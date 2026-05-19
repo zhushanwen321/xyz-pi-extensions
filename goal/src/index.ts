@@ -19,7 +19,6 @@ import {
 	type GoalRuntimeState,
 	type GoalTask,
 	type BudgetConfig,
-	type GoalPersistedData,
 	DEFAULT_BUDGET,
 	createInitialState,
 	transitionStatus,
@@ -30,6 +29,8 @@ import {
 	getCompletedCount,
 	getIncompleteTasks,
 	getElapsedTimeSeconds,
+	getTokenUsagePercent,
+	getTimeUsagePercent,
 } from "./state";
 
 import { parseGoalArgs } from "./commands";
@@ -37,7 +38,6 @@ import {
 	continuationPrompt,
 	budgetLimitPrompt,
 	objectiveUpdatedPrompt,
-	blockedPrompt,
 	contextInjectionPrompt,
 	formatTaskList,
 } from "./templates";
@@ -47,7 +47,6 @@ import { renderStatusLine, renderWidgetLines } from "./widget";
 // ── Constants ─────────────────────────────────────────
 
 const ENTRY_TYPE = "goal-state";
-const MAX_TURNS_HARD_LIMIT = 100;
 
 // ── Tool Parameter Schemas ────────────────────────────
 
@@ -78,7 +77,8 @@ interface GoalManagerDetails {
 
 export default function goalExtension(pi: ExtensionAPI) {
 	let state: GoalRuntimeState | null = null;
-	let tasksCompletedAtTurnStart = 0;
+	let tasksCompletedAtAgentStart = 0;
+	let budgetTimerId: ReturnType<typeof setTimeout> | null = null;
 
 	// ── Tool: goal_manager ─────────────────────────────
 
@@ -93,14 +93,15 @@ export default function goalExtension(pi: ExtensionAPI) {
 		promptSnippet: "管理目标驱动模式下的任务清单和完成状态",
 		promptGuidelines: [
 			"使用 goal_manager 的 create_tasks 在开始工作前将目标拆分为可验证的具体步骤",
-			"完成每个任务后必须调用 goal_manager 的 complete_task 并提供 evidence（具体证据，如"运行测试 X 通过"）",
+			"如果已有任务清单，不要再次调用 create_tasks，除非目标被更新",
+			"完成每个任务后必须调用 goal_manager 的 complete_task 并提供 evidence（具体证据，如'运行测试 X 通过'）",
 			"只有当你能提供具体证据证明目标已达成时，才能调用 goal_manager 的 complete_goal",
 			"遇到无法解决的阻塞时，调用 goal_manager 的 report_blocked 报告原因",
 			"使用 goal_manager 的 list_tasks 查看当前进度和剩余任务",
 		],
 		parameters: GoalManagerParams,
 
-		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (!state) {
 				throw new Error("Goal 模式未激活。使用 /goal <objective> 启动。");
 			}
@@ -110,11 +111,20 @@ export default function goalExtension(pi: ExtensionAPI) {
 					if (!params.tasks || params.tasks.length === 0) {
 						throw new Error("create_tasks requires a non-empty tasks array");
 					}
+					// 保护已有任务进度：如果已有未完成任务，拒绝覆盖
+					const existingIncomplete = getIncompleteTasks(state.tasks);
+					if (state.tasks.length > 0 && existingIncomplete.length > 0) {
+						throw new Error(
+							`已有 ${state.tasks.length} 个任务（${existingIncomplete.length} 个未完成）。` +
+								`请继续完成现有任务，不要重新创建。如需重新规划，请先使用 /goal update 更新目标。`,
+						);
+					}
 					state.tasks = params.tasks.map((desc, i) => ({
 						id: i + 1,
 						description: desc,
 						completed: false,
 					}));
+					persistState(ctx);
 					return makeResult(
 						`已创建 ${state.tasks.length} 个任务：\n${state.tasks.map((t) => `  #${t.id}: ${t.description}`).join("\n")}`,
 					);
@@ -125,7 +135,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 						throw new Error("complete_task requires taskId");
 					}
 					if (!params.evidence || params.evidence.trim() === "") {
-						throw new Error("complete_task requires evidence — 提供具体的完成证据（如"测试通过"、"文件已创建"等）");
+						throw new Error("complete_task requires evidence — 提供具体的完成证据（如'测试通过'、'文件已创建'等）");
 					}
 					const task = state.tasks.find((t) => t.id === params.taskId);
 					if (!task) {
@@ -136,6 +146,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 					}
 					task.completed = true;
 					task.evidence = params.evidence;
+					persistState(ctx);
 					return makeResult(`已完成任务 #${task.id}: ${task.description}\n证据: ${params.evidence}`);
 				}
 
@@ -154,7 +165,9 @@ export default function goalExtension(pi: ExtensionAPI) {
 								`请先完成这些任务或提供理由说明为什么它们不需要完成。`,
 						);
 					}
+					state.timeUsedSeconds = getElapsedTimeSeconds(state);
 					state.status = transitionStatus(state.status, "complete");
+					persistState(ctx);
 					return makeResult(
 						`目标已完成!\n证据: ${params.evidence}\n总轮次: ${state.turnCount}`,
 					);
@@ -165,6 +178,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 						throw new Error("report_blocked requires reason — 说明阻塞原因");
 					}
 					state.status = transitionStatus(state.status, "blocked");
+					persistState(ctx);
 					return makeResult(`已报告阻塞。原因: ${params.reason}`);
 				}
 
@@ -182,7 +196,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 		renderResult(result, { expanded }, theme) {
 			const details = result.details as GoalManagerDetails | undefined;
-			if (!details) {
+			if (!details || !Array.isArray(details.tasks)) {
 				const text = result.content[0];
 				return new Text(text?.type === "text" ? text.text : "", 0, 0);
 			}
@@ -219,14 +233,27 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	function persistState(ctx: ExtensionContext): void {
 		if (!state) return;
+		// 每次持久化时同步更新 timeUsedSeconds，确保 session 重启后时间不丢失
+		if (isActiveStatus(state.status)) {
+			const now = Date.now();
+			state.timeUsedSeconds += (now - state.timeStartedAt) / 1000;
+			state.timeStartedAt = now;
+		}
 		pi.appendEntry(ENTRY_TYPE, serializeState(state));
+	}
+
+	function clearBudgetTimer(): void {
+		if (budgetTimerId !== null) {
+			clearTimeout(budgetTimerId);
+			budgetTimerId = null;
+		}
 	}
 
 	function reconstructState(ctx: ExtensionContext): void {
 		state = null;
 		const entries = ctx.sessionManager.getEntries();
 
-		// 从最新的 custom entry 恢复基础状态
+		// 从最新的 custom entry 恢复完整状态
 		for (let i = entries.length - 1; i >= 0; i--) {
 			const entry = entries[i];
 			if (
@@ -234,7 +261,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 				"customType" in entry &&
 				(entry as any).customType === ENTRY_TYPE
 			) {
-				const data = (entry as any).data as GoalPersistedData | undefined;
+				const data = (entry as any).data as GoalRuntimeState | undefined;
 				if (data) {
 					state = deserializeState(data);
 				}
@@ -244,27 +271,10 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 		if (!state) return;
 
-		// 从 tool result entries 恢复最新的 tasks
-		for (let i = entries.length - 1; i >= 0; i--) {
-			const entry = entries[i];
-			if (
-				entry.type === "message" &&
-				"message" in entry &&
-				(entry.message as any).role === "toolResult" &&
-				(entry.message as any).toolName === "goal_manager"
-			) {
-				const details = (entry.message as any).details as GoalManagerDetails | undefined;
-				if (details?.tasks) {
-					state.tasks = details.tasks.map((t: GoalTask) => ({ ...t }));
-				}
-				break;
-			}
-		}
-
 		// 非终态 → 恢复为 active（session 重启后 resume）
 		if (!isTerminalStatus(state.status) && state.status !== "paused") {
 			state.status = "active";
-			state.timeStartedAt = Date.now(); // 重新计时
+			state.timeStartedAt = Date.now();
 		}
 	}
 
@@ -280,8 +290,9 @@ export default function goalExtension(pi: ExtensionAPI) {
 	}
 
 	function clearGoal(ctx: ExtensionContext): void {
+		clearBudgetTimer();
 		state = null;
-		tasksCompletedAtTurnStart = 0;
+		tasksCompletedAtAgentStart = 0;
 		ctx.ui.setWidget("goal", undefined);
 		ctx.ui.setStatus("goal", undefined);
 	}
@@ -370,10 +381,8 @@ export default function goalExtension(pi: ExtensionAPI) {
 						ctx.ui.notify("Goal 模式未激活。", "info");
 						return;
 					}
-					if (state) {
-						state.status = "cancelled";
-						persistState(ctx);
-					}
+					state.status = "cancelled";
+					persistState(ctx);
 					clearGoal(ctx);
 					ctx.ui.notify("Goal 已清除。", "info");
 					return;
@@ -391,6 +400,8 @@ export default function goalExtension(pi: ExtensionAPI) {
 					const oldObjective = state.objective;
 					state.objective = parsed.objective;
 					state.objectiveUpdatedAt = Date.now();
+					// 清除已有任务，允许重新规划
+					state.tasks = [];
 					persistState(ctx);
 					updateWidget(ctx);
 					ctx.ui.notify(`目标已更新:\n旧: ${oldObjective}\n新: ${parsed.objective}`, "info");
@@ -412,6 +423,8 @@ export default function goalExtension(pi: ExtensionAPI) {
 						persistState(ctx);
 					}
 
+					clearBudgetTimer();
+
 					const budget: Partial<BudgetConfig> = {};
 					if (parsed.budget?.tokenBudget) budget.tokenBudget = parsed.budget.tokenBudget;
 					if (parsed.budget?.timeBudgetMinutes) budget.timeBudgetMinutes = parsed.budget.timeBudgetMinutes;
@@ -419,7 +432,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 					budget.maxStallTurns = parsed.budget?.maxStallTurns ?? DEFAULT_BUDGET.maxStallTurns;
 
 					state = createInitialState(parsed.objective, budget);
-					tasksCompletedAtTurnStart = 0;
+					tasksCompletedAtAgentStart = 0;
 
 					persistState(ctx);
 					updateWidget(ctx);
@@ -477,11 +490,11 @@ export default function goalExtension(pi: ExtensionAPI) {
 		};
 	});
 
-	// ── Event: turn_start ──────────────────────────────
+	// ── Event: agent_start — 记录本 agent loop 起始时的完成数 ──
 
-	pi.on("turn_start", async () => {
+	pi.on("agent_start", async () => {
 		if (!state || !isActiveStatus(state.status)) return;
-		tasksCompletedAtTurnStart = getCompletedCount(state.tasks);
+		tasksCompletedAtAgentStart = getCompletedCount(state.tasks);
 	});
 
 	// ── Event: turn_end ────────────────────────────────
@@ -506,7 +519,30 @@ export default function goalExtension(pi: ExtensionAPI) {
 	// ── Event: agent_end ───────────────────────────────
 
 	pi.on("agent_end", async (_event, ctx) => {
-		if (!state || !isActiveStatus(state.status)) return;
+		if (!state) return;
+
+		// ── 处理 complete/blocked（tool execute 中设置的状态）──
+
+		if (state.status === "complete") {
+			persistState(ctx);
+			updateWidget(ctx);
+			ctx.ui.notify(
+				`目标已完成 ✓ (${getCompletedCount(state.tasks)}/${state.tasks.length} 任务, ${state.turnCount} 轮)`,
+				"info",
+			);
+			return;
+		}
+
+		if (state.status === "blocked") {
+			persistState(ctx);
+			updateWidget(ctx);
+			ctx.ui.notify("Goal 被阻塞。使用 /goal resume 恢复或 /goal clear 清除。", "warning");
+			return;
+		}
+
+		// ── 只处理 active 状态 ──
+
+		if (!isActiveStatus(state.status)) return;
 
 		// Token 预算检查
 		if (state.budget.tokenBudget && state.tokensUsed >= state.budget.tokenBudget) {
@@ -515,22 +551,33 @@ export default function goalExtension(pi: ExtensionAPI) {
 				persistState(ctx);
 				updateWidget(ctx);
 
-				// 注入收尾 steering 而不是直接终止，给模型一个收尾的机会
+				// 注入收尾 steering，给模型一个收尾的机会
 				pi.sendUserMessage(budgetLimitPrompt(state, "token"), { deliverAs: "steer" });
 
-				// 设置一个延迟检查：如果下一轮还没收尾就强制 budget_limited
-				setTimeout(() => {
-					if (state && state.tokensUsed >= state.budget.tokenBudget! && isActiveStatus(state.status)) {
+				// 捕获当前 goal 的引用，防止 timer 误杀新 goal
+				const currentGoalId = state.goalId;
+
+				// 设置延迟检查：如果下一轮还没收尾就强制 budget_limited
+				budgetTimerId = setTimeout(() => {
+					if (
+						state &&
+						state.goalId === currentGoalId &&
+						state.tokensUsed >= state.budget.tokenBudget! &&
+						isActiveStatus(state.status)
+					) {
 						state.status = transitionStatus(state.status, "budget_limited");
+						state.timeUsedSeconds = getElapsedTimeSeconds(state);
 						persistState(ctx);
 						updateWidget(ctx);
 						ctx.ui.notify("Token 预算已耗尽，Goal 已自动终止。", "warning");
 					}
+					budgetTimerId = null;
 				}, 120_000); // 2 分钟 grace period
 
 				return;
 			}
 			state.status = transitionStatus(state.status, "budget_limited");
+			state.timeUsedSeconds = getElapsedTimeSeconds(state);
 			persistState(ctx);
 			updateWidget(ctx);
 			ctx.ui.notify("Token 预算已耗尽，Goal 已终止。", "warning");
@@ -553,31 +600,26 @@ export default function goalExtension(pi: ExtensionAPI) {
 			}
 		}
 
-		// 目标完成
-		if (state.status === "complete") {
-			state.timeUsedSeconds = getElapsedTimeSeconds(state);
-			persistState(ctx);
-			updateWidget(ctx);
-			ctx.ui.notify(
-				`目标已完成 ✓ (${getCompletedCount(state.tasks)}/${state.tasks.length} 任务, ${state.turnCount} 轮)`,
-				"info",
-			);
-			return;
-		}
+		// ── 统一 turnCount 递增（先递增再检查）──
 
-		// Blocked
-		if (state.status === "blocked") {
-			persistState(ctx);
-			updateWidget(ctx);
-			ctx.ui.notify("Goal 被阻塞。使用 /goal resume 恢复或 /goal clear 清除。", "warning");
-			return;
-		}
+		state.turnCount++;
 
 		// 所有任务完成但 goal 未标记 complete → 自动提示
 		const incomplete = getIncompleteTasks(state.tasks);
 		const total = state.tasks.length;
 		if (total > 0 && incomplete.length === 0) {
-			// 任务都完成了但 goal 未 complete → 自动提示模型
+			// 防止无限循环：多次提示后仍未 complete 则自动 complete
+			if (state.turnCount >= state.budget.maxTurns) {
+				state.status = transitionStatus(state.status, "complete");
+				state.timeUsedSeconds = getElapsedTimeSeconds(state);
+				persistState(ctx);
+				updateWidget(ctx);
+				ctx.ui.notify(
+					`所有任务已完成，Goal 自动结束。(${getCompletedCount(state.tasks)}/${total} 任务, ${state.turnCount} 轮)`,
+					"info",
+				);
+				return;
+			}
 			pi.sendUserMessage(
 				`所有 ${total} 个任务已完成。请调用 goal_manager 的 complete_goal 完成目标，提供整体 evidence。` +
 					`\n\n目标: ${state.objective}`,
@@ -590,9 +632,9 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 		// 没有任务创建
 		if (total === 0) {
-			state.turnCount++;
 			if (state.turnCount >= state.budget.maxTurns) {
 				state.status = transitionStatus(state.status, "cancelled");
+				state.timeUsedSeconds = getElapsedTimeSeconds(state);
 				persistState(ctx);
 				updateWidget(ctx);
 				ctx.ui.notify(
@@ -614,6 +656,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		// 最大轮次检查
 		if (state.turnCount >= state.budget.maxTurns) {
 			state.status = transitionStatus(state.status, "cancelled");
+			state.timeUsedSeconds = getElapsedTimeSeconds(state);
 			persistState(ctx);
 			updateWidget(ctx);
 			ctx.ui.notify(
@@ -623,9 +666,9 @@ export default function goalExtension(pi: ExtensionAPI) {
 			return;
 		}
 
-		// 进展跟踪
+		// 进展跟踪（基于 agent_start 时记录的完成数，而非 turn_start）
 		const currentCompleted = getCompletedCount(state.tasks);
-		const progressThisRound = currentCompleted - tasksCompletedAtTurnStart;
+		const progressThisRound = currentCompleted - tasksCompletedAtAgentStart;
 
 		if (progressThisRound === 0) {
 			state.stallCount++;
@@ -647,7 +690,6 @@ export default function goalExtension(pi: ExtensionAPI) {
 		}
 
 		// Normal continuation
-		state.turnCount++;
 		persistState(ctx);
 		updateWidget(ctx);
 
@@ -659,15 +701,9 @@ export default function goalExtension(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		reconstructState(ctx);
 		if (state) {
-			tasksCompletedAtTurnStart = getCompletedCount(state.tasks);
+			tasksCompletedAtAgentStart = getCompletedCount(state.tasks);
 			updateWidget(ctx);
 		}
-	});
-
-	// ── Event: session_shutdown ────────────────────────
-
-	pi.on("session_shutdown", async () => {
-		// State is persisted in session entries
 	});
 
 	// ── Message Renderers ──────────────────────────────
@@ -683,7 +719,8 @@ export default function goalExtension(pi: ExtensionAPI) {
 				message.customType === "goal-context-exceeded"
 					? theme.fg("error", "[GOAL 预算] ")
 					: theme.fg("accent", "[GOAL] ");
-			return new Text(prefix + theme.fg("dim", message.content), 0, 0);
+			const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+			return new Text(prefix + theme.fg("dim", content), 0, 0);
 		});
 	}
 }

@@ -10,7 +10,7 @@
  */
 
 import type { GoalRuntimeState, GoalTask } from "./state";
-import { getIncompleteTasks, getCompletedCount, getElapsedTimeSeconds } from "./state";
+import { getIncompleteTasks, getCompletedCount, getElapsedTimeSeconds, getTokenUsagePercent, getTimeUsagePercent } from "./state";
 
 // ── Continuation Prompt ───────────────────────────────
 
@@ -35,6 +35,8 @@ export function continuationPrompt(state: GoalRuntimeState): string {
 			: "";
 
 	const budgetInfo = formatBudgetInfo(state);
+	const tokenPct = Math.round(getTokenUsagePercent(state));
+	const timePct = Math.round(getTimeUsagePercent(state));
 
 	return (
 		`<goal_context>\n` +
@@ -42,10 +44,12 @@ export function continuationPrompt(state: GoalRuntimeState): string {
 		`目标: ${state.objective}\n\n` +
 		`${taskSection}\n\n` +
 		`轮次: ${state.turnCount}/${state.budget.maxTurns}${budgetInfo}\n` +
+		(tokenPct > 0 ? `Token 使用: ${tokenPct}%\n` : "") +
+		(timePct > 0 ? `时间 使用: ${timePct}%\n` : "") +
 		`${stallWarning}\n\n` +
 		`你必须严格遵守以下规则:\n` +
 		`1. 如果尚未创建任务清单，立即调用 goal_manager 的 create_tasks 将目标拆分为具体可验证的步骤\n` +
-		`2. 每完成一个任务，必须调用 goal_manager 的 complete_task 标记，并提供 evidence（具体证据，如"运行测试 X 通过"）\n` +
+		`2. 每完成一个任务，必须调用 goal_manager 的 complete_task 标记，并提供 evidence（具体证据，如'运行测试 X 通过'）\n` +
 		`3. 只有当你能提供具体证据证明目标已达成时，才能调用 goal_manager 的 complete_goal\n` +
 		`4. 遇到无法解决的阻塞时，调用 goal_manager 的 report_blocked 报告原因\n` +
 		`5. 不要重复之前的操作。如果某个方法不work，换一种方式\n` +
@@ -73,8 +77,8 @@ export function budgetLimitPrompt(state: GoalRuntimeState, limitType: "token" | 
 		`当前进度: ${completedCount}/${total} 任务完成\n` +
 		`${incompleteSummary}\n` +
 		(limitType === "token"
-			? `Token 已使用: ${state.tokensUsed} / ${state.budget.tokenBudget}\n`
-			: `已用时间: ${Math.floor(elapsed / 60)}分${Math.floor(elapsed % 60)}秒 / ${state.budget.timeBudgetMinutes}分钟\n`) +
+			? `Token 已使用: ${state.tokensUsed} / ${state.budget.tokenBudget ?? "未知"}\n`
+			: `已用时间: ${Math.floor(elapsed / 60)}分${Math.floor(elapsed % 60)}秒 / ${state.budget.timeBudgetMinutes ?? "未知"}分钟\n`) +
 		`\n你必须立即收尾:\n` +
 		`1. 用 goal_manager 的 list_tasks 查看剩余任务\n` +
 		`2. 只标记你真正完成且有证据的任务\n` +

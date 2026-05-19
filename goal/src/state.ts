@@ -8,7 +8,9 @@
  *   Active → BudgetLimited (token 预算耗尽)
  *   Active → TimeLimited (时间预算耗尽)
  *   Active → Cancelled (用户清除)
- *   BudgetLimited/TimeLimited 不可被 Paused/Blocked 覆盖
+ *
+ * 终态（不可被任何状态覆盖）：Complete, BudgetLimited, TimeLimited, Cancelled
+ * Paused/Blocked 可被 Active 覆盖（用户 resume）
  */
 
 // ── Goal 状态枚举 ──────────────────────────────────────
@@ -30,12 +32,6 @@ const TERMINAL_STATUSES: ReadonlySet<GoalStatus> = new Set([
 	"cancelled",
 ]);
 
-// 受保护的状态：不可被 paused/blocked 覆盖
-const PROTECTED_STATUSES: ReadonlySet<GoalStatus> = new Set([
-	"budget_limited",
-	"time_limited",
-]);
-
 // ── 任务数据结构 ──────────────────────────────────────
 
 export interface GoalTask {
@@ -54,7 +50,7 @@ export interface BudgetConfig {
 	maxTurns: number; // 最大 turn 数上限
 }
 
-// ── 运行时状态 ────────────────────────────────────────
+// ── 运行时状态（也是持久化数据格式，保持统一）─────────────
 
 export interface GoalRuntimeState {
 	goalId: string;
@@ -65,29 +61,11 @@ export interface GoalRuntimeState {
 	stallCount: number;
 	tokensUsed: number;
 	timeStartedAt: number; // Date.now() timestamp
-	timeUsedSeconds: number;
+	timeUsedSeconds: number; // 累计使用秒数（不含当前活跃段）
 	budget: BudgetConfig;
 	lastProgressTurn: number; // 上次有进展的 turn number
 	budgetLimitSteeringSent: boolean; // 是否已发送预算耗尽 steering
 	objectiveUpdatedAt: number; // objective 最后更新时间
-}
-
-// ── 持久化数据 (写入 session entry) ────────────────────
-
-export interface GoalPersistedData {
-	goalId: string;
-	objective: string;
-	status: GoalStatus;
-	tasks: GoalTask[];
-	turnCount: number;
-	stallCount: number;
-	tokensUsed: number;
-	timeUsedSeconds: number;
-	budget: BudgetConfig;
-	timeStartedAt: number;
-	lastProgressTurn: number;
-	budgetLimitSteeringSent: boolean;
-	objectiveUpdatedAt: number;
 }
 
 // ── 默认值 ────────────────────────────────────────────
@@ -118,13 +96,10 @@ export function createInitialState(objective: string, budget: Partial<BudgetConf
 // ── 状态转换 ──────────────────────────────────────────
 
 /**
- * 安全的状态转换。遵循 Codex 的约束：
- * - 终态不可被覆盖
- * - budget_limited/time_limited 不可被 paused/blocked 覆盖
+ * 安全的状态转换。终态不可被覆盖。
  */
 export function transitionStatus(current: GoalStatus, next: GoalStatus): GoalStatus {
 	if (TERMINAL_STATUSES.has(current)) return current;
-	if (PROTECTED_STATUSES.has(current) && (next === "paused" || next === "blocked")) return current;
 	return next;
 }
 
@@ -136,27 +111,17 @@ export function isActiveStatus(status: GoalStatus): boolean {
 	return status === "active";
 }
 
-// ── 序列化 ────────────────────────────────────────────
+// ── 序列化（直接用相同类型，避免维护两个相同接口）──────
 
-export function serializeState(state: GoalRuntimeState): GoalPersistedData {
+export function serializeState(state: GoalRuntimeState): GoalRuntimeState {
 	return {
-		goalId: state.goalId,
-		objective: state.objective,
-		status: state.status,
+		...state,
 		tasks: state.tasks.map((t) => ({ ...t })),
-		turnCount: state.turnCount,
-		stallCount: state.stallCount,
-		tokensUsed: state.tokensUsed,
-		timeUsedSeconds: state.timeUsedSeconds,
 		budget: { ...state.budget },
-		timeStartedAt: state.timeStartedAt,
-		lastProgressTurn: state.lastProgressTurn,
-		budgetLimitSteeringSent: state.budgetLimitSteeringSent,
-		objectiveUpdatedAt: state.objectiveUpdatedAt,
 	};
 }
 
-export function deserializeState(data: GoalPersistedData): GoalRuntimeState {
+export function deserializeState(data: GoalRuntimeState): GoalRuntimeState {
 	return {
 		...data,
 		tasks: data.tasks.map((t) => ({ ...t })),
@@ -175,17 +140,17 @@ export function getIncompleteTasks(tasks: GoalTask[]): GoalTask[] {
 }
 
 export function getElapsedTimeSeconds(state: GoalRuntimeState): number {
-	if (isTerminalStatus(state.status)) return state.timeUsedSeconds;
+	if (isTerminalStatus(state.status) || state.status === "paused") return state.timeUsedSeconds;
 	return state.timeUsedSeconds + (Date.now() - state.timeStartedAt) / 1000;
 }
 
 export function getTokenUsagePercent(state: GoalRuntimeState): number {
-	if (!state.budget.tokenBudget) return 0;
+	if (!state.budget.tokenBudget || state.budget.tokenBudget <= 0) return 0;
 	return (state.tokensUsed / state.budget.tokenBudget) * 100;
 }
 
 export function getTimeUsagePercent(state: GoalRuntimeState): number {
-	if (!state.budget.timeBudgetMinutes) return 0;
+	if (!state.budget.timeBudgetMinutes || state.budget.timeBudgetMinutes <= 0) return 0;
 	const elapsed = getElapsedTimeSeconds(state);
 	const budgetSeconds = state.budget.timeBudgetMinutes * 60;
 	return (elapsed / budgetSeconds) * 100;

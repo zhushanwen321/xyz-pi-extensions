@@ -3,7 +3,7 @@
  */
 
 import type { GoalRuntimeState } from "./state";
-import { getCompletedCount, getIncompleteTasks, getElapsedTimeSeconds } from "./state";
+import { getCompletedCount, getIncompleteTasks, getElapsedTimeSeconds, getTokenUsagePercent, getTimeUsagePercent } from "./state";
 
 export interface ThemeLike {
 	fg: (color: string, text: string) => string;
@@ -22,15 +22,14 @@ export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string
 		text += th.fg("muted", ` | ${completedCount}/${total} 任务`);
 	}
 
-	// Budget indicators
-	if (state.budget.tokenBudget) {
-		const pct = Math.round((state.tokensUsed / state.budget.tokenBudget) * 100);
+	// Budget indicators — 使用 state.ts 的安全函数避免 division by zero
+	if (state.budget.tokenBudget && state.budget.tokenBudget > 0) {
+		const pct = Math.round(getTokenUsagePercent(state));
 		const color = pct >= 90 ? "error" : pct >= 70 ? "warning" : "muted";
 		text += th.fg(color, ` | ${pct}% tokens`);
 	}
-	if (state.budget.timeBudgetMinutes) {
-		const elapsed = getElapsedTimeSeconds(state);
-		const pct = Math.round((elapsed / (state.budget.timeBudgetMinutes * 60)) * 100);
+	if (state.budget.timeBudgetMinutes && state.budget.timeBudgetMinutes > 0) {
+		const pct = Math.round(getTimeUsagePercent(state));
 		const color = pct >= 90 ? "error" : pct >= 70 ? "warning" : "muted";
 		text += th.fg(color, ` | ${pct}% time`);
 	}

@@ -32,22 +32,40 @@ export function parseGoalArgs(raw: string): GoalCommandArgs {
 	if (trimmed.startsWith("update ")) {
 		return { action: "update", objective: fullRaw.slice(7).trim() };
 	}
+	// /goal update (without argument) → 报错
+	if (trimmed === "update") {
+		return { action: "update" };
+	}
 
 	// /goal <objective> [--tokens N] [--timeout N] [--max-turns N] [--max-stall N]
-	const objective = fullRaw.replace(/--\w+\s+\S+/g, "").trim();
+	// 只匹配已知 flag，避免误删 objective 中的 -- 文本
+	const knownFlags = /--(?:tokens|timeout|max-turns|max-stall)\s+\d+/g;
+	const objective = fullRaw.replace(knownFlags, "").trim();
 	const budget: Partial<BudgetConfig> = {};
 
 	const tokenMatch = fullRaw.match(/--tokens\s+(\d+)/);
-	if (tokenMatch) budget.tokenBudget = parseInt(tokenMatch[1]!, 10);
+	if (tokenMatch) {
+		const val = parseInt(tokenMatch[1]!, 10);
+		if (!isNaN(val) && val > 0) budget.tokenBudget = val;
+	}
 
 	const timeMatch = fullRaw.match(/--timeout\s+(\d+)/);
-	if (timeMatch) budget.timeBudgetMinutes = parseInt(timeMatch[1]!, 10);
+	if (timeMatch) {
+		const val = parseInt(timeMatch[1]!, 10);
+		if (!isNaN(val) && val > 0) budget.timeBudgetMinutes = val;
+	}
 
 	const maxTurnsMatch = fullRaw.match(/--max-turns\s+(\d+)/);
-	if (maxTurnsMatch) budget.maxTurns = Math.max(1, Math.min(parseInt(maxTurnsMatch[1]!, 10), 100));
+	if (maxTurnsMatch) {
+		const val = parseInt(maxTurnsMatch[1]!, 10);
+		if (!isNaN(val)) budget.maxTurns = Math.max(1, Math.min(val, 100));
+	}
 
 	const maxStallMatch = fullRaw.match(/--max-stall\s+(\d+)/);
-	if (maxStallMatch) budget.maxStallTurns = Math.max(1, parseInt(maxStallMatch[1]!, 10));
+	if (maxStallMatch) {
+		const val = parseInt(maxStallMatch[1]!, 10);
+		if (!isNaN(val)) budget.maxStallTurns = Math.max(1, Math.min(val, 20));
+	}
 
 	if (!objective) {
 		return { action: "status" };
