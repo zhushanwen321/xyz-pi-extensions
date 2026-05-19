@@ -59,7 +59,7 @@ ln -s /path/to/xyz-pi-extensions/goal .pi/extensions/goal
 | `--tokens N` | unlimited | Token budget |
 | `--timeout N` | unlimited | Time budget in minutes |
 | `--max-turns N` | 50 | Maximum turn count |
-| `--max-stall N` | 3 | Consecutive stall turns before blocked |
+| `--max-stall N` | 5 | Consecutive stall turns before blocked |
 
 ### How it works
 

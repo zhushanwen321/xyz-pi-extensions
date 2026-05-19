@@ -105,20 +105,6 @@ export function objectiveUpdatedPrompt(state: GoalRuntimeState, oldObjective: st
 	);
 }
 
-// ── Blocked Prompt ────────────────────────────────────
-
-export function blockedPrompt(state: GoalRuntimeState, reason: string): string {
-	return (
-		`<goal_context>\n` +
-		`[GOAL — 被阻塞]\n\n` +
-		`目标: ${state.objective}\n` +
-		`阻塞原因: ${reason}\n` +
-		`连续无进展轮数: ${state.stallCount}\n\n` +
-		`你已被阻塞。请思考如何绕过障碍，或者承认无法完成并说明原因。\n` +
-		`</goal_context>`
-	);
-}
-
 // ── Context Injection Prompt (before_agent_start) ─────
 
 export function contextInjectionPrompt(state: GoalRuntimeState): string {

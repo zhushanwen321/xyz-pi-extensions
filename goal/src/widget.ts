@@ -10,6 +10,12 @@ export interface ThemeLike {
 	bold: (text: string) => string;
 }
 
+function renderProgressBar(pct: number, width: number = 10): string {
+	const clamped = Math.min(Math.max(pct, 0), 1);
+	const filled = Math.round(clamped * width);
+	return "█".repeat(filled) + "░".repeat(width - filled);
+}
+
 export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string {
 	if (state.status === "cancelled") return "";
 
@@ -22,7 +28,7 @@ export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string
 		text += th.fg("muted", ` | ${completedCount}/${total} 任务`);
 	}
 
-	// Budget indicators — 使用 state.ts 的安全函数避免 division by zero
+	// Budget indicators
 	if (state.budget.tokenBudget && state.budget.tokenBudget > 0) {
 		const pct = Math.round(getTokenUsagePercent(state));
 		const color = pct >= 90 ? "error" : pct >= 70 ? "warning" : "muted";
@@ -86,6 +92,18 @@ export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): strin
 				lines.push(`  ${th.fg("dim", "☐")} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", t.description)}`);
 			}
 		}
+	}
+
+	// P2-8: Budget progress bars
+	if (state.budget.tokenBudget && state.budget.tokenBudget > 0) {
+		const pct = getTokenUsagePercent(state) / 100;
+		lines.push(`  Token: ${renderProgressBar(pct)} ${Math.round(pct * 100)}%`);
+	}
+	if (state.budget.timeBudgetMinutes && state.budget.timeBudgetMinutes > 0) {
+		const pct = getTimeUsagePercent(state) / 100;
+		const elapsed = getElapsedTimeSeconds(state);
+		const mins = Math.floor(elapsed / 60);
+		lines.push(`  时间: ${renderProgressBar(pct)} ${mins}/${state.budget.timeBudgetMinutes}分钟`);
 	}
 
 	return lines;

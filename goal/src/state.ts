@@ -67,6 +67,8 @@ export interface GoalRuntimeState {
 	budgetLimitSteeringSent: boolean; // 是否已发送预算耗尽 steering
 	objectiveUpdatedAt: number; // objective 最后更新时间
 	lastBlockerReason: string | null; // 上次 report_blocked 的原因，resume 时注入
+	budgetWarning70Sent: boolean; // 70% 预算预警已发送（token 或时间任一达 70%）
+	budgetWarning90Sent: boolean; // 90% 预算预警已发送
 }
 
 // ── 默认值 ────────────────────────────────────────────
@@ -92,6 +94,8 @@ export function createInitialState(objective: string, budget: Partial<BudgetConf
 		budgetLimitSteeringSent: false,
 		objectiveUpdatedAt: Date.now(),
 		lastBlockerReason: null,
+		budgetWarning70Sent: false,
+		budgetWarning90Sent: false,
 	};
 }
 
@@ -123,11 +127,27 @@ export function serializeState(state: GoalRuntimeState): GoalRuntimeState {
 	};
 }
 
-export function deserializeState(data: GoalRuntimeState): GoalRuntimeState {
+/**
+ * 反序列化，补全缺失字段的默认值（向后兼容旧格式数据）
+ */
+export function deserializeState(data: Record<string, unknown>): GoalRuntimeState {
 	return {
-		...data,
-		tasks: data.tasks.map((t) => ({ ...t })),
-		budget: { ...data.budget },
+		goalId: (data.goalId as string) ?? "",
+		objective: (data.objective as string) ?? "",
+		status: (data.status as GoalStatus) ?? "active",
+		tasks: ((data.tasks as GoalTask[]) ?? []).map((t: GoalTask) => ({ ...t })),
+		turnCount: (data.turnCount as number) ?? 0,
+		stallCount: (data.stallCount as number) ?? 0,
+		tokensUsed: (data.tokensUsed as number) ?? 0,
+		timeStartedAt: (data.timeStartedAt as number) ?? Date.now(),
+		timeUsedSeconds: (data.timeUsedSeconds as number) ?? 0,
+		budget: { ...DEFAULT_BUDGET, ...((data.budget as Partial<BudgetConfig>) ?? {}) },
+		lastProgressTurn: (data.lastProgressTurn as number) ?? 0,
+		budgetLimitSteeringSent: (data.budgetLimitSteeringSent as boolean) ?? false,
+		objectiveUpdatedAt: (data.objectiveUpdatedAt as number) ?? Date.now(),
+		lastBlockerReason: (data.lastBlockerReason as string | null) ?? null,
+		budgetWarning70Sent: (data.budgetWarning70Sent as boolean) ?? false,
+		budgetWarning90Sent: (data.budgetWarning90Sent as boolean) ?? false,
 	};
 }
 
