@@ -1,0 +1,689 @@
+/**
+ * Pi /goal Extension — Codex-style persistent goal-driven autonomous loop
+ *
+ * 功能：
+ * - 持久化目标设定，支持 pause/resume/clear/update
+ * - Evidence-based completion（完成任务必须提供具体证据）
+ * - Token 预算 + 时间预算
+ * - Blocked 状态检测（连续 stall 自动阻塞）
+ * - Steering 模板化（continuation / budget-limit / objective-updated / blocked）
+ * - 任务清单追踪
+ */
+
+import { StringEnum } from "@mariozechner/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
+import { Type } from "typebox";
+
+import {
+	type GoalRuntimeState,
+	type GoalTask,
+	type BudgetConfig,
+	type GoalPersistedData,
+	DEFAULT_BUDGET,
+	createInitialState,
+	transitionStatus,
+	isTerminalStatus,
+	isActiveStatus,
+	serializeState,
+	deserializeState,
+	getCompletedCount,
+	getIncompleteTasks,
+	getElapsedTimeSeconds,
+} from "./state";
+
+import { parseGoalArgs } from "./commands";
+import {
+	continuationPrompt,
+	budgetLimitPrompt,
+	objectiveUpdatedPrompt,
+	blockedPrompt,
+	contextInjectionPrompt,
+	formatTaskList,
+} from "./templates";
+
+import { renderStatusLine, renderWidgetLines } from "./widget";
+
+// ── Constants ─────────────────────────────────────────
+
+const ENTRY_TYPE = "goal-state";
+const MAX_TURNS_HARD_LIMIT = 100;
+
+// ── Tool Parameter Schemas ────────────────────────────
+
+const GoalManagerParams = Type.Object({
+	action: StringEnum([
+		"create_tasks",
+		"complete_task",
+		"list_tasks",
+		"complete_goal",
+		"report_blocked",
+	] as const),
+	tasks: Type.Optional(Type.Array(Type.String(), { description: "Task descriptions for create_tasks" })),
+	taskId: Type.Optional(Type.Number({ description: "Task ID for complete_task" })),
+	evidence: Type.Optional(Type.String({ description: "Evidence for completion (required for complete_task and complete_goal)" })),
+	reason: Type.Optional(Type.String({ description: "Reason for being blocked (required for report_blocked)" })),
+});
+
+// ── Tool Details Types ────────────────────────────────
+
+interface GoalManagerDetails {
+	action: string;
+	tasks: GoalTask[];
+	goalId: string;
+	status: string;
+}
+
+// ── Extension Factory ─────────────────────────────────
+
+export default function goalExtension(pi: ExtensionAPI) {
+	let state: GoalRuntimeState | null = null;
+	let tasksCompletedAtTurnStart = 0;
+
+	// ── Tool: goal_manager ─────────────────────────────
+
+	pi.registerTool({
+		name: "goal_manager",
+		label: "Goal Manager",
+		description:
+			"管理 /goal 模式的目标和任务清单。必须在开始工作前调用 create_tasks 拆分任务。" +
+			"完成每个任务调用 complete_task（必须提供 evidence）。" +
+			"目标达成时调用 complete_goal（必须提供整体 evidence）。" +
+			"遇到阻塞调用 report_blocked。只在 /goal 模式激活时可用。",
+		promptSnippet: "管理目标驱动模式下的任务清单和完成状态",
+		promptGuidelines: [
+			"使用 goal_manager 的 create_tasks 在开始工作前将目标拆分为可验证的具体步骤",
+			"完成每个任务后必须调用 goal_manager 的 complete_task 并提供 evidence（具体证据，如"运行测试 X 通过"）",
+			"只有当你能提供具体证据证明目标已达成时，才能调用 goal_manager 的 complete_goal",
+			"遇到无法解决的阻塞时，调用 goal_manager 的 report_blocked 报告原因",
+			"使用 goal_manager 的 list_tasks 查看当前进度和剩余任务",
+		],
+		parameters: GoalManagerParams,
+
+		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+			if (!state) {
+				throw new Error("Goal 模式未激活。使用 /goal <objective> 启动。");
+			}
+
+			switch (params.action) {
+				case "create_tasks": {
+					if (!params.tasks || params.tasks.length === 0) {
+						throw new Error("create_tasks requires a non-empty tasks array");
+					}
+					state.tasks = params.tasks.map((desc, i) => ({
+						id: i + 1,
+						description: desc,
+						completed: false,
+					}));
+					return makeResult(
+						`已创建 ${state.tasks.length} 个任务：\n${state.tasks.map((t) => `  #${t.id}: ${t.description}`).join("\n")}`,
+					);
+				}
+
+				case "complete_task": {
+					if (params.taskId === undefined) {
+						throw new Error("complete_task requires taskId");
+					}
+					if (!params.evidence || params.evidence.trim() === "") {
+						throw new Error("complete_task requires evidence — 提供具体的完成证据（如"测试通过"、"文件已创建"等）");
+					}
+					const task = state.tasks.find((t) => t.id === params.taskId);
+					if (!task) {
+						throw new Error(`Task #${params.taskId} not found`);
+					}
+					if (task.completed) {
+						return makeResult(`任务 #${task.id} 已完成，无需重复标记。`);
+					}
+					task.completed = true;
+					task.evidence = params.evidence;
+					return makeResult(`已完成任务 #${task.id}: ${task.description}\n证据: ${params.evidence}`);
+				}
+
+				case "list_tasks": {
+					return makeResult(formatTaskList(state.tasks));
+				}
+
+				case "complete_goal": {
+					if (!params.evidence || params.evidence.trim() === "") {
+						throw new Error("complete_goal requires evidence — 提供具体的证据证明目标已达成");
+					}
+					const incomplete = getIncompleteTasks(state.tasks);
+					if (incomplete.length > 0) {
+						throw new Error(
+							`还有 ${incomplete.length} 个任务未完成：${incomplete.map((t) => `#${t.id}`).join(", ")}。` +
+								`请先完成这些任务或提供理由说明为什么它们不需要完成。`,
+						);
+					}
+					state.status = transitionStatus(state.status, "complete");
+					return makeResult(
+						`目标已完成!\n证据: ${params.evidence}\n总轮次: ${state.turnCount}`,
+					);
+				}
+
+				case "report_blocked": {
+					if (!params.reason || params.reason.trim() === "") {
+						throw new Error("report_blocked requires reason — 说明阻塞原因");
+					}
+					state.status = transitionStatus(state.status, "blocked");
+					return makeResult(`已报告阻塞。原因: ${params.reason}`);
+				}
+
+				default:
+					throw new Error(`Unknown action: ${params.action}`);
+			}
+		},
+
+		renderCall(args, theme) {
+			let text = theme.fg("toolTitle", theme.bold("goal_manager ")) + theme.fg("muted", args.action);
+			if (args.tasks) text += ` ${theme.fg("dim", `(${args.tasks.length} tasks)`)}`;
+			if (args.taskId !== undefined) text += ` ${theme.fg("accent", `#${args.taskId}`)}`;
+			return new Text(text, 0, 0);
+		},
+
+		renderResult(result, { expanded }, theme) {
+			const details = result.details as GoalManagerDetails | undefined;
+			if (!details) {
+				const text = result.content[0];
+				return new Text(text?.type === "text" ? text.text : "", 0, 0);
+			}
+			const tasks = details.tasks;
+			const completed = tasks.filter((t) => t.completed).length;
+			const summary = theme.fg("success", `✓ ${completed}/${tasks.length} 完成`);
+			if (!expanded || tasks.length === 0) {
+				return new Text(summary, 0, 0);
+			}
+			const lines = [summary];
+			for (const t of tasks) {
+				const icon = t.completed ? theme.fg("success", "✓") : theme.fg("dim", "☐");
+				const desc = t.completed ? theme.fg("dim", t.description) : theme.fg("text", t.description);
+				lines.push(`  ${icon} ${theme.fg("accent", `#${t.id}`)} ${desc}`);
+			}
+			return new Text(lines.join("\n"), 0, 0);
+		},
+	});
+
+	// ── Helpers ────────────────────────────────────────
+
+	function makeResult(text: string) {
+		if (!state) throw new Error("No active goal");
+		return {
+			content: [{ type: "text", text }],
+			details: {
+				action: "update",
+				tasks: state.tasks.map((t) => ({ ...t })),
+				goalId: state.goalId,
+				status: state.status,
+			} satisfies GoalManagerDetails,
+		};
+	}
+
+	function persistState(ctx: ExtensionContext): void {
+		if (!state) return;
+		pi.appendEntry(ENTRY_TYPE, serializeState(state));
+	}
+
+	function reconstructState(ctx: ExtensionContext): void {
+		state = null;
+		const entries = ctx.sessionManager.getEntries();
+
+		// 从最新的 custom entry 恢复基础状态
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const entry = entries[i];
+			if (
+				entry.type === "custom" &&
+				"customType" in entry &&
+				(entry as any).customType === ENTRY_TYPE
+			) {
+				const data = (entry as any).data as GoalPersistedData | undefined;
+				if (data) {
+					state = deserializeState(data);
+				}
+				break;
+			}
+		}
+
+		if (!state) return;
+
+		// 从 tool result entries 恢复最新的 tasks
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const entry = entries[i];
+			if (
+				entry.type === "message" &&
+				"message" in entry &&
+				(entry.message as any).role === "toolResult" &&
+				(entry.message as any).toolName === "goal_manager"
+			) {
+				const details = (entry.message as any).details as GoalManagerDetails | undefined;
+				if (details?.tasks) {
+					state.tasks = details.tasks.map((t: GoalTask) => ({ ...t }));
+				}
+				break;
+			}
+		}
+
+		// 非终态 → 恢复为 active（session 重启后 resume）
+		if (!isTerminalStatus(state.status) && state.status !== "paused") {
+			state.status = "active";
+			state.timeStartedAt = Date.now(); // 重新计时
+		}
+	}
+
+	function updateWidget(ctx: ExtensionContext): void {
+		if (!state || state.status === "cancelled") {
+			ctx.ui.setWidget("goal", undefined);
+			ctx.ui.setStatus("goal", undefined);
+			return;
+		}
+
+		ctx.ui.setStatus("goal", renderStatusLine(state, ctx.ui.theme));
+		ctx.ui.setWidget("goal", renderWidgetLines(state, ctx.ui.theme));
+	}
+
+	function clearGoal(ctx: ExtensionContext): void {
+		state = null;
+		tasksCompletedAtTurnStart = 0;
+		ctx.ui.setWidget("goal", undefined);
+		ctx.ui.setStatus("goal", undefined);
+	}
+
+	// ── Command: /goal ─────────────────────────────────
+
+	pi.registerCommand("goal", {
+		description:
+			"目标驱动模式: /goal <objective> [--tokens N] [--timeout N] [--max-turns N] | /goal pause | /goal resume | /goal clear | /goal update <new-objective> | /goal status",
+		handler: async (args, ctx) => {
+			const parsed = parseGoalArgs(args);
+
+			switch (parsed.action) {
+				case "status": {
+					if (!state) {
+						ctx.ui.notify("Goal 模式未激活。使用 /goal <objective> 启动。", "info");
+						return;
+					}
+					const completed = getCompletedCount(state.tasks);
+					const total = state.tasks.length;
+					const elapsed = getElapsedTimeSeconds(state);
+					const lines = [
+						`目标: ${state.objective}`,
+						`状态: ${state.status}`,
+						`轮次: ${state.turnCount}/${state.budget.maxTurns}`,
+						`任务: ${completed}/${total} 完成`,
+						`无进展轮数: ${state.stallCount}`,
+						`已用时间: ${Math.floor(elapsed / 60)}分${Math.floor(elapsed % 60)}秒`,
+						state.budget.tokenBudget ? `Token: ${state.tokensUsed}/${state.budget.tokenBudget}` : null,
+						`Goal ID: ${state.goalId}`,
+					].filter(Boolean);
+					ctx.ui.notify(lines.join("\n"), "info");
+					return;
+				}
+
+				case "pause": {
+					if (!state) {
+						ctx.ui.notify("Goal 模式未激活。", "warning");
+						return;
+					}
+					if (isTerminalStatus(state.status)) {
+						ctx.ui.notify(`Goal 已处于终态 (${state.status})，无法暂停。`, "warning");
+						return;
+					}
+					state.timeUsedSeconds = getElapsedTimeSeconds(state);
+					state.status = transitionStatus(state.status, "paused");
+					persistState(ctx);
+					updateWidget(ctx);
+					ctx.ui.notify("Goal 已暂停。使用 /goal resume 恢复。", "info");
+					return;
+				}
+
+				case "resume": {
+					if (!state) {
+						ctx.ui.notify("Goal 模式未激活。", "warning");
+						return;
+					}
+					if (isTerminalStatus(state.status)) {
+						ctx.ui.notify(`Goal 已处于终态 (${state.status})，无法恢复。`, "warning");
+						return;
+					}
+					if (state.status !== "paused" && state.status !== "blocked") {
+						ctx.ui.notify("Goal 未暂停或阻塞，无需恢复。", "info");
+						return;
+					}
+					state.status = "active";
+					state.stallCount = 0;
+					state.timeStartedAt = Date.now();
+					persistState(ctx);
+					updateWidget(ctx);
+
+					const incomplete = getIncompleteTasks(state.tasks);
+					if (incomplete.length > 0) {
+						pi.sendUserMessage(
+							`Goal 已恢复。继续执行剩余 ${incomplete.length} 个任务。\n\n目标: ${state.objective}`,
+							{ deliverAs: "followUp" },
+						);
+					} else {
+						ctx.ui.notify("所有任务已完成。", "info");
+					}
+					return;
+				}
+
+				case "clear": {
+					if (!state) {
+						ctx.ui.notify("Goal 模式未激活。", "info");
+						return;
+					}
+					if (state) {
+						state.status = "cancelled";
+						persistState(ctx);
+					}
+					clearGoal(ctx);
+					ctx.ui.notify("Goal 已清除。", "info");
+					return;
+				}
+
+				case "update": {
+					if (!state) {
+						ctx.ui.notify("Goal 模式未激活。", "warning");
+						return;
+					}
+					if (!parsed.objective) {
+						ctx.ui.notify("用法: /goal update <new-objective>", "warning");
+						return;
+					}
+					const oldObjective = state.objective;
+					state.objective = parsed.objective;
+					state.objectiveUpdatedAt = Date.now();
+					persistState(ctx);
+					updateWidget(ctx);
+					ctx.ui.notify(`目标已更新:\n旧: ${oldObjective}\n新: ${parsed.objective}`, "info");
+
+					if (isActiveStatus(state.status)) {
+						pi.sendUserMessage(objectiveUpdatedPrompt(state, oldObjective), { deliverAs: "steer" });
+					}
+					return;
+				}
+
+				case "set": {
+					if (!parsed.objective) {
+						ctx.ui.notify("用法: /goal <objective> [--tokens N] [--timeout N]", "warning");
+						return;
+					}
+					// 如果已有活跃 goal，先取消旧的
+					if (state && !isTerminalStatus(state.status)) {
+						state.status = "cancelled";
+						persistState(ctx);
+					}
+
+					const budget: Partial<BudgetConfig> = {};
+					if (parsed.budget?.tokenBudget) budget.tokenBudget = parsed.budget.tokenBudget;
+					if (parsed.budget?.timeBudgetMinutes) budget.timeBudgetMinutes = parsed.budget.timeBudgetMinutes;
+					budget.maxTurns = parsed.budget?.maxTurns ?? DEFAULT_BUDGET.maxTurns;
+					budget.maxStallTurns = parsed.budget?.maxStallTurns ?? DEFAULT_BUDGET.maxStallTurns;
+
+					state = createInitialState(parsed.objective, budget);
+					tasksCompletedAtTurnStart = 0;
+
+					persistState(ctx);
+					updateWidget(ctx);
+
+					const budgetNotice: string[] = [];
+					if (budget.tokenBudget) budgetNotice.push(`Token 预算: ${budget.tokenBudget}`);
+					if (budget.timeBudgetMinutes) budgetNotice.push(`时间预算: ${budget.timeBudgetMinutes} 分钟`);
+					const notice = [
+						`Goal 已启动: ${parsed.objective}`,
+						`最大轮次: ${budget.maxTurns}`,
+						...budgetNotice,
+					].join("\n");
+					ctx.ui.notify(notice, "info");
+
+					pi.sendUserMessage(parsed.objective, { deliverAs: "followUp" });
+					return;
+				}
+			}
+		},
+	});
+
+	// ── Event: before_agent_start ──────────────────────
+
+	pi.on("before_agent_start", async (_event, ctx) => {
+		if (!state || !isActiveStatus(state.status)) return;
+
+		// 上下文空间保护
+		const usage = ctx.getContextUsage();
+		if (usage && usage.contextWindow > 0 && (usage.tokens ?? 0) / usage.contextWindow > 0.85) {
+			state.status = transitionStatus(state.status, "paused");
+			state.timeUsedSeconds = getElapsedTimeSeconds(state);
+			persistState(ctx);
+			updateWidget(ctx);
+
+			return {
+				message: {
+					customType: "goal-context-exceeded",
+					content:
+						"[GOAL — 上下文空间不足，必须立即收尾]\n" +
+						"1. 用 goal_manager 的 list_tasks 查看剩余任务\n" +
+						"2. 只标记你真正完成且有证据的任务\n" +
+						"3. 总结当前进度和剩余工作\n" +
+						"不要再开始新任务。",
+					display: false,
+				},
+			};
+		}
+
+		return {
+			message: {
+				customType: "goal-context",
+				content: contextInjectionPrompt(state),
+				display: false,
+			},
+		};
+	});
+
+	// ── Event: turn_start ──────────────────────────────
+
+	pi.on("turn_start", async () => {
+		if (!state || !isActiveStatus(state.status)) return;
+		tasksCompletedAtTurnStart = getCompletedCount(state.tasks);
+	});
+
+	// ── Event: turn_end ────────────────────────────────
+
+	pi.on("turn_end", async (_event, ctx) => {
+		if (!state) return;
+		updateWidget(ctx);
+	});
+
+	// ── Event: message_end (token accounting) ──────────
+
+	pi.on("message_end", async (event, _ctx) => {
+		if (!state || !isActiveStatus(state.status)) return;
+		if (event.message.role !== "assistant") return;
+
+		const usage = event.message.usage;
+		if (usage?.totalTokens) {
+			state.tokensUsed += usage.totalTokens;
+		}
+	});
+
+	// ── Event: agent_end ───────────────────────────────
+
+	pi.on("agent_end", async (_event, ctx) => {
+		if (!state || !isActiveStatus(state.status)) return;
+
+		// Token 预算检查
+		if (state.budget.tokenBudget && state.tokensUsed >= state.budget.tokenBudget) {
+			if (!state.budgetLimitSteeringSent) {
+				state.budgetLimitSteeringSent = true;
+				persistState(ctx);
+				updateWidget(ctx);
+
+				// 注入收尾 steering 而不是直接终止，给模型一个收尾的机会
+				pi.sendUserMessage(budgetLimitPrompt(state, "token"), { deliverAs: "steer" });
+
+				// 设置一个延迟检查：如果下一轮还没收尾就强制 budget_limited
+				setTimeout(() => {
+					if (state && state.tokensUsed >= state.budget.tokenBudget! && isActiveStatus(state.status)) {
+						state.status = transitionStatus(state.status, "budget_limited");
+						persistState(ctx);
+						updateWidget(ctx);
+						ctx.ui.notify("Token 预算已耗尽，Goal 已自动终止。", "warning");
+					}
+				}, 120_000); // 2 分钟 grace period
+
+				return;
+			}
+			state.status = transitionStatus(state.status, "budget_limited");
+			persistState(ctx);
+			updateWidget(ctx);
+			ctx.ui.notify("Token 预算已耗尽，Goal 已终止。", "warning");
+			return;
+		}
+
+		// 时间预算检查
+		if (state.budget.timeBudgetMinutes) {
+			const elapsed = getElapsedTimeSeconds(state);
+			if (elapsed >= state.budget.timeBudgetMinutes * 60) {
+				state.status = transitionStatus(state.status, "time_limited");
+				state.timeUsedSeconds = elapsed;
+				persistState(ctx);
+				updateWidget(ctx);
+				ctx.ui.notify(
+					`时间预算耗尽 (${state.budget.timeBudgetMinutes} 分钟)，Goal 已终止。`,
+					"warning",
+				);
+				return;
+			}
+		}
+
+		// 目标完成
+		if (state.status === "complete") {
+			state.timeUsedSeconds = getElapsedTimeSeconds(state);
+			persistState(ctx);
+			updateWidget(ctx);
+			ctx.ui.notify(
+				`目标已完成 ✓ (${getCompletedCount(state.tasks)}/${state.tasks.length} 任务, ${state.turnCount} 轮)`,
+				"info",
+			);
+			return;
+		}
+
+		// Blocked
+		if (state.status === "blocked") {
+			persistState(ctx);
+			updateWidget(ctx);
+			ctx.ui.notify("Goal 被阻塞。使用 /goal resume 恢复或 /goal clear 清除。", "warning");
+			return;
+		}
+
+		// 所有任务完成但 goal 未标记 complete → 自动提示
+		const incomplete = getIncompleteTasks(state.tasks);
+		const total = state.tasks.length;
+		if (total > 0 && incomplete.length === 0) {
+			// 任务都完成了但 goal 未 complete → 自动提示模型
+			pi.sendUserMessage(
+				`所有 ${total} 个任务已完成。请调用 goal_manager 的 complete_goal 完成目标，提供整体 evidence。` +
+					`\n\n目标: ${state.objective}`,
+				{ deliverAs: "followUp" },
+			);
+			persistState(ctx);
+			updateWidget(ctx);
+			return;
+		}
+
+		// 没有任务创建
+		if (total === 0) {
+			state.turnCount++;
+			if (state.turnCount >= state.budget.maxTurns) {
+				state.status = transitionStatus(state.status, "cancelled");
+				persistState(ctx);
+				updateWidget(ctx);
+				ctx.ui.notify(
+					`已达最大轮次 (${state.budget.maxTurns})，LLM 未创建任务清单。`,
+					"warning",
+				);
+				return;
+			}
+			pi.sendUserMessage(
+				`你尚未创建任务清单。请立即调用 goal_manager 的 create_tasks 将工作拆分为具体可验证的任务步骤。` +
+					`\n\n目标: ${state.objective}`,
+				{ deliverAs: "followUp" },
+			);
+			persistState(ctx);
+			updateWidget(ctx);
+			return;
+		}
+
+		// 最大轮次检查
+		if (state.turnCount >= state.budget.maxTurns) {
+			state.status = transitionStatus(state.status, "cancelled");
+			persistState(ctx);
+			updateWidget(ctx);
+			ctx.ui.notify(
+				`已达最大轮次 (${state.budget.maxTurns})，还有 ${incomplete.length} 个任务未完成。`,
+				"warning",
+			);
+			return;
+		}
+
+		// 进展跟踪
+		const currentCompleted = getCompletedCount(state.tasks);
+		const progressThisRound = currentCompleted - tasksCompletedAtTurnStart;
+
+		if (progressThisRound === 0) {
+			state.stallCount++;
+		} else {
+			state.stallCount = 0;
+			state.lastProgressTurn = state.turnCount;
+		}
+
+		// Stall → Blocked
+		if (state.stallCount >= state.budget.maxStallTurns) {
+			state.status = transitionStatus(state.status, "blocked");
+			persistState(ctx);
+			updateWidget(ctx);
+			ctx.ui.notify(
+				`已连续 ${state.stallCount} 轮无进展，Goal 自动阻塞。使用 /goal resume 恢复或 /goal clear 清除。`,
+				"warning",
+			);
+			return;
+		}
+
+		// Normal continuation
+		state.turnCount++;
+		persistState(ctx);
+		updateWidget(ctx);
+
+		pi.sendUserMessage(continuationPrompt(state), { deliverAs: "followUp" });
+	});
+
+	// ── Event: session_start (state reconstruction) ───
+
+	pi.on("session_start", async (_event, ctx) => {
+		reconstructState(ctx);
+		if (state) {
+			tasksCompletedAtTurnStart = getCompletedCount(state.tasks);
+			updateWidget(ctx);
+		}
+	});
+
+	// ── Event: session_shutdown ────────────────────────
+
+	pi.on("session_shutdown", async () => {
+		// State is persisted in session entries
+	});
+
+	// ── Message Renderers ──────────────────────────────
+
+	const goalMessageTypes = [
+		"goal-context",
+		"goal-context-exceeded",
+	];
+
+	for (const customType of goalMessageTypes) {
+		pi.registerMessageRenderer(customType, (message, _options, theme) => {
+			const prefix =
+				message.customType === "goal-context-exceeded"
+					? theme.fg("error", "[GOAL 预算] ")
+					: theme.fg("accent", "[GOAL] ");
+			return new Text(prefix + theme.fg("dim", message.content), 0, 0);
+		});
+	}
+}
