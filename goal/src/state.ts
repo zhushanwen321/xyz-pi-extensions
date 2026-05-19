@@ -66,12 +66,13 @@ export interface GoalRuntimeState {
 	lastProgressTurn: number; // 上次有进展的 turn number
 	budgetLimitSteeringSent: boolean; // 是否已发送预算耗尽 steering
 	objectiveUpdatedAt: number; // objective 最后更新时间
+	lastBlockerReason: string | null; // 上次 report_blocked 的原因，resume 时注入
 }
 
 // ── 默认值 ────────────────────────────────────────────
 
 export const DEFAULT_BUDGET: BudgetConfig = {
-	maxStallTurns: 3,
+	maxStallTurns: 5,
 	maxTurns: 50,
 };
 
@@ -90,6 +91,7 @@ export function createInitialState(objective: string, budget: Partial<BudgetConf
 		lastProgressTurn: 0,
 		budgetLimitSteeringSent: false,
 		objectiveUpdatedAt: Date.now(),
+		lastBlockerReason: null,
 	};
 }
 

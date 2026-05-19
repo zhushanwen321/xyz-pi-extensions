@@ -78,7 +78,6 @@ interface GoalManagerDetails {
 export default function goalExtension(pi: ExtensionAPI) {
 	let state: GoalRuntimeState | null = null;
 	let tasksCompletedAtAgentStart = 0;
-	let budgetTimerId: ReturnType<typeof setTimeout> | null = null;
 
 	// ── Tool: goal_manager ─────────────────────────────
 
@@ -177,6 +176,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 					if (!params.reason || params.reason.trim() === "") {
 						throw new Error("report_blocked requires reason — 说明阻塞原因");
 					}
+					state.lastBlockerReason = params.reason;
 					state.status = transitionStatus(state.status, "blocked");
 					persistState(ctx);
 					return makeResult(`已报告阻塞。原因: ${params.reason}`);
@@ -242,13 +242,6 @@ export default function goalExtension(pi: ExtensionAPI) {
 		pi.appendEntry(ENTRY_TYPE, serializeState(state));
 	}
 
-	function clearBudgetTimer(): void {
-		if (budgetTimerId !== null) {
-			clearTimeout(budgetTimerId);
-			budgetTimerId = null;
-		}
-	}
-
 	function reconstructState(ctx: ExtensionContext): void {
 		state = null;
 		const entries = ctx.sessionManager.getEntries();
@@ -290,7 +283,6 @@ export default function goalExtension(pi: ExtensionAPI) {
 	}
 
 	function clearGoal(ctx: ExtensionContext): void {
-		clearBudgetTimer();
 		state = null;
 		tasksCompletedAtAgentStart = 0;
 		ctx.ui.setWidget("goal", undefined);
@@ -367,7 +359,13 @@ export default function goalExtension(pi: ExtensionAPI) {
 					const incomplete = getIncompleteTasks(state.tasks);
 					if (incomplete.length > 0) {
 						pi.sendUserMessage(
-							`Goal 已恢复。继续执行剩余 ${incomplete.length} 个任务。\n\n目标: ${state.objective}`,
+							`Goal 已恢复。继续执行剩余 ${incomplete.length} 个任务。` +
+							(state.lastBlockerReason ? `
+
+上次阻塞原因: ${state.lastBlockerReason}。请尝试不同的方法。` : "") +
+							`
+
+目标: ${state.objective}`,
 							{ deliverAs: "followUp" },
 						);
 					} else {
@@ -422,8 +420,6 @@ export default function goalExtension(pi: ExtensionAPI) {
 						state.status = "cancelled";
 						persistState(ctx);
 					}
-
-					clearBudgetTimer();
 
 					const budget: Partial<BudgetConfig> = {};
 					if (parsed.budget?.tokenBudget) budget.tokenBudget = parsed.budget.tokenBudget;
@@ -505,14 +501,23 @@ export default function goalExtension(pi: ExtensionAPI) {
 	});
 
 	// ── Event: message_end (token accounting) ──────────
+	// 使用 input + output 累加（含 cacheRead，排除 cacheWrite 的一次性成本）
+	// 这与 Codex 的"排除 cached tokens"略有不同，但更贴近实际费用
 
 	pi.on("message_end", async (event, _ctx) => {
 		if (!state || !isActiveStatus(state.status)) return;
 		if (event.message.role !== "assistant") return;
 
 		const usage = event.message.usage;
-		if (usage?.totalTokens) {
-			state.tokensUsed += usage.totalTokens;
+		if (usage) {
+			const input = usage.input ?? 0;
+			const output = usage.output ?? 0;
+			if (input > 0 || output > 0) {
+				state.tokensUsed += input + output;
+			} else if (usage.totalTokens) {
+				// fallback：某些 provider 不暴露分项 token 数据
+				state.tokensUsed += usage.totalTokens;
+			}
 		}
 	});
 
@@ -544,44 +549,30 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 		if (!isActiveStatus(state.status)) return;
 
-		// Token 预算检查
-		if (state.budget.tokenBudget && state.tokensUsed >= state.budget.tokenBudget) {
-			if (!state.budgetLimitSteeringSent) {
+		// Token 预算检查（同步两阶段，不用 setTimeout）
+		// Phase 1: 首次达到 90% 预算 → 注入 steering，允许一轮收尾
+		// Phase 2: 已发 steering 且已达到 100% → 直接终止
+		if (state.budget.tokenBudget) {
+			const pct = state.tokensUsed / state.budget.tokenBudget;
+
+			if (pct >= 1 && state.budgetLimitSteeringSent) {
+				// Phase 2: 已发过 steering 且仍超限 → 终止
+				state.status = transitionStatus(state.status, "budget_limited");
+				state.timeUsedSeconds = getElapsedTimeSeconds(state);
+				persistState(ctx);
+				updateWidget(ctx);
+				ctx.ui.notify("Token 预算已耗尽，Goal 已终止。", "warning");
+				return;
+			}
+
+			if (pct >= 0.9 && !state.budgetLimitSteeringSent) {
+				// Phase 1: 首次接近预算 → 注入收尾 steering
 				state.budgetLimitSteeringSent = true;
 				persistState(ctx);
 				updateWidget(ctx);
-
-				// 注入收尾 steering，给模型一个收尾的机会
 				pi.sendUserMessage(budgetLimitPrompt(state, "token"), { deliverAs: "steer" });
-
-				// 捕获当前 goal 的引用，防止 timer 误杀新 goal
-				const currentGoalId = state.goalId;
-
-				// 设置延迟检查：如果下一轮还没收尾就强制 budget_limited
-				budgetTimerId = setTimeout(() => {
-					if (
-						state &&
-						state.goalId === currentGoalId &&
-						state.tokensUsed >= state.budget.tokenBudget! &&
-						isActiveStatus(state.status)
-					) {
-						state.status = transitionStatus(state.status, "budget_limited");
-						state.timeUsedSeconds = getElapsedTimeSeconds(state);
-						persistState(ctx);
-						updateWidget(ctx);
-						ctx.ui.notify("Token 预算已耗尽，Goal 已自动终止。", "warning");
-					}
-					budgetTimerId = null;
-				}, 120_000); // 2 分钟 grace period
-
 				return;
 			}
-			state.status = transitionStatus(state.status, "budget_limited");
-			state.timeUsedSeconds = getElapsedTimeSeconds(state);
-			persistState(ctx);
-			updateWidget(ctx);
-			ctx.ui.notify("Token 预算已耗尽，Goal 已终止。", "warning");
-			return;
 		}
 
 		// 时间预算检查
