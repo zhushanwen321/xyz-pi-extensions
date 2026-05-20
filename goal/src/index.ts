@@ -94,7 +94,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		name: "goal_manager",
 		label: "Goal Manager",
 		description:
-			"Goal 模式任务管理器。用户通过 /goal 命令启动目标后，你使用此工具追踪进度。" +
+			"Goal 模式任务管理器。此工具仅在用户通过 /goal 命令启动目标后才可用，AI 不能主动触发此功能。如果 Goal 模式未激活，调用此工具会报错。" +
 			"\n\n可用 action:" +
 			"\n- create_tasks: 拆分目标为任务清单（每个 turn 开始前必须调用）" +
 			"\n- complete_task: 标记任务完成（必须提供 evidence）" +
