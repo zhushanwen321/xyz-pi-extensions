@@ -1,0 +1,39 @@
+#!/bin/bash
+# pre-commit — 类型检查 + ESLint 品味检查
+#
+# 跳过方式：SKIP_LINT=1 git commit -m "..."
+set -euo pipefail
+
+if [[ "${SKIP_LINT:-}" == "1" ]]; then
+  echo "[pre-commit] SKIP_LINT=1, 跳过检查"
+  exit 0
+fi
+
+C_RED='\033[0;31m'
+C_GREEN='\033[0;32m'
+C_RESET='\033[0m'
+
+# ── 1. tsc 类型检查 ──────────────────────────────────────
+echo "--- tsc --noEmit ---"
+if ! npx tsc --noEmit 2>&1; then
+  echo -e "${C_RED}[FAIL]${C_RESET} TypeScript 类型检查失败"
+  exit 1
+fi
+echo -e "${C_GREEN}[ OK ]${C_RESET} tsc 通过"
+
+# ── 2. ESLint 品味检查（仅检查 staged 的 .ts 文件）──────
+STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep '\.ts$' | grep -v '\.d\.ts$' || true)
+
+if [[ -z "$STAGED" ]]; then
+  echo "[pre-commit] 无 .ts 文件变更，跳过 eslint"
+  exit 0
+fi
+
+echo "--- eslint ---"
+# 将 staged 文件列表传给 eslint
+if ! npx eslint $STAGED 2>&1; then
+  echo -e "${C_RED}[FAIL]${C_RESET} ESLint 检查失败"
+  echo "修复：npm run lint:fix 或 SKIP_LINT=1 git commit 跳过"
+  exit 1
+fi
+echo -e "${C_GREEN}[ OK ]${C_RESET} eslint 通过"
