@@ -1,4 +1,7 @@
 ---
+verdict: fail
+must_fix: 2
+
 review:
   type: plan_review
   round: 1
