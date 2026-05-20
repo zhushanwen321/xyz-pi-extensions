@@ -495,9 +495,7 @@ function renderParallelTable(view: ParallelSummaryView, theme: any): Text {
 	}
 
 	if (view.isDone) {
-		const totalParts: string[] = [];
-		totalParts.push(`Total: ↑${formatTokens(view.aggregateTokens.input)} ↓${formatTokens(view.aggregateTokens.output)}`);
-		totalParts.push(`$${view.aggregateCost.toFixed(4)}`);
+
 		const totalLine = [];
 		if (view.aggregateTokens.input > 0 || view.aggregateTokens.output > 0) {
 			totalLine.push(`Total: ↑${formatTokens(view.aggregateTokens.input)} ↓${formatTokens(view.aggregateTokens.output)}`);
@@ -542,10 +540,16 @@ function renderParallelDetail(view: ParallelSummaryView, theme: any, mdTheme: an
 	}
 
 	const totalParts: string[] = [];
-	totalParts.push(`↑${formatTokens(view.aggregateTokens.input)} ↓${formatTokens(view.aggregateTokens.output)}`);
-	totalParts.push(`$${view.aggregateCost.toFixed(4)}`);
-	container.addChild(new Spacer(1));
-	container.addChild(new Text(theme.fg("dim", `Total: ${totalParts.join("  ")}`), 0, 0));
+	if (view.aggregateTokens.input > 0 || view.aggregateTokens.output > 0) {
+		totalParts.push(`↑${formatTokens(view.aggregateTokens.input)} ↓${formatTokens(view.aggregateTokens.output)}`);
+	}
+	if (view.aggregateCost > 0) {
+		totalParts.push(`$${view.aggregateCost.toFixed(4)}`);
+	}
+	if (totalParts.length > 0) {
+		container.addChild(new Spacer(1));
+		container.addChild(new Text(theme.fg("dim", `Total: ${totalParts.join("  ")}`), 0, 0));
+	}
 
 	return container;
 }
