@@ -246,7 +246,7 @@ interface ParallelSummaryView {
     agents: AgentResultView[];
     aggregateTokens: { input: number; output: number };
     aggregateCost: number;
-    totalDurationMs?: number; // 最慢 agent 的耗时
+    totalDurationMs?: number; // max(agents.duration.durationMs)，即 wall-clock 总耗时（所有 agent 同时启动，所以等于最慢 agent 的耗时）
 }
 ```
 
@@ -259,9 +259,11 @@ interface ParallelSummaryView {
 | `buildAgentResultView(r: SingleResult, now?: number): AgentResultView` | SingleResult -> 视图模型 |
 | `buildParallelSummaryView(results: SingleResult[]): ParallelSummaryView` | 多个结果 -> 汇总视图模型 |
 | `renderAgentRow(view: AgentResultView, theme): string` | 单个 agent collapsed 行 |
-| `renderAgentDetail(view: AgentResultView, theme): Container \| Text` | 单个 agent expanded |
+| `renderAgentDetail(view: AgentResultView, theme): Container \| Text` | 单个 agent expanded（chain 的每个 step 也复用此函数） |
 | `renderParallelTable(view: ParallelSummaryView, theme): Text` | 并行 collapsed 表格 |
-| `renderParallelDetail(view: ParallelSummaryView, theme): Container` | 并行 expanded 详情 |
+| `renderParallelDetail(view: ParallelSummaryView, theme): Container` | 并行 expanded详情 |
+
+注意：chain 模式不需要独立的渲染函数。expanded 时循环调 `renderAgentDetail`（加 step 编号前缀），collapsed 时循环拼接 `renderAgentRow`。chain 和 single 的渲染差异仅在分发器中处理。
 | `cleanupOldTempFiles(): void` | 清理过期临时文件 |
 | `getTempDir(): string` | 返回固定临时目录路径 |
 
