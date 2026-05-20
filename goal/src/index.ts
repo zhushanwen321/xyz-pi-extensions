@@ -62,12 +62,14 @@ const GoalManagerParams = Type.Object({
 		"complete_task",
 		"list_tasks",
 		"complete_goal",
+		"cancel_goal",
 		"report_blocked",
 	] as const),
 	tasks: Type.Optional(Type.Array(Type.String(), { description: "Task descriptions for create_tasks" })),
 	taskId: Type.Optional(Type.Number({ description: "Task ID for complete_task" })),
 	evidence: Type.Optional(Type.String({ description: "Evidence for completion (required for complete_task and complete_goal)" })),
 	reason: Type.Optional(Type.String({ description: "Reason for being blocked (required for report_blocked)" })),
+	cancelReason: Type.Optional(Type.String({ description: "Why the user wants to cancel (required for cancel_goal)" })),
 });
 
 // ── Tool Details Types ────────────────────────────────
@@ -92,18 +94,25 @@ export default function goalExtension(pi: ExtensionAPI) {
 		name: "goal_manager",
 		label: "Goal Manager",
 		description:
-			"管理 /goal 模式的目标和任务清单。必须在开始工作前调用 create_tasks 拆分任务。" +
-			"完成每个任务调用 complete_task（必须提供 evidence）。" +
-			"目标达成时调用 complete_goal（必须提供整体 evidence）。" +
-			"遇到阻塞调用 report_blocked。只在 /goal 模式激活时可用。",
-		promptSnippet: "管理目标驱动模式下的任务清单和完成状态",
+			"Goal 模式任务管理器。用户通过 /goal 命令启动目标后，你使用此工具追踪进度。" +
+			"\n\n可用 action:" +
+			"\n- create_tasks: 拆分目标为任务清单（每个 turn 开始前必须调用）" +
+			"\n- complete_task: 标记任务完成（必须提供 evidence）" +
+			"\n- list_tasks: 查看进度和剩余预算" +
+			"\n- complete_goal: 标记目标达成（必须所有任务完成 + evidence）" +
+			"\n- cancel_goal: 取消当前目标（用户要求退出/停止时使用）" +
+			"\n- report_blocked: 报告阻塞（遇到无法解决的问题时使用）",
+		promptSnippet: "管理 /goal 模式的任务清单、完成状态和退出",
 		promptGuidelines: [
-			"使用 goal_manager 的 create_tasks 在开始工作前将目标拆分为可验证的具体步骤",
-			"如果已有任务清单，不要再次调用 create_tasks，除非目标被更新",
-			"完成每个任务后必须调用 goal_manager 的 complete_task 并提供 evidence（具体证据，如'运行测试 X 通过'）",
-			"只有当你能提供具体证据证明目标已达成时，才能调用 goal_manager 的 complete_goal",
-			"遇到无法解决的阻塞时，调用 goal_manager 的 report_blocked 报告原因",
-			"使用 goal_manager 的 list_tasks 查看当前进度和剩余任务",
+			"[工作流] 收到目标后，第一步必须调用 create_tasks 拆分任务。已有任务清单时不要重复调用",
+			"[完成] 每完成一个任务调用 complete_task，必须提供 evidence（具体证据，如'测试 X 通过'、'文件 F 已创建'）",
+			"[目标完成] 只有所有任务完成且有整体证据时，才能调用 complete_goal",
+			"[退出] 当用户说'停止'、'退出'、'取消'、'stop'、'exit'、'cancel'、'不用了'、'结束'等表示不想继续时，立即调用 cancel_goal 取消目标，不要引导用户走 complete_goal 流程",
+			"[阻塞] 遇到无法解决的技术问题时调用 report_blocked 说明原因",
+			"[进度] 随时可用 list_tasks 查看剩余任务和预算",
+			"[禁止] 不要在没有 evidence 的情况下调用 complete_task 或 complete_goal",
+			"[禁止] 不要在用户明确想退出时强制要求完成任务——直接 cancel_goal",
+			"[禁止] 不要重复调用 create_tasks 覆盖已有未完成任务，如需重新规划请建议用户使用 /goal update",
 		],
 		parameters: GoalManagerParams,
 
@@ -199,6 +208,25 @@ export default function goalExtension(pi: ExtensionAPI) {
 					state.status = transitionStatus(state.status, "blocked");
 					persistState(ctx);
 					return makeResult(`已报告阻塞。原因: ${params.reason}`);
+				}
+
+				case "cancel_goal": {
+					if (isTerminalStatus(state.status)) {
+						throw new Error(`Goal 已处于终态 (${state.status})。`);
+					}
+					const reason = params.cancelReason ?? "用户要求取消";
+					state.status = "cancelled";
+					persistState(ctx);
+					clearGoal(ctx);
+					return {
+						content: [{ type: "text", text: `Goal 已取消: ${reason}` }],
+						details: {
+							action: "cancel",
+							tasks: [],
+							goalId: state?.goalId ?? "",
+							status: "cancelled",
+						} satisfies GoalManagerDetails,
+					};
 				}
 
 				default:
