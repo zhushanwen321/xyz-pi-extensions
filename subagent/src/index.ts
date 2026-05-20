@@ -1726,7 +1726,7 @@ export default function (pi: ExtensionAPI) {
 			const complexity = args.taskComplexity as string | undefined;
 			const model = args.model || (complexity ? `auto:${complexity}` : "?");
 			const thinking = args.thinkingLevel as string | undefined;
-			const thinkingLabel = thinking ? theme.fg("dim", ` thinking:${thinking}`) : "";
+			const modelDisplay = thinking ? theme.fg("dim", ` ${model}/${thinking}`) : theme.fg("dim", ` ${model}`);
 			const bg = args.background ? theme.fg("warning", " [bg]") : "";
 
 			if (args.chain && args.chain.length > 0) {
@@ -1734,8 +1734,7 @@ export default function (pi: ExtensionAPI) {
 					theme.fg("toolTitle", theme.bold("subagent ")) +
 					theme.fg("accent", `chain (${args.chain.length} steps)`) +
 					theme.fg("muted", ` [${scope}]`) +
-					theme.fg("dim", ` ${model}`) +
-					thinkingLabel +
+					modelDisplay +
 					bg;
 				for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
 					const step = args.chain[i];
@@ -1751,8 +1750,7 @@ export default function (pi: ExtensionAPI) {
 					theme.fg("toolTitle", theme.bold("subagent ")) +
 					theme.fg("accent", `parallel (${args.tasks.length} tasks)`) +
 					theme.fg("muted", ` [${scope}]`) +
-					theme.fg("dim", ` ${model}`) +
-					thinkingLabel +
+					modelDisplay +
 					bg;
 				for (const t of args.tasks.slice(0, 3)) {
 					const preview = t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;
@@ -1767,8 +1765,7 @@ export default function (pi: ExtensionAPI) {
 				theme.fg("toolTitle", theme.bold("subagent ")) +
 				theme.fg("accent", agentName) +
 				theme.fg("muted", ` [${scope}]`) +
-				theme.fg("dim", ` ${model}`) +
-				thinkingLabel +
+				modelDisplay +
 				bg;
 			text += `\n  ${theme.fg("dim", preview)}`;
 			return new Text(text, 0, 0);
