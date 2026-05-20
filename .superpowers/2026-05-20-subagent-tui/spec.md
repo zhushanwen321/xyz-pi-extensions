@@ -1,8 +1,33 @@
+---
+verdict: pass
+---
+
 # Subagent Extension TUI 优化
 
 ## 目标
 
 优化定制版 subagent extension（`~/.pi/agent/extensions/subagent/index.ts`）的并行执行体验，解决执行时间不可见、TUI 展示混乱、streaming 更新无节流等问题。
+
+## Background
+
+定制版 subagent extension 在并行执行时存在三个体验问题：
+1. 无执行时间信息 — 无法判断哪个 agent 慢、总体耗时多少
+2. TUI 展示混乱 — 并行运行时 streaming 更新无节流，collapsed 模式显示过多 tool call 细节
+3. 临时文件残留 — SIGKILL 时 finally 不执行，`os.tmpdir()` 下残留 `pi-subagent-*` 目录
+
+此外 `getFinalOutput` 在最后一条 assistant 消息只有 tool_use 时返回空字符串，丢失有效输出。
+
+## Complexity Assessment
+
+**L1（简单）**— 单文件修改，无跨服务依赖，无新存储引擎。
+
+| 维度 | 评估 |
+|------|------|
+| 领域影响 | 扩展现有渲染逻辑，无新概念 |
+| 存储影响 | 仅临时文件路径变更 |
+| 数据流 | 同步，短路径 |
+| API 影响 | 无新端点 |
+| 非功能 | 无特殊要求 |
 
 ## 改动范围
 
@@ -14,7 +39,26 @@
 - chain/single 模式的核心执行逻辑
 - Pi 官方版（`pi-mono/.../examples/extensions/subagent/`）
 
-## 架构决策：数据模型 + 渲染分离
+## Constraints
+
+- 仅修改 `/Users/zhushanwen/Code/useful-dev-tools/claude-code-tool/custom-tools/subagent/index.ts`（当前 1754 行）
+- 不改 agent 发现逻辑（`agents.ts`）、chain/single 模式的核心执行逻辑、Pi 官方版
+- 不加颜色区分系统
+- Pi TUI 组件：`Container`、`Text`、`Markdown`、`Spacer`，theme 通过 `getMarkdownTheme()` 和 `theme.fg()` 使用
+- `Ctrl+O to expand` 是 Pi TUI 内置功能，不需要代码实现
+
+## Acceptance Criteria
+
+- **AC1**：并行执行时，TUI 显示每个 agent 的耗时（格式：234ms / 3.5s / 2m15s）；运行中 agent 显示 elapsed + `last @ HH:MM:SS`
+- **AC2**：并行 streaming 更新频率 <= 500ms（`ThrottleState`），单个 agent 完成时强制发送
+- **AC3**：并行 collapsed 模式改为表格式汇总（每 agent 一行：状态/耗时/turns/token/成本），不再显示 tool call 细节
+- **AC4**：并行模式任意 agent 失败 → 返回结果 `isError: true`，工具 description 包含失败指引
+- **AC5**：`getFinalOutput` 能从多条 assistant 消息中找到最后一条包含非空 text 的输出
+- **AC6**：临时文件使用固定子目录 `os.tmpdir()/pi-subagent/`，每次执行时清理超过 1 小时的文件
+- **AC7**：single/chain 模式 existing 渲染行为不变（collapsed 仍显示 tool call，expanded 仍显示完整细节），仅在标题行加入耗时
+- **AC8**：single/chain 模式的 streaming 不加节流（只有并行模式需要，因为并行时多个 agent 同时推送更新）
+
+## Architecture Decision: 数据模型 + 渲染分离
 
 将 `renderResult` 中的"数据准备"和"TUI 渲染"职责分离为三层：
 
@@ -90,6 +134,8 @@ class ThrottleState {
 - 单个 agent 完成时调用 `throttle.forceEmit()` 强制发送最终状态
 - 每个 `execute` 调用创建独立的 `ThrottleState` 实例
 
+**仅并行模式节流。** single/chain 模式的 `emitUpdate` 不加节流——它们只有一个 agent 推送更新，频率不会造成 TUI 闪烁。
+
 **节流间隔：500ms**
 
 ### 3. 并行视图结构优化
@@ -112,7 +158,9 @@ class ThrottleState {
   agent-c  ⏳   8s  0 turns  last @ 14:31:58
 ```
 
-**关键变化：** collapsed 模式不再显示 tool call 细节，只显示汇总行。每个 agent 一行，包含状态/耗时/turns/token/成本。
+**关键变化：** 并行 collapsed 模式不再显示 tool call 细节，只显示汇总行。每个 agent 一行，包含状态/耗时/turns/token/成本。
+
+> **注意：** single 和 chain 的 collapsed 模式保留当前行为（显示 tool call 细节），仅并行 collapsed 改为表格式汇总。
 
 #### Expanded 模式（保留细节）
 
@@ -263,9 +311,10 @@ interface ParallelSummaryView {
 | `renderParallelTable(view: ParallelSummaryView, theme): Text` | 并行 collapsed 表格 |
 | `renderParallelDetail(view: ParallelSummaryView, theme): Container` | 并行 expanded详情 |
 
-注意：chain 模式不需要独立的渲染函数。expanded 时循环调 `renderAgentDetail`（加 step 编号前缀），collapsed 时循环拼接 `renderAgentRow`。chain 和 single 的渲染差异仅在分发器中处理。
 | `cleanupOldTempFiles(): void` | 清理过期临时文件 |
 | `getTempDir(): string` | 返回固定临时目录路径 |
+
+> **注意：** chain 模式不需要独立的渲染函数。expanded 时循环调 `renderAgentDetail`（加 step 编号前缀），collapsed 时保留当前行为（显示 tool call 细节 + 耗时），不使用 `renderAgentRow`。chain 和 single 的渲染差异仅在分发器中处理。
 
 ## 不变的项
 
