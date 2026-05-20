@@ -3,6 +3,7 @@
  */
 
 import type { BudgetConfig } from "./state";
+import { MAX_TURNS_CAP, MAX_STALL_CAP, UPDATE_PREFIX_LENGTH } from "./constants";
 
 export interface GoalCommandArgs {
 	action: "set" | "status" | "pause" | "resume" | "clear" | "update";
@@ -30,7 +31,7 @@ export function parseGoalArgs(raw: string): GoalCommandArgs {
 
 	// /goal update <new objective>
 	if (trimmed.startsWith("update ")) {
-		return { action: "update", objective: fullRaw.slice(7).trim() };
+		return { action: "update", objective: fullRaw.slice(UPDATE_PREFIX_LENGTH).trim() };
 	}
 	// /goal update (without argument) → 报错
 	if (trimmed === "update") {
@@ -58,13 +59,13 @@ export function parseGoalArgs(raw: string): GoalCommandArgs {
 	const maxTurnsMatch = fullRaw.match(/--max-turns\s+(\d+)/);
 	if (maxTurnsMatch) {
 		const val = parseInt(maxTurnsMatch[1]!, 10);
-		if (!isNaN(val)) budget.maxTurns = Math.max(1, Math.min(val, 100));
+		if (!isNaN(val)) budget.maxTurns = Math.max(1, Math.min(val, MAX_TURNS_CAP));
 	}
 
 	const maxStallMatch = fullRaw.match(/--max-stall\s+(\d+)/);
 	if (maxStallMatch) {
 		const val = parseInt(maxStallMatch[1]!, 10);
-		if (!isNaN(val)) budget.maxStallTurns = Math.max(1, Math.min(val, 20));
+		if (!isNaN(val)) budget.maxStallTurns = Math.max(1, Math.min(val, MAX_STALL_CAP));
 	}
 
 	if (!objective) {

@@ -2,15 +2,25 @@
  * Widget 渲染逻辑 — 状态栏和侧边栏任务面板
  */
 
+import type { ThemeColor } from "@mariozechner/pi-coding-agent";
 import type { GoalRuntimeState } from "./state";
-import { getCompletedCount, getIncompleteTasks, getElapsedTimeSeconds, getTokenUsagePercent, getTimeUsagePercent } from "./state";
+import { getCompletedCount, getElapsedTimeSeconds, getTokenUsagePercent, getTimeUsagePercent } from "./state";
+import {
+	SECONDS_PER_MINUTE,
+	PERCENT_FACTOR,
+	BUDGET_PERCENT_HIGH,
+	BUDGET_PERCENT_LOW,
+	PROGRESS_BAR_DEFAULT_WIDTH,
+	OBJECTIVE_DISPLAY_LIMIT,
+	OBJECTIVE_TRUNCATE_KEEP,
+} from "./constants";
 
 export interface ThemeLike {
-	fg: (color: string, text: string) => string;
+	fg: (color: ThemeColor, text: string) => string;
 	bold: (text: string) => string;
 }
 
-function renderProgressBar(pct: number, width: number = 10): string {
+function renderProgressBar(pct: number, width: number = PROGRESS_BAR_DEFAULT_WIDTH): string {
 	const clamped = Math.min(Math.max(pct, 0), 1);
 	const filled = Math.round(clamped * width);
 	return "█".repeat(filled) + "░".repeat(width - filled);
@@ -31,12 +41,12 @@ export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string
 	// Budget indicators
 	if (state.budget.tokenBudget && state.budget.tokenBudget > 0) {
 		const pct = Math.round(getTokenUsagePercent(state));
-		const color = pct >= 90 ? "error" : pct >= 70 ? "warning" : "muted";
+		const color = pct >= BUDGET_PERCENT_HIGH ? "error" : pct >= BUDGET_PERCENT_LOW ? "warning" : "muted";
 		text += th.fg(color, ` | ${pct}% tokens`);
 	}
 	if (state.budget.timeBudgetMinutes && state.budget.timeBudgetMinutes > 0) {
 		const pct = Math.round(getTimeUsagePercent(state));
-		const color = pct >= 90 ? "error" : pct >= 70 ? "warning" : "muted";
+		const color = pct >= BUDGET_PERCENT_HIGH ? "error" : pct >= BUDGET_PERCENT_LOW ? "warning" : "muted";
 		text += th.fg(color, ` | ${pct}% time`);
 	}
 
@@ -69,16 +79,16 @@ export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string
 export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): string[] {
 	if (state.status === "cancelled") return [];
 
-	const completedCount = getCompletedCount(state.tasks);
 	const total = state.tasks.length;
-	const incomplete = getIncompleteTasks(state.tasks);
 
 	// Header line
 	const header = renderStatusLine(state, th);
 	const lines: string[] = [header];
 
 	// Objective (truncated if too long)
-	const objDisplay = state.objective.length > 80 ? state.objective.slice(0, 77) + "..." : state.objective;
+	const objDisplay = state.objective.length > OBJECTIVE_DISPLAY_LIMIT
+		? state.objective.slice(0, OBJECTIVE_TRUNCATE_KEEP) + "..."
+		: state.objective;
 	lines.push(th.fg("dim", `目标: ${objDisplay}`));
 
 	// Task list
@@ -96,13 +106,13 @@ export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): strin
 
 	// P2-8: Budget progress bars
 	if (state.budget.tokenBudget && state.budget.tokenBudget > 0) {
-		const pct = getTokenUsagePercent(state) / 100;
-		lines.push(`  Token: ${renderProgressBar(pct)} ${Math.round(pct * 100)}%`);
+		const pct = getTokenUsagePercent(state) / PERCENT_FACTOR;
+		lines.push(`  Token: ${renderProgressBar(pct)} ${Math.round(pct * PERCENT_FACTOR)}%`);
 	}
 	if (state.budget.timeBudgetMinutes && state.budget.timeBudgetMinutes > 0) {
-		const pct = getTimeUsagePercent(state) / 100;
+		const pct = getTimeUsagePercent(state) / PERCENT_FACTOR;
 		const elapsed = getElapsedTimeSeconds(state);
-		const mins = Math.floor(elapsed / 60);
+		const mins = Math.floor(elapsed / SECONDS_PER_MINUTE);
 		lines.push(`  时间: ${renderProgressBar(pct)} ${mins}/${state.budget.timeBudgetMinutes}分钟`);
 	}
 

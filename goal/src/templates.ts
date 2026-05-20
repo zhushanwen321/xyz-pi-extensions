@@ -10,7 +10,8 @@
  */
 
 import type { GoalRuntimeState, GoalTask } from "./state";
-import { getIncompleteTasks, getCompletedCount, getElapsedTimeSeconds, getTokenUsagePercent, getTimeUsagePercent } from "./state";
+import { getIncompleteTasks, getCompletedCount, getElapsedTimeSeconds } from "./state";
+import { SECONDS_PER_MINUTE, PERCENT_FACTOR } from "./constants";
 
 // ── XML 转义（防止 objective 中的 XML 标签破坏 prompt 结构）──
 
@@ -72,7 +73,7 @@ export function budgetLimitPrompt(state: GoalRuntimeState, limitType: "token" | 
 		`${incompleteSummary}\n` +
 		(limitType === "token"
 			? `Token 已使用: ${state.tokensUsed} / ${state.budget.tokenBudget ?? "未知"}\n`
-			: `已用时间: ${Math.floor(elapsed / 60)}分${Math.floor(elapsed % 60)}秒 / ${state.budget.timeBudgetMinutes ?? "未知"}分钟\n`) +
+			: `已用时间: ${Math.floor(elapsed / SECONDS_PER_MINUTE)}分${Math.floor(elapsed % SECONDS_PER_MINUTE)}秒 / ${state.budget.timeBudgetMinutes ?? "未知"}分钟\n`) +
 		`\n你必须立即收尾:\n` +
 		`1. 用 goal_manager 的 list_tasks 查看剩余任务\n` +
 		`2. 只标记你真正完成且有证据的任务\n` +
@@ -132,12 +133,12 @@ export function contextInjectionPrompt(state: GoalRuntimeState): string {
 function formatBudgetInfo(state: GoalRuntimeState): string {
 	const parts: string[] = [];
 	if (state.budget.tokenBudget) {
-		const pct = Math.round((state.tokensUsed / state.budget.tokenBudget) * 100);
+		const pct = Math.round((state.tokensUsed / state.budget.tokenBudget) * PERCENT_FACTOR);
 		parts.push(`Token: ${pct}%`);
 	}
 	if (state.budget.timeBudgetMinutes) {
 		const elapsed = getElapsedTimeSeconds(state);
-		const pct = Math.round((elapsed / (state.budget.timeBudgetMinutes * 60)) * 100);
+		const pct = Math.round((elapsed / (state.budget.timeBudgetMinutes * SECONDS_PER_MINUTE)) * PERCENT_FACTOR);
 		parts.push(`时间: ${pct}%`);
 	}
 	return parts.length > 0 ? ` (${parts.join(", ")})` : "";
@@ -151,8 +152,8 @@ function formatBudgetLine(state: GoalRuntimeState): string {
 	}
 	if (state.budget.timeBudgetMinutes) {
 		const elapsed = getElapsedTimeSeconds(state);
-		const remaining = Math.max(state.budget.timeBudgetMinutes * 60 - elapsed, 0);
-		parts.push(`Time: ${Math.floor(remaining / 60)}m/${state.budget.timeBudgetMinutes}m`);
+		const remaining = Math.max(state.budget.timeBudgetMinutes * SECONDS_PER_MINUTE - elapsed, 0);
+		parts.push(`Time: ${Math.floor(remaining / SECONDS_PER_MINUTE)}m/${state.budget.timeBudgetMinutes}m`);
 	}
 	return parts.length > 0 ? ` | ${parts.join(" ")}` : "";
 }

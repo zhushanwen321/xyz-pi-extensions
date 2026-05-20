@@ -13,6 +13,8 @@
  * Paused/Blocked 可被 Active 覆盖（用户 resume）
  */
 
+import { SECONDS_PER_MINUTE, MS_PER_SECOND, PERCENT_FACTOR } from "./constants";
+
 // ── Goal 状态枚举 ──────────────────────────────────────
 
 export type GoalStatus =
@@ -166,17 +168,17 @@ export function getIncompleteTasks(tasks: GoalTask[]): GoalTask[] {
 
 export function getElapsedTimeSeconds(state: GoalRuntimeState): number {
 	if (isTerminalStatus(state.status) || state.status === "paused") return state.timeUsedSeconds;
-	return state.timeUsedSeconds + (Date.now() - state.timeStartedAt) / 1000;
+	return state.timeUsedSeconds + (Date.now() - state.timeStartedAt) / MS_PER_SECOND;
 }
 
 export function getTokenUsagePercent(state: GoalRuntimeState): number {
 	if (!state.budget.tokenBudget || state.budget.tokenBudget <= 0) return 0;
-	return (state.tokensUsed / state.budget.tokenBudget) * 100;
+	return (state.tokensUsed / state.budget.tokenBudget) * PERCENT_FACTOR;
 }
 
 export function getTimeUsagePercent(state: GoalRuntimeState): number {
 	if (!state.budget.timeBudgetMinutes || state.budget.timeBudgetMinutes <= 0) return 0;
 	const elapsed = getElapsedTimeSeconds(state);
-	const budgetSeconds = state.budget.timeBudgetMinutes * 60;
-	return (elapsed / budgetSeconds) * 100;
+	const budgetSeconds = state.budget.timeBudgetMinutes * SECONDS_PER_MINUTE;
+	return (elapsed / budgetSeconds) * PERCENT_FACTOR;
 }
