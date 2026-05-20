@@ -177,8 +177,17 @@ export default function goalExtension(pi: ExtensionAPI) {
 					}
 					state.status = transitionStatus(state.status, "complete");
 					persistState(ctx);
+					// #7: 完成时的预算报告
+					const budgetReport: string[] = [];
+					budgetReport.push(`总轮次: ${state.turnCount}`);
+					budgetReport.push(`任务完成: ${getCompletedCount(state.tasks)}/${state.tasks.length}`);
+					if (state.budget.tokenBudget) {
+						budgetReport.push(`Token 消耗: ${state.tokensUsed}/${state.budget.tokenBudget}`);
+					}
+					const elapsed = getElapsedTimeSeconds(state);
+					budgetReport.push(`用时: ${Math.floor(elapsed / 60)}分${Math.floor(elapsed % 60)}秒`);
 					return makeResult(
-						`目标已完成!\n证据: ${params.evidence}\n总轮次: ${state.turnCount}`,
+						`目标已完成!\n证据: ${params.evidence}\n\n--- Budget Report ---\n${budgetReport.join("\n")}`,
 					);
 				}
 
@@ -230,8 +239,20 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	function makeResult(text: string) {
 		if (!state) throw new Error("No active goal");
+		const budgetInfo: string[] = [];
+		// #6: Tool 响应包含剩余预算
+		if (state.budget.tokenBudget) {
+			const remaining = Math.max(state.budget.tokenBudget - state.tokensUsed, 0);
+			budgetInfo.push(`Token: ${state.tokensUsed}/${state.budget.tokenBudget} (剩余 ${remaining})`);
+		}
+		if (state.budget.timeBudgetMinutes) {
+			const elapsed = getElapsedTimeSeconds(state);
+			const remaining = Math.max(state.budget.timeBudgetMinutes * 60 - elapsed, 0);
+			budgetInfo.push(`时间: ${Math.floor(elapsed / 60)}分/${state.budget.timeBudgetMinutes}分 (剩余 ${Math.floor(remaining / 60)}分)`);
+		}
+		const suffix = budgetInfo.length > 0 ? `\n\n[Budget] ${budgetInfo.join(" | ")}` : "";
 		return {
-			content: [{ type: "text", text }],
+			content: [{ type: "text", text: text + suffix }],
 			details: {
 				action: "update",
 				tasks: state.tasks.map((t) => ({ ...t })),
@@ -280,6 +301,30 @@ export default function goalExtension(pi: ExtensionAPI) {
 		if (!isTerminalStatus(state.status) && state.status !== "paused") {
 			state.status = "active";
 			state.timeStartedAt = Date.now();
+		}
+
+		// #3: Entry GC — 标记旧的 goal-state entries 以便 session manager 清理
+		// 找到最新 entry 后，向前扫描所有旧的 goal-state entries 并从数组移除
+		// 这防止长 session 中 entries 无限积累
+		const goalEntryIndices: number[] = [];
+		let latestFound = false;
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const entry = entries[i];
+			if (
+				entry.type === "custom" &&
+				"customType" in entry &&
+				(entry as any).customType === ENTRY_TYPE
+			) {
+				if (!latestFound) {
+					latestFound = true; // 保留最新的
+				} else {
+					goalEntryIndices.push(i);
+				}
+			}
+		}
+		// 从后向前删除，避免索引偏移
+		for (const idx of goalEntryIndices) {
+			entries.splice(idx, 1);
 		}
 	}
 
@@ -365,6 +410,26 @@ export default function goalExtension(pi: ExtensionAPI) {
 					state.status = "active";
 					state.stallCount = 0;
 					state.timeStartedAt = Date.now();
+
+					// #1: Resume 时重检预算 — 如果 token 或时间已超限，直接转终态
+					if (state.budget.tokenBudget && state.tokensUsed >= state.budget.tokenBudget) {
+						state.status = transitionStatus(state.status, "budget_limited");
+						persistState(ctx);
+						updateWidget(ctx);
+						ctx.ui.notify("Token 预算已耗尽，无法恢复。使用 /goal clear 清除。", "warning");
+						return;
+					}
+					if (state.budget.timeBudgetMinutes) {
+						const elapsed = getElapsedTimeSeconds(state);
+						if (elapsed >= state.budget.timeBudgetMinutes * 60) {
+							state.status = transitionStatus(state.status, "time_limited");
+							persistState(ctx);
+							updateWidget(ctx);
+							ctx.ui.notify("时间预算已耗尽，无法恢复。使用 /goal clear 清除。", "warning");
+							return;
+						}
+					}
+
 					persistState(ctx);
 					updateWidget(ctx);
 
@@ -433,6 +498,11 @@ export default function goalExtension(pi: ExtensionAPI) {
 				case "set": {
 					if (!parsed.objective) {
 						ctx.ui.notify("用法: /goal <objective> [--tokens N] [--timeout N]", "warning");
+						return;
+					}
+					// #2: 空白 objective 拦截
+					if (!parsed.objective.trim()) {
+						ctx.ui.notify("目标描述不能为空。", "warning");
 						return;
 					}
 					// 如果已有活跃 goal，先取消旧的并通知用户
@@ -539,7 +609,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 	});
 
 	// ── Event: message_end (token accounting) ──────────
-	// 使用 input + output 累加（含 cacheRead，排除 cacheWrite 的一次性成本）
+	// 排除 cached input 以避免跨 turn 双重计算（对齐 Codex 公式）
 
 	pi.on("message_end", async (event, _ctx) => {
 		if (!state || !isActiveStatus(state.status)) return;
@@ -549,8 +619,10 @@ export default function goalExtension(pi: ExtensionAPI) {
 		if (usage) {
 			const input = usage.input ?? 0;
 			const output = usage.output ?? 0;
+			const cacheRead = usage.cacheRead ?? 0;
 			if (input > 0 || output > 0) {
-				state.tokensUsed += input + output;
+				// #4: Codex 公式 = (input - cached) + output
+				state.tokensUsed += Math.max(input - cacheRead, 0) + output;
 			} else if (usage.totalTokens) {
 				state.tokensUsed += usage.totalTokens;
 			}

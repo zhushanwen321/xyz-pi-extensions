@@ -22,6 +22,7 @@ function escapeXmlText(input: string): string {
 }
 
 // ── Continuation Prompt ───────────────────────────────
+// 精简版，对标 Codex ~500 chars。详细信息在 before_agent_start 注入。
 
 export function continuationPrompt(state: GoalRuntimeState): string {
 	const objective = escapeXmlText(state.objective);
@@ -29,43 +30,22 @@ export function continuationPrompt(state: GoalRuntimeState): string {
 	const completedCount = getCompletedCount(state.tasks);
 	const total = state.tasks.length;
 
-	const taskSection =
-		total > 0
-			? [
-					`任务进度: ${completedCount}/${total} 完成`,
-					incomplete.length > 0
-						? `未完成任务:\n${incomplete.map((t) => `  - #${t.id}: ${escapeXmlText(t.description)}`).join("\n")}`
-						: "所有任务已完成。",
-				].join("\n")
-			: "尚未创建任务清单。请先调用 goal_manager 的 create_tasks 拆分任务。";
+	// Budget info (single line, Codex style)
+	const budgetLine = formatBudgetLine(state);
+	const stallLine = state.stallCount > 0 ? `\nStall: ${state.stallCount}/${state.budget.maxStallTurns}轮无进展` : "";
 
-	const stallWarning =
-		state.stallCount > 0
-			? `\n\n⚠ 警告：已连续 ${state.stallCount} 轮没有进展。你必须专注于推进任务，而不是重复之前的操作。如果遇到阻塞，使用 goal_manager 的 report_blocked 报告。`
-			: "";
-
-	const budgetSection = formatBudgetSection(state);
+	// Task summary (only IDs, not full descriptions — descriptions in before_agent_start)
+	const taskLine = total > 0
+		? `Tasks: ${completedCount}/${total}${incomplete.length > 0 ? ` (剩余: ${incomplete.map(t => `#${t.id}`).join(",")})` : " ✓"}`
+		: "Tasks: 未创建。请立即 create_tasks。";
 
 	return (
 		`<goal_context>\n` +
-		`[GOAL — 持续工作模式]\n\n` +
-		`<objective>\n${objective}\n</objective>\n\n` +
-		`${taskSection}\n\n` +
-		`轮次: ${state.turnCount}/${state.budget.maxTurns}\n` +
-		`${budgetSection}\n` +
-		`${stallWarning}\n\n` +
-		`你必须严格遵守以下规则:\n` +
-		`1. 如果尚未创建任务清单，立即调用 goal_manager 的 create_tasks 将目标拆分为具体可验证的步骤\n` +
-		`2. 每完成一个任务，必须调用 goal_manager 的 complete_task 标记，并提供 evidence（具体证据，如'运行测试 X 通过'）\n` +
-		`3. 只有当你能提供具体证据证明目标已达成时，才能调用 goal_manager 的 complete_goal\n` +
-		`4. 遇到无法解决的阻塞时，调用 goal_manager 的 report_blocked 报告原因\n` +
-		`5. 不要重复之前的操作。如果某个方法不work，换一种方式\n\n` +
-		`Completion audit (完成审计):\n` +
-		`在决定目标已达成之前，你必须逐项验证:\n` +
-		`- 从 objective 中推导出所有具体需求\n` +
-		`- 对每个需求，找到可以证明它已完成的权威证据（文件内容、测试输出、命令结果）\n` +
-		`- 不确定或间接的证据不算完成，需要更强的证据或继续工作\n` +
-		`- 不要因为预算快耗尽就标记完成，也不要因为工作困难就标记阻塞\n` +
+		`[GOAL] Turn ${state.turnCount}/${state.budget.maxTurns}${budgetLine}${stallLine}\n` +
+		`<objective>${objective}</objective>\n` +
+		`${taskLine}\n` +
+		`Rules: create_tasks→complete_task(evidence)→complete_goal(evidence). blocked→report_blocked(reason).\n` +
+		`Audit: 逐项验证每个需求有权威证据。不因预算耗尽标记完成，不因困难标记阻塞。\n` +
 		`</goal_context>`
 	);
 }
@@ -163,28 +143,18 @@ function formatBudgetInfo(state: GoalRuntimeState): string {
 	return parts.length > 0 ? ` (${parts.join(", ")})` : "";
 }
 
-function formatBudgetSection(state: GoalRuntimeState): string {
-	const lines: string[] = ["Budget:"];
-	const tokenPct = Math.round(getTokenUsagePercent(state));
-	const timePct = Math.round(getTimeUsagePercent(state));
-
+function formatBudgetLine(state: GoalRuntimeState): string {
+	const parts: string[] = [];
 	if (state.budget.tokenBudget) {
 		const remaining = Math.max(state.budget.tokenBudget - state.tokensUsed, 0);
-		lines.push(`- Tokens 已使用: ${state.tokensUsed}`);
-		lines.push(`- Token 预算: ${state.budget.tokenBudget}`);
-		lines.push(`- Tokens 剩余: ${remaining} (${tokenPct}%)`);
+		parts.push(`Tokens: ${remaining}/${state.budget.tokenBudget}`);
 	}
 	if (state.budget.timeBudgetMinutes) {
 		const elapsed = getElapsedTimeSeconds(state);
 		const remaining = Math.max(state.budget.timeBudgetMinutes * 60 - elapsed, 0);
-		lines.push(`- 已用时间: ${Math.floor(elapsed / 60)}分${Math.floor(elapsed % 60)}秒`);
-		lines.push(`- 时间预算: ${state.budget.timeBudgetMinutes}分钟`);
-		lines.push(`- 时间剩余: ${Math.floor(remaining / 60)}分${Math.floor(remaining % 60)}秒 (${timePct}%)`);
+		parts.push(`Time: ${Math.floor(remaining / 60)}m/${state.budget.timeBudgetMinutes}m`);
 	}
-	if (!state.budget.tokenBudget && !state.budget.timeBudgetMinutes) {
-		return "";
-	}
-	return lines.join("\n") + "\n";
+	return parts.length > 0 ? ` | ${parts.join(" ")}` : "";
 }
 
 export function formatTaskList(tasks: GoalTask[]): string {
