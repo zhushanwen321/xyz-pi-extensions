@@ -435,10 +435,25 @@ export default function goalExtension(pi: ExtensionAPI) {
 						ctx.ui.notify("用法: /goal <objective> [--tokens N] [--timeout N]", "warning");
 						return;
 					}
-					// 如果已有活跃 goal，先取消旧的
+					// 如果已有活跃 goal，先取消旧的并通知用户
 					if (state && !isTerminalStatus(state.status)) {
+						ctx.ui.notify(
+							`已取消旧 Goal: ${state.objective}\n(新目标已启动)`,
+							"info",
+						);
 						state.status = "cancelled";
 						persistState(ctx);
+					}
+
+					// P2: 零预算拒绝
+					if (parsed.budget?.tokenBudget !== undefined && parsed.budget.tokenBudget <= 0) {
+						ctx.ui.notify("Token 预算必须大于 0。", "warning");
+						return;
+					}
+					// P1: Objective 长度限制
+					if (parsed.objective.length > 4000) {
+						ctx.ui.notify(`目标描述过长（${parsed.objective.length} 字符），上限 4000 字符。`, "warning");
+						return;
 					}
 
 					const budget: Partial<BudgetConfig> = {};
@@ -757,6 +772,18 @@ export default function goalExtension(pi: ExtensionAPI) {
 		}
 
 		if (checkStale()) return;
+
+		// P0: 去抖 — 检测本 turn 是否有任何 token 消耗
+		// 如果 token delta = 0，说明模型没做任何实质工作，不发 continuation
+		const tokenDelta = state.tokensUsed - state.lastTurnTokensUsed;
+		state.lastTurnTokensUsed = state.tokensUsed;
+
+		if (tokenDelta === 0) {
+			persistState(ctx);
+			updateWidget(ctx);
+			// 不发 continuation，等待用户输入
+			return;
+		}
 
 		// Normal continuation
 		persistState(ctx);

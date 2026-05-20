@@ -69,6 +69,7 @@ export interface GoalRuntimeState {
 	lastBlockerReason: string | null; // 上次 report_blocked 的原因，resume 时注入
 	budgetWarning70Sent: boolean; // 70% 预算预警已发送（token 或时间任一达 70%）
 	budgetWarning90Sent: boolean; // 90% 预算预警已发送
+	lastTurnTokensUsed: number; // 上一 turn 结束时的 tokensUsed，用于去抖检测
 }
 
 // ── 默认值 ────────────────────────────────────────────
@@ -96,6 +97,7 @@ export function createInitialState(objective: string, budget: Partial<BudgetConf
 		lastBlockerReason: null,
 		budgetWarning70Sent: false,
 		budgetWarning90Sent: false,
+		lastTurnTokensUsed: 0,
 	};
 }
 
@@ -148,6 +150,7 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 		lastBlockerReason: (data.lastBlockerReason as string | null) ?? null,
 		budgetWarning70Sent: (data.budgetWarning70Sent as boolean) ?? false,
 		budgetWarning90Sent: (data.budgetWarning90Sent as boolean) ?? false,
+		lastTurnTokensUsed: (data.lastTurnTokensUsed as number) ?? 0,
 	};
 }
 
