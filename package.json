@@ -1,0 +1,14 @@
+{
+  "name": "xyz-pi-extensions",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint \"goal/src/**/*.ts\" \"todo/src/**/*.ts\"",
+    "lint:fix": "eslint --fix \"goal/src/**/*.ts\" \"todo/src/**/*.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "eslint": "^9",
+    "typescript-eslint": "^8"
+  }
+}

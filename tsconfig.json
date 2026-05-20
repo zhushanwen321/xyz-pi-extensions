@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowImportingTsExtensions": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "lib": ["ES2022"],
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "paths": {
+      "@mariozechner/pi-coding-agent": ["/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/@mariozechner/pi-coding-agent"],
+      "@mariozechner/pi-tui": ["/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-tui"],
+      "@mariozechner/pi-ai": ["/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/@mariozechner/pi-ai"],
+      "typebox": ["/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/@mariozechner/pi-coding-agent/node_modules/typebox"]
+    }
+  },
+  "include": [
+    "goal/**/*.ts",
+    "todo/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    ".superpowers",
+    ".xyz-harness"
+  ]
+}
