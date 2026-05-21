@@ -68,6 +68,7 @@ const ENTRY_TYPE = "goal-state";
 const GoalManagerParams = Type.Object({
 	action: StringEnum([
 		"create_tasks",
+		"add_tasks",
 		"complete_task",
 		"list_tasks",
 		"complete_goal",
@@ -222,7 +223,7 @@ async function executeGoalAction(
 			if (state.tasks.length > 0 && existingIncomplete.length > 0) {
 				throw new Error(
 					`已有 ${state.tasks.length} 个任务（${existingIncomplete.length} 个未完成）。` +
-						`请继续完成现有任务，不要重新创建。如需重新规划，请先使用 /goal update 更新目标。`,
+						`如需追加任务请用 add_tasks，如需全部重新规划请用 /goal update。`,
 				);
 			}
 			state.tasks = params.tasks.map((desc, i) => ({
@@ -233,6 +234,25 @@ async function executeGoalAction(
 			persistGoalState(pi, session, ctx);
 			return makeGoalResult(session,
 				`已创建 ${state.tasks.length} 个任务：\n${state.tasks.map((t) => `  #${t.id}: ${t.description}`).join("\n")}`,
+			);
+		}
+
+		case "add_tasks": {
+			if (!params.tasks || params.tasks.length === 0) {
+				throw new Error("add_tasks requires a non-empty tasks array");
+			}
+			const startId = state.tasks.length > 0
+				? Math.max(...state.tasks.map((t) => t.id)) + 1
+				: 1;
+			const newTasks: GoalTask[] = params.tasks.map((desc, i) => ({
+				id: startId + i,
+				description: desc,
+				completed: false,
+			}));
+			state.tasks.push(...newTasks);
+			persistGoalState(pi, session, ctx);
+			return makeGoalResult(session,
+				`已追加 ${newTasks.length} 个任务：\n${newTasks.map((t) => `  #${t.id}: ${t.description}`).join("\n")}`,
 			);
 		}
 
@@ -800,7 +820,8 @@ export default function goalExtension(pi: ExtensionAPI) {
 		description:
 			"Goal 模式任务管理器。此工具仅在用户通过 /goal 命令启动目标后才可用，AI 不能主动触发此功能。如果 Goal 模式未激活，调用此工具会报错。" +
 			"\n\n可用 action:" +
-			"\n- create_tasks: 拆分目标为任务清单（每个 turn 开始前必须调用）" +
+			"\n- create_tasks: 首次拆分目标为任务清单（每个 goal 开始时调用一次）" +
+			"\n- add_tasks: 向已有任务清单追加新任务（执行中发现遗漏时使用）" +
 			"\n- complete_task: 标记任务完成（必须提供 evidence）" +
 			"\n- list_tasks: 查看进度和剩余预算" +
 			"\n- complete_goal: 标记目标达成（必须所有任务完成 + evidence）" +
@@ -809,6 +830,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		promptSnippet: "管理 /goal 模式的任务清单、完成状态和退出",
 		promptGuidelines: [
 			"[工作流] 收到目标后，第一步必须调用 create_tasks 拆分任务。已有任务清单时不要重复调用",
+			"[追加] 执行中发现遗漏的子任务时，使用 add_tasks 追加，不要尝试重新 create_tasks",
 			"[完成] 每完成一个任务调用 complete_task，必须提供 evidence（具体证据，如'测试 X 通过'、'文件 F 已创建'）",
 			"[目标完成] 只有所有任务完成且有整体证据时，才能调用 complete_goal",
 			"[退出] 当用户说'停止'、'退出'、'取消'、'stop'、'exit'、'cancel'、'不用了'、'结束'等表示不想继续时，立即调用 cancel_goal 取消目标，不要引导用户走 complete_goal 流程",
@@ -816,7 +838,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 			"[进度] 随时可用 list_tasks 查看剩余任务和预算",
 			"[禁止] 不要在没有 evidence 的情况下调用 complete_task 或 complete_goal",
 			"[禁止] 不要在用户明确想退出时强制要求完成任务——直接 cancel_goal",
-			"[禁止] 不要重复调用 create_tasks 覆盖已有未完成任务，如需重新规划请建议用户使用 /goal update",
+			"[禁止] 不要重复调用 create_tasks 覆盖已有未完成任务，如需追加请用 add_tasks",
 		],
 		parameters: GoalManagerParams,
 
