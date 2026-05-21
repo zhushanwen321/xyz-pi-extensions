@@ -23,22 +23,6 @@ export interface AgentDiscoveryResult {
 	projectAgentsDir: string | null;
 }
 
-/** Claude Code 和 Pi 的工具名映射（大写→小写，Glob→find） */
-const TOOL_NAME_MAP: Record<string, string> = {
-	Read: "read",
-	Write: "write",
-	Bash: "bash",
-	Edit: "edit",
-	Glob: "find",
-	Grep: "grep",
-	Find: "find",
-	Ls: "ls",
-};
-
-function normalizeToolName(name: string): string {
-	return TOOL_NAME_MAP[name] ?? name.toLowerCase();
-}
-
 function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig[] {
 	const agents: AgentConfig[] = [];
 
@@ -73,7 +57,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 
 		const tools = frontmatter.tools
 			?.split(",")
-			.map((t: string) => normalizeToolName(t.trim()))
+			.map((t: string) => t.trim())
 			.filter(Boolean);
 
 		agents.push({
