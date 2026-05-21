@@ -94,6 +94,96 @@ const COMPLEXITY_DEFAULT_THINKING: Record<TaskComplexity, ThinkingLevel> = {
 	high: "max",
 };
 
+/**
+ * Build a human-readable summary of models for tool description (sync).
+ * Only reads subagent-models.json — no async model registry access.
+ */
+function buildModelsHintFromConfig(): string {
+	const config = loadSubagentModels();
+	if (!config || !config.models?.length) {
+		return [
+			"No subagent-models.json configured.",
+			"When taskComplexity is used without this file, you MUST specify 'model' explicitly.",
+			"Create ~/.pi/agent/subagent-models.json to enable automatic model routing.",
+		].join("\n");
+	}
+
+	const complexityLabels: Record<string, string> = {
+		low: 'taskComplexity: "low"     (simple: grep, format, batch replace)',
+		medium: 'taskComplexity: "medium"  (moderate: code review, tests, bug fix)',
+		high: 'taskComplexity: "high"    (complex: architecture, multi-file refactor)',
+	};
+	const byComplexity: Record<string, string[]> = { low: [], medium: [], high: [] };
+	const uncategorized: string[] = [];
+
+	for (const m of config.models) {
+		if (!m.provider) continue;
+		const ref = `${m.provider}/${m.id}`;
+		const entry = ref;
+
+		if (m["task-complexity"]?.length) {
+			for (const c of m["task-complexity"]) {
+				if (c in byComplexity) byComplexity[c].push(entry);
+			}
+		} else {
+			uncategorized.push(entry);
+		}
+	}
+
+	const lines: string[] = ["YOUR MODEL OPTIONS (from ~/.pi/agent/subagent-models.json):"];
+	for (const [level, models] of Object.entries(byComplexity)) {
+		if (models.length > 0) {
+			lines.push("");
+			lines.push(`  ${complexityLabels[level]}`);
+			lines.push(`    → selects: ${models.join(", ")}`);
+		}
+	}
+	if (uncategorized.length > 0) {
+		lines.push("");
+		lines.push(`  Explicit model: ${uncategorized.join(", ")}`);
+	}
+	return lines.join("\n");
+}
+
+/**
+ * Build a dynamic models hint for error messages (async).
+ * Three-tier fallback: subagent-models.json → scoped models → guidance.
+ */
+async function buildModelsHintDynamic(ctx: ModelResolutionContext): Promise<string> {
+	// Tier 1: subagent-models.json
+	const config = loadSubagentModels();
+	if (config?.models?.length) {
+		return buildModelsHintFromConfig();
+	}
+
+	// Tier 2: scoped models from registry
+	let scopedModels: Array<{ id: string; provider: string }> = [];
+	try {
+		scopedModels = (await ctx.modelRegistry?.getAvailable?.()) ?? [];
+	} catch { /* ignore */ }
+
+	if (scopedModels.length > 0) {
+		const lines: string[] = [
+			"No subagent-models.json configured — automatic taskComplexity routing is unavailable.",
+			"You MUST specify 'model' explicitly using one of these scoped models:",
+			"",
+		];
+		for (const m of scopedModels) {
+			lines.push(`  model: "${m.provider}/${m.id}"`);
+		}
+		lines.push("");
+		lines.push("Tip: Create ~/.pi/agent/subagent-models.json to enable taskComplexity auto-routing.");
+		return lines.join("\n");
+	}
+
+	// Tier 3: nothing available
+	return [
+		"No models configured anywhere.",
+		"1. Create ~/.pi/agent/subagent-models.json with model entries for taskComplexity routing.",
+		"2. Or specify 'model: provider/model-id' explicitly if you know the model name.",
+	].join("\n");
+}
+
 // ──────────────────────── Formatting helpers ────────────────────────
 
 function formatTokens(count: number): string {
@@ -1412,6 +1502,14 @@ export default function (pi: ExtensionAPI) {
 			"  - Returns a Job ID immediately; the main agent can continue working on other tasks.",
 			"  - Results are automatically injected when the subagent completes.",
 			"  - collect_subagent is only for listing active jobs or checking status.",
+			"",
+			buildModelsHintFromConfig(),
+			"",
+			"QUICK EXAMPLES:",
+			'  { agent: "general-purpose", task: "analyze X", taskComplexity: "medium" }',
+			'  { tasks: [{ agent: "a", task: "..." }, { agent: "b", task: "..." }], taskComplexity: "low" }',
+			'  { chain: [{ agent: "a", task: "..." }, { agent: "b", task: "refine: {previous}" }], taskComplexity: "high" }',
+			'  { agent: "general-purpose", task: "...", model: "router-openai/glm-5.1" }  // explicit, use sparingly',
 		].join("\n"),
 		parameters: SubagentParams,
 		promptSnippet: "Delegate independent work to sub-agents with automatic model selection based on task complexity",
@@ -1442,14 +1540,28 @@ export default function (pi: ExtensionAPI) {
 			// Mutual exclusion: model and taskComplexity cannot both be set
 			if (modelParam && taskComplexity) {
 				return {
-					content: [{ type: "text", text: "Parameters 'model' and 'taskComplexity' are mutually exclusive. Provide exactly one." }],
+					content: [{ type: "text", text: "ERROR: 'model' and 'taskComplexity' are mutually exclusive. Remove one.\nRecommended: remove 'model' and keep 'taskComplexity' for automatic selection.\nOnly use 'model' when you need a specific provider for a known reason." }],
 					details: { mode: "single" as const, resolvedModel: "", agentScope: "user" as AgentScope, projectAgentsDir: null, results: [] },
 					isError: true,
 				};
 			}
 			if (!modelParam && !taskComplexity) {
+				const modelsHint = await buildModelsHintDynamic(ctx);
 				return {
-					content: [{ type: "text", text: "Either 'model' or 'taskComplexity' is required. Use taskComplexity (low/medium/high) for automatic model selection, or model for explicit selection." }],
+					content: [{ type: "text", text: [
+						"ERROR: You MUST provide 'taskComplexity' or 'model'. Your call is missing both.",
+						"",
+						"Fix: pick ONE option and add it to your subagent call:",
+						'  taskComplexity: "low"     — simple tasks (grep, batch replace, formatting)',
+						'  taskComplexity: "medium"  — moderate tasks (code review, tests, bug fix)',
+						'  taskComplexity: "high"    — complex tasks (architecture, multi-file refactor)',
+						'  model: "provider/model"   — explicit model (only when taskComplexity routing won\'t work)',
+						"",
+						modelsHint,
+						"",
+						'Correct: { agent: "general-purpose", task: "...", taskComplexity: "medium" }',
+						'Wrong:   { agent: "general-purpose", task: "..." }  // missing model selection!',
+					].join("\n") }],
 					details: { mode: "single" as const, resolvedModel: "", agentScope: "user" as AgentScope, projectAgentsDir: null, results: [] },
 					isError: true,
 				};
