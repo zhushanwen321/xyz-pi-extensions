@@ -57,13 +57,15 @@ export const COMPLEXITY_DEFAULT_THINKING: Record<TaskComplexity, ThinkingLevel> 
 
 // ──────────────────────── Internal cache ────────────────────────
 
-/** Lazy singleton: load once per process, avoid repeated readFile on every call. */
+/** Cached config with TTL — avoids stale data when users edit subagent-models.json. */
+const CACHE_TTL_MS = 60 * 1000; // 1 minute
 let _cachedModels: SubagentModelsConfig | null | undefined = undefined;
+let _cachedModelsTimestamp = 0;
 
 // ──────────────────────── Config loader ────────────────────────
 
 export function loadSubagentModels(): SubagentModelsConfig | null {
-	if (_cachedModels !== undefined) return _cachedModels;
+	if (_cachedModels !== undefined && Date.now() - _cachedModelsTimestamp < CACHE_TTL_MS) return _cachedModels;
 	try {
 		const content = fs.readFileSync(SUBAGENT_MODELS_PATH, "utf-8");
 		const parsed = JSON.parse(content) as SubagentModelsConfig;
@@ -86,9 +88,11 @@ export function loadSubagentModels(): SubagentModelsConfig | null {
 			}
 		}
 		_cachedModels = parsed;
+		_cachedModelsTimestamp = Date.now();
 		return parsed;
 	} catch {
 		_cachedModels = null;
+		_cachedModelsTimestamp = Date.now();
 		return null;
 	}
 }

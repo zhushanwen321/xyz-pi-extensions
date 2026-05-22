@@ -54,7 +54,14 @@ export async function mapWithConcurrencyLimit<TIn, TOut>(
 			results[current] = await fn(items[current], current);
 		}
 	});
-	await Promise.all(workers);
+	// Use allSettled to avoid losing results from other workers when one throws
+	const settled = await Promise.allSettled(workers);
+	const rejected = settled.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+	if (rejected.length > 0) {
+		// Re-throw the first rejection so callers know something failed,
+		// but all other results are already populated in the results array.
+		throw rejected[0].reason;
+	}
 	return results;
 }
 
@@ -86,13 +93,20 @@ function getTempDir(): string {
 	return path.join(os.tmpdir(), TEMP_SUBDIR);
 }
 
+// Throttle: only run cleanup once per 5 minutes to avoid blocking event loop
+let lastCleanupTime = 0;
+const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+
 export function cleanupOldTempFiles(): void {
+	const now = Date.now();
+	if (now - lastCleanupTime < CLEANUP_INTERVAL_MS) return;
+	lastCleanupTime = now;
+
 	const dir = getTempDir();
 	if (!fs.existsSync(dir)) {
 		fs.mkdirSync(dir, { recursive: true });
 		return;
 	}
-	const now = Date.now();
 	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
 		if (!entry.isFile()) continue;
 		const filePath = path.join(dir, entry.name);
@@ -108,9 +122,15 @@ async function writePromptToTempFile(agentName: string, prompt: string): Promise
 	if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 	const safeName = agentName.replace(/[^\w.-]+/g, "_");
 	const filePath = path.join(dir, `prompt-${safeName}-${randomUUID().slice(0, 8)}.md`);
-	await withFileMutationQueue(filePath, async () => {
-		await fs.promises.writeFile(filePath, prompt, { encoding: "utf-8", mode: 0o600 });
-	});
+	try {
+		await withFileMutationQueue(filePath, async () => {
+			await fs.promises.writeFile(filePath, prompt, { encoding: "utf-8", mode: 0o600 });
+		});
+	} catch {
+		// Clean up the empty file if write failed (e.g. disk full, permissions)
+		try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+		throw new Error(`Failed to write temp prompt file for agent "${agentName}"`);
+	}
 	return { dir, filePath };
 }
 
@@ -272,10 +292,13 @@ export function createSpawnManager(pi: ExtensionAPI): SpawnManager {
 
 	function cleanupJobLocal(job: JobInfo): void {
 		if (job.status === "running") {
-			try {
-				process.kill(job.pid, "SIGTERM");
-			} catch {
-				/* already dead */
+			// Guard: pid must be a valid positive integer — never call process.kill(0) or process.kill(-1)
+			if (job.pid > 0) {
+				try {
+					process.kill(job.pid, "SIGTERM");
+				} catch {
+					/* already dead */
+				}
 			}
 			job.status = "aborted";
 		}
@@ -511,9 +534,11 @@ export function createSpawnManager(pi: ExtensionAPI): SpawnManager {
 					const killProc = () => {
 						wasAborted = true;
 						proc.kill("SIGTERM");
-						setTimeout(() => {
+						const killTimer = setTimeout(() => {
 							if (!proc.killed) proc.kill("SIGKILL");
 						}, 5000);
+						// Clean up SIGKILL timer when process closes to avoid retaining proc reference
+						proc.on("close", () => clearTimeout(killTimer));
 					};
 					if (signal.aborted) killProc();
 					else signal.addEventListener("abort", killProc, { once: true });
@@ -523,7 +548,11 @@ export function createSpawnManager(pi: ExtensionAPI): SpawnManager {
 			currentResult.exitCode = exitCode;
 			currentResult.endTime = Date.now();
 			currentResult.durationMs = currentResult.endTime - currentResult.startTime;
-			if (wasAborted) throw new Error("Subagent was aborted");
+			// Return structured result instead of throwing — callers can handle it uniformly
+			if (wasAborted) {
+				currentResult.exitCode = -1;
+				currentResult.stopReason = "aborted";
+			}
 			return currentResult;
 		} finally {
 			if (tmpPromptPath)
@@ -613,7 +642,7 @@ export function createSpawnManager(pi: ExtensionAPI): SpawnManager {
 			agent: agentName,
 			task,
 			model: resolvedModel,
-			pid: proc.pid ?? 0,
+			pid: proc.pid ?? -1,
 			startedAt: Date.now(),
 			status: "running",
 			outFile,
