@@ -15,6 +15,30 @@ import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@mariozec
 // ──────────────────────── Constants ────────────────────────
 
 export const COLLAPSED_ITEM_COUNT = 10;
+export const CHAIN_COLLAPSED_ITEM_COUNT = 5;
+export const TEXT_PREVIEW_LINES = 3;
+
+const STATUS_ICONS: Record<string, string> = {
+	running: "\u23F3",
+	succeeded: "\u2705",
+	failed: "\u274C",
+	pending: "\u25CB",
+};
+
+const STATUS_COLORS: Record<string, string> = {
+	running: "warning",
+	succeeded: "success",
+	failed: "error",
+	pending: "muted",
+};
+
+type ThemeColorParam = Parameters<Theme["fg"]>[0];
+
+function renderStatusIcon(status: string, theme: Theme): string {
+	const icon = STATUS_ICONS[status] ?? STATUS_ICONS.running;
+	const color = (STATUS_COLORS[status] ?? "muted") as ThemeColorParam;
+	return theme.fg(color, icon);
+}
 
 // ──────────────────────── Formatting ────────────────────────
 
@@ -226,6 +250,7 @@ export function getDisplayItems(messages: Message[]): DisplayItem[] {
 	for (const msg of messages) {
 		if (msg.role === "assistant") {
 			for (const part of msg.content) {
+				if (part.type === "thinking") continue;
 				if (part.type === "text") items.push({ type: "text", text: part.text });
 				else if (part.type === "toolCall") items.push({ type: "toolCall", name: part.name, args: part.arguments });
 			}
@@ -317,30 +342,31 @@ export function aggregateUsageFromViews(views: AgentResultView[]): string {
 	});
 }
 
+
 export function renderAgentDetail(
 	view: AgentResultView,
 	theme: Theme,
 	mdTheme: MarkdownTheme,
-	opts: { label?: string; showTask: boolean },
+	opts: { label?: string; showTask: boolean; sessionShortId?: string },
 ): Container {
 	const container = new Container();
-	const isError = view.status === "failed";
-	const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
+	const icon = renderStatusIcon(view.status, theme);
 
 	const durationStr = view.duration.durationMs !== undefined
 		? formatDuration(view.duration.durationMs)
 		: "";
 
-	let header = `${icon} ${theme.fg("toolTitle", theme.bold(view.name))}`;
+	const idPart = opts.sessionShortId ? ` #${opts.sessionShortId}` : "";
+	let header = `${icon} ${theme.fg("toolTitle", theme.bold(view.name))}${theme.fg("accent", idPart)}`;
 	if (opts.label) header += theme.fg("muted", ` (${opts.label})`);
 	header += theme.fg("muted", ` (${view.source})`);
 	if (durationStr) header += ` ${theme.fg("dim", durationStr)}`;
 	if (view.model) header += ` ${theme.fg("dim", view.model)}`;
-	if (isError && view.stopReason) header += ` ${theme.fg("error", `[${view.stopReason}]`)}`;
+	if (view.status === "failed" && view.stopReason) header += ` ${theme.fg("error", `[${view.stopReason}]`)}`;
 
 	container.addChild(new Text(header, 0, 0));
 
-	if (isError && view.errorMessage) {
+	if (view.status === "failed" && view.errorMessage) {
 		container.addChild(new Text(theme.fg("error", `Error: ${view.errorMessage}`), 0, 0));
 	}
 
@@ -365,6 +391,8 @@ export function renderAgentDetail(
 						0, 0,
 					),
 				);
+			} else if (item.type === "text" && item.text.trim()) {
+				container.addChild(new Text(theme.fg("toolOutput", item.text), 0, 0));
 			}
 		}
 		if (view.finalOutput) {
@@ -386,16 +414,15 @@ export function renderAgentDetail(
 	return container;
 }
 
-export function renderSingleCollapsedText(view: AgentResultView, theme: Theme): string {
-	const isError = view.status === "failed";
-	const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
-	const durationStr = view.duration.durationMs !== undefined ? ` ${formatDuration(view.duration.durationMs)}` : "";
+export function renderSingleCollapsedText(view: AgentResultView, theme: Theme, sessionShortId?: string, elapsed?: string): string {
+	const icon = renderStatusIcon(view.status, theme);
+	const durationStr = elapsed ?? (view.duration.durationMs !== undefined ? formatDuration(view.duration.durationMs) : "");
+	const idPart = sessionShortId ? ` #${sessionShortId}` : "";
 
-	let text = `${icon} ${theme.fg("toolTitle", theme.bold(view.name))}${theme.fg("muted", ` (${view.source})`)}`;
-	if (view.model) text += ` ${theme.fg("dim", view.model)}`;
-	text += ` ${theme.fg("dim", durationStr)}`;
-	if (isError && view.stopReason) text += ` ${theme.fg("error", `[${view.stopReason}]`)}`;
-	if (isError && view.errorMessage) {
+	let text = `${icon} ${theme.fg("toolTitle", theme.bold("single"))}${theme.fg("accent", idPart)}  ${theme.fg("accent", view.name)}  ${theme.fg("dim", view.model ?? "")}`;
+	if (durationStr) text += `  ${theme.fg("dim", durationStr)}`;
+	if (view.status === "failed" && view.stopReason) text += ` ${theme.fg("error", `[${view.stopReason}]`)}`;
+	if (view.status === "failed" && view.errorMessage) {
 		text += `\n${theme.fg("error", `Error: ${view.errorMessage}`)}`;
 	} else if (view.toolCalls.length === 0) {
 		text += `\n${theme.fg("muted", "(no output)")}`;
@@ -405,13 +432,15 @@ export function renderSingleCollapsedText(view: AgentResultView, theme: Theme): 
 		if (skipped > 0) text += `\n${theme.fg("muted", `... ${skipped} earlier items`)}`;
 		for (const item of toShow) {
 			if (item.type === "text") {
-				const preview = item.text.split("\n").slice(0, 3).join("\n");
+				const lines = item.text.split("\n");
+				const preview = lines.slice(0, TEXT_PREVIEW_LINES).join("\n");
 				text += `\n${theme.fg("toolOutput", preview)}`;
+				if (lines.length > TEXT_PREVIEW_LINES) text += `\n${theme.fg("muted", "...")}`;
 			} else {
 				text += `\n${theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme))}`;
 			}
 		}
-		if (view.toolCalls.length > COLLAPSED_ITEM_COUNT) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
+		if (skipped > 0 || view.toolCalls.length > COLLAPSED_ITEM_COUNT) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 	}
 	const usageParts: string[] = [];
 	if (view.turns) usageParts.push(`${view.turns} turn${view.turns > 1 ? "s" : ""}`);
@@ -427,70 +456,70 @@ export function renderChainCollapsedText(
 	details: SubagentDetails,
 	icon: string,
 	theme: Theme,
+	sessionShortId?: string,
 ): Text {
-	let text = `${icon} ${theme.fg("toolTitle", theme.bold("chain "))}${theme.fg("accent", `${views.filter((v) => v.status === "succeeded").length}/${views.length} steps`)}`;
+	const successCount = views.filter((v) => v.status === "succeeded").length;
+	const runningCount = views.filter((v) => v.status === "running").length;
+	const idPart = sessionShortId ? ` #${sessionShortId}` : "";
+	const statusStr = runningCount > 0
+		? `${successCount}/${views.length} done, ${runningCount} running`
+		: `${successCount}/${views.length} succeeded`;
+
+	let text = `${icon} ${theme.fg("toolTitle", theme.bold("chain"))}${theme.fg("accent", idPart)}  ${theme.fg("dim", statusStr)}`;
+
 	for (let i = 0; i < views.length; i++) {
 		const view = views[i];
 		const stepNum = details.results[i].step ?? i + 1;
-		const rIcon = view.status === "succeeded" ? theme.fg("success", "✓") : theme.fg("error", "✗");
+		const stepIcon = renderStatusIcon(view.status, theme);
 		const durationStr = view.duration.durationMs !== undefined ? ` ${formatDuration(view.duration.durationMs)}` : "";
-		text += `\n\n${theme.fg("muted", `─── Step ${stepNum}: `)}${theme.fg("accent", view.name)} ${rIcon}${durationStr}`;
+		text += `\n  ${theme.fg("muted", `Step ${stepNum}:`)} ${stepIcon} ${theme.fg("accent", view.name)}${theme.fg("dim", durationStr)}`;
 		if (view.toolCalls.length === 0) {
-			text += `\n${theme.fg("muted", "(no output)")}`;
+			text += `\n    ${theme.fg("muted", "(no output)")}`;
 		} else {
-			const toShow = view.toolCalls.slice(-5);
-			const skipped = view.toolCalls.length > 5 ? view.toolCalls.length - 5 : 0;
-			if (skipped > 0) text += `\n${theme.fg("muted", `... ${skipped} earlier items`)}`;
+			const toShow = view.toolCalls.slice(-CHAIN_COLLAPSED_ITEM_COUNT);
+			const skipped = view.toolCalls.length > CHAIN_COLLAPSED_ITEM_COUNT ? view.toolCalls.length - CHAIN_COLLAPSED_ITEM_COUNT : 0;
+			if (skipped > 0) text += `\n    ${theme.fg("muted", `... ${skipped} earlier items`)}`;
 			for (const item of toShow) {
 				if (item.type === "text") {
-					text += `\n${theme.fg("toolOutput", item.text.split("\n").slice(0, 3).join("\n"))}`;
+					const lines = item.text.split("\n");
+					const preview = lines.slice(0, TEXT_PREVIEW_LINES).join("\n");
+					text += `\n    ${theme.fg("toolOutput", preview)}`;
+					if (lines.length > TEXT_PREVIEW_LINES) text += `\n    ${theme.fg("muted", "...")}`;
 				} else {
-					text += `\n${theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme))}`;
+					text += `\n    ${theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme))}`;
 				}
 			}
 		}
 	}
 	const totalUsage = aggregateUsageFromViews(views);
-	if (totalUsage) text += `\n\n${theme.fg("dim", `Total: ${totalUsage}`)}`;
+	if (totalUsage) text += `\n${theme.fg("dim", `Total: ${totalUsage}`)}`;
 	text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 	return new Text(text, 0, 0);
 }
 
-export function renderParallelTable(view: ParallelSummaryView, theme: Theme): Text {
+export function renderParallelTable(view: ParallelSummaryView, theme: Theme, sessionShortId?: string): Text {
 	const isRunning = view.running > 0;
 	const hasFailures = view.failed > 0;
 
-	const headerIcon = isRunning
-		? theme.fg("warning", "⏳")
-		: hasFailures
-			? theme.fg("error", "✗")
-			: theme.fg("success", "✓");
+	const overallStatus: AgentResultView["status"] = isRunning ? "running" : hasFailures ? "failed" : "succeeded";
+	const headerIcon = renderStatusIcon(overallStatus, theme);
 
+	const idPart = sessionShortId ? ` #${sessionShortId}` : "";
 	const durationStr = view.totalDurationMs !== undefined
-		? ` (${formatDuration(view.totalDurationMs)})`
+		? formatDuration(view.totalDurationMs)
 		: "";
 
 	let statusText: string;
 	if (isRunning) {
-		const elapsedStr = view.totalDurationMs !== undefined
-			? formatDuration(view.totalDurationMs)
-			: "...";
-		statusText = `${view.succeeded + view.failed}/${view.total} done, ${view.running} running (${elapsedStr} elapsed)`;
-	} else if (hasFailures) {
-		statusText = `${view.succeeded}/${view.total} succeeded${durationStr}`;
+		statusText = `${view.succeeded + view.failed}/${view.total} done, ${view.running} running`;
 	} else {
-		statusText = `${view.succeeded}/${view.total} succeeded${durationStr}`;
+		statusText = `${view.succeeded}/${view.total} succeeded`;
 	}
 
-	let text = `${headerIcon} parallel ${statusText}`;
+	let text = `${headerIcon} ${theme.fg("toolTitle", theme.bold("parallel"))}${theme.fg("accent", idPart)}  ${theme.fg("dim", statusText)}  ${theme.fg("muted", durationStr)}`;
 
 	for (const agent of view.agents) {
-		const statusIcon =
-			agent.status === "running"
-				? theme.fg("warning", "⏳")
-				: agent.status === "succeeded"
-					? theme.fg("success", "✓")
-					: theme.fg("error", "✗");
+		const statusIcon = renderStatusIcon(agent.status, theme);
 		const agentDuration = agent.duration.durationMs !== undefined
 			? formatDuration(agent.duration.durationMs)
 			: formatDuration(Date.now() - agent.duration.startTime);
@@ -523,15 +552,17 @@ export function renderParallelTable(view: ParallelSummaryView, theme: Theme): Te
 	return new Text(text, 0, 0);
 }
 
-export function renderParallelDetail(view: ParallelSummaryView, theme: Theme, mdTheme: MarkdownTheme): Container {
+export function renderParallelDetail(view: ParallelSummaryView, theme: Theme, mdTheme: MarkdownTheme, sessionShortId?: string): Container {
 	const hasFailures = view.failed > 0;
-	const headerIcon = hasFailures ? theme.fg("error", "✗") : theme.fg("success", "✓");
+	const overallStatus: AgentResultView["status"] = hasFailures ? "failed" : "succeeded";
+	const headerIcon = renderStatusIcon(overallStatus, theme);
+	const idPart = sessionShortId ? ` #${sessionShortId}` : "";
 	const durationStr = view.totalDurationMs !== undefined ? ` (${formatDuration(view.totalDurationMs)})` : "";
 
 	const container = new Container();
 	container.addChild(
 		new Text(
-			`${headerIcon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", `${view.succeeded}/${view.total} succeeded`)}${durationStr}`,
+			`${headerIcon} ${theme.fg("toolTitle", theme.bold("parallel"))}${theme.fg("accent", idPart)}  ${theme.fg("accent", `${view.succeeded}/${view.total} succeeded`)}${durationStr}`,
 			0, 0,
 		),
 	);

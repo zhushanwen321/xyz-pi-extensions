@@ -11,7 +11,6 @@
  *   agents.ts — agent discovery from .md files
  */
 
-import * as fs from "node:fs";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
@@ -34,7 +33,6 @@ import {
 	buildAgentResultView,
 	buildParallelSummaryView,
 	formatDuration,
-	formatUsageStats,
 	getFinalOutput,
 	renderAgentDetail,
 	renderChainCollapsedText,
@@ -99,16 +97,11 @@ const SubagentParams = Type.Object({
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
 });
 
-const CollectSubagentParams = Type.Object({
-	jobId: Type.Optional(Type.String({
-		description: "Job ID from background subagent. Omit to list all active jobs.",
-	})),
-});
-
-// ──────────────────────── Extension entry ────────────────────────
-
 export default function subagentExtension(pi: ExtensionAPI) {
 	const spawnManager: SpawnManager = createSpawnManager(pi);
+	const capturedSessionId = { value: "" };
+	const sessionShortId = () => capturedSessionId.value.slice(0, 8);
+	const idPart = () => sessionShortId() ? ` #${sessionShortId()}` : "";
 
 	// ── Tool: subagent ──
 	pi.registerTool({
@@ -156,7 +149,6 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			"BACKGROUND MODE: Set background: true (single mode only) to run a subagent without blocking.",
 			"  - Returns a Job ID immediately; the main agent can continue working on other tasks.",
 			"  - Results are automatically injected when the subagent completes.",
-			"  - collect_subagent is only for listing active jobs or checking status.",
 			"",
 			buildModelsHintFromConfig(),
 			"",
@@ -176,7 +168,6 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			"thinkingLevel only accepts \"high\" or \"max\" \u2014 all models always think",
 			"background: true runs a subagent non-blocking \u2014 the main agent can continue other work immediately",
 			"Background results are automatically injected into the conversation when the subagent completes \u2014 no collect needed",
-			"Use collect_subagent only to list active background jobs or check on a running job's status",
 			"",
 			"IMPORTANT for parallel mode: isError=true means at least one task failed.",
 			"Check each agent's individual status to identify which failed and decide",
@@ -185,6 +176,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			cleanupOldTempFiles();
+			capturedSessionId.value = ctx.sessionManager.getSessionId();
 			const isBackground = (params.background as boolean) ?? false;
 
 			// ── Step 1: Resolve model + thinking level ──
@@ -320,7 +312,6 @@ export default function subagentExtension(pi: ExtensionAPI) {
 							`  Task:   ${(params.task as string).slice(0, 100)}`,
 							``,
 							`Results will be injected automatically when the subagent completes.`,
-					`Use collect_subagent to check status or list active jobs.`,
 						].join("\n"),
 					}],
 					details: makeDetails("background")([]),
@@ -470,6 +461,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			};
 		},
 
+
+
 		renderCall(args, theme, _context) {
 			const scope: AgentScope = args.agentScope ?? "user";
 			const complexity = args.taskComplexity as string | undefined;
@@ -478,41 +471,61 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			const modelDisplay = thinking ? theme.fg("dim", ` ${model}/${thinking}`) : theme.fg("dim", ` ${model}`);
 			const bg = args.background ? theme.fg("warning", " [bg]") : "";
 
+			// Unified Line 1: ⏳ mode #sessionID
+			const headerPrefix = `${theme.fg("warning", "\u23F3")} `;
+
 			if (args.chain && args.chain.length > 0) {
 				let text =
-					theme.fg("toolTitle", theme.bold("subagent ")) +
-					theme.fg("accent", `chain (${args.chain.length} steps)`) +
+					headerPrefix +
+					theme.fg("toolTitle", theme.bold("chain")) +
+					theme.fg("accent", idPart()) +
+					theme.fg("muted", ` (${args.chain.length} steps)`) +
 					theme.fg("muted", ` [${scope}]`) +
 					modelDisplay +
 					bg;
+				// Line 2: agents + model
+				const agents = args.chain.slice(0, 3).map((s) => s.agent).join(", ");
+				text += "\n  " + theme.fg("accent", agents);
+				if (args.chain.length > 3) text += theme.fg("muted", ` +${args.chain.length - 3} more`);
+				// Line 3+: task previews
 				for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
 					const step = args.chain[i];
 					const cleanTask = step.task.replace(/\{previous\}/g, "").trim();
 					const preview = cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask;
-					text += "\n  " + theme.fg("muted", `${i + 1}.`) + " " + theme.fg("accent", step.agent) + theme.fg("dim", ` ${preview}`);
+					text += "\n  " + theme.fg("muted", `${i + 1}.`) + " " + theme.fg("dim", preview);
 				}
 				if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
 				return new Text(text, 0, 0);
 			}
 			if (args.tasks && args.tasks.length > 0) {
 				let text =
-					theme.fg("toolTitle", theme.bold("subagent ")) +
-					theme.fg("accent", `parallel (${args.tasks.length} tasks)`) +
+					headerPrefix +
+					theme.fg("toolTitle", theme.bold("parallel")) +
+					theme.fg("accent", idPart()) +
+					theme.fg("muted", ` (${args.tasks.length} tasks)`) +
 					theme.fg("muted", ` [${scope}]`) +
 					modelDisplay +
 					bg;
+				// Line 2: agents
+				const agents = args.tasks.slice(0, 3).map((t) => t.agent).join(", ");
+				text += "\n  " + theme.fg("accent", agents);
+				if (args.tasks.length > 3) text += theme.fg("muted", ` +${args.tasks.length - 3} more`);
+				// Line 3+: task previews
 				for (const t of args.tasks.slice(0, 3)) {
 					const preview = t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;
-					text += `\n  ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview}`)}`;
+					text += `\n  ${theme.fg("dim", preview)}`;
 				}
 				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
 				return new Text(text, 0, 0);
 			}
+			// Single mode
 			const agentName = args.agent || "...";
 			const preview = args.task ? (args.task.length > 60 ? `${args.task.slice(0, 60)}...` : args.task) : "...";
 			let text =
-				theme.fg("toolTitle", theme.bold("subagent ")) +
-				theme.fg("accent", agentName) +
+				headerPrefix +
+				theme.fg("toolTitle", theme.bold("single")) +
+				theme.fg("accent", idPart()) +
+				`  ${theme.fg("accent", agentName)}` +
 				theme.fg("muted", ` [${scope}]`) +
 				modelDisplay +
 				bg;
@@ -528,19 +541,28 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			}
 
 			const mdTheme = getMarkdownTheme();
+			const sid = sessionShortId();
 
 			if (details.mode === "single" && details.results.length === 1) {
 				const view = buildAgentResultView(details.results[0]);
+				// Compute elapsed for running state
+				const elapsed = view.status === "running" && view.duration.durationMs === undefined
+					? formatDuration(Date.now() - view.duration.startTime)
+					: undefined;
 				if (expanded) {
-					return renderAgentDetail(view, theme, mdTheme, { showTask: true });
+					return renderAgentDetail(view, theme, mdTheme, { showTask: true, sessionShortId: sid });
 				}
-				return new Text(renderSingleCollapsedText(view, theme), 0, 0);
+				return new Text(renderSingleCollapsedText(view, theme, sid, elapsed), 0, 0);
 			}
 
 			if (details.mode === "chain") {
 				const views = details.results.map((r) => buildAgentResultView(r));
-				const successCount = views.filter((v) => v.status === "succeeded").length;
-				const icon = successCount === views.length ? theme.fg("success", "✓") : theme.fg("error", "✗");
+				const hasFailure = views.some((v) => v.status === "failed");
+				const isRunning = views.some((v) => v.status === "running");
+				const overallStatus: "running" | "succeeded" | "failed" = isRunning ? "running" : hasFailure ? "failed" : "succeeded";
+				const iconMap = { running: "\u23F3", succeeded: "\u2705", failed: "\u274C" };
+				const colorMap = { running: "warning", succeeded: "success", failed: "error" };
+				const icon = theme.fg(colorMap[overallStatus] as "warning", iconMap[overallStatus]);
 
 				if (expanded) {
 					const container = new Container();
@@ -552,7 +574,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
 					container.addChild(
 						new Text(
-							`${icon} ${theme.fg("toolTitle", theme.bold("chain "))}${theme.fg("accent", `${successCount}/${views.length} steps`)}${durationStr}`,
+							`${icon} ${theme.fg("toolTitle", theme.bold("chain"))}${theme.fg("accent", sid ? ` #${sid}` : "")}  ${theme.fg("accent", `${views.filter((v) => v.status === "succeeded").length}/${views.length} steps`)}${durationStr}`,
 							0, 0,
 						),
 					);
@@ -575,159 +597,19 @@ export default function subagentExtension(pi: ExtensionAPI) {
 					return container;
 				}
 
-				return renderChainCollapsedText(views, details, icon, theme);
+				return renderChainCollapsedText(views, details, icon, theme, sid);
 			}
 
 			if (details.mode === "parallel") {
 				const summary = buildParallelSummaryView(details.results);
 				if (expanded && summary.isDone) {
-					return renderParallelDetail(summary, theme, mdTheme);
+					return renderParallelDetail(summary, theme, mdTheme, sid);
 				}
-				return renderParallelTable(summary, theme);
+				return renderParallelTable(summary, theme, sid);
 			}
 
 			const text = result.content[0];
 			return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
-		},
-	});
-
-	// ── Tool: collect_subagent ──
-	pi.registerTool({
-		name: "collect_subagent",
-		label: "Collect Subagent",
-		description: "Collect results from a background subagent. Omit jobId to list all active background jobs.",
-		parameters: CollectSubagentParams,
-
-		async execute(_toolCallId, params, signal, onUpdate, _ctx) {
-			const jobId = params.jobId as string | undefined;
-			const jobs = spawnManager.getActiveJobs();
-			const jobEvents = spawnManager.getJobEvents();
-			const sessionJobFiles = spawnManager.getSessionJobFiles();
-
-			if (!jobId) {
-				const lines: string[] = ["[Active background jobs]"];
-				for (const [id, job] of jobs) {
-					const elapsed = ((Date.now() - job.startedAt) / 1000).toFixed(1);
-					lines.push(`  ${id} | ${job.status} | ${job.model} | ${elapsed}s | "${job.task.slice(0, 50)}..."`);
-				}
-				if (lines.length === 1) lines.push("  (none)");
-				return {
-					content: [{ type: "text", text: lines.join("\n") }],
-					details: { count: jobs.size },
-				};
-			}
-
-			const job = jobs.get(jobId);
-			if (!job) {
-				return {
-					content: [{ type: "text", text: `[Job not found: ${jobId}]` }],
-					details: undefined,
-					isError: true,
-				};
-			}
-
-			const POLL_INTERVAL_SEC = 10;
-			let outputComplete = false;
-
-			while (job.status === "running" && !outputComplete) {
-				const elapsed = ((Date.now() - job.startedAt) / 1000).toFixed(1);
-
-				const stopReason = job.parseResult.stopReason;
-				if (stopReason !== undefined && stopReason !== "tool_use") {
-					outputComplete = true;
-					const elapsedNow = ((Date.now() - job.startedAt) / 1000).toFixed(1);
-					onUpdate?.({
-						content: [{
-							type: "text",
-							text: `[Job ${jobId.slice(0, 8)}... output complete (${elapsedNow}s), finalizing...]`,
-						}],
-						details: undefined,
-					});
-					break;
-				}
-
-				onUpdate?.({
-					content: [{
-						type: "text",
-						text: `[Job ${jobId.slice(0, 8)}... still running (${elapsed}s), polling...]`,
-					}],
-					details: undefined,
-				});
-
-				const eventName = `done:${jobId}`;
-				const aborted = await new Promise<boolean>((resolve) => {
-					let settled = false;
-
-					const settle = (value: boolean) => {
-						if (settled) return;
-						settled = true;
-						jobEvents.off(eventName, onDone);
-						clearTimeout(timer);
-						if (signal) signal.removeEventListener("abort", onAbort);
-						resolve(value);
-					};
-
-					const onDone = () => settle(false);
-					const onAbort = () => settle(true);
-
-					const timer = setTimeout(() => settle(false), POLL_INTERVAL_SEC * 1000);
-
-					jobEvents.on(eventName, onDone);
-					if (signal) {
-						if (signal.aborted) { settle(true); return; }
-						signal.addEventListener("abort", onAbort, { once: true });
-					}
-				});
-
-				if (aborted) {
-					return {
-						content: [{ type: "text", text: `[Job ${jobId.slice(0, 8)}... collection aborted by user]` }],
-						details: undefined,
-						isError: true,
-					};
-				}
-			}
-
-			if (outputComplete && job.status === "running") {
-				try {
-					process.kill(job.pid, "SIGTERM");
-					setTimeout(() => {
-						try { process.kill(job.pid, "SIGKILL"); } catch { /* already dead */ }
-					}, 2000);
-				} catch {
-					/* already dead */
-				}
-			}
-
-			const elapsed = ((Date.now() - job.startedAt) / 1000).toFixed(1);
-			const parsed = job.parseResult;
-			let stderr = "";
-			try {
-				if (fs.existsSync(job.errFile)) stderr = fs.readFileSync(job.errFile, "utf-8").trim();
-			} catch { /* ignore */ }
-
-			const label = job.status === "done" ? "completed" : job.status;
-			const usageStr = formatUsageStats(parsed.usage, parsed.model);
-			const parts = [
-				`[Background job ${jobId.slice(0, 8)}... ${label} (${elapsed}s)]`,
-				`  Agent: ${job.agent}`,
-				`  Model: ${job.model}`,
-			];
-			if (usageStr) parts.push(`  Usage: ${usageStr}`);
-			if (parsed.errorMessage) parts.push(`  Error: ${parsed.errorMessage}`);
-			parts.push("", parsed.output || "(no output)");
-			if (stderr) parts.push("", `[stderr]`, stderr);
-
-			for (const f of [job.outFile, job.errFile]) {
-				try { fs.unlinkSync(f); } catch { /* ignore */ }
-				sessionJobFiles.delete(f);
-			}
-			jobs.delete(jobId);
-
-			return {
-				content: [{ type: "text", text: parts.join("\n") }],
-				details: undefined,
-			};
 		},
 	});
 
