@@ -632,25 +632,18 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			while (job.status === "running" && !outputComplete) {
 				const elapsed = ((Date.now() - job.startedAt) / 1000).toFixed(1);
 
-				if (fs.existsSync(job.outFile)) {
-					try {
-						const parsed = spawnManager.parseOutputFile(job.outFile);
-						const stopReason = parsed.stopReason;
-						if (stopReason !== undefined && stopReason !== "tool_use") {
-							outputComplete = true;
-							const elapsedNow = ((Date.now() - job.startedAt) / 1000).toFixed(1);
-							onUpdate?.({
-								content: [{
-									type: "text",
-									text: `[Job ${jobId.slice(0, 8)}... output complete (${elapsedNow}s), finalizing...]`,
-								}],
-								details: undefined,
-							});
-							break;
-						}
-					} catch {
-						/* output file not ready yet */
-					}
+				const stopReason = job.parseResult.stopReason;
+				if (stopReason !== undefined && stopReason !== "tool_use") {
+					outputComplete = true;
+					const elapsedNow = ((Date.now() - job.startedAt) / 1000).toFixed(1);
+					onUpdate?.({
+						content: [{
+							type: "text",
+							text: `[Job ${jobId.slice(0, 8)}... output complete (${elapsedNow}s), finalizing...]`,
+						}],
+						details: undefined,
+					});
+					break;
 				}
 
 				onUpdate?.({
@@ -707,7 +700,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			}
 
 			const elapsed = ((Date.now() - job.startedAt) / 1000).toFixed(1);
-			const parsed = spawnManager.parseOutputFile(job.outFile);
+			const parsed = job.parseResult;
 			let stderr = "";
 			try {
 				if (fs.existsSync(job.errFile)) stderr = fs.readFileSync(job.errFile, "utf-8").trim();

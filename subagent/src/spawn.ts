@@ -132,6 +132,14 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 
 // ──────────────────────── Job types ────────────────────────
 
+export interface ParsedJobResult {
+	output: string;
+	usage: UsageStats;
+	model?: string;
+	stopReason?: string;
+	errorMessage?: string;
+}
+
 export interface JobInfo {
 	id: string;
 	agent: string;
@@ -145,70 +153,68 @@ export interface JobInfo {
 	promptFile: string | null;
 	promptDir: string | null;
 	spawnError: string | null;
+	parseResult: ParsedJobResult;
 }
 
 // ──────────────────────── Output parsing ────────────────────────
 
-function parseOutputFile(filePath: string): {
-	output: string;
-	usage: UsageStats;
-	model?: string;
-	stopReason?: string;
-	errorMessage?: string;
-} {
-	const empty: { output: string; usage: UsageStats } = {
+/** Shared JSONL line parser. Mutates `result` in place, O(1) memory. */
+function processJsonlLine(line: string, result: ParsedJobResult): void {
+	if (!line.trim()) return;
+	let event: Record<string, unknown>;
+	try {
+		event = JSON.parse(line) as Record<string, unknown>;
+	} catch {
+		return;
+	}
+
+	if (event.type === "message_end" && event.message) {
+		const msg = event.message as Message;
+		if (msg.role === "assistant") {
+			result.usage.turns++;
+			const u = msg.usage;
+			if (u) {
+				result.usage.input += u.input || 0;
+				result.usage.output += u.output || 0;
+				result.usage.cacheRead += u.cacheRead || 0;
+				result.usage.cacheWrite += u.cacheWrite || 0;
+				result.usage.cost += u.cost?.total || 0;
+				result.usage.contextTokens = u.totalTokens || 0;
+			}
+			if (msg.model) result.model = msg.model;
+			if (msg.stopReason) result.stopReason = msg.stopReason;
+			if (msg.errorMessage) result.errorMessage = msg.errorMessage;
+			for (const part of msg.content) {
+				if (part.type === "text" && part.text) result.output = part.text;
+			}
+		}
+	}
+}
+
+function makeEmptyParsedResult(): ParsedJobResult {
+	return {
 		output: "",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 	};
+}
 
-	if (!fs.existsSync(filePath)) return empty;
-
+/** Synchronous small-file parser. Exported for external consumers if needed. */
+export function parseOutputFileSmall(
+	filePath: string,
+	result: ParsedJobResult,
+): ParsedJobResult {
+	if (!fs.existsSync(filePath)) return result;
 	let content: string;
 	try {
 		content = fs.readFileSync(filePath, "utf-8");
 	} catch {
-		return empty;
+		// read error (permissions, etc.)
+		return result;
 	}
-
-	const lines = content.split("\n").filter((l) => l.trim());
-	const usage: UsageStats = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
-	let output = "";
-	let model: string | undefined;
-	let stopReason: string | undefined;
-	let errorMessage: string | undefined;
-
-	for (const line of lines) {
-		let event: Record<string, unknown>;
-		try {
-			event = JSON.parse(line) as Record<string, unknown>;
-		} catch {
-			continue;
-		}
-
-		if (event.type === "message_end" && event.message) {
-			const msg = event.message as Message;
-			if (msg.role === "assistant") {
-				usage.turns++;
-				const u = msg.usage;
-				if (u) {
-					usage.input += u.input || 0;
-					usage.output += u.output || 0;
-					usage.cacheRead += u.cacheRead || 0;
-					usage.cacheWrite += u.cacheWrite || 0;
-					usage.cost += u.cost?.total || 0;
-					usage.contextTokens = u.totalTokens || 0;
-				}
-				if (msg.model) model = msg.model;
-				if (msg.stopReason) stopReason = msg.stopReason;
-				if (msg.errorMessage) errorMessage = msg.errorMessage;
-				for (const part of msg.content) {
-					if (part.type === "text") output = part.text;
-				}
-			}
-		}
+	for (const line of content.split("\n")) {
+		processJsonlLine(line, result);
 	}
-
-	return { output, usage, model, stopReason, errorMessage };
+	return result;
 }
 
 // ──────────────────────── Callback type ────────────────────────
@@ -244,7 +250,6 @@ export interface SpawnManager {
 
 	cleanupJob: (job: JobInfo) => void;
 	cleanupAllJobs: () => void;
-	parseOutputFile: typeof parseOutputFile;
 	getActiveJobs: () => Map<string, JobInfo>;
 	getJobEvents: () => EventEmitter;
 	getSessionJobFiles: () => Set<string>;
@@ -287,7 +292,7 @@ export function createSpawnManager(pi: ExtensionAPI): SpawnManager {
 		if (!jobs.has(job.id)) return;
 
 		const elapsed = ((Date.now() - job.startedAt) / 1000).toFixed(1);
-		const parsed = parseOutputFile(job.outFile);
+		const parsed = job.parseResult; // streaming-parsed in real time, no file read
 
 		const isFailed = job.status === "failed" || parsed.stopReason === "error" || parsed.stopReason === "aborted";
 		const label = isFailed ? "FAILED" : "completed";
@@ -578,7 +583,29 @@ export function createSpawnManager(pi: ExtensionAPI): SpawnManager {
 
 		const outStream = fs.createWriteStream(outFile);
 		const errStream = fs.createWriteStream(errFile);
-		proc.stdout.pipe(outStream);
+
+		const parseResult = makeEmptyParsedResult();
+		let stdoutBuffer = "";
+
+		const processStdoutChunk = (data: Buffer) => {
+			const chunk = data.toString();
+			outStream.write(data); // write raw bytes to audit file
+			stdoutBuffer += chunk;
+			const lines = stdoutBuffer.split("\n");
+			stdoutBuffer = lines.pop() || "";
+			for (const line of lines) processJsonlLine(line, parseResult);
+		};
+
+		const flushStdoutBuffer = () => {
+			if (stdoutBuffer.trim()) processJsonlLine(stdoutBuffer, parseResult);
+			stdoutBuffer = "";
+		};
+
+		proc.stdout.on("data", processStdoutChunk);
+		proc.stdout.on("end", () => {
+			flushStdoutBuffer();
+			outStream.end();
+		});
 		proc.stderr.pipe(errStream);
 
 		const job: JobInfo = {
@@ -594,13 +621,13 @@ export function createSpawnManager(pi: ExtensionAPI): SpawnManager {
 			promptFile,
 			promptDir,
 			spawnError: null,
+			parseResult,
 		};
 		jobs.set(jobId, job);
 
 		proc.on("close", (code) => {
+			flushStdoutBuffer(); // ensure last partial line is parsed before injection
 			job.status = code === 0 ? "done" : "failed";
-			outStream.end();
-			errStream.end();
 			if (promptFile) {
 				try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
 			}
@@ -611,6 +638,7 @@ export function createSpawnManager(pi: ExtensionAPI): SpawnManager {
 		});
 
 		proc.on("error", (err) => {
+			flushStdoutBuffer();
 			job.status = "failed";
 			job.spawnError = err.message;
 			outStream.end();
@@ -640,7 +668,6 @@ export function createSpawnManager(pi: ExtensionAPI): SpawnManager {
 		startBackgroundJob: startBackgroundJobImpl,
 		cleanupJob: cleanupJobLocal,
 		cleanupAllJobs,
-		parseOutputFile,
 		getActiveJobs: () => jobs,
 		getJobEvents: () => jobEvents,
 		getSessionJobFiles: () => sessionJobFiles,
