@@ -99,10 +99,25 @@ const SubagentParams = Type.Object({
 });
 
 export default function subagentExtension(pi: ExtensionAPI) {
-	const spawnManager: SpawnManager = createSpawnManager(pi);
-	const capturedSessionId = { value: "" };
-	const sessionShortId = () => capturedSessionId.value.slice(0, 8);
-	const idPart = () => sessionShortId() ? ` #${sessionShortId()}` : "";
+	// Session-scoped state: each session gets its own SpawnManager and captured ID.
+	// Using Map keyed by sessionId ensures Session A cannot affect Session B.
+	const sessionStates = new Map<string, { spawnManager: SpawnManager; capturedSessionId: string; timerIntervals: Set<ReturnType<typeof setInterval>> }>();
+	// Track the most recent session ID for cleanup during session_shutdown
+	// (SessionShutdownEvent doesn't carry sessionManager)
+	let lastSessionId = "";
+
+	function getSessionState(sessionId: string) {
+		let state = sessionStates.get(sessionId);
+		if (!state) {
+			state = {
+				spawnManager: createSpawnManager(pi),
+				capturedSessionId: "",
+				timerIntervals: new Set(),
+			};
+			sessionStates.set(sessionId, state);
+		}
+		return state;
+	}
 
 	// ── Tool: subagent ──
 	pi.registerTool({
@@ -177,7 +192,14 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			cleanupOldTempFiles();
-			capturedSessionId.value = ctx.sessionManager.getSessionId();
+
+			// Session-scoped state lookup
+			const sessionId = ctx.sessionManager.getSessionId();
+			lastSessionId = sessionId;
+			const state = getSessionState(sessionId);
+			state.capturedSessionId = sessionId;
+			const spawnManager = state.spawnManager;
+
 			const isBackground = (params.background as boolean) ?? false;
 
 			// ── Step 1: Resolve model + thinking level ──
@@ -212,11 +234,20 @@ export default function subagentExtension(pi: ExtensionAPI) {
 				resolvedModel = result.ref;
 				resolvedThinking = thinkingParam ?? COMPLEXITY_DEFAULT_THINKING[effectiveComplexity];
 			} else {
-				const result = await resolveModel(modelParam!, ctx);
+				// This branch is reached only when effectiveComplexity is falsy,
+				// meaning modelParam must be set. Guard defensively anyway.
+				if (!modelParam) {
+					return {
+						content: [{ type: "text", text: "ERROR: No model or taskComplexity specified." }],
+						details: { mode: "single" as const, resolvedModel: "", agentScope: "user" as AgentScope, projectAgentsDir: null, results: [] },
+						isError: true,
+					};
+				}
+				const result = await resolveModel(modelParam, ctx);
 				if (!result.ok) {
 					return {
 						content: [{ type: "text", text: (result as { ok: false; error: string }).error }],
-						details: { mode: "single" as const, resolvedModel: modelParam!, agentScope: "user" as AgentScope, projectAgentsDir: null, results: [] },
+						details: { mode: "single" as const, resolvedModel: modelParam, agentScope: "user" as AgentScope, projectAgentsDir: null, results: [] },
 						isError: true,
 					};
 				}
@@ -464,13 +495,18 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
 
 
-		renderCall(args, theme, _context) {
+		renderCall(args, theme, context) {
 			const scope: AgentScope = args.agentScope ?? "user";
 			const complexity = args.taskComplexity as string | undefined;
 			const model = args.model || (complexity ? `auto:${complexity}` : "?");
 			const thinking = args.thinkingLevel as string | undefined;
 			const modelDisplay = thinking ? theme.fg("dim", ` ${model}/${thinking}`) : theme.fg("dim", ` ${model}`);
 			const bg = args.background ? theme.fg("warning", " [bg]") : "";
+
+			// Extract session short ID from render context for display
+			const ctxSessionId = (context as { sessionManager?: { getSessionId?: () => string } }).sessionManager?.getSessionId?.() ?? "";
+			const shortId = ctxSessionId.slice(0, 8);
+			const ctxIdPart = shortId ? ` #${shortId}` : "";
 
 			// Unified Line 1: ⏳ mode #sessionID
 			const headerPrefix = `${theme.fg("warning", "\u23F3")} `;
@@ -479,7 +515,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 				let text =
 					headerPrefix +
 					theme.fg("toolTitle", theme.bold("chain")) +
-					theme.fg("accent", idPart()) +
+					theme.fg("accent", ctxIdPart) +
 					theme.fg("muted", ` (${args.chain.length} steps)`) +
 					theme.fg("muted", ` [${scope}]`) +
 					modelDisplay +
@@ -502,7 +538,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 				let text =
 					headerPrefix +
 					theme.fg("toolTitle", theme.bold("parallel")) +
-					theme.fg("accent", idPart()) +
+					theme.fg("accent", ctxIdPart) +
 					theme.fg("muted", ` (${args.tasks.length} tasks)`) +
 					theme.fg("muted", ` [${scope}]`) +
 					modelDisplay +
@@ -525,7 +561,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			let text =
 				headerPrefix +
 				theme.fg("toolTitle", theme.bold("single")) +
-				theme.fg("accent", idPart()) +
+				theme.fg("accent", ctxIdPart) +
 				`  ${theme.fg("accent", agentName)}` +
 				theme.fg("muted", ` [${scope}]`) +
 				modelDisplay +
@@ -542,20 +578,33 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			}
 
 			// ── Live timer support: setInterval + context.invalidate() ──
-			// Store timer state in context.state for dedup; clean up on completion.
-			const ctxState = (context as unknown as Record<string, unknown>).state as Record<string, unknown> | undefined;
-			const ctxInvalidate = (context as unknown as Record<string, unknown>).invalidate as (() => void) | undefined;
+			// Use feature detection instead of double type assertion for safe access.
+			const ctxState = (context as { state?: Record<string, unknown> }).state;
+			const ctxInvalidate = (context as { invalidate?: () => void }).invalidate;
+
+			// Extract session ID from render context for display
+			const ctxSessionId = (context as { sessionManager?: { getSessionId?: () => string } }).sessionManager?.getSessionId?.() ?? "";
+			const sid = ctxSessionId.slice(0, 8);
+
+			// Track timer in session state for cleanup on session_shutdown
+			const sessionId = ctxSessionId;
+			const sessState = sessionId ? getSessionState(sessionId) : undefined;
+
 			const hasAnyRunning = details.results.some((r) => r.exitCode === -1);
 			if (hasAnyRunning && ctxState && !ctxState.timerInterval && ctxInvalidate) {
-				ctxState.timerInterval = setInterval(() => ctxInvalidate(), 1000);
+				const timer = setInterval(() => ctxInvalidate(), 1000);
+				ctxState.timerInterval = timer;
+				// Track in session state for cleanup on session_shutdown (NF-6)
+				sessState?.timerIntervals.add(timer);
 			}
 			if (!hasAnyRunning && ctxState?.timerInterval) {
-				clearInterval(ctxState.timerInterval as ReturnType<typeof setInterval>);
+				const timer = ctxState.timerInterval as ReturnType<typeof setInterval>;
+				clearInterval(timer);
 				ctxState.timerInterval = undefined;
+				sessState?.timerIntervals.delete(timer);
 			}
 
 			const mdTheme = getMarkdownTheme();
-			const sid = sessionShortId();
 
 			if (details.mode === "single" && details.results.length === 1) {
 				const view = buildAgentResultView(details.results[0]);
@@ -627,6 +676,18 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
 	// ── Cleanup on session shutdown ──
 	pi.on("session_shutdown", async () => {
-		spawnManager.cleanupAllJobs();
+		// SessionShutdownEvent doesn't carry sessionManager,
+		// so use the last known session ID for cleanup.
+		const sessionId = lastSessionId;
+		const state = sessionStates.get(sessionId);
+		if (state) {
+			// Clean up all active timers for this session
+			for (const timer of state.timerIntervals) {
+				clearInterval(timer);
+			}
+			state.timerIntervals.clear();
+			state.spawnManager.cleanupAllJobs();
+			sessionStates.delete(sessionId);
+		}
 	});
 }
