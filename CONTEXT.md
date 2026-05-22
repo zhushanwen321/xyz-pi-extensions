@@ -79,7 +79,7 @@ Goal 的生命周期状态，共 7 种：
 终态不可被覆盖。
 
 **GoalTask**
-Goal 内的可追踪工作单元。必须提供 **Evidence** 才能标记完成。ID 为递增整数。
+Goal 内的可追踪工作单元。每个 GoalTask 有四种状态：`pending`（未开始）、`in_progress`（执行中）、`completed`（已完成，必须提供 **Evidence**）、`cancelled`（已取消，不阻碍 goal 完成）。ID 为递增整数。终态（completed / cancelled）不可再变更。
 _Avoid_: 任务（指 Goal 的 task 时用 GoalTask，避免与通用"任务"混淆）
 
 **Evidence**
@@ -108,7 +108,7 @@ Goal 扩展的四种提示词模板：
 ### Todo
 
 **Todo**
-轻量级三态任务项：`pending` / `in_progress` / `completed`。无预算、无状态机、无 Evidence 要求。agent 的短期工作记忆，3-8 项为宜。
+轻量级三态任务项：`pending` / `in_progress` / `completed`。无预算、无状态机、无 Evidence 要求。agent 的短期工作记忆，3-8 项为宜。`add` 和 `delete` 操作只接受数组参数（批量），单条操作通过长度为 1 的数组实现。
 _Avoid_: 待办
 
 ### Subagent
