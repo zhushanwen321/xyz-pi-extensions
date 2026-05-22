@@ -4,12 +4,11 @@
 
 import type { ThemeColor } from "@mariozechner/pi-coding-agent";
 import type { GoalRuntimeState } from "./state";
-import { getCompletedCount, getElapsedTimeSeconds, getTokenUsagePercent, getTimeUsagePercent } from "./state";
+import { getCompletedCount, getElapsedTimeSeconds } from "./state";
+import { getTokenUsagePercent, getTimeUsagePercent, getBudgetColor } from "./budget.js";
 import {
 	SECONDS_PER_MINUTE,
 	PERCENT_FACTOR,
-	BUDGET_PERCENT_HIGH,
-	BUDGET_PERCENT_LOW,
 	PROGRESS_BAR_DEFAULT_WIDTH,
 	OBJECTIVE_DISPLAY_LIMIT,
 	OBJECTIVE_TRUNCATE_KEEP,
@@ -41,13 +40,11 @@ export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string
 	// Budget indicators
 	if (state.budget.tokenBudget && state.budget.tokenBudget > 0) {
 		const pct = Math.round(getTokenUsagePercent(state));
-		const color = pct >= BUDGET_PERCENT_HIGH ? "error" : pct >= BUDGET_PERCENT_LOW ? "warning" : "muted";
-		text += th.fg(color, ` | ${pct}% tokens`);
+		text += th.fg(getBudgetColor(pct), ` | ${pct}% tokens`);
 	}
 	if (state.budget.timeBudgetMinutes && state.budget.timeBudgetMinutes > 0) {
 		const pct = Math.round(getTimeUsagePercent(state));
-		const color = pct >= BUDGET_PERCENT_HIGH ? "error" : pct >= BUDGET_PERCENT_LOW ? "warning" : "muted";
-		text += th.fg(color, ` | ${pct}% time`);
+		text += th.fg(getBudgetColor(pct), ` | ${pct}% time`);
 	}
 
 	if (state.stallCount > 0) {

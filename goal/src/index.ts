@@ -51,13 +51,15 @@ import { renderStatusLine, renderWidgetLines } from "./widget";
 import {
 	SECONDS_PER_MINUTE,
 	MS_PER_SECOND,
-	BUDGET_RATIO_HIGH,
-	BUDGET_RATIO_LOW,
-	BUDGET_RATIO_TIGHT,
 	CONTEXT_USAGE_RATIO_LIMIT,
-	MAX_OBJECTIVE_LENGTH,
 	PERCENT_FACTOR,
 } from "./constants";
+
+import {
+	checkBudgetOnTurnEnd,
+	checkBudgetOnResume,
+	checkProgress,
+} from "./budget.js";
 
 // ── Constants ─────────────────────────────────────────
 
@@ -405,23 +407,15 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 			session.state.stallCount = 0;
 			session.state.timeStartedAt = Date.now();
 
-			// Resume 时重检预算
-			if (session.state.budget.tokenBudget && session.state.tokensUsed >= session.state.budget.tokenBudget) {
-				session.state.status = transitionStatus(session.state.status, "budget_limited");
+			// Resume 时重检预算（复用 budget.ts 的决策函数）
+			const resumeBudgetCheck = checkBudgetOnResume(session.state);
+			if (resumeBudgetCheck) {
+				const dim = resumeBudgetCheck.dimension;
+				session.state.status = transitionStatus(session.state.status, dim === "token" ? "budget_limited" : "time_limited");
 				persistGoalState(pi, session, ctx);
 				updateWidget(session, ctx);
-				ctx.ui.notify("Token 预算已耗尽，无法恢复。使用 /goal clear 清除。", "warning");
+				ctx.ui.notify(`${dim === "token" ? "Token" : "时间"} 预算已耗尽，无法恢复。使用 /goal clear 清除。`, "warning");
 				return;
-			}
-			if (session.state.budget.timeBudgetMinutes) {
-				const elapsed = getElapsedTimeSeconds(session.state);
-				if (elapsed >= session.state.budget.timeBudgetMinutes * SECONDS_PER_MINUTE) {
-					session.state.status = transitionStatus(session.state.status, "time_limited");
-					persistGoalState(pi, session, ctx);
-					updateWidget(session, ctx);
-					ctx.ui.notify("时间预算已耗尽，无法恢复。使用 /goal clear 清除。", "warning");
-					return;
-				}
 			}
 
 			persistGoalState(pi, session, ctx);
@@ -509,11 +503,6 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 				ctx.ui.notify("Token 预算必须大于 0。", "warning");
 				return;
 			}
-			if (parsed.objective.length > MAX_OBJECTIVE_LENGTH) {
-				ctx.ui.notify(`目标描述过长（${parsed.objective.length} 字符），上限 ${MAX_OBJECTIVE_LENGTH} 字符。`, "warning");
-				return;
-			}
-
 			const budget: Partial<BudgetConfig> = {};
 			if (parsed.budget?.tokenBudget) budget.tokenBudget = parsed.budget.tokenBudget;
 			if (parsed.budget?.timeBudgetMinutes) budget.timeBudgetMinutes = parsed.budget.timeBudgetMinutes;
@@ -587,6 +576,7 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 	const snapshotGoalId = session.state.goalId;
 	const checkStale = () => !session.state || session.state.goalId !== snapshotGoalId;
 
+	// 终态处理：complete / blocked 只需 persist + notify
 	if (session.state.status === "complete") {
 		persistGoalState(pi, session, ctx);
 		if (checkStale()) return;
@@ -608,7 +598,7 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 
 	if (!isActiveStatus(session.state.status)) return;
 
-	// 防重入——如果 before_agent_start 注入了 context，跳过本轮 continuation
+	// 防重入
 	if (session.hasPendingInjection) {
 		session.hasPendingInjection = false;
 		return;
@@ -616,96 +606,70 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 
 	if (checkStale()) return;
 
-	// ── 预算预警（token + time 70%/90%）──
+	// ── 预算策略（集中检查）──
 
-	if (session.state.budget.tokenBudget) {
-		const pct = session.state.tokensUsed / session.state.budget.tokenBudget;
-		if (pct >= BUDGET_RATIO_HIGH && !session.state.budgetWarning90Sent) {
+	const budgetResult = checkBudgetOnTurnEnd(session.state);
+
+	// 发送预警
+	for (const w of budgetResult.warnings) {
+		if (w.type === "warning90") {
 			session.state.budgetWarning90Sent = true;
-			ctx.ui.notify("Token 预算已用 90%，请开始收尾。", "warning");
-		} else if (pct >= BUDGET_RATIO_LOW && !session.state.budgetWarning70Sent) {
+			ctx.ui.notify(`${w.dimension === "token" ? "Token" : "时间"} 预算已用 90%，请开始收尾。`, "warning");
+		} else if (w.type === "warning70") {
 			session.state.budgetWarning70Sent = true;
-			ctx.ui.notify("Token 预算已用 70%，注意控制范围。", "info");
-		}
-	}
-	if (session.state.budget.timeBudgetMinutes) {
-		const elapsed = getElapsedTimeSeconds(session.state);
-		const timePct = elapsed / (session.state.budget.timeBudgetMinutes * SECONDS_PER_MINUTE);
-		if (timePct >= BUDGET_RATIO_HIGH && !session.state.budgetWarning90Sent) {
-			session.state.budgetWarning90Sent = true;
-			ctx.ui.notify("时间预算已用 90%，请开始收尾。", "warning");
-		} else if (timePct >= BUDGET_RATIO_LOW && !session.state.budgetWarning70Sent) {
-			session.state.budgetWarning70Sent = true;
-			ctx.ui.notify("时间预算已用 70%，注意控制范围。", "info");
+			ctx.ui.notify(`${w.dimension === "token" ? "Token" : "时间"} 预算已用 70%，注意控制范围。`, "info");
 		}
 	}
 
-	// Token 预算检查（同步两阶段）
-	if (session.state.budget.tokenBudget) {
-		const pct = session.state.tokensUsed / session.state.budget.tokenBudget;
-
-		if (pct >= 1 && session.state.budgetLimitSteeringSent) {
-			session.state.status = transitionStatus(session.state.status, "budget_limited");
-			persistGoalState(pi, session, ctx);
-			if (checkStale()) return;
-			updateWidget(session, ctx);
-			ctx.ui.notify("Token 预算已耗尽，Goal 已终止。", "warning");
-			return;
-		}
-
-		if (pct >= BUDGET_RATIO_HIGH && !session.state.budgetLimitSteeringSent) {
-			session.state.budgetLimitSteeringSent = true;
-			persistGoalState(pi, session, ctx);
-			if (checkStale()) return;
-			updateWidget(session, ctx);
-			pi.sendUserMessage(budgetLimitPrompt(session.state, "token"), { deliverAs: "steer" });
-			return;
-		}
+	// 预算耗尽 → 终止
+	if (budgetResult.terminal) {
+		const dim = budgetResult.terminal.dimension;
+		session.state.status = transitionStatus(session.state.status, dim === "token" ? "budget_limited" : "time_limited");
+		persistGoalState(pi, session, ctx);
+		if (checkStale()) return;
+		updateWidget(session, ctx);
+		ctx.ui.notify(
+			dim === "token"
+				? "Token 预算已耗尽，Goal 已终止。"
+				: `时间预算耗尽 (${session.state.budget.timeBudgetMinutes} 分钟)，Goal 已终止。`,
+			"warning",
+		);
+		return;
 	}
 
-	// 时间预算检查
-	if (session.state.budget.timeBudgetMinutes) {
-		const elapsed = getElapsedTimeSeconds(session.state);
-		if (elapsed >= session.state.budget.timeBudgetMinutes * SECONDS_PER_MINUTE) {
-			session.state.status = transitionStatus(session.state.status, "time_limited");
-			persistGoalState(pi, session, ctx);
-			if (checkStale()) return;
-			updateWidget(session, ctx);
-			ctx.ui.notify(
-				`时间预算耗尽 (${session.state.budget.timeBudgetMinutes} 分钟)，Goal 已终止。`,
-				"warning",
-			);
-			return;
-		}
+	// 90% steering → 发送收尾指令
+	if (budgetResult.shouldSendSteering) {
+		session.state.budgetLimitSteeringSent = true;
+		persistGoalState(pi, session, ctx);
+		if (checkStale()) return;
+		updateWidget(session, ctx);
+		pi.sendUserMessage(budgetLimitPrompt(session.state, "token"), { deliverAs: "steer" });
+		return;
 	}
 
 	if (checkStale()) return;
 
-	// ── 统一 turnCount 递增 ──
+	// ── Turn 递增 + 进展评估 ──
 
 	session.state.turnCount++;
 
-	// 所有任务完成但 goal 未标记 complete → 自动提示
-	const incomplete = getIncompleteTasks(session.state.tasks);
-	const total = session.state.tasks.length;
-	if (total > 0 && incomplete.length === 0) {
-		if (session.state.turnCount >= session.state.budget.maxTurns) {
+	const progress = checkProgress(session.state, session.tasksCompletedAtAgentStart);
+
+	// 所有任务完成 → 提示 complete_goal
+	if (progress.allTasksDone) {
+		if (progress.maxTurnsReached) {
 			session.state.status = transitionStatus(session.state.status, "complete");
 			persistGoalState(pi, session, ctx);
 			if (checkStale()) return;
 			updateWidget(session, ctx);
 			ctx.ui.notify(
-				`所有任务已完成，Goal 自动结束。(${getCompletedCount(session.state.tasks)}/${total} 任务, ${session.state.turnCount} 轮)`,
+				`所有任务已完成，Goal 自动结束。(${progress.completedCount}/${progress.totalCount} 任务, ${session.state.turnCount} 轮)`,
 				"info",
 			);
 			return;
 		}
 
-		// 预算紧张时用 steer 优先完成
-		const budgetTight = session.state.budget.tokenBudget
-			&& session.state.tokensUsed >= session.state.budget.tokenBudget * BUDGET_RATIO_TIGHT;
-
-		if (budgetTight) {
+		if (progress.budgetTight) {
 			pi.sendUserMessage(
 				`所有任务已完成，且 token 预算已用 ${Math.round(session.state.tokensUsed / session.state.budget.tokenBudget! * PERCENT_FACTOR)}%。` +
 				`请立即调用 goal_manager 的 complete_goal 完成目标，提供整体 evidence。` +
@@ -714,7 +678,7 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 			);
 		} else {
 			pi.sendUserMessage(
-				`所有 ${total} 个任务已完成。请调用 goal_manager 的 complete_goal 完成目标，提供整体 evidence。` +
+				`所有 ${progress.totalCount} 个任务已完成。请调用 goal_manager 的 complete_goal 完成目标，提供整体 evidence。` +
 					`\n\n目标: ${session.state.objective}`,
 				{ deliverAs: "followUp" },
 			);
@@ -724,9 +688,9 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 		return;
 	}
 
-	// 没有任务创建
-	if (total === 0) {
-		if (session.state.turnCount >= session.state.budget.maxTurns) {
+	// 没有任务创建 → 提醒 create_tasks
+	if (progress.noTasksCreated) {
+		if (progress.maxTurnsReached) {
 			session.state.status = transitionStatus(session.state.status, "cancelled");
 			persistGoalState(pi, session, ctx);
 			if (checkStale()) return;
@@ -747,8 +711,9 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 		return;
 	}
 
-	// 最大轮次检查
-	if (session.state.turnCount >= session.state.budget.maxTurns) {
+	// 最大轮次 → 取消
+	if (progress.maxTurnsReached) {
+		const incomplete = getIncompleteTasks(session.state.tasks);
 		session.state.status = transitionStatus(session.state.status, "cancelled");
 		persistGoalState(pi, session, ctx);
 		if (checkStale()) return;
@@ -760,18 +725,14 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 		return;
 	}
 
-	// 进展跟踪
-	const currentCompleted = getCompletedCount(session.state.tasks);
-	const progressThisRound = currentCompleted - session.tasksCompletedAtAgentStart;
-
-	if (progressThisRound === 0) {
+	// Stall 检测
+	if (progress.isStalled) {
 		session.state.stallCount++;
 	} else {
 		session.state.stallCount = 0;
 		session.state.lastProgressTurn = session.state.turnCount;
 	}
 
-	// Stall → Blocked
 	if (session.state.stallCount >= session.state.budget.maxStallTurns) {
 		session.state.status = transitionStatus(session.state.status, "blocked");
 		persistGoalState(pi, session, ctx);
@@ -786,7 +747,7 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 
 	if (checkStale()) return;
 
-	// 去抖 — 检测本 turn 是否有任何 token 消耗
+	// 去抖：本 turn 无 token 消耗则不发 continuation
 	const tokenDelta = session.state.tokensUsed - session.state.lastTurnTokensUsed;
 	session.state.lastTurnTokensUsed = session.state.tokensUsed;
 
@@ -843,7 +804,13 @@ export default function goalExtension(pi: ExtensionAPI) {
 		parameters: GoalManagerParams,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			return executeGoalAction(pi, session, params, ctx);
+			try {
+				return await executeGoalAction(pi, session, params, ctx);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				const inputSummary = JSON.stringify(params, null, 2);
+				throw new Error(`${msg}\n\nInput: ${inputSummary}`);
+			}
 		},
 
 		renderCall(args, theme) {

@@ -23,7 +23,6 @@ export const BUDGET_PERCENT_LOW = 70;    // widget 颜色变黄
 
 // ── 长度/数量上限 ───────────────────────────────────
 
-export const MAX_OBJECTIVE_LENGTH = 4000;     // 目标描述字符上限
 export const MAX_TURNS_CAP = 100;             // maxTurns 上限
 export const MAX_STALL_CAP = 20;              // maxStallTurns 上限
 export const UPDATE_PREFIX_LENGTH = 7;        // "update ".length

@@ -500,7 +500,17 @@ export default function (pi: ExtensionAPI) {
 		parameters: TodoParams,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			return executeTodoAction(params, ctx);
+			const result = await executeTodoAction(params, ctx);
+			// Append input params to error results for debugging
+			const details = result.details as { error?: string } | undefined;
+			if (details?.error) {
+				const textPart = result.content[0];
+				if (textPart?.type === "text") {
+					const inputSummary = JSON.stringify(params);
+					textPart.text += `\nInput: ${inputSummary}`;
+				}
+			}
+			return result;
 		},
 
 		renderCall(args, theme, _context) {

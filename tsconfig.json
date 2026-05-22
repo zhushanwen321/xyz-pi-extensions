@@ -22,7 +22,8 @@
   },
   "include": [
     "goal/**/*.ts",
-    "todo/**/*.ts"
+    "todo/**/*.ts",
+    "subagent/**/*.ts"
   ],
   "exclude": [
     "node_modules",

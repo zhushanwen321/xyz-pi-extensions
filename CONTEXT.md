@@ -1,0 +1,153 @@
+# xyz-pi-extensions
+
+Pi coding agent 的扩展工具箱。每个扩展是一个独立可安装的 Pi 插件，解决 AI coding agent 工作流中的特定问题。
+
+## Pi 平台
+
+**Extension**
+TypeScript 模块，通过 `export default function(pi: ExtensionAPI)` 注册到 Pi 运行时。可注册 Tool、Command、Event Handler、UI 组件。放置于 `~/.pi/agent/extensions/` 或 `.pi/extensions/`。
+_Avoid_: 插件（口语可，正式文档用 Extension）
+
+**ExtensionAPI**
+Pi 传递给 Extension 工厂函数的 API 对象。提供 `registerTool()`、`registerCommand()`、`on()`、`registerMessageRenderer()`、`appendEntry()` 等方法。
+
+**Tool**
+Extension 通过 `pi.registerTool()` 注册的能力单元。定义 name、parameters schema、execute handler、renderCall/renderResult。模型通过 function calling 调用。
+_Avoid_: 工具（口语可，正式文档用 Tool）
+
+**Command**
+Extension 通过 `pi.registerCommand()` 注册的用户命令，以 `/` 开头。用户在编辑器中输入触发，不由模型调用。
+
+**Event**
+Pi 运行时生命周期事件。Extension 通过 `pi.on(event, handler)` 监听。核心事件：`session_start`、`before_agent_start`、`agent_start`、`turn_end`、`message_end`、`agent_end`、`session_shutdown`。
+
+**Session**
+一次 Pi 对话的完整生命周期。以 JSONL 文件持久化，支持树状分支。状态通过 `ctx.sessionManager` 访问。
+
+**Entry**
+Session 中的单条记录。`ctx.sessionManager.getEntries()` 返回全部，`ctx.sessionManager.getBranch()` 返回当前分支。Extension 通过 `pi.appendEntry(type, data)` 写入自定义记录，通过 `type === "custom" && customType === "..."` 读取。
+_Avoid_: 记录、条目
+
+**CustomEntry**
+带 `customType` 字段的 Entry，用于 Extension 持久化私有状态。写入：`pi.appendEntry("my-type", data)`；读取：过滤 `entry.type === "custom" && entry.customType === "my-type"`。
+
+**Theme**
+TUI 颜色系统。通过 `ctx.ui.theme.fg(token, text)` 使用语义 token（如 "toolTitle"、"success"、"error"）着色，不硬编码 ANSI。
+
+**Agent**
+`.md` 文件定义的 agent 配置，包含 frontmatter（name、description、tools）和 body（systemPrompt）。放置于 `~/.pi/agent/agents/`（user 级）或 `.pi/agents/`（project 级）。
+
+**Context Files**
+`AGENTS.md` 或 `CLAUDE.md`，作为系统提示词的一部分加载。从 `~/.pi/agent/`、父目录、当前目录自动发现并拼接。
+
+**Skill**
+On-demand 能力包，Markdown 格式。通过 `/skill:name` 触发或由 agent 自动加载。放置于 `~/.pi/agent/skills/`、`~/.agents/skills/`、`.pi/skills/`。
+
+**Prompt Template**
+可复用的提示词模板，Markdown 格式，支持 `{{variable}}` 插值。通过 `/name` 展开。
+
+**Steering**
+Pi 的消息投递机制之一。`deliverAs: "steer"` 在当前 assistant turn 执行完 tool call 后注入，高优先级。用于目标更新、预算警告等需要立即响应的场景。
+_Avoid_: 舵向、引导
+
+**Follow-up**
+Pi 的消息投递机制之一。`deliverAs: "followUp"` 在 agent 完成所有工作后注入，低优先级。用于常规 continuation。
+
+**Compaction**
+长 session 的上下文压缩机制。将旧消息摘要，保留近期消息。有损操作，完整历史保留在 JSONL 中。
+
+**Pi Package**
+Extension + Skill + Prompt Template + Theme 的分发单元，通过 npm 或 git 安装。
+
+## 本项目概念
+
+### Goal
+
+**Goal**
+用户通过 `/goal <objective>` 发起的持久化自主循环。有预算约束、7 态状态机、任务清单、stall 检测。保证目标一定被完成或被显式取消。
+_Avoid_: 目标（口语可，正式文档用 Goal）
+
+**GoalStatus**
+Goal 的生命周期状态，共 7 种：
+- `active` — 唯一驱动 agent 循环的状态
+- `paused` — 用户暂停，不计时不消耗 turn
+- `blocked` — 连续无进展触发，可 resume
+- `complete` — 终态，所有任务完成且有证据
+- `budget_limited` — 终态，token 预算耗尽
+- `time_limited` — 终态，时间预算耗尽
+- `cancelled` — 终态，用户清除
+终态不可被覆盖。
+
+**GoalTask**
+Goal 内的可追踪工作单元。必须提供 **Evidence** 才能标记完成。ID 为递增整数。
+_Avoid_: 任务（指 Goal 的 task 时用 GoalTask，避免与通用"任务"混淆）
+
+**Evidence**
+完成任务（`complete_task`）或完成目标（`complete_goal`）时必须提供的具体验证信息。如"测试 X 通过"、"文件 F 已创建"。防止无证据标记完成。
+
+**Budget**
+Goal 的资源约束，包含四个维度：
+- **Token Budget** — token 消耗上限
+- **Time Budget** — 墙钟时间上限（分钟）
+- **Max Turns** — 最大 agent turn 数（默认 50，上限 100）
+- **Max Stall Turns** — 连续无进展轮数阈值（默认 5，上限 20），触发 blocked
+
+**Stall**
+连续无 **GoalTask** 完成的 turn 数。达到 `maxStallTurns` 时 Goal 自动转为 `blocked`。
+
+**Steering Template**
+Goal 扩展的四种提示词模板：
+- **Continuation** — 每个 agent turn 结束时注入，驱动下一轮工作
+- **Budget Limit** — token 预算达 90% 时注入，引导收尾
+- **Objective Updated** — 用户 `/goal update` 修改目标时注入
+- **Context Injection** — `before_agent_start` 时注入，提供当前 Goal 上下文
+
+**Budget Warning**
+预算消耗的两阶段预警：70% 提示注意，90% 提示收尾。token 和时间预算共享预警 flag。
+
+### Todo
+
+**Todo**
+轻量级三态任务项：`pending` / `in_progress` / `completed`。无预算、无状态机、无 Evidence 要求。agent 的短期工作记忆，3-8 项为宜。
+_Avoid_: 待办
+
+### Subagent
+
+**Subagent**
+通过 `spawn("pi", ["--mode", "json"])` 启动独立操作系统进程执行委派任务。与主 agent 进程隔离，拥有独立对话历史。主 agent 与 Subagent 之间通过 task prompt（下行）和 stdout JSON 事件流（上行）通信。
+
+**Execution Mode**
+Subagent 的四种执行模式：
+- **Single** — 一个 agent 执行一个 task，阻塞等待
+- **Parallel** — 多个 agent 并发执行多个独立 task
+- **Chain** — 多个 agent 串行执行，前一步输出通过 `{previous}` 占位符传递给下一步
+- **Background** — 异步运行的 Single 模式，完成后自动注入结果到主对话
+
+**AgentScope**
+Agent 定义文件的发现范围：`user`（`~/.pi/agent/agents/`）、`project`（`.pi/agents/`）、`both`。
+
+**TaskComplexity**
+任务复杂度等级，用于自动模型选择：`low`（简单快速）、`medium`（中等）、`high`（复杂）。从 `~/.pi/agent/subagent-models.json` 读取模型映射。
+
+**ThinkingLevel**
+模型的推理深度：`high`（标准推理）或 `max`（最大推理）。按 TaskComplexity 默认：low→high, medium→high, high→max。
+
+**Background Job**
+`background: true` 模式下的 Subagent 运行实例。结果通过 Pi 的 `sendMessage({ deliverAs: "followUp", triggerTurn: true })` 自动注入到主对话，无需轮询。
+
+## Flagged Ambiguities
+
+**"任务"同时存在于 Goal（GoalTask）和 Todo（Todo item）**
+两者定位不同：GoalTask 要求 Evidence，是完成目标的强制路径；Todo 是可选的轻量备忘。在 Goal 激活时不应同时使用 Todo 追踪同类工作。
+
+## Example Dialogue
+
+> **Dev**: 我要让 goal 扩展支持时间预算，达到上限就自动终止。
+>
+> **Expert**: 你的 **GoalStatus** 已经有 `budget_limited`，但那是给 token 用的。你要加一个新终态还是复用它？
+>
+> **Dev**: 加一个 `time_limited`。token 和时间是两个独立的预算维度，终态应该分开，这样用户知道是哪种资源耗尽了。
+>
+> **Dev**: 现在子任务完成后我不想每次都手动调用 complete_task。可以让 **Todo** 自动追踪吗？
+>
+> **Expert**: 不建议。**GoalTask** 要求 **Evidence**，这是核心设计——防止模型跳过验证。**Todo** 没有这个保证。在 Goal 激活时，用 GoalTask，不用 Todo。

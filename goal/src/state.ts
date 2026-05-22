@@ -13,7 +13,7 @@
  * Paused/Blocked 可被 Active 覆盖（用户 resume）
  */
 
-import { SECONDS_PER_MINUTE, MS_PER_SECOND, PERCENT_FACTOR } from "./constants";
+import { MS_PER_SECOND } from "./constants";
 
 // ── Goal 状态枚举 ──────────────────────────────────────
 
@@ -171,14 +171,6 @@ export function getElapsedTimeSeconds(state: GoalRuntimeState): number {
 	return state.timeUsedSeconds + (Date.now() - state.timeStartedAt) / MS_PER_SECOND;
 }
 
-export function getTokenUsagePercent(state: GoalRuntimeState): number {
-	if (!state.budget.tokenBudget || state.budget.tokenBudget <= 0) return 0;
-	return (state.tokensUsed / state.budget.tokenBudget) * PERCENT_FACTOR;
-}
-
-export function getTimeUsagePercent(state: GoalRuntimeState): number {
-	if (!state.budget.timeBudgetMinutes || state.budget.timeBudgetMinutes <= 0) return 0;
-	const elapsed = getElapsedTimeSeconds(state);
-	const budgetSeconds = state.budget.timeBudgetMinutes * SECONDS_PER_MINUTE;
-	return (elapsed / budgetSeconds) * PERCENT_FACTOR;
-}
+// getTokenUsagePercent 和 getTimeUsagePercent 已移至 budget.ts
+// 保留 re-export 以便渐进迁移
+export { getTokenUsagePercent, getTimeUsagePercent } from "./budget.js";

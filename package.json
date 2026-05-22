@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "eslint \"goal/src/**/*.ts\" \"todo/src/**/*.ts\"",
-    "lint:fix": "eslint --fix \"goal/src/**/*.ts\" \"todo/src/**/*.ts\"",
+    "lint": "eslint \"goal/src/**/*.ts\" \"todo/src/**/*.ts\" \"subagent/src/**/*.ts\"",
+    "lint:fix": "eslint --fix \"goal/src/**/*.ts\" \"todo/src/**/*.ts\" \"subagent/src/**/*.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
