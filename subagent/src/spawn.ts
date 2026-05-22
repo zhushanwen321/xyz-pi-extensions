@@ -18,7 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@mariozechner/pi-coding-agent";
 import type { Message } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { withFileMutationQueue } from "@mariozechner/pi-coding-agent";

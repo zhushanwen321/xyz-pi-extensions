@@ -34,7 +34,7 @@ export interface SubagentModelsConfig {
 
 export interface ModelResolutionContext {
 	modelRegistry?: {
-		getAvailable?: () => Promise<Array<{ id: string; provider: string }>>;
+		getAvailable?: () => Array<{ id: string; provider: string }>;
 	};
 }
 
@@ -159,7 +159,7 @@ export async function buildModelsHintDynamic(ctx: ModelResolutionContext): Promi
 	// Tier 2: scoped models from registry
 	let scopedModels: Array<{ id: string; provider: string }> = [];
 	try {
-		scopedModels = (await ctx.modelRegistry?.getAvailable?.()) ?? [];
+		scopedModels = ctx.modelRegistry?.getAvailable?.() ?? [];
 	} catch {
 		/* ignore */
 	}
@@ -250,7 +250,7 @@ export async function resolveModel(
 
 	let models: Array<{ id: string; provider: string }>;
 	try {
-		models = (await ctx.modelRegistry?.getAvailable?.()) ?? [];
+		models = ctx.modelRegistry?.getAvailable?.() ?? [];
 	} catch {
 		models = [];
 	}

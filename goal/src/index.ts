@@ -47,6 +47,7 @@ import {
 } from "./templates";
 
 import { renderStatusLine, renderWidgetLines } from "./widget";
+import { toSingleLine } from "./widget";
 
 import {
 	SECONDS_PER_MINUTE,
@@ -77,7 +78,7 @@ const GoalManagerParams = Type.Object({
 		"cancel_goal",
 		"report_blocked",
 	] as const),
-	tasks: Type.Optional(Type.Array(Type.String(), { description: "Task descriptions for create_tasks" })),
+	tasks: Type.Optional(Type.Array(Type.String(), { description: "Task descriptions. 每条必须是一行简短摘要（不超过 60 字），不含换行或 markdown" })),
 	taskId: Type.Optional(Type.Number({ description: "Task ID for complete_task" })),
 	evidence: Type.Optional(Type.String({ description: "Evidence for completion (required for complete_task and complete_goal)" })),
 	reason: Type.Optional(Type.String({ description: "Reason for being blocked (required for report_blocked)" })),
@@ -205,6 +206,16 @@ function clearGoalSession(session: GoalSession, ctx: ExtensionContext): void {
 
 // ── Tool Execute Handler ──────────────────────────────
 
+/** 将 AI 传入的 task description 标准化：去换行、截断 */
+function normalizeDescription(desc: string): string {
+	const singleLine = desc.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
+	const MAX_TASK_DESC_LENGTH = 80;
+	if (singleLine.length > MAX_TASK_DESC_LENGTH) {
+		return singleLine.slice(0, MAX_TASK_DESC_LENGTH - 3) + "...";
+	}
+	return singleLine;
+}
+
 async function executeGoalAction(
 	pi: ExtensionAPI,
 	session: GoalSession,
@@ -230,7 +241,7 @@ async function executeGoalAction(
 			}
 			state.tasks = params.tasks.map((desc, i) => ({
 				id: i + 1,
-				description: desc,
+				description: normalizeDescription(desc),
 				completed: false,
 			}));
 			persistGoalState(pi, session, ctx);
@@ -248,7 +259,7 @@ async function executeGoalAction(
 				: 1;
 			const newTasks: GoalTask[] = params.tasks.map((desc, i) => ({
 				id: startId + i,
-				description: desc,
+				description: normalizeDescription(desc),
 				completed: false,
 			}));
 			state.tasks.push(...newTasks);
@@ -781,8 +792,8 @@ export default function goalExtension(pi: ExtensionAPI) {
 		description:
 			"Goal 模式任务管理器。此工具仅在用户通过 /goal 命令启动目标后才可用，AI 不能主动触发此功能。如果 Goal 模式未激活，调用此工具会报错。" +
 			"\n\n可用 action:" +
-			"\n- create_tasks: 首次拆分目标为任务清单（每个 goal 开始时调用一次）" +
-			"\n- add_tasks: 向已有任务清单追加新任务（执行中发现遗漏时使用）" +
+			"\n- create_tasks: 首次拆分目标为任务清单（每个 goal 开始时调用一次）。每条 task description 必须是一行简短摘要（不超过 60 字），不要包含换行、markdown、详细参数" +
+			"\n- add_tasks: 向已有任务清单追加新任务（执行中发现遗漏时使用）。每条 task description 必须是一行简短摘要（不超过 60 字），不要包含换行、markdown、详细参数" +
 			"\n- complete_task: 标记任务完成（必须提供 evidence）" +
 			"\n- list_tasks: 查看进度和剩余预算" +
 			"\n- complete_goal: 标记目标达成（必须所有任务完成 + evidence）" +
@@ -791,6 +802,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		promptSnippet: "管理 /goal 模式的任务清单、完成状态和退出",
 		promptGuidelines: [
 			"[工作流] 收到目标后，第一步必须调用 create_tasks 拆分任务。已有任务清单时不要重复调用",
+			"[格式] 每个 task description 必须是一行简短摘要，不超过 60 个字符。不要包含换行符、markdown 格式、详细参数列表——这些放在执行阶段处理。示例: '修复 hook-registry 去重逻辑' 而不是 '修复 hook-registry 去重逻辑 + transport-execute enhancementConfig 防护 + failover-loop ...'",
 			"[追加] 执行中发现遗漏的子任务时，使用 add_tasks 追加，不要尝试重新 create_tasks",
 			"[完成] 每完成一个任务调用 complete_task，必须提供 evidence（具体证据，如'测试 X 通过'、'文件 F 已创建'）",
 			"[目标完成] 只有所有任务完成且有整体证据时，才能调用 complete_goal",
@@ -835,7 +847,8 @@ export default function goalExtension(pi: ExtensionAPI) {
 			const lines = [summary];
 			for (const t of tasks) {
 				const icon = t.completed ? theme.fg("success", "✓") : theme.fg("dim", "☐");
-				const desc = t.completed ? theme.fg("dim", t.description) : theme.fg("text", t.description);
+				const descText = toSingleLine(t.description);
+				const desc = t.completed ? theme.fg("dim", descText) : theme.fg("text", descText);
 				lines.push(`  ${icon} ${theme.fg("accent", `#${t.id}`)} ${desc}`);
 			}
 			return new Text(lines.join("\n"), 0, 0);

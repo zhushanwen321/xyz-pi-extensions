@@ -54,7 +54,7 @@ export function formatUsageStats(
 export function formatToolCall(
 	toolName: string,
 	args: Record<string, unknown>,
-	themeFg: (color: string, text: string) => string,
+	themeFg: Theme["fg"],
 ): string {
 	const shortenPath = (p: string) => {
 		const home = os.homedir();

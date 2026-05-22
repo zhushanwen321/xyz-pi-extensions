@@ -14,6 +14,14 @@ import {
 	OBJECTIVE_TRUNCATE_KEEP,
 } from "./constants";
 
+/**
+ * 将多行文本压缩为单行，用于 widget 渲染。
+ * 多行 content 泄漏到 widget 会导致 markdown 表格/标题等破坏布局。
+ */
+export function toSingleLine(text: string): string {
+	return text.replace(/\r?\n/g, " ").trim();
+}
+
 export interface ThemeLike {
 	fg: (color: ThemeColor, text: string) => string;
 	bold: (text: string) => string;
@@ -82,10 +90,11 @@ export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): strin
 	const header = renderStatusLine(state, th);
 	const lines: string[] = [header];
 
-	// Objective (truncated if too long)
-	const objDisplay = state.objective.length > OBJECTIVE_DISPLAY_LIMIT
-		? state.objective.slice(0, OBJECTIVE_TRUNCATE_KEEP) + "..."
-		: state.objective;
+	// Objective (single-line + truncated if too long)
+	const objSingleLine = toSingleLine(state.objective);
+	const objDisplay = objSingleLine.length > OBJECTIVE_DISPLAY_LIMIT
+		? objSingleLine.slice(0, OBJECTIVE_TRUNCATE_KEEP) + "..."
+		: objSingleLine;
 	lines.push(th.fg("dim", `目标: ${objDisplay}`));
 
 	// Task list
@@ -93,10 +102,11 @@ export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): strin
 		lines.push(th.fg("dim", "  等待创建任务清单..."));
 	} else {
 		for (const t of state.tasks) {
+			const desc = toSingleLine(t.description);
 			if (t.completed) {
-				lines.push(`  ${th.fg("success", "✓")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", t.description)}`);
+				lines.push(`  ${th.fg("success", "✓")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}`);
 			} else {
-				lines.push(`  ${th.fg("dim", "☐")} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", t.description)}`);
+				lines.push(`  ${th.fg("dim", "☐")} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}`);
 			}
 		}
 	}

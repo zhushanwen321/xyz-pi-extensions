@@ -621,6 +621,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			if (!job) {
 				return {
 					content: [{ type: "text", text: `[Job not found: ${jobId}]` }],
+					details: undefined,
 					isError: true,
 				};
 			}
@@ -643,6 +644,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 									type: "text",
 									text: `[Job ${jobId.slice(0, 8)}... output complete (${elapsedNow}s), finalizing...]`,
 								}],
+								details: undefined,
 							});
 							break;
 						}
@@ -656,6 +658,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 						type: "text",
 						text: `[Job ${jobId.slice(0, 8)}... still running (${elapsed}s), polling...]`,
 					}],
+					details: undefined,
 				});
 
 				const eventName = `done:${jobId}`;
@@ -686,6 +689,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 				if (aborted) {
 					return {
 						content: [{ type: "text", text: `[Job ${jobId.slice(0, 8)}... collection aborted by user]` }],
+						details: undefined,
 						isError: true,
 					};
 				}
@@ -729,6 +733,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
 			return {
 				content: [{ type: "text", text: parts.join("\n") }],
+				details: undefined,
 			};
 		},
 	});
