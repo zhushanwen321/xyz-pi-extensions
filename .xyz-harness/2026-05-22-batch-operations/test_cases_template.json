@@ -1,0 +1,179 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "api",
+      "title": "Todo batch add 3 items",
+      "description": "Verify texts: ['A', 'B', 'C'] creates 3 todos with consecutive IDs",
+      "steps": ["call todo add with texts: ['A', 'B', 'C']", "verify 3 todos created with IDs 1-3", "verify return text is summary format"]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "api",
+      "title": "Todo batch add single item",
+      "description": "Verify texts: ['single'] works as single-add equivalent",
+      "steps": ["call todo add with texts: ['single']", "verify 1 todo created"]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "api",
+      "title": "Todo batch add empty array rejected",
+      "description": "Verify texts: [] returns error",
+      "steps": ["call todo add with texts: []", "verify error returned"]
+    },
+    {
+      "id": "TC-1-04",
+      "type": "api",
+      "title": "Todo batch add whitespace-only item rejected",
+      "description": "Verify texts: ['  '] returns error after trim",
+      "steps": ["call todo add with texts: ['  ']", "verify error returned"]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "api",
+      "title": "Todo batch delete 2 items",
+      "description": "Verify ids: [1, 3] deletes both items",
+      "steps": ["create 3 todos", "call todo delete with ids: [1, 3]", "verify only #2 remains"]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "api",
+      "title": "Todo batch delete non-existent ID rejected",
+      "description": "Verify ids: [99] returns error without partial deletion",
+      "steps": ["create 1 todo (#1)", "call todo delete with ids: [99]", "verify error returned and #1 still exists"]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "api",
+      "title": "Todo batch delete duplicate IDs deduplicated",
+      "description": "Verify ids: [1, 1] deletes #1 once",
+      "steps": ["create 2 todos", "call todo delete with ids: [1, 1]", "verify #1 deleted, #2 remains"]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "api",
+      "title": "GoalTask initial status is pending",
+      "description": "Verify create_tasks sets status: 'pending'",
+      "steps": ["start goal", "call create_tasks", "verify all tasks have status: 'pending'"]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "api",
+      "title": "GoalTask normal flow: pending → in_progress → completed",
+      "description": "Verify normal lifecycle with evidence",
+      "steps": ["create task", "update_tasks: status=in_progress", "update_tasks: status=completed + evidence", "verify task status is completed"]
+    },
+    {
+      "id": "TC-3-03",
+      "type": "api",
+      "title": "GoalTask cancel flow: pending → cancelled",
+      "description": "Verify cancellation from non-terminal state",
+      "steps": ["create task", "update_tasks: status=cancelled", "verify task status is cancelled"]
+    },
+    {
+      "id": "TC-3-04",
+      "type": "api",
+      "title": "GoalTask completed cannot be changed",
+      "description": "Verify terminal state protection for completed",
+      "steps": ["complete a task", "update_tasks: status=in_progress on same task", "verify error returned"]
+    },
+    {
+      "id": "TC-3-05",
+      "type": "api",
+      "title": "GoalTask cancelled cannot be changed",
+      "description": "Verify terminal state protection for cancelled",
+      "steps": ["cancel a task", "update_tasks: status=in_progress on same task", "verify error returned"]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "api",
+      "title": "Goal update_tasks batch 3 updates",
+      "description": "Verify 2 completed + 1 cancelled in single call",
+      "steps": ["create 3 tasks", "update_tasks: [{taskId:1,status:completed,evidence:'a'},{taskId:2,status:completed,evidence:'b'},{taskId:3,status:cancelled}]", "verify all 3 updated correctly"]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "api",
+      "title": "Goal update_tasks completed without evidence rejected",
+      "description": "Verify evidence required for completed status",
+      "steps": ["create task", "update_tasks: [{taskId:1,status:completed}]", "verify error returned"]
+    },
+    {
+      "id": "TC-4-03",
+      "type": "api",
+      "title": "Goal update_tasks non-existent taskId rejected",
+      "description": "Verify whole batch rejected if any taskId missing",
+      "steps": ["create 1 task", "update_tasks: [{taskId:99,status:in_progress}]", "verify error returned"]
+    },
+    {
+      "id": "TC-4-04",
+      "type": "api",
+      "title": "Goal update_tasks empty array rejected",
+      "description": "Verify updates: [] returns error",
+      "steps": ["create task", "update_tasks: []", "verify error returned"]
+    },
+    {
+      "id": "TC-4-05",
+      "type": "api",
+      "title": "Goal update_tasks duplicate taskId rejected",
+      "description": "Verify updates with same taskId twice returns error",
+      "steps": ["create 1 task", "update_tasks: [{taskId:1,status:in_progress},{taskId:1,status:completed,evidence:'x'}]", "verify error returned"]
+    },
+    {
+      "id": "TC-4-06",
+      "type": "api",
+      "title": "Goal update_tasks non-completed evidence silently ignored",
+      "description": "Verify evidence on in_progress status is ignored",
+      "steps": ["create task", "update_tasks: [{taskId:1,status:in_progress,evidence:'ignored'}]", "verify task is in_progress, evidence not set"]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "api",
+      "title": "Goal complete_goal with cancelled tasks allowed",
+      "description": "Verify 6 completed + 2 cancelled → complete_goal succeeds",
+      "steps": ["create 8 tasks", "complete 6 with evidence", "cancel 2", "call complete_goal with evidence", "verify goal status is complete"]
+    },
+    {
+      "id": "TC-5-02",
+      "type": "api",
+      "title": "Goal complete_goal with pending tasks rejected",
+      "description": "Verify 6 completed + 2 pending → complete_goal fails",
+      "steps": ["create 8 tasks", "complete 6 with evidence", "call complete_goal with evidence", "verify error about incomplete tasks"]
+    },
+    {
+      "id": "TC-5-03",
+      "type": "api",
+      "title": "Goal complete_goal all cancelled rejected",
+      "description": "Verify all cancelled → complete_goal fails",
+      "steps": ["create 3 tasks", "cancel all 3", "call complete_goal with evidence", "verify error about no completed tasks"]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "integration",
+      "title": "formatTaskList three groups rendering",
+      "description": "Verify output has completed, in_progress+pending, cancelled groups",
+      "steps": ["create tasks in all 4 states", "call list_tasks", "verify output contains ✓ group, ☐/● group, ✗ group"]
+    },
+    {
+      "id": "TC-6-02",
+      "type": "integration",
+      "title": "renderCall batch display",
+      "description": "Verify renderCall shows (N items) for add and (N updates) for update_tasks",
+      "steps": ["verify renderCall for add with texts: ['a','b'] shows (2 items)", "verify renderCall for update_tasks with 3 updates shows (3 updates)"]
+    },
+    {
+      "id": "TC-8-01",
+      "type": "integration",
+      "title": "TypeScript type check passes",
+      "description": "Verify npx tsc --noEmit has zero errors",
+      "steps": ["run npx tsc --noEmit", "verify exit code 0"]
+    },
+    {
+      "id": "TC-8-02",
+      "type": "integration",
+      "title": "ESLint passes",
+      "description": "Verify npm run lint has zero errors",
+      "steps": ["run npm run lint", "verify zero errors"]
+    }
+  ]
+}
