@@ -89,7 +89,7 @@ state.ts 变更清单：
 2. `createInitialState` 中 task 初始值改为 `status: "pending"`（而非 `completed: false`）—— 注意 createInitialState 不创建 task，但 create_tasks handler 中的 `{ ..., completed: false }` 要改为 `{ ..., status: "pending" }`。这属于 Task 2 的范围。此处只改类型定义和辅助函数。
 3. `getCompletedCount`: `t.completed` → `t.status === "completed"`
 4. `getIncompleteTasks`: `!t.completed` → `t.status === "pending" || t.status === "in_progress"`
-5. `deserializeState`: 不做向后兼容。旧 entry 中 tasks 如果包含 `completed: boolean`，直接忽略——即 deserializeState 不识别旧格式，视为空 tasks。具体做法：tasks 映射时检查 `status` 字段是否存在，不存在则视为无活跃 goal（整个 state 返回 null 抛出或返回空）。但更简单的做法：tasks 中每个 task 必须有 `status` 字段，如果没有则该 task 被跳过（filtered out）。实现细节交给 executor。
+5. `deserializeState`: 不做向后兼容。如果 tasks 数组中任何 task 缺少 `status` 字段（即旧 `completed: boolean` 格式），整个 deserializeState 抛出 Error（"Legacy goal-state format detected, session reset required"）。这意味着旧 session 的 goal-state entry 会导致 reconstructGoalState 捕获异常后 state 保持 null，等同于无活跃 goal。
 6. 新增 `GOAL_TASK_STATUSES` 常量数组：`["pending", "in_progress", "completed", "cancelled"] as const`，供 index.ts schema 复用。
 7. 新增 `isTerminalTaskStatus(status: string): boolean` 辅助函数：`status === "completed" || status === "cancelled"`
 
@@ -176,7 +176,7 @@ index.ts 变更清单：
 
 templates.ts 变更清单：
 
-1. **formatTaskList**：从 completed/incomplete 两组改为三组——in_progress+pending（☐/●）、completed（✓）、cancelled（✗ 灰色）。统计行改为 `N/M 完成, K 已取消`
+1. **formatTaskList**：从 completed/incomplete 两组改为三组——in_progress+pending（● in_progress / ☐ pending）、completed（✓）、cancelled（✗ 灰色）。统计行改为 `N/M 完成, K 已取消`
 2. **continuationPrompt**：`complete_task` → `update_tasks` 在 Rules 行
 3. **contextInjectionPrompt**：`complete_task` → `update_tasks` 在规则中
 
