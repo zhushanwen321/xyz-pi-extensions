@@ -159,7 +159,12 @@ function reconstructGoalState(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 		if (isGoalEntry(entry)) {
 			const data = entry.data as Record<string, unknown> | undefined;
 			if (data) {
-				session.state = deserializeState(data);
+				try {
+					session.state = deserializeState(data);
+				} catch {
+					// 旧格式 goal-state entry，视为无活跃 goal
+					session.state = null;
+				}
 			}
 			break;
 		}
@@ -302,10 +307,13 @@ async function executeGoalAction(
 				const task = state.tasks.find((t) => t.id === u.taskId)!;
 				const prev = task.status;
 				if (u.status === "completed") {
+					task.status = "completed";
 					task.evidence = u.evidence;
+					results.push(`#${task.id}: ${prev} → completed (${u.evidence})`);
+				} else {
+					task.status = u.status;
+					results.push(`#${task.id}: ${prev} → ${u.status}`);
 				}
-				task.status = u.status;
-				results.push(`#${task.id}: ${prev} → ${u.status}` + (u.evidence ? ` (${u.evidence})` : ""));
 			}
 			persistGoalState(pi, session, ctx);
 			return makeGoalResult(session, `已更新 ${results.length} 个任务：\n${results.join("\n")}`);
