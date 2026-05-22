@@ -36,10 +36,23 @@ const TERMINAL_STATUSES: ReadonlySet<GoalStatus> = new Set([
 
 // ── 任务数据结构 ──────────────────────────────────────
 
+export type TaskStatus = "pending" | "in_progress" | "completed" | "cancelled";
+
+export const GOAL_TASK_STATUSES: readonly TaskStatus[] = [
+	"pending",
+	"in_progress",
+	"completed",
+	"cancelled",
+] as const;
+
+export function isTerminalTaskStatus(status: TaskStatus): boolean {
+	return status === "completed" || status === "cancelled";
+}
+
 export interface GoalTask {
 	id: number;
 	description: string;
-	completed: boolean;
+	status: TaskStatus;
 	evidence?: string; // 完成时的证据描述
 }
 
@@ -139,7 +152,12 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 		goalId: (data.goalId as string) ?? "",
 		objective: (data.objective as string) ?? "",
 		status: (data.status as GoalStatus) ?? "active",
-		tasks: ((data.tasks as GoalTask[]) ?? []).map((t: GoalTask) => ({ ...t })),
+		tasks: ((data.tasks as Record<string, unknown>[]) ?? []).map((t: Record<string, unknown>) => {
+		if (!("status" in t)) {
+			throw new Error("Legacy goal-state format detected, session reset required");
+		}
+		return { ...t } as unknown as GoalTask;
+	}),
 		turnCount: (data.turnCount as number) ?? 0,
 		stallCount: (data.stallCount as number) ?? 0,
 		tokensUsed: (data.tokensUsed as number) ?? 0,
@@ -159,11 +177,11 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 // ── 进度计算 ──────────────────────────────────────────
 
 export function getCompletedCount(tasks: GoalTask[]): number {
-	return tasks.filter((t) => t.completed).length;
+	return tasks.filter((t) => t.status === "completed").length;
 }
 
 export function getIncompleteTasks(tasks: GoalTask[]): GoalTask[] {
-	return tasks.filter((t) => !t.completed);
+	return tasks.filter((t) => !isTerminalTaskStatus(t.status));
 }
 
 export function getElapsedTimeSeconds(state: GoalRuntimeState): number {

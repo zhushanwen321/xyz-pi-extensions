@@ -33,8 +33,10 @@ const VALID_STATUSES = ["pending", "in_progress", "completed"] as const;
 
 const TodoParams = Type.Object({
 	action: StringEnum(["list", "add", "update", "delete", "clear"] as const),
-	text: Type.Optional(Type.String({ description: "Todo 文本（add / update 时使用）" })),
-	id: Type.Optional(Type.Number({ description: "Todo ID（update / delete 时使用）" })),
+	text: Type.Optional(Type.String({ description: "Todo 文本（update 时使用）" })),
+	id: Type.Optional(Type.Number({ description: "Todo ID（update 时使用）" })),
+	texts: Type.Optional(Type.Array(Type.String(), { description: "Todo 文本列表（add 时使用）" })),
+	ids: Type.Optional(Type.Array(Type.Number(), { description: "Todo ID 列表（delete 时使用）" })),
 	status: Type.Optional(
 		StringEnum(VALID_STATUSES, { description: "目标状态（update 时使用）" }),
 	),
@@ -164,7 +166,7 @@ let nextId = 1;
 
 // ── Tool execute handler ─────────────────────────────
 
-function executeTodoAction(params: { action: string; text?: string; id?: number; status?: string }, ctx: ExtensionContext) {
+function executeTodoAction(params: { action: string; text?: string; id?: number; texts?: string[]; ids?: number[]; status?: string }, ctx: ExtensionContext) {
 	let resultText = "";
 
 	switch (params.action) {
@@ -186,20 +188,35 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 		}
 
 		case "add": {
-			if (!params.text) {
+			if (!params.texts || params.texts.length === 0) {
 				return {
-					content: [{ type: "text" as const, text: "\u9519\u8bef\uff1aadd \u9700\u8981 text \u53c2\u6570" }],
+					content: [{ type: "text" as const, text: "\u9519\u8bef\uff1aadd \u9700\u8981 texts \u53c2\u6570\uff08\u975e\u7a7a\u6570\u7ec4\uff09" }],
 					details: {
 						action: "add" as const,
 						todos: [...todos],
 						nextId,
-						error: "text required",
+						error: "texts required",
 					} as TodoDetails,
 				};
 			}
-			const newTodo: Todo = { id: nextId++, text: params.text, status: "pending" };
-			todos.push(newTodo);
-			resultText = `\u5df2\u6dfb\u52a0 todo #${newTodo.id}: ${newTodo.text}`;
+			const trimmed = params.texts.map((t) => t.trim()).filter((t) => t.length > 0);
+			if (trimmed.length === 0) {
+				return {
+					content: [{ type: "text" as const, text: "\u9519\u8bef\uff1atexts \u4e2d\u81f3\u5c11\u9700\u8981\u4e00\u4e2a\u975e\u7a7a\u5b57\u7b26\u4e32" }],
+					details: {
+						action: "add" as const,
+						todos: [...todos],
+						nextId,
+						error: "all texts empty",
+					} as TodoDetails,
+				};
+			}
+			const startId = nextId;
+			for (const t of trimmed) {
+				todos.push({ id: nextId++, text: t, status: "pending" });
+			}
+			const endId = nextId - 1;
+			resultText = `\u5df2\u6dfb\u52a0 ${trimmed.length} \u9879 todo (#${startId}-#${endId})`;
 			break;
 		}
 
@@ -298,31 +315,40 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 		}
 
 		case "delete": {
-			if (params.id === undefined) {
+			if (!params.ids || params.ids.length === 0) {
 				return {
-					content: [{ type: "text" as const, text: "\u9519\u8bef\uff1adelete \u9700\u8981 id \u53c2\u6570" }],
+					content: [{ type: "text" as const, text: "\u9519\u8bef\uff1adelete \u9700\u8981 ids \u53c2\u6570\uff08\u975e\u7a7a\u6570\u7ec4\uff09" }],
 					details: {
 						action: "delete" as const,
 						todos: [...todos],
 						nextId,
-						error: "id required",
+						error: "ids required",
 					} as TodoDetails,
 				};
 			}
-			const idx = todos.findIndex((t) => t.id === params.id);
-			if (idx === -1) {
+			const uniqueIds = [...new Set(params.ids)];
+			const missing = uniqueIds.filter((id) => !todos.some((t) => t.id === id));
+			if (missing.length > 0) {
+				const missingStr = missing.map((id) => `#${id}`).join(", ");
 				return {
-					content: [{ type: "text" as const, text: `Todo #${params.id} \u4e0d\u5b58\u5728` }],
+					content: [{ type: "text" as const, text: `\u9519\u8bef\uff1aTodo ${missingStr} \u4e0d\u5b58\u5728` }],
 					details: {
 						action: "delete" as const,
 						todos: [...todos],
 						nextId,
-						error: `#${params.id} not found`,
+						error: `#${missing.map((id) => id).join(", #")} not found`,
 					} as TodoDetails,
 				};
 			}
-			const removed = todos.splice(idx, 1)[0];
-			resultText = `\u5df2\u5220\u9664 todo #${removed.id}: ${removed.text}\uff08\u5269\u4f59 ${todos.length} \u9879\uff09`;
+			const removedIds: number[] = [];
+			for (const id of uniqueIds) {
+				const idx = todos.findIndex((t) => t.id === id);
+				if (idx !== -1) {
+					todos.splice(idx, 1);
+					removedIds.push(id);
+				}
+			}
+			resultText = `\u5df2\u5220\u9664 ${removedIds.length} \u9879 (#${removedIds.join(", #")})\uff0c\u5269\u4f59 ${todos.length} \u9879`;
 			break;
 		}
 
@@ -400,16 +426,9 @@ function renderTodoResult(result: unknown, options: { expanded: boolean }, theme
 		}
 
 		case "add": {
-			const added = todoList[todoList.length - 1];
-			if (!added) return new Text(theme.fg("success", "\u2713 \u5df2\u6dfb\u52a0"), 0, 0);
-			return new Text(
-				theme.fg("success", "\u2713 \u5df2\u6dfb\u52a0 ") +
-					theme.fg("accent", `#${added.id}`) +
-					" " +
-					theme.fg("muted", added.text),
-				0,
-				0,
-			);
+			const text = r.content[0];
+			const msg = text?.type === "text" ? (text.text ?? "") : "";
+			return new Text(theme.fg("success", "\u2713 ") + theme.fg("muted", msg), 0, 0);
 		}
 
 		case "update":
@@ -484,9 +503,9 @@ export default function (pi: ExtensionAPI) {
 			"\u7ba1\u7406 todo \u6e05\u5355\u3002" +
 			"\n\n\u53ef\u7528 action\uff1a" +
 			"\n- list\uff1a\u67e5\u770b\u6240\u6709 todo" +
-			"\n- add\uff1a\u6dfb\u52a0 todo\uff08\u9700\u8981 text\uff09" +
+			"\n- add\uff1a\u6279\u91cf\u6dfb\u52a0 todo\uff08\u9700\u8981 texts \u6570\u7ec4\uff09" +
 			"\n- update\uff1a\u66f4\u65b0 todo\uff08\u9700\u8981 id\uff0c\u53ef\u9009 status/text\uff09" +
-			"\n- delete\uff1a\u5220\u9664 todo\uff08\u9700\u8981 id\uff09" +
+			"\n- delete\uff1a\u6279\u91cf\u5220\u9664 todo\uff08\u9700\u8981 ids \u6570\u7ec4\uff09" +
 			"\n- clear\uff1a\u6e05\u7a7a\u6240\u6709 todo \u5e76\u91cd\u7f6e ID",
 		promptSnippet: "\u8f7b\u91cf\u7ea7\u4efb\u52a1\u6e05\u5355\u3002\u591a\u6b65\u9aa4\u5de5\u4f5c\u65f6\u8ffd\u8e2a\u8fdb\u5ea6\uff0c\u4e0d\u5fc5\u7b49 /goal \u6a21\u5f0f",
 		promptGuidelines: [
@@ -515,8 +534,10 @@ export default function (pi: ExtensionAPI) {
 
 		renderCall(args, theme, _context) {
 			let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", args.action);
-			if (args.text) text += ` ${theme.fg("dim", `"${args.text}"`)}`;
+			if (args.texts && args.texts.length > 0) text += ` ${theme.fg("dim", `(${args.texts.length} items)`)}`;
+			if (args.ids && args.ids.length > 0) text += ` ${theme.fg("accent", `#${args.ids.join(", #")}`)}`;
 			if (args.id !== undefined) text += ` ${theme.fg("accent", `#${args.id}`)}`;
+			if (args.text) text += ` ${theme.fg("dim", `"${args.text}"`)}`;
 			if (args.status) text += ` ${theme.fg("warning", args.status)}`;
 			return new Text(text, 0, 0);
 		},

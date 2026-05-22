@@ -43,6 +43,10 @@ export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string
 
 	if (total > 0) {
 		text += th.fg("muted", ` | ${completedCount}/${total} 任务`);
+		const cancelledCount = state.tasks.filter(t => t.status === "cancelled").length;
+		if (cancelledCount > 0) {
+			text += th.fg("dim", `, ${cancelledCount} 取消`);
+		}
 	}
 
 	// Budget indicators
@@ -103,8 +107,12 @@ export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): strin
 	} else {
 		for (const t of state.tasks) {
 			const desc = toSingleLine(t.description);
-			if (t.completed) {
+			if (t.status === "completed") {
 				lines.push(`  ${th.fg("success", "✓")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}`);
+			} else if (t.status === "cancelled") {
+				lines.push(`  ${th.fg("dim", "✗")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}`);
+			} else if (t.status === "in_progress") {
+				lines.push(`  ${th.fg("warning", "●")} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}`);
 			} else {
 				lines.push(`  ${th.fg("dim", "☐")} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}`);
 			}

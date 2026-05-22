@@ -139,13 +139,13 @@ export interface ProgressCheck {
 }
 
 export function checkProgress(state: GoalRuntimeState, tasksCompletedAtStart: number): ProgressCheck {
-	const incomplete = state.tasks.filter((t) => !t.completed);
-	const completedCount = state.tasks.filter((t) => t.completed).length;
+	const incomplete = state.tasks.filter((t) => t.status === "pending" || t.status === "in_progress");
+	const completedCount = state.tasks.filter((t) => t.status === "completed").length;
 	const totalCount = state.tasks.length;
 	const progressThisRound = completedCount - tasksCompletedAtStart;
 
 	return {
-		allTasksDone: totalCount > 0 && incomplete.length === 0,
+		allTasksDone: totalCount > 0 && incomplete.length === 0 && completedCount > 0,
 		noTasksCreated: totalCount === 0,
 		maxTurnsReached: state.turnCount >= state.budget.maxTurns,
 		isStalled: progressThisRound === 0,

@@ -29,12 +29,14 @@ import {
 	createInitialState,
 	transitionStatus,
 	isTerminalStatus,
+	isTerminalTaskStatus,
 	isActiveStatus,
 	serializeState,
 	deserializeState,
 	getCompletedCount,
 	getIncompleteTasks,
 	getElapsedTimeSeconds,
+	GOAL_TASK_STATUSES,
 } from "./state";
 
 import { parseGoalArgs } from "./commands";
@@ -72,15 +74,19 @@ const GoalManagerParams = Type.Object({
 	action: StringEnum([
 		"create_tasks",
 		"add_tasks",
-		"complete_task",
+		"update_tasks",
 		"list_tasks",
 		"complete_goal",
 		"cancel_goal",
 		"report_blocked",
 	] as const),
 	tasks: Type.Optional(Type.Array(Type.String(), { description: "Task descriptions. 每条必须是一行简短摘要（不超过 60 字），不含换行或 markdown" })),
-	taskId: Type.Optional(Type.Number({ description: "Task ID for complete_task" })),
-	evidence: Type.Optional(Type.String({ description: "Evidence for completion (required for complete_task and complete_goal)" })),
+	updates: Type.Optional(Type.Array(Type.Object({
+		taskId: Type.Number(),
+		status: StringEnum(GOAL_TASK_STATUSES),
+		evidence: Type.Optional(Type.String()),
+	}))),
+	evidence: Type.Optional(Type.String({ description: "Evidence for completion (required for complete_goal)" })),
 	reason: Type.Optional(Type.String({ description: "Reason for being blocked (required for report_blocked)" })),
 	cancelReason: Type.Optional(Type.String({ description: "Why the user wants to cancel (required for cancel_goal)" })),
 });
@@ -243,8 +249,8 @@ async function executeGoalAction(
 			state.tasks = params.tasks.map((desc, i) => ({
 				id: i + 1,
 				description: normalizeDescription(desc),
-				completed: false,
-			}));
+				status: "pending" as const,
+			}))
 			persistGoalState(pi, session, ctx);
 			return makeGoalResult(session,
 				`已创建 ${state.tasks.length} 个任务：\n${state.tasks.map((t) => `  #${t.id}: ${t.description}`).join("\n")}`,
@@ -261,8 +267,8 @@ async function executeGoalAction(
 			const newTasks: GoalTask[] = params.tasks.map((desc, i) => ({
 				id: startId + i,
 				description: normalizeDescription(desc),
-				completed: false,
-			}));
+				status: "pending" as const,
+			}))
 			state.tasks.push(...newTasks);
 			persistGoalState(pi, session, ctx);
 			return makeGoalResult(session,
@@ -270,24 +276,39 @@ async function executeGoalAction(
 			);
 		}
 
-		case "complete_task": {
-			if (params.taskId === undefined) {
-				throw new Error("complete_task requires taskId");
+		case "update_tasks": {
+			if (!params.updates || params.updates.length === 0) {
+				throw new Error("update_tasks requires a non-empty updates array");
 			}
-			if (!params.evidence || params.evidence.trim() === "") {
-				throw new Error("complete_task requires evidence — 提供具体的完成证据（如'测试通过'、'文件已创建'等）");
+			const taskIds = params.updates.map((u) => u.taskId);
+			const duplicateIds = taskIds.filter((id, i) => taskIds.indexOf(id) !== i);
+			if (duplicateIds.length > 0) {
+				throw new Error(`重复的 taskId: ${[...new Set(duplicateIds)].join(", ")}`);
 			}
-			const task = state.tasks.find((t) => t.id === params.taskId);
-			if (!task) {
-				throw new Error(`Task #${params.taskId} not found`);
+			for (const u of params.updates) {
+				const task = state.tasks.find((t) => t.id === u.taskId);
+				if (!task) {
+					throw new Error(`Task #${u.taskId} not found`);
+				}
+				if (isTerminalTaskStatus(task.status)) {
+					throw new Error(`Task #${task.id} 已处于终态 (${task.status})，不可变更`);
+				}
+				if (u.status === "completed" && (!u.evidence || u.evidence.trim() === "")) {
+					throw new Error(`Task #${task.id}: completed 必须提供 evidence`);
+				}
 			}
-			if (task.completed) {
-				return makeGoalResult(session, `任务 #${task.id} 已完成，无需重复标记。`);
+			const results: string[] = [];
+			for (const u of params.updates) {
+				const task = state.tasks.find((t) => t.id === u.taskId)!;
+				const prev = task.status;
+				if (u.status === "completed") {
+					task.evidence = u.evidence;
+				}
+				task.status = u.status;
+				results.push(`#${task.id}: ${prev} → ${u.status}` + (u.evidence ? ` (${u.evidence})` : ""));
 			}
-			task.completed = true;
-			task.evidence = params.evidence;
 			persistGoalState(pi, session, ctx);
-			return makeGoalResult(session, `已完成任务 #${task.id}: ${task.description}\n证据: ${params.evidence}`);
+			return makeGoalResult(session, `已更新 ${results.length} 个任务：\n${results.join("\n")}`);
 		}
 
 		case "list_tasks": {
@@ -307,6 +328,10 @@ async function executeGoalAction(
 					`还有 ${incomplete.length} 个任务未完成：${incomplete.map((t) => `#${t.id}`).join(", ")}。` +
 						`请先完成这些任务或提供理由说明为什么它们不需要完成。`,
 				);
+			}
+			const completedCount = getCompletedCount(state.tasks);
+			if (completedCount === 0) {
+				throw new Error("至少需要完成一个任务才能完成目标。全部取消不算达成。");
 			}
 			state.status = transitionStatus(state.status, "complete");
 			persistGoalState(pi, session, ctx);
@@ -795,7 +820,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 			"\n\n可用 action:" +
 			"\n- create_tasks: 首次拆分目标为任务清单（每个 goal 开始时调用一次）。每条 task description 必须是一行简短摘要（不超过 60 字），不要包含换行、markdown、详细参数" +
 			"\n- add_tasks: 向已有任务清单追加新任务（执行中发现遗漏时使用）。每条 task description 必须是一行简短摘要（不超过 60 字），不要包含换行、markdown、详细参数" +
-			"\n- complete_task: 标记任务完成（必须提供 evidence）" +
+			"\n- update_tasks: 批量更新任务状态（completed 必须带 evidence，cancelled 不阻碍 goal 完成）" +
 			"\n- list_tasks: 查看进度和剩余预算" +
 			"\n- complete_goal: 标记目标达成（必须所有任务完成 + evidence）" +
 			"\n- cancel_goal: 取消当前目标（用户要求退出/停止时使用）" +
@@ -805,12 +830,13 @@ export default function goalExtension(pi: ExtensionAPI) {
 			"[工作流] 收到目标后，第一步必须调用 create_tasks 拆分任务。已有任务清单时不要重复调用",
 			"[格式] 每个 task description 必须是一行简短摘要，不超过 60 个字符。不要包含换行符、markdown 格式、详细参数列表——这些放在执行阶段处理。示例: '修复 hook-registry 去重逻辑' 而不是 '修复 hook-registry 去重逻辑 + transport-execute enhancementConfig 防护 + failover-loop ...'",
 			"[追加] 执行中发现遗漏的子任务时，使用 add_tasks 追加，不要尝试重新 create_tasks",
-			"[完成] 每完成一个任务调用 complete_task，必须提供 evidence（具体证据，如'测试 X 通过'、'文件 F 已创建'）",
+			"[完成] 每完成一个任务调用 update_tasks 将状态设为 completed，必须提供 evidence（具体证据，如'测试 X 通过'、'文件 F 已创建'）",
 			"[目标完成] 只有所有任务完成且有整体证据时，才能调用 complete_goal",
 			"[退出] 当用户说'停止'、'退出'、'取消'、'stop'、'exit'、'cancel'、'不用了'、'结束'等表示不想继续时，立即调用 cancel_goal 取消目标，不要引导用户走 complete_goal 流程",
 			"[阻塞] 遇到无法解决的技术问题时调用 report_blocked 说明原因",
-			"[进度] 随时可用 list_tasks 查看剩余任务和预算",
-			"[禁止] 不要在没有 evidence 的情况下调用 complete_task 或 complete_goal",
+			"[进度] 随时可用 list_tasks 查看剩余任务和预算，",
+			"[取消] 取消任务时使用 update_tasks 将状态设为 cancelled，取消的任务不阻碍 goal 完成",
+			"[禁止] 不要在没有 evidence 的情况下将任务标记为 completed，也不要在没有 evidence 时调用 complete_goal",
 			"[禁止] 不要在用户明确想退出时强制要求完成任务——直接 cancel_goal",
 			"[禁止] 不要重复调用 create_tasks 覆盖已有未完成任务，如需追加请用 add_tasks",
 		],
@@ -829,7 +855,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		renderCall(args, theme) {
 			let text = theme.fg("toolTitle", theme.bold("goal_manager ")) + theme.fg("muted", args.action);
 			if (args.tasks) text += ` ${theme.fg("dim", `(${args.tasks.length} tasks)`)}`;
-			if (args.taskId !== undefined) text += ` ${theme.fg("accent", `#${args.taskId}`)}`;
+			if (args.updates) text += ` ${theme.fg("dim", `(${args.updates.length} updates)`)}`;
 			return new Text(text, 0, 0);
 		},
 
@@ -840,16 +866,24 @@ export default function goalExtension(pi: ExtensionAPI) {
 				return new Text(text?.type === "text" ? text.text : "", 0, 0);
 			}
 			const tasks = details.tasks;
-			const completed = tasks.filter((t) => t.completed).length;
+			const completed = tasks.filter((t) => t.status === "completed").length;
 			const summary = theme.fg("success", `✓ ${completed}/${tasks.length} 完成`);
 			if (!expanded || tasks.length === 0) {
 				return new Text(summary, 0, 0);
 			}
 			const lines = [summary];
 			for (const t of tasks) {
-				const icon = t.completed ? theme.fg("success", "✓") : theme.fg("dim", "☐");
+				const icon = t.status === "completed"
+					? theme.fg("success", "✓")
+					: t.status === "in_progress"
+						? theme.fg("warning", "●")
+						: t.status === "cancelled"
+							? theme.fg("dim", "✗")
+							: theme.fg("dim", "☐");
 				const descText = toSingleLine(t.description);
-				const desc = t.completed ? theme.fg("dim", descText) : theme.fg("text", descText);
+				const desc = (t.status === "completed" || t.status === "cancelled")
+					? theme.fg("dim", descText)
+					: theme.fg("text", descText);
 				lines.push(`  ${icon} ${theme.fg("accent", `#${t.id}`)} ${desc}`);
 			}
 			return new Text(lines.join("\n"), 0, 0);

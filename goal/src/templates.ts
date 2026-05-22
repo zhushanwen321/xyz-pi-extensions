@@ -45,7 +45,7 @@ export function continuationPrompt(state: GoalRuntimeState): string {
 		`[GOAL] Turn ${state.turnCount}/${state.budget.maxTurns}${budgetLine}${stallLine}\n` +
 		`<objective>${objective}</objective>\n` +
 		`${taskLine}\n` +
-		`Rules: create_tasks→complete_task(evidence)→complete_goal(evidence). blocked→report_blocked(reason).\n` +
+		`Rules: create_tasks→update_tasks(evidence)→complete_goal(evidence). blocked→report_blocked(reason).\n` +
 		`Audit: 逐项验证每个需求有权威证据。不因预算耗尽标记完成，不因困难标记阻塞。\n` +
 		`</goal_context>`
 	);
@@ -121,7 +121,7 @@ export function contextInjectionPrompt(state: GoalRuntimeState): string {
 		`任务进度: ${completedCount}/${total}\n\n` +
 		`严格规则:\n` +
 		`1. 第一步必须调用 goal_manager 的 create_tasks 拆分任务（如果尚未创建）\n` +
-		`2. 每完成一个任务调用 complete_task 并提供 evidence\n` +
+		`2. 每完成一个任务调用 update_tasks 将状态设为 completed，并提供 evidence\n` +
 		`3. 只有提供具体证据时才能调用 complete_goal\n` +
 		`4. 遇到阻塞调用 report_blocked\n` +
 		`</goal_context>`
@@ -160,12 +160,16 @@ function formatBudgetLine(state: GoalRuntimeState): string {
 
 export function formatTaskList(tasks: GoalTask[]): string {
 	if (tasks.length === 0) return "暂无任务。";
-	const completed = tasks.filter((t) => t.completed);
-	const incomplete = tasks.filter((t) => !t.completed);
+	const completed = tasks.filter(t => t.status === "completed");
+	const active = tasks.filter(t => t.status === "in_progress" || t.status === "pending");
+	const cancelled = tasks.filter(t => t.status === "cancelled");
 	const lines: string[] = [];
-	if (incomplete.length > 0) {
-		lines.push(`未完成 (${incomplete.length}):`);
-		for (const t of incomplete) lines.push(`  ☐ #${t.id}: ${t.description}`);
+	if (active.length > 0) {
+		lines.push(`进行中/待执行 (${active.length}):`);
+		for (const t of active) {
+			const icon = t.status === "in_progress" ? "●" : "☐";
+			lines.push(`  ${icon} #${t.id}: ${t.description}`);
+		}
 	}
 	if (completed.length > 0) {
 		lines.push(`已完成 (${completed.length}):`);
@@ -174,5 +178,11 @@ export function formatTaskList(tasks: GoalTask[]): string {
 			lines.push(`  ✓ #${t.id}: ${t.description}${evidence}`);
 		}
 	}
+	if (cancelled.length > 0) {
+		lines.push(`已取消 (${cancelled.length}):`);
+		for (const t of cancelled) lines.push(`  ✗ #${t.id}: ${t.description}`);
+	}
+	const summary = `${completed.length}/${tasks.length} 完成` + (cancelled.length > 0 ? `, ${cancelled.length} 已取消` : "");
+	lines.push(summary);
 	return lines.join("\n");
 }
