@@ -22,7 +22,7 @@ verdict: pass
 
 **约束：**
 - `texts` 不能为空数组
-- `texts` 中每项不能为空字符串
+- `texts` 中每项不能为空字符串（`trim()` 后为空也视为无效）
 - ID 按数组顺序连续分配
 
 ### FR-2: Todo 批量删除
@@ -35,6 +35,7 @@ verdict: pass
 
 **约束：**
 - `ids` 不能为空数组
+- `ids` 中重复 ID 自动去重后执行（无副作用）
 - 不存在的 ID 整体报错（不部分删除）
 
 ### FR-3: Todo update 保持单条
@@ -85,6 +86,7 @@ interface GoalTask {
 
 **约束：**
 - `updates` 不能为空数组
+- `updates` 中不能有重复 taskId（整体报错）
 - 当 `status === "completed"` 时，`evidence` 必填且非空
 - 当 `status !== "completed"` 时，如果提供了 `evidence`，静默忽略
 - 对已经 `cancelled` 的任务不允许再变更状态（返回错误）
@@ -183,6 +185,8 @@ const incomplete = tasks.filter(t => t.status === "pending" || t.status === "in_
 - 调用 `update_tasks` 中某条 completed 不带 evidence，整体报错
 - 调用 `update_tasks` 中某条 taskId 不存在，整体报错
 - 调用 `update_tasks` 传入空数组，报错
+- 调用 `update_tasks` 中包含重复 taskId，整体报错
+- 调用 `update_tasks` 传入 `{taskId: 1, status: "in_progress", evidence: "ignored"}`，evidence 被静默忽略，任务状态正常变更
 
 ### AC-5: Goal complete_goal 适配
 - 8 个任务中 6 completed + 2 cancelled → `complete_goal` 允许完成
