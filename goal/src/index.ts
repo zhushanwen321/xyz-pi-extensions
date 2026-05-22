@@ -209,9 +209,10 @@ function clearGoalSession(session: GoalSession, ctx: ExtensionContext): void {
 /** 将 AI 传入的 task description 标准化：去换行、截断 */
 function normalizeDescription(desc: string): string {
 	const singleLine = desc.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
+	const ELLIPSIS_LENGTH = 3;
 	const MAX_TASK_DESC_LENGTH = 80;
 	if (singleLine.length > MAX_TASK_DESC_LENGTH) {
-		return singleLine.slice(0, MAX_TASK_DESC_LENGTH - 3) + "...";
+		return singleLine.slice(0, MAX_TASK_DESC_LENGTH - ELLIPSIS_LENGTH) + "...";
 	}
 	return singleLine;
 }
