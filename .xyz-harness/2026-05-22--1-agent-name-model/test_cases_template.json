@@ -1,0 +1,157 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "manual",
+      "title": "Single 模式成功状态",
+      "description": "Single 模式正常完成后，renderResult header 显示 ✅ single #XXXX，line 2 显示 agent/model/thinking/持时，活动流包含 tool calls + text output",
+      "steps": [
+        "启动 Pi，确保 subagent 扩展已加载",
+        "执行: subagent { agent: \"general-purpose\", task: \"list files in /\", taskComplexity: \"low\" }",
+        "完成时确认 header 以 ✅ single # 开头",
+        "确认 line 2 包含 agent 名、model、thinking level、持时",
+        "确认活动流包含 → 前缀的 tool call 和缩进的 text output"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "manual",
+      "title": "Single 模式失败状态",
+      "description": "Single 模式执行失败后，renderResult header 显示 ❌ single #XXXX，line 2 显示错误消息",
+      "steps": [
+        "执行一个必然失败的 subagent（如无效 agent 名或超时 task）",
+        "确认 header 以 ❌ single # 开头",
+        "确认错误消息在 header 下方合理呈现"
+      ]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "manual",
+      "title": "Single 模式运行中实时计时",
+      "description": "Running 状态下 elapsed 每秒刷新，Done 后固定",
+      "steps": [
+        "执行 medium+ complexity subagent（确保执行时间 > 3s）",
+        "运行中观察 elapsed 数字每秒至少增长 1",
+        "完成后确认 elapsed 固定不再变化"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "manual",
+      "title": "Parallel 模式运行中状态",
+      "description": "Parallel 模式运行中显示进度 + 表格，各 agent 行显示状态图标和 elapsed",
+      "steps": [
+        "执行: subagent { tasks: [{ agent: \"general-purpose\", task: \"ls\", cwd: \".\" }, { agent: \"general-purpose\", task: \"pwd\", cwd: \".\" }], taskComplexity: \"low\" }",
+        "运行中确认 header 显示进度 (m/n done, n-m running)",
+        "确认表格每行包含 agent 名、⏳/✅/❌ 图标、elapsed、turns",
+        "确认先完成的 agent 行变为 ✅ 绿色，运行中的保持 ⏳ 黄色"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "manual",
+      "title": "Parallel 模式完成状态",
+      "description": "Parallel 模式完成后显示 ✅ 或 ❌、聚合统计",
+      "steps": [
+        "等待 parallel 执行完成",
+        "全部成功时 header 以 ✅ 开头，显示 n/n succeeded + total 统计",
+        "部分失败时 header 以 ❌ 开头，显示 m/n succeeded + 失败 agent 红色行"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "manual",
+      "title": "Chain 模式运行中状态 + 完成",
+      "description": "Chain 模式按步骤显示状态和活动流",
+      "steps": [
+        "执行: subagent { chain: [{ agent: \"general-purpose\", task: \"echo hello\" }, { agent: \"general-purpose\", task: \"echo {previous}\" }], taskComplexity: \"low\" }",
+        "运行中：确认 Step 1 完成后显示 ✅，Step 2 运行中显示 ⏳",
+        "完成后：所有步骤 ✅，底部显示聚合统计"
+      ]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "manual",
+      "title": "Chain 模式中断",
+      "description": "Chain 中某步失败时中断并显示 ❌",
+      "steps": [
+        "执行 chain 其中一步故意失败（如读不存在文件）",
+        "确认中断步骤显示 ❌，后续步骤不执行",
+        "确认 header 显示 ❌ chain #XXXX"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "manual",
+      "title": "Background 模式启动 + 完成注入",
+      "description": "Background 模式返回即时消息，结果 auto-inject",
+      "steps": [
+        "执行: subagent { agent: \"general-purpose\", task: \"echo bg test\", taskComplexity: \"low\", background: true }",
+        "确认 renderCall 显示 ⏳ single #XXXX [bg]",
+        "确认返回消息包含 job ID",
+        "等待 auto-inject 完成，确认注入结果以 Single renderResult 格式显示"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "manual",
+      "title": "collect_subagent 工具已移除",
+      "description": "collect_subagent 工具不在注册列表中",
+      "steps": [
+        "尝试调用 collect_subagent（直接输入工具名）",
+        "确认返回 'Tool not found' 或类似错误",
+        "或在扩展环境中确认 collect_subagent 未被注册"
+      ]
+    },
+    {
+      "id": "TC-5-02",
+      "type": "manual",
+      "title": "background job cleanup 不受影响",
+      "description": "移除 collect_subagent 后，session_shutdown 仍能 cleanup 后台 job 的 temp files",
+      "steps": [
+        "启动一个 background subagent",
+        "关闭 session",
+        "确认不会有因 collect_subagent 移除导致的 TypeError 或 ReferenceError",
+        "检查 temp 目录，确认 job 相关的 outFile/errFile 已被清理"
+      ]
+    },
+    {
+      "id": "TC-5-03",
+      "type": "manual",
+      "title": "运行时无 collect_subagent 引用错误",
+      "description": "移除后不产生运行时错误",
+      "steps": [
+        "启动 Pi",
+        "执行 subagent tool（single/parallel/chain/background 各一次）",
+        "确认所有模式正常执行，无任何 collect_subagent 相关的错误或警告"
+      ]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "manual",
+      "title": "活动流过滤 thinking 块",
+      "description": "activity stream 中不显示 thinking 内容",
+      "steps": [
+        "执行一个可能产生 thinking 的 subagent（high complexity）",
+        "观察活动流，确认没有 'thinking' 标签的内容块显示",
+        "展开后同样确认",
+        "注：如果当前模型不支持 thinking 可跳过"
+      ]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "manual",
+      "title": "renderCall 统一格式",
+      "description": "所有模式的 renderCall 格式一致",
+      "steps": [
+        "触发 single 模式 subagent",
+        "确认 renderCall 以 ⏳ single #XXXX 开头",
+        "触发 parallel 模式 subagent",
+        "确认 renderCall 以 ⏳ parallel #XXXX 开头",
+        "触发 chain 模式 subagent",
+        "确认 renderCall 以 ⏳ chain #XXXX 开头",
+        "所有模式 line 2 都包含 agent 名和 model/thinking"
+      ]
+    }
+  ]
+}

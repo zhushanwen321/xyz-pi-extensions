@@ -34,7 +34,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 type ThemeColorParam = Parameters<Theme["fg"]>[0];
 
-function renderStatusIcon(status: string, theme: Theme): string {
+export function renderStatusIcon(status: string, theme: Theme): string {
 	const icon = STATUS_ICONS[status] ?? STATUS_ICONS.running;
 	const color = (STATUS_COLORS[status] ?? "muted") as ThemeColorParam;
 	return theme.fg(color, icon);
@@ -419,7 +419,8 @@ export function renderSingleCollapsedText(view: AgentResultView, theme: Theme, s
 	const durationStr = elapsed ?? (view.duration.durationMs !== undefined ? formatDuration(view.duration.durationMs) : "");
 	const idPart = sessionShortId ? ` #${sessionShortId}` : "";
 
-	let text = `${icon} ${theme.fg("toolTitle", theme.bold("single"))}${theme.fg("accent", idPart)}  ${theme.fg("accent", view.name)}  ${theme.fg("dim", view.model ?? "")}`;
+	let text = `${icon} ${theme.fg("toolTitle", theme.bold("single"))}${theme.fg("accent", idPart)}`;
+	text += `\n  ${theme.fg("accent", view.name)}  ${theme.fg("dim", view.model ?? "")}`;
 	if (durationStr) text += `  ${theme.fg("dim", durationStr)}`;
 	if (view.status === "failed" && view.stopReason) text += ` ${theme.fg("error", `[${view.stopReason}]`)}`;
 	if (view.status === "failed" && view.errorMessage) {

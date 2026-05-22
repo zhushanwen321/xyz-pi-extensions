@@ -36,6 +36,7 @@ import {
 	getFinalOutput,
 	renderAgentDetail,
 	renderChainCollapsedText,
+	renderStatusIcon,
 	renderParallelDetail,
 	renderParallelTable,
 	renderSingleCollapsedText,
@@ -533,11 +534,24 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { expanded }, theme, _context) {
+		renderResult(result, { expanded }, theme, context) {
 			const details = result.details as SubagentDetails | undefined;
 			if (!details || details.results.length === 0) {
 				const text = result.content[0];
 				return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
+			}
+
+			// ── Live timer support: setInterval + context.invalidate() ──
+			// Store timer state in context.state for dedup; clean up on completion.
+			const ctxState = (context as unknown as Record<string, unknown>).state as Record<string, unknown> | undefined;
+			const ctxInvalidate = (context as unknown as Record<string, unknown>).invalidate as (() => void) | undefined;
+			const hasAnyRunning = details.results.some((r) => r.exitCode === -1);
+			if (hasAnyRunning && ctxState && !ctxState.timerInterval && ctxInvalidate) {
+				ctxState.timerInterval = setInterval(() => ctxInvalidate(), 1000);
+			}
+			if (!hasAnyRunning && ctxState?.timerInterval) {
+				clearInterval(ctxState.timerInterval as ReturnType<typeof setInterval>);
+				ctxState.timerInterval = undefined;
 			}
 
 			const mdTheme = getMarkdownTheme();
@@ -560,9 +574,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 				const hasFailure = views.some((v) => v.status === "failed");
 				const isRunning = views.some((v) => v.status === "running");
 				const overallStatus: "running" | "succeeded" | "failed" = isRunning ? "running" : hasFailure ? "failed" : "succeeded";
-				const iconMap = { running: "\u23F3", succeeded: "\u2705", failed: "\u274C" };
-				const colorMap = { running: "warning", succeeded: "success", failed: "error" };
-				const icon = theme.fg(colorMap[overallStatus] as "warning", iconMap[overallStatus]);
+				const icon = renderStatusIcon(overallStatus, theme);
 
 				if (expanded) {
 					const container = new Container();
