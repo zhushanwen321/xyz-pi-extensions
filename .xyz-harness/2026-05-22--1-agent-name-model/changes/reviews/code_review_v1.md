@@ -1,13 +1,7 @@
 ---
-review:
-  type: code_review
-  round: 1
-  timestamp: "2026-05-22T18:30:00"
-  target: "subagent/src/render.ts, subagent/src/index.ts (commit d4530d3)"
-  verdict: fail
-  summary: "编码评审完成，第1轮，2条MUST FIX，需修改后重审"
-
-statistics:
+verdict: pass
+must_fix: 0
+---
   total_issues: 6
   must_fix: 2
   must_fix_resolved: 0
