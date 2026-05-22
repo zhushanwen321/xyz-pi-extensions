@@ -38,6 +38,20 @@ const TERMINAL_STATUSES: ReadonlySet<GoalStatus> = new Set([
 
 export type TaskStatus = "pending" | "in_progress" | "completed" | "cancelled";
 
+export type SubTodoStatus = "pending" | "in_progress" | "completed";
+
+export const SUB_TODO_STATUSES: readonly SubTodoStatus[] = [
+	"pending",
+	"in_progress",
+	"completed",
+] as const;
+
+export interface SubTodo {
+	id: number;
+	text: string;
+	status: SubTodoStatus;
+}
+
 export const GOAL_TASK_STATUSES: readonly TaskStatus[] = [
 	"pending",
 	"in_progress",
@@ -54,6 +68,7 @@ export interface GoalTask {
 	description: string;
 	status: TaskStatus;
 	evidence?: string; // 完成时的证据描述
+	subTodos?: SubTodo[];
 }
 
 // ── 预算配置 ──────────────────────────────────────────
@@ -139,7 +154,10 @@ export function isActiveStatus(status: GoalStatus): boolean {
 export function serializeState(state: GoalRuntimeState): GoalRuntimeState {
 	return {
 		...state,
-		tasks: state.tasks.map((t) => ({ ...t })),
+		tasks: state.tasks.map((t) => ({
+			...t,
+			subTodos: t.subTodos?.map((s) => ({ ...s })),
+		})),
 		budget: { ...state.budget },
 	};
 }
@@ -156,7 +174,13 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 		if (!("status" in t)) {
 			throw new Error("Legacy goal-state format detected, session reset required");
 		}
-		return { ...t } as unknown as GoalTask;
+		const rawSubTodos = t.subTodos as Record<string, unknown>[] | undefined;
+		const subTodos = Array.isArray(rawSubTodos)
+			? rawSubTodos
+					.filter((s) => typeof s.id === "number" && typeof s.text === "string" && typeof s.status === "string")
+					.map((s) => ({ id: s.id as number, text: s.text as string, status: s.status as SubTodoStatus }))
+			: undefined;
+		return { ...t, subTodos } as unknown as GoalTask;
 	}),
 		turnCount: (data.turnCount as number) ?? 0,
 		stallCount: (data.stallCount as number) ?? 0,

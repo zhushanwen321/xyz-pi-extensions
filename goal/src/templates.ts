@@ -45,7 +45,7 @@ export function continuationPrompt(state: GoalRuntimeState): string {
 		`[GOAL] Turn ${state.turnCount}/${state.budget.maxTurns}${budgetLine}${stallLine}\n` +
 		`<objective>${objective}</objective>\n` +
 		`${taskLine}\n` +
-		`Rules: create_tasks→update_tasks(evidence)→complete_goal(evidence). blocked→report_blocked(reason).\n` +
+		`Rules: create_tasks→update_tasks(evidence)→complete_goal(evidence). blocked→report_blocked(reason). sub-todo: add_sub_todos/update_sub_todos (替代 todo 工具).\n` +
 		`Audit: 逐项验证每个需求有权威证据。不因预算耗尽标记完成，不因困难标记阻塞。\n` +
 		`</goal_context>`
 	);
@@ -124,6 +124,7 @@ export function contextInjectionPrompt(state: GoalRuntimeState): string {
 		`2. 每完成一个任务调用 update_tasks 将状态设为 completed，并提供 evidence\n` +
 		`3. 只有提供具体证据时才能调用 complete_goal\n` +
 		`4. 遇到阻塞调用 report_blocked\n` +
+		`5. Goal 模式下不要使用 todo 工具，使用 add_sub_todos / update_sub_todos 追踪细粒度步骤\n` +
 		`</goal_context>`
 	);
 }
@@ -169,6 +170,12 @@ export function formatTaskList(tasks: GoalTask[]): string {
 		for (const t of active) {
 			const icon = t.status === "in_progress" ? "●" : "☐";
 			lines.push(`  ${icon} #${t.id}: ${t.description}`);
+			if (t.subTodos && t.subTodos.length > 0) {
+				for (const s of t.subTodos) {
+					const sIcon = s.status === "completed" ? "✓" : s.status === "in_progress" ? "●" : "○";
+					lines.push(`    ${sIcon} #${t.id}.${s.id}: ${s.text}`);
+				}
+			}
 		}
 	}
 	if (completed.length > 0) {

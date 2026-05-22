@@ -116,6 +116,18 @@ export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): strin
 			} else {
 				lines.push(`  ${th.fg("dim", "☐")} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}`);
 			}
+			// Sub-todo items
+			if (t.subTodos && t.subTodos.length > 0 && t.status !== "cancelled") {
+				for (const s of t.subTodos) {
+					const subIcon = s.status === "completed"
+						? th.fg("success", "✓")
+						: s.status === "in_progress"
+							? th.fg("warning", "●")
+							: th.fg("dim", "○");
+					const subText = s.status === "completed" ? th.fg("dim", s.text) : th.fg("muted", s.text);
+					lines.push(`    ${subIcon} ${th.fg("dim", `${t.id}.${s.id}`)} ${subText}`);
+				}
+			}
 		}
 	}
 

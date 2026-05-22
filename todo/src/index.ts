@@ -384,6 +384,32 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 	};
 }
 
+// ── 列表渲染辅助函数 ─────────────────────────────────
+
+function buildTodoListText(todoList: Todo[], options: { expanded: boolean }, theme: Theme): string {
+	if (todoList.length === 0) {
+		return theme.fg("dim", "\u6682\u65e0 todo");
+	}
+	let listText = theme.fg("muted", `${todoList.length} \u9879 todo\uff1a`);
+	const display = options.expanded ? todoList : todoList.slice(0, MAX_COLLAPSED_ITEMS);
+	for (const t of display) {
+		const status = getDisplayStatus(t);
+		const mark =
+			status === "completed"
+				? theme.fg("success", "\u2713")
+				: status === "in_progress"
+					? theme.fg("warning", "\u25cf")
+					: theme.fg("dim", "\u25cb");
+		const itemText =
+			status === "completed" ? theme.fg("dim", t.text) : theme.fg("muted", t.text);
+		listText += `\n${mark} ${theme.fg("accent", `#${t.id}`)} ${itemText}`;
+	}
+	if (!options.expanded && todoList.length > MAX_COLLAPSED_ITEMS) {
+		listText += `\n${theme.fg("dim", `... \u8fd8\u6709 ${todoList.length - MAX_COLLAPSED_ITEMS} \u9879`)}`;
+	}
+	return listText;
+}
+
 // ── Tool renderResult handler ────────────────────────
 
 function renderTodoResult(result: unknown, options: { expanded: boolean }, theme: Theme): Text {
@@ -402,33 +428,18 @@ function renderTodoResult(result: unknown, options: { expanded: boolean }, theme
 
 	switch (details.action) {
 		case "list": {
-			if (todoList.length === 0) {
-				return new Text(theme.fg("dim", "\u6682\u65e0 todo"), 0, 0);
-			}
-			let listText = theme.fg("muted", `${todoList.length} \u9879 todo\uff1a`);
-			const display = options.expanded ? todoList : todoList.slice(0, MAX_COLLAPSED_ITEMS);
-			for (const t of display) {
-				const status = getDisplayStatus(t);
-				const mark =
-					status === "completed"
-						? theme.fg("success", "\u2713")
-						: status === "in_progress"
-							? theme.fg("warning", "\u25cf")
-							: theme.fg("dim", "\u25cb");
-				const itemText =
-					status === "completed" ? theme.fg("dim", t.text) : theme.fg("muted", t.text);
-				listText += `\n${mark} ${theme.fg("accent", `#${t.id}`)} ${itemText}`;
-			}
-			if (!options.expanded && todoList.length > MAX_COLLAPSED_ITEMS) {
-				listText += `\n${theme.fg("dim", `... \u8fd8\u6709 ${todoList.length - MAX_COLLAPSED_ITEMS} \u9879`)}`;
-			}
-			return new Text(listText, 0, 0);
+			return new Text(buildTodoListText(todoList, options, theme), 0, 0);
 		}
 
 		case "add": {
 			const text = r.content[0];
 			const msg = text?.type === "text" ? (text.text ?? "") : "";
-			return new Text(theme.fg("success", "\u2713 ") + theme.fg("muted", msg), 0, 0);
+			const listText = buildTodoListText(todoList, options, theme);
+			return new Text(
+				theme.fg("success", "\u2713 ") + theme.fg("muted", msg) + "\n\n" + listText,
+				0,
+				0,
+			);
 		}
 
 		case "update":
@@ -436,7 +447,12 @@ function renderTodoResult(result: unknown, options: { expanded: boolean }, theme
 		case "clear": {
 			const text = r.content[0];
 			const msg = text?.type === "text" ? (text.text ?? "") : "";
-			return new Text(theme.fg("success", "\u2713 ") + theme.fg("muted", msg), 0, 0);
+			const listText = buildTodoListText(todoList, options, theme);
+			return new Text(
+				theme.fg("success", "\u2713 ") + theme.fg("muted", msg) + "\n\n" + listText,
+				0,
+				0,
+			);
 		}
 
 		default: {

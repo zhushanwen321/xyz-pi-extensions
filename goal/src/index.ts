@@ -25,6 +25,7 @@ import {
 	type GoalRuntimeState,
 	type GoalTask,
 	type BudgetConfig,
+	type SubTodo,
 	DEFAULT_BUDGET,
 	createInitialState,
 	transitionStatus,
@@ -37,6 +38,7 @@ import {
 	getIncompleteTasks,
 	getElapsedTimeSeconds,
 	GOAL_TASK_STATUSES,
+	SUB_TODO_STATUSES,
 } from "./state";
 
 import { parseGoalArgs } from "./commands";
@@ -79,6 +81,9 @@ const GoalManagerParams = Type.Object({
 		"complete_goal",
 		"cancel_goal",
 		"report_blocked",
+		"add_sub_todos",
+		"update_sub_todos",
+		"delete_sub_todos",
 	] as const),
 	tasks: Type.Optional(Type.Array(Type.String(), { description: "Task descriptions. 每条必须是一行简短摘要（不超过 60 字），不含换行或 markdown" })),
 	updates: Type.Optional(Type.Array(Type.Object({
@@ -86,6 +91,13 @@ const GoalManagerParams = Type.Object({
 		status: StringEnum(GOAL_TASK_STATUSES),
 		evidence: Type.Optional(Type.String()),
 	}))),
+	taskId: Type.Optional(Type.Number({ description: "Task ID（sub-todo 操作时必需）" })),
+	texts: Type.Optional(Type.Array(Type.String(), { description: "Sub-todo 文本列表（add_sub_todos 时使用）" })),
+	subUpdates: Type.Optional(Type.Array(Type.Object({
+		subId: Type.Number(),
+		status: StringEnum(SUB_TODO_STATUSES),
+	}))),
+	subIds: Type.Optional(Type.Array(Type.Number(), { description: "Sub-todo ID 列表（delete_sub_todos 时使用）" })),
 	evidence: Type.Optional(Type.String({ description: "Evidence for completion (required for complete_goal)" })),
 	reason: Type.Optional(Type.String({ description: "Reason for being blocked (required for report_blocked)" })),
 	cancelReason: Type.Optional(Type.String({ description: "Why the user wants to cancel (required for cancel_goal)" })),
@@ -384,6 +396,101 @@ async function executeGoalAction(
 					status: "cancelled",
 				} satisfies GoalManagerDetails,
 			};
+		}
+
+		case "add_sub_todos": {
+			if (params.taskId === undefined) {
+				throw new Error("add_sub_todos requires taskId");
+			}
+			if (!params.texts || params.texts.length === 0) {
+				throw new Error("add_sub_todos requires a non-empty texts array");
+			}
+			const parentTask = state.tasks.find((t) => t.id === params.taskId);
+			if (!parentTask) {
+				throw new Error(`Task #${params.taskId} not found`);
+			}
+			if (isTerminalTaskStatus(parentTask.status)) {
+				throw new Error(`Task #${parentTask.id} 已处于终态 (${parentTask.status})，不能添加 sub-todo`);
+			}
+			const subTodos = parentTask.subTodos ?? [];
+			const startId = subTodos.length > 0 ? Math.max(...subTodos.map((s) => s.id)) + 1 : 1;
+			const trimmed = params.texts.map((t) => t.trim()).filter((t) => t.length > 0);
+			if (trimmed.length === 0) {
+				throw new Error("texts 中至少需要一个非空字符串");
+			}
+			const newSubTodos: SubTodo[] = trimmed.map((text, i) => ({
+				id: startId + i,
+				text,
+				status: "pending" as const,
+			}));
+			parentTask.subTodos = [...subTodos, ...newSubTodos];
+			persistGoalState(pi, session, ctx);
+			return makeGoalResult(session,
+				`已给 Task #${parentTask.id} 添加 ${newSubTodos.length} 项 sub-todo：\n` +
+				newSubTodos.map((s) => `  - #${parentTask.id}.${s.id}: ${s.text}`).join("\n"),
+			);
+		}
+
+		case "update_sub_todos": {
+			if (params.taskId === undefined) {
+				throw new Error("update_sub_todos requires taskId");
+			}
+			if (!params.subUpdates || params.subUpdates.length === 0) {
+				throw new Error("update_sub_todos requires a non-empty subUpdates array");
+			}
+			const targetTask = state.tasks.find((t) => t.id === params.taskId);
+			if (!targetTask) {
+				throw new Error(`Task #${params.taskId} not found`);
+			}
+			if (!targetTask.subTodos || targetTask.subTodos.length === 0) {
+				throw new Error(`Task #${params.taskId} 没有 sub-todo`);
+			}
+			const results: string[] = [];
+			for (const u of params.subUpdates) {
+				const sub = targetTask.subTodos.find((s) => s.id === u.subId);
+				if (!sub) {
+					throw new Error(`Sub-todo #${params.taskId}.${u.subId} not found`);
+				}
+				if (sub.status === "completed") {
+					throw new Error(`Sub-todo #${params.taskId}.${sub.id} 已完成，不可变更`);
+				}
+				const prev = sub.status;
+				sub.status = u.status;
+				results.push(`#${params.taskId}.${sub.id}: ${prev} → ${u.status}`);
+			}
+			persistGoalState(pi, session, ctx);
+			return makeGoalResult(session,
+				`已更新 ${results.length} 项 sub-todo：\n${results.join("\n")}`,
+			);
+		}
+
+		case "delete_sub_todos": {
+			if (params.taskId === undefined) {
+				throw new Error("delete_sub_todos requires taskId");
+			}
+			if (!params.subIds || params.subIds.length === 0) {
+				throw new Error("delete_sub_todos requires a non-empty subIds array");
+			}
+			const delTask = state.tasks.find((t) => t.id === params.taskId);
+			if (!delTask) {
+				throw new Error(`Task #${params.taskId} not found`);
+			}
+			if (!delTask.subTodos || delTask.subTodos.length === 0) {
+				throw new Error(`Task #${params.taskId} 没有 sub-todo`);
+			}
+			const uniqueIds = [...new Set(params.subIds)];
+			const missing = uniqueIds.filter((id) => !delTask.subTodos!.some((s) => s.id === id));
+			if (missing.length > 0) {
+				throw new Error(`Sub-todo ${missing.map((id) => `#${params.taskId}.${id}`).join(", ")} not found`);
+			}
+			delTask.subTodos = delTask.subTodos.filter((s) => !uniqueIds.includes(s.id));
+			if (delTask.subTodos.length === 0) {
+				delTask.subTodos = undefined;
+			}
+			persistGoalState(pi, session, ctx);
+			return makeGoalResult(session,
+				`已删除 ${uniqueIds.length} 项 sub-todo，Task #${params.taskId} 剩余 ${delTask.subTodos?.length ?? 0} 项`,
+			);
 		}
 
 		default:
@@ -832,7 +939,10 @@ export default function goalExtension(pi: ExtensionAPI) {
 			"\n- list_tasks: 查看进度和剩余预算" +
 			"\n- complete_goal: 标记目标达成（必须所有任务完成 + evidence）" +
 			"\n- cancel_goal: 取消当前目标（用户要求退出/停止时使用）" +
-			"\n- report_blocked: 报告阻塞（遇到无法解决的问题时使用）",
+			"\n- report_blocked: 报告阻塞（遇到无法解决的问题时使用）" +
+			"\n- add_sub_todos: 给指定 task 添加 sub-todo（参数: taskId, texts[]）。Goal 模式下用此替代 todo 工具" +
+			"\n- update_sub_todos: 批量更新 sub-todo 状态（参数: taskId, subUpdates[]）" +
+			"\n- delete_sub_todos: 删除指定 task 的 sub-todo（参数: taskId, subIds[]）",
 		promptSnippet: "管理 /goal 模式的任务清单、完成状态和退出",
 		promptGuidelines: [
 			"[工作流] 收到目标后，第一步必须调用 create_tasks 拆分任务。已有任务清单时不要重复调用",
@@ -847,6 +957,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 			"[禁止] 不要在没有 evidence 的情况下将任务标记为 completed，也不要在没有 evidence 时调用 complete_goal",
 			"[禁止] 不要在用户明确想退出时强制要求完成任务——直接 cancel_goal",
 			"[禁止] 不要重复调用 create_tasks 覆盖已有未完成任务，如需追加请用 add_tasks",
+			"[sub-todo] Goal 模式下需要细粒度步骤追踪时，使用 add_sub_todos 给 task 添加 sub-todo，不要使用 todo 工具",
 		],
 		parameters: GoalManagerParams,
 
@@ -864,6 +975,10 @@ export default function goalExtension(pi: ExtensionAPI) {
 			let text = theme.fg("toolTitle", theme.bold("goal_manager ")) + theme.fg("muted", args.action);
 			if (args.tasks) text += ` ${theme.fg("dim", `(${args.tasks.length} tasks)`)}`;
 			if (args.updates) text += ` ${theme.fg("dim", `(${args.updates.length} updates)`)}`;
+			if (args.taskId !== undefined) text += ` ${theme.fg("accent", `#${args.taskId}`)}`;
+			if (args.texts) text += ` ${theme.fg("dim", `(${args.texts.length} sub-todos)`)}`;
+			if (args.subUpdates) text += ` ${theme.fg("dim", `(${args.subUpdates.length} sub-updates)`)}`;
+			if (args.subIds) text += ` ${theme.fg("dim", `del #${args.subIds.join(",")}`)}`;
 			return new Text(text, 0, 0);
 		},
 
@@ -893,7 +1008,19 @@ export default function goalExtension(pi: ExtensionAPI) {
 					? theme.fg("dim", descText)
 					: theme.fg("text", descText);
 				lines.push(`  ${icon} ${theme.fg("accent", `#${t.id}`)} ${desc}`);
+			// Sub-todo items in expanded view
+			if (t.subTodos && t.subTodos.length > 0) {
+				for (const s of t.subTodos) {
+					const subIcon = s.status === "completed"
+						? theme.fg("success", "\u2713")
+						: s.status === "in_progress"
+							? theme.fg("warning", "\u25cf")
+							: theme.fg("dim", "\u25cb");
+					const subText = s.status === "completed" ? theme.fg("dim", s.text) : theme.fg("muted", s.text);
+					lines.push(`    ${subIcon} ${theme.fg("dim", `${t.id}.${s.id}`)} ${subText}`);
+				}
 			}
+		}
 			return new Text(lines.join("\n"), 0, 0);
 		},
 	});
