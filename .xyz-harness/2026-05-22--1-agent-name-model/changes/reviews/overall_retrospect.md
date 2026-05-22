@@ -3,7 +3,7 @@ phase: pr
 verdict: pass
 ---
 
-# Overall Retrospect — Subagent TUI 渲染统一与优化（5 Phase 覆盖）
+# Overall Retrospect — Subagent TUI 渲染统一与优化（5 Phase 全覆盖）
 
 ## 项目基本信息
 
@@ -11,155 +11,223 @@ verdict: pass
 |------|-----|
 | 项目 | xyz-pi-extensions, subagent extension |
 | 改动范围 | `subagent/src/render.ts` + `subagent/src/index.ts`（2 个文件） |
-| 复杂度评估 | Medium（L1，不跨模块） |
-| 总时长 | 5 个 Phase，约 2-3 轮对话 |
+| 复杂度评估 | L1（不跨模块，2 文件） |
+| 代码变更 | +147/-221 行，净减 74 行 |
+| Dev commits | `d4530d3`（主功能）+ `a5414e8`（MUST FIX 修复） |
 | PR | https://github.com/zhushanwen321/xyz-pi-extensions/pull/1 |
+| CI | 无（项目未配置 GitHub Actions） |
 
-## Phase 执行质量总结
+---
+
+## 1. Phase-by-Phase 执行回顾
 
 ### Phase 1 (Spec) — 评分：A-
 
-**效率**：高。单轮 spec 产出通过 completeness check，review 2 轮。
-**质量**：完整。8 FR, 6 AC, 30+ checkpoint, 7 constraints, Out of Scope。completeness check 发现了缺失的 Out of Scope 和歧义范围。
-**问题**：review 子 agent 的 YAML frontmatter 格式始终不匹配模板；subagent API 429 错误导致一次 review 失败，需要人工补写。
-**关键产出**：spec.md → plan.md 的 F/AC → task 映射清晰，减少了 Phase 2 的歧义。
+**做了什么**：产出 spec.md（8 FR、6 AC、30+ checkpoint、7 constraints、Out of Scope）。通过 pi-mono bash.ts 源码扫描发现 `setInterval + context.invalidate()` timer 模式。5 轮澄清问答 + mockup 迭代。Review 2 轮 PASS。
+
+**做对了什么**：
+- Completeness check（6 元素）有效捕获了缺失的 Out of Scope 和歧义的 "N=3-5" 范围
+- pi-mono 源码扫描提前验证了 timer 机制的可行性，减少了 Phase 3 的探索成本
+- Spec 的 F/AC → task 映射清晰，Phase 2 几乎不需要回溯
+
+**做错了什么**：
+- Review subagent 的 YAML frontmatter 格式不匹配（嵌套 vs flat），需要手动修正。这是 5 个 phase 中持续出现的系统性问题
+- Spec review 中一次 subagent dispatch 因 API 429 失败，需要手动补写
+
+**如果重来**：在 review subagent 的 task prompt 中嵌入显式 YAML 模板，一次解决格式问题。
 
 ### Phase 2 (Plan) — 评分：B+
 
-**效率**：中等偏低。L1 计划（2 个文件）经历了 3 轮 review，其中 Round 2（timer guard bug）和 Round 3（集成缺口）是真实缺陷。如果没有这两类缺陷，应能在 1 轮完成。
-**质量**：高。7 个 task 的 Execution Group 拆分合理，Wave 调度考虑了 BG1 Task 1 与 BG2 Task 6 之间的跨文件依赖。E2E test plan + 13 测试用例覆盖全面。
-**问题**：timer guard 代码 bug（isDone → interval 模式）和 BG1→BG2 集成缺口直到 Round 3 才被发现。review frontmatter 格式问题第三次出现。
-**改进点**：对跨文件依赖（"谁提供数据、谁消费、接线完整？"）应该有一个明确的自检步骤。
+**做了什么**：产出 plan.md（7 tasks、3 BG、Wave 1-3 调度）+ e2e-test-plan.md（8 场景）+ test_cases_template.json（13 用例）。Review 3 轮 PASS。
+
+**做对了什么**：
+- BG1/BG2 的 Execution Group 拆分有效隔离了并行依赖
+- Wave 调度发现了 BG1 Task 1 → BG2 Task 6 的跨文件依赖，避免运行时数据竞争
+- E2E test plan 覆盖了 spec 全部 6 个 AC 组
+
+**做错了什么**：
+- Round 2: timer guard 代码 bug（`isDone` flag 模式而非 `context.state.interval` 模式）——引入了一个无效的 guard
+- Round 3: BG1→BG2 集成缺口——BG1 修改了 render 函数签名（加 sessionShortId/elapsed 参数），但没有 task 负责在 index.ts 的 renderResult 中调用这些参数。直到 Round 3 才发现，新增 Task 6 修复
+- 13 个 test case 全部标为 `type: "manual"`，没有考虑项目的实际测试能力。这导致 Phase 4 只能通过静态代码分析验证，且 TC-1-03 的实时计时行为无法确认
+
+**如果重来**：
+1. Plan 完成后做一个 "数据流自检"：谁提供数据、谁消费、接线是否完整？这个检查会在 Round 1 就发现 BG1→BG2 缺口
+2. Test case 设计加入项目测试能力检测：Pi extension 只支持 tsc + eslint + grep，应标记 12/13 为 integration type
 
 ### Phase 3 (Dev) — 评分：B
 
-**效率**：中等偏高。实际编码效率高，但被 subagent abort 和 Unicode 匹配问题拖慢了约 18 分钟。最终由主 agent 直接编码完成。
-**质量**：中高。code review 发现 2 条 MUST FIX（header 不符合三层结构，renderResult 缺少 timer），均在第二轮修复。类型检查（tsc）0 error。
-**问题**：subagent abort 暴露了并行执行模式的脆弱性——没有自动重试或 fallback 机制。Unicode 转义（\u2717）与 edit 工具不兼容。ToolRenderContext 的类型定义不足，需要双重类型断言。
-**改进点**：小文件批量修改用 write 替代 edit；subagent 复杂路径失败时应自动触发回退方案。
+**做了什么**：完成 render.ts 和 index.ts 的全面重构。主功能 commit `d4530d3` + MUST FIX 修复 commit `a5414e8`。tsc 0 error, eslint 0 error。
+
+**做对了什么**：
+- head+tail 文件拼接策略绕过了 edit 工具的 Unicode 匹配限制
+- capturedSessionId 提升到闭包外层解决了对象字面量内不能声明 let 的问题
+- Code review subagent 准确发现了 2 条 MUST FIX（header 三层结构、timer 缺失）
+
+**做错了什么**：
+- Subagent abort 浪费 ~10 min：按 plan 走"复杂路径"派遣 subagent，但 BG2 Task 6 被 abort，被迫回退到主 agent 直接编码。2 文件改动用 subagent 纯属 overhead
+- Unicode 匹配浪费 ~8 min：反复尝试 edit 的 oldText Unicode 转义写法，应该一开始就用 write
+- 编码时没有逐条对照 spec F1-F8 验证——导致 renderSingleCollapsedText 的 header 格式和 renderResult 的 timer 两个 spec 合规问题被 code review 发现而非自检发现
+- ToolRenderContext 的 `state`/`invalidate()` 通过双重类型断言绕过编译检查，运行时可能静默失效
+
+**如果重来**：
+1. ≤2 文件直接用主 agent 编码，不走 subagent
+2. 编码完成后按 spec F1-F8 逐条自检
+3. 先读 Pi 源码的 types.ts 确认 context API，再做类型断言
 
 ### Phase 4 (Test) — 评分：B
 
-**效率**：中等。13 个 manual 测试用例全部通过静态代码分析完成，无需 TUI 交互。TC-1-03 需要 Round 2 修正。
-**质量**：中。静态分析可以验证代码结构和逻辑路径，但 timer 的运行时行为（setInterval + context.invalidate() 是否在工作）无法确认。
-**问题**：全部测试用例为 manual 类型——这是 Phase 2 设计时的遗漏。Pi extension 没有 TUI 测试框架，无法执行交互式验证。应该设计 `type: "integration"` 的用例，通过 tsc + grep + 代码结构分析来验证。
-**改进点**：Phase 2 的 test case 设计应考虑项目的实际测试能力，而非照搬模板。
+**做了什么**：13/13 test cases PASS。全部通过 subagent 静态代码分析完成。TC-1-03 经历 Round 1 (false) → Round 2 (true)。
+
+**做对了什么**：
+- 在无法启动 TUI 的环境下，用代码结构分析覆盖了 12/13 个 case 的功能验证
+- grep 全项目搜索有效确认了 collect_subagent 的完全移除（TC-5-01/02/03）
+- JSON 格式验证脚本确保了 test_execution.json 的 schema 正确性
+
+**做错了什么**：
+- TC-1-03 Round 1 标记 false 是正确的（静态分析无法证明运行时 1s 刷新），但 Round 2 改为 true 的论据（"代码逻辑与 Pi bash tool 的 timer 模式一致"）有风险——`ToolRenderContext` 通过类型断言访问的属性在运行时可能不存在
+- 手动用 Python 修改 JSON 时写了 `true` 而非 `True`（低级语法错误）
+- 全部 case 为 manual type 是 Phase 2 的设计缺陷，Phase 4 被迫自行发明验证方法
+
+**如果重来**：Phase 2 就把 12/13 case 标为 `integration`，只留 TC-1-03 为 `manual`。Phase 4 可以用自动化脚本执行 integration cases。
 
 ### Phase 5 (PR) — 评分：A
 
-**效率**：高。PR 创建、push、local checks 一步完成。
-**质量**：高。tsc 0 error, eslint 0 error（51 pre-existing warnings），PR link 可用。
-**问题**：项目没有配置 CI pipeline。虽然本地验证通过，但没有 CI gate 来防止退化。
-**改进点**：建议配置 GitHub Actions CI（tsc + eslint）。
+**做了什么**：CI 预检 → 创建 feature 分支 → push → gh pr create → 产出 pr_evidence.md + ci_results.md → Gate PASS → subagent 整体复盘。
 
-## 跨 Phase 模式识别
+**做对了什么**：
+- CI 预检发现项目没有 CI pipeline，在 ci_results.md 中记录了 `ci_configured: false` 和本地验证结果
+- PR body 包含完整的 change summary、test results、spec reference
+- 分支命名符合规范（`feat/subagent-tui-rendering`）
 
-### 1. Review 子 agent YAML frontmatter 格式不匹配（P1, P2, P3）
+**做错了什么**：
+- PR body 的 heredoc 语法在 bash 中失败（单引号嵌套问题），需要先写入临时文件再用 `--body-file`。这是一个 shell 语法问题，不是 harness 流程问题
+- 整体复盘（overall_retrospect.md）由 subagent 产出，但 YAML frontmatter 又是嵌套格式，需要手动修正。这再次印证了 P0 级格式问题
 
-每个 Phase 的 review subagent 都输出嵌套 YAML（`review: { verdict: ... }`）而非要求的平坦格式（`verdict: pass`）。每次都需要主 agent 手动修正后再提交 gate。
+**如果重来**：无重大改进。Phase 5 流程顺畅。
 
-**根源**：task prompt 中缺少显式的 YAML 模板。subagent 依赖隐式格式说明。
-**影响**：P1 (5min) + P2 (6min) + P3 (3min) = 约 14 分钟机械劳动。
-**修复方案**：在 review subagent 的 task prompt 中加入 `输出 frontmatter 必须使用平坦格式：\n---\nverdict: pass\nmust_fix: 0\n---`。
+---
 
-### 2. Subagent abort 无重试机制（P3）
+## 2. 跨 Phase 模式识别
 
-Wave 1 尝试 subagent 并行执行 BG1/BG2 但 BG2 Task 6 被 abort。没有自动重试逻辑，退回到主 agent 直接编码。
+### 模式 1: Review subagent YAML frontmatter 格式不匹配 — 贯穿全部 5 Phase
 
-**根源**：subagent 的并行执行层没有统一的 retry 或 fallback 逻辑。被 abort 后，主 agent 只能重建上下文手动完成。
-**影响**：~10 分钟损失。
-**修复方案**：不应使用 subagent 来处理同一扩展中 2 个文件的改动——subagent 的上下文传递开销 > 直接编码成本。
+| Phase | 出现次数 | 修正耗时 |
+|-------|---------|---------|
+| P1 (Spec) | 1 次 | ~5 min |
+| P2 (Plan) | 3 次 | ~6 min |
+| P3 (Dev) | 1 次 | ~2 min |
+| P5 (PR) | 1 次 | ~1 min |
+| **合计** | **6 次** | **~14 min** |
 
-### 3. context.state / context.invalidate() 运行时风险（P3, P4, P5）
+每个 phase 的 review subagent 都输出嵌套 YAML（`review: { verdict: ... }`）而非 gate 要求的 flat 格式（`verdict: pass`）。根本原因是 task prompt 中没有显式模板——subagent 自行选择了更"结构化"的嵌套格式。
 
-这是三个 Phase 持续记录的未验证风险：ToolRenderContext 是否在运行时暴露 `state` 和 `invalidate()`？当前通过 `as unknown as Record<string, unknown>` 双重类型断言绕过编译检查，但运行时调用可能静默失败。
+**修复成本极低**：在 review subagent 的 task prompt 中加一行模板字符串。但这个问题在 5 个 phase 中都没有被根治，说明"低优先级的小问题"容易被持续忽略。
 
-**根源**：Pi Extension API 的类型定义（`ToolRenderContext`）未包含这些方法，但运行时可能存在。没有方式在不实际运行 Pi 的情况下确认。
-**影响**：如果在运行时不可用，timer（F2）将不工作，但不抛出错误。这是一个"沉默退化"风险。
-**建议**：PR merge 前在 Pi 环境中实际运行一次 subagent，验证 timer 刷新是否工作。
+### 模式 2: `context.state` / `context.invalidate()` 运行时风险 — 贯穿 P3→P4→P5
 
-### 4. 测试类型设计脱离项目实际（P2 → P4）
+Phase 3 编码时通过 `as unknown as Record<string, unknown>` 双重类型断言访问 `ToolRenderContext` 上未定义的属性。Phase 4 静态分析无法验证运行时可用性。Phase 5 PR merge 前仍未实际验证。
 
-Phase 2 设计的 13 个测试用例全部为 `type: "manual"`，假设需要在 Pi TUI 中交互观察。但 Pi extension 没有测试框架，Phase 4 发现无法交互式验证。
+这是一个 **"沉默退化"风险**：如果运行时不存在这些属性，timer 不会启动，不会报错，但实时计时不工作。防御性代码确保了不会 crash，但也意味着问题可能长时间不被发现。
 
-**根源**：Phase 2 的 test case 模板没有区分"项目支持什么类型的测试"。Pi extension 只支持类型检查（tsc）+ lint（eslint）+ 代码结构分析。
-**修复方案**：在 Phase 2 plan skill 中加入测试能力检测步骤："检查项目技术栈，确认支持的测试类型（unit/integration/manual）"。
+**建议**：PR merge 前在 Pi 中执行一次 medium complexity subagent，观察 elapsed 是否每秒刷新。
 
-### 5. Gate 自动产生过期 review 文件（P2）
+### 模式 3: 测试类型设计脱离项目实际 — P2→P4 级联影响
 
-Gate 发现问题时自动创建新的 review 文件（`plan_review_v{N}.md`），反映旧状态。修复 plan 后，这个 review 文件的 frontmatter（verdict/must_fix）必须手动更新才能通过 gate。
+Phase 2 把 13 个 test case 全标为 `manual`，假设需要在 Pi TUI 中交互观察。Phase 4 发现 Pi extension 没有测试框架，只能通过静态代码分析替代。
 
-**根源**：Gate 不做自动重验证——它在当前文件系统状态上做检查。
-**影响**：每次修复后需要额外一步手动操作。
-**改进方向**：Gate 应该在修复后自动重新验证计划文件，而不是依赖手动维护的 review meta file。
+**根因**：test_cases_template.json 的设计没有考虑项目技术栈的实际测试能力。Pi extension 只支持 tsc + eslint + grep，不支持 Playwright/jest/curl。
 
-## Harness 整体体验评估
+**级联路径**：P2 设计失误 → P4 执行困难 → P4 验证可信度降低（TC-1-03 Round 2 的论据有风险）
+
+### 模式 4: Subagent 调度成本在某些场景下超过直接编码
+
+Phase 3 按 plan 设计走"复杂路径"（7 tasks > 4 → subagent-driven dev），但实际改动只涉及 2 个文件。Subagent 的上下文构造、派遣、等待、abort 处理的总开销（~10 min），超过了主 agent 直接编码的预估时间（~20 min without abort）。
+
+**根因**：路径选择基于 task 数量而非文件数量。2 文件的改动无论有多少 tasks，都应由主 agent 直接编码——同文件的函数间共享常量和类型，串行 subagent 无法利用并行优势。
+
+### 模式 5: Phase 2→Phase 3 的集成缺口是 L1 plan 的典型失败模式
+
+BG1 修改了 render 函数签名（加 sessionShortId/elapsed 参数），但没有 task 负责在 index.ts 的 renderResult 中传递这些参数。直到 plan review Round 3 才被发现。
+
+这类"接口变更但调用方未更新"的问题在手动 plan review 中容易被遗漏。如果 plan 的 task list 有 `reads_file`/`writes_file` 字段，gate 可以自动检测跨文件依赖的接线完整性。
+
+---
+
+## 3. Harness 整体体验
 
 ### 优点
 
 | 方面 | 评价 |
 |------|------|
-| **Gate 质量** | 准确。所有 P1-P5 的 MUST FIX 都是真实缺陷，没有 false positive。错误定位精确到具体行和字段。 |
-| **Template 一致性** | spec/plan/test case 的 YAML frontmatter 格式统一、机器可解析。这对多 Phase 自动化流转至关重要。 |
-| **Execution Group 模式** | BG1/BG2/BG3 的拆分有效隔离了并行依赖。Wave 调度考虑了跨文件依赖（BG1 Task 1 → BG2 Task 6），避免了数据竞争。 |
-| **ADRs 复用** | 之前 ADR 中记录的 timer 模式（从 pi-mono bash.ts 发现）在 P2/P3 中直接复用，避免了重新探索。 |
-| **Review 覆盖度** | Spec compliance review + Code review 两层覆盖，发现的问题都是真实的。 |
+| **Gate 准确性** | 5 个 phase 的 gate 全部准确：MUST FIX 都是真实缺陷，没有 false positive，错误定位精确到具体行 |
+| **Spec/Plan 模板** | YAML frontmatter 格式统一、机器可解析，对多 phase 自动化流转至关重要 |
+| **Review 覆盖度** | Spec compliance review + Code review 两层覆盖，发现了 P3 的 2 条 MUST FIX |
+| **ADRs 复用** | pi-mono bash.ts 的 timer 模式在 P2/P3 中直接复用 |
+| **Subagent 任务拆分** | 复盘 subagent（medium complexity）产出质量稳定 |
 
-### 摩擦点
+### 摩擦点（按严重度排序）
 
-| 摩擦 | 影响 | 严重度 |
-|------|------|--------|
-| Review subagent YAML 格式不匹配（全部 Phase） | ~14min 手动修正 | **高** — 每个 Phase 出现，总计明显 |
-| Subagent abort 无重试（P3） | ~10min 上下文重建 | **中** — 仅在复杂路径触发 |
-| Manual-only 测试用例（P2→P4） | 无法交互验证 | **中** — 可通过静态分析补偿 |
-| Gate 自动文件过期（P2） | 额外手动步骤 | **低** — 每次~2min |
-| 跨文件依赖缺口遗漏（P2 Round 3） | 第 3 轮才被发现 | **中** — L1 计划不应该 REV3 |
-| edit 工具 Unicode 不兼容（P3） | ~8min 改用 write | **低** — 仅含 Unicode 字符时 |
+| 摩擦 | 严重度 | 频次 | 累计耗时 |
+|------|--------|------|---------|
+| Review subagent YAML 格式不匹配 | **高** | 6 次 | ~14 min |
+| Subagent abort 无重试 | **中** | 1 次 | ~10 min |
+| Manual-only 测试用例 | **中** | 1 次（级联） | Phase 4 执行困难 |
+| 跨文件依赖缺口遗漏 | **中** | 1 次 | Plan Round 3 |
+| Edit 工具 Unicode 不兼容 | **低** | 1 次 | ~8 min |
+| PR body heredoc 语法 | **低** | 1 次 | ~1 min |
 
-### 自动化缺口优先级排序
+### 自动化缺口优先级
 
-| 优先级 | 缺口 | 解决方向 |
-|--------|------|----------|
-| P0 | Review subagent frontmatter 格式强制 | task prompt 中嵌入平坦 YAML 模板 |
-| P1 | 跨文件依赖自动检测 | plan.md 的 task list 中增加 "reads_file"/"writes_file" 字段，gate 检查接线完整性 |
-| P2 | Gate 文件自动刷新 | Gate 验证后自动写入 review 文件 frontmatter |
-| P3 | 测试能力检测 | Phase 2 plan skill 加入 `check_test_capabilities()` |
-| P4 | Unicode 处理 | edit 工具或 whitespace-fixer 增加unicode-aware 匹配 |
+| 优先级 | 缺口 | 解决方向 | 预估节省 |
+|--------|------|----------|---------|
+| **P0** | Review subagent frontmatter 格式 | task prompt 嵌入 flat YAML 模板 | ~14 min/project |
+| **P1** | 测试能力检测 | Phase 2 plan skill 加入 `check_test_capabilities()` | 避免 P4 重新发明验证方法 |
+| **P2** | 跨文件依赖自动检测 | Plan task 增加 `reads_file`/`writes_file`，gate 检查接线 | 避免 Round 3 才发现缺口 |
+| **P3** | CI 配置 | 为 xyz-pi-extensions 配置 GitHub Actions（tsc + eslint） | 防止退化 |
+| **P4** | Subagent 路径选择 | 基于"涉及文件数"而非"task 数"选择简单/复杂路径 | 避免 abort 浪费 |
 
-## 系统性教训
+---
 
-### 1. L1 ≠ 简单
+## 4. 系统性教训
 
-这个项目被评估为 L1（2 个文件，TUI 渲染改动），但仍然经历了 3 轮 plan review、1 次 subagent abort、2 个 code review MUST FIX。教训：L1 只指示文件范围和跨模块依赖，不代表执行难度。TUI 渲染的统一（尤其是实时计时器生命周期和跨模式可视化）有内在复杂度。
+### 4.1 L1 ≠ 简单
 
-### 2. Subagent 调度成本在某些情况下超过直接编码
+这个项目被评估为 L1（2 文件，TUI 渲染改动），但经历了 3 轮 plan review、1 次 subagent abort、2 个 code review MUST FIX。L1 只表示文件范围和跨模块依赖程度，不代表执行复杂度。TUI 渲染的统一（实时计时器生命周期、跨模式可视化、session ID 传递）有内在复杂度，不应低估。
 
-对于 2 个文件的改动，subagent 上下文的构造、派遣、等待、结果收集、abort 处理的总开销，超过了主 agent 直接编码所需的轮次。建议：当改动文件 ≤ 2，且主 agent 已经熟悉该模块时，直接编码比派遣 subagent 更高效。
+### 4.2 小问题的复利效应
 
-### 3. 项目级测试能力应作为 plan 阶段的输入
+Review subagent 的 YAML 格式问题是一个"修复成本极低（1 行模板）、但每次都被忽略"的问题。5 个 phase 累计浪费 ~14 min。这类问题不是技术难题，而是优先级判断失误——应该在一次出现后就立即根治，而不是每轮手动修复。
 
-Pi extension 缺少测试框架不是一个新信息——项目 CLAUDE.md 已经有说明。"测试类型脱离项目实际"这个错误的根源是 Phase 2 没有将"当前项目支持什么类型的测试"作为 plan 输入。建议在 plan skill 中加入项目测试能力检测步骤。
+### 4.3 项目测试能力应作为 plan 阶段的显式输入
 
-### 4. 持续存在的格式问题
+"Pi extension 没有测试框架"不是新信息——项目 CLAUDE.md 有说明。但 Phase 2 没有 读取这个信息并将其转化为 test case type 决策。Plan skill 应该在"编写测试用例"步骤前加入"检测项目测试能力"子步骤。
 
-Review subagent 的 YAML frontmatter 格式是一个已经持续 3 个 Phase（P1, P2, P3）的问题，每次都是手动修复但没有从根本上解决。这违反了 CLAUDE.md 的"移除 friction"原则。解决方案很简单（加模板到 prompt），不需要架构变更——说明这类小问题的优先级容易被忽略。
+### 4.4 静态分析对 TUI 渲染的验证边界
 
-## 最终评分
+代码静态分析可以验证"函数存在、逻辑正确、参数传递完整"，但无法验证"ANSI escape 序列是否被 pi-tui 正确解析"、"elapsed 是否每秒在终端上刷新"。这个边界在 Phase 4 诚实面对了（TC-1-03 Round 1 标记 false），但 Round 2 的"代码逻辑一致性"论据实际上跨越了这个边界。对于 TUI 渲染功能，运行时验证不可替代。
 
-| Phase | 执行质量 | 主要失分原因 |
-|-------|---------|-------------|
-| Phase 1 (Spec) | A- | Out of Scope 初始缺失, review 格式问题 |
-| Phase 2 (Plan) | B+ | 3 轮 review, 集成缺口遗漏 |
-| Phase 3 (Dev) | B | Subagent abort, Unicode 问题, 2 条 MUST FIX |
-| Phase 4 (Test) | B | Manual-only 用例, 运行时验证缺口 |
-| Phase 5 (PR) | A | 无 CI pipeline (pre-existing) |
-| **总体** | **B+** | 主要损失在 subagent abort 和 review 格式 |
+---
 
-## Recommendations for Next Project
+## 5. 推荐行动
 
-1. **Review subagent prompt 加入显式 YAML 模板** — 消除全部 Phase 中的 frontmatter 格式修复步骤。
-2. **≤2 文件的改动由主 agent 直接编码** — subagent 的开销超过收益。
-3. **Phase 2 增加测试能力检测** — 匹配项目的实际测试手段。
-4. **在 PR merge 前运行一次 Pi 验证 timer** — 消除 P3-P5 持续记录的运行时风险。
-5. **为 xyz-pi-extensions 配置 GitHub Actions CI** — 防止退化，减少对本地手动验证的依赖。
-6. **Plan Task 增加 `reads_file`/`writes_file` 字段** — 实现跨文件依赖的自动化验证。
+| # | 行动 | 优先级 | 影响范围 |
+|---|------|--------|---------|
+| 1 | Review subagent task prompt 加入显式 flat YAML 模板 | P0 | 所有 future phases |
+| 2 | ≤2 文件改动由主 agent 直接编码，不走 subagent | P1 | Dev phase |
+| 3 | Phase 2 plan skill 加入项目测试能力检测步骤 | P1 | Plan + Test phases |
+| 4 | PR merge 前在 Pi 中运行一次 subagent 验证 timer | P1 | 本 PR |
+| 5 | 为 xyz-pi-extensions 配置 GitHub Actions CI（tsc + eslint） | P2 | 所有 future PRs |
+| 6 | Plan task 增加 `reads_file`/`writes_file` 字段 | P2 | Plan phase gate |
+
+---
+
+## 6. 最终评分
+
+| Phase | 评分 | 主要失分原因 |
+|-------|------|-------------|
+| P1 (Spec) | A- | Out of Scope 初始缺失, review 格式 x1 |
+| P2 (Plan) | B+ | 3 轮 review, 集成缺口 Round 3, manual-only tests |
+| P3 (Dev) | B | Subagent abort, Unicode, 2 条 MUST FIX |
+| P4 (Test) | B | Manual-only 用例, TC-1-03 验证争议 |
+| P5 (PR) | A | 无 CI pipeline (pre-existing), review 格式 x1 |
+| **总体** | **B+** | 主要损失在 review 格式重复修复和 subagent abort |
