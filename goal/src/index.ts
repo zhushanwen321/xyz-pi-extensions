@@ -110,6 +110,11 @@ interface GoalManagerDetails {
 	tasks: GoalTask[];
 	goalId: string;
 	status: string;
+	_render?: {
+		type: "task-list" | "summary-table" | "progress" | "code-block";
+		summary?: string;
+		data: unknown;
+	};
 }
 
 // ── Session State ─────────────────────────────────────
@@ -158,6 +163,28 @@ function makeGoalResult(session: GoalSession, text: string) {
 			tasks: state.tasks.map((t) => ({ ...t })),
 			goalId: state.goalId,
 			status: state.status,
+			_render: {
+				type: "task-list" as const,
+				summary: `${getCompletedCount(state.tasks)}/${state.tasks.length} 完成`,
+				data: {
+					items: state.tasks.map((t) => ({
+						id: t.id,
+						text: t.description,
+						status: t.status,
+						evidence: t.evidence,
+						subItems: t.subTodos?.map((s) => ({
+							id: s.id,
+							text: s.text,
+							status: s.status,
+						})),
+					})),
+					meta: {
+						...(state.budget.tokenBudget ? { "Token": `${state.tokensUsed}/${state.budget.tokenBudget}` } : {}),
+						...(state.budget.timeBudgetMinutes ? { "时间": `${Math.floor(getElapsedTimeSeconds(state) / SECONDS_PER_MINUTE)}分/${state.budget.timeBudgetMinutes}分` } : {}),
+						"轮次": `${state.turnCount}/${state.budget.maxTurns}`,
+					},
+				},
+			},
 		} satisfies GoalManagerDetails,
 	};
 }
@@ -394,6 +421,11 @@ async function executeGoalAction(
 					tasks: [],
 					goalId,
 					status: "cancelled",
+					_render: {
+						type: "task-list" as const,
+						summary: "已取消",
+						data: { items: [], meta: {} },
+					},
 				} satisfies GoalManagerDetails,
 			};
 		}

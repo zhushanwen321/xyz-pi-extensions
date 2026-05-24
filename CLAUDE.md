@@ -90,6 +90,238 @@ cd xyz-pi-extensions/goal && npx tsc --noEmit
 - 颜色通过 `theme.fg("token", text)` 使用语义 token，不硬编码 ANSI
 - 展开/折叠：`options.expanded` 控制显示详细程度
 
+### GUI 渲染描述符（`_render` 协议）
+
+#### 协议概述
+
+扩展的 `execute()` 返回 `{ content: [...], details: {...} }` 结构。`details` 中的数据面向 TUI 的 `renderResult` 消费。为了让 xyz-agent（Electron + Vue 3 GUI）能以最小代价渲染扩展输出，在 `details` 中增加可选的 `_render` 字段，作为 GUI 渲染的声明式描述符。
+
+**核心思想**：扩展侧不关心 GUI 如何渲染，只声明「我产出了什么类型的数据，数据是什么」。GUI 侧根据 `_render.type` 选择对应的 Vue 组件，将 `_render.data` 作为 props 传入。
+
+#### 数据管道
+
+```
+┌─────────────────────┐
+│  xyz-pi-extensions   │  execute() 返回
+│  扩展 (goal/todo/    │  { content, details: { ..., _render } }
+│  subagent)           │
+└──────────┬──────────┘
+           │ Pi 进程内部调用
+           ▼
+┌─────────────────────┐
+│  pi RPC mode        │  tool_execution_end.result
+│  (stdout JSON)      │  完整序列化 details（含 _render）
+└──────────┬──────────┘
+           │ stdout → sidecar
+           ▼
+┌─────────────────────┐
+│  xyz-agent          │  event-adapter 从
+│  sidecar (ws)       │  result.details._render 提取
+│  event-adapter.ts   │  转发给渲染进程
+└──────────┬──────────┘
+           │ WebSocket → 前端
+           ▼
+┌─────────────────────┐
+│  xyz-agent          │  根据 _render.type 选择组件
+│  渲染进程 (Vue 3)    │  将 _render.data 作为 props
+└─────────────────────┘
+```
+
+#### 类型定义
+
+```typescript
+/** GUI 渲染描述符，嵌入在 details 中 */
+interface RenderDescriptor {
+  /** 渲染类型，对应 xyz-agent 中的 Vue 组件 */
+  type: RenderType;
+  /** 传给 Vue 组件的 props 数据 */
+  data: RenderDataMap[RenderType];
+}
+
+type RenderType = "task-list" | "summary-table" | "progress" | "code-block";
+
+/** 各渲染类型对应的数据结构 */
+interface RenderDataMap {
+  "task-list": TaskListData;
+  "summary-table": SummaryTableData;
+  "progress": ProgressData;
+  "code-block": CodeBlockData;
+}
+```
+
+#### 支持的渲染类型
+
+##### `task-list` — 任务/待办列表
+
+适用于：goal 的任务列表、todo 的待办列表、subagent 的并行任务状态。
+
+```typescript
+interface TaskListData {
+  /** 列表标题 */
+  title: string;
+  /** 任务项 */
+  items: TaskItem[];
+  /** 可选的汇总信息 */
+  summary?: string;
+}
+
+interface TaskItem {
+  /** 显示文本 */
+  label: string;
+  /** 任务状态 */
+  status: "pending" | "in_progress" | "completed" | "failed" | "cancelled";
+  /** 可选的详情/证据 */
+  detail?: string;
+  /** 可选的子项 */
+  children?: TaskItem[];
+}
+```
+
+##### `summary-table` — 结构化表格
+
+适用于：subagent 的多 agent 结果汇总、任何需要多列对比的场景。
+
+```typescript
+interface SummaryTableData {
+  /** 表格标题 */
+  title: string;
+  /** 列定义 */
+  columns: TableColumn[];
+  /** 数据行 */
+  rows: Record<string, unknown>[];
+}
+
+interface TableColumn {
+  /** 列 key，对应 rows 中的字段名 */
+  key: string;
+  /** 显示标题 */
+  label: string;
+  /** 列宽（flex 比例） */
+  width?: number;
+  /** 值的语义类型，影响渲染样式 */
+  valueType?: "text" | "status" | "duration" | "number";
+}
+```
+
+##### `progress` — 进度指示
+
+适用于：goal 的预算消耗、长时间操作的进度反馈。
+
+```typescript
+interface ProgressData {
+  /** 进度项标题 */
+  label: string;
+  /** 当前值 */
+  current: number;
+  /** 总量 */
+  total: number;
+  /** 可选的单位 */
+  unit?: string;
+  /** 可选的子进度项 */
+  segments?: ProgressData[];
+}
+```
+
+##### `code-block` — 代码/结构化文本块
+
+适用于：命令输出、代码片段、日志展示。
+
+```typescript
+interface CodeBlockData {
+  /** 语言标识（用于语法高亮） */
+  language?: string;
+  /** 代码内容 */
+  content: string;
+  /** 可选的标题 */
+  title?: string;
+}
+```
+
+#### 扩展侧改动示例
+
+扩展只需在 `details` 中添加 `_render` 字段。**不改变现有 `details` 结构**，`_render` 是增量字段，TUI 渲染不受影响。
+
+```typescript
+// goal/src/index.ts — makeGoalResult 中添加 _render
+function makeGoalResult(session: GoalSession, text: string) {
+  const state = session.state!;
+  // ... 现有逻辑不变 ...
+  return {
+    content: [{ type: "text" as const, text: text + suffix }],
+    details: {
+      action: "update",
+      tasks: state.tasks.map((t) => ({ ...t })),
+      goalId: state.goalId,
+      status: state.status,
+      // ↓ 新增：GUI 渲染描述符
+      _render: {
+        type: "task-list",
+        data: {
+          title: state.objective,
+          items: state.tasks.map((t) => ({
+            label: t.description,
+            status: t.status,
+            detail: t.evidence,
+            children: t.subTodos?.map((s) => ({
+              label: s.text,
+              status: s.status,
+            })),
+          })),
+        },
+      },
+    } satisfies GoalManagerDetails,
+  };
+}
+```
+
+Details 接口更新：在现有 interface 中追加可选字段：
+
+```typescript
+interface GoalManagerDetails {
+  action: string;
+  tasks: GoalTask[];
+  goalId: string;
+  status: string;
+  _render?: RenderDescriptor; // 新增，可选
+}
+```
+
+#### xyz-agent 侧改动说明
+
+xyz-agent 的 event-adapter 需要两个改动点：
+
+1. **提取 `_render`**：在 `tool_execution_end` 事件处理中，从 `result.details._render` 提取描述符，附加到转发给渲染进程的消息中。当前 event-adapter 丢弃了 details，需要保留 `_render` 字段。
+
+2. **渲染组件映射**：在 Vue 渲染进程中，根据 `_render.type` 选择对应的 Vue 组件。可以是一个简单的 `<RenderDescriptorSwitch>` 组件：
+
+```vue
+<!-- 伪代码，展示选择逻辑 -->
+<template>
+  <TaskListWidget v-if="descriptor.type === 'task-list'" :data="descriptor.data" />
+  <SummaryTableWidget v-else-if="descriptor.type === 'summary-table'" :data="descriptor.data" />
+  <ProgressWidget v-else-if="descriptor.type === 'progress'" :data="descriptor.data" />
+  <CodeBlockWidget v-else-if="descriptor.type === 'code-block'" :data="descriptor.data" />
+  <!-- fallback: 显示 content 文本 -->
+  <MarkdownText v-else :text="fallbackText" />
+</template>
+```
+
+GUI 组件（`TaskListWidget` 等）是 xyz-agent 的工作，扩展侧不需要关心组件实现。
+
+#### 设计原则
+
+1. **增量字段**：`_render` 是 `details` 中的可选字段。缺失时 GUI fallback 到 `content` 文本渲染。TUI 渲染完全不受影响（TUI 的 `renderResult` 不读取 `_render`）。
+
+2. **声明式**：扩展声明「我产出什么」，不声明「怎么显示」。渲染决策在 GUI 侧。扩展不输出颜色、布局、间距等 UI 指令。
+
+3. **类型驱动**：`RenderType` 是有限枚举，不支持扩展自定义类型。新增渲染类型需要在本协议中定义，xyz-agent 同步实现对应组件。这避免了 GUI 侧运行时动态解析的复杂性。
+
+4. **数据冗余可接受**：`_render.data` 中的数据可能与 `details` 中的其他字段有重叠（如 `tasks` 和 `_render.data.items`）。这是有意为之——`details` 面向 TUI，`_render` 面向 GUI，两者的数据消费模式不同，冗余换来的是解耦。
+
+5. **下划线前缀**：`_render` 使用下划线前缀，明确标记这是元协议字段，不属于扩展的业务 `details` 数据。降低命名冲突风险。
+
+6. **向后兼容**：旧版 xyz-agent 不识别 `_render` 字段会忽略它。旧版扩展不输出 `_render` 字段时，xyz-agent 使用 `content` 文本 fallback。两端都可以独立升级。
+
 ## 代码规范
 
 ### TypeScript
