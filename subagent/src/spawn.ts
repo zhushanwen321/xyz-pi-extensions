@@ -241,6 +241,38 @@ export function parseOutputFileSmall(
 
 export type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
+// ──────────────────────── Memory session types ────────────────────────
+
+export interface MemorySession {
+	/** Path to the memory session file (our naming convention) */
+	filePath: string;
+	/** Path to the main session file (source for first-time copy) */
+	mainSessionFile: string;
+	/** "create" = copy main file first, "resume" = file already exists */
+	action: "create" | "resume";
+}
+
+/** Sanitize memory identifier for use in filenames: replace non-[a-zA-Z0-9_-] with _, truncate to 64 chars */
+export function sanitizeMemoryId(memory: string): string {
+	return memory.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+}
+
+/**
+ * Compute memory session file path from main session file and memory identifier.
+ * Convention: {mainBasename}.mem-{sanitized}.jsonl in the same directory.
+ * Returns undefined if main session has no file (in-memory session).
+ */
+export function resolveMemorySessionFile(
+	mainSessionFile: string | undefined,
+	memory: string,
+): string | undefined {
+	if (!mainSessionFile) return undefined;
+	const dir = path.dirname(mainSessionFile);
+	const base = path.basename(mainSessionFile, ".jsonl");
+	const sanitized = sanitizeMemoryId(memory);
+	return path.join(dir, `${base}.mem-${sanitized}.jsonl`);
+}
+
 // ──────────────────────── Factory ────────────────────────
 
 export interface SpawnManager {
@@ -256,6 +288,7 @@ export interface SpawnManager {
 		onUpdate: OnUpdateCallback | undefined,
 		makeDetails: (results: SingleResult[]) => SubagentDetails,
 		thinkingLevel?: ThinkingLevel,
+		memorySession?: MemorySession,
 	) => Promise<SingleResult>;
 
 	startBackgroundJob: (
@@ -401,6 +434,7 @@ export function createSpawnManager(pi: ExtensionAPI): SpawnManager {
 		onUpdate: OnUpdateCallback | undefined,
 		makeDetails: (results: SingleResult[]) => SubagentDetails,
 		thinkingLevel?: ThinkingLevel,
+		memorySession?: MemorySession,
 	): Promise<SingleResult> {
 		const agent = agents.find((a) => a.name === agentName);
 
@@ -422,7 +456,15 @@ export function createSpawnManager(pi: ExtensionAPI): SpawnManager {
 			};
 		}
 
-		const args: string[] = ["--mode", "json", "-p", "--no-session"];
+		const args: string[] = ["--mode", "json", "-p"];
+		if (memorySession) {
+			if (memorySession.action === "create") {
+				fs.copyFileSync(memorySession.mainSessionFile, memorySession.filePath);
+			}
+			args.push("--session", memorySession.filePath);
+		} else {
+			args.push("--no-session");
+		}
 		args.push("--model", resolvedModel);
 		if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 		if (thinkingLevel) args.push("--thinking", THINKING_TO_PI[thinkingLevel]);

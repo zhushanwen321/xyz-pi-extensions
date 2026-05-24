@@ -196,6 +196,8 @@ export interface SubagentDetails {
 	agentScope: AgentScope;
 	projectAgentsDir: string | null;
 	results: SingleResult[];
+	memoryId?: string;
+	memoryAction?: "create" | "resume";
 	_render?: {
 		type: "summary-table";
 		summary: string;
