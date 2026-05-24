@@ -269,13 +269,66 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
 			const makeDetails =
 				(mode: "single" | "parallel" | "chain" | "background") =>
-				(results: SingleResult[]): SubagentDetails => ({
-					mode,
-					resolvedModel,
-					agentScope,
-					projectAgentsDir: discovery.projectAgentsDir,
-					results,
-				});
+				(results: SingleResult[]): SubagentDetails => {
+					const base: SubagentDetails = {
+						mode,
+						resolvedModel,
+						agentScope,
+						projectAgentsDir: discovery.projectAgentsDir,
+						results,
+					};
+
+					if (mode === "parallel" && results.length > 0) {
+						const successCount = results.filter((r) => r.exitCode === 0).length;
+						const isDone = results.every((r) => r.exitCode !== -1);
+						if (isDone) {
+							base._render = {
+								type: "summary-table" as const,
+								summary: `${successCount}/${results.length} succeeded`,
+								data: {
+									columns: ["Agent", "Task", "Status", "Duration"],
+									rows: results.map((r) => ({
+										Agent: r.agent,
+										Task: r.task.length > 60 ? `${r.task.slice(0, 60)}...` : r.task,
+										Status: r.exitCode === 0 ? "completed" : "failed",
+										Duration: r.durationMs !== undefined
+											? formatDuration(r.durationMs)
+											: r.endTime !== undefined
+												? formatDuration(r.endTime - r.startTime)
+												: formatDuration(r.lastActivityTime - r.startTime),
+									})),
+								},
+							};
+						}
+					}
+
+					if (mode === "chain" && results.length > 0) {
+						const successCount = results.filter((r) => r.exitCode === 0).length;
+						const isDone = results.every((r) => r.exitCode !== -1);
+						if (isDone) {
+							base._render = {
+								type: "summary-table" as const,
+								summary: `${successCount}/${results.length} succeeded`,
+								data: {
+									columns: ["Step", "Agent", "Task", "Status", "Duration"],
+									rows: results.map((r, i) => ({
+										Step: String(r.step ?? i + 1),
+										Agent: r.agent,
+										Task: r.task.length > 50 ? `${r.task.slice(0, 50)}...` : r.task,
+										Status: r.exitCode === 0 ? "completed" : "failed",
+										Duration: r.durationMs !== undefined
+											? formatDuration(r.durationMs)
+											: r.endTime !== undefined
+												? formatDuration(r.endTime - r.startTime)
+												: formatDuration(r.lastActivityTime - r.startTime),
+									})),
+								},
+							};
+						}
+					}
+
+					return base;
+				};
 
 			if (modeCount !== 1) {
 				const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";

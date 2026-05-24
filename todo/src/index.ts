@@ -27,6 +27,14 @@ interface TodoDetails {
 	todos: Todo[];
 	nextId: number;
 	error?: string;
+	_render?: {
+		type: "task-list";
+		summary?: string;
+		data: {
+			items: Array<{ id: number; text: string; status: string }>;
+			meta: Record<string, string>;
+		};
+	};
 }
 
 const VALID_STATUSES = ["pending", "in_progress", "completed"] as const;
@@ -164,6 +172,20 @@ function updateStatusLine(ctx: ExtensionContext): void {
 let todos: Todo[] = [];
 let nextId = 1;
 
+/** 构建 _render 描述符 */
+function buildRender(todoList: Todo[]): TodoDetails["_render"] {
+	const completed = todoList.filter((t) => t.status === "completed").length;
+	const total = todoList.length;
+	return {
+		type: "task-list" as const,
+		summary: `${completed}/${total} 已完成`,
+		data: {
+			items: todoList.map((t) => ({ id: t.id, text: t.text, status: t.status })),
+			meta: {},
+		},
+	};
+}
+
 // ── Tool execute handler ─────────────────────────────
 
 function executeTodoAction(params: { action: string; text?: string; id?: number; texts?: string[]; ids?: number[]; status?: string }, ctx: ExtensionContext) {
@@ -196,7 +218,8 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 						todos: [...todos],
 						nextId,
 						error: "texts required",
-					} as TodoDetails,
+						_render: buildRender(todos),
+				} as TodoDetails,
 				};
 			}
 			const trimmed = params.texts.map((t) => t.trim()).filter((t) => t.length > 0);
@@ -208,7 +231,8 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 						todos: [...todos],
 						nextId,
 						error: "all texts empty",
-					} as TodoDetails,
+						_render: buildRender(todos),
+				} as TodoDetails,
 				};
 			}
 			const startId = nextId;
@@ -229,7 +253,8 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 						todos: [...todos],
 						nextId,
 						error: "id required",
-					} as TodoDetails,
+						_render: buildRender(todos),
+				} as TodoDetails,
 				};
 			}
 			if (params.status === undefined && params.text === undefined) {
@@ -240,7 +265,8 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 						todos: [...todos],
 						nextId,
 						error: "need status or text",
-					} as TodoDetails,
+						_render: buildRender(todos),
+				} as TodoDetails,
 				};
 			}
 			if (params.text !== undefined && params.text === "") {
@@ -251,7 +277,8 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 						todos: [...todos],
 						nextId,
 						error: "text empty",
-					} as TodoDetails,
+						_render: buildRender(todos),
+				} as TodoDetails,
 				};
 			}
 			if (
@@ -270,7 +297,8 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 						todos: [...todos],
 						nextId,
 						error: `invalid status: ${params.status}`,
-					} as TodoDetails,
+						_render: buildRender(todos),
+				} as TodoDetails,
 				};
 			}
 
@@ -283,7 +311,8 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 						todos: [...todos],
 						nextId,
 						error: `#${params.id} not found`,
-					} as TodoDetails,
+						_render: buildRender(todos),
+				} as TodoDetails,
 				};
 			}
 
@@ -323,7 +352,8 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 						todos: [...todos],
 						nextId,
 						error: "ids required",
-					} as TodoDetails,
+						_render: buildRender(todos),
+				} as TodoDetails,
 				};
 			}
 			const uniqueIds = [...new Set(params.ids)];
@@ -337,7 +367,8 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 						todos: [...todos],
 						nextId,
 						error: `#${missing.map((id) => id).join(", #")} not found`,
-					} as TodoDetails,
+						_render: buildRender(todos),
+				} as TodoDetails,
 				};
 			}
 			const removedIds: number[] = [];
@@ -368,6 +399,7 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 					todos: [...todos],
 					nextId,
 					error: `unknown action: ${params.action}`,
+					_render: buildRender(todos),
 				} as TodoDetails,
 			};
 	}
@@ -380,6 +412,7 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 			action: params.action as TodoDetails["action"],
 			todos: [...todos],
 			nextId,
+			_render: buildRender(todos),
 		} as TodoDetails,
 	};
 }

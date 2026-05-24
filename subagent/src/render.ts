@@ -196,6 +196,14 @@ export interface SubagentDetails {
 	agentScope: AgentScope;
 	projectAgentsDir: string | null;
 	results: SingleResult[];
+	_render?: {
+		type: "summary-table";
+		summary: string;
+		data: {
+			columns: string[];
+			rows: Record<string, string>[];
+		};
+	};
 }
 
 export interface DurationInfo {
