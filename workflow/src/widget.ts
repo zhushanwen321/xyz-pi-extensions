@@ -3,7 +3,7 @@
  *
  * Combines three Pi TUI mechanisms:
  *   1. setWidget  — list view (all workflow status overview)
- *   2. registerShortcut — ctrl+p (pause) / ctrl+x (abort) / ctrl+r (retry)
+ *   2. registerShortcut — ctrl+shift+p (pause) / ctrl+shift+x (abort) / ctrl+shift+r (retry)
  *   3. ctx.ui.custom() overlay — detail view (single workflow trace nodes)
  */
 
@@ -164,17 +164,17 @@ export function renderWorkflowDetail(
 /**
  * Register global TUI shortcuts for workflow lifecycle operations.
  *
- *   ctrl+p — Pause the last-started workflow (or prompt to select)
- *   ctrl+x — Abort the last-started workflow
- *   ctrl+r — Retry the last-started workflow
+ *   ctrl+shift+p — Pause the last-started workflow (or prompt to select)
+ *   ctrl+shift+x — Abort the last-started workflow
+ *   ctrl+shift+r — Retry the last-started workflow
  */
 export function registerWorkflowShortcuts(
   api: ExtensionAPI,
   orchestrators: Map<string, WorkflowOrchestrator>,
   cmdState: { lastRunId: string | null },
 ): void {
-  // ── ctrl+p: Pause ──
-  api.registerShortcut("ctrl+p", {
+  // ── ctrl+shift+p: Pause ──
+  api.registerShortcut("ctrl+shift+p", {
     description: "Pause the most recently started workflow",
     handler: async (ctx: ExtensionContext) => {
       const sessionId = ctx.sessionManager.getSessionId();
@@ -197,8 +197,8 @@ export function registerWorkflowShortcuts(
     },
   });
 
-  // ── ctrl+x: Abort ──
-  api.registerShortcut("ctrl+x", {
+  // ── ctrl+shift+x: Abort ──
+  api.registerShortcut("ctrl+shift+x", {
     description: "Abort the most recently started workflow",
     handler: async (ctx: ExtensionContext) => {
       const sessionId = ctx.sessionManager.getSessionId();
@@ -221,8 +221,8 @@ export function registerWorkflowShortcuts(
     },
   });
 
-  // ── ctrl+r: Retry ──
-  api.registerShortcut("ctrl+r", {
+  // ── ctrl+shift+r: Retry ──
+  api.registerShortcut("ctrl+shift+r", {
     description: "Retry the most recently started workflow",
     handler: async (ctx: ExtensionContext) => {
       const sessionId = ctx.sessionManager.getSessionId();
