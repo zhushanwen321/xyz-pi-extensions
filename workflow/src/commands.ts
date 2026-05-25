@@ -207,7 +207,17 @@ export function registerWorkflowCommands(
             pollForCompletion(api, orch, runId);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            ctx.ui.notify(`Failed: ${msg}`, "error");
+            // If workflow not found, pass to AI to handle
+            if (msg.includes("not found") || msg.includes("unavailable")) {
+              api.sendUserMessage(
+                `The user tried to run /workflow run '${parsed.name}' but no workflow script with that name was found. ` +
+                `The original /workflow run input was:\n${args.trim()}\n\n` +
+                `Available workflow scripts can be found in .pi/workflows/ and ~/.pi/agent/workflows/. ` +
+                `If no workflow matches, execute the task directly using subagents.`
+              );
+            } else {
+              ctx.ui.notify(`Failed: ${msg}`, "error");
+            }
           }
           return;
         }
@@ -249,11 +259,19 @@ export function registerWorkflowCommands(
           return;
         }
 
-        default:
-          ctx.ui.notify(
-            `Unknown: ${subcommand}. Use: run | list | abort`,
-            "warning",
+        default: {
+          // Unknown subcommand — pass the entire input back to AI
+          // so it can decide whether to find a matching workflow
+          // or execute the task directly with subagents.
+          api.sendUserMessage(
+            `The user typed /workflow with an unrecognized subcommand. ` +
+            `The original input was: "${args.trim()}"\n\n` +
+            `Available subcommands: run <name>, list, abort.\n` +
+            `Available workflow scripts can be found in .pi/workflows/ and ~/.pi/agent/workflows/.\n` +
+            `If this doesn't match any workflow, execute the task directly using subagents.`
           );
+          return;
+        }
       }
     },
   });
