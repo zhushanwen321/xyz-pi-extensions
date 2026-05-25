@@ -16,7 +16,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { AgentToolResult } from "@mariozechner/pi-coding-agent";
 import type { Message } from "@mariozechner/pi-ai";
@@ -252,9 +252,19 @@ export interface MemorySession {
 	action: "create" | "resume";
 }
 
-/** Sanitize memory identifier for use in filenames: replace non-[a-zA-Z0-9_-] with _, truncate to 64 chars */
+/** Short hash of input for collision resistance (first 8 hex chars of sha256) */
+function shortHash(input: string): string {
+	return createHash("sha256").update(input).digest("hex").slice(0, 8);
+}
+
+/**
+ * Sanitize memory identifier for use in filenames.
+ * Replaces non-[a-zA-Z0-9_-] with _, truncates readable part to 56 chars,
+ * then appends 8-char hash of original input for collision resistance.
+ */
 export function sanitizeMemoryId(memory: string): string {
-	return memory.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+	const sanitized = memory.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 56);
+	return `${sanitized}_${shortHash(memory)}`;
 }
 
 /**

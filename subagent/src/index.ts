@@ -12,6 +12,7 @@
  */
 
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
@@ -113,18 +114,19 @@ const SubagentParams = Type.Object({
 export default function subagentExtension(pi: ExtensionAPI) {
 	// Session-scoped state: each session gets its own SpawnManager and captured ID.
 	// Using Map keyed by sessionId ensures Session A cannot affect Session B.
-	const sessionStates = new Map<string, { spawnManager: SpawnManager; capturedSessionId: string; timerIntervals: Set<ReturnType<typeof setInterval>> }>();
+	const sessionStates = new Map<string, { spawnManager: SpawnManager; capturedSessionId: string; timerIntervals: Set<ReturnType<typeof setInterval>>; memoryFiles: Set<string> }>();
 	// Track the most recent session ID for cleanup during session_shutdown
 	// (SessionShutdownEvent doesn't carry sessionManager)
 	let lastSessionId = "";
 
 	function getSessionState(sessionId: string) {
-		let state = sessionStates.get(sessionId);
+	let state = sessionStates.get(sessionId);
 		if (!state) {
 			state = {
 				spawnManager: createSpawnManager(pi),
 				capturedSessionId: "",
 				timerIntervals: new Set(),
+				memoryFiles: new Set(),
 			};
 			sessionStates.set(sessionId, state);
 		}
@@ -404,6 +406,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
 				}
 				const action = fs.existsSync(filePath) ? "resume" : "create";
 				memorySession = { filePath, mainSessionFile, action };
+				// Track for cleanup on session_shutdown
+				getSessionState(ctx.sessionManager.getSessionId()).memoryFiles.add(filePath);
 			}
 
 			if (modeCount !== 1) {
@@ -607,6 +611,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 					if (memorySession) {
 						details.memoryId = memoryParam;
 						details.memoryAction = memorySession.action;
+						details.memoryFile = memorySession.filePath;
 					}
 					return {
 						content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
@@ -618,6 +623,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 				if (memorySession) {
 					details.memoryId = memoryParam;
 					details.memoryAction = memorySession.action;
+					details.memoryFile = memorySession.filePath;
 				}
 				return {
 					content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
@@ -759,7 +765,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
 				let memoryPrefix = "";
 				if (details.memoryId) {
 					const action = details.memoryAction === "create" ? "created" : "resumed";
-					memoryPrefix = theme.fg("accent", `[memory: ${details.memoryId} (${action})]`) + "\n";
+					const fileName = details.memoryFile ? path.basename(details.memoryFile) : details.memoryId;
+					memoryPrefix = theme.fg("accent", `[memory: ${details.memoryId} → ${fileName} (${action})]`) + "\n";
 				}
 
 				if (expanded) {
@@ -847,6 +854,11 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			}
 			state.timerIntervals.clear();
 			state.spawnManager.cleanupAllJobs();
+			// Clean up memory session files
+			for (const memoryFile of state.memoryFiles) {
+				try { fs.unlinkSync(memoryFile); } catch { /* file may already be gone */ }
+			}
+			state.memoryFiles.clear();
 			sessionStates.delete(sessionId);
 		}
 	});
