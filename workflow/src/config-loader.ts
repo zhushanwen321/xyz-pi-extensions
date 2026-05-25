@@ -226,15 +226,15 @@ export async function loadWorkflows(): Promise<CachedWorkflowMeta[]> {
 
   // Lowest priority first: user-level
   for (const wf of userWorkflows) {
-    if (wf.available) mergedMap.set(wf.name, wf);
+    mergedMap.set(wf.name, wf);
   }
   // Project-level overrides user-level
   for (const wf of projectWorkflows) {
-    if (wf.available) mergedMap.set(wf.name, wf);
+    mergedMap.set(wf.name, wf);
   }
   // Tmp overrides everything
   for (const wf of tmpWorkflows) {
-    if (wf.available) mergedMap.set(wf.name, wf);
+    mergedMap.set(wf.name, wf);
   }
 
   const merged = Array.from(mergedMap.values());

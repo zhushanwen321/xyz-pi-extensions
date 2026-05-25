@@ -13,7 +13,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
-import { renameSync, mkdirSync, accessSync, existsSync, unlinkSync } from "node:fs";
+import { renameSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { type WorkflowOrchestrator } from "./orchestrator.js";
@@ -364,39 +364,100 @@ export function registerWorkflowCommands(
         return;
       }
 
+      // Build combined list: running instances + available scripts
       const instances = orch.list();
-      if (instances.length === 0) {
-        ctx.ui.notify("No workflows in current session", "info");
+      let availableScripts: Array<{ name: string; description: string; source: string; path: string }> = [];
+      try {
+        availableScripts = (await loadWorkflows()).map((wf) => ({
+          name: wf.name,
+          description: wf.description,
+          source: wf.source,
+          path: wf.path,
+        }));
+      } catch {
+        // Ignore load errors
+      }
+
+      if (instances.length === 0 && availableScripts.length === 0) {
+        ctx.ui.notify("No workflows available", "info");
         return;
       }
 
-      // Show a select dialog listing all workflows
-      const displayNames = instances.map(
-        (i) => `${i.name} (${i.runId.slice(0, 12)}...) [${i.status}]`,
-      );
-      const selected = await ctx.ui.select("Select workflow:", displayNames);
+      // Build display entries
+      const entries: string[] = [];
+      const entryMeta: Array<{ type: "instance"; runId: string } | { type: "script"; name: string; source: string }> = [];
+
+      for (const inst of instances) {
+        entries.push(`${inst.name} (${inst.runId.slice(0, 12)}...) [${inst.status}]`);
+        entryMeta.push({ type: "instance", runId: inst.runId });
+      }
+      for (const wf of availableScripts) {
+        entries.push(`[${wf.source}] ${wf.name} — ${wf.description || "(no description)"}`);
+        entryMeta.push({ type: "script", name: wf.name, source: wf.source });
+      }
+
+      const selected = await ctx.ui.select("Select workflow:", entries);
       if (!selected) return;
 
-      const idx = displayNames.indexOf(selected);
+      const idx = entries.indexOf(selected);
       if (idx === -1) return;
 
-      const instance = orch.getInstance(instances[idx].runId);
-      if (!instance) return;
+      const meta = entryMeta[idx];
+      if (!meta) return;
 
-      // Show details via notify (fallback when ctx.ui.custom is complex)
-      const traceLines = instance.trace.map(
-        (node) =>
-          `  [${node.stepIndex}] ${node.agent}: ${node.status} — ${node.task.slice(0, 60)}`,
-      );
-      ctx.ui.notify(
-        [
-          `Workflow: ${instance.name} (${instance.runId.slice(0, 16)}...)`,
-          `Status: ${instance.status}`,
-          `Nodes: ${instance.trace.length}`,
-          ...traceLines,
-        ].join("\n"),
-        "info",
-      );
+      if (meta.type === "instance") {
+        // Show instance details
+        const instance = orch.getInstance(meta.runId);
+        if (!instance) return;
+
+        const traceLines = instance.trace.map(
+          (node) =>
+            `  [${node.stepIndex}] ${node.agent}: ${node.status} — ${node.task.slice(0, 60)}`,
+        );
+        ctx.ui.notify(
+          [
+            `Workflow: ${instance.name} (${instance.runId.slice(0, 16)}...)`,
+            `Status: ${instance.status}`,
+            `Nodes: ${instance.trace.length}`,
+            ...traceLines,
+          ].join("\n"),
+          "info",
+        );
+      } else {
+        // Script selected — offer actions
+        const actions = ["Run", ...(meta.source === "tmp" ? ["Save"] : []), "Delete"];
+        const action = await ctx.ui.select(
+          `Workflow: ${meta.name} [${meta.source}]`,
+          actions,
+        );
+        if (!action) return;
+
+        if (action === "Run") {
+          api.sendUserMessage(
+            `The user selected workflow '${meta.name}' from the /workflows panel and chose Run. ` +
+            `Script path: ${availableScripts.find((s) => s.name === meta.name)?.path ?? "unknown"}\n` +
+            `Show the script path and wait for user confirmation before executing.`,
+          );
+        } else if (action === "Save") {
+          try {
+            const result = await saveWorkflow(meta.name);
+            ctx.ui.notify(result, "info");
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            ctx.ui.notify(`Save failed: ${msg}`, "error");
+          }
+        } else if (action === "Delete") {
+          const isRunning = (name: string) =>
+            orch.list().some((i) => i.name === name && i.status === "running");
+          try {
+            const result = deleteWorkflow(meta.name, isRunning);
+            ctx.ui.notify(result, "info");
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            ctx.ui.notify(`Delete failed: ${msg}`, "error");
+          }
+        }
+      }
     },
   });
 }
@@ -423,15 +484,8 @@ export async function saveWorkflow(tmpName: string, newName?: string): Promise<s
   const destPath = resolve(SAVED_DIR, `${destName}.js`);
 
   // Check destination exists (reject, not auto-rename)
-  try {
-    accessSync(destPath);
-    // If accessSync doesn't throw, file exists
+  if (existsSync(destPath)) {
     throw new Error(`'${destName}' already exists in saved workflows. Use --as to save with a different name.`);
-  } catch (err: unknown) {
-    if (err instanceof Error && err.message.includes("already exists")) {
-      throw err;
-    }
-    // accessSync threw because file doesn't exist — proceed
   }
 
   mkdirSync(SAVED_DIR, { recursive: true });
