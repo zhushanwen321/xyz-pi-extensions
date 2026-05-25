@@ -1,0 +1,166 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "Minimum viable workflow run",
+      "description": "Start a workflow via /workflow run command and verify it completes with 2 agent calls",
+      "steps": [
+        "Create .pi/workflows/demo.js with meta + 2 agent() calls",
+        "Run /workflow run demo",
+        "Verify runId is returned",
+        "Check /workflows shows running status",
+        "Wait for completion",
+        "Verify result notification appears in conversation"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "api",
+      "title": "workflow-run tool returns _render descriptor",
+      "description": "AI calls workflow-run tool and result details contain correct _render field",
+      "steps": [
+        "Call workflow-run tool with name='demo'",
+        "Verify details._render.type === 'task-list'",
+        "Verify details._render.data.items is non-empty array"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "Pause running workflow",
+      "description": "Pause a running workflow via ctrl+p shortcut, verify state change",
+      "steps": [
+        "Start a long-running workflow",
+        "Press ctrl+p during execution",
+        "Verify /workflows shows paused status",
+        "Verify Worker thread terminated, callCache retained"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "integration",
+      "title": "Resume paused workflow in same session",
+      "description": "Resume a paused workflow, verify completed agents are not re-executed",
+      "steps": [
+        "Pause a workflow after 2 of 5 agent calls complete",
+        "Resume the workflow",
+        "Verify it continues from the 3rd agent call",
+        "Verify the first 2 calls are served from callCache (cached=true)"
+      ]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "integration",
+      "title": "Cross-session workflow recovery",
+      "description": "Close Pi session, restart, and recover a paused workflow",
+      "steps": [
+        "Pause a workflow",
+        "Exit Pi session",
+        "Restart Pi in same directory",
+        "Verify /workflows shows the interrupted workflow",
+        "Confirm recovery prompt",
+        "Verify workflow resumes from breakpoint"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "Parallel agent execution",
+      "description": "Verify parallel() spawns concurrent subprocesses and gathers results",
+      "steps": [
+        "Run workflow with await parallel([agent(A), agent(B), agent(C)])",
+        "Verify 3 pi subprocesses run concurrently",
+        "Verify Worker receives all 3 results before continuing",
+        "Test with one call failing — verify error propagation"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "integration",
+      "title": "Agent auto-retry on failure",
+      "description": "Verify 3 retries with exponential backoff, then fail",
+      "steps": [
+        "Run workflow with an agent call that fails (invalid prompt/MCP)",
+        "Verify first failure triggers retry after ~1s",
+        "Verify second retry after ~3s",
+        "Verify third retry after ~9s",
+        "Verify node status becomes 'failed' after 3 failures",
+        "Verify Workflow status becomes 'failed'"
+      ]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "integration",
+      "title": "Manual retry via shortcut",
+      "description": "User presses ctrl+r to retry a failed agent node",
+      "steps": [
+        "Have a workflow with a failed node",
+        "Press ctrl+r to retry that node",
+        "Verify callCache entry cleared",
+        "Verify node re-executes",
+        "Verify workflow continues if retry succeeds"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "integration",
+      "title": "Multiple concurrent workflows",
+      "description": "Run 3 workflows simultaneously, verify independent execution",
+      "steps": [
+        "Start 3 different workflows concurrently",
+        "Verify /workflows shows 3 running entries",
+        "Verify max 4 agent subprocesses at any time",
+        "Verify one completing does not affect others"
+      ]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "integration",
+      "title": "Token budget enforcement",
+      "description": "Verify budget_limited state when token limit reached",
+      "steps": [
+        "Start workflow with --tokens 5000",
+        "Verify token usage accumulates per agent call",
+        "Verify warning at 90%",
+        "Verify workflow terminates with budget_limited at 100%",
+        "Verify completed agent results retained"
+      ]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "api",
+      "title": "Schema extraction from agent output",
+      "description": "Verify structured JSON extraction with schema validation",
+      "steps": [
+        "Run agent with schema: { type: 'array', items: { type: 'string' } }",
+        "Verify prompt includes schema instructions",
+        "Test with valid JSON output — verify parsed result",
+        "Test with invalid JSON output — verify raw text fallback"
+      ]
+    },
+    {
+      "id": "TC-8-01",
+      "type": "integration",
+      "title": "Workflow list command",
+      "description": "Verify /workflow list shows available workflows from both directories",
+      "steps": [
+        "Place demo.js in .pi/workflows/",
+        "Place another.js in ~/.pi/agent/workflows/",
+        "Run /workflow list",
+        "Verify both workflows appear with name, description, phases"
+      ]
+    },
+    {
+      "id": "TC-8-02",
+      "type": "integration",
+      "title": "Workflow with CC-compatible format",
+      "description": "Verify script with const meta = { name, description, phases } parses correctly",
+      "steps": [
+        "Create workflow script with CC meta format",
+        "Run /workflow list — verify it appears",
+        "Run /workflow run — verify it executes"
+      ]
+    }
+  ]
+}

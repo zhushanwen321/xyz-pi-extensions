@@ -181,6 +181,7 @@ export interface SingleResult {
 	stderr: string;
 	usage: UsageStats;
 	model?: string;
+	thinkingLevel?: string;
 	stopReason?: string;
 	errorMessage?: string;
 	step?: number;
@@ -224,7 +225,8 @@ export interface AgentResultView {
 	turns: number;
 	tokens: { input: number; output: number };
 	cost: number;
-	model?: string;
+	model?: string;	
+	thinkingLevel?: string;
 	task: string;
 	toolCalls: DisplayItem[];
 	finalOutput: string;
@@ -296,6 +298,7 @@ export function buildAgentResultView(r: SingleResult, _now?: number): AgentResul
 		tokens: { input: r.usage.input, output: r.usage.output },
 		cost: r.usage.cost,
 		model: r.model,
+		thinkingLevel: r.thinkingLevel,
 		task: r.task,
 		toolCalls: getDisplayItems(r.messages),
 		finalOutput: getFinalOutput(r.messages),
@@ -376,7 +379,10 @@ export function renderAgentDetail(
 	if (opts.label) header += theme.fg("muted", ` (${opts.label})`);
 	header += theme.fg("muted", ` (${view.source})`);
 	if (durationStr) header += ` ${theme.fg("dim", durationStr)}`;
-	if (view.model) header += ` ${theme.fg("dim", view.model)}`;
+	if (view.model) {
+		const modelDisplay = view.thinkingLevel ? `${view.model}/${view.thinkingLevel}` : view.model;
+		header += ` ${theme.fg("dim", modelDisplay)}`;
+	}
 	if (view.status === "failed" && view.stopReason) header += ` ${theme.fg("error", `[${view.stopReason}]`)}`;
 
 	container.addChild(new Text(header, 0, 0));
@@ -435,7 +441,10 @@ export function renderSingleCollapsedText(view: AgentResultView, theme: Theme, s
 	const idPart = sessionShortId ? ` #${sessionShortId}` : "";
 
 	let text = `${icon} ${theme.fg("toolTitle", theme.bold("single"))}${theme.fg("accent", idPart)}`;
-	text += `\n  ${theme.fg("accent", view.name)}  ${theme.fg("dim", view.model ?? "")}`;
+	const modelDisplay = view.model
+		? (view.thinkingLevel ? `${view.model}/${view.thinkingLevel}` : view.model)
+		: "";
+	text += `\n  ${theme.fg("accent", view.name)}  ${theme.fg("dim", modelDisplay)}`;
 	if (durationStr) text += `  ${theme.fg("dim", durationStr)}`;
 	if (view.status === "failed" && view.stopReason) text += ` ${theme.fg("error", `[${view.stopReason}]`)}`;
 	if (view.status === "failed" && view.errorMessage) {
@@ -487,8 +496,11 @@ export function renderChainCollapsedText(
 		const view = views[i];
 		const stepNum = details.results[i].step ?? i + 1;
 		const stepIcon = renderStatusIcon(view.status, theme);
+		const modelStr = view.model
+			? (view.thinkingLevel ? ` ${theme.fg("dim", `${view.model}/${view.thinkingLevel}`)}` : ` ${theme.fg("dim", view.model)}`)
+			: "";
 		const durationStr = view.duration.durationMs !== undefined ? ` ${formatDuration(view.duration.durationMs)}` : "";
-		text += `\n  ${theme.fg("muted", `Step ${stepNum}:`)} ${stepIcon} ${theme.fg("accent", view.name)}${theme.fg("dim", durationStr)}`;
+		text += `\n  ${theme.fg("muted", `Step ${stepNum}:`)} ${stepIcon} ${theme.fg("accent", view.name)}${modelStr}${theme.fg("dim", durationStr)}`;
 		if (view.toolCalls.length === 0) {
 			text += `\n    ${theme.fg("muted", "(no output)")}`;
 		} else {
@@ -539,7 +551,10 @@ export function renderParallelTable(view: ParallelSummaryView, theme: Theme, ses
 		const agentDuration = agent.duration.durationMs !== undefined
 			? formatDuration(agent.duration.durationMs)
 			: formatDuration(Date.now() - agent.duration.startTime);
-		let agentLine = `  ${agent.name.padEnd(12)} ${statusIcon}  ${agentDuration.padStart(5)}  ${agent.turns} turn${agent.turns !== 1 ? "s" : ""}`;
+		const modelStr = agent.model
+			? (agent.thinkingLevel ? `  ${agent.model}/${agent.thinkingLevel}` : `  ${agent.model}`)
+			: "";
+		let agentLine = `  ${agent.name.padEnd(12)} ${statusIcon}  ${agentDuration.padStart(5)}${modelStr}  ${agent.turns} turn${agent.turns !== 1 ? "s" : ""}`;
 		if (agent.status === "running") {
 			agentLine += `  last @ ${formatTimestamp(agent.duration.lastActivityTime)}`;
 		} else {
