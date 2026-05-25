@@ -13,9 +13,12 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import { renameSync, mkdirSync, accessSync, existsSync, unlinkSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { type WorkflowOrchestrator } from "./orchestrator.js";
 import { type WorkflowInstance, isTerminal } from "./state.js";
+import { loadWorkflows } from "./config-loader.js";
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -224,21 +227,46 @@ export function registerWorkflowCommands(
 
         // ── list ──
         case "list": {
+          // Show available workflow scripts with source tags
+          let scriptSection = "";
+          try {
+            const workflows = await loadWorkflows();
+            if (workflows.length > 0) {
+              scriptSection = "\nAvailable workflows:\n" +
+                workflows
+                  .map((wf) => `  [${wf.source}] ${wf.name} — ${wf.description || "(no description)"}`)
+                  .join("\n");
+            }
+          } catch {
+            // Ignore load errors
+          }
+
           const instances = orch.list();
-          if (instances.length === 0) {
-            ctx.ui.notify("No workflow instances in current session", "info");
+          if (instances.length === 0 && !scriptSection) {
+            ctx.ui.notify("No workflow instances or scripts available", "info");
             return;
           }
-          const lines = instances.map((inst) => {
-            const ts = inst.startedAt
-              ? new Date(inst.startedAt).toLocaleTimeString()
-              : "-";
-            return (
-              `[${inst.status}] ${inst.name} (${inst.runId.slice(0, 16)}...) ${ts}` +
-              (inst.error ? ` error: ${inst.error}` : "")
-            );
-          });
-          ctx.ui.notify(lines.join("\n"), "info");
+
+          const sections: string[] = [];
+
+          if (instances.length > 0) {
+            sections.push("Running:");
+            sections.push(...instances.map((inst) => {
+              const ts = inst.startedAt
+                ? new Date(inst.startedAt).toLocaleTimeString()
+                : "-";
+              return (
+                `  [${inst.status}] ${inst.name} (${inst.runId.slice(0, 16)}...) ${ts}` +
+                (inst.error ? ` error: ${inst.error}` : "")
+              );
+            }));
+          }
+
+          if (scriptSection) {
+            sections.push(scriptSection);
+          }
+
+          ctx.ui.notify(sections.join("\n"), "info");
           return;
         }
 
@@ -259,16 +287,59 @@ export function registerWorkflowCommands(
           return;
         }
 
+        // ── save ──
+        case "save": {
+          const tmpName = parts[1];
+          if (!tmpName) {
+            ctx.ui.notify("Usage: /workflow save <tmp-name> [--as <new-name>]", "warning");
+            return;
+          }
+
+          // Parse --as parameter
+          let newName: string | undefined;
+          const asIdx = parts.indexOf("--as");
+          if (asIdx !== -1 && parts[asIdx + 1]) {
+            newName = parts[asIdx + 1];
+          }
+
+          try {
+            const result = await saveWorkflow(tmpName, newName);
+            ctx.ui.notify(result, "info");
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            ctx.ui.notify(`Save failed: ${msg}`, "error");
+          }
+          return;
+        }
+
         default: {
-          // Unknown subcommand — pass the entire input back to AI
-          // so it can decide whether to find a matching workflow
-          // or execute the task directly with subagents.
+          // Unknown subcommand — check if it could be a workflow name or natural language
+          // Collect available workflows and pass to AI for routing
+          const userInput = args.trim();
+          let workflowList = "";
+          try {
+            const workflows = await loadWorkflows();
+            if (workflows.length > 0) {
+              workflowList = workflows
+                .map((wf) => `  [${wf.source}] ${wf.name} — ${wf.description || "(no description)"}`)
+                .join("\n");
+            }
+          } catch {
+            // Ignore load errors — proceed without workflow list
+          }
+
+          const listSection = workflowList
+            ? `\nAvailable workflows:\n${workflowList}`
+            : "\nNo available workflows found.";
+
           api.sendUserMessage(
-            `The user typed /workflow with an unrecognized subcommand. ` +
-            `The original input was: "${args.trim()}"\n\n` +
-            `Available subcommands: run <name>, list, abort.\n` +
-            `Available workflow scripts can be found in .pi/workflows/ and ~/.pi/agent/workflows/.\n` +
-            `If this doesn't match any workflow, execute the task directly using subagents.`
+            `The user typed /workflow with input: "${userInput}"` +
+            listSection +
+            `\n\nPlease determine:\n` +
+            `1. If any existing workflow matches the user's intent, read its script and evaluate suitability.\n` +
+            `2. If matched, list matches and ask the user to confirm: use existing or create new.\n` +
+            `3. If no match, use workflow-generate to create a new temporary workflow.\n` +
+            `4. Before execution, ALWAYS show the script path and wait for user confirmation.`,
           );
           return;
         }
@@ -328,4 +399,70 @@ export function registerWorkflowCommands(
       );
     },
   });
+}
+
+// ── Shared workflow file operations ──────────────────────────────
+
+const TMP_DIR = resolve(".pi/workflows/.tmp");
+const SAVED_DIR = resolve(".pi/workflows");
+
+/**
+ * Save a temporary workflow to the saved directory.
+ * Moves .pi/workflows/.tmp/{name}.js → .pi/workflows/{newName||name}.js
+ */
+export async function saveWorkflow(tmpName: string, newName?: string): Promise<string> {
+  const workflows = await loadWorkflows();
+  const target = workflows.find(
+    (wf) => wf.source === "tmp" && wf.name === tmpName,
+  );
+  if (!target) {
+    throw new Error(`Temporary workflow '${tmpName}' not found`);
+  }
+
+  const destName = newName ?? tmpName;
+  const destPath = resolve(SAVED_DIR, `${destName}.js`);
+
+  // Check destination exists (reject, not auto-rename)
+  try {
+    accessSync(destPath);
+    // If accessSync doesn't throw, file exists
+    throw new Error(`'${destName}' already exists in saved workflows. Use --as to save with a different name.`);
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message.includes("already exists")) {
+      throw err;
+    }
+    // accessSync threw because file doesn't exist — proceed
+  }
+
+  mkdirSync(SAVED_DIR, { recursive: true });
+
+  renameSync(target.path, destPath);
+  return `Saved '${tmpName}' → '${destName}' (${destPath})`;
+}
+
+/**
+ * Delete a workflow script file.
+ * Rejects if the workflow is currently running.
+ */
+export function deleteWorkflow(
+  name: string,
+  isRunning: (name: string) => boolean,
+): string {
+  if (isRunning(name)) {
+    throw new Error(`Cannot delete '${name}': workflow is currently running. Abort it first.`);
+  }
+
+  const candidates = [
+    resolve(TMP_DIR, `${name}.js`),
+    resolve(SAVED_DIR, `${name}.js`),
+  ];
+
+  for (const filePath of candidates) {
+    if (existsSync(filePath)) {
+      unlinkSync(filePath);
+      return `Deleted workflow '${name}' (${filePath})`;
+    }
+  }
+
+  throw new Error(`Workflow file '${name}' not found`);
 }
