@@ -11,6 +11,8 @@
  *   agents.ts — agent discovery from .md files
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
@@ -50,6 +52,7 @@ import {
 	MAX_PARALLEL_TASKS,
 	type OnUpdateCallback,
 	type SpawnManager,
+	resolveMemorySessionFile,
 } from "./spawn.js";
 import { Container, Spacer } from "@mariozechner/pi-tui";
 import { getMarkdownTheme } from "@mariozechner/pi-coding-agent";
@@ -96,23 +99,34 @@ const SubagentParams = Type.Object({
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
 	),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
+	memory: Type.Optional(Type.String({
+		description: [
+			"Memory space identifier for persistent subagent sessions (single mode only).",
+			"Same identifier = same session across calls. First call forks from main session;",
+			"subsequent calls resume the subagent's own session (KV cache hit).",
+			"",
+			"Use when: multi-turn complex tasks, deep project understanding needed.",
+			"Don't use when: one-shot tasks, simple grep/format, low complexity.",
+		].join("\n"),
+	})),
 });
 
 export default function subagentExtension(pi: ExtensionAPI) {
 	// Session-scoped state: each session gets its own SpawnManager and captured ID.
 	// Using Map keyed by sessionId ensures Session A cannot affect Session B.
-	const sessionStates = new Map<string, { spawnManager: SpawnManager; capturedSessionId: string; timerIntervals: Set<ReturnType<typeof setInterval>> }>();
+	const sessionStates = new Map<string, { spawnManager: SpawnManager; capturedSessionId: string; timerIntervals: Set<ReturnType<typeof setInterval>>; memoryFiles: Set<string> }>();
 	// Track the most recent session ID for cleanup during session_shutdown
 	// (SessionShutdownEvent doesn't carry sessionManager)
 	let lastSessionId = "";
 
 	function getSessionState(sessionId: string) {
-		let state = sessionStates.get(sessionId);
+	let state = sessionStates.get(sessionId);
 		if (!state) {
 			state = {
 				spawnManager: createSpawnManager(pi),
 				capturedSessionId: "",
 				timerIntervals: new Set(),
+				memoryFiles: new Set(),
 			};
 			sessionStates.set(sessionId, state);
 		}
@@ -162,11 +176,26 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			"  Defaults by complexity: low\u2192high, medium\u2192high, high\u2192max.",
 			"  All models always have thinking enabled. \"high\" = standard reasoning, \"max\" = maximum reasoning.",
 			"",
-			"BACKGROUND MODE: Set background: true (single mode only) to run a subagent without blocking.",
+				"BACKGROUND MODE: Set background: true (single mode only) to run a subagent without blocking.",
 			"  - Returns a Job ID immediately; the main agent can continue working on other tasks.",
 			"  - Results are automatically injected when the subagent completes.",
 			"",
 			buildModelsHintFromConfig(),
+			"",
+			"MEMORY MODE (single mode only):",
+			'  Set memory: "<identifier>" to give the subagent a persistent session.',
+			"  Same identifier = same session across calls. First call forks from main session;",
+			"  subsequent calls resume the subagent's own session (KV cache hits, lower cost).",
+			"",
+			"  Use memory when:",
+			"    - Multi-turn iteration (architecture analysis -> implementation -> fix)",
+			"    - Subagent needs deep project understanding (design decisions, code conventions)",
+			"    - Main agent context is near-full, offload work to a remembered agent",
+			"",
+			"  Don't use memory when:",
+			"    - One-shot tasks (grep, format, batch replace)",
+			"    - Independent code review (system prompt is sufficient)",
+			"    - Low complexity tasks (session overhead not worth it)",
 			"",
 			"QUICK EXAMPLES:",
 			'  { agent: "general-purpose", task: "analyze X", taskComplexity: "medium" }',
@@ -329,6 +358,57 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
 					return base;
 				};
+
+			// ── Memory mode validation ──
+			const memoryParam = params.memory?.trim();
+			if (memoryParam) {
+				if (isBackground) {
+					return {
+						content: [{ type: "text", text: "ERROR: 'memory' is not supported in background mode. Use single mode for persistent sessions." }],
+						details: makeDetails("single")([]),
+						isError: true,
+					};
+				}
+				if (hasTasks) {
+					return {
+						content: [{ type: "text", text: "ERROR: 'memory' is not supported in parallel mode. Use single mode for persistent sessions." }],
+						details: makeDetails("parallel")([]),
+						isError: true,
+					};
+				}
+				if (hasChain) {
+					return {
+						content: [{ type: "text", text: "ERROR: 'memory' is not supported in chain mode. Use single mode for persistent sessions." }],
+						details: makeDetails("chain")([]),
+						isError: true,
+					};
+				}
+			}
+
+			// Compute memory session info
+			let memorySession: { filePath: string; mainSessionFile: string; action: "create" | "resume" } | undefined;
+			if (memoryParam) {
+				const mainSessionFile = ctx.sessionManager.getSessionFile();
+				if (!mainSessionFile) {
+					return {
+						content: [{ type: "text", text: "ERROR: 'memory' requires a file-backed session. Current session is in-memory." }],
+						details: makeDetails("single")([]),
+						isError: true,
+					};
+				}
+				const filePath = resolveMemorySessionFile(mainSessionFile, memoryParam);
+				if (!filePath) {
+					return {
+						content: [{ type: "text", text: "ERROR: Failed to resolve memory session file path." }],
+						details: makeDetails("single")([]),
+						isError: true,
+					};
+				}
+				const action = fs.existsSync(filePath) ? "resume" : "create";
+				memorySession = { filePath, mainSessionFile, action };
+				// Track for cleanup on session_shutdown
+				getSessionState(ctx.sessionManager.getSessionId()).memoryFiles.add(filePath);
+			}
 
 			if (modeCount !== 1) {
 				const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
@@ -522,20 +602,32 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			if (params.agent && params.task) {
 				const result = await spawnManager.runSingleAgent(
 					ctx.cwd, agents, params.agent, params.task,
-					resolvedModel, params.cwd, undefined, signal, onUpdate, makeDetails("single"), resolvedThinking,
+					resolvedModel, params.cwd, undefined, signal, onUpdate, makeDetails("single"), resolvedThinking, memorySession,
 				);
 				const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
 				if (isError) {
 					const errorMsg = result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+					const details = makeDetails("single")([result]);
+					if (memorySession) {
+						details.memoryId = memoryParam;
+						details.memoryAction = memorySession.action;
+						details.memoryFile = memorySession.filePath;
+					}
 					return {
 						content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
-						details: makeDetails("single")([result]),
+						details,
 						isError: true,
 					};
 				}
+				const details = makeDetails("single")([result]);
+				if (memorySession) {
+					details.memoryId = memoryParam;
+					details.memoryAction = memorySession.action;
+					details.memoryFile = memorySession.filePath;
+				}
 				return {
 					content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
-					details: makeDetails("single")([result]),
+					details,
 				};
 			}
 
@@ -611,6 +703,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			// Single mode
 			const agentName = args.agent || "...";
 			const preview = args.task ? (args.task.length > 60 ? `${args.task.slice(0, 60)}...` : args.task) : "...";
+			const memory = args.memory as string | undefined;
+			const memoryPart = memory ? theme.fg("accent", ` [mem:${memory.length > 20 ? memory.slice(0, 20) + "..." : memory}]`) : "";
 			let text =
 				headerPrefix +
 				theme.fg("toolTitle", theme.bold("single")) +
@@ -618,7 +712,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
 				`  ${theme.fg("accent", agentName)}` +
 				theme.fg("muted", ` [${scope}]`) +
 				modelDisplay +
-				bg;
+				bg +
+				memoryPart;
 			text += `\n  ${theme.fg("dim", preview)}`;
 			return new Text(text, 0, 0);
 		},
@@ -665,10 +760,29 @@ export default function subagentExtension(pi: ExtensionAPI) {
 				const elapsed = view.status === "running" && view.duration.durationMs === undefined
 					? formatDuration(Date.now() - view.duration.startTime)
 					: undefined;
-				if (expanded) {
-					return renderAgentDetail(view, theme, mdTheme, { showTask: true, sessionShortId: sid });
+
+				// Memory indicator prefix
+				let memoryPrefix = "";
+				if (details.memoryId) {
+					const action = details.memoryAction === "create" ? "created" : "resumed";
+					const fileName = details.memoryFile ? path.basename(details.memoryFile) : details.memoryId;
+					memoryPrefix = theme.fg("accent", `[memory: ${details.memoryId} → ${fileName} (${action})]`) + "\n";
 				}
-				return new Text(renderSingleCollapsedText(view, theme, sid, elapsed), 0, 0);
+
+				if (expanded) {
+					const detailContainer = renderAgentDetail(view, theme, mdTheme, { showTask: true, sessionShortId: sid });
+					if (memoryPrefix) {
+						const wrapper = new Container();
+						wrapper.addChild(new Text(memoryPrefix, 0, 0));
+						wrapper.addChild(new Spacer(1));
+						for (const child of detailContainer.children) {
+							wrapper.addChild(child);
+						}
+						return wrapper;
+					}
+					return detailContainer;
+				}
+				return new Text(memoryPrefix + renderSingleCollapsedText(view, theme, sid, elapsed), 0, 0);
 			}
 
 			if (details.mode === "chain") {
@@ -740,6 +854,11 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			}
 			state.timerIntervals.clear();
 			state.spawnManager.cleanupAllJobs();
+			// Clean up memory session files
+			for (const memoryFile of state.memoryFiles) {
+				try { fs.unlinkSync(memoryFile); } catch { /* file may already be gone */ }
+			}
+			state.memoryFiles.clear();
 			sessionStates.delete(sessionId);
 		}
 	});

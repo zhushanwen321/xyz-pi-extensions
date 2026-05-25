@@ -16,7 +16,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { AgentToolResult } from "@mariozechner/pi-coding-agent";
 import type { Message } from "@mariozechner/pi-ai";
@@ -241,6 +241,48 @@ export function parseOutputFileSmall(
 
 export type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
+// ──────────────────────── Memory session types ────────────────────────
+
+export interface MemorySession {
+	/** Path to the memory session file (our naming convention) */
+	filePath: string;
+	/** Path to the main session file (source for first-time copy) */
+	mainSessionFile: string;
+	/** "create" = copy main file first, "resume" = file already exists */
+	action: "create" | "resume";
+}
+
+/** Short hash of input for collision resistance (first 8 hex chars of sha256) */
+function shortHash(input: string): string {
+	return createHash("sha256").update(input).digest("hex").slice(0, 8);
+}
+
+/**
+ * Sanitize memory identifier for use in filenames.
+ * Replaces non-[a-zA-Z0-9_-] with _, truncates readable part to 56 chars,
+ * then appends 8-char hash of original input for collision resistance.
+ */
+export function sanitizeMemoryId(memory: string): string {
+	const sanitized = memory.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 56);
+	return `${sanitized}_${shortHash(memory)}`;
+}
+
+/**
+ * Compute memory session file path from main session file and memory identifier.
+ * Convention: {mainBasename}.mem-{sanitized}.jsonl in the same directory.
+ * Returns undefined if main session has no file (in-memory session).
+ */
+export function resolveMemorySessionFile(
+	mainSessionFile: string | undefined,
+	memory: string,
+): string | undefined {
+	if (!mainSessionFile) return undefined;
+	const dir = path.dirname(mainSessionFile);
+	const base = path.basename(mainSessionFile, ".jsonl");
+	const sanitized = sanitizeMemoryId(memory);
+	return path.join(dir, `${base}.mem-${sanitized}.jsonl`);
+}
+
 // ──────────────────────── Factory ────────────────────────
 
 export interface SpawnManager {
@@ -256,6 +298,7 @@ export interface SpawnManager {
 		onUpdate: OnUpdateCallback | undefined,
 		makeDetails: (results: SingleResult[]) => SubagentDetails,
 		thinkingLevel?: ThinkingLevel,
+		memorySession?: MemorySession,
 	) => Promise<SingleResult>;
 
 	startBackgroundJob: (
@@ -401,6 +444,7 @@ export function createSpawnManager(pi: ExtensionAPI): SpawnManager {
 		onUpdate: OnUpdateCallback | undefined,
 		makeDetails: (results: SingleResult[]) => SubagentDetails,
 		thinkingLevel?: ThinkingLevel,
+		memorySession?: MemorySession,
 	): Promise<SingleResult> {
 		const agent = agents.find((a) => a.name === agentName);
 
@@ -422,7 +466,15 @@ export function createSpawnManager(pi: ExtensionAPI): SpawnManager {
 			};
 		}
 
-		const args: string[] = ["--mode", "json", "-p", "--no-session"];
+		const args: string[] = ["--mode", "json", "-p"];
+		if (memorySession) {
+			if (memorySession.action === "create") {
+				fs.copyFileSync(memorySession.mainSessionFile, memorySession.filePath);
+			}
+			args.push("--session", memorySession.filePath);
+		} else {
+			args.push("--no-session");
+		}
 		args.push("--model", resolvedModel);
 		if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 		if (thinkingLevel) args.push("--thinking", THINKING_TO_PI[thinkingLevel]);
