@@ -221,25 +221,22 @@ export default function workflowExtension(pi: ExtensionAPI) {
     name: "workflow",
     label: "Workflow",
     description:
-      "Multi-agent workflow orchestration. Create, manage, and trace multi-step agent workflows.\n\n" +
+      "Manage running workflow instances (pause, resume, abort, status).\n" +
+      "\n" +
+      "Do NOT use this tool to start a workflow — use `workflow-run` instead.\n" +
+      "This tool is for checking status or controlling already-running workflows.\n" +
+      "\n" +
       "Actions:\n" +
-      "  create   — Create a new workflow in 'created' status\n" +
-      "  start    — Transition created → running\n" +
-      "  pause    — Transition running → paused\n" +
-      "  resume   — Transition paused → running\n" +
-      "  complete — Transition running → completed (terminal)\n" +
-      "  fail     — Transition running → failed (terminal)\n" +
-      "  abort    — Transition running → aborted (terminal)\n" +
-      "  status   — List all workflows in current session\n\n" +
-      "State machine: created → running ↔ paused → completed/failed/aborted/budget_limited/time_limited\n" +
-      "Terminal states are irreversible.",
+      "  status   — List all workflow instances in current session\n" +
+      "  pause    — Pause a running workflow (preserves progress, terminates Worker)\n" +
+      "  resume   — Resume a paused workflow (replays callCache, skips completed agents)\n" +
+      "  abort    — Abort a running workflow (irreversible)\n",
     promptSnippet:
-      "Orchestrate multi-agent workflows with state persistence and execution tracing",
+      "Check workflow status, or pause/resume/abort a running workflow",
     promptGuidelines: [
-      "Use workflow when you need to orchestrate multiple agents in a multi-step process",
-      "Workflows have states: created → running ↔ paused → completed/failed/aborted/budget_limited/time_limited",
-      "Terminal states cannot be transitioned out of",
-      "State is persisted across session branches via Session JSONL entries",
+      "Use workflow tool for status checks and lifecycle control of running workflows",
+      "To START a new workflow, use workflow-run tool instead",
+      "Workflows can be paused and resumed across sessions",
     ],
     parameters: WorkflowParams,
 
@@ -492,14 +489,26 @@ export default function workflowExtension(pi: ExtensionAPI) {
     name: "workflow-run",
     label: "Workflow Run",
     description:
-      "Run a workflow in the background. Starts execution immediately and returns " +
-      "a runId without waiting for completion. Results are delivered as a custom " +
-      "message (workflow-result) when the workflow finishes.",
+      "Run a named workflow script in the background. The script runs in a Worker thread " +
+      "with agent()/parallel()/pipeline() APIs for multi-step agent orchestration.\n\n" +
+      "When to use workflow-run INSTEAD of subagent:\n" +
+      "  - The task follows a fixed, deterministic pipeline (not interactive)\n" +
+      "  - You need parallel() to run multiple agents concurrently on the SAME task\n" +
+      "  - The task should run in the background without blocking the conversation\n" +
+      "  - The user explicitly asks to run a workflow by name\n\n" +
+      "When to use subagent INSTEAD of workflow-run:\n" +
+      "  - The task is a one-off delegation (not a reusable pipeline)\n" +
+      "  - You need the agent to interact with the user\n" +
+      "  - You need chain/sequential modes with output passing\n" +
+      "  - The task doesn't match any existing workflow script\n\n" +
+      "Available workflows are discovered from .pi/workflows/ and ~/.pi/agent/workflows/. " +
+      "Returns immediately with a runId; results arrive asynchronously.",
     promptSnippet:
-      "Execute a workflow script with optional arguments and budget limits",
+      "Run a named workflow script with agent/parallel/pipeline APIs in background",
     promptGuidelines: [
-      "Use workflow-run to start workflows that execute in the background",
-      "The tool returns immediately with a runId; results arrive asynchronously",
+      "Use workflow-run for deterministic, non-interactive agent pipelines that run in the background",
+      "Prefer subagent for one-off tasks, interactive work, or tasks without a matching script",
+      "The tool returns immediately; workflow results arrive as a background message",
       "Optional --tokens and --time enforce budget limits",
     ],
     parameters: WorkflowRunParams,
