@@ -161,10 +161,41 @@ function renderStatusText(todoList: Todo[], th: Theme): string {
 	return th.fg("accent", "\u2611") + th.fg("muted", ` ${completed}/${total}`);
 }
 
-/** 更新状态栏 */
-function updateStatusLine(ctx: ExtensionContext): void {
-	const text = renderStatusText(todos, ctx.ui.theme);
-	ctx.ui.setStatus("todo", text || undefined);
+/** 渲染 widget 行 */
+function renderWidgetLines(todoList: Todo[], th: Theme): string[] {
+	if (todoList.length === 0) return [];
+
+	const lines: string[] = [];
+	const completed = todoList.filter((t) => getDisplayStatus(t) === "completed").length;
+	const total = todoList.length;
+
+	lines.push(th.fg("accent", "\u2611") + th.fg("muted", ` ${completed}/${total}`));
+
+	for (const t of todoList) {
+		const mark =
+			t.status === "completed"
+				? th.fg("success", "\u2713")
+				: t.status === "in_progress"
+					? th.fg("warning", "\u25cf")
+					: th.fg("dim", "\u25cb");
+		const id = th.fg("accent", `#${t.id}`);
+		const text = t.status === "completed" ? th.fg("dim", t.text) : th.fg("text", t.text);
+		lines.push(`  ${mark} ${id} ${text}`);
+	}
+
+	return lines;
+}
+
+/** 更新状态栏和 widget */
+function refreshDisplay(ctx: ExtensionContext): void {
+	const statusText = renderStatusText(todos, ctx.ui.theme);
+	ctx.ui.setStatus("todo", statusText || undefined);
+
+	if (todos.length === 0) {
+		ctx.ui.setWidget("todo", undefined);
+	} else {
+		ctx.ui.setWidget("todo", renderWidgetLines(todos, ctx.ui.theme));
+	}
 }
 
 // ── 模块级状态 ───────────────────────────────────────
@@ -404,7 +435,7 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 			};
 	}
 
-	updateStatusLine(ctx);
+	refreshDisplay(ctx);
 
 	return {
 		content: [{ type: "text" as const, text: resultText }],
@@ -503,7 +534,7 @@ export default function (pi: ExtensionAPI) {
 		todos = [];
 		nextId = 1;
 
-		const entries = ctx.sessionManager.getBranch();
+		const entries = ctx.sessionManager.getEntries();
 		let latestIdx = -1;
 
 		for (let i = 0; i < entries.length; i++) {
@@ -538,11 +569,11 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		reconstructState(ctx);
-		updateStatusLine(ctx);
+		refreshDisplay(ctx);
 	});
 	pi.on("session_tree", async (_event, ctx) => {
 		reconstructState(ctx);
-		updateStatusLine(ctx);
+		refreshDisplay(ctx);
 	});
 
 	pi.registerTool({
