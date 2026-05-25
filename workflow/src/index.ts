@@ -15,6 +15,8 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { resolve as pathResolve } from "node:path";
 
 import {
   type WorkflowInstance,
@@ -33,6 +35,7 @@ import {
   type WorkflowCommandsState,
 } from "./commands.js";
 import { renderWorkflowList, registerWorkflowShortcuts } from "./widget.js";
+import { loadWorkflows, invalidateCache } from "./config-loader.js";
 
 // ── Parameter schema ──────────────────────────────────────────
 
@@ -614,4 +617,101 @@ export default function workflowExtension(pi: ExtensionAPI) {
 
   registerWorkflowCommands(pi, orchestrators, cmdState);
   registerWorkflowShortcuts(pi, orchestrators, cmdState);
+
+  // ── Tool: workflow-generate ─────────────────────────────────
+
+  const WorkflowGenerateParams = Type.Object({
+    name: Type.String({ description: "Short name for the workflow (e.g. 'batch-review-src')" }),
+    script: Type.String({ description: "Complete JS workflow script content" }),
+    description: Type.Optional(Type.String({ description: "Workflow purpose description for list display" })),
+  });
+
+  pi.registerTool({
+    name: "workflow-generate",
+    label: "Workflow Generate",
+    description:
+      "Generate a temporary workflow script from AI-generated code. " +
+      "Writes the script to .pi/workflows/.tmp/ for execution. " +
+      "\n\nWhen to use: When the user describes a task in natural language via /workflow " +
+      "and no existing workflow matches. AI generates a JS script using agent()/parallel()/pipeline() APIs, " +
+      "then uses this tool to write it.\n" +
+      "\nIMPORTANT: Always show the generated script path to the user and wait for confirmation before executing.",
+    promptSnippet: "Generate a temporary workflow script from AI-generated code",
+    promptGuidelines: [
+      "Use when user describes a task via /workflow and no existing workflow matches",
+      "The script must export a 'meta' object with name, description, and phases",
+      "Always show the generated script path and wait for user confirmation before running",
+      "After user confirms, use workflow-run to execute the generated script",
+    ],
+    parameters: WorkflowGenerateParams,
+
+    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      const name = params.name as string;
+      const script = params.script as string;
+
+      // 1. Validate script contains meta export
+      if (!script.includes("const meta") && !script.includes("export const meta") && !script.includes("module.exports = { meta")) {
+        throw new Error(
+          "Script must contain a meta export: const meta = { name, description, phases }",
+        );
+      }
+
+      // 2. Syntax check via new Function (no execution)
+      try {
+        new Function(script);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(`Syntax error in script: ${msg}`);
+      }
+
+      // 3. Check name conflict with existing workflows
+      const existing = await loadWorkflows();
+      const conflict = existing.find((wf) => wf.name === name);
+      if (conflict) {
+        throw new Error(
+          `Name conflict: '${name}' already exists as [${conflict.source}] at ${conflict.path}. ` +
+          `Choose a different name.`,
+        );
+      }
+
+      // 4. Write to .tmp directory
+      const tmpDir = pathResolve(".pi/workflows/.tmp");
+      mkdirSync(tmpDir, { recursive: true });
+      const filePath = pathResolve(tmpDir, `${name}.js`);
+      writeFileSync(filePath, script, "utf-8");
+
+      // 5. Invalidate cache so the new script appears in listings
+      invalidateCache();
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Generated workflow script: ${filePath}\n` +
+              `Name: ${name}\n` +
+              `Show this path to the user and wait for confirmation before executing.`,
+          },
+        ],
+        details: {
+          action: "generate",
+          path: filePath,
+          name,
+          status: "ready",
+        },
+      };
+    },
+
+    renderCall(args, theme, _context) {
+      const name = args.name as string;
+      const text =
+        theme.fg("toolTitle", theme.bold("workflow-generate ")) +
+        theme.fg("accent", name);
+      return new Text(text, 0, 0);
+    },
+
+    renderResult(result, _options, _theme, _context) {
+      const text = result.content[0];
+      return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
+    },
+  });
 }

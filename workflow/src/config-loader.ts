@@ -21,11 +21,15 @@ export interface WorkflowMeta {
   phases: string[];
 }
 
+export type WorkflowSource = "saved" | "tmp";
+
 export interface CachedWorkflowMeta extends WorkflowMeta {
   /** Absolute path to the script file */
   path: string;
   /** false when the script failed to load or has no valid meta export */
   available: boolean;
+  /** Whether this is a saved (fixed) or temporary (ad-hoc) workflow */
+  source: WorkflowSource;
 }
 
 // ── Internal types ────────────────────────────────────────────
@@ -153,7 +157,7 @@ function extractMetaViaWorker(scriptPath: string): Promise<WorkerResult> {
  * Scan a single directory for workflow script files and extract their meta.
  * Silently returns an empty array if the directory does not exist.
  */
-async function scanDirectory(dirPath: string): Promise<CachedWorkflowMeta[]> {
+async function scanDirectory(dirPath: string, source: WorkflowSource): Promise<CachedWorkflowMeta[]> {
   try {
     await access(dirPath);
   } catch {
@@ -178,6 +182,7 @@ async function scanDirectory(dirPath: string): Promise<CachedWorkflowMeta[]> {
         phases: result.meta.phases,
         path: filePath,
         available: true,
+        source,
       });
     } else {
       // Import failed — mark as unavailable but still include in listing
@@ -187,6 +192,7 @@ async function scanDirectory(dirPath: string): Promise<CachedWorkflowMeta[]> {
         phases: [],
         path: filePath,
         available: false,
+        source,
       });
     }
   }
@@ -207,25 +213,31 @@ async function scanDirectory(dirPath: string): Promise<CachedWorkflowMeta[]> {
  */
 export async function loadWorkflows(): Promise<CachedWorkflowMeta[]> {
   const projectDir = resolve(".pi/workflows");
-  const [projectWorkflows, userWorkflows] = await Promise.all([
-    scanDirectory(projectDir),
-    scanDirectory(USER_DIR),
+  const tmpDir = resolve(".pi/workflows/.tmp");
+  const [projectWorkflows, userWorkflows, tmpWorkflows] = await Promise.all([
+    scanDirectory(projectDir, "saved"),
+    scanDirectory(USER_DIR, "saved"),
+    scanDirectory(tmpDir, "tmp"),
   ]);
 
-  // Deduplicate: project-level takes priority
-  const seen = new Set<string>();
-  const merged: CachedWorkflowMeta[] = [];
+  // Deduplicate by priority: tmp > project > user
+  // Use a Map keyed by name — later entries overwrite earlier ones
+  const mergedMap = new Map<string, CachedWorkflowMeta>();
 
-  for (const wf of projectWorkflows) {
-    seen.add(wf.name);
-    merged.push(wf);
-  }
+  // Lowest priority first: user-level
   for (const wf of userWorkflows) {
-    if (!seen.has(wf.name)) {
-      seen.add(wf.name);
-      merged.push(wf);
-    }
+    if (wf.available) mergedMap.set(wf.name, wf);
   }
+  // Project-level overrides user-level
+  for (const wf of projectWorkflows) {
+    if (wf.available) mergedMap.set(wf.name, wf);
+  }
+  // Tmp overrides everything
+  for (const wf of tmpWorkflows) {
+    if (wf.available) mergedMap.set(wf.name, wf);
+  }
+
+  const merged = Array.from(mergedMap.values());
 
   // Update cache
   const now = Date.now();
