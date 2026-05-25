@@ -490,6 +490,7 @@ export function createSpawnManager(pi: ExtensionAPI): SpawnManager {
 			stderr: "",
 			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 			model: resolvedModel,
+			thinkingLevel: thinkingLevel ?? undefined,
 			step,
 			startTime: Date.now(),
 			lastActivityTime: Date.now(),

@@ -23,7 +23,8 @@
   "include": [
     "goal/**/*.ts",
     "todo/**/*.ts",
-    "subagent/**/*.ts"
+    "subagent/**/*.ts",
+    "workflow/**/*.ts"
   ],
   "exclude": [
     "node_modules",
