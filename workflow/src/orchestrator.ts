@@ -49,6 +49,8 @@ export interface WorkflowInstanceSummary {
   traceLength: number;
   cachedCalls: number;
   budget: WorkflowBudget;
+  /** Full trace nodes for live progress rendering */
+  traceNodes: ExecutionTraceNode[];
 }
 
 // ── Internal types ────────────────────────────────────────────
@@ -98,6 +100,8 @@ export class WorkflowOrchestrator {
   private readonly agentPool: AgentPool;
   private readonly pi: ExtensionAPI;
   private readonly ctx: ExtensionContext;
+  /** Called after every trace node state change for live TUI updates */
+  onTraceUpdate?: (runId: string) => void;
 
   constructor(
     pi: ExtensionAPI,
@@ -127,7 +131,9 @@ export class WorkflowOrchestrator {
       throw new Error(`Workflow '${name}' not found or unavailable`);
     }
 
-    const scriptSource = fs.readFileSync(workflow.path, "utf-8");
+    // Read and normalize script: strip 'export' from 'export const meta' for CJS Worker
+    let scriptSource = fs.readFileSync(workflow.path, "utf-8");
+    scriptSource = scriptSource.replace(/\bexport\s+const\s+meta\b/, "const meta");
     const runId = `wf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const instance = createInstance({
@@ -300,6 +306,7 @@ export class WorkflowOrchestrator {
       traceLength: inst.trace.length,
       cachedCalls: inst.callCache.size,
       budget: inst.budget,
+      traceNodes: inst.trace,
     }));
   }
 
@@ -323,11 +330,14 @@ export class WorkflowOrchestrator {
   ): void {
     const workerCode = buildWorkerScript(scriptSource);
 
+    // Inject runId into args so .then()/.catch() can send it back
+    const workerArgs = { ...args, _runId: runId };
+
     const worker = new Worker(workerCode, {
       eval: true,
       workerData: {
         scriptPath: instance.worker,
-        args,
+        args: workerArgs,
         callCache: instance.callCache,
         budget: instance.budget,
         workspace: process.cwd(),
@@ -392,6 +402,7 @@ export class WorkflowOrchestrator {
         transitionStatus(instance, "completed");
         this.workers.delete(runId);
         this.persistState();
+        this.onTraceUpdate?.(runId);
         break;
       case "error":
         this.handleScriptError(runId, msg.error);
@@ -428,6 +439,7 @@ export class WorkflowOrchestrator {
     };
     instance.trace.push(node);
     appendTraceNode(this.pi, runId, node);
+    this.onTraceUpdate?.(runId);
 
     // Enqueue via AgentPool with retry
     this.executeWithRetry(runId, callId, opts, instance, node);
@@ -488,6 +500,7 @@ export class WorkflowOrchestrator {
       this.checkBudget(runId);
 
       this.persistState();
+      this.onTraceUpdate?.(runId);
     });
   }
 
