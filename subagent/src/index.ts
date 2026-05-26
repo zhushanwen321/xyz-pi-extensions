@@ -654,9 +654,22 @@ export default function subagentExtension(pi: ExtensionAPI) {
 		renderCall(args, theme, context) {
 			const scope: AgentScope = args.agentScope ?? "user";
 			const complexity = args.taskComplexity as string | undefined;
-			const model = args.model || (complexity ? `auto:${complexity}` : "?");
+			const explicitModel = args.model as string | undefined;
 			const thinking = args.thinkingLevel as string | undefined;
-			const modelDisplay = thinking ? theme.fg("dim", ` ${model}/${thinking}`) : theme.fg("dim", ` ${model}`);
+
+			// renderCall 在模型解析之前，无法知道实际模型。
+			// taskComplexity 路径显示 complexity level，explicit model 路径显示实际模型名。
+			let modelDisplay: string;
+			if (explicitModel) {
+				modelDisplay = thinking
+					? theme.fg("dim", ` ${explicitModel}/${thinking}`)
+					: theme.fg("dim", ` ${explicitModel}`);
+			} else if (complexity) {
+				const defaultThinking = COMPLEXITY_DEFAULT_THINKING[complexity as TaskComplexity];
+				modelDisplay = theme.fg("dim", ` complexity:${complexity}/${thinking ?? defaultThinking}`);
+			} else {
+				modelDisplay = theme.fg("dim", " (no model)");
+			}
 			const bg = args.background ? theme.fg("warning", " [bg]") : "";
 
 			// Extract session short ID from render context for display
