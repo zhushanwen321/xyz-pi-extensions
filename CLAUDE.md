@@ -17,6 +17,7 @@ Pi coding agent 的扩展工具箱。每个扩展是一个独立可安装的 Pi 
   - [001-subagent-architecture.md](./docs/adr/001-subagent-architecture.md) — Subagent 进程隔离、上下文传递、background 模式、能力边界、模型选择
   - [002-goal-7-state-machine.md](./docs/adr/002-goal-7-state-machine.md) — Goal 为什么有 7 种状态（time_limited + cancelled），以及为什么没有 usage_limited
   - [003-evidence-based-completion.md](./docs/adr/003-evidence-based-completion.md) — Goal 为什么强制任务分解 + evidence，以及代价
+- `.xyz-harness/` — xyz-harness 工作流产出物（spec、plan、test cases），按 `<date>-<slug>/` 组织，应纳入版本控制
 
 ## 技术栈
 
