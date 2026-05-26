@@ -59,8 +59,9 @@ function nodeColor(node: { status: string }, theme: Theme): string {
 // ── setWidget renderer: workflow list overview ─────────────────
 
 /**
- * Render a compact overview of all workflow instances.
+ * Render a compact overview of all workflow instances with trace progress.
  * Returns an array of lines suitable for ctx.ui.setWidget().
+ * Similar to subagent's collapsed parallel view.
  */
 export function renderWorkflowList(
   instances: WorkflowInstanceSummary[],
@@ -79,9 +80,35 @@ export function renderWorkflowList(
           ? `${((Date.now() - new Date(inst.startedAt).getTime()) / 1000).toFixed(0)}s`
           : "-";
 
+    // Header line: status + name + elapsed + budget
+    const completedNodes = inst.traceNodes?.filter((n) => n.status === "completed").length ?? 0;
+    const totalNodes = inst.traceNodes?.length ?? 0;
+    const progress = totalNodes > 0 ? ` ${completedNodes}/${totalNodes} agents` : "";
+
     lines.push(
-      `${statusColor(inst.status, theme)} ${theme.fg("accent", inst.name)} ${theme.fg("dim", elapsed)} ${theme.fg("muted", `${inst.traceLength} nodes`)}`,
+      `${statusColor(inst.status, theme)} ${theme.fg("accent", inst.name)} ${theme.fg("dim", elapsed)}${theme.fg("muted", progress)}`,
     );
+
+    // Trace node lines (like subagent collapsed view)
+    if (inst.traceNodes && inst.traceNodes.length > 0) {
+      for (const node of inst.traceNodes) {
+        const icon = node.status === "completed" ? "\u2705"
+          : node.status === "running" ? "\u23F3"
+          : node.status === "failed" ? "\u274C"
+          : "\u25CB";
+        const nodeDuration =
+          node.startedAt && node.completedAt
+            ? `${((new Date(node.completedAt).getTime() - new Date(node.startedAt).getTime()) / 1000).toFixed(1)}s`
+            : node.startedAt
+              ? `${((Date.now() - new Date(node.startedAt).getTime()) / 1000).toFixed(0)}s...`
+              : "";
+        const taskPreview =
+          node.task.length > 60 ? `${node.task.slice(0, 60)}...` : node.task;
+        lines.push(
+          `  ${icon} ${theme.fg("dim", `#${node.stepIndex}`)} ${theme.fg("muted", taskPreview)} ${theme.fg("dim", nodeDuration)}`,
+        );
+      }
+    }
   }
   return lines;
 }
