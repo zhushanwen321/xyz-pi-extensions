@@ -1,0 +1,8 @@
+{
+  "name": "pi-extension-usage-tracker",
+  "version": "0.1.0",
+  "description": "Passive skill & agent usage counter for Pi — tracks full-text skill loads and agent invocations across sessions.",
+  "main": "src/index.ts",
+  "keywords": ["pi", "extension", "usage", "tracker", "analytics"],
+  "license": "MIT"
+}

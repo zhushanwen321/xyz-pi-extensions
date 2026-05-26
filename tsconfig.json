@@ -24,6 +24,7 @@
     "goal/**/*.ts",
     "todo/**/*.ts",
     "subagent/**/*.ts",
+    "usage-tracker/**/*.ts",
     "workflow/**/*.ts"
   ],
   "exclude": [
