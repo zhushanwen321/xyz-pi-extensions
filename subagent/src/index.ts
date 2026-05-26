@@ -15,8 +15,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import { type ExtensionAPI, getMarkdownTheme } from "@mariozechner/pi-coding-agent";
+import { Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { type AgentScope, discoverAgents } from "./agents.js";
 import {
@@ -63,8 +63,6 @@ import {
 	VISION_ALLOWED_TOOLS,
 	VISION_SYSTEM_PROMPT,
 } from "./vision.js";
-import { Container, Spacer } from "@mariozechner/pi-tui";
-import { getMarkdownTheme } from "@mariozechner/pi-coding-agent";
 
 // ──────────────────────── Tool parameters ────────────────────────
 
