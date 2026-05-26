@@ -15,27 +15,22 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { resolve as pathResolve } from "node:path";
 
 import {
   type WorkflowInstance,
   type WorkflowStatus,
   ENTRY_TYPE,
-  serializeState,
   deserializeState,
-  createInstance as createWorkflowInstance,
   transitionStatus,
   isTerminal,
 } from "./state.js";
-import { WorkflowOrchestrator } from "./orchestrator.js";
+import { WorkflowOrchestrator, type WorkflowInstanceSummary } from "./orchestrator.js";
 import {
   registerWorkflowCommands,
-  sendCompletionNotification,
   type WorkflowCommandsState,
 } from "./commands.js";
 import { renderWorkflowList, registerWorkflowShortcuts } from "./widget.js";
-import { loadWorkflows, invalidateCache } from "./config-loader.js";
+import { registerGenerateTool } from "./tool-generate.js";
 
 // ── Parameter schema ──────────────────────────────────────────
 
@@ -73,35 +68,21 @@ interface WorkflowDetails {
   instances: InstanceSummary[];
   _render?: {
     type: "summary-table";
-    summary?: string;
     data: {
-      columns: string[];
+      title: string;
+      columns: Array<{ key: string; label: string; width?: number; valueType?: "text" | "status" | "duration" | "number" }>;
       rows: Record<string, unknown>[];
     };
+    summary?: string;
   };
 }
 
 // ── Extension factory ─────────────────────────────────────────
 
 export default function workflowExtension(pi: ExtensionAPI) {
-  // Session-scoped state: Map<sessionId, Map<runId, WorkflowInstance>>
-  const sessionStates = new Map<string, Map<string, WorkflowInstance>>();
   let lastSessionId = "";
   const orchestrators = new Map<string, WorkflowOrchestrator>();
   const cmdState: WorkflowCommandsState = { lastRunId: null };
-
-  function getSessionState(sessionId: string): Map<string, WorkflowInstance> {
-    let state = sessionStates.get(sessionId);
-    if (!state) {
-      state = new Map();
-      sessionStates.set(sessionId, state);
-    }
-    return state;
-  }
-
-  function persistState(instances: Map<string, WorkflowInstance>): void {
-    pi.appendEntry(ENTRY_TYPE, serializeState(instances));
-  }
 
   /**
    * Rebuild workflow state from Session JSONL custom entries.
@@ -131,9 +112,9 @@ export default function workflowExtension(pi: ExtensionAPI) {
   // ── Build _render descriptor ────────────────────────────────
 
   function buildRender(
-    instances: Map<string, WorkflowInstance>,
+    summaries: WorkflowInstanceSummary[],
   ): WorkflowDetails["_render"] {
-    const items = Array.from(instances.values());
+    const items = summaries;
     const active = items.filter(
       (i) => i.status === "running" || i.status === "paused",
     ).length;
@@ -142,7 +123,13 @@ export default function workflowExtension(pi: ExtensionAPI) {
       type: "summary-table",
       summary: `${items.length} workflows: ${active} active, ${finished} finished`,
       data: {
-        columns: ["Name", "Status", "Worker", "Duration"],
+        title: "Workflows",
+        columns: [
+          { key: "name", label: "Name", valueType: "text" },
+          { key: "status", label: "Status", valueType: "status" },
+          { key: "worker", label: "Worker", valueType: "text" },
+          { key: "duration", label: "Duration", valueType: "duration" },
+        ],
         rows: items.map((inst) => {
           const duration =
             inst.startedAt && inst.completedAt
@@ -150,20 +137,20 @@ export default function workflowExtension(pi: ExtensionAPI) {
               : inst.startedAt
                 ? `${((Date.now() - new Date(inst.startedAt).getTime()) / 1000).toFixed(0)}s (running)`
                 : "-";
-          return { Name: inst.name, Status: inst.status, Worker: inst.worker, Duration: duration };
+          return { name: inst.name, status: inst.status, worker: inst.worker, duration };
         }),
       },
     };
   }
 
-  function toInstanceSummary(inst: WorkflowInstance): InstanceSummary {
+  function toInstanceSummary(summary: WorkflowInstanceSummary): InstanceSummary {
     return {
-      runId: inst.runId,
-      name: inst.name,
-      status: inst.status,
-      startedAt: inst.startedAt,
-      completedAt: inst.completedAt,
-      error: inst.error,
+      runId: summary.runId,
+      name: summary.name,
+      status: summary.status,
+      startedAt: summary.startedAt,
+      completedAt: summary.completedAt,
+      error: summary.error,
     };
   }
 
@@ -173,13 +160,13 @@ export default function workflowExtension(pi: ExtensionAPI) {
     const sessionId = ctx.sessionManager.getSessionId();
     lastSessionId = sessionId;
 
-    // Reconstruct state-machine instances
-    const instances = reconstructState(ctx);
-    sessionStates.set(sessionId, instances);
-
-    // Create orchestrator (separate from state-machine instances)
+    // Create orchestrator (sole instance holder)
     const orch = new WorkflowOrchestrator(pi, ctx);
     orchestrators.set(sessionId, orch);
+
+    // Restore reconstructed state into orchestrator
+    const instances = reconstructState(ctx);
+    orch.restoreInstances(instances);
 
     // Live progress: refresh widget on every trace node change
     orch.onTraceUpdate = (_runId) => {
@@ -198,12 +185,14 @@ export default function workflowExtension(pi: ExtensionAPI) {
   pi.on("session_tree", async (_event, ctx) => {
     const sessionId = ctx.sessionManager.getSessionId();
     lastSessionId = sessionId;
-    const instances = reconstructState(ctx);
-    sessionStates.set(sessionId, instances);
 
-    // Re-create orchestrator for the new session context
+    // Create orchestrator for the new session context
     const orch = new WorkflowOrchestrator(pi, ctx);
     orchestrators.set(sessionId, orch);
+
+    // Restore reconstructed state into orchestrator
+    const instances = reconstructState(ctx);
+    orch.restoreInstances(instances);
 
     // Live progress: refresh widget on every trace node change
     orch.onTraceUpdate = (_runId) => {
@@ -219,6 +208,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
+    // Note: Pi's session_shutdown event does not pass ctx, so we use lastSessionId
     const sessionId = lastSessionId;
     // Pause running orchestrators before cleanup
     const orch = orchestrators.get(sessionId);
@@ -228,7 +218,6 @@ export default function workflowExtension(pi: ExtensionAPI) {
         orch.pause(inst.runId);
       }
     }
-    sessionStates.delete(sessionId);
     orchestrators.delete(sessionId);
   });
 
@@ -260,7 +249,10 @@ export default function workflowExtension(pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const sessionId = ctx.sessionManager.getSessionId();
       lastSessionId = sessionId;
-      const instances = getSessionState(sessionId);
+      const orch = orchestrators.get(sessionId);
+      if (!orch) {
+        throw new Error("Workflow orchestrator not initialized");
+      }
       const action = params.action as string;
 
       switch (action) {
@@ -279,7 +271,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
             `wf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           const worker = (params.worker as string | undefined) ?? "general-purpose";
 
-          const instance = createWorkflowInstance({
+          orch.createInstance({
             runId,
             name,
             worker,
@@ -290,17 +282,15 @@ export default function workflowExtension(pi: ExtensionAPI) {
             },
           });
 
-          instances.set(runId, instance);
-          persistState(instances);
-
+          const summaries = orch.list();
           return {
             content: [
               { type: "text" as const, text: `Created workflow: ${name} (${runId}) [created]` },
             ],
             details: {
               action: "create",
-              instances: Array.from(instances.values()).map(toInstanceSummary),
-              _render: buildRender(instances),
+              instances: summaries.map(toInstanceSummary),
+              _render: buildRender(summaries),
             } satisfies WorkflowDetails,
           };
         }
@@ -316,51 +306,16 @@ export default function workflowExtension(pi: ExtensionAPI) {
           if (!runId) {
             return {
               content: [{ type: "text" as const, text: "Error: 'runId' is required for this action" }],
-              details: { action, instances: Array.from(instances.values()).map(toInstanceSummary) } satisfies WorkflowDetails,
+              details: { action, instances: orch.list().map(toInstanceSummary) } satisfies WorkflowDetails,
               isError: true,
             };
           }
 
-          // For pause/resume/abort: delegate to orchestrator if it manages this instance.
-          // The orchestrator handles Worker thread lifecycle (terminate/restart),
-          // not just state machine transitions.
-          if (action === "pause" || action === "resume" || action === "abort") {
-            const orch = orchestrators.get(sessionId);
-            if (orch?.getInstance(runId)) {
-              try {
-                if (action === "pause") orch.pause(runId);
-                else if (action === "resume") orch.resume(runId);
-                else orch.abort(runId);
-
-                persistState(instances);
-                const inst = orch.getInstance(runId)!;
-                return {
-                  content: [{
-                    type: "text" as const,
-                    text: `Workflow '${inst.name}' (${runId}): → ${inst.status}`,
-                  }],
-                  details: {
-                    action,
-                    instances: Array.from(instances.values()).map(toInstanceSummary),
-                    _render: buildRender(instances),
-                  } satisfies WorkflowDetails,
-                };
-              } catch (e) {
-                const msg = e instanceof Error ? e.message : String(e);
-                return {
-                  content: [{ type: "text" as const, text: `Error: ${msg}` }],
-                  details: { action, instances: Array.from(instances.values()).map(toInstanceSummary) } satisfies WorkflowDetails,
-                  isError: true,
-                };
-              }
-            }
-          }
-
-          const instance = instances.get(runId);
+          const instance = orch.getInstance(runId);
           if (!instance) {
             return {
               content: [{ type: "text" as const, text: `Error: workflow '${runId}' not found` }],
-              details: { action, instances: Array.from(instances.values()).map(toInstanceSummary) } satisfies WorkflowDetails,
+              details: { action, instances: orch.list().map(toInstanceSummary) } satisfies WorkflowDetails,
               isError: true,
             };
           }
@@ -378,11 +333,39 @@ export default function workflowExtension(pi: ExtensionAPI) {
           if (!targetStatus) {
             return {
               content: [{ type: "text" as const, text: `Error: unknown action '${action}'` }],
-              details: { action, instances: Array.from(instances.values()).map(toInstanceSummary) } satisfies WorkflowDetails,
+              details: { action, instances: orch.list().map(toInstanceSummary) } satisfies WorkflowDetails,
               isError: true,
             };
           }
 
+          // For pause/resume/abort: delegate to orchestrator (handles Worker lifecycle)
+          if (action === "pause" || action === "resume" || action === "abort") {
+            if (action === "abort" && (params.error as string | undefined)) {
+              instance.error = params.error as string;
+            }
+            try {
+              if (action === "pause") orch.pause(runId);
+              else if (action === "resume") orch.resume(runId);
+              else orch.abort(runId);
+
+              const summaries = orch.list();
+              return {
+                content: [{
+                  type: "text" as const,
+                  text: `Workflow '${instance.name}' (${runId}): → ${instance.status}`,
+                }],
+                details: {
+                  action,
+                  instances: summaries.map(toInstanceSummary),
+                  _render: buildRender(summaries),
+                } satisfies WorkflowDetails,
+              };
+            } catch {
+              // Orchestrator method failed — fall through to direct state machine
+            }
+          }
+
+          // Direct state machine transition (start/complete/fail, or orchestrator fallback)
           try {
             const oldStatus = instance.status;
             transitionStatus(instance, targetStatus);
@@ -390,6 +373,8 @@ export default function workflowExtension(pi: ExtensionAPI) {
             // Set timestamps
             if (targetStatus === "running" && oldStatus === "created") {
               instance.startedAt = new Date().toISOString();
+            } else if (targetStatus === "running" && oldStatus === "paused") {
+              instance.pausedAt = undefined;
             } else if (targetStatus === "paused") {
               instance.pausedAt = new Date().toISOString();
             } else if (isTerminal(targetStatus)) {
@@ -399,8 +384,9 @@ export default function workflowExtension(pi: ExtensionAPI) {
               }
             }
 
-            persistState(instances);
+            orch.persistState();
 
+            const summaries = orch.list();
             return {
               content: [
                 {
@@ -410,15 +396,15 @@ export default function workflowExtension(pi: ExtensionAPI) {
               ],
               details: {
                 action,
-                instances: Array.from(instances.values()).map(toInstanceSummary),
-                _render: buildRender(instances),
+                instances: summaries.map(toInstanceSummary),
+                _render: buildRender(summaries),
               } satisfies WorkflowDetails,
             };
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             return {
               content: [{ type: "text" as const, text: `Error: ${msg}` }],
-              details: { action, instances: Array.from(instances.values()).map(toInstanceSummary) } satisfies WorkflowDetails,
+              details: { action, instances: orch.list().map(toInstanceSummary) } satisfies WorkflowDetails,
               isError: true,
             };
           }
@@ -426,22 +412,22 @@ export default function workflowExtension(pi: ExtensionAPI) {
 
         // ── Status ──
         case "status": {
-          const items = Array.from(instances.values());
-          if (items.length === 0) {
+          const summaries = orch.list();
+          if (summaries.length === 0) {
             return {
               content: [{ type: "text" as const, text: "No workflows in current session." }],
-              details: { action: "status", instances: [], _render: buildRender(instances) } satisfies WorkflowDetails,
+              details: { action: "status", instances: [], _render: buildRender(summaries) } satisfies WorkflowDetails,
             };
           }
 
-          const text = items
-            .map((inst) => {
+          const text = summaries
+            .map((s) => {
               const duration =
-                inst.startedAt
-                  ? ` (${((Date.now() - new Date(inst.startedAt).getTime()) / 1000).toFixed(0)}s)`
+                s.startedAt
+                  ? ` (${((Date.now() - new Date(s.startedAt).getTime()) / 1000).toFixed(0)}s)`
                   : "";
-              return `[${inst.status}] ${inst.name} (${inst.runId.slice(0, 20)})${duration}` +
-                (inst.error ? ` error: ${inst.error}` : "");
+              return `[${s.status}] ${s.name} (${s.runId.slice(0, 20)})${duration}` +
+                (s.error ? ` error: ${s.error}` : "");
             })
             .join("\n");
 
@@ -449,8 +435,8 @@ export default function workflowExtension(pi: ExtensionAPI) {
             content: [{ type: "text" as const, text }],
             details: {
               action: "status",
-              instances: Array.from(instances.values()).map(toInstanceSummary),
-              _render: buildRender(instances),
+              instances: summaries.map(toInstanceSummary),
+              _render: buildRender(summaries),
             } satisfies WorkflowDetails,
           };
         }
@@ -458,7 +444,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
         default: {
           return {
             content: [{ type: "text" as const, text: `Unknown action: ${action}` }],
-            details: { action, instances: Array.from(instances.values()).map(toInstanceSummary) } satisfies WorkflowDetails,
+            details: { action, instances: orch.list().map(toInstanceSummary) } satisfies WorkflowDetails,
             isError: true,
           };
         }
@@ -581,27 +567,6 @@ export default function workflowExtension(pi: ExtensionAPI) {
       const runId = await orch.run(name, args, tokens, time);
       cmdState.lastRunId = runId;
 
-      // Sync instance reference to sessionStates so workflow tool can see it
-      const orchInstance = orch.getInstance(runId);
-      if (orchInstance) {
-        getSessionState(sessionId).set(runId, orchInstance);
-      }
-
-      // Poll for completion (unref'd so it doesn't block process exit)
-      const pollInterval = setInterval(() => {
-        const inst = orch.getInstance(runId);
-        if (!inst || isTerminal(inst.status)) {
-          clearInterval(pollInterval);
-          if (inst) {
-            sendCompletionNotification(pi, runId, inst);
-          }
-        }
-      }, 2000);
-
-      if (typeof pollInterval === "object" && "unref" in pollInterval) {
-        pollInterval.unref();
-      }
-
       // Update widget
       if (ctx.hasUI) {
         const summaryList = orch.list();
@@ -671,176 +636,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
   // ── Commands & Shortcuts ───────────────────────────────────
 
   registerWorkflowCommands(pi, orchestrators, cmdState);
+  registerGenerateTool(pi);
   // registerWorkflowShortcuts(pi, orchestrators, cmdState); // shortcuts disabled for now
 
-  // ── Tool: workflow-generate ─────────────────────────────────
-
-  const WorkflowGenerateParams = Type.Object({
-    name: Type.String({ description: "Short name for the workflow (e.g. 'batch-review-src')" }),
-    script: Type.String({ description: "Complete JS workflow script content" }),
-    description: Type.Optional(Type.String({ description: "Workflow purpose description for list display" })),
-  });
-
-  pi.registerTool({
-    name: "workflow-generate",
-    label: "Workflow Generate",
-    description:
-      "Generate a temporary workflow script from AI-generated code. " +
-      "Writes the script to .pi/workflows/.tmp/ for execution.\n" +
-      "\nWhen to use: When the user describes a task in natural language via /workflow " +
-      "and no existing workflow matches. AI generates a JS script, then uses this tool to write it.\n" +
-      "\nIMPORTANT: Always show the generated script path to the user and wait for confirmation before executing.\n" +
-      "\n== Script Format Requirements ==\n" +
-      "\nRuntime environment:\n" +
-      "- Script runs inside an async IIFE in a Worker thread. Top-level await IS supported.\n" +
-      "- DO NOT use import/export (ESM) syntax. Use require() for Node.js built-ins.\n" +
-      "- The script's return value IS captured and sent back to the main thread.\n" +
-      "\nMeta declaration (required at top level):\n" +
-      "  const meta = { name: 'workflow-name', description: '...', phases: ['phase1', 'phase2'] };\n" +
-      "\nInjected globals (pre-defined, do NOT redeclare):\n" +
-      "  agent(opts) — Call an AI agent. Returns parsedOutput (structured data) or content (string).\n" +
-      "    opts: { prompt: string, schema?: object, model?: string, description?: string }\n" +
-      "  parallel(calls) — Run multiple agent() calls concurrently via Promise.all.\n" +
-      "    calls: Array<AgentOpts> — array of agent opts objects\n" +
-      "  pipeline(stages) — Execute stages sequentially, each receives previous result.\n" +
-      "    stages: Array<(prevResult?) => Promise<any>>\n" +
-      "  $ARGS — Object with workflow arguments (from /workflow run --args key=val).\n" +
-      "  $WORKSPACE — Absolute path to the project workspace root.\n" +
-      "  $BUDGET — Budget info: { usedTokens, usedCost, maxTokens?, maxTimeMs? }.\n" +
-      "\nConstraints:\n" +
-      "- agent() calls must be deterministic in order for pause/resume to work correctly.\n" +
-      "- parallel() has no concurrency limit — be mindful of API rate limits.\n" +
-      "- Throwing an error aborts the workflow (after retries).\n" +
-      "- Use require() for Node.js built-ins: const fs = require('node:fs');\n" +
-      "\nExample minimal script:\n" +
-      "  const meta = { name: 'hello', description: 'Hello workflow', phases: ['greet'] };\n" +
-      "  const target = $ARGS.target ?? 'world';\n" +
-      "  const result = await agent({ prompt: `Say hello to ${target}`, description: 'greet' });\n" +
-      "  return { greeting: result };",
-    promptSnippet: "Generate a temporary workflow script from AI-generated code",
-    promptGuidelines: [
-      "Use when user describes a task via /workflow and no existing workflow matches",
-      "Script runs in async IIFE Worker — NO import/export, use require() and const meta = {...}",
-      "Always show the generated script path and wait for user confirmation before running",
-      "After user confirms, use workflow-run to execute the generated script",
-      "Injected globals: agent({prompt, schema?, model?, description?}), parallel(calls), pipeline(stages), $ARGS, $WORKSPACE, $BUDGET",
-      "agent() returns parsedOutput (structured) or content (string). Script return value is captured.",
-    ],
-    parameters: WorkflowGenerateParams,
-
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const name = params.name as string;
-      const script = params.script as string;
-
-      // 1. Reject ESM syntax (import/export) — Worker runs in CJS mode
-      //    Exception: 'export const meta' is allowed (CC-compatible format)
-      const strippedScript = script
-        .replace(/\/\/.*$/gm, '')
-        .replace(/\/\*[\s\S]*?\*\//g, '');
-      if (/\bimport\s+(?:type\s+)?[\w{*]/.test(strippedScript)) {
-        throw new Error(
-          "Script uses ESM 'import' syntax. Workflow scripts run in a CJS Worker — " +
-          "use require() instead. Example: const fs = require('node:fs');",
-        );
-      }
-      const hasExportMeta = /\bexport\s+const\s+meta\s*=/.test(strippedScript);
-      const otherExports = strippedScript.match(/\bexport\s+(?:const|let|var|function|default|\{)/g);
-      if (otherExports && !hasExportMeta) {
-        throw new Error(
-          "Script uses ESM 'export' syntax (non-meta). Workflow scripts run in a CJS Worker — " +
-          "use 'const meta = {...}' at the top level instead of 'export const meta'.",
-        );
-      }
-
-      // 2. Validate script contains meta declaration (const or export const)
-      if (!script.includes("const meta") && !script.includes("export const meta")) {
-        throw new Error(
-          "Script must contain a meta declaration: const meta = { name, description, phases }",
-        );
-      }
-
-      // 3. Check agent() usage — script must actually use agent()
-      if (!/\bagent\s*\(/.test(strippedScript)) {
-        throw new Error(
-          "Script does not contain any agent() calls. " +
-          "A workflow must call agent() at least once to do useful work. " +
-          "Example: const result = await agent({ prompt: '...' });",
-        );
-      }
-
-      // 4. Check module.exports.execute without invocation — common mistake
-      const hasModuleExportsExecute = /module\.exports\s*=.*execute/.test(strippedScript);
-      const hasTopLevelAwait = /await\s+agent\s*\(/.test(strippedScript);
-      if (hasModuleExportsExecute && !hasTopLevelAwait) {
-        throw new Error(
-          "Script defines module.exports.execute() but never calls it at the top level. " +
-          "Either call execute() directly at the bottom of the script, or use top-level " +
-          "agent() calls instead of wrapping in execute(). " +
-          "Example: const meta = {...}; const result = await agent({ prompt: '...' }); return result;",
-        );
-      }
-
-      // 5. Lightweight syntax check — wrap in async IIFE (matches actual runtime)
-      //    new Function doesn't support top-level await, but our runtime wraps
-      //    the script in async IIFE, so we test with the same wrapper.
-      //    Strip 'export' keyword for syntax check since CJS Worker doesn't support it.
-      const cjsScript = script.replace(/\bexport\s+const\s+meta\b/, 'const meta');
-      try {
-        new Function(`(async () => { ${cjsScript} })();`);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new Error(`Syntax error in script: ${msg}`);
-      }
-
-      // 6. Check name conflict with existing workflows
-      // 7. Check name conflict with existing workflows
-      const existing = await loadWorkflows();
-      const conflict = existing.find((wf) => wf.name === name);
-      if (conflict) {
-        throw new Error(
-          `Name conflict: '${name}' already exists as [${conflict.source}] at ${conflict.path}. ` +
-          `Choose a different name.`,
-        );
-      }
-
-      // 8. Write to .tmp directory
-      const tmpDir = pathResolve(".pi/workflows/.tmp");
-      mkdirSync(tmpDir, { recursive: true });
-      const filePath = pathResolve(tmpDir, `${name}.js`);
-      writeFileSync(filePath, script, "utf-8");
-
-      // 9. Invalidate cache so the new script appears in listings
-      invalidateCache();
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Generated workflow script: ${filePath}\n` +
-              `Name: ${name}\n` +
-              `Show this path to the user and wait for confirmation before executing.`,
-          },
-        ],
-        details: {
-          action: "generate",
-          path: filePath,
-          name,
-          status: "ready",
-        },
-      };
-    },
-
-    renderCall(args, theme, _context) {
-      const name = args.name as string;
-      const text =
-        theme.fg("toolTitle", theme.bold("workflow-generate ")) +
-        theme.fg("accent", name);
-      return new Text(text, 0, 0);
-    },
-
-    renderResult(result, _options, _theme, _context) {
-      const text = result.content[0];
-      return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
-    },
-  });
 }

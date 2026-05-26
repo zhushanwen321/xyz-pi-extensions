@@ -131,7 +131,7 @@ export const TERMINAL_STATUSES: readonly WorkflowStatus[] = [
 export const VALID_TRANSITIONS: Record<WorkflowStatus, WorkflowStatus[]> = {
   created: ["running"],
   running: ["paused", "completed", "failed", "aborted", "budget_limited", "time_limited"],
-  paused: ["running"],
+  paused: ["running", "aborted"],
   completed: [],
   failed: [],
   aborted: [],

@@ -42,11 +42,16 @@ const statusToItemStatus = (
  * Send a completion notification via pi.sendMessage when a workflow
  * reaches a terminal state. Includes a _render descriptor for GUI.
  */
+const notifiedRunIds = new Set<string>();
+
 export function sendCompletionNotification(
   api: ExtensionAPI,
   runId: string,
   instance: WorkflowInstance,
 ): void {
+  if (notifiedRunIds.has(runId)) return;
+  notifiedRunIds.add(runId);
+
   api.sendMessage({
     customType: "workflow-result",
     content:

@@ -1,6 +1,9 @@
 /**
  * Workflow Extension — Budget Tracker
  *
+ * Budget utilities — reserved for future use.
+ * Current budget enforcement is in orchestrator.ts checkBudget().
+ *
  * Pure calculation utility for token budget enforcement.
  * Does not depend on orchestrator, Pi API, or process concerns.
  *

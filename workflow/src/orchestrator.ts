@@ -29,7 +29,7 @@ import {
   type WorkflowInstance,
   type WorkflowBudget,
   type WorkflowStatus,
-  createInstance,
+  createInstance as createStateInstance,
   transitionStatus,
   isTerminal,
   serializeState,
@@ -136,7 +136,7 @@ export class WorkflowOrchestrator {
     scriptSource = scriptSource.replace(/\bexport\s+const\s+meta\b/, "const meta");
     const runId = `wf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const instance = createInstance({
+    const instance = createStateInstance({
       runId,
       name,
       worker: workflow.path,
@@ -196,14 +196,21 @@ export class WorkflowOrchestrator {
       );
     }
 
-    const meta = this.runMetaMap.get(runId);
-    if (!meta) {
-      throw new Error(`Run metadata for '${runId}' not found — cannot resume`);
-    }
-
     instance.pausedAt = undefined;
     transitionStatus(instance, "running");
-    this.startWorker(runId, instance, meta.scriptSource, meta.args);
+
+    const meta = this.runMetaMap.get(runId);
+    if (meta) {
+      // Worker-backed instance: restart Worker with preserved callCache
+      this.startWorker(runId, instance, meta.scriptSource, meta.args);
+
+      // P1-6: Re-schedule time budget check after resume
+      if (meta.budgetTimeMs) {
+        this.scheduleTimeBudgetCheck(runId, meta.budgetTimeMs);
+      }
+    }
+    // State-machine-only instances (no runMeta): just transition status
+
     this.persistState();
   }
 
@@ -215,6 +222,13 @@ export class WorkflowOrchestrator {
     const instance = this.instances.get(runId);
     if (!instance) {
       throw new Error(`Workflow '${runId}' not found`);
+    }
+
+    // P1-4: Allow abort from running or paused
+    if (instance.status !== "running" && instance.status !== "paused") {
+      throw new Error(
+        `Cannot abort workflow in state '${instance.status}': only 'running' or 'paused' can be aborted`,
+      );
     }
 
     // Set terminal status BEFORE terminating
@@ -235,6 +249,12 @@ export class WorkflowOrchestrator {
     if (!instance) {
       throw new Error(`Workflow '${runId}' not found`);
     }
+    // P1-7: Only running or paused can retry
+    if (instance.status !== "running" && instance.status !== "paused") {
+      throw new Error(
+        `Cannot retry node in state '${instance.status}': only 'running' or 'paused' allowed`,
+      );
+    }
 
     // Remove the cached result for this call
     instance.callCache.delete(callId);
@@ -248,6 +268,9 @@ export class WorkflowOrchestrator {
     }
 
     this.terminateWorker(runId);
+
+    // P1-7: Reset retry counts for fresh start
+    this.retryCounts.delete(runId);
 
     const meta = this.runMetaMap.get(runId);
     if (meta) {
@@ -285,7 +308,11 @@ export class WorkflowOrchestrator {
 
     // If worker is alive, send cached result immediately for any pending call
     if (this.workers.has(runId)) {
-      this.postMessage(runId, { type: "agent-result", callId, result: placeholder, cached: true });
+      try {
+        this.postMessage(runId, { type: "agent-result", callId, result: placeholder, cached: true });
+      } catch {
+        // P1-8: Worker may have exited between has() and postMessage()
+      }
     }
 
     this.persistState();
@@ -315,6 +342,32 @@ export class WorkflowOrchestrator {
    */
   getInstance(runId: string): WorkflowInstance | undefined {
     return this.instances.get(runId);
+  }
+
+  /**
+   * Restore previously serialized instances into the orchestrator.
+   * Used during session_start/session_tree to rehydrate state.
+   */
+  restoreInstances(instances: Map<string, WorkflowInstance>): void {
+    for (const [runId, instance] of instances) {
+      this.instances.set(runId, instance);
+    }
+  }
+
+  /**
+   * Create a state-machine-only instance (no Worker thread).
+   * Used by the workflow tool's create action.
+   */
+  createInstance(params: {
+    runId: string;
+    name: string;
+    worker: string;
+    budget?: Partial<WorkflowBudget>;
+  }): WorkflowInstance {
+    const instance = createStateInstance(params);
+    this.instances.set(params.runId, instance);
+    this.persistState();
+    return instance;
   }
 
   // ── Worker lifecycle ────────────────────────────────────────
@@ -397,16 +450,22 @@ export class WorkflowOrchestrator {
       case "agent-call":
         this.handleAgentCall(runId, instance, msg.callId, msg.opts);
         break;
-      case "return":
+      case "return": {
+        // P0-1: Guard against stale return messages after terminate/pause/budget
+        if (isTerminal(instance.status) || instance.status === "budget_limited" || instance.status === "paused") return;
         instance.completedAt = new Date().toISOString();
         transitionStatus(instance, "completed");
         this.workers.delete(runId);
         this.persistState();
         this.onTraceUpdate?.(runId);
         break;
-      case "error":
+      }
+      case "error": {
+        // P0-1: Guard against stale error messages after terminate/pause/budget
+        if (isTerminal(instance.status) || instance.status === "budget_limited" || instance.status === "paused") return;
         this.handleScriptError(runId, msg.error);
         break;
+      }
     }
   }
 
@@ -458,6 +517,9 @@ export class WorkflowOrchestrator {
     attempt = 1,
   ): void {
     this.agentPool.enqueue(opts).then((poolResult) => {
+      // P0-2: Stale state check — instance may have been paused/aborted during agent call
+      if (instance.status !== "running") return;
+
       const result: StateAgentResult = {
         content: poolResult.output,
         parsedOutput: poolResult.parsedOutput,
@@ -470,6 +532,8 @@ export class WorkflowOrchestrator {
       if (!poolResult.success && attempt < MAX_AGENT_RETRIES) {
         const delay = RETRY_BACKOFF_MS * Math.pow(2, attempt - 1);
         setTimeout(() => {
+          // P0-2: Stale state check before retry
+          if (instance.status !== "running") return;
           this.executeWithRetry(runId, callId, opts, instance, node, attempt + 1);
         }, delay);
         return;
@@ -513,6 +577,10 @@ export class WorkflowOrchestrator {
 
     this.workers.delete(runId);
     instance.error = err.message;
+    // P1-5: Mark failed — error event may not be followed by exit event
+    instance.completedAt = new Date().toISOString();
+    transitionStatus(instance, "failed");
+    this.persistState();
   }
 
   /**
@@ -552,6 +620,8 @@ export class WorkflowOrchestrator {
 
       const delay = RETRY_BACKOFF_MS * Math.pow(2, attempt - 1);
       setTimeout(() => {
+        // P0-3: Stale state check before restart
+        if (instance.status !== "running") return;
         const meta = this.runMetaMap.get(runId);
         if (meta && instance) {
           this.startWorker(runId, instance, meta.scriptSource, meta.args);
@@ -642,8 +712,13 @@ export class WorkflowOrchestrator {
 
   /**
    * Flush the current state to session JSONL via pi.appendEntry.
+   *
+   * GC strategy: this method only appends entries. Deduplication and
+   * pruning happen naturally in reconstructState (index.ts), which reads
+   * all workflow-state entries but only keeps the last valid snapshot per
+   * runId. Old entries accumulate in the JSONL but are ignored on rehydrate.
    */
-  private persistState(): void {
+  persistState(): void {
     this.pi.appendEntry("workflow-state", serializeState(this.instances));
   }
 }
