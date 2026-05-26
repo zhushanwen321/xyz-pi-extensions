@@ -950,6 +950,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			const memoryId = buildVisionMemoryId(absoluteImagePath);
 			const mainSessionFile = ctx.sessionManager.getSessionFile();
 			let memorySession: { filePath: string; mainSessionFile: string; action: "create" | "resume" } | undefined;
+			let memoryDegraded = false;
 
 			if (mainSessionFile) {
 				const filePath = resolveMemorySessionFile(mainSessionFile, memoryId);
@@ -958,6 +959,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
 					memorySession = { filePath, mainSessionFile, action };
 					state.memoryFiles.add(filePath);
 				}
+			} else {
+				memoryDegraded = true;
 			}
 
 			// ── Discover agents ──
@@ -974,14 +977,14 @@ export default function subagentExtension(pi: ExtensionAPI) {
 					source: "user",
 					filePath: "",
 				};
-				} else {
-					// Override with vision-specific config
-					agent = {
-						...agent,
-						tools: VISION_ALLOWED_TOOLS.split(","),
-						systemPrompt: VISION_SYSTEM_PROMPT,
-					};
-				}
+			} else {
+				// Override with vision-specific config
+				agent = {
+					...agent,
+					tools: VISION_ALLOWED_TOOLS.split(","),
+					systemPrompt: VISION_SYSTEM_PROMPT,
+				};
+			}
 
 			const agents = [agent];
 			const question = params.question as string;
@@ -1004,29 +1007,28 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			);
 
 			const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+			const details = makeDetails("single")([result]);
+
+			// Attach memory session metadata (shared by both success and error paths)
+			if (memorySession) {
+				details.memoryId = memoryId;
+				details.memoryAction = memorySession.action;
+				details.memoryFile = memorySession.filePath;
+			}
+
+			const degradation = memoryDegraded ? "\n[Warning: Memory session unavailable — in-memory session, vision context will not persist across calls.]" : "";
+
 			if (isError) {
 				const errorMsg = result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
-				const details = makeDetails("single")([result]);
-				if (memorySession) {
-					details.memoryId = memoryId;
-					details.memoryAction = memorySession.action;
-					details.memoryFile = memorySession.filePath;
-				}
 				return {
-					content: [{ type: "text", text: `Vision analysis failed: ${errorMsg}` }],
+					content: [{ type: "text", text: `Vision analysis failed: ${errorMsg}${degradation}` }],
 					details,
 					isError: true,
 				};
 			}
 
-			const details = makeDetails("single")([result]);
-			if (memorySession) {
-						details.memoryId = memoryId;
-					details.memoryAction = memorySession.action;
-					details.memoryFile = memorySession.filePath;
-			}
 			return {
-				content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
+				content: [{ type: "text", text: (getFinalOutput(result.messages) || "(no output)") + degradation }],
 				details,
 			};
 		},
