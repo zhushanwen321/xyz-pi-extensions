@@ -25,6 +25,7 @@ import {
 	COMPLEXITY_DEFAULT_THINKING,
 	resolveModel,
 	resolveModelByComplexity,
+	resolveModelByComplexitySync,
 } from "./model.js";
 import type {
 	SingleResult,
@@ -657,16 +658,22 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			const explicitModel = args.model as string | undefined;
 			const thinking = args.thinkingLevel as string | undefined;
 
-			// renderCall 在模型解析之前，无法知道实际模型。
-			// taskComplexity 路径显示 complexity level，explicit model 路径显示实际模型名。
+			// Resolve actual model name synchronously — no need to defer to execute().
+			// taskComplexity path resolves from subagent-models.json here;
+			// explicit model path just shows the model string directly.
 			let modelDisplay: string;
 			if (explicitModel) {
 				modelDisplay = thinking
 					? theme.fg("dim", ` ${explicitModel}/${thinking}`)
 					: theme.fg("dim", ` ${explicitModel}`);
 			} else if (complexity) {
-				const defaultThinking = COMPLEXITY_DEFAULT_THINKING[complexity as TaskComplexity];
-				modelDisplay = theme.fg("dim", ` complexity:${complexity}/${thinking ?? defaultThinking}`);
+				const resolved = resolveModelByComplexitySync(complexity as TaskComplexity);
+				const thinkingStr = thinking ?? COMPLEXITY_DEFAULT_THINKING[complexity as TaskComplexity];
+				if (resolved) {
+					modelDisplay = theme.fg("dim", ` ${resolved}/${thinkingStr}`);
+				} else {
+					modelDisplay = theme.fg("muted", ` complexity:${complexity}/${thinkingStr} (no subagent-models.json)`);
+				}
 			} else {
 				modelDisplay = theme.fg("dim", " (no model)");
 			}
