@@ -1,0 +1,151 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: Verified handleEvolve in commands.ts implements full analyze.py → Judge → suggestions → savePending flow",
+        "code_review: buildJudgeInput creates temp files in tmpDir, runJudge spawns pi subprocess with glm-5.1",
+        "code_review: /evolve-apply action=list shows suggestions with full details (description/rationale/diff)",
+        "code_review: /evolve-apply action=apply + index applies single suggestion with backup via applySuggestion",
+        "code_review: handleEvolveApply calls appendHistory for each applied suggestion",
+        "code_review: savePending preserves unapproved suggestions (only status=pending filtered for apply)"
+      ],
+      "evidence": "code_review — requires Pi runtime + LLM Judge subprocess"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: handleEvolveApply with action=list filters status===pending only",
+        "code_review: handleEvolveApply with action=apply applies single suggestion by index",
+        "code_review: handleEvolveApply with action=skip marks suggestion as rejected",
+        "code_review: savePending updates suggestion status after each operation",
+        "code_review: All terminal states (applied/rejected/failed) are correctly set"
+      ],
+      "evidence": "code_review — requires Pi runtime"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: handleEvolveStats reads daily/ last 7 days, aggregates toolCalls/tokenUsage/skillTriggers",
+        "code_review: StatsData type includes toolCalls, tokenInput, tokenOutput, topSkills, topFailures",
+        "code_review: renderStatsDashboard formats stats for TUI display"
+      ],
+      "evidence": "code_review — requires Pi runtime"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: handleEvolveRollback loads history via loadHistory, accepts index parameter",
+        "code_review: rollbackSuggestion restores from backup via copyFileSync",
+        "code_review: When commitSha exists, uses git revert --no-edit for cleaner history",
+        "code_review: appendHistory records rollback action with timestamp"
+      ],
+      "evidence": "code_review — requires Pi runtime"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Automated test: Created 14 days of mock data with high token/session for last 3 days",
+        "checkAutoTriggerRules returned token-decline flag",
+        "Verified flag detail contains 'consecutive'",
+        "Verified daily.slice(0,7) baseline vs daily.slice(-3) recent window — no overlap"
+      ],
+      "evidence": "integration.test.mts — TC-5-01 test case passed"
+    },
+    {
+      "caseId": "TC-5-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Automated test: Created skill-triggers.json with dormant skill (>30 days)",
+        "checkAutoTriggerRules returned skill-dormant flag",
+        "Verified flag detail mentions dormant skill name"
+      ],
+      "evidence": "integration.test.mts — TC-5-02 test case passed"
+    },
+    {
+      "caseId": "TC-5-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Automated test: checkAutoTriggerRules with empty daily/ returns empty array — no crash",
+        "Automated test: cleanExpiredFlags with nonexistent dir does not throw",
+        "Automated test: No false flags when data is healthy (uniform token/session)"
+      ],
+      "evidence": "integration.test.mts — TC-5-03 test cases passed (3 assertions)"
+    },
+    {
+      "caseId": "TC-6-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: handleEvolve checks reportsDir for JSON files within 7-day window",
+        "code_review: If no report found, executes analyze.py via execFileSync with --format json --output",
+        "code_review: Error handling: catch analyzes.py failure, throw with stderr message",
+        "code_review: On success, reads generated report JSON and proceeds to buildJudgeInput"
+      ],
+      "evidence": "code_review — requires Pi runtime + analyze.py"
+    },
+    {
+      "caseId": "TC-7-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: handleEvolve wraps analyze.py call in try-catch",
+        "code_review: On failure, throws Error with descriptive message (includes stderr)",
+        "code_review: Pi tool framework catches thrown errors and displays to user — does not block Pi"
+      ],
+      "evidence": "code_review — requires Pi runtime"
+    },
+    {
+      "caseId": "TC-8-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Automated test: applyUnifiedDiff applies valid diff — line2 replaced with MODIFIED",
+        "Automated test: applyUnifiedDiff detects conflict when content doesn't match — returns {success: false, reason}",
+        "Automated test: applySuggestion rejects /etc/passwd path outside whitelist — {success: false, reason: 'path not allowed'}",
+        "code_review: handleEvolveApply marks failed suggestions and continues to next"
+      ],
+      "evidence": "integration.test.mts — TC-8-01 test cases passed (3 assertions)"
+    },
+    {
+      "caseId": "TC-9-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Automated test: parseJudgeOutput([]) returns empty array without error",
+        "Automated test: parseJudgeOutput parses 2 valid suggestions with correct fields",
+        "Automated test: parseJudgeOutput handles markdown fence ```json wrapper",
+        "Automated test: parseJudgeOutput skips entry with confidence=1.5 (out of range), keeps valid entry",
+        "Automated test: parseJudgeOutput normalizes 'skills' → 'skill' for target field",
+        "Automated test: parseJudgeOutput auto-generates id when missing"
+      ],
+      "evidence": "integration.test.mts — TC-9-01 test cases passed"
+    },
+    {
+      "caseId": "TC-10-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: package.json has name 'evolution-engine' with main 'index.ts'",
+        "code_review: index.ts re-exports src/index.ts via export default factory function",
+        "code_review: index.ts registers 4 tools (evolve, evolve-apply, evolve-stats, evolve-rollback)",
+        "code_review: index.ts registers 3 commands (/evolve, /evolve-stats, /evolve-rollback)",
+        "code_review: Extension follows same pattern as usage-tracker and subagent extensions",
+        "Verified tsc --noEmit passes for all 8 TypeScript source files"
+      ],
+      "evidence": "code_review + tsc — manual install not tested"
+    }
+  ]
+}

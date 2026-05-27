@@ -1,0 +1,160 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "/evolve --target all completes full analysis-to-apply loop",
+      "description": "Verify end-to-end flow: analyze.py auto-run → Judge subprocess → suggestion generation → TUI approval → apply with backup",
+      "steps": [
+        "Ensure evolution-data/daily/ has >= 3 days of data",
+        "Delete reports/*.json to trigger auto-analysis",
+        "Run /evolve --target all --since 7d",
+        "Verify analyze.py executes and produces JSON report",
+        "Verify LLM Judge subprocess spawns with glm-5.1",
+        "Verify suggestions displayed in TUI with severity/confidence",
+        "Approve one suggestion (y), skip another (n), quit (q)",
+        "Verify backup file created in evolution-data/backups/",
+        "Verify history.jsonl has apply entry",
+        "Verify pending.json retains unapproved suggestions"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "/evolve-apply resumes pending suggestions",
+      "description": "After quitting mid-approval in /evolve, verify /evolve-apply shows remaining suggestions",
+      "steps": [
+        "Run /evolve and quit with pending suggestions remaining",
+        "Run /evolve-apply",
+        "Verify only pending suggestions are shown",
+        "Approve all remaining",
+        "Verify all suggestions reach terminal state in pending.json"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "/evolve-stats displays signal dashboard",
+      "description": "Verify stats command reads daily/ and tool-stats.json, renders 7-day summary",
+      "steps": [
+        "Run /evolve-stats",
+        "Verify tool calls total is displayed",
+        "Verify token consumption is displayed",
+        "Verify skill trigger ranking is displayed",
+        "Verify tool failure rate Top 5 is displayed"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "integration",
+      "title": "/evolve-rollback restores file from backup",
+      "description": "Verify rollback restores original file and records in history",
+      "steps": [
+        "Apply a suggestion via /evolve",
+        "Note the original file content",
+        "Run /evolve-rollback",
+        "Select the applied entry",
+        "Verify file content matches original",
+        "Verify history.jsonl has rollback entry"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "integration",
+      "title": "Auto-trigger creates flag on token decline",
+      "description": "When token efficiency declines 3 consecutive days, flag file is created",
+      "steps": [
+        "Verify daily/ has data showing 3-day token increase",
+        "Start new Pi session",
+        "Check auto-trigger.flags/token-decline exists",
+        "Verify session_start output contains hint message"
+      ]
+    },
+    {
+      "id": "TC-5-02",
+      "type": "integration",
+      "title": "Auto-trigger creates flag on skill dormant",
+      "description": "Skills not triggered for >30 days trigger dormant flag",
+      "steps": [
+        "Verify skill-triggers.json has entries with lastTriggered > 30 days ago",
+        "Start new Pi session",
+        "Check auto-trigger.flags/skill-dormant exists",
+        "Verify hint message lists dormant skill names"
+      ]
+    },
+    {
+      "id": "TC-5-03",
+      "type": "integration",
+      "title": "Auto-trigger skips on insufficient data (division-by-zero protection)",
+      "description": "When no historical data exists, monitor does not crash or create false flags",
+      "steps": [
+        "Clear daily/ directory (simulate new user)",
+        "Start new Pi session",
+        "Verify no error thrown",
+        "Verify no flag files created"
+      ]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "integration",
+      "title": "/evolve auto-executes analyze.py when no recent report",
+      "description": "When reports/ has no JSON within 7 days, /evolve auto-runs analyze.py",
+      "steps": [
+        "Delete all files in reports/",
+        "Run /evolve --target all",
+        "Verify analyze.py is executed automatically",
+        "Verify new JSON report is generated",
+        "Verify Judge consumes the new report"
+      ]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "integration",
+      "title": "/evolve shows error when analyze.py fails",
+      "description": "When Python is missing or analyze.py errors, /evolve shows stderr",
+      "steps": [
+        "Temporarily rename analyze.py",
+        "Run /evolve",
+        "Verify error message contains stderr output",
+        "Verify Pi continues to function (not blocked)"
+      ]
+    },
+    {
+      "id": "TC-8-01",
+      "type": "integration",
+      "title": "Diff conflict skips suggestion without blocking others",
+      "description": "When target file has changed and diff doesn't apply, that suggestion is skipped",
+      "steps": [
+        "Manually modify a target file to create diff conflict",
+        "Run /evolve and approve the conflicting suggestion",
+        "Verify suggestion marked as failed",
+        "Verify other suggestions are still processed",
+        "Verify summary shows 'Skipped: N (diff conflict)'"
+      ]
+    },
+    {
+      "id": "TC-9-01",
+      "type": "integration",
+      "title": "/evolve returns 0 suggestions gracefully",
+      "description": "With insufficient data, Judge returns 0 suggestions without error",
+      "steps": [
+        "Run /evolve --target all --since 1d with minimal data",
+        "Verify 0 suggestions does not cause error",
+        "Verify pending.json written with empty suggestions array"
+      ]
+    },
+    {
+      "id": "TC-10-01",
+      "type": "manual",
+      "title": "Extension installs and loads correctly",
+      "description": "Symlink evolution-engine to ~/.pi/agent/extensions/ and verify Pi loads it",
+      "steps": [
+        "ln -s /path/to/evolution-engine ~/.pi/agent/extensions/evolution-engine",
+        "Start Pi",
+        "Verify /evolve command is available",
+        "Verify /evolve-stats command is available",
+        "Verify /evolve-rollback command is available"
+      ]
+    }
+  ]
+}

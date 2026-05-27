@@ -84,7 +84,7 @@ cd xyz-pi-extensions/goal && npx tsc --noEmit
 
 - 扩展在 Pi 进程内执行，**不是独立进程**
 - 同一进程可能有多个 session。模块级 `let` 变量会被所有 session 共享，必须用闭包或 session_start 重建
-- 扩展不能依赖 fs 之外的 Node.js 原生模块（网络、child_process 等由 Pi 核心控制）。**subagent 是已知例外**——它使用 `child_process.spawn` 启动独立 Pi 进程
+- 扩展不能依赖 fs 之外的 Node.js 原生模块（网络、child_process 等由 Pi 核心控制）。**subagent 和 evolution-engine 是已知例外**——它们使用 `child_process.spawn` 启动独立 Pi 进程做 LLM 推理（subagent 用于任务委派，evolution-engine 用于 LLM Judge）
 
 ### Session 隔离
 
