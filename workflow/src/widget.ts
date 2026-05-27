@@ -7,7 +7,7 @@
  *   3. ctx.ui.custom() overlay — detail view (single workflow trace nodes)
  */
 
-import type { ExtensionAPI, ExtensionContext, Theme } from "xyz-pi";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import {
   Container,
   Spacer,

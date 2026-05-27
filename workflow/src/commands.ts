@@ -12,7 +12,7 @@
  * for GUI display.
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "xyz-pi";
+import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import { renameSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 

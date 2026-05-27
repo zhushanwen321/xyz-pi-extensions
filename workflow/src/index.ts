@@ -11,7 +11,7 @@
  *   Enforces state machine rules (terminal states are irreversible)
  */
 
-import type { ExtensionAPI, ExtensionContext } from "xyz-pi";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";

@@ -18,7 +18,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { ExtensionAPI } from "xyz-pi";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import { ensureEvolutionDirs, readDailySummary, updateSessionEnd, updateSkillTrigger, updateToolStats, writeDailySummary, recordSessionStart } from "./storage.js";
 import { createLogger, type Logger } from "../../shared/logger.js";
