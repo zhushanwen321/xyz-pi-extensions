@@ -72,7 +72,7 @@ function makeDirs(): Dirs {
 // ── Tool 参数 schema ─────────────────────────────────
 
 const EvolveParams = Type.Object({
-	target: StringEnum(["all", "claude-md", "skills"], {
+	target: StringEnum(["all", "claude-md", "skills", "merge-reviewer"], {
 		default: "all",
 		description: "Analysis target scope",
 	}),

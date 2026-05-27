@@ -8,7 +8,7 @@ import path from "node:path";
 import os from "node:os";
 
 // Absolute path to src dir
-const srcDir = "/Users/zhushanwen/Code/xyz-pi-extensions-workspace/feat-self-evolution-3/evolution-engine/src";
+const srcDir = new URL("../src", import.meta.url).pathname;
 
 const { loadPending, savePending, appendHistory, loadHistory } = await import(
   path.resolve(srcDir, "state.ts")

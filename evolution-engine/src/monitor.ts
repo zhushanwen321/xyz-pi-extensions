@@ -7,6 +7,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AutoTriggerFlag } from "./types";
+import { createLogger } from "../../shared/logger.js";
+const log = createLogger("evolution-monitor");
 
 // ── 常量 ─────────────────────────────────────────────
 
@@ -263,6 +265,7 @@ export function checkAutoTriggerRules(evolutionDir: string): AutoTriggerFlag[] {
 	const dailyDir = path.join(evolutionDir, "daily");
 	const flagsDir = path.join(evolutionDir, FLAGS_DIR);
 	const daily = loadRecentDaily(dailyDir, now, DAILY_WINDOW);
+	log.info(`Auto-trigger check: ${daily.length} daily files loaded`);
 
 	const rules: Array<{ name: RuleName; result: { hit: boolean; detail: string } }> = [
 		{ name: "token-decline", result: checkTokenDecline(daily) },
@@ -272,6 +275,7 @@ export function checkAutoTriggerRules(evolutionDir: string): AutoTriggerFlag[] {
 
 	for (const { name, result } of rules) {
 		if (result.hit) {
+			log.info(`Rule "${name}" triggered: ${result.detail}`);
 			const existing = readFlag(flagsDir, name);
 			// 已有 flag 且在 24h 冷却期内，跳过
 			if (existing) {
