@@ -12,10 +12,11 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import { type ExtensionAPI, getMarkdownTheme } from "@mariozechner/pi-coding-agent";
+import { Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { type AgentScope, discoverAgents } from "./agents.js";
 import {
@@ -25,6 +26,7 @@ import {
 	COMPLEXITY_DEFAULT_THINKING,
 	resolveModel,
 	resolveModelByComplexity,
+	resolveModelByComplexitySync,
 } from "./model.js";
 import type {
 	SingleResult,
@@ -54,8 +56,13 @@ import {
 	type SpawnManager,
 	resolveMemorySessionFile,
 } from "./spawn.js";
-import { Container, Spacer } from "@mariozechner/pi-tui";
-import { getMarkdownTheme } from "@mariozechner/pi-coding-agent";
+import {
+	buildVisionMemoryId,
+	loadVisionModels,
+	resolveVisionModel,
+	VISION_ALLOWED_TOOLS,
+	VISION_SYSTEM_PROMPT,
+} from "./vision.js";
 
 // ──────────────────────── Tool parameters ────────────────────────
 
@@ -112,6 +119,13 @@ const SubagentParams = Type.Object({
 			"Don't use when: one-shot tasks, or the task prompt already contains everything the subagent needs.",
 		].join("\n"),
 	})),
+});
+
+// ──────────────────────── analyze_image parameters ────────────────────────
+
+const AnalyzeImageParams = Type.Object({
+	image_path: Type.String({ description: "Image file path. Relative paths resolved via cwd." }),
+	question: Type.String({ description: "The question to answer about the image" }),
 });
 
 export default function subagentExtension(pi: ExtensionAPI) {
@@ -654,9 +668,28 @@ export default function subagentExtension(pi: ExtensionAPI) {
 		renderCall(args, theme, context) {
 			const scope: AgentScope = args.agentScope ?? "user";
 			const complexity = args.taskComplexity as string | undefined;
-			const model = args.model || (complexity ? `auto:${complexity}` : "?");
+			const explicitModel = args.model as string | undefined;
 			const thinking = args.thinkingLevel as string | undefined;
-			const modelDisplay = thinking ? theme.fg("dim", ` ${model}/${thinking}`) : theme.fg("dim", ` ${model}`);
+
+			// Resolve actual model name synchronously — no need to defer to execute().
+			// taskComplexity path resolves from subagent-models.json here;
+			// explicit model path just shows the model string directly.
+			let modelDisplay: string;
+			if (explicitModel) {
+				modelDisplay = thinking
+					? theme.fg("dim", ` ${explicitModel}/${thinking}`)
+					: theme.fg("dim", ` ${explicitModel}`);
+			} else if (complexity) {
+				const resolved = resolveModelByComplexitySync(complexity as TaskComplexity);
+				const thinkingStr = thinking ?? COMPLEXITY_DEFAULT_THINKING[complexity as TaskComplexity];
+				if (resolved) {
+					modelDisplay = theme.fg("dim", ` ${resolved}/${thinkingStr}`);
+				} else {
+					modelDisplay = theme.fg("muted", ` complexity:${complexity}/${thinkingStr} (no subagent-models.json)`);
+				}
+			} else {
+				modelDisplay = theme.fg("dim", " (no model)");
+			}
 			const bg = args.background ? theme.fg("warning", " [bg]") : "";
 
 			// Extract session short ID from render context for display
@@ -849,6 +882,200 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
 			const text = result.content[0];
 			return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
+		},
+	});
+
+	// ── Tool: analyze_image ──
+
+	pi.registerTool({
+		name: "analyze_image",
+		label: "Analyze Image",
+		description: [
+			"Analyze images using a multimodal vision model.",
+			"",
+			"Spawns a vision subagent with a multimodal model to analyze the specified image.",
+			"The image is processed by the vision model only — it never enters the main session context.",
+			"Returns text-only analysis conclusions.",
+			"",
+			"Requires ~/.pi/agent/vision-models.json with at least one vision model entry.",
+			"",
+			"Supports memory sessions: same image path reuses prior context for follow-up questions.",
+		].join("\n"),
+		parameters: AnalyzeImageParams,
+		promptSnippet: "Analyze images using a multimodal vision model",
+		promptGuidelines: [
+			"Provide image_path and question — the tool handles model selection and memory internally",
+			"Relative paths are resolved via cwd",
+			"Same image reuses memory context; different images get independent sessions",
+		],
+
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			cleanupOldTempFiles();
+
+			const sessionId = ctx.sessionManager.getSessionId();
+			lastSessionId = sessionId;
+			const state = getSessionState(sessionId);
+			state.capturedSessionId = sessionId;
+
+			// ── Validate image path ──
+			const rawPath = params.image_path as string;
+			const absoluteImagePath = path.isAbsolute(rawPath)
+				? rawPath
+				: path.resolve(ctx.cwd, rawPath);
+
+			if (!fs.existsSync(absoluteImagePath)) {
+				return {
+					content: [{ type: "text", text: `Image file not found: ${absoluteImagePath}` }],
+					details: { mode: "single" as const, resolvedModel: "", agentScope: "user" as AgentScope, projectAgentsDir: null, results: [] },
+					isError: true,
+				};
+			}
+
+			// ── Resolve vision model ──
+			const modelResult = await resolveVisionModel(ctx);
+			if (!modelResult.ok) {
+				return {
+					content: [{ type: "text", text: modelResult.error }],
+					details: { mode: "single" as const, resolvedModel: "", agentScope: "user" as AgentScope, projectAgentsDir: null, results: [] },
+					isError: true,
+				};
+			}
+
+			const resolvedModel = modelResult.ref;
+			const resolvedThinking = modelResult.thinkingLevel;
+
+			// ── Build memory session ──
+			const memoryId = buildVisionMemoryId(absoluteImagePath);
+			const mainSessionFile = ctx.sessionManager.getSessionFile();
+			let memorySession: { filePath: string; mainSessionFile: string; action: "create" | "resume" } | undefined;
+			let memoryDegraded = false;
+
+			if (mainSessionFile) {
+				const filePath = resolveMemorySessionFile(mainSessionFile, memoryId);
+				if (filePath) {
+					const action = fs.existsSync(filePath) ? "resume" : "create";
+					memorySession = { filePath, mainSessionFile, action };
+					state.memoryFiles.add(filePath);
+				}
+			} else {
+				memoryDegraded = true;
+			}
+
+			// ── Discover agents ──
+			const discovery = discoverAgents(ctx.cwd, "user");
+			let agent = discovery.agents.find((a) => a.name === "general-purpose");
+
+			// Fallback: create an ad-hoc agent config if general-purpose is not found
+			if (!agent) {
+				agent = {
+					name: "general-purpose",
+					description: "General purpose agent (ad-hoc for vision)",
+					tools: VISION_ALLOWED_TOOLS.split(","),
+					systemPrompt: VISION_SYSTEM_PROMPT,
+					source: "user",
+					filePath: "",
+				};
+			} else {
+				// Override with vision-specific config
+				agent = {
+					...agent,
+					tools: VISION_ALLOWED_TOOLS.split(","),
+					systemPrompt: VISION_SYSTEM_PROMPT,
+				};
+			}
+
+			const agents = [agent];
+			const question = params.question as string;
+			const task = `读取图片 ${absoluteImagePath}，分析以下问题：${question}。仅输出分析结论。`;
+
+			// ── Spawn vision subagent ──
+			const makeDetails = (mode: "single" | "parallel" | "chain" | "background") =>
+				(results: SingleResult[]): SubagentDetails => ({
+					mode,
+					resolvedModel,
+					agentScope: "user" as AgentScope,
+					projectAgentsDir: null,
+					results,
+				});
+
+			const result = await state.spawnManager.runSingleAgent(
+				ctx.cwd, agents, agent.name, task,
+				resolvedModel, undefined, undefined, signal, onUpdate, makeDetails("single"),
+				resolvedThinking, memorySession,
+			);
+
+			const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+			const details = makeDetails("single")([result]);
+
+			// Attach memory session metadata (shared by both success and error paths)
+			if (memorySession) {
+				details.memoryId = memoryId;
+				details.memoryAction = memorySession.action;
+				details.memoryFile = memorySession.filePath;
+			}
+
+			const degradation = memoryDegraded ? "\n[Warning: Memory session unavailable — in-memory session, vision context will not persist across calls.]" : "";
+
+			if (isError) {
+				const errorMsg = result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+				return {
+					content: [{ type: "text", text: `Vision analysis failed: ${errorMsg}${degradation}` }],
+					details,
+					isError: true,
+				};
+			}
+
+			return {
+				content: [{ type: "text", text: (getFinalOutput(result.messages) || "(no output)") + degradation }],
+				details,
+			};
+		},
+
+		renderCall(args, theme) {
+			const rawPath = args.image_path as string;
+			const home = os.homedir();
+			const shortPath = rawPath.startsWith(home) ? `~${rawPath.slice(home.length)}` : rawPath;
+			const modelDisplay = theme.fg("dim", ` ${loadVisionModels()?.models?.[0]?.id ?? "vision"}`);
+
+			const text = [
+				`${theme.fg("warning", "\u23F3")} ${theme.fg("toolTitle", theme.bold("analyze_image"))}${modelDisplay}`,
+				`  ${theme.fg("accent", shortPath)}`,
+			].join("\n");
+			return new Text(text, 0, 0);
+		},
+
+		renderResult(result, { expanded }, theme, context) {
+			const details = result.details as SubagentDetails | undefined;
+			if (!details || details.results.length === 0) {
+				const text = result.content[0];
+				return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
+			}
+
+			const ctxSessionId = (context as { sessionManager?: { getSessionId?: () => string } }).sessionManager?.getSessionId?.() ?? "";
+			const sid = ctxSessionId.slice(0, 8);
+			const view = buildAgentResultView(details.results[0]);
+
+			let memoryPrefix = "";
+			if (details.memoryId) {
+				const action = details.memoryAction === "create" ? "created" : "resumed";
+				memoryPrefix = theme.fg("accent", `[memory: ${details.memoryId} (${action})]`) + "\n";
+			}
+
+			if (expanded) {
+				const mdTheme = getMarkdownTheme();
+				const detailContainer = renderAgentDetail(view, theme, mdTheme, { showTask: false, sessionShortId: sid });
+				if (memoryPrefix) {
+					const wrapper = new Container();
+					wrapper.addChild(new Text(memoryPrefix, 0, 0));
+					wrapper.addChild(new Spacer(1));
+					for (const child of detailContainer.children) {
+						wrapper.addChild(child);
+					}
+					return wrapper;
+				}
+				return detailContainer;
+			}
+			return new Text(memoryPrefix + renderSingleCollapsedText(view, theme, sid), 0, 0);
 		},
 	});
 

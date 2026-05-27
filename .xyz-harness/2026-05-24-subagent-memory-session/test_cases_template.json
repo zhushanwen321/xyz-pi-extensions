@@ -1,0 +1,107 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "First memory call creates session file",
+      "description": "Call subagent with memory='test-session', verify session file created in main session dir",
+      "steps": [
+        "Call subagent tool: agent='general-purpose', task='list files', memory='test-session'",
+        "Verify result contains memoryId='test-session' and memoryAction='create'",
+        "Verify *.mem-test-session.jsonl file exists in main session directory"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "integration",
+      "title": "Subsequent memory call resumes session",
+      "description": "Call subagent again with same memory identifier, verify resume behavior",
+      "steps": [
+        "Call subagent tool: agent='general-purpose', task='what did I do before', memory='test-session'",
+        "Verify result contains memoryId='test-session' and memoryAction='resume'",
+        "Verify subagent can recall previous conversation context"
+      ]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "integration",
+      "title": "No-memory call unchanged",
+      "description": "Call subagent without memory, verify existing behavior preserved",
+      "steps": [
+        "Call subagent tool: agent='general-purpose', task='hello' (no memory param)",
+        "Verify normal completion, no session file created"
+      ]
+    },
+    {
+      "id": "TC-1-04",
+      "type": "integration",
+      "title": "Memory parameter sanitization",
+      "description": "Special characters in memory param are sanitized in filename",
+      "steps": [
+        "Call subagent tool: memory='my agent/task:refactor'",
+        "Verify session file contains 'my_agent_task_refactor' in name"
+      ]
+    },
+    {
+      "id": "TC-1-05",
+      "type": "integration",
+      "title": "Memory rejected in background mode",
+      "description": "Memory param with background=true returns error",
+      "steps": [
+        "Call subagent tool: memory='test', background=true",
+        "Verify error message says memory not supported in background mode"
+      ]
+    },
+    {
+      "id": "TC-1-06",
+      "type": "integration",
+      "title": "Memory rejected in parallel mode",
+      "description": "Memory param with tasks array returns error",
+      "steps": [
+        "Call subagent tool: memory='test', tasks=[{agent:'a', task:'...'}]",
+        "Verify error message says memory not supported in parallel mode"
+      ]
+    },
+    {
+      "id": "TC-1-07",
+      "type": "integration",
+      "title": "Memory rejected in chain mode",
+      "description": "Memory param with chain array returns error",
+      "steps": [
+        "Call subagent tool: memory='test', chain=[{agent:'a', task:'...'}]",
+        "Verify error message says memory not supported in chain mode"
+      ]
+    },
+    {
+      "id": "TC-1-08",
+      "type": "integration",
+      "title": "Memory rejected for in-memory session",
+      "description": "Memory param fails when main session has no file",
+      "steps": [
+        "Start Pi with --no-session (in-memory session)",
+        "Call subagent tool: memory='test'",
+        "Verify error message about requiring file-backed session"
+      ]
+    },
+    {
+      "id": "TC-1-09",
+      "type": "manual",
+      "title": "TypeScript type check passes",
+      "description": "npx tsc --noEmit passes with no errors",
+      "steps": [
+        "Run: cd xyz-pi-extensions && npx tsc --noEmit",
+        "Verify: 0 errors"
+      ]
+    },
+    {
+      "id": "TC-1-10",
+      "type": "manual",
+      "title": "ESLint passes with no new errors",
+      "description": "npm run lint passes with 0 new errors",
+      "steps": [
+        "Run: cd xyz-pi-extensions && npm run lint",
+        "Verify: 0 new errors compared to baseline"
+      ]
+    }
+  ]
+}

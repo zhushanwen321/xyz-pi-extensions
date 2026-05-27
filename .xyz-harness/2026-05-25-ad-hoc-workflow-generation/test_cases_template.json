@@ -1,0 +1,123 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "/workflow <prompt> 生成新 workflow 脚本",
+      "description": "用户输入自然语言，AI 收到 workflow 列表后生成新脚本写入 .tmp",
+      "steps": ["准备空 workflows 目录", "输入 /workflow 批量审查代码", "AI 调用 workflow-generate", "验证 .tmp/{name}.js 存在"]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "integration",
+      "title": "/workflow <prompt> 匹配已有 saved workflow",
+      "description": "已有 batch-review.js saved workflow 时，AI 匹配并让用户选择",
+      "steps": ["准备 batch-review.js", "输入 /workflow 批量审查", "AI 列出匹配项", "用户选择复用", "验证使用已有 name 执行"]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "integration",
+      "title": "/workflow <prompt> 匹配已有 tmp workflow",
+      "description": "已有 tmp workflow 时也被纳入匹配范围",
+      "steps": ["准备 .tmp/review-abc.js", "输入 /workflow 审查代码", "验证 AI 收到列表中包含 [tmp] review-abc"]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "api",
+      "title": "workflow-generate 正常生成脚本",
+      "description": "合法 name + script + description → 写入成功",
+      "steps": ["调用 workflow-generate(name='test-wf', script=valid, description='test')", "验证返回 status=ready", "验证 .tmp/test-wf.js 存在"]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "api",
+      "title": "workflow-generate 拒绝无 meta 脚本",
+      "description": "script 不含 meta 导出时拒绝",
+      "steps": ["调用 workflow-generate(name='no-meta', script='console.log(1)')", "验证返回 isError", "验证错误信息包含 'meta'"]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "api",
+      "title": "workflow-generate 拒绝语法错误脚本",
+      "description": "script 有语法错误时拒绝",
+      "steps": ["调用 workflow-generate(name='bad-syntax', script='invalid {{{')", "验证返回 isError", "验证错误信息包含 '语法'"]
+    },
+    {
+      "id": "TC-2-04",
+      "type": "api",
+      "title": "workflow-generate 名称冲突拒绝",
+      "description": "name 与已有 saved/tmp 冲突时拒绝",
+      "steps": ["准备 batch-review.js", "调用 workflow-generate(name='batch-review', script=valid)", "验证抛出错误", "AI 更换名称后重试成功"]
+    },
+    {
+      "id": "TC-2-05",
+      "type": "api",
+      "title": "workflow-generate 自动创建 .tmp 目录",
+      "description": ".tmp 目录不存在时自动 mkdir",
+      "steps": ["删除 .tmp 目录", "调用 workflow-generate", "验证 .tmp 目录创建且脚本写入成功"]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "/workflow save 正常保存",
+      "description": "从 .tmp 移动到 .pi/workflows/",
+      "steps": ["准备 .tmp/review-src.js", "执行 /workflow save review-src", "验证 .pi/workflows/review-src.js 存在", "验证 .tmp/review-src.js 不存在"]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "integration",
+      "title": "/workflow save --as 重命名保存",
+      "description": "保存并重命名",
+      "steps": ["准备 .tmp/review-src.js", "执行 /workflow save review-src --as batch-review-v2", "验证 .pi/workflows/batch-review-v2.js 存在"]
+    },
+    {
+      "id": "TC-3-03",
+      "type": "integration",
+      "title": "/workflow save 目标已存在拒绝",
+      "description": "目标 .pi/workflows/ 下已存在同名文件时拒绝",
+      "steps": ["准备 .tmp/demo.js 和 .pi/workflows/demo.js", "执行 /workflow save demo", "验证拒绝并提示冲突"]
+    },
+    {
+      "id": "TC-3-04",
+      "type": "integration",
+      "title": "/workflow save 运行中不影响 Worker",
+      "description": "保存操作不阻塞正在运行的 Worker",
+      "steps": ["启动 workflow run", "执行 /workflow save <name>", "验证 Worker 继续运行"]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "manual",
+      "title": "/workflow list 显示 [tmp]/[saved] 标签",
+      "description": "list 输出中每个 workflow 前有 source 标签",
+      "steps": ["准备 1 saved + 1 tmp workflow", "执行 /workflow list", "验证输出包含 [saved] 和 [tmp]"]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "manual",
+      "title": "/workflow list 去重优先级",
+      "description": "同名 workflow 只显示优先级最高的",
+      "steps": ["在 .pi/workflows/ 和 .tmp/ 放同名文件", "执行 /workflow list", "验证只显示一个，标记 [tmp]"]
+    },
+    {
+      "id": "TC-4-03",
+      "type": "manual",
+      "title": "/workflows 面板显示 source 标签",
+      "description": "交互面板中区分 saved/tmp",
+      "steps": ["准备混合 workflow", "打开 /workflows 面板", "验证标签显示"]
+    },
+    {
+      "id": "TC-4-04",
+      "type": "manual",
+      "title": "/workflows 面板 Save 操作",
+      "description": "选中 tmp workflow 后按 s 保存",
+      "steps": ["准备 tmp workflow", "打开 /workflows 面板", "选中 tmp workflow", "按 s", "验证文件移到 saved"]
+    },
+    {
+      "id": "TC-4-05",
+      "type": "manual",
+      "title": "/workflows 面板 Delete 运行中拒绝",
+      "description": "运行中的 workflow 拒绝删除",
+      "steps": ["启动 workflow run", "打开 /workflows 面板", "选中 running workflow", "按 d", "验证拒绝并提示先 abort"]
+    }
+  ]
+}
