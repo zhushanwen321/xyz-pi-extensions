@@ -1,0 +1,8 @@
+{
+  "name": "evolution-engine",
+  "version": "0.1.0",
+  "description": "Pi Agent self-evolution engine — signal analysis, LLM Judge, and auto-apply loop.",
+  "main": "index.ts",
+  "keywords": ["pi", "extension", "evolution", "self-improvement"],
+  "license": "MIT"
+}

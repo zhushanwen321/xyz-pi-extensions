@@ -153,6 +153,31 @@ Agent 定义文件的发现范围：`user`（`~/.pi/agent/agents/`）、`project
 **DailySummary**
 按日期聚合的进化信号汇总。由 TurnBuffer 逐轮累积，在每次 `agent_end` 时写入磁盘。同一天的多次 session 数据会被合并到同一个 DailySummary 中。
 
+### EvolutionEngine
+
+**Evolution Engine**
+自我进化闭环 Extension。安装于 `~/.pi/agent/extensions/evolution-engine/`。注册 `/evolve`、`/evolve-apply`、`/evolve-stats`、`/evolve-rollback` 四个 command。通过 spawn 独立 Pi 子进程调用 LLM Judge，通过文件系统 I/O 应用修改。
+_Avoid_: 进化引擎
+
+**LLM Judge**
+运行在独立 Pi 子进程（`spawn("pi", ["--mode", "json", "-p"])`）中的演进分析器。固定使用 `glm-5.1` 模型，只读访问信号数据，输出结构化 `EvolutionSuggestion[]` JSON。不修改任何文件。
+_Avoid_: Judge Subagent
+
+**EvolutionSuggestion**
+LLM Judge 产出的单条进化建议。包含：id (UUID)、target (claude-md/skill)、targetPath、severity (high/medium/low)、confidence (0-1)、title、description、rationale、diff (unified format)、status (pending/approved/rejected/applied/failed)。
+
+**PendingFile**
+`~/.pi/agent/evolution-data/suggestions/pending.json`，存储当前待审批的 EvolutionSuggestion 列表。`/evolve` 写入，`/evolve-apply` 读取。
+
+**EvolutionHistory**
+`~/.pi/agent/evolution-data/history.jsonl`，每行一条 JSON 记录每次 apply/rollback 操作（timestamp、action、suggestionId、targetPath、backupPath、diff）。
+
+**AutoTriggerFlag**
+`~/.pi/agent/evolution-data/auto-trigger.flags/` 下的标志文件。monitor.ts 在 session_start 时检查 token/skill/error 三个维度的阈值，命中时写入对应 flag 文件（24h 去重）。不自动执行分析，仅在下次 session 开始时提示用户。
+
+**Applier**
+Evolution Engine 的建议应用引擎。执行流程：预检查 diff 可应用性 → 备份原文件 → 写入 diff → git commit（如有仓库）→ 记录 history。diff 应用失败时跳过该条并标记 failed，不中断后续建议。
+
 ### Workflow
 
 **Workflow**
