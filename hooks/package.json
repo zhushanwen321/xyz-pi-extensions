@@ -1,0 +1,6 @@
+{
+  "name": "pi-extension-hooks",
+  "version": "0.1.0",
+  "description": "Collection of lightweight Pi hooks — last activity timestamp in footer.",
+  "main": "src/index.ts"
+}
