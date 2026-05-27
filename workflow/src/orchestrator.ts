@@ -18,7 +18,7 @@
 import * as fs from "node:fs";
 import { Worker } from "node:worker_threads";
 
-import type { ExtensionAPI, ExtensionContext } from "xyz-pi";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import { AgentPool, type AgentCallOpts } from "./agent-pool.js";
 import { getWorkflow } from "./config-loader.js";

@@ -8,7 +8,7 @@
 
 import * as os from "node:os";
 import type { Message } from "@earendil-works/pi-ai";
-import type { Theme } from "xyz-pi";
+import type { Theme } from "@mariozechner/pi-coding-agent";
 import type { AgentScope } from "./agents.js";
 import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
 

@@ -14,7 +14,7 @@
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "paths": {
-      "xyz-pi": ["/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/dist/index.d.ts"],
+      "@mariozechner/pi-coding-agent": ["/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/dist/index.d.ts"],
       "@earendil-works/pi-tui": ["/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/node_modules/@earendil-works/pi-tui/dist/index.d.ts"],
       "@earendil-works/pi-ai": ["/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/node_modules/@earendil-works/pi-ai/dist/index.d.ts"],
       "typebox": ["/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/node_modules/typebox/build/index.d.mts"]

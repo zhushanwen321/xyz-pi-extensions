@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "xyz-pi";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 const STATUS_KEY = "last-activity";
 
