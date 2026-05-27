@@ -51,11 +51,12 @@ function extractReportSubset(
 		return subset;
 	}
 
-	// target === "skills"
-	if (report.skill_stats != null) subset.skill_stats = report.skill_stats;
-	if (report.skill_health != null) subset.skill_health = report.skill_health;
-	if (report.actionable_issues != null) subset.actionable_issues = report.actionable_issues;
-	return subset;
+	if (target === "skills") {
+		if (report.skill_stats != null) subset.skill_stats = report.skill_stats;
+		if (report.skill_health != null) subset.skill_health = report.skill_health;
+		if (report.actionable_issues != null) subset.actionable_issues = report.actionable_issues;
+		return subset;
+	}
 
 	// target === "merge-reviewer"
 	if (report.tool_stats != null) subset.tool_stats = report.tool_stats;
