@@ -32,6 +32,22 @@ Pi coding agent 的扩展工具箱。每个扩展是一个独立可安装的 Pi 
 
 **依赖说明**：扩展没有自己的 `node_modules`，所有 `@mariozechner/*` 和 `typebox` 依赖由 Pi 运行时提供。本地开发时 `tsc --noEmit` 通过 `paths` 映射到全局安装的 Pi 包获取类型。
 
+**模块导入规范**：上游 Pi 已将包 scope 从 `@mariozechner` 迁移到 `@earendil-works`，但 loader 同时注册了两个 scope 的 alias（指向同一实现）。为同时兼容原版 pi 和 xyz-pi，扩展 import 统一使用 `@mariozechner/*`（两个 pi 都认识的公约数）：
+
+```typescript
+// 正确 — 原版 pi 和 xyz-pi 都支持
+import { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
+import { StringEnum } from "@mariozechner/pi-ai";
+
+// 错误 — 原版 pi 不支持
+import { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+// 错误 — loader 不注册 xyz-pi 作为模块别名
+import { ExtensionAPI } from "xyz-pi";
+```
+
+`tsconfig.json` 的 `paths` 是编译时类型解析，指向本地安装的 pi 包路径即可，不影响运行时。
+
 ## 架构
 
 ```
