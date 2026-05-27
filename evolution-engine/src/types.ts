@@ -90,7 +90,7 @@ export interface JudgeInput {
 /** /evolve 命令参数 */
 export interface EvolveCommandParams {
 	/** 分析目标，默认 "all" */
-	target: "all" | "claude-md" | "skills";
+	target: "all" | "claude-md" | "skills" | "merge-reviewer";
 	/** 时间范围，默认 "7d" */
 	since: string;
 	/** 抽样 session 数 */

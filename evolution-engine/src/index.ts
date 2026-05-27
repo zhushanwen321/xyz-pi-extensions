@@ -145,7 +145,7 @@ export default function evolutionEngineExtension(pi: ExtensionAPI): void {
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 			return await handleEvolve(
 				{
-					target: params.target as "all" | "claude-md" | "skills",
+					target: params.target as "all" | "claude-md" | "skills" | "merge-reviewer",
 					since: params.since,
 					sample: params.sample,
 				},

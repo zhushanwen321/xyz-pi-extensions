@@ -56,6 +56,12 @@ function extractReportSubset(
 	if (report.skill_health != null) subset.skill_health = report.skill_health;
 	if (report.actionable_issues != null) subset.actionable_issues = report.actionable_issues;
 	return subset;
+
+	// target === "merge-reviewer"
+	if (report.tool_stats != null) subset.tool_stats = report.tool_stats;
+	if (report.error_stats != null) subset.error_stats = report.error_stats;
+	if (report.user_patterns != null) subset.user_patterns = report.user_patterns;
+	return subset;
 }
 
 // ── buildJudgeInput ──────────────────────────────────

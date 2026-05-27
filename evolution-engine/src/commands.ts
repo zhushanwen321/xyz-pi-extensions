@@ -238,11 +238,11 @@ export async function handleEvolveApply(
 				const header = `#${index} [${suggestion.severity.toUpperCase()}] ${suggestion.title}`;
 				const desc = suggestion.description ? `  Description: ${suggestion.description}` : "";
 				const rationale = suggestion.rationale ? `  Rationale: ${suggestion.rationale}` : "";
-				const diff = suggestion.diff ? `  Diff target: ${suggestion.targetPath}` : "";
-			const diffPreview = suggestion.diff
-				? `  Diff preview:\n  ${suggestion.diff.split("\n").slice(0, 10).join("\n  ")}`
-				: "";
-			return [header, desc, rationale, diff, diffPreview].filter(Boolean).join("\n");
+					const diff = suggestion.diff ? `  Diff target: ${suggestion.targetPath}` : "";
+				const diffPreview = suggestion.diff
+					? `  Diff preview:\n  ${suggestion.diff.split("\n").slice(0, 10).join("\n  ")}`
+					: "";
+				return [header, desc, rationale, diff, diffPreview].filter(Boolean).join("\n");
 			}).join("\n\n");
 
 			return successResult(
