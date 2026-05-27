@@ -19,6 +19,7 @@ const TARGET_TEMPLATE: Record<JudgeInput["target"], string> = {
 	all: "session-quality.txt",
 	"claude-md": "prompt-optimize.txt",
 	skills: "skill-health.txt",
+	"merge-reviewer": "merge-reviewer.txt",
 };
 
 // ── report 子集提取器 ────────────────────────────────
