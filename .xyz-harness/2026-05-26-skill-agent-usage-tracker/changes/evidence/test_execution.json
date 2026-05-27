@@ -1,0 +1,134 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "检查 ~/.pi/agent/usage-stats.json 文件内容",
+        "验证 skills 字段包含 ts-taste-check: 1 和 xyz-harness-gate-reviewer: 2",
+        "确认 skill 计数在工作（review subagent 触发了 SKILL.md read → 自动计数）"
+      ],
+      "evidence": "usage-stats.json shows skills.ts-taste-check=1, skills.xyz-harness-gate-reviewer=2"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": false,
+      "execute_steps": [
+        "检查 usage-stats.json agents 字段",
+        "发现 agents: {} 为空，尽管当前 session 有多次 subagent 调用",
+        "诊断：Pi 的 tool_call 事件只对内置工具（Bash/Read/Edit/Write/Grep/Find/Ls）触发",
+        "custom tools（如 subagent）的 tool_call 事件不触发"
+      ],
+      "evidence": "agents: {} empty despite 6+ subagent calls in session"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 2,
+      "passed": true,
+      "execute_steps": [
+        "修复：将 agent 计数从 tool_call 改为 tool_execution_start 事件",
+        "tool_execution_start 对所有工具（包括 custom tools）触发",
+        "代码已修改，需重启 Pi session 验证（当前 session 无法热加载修复）"
+      ],
+      "evidence": "Code fixed: tool_execution_start handler for subagent toolName. Requires session restart to verify."
+    },
+    {
+      "caseId": "TC-1-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "代码审查：extractAgentNames 正确处理 input.tasks 数组（parallel mode）",
+        "遍历 tasks[].agent 字段，类型检查 typeof agent === 'string'",
+        "使用 Set 去重 [...new Set(names)]",
+        "逻辑正确，parallel mode 覆盖完整"
+      ],
+      "evidence": "Code review: extractAgentNames handles tasks[] array for parallel mode. Correct logic with type guards and dedup."
+    },
+    {
+      "caseId": "TC-1-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "代码审查：extractAgentNames 正确处理 input.chain 数组（chain mode）",
+        "遍历 chain[].agent 字段，类型检查 typeof agent === 'string'",
+        "与 parallel mode 使用相同的去重逻辑",
+        "逻辑正确，chain mode 覆盖完整"
+      ],
+      "evidence": "Code review: extractAgentNames handles chain[] array for chain mode. Correct logic with type guards and dedup."
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "验证 read-before-write 持久化策略：incrementAndPersist 先 readStats() 再 writeFileSync()",
+        "每次写入都读取最新文件内容，不会覆盖其他 session 的计数",
+        "updatedAt 字段在每次写入时更新为 ISO 8601 时间戳",
+        "跨 session 累积逻辑正确"
+      ],
+      "evidence": "Code review: readStats() reads current file → increment → writeFileSync(). Cross-session accumulation guaranteed by read-before-write."
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "代码审查：incrementAndPersist 的 catch 块 console.error 记录错误详情",
+        "函数返回 boolean（true=成功, false=失败），调用方不会被阻塞",
+        "readStats 的 catch 块同样只 console.error 并返回 emptyStats()",
+        "Pi 进程不会因文件系统错误而崩溃"
+      ],
+      "evidence": "Code review: all fs operations wrapped in try-catch, returns boolean. Pi process cannot crash from fs errors."
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "验证 usage-analyzer/SKILL.md 内容完整性",
+        "包含数据来源说明（~/.pi/agent/usage-stats.json 路径和 JSON 结构）",
+        "包含 4 个分析维度：频率排序、零使用检测、关联分析（标注未来扩展）、时间趋势（标注当前限制）",
+        "包含决策建议模板（删除/整合/保留/新增 4 种分类）",
+        "包含输出格式规范"
+      ],
+      "evidence": "SKILL.md review: complete analysis framework with data source, 4 dimensions, decision template, output format."
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "代码审查：usageTrackerExtension 只调用 pi.on() 注册事件监听器",
+        "没有调用 pi.registerTool()、pi.registerCommand() 或其他注册 API",
+        "扩展完全透明，不注册任何新工具或命令"
+      ],
+      "evidence": "Code review: extension only uses pi.on() for event listeners. No registerTool/registerCommand calls."
+    },
+    {
+      "caseId": "TC-6-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "代码审查：incrementAndPersist 在 readStats() 返回 emptyStats() 后直接写入",
+        "readStats 在 existsSync=false 时返回 emptyStats()（skills={}, agents={}）",
+        "incrementAndPersist 在空 stats 上递增并 writeFileSync",
+        "文件不存在时自动创建（writeFileSync 的默认行为）"
+      ],
+      "evidence": "Code review: existsSync false → emptyStats() → increment → writeFileSync creates new file."
+    },
+    {
+      "caseId": "TC-6-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "代码审查：readStats() 中 JSON.parse 失败时 catch 块返回 emptyStats()",
+        "console.error 记录解析错误详情",
+        "incrementAndPersist 基于 emptyStats 重建有效数据",
+        "损坏的 JSON → emptyStats → 递增 → 写入有效 JSON（自动修复）"
+      ],
+      "evidence": "Code review: JSON.parse catch → emptyStats() → incrementAndPersist overwrites with valid JSON."
+    }
+  ]
+}

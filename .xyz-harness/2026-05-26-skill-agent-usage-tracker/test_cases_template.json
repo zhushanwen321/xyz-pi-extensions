@@ -1,0 +1,122 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "manual",
+      "title": "Skill read increments counter in usage-stats.json",
+      "description": "AC-1: AI reads a skill's SKILL.md → stats file shows count +1 for that skill",
+      "steps": [
+        "Start Pi session",
+        "Ask AI to read any available skill's SKILL.md file",
+        "Read ~/.pi/agent/usage-stats.json",
+        "Verify skills[skillName] exists and equals 1"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "manual",
+      "title": "Agent call increments counter in usage-stats.json",
+      "description": "AC-2: AI calls subagent tool → stats file shows count +1 for that agent",
+      "steps": [
+        "Start Pi session",
+        "Delegate a task to a specific agent (e.g., general-purpose)",
+        "Read ~/.pi/agent/usage-stats.json",
+        "Verify agents[agentName] exists and count >= 1"
+      ]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "manual",
+      "title": "Parallel mode agent call counts all agents",
+      "description": "AC-2: subagent parallel mode with multiple agents → each gets counted",
+      "steps": [
+        "Start Pi session",
+        "Trigger parallel subagent call with 2+ agents",
+        "Read ~/.pi/agent/usage-stats.json",
+        "Verify each agent in the parallel call has count >= 1"
+      ]
+    },
+    {
+      "id": "TC-1-04",
+      "type": "manual",
+      "title": "Chain mode agent call counts all agents",
+      "description": "AC-2: subagent chain mode → each agent in chain gets counted",
+      "steps": [
+        "Start Pi session",
+        "Trigger chain subagent call with 2+ agents",
+        "Read ~/.pi/agent/usage-stats.json",
+        "Verify each agent in the chain has count >= 1"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "manual",
+      "title": "Cross-session count accumulation",
+      "description": "AC-3: Two sequential sessions each read same skill → count = 2",
+      "steps": [
+        "Session 1: read a skill file, verify count = 1",
+        "End session 1",
+        "Session 2: read same skill file, verify count = 2"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "manual",
+      "title": "Write failure does not crash Pi",
+      "description": "AC-4: Make stats file unwritable, trigger counting, verify Pi continues",
+      "steps": [
+        "chmod 000 ~/.pi/agent/usage-stats.json",
+        "Start Pi, trigger skill read",
+        "Verify Pi runs without error",
+        "Check stderr for [usage-tracker] Failed message",
+        "chmod 644 to restore"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "manual",
+      "title": "Usage analyzer skill produces analysis report",
+      "description": "AC-5: Load usage-analyzer skill → agent reads JSON → produces structured report",
+      "steps": [
+        "Ensure usage-stats.json has non-trivial data",
+        "Ask 'analyze my skill usage'",
+        "Verify agent reads ~/.pi/agent/usage-stats.json",
+        "Verify output contains ranked list + recommendations"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "manual",
+      "title": "Extension registers no tools or commands",
+      "description": "AC-6: Verify extension is invisible — no new tool or command registered",
+      "steps": [
+        "Start Pi with extension installed",
+        "Check available tools list — no usage-tracker or usage-stats tool",
+        "Try /usage command — should not exist"
+      ]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "manual",
+      "title": "Extension creates stats file on first use",
+      "description": "When stats file does not exist, extension creates it on first counting event",
+      "steps": [
+        "Delete ~/.pi/agent/usage-stats.json if it exists",
+        "Start Pi session, trigger skill read",
+        "Verify file is created with correct structure"
+      ]
+    },
+    {
+      "id": "TC-6-02",
+      "type": "manual",
+      "title": "Extension handles corrupted stats file gracefully",
+      "description": "If stats file contains invalid JSON, extension resets to empty stats and logs error",
+      "steps": [
+        "Write invalid JSON to ~/.pi/agent/usage-stats.json",
+        "Start Pi session, trigger counting event",
+        "Verify extension recovers (creates valid stats)",
+        "Check stderr for parse error log"
+      ]
+    }
+  ]
+}
