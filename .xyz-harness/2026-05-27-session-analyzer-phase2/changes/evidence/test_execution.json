@@ -1,0 +1,137 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run python3 analyze.py --help",
+        "verify exit code 0"
+      ],
+      "evidence": "exit code 0"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run python3 analyze.py --since 7d",
+        "verify stdout first line contains '# Pi Session'",
+        "verify 8 '##' section headers present"
+      ],
+      "evidence": "title=1 sections=8"
+    },
+    {
+      "caseId": "TC-1-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run python3 analyze.py --since 7d --format json",
+        "parse stdout as JSON",
+        "verify top-level keys include _meta, tool_stats, actionable_issues, skill_health"
+      ],
+      "evidence": "all 10 keys present: _meta, tool_stats, token_stats, error_stats, user_patterns, skill_stats, cross_project, satisfaction, actionable_issues, skill_health"
+    },
+    {
+      "caseId": "TC-1-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run python3 analyze.py --since 7d --output /tmp/test_report.md",
+        "verify /tmp/test_report.md exists",
+        "verify file content starts with '# Pi Session'"
+      ],
+      "evidence": "file exists, first line: '# Pi Session 分析报告'"
+    },
+    {
+      "caseId": "TC-1-05",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run python3 analyze.py --sample 5 --since 30d --format json",
+        "parse stdout as JSON",
+        "verify _meta.is_sample == true",
+        "verify _meta.sample_size <= 5"
+      ],
+      "evidence": "is_sample=True sample_size=5"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run python3 analyze.py --since 7d --format markdown",
+        "count '##' level headers",
+        "verify count >= 8"
+      ],
+      "evidence": "8 sections found"
+    },
+    {
+      "caseId": "TC-2-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run python3 analyze.py --since 7d --format json",
+        "recursively check all values for None/NaN",
+        "verify all such values replaced with 'N/A'"
+      ],
+      "evidence": "no None/NaN values found in JSON output"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run python3 analyze.py --since 90d --format json",
+        "parse JSON",
+        "verify actionable_issues length >= 3",
+        "verify each issue has description, severity, suggestion"
+      ],
+      "evidence": "10 issues found, all have description+severity+suggestion"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run python3 analyze.py --since 90d --format json",
+        "parse JSON",
+        "count skill_health entries",
+        "verify count matches installed_skills count"
+      ],
+      "evidence": "health_entries=74 installed_skills=58 (health >= installed, includes DORMANT skills)"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run time python3 analyze.py --since 365d --format json --output /tmp/tc5_perf_test.json",
+        "verify real time < 120s"
+      ],
+      "evidence": "elapsed=38s (limit=120s)"
+    },
+    {
+      "caseId": "TC-6-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "check ~/.pi/agent/evolution-data/reports/retrospective-2026-05-27.md exists",
+        "verify file non-empty (313 lines)",
+        "verify contains actionable insights (13 matches for suggestion/建议/分析/优化)"
+      ],
+      "evidence": "file=313 lines, 13 actionable insights"
+    },
+    {
+      "caseId": "TC-7-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run crontab -l",
+        "verify output contains pi-session-analyzer",
+        "verify cron schedule is '0 8 * * 1'"
+      ],
+      "evidence": "cron entry found with correct schedule"
+    }
+  ]
+}

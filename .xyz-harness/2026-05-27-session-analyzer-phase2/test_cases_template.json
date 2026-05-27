@@ -1,0 +1,76 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "CLI --help exits with code 0",
+      "steps": ["run python3 analyze.py --help", "verify exit code 0"]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "integration",
+      "title": "CLI --since 7d outputs Markdown to stdout",
+      "steps": ["run python3 analyze.py --since 7d", "verify stdout contains '# Pi Session' title", "verify contains 8 '##' section headers"]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "integration",
+      "title": "CLI --format json outputs valid JSON",
+      "steps": ["run python3 analyze.py --since 7d --format json", "parse stdout as JSON", "verify top-level keys include _meta, tool_stats, actionable_issues, skill_health"]
+    },
+    {
+      "id": "TC-1-04",
+      "type": "integration",
+      "title": "CLI --output writes to file",
+      "steps": ["run python3 analyze.py --since 7d --output /tmp/test_report.md", "verify /tmp/test_report.md exists", "verify file content starts with '# Pi Session'"]
+    },
+    {
+      "id": "TC-1-05",
+      "type": "integration",
+      "title": "CLI --sample marks report as sample",
+      "steps": ["run python3 analyze.py --sample 5 --since 30d --format json", "parse stdout as JSON", "verify _meta.is_sample == true", "verify _meta.sample_size <= 5"]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "Markdown report contains all 8 sections",
+      "steps": ["run python3 analyze.py --since 7d --format markdown", "count '##' level headers", "verify count >= 8"]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "integration",
+      "title": "JSON report has no None/NaN values",
+      "steps": ["run python3 analyze.py --since 7d --format json", "recursively check all values for None/NaN", "verify all such values replaced with 'N/A'"]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "Top-N issues has >= 3 entries on full run",
+      "steps": ["run python3 analyze.py --since 90d --format json", "parse JSON", "verify actionable_issues length >= 3", "verify each issue has description, severity, suggestion"]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "integration",
+      "title": "Skill health lists all installed skills",
+      "steps": ["run python3 analyze.py --since 90d --format json", "parse JSON", "count skill_health entries", "verify count matches installed_skills count from skills extractor"]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "integration",
+      "title": "Full analysis completes within 120 seconds",
+      "steps": ["run 'time python3 analyze.py --since 365d --format json -o /dev/null'", "verify real time < 120s"]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "manual",
+      "title": "Retrospective report exists with actionable insights",
+      "steps": ["check ~/.pi/agent/evolution-data/reports/ for retrospective-*.md", "verify file exists and non-empty", "verify contains at least 3 distinct actionable insights"]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "manual",
+      "title": "Cron entry exists with correct command",
+      "steps": ["run crontab -l", "verify output contains pi-session-analyzer", "verify cron schedule is '0 8 * * 1'"]
+    }
+  ]
+}
