@@ -31,7 +31,8 @@ import { getFinalOutput, formatUsageStats } from "./render.js";
 // ──────────────────────── Constants ────────────────────────
 
 export const MAX_PARALLEL_TASKS = 8;
-export const MAX_CONCURRENCY = 4;
+export const MAX_CONCURRENCY = 6;
+export const DEFAULT_CONCURRENCY = 4;
 
 const TEMP_SUBDIR = "pi-subagent";
 const MAX_TEMP_AGE_MS = 60 * 60 * 1000; // 1 hour
