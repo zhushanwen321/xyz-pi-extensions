@@ -14,6 +14,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createLogger } from "../../shared/logger.js";
+
+const log = createLogger("subagent");
 
 // ──────────────────────── Types ────────────────────────
 
@@ -75,14 +78,14 @@ export function loadSubagentModels(): SubagentModelsConfig | null {
 				if (m["task-complexity"]) {
 					const invalid = m["task-complexity"].filter((c) => !VALID_COMPLEXITIES.has(c));
 					if (invalid.length > 0) {
-						console.warn(
-							`[subagent] Invalid complexity values in subagent-models.json for ${m.id}: ${invalid.join(", ")}. Valid: low, medium, high.`,
+						log.warn(
+							`Invalid complexity values in subagent-models.json for ${m.id}: ${invalid.join(", ")}. Valid: low, medium, high.`,
 						);
 					}
 				}
 				if (!m.provider) {
-					console.warn(
-						`[subagent] Model entry "${m.id}" has no provider field, will be skipped during complexity routing.`,
+					log.warn(
+						`Model entry "${m.id}" has no provider field, will be skipped during complexity routing.`,
 					);
 				}
 			}

@@ -16,6 +16,9 @@ import { createHash } from "node:crypto";
 import type { ModelResolutionContext, ThinkingLevel } from "./model.js";
 import { resolveModel } from "./model.js";
 import { sanitizeMemoryId } from "./spawn.js";
+import { createLogger } from "../../shared/logger.js";
+
+const log = createLogger("subagent");
 
 // ──────────────────────── Types ────────────────────────
 
@@ -84,7 +87,7 @@ export function loadVisionModels(): VisionModelsConfig | null {
 		if (parsed.models) {
 			for (const m of parsed.models) {
 				if (!m.provider) {
-					console.warn(`[subagent] Vision model entry "${m.id}" has no provider field, will be skipped.`);
+					log.warn(`Vision model entry "${m.id}" has no provider field, will be skipped.`);
 				}
 			}
 		}

@@ -21,12 +21,12 @@ import { join, resolve } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import { ensureEvolutionDirs, readDailySummary, updateSessionEnd, updateSkillTrigger, updateToolStats, writeDailySummary, recordSessionStart } from "./storage.js";
+import { createLogger, type Logger } from "../../shared/logger.js";
 import { type DailySummary, type TurnBuffer, emptyDailySummary, emptyTurnBuffer } from "./types.js";
 
 // ── 常量 ────────────────────────────────────────────
 
 const STATS_FILE = join(homedir(), ".pi", "agent", "usage-stats.json");
-const LOG_PREFIX = "[usage-tracker]";
 const JSON_INDENT = 2;
 
 // ── 数据模型 ─────────────────────────────────────────
@@ -105,6 +105,7 @@ export default function usageTrackerExtension(pi: ExtensionAPI): void {
 	// 原有状态
 	let skillMap = new Map<string, string>();
 	let initialized = false;
+	const log: Logger = createLogger("usage-tracker");
 
 	// 进化信号 buffer（注意：闭包级变量，多 session 并行时各实例独立，
 	// 后写入的 dailySummary 会覆盖先写入的。Phase 1 单 session 可接受）
@@ -137,7 +138,7 @@ export default function usageTrackerExtension(pi: ExtensionAPI): void {
 		sessionTokenTotal = 0;
 
 		recordSessionStart(sessionId, sessionCwd);
-		console.error(`${LOG_PREFIX} Session started: ${sessionId} (${sessionCwd})`);
+		log.info("Session started:", sessionId, `(${sessionCwd})`);
 	});
 
 	// before_agent_start: 构建 skill 映射 + 记录本次加载的 skills
@@ -156,9 +157,9 @@ export default function usageTrackerExtension(pi: ExtensionAPI): void {
 				}
 			}
 		}
-		console.error(`${LOG_PREFIX} Turn ${turnSequence} started`);
+		log.info(`Turn ${turnSequence} started`);
 		if (skillMap.size > 0) {
-			console.error(`${LOG_PREFIX} Skill map built: ${skillMap.size} entries`);
+			log.info(`Skill map built: ${skillMap.size} entries`);
 		}
 	});
 
@@ -177,7 +178,7 @@ export default function usageTrackerExtension(pi: ExtensionAPI): void {
 						// 新增: 同时记录到 evolution-data
 						turnBuffer.skillTriggers.push(skillName);
 						updateSkillTrigger(skillName);
-						console.error(`${LOG_PREFIX} Skill loaded: ${skillName} (${readPath})`);
+						log.info(`Skill loaded: ${skillName} (${readPath})`);
 					}
 				}
 			}
@@ -194,7 +195,7 @@ export default function usageTrackerExtension(pi: ExtensionAPI): void {
 				turnBuffer.agentCalls.push(name);
 			}
 			if (names.length > 0) {
-				console.error(`${LOG_PREFIX} Agent(s) called: ${names.join(", ")}`);
+				log.info(`Agent(s) called: ${names.join(", ")}`);
 			}
 		}
 
@@ -213,7 +214,7 @@ export default function usageTrackerExtension(pi: ExtensionAPI): void {
 		updateToolStats(toolName, !isError);
 
 		if (isError) {
-			console.error(`${LOG_PREFIX} Tool failed: ${toolName}`);
+			log.error(`Tool failed: ${toolName}`);
 		}
 	});
 
@@ -263,8 +264,8 @@ export default function usageTrackerExtension(pi: ExtensionAPI): void {
 		// 写入每日汇总（每次 agent_end 后更新，保证崩溃时数据不丢失）
 		writeDailySummary(dailySummary);
 
-		console.error(
-			`${LOG_PREFIX} Turn ${sessionTurnCount} flushed: ` +
+		log.info(
+			`Turn ${sessionTurnCount} flushed: ` +
 				`${turnBuffer.toolCalls.length} tool calls, ` +
 				`${turnBuffer.tokenUsage ? `${turnBuffer.tokenUsage.input + turnBuffer.tokenUsage.output} tokens` : "no usage"}`,
 		);
@@ -274,6 +275,6 @@ export default function usageTrackerExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async () => {
 		updateSessionEnd(sessionId, sessionTurnCount, sessionTokenTotal);
-		console.error(`${LOG_PREFIX} Session shutdown: ${sessionId}, ${sessionTurnCount} turns, ${sessionTokenTotal} tokens`);
+		log.info(`Session shutdown: ${sessionId}, ${sessionTurnCount} turns, ${sessionTokenTotal} tokens`);
 	});
 }

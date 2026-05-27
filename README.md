@@ -39,6 +39,30 @@ Lightweight task list — `/todos` command + `todo` tool with pending/in_progres
 /todos
 ```
 
+### [usage-tracker](./usage-tracker/)
+
+Passive usage signal collector — tracks skill/agent invocations, tool execution stats, and token usage per session/day. Writes to `~/.pi/agent/usage-stats.json` and `~/.pi/agent/evolution-data/`.
+
+No commands or user interaction required — runs automatically in the background.
+
+## Shared Modules
+
+### [shared/logger](./shared/)
+
+File-only logger shared by all extensions. Log files are written to `~/.pi/agent/logs/<extension>-YYYY-MM-DD.log` and never output to the console (avoids TUI pollution).
+
+Usage:
+
+```typescript
+import { createLogger } from "../../shared/logger.js";
+const log = createLogger("my-extension");
+log.info("Something happened");
+log.warn("Config missing: %s", path);
+log.error("Failed: %s", err.message);
+```
+
+Log level can be overridden via environment variable `PI_LOG_LEVEL` (debug/info/warn/error). Default is `info`.
+
 ## Installation
 
 Each extension can be installed globally or per-project by symlinking into the Pi extensions directory:
