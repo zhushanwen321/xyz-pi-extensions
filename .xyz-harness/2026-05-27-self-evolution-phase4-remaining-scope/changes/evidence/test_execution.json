@@ -1,0 +1,180 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run: python3 ~/.pi/agent/scripts/pi-session-analyzer/analyze.py --since 7d --format json --output /tmp/tc1-report.json",
+        "Verify output file exists (383974 bytes)",
+        "Parse JSON, assert top-level keys include: _meta, tool_stats, token_stats, error_stats, user_patterns, skill_stats, cross_project, satisfaction, actionable_issues, skill_health",
+        "All expected keys present, tool_stats contains numeric values"
+      ],
+      "evidence": "Analyze.py produced 383KB JSON report with all expected keys."
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Integration test 'buildJudgeInput filters report for target claude-md' covers target type filtering",
+        "Code review confirms buildJudgeInput creates reportPath and promptFilePath for all 4 target types"
+      ],
+      "evidence": "Covered by integration test suite (18/18 pass). Code review confirms all target paths."
+    },
+    {
+      "caseId": "TC-1-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Grep commands.ts for '!existsSync(ANALYZER_SCRIPT)' — found at line 118",
+        "Grep commands.ts for 'Session analyzer not found' — found in error message",
+        "Verify error thrown before execFileSync call"
+      ],
+      "evidence": "Source code review: existence check at commands.ts:118-122 with clear error message."
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Grep judge.ts TARGET_TEMPLATE for 'merge-reviewer' key — found mapping to 'merge-reviewer.txt'",
+        "Verify file exists: evolution-engine/src/templates/merge-reviewer.txt — exists (50 lines)"
+      ],
+      "evidence": "TARGET_TEMPLATE['merge-reviewer'] === 'merge-reviewer.txt', template file exists."
+    },
+    {
+      "caseId": "TC-2-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Analyze extractReportSubset control flow in judge.ts",
+        "Verify merge-reviewer branch reachable (after if(target==='skills'){return}, before final return)",
+        "Verify merge-reviewer extracts tool_stats, error_stats, user_patterns fields"
+      ],
+      "evidence": "Code review: merge-reviewer branch at correct position, not dead code."
+    },
+    {
+      "caseId": "TC-2-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Grep commands.ts for 'Diff preview' — found in handleEvolveApply list handler",
+        "Verify diff preview shows first 10 lines of diff content",
+        "Verify 'Diff target' label present for suggestions with diff"
+      ],
+      "evidence": "Source code review: diff preview in handleEvolveApply (commands.ts:244-248)."
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Integration test 'applySuggestion rejects path outside whitelist' executed",
+        "Test creates suggestion with targetPath='/etc/passwd', asserts rejection with 'not allowed'"
+      ],
+      "evidence": "Covered by integration test (18/18 pass)."
+    },
+    {
+      "caseId": "TC-4-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Integration test 'applyUnifiedDiff applies valid diff' covers apply path",
+        "Integration test 'applyUnifiedDiff detects conflict' covers conflict detection",
+        "Code review: applySuggestion calls backupFile before patching, rollbackSuggestion calls copyFileSync to restore"
+      ],
+      "evidence": "Apply/rollback roundtrip verified via integration tests + code review."
+    },
+    {
+      "caseId": "TC-4-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: applier.ts line 218 checks !existsSync(entry.backupPath)",
+        "Line 219 returns { success: false, reason: 'backup file not found' }"
+      ],
+      "evidence": "Source code review confirms graceful error handling (applier.ts:218-219)."
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Integration test 'token-decline flag created when 3 consecutive days above baseline' executed",
+        "Creates 14 daily files with last 3 having 3x token/session, asserts flag with rule='token-decline'"
+      ],
+      "evidence": "Covered by integration test (18/18 pass)."
+    },
+    {
+      "caseId": "TC-5-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Integration test 'skill-dormant flag created for skills > 30 days inactive' executed",
+        "Creates skill-triggers.json with lastTriggered 45 days ago, asserts flag mentioning skill name"
+      ],
+      "evidence": "Covered by integration test (18/18 pass)."
+    },
+    {
+      "caseId": "TC-5-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Integration test 'no flags when data is healthy' executed",
+        "Creates 14 days uniform data with recent skill triggers, asserts empty flags array"
+      ],
+      "evidence": "Covered by integration test (18/18 pass)."
+    },
+    {
+      "caseId": "TC-9-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Integration test 'parseJudgeOutput handles markdown fence' executed",
+        "Test passes ```json [...] ``` wrapped output, verifies correct array parsing"
+      ],
+      "evidence": "Covered by integration test (18/18 pass)."
+    },
+    {
+      "caseId": "TC-9-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Integration test 'parseJudgeOutput skips entries with invalid confidence' executed",
+        "Test passes array with confidence 0.85 and 1.5, verifies only valid entry kept"
+      ],
+      "evidence": "Covered by integration test (18/18 pass)."
+    },
+    {
+      "caseId": "TC-D3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: session-quality.txt template (53 lines) has role definition, input schema, scoring dimensions, output format",
+        "Template structure verified: contains actionable_fields, confidence_scale, output_schema sections"
+      ],
+      "evidence": "Template structure verified by code review. Full LLM Judge quality assessment deferred to EG2 post-merge."
+    },
+    {
+      "caseId": "TC-D3-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: prompt-optimize.txt template (54 lines) has role definition, input schema, scoring dimensions, output format",
+        "Template structure verified: contains actionable_fields, confidence_scale, output_schema sections"
+      ],
+      "evidence": "Template structure verified by code review. Full LLM Judge quality assessment deferred to EG2 post-merge."
+    },
+    {
+      "caseId": "TC-D3-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: skill-health.txt template (52 lines) has role definition, input schema, scoring dimensions, output format",
+        "Template structure verified: contains actionable_fields, confidence_scale, output_schema sections"
+      ],
+      "evidence": "Template structure verified by code review. Full LLM Judge quality assessment deferred to EG2 post-merge."
+    }
+  ]
+}

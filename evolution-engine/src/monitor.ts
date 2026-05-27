@@ -7,6 +7,24 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AutoTriggerFlag } from "./types";
+import { existsSync as existsSync$1, mkdirSync as mkdirSync$1, appendFileSync } from "node:fs";
+import { join as join$1 } from "node:path";
+import { homedir as homedir$1 } from "node:os";
+
+/** 内联 file logger，避免跨扩展目录引用（symlink 部署时路径可能断裂） */
+function createMonitorLogger(prefix: string) {
+	const logDir = join$1(homedir$1(), ".pi", "agent", "logs");
+	function write(level: string, args: unknown[]) {
+		if (!existsSync$1(logDir)) mkdirSync$1(logDir, { recursive: true });
+		const date = new Date().toISOString().slice(0, 10);
+		const filePath = join$1(logDir, `${prefix}-${date}.log`);
+		const ts = new Date().toISOString();
+		const msg = args.map(a => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
+		try { appendFileSync(filePath, `${ts} [${level.toUpperCase()}] [${prefix}] ${msg}\n`, "utf-8"); } catch { /* silent */ }
+	}
+	return { info: (...a: unknown[]) => write("info", a), warn: (...a: unknown[]) => write("warn", a), error: (...a: unknown[]) => write("error", a) };
+}
+const log = createMonitorLogger("evolution-monitor");
 
 // ── 常量 ─────────────────────────────────────────────
 
@@ -263,6 +281,7 @@ export function checkAutoTriggerRules(evolutionDir: string): AutoTriggerFlag[] {
 	const dailyDir = path.join(evolutionDir, "daily");
 	const flagsDir = path.join(evolutionDir, FLAGS_DIR);
 	const daily = loadRecentDaily(dailyDir, now, DAILY_WINDOW);
+	log.info(`Auto-trigger check: ${daily.length} daily files loaded`);
 
 	const rules: Array<{ name: RuleName; result: { hit: boolean; detail: string } }> = [
 		{ name: "token-decline", result: checkTokenDecline(daily) },
@@ -272,6 +291,7 @@ export function checkAutoTriggerRules(evolutionDir: string): AutoTriggerFlag[] {
 
 	for (const { name, result } of rules) {
 		if (result.hit) {
+			log.info(`Rule "${name}" triggered: ${result.detail}`);
 			const existing = readFlag(flagsDir, name);
 			// 已有 flag 且在 24h 冷却期内，跳过
 			if (existing) {

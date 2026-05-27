@@ -19,6 +19,7 @@ const TARGET_TEMPLATE: Record<JudgeInput["target"], string> = {
 	all: "session-quality.txt",
 	"claude-md": "prompt-optimize.txt",
 	skills: "skill-health.txt",
+	"merge-reviewer": "merge-reviewer.txt",
 };
 
 // ── report 子集提取器 ────────────────────────────────
@@ -50,10 +51,17 @@ function extractReportSubset(
 		return subset;
 	}
 
-	// target === "skills"
-	if (report.skill_stats != null) subset.skill_stats = report.skill_stats;
-	if (report.skill_health != null) subset.skill_health = report.skill_health;
-	if (report.actionable_issues != null) subset.actionable_issues = report.actionable_issues;
+	if (target === "skills") {
+		if (report.skill_stats != null) subset.skill_stats = report.skill_stats;
+		if (report.skill_health != null) subset.skill_health = report.skill_health;
+		if (report.actionable_issues != null) subset.actionable_issues = report.actionable_issues;
+		return subset;
+	}
+
+	// target === "merge-reviewer"
+	if (report.tool_stats != null) subset.tool_stats = report.tool_stats;
+	if (report.error_stats != null) subset.error_stats = report.error_stats;
+	if (report.user_patterns != null) subset.user_patterns = report.user_patterns;
 	return subset;
 }
 
