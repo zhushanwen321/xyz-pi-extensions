@@ -100,6 +100,27 @@ export function loadSubagentModels(): SubagentModelsConfig | null {
 // ──────────────────────── Hints ────────────────────────
 
 /**
+ * Synchronously resolve the first candidate model ref from subagent-models.json
+ * for a given complexity level. No ctx / modelRegistry required — purely config-driven.
+ * Returns undefined when config is missing, empty, or no candidate has a provider.
+ */
+export function resolveModelByComplexitySync(
+	complexity: TaskComplexity,
+): string | undefined {
+	const config = loadSubagentModels();
+	if (!config?.models?.length) return undefined;
+	const candidates = config.models
+		.filter((m) => m["task-complexity"]?.includes(complexity))
+		.sort((a, b) => a.order - b.order);
+	for (const c of candidates) {
+		if (c.provider) {
+			return `${c.provider}/${c.id}`;
+		}
+	}
+	return undefined;
+}
+
+/**
  * Build a human-readable summary of models for tool description (sync).
  * Only reads subagent-models.json — no async model registry access.
  */

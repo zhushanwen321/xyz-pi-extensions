@@ -1,0 +1,218 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_trace: commands.ts default case → loadWorkflows() returns empty → sendUserMessage() with 'No available workflows found' and instruction to use workflow-generate",
+        "code_trace: AI receives message with routing instructions → calls workflow-generate tool",
+        "code_trace: workflow-generate execute() validates meta, syntax, writes to .tmp, returns path"
+      ],
+      "evidence": "code_trace of commands.ts default handler + index.ts workflow-generate execute"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_trace: loadWorkflows() scans SAVED_DIR → finds batch-review.js with source='saved'",
+        "code_trace: commands.ts default handler builds workflowList with '[saved] batch-review — description'",
+        "code_trace: sendUserMessage includes routing prompt asking AI to match or generate"
+      ],
+      "evidence": "code_trace of config-loader.ts loadWorkflows + commands.ts default handler"
+    },
+    {
+      "caseId": "TC-1-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_trace: loadWorkflows() scans TMP_DIR → finds .tmp/review-abc.js with source='tmp'",
+        "code_trace: commands.ts default handler includes '[tmp] review-abc' in workflowList"
+      ],
+      "evidence": "code_trace of config-loader.ts scanDirectory(tmpDir, 'tmp')"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "automated: verify_test.cjs test_generate_valid_script",
+        "assert hasMeta=true for valid script",
+        "assert new Function(script) succeeds",
+        "assert fs.existsSync(filePath) after write"
+      ],
+      "evidence": "verify_test.cjs PASS"
+    },
+    {
+      "caseId": "TC-2-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "automated: verify_test.cjs test_generate_no_meta",
+        "assert hasMeta=false for 'console.log(1)'",
+        "code_trace: index.ts meta check throws 'Script must contain a meta export'"
+      ],
+      "evidence": "verify_test.cjs PASS"
+    },
+    {
+      "caseId": "TC-2-03",
+      "round": 1,
+      "passed": false,
+      "execute_steps": [
+        "automated: test with script='invalid {{{'",
+        "verify_test.cjs Round 1: 'invalid {{{' has no meta → rejected by meta check, not syntax check",
+        "original test case assumed syntax error would be caught, but meta check runs first",
+        "script needs 'const meta' to pass meta check and reach syntax validation"
+      ],
+      "evidence": "verify_test.cjs Round 1: meta check blocks path to syntax check for scripts without meta"
+    },
+    {
+      "caseId": "TC-2-03",
+      "round": 2,
+      "passed": true,
+      "execute_steps": [
+        "automated: fixed test script to include meta: 'const meta = { name: \"bad\", ... }; invalid {{{'",
+        "assert hasMeta=true → passes meta check",
+        "assert new Function(script) throws → syntax check catches error",
+        "code_trace: index.ts line ~667 catch → throw new Error('Syntax error in script: ...')"
+      ],
+      "evidence": "verify_test.cjs Round 2 PASS — SYNTAX_ERR_SCRIPT has meta but invalid syntax"
+    },
+    {
+      "caseId": "TC-2-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "automated: verify_test.cjs test_generate_name_conflict",
+        "create batch-review.js in saved dir",
+        "existing.find(wf => wf.name === 'batch-review') finds conflict"
+      ],
+      "evidence": "verify_test.cjs PASS"
+    },
+    {
+      "caseId": "TC-2-05",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "automated: verify_test.cjs test_generate_auto_mkdir",
+        "cleanup removes entire test dir, only SAVED_DIR created",
+        "mkdirSync(TMP_DIR, { recursive: true }) creates .tmp from scratch",
+        "assert fs.existsSync(TMP_DIR) and written file"
+      ],
+      "evidence": "verify_test.cjs PASS"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "automated: verify_test.cjs test_save_normal",
+        "create .tmp/review-src.js",
+        "renameSync to saved/review-src.js",
+        "assert dest exists, tmp gone"
+      ],
+      "evidence": "verify_test.cjs PASS"
+    },
+    {
+      "caseId": "TC-3-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "automated: verify_test.cjs test_save_as_rename",
+        "renameSync .tmp/review-src.js → saved/batch-review-v2.js",
+        "assert renamed file exists"
+      ],
+      "evidence": "verify_test.cjs PASS"
+    },
+    {
+      "caseId": "TC-3-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "automated: verify_test.cjs test_save_dest_exists",
+        "create both .tmp/demo.js and saved/demo.js",
+        "assert fs.existsSync(destPath) === true → would reject"
+      ],
+      "evidence": "verify_test.cjs PASS"
+    },
+    {
+      "caseId": "TC-3-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_trace: saveWorkflow uses renameSync (synchronous fs metadata change)",
+        "code_trace: Worker threads run in separate child_process — no shared file handles",
+        "renameSync only changes directory entry, does not affect open file descriptors on POSIX"
+      ],
+      "evidence": "code_trace: commands.ts saveWorkflow + Worker in separate process"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": false,
+      "execute_steps": [
+        "code_trace: commands.ts list case — loadWorkflows() returns items with .source field",
+        "code_trace: workflows.map(wf => `[${wf.source}] ${wf.name} — ...`)",
+        "ISSUE: discovered MF2 from code review — original dedup had `if (wf.available)` filter that silently dropped unavailable scripts",
+        "unavailable scripts (e.g. broken imports) would not appear in list despite being on disk"
+      ],
+      "evidence": "code review MF2 identified: dedup filter dropped unavailable workflows"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 2,
+      "passed": true,
+      "execute_steps": [
+        "code_trace: config-loader.ts MF2 fix — removed `if (wf.available)` filter",
+        "all workflows now included in mergedMap regardless of available status",
+        "list handler shows [source] tag for all items including unavailable"
+      ],
+      "evidence": "commit 1b13bb1 fixed MF2 — dedup no longer filters unavailable"
+    },
+    {
+      "caseId": "TC-4-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "automated: verify_test.cjs test_dedup_priority",
+        "Map.set('review', saved) then Map.set('review', tmp)",
+        "assert result.source === 'tmp', map.size === 1",
+        "code_trace: config-loader.ts — user→project→tmp order ensures tmp wins"
+      ],
+      "evidence": "verify_test.cjs PASS"
+    },
+    {
+      "caseId": "TC-4-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_trace: commands.ts /workflows handler — loadWorkflows() returns source field",
+        "code_trace: entries.push(`[${wf.source}] ${wf.name} — ...`) for scripts",
+        "panel select dialog shows source tags"
+      ],
+      "evidence": "code_trace: commands.ts /workflows handler entries construction"
+    },
+    {
+      "caseId": "TC-4-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_trace: commands.ts /workflows handler — actions array includes 'Save' only when meta.source === 'tmp'",
+        "selecting Save calls saveWorkflow(meta.name)",
+        "saveWorkflow moves file from .tmp to saved dir"
+      ],
+      "evidence": "code_trace: commands.ts /workflows Save action branch"
+    },
+    {
+      "caseId": "TC-4-05",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_trace: commands.ts deleteWorkflow — isRunning callback checks orch.list() for name + status='running'",
+        "if isRunning(name) → throws Error('Cannot delete: workflow is currently running. Abort it first.')"
+      ],
+      "evidence": "code_trace: commands.ts deleteWorkflow isRunning guard"
+    }
+  ]
+}

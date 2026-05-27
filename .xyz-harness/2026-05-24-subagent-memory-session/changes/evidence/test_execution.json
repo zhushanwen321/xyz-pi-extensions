@@ -1,0 +1,117 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: trace index.ts L361-406 — memoryParam truthy, isBackground/hasTasks/hasChain all false, enters session computation",
+        "Verify resolveMemorySessionFile(mainSessionFile, 'test-session') → '{dir}/{base}.mem-test-session.jsonl'",
+        "fs.existsSync(filePath) → false → action='create'",
+        "Trace spawn.ts L459-466: memorySession.action==='create' → fs.copyFileSync(mainSessionFile, filePath) → args.push('--session', filePath)",
+        "Verify index.ts L607-609: details.memoryId='test-session', details.memoryAction='create'"
+      ],
+      "evidence": "Static code trace — no live Pi session available for extension tool invocation"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: second call with same memory='test-session'",
+        "fs.existsSync(filePath) → true (file created by first call) → action='resume'",
+        "Trace spawn.ts: memorySession.action==='resume' → no copyFileSync → args.push('--session', filePath)",
+        "Verify Pi CLI receives --session pointing to existing file → resumes session",
+        "Verify details.memoryId='test-session', details.memoryAction='resume'"
+      ],
+      "evidence": "Static code trace — resume path verified through fs.existsSync branch"
+    },
+    {
+      "caseId": "TC-1-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: memoryParam = params.memory?.trim() → undefined → falsy",
+        "Validation block skipped, memorySession remains undefined",
+        "spawn.ts L464-466: memorySession falsy → args.push('--no-session')",
+        "details.memoryId and memoryAction remain undefined — no memory fields in result"
+      ],
+      "evidence": "Static code trace — no-memory path is the else branch, unchanged from original"
+    },
+    {
+      "caseId": "TC-1-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: sanitizeMemoryId('my agent/task:refactor')",
+        "Verify regex /[^a-zA-Z0-9_-]/g replaces space, slash, colon → 'my_agent_task_refactor'",
+        "resolveMemorySessionFile joins dir + '{base}.mem-my_agent_task_refactor.jsonl'"
+      ],
+      "evidence": "Static code trace — sanitization regex verified in spawn.ts L264"
+    },
+    {
+      "caseId": "TC-1-05",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: isBackground=true, memoryParam truthy",
+        "Trace index.ts L363-371: returns error 'memory is not supported in background mode'",
+        "Verify isError: true"
+      ],
+      "evidence": "Static code trace — early return with error before session computation"
+    },
+    {
+      "caseId": "TC-1-06",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: hasTasks=true, memoryParam truthy, isBackground=false",
+        "Trace index.ts L373-381: returns error 'memory is not supported in parallel mode'",
+        "Verify isError: true"
+      ],
+      "evidence": "Static code trace — parallel mode rejection"
+    },
+    {
+      "caseId": "TC-1-07",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: hasChain=true, memoryParam truthy, isBackground=false, hasTasks=false",
+        "Trace index.ts L383-391: returns error 'memory is not supported in chain mode'",
+        "Verify isError: true"
+      ],
+      "evidence": "Static code trace — chain mode rejection"
+    },
+    {
+      "caseId": "TC-1-08",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: ctx.sessionManager.getSessionFile() returns undefined (in-memory session)",
+        "Trace index.ts L389-396: !mainSessionFile → returns error 'memory requires a file-backed session'",
+        "Verify isError: true"
+      ],
+      "evidence": "Static code trace — in-memory session guard"
+    },
+    {
+      "caseId": "TC-1-09",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run: cd /Users/zhushanwen/Code/xyz-pi-extensions && npx tsc --noEmit",
+        "Verify: 0 errors, exit code 0"
+      ],
+      "evidence": "Executed 2026-05-25 — tsc output empty (0 errors)"
+    },
+    {
+      "caseId": "TC-1-10",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run: cd /Users/zhushanwen/Code/xyz-pi-extensions && npm run lint",
+        "Verify: 0 errors, 88 warnings (all pre-existing, no new warnings)"
+      ],
+      "evidence": "Executed 2026-05-25 — 0 errors, 88 warnings (unchanged from baseline)"
+    }
+  ]
+}
