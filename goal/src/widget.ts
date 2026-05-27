@@ -2,7 +2,7 @@
  * Widget 渲染逻辑 — 状态栏和侧边栏任务面板
  */
 
-import type { ThemeColor } from "@mariozechner/pi-coding-agent";
+import type { ThemeColor } from "xyz-pi";
 import type { GoalRuntimeState } from "./state";
 import { getCompletedCount, getElapsedTimeSeconds } from "./state";
 import { getTokenUsagePercent, getTimeUsagePercent, getBudgetColor } from "./budget.js";

@@ -7,8 +7,8 @@
  * and name conflict checking.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "xyz-pi";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve as pathResolve } from "node:path";
