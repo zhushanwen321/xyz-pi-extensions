@@ -135,6 +135,39 @@ Agent 定义文件的发现范围：`user`（`~/.pi/agent/agents/`）、`project
 **Background Job**
 `background: true` 模式下的 Subagent 运行实例。结果通过 Pi 的 `sendMessage({ deliverAs: "followUp", triggerTurn: true })` 自动注入到主对话，无需轮询。
 
+### UsageTracker
+
+**UsageStats**
+`~/.pi/agent/usage-stats.json` 文件，记录 skill 全文加载次数和 agent 调用次数。由 usage-tracker extension 维护，read-before-write 防跨 session 覆盖。
+
+**EvolutionData**
+`~/.pi/agent/evolution-data/` 目录，存储 Agent 自我进化所需的信号数据：
+- `daily/YYYY-MM-DD.json` — 每日汇总（工具调用、token 消耗、skill 触发、agent 调用按天聚合）
+- `tool-stats.json` — 工具执行累积统计（按工具名的调用次数、失败次数、累计耗时）
+- `skill-triggers.json` — Skill 触发累积统计（触发次数、最后触发时间）
+- `session-manifest.json` — Session 清单（sessionId、cwd、起止时间、turn 数、总 token）
+
+**TurnBuffer**
+内存中的单轮信号缓冲区。在 `before_agent_start` 时重置，在 `agent_end` 时 flush 到 DailySummary。采集内容：toolCalls、tokenUsage、skillTriggers、agentCalls。
+
+**DailySummary**
+按日期聚合的进化信号汇总。由 TurnBuffer 逐轮累积，在每次 `agent_end` 时写入磁盘。同一天的多次 session 数据会被合并到同一个 DailySummary 中。
+
+### Workflow
+
+**Workflow**
+基于 `worker_threads` 的多 Agent 编排引擎。用户编写 JS 脚本描述任务流程（`agent()`/`parallel()`/`pipeline()`），脚本在 Worker 线程中执行，通过消息传递与主线程通信。
+_Avoid_: 工作流（口语可，正式文档用 Workflow）
+
+**Worker Script**
+用户编写的 Workflow 定义文件（`.pi/workflows/*.js`）。运行在 Worker 线程中，可调用 `agent()`、`parallel()`、`pipeline()` 等全局函数。支持 `$ARGS`、`$WORKSPACE`、`$BUDGET` 全局变量。
+
+**AgentPool**
+Workflow 内部管理的 Pi 子进程池。以 FIFO 顺序调度 agent 调用，受 `maxConcurrency` 限制。自动重试 3 次（指数退避）。
+
+**CallCache**
+Workflow 暂停/恢复时的 agent 调用结果缓存。已完成的调用在恢复时从缓存重放，不重新执行。
+
 ## Flagged Ambiguities
 
 **"任务"同时存在于 Goal（GoalTask）和 Todo（Todo item）**
