@@ -376,15 +376,15 @@ export default function evolutionEngineExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("evolve", {
 		description:
 			"Analyze usage data and suggest improvements. " +
-			"Usage: /evolve [target] [since] | target: all|claude-md|skills, since: 7d",
+			"Usage: /evolve [target] [since] | target: all|claude-md|skills|merge-reviewer, since: 7d",
 		handler: async (args, ctx) => {
 			// 解析简单参数
 			const parts = args.trim().split(/\s+/);
-			let target: "all" | "claude-md" | "skills" = "all";
+			let target: "all" | "claude-md" | "skills" | "merge-reviewer" = "all";
 			let since = "7d";
 
 			for (const part of parts) {
-				if (part === "all" || part === "claude-md" || part === "skills") {
+				if (part === "all" || part === "claude-md" || part === "skills" || part === "merge-reviewer") {
 					target = part;
 				} else if (part.match(/^\d+d$/)) {
 					since = part;
