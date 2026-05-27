@@ -1,0 +1,200 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "Analyzer CLI produces valid JSON report with expected keys",
+      "description": "Run pi-session-analyzer with --since 7d --format json, verify output contains tool_stats, token_stats, skill_stats, error_stats top-level keys",
+      "steps": [
+        "python3 ~/.pi/agent/scripts/pi-session-analyzer/analyze.py --since 7d --format json --output /tmp/tc1-report.json",
+        "Parse output JSON, assert top-level keys include tool_stats, token_stats, skill_stats",
+        "Assert tool_stats.total_calls is a non-negative number"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "integration",
+      "title": "buildJudgeInput creates valid input files for each target",
+      "description": "Call buildJudgeInput with each target type, verify temp files created and non-empty",
+      "steps": [
+        "Call buildJudgeInput(report, 'all', tmpDir), verify reportPath exists and file size > 0",
+        "Call buildJudgeInput(report, 'claude-md', tmpDir), verify promptFilePath exists",
+        "Call buildJudgeInput(report, 'skill', tmpDir), verify reportPath exists"
+      ]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "integration",
+      "title": "handleEvolve returns error when analyzer script missing",
+      "description": "Set ANALYZER_SCRIPT to nonexistent path, verify clear error message",
+      "steps": [
+        "Mock ANALYZER_SCRIPT to '/nonexistent/analyze.py'",
+        "Call handleEvolve with no recent reports",
+        "Assert error message contains 'not found' or 'install'"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "merge-reviewer target maps to correct template",
+      "description": "Verify TARGET_TEMPLATE['merge-reviewer'] === 'merge-reviewer.txt' and file exists",
+      "steps": [
+        "Import TARGET_TEMPLATE from judge.ts",
+        "Assert TARGET_TEMPLATE['merge-reviewer'] === 'merge-reviewer.txt'",
+        "Assert file exists at evolution-engine/src/templates/merge-reviewer.txt"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "integration",
+      "title": "buildJudgeInput accepts merge-reviewer target without error",
+      "description": "Call buildJudgeInput with target='merge-reviewer', verify no throw",
+      "steps": [
+        "Call buildJudgeInput(report, 'merge-reviewer', tmpDir)",
+        "Assert result.target === 'merge-reviewer'",
+        "Assert result.reportPath exists"
+      ]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "integration",
+      "title": "handleEvolveApply list shows diff preview",
+      "description": "Create pending suggestions with diff content, verify list output includes diff preview",
+      "steps": [
+        "Save pending file with suggestions containing non-empty diff",
+        "Call handleEvolveApply with action='list'",
+        "Assert content text includes diff-related content or 'Diff target'"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "integration",
+      "title": "applySuggestion rejects path outside whitelist",
+      "description": "Attempt to apply suggestion targeting /etc/passwd, verify rejection",
+      "steps": [
+        "Create suggestion with targetPath='/etc/passwd'",
+        "Call applySuggestion(suggestion, backupDir)",
+        "Assert result.success === false",
+        "Assert result.reason includes 'not allowed'"
+      ]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "integration",
+      "title": "apply + rollback roundtrip preserves original content",
+      "description": "Apply a suggestion to a temp file, then rollback, verify content restored",
+      "steps": [
+        "Create temp .md file under ~/.pi/agent/ with known content",
+        "Create suggestion with valid diff modifying one line",
+        "Call applySuggestion, assert success",
+        "Verify file content changed",
+        "Call rollbackSuggestion with history entry, assert success",
+        "Verify file content matches original"
+      ]
+    },
+    {
+      "id": "TC-4-03",
+      "type": "integration",
+      "title": "rollbackSuggestion fails gracefully when backup missing",
+      "description": "Attempt rollback with nonexistent backup file, verify error message",
+      "steps": [
+        "Create history entry with backupPath='/nonexistent/backup.md'",
+        "Call rollbackSuggestion(entry)",
+        "Assert result.success === false",
+        "Assert result.reason includes 'not found'"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "integration",
+      "title": "Auto-trigger token-decline rule fires for elevated token usage",
+      "description": "Create daily files with 3 consecutive high-token days, verify flag created",
+      "steps": [
+        "Create 14 daily JSON files: first 7 normal, last 3 with 3x token/session",
+        "Call checkAutoTriggerRules(evolutionDir)",
+        "Assert flags include one with rule='token-decline'"
+      ]
+    },
+    {
+      "id": "TC-5-02",
+      "type": "integration",
+      "title": "Auto-trigger skill-dormant rule fires for inactive skills",
+      "description": "Create skill-triggers.json with skill last triggered > 30 days ago",
+      "steps": [
+        "Write skill-triggers.json with 'old-skill' lastTriggered 45 days ago",
+        "Call checkAutoTriggerRules(evolutionDir)",
+        "Assert flags include one with rule='skill-dormant' mentioning 'old-skill'"
+      ]
+    },
+    {
+      "id": "TC-5-03",
+      "type": "integration",
+      "title": "Auto-trigger returns empty for healthy data",
+      "description": "Create 14 days of uniform data, verify no flags",
+      "steps": [
+        "Create 14 daily JSON files with uniform token/session ~300",
+        "Write skill-triggers.json with recently triggered skill",
+        "Call checkAutoTriggerRules(evolutionDir)",
+        "Assert returned array is empty"
+      ]
+    },
+    {
+      "id": "TC-9-01",
+      "type": "integration",
+      "title": "parseJudgeOutput handles markdown-wrapped JSON",
+      "description": "Pass ```json [...] ``` wrapped output, verify parsing succeeds",
+      "steps": [
+        "Call parseJudgeOutput with markdown-fence wrapped JSON array",
+        "Assert result is array with correct length",
+        "Assert each item has status='pending'"
+      ]
+    },
+    {
+      "id": "TC-9-02",
+      "type": "integration",
+      "title": "parseJudgeOutput skips entries with invalid confidence",
+      "description": "Pass array with one valid and one confidence=1.5 entry, verify only valid kept",
+      "steps": [
+        "Call parseJudgeOutput with mixed array (confidence 0.85 and 1.5)",
+        "Assert result length === 1",
+        "Assert result[0].confidence === 0.85"
+      ]
+    },
+    {
+      "id": "TC-D3-01",
+      "type": "manual",
+      "title": "D3.3: session-quality template produces actionable suggestions",
+      "description": "Run Judge with session-quality template on real data, score output quality",
+      "steps": [
+        "Generate report via analyzer",
+        "Run pi subprocess with session-quality.txt system prompt",
+        "Score output on 5 dimensions (format, fields, confidence, actionability, relevance)",
+        "Record score in d3.3-quality-assessment.md"
+      ]
+    },
+    {
+      "id": "TC-D3-02",
+      "type": "manual",
+      "title": "D3.3: prompt-optimize template produces actionable suggestions",
+      "description": "Run Judge with prompt-optimize template on real data, score output quality",
+      "steps": [
+        "Generate report via analyzer",
+        "Run pi subprocess with prompt-optimize.txt system prompt",
+        "Score output on 5 dimensions",
+        "Record score in d3.3-quality-assessment.md"
+      ]
+    },
+    {
+      "id": "TC-D3-03",
+      "type": "manual",
+      "title": "D3.3: skill-health template produces actionable suggestions",
+      "description": "Run Judge with skill-health template on real data, score output quality",
+      "steps": [
+        "Generate report via analyzer",
+        "Run pi subprocess with skill-health.txt system prompt",
+        "Score output on 5 dimensions",
+        "Record score in d3.3-quality-assessment.md"
+      ]
+    }
+  ]
+}
