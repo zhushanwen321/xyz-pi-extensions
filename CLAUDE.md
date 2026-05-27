@@ -7,6 +7,8 @@ Pi coding agent 的扩展工具箱。每个扩展是一个独立可安装的 Pi 
 - **goal/** — 持久化目标驱动自主循环，7 态状态机，evidence-based 完成和 token/时间预算
 - **todo/** — 轻量三态任务清单（pending/in_progress/completed），`/todos` 命令 + `todo` 工具
 - **subagent/** — 任务委派与并行执行，支持 single/parallel/chain/background 四种模式
+- **usage-tracker/** — 被动采集 skill/agent 使用计数 + evolution 信号（工具执行、token 消耗、session 元信息）
+- **workflow/** — 基于 worker_threads 的多 Agent 编排引擎，`agent()`/`parallel()`/`pipeline()` API
 
 扩展通过 symlink 安装到 `~/.pi/agent/extensions/<name>` → 源目录。
 
@@ -14,6 +16,7 @@ Pi coding agent 的扩展工具箱。每个扩展是一个独立可安装的 Pi 
 
 - [CONTEXT.md](./CONTEXT.md) — 领域术语表（Pi 平台概念 + 本项目概念 + 歧义标记）
 - [docs/adr/](./docs/adr/) — 架构决策记录
+- [docs/self-evolution/](./docs/self-evolution/) — Pi Agent 自我进化系统设计与分期规划
   - [001-subagent-architecture.md](./docs/adr/001-subagent-architecture.md) — Subagent 进程隔离、上下文传递、background 模式、能力边界、模型选择
   - [002-goal-7-state-machine.md](./docs/adr/002-goal-7-state-machine.md) — Goal 为什么有 7 种状态（time_limited + cancelled），以及为什么没有 usage_limited
   - [003-evidence-based-completion.md](./docs/adr/003-evidence-based-completion.md) — Goal 为什么强制任务分解 + evidence，以及代价
