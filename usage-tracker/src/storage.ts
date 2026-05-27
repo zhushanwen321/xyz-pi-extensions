@@ -35,7 +35,6 @@ const TOOL_STATS_FILE = join(EVOLUTION_DIR, "tool-stats.json");
 const SKILL_TRIGGERS_FILE = join(EVOLUTION_DIR, "skill-triggers.json");
 const SESSION_MANIFEST_FILE = join(EVOLUTION_DIR, "session-manifest.json");
 
-const LOG_PREFIX = "[evolution-storage]";
 const JSON_INDENT = 2;
 
 // ── 目录初始化 ──────────────────────────────────────
