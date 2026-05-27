@@ -78,7 +78,7 @@ export interface AutoTriggerFlag {
 /** LLM Judge 子进程的输入参数 */
 export interface JudgeInput {
 	/** 分析目标 */
-	target: "all" | "claude-md" | "skills";
+	target: "all" | "claude-md" | "skills" | "merge-reviewer";
 	/** Phase 2 JSON 报告路径 */
 	reportPath: string;
 	/** 构建的 prompt 临时文件路径 */
@@ -90,7 +90,7 @@ export interface JudgeInput {
 /** /evolve 命令参数 */
 export interface EvolveCommandParams {
 	/** 分析目标，默认 "all" */
-	target: "all" | "claude-md" | "skills";
+	target: "all" | "claude-md" | "skills" | "merge-reviewer";
 	/** 时间范围，默认 "7d" */
 	since: string;
 	/** 抽样 session 数 */

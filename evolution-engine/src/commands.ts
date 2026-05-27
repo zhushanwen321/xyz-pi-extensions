@@ -115,6 +115,13 @@ export async function handleEvolve(
 				`phase2-${Date.now()}.json`,
 			);
 
+			if (!existsSync(ANALYZER_SCRIPT)) {
+				throw new Error(
+					`Session analyzer not found at ${ANALYZER_SCRIPT}. ` +
+					`Please install pi-session-analyzer first.`
+				);
+			}
+
 			try {
 				execFileSync(
 					"python3",
@@ -232,7 +239,10 @@ export async function handleEvolveApply(
 				const desc = suggestion.description ? `  Description: ${suggestion.description}` : "";
 				const rationale = suggestion.rationale ? `  Rationale: ${suggestion.rationale}` : "";
 				const diff = suggestion.diff ? `  Diff target: ${suggestion.targetPath}` : "";
-				return [header, desc, rationale, diff].filter(Boolean).join("\n");
+				const diffPreview = suggestion.diff
+					? `  Diff preview:\n  ${suggestion.diff.split("\n").slice(0, 10).join("\n  ")}`
+					: "";
+				return [header, desc, rationale, diff, diffPreview].filter(Boolean).join("\n");
 			}).join("\n\n");
 
 			return successResult(
