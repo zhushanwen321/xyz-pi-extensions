@@ -178,6 +178,32 @@ LLM Judge 产出的单条进化建议。包含：id (UUID)、target (claude-md/s
 **Applier**
 Evolution Engine 的建议应用引擎。执行流程：预检查 diff 可应用性 → 备份原文件 → 写入 diff → git commit（如有仓库）→ 记录 history。diff 应用失败时跳过该条并标记 failed，不中断后续建议。
 
+### InfiniteContext
+
+**Segment**
+每次 user message 触发的所有 agent turn 组成的工作单元。是树压缩的叶子节点。段边界仅依据新的 user message，不做语义分析。
+_Avoid_: 分段、块（口语可，正式文档用 Segment）
+
+**Tree Compact**
+通过 subagent 调用主模型，对所有历史 Segment 一次性构建摘要树的操作。替代 Pi 原生 compaction。在 `turn_end` 中同步执行，不停止对话。
+_Avoid_: 树压缩（口语可，正式文档用 Tree Compact）
+
+**TreeNode**
+树压缩产出的节点，类型为 `group`（分组节点，含 children）或 `leaf`（叶子节点，对应一个 Segment）。不在树中的 Segment 及其子孙被隐式 drop。
+_Avoid_: 节点（口语可，正式文档用 TreeNode）
+
+**Recall**
+LLM 主动检索被压缩内容的工具。两次调用模式：`mode: "structure"` 返回子树结构（不含原始内容），`mode: "content"` 返回指定节点的完整原始 messages。
+_Avoid_: 召回、检索（口语可，正式文档用 Recall）
+
+**Tree-Context**
+InfiniteContext 扩展独立估算的实际发给 LLM 的 token 数量。使用 chars/4 启发式，区别于 Pi 的 `getContextUsage()`（基于原始 entries，不反映压缩效果）。用于压缩触发判断和状态显示。
+_Avoid_: 树上下文（口语可，正式文档用 Tree-Context）
+
+**NodeId**
+每个 TreeNode 的唯一标识符。格式为 `seg_N`（leaf）或 `gN`（group）。LLM 通过 NodeId 调用 Recall 检索该节点子树。全局唯一。
+_Avoid_: 节点ID（口语可，正式文档用 NodeId）
+
 ### Workflow
 
 **Workflow**
