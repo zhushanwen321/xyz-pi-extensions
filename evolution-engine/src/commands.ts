@@ -19,7 +19,6 @@ import type {
 	StatsData,
 	PendingFile,
 	EvolutionSuggestion,
-	HistoryEntry,
 	JudgeInput,
 } from "./types";
 import { runJudge } from "./judge";
@@ -64,8 +63,9 @@ function findRecentReport(reportsDir: string, sinceDays: number): string | null 
 			if (stat.mtime >= cutoff) {
 				files.push({ name: entry, mtime: stat.mtime });
 			}
-		} catch {
-			// 文件读取失败，跳过
+		} catch (err) {
+			// 文件可能被其他进程删除，跳过
+			if (process.env.NODE_ENV !== "test") console.warn(`[evolve] Failed to stat ${entry}: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 
@@ -450,8 +450,9 @@ export function handleEvolveStats(evolutionDir: string): CommandResult {
 						toolFailures[tool].failures += fails;
 					}
 				}
-			} catch {
+			} catch (err) {
 				// 损坏文件跳过
+				if (process.env.NODE_ENV !== "test") console.warn(`[evolve-stats] Failed to parse ${entry}: ${err instanceof Error ? err.message : String(err)}`);
 			}
 		}
 

@@ -10,7 +10,6 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
 import type { JudgeInput, EvolutionSuggestion } from "./types.js";
 
 // ── target → 模板文件名映射 ─────────────────────────
@@ -219,7 +218,7 @@ function runJudgeOnce(
 			try {
 				const suggestions = parseJudgeOutput(raw);
 				resolve({ suggestions, raw, stderr });
-			} catch (parseErr) {
+			} catch (_parseErr) {
 				// 解析失败：带 raw 返回，让上层决定是否重试
 				resolve({ suggestions: [], raw, stderr });
 			}
