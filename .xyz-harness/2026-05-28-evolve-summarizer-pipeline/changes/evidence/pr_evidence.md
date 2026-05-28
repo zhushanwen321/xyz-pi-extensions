@@ -18,11 +18,8 @@ Pull Request #10 created for the Evolve Summarizer Pipeline feature:
 
 ## Risk Note
 
-**CI not configured.** This project has no `.github/workflows/` — no automated CI pipeline runs on PR creation. Code quality is verified manually:
-
-- `tsc --noEmit`: 0 errors ✅
-- `npm run lint`: 0 errors in evolution-engine ✅
-- All 13 integration tests passed ✅
+CI pipeline added at `.github/workflows/ci.yml` (lint + typecheck).
+PR #10 was created before CI was configured, so no automated runs for this specific PR.
 
 ## PR Description
 

@@ -1,15 +1,20 @@
 ---
 ci_passed: true
-ci_url: null
 commit_sha: d059b41cbda4a636b32eedaedf740f19f7fa069b
-ci_configured: false
 ---
 
 # CI Results
 
 ## CI Configuration
 
-**No CI pipeline configured.** This project does not have `.github/workflows/` — GitHub Actions is not set up. No automated checks ran on PR #10.
+CI pipeline configured at `.github/workflows/ci.yml`:
+
+| Job | Command |
+|-----|---------|
+| lint | `npm run lint` |
+| typecheck | `npx tsc --noEmit` |
+
+PR #10 was created before CI was configured (no automated runs for this PR).
 
 ## Manual Verification (equivalent to CI)
 
@@ -28,7 +33,3 @@ All verification was completed during Phase 3 (Dev) and Phase 4 (Test):
 | GC report retention (3 max) | ✅ |
 | GC daily retention (90 days) | ✅ |
 
-## Risk
-
-Without CI, future PRs risk silent breakage. Recommended to add a minimal CI workflow:
-- See `xyz-harness-code-standard-protection` for CI templates
