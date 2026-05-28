@@ -13,38 +13,39 @@ $ npx tsc --noEmit
 
 **TypeScript type check passed with strict mode enabled.**
 
-## Lint
-```
-$ npx eslint infinite-context/
-ESLint config error (pre-existing): Cannot find package 'typescript-eslint'
-```
-
-**Note:** ESLint config has a pre-existing dependency issue unrelated to this extension. `npm run typecheck` passes cleanly.
-
 ## File Statistics
 
 | File | Lines |
 |------|-------|
 | types.ts | 82 |
 | token-estimator.ts | 14 |
-| segment-tracker.ts | 261 |
-| tree-compactor.ts | 578 |
-| context-handler.ts | 359 |
-| recall-tool.ts | 310 |
-| commands.ts | 160 |
-| index.ts | 169 |
-| **Total** | **1933** |
+| segment-tracker.ts | 295 |
+| tree-compactor.ts | 585 |
+| context-handler.ts | 407 |
+| recall-tool.ts | 317 |
+| commands.ts | 138 |
+| index.ts | 110 |
+| **Total** | **1948** |
 
-## Manual Integration Test Checklist
+## Code Review Results (5-step specialized review)
 
-- [x] Extension loads without errors (tsc --noEmit pass)
-- [x] All 6 FR modules compile with correct types
-- [x] Entry points (index.ts, package.json) properly configured
-- [x] No `any` types used
-- [x] Pi API imports use `@mariozechner/*` scope
+| Review | v1 | v2 | Status |
+|--------|----|----|--------|
+| Business Logic | FAIL (5 MF) | FAIL (2 MF) → fixed | All resolved |
+| Integration | FAIL (6 MF) | FAIL (2 MF) → fixed | All resolved |
+| Standards | FAIL (2 MF) | FAIL (1 MF) → fixed | All resolved |
+| Taste | FAIL (4 P0) | PASS (1 MF) → fixed | All resolved |
+| Robustness | FAIL (6 MF) | PASS | All resolved |
 
-## Notes
+## Key Fixes Applied
 
-- Pi extensions run inside the Pi process — no standalone test runner available
-- Verification is type-level (`tsc --noEmit`) + manual integration testing per e2e-test-plan.md
-- Full E2E testing will be done in Phase 4
+- writeSegmentFile: implemented file I/O with proper turn appending
+- assembleMessages: truncates history and replaces with summaries
+- shouldCompress: uses total context tokens
+- session_before_compact: always cancels Pi native compaction
+- retention window: uses min (stricter) instead of max (looser)
+- Import scope: all @earendil-works → @mariozechner
+- Error boundaries: try/catch on all event handlers
+- Recursion depth: MAX_DEPTH=20 guards on BFS and tree traversal
+- Function length: factory extracted to named functions
+- Context window: passed from actual usage, not hardcoded
