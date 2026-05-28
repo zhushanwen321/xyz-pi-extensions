@@ -26,7 +26,8 @@
     "todo/**/*.ts",
     "subagent/**/*.ts",
     "usage-tracker/**/*.ts",
-    "workflow/**/*.ts"
+    "workflow/**/*.ts",
+    "infinite-context/**/*.ts"
   ],
   "exclude": [
     "node_modules",

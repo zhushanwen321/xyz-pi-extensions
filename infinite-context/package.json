@@ -1,0 +1,8 @@
+{
+  "name": "pi-extension-infinite-context",
+  "version": "0.1.0",
+  "description": "Tree-structured context compression for Pi — ensures the agent never hits the context window limit.",
+  "main": "src/index.ts",
+  "keywords": ["pi", "extension", "context", "compression", "infinite-context"],
+  "license": "MIT"
+}
