@@ -283,8 +283,8 @@ export class TreeCompactor {
 		const byTurns = completedSegments.filter(
 			(s) => s.turnRange.end >= cutoffTurn,
 		);
-		// 取较宽松的窗口（段数较多的）
-		const retentionSegs = byCount.length >= byTurns.length ? byCount : byTurns;
+		// 取更严格的窗口（段数较少的），保留更多历史段给压缩
+		const retentionSegs = byCount.length <= byTurns.length ? byCount : byTurns;
 		const retentionIds = new Set(retentionSegs.map((s) => s.segId));
 		// 也排除当前活跃段（未完成的）
 		const activeIds = new Set(

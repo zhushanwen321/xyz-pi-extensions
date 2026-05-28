@@ -158,6 +158,7 @@ export class SegmentTracker {
 	): void {
 		const msg = message as Record<string, unknown> | null;
 		const isUserMessage = msg !== null && msg.role === "user";
+		let isFirstTurnOfSegment = false;
 
 		if (isUserMessage) {
 			// 标记前段完成
@@ -183,6 +184,7 @@ export class SegmentTracker {
 
 			this.segments.push(newSegment);
 			this.currentSegment = newSegment;
+			isFirstTurnOfSegment = true;
 
 			pi.appendEntry(SEGMENT_ENTRY_TYPE, this.toEntryData(newSegment));
 		}
@@ -201,9 +203,10 @@ export class SegmentTracker {
 			};
 			pi.appendEntry(TURN_ENTRY_TYPE, turnData);
 
-			// 写入段文件
-			this.writeSegmentFile(ctx, this.currentSegment);
-
+			// 只在段创建时写入段文件（第一个 turn），后续 turn 只追加
+			if (isFirstTurnOfSegment) {
+				this.writeSegmentFile(ctx, this.currentSegment);
+			}
 			// 追加 turn 数据到段文件
 			this.appendTurnToSegFile(ctx, this.currentSegment, { turnIndex, message, toolResults });
 		}
@@ -240,8 +243,8 @@ export class SegmentTracker {
 			(s) => s.turnRange.end >= cutoffTurn,
 		);
 
-		// 取两者中段数较多的（更宽松的窗口）
-		return byCount.length >= byTurns.length ? byCount : byTurns;
+		// 取两者中段数较少的（更严格的窗口，保留更多历史段给压缩）
+		return byCount.length <= byTurns.length ? byCount : byTurns;
 	}
 
 	// ── 内部方法 ──────────────────────────────────────
@@ -285,8 +288,9 @@ export class SegmentTracker {
 				toolResults: turnData.toolResults,
 			});
 			writeFileSync(segFile, JSON.stringify(data, null, 2));
-		} catch {
-			// 文件不存在或解析失败，静默忽略
+		} catch (err) {
+			// 文件不存在或解析失败时记录错误但不中断流程
+			console.error("[infinite-context] appendTurnToSegFile error:", err);
 		}
 	}
 }
