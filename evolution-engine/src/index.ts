@@ -55,16 +55,21 @@ function makeDirs(): Dirs {
 	const evolutionDir = EVOLUTION_DIR;
 	const reportsDir = join(evolutionDir, "reports");
 	const tmpDir = join(evolutionDir, "tmp");
+	const signalsDir = join(evolutionDir, "signals");
 
-	// 确保 base 目录存在
+	// 确保 base 目录和 signals 目录存在
 	if (!existsSync(evolutionDir)) {
 		mkdirSync(evolutionDir, { recursive: true });
+	}
+	if (!existsSync(signalsDir)) {
+		mkdirSync(signalsDir, { recursive: true });
 	}
 
 	return {
 		evolutionDir,
 		reportsDir,
 		tmpDir,
+		signalsDir,
 		templateDir: TEMPLATE_DIR,
 	};
 }
