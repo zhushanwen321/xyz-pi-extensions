@@ -120,13 +120,10 @@ export default function infiniteContextExtension(pi: ExtensionAPI): void {
 	});
 
 	// -- Event: session_before_compact (cancel Pi native compaction) ----------
+	// 始终取消 Pi 原生 compaction——我们的树压缩接管了上下文管理
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	pi.on("session_before_compact", (_event, _ctx) => {
-		try {
-			return compactor.cancelPiCompaction();
-		} catch (err) {
-			console.error("[infinite-context] session_before_compact error:", err);
-			return { cancel: false };
-		}
+		return { cancel: true };
 	});
 
 	// -- Command registration -------------------------------------------------

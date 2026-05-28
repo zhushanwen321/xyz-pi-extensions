@@ -274,11 +274,18 @@ export class TreeCompactor {
 
 		// 2. 过滤 retention window：最近 maxSegments 个已完成段 + 当前活跃段
 		const completedSegments = segments.filter((s) => s.completed);
-		const retentionIds = new Set(
-			completedSegments
-				.slice(-RETENTION_CONFIG.maxSegments)
-				.map((s) => s.segId),
+		// 保留窗口: min(2 个已完成段, 覆盖最近 8 turns 的段)
+		const byCount = completedSegments.slice(-RETENTION_CONFIG.maxSegments);
+		const latestTurnEnd = Math.max(
+			...completedSegments.map((s) => s.turnRange.end),
 		);
+		const cutoffTurn = latestTurnEnd - RETENTION_CONFIG.maxTurns + 1;
+		const byTurns = completedSegments.filter(
+			(s) => s.turnRange.end >= cutoffTurn,
+		);
+		// 取较宽松的窗口（段数较多的）
+		const retentionSegs = byCount.length >= byTurns.length ? byCount : byTurns;
+		const retentionIds = new Set(retentionSegs.map((s) => s.segId));
 		// 也排除当前活跃段（未完成的）
 		const activeIds = new Set(
 			segments.filter((s) => !s.completed).map((s) => s.segId),

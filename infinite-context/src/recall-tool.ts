@@ -30,6 +30,7 @@ const RecallParams = Type.Object({
 	nodeId: Type.String({ description: "树节点 ID（如 g0, seg_0）" }),
 	mode: StringEnum(["structure", "content"], {
 		description: "'structure' 查看子树结构，'content' 获取原始内容",
+		default: "structure",
 	}),
 });
 
@@ -99,10 +100,10 @@ function readSegmentFile(
 	const segIndex = segIndexFromId(segId);
 	if (segIndex === undefined) return undefined;
 
+	// 路径必须与 segment-tracker.ts 的 writeSegmentFile 一致:
+	// ctx.cwd/.pi/infinite-context/<sessionId>/seg_N.json
 	const segPath = join(
-		ctx.sessionManager.getSessionDir(),
-		"..",
-		"..",
+		ctx.cwd,
 		".pi",
 		"infinite-context",
 		sessionId,
