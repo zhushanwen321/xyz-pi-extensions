@@ -1,4 +1,6 @@
 ---
+verdict: pass
+must_fix: 0
 review:
   type: code_review
   round: 2
