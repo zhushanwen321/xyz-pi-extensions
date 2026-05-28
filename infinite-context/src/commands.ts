@@ -4,7 +4,7 @@
  * 提供 /tree-compact 和 /context-status 两个命令。
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { SegmentTracker } from "./segment-tracker";
 import type { TreeCompactor, CompactResult } from "./tree-compactor";
 import type { ContextAssembler } from "./context-handler";

@@ -189,8 +189,6 @@ export class RecallTool {
 	 * 注册 recall 工具到 Pi
 	 */
 	register(pi: ExtensionAPI): void {
-		// 捕获 this 以便在闭包中使用
-		const self = this;
 
 		pi.registerTool({
 			name: "recall",
@@ -201,16 +199,16 @@ export class RecallTool {
 			promptSnippet: "recall(nodeId, mode) - 检索被压缩的历史内容",
 			parameters: RecallParams,
 
-			async execute(
+			execute: async (
 				_toolCallId: string,
 				params: { nodeId: string; mode: "structure" | "content" },
 				_signal: AbortSignal | undefined,
 				_onUpdate: unknown,
 				ctx: ExtensionContext,
-			): Promise<{ content: Array<{ type: "text"; text: string }>; details: RecallDetails }> {
+			): Promise<{ content: Array<{ type: "text"; text: string }>; details: RecallDetails }> => {
 				const sessionId = ctx.sessionManager.getSessionId();
 				const tree = loadTreeFromEntries(ctx);
-				return self.executeRecall(params.nodeId, params.mode, tree, sessionId, ctx);
+				return this.executeRecall(params.nodeId, params.mode, tree, sessionId, ctx);
 			},
 
 			renderCall(args, theme) {
