@@ -7,11 +7,11 @@ all_passing: true
 
 ## Test Execution Summary
 
-All 12 test cases from `test_cases_template.json` executed and passed.
+All **13** test cases from `test_cases_template.json` executed and passed.
 
 | Result | Count |
 |--------|-------|
-| ✅ PASS | 12 |
+| ✅ PASS | 13 |
 | ❌ FAIL | 0 |
 
 See `test_execution.json` for detailed per-case evidence.
