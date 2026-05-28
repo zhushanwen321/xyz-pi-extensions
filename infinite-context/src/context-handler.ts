@@ -191,7 +191,6 @@ export class ContextAssembler {
 		const totalBudget = contextWindow * BUDGET_RATIO;
 
 		let finalMessages: MinimalAgentMessage[];
-		let finalSummaryTokens: number;
 		let compressedNodeCount: number;
 
 		if (totalWithSummary > totalBudget) {
@@ -216,10 +215,6 @@ export class ContextAssembler {
 			const truncatedSummaries = finalFlatNodes.map(
 				(node) => createSummaryMessage(node.nodeId, node.summary, now),
 			);
-			finalSummaryTokens = truncatedSummaries.reduce(
-				(sum, msg) => sum + estimateTokens(typeof msg.content === "string" ? msg.content : ""),
-				0,
-			);
 			compressedNodeCount = finalFlatNodes.length;
 
 			// 从 filtered 末尾保留尽可能多的 messages，不超过 availableForRetention
@@ -232,7 +227,6 @@ export class ContextAssembler {
 			// Context 未膨胀 → 全部保留原文 + 注入摘要到开头
 			const recallMsg = createRecallPromptMessage(now);
 			finalMessages = [recallMsg, ...summaryMessages, ...filtered];
-			finalSummaryTokens = summaryTokens;
 			compressedNodeCount = flatNodes.length;
 		}
 

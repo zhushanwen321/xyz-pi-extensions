@@ -3,11 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "eslint \"goal/src/**/*.ts\" \"todo/src/**/*.ts\" \"subagent/src/**/*.ts\" \"usage-tracker/src/**/*.ts\" \"workflow/src/**/*.ts\"",
-    "lint:fix": "eslint --fix \"goal/src/**/*.ts\" \"todo/src/**/*.ts\" \"subagent/src/**/*.ts\" \"usage-tracker/src/**/*.ts\" \"workflow/src/**/*.ts\"",
+    "lint": "eslint \"goal/src/**/*.ts\" \"todo/src/**/*.ts\" \"subagent/src/**/*.ts\" \"usage-tracker/src/**/*.ts\" \"workflow/src/**/*.ts\" \"infinite-context/src/**/*.ts\"",
+    "lint:fix": "eslint --fix \"goal/src/**/*.ts\" \"todo/src/**/*.ts\" \"subagent/src/**/*.ts\" \"usage-tracker/src/**/*.ts\" \"workflow/src/**/*.ts\" \"infinite-context/src/**/*.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@types/node": "^25.9.1",
     "eslint": "^9",
     "typescript-eslint": "^8"
   }

@@ -635,6 +635,8 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
+			// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+			// @ts-ignore CI stub: custom<void> on ambient module resolves differently
 			await ctx.ui.custom<void>((_tui, theme, _kb, done) => {
 				return new TodoListComponent(todos, theme, () => done());
 			});

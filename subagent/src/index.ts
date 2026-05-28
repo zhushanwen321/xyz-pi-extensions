@@ -571,8 +571,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
 				const results = await mapWithConcurrencyLimit(params.tasks, effectiveConcurrency, async (t, index) => {
 					const result = await spawnManager.runSingleAgent(
-						ctx.cwd, agents, t.agent, t.task,
-						resolvedModel, t.cwd, undefined, signal,
+						ctx.cwd, agents, (t as Record<string, string>).agent, (t as Record<string, string>).task,
+						resolvedModel, (t as Record<string, string>).cwd, undefined, signal,
 						(partial) => {
 							if (partial.details?.results[0]) {
 								allResults[index] = partial.details.results[0];
@@ -915,7 +915,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 			const modelResult = await resolveVisionModel(ctx);
 			if (!modelResult.ok) {
 				return {
-					content: [{ type: "text", text: modelResult.error }],
+					content: [{ type: "text", text: (modelResult as { ok: false; error: string }).error }],
 					details: { mode: "single" as const, resolvedModel: "", agentScope: "user" as AgentScope, projectAgentsDir: null, results: [] },
 					isError: true,
 				};
