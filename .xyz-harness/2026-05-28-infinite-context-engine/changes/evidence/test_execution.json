@@ -1,0 +1,241 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify segment-tracker.ts handleTurnEnd: msg.role === 'user' triggers new segment creation",
+        "verify line 163-167: previous segment marked completed=true + appendEntry",
+        "verify line 177-186: new Segment created with segId='seg_N', turnRange.start=turnIndex, pushed to this.segments",
+        "verify line 186: this.currentSegment updated to newSegment"
+      ],
+      "evidence": "segment-tracker.ts:160-189, user message detection + segment lifecycle"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify segment-tracker.ts restoreState (line 91): iterates entries filtering ic-segment customType",
+        "verify line 99-109: reconstructs Segment objects from entry data, pushes to this.segments",
+        "verify line 115-131: restores ic-turn entries, rebuilds turnIndex→segId mapping",
+        "verify entry types: SEGMENT_ENTRY_TYPE='ic-segment', TURN_ENTRY_TYPE='ic-turn'"
+      ],
+      "evidence": "segment-tracker.ts:20-21, 91-131, restoreState rebuilds segments + turn mapping"
+    },
+    {
+      "caseId": "TC-1-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify writeSegmentFile (line 262-273): creates dir with mkdirSync recursive, writes JSON via writeFileSync",
+        "verify segDir = join(ctx.cwd, '.pi', 'infinite-context', sessionId)",
+        "verify appendTurnToSegFile (line 276-298): reads existing file, appends turn to turns array, rewrites",
+        "verify line 208-211: writeSegmentFile only called when isFirstTurnOfSegment=true, subsequent turns use appendTurnToSegFile"
+      ],
+      "evidence": "segment-tracker.ts:262-298, file I/O with proper create-then-append pattern"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify context-handler.ts COMPRESSION_THRESHOLD = 0.7 (line 57)",
+        "verify shouldCompress (line 293): returns treeContextTokens / contextWindow >= 0.7",
+        "verify index.ts context handler (line 85): sets needsCompressionRef.value from shouldCompress result",
+        "verify index.ts turn_end handler (line 37): checks needsCompression flag and triggers compactor.triggerCompression"
+      ],
+      "evidence": "context-handler.ts:57,293; index.ts:37-42,85, auto trigger via needsCompression flag"
+    },
+    {
+      "caseId": "TC-2-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify commands.ts registerTreeCompactCommand (line 16-50): registers 'tree-compact' command",
+        "verify line 39: calls compactor.triggerCompression with onComplete callback",
+        "verify onCompleteFactory in index.ts (line 44-54): shows TUI notify with compression result or fallback warning"
+      ],
+      "evidence": "commands.ts:16-50, /tree-compact command delegates to compactor.triggerCompression"
+    },
+    {
+      "caseId": "TC-2-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify index.ts line 120: pi.on('session_before_compact', () => ({ cancel: true }))",
+        "verify unconditional cancel — always returns { cancel: true } regardless of state"
+      ],
+      "evidence": "index.ts:120, unconditional { cancel: true }"
+    },
+    {
+      "caseId": "TC-2-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify tree-compactor.ts validateTreeOutput (line 80-155): validates JSON parse success",
+        "verify line 100-105: checks root has children array and nodeType='root'",
+        "verify line 108-116: each node must have nodeId (string), children (array) or segments (array), summary (string)",
+        "verify line 418-456: on success, constructs CompactTree from validated output"
+      ],
+      "evidence": "tree-compactor.ts:80-155, validateTreeOutput with type/structure checks"
+    },
+    {
+      "caseId": "TC-2-05",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify tree-compactor.ts handleCompressionFailure (line 477-530): checks retryCount < MAX_RETRY_COUNT",
+        "verify line 485-495: if retry available, calls runCompression with retryCount+1",
+        "verify line 497-528: if max retries exceeded, falls back to ruleBasedFallback (uses first sentence of user messages)",
+        "verify MAX_RETRY_COUNT=1 (line 19): exactly 1 retry before fallback"
+      ],
+      "evidence": "tree-compactor.ts:19, 477-530, retry once then rule-based fallback"
+    },
+    {
+      "caseId": "TC-2-06",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify tree-compactor.ts COMPRESSION_TIMEOUT_MS = 30_000 (line 20)",
+        "verify line 390-395: setTimeout triggers child.kill('SIGTERM') after 30s",
+        "verify line 501-504: retry path also has independent timeout with kill",
+        "verify line 407-425: on error/close after timeout, triggers handleCompressionFailure"
+      ],
+      "evidence": "tree-compactor.ts:20, 390-395, 501-504, timeout + SIGTERM kill"
+    },
+    {
+      "caseId": "TC-2-07",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify tree-compactor.ts line 252: compressing = false (private field)",
+        "verify line 272-273: if (this.compressing) return — guard at start of triggerCompression",
+        "verify line 300: this.compressing = false in finally block — always resets",
+        "verify index.ts turn_end handler (line 37): !compactor.isCompressing() guard before triggering",
+        "verify context handler returns immediately if error — no blocking on compression"
+      ],
+      "evidence": "tree-compactor.ts:252,272-273,300; index.ts:37, isCompressing guard + async fire-and-forget"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify context-handler.ts assembleMessages line 159-162: creates retentionSegIds from retentionWindow + active segment",
+        "verify line 197-230: if totalWithSummary > totalBudget, calculates availableForRetention (70% of budget)",
+        "verify line 207: availableForRetention = totalBudget * 0.7 — retention window gets 70% of budget",
+        "verify line 226: truncateFromStart retains messages from end up to availableForRetention tokens"
+      ],
+      "evidence": "context-handler.ts:159-162,197-230, retention window messages preserved with 70% budget"
+    },
+    {
+      "caseId": "TC-3-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify context-handler.ts createSummaryMessage (line 102-110): creates custom message with customType=IC_SUMMARY_CUSTOM_TYPE",
+        "verify line 106: content format is '[nodeId] summary'",
+        "verify isIcSummary (line 75-77): checks msg.role === 'custom' && msg.customType === IC_SUMMARY_CUSTOM_TYPE",
+        "verify line 66-68: IC_SUMMARY_CUSTOM_TYPE = 'ic-summary' (exported constant)"
+      ],
+      "evidence": "context-handler.ts:66-68, 75-77, 102-110, [nodeId] summary format"
+    },
+    {
+      "caseId": "TC-3-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify context-handler.ts bfsFlatten (line 306-334): uses queue-based BFS traversal",
+        "verify line 314-316: while loop with depth < MAX_DEPTH guard",
+        "verify line 315-322: processes currentLevel (newest-to-oldest within each level), then collects children",
+        "verify comment: '同层 newest-to-oldest：children 数组最后添加的 = newest'",
+        "verify result: flatNodes array has level 0 nodes first, then level 1, etc."
+      ],
+      "evidence": "context-handler.ts:306-334, BFS with depth guard and newest-to-oldest within level"
+    },
+    {
+      "caseId": "TC-3-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify context-handler.ts budgetTruncate (line 343-370): iterates flatNodes from last (deepest/oldest)",
+        "verify line 354-357: removes nodes from end until within budget, prefers keeping shallow/newer nodes",
+        "verify line 362-367: extreme fallback — if nothing left, keeps only level 1 nodes",
+        "verify line 308: MAX_DEPTH = 20 prevents unbounded recursion"
+      ],
+      "evidence": "context-handler.ts:343-370, budgetTruncate removes deepest/oldest first"
+    },
+    {
+      "caseId": "TC-3-05",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify context-handler.ts IC_RECALL_PROMPT_TYPE = 'ic-recall-prompt' (line 71)",
+        "verify assembleMessages line 232-241: injects recall hint at start of messages when tree has compressed nodes",
+        "verify line 233: condition checks flatNodes.length > 0 (compressed content exists)"
+      ],
+      "evidence": "context-handler.ts:71, 232-241, recall hint injected when compressed content exists"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify recall-tool.ts recallStructure (line 256-272): calls formatStructure(node, 0) which outputs nodeId+type+summary+children",
+        "verify formatStructure only outputs structural metadata, never reads segment files",
+        "verify line 262-270: returns structureText without any raw message content"
+      ],
+      "evidence": "recall-tool.ts:256-272, structure mode returns only tree structure metadata"
+    },
+    {
+      "caseId": "TC-4-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify recall-tool.ts recallContent (line 277-326): calls collectSegIds(node) to get all leaf segIds",
+        "verify line 292: readSegmentFile(sessionId, segId, ctx) reads the actual segment file",
+        "verify readSegmentFile (line 95-133): reads from ctx.cwd/.pi/infinite-context/<sessionId>/seg_N.json",
+        "verify line 292-295: includes raw segment content in output, missing files marked as '(段文件不存在或无法读取)'"
+      ],
+      "evidence": "recall-tool.ts:277-326, content mode reads actual segment files with full messages"
+    },
+    {
+      "caseId": "TC-4-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify recall-tool.ts executeRecall line 169-181: findNode returns undefined if nodeId not in tree",
+        "verify line 178-185: returns error message '未找到节点 \"nodeId\"' with found: false",
+        "verify findNode (line 41-50): recursive search through tree, returns undefined if no match"
+      ],
+      "evidence": "recall-tool.ts:169-185, 41-50, nodeId not found returns error message"
+    },
+    {
+      "caseId": "TC-4-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify recall-tool.ts recallContent line 279: calls collectSegIds(node) on the group node",
+        "verify collectSegIds (line 53-65): recursively collects segIds from all leaf descendants",
+        "verify line 286-295: iterates collected segIds, reads each segment file",
+        "verify result: all descendant leaf segment files are read and concatenated"
+      ],
+      "evidence": "recall-tool.ts:53-65 (collectSegIds), 279-295, recursive leaf collection for group content"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify commands.ts registerContextStatusCommand (line 55-138): registers 'context-status' command",
+        "verify line 93-99: displays segment statistics (total, completed, active)",
+        "verify line 108-120: displays tree compression status (treeId, nodes, tokens, depth)",
+        "verify line 122-137: displays context usage with both raw tokens and tree-context estimation",
+        "verify line 131: treeTokens calculated from bfsFlatten summary lengths"
+      ],
+      "evidence": "commands.ts:55-138, context-status shows raw context, tree context, and segment counts"
+    }
+  ]
+}
