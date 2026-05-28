@@ -55,7 +55,8 @@ const FLAGS_DIR = "auto-trigger.flags";
 /** daily/YYYY-MM-DD.json 的结构 */
 interface DailyFile {
 	date: string;
-	sessions: number;
+	/** usage-tracker 写入 SessionRecord[]，旧测试数据可能是 number */
+	sessions: unknown[] | number;
 	toolCalls: {
 		total: number;
 		byTool: Record<string, number>;
@@ -69,6 +70,13 @@ interface DailyFile {
 	};
 	skillTriggers: Record<string, unknown>;
 	agentCalls: Record<string, unknown>;
+}
+
+/** 安全获取 session 数量：兼容 SessionRecord[] 和 number 两种格式 */
+function sessionCount(sessions: unknown[] | number): number {
+	if (typeof sessions === "number") return sessions;
+	if (Array.isArray(sessions)) return sessions.length;
+	return 0;
 }
 
 /** skill-triggers.json 的条目 */
@@ -175,7 +183,7 @@ function checkTokenDecline(daily: DailyFile[]): { hit: boolean; detail: string }
 
 	if (baseline.length === 0) return { hit: false, detail: "" };
 
-	const baselineSessions = baseline.reduce((s, d) => s + d.sessions, 0);
+	const baselineSessions = baseline.reduce((s, d) => s + sessionCount(d.sessions), 0);
 	if (baselineSessions === 0) return { hit: false, detail: "" };
 
 	const baselineAvg =
@@ -184,8 +192,9 @@ function checkTokenDecline(daily: DailyFile[]): { hit: boolean; detail: string }
 	// 逐天检查：最近 3 天每一天的 token/session 都 > baseline
 	const perDayTokens: number[] = [];
 	for (const day of recent) {
-		if (day.sessions === 0) return { hit: false, detail: "" };
-		const dayAvg = day.tokenUsage.totalInput / day.sessions;
+		const count = sessionCount(day.sessions);
+		if (count === 0) return { hit: false, detail: "" };
+		const dayAvg = day.tokenUsage.totalInput / count;
 		perDayTokens.push(Math.round(dayAvg));
 		if (dayAvg <= baselineAvg) return { hit: false, detail: "" };
 	}

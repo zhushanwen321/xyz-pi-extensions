@@ -72,7 +72,7 @@ function makeDirs(): Dirs {
 // ── Tool 参数 schema ─────────────────────────────────
 
 const EvolveParams = Type.Object({
-	target: StringEnum(["all", "claude-md", "skills", "merge-reviewer"], {
+	target: StringEnum(["all", "claude-md", "skills", "merge-reviewer", "agents"], {
 		default: "all",
 		description: "Analysis target scope",
 	}),
@@ -145,7 +145,7 @@ export default function evolutionEngineExtension(pi: ExtensionAPI): void {
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 			return await handleEvolve(
 				{
-					target: params.target as "all" | "claude-md" | "skills" | "merge-reviewer",
+					target: params.target as "all" | "claude-md" | "skills" | "merge-reviewer" | "agents",
 					since: params.since,
 					sample: params.sample,
 				},
@@ -380,11 +380,11 @@ export default function evolutionEngineExtension(pi: ExtensionAPI): void {
 		handler: async (args, ctx) => {
 			// 解析简单参数
 			const parts = args.trim().split(/\s+/);
-			let target: "all" | "claude-md" | "skills" | "merge-reviewer" = "all";
+			let target: "all" | "claude-md" | "skills" | "merge-reviewer" | "agents" = "all";
 			let since = "7d";
 
 			for (const part of parts) {
-				if (part === "all" || part === "claude-md" || part === "skills" || part === "merge-reviewer") {
+				if (part === "all" || part === "claude-md" || part === "skills" || part === "merge-reviewer" || part === "agents") {
 					target = part;
 				} else if (part.match(/^\d+d$/)) {
 					since = part;
