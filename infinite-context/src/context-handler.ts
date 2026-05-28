@@ -148,6 +148,7 @@ export class ContextAssembler {
 		tree: CompactTree | undefined,
 		segments: readonly Segment[],
 		retentionWindow: readonly Segment[],
+		contextWindow: number = DEFAULT_CONTEXT_WINDOW,
 	): AssembleResult {
 		// 1. 浅拷贝，不修改原始；清除旧注入（幂等安全）
 		const filtered = messages.filter(
@@ -187,7 +188,7 @@ export class ContextAssembler {
 		const totalWithSummary = rawTokens + summaryTokens + recallTokens;
 
 		// 4. 预算分配
-		const totalBudget = DEFAULT_CONTEXT_WINDOW * BUDGET_RATIO;
+		const totalBudget = contextWindow * BUDGET_RATIO;
 
 		let finalMessages: MinimalAgentMessage[];
 		let finalSummaryTokens: number;
