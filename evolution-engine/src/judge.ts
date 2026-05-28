@@ -142,7 +142,7 @@ interface JudgeOnceResult {
 	stderr: string;
 }
 
-const JUDGE_TIMEOUT_MS = 120_000;
+const JUDGE_TIMEOUT_MS = 300_000;
 
 /**
  * 执行一次 pi 子进程调用，返回解析后的建议 + 原始输出。
