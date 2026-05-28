@@ -31,12 +31,10 @@ export function registerTreeCompactCommand(
 			}
 
 			const segments = tracker.getSegments();
-			if (segments.length === 0) {
-				ctx.ui.notify("没有段可供压缩");
+			if (segments.length < 3) {
+				ctx.ui.notify("至少需要 3 个段才能执行压缩");
 				return;
 			}
-
-			ctx.ui.setStatus("ic-compact", "正在执行树压缩...");
 
 			compactor.triggerCompression(
 				pi,
@@ -44,32 +42,12 @@ export function registerTreeCompactCommand(
 				segments,
 				compactor.getTree(),
 				(result: CompactResult) => {
-					if (ctx.hasUI) {
-						if (result.fallbackUsed) {
-							ctx.ui.notify("树压缩降级: 使用规则策略替代 LLM 压缩");
-						} else {
-							const tree = result.tree;
-							ctx.ui.notify(
-								`树压缩完成: ${tree.totalTokens} tokens, `
-								+ `${tree.root.children.length} 个顶层组, `
-								+ `深度 ${tree.depth}`,
-							);
-						}
-					}
+					// onComplete 回调：通知由 index.ts 中 turn_end handler 的 onComplete 处理
+					void result;
 				},
 			);
 
-			// 等待压缩完成（最多 35 秒）
-			const deadline = Date.now() + 35_000;
-			while (compactor.isCompressing() && Date.now() < deadline) {
-				await new Promise((resolve) => setTimeout(resolve, 500));
-			}
-
-			if (compactor.isCompressing()) {
-				ctx.ui.notify("树压缩超时，正在后台继续...");
-			} else {
-				ctx.ui.setStatus("ic-compact", undefined);
-			}
+			ctx.ui.notify("树压缩已启动...");
 		},
 	});
 }

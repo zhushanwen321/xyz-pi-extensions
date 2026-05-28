@@ -9,6 +9,8 @@
  * - 提供 retention window 查询
  */
 
+import { writeFileSync, readFileSync, mkdirSync, existsSync } from "fs";
+import { join } from "path";
 import type { ExtensionAPI, ExtensionContext, CustomEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
 import type { Segment, SegmentEntryData, TurnEntryData } from "./types";
 import { RETENTION_CONFIG } from "./types";
@@ -201,6 +203,9 @@ export class SegmentTracker {
 
 			// 写入段文件
 			this.writeSegmentFile(ctx, this.currentSegment);
+
+			// 追加 turn 数据到段文件
+			this.appendTurnToSegFile(ctx, this.currentSegment, { turnIndex, message, toolResults });
 		}
 	}
 
@@ -252,10 +257,36 @@ export class SegmentTracker {
 	}
 
 	private writeSegmentFile(ctx: ExtensionContext, segment: Segment): void {
-		// 段文件写入将在后续 Task 中实现文件系统操作
-		// 当前仅记录 filePath，实际写入需要 Pi 的 fs 能力
-		// TODO: 使用 ctx.sessionManager.getSessionDir() + fs.writeFile
-		void ctx;
-		void segment;
+		const segDir = join(ctx.cwd, ".pi", "infinite-context", ctx.sessionManager.getSessionId());
+		if (!existsSync(segDir)) {
+			mkdirSync(segDir, { recursive: true });
+		}
+		const data = {
+			segId: segment.segId,
+			turnRange: segment.turnRange,
+			userMessage: segment.userMessage,
+			timestamp: Date.now(),
+		};
+		writeFileSync(join(segDir, `${segment.segId}.json`), JSON.stringify(data, null, 2));
+	}
+
+	private appendTurnToSegFile(ctx: ExtensionContext, segment: Segment | undefined, turnData: { turnIndex: number; message: unknown; toolResults: unknown[] }): void {
+		if (!segment) return;
+		const segDir = join(ctx.cwd, ".pi", "infinite-context", ctx.sessionManager.getSessionId());
+		const segFile = join(segDir, `${segment.segId}.json`);
+		if (!existsSync(segFile)) return;
+		try {
+			const content = readFileSync(segFile, "utf-8");
+			const data = JSON.parse(content) as Record<string, unknown>;
+			if (!Array.isArray(data.turns)) data.turns = [];
+			(data.turns as unknown[]).push({
+				turnIndex: turnData.turnIndex,
+				message: turnData.message,
+				toolResults: turnData.toolResults,
+			});
+			writeFileSync(segFile, JSON.stringify(data, null, 2));
+		} catch {
+			// 文件不存在或解析失败，静默忽略
+		}
 	}
 }

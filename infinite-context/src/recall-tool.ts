@@ -11,8 +11,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionEntry, CustomEntry } from "@mariozechner/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
-import { StringEnum } from "@earendil-works/pi-ai";
+import { Text } from "@mariozechner/pi-tui";
+import { StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "typebox";
 import type { TreeNode, CompactTree } from "./types";
 
@@ -36,27 +36,31 @@ const RecallParams = Type.Object({
 // ── helpers ───────────────────────────────────────────
 
 /** 在树中递归搜索 nodeId */
-function findNode(node: TreeNode, nodeId: string): TreeNode | undefined {
+const MAX_FIND_DEPTH = 20;
+function findNode(node: TreeNode, nodeId: string, depth = 0): TreeNode | undefined {
+	if (depth > MAX_FIND_DEPTH) return undefined;
 	if (node.nodeId === nodeId) return node;
 	for (const child of node.children) {
-		const found = findNode(child, nodeId);
+		const found = findNode(child, nodeId, depth + 1);
 		if (found) return found;
 	}
 	return undefined;
 }
 
 /** 收集节点及其子孙的所有 segId */
+const MAX_COLLECT_DEPTH = 20;
 function collectSegIds(node: TreeNode): string[] {
 	const result: string[] = [];
-	function walk(n: TreeNode): void {
+	function walk(n: TreeNode, depth: number): void {
+		if (depth > MAX_COLLECT_DEPTH) return;
 		if (n.segId) {
 			result.push(n.segId);
 		}
 		for (const child of n.children) {
-			walk(child);
+			walk(child, depth + 1);
 		}
 	}
-	walk(node);
+	walk(node, 0);
 	return result;
 }
 
@@ -68,7 +72,9 @@ function segIndexFromId(segId: string): number | undefined {
 }
 
 /** 构建子树结构描述文本 */
-function formatStructure(node: TreeNode, indent: number): string {
+const MAX_FORMAT_DEPTH = 20;
+function formatStructure(node: TreeNode, indent: number, depth = 0): string {
+	if (depth > MAX_FORMAT_DEPTH) return "";
 	const prefix = "  ".repeat(indent);
 	const leafMarker = node.segId ? ` [leaf: ${node.segId}]` : " [group]";
 	const tokenInfo = ` (${node.tokenCount} tokens)`;
@@ -77,7 +83,7 @@ function formatStructure(node: TreeNode, indent: number): string {
 
 	if (node.children.length > 0) {
 		for (const child of node.children) {
-			result += formatStructure(child, indent + 1);
+			result += formatStructure(child, indent + 1, depth + 1);
 		}
 	}
 

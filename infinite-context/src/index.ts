@@ -15,41 +15,20 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text } from "@mariozechner/pi-tui";
 
 import { SegmentTracker } from "./segment-tracker";
 import { TreeCompactor, type CompactResult } from "./tree-compactor";
-import { ContextAssembler, type AssembleResult } from "./context-handler";
+import { ContextAssembler, type AssembleResult, type MinimalAgentMessage, IC_SUMMARY_CUSTOM_TYPE, IC_RECALL_PROMPT_TYPE } from "./context-handler";
 import { RecallTool } from "./recall-tool";
 import {
 	registerTreeCompactCommand,
 	registerContextStatusCommand,
 } from "./commands";
 
-// -- Constants ---------------------------------------------------------------
-
-/** CustomMessage customType -- tree node summary */
-const IC_SUMMARY_CUSTOM_TYPE = "ic-summary";
-
-/** CustomMessage customType -- recall prompt */
-const IC_RECALL_PROMPT_TYPE = "ic-recall-prompt";
-
 // -- RecallTool instance ---------------------------------------------------
 
 const recallTool = new RecallTool();
-
-// -- MinimalAgentMessage type for assembleMessages compatibility ------------
-
-/** Message type compatible with Pi's AgentMessage for assembler consumption */
-interface CompatibleMessage {
-	role: string;
-	content?: string | Array<{ type: string; text?: string }>;
-	customType?: string;
-	display?: boolean;
-	details?: unknown;
-	timestamp?: number;
-	[key: string]: unknown;
-}
 
 // -- Extension Factory -------------------------------------------------------
 
@@ -62,74 +41,92 @@ export default function infiniteContextExtension(pi: ExtensionAPI): void {
 
 	// -- Event: session_start (state restoration) -----------------------------
 	pi.on("session_start", (_event, ctx) => {
-		const entries = ctx.sessionManager.getEntries();
-		tracker.restoreState(entries);
-		compactor.restoreState(entries);
+		try {
+			const entries = ctx.sessionManager.getEntries();
+			tracker.restoreState(entries);
+			compactor.restoreState(entries);
+		} catch (err) {
+			console.error("[infinite-context] session_start error:", err);
+		}
 	});
 
 	// -- Event: turn_end (segment tracking + compression trigger) ------------
 	pi.on("turn_end", (event, ctx) => {
-		tracker.handleTurnEnd(
-			pi,
-			ctx,
-			event.turnIndex,
-			event.message,
-			event.toolResults,
-		);
-
-		// Check if compression is needed (flagged in previous context event)
-		if (!compactor.isCompressing() && needsCompression) {
-			needsCompression = false;
-			const segments = tracker.getSegments();
-			compactor.triggerCompression(
+		try {
+			tracker.handleTurnEnd(
 				pi,
 				ctx,
-				segments,
-				compactor.getTree(),
-				(result: CompactResult) => {
-					if (!ctx.hasUI) return;
-					if (result.fallbackUsed) {
-						ctx.ui.notify("Tree compression degraded: using rule-based fallback instead of LLM compression");
-					} else {
-						const tree = result.tree;
-						ctx.ui.notify(
-							`Tree compression complete: ${tree.totalTokens} tokens, `
-							+ `${tree.root.children.length} top-level groups, `
-							+ `depth ${tree.depth}`,
-						);
-					}
-				},
+				event.turnIndex,
+				event.message,
+				event.toolResults,
 			);
+
+			// Check if compression is needed (flagged in previous context event)
+			if (!compactor.isCompressing() && needsCompression) {
+				needsCompression = false;
+				const segments = tracker.getSegments();
+				compactor.triggerCompression(
+					pi,
+					ctx,
+					segments,
+					compactor.getTree(),
+					(result: CompactResult) => {
+						if (!ctx.hasUI) return;
+						if (result.fallbackUsed) {
+							ctx.ui.notify("Tree compression degraded: using rule-based fallback instead of LLM compression");
+						} else {
+							const tree = result.tree;
+							ctx.ui.notify(
+								`Tree compression complete: ${tree.totalTokens} tokens, `
+								+ `${tree.root.children.length} top-level groups, `
+								+ `depth ${tree.depth}`,
+							);
+						}
+					},
+				);
+			}
+		} catch (err) {
+			console.error("[infinite-context] turn_end error:", err);
 		}
 	});
 
 	// -- Event: context (reassemble messages) ---------------------------------
 	pi.on("context", (event, ctx) => {
-		const segments = tracker.getSegments();
-		const retentionWindow = tracker.getRetentionWindow();
-		const tree = compactor.getTree();
+		try {
+			const segments = tracker.getSegments();
+			const retentionWindow = tracker.getRetentionWindow();
+			const tree = compactor.getTree();
 
-		const result: AssembleResult = assembler.assembleMessages(
-			event.messages as CompatibleMessage[],
-			tree,
-			segments,
-			retentionWindow,
-		);
+			const result: AssembleResult = assembler.assembleMessages(
+				event.messages as unknown as MinimalAgentMessage[],
+				tree,
+				segments,
+				retentionWindow,
+			);
 
-		// Update compression flag (will trigger on next turn_end)
-		const contextUsage = ctx.getContextUsage();
-		if (contextUsage) {
-			const limit = contextUsage.contextWindow;
-			needsCompression = assembler.shouldCompress(result.treeContextTokens, limit);
+			// Update compression flag (will trigger on next turn_end)
+			const contextUsage = ctx.getContextUsage();
+			if (contextUsage) {
+				const limit = contextUsage.contextWindow;
+				needsCompression = assembler.shouldCompress(result.treeContextTokens, limit);
+			}
+
+			// result.messages is MinimalAgentMessage[], structurally compatible with AgentMessage
+			return { messages: result.messages as typeof event.messages };
+		} catch (err) {
+			console.error("[infinite-context] context error:", err);
+			return undefined;
 		}
-
-		// result.messages is MinimalAgentMessage[], structurally compatible with AgentMessage
-		return { messages: result.messages as typeof event.messages };
 	});
 
 	// -- Event: session_before_compact (cancel Pi native compaction) ----------
 	pi.on("session_before_compact", (_event, _ctx) => {
-		return compactor.cancelPiCompaction();
+		try {
+			return compactor.cancelPiCompaction();
+		} catch (err) {
+			console.error("[infinite-context] session_before_compact error:", err);
+			return { cancel: false };
+		}
 	});
 
 	// -- Command registration -------------------------------------------------

@@ -21,7 +21,7 @@ import { estimateTokens } from "./token-estimator";
  * 此处仅定义本模块需要操作的字段。在 index.ts（扩展入口）中，
  * 会将实际的 Pi AgentMessage 传入，类型安全由调用方保证。
  */
-interface MinimalAgentMessage {
+export interface MinimalAgentMessage {
 	role: string;
 	content?: string | ContentPart[];
 	customType?: string;
@@ -65,20 +65,20 @@ recall(nodeId, "structure") 查看子树结构（不含原始内容）。
 recall(nodeId, "content") 获取原始完整内容。`;
 
 /** CustomMessage 的 customType 标识 — 树节点摘要 */
-const IC_SUMMARY_CUSTOM_TYPE = "ic-summary";
+export const IC_SUMMARY_CUSTOM_TYPE = "ic-summary";
 
 /** CustomMessage 的 customType 标识 — recall 提示 */
-const IC_RECALL_PROMPT_TYPE = "ic-recall-prompt";
+export const IC_RECALL_PROMPT_TYPE = "ic-recall-prompt";
 
 // ── helpers ───────────────────────────────────────────
 
 /** 判断消息是否为本扩展注入的摘要 */
-function isIcSummary(msg: MinimalAgentMessage): boolean {
+export function isIcSummary(msg: MinimalAgentMessage): boolean {
 	return msg.role === "custom" && msg.customType === IC_SUMMARY_CUSTOM_TYPE;
 }
 
 /** 判断消息是否为本扩展注入的 recall 提示 */
-function isIcRecallPrompt(msg: MinimalAgentMessage): boolean {
+export function isIcRecallPrompt(msg: MinimalAgentMessage): boolean {
 	return msg.role === "custom" && msg.customType === IC_RECALL_PROMPT_TYPE;
 }
 
@@ -123,17 +123,19 @@ function createRecallPromptMessage(timestamp: number): MinimalAgentMessage {
 /** 从树节点收集所有 segId */
 function collectTreeSegIds(root: TreeNode): Set<string> {
 	const segIds = new Set<string>();
+	const MAX_DEPTH = 20;
 
-	function walk(node: TreeNode): void {
+	function walk(node: TreeNode, depth: number): void {
+		if (depth > MAX_DEPTH) return;
 		if (node.segId) {
 			segIds.add(node.segId);
 		}
 		for (const child of node.children) {
-			walk(child);
+			walk(child, depth + 1);
 		}
 	}
 
-	walk(root);
+	walk(root, 0);
 	return segIds;
 }
 
@@ -261,11 +263,13 @@ export class ContextAssembler {
 	 */
 	bfsFlatten(tree: CompactTree): TreeNode[] {
 		const result: TreeNode[] = [];
+		const MAX_DEPTH = 20;
 
 		// Level 1 = root 的直接子节点
 		let currentLevel: TreeNode[] = tree.root.children;
+		let depth = 0;
 
-		while (currentLevel.length > 0) {
+		while (currentLevel.length > 0 && depth < MAX_DEPTH) {
 			// 同层 newest-to-oldest：children 数组最后添加的 = newest
 			// reverse 使 newest 排在前面
 			const levelReversed = [...currentLevel].reverse();
@@ -280,6 +284,7 @@ export class ContextAssembler {
 				nextLevel.push(...node.children);
 			}
 			currentLevel = nextLevel;
+			depth++;
 		}
 
 		return result;
