@@ -51,10 +51,6 @@ function matchMetricField(title: string): keyof MetricsSnapshot | null {
 
 // ── 时间窗口 ─────────────────────────────────────────
 
-/** 7 天的毫秒数 */
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-
-/** 判断 ISO timestamp 是否在最近 N 天内 */
 function isWithinDays(isoTimestamp: string, days: number): boolean {
 	const then = new Date(isoTimestamp).getTime();
 	if (Number.isNaN(then)) return false;

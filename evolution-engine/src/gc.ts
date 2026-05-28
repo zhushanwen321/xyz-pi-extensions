@@ -48,8 +48,9 @@ function removeFiles(paths: string[]): number {
 		try {
 			unlinkSync(p);
 			removed++;
-		} catch {
-			// 权限或并发删除导致失败，静默跳过
+		} catch (err) {
+			// 文件可能已被其他进程删除，记录但不停滞
+			console.warn(`[evolve-gc] Failed to remove ${p}: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 	return removed;

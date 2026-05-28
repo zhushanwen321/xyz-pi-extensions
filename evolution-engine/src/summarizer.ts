@@ -16,130 +16,134 @@ import type {
 	Anomaly,
 	TrendDelta,
 	SignalReport,
+	EffectReview,
 } from "./types.js";
-import { loadMetricsHistory, saveMetricsSnapshot } from "./state.js";
+import { saveMetricsSnapshot } from "./state.js";
 
 // ── 指标提取 ─────────────────────────────────────────
 
+/** 安全提取数字值，缺失或非数字时返回默认值 */
+function safeNum(value: unknown, fallback: number = 0): number {
+	return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+/** 从 report._meta 提取基础信息 */
+function extractMetaInfo(report: Record<string, unknown>): { date: string; sessionCount: number } {
+	const meta = report._meta as Record<string, unknown> | undefined;
+	const sessionCount = safeNum(meta?.total_sessions);
+	const analysisPeriod = meta?.analysis_period as Record<string, string> | undefined;
+	const date = analysisPeriod?.until ?? new Date().toISOString().slice(0, 10);
+	return { date, sessionCount };
+}
+
+/** 从 report 中提取 tool 和 error 相关指标 */
+function extractToolMetrics(report: Record<string, unknown>): {
+	totalToolCalls: number;
+	editRetryRate: number;
+	bashFailureRate: number;
+	selfCorrectionRate: number;
+	toolFailureRates: Record<string, number>;
+} {
+	const toolStats = report.tool_stats as Record<string, unknown> | undefined;
+	const errorStats = report.error_stats as Record<string, unknown> | undefined;
+	return {
+		totalToolCalls: safeNum(toolStats?.total_calls),
+		editRetryRate: safeNum(toolStats?.edit_retry_rate),
+		bashFailureRate: safeNum(errorStats?.bash_failure_rate),
+		selfCorrectionRate: safeNum(errorStats?.self_correction_rate),
+		toolFailureRates: extractToolFailureRates(errorStats),
+	};
+}
+
+/** 从 report 中提取 token 和 satisfaction 相关指标 */
+function extractTokenAndSatisfactionMetrics(report: Record<string, unknown>): {
+	totalInputTokens: number;
+	totalOutputTokens: number;
+	totalCost: number;
+	avgInputPerSession: number;
+	avgOutputPerSession: number;
+	singleTurnCompletionRate: number;
+	avgTurnsPerSession: number;
+	avgToolCallsPerSession: number;
+	medianSessionMinutes: number;
+} {
+	const tokenStats = report.token_stats as Record<string, unknown> | undefined;
+	const avgPerSession = tokenStats?.avg_per_session as Record<string, unknown> | undefined;
+	const satisfaction = report.satisfaction as Record<string, unknown> | undefined;
+	const durationStats = satisfaction?.session_duration_stats as Record<string, unknown> | undefined;
+	return {
+		totalInputTokens: safeNum(tokenStats?.total_input),
+		totalOutputTokens: safeNum(tokenStats?.total_output),
+		totalCost: safeNum(tokenStats?.cost_total),
+		avgInputPerSession: safeNum(avgPerSession?.input),
+		avgOutputPerSession: safeNum(avgPerSession?.output),
+		singleTurnCompletionRate: safeNum(satisfaction?.single_turn_completion_rate),
+		avgTurnsPerSession: safeNum(satisfaction?.avg_turns_per_session),
+		avgToolCallsPerSession: safeNum(satisfaction?.avg_tool_calls_per_session),
+		medianSessionMinutes: safeNum(durationStats?.median_minutes),
+	};
+}
+
+/** 从 report 中提取 user 和 skill 相关指标 */
+function extractUserAndSkillMetrics(report: Record<string, unknown>): {
+	userCorrectionRate: number;
+	repeatedRequestCount: number;
+	activeSkillCount: number;
+	dormantSkillCount: number;
+	totalSkillFileSize: number;
+} {
+	const userPatterns = report.user_patterns as Record<string, unknown> | undefined;
+	const corrections = userPatterns?.corrections as Record<string, unknown> | undefined;
+	const repeatedRequests = userPatterns?.repeated_requests as unknown[] | undefined;
+	const skillStats = report.skill_stats as Record<string, unknown> | undefined;
+	const triggeredSkills = skillStats?.triggered_skills as Record<string, unknown> | undefined;
+	const neverTriggered = skillStats?.never_triggered as unknown[] | undefined;
+	const skillFileSizes = skillStats?.skill_file_sizes as Record<string, number> | undefined;
+	return {
+		userCorrectionRate: safeNum(corrections?.rate),
+		repeatedRequestCount: Array.isArray(repeatedRequests) ? repeatedRequests.length : 0,
+		activeSkillCount: triggeredSkills ? Object.keys(triggeredSkills).length : 0,
+		dormantSkillCount: Array.isArray(neverTriggered) ? neverTriggered.length : 0,
+		totalSkillFileSize: skillFileSizes
+			? Object.values(skillFileSizes).reduce((sum, size) => sum + size, 0)
+			: 0,
+	};
+}
+
 /**
  * 从原始报告提取结构化指标快照。
- * 报告结构由 usage-tracker 的 session analyzer 产出，格式参见 types.ts 注释。
+ * 报告结构由 usage-tracker 的 session analyzer 产出。
  */
 export function extractMetricsSnapshot(
 	report: Record<string, unknown>,
 ): MetricsSnapshot {
-	const meta = report._meta as Record<string, unknown> | undefined;
-	const toolStats = report.tool_stats as Record<string, unknown> | undefined;
-	const tokenStats = report.token_stats as Record<string, unknown> | undefined;
-	const errorStats = report.error_stats as Record<string, unknown> | undefined;
-	const userPatterns = report.user_patterns as Record<string, unknown> | undefined;
-	const skillStats = report.skill_stats as Record<string, unknown> | undefined;
-	const satisfaction = report.satisfaction as Record<string, unknown> | undefined;
-
-	// 提取 session 数量
-	const sessionCount = typeof meta?.total_sessions === "number"
-		? meta.total_sessions
-		: 0;
-
-	// 提取日期
-	const analysisPeriod = meta?.analysis_period as Record<string, string> | undefined;
-	const date = analysisPeriod?.until ?? new Date().toISOString().slice(0, 10);
-
-	// tool_stats
-	const totalToolCalls = typeof toolStats?.total_calls === "number"
-		? toolStats.total_calls
-		: 0;
-	const editRetryRate = typeof toolStats?.edit_retry_rate === "number"
-		? toolStats.edit_retry_rate
-		: 0;
-
-	// 只保留高失败率的工具（rate < 0.95 视为值得关注的）
-	const toolFailureRates = extractToolFailureRates(errorStats);
-
-	// error_stats
-	const bashFailureRate = typeof errorStats?.bash_failure_rate === "number"
-		? errorStats.bash_failure_rate
-		: 0;
-	const selfCorrectionRate = typeof errorStats?.self_correction_rate === "number"
-		? errorStats.self_correction_rate
-		: 0;
-
-	// token_stats
-	const totalInputTokens = typeof tokenStats?.total_input === "number"
-		? tokenStats.total_input
-		: 0;
-	const totalOutputTokens = typeof tokenStats?.total_output === "number"
-		? tokenStats.total_output
-		: 0;
-	const totalCost = typeof tokenStats?.cost_total === "number"
-		? tokenStats.cost_total
-		: 0;
-	const avgPerSession = tokenStats?.avg_per_session as Record<string, number> | undefined;
-	const avgInputPerSession = typeof avgPerSession?.input === "number"
-		? avgPerSession.input
-		: 0;
-	const avgOutputPerSession = typeof avgPerSession?.output === "number"
-		? avgPerSession.output
-		: 0;
-
-	// user_patterns
-	const corrections = userPatterns?.corrections as Record<string, unknown> | undefined;
-	const userCorrectionRate = typeof corrections?.rate === "number"
-		? corrections.rate
-		: 0;
-	const repeatedRequests = userPatterns?.repeated_requests as unknown[] | undefined;
-	const repeatedRequestCount = Array.isArray(repeatedRequests)
-		? repeatedRequests.length
-		: 0;
-
-	// satisfaction
-	const singleTurnCompletionRate = typeof satisfaction?.single_turn_completion_rate === "number"
-		? satisfaction.single_turn_completion_rate
-		: 0;
-	const avgTurnsPerSession = typeof satisfaction?.avg_turns_per_session === "number"
-		? satisfaction.avg_turns_per_session
-		: 0;
-	const avgToolCallsPerSession = typeof satisfaction?.avg_tool_calls_per_session === "number"
-		? satisfaction.avg_tool_calls_per_session
-		: 0;
-	const durationStats = satisfaction?.session_duration_stats as Record<string, number> | undefined;
-	const medianSessionMinutes = typeof durationStats?.median_minutes === "number"
-		? durationStats.median_minutes
-		: 0;
-
-	// skill_stats
-	const triggeredSkills = skillStats?.triggered_skills as Record<string, unknown> | undefined;
-	const neverTriggered = skillStats?.never_triggered as unknown[] | undefined;
-	const activeSkillCount = triggeredSkills ? Object.keys(triggeredSkills).length : 0;
-	const dormantSkillCount = Array.isArray(neverTriggered) ? neverTriggered.length : 0;
-
-	const skillFileSizes = skillStats?.skill_file_sizes as Record<string, number> | undefined;
-	const totalSkillFileSize = skillFileSizes
-		? Object.values(skillFileSizes).reduce((sum, size) => sum + size, 0)
-		: 0;
+	const meta = extractMetaInfo(report);
+	const tool = extractToolMetrics(report);
+	const tokenSat = extractTokenAndSatisfactionMetrics(report);
+	const userSkill = extractUserAndSkillMetrics(report);
 
 	return {
-		date,
-		sessionCount,
-		totalToolCalls,
-		toolFailureRates,
-		editRetryRate,
-		bashFailureRate,
-		singleTurnCompletionRate,
-		avgTurnsPerSession,
-		avgToolCallsPerSession,
-		selfCorrectionRate,
-		totalInputTokens,
-		totalOutputTokens,
-		totalCost,
-		avgInputPerSession,
-		avgOutputPerSession,
-		userCorrectionRate,
-		repeatedRequestCount,
-		medianSessionMinutes,
-		activeSkillCount,
-		dormantSkillCount,
-		totalSkillFileSize,
+		date: meta.date,
+		sessionCount: meta.sessionCount,
+		totalToolCalls: tool.totalToolCalls,
+		toolFailureRates: tool.toolFailureRates,
+		editRetryRate: tool.editRetryRate,
+		bashFailureRate: tool.bashFailureRate,
+		singleTurnCompletionRate: tokenSat.singleTurnCompletionRate,
+		avgTurnsPerSession: tokenSat.avgTurnsPerSession,
+		avgToolCallsPerSession: tokenSat.avgToolCallsPerSession,
+		selfCorrectionRate: tool.selfCorrectionRate,
+		totalInputTokens: tokenSat.totalInputTokens,
+		totalOutputTokens: tokenSat.totalOutputTokens,
+		totalCost: tokenSat.totalCost,
+		avgInputPerSession: tokenSat.avgInputPerSession,
+		avgOutputPerSession: tokenSat.avgOutputPerSession,
+		userCorrectionRate: userSkill.userCorrectionRate,
+		repeatedRequestCount: userSkill.repeatedRequestCount,
+		medianSessionMinutes: tokenSat.medianSessionMinutes,
+		activeSkillCount: userSkill.activeSkillCount,
+		dormantSkillCount: userSkill.dormantSkillCount,
+		totalSkillFileSize: userSkill.totalSkillFileSize,
 	};
 }
 
@@ -377,8 +381,8 @@ export function summarizeReport(
 		trends = computeTrends(snapshot, previous);
 	}
 
-	// 4. 效果回顾（委托给 effect-tracker，此处只占位）
-	const effectReview = buildEffectReviewPlaceholder(metricsHistory);
+	// 4. 效果回顾（由 commands.ts 在外部通过 effect-tracker.buildEffectReview 计算）
+	const effectReview: EffectReview[] | undefined = undefined;
 
 	// 5. 压缩原始报告
 	const compressed = compressReport(report);
@@ -390,7 +394,7 @@ export function summarizeReport(
 		metricsSnapshot: snapshot,
 		anomalies,
 		trends,
-		effectReview: effectReview.length > 0 ? effectReview : undefined,
+		effectReview: effectReview,
 		compressed,
 	};
 
@@ -408,10 +412,3 @@ export function summarizeReport(
 	return signalReport;
 }
 
-/** 占位：效果回顾由 effect-tracker.ts 独立计算，summarizer 不依赖它 */
-function buildEffectReviewPlaceholder(
-	_metricsHistory: MetricsSnapshot[],
-): never[] {
-	// 效果回顾在 summarizeReport 外部通过 effect-tracker.buildEffectReview 计算
-	return [];
-}
