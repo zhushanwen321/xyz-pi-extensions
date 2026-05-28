@@ -72,12 +72,15 @@ function createContextHandler(
 			const retentionWindow = tracker.getRetentionWindow();
 			const tree = compactor.getTree();
 
+			const contextUsage = ctx.getContextUsage();
+			const contextWindow = contextUsage?.contextWindow ?? 200_000;
+
 			const result: AssembleResult = assembler.assembleMessages(
 				event.messages as unknown as MinimalAgentMessage[],
 				tree, segments, retentionWindow,
+				contextWindow,
 			);
 
-			const contextUsage = ctx.getContextUsage();
 			if (contextUsage) {
 				needsCompressionRef.value = assembler.shouldCompress(result.treeContextTokens, contextUsage.contextWindow);
 			}
