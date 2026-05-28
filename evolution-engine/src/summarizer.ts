@@ -338,9 +338,18 @@ function compressReport(report: Record<string, unknown>): Record<string, unknown
 		result.satisfaction_top_projects = compressByProject(byProject, "sessions", 5);
 	}
 
-	// error_stats 的摘要（不含 by_project）
+	// error_stats 的摘要（只保留聚合指标，去掉详细数据）
 	if (report.error_stats && typeof report.error_stats === "object") {
-		const { by_project: _bp, ...errorSummary } = report.error_stats as Record<string, unknown> & { by_project?: unknown };
+		const {
+			by_project: _bp,
+			by_tool: _bt,
+			top_error_patterns: _tep,
+			...errorSummary
+		} = report.error_stats as Record<string, unknown> & {
+			by_project?: unknown;
+			by_tool?: unknown;
+			top_error_patterns?: unknown;
+		};
 		result.error_stats_summary = errorSummary;
 	}
 
