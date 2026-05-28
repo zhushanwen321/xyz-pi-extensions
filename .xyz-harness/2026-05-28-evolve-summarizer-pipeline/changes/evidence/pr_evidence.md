@@ -3,7 +3,7 @@ pr_created: true
 pr_url: https://github.com/zhushanwen321/xyz-pi-extensions/pull/10
 pr_title: "feat: evolve-summarizer-pipeline"
 branch: main
-ci_configured: false
+ci_configured: true
 ---
 
 # PR Evidence
