@@ -1,0 +1,144 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "新 user message 创建新 Segment",
+      "description": "验证每条 user message 触发新段创建，前段标记 completed",
+      "steps": ["发送第一条 user message", "验证 seg_0 创建", "发送第二条 user message", "验证 seg_0 completed, seg_1 创建"]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "integration",
+      "title": "Session 重启后段索引恢复",
+      "description": "验证 session_start 从 entries 恢复段索引和 TurnIndex 映射",
+      "steps": ["创建多个段", "重启 session", "验证 segments 从 entries 恢复"]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "integration",
+      "title": "段原始数据文件写入",
+      "description": "验证 seg_N.json 正确写入 .pi/infinite-context/<sessionId>/",
+      "steps": ["完成一个段", "检查 .pi/infinite-context/<sessionId>/seg_0.json 存在", "验证 JSON 内容包含完整 messages"]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "tree-context >= 70% 自动触发压缩",
+      "description": "验证 context handler 检测到阈值后设置 needsCompression 标志",
+      "steps": ["模拟多轮对话使 tree-context >= 70%", "验证 turn_end 后自动触发压缩"]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "integration",
+      "title": "/tree-compact 手动触发压缩",
+      "description": "验证命令触发压缩并显示结果摘要",
+      "steps": ["输入 /tree-compact", "验证 TUI 显示压缩状态", "验证完成后 TUI notify 结果"]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "integration",
+      "title": "session_before_compact 取消 Pi 原生 compaction",
+      "description": "验证 handler 返回 { cancel: true }",
+      "steps": ["触发 Pi 原生 compaction 条件", "验证 handler 被调用", "验证原生 compaction 被取消"]
+    },
+    {
+      "id": "TC-2-04",
+      "type": "integration",
+      "title": "LLM 输出有效树 JSON",
+      "description": "验证 subagent 返回合法的 group/leaf 树结构",
+      "steps": ["触发压缩", "验证输出包含 children 数组", "验证 group 有 summary 和 children", "验证 leaf 有 summary"]
+    },
+    {
+      "id": "TC-2-05",
+      "type": "integration",
+      "title": "校验失败重试 1 次后降级",
+      "description": "验证非法 JSON 输出触发重试，重试失败后降级到规则 fallback",
+      "steps": ["注入非法 JSON 输出", "验证重试 1 次", "验证重试失败后降级", "验证降级使用用户消息第一句话"]
+    },
+    {
+      "id": "TC-2-06",
+      "type": "integration",
+      "title": "subagent 超时降级",
+      "description": "验证 30 秒超时 kill + 规则降级",
+      "steps": ["模拟 subagent 超时", "验证进程被 kill", "验证降级到规则 fallback", "验证 TUI 显示降级警告"]
+    },
+    {
+      "id": "TC-2-07",
+      "type": "integration",
+      "title": "压缩期间对话不中断",
+      "description": "验证 isCompressing 守卫和异步执行不阻塞对话",
+      "steps": ["触发压缩", "压缩期间发送新消息", "验证对话正常继续", "验证 context handler 使用旧树"]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "当前段和保留窗口使用完整原文",
+      "description": "验证 context handler 保留最近段不压缩",
+      "steps": ["创建 5 个段", "触发压缩", "验证当前段和最近 2 段使用完整原文"]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "integration",
+      "title": "已压缩段使用 [nodeId] summary 格式",
+      "description": "验证展平后的 CustomMessage 格式",
+      "steps": ["完成压缩", "检查 context handler 输出", "验证格式为 [nodeId] summary"]
+    },
+    {
+      "id": "TC-3-03",
+      "type": "integration",
+      "title": "BFS 展平顺序验证",
+      "description": "验证层级优先、同层 newest-to-oldest",
+      "steps": ["创建 3 层树结构", "展平", "验证 Level 1 在前", "验证同层内 newest 在前"]
+    },
+    {
+      "id": "TC-3-04",
+      "type": "integration",
+      "title": "预算超限按深度裁剪",
+      "description": "验证超出 80% 预算时的截断策略",
+      "steps": ["创建大树使预算超限", "验证先砍最深层最老节点", "验证最坏情况只保留 Level 1"]
+    },
+    {
+      "id": "TC-3-05",
+      "type": "integration",
+      "title": "Recall 提示注入",
+      "description": "验证存在被压缩段时注入 recall 使用说明",
+      "steps": ["完成压缩", "验证 context handler 在 messages 开头注入 recall 提示"]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "integration",
+      "title": "Recall structure 模式不含原始内容",
+      "description": "验证 mode:structure 只返回 nodeId+type+summary+children",
+      "steps": ["调用 recall(g0, structure)", "验证返回中无 raw messages", "验证返回包含 children 列表"]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "integration",
+      "title": "Recall content 模式返回原始内容",
+      "description": "验证 mode:content 返回 seg_N.json 中的完整 messages",
+      "steps": ["调用 recall(seg_0, content)", "验证返回完整原始 messages"]
+    },
+    {
+      "id": "TC-4-03",
+      "type": "integration",
+      "title": "Recall nodeId 不存在返回错误",
+      "description": "验证无效 nodeId 返回明确错误消息",
+      "steps": ["调用 recall(nonexistent, structure)", "验证返回'未找到 nodeId'错误"]
+    },
+    {
+      "id": "TC-4-04",
+      "type": "integration",
+      "title": "Recall group content 递归展开",
+      "description": "验证 group nodeId 的 content 模式递归收集所有子孙 leaf",
+      "steps": ["创建包含多个 leaf 的 group", "调用 recall(g0, content)", "验证返回所有子孙 leaf 的原始内容"]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "integration",
+      "title": "/context-status 同时显示原始和树上下文",
+      "description": "验证命令输出包含两个独立的上下文使用率",
+      "steps": ["输入 /context-status", "验证显示原始上下文（Pi 报告）", "验证显示树上下文（独立估算）", "验证显示段数量统计"]
+    }
+  ]
+}

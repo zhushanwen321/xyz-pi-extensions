@@ -52,10 +52,10 @@ Pi 使用 `chars/4` 启发式估算（无 tokenizer）。基准取最后一次 L
 
 **FR-1.5 并发压缩守卫**
 
-`isCompressing` 布尔标志（闭包变量），确保同一时刻最多一个压缩进程运行。
-- `turn_end` 触发压缩前检查 `isCompressing`，如为 true 则跳过
-- 压缩完成（成功或失败/超时）后重置为 false
-- `context` handler 检查 `isCompressing`，如为 true 则不设置 `needsCompression` 标志
+`isCompressing` 布尔标志由 `TreeCompactor` 内部管理（封装性更好，外部通过 `TreeCompactor.isCompressing()` 查询）。确保同一时刻最多一个压缩进程运行。
+- `turn_end` 触发压缩前调用 `treeCompactor.isCompressing()` 检查，如为 true 则跳过
+- 压缩完成（成功或失败/超时）后 TreeCompactor 内部重置
+- `context` handler 调用 `treeCompactor.isCompressing()` 检查，如为 true 则不设置 `needsCompression` 标志
 
 ### FR-2: 树压缩（Tree Compact）
 
