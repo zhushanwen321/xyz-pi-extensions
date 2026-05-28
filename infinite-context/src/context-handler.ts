@@ -120,24 +120,6 @@ function createRecallPromptMessage(timestamp: number): MinimalAgentMessage {
 	};
 }
 
-/** 从树节点收集所有 segId */
-function collectTreeSegIds(root: TreeNode): Set<string> {
-	const segIds = new Set<string>();
-	const MAX_DEPTH = 20;
-
-	function walk(node: TreeNode, depth: number): void {
-		if (depth > MAX_DEPTH) return;
-		if (node.segId) {
-			segIds.add(node.segId);
-		}
-		for (const child of node.children) {
-			walk(child, depth + 1);
-		}
-	}
-
-	walk(root, 0);
-	return segIds;
-}
 
 // ── ContextAssembler ──────────────────────────────────
 
@@ -145,11 +127,21 @@ export class ContextAssembler {
 	/**
 	 * 核心方法：每次 LLM 调用前重组 messages
 	 *
-	 * 1. 浅拷贝 messages
-	 * 2. 清除旧注入的摘要和 recall 提示
-	 * 3. 如果有 tree → 注入摘要
-	 * 4. 预算检查与裁剪
-	 * 5. 注入 recall 提示
+	 * 策略：
+	 * - 无树时：保留全部原文 messages
+	 * - 有树且 context 膨胀（>70%）时：截断历史 messages，用摘要替换
+	 * - 有树但 context 未膨胀时：在开头注入摘要（原文仍保留）
+	 *
+	 * 步骤：
+	 * 1. 浅拷贝 messages，清除旧注入的摘要和 recall 提示
+	 * 2. 如果有 tree:
+	 *    a. BFS 展平 → 创建摘要消息
+	 *    b. 估算 filtered messages 的总 tokens
+	 *    c. 如果总 tokens > contextWindow * 0.7:
+	 *       - 截断 filtered，只保留后 30% 的 messages（最近的对话）
+	 *       - 在截断后的 messages 前面注入 recall 提示 + 摘要
+	 *    d. 否则: 全部保留 + 注入摘要到开头
+	 * 3. treeContextTokens = 最终 messages 的总 tokens（含摘要/原文）
 	 */
 	assembleMessages(
 		messages: MinimalAgentMessage[],
@@ -157,80 +149,129 @@ export class ContextAssembler {
 		segments: readonly Segment[],
 		retentionWindow: readonly Segment[],
 	): AssembleResult {
-		// 1. 浅拷贝，不修改原始
-		const result: MinimalAgentMessage[] = [...messages];
-
-		// 2. 清除旧注入的摘要和 recall 提示（幂等安全）
-		const filtered = result.filter(
+		// 1. 浅拷贝，不修改原始；清除旧注入（幂等安全）
+		const filtered = messages.filter(
 			(msg) => !isIcSummary(msg) && !isIcRecallPrompt(msg),
 		);
 
-		// 3. 计算保留窗口段 ID 集合（当前段 + retentionWindow）
+		// 保留窗口段 ID（仅用于信息记录）
 		const retentionSegIds = new Set(retentionWindow.map((s) => s.segId));
 		const activeSegment = segments.find((s) => !s.completed);
 		if (activeSegment) {
 			retentionSegIds.add(activeSegment.segId);
 		}
 
-		let compressedNodeCount = 0;
-		let treeContextTokens = 0;
+		// 无树时：全部原文发送
+		if (!tree) {
+			return {
+				messages: filtered,
+				treeContextTokens: this.estimateTreeContext(filtered),
+				compressedNodeCount: 0,
+			};
+		}
 
-		if (tree) {
-			// 4. 确定树中已压缩的段 ID（用于调用方判断哪些段不使用原文）
-			const _treeSegIds = collectTreeSegIds(tree.root);
-			// treeSegIds 可在后续版本中用于标记 messages 中的段归属
-			void _treeSegIds;
+		// 2. BFS 展平树 → 创建摘要消息
+		const flatNodes = this.bfsFlatten(tree);
+		const now = Date.now();
+		const summaryMessages: MinimalAgentMessage[] = flatNodes.map(
+			(node) => createSummaryMessage(node.nodeId, node.summary, now),
+		);
 
-			// 5. BFS 展平树
-			const flatNodes = this.bfsFlatten(tree);
+		// 3. 估算当前 filtered messages 的 tokens
+		const rawTokens = this.estimateTreeContext(filtered);
+		const summaryTokens = summaryMessages.reduce(
+			(sum, msg) => sum + estimateTokens(typeof msg.content === "string" ? msg.content : ""),
+			0,
+		);
+		const recallTokens = estimateTokens(RECALL_PROMPT);
+		const totalWithSummary = rawTokens + summaryTokens + recallTokens;
 
-			// 6. 为每个节点创建摘要消息
-			const now = Date.now();
-			const summaryMessages: MinimalAgentMessage[] = flatNodes.map(
-				(node) => createSummaryMessage(node.nodeId, node.summary, now),
-			);
+		// 4. 预算分配
+		const totalBudget = DEFAULT_CONTEXT_WINDOW * BUDGET_RATIO;
 
-			// 7. 预算检查
-			treeContextTokens = summaryMessages.reduce(
-				(sum, msg) => sum + estimateTokens(typeof msg.content === "string" ? msg.content : ""),
-				0,
-			);
+		let finalMessages: MinimalAgentMessage[];
+		let finalSummaryTokens: number;
+		let compressedNodeCount: number;
 
-			const existingTokens = this.estimateTreeContext(filtered);
-			const totalBudget = DEFAULT_CONTEXT_WINDOW * BUDGET_RATIO;
-			const availableForTree = totalBudget - existingTokens;
+		if (totalWithSummary > totalBudget) {
+			// Context 膨胀 → 截断历史，用摘要替换
+			//
+			// 由于 AgentMessage 没有 turnIndex/segId 字段，
+			// 无法精确知道哪条 message 属于哪个段。
+			// 近似策略：保留后 RETENTION_RATIO 的 messages（最近的对话），
+			// 前面的历史部分替换为摘要。
 
-			let finalSummaryMessages: MinimalAgentMessage[];
+			// 先对摘要做预算裁剪
+			const availableForSummary = totalBudget * 0.3; // 30% 给摘要
+			const availableForRetention = totalBudget * 0.7; // 70% 给保留窗口
+
 			let finalFlatNodes: TreeNode[];
-
-			if (availableForTree > 0 && treeContextTokens > availableForTree) {
-				// 超限 → 裁剪
-				const truncatedNodes = this.budgetTruncate(flatNodes, Math.max(0, availableForTree));
-				finalFlatNodes = truncatedNodes;
-				finalSummaryMessages = truncatedNodes.map(
-					(node) => createSummaryMessage(node.nodeId, node.summary, now),
-				);
-				treeContextTokens = finalSummaryMessages.reduce(
-					(sum, msg) => sum + estimateTokens(typeof msg.content === "string" ? msg.content : ""),
-					0,
-				);
+			if (summaryTokens > availableForSummary) {
+				finalFlatNodes = this.budgetTruncate(flatNodes, Math.max(0, availableForSummary));
 			} else {
-				finalSummaryMessages = summaryMessages;
 				finalFlatNodes = flatNodes;
 			}
 
+			const truncatedSummaries = finalFlatNodes.map(
+				(node) => createSummaryMessage(node.nodeId, node.summary, now),
+			);
+			finalSummaryTokens = truncatedSummaries.reduce(
+				(sum, msg) => sum + estimateTokens(typeof msg.content === "string" ? msg.content : ""),
+				0,
+			);
 			compressedNodeCount = finalFlatNodes.length;
 
-			// 8. 注入 recall 提示 + 摘要消息到开头
+			// 从 filtered 末尾保留尽可能多的 messages，不超过 availableForRetention
+			const retainedMessages = this.truncateFromStart(filtered, availableForRetention);
+
+			// 组装: recall 提示 + 摘要 + 保留的原文
 			const recallMsg = createRecallPromptMessage(now);
-			filtered.unshift(recallMsg, ...finalSummaryMessages);
+			finalMessages = [recallMsg, ...truncatedSummaries, ...retainedMessages];
+		} else {
+			// Context 未膨胀 → 全部保留原文 + 注入摘要到开头
+			const recallMsg = createRecallPromptMessage(now);
+			finalMessages = [recallMsg, ...summaryMessages, ...filtered];
+			finalSummaryTokens = summaryTokens;
+			compressedNodeCount = flatNodes.length;
 		}
 
+		// 5. treeContextTokens = 最终 messages 的总 tokens（用于 shouldCompress 判断）
+		const treeContextTokens = this.estimateTreeContext(finalMessages);
+
 		return {
-			messages: filtered,
+			messages: finalMessages,
 			treeContextTokens,
 			compressedNodeCount,
 		};
+	}
+
+	/**
+	 * 从 messages 末尾保留尽可能多的 messages，
+	 * 使保留部分的总 tokens 不超过 budget。
+	 *
+	 * 从后往前遍历，累加 tokens，直到超出 budget。
+	 */
+	private truncateFromStart(
+		messages: MinimalAgentMessage[],
+		budget: number,
+	): MinimalAgentMessage[] {
+		if (budget <= 0 || messages.length === 0) return [];
+
+		let accumulated = 0;
+		let cutoffIndex = messages.length; // 从末尾开始
+
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const content = messages[i].content;
+			const text = typeof content === "string" ? content : "";
+			const msgTokens = estimateTokens(text);
+			accumulated += msgTokens;
+			if (accumulated > budget) {
+				cutoffIndex = i + 1; // 保留这条及之后的
+				break;
+			}
+		}
+
+		return messages.slice(cutoffIndex);
 	}
 
 	/**
