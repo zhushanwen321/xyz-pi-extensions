@@ -160,6 +160,9 @@ export async function handleEvolve(
 		// 3b. 运行 summarizer（内部会 saveMetricsSnapshot + 写信号文件到 signalsDir）
 		const signalReport = summarizeReport(report, metricsHistory, dirs.evolutionDir, reportPath);
 
+		// 3b-2. 将新 snapshot 加入内存历史，让 effect review 看到最新数据
+		metricsHistory.push(signalReport.metricsSnapshot);
+
 		// 3c. 构建 effect review 并追加到信号文件
 		const recentHistory = loadHistory(dirs.evolutionDir, 30);
 		const effectReview = buildEffectReview(recentHistory, metricsHistory);
