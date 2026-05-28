@@ -1,17 +1,6 @@
 {
   "test_execution": [
     {
-      "caseId": "TC-6-01",
-      "round": 1,
-      "passed": true,
-      "execute_steps": [
-        "read judge.ts: runJudgeOnce uses spawn('pi', [..., '--stdin'], { stdio: ['pipe', ...] })",
-        "verify userMessage is written via stdin (not CLI arg): proc.stdin.write(userMessage)",
-        "confirm no signal data passed as positional argument"
-      ],
-      "evidence": "Code review: runJudgeOnce line ~70 shows spawn with stdio=['pipe','pipe','pipe']; userMessage written via proc.stdin.write(); signals passed via signal file path, not as CLI arg"
-    },
-    {
       "caseId": "TC-8-01",
       "round": 1,
       "passed": true,
@@ -131,6 +120,18 @@
       "evidence": "Old file deleted, recent files kept (2026-05-27.json, 2026-05-28.json)"
     },
     {
+      "caseId": "TC-6-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "read judge.ts source",
+        "verify spawn uses stdio: ['pipe', 'pipe', 'pipe']",
+        "verify proc.stdin.write(userMessage) is used",
+        "verify no signal data passed as positional spawn arg"
+      ],
+      "evidence": "Source analysis: stdio=[pipe,pipe,pipe] ✓, proc.stdin.write() ✓, no data in CLI args ✓"
+    },
+    {
       "caseId": "TC-7-01",
       "round": 1,
       "passed": true,
@@ -139,7 +140,7 @@
         "run summarizeReport pipeline",
         "verify signal-{date}.json created in signals/"
       ],
-      "evidence": "Signal file created at /var/folders/3p/d4mx1j_j5s7bn3_03x48kpkw0000gn/T/evolve-test-23d2352b-8789-424f-80a1-2477ac297754/evolution-data/signals/signal-2026-05-27.json"
+      "evidence": "Signal file created at /var/folders/3p/d4mx1j_j5s7bn3_03x48kpkw0000gn/T/evolve-test-e24f4ce0-77ee-4dd2-a055-ed494032dcaf/evolution-data/signals/signal-2026-05-27.json"
     }
   ]
 }

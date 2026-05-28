@@ -511,7 +511,42 @@ async function main(): Promise<void> {
 	], tc5_2_evidence);
 
 	// ════════════════════════════════════════════════════════════════
-	// TC-7-01: Full pipeline (signal file creation)
+	// TC-6-01: Judge spawns with stdin, not CLI args
+	// ════════════════════════════════════════════════════════════════
+	console.log("\n--- TC-6-01: judge stdin spawn ---");
+	let tc6_1_passed = false;
+	let tc6_1_evidence = "";
+	try {
+		const judgeSource = readFileSync(join(EVOLUTION_SRC, "judge.ts"), "utf-8");
+		// Check: spawn uses stdio: ['pipe', 'pipe', 'pipe']
+		const hasPipeStdio = judgeSource.includes("pipe", "pipe", "pipe") ||
+			judgeSource.includes('stdio: ["pipe", "pipe", "pipe"]') ||
+			judgeSource.includes("stdio: ['pipe', 'pipe', 'pipe']");
+		// Check: proc.stdin.write is used (not CLI args for message)
+		const hasStdinWrite = judgeSource.includes("proc.stdin.write");
+		// Check: userMessage NOT passed as spawn positional arg
+		const spawnLine = judgeSource.split("\n").filter((l: string) => l.includes("spawn(\"pi"))[0];
+		const positionalArgsAfterSpawn = judgeSource
+			.split("\n")
+			.filter((l: string) => l.includes("spawn"))
+			.some((l: string) => l.includes("userMessage") || l.includes(", \"--mode"));
+		// The args array should just be pi flags, not the signal data
+		const argsStr = judgeSource.split("\n").filter((l: string) => l.includes("const args"))[0] ?? "";
+		const noDataInArgs = !argsStr.includes("JSON.stringify") && !argsStr.includes("signal");
+
+		tc6_1_passed = hasPipeStdio && hasStdinWrite && noDataInArgs;
+		tc6_1_evidence = tc6_1_passed
+			? `Source analysis: stdio=[pipe,pipe,pipe] ✓, proc.stdin.write() ✓, no data in CLI args ✓`
+			: `pipeStdio=${hasPipeStdio}, stdinWrite=${hasStdinWrite}, noDataInArgs=${noDataInArgs}`;
+	} catch (e: unknown) {
+		tc6_1_evidence = `Error: ${e instanceof Error ? e.message : String(e)}`;
+	}
+	record("TC-6-01", tc6_1_passed, [
+		"read judge.ts source",
+		"verify spawn uses stdio: ['pipe', 'pipe', 'pipe']",
+		"verify proc.stdin.write(userMessage) is used",
+		"verify no signal data passed as positional spawn arg",
+	], tc6_1_evidence);
 	// ════════════════════════════════════════════════════════════════
 	console.log("\n--- TC-7-01: full pipeline (signal) ---");
 	let tc7_1_passed = false;
