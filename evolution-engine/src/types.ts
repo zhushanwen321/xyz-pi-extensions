@@ -12,7 +12,7 @@ export interface EvolutionSuggestion {
 	/** UUID */
 	id: string;
 	/** 建议目标类型 */
-	target: "claude-md" | "skill";
+	target: "claude-md" | "skill" | "agent";
 	/** 要修改的文件绝对路径 */
 	targetPath: string;
 	/** 严重程度 */
@@ -78,7 +78,7 @@ export interface AutoTriggerFlag {
 /** LLM Judge 子进程的输入参数 */
 export interface JudgeInput {
 	/** 分析目标 */
-	target: "all" | "claude-md" | "skills" | "merge-reviewer";
+	target: "all" | "claude-md" | "skills" | "merge-reviewer" | "agents";
 	/** Phase 2 JSON 报告路径 */
 	reportPath: string;
 	/** 构建的 prompt 临时文件路径 */
@@ -90,7 +90,7 @@ export interface JudgeInput {
 /** /evolve 命令参数 */
 export interface EvolveCommandParams {
 	/** 分析目标，默认 "all" */
-	target: "all" | "claude-md" | "skills" | "merge-reviewer";
+	target: "all" | "claude-md" | "skills" | "merge-reviewer" | "agents";
 	/** 时间范围，默认 "7d" */
 	since: string;
 	/** 抽样 session 数 */

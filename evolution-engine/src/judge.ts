@@ -20,6 +20,7 @@ const TARGET_TEMPLATE: Record<JudgeInput["target"], string> = {
 	"claude-md": "prompt-optimize.txt",
 	skills: "skill-health.txt",
 	"merge-reviewer": "merge-reviewer.txt",
+	agents: "agent-health.txt",
 };
 
 // ── report 子集提取器 ────────────────────────────────
@@ -59,9 +60,19 @@ function extractReportSubset(
 	}
 
 	// target === "merge-reviewer"
+	if (target === "merge-reviewer") {
+		if (report.tool_stats != null) subset.tool_stats = report.tool_stats;
+		if (report.error_stats != null) subset.error_stats = report.error_stats;
+		if (report.user_patterns != null) subset.user_patterns = report.user_patterns;
+		return subset;
+	}
+
+	// target === "agents"
 	if (report.tool_stats != null) subset.tool_stats = report.tool_stats;
 	if (report.error_stats != null) subset.error_stats = report.error_stats;
+	if (report.skill_stats != null) subset.skill_stats = report.skill_stats;
 	if (report.user_patterns != null) subset.user_patterns = report.user_patterns;
+	if (report.actionable_issues != null) subset.actionable_issues = report.actionable_issues;
 	return subset;
 }
 
@@ -305,7 +316,7 @@ export function parseJudgeOutput(raw: string): EvolutionSuggestion[] {
 		// target 检查（容错：LLM 可能输出 "skills" 复数形式）
 		let target = String(record.target);
 		if (target === "skills") target = "skill";
-		if (target !== "claude-md" && target !== "skill") continue;
+		if (target !== "claude-md" && target !== "skill" && target !== "agent") continue;
 
 		suggestions.push({
 			id: record.id ? String(record.id) : `sug-${suggestions.length + 1}`,
