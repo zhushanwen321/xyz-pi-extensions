@@ -89,7 +89,6 @@ export function buildJudgeInput(
 
 	writeFileSync(reportPath, JSON.stringify(subset, null, 2), "utf-8");
 
-	const templateFileName = TARGET_TEMPLATE[target];
 	const promptFilePath = join(tmpDir, `judge-prompt-${timestamp}.txt`);
 	// 写入用户消息到临时文件，方便 runJudge 读取
 	const userMessage = `分析以下信号数据，生成进化建议：\n\n${JSON.stringify(subset, null, 2)}`;
