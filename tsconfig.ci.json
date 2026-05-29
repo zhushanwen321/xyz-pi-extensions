@@ -16,15 +16,5 @@
       "@earendil-works/pi-ai": ["./types/mariozechner/index"],
       "typebox": ["./types/mariozechner/index"]
     }
-  },
-  "include": [
-    "shared/**/*.ts",
-    "goal/**/*.ts",
-    "todo/**/*.ts",
-    "subagent/**/*.ts",
-    "usage-tracker/**/*.ts",
-    "workflow/**/*.ts",
-    "infinite-context/**/*.ts",
-    "types/**/*.d.ts"
-  ]
+  }
 }
