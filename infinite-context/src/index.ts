@@ -12,6 +12,8 @@ const recallTool = new RecallTool();
 /** 压缩状态气泡的 customType */
 const IC_COMPACT_START_TYPE = "ic-compact-start";
 const IC_COMPACT_END_TYPE = "ic-compact-end";
+/** 压缩统计记录的 customType */
+const IC_COMPACT_STATS_TYPE = "ic-compact-stats";
 
 // -- Named event handlers (extracted for readability) -------------------------
 
@@ -50,9 +52,22 @@ function createTurnEndHandler(
 	};
 }
 
-/** 启动压缩的 UI 反馈：working spinner + footer status + 气泡消息 */
+/** 启动压缩的 UI 反馈：working spinner + footer status + 气泡消息 + 记录压缩前 tokens */
 function startCompressionUI(pi: ExtensionAPI, ctx: ExtensionContext, segmentCount: number): void {
-	// 1. Working spinner — 模拟 agent 工作状态
+	// 记录压缩前的上下文大小
+	const contextUsage = ctx.getContextUsage();
+	const tokensBefore = contextUsage?.tokens ?? null;
+
+	// 持久化统计（压缩前快照）
+	pi.appendEntry(IC_COMPACT_STATS_TYPE, {
+		phase: "before",
+		segmentCount,
+		tokensBefore,
+		contextWindow: contextUsage?.contextWindow ?? null,
+		timestamp: Date.now(),
+	});
+
+	// 1. Working spinner
 	ctx.ui.setWorkingVisible(true);
 	ctx.ui.setWorkingMessage(`IC Tree Compact: compressing ${segmentCount} segments...`);
 
@@ -60,9 +75,10 @@ function startCompressionUI(pi: ExtensionAPI, ctx: ExtensionContext, segmentCoun
 	ctx.ui.setStatus("ic-compact", `IC compressing ${segmentCount} segments...`);
 
 	// 3. 对话流气泡
+	const tokenInfo = tokensBefore !== null ? ` (${tokensBefore.toLocaleString()} tokens)` : "";
 	pi.sendMessage({
 		customType: IC_COMPACT_START_TYPE,
-		content: `compressing ${segmentCount} segments...`,
+		content: `compressing ${segmentCount} segments${tokenInfo}...`,
 		display: true,
 	});
 }
@@ -79,20 +95,33 @@ function onCompleteFactory(pi: ExtensionAPI, ctx: ExtensionContext) {
 		// 清除 working spinner + footer
 		clearCompressionUI(ctx);
 
+		// 持久化统计（压缩后快照）
+		const tree = result.tree;
+		pi.appendEntry(IC_COMPACT_STATS_TYPE, {
+			phase: "after",
+			fallbackUsed: result.fallbackUsed,
+			treeGroups: tree.root.children.length,
+			treeDepth: tree.depth,
+			treeTokens: tree.totalTokens,
+			treeId: tree.treeId,
+			errorReason: result.errorReason,
+			retryCount: result.retryCount,
+			timestamp: Date.now(),
+		});
+
 		if (!ctx.hasUI) return;
 
-		const tree = result.tree;
 		const summary = `${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`;
 
 		// 完成气泡
+		const tokenInfo = `tree: ${tree.totalTokens} tokens`;
 		pi.sendMessage({
 			customType: IC_COMPACT_END_TYPE,
-			content: summary,
+			content: `${summary} | ${tokenInfo}`,
 			display: true,
 			details: {
 				fallbackUsed: result.fallbackUsed,
 				errorReason: result.errorReason,
-				rawOutputPreview: result.rawOutput?.slice(0, 200),
 			},
 		});
 	};

@@ -13,6 +13,7 @@ import { estimateTokens } from "./token-estimator";
 /** 与 index.ts 中的常量保持同步 */
 const IC_COMPACT_START_TYPE = "ic-compact-start";
 const IC_COMPACT_END_TYPE = "ic-compact-end";
+const IC_COMPACT_STATS_TYPE = "ic-compact-stats";
 
 // ── /tree-compact ─────────────────────────────────────
 
@@ -54,11 +55,23 @@ export function registerTreeCompactCommand(
 			const activeCount = allSegments.filter((s) => !s.completed).length;
 			const totalCount = completedCount + activeCount;
 
+			// 记录压缩前上下文
+			const contextUsage = ctx.getContextUsage();
+			const tokensBefore = contextUsage?.tokens ?? null;
+			pi.appendEntry(IC_COMPACT_STATS_TYPE, {
+				phase: "before",
+				segmentCount: totalCount,
+				tokensBefore,
+				contextWindow: contextUsage?.contextWindow ?? null,
+				timestamp: Date.now(),
+			});
+
 			// UI: working spinner + footer + 气泡
 			ctx.ui.setWorkingVisible(true);
 			ctx.ui.setWorkingMessage(`IC Tree Compact: compressing ${totalCount} segments...`);
 			ctx.ui.setStatus("ic-compact", `IC compressing ${totalCount} segments...`);
-			pi.sendMessage({ customType: IC_COMPACT_START_TYPE, content: `compressing ${totalCount} segments...`, display: true });
+			const tokenInfo = tokensBefore !== null ? ` (${tokensBefore.toLocaleString()} tokens)` : "";
+			pi.sendMessage({ customType: IC_COMPACT_START_TYPE, content: `compressing ${totalCount} segments${tokenInfo}...`, display: true });
 
 			compactor.triggerCompression(
 				pi,
@@ -70,14 +83,28 @@ export function registerTreeCompactCommand(
 					ctx.ui.setWorkingVisible(false);
 					ctx.ui.setWorkingMessage(undefined);
 					ctx.ui.setStatus("ic-compact", undefined);
+
+					// 记录压缩后统计
+					const tree = result.tree;
+					pi.appendEntry(IC_COMPACT_STATS_TYPE, {
+						phase: "after",
+						fallbackUsed: result.fallbackUsed,
+						treeGroups: tree.root.children.length,
+						treeDepth: tree.depth,
+						treeTokens: tree.totalTokens,
+						treeId: tree.treeId,
+						errorReason: result.errorReason,
+						retryCount: result.retryCount,
+						timestamp: Date.now(),
+					});
+
 					if (!ctx.hasUI) return;
 
-					const tree = result.tree;
 					const summary = `${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`;
 
 					pi.sendMessage({
 						customType: IC_COMPACT_END_TYPE,
-						content: summary,
+						content: `${summary} | tree: ${tree.totalTokens} tokens`,
 						display: true,
 						details: { fallbackUsed: result.fallbackUsed, errorReason: result.errorReason },
 					});
