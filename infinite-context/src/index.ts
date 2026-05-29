@@ -211,10 +211,11 @@ function registerRenderers(pi: ExtensionAPI): void {
  * 有段时由树压缩接管，取消原生 compact
  * 无段时放行原生 compact
  */
-function createBeforeCompactHandler(tracker: SegmentTracker) {
+function createBeforeCompactHandler(tracker: SegmentTracker, compactor: TreeCompactor) {
 	return () => {
-		const segments = tracker.getSegments();
-		if (segments.length >= 1) {
+		// 只有树压缩已经完成（有有效的压缩树）且不在压缩中时，才接管
+		// 否则放行原生 compact（如 coding-workflow 的 phase 推进依赖 compact）
+		if (compactor.getTree() && !compactor.isCompressing()) {
 			return { cancel: true };
 		}
 		return { cancel: false };
@@ -233,7 +234,7 @@ export default function infiniteContextExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", createSessionStartHandler(tracker, compactor));
 	pi.on("turn_end", createTurnEndHandler(pi, tracker, compactor, assembler, needsCompression));
 	pi.on("context", createContextHandler(pi, tracker, compactor, assembler, needsCompression));
-	pi.on("session_before_compact", createBeforeCompactHandler(tracker));
+	pi.on("session_before_compact", createBeforeCompactHandler(tracker, compactor));
 
 	// Commands + tools + renderers
 	registerTreeCompactCommand(pi, compactor, tracker);
