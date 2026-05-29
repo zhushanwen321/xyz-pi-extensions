@@ -345,8 +345,9 @@ export class TreeCompactor {
 			return applyFallback(pi, segments, 0);
 		}
 
+		let lastError: string | undefined;
 		for (let attempt = 0; attempt <= IC_CONFIG.maxRetryCount; attempt++) {
-			const prompt = buildCompressionPrompt(segments, existingTree, undefined);
+			const prompt = buildCompressionPrompt(segments, existingTree, lastError);
 			icDebug(`[infinite-context] async spawn (attempt ${attempt}, ${segments.length} segments)`);
 
 			const result = await this.asyncSpawnPi(prompt);
@@ -361,7 +362,8 @@ export class TreeCompactor {
 			}
 
 			// 失败，继续重试
-			icDebug(`[infinite-context] async compression failed (attempt ${attempt}): ${result.errorReason}`);
+			lastError = result.errorReason;
+			icDebug(`[infinite-context] async compression failed (attempt ${attempt}): ${lastError}`);
 		}
 
 		icDebug(`[infinite-context] async compression all attempts failed`);
