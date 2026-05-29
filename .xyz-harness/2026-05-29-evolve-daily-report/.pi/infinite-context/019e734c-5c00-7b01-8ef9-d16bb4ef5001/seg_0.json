@@ -1,0 +1,479 @@
+{
+  "segId": "seg_0",
+  "turnRange": {
+    "start": 0,
+    "end": 0
+  },
+  "userMessage": "Task: 你是 Gate 防伪造审查员。你的职责是验证 deliverable 是否真实可信，而非审查内容质量。\n\n1. read `/Users/zhush",
+  "timestamp": 1780050844833,
+  "turns": [
+    {
+      "turnIndex": 0,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Let me start by reading the gate reviewer skill to understand the Phase 2 — Plan check methodology, and then read the deliverable files.",
+            "thinkingSignature": "reasoning_content"
+          },
+          {
+            "type": "toolCall",
+            "id": "call_7b45a67ba82240e4afc97e17",
+            "name": "read",
+            "arguments": {
+              "path": "/Users/zhushanwen/.pi/agent/skills/xyz-harness-gate-reviewer/SKILL.md"
+            }
+          },
+          {
+            "type": "toolCall",
+            "id": "call_b249f6719d3e4792a0612e06",
+            "name": "read",
+            "arguments": {
+              "path": "/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/.xyz-harness/2026-05-29-evolve-daily-report/plan.md"
+            }
+          },
+          {
+            "type": "toolCall",
+            "id": "call_d4fe878470264d24a69680e5",
+            "name": "read",
+            "arguments": {
+              "path": "/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/.xyz-harness/2026-05-29-evolve-daily-report/e2e-test-plan.md"
+            }
+          },
+          {
+            "type": "toolCall",
+            "id": "call_5c354410c50b40c38ba7f60f",
+            "name": "read",
+            "arguments": {
+              "path": "/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/.xyz-harness/2026-05-29-evolve-daily-report/test_cases_template.json"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 19774,
+          "output": 198,
+          "cacheRead": 320,
+          "cacheWrite": 0,
+          "totalTokens": 20292,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780050844846,
+        "responseId": "20260529183405eafea5181fde46f1"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_7b45a67ba82240e4afc97e17",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "---\nname: xyz-harness-gate-reviewer\ndescription: >-\n  Gate anti-fraud reviewer. Verifies that deliverables are genuine, not fabricated by AI.\n  Dispatched automatically by coding-workflow gate tool after GL1 script check passes.\n  Do NOT use for content quality review — that is the job of xyz-harness-expert-reviewer.\n  Trigger: \"gate review\", \"anti-fraud check\", \"verify deliverable authenticity\".\n---\n\n# Gate Anti-Fraud Reviewer\n\n你是 gate 防伪造审查员。你的唯一职责是验证 deliverable 是否真实可信，而非审查内容质量。\n\n## 为什么需要你\n\nAI 是不可信的执行者。它会：\n- 编造测试结果（声称通过但从未运行）\n- 伪造 PR 证据（声称创建但 URL 不存在）\n- 写空洞的 spec（有格式无内容，敷衍过 gate）\n- 跳过实际操作直接声称完成\n\ncontent quality review（expert-reviewer）检查的是\"做得好不好\"。你检查的是\"有没有真的做\"。\n\n## 核心原则\n\n1. **不信任声明，只信任证据**。deliverable 说\"所有测试通过\"不够，你要看到能证明这一点的具体内容\n2. **可验证性优先**。每个 deliverable 的关键声明必须能在文件系统中或通过命令验证\n3. **只报告 MUST_FIX**。不确定的可疑点不报，只报告你确信是伪造或严重缺失的问题\n4. **快速判断**。你不是在做全面审查，你是在做抽查。抓住最明显的欺诈信号就够了\n\n## 按 Phase 的检查策略\n\n### Phase 1 — Spec\n\n**伪造信号：**\n- spec 只有框架标题，正文内容空洞（每段不足一句话）\n- 验收标准含糊不可量化（\"提升用户体验\"、\"系统更稳定\"）\n- 没有任何具体的用户场景或业务规则\n- 所有内容都是泛泛而谈，看不出是针对特定项目的\n\n**验证方法：**\n- 读 spec.md 全文\n- 检查每个需求项是否有具体、可测试的验收标准\n- 检查是否包含具体的技术细节（字段名、API 路径、数据结构等），而非只有抽象描述\n\n### Phase 2 — Plan\n\n**伪造信号：**\n- task 列表和 spec 需求没有对应关系（plan 写了一堆但没覆盖 spec 的核心需求）\n- 每个 task 的描述只有一句话，没有具体步骤\n- 依赖关系明显不合理（被依赖的 task 排在后面）\n- Execution Group 配置缺失或敷衍（没有文件列表、没有 subagent 配置）\n\n**验证方法：**\n- 读 plan.md，对比 spec.md 的需求列表\n- 检查每个 task 是否能映射到 spec 中的具体需求\n- 检查 Execution Group 是否包含文件列表和 subagent 配置\n\n### Phase 3 — Dev\n\n**伪造信号：**\n- test_results.md 声称测试通过，但找不到对应的测试文件\n- test_results.md 中没有具体的测试命令输出（只有总结，没有 raw output）\n- git diff 为空或只有配置文件变更，没有实际业务代码\n- 代码中只有 TODO 占位符或 stub 实现\n\n**验证方法：**\n- 读 test_results.md，检查是否包含实际命令输出\n- 用 `ls` 或 `find` 验证提到的测试文件是否真实存在\n- 如果有 git，检查是否有实际的代码变更（不只是 .xyz-harness 目录）\n- 抽查关键实现文件，确认不是 stub/TODO\n\n### Phase 4 — Test\n\n**伪造信号：**\n- test_execution.json 是手工编写的（时间戳格式不自然、所有测试耗时相同）\n- 测试 case 覆盖面明显不足（复杂功能只有 1-2 个 case）\n- 没有失败 case 记录（真实测试通常至少有一些边缘 case 的尝试痕迹）\n\n**验证方法：**\n- 读 test_execution.json，检查结构完整性和时间戳合理性\n- 对比 test_cases_template.json，确认声明的 case 都有执行记录\n- 检查是否有具体的断言信息，而非只有 pass/fail 总结\n\n### Phase 5 — PR\n\n**伪造信号：**\n- pr_evidence.md 中的 PR URL 格式不正确或明显是编造的\n- ci_results.md 声称 CI 通过但没有任何日志或输出\n- 没有实际的 git commit 或 push 证据\n\n**验证方法：**\n- 读 pr_evidence.md，检查 PR URL 是否是有效的 GitHub/GitLab URL 格式\n- 如果可能，用 `git log` 检查是否有对应的 commit\n- 读 ci_results.md，检查是否包含具体的 CI 输出（而非只有\"CI passed\"一句话）\n\n## 输出格式\n\n将审查结果写入指定路径，YAML frontmatter 格式：\n\n```markdown\n---\nverdict: pass  # 或 fail\nmust_fix: 0    # 确认伪造或严重缺失的问题数量\n---\n\n## Gate Review — Phase {N} ({name})\n\n### 检查项\n\n| 检查项 | 结果 | 说明 |\n|--------|------|------|\n| {检查项名称} | PASS/FAIL | {具体发现} |\n\n### MUST_FIX 问题\n\n{如有，列出每个问题的具体描述和位置}\n\n### 总结\n\n{一段话总结 deliverable 的可信度判断}\n```\n\n## 判定标准\n\n- **verdict: pass** — 没有发现确凿的伪造证据。deliverable 的关键声明有对应的具体内容支撑\n- **verdict: fail** — 发现至少一个确凿的伪造或严重缺失问题（must_fix > 0）\n\n注意：pass 不代表 deliverable 质量高，只代表它不是明显伪造的。质量审查是 expert-reviewer 的职责。\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780050855417
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "call_b249f6719d3e4792a0612e06",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "---\nverdict: pass\ncomplexity: L1\n---\n\n# Evolve Daily Report Implementation Plan\n\n> **For agentic workers:** REQUIRED SUB-SKILL: Use xyz-harness-subagent-driven-development (recommended) or executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.\n\n**Goal:** Add daily automated evolution analysis that generates human-readable Markdown reports, triggered automatically on session_start once per day.\n\n**Architecture:** Wrap the existing analyzer→summarizer→judge pipeline in a new `daily-trigger` module. On session_start, fire-and-forget an async check: if today's report doesn't exist, acquire a lock file, run the full pipeline, generate a Markdown report, merge suggestions into pending.json, release lock. Add `/evolve-report` command for viewing reports. Extend GC to clean old reports.\n\n**Tech Stack:** TypeScript, Node.js built-ins (fs, path, child_process), Pi Extension API\n\n---\n\n## File Structure\n\n| File | Type | Group | Description |\n|------|------|-------|-------------|\n| `evolution-engine/src/types.ts` | modify | BG1 | Add `dailyReportsDir` to Dirs interface |\n| `evolution-engine/src/state.ts` | modify | BG1 | Add `mergePending` + `saveLastRunStatus` |\n| `evolution-engine/src/report-generator.ts` | create | BG1 | SignalReport + Suggestions + EffectReview → Markdown |\n| `evolution-engine/src/gc.ts` | modify | BG1 | Add daily-reports directory cleanup (30 days) |\n| `evolution-engine/src/daily-trigger.ts` | create | BG2 | Lock → pipeline → report → merge pending → unlock |\n| `evolution-engine/src/commands.ts` | modify | BG2 | Add `handleEvolveReport` function |\n| `evolution-engine/src/index.ts` | modify | BG2 | Wire dailyReportsDir, daily-trigger in session_start, /evolve-report |\n\n## Task List\n\n| # | Task | Type | Depends on | Group |\n|---|------|------|-----------|-------|\n| 1 | Extend Dirs + state (mergePending, saveLastRunStatus) | backend | — | BG1 |\n| 2 | Create report-generator module | backend | — | BG1 |\n| 3 | Extend GC for daily-reports | backend | — | BG1 |\n| 4 | Create daily-trigger orchestration | backend | 1, 2 | BG2 |\n| 5 | Wire commands + index integration | backend | 1, 3, 4 | BG2 |\n\n---\n\n## Interface Contracts\n\n### Module: types (modify)\n\n#### Data: Dirs (extend)\n\n| Field | Type | Description |\n|-------|------|-------------|\n| dailyReportsDir | string | `~/.pi/agent/evolution-data/daily-reports` |\n\nLocation: `evolution-engine/src/types.ts` line ~222, after `signalsDir` field.\n\n### Module: state (modify)\n\n| Method | Signature | Returns | Edge Cases | Spec Ref |\n|--------|-----------|---------|------------|----------|\n| mergePending | (dir: string, newSuggestions: EvolutionSuggestion[]) => void | void | No existing pending → create new PendingFile; newSuggestions empty → no-op; title collision → skip duplicate; pending count > 30 → auto-evict oldest with status \"rejected\" | AC-7, AC-8b |\n| saveLastRunStatus | (dir: string, status: \"success\" \\| \"failed\", errorSummary?: string) => void | void | Directory doesn't exist → create | AC-8 |\n\nLocation: `evolution-engine/src/state.ts`, append after `saveMetricsSnapshot`.\n\n### Module: report-generator (create)\n\n| Method | Signature | Returns | Edge Cases | Spec Ref |\n|--------|-----------|---------|------------|----------|\n| generateDailyReport | (signalReport: SignalReport, suggestions: EvolutionSuggestion[], effectReview?: EffectReview[]) => string | string (Markdown) | 0 suggestions → \"系统运行良好，无需调整\"; empty anomalies → \"无异常\"; empty trends → \"无显著变化\"; 0 sessionCount → \"无数据\" indicators | AC-3 |\n\nLocation: `evolution-engine/src/report-generator.ts` (new file).\n\n### Module: daily-trigger (create)\n\n| Method | Signature | Returns | Edge Cases | Spec Ref |\n|--------|-----------|---------|------------|----------|\n| checkAndRunDailyAnalysis | (dirs: Dirs) => Promise<void> | void | Report exists → no-op; lock held by alive PID → no-op; stale lock → clean + proceed; pipeline failure → log + saveLastRunStatus(\"failed\") | AC-1, AC-2, AC-8 |\n| acquireLock | (lockPath: string) => boolean | boolean | Stale lock (PID dead) → unlink + acquire; lock held → return false; no lock file → create + return true | AC-8a |\n| releaseLock | (lockPath: string) => void | void | Lock file missing → no-op | — |\n\nLocation: `evolution-engine/src/daily-trigger.ts` (new file).\n\n### Module: commands (modify)\n\n| Method | Signature | Returns | Edge Cases | Spec Ref |\n|--------|-----------|---------|------------|----------|\n| handleEvolveReport | (args: string, dirs: Dirs) => CommandResult | CommandResult | No args → today's report; date arg → specific date; --list → list reports; report missing → error message with last-run status; corrupted file → \"报告文件损坏\" | AC-5, AC-6 |\n\nLocation: `evolution-engine/src/commands.ts`, append after `handleEvolveRollback`.\n\n### Module: index (modify)\n\nChanges:\n1. `makeDirs()`: Add `dailyReportsDir` field, ensure directory exists\n2. `session_start` handler: Add `checkAndRunDailyAnalysis(dirs)` call (no await — fire-and-forget with `.catch()`)\n3. Register new `/evolve-report` command\n4. Register new `evolve-report` tool\n\nLocation: `evolution-engine/src/index.ts`.\n\n---\n\n## Spec Coverage Matrix\n\n| Spec AC | Interface Method | Data Flow | Task |\n|---------|-----------------|-----------|------|\n| AC-1 | checkAndRunDailyAnalysis | session_start → check file → pipeline → write report | Task 4, 5 |\n| AC-2 | checkAndRunDailyAnalysis | file-exists-and-non-empty → skip | Task 4 |\n| AC-3 | generateDailyReport | SignalReport + Suggestions → Markdown string | Task 2 |\n| AC-4 | checkAndRunDailyAnalysis → mergePending | pipeline → suggestions → pending.json (via merge) | Task 4 |\n| AC-5 | handleEvolveReport | read markdown file → CommandResult | Task 5 |\n| AC-6 | handleEvolveReport(--list) | readdir → format → CommandResult | Task 5 |\n| AC-7 | mergePending | loadPending → dedup by title → cap at 30 → savePending | Task 1 |\n| AC-8 | checkAndRunDailyAnalysis | try/catch → log → saveLastRunStatus | Task 4 |\n| AC-8a | acquireLock / releaseLock | PID check → stale cleanup → lock file | Task 4 |\n| AC-8b | mergePending (title dedup) | title exact match → skip new | Task 1 |\n| AC-9 | runGc (extended) | daily-reports dir → keep 30 days | Task 3 |\n| AC-10 | npx tsc --noEmit | — | all |\n| AC-11 | existing commands unchanged | — | Task 5 (only additions) |\n\n## Spec Metrics Traceability\n\n| Spec AC | 采纳状态 | 对应 Task |\n|---------|---------|----------|\n| AC-1 启动自动生成报告 | adopted | Task 4, 5 |\n| AC-2 同一天不重复生成 | adopted | Task 4 |\n| AC-3 报告包含四+条件章节 | adopted | Task 2 |\n| AC-4 建议与 pending.json 一致 | adopted | Task 4 |\n| AC-5 /evolve-report 展示 | adopted | Task 5 |\n| AC-6 /evolve-report --list | adopted | Task 5 |\n| AC-7 已有 pending 不被覆盖 | adopted | Task 1 |\n| AC-8 失败不阻塞 + status | adopted | Task 4 |\n| AC-8a 并发不重复 | adopted | Task 4 |\n| AC-8b title 去重 | adopted | Task 1 |\n| AC-9 GC 清理 > 30 天 | adopted | Task 3 |\n| AC-10 tsc 通过 | adopted | all |\n| AC-11 现有命令不变 | adopted | Task 5 |\n\n---\n\n## Tasks\n\n### Task 1: Extend Dirs type + add mergePending / saveLastRunStatus to state\n\n**Type:** backend\n\n**Files:**\n- Modify: `evolution-engine/src/types.ts:222` — Dirs interface\n- Modify: `evolution-engine/src/state.ts` — append after `saveMetricsSnapshot`\n\n- [ ] **Step 1: Add dailyReportsDir to Dirs interface**\n\nIn `types.ts`, add field to Dirs interface after `signalsDir`:\n\n```typescript\n/** ~/.pi/agent/evolution-data/daily-reports */\ndailyReportsDir: string;\n```\n\n- [ ] **Step 2: Add mergePending function to state.ts**\n\nFunction signature and behavior:\n\n```typescript\n/**\n * 增量合并新建议到 pending.json。\n * - title 精确匹配去重：已有 pending 建议的 title 与新建议相同时跳过\n * - 容量保护：pending 状态的建议不超过 30 条，超出时将最早的标记为 rejected\n * - 无现有文件时创建新 PendingFile\n */\nexport function mergePending(dir: string, newSuggestions: EvolutionSuggestion[]): void\n```\n\nRead `loadPending(dir)`:\n- null → create new PendingFile with all newSuggestions\n- existing → filter newSuggestions where `!existing.suggestions.some(e => e.status === \"pending\" && e.title === new.title)`\n- Append filtered suggestions\n- If pending-status count > 30, mark oldest pending as rejected with reason \"auto-evicted: exceeded capacity\"\n- `savePending(dir, updated)`\n\n- [ ] **Step 3: Add saveLastRunStatus to state.ts**\n\n```typescript\n/**\n * 写入每日运行状态文件，供 /evolve-report --list 展示。\n * 文件路径: {dailyReportsDir}/../daily-reports/.last-run-status\n */\nexport function saveLastRunStatus(\n  dailyReportsDir: string,\n  status: \"success\" | \"failed\",\n  errorSummary?: string,\n): void\n```\n\nWrite JSON file `{dailyReportsDir}/.last-run-status`:\n```typescript\n{ status, timestamp: new Date().toISOString(), errorSummary?: string }\n```\n\n- [ ] **Step 4: Type check**\n\nRun: `cd evolution-engine && npx tsc --noEmit`\nExpected: PASS\n\n- [ ] **Step 5: Commit**\n\n```bash\ngit add evolution-engine/src/types.ts evolution-engine/src/state.ts\ngit commit -m \"feat(evolve): add dailyReportsDir to Dirs + mergePending + saveLastRunStatus\"\n```\n\n---\n\n### Task 2: Create report-generator module\n\n**Type:** backend\n\n**Files:**\n- Create: `evolution-engine/src/report-generator.ts`\n\n- [ ] **Step 1: Create report-generator.ts with generateDailyReport**\n\n```typescript\n/**\n * Evolution Engine — 每日报告生成器\n *\n * 将 SignalReport + Suggestions + EffectReview 转换为人类可读的 Markdown 报告。\n */\nimport type { SignalReport, EvolutionSuggestion, EffectReview } from \"./types\";\n\n/**\n * 生成每日分析报告的 Markdown 文本。\n * 报告结构：数据概览 → 异常信号 → 趋势变化 → 改进建议 → 效果回顾（条件章节）\n */\nexport function generateDailyReport(\n  signalReport: SignalReport,\n  suggestions: EvolutionSuggestion[],\n  effectReview?: EffectReview[],\n): string\n```\n\nOutput format per spec FR-2.1:\n\n```markdown\n# Evolution Daily Report — YYYY-MM-DD\n\n## 数据概览\n- Session 数量：N\n- 工具调用总数：N\n- Token 消耗：input N / output N\n- 平均每 session 轮次：N.X\n\n## 异常信号\n（anomalies 列表，每条格式: `- [HIGH] detail`，空则 \"无异常\"）\n\n## 趋势变化\n（trends 列表，每条格式: `- field: previous → current (±X%)`，空则 \"无显著变化\"）\n\n## 改进建议\n（suggestions 列表，空则 \"系统运行良好，无需调整\"）\n### #0 [HIGH] title\n- 描述：description\n- 依据：rationale\n- 修改目标：targetPath\n- 修改指令：instruction\n\n## 效果回顾\n（effectReview 列表，仅有数据时出现此章节）\n- suggestionTitle: metric before → after (±X%)\n```\n\nEdge cases:\n- `signalReport.metricsSnapshot.sessionCount === 0` → all values show \"无数据\"\n- `suggestions.length === 0` → \"系统运行良好，无需调整\"\n- `anomalies.length === 0` → \"无异常\"\n- `trends.length === 0` → \"无显著变化\"\n- `effectReview` undefined or empty → omit section entirely\n\nDate from `signalReport.generatedAt` using `new Date(generatedAt).toISOString().slice(0, 10)` (UTC).\n\n- [ ] **Step 2: Type check**\n\nRun: `cd evolution-engine && npx tsc --noEmit`\nExpected: PASS\n\n- [ ] **Step 3: Commit**\n\n```bash\ngit add evolution-engine/src/report-generator.ts\ngit commit -m \"feat(evolve): add daily report Markdown generator\"\n```\n\n---\n\n### Task 3: Extend GC for daily-reports cleanup\n\n**Type:** backend\n\n**Files:**\n- Modify: `evolution-engine/src/gc.ts`\n\n- [ ] **Step 1: Add daily-reports cleanup to GcResult and runGc**\n\nAdd to `GcResult` interface:\n```typescript\ndailyReportsRemoved: number;\n```\n\nAdd constant:\n```typescript\n/** daily-reports/*.md 保留天数 */\nconst MAX_DAILY_REPORT_DAYS = 30;\n```\n\nIn `runGc`, after daily cleanup block, add daily-reports cleanup:\n- Path: `join(evolutionDir, \"daily-reports\")`\n- Filter: `*.md` files, exclude dotfiles (`.last-run-status`, `.daily-report.lock`)\n- Reuse `listExpiredDaily` pattern but check `.md` extension\n- Files older than `MAX_DAILY_REPORT_DAYS` days → delete\n\n- [ ] **Step 2: Type check**\n\nRun: `cd evolution-engine && npx tsc --noEmit`\nExpected: PASS\n\n- [ ] **Step 3: Commit**\n\n```bash\ngit add evolution-engine/src/gc.ts\ngit commit -m \"feat(evolve): add daily-reports cleanup to GC\"\n```\n\n---\n\n### Task 4: Create daily-trigger orchestration module\n\n**Type:** backend\n\n**Files:**\n- Create: `evolution-engine/src/daily-trigger.ts`\n\nDepends on: Task 1 (state.ts mergePending, saveLastRunStatus, Dirs), Task 2 (report-generator)\n\n- [ ] **Step 1: Create daily-trigger.ts with lock helpers + orchestration**\n\n```typescript\n/**\n * Evolution Engine — 每日自动分析触发器\n *\n * 在 session_start 中异步触发，每天最多运行一次完整的分析流程。\n * Fire-and-forget：不阻塞 session 初始化。\n */\nimport { existsSync, writeFileSync, readFileSync, unlinkSync, statSync, renameSync } from \"node:fs\";\nimport { join } from \"node:path\";\nimport type { Dirs } from \"./types\";\nimport { loadPending, mergePending, saveLastRunStatus } from \"./state\";\nimport { generateDailyReport } from \"./report-generator\";\n// Reuse existing pipeline pieces:\nimport { summarizeReport } from \"./summarizer\";\nimport { buildEffectReview } from \"./effect-tracker\";\nimport { runJudge } from \"./judge\";\nimport { loadMetricsHistory, saveMetricsSnapshot, loadHistory, savePending } from \"./state\";\nimport { runGc } from \"./gc\";\n```\n\n**acquireLock(lockPath: string): boolean**\n\n- Check if lock file exists\n- If exists: read JSON `{ pid, timestamp }`, check if PID is alive (`process.kill(pid, 0)`)\n  - Alive → return false (another process running)\n  - Dead → unlink stale lock, fall through to acquire\n- Write new lock: `{ pid: process.pid, timestamp: new Date().toISOString() }`\n- Return true\n\n**releaseLock(lockPath: string): void**\n\n- try { unlinkSync(lockPath) } catch { /* already removed */ }\n\n**checkAndRunDailyAnalysis(dirs: Dirs): Promise<void>**\n\nOrchestration flow:\n1. Compute today's date: `new Date().toISOString().slice(0, 10)` (UTC)\n2. Compute report path: `join(dirs.dailyReportsDir, \"${date}.md\")`\n3. Check: `existsSync(reportPath) && statSync(reportPath).size > 0` → return (already done)\n4. Acquire lock: `join(dirs.dailyReportsDir, \".daily-report.lock\")` → if false, return\n5. **Pipeline** (wrapped in try/catch):\n   a. Run analyzer (same as handleEvolve but fixed `since=\"1d\"`): execFile python3 ANALYZER_SCRIPT with `--since 1d --format json --output {tmpReportPath}`\n   b. Read report JSON\n   c. Load metrics history, run summarizeReport\n   d. Build effect review\n   e. Run GC\n   f. Run LLM Judge\n   g. Generate Markdown report via `generateDailyReport(signalReport, suggestions, effectReview)`\n   h. Write report: write to `reportPath + \".tmp\"`, then `renameSync` to reportPath (atomic)\n   i. Merge suggestions into pending: `mergePending(dirs.evolutionDir, suggestions)`\n   j. `saveLastRunStatus(dirs.dailyReportsDir, \"success\")`\n6. **On error**: `saveLastRunStatus(dirs.dailyReportsDir, \"failed\", error.message)`\n7. **Finally**: `releaseLock(lockPath)`\n\nError handling: All errors caught, logged to console, and written to `.last-run-status`. Never throws.\n\nANALYZER_SCRIPT path: `join(homedir(), \".pi/agent/scripts/pi-session-analyzer/analyze.py\")` (same as commands.ts)\nANALYZER_TIMEOUT_MS: 60_000 (same as commands.ts)\n\n- [ ] **Step 2: Type check**\n\nRun: `cd evolution-engine && npx tsc --noEmit`\nExpected: PASS\n\n- [ ] **Step 3: Commit**\n\n```bash\ngit add evolution-engine/src/daily-trigger.ts\ngit commit -m \"feat(evolve): add daily-trigger with lock + pipeline orchestration\"\n```\n\n---\n\n### Task 5: Wire commands + index integration\n\n**Type:** backend\n\n**Files:**\n- Modify: `evolution-engine/src/commands.ts` — add handleEvolveReport\n- Modify: `evolution-engine/src/index.ts` — wire everything\n\nDepends on: Task 1 (Dirs.dailyReportsDir), Task 3 (GC), Task 4 (daily-trigger)\n\n- [ ] **Step 1: Add handleEvolveReport to commands.ts**\n\n```typescript\nimport { checkAndRunDailyAnalysis } from \"./daily-trigger\";\n```\n\n```typescript\n/**\n * /evolve-report handler:\n * - 无参数 → 显示今天的报告\n * - YYYY-MM-DD → 显示指定日期的报告\n * - --list → 列出所有可用报告（最多 10 条）\n */\nexport function handleEvolveReport(args: string, dirs: Dirs): CommandResult\n```\n\nLogic:\n- Parse args: `const trimmed = args.trim()`\n- `trimmed === \"--list\"`:\n  - readdir `dirs.dailyReportsDir`, filter `*.md` (exclude dotfiles), sort descending\n  - Read `.last-run-status` if exists\n  - Find today's date, check if today's report exists\n  - Find missing dates in last 7 days\n  - Format and return\n- `trimmed` matches `YYYY-MM-DD`:\n  - Read `join(dirs.dailyReportsDir, \"${trimmed}.md\")`\n  - Not found → error: `${trimmed} 的报告不存在`\n  - Found → return markdown content\n- No args (empty):\n  - Today's date, check report\n  - Not found → check `.last-run-status` for error info, return \"今天的报告尚未生成\" + status\n  - Found → return markdown content\n\n- [ ] **Step 2: Update makeDirs in index.ts**\n\nAdd `dailyReportsDir` to makeDirs return, ensure directory exists:\n\n```typescript\nconst dailyReportsDir = join(evolutionDir, \"daily-reports\");\nif (!existsSync(dailyReportsDir)) {\n  mkdirSync(dailyReportsDir, { recursive: true });\n}\n```\n\nReturn object gains: `dailyReportsDir`\n\n- [ ] **Step 3: Add daily-trigger call to session_start**\n\nIn the `session_start` handler, after existing `checkAutoTriggerRules` + `cleanExpiredFlags`:\n\n```typescript\ncheckAndRunDailyAnalysis(dirs).catch((err) => {\n  console.error(\"[evolve] Daily analysis failed:\", err instanceof Error ? err.message : String(err));\n});\n```\n\nNo await — fire-and-forget.\n\n- [ ] **Step 4: Register /evolve-report command + tool**\n\nCommand:\n```typescript\npi.registerCommand(\"evolve-report\", {\n  description: \"View daily evolution reports. Usage: /evolve-report [YYYY-MM-DD] | --list\",\n  handler: async (args, _ctx) => {\n    pi.sendUserMessage(\n      `Please call the evolve-report tool with args=\"${args.trim()}\". Do not add any commentary, just call the tool directly.`,\n    );\n  },\n});\n```\n\nTool schema:\n```typescript\nconst EvolveReportParams = Type.Object({\n  args: Type.String({ default: \"\", description: \"Date (YYYY-MM-DD) or --list\" }),\n});\n```\n\nTool execute:\n```typescript\nasync execute(_toolCallId, params) {\n  return handleEvolveReport(params.args, dirs);\n}\n```\n\nTool renderResult: display markdown content from result.content[0].\n\n- [ ] **Step 5: Type check**\n\nRun: `cd evolution-engine && npx tsc --noEmit`\nExpected: PASS\n\n- [ ] **Step 6: Lint check**\n\nRun: `cd xyz-pi-extensions && npm run lint`\nExpected: 0 error\n\n- [ ] **Step 7: Commit**\n\n```bash\ngit add evolution-engine/src/commands.ts evolution-engine/src/index.ts\ngit commit -m \"feat(evolve): wire daily-trigger + /evolve-report command\"\n```\n\n---\n\n## Execution Groups\n\n#### BG1: Foundation modules\n\n**Description:** Independent module extensions and new report generator. No cross-dependencies within group.\n\n**Tasks:** Task 1, Task 2, Task 3\n\n**Files (预估):** 4 个文件（2 create + 2 modify）\n\n**Subagent 配置:**\n\n| 配置项 | 值 |\n|--------|---|\n| Agent | general-purpose → general-purpose → general-purpose |\n| Model | 按 taskComplexity 自动选择（executor: high、tdd-coder: medium） |\n| 注入上下文 | Task 1-3 描述 + spec FR-1/FR-2/FR-4/FR-5 + 编码规范（CLAUDE.md 禁止 any、函数 ≤ 80 行） |\n| 读取文件 | `evolution-engine/src/types.ts`, `evolution-engine/src/state.ts`, `evolution-engine/src/gc.ts` |\n| 修改/创建文件 | `types.ts`, `state.ts`, `report-generator.ts`, `gc.ts` |\n\n**Execution Flow (BG1 内部):** 串行派遣。\n\n  Task 1:\n    1. general-purpose (read xyz-harness-test-driven-development) → 类型定义 + mergePending 实现\n    2. general-purpose → tsc 验证\n\n  Task 2 (independent of Task 1):\n    1. general-purpose → report-generator 实现\n    2. general-purpose → tsc 验证\n\n  Task 3 (independent of Task 1, 2):\n    1. general-purpose → gc.ts 扩展\n    2. general-purpose → tsc 验证\n\n**Dependencies:** 无\n\n**设计细节:** L1 — 设计细节直接写在各 Task 步骤中。\n\n---\n\n#### BG2: Orchestration + integration\n\n**Description:** daily-trigger (core orchestration) and final wiring in commands + index. Depends on BG1 outputs.\n\n**Tasks:** Task 4, Task 5\n\n**Files (预估):** 3 个文件（1 create + 2 modify）\n\n**Subagent 配置:**\n\n| 配置项 | 值 |\n|--------|---|\n| Agent | general-purpose → general-purpose → general-purpose |\n| Model | 按 taskComplexity 自动选择 |\n| 注入上下文 | Task 4-5 描述 + spec FR-1/FR-3 + 编码规范 + BG1 产出的接口签名 |\n| 读取文件 | `evolution-engine/src/commands.ts`, `evolution-engine/src/index.ts`, `evolution-engine/src/summarizer.ts`, `evolution-engine/src/judge.ts` |\n| 修改/创建文件 | `daily-trigger.ts`, `commands.ts`, `index.ts` |\n\n**Execution Flow (BG2 内部):** 串行派遣。\n\n  Task 4 (depends on BG1):\n    1. general-purpose → daily-trigger 实现（含 lock + pipeline 复用）\n    2. general-purpose → tsc 验证\n\n  Task 5 (depends on Task 4 + BG1):\n    1. general-purpose → commands + index 集成\n    2. general-purpose (read xyz-harness-expert-reviewer) → spec 合规检查\n\n**Dependencies:** BG1（需要 mergePending, generateDailyReport, Dirs.dailyReportsDir）\n\n**设计细节:** L1 — 设计细节直接写在各 Task 步骤中。\n\n---\n\n## Dependency Graph & Wave Schedule\n\n```\nBG1 (foundation) ──→ BG2 (orchestration + integration)\n```\n\n| Wave | Groups | 说明 |\n|------|--------|------|\n| Wave 1 | BG1 | 独立基础模块，无外部依赖 |\n| Wave 2 | BG2 | 依赖 BG1 的接口和数据类型 |\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780050855417
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "call_d4fe878470264d24a69680e5",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "---\nverdict: pass\n---\n\n# E2E Test Plan — Evolve Daily Report\n\n## Test Scenarios\n\n### TS-1: 首次启动自动生成报告\n- **覆盖 AC:** AC-1, AC-3\n- **前置条件:** `daily-reports/` 目录为空，`daily/YYYY-MM-DD.json` 中有最近 1 天的 usage 数据\n- **步骤:**\n  1. 启动 Pi session\n  2. 等待每日分析完成（fire-and-forget，需要等待 ~60s）\n  3. 检查 `daily-reports/YYYY-MM-DD.md` 是否存在\n  4. 验证报告包含\"数据概览\"、\"异常信号\"、\"趋势变化\"、\"改进建议\"章节\n  5. 验证报告中的建议与 `pending.json` 中的建议一致\n- **预期:** 报告生成，pending.json 更新\n\n### TS-2: 同一天不重复生成\n- **覆盖 AC:** AC-2\n- **前置条件:** `daily-reports/YYYY-MM-DD.md` 已存在且非空\n- **步骤:**\n  1. 启动新的 Pi session\n  2. 检查 analyzer 是否被调用（不应被调用）\n- **预期:** 不重复运行 pipeline\n\n### TS-3: /evolve-report 查看今天的报告\n- **覆盖 AC:** AC-5\n- **前置条件:** 今天的报告已生成\n- **步骤:**\n  1. 执行 `/evolve-report`\n  2. 验证返回的 Markdown 内容与文件内容一致\n- **预期:** 显示今天的报告\n\n### TS-4: /evolve-report --list 列出报告\n- **覆盖 AC:** AC-6\n- **前置条件:** 多天的报告存在\n- **步骤:**\n  1. 执行 `/evolve-report --list`\n  2. 验证输出包含报告列表（按日期降序）\n  3. 验证显示最后运行状态\n  4. 验证显示今天是否已生成\n- **预期:** 列表格式正确，信息完整\n\n### TS-5: Pending 增量合并（去重）\n- **覆盖 AC:** AC-7, AC-8b\n- **前置条件:** `pending.json` 中有一条 pending 建议（title: \"减少 bash 失败率\"）\n- **步骤:**\n  1. 运行每日分析，Judge 返回包含相同 title 的建议\n  2. 检查 pending.json 中是否只有一条该 title 的建议\n  3. 检查原有建议的 status 仍为 \"pending\"\n- **预期:** 不重复追加\n\n### TS-6: 并发 session_start 不重复执行\n- **覆盖 AC:** AC-8a\n- **前置条件:** 报告不存在，lock 文件不存在\n- **步骤:**\n  1. 同时启动两个 Pi session\n  2. 检查 lock 文件只有一个被写入\n  3. 检查只有一个 session 运行了 pipeline\n- **预期:** 只生成一份报告\n\n### TS-7: 分析失败不阻塞\n- **覆盖 AC:** AC-8\n- **前置条件:** Python analyzer 脚本不存在\n- **步骤:**\n  1. 启动 Pi session\n  2. 验证 session 正常启动（不阻塞）\n  3. 检查 `.last-run-status` 文件记录了失败信息\n- **预期:** session 正常，失败被记录\n\n### TS-8: GC 清理旧报告\n- **覆盖 AC:** AC-9\n- **前置条件:** `daily-reports/` 中有 35 天前的报告\n- **步骤:**\n  1. 触发 runGc\n  2. 检查 35 天前的报告被删除\n  3. 检查 30 天内的报告保留\n- **预期:** 旧报告被清理\n\n### TS-9: 现有命令不受影响\n- **覆盖 AC:** AC-11\n- **前置条件:** 无\n- **步骤:**\n  1. 执行 `/evolve since=7d`\n  2. 执行 `/evolve-apply action=list`\n  3. 执行 `/evolve-stats`\n  4. 执行 `/evolve-rollback`\n  5. 验证所有命令行为与修改前一致\n- **预期:** 所有命令正常工作\n\n## Test Environment\n\n- **运行环境:** macOS, Node.js v24+, Pi agent 进程\n- **前置安装:** pi-session-analyzer 脚本, Python 3\n- **数据准备:** `~/.pi/agent/evolution-data/daily/` 中需要至少 1 天的 usage 数据文件\n- **类型检查:** `cd evolution-engine && npx tsc --noEmit`\n- **Lint 检查:** `cd xyz-pi-extensions && npm run lint`\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780050855417
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "call_5c354410c50b40c38ba7f60f",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\n  \"test_cases\": [\n    {\n      \"id\": \"TC-1-01\",\n      \"type\": \"integration\",\n      \"title\": \"Daily report auto-generated on first session of the day\",\n      \"description\": \"Verify that checkAndRunDailyAnalysis generates a Markdown report when none exists for today\",\n      \"steps\": [\n        \"Ensure daily-reports/ directory is empty\",\n        \"Trigger checkAndRunDailyAnalysis(dirs)\",\n        \"Wait for pipeline to complete\",\n        \"Check daily-reports/YYYY-MM-DD.md exists and size > 0\",\n        \"Verify pending.json contains suggestions from the report\"\n      ]\n    },\n    {\n      \"id\": \"TC-1-02\",\n      \"type\": \"integration\",\n      \"title\": \"Daily report skipped when already generated today\",\n      \"description\": \"Verify that checkAndRunDailyAnalysis is a no-op when today's report already exists\",\n      \"steps\": [\n        \"Create daily-reports/YYYY-MM-DD.md with some content\",\n        \"Trigger checkAndRunDailyAnalysis(dirs)\",\n        \"Verify no analyzer process was spawned\",\n        \"Verify the report file was not modified\"\n      ]\n    },\n    {\n      \"id\": \"TC-1-03\",\n      \"type\": \"integration\",\n      \"title\": \"Empty/truncated report file triggers regeneration\",\n      \"description\": \"Verify that a 0-byte report file is treated as non-existent and triggers regeneration\",\n      \"steps\": [\n        \"Create daily-reports/YYYY-MM-DD.md as an empty file (0 bytes)\",\n        \"Trigger checkAndRunDailyAnalysis(dirs)\",\n        \"Verify the report is regenerated with actual content\"\n      ]\n    },\n    {\n      \"id\": \"TC-2-01\",\n      \"type\": \"integration\",\n      \"title\": \"Report contains all required sections\",\n      \"description\": \"Verify the generated Markdown report has 数据概览, 异常信号, 趋势变化, 改进建议 sections\",\n      \"steps\": [\n        \"Generate a report with non-zero session data\",\n        \"Parse the Markdown output\",\n        \"Verify all 4 required sections exist (## 数据概览, ## 异常信号, ## 趋势变化, ## 改进建议)\",\n        \"Verify effect review section is omitted when no apply history exists\"\n      ]\n    },\n    {\n      \"id\": \"TC-2-02\",\n      \"type\": \"integration\",\n      \"title\": \"Report with 0 sessions shows no-data indicators\",\n      \"description\": \"Verify that a 0-session day generates a valid report with 无数据 indicators\",\n      \"steps\": [\n        \"Run generateDailyReport with sessionCount=0\",\n        \"Verify output contains '无数据' or equivalent indicators\",\n        \"Verify no NaN or undefined values appear\"\n      ]\n    },\n    {\n      \"id\": \"TC-2-03\",\n      \"type\": \"integration\",\n      \"title\": \"Report with 0 suggestions shows positive message\",\n      \"description\": \"Verify that 0 suggestions produces '系统运行良好，无需调整' message\",\n      \"steps\": [\n        \"Run generateDailyReport with empty suggestions array\",\n        \"Verify 改进建议 section contains the positive message\"\n      ]\n    },\n    {\n      \"id\": \"TC-3-01\",\n      \"type\": \"integration\",\n      \"title\": \"GC removes daily reports older than 30 days\",\n      \"description\": \"Verify runGc deletes .md files older than 30 days in daily-reports/\",\n      \"steps\": [\n        \"Create daily-reports/2026-04-28.md (31+ days old)\",\n        \"Create daily-reports/YYYY-MM-DD.md (today)\",\n        \"Run runGc\",\n        \"Verify old file deleted, today's file preserved\"\n      ]\n    },\n    {\n      \"id\": \"TC-4-01\",\n      \"type\": \"integration\",\n      \"title\": \"Lock prevents concurrent pipeline execution\",\n      \"description\": \"Verify that acquireLock returns false when another process holds the lock\",\n      \"steps\": [\n        \"Create .daily-report.lock with current PID\",\n        \"Call acquireLock\",\n        \"Verify return value is false\"\n      ]\n    },\n    {\n      \"id\": \"TC-4-02\",\n      \"type\": \"integration\",\n      \"title\": \"Stale lock is cleaned and acquired\",\n      \"description\": \"Verify that a lock with a dead PID is cleaned up and a new lock is acquired\",\n      \"steps\": [\n        \"Create .daily-report.lock with PID 99999999 (non-existent)\",\n        \"Call acquireLock\",\n        \"Verify return value is true\",\n        \"Verify lock file now contains current PID\"\n      ]\n    },\n    {\n      \"id\": \"TC-4-03\",\n      \"type\": \"integration\",\n      \"title\": \"Pipeline failure saves error status and does not block\",\n      \"description\": \"Verify that a pipeline error writes .last-run-status with failed status\",\n      \"steps\": [\n        \"Ensure analyzer script path is invalid\",\n        \"Trigger checkAndRunDailyAnalysis\",\n        \"Verify function does not throw\",\n        \"Check .last-run-status contains status='failed' and errorSummary\"\n      ]\n    },\n    {\n      \"id\": \"TC-5-01\",\n      \"type\": \"integration\",\n      \"title\": \"/evolve-report shows today's report\",\n      \"description\": \"Verify handleEvolveReport with empty args returns today's report\",\n      \"steps\": [\n        \"Create today's report file\",\n        \"Call handleEvolveReport('', dirs)\",\n        \"Verify result.content contains the Markdown content\"\n      ]\n    },\n    {\n      \"id\": \"TC-5-02\",\n      \"type\": \"integration\",\n      \"title\": \"/evolve-report YYYY-MM-DD shows specific report\",\n      \"description\": \"Verify handleEvolveReport with date arg returns that date's report\",\n      \"steps\": [\n        \"Create daily-reports/2026-05-28.md\",\n        \"Call handleEvolveReport('2026-05-28', dirs)\",\n        \"Verify result.content contains that file's content\"\n      ]\n    },\n    {\n      \"id\": \"TC-5-03\",\n      \"type\": \"integration\",\n      \"title\": \"/evolve-report --list lists available reports\",\n      \"description\": \"Verify handleEvolveReport with --list returns report list with health info\",\n      \"steps\": [\n        \"Create several daily report files\",\n        \"Create .last-run-status with success status\",\n        \"Call handleEvolveReport('--list', dirs)\",\n        \"Verify output contains date list, last run status, today indicator\"\n      ]\n    },\n    {\n      \"id\": \"TC-5-04\",\n      \"type\": \"integration\",\n      \"title\": \"/evolve-report for missing date returns error message\",\n      \"description\": \"Verify handleEvolveReport with non-existent date returns appropriate error\",\n      \"steps\": [\n        \"Call handleEvolveReport('2020-01-01', dirs)\",\n        \"Verify result contains '报告不存在' message\"\n      ]\n    },\n    {\n      \"id\": \"TC-6-01\",\n      \"type\": \"integration\",\n      \"title\": \"mergePending deduplicates by title\",\n      \"description\": \"Verify that mergePending skips suggestions with same title as existing pending ones\",\n      \"steps\": [\n        \"Create pending.json with one pending suggestion (title: 'Fix X')\",\n        \"Call mergePending with new suggestions including title: 'Fix X'\",\n        \"Verify only one suggestion with title 'Fix X' exists in pending.json\"\n      ]\n    },\n    {\n      \"id\": \"TC-6-02\",\n      \"type\": \"integration\",\n      \"title\": \"mergePending caps at 30 pending suggestions\",\n      \"description\": \"Verify that exceeding 30 pending suggestions auto-evicts oldest\",\n      \"steps\": [\n        \"Create pending.json with 29 pending suggestions\",\n        \"Call mergePending with 3 new suggestions\",\n        \"Verify total pending count is 30\",\n        \"Verify 2 oldest suggestions are marked as rejected with auto-evict reason\"\n      ]\n    },\n    {\n      \"id\": \"TC-7-01\",\n      \"type\": \"manual\",\n      \"title\": \"Existing /evolve command still works after daily report changes\",\n      \"description\": \"Verify /evolve, /evolve-apply, /evolve-stats, /evolve-rollback all work unchanged\",\n      \"steps\": [\n        \"Run /evolve since=1d\",\n        \"Verify it completes successfully\",\n        \"Run /evolve-apply action=list\",\n        \"Verify it shows pending suggestions\",\n        \"Run /evolve-stats\",\n        \"Verify it shows stats dashboard\"\n      ]\n    },\n    {\n      \"id\": \"TC-7-02\",\n      \"type\": \"manual\",\n      \"title\": \"TypeScript compilation passes\",\n      \"description\": \"Verify npx tsc --noEmit passes with all changes\",\n      \"steps\": [\n        \"Run cd evolution-engine && npx tsc --noEmit\",\n        \"Verify 0 errors\"\n      ]\n    },\n    {\n      \"id\": \"TC-7-03\",\n      \"type\": \"manual\",\n      \"title\": \"ESLint passes\",\n      \"description\": \"Verify npm run lint shows 0 errors\",\n      \"steps\": [\n        \"Run cd xyz-pi-extensions && npm run lint\",\n        \"Verify 0 errors\"\n      ]\n    }\n  ]\n}\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780050855417
+        }
+      ]
+    },
+    {
+      "turnIndex": 1,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Now I need to read the spec.md to compare plan's task coverage against spec requirements.",
+            "thinkingSignature": "reasoning_content"
+          },
+          {
+            "type": "text",
+            "text": "现在让我阅读 `spec.md` 来验证 `plan` 的覆盖率，并检查引用的源文件是否确实存在。"
+          },
+          {
+            "type": "toolCall",
+            "id": "call_ec8cde5d19844168aa913492",
+            "name": "read",
+            "arguments": {
+              "path": "/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/.xyz-harness/2026-05-29-evolve-daily-report/spec.md"
+            }
+          },
+          {
+            "type": "toolCall",
+            "id": "call_563cbb73688d43b38fe825da",
+            "name": "bash",
+            "arguments": {
+              "command": "ls -la /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/types.ts /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/state.ts /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/gc.ts /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/commands.ts /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/index.ts /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/summarizer.ts /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/judge.ts 2>&1"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 10396,
+          "output": 284,
+          "cacheRead": 20032,
+          "cacheWrite": 0,
+          "totalTokens": 30712,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780050855418,
+        "responseId": "2026052918341504da63bbaf9d4d5f"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_ec8cde5d19844168aa913492",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "---\nverdict: pass\n---\n\n# Evolve Daily Report — 每日自动分析报告\n\n## Background\n\n当前 evolve 系统是\"手动触发 + 交互式 apply\"模式：\n\n1. 用户手动执行 `/evolve` → analyzer 采集数据 → LLM Judge 生成 suggestions → 存入 pending.json\n2. 用户手动执行 `/evolve-apply` → 逐条 review → apply/skip\n\n实际使用中，用户希望的是**被动接收模式**：每天自动跑一次分析，产出一份人类可读的报告，看完报告后决定哪些要改。而不是主动记住要去跑 `/evolve`。\n\n当前架构中缺失的部分：\n- **定时触发**：没有自动执行 evolve 的机制（monitor.ts 只检测异常写 flag，不触发分析）\n- **报告持久化**：pending.json 是给 /evolve-apply 消费的机器格式，没有人类可读的 Markdown 报告\n- **按日期归档**：analyzer 的 JSON 报告用时间戳命名（`phase2-1698765432.json`），没有按日期组织的报告存档\n- **人工决策替代自动 apply**：用户希望看完报告后直接跟 AI 说\"执行建议 #2\"，而不是走 /evolve-apply 的 tool call 流程\n\n## Functional Requirements\n\n### FR-1: 每日自动触发\n\n**FR-1.1 Session Start 异步检查**\n\n在 `session_start` 事件中异步触发每日分析。**fire-and-forget 模式**：`session_start` handler 立即返回，分析流程在后台执行。\n\n判断依据：`daily-reports/YYYY-MM-DD.md` 文件是否存在且非空（文件大小 > 0）。\n\n- 文件存在且非空 → 跳过（当天已分析过）\n- 文件不存在或为空 → 触发一次完整的 analyze → summarize → judge → report 生成流程\n\n日期使用 UTC（与现有 `summarizer.ts` 中的 `new Date().toISOString().slice(0, 10)` 一致）。\n\n**FR-1.2 并发保护：lock 文件**\n\n使用 `daily-reports/.daily-report.lock` 文件防止并发执行：\n- pipeline 启动前写入 lock 文件（内容为 PID + timestamp）\n- 完成后删除 lock 文件\n- 检测到 lock 文件时，检查 PID 是否存活：存活则跳过，不存活则清除 stale lock 并继续\n- 报告使用 temp-file-rename 模式：先写 `.tmp` 文件，完成后 `rename` 为最终文件名（原子操作）\n\n**FR-1.3 时间范围固定为 1d**\n\n自动触发的分析固定使用 `since=1d`，分析过去 24 小时的数据。不支持自定义范围——自定义范围通过手动 `/evolve` 命令实现。\n\n**FR-1.4 失败处理**\n\n自动触发的分析失败时：\n- 不阻塞 session 启动（fire-and-forget）\n- 错误写入日志文件\n- 失败时清理 lock 文件和临时报告文件\n- 写入 `daily-reports/.last-run-status` 文件记录状态（`success` / `failed` + 时间戳 + 错误摘要），供 `/evolve-report --list` 展示健康状态\n\n**FR-1.5 零 session 日**\n\n如果 analyzer 返回 0 session 的报告，仍然生成报告，但各章节显示\"无数据\"。不跳过生成。\n\n### FR-2: 每日分析报告\n\n**FR-2.1 报告格式**\n\nMarkdown 文件，存储在 `~/.pi/agent/evolution-data/daily-reports/YYYY-MM-DD.md`。\n\n报告结构：\n\n```markdown\n# Evolution Daily Report — YYYY-MM-DD\n\n## 数据概览\n- Session 数量：N\n- 工具调用总数：N\n- Token 消耗：input N / output N\n- 平均每 session 轮次：N\n\n## 异常信号\n（列出 anomalies，无异常则显示\"无异常\"）\n\n## 趋势变化\n（列出与上一日的 trend delta，无变化则显示\"无显著变化\"）\n\n## 改进建议\n（列出 suggestions，无建议则显示\"系统运行良好，无需调整\"）\n### #0 [HIGH] 标题\n- 描述：...\n- 依据：...\n- 修改目标：`/path/to/file`\n- 修改指令：...\n\n## 效果回顾\n（列出最近 apply 的 suggestion 的效果数据，无则省略此节）\n```\n\n**FR-2.2 报告内容来源**\n\n复用现有 pipeline 的全部产物：\n\n| 报告章节 | 数据来源 |\n|----------|----------|\n| 数据概览 | `MetricsSnapshot` |\n| 异常信号 | `SignalReport.anomalies` |\n| 趋势变化 | `SignalReport.trends` |\n| 改进建议 | `EvolutionSuggestion[]`（Judge 输出） |\n| 效果回顾 | `EffectReview[]` |\n\n**FR-2.3 报告持久化**\n\n- 路径：`daily-reports/YYYY-MM-DD.md`\n- 编码：UTF-8\n- 覆盖策略：同一天覆盖（幂等）\n- 保留策略：GC 清理超过 30 天的报告\n\n### FR-3: 报告查看命令\n\n**FR-3.1 `/evolve-report` 命令**\n\n新命令，查看每日分析报告。\n\n- `/evolve-report` — 显示今天的报告（如果存在）\n- `/evolve-report YYYY-MM-DD` — 显示指定日期的报告\n- `/evolve-report --list` — 列出所有可用的报告（按日期降序，最多 10 条）。额外显示：最近一次成功生成日期、今天是否已生成、过去 7 天中缺失的日期\n\n错误处理：\n- 指定日期不存在时返回 \"YYYY-MM-DD 的报告不存在\"\n- 今天报告尚未生成时返回 \"今天的报告尚未生成，可能正在分析中或分析失败\" + `.last-run-status` 中的错误摘要\n- 报告文件损坏时返回 \"报告文件损坏\"\n\n**FR-3.2 与 `/evolve` 命令的关系**\n\n`/evolve` 保持不变，仍然作为手动分析入口（支持自定义 target/since）。自动触发的每日分析走独立的代码路径，不依赖 `/evolve` 命令。\n\n### FR-4: pending.json 同步更新\n\n**FR-4.1 自动更新**\n\n每日自动分析完成后，同步更新 `pending.json`。这样用户看完报告后可以：\n- 用 `/evolve-apply` 逐条处理（现有流程不变）\n- 或直接跟 AI 说\"执行报告里的建议 #0\"（AI 会调 evolve-apply tool）\n\n**FR-4.2 增量合并（去重）**\n\n如果 `pending.json` 中有未处理的 pending 状态建议（status === \"pending\"），新建议追加到末尾而不是覆盖。已有建议的状态不受影响。\n\n去重策略：基于 title 的精确匹配。如果新建议的 title 与已有的 pending 建议完全相同，跳过该建议（不重复追加）。这避免了同一问题连续多天产生重复建议。\n\n容量保护：`pending.json` 中 pending 状态建议不超过 30 条。超出时，标记最早的 pending 建议为 rejected（附带 reason: \"auto-evicted: exceeded capacity\"）。\n\n### FR-5: GC 扩展\n\n**FR-5.1 daily-reports 目录纳入 GC**\n\n在 `gc.ts` 的 `runGc` 中增加对 `daily-reports/` 目录的清理：\n\n- 保留最近 30 天的 Markdown 报告\n- 清理逻辑与现有 `daily/` 的 GC 一致\n\n## Acceptance Criteria\n\n- AC-1: Pi 启动后首次 session 自动检测并生成当日分析报告（`daily-reports/YYYY-MM-DD.md`）\n- AC-2: 同一天内多次启动 Pi 不会重复生成报告（幂等）\n- AC-3: 报告包含数据概览、异常信号、趋势变化、改进建议四个章节（效果回顾为条件章节，仅有 apply 记录时出现）\n- AC-4: 报告中的建议与 `pending.json` 中的数据一致\n- AC-5: `/evolve-report` 能正确展示当天和指定日期的报告\n- AC-6: `/evolve-report --list` 能列出所有可用报告\n- AC-7: 已有 pending 建议不被新分析覆盖（增量合并）\n- AC-8: 自动分析失败时不阻塞 session 启动，`.last-run-status` 记录失败信息\n- AC-8a: 并发 session_start 不会导致重复执行 pipeline\n- AC-8b: 相同 title 的建议不会在 pending.json 中重复出现\n- AC-9: `daily-reports/` 目录的旧文件被 GC 正确清理（> 30 天）\n- AC-10: 类型检查 `npx tsc --noEmit` 通过\n- AC-11: 现有 `/evolve`、`/evolve-apply`、`/evolve-stats`、`/evolve-rollback` 命令行为不受影响\n\n## Constraints\n\n- **不改变现有 pipeline**：analyzer → summarizer → judge 的调用链路保持不变，只在外层包装\"自动触发 + 报告生成\"\n- **不改变现有命令行为**：`/evolve`、`/evolve-apply`、`/evolve-stats`、`/evolve-rollback` 保持现有行为\n- **不引入外部定时器**：不用 cron、setInterval。触发点仅限 session_start 事件\n- **异步执行**：session_start 中的每日分析必须 fire-and-forget，不 await 返回值。session 初始化不受分析耗时影响\n- **模块导入规范**：使用 `@mariozechner/*` scope\n- **单文件 <= 1000 行**\n- **函数 <= 80 行**\n- **禁止 any**\n\n## 与现有 monitor.ts 的关系\n\nmonitor.ts 的 auto-trigger 机制（token-decline、skill-dormant、error-spike）与每日报告**共存**：\n- monitor.ts 在每次 session_start 运行，做轻量级阈值检测，命中时写 flag + 弹通知。它是**实时异常警报**\n- 每日报告做完整的 analyze → summarize → judge 流程，产出深度分析。它是**每日深度体检**\n- 两者信号可能重叠（都检测到 error spike），这是合理的——monitor 做实时提醒，报告做趋势分析和建议\n\n## Task Breakdown\n\n1. **report-generator.ts** — 新增报告生成模块，输入 SignalReport + Suggestions + EffectReview → 输出 Markdown 文本。纯函数，独立可测试\n2. **daily-trigger.ts** — 新增每日触发逻辑，封装\"lock → 检查是否需要运行 → 运行 pipeline → 生成报告 → 更新 pending → 解锁\"的完整流程。fire-and-forget\n3. **gc.ts 扩展** — 在现有 GC 中增加 daily-reports 目录清理（保留 30 天）\n4. **state.ts 扩展** — pending.json 的增量合并逻辑（mergePending），含 title 去重和容量保护\n5. **index.ts 修改** — session_start 事件中异步调用 daily-trigger（不 await），注册 `/evolve-report` 命令\n6. **types.ts 扩展** — Dirs 增加 dailyReportsDir 字段\n\n依赖关系：#1 和 #2 是核心新模块，#3/#4/#5/#6 是胶水和集成\n\n## Complexity Assessment\n\n- **规模**: 小到中等（新增 ~250 行 TS，修改 ~60 行）\n- **核心难点**: 并发安全（lock 机制）和 fire-and-forget 的错误处理\n- **风险**: analyzer + judge 合计耗时 30-60s，虽然是异步的，但并发资源消耗需注意。如果用户同时在手动跑 `/evolve`，两个 pipeline 可能竞争\n- **依赖**: 依赖现有 pipeline（analyzer、summarizer、judge）正常工作\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780050865943
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "call_563cbb73688d43b38fe825da",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "-rw-r--r--@ 1 zhushanwen  staff  17914 May 29 08:40 /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/commands.ts\n-rw-r--r--@ 1 zhushanwen  staff   3630 May 28 17:01 /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/gc.ts\n-rw-r--r--@ 1 zhushanwen  staff  15581 May 29 08:40 /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/index.ts\n-rw-r--r--@ 1 zhushanwen  staff  12168 May 29 08:40 /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/judge.ts\n-rw-r--r--@ 1 zhushanwen  staff   4708 May 29 08:40 /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/state.ts\n-rw-r--r--@ 1 zhushanwen  staff  15202 May 28 17:01 /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/summarizer.ts\n-rw-r--r--@ 1 zhushanwen  staff   6769 May 29 08:40 /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/types.ts\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780050865943
+        }
+      ]
+    },
+    {
+      "turnIndex": 2,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Now let me verify the specific lines mentioned in the plan to make sure the references are accurate:\n\n1. Plan says `types.ts line ~222, after signalsDir field` — let me verify\n2. Plan says `state.ts, append after saveMetricsSnapshot` — let me verify\n3. Plan references existing modules like `summarizer.ts`, `judge.ts`, `effect-tracker` — let me check if effect-tracker exists",
+            "thinkingSignature": "reasoning_content"
+          },
+          {
+            "type": "text",
+            "text": "让我来核实计划中提到的具体行引用，并检查是否存在 `effect-tracker` 模块。"
+          },
+          {
+            "type": "toolCall",
+            "id": "call_9c52caac9b154fe6bd84e2a6",
+            "name": "bash",
+            "arguments": {
+              "command": "grep -n \"signalsDir\" /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/types.ts"
+            }
+          },
+          {
+            "type": "toolCall",
+            "id": "call_4d69ee4593f6445db7391af5",
+            "name": "bash",
+            "arguments": {
+              "command": "grep -n \"saveMetricsSnapshot\" /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/state.ts"
+            }
+          },
+          {
+            "type": "toolCall",
+            "id": "call_4bc39d522206484b9a9e55b8",
+            "name": "bash",
+            "arguments": {
+              "command": "ls /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/effect-tracker.ts 2>&1; grep -rn \"buildEffectReview\\|effect-tracker\" /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/ 2>&1 | head -20"
+            }
+          },
+          {
+            "type": "toolCall",
+            "id": "call_45e0579e0ed5408b9caa8b43",
+            "name": "bash",
+            "arguments": {
+              "command": "grep -rn \"handleEvolveRollback\" /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/commands.ts | head -5"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 3333,
+          "output": 330,
+          "cacheRead": 30400,
+          "cacheWrite": 0,
+          "totalTokens": 34063,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780050865944,
+        "responseId": "20260529183426676f0b997cbc4095"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_9c52caac9b154fe6bd84e2a6",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "226:\tsignalsDir: string;\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780050875568
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "call_4d69ee4593f6445db7391af5",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "111:export function saveMetricsSnapshot(dir: string, snapshot: MetricsSnapshot): void {\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780050875568
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "call_4bc39d522206484b9a9e55b8",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/effect-tracker.ts\n/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/commands.ts:28:import { buildEffectReview } from \"./effect-tracker.js\";\n/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/commands.ts:171:\t\tconst effectReview = buildEffectReview(recentHistory, metricsHistory);\n/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/summarizer.ts:8: *           → buildEffectReview（如有历史）→ summarizeReport → stdin 传给 Judge\n/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/summarizer.ts:393:\t// 4. 效果回顾（由 commands.ts 在外部通过 effect-tracker.buildEffectReview 计算）\n/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/effect-tracker.ts:103:export function buildEffectReview(\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780050875568
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "call_45e0579e0ed5408b9caa8b43",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/commands.ts:4: * 4 个 handler：handleEvolve, handleEvolveApply, handleEvolveStats, handleEvolveRollback\n/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/commands.ts:493:// ── handleEvolveRollback ─────────────────────────────\n/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/commands.ts:502:export async function handleEvolveRollback(\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780050875568
+        }
+      ]
+    },
+    {
+      "turnIndex": 3,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Now I have all the information I need to do the gate review. Let me analyze:\n\n### Phase 2 — Plan 伪造信号检查\n\n**1. task 列表和 spec 需求没有对应关系？**\n- Spec has FR-1 (daily trigger), FR-2 (daily report), FR-3 (report viewing command), FR-4 (pending.json sync), FR-5 (GC extension)\n- Plan has 5 tasks:\n  - Task 1: Dirs + state (mergePending, saveLastRunStatus) → covers FR-4, FR-5 support\n  - Task 2: report-generator → covers FR-2\n  - Task 3: GC extension → covers FR-5\n  - Task 4: daily-trigger → covers FR-1, FR-4\n  - Task 5: commands + index wiring → covers FR-3\n- Plan has a Spec Coverage Matrix that maps every AC to tasks\n- All 11 ACs (AC-1 through AC-11) are mapped\n- PASS — good correspondence\n\n**2. 每个 task 的描述只有一句话？**\n- Each task has multiple detailed steps with checkbox syntax\n- Task 1 has 5 steps with code snippets\n- Task 2 has 3 steps with detailed function signatures and output format\n- Task 3 has 3 steps with code changes specified\n- Task 4 has 3 steps with detailed orchestration flow\n- Task 5 has 7 steps with detailed wiring instructions\n- PASS — substantial task descriptions\n\n**3. 依赖关系明显不合理？**\n- Task 1, 2, 3 are independent (BG1)\n- Task 4 depends on Task 1, 2 (mergePending, generateDailyReport)\n- Task 5 depends on Task 1, 3, 4 (Dirs, GC, daily-trigger)\n- Wave schedule: BG1 → BG2\n- This is logical\n- PASS\n\n**4. Execution Group 配置缺失或敷衍？**\n- BG1 and BG2 both have: Description, Tasks, Files count, Subagent configuration table, Execution Flow details, Dependencies, Design details\n- File lists are provided for both groups\n- Subagent configurations include agent type, model selection, context injection, read/modify file lists\n- PASS\n\n**5. Line references accuracy (additional check)**\n- Plan says types.ts line ~222, after signalsDir → actual line 226 — close enough\n- Plan says state.ts append after saveMetricsSnapshot → actual line 111 — correct\n- effect-tracker.ts exists with buildEffectReview export — correct reference in Task 4\n- handleEvolveRollback exists at line 493/502 in commands.ts — correct reference in Task 5\n- PASS — references are accurate to the real codebase\n\n**6. e2e-test-plan.md**\n- 9 test scenarios covering all ACs\n- Each scenario has preconditions, steps, and expected results\n- Test environment section is included\n- PASS\n\n**7. test_cases_template.json**\n- 19 test cases\n- Each has id, type, title, description, steps\n- Covers all functional areas\n- PASS\n\nOverall verdict: All deliverables are genuine with concrete, verifiable content. No fabrication signals detected. The plan is grounded in real codebase references that checked out.\n\nLet me write the review.",
+            "thinkingSignature": "reasoning_content"
+          },
+          {
+            "type": "text",
+            "text": "已验证所有引用。现在让我来编写 gate 评审。"
+          },
+          {
+            "type": "toolCall",
+            "id": "call_2848cd20b7434183bc44fd32",
+            "name": "bash",
+            "arguments": {
+              "command": "mkdir -p /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/.xyz-harness/2026-05-29-evolve-daily-report/changes/reviews"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 761,
+          "output": 772,
+          "cacheRead": 33728,
+          "cacheWrite": 0,
+          "totalTokens": 35261,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780050875569,
+        "responseId": "20260529183435cdcde57350054898"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_2848cd20b7434183bc44fd32",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "(no output)"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780050895843
+        }
+      ]
+    },
+    {
+      "turnIndex": 4,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "toolCall",
+            "id": "call_5858841fb0ad4f8fbdbc039c",
+            "name": "write",
+            "arguments": {
+              "path": "/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/.xyz-harness/2026-05-29-evolve-daily-report/changes/reviews/gate_review_2.md",
+              "content": "---\nverdict: pass\nmust_fix: 0\n---\n\n## Gate Review — Phase 2 (Plan)\n\n### 检查项\n\n| 检查项 | 结果 | 说明 |\n|--------|------|------|\n| plan.md task 列表 vs spec 需求对应关系 | PASS | 5 个 task 完整覆盖 spec 的 FR-1~FR-5 全部功能需求。Spec Coverage Matrix 将 AC-1~AC-11 逐一映射到具体 task，无遗漏 |\n| task 描述具体程度 | PASS | 每个 task 包含 3-7 个 checkbox 步骤，含函数签名、参数类型、edge case 说明、代码片段。非一句话敷衍 |\n| 依赖关系合理性 | PASS | BG1（Task 1/2/3，独立基础模块）→ BG2（Task 4/5，依赖 BG1 产出的接口）。Task 4 依赖 Task 1+2，Task 5 依赖 Task 1+3+4，拓扑无环 |\n| Execution Group 配置 | PASS | BG1/BG2 均包含：描述、task 列表、文件数量、subagent 配置表（agent/model/注入上下文/读写文件列表）、串行执行流程、依赖声明 |\n| 行号/函数引用准确性 | PASS | types.ts `signalsDir` 在实际 line 226（plan 写 ~222）；state.ts `saveMetricsSnapshot` 在 line 111；commands.ts `handleEvolveRollback` 在 line 493/502；effect-tracker.ts `buildEffectReview` 确认存在——引用与代码库吻合 |\n| e2e-test-plan.md 覆盖度 | PASS | 9 个测试场景，覆盖全部 11 条 AC（AC-1~AC-11）。每个场景含前置条件、步骤、预期结果。包含测试环境说明 |\n| test_cases_template.json 结构完整性 | PASS | 19 个 test case，每个含 id/type/title/description/steps。覆盖集成（17 个）和手动验证（2 个）两种类型。TC id 按 spec AC 分组编号 |\n| 引用的源文件真实存在 | PASS | `types.ts`, `state.ts`, `gc.ts`, `commands.ts`, `index.ts`, `summarizer.ts`, `judge.ts`, `effect-tracker.ts` 全部存在于 `evolution-engine/src/` 目录 |\n\n### MUST_FIX 问题\n\n无。\n\n### 总结\n\nplan.md 是一份详实的实施计划，所有 task 与 spec 的 FR/AC 形成完整的双向映射。关键信号：(1) 行号和函数名引用经过 bash 验证，与代码库实际内容一致；(2) 依赖关系拓扑正确，BG1→BG2 的分波执行策略合理；(3) Execution Group 包含完整的 subagent 配置和文件列表，非敷衍填充；(4) e2e-test-plan 和 test_cases_template 覆盖全部 AC，测试步骤具体可执行。未发现伪造或严重缺失问题。\n"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 836,
+          "output": 699,
+          "cacheRead": 34432,
+          "cacheWrite": 0,
+          "totalTokens": 35967,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780050895845,
+        "responseId": "202605291834567ea39520c84d483b"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_5858841fb0ad4f8fbdbc039c",
+          "toolName": "write",
+          "content": [
+            {
+              "type": "text",
+              "text": "Successfully wrote 1462 bytes to /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/.xyz-harness/2026-05-29-evolve-daily-report/changes/reviews/gate_review_2.md"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780050917975
+        }
+      ]
+    },
+    {
+      "turnIndex": 5,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Gate review 完成。**verdict: pass, must_fix: 0**。\n\n核心发现：\n- plan 的 5 个 task 完整覆盖 spec FR-1~FR-5，Spec Coverage Matrix 双向映射无遗漏\n- 行号引用（types.ts `signalsDir` line 226、state.ts `saveMetricsSnapshot` line 111、commands.ts `handleEvolveRollback` line 493）经 bash 验证全部准确\n- Execution Group 配置完整（subagent 配置表、文件列表、串行执行流程），非敷衍\n- e2e-test-plan 9 个场景覆盖全部 11 条 AC，test_cases_template 19 个 case 结构完整\n- 未发现伪造信号"
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 758,
+          "output": 156,
+          "cacheRead": 35264,
+          "cacheWrite": 0,
+          "totalTokens": 36178,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "stop",
+        "timestamp": 1780050917976,
+        "responseId": "202605291835188cdbe8434cd44e00"
+      },
+      "toolResults": []
+    }
+  ]
+}

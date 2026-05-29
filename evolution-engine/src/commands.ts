@@ -9,7 +9,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 
 import type {
 	Dirs,
@@ -127,11 +127,14 @@ export async function handleEvolve(
 			}
 
 			try {
-				execFileSync(
-					"python3",
-					[ANALYZER_SCRIPT, "--since", params.since, "--format", "json", "--output", tmpReportPath],
-					{ timeout: ANALYZER_TIMEOUT_MS, stdio: "pipe" },
-				);
+				await new Promise<void>((resolve, reject) => {
+					execFile(
+						"python3",
+						[ANALYZER_SCRIPT, "--since", params.since, "--format", "json", "--output", tmpReportPath],
+						{ timeout: ANALYZER_TIMEOUT_MS },
+						(err: Error | null) => err ? reject(err) : resolve(),
+					);
+				});
 				reportPath = tmpReportPath;
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
@@ -172,10 +175,7 @@ export async function handleEvolve(
 			writeFileSync(effectSignalPath, JSON.stringify(signalReport, null, 2), "utf-8");
 		}
 
-		// 3d. GC 清理旧信号文件
-		runGc(dirs.evolutionDir);
-
-		// 3e. 构建 Judge input（使用信号文件而非原始报告）
+		// 3d. 构建 Judge input（使用信号文件而非原始报告）
 		const signalPath = join(dirs.signalsDir, `signal-${signalReport.metricsSnapshot.date}.json`);
 		const judgeInput: JudgeInput = {
 			target: params.target === "all" ? "all" : params.target,
@@ -191,6 +191,9 @@ export async function handleEvolve(
 			const msg = err instanceof Error ? err.message : String(err);
 			throw new Error(`LLM Judge failed: ${msg}`);
 		}
+
+		// 4b. GC 清理旧信号文件（Judge 成功后执行，避免误删新信号）
+		runGc(dirs.evolutionDir);
 
 		// 5. 保存 pending.json
 		const pending: PendingFile = {
@@ -266,11 +269,11 @@ export async function handleEvolveApply(
 				const header = `#${index} [${suggestion.severity.toUpperCase()}] ${suggestion.title}`;
 				const desc = suggestion.description ? `  Description: ${suggestion.description}` : "";
 				const rationale = suggestion.rationale ? `  Rationale: ${suggestion.rationale}` : "";
-				const diff = suggestion.diff ? `  Diff target: ${suggestion.targetPath}` : "";
-				const diffPreview = suggestion.diff
-					? `  Diff preview:\n  ${suggestion.diff.split("\n").slice(0, 10).join("\n  ")}`
+				const instruction = suggestion.instruction ? `  Target: ${suggestion.targetPath}` : "";
+				const instructionPreview = suggestion.instruction
+					? `  Instruction:\n  ${suggestion.instruction.split("\n").slice(0, 10).join("\n  ")}`
 					: "";
-				return [header, desc, rationale, diff, diffPreview].filter(Boolean).join("\n");
+				return [header, desc, rationale, instruction, instructionPreview].filter(Boolean).join("\n");
 			}).join("\n\n");
 
 			return successResult(
@@ -289,7 +292,7 @@ export async function handleEvolveApply(
 						status: suggestion.status,
 						description: suggestion.description,
 						rationale: suggestion.rationale,
-						diff: suggestion.diff,
+						instruction: suggestion.instruction,
 					})),
 				},
 			);
@@ -355,7 +358,7 @@ export async function handleEvolveApply(
 				suggestionId: suggestion.id,
 				targetPath: suggestion.targetPath,
 				backupPath: result.backupPath ?? join(backupDir, `${suggestion.id}.bak`),
-				diff: suggestion.diff,
+				instruction: suggestion.instruction,
 				title: suggestion.title,
 				commitSha: result.commitSha,
 				metricsSnapshotDate: latestSnapshotDate,
@@ -531,7 +534,7 @@ export async function handleEvolveRollback(
 				suggestionId: entry.suggestionId,
 				targetPath: entry.targetPath,
 				backupPath: entry.backupPath,
-				diff: entry.diff,
+				instruction: entry.instruction,
 				title: entry.title,
 			});
 
@@ -550,4 +553,136 @@ export async function handleEvolveRollback(
 		const msg = err instanceof Error ? err.message : String(err);
 		throw new Error(`Unexpected error in /evolve-rollback: ${msg}`);
 	}
+}
+
+// ── handleEvolveReport ───────────────────────────────
+
+/**
+ * /evolve-report handler:
+ * - 无参数 → 显示今天的报告
+ * - YYYY-MM-DD → 显示指定日期的报告
+ * - --list → 列出所有可用报告（最近 10 条）
+ */
+export function handleEvolveReport(args: string, dirs: Dirs): CommandResult {
+	try {
+		const trimmed = args.trim();
+		const today = new Date().toISOString().slice(0, 10);
+
+		// ── --list: 列出所有报告 ─────────────────────
+		if (trimmed === "--list") {
+			return listReports(dirs, today);
+		}
+
+		// ── 指定日期或今天 ────────────────────────────
+		const targetDate = isDateString(trimmed) ? trimmed : today;
+		const reportPath = join(dirs.dailyReportsDir, `${targetDate}.md`);
+
+		if (!existsSync(reportPath)) {
+			// 如果是今天的报告缺失，提供额外诊断信息
+			if (targetDate === today) {
+				const statusInfo = readLastRunStatus(dirs.dailyReportsDir);
+				const statusLine = statusInfo
+					? `\n最后运行状态: ${statusInfo.status} (${statusInfo.timestamp})${statusInfo.errorSummary ? `\n错误: ${statusInfo.errorSummary}` : ""}`
+					: "";
+				throw new Error(`今天的报告尚未生成。${statusLine}`);
+			}
+			throw new Error(`${targetDate} 的报告不存在`);
+		}
+
+		const content = readFileSync(reportPath, "utf-8");
+		if (content.trim().length === 0) {
+			throw new Error(`${targetDate} 的报告文件损坏或为空`);
+		}
+		return successResult(content, {
+			action: "report",
+			date: targetDate,
+			size: content.length,
+		});
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		throw new Error(`Unexpected error in /evolve-report: ${msg}`);
+	}
+}
+
+// ── Report 辅助函数 ─────────────────────────────────
+
+/** 列出所有可用报告 */
+function listReports(dirs: Dirs, today: string): CommandResult {
+	if (!existsSync(dirs.dailyReportsDir)) {
+		return successResult("尚未生成任何报告。", { action: "list", reports: [] });
+	}
+
+	const entries = readdirSync(dirs.dailyReportsDir)
+		.filter(name => name.endsWith(".md") && !name.startsWith("."))
+		.sort()
+		.reverse()
+		.slice(0, 10);
+
+	if (entries.length === 0) {
+		return successResult("尚未生成任何报告。", { action: "list", reports: [] });
+	}
+
+	// 读取最后运行状态
+	const statusInfo = readLastRunStatus(dirs.dailyReportsDir);
+	const todayReport = `${today}.md`;
+	const todayExists = entries.some(e => e === todayReport);
+
+	// 检查最近 7 天缺失日期
+	const missingDates: string[] = [];
+	for (let i = 0; i < 7; i++) {
+		const d = new Date(Date.now() - i * MS_PER_DAY).toISOString().slice(0, 10);
+		if (!entries.some(e => e === `${d}.md`)) {
+			missingDates.push(d);
+		}
+	}
+
+	const lines: string[] = ["可用报告:"];
+	for (const name of entries) {
+		const date = name.replace(".md", "");
+		const marker = date === today ? " ← 今天" : "";
+		lines.push(`  ${date}${marker}`);
+	}
+
+	if (statusInfo) {
+		lines.push(`\n最后运行: ${statusInfo.status} (${statusInfo.timestamp})`);
+	}
+
+	if (!todayExists) {
+		lines.push("\n⚠ 今天的报告尚未生成");
+	}
+
+	if (missingDates.length > 0) {
+		lines.push(`\n最近 7 天缺失: ${missingDates.join(", ")}`);
+	}
+
+	return successResult(lines.join("\n"), {
+		action: "list",
+		reports: entries.map(e => e.replace(".md", "")),
+		todayGenerated: todayExists,
+		missingDates,
+	});
+}
+
+interface LastRunStatus {
+	status: string;
+	timestamp: string;
+	errorSummary?: string;
+}
+
+/** 读取 .last-run-status 文件 */
+function readLastRunStatus(dailyReportsDir: string): LastRunStatus | null {
+	const statusPath = join(dailyReportsDir, ".last-run-status");
+	if (!existsSync(statusPath)) return null;
+
+	try {
+		const raw = readFileSync(statusPath, "utf-8");
+		return JSON.parse(raw) as LastRunStatus;
+	} catch {
+		return null;
+	}
+}
+
+/** 检查字符串是否匹配 YYYY-MM-DD 格式 */
+function isDateString(s: string): boolean {
+	return /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(new Date(s).getTime());
 }

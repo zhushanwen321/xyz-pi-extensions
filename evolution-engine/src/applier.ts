@@ -1,14 +1,14 @@
 /**
  * Evolution Engine — 建议应用引擎
  *
- * 负责 apply（备份→diff→commit）和 rollback（恢复→revert）两个核心操作。
- * 纯 Node.js 内置模块实现，不引入 npm 依赖。
+ * 负责 apply（备份→LLM 执行修改→写入→commit）和 rollback（恢复）两个核心操作。
+ * apply 阶段 spawn pi 子进程，让 LLM 读取目标文件并按 instruction 执行修改。
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 
 import type { EvolutionSuggestion, HistoryEntry, ApplyResult, RollbackResult } from "./types";
 
@@ -36,122 +36,169 @@ export function backupFile(filePath: string, backupDir: string): string {
 	return backupPath;
 }
 
-// ── Unified Diff 解析与应用 ───────────────────────────
+// ── LLM Apply ────────────────────────────────────────
 
-interface ParsedHunk {
-	oldStart: number;
-	oldLines: number;
-	newStart: number;
-	newLines: number;
-	oldContent: string;
-	newContent: string;
-}
+const APPLY_TIMEOUT_MS = 120_000;
+
+const APPLY_SYSTEM_PROMPT = `你是一个精确的文件修改执行器。你的任务是：
+1. 读取指定的文件内容
+2. 按照修改指令精确地修改文件
+3. 输出修改后的完整文件内容
+
+规则：
+- 只输出修改后的完整文件内容，不要输出任何解释、说明或 markdown 代码块标记
+- 严格遵循修改指令，不要添加指令之外的内容
+- 保持文件其他部分完全不变
+- 输出必须是可以直接写入文件的完整文本`;
 
 /**
- * 从 unified diff 文本中解析所有 hunk。
- * 只处理以 `---` / `+++` 开头的文件头和 `@@ ... @@` 的 hunk。
+ * 通过 LLM 子进程执行修改。
+ * 让 LLM 读取目标文件，按 instruction 修改，输出修改后的完整内容。
  */
-function parseUnifiedDiff(diff: string): ParsedHunk[] {
-	const hunks: ParsedHunk[] = [];
-	const lines = diff.split("\n");
+function applyViaLLM(
+	targetPath: string,
+	instruction: string,
+): Promise<{ success: boolean; reason?: string }> {
+	const originalContent = fs.readFileSync(targetPath, "utf-8");
 
-	let i = 0;
-	// 跳过文件头行（--- a/xxx, +++ b/xxx 等）
-	while (i < lines.length && !lines[i].startsWith("@@")) {
-		i++;
-	}
+	const userMessage = `文件路径: ${targetPath}
 
-	while (i < lines.length) {
-		const hunkMatch = lines[i].match(
-			/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/,
-		);
-		if (!hunkMatch) {
-			i++;
-			continue;
-		}
+当前文件内容:
+${originalContent}
 
-		const oldStart = parseInt(hunkMatch[1], 10);
-		const oldLines = hunkMatch[2] !== undefined ? parseInt(hunkMatch[2], 10) : 1;
-		const newStart = hunkMatch[3] !== undefined ? parseInt(hunkMatch[3], 10) : 1;
-		const newLines = hunkMatch[4] !== undefined ? parseInt(hunkMatch[4], 10) : 1;
+修改指令:
+${instruction}
 
-		i++; // 进入 hunk body
+请输出修改后的完整文件内容（不要输出任何其他文字）:`;
 
-		const oldParts: string[] = [];
-		const newParts: string[] = [];
-		let oldCount = 0;
-		let newCount = 0;
+	const args = [
+		"--mode", "json",
+		"-p",
+		"--model", "router-openai/glm-5.1",
+		"--no-session",
+		"--append-system-prompt", APPLY_SYSTEM_PROMPT,
+	];
 
-		while (i < lines.length && (oldCount < oldLines || newCount < newLines)) {
-			const line = lines[i];
-			if (line.startsWith("-")) {
-				oldParts.push(line.substring(1));
-				oldCount++;
-			} else if (line.startsWith("+")) {
-				newParts.push(line.substring(1));
-				newCount++;
-			} else if (line.startsWith(" ")) {
-				// 上下行，两边都有
-				oldParts.push(line.substring(1));
-				newParts.push(line.substring(1));
-				oldCount++;
-				newCount++;
-			} else if (line.startsWith("\\")) {
-				// `\ No newline at end of file` — 跳过
-			} else {
-				break;
-			}
-			i++;
-		}
-
-		hunks.push({
-			oldStart,
-			oldLines,
-			newStart,
-			newLines,
-			oldContent: oldParts.join("\n"),
-			newContent: newParts.join("\n"),
+	return new Promise<{ success: boolean; reason?: string }>((resolve) => {
+		const proc = spawn("pi", args, {
+			shell: false,
+			stdio: ["pipe", "pipe", "pipe"],
 		});
-	}
 
-	return hunks;
+		proc.stdin.write(userMessage);
+		proc.stdin.end();
+
+		let stdout = "";
+		let stderr = "";
+		let settled = false;
+
+		const timer = setTimeout(() => {
+			if (settled) return;
+			settled = true;
+			proc.kill("SIGTERM");
+			resolve({ success: false, reason: "LLM apply timed out" });
+		}, APPLY_TIMEOUT_MS);
+
+		proc.stdout.on("data", (data: Buffer) => {
+			stdout += data.toString();
+		});
+
+		proc.stderr.on("data", (data: Buffer) => {
+			stderr += data.toString();
+		});
+
+		proc.on("error", (err) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			resolve({ success: false, reason: `LLM apply spawn failed: ${err.message}` });
+		});
+
+		proc.on("close", (code) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+
+			if (code !== 0) {
+				resolve({
+					success: false,
+					reason: `LLM apply exited with code ${code}: ${stderr.slice(0, 300)}`,
+				});
+				return;
+			}
+
+			// 从 JSONL stdout 中提取 assistant 最后的文本输出
+			const modifiedContent = extractAssistantText(stdout);
+			if (!modifiedContent) {
+				resolve({
+					success: false,
+					reason: "LLM apply returned empty output",
+				});
+				return;
+			}
+
+			// 去除可能的 markdown 代码块包裹
+			let cleaned = modifiedContent;
+			const fenceMatch = cleaned.match(/^```(?:\w*)\n([\s\S]*?)\n?```$/);
+			if (fenceMatch) {
+				cleaned = fenceMatch[1]!;
+			}
+
+			// 基本验证：修改后的内容不能为空，不能和原内容完全相同
+			if (cleaned.trim().length === 0) {
+				resolve({ success: false, reason: "LLM apply output is empty after cleanup" });
+				return;
+			}
+
+			if (cleaned === originalContent) {
+				resolve({ success: false, reason: "LLM apply output is identical to original" });
+				return;
+			}
+
+			// 写入文件
+			try {
+				fs.writeFileSync(targetPath, cleaned, "utf-8");
+				resolve({ success: true });
+			} catch (writeErr: unknown) {
+				const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
+				resolve({ success: false, reason: `write failed: ${msg}` });
+			}
+		});
+	});
 }
 
-/**
- * 将 unified diff 应用到指定文件。
- * 策略：解析 hunk → 按顺序在文件内容中定位并替换。
- */
-export function applyUnifiedDiff(
-	filePath: string,
-	diff: string,
-): ApplyResult {
-	const hunks = parseUnifiedDiff(diff);
-	if (hunks.length === 0) {
-		return { success: false, reason: "no hunks found in diff" };
-	}
+/** 从 pi --mode json 的 JSONL stdout 中提取最后一个 assistant 文本 */
+function extractAssistantText(stdout: string): string {
+	const lines = stdout.split("\n");
+	let lastAssistantText = "";
 
-	const original = fs.readFileSync(filePath, "utf-8");
-	let content = original;
+	for (const line of lines) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
 
-	for (const hunk of hunks) {
-		if (hunk.oldContent.length === 0 && hunk.newContent.length === 0) {
+		let event: Record<string, unknown>;
+		try {
+			event = JSON.parse(trimmed) as Record<string, unknown>;
+		} catch {
 			continue;
 		}
 
-		// 精确匹配：在内容中查找 old 内容
-		const idx = content.indexOf(hunk.oldContent);
-		if (idx === -1) {
-			return { success: false, reason: "diff conflict" };
+		if (event.type === "message_end" && event.message) {
+			const msg = event.message as {
+				role?: string;
+				content?: Array<{ type: string; text?: string }>;
+			};
+			if (msg.role === "assistant" && Array.isArray(msg.content)) {
+				for (const part of msg.content) {
+					if (part.type === "text" && typeof part.text === "string") {
+						lastAssistantText = part.text;
+					}
+				}
+			}
 		}
-
-		content =
-			content.substring(0, idx) +
-			hunk.newContent +
-			content.substring(idx + hunk.oldContent.length);
 	}
 
-	fs.writeFileSync(filePath, content, "utf-8");
-	return { success: true };
+	return lastAssistantText;
 }
 
 // ── Apply ─────────────────────────────────────────────
@@ -161,7 +208,7 @@ export function applyUnifiedDiff(
  * 1. 路径白名单校验
  * 2. 目标文件存在性校验
  * 3. 备份原文件
- * 4. 应用 diff
+ * 4. 通过 LLM 子进程执行修改
  * 5. 尝试 git commit（失败不影响结果）
  */
 export async function applySuggestion(
@@ -181,10 +228,16 @@ export async function applySuggestion(
 	// 3. 备份
 	const backupPath = backupFile(suggestion.targetPath, backupDir);
 
-	// 4. 应用 diff
-	const result = applyUnifiedDiff(suggestion.targetPath, suggestion.diff);
+	// 4. 通过 LLM 执行修改
+	const result = await applyViaLLM(suggestion.targetPath, suggestion.instruction);
 	if (!result.success) {
-		return { success: false, reason: result.reason ?? "diff conflict" };
+		// LLM 修改失败时恢复备份
+		try {
+			fs.copyFileSync(backupPath, suggestion.targetPath);
+		} catch {
+			// 恢复失败不阻塞，保留备份供手动恢复
+		}
+		return { success: false, reason: result.reason ?? "LLM apply failed" };
 	}
 
 	// 5. 尝试 git add + commit — 失败不影响 success，但成功时记录 commitSha
@@ -235,7 +288,7 @@ export async function rollbackSuggestion(
 		}
 	}
 
-	// 无 commitSha 或 revert 失败时：copyFileSync 恢复文件
+	// 无 commitSha 或 revert 失败时：copyFileSync 恢复
 	try {
 		fs.copyFileSync(entry.backupPath, entry.targetPath);
 	} catch (err: unknown) {

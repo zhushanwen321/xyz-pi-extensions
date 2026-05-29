@@ -290,7 +290,7 @@ export async function runJudge(
 const VALID_SEVERITIES = new Set(["high", "medium", "low"]);
 const REQUIRED_KEYS: ReadonlyArray<keyof EvolutionSuggestion> = [
 	"target", "targetPath", "severity", "confidence",
-	"title", "description", "rationale", "diff",
+	"title", "description", "rationale", "instruction",
 ];
 
 /**
@@ -349,10 +349,20 @@ export function parseJudgeOutput(raw: string): EvolutionSuggestion[] {
 		const severity = String(record.severity);
 		if (!VALID_SEVERITIES.has(severity)) continue;
 
-		// target 检查（容错：LLM 可能输出 "skills" 复数形式）
+		// target 检查（容错：LLM 可能输出 "skills" 复数形式或旧值）
 		let target = String(record.target);
 		if (target === "skills") target = "skill";
+		// 容错：LLM 可能输出 claude-md 或 CLAUDE.md
+		if (target === "CLAUDE.md") target = "claude-md";
 		if (target !== "claude-md" && target !== "skill") continue;
+
+		// instruction 优先取 instruction 字段，fallback 到旧格式 diff 字段
+		const instruction = record.instruction
+			? String(record.instruction)
+			: record.diff
+				? String(record.diff)
+				: "";
+		if (!instruction) continue;
 
 		suggestions.push({
 			id: record.id ? String(record.id) : `sug-${suggestions.length + 1}`,
@@ -363,7 +373,7 @@ export function parseJudgeOutput(raw: string): EvolutionSuggestion[] {
 			title: String(record.title),
 			description: String(record.description),
 			rationale: String(record.rationale),
-			diff: String(record.diff),
+			instruction,
 			status: "pending",
 		});
 	}

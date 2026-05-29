@@ -26,6 +26,7 @@ import {
 	handleEvolveApply,
 	handleEvolveStats,
 	handleEvolveRollback,
+	handleEvolveReport,
 } from "./commands";
 import {
 	renderSuggestionSummary,
@@ -34,6 +35,7 @@ import {
 	renderAutoTriggerHint,
 } from "./widget";
 import { loadHistory } from "./state";
+import { checkAndRunDailyAnalysis } from "./daily-trigger";
 
 // ── 常量 ─────────────────────────────────────────────
 
@@ -56,13 +58,16 @@ function makeDirs(): Dirs {
 	const reportsDir = join(evolutionDir, "reports");
 	const tmpDir = join(evolutionDir, "tmp");
 	const signalsDir = join(evolutionDir, "signals");
+	const dailyReportsDir = join(evolutionDir, "daily-reports");
 
-	// 确保 base 目录和 signals 目录存在
+	// 确保 base 目录和子目录存在
 	if (!existsSync(evolutionDir)) {
 		mkdirSync(evolutionDir, { recursive: true });
 	}
-	if (!existsSync(signalsDir)) {
-		mkdirSync(signalsDir, { recursive: true });
+	for (const dir of [signalsDir, dailyReportsDir]) {
+		if (!existsSync(dir)) {
+			mkdirSync(dir, { recursive: true });
+		}
 	}
 
 	return {
@@ -70,6 +75,7 @@ function makeDirs(): Dirs {
 		reportsDir,
 		tmpDir,
 		signalsDir,
+		dailyReportsDir,
 		templateDir: TEMPLATE_DIR,
 	};
 }
@@ -127,6 +133,11 @@ export default function evolutionEngineExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify(hint, "info");
 			}
 		}
+
+		// 每日自动分析：fire-and-forget，不阻塞 session 初始化
+		checkAndRunDailyAnalysis(dirs).catch((err) => {
+			console.error("[evolve] Daily analysis failed:", err instanceof Error ? err.message : String(err));
+		});
 	});
 
 	// ── Tool: evolve ───────────────────────────────────
@@ -486,4 +497,56 @@ export default function evolutionEngineExtension(pi: ExtensionAPI): void {
 			}
 		},
 	});
+	// ── Tool: evolve-report ────────────────────────────
+
+	const EvolveReportParams = Type.Object({
+		args: Type.String({
+			default: "",
+			description: "Date (YYYY-MM-DD) or --list",
+		}),
+	});
+
+	pi.registerTool({
+		name: "evolve-report",
+		label: "Evolve Report",
+		description:
+			"View daily evolution reports. " +
+			"No args shows today's report, YYYY-MM-DD shows a specific date, --list lists all reports.",
+		promptSnippet: "View evolution daily report",
+		parameters: EvolveReportParams,
+
+		async execute(_toolCallId, params) {
+			return handleEvolveReport(params.args, dirs);
+		},
+
+		renderCall(args, theme) {
+			return new Text(
+				theme.fg("toolTitle", theme.bold("evolve-report ")) +
+				theme.fg("muted", args.args || "today"),
+				0, 0,
+			);
+		},
+
+		renderResult(result, _options, _theme) {
+			const textPart = result.content[0];
+			return new Text(
+				textPart?.type === "text" ? textPart.text : "evolve-report completed",
+				0, 0,
+			);
+		},
+	});
+
+	// ── Command: /evolve-report ────────────────────────
+
+	pi.registerCommand("evolve-report", {
+		description:
+			"View daily evolution reports. " +
+			"Usage: /evolve-report [YYYY-MM-DD] | --list",
+		handler: async (args, _ctx) => {
+			pi.sendUserMessage(
+				`Please call the evolve-report tool with args="${args.trim()}". Do not add any commentary, just call the tool directly.`,
+			);
+		},
+	});
+
 }
