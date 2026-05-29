@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "ignoreDeprecations": "6.0",
+    "strict": false,
+    "noImplicitAny": false,
+    "noImplicitReturns": false,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "paths": {
+      "@mariozechner/pi-coding-agent": ["./types/mariozechner/index"],
+      "@mariozechner/pi-tui": ["./types/mariozechner/index"],
+      "@mariozechner/pi-ai": ["./types/mariozechner/index"],
+      "@earendil-works/pi-coding-agent": ["./types/mariozechner/index"],
+      "@earendil-works/pi-tui": ["./types/mariozechner/index"],
+      "@earendil-works/pi-ai": ["./types/mariozechner/index"],
+      "typebox": ["./types/mariozechner/index"]
+    }
+  }
+}

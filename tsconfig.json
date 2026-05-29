@@ -14,10 +14,30 @@
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "paths": {
-      "@mariozechner/pi-coding-agent": ["/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/dist/index.d.ts"],
-      "@earendil-works/pi-tui": ["/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/node_modules/@earendil-works/pi-tui/dist/index.d.ts"],
-      "@earendil-works/pi-ai": ["/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/node_modules/@earendil-works/pi-ai/dist/index.d.ts"],
-      "typebox": ["/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/node_modules/typebox/build/index.d.mts"]
+      "@mariozechner/pi-coding-agent": [
+        "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/dist/index.d.ts",
+        "./types/mariozechner/index"
+      ],
+      "@mariozechner/pi-tui": [
+        "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/node_modules/@earendil-works/pi-tui/dist/index.d.ts",
+        "./types/mariozechner/index"
+      ],
+      "@mariozechner/pi-ai": [
+        "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/node_modules/@earendil-works/pi-ai/dist/index.d.ts",
+        "./types/mariozechner/index"
+      ],
+      "@earendil-works/pi-tui": [
+        "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/node_modules/@earendil-works/pi-tui/dist/index.d.ts",
+        "./types/mariozechner/index"
+      ],
+      "@earendil-works/pi-ai": [
+        "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/node_modules/@earendil-works/pi-ai/dist/index.d.ts",
+        "./types/mariozechner/index"
+      ],
+      "typebox": [
+        "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/node_modules/typebox/build/index.d.mts",
+        "./types/mariozechner/index"
+      ]
     }
   },
   "include": [
@@ -26,7 +46,8 @@
     "todo/**/*.ts",
     "subagent/**/*.ts",
     "usage-tracker/**/*.ts",
-    "workflow/**/*.ts"
+    "workflow/**/*.ts",
+    "infinite-context/**/*.ts"
   ],
   "exclude": [
     "node_modules",
