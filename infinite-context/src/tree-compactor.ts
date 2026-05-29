@@ -12,6 +12,7 @@ import { spawn, spawnSync } from "node:child_process";
 import type { ExtensionAPI, CustomEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
 import type { Segment, TreeNode, CompactTree } from "./types";
 import { IC_CONFIG } from "./types";
+import { estimateTokens } from "./token-estimator";
 
 const COMPACT_TREE_ENTRY_TYPE = "ic-compact-tree";
 
@@ -135,11 +136,10 @@ export function ruleBasedFallback(segments: readonly Segment[]): CompactTree {
 	const children: TreeNode[] = segments.map((seg) => ({
 		nodeId: `node_${seg.segId}`,
 		summary: firstSentence(seg.userMessage),
-		tokenCount: 0,
+		tokenCount: estimateTokens(firstSentence(seg.userMessage)),
 		children: [],
 		segId: seg.segId,
 	}));
-	const totalTokens = children.length;
 	const root: TreeNode = {
 		nodeId: "root",
 		summary: `Fallback compression of ${segments.length} segments`,
@@ -149,7 +149,7 @@ export function ruleBasedFallback(segments: readonly Segment[]): CompactTree {
 	return {
 		treeId: `tree_${Date.now()}`,
 		root,
-		totalTokens,
+		totalTokens: treeTotalTokens(root),
 		createdAt: Date.now(),
 		depth: treeDepth(root),
 	};
