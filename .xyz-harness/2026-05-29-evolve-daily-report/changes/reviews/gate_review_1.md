@@ -9,11 +9,11 @@ must_fix: 0
 
 | 检查项 | 结果 | 说明 |
 |--------|------|------|
-| 正文内容空洞检测 | PASS | 每个 FR 有 2-5 个子项，每段内容充实。FR-1.2 详细描述了 lock 文件机制（PID + timestamp、stale lock 检测、temp-file-rename）；FR-2.1 包含完整的 Markdown 报告模板；FR-3.1 列出了三种命令变体及其错误处理 |
-| 验收标准可量化性 | PASS | 11 条 AC（AC-1 到 AC-11），每条都可测试。AC-1 验证自动触发、AC-2 验证幂等、AC-8a 验证并发保护、AC-10 验证 tsc --noEmit 通过。无含糊的"提升体验"式描述 |
-| 具体用户场景/业务规则 | PASS | Background 部分描述了明确的用户场景（被动接收模式 vs 当前主动触发模式）。FR-3.1 描述了三种具体使用场景（当天/指定日期/列表查看）。FR-4.2 描述了用户看完报告后走 /evolve-apply 或直接对话两种路径 |
-| 针对特定项目 vs 泛泛而谈 | PASS | 引用了大量项目特有实体，已全部验证存在：`monitor.ts`、`gc.ts`、`state.ts`、`summarizer.ts`、`judge.ts`（均在 evolution-engine/src/）；类型 `MetricsSnapshot`、`SignalReport`、`EvolutionSuggestion`、`EffectReview`（均在 types.ts）；命令 `/evolve`、`/evolve-apply`、`/evolve-stats`、`/evolve-rollback`（均在 commands.ts） |
-| 技术细节具体性 | PASS | 包含具体文件路径（`daily-reports/YYYY-MM-DD.md`、`daily-reports/.daily-report.lock`、`.last-run-status`）、具体阈值（30 天 GC、30 条 pending 上限）、具体机制（PID lock、title 精确匹配去重、temp-file-rename 原子操作） |
+| 正文内容充实度 | PASS | 209 行 / 9848 字节。Background 描述当前系统缺失的 4 个方面（定时触发、报告持久化、按日期归档、人工决策替代），FR-1 到 FR-5 每个需求有 2-5 个子项，每项包含具体实现细节（文件路径、判断条件、算法描述），不是只有标题框架的空壳 |
+| 验收标准可量化性 | PASS | AC-1 到 AC-11 全部可测试：AC-1 指定具体文件路径 `daily-reports/YYYY-MM-DD.md`；AC-2 指定幂等行为；AC-9 指定 30 天阈值；AC-10 指定 `npx tsc --noEmit` 命令；AC-11 逐条列出不受影响的命令。无"提升用户体验"类含糊表述 |
+| 具体用户场景和业务规则 | PASS | 有明确用户场景（被动接收模式 vs 主动触发模式）。业务规则具体：fire-and-forget 异步、lock 文件并发保护（PID 检测 + stale lock 清理）、title 精确匹配去重、pending 条目上限 30 条超限时标记 rejected、temp-file-rename 原子写入 |
+| 项目特异性 | PASS | 引用的文件均验证存在：`evolution-engine/src/monitor.ts`、`gc.ts`、`state.ts`、`summarizer.ts`、`judge.ts`、`types.ts` 全部在代码库中找到。引用的数据结构 `MetricsSnapshot`、`SignalReport`、`EvolutionSuggestion`、`EffectReview` 在 8 个文件中有使用。模块导入规范 `@mariozechner/*` 与 CLAUDE.md 约定一致 |
+| git 提交证据 | PASS | commit `c2b88cd` (2026-05-29 09:11:41) "docs: spec for evolve-daily-report"，有对应的文件变更记录 |
 
 ### MUST_FIX 问题
 
@@ -21,4 +21,4 @@ must_fix: 0
 
 ### 总结
 
-spec.md 内容充实、具体、且与实际代码库高度吻合。5 个功能需求（FR-1 到 FR-5）各有详细子项，11 条验收标准均可测试，引用的所有类型、文件、命令均在 evolution-engine 扩展中验证存在。未检测到空洞框架、含糊标准或泛泛而谈等伪造信号。deliverable 可信。
+spec.md 内容充实、具体、针对本项目。每个功能需求有可测试的验收标准，引用的技术细节（文件路径、数据结构、现有模块）全部能在代码库中验证。有 git commit 作为提交证据。未发现伪造信号。

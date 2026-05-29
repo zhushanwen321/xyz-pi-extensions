@@ -1,0 +1,221 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "Daily report auto-generated on first session of the day",
+      "description": "Verify that checkAndRunDailyAnalysis generates a Markdown report when none exists for today",
+      "steps": [
+        "Ensure daily-reports/ directory is empty",
+        "Trigger checkAndRunDailyAnalysis(dirs)",
+        "Wait for pipeline to complete",
+        "Check daily-reports/YYYY-MM-DD.md exists and size > 0",
+        "Verify pending.json contains suggestions from the report"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "integration",
+      "title": "Daily report skipped when already generated today",
+      "description": "Verify that checkAndRunDailyAnalysis is a no-op when today's report already exists",
+      "steps": [
+        "Create daily-reports/YYYY-MM-DD.md with some content",
+        "Trigger checkAndRunDailyAnalysis(dirs)",
+        "Verify no analyzer process was spawned",
+        "Verify the report file was not modified"
+      ]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "integration",
+      "title": "Empty/truncated report file triggers regeneration",
+      "description": "Verify that a 0-byte report file is treated as non-existent and triggers regeneration",
+      "steps": [
+        "Create daily-reports/YYYY-MM-DD.md as an empty file (0 bytes)",
+        "Trigger checkAndRunDailyAnalysis(dirs)",
+        "Verify the report is regenerated with actual content"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "Report contains all required sections",
+      "description": "Verify the generated Markdown report has 数据概览, 异常信号, 趋势变化, 改进建议 sections",
+      "steps": [
+        "Generate a report with non-zero session data",
+        "Parse the Markdown output",
+        "Verify all 4 required sections exist (## 数据概览, ## 异常信号, ## 趋势变化, ## 改进建议)",
+        "Verify effect review section is omitted when no apply history exists"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "integration",
+      "title": "Report with 0 sessions shows no-data indicators",
+      "description": "Verify that a 0-session day generates a valid report with 无数据 indicators",
+      "steps": [
+        "Run generateDailyReport with sessionCount=0",
+        "Verify output contains '无数据' or equivalent indicators",
+        "Verify no NaN or undefined values appear"
+      ]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "integration",
+      "title": "Report with 0 suggestions shows positive message",
+      "description": "Verify that 0 suggestions produces '系统运行良好，无需调整' message",
+      "steps": [
+        "Run generateDailyReport with empty suggestions array",
+        "Verify 改进建议 section contains the positive message"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "GC removes daily reports older than 30 days",
+      "description": "Verify runGc deletes .md files older than 30 days in daily-reports/",
+      "steps": [
+        "Create daily-reports/2026-04-28.md (31+ days old)",
+        "Create daily-reports/YYYY-MM-DD.md (today)",
+        "Run runGc",
+        "Verify old file deleted, today's file preserved"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "integration",
+      "title": "Lock prevents concurrent pipeline execution",
+      "description": "Verify that acquireLock returns false when another process holds the lock",
+      "steps": [
+        "Create .daily-report.lock with current PID",
+        "Call acquireLock",
+        "Verify return value is false"
+      ]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "integration",
+      "title": "Stale lock is cleaned and acquired",
+      "description": "Verify that a lock with a dead PID is cleaned up and a new lock is acquired",
+      "steps": [
+        "Create .daily-report.lock with PID 99999999 (non-existent)",
+        "Call acquireLock",
+        "Verify return value is true",
+        "Verify lock file now contains current PID"
+      ]
+    },
+    {
+      "id": "TC-4-03",
+      "type": "integration",
+      "title": "Pipeline failure saves error status and does not block",
+      "description": "Verify that a pipeline error writes .last-run-status with failed status",
+      "steps": [
+        "Ensure analyzer script path is invalid",
+        "Trigger checkAndRunDailyAnalysis",
+        "Verify function does not throw",
+        "Check .last-run-status contains status='failed' and errorSummary"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "integration",
+      "title": "/evolve-report shows today's report",
+      "description": "Verify handleEvolveReport with empty args returns today's report",
+      "steps": [
+        "Create today's report file",
+        "Call handleEvolveReport('', dirs)",
+        "Verify result.content contains the Markdown content"
+      ]
+    },
+    {
+      "id": "TC-5-02",
+      "type": "integration",
+      "title": "/evolve-report YYYY-MM-DD shows specific report",
+      "description": "Verify handleEvolveReport with date arg returns that date's report",
+      "steps": [
+        "Create daily-reports/2026-05-28.md",
+        "Call handleEvolveReport('2026-05-28', dirs)",
+        "Verify result.content contains that file's content"
+      ]
+    },
+    {
+      "id": "TC-5-03",
+      "type": "integration",
+      "title": "/evolve-report --list lists available reports",
+      "description": "Verify handleEvolveReport with --list returns report list with health info",
+      "steps": [
+        "Create several daily report files",
+        "Create .last-run-status with success status",
+        "Call handleEvolveReport('--list', dirs)",
+        "Verify output contains date list, last run status, today indicator"
+      ]
+    },
+    {
+      "id": "TC-5-04",
+      "type": "integration",
+      "title": "/evolve-report for missing date returns error message",
+      "description": "Verify handleEvolveReport with non-existent date returns appropriate error",
+      "steps": [
+        "Call handleEvolveReport('2020-01-01', dirs)",
+        "Verify result contains '报告不存在' message"
+      ]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "integration",
+      "title": "mergePending deduplicates by title",
+      "description": "Verify that mergePending skips suggestions with same title as existing pending ones",
+      "steps": [
+        "Create pending.json with one pending suggestion (title: 'Fix X')",
+        "Call mergePending with new suggestions including title: 'Fix X'",
+        "Verify only one suggestion with title 'Fix X' exists in pending.json"
+      ]
+    },
+    {
+      "id": "TC-6-02",
+      "type": "integration",
+      "title": "mergePending caps at 30 pending suggestions",
+      "description": "Verify that exceeding 30 pending suggestions auto-evicts oldest",
+      "steps": [
+        "Create pending.json with 29 pending suggestions",
+        "Call mergePending with 3 new suggestions",
+        "Verify total pending count is 30",
+        "Verify 2 oldest suggestions are marked as rejected with auto-evict reason"
+      ]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "manual",
+      "title": "Existing /evolve command still works after daily report changes",
+      "description": "Verify /evolve, /evolve-apply, /evolve-stats, /evolve-rollback all work unchanged",
+      "steps": [
+        "Run /evolve since=1d",
+        "Verify it completes successfully",
+        "Run /evolve-apply action=list",
+        "Verify it shows pending suggestions",
+        "Run /evolve-stats",
+        "Verify it shows stats dashboard"
+      ]
+    },
+    {
+      "id": "TC-7-02",
+      "type": "manual",
+      "title": "TypeScript compilation passes",
+      "description": "Verify npx tsc --noEmit passes with all changes",
+      "steps": [
+        "Run cd evolution-engine && npx tsc --noEmit",
+        "Verify 0 errors"
+      ]
+    },
+    {
+      "id": "TC-7-03",
+      "type": "manual",
+      "title": "ESLint passes",
+      "description": "Verify npm run lint shows 0 errors",
+      "steps": [
+        "Run cd xyz-pi-extensions && npm run lint",
+        "Verify 0 errors"
+      ]
+    }
+  ]
+}
