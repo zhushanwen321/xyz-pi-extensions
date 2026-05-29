@@ -5,7 +5,6 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Loader } from "@mariozechner/pi-tui";
 import type { TreeCompactor, CompactResult } from "./tree-compactor";
 import type { Segment } from "./types";
 import { IC_COMPACT_START_TYPE, IC_COMPACT_END_TYPE, IC_COMPACT_STATS_TYPE } from "./types";
@@ -18,21 +17,10 @@ function beforeCompressionUI(pi: ExtensionAPI, ctx: ExtensionContext, segmentCou
 		contextWindow: contextUsage?.contextWindow ?? null, timestamp: Date.now(),
 	});
 
-	// Spinner loader widget（与原生 compact 一致）
-	const label = `IC Tree Compact: compressing ${segmentCount} segments...`;
-	ctx.ui.setWidget("ic-compact", (tui, theme) => {
-		const loader = new Loader(
-			tui,
-			(spinner: string) => theme.fg("accent", spinner),
-			(text: string) => theme.fg("muted", text),
-			label,
-		);
-		loader.start();
-		return Object.assign(loader, { dispose: () => loader.stop() });
-	});
-
-	// Footer status
-	ctx.ui.setStatus("ic-compact", label);
+	// Footer status + working message（不阻塞事件循环的异步路径会显示 spinner）
+	ctx.ui.setWorkingVisible(true);
+	ctx.ui.setWorkingMessage(`IC Tree Compact: compressing ${segmentCount} segments...`);
+	ctx.ui.setStatus("ic-compact", `IC compressing ${segmentCount} segments...`);
 
 	// Bubble message
 	const tokenInfo = tokensBefore !== null ? ` (${tokensBefore.toLocaleString()} tokens)` : "";
@@ -45,8 +33,8 @@ function beforeCompressionUI(pi: ExtensionAPI, ctx: ExtensionContext, segmentCou
 }
 
 function afterCompressionUI(pi: ExtensionAPI, ctx: ExtensionContext, result: CompactResult): void {
-	// 清除 widget spinner
-	ctx.ui.setWidget("ic-compact", undefined);
+	ctx.ui.setWorkingVisible(false);
+	ctx.ui.setWorkingMessage(undefined);
 	ctx.ui.setStatus("ic-compact", undefined);
 
 	const tree = result.tree;
