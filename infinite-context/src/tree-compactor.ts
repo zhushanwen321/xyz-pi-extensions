@@ -115,7 +115,7 @@ export function validateTreeOutput(
 		return {
 			nodeId: n.nodeId as string,
 			summary: n.summary as string,
-			tokenCount: n.tokenCount as number,
+			tokenCount: estimateTokens(n.summary as string),
 			children: validatedChildren,
 			...(n.segId !== undefined ? { segId: n.segId as string } : {}),
 		};
