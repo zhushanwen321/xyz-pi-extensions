@@ -403,8 +403,10 @@ export class TreeCompactor {
 			return applyFallback(pi, segments, 0);
 		}
 
+		let lastError: string | undefined;
+
 		for (let attempt = 0; attempt <= IC_CONFIG.maxRetryCount; attempt++) {
-			const prompt = buildCompressionPrompt(segments, existingTree, undefined);
+			const prompt = buildCompressionPrompt(segments, existingTree, lastError);
 			console.log(`[infinite-context] sync spawn (attempt ${attempt}, ${segments.length} segments)`);
 
 			const result = spawnSync("pi", ["--mode", "json", "-p", prompt], {
@@ -414,22 +416,62 @@ export class TreeCompactor {
 			});
 
 			const { stdout, stderr, errorReason } = this.parseSpawnSyncResult(result);
-			const spawnResult = { stdout, stderr, errorReason };
-			const validated = this.processSpawnResult(spawnResult, segments, attempt);
-
-			if (validated) {
-				const tree = makeTree(validated, segments);
-				this.tree = tree;
-				pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
-				console.log(`[infinite-context] tree compression succeeded: ${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`);
-				return { tree, fallbackUsed: false, retryCount: attempt, rawOutput: stdout.slice(0, IC_CONFIG.maxStdoutLogLength) };
+			if (stderr) {
+				console.error(`[infinite-context] pi stderr: ${stderr.slice(0, IC_CONFIG.maxStderrLogLength)}`);
 			}
 
-			console.error(`[infinite-context] sync compression failed (attempt ${attempt}): ${errorReason}`);
+			if (errorReason) {
+				lastError = errorReason;
+				console.error(`[infinite-context] spawn/exit failed (attempt ${attempt}): ${errorReason}`);
+				const partial = extractAssistantText(stdout);
+				if (partial) {
+					const validated = this.tryValidate(partial, segments);
+					if (validated) {
+						console.log(`[infinite-context] recovered from partial output (${partial.length} chars)`);
+						return this.makeValidatedResult(pi, validated, segments, attempt, stdout);
+					}
+				}
+				continue;
+			}
+
+			// spawn OK, process output
+			const assistantText = extractAssistantText(stdout);
+			if (!assistantText) {
+				const lines = stdout.split("\n").length;
+				lastError = `No assistant text in pi output (${stdout.length}B, ${lines} lines)`;
+				console.warn(`[infinite-context] ${lastError}. Check if pi --mode json format changed.`);
+				continue;
+			}
+
+			console.log(`[infinite-context] assistant text (first ${IC_CONFIG.maxStdoutLogLength} chars): ${assistantText.slice(0, IC_CONFIG.maxStdoutLogLength)}`);
+
+			const validated = validateTreeOutput(assistantText.trim(), segments);
+			if ("reason" in validated) {
+				lastError = validated.reason;
+				console.error(`[infinite-context] tree validation failed (attempt ${attempt}): ${validated.reason}`);
+				continue;
+			}
+
+			// 成功
+			return this.makeValidatedResult(pi, validated, segments, attempt, stdout);
 		}
 
-		console.error(`[infinite-context] sync compression all attempts failed`);
-		return applyFallback(pi, segments, IC_CONFIG.maxRetryCount, "All attempts failed");
+		console.error(`[infinite-context] sync compression all attempts failed. Last error: ${lastError}`);
+		return applyFallback(pi, segments, IC_CONFIG.maxRetryCount, lastError);
+	}
+
+	private makeValidatedResult(
+		pi: ExtensionAPI,
+		validated: TreeNode[],
+		segments: readonly Segment[],
+		attempt: number,
+		stdout: string,
+	): CompactResult {
+		const tree = makeTree(validated, segments);
+		this.tree = tree;
+		pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
+		console.log(`[infinite-context] tree compression succeeded: ${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`);
+		return { tree, fallbackUsed: false, retryCount: attempt, rawOutput: stdout.slice(0, IC_CONFIG.maxStdoutLogLength) };
 	}
 
 	private parseSpawnSyncResult(result: ReturnType<typeof spawnSync>): {
