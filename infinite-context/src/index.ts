@@ -49,12 +49,13 @@ function onCompleteFactory(ctx: ExtensionContext) {
 	return (result: CompactResult) => {
 		if (!ctx.hasUI) return;
 		if (result.fallbackUsed) {
-			ctx.ui.notify("Tree compression degraded: using rule-based fallback");
+			const reason = result.errorReason ? `: ${result.errorReason}` : "";
+			ctx.ui.notify(`[IC] 树压缩降级，使用规则分组${reason}`);
 		} else {
 			const tree = result.tree;
 			ctx.ui.notify(
-				`Tree compression complete: ${tree.totalTokens} tokens, `
-				+ `${tree.root.children.length} groups, depth ${tree.depth}`,
+				`[IC] 树压缩完成: ${tree.totalTokens} tokens, `
+				+ `${tree.root.children.length} 分组, 深度 ${tree.depth}`,
 			);
 		}
 	};

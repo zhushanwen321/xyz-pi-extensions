@@ -46,18 +46,29 @@ export function registerTreeCompactCommand(
 				return;
 			}
 
+			const completedCount = allSegments.filter((s) => s.completed).length;
+			const activeCount = allSegments.filter((s) => !s.completed).length;
+			ctx.ui.notify(`树压缩已启动... (${completedCount} 已完成段, ${activeCount} 活跃段)`);
+
 			compactor.triggerCompression(
 				pi,
 				ctx,
 				allSegments,
 				compactor.getTree(),
 				(result: CompactResult) => {
-					// onComplete 回调：通知由 index.ts 中 turn_end handler 的 onComplete 处理
-					void result;
+					if (!ctx.hasUI) return;
+					if (result.fallbackUsed) {
+						const reason = result.errorReason ? ` (${result.errorReason})` : "";
+						ctx.ui.notify(`[IC] 树压缩降级: 使用规则分组${reason}`);
+					} else {
+						const tree = result.tree;
+						ctx.ui.notify(
+							`[IC] 树压缩完成: ${tree.totalTokens} tokens, `
+							+ `${tree.root.children.length} 分组, 深度 ${tree.depth}`,
+						);
+					}
 				},
 			);
-
-			ctx.ui.notify("树压缩已启动...");
 		},
 	});
 }

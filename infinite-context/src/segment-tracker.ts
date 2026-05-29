@@ -157,6 +157,11 @@ export class SegmentTracker {
 		messages: unknown[],
 	): number {
 		let created = 0;
+		// 估算 turnRange 基线：已有段的最大 end + 1，避免新段的 turnRange 出现 -1
+		const baseTurn = this.segments.reduce(
+			(max, s) => Math.max(max, s.turnRange.end === -1 ? 0 : s.turnRange.end + 1),
+			0,
+		);
 		for (const raw of messages) {
 			const m = raw as Record<string, unknown> | null;
 			if (m === null || m.role !== "user") continue;
@@ -177,9 +182,10 @@ export class SegmentTracker {
 			const sessionId = ctx.sessionManager.getSessionId();
 			const filePath = `${CONTEXT_DIR_NAME}/${sessionId}/${segId}.json`;
 
+			const estimatedTurn = baseTurn + created;
 			const newSegment: Segment = {
 				segId,
-				turnRange: { start: -1, end: -1 },
+				turnRange: { start: estimatedTurn, end: estimatedTurn },
 				userMessage: dedupeKey,
 				completed: false,
 				filePath,
@@ -233,6 +239,10 @@ export class SegmentTracker {
 		messages: unknown[],
 	): number {
 		let created = 0;
+		const baseTurn = this.segments.reduce(
+			(max, s) => Math.max(max, s.turnRange.end === -1 ? 0 : s.turnRange.end + 1),
+			0,
+		);
 		for (const raw of messages) {
 			const m = raw as Record<string, unknown> | null;
 			if (m === null || m.role !== "assistant") continue;
@@ -251,9 +261,10 @@ export class SegmentTracker {
 			const sessionId = ctx.sessionManager.getSessionId();
 			const filePath = `${CONTEXT_DIR_NAME}/${sessionId}/${segId}.json`;
 
+			const assistantEstimatedTurn = baseTurn + created;
 			const newSegment: Segment = {
 				segId,
-				turnRange: { start: -1, end: -1 },
+				turnRange: { start: assistantEstimatedTurn, end: assistantEstimatedTurn },
 				userMessage: `[assistant] ${text}`,
 				completed: true,
 				filePath,
