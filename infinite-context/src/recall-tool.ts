@@ -16,6 +16,7 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "typebox";
 import type { TreeNode, CompactTree } from "./types";
 import type { TreeCompactor } from "./tree-compactor";
+import { getDataDir } from "./types";
 
 // ── 类型 ──────────────────────────────────────────────
 
@@ -76,10 +77,10 @@ function formatStructure(node: TreeNode, indent: number, depth = 0): string {
 	return result;
 }
 
-function readSegmentFile(sessionId: string, segId: string, ctx: ExtensionContext): string | undefined {
+function readSegmentFile(sessionId: string, segId: string): string | undefined {
 	const segIndex = segIndexFromId(segId);
 	if (segIndex === undefined) return undefined;
-	const segPath = join(ctx.cwd, ".pi", "infinite-context", sessionId, `seg_${segIndex}.json`);
+	const segPath = join(getDataDir(), sessionId, `seg_${segIndex}.json`);
 	if (!existsSync(segPath)) return undefined;
 	try {
 		return readFileSync(segPath, "utf-8");
@@ -103,7 +104,6 @@ function recallContent(
 	node: TreeNode,
 	nodeId: string,
 	sessionId: string,
-	ctx: ExtensionContext,
 ): { content: Array<{ type: "text"; text: string }>; details: RecallDetails } {
 	const segIds = collectSegIds(node);
 	if (segIds.length === 0) {
@@ -114,7 +114,7 @@ function recallContent(
 	}
 	const parts: string[] = [];
 	for (const segId of segIds) {
-		const raw = readSegmentFile(sessionId, segId, ctx);
+		const raw = readSegmentFile(sessionId, segId);
 		parts.push(raw !== undefined ? `--- ${segId} ---\n${raw}` : `--- ${segId} ---\n(段文件不存在)`);
 	}
 	return {
@@ -152,7 +152,7 @@ export class RecallTool {
 			): RecallExecuteResult => {
 				const sessionId = ctx.sessionManager.getSessionId();
 				const tree = this.compactor?.getTree();
-				return this.executeRecall(params.nodeId, params.mode, tree, sessionId, ctx);
+				return this.executeRecall(params.nodeId, params.mode, tree, sessionId);
 			},
 
 			renderCall(args, theme) {
@@ -176,7 +176,6 @@ export class RecallTool {
 		mode: "structure" | "content",
 		tree: CompactTree | undefined,
 		sessionId: string,
-		ctx: ExtensionContext,
 	): { content: Array<{ type: "text"; text: string }>; details: RecallDetails } {
 		if (!tree) {
 			return {
@@ -196,6 +195,6 @@ export class RecallTool {
 		if (mode === "structure") {
 			return recallStructure(node, nodeId);
 		}
-		return recallContent(node, nodeId, sessionId, ctx);
+		return recallContent(node, nodeId, sessionId);
 	}
 }

@@ -93,3 +93,14 @@ export const IC_CONFIG = {
 	/** stdout 日志截断长度 */
 	maxStdoutLogLength: 1000,
 } as const;
+
+// ── 路径工具 ──────────────────────────────────────────
+
+import { join } from "path";
+import * as os from "os";
+
+/** 获取 infinite-context 数据存储根目录 */
+export function getDataDir(): string {
+	const piHome = process.env.PI_HOME || join(os.homedir(), ".pi");
+	return join(piHome, "agent", "infinite-context");
+}
