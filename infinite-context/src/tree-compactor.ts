@@ -19,6 +19,7 @@ import { RETENTION_CONFIG } from "./types";
 const COMPACT_TREE_ENTRY_TYPE = "ic-compact-tree";
 const COMPRESSION_TIMEOUT_MS = 30_000;
 const MAX_RETRY_COUNT = 1;
+const MAX_STDERR_LOG_LENGTH = 500;
 
 // ── 类型 ──────────────────────────────────────────────
 
@@ -27,6 +28,7 @@ export interface CompactResult {
 	tree: CompactTree;
 	fallbackUsed: boolean;
 	retryCount: number;
+	errorReason?: string;
 }
 
 /** 校验错误 */
@@ -367,8 +369,9 @@ export class TreeCompactor {
 		existingTree: CompactTree | undefined,
 		retryCount: number,
 		onComplete?: (result: CompactResult) => void,
+		previousError?: string,
 	): void {
-		const prompt = buildCompressionPrompt(segments, existingTree);
+		const prompt = buildCompressionPrompt(segments, existingTree, previousError);
 		const sessionId = ctx.sessionManager.getSessionId();
 
 		// spawn Pi 子进程
@@ -379,11 +382,17 @@ export class TreeCompactor {
 
 		this.currentProcess = child;
 		let stdout = "";
+		let stderr = "";
 		let timedOut = false;
 
 		// 收集 stdout
 		child.stdout?.on("data", (chunk: Buffer) => {
 			stdout += chunk.toString("utf-8");
+		});
+
+		// 收集 stderr
+		child.stderr?.on("data", (chunk: Buffer) => {
+			stderr += chunk.toString("utf-8");
 		});
 
 		// 30 秒超时
@@ -404,9 +413,15 @@ export class TreeCompactor {
 					? "Compression timed out after 30s"
 					: `Process exited with code ${code}`;
 
+				if (stderr) {
+					console.error(`[infinite-context] pi subprocess stderr: ${stderr.slice(0, MAX_STDERR_LOG_LENGTH)}`);
+				}
+
 				this.handleCompressionFailure(
 					pi,
+					ctx,
 					segments,
+					existingTree,
 					errorReason,
 					retryCount,
 					onComplete,
@@ -418,9 +433,15 @@ export class TreeCompactor {
 			const result = validateTreeOutput(stdout.trim(), segments);
 
 			if ("reason" in result) {
+				console.error(`[infinite-context] tree validation failed: ${result.reason}`);
+				if (stderr) {
+					console.error(`[infinite-context] pi subprocess stderr: ${stderr.slice(0, MAX_STDERR_LOG_LENGTH)}`);
+				}
 				this.handleCompressionFailure(
 					pi,
+					ctx,
 					segments,
+					existingTree,
 					result.reason,
 					retryCount,
 					onComplete,
@@ -457,13 +478,16 @@ export class TreeCompactor {
 			});
 		});
 
-		// 处理 spawn 错误
+		// 处理 spawn 错误（例如 "pi" 命令找不到）
 		child.on("error", (err) => {
 			clearTimeout(timer);
 			this.currentProcess = undefined;
+			console.error(`[infinite-context] spawn "pi" failed: ${err.message}`);
 			this.handleCompressionFailure(
 				pi,
+				ctx,
 				segments,
+				existingTree,
 				`Spawn error: ${err.message}`,
 				retryCount,
 				onComplete,
@@ -476,89 +500,20 @@ export class TreeCompactor {
 	 */
 	private handleCompressionFailure(
 		pi: ExtensionAPI,
+		ctx: ExtensionContext,
 		segments: readonly Segment[],
+		existingTree: CompactTree | undefined,
 		errorReason: string,
 		retryCount: number,
 		onComplete?: (result: CompactResult) => void,
 	): void {
-		// 尝试重试（最多 MAX_RETRY_COUNT 次）
 		if (retryCount < MAX_RETRY_COUNT) {
-			// 重试时附带错误信息
-			const prompt = buildCompressionPrompt(segments, this.tree, errorReason);
-			const child = spawn("pi", ["--mode", "json", "-p", prompt], {
-				stdio: ["ignore", "pipe", "pipe"],
-				detached: false,
-			});
-
-			this.currentProcess = child;
-			let stdout = "";
-			let timedOut = false;
-
-			child.stdout?.on("data", (chunk: Buffer) => {
-				stdout += chunk.toString("utf-8");
-			});
-
-			const timer = setTimeout(() => {
-				timedOut = true;
-				if (!child.killed) {
-					child.kill("SIGTERM");
-				}
-			}, COMPRESSION_TIMEOUT_MS);
-
-			child.on("close", (code) => {
-				clearTimeout(timer);
-				this.currentProcess = undefined;
-
-				if (timedOut || code !== 0) {
-					// 重试也失败 → 降级
-					this.applyFallback(pi, segments, retryCount + 1, onComplete);
-					return;
-				}
-
-				const result = validateTreeOutput(stdout.trim(), segments);
-				if ("reason" in result) {
-					this.applyFallback(pi, segments, retryCount + 1, onComplete);
-					return;
-				}
-
-				// 重试成功
-				const root: TreeNode = {
-					nodeId: "root",
-					summary: `Compressed ${segments.length} segments`,
-					tokenCount: 0,
-					children: result,
-				};
-
-				const tree: CompactTree = {
-					treeId: `tree_${Date.now()}`,
-					root,
-					totalTokens: treeTotalTokens(root),
-					createdAt: Date.now(),
-					depth: treeDepth(root),
-				};
-
-				this.tree = tree;
-				this.compressing = false;
-				pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
-
-				onComplete?.({
-					tree,
-					fallbackUsed: false,
-					retryCount: retryCount + 1,
-				});
-			});
-
-			child.on("error", () => {
-				clearTimeout(timer);
-				this.currentProcess = undefined;
-				this.applyFallback(pi, segments, retryCount + 1, onComplete);
-			});
-
+			console.error(`[infinite-context] compression failed (retry ${retryCount + 1}/${MAX_RETRY_COUNT}): ${errorReason}`);
+			this.runCompression(pi, ctx, segments, existingTree, retryCount + 1, onComplete, errorReason);
 			return;
 		}
-
-		// 超过重试次数 → 降级
-		this.applyFallback(pi, segments, retryCount, onComplete);
+		console.error(`[infinite-context] compression failed, using fallback: ${errorReason}`);
+		this.applyFallback(pi, segments, retryCount, onComplete, errorReason);
 	}
 
 	/**
@@ -569,6 +524,7 @@ export class TreeCompactor {
 		segments: readonly Segment[],
 		retryCount: number,
 		onComplete?: (result: CompactResult) => void,
+		errorReason?: string,
 	): void {
 		const tree = ruleBasedFallback(segments);
 		this.tree = tree;
@@ -580,6 +536,7 @@ export class TreeCompactor {
 			tree,
 			fallbackUsed: true,
 			retryCount,
+			errorReason,
 		});
 	}
 }
