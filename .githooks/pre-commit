@@ -21,11 +21,12 @@ if ! npx tsc --noEmit 2>&1; then
 fi
 echo -e "${C_GREEN}[ OK ]${C_RESET} tsc 通过"
 
-# ── 1.5 console.log 长内容检测 ──────────────────────────
+# ── 1.5 console.log 检测（TUI 模式下污染终端输出）────
 STAGED_TS=$(git diff --cached --name-only --diff-filter=ACM | grep '\.ts$' | grep -v '\.d\.ts$' || true)
 if echo "$STAGED_TS" | grep -q "infinite-context"; then
-  if git diff --cached -- infinite-context/ | grep -E '^\\+.*console\.log.*\.slice\(0,' > /dev/null 2>&1; then
-    echo -e "${C_RED}[FAIL]${C_RESET} infinite-context 中 console.log 包含 .slice(0,) 长内容输出，请改用 console.warn"
+  if git diff --cached -- infinite-context/ | grep -E '^\+.*console\.log\(' > /dev/null 2>&1; then
+    echo -e "${C_RED}[FAIL]${C_RESET} infinite-context 禁止使用 console.log（TUI 模式下会污染终端输出），请改用 console.error"
+    git diff --cached -- infinite-context/ | grep -nE '^\+.*console\.log\(' | head -5
     exit 1
   fi
 fi
