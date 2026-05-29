@@ -1,6 +1,6 @@
 ---
 verdict: pass
-must_fix: []
+must_fix: 0
 ---
 
 # 集成审查 — 第 2 轮
