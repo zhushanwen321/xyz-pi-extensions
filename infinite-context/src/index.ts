@@ -101,11 +101,8 @@ function registerRenderers(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer(IC_COMPACT_END_TYPE, (message, _options, theme) => {
 		const details = message.details as { fallbackUsed?: boolean; errorReason?: string } | undefined;
 		const content = typeof message.content === "string" ? message.content : "";
-		if (details?.fallbackUsed) {
-			const reason = details.errorReason ? ` — ${details.errorReason}` : "";
-			return new Text(theme.fg("error", "\u274C ") + theme.fg("toolTitle", "IC Tree Compact") + theme.fg("dim", ` fallback${reason}`) + theme.fg("muted", ` | ${content}`), 0, 0) as unknown as Component;
-		}
-		return new Text(theme.fg("success", "\u2705 ") + theme.fg("toolTitle", "IC Tree Compact") + theme.fg("dim", " done") + theme.fg("muted", ` | ${content}`), 0, 0) as unknown as Component;
+		const icon = details?.fallbackUsed ? "\u26A0\uFE0F" : "\u2705";
+		return new Text(theme.fg(details?.fallbackUsed ? "error" : "success", `${icon} `) + theme.fg("toolTitle", "IC Tree Compact") + theme.fg("dim", ` ${content}`), 0, 0) as unknown as Component;
 	});
 }
 

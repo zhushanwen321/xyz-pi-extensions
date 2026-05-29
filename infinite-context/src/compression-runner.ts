@@ -24,7 +24,7 @@ function beforeCompressionUI(pi: ExtensionAPI, ctx: ExtensionContext, segmentCou
 	const tokenInfo = tokensBefore !== null ? `, ${(tokensBefore / 1000).toFixed(1)}K tokens` : "";
 	pi.sendMessage({
 		customType: IC_COMPACT_START_TYPE,
-		content: `⏳ IC Tree Compact: ${segmentCount} segments${tokenInfo}`,
+		content: `${segmentCount} segments${tokenInfo}`,
 		display: true,
 	});
 	return { tokensBefore };
@@ -43,11 +43,9 @@ function afterCompressionUI(pi: ExtensionAPI, ctx: ExtensionContext, result: Com
 	});
 
 	if (ctx.hasUI) {
-		const icon = result.fallbackUsed ? "⚠️" : "✅";
-		const summary = `${icon} IC Tree Compact: ${tree.root.children.length} groups, ${tree.totalTokens} tokens`;
 		pi.sendMessage({
 			customType: IC_COMPACT_END_TYPE,
-			content: summary,
+			content: `${tree.root.children.length} groups, ${tree.totalTokens} tokens`,
 			display: true,
 			details: { fallbackUsed: result.fallbackUsed, errorReason: result.errorReason },
 		});

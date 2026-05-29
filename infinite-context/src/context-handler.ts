@@ -28,9 +28,21 @@ export interface AssembleResult {
 	compressedNodeCount: number;
 }
 
-const RECALL_PROMPT = `历史对话已压缩为摘要树。使用 recall(nodeId, mode) 工具检索被压缩内容。
-recall(nodeId, "structure") 查看子树结构（不含原始内容）。
-recall(nodeId, "content") 获取原始完整内容。`;
+const RECALL_PROMPT = `历史对话已压缩为摘要树。原始内容全部保留，通过 recall 工具随时检索。
+
+## 树结构
+- group_X: 非叶节点，摘要是子节点内容的归纳。调用 recall(group_X, "content") 会聚合底下所有叶子节点的原始内容。
+- node_seg_Y: 叶子节点，每个对应一个对话段，保存完整原始内容。
+- root: 整棵树的根节点。
+
+## recall 工具用法
+- recall(nodeId, "structure") → 查看节点子树结构，了解下面有哪些子节点
+- recall(nodeId, "content") → 获取节点的完整原始内容（叶子节点返回原文，非叶节点返回所有子叶的聚合内容）
+
+## 使用建议
+- 需要完整的原始对话内容时，先 recall(nodeId, "structure") 确认结构，再 recall(nodeId, "content") 取内容
+- 不确定某个话题在哪个节点时，从 root 或 group_X 开始查看结构
+- 压缩不会删除任何原始内容，只是用摘要代替了原文出现在你的上下文中`;
 
 export const IC_SUMMARY_CUSTOM_TYPE = "ic-summary";
 export const IC_RECALL_PROMPT_TYPE = "ic-recall-prompt";
