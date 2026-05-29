@@ -61,6 +61,7 @@ function onCompleteFactory(ctx: ExtensionContext) {
 }
 
 function createContextHandler(
+	pi: ExtensionAPI,
 	tracker: SegmentTracker,
 	compactor: TreeCompactor,
 	assembler: ContextAssembler,
@@ -68,6 +69,9 @@ function createContextHandler(
 ) {
 	return (event: ContextEvent, ctx: ExtensionContext) => {
 		try {
+			// 检测新 user message，创建段
+			tracker.syncFromMessages(pi, ctx, event.messages);
+
 			const segments = tracker.getSegments();
 			const retentionWindow = tracker.getRetentionWindow();
 			const tree = compactor.getTree();
@@ -105,6 +109,22 @@ function registerRenderers(pi: ExtensionAPI): void {
 	});
 }
 
+// ── session_before_compact handler ─────────────────────────
+
+/**
+ * 段数 >= 3 时由树压缩接管，取消原生 compact
+ * 段数 < 3 时放行原生 compact（树压缩无法工作）
+ */
+function createBeforeCompactHandler(tracker: SegmentTracker) {
+	return () => {
+		const segments = tracker.getSegments();
+		if (segments.length >= 1) {
+			return { cancel: true };
+		}
+		return { cancel: false };
+	};
+}
+
 // -- Extension Factory -------------------------------------------------------
 
 export default function infiniteContextExtension(pi: ExtensionAPI): void {
@@ -116,8 +136,8 @@ export default function infiniteContextExtension(pi: ExtensionAPI): void {
 	// Event handlers
 	pi.on("session_start", createSessionStartHandler(tracker, compactor));
 	pi.on("turn_end", createTurnEndHandler(pi, tracker, compactor, assembler, needsCompression));
-	pi.on("context", createContextHandler(tracker, compactor, assembler, needsCompression));
-	pi.on("session_before_compact", () => ({ cancel: true }));
+	pi.on("context", createContextHandler(pi, tracker, compactor, assembler, needsCompression));
+	pi.on("session_before_compact", createBeforeCompactHandler(tracker));
 
 	// Commands + tools + renderers
 	registerTreeCompactCommand(pi, compactor, tracker);

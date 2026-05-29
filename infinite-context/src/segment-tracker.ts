@@ -138,29 +138,33 @@ export class SegmentTracker {
 				seg.turnRange.end = turnData.turnIndex;
 			}
 		}
+
+		// 从已恢复的段重建去重集合
+		this.syncedKeys = new Set(this.segments.map((s) => s.userMessage));
 	}
 
+	/** 已创建段的去重 key 集合 */
+	private syncedKeys = new Set<string>();
+
 	/**
-	 * 处理 turn_end 事件
-	 *
-	 * 检测段边界：
-	 * 1. 如果 message.role === "user"，标记前段完成并创建新段
-	 * 2. 更新当前段的 turnRange
-	 * 3. 追加 turn 信息
-	 * 4. 写入段文件
+	 * 从 messages 中批量补建缺失段
+	 * 在 context 事件和 /tree-compact 命令中调用
+	 * 遍历所有 user message，为尚未创建段的自动创建
 	 */
-	handleTurnEnd(
+	syncFromMessages(
 		pi: ExtensionAPI,
 		ctx: ExtensionContext,
-		turnIndex: number,
-		message: unknown,
-		toolResults: unknown[],
-	): void {
-		const msg = message as Record<string, unknown> | null;
-		const isUserMessage = msg !== null && msg.role === "user";
-		let isFirstTurnOfSegment = false;
+		messages: unknown[],
+	): number {
+		let created = 0;
+		for (const raw of messages) {
+			const m = raw as Record<string, unknown> | null;
+			if (m === null || m.role !== "user") continue;
 
-		if (isUserMessage) {
+			const userText = extractUserText(m);
+			const dedupeKey = userText.slice(0, 80);
+			if (this.syncedKeys.has(dedupeKey)) continue;
+
 			// 标记前段完成
 			if (this.currentSegment && !this.currentSegment.completed) {
 				this.currentSegment.completed = true;
@@ -170,46 +174,100 @@ export class SegmentTracker {
 			// 创建新段
 			const segId = `seg_${this.nextSegIndex}`;
 			this.nextSegIndex++;
-
 			const sessionId = ctx.sessionManager.getSessionId();
 			const filePath = `${CONTEXT_DIR_NAME}/${sessionId}/${segId}.json`;
 
 			const newSegment: Segment = {
 				segId,
-				turnRange: { start: turnIndex, end: turnIndex },
-				userMessage: extractUserText(message),
+				turnRange: { start: -1, end: -1 },
+				userMessage: dedupeKey,
 				completed: false,
 				filePath,
 			};
 
 			this.segments.push(newSegment);
 			this.currentSegment = newSegment;
-			isFirstTurnOfSegment = true;
+			this.syncedKeys.add(dedupeKey);
+			created++;
 
 			pi.appendEntry(SEGMENT_ENTRY_TYPE, this.toEntryData(newSegment));
+			this.writeSegmentFile(ctx, newSegment);
+		}
+		return created;
+	}
+
+	/**
+	 * 从 session entries 中提取 messages 并 sync
+	 * 用于 /tree-compact 命令（没有 messages 参数时）
+	 */
+	syncFromEntries(
+		pi: ExtensionAPI,
+		ctx: ExtensionContext,
+		entries: SessionEntry[],
+	): number {
+		const messages: unknown[] = [];
+		for (const entry of entries) {
+			if (entry.type === "message") {
+				const msgEntry = entry as { message: unknown };
+				if (msgEntry.message) {
+					messages.push(msgEntry.message);
+				}
+			}
+		}
+		const created = this.syncFromMessages(pi, ctx, messages);
+
+		// 补建：assistant 回复也作为段（确保段数足够建树）
+		if (this.segments.length < 3) {
+			this.syncAssistantMessages(pi, ctx, messages);
 		}
 
-		// 更新当前段的 turnRange
-		if (this.currentSegment) {
-			if (turnIndex > this.currentSegment.turnRange.end) {
-				this.currentSegment.turnRange.end = turnIndex;
+		return created;
+	}
+
+	/**
+	 * 将 assistant 回复也建为段（补充 user message 段数不足的情况）
+	 */
+	private syncAssistantMessages(
+		pi: ExtensionAPI,
+		ctx: ExtensionContext,
+		messages: unknown[],
+	): number {
+		let created = 0;
+		for (const raw of messages) {
+			const m = raw as Record<string, unknown> | null;
+			if (m === null || m.role !== "assistant") continue;
+
+			const text = extractUserText(m).slice(0, 80);
+			if (!text || this.syncedKeys.has(text)) continue;
+
+			// 标记前段完成
+			if (this.currentSegment && !this.currentSegment.completed) {
+				this.currentSegment.completed = true;
+				pi.appendEntry(SEGMENT_ENTRY_TYPE, this.toEntryData(this.currentSegment));
 			}
 
-			// 追加 turn 信息
-			const turnData: TurnEntryData = {
-				turnIndex,
-				segId: this.currentSegment.segId,
-				toolCalls: extractToolCalls(toolResults),
+			const segId = `seg_${this.nextSegIndex}`;
+			this.nextSegIndex++;
+			const sessionId = ctx.sessionManager.getSessionId();
+			const filePath = `${CONTEXT_DIR_NAME}/${sessionId}/${segId}.json`;
+
+			const newSegment: Segment = {
+				segId,
+				turnRange: { start: -1, end: -1 },
+				userMessage: `[assistant] ${text}`,
+				completed: true,
+				filePath,
 			};
-			pi.appendEntry(TURN_ENTRY_TYPE, turnData);
 
-			// 只在段创建时写入段文件（第一个 turn），后续 turn 只追加
-			if (isFirstTurnOfSegment) {
-				this.writeSegmentFile(ctx, this.currentSegment);
-			}
-			// 追加 turn 数据到段文件
-			this.appendTurnToSegFile(ctx, this.currentSegment, { turnIndex, message, toolResults });
+			this.segments.push(newSegment);
+			this.currentSegment = newSegment;
+			this.syncedKeys.add(text);
+			created++;
+
+			pi.appendEntry(SEGMENT_ENTRY_TYPE, this.toEntryData(newSegment));
+			this.writeSegmentFile(ctx, newSegment);
 		}
+		return created;
 	}
 
 	/** 返回只读段列表 */
@@ -220,6 +278,39 @@ export class SegmentTracker {
 	/** 返回当前活跃段（未完成） */
 	getCurrentSegment(): Segment | undefined {
 		return this.currentSegment;
+	}
+
+	/**
+	 * 追加 turn 数据到当前段（不创建新段）
+	 * 在 turn_end 事件中调用
+	 */
+	handleTurnEnd(
+		pi: ExtensionAPI,
+		ctx: ExtensionContext,
+		turnIndex: number,
+		message: unknown,
+		toolResults: unknown[],
+	): void {
+		if (!this.currentSegment) return;
+
+		// 更新 turnRange（首次 turn_end 到达时设置 start）
+		if (this.currentSegment.turnRange.start === -1) {
+			this.currentSegment.turnRange.start = turnIndex;
+		}
+		if (turnIndex > this.currentSegment.turnRange.end) {
+			this.currentSegment.turnRange.end = turnIndex;
+		}
+
+		// 追加 turn 信息
+		const turnData: TurnEntryData = {
+			turnIndex,
+			segId: this.currentSegment.segId,
+			toolCalls: extractToolCalls(toolResults),
+		};
+		pi.appendEntry(TURN_ENTRY_TYPE, turnData);
+
+		// 追加 turn 数据到段文件
+		this.appendTurnToSegFile(ctx, this.currentSegment, { turnIndex, message, toolResults });
 	}
 
 	/**
