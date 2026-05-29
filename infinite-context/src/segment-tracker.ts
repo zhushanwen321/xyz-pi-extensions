@@ -93,7 +93,8 @@ export class SegmentTracker {
 		this.currentSegment = undefined;
 		this.nextSegIndex = 0;
 
-		// 先恢复 segments
+		// 按 segId 去重恢复 segments（每个 segId 可能有多条 entry，取最后一条）
+		const segMap = new Map<string, Segment>();
 		for (const entry of entries) {
 			if (isSegmentEntry(entry) && entry.data) {
 				const data = entry.data;
@@ -104,7 +105,7 @@ export class SegmentTracker {
 					completed: data.completed,
 					filePath: data.filePath,
 				};
-				this.segments.push(segment);
+				segMap.set(data.segId, segment);
 
 				// 跟踪最大 seg index
 				const indexMatch = data.segId.match(/^seg_(\d+)$/);
@@ -116,6 +117,9 @@ export class SegmentTracker {
 				}
 			}
 		}
+
+		// 保持创建顺序
+		this.segments = [...segMap.values()];
 
 		// 设置当前段：最后一个未完成的段
 		const lastSegment = this.segments.length > 0
