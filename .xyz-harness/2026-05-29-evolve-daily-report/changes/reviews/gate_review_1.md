@@ -9,13 +9,11 @@ must_fix: 0
 
 | 检查项 | 结果 | 说明 |
 |--------|------|------|
-| spec 内容完整，非空洞框架 | PASS | spec 全文 ~210 行，每个需求项（FR-1 到 FR-5）都有具体子项描述，段落充实 |
-| 验收标准可量化、可测试 | PASS | AC-1 到 AC-11 均为具体可验证条件（如：指定文件路径、幂等性、不阻塞启动、GC 期限） |
-| 包含具体技术细节 | PASS | 包含 lock 文件路径、报告路径、UTC 日期格式、pending.json 去重策略、30 天保留期等具体实现级细节 |
-| 针对特定项目 | PASS | 明确是针对 evolution-engine 模块的扩展，引用了现有文件（gc.ts、monitor.ts、summarizer.ts）、命令（/evolve, /evolve-apply）、约束（@mariozechner/* scope） |
-| 代码库存在性验证 | PASS | `evolution-engine/src/` 目录存在，包含 gc.ts、monitor.ts、summarizer.ts、state.ts、index.ts、types.ts 等全部引用文件 |
-| git 历史一致性 | PASS | 项目 git 历史有相关 commits（chore: update gate review for evolve-daily-report） |
-| Frontmatter 完整性 | PASS | spec.md 包含 `verdict: pass` YAML frontmatter |
+| 正文内容空洞检测 | PASS | 每个需求项（FR-1~FR-5）都有充实的内容，子项（FR-1.1~FR-1.5、FR-2.1~FR-2.3 等）均包含具体实现细节（文件路径、逻辑分支、数据来源），非框架标题填空 |
+| 验收标准可量化性 | PASS | AC-1~AC-11 均可测试：AC-1 检查具体文件路径是否存在，AC-2 验证幂等性，AC-5/AC-6 验证命令行为，AC-8 验证 `.last-run-status` 内容，AC-10 验证 tsc --noEmit 通过 |
+| 具体用户场景 | PASS | Background 描述了从"手动 /evolve"到"被动接收报告"的用户场景转化。FR-3 描述了 `/evolve-report`、`/evolve-report YYYY-MM-DD`、`/evolve-report --list` 三种具体使用场景。FR-4.1 描述了"看完报告后决定执行建议"的交互流程 |
+| 项目针对性 | PASS | 引用了具体模块（monitor.ts、gc.ts、state.ts、summarizer.ts、types.ts），具体数据类型（SignalReport、EvolutionSuggestion、EffectReview、MetricsSnapshot），具体命令（/evolve、/evolve-apply、/evolve-stats、/evolve-rollback）。经 bash 验证，所有引用的源文件在 evolution-engine/src/ 中真实存在，types.ts 中确实包含这些类型定义 |
+| 技术细节具体性 | PASS | 包含具体文件路径（`daily-reports/YYYY-MM-DD.md`、`daily-reports/.daily-report.lock`、`.last-run-status`）、具体数据结构映射（报告章节→数据来源表格）、具体阈值（30 天 GC、30 条容量上限）、具体日期格式（UTC `YYYY-MM-DD`） |
 
 ### MUST_FIX 问题
 
@@ -23,4 +21,4 @@ must_fix: 0
 
 ### 总结
 
-Spec 内容详实、验收标准可验证、技术细节具体、与现有代码库一致。未发现伪造或严重缺失信号。这是一份真实的 spec deliverable。
+spec.md 内容充实、具体，针对 xyz-pi-extensions 项目的 evolution-engine 模块提出了可验证的需求。验收标准可量化，技术细节（文件路径、数据类型、阈值）均有明确指向。经文件系统验证，spec 引用的所有源文件和数据类型在项目中真实存在，排除了编造可能性。未发现伪造信号。
