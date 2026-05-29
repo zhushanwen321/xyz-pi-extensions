@@ -13,7 +13,7 @@ import { writeFileSync, readFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import type { ExtensionAPI, ExtensionContext, CustomEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
 import type { Segment, SegmentEntryData, TurnEntryData } from "./types";
-import { RETENTION_CONFIG, IC_CONFIG } from "./types";
+import { RETENTION_CONFIG, IC_CONFIG, getDataDir } from "./types";
 
 // ── 常量 ──────────────────────────────────────────────
 
@@ -366,7 +366,7 @@ export class SegmentTracker {
 	}
 
 	private writeSegmentFile(ctx: ExtensionContext, segment: Segment): void {
-		const segDir = join(ctx.cwd, ".pi", "infinite-context", ctx.sessionManager.getSessionId());
+		const segDir = join(getDataDir(), ctx.sessionManager.getSessionId());
 		if (!existsSync(segDir)) {
 			mkdirSync(segDir, { recursive: true });
 		}
@@ -381,7 +381,7 @@ export class SegmentTracker {
 
 	private appendTurnToSegFile(ctx: ExtensionContext, segment: Segment | undefined, turnData: { turnIndex: number; message: unknown; toolResults: unknown[] }): void {
 		if (!segment) return;
-		const segDir = join(ctx.cwd, ".pi", "infinite-context", ctx.sessionManager.getSessionId());
+		const segDir = join(getDataDir(), ctx.sessionManager.getSessionId());
 		const segFile = join(segDir, `${segment.segId}.json`);
 		if (!existsSync(segFile)) return;
 		try {
