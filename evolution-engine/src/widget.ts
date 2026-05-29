@@ -22,9 +22,9 @@ export function renderSuggestionCard(
 	const conf = suggestion.confidence.toFixed(2);
 	const header = `#[${index}] [${severity} conf:${conf}] ${suggestion.targetPath}`;
 
-	// diff 预览：只取前 10 行
-	const diffLines = suggestion.diff.split("\n").slice(0, 10);
-	const diffPreview = diffLines.join("\n");
+	// instruction 预览：只取前 10 行
+	const instructionLines = suggestion.instruction.split("\n").slice(0, 10);
+	const instructionPreview = instructionLines.join("\n");
 
 	const lines = [
 		header,
@@ -32,7 +32,7 @@ export function renderSuggestionCard(
 		// 原因摘要：取第一行或截断
 		suggestion.rationale.split("\n")[0],
 		"---",
-		diffPreview,
+		instructionPreview,
 		"Use: /evolve-apply action=apply index=<N> or action=skip index=<N>",
 	];
 

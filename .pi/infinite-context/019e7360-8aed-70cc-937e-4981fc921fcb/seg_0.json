@@ -1,0 +1,783 @@
+{
+  "segId": "seg_0",
+  "turnRange": {
+    "start": 0,
+    "end": 0
+  },
+  "userMessage": "Task: 你是健壮性审查专家。对 evolve-daily-report 功能进行第 2 轮审查。\n\n第 1 轮 4 个 must-fix 已修复：\n1. I",
+  "timestamp": 1780052167740,
+  "turns": [
+    {
+      "turnIndex": 0,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The user wants me to perform a robustness review (round 2) on the evolve-daily-report feature, verifying 4 must-fix items from round 1. Let me read the three files first.",
+            "thinkingSignature": "reasoning_content"
+          },
+          {
+            "type": "toolCall",
+            "id": "call_6b5c89d4547e41b1b07de875",
+            "name": "read",
+            "arguments": {
+              "path": "/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/daily-trigger.ts"
+            }
+          },
+          {
+            "type": "toolCall",
+            "id": "call_2375c227c0c6497a84801e94",
+            "name": "read",
+            "arguments": {
+              "path": "/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/report-generator.ts"
+            }
+          },
+          {
+            "type": "toolCall",
+            "id": "call_795b13dfb3994b2c92100ec6",
+            "name": "read",
+            "arguments": {
+              "path": "/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/state.ts"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 305,
+          "output": 143,
+          "cacheRead": 23680,
+          "cacheWrite": 0,
+          "totalTokens": 24128,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780052167772,
+        "responseId": "20260529185608ed5942a100b1433f"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_6b5c89d4547e41b1b07de875",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "/**\n * Evolution Engine — 每日自动分析触发器\n *\n * 在 session_start 中异步触发，每天最多运行一次完整的分析流程。\n * Fire-and-forget：不阻塞 session 初始化。\n *\n * 流程：检查报告 → 获取锁 → 运行 analyzer → summarizer → Judge\n *       → 生成 Markdown 报告 → 合并 pending → 释放锁\n */\n\nimport {\n\texistsSync,\n\twriteFileSync,\n\treadFileSync,\n\tunlinkSync,\n\tstatSync,\n\trenameSync,\n\tmkdirSync,\n} from \"node:fs\";\nimport { homedir } from \"node:os\";\nimport { join } from \"node:path\";\nimport { execFile } from \"node:child_process\";\n\nimport type { Dirs, JudgeInput, EvolutionSuggestion } from \"./types\";\nimport {\n\tmergePending,\n\tsaveLastRunStatus,\n\tloadMetricsHistory,\n\tloadHistory,\n} from \"./state\";\nimport { generateDailyReport } from \"./report-generator\";\nimport { summarizeReport } from \"./summarizer.js\";\nimport { buildEffectReview } from \"./effect-tracker.js\";\nimport { runJudge } from \"./judge\";\nimport { runGc } from \"./gc.js\";\n\n// ── 常量 ─────────────────────────────────────────────\n\n/** analyzer 脚本执行超时 */\nconst ANALYZER_TIMEOUT_MS = 60_000;\n\nconst ANALYZER_SCRIPT = join(\n\thomedir(),\n\t\".pi/agent/scripts/pi-session-analyzer/analyze.py\",\n);\n\n// ── Lock 管理 ────────────────────────────────────────\n\ninterface LockData {\n\tpid: number;\n\ttimestamp: string;\n}\n\n/**\n * 尝试获取锁文件。\n * - 已有锁但 PID 已死 → 清理 stale lock，获取新锁\n * - 已有锁且 PID 存活 → 返回 false\n * - 无锁文件 → 创建并返回 true\n *\n * 注意：使用 mkdirSync 作为原子操作（POSIX 上 mkdir 是原子的），\n * 避免 existsSync → writeFileSync 之间的 TOCTOU 竞态。\n */\nfunction acquireLock(lockPath: string): boolean {\n\tif (existsSync(lockPath)) {\n\t\ttry {\n\t\t\tconst raw = readFileSync(lockPath, \"utf-8\");\n\t\t\tconst lock = JSON.parse(raw) as LockData;\n\n\t\t\t// 检查 PID 是否仍然存活\n\t\t\t// process.kill(pid, 0) 不发送信号，只检查进程存在性\n\t\t\ttry {\n\t\t\t\tprocess.kill(lock.pid, 0);\n\t\t\t\t// PID 仍然存活 → 另一个进程在运行\n\t\t\t\treturn false;\n\t\t\t} catch {\n\t\t\t\t// PID 已死 → stale lock，清理\n\t\t\t\tunlinkSync(lockPath);\n\t\t\t}\n\t\t} catch {\n\t\t\t// 锁文件损坏 → 清理\n\t\t\tunlinkSync(lockPath);\n\t\t}\n\t}\n\n\t// 创建新锁\n\tconst data: LockData = { pid: process.pid, timestamp: new Date().toISOString() };\n\twriteFileSync(lockPath, JSON.stringify(data, null, 2), \"utf-8\");\n\treturn true;\n}\n\n/** 释放锁文件 */\nfunction releaseLock(lockPath: string): void {\n\ttry {\n\t\tunlinkSync(lockPath);\n\t} catch {\n\t\t// 锁文件可能已被其他进程清理\n\t}\n}\n\n// ── Pipeline 步骤 ────────────────────────────────────\n\n/** 运行 Python analyzer 生成原始报告 */\nfunction runAnalyzer(outputPath: string): Promise<string> {\n\treturn new Promise<string>((resolve, reject) => {\n\t\tif (!existsSync(ANALYZER_SCRIPT)) {\n\t\t\treject(new Error(`Session analyzer not found at ${ANALYZER_SCRIPT}`));\n\t\t\treturn;\n\t\t}\n\n\t\texecFile(\n\t\t\t\"python3\",\n\t\t\t[ANALYZER_SCRIPT, \"--since\", \"1d\", \"--format\", \"json\", \"--output\", outputPath],\n\t\t\t{ timeout: ANALYZER_TIMEOUT_MS },\n\t\t\t(err: Error | null) => {\n\t\t\t\tif (err) {\n\t\t\t\t\treject(err);\n\t\t\t\t} else {\n\t\t\t\t\tresolve(outputPath);\n\t\t\t\t}\n\t\t\t},\n\t\t);\n\t});\n}\n\n/**\n * 执行完整分析 pipeline（analyzer → summarizer → judge）。\n * 调用方负责 lock 管理。\n */\nasync function executePipeline(\n\tdirs: Dirs,\n\ttoday: string,\n\treportPath: string,\n): Promise<void> {\n\t// 确保 tmp 目录存在\n\tif (!existsSync(dirs.tmpDir)) {\n\t\tmkdirSync(dirs.tmpDir, { recursive: true });\n\t}\n\n\t// 1. 运行 analyzer\n\tconst tmpReportPath = join(dirs.tmpDir, `daily-raw-${today}.json`);\n\tawait runAnalyzer(tmpReportPath);\n\n\t// 2. 读取原始报告\n\tconst rawReport = readFileSync(tmpReportPath, \"utf-8\");\n\tconst report = JSON.parse(rawReport) as Record<string, unknown>;\n\n\t// 3. Summarizer pipeline\n\tconst metricsHistory = loadMetricsHistory(dirs.evolutionDir);\n\tconst signalReport = summarizeReport(\n\t\treport,\n\t\tmetricsHistory,\n\t\tdirs.evolutionDir,\n\t\ttmpReportPath,\n\t);\n\tmetricsHistory.push(signalReport.metricsSnapshot);\n\n\t// 3b. Effect review\n\tconst recentHistory = loadHistory(dirs.evolutionDir, 30);\n\tconst effectReview = buildEffectReview(recentHistory, metricsHistory);\n\tif (effectReview.length > 0) {\n\t\tsignalReport.effectReview = effectReview;\n\t}\n\n\t// 4. 运行 LLM Judge（在 GC 之前，避免新信号文件被删除）\n\tconst signalPath = join(\n\t\tdirs.signalsDir,\n\t\t`signal-${signalReport.metricsSnapshot.date}.json`,\n\t);\n\tconst judgeInput: JudgeInput = {\n\t\ttarget: \"all\",\n\t\treportPath: signalPath,\n\t\tpromptFilePath: \"\",\n\t};\n\n\tlet suggestions: EvolutionSuggestion[];\n\ttry {\n\t\tsuggestions = await runJudge(judgeInput, dirs.templateDir);\n\t} catch (err) {\n\t\tconst msg = err instanceof Error ? err.message : String(err);\n\t\tthrow new Error(`LLM Judge failed: ${msg}`);\n\t}\n\n\t// 5. GC（在 Judge 成功后执行，避免误删）\n\trunGc(dirs.evolutionDir);\n\n\t// 6. 生成 Markdown 报告 + 原子写入\n\tconst markdown = generateDailyReport(signalReport, suggestions, effectReview);\n\tconst tmpReport = `${reportPath}.tmp`;\n\twriteFileSync(tmpReport, markdown, \"utf-8\");\n\trenameSync(tmpReport, reportPath);\n\n\t// 7. 合并建议到 pending.json\n\tmergePending(dirs.evolutionDir, suggestions);\n\n\t// 8. 记录成功状态\n\tsaveLastRunStatus(dirs.dailyReportsDir, \"success\");\n\n\t// 9. 清理临时原始报告\n\ttry {\n\t\tunlinkSync(tmpReportPath);\n\t} catch {\n\t\t// 临时文件清理失败不影响主流程\n\t}\n}\n\n// ── 公共 API ─────────────────────────────────────────\n\n/**\n * 每日自动分析入口。\n * 在 session_start 中调用，fire-and-forget。\n * 同一天只运行一次（通过文件存在性判断）。\n */\nexport async function checkAndRunDailyAnalysis(dirs: Dirs): Promise<void> {\n\tconst today = new Date().toISOString().slice(0, 10);\n\tconst reportPath = join(dirs.dailyReportsDir, `${today}.md`);\n\n\t// AC-2: 同一天不重复生成\n\tif (existsSync(reportPath) && statSync(reportPath).size > 0) {\n\t\treturn;\n\t}\n\n\t// 获取锁\n\tconst lockPath = join(dirs.dailyReportsDir, \".daily-report.lock\");\n\tif (!acquireLock(lockPath)) {\n\t\treturn;\n\t}\n\n\ttry {\n\t\tawait executePipeline(dirs, today, reportPath);\n\t} catch (err) {\n\t\t// AC-8: 失败不阻塞\n\t\tconst msg = err instanceof Error ? err.message : String(err);\n\t\tconsole.error(`[evolve] Daily analysis failed: ${msg}`);\n\t\tsaveLastRunStatus(dirs.dailyReportsDir, \"failed\", msg);\n\t} finally {\n\t\treleaseLock(lockPath);\n\t}\n}\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780052174528
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "call_2375c227c0c6497a84801e94",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "/**\n * Evolution Engine — 每日报告生成器\n *\n * 将 SignalReport + Suggestions + EffectReview 转换为人类可读的 Markdown 报告。\n */\n\nimport type { SignalReport, EvolutionSuggestion, EffectReview } from \"./types\";\n\n// ── 公共 API ─────────────────────────────────────────\n\n/**\n * 生成每日分析报告的 Markdown 文本。\n * 报告结构：数据概览 → 异常信号 → 趋势变化 → 改进建议 → 效果回顾（条件章节）\n */\nexport function generateDailyReport(\n\tsignalReport: SignalReport,\n\tsuggestions: EvolutionSuggestion[],\n\teffectReview?: EffectReview[],\n): string {\n\tconst date = new Date(signalReport.generatedAt).toISOString().slice(0, 10);\n\tconst snapshot = signalReport.metricsSnapshot;\n\tconst hasData = snapshot.sessionCount > 0;\n\n\tconst sections: string[] = [\n\t\t`# Evolution Daily Report — ${date}`,\n\t\t\"\",\n\t\t\"## 数据概览\",\n\t\t...buildOverview(snapshot, hasData),\n\t\t\"\",\n\t\t\"## 异常信号\",\n\t\t...buildAnomalies(signalReport.anomalies),\n\t\t\"\",\n\t\t\"## 趋势变化\",\n\t\t...buildTrends(signalReport.trends),\n\t\t\"\",\n\t\t\"## 改进建议\",\n\t\t...buildSuggestions(suggestions),\n\t];\n\n\t// 效果回顾：仅有数据时追加\n\tif (effectReview && effectReview.length > 0) {\n\t\tsections.push(\"\", \"## 效果回顾\", ...buildEffectReview(effectReview));\n\t}\n\n\treturn sections.join(\"\\n\");\n}\n\n// ── 内部格式化函数 ───────────────────────────────────\n\nfunction buildOverview(\n\tsnapshot: { sessionCount: number; totalToolCalls: number; totalInputTokens: number; totalOutputTokens: number; avgTurnsPerSession: number },\n\thasData: boolean,\n): string[] {\n\tif (!hasData) {\n\t\treturn [\n\t\t\t\"- Session 数量：无数据\",\n\t\t\t\"- 工具调用总数：无数据\",\n\t\t\t\"- Token 消耗：无数据\",\n\t\t\t\"- 平均每 session 轮次：无数据\",\n\t\t];\n\t}\n\n\treturn [\n\t\t`- Session 数量：${snapshot.sessionCount}`,\n\t\t`- 工具调用总数：${snapshot.totalToolCalls}`,\n\t\t`- Token 消耗：input ${snapshot.totalInputTokens.toLocaleString()} / output ${snapshot.totalOutputTokens.toLocaleString()}`,\n\t\t`- 平均每 session 轮次：${formatNum(snapshot.avgTurnsPerSession)}`,\n\t];\n}\n\nfunction buildAnomalies(anomalies: Array<{ severity: string; detail: string }>): string[] {\n\tif (anomalies.length === 0) {\n\t\treturn [\"无异常\"];\n\t}\n\n\treturn anomalies.map(a => `- [${a.severity.toUpperCase()}] ${a.detail}`);\n}\n\nfunction buildTrends(trends: Array<{ field: string; previous: number; current: number; changePercent: number }>): string[] {\n\tif (trends.length === 0) {\n\t\treturn [\"无显著变化\"];\n\t}\n\n\treturn trends.map(t => {\n\t\tconst sign = t.changePercent >= 0 ? \"+\" : \"\";\n\t\treturn `- ${t.field}: ${formatNum(t.previous)} → ${formatNum(t.current)} (${sign}${t.changePercent.toFixed(1)}%)`;\n\t});\n}\n\nfunction buildSuggestions(suggestions: EvolutionSuggestion[]): string[] {\n\tif (suggestions.length === 0) {\n\t\treturn [\"系统运行良好，无需调整\"];\n\t}\n\n\tconst lines: string[] = [];\n\tfor (let i = 0; i < suggestions.length; i++) {\n\t\tconst s = suggestions[i];\n\t\tif (i > 0) lines.push(\"\");\n\t\tlines.push(`### #${i} [${s.severity.toUpperCase()}] ${s.title}`);\n\t\tif (s.description) lines.push(`- 描述：${s.description}`);\n\t\tif (s.rationale) lines.push(`- 依据：${s.rationale}`);\n\t\tif (s.targetPath) lines.push(`- 修改目标：${s.targetPath}`);\n\t\tif (s.instruction) lines.push(`- 修改指令：${s.instruction}`);\n\t}\n\treturn lines;\n}\n\nfunction buildEffectReview(reviews: EffectReview[]): string[] {\n\treturn reviews.map(r => {\n\t\tconst sign = r.changePercent >= 0 ? \"+\" : \"\";\n\t\treturn `- ${r.suggestionTitle}: ${r.targetMetric} ${formatNum(r.before)} → ${formatNum(r.after)} (${sign}${r.changePercent.toFixed(1)}%)`;\n\t});\n}\n\n/** 格式化数字：整数直接显示，浮点保留 2 位，Infinity/NaN 显示为 \"N/A\" */\nfunction formatNum(n: number): string {\n\tif (!Number.isFinite(n)) return \"N/A\";\n\treturn Number.isInteger(n) ? String(n) : n.toFixed(2);\n}\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780052174528
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "call_795b13dfb3994b2c92100ec6",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "/**\n * Evolution Engine — 状态持久化\n *\n * 管理 suggestions/pending.json 和 history.jsonl。\n * 所有路径基于传入的 evolutionDir 参数，不硬编码。\n */\n\nimport { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from \"node:fs\";\nimport { join } from \"node:path\";\nimport type { PendingFile, HistoryEntry, MetricsSnapshot, EvolutionSuggestion } from \"./types.js\";\n\n// ── 内部路径 ─────────────────────────────────────────\n\nfunction suggestionsPath(dir: string): string {\n\treturn join(dir, \"suggestions\", \"pending.json\");\n}\n\nfunction historyPath(dir: string): string {\n\treturn join(dir, \"history.jsonl\");\n}\n\nfunction metricsHistoryPath(dir: string): string {\n\treturn join(dir, \"metrics-history.json\");\n}\n\n// ── 公共 API ─────────────────────────────────────────\n\n/**\n * 读取 pending.json。\n * 文件不存在或 JSON 损坏时返回 null。\n */\nexport function loadPending(dir: string): PendingFile | null {\n\tconst filePath = suggestionsPath(dir);\n\tif (!existsSync(filePath)) return null;\n\n\ttry {\n\t\tconst raw = readFileSync(filePath, \"utf-8\");\n\t\tconst pending = JSON.parse(raw) as PendingFile;\n\n\t\t// Migration: 旧格式有 diff 字段而无 instruction，自动迁移\n\t\tfor (const sug of pending.suggestions) {\n\t\t\tif (!sug.instruction && (sug as unknown as Record<string, unknown>).diff) {\n\t\t\t\tsug.instruction = String((sug as unknown as Record<string, unknown>).diff);\n\t\t\t\tdelete (sug as unknown as Record<string, unknown>).diff;\n\t\t\t}\n\t\t}\n\n\t\treturn pending;\n\t} catch {\n\t\treturn null;\n\t}\n}\n\n/**\n * 写入 pending.json。\n * 目录不存在时递归创建。\n */\nexport function savePending(dir: string, pending: PendingFile): void {\n\tconst filePath = suggestionsPath(dir);\n\tconst dirName = join(dir, \"suggestions\");\n\n\tif (!existsSync(dirName)) {\n\t\tmkdirSync(dirName, { recursive: true });\n\t}\n\n\twriteFileSync(filePath, JSON.stringify(pending, null, 2), \"utf-8\");\n}\n\n/**\n * 追加一条 JSON 行到 history.jsonl。\n * 文件不存在时创建。\n */\nexport function appendHistory(dir: string, entry: HistoryEntry): void {\n\tconst filePath = historyPath(dir);\n\n\tappendFileSync(filePath, JSON.stringify(entry) + \"\\n\", \"utf-8\");\n}\n\n/**\n * 读取 history.jsonl 最后 N 条记录。\n * 文件不存在返回空数组。\n */\n// ── Metrics Snapshot 持久化 ─────────────────────────\n\n/** metrics-history.json 的文件结构 */\ninterface MetricsHistoryFile {\n\tsnapshots: MetricsSnapshot[];\n}\n\nconst MAX_METRICS_SNAPSHOTS = 30;\n\n/**\n * 读取 metrics 历史。文件不存在或损坏时返回空数组。\n */\nexport function loadMetricsHistory(dir: string): MetricsSnapshot[] {\n\tconst filePath = metricsHistoryPath(dir);\n\tif (!existsSync(filePath)) return [];\n\n\ttry {\n\t\tconst raw = readFileSync(filePath, \"utf-8\");\n\t\tconst data = JSON.parse(raw) as MetricsHistoryFile;\n\t\treturn Array.isArray(data.snapshots) ? data.snapshots : [];\n\t} catch {\n\t\treturn [];\n\t}\n}\n\n/**\n * 追加一条 snapshot，滑动窗口保留最近 30 条。\n */\nexport function saveMetricsSnapshot(dir: string, snapshot: MetricsSnapshot): void {\n\tconst history = loadMetricsHistory(dir);\n\thistory.push(snapshot);\n\n\t// 滑动窗口：超出上限时删除最老的\n\tif (history.length > MAX_METRICS_SNAPSHOTS) {\n\t\thistory.splice(0, history.length - MAX_METRICS_SNAPSHOTS);\n\t}\n\n\tconst filePath = metricsHistoryPath(dir);\n\twriteFileSync(\n\t\tfilePath,\n\t\tJSON.stringify({ snapshots: history }, null, 2),\n\t\t\"utf-8\",\n\t);\n}\n\n// ── History JSONL ────────────────────────────────────\n\n// ── Daily Report 状态 ──────────────────────────────\n\n/** pending.json 中 pending 状态建议的最大数量 */\nconst MAX_PENDING_SUGGESTIONS = 30;\n\n/**\n * 增量合并新建议到 pending.json。\n * - title 精确匹配去重：已有 pending 建议的 title 与新建议相同时跳过\n * - 容量保护：pending 状态的建议不超过 MAX_PENDING_SUGGESTIONS 条\n * - 无现有文件时创建新 PendingFile\n */\nexport function mergePending(dir: string, newSuggestions: EvolutionSuggestion[]): void {\n\tif (newSuggestions.length === 0) return;\n\n\tconst existing = loadPending(dir);\n\tif (!existing) {\n\t\tconst pending: PendingFile = {\n\t\t\tgeneratedAt: new Date().toISOString(),\n\t\t\treportUsed: \"daily-report\",\n\t\t\tsuggestions: newSuggestions,\n\t\t};\n\t\tsavePending(dir, pending);\n\t\treturn;\n\t}\n\n\t// title 去重：跳过与已有 pending 建议同名的\n\tconst pendingTitles = new Set(\n\t\texisting.suggestions\n\t\t\t.filter(s => s.status === \"pending\")\n\t\t\t.map(s => s.title),\n\t);\n\tconst unique = newSuggestions.filter(s => !pendingTitles.has(s.title));\n\n\tif (unique.length > 0) {\n\t\texisting.suggestions.push(...unique);\n\t}\n\n\t// 容量保护：超出时按数组顺序驱逐最早的 pending（先入先出）\n\tconst pendingCount = existing.suggestions.filter(s => s.status === \"pending\").length;\n\tif (pendingCount > MAX_PENDING_SUGGESTIONS) {\n\t\tconst overflow = pendingCount - MAX_PENDING_SUGGESTIONS;\n\t\tlet evicted = 0;\n\t\tfor (const sug of existing.suggestions) {\n\t\t\tif (sug.status === \"pending\" && evicted < overflow) {\n\t\t\t\tsug.status = \"rejected\";\n\t\t\t\tevicted++;\n\t\t\t}\n\t\t}\n\t\tconsole.warn(\n\t\t\t`[evolve] Auto-evicted ${evicted} pending suggestion(s) to maintain capacity cap of ${MAX_PENDING_SUGGESTIONS}`,\n\t\t);\n\t}\n\n\tsavePending(dir, existing);\n}\n\n/**\n * 写入每日运行状态文件，供诊断。\n * 文件路径: {dailyReportsDir}/.last-run-status\n */\nexport function saveLastRunStatus(\n\tdailyReportsDir: string,\n\tstatus: \"success\" | \"failed\",\n\terrorSummary?: string,\n): void {\n\tconst filePath = join(dailyReportsDir, \".last-run-status\");\n\tconst data = {\n\t\tstatus,\n\t\ttimestamp: new Date().toISOString(),\n\t\t...(errorSummary ? { errorSummary } : {}),\n\t};\n\twriteFileSync(filePath, JSON.stringify(data, null, 2), \"utf-8\");\n}\n\n// ── History JSONL ────────────────────────────────────\n\nexport function loadHistory(dir: string, limit: number = 10): HistoryEntry[] {\n\tconst filePath = historyPath(dir);\n\tif (!existsSync(filePath)) return [];\n\n\ttry {\n\t\tconst raw = readFileSync(filePath, \"utf-8\").trim();\n\t\tif (raw.length === 0) return [];\n\n\t\tconst lines = raw.split(\"\\n\");\n\t\tconst tail = lines.slice(-limit);\n\n\t\tconst entries: HistoryEntry[] = [];\n\t\tfor (const line of tail) {\n\t\t\tconst trimmed = line.trim();\n\t\t\tif (trimmed.length === 0) continue;\n\t\t\ttry {\n\t\t\t\tconst entry = JSON.parse(trimmed) as HistoryEntry;\n\t\t\t\t// Migration: 旧格式有 diff 字段而无 instruction\n\t\t\t\tif (!entry.instruction && (entry as unknown as Record<string, unknown>).diff) {\n\t\t\t\t\tentry.instruction = String((entry as unknown as Record<string, unknown>).diff);\n\t\t\t\t\tdelete (entry as unknown as Record<string, unknown>).diff;\n\t\t\t\t}\n\t\t\t\tentries.push(entry);\n\t\t\t} catch {\n\t\t\t\t// 损坏行跳过\n\t\t\t}\n\t\t}\n\t\treturn entries;\n\t} catch {\n\t\treturn [];\n\t}\n}\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780052174528
+        }
+      ]
+    },
+    {
+      "turnIndex": 1,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Now let me review the three files carefully for the 4 must-fix items from round 1, plus any additional robustness issues.\n\n**Must-fix #1: Infinity.toFixed() → formatNum 已添加 Number.isFinite 检查**\n\nLooking at `report-generator.ts`:\n```typescript\nfunction formatNum(n: number): string {\n\tif (!Number.isFinite(n)) return \"N/A\";\n\treturn Number.isInteger(n) ? String(n) : n.toFixed(2);\n}\n```\n\nThis is called in:\n- `buildOverview` for `avgTurnsPerSession`\n- `buildTrends` for `t.previous`, `t.current` — but wait, `t.changePercent.toFixed(1)` is called directly on line 67 without formatNum! Let me check...\n\n```typescript\nreturn trends.map(t => {\n    const sign = t.changePercent >= 0 ? \"+\" : \"\";\n    return `- ${t.field}: ${formatNum(t.previous)} → ${formatNum(t.current)} (${sign}${t.changePercent.toFixed(1)}%)`;\n});\n```\n\n`t.changePercent.toFixed(1)` — if `changePercent` is Infinity or NaN, this will throw. `t.previous` and `t.current` are protected by `formatNum`, but `changePercent` is not.\n\nSimilarly in `buildEffectReview`:\n```typescript\nreturn `- ${r.suggestionTitle}: ${r.targetMetric} ${formatNum(r.before)} → ${formatNum(r.after)} (${sign}${r.changePercent.toFixed(1)}%)`;\n```\n\nSame issue — `r.changePercent.toFixed(1)` without protection.\n\nSo must-fix #1 is partially fixed — `formatNum` itself is safe now, but `changePercent` is still directly calling `.toFixed()` without `Number.isFinite` check.\n\n**Must-fix #2: Lock TOCTOU → 在注释中说明了使用 existsSync+writeFileSync 模式**\n\nLooking at the code:\n```typescript\nfunction acquireLock(lockPath: string): boolean {\n    if (existsSync(lockPath)) {\n        // ... check PID ...\n    }\n    // 创建新锁\n    const data: LockData = { pid: process.pid, timestamp: new Date().toISOString() };\n    writeFileSync(lockPath, JSON.stringify(data, null, 2), \"utf-8\");\n    return true;\n}\n```\n\nThe comment says:\n```\n* 注意：使用 mkdirSync 作为原子操作（POSIX 上 mkdir 是原子的），\n* 避免 existsSync → writeFileSync 之间的 TOCTOU 竞态。\n```\n\nBut the actual implementation still uses `existsSync` → `writeFileSync`, NOT `mkdirSync`! The comment claims to use `mkdirSync` but the code doesn't match. This is a discrepancy between comment and implementation.\n\nWait, let me re-read... The comment says \"使用 mkdirSync 作为原子操作\" but the code uses `writeFileSync`. So either:\n1. The comment was supposed to describe a fix that wasn't actually implemented\n2. The comment is wrong\n\nThis is a bug — the comment promises atomic lock acquisition via `mkdirSync`, but the code uses non-atomic `existsSync → writeFileSync`. Either fix the code to use `mkdirSync` or fix the comment.\n\n**Must-fix #3: 临时文件未清理 → executePipeline 成功后清理 tmpReportPath**\n\nLooking at `executePipeline`:\n```typescript\n// 9. 清理临时原始报告\ntry {\n    unlinkSync(tmpReportPath);\n} catch {\n    // 临时文件清理失败不影响主流程\n}\n```\n\nThis only cleans up on success. If the pipeline throws (e.g., at step 4 judge fails), `tmpReportPath` is left behind. But the catch block in `checkAndRunDailyAnalysis` catches the error and the finally block releases the lock, but doesn't clean up the tmp file.\n\nSo tmp file cleanup only happens on success path, not on failure path. This is still an issue — failed runs accumulate temp files.\n\n**Must-fix #4: mergePending eviction 顺序 → 添加了 console.warn 审计日志**\n\n```typescript\nif (pendingCount > MAX_PENDING_SUGGESTIONS) {\n    const overflow = pendingCount - MAX_PENDING_SUGGESTIONS;\n    let evicted = 0;\n    for (const sug of existing.suggestions) {\n        if (sug.status === \"pending\" && evicted < overflow) {\n            sug.status = \"rejected\";\n            evicted++;\n        }\n    }\n    console.warn(\n        `[evolve] Auto-evicted ${evicted} pending suggestion(s) to maintain capacity cap of ${MAX_PENDING_SUGGESTIONS}`,\n    );\n}\n```\n\nThe eviction logic iterates in array order (oldest first) and marks the first N pending items as \"rejected\". This is FIFO. The console.warn is present. This looks correct.\n\nBut wait — the eviction changes `status` to \"rejected\" but the original status might not have been \"pending\" only — could there be items with other statuses like \"applied\" or \"skipped\"? The filter `s.status === \"pending\"` correctly only targets pending items. Good.\n\n**Additional issues I notice:**\n\n1. In `report-generator.ts`, `buildTrends` line: `t.changePercent.toFixed(1)` — if `changePercent` is Infinity/NaN, this throws. Same for `buildEffectReview` with `r.changePercent.toFixed(1)`.\n\n2. In `daily-trigger.ts`, `acquireLock` comment claims mkdirSync atomicity but code uses writeFileSync — misleading comment.\n\n3. In `daily-trigger.ts`, `executePipeline` tmp file cleanup only on success, not on failure path.\n\n4. In `daily-trigger.ts`, `renameSync` for atomic write — this is correct POSIX behavior.\n\n5. In `state.ts`, `mergePending` — the eviction changes status to \"rejected\" which is fine, but it doesn't log which specific titles were evicted. The console.warn only says count. For audit purposes, knowing which suggestions were auto-rejected would be valuable.\n\nLet me also check: does `buildSuggestions` use `s.title` with potential undefined? Looking at the type `EvolutionSuggestion`... I don't have the types file, but the code accesses `s.severity`, `s.title`, `s.description`, `s.rationale`, `s.targetPath`, `s.instruction` — all with optional chaining via `if (s.description)` etc. This is fine.\n\nLet me also look for the issue with `loadHistory` — it has a duplicate `// ── History JSONL ────────────────────────────────────` section header, and `loadHistory` is defined at the bottom while there are two section headers. This is a code organization issue, not a robustness issue.\n\nLet me also check the `checkAndRunDailyAnalysis` function more carefully:\n\n```typescript\nif (existsSync(reportPath) && statSync(reportPath).size > 0) {\n    return;\n}\n```\n\n`statSync` can throw if the file was deleted between `existsSync` and `statSync`. This is a minor TOCTOU issue but not critical — it would just throw and be caught by the outer try... actually, there's no outer try here in `checkAndRunDailyAnalysis`. Wait:\n\n```typescript\nexport async function checkAndRunDailyAnalysis(dirs: Dirs): Promise<void> {\n    const today = new Date().toISOString().slice(0, 10);\n    const reportPath = join(dirs.dailyReportsDir, `${today}.md`);\n\n    if (existsSync(reportPath) && statSync(reportPath).size > 0) {\n        return;\n    }\n\n    const lockPath = join(dirs.dailyReportsDir, \".daily-report.lock\");\n    if (!acquireLock(lockPath)) {\n        return;\n    }\n\n    try {\n        await executePipeline(dirs, today, reportPath);\n    } catch (err) {\n        const msg = err instanceof Error ? err.message : String(err);\n        console.error(`[evolve] Daily analysis failed: ${msg}`);\n        saveLastRunStatus(dirs.dailyReportsDir, \"failed\", msg);\n    } finally {\n        releaseLock(lockPath);\n    }\n}\n```\n\nThe `statSync` call at the top is outside the try-catch block. If the file is deleted between `existsSync` and `statSync`, the error propagates up uncaught. Since this is fire-and-forget (called from session_start), an unhandled promise rejection would occur.\n\nThis is a robustness issue. Should either:\n1. Wrap `statSync` in try-catch\n2. Or move the check inside the try block\n\nActually, looking more carefully — this function returns a Promise<void> and is fire-and-forget. An unhandled rejection would log but not crash. Still, it's not great.\n\nLet me compile my findings:\n\n**Must-fix issues (round 2):**\n\n1. **`changePercent.toFixed(1)` unprotected** — `report-generator.ts` lines 67 and 86. `t.changePercent` and `r.changePercent` call `.toFixed(1)` directly without `Number.isFinite` check. If changePercent is Infinity/NaN (e.g., division by zero when previous=0), this throws and kills the entire report generation. This is the same class of bug as the original must-fix #1, partially fixed.\n\n2. **`acquireLock` comment contradicts implementation** — Comment claims \"使用 mkdirSync 作为原子操作\" but code uses `existsSync → writeFileSync` which has the exact TOCTOU race the comment claims to avoid. Either the comment is lying or the implementation is wrong. At minimum, the comment needs to accurately describe the implementation's behavior and risk.\n\n**Should-fix issues:**\n\n3. **Temp file not cleaned on failure path** — `executePipeline` only cleans `tmpReportPath` on success (step 9). If steps 2-4 throw (JSON parse error, Judge failure), the tmp file leaks. Failed daily runs accumulate unbounded temp files in `tmpDir`.\n\n4. **`statSync` at top of `checkAndRunDailyAnalysis` is unprotected** — Outside try-catch, TOCTOU race with `existsSync`. If file is deleted between checks, unhandled rejection in fire-and-forget context.\n\nLet me finalize my review. I'll classify the must-fix items strictly:\n\nFor must-fix #1 (changePercent), this is clearly the same class of bug that was supposed to be fixed in round 1. The `formatNum` function was fixed but the callers that bypass it were not.\n\nFor must-fix #2 (lock comment), the fix claim was that \"在注释中说明了使用 existsSync+writeFileSync 模式（非 O_EXCL），风险已知且可接受\". But the comment actually says the OPPOSITE — it claims mkdirSync atomicity. So the fix is incorrect; the comment misrepresents the implementation.\n\nActually wait, let me re-read the comment more carefully:\n\n```\n/**\n * 尝试获取锁文件。\n * - 已有锁但 PID 已死 → 清理 stale lock，获取新锁\n * - 已有锁且 PID 存活 → 返回 false\n * - 无锁文件 → 创建并返回 true\n *\n * 注意：使用 mkdirSync 作为原子操作（POSIX 上 mkdir 是原子的），\n * 避免 existsSync → writeFileSync 之间的 TOCTOU 竞态。\n */\n```\n\nThe comment explicitly says \"使用 mkdirSync 作为原子操作\" but the code uses writeFileSync. This is factually incorrect. The task description says the fix was \"在注释中说明了使用 existsSync+writeFileSync 模式（非 O_EXCL），风险已知且可接受\" — but that's not what the comment says at all.\n\nOK, so my must-fix list:\n\n1. `changePercent.toFixed(1)` — same class of bug as round 1 #1, still present\n2. Lock comment contradicts code — comment claims atomic mkdirSync, code does non-atomic writeFileSync\n\nLet me also think about whether the temp file cleanup on failure is must-fix or should-fix... In a fire-and-forget context, temp file accumulation is a slow resource leak. Not immediately dangerous but degrades over time. I'd call it should-fix rather than must-fix since the tmp directory should be periodically cleaned by other means (like the GC step).\n\nActually, the `runGc` function handles cleanup but only runs AFTER a successful Judge execution. So failed runs before Judge never trigger GC. This means temp files from failed analyzer runs accumulate indefinitely.\n\nLet me keep this as should-fix.\n\nNow let me write the review.",
+            "thinkingSignature": "reasoning_content"
+          },
+          {
+            "type": "text",
+            "text": "现在让我来更仔细地检查具体问题——特别是 `changePercent` 的调用点以及锁的注释与实现。"
+          },
+          {
+            "type": "toolCall",
+            "id": "call_f1aa2c6a0c8b4be08e3d6f10",
+            "name": "bash",
+            "arguments": {
+              "command": "cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src && grep -n 'mkdirSync\\|writeFileSync' daily-trigger.ts | head -20"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 4649,
+          "output": 2760,
+          "cacheRead": 23936,
+          "cacheWrite": 0,
+          "totalTokens": 31345,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780052174528,
+        "responseId": "202605291856145bbc689aa15d45e7"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_f1aa2c6a0c8b4be08e3d6f10",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "13:\twriteFileSync,\n18:\tmkdirSync,\n60: * 注意：使用 mkdirSync 作为原子操作（POSIX 上 mkdir 是原子的），\n61: * 避免 existsSync → writeFileSync 之间的 TOCTOU 竞态。\n87:\twriteFileSync(lockPath, JSON.stringify(data, null, 2), \"utf-8\");\n136:\t\tmkdirSync(dirs.tmpDir, { recursive: true });\n189:\twriteFileSync(tmpReport, markdown, \"utf-8\");\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780052242840
+        }
+      ]
+    },
+    {
+      "turnIndex": 2,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "toolCall",
+            "id": "call_2a928476c73944b1abbef3e1",
+            "name": "bash",
+            "arguments": {
+              "command": "cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src && grep -n 'changePercent\\|\\.toFixed' report-generator.ts"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 2865,
+          "output": 49,
+          "cacheRead": 28544,
+          "cacheWrite": 0,
+          "totalTokens": 31458,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780052242842,
+        "responseId": "202605291857232f1aa3494a504abd"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_2a928476c73944b1abbef3e1",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "79:function buildTrends(trends: Array<{ field: string; previous: number; current: number; changePercent: number }>): string[] {\n85:\t\tconst sign = t.changePercent >= 0 ? \"+\" : \"\";\n86:\t\treturn `- ${t.field}: ${formatNum(t.previous)} → ${formatNum(t.current)} (${sign}${t.changePercent.toFixed(1)}%)`;\n110:\t\tconst sign = r.changePercent >= 0 ? \"+\" : \"\";\n111:\t\treturn `- ${r.suggestionTitle}: ${r.targetMetric} ${formatNum(r.before)} → ${formatNum(r.after)} (${sign}${r.changePercent.toFixed(1)}%)`;\n118:\treturn Number.isInteger(n) ? String(n) : n.toFixed(2);\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780052248136
+        }
+      ]
+    },
+    {
+      "turnIndex": 3,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "toolCall",
+            "id": "call_e6bc8b06b4664402b4cc18cb",
+            "name": "bash",
+            "arguments": {
+              "command": "cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src && grep -n 'statSync\\|existsSync' daily-trigger.ts"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 258,
+          "output": 49,
+          "cacheRead": 31360,
+          "cacheWrite": 0,
+          "totalTokens": 31667,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780052248136,
+        "responseId": "20260529185728fab8ceee5d0744ca"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_e6bc8b06b4664402b4cc18cb",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "12:\texistsSync,\n16:\tstatSync,\n61: * 避免 existsSync → writeFileSync 之间的 TOCTOU 竞态。\n64:\tif (existsSync(lockPath)) {\n105:\t\tif (!existsSync(ANALYZER_SCRIPT)) {\n135:\tif (!existsSync(dirs.tmpDir)) {\n218:\tif (existsSync(reportPath) && statSync(reportPath).size > 0) {\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780052252314
+        }
+      ]
+    },
+    {
+      "turnIndex": 4,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "toolCall",
+            "id": "call_0f10f153fe924a6cacc53a83",
+            "name": "bash",
+            "arguments": {
+              "command": "cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src && sed -n '60,90p' daily-trigger.ts"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 143,
+          "output": 47,
+          "cacheRead": 31616,
+          "cacheWrite": 0,
+          "totalTokens": 31806,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780052252315,
+        "responseId": "202605291857326871a0538ec44f72"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_0f10f153fe924a6cacc53a83",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": " * 注意：使用 mkdirSync 作为原子操作（POSIX 上 mkdir 是原子的），\n * 避免 existsSync → writeFileSync 之间的 TOCTOU 竞态。\n */\nfunction acquireLock(lockPath: string): boolean {\n\tif (existsSync(lockPath)) {\n\t\ttry {\n\t\t\tconst raw = readFileSync(lockPath, \"utf-8\");\n\t\t\tconst lock = JSON.parse(raw) as LockData;\n\n\t\t\t// 检查 PID 是否仍然存活\n\t\t\t// process.kill(pid, 0) 不发送信号，只检查进程存在性\n\t\t\ttry {\n\t\t\t\tprocess.kill(lock.pid, 0);\n\t\t\t\t// PID 仍然存活 → 另一个进程在运行\n\t\t\t\treturn false;\n\t\t\t} catch {\n\t\t\t\t// PID 已死 → stale lock，清理\n\t\t\t\tunlinkSync(lockPath);\n\t\t\t}\n\t\t} catch {\n\t\t\t// 锁文件损坏 → 清理\n\t\t\tunlinkSync(lockPath);\n\t\t}\n\t}\n\n\t// 创建新锁\n\tconst data: LockData = { pid: process.pid, timestamp: new Date().toISOString() };\n\twriteFileSync(lockPath, JSON.stringify(data, null, 2), \"utf-8\");\n\treturn true;\n}\n\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780052255921
+        }
+      ]
+    },
+    {
+      "turnIndex": 5,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Now I have all the information I need. Let me also check whether there's a summarizer that computes changePercent to understand the risk of Infinity/NaN.",
+            "thinkingSignature": "reasoning_content"
+          },
+          {
+            "type": "toolCall",
+            "id": "call_604362bb625d48708feaffc2",
+            "name": "bash",
+            "arguments": {
+              "command": "cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src && grep -n 'changePercent\\|Percent' summarizer.ts | head -20"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 317,
+          "output": 84,
+          "cacheRead": 31744,
+          "cacheWrite": 0,
+          "totalTokens": 32145,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780052255922,
+        "responseId": "20260529185736fbdeb9a6409144ac"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_604362bb625d48708feaffc2",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "291:\t\tconst changePercent = prev === 0\n296:\t\tif (Math.abs(changePercent) >= 10) {\n301:\t\t\t\tchangePercent: Math.round(changePercent * 100) / 100,\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780052261698
+        }
+      ]
+    },
+    {
+      "turnIndex": 6,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "toolCall",
+            "id": "call_f42ded4a720448d9a71a0424",
+            "name": "bash",
+            "arguments": {
+              "command": "cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src && sed -n '288,310p' summarizer.ts"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 196,
+          "output": 48,
+          "cacheRead": 32000,
+          "cacheWrite": 0,
+          "totalTokens": 32244,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780052261699,
+        "responseId": "20260529185741f165f6326d80419c"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_f42ded4a720448d9a71a0424",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "\t\tconst curr = current[key] as number;\n\t\tif (prev === 0 && curr === 0) continue;\n\n\t\tconst changePercent = prev === 0\n\t\t\t? (curr === 0 ? 0 : 100)\n\t\t\t: ((curr - prev) / prev) * 100;\n\n\t\t// 只关注变化超过 10% 的指标\n\t\tif (Math.abs(changePercent) >= 10) {\n\t\t\tdeltas.push({\n\t\t\t\tfield: key,\n\t\t\t\tprevious: prev,\n\t\t\t\tcurrent: curr,\n\t\t\t\tchangePercent: Math.round(changePercent * 100) / 100,\n\t\t\t});\n\t\t}\n\t}\n\n\treturn deltas;\n}\n\n// ── 原始报告压缩 ─────────────────────────────────────\n\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780052266333
+        }
+      ]
+    },
+    {
+      "turnIndex": 7,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Looking at the summarizer: when `prev === 0 && curr !== 0`, `changePercent` is hardcoded to `100`. When `prev !== 0`, it computes `((curr - prev) / prev) * 100`. When both are 0, it `continue`s. So `changePercent` should never be Infinity/NaN from the summarizer.\n\nBut what about `effect-tracker.ts`?",
+            "thinkingSignature": "reasoning_content"
+          },
+          {
+            "type": "toolCall",
+            "id": "call_16098c8c4f374ed08b6902da",
+            "name": "bash",
+            "arguments": {
+              "command": "cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src && grep -n 'changePercent' effect-tracker.ts"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 214,
+          "output": 133,
+          "cacheRead": 32192,
+          "cacheWrite": 0,
+          "totalTokens": 32539,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780052266334,
+        "responseId": "20260529185746c213a328d1584669"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_16098c8c4f374ed08b6902da",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "138:\t\tconst changePercent = before === 0\n148:\t\t\tchangePercent,\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780052273034
+        }
+      ]
+    },
+    {
+      "turnIndex": 8,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "toolCall",
+            "id": "call_d522647fcb3e440b89f56ec3",
+            "name": "bash",
+            "arguments": {
+              "command": "cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src && sed -n '135,155p' effect-tracker.ts"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 177,
+          "output": 48,
+          "cacheRead": 32384,
+          "cacheWrite": 0,
+          "totalTokens": 32609,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780052273035,
+        "responseId": "202605291857530b5f1546ebaf49ee"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_d522647fcb3e440b89f56ec3",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "\t\tif (typeof before !== \"number\" || typeof after !== \"number\") continue;\n\t\tif (before === 0 && after === 0) continue;\n\n\t\tconst changePercent = before === 0\n\t\t\t? 100\n\t\t\t: Math.round(((after - before) / before) * 10000) / 100;\n\n\t\treviews.push({\n\t\t\tsuggestionTitle: entry.title,\n\t\t\tappliedAt: entry.timestamp,\n\t\t\ttargetMetric: field,\n\t\t\tbefore,\n\t\t\tafter,\n\t\t\tchangePercent,\n\t\t});\n\t}\n\n\treturn reviews;\n}\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780052277784
+        }
+      ]
+    },
+    {
+      "turnIndex": 9,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "OK, so both the summarizer and effect-tracker handle the division-by-zero case explicitly. When `prev === 0` (or `before === 0`), they use a hardcoded `100` or `100` respectively. Both skip when both values are 0.\n\nSo in practice, `changePercent` should never be Infinity or NaN from the current producers. However, the `report-generator.ts` is a consumer that doesn't control the data source. The type system says `changePercent: number` which includes Infinity and NaN. If the data comes from a different source in the future (or if there's a bug in the producer), `toFixed()` would throw.\n\nThe question is: is this a must-fix or a should-fix? Given that:\n1. The round 1 must-fix #1 was specifically about `Infinity.toFixed()` \n2. The fix added `formatNum` but left two call sites unprotected\n3. The data producers currently handle zero-division, but the consumer is not defensively coded\n\nI'd say this is a **should-fix** rather than a must-fix, because:\n- The producers already handle the edge case\n- `changePercent` is computed, not user input\n- The type system doesn't prevent Infinity/NaN but the logic guards against it\n\nHowever, it IS the same class of bug that was supposedly fixed in round 1, and the fix was incomplete. So I could argue it's a must-fix as \"incomplete fix of round 1 issue.\"\n\nLet me think about this more carefully. The round 1 must-fix was specifically \"Infinity.toFixed() → formatNum\". The fix added `formatNum` with `Number.isFinite` check. But two call sites (`changePercent.toFixed(1)`) still call `.toFixed()` directly. The fact that the current producers don't produce Infinity is a coincidence of implementation, not a guarantee of the type contract.\n\nI'll classify this as **must-fix** because:\n1. It's the same bug pattern that was identified in round 1\n2. The fix was incomplete — formatNum was added but not applied to all toFixed call sites\n3. Defensive programming at the formatting layer is the right approach\n\nNow let me also assess the lock comment issue. The comment says:\n```\n* 注意：使用 mkdirSync 作为原子操作（POSIX 上 mkdir 是原子的），\n* 避免 existsSync → writeFileSync 之间的 TOCTOU 竞态。\n```\n\nBut the code uses `writeFileSync`, not `mkdirSync`. The comment is factually wrong about what the code does. This is a must-fix because:\n1. The comment misleads future maintainers\n2. The original round 1 fix was supposed to document the risk, but the documentation is wrong\n3. Someone reading the comment would think the lock is atomic when it isn't\n\nLet me write the review now.\n\nActually, let me reconsider. The task says round 1 fix #2 was \"Lock TOCTOU → 在注释中说明了使用 existsSync+writeFileSync 模式（非 O_EXCL），风险已知且可接受\". But the actual comment says the OPPOSITE — it claims mkdirSync atomicity. So the \"fix\" that was applied is incorrect. The comment needs to be corrected to accurately describe the existsSync+writeFileSync pattern and its TOCTOU risk.\n\nNow for the temp file cleanup on failure: the fix only adds cleanup on the success path (step 9). The `executePipeline` function's catch is in `checkAndRunDailyAnalysis`, which doesn't clean up tmpReportPath. So failed runs still leak temp files. But since tmp files have the date in their name (`daily-raw-${today}.json`), at most one per day. Not a critical leak. I'll mark as should-fix.\n\nFor the `statSync` TOCTOU: `existsSync(reportPath) && statSync(reportPath).size > 0` — the statSync is outside any try-catch. If the file is deleted between the two calls, statSync throws, and since this is in an async function that's fire-and-forget, it becomes an unhandled promise rejection. This is a robustness issue but not critical. Should-fix.\n\nLet me write the review document now.\n\nWait, I want to double-check one more thing. In `executePipeline`, the tmp file is cleaned up in step 9:\n```\n// 9. 清理临时原始报告\ntry {\n    unlinkSync(tmpReportPath);\n} catch {\n    // 临时文件清理失败不影响主流程\n}\n```\n\nThis is inside `executePipeline`, after all the main work. If any step 2-8 throws, we jump out of `executePipeline` and into the catch in `checkAndRunDailyAnalysis`. The tmp file is NOT cleaned up there.\n\nThe `checkAndRunDailyAnalysis` catch:\n```\n} catch (err) {\n    const msg = err instanceof Error ? err.message : String(err);\n    console.error(`[evolve] Daily analysis failed: ${msg}`);\n    saveLastRunStatus(dirs.dailyReportsDir, \"failed\", msg);\n} finally {\n    releaseLock(lockPath);\n}\n```\n\nNo tmp cleanup in catch or finally. Confirmed: tmp files leak on failure.\n\nOK, let me write the review now.\n\nMy final assessment:\n\n**Must-fix (2):**\n1. `changePercent.toFixed(1)` in `report-generator.ts` lines 86 and 111 — same bug as round 1 #1, fix was incomplete. `formatNum()` exists but is not used for these two call sites.\n2. `acquireLock` comment falsely claims atomic mkdirSync while code uses non-atomic writeFileSync — the round 1 \"fix\" made the comment worse by adding an incorrect claim.\n\n**Should-fix (2):**\n1. Temp file (`tmpReportPath`) not cleaned on failure path — only step 9 cleans it, but failures at steps 2-8 skip cleanup.\n2. `statSync(reportPath)` in `checkAndRunDailyAnalysis` is outside try-catch — TOCTOU with existsSync, unhandled rejection in fire-and-forget context.\n\n**Verdict: FAIL** — 2 must-fix items remain.",
+            "thinkingSignature": "reasoning_content"
+          },
+          {
+            "type": "text",
+            "text": "现在我明白了。我还需要检查 `effect-tracker` 的输出类型，以确认 `EffectReview.changePercent` 的来源："
+          },
+          {
+            "type": "toolCall",
+            "id": "call_1fb7340da04e468da8778a01",
+            "name": "bash",
+            "arguments": {
+              "command": "cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src && grep -n 'EffectReview' types.ts 2>/dev/null || grep -rn 'EffectReview' types.ts 2>/dev/null || grep -rn 'interface EffectReview' ."
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 219,
+          "output": 1391,
+          "cacheRead": 32512,
+          "cacheWrite": 0,
+          "totalTokens": 34122,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780052277785,
+        "responseId": "202605291857574d706393d0a641fe"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_1fb7340da04e468da8778a01",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "52:export interface EffectReview {\n68:\teffectReview?: EffectReview[];\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780052319177
+        }
+      ]
+    },
+    {
+      "turnIndex": 10,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "toolCall",
+            "id": "call_b3c976fc3202478d9e1d158b",
+            "name": "bash",
+            "arguments": {
+              "command": "cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src && sed -n '52,62p' types.ts"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 1437,
+          "output": 46,
+          "cacheRead": 32704,
+          "cacheWrite": 0,
+          "totalTokens": 34187,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780052319179,
+        "responseId": "20260529185839cf15cc6b61b64cb9"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_b3c976fc3202478d9e1d158b",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "export interface EffectReview {\n\tsuggestionTitle: string;\n\tappliedAt: string;\n\ttargetMetric: string;\n\tbefore: number;\n\tafter: number;\n\tchangePercent: number;\n}\n\n/** 压缩后的信号报告，~5KB，供 Judge 消费 */\nexport interface SignalReport {\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780052326122
+        }
+      ]
+    },
+    {
+      "turnIndex": 11,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "toolCall",
+            "id": "call_320ee140f60a401190ddfede",
+            "name": "bash",
+            "arguments": {
+              "command": "mkdir -p /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/.xyz-harness/2026-05-29-evolve-daily-report/changes/reviews"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 140,
+          "output": 51,
+          "cacheRead": 34112,
+          "cacheWrite": 0,
+          "totalTokens": 34303,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780052326123,
+        "responseId": "20260529185846d9797fdb313e43cf"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_320ee140f60a401190ddfede",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "(no output)"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780052335072
+        }
+      ]
+    },
+    {
+      "turnIndex": 12,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "toolCall",
+            "id": "call_d8f66ee119224b43b27af131",
+            "name": "write",
+            "arguments": {
+              "path": "/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/.xyz-harness/2026-05-29-evolve-daily-report/changes/reviews/robustness_review_v2.md",
+              "content": "---\nverdict: fail\nmust_fix: 2\n---\n\n# Robustness Review v2 — evolve-daily-report\n\n审查范围：验证第 1 轮 4 个 must-fix 的修复质量，并检查是否引入新问题。\n\n## 第 1 轮修复验证\n\n### MF-1: Infinity.toFixed() → formatNum\n\n**修复状态：部分修复，仍有残留**\n\n`formatNum()` 本身已正确添加 `Number.isFinite` 守卫（report-generator.ts:117-118）：\n\n```typescript\nfunction formatNum(n: number): string {\n\tif (!Number.isFinite(n)) return \"N/A\";\n\treturn Number.isInteger(n) ? String(n) : n.toFixed(2);\n}\n```\n\n但以下两处 `.toFixed()` 调用绕过了 `formatNum`：\n\n1. **report-generator.ts:86** — `buildTrends`\n   ```typescript\n   return `- ${t.field}: ${formatNum(t.previous)} → ${formatNum(t.current)} (${sign}${t.changePercent.toFixed(1)}%)`;\n   ```\n   `t.previous` 和 `t.current` 受 formatNum 保护，但 `t.changePercent.toFixed(1)` 直接调用。若 `changePercent` 为 Infinity/NaN（类型签名 `number` 允许），此处抛 TypeError，整个报告生成中断。\n\n2. **report-generator.ts:111** — `buildEffectReview`\n   ```typescript\n   return `- ... ${formatNum(r.before)} → ${formatNum(r.after)} (${sign}${r.changePercent.toFixed(1)}%)`;\n   ```\n   同上，`r.changePercent.toFixed(1)` 未受保护。\n\n**风险分析**：当前 `summarizer.ts:291` 和 `effect-tracker.ts:138` 在生产端显式处理了 `prev === 0` 的除零情况，所以正常运行中 `changePercent` 不会是 Infinity。但防御层应在格式化端而非生产端——类型签名 `number` 不排除 Infinity/NaN，且 report-generator 不控制数据来源。\n\n**结论：must-fix**（round 1 #1 的同一类 bug，修复不完整）\n\n---\n\n### MF-2: Lock TOCTOU\n\n**修复状态：注释与代码矛盾**\n\n注释（daily-trigger.ts:60-61）声称：\n\n```\n* 注意：使用 mkdirSync 作为原子操作（POSIX 上 mkdir 是原子的），\n* 避免 existsSync → writeFileSync 之间的 TOCTOU 竞态。\n```\n\n但实际代码（daily-trigger.ts:87）使用的是 `writeFileSync`，不是 `mkdirSync`：\n\n```typescript\nwriteFileSync(lockPath, JSON.stringify(data, null, 2), \"utf-8\");\n```\n\n第 1 轮修复任务描述是\"在注释中说明使用 existsSync+writeFileSync 模式，风险已知且可接受\"。但实际注释说的是反话——声称使用了原子 mkdirSync，与代码矛盾。\n\n这比没有注释更危险：后续维护者读注释会认为锁是原子的，不会去审查竞态风险。\n\n**结论：must-fix**（注释与实现不一致，误导维护者）\n\n---\n\n### MF-3: 临时文件未清理\n\n**修复状态：成功路径已修复，失败路径未覆盖**\n\n`executePipeline` 步骤 9（daily-trigger.ts:201-204）在成功后清理 `tmpReportPath`：\n\n```typescript\ntry {\n    unlinkSync(tmpReportPath);\n} catch {\n    // 临时文件清理失败不影响主流程\n}\n```\n\n但如果步骤 2-8 抛异常（如 JSON.parse 失败、Judge 超时），控制流跳到 `checkAndRunDailyAnalysis` 的 catch 块（daily-trigger.ts:224-228），该块不清理 tmp 文件。\n\n文件名格式 `daily-raw-${today}.json` 限制了每天最多一个泄漏文件，风险有限。但长期运行（每天失败）会积累。\n\n**结论：should-fix**（非 must-fix，泄漏量有上限且可通过 GC 或手动清理处理）\n\n---\n\n### MF-4: mergePending eviction 顺序\n\n**修复状态：已正确修复**\n\neviction 循环按数组顺序遍历（先入先出），将最早的 `pending` 项改为 `rejected`（state.ts:195-206）。`console.warn` 审计日志包含 evicted 数量。\n\n逻辑正确，顺序语义（FIFO）与数组顺序一致。\n\n**结论：PASS**\n\n---\n\n## 新发现\n\n### SF-1: statSync TOCTOU 在 checkAndRunDailyAnalysis 顶部\n\n**文件**：daily-trigger.ts:218\n**严重度**：should-fix\n\n```typescript\nif (existsSync(reportPath) && statSync(reportPath).size > 0) {\n    return;\n}\n```\n\n`statSync` 在 try-catch 外部。若文件在 `existsSync` 和 `statSync` 之间被删除，`statSync` 抛 ENOENT。由于此函数是 fire-and-forget（`session_start` 调用），抛出的异常变成 unhandled promise rejection。\n\n修复建议：将 statSync 包裹在 try-catch 中，catch 时视为\"文件不存在\"，继续执行。\n\n---\n\n## 汇总\n\n| ID | 类别 | 文件 | 行号 | 状态 |\n|----|------|------|------|------|\n| MF-1 | changePercent.toFixed 未防护 | report-generator.ts | 86, 111 | **must-fix** |\n| MF-2 | Lock 注释与实现矛盾 | daily-trigger.ts | 60-61 vs 87 | **must-fix** |\n| MF-3 | 失败路径 tmp 文件泄漏 | daily-trigger.ts | 201 vs 224-228 | should-fix |\n| MF-4 | mergePending eviction FIFO | state.ts | 195-206 | PASS |\n| SF-1 | statSync TOCTOU 无 catch | daily-trigger.ts | 218 | should-fix |\n\n**Verdict: FAIL** — 2 项 must-fix 未通过（MF-1 修复不完整，MF-2 注释错误）。\n"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 70,
+          "output": 1356,
+          "cacheRead": 34240,
+          "cacheWrite": 0,
+          "totalTokens": 35666,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780052335075,
+        "responseId": "20260529185855a16a4cfb9e8e41cf"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_d8f66ee119224b43b27af131",
+          "toolName": "write",
+          "content": [
+            {
+              "type": "text",
+              "text": "Successfully wrote 3383 bytes to /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/.xyz-harness/2026-05-29-evolve-daily-report/changes/reviews/robustness_review_v2.md"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780052370678
+        }
+      ]
+    },
+    {
+      "turnIndex": 13,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "审查完成，结论：**FAIL**，2 项 must-fix 未通过。\n\n核心发现：\n\n1. **MF-1 修复不完整** — `formatNum()` 本身正确，但 `report-generator.ts:86` 和 `:111` 的 `changePercent.toFixed(1)` 仍直接调用，绕过了守卫。这是 round 1 #1 的同类 bug，两处遗漏。\n\n2. **MF-2 注释与代码矛盾** — 注释声称\"使用 mkdirSync 作为原子操作\"，实际代码用 `writeFileSync`。比没有注释更危险——误导后续维护者认为锁是原子的。\n\n另外 2 项 should-fix（失败路径 tmp 文件泄漏、statSync TOCTOU 无 catch）已记录但不阻塞。"
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5.1",
+        "usage": {
+          "input": 1420,
+          "output": 163,
+          "cacheRead": 34304,
+          "cacheWrite": 0,
+          "totalTokens": 35887,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "stop",
+        "timestamp": 1780052370680,
+        "responseId": "2026052918593035add328f1ca4924"
+      },
+      "toolResults": []
+    }
+  ]
+}
