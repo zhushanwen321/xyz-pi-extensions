@@ -243,7 +243,56 @@ Example output:
 ]`;
 }
 
-// ── TreeCompactor ─────────────────────────────────────
+// ── Pi JSON mode stdout parser ───────────────────────
+
+/**
+ * 从 `pi --mode json` 的 JSONL 输出中提取 assistant message 的文本内容。
+ *
+ * Pi --mode json 输出的是 JSONL 事件流：
+ *   {"type":"session",...}
+ *   {"type":"agent_start"}
+ *   {"type":"turn_start"}
+ *   {"type":"message_start","message":{...}}
+ *   {"type":"message_update","message":{...}}
+ *   {"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"..."}]}}
+ *
+ * 我们需要从最后一个 message_end 或 message_update 中提取 assistant 的文本。
+ */
+function extractAssistantText(stdout: string): string {
+	const lines = stdout.split("\n");
+	let lastAssistantText = "";
+
+	for (const line of lines) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+
+		let parsed: Record<string, unknown>;
+		try {
+			parsed = JSON.parse(trimmed) as Record<string, unknown>;
+		} catch {
+			continue;
+		}
+
+		const type = parsed.type as string | undefined;
+		if (type !== "message_end" && type !== "message_update" && type !== "message_start") continue;
+
+		const message = parsed.message as Record<string, unknown> | undefined;
+		if (!message || message.role !== "assistant") continue;
+
+		const content = message.content;
+		if (typeof content === "string") {
+			lastAssistantText = content;
+		} else if (Array.isArray(content)) {
+			for (const part of content) {
+				if (typeof part === "object" && part !== null && part.type === "text" && typeof part.text === "string") {
+					lastAssistantText = part.text;
+				}
+			}
+		}
+	}
+
+	return lastAssistantText;
+}
 
 export class TreeCompactor {
 	private compressing = false;
@@ -377,10 +426,21 @@ export class TreeCompactor {
 				return;
 			}
 
-			// 记录 LLM 返回的原始内容
-			console.log(`[infinite-context] LLM raw output (first ${MAX_STDOUT_LOG_LENGTH} chars): ${stdout.slice(0, MAX_STDOUT_LOG_LENGTH)}`);
+			// 从 Pi JSONL 事件流中提取 assistant 文本
+			const assistantText = extractAssistantText(stdout);
 
-			const result = validateTreeOutput(stdout.trim(), segments);
+			if (!assistantText) {
+				console.error(`[infinite-context] no assistant text found in pi output (stdout=${stdout.length}B)`);
+				this.handleCompressionFailure(
+					pi, ctx, segments, existingTree,
+					"No assistant text in pi output", retryCount, onComplete, stdout,
+				);
+				return;
+			}
+
+			console.log(`[infinite-context] assistant text (first ${MAX_STDOUT_LOG_LENGTH} chars): ${assistantText.slice(0, MAX_STDOUT_LOG_LENGTH)}`);
+
+			const result = validateTreeOutput(assistantText.trim(), segments);
 
 			if ("reason" in result) {
 				console.error(`[infinite-context] tree validation failed: ${result.reason}`);
