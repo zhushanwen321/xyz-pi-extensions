@@ -1,9 +1,0 @@
-{
-  "segId": "seg_1",
-  "turnRange": {
-    "start": -1,
-    "end": -1
-  },
-  "userMessage": "[CODING WORKFLOW] 需求已记录。\n\n用户的需求如下：\n\n---\n澄清这需求\n---\n\n请根据以上需求，生成一个简短的英文 slug（小写、连字符",
-  "timestamp": 1780033055674
-}

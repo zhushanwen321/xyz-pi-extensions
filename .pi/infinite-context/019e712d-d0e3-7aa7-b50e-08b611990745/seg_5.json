@@ -1,9 +1,0 @@
-{
-  "segId": "seg_5",
-  "turnRange": {
-    "start": -1,
-    "end": -1
-  },
-  "userMessage": "Compact failed (attempt 3/3): Compaction cancelled\n\nPhase advancement was rolled",
-  "timestamp": 1780033055674
-}
