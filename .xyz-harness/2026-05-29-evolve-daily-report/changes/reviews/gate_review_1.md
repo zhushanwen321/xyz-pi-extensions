@@ -9,11 +9,11 @@ must_fix: 0
 
 | 检查项 | 结果 | 说明 |
 |--------|------|------|
-| 正文内容空洞检测 | PASS | 每个需求项（FR-1~FR-5）都有充实的内容，子项（FR-1.1~FR-1.5、FR-2.1~FR-2.3 等）均包含具体实现细节（文件路径、逻辑分支、数据来源），非框架标题填空 |
-| 验收标准可量化性 | PASS | AC-1~AC-11 均可测试：AC-1 检查具体文件路径是否存在，AC-2 验证幂等性，AC-5/AC-6 验证命令行为，AC-8 验证 `.last-run-status` 内容，AC-10 验证 tsc --noEmit 通过 |
-| 具体用户场景 | PASS | Background 描述了从"手动 /evolve"到"被动接收报告"的用户场景转化。FR-3 描述了 `/evolve-report`、`/evolve-report YYYY-MM-DD`、`/evolve-report --list` 三种具体使用场景。FR-4.1 描述了"看完报告后决定执行建议"的交互流程 |
-| 项目针对性 | PASS | 引用了具体模块（monitor.ts、gc.ts、state.ts、summarizer.ts、types.ts），具体数据类型（SignalReport、EvolutionSuggestion、EffectReview、MetricsSnapshot），具体命令（/evolve、/evolve-apply、/evolve-stats、/evolve-rollback）。经 bash 验证，所有引用的源文件在 evolution-engine/src/ 中真实存在，types.ts 中确实包含这些类型定义 |
-| 技术细节具体性 | PASS | 包含具体文件路径（`daily-reports/YYYY-MM-DD.md`、`daily-reports/.daily-report.lock`、`.last-run-status`）、具体数据结构映射（报告章节→数据来源表格）、具体阈值（30 天 GC、30 条容量上限）、具体日期格式（UTC `YYYY-MM-DD`） |
+| 正文内容空洞检测 | PASS | 每个 FR 有 2-5 个子项，每段内容充实。FR-1.2 详细描述了 lock 文件机制（PID + timestamp、stale lock 检测、temp-file-rename）；FR-2.1 包含完整的 Markdown 报告模板；FR-3.1 列出了三种命令变体及其错误处理 |
+| 验收标准可量化性 | PASS | 11 条 AC（AC-1 到 AC-11），每条都可测试。AC-1 验证自动触发、AC-2 验证幂等、AC-8a 验证并发保护、AC-10 验证 tsc --noEmit 通过。无含糊的"提升体验"式描述 |
+| 具体用户场景/业务规则 | PASS | Background 部分描述了明确的用户场景（被动接收模式 vs 当前主动触发模式）。FR-3.1 描述了三种具体使用场景（当天/指定日期/列表查看）。FR-4.2 描述了用户看完报告后走 /evolve-apply 或直接对话两种路径 |
+| 针对特定项目 vs 泛泛而谈 | PASS | 引用了大量项目特有实体，已全部验证存在：`monitor.ts`、`gc.ts`、`state.ts`、`summarizer.ts`、`judge.ts`（均在 evolution-engine/src/）；类型 `MetricsSnapshot`、`SignalReport`、`EvolutionSuggestion`、`EffectReview`（均在 types.ts）；命令 `/evolve`、`/evolve-apply`、`/evolve-stats`、`/evolve-rollback`（均在 commands.ts） |
+| 技术细节具体性 | PASS | 包含具体文件路径（`daily-reports/YYYY-MM-DD.md`、`daily-reports/.daily-report.lock`、`.last-run-status`）、具体阈值（30 天 GC、30 条 pending 上限）、具体机制（PID lock、title 精确匹配去重、temp-file-rename 原子操作） |
 
 ### MUST_FIX 问题
 
@@ -21,4 +21,4 @@ must_fix: 0
 
 ### 总结
 
-spec.md 内容充实、具体，针对 xyz-pi-extensions 项目的 evolution-engine 模块提出了可验证的需求。验收标准可量化，技术细节（文件路径、数据类型、阈值）均有明确指向。经文件系统验证，spec 引用的所有源文件和数据类型在项目中真实存在，排除了编造可能性。未发现伪造信号。
+spec.md 内容充实、具体、且与实际代码库高度吻合。5 个功能需求（FR-1 到 FR-5）各有详细子项，11 条验收标准均可测试，引用的所有类型、文件、命令均在 evolution-engine 扩展中验证存在。未检测到空洞框架、含糊标准或泛泛而谈等伪造信号。deliverable 可信。
