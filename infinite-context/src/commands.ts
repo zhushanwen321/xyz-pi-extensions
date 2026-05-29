@@ -7,7 +7,7 @@ import type { SegmentTracker } from "./segment-tracker";
 import type { TreeCompactor } from "./tree-compactor";
 import type { ContextAssembler } from "./context-handler";
 import { estimateTokens } from "./token-estimator";
-import { compressSync } from "./compression-runner";
+import { compressAsync } from "./compression-runner";
 
 // ── /tree-compact ─────────────────────────────────────
 
@@ -34,8 +34,8 @@ export function registerTreeCompactCommand(
 				return;
 			}
 
-			// 同步压缩（阻塞等待）
-			compressSync(pi, ctx, allSegments, compactor);
+			// 同步建段 + 异步压缩（不阻塞事件循环，working 提示可见）
+			await compressAsync(pi, ctx, allSegments, compactor);
 		},
 	});
 }
