@@ -9,7 +9,7 @@ import { registerTreeCompactCommand, registerContextStatusCommand } from "./comm
 
 const recallTool = new RecallTool();
 
-// Custom message types for tree compression status bubbles
+/** 压缩状态气泡的 customType */
 const IC_COMPACT_START_TYPE = "ic-compact-start";
 const IC_COMPACT_END_TYPE = "ic-compact-end";
 
@@ -41,9 +41,8 @@ function createTurnEndHandler(
 			if (!compactor.isCompressing() && needsCompressionRef.value) {
 				needsCompressionRef.value = false;
 				const segments = tracker.getSegments();
-				ctx.ui.setStatus("ic-compact", `IC compressing ${segments.length} segments...`);
-				pi.sendMessage({ customType: IC_COMPACT_START_TYPE, content: `${segments.length} segments`, display: true });
-				compactor.triggerCompression(pi, ctx, segments, compactor.getTree(), onCompleteFactory(pi, ctx, segments.length));
+				startCompressionUI(pi, ctx, segments.length);
+				compactor.triggerCompression(pi, ctx, segments, compactor.getTree(), onCompleteFactory(pi, ctx));
 			}
 		} catch (err) {
 			console.error("[infinite-context] turn_end error:", err);
@@ -51,29 +50,51 @@ function createTurnEndHandler(
 	};
 }
 
-function onCompleteFactory(pi: ExtensionAPI, ctx: ExtensionContext, _segmentCount: number) {
+/** 启动压缩的 UI 反馈：working spinner + footer status + 气泡消息 */
+function startCompressionUI(pi: ExtensionAPI, ctx: ExtensionContext, segmentCount: number): void {
+	// 1. Working spinner — 模拟 agent 工作状态
+	ctx.ui.setWorkingVisible(true);
+	ctx.ui.setWorkingMessage(`IC Tree Compact: compressing ${segmentCount} segments...`);
+
+	// 2. Footer status bar
+	ctx.ui.setStatus("ic-compact", `IC compressing ${segmentCount} segments...`);
+
+	// 3. 对话流气泡
+	pi.sendMessage({
+		customType: IC_COMPACT_START_TYPE,
+		content: `compressing ${segmentCount} segments...`,
+		display: true,
+	});
+}
+
+/** 清除压缩的 UI 反馈 */
+function clearCompressionUI(ctx: ExtensionContext): void {
+	ctx.ui.setWorkingVisible(false);
+	ctx.ui.setWorkingMessage(undefined);
+	ctx.ui.setStatus("ic-compact", undefined);
+}
+
+function onCompleteFactory(pi: ExtensionAPI, ctx: ExtensionContext) {
 	return (result: CompactResult) => {
-		ctx.ui.setStatus("ic-compact", undefined);
+		// 清除 working spinner + footer
+		clearCompressionUI(ctx);
+
 		if (!ctx.hasUI) return;
 
 		const tree = result.tree;
 		const summary = `${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`;
 
-		if (result.fallbackUsed) {
-			pi.sendMessage({
-				customType: IC_COMPACT_END_TYPE,
-				content: summary,
-				display: true,
-				details: { fallbackUsed: true, errorReason: result.errorReason },
-			});
-		} else {
-			pi.sendMessage({
-				customType: IC_COMPACT_END_TYPE,
-				content: summary,
-				display: true,
-				details: { fallbackUsed: false },
-			});
-		}
+		// 完成气泡
+		pi.sendMessage({
+			customType: IC_COMPACT_END_TYPE,
+			content: summary,
+			display: true,
+			details: {
+				fallbackUsed: result.fallbackUsed,
+				errorReason: result.errorReason,
+				rawOutputPreview: result.rawOutput?.slice(0, 200),
+			},
+		});
 	};
 }
 
@@ -127,28 +148,39 @@ function registerRenderers(pi: ExtensionAPI): void {
 		return new Text(theme.fg("warning", "[IC Recall] ") + theme.fg("dim", content), 0, 0);
 	});
 
-	// 压缩开始气泡
+	// 压缩开始气泡：⏳ IC Tree Compact compressing N segments...
 	pi.registerMessageRenderer(IC_COMPACT_START_TYPE, (message, _options, theme) => {
 		const content = typeof message.content === "string" ? message.content : "";
-		return new Text(theme.fg("warning", "\u23F3 ") + theme.fg("toolTitle", "IC Tree Compact") + theme.fg("dim", ` ${content}`), 0, 0);
+		return new Text(
+			theme.fg("warning", "\u23F3 ") + theme.fg("toolTitle", "IC Tree Compact") + theme.fg("dim", ` ${content}`),
+			0, 0,
+		);
 	});
 
-	// 压缩完成气泡
+	// 压缩完成气泡：✅ 或 ❌
 	pi.registerMessageRenderer(IC_COMPACT_END_TYPE, (message, _options, theme) => {
-		const details = message.details as { fallbackUsed: boolean; errorReason?: string } | undefined;
+		const details = message.details as { fallbackUsed?: boolean; errorReason?: string } | undefined;
 		const content = typeof message.content === "string" ? message.content : "";
+
 		if (details?.fallbackUsed) {
-			return new Text(theme.fg("error", "\u274C ") + theme.fg("toolTitle", "IC Tree Compact") + theme.fg("dim", ` degraded: ${details.errorReason ?? content}`), 0, 0);
+			const reason = details.errorReason ? ` — ${details.errorReason}` : "";
+			return new Text(
+				theme.fg("error", "\u274C ") + theme.fg("toolTitle", "IC Tree Compact") + theme.fg("dim", ` fallback${reason}`) + theme.fg("muted", ` | ${content}`),
+				0, 0,
+			);
 		}
-		return new Text(theme.fg("success", "\u2705 ") + theme.fg("toolTitle", "IC Tree Compact") + theme.fg("dim", ` ${content}`), 0, 0);
+		return new Text(
+			theme.fg("success", "\u2705 ") + theme.fg("toolTitle", "IC Tree Compact") + theme.fg("dim", ` done`) + theme.fg("muted", ` | ${content}`),
+			0, 0,
+		);
 	});
 }
 
 // ── session_before_compact handler ─────────────────────────
 
 /**
- * 段数 >= 3 时由树压缩接管，取消原生 compact
- * 段数 < 3 时放行原生 compact（树压缩无法工作）
+ * 有段时由树压缩接管，取消原生 compact
+ * 无段时放行原生 compact
  */
 function createBeforeCompactHandler(tracker: SegmentTracker) {
 	return () => {
