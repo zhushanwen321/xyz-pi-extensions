@@ -6,7 +6,7 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { SegmentTracker } from "./segment-tracker";
-import type { TreeCompactor, CompactResult } from "./tree-compactor";
+import type { TreeCompactor } from "./tree-compactor";
 import type { ContextAssembler } from "./context-handler";
 import { estimateTokens } from "./token-estimator";
 
@@ -30,11 +30,6 @@ export function registerTreeCompactCommand(
 	pi.registerCommand("tree-compact", {
 		description: "手动触发树压缩（将历史段压缩为摘要树）",
 		handler: async (_args, ctx) => {
-			if (compactor.isCompressing()) {
-				ctx.ui.notify("树压缩正在进行中，请稍候...");
-				return;
-			}
-
 			const segments = tracker.getSegments();
 			if (segments.length < 1) {
 				// 段数为 0，尝试从 session entries 补建
@@ -55,7 +50,8 @@ export function registerTreeCompactCommand(
 			const activeCount = allSegments.filter((s) => !s.completed).length;
 			const totalCount = completedCount + activeCount;
 
-			// 记录压缩前上下文
+			// 同步压缩（复用 index.ts 中的 runCompressionSync）
+			// 但 commands.ts 无法直接引用 index.ts，所以内联同步逻辑
 			const contextUsage = ctx.getContextUsage();
 			const tokensBefore = contextUsage?.tokens ?? null;
 			pi.appendEntry(IC_COMPACT_STATS_TYPE, {
@@ -66,50 +62,43 @@ export function registerTreeCompactCommand(
 				timestamp: Date.now(),
 			});
 
-			// UI: working spinner + footer + 气泡
 			ctx.ui.setWorkingVisible(true);
 			ctx.ui.setWorkingMessage(`IC Tree Compact: compressing ${totalCount} segments...`);
 			ctx.ui.setStatus("ic-compact", `IC compressing ${totalCount} segments...`);
 			const tokenInfo = tokensBefore !== null ? ` (${tokensBefore.toLocaleString()} tokens)` : "";
 			pi.sendMessage({ customType: IC_COMPACT_START_TYPE, content: `compressing ${totalCount} segments${tokenInfo}...`, display: true });
 
-			compactor.triggerCompression(
-				pi,
-				ctx,
-				allSegments,
-				compactor.getTree(),
-				(result: CompactResult) => {
-					// 清除 working spinner + footer
-					ctx.ui.setWorkingVisible(false);
-					ctx.ui.setWorkingMessage(undefined);
-					ctx.ui.setStatus("ic-compact", undefined);
+			// 同步执行压缩（阻塞）
+			const result = compactor.triggerCompression(pi, allSegments, compactor.getTree());
 
-					// 记录压缩后统计
-					const tree = result.tree;
-					pi.appendEntry(IC_COMPACT_STATS_TYPE, {
-						phase: "after",
-						fallbackUsed: result.fallbackUsed,
-						treeGroups: tree.root.children.length,
-						treeDepth: tree.depth,
-						treeTokens: tree.totalTokens,
-						treeId: tree.treeId,
-						errorReason: result.errorReason,
-						retryCount: result.retryCount,
-						timestamp: Date.now(),
-					});
+			// 清除 UI
+			ctx.ui.setWorkingVisible(false);
+			ctx.ui.setWorkingMessage(undefined);
+			ctx.ui.setStatus("ic-compact", undefined);
 
-					if (!ctx.hasUI) return;
+			// 记录压缩后统计
+			const tree = result.tree;
+			pi.appendEntry(IC_COMPACT_STATS_TYPE, {
+				phase: "after",
+				fallbackUsed: result.fallbackUsed,
+				treeGroups: tree.root.children.length,
+				treeDepth: tree.depth,
+				treeTokens: tree.totalTokens,
+				treeId: tree.treeId,
+				errorReason: result.errorReason,
+				retryCount: result.retryCount,
+				timestamp: Date.now(),
+			});
 
-					const summary = `${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`;
-
-					pi.sendMessage({
-						customType: IC_COMPACT_END_TYPE,
-						content: `${summary} | tree: ${tree.totalTokens} tokens`,
-						display: true,
-						details: { fallbackUsed: result.fallbackUsed, errorReason: result.errorReason },
-					});
-				},
-			);
+			if (ctx.hasUI) {
+				const summary = `${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`;
+				pi.sendMessage({
+					customType: IC_COMPACT_END_TYPE,
+					content: `${summary} | tree: ${tree.totalTokens} tokens`,
+					display: true,
+					details: { fallbackUsed: result.fallbackUsed, errorReason: result.errorReason },
+				});
+			}
 		},
 	});
 }
@@ -161,10 +150,6 @@ export function registerContextStatusCommand(
 				lines.push(`创建时间: ${new Date(tree.createdAt).toLocaleString()}`);
 			} else {
 				lines.push("尚未压缩");
-			}
-
-			if (compactor.isCompressing()) {
-				lines.push("状态: 正在压缩中...");
 			}
 			lines.push("");
 
