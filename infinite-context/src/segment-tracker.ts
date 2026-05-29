@@ -144,7 +144,7 @@ export class SegmentTracker {
 		}
 
 		// 从已恢复的段重建去重集合
-		this.syncedKeys = new Set(this.segments.map((s) => s.userMessage));
+		this.syncedKeys = new Set(this.segments.map((s) => s.userMessage.slice(0, IC_CONFIG.dedupKeyLength)));
 	}
 
 	/** 已创建段的去重 key 集合 */
@@ -395,8 +395,8 @@ export class SegmentTracker {
 			});
 			writeFileSync(segFile, JSON.stringify(data, null, 2));
 		} catch (err) {
-			// 文件不存在或解析失败时记录错误但不中断流程
-			console.error("[infinite-context] appendTurnToSegFile error:", err);
+			// 文件不存在或解析失败：通过 entry 保存 fallback turn 数据
+			console.error("[infinite-context] appendTurnToSegFile failed, turn data may be incomplete:", err);
 		}
 	}
 }

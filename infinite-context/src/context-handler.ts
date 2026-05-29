@@ -87,10 +87,6 @@ export class ContextAssembler {
 		// 1. 清除旧注入
 		const filtered = messages.filter((msg) => !isIcSummary(msg) && !isIcRecallPrompt(msg));
 
-		const retentionSegIds = new Set(retentionWindow.map((s) => s.segId));
-		const activeSegment = segments.find((s) => !s.completed);
-		if (activeSegment) retentionSegIds.add(activeSegment.segId);
-
 		if (!tree) {
 			return { messages: filtered, treeContextTokens: this.estimateTreeContext(filtered), compressedNodeCount: 0 };
 		}
@@ -144,7 +140,10 @@ export class ContextAssembler {
 		let accumulated = 0;
 		let cutoffIndex = messages.length;
 		for (let i = messages.length - 1; i >= 0; i--) {
-			const text = typeof messages[i].content === "string" ? messages[i].content as string : "";
+			const raw = messages[i].content;
+			const text = typeof raw === "string" ? raw
+				: Array.isArray(raw) ? raw.map((p: unknown) => (typeof p === "object" && p !== null && "text" in (p as Record<string, unknown>)) ? String((p as Record<string, unknown>).text) : "").join("")
+				: "";
 			accumulated += estimateTokens(text);
 			if (accumulated > budget) {
 				cutoffIndex = i + 1;
