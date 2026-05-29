@@ -10,9 +10,12 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, CustomEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
 import type { Segment, TreeNode, CompactTree } from "./types";
 import { RETENTION_CONFIG } from "./types";
+import { estimateTokens } from "./token-estimator";
 
 // ── 常量 ──────────────────────────────────────────────
 
@@ -49,17 +52,32 @@ function firstSentence(text: string): string {
 	return text.slice(0, idx).trim();
 }
 
+/** 计算节点的 tokenCount（chars/4，模拟注入上下文时的实际格式） */
+function computeNodeTokens(nodeId: string, summary: string): number {
+	return estimateTokens(`[${nodeId}] ${summary}`);
+}
+
+/** 递归重算整棵树的 tokenCount，返回整棵树的总 tokens */
+function recomputeTreeTokens(node: TreeNode): number {
+	node.tokenCount = computeNodeTokens(node.nodeId, node.summary);
+	let sum = node.tokenCount;
+	for (const child of node.children) {
+		sum += recomputeTreeTokens(child);
+	}
+	return sum;
+}
+
 /** 计算树的深度 */
 function treeDepth(node: TreeNode): number {
 	if (node.children.length === 0) return 1;
 	return 1 + Math.max(...node.children.map(treeDepth));
 }
 
-/** 计算树的总 token 数 */
-function treeTotalTokens(node: TreeNode): number {
+/** 计算树的总 token 数（递归求和已有 tokenCount） */
+function sumTreeTokens(node: TreeNode): number {
 	let sum = node.tokenCount;
 	for (const child of node.children) {
-		sum += treeTotalTokens(child);
+		sum += sumTreeTokens(child);
 	}
 	return sum;
 }
@@ -97,7 +115,7 @@ export function validateTreeOutput(
 	const validSegIds = new Set(segments.map((s) => s.segId));
 	const seenNodeIds = new Set<string>();
 
-	// 3. 递归校验
+	// 3. 递归校验（tokenCount 可选，校验后由 recomputeTreeTokens 统一填充）
 	function validateNode(node: unknown): TreeNode | ValidateError {
 		if (typeof node !== "object" || node === null) {
 			return { reason: "Each node must be an object" };
@@ -111,9 +129,6 @@ export function validateTreeOutput(
 		}
 		if (typeof n.summary !== "string" || n.summary.length === 0) {
 			return { reason: `Node ${String(n.nodeId)}: summary must be non-empty` };
-		}
-		if (typeof n.tokenCount !== "number") {
-			return { reason: `Node ${String(n.nodeId)}: tokenCount must be a number` };
 		}
 		if (!Array.isArray(n.children)) {
 			return { reason: `Node ${String(n.nodeId)}: children must be an array` };
@@ -146,7 +161,7 @@ export function validateTreeOutput(
 		return {
 			nodeId: n.nodeId as string,
 			summary: n.summary as string,
-			tokenCount: n.tokenCount as number,
+			tokenCount: 0, // 占位，后续由 recomputeTreeTokens 用 chars/4 统一填充
 			children: validatedChildren,
 			...(n.segId !== undefined ? { segId: n.segId as string } : {}),
 		};
@@ -159,6 +174,12 @@ export function validateTreeOutput(
 		validatedRoot.push(result);
 	}
 
+	// 校验通过后，用 chars/4 统一重算所有节点的 tokenCount
+	// （LLM 输出的 tokenCount 不可靠，由我们自行计算摘要文本的实际 token 开销）
+	for (const node of validatedRoot) {
+		recomputeTreeTokens(node);
+	}
+
 	return validatedRoot;
 }
 
@@ -166,47 +187,187 @@ export function validateTreeOutput(
 
 /**
  * 降级压缩：所有历史段为独立 leaf 节点
+ * tokenCount 用 chars/4 计算摘要文本的实际 token 开销
  */
 export function ruleBasedFallback(segments: readonly Segment[]): CompactTree {
-	const children: TreeNode[] = segments.map((seg) => ({
-		nodeId: `node_${seg.segId}`,
-		summary: firstSentence(seg.userMessage),
-		tokenCount: 0,
-		children: [],
-		segId: seg.segId,
-	}));
+	const children: TreeNode[] = segments.map((seg) => {
+		const summary = firstSentence(seg.userMessage);
+		return {
+			nodeId: `node_${seg.segId}`,
+			summary,
+			tokenCount: computeNodeTokens(`node_${seg.segId}`, summary),
+			children: [] as TreeNode[],
+			segId: seg.segId,
+		};
+	});
 
-	const totalTokens = children.length; // 每个 leaf 至少 1 token
-
+	const rootSummary = `Fallback compression of ${segments.length} segments`;
 	const root: TreeNode = {
 		nodeId: "root",
-		summary: `Fallback compression of ${segments.length} segments`,
-		tokenCount: 0,
+		summary: rootSummary,
+		tokenCount: computeNodeTokens("root", rootSummary),
 		children,
 	};
 
 	return {
 		treeId: `tree_${Date.now()}`,
 		root,
-		totalTokens,
+		totalTokens: sumTreeTokens(root),
 		createdAt: Date.now(),
 		depth: treeDepth(root),
 	};
+}
+
+// ── Segment Digest（从段文件提取丰富摘要） ──────────
+
+/** 段摘要的截断阈值 */
+const ASSISTANT_TEXT_MAX = 300;
+/** 每个 segment 的 assistant text 条数上限 */
+const ASSISTANT_SUMMARY_LIMIT = 5;
+
+/** 段丰富摘要，用于压缩 prompt */
+interface SegmentDigest {
+	segId: string;
+	userMessage: string;
+	assistantSummaries: string[];
+	toolNames: string[];
+	/** API 返回的 input tokens 之和（用于信息展示，不参与 tokenCount 计算） */
+	apiInputTokens: number;
+}
+
+/**
+ * 从段文件提取丰富摘要信息。
+ *
+ * 包含：
+ * - 完整 userMessage
+ * - 每个 assistant turn 的 text 回复摘要（截断）
+ * - 工具调用名称列表
+ * - API 返回的 input tokens 总和
+ *
+ * 不包含：完整的 thinking、tool 调用参数、tool result 全文
+ * （这些信息量太大，压缩 prompt 应保持精简）
+ */
+function buildSegmentDigests(
+	segments: readonly Segment[],
+	ctxCwd: string,
+): SegmentDigest[] {
+	return segments.map((seg) => {
+		const digest: SegmentDigest = {
+			segId: seg.segId,
+			userMessage: seg.userMessage,
+			assistantSummaries: [],
+			toolNames: [],
+			apiInputTokens: 0,
+		};
+
+		// 尝试读取段文件获取丰富信息
+		const segFilePath = join(ctxCwd, ".pi", seg.filePath);
+		if (!existsSync(segFilePath)) {
+			// 文件不存在时降级：只使用 userMessage
+			return digest;
+		}
+
+		try {
+			const raw = readFileSync(segFilePath, "utf-8");
+			const data = JSON.parse(raw) as {
+				turns?: Array<{
+					message?: {
+						role?: string;
+						content?: unknown[];
+						usage?: { input?: number; output?: number };
+					};
+					toolResults?: Array<{ toolName?: string }>;
+				}>;
+			};
+
+			for (const turn of data.turns ?? []) {
+				const msg = turn.message;
+				if (!msg || msg.role !== "assistant") continue;
+
+				// 累加 API 返回的 input tokens
+				if (msg.usage?.input) {
+					digest.apiInputTokens += msg.usage.input;
+				}
+
+				const content = Array.isArray(msg.content) ? msg.content : [];
+				for (const part of content) {
+					const p = part as Record<string, unknown>;
+
+					// 提取 text 回复（截断）
+					if (p.type === "text" && typeof p.text === "string" && p.text.length > 0) {
+						if (digest.assistantSummaries.length < ASSISTANT_SUMMARY_LIMIT) {
+							digest.assistantSummaries.push(
+								truncate(p.text, ASSISTANT_TEXT_MAX),
+							);
+						}
+					}
+
+					// 提取工具调用名称
+					if (p.type === "toolCall" && typeof p.name === "string") {
+						digest.toolNames.push(p.name);
+					}
+				}
+			}
+		} catch {
+			// 文件读取或解析失败，降级为空摘要
+		}
+
+		return digest;
+	});
+}
+
+/** 截断文本并添加省略标记 */
+function truncate(text: string, maxLen: number): string {
+	if (text.length <= maxLen) return text;
+	return text.slice(0, maxLen) + "...";
 }
 
 // ── buildCompressionPrompt ────────────────────────────
 
 /**
  * 构建发送给 Pi 子进程的 prompt
+ *
+ * 给 LLM 每个段的丰富摘要信息：
+ * - 完整 userMessage
+ * - assistant text 回复摘要
+ * - 工具调用名称
+ * - API 返回的 input tokens
+ *
+ * 不要求 LLM 输出 tokenCount（由校验后 recomputeTreeTokens 用 chars/4 统一计算）
  */
 function buildCompressionPrompt(
 	segments: readonly Segment[],
 	existingTree: CompactTree | undefined,
 	previousError?: string,
+	ctxCwd?: string,
 ): string {
-	const segSummaries = segments.map((seg) =>
-		`- ${seg.segId}: ${firstSentence(seg.userMessage)}`,
-	).join("\n");
+	// 构建段摘要
+	const digests = ctxCwd
+		? buildSegmentDigests(segments, ctxCwd)
+		: segments.map((seg) => ({
+			segId: seg.segId,
+			userMessage: seg.userMessage,
+			assistantSummaries: [] as string[],
+			toolNames: [] as string[],
+			apiInputTokens: 0,
+		}));
+
+	const segLines = digests.map((d) => {
+		const parts: string[] = [];
+		parts.push(`- ${d.segId}:`);
+		parts.push(`  user: ${truncate(d.userMessage, 200)}`);
+		if (d.assistantSummaries.length > 0) {
+			parts.push(`  assistant: ${d.assistantSummaries.join(" | ")}`);
+		}
+		if (d.toolNames.length > 0) {
+			const unique = [...new Set(d.toolNames)];
+			parts.push(`  tools: ${unique.join(", ")}`);
+		}
+		if (d.apiInputTokens > 0) {
+			parts.push(`  context: ~${d.apiInputTokens.toLocaleString()} tokens consumed`);
+		}
+		return parts.join("\n");
+	}).join("\n\n");
 
 	const existingContext = existingTree
 		? `\nExisting tree summary: ${existingTree.root.summary} (${existingTree.root.children.length} groups)\n`
@@ -219,16 +380,16 @@ function buildCompressionPrompt(
 	return `You are a context compression engine. Given the following conversation segment summaries, produce a tree-structured compression.
 
 Segments:
-${segSummaries}
+${segLines}
 ${existingContext}${errorContext}
 Output a JSON array of tree nodes. Each node has:
 - nodeId: string (unique, e.g. "group_1" or "node_seg_0")
-- summary: string (concise summary of the grouped content)
-- tokenCount: number (estimated tokens for this node)
+- summary: string (concise summary of what happened in this group/segment, based on the user message, assistant replies, and tools used)
 - children: array of child nodes (empty for leaf nodes)
 - segId: string (only for leaf nodes, must match one of the segment IDs above)
 
 Group related segments under parent nodes. Each segment must appear exactly once as a leaf.
+The summary should capture the key decisions, actions, and outcomes — not just repeat the user message.
 
 Output ONLY the JSON array, no other text.
 
@@ -236,11 +397,10 @@ Example output:
 [
   {
     "nodeId": "group_1",
-    "summary": "User discussed feature design and implementation",
-    "tokenCount": 50,
+    "summary": "User discussed feature design and implementation: Vue 3 + TS setup, ESLint config, auth module",
     "children": [
-      { "nodeId": "node_seg_0", "summary": "Feature design discussion", "tokenCount": 30, "children": [], "segId": "seg_0" },
-      { "nodeId": "node_seg_1", "summary": "Implementation planning", "tokenCount": 20, "children": [], "segId": "seg_1" }
+      { "nodeId": "node_seg_0", "summary": "Project initialization: Vue 3 + TypeScript, added ESLint/Prettier config", "children": [], "segId": "seg_0" },
+      { "nodeId": "node_seg_1", "summary": "Auth module design: JWT refresh token flow, interceptor setup", "children": [], "segId": "seg_1" }
     ]
   }
 ]`;
@@ -252,6 +412,8 @@ export class TreeCompactor {
 	private compressing = false;
 	private tree: CompactTree | undefined;
 	private currentProcess: ChildProcess | undefined;
+	/** 当前压缩任务的工作目录（用于读取段文件） */
+	private ctxCwd = "";
 
 	/**
 	 * 触发树压缩（fire-and-forget + 回调模式）
@@ -271,6 +433,7 @@ export class TreeCompactor {
 		// 1. 守卫：已在压缩中
 		if (this.compressing) return;
 		this.compressing = true;
+		this.ctxCwd = ctx.cwd;
 
 		// 2. 过滤 retention window：最近 maxSegments 个已完成段 + 当前活跃段
 		const completedSegments = segments.filter((s) => s.completed);
@@ -368,7 +531,7 @@ export class TreeCompactor {
 		retryCount: number,
 		onComplete?: (result: CompactResult) => void,
 	): void {
-		const prompt = buildCompressionPrompt(segments, existingTree);
+		const prompt = buildCompressionPrompt(segments, existingTree, undefined, this.ctxCwd);
 		const sessionId = ctx.sessionManager.getSessionId();
 
 		// spawn Pi 子进程
@@ -428,18 +591,19 @@ export class TreeCompactor {
 				return;
 			}
 
-			// 校验通过 → 构建树
+			// 校验通过 → 构建树（tokenCount 已由 validateTreeOutput 中的 recomputeTreeTokens 用 chars/4 填充）
+			const rootSummary = `Compressed ${segments.length} segments (session ${sessionId})`;
 			const root: TreeNode = {
 				nodeId: "root",
-				summary: `Compressed ${segments.length} segments (session ${sessionId})`,
-				tokenCount: 0,
+				summary: rootSummary,
+				tokenCount: computeNodeTokens("root", rootSummary),
 				children: result,
 			};
 
 			const tree: CompactTree = {
 				treeId: `tree_${Date.now()}`,
 				root,
-				totalTokens: treeTotalTokens(root),
+				totalTokens: sumTreeTokens(root),
 				createdAt: Date.now(),
 				depth: treeDepth(root),
 			};
@@ -484,7 +648,7 @@ export class TreeCompactor {
 		// 尝试重试（最多 MAX_RETRY_COUNT 次）
 		if (retryCount < MAX_RETRY_COUNT) {
 			// 重试时附带错误信息
-			const prompt = buildCompressionPrompt(segments, this.tree, errorReason);
+			const prompt = buildCompressionPrompt(segments, this.tree, errorReason, this.ctxCwd);
 			const child = spawn("pi", ["--mode", "json", "-p", prompt], {
 				stdio: ["ignore", "pipe", "pipe"],
 				detached: false,
@@ -521,18 +685,19 @@ export class TreeCompactor {
 					return;
 				}
 
-				// 重试成功
+				// 重试成功（tokenCount 已由 validateTreeOutput 中的 recomputeTreeTokens 用 chars/4 填充）
+				const rootSummary = `Compressed ${segments.length} segments`;
 				const root: TreeNode = {
 					nodeId: "root",
-					summary: `Compressed ${segments.length} segments`,
-					tokenCount: 0,
+					summary: rootSummary,
+					tokenCount: computeNodeTokens("root", rootSummary),
 					children: result,
 				};
 
 				const tree: CompactTree = {
 					treeId: `tree_${Date.now()}`,
 					root,
-					totalTokens: treeTotalTokens(root),
+					totalTokens: sumTreeTokens(root),
 					createdAt: Date.now(),
 					depth: treeDepth(root),
 				};
