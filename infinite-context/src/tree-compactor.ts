@@ -1,31 +1,22 @@
 /**
  * 树压缩引擎（TreeCompactor）
  *
- * 职责：
- * - 将历史段压缩为树结构摘要（通过 Pi 子进程调用 LLM）
- * - 校验 LLM 输出的树结构
- * - 降级：rule-based fallback（所有段为独立 leaf）
- * - 持久化压缩树到 session entries
- * - 从 session entries 恢复压缩树
+ * 提供 async（不阻塞事件循环）和 sync（阻塞等待）两种模式。
+ * - async 模式：用于 turn_end 自动触发（fire-and-forget）
+ * - sync 模式：用于 /tree-compact 命令（用户期待等待完成）
  *
- * 压缩是同步的：调用 triggerCompression 会阻塞直到完成。
+ * 核心逻辑 shared，只在 spawn/child_process 调用方式上区分。
  */
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { ExtensionAPI, CustomEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
 import type { Segment, TreeNode, CompactTree } from "./types";
-
-// ── 常量 ──────────────────────────────────────────────
+import { IC_CONFIG } from "./types";
 
 const COMPACT_TREE_ENTRY_TYPE = "ic-compact-tree";
-const COMPRESSION_TIMEOUT_MS = 60_000;
-const MAX_RETRY_COUNT = 1;
-const MAX_STDERR_LOG_LENGTH = 500;
-const MAX_STDOUT_LOG_LENGTH = 1000;
 
 // ── 类型 ──────────────────────────────────────────────
 
-/** 压缩结果 */
 export interface CompactResult {
 	tree: CompactTree;
 	fallbackUsed: boolean;
@@ -34,7 +25,6 @@ export interface CompactResult {
 	rawOutput?: string;
 }
 
-/** 校验错误 */
 interface ValidateError {
 	reason: string;
 }
@@ -90,9 +80,7 @@ export function validateTreeOutput(
 		if (typeof node !== "object" || node === null) {
 			return { reason: "Each node must be an object" };
 		}
-
 		const n = node as Record<string, unknown>;
-
 		if (typeof n.nodeId !== "string" || n.nodeId.length === 0) {
 			return { reason: "Each node must have a non-empty string nodeId" };
 		}
@@ -105,12 +93,10 @@ export function validateTreeOutput(
 		if (!Array.isArray(n.children)) {
 			return { reason: `Node ${String(n.nodeId)}: children must be an array` };
 		}
-
 		if (seenNodeIds.has(n.nodeId as string)) {
 			return { reason: `Duplicate nodeId: ${n.nodeId}` };
 		}
 		seenNodeIds.add(n.nodeId as string);
-
 		if (n.segId !== undefined) {
 			if (typeof n.segId !== "string") {
 				return { reason: `Node ${String(n.nodeId)}: segId must be a string` };
@@ -119,14 +105,12 @@ export function validateTreeOutput(
 				return { reason: `Node ${String(n.nodeId)} references unknown segId: ${n.segId}` };
 			}
 		}
-
 		const validatedChildren: TreeNode[] = [];
 		for (const child of n.children as unknown[]) {
 			const result = validateNode(child);
 			if ("reason" in result) return result;
 			validatedChildren.push(result);
 		}
-
 		return {
 			nodeId: n.nodeId as string,
 			summary: n.summary as string,
@@ -142,7 +126,6 @@ export function validateTreeOutput(
 		if ("reason" in result) return result;
 		validatedRoot.push(result);
 	}
-
 	return validatedRoot;
 }
 
@@ -156,16 +139,13 @@ export function ruleBasedFallback(segments: readonly Segment[]): CompactTree {
 		children: [],
 		segId: seg.segId,
 	}));
-
 	const totalTokens = children.length;
-
 	const root: TreeNode = {
 		nodeId: "root",
 		summary: `Fallback compression of ${segments.length} segments`,
 		tokenCount: 0,
 		children,
 	};
-
 	return {
 		treeId: `tree_${Date.now()}`,
 		root,
@@ -185,15 +165,12 @@ function buildCompressionPrompt(
 	const segSummaries = segments.map((seg) =>
 		`- ${seg.segId}: ${firstSentence(seg.userMessage)}`,
 	).join("\n");
-
 	const existingContext = existingTree
 		? `\nExisting tree summary: ${existingTree.root.summary} (${existingTree.root.children.length} groups)\n`
 		: "";
-
 	const errorContext = previousError
 		? `\nIMPORTANT: Previous attempt failed with error: ${previousError}\nPlease fix the issue and output valid JSON.\n`
 		: "";
-
 	return `You are a context compression engine. Given the following conversation segment summaries, produce a tree-structured compression.
 
 Segments:
@@ -226,9 +203,9 @@ Example output:
 
 // ── Pi JSON mode stdout parser ───────────────────────
 
-function extractAssistantText(stdout: string): string {
+function extractAssistantText(stdout: string): string | undefined {
 	const lines = stdout.split("\n");
-	let lastAssistantText = "";
+	let lastAssistantText: string | undefined;
 
 	for (const line of lines) {
 		const trimmed = line.trim();
@@ -262,52 +239,35 @@ function extractAssistantText(stdout: string): string {
 	return lastAssistantText;
 }
 
-// ── 同步执行单次压缩 ────────────────────────────────
-
-/** 同步 spawn pi 子进程，提取 assistant 文本，返回结果 */
-function runSyncCompression(
+function makeTree(
+	validated: TreeNode[],
 	segments: readonly Segment[],
-	existingTree: CompactTree | undefined,
-	previousError?: string,
-): { assistantText: string; rawStdout: string } | { error: string; rawStdout: string } {
-	const prompt = buildCompressionPrompt(segments, existingTree, previousError);
+): CompactTree {
+	const root: TreeNode = {
+		nodeId: "root",
+		summary: `Compressed ${segments.length} segments`,
+		tokenCount: 0,
+		children: validated,
+	};
+	return {
+		treeId: `tree_${Date.now()}`,
+		root,
+		totalTokens: treeTotalTokens(root),
+		createdAt: Date.now(),
+		depth: treeDepth(root),
+	};
+}
 
-	console.log(`[infinite-context] spawning pi subprocess (sync, ${segments.length} segments)`);
-
-	const result = spawnSync("pi", ["--mode", "json", "-p", prompt], {
-		stdio: ["ignore", "pipe", "pipe"],
-		timeout: COMPRESSION_TIMEOUT_MS,
-		encoding: "utf-8",
-	});
-
-	if (result.error) {
-		const msg = `Spawn error: ${result.error.message}`;
-		console.error(`[infinite-context] ${msg}`);
-		return { error: msg, rawStdout: "" };
-	}
-
-	if (result.status !== 0) {
-		const stderr = (result.stderr ?? "").slice(0, MAX_STDERR_LOG_LENGTH);
-		const msg = result.signal === "SIGTERM"
-			? "Compression timed out"
-			: `Process exited with code ${result.status}`;
-		console.error(`[infinite-context] pi subprocess failed: ${msg}`);
-		if (stderr) console.error(`[infinite-context] stderr: ${stderr}`);
-		return { error: msg, rawStdout: result.stdout ?? "" };
-	}
-
-	const stdout = result.stdout ?? "";
-	console.log(`[infinite-context] pi subprocess done (${stdout.length}B)`);
-
-	const assistantText = extractAssistantText(stdout);
-	if (!assistantText) {
-		console.error(`[infinite-context] no assistant text in pi output`);
-		return { error: "No assistant text in pi output", rawStdout: stdout };
-	}
-
-	console.log(`[infinite-context] assistant text (first ${MAX_STDOUT_LOG_LENGTH} chars): ${assistantText.slice(0, MAX_STDOUT_LOG_LENGTH)}`);
-
-	return { assistantText, rawStdout: stdout };
+function applyFallback(
+	pi: ExtensionAPI,
+	segments: readonly Segment[],
+	retryCount: number,
+	errorReason?: string,
+	rawOutput?: string,
+): CompactResult {
+	const tree = ruleBasedFallback(segments);
+	pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
+	return { tree, fallbackUsed: true, retryCount, errorReason, rawOutput };
 }
 
 // ── TreeCompactor ─────────────────────────────────────
@@ -316,74 +276,30 @@ export class TreeCompactor {
 	private tree: CompactTree | undefined;
 
 	/**
-	 * 同步触发树压缩
-	 *
-	 * 调用会阻塞直到压缩完成（或超时/失败后降级）。
-	 * 返回压缩结果。持久化到 session entries。
+	 * 异步压缩（不阻塞事件循环）
+	 * 用于 turn_end 自动触发。返回 Promise，完成时自动更新内部 tree 状态。
 	 */
-	triggerCompression(
+	async triggerCompressionAsync(
+		pi: ExtensionAPI,
+		segments: readonly Segment[],
+		existingTree: CompactTree | undefined,
+		onUpdate?: (result: CompactResult) => void,
+	): Promise<CompactResult> {
+		const result = await this.runAsyncCompression(pi, segments, existingTree);
+		onUpdate?.(result);
+		return result;
+	}
+
+	/**
+	 * 同步压缩（阻塞等待）
+	 * 用于 /tree-compact 命令
+	 */
+	triggerCompressionSync(
 		pi: ExtensionAPI,
 		segments: readonly Segment[],
 		existingTree: CompactTree | undefined,
 	): CompactResult {
-		if (segments.length === 0) {
-			return this.applyFallback(pi, segments, 0);
-		}
-
-		const sessionId = "sync"; // 不再需要 ctx
-		let lastError: string | undefined;
-		let rawStdout = "";
-
-		for (let attempt = 0; attempt <= MAX_RETRY_COUNT; attempt++) {
-			const output = runSyncCompression(segments, existingTree, lastError);
-
-			if ("error" in output) {
-				lastError = output.error;
-				rawStdout = output.rawStdout;
-				continue;
-			}
-
-			const validated = validateTreeOutput(output.assistantText.trim(), segments);
-
-			if ("reason" in validated) {
-				console.error(`[infinite-context] tree validation failed: ${validated.reason}`);
-				lastError = validated.reason;
-				rawStdout = output.rawStdout;
-				continue;
-			}
-
-			// 成功
-			const root: TreeNode = {
-				nodeId: "root",
-				summary: `Compressed ${segments.length} segments (${sessionId})`,
-				tokenCount: 0,
-				children: validated,
-			};
-
-			const tree: CompactTree = {
-				treeId: `tree_${Date.now()}`,
-				root,
-				totalTokens: treeTotalTokens(root),
-				createdAt: Date.now(),
-				depth: treeDepth(root),
-			};
-
-			this.tree = tree;
-			pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
-
-			console.log(`[infinite-context] tree compression succeeded: ${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`);
-
-			return {
-				tree,
-				fallbackUsed: false,
-				retryCount: attempt,
-				rawOutput: rawStdout.slice(0, MAX_STDOUT_LOG_LENGTH),
-			};
-		}
-
-		// 所有尝试失败 → 降级
-		console.error(`[infinite-context] all compression attempts failed, using fallback: ${lastError}`);
-		return this.applyFallback(pi, segments, MAX_RETRY_COUNT, lastError, rawStdout);
+		return this.runSyncCompression(pi, segments, existingTree);
 	}
 
 	getTree(): CompactTree | undefined {
@@ -401,23 +317,201 @@ export class TreeCompactor {
 		}
 	}
 
-	private applyFallback(
+	// ── Async implementation ──────────────────────────
+
+	private async runAsyncCompression(
 		pi: ExtensionAPI,
 		segments: readonly Segment[],
-		retryCount: number,
-		errorReason?: string,
-		rawOutput?: string,
-	): CompactResult {
-		const tree = ruleBasedFallback(segments);
-		this.tree = tree;
-		pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
+		existingTree: CompactTree | undefined,
+	): Promise<CompactResult> {
+		if (segments.length === 0) {
+			return applyFallback(pi, segments, 0);
+		}
 
-		return {
-			tree,
-			fallbackUsed: true,
-			retryCount,
-			errorReason,
-			rawOutput,
-		};
+		for (let attempt = 0; attempt <= IC_CONFIG.maxRetryCount; attempt++) {
+			const prompt = buildCompressionPrompt(segments, existingTree, undefined);
+			console.log(`[infinite-context] async spawn (attempt ${attempt}, ${segments.length} segments)`);
+
+			const result = await this.asyncSpawnPi(prompt);
+			const validated = this.processSpawnResult(result, segments, attempt);
+
+			if (validated) {
+				const tree = makeTree(validated, segments);
+				this.tree = tree;
+				pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
+				console.log(`[infinite-context] tree compression succeeded: ${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`);
+				return { tree, fallbackUsed: false, retryCount: attempt, rawOutput: result.stdout.slice(0, IC_CONFIG.maxStdoutLogLength) };
+			}
+
+			// 失败，继续重试
+			console.error(`[infinite-context] async compression failed (attempt ${attempt}): ${result.errorReason}`);
+		}
+
+		console.error(`[infinite-context] async compression all attempts failed`);
+		return applyFallback(pi, segments, IC_CONFIG.maxRetryCount, "All attempts failed");
+	}
+
+	private async asyncSpawnPi(prompt: string): Promise<{ stdout: string; stderr: string; errorReason?: string }> {
+		return new Promise((resolve) => {
+			const child = spawn("pi", ["--mode", "json", "-p", prompt], {
+				stdio: ["ignore", "pipe", "pipe"],
+				detached: false,
+			});
+
+			let stdout = "";
+			let stderr = "";
+			const timer = setTimeout(() => {
+				if (!child.killed) child.kill("SIGTERM");
+			}, IC_CONFIG.compressionTimeoutMs);
+
+			child.stdout?.on("data", (chunk: Buffer) => {
+				stdout += chunk.toString("utf-8");
+			});
+			child.stderr?.on("data", (chunk: Buffer) => {
+				stderr += chunk.toString("utf-8");
+			});
+
+			child.on("close", (code) => {
+				clearTimeout(timer);
+				const killed = code === null;
+				if (killed) {
+					resolve({ stdout, stderr, errorReason: `Process timed out (${IC_CONFIG.compressionTimeoutMs}ms)` });
+				} else if (code !== 0) {
+					if (stderr) console.error(`[infinite-context] stderr: ${stderr.slice(0, IC_CONFIG.maxStderrLogLength)}`);
+					resolve({ stdout, stderr, errorReason: `Process exited with code ${code}` });
+				} else {
+					resolve({ stdout, stderr });
+				}
+			});
+
+			child.on("error", (err) => {
+				clearTimeout(timer);
+				console.error(`[infinite-context] spawn error: ${err.message}`);
+				resolve({ stdout, stderr, errorReason: `Spawn error: ${err.message}` });
+			});
+		});
+	}
+
+	// ── Sync implementation ───────────────────────────
+
+	private runSyncCompression(
+		pi: ExtensionAPI,
+		segments: readonly Segment[],
+		existingTree: CompactTree | undefined,
+	): CompactResult {
+		if (segments.length === 0) {
+			return applyFallback(pi, segments, 0);
+		}
+
+		for (let attempt = 0; attempt <= IC_CONFIG.maxRetryCount; attempt++) {
+			const prompt = buildCompressionPrompt(segments, existingTree, undefined);
+			console.log(`[infinite-context] sync spawn (attempt ${attempt}, ${segments.length} segments)`);
+
+			const result = spawnSync("pi", ["--mode", "json", "-p", prompt], {
+				stdio: ["ignore", "pipe", "pipe"],
+				timeout: IC_CONFIG.compressionTimeoutMs,
+				encoding: "utf-8",
+			});
+
+			const { stdout, stderr, errorReason } = this.parseSpawnSyncResult(result);
+			const spawnResult = { stdout, stderr, errorReason };
+			const validated = this.processSpawnResult(spawnResult, segments, attempt);
+
+			if (validated) {
+				const tree = makeTree(validated, segments);
+				this.tree = tree;
+				pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
+				console.log(`[infinite-context] tree compression succeeded: ${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`);
+				return { tree, fallbackUsed: false, retryCount: attempt, rawOutput: stdout.slice(0, IC_CONFIG.maxStdoutLogLength) };
+			}
+
+			console.error(`[infinite-context] sync compression failed (attempt ${attempt}): ${errorReason}`);
+		}
+
+		console.error(`[infinite-context] sync compression all attempts failed`);
+		return applyFallback(pi, segments, IC_CONFIG.maxRetryCount, "All attempts failed");
+	}
+
+	private parseSpawnSyncResult(result: ReturnType<typeof spawnSync>): {
+		stdout: string;
+		stderr: string;
+		errorReason?: string;
+	} {
+		const stdout = (result.stdout ?? "") as string;
+		const stderr = (result.stderr ?? "") as string;
+
+		if (result.error) {
+			const spawnErr = result.error as { code?: string; message: string } | undefined;
+			const msg = spawnErr?.code === "ETIMEDOUT"
+				? "Compression timed out"
+				: `Spawn error: ${spawnErr?.message ?? "unknown"}`;
+			console.error(`[infinite-context] ${msg}`);
+			// 超时时 stdout 可能有部分输出
+			if (stdout) {
+				const partial = extractAssistantText(stdout);
+				if (partial) {
+					console.log(`[infinite-context] found partial assistant text in timed-out output (${partial.length} chars)`);
+				}
+			}
+			if (stderr) console.error(`[infinite-context] stderr: ${stderr.slice(0, IC_CONFIG.maxStderrLogLength)}`);
+			return { stdout, stderr, errorReason: msg };
+		}
+		if (result.status !== 0) {
+			const msg = `Process exited with code ${result.status}`;
+			console.error(`[infinite-context] ${msg}`);
+			if (stderr) console.error(`[infinite-context] stderr: ${stderr.slice(0, IC_CONFIG.maxStderrLogLength)}`);
+			return { stdout, stderr, errorReason: msg };
+		}
+		return { stdout, stderr };
+	}
+
+	// ── Shared pipe ───────────────────────────────────
+
+	private processSpawnResult(
+		spawnResult: { stdout: string; stderr: string; errorReason?: string },
+		segments: readonly Segment[],
+		_attempt: number,
+	): TreeNode[] | undefined {
+		const { stdout, errorReason } = spawnResult;
+
+		if (errorReason) {
+			// Error occurred (timeout/spawn), but try partial output
+			if (stdout) {
+				const partial = extractAssistantText(stdout);
+				if (partial) {
+					const validated = this.tryValidate(partial, segments);
+					if (validated) {
+						console.log(`[infinite-context] recovered valid tree from partial output (${partial.length} chars)`);
+						return validated;
+					}
+				}
+			}
+			return undefined;
+		}
+
+		const assistantText = extractAssistantText(stdout);
+		if (!assistantText) {
+			const lines = stdout.split("\n").length;
+			console.warn(`[infinite-context] no assistant text in pi output (${stdout.length}B, ${lines} lines). Check if pi --mode json output format changed.`);
+			return undefined;
+		}
+
+		console.log(`[infinite-context] assistant text (first ${IC_CONFIG.maxStdoutLogLength} chars): ${assistantText.slice(0, IC_CONFIG.maxStdoutLogLength)}`);
+
+		const result = validateTreeOutput(assistantText.trim(), segments);
+		if ("reason" in result) {
+			console.error(`[infinite-context] tree validation failed: ${result.reason}`);
+			return undefined;
+		}
+		return result;
+	}
+
+	/** 尝试校验文本作为树结构，失败返回 undefined */
+	private tryValidate(text: string, segments: readonly Segment[]): TreeNode[] | undefined {
+		const result = validateTreeOutput(text.trim(), segments);
+		if ("reason" in result) {
+			return undefined;
+		}
+		return result;
 	}
 }

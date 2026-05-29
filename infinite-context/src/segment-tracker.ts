@@ -13,7 +13,7 @@ import { writeFileSync, readFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import type { ExtensionAPI, ExtensionContext, CustomEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
 import type { Segment, SegmentEntryData, TurnEntryData } from "./types";
-import { RETENTION_CONFIG } from "./types";
+import { RETENTION_CONFIG, IC_CONFIG } from "./types";
 
 // ── 常量 ──────────────────────────────────────────────
 
@@ -171,7 +171,7 @@ export class SegmentTracker {
 			if (m === null || m.role !== "user") continue;
 
 			const userText = extractUserText(m);
-			const dedupeKey = userText.slice(0, 80);
+			const dedupeKey = userText.slice(0, IC_CONFIG.dedupKeyLength);
 			if (this.syncedKeys.has(dedupeKey)) continue;
 
 			// 标记前段完成
@@ -251,7 +251,7 @@ export class SegmentTracker {
 			const m = raw as Record<string, unknown> | null;
 			if (m === null || m.role !== "assistant") continue;
 
-			const text = extractUserText(m).slice(0, 80);
+			const text = extractUserText(m).slice(0, IC_CONFIG.dedupKeyLength);
 			if (!text || this.syncedKeys.has(text)) continue;
 
 			// 标记前段完成
