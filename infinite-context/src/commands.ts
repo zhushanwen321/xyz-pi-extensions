@@ -10,6 +10,10 @@ import type { TreeCompactor, CompactResult } from "./tree-compactor";
 import type { ContextAssembler } from "./context-handler";
 import { estimateTokens } from "./token-estimator";
 
+/** 与 index.ts 中的常量保持同步 */
+const IC_COMPACT_START_TYPE = "ic-compact-start";
+const IC_COMPACT_END_TYPE = "ic-compact-end";
+
 // ── /tree-compact ─────────────────────────────────────
 
 /**
@@ -48,7 +52,9 @@ export function registerTreeCompactCommand(
 
 			const completedCount = allSegments.filter((s) => s.completed).length;
 			const activeCount = allSegments.filter((s) => !s.completed).length;
-			ctx.ui.notify(`树压缩已启动... (${completedCount} 已完成段, ${activeCount} 活跃段)`);
+			const totalCount = completedCount + activeCount;
+			ctx.ui.setStatus("ic-compact", `IC compressing ${totalCount} segments...`);
+			pi.sendMessage({ customType: IC_COMPACT_START_TYPE, content: `${totalCount} segments`, display: true });
 
 			compactor.triggerCompression(
 				pi,
@@ -56,17 +62,18 @@ export function registerTreeCompactCommand(
 				allSegments,
 				compactor.getTree(),
 				(result: CompactResult) => {
+					ctx.ui.setStatus("ic-compact", undefined);
 					if (!ctx.hasUI) return;
-					if (result.fallbackUsed) {
-						const reason = result.errorReason ? ` (${result.errorReason})` : "";
-						ctx.ui.notify(`[IC] 树压缩降级: 使用规则分组${reason}`);
-					} else {
-						const tree = result.tree;
-						ctx.ui.notify(
-							`[IC] 树压缩完成: ${tree.totalTokens} tokens, `
-							+ `${tree.root.children.length} 分组, 深度 ${tree.depth}`,
-						);
-					}
+
+					const tree = result.tree;
+					const summary = `${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`;
+
+					pi.sendMessage({
+						customType: IC_COMPACT_END_TYPE,
+						content: summary,
+						display: true,
+						details: { fallbackUsed: result.fallbackUsed, errorReason: result.errorReason },
+					});
 				},
 			);
 		},

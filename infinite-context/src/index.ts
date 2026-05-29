@@ -9,6 +9,10 @@ import { registerTreeCompactCommand, registerContextStatusCommand } from "./comm
 
 const recallTool = new RecallTool();
 
+// Custom message types for tree compression status bubbles
+const IC_COMPACT_START_TYPE = "ic-compact-start";
+const IC_COMPACT_END_TYPE = "ic-compact-end";
+
 // -- Named event handlers (extracted for readability) -------------------------
 
 function createSessionStartHandler(tracker: SegmentTracker, compactor: TreeCompactor) {
@@ -37,7 +41,9 @@ function createTurnEndHandler(
 			if (!compactor.isCompressing() && needsCompressionRef.value) {
 				needsCompressionRef.value = false;
 				const segments = tracker.getSegments();
-				compactor.triggerCompression(pi, ctx, segments, compactor.getTree(), onCompleteFactory(ctx));
+				ctx.ui.setStatus("ic-compact", `IC compressing ${segments.length} segments...`);
+				pi.sendMessage({ customType: IC_COMPACT_START_TYPE, content: `${segments.length} segments`, display: true });
+				compactor.triggerCompression(pi, ctx, segments, compactor.getTree(), onCompleteFactory(pi, ctx, segments.length));
 			}
 		} catch (err) {
 			console.error("[infinite-context] turn_end error:", err);
@@ -45,18 +51,28 @@ function createTurnEndHandler(
 	};
 }
 
-function onCompleteFactory(ctx: ExtensionContext) {
+function onCompleteFactory(pi: ExtensionAPI, ctx: ExtensionContext, _segmentCount: number) {
 	return (result: CompactResult) => {
+		ctx.ui.setStatus("ic-compact", undefined);
 		if (!ctx.hasUI) return;
+
+		const tree = result.tree;
+		const summary = `${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`;
+
 		if (result.fallbackUsed) {
-			const reason = result.errorReason ? `: ${result.errorReason}` : "";
-			ctx.ui.notify(`[IC] 树压缩降级，使用规则分组${reason}`);
+			pi.sendMessage({
+				customType: IC_COMPACT_END_TYPE,
+				content: summary,
+				display: true,
+				details: { fallbackUsed: true, errorReason: result.errorReason },
+			});
 		} else {
-			const tree = result.tree;
-			ctx.ui.notify(
-				`[IC] 树压缩完成: ${tree.totalTokens} tokens, `
-				+ `${tree.root.children.length} 分组, 深度 ${tree.depth}`,
-			);
+			pi.sendMessage({
+				customType: IC_COMPACT_END_TYPE,
+				content: summary,
+				display: true,
+				details: { fallbackUsed: false },
+			});
 		}
 	};
 }
@@ -99,14 +115,32 @@ function createContextHandler(
 }
 
 function registerRenderers(pi: ExtensionAPI): void {
+	// 树摘要渲染
 	pi.registerMessageRenderer(IC_SUMMARY_CUSTOM_TYPE, (message, _options, theme) => {
 		const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
 		return new Text(theme.fg("accent", "[IC] ") + theme.fg("dim", content), 0, 0);
 	});
 
+	// Recall 提示渲染
 	pi.registerMessageRenderer(IC_RECALL_PROMPT_TYPE, (message, _options, theme) => {
 		const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
 		return new Text(theme.fg("warning", "[IC Recall] ") + theme.fg("dim", content), 0, 0);
+	});
+
+	// 压缩开始气泡
+	pi.registerMessageRenderer(IC_COMPACT_START_TYPE, (message, _options, theme) => {
+		const content = typeof message.content === "string" ? message.content : "";
+		return new Text(theme.fg("warning", "\u23F3 ") + theme.fg("toolTitle", "IC Tree Compact") + theme.fg("dim", ` ${content}`), 0, 0);
+	});
+
+	// 压缩完成气泡
+	pi.registerMessageRenderer(IC_COMPACT_END_TYPE, (message, _options, theme) => {
+		const details = message.details as { fallbackUsed: boolean; errorReason?: string } | undefined;
+		const content = typeof message.content === "string" ? message.content : "";
+		if (details?.fallbackUsed) {
+			return new Text(theme.fg("error", "\u274C ") + theme.fg("toolTitle", "IC Tree Compact") + theme.fg("dim", ` degraded: ${details.errorReason ?? content}`), 0, 0);
+		}
+		return new Text(theme.fg("success", "\u2705 ") + theme.fg("toolTitle", "IC Tree Compact") + theme.fg("dim", ` ${content}`), 0, 0);
 	});
 }
 
