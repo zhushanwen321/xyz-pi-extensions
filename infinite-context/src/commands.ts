@@ -53,8 +53,12 @@ export function registerTreeCompactCommand(
 			const completedCount = allSegments.filter((s) => s.completed).length;
 			const activeCount = allSegments.filter((s) => !s.completed).length;
 			const totalCount = completedCount + activeCount;
+
+			// UI: working spinner + footer + 气泡
+			ctx.ui.setWorkingVisible(true);
+			ctx.ui.setWorkingMessage(`IC Tree Compact: compressing ${totalCount} segments...`);
 			ctx.ui.setStatus("ic-compact", `IC compressing ${totalCount} segments...`);
-			pi.sendMessage({ customType: IC_COMPACT_START_TYPE, content: `${totalCount} segments`, display: true });
+			pi.sendMessage({ customType: IC_COMPACT_START_TYPE, content: `compressing ${totalCount} segments...`, display: true });
 
 			compactor.triggerCompression(
 				pi,
@@ -62,6 +66,9 @@ export function registerTreeCompactCommand(
 				allSegments,
 				compactor.getTree(),
 				(result: CompactResult) => {
+					// 清除 working spinner + footer
+					ctx.ui.setWorkingVisible(false);
+					ctx.ui.setWorkingMessage(undefined);
 					ctx.ui.setStatus("ic-compact", undefined);
 					if (!ctx.hasUI) return;
 
