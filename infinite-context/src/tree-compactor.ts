@@ -330,7 +330,7 @@ export class TreeCompactor {
 
 		for (let attempt = 0; attempt <= IC_CONFIG.maxRetryCount; attempt++) {
 			const prompt = buildCompressionPrompt(segments, existingTree, undefined);
-			console.log(`[infinite-context] async spawn (attempt ${attempt}, ${segments.length} segments)`);
+			console.error(`[infinite-context] async spawn (attempt ${attempt}, ${segments.length} segments)`);
 
 			const result = await this.asyncSpawnPi(prompt);
 			const validated = this.processSpawnResult(result, segments, attempt);
@@ -339,7 +339,7 @@ export class TreeCompactor {
 				const tree = makeTree(validated, segments);
 				this.tree = tree;
 				pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
-				console.log(`[infinite-context] tree compression succeeded: ${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`);
+				console.error(`[infinite-context] tree compression succeeded: ${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`);
 				return { tree, fallbackUsed: false, retryCount: attempt, rawOutput: result.stdout.slice(0, IC_CONFIG.maxStdoutLogLength) };
 			}
 
@@ -407,7 +407,7 @@ export class TreeCompactor {
 
 		for (let attempt = 0; attempt <= IC_CONFIG.maxRetryCount; attempt++) {
 			const prompt = buildCompressionPrompt(segments, existingTree, lastError);
-			console.log(`[infinite-context] sync spawn (attempt ${attempt}, ${segments.length} segments)`);
+			console.error(`[infinite-context] sync spawn (attempt ${attempt}, ${segments.length} segments)`);
 
 			const result = spawnSync("pi", ["--mode", "json", "-p", prompt], {
 				stdio: ["ignore", "pipe", "pipe"],
@@ -427,7 +427,7 @@ export class TreeCompactor {
 				if (partial) {
 					const validated = this.tryValidate(partial, segments);
 					if (validated) {
-						console.log(`[infinite-context] recovered from partial output (${partial.length} chars)`);
+						console.error(`[infinite-context] recovered from partial output (${partial.length} chars)`);
 						return this.makeValidatedResult(pi, validated, segments, attempt, stdout);
 					}
 				}
@@ -444,7 +444,7 @@ export class TreeCompactor {
 			}
 
 			if (assistantText.length > 0) {
-				console.log(`[infinite-context] assistant text ${assistantText.length}B (${assistantText.split("\n").length} lines)`);
+				console.error(`[infinite-context] assistant text ${assistantText.length}B (${assistantText.split("\n").length} lines)`);
 			}
 
 			const validated = validateTreeOutput(assistantText.trim(), segments);
@@ -472,7 +472,7 @@ export class TreeCompactor {
 		const tree = makeTree(validated, segments);
 		this.tree = tree;
 		pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
-		console.log(`[infinite-context] tree compression succeeded: ${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`);
+		console.error(`[infinite-context] tree compression succeeded: ${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`);
 		return { tree, fallbackUsed: false, retryCount: attempt, rawOutput: stdout.slice(0, IC_CONFIG.maxStdoutLogLength) };
 	}
 
@@ -494,7 +494,7 @@ export class TreeCompactor {
 			if (stdout) {
 				const partial = extractAssistantText(stdout);
 				if (partial) {
-					console.log(`[infinite-context] found partial assistant text in timed-out output (${partial.length} chars)`);
+					console.error(`[infinite-context] found partial assistant text in timed-out output (${partial.length} chars)`);
 				}
 			}
 			if (stderr) console.error(`[infinite-context] stderr: ${stderr.slice(0, IC_CONFIG.maxStderrLogLength)}`);
@@ -525,7 +525,7 @@ export class TreeCompactor {
 				if (partial) {
 					const validated = this.tryValidate(partial, segments);
 					if (validated) {
-						console.log(`[infinite-context] recovered valid tree from partial output (${partial.length} chars)`);
+						console.error(`[infinite-context] recovered valid tree from partial output (${partial.length} chars)`);
 						return validated;
 					}
 				}
@@ -540,7 +540,7 @@ export class TreeCompactor {
 			return undefined;
 		}
 
-		console.log(`[infinite-context] assistant text ${assistantText.length}B (${assistantText.split("\n").length} lines)`);
+		console.error(`[infinite-context] assistant text ${assistantText.length}B (${assistantText.split("\n").length} lines)`);
 
 		const result = validateTreeOutput(assistantText.trim(), segments);
 		if ("reason" in result) {
