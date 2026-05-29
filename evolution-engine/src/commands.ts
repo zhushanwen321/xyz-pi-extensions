@@ -208,8 +208,9 @@ export async function handleEvolve(
 			.map((s, i) => `  #${i} [${s.severity.toUpperCase()}] ${s.title}`)
 			.join("\n");
 
+		const pendingPath = join(dirs.evolutionDir, "pending.json");
 		return successResult(
-			`Generated ${suggestions.length} evolution suggestion(s):\n${summaryLines}\n\nUse /evolve-apply action=list to review details, then /evolve-apply action=apply index=<N> or action=skip index=<N> to decide per suggestion.`,
+			`Generated ${suggestions.length} evolution suggestion(s) from last ${params.since} of data:\n${summaryLines}\n\nSaved to: ${pendingPath}\nUse /evolve-apply action=list to review details, then /evolve-apply action=apply index=<N> or action=skip index=<N> to decide per suggestion.`,
 			{
 				action: "evolve",
 				count: suggestions.length,
