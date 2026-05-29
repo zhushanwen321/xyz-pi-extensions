@@ -9,13 +9,11 @@ import { registerTreeCompactCommand, registerContextStatusCommand } from "./comm
 
 const recallTool = new RecallTool();
 
-/** 压缩状态气泡的 customType */
 const IC_COMPACT_START_TYPE = "ic-compact-start";
 const IC_COMPACT_END_TYPE = "ic-compact-end";
-/** 压缩统计记录的 customType */
 const IC_COMPACT_STATS_TYPE = "ic-compact-stats";
 
-// -- Named event handlers (extracted for readability) -------------------------
+// -- Named event handlers -----------------------------------------------------
 
 function createSessionStartHandler(tracker: SegmentTracker, compactor: TreeCompactor) {
 	return (_event: unknown, ctx: ExtensionContext) => {
@@ -40,90 +38,14 @@ function createTurnEndHandler(
 		try {
 			tracker.handleTurnEnd(pi, ctx, event.turnIndex, event.message, event.toolResults);
 
-			if (!compactor.isCompressing() && needsCompressionRef.value) {
+			if (needsCompressionRef.value) {
 				needsCompressionRef.value = false;
 				const segments = tracker.getSegments();
-				startCompressionUI(pi, ctx, segments.length);
-				compactor.triggerCompression(pi, ctx, segments, compactor.getTree(), onCompleteFactory(pi, ctx));
+				runCompressionSync(pi, ctx, segments, compactor);
 			}
 		} catch (err) {
 			console.error("[infinite-context] turn_end error:", err);
 		}
-	};
-}
-
-/** 启动压缩的 UI 反馈：working spinner + footer status + 气泡消息 + 记录压缩前 tokens */
-function startCompressionUI(pi: ExtensionAPI, ctx: ExtensionContext, segmentCount: number): void {
-	// 记录压缩前的上下文大小
-	const contextUsage = ctx.getContextUsage();
-	const tokensBefore = contextUsage?.tokens ?? null;
-
-	// 持久化统计（压缩前快照）
-	pi.appendEntry(IC_COMPACT_STATS_TYPE, {
-		phase: "before",
-		segmentCount,
-		tokensBefore,
-		contextWindow: contextUsage?.contextWindow ?? null,
-		timestamp: Date.now(),
-	});
-
-	// 1. Working spinner
-	ctx.ui.setWorkingVisible(true);
-	ctx.ui.setWorkingMessage(`IC Tree Compact: compressing ${segmentCount} segments...`);
-
-	// 2. Footer status bar
-	ctx.ui.setStatus("ic-compact", `IC compressing ${segmentCount} segments...`);
-
-	// 3. 对话流气泡
-	const tokenInfo = tokensBefore !== null ? ` (${tokensBefore.toLocaleString()} tokens)` : "";
-	pi.sendMessage({
-		customType: IC_COMPACT_START_TYPE,
-		content: `compressing ${segmentCount} segments${tokenInfo}...`,
-		display: true,
-	});
-}
-
-/** 清除压缩的 UI 反馈 */
-function clearCompressionUI(ctx: ExtensionContext): void {
-	ctx.ui.setWorkingVisible(false);
-	ctx.ui.setWorkingMessage(undefined);
-	ctx.ui.setStatus("ic-compact", undefined);
-}
-
-function onCompleteFactory(pi: ExtensionAPI, ctx: ExtensionContext) {
-	return (result: CompactResult) => {
-		// 清除 working spinner + footer
-		clearCompressionUI(ctx);
-
-		// 持久化统计（压缩后快照）
-		const tree = result.tree;
-		pi.appendEntry(IC_COMPACT_STATS_TYPE, {
-			phase: "after",
-			fallbackUsed: result.fallbackUsed,
-			treeGroups: tree.root.children.length,
-			treeDepth: tree.depth,
-			treeTokens: tree.totalTokens,
-			treeId: tree.treeId,
-			errorReason: result.errorReason,
-			retryCount: result.retryCount,
-			timestamp: Date.now(),
-		});
-
-		if (!ctx.hasUI) return;
-
-		const summary = `${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`;
-
-		// 完成气泡
-		const tokenInfo = `tree: ${tree.totalTokens} tokens`;
-		pi.sendMessage({
-			customType: IC_COMPACT_END_TYPE,
-			content: `${summary} | ${tokenInfo}`,
-			display: true,
-			details: {
-				fallbackUsed: result.fallbackUsed,
-				errorReason: result.errorReason,
-			},
-		});
 	};
 }
 
@@ -136,7 +58,6 @@ function createContextHandler(
 ) {
 	return (event: ContextEvent, ctx: ExtensionContext) => {
 		try {
-			// 检测新 user message，创建段
 			tracker.syncFromMessages(pi, ctx, event.messages);
 
 			const segments = tracker.getSegments();
@@ -164,20 +85,90 @@ function createContextHandler(
 	};
 }
 
+// ── 同步压缩 + UI ──────────────────────────────────
+
+/** 同步执行压缩，包含完整 UI 反馈和统计记录 */
+function runCompressionSync(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	segments: Parameters<TreeCompactor["triggerCompression"]>[1],
+	compactor: TreeCompactor,
+): CompactResult {
+	const segmentCount = segments.length;
+
+	// ── 压缩前：记录 + UI ──
+	const contextUsage = ctx.getContextUsage();
+	const tokensBefore = contextUsage?.tokens ?? null;
+
+	pi.appendEntry(IC_COMPACT_STATS_TYPE, {
+		phase: "before",
+		segmentCount,
+		tokensBefore,
+		contextWindow: contextUsage?.contextWindow ?? null,
+		timestamp: Date.now(),
+	});
+
+	ctx.ui.setWorkingVisible(true);
+	ctx.ui.setWorkingMessage(`IC Tree Compact: compressing ${segmentCount} segments...`);
+	ctx.ui.setStatus("ic-compact", `IC compressing ${segmentCount} segments...`);
+
+	const tokenInfo = tokensBefore !== null ? ` (${tokensBefore.toLocaleString()} tokens)` : "";
+	pi.sendMessage({
+		customType: IC_COMPACT_START_TYPE,
+		content: `compressing ${segmentCount} segments${tokenInfo}...`,
+		display: true,
+	});
+
+	// ── 同步压缩（阻塞） ──
+	const result = compactor.triggerCompression(pi, segments, compactor.getTree());
+
+	// ── 压缩后：清除 UI + 记录 + 气泡 ──
+	ctx.ui.setWorkingVisible(false);
+	ctx.ui.setWorkingMessage(undefined);
+	ctx.ui.setStatus("ic-compact", undefined);
+
+	const tree = result.tree;
+	pi.appendEntry(IC_COMPACT_STATS_TYPE, {
+		phase: "after",
+		fallbackUsed: result.fallbackUsed,
+		treeGroups: tree.root.children.length,
+		treeDepth: tree.depth,
+		treeTokens: tree.totalTokens,
+		treeId: tree.treeId,
+		errorReason: result.errorReason,
+		retryCount: result.retryCount,
+		timestamp: Date.now(),
+	});
+
+	if (ctx.hasUI) {
+		const summary = `${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`;
+		pi.sendMessage({
+			customType: IC_COMPACT_END_TYPE,
+			content: `${summary} | tree: ${tree.totalTokens} tokens`,
+			display: true,
+			details: {
+				fallbackUsed: result.fallbackUsed,
+				errorReason: result.errorReason,
+			},
+		});
+	}
+
+	return result;
+}
+
+// ── Renderers ──────────────────────────────────────────
+
 function registerRenderers(pi: ExtensionAPI): void {
-	// 树摘要渲染
 	pi.registerMessageRenderer(IC_SUMMARY_CUSTOM_TYPE, (message, _options, theme) => {
 		const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
 		return new Text(theme.fg("accent", "[IC] ") + theme.fg("dim", content), 0, 0);
 	});
 
-	// Recall 提示渲染
 	pi.registerMessageRenderer(IC_RECALL_PROMPT_TYPE, (message, _options, theme) => {
 		const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
 		return new Text(theme.fg("warning", "[IC Recall] ") + theme.fg("dim", content), 0, 0);
 	});
 
-	// 压缩开始气泡：⏳ IC Tree Compact compressing N segments...
 	pi.registerMessageRenderer(IC_COMPACT_START_TYPE, (message, _options, theme) => {
 		const content = typeof message.content === "string" ? message.content : "";
 		return new Text(
@@ -186,7 +177,6 @@ function registerRenderers(pi: ExtensionAPI): void {
 		);
 	});
 
-	// 压缩完成气泡：✅ 或 ❌
 	pi.registerMessageRenderer(IC_COMPACT_END_TYPE, (message, _options, theme) => {
 		const details = message.details as { fallbackUsed?: boolean; errorReason?: string } | undefined;
 		const content = typeof message.content === "string" ? message.content : "";
@@ -207,15 +197,11 @@ function registerRenderers(pi: ExtensionAPI): void {
 
 // ── session_before_compact handler ─────────────────────────
 
-/**
- * 有段时由树压缩接管，取消原生 compact
- * 无段时放行原生 compact
- */
 function createBeforeCompactHandler(tracker: SegmentTracker, compactor: TreeCompactor) {
 	return () => {
-		// 只有树压缩已经完成（有有效的压缩树）且不在压缩中时，才接管
-		// 否则放行原生 compact（如 coding-workflow 的 phase 推进依赖 compact）
-		if (compactor.getTree() && !compactor.isCompressing()) {
+		// 压缩树已存在 → 由树压缩接管，跳过原生 compact
+		// 否则 → 放行原生 compact
+		if (compactor.getTree()) {
 			return { cancel: true };
 		}
 		return { cancel: false };
@@ -230,13 +216,11 @@ export default function infiniteContextExtension(pi: ExtensionAPI): void {
 	const assembler = new ContextAssembler();
 	const needsCompression = { value: false };
 
-	// Event handlers
 	pi.on("session_start", createSessionStartHandler(tracker, compactor));
 	pi.on("turn_end", createTurnEndHandler(pi, tracker, compactor, assembler, needsCompression));
 	pi.on("context", createContextHandler(pi, tracker, compactor, assembler, needsCompression));
 	pi.on("session_before_compact", createBeforeCompactHandler(tracker, compactor));
 
-	// Commands + tools + renderers
 	registerTreeCompactCommand(pi, compactor, tracker);
 	registerContextStatusCommand(pi, assembler, compactor, tracker);
 	recallTool.register(pi);

@@ -7,16 +7,18 @@
  * - 降级：rule-based fallback（所有段为独立 leaf）
  * - 持久化压缩树到 session entries
  * - 从 session entries 恢复压缩树
+ *
+ * 压缩是同步的：调用 triggerCompression 会阻塞直到完成。
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
-import type { ExtensionAPI, ExtensionContext, CustomEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
+import { spawnSync } from "node:child_process";
+import type { ExtensionAPI, CustomEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
 import type { Segment, TreeNode, CompactTree } from "./types";
 
 // ── 常量 ──────────────────────────────────────────────
 
 const COMPACT_TREE_ENTRY_TYPE = "ic-compact-tree";
-const COMPRESSION_TIMEOUT_MS = 30_000;
+const COMPRESSION_TIMEOUT_MS = 60_000;
 const MAX_RETRY_COUNT = 1;
 const MAX_STDERR_LOG_LENGTH = 500;
 const MAX_STDOUT_LOG_LENGTH = 1000;
@@ -29,7 +31,6 @@ export interface CompactResult {
 	fallbackUsed: boolean;
 	retryCount: number;
 	errorReason?: string;
-	/** LLM 原始 stdout（调试用） */
 	rawOutput?: string;
 }
 
@@ -45,7 +46,6 @@ function isCompactTreeEntry(entry: SessionEntry): entry is CustomEntry<CompactTr
 		&& (entry as CustomEntry).customType === COMPACT_TREE_ENTRY_TYPE;
 }
 
-/** 提取用户消息第一句话（截取第一个句号/换行之前） */
 function firstSentence(text: string): string {
 	if (!text) return "(empty)";
 	const idx = text.search(/[。.\n]/);
@@ -53,13 +53,11 @@ function firstSentence(text: string): string {
 	return text.slice(0, idx).trim();
 }
 
-/** 计算树的深度 */
 function treeDepth(node: TreeNode): number {
 	if (node.children.length === 0) return 1;
 	return 1 + Math.max(...node.children.map(treeDepth));
 }
 
-/** 计算树的总 token 数 */
 function treeTotalTokens(node: TreeNode): number {
 	let sum = node.tokenCount;
 	for (const child of node.children) {
@@ -70,22 +68,10 @@ function treeTotalTokens(node: TreeNode): number {
 
 // ── validateTreeOutput ────────────────────────────────
 
-/**
- * 校验 LLM 输出的树结构 JSON
- *
- * 规则：
- * - JSON 解析成功
- * - 顶层为数组（children）
- * - 每个节点有 nodeId、summary、tokenCount、children
- * - segId（叶节点）必须存在于原始段中
- * - nodeId 无重复、无环（用 Set 追踪）
- * - group 节点（无 segId）的 summary 非空
- */
 export function validateTreeOutput(
 	output: string,
 	segments: readonly Segment[],
 ): TreeNode[] | ValidateError {
-	// 1. JSON 解析
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(output);
@@ -93,7 +79,6 @@ export function validateTreeOutput(
 		return { reason: `JSON parse failed: ${output.slice(0, 200)}` };
 	}
 
-	// 2. 顶层必须为数组
 	if (!Array.isArray(parsed)) {
 		return { reason: "Top-level output must be an array of TreeNode" };
 	}
@@ -101,7 +86,6 @@ export function validateTreeOutput(
 	const validSegIds = new Set(segments.map((s) => s.segId));
 	const seenNodeIds = new Set<string>();
 
-	// 3. 递归校验
 	function validateNode(node: unknown): TreeNode | ValidateError {
 		if (typeof node !== "object" || node === null) {
 			return { reason: "Each node must be an object" };
@@ -164,9 +148,6 @@ export function validateTreeOutput(
 
 // ── ruleBasedFallback ─────────────────────────────────
 
-/**
- * 降级压缩：所有历史段为独立 leaf 节点
- */
 export function ruleBasedFallback(segments: readonly Segment[]): CompactTree {
 	const children: TreeNode[] = segments.map((seg) => ({
 		nodeId: `node_${seg.segId}`,
@@ -245,19 +226,6 @@ Example output:
 
 // ── Pi JSON mode stdout parser ───────────────────────
 
-/**
- * 从 `pi --mode json` 的 JSONL 输出中提取 assistant message 的文本内容。
- *
- * Pi --mode json 输出的是 JSONL 事件流：
- *   {"type":"session",...}
- *   {"type":"agent_start"}
- *   {"type":"turn_start"}
- *   {"type":"message_start","message":{...}}
- *   {"type":"message_update","message":{...}}
- *   {"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"..."}]}}
- *
- * 我们需要从最后一个 message_end 或 message_update 中提取 assistant 的文本。
- */
 function extractAssistantText(stdout: string): string {
 	const lines = stdout.split("\n");
 	let lastAssistantText = "";
@@ -294,61 +262,132 @@ function extractAssistantText(stdout: string): string {
 	return lastAssistantText;
 }
 
+// ── 同步执行单次压缩 ────────────────────────────────
+
+/** 同步 spawn pi 子进程，提取 assistant 文本，返回结果 */
+function runSyncCompression(
+	segments: readonly Segment[],
+	existingTree: CompactTree | undefined,
+	previousError?: string,
+): { assistantText: string; rawStdout: string } | { error: string; rawStdout: string } {
+	const prompt = buildCompressionPrompt(segments, existingTree, previousError);
+
+	console.log(`[infinite-context] spawning pi subprocess (sync, ${segments.length} segments)`);
+
+	const result = spawnSync("pi", ["--mode", "json", "-p", prompt], {
+		stdio: ["ignore", "pipe", "pipe"],
+		timeout: COMPRESSION_TIMEOUT_MS,
+		encoding: "utf-8",
+	});
+
+	if (result.error) {
+		const msg = `Spawn error: ${result.error.message}`;
+		console.error(`[infinite-context] ${msg}`);
+		return { error: msg, rawStdout: "" };
+	}
+
+	if (result.status !== 0) {
+		const stderr = (result.stderr ?? "").slice(0, MAX_STDERR_LOG_LENGTH);
+		const msg = result.signal === "SIGTERM"
+			? "Compression timed out"
+			: `Process exited with code ${result.status}`;
+		console.error(`[infinite-context] pi subprocess failed: ${msg}`);
+		if (stderr) console.error(`[infinite-context] stderr: ${stderr}`);
+		return { error: msg, rawStdout: result.stdout ?? "" };
+	}
+
+	const stdout = result.stdout ?? "";
+	console.log(`[infinite-context] pi subprocess done (${stdout.length}B)`);
+
+	const assistantText = extractAssistantText(stdout);
+	if (!assistantText) {
+		console.error(`[infinite-context] no assistant text in pi output`);
+		return { error: "No assistant text in pi output", rawStdout: stdout };
+	}
+
+	console.log(`[infinite-context] assistant text (first ${MAX_STDOUT_LOG_LENGTH} chars): ${assistantText.slice(0, MAX_STDOUT_LOG_LENGTH)}`);
+
+	return { assistantText, rawStdout: stdout };
+}
+
+// ── TreeCompactor ─────────────────────────────────────
+
 export class TreeCompactor {
-	private compressing = false;
 	private tree: CompactTree | undefined;
-	private currentProcess: ChildProcess | undefined;
 
 	/**
-	 * 触发树压缩（fire-and-forget + 回调模式）
+	 * 同步触发树压缩
 	 *
-	 * 1. 检查 isCompressing 守卫
-	 * 2. 使用所有段（不再过滤 retention window）— 只要触发就执行
-	 * 3. 异步 spawn Pi 子进程调用 LLM
-	 * 4. 校验输出 → 成功则持久化，失败则重试或降级
+	 * 调用会阻塞直到压缩完成（或超时/失败后降级）。
+	 * 返回压缩结果。持久化到 session entries。
 	 */
 	triggerCompression(
 		pi: ExtensionAPI,
-		ctx: ExtensionContext,
 		segments: readonly Segment[],
 		existingTree: CompactTree | undefined,
-		onComplete?: (result: CompactResult) => void,
-	): void {
-		if (this.compressing) return;
-		this.compressing = true;
-
-		// 只要触发就压缩所有段，不做 retention window 过滤
+	): CompactResult {
 		if (segments.length === 0) {
-			this.compressing = false;
-			return;
+			return this.applyFallback(pi, segments, 0);
 		}
 
-		this.runCompression(
-			pi,
-			ctx,
-			segments,
-			existingTree,
-			0,
-			onComplete,
-		);
-	}
+		const sessionId = "sync"; // 不再需要 ctx
+		let lastError: string | undefined;
+		let rawStdout = "";
 
-	cancelPiCompaction(): { cancel: boolean } {
-		if (this.currentProcess && !this.currentProcess.killed) {
-			this.currentProcess.kill("SIGTERM");
-			this.currentProcess = undefined;
-			this.compressing = false;
-			return { cancel: true };
+		for (let attempt = 0; attempt <= MAX_RETRY_COUNT; attempt++) {
+			const output = runSyncCompression(segments, existingTree, lastError);
+
+			if ("error" in output) {
+				lastError = output.error;
+				rawStdout = output.rawStdout;
+				continue;
+			}
+
+			const validated = validateTreeOutput(output.assistantText.trim(), segments);
+
+			if ("reason" in validated) {
+				console.error(`[infinite-context] tree validation failed: ${validated.reason}`);
+				lastError = validated.reason;
+				rawStdout = output.rawStdout;
+				continue;
+			}
+
+			// 成功
+			const root: TreeNode = {
+				nodeId: "root",
+				summary: `Compressed ${segments.length} segments (${sessionId})`,
+				tokenCount: 0,
+				children: validated,
+			};
+
+			const tree: CompactTree = {
+				treeId: `tree_${Date.now()}`,
+				root,
+				totalTokens: treeTotalTokens(root),
+				createdAt: Date.now(),
+				depth: treeDepth(root),
+			};
+
+			this.tree = tree;
+			pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
+
+			console.log(`[infinite-context] tree compression succeeded: ${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`);
+
+			return {
+				tree,
+				fallbackUsed: false,
+				retryCount: attempt,
+				rawOutput: rawStdout.slice(0, MAX_STDOUT_LOG_LENGTH),
+			};
 		}
-		return { cancel: false };
+
+		// 所有尝试失败 → 降级
+		console.error(`[infinite-context] all compression attempts failed, using fallback: ${lastError}`);
+		return this.applyFallback(pi, segments, MAX_RETRY_COUNT, lastError, rawStdout);
 	}
 
 	getTree(): CompactTree | undefined {
 		return this.tree;
-	}
-
-	isCompressing(): boolean {
-		return this.compressing;
 	}
 
 	restoreState(entries: SessionEntry[]): void {
@@ -362,177 +401,23 @@ export class TreeCompactor {
 		}
 	}
 
-	// ── 内部方法 ──────────────────────────────────────
-
-	private runCompression(
-		pi: ExtensionAPI,
-		ctx: ExtensionContext,
-		segments: readonly Segment[],
-		existingTree: CompactTree | undefined,
-		retryCount: number,
-		onComplete?: (result: CompactResult) => void,
-		previousError?: string,
-	): void {
-		const prompt = buildCompressionPrompt(segments, existingTree, previousError);
-		const sessionId = ctx.sessionManager.getSessionId();
-
-		console.log(`[infinite-context] spawning pi subprocess for tree compression (${segments.length} segments, retry=${retryCount})`);
-
-		const child = spawn("pi", ["--mode", "json", "-p", prompt], {
-			stdio: ["ignore", "pipe", "pipe"],
-			detached: false,
-		});
-
-		this.currentProcess = child;
-		let stdout = "";
-		let stderr = "";
-		let timedOut = false;
-
-		child.stdout?.on("data", (chunk: Buffer) => {
-			stdout += chunk.toString("utf-8");
-		});
-
-		child.stderr?.on("data", (chunk: Buffer) => {
-			stderr += chunk.toString("utf-8");
-		});
-
-		const timer = setTimeout(() => {
-			timedOut = true;
-			if (!child.killed) {
-				child.kill("SIGTERM");
-			}
-		}, COMPRESSION_TIMEOUT_MS);
-
-		child.on("close", (code) => {
-			clearTimeout(timer);
-			this.currentProcess = undefined;
-
-			// 记录 LLM 原始输出（无论成功失败）
-			console.log(`[infinite-context] pi subprocess exited (code=${code}, stdout=${stdout.length}B, stderr=${stderr.length}B)`);
-
-			if (timedOut || code !== 0) {
-				const errorReason = timedOut
-					? "Compression timed out after 30s"
-					: `Process exited with code ${code}`;
-
-				if (stderr) {
-					console.error(`[infinite-context] pi subprocess stderr: ${stderr.slice(0, MAX_STDERR_LOG_LENGTH)}`);
-				}
-
-				this.handleCompressionFailure(
-					pi, ctx, segments, existingTree,
-					errorReason, retryCount, onComplete, stdout,
-				);
-				return;
-			}
-
-			// 从 Pi JSONL 事件流中提取 assistant 文本
-			const assistantText = extractAssistantText(stdout);
-
-			if (!assistantText) {
-				console.error(`[infinite-context] no assistant text found in pi output (stdout=${stdout.length}B)`);
-				this.handleCompressionFailure(
-					pi, ctx, segments, existingTree,
-					"No assistant text in pi output", retryCount, onComplete, stdout,
-				);
-				return;
-			}
-
-			console.log(`[infinite-context] assistant text (first ${MAX_STDOUT_LOG_LENGTH} chars): ${assistantText.slice(0, MAX_STDOUT_LOG_LENGTH)}`);
-
-			const result = validateTreeOutput(assistantText.trim(), segments);
-
-			if ("reason" in result) {
-				console.error(`[infinite-context] tree validation failed: ${result.reason}`);
-				if (stderr) {
-					console.error(`[infinite-context] pi subprocess stderr: ${stderr.slice(0, MAX_STDERR_LOG_LENGTH)}`);
-				}
-				this.handleCompressionFailure(
-					pi, ctx, segments, existingTree,
-					result.reason, retryCount, onComplete, stdout,
-				);
-				return;
-			}
-
-			// 校验通过 → 构建树
-			const root: TreeNode = {
-				nodeId: "root",
-				summary: `Compressed ${segments.length} segments (session ${sessionId})`,
-				tokenCount: 0,
-				children: result,
-			};
-
-			const tree: CompactTree = {
-				treeId: `tree_${Date.now()}`,
-				root,
-				totalTokens: treeTotalTokens(root),
-				createdAt: Date.now(),
-				depth: treeDepth(root),
-			};
-
-			this.tree = tree;
-			this.compressing = false;
-			pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
-
-			console.log(`[infinite-context] tree compression succeeded: ${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`);
-
-			onComplete?.({
-				tree,
-				fallbackUsed: false,
-				retryCount,
-				rawOutput: stdout.slice(0, MAX_STDOUT_LOG_LENGTH),
-			});
-		});
-
-		child.on("error", (err) => {
-			clearTimeout(timer);
-			this.currentProcess = undefined;
-			console.error(`[infinite-context] spawn "pi" failed: ${err.message}`);
-			this.handleCompressionFailure(
-				pi, ctx, segments, existingTree,
-				`Spawn error: ${err.message}`, retryCount, onComplete, "",
-			);
-		});
-	}
-
-	private handleCompressionFailure(
-		pi: ExtensionAPI,
-		ctx: ExtensionContext,
-		segments: readonly Segment[],
-		existingTree: CompactTree | undefined,
-		errorReason: string,
-		retryCount: number,
-		onComplete?: (result: CompactResult) => void,
-		rawOutput?: string,
-	): void {
-		if (retryCount < MAX_RETRY_COUNT) {
-			console.error(`[infinite-context] compression failed (retry ${retryCount + 1}/${MAX_RETRY_COUNT}): ${errorReason}`);
-			this.runCompression(pi, ctx, segments, existingTree, retryCount + 1, onComplete, errorReason);
-			return;
-		}
-		console.error(`[infinite-context] compression failed, using fallback: ${errorReason}`);
-		this.applyFallback(pi, segments, retryCount, onComplete, errorReason, rawOutput);
-	}
-
 	private applyFallback(
 		pi: ExtensionAPI,
 		segments: readonly Segment[],
 		retryCount: number,
-		onComplete?: (result: CompactResult) => void,
 		errorReason?: string,
 		rawOutput?: string,
-	): void {
+	): CompactResult {
 		const tree = ruleBasedFallback(segments);
 		this.tree = tree;
-		this.compressing = false;
 		pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
 
-		onComplete?.({
+		return {
 			tree,
 			fallbackUsed: true,
 			retryCount,
 			errorReason,
 			rawOutput,
-		});
+		};
 	}
 }
