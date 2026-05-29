@@ -31,15 +31,25 @@ export function registerTreeCompactCommand(
 			}
 
 			const segments = tracker.getSegments();
-			if (segments.length < 3) {
-				ctx.ui.notify("至少需要 3 个段才能执行压缩");
+			if (segments.length < 1) {
+				// 段数为 0，尝试从 session entries 补建
+				const entries = ctx.sessionManager.getEntries();
+				const created = tracker.syncFromEntries(pi, ctx, entries);
+				if (created > 0) {
+					ctx.ui.notify(`从历史对话中补建了 ${created} 个段`);
+				}
+			}
+
+			const allSegments = tracker.getSegments();
+			if (allSegments.length < 1) {
+				ctx.ui.notify("当前无对话内容可压缩。");
 				return;
 			}
 
 			compactor.triggerCompression(
 				pi,
 				ctx,
-				segments,
+				allSegments,
 				compactor.getTree(),
 				(result: CompactResult) => {
 					// onComplete 回调：通知由 index.ts 中 turn_end handler 的 onComplete 处理
