@@ -1,5 +1,5 @@
 ---
-verdict: PASS
+verdict: pass
 must_fix: []
 ---
 
