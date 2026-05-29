@@ -5,6 +5,71 @@
  * 与项目其他 extension 保持一致。
  */
 
+// ── 信号摘要 Pipeline ───────────────────────────────
+
+/** 趋势指标快照，用于跨周期对比 */
+export interface MetricsSnapshot {
+	date: string;
+	sessionCount: number;
+	totalToolCalls: number;
+	/** 只存 rate < 0.95 的工具，避免字典膨胀 */
+	toolFailureRates: Record<string, number>;
+	editRetryRate: number;
+	bashFailureRate: number;
+	singleTurnCompletionRate: number;
+	avgTurnsPerSession: number;
+	avgToolCallsPerSession: number;
+	selfCorrectionRate: number;
+	totalInputTokens: number;
+	totalOutputTokens: number;
+	totalCost: number;
+	avgInputPerSession: number;
+	avgOutputPerSession: number;
+	userCorrectionRate: number;
+	repeatedRequestCount: number;
+	medianSessionMinutes: number;
+	activeSkillCount: number;
+	dormantSkillCount: number;
+	totalSkillFileSize: number;
+}
+
+/** 单个指标的前后变化 */
+export interface TrendDelta {
+	field: string;
+	previous: number;
+	current: number;
+	changePercent: number;
+}
+
+/** 异常信号 */
+export interface Anomaly {
+	type: "tool_failure" | "dormant_skill" | "user_correction" | "token_hotspot";
+	detail: string;
+	severity: "high" | "medium" | "low";
+}
+
+/** 已应用建议的效果回顾 */
+export interface EffectReview {
+	suggestionTitle: string;
+	appliedAt: string;
+	targetMetric: string;
+	before: number;
+	after: number;
+	changePercent: number;
+}
+
+/** 压缩后的信号报告，~5KB，供 Judge 消费 */
+export interface SignalReport {
+	generatedAt: string;
+	reportPath: string;
+	metricsSnapshot: MetricsSnapshot;
+	anomalies: Anomaly[];
+	trends: TrendDelta[];
+	effectReview?: EffectReview[];
+	/** 压缩后的原始报告子集 */
+	compressed: Record<string, unknown>;
+}
+
 // ── 核心数据模型 ─────────────────────────────────────
 
 /** LLM Judge 产出的单条进化建议 */
@@ -59,6 +124,8 @@ export interface HistoryEntry {
 	title: string;
 	/** apply 时的 git commit SHA，用于 rollback 时 git revert */
 	commitSha?: string;
+	/** apply 时对应的 metrics snapshot 日期，用于效果追踪 */
+	metricsSnapshotDate?: string;
 }
 
 // ── 自动触发 ─────────────────────────────────────────
@@ -155,4 +222,6 @@ export interface Dirs {
 	tmpDir: string;
 	/** extension 源码下 src/templates/ 的绝对路径 */
 	templateDir: string;
+	/** ~/.pi/agent/evolution-data/signals */
+	signalsDir: string;
 }

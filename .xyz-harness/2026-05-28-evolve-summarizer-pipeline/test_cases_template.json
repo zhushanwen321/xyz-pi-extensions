@@ -1,0 +1,163 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "Summarizer compresses 745KB report to <= 10KB",
+      "description": "Feed the real retrospective-2026-05-27.json into summarizeReport, verify output size",
+      "steps": [
+        "read ~/.pi/agent/evolution-data/reports/retrospective-2026-05-27.json",
+        "call summarizeReport(report, [])",
+        "assert JSON.stringify(result).length <= 10240",
+        "assert result.anomalies is array",
+        "assert result.compressed has expected top-N fields"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "integration",
+      "title": "Summarizer extracts MetricsSnapshot from raw report",
+      "description": "Verify extractMetricsSnapshot populates all fields from real data",
+      "steps": [
+        "read real report JSON",
+        "call extractMetricsSnapshot(report, '2026-05-27')",
+        "assert snapshot.totalToolCalls > 0",
+        "assert snapshot.bashFailureRate is between 0 and 1",
+        "assert snapshot.date === '2026-05-27'"
+      ]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "integration",
+      "title": "Anomaly detection finds tool failures > 10%",
+      "description": "Verify detectAnomalies flags bash and other tools with high failure rates",
+      "steps": [
+        "construct report with tool_stats.by_tool.bash = { calls: 100, failures: 15 }",
+        "call detectAnomalies(report)",
+        "assert result contains anomaly with type='tool_failure' for bash",
+        "assert anomaly.severity is 'medium' (15% > 10%)"
+      ]
+    },
+    {
+      "id": "TC-1-04",
+      "type": "integration",
+      "title": "Anomaly detection finds dormant skills",
+      "description": "Verify skills with 0 triggers are flagged as dormant",
+      "steps": [
+        "construct report with skill_health containing entries with triggers=0",
+        "call detectAnomalies(report)",
+        "assert result contains anomaly with type='dormant_skill'"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "Metrics history sliding window caps at 30",
+      "description": "Write 31 snapshots, verify only 30 retained",
+      "steps": [
+        "save 31 snapshots via saveMetricsSnapshot",
+        "call loadMetricsHistory",
+        "assert result.length === 30",
+        "assert oldest snapshot is the 2nd one written"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "Trend delta filters by ±20% threshold",
+      "description": "Verify only significant changes appear in trends",
+      "steps": [
+        "create previous snapshot with bashFailureRate=0.10",
+        "create current snapshot with bashFailureRate=0.08",
+        "call computeTrends(current, previous)",
+        "assert bashFailureRate appears with changePercent=-20",
+        "assert fields with <20% change are excluded"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "integration",
+      "title": "Effect review compares pre/post apply metrics",
+      "description": "Given apply history + metrics snapshots, verify effect calculation",
+      "steps": [
+        "create apply history entry with metricsSnapshotDate='2026-05-25'",
+        "create metrics snapshots for 2026-05-24, 2026-05-26, 2026-05-28",
+        "call buildEffectReview(history, metrics)",
+        "assert result has 1 entry",
+        "assert before is from 2026-05-24 snapshot",
+        "assert after is from latest snapshot"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "integration",
+      "title": "GC removes old reports keeping newest 3",
+      "description": "Create 5 report files, verify GC deletes 2 oldest",
+      "steps": [
+        "create 5 JSON files in reports/ with different timestamps",
+        "call runGc(evolutionDir)",
+        "assert reports/ has exactly 3 files",
+        "assert result.reportsRemoved === 2"
+      ]
+    },
+    {
+      "id": "TC-5-02",
+      "type": "integration",
+      "title": "GC removes old daily files beyond 90 days",
+      "description": "Create daily files spanning 100 days, verify old ones deleted",
+      "steps": [
+        "create daily/2026-02-01.json (>90 days old)",
+        "create daily/2026-05-27.json (recent)",
+        "call runGc(evolutionDir)",
+        "assert 2026-02-01.json is deleted",
+        "assert 2026-05-27.json is retained"
+      ]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "integration",
+      "title": "Judge spawns with stdin, not CLI args",
+      "description": "Verify runJudge uses stdin pipe for userMessage",
+      "steps": [
+        "mock child_process.spawn to capture args",
+        "call runJudge with small signal file",
+        "assert args do NOT contain the signal data as a positional argument",
+        "assert stdio[0] is 'pipe'"
+      ]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "integration",
+      "title": "Full handleEvolve produces pending.json without error",
+      "description": "End-to-end test with real data, mock judge",
+      "steps": [
+        "ensure report exists in reports/",
+        "mock runJudge to return 1 sample suggestion",
+        "call handleEvolve({ target: 'all', since: '7d', sample: undefined }, dirs)",
+        "assert no error thrown",
+        "assert pending.json created in suggestions/",
+        "assert signal JSON created in signals/"
+      ]
+    },
+    {
+      "id": "TC-8-01",
+      "type": "manual",
+      "title": "TypeScript type check passes",
+      "description": "Run tsc --noEmit on evolution-engine",
+      "steps": [
+        "cd evolution-engine && npx tsc --noEmit",
+        "assert exit code 0"
+      ]
+    },
+    {
+      "id": "TC-9-01",
+      "type": "manual",
+      "title": "ESLint passes with 0 errors",
+      "description": "Run npm run lint on project root",
+      "steps": [
+        "cd xyz-pi-extensions && npm run lint",
+        "assert 0 errors (warnings OK)"
+      ]
+    }
+  ]
+}

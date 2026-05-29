@@ -6,7 +6,7 @@
  * 错误用 throw new Error() 抛出，正常路径返回 CommandResult。
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -19,11 +19,14 @@ import type {
 	StatsData,
 	PendingFile,
 	EvolutionSuggestion,
-	HistoryEntry,
+	JudgeInput,
 } from "./types";
-import { buildJudgeInput, runJudge } from "./judge";
+import { runJudge } from "./judge";
 import { applySuggestion, rollbackSuggestion } from "./applier";
-import { loadPending, savePending, appendHistory, loadHistory } from "./state";
+import { loadPending, savePending, appendHistory, loadHistory, loadMetricsHistory } from "./state";
+import { summarizeReport } from "./summarizer.js";
+import { buildEffectReview } from "./effect-tracker.js";
+import { runGc } from "./gc.js";
 
 // ── 常量 ─────────────────────────────────────────────
 
@@ -60,8 +63,9 @@ function findRecentReport(reportsDir: string, sinceDays: number): string | null 
 			if (stat.mtime >= cutoff) {
 				files.push({ name: entry, mtime: stat.mtime });
 			}
-		} catch {
-			// 文件读取失败，跳过
+		} catch (err) {
+			// 文件可能被其他进程删除，跳过
+			if (process.env.NODE_ENV !== "test") console.warn(`[evolve] Failed to stat ${entry}: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 
@@ -145,15 +149,39 @@ export async function handleEvolve(
 			throw new Error(`Failed to read report: ${msg}`);
 		}
 
-		// 3. 构建 Judge 输入
+		// 3. Signal Summarizer Pipeline
 		if (!existsSync(dirs.tmpDir)) {
 			mkdirSync(dirs.tmpDir, { recursive: true });
 		}
-		const judgeInput = buildJudgeInput(
-			report,
-			params.target === "all" ? "all" : params.target,
-			dirs.tmpDir,
-		);
+
+		// 3a. 加载 metrics 历史
+		const metricsHistory = loadMetricsHistory(dirs.evolutionDir);
+
+		// 3b. 运行 summarizer（内部会 saveMetricsSnapshot + 写信号文件到 signalsDir）
+		const signalReport = summarizeReport(report, metricsHistory, dirs.evolutionDir, reportPath);
+
+		// 3b-2. 将新 snapshot 加入内存历史，让 effect review 看到最新数据
+		metricsHistory.push(signalReport.metricsSnapshot);
+
+		// 3c. 构建 effect review 并追加到信号文件
+		const recentHistory = loadHistory(dirs.evolutionDir, 30);
+		const effectReview = buildEffectReview(recentHistory, metricsHistory);
+		if (effectReview.length > 0) {
+			signalReport.effectReview = effectReview;
+			const effectSignalPath = join(dirs.signalsDir, `signal-${signalReport.metricsSnapshot.date}.json`);
+			writeFileSync(effectSignalPath, JSON.stringify(signalReport, null, 2), "utf-8");
+		}
+
+		// 3d. GC 清理旧信号文件
+		runGc(dirs.evolutionDir);
+
+		// 3e. 构建 Judge input（使用信号文件而非原始报告）
+		const signalPath = join(dirs.signalsDir, `signal-${signalReport.metricsSnapshot.date}.json`);
+		const judgeInput: JudgeInput = {
+			target: params.target === "all" ? "all" : params.target,
+			reportPath: signalPath,
+			promptFilePath: "",
+		};
 
 		// 4. 运行 LLM Judge
 		let suggestions: EvolutionSuggestion[];
@@ -314,6 +342,13 @@ export async function handleEvolveApply(
 
 		if (result.success) {
 			suggestion.status = "applied";
+
+			// 获取最新 snapshot 日期，用于后续效果追踪
+			const metricsHistory = loadMetricsHistory(dirs.evolutionDir);
+			const latestSnapshotDate = metricsHistory.length > 0
+				? metricsHistory[metricsHistory.length - 1].date
+				: undefined;
+
 			appendHistory(dirs.evolutionDir, {
 				timestamp: new Date().toISOString(),
 				action: "apply",
@@ -323,6 +358,7 @@ export async function handleEvolveApply(
 				diff: suggestion.diff,
 				title: suggestion.title,
 				commitSha: result.commitSha,
+				metricsSnapshotDate: latestSnapshotDate,
 			});
 		} else {
 			suggestion.status = "failed";
@@ -414,8 +450,9 @@ export function handleEvolveStats(evolutionDir: string): CommandResult {
 						toolFailures[tool].failures += fails;
 					}
 				}
-			} catch {
+			} catch (err) {
 				// 损坏文件跳过
+				if (process.env.NODE_ENV !== "test") console.warn(`[evolve-stats] Failed to parse ${entry}: ${err instanceof Error ? err.message : String(err)}`);
 			}
 		}
 

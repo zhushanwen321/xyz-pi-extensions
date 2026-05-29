@@ -7,7 +7,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PendingFile, HistoryEntry } from "./types.js";
+import type { PendingFile, HistoryEntry, MetricsSnapshot } from "./types.js";
 
 // ── 内部路径 ─────────────────────────────────────────
 
@@ -17,6 +17,10 @@ function suggestionsPath(dir: string): string {
 
 function historyPath(dir: string): string {
 	return join(dir, "history.jsonl");
+}
+
+function metricsHistoryPath(dir: string): string {
+	return join(dir, "metrics-history.json");
 }
 
 // ── 公共 API ─────────────────────────────────────────
@@ -66,6 +70,53 @@ export function appendHistory(dir: string, entry: HistoryEntry): void {
  * 读取 history.jsonl 最后 N 条记录。
  * 文件不存在返回空数组。
  */
+// ── Metrics Snapshot 持久化 ─────────────────────────
+
+/** metrics-history.json 的文件结构 */
+interface MetricsHistoryFile {
+	snapshots: MetricsSnapshot[];
+}
+
+const MAX_METRICS_SNAPSHOTS = 30;
+
+/**
+ * 读取 metrics 历史。文件不存在或损坏时返回空数组。
+ */
+export function loadMetricsHistory(dir: string): MetricsSnapshot[] {
+	const filePath = metricsHistoryPath(dir);
+	if (!existsSync(filePath)) return [];
+
+	try {
+		const raw = readFileSync(filePath, "utf-8");
+		const data = JSON.parse(raw) as MetricsHistoryFile;
+		return Array.isArray(data.snapshots) ? data.snapshots : [];
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * 追加一条 snapshot，滑动窗口保留最近 30 条。
+ */
+export function saveMetricsSnapshot(dir: string, snapshot: MetricsSnapshot): void {
+	const history = loadMetricsHistory(dir);
+	history.push(snapshot);
+
+	// 滑动窗口：超出上限时删除最老的
+	if (history.length > MAX_METRICS_SNAPSHOTS) {
+		history.splice(0, history.length - MAX_METRICS_SNAPSHOTS);
+	}
+
+	const filePath = metricsHistoryPath(dir);
+	writeFileSync(
+		filePath,
+		JSON.stringify({ snapshots: history }, null, 2),
+		"utf-8",
+	);
+}
+
+// ── History JSONL ────────────────────────────────────
+
 export function loadHistory(dir: string, limit: number = 10): HistoryEntry[] {
 	const filePath = historyPath(dir);
 	if (!existsSync(filePath)) return [];

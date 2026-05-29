@@ -10,7 +10,6 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
 import type { JudgeInput, EvolutionSuggestion } from "./types.js";
 
 // ── target → 模板文件名映射 ─────────────────────────
@@ -90,7 +89,6 @@ export function buildJudgeInput(
 
 	writeFileSync(reportPath, JSON.stringify(subset, null, 2), "utf-8");
 
-	const templateFileName = TARGET_TEMPLATE[target];
 	const promptFilePath = join(tmpDir, `judge-prompt-${timestamp}.txt`);
 	// 写入用户消息到临时文件，方便 runJudge 读取
 	const userMessage = `分析以下信号数据，生成进化建议：\n\n${JSON.stringify(subset, null, 2)}`;
@@ -135,46 +133,44 @@ function extractAssistantText(stdout: string): string {
 	return lastAssistantText;
 }
 
-// ── runJudge ─────────────────────────────────────────
+// ── runJudgeOnce（单次 Judge 调用） ─────────────────
 
-const JUDGE_TIMEOUT_MS = 120_000;
+/** 单次 Judge 调用的原始结果 */
+interface JudgeOnceResult {
+	suggestions: EvolutionSuggestion[];
+	raw: string;
+	stderr: string;
+}
+
+const JUDGE_TIMEOUT_MS = 300_000;
 
 /**
- * Spawn pi 子进程作为 LLM Judge，返回进化建议数组。
- *
- * @param input        buildJudgeInput 的返回值
- * @param templateDir  模板文件目录（含 session-quality.txt 等）
+ * 执行一次 pi 子进程调用，返回解析后的建议 + 原始输出。
+ * 如果 parseJudgeOutput 抛错（包括 "Empty Judge output"），
+ * 会在 result 中把 raw 和 stderr 带回来供上层判断是否重试。
  */
-export async function runJudge(
-	input: JudgeInput,
-	templateDir: string,
-): Promise<EvolutionSuggestion[]> {
-	const templateFileName = TARGET_TEMPLATE[input.target];
-	const templatePath = join(templateDir, templateFileName);
-
-	if (!existsSync(templatePath)) {
-		throw new Error(`Judge template not found: ${templatePath}`);
-	}
-
-	const templateContent = readFileSync(templatePath, "utf-8");
-	const signalData = readFileSync(input.reportPath, "utf-8");
-	const userMessage = `分析以下信号数据，生成进化建议：\n\n${signalData}`;
-
-	// 构造 pi 命令参数
+function runJudgeOnce(
+	templateContent: string,
+	userMessage: string,
+): Promise<JudgeOnceResult> {
 	const args = [
 		"--mode", "json",
 		"-p",
 		"--model", "router-openai/glm-5.1",
 		"--no-session",
 		"--append-system-prompt", templateContent,
-		userMessage,
 	];
 
-	return new Promise<EvolutionSuggestion[]>((resolve, reject) => {
+	return new Promise<JudgeOnceResult>((resolve, reject) => {
+		// stdin=pipe 以便写入 userMessage
 		const proc = spawn("pi", args, {
 			shell: false,
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: ["pipe", "pipe", "pipe"],
 		});
+
+		// 通过 stdin 传递 userMessage，避免 args 截断或 shell 转义问题
+		proc.stdin.write(userMessage);
+		proc.stdin.end();
 
 		let stdout = "";
 		let stderr = "";
@@ -220,22 +216,73 @@ export async function runJudge(
 
 			try {
 				const suggestions = parseJudgeOutput(raw);
-				resolve(suggestions);
-			} catch (parseErr) {
-				// 非 JSON 输出：保存原始内容再抛错
-				const ts = Date.now();
-				const rawPath = join(
-					input.reportPath.slice(0, input.reportPath.lastIndexOf("/")),
-					`judge-raw-${ts}.txt`,
-				);
-				writeFileSync(rawPath, raw, "utf-8");
-				const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
-				reject(new Error(
-					`Failed to parse Judge output: ${msg}. Raw output saved to: ${rawPath}`,
-				));
+				resolve({ suggestions, raw, stderr });
+			} catch (_parseErr) {
+				// 解析失败：带 raw 返回，让上层决定是否重试
+				resolve({ suggestions: [], raw, stderr });
 			}
 		});
 	});
+}
+
+// ── runJudge ─────────────────────────────────────────
+
+/**
+ * Spawn pi 子进程作为 LLM Judge，返回进化建议数组。
+ * 如果首次调用返回空输出，自动用简化 prompt 重试一次。
+ *
+ * @param input        buildJudgeInput 的返回值
+ * @param templateDir  模板文件目录（含 session-quality.txt 等）
+ */
+export async function runJudge(
+	input: JudgeInput,
+	templateDir: string,
+): Promise<EvolutionSuggestion[]> {
+	const templateFileName = TARGET_TEMPLATE[input.target];
+	const templatePath = join(templateDir, templateFileName);
+
+	if (!existsSync(templatePath)) {
+		throw new Error(`Judge template not found: ${templatePath}`);
+	}
+
+	const templateContent = readFileSync(templatePath, "utf-8");
+	// 现在 reportPath 指向信号文件（SignalReport JSON）
+	const signalData = readFileSync(input.reportPath, "utf-8");
+	const userMessage = `以下是信号摘要数据，请生成进化建议：\n\n${signalData}`;
+
+	// 第一次尝试
+	const first = await runJudgeOnce(templateContent, userMessage);
+
+	// 首次返回非空建议 → 直接返回
+	if (first.suggestions.length > 0) {
+		return first.suggestions;
+	}
+
+	// 空输出可能因为 LLM 输出格式异常，用简化 prompt 重试一次
+	const retryMessage = `Output ONLY a JSON array of suggestions. No markdown, no explanation. If no suggestions, output [].\n\n${signalData}`;
+	const second = await runJudgeOnce(templateContent, retryMessage);
+
+	if (second.suggestions.length > 0) {
+		return second.suggestions;
+	}
+
+	// 两次都失败 → 保存诊断信息并抛错
+	const ts = Date.now();
+	const tmpDir = input.reportPath.slice(0, input.reportPath.lastIndexOf("/"));
+	const stderrPath = join(tmpDir, `judge-stderr-${ts}.txt`);
+	writeFileSync(stderrPath, [
+		`=== Attempt 1 ===`,
+		`stderr: ${first.stderr.slice(0, 2000)}`,
+		`raw output: ${first.raw.slice(0, 2000)}`,
+		``,
+		`=== Attempt 2 (retry) ===`,
+		`stderr: ${second.stderr.slice(0, 2000)}`,
+		`raw output: ${second.raw.slice(0, 2000)}`,
+	].join("\n"), "utf-8");
+
+	throw new Error(
+		`LLM Judge returned empty output after 2 attempts. Diagnostics saved to: ${stderrPath}`,
+	);
 }
 
 // ── parseJudgeOutput ─────────────────────────────────

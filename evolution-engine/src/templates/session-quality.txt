@@ -2,11 +2,11 @@
 
 ## 输入数据
 
-以下是最近 N 天的 session 信号数据（JSON 格式），包含：
-- token 使用统计（每日输入/输出量、趋势）
-- 工具调用频率与失败率
-- skill/agent 触发模式
-- 用户交互模式（turn 数、session 时长）
+以下是信号摘要（SignalReport JSON 格式），包含：
+- metricsSnapshot（指标快照）
+- anomalies（异常检测）
+- trends（趋势变化）
+- compressed（压缩数据）
 
 ## 评判维度
 
