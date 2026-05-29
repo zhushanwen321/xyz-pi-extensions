@@ -9,12 +9,11 @@ must_fix: 0
 
 | 检查项 | 结果 | 说明 |
 |--------|------|------|
-| spec 内容完整度 | PASS | 209 行 / 9848 字节，5 个 Functional Requirements（FR-1 到 FR-5），每个含多级子条款，非空洞框架 |
-| 验收标准可测试性 | PASS | 11 条 AC 全部可测试（AC-1~AC-11），包含幂等性、章节结构、并发保护、去重等具体可验证条件 |
-| 具体用户场景/业务规则 | PASS | 包含完整场景：session_start 触发、lock 并发保护、零 session 日处理、pending.json 增量合并（title 去重 + 30 条容量保护）、GC 清理 |
-| 项目特定技术细节 | PASS | 引用项目真实路径（`gc.ts`、`state.ts`、`types.ts`、`monitor.ts`、`summarizer.ts`、`judge.ts`），全部验证存在；指定 `@mariozechner/*` import scope；引用现有命令 `/evolve`、`/evolve-apply` 等 |
-| 引用的源文件存在性 | PASS | 验证 `evolution-engine/src/` 下所有引用文件均真实存在（gc.ts, state.ts, types.ts, index.ts, monitor.ts, summarizer.ts, judge.ts, applier.ts, commands.ts 等） |
-| Git 历史真实性 | PASS | 项目在 main 分支，有近期合并提交记录，.xyz-harness 目录本身在版本控制内 |
+| 正文内容是否充实而非空壳 | PASS | 全文 209 行，涵盖 Background、FR-1 至 FR-5（含 11 个子项）、11 条 AC、7 条约束、Task Breakdown、Complexity Assessment。每个章节都有实质性内容，非仅有标题 |
+| 验收标准是否具体可测量 | PASS | AC-1 至 AC-11 均为具体可验证的标准，如"同一天内多次启动 Pi 不会重复生成报告"、"类型检查 `npx tsc --noEmit` 通过"、"现有命令行为不受影响"。无"提升用户体验"类模糊表述 |
+| 是否有具体用户场景与业务规则 | PASS | Background 描述了"被动接收模式"替代"手动触发"的真实用户痛点。业务规则极具体：lock 文件（PID+timestamp）、stale lock 检测、temp-file-rename 原子写、title 精确去重、30 条 pending 容量保护、零 session 日处理 |
+| 是否包含具体技术细节而非泛泛而谈 | PASS | 包含大量可验证的技术细节：报告路径 `daily-reports/YYYY-MM-DD.md`、日期格式 `new Date().toISOString().slice(0, 10)`、5 个报告章节与现有数据结构（MetricsSnapshot/SignalReport/EvolutionSuggestion）的映射表、GC 保留策略（> 30 天） |
+| 内容是否对应真实项目 | PASS | 引用的现有文件全部在文件系统中存在且内容匹配：`evolution-engine/src/monitor.ts`（auto-trigger 检测）、`gc.ts`、`state.ts`、`types.ts`（含 `MetricsSnapshot` / `SignalReport` / `EvolutionSuggestion` / `EffectReview` 等导出类型）、`summarizer.ts`、`judge.ts`、`commands.ts`（注册了 `/evolve` / `/evolve-apply` / `/evolve-stats` / `/evolve-rollback` 四个命令）。引用路径 `~/.pi/agent/evolution-data/suggestions/pending.json` 存在且非空。引用项目约束 `@mariozechner/*` scope 在现有代码中使用 |
 
 ### MUST_FIX 问题
 
@@ -22,4 +21,4 @@ must_fix: 0
 
 ### 总结
 
-未发现任何伪造信号。spec.md 内容充实、项目上下文准确、引用的所有源文件路径均经验证存在、验收标准具体可测试。该 deliverable 是真实可信的 Phase 1 Spec 产出。
+spec.md 内容充实、结构完整，所有验收标准具体可测试。技术细节丰富——lock 文件机制、去重策略、容量保护、GC 策略均有明确规则。引用的现有模块和数据结构均在文件系统中存在且内容与 spec 描述一致。没有检测到任何伪造或严重缺失的证据。deliverable 可信。
