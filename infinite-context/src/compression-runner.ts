@@ -22,11 +22,11 @@ function beforeCompressionUI(pi: ExtensionAPI, ctx: ExtensionContext, segmentCou
 	ctx.ui.setWorkingMessage(`IC Tree Compact: compressing ${segmentCount} segments...`);
 	ctx.ui.setStatus("ic-compact", `IC compressing ${segmentCount} segments...`);
 
-	// Bubble message
-	const tokenInfo = tokensBefore !== null ? ` (${tokensBefore.toLocaleString()} tokens)` : "";
+	// Bubble message — subagent 风格：简洁一行
+	const tokenInfo = tokensBefore !== null ? `, ${(tokensBefore / 1000).toFixed(1)}K tokens` : "";
 	pi.sendMessage({
 		customType: IC_COMPACT_START_TYPE,
-		content: `compressing ${segmentCount} segments${tokenInfo}...`,
+		content: `⏳ IC Tree Compact: ${segmentCount} segments${tokenInfo}`,
 		display: true,
 	});
 	return { tokensBefore };
@@ -47,10 +47,11 @@ function afterCompressionUI(pi: ExtensionAPI, ctx: ExtensionContext, result: Com
 	});
 
 	if (ctx.hasUI) {
-		const summary = `${tree.root.children.length} groups, depth ${tree.depth}, ${tree.totalTokens} tokens`;
+		const icon = result.fallbackUsed ? "⚠️" : "✅";
+		const summary = `${icon} IC Tree Compact: ${tree.root.children.length} groups, ${tree.totalTokens} tokens`;
 		pi.sendMessage({
 			customType: IC_COMPACT_END_TYPE,
-			content: `${summary} | tree: ${tree.totalTokens} tokens`,
+			content: summary,
 			display: true,
 			details: { fallbackUsed: result.fallbackUsed, errorReason: result.errorReason },
 		});
