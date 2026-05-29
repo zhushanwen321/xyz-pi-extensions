@@ -443,7 +443,9 @@ export class TreeCompactor {
 				continue;
 			}
 
-			console.log(`[infinite-context] assistant text (first ${IC_CONFIG.maxStdoutLogLength} chars): ${assistantText.slice(0, IC_CONFIG.maxStdoutLogLength)}`);
+			if (assistantText.length > 0) {
+				console.log(`[infinite-context] assistant text ${assistantText.length}B (${assistantText.split("\n").length} lines)`);
+			}
 
 			const validated = validateTreeOutput(assistantText.trim(), segments);
 			if ("reason" in validated) {
@@ -538,7 +540,7 @@ export class TreeCompactor {
 			return undefined;
 		}
 
-		console.log(`[infinite-context] assistant text (first ${IC_CONFIG.maxStdoutLogLength} chars): ${assistantText.slice(0, IC_CONFIG.maxStdoutLogLength)}`);
+		console.log(`[infinite-context] assistant text ${assistantText.length}B (${assistantText.split("\n").length} lines)`);
 
 		const result = validateTreeOutput(assistantText.trim(), segments);
 		if ("reason" in result) {
