@@ -27,9 +27,11 @@ evolution-engine 有 5 个 command（`/evolve`, `/evolve-apply`, `/evolve-stats`
 2. 调用 `pi.sendUserMessage` 转发用户输入
 3. 返回结果
 
-### FR-3: 删除 commands.ts 中不再需要的辅助函数
+### FR-3: 清理 index.ts 中不再需要的 import
 
-移除 `commands.ts` 中仅被 command handler 使用的辅助函数（如有），保留被 tool execute 直接调用的核心业务函数不变。
+统一 sendUserMessage 后，index.ts 中 `/evolve`、`/evolve-apply`、`/evolve-stats` 的 command handler 不再直接调用 commands.ts/state.ts 的函数。需要清理：
+- 从 commands.ts 导入但仅被 command handler（非 tool）使用的 import
+- 注意：`/evolve-rollback` 无参数时仍需 `loadHistory` + `renderRollbackList`，这两个 import 保留
 
 ## Acceptance Criteria
 
@@ -61,7 +63,17 @@ evolution-engine 有 5 个 command（`/evolve`, `/evolve-apply`, `/evolve-stats`
 - `/evolve 分析最近 3 天的数据` → AI 调用 `{ since: "3d" }`
 - `/evolve-apply 跳过第 2 个建议` → AI 调用 `{ action: "skip", index: 2 }`
 
-### AC-8: TypeScript 编译通过，ESLint 0 errors
+### AC-8: `/evolve-rollback` 无参数保留现有行为
+- 输入 `/evolve-rollback`（无参数）
+- 保留现有逻辑：调用 `loadHistory` + `renderRollbackList` 显示历史列表
+- 不走 sendUserMessage（tool schema 的 index 是必填参数，AI 无法调用）
+
+### AC-9: 无参数 command 的默认行为
+- `/evolve` 无参数 → AI 调用 `{ target: "all", since: "7d" }`（tool schema 默认值）
+- `/evolve-apply` 无参数 → AI 调用 `{ action: "list" }`（合理的默认行为）
+- `/evolve-stats` 无参数 → AI 调用 `{}`（tool 无参数）
+
+### AC-10: TypeScript 编译通过，ESLint 0 errors
 
 ## Constraints
 
@@ -69,6 +81,7 @@ evolution-engine 有 5 个 command（`/evolve`, `/evolve-apply`, `/evolve-stats`
 - **不改 commands.ts 业务逻辑**：handleEvolve 等 5 个 handler 的核心逻辑不变，只改 index.ts 中的 command 注册部分
 - **不改其他扩展**：只修改 evolution-engine/src/index.ts 中的 command handler 注册代码
 - `/evolve-report` 已走 sendUserMessage 模式，保持不变作为参考模板
+- **`/evolve-rollback` 无参数路径**：保留现有的 `loadHistory` + `renderRollbackList` 逻辑，不走 sendUserMessage
 
 ## 业务用例
 
