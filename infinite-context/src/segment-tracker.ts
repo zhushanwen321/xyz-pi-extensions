@@ -190,7 +190,7 @@ export class SegmentTracker {
 			const newSegment: Segment = {
 				segId,
 				turnRange: { start: estimatedTurn, end: estimatedTurn },
-				userMessage: dedupeKey,
+				userMessage: userText, // 完整文本；dedupeKey 仅用于去重
 				completed: false,
 				filePath,
 			};
