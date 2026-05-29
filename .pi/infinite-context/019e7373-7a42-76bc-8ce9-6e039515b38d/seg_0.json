@@ -1,0 +1,121 @@
+{
+  "segId": "seg_0",
+  "turnRange": {
+    "start": 0,
+    "end": 0
+  },
+  "userMessage": "Task: 验证 evolve-daily-report 的 TC-3-01 和 TC-6-01 到 TC-6-02 测试用例。\n\nread 以下文件：\n- `",
+  "timestamp": 1780053408625,
+  "turns": [
+    {
+      "turnIndex": 0,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The user wants me to verify specific test cases by reading two source files. Let me read both files.",
+            "thinkingSignature": "reasoning_content"
+          },
+          {
+            "type": "toolCall",
+            "id": "call_1606969242254d6eafd5c2f3",
+            "name": "read",
+            "arguments": {
+              "path": "/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/gc.ts"
+            }
+          },
+          {
+            "type": "toolCall",
+            "id": "call_ba9e93446a7a49ca9501b428",
+            "name": "read",
+            "arguments": {
+              "path": "/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/state.ts"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5-turbo",
+        "usage": {
+          "input": 253,
+          "output": 88,
+          "cacheRead": 23936,
+          "cacheWrite": 0,
+          "totalTokens": 24277,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780053408654,
+        "responseId": "20260529191648e76471b944284993"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_1606969242254d6eafd5c2f3",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "/**\n * Evolution Engine — 数据垃圾回收\n *\n * 清理过期的 reports、signals、daily 数据文件，防止磁盘无限膨胀。\n * 由 /evolve 命令在每次运行后自动调用。\n */\n\nimport { existsSync, readdirSync, unlinkSync, statSync } from \"node:fs\";\nimport { join } from \"node:path\";\n\n// ── GC 策略常量 ──────────────────────────────────────\n\n/** reports/*.json 保留最新 N 个 */\nconst MAX_REPORTS = 3;\n\n/** signals/*.json 保留最新 N 个 */\nconst MAX_SIGNALS = 30;\n\n/** daily/*.json 保留天数 */\nconst MAX_DAILY_DAYS = 90;\n\n/** daily-reports/*.md 保留天数 */\nconst MAX_DAILY_REPORT_DAYS = 30;\n\n// ── 辅助函数 ─────────────────────────────────────────\n\n/** 安全地按修改时间降序排列目录中的 .json 文件 */\nfunction listJsonByMtime(dir: string): string[] {\n\tif (!existsSync(dir)) return [];\n\n\ttry {\n\t\tconst entries = readdirSync(dir);\n\t\treturn entries\n\t\t\t.filter(name => name.endsWith(\".json\"))\n\t\t\t.map(name => ({\n\t\t\t\tname,\n\t\t\t\tpath: join(dir, name),\n\t\t\t\tmtime: statSync(join(dir, name)).mtimeMs,\n\t\t\t}))\n\t\t\t.sort((a, b) => b.mtime - a.mtime)\n\t\t\t.map(e => e.path);\n\t} catch {\n\t\treturn [];\n\t}\n}\n\n/** 删除指定文件路径列表 */\nfunction removeFiles(paths: string[]): number {\n\tlet removed = 0;\n\tfor (const p of paths) {\n\t\ttry {\n\t\t\tunlinkSync(p);\n\t\t\tremoved++;\n\t\t} catch (err) {\n\t\t\t// 文件可能已被其他进程删除，记录但不停滞\n\t\t\tconsole.warn(`[evolve-gc] Failed to remove ${p}: ${err instanceof Error ? err.message : String(err)}`);\n\t\t}\n\t}\n\treturn removed;\n}\n\n/** 从 daily 文件名提取日期并过滤超过 N 天的 */\nfunction listExpiredDaily(dir: string, maxDays: number): string[] {\n\tif (!existsSync(dir)) return [];\n\n\tconst cutoff = Date.now() - maxDays * 24 * 60 * 60 * 1000;\n\n\ttry {\n\t\tconst entries = readdirSync(dir);\n\t\tconst expired: string[] = [];\n\n\t\tfor (const name of entries) {\n\t\t\tif (!name.endsWith(\".json\")) continue;\n\n\t\t\t// daily 文件名格式: 2026-05-27.json\n\t\t\tconst dateStr = name.replace(\".json\", \"\");\n\t\t\tconst fileTime = new Date(dateStr).getTime();\n\n\t\t\t// 文件名无法解析为日期时，用 mtime 兜底\n\t\t\tconst effectiveTime = Number.isNaN(fileTime)\n\t\t\t\t? statSync(join(dir, name)).mtimeMs\n\t\t\t\t: fileTime;\n\n\t\t\tif (effectiveTime < cutoff) {\n\t\t\t\texpired.push(join(dir, name));\n\t\t\t}\n\t\t}\n\n\t\treturn expired;\n\t} catch {\n\t\treturn [];\n\t}\n}\n\n/** 从 daily-reports 文件名提取日期并过滤超过 N 天的指定扩展名文件 */\nfunction listExpiredDailyByExt(dir: string, maxDays: number, ext: string): string[] {\n\tif (!existsSync(dir)) return [];\n\n\tconst cutoff = Date.now() - maxDays * 24 * 60 * 60 * 1000;\n\n\ttry {\n\t\tconst entries = readdirSync(dir);\n\t\tconst expired: string[] = [];\n\n\t\tfor (const name of entries) {\n\t\t\t// 排除 dotfile 和不匹配扩展名的文件\n\t\t\tif (!name.endsWith(ext) || name.startsWith(\".\")) continue;\n\n\t\t\t// 文件名格式: 2026-05-27.md\n\t\t\tconst dateStr = name.replace(ext, \"\");\n\t\t\tconst fileTime = new Date(dateStr).getTime();\n\n\t\t\t// 文件名无法解析为日期时，用 mtime 兜底\n\t\t\tconst effectiveTime = Number.isNaN(fileTime)\n\t\t\t\t? statSync(join(dir, name)).mtimeMs\n\t\t\t\t: fileTime;\n\n\t\t\tif (effectiveTime < cutoff) {\n\t\t\t\texpired.push(join(dir, name));\n\t\t\t}\n\t\t}\n\n\t\treturn expired;\n\t} catch {\n\t\treturn [];\n\t}\n}\n\n// ── 公共 API ─────────────────────────────────────────\n\n/** GC 清理结果 */\nexport interface GcResult {\n\treportsRemoved: number;\n\tsignalsRemoved: number;\n\tdailyRemoved: number;\n\tdailyReportsRemoved: number;\n}\n\n/**\n * 执行数据垃圾回收。\n * 目录不存在时静默跳过，不报错。\n */\nexport function runGc(evolutionDir: string): GcResult {\n\tconst reportsDir = join(evolutionDir, \"reports\");\n\tconst signalsDir = join(evolutionDir, \"signals\");\n\tconst dailyDir = join(evolutionDir, \"daily\");\n\n\t// reports: 保留最新 MAX_REPORTS 个\n\tconst reportFiles = listJsonByMtime(reportsDir);\n\tconst reportsToRemove = reportFiles.slice(MAX_REPORTS);\n\tconst reportsRemoved = removeFiles(reportsToRemove);\n\n\t// signals: 保留最新 MAX_SIGNALS 个\n\tconst signalFiles = listJsonByMtime(signalsDir);\n\tconst signalsToRemove = signalFiles.slice(MAX_SIGNALS);\n\tconst signalsRemoved = removeFiles(signalsToRemove);\n\n\t// daily: 保留 MAX_DAILY_DAYS 天内\n\tconst expiredDaily = listExpiredDaily(dailyDir, MAX_DAILY_DAYS);\n\tconst dailyRemoved = removeFiles(expiredDaily);\n\n\t// daily-reports: 保留 MAX_DAILY_REPORT_DAYS 天内的 .md 文件\n\tlet dailyReportsRemoved = 0;\n\tconst dailyReportsDir = join(evolutionDir, \"daily-reports\");\n\tif (existsSync(dailyReportsDir)) {\n\t\tconst expiredReports = listExpiredDailyByExt(dailyReportsDir, MAX_DAILY_REPORT_DAYS, \".md\");\n\t\tdailyReportsRemoved = removeFiles(expiredReports);\n\t}\n\n\treturn { reportsRemoved, signalsRemoved, dailyRemoved, dailyReportsRemoved };\n}\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780053409790
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "call_ba9e93446a7a49ca9501b428",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "/**\n * Evolution Engine — 状态持久化\n *\n * 管理 suggestions/pending.json 和 history.jsonl。\n * 所有路径基于传入的 evolutionDir 参数，不硬编码。\n */\n\nimport { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from \"node:fs\";\nimport { join } from \"node:path\";\nimport type { PendingFile, HistoryEntry, MetricsSnapshot, EvolutionSuggestion } from \"./types.js\";\n\n// ── 内部路径 ─────────────────────────────────────────\n\nfunction suggestionsPath(dir: string): string {\n\treturn join(dir, \"suggestions\", \"pending.json\");\n}\n\nfunction historyPath(dir: string): string {\n\treturn join(dir, \"history.jsonl\");\n}\n\nfunction metricsHistoryPath(dir: string): string {\n\treturn join(dir, \"metrics-history.json\");\n}\n\n// ── 公共 API ─────────────────────────────────────────\n\n/**\n * 读取 pending.json。\n * 文件不存在或 JSON 损坏时返回 null。\n */\nexport function loadPending(dir: string): PendingFile | null {\n\tconst filePath = suggestionsPath(dir);\n\tif (!existsSync(filePath)) return null;\n\n\ttry {\n\t\tconst raw = readFileSync(filePath, \"utf-8\");\n\t\tconst pending = JSON.parse(raw) as PendingFile;\n\n\t\t// Migration: 旧格式有 diff 字段而无 instruction，自动迁移\n\t\tfor (const sug of pending.suggestions) {\n\t\t\tif (!sug.instruction && (sug as unknown as Record<string, unknown>).diff) {\n\t\t\t\tsug.instruction = String((sug as unknown as Record<string, unknown>).diff);\n\t\t\t\tdelete (sug as unknown as Record<string, unknown>).diff;\n\t\t\t}\n\t\t}\n\n\t\treturn pending;\n\t} catch {\n\t\treturn null;\n\t}\n}\n\n/**\n * 写入 pending.json。\n * 目录不存在时递归创建。\n */\nexport function savePending(dir: string, pending: PendingFile): void {\n\tconst filePath = suggestionsPath(dir);\n\tconst dirName = join(dir, \"suggestions\");\n\n\tif (!existsSync(dirName)) {\n\t\tmkdirSync(dirName, { recursive: true });\n\t}\n\n\twriteFileSync(filePath, JSON.stringify(pending, null, 2), \"utf-8\");\n}\n\n/**\n * 追加一条 JSON 行到 history.jsonl。\n * 文件不存在时创建。\n */\nexport function appendHistory(dir: string, entry: HistoryEntry): void {\n\tconst filePath = historyPath(dir);\n\n\tappendFileSync(filePath, JSON.stringify(entry) + \"\\n\", \"utf-8\");\n}\n\n/**\n * 读取 history.jsonl 最后 N 条记录。\n * 文件不存在返回空数组。\n */\n// ── Metrics Snapshot 持久化 ─────────────────────────\n\n/** metrics-history.json 的文件结构 */\ninterface MetricsHistoryFile {\n\tsnapshots: MetricsSnapshot[];\n}\n\nconst MAX_METRICS_SNAPSHOTS = 30;\n\n/**\n * 读取 metrics 历史。文件不存在或损坏时返回空数组。\n */\nexport function loadMetricsHistory(dir: string): MetricsSnapshot[] {\n\tconst filePath = metricsHistoryPath(dir);\n\tif (!existsSync(filePath)) return [];\n\n\ttry {\n\t\tconst raw = readFileSync(filePath, \"utf-8\");\n\t\tconst data = JSON.parse(raw) as MetricsHistoryFile;\n\t\treturn Array.isArray(data.snapshots) ? data.snapshots : [];\n\t} catch {\n\t\treturn [];\n\t}\n}\n\n/**\n * 追加一条 snapshot，滑动窗口保留最近 30 条。\n */\nexport function saveMetricsSnapshot(dir: string, snapshot: MetricsSnapshot): void {\n\tconst history = loadMetricsHistory(dir);\n\thistory.push(snapshot);\n\n\t// 滑动窗口：超出上限时删除最老的\n\tif (history.length > MAX_METRICS_SNAPSHOTS) {\n\t\thistory.splice(0, history.length - MAX_METRICS_SNAPSHOTS);\n\t}\n\n\tconst filePath = metricsHistoryPath(dir);\n\twriteFileSync(\n\t\tfilePath,\n\t\tJSON.stringify({ snapshots: history }, null, 2),\n\t\t\"utf-8\",\n\t);\n}\n\n// ── History JSONL ────────────────────────────────────\n\n// ── Daily Report 状态 ──────────────────────────────\n\n/** pending.json 中 pending 状态建议的最大数量 */\nconst MAX_PENDING_SUGGESTIONS = 30;\n\n/**\n * 增量合并新建议到 pending.json。\n * - title 精确匹配去重：已有 pending 建议的 title 与新建议相同时跳过\n * - 容量保护：pending 状态的建议不超过 MAX_PENDING_SUGGESTIONS 条\n * - 无现有文件时创建新 PendingFile\n */\nexport function mergePending(dir: string, newSuggestions: EvolutionSuggestion[]): void {\n\tif (newSuggestions.length === 0) return;\n\n\tconst existing = loadPending(dir);\n\tif (!existing) {\n\t\tconst pending: PendingFile = {\n\t\t\tgeneratedAt: new Date().toISOString(),\n\t\t\treportUsed: \"daily-report\",\n\t\t\tsuggestions: newSuggestions,\n\t\t};\n\t\tsavePending(dir, pending);\n\t\treturn;\n\t}\n\n\t// title 去重：跳过与已有 pending 建议同名的\n\tconst pendingTitles = new Set(\n\t\texisting.suggestions\n\t\t\t.filter(s => s.status === \"pending\")\n\t\t\t.map(s => s.title),\n\t);\n\tconst unique = newSuggestions.filter(s => !pendingTitles.has(s.title));\n\n\tif (unique.length > 0) {\n\t\texisting.suggestions.push(...unique);\n\t}\n\n\t// 容量保护：超出时按数组顺序驱逐最早的 pending（先入先出）\n\tconst pendingCount = existing.suggestions.filter(s => s.status === \"pending\").length;\n\tif (pendingCount > MAX_PENDING_SUGGESTIONS) {\n\t\tconst overflow = pendingCount - MAX_PENDING_SUGGESTIONS;\n\t\tlet evicted = 0;\n\t\tfor (const sug of existing.suggestions) {\n\t\t\tif (sug.status === \"pending\" && evicted < overflow) {\n\t\t\t\tsug.status = \"rejected\";\n\t\t\t\tevicted++;\n\t\t\t}\n\t\t}\n\t\tconsole.warn(\n\t\t\t`[evolve] Auto-evicted ${evicted} pending suggestion(s) to maintain capacity cap of ${MAX_PENDING_SUGGESTIONS}`,\n\t\t);\n\t}\n\n\tsavePending(dir, existing);\n}\n\n/**\n * 写入每日运行状态文件，供诊断。\n * 文件路径: {dailyReportsDir}/.last-run-status\n */\nexport function saveLastRunStatus(\n\tdailyReportsDir: string,\n\tstatus: \"success\" | \"failed\",\n\terrorSummary?: string,\n): void {\n\tconst filePath = join(dailyReportsDir, \".last-run-status\");\n\tconst data = {\n\t\tstatus,\n\t\ttimestamp: new Date().toISOString(),\n\t\t...(errorSummary ? { errorSummary } : {}),\n\t};\n\twriteFileSync(filePath, JSON.stringify(data, null, 2), \"utf-8\");\n}\n\n// ── History JSONL ────────────────────────────────────\n\nexport function loadHistory(dir: string, limit: number = 10): HistoryEntry[] {\n\tconst filePath = historyPath(dir);\n\tif (!existsSync(filePath)) return [];\n\n\ttry {\n\t\tconst raw = readFileSync(filePath, \"utf-8\").trim();\n\t\tif (raw.length === 0) return [];\n\n\t\tconst lines = raw.split(\"\\n\");\n\t\tconst tail = lines.slice(-limit);\n\n\t\tconst entries: HistoryEntry[] = [];\n\t\tfor (const line of tail) {\n\t\t\tconst trimmed = line.trim();\n\t\t\tif (trimmed.length === 0) continue;\n\t\t\ttry {\n\t\t\t\tconst entry = JSON.parse(trimmed) as HistoryEntry;\n\t\t\t\t// Migration: 旧格式有 diff 字段而无 instruction\n\t\t\t\tif (!entry.instruction && (entry as unknown as Record<string, unknown>).diff) {\n\t\t\t\t\tentry.instruction = String((entry as unknown as Record<string, unknown>).diff);\n\t\t\t\t\tdelete (entry as unknown as Record<string, unknown>).diff;\n\t\t\t\t}\n\t\t\t\tentries.push(entry);\n\t\t\t} catch {\n\t\t\t\t// 损坏行跳过\n\t\t\t}\n\t\t}\n\t\treturn entries;\n\t} catch {\n\t\treturn [];\n\t}\n}\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780053409790
+        }
+      ]
+    },
+    {
+      "turnIndex": 1,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "TC-3-01: PASS | `MAX_DAILY_REPORT_DAYS=30`（第15行），`listExpiredDailyByExt` 同时检查 `name.endsWith(ext)` 和 `name.startsWith(\".\")`（第80行），超过 30 天 cutoff 的 `.md` 文件被加入 expired 列表\n\nTC-6-01: PASS | `mergePending` 用 `Set` 收集现有 `status === \"pending\"` 的 `title`（第175-178行），`filter` 跳过 `pendingTitles.has(s.title)` 的新建议（第180行）\n\nTC-6-02: PASS | `MAX_PENDING_SUGGESTIONS=30`（第163行），超出时按数组顺序遍历，将最早的 `pending` 逐个标记为 `rejected` 直到数量 ≤ 30（第184-191行），且输出 warn 日志"
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5-turbo",
+        "usage": {
+          "input": 2964,
+          "output": 187,
+          "cacheRead": 24256,
+          "cacheWrite": 0,
+          "totalTokens": 27407,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "stop",
+        "timestamp": 1780053409790,
+        "responseId": "202605291916495bbabe52c2334da1"
+      },
+      "toolResults": []
+    }
+  ]
+}

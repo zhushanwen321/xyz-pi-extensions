@@ -1,0 +1,121 @@
+{
+  "segId": "seg_0",
+  "turnRange": {
+    "start": 0,
+    "end": 0
+  },
+  "userMessage": "Task: 验证 evolve-daily-report 的 TC-1-01 到 TC-1-03 和 TC-4-01 到 TC-4-03 测试用例。\n\n对每个测",
+  "timestamp": 1780053408623,
+  "turns": [
+    {
+      "turnIndex": 0,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Let me read the two source files to verify the test cases.",
+            "thinkingSignature": "reasoning_content"
+          },
+          {
+            "type": "toolCall",
+            "id": "call_b4e7a89efa2b4b5293ce4fd2",
+            "name": "read",
+            "arguments": {
+              "path": "/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/daily-trigger.ts"
+            }
+          },
+          {
+            "type": "toolCall",
+            "id": "call_a2bb5b9bf8c946d4a98667e2",
+            "name": "read",
+            "arguments": {
+              "path": "/Users/zhushanwen/Code/xyz-pi-extensions-workspace/main/evolution-engine/src/report-generator.ts"
+            }
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5-turbo",
+        "usage": {
+          "input": 448,
+          "output": 82,
+          "cacheRead": 23936,
+          "cacheWrite": 0,
+          "totalTokens": 24466,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1780053408653,
+        "responseId": "20260529191648e0446102faf54622"
+      },
+      "toolResults": [
+        {
+          "role": "toolResult",
+          "toolCallId": "call_b4e7a89efa2b4b5293ce4fd2",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "/**\n * Evolution Engine — 每日自动分析触发器\n *\n * 在 session_start 中异步触发，每天最多运行一次完整的分析流程。\n * Fire-and-forget：不阻塞 session 初始化。\n *\n * 流程：检查报告 → 获取锁 → 运行 analyzer → summarizer → Judge\n *       → 生成 Markdown 报告 → 合并 pending → 释放锁\n */\n\nimport {\n\texistsSync,\n\twriteFileSync,\n\treadFileSync,\n\tunlinkSync,\n\tstatSync,\n\trenameSync,\n\tmkdirSync,\n} from \"node:fs\";\nimport { homedir } from \"node:os\";\nimport { join } from \"node:path\";\nimport { execFile } from \"node:child_process\";\n\nimport type { Dirs, JudgeInput, EvolutionSuggestion } from \"./types\";\nimport {\n\tmergePending,\n\tsaveLastRunStatus,\n\tloadMetricsHistory,\n\tloadHistory,\n} from \"./state\";\nimport { generateDailyReport } from \"./report-generator\";\nimport { summarizeReport } from \"./summarizer.js\";\nimport { buildEffectReview } from \"./effect-tracker.js\";\nimport { runJudge } from \"./judge\";\nimport { runGc } from \"./gc.js\";\n\n// ── 常量 ─────────────────────────────────────────────\n\n/** analyzer 脚本执行超时 */\nconst ANALYZER_TIMEOUT_MS = 60_000;\n\nconst ANALYZER_SCRIPT = join(\n\thomedir(),\n\t\".pi/agent/scripts/pi-session-analyzer/analyze.py\",\n);\n\n// ── Lock 管理 ────────────────────────────────────────\n\ninterface LockData {\n\tpid: number;\n\ttimestamp: string;\n}\n\n/**\n * 尝试获取锁文件。\n * - 已有锁但 PID 已死 → 清理 stale lock，获取新锁\n * - 已有锁且 PID 存活 → 返回 false\n * - 无锁文件 → 创建并返回 true\n *\n * 注意：existsSync → writeFileSync 存在理论上的 TOCTOU 竞态窗口，\n * 但 Pi 多 session 并发不常见，实际风险可接受。\n */\nfunction acquireLock(lockPath: string): boolean {\n\tif (existsSync(lockPath)) {\n\t\ttry {\n\t\t\tconst raw = readFileSync(lockPath, \"utf-8\");\n\t\t\tconst lock = JSON.parse(raw) as LockData;\n\n\t\t\t// 检查 PID 是否仍然存活\n\t\t\t// process.kill(pid, 0) 不发送信号，只检查进程存在性\n\t\t\ttry {\n\t\t\t\tprocess.kill(lock.pid, 0);\n\t\t\t\t// PID 仍然存活 → 另一个进程在运行\n\t\t\t\treturn false;\n\t\t\t} catch {\n\t\t\t\t// PID 已死 → stale lock，清理\n\t\t\t\tunlinkSync(lockPath);\n\t\t\t}\n\t\t} catch {\n\t\t\t// 锁文件损坏 → 清理\n\t\t\tunlinkSync(lockPath);\n\t\t}\n\t}\n\n\t// 创建新锁\n\tconst data: LockData = { pid: process.pid, timestamp: new Date().toISOString() };\n\twriteFileSync(lockPath, JSON.stringify(data, null, 2), \"utf-8\");\n\treturn true;\n}\n\n/** 释放锁文件 */\nfunction releaseLock(lockPath: string): void {\n\ttry {\n\t\tunlinkSync(lockPath);\n\t} catch {\n\t\t// 锁文件可能已被其他进程清理\n\t}\n}\n\n// ── Pipeline 步骤 ────────────────────────────────────\n\n/** 运行 Python analyzer 生成原始报告 */\nfunction runAnalyzer(outputPath: string): Promise<string> {\n\treturn new Promise<string>((resolve, reject) => {\n\t\tif (!existsSync(ANALYZER_SCRIPT)) {\n\t\t\treject(new Error(`Session analyzer not found at ${ANALYZER_SCRIPT}`));\n\t\t\treturn;\n\t\t}\n\n\t\texecFile(\n\t\t\t\"python3\",\n\t\t\t[ANALYZER_SCRIPT, \"--since\", \"1d\", \"--format\", \"json\", \"--output\", outputPath],\n\t\t\t{ timeout: ANALYZER_TIMEOUT_MS },\n\t\t\t(err: Error | null) => {\n\t\t\t\tif (err) {\n\t\t\t\t\treject(err);\n\t\t\t\t} else {\n\t\t\t\t\tresolve(outputPath);\n\t\t\t\t}\n\t\t\t},\n\t\t);\n\t});\n}\n\n/**\n * 执行完整分析 pipeline（analyzer → summarizer → judge）。\n * 调用方负责 lock 管理。\n */\nasync function executePipeline(\n\tdirs: Dirs,\n\ttoday: string,\n\treportPath: string,\n): Promise<void> {\n\t// 确保 tmp 目录存在\n\tif (!existsSync(dirs.tmpDir)) {\n\t\tmkdirSync(dirs.tmpDir, { recursive: true });\n\t}\n\n\t// 1. 运行 analyzer\n\tconst tmpReportPath = join(dirs.tmpDir, `daily-raw-${today}.json`);\n\tawait runAnalyzer(tmpReportPath);\n\n\t// 2. 读取原始报告\n\tconst rawReport = readFileSync(tmpReportPath, \"utf-8\");\n\tconst report = JSON.parse(rawReport) as Record<string, unknown>;\n\n\t// 3. Summarizer pipeline\n\tconst metricsHistory = loadMetricsHistory(dirs.evolutionDir);\n\tconst signalReport = summarizeReport(\n\t\treport,\n\t\tmetricsHistory,\n\t\tdirs.evolutionDir,\n\t\ttmpReportPath,\n\t);\n\tmetricsHistory.push(signalReport.metricsSnapshot);\n\n\t// 3b. Effect review\n\tconst recentHistory = loadHistory(dirs.evolutionDir, 30);\n\tconst effectReview = buildEffectReview(recentHistory, metricsHistory);\n\tif (effectReview.length > 0) {\n\t\tsignalReport.effectReview = effectReview;\n\t\t// 写回信号文件，确保 Judge 从文件读取时也能看到 effectReview\n\t\tconst effectSignalPath = join(\n\t\t\tdirs.signalsDir,\n\t\t\t`signal-${signalReport.metricsSnapshot.date}.json`,\n\t\t);\n\t\twriteFileSync(effectSignalPath, JSON.stringify(signalReport, null, 2), \"utf-8\");\n\t}\n\n\t// 4. 运行 LLM Judge（在 GC 之前，避免新信号文件被删除）\n\tconst signalPath = join(\n\t\tdirs.signalsDir,\n\t\t`signal-${signalReport.metricsSnapshot.date}.json`,\n\t);\n\tconst judgeInput: JudgeInput = {\n\t\ttarget: \"all\",\n\t\treportPath: signalPath,\n\t\tpromptFilePath: \"\",\n\t};\n\n\tlet suggestions: EvolutionSuggestion[];\n\ttry {\n\t\tsuggestions = await runJudge(judgeInput, dirs.templateDir);\n\t} catch (err) {\n\t\tconst msg = err instanceof Error ? err.message : String(err);\n\t\tthrow new Error(`LLM Judge failed: ${msg}`);\n\t}\n\n\t// 5. GC（在 Judge 成功后执行，避免误删）\n\trunGc(dirs.evolutionDir);\n\n\t// 6. 生成 Markdown 报告 + 原子写入\n\tconst markdown = generateDailyReport(signalReport, suggestions, effectReview);\n\tconst tmpReport = `${reportPath}.tmp`;\n\twriteFileSync(tmpReport, markdown, \"utf-8\");\n\trenameSync(tmpReport, reportPath);\n\n\t// 7. 合并建议到 pending.json\n\tmergePending(dirs.evolutionDir, suggestions);\n\n\t// 8. 记录成功状态\n\tsaveLastRunStatus(dirs.dailyReportsDir, \"success\");\n\n\t// 9. 清理临时原始报告\n\ttry {\n\t\tunlinkSync(tmpReportPath);\n\t} catch {\n\t\t// 临时文件清理失败不影响主流程\n\t}\n}\n\n// ── 公共 API ─────────────────────────────────────────\n\n/**\n * 每日自动分析入口。\n * 在 session_start 中调用，fire-and-forget。\n * 同一天只运行一次（通过文件存在性判断）。\n */\nexport async function checkAndRunDailyAnalysis(dirs: Dirs): Promise<void> {\n\tconst today = new Date().toISOString().slice(0, 10);\n\tconst reportPath = join(dirs.dailyReportsDir, `${today}.md`);\n\n\t// AC-2: 同一天不重复生成\n\tif (existsSync(reportPath) && statSync(reportPath).size > 0) {\n\t\treturn;\n\t}\n\n\t// 获取锁\n\tconst lockPath = join(dirs.dailyReportsDir, \".daily-report.lock\");\n\tif (!acquireLock(lockPath)) {\n\t\treturn;\n\t}\n\n\ttry {\n\t\tawait executePipeline(dirs, today, reportPath);\n\t} catch (err) {\n\t\t// AC-8: 失败不阻塞\n\t\tconst msg = err instanceof Error ? err.message : String(err);\n\t\tconsole.error(`[evolve] Daily analysis failed: ${msg}`);\n\t\tsaveLastRunStatus(dirs.dailyReportsDir, \"failed\", msg);\n\t} finally {\n\t\treleaseLock(lockPath);\n\t}\n}\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780053409827
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "call_a2bb5b9bf8c946d4a98667e2",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "/**\n * Evolution Engine — 每日报告生成器\n *\n * 将 SignalReport + Suggestions + EffectReview 转换为人类可读的 Markdown 报告。\n */\n\nimport type { SignalReport, EvolutionSuggestion, EffectReview } from \"./types\";\n\n// ── 公共 API ─────────────────────────────────────────\n\n/**\n * 生成每日分析报告的 Markdown 文本。\n * 报告结构：数据概览 → 异常信号 → 趋势变化 → 改进建议 → 效果回顾（条件章节）\n */\nexport function generateDailyReport(\n\tsignalReport: SignalReport,\n\tsuggestions: EvolutionSuggestion[],\n\teffectReview?: EffectReview[],\n): string {\n\tconst date = new Date(signalReport.generatedAt).toISOString().slice(0, 10);\n\tconst snapshot = signalReport.metricsSnapshot;\n\tconst hasData = snapshot.sessionCount > 0;\n\n\tconst sections: string[] = [\n\t\t`# Evolution Daily Report — ${date}`,\n\t\t\"\",\n\t\t\"## 数据概览\",\n\t\t...buildOverview(snapshot, hasData),\n\t\t\"\",\n\t\t\"## 异常信号\",\n\t\t...buildAnomalies(signalReport.anomalies),\n\t\t\"\",\n\t\t\"## 趋势变化\",\n\t\t...buildTrends(signalReport.trends),\n\t\t\"\",\n\t\t\"## 改进建议\",\n\t\t...buildSuggestions(suggestions),\n\t];\n\n\t// 效果回顾：仅有数据时追加\n\tif (effectReview && effectReview.length > 0) {\n\t\tsections.push(\"\", \"## 效果回顾\", ...buildEffectReview(effectReview));\n\t}\n\n\treturn sections.join(\"\\n\");\n}\n\n// ── 内部格式化函数 ───────────────────────────────────\n\nfunction buildOverview(\n\tsnapshot: { sessionCount: number; totalToolCalls: number; totalInputTokens: number; totalOutputTokens: number; avgTurnsPerSession: number },\n\thasData: boolean,\n): string[] {\n\tif (!hasData) {\n\t\treturn [\n\t\t\t\"- Session 数量：无数据\",\n\t\t\t\"- 工具调用总数：无数据\",\n\t\t\t\"- Token 消耗：无数据\",\n\t\t\t\"- 平均每 session 轮次：无数据\",\n\t\t];\n\t}\n\n\treturn [\n\t\t`- Session 数量：${snapshot.sessionCount}`,\n\t\t`- 工具调用总数：${snapshot.totalToolCalls}`,\n\t\t`- Token 消耗：input ${snapshot.totalInputTokens.toLocaleString()} / output ${snapshot.totalOutputTokens.toLocaleString()}`,\n\t\t`- 平均每 session 轮次：${formatNum(snapshot.avgTurnsPerSession)}`,\n\t];\n}\n\nfunction buildAnomalies(anomalies: Array<{ severity: string; detail: string }>): string[] {\n\tif (anomalies.length === 0) {\n\t\treturn [\"无异常\"];\n\t}\n\n\treturn anomalies.map(a => `- [${a.severity.toUpperCase()}] ${a.detail}`);\n}\n\nfunction buildTrends(trends: Array<{ field: string; previous: number; current: number; changePercent: number }>): string[] {\n\tif (trends.length === 0) {\n\t\treturn [\"无显著变化\"];\n\t}\n\n\treturn trends.map(t => {\n\t\tconst sign = t.changePercent >= 0 ? \"+\" : \"\";\n\t\treturn `- ${t.field}: ${formatNum(t.previous)} → ${formatNum(t.current)} (${sign}${formatNum(t.changePercent)}%)`;\n\t});\n}\n\nfunction buildSuggestions(suggestions: EvolutionSuggestion[]): string[] {\n\tif (suggestions.length === 0) {\n\t\treturn [\"系统运行良好，无需调整\"];\n\t}\n\n\tconst lines: string[] = [];\n\tfor (let i = 0; i < suggestions.length; i++) {\n\t\tconst s = suggestions[i];\n\t\tif (i > 0) lines.push(\"\");\n\t\tlines.push(`### #${i} [${s.severity.toUpperCase()}] ${s.title}`);\n\t\tif (s.description) lines.push(`- 描述：${s.description}`);\n\t\tif (s.rationale) lines.push(`- 依据：${s.rationale}`);\n\t\tif (s.targetPath) lines.push(`- 修改目标：${s.targetPath}`);\n\t\tif (s.instruction) lines.push(`- 修改指令：${s.instruction}`);\n\t}\n\treturn lines;\n}\n\nfunction buildEffectReview(reviews: EffectReview[]): string[] {\n\treturn reviews.map(r => {\n\t\tconst sign = r.changePercent >= 0 ? \"+\" : \"\";\n\t\treturn `- ${r.suggestionTitle}: ${r.targetMetric} ${formatNum(r.before)} → ${formatNum(r.after)} (${sign}${formatNum(r.changePercent)}%)`;\n\t});\n}\n\n/** 格式化数字：整数直接显示，浮点保留 2 位，Infinity/NaN 显示为 \"N/A\" */\nfunction formatNum(n: number): string {\n\tif (!Number.isFinite(n)) return \"N/A\";\n\treturn Number.isInteger(n) ? String(n) : n.toFixed(2);\n}\n"
+            }
+          ],
+          "isError": false,
+          "timestamp": 1780053409827
+        }
+      ]
+    },
+    {
+      "turnIndex": 1,
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "逐条验证结果：\n\n**TC-1-01: PASS** | `checkAndRunDailyAnalysis` 在 `existsSync(reportPath) && statSync(reportPath).size > 0` 为 false 时，调用 `acquireLock` → `executePipeline`，pipeline 内依次执行：`runAnalyzer` → `summarizeReport` → `buildEffectReview` → `runJudge` → `generateDailyReport` → `writeFileSync` + `renameSync` 原子写入 → `mergePending`。完整覆盖描述的全部步骤。\n\n**TC-1-02: PASS** | 第 131-133 行：`if (existsSync(reportPath) && statSync(reportPath).size > 0) { return; }`。报告文件存在且非空（size > 0）时直接 return，跳过整个 pipeline。\n\n**TC-1-03: PASS** | 同一个条件：`existsSync` 返回 true（文件存在），但 `statSync(reportPath).size > 0` 为 false（0 字节文件 size = 0），短路求值使整个条件为 false，不会 return，继续执行 pipeline 重新生成。符合描述。\n\n**TC-4-01: PASS** | `acquireLock` 第 63-67 行：读取锁文件解析 PID，调用 `process.kill(lock.pid, 0)` 检查进程存活。PID 存活时 kill 不抛异常，执行到 `return false`，阻止并发执行。\n\n**TC-4-02: PASS** | 第 68-70 行：`process.kill` 对已死 PID 抛 ESRCH 异常，进入 catch 块，执行 `unlinkSync(lockPath)` 清理 stale lock，随后在第 77-78 行创建新锁并返回 true。\n\n**TC-4-03: PASS** | 第 145-149 行：`executePipeline` 的 catch 块中，`const msg = err instanceof Error ? err.message : String(err)` 提取错误信息，调用 `saveLastRunStatus(dirs.dailyReportsDir, \"failed\", msg)` 保存失败状态。"
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "router-openai",
+        "model": "glm-5-turbo",
+        "usage": {
+          "input": 2871,
+          "output": 453,
+          "cacheRead": 24448,
+          "cacheWrite": 0,
+          "totalTokens": 27772,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "stop",
+        "timestamp": 1780053409828,
+        "responseId": "202605291916503f86ac0773ca4b8c"
+      },
+      "toolResults": []
+    }
+  ]
+}
