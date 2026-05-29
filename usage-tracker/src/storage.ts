@@ -17,10 +17,7 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import {
 	type DailySummary,
-	type SessionManifest,
 	type SessionManifestEntry,
-	type SkillTriggerStats,
-	type ToolStats,
 	emptyDailySummary,
 	emptySessionManifest,
 	emptySkillTriggerStats,
