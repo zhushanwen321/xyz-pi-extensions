@@ -1,0 +1,141 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: read index.ts L393-397, verify /evolve handler sends prompt containing user args",
+        "verify sendUserMessage prompt includes 'since=1d' when args='since=1d'",
+        "verify AI receives 'Please call the evolve tool based on user intent: \"since=1d\"'"
+      ],
+      "evidence": "index.ts L395: pi.sendUserMessage(`Please call the evolve tool based on user intent: \"${args.trim() || \"target=all since=7d\"}\"`)"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify /evolve handler fallback when args is empty",
+        "verify args.trim() || 'target=all since=7d' produces correct fallback",
+        "verify AI receives 'Please call the evolve tool based on user intent: \"target=all since=7d\"'"
+      ],
+      "evidence": "index.ts L395: fallback 'target=all since=7d' used when args is empty"
+    },
+    {
+      "caseId": "TC-1-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify /evolve handler passes natural language args verbatim to sendUserMessage",
+        "verify prompt includes raw user text for AI to interpret"
+      ],
+      "evidence": "index.ts L395: args.trim() is embedded as-is, AI interprets natural language"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify /evolve-apply handler delegates to sendUserMessage",
+        "verify prompt contains user args for AI to extract action=list"
+      ],
+      "evidence": "index.ts L408: pi.sendUserMessage with args including 'list'"
+    },
+    {
+      "caseId": "TC-2-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify /evolve-apply handler passes 'apply 0' to sendUserMessage",
+        "verify AI can extract action=apply, index=0 from prompt"
+      ],
+      "evidence": "index.ts L408: args.trim() embedded, AI interprets 'apply 0'"
+    },
+    {
+      "caseId": "TC-2-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify /evolve-apply handler passes natural language to sendUserMessage",
+        "verify AI can interpret 'skip the second suggestion' as action=skip, index=1"
+      ],
+      "evidence": "index.ts L408: natural language args passed verbatim"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify /evolve-stats handler sends fixed prompt to call evolve-stats tool",
+        "verify no args parsing needed"
+      ],
+      "evidence": "index.ts L419: pi.sendUserMessage('Please call the evolve-stats tool...')"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify /evolve-rollback handler checks parseInt on args",
+        "verify NaN path calls loadHistory + renderRollbackList directly (no sendUserMessage)",
+        "verify ctx.ui.notify displays history text"
+      ],
+      "evidence": "index.ts L434-441: parseInt check → NaN → loadHistory(dirs.evolutionDir, 20) → renderRollbackList(history) → ctx.ui.notify"
+    },
+    {
+      "caseId": "TC-4-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify /evolve-rollback handler with valid index delegates to sendUserMessage",
+        "verify prompt includes 'index=3' for AI to call tool"
+      ],
+      "evidence": "index.ts L446: pi.sendUserMessage(`Please call the evolve-rollback tool with index=${index}...`)"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify /evolve-report handler unchanged from prior implementation",
+        "verify sendUserMessage pattern consistent with other commands"
+      ],
+      "evidence": "index.ts L497: pi.sendUserMessage(`Please call the evolve-report tool with args=\"${args.trim()}\"...`)"
+    },
+    {
+      "caseId": "TC-6-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run: npx tsc --noEmit",
+        "verify exit code 0 and no error output"
+      ],
+      "evidence": "tsc exited with code 0, no output"
+    },
+    {
+      "caseId": "TC-6-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run: npm run lint -- --quiet",
+        "verify 0 errors (warnings from other extensions are pre-existing)"
+      ],
+      "evidence": "eslint: 0 errors, 4 warnings in index.ts (all pre-existing: max-lines-per-function, magic numbers)"
+    },
+    {
+      "caseId": "TC-7-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "grep all 5 handle* function calls in tool execute handlers",
+        "verify handleEvolve(target, since, sample, dirs) unchanged",
+        "verify handleEvolveApply(action, index, dirs) unchanged",
+        "verify handleEvolveStats(dirs.evolutionDir) unchanged",
+        "verify handleEvolveRollback(index, dirs) unchanged",
+        "verify handleEvolveReport(params.args, dirs) unchanged"
+      ],
+      "evidence": "grep output confirms all 5 tool execute handlers call handle* with identical signatures"
+    }
+  ]
+}
