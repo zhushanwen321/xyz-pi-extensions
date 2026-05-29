@@ -17,12 +17,10 @@ function beforeCompressionUI(pi: ExtensionAPI, ctx: ExtensionContext, segmentCou
 		contextWindow: contextUsage?.contextWindow ?? null, timestamp: Date.now(),
 	});
 
-	// Footer status + working message（不阻塞事件循环的异步路径会显示 spinner）
-	ctx.ui.setWorkingVisible(true);
-	ctx.ui.setWorkingMessage(`IC Tree Compact: compressing ${segmentCount} segments...`);
+	// Footer status
 	ctx.ui.setStatus("ic-compact", `IC compressing ${segmentCount} segments...`);
 
-	// Bubble message — subagent 风格：简洁一行
+	// Bubble — subagent 风格
 	const tokenInfo = tokensBefore !== null ? `, ${(tokensBefore / 1000).toFixed(1)}K tokens` : "";
 	pi.sendMessage({
 		customType: IC_COMPACT_START_TYPE,
@@ -33,8 +31,6 @@ function beforeCompressionUI(pi: ExtensionAPI, ctx: ExtensionContext, segmentCou
 }
 
 function afterCompressionUI(pi: ExtensionAPI, ctx: ExtensionContext, result: CompactResult): void {
-	ctx.ui.setWorkingVisible(false);
-	ctx.ui.setWorkingMessage(undefined);
 	ctx.ui.setStatus("ic-compact", undefined);
 
 	const tree = result.tree;
