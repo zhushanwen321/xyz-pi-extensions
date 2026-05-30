@@ -64,6 +64,8 @@ interface SpawnResult {
 	outFile: string;
 	writeStream: fs.WriteStream;
 	exitPromise: Promise<number | null>;
+	/** Remove only the in-memory capture listener, keep pipe intact */
+	removeCapture: () => void;
 }
 
 /**
@@ -126,7 +128,12 @@ function spawnCommand(
 		exitPromise.finally(() => signal.removeEventListener("abort", onAbort));
 	}
 
-	return { child, outFile, writeStream, exitPromise };
+	const removeCapture = (): void => {
+		child.stdout?.removeListener("data", capture);
+		child.stderr?.removeListener("data", capture);
+	};
+
+	return { child, outFile, writeStream, exitPromise, removeCapture };
 }
 
 function getBufferContent(chunks: Buffer[]): string {
@@ -158,9 +165,7 @@ export async function executeSync(
 		const msg = err instanceof Error ? err.message : String(err);
 		throw new Error(`Failed to spawn command: ${msg}`);
 	}
-	const { child, outFile, exitPromise } = spawnResult;
-
-	// Forward to onUpdate
+	const { child, outFile, exitPromise, removeCapture } = spawnResult;
 	if (onUpdate) {
 		const forwardData = (): void => {
 			onUpdate({ action: "sync" }, getBufferContent(chunks));
@@ -200,7 +205,7 @@ export async function executeSync(
 	}
 
 	if (timedOut) {
-		return detachJob(cmd, cwd, effectiveTimeout, child, outFile, exitPromise, chunks, jobs);
+		return detachJob(cmd, cwd, effectiveTimeout, child, outFile, exitPromise, chunks, removeCapture, jobs);
 	}
 
 	// Normal completion
@@ -233,6 +238,7 @@ function detachJob(
 	outFile: string,
 	exitPromise: Promise<number | null>,
 	chunks: Buffer[],
+	removeCapture: () => void,
 	jobs: Map<string, Job>,
 ): ToolResult {
 	const jobId = generateJobId();
@@ -251,8 +257,7 @@ function detachJob(
 	registerJob(jobs, job);
 
 	// Stop in-memory capture — output continues to WriteStream/file only
-	child.stdout?.removeAllListeners("data");
-	child.stderr?.removeAllListeners("data");
+	removeCapture();
 
 	// When process eventually exits, update job status
 	exitPromise.then((code) => {
@@ -301,7 +306,7 @@ export async function executeBackground(
 		const msg = err instanceof Error ? err.message : String(err);
 		return makeErrorResult(`Failed to spawn command: ${msg}`, { action: "background" });
 	}
-	const { child, outFile, exitPromise } = spawnResult;
+	const { child, outFile, exitPromise, removeCapture } = spawnResult;
 
 	const jobId = generateJobId();
 	const job: Job = {
@@ -319,8 +324,7 @@ export async function executeBackground(
 	registerJob(jobs, job);
 
 	// Stop in-memory capture for background jobs — output goes to file only
-	child.stdout?.removeAllListeners("data");
-	child.stderr?.removeAllListeners("data");
+	removeCapture();
 
 	// Handle process exit
 	exitPromise.then((code) => {
@@ -436,6 +440,9 @@ export async function executeKill(
 		}
 		job.child.once("exit", (code) => resolve(code));
 	});
+
+	// Mark as killed BEFORE killing to prevent bg exit handler from injecting result
+	job.status = "killed";
 
 	// Kill the process group
 	await killProcessGroup(job.pid);
