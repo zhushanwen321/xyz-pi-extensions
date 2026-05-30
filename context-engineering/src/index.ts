@@ -11,33 +11,17 @@ import {
   type CompressionStats,
   type AgentMessage as CompressorMessage,
 } from "./compressor";
-import {
-  handleContextEngineeringCommand,
-  handleContextStatsCommand,
-} from "./commands";
-
-// ── Tool parameter schemas ──
+import { handleContextEngineeringCommand, handleContextStatsCommand } from "./commands";
 
 const RecallParams = Type.Object({
   id: Type.String({ description: "Context ID (ctx-xxxxxxxx) to recall" }),
 });
 
-// ── Cumulative stats factory ──
-
 function zeroStats(): CompressionStats {
-  return {
-    l0Expired: 0,
-    l0Truncated: 0,
-    l0ThinkingCleared: 0,
-    l1Condensed: 0,
-    l2Triggered: false,
-    validationFailed: false,
-  };
+  return { l0Expired: 0, l0Truncated: 0, l0ThinkingCleared: 0, l1Condensed: 0, l2Triggered: false, validationFailed: false };
 }
 
-// ── Helper: accumulate compression stats ──
-
-function accumulateStats(target: CompressionStats, delta: CompressionStats): void {
+function addStats(target: CompressionStats, delta: CompressionStats): void {
   target.l0Expired += delta.l0Expired;
   target.l0Truncated += delta.l0Truncated;
   target.l0ThinkingCleared += delta.l0ThinkingCleared;
@@ -46,108 +30,61 @@ function accumulateStats(target: CompressionStats, delta: CompressionStats): voi
   if (delta.validationFailed) target.validationFailed = true;
 }
 
-// ── Helper: register recall_context tool ──
-
-function registerRecallTool(pi: ExtensionAPI, store: RecallStore): void {
-  pi.registerTool({
-    name: "recall_context",
-    label: "Recall Compressed Context",
-    description:
-      "Recall original content that was compressed by the context engineering plugin. " +
-      "Use when you need the full content of an expired, truncated, or condensed tool result.",
-    promptSnippet:
-      "recall_context(id) — retrieve original content compressed by context engineering",
-    parameters: RecallParams,
-    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const stored = store.recall(params.id);
-      if (!stored) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `[recall_context] ID "${params.id}" not found. Content may have been lost on session reload.`,
-            },
-          ],
-          details: { found: false, id: params.id },
-        };
-      }
-      const timestamp = new Date(stored.compressedAt).toISOString();
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `[Recalled content (${stored.level}, compressed at ${timestamp})]\n\n${stored.original}`,
-          },
-        ],
-        details: { found: true, id: params.id, level: stored.level },
-      };
-    },
-  });
+function recallResult(id: string, store: RecallStore) {
+  const stored = store.recall(id);
+  if (!stored) return {
+    content: [{ type: "text" as const, text: `[recall_context] ID "${id}" not found. Content may have been lost on session reload.` }],
+    details: { found: false, id },
+  };
+  return {
+    content: [{ type: "text" as const, text: `[Recalled content (${stored.level}, ${new Date(stored.compressedAt).toISOString()})]\n\n${stored.original}` }],
+    details: { found: true, id, level: stored.level },
+  };
 }
 
-// ── Helper: register commands ──
-
-function registerCommands(
-  pi: ExtensionAPI,
-  config: ContextEngineeringConfig,
-  stats: CompressionStats,
-): void {
-  pi.registerCommand("context-engineering", {
-    description: "View/modify context compression settings",
-    handler: async (_args: string, ctx: ExtensionCommandContext) => {
-      const output = handleContextEngineeringCommand(_args || undefined, config, stats);
-      ctx.ui.notify(output, "info");
-    },
-  });
-
-  pi.registerCommand("context-stats", {
-    description: "View context compression statistics",
-    handler: async (_args: string, ctx: ExtensionCommandContext) => {
-      const output = handleContextStatsCommand(stats);
-      ctx.ui.notify(output, "info");
-    },
-  });
-}
-
-// ── Extension entry ──
+// Extension entry — handlers close over mutable `config`/`store`/`cumulativeStats`
+// so session_start reassignment is visible to every registered handler.
 
 export default function contextEngineeringExtension(pi: ExtensionAPI): void {
-  // Session-scoped state (rebuilt on session_start)
   let config: ContextEngineeringConfig = loadConfig();
   let store: RecallStore = createRecallStore();
   let cumulativeStats: CompressionStats = zeroStats();
 
-  // session_start: reset state
   pi.on("session_start", () => {
     config = loadConfig();
     store = createRecallStore();
     cumulativeStats = zeroStats();
   });
 
-  // context: compression core
-  // Compressor defines its own AgentMessage union (includes BashExecutionMessage).
-  // Pi's ContextEvent.messages uses the agent-core AgentMessage type.
-  // At runtime Pi's messages contain all message types our compressor handles.
   pi.on("context", (event, ctx) => {
     try {
-      const messages = event.messages as unknown as CompressorMessage[];
-      const result = compressContext(
-        messages,
-        config,
-        store,
-        ctx.getContextUsage() as unknown as
-          Parameters<typeof compressContext>[3],
-      );
-      accumulateStats(cumulativeStats, result.stats);
-      return {
-        messages: result.messages as unknown as (typeof event.messages)[number][],
-      };
-    } catch {
-      // Safety: never modify messages on unexpected error
-      return {};
-    }
+      const msgs = event.messages as unknown as CompressorMessage[];
+      const result = compressContext(msgs, config, store, ctx.getContextUsage() as unknown as Parameters<typeof compressContext>[3]);
+      addStats(cumulativeStats, result.stats);
+      return { messages: result.messages as unknown as (typeof event.messages)[number][] };
+    } catch { return {}; }
   });
 
-  registerRecallTool(pi, store);
-  registerCommands(pi, config, cumulativeStats);
+  pi.registerTool({
+    name: "recall_context",
+    label: "Recall Compressed Context",
+    description: "Recall original content compressed by context engineering. Use when you need the full content of an expired, truncated, or condensed tool result.",
+    promptSnippet: "recall_context(id) — retrieve original content compressed by context engineering",
+    parameters: RecallParams,
+    execute: async (_tcId, params, _sig, _upd, _ctx) => recallResult(params.id, store),
+  });
+
+  pi.registerCommand("context-engineering", {
+    description: "View/modify context compression settings",
+    handler: async (_args: string, ctx: ExtensionCommandContext) => {
+      ctx.ui.notify(handleContextEngineeringCommand(_args || undefined, config, cumulativeStats), "info");
+    },
+  });
+
+  pi.registerCommand("context-stats", {
+    description: "View context compression statistics",
+    handler: async (_args: string, ctx: ExtensionCommandContext) => {
+      ctx.ui.notify(handleContextStatsCommand(cumulativeStats), "info");
+    },
+  });
 }
