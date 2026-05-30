@@ -107,12 +107,13 @@ User says "/evolve-apply", "evolve-apply", "应用建议", "/evolve-rollback",
    cd "$(dirname '<targetPath>')" && git add '<filename>' && git commit -m "evolve: rollback <title>"
    ```
 5. **If backup missing**: Tell user "Cannot auto-restore: backup file not found
-   at <backupPath>. You may need to manually check git history." Do NOT write
-   to history.jsonl.
-6. **Update pending.json**: Find the suggestion matching the suggestionId
-   and change its status back to "pending". Use `write` tool to overwrite.
+   at <backupPath>. You may need to manually check git history." STOP HERE.
+   Do NOT proceed to steps 6-8. Do NOT update pending.json or history.jsonl.
+6. **Update pending.json** (only if step 4 succeeded): Find the suggestion
+   matching the suggestionId and change its status back to "pending".
+   Use `write` tool to overwrite.
 7. **Append rollback to history.jsonl** (only if step 4 succeeded):
    ```bash
    python3 -c "import json; print(json.dumps({'timestamp':'<ISO>','action':'rollback','suggestionId':'<id>','targetPath':'<path>','backupPath':'<backup>','instruction':'','title':'<title>','commitSha':'<sha>'}, ensure_ascii=False))" >> ~/.pi/agent/evolution-data/history.jsonl
    ```
-8. Confirm: "Rolled back: <title>. File restored from backup."
+8. Confirm (only if step 4 succeeded): "Rolled back: <title>. File restored from backup."
