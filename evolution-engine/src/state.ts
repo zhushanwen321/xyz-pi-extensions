@@ -7,7 +7,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PendingFile, HistoryEntry, MetricsSnapshot } from "./types.js";
+import type { PendingFile, HistoryEntry, MetricsSnapshot, EvolutionSuggestion } from "./types.js";
 
 // ── 内部路径 ─────────────────────────────────────────
 
@@ -35,7 +35,17 @@ export function loadPending(dir: string): PendingFile | null {
 
 	try {
 		const raw = readFileSync(filePath, "utf-8");
-		return JSON.parse(raw) as PendingFile;
+		const pending = JSON.parse(raw) as PendingFile;
+
+		// Migration: 旧格式有 diff 字段而无 instruction，自动迁移
+		for (const sug of pending.suggestions) {
+			if (!sug.instruction && (sug as unknown as Record<string, unknown>).diff) {
+				sug.instruction = String((sug as unknown as Record<string, unknown>).diff);
+				delete (sug as unknown as Record<string, unknown>).diff;
+			}
+		}
+
+		return pending;
 	} catch {
 		return null;
 	}
@@ -117,6 +127,82 @@ export function saveMetricsSnapshot(dir: string, snapshot: MetricsSnapshot): voi
 
 // ── History JSONL ────────────────────────────────────
 
+// ── Daily Report 状态 ──────────────────────────────
+
+/** pending.json 中 pending 状态建议的最大数量 */
+const MAX_PENDING_SUGGESTIONS = 30;
+
+/**
+ * 增量合并新建议到 pending.json。
+ * - title 精确匹配去重：已有 pending 建议的 title 与新建议相同时跳过
+ * - 容量保护：pending 状态的建议不超过 MAX_PENDING_SUGGESTIONS 条
+ * - 无现有文件时创建新 PendingFile
+ */
+export function mergePending(dir: string, newSuggestions: EvolutionSuggestion[]): void {
+	if (newSuggestions.length === 0) return;
+
+	const existing = loadPending(dir);
+	if (!existing) {
+		const pending: PendingFile = {
+			generatedAt: new Date().toISOString(),
+			reportUsed: "daily-report",
+			suggestions: newSuggestions,
+		};
+		savePending(dir, pending);
+		return;
+	}
+
+	// title 去重：跳过与已有 pending 建议同名的
+	const pendingTitles = new Set(
+		existing.suggestions
+			.filter(s => s.status === "pending")
+			.map(s => s.title),
+	);
+	const unique = newSuggestions.filter(s => !pendingTitles.has(s.title));
+
+	if (unique.length > 0) {
+		existing.suggestions.push(...unique);
+	}
+
+	// 容量保护：超出时按数组顺序驱逐最早的 pending（先入先出）
+	const pendingCount = existing.suggestions.filter(s => s.status === "pending").length;
+	if (pendingCount > MAX_PENDING_SUGGESTIONS) {
+		const overflow = pendingCount - MAX_PENDING_SUGGESTIONS;
+		let evicted = 0;
+		for (const sug of existing.suggestions) {
+			if (sug.status === "pending" && evicted < overflow) {
+				sug.status = "rejected";
+				evicted++;
+			}
+		}
+		console.warn(
+			`[evolve] Auto-evicted ${evicted} pending suggestion(s) to maintain capacity cap of ${MAX_PENDING_SUGGESTIONS}`,
+		);
+	}
+
+	savePending(dir, existing);
+}
+
+/**
+ * 写入每日运行状态文件，供诊断。
+ * 文件路径: {dailyReportsDir}/.last-run-status
+ */
+export function saveLastRunStatus(
+	dailyReportsDir: string,
+	status: "success" | "failed",
+	errorSummary?: string,
+): void {
+	const filePath = join(dailyReportsDir, ".last-run-status");
+	const data = {
+		status,
+		timestamp: new Date().toISOString(),
+		...(errorSummary ? { errorSummary } : {}),
+	};
+	writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+}
+
+// ── History JSONL ────────────────────────────────────
+
 export function loadHistory(dir: string, limit: number = 10): HistoryEntry[] {
 	const filePath = historyPath(dir);
 	if (!existsSync(filePath)) return [];
@@ -133,7 +219,13 @@ export function loadHistory(dir: string, limit: number = 10): HistoryEntry[] {
 			const trimmed = line.trim();
 			if (trimmed.length === 0) continue;
 			try {
-				entries.push(JSON.parse(trimmed) as HistoryEntry);
+				const entry = JSON.parse(trimmed) as HistoryEntry;
+				// Migration: 旧格式有 diff 字段而无 instruction
+				if (!entry.instruction && (entry as unknown as Record<string, unknown>).diff) {
+					entry.instruction = String((entry as unknown as Record<string, unknown>).diff);
+					delete (entry as unknown as Record<string, unknown>).diff;
+				}
+				entries.push(entry);
 			} catch {
 				// 损坏行跳过
 			}

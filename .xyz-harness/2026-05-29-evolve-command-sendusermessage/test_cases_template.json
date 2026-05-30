@@ -1,0 +1,82 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "manual",
+      "title": "/evolve since=1d 正确传递 since 参数",
+      "steps": ["输入 /evolve since=1d", "验证 AI 调用 evolve tool 且 since=1d", "验证输出包含 from last 1d of data"]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "manual",
+      "title": "/evolve 无参数使用默认值",
+      "steps": ["输入 /evolve", "验证 AI 调用 evolve tool 且 since=7d（tool 默认值）"]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "manual",
+      "title": "/evolve 自然语言变体",
+      "steps": ["输入 /evolve 分析最近 3 天的 skill 使用情况", "验证 AI 调用 evolve tool 且 target=skills, since=3d"]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "manual",
+      "title": "/evolve-apply list 列出建议",
+      "steps": ["输入 /evolve-apply list", "验证 AI 调用 evolve-apply tool 且 action=list"]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "manual",
+      "title": "/evolve-apply apply 0 应用建议",
+      "steps": ["输入 /evolve-apply apply 0", "验证 AI 调用 evolve-apply tool 且 action=apply, index=0"]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "manual",
+      "title": "/evolve-apply 自然语言跳过",
+      "steps": ["输入 /evolve-apply 跳过第 2 个建议", "验证 AI 调用 evolve-apply tool 且 action=skip, index=2"]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "manual",
+      "title": "/evolve-stats 无参数正常工作",
+      "steps": ["输入 /evolve-stats", "验证 AI 调用 evolve-stats tool"]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "manual",
+      "title": "/evolve-rollback 无参数显示历史列表",
+      "steps": ["输入 /evolve-rollback", "验证显示历史列表（不调用 tool）", "验证 loadHistory + renderRollbackList 被直接调用"]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "manual",
+      "title": "/evolve-rollback 3 走 sendUserMessage",
+      "steps": ["输入 /evolve-rollback 3", "验证 AI 调用 evolve-rollback tool 且 index=3"]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "manual",
+      "title": "/evolve-report 保持现有行为",
+      "steps": ["输入 /evolve-report", "验证行为与改动前一致（sendUserMessage）"]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "manual",
+      "title": "tsc 编译通过",
+      "steps": ["运行 npx tsc --noEmit", "验证 0 errors"]
+    },
+    {
+      "id": "TC-6-02",
+      "type": "manual",
+      "title": "eslint 0 errors",
+      "steps": ["运行 npm run lint", "验证 0 errors"]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "integration",
+      "title": "Tool execute 函数签名不变",
+      "steps": ["grep handleEvolve/handleEvolveApply/handleEvolveStats/handleEvolveRollback/handleEvolveReport 在 tool execute 中的调用", "验证所有调用签名与改动前一致"]
+    }
+  ]
+}

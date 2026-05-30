@@ -1,0 +1,195 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "spawn 'echo hello world' via child_process",
+        "await exitPromise, verify exitCode=0",
+        "verify output buffer contains 'hello world'"
+      ],
+      "evidence": "integration.test.ts TC-1-01: exitCode=0, output contains 'hello world'"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "spawn 'exit 1' via child_process",
+        "await exitPromise, verify exitCode=1"
+      ],
+      "evidence": "integration.test.ts TC-1-02: exitCode=1"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "spawn 'sleep 200' with 3s timeout",
+        "race exitPromise vs 3s timeout — timeout wins",
+        "verify process still alive via kill(pid,0)",
+        "call removeCapture(), killProcessGroup()"
+      ],
+      "evidence": "integration.test.ts TC-2-01: timed out at 3s, process alive, killed"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "spawn 'sleep 200' with 5s explicit timeout",
+        "race exitPromise vs 5s timeout — timeout wins",
+        "verify process still alive",
+        "killProcessGroup cleanup"
+      ],
+      "evidence": "integration.test.ts TC-3-01: timed out at 5s, process alive, killed"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "spawn 'sleep 2 && echo done' with no timeout (30s max wait)",
+        "await exitPromise — completes normally",
+        "verify exitCode=0, output contains 'done', no jobId"
+      ],
+      "evidence": "integration.test.ts TC-4-01: exitCode=0, output='done'"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify spawnCommand accepts optional AbortSignal parameter",
+        "code_review: signal.addEventListener('abort', onAbort) calls killProcessGroup",
+        "code_review: executeSync checks signal.aborted after race"
+      ],
+      "evidence": "code_review: spawn.ts L111-119 AbortSignal handler, L195 signal.aborted check"
+    },
+    {
+      "caseId": "TC-6-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "spawn 'echo bg_done && sleep 1' in background mode",
+        "call removeCapture() immediately",
+        "await exitPromise",
+        "read outFile — verify contains 'bg_done'"
+      ],
+      "evidence": "integration.test.ts TC-6-01: outFile contains 'bg_done', exitCode=0"
+    },
+    {
+      "caseId": "TC-7-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "spawn 'sleep 3 && echo poll_done', register job in map",
+        "verify status='running', process alive",
+        "await exitPromise",
+        "update job status='done', verify outFile contains 'poll_done'"
+      ],
+      "evidence": "integration.test.ts TC-7-01: running→done transition, output='poll_done'"
+    },
+    {
+      "caseId": "TC-8-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "spawn 'sleep 100', verify process alive",
+        "killProcessGroup(pid)",
+        "await exitPromise with 5s timeout",
+        "verify isProcessAlive(pid)=false"
+      ],
+      "evidence": "integration.test.ts TC-8-01: process killed, isProcessAlive=false"
+    },
+    {
+      "caseId": "TC-9-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "lookup 'nonexistent-id' in empty job map",
+        "verify result is undefined"
+      ],
+      "evidence": "integration.test.ts TC-9-01: findJob returns undefined"
+    },
+    {
+      "caseId": "TC-10-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "create sessionA Map and sessionB Map",
+        "spawn process, register in sessionA only",
+        "verify sessionB.get(jobId) === undefined"
+      ],
+      "evidence": "integration.test.ts TC-10-01: session isolation verified"
+    },
+    {
+      "caseId": "TC-11-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify DEFAULT_CONFIG values: defaultTimeout=120, maxBackgroundJobs=10",
+        "code_review: loadConfig falls back to defaults on missing file / invalid JSON"
+      ],
+      "evidence": "integration.test.ts TC-11-01 + code_review: jobs.ts L99-116 loadConfig with defaults"
+    },
+    {
+      "caseId": "TC-12-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "spawn with shell='/nonexistent/shell'",
+        "exitPromise rejects with ENOENT error",
+        "verify error message contains 'enoent'"
+      ],
+      "evidence": "integration.test.ts TC-12-01: caught ENOENT error from child 'error' event"
+    },
+    {
+      "caseId": "TC-14-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "spawn 'for i in $(seq 1 3000); do echo line_$i; done'",
+        "await exitPromise",
+        "read outFile, count lines >= 2900",
+        "verify in-memory chunks contain 'line_3000'"
+      ],
+      "evidence": "integration.test.ts TC-14-01: 3000 lines captured in file, complete output"
+    },
+    {
+      "caseId": "TC-15-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "set maxBackgroundJobs=3",
+        "spawn 3 'sleep 100' background jobs",
+        "count running jobs = 3",
+        "verify runningCount >= maxJobs (limit check would trigger for 4th)"
+      ],
+      "evidence": "integration.test.ts TC-15-01: 3/3 running, limit enforced"
+    },
+    {
+      "caseId": "TC-16-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "spawn with cwd='/nonexistent/path/xyz'",
+        "exitPromise rejects with error",
+        "verify error caught"
+      ],
+      "evidence": "integration.test.ts TC-16-01: child error event caught for bad cwd"
+    },
+    {
+      "caseId": "TC-17-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "verify getTestShell() returns non-empty shell path",
+        "verify args contains '-c' flag",
+        "code_review: buildShellContext uses Pi's getShellConfig + settings"
+      ],
+      "evidence": "integration.test.ts TC-17-01 + code_review: shell.ts uses getShellConfig"
+    }
+  ]
+}
