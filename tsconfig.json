@@ -47,7 +47,8 @@
     "subagent/**/*.ts",
     "usage-tracker/**/*.ts",
     "workflow/**/*.ts",
-    "infinite-context/**/*.ts"
+    "infinite-context/**/*.ts",
+    "context-engineering/**/*.ts"
   ],
   "exclude": [
     "node_modules",
