@@ -23,6 +23,11 @@ const COMPACT_TREE_ENTRY_TYPE = "ic-compact-tree";
 const COMPRESSION_TIMEOUT_MS = 30_000;
 const MAX_RETRY_COUNT = 1;
 
+/** 叶节点 summary 最小长度（chars），低于此值校验不通过 */
+const MIN_LEAF_SUMMARY_LENGTH = 80;
+/** 分组节点 summary 最小长度（chars） */
+const MIN_GROUP_SUMMARY_LENGTH = 60;
+
 // ── 类型 ──────────────────────────────────────────────
 
 /** 压缩结果 */
@@ -44,10 +49,20 @@ function isCompactTreeEntry(entry: SessionEntry): entry is CustomEntry<CompactTr
 		&& (entry as CustomEntry).customType === COMPACT_TREE_ENTRY_TYPE;
 }
 
-/** 提取段摘要（用于降级压缩）：取 userMessage 的前 200 字符 */
-function fallbackSummary(text: string): string {
-	if (!text) return "(empty)";
-	return text.slice(0, 200);
+/** 提取段摘要（用于降级压缩）：userMessage + assistant 摘要拼接 */
+function fallbackSummary(seg: Segment, digest?: SegmentDigest): string {
+	const parts: string[] = [];
+	if (seg.userMessage) {
+		parts.push(truncate(seg.userMessage, USER_MESSAGE_MAX));
+	}
+	if (digest && digest.assistantSummaries.length > 0) {
+		parts.push(`Assistant: ${digest.assistantSummaries.slice(0, 3).join("; ")}`);
+	}
+	if (digest && digest.toolNames.length > 0) {
+		const unique = [...new Set(digest.toolNames)];
+		parts.push(`Tools: ${unique.slice(0, 5).join(", ")}`);
+	}
+	return parts.length > 0 ? parts.join(" | ") : "(empty)";
 }
 
 /** 计算节点的 tokenCount（chars/4，模拟注入上下文时的实际格式） */
@@ -93,16 +108,51 @@ function sumTreeTokens(node: TreeNode): number {
  * - nodeId 无重复、无环（用 Set 追踪）
  * - group 节点（无 segId）的 summary 非空
  */
+/**
+ * 从 LLM 输出中提取 JSON 内容
+ *
+ * 支持两阶段输出格式：
+ * - <analysis>...</analysis><summary>[...]</summary>
+ * - <analysis>...</analysis> [...]
+ * - 纯 JSON 数组 [...]
+ */
+function extractJsonFromOutput(output: string): string {
+	// 1. 尝试提取 <summary> 标签内容
+	const summaryMatch = output.match(/<summary>([\s\S]*?)<\/summary>/);
+	if (summaryMatch) {
+		return summaryMatch[1].trim();
+	}
+
+	// 2. 如果有 <analysis> 标签，取其后面的内容
+	const analysisEnd = output.lastIndexOf("</analysis>");
+	if (analysisEnd !== -1) {
+		const afterAnalysis = output.slice(analysisEnd + "</analysis>".length).trim();
+		if (afterAnalysis) return afterAnalysis;
+	}
+
+	// 3. 尝试直接找 JSON 数组
+	const jsonStart = output.indexOf("[");
+	const jsonEnd = output.lastIndexOf("]");
+	if (jsonStart !== -1 && jsonEnd > jsonStart) {
+		return output.slice(jsonStart, jsonEnd + 1);
+	}
+
+	return output.trim();
+}
+
 export function validateTreeOutput(
 	output: string,
 	segments: readonly Segment[],
 ): TreeNode[] | ValidateError {
+	// 0. 提取 JSON（支持两阶段输出）
+	const jsonStr = extractJsonFromOutput(output);
+
 	// 1. JSON 解析
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(output);
+		parsed = JSON.parse(jsonStr);
 	} catch {
-		return { reason: `JSON parse failed: ${output.slice(0, 200)}` };
+		return { reason: `JSON parse failed: ${jsonStr.slice(0, 200)}` };
 	}
 
 	// 2. 顶层必须为数组
@@ -139,12 +189,22 @@ export function validateTreeOutput(
 		seenNodeIds.add(n.nodeId as string);
 
 		// segId 存在性（叶节点）
-		if (n.segId !== undefined) {
+		const isLeaf = n.segId !== undefined;
+		if (isLeaf) {
 			if (typeof n.segId !== "string") {
 				return { reason: `Node ${String(n.nodeId)}: segId must be a string` };
 			}
 			if (!validSegIds.has(n.segId)) {
 				return { reason: `Node ${String(n.nodeId)} references unknown segId: ${n.segId}` };
+			}
+			// 叶节点 summary 最小长度校验
+			if ((n.summary as string).length < MIN_LEAF_SUMMARY_LENGTH) {
+				return { reason: `Node ${String(n.nodeId)}: leaf summary too short (${(n.summary as string).length} chars, minimum ${MIN_LEAF_SUMMARY_LENGTH}). Summary: ${(n.summary as string).slice(0, 100)}` };
+			}
+		} else {
+			// 分组节点 summary 最小长度校验
+			if ((n.summary as string).length < MIN_GROUP_SUMMARY_LENGTH) {
+				return { reason: `Node ${String(n.nodeId)}: group summary too short (${(n.summary as string).length} chars, minimum ${MIN_GROUP_SUMMARY_LENGTH}). Summary: ${(n.summary as string).slice(0, 100)}` };
 			}
 		}
 
@@ -187,9 +247,10 @@ export function validateTreeOutput(
  * 降级压缩：所有历史段为独立 leaf 节点
  * tokenCount 用 chars/4 计算摘要文本的实际 token 开销
  */
-export function ruleBasedFallback(segments: readonly Segment[]): CompactTree {
-	const children: TreeNode[] = segments.map((seg) => {
-		const summary = fallbackSummary(seg.userMessage);
+export function ruleBasedFallback(segments: readonly Segment[], digests?: SegmentDigest[]): CompactTree {
+	const children: TreeNode[] = segments.map((seg, idx) => {
+		const digest = digests?.[idx];
+		const summary = fallbackSummary(seg, digest);
 		return {
 			nodeId: `node_${seg.segId}`,
 			summary,
@@ -308,8 +369,9 @@ function buildSegmentDigests(
 					}
 				}
 			}
-		} catch {
+		} catch (err) {
 			// 文件读取或解析失败，降级为空摘要
+			console.error("[infinite-context] buildSegmentDigests file read error:", err);
 		}
 
 		return digest;
@@ -327,13 +389,13 @@ function truncate(text: string, maxLen: number): string {
 /**
  * 构建发送给 Pi 子进程的 prompt
  *
- * 给 LLM 每个段的丰富摘要信息：
- * - 完整 userMessage
- * - assistant text 回复摘要
- * - 工具调用名称
- * - API 返回的 input tokens
- *
- * 不要求 LLM 输出 tokenCount（由校验后 recomputeTreeTokens 用 chars/4 统一计算）
+ * 设计原则（学习自 Claude Code / Codex CLI / Pi Mono）：
+ * - 交接文档视角（为后续 LLM 生成 context checkpoint）
+ * - 两阶段输出：analysis 草稿 + summary JSON
+ * - 增量压缩：已有旧树时用 previous-summary 增量更新
+ * - 结构化输出：叶节点包含「用户请求→助手行动→关键结果」
+ * - 用户消息原文保留
+ * - 工具调用防护
  */
 function buildCompressionPrompt(
 	segments: readonly Segment[],
@@ -363,7 +425,7 @@ function buildCompressionPrompt(
 		}
 		if (d.toolNames.length > 0) {
 			const unique = [...new Set(d.toolNames)];
-			parts.push(`  tools: ${unique.join(", ")}`);
+		parts.push(`  tools: ${unique.join(", ")}`);
 		}
 		if (d.apiInputTokens > 0) {
 			parts.push(`  context: ~${d.apiInputTokens.toLocaleString()} tokens consumed`);
@@ -371,24 +433,94 @@ function buildCompressionPrompt(
 		return parts.join("\n");
 	}).join("\n\n");
 
-	const existingContext = existingTree
-		? `\nExisting tree summary: ${existingTree.root.summary} (${existingTree.root.children.length} groups)\n`
+	// 增量上下文：已有旧树时，传递旧摘要给 LLM 增量更新
+	const previousSummaryContext = existingTree
+		? buildPreviousSummarySection(existingTree)
 		: "";
 
 	const errorContext = previousError
 		? `\nIMPORTANT: Previous attempt failed with error: ${previousError}\nPlease fix the issue and output valid JSON.\n`
 		: "";
 
-	return `You are a context compression engine. Your job is to compress conversation segments into a tree of DETAILED summaries that preserve maximum useful information for future AI context.
+	// 选择增量或初始提示词
+	const isIncremental = existingTree !== undefined;
+	const taskPrompt = isIncremental
+		? buildIncrementalPrompt(segLines, previousSummaryContext, errorContext)
+		: buildInitialPrompt(segLines, errorContext);
+
+	return TOOL_CALL_GUARD_PREAMBLE + taskPrompt + TOOL_CALL_GUARD_TRAILER;
+}
+
+// ── 工具调用防护（学习自 Claude Code） ────────────────
+
+/** 工具调用防护前导 */
+const TOOL_CALL_GUARD_PREAMBLE = `CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
+- Do NOT use Read, Bash, Grep, Glob, Edit, Write, or ANY other tool.
+- You already have all the context you need above.
+- Your entire response must be plain text: an <analysis> block followed by a <summary> block containing a JSON array.
+
+`;
+
+/** 工具调用防护尾部 */
+const TOOL_CALL_GUARD_TRAILER = `
+
+REMINDER: Do NOT call any tools. Respond with plain text only — an <analysis> block followed by a <summary> block containing the JSON array.`;
+
+// ── 构建旧摘要段落（增量压缩，学习自 Pi Mono） ────────
+
+function buildPreviousSummarySection(existingTree: CompactTree): string {
+	const flatNodes: Array<{ nodeId: string; summary: string; segId?: string }> = [];
+	function collectNodes(node: TreeNode): void {
+		if (node.nodeId !== "root") {
+			flatNodes.push({
+				nodeId: node.nodeId,
+				summary: node.summary,
+				segId: node.segId,
+			});
+		}
+		for (const child of node.children) {
+			collectNodes(child);
+		}
+	}
+	collectNodes(existingTree.root);
+
+	const nodeLines = flatNodes.map((n) => {
+		const suffix = n.segId ? ` [${n.segId}]` : "";
+		return `  ${n.nodeId}${suffix}: ${n.summary}`;
+	}).join("\n");
+
+	return `\n<previous-summary>\n${nodeLines}\n</previous-summary>\n`;
+}
+
+// ── 初始压缩提示词 ───────────────────────────────────
+
+function buildInitialPrompt(segLines: string, errorContext: string): string {
+	return `You are creating a CONTEXT CHECKPOINT for another AI that will continue this work.
+Your job is to produce a tree-structured compression that preserves MAXIMUM useful information.
+Another AI will use your output to seamlessly continue the conversation.
+
+First, analyze each segment in <analysis> tags:
+- What was the user's request?
+- What did the assistant do? (specific files, functions, changes)
+- What decisions were made?
+- What errors occurred and how were they fixed?
+- What were the outcomes?
+
+Then produce the compressed tree in <summary> tags as a JSON array.
 
 Segments:
 ${segLines}
-${existingContext}${errorContext}
+${errorContext}
 Output a JSON array of tree nodes. Each node has:
 - nodeId: string (unique, e.g. "group_1" or "node_seg_0")
-- summary: string (DETAILED summary, 100-300 chars per leaf, capturing: what user asked, what assistant did, specific files/functions modified, key decisions made, tools used, and concrete outcomes)
+- summary: string (DETAILED, 100-300 chars per leaf)
 - children: array of child nodes (empty for leaf nodes)
 - segId: string (only for leaf nodes, must match one of the segment IDs above)
+
+STRUCTURED SUMMARY FORMAT for each leaf node:
+  [User Request] → [Assistant Actions] → [Key Results]
+  Files: path/to/file.ts (functionName)
+  Decisions: X over Y because Z
 
 CRITICAL RULES:
 1. Group related segments under parent nodes. Each segment must appear exactly once as a leaf.
@@ -396,10 +528,23 @@ CRITICAL RULES:
 3. Group summaries MUST synthesize their children: explain the common theme and list key deliverables.
 4. NEVER write vague summaries like "User discussed project setup". Instead: "User initialized Vue 3 + TS project: added ESLint with typescript-eslint, Prettier (2-space indent), configured vite.config.ts with API proxy".
 5. Preserve important details: variable names, configuration values, API endpoints, error messages, file paths.
+6. Preserve exact user messages — include key user feedback and corrections in the summary.
+7. When errors were encountered, document the error AND the fix.
 
-Output ONLY the JSON array, no other text.
+Output format:
+<analysis>
+[Your analysis of each segment]
+</analysis>
+<summary>
+[JSON array of tree nodes]
+</summary>
 
-Example output:
+Example:
+<analysis>
+seg_0: User asked to set up a new project. Assistant scaffolded Vue 3 + TS, configured ESLint and Prettier...
+seg_1: User asked for auth module. Assistant built JWT flow with refresh tokens...
+</analysis>
+<summary>
 [
   {
     "nodeId": "group_1",
@@ -409,10 +554,49 @@ Example output:
       { "nodeId": "node_seg_1", "summary": "Auth module implementation: built JWT access+refresh token flow with httpOnly cookie for refresh, created axios interceptor for auto-refresh on 401, added useAuth composable with login/logout/refresh methods", "children": [], "segId": "seg_1" }
     ]
   }
-]`;
+]
+</summary>`;
 }
 
-// ── TreeCompactor ─────────────────────────────────────
+// ── 增量压缩提示词（学习自 Pi Mono） ────────────────
+
+function buildIncrementalPrompt(segLines: string, previousSummary: string, errorContext: string): string {
+	return `You are updating a CONTEXT CHECKPOINT for another AI that will continue this work.
+New conversation segments have been added since the last checkpoint.
+
+First, analyze the new segments in <analysis> tags:
+- What new work was done since the last checkpoint?
+- What decisions changed or were added?
+- What new errors occurred and how were they fixed?
+
+Then produce an UPDATED tree in <summary> tags.
+
+RULES:
+- PRESERVE all information from the previous summary
+- ADD new segments as new leaf nodes (group with existing siblings if related, or create new groups)
+- UPDATE group summaries if their children changed
+- REMOVE information that is no longer relevant
+- Keep the same nodeId for unchanged nodes (helps maintain continuity)
+
+Previous checkpoint:
+${previousSummary}
+
+New segments to incorporate:
+${segLines}
+${errorContext}
+Output a JSON array of ALL tree nodes (both old and new, fully merged).
+Each node has: nodeId, summary (100-300 chars for leaves), children, segId (leaf only).
+
+Output format:
+<analysis>
+[Your analysis of new segments and how they integrate with existing checkpoint]
+</analysis>
+<summary>
+[JSON array of ALL tree nodes]
+</summary>`;
+}
+
+// ── TreeCompactor ────────────────────────────────────
 
 export class TreeCompactor {
 	private compressing = false;
@@ -744,6 +928,8 @@ export class TreeCompactor {
 		const tree = ruleBasedFallback(segments);
 		this.tree = tree;
 		this.compressing = false;
+
+		console.error("[infinite-context] LLM compression failed, using rule-based fallback");
 
 		pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
 
