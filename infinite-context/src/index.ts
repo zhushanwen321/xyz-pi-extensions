@@ -69,11 +69,12 @@ function createContextHandler(
 	return (event: ContextEvent, ctx: ExtensionContext) => {
 		try {
 			const segments = tracker.getSegments();
-			const retentionWindow = tracker.getRetentionWindow();
 			const tree = compactor.getTree();
 
 			const contextUsage = ctx.getContextUsage();
 			const contextWindow = contextUsage?.contextWindow ?? 200_000;
+			const usagePercent = contextUsage?.percent ?? 50;
+			const retentionWindow = tracker.getRetentionWindow(usagePercent);
 
 			const result: AssembleResult = assembler.assembleMessages(
 				event.messages as unknown as MinimalAgentMessage[],

@@ -13,10 +13,7 @@ import { writeFileSync, readFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import type { ExtensionAPI, ExtensionContext, CustomEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
 import type { Segment, SegmentEntryData, TurnEntryData } from "./types";
-import { RETENTION_GRADIENT as _RETENTION_GRADIENT } from "./types";
-
-/** @deprecated Use RETENTION_GRADIENT instead — will be removed in Task 3 */
-const RETENTION_CONFIG = { maxSegments: 2, maxTurns: 8 } as const;
+import { RETENTION_GRADIENT } from "./types";
 
 // ── 常量 ──────────────────────────────────────────────
 
@@ -226,28 +223,40 @@ export class SegmentTracker {
 	}
 
 	/**
-	 * 返回 retention window 内的段
-	 * 规则：取最后 maxSegments 个已完成段（或覆盖最近 maxTurns turns 的段）
-	 * 不包含当前活跃段
+	 * 返回 retention window 内的段（基于梯度表）
+	 *
+	 * 根据 context 使用百分比查 RETENTION_GRADIENT 表决定保留的已完成段数量。
+	 * sentinel 值 9999 = 保留所有已完成段。
+	 * 最后追加当前活跃段（如果有已完成段为上下文基础）。
 	 */
-	getRetentionWindow(): readonly Segment[] {
+	getRetentionWindow(usagePercent: number): readonly Segment[] {
 		const completedSegments = this.segments.filter((s) => s.completed);
-		if (completedSegments.length === 0) return [];
 
-		// 策略 1：最近 maxSegments 个已完成段
-		const byCount = completedSegments.slice(-RETENTION_CONFIG.maxSegments);
+		// 查梯度表
+		let retainCount = 1; // 兜底
+		for (const entry of RETENTION_GRADIENT) {
+			if (usagePercent <= entry.usageMax) {
+				retainCount = entry.retainCount;
+				break;
+			}
+		}
 
-		// 策略 2：覆盖最近 maxTurns turns 的段
-		const latestTurnEnd = Math.max(
-			...completedSegments.map((s) => s.turnRange.end),
-		);
-		const cutoffTurn = latestTurnEnd - RETENTION_CONFIG.maxTurns + 1;
-		const byTurns = completedSegments.filter(
-			(s) => s.turnRange.end >= cutoffTurn,
-		);
+		// sentinel 值 9999 = 所有已完成段
+		let result: Segment[];
+		if (retainCount >= 9999 || retainCount >= completedSegments.length) {
+			result = [...completedSegments];
+		} else {
+			result = completedSegments.slice(-retainCount);
+		}
 
-		// 取两者中段数较少的（更严格的窗口，保留更多历史段给压缩）
-		return byCount.length <= byTurns.length ? byCount : byTurns;
+		// 有已完成段时追加当前活跃段（为上下文提供基础）
+		// 优先用 this.currentSegment，fallback 到 segments 中查找最后一个未完成的段
+		const activeSegment = this.currentSegment ?? this.segments.find((s) => !s.completed);
+		if (activeSegment && result.length > 0) {
+			result = [...result, activeSegment];
+		}
+
+		return result;
 	}
 
 	// ── 内部方法 ──────────────────────────────────────
