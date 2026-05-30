@@ -44,12 +44,10 @@ function isCompactTreeEntry(entry: SessionEntry): entry is CustomEntry<CompactTr
 		&& (entry as CustomEntry).customType === COMPACT_TREE_ENTRY_TYPE;
 }
 
-/** 提取用户消息第一句话（截取第一个句号/换行之前） */
-function firstSentence(text: string): string {
+/** 提取段摘要（用于降级压缩）：取 userMessage 的前 200 字符 */
+function fallbackSummary(text: string): string {
 	if (!text) return "(empty)";
-	const idx = text.search(/[。.\n]/);
-	if (idx === -1) return text.slice(0, 80);
-	return text.slice(0, idx).trim();
+	return text.slice(0, 200);
 }
 
 /** 计算节点的 tokenCount（chars/4，模拟注入上下文时的实际格式） */
@@ -191,7 +189,7 @@ export function validateTreeOutput(
  */
 export function ruleBasedFallback(segments: readonly Segment[]): CompactTree {
 	const children: TreeNode[] = segments.map((seg) => {
-		const summary = firstSentence(seg.userMessage);
+		const summary = fallbackSummary(seg.userMessage);
 		return {
 			nodeId: `node_${seg.segId}`,
 			summary,
@@ -220,10 +218,12 @@ export function ruleBasedFallback(segments: readonly Segment[]): CompactTree {
 
 // ── Segment Digest（从段文件提取丰富摘要） ──────────
 
-/** 段摘要的截断阈值 */
-const ASSISTANT_TEXT_MAX = 300;
+/** 段摘要中单条 assistant text 的截断阈值 */
+const ASSISTANT_TEXT_MAX = 800;
 /** 每个 segment 的 assistant text 条数上限 */
-const ASSISTANT_SUMMARY_LIMIT = 5;
+const ASSISTANT_SUMMARY_LIMIT = 15;
+/** userMessage 截断阈值（buildCompressionPrompt 中使用） */
+const USER_MESSAGE_MAX = 500;
 
 /** 段丰富摘要，用于压缩 prompt */
 interface SegmentDigest {
@@ -355,9 +355,11 @@ function buildCompressionPrompt(
 	const segLines = digests.map((d) => {
 		const parts: string[] = [];
 		parts.push(`- ${d.segId}:`);
-		parts.push(`  user: ${truncate(d.userMessage, 200)}`);
+		parts.push(`  user: ${truncate(d.userMessage, USER_MESSAGE_MAX)}`);
 		if (d.assistantSummaries.length > 0) {
-			parts.push(`  assistant: ${d.assistantSummaries.join(" | ")}`);
+			for (const summary of d.assistantSummaries) {
+				parts.push(`  asst: ${summary}`);
+			}
 		}
 		if (d.toolNames.length > 0) {
 			const unique = [...new Set(d.toolNames)];
@@ -377,19 +379,23 @@ function buildCompressionPrompt(
 		? `\nIMPORTANT: Previous attempt failed with error: ${previousError}\nPlease fix the issue and output valid JSON.\n`
 		: "";
 
-	return `You are a context compression engine. Given the following conversation segment summaries, produce a tree-structured compression.
+	return `You are a context compression engine. Your job is to compress conversation segments into a tree of DETAILED summaries that preserve maximum useful information for future AI context.
 
 Segments:
 ${segLines}
 ${existingContext}${errorContext}
 Output a JSON array of tree nodes. Each node has:
 - nodeId: string (unique, e.g. "group_1" or "node_seg_0")
-- summary: string (concise summary of what happened in this group/segment, based on the user message, assistant replies, and tools used)
+- summary: string (DETAILED summary, 100-300 chars per leaf, capturing: what user asked, what assistant did, specific files/functions modified, key decisions made, tools used, and concrete outcomes)
 - children: array of child nodes (empty for leaf nodes)
 - segId: string (only for leaf nodes, must match one of the segment IDs above)
 
-Group related segments under parent nodes. Each segment must appear exactly once as a leaf.
-The summary should capture the key decisions, actions, and outcomes — not just repeat the user message.
+CRITICAL RULES:
+1. Group related segments under parent nodes. Each segment must appear exactly once as a leaf.
+2. Leaf summaries MUST be 100-300 chars. Include specific file names, function names, key decisions, and concrete outcomes.
+3. Group summaries MUST synthesize their children: explain the common theme and list key deliverables.
+4. NEVER write vague summaries like "User discussed project setup". Instead: "User initialized Vue 3 + TS project: added ESLint with typescript-eslint, Prettier (2-space indent), configured vite.config.ts with API proxy".
+5. Preserve important details: variable names, configuration values, API endpoints, error messages, file paths.
 
 Output ONLY the JSON array, no other text.
 
@@ -397,10 +403,10 @@ Example output:
 [
   {
     "nodeId": "group_1",
-    "summary": "User discussed feature design and implementation: Vue 3 + TS setup, ESLint config, auth module",
+    "summary": "Project setup and tooling: initialized Vue 3 + TypeScript with Vite, configured ESLint (typescript-eslint + vue plugin) and Prettier (2-space indent, single quotes), set up vitest for unit testing, created GitHub Actions CI pipeline",
     "children": [
-      { "nodeId": "node_seg_0", "summary": "Project initialization: Vue 3 + TypeScript, added ESLint/Prettier config", "children": [], "segId": "seg_0" },
-      { "nodeId": "node_seg_1", "summary": "Auth module design: JWT refresh token flow, interceptor setup", "children": [], "segId": "seg_1" }
+      { "nodeId": "node_seg_0", "summary": "Project initialization: scaffolded Vue 3 + TS via create-vue, added ESLint with typescript-eslint parser and vue plugin, configured Prettier with 2-space indent and single quotes, set up vite.config.ts with API proxy to localhost:3000", "children": [], "segId": "seg_0" },
+      { "nodeId": "node_seg_1", "summary": "Auth module implementation: built JWT access+refresh token flow with httpOnly cookie for refresh, created axios interceptor for auto-refresh on 401, added useAuth composable with login/logout/refresh methods", "children": [], "segId": "seg_1" }
     ]
   }
 ]`;
