@@ -63,7 +63,8 @@ User says "/evolve-apply", "evolve-apply", "应用建议", "/evolve-rollback",
    If cp fails → ABORT, tell user "Backup failed, cannot apply. Reason: ..."
 4. **Modify file**: Use `edit` or `write` tool to apply the suggestion's
    `instruction` to `targetPath`. Follow the instruction precisely.
-   If edit fails → ABORT, tell user reason, keep status as "pending",
+   If edit fails → clean up backup file (`rm "<backupPath>"`), ABORT,
+   tell user reason, keep status as "pending",
    do NOT update pending.json or append to history.jsonl.
 5. **Git commit**: Use `bash` tool:
    ```bash
@@ -72,12 +73,12 @@ User says "/evolve-apply", "evolve-apply", "应用建议", "/evolve-rollback",
    If commit fails → CONTINUE (commitSha will be empty)
 6. **Update pending.json**: Change suggestion status to "applied". Use `write`
    tool to overwrite the entire file.
-7. **Append to history.jsonl**: Use `bash` tool to append one JSON line:
+7. **Append to history.jsonl**: Use `bash` tool with python to ensure
+   valid single-line JSON (avoids heredoc issues with multi-line instruction):
    ```bash
-   cat >> ~/.pi/agent/evolution-data/history.jsonl << 'EOF'
-   {"timestamp":"<ISO>","action":"apply","suggestionId":"<id>","targetPath":"<path>","backupPath":"<backup>","instruction":"<escaped>","title":"<title>","commitSha":"<sha or omit>"}
-   EOF
+   python3 -c "import json; print(json.dumps({'timestamp':'<ISO>','action':'apply','suggestionId':'<id>','targetPath':'<path>','backupPath':'<backup>','instruction':'<instruction text>','title':'<title>','commitSha':'<sha>'}, ensure_ascii=False))" >> ~/.pi/agent/evolution-data/history.jsonl
    ```
+   Escape single quotes in values before passing to python -c.
 8. Confirm to user: "Applied suggestion #N: <title>. Backup at <backupPath>."
 
 ---
@@ -96,17 +97,22 @@ User says "/evolve-apply", "evolve-apply", "应用建议", "/evolve-rollback",
 1. Read `history.jsonl` (last line = most recent action)
 2. Find the most recent "apply" action that hasn't been rolled back
 3. Check if `backupPath` file exists
-4. **If backup exists**: Use `bash` tool:
+4. **If backup exists**: Use `bash` tool to restore:
    ```bash
    cp "<backupPath>" "<targetPath>"
+   ```
+   Verify cp succeeded (exit code 0). If cp fails → ABORT, tell user.
+   If cp succeeded → commit:
+   ```bash
    cd "$(dirname '<targetPath>')" && git add '<filename>' && git commit -m "evolve: rollback <title>"
    ```
 5. **If backup missing**: Tell user "Cannot auto-restore: backup file not found
-   at <backupPath>. You may need to manually check git history."
-6. **Append rollback to history.jsonl**:
+   at <backupPath>. You may need to manually check git history." Do NOT write
+   to history.jsonl.
+6. **Update pending.json**: Find the suggestion matching the suggestionId
+   and change its status back to "pending". Use `write` tool to overwrite.
+7. **Append rollback to history.jsonl** (only if step 4 succeeded):
    ```bash
-   cat >> ~/.pi/agent/evolution-data/history.jsonl << 'EOF'
-   {"timestamp":"<ISO>","action":"rollback","suggestionId":"<id>","targetPath":"<path>","backupPath":"<backup>","instruction":"","title":"<title>","commitSha":"<sha or omit>"}
-   EOF
+   python3 -c "import json; print(json.dumps({'timestamp':'<ISO>','action':'rollback','suggestionId':'<id>','targetPath':'<path>','backupPath':'<backup>','instruction':'','title':'<title>','commitSha':'<sha>'}, ensure_ascii=False))" >> ~/.pi/agent/evolution-data/history.jsonl
    ```
-7. Confirm: "Rolled back: <title>. File restored from backup."
+8. Confirm: "Rolled back: <title>. File restored from backup."

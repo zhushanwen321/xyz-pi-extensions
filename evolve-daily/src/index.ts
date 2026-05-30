@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { existsSync } from "node:fs";
+import { existsSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -26,6 +26,8 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
         { timeout: 30_000 }
       );
     } catch (e) {
+      // Clean up partial output if analyzer failed mid-write
+      try { unlinkSync(reportPath); } catch { /* already gone */ }
       console.error("[evolve-daily] analyzer failed:", e);
     }
   });

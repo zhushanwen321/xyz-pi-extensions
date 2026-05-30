@@ -97,6 +97,10 @@ Write to `~/.pi/agent/evolution-data/suggestions/pending.json`:
 Use the `write` tool. Overwrite the entire file (replace any existing
 pending suggestions that have status "pending" — they will be re-evaluated).
 
+**If write fails**: Tell the user the write failed and the suggestions
+were not persisted. Show the suggestions in the conversation output so the
+user can manually save them. Do NOT silently lose the analysis results.
+
 ### 6. Present Results
 
 Show the user a summary:
