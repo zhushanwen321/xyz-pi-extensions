@@ -41,6 +41,7 @@ export function registerTreeCompactCommand(
 				ctx,
 				segments,
 				compactor.getTree(),
+				50, // manual trigger: default usage
 				(result: CompactResult) => {
 					// onComplete 回调：通知由 index.ts 中 turn_end handler 的 onComplete 处理
 					void result;
