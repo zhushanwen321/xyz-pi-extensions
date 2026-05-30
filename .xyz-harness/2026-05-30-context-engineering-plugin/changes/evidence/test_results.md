@@ -5,35 +5,57 @@ all_passing: true
 
 # Test Results — context-engineering-plugin
 
-## Backend Unit Tests
+## Unit Tests
 
 ```
 npx vitest run context-engineering/src/__tests__/compressor.test.ts
 
- RUN  v4.1.7
-
- ✓ AC-1: Tool result expiry cleanup (1.02ms)
- ✓ AC-2: Bash output truncation (0.34ms)
- ✓ AC-3: Thinking block cleanup (0.14ms)
- ✓ AC-4: ToolCall/ToolResult pairing validation (0.49ms)
- ✓ AC-7: L1 rule-based condensation (0.38ms)
- ✓ AC-8: L2 emergency compression (0.40ms)
- ✓ AC-10: Global disable (0.06ms)
+ ✓ AC-1: Tool result expiry cleanup
+ ✓ AC-2: Bash output truncation
+ ✓ AC-3: Thinking block cleanup
+ ✓ AC-4: ToolCall/ToolResult pairing validation
+ ✓ AC-7: L1 rule-based condensation
+ ✓ AC-8: L2 emergency compression
+ ✓ AC-10: Global disable
 
  Test Files  1 passed (1)
       Tests  7 passed (7)
-   Start at  02:24:16
-   Duration  82ms
 ```
 
-**All 7 backend unit tests passed.**
-
-## Type Check
+## Integration Tests
 
 ```
-npx tsc --noEmit
+npx vitest run context-engineering/src/__tests__/integration.test.ts
+
+ ✓ TC-1-01: Tool result expired >30min, recall store has original
+ ✓ TC-1-02: Tool result in protected turns preserved
+ ✓ TC-2-01: Bash output >4000 chars truncated, recall store has full
+ ✓ TC-2-02: Bash output <4000 chars unchanged
+ ✓ TC-3-01: Thinking >5min idle cleared
+ ✓ TC-4-01: Normal toolCall/toolResult pairing preserved
+ ✓ TC-4-02: Orphan toolResult causes validation failure, returns original
+ ✓ TC-5-01: Recall existing ID returns full content
+ ✓ TC-5-02: Recall non-existing ID returns undefined
+ ✓ TC-7-01: TypeScript code condensed with key lines preserved
+ ✓ TC-7-02: Non-code content falls back to truncation
+ ✓ TC-8-01: 91% context usage triggers L2, old turns expired
+ ✓ TC-8-02: 85% context usage does not trigger L2
+ ✓ TC-9-01: /context-stats outputs correct statistics
+ ✓ TC-10-01: global on/off toggles plugin
+ ✓ TC-10-02: l1 off disables L1 only
+
+ Test Files  1 passed (1)
+      Tests  16 passed (16)
 ```
 
-Only remaining error: `Cannot find module 'vitest'` in test file (test framework not in tsconfig paths, does not affect runtime).
+## Full Suite
 
-**All source files type-check clean.**
+```
+npx vitest run context-engineering/src/__tests__/
+
+ Test Files  2 passed (2)
+      Tests  23 passed (23)
+   Duration  103ms
+```
+
+**All 23 tests passed. No regressions.**
