@@ -1,16 +1,22 @@
 /**
  * Infinite Context Engine — 命令注册
+ *
+ * 提供 /tree-compact 和 /context-status 两个命令。
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { SegmentTracker } from "./segment-tracker";
-import type { TreeCompactor } from "./tree-compactor";
+import type { TreeCompactor, CompactResult } from "./tree-compactor";
 import type { ContextAssembler } from "./context-handler";
 import { estimateTokens } from "./token-estimator";
-import { compressAsync } from "./compression-runner";
 
 // ── /tree-compact ─────────────────────────────────────
 
+/**
+ * 注册 /tree-compact 命令
+ *
+ * 手动触发树压缩，适用于用户发现上下文膨胀时主动压缩。
+ */
 export function registerTreeCompactCommand(
 	pi: ExtensionAPI,
 	compactor: TreeCompactor,
@@ -19,29 +25,44 @@ export function registerTreeCompactCommand(
 	pi.registerCommand("tree-compact", {
 		description: "手动触发树压缩（将历史段压缩为摘要树）",
 		handler: async (_args, ctx) => {
-			const segments = tracker.getSegments();
-			if (segments.length < 1) {
-				const entries = ctx.sessionManager.getEntries();
-				const created = tracker.syncFromEntries(pi, ctx, entries);
-				if (created > 0) {
-					ctx.ui.notify(`从历史对话中补建了 ${created} 个段`);
-				}
-			}
-
-			const allSegments = tracker.getSegments();
-			if (allSegments.length < 1) {
-				ctx.ui.notify("当前无对话内容可压缩。");
+			if (compactor.isCompressing()) {
+				ctx.ui.notify("树压缩正在进行中，请稍候...");
 				return;
 			}
 
-			// 同步建段 + 异步压缩（不阻塞事件循环，working 提示可见）
-			await compressAsync(pi, ctx, allSegments, compactor);
+			const segments = tracker.getSegments();
+			if (segments.length < 3) {
+				ctx.ui.notify("至少需要 3 个段才能执行压缩");
+				return;
+			}
+
+			compactor.triggerCompression(
+				pi,
+				ctx,
+				segments,
+				compactor.getTree(),
+				50, // manual trigger: default usage
+				(result: CompactResult) => {
+					// onComplete 回调：通知由 index.ts 中 turn_end handler 的 onComplete 处理
+					void result;
+				},
+			);
+
+			ctx.ui.notify("树压缩已启动...");
 		},
 	});
 }
 
 // ── /context-status ───────────────────────────────────
 
+/**
+ * 注册 /context-status 命令
+ *
+ * 显示上下文使用状态，包括：
+ * - 原始上下文估算
+ * - 树上下文（压缩摘要）估算
+ * - 段数量统计
+ */
 export function registerContextStatusCommand(
 	pi: ExtensionAPI,
 	assembler: ContextAssembler,
@@ -52,20 +73,25 @@ export function registerContextStatusCommand(
 		description: "显示上下文使用状态（原始 vs 树上下文）",
 		handler: async (_args, ctx) => {
 			const segments = tracker.getSegments();
-			const retentionWindow = tracker.getRetentionWindow();
 			const tree = compactor.getTree();
 			const contextUsage = ctx.getContextUsage();
+			const usagePercent = contextUsage?.percent ?? 50;
+			const retentionWindow = tracker.getRetentionWindow(usagePercent);
 
 			const completedSegments = segments.filter((s) => s.completed).length;
 			const activeSegments = segments.filter((s) => !s.completed).length;
 			const totalSegments = segments.length;
 
+			// 构建状态报告
 			const lines: string[] = [];
+
+			// 段统计
 			lines.push("── 段统计 ──");
 			lines.push(`总段数: ${totalSegments} (已完成: ${completedSegments}, 活跃: ${activeSegments})`);
 			lines.push(`保留窗口: ${retentionWindow.length} 个段`);
 			lines.push("");
 
+			// 树压缩状态
 			lines.push("── 树压缩 ──");
 			if (tree) {
 				lines.push(`树 ID: ${tree.treeId}`);
@@ -76,14 +102,21 @@ export function registerContextStatusCommand(
 			} else {
 				lines.push("尚未压缩");
 			}
+
+			if (compactor.isCompressing()) {
+				lines.push("状态: 正在压缩中...");
+			}
 			lines.push("");
 
+			// 上下文使用
 			lines.push("── 上下文使用 ──");
 			if (contextUsage) {
 				const tokens = contextUsage.tokens ?? 0;
 				const window = contextUsage.contextWindow;
 				const percent = contextUsage.percent ?? Math.round((tokens / window) * 100);
 				lines.push(`已使用: ${tokens.toLocaleString()} / ${window.toLocaleString()} tokens (${percent}%)`);
+
+				// 估算树上下文开销
 				if (tree) {
 					const flatNodes = assembler.bfsFlatten(tree);
 					let treeTokens = 0;
@@ -97,8 +130,10 @@ export function registerContextStatusCommand(
 				lines.push("上下文使用信息不可用（当前无活跃 LLM 调用）");
 			}
 
+			const report = lines.join("\n");
+			// 输出到 TUI
 			if (ctx.hasUI) {
-				ctx.ui.notify(lines.join("\n"));
+				ctx.ui.notify(report);
 			}
 		},
 	});

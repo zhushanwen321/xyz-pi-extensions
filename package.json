@@ -5,11 +5,13 @@
   "scripts": {
     "lint": "eslint \"goal/src/**/*.ts\" \"todo/src/**/*.ts\" \"subagent/src/**/*.ts\" \"usage-tracker/src/**/*.ts\" \"workflow/src/**/*.ts\" \"infinite-context/src/**/*.ts\"",
     "lint:fix": "eslint --fix \"goal/src/**/*.ts\" \"todo/src/**/*.ts\" \"subagent/src/**/*.ts\" \"usage-tracker/src/**/*.ts\" \"workflow/src/**/*.ts\" \"infinite-context/src/**/*.ts\"",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
     "eslint": "^9",
-    "typescript-eslint": "^8"
+    "typescript-eslint": "^8",
+    "vitest": "^4.1.7"
   }
 }

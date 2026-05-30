@@ -217,7 +217,7 @@ function runJudgeOnce(
 			try {
 				const suggestions = parseJudgeOutput(raw);
 				resolve({ suggestions, raw, stderr });
-			} catch (_parseErr) {
+			} catch {
 				// 解析失败：带 raw 返回，让上层决定是否重试
 				resolve({ suggestions: [], raw, stderr });
 			}

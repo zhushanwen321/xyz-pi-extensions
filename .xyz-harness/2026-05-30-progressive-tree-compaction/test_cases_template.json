@@ -1,0 +1,174 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "Dynamic retention window gradient lookup",
+      "description": "Verify getRetentionWindow(usagePercent) returns correct count per gradient tier",
+      "steps": [
+        "Create SegmentTracker with 12 completed mock segments",
+        "Call getRetentionWindow(30) → expect all 12 (Infinity)",
+        "Call getRetentionWindow(60) → expect last 8 segments",
+        "Call getRetentionWindow(75) → expect last 4 segments",
+        "Call getRetentionWindow(85) → expect last 2 segments",
+        "Call getRetentionWindow(95) → expect last 1 segment"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "unit",
+      "title": "Retention window with no completed segments",
+      "description": "Verify empty case returns empty array",
+      "steps": [
+        "Create SegmentTracker with 0 completed segments",
+        "Call getRetentionWindow(75)",
+        "Expect empty array"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "unit",
+      "title": "Compression scope — within ratio range",
+      "description": "Verify computeCompressionScope accumulates segments until ratio is 20-50%",
+      "steps": [
+        "Create 10 mock segments with known digest sizes, retention=2",
+        "Call computeCompressionScope with these inputs",
+        "Verify estimatedAfterTokens / denominator is within [0.2, 0.5]",
+        "Verify at least 1 segment is included"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "unit",
+      "title": "Compression scope — all segments too small",
+      "description": "Verify when all segments < 20%, all are included",
+      "steps": [
+        "Create 3 mock segments with very small digest sizes",
+        "Call computeCompressionScope",
+        "Verify all 3 segments are returned"
+      ]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "unit",
+      "title": "Compression scope — first segment exceeds max",
+      "description": "Verify when even 1 segment exceeds 50%, it's still included",
+      "steps": [
+        "Create scenario where 1 segment exceeds 50% ratio",
+        "Call computeCompressionScope",
+        "Verify 1 segment is returned (compress it anyway)"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "Tree append structure after multiple compressions",
+      "description": "Verify trees are appended, old groups unchanged",
+      "steps": [
+        "Run compression on segments 0-5 → tree has groups A, B",
+        "Store group summaries for A, B",
+        "Run compression on segments 6-10 → tree has A, B, C, D",
+        "Verify A.summary and B.summary unchanged",
+        "Verify C and D have correct segIds",
+        "Verify tree.depth === 2"
+      ]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "unit",
+      "title": "Compression prompt includes existing groups",
+      "description": "Verify buildCompressionPrompt includes <existing-groups> section when tree exists",
+      "steps": [
+        "Call buildCompressionPrompt with existingTree defined",
+        "Verify output contains <existing-groups> XML tag",
+        "Verify output contains old group nodeId values",
+        "Verify instruction says DO NOT modify old groups"
+      ]
+    },
+    {
+      "id": "TC-3-03",
+      "type": "unit",
+      "title": "Initial compression prompt (no tree)",
+      "description": "Verify buildCompressionPrompt without existingTree",
+      "steps": [
+        "Call buildCompressionPrompt without existingTree",
+        "Verify output does NOT contain <existing-groups>",
+        "Verify output contains CONTEXT CHECKPOINT header",
+        "Verify output has tool call guard"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "integration",
+      "title": "Context injection contains all tree nodes",
+      "description": "Verify assembled messages include all tree node summaries",
+      "steps": [
+        "Create ContextAssembler with compressed tree having 3 groups, 10 leaves",
+        "Call assembleMessages with empty messages array",
+        "Verify output contains recall prompt (ic-recall-prompt)",
+        "Verify output contains 1 ic-summary per group + 1 per leaf = 13 total",
+        "Verify no raw segment content in output"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "integration",
+      "title": "Compression trigger flow — usage < 50% skips",
+      "description": "Verify compression doesn't fire at low usage",
+      "steps": [
+        "Set context usage to 30%",
+        "Call triggerCompression in index.ts flow",
+        "Verify isCompressing() is false, no entry written"
+      ]
+    },
+    {
+      "id": "TC-5-02",
+      "type": "integration",
+      "title": "Compression trigger flow — usage >= 50% fires",
+      "description": "Verify compression fires when usage exceeds threshold",
+      "steps": [
+        "Set context usage to 65%",
+        "Call triggerCompression",
+        "Verify isCompressing() becomes true",
+        "Verify computeCompressionScope is called"
+      ]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "unit",
+      "title": "Compression failure fallback sequence",
+      "description": "Verify handleCompressionFailure retries then falls back",
+      "steps": [
+        "Trigger compression that will fail (mock child process exit code 1)",
+        "Verify retry is attempted (MAX_RETRY_COUNT=1 → 1 retry)",
+        "On second failure verify ruleBasedFallback is called",
+        "Verify fallbackUsed flag is true",
+        "Verify tree exists with all segments as leaf nodes"
+      ]
+    },
+    {
+      "id": "TC-6-02",
+      "type": "unit",
+      "title": "Rule-based fallback segment summary length",
+      "description": "Verify fallback summaries meet minimum length",
+      "steps": [
+        "Create a segment with short userMessage",
+        "Call ruleBasedFallback with this segment",
+        "Verify leaf summary length >= MIN_LEAF_SUMMARY_LENGTH (120)"
+      ]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "manual",
+      "title": "End-to-end session verification",
+      "description": "Full Pi session with 30+ messages, verify compression works end-to-end",
+      "steps": [
+        "Launch Pi with infinite-context extension",
+        "Send 25+ short messages to fill context",
+        "Verify compact tree entry appears in session",
+        "Verify old content accessible via recall tool",
+        "Verify new messages appear in context normally"
+      ]
+    }
+  ]
+}
