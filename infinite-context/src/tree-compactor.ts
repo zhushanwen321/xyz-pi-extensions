@@ -14,10 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, CustomEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
 import type { Segment, TreeNode, CompactTree } from "./types";
-import { RETENTION_GRADIENT as _RETENTION_GRADIENT } from "./types";
-
-/** @deprecated Use RETENTION_GRADIENT instead — will be removed in Task 3 */
-const RETENTION_CONFIG = { maxSegments: 2, maxTurns: 8 } as const;
+import { COMPRESSION_CONFIG } from "./types";
 import { estimateTokens } from "./token-estimator";
 
 // ── 常量 ──────────────────────────────────────────────
@@ -440,20 +437,17 @@ function buildCompressionPrompt(
 		return parts.join("\n");
 	}).join("\n\n");
 
-	// 增量上下文：已有旧树时，传递旧摘要给 LLM 增量更新
-	const previousSummaryContext = existingTree
-		? buildPreviousSummarySection(existingTree)
+	// 已有旧树时，传递旧组信息给 LLM
+	const existingGroupsContext = existingTree
+		? buildExistingGroupsSection(existingTree)
 		: "";
 
 	const errorContext = previousError
 		? `\nIMPORTANT: Previous attempt failed with error: ${previousError}\nPlease fix the issue and output valid JSON.\n`
 		: "";
 
-	// 选择增量或初始提示词
-	const isIncremental = existingTree !== undefined;
-	const taskPrompt = isIncremental
-		? buildIncrementalPrompt(segLines, previousSummaryContext, errorContext)
-		: buildInitialPrompt(segLines, errorContext);
+	// 总是使用初始提示词（不再使用增量提示词）
+	const taskPrompt = buildInitialPrompt(segLines, existingGroupsContext, errorContext);
 
 	return TOOL_CALL_GUARD_PREAMBLE + taskPrompt + TOOL_CALL_GUARD_TRAILER;
 }
@@ -475,7 +469,7 @@ REMINDER: Do NOT call any tools. Respond with plain text only — an <analysis> 
 
 // ── 构建旧摘要段落（增量压缩，学习自 Pi Mono） ────────
 
-function buildPreviousSummarySection(existingTree: CompactTree): string {
+function _buildPreviousSummarySection(existingTree: CompactTree): string {
 	const flatNodes: Array<{ nodeId: string; summary: string; segId?: string }> = [];
 	function collectNodes(node: TreeNode): void {
 		if (node.nodeId !== "root") {
@@ -499,9 +493,26 @@ function buildPreviousSummarySection(existingTree: CompactTree): string {
 	return `\n<previous-summary>\n${nodeLines}\n</previous-summary>\n`;
 }
 
+// ── 构建已有组段落（追加模式） ──────────────────
+
+function buildExistingGroupsSection(existingTree: CompactTree): string {
+	const groups = existingTree.root.children;
+	if (groups.length === 0) return "";
+
+	const lines = groups.map((g) => {
+		const leafSegIds = g.children
+			.filter((c) => c.segId)
+			.map((c) => c.segId!)
+			.join(", ");
+		return `  ${g.nodeId} [${leafSegIds}]: ${g.summary}`;
+	});
+
+	return `\n<existing-groups>\nThe tree already contains the following groups from previous compressions:\n${lines.join("\n")}\n</existing-groups>\n`;
+}
+
 // ── 初始压缩提示词 ───────────────────────────────────
 
-function buildInitialPrompt(segLines: string, errorContext: string): string {
+function buildInitialPrompt(segLines: string, existingGroupsContext: string, errorContext: string): string {
 	return `You are creating a CONTEXT CHECKPOINT for another AI that will continue this work.
 Your job is to produce a tree-structured compression that preserves MAXIMUM useful information.
 Another AI will use your output to seamlessly continue the conversation.
@@ -514,7 +525,7 @@ First, analyze each segment in <analysis> tags:
 - What were the outcomes?
 
 Then produce the compressed tree in <summary> tags as a JSON array.
-
+${existingGroupsContext}
 Segments:
 ${segLines}
 ${errorContext}
@@ -570,7 +581,7 @@ seg_1: User asked for authentication module. Assistant built JWT access+refresh 
 
 // ── 增量压缩提示词（学习自 Pi Mono） ────────────────
 
-function buildIncrementalPrompt(segLines: string, previousSummary: string, errorContext: string): string {
+function _buildIncrementalPrompt(segLines: string, previousSummary: string, errorContext: string): string {
 	return `You are updating a CONTEXT CHECKPOINT for another AI that will continue this work.
 New conversation segments have been added since the last checkpoint.
 
@@ -619,7 +630,66 @@ export class TreeCompactor {
 	private currentDigests: SegmentDigest[] = [];
 	/** 当前压缩任务的工作目录（用于读取段文件） */
 	private ctxCwd = "";
+	private compressedSegIds: Set<string> = new Set();
 
+	/** BFS 收集树中所有 leaf segIds */
+	private collectCompressedSegIds(node: TreeNode): void {
+		if (node.segId) {
+			this.compressedSegIds.add(node.segId);
+		}
+		for (const child of node.children) {
+			this.collectCompressedSegIds(child);
+		}
+	}
+
+	/** 返回已压缩段的 segId 集合的拷贝 */
+	getCompressedSegIds(): Set<string> {
+		return new Set(this.compressedSegIds);
+	}
+
+
+	computeCompressionScope(
+		retentionSegs: readonly Segment[],
+		historySegs: readonly Segment[],
+		existingTree: CompactTree | undefined,
+	): { targetSegs: Segment[]; estimatedAfterTokens: number } {
+		const { ratioMin, ratioMax, perSegmentTokens } = COMPRESSION_CONFIG;
+		const existingTreeSize = existingTree?.totalTokens ?? 0;
+
+		// 分母：树 + 保留段 digest + 历史段 digest + 系统提示词
+		const systemPromptEstimate = 4000;
+		const retentionMsgSize = retentionSegs.reduce((sum, s) => sum + s.userMessage.length, 0) / 4;
+		const historyTotalDigest = historySegs.reduce((sum, s) => sum + s.userMessage.length, 0) / 4;
+		const denominator = existingTreeSize + retentionMsgSize + historyTotalDigest + systemPromptEstimate;
+
+		if (denominator <= 0) return { targetSegs: [...historySegs], estimatedAfterTokens: 0 };
+
+		// 按 segId 排序（最旧在前）
+		const sorted = [...historySegs].sort((a, b) => a.segId.localeCompare(b.segId));
+
+		for (let i = 1; i <= sorted.length; i++) {
+			const segs = sorted.slice(0, i);
+			const estimatedAfter = segs.length * perSegmentTokens + existingTreeSize;
+			const ratio = estimatedAfter / denominator;
+
+			if (ratio >= ratioMin) {
+				if (ratio <= ratioMax) {
+					return { targetSegs: segs, estimatedAfterTokens: estimatedAfter };
+				}
+				// 超出上限 → 减一段
+				if (i > 1) {
+					const prev = sorted.slice(0, i - 1);
+					const prevEstimated = (i - 1) * perSegmentTokens + existingTreeSize;
+					return { targetSegs: prev, estimatedAfterTokens: prevEstimated };
+				}
+				return { targetSegs: segs, estimatedAfterTokens: estimatedAfter };
+			}
+		}
+
+		// 所有段加完仍未达标 → 接受小于 ratioMin
+		const allEstimated = sorted.length * perSegmentTokens + existingTreeSize;
+		return { targetSegs: sorted, estimatedAfterTokens: allEstimated };
+	}
 
 	/**
 	 * 触发树压缩（fire-and-forget + 回调模式）
@@ -644,11 +714,11 @@ export class TreeCompactor {
 		// 2. 过滤 retention window：最近 maxSegments 个已完成段 + 当前活跃段
 		const completedSegments = segments.filter((s) => s.completed);
 		// 保留窗口: min(2 个已完成段, 覆盖最近 8 turns 的段)
-		const byCount = completedSegments.slice(-RETENTION_CONFIG.maxSegments);
+		const byCount = completedSegments.slice(-2);
 		const latestTurnEnd = Math.max(
 			...completedSegments.map((s) => s.turnRange.end),
 		);
-		const cutoffTurn = latestTurnEnd - RETENTION_CONFIG.maxTurns + 1;
+		const cutoffTurn = latestTurnEnd - 8 + 1;
 		const byTurns = completedSegments.filter(
 			(s) => s.turnRange.end >= cutoffTurn,
 		);
@@ -716,12 +786,14 @@ export class TreeCompactor {
 	 */
 	restoreState(entries: SessionEntry[]): void {
 		this.tree = undefined;
+		this.compressedSegIds.clear();
 
 		// 取最后一个 ic-compact-tree entry
 		for (let i = entries.length - 1; i >= 0; i--) {
 			const entry = entries[i];
 			if (isCompactTreeEntry(entry) && entry.data) {
 				this.tree = entry.data as CompactTree;
+				this.collectCompressedSegIds(this.tree.root);
 				return;
 			}
 		}
@@ -800,34 +872,60 @@ export class TreeCompactor {
 				return;
 			}
 
-			// 校验通过 → 构建树（tokenCount 已由 validateTreeOutput 中的 recomputeTreeTokens 用 chars/4 填充）
-			const rootSummary = `Compressed ${segments.length} segments (session ${sessionId})`;
-			const root: TreeNode = {
-				nodeId: "root",
-				summary: rootSummary,
-				tokenCount: computeNodeTokens("root", rootSummary),
-				children: result,
-			};
+			// 校验通过 → 构建树（tokenCount 已由 validateTreeOutput 中的 recomputeTreeTokens 填充）
+			const newGroups = result; // validated TreeNode[]
 
-			const tree: CompactTree = {
-				treeId: `tree_${Date.now()}`,
-				root,
-				totalTokens: sumTreeTokens(root),
-				createdAt: Date.now(),
-				depth: treeDepth(root),
-			};
+			if (existingTree) {
+				// 追加模式：保留旧 groups，追加新 groups
+				const rootSummary = `Compressed ${segments.length} segments (appended, session ${sessionId})`;
+				const root: TreeNode = {
+					nodeId: "root",
+					summary: rootSummary,
+					tokenCount: computeNodeTokens("root", rootSummary),
+					children: [...existingTree.root.children, ...newGroups],
+				};
 
-			this.tree = tree;
-			this.compressing = false;
+				const tree: CompactTree = {
+					treeId: existingTree.treeId,
+					root,
+					totalTokens: sumTreeTokens(root),
+					createdAt: Date.now(),
+					depth: treeDepth(root),
+				};
 
-			// 持久化
-			pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
+				this.tree = tree;
+				this.compressing = false;
+				for (const seg of segments) {
+					this.compressedSegIds.add(seg.segId);
+				}
+				pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
+				onComplete?.({ tree, fallbackUsed: false, retryCount });
+			} else {
+				// 首次压缩：新树
+				const rootSummary = `Compressed ${segments.length} segments (session ${sessionId})`;
+				const root: TreeNode = {
+					nodeId: "root",
+					summary: rootSummary,
+					tokenCount: computeNodeTokens("root", rootSummary),
+					children: newGroups,
+				};
 
-			onComplete?.({
-				tree,
-				fallbackUsed: false,
-				retryCount,
-			});
+				const tree: CompactTree = {
+					treeId: `tree_${Date.now()}`,
+					root,
+					totalTokens: sumTreeTokens(root),
+					createdAt: Date.now(),
+					depth: treeDepth(root),
+				};
+
+				this.tree = tree;
+				this.compressing = false;
+				for (const seg of segments) {
+					this.compressedSegIds.add(seg.segId);
+				}
+				pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
+				onComplete?.({ tree, fallbackUsed: false, retryCount });
+			}
 		});
 
 		// 处理 spawn 错误
@@ -913,6 +1011,9 @@ export class TreeCompactor {
 
 				this.tree = tree;
 				this.compressing = false;
+				for (const seg of segments) {
+					this.compressedSegIds.add(seg.segId);
+				}
 				pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
 
 				onComplete?.({
@@ -947,6 +1048,9 @@ export class TreeCompactor {
 		const tree = ruleBasedFallback(segments, this.currentDigests.length > 0 ? this.currentDigests : undefined);
 		this.tree = tree;
 		this.compressing = false;
+		for (const seg of segments) {
+			this.compressedSegIds.add(seg.segId);
+		}
 
 		console.error("[infinite-context] LLM compression failed, using rule-based fallback");
 
