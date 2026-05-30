@@ -46,6 +46,8 @@ export interface AssembleResult {
 	treeContextTokens: number;
 	/** 被压缩的节点数量 */
 	compressedNodeCount: number;
+	/** 本次被压缩的段 ID 集合 */
+	compressedSegIds?: Set<string>;
 }
 
 // ── 常量 ──────────────────────────────────────────────
@@ -152,12 +154,51 @@ export class ContextAssembler {
 		tree: CompactTree | undefined,
 		segments: readonly Segment[],
 		retentionWindow: readonly Segment[],
+		compressedSegIds?: Set<string> | number,
 		contextWindow: number = DEFAULT_CONTEXT_WINDOW,
 	): AssembleResult {
+		// Backward compat: old callers pass (msg, tree, seg, ret, contextWindow)
+		// — the 5th positional arg is a number, not a Set.
+		let effectiveCompressedSegIds: Set<string> | undefined;
+		let effectiveContextWindow = contextWindow;
+		if (compressedSegIds instanceof Set) {
+			effectiveCompressedSegIds = compressedSegIds;
+		} else if (typeof compressedSegIds === "number") {
+			effectiveContextWindow = compressedSegIds;
+		}
+
 		// 1. 浅拷贝，不修改原始；清除旧注入（幂等安全）
-		const filtered = messages.filter(
+		let filtered = messages.filter(
 			(msg) => !isIcSummary(msg) && !isIcRecallPrompt(msg),
 		);
+
+		// AC-4: filter out original messages of compressed segments
+		if (effectiveCompressedSegIds && effectiveCompressedSegIds.size > 0 && tree) {
+			// Count how many user messages belong to compressed segments
+			const userMsgCount = segments
+				.filter(s => effectiveCompressedSegIds!.has(s.segId))
+				.length;
+
+			// Skip the first N user messages + their assistant replies.
+			// Each compressed segment has a user+assistant pair.
+			let toSkip = 0;
+			let userCount = 0;
+			let lastWasUser = false;
+			for (const msg of filtered) {
+				toSkip++;
+				if (msg.role === "user") {
+					userCount++;
+					lastWasUser = true;
+				} else if (lastWasUser && userCount <= userMsgCount) {
+					// This is the assistant reply after a compressed user message
+					lastWasUser = false;
+					if (userCount >= userMsgCount) break;
+				} else {
+					lastWasUser = false;
+				}
+			}
+			filtered = filtered.slice(toSkip);
+		}
 
 		// 保留窗口段 ID（仅用于信息记录）
 		const retentionSegIds = new Set(retentionWindow.map((s) => s.segId));
@@ -172,6 +213,7 @@ export class ContextAssembler {
 				messages: filtered,
 				treeContextTokens: this.estimateTreeContext(filtered),
 				compressedNodeCount: 0,
+				compressedSegIds: effectiveCompressedSegIds,
 			};
 		}
 
@@ -192,7 +234,7 @@ export class ContextAssembler {
 		const totalWithSummary = rawTokens + summaryTokens + recallTokens;
 
 		// 4. 预算分配
-		const totalBudget = contextWindow * BUDGET_RATIO;
+		const totalBudget = effectiveContextWindow * BUDGET_RATIO;
 
 		let finalMessages: MinimalAgentMessage[];
 		let compressedNodeCount: number;
@@ -241,6 +283,7 @@ export class ContextAssembler {
 			messages: finalMessages,
 			treeContextTokens,
 			compressedNodeCount,
+			compressedSegIds: effectiveCompressedSegIds,
 		};
 	}
 
@@ -257,7 +300,7 @@ export class ContextAssembler {
 		if (budget <= 0 || messages.length === 0) return [];
 
 		let accumulated = 0;
-		let cutoffIndex = messages.length; // 从末尾开始
+		let cutoffIndex = 0; // 保留从 cutoffIndex 开始的所有消息
 
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const content = messages[i].content;
