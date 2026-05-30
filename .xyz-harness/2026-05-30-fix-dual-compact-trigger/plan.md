@@ -56,6 +56,7 @@ Add the following function to `compression-runner.ts`. It reuses `beforeCompress
 /**
  * Compression for session_before_compact handler.
  * Returns CompactResult for building CompactionResult to return to Pi.
+ * Returns null when segments are empty (caller should fallback to Pi native compact).
  * Uses async spawn (non-blocking event loop) so TUI can render status.
  */
 export async function compressForCompaction(
@@ -63,15 +64,8 @@ export async function compressForCompaction(
 	ctx: ExtensionContext,
 	segments: readonly Segment[],
 	compactor: TreeCompactor,
-): Promise<CompactResult> {
-	if (segments.length === 0) {
-		return {
-			tree: { treeId: "empty", root: { nodeId: "root", summary: "no segments", tokenCount: 0, children: [] }, totalTokens: 0, createdAt: Date.now(), depth: 1 },
-			fallbackUsed: true,
-			retryCount: 0,
-			errorReason: "No segments",
-		};
-	}
+): Promise<CompactResult | null> {
+	if (segments.length === 0) return null;
 	beforeCompressionUI(pi, ctx, segments.length);
 	const result = await compactor.triggerCompressionAsync(pi, segments, compactor.getTree());
 	afterCompressionUI(pi, ctx, result);
@@ -79,7 +73,7 @@ export async function compressForCompaction(
 }
 ```
 
-This function is identical to `compressAsync` except it returns the `CompactResult` instead of `void`. The existing `compressAsync` can be updated to call this internally to avoid duplication:
+The existing `compressAsync` retains its original segments=0 early-return behavior (no UI, no compression). It delegates to `compressForCompaction` only for the shared spawn+UI logic:
 
 ```typescript
 export async function compressAsync(
@@ -88,6 +82,7 @@ export async function compressAsync(
 	segments: readonly Segment[],
 	compactor: TreeCompactor,
 ): Promise<void> {
+	if (segments.length === 0) return;
 	await compressForCompaction(pi, ctx, segments, compactor);
 }
 ```
@@ -116,8 +111,9 @@ Replace the current implementation with one that:
 3. Calls `compressForCompaction()` (await, async spawn → non-blocking)
 4. On success, builds a text summary from the tree and returns `{ compaction: { summary, firstKeptEntryId, tokensBefore } }`
 5. On failure (fallbackUsed with errorReason), returns `{ cancel: false }` (let Pi fallback)
+6. On `compressForCompaction` returning null, returns `{ cancel: false }` (let Pi fallback)
 
-The handler signature must match Pi's `ExtensionHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>`:
+The handler signature must match Pi's `ExtensionHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>`. Pi calls handlers with `(event, ctx)` where `ctx` is `ExtensionContext` — the same context used for UI operations (`sendMessage`, `setStatus`):
 
 ```typescript
 function createBeforeCompactHandler(
@@ -135,6 +131,11 @@ function createBeforeCompactHandler(
 
 		try {
 			const result = await compressForCompaction(pi, ctx, segments, compactor);
+
+			// No result (empty segments) → let Pi handle
+			if (!result) {
+				return { cancel: false };
+			}
 
 			// If fallback was used with error, let Pi do native compact
 			if (result.fallbackUsed && result.errorReason) {
@@ -158,6 +159,8 @@ function createBeforeCompactHandler(
 	};
 }
 ```
+
+Note: `ctx` comes from Pi's emit call — `this._extensionRunner.emit({ type: "session_before_compact", ... })` passes the current `ExtensionContext` to each handler. This is the same `ctx` used in all other handlers.
 
 The `buildTreeSummary` helper generates a text summary from the tree:
 
@@ -319,7 +322,7 @@ Expected: 0 errors
 
 | Method | Signature | Returns | Edge Cases | Spec Ref |
 |--------|-----------|---------|------------|----------|
-| `compressForCompaction` | `(pi, ctx, segments, compactor) => Promise<CompactResult>` | `CompactResult` | segments.length=0 → returns fallback CompactResult | AC-2, AC-3 |
+| `compressForCompaction` | `(pi, ctx, segments, compactor) => Promise<CompactResult \| null>` | `CompactResult \| null` | segments.length=0 → returns null | AC-2, AC-3 |
 | `compressAsync` | `(pi, ctx, segments, compactor) => Promise<void>` | `void` | delegates to compressForCompaction | — |
 
 ### Module: index.ts (handlers)
