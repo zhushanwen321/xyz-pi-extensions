@@ -208,11 +208,11 @@ describe("Integration: TC-4 配对校验", () => {
 describe("Integration: TC-5 Recall 完整性", () => {
   it("TC-5-01: 存在的ID返回完整原始内容", () => {
     const store = createRecallStore();
-    const id = store.store("original full content here", "L0");
+    const id = store.store("original full content here", "l0-expired");
     const stored = store.recall(id);
     expect(stored).toBeDefined();
     expect(stored!.original).toBe("original full content here");
-    expect(stored!.level).toBe("L0");
+    expect(stored!.level).toBe("l0-expired");
     expect(typeof stored!.compressedAt).toBe("number");
   });
 
