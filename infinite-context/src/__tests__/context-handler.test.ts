@@ -15,9 +15,7 @@ import { describe, it, expect } from "vitest";
 import {
 	ContextAssembler,
 	type MinimalAgentMessage,
-	type AssembleResult,
 	IC_SUMMARY_CUSTOM_TYPE,
-	IC_RECALL_PROMPT_TYPE,
 } from "../context-handler.js";
 import type { Segment, CompactTree, TreeNode } from "../types.js";
 
