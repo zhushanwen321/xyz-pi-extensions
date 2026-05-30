@@ -19,7 +19,19 @@ Result: **0 errors, 0 warnings** — PASS
 cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace/main && npx eslint bash-async/src/
 ```
 
-Result: **0 errors, 14 warnings** (all magic numbers + 1 acceptable console-only catch in background callback) — PASS
+Result: **0 errors, 6 warnings** (all magic numbers in acceptable contexts: timeout multipliers, display truncation lengths) — PASS
+
+## Five-Step Specialized Review
+
+| Review | Round | Verdict | MUST FIX |
+|--------|-------|---------|----------|
+| Business Logic Review | v1 → v2 → v3 | pass | 0 |
+| Standards Review | v1 → v2 | pass | 0 (2 resolved) |
+| Taste Review | v1 | pass | 0 |
+| Robustness Review | v1 → v2 | pass | 0 (3 resolved) |
+| Integration Review | v1 | pass | 0 |
+
+All 5 reviews PASS with 0 open MUST FIX.
 
 ## File Structure Verification
 
@@ -32,27 +44,22 @@ bash-async/
     types.ts        — Shared types (~70 lines)
     shell.ts        — Shell discovery (~80 lines)
     jobs.ts         — Job state + config + kill (~190 lines)
-    spawn.ts        — Process spawn engine (~400 lines)
+    spawn.ts        — Process spawn engine (~460 lines)
 ```
 
-Total: ~940 lines across 7 files. All files created and tracked by git.
+Total: ~1000 lines across 7 files. All files created and tracked by git.
 
-## Manual Smoke Test
+## Bug Fixes During Review
 
-Manual testing requires a running Pi session with the extension symlinked. The following test scenarios from e2e-test-plan.md will be executed in Phase 4:
+### Round 1 (6 MUST FIX)
+1. **BLR-1 / Robustness-2**: ChildProcess 'error' event not handled → added reject on error
+2. **Standards-1**: pi-tui import used wrong scope → changed to @mariozechner
+3. **Standards-2**: fs import in wrong position → moved to top
+4. **Robustness-1**: WriteStream leak → destroy on exit/error
+5. **Robustness-3**: executeKill race condition → register exit listener before kill
 
-- TS-1: Sync basic commands
-- TS-2: Sync timeout detach
-- TS-5: Background mode
-- TS-6: Poll mode
-- TS-7: Kill mode
-- TS-8: Spawn failure
-- TS-10: Output truncation
+### Round 2 (1 MUST FIX)
+6. **BLR-v2**: removeAllListeners('data') broke pipe to WriteStream → use removeCapture() with specific listener reference
 
-## Summary
-
-- TypeCheck: ✅ PASS
-- ESLint: ✅ PASS (0 errors)
-- File structure: ✅ All 7 files created
-- Automated test framework: Not applicable (Pi extension, no test runner)
-- E2E tests: Deferred to Phase 4
+### Round 3
+All PASS — 0 MUST FIX, 3 LOW, 2 INFO remaining (acceptable).
