@@ -9,7 +9,7 @@ review:
 
 statistics:
   total_issues: 6
-  must_fix: 2
+  must_fix: 0
   must_fix_resolved: 2
   low: 3
   info: 1
