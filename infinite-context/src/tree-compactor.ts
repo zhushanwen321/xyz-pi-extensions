@@ -250,7 +250,11 @@ export function validateTreeOutput(
 export function ruleBasedFallback(segments: readonly Segment[], digests?: SegmentDigest[]): CompactTree {
 	const children: TreeNode[] = segments.map((seg, idx) => {
 		const digest = digests?.[idx];
-		const summary = fallbackSummary(seg, digest);
+		let summary = fallbackSummary(seg, digest);
+		// 兜底：如果 summary 太短，补充段范围信息
+		if (summary.length < MIN_LEAF_SUMMARY_LENGTH) {
+			summary = `Segment ${seg.segId} (turns ${seg.turnRange.start}-${seg.turnRange.end}): ${summary}`;
+		}
 		return {
 			nodeId: `node_${seg.segId}`,
 			summary,
@@ -602,8 +606,11 @@ export class TreeCompactor {
 	private compressing = false;
 	private tree: CompactTree | undefined;
 	private currentProcess: ChildProcess | undefined;
+	/** 当前压缩任务的段摘要缓存（用于 fallback 时复用） */
+	private currentDigests: SegmentDigest[] = [];
 	/** 当前压缩任务的工作目录（用于读取段文件） */
 	private ctxCwd = "";
+
 
 	/**
 	 * 触发树压缩（fire-and-forget + 回调模式）
@@ -654,7 +661,10 @@ export class TreeCompactor {
 			return;
 		}
 
-		// 4. 启动异步压缩流程
+		// 4. 预构建段摘要（缓存，用于 fallback 复用）
+		this.currentDigests = buildSegmentDigests(historySegments, this.ctxCwd);
+
+		// 5. 启动异步压缩流程
 		this.runCompression(
 			pi,
 			ctx,
@@ -925,7 +935,7 @@ export class TreeCompactor {
 		retryCount: number,
 		onComplete?: (result: CompactResult) => void,
 	): void {
-		const tree = ruleBasedFallback(segments);
+		const tree = ruleBasedFallback(segments, this.currentDigests.length > 0 ? this.currentDigests : undefined);
 		this.tree = tree;
 		this.compressing = false;
 
