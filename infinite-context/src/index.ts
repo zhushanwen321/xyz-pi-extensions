@@ -117,7 +117,13 @@ export default function infiniteContextExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", createSessionStartHandler(tracker, compactor));
 	pi.on("turn_end", createTurnEndHandler(pi, tracker, compactor, assembler, needsCompression));
 	pi.on("context", createContextHandler(tracker, compactor, assembler, needsCompression));
-	pi.on("session_before_compact", () => ({ cancel: true }));
+	// 只在 tree compactor 有有效压缩树时取消 Pi 原生 compact，否则让原生 compact 正常执行
+	pi.on("session_before_compact", () => {
+		if (compactor.getTree()) {
+			return { cancel: true };
+		}
+		return undefined;
+	});
 
 	// Commands + tools + renderers
 	registerTreeCompactCommand(pi, compactor, tracker);
