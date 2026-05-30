@@ -72,9 +72,10 @@ export function registerContextStatusCommand(
 		description: "显示上下文使用状态（原始 vs 树上下文）",
 		handler: async (_args, ctx) => {
 			const segments = tracker.getSegments();
-			const retentionWindow = tracker.getRetentionWindow();
 			const tree = compactor.getTree();
 			const contextUsage = ctx.getContextUsage();
+			const usagePercent = contextUsage?.percent ?? 50;
+			const retentionWindow = tracker.getRetentionWindow(usagePercent);
 
 			const completedSegments = segments.filter((s) => s.completed).length;
 			const activeSegments = segments.filter((s) => !s.completed).length;
