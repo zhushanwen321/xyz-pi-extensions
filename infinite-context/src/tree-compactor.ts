@@ -24,9 +24,9 @@ const COMPRESSION_TIMEOUT_MS = 30_000;
 const MAX_RETRY_COUNT = 1;
 
 /** 叶节点 summary 最小长度（chars），低于此值校验不通过 */
-const MIN_LEAF_SUMMARY_LENGTH = 80;
+const MIN_LEAF_SUMMARY_LENGTH = 120;
 /** 分组节点 summary 最小长度（chars） */
-const MIN_GROUP_SUMMARY_LENGTH = 60;
+const MIN_GROUP_SUMMARY_LENGTH = 80;
 
 // ── 类型 ──────────────────────────────────────────────
 
@@ -517,27 +517,30 @@ ${segLines}
 ${errorContext}
 Output a JSON array of tree nodes. Each node has:
 - nodeId: string (unique, e.g. "group_1" or "node_seg_0")
-- summary: string (DETAILED, 100-300 chars per leaf)
+- summary: string (DETAILED, 150-400 chars per leaf, aim for 200+ chars average)
 - children: array of child nodes (empty for leaf nodes)
 - segId: string (only for leaf nodes, must match one of the segment IDs above)
 
-STRUCTURED SUMMARY FORMAT for each leaf node:
-  [User Request] → [Assistant Actions] → [Key Results]
-  Files: path/to/file.ts (functionName)
-  Decisions: X over Y because Z
+STRUCTURED SUMMARY FORMAT for each leaf node — cover ALL of these:
+  1. What the user asked for (their exact request or intent)
+  2. What the assistant did (specific actions, files read/edited, tools used)
+  3. Key results or outcomes (files created/modified, functions added, errors fixed)
+  4. Important decisions (chose X over Y because Z)
+  5. Files involved (exact paths: src/auth/login.ts, config/eslint.config.js)
 
 CRITICAL RULES:
 1. Group related segments under parent nodes. Each segment must appear exactly once as a leaf.
-2. Leaf summaries MUST be 100-300 chars. Include specific file names, function names, key decisions, and concrete outcomes.
-3. Group summaries MUST synthesize their children: explain the common theme and list key deliverables.
-4. NEVER write vague summaries like "User discussed project setup". Instead: "User initialized Vue 3 + TS project: added ESLint with typescript-eslint, Prettier (2-space indent), configured vite.config.ts with API proxy".
-5. Preserve important details: variable names, configuration values, API endpoints, error messages, file paths.
+2. Leaf summaries MUST be 150-400 chars. This is a HARD requirement. Short summaries WILL BE REJECTED.
+3. Group summaries MUST be 100-250 chars. Synthesize their children: common theme + key deliverables.
+4. NEVER write vague summaries like "User discussed project setup". Instead: "User initialized Vue 3 + TS project with Vite: added ESLint with typescript-eslint parser + vue plugin, Prettier with 2-space indent/single quotes, configured vite.config.ts with API proxy to localhost:3000/api, created vitest setup with jsdom environment".
+5. Preserve important details: variable names, configuration values, API endpoints, error messages, file paths, function signatures.
 6. Preserve exact user messages — include key user feedback and corrections in the summary.
-7. When errors were encountered, document the error AND the fix.
+7. When errors were encountered, document BOTH the error AND the fix.
+8. TARGET: your total JSON output should be 2000-4000 chars. Do NOT artificially shorten summaries.
 
 Output format:
 <analysis>
-[Your analysis of each segment]
+[Your analysis of each segment — be thorough, this helps you write better summaries]
 </analysis>
 <summary>
 [JSON array of tree nodes]
@@ -545,17 +548,17 @@ Output format:
 
 Example:
 <analysis>
-seg_0: User asked to set up a new project. Assistant scaffolded Vue 3 + TS, configured ESLint and Prettier...
-seg_1: User asked for auth module. Assistant built JWT flow with refresh tokens...
+seg_0: User asked to set up a new Vue 3 + TypeScript project. Assistant scaffolded with create-vue, added ESLint with typescript-eslint parser and vue plugin, configured Prettier with 2-space indent and single quotes, set up vite.config.ts with API proxy to localhost:3000. Key decision: chose Vite over Webpack for faster HMR.
+seg_1: User asked for authentication module. Assistant built JWT access+refresh token flow, created axios interceptor for automatic token refresh on 401, added useAuth composable with login/logout/refresh methods, configured httpOnly cookies for refresh token storage. Error encountered: CORS issue on /api/auth/refresh — fixed by adding credentials: 'include' to axios config.
 </analysis>
 <summary>
 [
   {
     "nodeId": "group_1",
-    "summary": "Project setup and tooling: initialized Vue 3 + TypeScript with Vite, configured ESLint (typescript-eslint + vue plugin) and Prettier (2-space indent, single quotes), set up vitest for unit testing, created GitHub Actions CI pipeline",
+    "summary": "Project setup and authentication: scaffolded Vue 3 + TS with Vite, configured ESLint/Prettier, implemented JWT auth module with refresh token flow",
     "children": [
-      { "nodeId": "node_seg_0", "summary": "Project initialization: scaffolded Vue 3 + TS via create-vue, added ESLint with typescript-eslint parser and vue plugin, configured Prettier with 2-space indent and single quotes, set up vite.config.ts with API proxy to localhost:3000", "children": [], "segId": "seg_0" },
-      { "nodeId": "node_seg_1", "summary": "Auth module implementation: built JWT access+refresh token flow with httpOnly cookie for refresh, created axios interceptor for auto-refresh on 401, added useAuth composable with login/logout/refresh methods", "children": [], "segId": "seg_1" }
+      { "nodeId": "node_seg_0", "summary": "Project initialization: scaffolded Vue 3 + TS via create-vue with Vite bundler. Added ESLint with typescript-eslint parser + vue plugin, Prettier with 2-space indent/single quotes. Configured vite.config.ts with API proxy (/api → localhost:3000). Set up vitest with jsdom. Key decision: Vite over Webpack for faster HMR.", "children": [], "segId": "seg_0" },
+      { "nodeId": "node_seg_1", "summary": "Auth module implementation: built JWT access+refresh token flow with 15min access / 7day refresh expiry. Created axios interceptor for auto-refresh on 401. Added useAuth composable (src/composables/useAuth.ts) with login/logout/refresh methods. Configured httpOnly cookies for refresh tokens. Fixed CORS issue on /api/auth/refresh by adding credentials: 'include' to axios config.", "children": [], "segId": "seg_1" }
     ]
   }
 ]
@@ -581,6 +584,9 @@ RULES:
 - UPDATE group summaries if their children changed
 - REMOVE information that is no longer relevant
 - Keep the same nodeId for unchanged nodes (helps maintain continuity)
+- Leaf summaries MUST be 150-400 chars with specific details
+- Group summaries MUST be 100-250 chars
+- TARGET: total JSON output should be 2000-4000 chars
 
 Previous checkpoint:
 ${previousSummary}
@@ -589,7 +595,7 @@ New segments to incorporate:
 ${segLines}
 ${errorContext}
 Output a JSON array of ALL tree nodes (both old and new, fully merged).
-Each node has: nodeId, summary (100-300 chars for leaves), children, segId (leaf only).
+Each node has: nodeId, summary (150-400 chars for leaves), children, segId (leaf only).
 
 Output format:
 <analysis>
