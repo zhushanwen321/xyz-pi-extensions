@@ -105,12 +105,15 @@ function spawnCommand(
 	// Exit/error promise — resolves with exit code, rejects on spawn error
 	const exitPromise = new Promise<number | null>((resolve, reject) => {
 		child.on("exit", (code) => {
-			// Clean up writeStream on exit
+			// Unpipe before destroy to avoid ERR_STREAM_DESTROYED
+			child.stdout?.unpipe(writeStream);
+			child.stderr?.unpipe(writeStream);
 			writeStream.destroy();
 			resolve(code);
 		});
 		child.on("error", (err) => {
-			// Clean up writeStream on spawn error
+			child.stdout?.unpipe(writeStream);
+			child.stderr?.unpipe(writeStream);
 			writeStream.destroy();
 			removeOutputFile(outFile);
 			reject(err);
