@@ -5,12 +5,6 @@ import { getShellConfig } from "@mariozechner/pi-coding-agent";
 import type { ShellContext } from "./types.js";
 
 /**
- * Re-export Pi's battle-tested shell discovery.
- * Handles Windows Git Bash, Unix bash/sh fallback, custom path.
- */
-export { getShellConfig as resolveShell } from "@mariozechner/pi-coding-agent";
-
-/**
  * Build shell environment with Pi's bin dir prepended to PATH.
  * Mirrors Pi's internal getShellEnv() logic.
  */
@@ -62,13 +56,13 @@ export function loadPiSettings(): {
 /**
  * Build the full ShellContext by combining shell config with env and prefix.
  */
-export function buildShellContext(prefix?: string): ShellContext {
+export function buildShellContext(): ShellContext {
 	const settings = loadPiSettings();
 	const resolved = getShellConfig(settings.shellPath);
 	return {
 		shell: resolved.shell,
 		args: resolved.args,
 		env: buildShellEnv(),
-		commandPrefix: prefix ?? settings.commandPrefix ?? "",
+		commandPrefix: settings.commandPrefix ?? "",
 	};
 }

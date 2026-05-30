@@ -53,7 +53,6 @@ export interface BashAsyncParams {
 
 export interface BashAsyncToolDetails {
 	action: "sync" | "sync-detach" | "background" | "poll" | "kill";
-	mode?: string;
 	jobId?: string;
 	exitCode?: number | null;
 	status?: JobStatus;

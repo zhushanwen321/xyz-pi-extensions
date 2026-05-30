@@ -13,7 +13,13 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
-import type { BashAsyncParams, BashAsyncToolDetails, BashAsyncConfig, ShellContext } from "./types.js";
+import type {
+	BashAsyncParams,
+	BashAsyncToolDetails,
+	BashAsyncConfig,
+	ShellContext,
+	Job,
+} from "./types.js";
 import { createJobMap, loadConfig, cleanupJobs } from "./jobs.js";
 import { buildShellContext } from "./shell.js";
 import { executeSync, executeBackground, executePoll, executeKill } from "./spawn.js";
@@ -61,24 +67,32 @@ const bashAsyncSchema = Type.Object({
 	})),
 });
 
+// ── Session state ──
+
+interface SessionState {
+	config: BashAsyncConfig;
+	shellCtx: ShellContext;
+	jobs: Map<Job["jobId"], Job>;
+}
+
 // ── Extension factory ──
 
 export default function bashAsyncExtension(pi: ExtensionAPI): void {
-	// Session-scoped state — rebuilt on each session_start
-	let config: BashAsyncConfig;
-	let shellCtx: ShellContext;
-	let jobs: Map<import("./types.js").Job["jobId"], import("./types.js").Job>;
+	let state: SessionState | undefined;
 
 	pi.on("session_start", () => {
-		config = loadConfig();
-		shellCtx = buildShellContext();
-		jobs = createJobMap();
+		state = {
+			config: loadConfig(),
+			shellCtx: buildShellContext(),
+			jobs: createJobMap(),
+		};
 	});
 
 	pi.on("session_shutdown", async () => {
-		if (jobs) {
-			await cleanupJobs(jobs);
+		if (state) {
+			await cleanupJobs(state.jobs);
 		}
+		state = undefined;
 	});
 
 	pi.registerTool({
@@ -95,6 +109,11 @@ export default function bashAsyncExtension(pi: ExtensionAPI): void {
 			onUpdate: ((result: { content: Array<{ type: "text"; text: string }>; details: BashAsyncToolDetails }) => void) | undefined,
 			_ctx: unknown,
 		) {
+			if (!state) {
+				throw new Error("bash-async: session not initialized");
+			}
+			const { config, shellCtx, jobs } = state;
+
 			const onUpdateAdapter = onUpdate
 				? (details: BashAsyncToolDetails, text: string) => {
 						onUpdate({ content: [{ type: "text", text }], details });
@@ -125,16 +144,16 @@ export default function bashAsyncExtension(pi: ExtensionAPI): void {
 			}
 
 			// Sync mode (default)
-			return executeSync(
-				params.command,
-				process.cwd(),
-				params.timeout,
+			return executeSync({
+				cmd: params.command,
+				cwd: process.cwd(),
+				timeout: params.timeout,
 				signal,
-				onUpdateAdapter,
+				onUpdate: onUpdateAdapter,
 				jobs,
 				shellCtx,
 				config,
-			);
+			});
 		},
 
 		renderCall(args: BashAsyncParams, theme: unknown): unknown {

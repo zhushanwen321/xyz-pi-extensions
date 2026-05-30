@@ -25,6 +25,32 @@ interface ToolResult {
 
 type OnUpdate = ((details: BashAsyncToolDetails, text: string) => void) | undefined;
 
+/** Parameters for executeSync — packed to avoid >5 args */
+interface SyncParams {
+	cmd: string;
+	cwd: string;
+	timeout: number | undefined;
+	signal: AbortSignal | undefined;
+	onUpdate: OnUpdate;
+	jobs: Map<string, Job>;
+	shellCtx: ShellContext;
+	config: BashAsyncConfig;
+}
+
+/** Parameters for detachJob — packed to avoid >5 args */
+interface DetachParams {
+	cmd: string;
+	cwd: string;
+	timeout: number;
+	jobId: string;
+	child: child_process.ChildProcess;
+	outFile: string;
+	exitPromise: Promise<number | null>;
+	chunks: Buffer[];
+	removeCapture: () => void;
+	jobs: Map<string, Job>;
+}
+
 // ── Helpers ──
 
 function validateCwd(cwd: string): void {
@@ -62,7 +88,6 @@ function makeErrorResult(text: string, details: BashAsyncToolDetails): ToolResul
 interface SpawnResult {
 	child: child_process.ChildProcess;
 	outFile: string;
-	writeStream: fs.WriteStream;
 	exitPromise: Promise<number | null>;
 	/** Remove only the in-memory capture listener, keep pipe intact */
 	removeCapture: () => void;
@@ -78,12 +103,13 @@ function spawnCommand(
 	cwd: string,
 	chunks: Buffer[],
 	signal?: AbortSignal,
+	jobId?: string,
 ): SpawnResult {
 	const fullCommand = shellCtx.commandPrefix
 		? `${shellCtx.commandPrefix} && ${command}`
 		: command;
 
-	const outFile = createOutFilePath(generateJobId());
+	const outFile = createOutFilePath(jobId ?? generateJobId());
 
 	const child = child_process.spawn(shellCtx.shell, [...shellCtx.args, fullCommand], {
 		cwd,
@@ -102,19 +128,23 @@ function spawnCommand(
 	child.stdout?.on("data", capture);
 	child.stderr?.on("data", capture);
 
-	// Exit/error promise — resolves with exit code, rejects on spawn error
+	// close event fires after all stdio streams are drained (unlike exit).
+	// Using end() instead of destroy() ensures buffered data is flushed.
+	let exitCode: number | null = null;
 	const exitPromise = new Promise<number | null>((resolve, reject) => {
 		child.on("exit", (code) => {
-			// Unpipe before destroy to avoid ERR_STREAM_DESTROYED
+			exitCode = code;
+		});
+		child.on("close", () => {
 			child.stdout?.unpipe(writeStream);
 			child.stderr?.unpipe(writeStream);
-			writeStream.destroy();
-			resolve(code);
+			writeStream.end();
+			resolve(exitCode);
 		});
 		child.on("error", (err) => {
 			child.stdout?.unpipe(writeStream);
 			child.stderr?.unpipe(writeStream);
-			writeStream.destroy();
+			writeStream.end();
 			removeOutputFile(outFile);
 			reject(err);
 		});
@@ -136,7 +166,7 @@ function spawnCommand(
 		child.stderr?.removeListener("data", capture);
 	};
 
-	return { child, outFile, writeStream, exitPromise, removeCapture };
+	return { child, outFile, exitPromise, removeCapture };
 }
 
 function getBufferContent(chunks: Buffer[]): string {
@@ -145,24 +175,18 @@ function getBufferContent(chunks: Buffer[]): string {
 
 // ── Public: Sync mode with timeout detach ──
 
-export async function executeSync(
-	cmd: string,
-	cwd: string,
-	timeout: number | undefined,
-	signal: AbortSignal | undefined,
-	onUpdate: OnUpdate,
-	jobs: Map<string, Job>,
-	shellCtx: ShellContext,
-	config: BashAsyncConfig,
-): Promise<ToolResult> {
+export async function executeSync(params: SyncParams): Promise<ToolResult> {
+	const { cmd, cwd, timeout, signal, onUpdate, jobs, shellCtx, config } = params;
 	validateCwd(cwd);
 
 	const effectiveTimeout = timeout ?? config.defaultTimeout;
-	const chunks: Buffer[] = [];
 
+	// Pre-generate jobId so outFile name matches (used only if detach happens)
+	const pendingJobId = generateJobId();
+	const chunks: Buffer[] = [];
 	let spawnResult: SpawnResult;
 	try {
-		spawnResult = spawnCommand(cmd, shellCtx, cwd, chunks, signal);
+		spawnResult = spawnCommand(cmd, shellCtx, cwd, chunks, signal, pendingJobId);
 	} catch (err: unknown) {
 		// Spawn-time error (bad shell path, etc.)
 		const msg = err instanceof Error ? err.message : String(err);
@@ -208,7 +232,10 @@ export async function executeSync(
 	}
 
 	if (timedOut) {
-		return detachJob(cmd, cwd, effectiveTimeout, child, outFile, exitPromise, chunks, removeCapture, jobs);
+		return detachJob({
+			cmd, cwd, timeout: effectiveTimeout, jobId: pendingJobId,
+			child, outFile, exitPromise, chunks, removeCapture, jobs,
+		});
 	}
 
 	// Normal completion
@@ -232,19 +259,10 @@ const NEVER_RESOLVES: Promise<null> = new Promise(() => {});
 
 /**
  * Detach from a timed-out process: register as job and return partial output.
+ * jobId is pre-generated so outFile name matches.
  */
-function detachJob(
-	cmd: string,
-	cwd: string,
-	timeout: number,
-	child: child_process.ChildProcess,
-	outFile: string,
-	exitPromise: Promise<number | null>,
-	chunks: Buffer[],
-	removeCapture: () => void,
-	jobs: Map<string, Job>,
-): ToolResult {
-	const jobId = generateJobId();
+function detachJob(params: DetachParams): ToolResult {
+	const { cmd, cwd, timeout, jobId, child, outFile, exitPromise, chunks, removeCapture, jobs } = params;
 	const job: Job = {
 		jobId,
 		pid: child.pid ?? 0,
@@ -301,17 +319,18 @@ export async function executeBackground(
 		);
 	}
 
+	// Generate jobId before spawn so outFile matches
+	const jobId = generateJobId();
 	const chunks: Buffer[] = [];
 	let spawnResult: SpawnResult;
 	try {
-		spawnResult = spawnCommand(cmd, shellCtx, cwd, chunks);
+		spawnResult = spawnCommand(cmd, shellCtx, cwd, chunks, undefined, jobId);
 	} catch (err: unknown) {
 		const msg = err instanceof Error ? err.message : String(err);
 		return makeErrorResult(`Failed to spawn command: ${msg}`, { action: "background" });
 	}
 	const { child, outFile, exitPromise, removeCapture } = spawnResult;
 
-	const jobId = generateJobId();
 	const job: Job = {
 		jobId,
 		pid: child.pid ?? 0,
@@ -429,6 +448,7 @@ export async function executeKill(
 	if (job.status !== "running") {
 		const output = readOutputFile(job.outFile);
 		const truncated = truncateTail(output);
+		removeOutputFile(job.outFile);
 		return makeResult(
 			`Job ${jobId} already finished (status: ${job.status}, exit code: ${job.exitCode})\n\n${truncated.text}`,
 			{ action: "kill", jobId, status: job.status, exitCode: job.exitCode },
@@ -459,6 +479,7 @@ export async function executeKill(
 	updateJobStatus(jobs, jobId, "killed", exitCode ?? undefined);
 
 	const output = readOutputFile(job.outFile);
+	removeOutputFile(job.outFile);
 	const truncated = truncateTail(output);
 	const elapsed = Math.round((Date.now() - job.startTime) / 1000);
 
