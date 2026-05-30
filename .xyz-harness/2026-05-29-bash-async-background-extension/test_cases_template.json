@@ -1,0 +1,210 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "manual",
+      "title": "Sync echo returns output with exitCode 0",
+      "description": "AC-1: Execute 'echo hello world', verify output contains 'hello world' and exitCode 0",
+      "steps": [
+        "Start Pi session with bash-async extension loaded",
+        "Execute: command='echo hello world'",
+        "Verify response contains 'hello world'",
+        "Verify response details.exitCode === 0"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "manual",
+      "title": "Sync exit 1 throws Error with exit code",
+      "description": "AC-13: Execute 'exit 1', verify Error thrown with 'exited with code 1'",
+      "steps": [
+        "Execute: command='exit 1'",
+        "Verify Error is thrown",
+        "Verify Error message contains 'exited with code 1'"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "manual",
+      "title": "Sync timeout detach returns jobId with running process",
+      "description": "AC-2: Execute 'sleep 200' with defaultTimeout=3, verify detach after 3s with process still alive",
+      "steps": [
+        "Set ~/.pi/agent/bash-async.json to { defaultTimeout: 3 }",
+        "Execute: command='sleep 200'",
+        "Wait ~3 seconds",
+        "Verify response contains jobId",
+        "Verify response text mentions 'still running'",
+        "Run 'ps aux | grep sleep' to confirm process is alive",
+        "Poll the jobId, verify status=running",
+        "Kill the job"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "manual",
+      "title": "Sync with explicit timeout detaches at correct time",
+      "description": "AC-3: Execute 'sleep 200' with timeout=5, verify detach after 5s",
+      "steps": [
+        "Execute: command='sleep 200', timeout=5",
+        "Wait ~5 seconds",
+        "Verify response contains jobId",
+        "Verify process still alive via 'ps aux | grep sleep'",
+        "Kill the job"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "manual",
+      "title": "Sync no timeout waits for completion",
+      "description": "AC-4: With defaultTimeout=0, execute 'sleep 3', verify normal completion",
+      "steps": [
+        "Set ~/.pi/agent/bash-async.json to { defaultTimeout: 0 }",
+        "Execute: command='sleep 3 && echo done'",
+        "Wait ~3 seconds",
+        "Verify output contains 'done'",
+        "Verify no jobId in response"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "manual",
+      "title": "Sync AbortSignal kills process",
+      "description": "AC-5: Execute 'sleep 100', send abort signal, verify process killed",
+      "steps": [
+        "Set defaultTimeout=0",
+        "Execute: command='sleep 100'",
+        "Immediately send Ctrl+C (abort)",
+        "Verify process is killed",
+        "Verify error message indicates abort"
+      ]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "manual",
+      "title": "Background mode returns jobId immediately",
+      "description": "AC-6: Execute 'echo done' with background=true, verify immediate return and followUp injection",
+      "steps": [
+        "Execute: command='echo bg_done', background=true",
+        "Verify response within 1 second",
+        "Verify response contains jobId",
+        "Wait for followUp message",
+        "Verify followUp contains 'bg_done'"
+      ]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "manual",
+      "title": "Poll returns running then done status",
+      "description": "AC-7: Start background 'sleep 3', poll immediately (running), wait, poll again (done)",
+      "steps": [
+        "Execute: command='sleep 3', background=true → get jobId",
+        "Immediately poll: pollJobId=jobId → verify status=running",
+        "Wait 4 seconds",
+        "Poll again: verify status=done, exitCode=0"
+      ]
+    },
+    {
+      "id": "TC-8-01",
+      "type": "manual",
+      "title": "Kill terminates running job",
+      "description": "AC-8: Start background 'sleep 100', kill it, verify process dead",
+      "steps": [
+        "Execute: command='sleep 100', background=true → get jobId",
+        "Execute: killJobId=jobId",
+        "Verify response contains output (may be empty)",
+        "Verify process no longer in 'ps aux'",
+        "Poll: verify status=killed"
+      ]
+    },
+    {
+      "id": "TC-9-01",
+      "type": "manual",
+      "title": "Poll/kill nonexistent jobId returns error",
+      "description": "AC-9: Poll and kill with fake jobId, verify isError",
+      "steps": [
+        "Execute: pollJobId='nonexistent' → verify isError=true",
+        "Execute: killJobId='nonexistent' → verify isError=true"
+      ]
+    },
+    {
+      "id": "TC-10-01",
+      "type": "manual",
+      "title": "Session shutdown kills all running jobs",
+      "description": "AC-10: Create jobs in session A, verify invisible in session B, verify cleanup on shutdown",
+      "steps": [
+        "Session A: start 2 background 'sleep 100' jobs",
+        "Session B: poll those jobIds → verify 'not found'",
+        "Shutdown session A",
+        "Run 'ps aux | grep sleep' → verify no orphaned processes"
+      ]
+    },
+    {
+      "id": "TC-11-01",
+      "type": "manual",
+      "title": "Config file defaults and overrides",
+      "description": "AC-11: Test missing config, invalid JSON, valid config",
+      "steps": [
+        "Remove ~/.pi/agent/bash-async.json → verify default 120s timeout",
+        "Write invalid JSON to config → verify defaults used",
+        "Write { defaultTimeout: 5, maxBackgroundJobs: 3 } → verify values applied"
+      ]
+    },
+    {
+      "id": "TC-12-01",
+      "type": "manual",
+      "title": "Spawn failure returns isError",
+      "description": "AC-12: Execute nonexistent command, verify isError with ENOENT",
+      "steps": [
+        "Execute: command='nonexistent_command_xyz_12345'",
+        "Verify isError=true in response",
+        "Verify error message mentions command not found"
+      ]
+    },
+    {
+      "id": "TC-14-01",
+      "type": "manual",
+      "title": "Output truncation at 2000 lines",
+      "description": "AC-14: Execute command producing 3000 lines, verify truncation",
+      "steps": [
+        "Execute: command='for i in $(seq 1 3000); do echo line_$i; done'",
+        "Verify output is truncated (less than 3000 lines)",
+        "Verify truncation notice includes 'Showing lines' text",
+        "Verify temp file path is provided"
+      ]
+    },
+    {
+      "id": "TC-15-01",
+      "type": "manual",
+      "title": "Max background jobs limit enforced",
+      "description": "AC-15: Start maxBackgroundJobs jobs, verify next one fails",
+      "steps": [
+        "Set maxBackgroundJobs=3 in config",
+        "Start 3 background 'sleep 100' jobs",
+        "Attempt 4th background job → verify error about max concurrent",
+        "Kill all jobs"
+      ]
+    },
+    {
+      "id": "TC-16-01",
+      "type": "manual",
+      "title": "Cwd validation rejects nonexistent directory",
+      "description": "AC-16: Execute command with non-existent cwd",
+      "steps": [
+        "Attempt to execute in /nonexistent/path/xyz",
+        "Verify Error thrown with 'Working directory does not exist'"
+      ]
+    },
+    {
+      "id": "TC-17-01",
+      "type": "manual",
+      "title": "Shell discovery uses correct shell",
+      "description": "AC-17: Verify bash/sh is used, commandPrefix injected",
+      "steps": [
+        "Execute: command='echo $0' → verify shows bash or sh",
+        "Add shellCommandPrefix to Pi settings",
+        "Execute command that relies on prefix → verify prefix applied",
+        "Clean up settings"
+      ]
+    }
+  ]
+}
