@@ -22,7 +22,7 @@ complexity: L1
 | `context-engineering/index.ts` | create | BG1 | 入口，re-export src/index.ts |
 | `context-engineering/package.json` | create | BG1 | 扩展元数据 |
 | `context-engineering/src/index.ts` | create | BG1 | 扩展工厂函数，注册事件/工具/命令 |
-| `context-engineering/src/config.ts` | create | BG1 | 配置类型定义、默认值、settings.jsonl 读取 |
+| `context-engineering/src/config.ts` | create | BG1 | 配置类型定义、默认值、settings.json 读取 |
 | `context-engineering/src/recall-store.ts` | create | BG1 | 原始内容存储（Map + CRUD） |
 | `context-engineering/src/compressor.ts` | create | BG1 | L0/L1/L2 压缩逻辑 + 配对校验 |
 | `context-engineering/src/commands.ts` | create | BG1 | /context-engineering 和 /context-stats 命令处理 |
@@ -261,7 +261,7 @@ git commit -m "feat(context-engineering): recall store module"
 
 - [ ] **Step 2: 实现 L0 过期/截断/清理**
 
-`processL0(messages, config, store, now)` 函数：
+`processL0(messages, config, store, now, turnBoundaries)` 函数：
 
 - 遍历 messages，对每条消息判断类型：
   - **toolResult**: 检查 `now - timestamp > expireMinutes * 60000` 且不在保护 turn 内 → 调用 `store.store()` 保存原始内容 → 替换 content 为过期标记
