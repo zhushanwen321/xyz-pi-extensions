@@ -19,21 +19,21 @@ import { Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 
-import type { Dirs, EvolutionSuggestion } from "./types";
+import type { Dirs } from "./types";
 import { checkAutoTriggerRules, cleanExpiredFlags } from "./monitor";
 import {
 	handleEvolve,
 	handleEvolveApply,
 	handleEvolveStats,
 	handleEvolveRollback,
+	handleEvolveReport,
 } from "./commands";
 import {
-	renderSuggestionSummary,
-	renderStatsDashboard,
 	renderRollbackList,
 	renderAutoTriggerHint,
 } from "./widget";
 import { loadHistory } from "./state";
+import { checkAndRunDailyAnalysis } from "./daily-trigger";
 
 // ── 常量 ─────────────────────────────────────────────
 
@@ -56,13 +56,16 @@ function makeDirs(): Dirs {
 	const reportsDir = join(evolutionDir, "reports");
 	const tmpDir = join(evolutionDir, "tmp");
 	const signalsDir = join(evolutionDir, "signals");
+	const dailyReportsDir = join(evolutionDir, "daily-reports");
 
-	// 确保 base 目录和 signals 目录存在
+	// 确保 base 目录和子目录存在
 	if (!existsSync(evolutionDir)) {
 		mkdirSync(evolutionDir, { recursive: true });
 	}
-	if (!existsSync(signalsDir)) {
-		mkdirSync(signalsDir, { recursive: true });
+	for (const dir of [signalsDir, dailyReportsDir]) {
+		if (!existsSync(dir)) {
+			mkdirSync(dir, { recursive: true });
+		}
 	}
 
 	return {
@@ -70,6 +73,7 @@ function makeDirs(): Dirs {
 		reportsDir,
 		tmpDir,
 		signalsDir,
+		dailyReportsDir,
 		templateDir: TEMPLATE_DIR,
 	};
 }
@@ -127,6 +131,11 @@ export default function evolutionEngineExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify(hint, "info");
 			}
 		}
+
+		// 每日自动分析：fire-and-forget，不阻塞 session 初始化
+		checkAndRunDailyAnalysis(dirs).catch((err) => {
+			console.error("[evolve] Daily analysis failed:", err instanceof Error ? err.message : String(err));
+		});
 	});
 
 	// ── Tool: evolve ───────────────────────────────────
@@ -381,41 +390,11 @@ export default function evolutionEngineExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("evolve", {
 		description:
 			"Analyze usage data and suggest improvements. " +
-			"Usage: /evolve [target] [since] | target: all|claude-md|skills|merge-reviewer, since: 7d",
-		handler: async (args, ctx) => {
-			// 解析简单参数
-			const parts = args.trim().split(/\s+/);
-			let target: "all" | "claude-md" | "skills" | "merge-reviewer" = "all";
-			let since = "7d";
-
-			for (const part of parts) {
-				if (part === "all" || part === "claude-md" || part === "skills" || part === "merge-reviewer") {
-					target = part;
-				} else if (part.match(/^\d+d$/)) {
-					since = part;
-				}
-			}
-
-			// 通过 sendMessage 注入一个 tool call 触发
-			// command handler 中无法直接调用 registerTool 的 execute，
-			// 但可以通过注入提示词让 AI 调用 evolve tool
-			if (ctx.hasUI) {
-				ctx.ui.notify(
-					`Running evolution analysis (target=${target}, since=${since})...`,
-					"info",
-				);
-			}
-
-			// 直接执行 handler 并打印结果
-			const result = await handleEvolve(
-				{ target, since, sample: undefined },
-				dirs,
+			"Supports natural language: /evolve, /evolve since=1d, /evolve analyze skills from last 3 days",
+		handler: async (args, _ctx) => {
+			pi.sendUserMessage(
+				`Please call the evolve tool based on user intent: "${args.trim() || "target=all since=7d"}". Do not add any commentary, just call the tool directly.`,
 			);
-
-			const textPart = result.content[0];
-			if (textPart?.type === "text" && ctx.hasUI) {
-				ctx.ui.notify(textPart.text, "info");
-			}
 		},
 	});
 
@@ -424,26 +403,11 @@ export default function evolutionEngineExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("evolve-apply", {
 		description:
 			"Review and manage evolution suggestions. " +
-			"Usage: /evolve-apply [list|apply|skip] [index]",
-		handler: async (args, ctx) => {
-			const parts = args.trim().split(/\s+/);
-			let action: "list" | "apply" | "skip" = "list";
-			let index: number | undefined;
-
-			for (const part of parts) {
-				if (part === "list" || part === "apply" || part === "skip") {
-					action = part;
-				} else {
-					const n = parseInt(part, 10);
-					if (!Number.isNaN(n) && n >= 0) index = n;
-				}
-			}
-
-			const result = await handleEvolveApply({ action, index }, dirs);
-			const textPart = result.content[0];
-			if (textPart?.type === "text" && ctx.hasUI) {
-				ctx.ui.notify(textPart.text, "info");
-			}
+			"Supports natural language: /evolve-apply list, /evolve-apply apply 0, /evolve-apply skip the second one",
+		handler: async (args, _ctx) => {
+			pi.sendUserMessage(
+				`Please call the evolve-apply tool based on user intent: "${args.trim() || "list pending suggestions"}". Do not add any commentary, just call the tool directly.`,
+			);
 		},
 	});
 
@@ -451,12 +415,10 @@ export default function evolutionEngineExtension(pi: ExtensionAPI): void {
 
 	pi.registerCommand("evolve-stats", {
 		description: "Show usage statistics dashboard for the last 7 days.",
-		handler: async (_args, ctx) => {
-			const result = handleEvolveStats(dirs.evolutionDir);
-			const textPart = result.content[0];
-			if (textPart?.type === "text" && ctx.hasUI) {
-				ctx.ui.notify(textPart.text, "info");
-			}
+		handler: async (_args, _ctx) => {
+			pi.sendUserMessage(
+				"Please call the evolve-stats tool. Do not add any commentary, just call the tool directly.",
+			);
 		},
 	});
 
@@ -465,11 +427,13 @@ export default function evolutionEngineExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("evolve-rollback", {
 		description:
 			"Rollback an applied evolution suggestion. " +
-			"Usage: /evolve-rollback [index] | No index to list history.",
+			"No index to list history, or provide an index to rollback. " +
+			"Supports natural language: /evolve-rollback 3, /evolve-rollback the last one",
 		handler: async (args, ctx) => {
-			const index = parseInt(args.trim(), 10);
+			const trimmed = args.trim();
+			const index = parseInt(trimmed, 10);
 
-			// 无有效 index 时，显示历史列表
+			// 无有效 index 时，显示历史列表（tool schema 的 index 是必填，AI 无法调用无参版本）
 			if (Number.isNaN(index) || index < 1) {
 				const history = loadHistory(dirs.evolutionDir, 20);
 				const text = renderRollbackList(history);
@@ -479,11 +443,61 @@ export default function evolutionEngineExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
-			const result = await handleEvolveRollback(index, dirs);
-			const textPart = result.content[0];
-			if (textPart?.type === "text" && ctx.hasUI) {
-				ctx.ui.notify(textPart.text, "info");
-			}
+			pi.sendUserMessage(
+				`Please call the evolve-rollback tool with index=${index}. Do not add any commentary, just call the tool directly.`,
+			);
 		},
 	});
+	// ── Tool: evolve-report ────────────────────────────
+
+	const EvolveReportParams = Type.Object({
+		args: Type.String({
+			default: "",
+			description: "Date (YYYY-MM-DD) or --list",
+		}),
+	});
+
+	pi.registerTool({
+		name: "evolve-report",
+		label: "Evolve Report",
+		description:
+			"View daily evolution reports. " +
+			"No args shows today's report, YYYY-MM-DD shows a specific date, --list lists all reports.",
+		promptSnippet: "View evolution daily report",
+		parameters: EvolveReportParams,
+
+		async execute(_toolCallId, params) {
+			return handleEvolveReport(params.args, dirs);
+		},
+
+		renderCall(args, theme) {
+			return new Text(
+				theme.fg("toolTitle", theme.bold("evolve-report ")) +
+				theme.fg("muted", args.args || "today"),
+				0, 0,
+			);
+		},
+
+		renderResult(result, _options, _theme) {
+			const textPart = result.content[0];
+			return new Text(
+				textPart?.type === "text" ? textPart.text : "evolve-report completed",
+				0, 0,
+			);
+		},
+	});
+
+	// ── Command: /evolve-report ────────────────────────
+
+	pi.registerCommand("evolve-report", {
+		description:
+			"View daily evolution reports. " +
+			"Usage: /evolve-report [YYYY-MM-DD] | --list",
+		handler: async (args, _ctx) => {
+			pi.sendUserMessage(
+				`Please call the evolve-report tool with args="${args.trim()}". Do not add any commentary, just call the tool directly.`,
+			);
+		},
+	});
+
 }

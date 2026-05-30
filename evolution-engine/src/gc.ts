@@ -19,6 +19,9 @@ const MAX_SIGNALS = 30;
 /** daily/*.json 保留天数 */
 const MAX_DAILY_DAYS = 90;
 
+/** daily-reports/*.md 保留天数 */
+const MAX_DAILY_REPORT_DAYS = 30;
+
 // ── 辅助函数 ─────────────────────────────────────────
 
 /** 安全地按修改时间降序排列目录中的 .json 文件 */
@@ -89,6 +92,40 @@ function listExpiredDaily(dir: string, maxDays: number): string[] {
 	}
 }
 
+/** 从 daily-reports 文件名提取日期并过滤超过 N 天的指定扩展名文件 */
+function listExpiredDailyByExt(dir: string, maxDays: number, ext: string): string[] {
+	if (!existsSync(dir)) return [];
+
+	const cutoff = Date.now() - maxDays * 24 * 60 * 60 * 1000;
+
+	try {
+		const entries = readdirSync(dir);
+		const expired: string[] = [];
+
+		for (const name of entries) {
+			// 排除 dotfile 和不匹配扩展名的文件
+			if (!name.endsWith(ext) || name.startsWith(".")) continue;
+
+			// 文件名格式: 2026-05-27.md
+			const dateStr = name.replace(ext, "");
+			const fileTime = new Date(dateStr).getTime();
+
+			// 文件名无法解析为日期时，用 mtime 兜底
+			const effectiveTime = Number.isNaN(fileTime)
+				? statSync(join(dir, name)).mtimeMs
+				: fileTime;
+
+			if (effectiveTime < cutoff) {
+				expired.push(join(dir, name));
+			}
+		}
+
+		return expired;
+	} catch {
+		return [];
+	}
+}
+
 // ── 公共 API ─────────────────────────────────────────
 
 /** GC 清理结果 */
@@ -96,6 +133,7 @@ export interface GcResult {
 	reportsRemoved: number;
 	signalsRemoved: number;
 	dailyRemoved: number;
+	dailyReportsRemoved: number;
 }
 
 /**
@@ -121,5 +159,13 @@ export function runGc(evolutionDir: string): GcResult {
 	const expiredDaily = listExpiredDaily(dailyDir, MAX_DAILY_DAYS);
 	const dailyRemoved = removeFiles(expiredDaily);
 
-	return { reportsRemoved, signalsRemoved, dailyRemoved };
+	// daily-reports: 保留 MAX_DAILY_REPORT_DAYS 天内的 .md 文件
+	let dailyReportsRemoved = 0;
+	const dailyReportsDir = join(evolutionDir, "daily-reports");
+	if (existsSync(dailyReportsDir)) {
+		const expiredReports = listExpiredDailyByExt(dailyReportsDir, MAX_DAILY_REPORT_DAYS, ".md");
+		dailyReportsRemoved = removeFiles(expiredReports);
+	}
+
+	return { reportsRemoved, signalsRemoved, dailyRemoved, dailyReportsRemoved };
 }

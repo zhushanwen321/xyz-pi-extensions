@@ -1,0 +1,211 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read daily-trigger.ts checkAndRunDailyAnalysis",
+        "Verify: existsSync + statSync.size > 0 guard skips when report missing",
+        "Verify: acquireLock → executePipeline → releaseLock flow",
+        "Verify: executePipeline runs analyzer → summarizer → judge → generateReport → mergePending → saveLastRunStatus"
+      ],
+      "evidence": "code_review: daily-trigger.ts L210-241 (entry) + L142-204 (pipeline)"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read daily-trigger.ts L218-219",
+        "Verify: existsSync(reportPath) && statSync(reportPath).size > 0 returns early",
+        "Non-empty file → no pipeline execution"
+      ],
+      "evidence": "code_review: daily-trigger.ts L218-219"
+    },
+    {
+      "caseId": "TC-1-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read daily-trigger.ts L218",
+        "Verify: existsSync returns true for 0-byte file but statSync.size > 0 is false",
+        "Guard condition fails → pipeline proceeds to regenerate"
+      ],
+      "evidence": "code_review: daily-trigger.ts L218-219, 0-byte file has size=0"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read report-generator.ts generateDailyReport",
+        "Verify sections array contains '数据概览', '异常信号', '趋势变化', '改进建议'",
+        "Verify effectReview section only added when effectReview.length > 0"
+      ],
+      "evidence": "code_review: report-generator.ts L30-48"
+    },
+    {
+      "caseId": "TC-2-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read report-generator.ts buildOverview",
+        "Verify: hasData = snapshot.sessionCount > 0",
+        "Verify: hasData=false produces '无数据' placeholder text"
+      ],
+      "evidence": "code_review: report-generator.ts L60-75"
+    },
+    {
+      "caseId": "TC-2-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read report-generator.ts buildSuggestions",
+        "Verify: suggestions.length === 0 produces '系统运行良好，无需调整'"
+      ],
+      "evidence": "code_review: report-generator.ts L102-106"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read gc.ts MAX_DAILY_REPORT_DAYS=30",
+        "Verify: listExpiredDailyByExt filters .md files excluding dotfiles",
+        "Verify: files older than 30 days are included in expiry list",
+        "Verify: today's file is not in expiry list"
+      ],
+      "evidence": "code_review: gc.ts L15, L58-90"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read daily-trigger.ts acquireLock",
+        "Verify: process.kill(lock.pid, 0) succeeds for live PID → returns false"
+      ],
+      "evidence": "code_review: daily-trigger.ts L74-80"
+    },
+    {
+      "caseId": "TC-4-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read daily-trigger.ts acquireLock",
+        "Verify: process.kill(dead PID, 0) throws → catch block → unlinkSync stale lock",
+        "Verify: new lock created with current PID"
+      ],
+      "evidence": "code_review: daily-trigger.ts L76-87"
+    },
+    {
+      "caseId": "TC-4-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read daily-trigger.ts checkAndRunDailyAnalysis catch block",
+        "Verify: saveLastRunStatus(dirs.dailyReportsDir, 'failed', msg) called on error",
+        "Verify: function does not re-throw (fire-and-forget)"
+      ],
+      "evidence": "code_review: daily-trigger.ts L230-235"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read commands.ts handleEvolveReport",
+        "Verify: empty args → today = new Date().toISOString().slice(0,10)",
+        "Verify: reads daily-reports/{today}.md and returns content"
+      ],
+      "evidence": "code_review: commands.ts L566-600"
+    },
+    {
+      "caseId": "TC-5-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read commands.ts handleEvolveReport",
+        "Verify: isDateString validates YYYY-MM-DD format",
+        "Verify: reads daily-reports/{date}.md for matching date"
+      ],
+      "evidence": "code_review: commands.ts L570-580, isDateString helper"
+    },
+    {
+      "caseId": "TC-5-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read commands.ts handleEvolveReport --list branch",
+        "Verify: listReports reads directory entries",
+        "Verify: readLastRunStatus reads .last-run-status file",
+        "Verify: output contains date list, status, today indicator"
+      ],
+      "evidence": "code_review: commands.ts L572-595 (listReports, readLastRunStatus helpers)"
+    },
+    {
+      "caseId": "TC-5-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read commands.ts handleEvolveReport",
+        "Verify: file not found → throw Error with '报告不存在' message"
+      ],
+      "evidence": "code_review: commands.ts L586-588"
+    },
+    {
+      "caseId": "TC-6-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read state.ts mergePending",
+        "Verify: pendingTitles Set collects existing pending titles",
+        "Verify: newSuggestions filtered by !pendingTitles.has(s.title)"
+      ],
+      "evidence": "code_review: state.ts L155-164"
+    },
+    {
+      "caseId": "TC-6-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read state.ts mergePending",
+        "Verify: MAX_PENDING_SUGGESTIONS=30",
+        "Verify: overflow = pendingCount - 30, evicts oldest pending by array order"
+      ],
+      "evidence": "code_review: state.ts L168-181"
+    },
+    {
+      "caseId": "TC-7-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Verify handleEvolve, handleEvolveApply, handleEvolveStats, handleEvolveRollback unchanged (only GC order fix in handleEvolve)",
+        "Verify handleEvolveReport is new and does not affect other handlers",
+        "tsc --noEmit passes (no type errors in existing code)"
+      ],
+      "evidence": "code_review: commands.ts L101-555 (existing handlers), tsc 0 errors"
+    },
+    {
+      "caseId": "TC-7-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run: cd evolution-engine && npx tsc --noEmit",
+        "Output: 0 errors"
+      ],
+      "evidence": "tsc 0 errors"
+    },
+    {
+      "caseId": "TC-7-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run: cd xyz-pi-extensions && npm run lint",
+        "Output: 0 errors, 175 warnings (all pre-existing)"
+      ],
+      "evidence": "eslint 0 errors, 175 warnings"
+    }
+  ]
+}

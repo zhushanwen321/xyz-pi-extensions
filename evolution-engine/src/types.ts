@@ -90,8 +90,8 @@ export interface EvolutionSuggestion {
 	description: string;
 	/** 数据支撑说明 */
 	rationale: string;
-	/** unified diff */
-	diff: string;
+	/** 自然语言修改指令，供 LLM 执行时参考 */
+	instruction: string;
 	/** 当前状态，初始值为 "pending" */
 	status: "pending" | "approved" | "rejected" | "applied" | "failed";
 }
@@ -118,8 +118,8 @@ export interface HistoryEntry {
 	targetPath: string;
 	/** 备份文件路径 */
 	backupPath: string;
-	/** 应用的 diff */
-	diff: string;
+	/** 应用的 instruction（自然语言修改指令） */
+	instruction: string;
 	/** 建议标题（用于回滚展示） */
 	title: string;
 	/** apply 时的 git commit SHA，用于 rollback 时 git revert */
@@ -224,4 +224,6 @@ export interface Dirs {
 	templateDir: string;
 	/** ~/.pi/agent/evolution-data/signals */
 	signalsDir: string;
+	/** ~/.pi/agent/evolution-data/daily-reports */
+	dailyReportsDir: string;
 }

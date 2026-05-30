@@ -338,3 +338,43 @@ Session JSONL 中原始 entries 始终不修改。上下文变换仅在 context 
 5. `session_before_compact` 取消原生 compaction — 一行代码
 
 预估 ~1200 行 TypeScript。主要风险点：subagent prompt 设计（控制 LLM 输出树 JSON 格式）、BFS 展平 + 预算裁剪的边界条件、异步子进程与 context handler 之间的状态一致性（压缩完成前/后的树切换）。
+
+---
+
+## Post-Merge Fix Log (2026-05-29)
+
+### F-1: 段创建时机错误
+**问题**: `turn_end.message` 是 assistant 回复（role=assistant），不是 user message。段创建依赖 `role === "user"` 判断，导致段永远不会被创建。
+**修复**: 段创建从 `turn_end` 移到 `context` 事件（每次 LLM 调用前 messages 包含完整历史），用 `syncFromMessages` 批量扫描 user message 创建段。`handleTurnEnd` 简化为只追加 turn 数据。
+
+### F-2: session_before_compact 无条件 cancel
+**问题**: `() => ({ cancel: true })` 无条件阻止所有 Pi 原生 compact，导致 coding-workflow 的 phase 推进失败（连续 3 次 compact cancelled → phase rollback）。
+**修复**: 改为条件判断 — 压缩树已存在时 cancel（树压缩接管），否则放行原生 compact。
+
+### F-3: pi --mode json 输出格式误解
+**问题**: `pi --mode json` 输出 JSONL 事件流（session/agent_start/message_start/message_end...），不是纯文本。旧代码把整个 stdout 传给 `JSON.parse()`，必然失败。
+**修复**: 新增 `extractAssistantText()` 解析 JSONL，从 `message_end` 事件中提取 assistant 的 text content，再 validate。
+
+### F-4: 段去重失效导致重复
+**问题**: 每个 segId 有两条 entry（completed=false + true），`restoreState` 无条件 push，导致 segments 数组中同一 segId 出现两次。
+**修复**: `restoreState` 用 `Map<segId, Segment>` 去重，只保留最后一条 entry。
+
+### F-5: turnRange 始终 [-1,-1]
+**问题**: 批量创建段时 turnRange 初始化为 {start:-1, end:-1}，`handleTurnEnd` 只更新 currentSegment（最后一个段），之前的段不会被更新。
+**修复**: 用 `baseTurn + created` 估算 turnRange 起始值。
+
+### F-6: 压缩改为同步
+**问题**: 异步 spawn 导致状态管理复杂（isCompressing、currentProcess、onComplete 回调），且压缩完成前原生 compact 可能被错误 cancel。
+**修复**: 改用 `spawnSync`。`triggerCompression` 变成同步方法，直接返回 `CompactResult`。消除 isCompressing/cancelPiCompaction/currentProcess 状态。
+
+### F-7: TUI 反馈不足
+**问题**: 用户只能看到"树压缩已启动..."，无法感知压缩进度和结果。
+**修复**: 
+- Working spinner (`setWorkingVisible` + `setWorkingMessage`) 显示压缩中状态
+- Footer status bar (`setStatus`) 显示段数
+- 对话流气泡消息：⏳ 开始 → ✅ 成功 / ❌ 降级（含原因）
+- 压缩前/后统计记录到 `ic-compact-stats` entries
+
+### F-8: LLM 输出不可追溯
+**问题**: 压缩失败时无法看到 LLM 实际返回了什么。
+**修复**: 所有 spawn 输出记录到 console.log（stdout 前 1000 字符、exit code、stderr）。`CompactResult` 新增 `rawOutput` 字段。

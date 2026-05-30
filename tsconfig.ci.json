@@ -6,7 +6,6 @@
     "noImplicitAny": false,
     "noImplicitReturns": false,
     "skipLibCheck": true,
-    "types": ["node"],
     "paths": {
       "@mariozechner/pi-coding-agent": ["./types/mariozechner/index"],
       "@mariozechner/pi-tui": ["./types/mariozechner/index"],

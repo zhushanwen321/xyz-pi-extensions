@@ -395,6 +395,7 @@ SKIP_LINT=1 git commit -m "..."
 - `no-explicit-any: error` — 类型即契约
 - `prefer-allsettled` — 独立数据源用 `Promise.allSettled`
 - `no-silent-catch` — catch 块不能为空或只有 console
+- `no-console-log-in-tui` — infinite-context 扩展禁止使用 `console.log`（所有输出在 Pi TUI 模式下会渲染到终端对话流，破坏交互界面）。改用 `console.error`（stderr）
 - `no-unbounded-while-true` — while(true) 必须有迭代上限
 - `no-inline-import-type` — 禁止 `as import(...).Type`
 - `max-lines: 1000` / `max-lines-per-function: 300` — 结构先于一切
