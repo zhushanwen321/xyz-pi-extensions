@@ -1,0 +1,96 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "session_before_compact returns compaction result when segments >= 3",
+      "description": "Verify that when segments >= 3, the handler executes tree-compact and returns a valid CompactionResult with summary, firstKeptEntryId, and tokensBefore",
+      "steps": [
+        "Setup: Create session with 3+ segments, trigger compact threshold",
+        "Verify session_before_compact handler returns { compaction: { summary, firstKeptEntryId, tokensBefore } }",
+        "Verify Pi writes compaction entry (fromExtension=true)",
+        "Verify tree is updated (compactor.getTree() returns new tree)"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "integration",
+      "title": "No repeated compact trigger after successful tree-compact",
+      "description": "After tree-compact succeeds, next prompt should not trigger _runAutoCompaction",
+      "steps": [
+        "Setup: Trigger and complete tree-compact",
+        "Send new prompt",
+        "Verify _checkCompaction returns false (timestamp guard works)"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "Compression blocks conversation flow (sync await)",
+      "description": "During tree-compact, no LLM request should be sent until compression completes",
+      "steps": [
+        "Trigger compact threshold",
+        "Verify no LLM streaming starts before compression completes",
+        "Verify agent continues after compression ends"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "TUI renders compression status during async spawn",
+      "description": "Compression status (ic-compact-start/end bubbles, footer status) renders correctly",
+      "steps": [
+        "Trigger compact threshold",
+        "Verify ic-compact-start bubble appears",
+        "Verify footer shows 'IC compressing N segments...'",
+        "After completion, verify ic-compact-end bubble appears"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "manual",
+      "title": "context handler does not call shouldCompress",
+      "description": "Code review: createContextHandler does not reference needsCompressionRef or call shouldCompress",
+      "steps": [
+        "Read createContextHandler in index.ts",
+        "Verify no shouldCompress call",
+        "Verify no needsCompressionRef reference"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "manual",
+      "title": "turn_end handler does not trigger compression",
+      "description": "Code review: createTurnEndHandler does not call compressAsync",
+      "steps": [
+        "Read createTurnEndHandler in index.ts",
+        "Verify no compressAsync call",
+        "Verify no needsCompressionRef reference"
+      ]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "integration",
+      "title": "Segments < 3 falls through to Pi native compact",
+      "description": "When segments are insufficient, handler returns cancel:false and Pi executes native LLM compact",
+      "steps": [
+        "Setup: Create session with < 3 segments, trigger compact threshold",
+        "Verify session_before_compact returns { cancel: false }",
+        "Verify Pi executes native compact",
+        "Verify compaction entry is written (fromExtension=false)"
+      ]
+    },
+    {
+      "id": "TC-6-02",
+      "type": "integration",
+      "title": "Tree-compact failure falls through to Pi native compact",
+      "description": "When tree-compact fails (fallbackUsed with errorReason), handler returns cancel:false",
+      "steps": [
+        "Setup: Mock or force tree-compact to fail",
+        "Trigger compact threshold",
+        "Verify session_before_compact returns { cancel: false }",
+        "Verify Pi executes native compact as fallback"
+      ]
+    }
+  ]
+}
