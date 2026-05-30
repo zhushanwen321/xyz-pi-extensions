@@ -235,7 +235,7 @@ export class SegmentTracker {
 		// 查梯度表
 		let retainCount = 1; // 兜底
 		for (const entry of RETENTION_GRADIENT) {
-			if (usagePercent <= entry.usageMax) {
+			if (usagePercent < entry.usageMax) {
 				retainCount = entry.retainCount;
 				break;
 			}
@@ -252,7 +252,7 @@ export class SegmentTracker {
 		// 有已完成段时追加当前活跃段（为上下文提供基础）
 		// 优先用 this.currentSegment，fallback 到 segments 中查找最后一个未完成的段
 		const activeSegment = this.currentSegment ?? this.segments.find((s) => !s.completed);
-		if (activeSegment && result.length > 0) {
+		if (activeSegment) {
 			result = [...result, activeSegment];
 		}
 

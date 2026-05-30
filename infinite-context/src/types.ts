@@ -79,10 +79,10 @@ export const RETENTION_GRADIENT: ReadonlyArray<{
 	retainCount: number;
 }> = [
 	{ usageMax: 50, retainCount: 9999 },
-	{ usageMax: 70, retainCount: 8 },
-	{ usageMax: 80, retainCount: 4 },
-	{ usageMax: 90, retainCount: 2 },
-	{ usageMax: 100, retainCount: 1 },
+	{ usageMax: 71, retainCount: 8 },
+	{ usageMax: 81, retainCount: 4 },
+	{ usageMax: 91, retainCount: 2 },
+	{ usageMax: 101, retainCount: 1 },
 ] as const;
 
 // ── Compression Config ─────────────────────────────────

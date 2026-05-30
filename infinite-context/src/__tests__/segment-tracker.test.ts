@@ -54,7 +54,7 @@ describe("SegmentTracker.getRetentionWindow(usagePercent)", () => {
 			// We need to populate segments directly since restoreState needs entries.
 			// Access via a type-assertion on the private field for test setup.
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			(tracker as Record<string, unknown>).segments = segments;
+			(tracker as unknown as Record<string, unknown>).segments = segments;
 		});
 
 		it("usagePercent=30 (< 50%) → retains all 10 completed segments", () => {
@@ -94,9 +94,23 @@ describe("SegmentTracker.getRetentionWindow(usagePercent)", () => {
 			expect(result[0].segId).toBe("seg_9");
 		});
 
-		it("usagePercent=50 (exact tier boundary) → retains all (9999 sentinel)", () => {
+		it("usagePercent=50 (exact tier boundary) → retains last 8 (first tier is strict < 50%)", () => {
 			const result = tracker.getRetentionWindow(50);
-			expect(result).toHaveLength(10);
+			expect(result).toHaveLength(8);
+		});
+
+		describe("boundary: usagePercent=70 (top of 50-70% band)", () => {
+			beforeEach(() => {
+				const completedSegments: Segment[] = Array.from({ length: 10 }, (_, i) => makeCompletedSeg(i));
+				tracker.restoreState([]);
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				(tracker as unknown as Record<string, unknown>).segments = completedSegments;
+			});
+
+			it("usagePercent=70 → retains last 8 (50-70% band)", () => {
+				const result = tracker.getRetentionWindow(70);
+				expect(result).toHaveLength(8);
+			});
 		});
 	});
 
@@ -105,7 +119,7 @@ describe("SegmentTracker.getRetentionWindow(usagePercent)", () => {
 			const segments: Segment[] = Array.from({ length: 10 }, (_, i) => makeCompletedSeg(i));
 			tracker.restoreState([]);
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			(tracker as Record<string, unknown>).segments = segments;
+			(tracker as unknown as Record<string, unknown>).segments = segments;
 		});
 
 		it("usagePercent=0 → retains all completed segments (falls into first tier)", () => {
@@ -122,7 +136,7 @@ describe("SegmentTracker.getRetentionWindow(usagePercent)", () => {
 			const segments: Segment[] = Array.from({ length: 10 }, (_, i) => makeCompletedSeg(i));
 			tracker.restoreState([]);
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			(tracker as Record<string, unknown>).segments = segments;
+			(tracker as unknown as Record<string, unknown>).segments = segments;
 		});
 
 		it("usagePercent=100 → retains last 1 completed segment", () => {
@@ -138,7 +152,7 @@ describe("SegmentTracker.getRetentionWindow(usagePercent)", () => {
 			const segments: Segment[] = Array.from({ length: 3 }, (_, i) => makeCompletedSeg(i));
 			tracker.restoreState([]);
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			(tracker as Record<string, unknown>).segments = segments;
+			(tracker as unknown as Record<string, unknown>).segments = segments;
 		});
 
 		it("returns all completed segments when fewer than retainCount", () => {
@@ -157,7 +171,7 @@ describe("SegmentTracker.getRetentionWindow(usagePercent)", () => {
 			];
 			tracker.restoreState([]);
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			(tracker as Record<string, unknown>).segments = segments;
+			(tracker as unknown as Record<string, unknown>).segments = segments;
 		});
 
 		it("active segment is included in retention window at usagePercent=95", () => {
@@ -185,16 +199,14 @@ describe("SegmentTracker.getRetentionWindow(usagePercent)", () => {
 	});
 
 	describe("no completed segments", () => {
-		it("returns empty when only active segments exist", () => {
+		it("with only active segment (no completed) → active segment is retained", () => {
 			const segments: Segment[] = [makeActiveSeg(0)];
 			tracker.restoreState([]);
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			(tracker as Record<string, unknown>).segments = segments;
+			(tracker as unknown as Record<string, unknown>).segments = segments;
 
-			// With no completed segments, the result should be empty
-			// (active segment handling is a separate concern)
 			const result = tracker.getRetentionWindow(50);
-			expect(result).toHaveLength(0);
+			expect(result).toHaveLength(1);
 		});
 	});
 
@@ -203,7 +215,7 @@ describe("SegmentTracker.getRetentionWindow(usagePercent)", () => {
 			const segments: Segment[] = Array.from({ length: 10 }, (_, i) => makeCompletedSeg(i));
 			tracker.restoreState([]);
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			(tracker as Record<string, unknown>).segments = segments;
+			(tracker as unknown as Record<string, unknown>).segments = segments;
 		});
 
 		it("usagePercent=70 → retains last 8 (exactly at tier 1 boundary)", () => {

@@ -28,30 +28,30 @@ describe("RETENTION_GRADIENT", () => {
 		});
 	});
 
-	it("tier 1: usageMax=70 → retainCount=8", () => {
+	it("tier 1: usageMax=71 → retainCount=8", () => {
 		expect(RETENTION_GRADIENT[1]).toEqual({
-			usageMax: 70,
+			usageMax: 71,
 			retainCount: 8,
 		});
 	});
 
-	it("tier 2: usageMax=80 → retainCount=4", () => {
+	it("tier 2: usageMax=81 → retainCount=4", () => {
 		expect(RETENTION_GRADIENT[2]).toEqual({
-			usageMax: 80,
+			usageMax: 81,
 			retainCount: 4,
 		});
 	});
 
-	it("tier 3: usageMax=90 → retainCount=2", () => {
+	it("tier 3: usageMax=91 → retainCount=2", () => {
 		expect(RETENTION_GRADIENT[3]).toEqual({
-			usageMax: 90,
+			usageMax: 91,
 			retainCount: 2,
 		});
 	});
 
-	it("tier 4: usageMax=100 → retainCount=1", () => {
+	it("tier 4: usageMax=101 → retainCount=1", () => {
 		expect(RETENTION_GRADIENT[4]).toEqual({
-			usageMax: 100,
+			usageMax: 101,
 			retainCount: 1,
 		});
 	});
