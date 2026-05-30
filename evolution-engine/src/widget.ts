@@ -5,7 +5,6 @@
  * 只负责文本格式化，不涉及 I/O。
  */
 
-import { Text } from "@mariozechner/pi-tui";
 import type { EvolutionSuggestion, HistoryEntry, StatsData, AutoTriggerFlag } from "./types";
 
 // ── renderSuggestionCard ─────────────────────────────

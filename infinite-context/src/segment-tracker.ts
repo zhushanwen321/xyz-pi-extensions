@@ -13,7 +13,7 @@ import { writeFileSync, readFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import type { ExtensionAPI, ExtensionContext, CustomEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
 import type { Segment, SegmentEntryData, TurnEntryData } from "./types";
-import { RETENTION_CONFIG, IC_CONFIG, getDataDir } from "./types";
+import { RETENTION_GRADIENT } from "./types";
 
 // ── 常量 ──────────────────────────────────────────────
 
@@ -93,8 +93,7 @@ export class SegmentTracker {
 		this.currentSegment = undefined;
 		this.nextSegIndex = 0;
 
-		// 按 segId 去重恢复 segments（每个 segId 可能有多条 entry，取最后一条）
-		const segMap = new Map<string, Segment>();
+		// 先恢复 segments
 		for (const entry of entries) {
 			if (isSegmentEntry(entry) && entry.data) {
 				const data = entry.data;
@@ -105,7 +104,7 @@ export class SegmentTracker {
 					completed: data.completed,
 					filePath: data.filePath,
 				};
-				segMap.set(data.segId, segment);
+				this.segments.push(segment);
 
 				// 跟踪最大 seg index
 				const indexMatch = data.segId.match(/^seg_(\d+)$/);
@@ -117,9 +116,6 @@ export class SegmentTracker {
 				}
 			}
 		}
-
-		// 保持创建顺序
-		this.segments = [...segMap.values()];
 
 		// 设置当前段：最后一个未完成的段
 		const lastSegment = this.segments.length > 0
@@ -142,38 +138,29 @@ export class SegmentTracker {
 				seg.turnRange.end = turnData.turnIndex;
 			}
 		}
-
-		// 从已恢复的段重建去重集合
-		this.syncedKeys = new Set(this.segments.map((s) => s.userMessage.slice(0, IC_CONFIG.dedupKeyLength)));
 	}
 
-	/** 已创建段的去重 key 集合 */
-	private syncedKeys = new Set<string>();
-
 	/**
-	 * 从 messages 中批量补建缺失段
-	 * 在 context 事件和 /tree-compact 命令中调用
-	 * 遍历所有 user message，为尚未创建段的自动创建
+	 * 处理 turn_end 事件
+	 *
+	 * 检测段边界：
+	 * 1. 如果 message.role === "user"，标记前段完成并创建新段
+	 * 2. 更新当前段的 turnRange
+	 * 3. 追加 turn 信息
+	 * 4. 写入段文件
 	 */
-	syncFromMessages(
+	handleTurnEnd(
 		pi: ExtensionAPI,
 		ctx: ExtensionContext,
-		messages: unknown[],
-	): number {
-		let created = 0;
-		// 估算 turnRange 基线：已有段的最大 end + 1，避免新段的 turnRange 出现 -1
-		const baseTurn = this.segments.reduce(
-			(max, s) => Math.max(max, s.turnRange.end === -1 ? 0 : s.turnRange.end + 1),
-			0,
-		);
-		for (const raw of messages) {
-			const m = raw as Record<string, unknown> | null;
-			if (m === null || m.role !== "user") continue;
+		turnIndex: number,
+		message: unknown,
+		toolResults: unknown[],
+	): void {
+		const msg = message as Record<string, unknown> | null;
+		const isUserMessage = msg !== null && msg.role === "user";
+		let isFirstTurnOfSegment = false;
 
-			const userText = extractUserText(m);
-			const dedupeKey = userText.slice(0, IC_CONFIG.dedupKeyLength);
-			if (this.syncedKeys.has(dedupeKey)) continue;
-
+		if (isUserMessage) {
 			// 标记前段完成
 			if (this.currentSegment && !this.currentSegment.completed) {
 				this.currentSegment.completed = true;
@@ -183,106 +170,46 @@ export class SegmentTracker {
 			// 创建新段
 			const segId = `seg_${this.nextSegIndex}`;
 			this.nextSegIndex++;
+
 			const sessionId = ctx.sessionManager.getSessionId();
 			const filePath = `${CONTEXT_DIR_NAME}/${sessionId}/${segId}.json`;
 
-			const estimatedTurn = baseTurn + created;
 			const newSegment: Segment = {
 				segId,
-				turnRange: { start: estimatedTurn, end: estimatedTurn },
-				userMessage: userText, // 完整文本；dedupeKey 仅用于去重
+				turnRange: { start: turnIndex, end: turnIndex },
+				userMessage: extractUserText(message),
 				completed: false,
 				filePath,
 			};
 
 			this.segments.push(newSegment);
 			this.currentSegment = newSegment;
-			this.syncedKeys.add(dedupeKey);
-			created++;
+			isFirstTurnOfSegment = true;
 
 			pi.appendEntry(SEGMENT_ENTRY_TYPE, this.toEntryData(newSegment));
-			this.writeSegmentFile(ctx, newSegment);
-		}
-		return created;
-	}
-
-	/**
-	 * 从 session entries 中提取 messages 并 sync
-	 * 用于 /tree-compact 命令（没有 messages 参数时）
-	 */
-	syncFromEntries(
-		pi: ExtensionAPI,
-		ctx: ExtensionContext,
-		entries: SessionEntry[],
-	): number {
-		const messages: unknown[] = [];
-		for (const entry of entries) {
-			if (entry.type === "message") {
-				const msgEntry = entry as { message: unknown };
-				if (msgEntry.message) {
-					messages.push(msgEntry.message);
-				}
-			}
-		}
-		const created = this.syncFromMessages(pi, ctx, messages);
-
-		// 补建：assistant 回复也作为段（确保段数足够建树）
-		if (this.segments.length < 3) {
-			this.syncAssistantMessages(pi, ctx, messages);
 		}
 
-		return created;
-	}
-
-	/**
-	 * 将 assistant 回复也建为段（补充 user message 段数不足的情况）
-	 */
-	private syncAssistantMessages(
-		pi: ExtensionAPI,
-		ctx: ExtensionContext,
-		messages: unknown[],
-	): number {
-		let created = 0;
-		const baseTurn = this.segments.reduce(
-			(max, s) => Math.max(max, s.turnRange.end === -1 ? 0 : s.turnRange.end + 1),
-			0,
-		);
-		for (const raw of messages) {
-			const m = raw as Record<string, unknown> | null;
-			if (m === null || m.role !== "assistant") continue;
-
-			const text = extractUserText(m).slice(0, IC_CONFIG.dedupKeyLength);
-			if (!text || this.syncedKeys.has(text)) continue;
-
-			// 标记前段完成
-			if (this.currentSegment && !this.currentSegment.completed) {
-				this.currentSegment.completed = true;
-				pi.appendEntry(SEGMENT_ENTRY_TYPE, this.toEntryData(this.currentSegment));
+		// 更新当前段的 turnRange
+		if (this.currentSegment) {
+			if (turnIndex > this.currentSegment.turnRange.end) {
+				this.currentSegment.turnRange.end = turnIndex;
 			}
 
-			const segId = `seg_${this.nextSegIndex}`;
-			this.nextSegIndex++;
-			const sessionId = ctx.sessionManager.getSessionId();
-			const filePath = `${CONTEXT_DIR_NAME}/${sessionId}/${segId}.json`;
-
-			const assistantEstimatedTurn = baseTurn + created;
-			const newSegment: Segment = {
-				segId,
-				turnRange: { start: assistantEstimatedTurn, end: assistantEstimatedTurn },
-				userMessage: `[assistant] ${text}`,
-				completed: true,
-				filePath,
+			// 追加 turn 信息
+			const turnData: TurnEntryData = {
+				turnIndex,
+				segId: this.currentSegment.segId,
+				toolCalls: extractToolCalls(toolResults),
 			};
+			pi.appendEntry(TURN_ENTRY_TYPE, turnData);
 
-			this.segments.push(newSegment);
-			this.currentSegment = newSegment;
-			this.syncedKeys.add(text);
-			created++;
-
-			pi.appendEntry(SEGMENT_ENTRY_TYPE, this.toEntryData(newSegment));
-			this.writeSegmentFile(ctx, newSegment);
+			// 只在段创建时写入段文件（第一个 turn），后续 turn 只追加
+			if (isFirstTurnOfSegment) {
+				this.writeSegmentFile(ctx, this.currentSegment);
+			}
+			// 追加 turn 数据到段文件
+			this.appendTurnToSegFile(ctx, this.currentSegment, { turnIndex, message, toolResults });
 		}
-		return created;
 	}
 
 	/** 返回只读段列表 */
@@ -296,61 +223,40 @@ export class SegmentTracker {
 	}
 
 	/**
-	 * 追加 turn 数据到当前段（不创建新段）
-	 * 在 turn_end 事件中调用
+	 * 返回 retention window 内的段（基于梯度表）
+	 *
+	 * 根据 context 使用百分比查 RETENTION_GRADIENT 表决定保留的已完成段数量。
+	 * sentinel 值 9999 = 保留所有已完成段。
+	 * 最后追加当前活跃段（如果有已完成段为上下文基础）。
 	 */
-	handleTurnEnd(
-		pi: ExtensionAPI,
-		ctx: ExtensionContext,
-		turnIndex: number,
-		message: unknown,
-		toolResults: unknown[],
-	): void {
-		if (!this.currentSegment) return;
-
-		// 更新 turnRange（首次 turn_end 到达时设置 start）
-		if (this.currentSegment.turnRange.start === -1) {
-			this.currentSegment.turnRange.start = turnIndex;
-		}
-		if (turnIndex > this.currentSegment.turnRange.end) {
-			this.currentSegment.turnRange.end = turnIndex;
-		}
-
-		// 追加 turn 信息
-		const turnData: TurnEntryData = {
-			turnIndex,
-			segId: this.currentSegment.segId,
-			toolCalls: extractToolCalls(toolResults),
-		};
-		pi.appendEntry(TURN_ENTRY_TYPE, turnData);
-
-		// 追加 turn 数据到段文件
-		this.appendTurnToSegFile(ctx, this.currentSegment, { turnIndex, message, toolResults });
-	}
-
-	/**
-	 * 返回 retention window 内的段
-	 * 规则：取最后 maxSegments 个已完成段（或覆盖最近 maxTurns turns 的段）
-	 * 不包含当前活跃段
-	 */
-	getRetentionWindow(): readonly Segment[] {
+	getRetentionWindow(usagePercent: number): readonly Segment[] {
 		const completedSegments = this.segments.filter((s) => s.completed);
-		if (completedSegments.length === 0) return [];
 
-		// 策略 1：最近 maxSegments 个已完成段
-		const byCount = completedSegments.slice(-RETENTION_CONFIG.maxSegments);
+		// 查梯度表
+		let retainCount = 1; // 兜底
+		for (const entry of RETENTION_GRADIENT) {
+			if (usagePercent < entry.usageMax) {
+				retainCount = entry.retainCount;
+				break;
+			}
+		}
 
-		// 策略 2：覆盖最近 maxTurns turns 的段
-		const latestTurnEnd = Math.max(
-			...completedSegments.map((s) => s.turnRange.end),
-		);
-		const cutoffTurn = latestTurnEnd - RETENTION_CONFIG.maxTurns + 1;
-		const byTurns = completedSegments.filter(
-			(s) => s.turnRange.end >= cutoffTurn,
-		);
+		// sentinel 值 9999 = 所有已完成段
+		let result: Segment[];
+		if (retainCount >= 9999 || retainCount >= completedSegments.length) {
+			result = [...completedSegments];
+		} else {
+			result = completedSegments.slice(-retainCount);
+		}
 
-		// 取两者中段数较少的（更严格的窗口，保留更多历史段给压缩）
-		return byCount.length <= byTurns.length ? byCount : byTurns;
+		// 有已完成段时追加当前活跃段（为上下文提供基础）
+		// 优先用 this.currentSegment，fallback 到 segments 中查找最后一个未完成的段
+		const activeSegment = this.currentSegment ?? this.segments.find((s) => !s.completed);
+		if (activeSegment) {
+			result = [...result, activeSegment];
+		}
+
+		return result;
 	}
 
 	// ── 内部方法 ──────────────────────────────────────
@@ -366,7 +272,7 @@ export class SegmentTracker {
 	}
 
 	private writeSegmentFile(ctx: ExtensionContext, segment: Segment): void {
-		const segDir = join(getDataDir(), ctx.sessionManager.getSessionId());
+		const segDir = join(ctx.cwd, ".pi", "infinite-context", ctx.sessionManager.getSessionId());
 		if (!existsSync(segDir)) {
 			mkdirSync(segDir, { recursive: true });
 		}
@@ -381,7 +287,7 @@ export class SegmentTracker {
 
 	private appendTurnToSegFile(ctx: ExtensionContext, segment: Segment | undefined, turnData: { turnIndex: number; message: unknown; toolResults: unknown[] }): void {
 		if (!segment) return;
-		const segDir = join(getDataDir(), ctx.sessionManager.getSessionId());
+		const segDir = join(ctx.cwd, ".pi", "infinite-context", ctx.sessionManager.getSessionId());
 		const segFile = join(segDir, `${segment.segId}.json`);
 		if (!existsSync(segFile)) return;
 		try {
@@ -395,8 +301,8 @@ export class SegmentTracker {
 			});
 			writeFileSync(segFile, JSON.stringify(data, null, 2));
 		} catch (err) {
-			// 文件不存在或解析失败：通过 entry 保存 fallback turn 数据
-			console.error("[infinite-context] appendTurnToSegFile failed, turn data may be incomplete:", err);
+			// 文件不存在或解析失败时记录错误但不中断流程
+			console.error("[infinite-context] appendTurnToSegFile error:", err);
 		}
 	}
 }

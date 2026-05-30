@@ -1,18 +1,15 @@
 import type { ExtensionAPI, ExtensionContext, ContextEvent } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
 import { Text } from "@mariozechner/pi-tui";
 
 import { SegmentTracker } from "./segment-tracker";
-import { TreeCompactor } from "./tree-compactor";
+import { TreeCompactor, type CompactResult } from "./tree-compactor";
 import { ContextAssembler, type MinimalAgentMessage, type AssembleResult, IC_SUMMARY_CUSTOM_TYPE, IC_RECALL_PROMPT_TYPE } from "./context-handler";
 import { RecallTool } from "./recall-tool";
 import { registerTreeCompactCommand, registerContextStatusCommand } from "./commands";
-import { compressAsync } from "./compression-runner";
-import { IC_COMPACT_START_TYPE, IC_COMPACT_END_TYPE, IC_CONFIG } from "./types";
 
 const recallTool = new RecallTool();
 
-// -- Named event handlers -----------------------------------------------------
+// -- Named event handlers (extracted for readability) -------------------------
 
 function createSessionStartHandler(tracker: SegmentTracker, compactor: TreeCompactor) {
 	return (_event: unknown, ctx: ExtensionContext) => {
@@ -37,9 +34,15 @@ function createTurnEndHandler(
 		try {
 			tracker.handleTurnEnd(pi, ctx, event.turnIndex, event.message, event.toolResults);
 
-			if (needsCompressionRef.value) {
+			if (!compactor.isCompressing() && needsCompressionRef.value) {
 				needsCompressionRef.value = false;
-				void compressAsync(pi, ctx, tracker.getSegments(), compactor);
+				const segments = tracker.getSegments();
+				const ctxUsage = ctx.getContextUsage();
+				const usagePercent = ctxUsage?.percent ?? 50;
+				compactor.triggerCompression(
+					pi, ctx, segments, compactor.getTree(),
+					usagePercent, onCompleteFactory(ctx),
+				);
 			}
 		} catch (err) {
 			console.error("[infinite-context] turn_end error:", err);
@@ -47,8 +50,22 @@ function createTurnEndHandler(
 	};
 }
 
+function onCompleteFactory(ctx: ExtensionContext) {
+	return (result: CompactResult) => {
+		if (!ctx.hasUI) return;
+		if (result.fallbackUsed) {
+			ctx.ui.notify("Tree compression degraded: using rule-based fallback");
+		} else {
+			const tree = result.tree;
+			ctx.ui.notify(
+				`Tree compression complete: ${tree.totalTokens} tokens, `
+				+ `${tree.root.children.length} groups, depth ${tree.depth}`,
+			);
+		}
+	};
+}
+
 function createContextHandler(
-	pi: ExtensionAPI,
 	tracker: SegmentTracker,
 	compactor: TreeCompactor,
 	assembler: ContextAssembler,
@@ -56,18 +73,18 @@ function createContextHandler(
 ) {
 	return (event: ContextEvent, ctx: ExtensionContext) => {
 		try {
-			tracker.syncFromMessages(pi, ctx, event.messages);
-
 			const segments = tracker.getSegments();
-			const retentionWindow = tracker.getRetentionWindow();
 			const tree = compactor.getTree();
 
 			const contextUsage = ctx.getContextUsage();
-			const contextWindow = contextUsage?.contextWindow ?? IC_CONFIG.defaultContextWindow;
+			const contextWindow = contextUsage?.contextWindow ?? 200_000;
+			const usagePercent = contextUsage?.percent ?? 50;
+			const retentionWindow = tracker.getRetentionWindow(usagePercent);
 
 			const result: AssembleResult = assembler.assembleMessages(
 				event.messages as unknown as MinimalAgentMessage[],
 				tree, segments, retentionWindow,
+				compactor.getCompressedSegIds(),
 				contextWindow,
 			);
 
@@ -83,38 +100,16 @@ function createContextHandler(
 	};
 }
 
-// ── Renderers ──────────────────────────────────────────
-
 function registerRenderers(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer(IC_SUMMARY_CUSTOM_TYPE, (message, _options, theme) => {
-		const c = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
-		return new Text(theme.fg("accent", "[IC] ") + theme.fg("dim", c), 0, 0) as unknown as Component;
+		const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+		return new Text(theme.fg("accent", "[IC] ") + theme.fg("dim", content), 0, 0);
 	});
+
 	pi.registerMessageRenderer(IC_RECALL_PROMPT_TYPE, (message, _options, theme) => {
-		const c = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
-		return new Text(theme.fg("warning", "[IC Recall] ") + theme.fg("dim", c), 0, 0) as unknown as Component;
+		const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+		return new Text(theme.fg("warning", "[IC Recall] ") + theme.fg("dim", content), 0, 0);
 	});
-	pi.registerMessageRenderer(IC_COMPACT_START_TYPE, (message, _options, theme) => {
-		const content = typeof message.content === "string" ? message.content : "";
-		return new Text(theme.fg("warning", "\u23F3 ") + theme.fg("toolTitle", "IC Tree Compact") + theme.fg("dim", ` ${content}`), 0, 0) as unknown as Component;
-	});
-	pi.registerMessageRenderer(IC_COMPACT_END_TYPE, (message, _options, theme) => {
-		const details = message.details as { fallbackUsed?: boolean; errorReason?: string } | undefined;
-		const content = typeof message.content === "string" ? message.content : "";
-		const icon = details?.fallbackUsed ? "\u26A0\uFE0F" : "\u2705";
-		return new Text(theme.fg(details?.fallbackUsed ? "error" : "success", `${icon} `) + theme.fg("toolTitle", "IC Tree Compact") + theme.fg("dim", ` ${content}`), 0, 0) as unknown as Component;
-	});
-}
-
-// ── session_before_compact handler ─────────────────────────
-
-function createBeforeCompactHandler(_tracker: SegmentTracker, compactor: TreeCompactor) {
-	return () => {
-		if (compactor.getTree()) {
-			return { cancel: true };
-		}
-		return { cancel: false };
-	};
 }
 
 // -- Extension Factory -------------------------------------------------------
@@ -125,13 +120,21 @@ export default function infiniteContextExtension(pi: ExtensionAPI): void {
 	const assembler = new ContextAssembler();
 	const needsCompression = { value: false };
 
+	// Event handlers
 	pi.on("session_start", createSessionStartHandler(tracker, compactor));
 	pi.on("turn_end", createTurnEndHandler(pi, tracker, compactor, assembler, needsCompression));
-	pi.on("context", createContextHandler(pi, tracker, compactor, assembler, needsCompression));
-	pi.on("session_before_compact", createBeforeCompactHandler(tracker, compactor));
+	pi.on("context", createContextHandler(tracker, compactor, assembler, needsCompression));
+	// 只在 tree compactor 有有效压缩树时取消 Pi 原生 compact，否则让原生 compact 正常执行
+	pi.on("session_before_compact", () => {
+		if (compactor.getTree()) {
+			return { cancel: true };
+		}
+		return undefined;
+	});
 
+	// Commands + tools + renderers
 	registerTreeCompactCommand(pi, compactor, tracker);
 	registerContextStatusCommand(pi, assembler, compactor, tracker);
-	recallTool.register(pi, compactor);
+	recallTool.register(pi);
 	registerRenderers(pi);
 }
