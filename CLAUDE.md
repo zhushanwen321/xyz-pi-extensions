@@ -12,12 +12,34 @@ Pi coding agent 的扩展工具箱。每个扩展是一个独立可安装的 Pi 
 
 ## 文档索引
 
+### 长期文档（main 分支）
+
+- [docs/research/](./docs/research/) — 调研报告（跨分支共享，存 main 分支）
+  - `infinite-context-survey.md` — 通用方案调研（学术论文、开源项目、商业产品）
+  - `infinite-context-research-report.md` — 学术论文/产品详细分析
+  - `hermes-agent-research.md` — Hermes Agent 记忆/上下文管理调研
+  - `openclaw-research.md` — OpenClaw 记忆/上下文管理调研
+  - `coding-agents-context-research.md` — Claude Code/Aider/Qwen Code/OpenCode 对比调研
+
+### 当前分支文档
+
 - [CONTEXT.md](./CONTEXT.md) — 领域术语表（Pi 平台概念 + 本项目概念 + 歧义标记）
-- [docs/adr/](./docs/adr/) — 架构决策记录
+- [docs/adr/](./docs/adr/) — 架构决策记录（已做出的决策，不可逆）
   - [001-subagent-architecture.md](./docs/adr/001-subagent-architecture.md) — Subagent 进程隔离、上下文传递、background 模式、能力边界、模型选择
   - [002-goal-7-state-machine.md](./docs/adr/002-goal-7-state-machine.md) — Goal 为什么有 7 种状态（time_limited + cancelled），以及为什么没有 usage_limited
   - [003-evidence-based-completion.md](./docs/adr/003-evidence-based-completion.md) — Goal 为什么强制任务分解 + evidence，以及代价
+- [docs/evolution/](./docs/evolution/) — 架构演进与 Brainstorming（决策前的思考过程，可迭代）
+  - `001-context-compression-redesign.md` — 上下文压缩方案重新设计（基于调研的压缩流水线设计）
 - `.xyz-harness/` — xyz-harness 工作流产出物（spec、plan、test cases），按 `<date>-<slug>/` 组织，应纳入版本控制
+
+### 文档规范
+
+| 目录 | 性质 | 格式 | 生命周期 |
+|------|------|------|----------|
+| `docs/adr/` | 已做出的决策 | `NNN-<topic>.md`，含 Status/Context/Decision/Consequences | 永久 |
+| `docs/evolution/` | 决策前的探索 | `NNN-<topic>.md`，标注 draft/active/superseded | 迭代到决策或废弃 |
+| `docs/research/` | 外部调研 | `<topic>-research.md` | 长期参考 |
+| `.xyz-harness/` | 工作流产出 | 按 `<date>-<slug>/` 组织 | 随分支
 
 ## 技术栈
 
