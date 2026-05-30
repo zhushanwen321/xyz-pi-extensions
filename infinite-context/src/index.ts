@@ -84,6 +84,7 @@ function createContextHandler(
 			const result: AssembleResult = assembler.assembleMessages(
 				event.messages as unknown as MinimalAgentMessage[],
 				tree, segments, retentionWindow,
+				compactor.getCompressedSegIds(),
 				contextWindow,
 			);
 
