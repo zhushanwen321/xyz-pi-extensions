@@ -1,0 +1,105 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code trace: read createBeforeCompactHandler in index.ts",
+        "Verify segments.length < 3 early return returns { cancel: false }",
+        "Verify compressForCompaction called with await when segments >= 3",
+        "Verify compaction result includes summary (via buildTreeSummary), firstKeptEntryId (from event.preparation), tokensBefore (from event.preparation)",
+        "Verify Pi agent-session.ts line 1652: result?.compaction triggers fromExtension=true path"
+      ],
+      "evidence": "Code trace confirms handler returns { compaction: { summary, firstKeptEntryId, tokensBefore } } for segments >= 3"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code trace: grep for 'cancel: true' in index.ts — not found (old bug source eliminated)",
+        "Verify handler returns { compaction: {...} } not { cancel: true }",
+        "Verify Pi agent-session.ts line 1649-1653: compaction result → fromExtension=true → Pi writes compaction entry with timestamp",
+        "Architectural: Pi's _checkCompaction uses lastCompactionTimestamp guard → no retrigger"
+      ],
+      "evidence": "No 'cancel: true' in handler. Pi writes compaction entry (agent-session.ts:1654-1660), timestamp guard prevents retrigger"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code trace: createBeforeCompactHandler returns async function",
+        "Verify handler body uses 'await compressForCompaction(...)'",
+        "Verify Pi agent-session.ts line 1642: 'await this._extensionRunner.emit(...)' — Pi awaits handler",
+        "Handler awaits compressForCompaction → compressForCompaction awaits compactor.triggerCompressionAsync → handler blocks until completion",
+        "Pi's _runAutoCompaction awaits handler → no LLM request until handler resolves"
+      ],
+      "evidence": "Async handler with await; Pi emits with await (agent-session.ts:1642); full sync chain from Pi → handler → compressForCompaction → triggerCompressionAsync"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code trace: compressForCompaction in compression-runner.ts calls beforeCompressionUI before spawn",
+        "beforeCompressionUI sends IC_COMPACT_START_TYPE bubble + sets footer status",
+        "compressForCompaction uses async spawn (triggerCompressionAsync) — TUI event loop unblocked",
+        "afterCompressionUI called after completion — sends IC_COMPACT_END_TYPE bubble + clears footer",
+        "Renderers registered in registerRenderers (index.ts) for IC_COMPACT_START_TYPE and IC_COMPACT_END_TYPE"
+      ],
+      "evidence": "compressForCompaction calls beforeCompressionUI/afterCompressionUI bracketing async spawn; UI functions send bubbles + set status"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "grep -n 'shouldCompress' infinite-context/src/index.ts — not found",
+        "grep -n 'needsCompression' infinite-context/src/index.ts — not found",
+        "Read createContextHandler body: only calls tracker.syncFromMessages, assembler.assembleMessages, returns messages",
+        "No shouldCompress or needsCompressionRef reference anywhere in file"
+      ],
+      "evidence": "grep exit code 1 for shouldCompress and needsCompression — removed entirely"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "grep -n 'compressAsync' infinite-context/src/index.ts — not found (only compressForCompaction imported, used in before_compact handler)",
+        "Read createTurnEndHandler body: only calls tracker.handleTurnEnd",
+        "No compressAsync, compressForCompaction, or needsCompressionRef in turn_end handler",
+        "verify compressForCompaction only called in createBeforeCompactHandler (line 129)"
+      ],
+      "evidence": "turn_end handler body has no compression logic; compressForCompaction only used in before_compact handler"
+    },
+    {
+      "caseId": "TC-6-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code trace: createBeforeCompactHandler line 121 checks segments.length < 3",
+        "Returns { cancel: false } — no compaction property",
+        "Pi agent-session.ts line 1649: result?.cancel → throws Error('Compaction cancelled') if true",
+        "cancel is false → falls through to result?.compaction check → undefined → fromExtension stays false",
+        "Pi executes native compact path (agent-session.ts:1669 'else' branch)"
+      ],
+      "evidence": "segments < 3 → handler returns { cancel: false } → Pi native compact executes"
+    },
+    {
+      "caseId": "TC-6-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code trace: createBeforeCompactHandler line 133-135 checks result.fallbackUsed && result.errorReason",
+        "If true, returns { cancel: false } → same path as TC-6-01 → Pi native compact",
+        "Also verify: compressForCompaction returns null (segments=0 edge case) → line 125-127 returns { cancel: false }",
+        "catch block (line 138-140) also returns { cancel: false } for any unexpected error",
+        "Pi agent-session.ts: cancel=false → no throw → compaction undefined → native compact executes"
+      ],
+      "evidence": "Three fallback paths all return { cancel: false }: fallbackUsed+errorReason, null result, catch error"
+    }
+  ]
+}
