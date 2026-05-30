@@ -1,8 +1,9 @@
-import type { ExtensionAPI, ExtensionContext, ContextEvent } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ContextEvent, SessionBeforeCompactEvent } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 
 import { SegmentTracker } from "./segment-tracker";
 import { TreeCompactor, type CompactResult } from "./tree-compactor";
+import type { CompactTree } from "./types";
 import { ContextAssembler, type MinimalAgentMessage, type AssembleResult, IC_SUMMARY_CUSTOM_TYPE, IC_RECALL_PROMPT_TYPE } from "./context-handler";
 import { RecallTool } from "./recall-tool";
 import { registerTreeCompactCommand, registerContextStatusCommand } from "./commands";
@@ -26,50 +27,23 @@ function createSessionStartHandler(tracker: SegmentTracker, compactor: TreeCompa
 function createTurnEndHandler(
 	pi: ExtensionAPI,
 	tracker: SegmentTracker,
-	compactor: TreeCompactor,
-	assembler: ContextAssembler,
-	needsCompressionRef: { value: boolean },
+	_compactor: TreeCompactor,
+	_assembler: ContextAssembler,
 ) {
 	return (event: { turnIndex: number; message: unknown; toolResults: unknown[] }, ctx: ExtensionContext) => {
 		try {
 			tracker.handleTurnEnd(pi, ctx, event.turnIndex, event.message, event.toolResults);
-
-			if (!compactor.isCompressing() && needsCompressionRef.value) {
-				needsCompressionRef.value = false;
-				const segments = tracker.getSegments();
-				const ctxUsage = ctx.getContextUsage();
-				const usagePercent = ctxUsage?.percent ?? 50;
-				compactor.triggerCompression(
-					pi, ctx, segments, compactor.getTree(),
-					usagePercent, onCompleteFactory(ctx),
-				);
-			}
 		} catch (err) {
 			console.error("[infinite-context] turn_end error:", err);
 		}
 	};
 }
 
-function onCompleteFactory(ctx: ExtensionContext) {
-	return (result: CompactResult) => {
-		if (!ctx.hasUI) return;
-		if (result.fallbackUsed) {
-			ctx.ui.notify("Tree compression degraded: using rule-based fallback");
-		} else {
-			const tree = result.tree;
-			ctx.ui.notify(
-				`Tree compression complete: ${tree.totalTokens} tokens, `
-				+ `${tree.root.children.length} groups, depth ${tree.depth}`,
-			);
-		}
-	};
-}
-
 function createContextHandler(
+	pi: ExtensionAPI,
 	tracker: SegmentTracker,
 	compactor: TreeCompactor,
 	assembler: ContextAssembler,
-	needsCompressionRef: { value: boolean },
 ) {
 	return (event: ContextEvent, ctx: ExtensionContext) => {
 		try {
@@ -87,10 +61,6 @@ function createContextHandler(
 				compactor.getCompressedSegIds(),
 				contextWindow,
 			);
-
-			if (contextUsage) {
-				needsCompressionRef.value = assembler.shouldCompress(result.treeContextTokens, contextUsage.contextWindow);
-			}
 
 			return { messages: result.messages as ContextEvent["messages"] };
 		} catch (err) {
@@ -112,25 +82,85 @@ function registerRenderers(pi: ExtensionAPI): void {
 	});
 }
 
+// ── Tree summary builder ────────────────────────────────────────────────
+
+function buildTreeSummary(tree: CompactTree): string {
+	if (!tree.root.children.length) {
+		return `[IC Tree Compact] empty tree (0 groups)`;
+	}
+	const groupSummaries = tree.root.children.map((group) => {
+		const leafCount = group.children.length;
+		return `- ${group.summary} (${leafCount} segments)`;
+	}).join("\n");
+	return `[IC Tree Compact] ${tree.root.children.length} groups, ${tree.totalTokens} tokens, depth ${tree.depth}\n${groupSummaries}`;
+}
+
+// ── session_before_compact handler ─────────────────────────────────────
+
+function createBeforeCompactHandler(
+	pi: ExtensionAPI,
+	tracker: SegmentTracker,
+	compactor: TreeCompactor,
+) {
+	return async (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => {
+		const segments = tracker.getSegments();
+
+		// Not enough segments for meaningful tree compression → let Pi handle
+		if (segments.length < 3) {
+			return { cancel: false };
+		}
+
+		try {
+			// Wrap callback-based triggerCompression into a Promise
+			const contextUsage = ctx.getContextUsage();
+			const usagePercent = contextUsage?.percent ?? 50;
+			const result: CompactResult = await new Promise((resolve, reject) => {
+				compactor.triggerCompression(
+					pi, ctx, segments, compactor.getTree(),
+					usagePercent,
+					(r) => resolve(r),
+				);
+				// triggerCompression is fire-and-forget with callback.
+				// It guards against re-entry (isCompressing), so if already
+				// compressing the callback won't fire. Set a timeout to avoid
+				// hanging the handler indefinitely.
+				setTimeout(() => reject(new Error("tree-compact timeout")), 120_000);
+			});
+
+			// If fallback was used, let Pi do native compact
+			if (result.fallbackUsed) {
+				return { cancel: false };
+			}
+
+			// Build text summary from tree for Pi's compaction entry
+			const summary = buildTreeSummary(result.tree);
+
+			return {
+				compaction: {
+					summary,
+					firstKeptEntryId: event.preparation.firstKeptEntryId,
+					tokensBefore: event.preparation.tokensBefore,
+				},
+			};
+		} catch (err) {
+			console.error("[infinite-context] before_compact compression error:", err);
+			return { cancel: false };
+		}
+	};
+}
+
 // -- Extension Factory -------------------------------------------------------
 
 export default function infiniteContextExtension(pi: ExtensionAPI): void {
 	const tracker = new SegmentTracker();
 	const compactor = new TreeCompactor();
 	const assembler = new ContextAssembler();
-	const needsCompression = { value: false };
 
 	// Event handlers
 	pi.on("session_start", createSessionStartHandler(tracker, compactor));
-	pi.on("turn_end", createTurnEndHandler(pi, tracker, compactor, assembler, needsCompression));
-	pi.on("context", createContextHandler(tracker, compactor, assembler, needsCompression));
-	// 只在 tree compactor 有有效压缩树时取消 Pi 原生 compact，否则让原生 compact 正常执行
-	pi.on("session_before_compact", () => {
-		if (compactor.getTree()) {
-			return { cancel: true };
-		}
-		return undefined;
-	});
+	pi.on("turn_end", createTurnEndHandler(pi, tracker, compactor, assembler));
+	pi.on("context", createContextHandler(pi, tracker, compactor, assembler));
+	pi.on("session_before_compact", createBeforeCompactHandler(pi, tracker, compactor));
 
 	// Commands + tools + renderers
 	registerTreeCompactCommand(pi, compactor, tracker);

@@ -9,6 +9,13 @@ if [[ "${SKIP_LINT:-}" == "1" ]]; then
   exit 0
 fi
 
+# rebase 中跳过检查，完成后手动跑一次全量验证
+REBASE_DIR=$(git rev-parse --git-path rebase-merge 2>/dev/null || true)
+if [[ -n "$REBASE_DIR" && -d "$REBASE_DIR" ]]; then
+  echo "[pre-commit] rebase in progress, 跳过检查（完成后请手动验证）"
+  exit 0
+fi
+
 C_RED='\033[0;31m'
 C_GREEN='\033[0;32m'
 C_RESET='\033[0m'
