@@ -37,7 +37,12 @@ function createTurnEndHandler(
 			if (!compactor.isCompressing() && needsCompressionRef.value) {
 				needsCompressionRef.value = false;
 				const segments = tracker.getSegments();
-				compactor.triggerCompression(pi, ctx, segments, compactor.getTree(), onCompleteFactory(ctx));
+				const ctxUsage = ctx.getContextUsage();
+				const usagePercent = ctxUsage?.percent ?? 50;
+				compactor.triggerCompression(
+					pi, ctx, segments, compactor.getTree(),
+					usagePercent, onCompleteFactory(ctx),
+				);
 			}
 		} catch (err) {
 			console.error("[infinite-context] turn_end error:", err);

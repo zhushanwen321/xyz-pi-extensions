@@ -14,7 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, CustomEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
 import type { Segment, TreeNode, CompactTree } from "./types";
-import { COMPRESSION_CONFIG } from "./types";
+import { COMPRESSION_CONFIG, RETENTION_GRADIENT } from "./types";
 import { estimateTokens } from "./token-estimator";
 
 // ── 常量 ──────────────────────────────────────────────
@@ -704,46 +704,55 @@ export class TreeCompactor {
 		ctx: ExtensionContext,
 		segments: readonly Segment[],
 		existingTree: CompactTree | undefined,
+		usagePercent: number = 50,
 		onComplete?: (result: CompactResult) => void,
 	): void {
 		// 1. 守卫：已在压缩中
 		if (this.compressing) return;
+
+		// AC-6: 上下文占用 < 50% 时不压缩
+		if (usagePercent < 50) return;
+
 		this.compressing = true;
 		this.ctxCwd = ctx.cwd;
 
-		// 2. 过滤 retention window：最近 maxSegments 个已完成段 + 当前活跃段
+		// 2. 用梯度表计算 retention window（FR-1）
 		const completedSegments = segments.filter((s) => s.completed);
-		// 保留窗口: min(2 个已完成段, 覆盖最近 8 turns 的段)
-		const byCount = completedSegments.slice(-2);
-		const latestTurnEnd = Math.max(
-			...completedSegments.map((s) => s.turnRange.end),
-		);
-		const cutoffTurn = latestTurnEnd - 8 + 1;
-		const byTurns = completedSegments.filter(
-			(s) => s.turnRange.end >= cutoffTurn,
-		);
-		// 取更严格的窗口（段数较少的），保留更多历史段给压缩
-		const retentionSegs = byCount.length <= byTurns.length ? byCount : byTurns;
+		let retainCount = 1; // 兜底
+		for (const entry of RETENTION_GRADIENT) {
+			if (usagePercent < entry.usageMax) {
+				retainCount = entry.retainCount;
+				break;
+			}
+		}
+		const retentionSegs = retainCount >= 9999 || retainCount >= completedSegments.length
+			? completedSegments
+			: completedSegments.slice(-retainCount);
+
 		const retentionIds = new Set(retentionSegs.map((s) => s.segId));
 		// 也排除当前活跃段（未完成的）
 		const activeIds = new Set(
 			segments.filter((s) => !s.completed).map((s) => s.segId),
 		);
 
-		const historySegments = segments.filter(
+		let historySegments = segments.filter(
 			(s) => !retentionIds.has(s.segId) && !activeIds.has(s.segId),
 		);
 
-		// 3. 无历史段需要压缩
+		// 3. AC-2: 用 computeCompressionScope 确定压缩范围
+		const scope = this.computeCompressionScope(retentionSegs, historySegments, existingTree);
+		historySegments = scope.targetSegs;
+
+		// 4. 无历史段需要压缩
 		if (historySegments.length === 0) {
 			this.compressing = false;
 			return;
 		}
 
-		// 4. 预构建段摘要（缓存，用于 fallback 复用）
+		// 5. 预构建段摘要（缓存，用于 fallback 复用）
 		this.currentDigests = buildSegmentDigests(historySegments, this.ctxCwd);
 
-		// 5. 启动异步压缩流程
+		// 6. 启动异步压缩流程
 		this.runCompression(
 			pi,
 			ctx,
@@ -954,8 +963,9 @@ export class TreeCompactor {
 	): void {
 		// 尝试重试（最多 MAX_RETRY_COUNT 次）
 		if (retryCount < MAX_RETRY_COUNT) {
-			// 重试时附带错误信息
-			const prompt = buildCompressionPrompt(segments, this.tree, errorReason, this.ctxCwd);
+			// 重试时附带错误信息；捕获当前 tree（FR-3: retry 也要追加）
+			const currentTree = this.tree;
+			const prompt = buildCompressionPrompt(segments, currentTree, errorReason, this.ctxCwd);
 			const child = spawn("pi", ["--mode", "json", "-p", prompt], {
 				stdio: ["ignore", "pipe", "pipe"],
 				detached: false,
@@ -992,32 +1002,50 @@ export class TreeCompactor {
 					return;
 				}
 
-				// 重试成功（tokenCount 已由 validateTreeOutput 中的 recomputeTreeTokens 用 chars/4 填充）
-				const rootSummary = `Compressed ${segments.length} segments`;
-				const root: TreeNode = {
-					nodeId: "root",
-					summary: rootSummary,
-					tokenCount: computeNodeTokens("root", rootSummary),
-					children: result,
-				};
+				// 重试成功 — 支持追加（FR-3）
+				const newGroups = result;
+				let root: TreeNode;
+				let finalTree: CompactTree;
 
-				const tree: CompactTree = {
-					treeId: `tree_${Date.now()}`,
-					root,
-					totalTokens: sumTreeTokens(root),
-					createdAt: Date.now(),
-					depth: treeDepth(root),
-				};
+				if (currentTree) {
+					root = {
+						nodeId: "root",
+						summary: `Compressed ${segments.length} segments (retry+append)`,
+						tokenCount: computeNodeTokens("root", `Compressed ${segments.length} segments (retry+append)`),
+						children: [...currentTree.root.children, ...newGroups],
+					};
+					finalTree = {
+						treeId: currentTree.treeId,
+						root,
+						totalTokens: sumTreeTokens(root),
+						createdAt: Date.now(),
+						depth: treeDepth(root),
+					};
+				} else {
+					root = {
+						nodeId: "root",
+						summary: `Compressed ${segments.length} segments (retry)`,
+						tokenCount: computeNodeTokens("root", `Compressed ${segments.length} segments (retry)`),
+						children: newGroups,
+					};
+					finalTree = {
+						treeId: `tree_${Date.now()}_retry`,
+						root,
+						totalTokens: sumTreeTokens(root),
+						createdAt: Date.now(),
+						depth: treeDepth(root),
+					};
+				}
 
-				this.tree = tree;
+				this.tree = finalTree;
 				this.compressing = false;
 				for (const seg of segments) {
 					this.compressedSegIds.add(seg.segId);
 				}
-				pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
+				pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, finalTree);
 
 				onComplete?.({
-					tree,
+					tree: finalTree,
 					fallbackUsed: false,
 					retryCount: retryCount + 1,
 				});
@@ -1045,8 +1073,35 @@ export class TreeCompactor {
 		retryCount: number,
 		onComplete?: (result: CompactResult) => void,
 	): void {
-		const tree = ruleBasedFallback(segments, this.currentDigests.length > 0 ? this.currentDigests : undefined);
-		this.tree = tree;
+		const fallbackTree = ruleBasedFallback(segments, this.currentDigests.length > 0 ? this.currentDigests : undefined);
+
+		let resultTree: CompactTree;
+		if (this.tree) {
+			// FR-3 append: create a fallback group and append to existing tree
+			const fallbackGroup: TreeNode = {
+				nodeId: `group_fallback_${Date.now()}`,
+				summary: `Fallback compression of ${segments.length} segments (LLM failed)`,
+				tokenCount: computeNodeTokens(`group_fallback_${Date.now()}`, `Fallback compression of ${segments.length} segments (LLM failed)`),
+				children: fallbackTree.root.children,
+			};
+			const root: TreeNode = {
+				nodeId: "root",
+				summary: this.tree.root.summary,
+				tokenCount: computeNodeTokens("root", this.tree.root.summary),
+				children: [...this.tree.root.children, fallbackGroup],
+			};
+			resultTree = {
+				treeId: this.tree.treeId,
+				root,
+				totalTokens: sumTreeTokens(root),
+				createdAt: Date.now(),
+				depth: treeDepth(root),
+			};
+		} else {
+			resultTree = fallbackTree;
+		}
+
+		this.tree = resultTree;
 		this.compressing = false;
 		for (const seg of segments) {
 			this.compressedSegIds.add(seg.segId);
@@ -1054,10 +1109,10 @@ export class TreeCompactor {
 
 		console.error("[infinite-context] LLM compression failed, using rule-based fallback");
 
-		pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, tree);
+		pi.appendEntry(COMPACT_TREE_ENTRY_TYPE, resultTree);
 
 		onComplete?.({
-			tree,
+			tree: resultTree,
 			fallbackUsed: true,
 			retryCount,
 		});
