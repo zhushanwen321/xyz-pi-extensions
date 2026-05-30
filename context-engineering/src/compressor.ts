@@ -3,6 +3,10 @@
 import type { L0Config, L1Config, L2Config, ContextEngineeringConfig } from "./config.ts";
 import type { RecallStore } from "./recall-store.ts";
 
+// chars→tokens 估算因子和 fallback 上下文窗口大小
+const CHARS_PER_TOKEN = 4;
+const DEFAULT_CONTEXT_WINDOW = 200_000;
+
 // ── Message types (structural subset of pi-ai + Pi coding agent) ──
 
 export interface TextContent {
@@ -443,7 +447,7 @@ export function processL2(
     for (const msg of messages) {
       totalChars += estimateMessageChars(msg);
     }
-    usagePercent = (totalChars / 4) / 200000;
+    usagePercent = (totalChars / CHARS_PER_TOKEN) / DEFAULT_CONTEXT_WINDOW;
   }
 
   if (usagePercent < config.emergencyThreshold) {
@@ -502,14 +506,15 @@ export function compressContext(
   const boundaries = findTurnBoundaries(messages);
 
   // L0
-  const l0 = processL0(messages, config.l0, store, now, boundaries);
-  let current = l0.messages;
-  const stats: CompressionStats = {
-    ...zeroStats,
-    l0Expired: l0.stats.expired,
-    l0Truncated: l0.stats.truncated,
-    l0ThinkingCleared: l0.stats.thinkingCleared,
-  };
+  let current = messages;
+  const stats: CompressionStats = { ...zeroStats };
+  if (config.l0.enabled) {
+    const l0 = processL0(messages, config.l0, store, now, boundaries);
+    current = l0.messages;
+    stats.l0Expired = l0.stats.expired;
+    stats.l0Truncated = l0.stats.truncated;
+    stats.l0ThinkingCleared = l0.stats.thinkingCleared;
+  }
 
   // L1
   if (config.l1.enabled) {

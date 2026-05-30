@@ -35,56 +35,20 @@ function zeroStats(): CompressionStats {
   };
 }
 
-// ── Extension entry ──
+// ── Helper: accumulate compression stats ──
 
-export default function contextEngineeringExtension(
-  pi: ExtensionAPI,
-): void {
-  // Session-scoped state (rebuilt on session_start)
-  let config: ContextEngineeringConfig = loadConfig();
-  let store: RecallStore = createRecallStore();
-  let cumulativeStats: CompressionStats = zeroStats();
+function accumulateStats(target: CompressionStats, delta: CompressionStats): void {
+  target.l0Expired += delta.l0Expired;
+  target.l0Truncated += delta.l0Truncated;
+  target.l0ThinkingCleared += delta.l0ThinkingCleared;
+  target.l1Condensed += delta.l1Condensed;
+  if (delta.l2Triggered) target.l2Triggered = true;
+  if (delta.validationFailed) target.validationFailed = true;
+}
 
-  // ── session_start: reset state ──
+// ── Helper: register recall_context tool ──
 
-  pi.on("session_start", () => {
-    config = loadConfig();
-    store = createRecallStore();
-    cumulativeStats = zeroStats();
-  });
-
-  // ── context: compression core ──
-
-  // Compressor defines its own AgentMessage union (includes BashExecutionMessage).
-  // Pi's ContextEvent.messages uses the agent-core AgentMessage type.
-  // At runtime Pi's messages contain all message types our compressor handles.
-  pi.on("context", (event, ctx) => {
-    try {
-      const messages = event.messages as unknown as CompressorMessage[];
-      const result = compressContext(
-        messages,
-        config,
-        store,
-        ctx.getContextUsage() as unknown as Parameters<typeof compressContext>[3],
-      );
-
-      cumulativeStats.l0Expired += result.stats.l0Expired;
-      cumulativeStats.l0Truncated += result.stats.l0Truncated;
-      cumulativeStats.l0ThinkingCleared += result.stats.l0ThinkingCleared;
-      cumulativeStats.l1Condensed += result.stats.l1Condensed;
-      if (result.stats.l2Triggered) cumulativeStats.l2Triggered = true;
-      if (result.stats.validationFailed) cumulativeStats.validationFailed = true;
-
-      // ContextEventResult.messages expects Pi's AgentMessage[], not our local union
-      return { messages: result.messages as unknown as (typeof event.messages)[number][] };
-    } catch {
-      // Safety: never modify messages on unexpected error
-      return {};
-    }
-  });
-
-  // ── Tool: recall_context ──
-
+function registerRecallTool(pi: ExtensionAPI, store: RecallStore): void {
   pi.registerTool({
     name: "recall_context",
     label: "Recall Compressed Context",
@@ -119,28 +83,71 @@ export default function contextEngineeringExtension(
       };
     },
   });
+}
 
-  // ── Command: /context-engineering ──
+// ── Helper: register commands ──
 
+function registerCommands(
+  pi: ExtensionAPI,
+  config: ContextEngineeringConfig,
+  stats: CompressionStats,
+): void {
   pi.registerCommand("context-engineering", {
     description: "View/modify context compression settings",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
-      const output = handleContextEngineeringCommand(
-        _args || undefined,
-        config,
-        cumulativeStats,
-      );
+      const output = handleContextEngineeringCommand(_args || undefined, config, stats);
       ctx.ui.notify(output, "info");
     },
   });
-
-  // ── Command: /context-stats ──
 
   pi.registerCommand("context-stats", {
     description: "View context compression statistics",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
-      const output = handleContextStatsCommand(cumulativeStats);
+      const output = handleContextStatsCommand(stats);
       ctx.ui.notify(output, "info");
     },
   });
+}
+
+// ── Extension entry ──
+
+export default function contextEngineeringExtension(pi: ExtensionAPI): void {
+  // Session-scoped state (rebuilt on session_start)
+  let config: ContextEngineeringConfig = loadConfig();
+  let store: RecallStore = createRecallStore();
+  let cumulativeStats: CompressionStats = zeroStats();
+
+  // session_start: reset state
+  pi.on("session_start", () => {
+    config = loadConfig();
+    store = createRecallStore();
+    cumulativeStats = zeroStats();
+  });
+
+  // context: compression core
+  // Compressor defines its own AgentMessage union (includes BashExecutionMessage).
+  // Pi's ContextEvent.messages uses the agent-core AgentMessage type.
+  // At runtime Pi's messages contain all message types our compressor handles.
+  pi.on("context", (event, ctx) => {
+    try {
+      const messages = event.messages as unknown as CompressorMessage[];
+      const result = compressContext(
+        messages,
+        config,
+        store,
+        ctx.getContextUsage() as unknown as
+          Parameters<typeof compressContext>[3],
+      );
+      accumulateStats(cumulativeStats, result.stats);
+      return {
+        messages: result.messages as unknown as (typeof event.messages)[number][],
+      };
+    } catch {
+      // Safety: never modify messages on unexpected error
+      return {};
+    }
+  });
+
+  registerRecallTool(pi, store);
+  registerCommands(pi, config, cumulativeStats);
 }
