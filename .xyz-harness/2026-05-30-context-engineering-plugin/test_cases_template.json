@@ -1,0 +1,191 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "Tool Result 过期清理 - 超过 30 分钟",
+      "description": "AC-1: 验证超过过期时间的 tool_result 被替换为过期标记",
+      "steps": [
+        "构造 35 分钟前的 toolResult 消息",
+        "调用 compressContext",
+        "验证 content 被替换为 [Tool result expired. ID: ctx-xxx...]",
+        "验证 recall_store 中存在原始内容"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "integration",
+      "title": "Tool Result 过期清理 - 保护最近 N 轮",
+      "description": "AC-1: 验证最近 2 轮内的 tool_result 不被过期",
+      "steps": [
+        "构造 35 分钟前的 toolResult，位于最近 2 轮内",
+        "调用 compressContext",
+        "验证 content 未被替换"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "Bash 输出截断 - 超过阈值",
+      "description": "AC-2: 验证超过 4000 字符的 bash 输出被截断",
+      "steps": [
+        "构造 output 为 10000 字符的 bashExecution 消息",
+        "调用 compressContext",
+        "验证 output 被截断为前 2000 + 标记 + 后 2000",
+        "验证 recall_store 中存在完整原始输出"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "integration",
+      "title": "Bash 输出截断 - 低于阈值",
+      "description": "AC-2: 验证低于阈值的 bash 输出不被截断",
+      "steps": [
+        "构造 output 为 3000 字符的 bashExecution 消息",
+        "调用 compressContext",
+        "验证 output 未被修改"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "Thinking 清理 - 超过空闲时间",
+      "description": "AC-3: 验证超过 5 分钟空闲的 thinking 块被清空",
+      "steps": [
+        "构造包含 thinking 的 assistant 消息，时间戳 6 分钟前",
+        "确保之后无 user 消息",
+        "调用 compressContext",
+        "验证 thinking 被替换为 [thinking expired]"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "integration",
+      "title": "ToolCall/ToolResult 配对 - 正常序列",
+      "description": "AC-4: 验证压缩后 toolCall 和 toolResult 仍然配对",
+      "steps": [
+        "构造 assistant(toolCall) → toolResult 消息序列",
+        "调用 compressContext",
+        "验证 validateToolPairing 返回 true",
+        "验证 toolResult 仍紧随 toolCall"
+      ]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "integration",
+      "title": "ToolCall/ToolResult 配对 - 校验失败安全降级",
+      "description": "AC-4: 验证校验失败时返回原始消息",
+      "steps": [
+        "构造消息序列，让压缩导致配对异常（模拟场景）",
+        "调用 compressContext",
+        "验证返回原始消息（未压缩）"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "integration",
+      "title": "Recall 完整性 - 存在的 ID",
+      "description": "AC-5: 验证存在的 ID 返回完整原始内容",
+      "steps": [
+        "store 原始内容，获取 ID",
+        "调用 recall(ID)",
+        "验证返回的 original 与存储时一致"
+      ]
+    },
+    {
+      "id": "TC-5-02",
+      "type": "integration",
+      "title": "Recall 完整性 - 不存在的 ID",
+      "description": "AC-5: 验证不存在的 ID 返回 undefined",
+      "steps": [
+        "调用 recall('ctx-nonexist')",
+        "验证返回 undefined"
+      ]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "integration",
+      "title": "L1 规则化摘要 - TypeScript 代码",
+      "description": "AC-7: 验证 L1 对 TypeScript 代码的摘要保留关键行",
+      "steps": [
+        "构造 12000 字符的 TypeScript toolResult（含 import/function/class/export）",
+        "调用 compressContext（L1 启用）",
+        "验证摘要保留 import 行",
+        "验证摘要保留 function/class 定义行",
+        "验证摘要包含首 10 行和尾 5 行",
+        "验证摘要长度在原始的 20-40%"
+      ]
+    },
+    {
+      "id": "TC-7-02",
+      "type": "integration",
+      "title": "L1 规则化摘要 - 非代码内容 fallback",
+      "description": "AC-7: 验证非代码内容 fallback 到截断",
+      "steps": [
+        "构造 12000 字符的纯文本/JSON toolResult",
+        "调用 compressContext（L1 启用）",
+        "验证走 fallback 截断策略"
+      ]
+    },
+    {
+      "id": "TC-8-01",
+      "type": "integration",
+      "title": "L2 紧急压缩 - 超过阈值",
+      "description": "AC-8: 验证 91% 使用率触发紧急压缩",
+      "steps": [
+        "mock getContextUsage 返回 percent=0.91",
+        "构造多个 toolResult 消息，部分在保护 turn 外",
+        "调用 compressContext（L2 启用）",
+        "验证保护 turn 外的 toolResult 被强制过期",
+        "验证保护 turn 内的 toolResult 未被修改"
+      ]
+    },
+    {
+      "id": "TC-8-02",
+      "type": "integration",
+      "title": "L2 紧急压缩 - 低于阈值",
+      "description": "AC-8: 验证 85% 使用率不触发 L2",
+      "steps": [
+        "mock getContextUsage 返回 percent=0.85",
+        "调用 compressContext（L2 启用）",
+        "验证 L2 未触发"
+      ]
+    },
+    {
+      "id": "TC-9-01",
+      "type": "integration",
+      "title": "统计命令输出",
+      "description": "AC-9: 验证 /context-stats 命令输出正确统计",
+      "steps": [
+        "执行多次压缩，累计 3 expired + 2 truncated + 1 condensed",
+        "调用 handleContextStatsCommand",
+        "验证输出包含各项统计值"
+      ]
+    },
+    {
+      "id": "TC-10-01",
+      "type": "integration",
+      "title": "全局启停",
+      "description": "AC-10: 验证全局启用/禁用",
+      "steps": [
+        "设置 config.enabled = true",
+        "执行 /context-engineering off",
+        "验证 config.enabled 变为 false",
+        "调用 compressContext → 验证无压缩",
+        "执行 /context-engineering on",
+        "验证 config.enabled 变为 true"
+      ]
+    },
+    {
+      "id": "TC-10-02",
+      "type": "integration",
+      "title": "独立级别启停",
+      "description": "AC-10: 验证独立控制 L1 启停",
+      "steps": [
+        "执行 /context-engineering l1 off",
+        "验证 config.l1.enabled 变为 false",
+        "验证 config.l0.enabled 和 config.l2.enabled 不变"
+      ]
+    }
+  ]
+}
