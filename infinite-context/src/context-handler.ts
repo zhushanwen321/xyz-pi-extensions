@@ -60,7 +60,7 @@ const COMPRESSION_THRESHOLD = 0.7;
 const BUDGET_RATIO = 0.8;
 
 /** recall 提示模板 */
-const RECALL_PROMPT = `历史对话已压缩为摘要树。使用 recall(nodeId, mode) 工具检索被压缩内容。
+const RECALL_PROMPT = `[Context Checkpoint] 历史对话已压缩为摘要树。使用 recall(nodeId, mode) 工具检索被压缩内容。
 recall(nodeId, "structure") 查看子树结构（不含原始内容）。
 recall(nodeId, "content") 获取原始完整内容。`;
 
@@ -98,12 +98,16 @@ function extractMessageTextLength(msg: MinimalAgentMessage): number {
 	return 0;
 }
 
-/** 创建摘要 CustomMessage */
-function createSummaryMessage(nodeId: string, summary: string, timestamp: number): MinimalAgentMessage {
+/** 创建摘要 CustomMessage（学习自 Codex CLI 的 summary prefix 模式） */
+function createSummaryMessage(nodeId: string, summary: string, timestamp: number, isFirst: boolean = false): MinimalAgentMessage {
+	// 第一个摘要节点添加上下文说明前缀，告知 LLM 这是之前的摘要
+	const prefix = isFirst
+		? "A previous AI session produced this summary of earlier work. Use it to continue and avoid duplicating work:\n"
+		: "";
 	return {
 		role: "custom",
 		customType: IC_SUMMARY_CUSTOM_TYPE,
-		content: `[${nodeId}] ${summary}`,
+		content: `${prefix}[${nodeId}] ${summary}`,
 		display: false,
 		timestamp,
 	};
@@ -175,7 +179,7 @@ export class ContextAssembler {
 		const flatNodes = this.bfsFlatten(tree);
 		const now = Date.now();
 		const summaryMessages: MinimalAgentMessage[] = flatNodes.map(
-			(node) => createSummaryMessage(node.nodeId, node.summary, now),
+			(node, idx) => createSummaryMessage(node.nodeId, node.summary, now, idx === 0),
 		);
 
 		// 3. 估算当前 filtered messages 的 tokens
@@ -213,7 +217,7 @@ export class ContextAssembler {
 			}
 
 			const truncatedSummaries = finalFlatNodes.map(
-				(node) => createSummaryMessage(node.nodeId, node.summary, now),
+				(node, idx) => createSummaryMessage(node.nodeId, node.summary, now, idx === 0),
 			);
 			compressedNodeCount = finalFlatNodes.length;
 
