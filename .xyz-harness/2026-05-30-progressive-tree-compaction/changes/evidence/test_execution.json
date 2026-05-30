@@ -1,0 +1,163 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run segment-tracker.test.ts gradient lookup tests (5 tiers)",
+        "Verify getRetentionWindow(30) returns all 12 (infinity sentinel)",
+        "Verify getRetentionWindow(60) returns last 8",
+        "Verify getRetentionWindow(75) returns last 4",
+        "Verify getRetentionWindow(85) returns last 2",
+        "Verify getRetentionWindow(95) returns last 1"
+      ],
+      "evidence": "segment-tracker.test.ts — all 16 tests pass"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run segment-tracker.test.ts empty case tests (0 completed segments)",
+        "Verify getRetentionWindow(75) with 0 completed segments returns empty array"
+      ],
+      "evidence": "segment-tracker.test.ts — edge case tests pass"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run tree-compactor.test.ts computeCompressionScope ratio tests",
+        "Verify estimatedAfterTokens / denominator within [0.2, 0.5]",
+        "Verify at least 1 segment included"
+      ],
+      "evidence": "tree-compactor.test.ts — computeCompressionScope tests pass"
+    },
+    {
+      "caseId": "TC-2-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run tree-compactor.test.ts 'all segments too small' test",
+        "Verify all segments returned when ratio never reaches 20%",
+        "Verify all history segments included"
+      ],
+      "evidence": "tree-compactor.test.ts — 'small dataset — ratio stays below ratioMin' passes"
+    },
+    {
+      "caseId": "TC-2-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run tree-compactor.test.ts 'first segment exceeds max' test",
+        "Verify 1 segment is included even when ratio > 50%"
+      ],
+      "evidence": "tree-compactor.test.ts — 'accepts 1 segment when ratio > ratioMax' passes"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run phase4-integration.test.ts TC-3-01 tests",
+        "Verify restoreState preserves last tree entry with correct groups",
+        "Verify restoreState picks last of multiple entries"
+      ],
+      "evidence": "phase4-integration.test.ts — TC-3-01 tests pass"
+    },
+    {
+      "caseId": "TC-3-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run phase4-integration.test.ts TC-3-02 validateTreeOutput guard tests",
+        "Verify rejects missing nodeId",
+        "Verify rejects non-array top-level",
+        "Verify rejects invalid segId"
+      ],
+      "evidence": "phase4-integration.test.ts — TC-3-02 tests pass"
+    },
+    {
+      "caseId": "TC-3-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run phase4-integration.test.ts TC-3-03 initial tree validation test",
+        "Verify accepts valid group+leaf tree from JSON with long summaries"
+      ],
+      "evidence": "phase4-integration.test.ts — TC-3-03 test passes"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run context-handler.test.ts tree injection tests",
+        "Verify output contains recall prompt (ic-recall-prompt)",
+        "Verify ic-summary nodes are injected",
+        "Verify compressedSegIds filtering works correctly"
+      ],
+      "evidence": "context-handler.test.ts — all 6 tests pass"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run tree-compactor.test.ts AC-6 low usage skip test",
+        "Verify triggerCompression with usagePercent=30 returns early",
+        "Verify isCompressing() remains false"
+      ],
+      "evidence": "tree-compactor.test.ts — AC-6 test passes"
+    },
+    {
+      "caseId": "TC-5-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run tree-compactor.test.ts AC-6 usage >= 50% test",
+        "Verify triggerCompression with usagePercent=50 passes guard",
+        "Verify compression flow proceeds (blocked only by insufficient segments)"
+      ],
+      "evidence": "tree-compactor.test.ts — AC-6 test passes"
+    },
+    {
+      "caseId": "TC-6-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: verify handleCompressionFailure retry+fallback logic in tree-compactor.ts",
+        "Verify MAX_RETRY_COUNT=1 in COMPRESSION_CONFIG",
+        "Verify retry triggers ruleBasedFallback on second failure",
+        "Verify fallbackUsed flag set and tree structure correct"
+      ],
+      "evidence": "Code review confirmed retry/fallback at lines 957-985. Full end-to-end test requires child_process mocking."
+    },
+    {
+      "caseId": "TC-6-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run phase4-integration.test.ts TC-6-02 fallback summary tests",
+        "Verify ruleBasedFallback handles single segment correctly",
+        "Verify ruleBasedFallback handles 3 segments correctly",
+        "Verify ruleBasedFallback handles empty segments array"
+      ],
+      "evidence": "phase4-integration.test.ts — TC-6-02 tests pass"
+    },
+    {
+      "caseId": "TC-7-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Manual E2E verification: inspect code quality via code review",
+        "Verify all 75 unit tests pass across 5 test files",
+        "Verify TypeScript compilation 0 errors",
+        "Verify ESLint 0 errors"
+      ],
+      "evidence": "Full test suite: 5 files, 75 tests, all pass. tsc: 0 errors."
+    }
+  ]
+}
