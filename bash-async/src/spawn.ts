@@ -1,4 +1,5 @@
 import * as child_process from "node:child_process";
+import * as fs from "node:fs";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { truncateTail } from "@mariozechner/pi-coding-agent";
 import type { BashAsyncConfig, BashAsyncToolDetails, Job, ShellContext } from "./types.js";
@@ -40,9 +41,6 @@ function validateCwd(cwd: string): void {
 	}
 }
 
-// Need fs import at top — add it
-import * as fs from "node:fs";
-
 function makeResult(
 	text: string,
 	details: BashAsyncToolDetails,
@@ -64,6 +62,7 @@ function makeErrorResult(text: string, details: BashAsyncToolDetails): ToolResul
 interface SpawnResult {
 	child: child_process.ChildProcess;
 	outFile: string;
+	writeStream: fs.WriteStream;
 	exitPromise: Promise<number | null>;
 }
 
@@ -88,7 +87,7 @@ function spawnCommand(
 		cwd,
 		env: shellCtx.env,
 		detached: process.platform !== "win32",
-		stdio: ["pipe", "pipe", "pipe"],
+		stdio: ["ignore", "pipe", "pipe"],
 	});
 
 	// Write to temp file
@@ -96,14 +95,24 @@ function spawnCommand(
 	child.stdout?.pipe(writeStream);
 	child.stderr?.pipe(writeStream);
 
-	// Also capture in memory
+	// Also capture in memory for sync mode
 	const capture = (data: Buffer): void => { chunks.push(data); };
 	child.stdout?.on("data", capture);
 	child.stderr?.on("data", capture);
 
-	// Exit promise
-	const exitPromise = new Promise<number | null>((resolve) => {
-		child.on("exit", (code) => resolve(code));
+	// Exit/error promise — resolves with exit code, rejects on spawn error
+	const exitPromise = new Promise<number | null>((resolve, reject) => {
+		child.on("exit", (code) => {
+			// Clean up writeStream on exit
+			writeStream.destroy();
+			resolve(code);
+		});
+		child.on("error", (err) => {
+			// Clean up writeStream on spawn error
+			writeStream.destroy();
+			removeOutputFile(outFile);
+			reject(err);
+		});
 	});
 
 	// Handle abort signal
@@ -117,7 +126,7 @@ function spawnCommand(
 		exitPromise.finally(() => signal.removeEventListener("abort", onAbort));
 	}
 
-	return { child, outFile, exitPromise };
+	return { child, outFile, writeStream, exitPromise };
 }
 
 function getBufferContent(chunks: Buffer[]): string {
@@ -141,8 +150,15 @@ export async function executeSync(
 	const effectiveTimeout = timeout ?? config.defaultTimeout;
 	const chunks: Buffer[] = [];
 
-	// Wrap spawn to also forward to onUpdate
-	const { child, outFile, exitPromise } = spawnCommand(cmd, shellCtx, cwd, chunks, signal);
+	let spawnResult: SpawnResult;
+	try {
+		spawnResult = spawnCommand(cmd, shellCtx, cwd, chunks, signal);
+	} catch (err: unknown) {
+		// Spawn-time error (bad shell path, etc.)
+		const msg = err instanceof Error ? err.message : String(err);
+		throw new Error(`Failed to spawn command: ${msg}`);
+	}
+	const { child, outFile, exitPromise } = spawnResult;
 
 	// Forward to onUpdate
 	if (onUpdate) {
@@ -166,7 +182,22 @@ export async function executeSync(
 				})
 			: NEVER_RESOLVES;
 
-	const exitCode = await Promise.race([exitPromise, timeoutPromise]);
+	let exitCode: number | null;
+	try {
+		exitCode = await Promise.race([exitPromise, timeoutPromise]);
+	} catch (err: unknown) {
+		// spawn error (ENOENT, EACCES) — FR-11
+		const msg = err instanceof Error ? err.message : String(err);
+		return makeErrorResult(
+			`Command not found or permission denied: ${msg}`,
+			{ action: "sync" },
+		);
+	}
+
+	// Check if aborted
+	if (signal?.aborted) {
+		throw new Error("Command aborted");
+	}
 
 	if (timedOut) {
 		return detachJob(cmd, cwd, effectiveTimeout, child, outFile, exitPromise, chunks, jobs);
@@ -219,9 +250,15 @@ function detachJob(
 	};
 	registerJob(jobs, job);
 
+	// Stop in-memory capture — output continues to WriteStream/file only
+	child.stdout?.removeAllListeners("data");
+	child.stderr?.removeAllListeners("data");
+
 	// When process eventually exits, update job status
 	exitPromise.then((code) => {
 		updateJobStatus(jobs, jobId, code === 0 ? "done" : "failed", code ?? undefined);
+	}).catch((e: unknown) => {
+		console.error("[bash-async] sync-detach exit handler error:", e instanceof Error ? e.message : e);
 	});
 
 	const partialOutput = getBufferContent(chunks);
@@ -257,7 +294,14 @@ export async function executeBackground(
 	}
 
 	const chunks: Buffer[] = [];
-	const { child, outFile, exitPromise } = spawnCommand(cmd, shellCtx, cwd, chunks);
+	let spawnResult: SpawnResult;
+	try {
+		spawnResult = spawnCommand(cmd, shellCtx, cwd, chunks);
+	} catch (err: unknown) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return makeErrorResult(`Failed to spawn command: ${msg}`, { action: "background" });
+	}
+	const { child, outFile, exitPromise } = spawnResult;
 
 	const jobId = generateJobId();
 	const job: Job = {
@@ -274,10 +318,18 @@ export async function executeBackground(
 	};
 	registerJob(jobs, job);
 
+	// Stop in-memory capture for background jobs — output goes to file only
+	child.stdout?.removeAllListeners("data");
+	child.stderr?.removeAllListeners("data");
+
 	// Handle process exit
 	exitPromise.then((code) => {
 		updateJobStatus(jobs, jobId, code === 0 ? "done" : "failed", code ?? undefined);
-		injectBackgroundResult(pi, job, code, outFile);
+		// Only inject result if job wasn't killed
+		const currentJob = findJob(jobs, jobId);
+		if (currentJob && currentJob.status !== "killed") {
+			injectBackgroundResult(pi, job, code, outFile);
+		}
 	}).catch((e: unknown) => {
 		console.error("[bash-async] bg exit handler error:", e instanceof Error ? e.message : e);
 	});
@@ -376,16 +428,21 @@ export async function executeKill(
 		);
 	}
 
+	// Register exit listener BEFORE killing to avoid race condition
+	const exitPromise = new Promise<number | null>((resolve) => {
+		if (job.child.exitCode !== null) {
+			resolve(job.child.exitCode);
+			return;
+		}
+		job.child.once("exit", (code) => resolve(code));
+	});
+
 	// Kill the process group
 	await killProcessGroup(job.pid);
 
-	// Wait briefly for exit
+	// Wait for exit with timeout
 	const exitCode = await Promise.race([
-		new Promise<number | null>((resolve) => {
-			job.child.on("exit", (code) => resolve(code));
-			// May already have exited
-			if (job.child.exitCode !== null) resolve(job.child.exitCode);
-		}),
+		exitPromise,
 		new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
 	]);
 

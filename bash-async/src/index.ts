@@ -11,11 +11,10 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-// StringEnum available from @earendil-works/pi-ai if needed
-import { Text } from "@earendil-works/pi-tui";
+import { Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import type { BashAsyncParams, BashAsyncToolDetails, BashAsyncConfig, ShellContext } from "./types.js";
-import { loadConfig } from "./jobs.js";
+import { createJobMap, loadConfig, cleanupJobs } from "./jobs.js";
 import { buildShellContext } from "./shell.js";
 import { executeSync, executeBackground, executePoll, executeKill } from "./spawn.js";
 
@@ -68,7 +67,7 @@ export default function bashAsyncExtension(pi: ExtensionAPI): void {
 	// Session-scoped state — rebuilt on each session_start
 	let config: BashAsyncConfig;
 	let shellCtx: ShellContext;
-	let jobs: ReturnType<typeof import("./jobs.js").createJobMap>;
+	let jobs: Map<import("./types.js").Job["jobId"], import("./types.js").Job>;
 
 	pi.on("session_start", () => {
 		config = loadConfig();
@@ -78,7 +77,7 @@ export default function bashAsyncExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async () => {
 		if (jobs) {
-			await import("./jobs.js").then((m) => m.cleanupJobs(jobs));
+			await cleanupJobs(jobs);
 		}
 	});
 
@@ -196,6 +195,3 @@ export default function bashAsyncExtension(pi: ExtensionAPI): void {
 		},
 	});
 }
-
-// Need createJobMap import at module level for session_start
-import { createJobMap } from "./jobs.js";
