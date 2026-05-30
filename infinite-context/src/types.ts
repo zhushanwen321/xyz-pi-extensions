@@ -71,12 +71,34 @@ export interface CompactTree {
 	depth: number;
 }
 
-// ── Retention Window 配置 ─────────────────────────────
+// ── Retention Gradient ─────────────────────────────────
 
-/** 保留窗口的默认配置 */
-export const RETENTION_CONFIG = {
-	/** 保留最近多少个已完成段 */
-	maxSegments: 2,
-	/** 或覆盖最近多少个 turns */
-	maxTurns: 8,
+/** 保留梯度：根据 context 使用百分比决定保留多少个段 */
+export const RETENTION_GRADIENT: ReadonlyArray<{
+	usageMax: number;
+	retainCount: number;
+}> = [
+	{ usageMax: 50, retainCount: 9999 },
+	{ usageMax: 70, retainCount: 8 },
+	{ usageMax: 80, retainCount: 4 },
+	{ usageMax: 90, retainCount: 2 },
+	{ usageMax: 100, retainCount: 1 },
+] as const;
+
+// ── Compression Config ─────────────────────────────────
+
+/** 树压缩的参数配置 */
+export const COMPRESSION_CONFIG = {
+	ratioMin: 0.2,
+	ratioMax: 0.5,
+	perSegmentTokens: 63,
 } as const;
+
+// ── IContextUsage ───────────────────────────────────────
+
+/** 当前 context 使用情况快照 */
+export interface IContextUsage {
+	contextWindow: number;
+	usedTokens: number;
+	percent: number;
+}

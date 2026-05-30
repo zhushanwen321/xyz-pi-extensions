@@ -14,7 +14,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, CustomEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
 import type { Segment, TreeNode, CompactTree } from "./types";
-import { RETENTION_CONFIG } from "./types";
+import { RETENTION_GRADIENT as _RETENTION_GRADIENT } from "./types";
+
+/** @deprecated Use RETENTION_GRADIENT instead — will be removed in Task 3 */
+const RETENTION_CONFIG = { maxSegments: 2, maxTurns: 8 } as const;
 import { estimateTokens } from "./token-estimator";
 
 // ── 常量 ──────────────────────────────────────────────
