@@ -29,7 +29,7 @@ import {
   registerWorkflowCommands,
   type WorkflowCommandsState,
 } from "./commands.js";
-import { renderWorkflowList, registerWorkflowShortcuts } from "./widget.js";
+import { renderWorkflowList } from "./widget.js";
 import { registerGenerateTool } from "./tool-generate.js";
 
 // ── Parameter schema ──────────────────────────────────────────

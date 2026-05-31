@@ -1,0 +1,186 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "manual",
+      "title": "evolve-daily 首次启动生成报告",
+      "description": "当天无 JSON 报告时，启动 Pi session 自动生成",
+      "steps": [
+        "删除 daily-reports/YYYY-MM-DD.json",
+        "启动 Pi session",
+        "等待 10 秒后检查 daily-reports/YYYY-MM-DD.json 是否存在且是有效 JSON"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "manual",
+      "title": "evolve-daily 已有报告时跳过",
+      "description": "当天已有 JSON 报告时，不重复生成",
+      "steps": [
+        "确认 daily-reports/YYYY-MM-DD.json 已存在",
+        "记录文件修改时间",
+        "重启 Pi session",
+        "验证文件修改时间不变"
+      ]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "manual",
+      "title": "evolve-daily analyzer 失败不阻塞 session",
+      "description": "Python analyzer 执行失败时 session 正常启动",
+      "steps": [
+        "临时重命名 analyze.py",
+        "启动 Pi session",
+        "验证 session 正常启动，console 有 error 日志",
+        "恢复 analyze.py"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "manual",
+      "title": "/evolve 生成建议并写入 pending.json",
+      "description": "默认 7 天分析，生成建议写入 pending.json",
+      "steps": [
+        "确认 evolution-data/ 有至少 3 天历史数据",
+        "输入 /evolve",
+        "验证 LLM 输出分析结论和建议",
+        "检查 pending.json suggestions 数组非空，每条包含 id/title/targetPath/status"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "manual",
+      "title": "/evolve since=14d 扩大时间窗口",
+      "description": "指定更大时间范围，读取不少于 14 天数据",
+      "steps": [
+        "输入 /evolve since=14d",
+        "验证 LLM 读取了不少于 14 天的数据"
+      ]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "manual",
+      "title": "/evolve 无数据时明确提示",
+      "description": "无历史数据时不报错，给出提示",
+      "steps": [
+        "清空 daily/ 和 daily-reports/（先备份）",
+        "输入 /evolve",
+        "验证 LLM 给出明确提示而非报错",
+        "恢复数据"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "manual",
+      "title": "/evolve-apply list 展示 pending 建议",
+      "description": "无参数展示所有 pending 建议摘要",
+      "steps": [
+        "确认 pending.json 有至少 2 条 pending 建议",
+        "输入 /evolve-apply",
+        "验证 LLM 展示所有建议及其摘要"
+      ]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "manual",
+      "title": "/evolve-apply apply 修改文件并备份",
+      "description": "apply 成功修改目标文件、创建备份、记录历史",
+      "steps": [
+        "输入 /evolve-apply apply 0",
+        "验证目标文件已修改",
+        "验证 backups/ 中有备份文件",
+        "验证 history.jsonl 有 action:apply 记录",
+        "验证 pending.json 第 0 条状态为 applied"
+      ]
+    },
+    {
+      "id": "TC-3-03",
+      "type": "manual",
+      "title": "/evolve-apply skip 标记为 rejected",
+      "description": "skip 成功将建议状态改为 rejected",
+      "steps": [
+        "输入 /evolve-apply skip 1",
+        "验证 pending.json 第 1 条状态为 rejected"
+      ]
+    },
+    {
+      "id": "TC-3-04",
+      "type": "manual",
+      "title": "/evolve-apply rollback 恢复文件",
+      "description": "rollback 成功恢复文件到修改前状态",
+      "steps": [
+        "确认 history.jsonl 有至少一条 applied 记录",
+        "输入 /evolve-apply rollback",
+        "验证目标文件恢复到修改前内容",
+        "验证 history.jsonl 有 action:rollback 记录"
+      ]
+    },
+    {
+      "id": "TC-3-05",
+      "type": "manual",
+      "title": "/evolve-apply apply 失败时保持 pending",
+      "description": "apply 失败时 pending.json 不变，history.jsonl 不追加",
+      "steps": [
+        "手动修改 pending.json，将第 N 条建议的 targetPath 改为不存在的路径",
+        "输入 /evolve-apply apply N",
+        "验证 LLM 报告失败原因",
+        "验证 pending.json 中该建议状态仍为 pending",
+        "验证 history.jsonl 没有新增记录"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "manual",
+      "title": "/evolve-report 显示今天报告",
+      "description": "无参数显示当天报告",
+      "steps": [
+        "确认 daily-reports/ 有今天的 JSON 报告",
+        "输入 /evolve-report",
+        "验证 LLM 显示今天报告的关键信息"
+      ]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "manual",
+      "title": "/evolve-report 指定日期",
+      "description": "指定日期显示对应报告",
+      "steps": [
+        "输入 /evolve-report 2026-05-29（使用实际存在的日期）",
+        "验证显示对应日期报告"
+      ]
+    },
+    {
+      "id": "TC-4-03",
+      "type": "manual",
+      "title": "/evolve-report --list 列出报告",
+      "description": "列出所有可用报告日期",
+      "steps": [
+        "输入 /evolve-report --list",
+        "验证列出所有可用报告日期"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "manual",
+      "title": "旧 extension 移除后 Pi 正常启动",
+      "description": "evolution-engine 完全移除，Pi 启动无报错",
+      "steps": [
+        "执行清理（删除目录 + 更新 symlink）",
+        "启动 Pi",
+        "验证启动无报错"
+      ]
+    },
+    {
+      "id": "TC-5-02",
+      "type": "manual",
+      "title": "新 skill 和 extension 正确注册",
+      "description": "evolve/evolve-apply/evolve-report skill 和 evolve-daily extension 可用",
+      "steps": [
+        "验证 /evolve 命令触发 skill",
+        "验证 /evolve-apply 命令触发 skill",
+        "验证 /evolve-report 命令触发 skill",
+        "验证旧 tool 不再注册"
+      ]
+    }
+  ]
+}

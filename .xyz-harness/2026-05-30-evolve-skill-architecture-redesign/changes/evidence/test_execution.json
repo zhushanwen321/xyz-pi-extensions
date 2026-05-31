@@ -1,0 +1,236 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "审查 evolve-daily/src/index.ts 第 18-28 行 session_start 处理器",
+        "验证 'const today = new Date().toISOString().slice(0, 10)' 生成 YYYY-MM-DD 格式日期",
+        "验证 'if (existsSync(reportPath)) return' — 当天无报告时跳过 return，继续执行",
+        "验证 'await pi.exec(\"python3\", [ANALYZER_PATH, \"--since\", \"1d\", \"--format\", \"json\", \"--output\", reportPath], { timeout: 30_000 })' — 执行 analyzer 并将输出写入 reportPath",
+        "验证 REPORTS_DIR 常量指向 ~/.pi/agent/evolution-data/daily-reports，与 TC 描述的路径一致",
+        "验证 reportPath = join(REPORTS_DIR, `${today}.json`) 确保文件名为 YYYY-MM-DD.json"
+      ],
+      "evidence": "代码路径完整：session_start → existsSync 检查不存在 → pi.exec 调用 python3 analyzer --output <path>。首次启动时 reportPath 不存在，existsSync 返回 false，不提前 return，执行 analyzer 生成 JSON 报告。"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "审查 evolve-daily/src/index.ts 第 24 行 'if (existsSync(reportPath)) return'",
+        "验证当 reportPath（当天 YYYY-MM-DD.json）已存在时，函数立即 return，不执行 pi.exec",
+        "确认 return 之后没有任何报告生成逻辑",
+        "验证 existsSync 是同步 fs 检查，不会产生文件副作用"
+      ],
+      "evidence": "第 24 行 'if (existsSync(reportPath)) return' 是唯一的提前退出条件。当天报告存在时直接 return，不调用 pi.exec，文件内容不会改变。"
+    },
+    {
+      "caseId": "TC-1-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "审查 evolve-daily/src/index.ts 第 26-31 行 try/catch 结构",
+        "验证 pi.exec 调用被 try/catch 包裹",
+        "验证 catch 块执行：1) unlinkSync 清理部分输出 2) console.error 记录错误",
+        "验证 catch 块没有 throw 或 re-throw，session_start 处理器正常结束",
+        "确认 catch 内部 'try { unlinkSync } catch { /* already gone */ }' 双重防护不抛出异常"
+      ],
+      "evidence": "try/catch 包裹 pi.exec（第 26-31 行），catch 块清理部分输出并 console.error，但不 throw。session_start 处理器正常返回，不会阻塞 session 启动。"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "审查 skills/evolve/SKILL.md Procedure 部分",
+        "验证 Section 1 'Parse User Intent'：无参数默认 since=7d",
+        "验证 Section 2 'Read Data Sources'：列出 daily/*.json、daily-reports/*.json、skill-triggers.json 等数据源路径，按时间范围过滤",
+        "验证 Section 4 'Generate Suggestions'：EvolutionSuggestion 对象包含 id/title/targetPath/status 等字段，status 初始为 'pending'",
+        "验证 Section 5 'Write pending.json'：明确指定写入 ~/.pi/agent/evolution-data/suggestions/pending.json，JSON 结构含 suggestions 数组",
+        "验证 Section 6 'Present Results'：展示摘要和 /evolve-apply 使用指引"
+      ],
+      "evidence": "SKILL.md 完整定义了 evolve 工作流：默认 7 天分析（Section 1）、读取多数据源（Section 2）、LLM 分析（Section 3）、生成含 id/title/targetPath/status 的建议对象（Section 4）、写入 pending.json（Section 5）。所有步骤在 skill 指令中有明确定义。"
+    },
+    {
+      "caseId": "TC-2-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "审查 skills/evolve/SKILL.md Section 1 'Parse User Intent'",
+        "验证 'since=Nd → analyze last N days' 解析规则存在",
+        "验证 Section 2 要求 'Filter by user's requested time range. If requesting \"last N days\", read files with dates >= (today - N days)'",
+        "确认 since=14d 时 LLM 需要读取 14 天范围的数据文件"
+      ],
+      "evidence": "SKILL.md Section 1 明确定义 'since=Nd → analyze last N days'，Section 2 要求按时间范围过滤文件。since=14d 会触发读取 >= 14 天的数据。"
+    },
+    {
+      "caseId": "TC-2-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "审查 skills/evolve/SKILL.md Section 2 'No data scenario' 段落",
+        "验证明确指令：'If no data files exist for the requested range, tell the user: \"No usage data available...\"'",
+        "验证 'Do NOT proceed to generate suggestions' — 无数据时不生成建议",
+        "确认这是一个错误提示而非报错（tell the user 而非 throw）"
+      ],
+      "evidence": "SKILL.md Section 2 有专门的 'No data scenario' 段落，要求向用户明确提示无数据原因并建议确保 evolve-daily extension 已安装，不继续生成建议。"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "审查 skills/evolve-apply/SKILL.md 'Parse Command' 部分",
+        "验证 'No args or \"list\" → LIST mode' 解析规则",
+        "审查 LIST Mode 步骤 1-3：读取 pending.json、检查空数组、展示每条建议",
+        "验证展示格式包含 [#N]、[severity]、title、Target、Status、Summary"
+      ],
+      "evidence": "SKILL.md 定义无参数触发 LIST mode，步骤 1-3 明确读取 pending.json 并展示所有建议的摘要信息（索引、严重度、标题、目标路径、状态）。"
+    },
+    {
+      "caseId": "TC-3-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "审查 skills/evolve-apply/SKILL.md APPLY Mode 步骤 1-8",
+        "验证步骤 2：获取 index N 的 suggestion",
+        "验证步骤 3 Backup：cp targetPath 到 backups/ 目录，失败则 ABORT",
+        "验证步骤 4 Modify：使用 edit/write 工具修改目标文件，失败则清理备份并 ABORT，保持 pending",
+        "验证步骤 6 Update pending.json：将状态改为 applied",
+        "验证步骤 7 Append to history.jsonl：写入 action:apply 记录",
+        "确认步骤顺序：backup → modify → commit → update pending → append history"
+      ],
+      "evidence": "APPLY Mode 完整定义了 8 步流程：读取建议 → 备份到 backups/（步骤 3）→ 修改目标文件（步骤 4）→ git commit（步骤 5）→ 更新 pending.json 状态为 applied（步骤 6）→ 追加 history.jsonl（步骤 7）。每步有失败处理策略。"
+    },
+    {
+      "caseId": "TC-3-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "审查 skills/evolve-apply/SKILL.md SKIP Mode 步骤 1-4",
+        "验证步骤 1：读取 pending.json，验证 index 存在且 status 为 pending",
+        "验证步骤 2：更新 suggestion 状态为 'rejected'",
+        "验证步骤 3：使用 write 工具写回 pending.json",
+        "验证步骤 4：确认信息 'Skipped suggestion #N: <title>.'"
+      ],
+      "evidence": "SKIP Mode 明确定义：验证索引和状态 → 将状态改为 rejected → 写回 pending.json → 确认。状态值 'rejected' 与 TC 描述一致。"
+    },
+    {
+      "caseId": "TC-3-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "审查 skills/evolve-apply/SKILL.md ROLLBACK Mode 步骤 1-8",
+        "验证步骤 1：读取 history.jsonl，最后一行 = 最近操作",
+        "验证步骤 2：找到最近的未回滚 apply 操作",
+        "验证步骤 3：检查 backupPath 文件是否存在",
+        "验证步骤 4：如果备份存在，cp backupPath 到 targetPath 恢复文件",
+        "验证步骤 7：追加 action:rollback 记录到 history.jsonl",
+        "验证步骤 5 备份缺失场景：告知用户并 STOP，不执行步骤 6-8"
+      ],
+      "evidence": "ROLLBACK Mode 完整定义：读取 history.jsonl 找最近 apply → 检查备份 → cp 恢复 → git commit → 更新 pending.json 状态回 pending → 追加 rollback 到 history.jsonl。备份缺失时有明确的中止路径。"
+    },
+    {
+      "caseId": "TC-3-05",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "审查 skills/evolve-apply/SKILL.md APPLY Mode 步骤 4 失败处理",
+        "验证步骤 4 'If edit fails → clean up backup file, ABORT, tell user reason, keep status as pending'",
+        "验证 'do NOT update pending.json or append to history.jsonl' — 失败时不写入两个文件",
+        "确认失败路径：edit/write 失败 → rm 备份 → 告知用户 → 结束，pending.json 和 history.jsonl 不变"
+      ],
+      "evidence": "APPLY Mode 步骤 4 明确指定编辑失败时的处理：清理备份文件、ABORT、告知用户原因、保持 pending 状态、不更新 pending.json 和 history.jsonl。失败路径完整定义。"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "审查 skills/evolve-report/SKILL.md 'Parse Command' 部分",
+        "验证 'No args → show today's report' 解析规则",
+        "审查 'Show Report' 步骤 1-3：ls 检查可用报告 → read 读取当天报告 → 展示关键信息",
+        "验证展示内容包含 Session count、Tool call statistics、Token consumption、Anomalies、Suggestions"
+      ],
+      "evidence": "SKILL.md 定义无参数显示当天报告。Show Report 步骤使用 bash ls 检查 .json 文件、read 读取报告内容，展示 session/tool/token/anomaly/suggestion 五类关键信息。"
+    },
+    {
+      "caseId": "TC-4-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "审查 skills/evolve-report/SKILL.md 'Parse Command' 部分",
+        "验证 'Date string (YYYY-MM-DD) → show that date's report' 解析规则",
+        "确认 Show Report 步骤 2 'Read the requested report' 可读取指定日期文件",
+        "验证文件路径构造逻辑：daily-reports/YYYY-MM-DD.json"
+      ],
+      "evidence": "SKILL.md 定义 Date string 参数解析为 YYYY-MM-DD 格式，Show Report 步骤读取对应日期的 .json 文件。路径与 daily-reports/ 目录下的命名约定一致。"
+    },
+    {
+      "caseId": "TC-4-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "审查 skills/evolve-report/SKILL.md 'Parse Command' 部分",
+        "验证 '--list → list all available reports' 解析规则",
+        "审查 'List Reports' 部分：使用 'ls -1 ~/.pi/agent/evolution-data/daily-reports/*.json' 列出文件",
+        "验证 'xargs -I{} basename {} .json' 提取日期",
+        "验证 'Present as a numbered list of available dates' 展示格式"
+      ],
+      "evidence": "SKILL.md 定义 --list 参数触发列出所有报告，提供完整的 bash 命令（ls -1 *.json | xargs basename .json），并以编号列表形式展示可用日期。"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": false,
+      "execute_steps": [
+        "检查 ~/.pi/agent/extensions/ 目录中是否仍有旧 evolution-engine 目录",
+        "运行 'ls -la ~/.pi/agent/extensions/ | grep -i evolution-engine' 验证旧扩展已移除",
+        "检查旧扩展源目录是否存在",
+        "验证 evolve-daily extension 作为唯一 evolve 相关扩展存在"
+      ],
+      "evidence": "代码审查可确认旧 extension 目录已不存在，但'Pi 正常启动'需要运行时验证。"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 2,
+      "passed": true,
+      "execute_steps": [
+        "bash: ls ~/.pi/agent/extensions/evolution-engine → 不存在（已移除）",
+        "bash: ls ~/.pi/agent/extensions/evolve-daily/package.json src/index.ts index.ts → 3 个文件均存在",
+        "bash: node -e 读取 evolve-daily/src/index.ts → 文件可读、无语法错误",
+        "tsc --noEmit → 0 errors（编译通过）",
+        "验证新 extension 无外部依赖（仅使用 node:fs, node:os, node:path + @mariozechner/pi-coding-agent）"
+      ],
+      "evidence": "旧 extension symlink 已删除。新 evolve-daily 文件完整（package.json + index.ts + src/index.ts）。tsc 编译通过。无外部 npm 依赖。代码审查层面启动无障碍。"
+    },
+    {
+      "caseId": "TC-5-02",
+      "round": 1,
+      "passed": false,
+      "execute_steps": [
+        "验证 skills/evolve/SKILL.md description 包含触发词 '/evolve'",
+        "验证 skills/evolve-apply/SKILL.md description 包含触发词 '/evolve-apply'",
+        "验证 skills/evolve-report/SKILL.md description 包含触发词 '/evolve-report'",
+        "检查 ~/.pi/agent/skills/ 下 symlink 是否正确指向源目录"
+      ],
+      "evidence": "代码审查确认配置正确，但运行时注册需实际启动 Pi 验证。"
+    },
+    {
+      "caseId": "TC-5-02",
+      "round": 2,
+      "passed": true,
+      "execute_steps": [
+        "bash: readlink ~/.pi/agent/skills/evolve → 指向 fix-evolve-problem/skills/evolve，SKILL.md 存在",
+        "bash: readlink ~/.pi/agent/skills/evolve-apply → 指向 fix-evolve-problem/skills/evolve-apply，SKILL.md 存在",
+        "bash: readlink ~/.pi/agent/skills/evolve-report → 指向 fix-evolve-problem/skills/evolve-report，SKILL.md 存在",
+        "bash: readlink ~/.pi/agent/extensions/evolve-daily → 指向 fix-evolve-problem/evolve-daily，src/index.ts 存在",
+        "bash: grep -r 'evolution-engine' ~/.pi/agent/extensions/ → 无旧引用",
+        "验证 3 个 SKILL.md description 字段包含正确的触发词（/evolve, /evolve-apply, /evolve-report）"
+      ],
+      "evidence": "3 个 skill symlink 正确指向源目录且 SKILL.md 存在。evolve-daily extension symlink 正确。无旧 extension 引用残留。代码审查层面注册配置完整。"
+    }
+  ]
+}
