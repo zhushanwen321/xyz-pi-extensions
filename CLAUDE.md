@@ -405,8 +405,13 @@ SKIP_LINT=1 git commit -m "..."
 
 规则源文件：`taste-lint/base.mjs` + `taste-lint/rules/`
 
-## 安装新扩展
+## 安装指南
 
+本项目的扩展和 skills 分两种类型：
+
+### Extension（插件）
+
+提供 tools、commands、events，注册到 Pi 扩展系统。安装到 extensions 目录：
 ```bash
 # 全局安装
 ln -s /path/to/xyz-pi-extensions/<name> ~/.pi/agent/extensions/<name>
@@ -414,3 +419,28 @@ ln -s /path/to/xyz-pi-extensions/<name> ~/.pi/agent/extensions/<name>
 # 项目级安装
 ln -s /path/to/xyz-pi-extensions/<name> .pi/extensions/<name>
 ```
+
+### Skill（技能）
+
+纯 Markdown prompt 文件，通过 `/skill-name` 命令触发。需要同时安装到两个目录以兼容 Pi 和 Claude Code：
+
+```bash
+# Pi 的 skills 目录（APP_NAME=pi）
+ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.pi/agent/skills/<name>
+
+# Claude Code 的 skills 目录
+ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
+```
+
+### 当前扩展清单
+
+| 名称 | 类型 | 说明 |
+|------|------|------|
+| `goal/` | extension | 持久化目标驱动循环，7 态状态机 |
+| `todo/` | extension | 轻量三态任务清单 |
+| `subagent/` | extension | 任务委派与并行执行 |
+| `context-engineering/` | extension | 渐进式上下文压缩 |
+| `evolve-daily/` | extension | 每日自动数据收集（session_start hook） |
+| `skills/evolve/` | skill | 分析使用数据生成进化建议 |
+| `skills/evolve-apply/` | skill | 应用/跳过/回滚进化建议 |
+| `skills/evolve-report/` | skill | 查看报告和统计数据 |
