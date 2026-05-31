@@ -1,6 +1,6 @@
 ---
 verdict: "pass"
-must_fix: 1
+must_fix: 0
 reviewed_files:
   - goal/src/state.ts
   - goal/src/constants.ts
