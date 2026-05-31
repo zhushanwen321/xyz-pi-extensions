@@ -49,7 +49,8 @@
     "workflow/**/*.ts",
     "infinite-context/**/*.ts",
     "context-engineering/**/*.ts",
-    "unified-hooks/**/*.ts"
+    "unified-hooks/**/*.ts",
+    "skill-state/**/*.ts"
   ],
   "exclude": [
     "node_modules",
