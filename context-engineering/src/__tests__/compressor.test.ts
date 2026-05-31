@@ -69,6 +69,10 @@ function makeUser(text: string, ageMs: number = 0): UserMessage {
   return { role: "user", content: text, timestamp: Date.now() - ageMs };
 }
 
+function makeCompactionSummary(summary: string, ageMs: number = 0) {
+  return { role: "compactionSummary" as const, summary, tokensBefore: 0, timestamp: Date.now() - ageMs };
+}
+
 function makeBashExecution(output: string, ageMs: number = 0): BashExecutionMessage {
   return {
     role: "bashExecution",
@@ -371,20 +375,22 @@ describe("Microcompact (AC-1)", () => {
       { ...makeAssistant([], undefined, 65 * MINUTE), content: [{ type: "text" as const, text: "done" }] },
     ];
 
-    const { messages: result, stats } = processMicrocompact(pairedMessages, mcConfig, now, null);
+    const store = createRecallStore();
+    const { messages: result, stats } = processMicrocompact(pairedMessages, mcConfig, store, now, null);
 
     expect(stats.triggered).toBe(true);
     expect(stats.cleared).toBe(3); // 8 - 5 keepRecent = 3
 
-    // 前 3 个 toolResult (index 2, 4, 6) 被清理
+    // 前 3 个 toolResult (index 2, 4, 6) 被清理，包含 recall ID
     const tr1 = result[2] as ToolResultMessage;
-    expect(getToolResultText(tr1)).toBe("[Old tool result content cleared]");
+    expect(getToolResultText(tr1)).toContain("[Old tool result expired");
+    expect(getToolResultText(tr1)).toContain("ID: ctx-");
 
     const tr2 = result[4] as ToolResultMessage;
-    expect(getToolResultText(tr2)).toBe("[Old tool result content cleared]");
+    expect(getToolResultText(tr2)).toContain("[Old tool result expired");
 
     const tr3 = result[6] as ToolResultMessage;
-    expect(getToolResultText(tr3)).toBe("[Old tool result content cleared]");
+    expect(getToolResultText(tr3)).toContain("[Old tool result expired");
 
     // 后 5 个保留原文 (index 8, 10, 12, 14, 16)
     const tr4 = result[8] as ToolResultMessage;
@@ -441,7 +447,8 @@ describe("Microcompact (AC-1)", () => {
       { ...makeAssistant([], undefined, 65 * MINUTE), content: [{ type: "text" as const, text: "done" }] },
     ];
 
-    const { messages: result, stats } = processMicrocompact(messages, mcConfig, now, null);
+    const store = createRecallStore();
+    const { messages: result, stats } = processMicrocompact(messages, mcConfig, store, now, null);
 
     expect(stats.triggered).toBe(true);
     expect(stats.cleared).toBe(0); // 只有 1 个 compactable，keepRecent=5，不清理
@@ -524,7 +531,7 @@ describe("Compact Boundary (AC-4, AC-7)", () => {
       makeUser("t1", 110 * MINUTE),       // 3
       makeToolResult("old-2", 109 * MINUTE, "c2"), // 4 - 边界前，非 compactable 位置
       // compactionSummary 边界
-      makeUser("compactionSummary: summary of prior work", 100 * MINUTE), // 5 - boundary
+      makeCompactionSummary("summary of prior work", 100 * MINUTE), // 5 - boundary
       makeAssistant([tc("c3"), tc("c4"), tc("c5"), tc("c6")], undefined, 80 * MINUTE), // 6
       makeToolResult("fresh-1", 79 * MINUTE, "c3"), // 7 - 边界后
       makeToolResult("fresh-2", 78 * MINUTE, "c4"), // 8 - 边界后
@@ -536,7 +543,8 @@ describe("Compact Boundary (AC-4, AC-7)", () => {
     const boundary = findCompactBoundary(messages);
     expect(boundary).toBe(5);
 
-    const { messages: result, stats } = processMicrocompact(messages, mcConfig, now, boundary);
+    const store = createRecallStore();
+    const { messages: result, stats } = processMicrocompact(messages, mcConfig, store, now, boundary);
 
     // MC 应触发（最后一个 assistant 65min 前 > 60min）
     expect(stats.triggered).toBe(true);
@@ -548,7 +556,7 @@ describe("Compact Boundary (AC-4, AC-7)", () => {
     // 边界后有 4 个 compactable (7,8,9,10)，keepRecent=1 → 清理 3 个
     expect(stats.cleared).toBe(3);
     const cleared = result[7] as ToolResultMessage;
-    expect(getToolResultText(cleared)).toBe("[Old tool result content cleared]");
+    expect(getToolResultText(cleared)).toContain("[Old tool result expired");
 
     // 最近 1 个保留
     const kept = result[10] as ToolResultMessage;
@@ -649,7 +657,7 @@ describe("L1 Protected Turn (AC-5)", () => {
       makeUser("t0", 30 * MINUTE),          // 0
       makeAssistant([tc("c1")], undefined, 30 * MINUTE), // 1
       makeToolResult("pre-compact", 29 * MINUTE, "c1"), // 2 - 边界前
-      makeUser("compactionSummary: summary", 20 * MINUTE), // 3 - boundary
+      makeCompactionSummary("summary", 20 * MINUTE), // 3 - boundary
       makeUser("t1", 15 * MINUTE),          // 4
       makeAssistant([tc("c2")], undefined, 15 * MINUTE), // 5
       makeToolResult("post-compact", 14 * MINUTE, "c2"), // 6 - 边界后

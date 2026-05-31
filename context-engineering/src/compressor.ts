@@ -81,11 +81,19 @@ export interface BashExecutionMessage {
   excludeFromContext?: boolean;
 }
 
+export interface CompactionSummaryMessage {
+  role: "compactionSummary";
+  summary: string;
+  tokensBefore: number;
+  timestamp: number;
+}
+
 export type AgentMessage =
   | UserMessage
   | AssistantMessage
   | ToolResultMessage
-  | BashExecutionMessage;
+  | BashExecutionMessage
+  | CompactionSummaryMessage;
 
 export interface ContextUsage {
   tokens: number | null;
@@ -309,12 +317,7 @@ export function validateToolPairing(messages: AgentMessage[]): boolean {
 export function findCompactBoundary(messages: AgentMessage[]): number | null {
   let lastIdx: number | null = null;
   for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    if (
-      msg.role === "user" &&
-      typeof msg.content === "string" &&
-      msg.content.includes("compactionSummary")
-    ) {
+    if (messages[i].role === "compactionSummary") {
       lastIdx = i;
     }
   }
@@ -326,6 +329,7 @@ export function findCompactBoundary(messages: AgentMessage[]): number | null {
 export function processMicrocompact(
   messages: AgentMessage[],
   config: McConfig,
+  store: RecallStore,
   now: number,
   compactBoundaryIdx: number | null,
 ): { messages: AgentMessage[]; stats: McStats } {
@@ -371,9 +375,11 @@ export function processMicrocompact(
   const result = [...messages];
   for (const idx of toClear) {
     const msg = result[idx] as ToolResultMessage;
+    const originalText = getToolResultText(msg);
+    const id = store.store(originalText, "mc-cleared");
     result[idx] = {
       ...msg,
-      content: [{ type: "text" as const, text: "[Old tool result content cleared]" }],
+      content: [{ type: "text" as const, text: `[Old tool result expired. ID: ${id}. Use recall_context(${id}) to retrieve the original content.]` }],
     };
   }
 
@@ -409,7 +415,7 @@ export function processBudget(
     for (let j = groupStart; j < i; j++) {
       const msg = messages[j];
       if (msg.role !== "toolResult") continue;
-      if (compactBoundaryIdx != null && j <= compactBoundaryIdx) continue;
+      if (compactBoundaryIdx != null && j < compactBoundaryIdx) continue;
 
       // frozen 的用 replacement 替换
       if (ffState.isFrozen(msg.toolCallId)) {
@@ -444,9 +450,11 @@ export function processBudget(
         content: [{ type: "text" as const, text: replacement }],
       } as ToolResultMessage;
       totalFreshChars -= maxEntry.chars;
-      totalFreshChars += replacement.length;
       freshEntries.splice(freshEntries.indexOf(maxEntry), 1);
       persisted++;
+      // Guard: if replacement would not reduce total size, stop to avoid over-persisting small results
+      if (replacement.length >= maxEntry.chars) break;
+      totalFreshChars += replacement.length;
     }
 
     groupStart = i;
@@ -476,18 +484,30 @@ function estimateMessageChars(msg: AgentMessage): number {
       }, 0);
     }
     case "toolResult": {
-      return msg.content
-        .filter((c): c is TextContent => c.type === "text")
-        .reduce((s, c) => s + c.text.length, 0);
+      return msg.content.reduce((s, c) => {
+        if (c.type === "text") return s + c.text.length;
+        if (c.type === "image") return s + c.data.length;
+        return s;
+      }, 0);
     }
     case "bashExecution": {
       return msg.output.length;
     }
+    default:
+      return 0;
   }
 }
 
 function isToolResultExpired(msg: ToolResultMessage): boolean {
   return getToolResultText(msg).includes("[Tool result expired");
+}
+
+function isAlreadyProcessed(msg: ToolResultMessage): boolean {
+  const text = getToolResultText(msg);
+  return text.startsWith("[Tool result expired") ||
+         text.startsWith("[Old tool result") ||
+         text.startsWith("[Condensed") ||
+         text.startsWith("[Persisted output");
 }
 
 // ── L0: 基础过期/截断/思考清理 ──
@@ -534,7 +554,7 @@ export function processL0(
       const turnProtected = isInProtectedTurn(i, turnBoundaries, config.protectRecentTurns);
       const recentProtected = keepRecentProtected.has(i);
 
-      if (expired && !turnProtected && !recentProtected) {
+      if (expired && !turnProtected && !recentProtected && !isAlreadyProcessed(msg)) {
         const originalText = getToolResultText(msg);
         const id = store.store(originalText, "l0-expired");
         const expiredText = expireToolResult(originalText, id);
@@ -597,7 +617,7 @@ export function processL1(
     const msg = messages[i];
 
     if (msg.role === "toolResult") {
-      if (isToolResultExpired(msg)) {
+      if (isToolResultExpired(msg) || isAlreadyProcessed(msg)) {
         result.push(msg);
         continue;
       }
@@ -680,6 +700,7 @@ export function processL2(
     if (
       msg.role === "toolResult" &&
       !isToolResultExpired(msg) &&
+      !isAlreadyProcessed(msg) &&
       !isInProtectedTurn(i, turnBoundaries, config.protectRecentTurns)
     ) {
       const originalText = getToolResultText(msg);
@@ -732,7 +753,7 @@ export function compressContext(
 
   // MC (Microcompact)
   if (config.mc.enabled) {
-    const mc = processMicrocompact(current, config.mc, now, compactBoundaryIdx);
+    const mc = processMicrocompact(current, config.mc, store, now, compactBoundaryIdx);
     current = mc.messages;
     stats.mcTriggered = mc.stats.triggered;
     stats.mcCleared = mc.stats.cleared;
