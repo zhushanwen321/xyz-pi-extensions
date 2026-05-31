@@ -146,8 +146,9 @@ describe("compressor", () => {
     expect(bash.output).toContain(`Total: ${longOutput.length} chars`);
 
     // 首尾内容保留
-    const headChars = Math.floor(DEFAULT_CONFIG.l0.bashTruncateChars * 0.4);
-    expect(bash.output).toContain("x".repeat(headChars));
+    // Tail retention: last bashTruncateChars chars preserved
+    const tailChars = DEFAULT_CONFIG.l0.bashTruncateChars;
+    expect(bash.output).toContain("x".repeat(tailChars));
 
     expect(store.size()).toBe(1);
   });

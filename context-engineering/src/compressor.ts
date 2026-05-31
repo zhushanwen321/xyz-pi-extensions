@@ -185,11 +185,11 @@ export function truncateBashOutput(
   id: string,
 ): string {
   if (output.length <= maxChars) return output;
-  const headChars = Math.floor(maxChars / 2);
-  const tailChars = Math.floor(maxChars / 2);
+  // Tail retention: bash output is tail-heavy (errors, final results).
+  // Mirrors Pi's truncateTail in bash-executor.ts.
+  const tailChars = maxChars;
   return (
-    output.slice(0, headChars) +
-    `\n\n... [truncated. ID: ${id}. Use recall_context(${id}) to retrieve full output. Total: ${output.length} chars]\n\n` +
+    `... [truncated. ID: ${id}. Use recall_context(${id}) to retrieve full output. Total: ${output.length} chars]\n\n` +
     output.slice(-tailChars)
   );
 }
@@ -208,13 +208,13 @@ const MAX_CONDENSE_RATIO = 0.4;
 const MS_PER_MINUTE = 60_000;
 
 function fallbackTruncate(content: string): string {
+  // Head retention: for non-code content (JSON, YAML, logs),
+  // the beginning usually contains structure/headers.
+  // Mirrors Pi's truncateHead for read tool output.
   const budget = Math.floor(content.length * FALLBACK_KEEP_RATIO);
-  const headChars = Math.floor(budget / 2);
-  const tailChars = Math.floor(budget / 2);
   return (
-    content.slice(0, headChars) +
-    "\n[... truncated for space]\n" +
-    content.slice(-tailChars)
+    content.slice(0, budget) +
+    "\n[... truncated for space]"
   );
 }
 
