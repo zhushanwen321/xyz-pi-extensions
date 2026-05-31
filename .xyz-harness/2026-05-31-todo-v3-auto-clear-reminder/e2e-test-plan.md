@@ -2,57 +2,73 @@
 verdict: pass
 ---
 
-# E2E Test Plan — Todo Extension v3 升级
+# E2E Test Plan — todo-v3-auto-clear-reminder
 
 ## Test Scenarios
 
-### Scenario 1: 自动清空功能
+### TS-1: 自动清空（FR-1）
 
-**AC 覆盖:** AC-1
+**场景 1.1: 基本自动清空**
+1. 添加 3 个 todo
+2. 依次标记为 completed
+3. 发送 2 条用户消息（不触发 todo 工具）
+4. 第 3 条用户消息时，检查 todo 列表是否自动清空
+5. 验证 agent 收到 auto-clear 消息
 
-| Test Case | Steps | Expected Result |
-|-----------|-------|-----------------|
-| TC-1-01: 全部完成后自动清空 | 1. 添加 3 个 todo<br>2. 完成所有 todo<br>3. 发送 2 条用户消息<br>4. 检查 todo 列表 | 列表为空，状态栏无显示 |
-| TC-1-02: 新增 todo 重置计数 | 1. 添加 3 个 todo<br>2. 完成所有 todo<br>3. 发送 1 条用户消息<br>4. 添加新 todo<br>5. 发送 2 条用户消息 | 新 todo 仍在列表中 |
-| TC-1-03: clear action 重置计数 | 1. 添加 3 个 todo<br>2. 完成所有 todo<br>3. 发送 1 条用户消息<br>4. 执行 clear<br>5. 添加新 todo<br>6. 发送 2 条用户消息 | 新 todo 仍在列表中 |
+**场景 1.2: 自动清空前添加新 todo**
+1. 添加 3 个 todo 并全部完成
+2. 在自动清空前（1 轮后）添加新 todo
+3. 验证列表不会被清空（allCompletedAtCount 已重置）
 
-### Scenario 2: Todo Reminder
+**场景 1.3: 手动 clear 重置**
+1. 添加 3 个 todo 并全部完成
+2. 手动执行 clear action
+3. 验证 allCompletedAtCount 已重置
 
-**AC 覆盖:** AC-2
+### TS-2: Todo Reminder（FR-2）
 
-| Test Case | Steps | Expected Result |
-|-----------|-------|-----------------|
-| TC-2-01: 10 轮未调用触发提醒 | 1. 添加 2 个 todo<br>2. 不调用 todo 工具，发送 10 条用户消息 | agent 收到提醒消息（display: false） |
-| TC-2-02: 调用后重置计数 | 1. 添加 2 个 todo<br>2. 发送 5 条用户消息<br>3. 调用 todo list<br>4. 发送 10 条用户消息 | 不触发提醒（计数已重置） |
-| TC-2-03: 提醒间隔 10 轮 | 1. 触发一次提醒<br>2. 立即调用 todo list<br>3. 发送 5 条用户消息 | 不触发第二次提醒（间隔不足） |
+**场景 2.1: 基本提醒**
+1. 添加 2 个 todo（不完成）
+2. 连续发送 10 条用户消息（不调用 todo 工具）
+3. 验证第 10 条消息后 agent 收到 todo-reminder 消息
 
-### Scenario 3: Verification Nudge
+**场景 2.2: 提醒间隔**
+1. 触发第一次提醒后
+2. 再发送 9 条用户消息
+3. 验证未触发提醒（间隔未到 10 轮）
+4. 发送第 10 条消息，验证再次提醒
 
-**AC 覆盖:** AC-3
+**场景 2.3: 调用 todo 后重置计数**
+1. 在第 8 轮调用 todo list
+2. 继续发送消息
+3. 验证从第 8 轮重新计数 10 轮后才提醒
 
-| Test Case | Steps | Expected Result |
-|-----------|-------|-----------------|
-| TC-3-01: 3+ 任务无验证触发提醒 | 1. 添加 3 个 todo（无"验证"关键词）<br>2. 完成所有 todo<br>3. 检查 before_agent_start 返回 | 返回 verification-nudge 消息 |
-| TC-3-02: 有验证任务不触发 | 1. 添加 3 个 todo（包含"验证测试"）<br>2. 完成所有 todo<br>3. 检查 before_agent_start 返回 | 不返回 verification-nudge |
-| TC-3-03: 少于 3 个不触发 | 1. 添加 2 个 todo<br>2. 完成所有 todo<br>3. 检查 before_agent_start 返回 | 不返回 verification-nudge |
+### TS-3: Verification Nudge（FR-3）
 
-### Scenario 4: 提醒优先级
+**场景 3.1: 触发验证提醒**
+1. 添加 3 个不含"验证"/"verif"关键词的 todo
+2. 全部标记为 completed
+3. 验证 agent 收到 verification-nudge 消息
 
-**AC 覆盖:** AC-1, AC-2, AC-3
+**场景 3.2: 有关键词不触发**
+1. 添加 4 个 todo，其中 1 个包含"验证结果"或"verify"
+2. 全部标记为 completed
+3. 验证不触发 verification nudge
 
-| Test Case | Steps | Expected Result |
-|-----------|-------|-----------------|
-| TC-4-01: 自动清空优先于提醒 | 1. 添加 3 个 todo<br>2. 完成所有 todo<br>3. 发送 12 条用户消息（10 轮触发 reminder 条件） | 触发自动清空，不触发 reminder |
-| TC-4-02: Verification 优先于清空 | 1. 添加 3 个 todo（无验证）<br>2. 完成所有 todo<br>3. 发送 2 条用户消息 | 触发 verification-nudge，第 3 轮触发清空 |
+**场景 3.3: 少于 3 个不触发**
+1. 添加 2 个 todo 并全部完成
+2. 验证不触发 verification nudge
 
----
+### TS-4: Session 恢复
+
+**场景 4.1: Session 恢复后状态重置**
+1. 添加 todo 后重启 Pi
+2. 验证 todo 列表从 entries 恢复
+3. 验证提醒追踪状态（userMessageCount 等）重置为初始值
 
 ## Test Environment
 
-- **运行环境:** Pi 交互模式
-- **测试文件:** `todo/src/index.ts`
-- **依赖:** Pi Extension API, typebox
-- **验证方式:** 
-  - TypeScript 编译检查（`npx tsc --noEmit`）
-  - 手动交互验证（启动 Pi 后执行测试用例）
-  - 检查 TUI 状态栏和 widget 显示
+- 启动 Pi（交互模式）
+- 手动执行 todo 操作 + 发送用户消息
+- 观察状态栏和 widget 变化
+- 检查 agent 行为是否受注入消息影响

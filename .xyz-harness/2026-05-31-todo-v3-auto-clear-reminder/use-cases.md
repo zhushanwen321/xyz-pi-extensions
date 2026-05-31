@@ -2,110 +2,48 @@
 verdict: pass
 ---
 
-# Use Cases — Todo Extension v3 升级
+# Use Cases — todo-v3-auto-clear-reminder
 
-## UC-1: 自动清空已完成的 Todo
+## UC-1: 自动清空已完成任务列表
 
-**Actor:** Agent（AI 助手）
-**Preconditions:** 
-- Todo 列表非空
-- 所有 todo 状态为 `completed`
+| 字段 | 值 |
+|------|---|
+| Actor | Todo Extension（自动化） |
+| Preconditions | 用户有 N 个 todo，全部标记为 completed |
+| Main Flow | 1. Agent 完成最后一个 todo（update → completed）<br>2. Extension 记录 allCompletedAtCount = current userMessageCount<br>3. 用户发送第 1 条消息（agent_start 递增 userMessageCount）<br>4. before_agent_start 检查：差值 = 1 < 2，不触发<br>5. 用户发送第 2 条消息<br>6. before_agent_start 检查：差值 = 2 ≥ 2，触发自动清空<br>7. Extension 清空 todos、重置 nextId、注入 todo-auto-clear 消息 |
+| Alternative Paths | 3a. 用户在 2 轮内添加新 todo → allCompletedAtCount 重置为 null，自动清空取消 |
+| Postconditions | todo 列表为空，agent 收到自动清空通知 |
+| Module Boundaries | executeTodoAction（设置 allCompletedAtCount） → before_agent_start handler（检查并清空） |
+| Spec AC Ref | FR-1 |
 
-**Main Flow:**
-1. Agent 完成所有任务，将所有 todo 状态更新为 `completed`
-2. 用户发送下一条消息，触发 `agent_start` 事件，`userMessageCount++`
-3. 用户发送第二条消息，触发 `agent_start` 事件，`userMessageCount++`
-4. 用户发送第三条消息，触发 `before_agent_start` 事件
-5. 系统检测到 `allCompletedAtCount !== null && userMessageCount - allCompletedAtCount >= 2`
-6. 系统清空 todo 列表，重置 `allCompletedAtCount = null`
-7. 系统注入 `todo-auto-clear` 消息（`display: false`）
-8. Agent 收到消息，知道列表已清空
+## UC-2: 长时间未更新 Todo 提醒
 
-**Alternative Paths:**
-- **UC-1a: 用户在清空前添加新 todo**
-  1. 在步骤 2-4 之间，用户调用 `todo add` 添加新任务
-  2. 系统重置 `allCompletedAtCount = null`
-  3. 自动清空不再触发
+| 字段 | 值 |
+|------|---|
+| Actor | Todo Extension（自动化） |
+| Preconditions | 用户有未完成的 todo 列表 |
+| Main Flow | 1. 用户在对话中操作 10 轮，未调用 todo 工具<br>2. before_agent_start 检查：userMessageCount - lastTodoCallCount ≥ 10<br>3. Extension 注入 todo-reminder 消息（display: false）<br>4. Agent 收到提醒，可能主动更新 todo |
+| Alternative Paths | 2a. 距上次提醒不足 10 轮 → 不触发（防止频繁提醒）<br>2b. todo 列表为空 → 不触发<br>2c. 已全部完成（allCompletedAtCount !== null）→ 不触发（等待自动清空） |
+| Postconditions | Agent 收到 todo-reminder 消息，lastReminderCount 更新 |
+| Module Boundaries | executeTodoAction（更新 lastTodoCallCount） → before_agent_start handler（检查并注入） |
+| Spec AC Ref | FR-2 |
 
-**Postconditions:**
-- Todo 列表为空
-- 状态栏无显示
-- Widget 无显示
+## UC-3: 验证步骤提醒
 
-**Module Boundaries:** todo extension（状态管理 + before_agent_start 事件）
+| 字段 | 值 |
+|------|---|
+| Actor | Todo Extension（自动化） |
+| Preconditions | 用户完成 3+ 个 todo，且无验证步骤 |
+| Main Flow | 1. Agent 完成第 3 个 todo（或更多），全部标记 completed<br>2. before_agent_start 检查：todos.length ≥ 3 且无 /verif\|验证/ 匹配<br>3. Extension 注入 todo-verification-nudge 消息（display: false）<br>4. Agent 收到提醒，可能添加验证任务 |
+| Alternative Paths | 2a. todo 文本包含"验证"或"verif" → 不触发<br>2b. todo 数量 < 3 → 不触发 |
+| Postconditions | Agent 收到 verification nudge 消息 |
+| Module Boundaries | executeTodoAction（设置 allCompletedAtCount） → before_agent_start handler（检查并注入） |
+| Spec AC Ref | FR-3 |
 
----
+## Coverage Mapping
 
-## UC-2: Todo Reminder 提醒
-
-**Actor:** Agent（AI 助手）
-**Preconditions:**
-- Todo 列表非空
-- 距离上次调用 todo 工具已过 10 轮用户消息
-- 距离上次提醒已过 10 轮用户消息
-- 自动清空未触发（`allCompletedAtCount === null`）
-
-**Main Flow:**
-1. Agent 处理用户任务，但未调用 todo 工具
-2. 用户连续发送 10 条消息，每次触发 `agent_start` 事件
-3. 用户发送第 11 条消息，触发 `before_agent_start` 事件
-4. 系统检测到 `userMessageCount - lastTodoCallCount >= 10 && userMessageCount - lastReminderCount >= 10`
-5. 系统更新 `lastReminderCount = userMessageCount`
-6. 系统注入 `todo-reminder` 消息（`display: false`）
-7. Agent 收到消息，决定是否调用 todo 工具更新进度
-
-**Alternative Paths:**
-- **UC-2a: Agent 调用 todo 工具**
-  1. 在步骤 1-3 之间，Agent 调用 `todo list/add/update`
-  2. 系统更新 `lastTodoCallCount = userMessageCount`
-  3. 提醒不再触发
-
-**Postconditions:**
-- Todo 列表未变
-- `lastReminderCount` 已更新
-
-**Module Boundaries:** todo extension（状态管理 + before_agent_start 事件）
-
----
-
-## UC-3: Verification Nudge 验证提醒
-
-**Actor:** Agent（AI 助手）
-**Preconditions:**
-- 所有 todo 状态为 `completed`
-- Todo 数量 >= 3
-- 没有包含 "verif" 或 "验证" 关键词的任务
-
-**Main Flow:**
-1. Agent 完成所有任务，将所有 todo 状态更新为 `completed`
-2. 用户发送下一条消息，触发 `before_agent_start` 事件
-3. 系统检测到 `allCompletedAtCount !== null && todos.length >= 3 && !todos.some(t => /verif|验证/i.test(t.text))`
-4. 系统更新 `lastReminderCount = userMessageCount`
-5. 系统注入 `todo-verification-nudge` 消息（`display: false`）
-6. Agent 收到消息，添加验证任务或直接总结
-
-**Alternative Paths:**
-- **UC-3a: 有验证任务**
-  1. Agent 在创建 todo 时包含"验证"关键词的任务
-  2. 步骤 3 检查不通过，不注入消息
-
-- **UC-3b: 少于 3 个任务**
-  1. Agent 只创建了 2 个 todo
-  2. 步骤 3 检查不通过，不注入消息
-
-**Postconditions:**
-- Todo 列表未变
-- Agent 可能添加验证任务
-
-**Module Boundaries:** todo extension（before_agent_start 事件）
-
----
-
-## Spec AC 覆盖映射
-
-| Use Case | Spec AC | 覆盖说明 |
-|----------|---------|----------|
-| UC-1 | AC-1 自动清空 | 完整覆盖触发条件、边界情况 |
-| UC-2 | AC-2 Todo Reminder | 完整覆盖触发条件、重置逻辑 |
-| UC-3 | AC-3 Verification Nudge | 完整覆盖触发条件、优先级 |
-| — | AC-4 Prompt 更新 | 无业务流程，静态配置 |
+| UC | Spec AC | Covered |
+|----|---------|---------|
+| UC-1 | FR-1 自动清空 | ✅ |
+| UC-2 | FR-2 Todo Reminder | ✅ |
+| UC-3 | FR-3 Verification Nudge | ✅ |
