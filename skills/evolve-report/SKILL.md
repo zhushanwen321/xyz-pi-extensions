@@ -1,10 +1,6 @@
 ---
 name: evolve-report
-description: >-
-  View evolution daily reports and usage statistics. Shows session data,
-  tool usage, token consumption, and trend analysis.
-  Trigger: "/evolve-report", "evolve-report", "查看报告", "进化报告",
-  "/evolve-stats", "evolve-stats".
+description: "View evolution daily reports and usage statistics. Shows session data, tool usage, token consumption, and trend analysis. Trigger: /evolve-report, evolve-report, 查看报告, 进化报告, /evolve-stats, evolve-stats."
 ---
 
 # Evolve-Report — Report & Statistics Viewer
