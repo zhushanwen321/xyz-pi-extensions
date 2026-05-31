@@ -223,7 +223,7 @@ pi.on("agent_start", async (_event, _ctx) => {
 // v3: 自动清空与提醒检查
 pi.on("before_agent_start", async (_event, ctx) => {
     // 1. 自动清空：全部完成后经过 2 轮用户消息
-    if (allCompletedAtCount !== null && userMessageCount - allCompletedAtCount >= 2) {
+    if (allCompletedAtCount !== null && userMessageCount - allCompletedAtCount > 2) {
         const count = todos.length;
         todos = [];
         nextId = 1;

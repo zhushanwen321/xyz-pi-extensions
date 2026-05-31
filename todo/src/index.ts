@@ -203,6 +203,12 @@ function refreshDisplay(ctx: ExtensionContext): void {
 let todos: Todo[] = [];
 let nextId = 1;
 
+// v3: 用户消息轮数与提醒追踪
+let userMessageCount: number = 0;
+let allCompletedAtCount: number | null = null;
+let lastTodoCallCount: number = 0;
+let lastReminderCount: number = 0;
+
 /** 构建 _render 描述符 */
 function buildRender(todoList: Todo[]): TodoDetails["_render"] {
 	const completed = todoList.filter((t) => t.status === "completed").length;
@@ -221,6 +227,9 @@ function buildRender(todoList: Todo[]): TodoDetails["_render"] {
 
 function executeTodoAction(params: { action: string; text?: string; id?: number; texts?: string[]; ids?: number[]; status?: string }, ctx: ExtensionContext) {
 	let resultText = "";
+
+	// v3: 追踪 todo 工具调用轮数
+	lastTodoCallCount = userMessageCount;
 
 	switch (params.action) {
 		case "list": {
@@ -272,6 +281,8 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 			}
 			const endId = nextId - 1;
 			resultText = `\u5df2\u6dfb\u52a0 ${trimmed.length} \u9879 todo (#${startId}-#${endId})`;
+			// v3: 新增 todo 表示未全部完成
+			allCompletedAtCount = null;
 			break;
 		}
 
@@ -371,6 +382,14 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 			if (isLastCompletion) {
 				resultText += "\n\n\u6240\u6709 todo \u5df2\u5b8c\u6210\u3002\u8bf7\u603b\u7ed3\u5de5\u4f5c\u6210\u679c\u3002";
 			}
+
+			// v3: 检查是否所有 todo 已完成
+			const allCompleted = todos.every((t) => t.status === "completed");
+			if (allCompleted && todos.length > 0) {
+				allCompletedAtCount = userMessageCount;
+			} else {
+				allCompletedAtCount = null;
+			}
 			break;
 		}
 
@@ -419,6 +438,8 @@ function executeTodoAction(params: { action: string; text?: string; id?: number;
 			todos = [];
 			nextId = 1;
 			resultText = count > 0 ? `\u5df2\u6e05\u7a7a ${count} \u9879 todo` : "\u6682\u65e0 todo\uff0c\u65e0\u9700\u6e05\u7a7a";
+			// v3: 手动清空后重置
+			allCompletedAtCount = null;
 			break;
 		}
 
@@ -534,6 +555,12 @@ export default function (pi: ExtensionAPI) {
 		todos = [];
 		nextId = 1;
 
+		// v3: 重置提醒追踪状态
+		userMessageCount = 0;
+		allCompletedAtCount = null;
+		lastTodoCallCount = 0;
+		lastReminderCount = 0;
+
 		const entries = ctx.sessionManager.getEntries();
 		let latestIdx = -1;
 
@@ -576,6 +603,65 @@ export default function (pi: ExtensionAPI) {
 		refreshDisplay(ctx);
 	});
 
+	// v3: 追踪用户消息轮数
+	pi.on("agent_start", async (_event, _ctx) => {
+		userMessageCount++;
+	});
+
+	// v3: 自动清空与提醒检查
+	pi.on("before_agent_start", async (_event, ctx) => {
+		// 1. 自动清空：全部完成后经过 2 轮用户消息
+		if (allCompletedAtCount !== null && userMessageCount - allCompletedAtCount > 2) {
+			const count = todos.length;
+			todos = [];
+			nextId = 1;
+			allCompletedAtCount = null;
+			refreshDisplay(ctx);
+			return {
+				message: {
+					customType: "todo-auto-clear",
+					content: `所有 ${count} 个 todo 已完成，列表已自动清空。`,
+					display: false,
+				},
+			};
+		}
+
+		// 2. Verification Nudge：完成 3+ 任务且无验证步骤
+		if (
+			allCompletedAtCount !== null &&
+			todos.length >= 3 &&
+			!todos.some((t) => /verif|验证/i.test(t.text))
+		) {
+			lastReminderCount = userMessageCount;
+			return {
+				message: {
+					customType: "todo-verification-nudge",
+					content: "你刚完成了 3+ 个任务但没有验证步骤。建议在总结前添加验证任务。",
+					display: false,
+				},
+			};
+		}
+
+		// 3. Todo Reminder：10 轮未调用 todo 工具
+		if (
+			todos.length > 0 &&
+			allCompletedAtCount === null &&
+			userMessageCount - lastTodoCallCount >= 10 &&
+			userMessageCount - lastReminderCount >= 10
+		) {
+			lastReminderCount = userMessageCount;
+			return {
+				message: {
+					customType: "todo-reminder",
+					content: "Todo 工具最近没有被使用。如果你在处理任务，建议使用它来跟踪进度。",
+					display: false,
+				},
+			};
+		}
+
+		return undefined;
+	});
+
 	pi.registerTool({
 		name: "todo",
 		label: "Todo",
@@ -589,12 +675,14 @@ export default function (pi: ExtensionAPI) {
 			"\n- clear\uff1a\u6e05\u7a7a\u6240\u6709 todo \u5e76\u91cd\u7f6e ID",
 		promptSnippet: "\u8f7b\u91cf\u7ea7\u4efb\u52a1\u6e05\u5355\u3002\u591a\u6b65\u9aa4\u5de5\u4f5c\u65f6\u8ffd\u8e2a\u8fdb\u5ea6\uff0c\u4e0d\u5fc5\u7b49 /goal \u6a21\u5f0f",
 		promptGuidelines: [
-			"[\u4f7f\u7528\u573a\u666f] \u591a\u6b65\u9aa4\u4efb\u52a1\u3001\u9700\u8981\u8ffd\u8e2a\u8fdb\u5ea6\u3001\u4e34\u65f6\u8bb0\u5f55\u5f85\u529e\u65f6\u4f7f\u7528 todo",
-			"[\u4e0d\u9002\u7528] \u5355\u6b65\u64cd\u4f5c\u3001\u5df2\u7ecf\u5728\u7528 goal_manager \u65f6\u4e0d\u9700\u8981 todo",
-			"[\u65f6\u673a] \u5f00\u59cb\u5de5\u4f5c\u524d\u4e3b\u52a8\u521b\u5efa\uff0c\u5b8c\u6210\u65f6\u53ca\u65f6\u6807\u8bb0",
-			"[\u7c92\u5ea6] \u4e00\u4e2a todo \u5bf9\u5e94\u4e00\u4e2a\u53ef\u9a8c\u8bc1\u7684\u5de5\u4f5c\u5355\u5143\uff0c3-8 \u9879\u4e3a\u5b9c\uff0c\u4e0d\u8981\u8fc7\u5ea6\u62c6\u5206",
-			"[\u72b6\u6001] in_progress \u975e\u5f3a\u5236\uff0cpending \u2192 completed \u76f4\u63a5\u8df3\u8f6c\u5408\u6cd5",
-			"[\u5b9a\u4f4d] \u4e0d\u8981\u7528 todo \u66ff\u4ee3 goal_manager\uff0c\u4e24\u8005\u5b9a\u4f4d\u4e0d\u540c",
+			"[使用场景] 多步骤任务（3+步）、需要追踪进度、用户明确要求时使用 todo",
+			"[不适用] 单步操作、任务简单可直接完成、已在用 goal_manager 时",
+			"[时机] 开始工作前创建，完成时立即标记",
+			"[状态] 同一时间最多一个 in_progress，完成后立即标记 completed",
+			"[粒度] 一个 todo 对应一个可验证的工作单元，3-8 项为宜",
+			"[完成] 所有 todo 完成后会自动清空（保留 2 轮后）",
+			"[验证] 完成 3+ 任务时建议添加验证步骤",
+			"[定位] 不要用 todo 替代 goal_manager，两者定位不同",
 		],
 		parameters: TodoParams,
 
