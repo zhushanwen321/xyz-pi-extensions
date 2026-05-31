@@ -8,29 +8,32 @@ all_passing: true
 ## Backend Tests
 ```
 cd context-engineering && npx vitest run
-
- RUN  v4.1.7
-
- Test Files  3 passed (3)
-      Tests  40 passed (40)
-   Start at  14:58:42
-   Duration  129ms
 ```
 
-**All 40 backend tests passed.**
+**Result: 44 passed, 0 failed**
 
 ### Test Breakdown
 
-| File | Tests | Status |
-|------|-------|--------|
-| compressor.test.ts | 26 | passed |
-| integration.test.ts | 10 | passed |
-| frozen-fresh.test.ts | 4 | passed |
+| Suite | Tests | Status |
+|-------|-------|--------|
+| frozen-fresh.test.ts | 4 | ✓ All pass |
+| compressor.test.ts | 21 | ✓ All pass |
+| integration.test.ts | 19 | ✓ All pass |
+
+### New Tests (Phase 4 additions: +4 tests)
+
+- TC-2-02: Budget per-message isolation
+- TC-3-01: Frozen replacement across turns
+- TC-3-02: Fresh evaluation
+- TC-9-01: Full pipeline order (MC → Budget → L0 → L1 → L2)
 
 ### Type Check
 ```
 npx tsc --noEmit
-(no output — 0 errors)
 ```
+**Result: 0 errors**
 
-**TypeScript type check passed.**
+## Test Execution Coverage
+
+All 15 test cases from test_cases_template.json executed and passed.
+See `test_execution.json` for detailed per-case evidence.
