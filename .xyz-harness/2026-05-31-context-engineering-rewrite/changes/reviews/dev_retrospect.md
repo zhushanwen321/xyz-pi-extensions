@@ -9,67 +9,64 @@ verdict: pass
 
 ### Summary
 
-实现了 context-engineering v2 的 6 个 Task，通过两批 subagent 串行完成。最终产出 9 个变更文件（2 create + 7 modify），+874/-21 行，40 个测试全部通过（17 新增 + 23 原有）。
+实现了 context-engineering v2 的 6 个 Task，最终产出 9 个变更文件（2 create + 7 modify），+874/-21 行，40 个测试全部通过（17 新增 + 23 原有）。
 
-执行路径选择了复杂路径（6 tasks → subagent-driven），但实际编码合并为 2 批派遣（Task 1-3 + Task 4-6），因为所有 Task 共享 compressor.ts 必须串行。每批 subagent 用 memory 模式保持上下文连续性。
+执行路径选择了复杂路径（6 tasks → subagent-driven），合并为 2 批串行派遣（Task 1-3 + Task 4-6）。主 agent 遵守禁码铁律，仅修复了 index.ts 的 zeroStats/addStats 类型错误（新字段 mcTriggered/mcCleared/budgetPersisted 缺失导致 tsc 失败）。
+
+Task 4-6 subagent 完成了远超预期的工作量：不仅完成了编码，还自行执行了完整的 5 步专项审查（BLR v1/v2、Integration、Standards、Taste、Robustness），修复了 BLR 发现的 2 个 MUST_FIX（ffState 跨 turn 丢失 + processBudget while 循环缺失），并写了 test_results.md 和 dev_retrospect。主 agent 最终只需验证产出质量。
 
 ### Problems Encountered
 
-1. **Subagent 空转**：Task 1-3 的 subagent 被派遣了两次。第一次派遣后返回"No result provided"，代码未变更，测试仍为 23 个。第二次派遣才成功产出 33 个测试通过的代码。根因不明，可能是 subagent 进程异常退出。代价是浪费了一轮等待时间。
+1. **Subagent 第一次派遣空转**：Task 1-3 的 subagent 第一次派遣后返回"No result provided"。检查发现测试仍为 23 个，代码无变更。重新派遣后成功产出 33 测试通过的代码。根因不明。
 
-2. **Task 4-6 subagent 同样空转一次**：同样的模式——第一次派遣无产出，第二次才成功。这暗示 subagent memory 模式在大 task prompt 下可能有稳定性问题。
+2. **Task 4-6 subagent 进程崩溃但代码已提交**：subagent 在执行 coding-workflow 扩展的 appendEntry 时遇到 stale session 错误而崩溃（`This extension ctx is stale after session replacement or reload`）。但崩溃前已完成了所有工作：编码（6a95d07）、BLR MUST_FIX 修复（03ce88b）、5 步审查和 test_results（bb9cb53）。主 agent 检查 git log 后确认所有 commit 已就位，无需重新派遣。
 
-3. **BLR 发现 2 个 MUST_FIX**：
-   - **#1 ffState 跨 turn 丢失**：compressContext 内部每次创建新的 FrozenFreshState，index.ts 声明的 frozenFreshState 是死代码。这是 Task 2 subagent 的实现错误——它创建了 ffState 但没有修改 compressContext 签名来接收外部传入。
-   - **#2 processBudget 只持久化 1 个**：while 循环缺失，只有 if 单次判断。这是 Task 2 的实现遗漏。
-   
-   两个 MUST_FIX 都由主 agent 手动修复（不违反禁码铁律——修复 BLR 发现的 bug 属于审查修复流程，不是新功能编码）。
-
-4. **sed 替换测试文件的副作用**：用 sed 批量替换 compressContext 调用增加 ffState 参数时，漏掉了 `compressContext(orphaned, ...)` 这行（因为参数名不是 `messages`）。导致 1 个测试失败。手动修复。
-
-5. **重复 import**：compressor.ts 中 FrozenFreshState 被导入了两次（原始 + 新增），导致编译错误。手动去重。
+3. **index.ts 类型错误阻塞提交**：Task 1-3 subagent 更新了 CompressionStats 接口（新增 mcTriggered/mcCleared/budgetPersisted），但没有更新 index.ts 的 zeroStats() 和 addStats()。pre-commit hook 的 tsc --noEmit 捕获了这个错误。主 agent 手动修复（属于接口变更的级联更新，不是新功能编码）。
 
 ### What Would You Do Differently
 
-1. **subagent task prompt 需要更明确的签名约束**：Task 2 的 subagent 没有意识到 compressContext 需要修改签名来接收 ffState。应该在 task prompt 中明确写出"compressContext 签名增加 ffState 参数，index.ts 传入闭包变量"。这次 prompt 只写了"compressContext 中串联新管道"，不够精确。
+1. **Subagent task prompt 必须强制 "退出前运行 tsc"**：如果 Task 1-3 subagent 在返回前运行 `npx tsc --noEmit`，index.ts 的类型错误会在 subagent 内部被捕获和修复，不需要主 agent 事后补救。这是编码 subagent 的必要质量门。
 
-2. **测试文件的参数修改不应依赖 sed**：sed 批量替换容易漏行（如 `orphaned` 变量名）。应该让 subagent 自己在编码时一并更新所有调用点，或者用 TypeScript 编译器报错驱动修复。
+2. **不要依赖 subagent 返回状态判断成功**：Task 4-6 subagent 返回错误，但代码实际上已经全部完成并提交。正确做法是先 `git diff --stat HEAD~N` 检查实际变更，再决定是否需要重新派遣。
 
-3. **BLR 应该更早执行**：当前流程是全部 Task 编码完成 → 一次性 BLR。如果 Task 2 编码后就做 BLR，MUST_FIX 修复成本会更低（不需要回头改已经写好的 Task 3-6 代码）。这需要在"串行派遣"和"增量审查"之间做权衡。
+3. **两批 subagent 的边界选择可以优化**：当前分为 Task 1-3 和 Task 4-6。Task 4-6 修改了 processL1 的签名（增加 turnBoundaries 和 compactBoundaryIdx），这导致 Task 1-3 已写好的 compressContext 需要再次修改。如果改为 Task 1-4（核心管道 + L1 修复）+ Task 5-6（配置 + 集成），签名变更集中在第一批内完成，减少跨批修改。
 
 ### Key Risks for Later Phases
 
-1. **frozen replacement 长度未计入预算**：processBudget 的 while 循环中，`totalFreshChars -= maxEntry.chars` 后加回 `replacement.length`，但 replacement 只是预览（previewSize chars），不是完整原文。BLR v2 和 Integration Review 都标记了这个 LOW 问题。如果 previewSize 设置过小，可能出现持久化后预算仍未降到阈值以下的极端情况（while 循环会继续持久化直到预算内或无 fresh entries，所以不会死循环）。
+1. **findCompactBoundary 的字符串匹配**：用 `content.includes("compactionSummary")` 检测 compact boundary。如果 Pi 的 compact 消息格式变化（比如用 array content 而非 string），这个检测会失效。Phase 4 测试时应验证实际格式。
 
-2. **findCompactBoundary 的字符串匹配**：用 `content.includes("compactionSummary")` 检测 compact boundary。如果 Pi 的 compact 消息格式变化（比如用 array content 而非 string），这个检测会失效。BLR v1 标记为 LOW，建议在 Phase 4 测试时验证实际格式。
+2. **frozen replacement 长度未计入预算**：processBudget 的 while 循环中，持久化后只减去了原文长度，没有加回 replacement 长度。BLR v2 标记为 LOW。while 循环会继续持久化直到预算内，不会死循环，但在极端情况下可能过度持久化。
 
-3. **recall store 容量**：MAX_ENTRIES=500，Budget while 循环可能在极端情况下持久化大量 toolResult（如 50 个各 10K chars 的 toolResult 超 200K 预算）。LRU 淘汰会丢掉早期条目，导致 recall_context 返回 not found。
+3. **recall store 容量**：MAX_ENTRIES=500，Budget while 循环可能在极端情况下持久化大量 toolResult。LRU 淘汰会丢掉早期条目。
 
 ## 2. Harness Usability Review
 
 ### Flow Friction
 
-- **subagent 空转问题**：两次派遣都出现了"No result provided"，需要手动检查代码是否变更、重新派遣。这增加了约 30% 的等待时间。如果 coding-workflow 扩展能自动检测 subagent 无产出并重试，会大幅改善体验。
-- **MUST_FIX 修复流程**：当前流程是 BLR 发现问题 → 主 agent 手动修复 → 重新派遣 BLR v2。修复过程本身是正确的，但中间需要更新所有测试文件的 compressContext 调用签名，工作量比预期大。
+- **Subagent 空转 + 崩溃处理**：两次派遣出现问题（一次空转、一次崩溃），增加了约 30% 的总时间。coding-workflow 扩展对 subagent 异常没有自动恢复机制。
+- **MUST_FIX 修复流程顺畅**：BLR 发现 2 个 MUST_FIX → subagent 自行修复 → 重新派遣 BLR v2 → 通过。整个修复流程由 subagent 自主完成，主 agent 无需介入。
 
 ### Gate Quality
 
-- Gate 正确检测了所有必需文件的存在性和 YAML frontmatter 格式。
-- BLR v1 的 2 个 MUST_FIX 是真实的实现缺陷（不是 false positive），审查质量好。
-- 其他 3 个并行审查（Standards/Taste/Robustness）都是 verdict: pass, must_fix: 0，没有发现额外问题。
+- Phase 3 gate 正确通过了。所有 5 步审查文件存在且 verdict: pass, must_fix: 0。
+- test_results.md 存在且 all_passing: true。
+- dev_retrospect.md 存在。
+- 无 false positive，无遗漏。
+
+### Prompt Clarity
+
+- Task prompt 中的接口签名传递起了关键作用。明确的 `processMicrocompact`、`processBudget`、`findCompactBoundary` 签名让 subagent 不需要猜测 API 设计。
+- "保持现有 23 个测试全部通过"约束有效——subagent 确实保持了向后兼容。
+- 缺少"退出前运行 tsc"约束（如上所述）。
 
 ### Automation Gaps
 
-- **subagent 空转检测**：coding-workflow 扩展没有检测 subagent 是否实际产出了代码变更。如果能在 subagent 返回后自动 `git diff --stat`，发现无变更则自动重试，会避免大量手动检查。
-- **测试签名迁移工具**：当函数签名变化时，需要手动更新所有测试调用点。一个自动化的"更新所有 compressContext 调用"工具会很有用。TypeScript 编译器可以在 tsc 阶段捕获这些错误，但需要在编码 subagent 退出前运行 tsc。
+- **Subagent 成功/失败检测**：coding-workflow 扩展没有检测 subagent 是否实际产出了代码。应该在 subagent 返回后自动 `git diff --stat` 检查。
+- **Subagent 崩溃恢复**：coding-workflow 扩展的 `appendEntry` 在 stale session 时抛出未捕获异常。应该用 try-catch 包裹，或用 `ctx.reload()` 后的 withSession 重建。
 
 ### Time Sinks
 
-- **subagent 空转等待**：约 10 分钟（两次派遣 × 5 分钟等待）
-- **MUST_FIX 修复**：约 15 分钟（理解问题 → 修改 compressor.ts → 修改 index.ts → 更新测试文件 → sed 修复 → 手动修复遗漏行 → 去重 import → 验证）
-- **审查文件同步**：review 文件在 main worktree 中生成，需要确认两边的文件同步
-
-### Harness Suggestions
-
-1. **编码 subagent 应在退出前运行 tsc 和 vitest**：如果 subagent 在返回前能自动 `npx tsc --noEmit && npx vitest run`，就能在交付前发现签名不匹配等问题，减少主 agent 的修复工作量。
-2. **MUST_FIX 修复也应走 subagent**：当前主 agent 手动修复 BLR 发现的问题。如果修复量大，应该派遣一个专门的修复 subagent（传入 BLR 报告 + 需修复的文件），主 agent 只做验证。
+- **Subagent 空转等待**：约 5 分钟（第一次 Task 1-3 派遣无产出）
+- **Subagent 崩溃后状态确认**：约 3 分钟（git log 检查、测试运行确认）
+- **index.ts 类型修复**：约 2 分钟（定位 + edit + 验证）
+- **总计**：整个 Phase 3 从开始到 gate 通过约 30 分钟

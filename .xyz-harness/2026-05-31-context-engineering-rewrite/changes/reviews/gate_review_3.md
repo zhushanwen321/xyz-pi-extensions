@@ -9,16 +9,17 @@ must_fix: 0
 
 | 检查项 | 结果 | 说明 |
 |--------|------|------|
-| test_results.md 包含实际命令输出 | PASS | 包含 vitest `RUN v4.1.7` 格式的实际输出（Test Files 3 passed (3), Tests 40 passed (40), Duration 129ms）和 `npx tsc --noEmit` 的输出。缺少逐个 test case 的详细输出，但 vitest summary 格式真实 |
-| 测试文件真实存在 | PASS | 声称的 3 个测试文件在 `feat/context-engineering-v2` 分支上均存在：`compressor.test.ts`（737行/17 it）、`integration.test.ts`（19 it）、`frozen-fresh.test.ts`（44行/4 it）。总计 40 个 `it(` 与 test_results.md 声称的 40 tests 完全吻合。注意：当前工作目录在 `main` 分支，这些文件不在 main 上，但 test_results.md 是在 `feat/context-engineering-v2` 分支的上下文中生成的（commit bb9cb53 同时存在于 main 和 feat/context-engineering-v2） |
-| git diff 有实际业务代码变更 | PASS | `feat/context-engineering-v2` 分支有大量业务代码变更：`compressor.ts`（+198行）、`frozen-fresh.ts`（新增 36行）、`config.ts`、`index.ts`、`recall-store.ts` 等，共 7 文件 +559/-7 行变更 |
-| 代码非 TODO/stub 实现 | PASS | 在 compressor.ts 和 frozen-fresh.ts 中搜索 TODO/FIXME/stub/not implemented，结果为 0 匹配。frozen-fresh.ts 有完整的 FrozenFreshState 接口和实现（Map-based 存储、5 个方法） |
-| test breakdown 数字准确性 | WARN | test_results.md 声称 `integration.test.ts: 10 tests`，实际 `grep -c "it(" integration.test.ts` = 19。但总数 40 匹配（26+10+4 声称 vs 17+19+4 实际 = 40）。分项数字不准确但不构成伪造——总数正确，vitest summary 输出格式真实 |
+| test_results.md 包含实际命令输出 | PASS | 包含 vitest raw output（v4.1.7, 3 files, 40 tests, 129ms）和 tsc --noEmit 输出，格式与真实 vitest 输出一致 |
+| 测试文件真实存在 | PASS | 3 个测试文件均在 `feat/context-engineering-v2` 分支的 `context-engineering/src/__tests__/` 下存在：compressor.test.ts, integration.test.ts, frozen-fresh.test.ts |
+| git diff 包含实际业务代码 | PASS | 3 个 feature commit（`882bdd9` + `6a95d07` + `03ce88b`），合计 559+315+38 行变更，涉及 compressor.ts, frozen-fresh.ts, config.ts, commands.ts, index.ts 等业务文件，非 .xyz-harness 目录 |
+| 实现不是 stub/TODO | PASS | 抽查 compressor.ts（完整的 L0/L1/L2 压缩引擎，含类型定义、工具配对校验、预算管理）、frozen-fresh.ts（FrozenFreshState 工厂函数，含 Map 操作），均为真实实现 |
+| 测试可复现 | PASS | 在 feat-context-engineering-v2 worktree 实际运行 `npx vitest run`，得到 3 passed (3), 40 passed (40), Duration 119ms，与 test_results.md 声明一致。`npx tsc --noEmit` 也通过（exit 0） |
+| 时间线合理性 | PASS | 代码最后提交 14:53:46 → 测试运行 14:58:42 → test_results.md 提交 14:58:56，间隔合理（先写代码→跑测试→记录结果） |
 
-### MUST_FIX 问题
+### 注意事项（非 MUST_FIX）
 
-无。
+1. **per-file breakdown 不准确**：test_results.md 表格声称 compressor.test.ts 26 个、integration.test.ts 10 个、frozen-fresh.test.ts 4 个。实际 verbose 运行显示为 17+19+4=40。总数 40 正确，但分文件数字有误。vitest 默认输出不含 per-file breakdown，该表格为手工添加的总结。这是文档准确性问题，不是伪造——核心声明（40 tests all passing）经实际运行验证为真。
 
 ### 总结
 
-test_results.md 的核心声明（40 tests passed, 3 test files, type check passed）可验证为真实。3 个测试文件在 `feat/context-engineering-v2` 分支上均存在，`it(` 总数精确匹配 40。vitest 输出格式（v4.1.7, Duration 129ms）真实可信。代码实现无 TODO/stub。分项 breakdown 数字（integration 10 vs 实际 19）有偏差但总数正确，判定为记录疏忽而非伪造。deliverable 可信度判定为 pass。
+deliverable 关键声明可信。test_results.md 的 vitest raw output 格式、版本号、测试数量、运行时间均与实际运行结果一致。3 个测试文件存在且包含有意义的断言。代码变更横跨 3 个 commit 共 ~900 行，涉及 compressor、frozen-fresh、config、commands 等核心模块，无 stub/TODO 占位。时间线逻辑合理。唯一瑕疵是 per-file breakdown 表格数字与实际不符，但总数正确且已通过实际运行验证。verdict: pass。
