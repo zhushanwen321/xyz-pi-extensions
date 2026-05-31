@@ -9,6 +9,13 @@ if [[ "${SKIP_LINT:-}" == "1" ]]; then
   exit 0
 fi
 
+# rebase 中跳过 hook，完成后手动跑一次全量验证
+if git rev-parse --git-path rebase-merge >/dev/null 2>&1 && \
+   [ -d "$(git rev-parse --git-path rebase-merge)" ]; then
+    echo "[pre-commit] rebase 进行中，跳过 hook"
+    exit 0
+fi
+
 C_RED='\033[0;31m'
 C_GREEN='\033[0;32m'
 C_RESET='\033[0m'
