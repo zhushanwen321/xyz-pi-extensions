@@ -3,7 +3,6 @@
 import type { L0Config, L1Config, L2Config, McConfig, BudgetConfig, ContextEngineeringConfig } from "./config.ts";
 import type { RecallStore } from "./recall-store.ts";
 import type { FrozenFreshState } from "./frozen-fresh.ts";
-import { createFrozenFreshState } from "./frozen-fresh.ts";
 
 // chars→tokens 估算因子和 fallback 上下文窗口大小
 const CHARS_PER_TOKEN = 4;
@@ -427,9 +426,8 @@ export function processBudget(
       totalFreshChars += text.length;
     }
 
-    // 超过预算 → 持久化最大的 fresh toolResult
-    if (totalFreshChars > config.maxToolResultCharsPerMessage && freshEntries.length > 0) {
-      // 找最大
+    // 超过预算 → 循环持久化最大 fresh toolResult 直到在预算内
+    while (totalFreshChars > config.maxToolResultCharsPerMessage && freshEntries.length > 0) {
       let maxEntry = freshEntries[0];
       for (const entry of freshEntries) {
         if (entry.chars > maxEntry.chars) maxEntry = entry;
@@ -445,6 +443,9 @@ export function processBudget(
         ...msg,
         content: [{ type: "text" as const, text: replacement }],
       } as ToolResultMessage;
+      totalFreshChars -= maxEntry.chars;
+      totalFreshChars += replacement.length;
+      freshEntries.splice(freshEntries.indexOf(maxEntry), 1);
       persisted++;
     }
 
@@ -704,6 +705,7 @@ export function compressContext(
   config: ContextEngineeringConfig,
   store: RecallStore,
   contextUsage: ContextUsage | undefined,
+  ffState: FrozenFreshState,
 ): { messages: AgentMessage[]; stats: CompressionStats } {
   const zeroStats: CompressionStats = {
     l0Expired: 0,
@@ -736,9 +738,8 @@ export function compressContext(
     stats.mcCleared = mc.stats.cleared;
   }
 
-  // Budget
+  // Budget (ffState 由调用方持有，保证跨 turn 冻结状态持久化)
   if (config.budget.enabled) {
-    const ffState = createFrozenFreshState();
     const budget = processBudget(current, config.budget, store, ffState, compactBoundaryIdx);
     current = budget.messages;
     stats.budgetPersisted = budget.stats.persisted;

@@ -17,6 +17,7 @@ import {
   type ContextUsage,
 } from "../compressor";
 import { createRecallStore } from "../recall-store";
+import { createFrozenFreshState } from "../frozen-fresh";
 import { DEFAULT_CONFIG } from "../config";
 
 // ── Test helpers ──
@@ -92,6 +93,7 @@ function tc(id: string, name: string = "read"): ToolCall {
 // ── Tests ──
 
 describe("compressor", () => {
+    const ffState = createFrozenFreshState();
   const MINUTE = 60 * 1000;
 
   it("AC-1: 过期清理 — 过期的 ToolResult 被替换，保护 turn 内的保留", () => {
@@ -111,7 +113,7 @@ describe("compressor", () => {
       makeUser("task 3", 1 * MINUTE),
     ];
 
-    const result = compressContext(messages, config, store, undefined);
+    const result = compressContext(messages, config, store, undefined, ffState);
 
     expect(result.stats.validationFailed).toBe(false);
 
@@ -138,7 +140,7 @@ describe("compressor", () => {
 
     const messages: AgentMessage[] = [makeBashExecution(longOutput)];
 
-    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined);
+    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined, ffState);
 
     expect(result.stats.validationFailed).toBe(false);
     expect(result.stats.l0Truncated).toBe(1);
@@ -164,7 +166,7 @@ describe("compressor", () => {
       makeAssistant([], "deep analysis of the problem...", 6 * MINUTE),
     ];
 
-    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined);
+    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined, ffState);
 
     expect(result.stats.validationFailed).toBe(false);
     expect(result.stats.l0ThinkingCleared).toBe(1);
@@ -230,7 +232,7 @@ describe("compressor", () => {
       makeToolResult(longContent, 0, "c1"),
     ];
 
-    const result = compressContext(messages, config, store, undefined);
+    const result = compressContext(messages, config, store, undefined, ffState);
 
     expect(result.stats.validationFailed).toBe(false);
     expect(result.stats.l1Condensed).toBe(1);
@@ -273,7 +275,7 @@ describe("compressor", () => {
       makeUser("t4", 1 * MINUTE),
     ];
 
-    const result = compressContext(messages, DEFAULT_CONFIG, store, contextUsage);
+    const result = compressContext(messages, DEFAULT_CONFIG, store, contextUsage, ffState);
 
     expect(result.stats.validationFailed).toBe(false);
     expect(result.stats.l2Triggered).toBe(true);
@@ -297,7 +299,7 @@ describe("compressor", () => {
       makeToolResult("big content here", 60 * MINUTE, "c1"),
     ];
 
-    const result = compressContext(messages, config, store, undefined);
+    const result = compressContext(messages, config, store, undefined, ffState);
 
     // 应返回同一引用
     expect(result.messages).toBe(messages);
@@ -314,6 +316,7 @@ describe("compressor", () => {
 // ── Microcompact (AC-1) ──
 
 describe("Microcompact (AC-1)", () => {
+    const ffState = createFrozenFreshState();
   const MINUTE = 60 * 1000;
 
   it("8 个 read toolResult，最后一个 assistant 65 分钟前 → 前 3 个被清理", () => {
@@ -466,7 +469,6 @@ describe("Budget (AC-2, AC-3)", () => {
     const small = "a".repeat(20_000);
     const big = "B".repeat(170_000);
 
-    const { createFrozenFreshState } = await import("../frozen-fresh");
     const ffState = createFrozenFreshState();
 
     const messages: AgentMessage[] = [
@@ -503,6 +505,7 @@ describe("Budget (AC-2, AC-3)", () => {
 // ── Compact Boundary (AC-4, AC-7) ──
 
 describe("Compact Boundary (AC-4, AC-7)", () => {
+    const ffState = createFrozenFreshState();
   const MINUTE = 60 * 1000;
 
   it("compactionSummary 在 index 5，之前的 toolResult 不被 MC 处理", () => {
@@ -566,6 +569,7 @@ describe("Compact Boundary (AC-4, AC-7)", () => {
 // ── L1 Protected Turn (AC-5) ──
 
 describe("L1 Protected Turn (AC-5)", () => {
+    const ffState = createFrozenFreshState();
   const MINUTE = 60 * 1000;
 
   it("12K chars toolResult 在最近 2 轮内 → 不被 condense，原文保留", () => {
@@ -590,7 +594,7 @@ describe("L1 Protected Turn (AC-5)", () => {
       makeUser("followup", 0),
     ];
 
-    const result = compressContext(messages, config, store, undefined);
+    const result = compressContext(messages, config, store, undefined, ffState);
 
     // 应保留原文
     const tr = result.messages[2] as ToolResultMessage;
@@ -623,7 +627,7 @@ describe("L1 Protected Turn (AC-5)", () => {
       makeUser("task3", 1 * MINUTE),
     ];
 
-    const result = compressContext(messages, config, store, undefined);
+    const result = compressContext(messages, config, store, undefined, ffState);
 
     // Turn 1 的 toolResult 应被 condense
     const condensed = result.messages[2] as ToolResultMessage;
@@ -652,7 +656,7 @@ describe("L1 Protected Turn (AC-5)", () => {
       makeUser("t2", 1 * MINUTE),           // 7
     ];
 
-    const result = compressContext(messages, DEFAULT_CONFIG, store, contextUsage);
+    const result = compressContext(messages, DEFAULT_CONFIG, store, contextUsage, ffState);
 
     // 边界前的 toolResult (index 2) 不被 L2 处理
     const preCompact = result.messages[2] as ToolResultMessage;
@@ -674,6 +678,7 @@ describe("L1 Protected Turn (AC-5)", () => {
 // ── L0 keepRecent ──
 
 describe("L0 keepRecent", () => {
+    const ffState = createFrozenFreshState();
   const MINUTE = 60 * 1000;
 
   it("8 个 toolResult 全部超 30 分钟，keepRecent=5，protectRecentTurns=0 → 最新 5 个不过期，前 3 个过期", () => {
@@ -708,7 +713,7 @@ describe("L0 keepRecent", () => {
       makeUser("end", 0),
     ];
 
-    const result = compressContext(messages, config, store, undefined);
+    const result = compressContext(messages, config, store, undefined, ffState);
 
     // 前 3 个应过期
     expect(result.stats.l0Expired).toBe(3);

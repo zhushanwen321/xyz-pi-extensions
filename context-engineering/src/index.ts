@@ -68,7 +68,7 @@ export default function contextEngineeringExtension(pi: ExtensionAPI): void {
       // Both sides define the same shape but TypeScript can't verify across packages.
       // If Pi's message format changes, compressContext will gracefully fail via the catch below.
       const msgs = event.messages as unknown as CompressorMessage[];
-      const result = compressContext(msgs, config, store, ctx.getContextUsage() as unknown as Parameters<typeof compressContext>[3]);
+      const result = compressContext(msgs, config, store, ctx.getContextUsage() as unknown as Parameters<typeof compressContext>[3], frozenFreshState);
       addStats(cumulativeStats, result.stats);
       return { messages: result.messages as unknown as (typeof event.messages)[number][] };
     } catch (err) {

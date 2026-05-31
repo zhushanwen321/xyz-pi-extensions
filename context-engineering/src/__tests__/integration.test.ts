@@ -15,6 +15,7 @@ import {
 } from "../compressor";
 import { createRecallStore } from "../recall-store";
 import { DEFAULT_CONFIG, type ContextEngineeringConfig } from "../config";
+import { createFrozenFreshState } from "../frozen-fresh";
 import { handleContextEngineeringCommand, handleContextStatsCommand } from "../commands";
 
 // ── Helpers ──
@@ -86,7 +87,7 @@ describe("Integration: TC-1 Tool Result 过期清理", () => {
       makeUser("task2", 1 * MINUTE),
     ];
 
-    const result = compressContext(messages, config, store, undefined);
+    const result = compressContext(messages, config, store, undefined, createFrozenFreshState());
     // c0's toolResult at index 2 is in Turn 0 (before user@40min), outside protected 2 turns
     // c1's toolResult at index 5 is in Turn 1, inside protected 2 turns
     const expired = result.messages[2] as ToolResultMessage;
@@ -113,7 +114,7 @@ describe("Integration: TC-1 Tool Result 过期清理", () => {
       makeUser("recent", 1 * MINUTE),
     ];
 
-    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined);
+    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined, createFrozenFreshState());
     const kept = result.messages[2] as ToolResultMessage;
     // protectRecentTurns=2 → turn boundary at user(1min) → toolResult(35min) is in protected turn
     expect(getToolResultText(kept)).toBe("should-be-protected");
@@ -127,7 +128,7 @@ describe("Integration: TC-2 Bash 输出截断", () => {
     const longOutput = "A".repeat(10000);
     const messages: AgentMessage[] = [makeBashExecution(longOutput)];
 
-    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined);
+    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined, createFrozenFreshState());
     expect(result.stats.l0Truncated).toBe(1);
 
     const bash = result.messages[0] as BashExecutionMessage;
@@ -147,7 +148,7 @@ describe("Integration: TC-2 Bash 输出截断", () => {
     const shortOutput = "B".repeat(3000);
     const messages: AgentMessage[] = [makeBashExecution(shortOutput)];
 
-    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined);
+    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined, createFrozenFreshState());
     expect(result.stats.l0Truncated).toBe(0);
 
     const bash = result.messages[0] as BashExecutionMessage;
@@ -162,7 +163,7 @@ describe("Integration: TC-3 Thinking 清理", () => {
       makeAssistant([], "deep analysis content here", 6 * MINUTE),
     ];
 
-    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined);
+    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined, createFrozenFreshState());
     expect(result.stats.l0ThinkingCleared).toBe(1);
 
     const asst = result.messages[0] as AssistantMessage;
@@ -182,7 +183,7 @@ describe("Integration: TC-4 配对校验", () => {
       makeUser("next"),
     ];
 
-    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined);
+    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined, createFrozenFreshState());
     expect(result.stats.validationFailed).toBe(false);
     // toolResult 紧随 toolCall
     expect(result.messages[1].role).toBe("assistant");
@@ -199,7 +200,7 @@ describe("Integration: TC-4 配对校验", () => {
 
     // compressContext 对孤儿消息应安全降级
     const store = createRecallStore();
-    const result = compressContext(orphaned, DEFAULT_CONFIG, store, undefined);
+    const result = compressContext(orphaned, DEFAULT_CONFIG, store, undefined, createFrozenFreshState());
     expect(result.stats.validationFailed).toBe(true);
     // 返回原始消息
     expect(result.messages).toBe(orphaned);
@@ -241,7 +242,7 @@ describe("Integration: TC-7 L1 规则化摘要", () => {
       makeToolResult(longContent, 0, "c1"),
     ];
 
-    const result = compressContext(messages, config, store, undefined);
+    const result = compressContext(messages, config, store, undefined, createFrozenFreshState());
     expect(result.stats.l1Condensed).toBe(1);
 
     const condensed = result.messages[2] as ToolResultMessage;
@@ -271,7 +272,7 @@ describe("Integration: TC-7 L1 规则化摘要", () => {
       makeToolResult(jsonContent, 0, "c1"),
     ];
 
-    const result = compressContext(messages, config, store, undefined);
+    const result = compressContext(messages, config, store, undefined, createFrozenFreshState());
     expect(result.stats.l1Condensed).toBe(1);
 
     const condensed = result.messages[2] as ToolResultMessage;
@@ -301,7 +302,7 @@ describe("Integration: TC-8 L2 紧急压缩", () => {
       makeUser("t4", 1 * MINUTE),
     ];
 
-    const result = compressContext(messages, DEFAULT_CONFIG, store, contextUsage);
+    const result = compressContext(messages, DEFAULT_CONFIG, store, contextUsage, createFrozenFreshState());
     expect(result.stats.l2Triggered).toBe(true);
 
     // Turn 1 toolResult 被强制过期
@@ -323,7 +324,7 @@ describe("Integration: TC-8 L2 紧急压缩", () => {
       makeToolResult("content", 20 * MINUTE, "c1"),
     ];
 
-    const result = compressContext(messages, DEFAULT_CONFIG, store, contextUsage);
+    const result = compressContext(messages, DEFAULT_CONFIG, store, contextUsage, createFrozenFreshState());
     expect(result.stats.l2Triggered).toBe(false);
   });
 });
@@ -365,7 +366,7 @@ describe("Integration: TC-10 配置启停", () => {
       makeAssistant([tc("c1")]),
       makeToolResult("big content", 60 * MINUTE, "c1"),
     ];
-    const result = compressContext(messages, config, store, undefined);
+    const result = compressContext(messages, config, store, undefined, createFrozenFreshState());
     expect(result.messages).toBe(messages);
 
     // 执行 /context-engineering global on
@@ -431,7 +432,7 @@ describe("Integration: TC-11 MC/Budget Commands (AC-8)", () => {
       makeToolResult("content", 0, "c1"),
     ];
 
-    const result = compressContext(messages, config, store, undefined);
+    const result = compressContext(messages, config, store, undefined, createFrozenFreshState());
     expect(result.stats.mcTriggered).toBe(false);
     expect(result.stats.mcCleared).toBe(0);
     expect(result.stats.budgetPersisted).toBe(0);
