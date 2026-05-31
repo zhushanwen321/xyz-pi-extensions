@@ -1,0 +1,190 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "Goal complete 后 2 轮自动清理",
+      "description": "验证 goal 进入 complete 终态后，经过 2 轮 before_agent_start 自动清除 session",
+      "steps": [
+        "/goal test auto-clear --max-turns 10",
+        "AI 创建 task 并完成 (create_tasks → update_tasks → complete_goal)",
+        "验证 status bar 折叠为单行",
+        "发送 2 条无关消息",
+        "验证 widget 和 status 完全消失",
+        "/goal history 显示 complete 记录"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "integration",
+      "title": "Goal budget_limited 后自动清理",
+      "description": "验证 budget_limited 终态也走 2 轮后自动清理流程",
+      "steps": [
+        "/goal test budget-limit --tokens 1000",
+        "AI 工作直到 token 预算耗尽",
+        "验证 goal 进入 budget_limited 状态",
+        "发送 2 条消息后验证 widget 消失"
+      ]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "integration",
+      "title": "Goal cancel 立即清除不等待",
+      "description": "cancel_goal 在 handler 中已调用 clearGoalSession，不需要等待 2 轮",
+      "steps": [
+        "/goal test cancel",
+        "AI 创建 task",
+        "用户输入 /goal clear",
+        "验证 goal 立即清除"
+      ]
+    },
+    {
+      "id": "TC-1-04",
+      "type": "integration",
+      "title": "终态 widget 折叠为单行 status bar",
+      "description": "终态期间 widget 只显示状态 + 预算摘要，不显示 task 列表",
+      "steps": [
+        "/goal test widget-fold",
+        "AI 创建 3 个 task 并全部完成",
+        "验证 widget 折叠为 ◆ Goal ✓ 完成 | 3/3 任务 格式",
+        "验证 task 列表不再渲染"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "Task 停滞 10 turn 后触发提醒",
+      "description": "验证非终态 task 超过 10 turn 未更新时注入 staleness 提醒",
+      "steps": [
+        "/goal test staleness --max-turns 100",
+        "AI 创建 3 个 task",
+        "AI 完成 task #1，不操作 #2 和 #3",
+        "发送 10+ 条消息触发 turn_end",
+        "验证 before_agent_start 注入提醒包含 #2 和 #3"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "integration",
+      "title": "提醒后重置 lastUpdatedTurn",
+      "description": "staleness 提醒触发后，被提醒 task 的 lastUpdatedTurn 应重置为当前 currentTurnIndex",
+      "steps": [
+        "触发 staleness 提醒（TC-2-01 前置）",
+        "验证提醒后 task #2 和 #3 的 lastUpdatedTurn 已重置",
+        "继续发送 9 条消息不应再次触发提醒",
+        "第 10 条消息后再次触发"
+      ]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "integration",
+      "title": "所有 task 终态但 goal 未终结的提醒",
+      "description": "边界情况：所有 task 已完成但 AI 忘记调 complete_goal",
+      "steps": [
+        "/goal test boundary",
+        "AI 创建 2 个 task 并全部标记 completed",
+        "AI 不调用 complete_goal",
+        "验证后续 turn 注入 complete_goal 提醒"
+      ]
+    },
+    {
+      "id": "TC-2-04",
+      "type": "integration",
+      "title": "currentTurnIndex 在 turn_end 递增",
+      "description": "验证 turn_end 事件中 currentTurnIndex 正确递增",
+      "steps": [
+        "/goal test turn-count",
+        "AI 创建 task",
+        "发送 5 条消息",
+        "/goal status 查看 turnCount 和 currentTurnIndex",
+        "验证 currentTurnIndex >= 5"
+      ]
+    },
+    {
+      "id": "TC-2-05",
+      "type": "integration",
+      "title": "update_tasks 更新 lastUpdatedTurn",
+      "description": "task 状态变更时 lastUpdatedTurn 应更新为当前 currentTurnIndex",
+      "steps": [
+        "/goal test update-tracking",
+        "AI 创建 task（lastUpdatedTurn = 0）",
+        "发送 3 条消息（currentTurnIndex 增到 3+）",
+        "AI 调用 update_tasks 将 task 设为 in_progress",
+        "验证 task.lastUpdatedTurn 已更新为当前值"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "add_subtasks 新 action 名正常工作",
+      "description": "验证重命名后的 add_subtasks action 能正常添加 subtask",
+      "steps": [
+        "/goal test subtask-add",
+        "AI 创建 task",
+        "AI 调用 goal_manager add_subtasks (taskId, texts)",
+        "验证 subtask 添加成功"
+      ]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "integration",
+      "title": "update_subtasks / delete_subtasks 新 action 名正常工作",
+      "description": "验证重命名后的 update/delete subtasks action 正常工作",
+      "steps": [
+        "添加 subtask（TC-3-01 前置）",
+        "AI 调用 update_subtasks 更新状态",
+        "验证状态更新成功",
+        "AI 调用 delete_subtasks 删除",
+        "验证删除成功"
+      ]
+    },
+    {
+      "id": "TC-3-03",
+      "type": "integration",
+      "title": "旧格式 subTodos 反序列化兼容",
+      "description": "包含 subTodos 字段的旧 session entry 能正确反序列化为 subtasks",
+      "steps": [
+        "准备包含旧格式 goal-state entry 的 session（subTodos 字段）",
+        "启动 Pi 加载该 session",
+        "验证 goal 状态正确恢复",
+        "验证旧 subTodos 数据映射为 subtasks，lastUpdatedTurn 默认 0"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "integration",
+      "title": "/goal history 显示已完成和已取消的 goal",
+      "description": "验证 /goal history 命令正确显示历史 goal 列表",
+      "steps": [
+        "完成一个 goal（创建 → 完成）",
+        "创建另一个 goal 并取消",
+        "输入 /goal history",
+        "验证显示 2 条记录",
+        "验证每条显示 objective、状态、任务数、用时"
+      ]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "integration",
+      "title": "/goal history 无历史时显示提示",
+      "description": "新 session 无历史 goal 时 /goal history 显示提示信息",
+      "steps": [
+        "启动新 session",
+        "输入 /goal history",
+        "验证显示 '暂无历史 Goal'"
+      ]
+    },
+    {
+      "id": "TC-4-03",
+      "type": "integration",
+      "title": "goal-history entry 不被 clearGoalSession 清理",
+      "description": "自动清理 session 时 goal-history entries 保留",
+      "steps": [
+        "完成一个 goal 并等待自动清理",
+        "验证 widget 消失",
+        "输入 /goal history",
+        "验证历史记录仍然存在"
+      ]
+    }
+  ]
+}
