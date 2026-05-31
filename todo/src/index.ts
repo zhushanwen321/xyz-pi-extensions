@@ -205,7 +205,9 @@ let nextId = 1;
 
 // v3: 用户消息轮数与提醒追踪
 let userMessageCount: number = 0;
+// null 表示未全部完成；设置后保留 AUTO_CLEAR_DELAY_ROUNDS 轮再清空
 let allCompletedAtCount: number | null = null;
+// 均用 number（初始 0），与 userMessageCount 直接做差值比较
 let lastTodoCallCount: number = 0;
 let lastReminderCount: number = 0;
 
@@ -617,56 +619,61 @@ export default function (pi: ExtensionAPI) {
 
 	// v3: 自动清空与提醒检查
 	pi.on("before_agent_start", async (_event, ctx) => {
-		// 1. 自动清空：全部完成后经过 2 轮用户消息
-		if (allCompletedAtCount !== null && userMessageCount - allCompletedAtCount > AUTO_CLEAR_DELAY_ROUNDS) {
-			const count = todos.length;
-			todos = [];
-			nextId = 1;
-			allCompletedAtCount = null;
-			refreshDisplay(ctx);
-			return {
-				message: {
-					customType: "todo-auto-clear",
-					content: `所有 ${count} 个 todo 已完成，列表已自动清空。`,
-					display: false,
-				},
-			};
-		}
+		try {
+			// 1. 自动清空：全部完成后经过 2 轮用户消息
+			if (allCompletedAtCount !== null && userMessageCount - allCompletedAtCount > AUTO_CLEAR_DELAY_ROUNDS) {
+				const count = todos.length;
+				todos = [];
+				nextId = 1;
+				allCompletedAtCount = null;
+				refreshDisplay(ctx);
+				return {
+					message: {
+						customType: "todo-auto-clear",
+						content: `所有 ${count} 个 todo 已完成，列表已自动清空。`,
+						display: false,
+					},
+				};
+			}
 
-		// 2. Verification Nudge：完成 3+ 任务且无验证步骤
-		if (
-			allCompletedAtCount !== null &&
-			todos.length >= VERIFICATION_NUDGE_THRESHOLD &&
-			!todos.some((t) => /verif|验证/i.test(t.text))
-		) {
-			lastReminderCount = userMessageCount;
-			return {
-				message: {
-					customType: "todo-verification-nudge",
-					content: "你刚完成了 3+ 个任务但没有验证步骤。建议在总结前添加验证任务。",
-					display: false,
-				},
-			};
-		}
+			// 2. Verification Nudge：完成 3+ 任务且无验证步骤
+			if (
+				allCompletedAtCount !== null &&
+				todos.length >= VERIFICATION_NUDGE_THRESHOLD &&
+				!todos.some((t) => /verif|验证/i.test(t.text))
+			) {
+				lastReminderCount = userMessageCount;
+				return {
+					message: {
+						customType: "todo-verification-nudge",
+						content: "你刚完成了 3+ 个任务但没有验证步骤。建议在总结前添加验证任务。",
+						display: false,
+					},
+				};
+			}
 
-		// 3. Todo Reminder：10 轮未调用 todo 工具
-		if (
-			todos.length > 0 &&
-			allCompletedAtCount === null &&
-			userMessageCount - lastTodoCallCount >= TODO_REMINDER_INTERVAL &&
-			userMessageCount - lastReminderCount >= TODO_REMINDER_INTERVAL
-		) {
-			lastReminderCount = userMessageCount;
-			return {
-				message: {
-					customType: "todo-reminder",
-					content: "Todo 工具最近没有被使用。如果你在处理任务，建议使用它来跟踪进度。",
-					display: false,
-				},
-			};
-		}
+			// 3. Todo Reminder：10 轮未调用 todo 工具
+			if (
+				todos.length > 0 &&
+				allCompletedAtCount === null &&
+				userMessageCount - lastTodoCallCount >= TODO_REMINDER_INTERVAL &&
+				userMessageCount - lastReminderCount >= TODO_REMINDER_INTERVAL
+			) {
+				lastReminderCount = userMessageCount;
+				return {
+					message: {
+						customType: "todo-reminder",
+						content: "Todo 工具最近没有被使用。如果你在处理任务，建议使用它来跟踪进度。",
+						display: false,
+					},
+				};
+			}
 
-		return undefined;
+			return undefined;
+		} catch {
+			// v3: 提醒/清空非关键路径，异常时静默降级不影响 agent 循环
+			return undefined;
+		}
 	});
 
 	pi.registerTool({
