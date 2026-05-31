@@ -1,6 +1,6 @@
 ---
 ci_passed: true
-ci_configured: false
+ci_configured: true
 commit_sha: c607123641790a2b153f662d7e3b8ac10af56538
 ---
 
