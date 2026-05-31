@@ -62,7 +62,13 @@ export default function contextEngineeringExtension(pi: ExtensionAPI): void {
       const result = compressContext(msgs, config, store, ctx.getContextUsage() as unknown as Parameters<typeof compressContext>[3]);
       addStats(cumulativeStats, result.stats);
       return { messages: result.messages as unknown as (typeof event.messages)[number][] };
-    } catch { return {}; }
+    } catch (err) {
+      // Silently degrade to original messages, but log for debuggability
+      if (process.env.DEBUG_CONTEXT_ENGINEERING) {
+        console.error("[context-engineering] compressContext failed:", err);
+      }
+      return {};
+    }
   });
 
   pi.registerTool({

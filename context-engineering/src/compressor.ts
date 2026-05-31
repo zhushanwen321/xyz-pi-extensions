@@ -185,8 +185,8 @@ export function truncateBashOutput(
   id: string,
 ): string {
   if (output.length <= maxChars) return output;
-  const headChars = Math.floor(maxChars * 0.4);
-  const tailChars = Math.floor(maxChars * 0.4);
+  const headChars = Math.floor(maxChars / 2);
+  const tailChars = Math.floor(maxChars / 2);
   return (
     output.slice(0, headChars) +
     `\n\n... [truncated. ID: ${id}. Use recall_context(${id}) to retrieve full output. Total: ${output.length} chars]\n\n` +
