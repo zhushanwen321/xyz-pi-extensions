@@ -621,7 +621,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (_event, ctx) => {
 		try {
 			// 1. 自动清空：全部完成后经过 2 轮用户消息
-			if (allCompletedAtCount !== null && userMessageCount - allCompletedAtCount > AUTO_CLEAR_DELAY_ROUNDS) {
+			if (allCompletedAtCount !== null && userMessageCount - allCompletedAtCount >= AUTO_CLEAR_DELAY_ROUNDS) {
 				const count = todos.length;
 				todos = [];
 				nextId = 1;
