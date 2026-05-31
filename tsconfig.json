@@ -53,6 +53,7 @@
   "exclude": [
     "node_modules",
     ".superpowers",
-    ".xyz-harness"
+    ".xyz-harness",
+    "**/__tests__"
   ]
 }
