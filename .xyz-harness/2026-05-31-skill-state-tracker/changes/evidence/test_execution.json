@@ -1,0 +1,158 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: handleToolCall 检查 event.toolName==='read' (L243)",
+        "code_review: extractSkillName(path) 提取名称，findNonTerminalByName 去重 (L247-252)",
+        "code_review: persistState + sendUserMessage(loadedSteeringPrompt) 注入 steering (L254-264)",
+        "code_review: 验证完整路径 tool_call → extractSkillName → create item → persist → steer 注入"
+      ],
+      "evidence": "index.ts L230-264, state.ts extractSkillName L64-69"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: extractSkillName 检查 path.endsWith('SKILL.md') (state.ts L65)",
+        "code_review: split('/') 取倒数第二段 → '/path/to/diagnose/SKILL.md' 返回 'diagnose' (L68)",
+        "code_review: '~/.agents/skills/brainstorming/SKILL.md' → segments=['','home','...','brainstorming','SKILL.md'] → 'brainstorming'",
+        "code_review: '/tmp/test/SKILL.md' → segments=['','tmp','test','SKILL.md'] → 'test'",
+        "code_review: MIN_PATH_SEGMENTS=2 保证 segments.length >= 2"
+      ],
+      "evidence": "state.ts L62-69 extractSkillName"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: handleToolCall 调用 findNonTerminalByName(state.items, skillName) (index.ts L249)",
+        "code_review: findNonTerminalByName 检查 item.name === name && !isTerminalStatus(item.status) (L86)",
+        "code_review: 如果 existing 存在，return undefined 跳过创建 (L250)"
+      ],
+      "evidence": "index.ts L249-250, L83-85 findNonTerminalByName"
+    },
+    {
+      "caseId": "TC-2-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: findNonTerminalByName 检查 !isTerminalStatus(item.status) (L85)",
+        "code_review: completed/recorded 是终态 (TERMINAL_STATUSES in state.ts L28)",
+        "code_review: 终态 item 被 findNonTerminalByName 排除，不会被当作 existing",
+        "code_review: 因此终态后重新 read SKILL.md 会创建新 item（新 id）"
+      ],
+      "evidence": "state.ts L28 TERMINAL_STATUSES, index.ts L83-85"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: canTransition('loaded', 'completed') → ALLOWED_TRANSITIONS.get('loaded').has('completed') → true (state.ts L39-43)",
+        "code_review: executeSkillState 调用 canTransition 校验 (index.ts L139)",
+        "code_review: item.status = params.status 赋值 (L145)",
+        "code_review: isTerminalStatus('completed') → true → statusText='（终态）' (L156)"
+      ],
+      "evidence": "state.ts L36-43 ALLOWED_TRANSITIONS, index.ts L139-156"
+    },
+    {
+      "caseId": "TC-3-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: canTransition('loaded', 'error') → true (state.ts L37)",
+        "code_review: item.status = 'error', item.errorCount += 1 (index.ts L145-147)",
+        "code_review: errorCount=1 < ERROR_THRESHOLD(2), 不触发 steering (L148)",
+        "code_review: canTransition('error', 'error') → true (state.ts L38)",
+        "code_review: 第二次 error: errorCount=2 >= 2, 触发 errorForceRecordPrompt (L148-151)"
+      ],
+      "evidence": "state.ts L38 ALLOWED_TRANSITIONS error→error, index.ts L145-151 errorCount 逻辑"
+    },
+    {
+      "caseId": "TC-3-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: canTransition('loaded', 'recorded') → ALLOWED_TRANSITIONS.get('loaded').has('recorded') → false (state.ts L37)",
+        "code_review: executeSkillState 检查 !canTransition → throw Error (index.ts L139-143)",
+        "code_review: 错误消息包含 '非法转换: loaded → recorded'"
+      ],
+      "evidence": "state.ts L37 loaded 只允许 completed/error, index.ts L139-143"
+    },
+    {
+      "caseId": "TC-3-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: 第一次 error: errorCount=1, 1 < ERROR_THRESHOLD(2) → 不触发 (index.ts L147-151)",
+        "code_review: 第二次 error: errorCount=2, 2 >= 2 → sendUserMessage(errorForceRecordPrompt(item)) (L149-151)",
+        "code_review: errorForceRecordPrompt 包含完整指令（读 SKILL.md、分析问题、记录、标记 recorded）(templates.ts L18-27)"
+      ],
+      "evidence": "index.ts L147-151, templates.ts L18-27"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: handleTurnEnd 计算 turnsSinceLoad = currentTurnIndex - item.loadedAtTurn (index.ts L278)",
+        "code_review: turnsSinceRemind = currentTurnIndex - item.lastRemindAtTurn (L279)",
+        "code_review: 条件 turnsSinceLoad >= 10 && turnsSinceRemind >= 10 (L281)",
+        "code_review: item.loadedAtTurn=0, lastRemindAtTurn=-1, currentTurnIndex=9 → 9>=10 false → 无提醒",
+        "code_review: currentTurnIndex=10 → 10>=10 && 10-(-1)=11>=10 → 触发提醒 (L282-285)"
+      ],
+      "evidence": "index.ts L268-291 handleTurnEnd, REMIND_INTERVAL=10 (L22)"
+    },
+    {
+      "caseId": "TC-4-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: 第 10 turn 触发后 item.lastRemindAtTurn=10 (index.ts L285)",
+        "code_review: turn 11-19: turnsSinceRemind = currentTurnIndex - 10 → 1-9, 全部 < 10 → 无提醒",
+        "code_review: turn 20: turnsSinceLoad=20, turnsSinceRemind=10, 20>=10 && 10>=10 → 再次提醒"
+      ],
+      "evidence": "index.ts L278-285 turnsSinceRemind 计算逻辑"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: reconstructState 调用 deserializeState(latestData) (index.ts L97)",
+        "code_review: state.items.filter(item => !isTerminalStatus(item.status)) (L100)",
+        "code_review: completed 是终态 → 被过滤；loaded 不是终态 → 保留",
+        "code_review: handleSessionRestore 赋值 state = reconstructState(ctx) (L308-310)"
+      ],
+      "evidence": "index.ts L88-107 reconstructState, L100 终态过滤"
+    },
+    {
+      "caseId": "TC-6-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: handleBeforeAgentStart 过滤非终态 items (index.ts L295)",
+        "code_review: activeItems.length > 0 → 返回 { message: { customType, content, display:false } } (L297-303)",
+        "code_review: agentStartContextPrompt 生成列表字符串 (templates.ts L29-38)",
+        "code_review: before_agent_start handler 调用 handleBeforeAgentStart(state) (L326)"
+      ],
+      "evidence": "index.ts L293-303, templates.ts L29-38"
+    },
+    {
+      "caseId": "TC-7-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: executeSkillState action==='list' 返回 state.items 的浅拷贝 (index.ts L125-129)",
+        "code_review: formatItemList 输出每个 item 的 id/name/status/errorCount/loadedAtTurn/detail (L161-169)",
+        "code_review: details.items = [...state.items] 包含完整字段"
+      ],
+      "evidence": "index.ts L123-129, L161-169 formatItemList"
+    }
+  ]
+}
