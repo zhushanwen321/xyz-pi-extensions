@@ -209,6 +209,13 @@ let allCompletedAtCount: number | null = null;
 let lastTodoCallCount: number = 0;
 let lastReminderCount: number = 0;
 
+/** v3: 自动清空延迟轮数（全部完成后保留 N 轮用户消息） */
+const AUTO_CLEAR_DELAY_ROUNDS = 2;
+/** v3: Verification Nudge 触发阈值（完成 N 个任务以上时检查） */
+const VERIFICATION_NUDGE_THRESHOLD = 3;
+/** v3: Todo Reminder 触发间隔（N 轮未调用 todo 工具时提醒） */
+const TODO_REMINDER_INTERVAL = 10;
+
 /** 构建 _render 描述符 */
 function buildRender(todoList: Todo[]): TodoDetails["_render"] {
 	const completed = todoList.filter((t) => t.status === "completed").length;
@@ -611,7 +618,7 @@ export default function (pi: ExtensionAPI) {
 	// v3: 自动清空与提醒检查
 	pi.on("before_agent_start", async (_event, ctx) => {
 		// 1. 自动清空：全部完成后经过 2 轮用户消息
-		if (allCompletedAtCount !== null && userMessageCount - allCompletedAtCount > 2) {
+		if (allCompletedAtCount !== null && userMessageCount - allCompletedAtCount > AUTO_CLEAR_DELAY_ROUNDS) {
 			const count = todos.length;
 			todos = [];
 			nextId = 1;
@@ -629,7 +636,7 @@ export default function (pi: ExtensionAPI) {
 		// 2. Verification Nudge：完成 3+ 任务且无验证步骤
 		if (
 			allCompletedAtCount !== null &&
-			todos.length >= 3 &&
+			todos.length >= VERIFICATION_NUDGE_THRESHOLD &&
 			!todos.some((t) => /verif|验证/i.test(t.text))
 		) {
 			lastReminderCount = userMessageCount;
@@ -646,8 +653,8 @@ export default function (pi: ExtensionAPI) {
 		if (
 			todos.length > 0 &&
 			allCompletedAtCount === null &&
-			userMessageCount - lastTodoCallCount >= 10 &&
-			userMessageCount - lastReminderCount >= 10
+			userMessageCount - lastTodoCallCount >= TODO_REMINDER_INTERVAL &&
+			userMessageCount - lastReminderCount >= TODO_REMINDER_INTERVAL
 		) {
 			lastReminderCount = userMessageCount;
 			return {
