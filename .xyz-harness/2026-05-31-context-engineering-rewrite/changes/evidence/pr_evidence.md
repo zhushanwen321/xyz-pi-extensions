@@ -1,5 +1,7 @@
 ---
-pr_created: false
+pr_created: true
+pr_url: https://github.com/zhushanwen321/xyz-pi-extensions/pull/17
+pr_title: "feat(context-engineering): v2 rewrite — Microcompact, Budget, FrozenFresh, Compact Boundary"
 ci_configured: false
 branch: feat/context-engineering-v2
 ---
