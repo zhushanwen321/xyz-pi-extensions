@@ -1,0 +1,141 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "manual",
+      "title": "全部完成后自动清空",
+      "description": "验证所有 todo 完成后保留 2 轮用户消息，第 3 轮自动清空",
+      "steps": [
+        "调用 todo add 添加 3 个任务",
+        "调用 todo update 将所有任务状态改为 completed",
+        "发送 2 条用户消息（不调用 todo 工具）",
+        "发送第 3 条用户消息前检查 todo 列表",
+        "验证列表为空，状态栏无显示"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "manual",
+      "title": "新增 todo 重置自动清空计数",
+      "description": "验证全部完成后新增 todo 会重置自动清空计数器",
+      "steps": [
+        "调用 todo add 添加 3 个任务",
+        "调用 todo update 将所有任务状态改为 completed",
+        "发送 1 条用户消息",
+        "调用 todo add 添加新任务",
+        "发送 2 条用户消息",
+        "验证新任务仍在列表中"
+      ]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "manual",
+      "title": "clear action 重置自动清空计数",
+      "description": "验证执行 clear 后会重置自动清空计数器",
+      "steps": [
+        "调用 todo add 添加 3 个任务",
+        "调用 todo update 将所有任务状态改为 completed",
+        "发送 1 条用户消息",
+        "调用 todo clear",
+        "调用 todo add 添加新任务",
+        "发送 2 条用户消息",
+        "验证新任务仍在列表中"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "manual",
+      "title": "10 轮未调用触发 Todo Reminder",
+      "description": "验证 10 轮对话未调用 todo 工具时会触发提醒",
+      "steps": [
+        "调用 todo add 添加 2 个任务",
+        "连续发送 10 条用户消息（不调用 todo 工具）",
+        "检查 agent 是否收到提醒消息"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "manual",
+      "title": "调用 todo 后重置 Reminder 计数",
+      "description": "验证调用 todo 工具后会重置提醒计数器",
+      "steps": [
+        "调用 todo add 添加 2 个任务",
+        "发送 5 条用户消息",
+        "调用 todo list",
+        "发送 10 条用户消息",
+        "验证不触发提醒"
+      ]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "manual",
+      "title": "Reminder 间隔 10 轮",
+      "description": "验证两次提醒之间至少间隔 10 轮",
+      "steps": [
+        "触发一次 Todo Reminder",
+        "立即调用 todo list",
+        "发送 5 条用户消息",
+        "验证不触发第二次提醒"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "manual",
+      "title": "3+ 任务无验证触发 Verification Nudge",
+      "description": "验证完成 3+ 个无验证任务时会触发验证提醒",
+      "steps": [
+        "调用 todo add 添加 3 个任务（文本不含'验证'）",
+        "调用 todo update 将所有任务状态改为 completed",
+        "检查 before_agent_start 是否返回 verification-nudge 消息"
+      ]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "manual",
+      "title": "有验证任务不触发 Verification Nudge",
+      "description": "验证包含验证任务时不触发验证提醒",
+      "steps": [
+        "调用 todo add 添加 3 个任务（其中一个包含'验证'关键词）",
+        "调用 todo update 将所有任务状态改为 completed",
+        "检查 before_agent_start 不返回 verification-nudge 消息"
+      ]
+    },
+    {
+      "id": "TC-3-03",
+      "type": "manual",
+      "title": "少于 3 个任务不触发 Verification Nudge",
+      "description": "验证少于 3 个任务时不触发验证提醒",
+      "steps": [
+        "调用 todo add 添加 2 个任务",
+        "调用 todo update 将所有任务状态改为 completed",
+        "检查 before_agent_start 不返回 verification-nudge 消息"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "manual",
+      "title": "自动清空优先于 Todo Reminder",
+      "description": "验证自动清空条件满足时优先执行清空，不触发提醒",
+      "steps": [
+        "调用 todo add 添加 3 个任务",
+        "调用 todo update 将所有任务状态改为 completed",
+        "发送 12 条用户消息",
+        "验证触发自动清空，不触发 Todo Reminder"
+      ]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "manual",
+      "title": "Verification Nudge 优先于自动清空",
+      "description": "验证全部完成时优先检查 Verification Nudge",
+      "steps": [
+        "调用 todo add 添加 3 个任务（无验证关键词）",
+        "调用 todo update 将所有任务状态改为 completed",
+        "发送 2 条用户消息",
+        "验证触发 verification-nudge",
+        "发送第 3 条用户消息",
+        "验证触发自动清空"
+      ]
+    }
+  ]
+}

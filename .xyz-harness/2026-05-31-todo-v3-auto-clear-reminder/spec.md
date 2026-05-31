@@ -1,3 +1,11 @@
+---
+title: Todo Extension v3 升级规格
+date: 2026-05-31
+status: draft
+author: pi-agent
+verdict: pass
+---
+
 # Todo Extension v3 升级规格
 
 ## 概述
