@@ -8,8 +8,11 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 // Re-export hook modules for easy access
-export * from "./hooks/edit-whitespace-autofix";
-export * from "./hooks/tool-error-handler";
+export { setupEditStaleContentGuard } from "./hooks/edit-stale-content-guard";
+export { setupToolErrorHandler } from "./hooks/tool-error-handler";
+
+import { setupEditStaleContentGuard } from "./hooks/edit-stale-content-guard";
+import { setupToolErrorHandler } from "./hooks/tool-error-handler";
 
 /**
  * Extension factory - registers all unified hooks
@@ -20,7 +23,7 @@ export default function unifiedHooksExtension(pi: ExtensionAPI): void {
 
   // Register each hook
   const hookModules = [
-    { name: "edit-whitespace-autofix", setup: setupEditWhitespaceAutofix },
+    { name: "edit-stale-content-guard", setup: setupEditStaleContentGuard },
     { name: "tool-error-handler", setup: setupToolErrorHandler },
   ];
 
