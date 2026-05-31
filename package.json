@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "eslint \"goal/src/**/*.ts\" \"todo/src/**/*.ts\" \"subagent/src/**/*.ts\" \"workflow/src/**/*.ts\"",
+    "lint": "npx eslint \"goal/src/**/*.ts\" \"todo/src/**/*.ts\" \"subagent/src/**/*.ts\" \"workflow/src/**/*.ts\" \"context-engineering/src/**/*.ts\"",
     "lint:fix": "eslint --fix \"goal/src/**/*.ts\" \"todo/src/**/*.ts\" \"subagent/src/**/*.ts\" \"workflow/src/**/*.ts\"",
     "typecheck": "tsc --noEmit"
   },

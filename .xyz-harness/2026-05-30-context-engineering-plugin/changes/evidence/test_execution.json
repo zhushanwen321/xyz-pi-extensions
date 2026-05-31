@@ -1,0 +1,235 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": false,
+      "execute_steps": [
+        "Construct 3-turn message sequence with toolResult aged 35min outside protected 2 turns",
+        "Call compressContext",
+        "Assert toolResult replaced with [Tool result expired. ID: ctx-xxx]",
+        "Assert recall store contains original content"
+      ],
+      "evidence": "First attempt: toolResult still in protected turn boundary, not expired"
+    },
+    {
+      "caseId": "TC-1-01",
+      "round": 2,
+      "passed": true,
+      "execute_steps": [
+        "Fixed: added 3rd turn so oldest toolResult is outside protectRecentTurns=2",
+        "Call compressContext",
+        "Assert oldest toolResult (index 2) contains [Tool result expired. ID: ctx-xxx]",
+        "Assert recall store contains 'old-result' with level 'l0-expired'"
+      ],
+      "evidence": "vitest: TC-1-01 passed, store.recall returns original content"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Construct 2-turn sequence with 35min-old toolResult inside protected 2 turns",
+        "Call compressContext",
+        "Assert toolResult content unchanged"
+      ],
+      "evidence": "vitest: TC-1-02 passed, getToolResultText returns original text"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Construct bashExecution with 10000-char output",
+        "Call compressContext",
+        "Assert output truncated with [truncated] marker",
+        "Assert recall store contains full 10000-char original"
+      ],
+      "evidence": "vitest: TC-2-01 passed, l0Truncated=1, store has full output"
+    },
+    {
+      "caseId": "TC-2-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Construct bashExecution with 3000-char output",
+        "Call compressContext",
+        "Assert output unchanged, l0Truncated=0"
+      ],
+      "evidence": "vitest: TC-2-02 passed"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Construct assistant message with thinking, aged 6 minutes",
+        "Call compressContext",
+        "Assert thinking replaced with [thinking expired]"
+      ],
+      "evidence": "vitest: TC-3-01 passed, l0ThinkingCleared=1"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Construct assistant(toolCall) → toolResult sequence",
+        "Call compressContext",
+        "Assert validationFailed=false",
+        "Assert toolResult follows assistant in output"
+      ],
+      "evidence": "vitest: TC-4-01 passed"
+    },
+    {
+      "caseId": "TC-4-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Construct orphan toolResult with missing toolCall",
+        "Call validateToolPairing → expect false",
+        "Call compressContext → expect validationFailed=true, returns original messages"
+      ],
+      "evidence": "vitest: TC-4-02 passed, result.messages === orphaned"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": false,
+      "execute_steps": [
+        "Call store.store('content', 'L0')",
+        "Recall the returned ID",
+        "Verify original field matches"
+      ],
+      "evidence": "First attempt: wrong parameter order in test"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 2,
+      "passed": true,
+      "execute_steps": [
+        "Call store.store('original full content here', 'L0')",
+        "Recall the returned ID",
+        "Assert stored.original === 'original full content here'",
+        "Assert stored.level === 'L0'",
+        "Assert stored.compressedAt is number"
+      ],
+      "evidence": "vitest: TC-5-01 passed"
+    },
+    {
+      "caseId": "TC-5-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Call store.recall('ctx-nonexist')",
+        "Assert returns undefined"
+      ],
+      "evidence": "vitest: TC-5-02 passed"
+    },
+    {
+      "caseId": "TC-7-01",
+      "round": 1,
+      "passed": false,
+      "execute_steps": [
+        "Construct 12000-char TypeScript content with import/function/class lines",
+        "Call compressContext with L1 enabled",
+        "Verify summary preserves key lines"
+      ],
+      "evidence": "First attempt: content only 6714 chars, below L1 threshold"
+    },
+    {
+      "caseId": "TC-7-01",
+      "round": 2,
+      "passed": true,
+      "execute_steps": [
+        "Fixed: increased filler lines to 600 with longer content",
+        "Construct TypeScript content >8000 chars with imports/defs",
+        "Call compressContext",
+        "Assert l1Condensed=1",
+        "Assert summary contains import/function/class lines",
+        "Assert summary shorter than original",
+        "Assert recall store has original"
+      ],
+      "evidence": "vitest: TC-7-01 passed"
+    },
+    {
+      "caseId": "TC-7-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Construct 8000+ char JSON content (no import/function/class patterns)",
+        "Call compressContext",
+        "Assert l1Condensed=1",
+        "Assert summary does not contain 'import'"
+      ],
+      "evidence": "vitest: TC-7-02 passed, fallback truncation works"
+    },
+    {
+      "caseId": "TC-8-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Mock contextUsage.percent=0.91",
+        "Construct 4-turn sequence, L2 protectRecentTurns=3",
+        "Call compressContext",
+        "Assert l2Triggered=true",
+        "Assert Turn 1 toolResult expired, Turn 2 preserved"
+      ],
+      "evidence": "vitest: TC-8-01 passed"
+    },
+    {
+      "caseId": "TC-8-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Mock contextUsage.percent=0.85",
+        "Call compressContext",
+        "Assert l2Triggered=false"
+      ],
+      "evidence": "vitest: TC-8-02 passed"
+    },
+    {
+      "caseId": "TC-9-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Create stats with {l0Expired:3, l0Truncated:2, l0ThinkingCleared:1, l1Condensed:1}",
+        "Call handleContextStatsCommand",
+        "Assert output contains '3', '2', '1' for respective counts"
+      ],
+      "evidence": "vitest: TC-9-01 passed"
+    },
+    {
+      "caseId": "TC-10-01",
+      "round": 1,
+      "passed": false,
+      "execute_steps": [
+        "Call handleContextEngineeringCommand('off')",
+        "Assert config.enabled becomes false"
+      ],
+      "evidence": "First attempt: 'off' not recognized, needs 'global off'"
+    },
+    {
+      "caseId": "TC-10-01",
+      "round": 2,
+      "passed": true,
+      "execute_steps": [
+        "Call handleContextEngineeringCommand('global off') → config.enabled=false",
+        "Call compressContext → assert returns same messages (no compression)",
+        "Call handleContextEngineeringCommand('global on') → config.enabled=true"
+      ],
+      "evidence": "vitest: TC-10-01 passed"
+    },
+    {
+      "caseId": "TC-10-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Call handleContextEngineeringCommand('l1 off')",
+        "Assert config.l1.enabled=false",
+        "Assert config.l0.enabled=true and config.l2.enabled=true unchanged"
+      ],
+      "evidence": "vitest: TC-10-02 passed"
+    }
+  ]
+}
