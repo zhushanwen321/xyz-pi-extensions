@@ -446,3 +446,311 @@ agent-session.ts:
 ```
 
 context-engineering 可以在步骤 6 中感知 compact，但无法控制步骤 7-8 的消息重建。
+
+---
+
+## 附录：核心概念详解
+
+### 1. 完整的 Compact 链路流程
+
+以一个具体例子说明整个链路。假设用户在做一个代码修复任务：
+
+#### 初始状态（Turn 1-10）
+
+```
+messages = [
+  {role: 'user', content: '帮我修复 errors.py 中的 bug'},
+  {role: 'assistant', toolCalls: [{id: 'tc_1', name: 'read', args: {path: 'errors.py'}}]},
+  {role: 'toolResult', toolUseId: 'tc_1', content: '... 12000 chars 的文件内容 ...'},
+  {role: 'assistant', content: '我看到了错误在第 42 行...'},
+  {role: 'user', content: '修复它'},
+  {role: 'assistant', toolCalls: [{id: 'tc_2', name: 'edit', args: {...}}]},
+  {role: 'toolResult', toolUseId: 'tc_2', content: '文件已修改'},
+  {role: 'assistant', content: '已修复，让我运行测试验证...'},
+  {role: 'assistant', toolCalls: [{id: 'tc_3', name: 'bash', args: {command: 'pytest'}}]},
+  {role: 'bashExecution', toolUseId: 'tc_3', content: '... 5000 chars 的测试输出 ...'},
+  {role: 'assistant', content: '测试全部通过！'},
+  // ... 更多消息 ...
+]
+```
+
+#### Microcompact 触发（假设 60 分钟过去了）
+
+```
+// Time-Based Microcompact
+// 触发条件：距最后一条 assistant 消息 > 60 分钟
+// 保护：保留最近 5 个 compactable toolResult
+// 假设现在有 8 个 toolResult，保留最近 5 个，清理前 3 个
+
+messages_after_microcompact = [
+  {role: 'user', content: '帮我修复 errors.py 中的 bug'},
+  {role: 'assistant', toolCalls: [{id: 'tc_1', name: 'read', args: {path: 'errors.py'}}]},
+  {role: 'toolResult', toolUseId: 'tc_1', content: '[Old tool result content cleared]'},  // ← 被清理
+  {role: 'assistant', content: '我看到了错误在第 42 行...'},
+  {role: 'user', content: '修复它'},
+  {role: 'assistant', toolCalls: [{id: 'tc_2', name: 'edit', args: {...}}]},
+  {role: 'toolResult', toolUseId: 'tc_2', content: '文件已修改'},  // ← 保留
+  {role: 'assistant', content: '已修复，让我运行测试验证...'},
+  {role: 'assistant', toolCalls: [{id: 'tc_3', name: 'bash', args: {command: 'pytest'}}]},
+  {role: 'bashExecution', toolUseId: 'tc_3', content: '... 5000 chars 的测试输出 ...'},  // ← 保留
+  {role: 'assistant', content: '测试全部通过！'},
+  // ... 更多消息 ...
+]
+```
+
+#### Tool Result Budget 触发（单个 user 消息的 toolResult 超过 200K）
+
+```
+// 假设 user 在 Turn 5 一次性读取了 10 个大文件
+// Turn 5 的 user 消息包含 10 个 toolResult，总计 250K chars
+
+// Tool Result Budget 评估：
+// - 预算：200K
+// - 当前：250K
+// - 超出：50K
+// - 策略：替换最大的 toolResult
+
+messages_after_budget = [
+  // ... 前面的消息 ...
+  {role: 'user', content: '帮我分析这 10 个文件'},
+  {role: 'assistant', toolCalls: [{id: 'tc_10', name: 'read', args: {path: 'big_file_1.py'}}]},
+  {role: 'toolResult', toolUseId: 'tc_10', content: '<persisted-output>\n<path>/tmp/tool-results/tc_10.txt</path>\n<preview>前 2000 字节...</preview>\n</persisted-output>'},  // ← 被替换为磁盘引用
+  {role: 'assistant', toolCalls: [{id: 'tc_11', name: 'read', args: {path: 'big_file_2.py'}}]},
+  {role: 'toolResult', toolUseId: 'tc_11', content: '... 原始内容 ...'},  // ← 保留
+  // ... 其他 toolResult ...
+]
+```
+
+#### Autocompact 触发（token 超过阈值）
+
+```
+// 假设 token 使用量达到 80% 上下文窗口
+// Autocompact 用 LLM 生成摘要
+
+messages_after_autocompact = [
+  // compact_boundary 消息（Claude Code 特有）
+  {type: 'compact_boundary'},
+  
+  // compact summary
+  {role: 'user', content: 'This is a summary of previous conversation: 用户要求修复 errors.py 的 bug。我读取了文件，发现第 42 行有类型错误。使用 edit 工具修复了错误。运行 pytest 验证通过。用户还要求分析 10 个大文件，我读取了这些文件并提供了分析...'},
+  
+  // compact 后保留的消息（从 firstKeptEntryId 开始）
+  {role: 'user', content: '继续分析剩余的文件'},
+  {role: 'assistant', content: '好的，让我继续...'},
+  // ... compact 后的新消息 ...
+]
+```
+
+#### 各层压缩的相互影响
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    每次 API 调用前                           │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  1. getMessagesAfterCompactBoundary(messages)               │
+│     ↓ 物理截断：只保留 compact boundary 之后的消息           │
+│     ↓ compact 前的消息完全消失                              │
+│                                                             │
+│  2. applyToolResultBudget(messages)                         │
+│     ↓ per-message 预算控制                                  │
+│     ↓ 超预算的 toolResult 持久化到磁盘                       │
+│     ↓ frozen 的 toolResult 不再改变                         │
+│                                                             │
+│  3. microcompactMessages(messages)                          │
+│     ↓ time-based: 60 分钟后清理旧 toolResult                │
+│     ↓ cached: 使用 cache_edits API 删除（不修改本地消息）    │
+│                                                             │
+│  4. autoCompactIfNeeded(messages)                           │
+│     ↓ token 超阈值时触发                                    │
+│     ↓ 用 LLM 生成摘要                                      │
+│     ↓ 生成 compact boundary 消息                            │
+│                                                             │
+│  5. 发送给 LLM                                             │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**关键点**：
+- 步骤 1 的物理截断确保 compact 前的消息不会被步骤 2-4 处理
+- 步骤 2 的 frozen 状态确保同一 toolResult 在不同 turn 间保持相同的处理决定
+- 步骤 3 的 time-based 清理在 cache 冷了之后才触发，避免浪费 cache
+- 步骤 4 的 autocompact 是最后的防线，只在 token 真的不够时才触发
+
+---
+
+### 2. getMessagesAfterCompactBoundary 和 Frozen/Fresh 详解
+
+#### getMessagesAfterCompactBoundary
+
+**问题**：compact 之后，消息列表变成了：
+```
+[
+  compact_boundary,      // 分界线
+  compact_summary,       // 摘要
+  kept_message_1,        // compact 保留的消息
+  kept_message_2,
+  new_message_1,         // compact 后新产生的消息
+  new_message_2,
+]
+```
+
+如果 microcompact 处理这个列表，它可能会：
+- 清理 `kept_message_1` 中的 toolResult（因为它超过 60 分钟）
+- 这会破坏 compact 的保留策略
+
+**解决方案**：`getMessagesAfterCompactBoundary` 物理截断：
+```typescript
+function getMessagesAfterCompactBoundary(messages) {
+  const idx = messages.findLastIndex(m => isCompactBoundaryMessage(m));
+  if (idx === -1) return messages;  // 没有 compact boundary
+  return messages.slice(idx);  // 只保留 boundary 及之后的消息
+}
+```
+
+**效果**：
+```
+// 截断前
+[
+  old_message_1,         // compact 前的消息（已被摘要替代）
+  old_message_2,
+  compact_boundary,      // 分界线
+  compact_summary,       // 摘要
+  kept_message_1,        // compact 保留的消息
+  new_message_1,         // compact 后新产生的消息
+]
+
+// 截断后
+[
+  compact_boundary,      // 分界线
+  compact_summary,       // 摘要
+  kept_message_1,        // compact 保留的消息
+  new_message_1,         // compact 后新产生的消息
+]
+```
+
+**为什么需要物理截断**？
+- 确保 microcompact 只处理 compact 后的消息
+- 避免重复压缩已被 compact 处理过的消息
+- 简化逻辑：不需要在 microcompact 中检查“这条消息是否在 compact 前”
+
+#### Frozen/Fresh 状态
+
+**问题场景**：
+
+```
+// Turn 1
+messages = [
+  {role: 'user', content: '读取大文件'},
+  {role: 'toolResult', toolUseId: 'tc_1', content: '... 100K chars ...'},  // 超过预算
+]
+
+// Tool Result Budget 决定：持久化 tc_1 到磁盘
+// 替换为：<persisted-output>...
+
+// Turn 2
+messages = [
+  {role: 'user', content: '读取大文件'},
+  {role: 'toolResult', toolUseId: 'tc_1', content: '<persisted-output>...'},  // 已替换
+  {role: 'assistant', content: '...'},
+  {role: 'user', content: '继续分析'},
+  {role: 'toolResult', toolUseId: 'tc_2', content: '... 50K chars ...'},  // 新的 toolResult
+]
+
+// 问题：tc_1 已经被替换了，但 Tool Result Budget 可能会重新评估它
+// 如果预算现在够了，它可能会把 tc_1 恢复为原始内容
+// 这会导致 prompt cache miss（消息内容变了）
+```
+
+**解决方案**：Frozen/Fresh 状态
+
+```typescript
+interface ContentReplacementState {
+  replacements: Map<string, string>  // tool_use_id → replacement content
+  seenIds: Set<string>               // 已经见过的 tool_use_id（frozen）
+}
+
+// Turn 1
+// tc_1 是 fresh（没见过）
+// 决定：持久化 tc_1
+// 状态更新：seenIds.add('tc_1'), replacements.set('tc_1', '<persisted-output>...')
+
+// Turn 2
+// tc_1 是 frozen（在 seenIds 中）→ 使用缓存的 replacement，不再评估
+// tc_2 是 fresh（没见过）→ 评估是否需要替换
+```
+
+**效果**：
+- **frozen**：已经决定如何处理的 toolResult，后续 turn 保持不变
+- **fresh**：新出现的 toolResult，需要评估是否需要替换
+- **好处**：保证 prompt cache 稳定（相同的消息 → 相同的 wire prefix → cache hit）
+
+---
+
+### 3. Cache Edits API 详解
+
+#### 什么是 Prompt Cache？
+
+Anthropic 的 API 支持 prompt cache：
+- 如果连续两次 API 调用的前缀消息相同，第二次调用可以复用缓存
+- 缓存有效期：1 小时（Anthropic 的 TTL）
+- 好处：减少 API 延迟（100-200ms），降低费用
+
+```
+// 调用 1
+messages = [msg_1, msg_2, msg_3, msg_4, msg_5]
+// 全部发送，缓存 [msg_1, msg_2, msg_3, msg_4, msg_5]
+
+// 调用 2
+messages = [msg_1, msg_2, msg_3, msg_4, msg_5, msg_6]
+// 前缀 [msg_1, msg_2, msg_3, msg_4, msg_5] 命中缓存
+// 只需发送 msg_6，节省延迟和费用
+```
+
+#### 问题：Microcompact 破坏 Prompt Cache
+
+```
+// 调用 1
+messages = [msg_1, msg_2, msg_3(100K), msg_4, msg_5]
+// 缓存 [msg_1, msg_2, msg_3(100K), msg_4, msg_5]
+
+// 60 分钟后，microcompact 触发
+// 清理 msg_3 的内容：msg_3(100K) → msg_3('[Old tool result content cleared]')
+
+// 调用 2
+messages = [msg_1, msg_2, msg_3(cleared), msg_4, msg_5]
+// 前缀 [msg_1, msg_2] 命中缓存
+// 但 msg_3 变了，后续的 msg_4, msg_5 也需要重新发送
+// 缓存命中率下降
+```
+
+#### Cache Edits API 的解决方案
+
+Anthropic 的 `cache_edits` API 允许：
+- 在不修改本地消息的情况下，删除缓存中的某些内容
+- 保持 prompt cache 的连续性
+
+```
+// 调用 1
+messages = [msg_1, msg_2, msg_3(100K), msg_4, msg_5]
+// 缓存 [msg_1, msg_2, msg_3(100K), msg_4, msg_5]
+
+// 60 分钟后，cached microcompact 触发
+// 使用 cache_edits API 删除 msg_3 的缓存
+// 本地消息不变：msg_3 仍然是 100K
+
+// 调用 2
+// API 层面：msg_3 被标记为删除，不发送给 LLM
+// 但 prompt cache 的 key 不变，仍然命中 [msg_1, msg_2, msg_4, msg_5]
+// 缓存命中率保持
+```
+
+#### Pi 当前不支持 Cache Edits API
+
+Pi 使用的模型（如 GLM、Qwen）可能不支持 `cache_edits` API，所以：
+- **无法实现 cached microcompact**：只能使用 time-based microcompact
+- **每次压缩都可能导致 cache miss**：但影响可能不大，因为：
+  - Pi 的模型可能本身就不支持 prompt cache
+  - time-based microcompact 在 60 分钟后触发，此时 cache 已经过期了
+
+**结论**：这个劣势的实际影响取决于 Pi 使用的模型是否支持 prompt cache。如果不支持，影响为零。
