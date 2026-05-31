@@ -103,7 +103,7 @@ const GoalManagerParams = Type.Object({
 		"cancel_goal",
 		"report_blocked",
 		"add_subtasks",
-		"update_subtodos",
+		"update_subtasks",
 		"delete_subtasks",
 	] as const),
 	tasks: Type.Optional(Type.Array(Type.String(), { description: "Task descriptions. 每条必须是一行简短摘要（不超过 60 字），不含换行或 markdown" })),
@@ -431,6 +431,7 @@ async function executeGoalAction(
 			}
 			state.status = transitionStatus(state.status, "complete");
 			state.completedAtTurnIndex = state.currentTurnIndex;
+			writeGoalHistoryEntry(pi, session);
 			persistGoalState(pi, session, ctx);
 			const budgetReport: string[] = [];
 			budgetReport.push(`总轮次: ${state.turnCount}`);
@@ -516,7 +517,7 @@ async function executeGoalAction(
 			);
 		}
 
-		case "update_subtodos": {
+		case "update_subtasks": {
 			if (params.taskId === undefined) {
 				throw new Error("update_subtasks requires taskId");
 			}
