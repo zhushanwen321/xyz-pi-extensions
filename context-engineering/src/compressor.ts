@@ -203,8 +203,12 @@ export function expireThinking(): string {
 const IMPORT_EXPORT_RE = /^(import|export)\s/;
 const DEFINITION_RE = /(function|class|interface|type|const|let|var)\s+\w+/;
 
+const FALLBACK_KEEP_RATIO = 0.4;
+const MAX_CONDENSE_RATIO = 0.4;
+const MS_PER_MINUTE = 60_000;
+
 function fallbackTruncate(content: string): string {
-  const budget = Math.floor(content.length * 0.4);
+  const budget = Math.floor(content.length * FALLBACK_KEEP_RATIO);
   const headChars = Math.floor(budget / 2);
   const tailChars = Math.floor(budget / 2);
   return (
@@ -251,7 +255,7 @@ export function condenseToolResult(
   const result = [...head, ...keptMiddle, ...tail].join("\n");
 
   // 压缩不够 → fallback 截断
-  if (result.length > content.length * 0.4) {
+  if (result.length > content.length * MAX_CONDENSE_RATIO) {
     return fallbackTruncate(content);
   }
 
@@ -341,7 +345,7 @@ export function processL0(
 
     if (msg.role === "toolResult") {
       const age = now - msg.timestamp;
-      const expired = age > config.expireMinutes * 60000;
+      const expired = age > config.expireMinutes * MS_PER_MINUTE;
       const protected_ = isInProtectedTurn(i, turnBoundaries, config.protectRecentTurns);
 
       if (expired && !protected_) {
@@ -367,7 +371,7 @@ export function processL0(
       }
     } else if (msg.role === "assistant") {
       const age = now - msg.timestamp;
-      const thinkingExpired = age > config.thinkingExpireMinutes * 60000;
+      const thinkingExpired = age > config.thinkingExpireMinutes * MS_PER_MINUTE;
 
       if (thinkingExpired && !hasUserAfter[i]) {
         const hasThinking = msg.content.some((c) => c.type === "thinking");
@@ -453,6 +457,10 @@ export function processL2(
   if (usagePercent < config.emergencyThreshold) {
     return { messages, stats: { triggered: false } };
   }
+
+  // L2 emergency: force-expire toolResults outside protected turns when context usage is critical.
+  // `triggered` means "at least one toolResult was force-expired", not "usage threshold was crossed".
+  // This distinguishes "L2 activated but had nothing to expire" from "L2 didn't activate".
 
   const result: AgentMessage[] = [];
   let anyForceExpired = false;

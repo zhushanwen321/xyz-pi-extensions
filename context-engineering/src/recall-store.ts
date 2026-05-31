@@ -16,14 +16,28 @@ export interface RecallStore {
   size: () => number;
 }
 
+// ── 常量 ──
+
+/** UUID 前 12 字符 = 48 bit 熵，碰撞阈值约 16M 条。远超单 session 需求。 */
+const ID_CHARS = 12;
+
+/** 内存保护上限。超过时淘汰最早存入的条目。 */
+const MAX_ENTRIES = 500;
+
 // ── 工厂函数 ──
 
 export function createRecallStore(): RecallStore {
   const entries = new Map<string, StoredContent>();
 
   function store(content: string, level: StoredContent["level"]): string {
-    const uuid8 = randomUUID().slice(0, 8);
-    const id = `ctx-${uuid8}`;
+    // LRU 淘汰：超过上限时删除最早存入的条目
+    if (entries.size >= MAX_ENTRIES) {
+      const oldest = entries.keys().next().value;
+      if (oldest !== undefined) entries.delete(oldest);
+    }
+
+    const idSuffix = randomUUID().replace(/-/g, '').slice(0, ID_CHARS);
+    const id = `ctx-${idSuffix}`;
     entries.set(id, {
       id,
       original: content,

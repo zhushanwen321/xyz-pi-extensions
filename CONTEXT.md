@@ -135,7 +135,34 @@ Agent 定义文件的发现范围：`user`（`~/.pi/agent/agents/`）、`project
 **Background Job**
 `background: true` 模式下的 Subagent 运行实例。结果通过 Pi 的 `sendMessage({ deliverAs: "followUp", triggerTurn: true })` 自动注入到主对话，无需轮询。
 
+### Context Engineering
+
+**Context Engineering**
+Pi Extension，通过 `context` 事件在 LLM 调用前对消息做渐进式压缩。增强（不替代）原生 Compaction。
+_Avoid_: 上下文工程
+
+**L0 / L1 / L2**
+三级压缩管道：
+- **L0** — 零成本客户端清理（过期 toolResult、截断 bash output、清理 thinking）
+- **L1** — 规则化摘要（正则提取关键行）
+- **L2** — 紧急截断（强制过期 Protected Turn 外的 toolResult）
+
+**RecallStore**
+内存 Map，存储被压缩消息的原始内容。ID 格式 `ctx-{12hex}`。无持久化，`session_start` 时重建。
+
+**Recall**
+LLM 通过 `recall_context` 工具按 ID 获取被压缩前的原始内容。Context Engineering 压缩的可逆性保障。
+
+**Protected Turn**
+最近 N 个 Turn Boundary，其中的 toolResult 不被过期或强制截断。N 由 `protectRecentTurns` 配置（默认 2）。
+
+**Turn Boundary**
+以 user 消息为分界的消息分组，用于判断 Protected Turn 范围。
+
 ## Flagged Ambiguities
+
+**"压缩"同时存在于 Pi 原生（Compaction）和 Context Engineering（L0/L1/L2）**
+Compaction 在 agent loop 外做 token 级 LLM 摘要（不可逆），Context Engineering 在 agent loop 内做消息级规则化处理（可逆 Recall）。两者互补不冲突。
 
 **"任务"同时存在于 Goal（GoalTask）和 Todo（Todo item）**
 两者定位不同：GoalTask 要求 Evidence，是完成目标的强制路径；Todo 是可选的轻量备忘。在 Goal 激活时不应同时使用 Todo 追踪同类工作。

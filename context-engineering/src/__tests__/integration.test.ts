@@ -65,7 +65,7 @@ function tc(id: string): ToolCall {
 }
 
 function extractCtxId(text: string): string | null {
-  const m = text.match(/ctx-[a-f0-9]{8}/);
+  const m = text.match(/ctx-[a-f0-9]{12}/);
   return m ? m[0] : null;
 }
 
