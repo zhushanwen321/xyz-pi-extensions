@@ -509,15 +509,31 @@ export function processL0(
     if (messages[i].role === "user") seenUser = true;
   }
 
+  // keepRecent: 收集所有 compactable toolResult 索引，保留最近 N 个
+  const keepRecentProtected = new Set<number>();
+  if (config.keepRecent > 0) {
+    const compactableIdxs: number[] = [];
+    for (let i = 0; i < messages.length; i++) {
+      if (messages[i].role === "toolResult") {
+        compactableIdxs.push(i);
+      }
+    }
+    const keepFrom = Math.max(0, compactableIdxs.length - config.keepRecent);
+    for (let i = keepFrom; i < compactableIdxs.length; i++) {
+      keepRecentProtected.add(compactableIdxs[i]);
+    }
+  }
+
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
 
     if (msg.role === "toolResult") {
       const age = now - msg.timestamp;
       const expired = age > config.expireMinutes * MS_PER_MINUTE;
-      const protected_ = isInProtectedTurn(i, turnBoundaries, config.protectRecentTurns);
+      const turnProtected = isInProtectedTurn(i, turnBoundaries, config.protectRecentTurns);
+      const recentProtected = keepRecentProtected.has(i);
 
-      if (expired && !protected_) {
+      if (expired && !turnProtected && !recentProtected) {
         const originalText = getToolResultText(msg);
         const id = store.store(originalText, "l0-expired");
         const expiredText = expireToolResult(originalText, id);
@@ -570,13 +586,29 @@ export function processL1(
   messages: AgentMessage[],
   config: L1Config,
   store: RecallStore,
+  turnBoundaries: TurnBoundary[],
+  compactBoundaryIdx: number | null,
 ): { messages: AgentMessage[]; stats: { condensed: number } } {
   const stats = { condensed: 0 };
   const result: AgentMessage[] = [];
 
-  for (const msg of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+
     if (msg.role === "toolResult") {
       if (isToolResultExpired(msg)) {
+        result.push(msg);
+        continue;
+      }
+
+      // Compact boundary: 边界前的消息不处理
+      if (compactBoundaryIdx !== null && i < compactBoundaryIdx) {
+        result.push(msg);
+        continue;
+      }
+
+      // Protected turn check
+      if (isInProtectedTurn(i, turnBoundaries, config.protectRecentTurns)) {
         result.push(msg);
         continue;
       }
@@ -610,6 +642,7 @@ export function processL2(
   store: RecallStore,
   contextUsage: ContextUsage | undefined,
   turnBoundaries: TurnBoundary[],
+  compactBoundaryIdx: number | null,
 ): { messages: AgentMessage[]; stats: { triggered: boolean } } {
   // 计算上下文使用率
   let usagePercent: number;
@@ -636,6 +669,12 @@ export function processL2(
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
+
+    // Compact boundary: 边界前的消息不处理
+    if (compactBoundaryIdx !== null && i < compactBoundaryIdx) {
+      result.push(msg);
+      continue;
+    }
 
     if (
       msg.role === "toolResult" &&
@@ -716,14 +755,14 @@ export function compressContext(
 
   // L1
   if (config.l1.enabled) {
-    const l1 = processL1(current, config.l1, store);
+    const l1 = processL1(current, config.l1, store, boundaries, compactBoundaryIdx);
     current = l1.messages;
     stats.l1Condensed = l1.stats.condensed;
   }
 
   // L2
   if (config.l2.enabled) {
-    const l2 = processL2(current, config.l2, store, contextUsage, boundaries);
+    const l2 = processL2(current, config.l2, store, contextUsage, boundaries, compactBoundaryIdx);
     current = l2.messages;
     stats.l2Triggered = l2.stats.triggered;
   }

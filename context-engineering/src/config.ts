@@ -10,6 +10,7 @@ export interface L0Config {
   bashTruncateChars: number;
   thinkingExpireMinutes: number;
   protectRecentTurns: number;
+  keepRecent: number;
 }
 
 export interface L1Config {
@@ -17,6 +18,7 @@ export interface L1Config {
   summaryThresholdChars: number;
   keepHeadLines: number;
   keepTailLines: number;
+  protectRecentTurns: number;
 }
 
 export interface L2Config {
@@ -56,12 +58,14 @@ export const DEFAULT_CONFIG: ContextEngineeringConfig = {
     bashTruncateChars: 4000,
     thinkingExpireMinutes: 5,
     protectRecentTurns: 2,
+    keepRecent: 5,
   },
   l1: {
     enabled: true,
     summaryThresholdChars: 8000,
     keepHeadLines: 10,
     keepTailLines: 5,
+    protectRecentTurns: 2,
   },
   l2: {
     enabled: true,
@@ -146,7 +150,7 @@ export function loadConfig(
 
 export function parseLevelArgs(
   args: string,
-): { target: "global" | "l0" | "l1" | "l2"; action: "on" | "off" } | null {
+): { target: "global" | "l0" | "l1" | "l2" | "mc" | "budget"; action: "on" | "off" } | null {
   const tokens = args.trim().split(/\s+/);
   if (tokens.length < 2) {
     return null;
@@ -162,7 +166,7 @@ export function parseLevelArgs(
   }
 
   return {
-    target: rawTarget as "global" | "l0" | "l1" | "l2",
+    target: rawTarget as "global" | "l0" | "l1" | "l2" | "mc" | "budget",
     action: rawAction as "on" | "off",
   };
 }

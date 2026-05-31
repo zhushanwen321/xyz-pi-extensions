@@ -6,6 +6,7 @@ import { Type } from "typebox";
 
 import { loadConfig, type ContextEngineeringConfig } from "./config";
 import { createRecallStore, type RecallStore } from "./recall-store";
+import { createFrozenFreshState, type FrozenFreshState } from "./frozen-fresh";
 import {
   compressContext,
   type CompressionStats,
@@ -52,11 +53,13 @@ export default function contextEngineeringExtension(pi: ExtensionAPI): void {
   let config: ContextEngineeringConfig = loadConfig();
   let store: RecallStore = createRecallStore();
   let cumulativeStats: CompressionStats = zeroStats();
+  let frozenFreshState: FrozenFreshState = createFrozenFreshState();
 
   pi.on("session_start", () => {
     config = loadConfig();
     store = createRecallStore();
     cumulativeStats = zeroStats();
+    frozenFreshState = createFrozenFreshState();
   });
 
   pi.on("context", (event, ctx) => {

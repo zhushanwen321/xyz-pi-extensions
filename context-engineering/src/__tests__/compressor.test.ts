@@ -96,6 +96,7 @@ describe("compressor", () => {
 
   it("AC-1: 过期清理 — 过期的 ToolResult 被替换，保护 turn 内的保留", () => {
     const store = createRecallStore();
+    const config = { ...DEFAULT_CONFIG, l0: { ...DEFAULT_CONFIG.l0, keepRecent: 0 } };
 
     // Turn 1: user(40min) → assistant(tc1) → toolResult(35min, 应过期)
     // Turn 2: user(20min) → assistant(tc2) → toolResult(15min, 在保护 turn 内)
@@ -110,7 +111,7 @@ describe("compressor", () => {
       makeUser("task 3", 1 * MINUTE),
     ];
 
-    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined);
+    const result = compressContext(messages, config, store, undefined);
 
     expect(result.stats.validationFailed).toBe(false);
 
@@ -197,6 +198,7 @@ describe("compressor", () => {
 
   it("AC-7: L1 摘要 — 长文本被结构化摘要", () => {
     const store = createRecallStore();
+    const config = { ...DEFAULT_CONFIG, l1: { ...DEFAULT_CONFIG.l1, protectRecentTurns: 0 } };
 
     // 构造 > 8000 chars 的内容，包含 import/definition 行
     const headLines = Array.from({ length: 10 }, (_, i) => `// head comment line ${i}`);
@@ -228,7 +230,7 @@ describe("compressor", () => {
       makeToolResult(longContent, 0, "c1"),
     ];
 
-    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined);
+    const result = compressContext(messages, config, store, undefined);
 
     expect(result.stats.validationFailed).toBe(false);
     expect(result.stats.l1Condensed).toBe(1);
@@ -558,5 +560,173 @@ describe("Compact Boundary (AC-4, AC-7)", () => {
 
     const boundary = findCompactBoundary(messages);
     expect(boundary).toBeNull();
+  });
+});
+
+// ── L1 Protected Turn (AC-5) ──
+
+describe("L1 Protected Turn (AC-5)", () => {
+  const MINUTE = 60 * 1000;
+
+  it("12K chars toolResult 在最近 2 轮内 → 不被 condense，原文保留", () => {
+    const store = createRecallStore();
+    const config = {
+      ...DEFAULT_CONFIG,
+      l1: {
+        ...DEFAULT_CONFIG.l1,
+        summaryThresholdChars: 8000,
+        protectRecentTurns: 2,
+      },
+    };
+
+    // 构造 12K chars 的 toolResult
+    const bigContent = "x".repeat(12_000);
+
+    // Turn 1: user → assistant → toolResult(12K) → 保护范围内（最近 2 轮）
+    const messages: AgentMessage[] = [
+      makeUser("task", 1 * MINUTE),
+      makeAssistant([tc("c1")], undefined, 1 * MINUTE),
+      makeToolResult(bigContent, 0, "c1"),
+      makeUser("followup", 0),
+    ];
+
+    const result = compressContext(messages, config, store, undefined);
+
+    // 应保留原文
+    const tr = result.messages[2] as ToolResultMessage;
+    expect(getToolResultText(tr)).toBe(bigContent);
+    expect(result.stats.l1Condensed).toBe(0);
+  });
+
+  it("12K chars toolResult 在保护范围外（3 轮之前）→ 被 condense", () => {
+    const store = createRecallStore();
+    const config = {
+      ...DEFAULT_CONFIG,
+      l1: {
+        ...DEFAULT_CONFIG.l1,
+        summaryThresholdChars: 8000,
+        protectRecentTurns: 2,
+      },
+    };
+
+    const bigContent = "line\n".repeat(3000); // ~15K chars
+    expect(bigContent.length).toBeGreaterThan(8000);
+
+    // Turn 1: toolResult 在 Turn 0，protectRecentTurns=2 保护 Turn 1+2
+    const messages: AgentMessage[] = [
+      makeUser("task1", 10 * MINUTE),
+      makeAssistant([tc("c1")], undefined, 10 * MINUTE),
+      makeToolResult(bigContent, 9 * MINUTE, "c1"),
+      makeUser("task2", 5 * MINUTE),
+      makeAssistant([tc("c2")], undefined, 5 * MINUTE),
+      makeToolResult("small", 4 * MINUTE, "c2"),
+      makeUser("task3", 1 * MINUTE),
+    ];
+
+    const result = compressContext(messages, config, store, undefined);
+
+    // Turn 1 的 toolResult 应被 condense
+    const condensed = result.messages[2] as ToolResultMessage;
+    const text = getToolResultText(condensed);
+    expect(text).toContain("[Condensed (ID: ctx-");
+    expect(result.stats.l1Condensed).toBe(1);
+  });
+
+  it("L2 + compact boundary: compactionSummary 在索引 3，之前的 toolResult 不被 L2 处理", () => {
+    const store = createRecallStore();
+    const contextUsage: ContextUsage = {
+      tokens: null,
+      contextWindow: 200000,
+      percent: 0.95,
+    };
+
+    // compactionSummary 在 index 3
+    const messages: AgentMessage[] = [
+      makeUser("t0", 30 * MINUTE),          // 0
+      makeAssistant([tc("c1")], undefined, 30 * MINUTE), // 1
+      makeToolResult("pre-compact", 29 * MINUTE, "c1"), // 2 - 边界前
+      makeUser("compactionSummary: summary", 20 * MINUTE), // 3 - boundary
+      makeUser("t1", 15 * MINUTE),          // 4
+      makeAssistant([tc("c2")], undefined, 15 * MINUTE), // 5
+      makeToolResult("post-compact", 14 * MINUTE, "c2"), // 6 - 边界后
+      makeUser("t2", 1 * MINUTE),           // 7
+    ];
+
+    const result = compressContext(messages, DEFAULT_CONFIG, store, contextUsage);
+
+    // 边界前的 toolResult (index 2) 不被 L2 处理
+    const preCompact = result.messages[2] as ToolResultMessage;
+    expect(getToolResultText(preCompact)).toBe("pre-compact");
+
+    // 边界后的 toolResult (index 6) 应被 L2 处理（如果在保护范围外）
+    // Turn boundaries: [0-3), [3-4), [4-7), [7-8)
+    // L2 protectRecentTurns=3 → Turn 1,2,3 被保护 → Turn 0 的不受 L2 保护
+    // index 6 在 Turn 2 内（保护范围），所以也不应被 L2 处理
+    // 需要构造一个边界后且不在保护范围内的场景
+    // 实际上 index 6 在 Turn 2 (4-7)，protectRecentTurns=3 保护最后 3 轮
+    // 有 4 个 boundary → 保护 Turn 1,2,3 → Turn 0 不保护 → 但 index 2 在 Turn 0 边界前
+    // 所以实际上所有 post-boundary 的都在保护范围内
+    // L2 triggered 应该为 false（没有可 force-expire 的）
+    expect(result.stats.l2Triggered).toBe(false);
+  });
+});
+
+// ── L0 keepRecent ──
+
+describe("L0 keepRecent", () => {
+  const MINUTE = 60 * 1000;
+
+  it("8 个 toolResult 全部超 30 分钟，keepRecent=5，protectRecentTurns=0 → 最新 5 个不过期，前 3 个过期", () => {
+    const store = createRecallStore();
+    const config = {
+      ...DEFAULT_CONFIG,
+      l0: {
+        ...DEFAULT_CONFIG.l0,
+        keepRecent: 5,
+        protectRecentTurns: 0,
+      },
+    };
+
+    const messages: AgentMessage[] = [
+      makeUser("task", 60 * MINUTE),
+      makeAssistant([tc("c1")], undefined, 59 * MINUTE),
+      makeToolResult("content-1", 58 * MINUTE, "c1"),
+      makeAssistant([tc("c2")], undefined, 55 * MINUTE),
+      makeToolResult("content-2", 54 * MINUTE, "c2"),
+      makeAssistant([tc("c3")], undefined, 50 * MINUTE),
+      makeToolResult("content-3", 49 * MINUTE, "c3"),
+      makeAssistant([tc("c4")], undefined, 45 * MINUTE),
+      makeToolResult("content-4", 44 * MINUTE, "c4"),
+      makeAssistant([tc("c5")], undefined, 40 * MINUTE),
+      makeToolResult("content-5", 39 * MINUTE, "c5"),
+      makeAssistant([tc("c6")], undefined, 37 * MINUTE),
+      makeToolResult("content-6", 36 * MINUTE, "c6"),
+      makeAssistant([tc("c7")], undefined, 35 * MINUTE),
+      makeToolResult("content-7", 34 * MINUTE, "c7"),
+      makeAssistant([tc("c8")], undefined, 33 * MINUTE),
+      makeToolResult("content-8", 32 * MINUTE, "c8"),
+      makeUser("end", 0),
+    ];
+
+    const result = compressContext(messages, config, store, undefined);
+
+    // 前 3 个应过期
+    expect(result.stats.l0Expired).toBe(3);
+
+    const tr1 = result.messages[2] as ToolResultMessage;
+    expect(getToolResultText(tr1)).toContain("[Tool result expired");
+
+    const tr2 = result.messages[4] as ToolResultMessage;
+    expect(getToolResultText(tr2)).toContain("[Tool result expired");
+
+    const tr3 = result.messages[6] as ToolResultMessage;
+    expect(getToolResultText(tr3)).toContain("[Tool result expired");
+
+    // 后 5 个保留原文
+    const tr4 = result.messages[8] as ToolResultMessage;
+    expect(getToolResultText(tr4)).toBe("content-4");
+
+    const tr8 = result.messages[16] as ToolResultMessage;
+    expect(getToolResultText(tr8)).toBe("content-8");
   });
 });

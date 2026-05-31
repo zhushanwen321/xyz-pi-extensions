@@ -74,6 +74,7 @@ function extractCtxId(text: string): string | null {
 describe("Integration: TC-1 Tool Result 过期清理", () => {
   it("TC-1-01: 超过30分钟的toolResult被替换", () => {
     const store = createRecallStore();
+    const config = { ...DEFAULT_CONFIG, l0: { ...DEFAULT_CONFIG.l0, keepRecent: 0 } };
     // 3 turns: Turn 1 toolResult(35min) outside protectRecentTurns=2
     const messages: AgentMessage[] = [
       makeUser("task0", 45 * MINUTE),
@@ -85,7 +86,7 @@ describe("Integration: TC-1 Tool Result 过期清理", () => {
       makeUser("task2", 1 * MINUTE),
     ];
 
-    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined);
+    const result = compressContext(messages, config, store, undefined);
     // c0's toolResult at index 2 is in Turn 0 (before user@40min), outside protected 2 turns
     // c1's toolResult at index 5 is in Turn 1, inside protected 2 turns
     const expired = result.messages[2] as ToolResultMessage;
@@ -225,6 +226,7 @@ describe("Integration: TC-5 Recall 完整性", () => {
 describe("Integration: TC-7 L1 规则化摘要", () => {
   it("TC-7-01: TypeScript代码保留关键行", () => {
     const store = createRecallStore();
+    const config = { ...DEFAULT_CONFIG, l1: { ...DEFAULT_CONFIG.l1, protectRecentTurns: 0 } };
     const headLines = Array.from({ length: 10 }, (_, i) => `// head line ${i}`);
     const imports = ["import { read } from 'fs';", "import { join } from 'path';"];
     const defs = ["function process(d: string): void {", "export class Handler {"];
@@ -239,7 +241,7 @@ describe("Integration: TC-7 L1 规则化摘要", () => {
       makeToolResult(longContent, 0, "c1"),
     ];
 
-    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined);
+    const result = compressContext(messages, config, store, undefined);
     expect(result.stats.l1Condensed).toBe(1);
 
     const condensed = result.messages[2] as ToolResultMessage;
@@ -258,6 +260,7 @@ describe("Integration: TC-7 L1 规则化摘要", () => {
 
   it("TC-7-02: 非代码内容fallback到截断", () => {
     const store = createRecallStore();
+    const config = { ...DEFAULT_CONFIG, l1: { ...DEFAULT_CONFIG.l1, protectRecentTurns: 0 } };
     // 纯 JSON 内容，无 import/function/class 行
     const jsonContent = JSON.stringify(Array.from({ length: 2000 }, (_, i) => ({ id: i, value: `item-${i}` })));
     expect(jsonContent.length).toBeGreaterThan(8000);
@@ -268,7 +271,7 @@ describe("Integration: TC-7 L1 规则化摘要", () => {
       makeToolResult(jsonContent, 0, "c1"),
     ];
 
-    const result = compressContext(messages, DEFAULT_CONFIG, store, undefined);
+    const result = compressContext(messages, config, store, undefined);
     expect(result.stats.l1Condensed).toBe(1);
 
     const condensed = result.messages[2] as ToolResultMessage;
@@ -386,5 +389,51 @@ describe("Integration: TC-10 配置启停", () => {
     // L0 和 L2 不受影响
     expect(config.l0.enabled).toBe(true);
     expect(config.l2.enabled).toBe(true);
+  });
+});
+
+// ── TC-11 MC/Budget Commands (AC-8) ──
+
+describe("Integration: TC-11 MC/Budget Commands (AC-8)", () => {
+  it("mc off → config.mc.enabled 为 false", () => {
+    const config: ContextEngineeringConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+
+    const result = handleContextEngineeringCommand("mc off", config, {
+      l0Expired: 0, l0Truncated: 0, l0ThinkingCleared: 0,
+      l1Condensed: 0, l2Triggered: false, validationFailed: false,
+      mcTriggered: false, mcCleared: 0, budgetPersisted: 0,
+    });
+    expect(config.mc.enabled).toBe(false);
+  });
+
+  it("budget off → config.budget.enabled 为 false", () => {
+    const config: ContextEngineeringConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+
+    const result = handleContextEngineeringCommand("budget off", config, {
+      l0Expired: 0, l0Truncated: 0, l0ThinkingCleared: 0,
+      l1Condensed: 0, l2Triggered: false, validationFailed: false,
+      mcTriggered: false, mcCleared: 0, budgetPersisted: 0,
+    });
+    expect(config.budget.enabled).toBe(false);
+  });
+
+  it("禁用后 compressContext 中对应层不触发", () => {
+    const store = createRecallStore();
+    const config: ContextEngineeringConfig = {
+      ...DEFAULT_CONFIG,
+      mc: { ...DEFAULT_CONFIG.mc, enabled: false },
+      budget: { ...DEFAULT_CONFIG.budget, enabled: false },
+    };
+
+    const messages: AgentMessage[] = [
+      makeUser("task"),
+      makeAssistant([tc("c1")]),
+      makeToolResult("content", 0, "c1"),
+    ];
+
+    const result = compressContext(messages, config, store, undefined);
+    expect(result.stats.mcTriggered).toBe(false);
+    expect(result.stats.mcCleared).toBe(0);
+    expect(result.stats.budgetPersisted).toBe(0);
   });
 });

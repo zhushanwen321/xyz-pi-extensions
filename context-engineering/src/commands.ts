@@ -12,13 +12,37 @@ function formatConfigSummary(config: ContextEngineeringConfig): string {
     "",
   ];
 
+  if (config.mc.enabled) {
+    lines.push("MC (Microcompact):");
+    lines.push("  Enabled: true");
+    lines.push(
+      `  Gap: ${config.mc.gapThresholdMinutes}min | Keep recent: ${config.mc.keepRecent}`,
+    );
+  } else {
+    lines.push("MC (Microcompact): disabled");
+  }
+
+  lines.push("");
+
+  if (config.budget.enabled) {
+    lines.push("Budget (Tool result budget):");
+    lines.push("  Enabled: true");
+    lines.push(
+      `  Max: ${config.budget.maxToolResultCharsPerMessage} chars | Preview: ${config.budget.previewSize} chars`,
+    );
+  } else {
+    lines.push("Budget (Tool result budget): disabled");
+  }
+
+  lines.push("");
+
   if (config.l0.enabled) {
     lines.push("L0 (Zero-cost cleanup):");
     lines.push("  Enabled: true");
     lines.push(
       `  Expire: ${config.l0.expireMinutes}min | Bash truncate: ${config.l0.bashTruncateChars} chars | Thinking: ${config.l0.thinkingExpireMinutes}min`,
     );
-    lines.push(`  Protect recent: ${config.l0.protectRecentTurns} turns`);
+    lines.push(`  Protect recent: ${config.l0.protectRecentTurns} turns | Keep recent: ${config.l0.keepRecent}`);
   } else {
     lines.push("L0 (Zero-cost cleanup): disabled");
   }
@@ -29,7 +53,7 @@ function formatConfigSummary(config: ContextEngineeringConfig): string {
     lines.push("L1 (Rule-based compression):");
     lines.push("  Enabled: true");
     lines.push(
-      `  Threshold: ${config.l1.summaryThresholdChars} chars | Head: ${config.l1.keepHeadLines} lines | Tail: ${config.l1.keepTailLines} lines`,
+      `  Threshold: ${config.l1.summaryThresholdChars} chars | Head: ${config.l1.keepHeadLines} lines | Tail: ${config.l1.keepTailLines} lines | Protect: ${config.l1.protectRecentTurns} turns`,
     );
   } else {
     lines.push("L1 (Rule-based compression): disabled");
@@ -54,6 +78,8 @@ function formatConfigSummary(config: ContextEngineeringConfig): string {
 function formatStats(stats: CompressionStats): string {
   const lines = [
     "Statistics:",
+    `  MC: triggered=${stats.mcTriggered}, cleared=${stats.mcCleared}`,
+    `  Budget: persisted=${stats.budgetPersisted}`,
     `  L0 expired: ${stats.l0Expired} | truncated: ${stats.l0Truncated} | thinking cleared: ${stats.l0ThinkingCleared}`,
     `  L1 condensed: ${stats.l1Condensed}`,
     `  L2 triggered: ${stats.l2Triggered}`,
@@ -64,6 +90,10 @@ function formatStats(stats: CompressionStats): string {
 const USAGE_HELP = [
   "Usage:",
   "  /context-engineering          — Show current config and stats",
+  "  /context-engineering mc on    — Enable Microcompact",
+  "  /context-engineering mc off   — Disable Microcompact",
+  "  /context-engineering budget on  — Enable Budget",
+  "  /context-engineering budget off — Disable Budget",
   "  /context-engineering l0 on    — Enable L0 compression",
   "  /context-engineering l0 off   — Disable L0 compression",
   "  /context-engineering l1 on    — Enable L1 compression",
@@ -97,6 +127,12 @@ export function handleContextEngineeringCommand(
     case "global":
       config.enabled = onOff;
       return `Context engineering ${action === "on" ? "enabled" : "disabled"}.`;
+    case "mc":
+      config.mc.enabled = onOff;
+      return `MC (Microcompact) ${action === "on" ? "enabled" : "disabled"}.`;
+    case "budget":
+      config.budget.enabled = onOff;
+      return `Budget (Tool result budget) ${action === "on" ? "enabled" : "disabled"}.`;
     case "l0":
       config.l0.enabled = onOff;
       return `L0 (Zero-cost cleanup) ${action === "on" ? "enabled" : "disabled"}.`;
