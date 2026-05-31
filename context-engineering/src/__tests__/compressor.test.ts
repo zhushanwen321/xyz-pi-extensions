@@ -3,6 +3,9 @@ import {
   compressContext,
   validateToolPairing,
   getToolResultText,
+  processMicrocompact,
+  processBudget,
+  findCompactBoundary,
   type AgentMessage,
   type ToolCall,
   type AssistantMessage,
@@ -303,5 +306,257 @@ describe("compressor", () => {
     expect(result.stats.l2Triggered).toBe(false);
     expect(result.stats.validationFailed).toBe(false);
     expect(store.size()).toBe(0);
+  });
+});
+
+// ── Microcompact (AC-1) ──
+
+describe("Microcompact (AC-1)", () => {
+  const MINUTE = 60 * 1000;
+
+  it("8 个 read toolResult，最后一个 assistant 65 分钟前 → 前 3 个被清理", () => {
+    const now = Date.now();
+    const mcConfig = {
+      enabled: true,
+      gapThresholdMinutes: 60,
+      keepRecent: 5,
+    };
+
+    // assistant 在 65 分钟前
+    const assistantTs = now - 65 * MINUTE;
+
+    // 8 个 toolResult，每个关联一个 assistant（但 MC 只看最后一个 assistant 的 timestamp）
+    const messages: AgentMessage[] = [
+      makeUser("task", 70 * MINUTE),
+      makeAssistant([tc("c1")], undefined, 68 * MINUTE),
+      makeToolResult("content-1", 67 * MINUTE, "c1"),
+      makeToolResult("content-2", 66 * MINUTE, "c2"),
+      makeToolResult("content-3", 66 * MINUTE, "c3"),
+      makeToolResult("content-4", 66 * MINUTE, "c4"),
+      makeToolResult("content-5", 66 * MINUTE, "c5"),
+      makeToolResult("content-6", 66 * MINUTE, "c6"),
+      makeToolResult("content-7", 66 * MINUTE, "c7"),
+      makeToolResult("content-8", 66 * MINUTE, "c8"),
+      // 最后一个 assistant 在 65 分钟前
+      { ...makeAssistant([], undefined, 65 * MINUTE), content: [{ type: "text" as const, text: "done" }] },
+    ];
+
+    // 需要给 toolResult 配对 toolCall
+    // 为 c2-c8 添加 assistant toolCall
+    // 重新构造消息序列确保配对正确
+    const pairedMessages: AgentMessage[] = [
+      makeUser("task", 70 * MINUTE),
+      makeAssistant([tc("c1")], undefined, 68 * MINUTE),
+      makeToolResult("content-1", 67 * MINUTE, "c1"),
+      makeAssistant([tc("c2")], undefined, 67 * MINUTE),
+      makeToolResult("content-2", 66 * MINUTE, "c2"),
+      makeAssistant([tc("c3")], undefined, 66 * MINUTE),
+      makeToolResult("content-3", 66 * MINUTE, "c3"),
+      makeAssistant([tc("c4")], undefined, 66 * MINUTE),
+      makeToolResult("content-4", 66 * MINUTE, "c4"),
+      makeAssistant([tc("c5")], undefined, 66 * MINUTE),
+      makeToolResult("content-5", 66 * MINUTE, "c5"),
+      makeAssistant([tc("c6")], undefined, 66 * MINUTE),
+      makeToolResult("content-6", 66 * MINUTE, "c6"),
+      makeAssistant([tc("c7")], undefined, 66 * MINUTE),
+      makeToolResult("content-7", 66 * MINUTE, "c7"),
+      makeAssistant([tc("c8")], undefined, 66 * MINUTE),
+      makeToolResult("content-8", 66 * MINUTE, "c8"),
+      // 最后一个 assistant 在 65 分钟前
+      { ...makeAssistant([], undefined, 65 * MINUTE), content: [{ type: "text" as const, text: "done" }] },
+    ];
+
+    const { messages: result, stats } = processMicrocompact(pairedMessages, mcConfig, now, null);
+
+    expect(stats.triggered).toBe(true);
+    expect(stats.cleared).toBe(3); // 8 - 5 keepRecent = 3
+
+    // 前 3 个 toolResult (index 2, 4, 6) 被清理
+    const tr1 = result[2] as ToolResultMessage;
+    expect(getToolResultText(tr1)).toBe("[Old tool result content cleared]");
+
+    const tr2 = result[4] as ToolResultMessage;
+    expect(getToolResultText(tr2)).toBe("[Old tool result content cleared]");
+
+    const tr3 = result[6] as ToolResultMessage;
+    expect(getToolResultText(tr3)).toBe("[Old tool result content cleared]");
+
+    // 后 5 个保留原文 (index 8, 10, 12, 14, 16)
+    const tr4 = result[8] as ToolResultMessage;
+    expect(getToolResultText(tr4)).toBe("content-4");
+
+    const tr5 = result[10] as ToolResultMessage;
+    expect(getToolResultText(tr5)).toBe("content-5");
+  });
+
+  it("30 分钟内不触发 MC", () => {
+    const now = Date.now();
+    const mcConfig = {
+      enabled: true,
+      gapThresholdMinutes: 60,
+      keepRecent: 5,
+    };
+
+    const messages: AgentMessage[] = [
+      makeUser("task", 30 * MINUTE),
+      makeAssistant([tc("c1")], undefined, 30 * MINUTE),
+      makeToolResult("content-1", 29 * MINUTE, "c1"),
+    ];
+
+    const { messages: result, stats } = processMicrocompact(messages, mcConfig, now, null);
+
+    expect(stats.triggered).toBe(false);
+    expect(stats.cleared).toBe(0);
+    expect(getToolResultText(result[2] as ToolResultMessage)).toBe("content-1");
+  });
+
+  it("非 compactable 工具（recall_context）不被清理", () => {
+    const now = Date.now();
+    const mcConfig = {
+      enabled: true,
+      gapThresholdMinutes: 60,
+      keepRecent: 5,
+    };
+
+    const recallResult: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "c-recall",
+      toolName: "recall_context",
+      content: [{ type: "text" as const, text: "recalled content here" }],
+      isError: false,
+      timestamp: now - 65 * MINUTE,
+    };
+
+    const messages: AgentMessage[] = [
+      makeUser("task", 70 * MINUTE),
+      makeAssistant([tc("c1"), { type: "toolCall" as const, id: "c-recall", name: "recall_context", arguments: {} }], undefined, 65 * MINUTE),
+      makeToolResult("content-1", 66 * MINUTE, "c1"),
+      recallResult,
+      // 最后一个 assistant 65 分钟前
+      { ...makeAssistant([], undefined, 65 * MINUTE), content: [{ type: "text" as const, text: "done" }] },
+    ];
+
+    const { messages: result, stats } = processMicrocompact(messages, mcConfig, now, null);
+
+    expect(stats.triggered).toBe(true);
+    expect(stats.cleared).toBe(0); // 只有 1 个 compactable，keepRecent=5，不清理
+
+    // recall_context 的结果应保持原样
+    const kept = result[3] as ToolResultMessage;
+    expect(getToolResultText(kept)).toBe("recalled content here");
+  });
+});
+
+// ── Budget (AC-2, AC-3) ──
+
+describe("Budget (AC-2, AC-3)", () => {
+  it("5 个 toolResult 总计 250K chars，最大被持久化", async () => {
+    const store = createRecallStore();
+    const now = Date.now();
+    const budgetConfig = {
+      enabled: true,
+      maxToolResultCharsPerMessage: 200_000,
+      previewSize: 2000,
+    };
+
+    // 5 个 toolResult: 4x 20K + 1x 170K = 250K total
+    // 最大的 170K 应被持久化
+    const small = "a".repeat(20_000);
+    const big = "B".repeat(170_000);
+
+    const { createFrozenFreshState } = await import("../frozen-fresh");
+    const ffState = createFrozenFreshState();
+
+    const messages: AgentMessage[] = [
+      makeUser("task"),
+      makeAssistant([tc("c1"), tc("c2"), tc("c3"), tc("c4"), tc("c5")]),
+      makeToolResult(small, 0, "c1"),
+      makeToolResult(small, 0, "c2"),
+      makeToolResult(small, 0, "c3"),
+      makeToolResult(small, 0, "c4"),
+      makeToolResult(big, 0, "c5"),
+    ];
+
+    const { messages: result, stats } = processBudget(
+      messages, budgetConfig, store, ffState, null,
+    );
+
+    expect(stats.persisted).toBe(1);
+
+    // 最大的 (c5, index 6) 应被持久化
+    const persisted = result[6] as ToolResultMessage;
+    const text = getToolResultText(persisted);
+    expect(text).toContain("[Persisted output");
+    expect(text).toContain("Total: 170000 chars");
+
+    // 原文存入 recall store
+    expect(store.size()).toBe(1);
+
+    // 小的应保留
+    const kept = result[2] as ToolResultMessage;
+    expect(getToolResultText(kept)).toBe(small);
+  });
+});
+
+// ── Compact Boundary (AC-4, AC-7) ──
+
+describe("Compact Boundary (AC-4, AC-7)", () => {
+  const MINUTE = 60 * 1000;
+
+  it("compactionSummary 在 index 5，之前的 toolResult 不被 MC 处理", () => {
+    const now = Date.now();
+    const mcConfig = {
+      enabled: true,
+      gapThresholdMinutes: 60,
+      keepRecent: 1,
+    };
+
+    // compactionSummary 在 index 5
+    const messages: AgentMessage[] = [
+      makeUser("t0", 120 * MINUTE),       // 0
+      makeAssistant([tc("c0")], undefined, 119 * MINUTE), // 1
+      makeToolResult("old-1", 119 * MINUTE, "c0"), // 2 - 边界前
+      makeUser("t1", 110 * MINUTE),       // 3
+      makeToolResult("old-2", 109 * MINUTE, "c2"), // 4 - 边界前，非 compactable 位置
+      // compactionSummary 边界
+      makeUser("compactionSummary: summary of prior work", 100 * MINUTE), // 5 - boundary
+      makeAssistant([tc("c3"), tc("c4"), tc("c5"), tc("c6")], undefined, 80 * MINUTE), // 6
+      makeToolResult("fresh-1", 79 * MINUTE, "c3"), // 7 - 边界后
+      makeToolResult("fresh-2", 78 * MINUTE, "c4"), // 8 - 边界后
+      makeToolResult("fresh-3", 77 * MINUTE, "c5"), // 9 - 边界后
+      makeToolResult("fresh-4", 76 * MINUTE, "c6"), // 10 - 边界后
+      makeAssistant([], undefined, 65 * MINUTE), // 11 - 65min 前，触发 MC
+    ];
+
+    const boundary = findCompactBoundary(messages);
+    expect(boundary).toBe(5);
+
+    const { messages: result, stats } = processMicrocompact(messages, mcConfig, now, boundary);
+
+    // MC 应触发（最后一个 assistant 65min 前 > 60min）
+    expect(stats.triggered).toBe(true);
+
+    // 边界前的 toolResult (index 2) 不应被 MC 处理
+    const beforeBoundary = result[2] as ToolResultMessage;
+    expect(getToolResultText(beforeBoundary)).toBe("old-1");
+
+    // 边界后有 4 个 compactable (7,8,9,10)，keepRecent=1 → 清理 3 个
+    expect(stats.cleared).toBe(3);
+    const cleared = result[7] as ToolResultMessage;
+    expect(getToolResultText(cleared)).toBe("[Old tool result content cleared]");
+
+    // 最近 1 个保留
+    const kept = result[10] as ToolResultMessage;
+    expect(getToolResultText(kept)).toBe("fresh-4");
+  });
+
+  it("无 compactionSummary 时正常处理", () => {
+    const messages: AgentMessage[] = [
+      makeUser("t0", 120 * 60 * 1000),
+      makeToolResult("content", 119 * 60 * 1000, "c1"),
+    ];
+
+    const boundary = findCompactBoundary(messages);
+    expect(boundary).toBeNull();
   });
 });

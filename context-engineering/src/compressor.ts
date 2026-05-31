@@ -1,7 +1,9 @@
 // compressor.ts — L0/L1/L2 compression engine with tool pairing validation
 
-import type { L0Config, L1Config, L2Config, ContextEngineeringConfig } from "./config.ts";
+import type { L0Config, L1Config, L2Config, McConfig, BudgetConfig, ContextEngineeringConfig } from "./config.ts";
 import type { RecallStore } from "./recall-store.ts";
+import type { FrozenFreshState } from "./frozen-fresh.ts";
+import { createFrozenFreshState } from "./frozen-fresh.ts";
 
 // chars→tokens 估算因子和 fallback 上下文窗口大小
 const CHARS_PER_TOKEN = 4;
@@ -113,9 +115,27 @@ export interface CompressionStats {
   l1Condensed: number;
   l2Triggered: boolean;
   validationFailed: boolean;
+  mcTriggered: boolean;
+  mcCleared: number;
+  budgetPersisted: number;
 }
 
 // ── Turn boundary detection ──
+
+// MC: 可被 Microcompact 清理的工具集
+export const COMPACTABLE_TOOLS = new Set([
+  "read", "bash", "bash_background", "grep", "glob",
+  "web_search", "web_fetch", "edit", "write",
+]);
+
+export interface McStats {
+  triggered: boolean;
+  cleared: number;
+}
+
+export interface BudgetStats {
+  persisted: number;
+}
 
 export function findTurnBoundaries(messages: AgentMessage[]): TurnBoundary[] {
   if (messages.length === 0) return [];
@@ -283,6 +303,155 @@ export function validateToolPairing(messages: AgentMessage[]): boolean {
   }
 
   return pendingToolCalls.size === 0;
+}
+
+// ── Compact boundary detection ──
+
+export function findCompactBoundary(messages: AgentMessage[]): number | null {
+  let lastIdx: number | null = null;
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (
+      msg.role === "user" &&
+      typeof msg.content === "string" &&
+      msg.content.includes("compactionSummary")
+    ) {
+      lastIdx = i;
+    }
+  }
+  return lastIdx;
+}
+
+// ── Microcompact: time-based cleanup ──
+
+export function processMicrocompact(
+  messages: AgentMessage[],
+  config: McConfig,
+  now: number,
+  compactBoundaryIdx: number | null,
+): { messages: AgentMessage[]; stats: McStats } {
+  if (!config.enabled) {
+    return { messages, stats: { triggered: false, cleared: 0 } };
+  }
+
+  // 找最后一个 assistant 消息的 timestamp
+  let lastAssistantTs = 0;
+  for (const msg of messages) {
+    if (msg.role === "assistant") {
+      lastAssistantTs = Math.max(lastAssistantTs, msg.timestamp);
+    }
+  }
+
+  // 间隔不够，不触发
+  if (lastAssistantTs === 0 || now - lastAssistantTs <= config.gapThresholdMinutes * MS_PER_MINUTE) {
+    return { messages, stats: { triggered: false, cleared: 0 } };
+  }
+
+  // 收集所有 compactable toolResult 索引
+  const candidateIdxs: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role !== "toolResult") continue;
+    if (!COMPACTABLE_TOOLS.has(msg.toolName)) continue;
+    // 已过期的不再处理
+    const text = getToolResultText(msg);
+    if (text.startsWith("[Tool result expired")) continue;
+    // 只处理边界之后的
+    if (compactBoundaryIdx != null && i <= compactBoundaryIdx) continue;
+    candidateIdxs.push(i);
+  }
+
+  if (candidateIdxs.length <= config.keepRecent) {
+    return { messages, stats: { triggered: true, cleared: 0 } };
+  }
+
+  // 保留最近 keepRecent 个，清理前面的
+  const keepFrom = candidateIdxs.length - config.keepRecent;
+  const toClear = candidateIdxs.slice(0, keepFrom);
+
+  const result = [...messages];
+  for (const idx of toClear) {
+    const msg = result[idx] as ToolResultMessage;
+    result[idx] = {
+      ...msg,
+      content: [{ type: "text" as const, text: "[Old tool result content cleared]" }],
+    };
+  }
+
+  return { messages: result, stats: { triggered: true, cleared: toClear.length } };
+}
+
+// ── Budget: tool result budget management ──
+
+export function processBudget(
+  messages: AgentMessage[],
+  config: BudgetConfig,
+  store: RecallStore,
+  ffState: FrozenFreshState,
+  compactBoundaryIdx: number | null,
+): { messages: AgentMessage[]; stats: BudgetStats } {
+  if (!config.enabled) {
+    return { messages, stats: { persisted: 0 } };
+  }
+
+  const result = [...messages];
+  let persisted = 0;
+
+  // 按 user 消息分段
+  let groupStart = 0;
+  for (let i = 0; i <= messages.length; i++) {
+    const isGroupEnd = i === messages.length || messages[i].role === "user";
+    if (!isGroupEnd) continue;
+
+    // 处理 [groupStart, i) 范围内的 toolResult
+    const freshEntries: { idx: number; toolCallId: string; chars: number }[] = [];
+    let totalFreshChars = 0;
+
+    for (let j = groupStart; j < i; j++) {
+      const msg = messages[j];
+      if (msg.role !== "toolResult") continue;
+      if (compactBoundaryIdx != null && j <= compactBoundaryIdx) continue;
+
+      // frozen 的用 replacement 替换
+      if (ffState.isFrozen(msg.toolCallId)) {
+        const replacement = ffState.getReplacement(msg.toolCallId)!;
+        result[j] = {
+          ...msg,
+          content: [{ type: "text" as const, text: replacement }],
+        } as ToolResultMessage;
+        continue;
+      }
+
+      const text = getToolResultText(msg);
+      freshEntries.push({ idx: j, toolCallId: msg.toolCallId, chars: text.length });
+      totalFreshChars += text.length;
+    }
+
+    // 超过预算 → 持久化最大的 fresh toolResult
+    if (totalFreshChars > config.maxToolResultCharsPerMessage && freshEntries.length > 0) {
+      // 找最大
+      let maxEntry = freshEntries[0];
+      for (const entry of freshEntries) {
+        if (entry.chars > maxEntry.chars) maxEntry = entry;
+      }
+
+      const msg = messages[maxEntry.idx] as ToolResultMessage;
+      const text = getToolResultText(msg);
+      const id = store.store(text, "budget-persisted");
+      const replacement =
+        `[Persisted output (ID: ${id}). Preview: ${text.slice(0, config.previewSize)}... Total: ${text.length} chars]`;
+      ffState.markFrozen(maxEntry.toolCallId, replacement);
+      result[maxEntry.idx] = {
+        ...msg,
+        content: [{ type: "text" as const, text: replacement }],
+      } as ToolResultMessage;
+      persisted++;
+    }
+
+    groupStart = i;
+  }
+
+  return { messages: result, stats: { persisted } };
 }
 
 // ── Private helpers ──
@@ -504,6 +673,9 @@ export function compressContext(
     l1Condensed: 0,
     l2Triggered: false,
     validationFailed: false,
+    mcTriggered: false,
+    mcCleared: 0,
+    budgetPersisted: 0,
   };
 
   if (!config.enabled) {
@@ -512,12 +684,30 @@ export function compressContext(
 
   const now = Date.now();
   const boundaries = findTurnBoundaries(messages);
+  const compactBoundaryIdx = findCompactBoundary(messages);
+
+  const stats: CompressionStats = { ...zeroStats };
+  let current = messages;
+
+  // MC (Microcompact)
+  if (config.mc.enabled) {
+    const mc = processMicrocompact(current, config.mc, now, compactBoundaryIdx);
+    current = mc.messages;
+    stats.mcTriggered = mc.stats.triggered;
+    stats.mcCleared = mc.stats.cleared;
+  }
+
+  // Budget
+  if (config.budget.enabled) {
+    const ffState = createFrozenFreshState();
+    const budget = processBudget(current, config.budget, store, ffState, compactBoundaryIdx);
+    current = budget.messages;
+    stats.budgetPersisted = budget.stats.persisted;
+  }
 
   // L0
-  let current = messages;
-  const stats: CompressionStats = { ...zeroStats };
   if (config.l0.enabled) {
-    const l0 = processL0(messages, config.l0, store, now, boundaries);
+    const l0 = processL0(current, config.l0, store, now, boundaries);
     current = l0.messages;
     stats.l0Expired = l0.stats.expired;
     stats.l0Truncated = l0.stats.truncated;

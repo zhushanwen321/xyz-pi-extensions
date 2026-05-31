@@ -18,7 +18,7 @@ const RecallParams = Type.Object({
 });
 
 function zeroStats(): CompressionStats {
-  return { l0Expired: 0, l0Truncated: 0, l0ThinkingCleared: 0, l1Condensed: 0, l2Triggered: false, validationFailed: false };
+  return { l0Expired: 0, l0Truncated: 0, l0ThinkingCleared: 0, l1Condensed: 0, l2Triggered: false, validationFailed: false, mcTriggered: false, mcCleared: 0, budgetPersisted: 0 };
 }
 
 function addStats(target: CompressionStats, delta: CompressionStats): void {
@@ -26,8 +26,11 @@ function addStats(target: CompressionStats, delta: CompressionStats): void {
   target.l0Truncated += delta.l0Truncated;
   target.l0ThinkingCleared += delta.l0ThinkingCleared;
   target.l1Condensed += delta.l1Condensed;
+  target.mcCleared += delta.mcCleared;
+  target.budgetPersisted += delta.budgetPersisted;
   if (delta.l2Triggered) target.l2Triggered = true;
   if (delta.validationFailed) target.validationFailed = true;
+  if (delta.mcTriggered) target.mcTriggered = true;
 }
 
 function recallResult(id: string, store: RecallStore) {

@@ -6,7 +6,7 @@ export interface StoredContent {
   id: string;
   original: string;
   compressedAt: number;
-  level: "l0-expired" | "l0-truncated" | "l1-condensed" | "l2-emergency";
+  level: "l0-expired" | "l0-truncated" | "l1-condensed" | "l2-emergency" | "mc-cleared" | "budget-persisted";
 }
 
 export interface RecallStore {

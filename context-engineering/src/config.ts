@@ -25,11 +25,25 @@ export interface L2Config {
   protectRecentTurns: number;
 }
 
+export interface McConfig {
+  enabled: boolean;
+  gapThresholdMinutes: number;
+  keepRecent: number;
+}
+
+export interface BudgetConfig {
+  enabled: boolean;
+  maxToolResultCharsPerMessage: number;
+  previewSize: number;
+}
+
 export interface ContextEngineeringConfig {
   enabled: boolean;
   l0: L0Config;
   l1: L1Config;
   l2: L2Config;
+  mc: McConfig;
+  budget: BudgetConfig;
 }
 
 // ── 默认配置 ──
@@ -53,6 +67,16 @@ export const DEFAULT_CONFIG: ContextEngineeringConfig = {
     enabled: true,
     emergencyThreshold: 0.9,
     protectRecentTurns: 3,
+  },
+  mc: {
+    enabled: true,
+    gapThresholdMinutes: 60,
+    keepRecent: 5,
+  },
+  budget: {
+    enabled: true,
+    maxToolResultCharsPerMessage: 200_000,
+    previewSize: 2000,
   },
 };
 
@@ -130,7 +154,7 @@ export function parseLevelArgs(
 
   const [rawTarget, rawAction] = tokens;
 
-  const validTargets = new Set(["global", "l0", "l1", "l2"]);
+  const validTargets = new Set(["global", "l0", "l1", "l2", "mc", "budget"]);
   const validActions = new Set(["on", "off"]);
 
   if (!validTargets.has(rawTarget) || !validActions.has(rawAction)) {
