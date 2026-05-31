@@ -303,6 +303,7 @@ export function findCompactBoundary(messages: AgentMessage[]): number | null
 **Type:** backend
 
 **Files:**
+- Modify: `context-engineering/src/config.ts`
 - Modify: `context-engineering/src/compressor.ts`
 - Test: `context-engineering/src/__tests__/compressor.test.ts`
 
@@ -345,6 +346,7 @@ L1Config 新增 `protectRecentTurns: number` 字段，默认值 2。
 **Type:** backend
 
 **Files:**
+- Modify: `context-engineering/src/config.ts`
 - Modify: `context-engineering/src/recall-store.ts`
 - Modify: `context-engineering/src/compressor.ts`
 - Test: `context-engineering/src/__tests__/compressor.test.ts`
