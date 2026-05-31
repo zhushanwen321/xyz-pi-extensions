@@ -13,8 +13,8 @@ import {
   type ThinkingContent,
   type ContextUsage,
 } from "../compressor";
-import { createRecallStore, type RecallStore } from "../recall-store";
-import { DEFAULT_CONFIG, parseLevelArgs, type ContextEngineeringConfig } from "../config";
+import { createRecallStore } from "../recall-store";
+import { DEFAULT_CONFIG, type ContextEngineeringConfig } from "../config";
 import { handleContextEngineeringCommand, handleContextStatsCommand } from "../commands";
 
 // ── Helpers ──
@@ -350,7 +350,7 @@ describe("Integration: TC-10 配置启停", () => {
     const store = createRecallStore();
 
     // 执行 /context-engineering global off
-    const offResult = handleContextEngineeringCommand("global off", config, {
+    const _offResult = handleContextEngineeringCommand("global off", config, {
       l0Expired: 0, l0Truncated: 0, l0ThinkingCleared: 0,
       l1Condensed: 0, l2Triggered: false, validationFailed: false,
     });
@@ -366,7 +366,7 @@ describe("Integration: TC-10 配置启停", () => {
     expect(result.messages).toBe(messages);
 
     // 执行 /context-engineering global on
-    const onResult = handleContextEngineeringCommand("global on", config, {
+    const _onResult = handleContextEngineeringCommand("global on", config, {
       l0Expired: 0, l0Truncated: 0, l0ThinkingCleared: 0,
       l1Condensed: 0, l2Triggered: false, validationFailed: false,
     });
