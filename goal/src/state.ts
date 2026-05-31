@@ -38,18 +38,19 @@ const TERMINAL_STATUSES: ReadonlySet<GoalStatus> = new Set([
 
 export type TaskStatus = "pending" | "in_progress" | "completed" | "cancelled";
 
-export type SubTodoStatus = "pending" | "in_progress" | "completed";
+export type SubtaskStatus = "pending" | "in_progress" | "completed";
 
-export const SUB_TODO_STATUSES: readonly SubTodoStatus[] = [
+export const SUBTASK_STATUSES: readonly SubtaskStatus[] = [
 	"pending",
 	"in_progress",
 	"completed",
 ] as const;
 
-export interface SubTodo {
+export interface Subtask {
 	id: number;
 	text: string;
-	status: SubTodoStatus;
+	status: SubtaskStatus;
+	lastUpdatedTurn: number;
 }
 
 export const GOAL_TASK_STATUSES: readonly TaskStatus[] = [
@@ -68,7 +69,8 @@ export interface GoalTask {
 	description: string;
 	status: TaskStatus;
 	evidence?: string; // 完成时的证据描述
-	subTodos?: SubTodo[];
+	subtasks?: Subtask[];
+	lastUpdatedTurn: number;
 }
 
 // ── 预算配置 ──────────────────────────────────────────
@@ -100,6 +102,8 @@ export interface GoalRuntimeState {
 	budgetWarning70Sent: boolean; // 70% 预算预警已发送（token 或时间任一达 70%）
 	budgetWarning90Sent: boolean; // 90% 预算预警已发送
 	lastTurnTokensUsed: number; // 上一 turn 结束时的 tokensUsed，用于去抖检测
+	currentTurnIndex: number;                    // turn_end 粒度计数器
+	completedAtTurnIndex?: number;               // 进入终态时的 currentTurnIndex
 }
 
 // ── 默认值 ────────────────────────────────────────────
@@ -128,6 +132,8 @@ export function createInitialState(objective: string, budget: Partial<BudgetConf
 		budgetWarning70Sent: false,
 		budgetWarning90Sent: false,
 		lastTurnTokensUsed: 0,
+		currentTurnIndex: 0,
+		completedAtTurnIndex: undefined,
 	};
 }
 
@@ -156,7 +162,7 @@ export function serializeState(state: GoalRuntimeState): GoalRuntimeState {
 		...state,
 		tasks: state.tasks.map((t) => ({
 			...t,
-			subTodos: t.subTodos?.map((s) => ({ ...s })),
+			subtasks: t.subtasks?.map((s) => ({ ...s })),
 		})),
 		budget: { ...state.budget },
 	};
@@ -174,13 +180,18 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 		if (!("status" in t)) {
 			throw new Error("Legacy goal-state format detected, session reset required");
 		}
-		const rawSubTodos = t.subTodos as Record<string, unknown>[] | undefined;
-		const subTodos = Array.isArray(rawSubTodos)
-			? rawSubTodos
+		const rawSubtasks = (t.subtasks ?? t.subTodos) as Record<string, unknown>[] | undefined;
+		const subtasks = Array.isArray(rawSubtasks)
+			? rawSubtasks
 					.filter((s) => typeof s.id === "number" && typeof s.text === "string" && typeof s.status === "string")
-					.map((s) => ({ id: s.id as number, text: s.text as string, status: s.status as SubTodoStatus }))
+					.map((s) => ({
+						id: s.id as number,
+						text: s.text as string,
+						status: s.status as SubtaskStatus,
+						lastUpdatedTurn: (s.lastUpdatedTurn as number) ?? 0,
+					}))
 			: undefined;
-		return { ...t, subTodos } as unknown as GoalTask;
+		return { ...t, subtasks, lastUpdatedTurn: (t.lastUpdatedTurn as number) ?? 0 } as unknown as GoalTask;
 	}),
 		turnCount: (data.turnCount as number) ?? 0,
 		stallCount: (data.stallCount as number) ?? 0,
@@ -195,6 +206,8 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 		budgetWarning70Sent: (data.budgetWarning70Sent as boolean) ?? false,
 		budgetWarning90Sent: (data.budgetWarning90Sent as boolean) ?? false,
 		lastTurnTokensUsed: (data.lastTurnTokensUsed as number) ?? 0,
+		currentTurnIndex: (data.currentTurnIndex as number) ?? 0,
+		completedAtTurnIndex: data.completedAtTurnIndex as number | undefined,
 	};
 }
 

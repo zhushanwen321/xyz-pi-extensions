@@ -11,7 +11,7 @@
 
 import type { GoalRuntimeState, GoalTask } from "./state";
 import { getIncompleteTasks, getCompletedCount, getElapsedTimeSeconds } from "./state";
-import { SECONDS_PER_MINUTE, PERCENT_FACTOR } from "./constants";
+import { SECONDS_PER_MINUTE, PERCENT_FACTOR, TASK_STALL_TURN_THRESHOLD } from "./constants";
 
 // ── XML 转义（防止 objective 中的 XML 标签破坏 prompt 结构）──
 
@@ -45,7 +45,7 @@ export function continuationPrompt(state: GoalRuntimeState): string {
 		`[GOAL] Turn ${state.turnCount}/${state.budget.maxTurns}${budgetLine}${stallLine}\n` +
 		`<objective>${objective}</objective>\n` +
 		`${taskLine}\n` +
-		`Rules: create_tasks→update_tasks(evidence)→complete_goal(evidence). blocked→report_blocked(reason). sub-todo: add_sub_todos/update_sub_todos (替代 todo 工具).\n` +
+		`Rules: create_tasks→update_tasks(evidence)→complete_goal(evidence). blocked→report_blocked(reason). subtask: add_subtasks/update_subtasks (替代 todo 工具).\n` +
 		`Audit: 逐项验证每个需求有权威证据。不因预算耗尽标记完成，不因困难标记阻塞。\n` +
 		`</goal_context>`
 	);
@@ -124,9 +124,46 @@ export function contextInjectionPrompt(state: GoalRuntimeState): string {
 		`2. 每完成一个任务调用 update_tasks 将状态设为 completed，并提供 evidence\n` +
 		`3. 只有提供具体证据时才能调用 complete_goal\n` +
 		`4. 遇到阻塞调用 report_blocked\n` +
-		`5. Goal 模式下不要使用 todo 工具，使用 add_sub_todos / update_sub_todos 追踪细粒度步骤\n` +
+		`5. Goal 模式下不要使用 todo 工具，使用 add_subtasks / update_subtasks 追踪细粒度步骤\n` +
 		`</goal_context>`
 	);
+}
+
+// ── Staleness Reminder Prompt ────────────────────────
+
+export function stalenessReminderPrompt(
+	state: GoalRuntimeState,
+	staleTasks: Array<{
+		task: GoalTask;
+		staleTurns: number;
+		staleSubtasks: Array<{ text: string; staleTurns: number }>;
+	}>,
+	allTerminal: boolean,
+): string {
+	const objective = escapeXmlText(state.objective);
+	const lines: string[] = [];
+
+	lines.push("<goal_context>");
+	lines.push("[GOAL 提醒 — 有任务停滞]\n");
+
+	if (allTerminal) {
+		lines.push("所有任务已完成，但 goal_manager 未关闭。请调用 complete_goal 或 cancel_goal。");
+	} else {
+		lines.push(`以下任务已超过 ${TASK_STALL_TURN_THRESHOLD} turn 未更新：\n`);
+		for (const item of staleTasks) {
+			lines.push(`  #${item.task.id}: ${item.task.description} (${item.staleTurns} turn 未操作)`);
+			for (const s of item.staleSubtasks) {
+				lines.push(`    - ${s.text} (${s.staleTurns} turn)`);
+			}
+		}
+		lines.push("\n请检查这些任务的状态，调用 update_tasks 更新进展或 cancel 不再需要的任务。");
+	}
+
+	lines.push(`\n目标: ${objective}`);
+	lines.push(`Turn: ${state.turnCount}/${state.budget.maxTurns}`);
+	lines.push("</goal_context>");
+
+	return lines.join("\n");
 }
 
 // ── Helpers ───────────────────────────────────────────
@@ -170,8 +207,8 @@ export function formatTaskList(tasks: GoalTask[]): string {
 		for (const t of active) {
 			const icon = t.status === "in_progress" ? "●" : "☐";
 			lines.push(`  ${icon} #${t.id}: ${t.description}`);
-			if (t.subTodos && t.subTodos.length > 0) {
-				for (const s of t.subTodos) {
+			if (t.subtasks && t.subtasks.length > 0) {
+				for (const s of t.subtasks) {
 					const sIcon = s.status === "completed" ? "✓" : s.status === "in_progress" ? "●" : "○";
 					lines.push(`    ${sIcon} #${t.id}.${s.id}: ${s.text}`);
 				}

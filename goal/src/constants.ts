@@ -36,3 +36,9 @@ export const PERCENT_FACTOR = 100;
 export const PROGRESS_BAR_DEFAULT_WIDTH = 10;
 export const OBJECTIVE_DISPLAY_LIMIT = 80;
 export const OBJECTIVE_TRUNCATE_KEEP = 77; // DISPLAY_LIMIT - 3 for "..."
+
+// ── 停滞/清理阈值 ────────────────────────────────────
+
+export const TASK_STALL_TURN_THRESHOLD = 10;	// task/subtask 停滞提醒阈值（turn 数）
+export const AUTO_CLEAR_TURNS = 2;				// 终态后自动清理轮数
+export const MAX_HISTORY_ENTRIES = 20;			// goal-history entry GC 上限

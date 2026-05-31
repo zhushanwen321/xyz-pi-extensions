@@ -25,7 +25,7 @@ import {
 	type GoalRuntimeState,
 	type GoalTask,
 	type BudgetConfig,
-	type SubTodo,
+	type Subtask,
 	DEFAULT_BUDGET,
 	createInitialState,
 	transitionStatus,
@@ -38,7 +38,7 @@ import {
 	getIncompleteTasks,
 	getElapsedTimeSeconds,
 	GOAL_TASK_STATUSES,
-	SUB_TODO_STATUSES,
+	SUBTASK_STATUSES,
 } from "./state";
 
 import { parseGoalArgs } from "./commands";
@@ -48,9 +48,10 @@ import {
 	objectiveUpdatedPrompt,
 	contextInjectionPrompt,
 	formatTaskList,
+	stalenessReminderPrompt,
 } from "./templates";
 
-import { renderStatusLine, renderWidgetLines } from "./widget";
+import { renderStatusLine, renderWidgetLines, renderTerminalStatusLine } from "./widget";
 import { toSingleLine } from "./widget";
 
 import {
@@ -58,6 +59,11 @@ import {
 	MS_PER_SECOND,
 	CONTEXT_USAGE_RATIO_LIMIT,
 	PERCENT_FACTOR,
+	TASK_STALL_TURN_THRESHOLD,
+	AUTO_CLEAR_TURNS,
+	MAX_HISTORY_ENTRIES,
+	OBJECTIVE_DISPLAY_LIMIT,
+	OBJECTIVE_TRUNCATE_KEEP,
 } from "./constants";
 
 import {
@@ -69,6 +75,21 @@ import {
 // ── Constants ─────────────────────────────────────────
 
 const ENTRY_TYPE = "goal-state";
+const HISTORY_ENTRY_TYPE = "goal-history";
+
+function writeGoalHistoryEntry(pi: ExtensionAPI, session: GoalSession): void {
+	const state = session.state;
+	if (!state) return;
+	pi.appendEntry(HISTORY_ENTRY_TYPE, {
+		goalId: state.goalId,
+		objective: state.objective,
+		status: state.status,
+		completedTasks: getCompletedCount(state.tasks),
+		totalTasks: state.tasks.length,
+		elapsedSeconds: Math.floor(getElapsedTimeSeconds(state)),
+		timestamp: Date.now(),
+	});
+}
 
 // ── Tool Parameter Schemas ────────────────────────────
 
@@ -81,9 +102,9 @@ const GoalManagerParams = Type.Object({
 		"complete_goal",
 		"cancel_goal",
 		"report_blocked",
-		"add_sub_todos",
-		"update_sub_todos",
-		"delete_sub_todos",
+		"add_subtasks",
+		"update_subtodos",
+		"delete_subtasks",
 	] as const),
 	tasks: Type.Optional(Type.Array(Type.String(), { description: "Task descriptions. 每条必须是一行简短摘要（不超过 60 字），不含换行或 markdown" })),
 	updates: Type.Optional(Type.Array(Type.Object({
@@ -91,13 +112,13 @@ const GoalManagerParams = Type.Object({
 		status: StringEnum(GOAL_TASK_STATUSES),
 		evidence: Type.Optional(Type.String()),
 	}))),
-	taskId: Type.Optional(Type.Number({ description: "Task ID（sub-todo 操作时必需）" })),
-	texts: Type.Optional(Type.Array(Type.String(), { description: "Sub-todo 文本列表（add_sub_todos 时使用）" })),
+	taskId: Type.Optional(Type.Number({ description: "Task ID（subtask 操作时必需）" })),
+	texts: Type.Optional(Type.Array(Type.String(), { description: "Subtask 文本列表（add_subtasks 时使用）" })),
 	subUpdates: Type.Optional(Type.Array(Type.Object({
 		subId: Type.Number(),
-		status: StringEnum(SUB_TODO_STATUSES),
+		status: StringEnum(SUBTASK_STATUSES),
 	}))),
-	subIds: Type.Optional(Type.Array(Type.Number(), { description: "Sub-todo ID 列表（delete_sub_todos 时使用）" })),
+	subIds: Type.Optional(Type.Array(Type.Number(), { description: "Subtask ID 列表（delete_subtasks 时使用）" })),
 	evidence: Type.Optional(Type.String({ description: "Evidence for completion (required for complete_goal)" })),
 	reason: Type.Optional(Type.String({ description: "Reason for being blocked (required for report_blocked)" })),
 	cancelReason: Type.Optional(Type.String({ description: "Why the user wants to cancel (required for cancel_goal)" })),
@@ -172,7 +193,7 @@ function makeGoalResult(session: GoalSession, text: string) {
 						text: t.description,
 						status: t.status,
 						evidence: t.evidence,
-						subItems: t.subTodos?.map((s) => ({
+						subtasks: t.subtasks?.map((s) => ({
 							id: s.id,
 							text: s.text,
 							status: s.status,
@@ -233,12 +254,37 @@ function reconstructGoalState(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 	for (const idx of goalEntryIndices) {
 		entries.splice(idx, 1);
 	}
+
+	// Goal-history entry GC — 保留最近 MAX_HISTORY_ENTRIES 条
+	const historyIndices: number[] = [];
+	for (let i = 0; i < entries.length; i++) {
+		const entry = entries[i]!;
+		if (entry.type === "custom" && (entry as CustomEntry).customType === HISTORY_ENTRY_TYPE) {
+			historyIndices.push(i);
+		}
+	}
+	if (historyIndices.length > MAX_HISTORY_ENTRIES) {
+		const toDelete = historyIndices.slice(0, historyIndices.length - MAX_HISTORY_ENTRIES);
+		for (let i = toDelete.length - 1; i >= 0; i--) {
+			entries.splice(toDelete[i]!, 1);
+		}
+	}
 }
 
 function updateWidget(session: GoalSession, ctx: ExtensionContext): void {
 	if (!session.state || session.state.status === "cancelled") {
 		ctx.ui.setWidget("goal", undefined);
 		ctx.ui.setStatus("goal", undefined);
+		return;
+	}
+
+	// 终态折叠为单行 status bar
+	if (isTerminalStatus(session.state.status)) {
+		const statusText = renderTerminalStatusLine(session.state, ctx.ui.theme);
+		if (statusText) {
+			ctx.ui.setStatus("goal", statusText);
+		}
+		ctx.ui.setWidget("goal", undefined);
 		return;
 	}
 
@@ -294,6 +340,7 @@ async function executeGoalAction(
 				id: i + 1,
 				description: normalizeDescription(desc),
 				status: "pending" as const,
+				lastUpdatedTurn: state.currentTurnIndex,
 			}))
 			persistGoalState(pi, session, ctx);
 			return makeGoalResult(session,
@@ -312,6 +359,7 @@ async function executeGoalAction(
 				id: startId + i,
 				description: normalizeDescription(desc),
 				status: "pending" as const,
+				lastUpdatedTurn: state.currentTurnIndex,
 			}))
 			state.tasks.push(...newTasks);
 			persistGoalState(pi, session, ctx);
@@ -345,6 +393,7 @@ async function executeGoalAction(
 			for (const u of params.updates) {
 				const task = state.tasks.find((t) => t.id === u.taskId)!;
 				const prev = task.status;
+				task.lastUpdatedTurn = state.currentTurnIndex;
 				if (u.status === "completed") {
 					task.status = "completed";
 					task.evidence = u.evidence;
@@ -381,6 +430,7 @@ async function executeGoalAction(
 				throw new Error("至少需要完成一个任务才能完成目标。全部取消不算达成。");
 			}
 			state.status = transitionStatus(state.status, "complete");
+			state.completedAtTurnIndex = state.currentTurnIndex;
 			persistGoalState(pi, session, ctx);
 			const budgetReport: string[] = [];
 			budgetReport.push(`总轮次: ${state.turnCount}`);
@@ -412,6 +462,8 @@ async function executeGoalAction(
 			const reason = params.cancelReason ?? "用户要求取消";
 			const goalId = state.goalId;
 			state.status = "cancelled";
+			state.completedAtTurnIndex = state.currentTurnIndex;
+			writeGoalHistoryEntry(pi, session);
 			persistGoalState(pi, session, ctx);
 			clearGoalSession(session, ctx);
 			return {
@@ -430,98 +482,100 @@ async function executeGoalAction(
 			};
 		}
 
-		case "add_sub_todos": {
+		case "add_subtasks": {
 			if (params.taskId === undefined) {
-				throw new Error("add_sub_todos requires taskId");
+				throw new Error("add_subtasks requires taskId");
 			}
 			if (!params.texts || params.texts.length === 0) {
-				throw new Error("add_sub_todos requires a non-empty texts array");
+				throw new Error("add_subtasks requires a non-empty texts array");
 			}
 			const parentTask = state.tasks.find((t) => t.id === params.taskId);
 			if (!parentTask) {
 				throw new Error(`Task #${params.taskId} not found`);
 			}
 			if (isTerminalTaskStatus(parentTask.status)) {
-				throw new Error(`Task #${parentTask.id} 已处于终态 (${parentTask.status})，不能添加 sub-todo`);
+				throw new Error(`Task #${parentTask.id} 已处于终态 (${parentTask.status})，不能添加 subtask`);
 			}
-			const subTodos = parentTask.subTodos ?? [];
-			const startId = subTodos.length > 0 ? Math.max(...subTodos.map((s) => s.id)) + 1 : 1;
+			const subtasks = parentTask.subtasks ?? [];
+			const startId = subtasks.length > 0 ? Math.max(...subtasks.map((s) => s.id)) + 1 : 1;
 			const trimmed = params.texts.map((t) => t.trim()).filter((t) => t.length > 0);
 			if (trimmed.length === 0) {
 				throw new Error("texts 中至少需要一个非空字符串");
 			}
-			const newSubTodos: SubTodo[] = trimmed.map((text, i) => ({
+			const newSubtasks: Subtask[] = trimmed.map((text, i) => ({
 				id: startId + i,
 				text,
 				status: "pending" as const,
+				lastUpdatedTurn: state.currentTurnIndex,
 			}));
-			parentTask.subTodos = [...subTodos, ...newSubTodos];
+			parentTask.subtasks = [...subtasks, ...newSubtasks];
 			persistGoalState(pi, session, ctx);
 			return makeGoalResult(session,
-				`已给 Task #${parentTask.id} 添加 ${newSubTodos.length} 项 sub-todo：\n` +
-				newSubTodos.map((s) => `  - #${parentTask.id}.${s.id}: ${s.text}`).join("\n"),
+				`已给 Task #${parentTask.id} 添加 ${newSubtasks.length} 项 subtask：\n` +
+				newSubtasks.map((s) => `  - #${parentTask.id}.${s.id}: ${s.text}`).join("\n"),
 			);
 		}
 
-		case "update_sub_todos": {
+		case "update_subtodos": {
 			if (params.taskId === undefined) {
-				throw new Error("update_sub_todos requires taskId");
+				throw new Error("update_subtasks requires taskId");
 			}
 			if (!params.subUpdates || params.subUpdates.length === 0) {
-				throw new Error("update_sub_todos requires a non-empty subUpdates array");
+				throw new Error("update_subtasks requires a non-empty subUpdates array");
 			}
 			const targetTask = state.tasks.find((t) => t.id === params.taskId);
 			if (!targetTask) {
 				throw new Error(`Task #${params.taskId} not found`);
 			}
-			if (!targetTask.subTodos || targetTask.subTodos.length === 0) {
-				throw new Error(`Task #${params.taskId} 没有 sub-todo`);
+			if (!targetTask.subtasks || targetTask.subtasks.length === 0) {
+				throw new Error(`Task #${params.taskId} 没有 subtask`);
 			}
 			const results: string[] = [];
 			for (const u of params.subUpdates) {
-				const sub = targetTask.subTodos.find((s) => s.id === u.subId);
+				const sub = targetTask.subtasks.find((s) => s.id === u.subId);
 				if (!sub) {
-					throw new Error(`Sub-todo #${params.taskId}.${u.subId} not found`);
+					throw new Error(`Subtask #${params.taskId}.${u.subId} not found`);
 				}
 				if (sub.status === "completed") {
-					throw new Error(`Sub-todo #${params.taskId}.${sub.id} 已完成，不可变更`);
+					throw new Error(`Subtask #${params.taskId}.${sub.id} 已完成，不可变更`);
 				}
 				const prev = sub.status;
 				sub.status = u.status;
+				sub.lastUpdatedTurn = state.currentTurnIndex;
 				results.push(`#${params.taskId}.${sub.id}: ${prev} → ${u.status}`);
 			}
 			persistGoalState(pi, session, ctx);
 			return makeGoalResult(session,
-				`已更新 ${results.length} 项 sub-todo：\n${results.join("\n")}`,
+				`已更新 ${results.length} 项 subtask：\n${results.join("\n")}`,
 			);
 		}
 
-		case "delete_sub_todos": {
+		case "delete_subtasks": {
 			if (params.taskId === undefined) {
-				throw new Error("delete_sub_todos requires taskId");
+				throw new Error("delete_subtasks requires taskId");
 			}
 			if (!params.subIds || params.subIds.length === 0) {
-				throw new Error("delete_sub_todos requires a non-empty subIds array");
+				throw new Error("delete_subtasks requires a non-empty subIds array");
 			}
 			const delTask = state.tasks.find((t) => t.id === params.taskId);
 			if (!delTask) {
 				throw new Error(`Task #${params.taskId} not found`);
 			}
-			if (!delTask.subTodos || delTask.subTodos.length === 0) {
-				throw new Error(`Task #${params.taskId} 没有 sub-todo`);
+			if (!delTask.subtasks || delTask.subtasks.length === 0) {
+				throw new Error(`Task #${params.taskId} 没有 subtask`);
 			}
 			const uniqueIds = [...new Set(params.subIds)];
-			const missing = uniqueIds.filter((id) => !delTask.subTodos!.some((s) => s.id === id));
+			const missing = uniqueIds.filter((id) => !delTask.subtasks!.some((s) => s.id === id));
 			if (missing.length > 0) {
-				throw new Error(`Sub-todo ${missing.map((id) => `#${params.taskId}.${id}`).join(", ")} not found`);
+				throw new Error(`Subtask ${missing.map((id) => `#${params.taskId}.${id}`).join(", ")} not found`);
 			}
-			delTask.subTodos = delTask.subTodos.filter((s) => !uniqueIds.includes(s.id));
-			if (delTask.subTodos.length === 0) {
-				delTask.subTodos = undefined;
+			delTask.subtasks = delTask.subtasks.filter((s) => !uniqueIds.includes(s.id));
+			if (delTask.subtasks.length === 0) {
+				delTask.subtasks = undefined;
 			}
 			persistGoalState(pi, session, ctx);
 			return makeGoalResult(session,
-				`已删除 ${uniqueIds.length} 项 sub-todo，Task #${params.taskId} 剩余 ${delTask.subTodos?.length ?? 0} 项`,
+				`已删除 ${uniqueIds.length} 项 subtask，Task #${params.taskId} 剩余 ${delTask.subtasks?.length ?? 0} 项`,
 			);
 		}
 
@@ -623,12 +677,56 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 			return;
 		}
 
+		case "history": {
+			const entries = ctx.sessionManager.getEntries();
+			const historyEntries = entries.filter(
+				(e) => e.type === "custom" && (e as CustomEntry).customType === HISTORY_ENTRY_TYPE,
+			) as Array<CustomEntry<{
+				goalId: string;
+				objective: string;
+				status: string;
+				completedTasks: number;
+				totalTasks: number;
+				elapsedSeconds: number;
+				timestamp: number;
+			}>>;
+
+			if (historyEntries.length === 0) {
+				ctx.ui.notify("暂无历史 Goal", "info");
+				return;
+			}
+
+			// 按时间倒序
+			const sorted = [...historyEntries].reverse();
+			const lines: string[] = ["历史 Goal：\n"];
+			for (let i = 0; i < sorted.length; i++) {
+				const h = sorted[i]!.data;
+				if (!h) continue;
+				const statusIcon =
+					h.status === "complete" ? "✓" :
+					h.status === "cancelled" ? "✗" :
+					h.status === "budget_limited" ? "⊗" :
+					h.status === "time_limited" ? "⏱" : "?";
+				const objDisplay = h.objective.length > OBJECTIVE_DISPLAY_LIMIT
+					? h.objective.slice(0, OBJECTIVE_TRUNCATE_KEEP) + "..."
+					: h.objective;
+				const mins = Math.floor(h.elapsedSeconds / SECONDS_PER_MINUTE);
+				const secs = Math.floor(h.elapsedSeconds % SECONDS_PER_MINUTE);
+				lines.push(`${i + 1}. ${statusIcon} ${objDisplay}`);
+				lines.push(`   ${h.completedTasks}/${h.totalTasks} 任务 | ${mins}分${secs}秒 | ${h.status}`);
+			}
+			ctx.ui.notify(lines.join("\n"), "info");
+			return;
+		}
+
 		case "clear": {
 			if (!session.state) {
 				ctx.ui.notify("Goal 模式未激活。", "info");
 				return;
 			}
 			session.state.status = "cancelled";
+			session.state.completedAtTurnIndex = session.state.currentTurnIndex;
+			writeGoalHistoryEntry(pi, session);
 			persistGoalState(pi, session, ctx);
 			clearGoalSession(session, ctx);
 			ctx.ui.notify("Goal 已清除。", "info");
@@ -680,6 +778,8 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 					"info",
 				);
 				session.state.status = "cancelled";
+				session.state.completedAtTurnIndex = session.state.currentTurnIndex;
+				writeGoalHistoryEntry(pi, session);
 				persistGoalState(pi, session, ctx);
 			}
 
@@ -719,10 +819,96 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 // ── Event: before_agent_start Handler ─────────────────
 
 async function handleBeforeAgentStart(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionContext) {
-	if (!session.state || !isActiveStatus(session.state.status)) return;
+	if (!session.state) return;
+
+	// 终态处理：自动清理或折叠 status bar
+	if (isTerminalStatus(session.state.status)) {
+		const state = session.state;
+		const turnsInTerminal = state.currentTurnIndex - (state.completedAtTurnIndex ?? 0);
+
+		if (turnsInTerminal >= AUTO_CLEAR_TURNS) {
+			clearGoalSession(session, ctx);
+			return;
+		}
+
+		// 折叠 status bar（不渲染 task 列表）
+		const statusText = renderTerminalStatusLine(state, ctx.ui.theme);
+		if (statusText) {
+			ctx.ui.setStatus("goal", statusText);
+		}
+		ctx.ui.setWidget("goal", undefined);
+		return;
+	}
+
+	if (!isActiveStatus(session.state.status)) return;
 
 	session.hasPendingInjection = true;
 
+	// 停滞检查
+	const state = session.state;
+	const staleTasks: Array<{
+		task: GoalTask;
+		staleTurns: number;
+		staleSubtasks: Array<{ text: string; staleTurns: number }>;
+	}> = [];
+	let allTerminal = true;
+
+	for (const task of state.tasks) {
+		if (!isTerminalTaskStatus(task.status)) {
+			allTerminal = false;
+			const staleTurns = state.currentTurnIndex - task.lastUpdatedTurn;
+			if (staleTurns >= TASK_STALL_TURN_THRESHOLD) {
+				const staleSubtasks: Array<{ text: string; staleTurns: number }> = [];
+				if (task.subtasks) {
+					for (const s of task.subtasks) {
+						if (s.status !== "completed") {
+							const subStale = state.currentTurnIndex - s.lastUpdatedTurn;
+							if (subStale >= TASK_STALL_TURN_THRESHOLD) {
+								staleSubtasks.push({ text: s.text, staleTurns: subStale });
+							}
+						}
+					}
+				}
+				staleTasks.push({ task, staleTurns, staleSubtasks });
+			}
+		}
+	}
+
+	// 边界：所有 task 已终态但 goal 仍 active
+	if (allTerminal && state.tasks.length > 0) {
+		return {
+			message: {
+				customType: "goal-staleness-reminder",
+				content: stalenessReminderPrompt(state, [], true),
+				display: false,
+			},
+		};
+	}
+
+	// 有停滞项 → 注入提醒
+	if (staleTasks.length > 0) {
+		// 重置被提醒项的 lastUpdatedTurn
+		for (const item of staleTasks) {
+			item.task.lastUpdatedTurn = state.currentTurnIndex;
+			if (item.task.subtasks) {
+				for (const s of item.task.subtasks) {
+					if (s.status !== "completed") {
+						s.lastUpdatedTurn = state.currentTurnIndex;
+					}
+				}
+			}
+		}
+
+		return {
+			message: {
+				customType: "goal-staleness-reminder",
+				content: stalenessReminderPrompt(state, staleTasks, false),
+				display: false,
+			},
+		};
+	}
+
+	// 无停滞 → 继续原有 context injection
 	const usage = ctx.getContextUsage();
 	if (usage && usage.contextWindow > 0 && (usage.tokens ?? 0) / usage.contextWindow > CONTEXT_USAGE_RATIO_LIMIT) {
 		session.state.status = transitionStatus(session.state.status, "paused");
@@ -809,6 +995,8 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 	if (budgetResult.terminal) {
 		const dim = budgetResult.terminal.dimension;
 		session.state.status = transitionStatus(session.state.status, dim === "token" ? "budget_limited" : "time_limited");
+		session.state.completedAtTurnIndex = session.state.currentTurnIndex;
+		writeGoalHistoryEntry(pi, session);
 		persistGoalState(pi, session, ctx);
 		if (checkStale()) return;
 		updateWidget(session, ctx);
@@ -843,6 +1031,8 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 	if (progress.allTasksDone) {
 		if (progress.maxTurnsReached) {
 			session.state.status = transitionStatus(session.state.status, "complete");
+			session.state.completedAtTurnIndex = session.state.currentTurnIndex;
+			writeGoalHistoryEntry(pi, session);
 			persistGoalState(pi, session, ctx);
 			if (checkStale()) return;
 			updateWidget(session, ctx);
@@ -876,6 +1066,8 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 	if (progress.noTasksCreated) {
 		if (progress.maxTurnsReached) {
 			session.state.status = transitionStatus(session.state.status, "cancelled");
+			session.state.completedAtTurnIndex = session.state.currentTurnIndex;
+			writeGoalHistoryEntry(pi, session);
 			persistGoalState(pi, session, ctx);
 			if (checkStale()) return;
 			updateWidget(session, ctx);
@@ -899,6 +1091,8 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 	if (progress.maxTurnsReached) {
 		const incomplete = getIncompleteTasks(session.state.tasks);
 		session.state.status = transitionStatus(session.state.status, "cancelled");
+		session.state.completedAtTurnIndex = session.state.currentTurnIndex;
+		writeGoalHistoryEntry(pi, session);
 		persistGoalState(pi, session, ctx);
 		if (checkStale()) return;
 		updateWidget(session, ctx);
@@ -972,9 +1166,9 @@ export default function goalExtension(pi: ExtensionAPI) {
 			"\n- complete_goal: 标记目标达成（必须所有任务完成 + evidence）" +
 			"\n- cancel_goal: 取消当前目标（用户要求退出/停止时使用）" +
 			"\n- report_blocked: 报告阻塞（遇到无法解决的问题时使用）" +
-			"\n- add_sub_todos: 给指定 task 添加 sub-todo（参数: taskId, texts[]）。Goal 模式下用此替代 todo 工具" +
-			"\n- update_sub_todos: 批量更新 sub-todo 状态（参数: taskId, subUpdates[]）" +
-			"\n- delete_sub_todos: 删除指定 task 的 sub-todo（参数: taskId, subIds[]）",
+			"\n- add_subtasks: 给指定 task 添加 subtask（参数: taskId, texts[]）。Goal 模式下用此替代 todo 工具" +
+			"\n- update_subtasks: 批量更新 subtask 状态（参数: taskId, subUpdates[]）" +
+			"\n- delete_subtasks: 删除指定 task 的 subtask（参数: taskId, subIds[]）",
 		promptSnippet: "管理 /goal 模式的任务清单、完成状态和退出",
 		promptGuidelines: [
 			"[工作流] 收到目标后，第一步必须调用 create_tasks 拆分任务。已有任务清单时不要重复调用",
@@ -989,7 +1183,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 			"[禁止] 不要在没有 evidence 的情况下将任务标记为 completed，也不要在没有 evidence 时调用 complete_goal",
 			"[禁止] 不要在用户明确想退出时强制要求完成任务——直接 cancel_goal",
 			"[禁止] 不要重复调用 create_tasks 覆盖已有未完成任务，如需追加请用 add_tasks",
-			"[sub-todo] Goal 模式下需要细粒度步骤追踪时，使用 add_sub_todos 给 task 添加 sub-todo，不要使用 todo 工具",
+			"[subtask] Goal 模式下需要细粒度步骤追踪时，使用 add_subtasks 给 task 添加 subtask，不要使用 todo 工具",
 		],
 		parameters: GoalManagerParams,
 
@@ -1008,8 +1202,8 @@ export default function goalExtension(pi: ExtensionAPI) {
 			if (args.tasks) text += ` ${theme.fg("dim", `(${args.tasks.length} tasks)`)}`;
 			if (args.updates) text += ` ${theme.fg("dim", `(${args.updates.length} updates)`)}`;
 			if (args.taskId !== undefined) text += ` ${theme.fg("accent", `#${args.taskId}`)}`;
-			if (args.texts) text += ` ${theme.fg("dim", `(${args.texts.length} sub-todos)`)}`;
-			if (args.subUpdates) text += ` ${theme.fg("dim", `(${args.subUpdates.length} sub-updates)`)}`;
+			if (args.texts) text += ` ${theme.fg("dim", `(${args.texts.length} subtasks)`)}`;
+			if (args.subUpdates) text += ` ${theme.fg("dim", `(${args.subUpdates.length} subtask updates)`)}`;
 			if (args.subIds) text += ` ${theme.fg("dim", `del #${args.subIds.join(",")}`)}`;
 			return new Text(text, 0, 0);
 		},
@@ -1040,9 +1234,9 @@ export default function goalExtension(pi: ExtensionAPI) {
 					? theme.fg("dim", descText)
 					: theme.fg("text", descText);
 				lines.push(`  ${icon} ${theme.fg("accent", `#${t.id}`)} ${desc}`);
-			// Sub-todo items in expanded view
-			if (t.subTodos && t.subTodos.length > 0) {
-				for (const s of t.subTodos) {
+			// Subtask items in expanded view
+			if (t.subtasks && t.subtasks.length > 0) {
+				for (const s of t.subtasks) {
 					const subIcon = s.status === "completed"
 						? theme.fg("success", "\u2713")
 						: s.status === "in_progress"
@@ -1061,7 +1255,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("goal", {
 		description:
-			"目标驱动模式: /goal <objective> [--tokens N] [--timeout N] [--max-turns N] | /goal pause | /goal resume | /goal clear | /goal update <new-objective> | /goal status",
+			"目标驱动模式: /goal <objective> [--tokens N] [--timeout N] [--max-turns N] | /goal pause | /goal resume | /goal clear | /goal update <new-objective> | /goal status | /goal history",
 		handler: async (args, ctx) => {
 			await handleGoalCommand(pi, session, args, ctx);
 		},
@@ -1084,6 +1278,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	pi.on("turn_end", async (_event, ctx) => {
 		if (!session.state) return;
+		session.state.currentTurnIndex++;
 		updateWidget(session, ctx);
 	});
 
@@ -1127,6 +1322,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 	const goalMessageTypes = [
 		"goal-context",
 		"goal-context-exceeded",
+		"goal-staleness-reminder",
 	];
 
 	for (const customType of goalMessageTypes) {
@@ -1134,7 +1330,9 @@ export default function goalExtension(pi: ExtensionAPI) {
 			const prefix =
 				message.customType === "goal-context-exceeded"
 					? theme.fg("error", "[GOAL 预算] ")
-					: theme.fg("accent", "[GOAL] ");
+					: message.customType === "goal-staleness-reminder"
+						? theme.fg("warning", "[GOAL 提醒] ")
+						: theme.fg("accent", "[GOAL] ");
 			const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
 			return new Text(prefix + theme.fg("dim", content), 0, 0);
 		});

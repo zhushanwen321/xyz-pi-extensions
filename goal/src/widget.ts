@@ -85,6 +85,44 @@ export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string
 	return text;
 }
 
+export function renderTerminalStatusLine(state: GoalRuntimeState, th: ThemeLike): string {
+	if (state.status === "cancelled") return "";
+
+	const completedCount = getCompletedCount(state.tasks);
+	const total = state.tasks.length;
+
+	let text = th.fg("accent", "◆ Goal");
+
+	// 状态后缀
+	switch (state.status) {
+		case "complete":
+			text += th.fg("success", " ✓ 完成");
+			break;
+		case "budget_limited":
+			text += th.fg("error", " ⊗ Token 预算耗尽");
+			break;
+		case "time_limited":
+			text += th.fg("error", " ⏱ 时间预算耗尽");
+			break;
+		default:
+			break;
+	}
+
+	text += th.fg("muted", ` | ${completedCount}/${total} 任务`);
+
+	// 预算摘要
+	if (state.budget.tokenBudget && state.budget.tokenBudget > 0) {
+		const pct = Math.round(getTokenUsagePercent(state));
+		text += th.fg(getBudgetColor(pct), ` | ${pct}% tokens`);
+	}
+	if (state.budget.timeBudgetMinutes && state.budget.timeBudgetMinutes > 0) {
+		const pct = Math.round(getTimeUsagePercent(state));
+		text += th.fg(getBudgetColor(pct), ` | ${pct}% time`);
+	}
+
+	return text;
+}
+
 export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): string[] {
 	if (state.status === "cancelled") return [];
 
@@ -117,8 +155,8 @@ export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): strin
 				lines.push(`  ${th.fg("dim", "☐")} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}`);
 			}
 			// Sub-todo items
-			if (t.subTodos && t.subTodos.length > 0 && t.status !== "cancelled") {
-				for (const s of t.subTodos) {
+			if (t.subtasks && t.subtasks.length > 0 && t.status !== "cancelled") {
+				for (const s of t.subtasks) {
 					const subIcon = s.status === "completed"
 						? th.fg("success", "✓")
 						: s.status === "in_progress"
