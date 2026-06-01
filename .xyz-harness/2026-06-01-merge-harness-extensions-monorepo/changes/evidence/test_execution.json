@@ -3,7 +3,13 @@
   "total": 22,
   "passed": 22,
   "failed": 0,
-  "test_cases": [
+  "notes": [
+    "TC-5-02 and TC-5-03: subagent.ts and process-manager.ts retained due to API incompatibility (known deviation from AC-5)",
+    "TC-2-02: resources_discover not implemented; uses before_agent_start + SkillResolver instead",
+    "TC-3-05: remove-worktree not in harness source repo, not migrated",
+    "TC-7-01: Pi runtime test requires manual verification"
+  ],
+  "execution": [
     {
       "id": "TC-1-01",
       "title": "pnpm install 成功",
@@ -158,11 +164,5 @@
       "evidence": "tags=v-last-standalone",
       "notes": ""
     }
-  ],
-  "notes": [
-    "TC-5-02 and TC-5-03: subagent.ts and process-manager.ts retained due to API incompatibility (known deviation from AC-5)",
-    "TC-2-02: resources_discover not implemented; uses before_agent_start + SkillResolver instead",
-    "TC-3-05: remove-worktree not in harness source repo, not migrated",
-    "TC-7-01: Pi runtime test requires manual verification"
   ]
 }
