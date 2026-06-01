@@ -320,7 +320,7 @@ describe("compressor", () => {
 // ── Microcompact (AC-1) ──
 
 describe("Microcompact (AC-1)", () => {
-    const ffState = createFrozenFreshState();
+    const _ffState = createFrozenFreshState();
   const MINUTE = 60 * 1000;
 
   it("8 个 read toolResult，最后一个 assistant 65 分钟前 → 前 3 个被清理", () => {
@@ -332,10 +332,10 @@ describe("Microcompact (AC-1)", () => {
     };
 
     // assistant 在 65 分钟前
-    const assistantTs = now - 65 * MINUTE;
+    const _assistantTs = now - 65 * MINUTE;
 
     // 8 个 toolResult，每个关联一个 assistant（但 MC 只看最后一个 assistant 的 timestamp）
-    const messages: AgentMessage[] = [
+    const _messages: AgentMessage[] = [
       makeUser("task", 70 * MINUTE),
       makeAssistant([tc("c1")], undefined, 68 * MINUTE),
       makeToolResult("content-1", 67 * MINUTE, "c1"),
@@ -464,7 +464,7 @@ describe("Microcompact (AC-1)", () => {
 describe("Budget (AC-2, AC-3)", () => {
   it("5 个 toolResult 总计 250K chars，最大被持久化", async () => {
     const store = createRecallStore();
-    const now = Date.now();
+    const _now = Date.now();
     const budgetConfig = {
       enabled: true,
       maxToolResultCharsPerMessage: 200_000,
@@ -512,7 +512,7 @@ describe("Budget (AC-2, AC-3)", () => {
 // ── Compact Boundary (AC-4, AC-7) ──
 
 describe("Compact Boundary (AC-4, AC-7)", () => {
-    const ffState = createFrozenFreshState();
+    const _ffState = createFrozenFreshState();
   const MINUTE = 60 * 1000;
 
   it("compactionSummary 在 index 5，之前的 toolResult 不被 MC 处理", () => {

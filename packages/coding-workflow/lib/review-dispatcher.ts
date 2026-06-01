@@ -5,7 +5,6 @@
  * Content quality review is done by expert-reviewer during phase execution.
  */
 
-import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ChildProcess } from "node:child_process";
 import type { SkillResolver } from "./skill-resolver.js";
@@ -14,6 +13,7 @@ import {
 	getFinalOutput,
 	cleanupOldTempFiles,
 	type SingleResult,
+	type OnUpdateCallback,
 } from "./subagent.js";
 import {
 	resolveModelByComplexity,
@@ -123,7 +123,7 @@ export async function dispatchReviewSubagent(
 	topicDir: string,
 	skillResolver: SkillResolver,
 	signal?: AbortSignal,
-	onUpdate?: (partial: any) => void,
+	onUpdate?: OnUpdateCallback,
 	processRegistry?: ChildProcess[],
 ): Promise<ReviewDispatchResult> {
 	const modelResult = await resolveModelByComplexity("medium", {});

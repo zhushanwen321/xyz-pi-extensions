@@ -399,7 +399,7 @@ describe("Integration: TC-11 MC/Budget Commands (AC-8)", () => {
   it("mc off → config.mc.enabled 为 false", () => {
     const config: ContextEngineeringConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
 
-    const result = handleContextEngineeringCommand("mc off", config, {
+    const _result = handleContextEngineeringCommand("mc off", config, {
       l0Expired: 0, l0Truncated: 0, l0ThinkingCleared: 0,
       l1Condensed: 0, l2Triggered: false, validationFailed: false,
       mcTriggered: false, mcCleared: 0, budgetPersisted: 0,
@@ -410,7 +410,7 @@ describe("Integration: TC-11 MC/Budget Commands (AC-8)", () => {
   it("budget off → config.budget.enabled 为 false", () => {
     const config: ContextEngineeringConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
 
-    const result = handleContextEngineeringCommand("budget off", config, {
+    const _result = handleContextEngineeringCommand("budget off", config, {
       l0Expired: 0, l0Truncated: 0, l0ThinkingCleared: 0,
       l1Condensed: 0, l2Triggered: false, validationFailed: false,
       mcTriggered: false, mcCleared: 0, budgetPersisted: 0,

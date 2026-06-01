@@ -17,6 +17,24 @@ export interface ZhipuData {
 	resetTime: string;
 }
 
+
+interface ZhipuLimit {
+	type: string;
+	percentage?: number;
+	currentValue?: number;
+	nextResetTime?: string;
+}
+
+interface ZhipuApiData {
+	level?: string;
+	limits?: ZhipuLimit[];
+}
+
+interface ZhipuApiResponse {
+	success?: boolean;
+	data?: ZhipuApiData;
+}
+
 async function fetchZhipu(): Promise<ZhipuData | null> {
 	// 优先环境变量，兼容文件
 	let token = process.env.ZAI_AUTH_TOKEN ?? "";
@@ -53,14 +71,14 @@ async function fetchZhipu(): Promise<ZhipuData | null> {
 			},
 		);
 		if (!resp.ok) return null;
-		const data = (await resp.json()) as any;
+		const data = await resp.json() as ZhipuApiResponse;
 		return processZhipu(data);
 	} catch {
 		return null;
 	}
 }
 
-function processZhipu(data: any): ZhipuData | null {
+function processZhipu(data: ZhipuApiResponse): ZhipuData | null {
 	if (!data?.success) return null;
 	const d = data.data;
 	const label = d?.level ? `Z.ai-${d.level}` : "Z.ai";

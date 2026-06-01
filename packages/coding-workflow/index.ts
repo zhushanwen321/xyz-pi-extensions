@@ -225,10 +225,9 @@ function reconstructState(ctx: ExtensionContext, state: WorkflowState): void {
 		const entry = entries[i];
 		if (
 			entry.type === "custom" &&
-			"customType" in entry &&
-			(entry as any).customType === "coding-workflow"
+			(entry as { customType: string }).customType === "coding-workflow"
 		) {
-			const data = (entry as any).data as WorkflowState | undefined;
+			const data = (entry as { data: unknown }).data as WorkflowState | undefined;
 			if (data) {
 				state.isActive = data.isActive ?? false;
 				state.currentPhase = data.currentPhase ?? 0;

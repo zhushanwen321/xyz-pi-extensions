@@ -18,6 +18,26 @@ export interface KimiCodingWindow {
 	resetTime: string;
 }
 
+interface KimiLimitDetail {
+	limit?: number;
+	remaining?: number;
+	resetTime?: string;
+}
+
+interface KimiLimit {
+	detail?: KimiLimitDetail;
+}
+
+interface KimiUsage {
+	limit?: number;
+	used?: number;
+	resetTime?: string;
+}
+
+interface KimiApiResponse {
+	limits?: KimiLimit[];
+	usage?: KimiUsage;
+}
 export interface KimiCodingData {
 	rollingWindow: KimiCodingWindow;
 	dailyLimit: number;
@@ -41,7 +61,7 @@ async function fetchKimiCoding(): Promise<KimiCodingData | null> {
 			signal: AbortSignal.timeout(5000),
 		});
 		if (!resp.ok) return null;
-		const data = (await resp.json()) as any;
+	const data = (await resp.json()) as KimiApiResponse;
 
 		const win = (data?.limits ?? [])[0];
 		const winLimit = Number(win?.detail?.limit ?? 0);

@@ -25,7 +25,7 @@ export const DEFAULT_ACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
 export interface ProcessOpts {
 	cwd: string;
 	shell?: boolean;
-	stdio?: "pipe" | "ignore" | "inherit" | any[];
+	stdio?: "pipe" | "ignore" | "inherit" | Array<("pipe" | "ignore" | "inherit" | number | null | undefined)>;
 	activityTimeoutMs?: number;
 	globalTimeoutMs?: number;
 	signal?: AbortSignal;

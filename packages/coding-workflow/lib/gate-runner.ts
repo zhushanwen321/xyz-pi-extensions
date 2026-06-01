@@ -60,8 +60,8 @@ export async function runGateScript(
 					settle({
 						passed: false,
 						output: jsonResult.checks
-							?.filter((c: any) => !c.passed)
-							.map((c: any) => `  - ${c.name}: ${c.detail}`)
+						?.filter((c: GateCheckItem) => !c.passed)
+						.map((c: GateCheckItem) => `  - ${c.name}: ${c.detail}`)
 							.join("\n") || stdout,
 						checks: jsonResult.checks,
 					});

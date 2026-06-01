@@ -1,14 +1,32 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
-	INFINITE_WIN,
 	type NormalizedQuotaRow,
 	type QuotaProvider,
 } from "./types.js";
 
 const HOME = homedir();
 
+
+interface TavilyUsageEntry {
+	credits: number;
+	requests: number;
+}
+
+interface TavilyApiUsageEntry {
+	plan_usage: number;
+	plan_limit: number;
+	key_usage: number;
+	key_limit: number;
+	plan_name: string;
+}
+
+interface TavilyState {
+	usage: Record<string, TavilyUsageEntry>;
+	exhausted?: Record<string, unknown>;
+	api_usage?: Record<string, TavilyApiUsageEntry>;
+}
 export interface TavilyData {
 	available: number;
 	total: number;
@@ -24,22 +42,22 @@ export interface TavilyData {
 async function readTavily(): Promise<TavilyData | null> {
 	const stateFile = join(HOME, ".tavily", "state.json");
 	try {
-		const data = JSON.parse(readFileSync(stateFile, "utf-8")) as any;
+		const data = JSON.parse(readFileSync(stateFile, "utf-8")) as TavilyState;
 		if (!data?.usage) return null;
 
 		const total = Object.keys(data.usage).length;
 		const exhausted = Object.keys(data.exhausted ?? {}).length;
-		const entries = Object.values(data.usage) as any[];
+		const entries = Object.values(data.usage) as TavilyUsageEntry[];
 		const credits = entries.reduce(
-			(s: number, v: any) => s + (v.credits ?? 0),
+			(s, v) => s + (v.credits ?? 0),
 			0,
 		);
 		const requests = entries.reduce(
-			(s: number, v: any) => s + (v.requests ?? 0),
+			(s, v) => s + (v.requests ?? 0),
 			0,
 		);
 
-		const apiEntries = Object.values(data.api_usage ?? {}) as any[];
+		const apiEntries = Object.values(data.api_usage ?? {}) as TavilyApiUsageEntry[];
 		let planUsage = 0;
 		let planLimit = 0;
 		let keyUsage = 0;

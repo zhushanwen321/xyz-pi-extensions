@@ -12,7 +12,7 @@
  */
 
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth } from "@mariozechner/pi-tui";
 import {
 	readCache,
@@ -257,7 +257,7 @@ export default function (pi: ExtensionAPI) {
 
 // ── 数据刷新 ───────────────────────────────────────────
 
-function refreshTotals(st: State, ctx: any): void {
+function refreshTotals(st: State, ctx: ExtensionContext): void {
 	let inp = 0, out = 0, cost = 0;
 	for (const e of ctx.sessionManager.getBranch()) {
 		if (e.type === "message" && e.message.role === "assistant") {
@@ -274,7 +274,7 @@ function refreshTotals(st: State, ctx: any): void {
 	refreshContextUsage(st, ctx);
 }
 
-function refreshContextUsage(st: State, ctx: any): void {
+function refreshContextUsage(st: State, ctx: ExtensionContext): void {
 	const usage = ctx.getContextUsage();
 	if (!usage || usage.tokens === null) return;
 	const contextWindow = usage.contextWindow || 128_000;
@@ -285,12 +285,12 @@ function refreshContextUsage(st: State, ctx: any): void {
 }
 
 /** 从 session entries 中读取最新 ic-compact-tree 的 totalTokens */
-function refreshTreeTokens(st: State, ctx: any): void {
+function refreshTreeTokens(st: State, ctx: ExtensionContext): void {
 	let latestTokens: number | undefined;
 	let latestTreeId: string | undefined;
 	for (const e of ctx.sessionManager.getEntries()) {
-		if (e.type === "custom" && (e as any).customType === "ic-compact-tree") {
-			const data = (e as any).data;
+		if (e.type === "custom" && (e as { customType: string }).customType === "ic-compact-tree") {
+			const data = (e as { data?: { totalTokens?: number; treeId?: string } }).data;
 			if (data?.totalTokens != null) latestTokens = data.totalTokens;
 			if (data?.treeId != null) latestTreeId = data.treeId;
 		}
@@ -302,9 +302,9 @@ function refreshTreeTokens(st: State, ctx: any): void {
 // ── 渲染 ───────────────────────────────────────────────
 
 function buildLines(
-	ctx: any,
-	theme: any,
-	fd: any,
+	ctx: ExtensionContext,
+	theme: Theme,
+	fd: ReadonlyFooterDataProvider,
 	width: number,
 	st: State,
 ): string[] {

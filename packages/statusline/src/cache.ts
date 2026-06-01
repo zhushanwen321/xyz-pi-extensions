@@ -101,7 +101,7 @@ function readCacheSync(): CacheData {
 // ── Token Speed（与 provider 无关，保留在此）──────────────
 
 // 每条记录存储 [outputTokens, durationMs]，用于正确计算加权平均速度
-type Record = [number, number];
+type SpeedRecord = [number, number];
 
 export function trackSpeed(
 	outputTokens: number,
@@ -116,7 +116,7 @@ export function trackSpeed(
 	const filePath = join(SPEED_DIR, `${safeName}.json`);
 	const today = new Date().toISOString().slice(0, 10);
 
-	let records: Record<string, Record[]> = {};
+	const records: Record<string, SpeedRecord[]> = {};
 	try {
 		if (existsSync(filePath)) {
 			const raw = JSON.parse(readFileSync(filePath, "utf-8"));
@@ -126,11 +126,13 @@ export function trackSpeed(
 				if (entries.length > 0 && !Array.isArray(entries[0])) continue;
 				// 过滤掉同日期内混入的旧格式纯数字
 				records[date] = entries.filter(
-					(e): e is Record => Array.isArray(e) && e.length >= 2,
+					(e): e is SpeedRecord => Array.isArray(e) && e.length >= 2,
 				);
 			}
 		}
-	} catch {}
+	} catch {
+		/* istanbul ignore next — 文件损坏时回退到空记录 */
+	}
 
 	if (!records[today]) records[today] = [];
 	records[today].push([outputTokens, durationMs]);
@@ -146,10 +148,12 @@ export function trackSpeed(
 	try {
 		mkdirSync(SPEED_DIR, { recursive: true });
 		writeFileSync(filePath, JSON.stringify(records));
-	} catch {}
+	} catch {
+		/* istanbul ignore next — 写入失败不影响功能 */
+	}
 
 	// 加权平均：sum(tokens) / sum(duration) * 1000
-	const avgSpeed = (entries: Record[]): number => {
+	const avgSpeed = (entries: SpeedRecord[]): number => {
 		let totalTokens = 0;
 		let totalDuration = 0;
 		for (const entry of entries) {
@@ -162,9 +166,9 @@ export function trackSpeed(
 			: 0;
 	};
 
-	const dayEntries: Record[] = [];
-	const d7Entries: Record[] = [];
-	const d30Entries: Record[] = [];
+	const dayEntries: SpeedRecord[] = [];
+	const d7Entries: SpeedRecord[] = [];
+	const d30Entries: SpeedRecord[] = [];
 	const now = Date.now();
 
 	for (const [date, entries] of Object.entries(records)) {

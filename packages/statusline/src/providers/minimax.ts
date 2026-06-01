@@ -26,6 +26,14 @@ import {
 const API_URL =
 	"https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains";
 
+interface MinimaxBaseResp {
+	status_code?: number;
+}
+
+interface MinimaxApiResponse {
+	base_resp?: MinimaxBaseResp;
+	model_remains?: MinimaxModelRemains[];
+}
 export interface MinimaxModelRemains {
 	model_name: string;
 	current_interval_remaining_percent: number;
@@ -59,7 +67,7 @@ async function fetchMinimax(): Promise<MinimaxData | null> {
 			signal: AbortSignal.timeout(5000),
 		});
 		if (!resp.ok) return null;
-		const data = (await resp.json()) as any;
+	const data = (await resp.json()) as MinimaxApiResponse;
 
 		if (data?.base_resp?.status_code !== 0) return null;
 		const models = (data?.model_remains ?? []) as MinimaxModelRemains[];
