@@ -2,13 +2,41 @@
 
 ## 项目概述
 
-Pi coding agent 的扩展工具箱。每个扩展是一个独立可安装的 Pi 插件，解决 AI coding agent 工作流中的特定问题。当前包含：
+Pi coding agent 的扩展工具箱 monorepo。每个 extension 是独立可发布的 npm 包（`@zhushanwen/pi-*`），解决 AI coding agent 工作流中的特定问题。
 
-- **goal/** — 持久化目标驱动自主循环，7 态状态机，evidence-based 完成和 token/时间预算
-- **todo/** — 轻量三态任务清单（pending/in_progress/completed），`/todos` 命令 + `todo` 工具
-- **subagent/** — 任务委派与并行执行，支持 single/parallel/chain/background 四种模式
+### Monorepo 架构
 
-扩展通过 symlink 安装到 `~/.pi/agent/extensions/<name>` → 源目录。
+```
+xyz-pi-extensions/
+├── packages/                    # 可发布的 npm 包
+│   ├── goal/                → @zhushanwen/pi-goal
+│   ├── todo/                → @zhushanwen/pi-todo
+│   ├── subagent/            → @zhushanwen/pi-subagent
+│   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills)
+│   ├── claude-rules-loader/ → @zhushanwen/pi-claude-rules-loader
+│   ├── context-engineering/ → @zhushanwen/pi-context-engineering
+│   ├── skill-state/         → @zhushanwen/pi-skill-state
+│   ├── evolve-daily/        → @zhushanwen/pi-evolve-daily (含 evolve skills)
+│   ├── statusline/          → @zhushanwen/pi-statusline
+│   ├── unified-hooks/       → @zhushanwen/pi-unified-hooks
+│   ├── workflow/            → @zhushanwen/pi-workflow
+│   ├── taste-lint/          → @zhushanwen/pi-taste-lint
+│   └── types/               → @zhushanwen/pi-types (private, 不发布)
+├── skills/                      # 独立 skills（无所属 extension，GitHub 分发）
+├── scripts/                     # 共享脚本
+├── docs/                        # 统一文档
+├── .changeset/                  # 版本管理
+├── pnpm-workspace.yaml
+└── package.json
+```
+
+**设计原则**：
+- `packages/` = 一切有 package.json 的东西。根目录不混入可发布包
+- Skills 跟着 owner 走：extension-bundled skills 通过 `resources_discover` 自动注册
+- 独立 skills 不进 packages/，它们是 Markdown 资源不是包
+- types 是 private 包，仅通过 `workspace:*` 供其他包引用
+- coding-workflow 通过 `workspace:*` 依赖 subagent 包，不内嵌重复实现
+- Harness 是逻辑概念，不存在叫 "harness" 的物理目录
 
 ### 社区扩展借鉴
 
@@ -57,8 +85,9 @@ Pi coding agent 的扩展工具箱。每个扩展是一个独立可安装的 Pi 
 - typebox（参数 schema 定义）
 - pi-tui（终端 UI 组件：Text, Container, Spacer, Markdown 等）
 - pi-ai（StringEnum 等工具）
+- pnpm workspaces + changesets（monorepo 管理和版本发布）
 
-**依赖说明**：扩展没有自己的 `node_modules`，所有 `@mariozechner/*` 和 `typebox` 依赖由 Pi 运行时提供。本地开发时 `tsc --noEmit` 通过 `paths` 映射到全局安装的 Pi 包获取类型。
+**依赖说明**：扩展没有自己的 `node_modules`（开发时由 pnpm workspace 管理）。运行时 `@mariozechner/*` 和 `typebox` 依赖由 Pi 运行时提供。本地开发时 `tsc --noEmit` 通过 `paths` 映射到全局安装的 Pi 包获取类型。
 
 ## 架构
 
@@ -83,11 +112,23 @@ Pi coding agent 的扩展工具箱。每个扩展是一个独立可安装的 Pi 
 ## 常用命令
 
 ```bash
-# 类型检查（需要全局安装了 pi）
-cd xyz-pi-extensions && npx tsc --noEmit
+# 全量类型检查
+pnpm -r typecheck
 
-# 单个扩展类型检查
-cd xyz-pi-extensions/goal && npx tsc --noEmit
+# 单包类型检查
+pnpm --filter @zhushanwen/pi-goal typecheck
+
+# 全量 lint
+pnpm -r lint
+
+# 单包 lint
+pnpm --filter @zhushanwen/pi-goal lint
+
+# 创建版本变更记录
+pnpm changeset
+
+# 发布（dry run）
+pnpm changeset publish --dry-run
 ```
 
 ## 关键约束
@@ -382,15 +423,15 @@ GUI 组件（`TaskListWidget` 等）是 xyz-agent 的工作，扩展侧不需要
 ## 质量检查
 
 ```bash
-# 类型检查
-npm run typecheck
-# 或 npx tsc --noEmit
+# 全量类型检查
+pnpm -r typecheck
 
-# ESLint 品味检查（0 error 为通过）
-npm run lint
+# 全量 lint
+pnpm -r lint
 
-# 自动修复
-npm run lint:fix
+# 单包检查
+pnpm --filter @zhushanwen/pi-goal typecheck
+pnpm --filter @zhushanwen/pi-goal lint
 
 # 跳过 pre-commit hook
 SKIP_LINT=1 git commit -m "..."
@@ -416,40 +457,44 @@ SKIP_LINT=1 git commit -m "..."
 
 ## 安装指南
 
-本项目的扩展和 skills 分两种类型：
+### npm 包安装（推荐）
 
-### Extension（插件）
-
-提供 tools、commands、events，注册到 Pi 扩展系统。安装到 extensions 目录：
 ```bash
-# 全局安装
-ln -s /path/to/xyz-pi-extensions/<name> ~/.pi/agent/extensions/<name>
+# 安装单个 extension
+npm install @zhushanwen/pi-goal
 
-# 项目级安装
-ln -s /path/to/xyz-pi-extensions/<name> .pi/extensions/<name>
+# Pi 加载方式
+pi --extension node_modules/@zhushanwen/pi-goal/src/index.ts
 ```
 
-### Skill（技能）
+Extension-bundled skills 通过 `resources_discover` 事件自动注册，无需手动安装。
 
-纯 Markdown prompt 文件，通过 `/skill-name` 命令触发。需要同时安装到两个目录以兼容 Pi 和 Claude Code：
+### 独立 Skills（GitHub 分发）
+
+无所属 extension 的 skills 需要手动安装：
 
 ```bash
-# Pi 的 skills 目录（APP_NAME=pi）
+# Pi 的 skills 目录
 ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.pi/agent/skills/<name>
 
 # Claude Code 的 skills 目录
 ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 ```
 
-### 当前扩展清单
+### 当前包清单
 
-| 名称 | 类型 | 说明 |
-|------|------|------|
-| `goal/` | extension | 持久化目标驱动循环，7 态状态机 |
-| `todo/` | extension | 轻量三态任务清单 |
-| `subagent/` | extension | 任务委派与并行执行 |
-| `context-engineering/` | extension | 渐进式上下文压缩 |
-| `evolve-daily/` | extension | 每日自动数据收集（session_start hook） |
-| `skills/evolve/` | skill | 分析使用数据生成进化建议 |
-| `skills/evolve-apply/` | skill | 应用/跳过/回滚进化建议 |
-| `skills/evolve-report/` | skill | 查看报告和统计数据 |
+| 包名 | npm name | 说明 | 内嵌 Skills |
+|------|----------|------|------------|
+| `packages/goal/` | `@zhushanwen/pi-goal` | 持久化目标驱动循环，7 态状态机 | — |
+| `packages/todo/` | `@zhushanwen/pi-todo` | 轻量三态任务清单 | — |
+| `packages/subagent/` | `@zhushanwen/pi-subagent` | 任务委派与并行执行 | — |
+| `packages/coding-workflow/` | `@zhushanwen/pi-coding-workflow` | 5-Phase 编码工作流 | ~20 个 xyz-harness-* skills |
+| `packages/claude-rules-loader/` | `@zhushanwen/pi-claude-rules-loader` | 加载 CLAUDE.md 规则 | — |
+| `packages/context-engineering/` | `@zhushanwen/pi-context-engineering` | 渐进式上下文压缩 | — |
+| `packages/skill-state/` | `@zhushanwen/pi-skill-state` | Skill 执行状态追踪 | — |
+| `packages/evolve-daily/` | `@zhushanwen/pi-evolve-daily` | 每日自动数据收集 | evolve, evolve-apply, evolve-report |
+| `packages/statusline/` | `@zhushanwen/pi-statusline` | Pi 状态栏 | — |
+| `packages/unified-hooks/` | `@zhushanwen/pi-unified-hooks` | Hook 管理 | — |
+| `packages/workflow/` | `@zhushanwen/pi-workflow` | 通用 DAG 执行引擎 | — |
+| `packages/taste-lint/` | `@zhushanwen/pi-taste-lint` | ESLint 品味规则 | — |
+| `packages/types/` | `@zhushanwen/pi-types` (private) | 共享类型定义 | — |
