@@ -1,10 +1,17 @@
 {
   "name": "@zhushanwen/pi-coding-workflow",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "5-phase coding workflow orchestration",
   "main": "index.ts",
   "type": "module",
-  "files": ["index.ts", "lib/", "scripts/", "skills/", "agents/", "commands/"],
+  "files": [
+    "index.ts",
+    "lib/",
+    "scripts/",
+    "skills/",
+    "agents/",
+    "commands/"
+  ],
   "dependencies": {
     "@zhushanwen/pi-subagent": "workspace:*",
     "js-yaml": "^4.1.0"
