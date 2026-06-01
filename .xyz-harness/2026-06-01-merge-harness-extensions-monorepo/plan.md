@@ -394,31 +394,30 @@ git commit -m "feat: migrate claude-rules-loader from harness repo"
 **Type:** backend
 
 **Files:**
-- Create: `packages/coding-workflow/skills/` (28 个 skill 目录)
+- Create: `packages/coding-workflow/skills/` (19 个 skill 目录)
 - Modify: `packages/coding-workflow/index.ts` (添加 resources_discover 事件)
 
 - [ ] **Step 1: 从 harness 仓库复制所有 coding-workflow 所属 skills**
 
 ```bash
 mkdir -p packages/coding-workflow/skills
-# 复制 ~20 个 harness skills
+```bash
+mkdir -p packages/coding-workflow/skills
+# 复制 19 个 coding-workflow 所属 skills（不含独立 skills）
 for skill in xyz-harness-brainstorming xyz-harness-writing-plans xyz-harness-phase-dev \
   xyz-harness-phase-test xyz-harness-phase-pr xyz-harness-gate xyz-harness-gate-reviewer \
   xyz-harness-expert-reviewer xyz-harness-business-logic-reviewer xyz-harness-integration-reviewer \
   xyz-harness-robustness-reviewer xyz-harness-standards-reviewer xyz-harness-code-standard-protection \
   xyz-harness-backend-dev xyz-harness-frontend-dev xyz-harness-test-driven-development \
-  xyz-harness-subagent-driven-development harness-retrospect harness-retrospect-collector \
-  create-worktree merge-worktree remove-worktree code-review-worktree zcommit \
-  browser-automation code-link meta-sk-agent-writer meta-sk-skill-writer vision-analysis; do
+  xyz-harness-subagent-driven-development harness-retrospect harness-retrospect-collector; do
   if [ -d "/path/to/xyz-harness-engineering/skills/$skill" ]; then
     cp -r "/path/to/xyz-harness-engineering/skills/$skill" "packages/coding-workflow/skills/"
   fi
 done
 ```
 
-**完整 skill 清单（28 个，含独立 skills 暂放此处便于管理）：**
+**coding-workflow 专属 skills 清单（19 个）：**
 
-coding-workflow 专属 skills（~20）：
 1. xyz-harness-brainstorming
 2. xyz-harness-writing-plans
 3. xyz-harness-phase-dev
@@ -438,8 +437,6 @@ coding-workflow 专属 skills（~20）：
 17. xyz-harness-subagent-driven-development
 18. harness-retrospect
 19. harness-retrospect-collector
-
-**注意**：独立 skills（create-worktree、merge-worktree 等）在 Task 8 中单独迁入 `skills/` 目录，不放在 packages/coding-workflow/skills/ 下。
 
 - [ ] **Step 2: 在 coding-workflow/index.ts 中添加 resources_discover 事件**
 
