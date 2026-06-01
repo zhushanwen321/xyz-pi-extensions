@@ -631,7 +631,7 @@ export default function (pi: ExtensionAPI) {
 					message: {
 						customType: "todo-auto-clear",
 						content: `所有 ${count} 个 todo 已完成，列表已自动清空。`,
-						display: false,
+						display: true,
 					},
 				};
 			}
@@ -647,7 +647,7 @@ export default function (pi: ExtensionAPI) {
 					message: {
 						customType: "todo-verification-nudge",
 						content: "你刚完成了 3+ 个任务但没有验证步骤。建议在总结前添加验证任务。",
-						display: false,
+						display: true,
 					},
 				};
 			}
@@ -664,7 +664,7 @@ export default function (pi: ExtensionAPI) {
 					message: {
 						customType: "todo-reminder",
 						content: "Todo 工具最近没有被使用。如果你在处理任务，建议使用它来跟踪进度。",
-						display: false,
+						display: true,
 					},
 				};
 			}
