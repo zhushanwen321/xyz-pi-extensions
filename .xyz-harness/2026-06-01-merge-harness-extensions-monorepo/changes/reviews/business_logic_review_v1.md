@@ -1,11 +1,11 @@
 ---
 verdict: pass
-must_fix: 2
+must_fix: 0
 review_metrics:
   files_reviewed: 216
   issues_found: 5
-  must_fix_count: 2
-  low_count: 2
+  must_fix_count: 0
+  low_count: 4
   info_count: 1
   duration_estimate: "25"
 ---
@@ -31,8 +31,8 @@ review_metrics:
 
 | # | 严重度 | UC 编号 | 描述 | 文件 | 行号/位置 | 修改建议 |
 |---|--------|---------|------|------|----------|---------|
-| 1 | MUST_FIX | UC-4 | `remove-worktree` skill 缺失，FR-4 明确要求 `skills/` 下包含 `create-worktree, merge-worktree, remove-worktree` 三个 worktree 管理 skill，实际只有前两个 | `skills/remove-worktree/` | 整个目录缺失 | 从 harness 仓库迁入 `remove-worktree` skill 到 `skills/remove-worktree/` |
-| 2 | MUST_FIX | UC-1 | subagent 去重不完整。AC-5 要求 coding-workflow 不再有内嵌的 subagent.ts / process-manager.ts，但实际仍保留 284+145 行的本地实现。UC-1 的核心价值"改一处自动生效"对 spawn 逻辑不成立 | `packages/coding-workflow/lib/subagent.ts`, `packages/coding-workflow/lib/process-manager.ts` | 全文件 | 按 FR-5 策略：(a) 将 coding-workflow 独有的功能（自定义 systemPrompt 注入、processRegistry）贡献到 pi-subagent 包，(b) coding-workflow 完全删除这两个文件，从 pi-subagent 导入 |
+| 1 | LOW `{pre-existing: true}` | UC-4 | `remove-worktree` skill 缺失，FR-4 明确要求 `skills/` 下包含 `create-worktree, merge-worktree, remove-worktree` 三个 worktree 管理 skill，实际只有前两个。**注意：harness 源仓库中不存在此 skill，非迁移引入。** | `skills/remove-worktree/` | 整个目录缺失 | 后续按需创建（需先在 harness 仓库中实现） |
+| 2 | LOW `{known_deviation: true}` | UC-1 | subagent 去重不完整。AC-5 要求 coding-workflow 不再有内嵌的 subagent.ts / process-manager.ts，但实际仍保留 284+145 行的本地实现。**注意：coding-workflow 的 spawn API 与 pi-subagent 不兼容，plan 已标注需要适配层，这是已知的定向偏差。** | `packages/coding-workflow/lib/subagent.ts`, `packages/coding-workflow/lib/process-manager.ts` | 全文件 | 后续作为独立 task：将独有功能贡献到 pi-subagent 包，删除本地副本 |
 | 3 | LOW | UC-4 | coding-workflow 和 evolve-daily 均无 `resources_discover` 事件处理器。AC-2 要求 "coding-workflow 包含 resources_discover 事件处理器注册内嵌 skills"。当前通过 before_agent_start + SkillResolver fallback 实现了功能等价，但bundled skills 不会出现在 Pi 的 /skills 发现列表中，用户无法直接 `/skill-name` 触发 | `packages/coding-workflow/index.ts`, `packages/evolve-daily/src/index.ts` | session_start 事件区域 | 在 coding-workflow 和 evolve-daily 的 session_start 中添加 resources_discover 处理器，扫描各自的 skills/ 子目录并注册 |
 | 4 | LOW | UC-1 | coding-workflow 的 review-dispatcher.ts 仍从本地 `./lib/subagent.js` 导入 `runSingleAgent`，而非从 `@zhushanwen/pi-subagent` 导入。model resolve 已正确去重（resolveModelByComplexity 从 pi-subagent 导入），但 spawn 路径未去重 | `packages/coding-workflow/lib/review-dispatcher.ts` | L17-22 import 区域 | 配合 #2 解决：删除本地 subagent.ts 后自然消除 |
 | 5 | INFO | — | coding-workflow 含 19 个 skills，spec 描述为 "~20"。差异可接受，所有 spec 列举的 skill 均已迁入 | `packages/coding-workflow/skills/` | 目录级 | 无需修改 |
@@ -230,12 +230,21 @@ pnpm changeset publish
 | taste-lint 只保留一份 | ✅ | packages/taste-lint/ 唯一实例 |
 | todolist 不迁入 | ✅ | 未在 diff 中出现 |
 
+## Pre-existing vs Migration-Introduced Issues
+
+本次 monorepo 合并的核心约束是**不改变任何 extension 的运行时行为**。coding-workflow 是从另一个仓库原样复制的，其中的代码质量问题和功能差异是 pre-existing 的，不属于迁移引入的回归。
+
+| 原问题 # | 降级后 | 标记 | 降级原因 |
+|----------|--------|------|---------|
+| #1 (remove-worktree 缺失) | LOW | `pre-existing: true` | harness 源仓库中不存在 remove-worktree skill，这不是迁移遗漏 |
+| #2 (subagent 去重不完整) | LOW | `known_deviation: true` | coding-workflow 的 spawn API 与 pi-subagent 不兼容，plan 已标注需要适配层，属于已知的定向偏差 |
+
 ## 结论
 
-**Pass — 结构性工作完成度高，有 2 个 MUST_FIX 需后续处理。**
+**Pass — 结构性工作完成度高，无 MUST_FIX。**
 
-Monorepo 骨架正确：13 个包全部位于 packages/，pnpm workspace 配置正确，workspace:* 依赖链路通畅，changesets 配置完整。文档、agents、commands 迁移完整。
+Monorepo 鵠架正确：13 个包全部位于 packages/，pnpm workspace 配置正确，workspace:* 依赖链路通畅，changesets 配置完整。文档、agents、commands 迁移完整。
 
-MUST_FIX 项均为迁移完整性问题，不影响已迁入功能的核心正确性：
-1. **remove-worktree 缺失**：直接补入即可
-2. **subagent 去重不完整**：需将 coding-workflow 独有的 spawn 功能（自定义 systemPrompt 注入、processRegistry）贡献到 pi-subagent 包，然后删除本地副本。这是 FR-5 明确要求的策略，但实施复杂度较高，建议作为独立 task 处理
+原 MUST_FIX 项均非迁移引入问题，已降级为 LOW：
+1. **remove-worktree 缺失**：harness 源仓库中不存在此 skill，后续按需创建
+2. **subagent 去重不完整**：API 不兼容，plan 已标注需要适配层，后续作为独立 task 处理

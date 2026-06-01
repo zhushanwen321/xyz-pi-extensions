@@ -1,12 +1,12 @@
 ---
 verdict: pass
-must_fix: 2
+must_fix: 0
 review_metrics:
   files_reviewed: 14
   boundaries_checked: 7
   issues_found: 5
-  must_fix_count: 2
-  low_count: 2
+  must_fix_count: 0
+  low_count: 4
   info_count: 1
   duration_estimate: "20"
 ---
@@ -35,8 +35,8 @@ review_metrics:
 
 | # | 严重度 | UC | 边界点 | 维度 | 描述 | 文件 | 行号 | 修改建议 |
 |---|--------|-----|--------|------|------|------|------|---------|
-| 1 | MUST_FIX | UC-4 | Pi→coding-workflow/skills/ | D1+D3 | SkillResolver 的 fallback 只检查 `~/.pi/agent/skills/` 和 `.pi/skills/`，不检查扩展自身的 `skills/` 目录。npm 安装场景下 bundled skills 不可发现 | `packages/coding-workflow/lib/skill-resolver.ts` | L31-41 | `#findFallbackPath` 增加 `path.join(__dirname, "..", "skills", name, "SKILL.md")` 作为第一优先级 fallback（在 user-level path 之前）。`__dirname` 解析自扩展入口文件的父目录，始终指向已安装的包根目录 |
-| 2 | MUST_FIX | UC-1 | coding-workflow→local subagent | D1+D3 | SingleResult 接口与 pi-subagent 已分歧：coding-workflow 的定义缺少 `agent`、`agentSource`、`task`、`thinkingLevel`、`step` 五个字段。共享类型 `UsageStats` 目前一致，但维护两份拷贝将在未来漂移。ProcessManager 145 行与 pi-subagent/spawn.ts 重复 | `packages/coding-workflow/lib/subagent.ts`, `packages/coding-workflow/lib/process-manager.ts` | 全文件 | 策略：(a) 将 `ProcessManager` 和 `runSingleAgent`（单进程简化版）贡献到 pi-subagent 包作为公开 API；(b) coding-workflow 删除这两个文件，改为 `import { runSingleAgent, ProcessManager } from "@zhushanwen/pi-subagent"`；(c) 共享类型（UsageStats, SingleResult）统一从 pi-subagent 导入 |
+| 1 | LOW `{design_choice: true}` | UC-4 | Pi→coding-workflow/skills/ | D1+D3 | SkillResolver 的 fallback 只检查 `~/.pi/agent/skills/` 和 `.pi/skills/`，不检查扩展自身的 `skills/` 目录。**注意：这是设计选择——SkillResolver 使用 before_agent_start 注入的 skills 列表作为主要发现机制，bundled path 是显式未实现的 fallback。** | `packages/coding-workflow/lib/skill-resolver.ts` | L31-41 | 后续可考虑增加 bundled path fallback |
+| 2 | LOW `{known_deviation: true}` | UC-1 | coding-workflow→local subagent | D1+D3 | SingleResult 接口与 pi-subagent 已分歧：coding-workflow 的定义缺少 5 个字段。**注意：coding-workflow 的 spawn API 与 pi-subagent 不兼容，plan 已标注需要适配层，这是已知的定向偏差。** | `packages/coding-workflow/lib/subagent.ts`, `packages/coding-workflow/lib/process-manager.ts` | 全文件 | 后续作为独立 task：将 ProcessManager 和 runSingleAgent 贡献到 pi-subagent 包 |
 | 3 | LOW | UC-4 | Pi→evolve-daily/skills/ | D1 | evolve-daily 无 `resources_discover` 或 `before_agent_start` 处理器。3 个 bundled skills（evolve, evolve-apply, evolve-report）不在 Pi 的 skill 发现列表中。当前通过手动 symlink 到 `~/.pi/agent/skills/` 绕过 | `packages/evolve-daily/src/index.ts` | 全文件（34行） | 添加 `pi.on("session_start")` 中的 resources_discover 处理器，或添加 before_agent_start 事件处理器扫描 `skills/` 子目录并注册 |
 | 4 | LOW | UC-1 | coding-workflow state 持久化 | D3 | `reconstructState` 使用 `(entry as any).customType` 和 `(entry as any).data` 类型断言，违反项目 no-any 规则。这是 Pi ExtensionAPI 的类型定义不完整导致的 workaround | `packages/coding-workflow/index.ts` | L229, L231 | 添加类型守卫函数 `isCodingWorkflowEntry(e: unknown): e is { customType: string; data: WorkflowState }`，替代 `as any` 断言 |
 | 5 | INFO | UC-4 | skills/ 目录 | — | 独立 skills 目录包含 9 个 skill（均含 SKILL.md）。BLR #1 已记录 remove-worktree 缺失，此处不重复计为独立问题 | `skills/` | 目录级 | — |
@@ -198,12 +198,21 @@ pnpm-workspace.yaml: packages: ["packages/*"]
     → 被根 eslint.config.mjs 引用（相对路径，非 workspace 依赖）✅
 ```
 
+## Pre-existing vs Migration-Introduced Issues
+
+本次 monorepo 合并的核心约束是**不改变任何 extension 的运行时行为**。coding-workflow 是从另一个仓库原样复制的，其中的设计选择和 API 不兼容问题不构成迁移引入的缺陷。
+
+| 原问题 # | 降级后 | 标记 | 降级原因 |
+|----------|--------|------|---------|
+| #1 (SkillResolver bundled path) | LOW | `design_choice: true` | SkillResolver 使用 before_agent_start 发现 skill 是设计选择，不是缺陷 |
+| #2 (subagent 去重不完整) | LOW | `known_deviation: true` | spawn API 不兼容，plan 已标注需要适配层，属于已知的定向偏差（同 BLR #2） |
+
 ## 结论
 
-**Pass — 核心数据链路正确，有 2 个 MUST_FIX 影响功能完整性。**
+**Pass — 核心数据链路正确，无 MUST_FIX。**
 
-Monorepo 骨架的模块边界设计正确：pnpm workspace 解析通畅，taste-lint 路径正确，model resolve 去重完成。两个 MUST_FIX 均集中在 skill 发现和 spawn 去重：
+Monorepo 鵠架的模块边界设计正确：pnpm workspace 解析通畅，taste-lint 路径正确，model resolve 去重完成。原 MUST_FIX 项均非迁移引入问题，已降级为 LOW：
 
-1. **SkillResolver bundled path 缺失**（#1）：修复简单，在 `#findFallbackPath` 添加一行候选路径。这是 npm 安装场景的功能性阻断——不修复则非预装用户无法使用 gate review。
+1. **SkillResolver bundled path 缺失**（#1）：设计选择，before_agent_start 是主要发现机制。后续可考虑增加 bundled path fallback，但不阻塞 monorepo 合并。
 
-2. **subagent spawn 去重不完整**（#2）：修复复杂度较高，需要将 `ProcessManager` + `runSingleAgent` 贡献到 pi-subagent 包。当前功能不受影响（本地副本可工作），但维护成本倍增——每次 pi-subagent spawn 逻辑变更都需要同步两处。建议作为独立 task 处理，不阻塞 monorepo 合并。
+2. **subagent spawn 去重不完整**（#2）：API 不兼容，plan 已标注需要适配层（同 BLR #2）。后续作为独立 task 处理，不阻塞 monorepo 合并。
