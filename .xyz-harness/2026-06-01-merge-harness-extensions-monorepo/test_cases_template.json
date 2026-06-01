@@ -1,0 +1,123 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "manual",
+      "title": "pnpm install 成功",
+      "description": "在根目录运行 pnpm install，验证所有 workspace 包被正确链接",
+      "steps": ["cd xyz-pi-extensions", "pnpm install", "验证 exit code 0", "验证 packages/*/node_modules 存在"]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "manual",
+      "title": "所有 extension 位于 packages/ 下",
+      "description": "验证 13 个包目录存在（含 types）",
+      "steps": ["ls packages/ | wc -l", "验证输出为 13", "验证 goal、todo、subagent、coding-workflow 等目录存在"]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "manual",
+      "title": "每个包有正确的 npm name",
+      "description": "验证所有包的 package.json name 字段为 @zhushanwen/pi-* 格式",
+      "steps": ["grep -r '\"name\":.*@zhushanwen/pi-' packages/*/package.json", "验证 13 个匹配"]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "manual",
+      "title": "changeset dry run 不报错",
+      "description": "验证 changesets 发布配置正确",
+      "steps": ["pnpm changeset publish --dry-run", "验证 exit code 0"]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "manual",
+      "title": "coding-workflow resources_discover 注册 skills",
+      "description": "验证 coding-workflow index.ts 包含 resources_discover 事件处理器",
+      "steps": ["grep 'resources_discover' packages/coding-workflow/index.ts", "验证匹配存在"]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "manual",
+      "title": "coding-workflow 源文件完整",
+      "description": "验证 coding-workflow 包含所有必要源文件",
+      "steps": ["ls packages/coding-workflow/index.ts packages/coding-workflow/lib/gate-runner.ts packages/coding-workflow/lib/review-dispatcher.ts packages/coding-workflow/lib/skill-resolver.ts packages/coding-workflow/scripts/gate-check.py", "验证所有文件存在"]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "manual",
+      "title": "coding-workflow 不包含 subagent 三文件",
+      "description": "验证去重完成",
+      "steps": ["test ! -f packages/coding-workflow/lib/subagent.ts", "test ! -f packages/coding-workflow/lib/model-resolve.ts", "test ! -f packages/coding-workflow/lib/process-manager.ts"]
+    },
+    {
+      "id": "TC-3-03",
+      "type": "manual",
+      "title": "harness skills 迁入 coding-workflow",
+      "description": "验证 19 个 harness skill 目录存在",
+      "steps": ["ls packages/coding-workflow/skills/ | wc -l", "验证输出为 19", "验证 xyz-harness-brainstorming、xyz-harness-gate 等目录存在"]
+    },
+    {
+      "id": "TC-3-04",
+      "type": "manual",
+      "title": "evolve skills 迁入 evolve-daily",
+      "description": "验证 3 个 evolve skill 目录存在",
+      "steps": ["ls packages/evolve-daily/skills/", "验证 evolve、evolve-apply、evolve-report 存在"]
+    },
+    {
+      "id": "TC-3-05",
+      "type": "manual",
+      "title": "独立 skills 迁入 skills/",
+      "description": "验证 10 个独立 skill 目录存在",
+      "steps": ["ls skills/", "验证 create-worktree、merge-worktree、zcommit 等存在"]
+    },
+    {
+      "id": "TC-3-06",
+      "type": "manual",
+      "title": "agents 和 commands 迁入",
+      "description": "验证 7 个 agent .md 和 2 个 command .md 存在",
+      "steps": ["ls packages/coding-workflow/agents/*.md | wc -l", "验证 7", "ls packages/coding-workflow/commands/*.md | wc -l", "验证 2"]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "manual",
+      "title": "coding-workflow workspace 依赖 subagent",
+      "description": "验证 coding-workflow package.json 声明了 workspace 依赖",
+      "steps": ["grep '@zhushanwen/pi-subagent.*workspace:\\*' packages/coding-workflow/package.json"]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "manual",
+      "title": "无残留内部 import",
+      "description": "验证 coding-workflow 不再从 ./lib/subagent.js 或 ./lib/model-resolve.js 导入",
+      "steps": ["grep -r 'from.*./lib/subagent' packages/coding-workflow/", "验证无匹配", "grep -r 'from.*./lib/model-resolve' packages/coding-workflow/", "验证无匹配"]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "manual",
+      "title": "全量 typecheck 通过",
+      "description": "验证 pnpm -r typecheck 无错误",
+      "steps": ["pnpm -r typecheck", "验证 exit code 0"]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "manual",
+      "title": "Pi 加载所有 extensions 无启动错误",
+      "description": "验证所有 extension 可被 Pi 正确加载",
+      "steps": ["pi --extension packages/goal/index.ts --extension packages/todo/index.ts --extension packages/subagent/index.ts --extension packages/coding-workflow/index.ts --extension packages/claude-rules-loader/index.ts", "验证 Pi 启动无错误"]
+    },
+    {
+      "id": "TC-7-02",
+      "type": "manual",
+      "title": "coding-workflow-gate tool 可调用",
+      "description": "验证 gate tool 在 Pi 中可用",
+      "steps": ["在 Pi session 中执行 /coding-workflow-gate(phase=1)", "验证 tool 被识别并执行（无论结果为 pass 或 fail）"]
+    },
+    {
+      "id": "TC-8-01",
+      "type": "manual",
+      "title": "harness 仓库 README 包含 ARCHIVED",
+      "description": "验证归档声明",
+      "steps": ["grep 'ARCHIVED' /path/to/xyz-harness-engineering/README.md", "验证匹配存在"]
+    }
+  ]
+}
