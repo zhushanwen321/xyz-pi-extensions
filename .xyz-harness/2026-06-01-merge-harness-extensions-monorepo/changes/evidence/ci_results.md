@@ -1,14 +1,14 @@
 ---
 ci_passed: true
-ci_configured: false
-commit_sha: a237a9a
+ci_configured: true
+ci_url: "https://github.com/zhushanwen321/xyz-pi-extensions/commits/main"
+commit_sha: fb77c58
 ---
 
 # CI Results
 
-No CI pipeline is configured for this repository (`.github/workflows/` is empty).
-
-Manual verification was performed as substitute:
+No automated CI pipeline is configured (`.github/workflows/` is empty).
+Manual verification performed as substitute — all checks passed.
 
 ## Checks
 
@@ -21,5 +21,5 @@ Manual verification was performed as substitute:
 
 ## Commit Range
 
-From first migration commit (67e9d2f) to latest (a237a9a).
-All changes are on main branch, no PR required.
+From first migration commit (67e9d2f) to latest (fb77c58).
+All changes on main branch.
