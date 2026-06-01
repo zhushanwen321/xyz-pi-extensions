@@ -4,12 +4,12 @@ verdict: pass
 absorbed: false
 topic: "2026-06-01-merge-harness-extensions-monorepo"
 harness_issues:
-  - "subagent 去重（AC-5）是最大的设计到实现偏差。Plan 的 Interface Contracts 说 pi-subagent 包含了 coding-workflow 所需的全部 export，但 pi-subagent 连 named export 都没有（只有 default export 工厂函数），更关键的是 runSingleAgent 的调用接口完全不兼容。Plan review 没有捕获这个风险。建议 writing-plans skill 对 API 签名差异增加编译验证步骤：在 plan 阶段就实际 import 验证，而不是静态分析 export 列表"
-  - "五步审查的 MUST_FIX 虚高——9 个 MUST_FIX 中只有 1 个（eslint.config.mjs 路径）是迁移引入的，其余 8 个要么是 harness 仓库 pre-existing 代码质量问题，要么是已知偏差。审查工具应该增加 pre-existing 分类标记，gate 不应要求 pre-existing 问题必须在迁移 PR 中修复"
-  - "BLR 的 MUST_FIX #1（remove-worktree 缺失）源于 Plan Task 8 的 skill 清单包含了一个 harness 仓库中不存在的 skill。Plan 阶段应该用 bash `ls` 验证源仓库中每个 skill 是否实际存在"
-  - "eslint.config.mjs 路径是唯一一个真正的 migration-introduced 缺陷。Monorepo 迁移的 Self-Review checklist 应增加：检查所有配置文件中的相对路径引用（eslint.config.mjs、tsconfig.json paths、CLAUDE.md 中的路径等）"
-  - "SKIP_LINT=1 在 7 个 commit 中用了 7 次。pre-existing TS 错误（241 个）导致 pre-commit hook 总是失败，降低了防护有效性。建议 monorepo 迁移后立即为每个包创建独立 tsconfig.json，只 typecheck 自己的包"
-  - "pi-subagent 的 named re-exports 是迁移过程中才发现的需求——包只有 default export，无法被 workspace 消费者 import。这个需求应该在 plan 阶段就识别出来（写 `import { resolveModelByComplexity } from "@zhushanwen/pi-subagent"` 并验证），而不是在编码阶段才发现 import 失败"
+  - 'subagent 去重（AC-5）是最大的设计到实现偏差。Plan 的 Interface Contracts 说 pi-subagent 包含了 coding-workflow 所需的全部 export，但 pi-subagent 连 named export 都没有（只有 default export 工厂函数），更关键的是 runSingleAgent 的调用接口完全不兼容。Plan review 没有捕获这个风险。建议 writing-plans skill 对 API 签名差异增加编译验证步骤。'
+  - '五步审查的 MUST_FIX 虚高——9 个 MUST_FIX 中只有 1 个是迁移引入的，其余 8 个要么是 pre-existing 要么是已知偏差。审查工具应增加 pre-existing 分类标记。'
+  - 'BLR 的 MUST_FIX #1（remove-worktree 缺失）源于 Plan Task 8 的 skill 清单包含了一个源仓库中不存在的 skill。Plan 阶段应该用 bash ls 验证。'
+  - 'eslint.config.mjs 路径是唯一一个 migration-introduced 缺陷。Monorepo 迁移 Self-Review checklist 应增加：检查所有配置文件中的相对路径引用。'
+  - 'SKIP_LINT=1 在 7 个 commit 中用了 7 次。pre-existing TS 错误导致 pre-commit hook 总是失败。建议为每个包创建独立 tsconfig.json。'
+  - 'pi-subagent 的 named re-exports 是迁移过程中才发现的需求。包只有 default export，无法被 workspace 消费者 import。应在 plan 阶段就识别出来。'
 ---
 
 # Dev Phase Retrospect
