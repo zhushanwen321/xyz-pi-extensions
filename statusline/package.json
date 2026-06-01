@@ -1,8 +1,0 @@
-{
-  "name": "pi-extension-statusline",
-  "version": "0.1.0",
-  "description": "Pi statusline extension — shows context usage, token speed, and provider quota in the footer.",
-  "main": "src/index.ts",
-  "keywords": ["pi", "extension", "statusline", "footer", "quota"],
-  "license": "MIT"
-}

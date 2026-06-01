@@ -3,13 +3,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "npx eslint \"goal/src/**/*.ts\" \"todo/src/**/*.ts\" \"subagent/src/**/*.ts\" \"workflow/src/**/*.ts\" \"context-engineering/src/**/*.ts\" \"skill-state/src/**/*.ts\"",
-    "lint:fix": "eslint --fix \"goal/src/**/*.ts\" \"todo/src/**/*.ts\" \"subagent/src/**/*.ts\" \"workflow/src/**/*.ts\" \"skill-state/src/**/*.ts\"",
-    "typecheck": "tsc --noEmit"
+    "lint": "pnpm -r lint",
+    "lint:fix": "pnpm -r lint:fix",
+    "typecheck": "pnpm -r typecheck",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release": "pnpm -r typecheck && changeset publish"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.27.0",
     "eslint": "^9",
     "typescript-eslint": "^8.60.0"
-  },
-  "version": "0.0.3"
+  }
 }

@@ -1,5 +1,5 @@
 {
-  "name": "unified-hooks",
+  "name": "@zhushanwen/pi-unified-hooks",
   "version": "0.0.1",
   "description": "Unified hooks extension - collect scattered hooks in one place for easy maintenance",
   "main": "index.js",
@@ -7,9 +7,18 @@
   "scripts": {
     "typecheck": "npx tsc --noEmit"
   },
-  "keywords": ["pi", "extension", "hooks"],
+  "keywords": [
+    "pi",
+    "extension",
+    "hooks"
+  ],
   "license": "MIT",
   "peerDependencies": {
-    "typebox": "*"
-  }
+    "typebox": "*",
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "files": [
+    "src/",
+    "index.ts"
+  ]
 }

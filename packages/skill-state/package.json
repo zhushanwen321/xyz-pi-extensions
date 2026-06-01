@@ -1,0 +1,24 @@
+{
+  "name": "@zhushanwen/pi-skill-state",
+  "version": "0.1.0",
+  "description": "Automatic skill execution tracker for Pi — state-machine driven skill lifecycle management.",
+  "main": "src/index.ts",
+  "keywords": [
+    "pi",
+    "extension",
+    "skill",
+    "tracker",
+    "state-machine"
+  ],
+  "license": "MIT",
+  "files": [
+    "src/",
+    "index.ts"
+  ],
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "scripts": {
+    "typecheck": "npx tsc --noEmit"
+  }
+}

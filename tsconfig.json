@@ -41,16 +41,7 @@
     }
   },
   "include": [
-    "shared/**/*.ts",
-    "goal/**/*.ts",
-    "todo/**/*.ts",
-    "subagent/**/*.ts",
-    "usage-tracker/**/*.ts",
-    "workflow/**/*.ts",
-    "infinite-context/**/*.ts",
-    "context-engineering/**/*.ts",
-    "unified-hooks/**/*.ts",
-    "skill-state/**/*.ts"
+    "packages/**/*.ts"
   ],
   "exclude": [
     "node_modules",
