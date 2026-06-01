@@ -1101,3 +1101,29 @@ export default function subagentExtension(pi: ExtensionAPI) {
 		}
 	});
 }
+
+// ── Named re-exports for workspace consumers (e.g. @zhushanwen/pi-coding-workflow) ──
+export {
+	type TaskComplexity,
+	type ThinkingLevel,
+	THINKING_TO_PI as THINKING_TO_PI,
+	COMPLEXITY_DEFAULT_THINKING,
+	resolveModelByComplexity,
+	resolveModelByComplexitySync,
+	resolveModel,
+} from "./model.js";
+export {
+	type SingleResult,
+	type UsageStats,
+	type SubagentDetails,
+	formatUsageStats,
+	getFinalOutput,
+	formatTokens,
+	formatDuration,
+} from "./render.js";
+export {
+	cleanupOldTempFiles,
+	type OnUpdateCallback,
+	type SpawnManager,
+	createSpawnManager,
+} from "./spawn.js";
