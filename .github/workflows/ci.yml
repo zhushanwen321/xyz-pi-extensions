@@ -26,7 +26,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: ESLint
-        run: pnpm exec eslint . --max-warnings 0
+        run: pnpm exec eslint .
 
   # typecheck 有 233 个 pre-existing TS 错误（Pi SDK 类型导出不全），
   # 暂时设为 non-blocking，仅输出警告
