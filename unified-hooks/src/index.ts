@@ -8,10 +8,8 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 // Re-export hook modules for easy access
-export { setupEditStaleContentGuard } from "./hooks/edit-stale-content-guard";
 export { setupToolErrorHandler } from "./hooks/tool-error-handler";
 
-import { setupEditStaleContentGuard } from "./hooks/edit-stale-content-guard";
 import { setupToolErrorHandler } from "./hooks/tool-error-handler";
 
 /**
@@ -21,9 +19,9 @@ export default function unifiedHooksExtension(pi: ExtensionAPI): void {
   // Initialize hook registry
   const hooks: Array<{ name: string; enabled: boolean }> = [];
 
-  // Register each hook
+  // edit-stale-content-guard removed: pi-hashline-edit replaces built-in edit
+  // with hash-anchor mode, making oldText-based guard unreachable
   const hookModules = [
-    { name: "edit-stale-content-guard", setup: setupEditStaleContentGuard },
     { name: "tool-error-handler", setup: setupToolErrorHandler },
   ];
 

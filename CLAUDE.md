@@ -10,6 +10,15 @@ Pi coding agent 的扩展工具箱。每个扩展是一个独立可安装的 Pi 
 
 扩展通过 symlink 安装到 `~/.pi/agent/extensions/<name>` → 源目录。
 
+### 社区扩展借鉴
+
+[docs/third-party-extensions/](./docs/third-party-extensions/) — 记录从社区借鉴的扩展，分为三种来源：
+- **direct-install**：直接安装使用（如 pi-hashline-edit）
+- **fork-modified**：Fork 后修改
+- **self-written**：自主开发，部分借鉴思路
+
+**操作规范**：每次新增/变更社区扩展（安装、fork、借鉴思路），必须同步更新 `docs/third-party-extensions/README.md` 清单和对应的分析文档。这是强制流程，不要跳过。
+
 ## 文档索引
 
 ### 长期文档（main 分支）
