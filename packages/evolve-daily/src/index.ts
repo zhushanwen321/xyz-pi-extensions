@@ -11,8 +11,10 @@ import { createParamErrorDetector } from "./detectors/param-error";
 import { createGoalQualityDetector } from "./detectors/goal-quality";
 
 const ANALYZER_PATH = join(
-  homedir(),
-  ".pi/agent/scripts/pi-session-analyzer/analyze.py"
+  __dirname,
+  "..",
+  "analyzer",
+  "analyze.py"
 );
 // daily-reports/ 目录复用旧 extension 的目录路径。
 // 旧 extension 写入 .md 文件，新 evolve-daily 写入 .json 文件，天然不冲突。
