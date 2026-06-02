@@ -1,12 +1,13 @@
 {
   "name": "@zhushanwen/pi-evolve-daily",
-  "version": "0.1.0",
+    "version": "0.1.1",
   "description": "Daily evolution data collector — runs Python analyzer on first session of the day.",
   "main": "src/index.ts",
   "files": [
     "src/",
     "index.ts",
-    "skills/"
+    "skills/",
+    "scripts/**/*.py"
   ],
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*"
