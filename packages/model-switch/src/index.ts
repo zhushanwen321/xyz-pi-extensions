@@ -14,21 +14,37 @@ import { loadConfig } from "./config";
 import { computeRecommendation, computeQuotaSnapshot, detectScene } from "./advisor";
 import { formatAdvisorPrompt } from "./prompt";
 import { generatePolicyConfig, readEnabledModels, getConfigPath } from "./setup";
-import { getCurrentModelId, type SessionEntries, type ModelPolicy } from "./types";
+import { getCurrentModelId, asSessionEntries, type ModelPolicy } from "./types";
+
+// ── Tool 返回值 helper ──────────────────────────────────
+
+interface ToolRes {
+	content: Array<{ type: "text"; text: string }>;
+	details: Record<string, never>;
+	isError?: boolean;
+}
+
+function res(text: string, opts?: { error?: boolean }): ToolRes {
+	const r: ToolRes = { content: [{ type: "text" as const, text }], details: {} };
+	if (opts?.error) r.isError = true;
+	return r;
+}
+
+// ── 状态 ────────────────────────────────────────────────
 
 interface SessionState {
 	config: ModelPolicy | null;
 }
 
+// ── 扩展入口 ────────────────────────────────────────────
+
 export default function modelSwitchExtension(pi: ExtensionAPI) {
 	const state: SessionState = { config: null };
 
-	// ── Session Start ────────────────────────────────────
 	pi.on("session_start", async (_event: unknown, _ctx: ExtensionContext) => {
 		state.config = loadConfig();
 	});
 
-	// ── Before Agent Start: 注入推荐 ────────────────────
 	pi.on("before_agent_start", async (_event: unknown, ctx: ExtensionContext) => {
 		if (!state.config) return;
 
@@ -36,7 +52,7 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 			const prompt = ctx.getSystemPrompt();
 			const currentModel = getCurrentModelId(ctx);
 			const scene = detectScene(prompt);
-			const entries = ctx.sessionManager.getBranch() as SessionEntries;
+			const entries = asSessionEntries(ctx.sessionManager.getBranch());
 
 			const rec = computeRecommendation(state.config, scene, currentModel, entries);
 			const snapshot = computeQuotaSnapshot(readCache());
@@ -47,7 +63,6 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 		}
 	});
 
-	// ── /setup-model-policy 命令 ───────────────────────
 	pi.registerCommand("setup-model-policy", {
 		description: "Auto-generate model-policy.json from your configured models",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
@@ -55,14 +70,12 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 				ctx.ui.notify(`Config already exists at ${getConfigPath()}. Delete it first to regenerate.`, "info");
 				return;
 			}
-
 			const enabledModels = readEnabledModels();
 			const result = generatePolicyConfig(ctx.modelRegistry, enabledModels);
 			ctx.ui.notify(result.summary, "info");
 		},
 	});
 
-	// ── switch_model 工具 ───────────────────────────────
 	pi.registerTool({
 		name: "switch_model",
 		label: "Switch Model",
@@ -88,7 +101,7 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 			_signal: AbortSignal | undefined,
 			_onUpdate: unknown,
 			ctx: ExtensionContext,
-		) {
+		): Promise<ToolRes> {
 			const action = params.action;
 			const query = (params.query ?? "").trim().toLowerCase();
 
@@ -98,22 +111,16 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 			if (action === "recommend") return handleRecommend(state, ctx);
 			if (action === "setup") return handleSetup(state, ctx);
 
-			return {
-				content: [{ type: "text" as const, text: `Unknown action: ${action}. Supported: list, search, switch, recommend, setup.` }],
-				isError: true,
-			};
+			return res(`Unknown action: ${action}. Supported: list, search, switch, recommend, setup.`, { error: true });
 		},
 	});
 }
 
 // ── Action Handlers ────────────────────────────────────
 
-function handleList(
-	state: { config: ModelPolicy | null },
-	ctx: ExtensionContext,
-) {
+function handleList(state: { config: ModelPolicy | null }, ctx: ExtensionContext): ToolRes {
 	if (!state.config) {
-		return { content: [{ type: "text" as const, text: "No model policy configured. Run /setup-model-policy to generate one." }] };
+		return res("No model policy configured. Run /setup-model-policy to generate one.");
 	}
 
 	const currentModel = getCurrentModelId(ctx);
@@ -130,24 +137,16 @@ function handleList(
 		.map(([s, aliases]) => `  ${s}: ${aliases.join(", ")}`)
 		.join("\n");
 
-	return {
-		content: [{
-			type: "text" as const,
-			text: `Configured models (${Object.keys(state.config.models).length}):\n\n${lines.join("\n")}\n\nScenes:\n${sceneInfo}`,
-		}],
-	};
+	return res(`Configured models (${Object.keys(state.config.models).length}):\n\n${lines.join("\n")}\n\nScenes:\n${sceneInfo}`);
 }
 
-function handleSearch(
-	state: { config: ModelPolicy | null },
-	query: string,
-) {
+function handleSearch(state: { config: ModelPolicy | null }, query: string): ToolRes {
 	if (!state.config) {
-		return { content: [{ type: "text" as const, text: "No model policy configured." }] };
+		return res("No model policy configured.");
 	}
 
 	if (!query) {
-		return { content: [{ type: "text" as const, text: "Please provide a search query." }], isError: true };
+		return res("Please provide a search query.", { error: true });
 	}
 
 	const matches = Object.entries(state.config.models).filter(
@@ -158,30 +157,20 @@ function handleSearch(
 	);
 
 	if (matches.length === 0) {
-		return { content: [{ type: "text" as const, text: `No models matching "${query}".` }] };
+		return res(`No models matching "${query}".`);
 	}
 
 	const lines = matches.map(([alias, entry]) => `  ${alias} \u2192 ${entry.provider}/${entry.modelId} [${entry.capabilities.join(", ")}]`);
-	return {
-		content: [{ type: "text" as const, text: `Models matching "${query}" (${matches.length}):\n\n${lines.join("\n")}` }],
-	};
+	return res(`Models matching "${query}" (${matches.length}):\n\n${lines.join("\n")}`);
 }
 
-async function handleSwitch(
-	state: { config: ModelPolicy | null },
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	query: string,
-) {
+async function handleSwitch(state: { config: ModelPolicy | null }, pi: ExtensionAPI, ctx: ExtensionContext, query: string): Promise<ToolRes> {
 	if (!state.config) {
-		return { content: [{ type: "text" as const, text: "No model policy configured. Cannot switch." }], isError: true };
+		return res("No model policy configured. Cannot switch.", { error: true });
 	}
 
 	if (!query) {
-		return {
-			content: [{ type: "text" as const, text: "Please specify a model alias to switch to (e.g., 'glm-5.1') or use 'search' first." }],
-			isError: true,
-		};
+		return res("Please specify a model alias to switch to (e.g., 'glm-5.1') or use 'search' first.", { error: true });
 	}
 
 	const exactEntry = state.config.models[query];
@@ -197,70 +186,51 @@ async function handleSwitch(
 	);
 
 	if (!fuzzyEntry) {
-		return {
-			content: [{ type: "text" as const, text: `No model matching "${query}". Use 'list' to see available models or 'search' to find by keyword.` }],
-			isError: true,
-		};
+		return res(`No model matching "${query}". Use 'list' to see available models or 'search' to find by keyword.`, { error: true });
 	}
 
 	const [matchedAlias, matchedEntry] = fuzzyEntry;
 	return switchToModel(pi, ctx, matchedEntry.provider, matchedEntry.modelId, matchedAlias);
 }
 
-function handleRecommend(
-	state: { config: ModelPolicy | null },
-	ctx: ExtensionContext,
-) {
+function handleRecommend(state: { config: ModelPolicy | null }, ctx: ExtensionContext): ToolRes {
 	if (!state.config) {
-		return { content: [{ type: "text" as const, text: "No model policy configured. No recommendation available." }] };
+		return res("No model policy configured. No recommendation available.");
 	}
 
 	try {
 		const currentModel = getCurrentModelId(ctx);
 		const prompt = ctx.getSystemPrompt();
 		const scene = detectScene(prompt);
-		const entries = ctx.sessionManager.getBranch() as SessionEntries;
+		const entries = asSessionEntries(ctx.sessionManager.getBranch());
 
 		const rec = computeRecommendation(state.config, scene, currentModel, entries);
 		const snapshot = computeQuotaSnapshot(readCache());
 		const formatted = formatAdvisorPrompt(rec, snapshot, state.config, new Date());
 
-		return { content: [{ type: "text" as const, text: `Current recommendation:\n\n${formatted}` }] };
+		return res(`Current recommendation:\n\n${formatted}`);
 	} catch (err) {
-		return {
-			content: [{ type: "text" as const, text: `Failed to compute recommendation: ${(err as Error).message}` }],
-			isError: true,
-		};
+		return res(`Failed to compute recommendation: ${(err as Error).message}`, { error: true });
 	}
 }
 
-function handleSetup(
-	state: { config: ModelPolicy | null },
-	ctx: ExtensionContext,
-) {
+function handleSetup(state: { config: ModelPolicy | null }, ctx: ExtensionContext): ToolRes {
 	if (state.config) {
-		return {
-			content: [{ type: "text" as const, text: `Config already exists at ${getConfigPath()}. Delete it first if you want to regenerate.` }],
-		};
+		return res(`Config already exists at ${getConfigPath()}. Delete it first if you want to regenerate.`);
 	}
 
 	const enabledModels = readEnabledModels();
 	const result = generatePolicyConfig(ctx.modelRegistry, enabledModels);
 
-	return {
-		content: [{
-			type: "text" as const,
-			text: [
-				"Auto-generated model-policy.json based on your configured models.",
-				"Review the config below. If it looks correct, write it to " + getConfigPath() + " using the write tool.",
-				"Adjust any values before writing (e.g. peak hours, scene preferences, budget target).",
-				"",
-				"```json",
-				result.json,
-				"```",
-			].join("\n"),
-		}],
-	};
+	return res([
+		"Auto-generated model-policy.json based on your configured models.",
+		"Review the config below. If it looks correct, write it to " + getConfigPath() + " using the write tool.",
+		"Adjust any values before writing (e.g. peak hours, scene preferences, budget target).",
+		"",
+		"```json",
+		result.json,
+		"```",
+	].join("\n"));
 }
 
 // ── 辅助函数 ────────────────────────────────────────────
@@ -271,42 +241,33 @@ async function switchToModel(
 	provider: string,
 	modelId: string,
 	alias: string,
-): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
+): Promise<ToolRes> {
 	try {
 		const currentModel = getCurrentModelId(ctx);
 
 		if (currentModel === `${provider}/${modelId}`) {
-			return { content: [{ type: "text" as const, text: `Already using ${alias} (${provider}/${modelId}).` }] };
+			return res(`Already using ${alias} (${provider}/${modelId}).`);
 		}
 
 		const match = ctx.modelRegistry.find(provider, modelId);
 		if (!match) {
-			return {
-				content: [{ type: "text" as const, text: `Model ${provider}/${modelId} not available (API key may not be configured).` }],
-				isError: true,
-			};
+			return res(`Model ${provider}/${modelId} not available (API key may not be configured).`, { error: true });
 		}
 
 		const success = await pi.setModel(match);
 		if (!success) {
-			return {
-				content: [{ type: "text" as const, text: `Failed to switch to ${provider}/${modelId}.` }],
-				isError: true,
-			};
+			return res(`Failed to switch to ${provider}/${modelId}.`, { error: true });
 		}
 
-		ctx.sessionManager.appendCustomEntry?.("model_change", {
+		pi.appendEntry("model_change", {
 			provider,
 			modelId,
 			alias,
 			timestamp: new Date().toISOString(),
 		});
 
-		return { content: [{ type: "text" as const, text: `Switched to ${alias} (${provider}/${modelId}).` }] };
+		return res(`Switched to ${alias} (${provider}/${modelId}).`);
 	} catch (err) {
-		return {
-			content: [{ type: "text" as const, text: `Error switching to ${provider}/${modelId}: ${err instanceof Error ? err.message : String(err)}` }],
-			isError: true,
-		};
+		return res(`Error switching to ${provider}/${modelId}: ${err instanceof Error ? err.message : String(err)}`, { error: true });
 	}
 }

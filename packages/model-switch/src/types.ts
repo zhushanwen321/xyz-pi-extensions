@@ -90,3 +90,8 @@ export function getCurrentModelId(ctx: ExtensionContext): string {
 
 /** session entries 的通用类型（getBranch() 返回值） */
 export type SessionEntries = Array<{ type: string; [key: string]: unknown }>;
+
+/** 安全类型断言：getBranch() 返回 SessionEntry[]，需要通过 unknown 中转 */
+export function asSessionEntries(entries: unknown): SessionEntries {
+	return entries as SessionEntries;
+}
