@@ -217,6 +217,41 @@ git push origin dev-0.2.0
 - npm 禁止覆盖已发布的同版本号，正式版和 prerelease 都一样
 ```
 
+## 扩展安装红线
+
+**[强制规范] 所有扩展必须通过 npm 包（`pi install`）加载，禁止通过本地目录（`~/.pi/agent/extensions/`）加载，dev 环境测试除外。**
+
+| 方式 | 场景 | 是否允许 |
+|------|------|----------|
+| `pi install npm:@zhushanwen/pi-xxx` | 生产使用 | ✅ 唯一正确方式 |
+| `~/.pi/agent/extensions/` 目录放置 | dev 环境调试 | ✅ 仅开发时 |
+| `~/.pi/agent/extensions/` 目录放置 | 日常使用 | ❌ 禁止 |
+
+**原因**：Pi 的包发现机制对 npm 包和本地目录走不同路径。npm 包通过 `collectPackageResources` → `readPiManifest` 发现，**必须**有 `pi` 字段才能加载扩展。本地目录有 `index.ts` fallback 所以不报错，但这掩盖了 `pi` 字段缺失的问题，导致 npm 安装后扩展静默不加载。
+
+**每个扩展 package.json 必须包含以下最小声明**：
+
+```json
+{
+  "type": "module",
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "keywords": ["pi-package"]
+}
+```
+
+有 skills 目录的扩展还必须声明：
+
+```json
+{
+  "pi": {
+    "extensions": ["./index.ts"],
+    "skills": ["./skills"]
+  }
+}
+```
+
 ## 关键约束
 
 ### 运行环境
@@ -624,17 +659,18 @@ SKIP_LINT=1 git commit -m "..."
 
 ## 安装指南
 
-### npm 包安装（推荐）
+### npm 包安装（唯一正式方式）
 
 ```bash
-# 安装单个 extension
-npm install @zhushanwen/pi-goal
-
-# Pi 加载方式
-pi --extension node_modules/@zhushanwen/pi-goal/src/index.ts
+# 安装单个 extension（唯一正式方式）
+pi install npm:@zhushanwen/pi-goal
 ```
 
-Extension-bundled skills 通过 `resources_discover` 事件自动注册，无需手动安装。
+Extension-bundled skills 通过 `pi.extensions`/`pi.skills` manifest 自动注册，无需手动安装。
+
+### 本地开发调试（仅 dev 环境）
+
+本地开发时可以 symlink 到 `~/.pi/agent/extensions/` 目录进行调试，但**禁止用于日常使用**。本地目录的发现机制有 `index.ts` fallback，会掩盖 `pi` 字段缺失的问题。
 
 ### 独立 Skills（GitHub 分发）
 
