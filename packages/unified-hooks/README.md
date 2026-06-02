@@ -1,55 +1,42 @@
-# unified-hooks — Unified Hooks Extension
+# unified-hooks
 
-Collect scattered hooks in one place for easy maintenance. Each hook is a self-contained module that can be enabled/disabled independently.
+统一 hooks 管理器 — 将散落的 hooks 收集到一个扩展中统一维护，每个 hook 可独立启用/禁用。
 
-## Installation
+## 功能
+
+### 内置 Hooks
+
+| Hook | 说明 |
+|------|------|
+| `edit-whitespace-autofix` | edit 工具因空白字符不匹配失败时，自动注入 steering 让 AI 修复空白并重试 |
+| `tool-error-handler` | 记录所有工具执行错误到控制台，方便调试 |
+
+### 扩展方式
+
+在 `src/hooks/` 下新建 hook 模块，然后在 `src/index.ts` 的 `hookModules` 数组中注册即可。
+
+## 安装
 
 ```bash
-ln -s /path/to/xyz-pi-extensions/unified-hooks ~/.pi/agent/extensions/unified-hooks
+# symlink 方式（开发推荐）
+ln -s /path/to/xyz-pi-extensions-workspace/main/packages/unified-hooks \
+      ~/.pi/agent/extensions/unified-hooks
+
+# npm 方式（正式）
+pi install npm:@zhushanwen/pi-unified-hooks
 ```
 
-## Available Hooks
+## 使用
 
-### edit-whitespace-autofix
+安装后自动生效。edit 空白修复无需配置，工具错误日志自动输出到控制台。
 
-When edit tool fails due to whitespace mismatch, injects a steering message that tells the AI to fix whitespace and retry.
+## 文件结构
 
-**Trigger patterns:**
-- `Could not find the exact text`
-- `oldText must match exactly`
-- `Could not find edits[`
-
-**Behavior:**
-1. Detect whitespace mismatch error from edit tool
-2. Extract the file path from tool args
-3. Inject steer message with `fix_whitespace.py --fix <file>` command
-4. AI automatically fixes whitespace and retries the edit
-
-### tool-error-handler
-
-Logs all tool execution errors to console for debugging.
-
-## Adding New Hooks
-
-1. Create `src/hooks/my-hook.ts`:
-   ```typescript
-   import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-
-   export function setupMyHook(pi: ExtensionAPI): void {
-     pi.on("tool_execution_end", async (event) => {
-       if (event.toolName === "edit" && event.isError) {
-         // Your logic
-       }
-     });
-   }
-   ```
-
-2. Register in `src/index.ts` hookModules array
-
-3. Type check: `npx tsc --noEmit`
-
-## Important API Notes
-
-- Use `pi.sendUserMessage()` in event handlers, **not** `ctx.sendUserMessage()` (only available in command context)
-- `tool_execution_end` event has `{ toolCallId, toolName, args, result, isError }`
-- Inject direct instructions in steer messages, don't try to invoke `/skill-name` via text
+```
+unified-hooks/
+├── index.ts
+└── src/
+    ├── index.ts               # 入口 — hook 注册
+    └── hooks/
+        └── tool-error-handler.ts  # 工具错误处理
+```
