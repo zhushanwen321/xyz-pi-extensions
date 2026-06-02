@@ -39,7 +39,9 @@ def estimate_tokens_from_chars(char_count: int, text_sample: str = "") -> int:
 
 def _extract_content_length(msg: dict) -> int:
     """提取消息内容的字符数。"""
-    content = msg.get("content", "")
+    # 处理嵌套的消息格式 (msg.message.content)
+    message = msg.get("message", msg)
+    content = message.get("content", "")
     if isinstance(content, str):
         return len(content)
     if isinstance(content, list):

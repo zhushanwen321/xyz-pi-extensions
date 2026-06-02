@@ -22,7 +22,7 @@ def extract(sessions: list[dict]) -> dict:
         session_compacts = 0
 
         for i, msg in enumerate(messages):
-            if msg.get("role") == "compactionSummary":
+            if msg.get("type") == "compaction":
                 total_compacts += 1
                 session_compacts += 1
                 # turn 索引 = 消息序号 / 2（粗略估算）
@@ -34,7 +34,7 @@ def extract(sessions: list[dict]) -> dict:
     # 计算分布
     avg_compacts = total_compacts / max(total_sessions, 1)
     per_session_counts = [
-        sum(1 for msg in s.get("messages", []) if msg.get("role") == "compactionSummary")
+        sum(1 for msg in s.get("messages", []) if msg.get("type") == "compaction")
         for s in sessions
     ]
     max_compacts = max(per_session_counts) if per_session_counts else 0
