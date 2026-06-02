@@ -158,10 +158,9 @@ python3 scripts/validate-extensions-yaml.py
    pnpm changeset         # 选择受影响的包 + patch/minor/major
    git add .changeset/
    git commit -m "chore: add changeset"
-   git push
    ```
 
-2. 合并到 main 后，本地执行版本 bump：
+2. 本地执行版本 bump：
    ```bash
    pnpm changeset version  # 自动 bump package.json 版本号
    git add -A
@@ -169,17 +168,20 @@ python3 scripts/validate-extensions-yaml.py
    git push
    ```
 
-3. GitHub Actions 自动：
-   - 运行 `.github/workflows/release.yml`
-   - 执行 `pnpm changeset publish`（需要 `secrets.NPM_TOKEN`）
-   - 推送版本 tags
+3. 打 release tag 触发 GitHub Actions 发布：
+   ```bash
+   git tag v<version>
+   git push origin v<version>
+   ```
 
-**前提条件：**
-- GitHub Secrets 中配置 `NPM_TOKEN`（npm access token with publish permission）
-- `NPM_TOKEN` 需要是 Automation token 或 classic token（非 granular）
-- 首次发布的包需要先在 npmjs.org 上通过 `npm publish --access public` 创建（scoped package 默认 private）
-pnpm changeset
+   GitHub Actions 自动执行：
+   - `.github/workflows/release.yml`（触发条件：push tag `v*`）
+   - `pnpm changeset publish`（需要 `secrets.NPM_TOKEN`，已配置）
+   - 创建 GitHub Release（自动生成 release notes）
 
+**前提条件（已满足）：**
+- GitHub Secrets 中已配置 `NPM_TOKEN`
+- 所有 `@zhushanwen/pi-*` 包已在 npmjs.org 上首次发布过
 
 # 发布（dry run）
 pnpm changeset publish --dry-run
