@@ -30,6 +30,10 @@
         "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/node_modules/@earendil-works/pi-tui/dist/index.d.ts",
         "./types/mariozechner/index"
       ],
+      "@earendil-works/pi-coding-agent": [
+        "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/dist/index.d.ts",
+        "./types/mariozechner/index"
+      ],
       "@earendil-works/pi-ai": [
         "/Users/zhushanwen/.nvm/versions/node/v24.11.1/lib/node_modules/xyz-pi/node_modules/@earendil-works/pi-ai/dist/index.d.ts",
         "./types/mariozechner/index"
