@@ -31,10 +31,11 @@ evolve 自进化系统目前有两类数据源：
 
 ### FR-1: 通用 Tracker 工厂函数 `createTracker(config)`
 
-框架提供一个 `createTracker<TMeta>(pi, config: TrackerConfig<TMeta>)` 函数，自动处理所有样板逻辑：
+框架提供一个 `createTracker<TMeta>(pi, config: TrackerConfig<TMeta>)` 函数。**该函数必须在 `evolveDailyExtension(pi)` 工厂函数体内调用**（标准 §2.3 闭包状态隔离），确保所有 Tracker 运行时状态（items、nextId、currentTurnIndex）在闭包内隔离。
 
+调用后，框架自动处理所有样板逻辑：
 - 注册事件监听（`pi.on(config.triggerEvent)`）
-- 注册工具（`pi.registerTool(config.toolName)`，含 `update/list` 两个 action）
+- 注册工具（`pi.registerTool(config.toolName)`，含 `update/list` 两个 action + 默认 `renderCall`/`renderResult`）
 - 状态持久化（`pi.appendEntry(config.entryType)` + GC 旧 entry）
 - Session 恢复（`session_start` / `session_tree` 时 `reconstructState`）
 - Steering 注入（onCreate / onRemind / onError / onContextRestore）
@@ -59,7 +60,11 @@ interface TrackerConfig<TMeta = Record<string, unknown>> {
   entryType: string;          // "evolve-tracker-skill"
   remindInterval: number;     // 默认 10
   errorThreshold: number;     // 默认 2
+  renderResult?: (details: TrackerDetails, options: { expanded: boolean }, theme: Theme) => Text;
 }
+
+// 框架提供默认 renderResult：显示 item 列表及其状态
+// 框架提供默认 renderCall：显示工具调用参数摘要
 ```
 
 ### FR-3: 统一状态机
@@ -161,6 +166,11 @@ issues.append({
 ### FR-12: 删除 skill-state 包
 
 `packages/skill-state/` 删除，包括其 `index.ts`、`package.json`、`src/`、`README.md`。
+
+同步更新 `CLAUDE.md`：
+- monorepo 架构图（第 18 行）移除 `skill-state/` 条目
+- 包清单（第 697 行）移除 `packages/skill-state/` 行，`packages/evolve-daily/` 说明列改为 "每日自动数据收集 + skill 追踪"
+- `pi.extensions` 配置不再包含 skill-state
 
 Pi 扩展 symlink `~/.pi/agent/extensions/skill-state` 需由用户手动删除。
 
