@@ -137,11 +137,7 @@ git add -A
 git commit -m "chore: bump versions"
 git push
 
-# 发布（本地直接发布，需要 npm login）
-npm login --registry https://registry.npmjs.org/
-pnpm changeset publish
-
-# 发布（dry run）
+# 发布（dry run 预览，不实际发布）
 pnpm changeset publish --dry-run
 
 # 校验 third-party extensions 注册表
@@ -149,6 +145,8 @@ python3 scripts/validate-extensions-yaml.py
 ```
 
 ### 发布流程（GitHub Actions）
+
+**[强制] 禁止本地发布（`npm publish` / `pnpm changeset publish`），必须走 GitHub Actions。**
 
 项目通过 GitHub Actions 自动发布 npm 包。触发条件：push tag `v*`。
 

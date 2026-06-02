@@ -913,6 +913,7 @@ describe("state", () => {
 ### 启动阶段（阻塞性问题）
 
 - [ ] `package.json` 含 `type: "module"` 和 `pi.extensions`
+- [ ] `package.json` 不含 `private: true`（除非确定不发布到 npm）
 - [ ] `peerDependencies` 引用 `@mariozechner/pi-coding-agent`
 - [ ] `files` 包含入口 `.ts`，含 `index.ts` + `src/**/*.ts`
 - [ ] 入口 `export default function(pi: ExtensionAPI)`

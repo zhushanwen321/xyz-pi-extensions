@@ -2,12 +2,14 @@
   "name": "@zhushanwen/pi-quota-providers",
   "version": "0.1.0",
   "description": "Quota provider data fetching and caching layer for Pi extensions",
-  "private": true,
   "type": "module",
   "main": "src/index.ts",
-  "keywords": ["pi", "extension", "quota", "provider", "cache"],
+  "keywords": ["pi-package", "pi", "extension", "quota", "provider", "cache"],
   "license": "MIT",
   "files": ["src/", "index.ts"],
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
   "scripts": {
     "typecheck": "npx tsc --noEmit"
   }
