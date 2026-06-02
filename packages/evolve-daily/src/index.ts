@@ -1,16 +1,16 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { existsSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ANALYZER_PATH = join(
-  homedir(),
-  ".pi/agent/scripts/pi-session-analyzer/analyze.py"
-);
-// daily-reports/ 目录复用旧 extension 的目录路径。
-// 旧 extension 写入 .md 文件，新 evolve-daily 写入 .json 文件，天然不冲突。
-// 删除旧 extension 后残留的 .md 文件可忽略。
-const REPORTS_DIR = join(homedir(), ".pi/agent/evolution-data/daily-reports");
+// 资源文件（Python 脚本）相对于扩展目录自身定位，不依赖外部绝对路径
+const EXT_DIR = dirname(fileURLToPath(import.meta.url)); // src/
+const ANALYZER_PATH = join(EXT_DIR, "..", "scripts", "analyze.py");
+
+// 运行时数据目录使用 Pi 平台约定路径（homedir + .pi/agent/）
+// 这是运行时产出数据，不是扩展自带的资源，用平台约定路径是合理的
+const REPORTS_DIR = join(homedir(), ".pi", "agent", "evolution-data", "daily-reports");
 
 export default function evolveDailyExtension(pi: ExtensionAPI) {
   pi.on("session_start", async () => {

@@ -224,6 +224,21 @@ git push origin dev-0.2.0
 - 同一进程可能有多个 session。模块级 `let` 变量会被所有 session 共享，必须用闭包或 session_start 重建
 - 扩展不能依赖 fs 之外的 Node.js 原生模块（网络、child_process 等由 Pi 核心控制）。**subagent 是已知例外**——它使用 `child_process.spawn` 启动独立 Pi 进程
 
+### 资源自包含
+
+扩展的文件分为两类，路径策略不同：
+
+**资源文件**（扩展自带、随 npm 分发的脚本/配置）：
+- 必须放在扩展自己的目录内（如 `scripts/`、`data/`），禁止引用扩展目录外的绝对路径
+- 代码中通过 `import.meta.dirname`（ESM）或 `__dirname`（CJS）定位扩展内资源
+- `package.json` 的 `files` 字段必须包含所有资源文件（`.py`、`.sh`、`.json` 等），确保 `npm pack` 后完整可用
+
+**运行时数据文件**（扩展运行时产出的报告/缓存等）：
+- 使用 Pi 平台约定路径 `homedir() + '.pi/agent/<用途>/'`
+- 不纳入 npm 包，不随扩展分发
+
+目标：用户 `pi install <extension>` 后直接可用，无需额外下载或配置外部资源。
+
 ### Session 隔离
 
 - 状态必须存储在 `session_start` 重建的闭包变量或 `ctx.sessionManager` entries 中
