@@ -18,11 +18,11 @@ import {
 	readCache,
 	triggerUpdate,
 	trackSpeed,
+	PROVIDERS,
 	type CacheData,
 	type SpeedData,
-} from "./cache.js";
-import { PROVIDERS } from "./providers/index.js";
-import type { QuotaWindow } from "./providers/types.js";
+	type QuotaWindow,
+} from "@zhushanwen/pi-quota-providers";
 // ── 常量 ───────────────────────────────────────────────
 
 const SEP = "│";

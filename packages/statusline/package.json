@@ -21,6 +21,9 @@
     "src/",
     "index.ts"
   ],
+  "dependencies": {
+    "@zhushanwen/pi-quota-providers": "workspace:*"
+  },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*"
   },

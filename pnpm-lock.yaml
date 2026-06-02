@@ -69,6 +69,17 @@ importers:
         specifier: '*'
         version: 0.73.1(ws@8.21.0)(zod@4.4.3)
 
+  packages/model-switch:
+    dependencies:
+      '@mariozechner/pi-coding-agent':
+        specifier: '*'
+        version: 0.73.1(ws@8.21.0)(zod@4.4.3)
+      '@zhushanwen/pi-quota-providers':
+        specifier: workspace:*
+        version: link:../quota-providers
+
+  packages/quota-providers: {}
+
   packages/skill-state:
     dependencies:
       '@mariozechner/pi-coding-agent':
@@ -80,6 +91,9 @@ importers:
       '@mariozechner/pi-coding-agent':
         specifier: '*'
         version: 0.73.1(ws@8.21.0)(zod@4.4.3)
+      '@zhushanwen/pi-quota-providers':
+        specifier: workspace:*
+        version: link:../quota-providers
 
   packages/taste-lint:
     dependencies:
