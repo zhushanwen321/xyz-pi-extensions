@@ -16,8 +16,11 @@
  * - deserializeState 向后兼容旧格式
  */
 
-import type { ExtensionAPI, ExtensionContext, CustomEntry } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext, CustomEntry, Theme } from "@mariozechner/pi-coding-agent";
+
 import { Text } from "@mariozechner/pi-tui";
+import { type Static } from "typebox";
+
 
 import {
 	type GoalTask,
@@ -141,8 +144,8 @@ function reconstructGoalState(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 
 // ── Command Handler ───────────────────────────────────
 
-async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: string, ctx: ExtensionContext): Promise<void> {
-	const parsed = parseGoalArgs(args);
+async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: string | undefined, ctx: ExtensionContext): Promise<void> {
+	const parsed = parseGoalArgs(args ?? "");
 
 	switch (parsed.action) {
 		case "status": {
@@ -742,7 +745,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		],
 		parameters: GoalManagerParams,
 
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId: string, params: Static<typeof GoalManagerParams>, _signal: AbortSignal | undefined, _onUpdate: any, ctx: ExtensionContext) {
 			try {
 				return await executeGoalAction(pi, session, params, ctx);
 			} catch (err) {
@@ -752,7 +755,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 			}
 		},
 
-		renderCall(args, theme) {
+		renderCall(args: any, theme: Theme) {
 			let text = theme.fg("toolTitle", theme.bold("goal_manager ")) + theme.fg("muted", args.action);
 			if (args.tasks) text += ` ${theme.fg("dim", `(${args.tasks.length} tasks)`)}`;
 			if (args.updates) text += ` ${theme.fg("dim", `(${args.updates.length} updates)`)}`;
@@ -763,7 +766,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { expanded }, theme) {
+		renderResult(result: any, { expanded }: any, theme: Theme) {
 			const details = result.details as GoalManagerDetails | undefined;
 			if (!details || !Array.isArray(details.tasks)) {
 				const text = result.content[0];
@@ -811,14 +814,14 @@ export default function goalExtension(pi: ExtensionAPI) {
 	pi.registerCommand("goal", {
 		description:
 			"目标驱动模式: /goal <objective> [--tokens N] [--timeout N] [--max-turns N] | /goal pause | /goal resume | /goal clear | /goal update <new-objective> | /goal status | /goal history",
-		handler: async (args, ctx) => {
+		handler: async (args: string | undefined, ctx: ExtensionCommandContext) => {
 			await handleGoalCommand(pi, session, args, ctx);
 		},
 	});
 
 	// ── Event: before_agent_start ──────────────────────
 
-	pi.on("before_agent_start", async (_event, ctx) => {
+	pi.on("before_agent_start", async (_event: any, ctx: ExtensionContext) => {
 		return handleBeforeAgentStart(pi, session, ctx);
 	});
 
@@ -831,7 +834,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	// ── Event: turn_end ────────────────────────────────
 
-	pi.on("turn_end", async (_event, ctx) => {
+	pi.on("turn_end", async (_event: any, ctx: ExtensionContext) => {
 		if (!session.state) return;
 		session.state.currentTurnIndex++;
 		updateWidget(session, ctx);
@@ -839,7 +842,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	// ── Event: message_end (token accounting) ──────────
 
-	pi.on("message_end", async (event, _ctx) => {
+	pi.on("message_end", async (event: any, _ctx: ExtensionContext) => {
 		if (!session.state || !isActiveStatus(session.state.status)) return;
 		if (event.message.role !== "assistant") return;
 
@@ -858,13 +861,13 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	// ── Event: agent_end ───────────────────────────────
 
-	pi.on("agent_end", async (_event, ctx) => {
+	pi.on("agent_end", async (_event: any, ctx: ExtensionContext) => {
 		await handleAgentEnd(pi, session, ctx);
 	});
 
 	// ── Event: session_start (state reconstruction) ───
 
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (_event: any, ctx: ExtensionContext) => {
 		reconstructGoalState(pi, session, ctx);
 		if (session.state) {
 			session.tasksCompletedAtAgentStart = getCompletedCount(session.state.tasks);
@@ -881,7 +884,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 	];
 
 	for (const customType of goalMessageTypes) {
-		pi.registerMessageRenderer(customType, (message, _options, theme) => {
+		pi.registerMessageRenderer(customType, (message: any, _options: any, theme: Theme) => {
 			const prefix =
 				message.customType === "goal-context-exceeded"
 					? theme.fg("error", "[GOAL 预算] ")

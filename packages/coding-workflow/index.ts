@@ -298,7 +298,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 			"If gate returns PASS: follow the next-step instructions in the gate result message",
 			"Do NOT call any other tools between gate PASS and following the gate result instructions",
 		],
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+		async execute(_toolCallId: string, params: any, signal: any, onUpdate: any, ctx: any) {
 			if (state.pendingInit) {
 				return {
 					content: [{ type: "text", text: "Workflow is pending initialization. Call coding-workflow-init first to set the slug." }],
@@ -559,7 +559,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 			};
 		},
 
-		renderCall(args, theme) {
+		renderCall(args: any, theme: any) {
 			const phaseConfig = PHASES[(args.phase as number) - 1];
 			return new Text(
 				theme.fg("toolTitle", theme.bold("coding-workflow-gate ")) +
@@ -569,7 +569,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 			);
 		},
 
-		renderResult(result, _opts, theme) {
+		renderResult(result: any, _opts: any, theme: any) {
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 			const icon = result.isError
 				? theme.fg("error", "✗")
@@ -602,7 +602,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 			"The slug must be English, lowercase, hyphen-separated, concise",
 			"Do NOT include date prefix — it is added automatically",
 		],
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId: string, params: any, _signal: any, _onUpdate: any, ctx: any) {
 			if (!state.pendingInit) {
 				return {
 					content: [{ type: "text", text: "No pending workflow initialization. Use /coding-workflow to start one." }],
@@ -700,7 +700,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 			};
 		},
 
-		renderCall(args, theme) {
+		renderCall(args: any, theme: any) {
 			return new Text(
 				theme.fg("toolTitle", theme.bold("coding-workflow-init ")) +
 				theme.fg("accent", String(args.slug ?? "?")),
@@ -708,7 +708,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 			);
 		},
 
-		renderResult(result, _opts, theme) {
+		renderResult(result: any, _opts: any, theme: any) {
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 			const icon = result.isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
 			return new Text(`${icon} ${text.split("\n")[0]}`, 0, 0);
@@ -730,7 +730,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 			"No parameters needed",
 			"Do NOT call this if gate returned FAIL — fix issues and retry gate instead",
 		],
-		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId: string, _params: any, _signal: any, _onUpdate: any, ctx: any) {
 			if (state.pendingInit) {
 				return {
 					content: [{ type: "text", text: "Workflow is pending initialization. Call coding-workflow-init first to set the slug." }],
@@ -847,7 +847,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 						{ deliverAs: "steer" },
 					);
 				},
-				onError: (error) => {
+				onError: (error: any) => {
 					console.warn(`[coding-workflow] Compact failed: ${error.message}`);
 					// Rollback phase advancement — context isolation failed
 					state.currentPhase -= 1;
@@ -870,7 +870,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 			};
 		},
 
-		renderCall(_args, theme) {
+		renderCall(_args: any, theme: any) {
 			return new Text(
 				theme.fg("toolTitle", theme.bold("coding-workflow-phase-start ")) +
 				theme.fg("accent", `Phase ${state.currentPhase} → ${state.currentPhase + 1}`),
@@ -878,7 +878,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 			);
 		},
 
-		renderResult(result, _opts, theme) {
+		renderResult(result: any, _opts: any, theme: any) {
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 			const icon = result.isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
 			return new Text(`${icon} ${text}`, 0, 0);
@@ -928,7 +928,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 		description: "Start a coding workflow: /coding-workflow [requirement]. " +
 			"With no args, extracts requirement from conversation context. " +
 			"AI generates slug, then calls coding-workflow-init to finalize.",
-		handler: async (args, ctx) => {
+		handler: async (args: any, ctx: any) => {
 			if (state.isActive) {
 				ctx.ui.notify(
 					`Workflow "${state.topicName}" is already active (Phase ${state.currentPhase}/5). Use /coding-workflow-abort to cancel.`,
@@ -1002,7 +1002,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("coding-workflow-status", {
 		description: "Show current coding workflow status",
-		handler: async (_args, ctx) => {
+		handler: async (_args: any, ctx: any) => {
 			if (state.pendingInit) {
 				ctx.ui.notify("Workflow pending initialization. Generate a slug and call coding-workflow-init.", "info");
 				return;
@@ -1028,7 +1028,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("coding-workflow-abort", {
 		description: "Abort current coding workflow, kill subprocesses, reset state",
-		handler: async (_args, ctx) => {
+		handler: async (_args: any, ctx: any) => {
 			if (state.pendingInit) {
 				state.pendingInit = false;
 				state.pendingRequirement = "";
@@ -1120,7 +1120,7 @@ function checkProjectProtection(projectRoot: string): string[] {
 
 // ── Event: before_agent_start ──────────────────────────
 
-	pi.on("before_agent_start", async (event, _ctx) => {
+	pi.on("before_agent_start", async (event: any, _ctx: any) => {
 		if (!state.isActive || state.pendingInit) return;
 
 		const phaseConfig = PHASES[state.currentPhase - 1];
@@ -1263,14 +1263,14 @@ function checkProjectProtection(projectRoot: string): string[] {
 
 	// ── Event: session_start ───────────────────────────────
 
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (_event: any, ctx: any) => {
 		reconstructState(ctx, state);
 		updateWidget(ctx, state);
 	});
 
 	// ── Event: turn_end ────────────────────────────────────
 
-	pi.on("turn_end", async (_event, ctx) => {
+	pi.on("turn_end", async (_event: any, ctx: any) => {
 		if (!state.isActive || state.pendingInit) return;
 		updateWidget(ctx, state);
 	});
@@ -1279,7 +1279,7 @@ function checkProjectProtection(projectRoot: string): string[] {
 
 	pi.registerMessageRenderer(
 		"coding-workflow-context",
-		(message, _options, theme) => {
+		(message: any, _options: any, theme: any) => {
 			return new Text(
 				theme.fg("accent", "[CODING WORKFLOW] ") +
 				theme.fg("dim", "Phase instructions injected"),

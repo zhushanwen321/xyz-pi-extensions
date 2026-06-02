@@ -11,10 +11,10 @@
  *   Enforces state machine rules (terminal states are irreversible)
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 
 import {
   type WorkflowInstance,
@@ -156,7 +156,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
 
   // ── Events ──────────────────────────────────────────────────
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (_event: any, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     lastSessionId = sessionId;
 
@@ -182,7 +182,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
     }
   });
 
-  pi.on("session_tree", async (_event, ctx) => {
+  pi.on("session_tree", async (_event: any, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     lastSessionId = sessionId;
 
@@ -246,7 +246,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
     ],
     parameters: WorkflowParams,
 
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId: string, params: Static<typeof WorkflowParams>, _signal: AbortSignal | undefined, _onUpdate: any, ctx: ExtensionContext) {
       const sessionId = ctx.sessionManager.getSessionId();
       lastSessionId = sessionId;
       const orch = orchestrators.get(sessionId);
@@ -451,7 +451,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
       }
     },
 
-    renderCall(args, theme, _context) {
+    renderCall(args: any, theme: Theme, _context?: any) {
       const action = args.action as string;
       let text =
         theme.fg("toolTitle", theme.bold("workflow ")) +
@@ -462,7 +462,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
       return new Text(text, 0, 0);
     },
 
-    renderResult(result, _options, theme, _context) {
+    renderResult(result: any, _options: any, theme: Theme, _context?: any) {
       const details = result.details as WorkflowDetails | undefined;
       if (!details) {
         const text = result.content[0];
@@ -551,7 +551,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
     ],
     parameters: WorkflowRunParams,
 
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId: string, params: Static<typeof WorkflowRunParams>, _signal: AbortSignal | undefined, _onUpdate: any, ctx: ExtensionContext) {
       const sessionId = ctx.sessionManager.getSessionId();
       lastSessionId = sessionId;
       const orch = orchestrators.get(sessionId);
@@ -601,7 +601,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
       };
     },
 
-    renderCall(args, theme, _context) {
+    renderCall(args: any, theme: Theme, _context?: any) {
       const name = args.name as string;
       const text =
         theme.fg("toolTitle", theme.bold("workflow-run ")) +
@@ -609,7 +609,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
       return new Text(text, 0, 0);
     },
 
-    renderResult(result, _options, theme, _context) {
+    renderResult(result: any, _options: any, theme: Theme, _context?: any) {
       const details = result.details as WorkflowRunDetails | undefined;
       if (!details) {
         const text = result.content[0];

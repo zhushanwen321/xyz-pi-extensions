@@ -7,9 +7,9 @@
  * and name conflict checking.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, Theme } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve as pathResolve } from "node:path";
 import { loadWorkflows, invalidateCache } from "./config-loader.js";
@@ -72,7 +72,7 @@ export function registerGenerateTool(pi: ExtensionAPI) {
     ],
     parameters: WorkflowGenerateParams,
 
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+    async execute(_toolCallId: string, params: Static<typeof WorkflowGenerateParams>, _signal: AbortSignal | undefined, _onUpdate: any, _ctx: any) {
       const name = params.name as string;
       const script = params.script as string;
 
@@ -174,7 +174,7 @@ export function registerGenerateTool(pi: ExtensionAPI) {
       };
     },
 
-    renderCall(args, theme, _context) {
+    renderCall(args: any, theme: Theme, _context?: any) {
       const name = args.name as string;
       const text =
         theme.fg("toolTitle", theme.bold("workflow-generate ")) +
@@ -182,7 +182,7 @@ export function registerGenerateTool(pi: ExtensionAPI) {
       return new Text(text, 0, 0);
     },
 
-    renderResult(result, _options, _theme, _context) {
+    renderResult(result: any, _options: any, _theme: Theme, _context?: any) {
       const text = result.content[0];
       return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
     },

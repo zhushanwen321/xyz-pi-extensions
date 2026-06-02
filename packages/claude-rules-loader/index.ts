@@ -108,35 +108,35 @@ function findMarkdownFiles(dir: string, visited?: Set<string>): string[] {
  * Load and parse all .md rule files from a directory.
  */
 function loadRulesFromDir(
-  rulesDir: string,
-  displayPrefix: string,
+	rulesDir: string,
+	displayPrefix: string,
 ): RuleFile[] {
-  const files = findMarkdownFiles(rulesDir);
-  return files
-    .map((filePath) => {
-      try {
-        const realPath = fs.realpathSync(filePath);
-        const raw = fs.readFileSync(filePath, "utf-8");
-        const parsed = parseFrontmatter(raw);
-        if (!parsed.content) return null; // skip empty files
-        return {
-          path: `${displayPrefix}/${path.relative(rulesDir, filePath)}`,
-          realPath,
-          content: parsed.content,
-          globs: parsed.globs,
-        };
-      } catch {
-        return null;
-      }
-    })
-    .filter((r): r is RuleFile => r !== null);
+	const files = findMarkdownFiles(rulesDir);
+	return files
+		.map((filePath) => {
+			try {
+				const realPath = fs.realpathSync(filePath);
+				const raw = fs.readFileSync(filePath, "utf-8");
+				const parsed = parseFrontmatter(raw);
+				if (!parsed.content) return null; // skip empty files
+				return {
+					path: `${displayPrefix}/${path.relative(rulesDir, filePath)}`,
+					realPath,
+					content: parsed.content,
+					...(parsed.globs ? { globs: parsed.globs } : {}),
+				} as RuleFile;
+			} catch {
+				return null;
+			}
+		})
+		.filter((r): r is RuleFile => r !== null);
 }
 
 export default function claudeRulesLoader(pi: ExtensionAPI) {
   let unconditionalRules: RuleFile[] = [];
   let conditionalRules: RuleFile[] = [];
 
-  pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (_event: any, ctx: any) => {
     const homeDir = process.env.HOME || process.env.USERPROFILE || "";
     const allRules: RuleFile[] = [];
 
@@ -198,7 +198,7 @@ export default function claudeRulesLoader(pi: ExtensionAPI) {
     }
   });
 
-  pi.on("before_agent_start", async (event) => {
+	pi.on("before_agent_start", async (event: any) => {
     const parts: string[] = [];
 
     // Unconditional rules: full content injected into system prompt

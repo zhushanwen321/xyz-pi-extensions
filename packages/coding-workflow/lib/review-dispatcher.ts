@@ -26,7 +26,7 @@ import {
 export interface PhaseConfigForReview {
 	phase: number;
 	name: string;
-	reviewPrefix: string;
+	reviewPrefix: string | string[];
 	retrospectPrefix: string;
 	deliverables: string[];
 	reviewMode: string;

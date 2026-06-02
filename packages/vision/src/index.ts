@@ -9,9 +9,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type ExtensionAPI, SessionManager } from "@mariozechner/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, type Theme } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import {
 	VISION_ALLOWED_TOOLS,
 	VISION_SYSTEM_PROMPT,
@@ -21,7 +21,7 @@ import {
 } from "./vision-model.js";
 import {
 	type OnUpdateCallback,
-	type VisionResult,
+	
 	cleanupOldTempFiles,
 	getFinalOutput,
 	runSingleVisionAgent,
@@ -98,7 +98,7 @@ export default function visionExtension(pi: ExtensionAPI) {
 			"Use context: 'fork' when the image analysis needs to understand prior discussion (e.g. analyzing a screenshot of an error the user just described)",
 		],
 
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+		async execute(_toolCallId: string, params: Static<typeof AnalyzeImageParams>, signal: AbortSignal | undefined, onUpdate: any, ctx: ExtensionContext) {
 			cleanupOldTempFiles();
 
 			// ── Validate image path ──
@@ -200,7 +200,7 @@ export default function visionExtension(pi: ExtensionAPI) {
 			};
 		},
 
-		renderCall(args, theme) {
+		renderCall(args: any, theme: Theme) {
 			const rawPath = args.image_path as string;
 			const home = os.homedir();
 			const shortPath = rawPath.startsWith(home) ? `~${rawPath.slice(home.length)}` : rawPath;
@@ -213,7 +213,7 @@ export default function visionExtension(pi: ExtensionAPI) {
 			);
 		},
 
-		renderResult(result, { expanded }, theme) {
+		renderResult(result: any, { expanded }: any, theme: Theme) {
 			const text = result.content[0];
 			if (!text || text.type !== "text") return new Text("(no output)", 0, 0);
 

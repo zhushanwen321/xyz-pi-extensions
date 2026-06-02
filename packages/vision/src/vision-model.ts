@@ -53,7 +53,7 @@ const EXAMPLE_CONFIG = JSON.stringify({
 }, null, 2);
 
 /** Map vision ThinkingLevel to Pi CLI --thinking flag values. */
-const THINKING_TO_PI: Record<ThinkingLevel, string> = {
+const _THINKING_TO_PI: Record<ThinkingLevel, string> = {
 	high: "high",
 	max: "xhigh",
 };

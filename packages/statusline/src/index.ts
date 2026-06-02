@@ -184,7 +184,7 @@ export default function (pi: ExtensionAPI) {
 
 	let tui: { requestRender(): void } | null = null;
 
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (_event: any, ctx: ExtensionContext) => {
 		state.sessionStart = Date.now();
 		state.lastLlmTime = 0;
 		state.speed = { current: 0, day: 0, d7: 0, d30: 0 };
@@ -192,7 +192,7 @@ export default function (pi: ExtensionAPI) {
 		state.thinkingLevel = pi.getThinkingLevel();
 		refreshTotals(state, ctx);
 
-		ctx.ui.setFooter((t, theme, footerData) => {
+		(ctx.ui as any).setFooter((t: { requestRender(): void }, theme: Theme, footerData: ReadonlyFooterDataProvider) => {
 			tui = t;
 			const unsub = footerData.onBranchChange(() => t.requestRender());
 			return {
@@ -207,14 +207,14 @@ export default function (pi: ExtensionAPI) {
 		triggerUpdate();
 	});
 
-	pi.on("message_start", async (event) => {
+	pi.on("message_start", async (event: any) => {
 		if (event.message.role === "assistant") {
 			state.assistantStart = Date.now();
 			state.isAgentBusy = true;
 		}
 	});
 
-	pi.on("message_end", async (event, ctx) => {
+	pi.on("message_end", async (event: any, ctx: ExtensionContext) => {
 		if (event.message.role === "assistant") {
 			const msg = event.message as AssistantMessage;
 			if (!msg.usage) return;
@@ -249,7 +249,7 @@ export default function (pi: ExtensionAPI) {
 		state.thinkingLevel = pi.getThinkingLevel();
 		tui?.requestRender();
 	});
-	pi.on("thinking_level_select", async (event) => {
+	pi.on("thinking_level_select", async (event: any) => {
 		state.thinkingLevel = event.level;
 		if (!state.isAgentBusy) tui?.requestRender();
 	});

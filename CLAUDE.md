@@ -427,6 +427,62 @@ GUI 组件（`TaskListWidget` 等）是 xyz-agent 的工作，扩展侧不需要
 
 ## 质量检查
 
+### 类型检查零容忍
+
+pre-commit hook 会运行 `tsc --noEmit`，任何类型错误都会阻止提交。
+
+**核心规则：全量修复，不接受「不是本次引入」作为跳过理由。**
+
+- `tsc --noEmit` 报告的错误必须全部修复，无论是否本次修改引入
+- 禁止 `SKIP_LINT=1 git commit` 跳过 hook，除非是紧急 hotfix 且后续立即修复
+- 禁止 `--no-verify` 提交，除非是紧急 hotfix 且后续立即修复
+- 修复时从 `packages/types/mariozechner/index.d.ts` 的 stub 开始检查——缺失的导出声明会导致下游包报错
+- 回调参数缺少类型注解（TS7006 `implicitly has an 'any' type`）是代码质量问题，必须补全类型
+- 如果修复量过大（>50 个错误），使用 subagent 并行处理，不要手动一个一个修
+
+### 检查命令
+
+```bash
+# 全量类型检查
+npx tsc --noEmit
+
+# 全量 lint
+pnpm -r lint
+
+# 单包检查
+pnpm --filter @zhushanwen/pi-goal typecheck
+pnpm --filter @zhushanwen/pi-goal lint
+
+# 跳过 pre-commit hook（仅紧急 hotfix）
+SKIP_LINT=1 git commit -m "..."
+
+# 手动验证（启动 Pi 后）
+/goal Fix the typo in README --tokens 10000
+/todos
+```
+
+### Git Hooks
+
+项目使用 `.githooks/pre-commit`（通过 `git config core.hooksPath .githooks` 激活），包含：
+
+1. `tsc --noEmit` — 全量 TypeScript 类型检查
+2. `eslint` — 仅检查 staged 的 `.ts` 文件
+
+bare+worktree 模式下 hook 自动检测 rebase 状态并跳过。
+
+### 类型 Stub 维护（`packages/types/`）
+
+`packages/types/mariozechner/index.d.ts` 是 CI 环境的类型桩（ambient module declarations）。本地开发时 `tsconfig.json` 的 `paths` 优先解析到真实 Pi SDK 类型。
+
+**当 Pi SDK 更新或新增导入时，必须同步更新此 stub 文件。** 新增的 `export` 声明缺失会导致本地 typecheck 全量报错。检查方式：
+
+```bash
+# 确认哪些导入缺失
+npx tsc --noEmit 2>&1 | grep "has no exported member"
+```
+
+添加 stub 声明的模式：`export type XxxName = any;`（类型）或 `export function xxx(): void;`（函数）。
+
 ```bash
 # 全量类型检查
 pnpm -r typecheck
@@ -446,7 +502,6 @@ SKIP_LINT=1 git commit -m "..."
 /todos
 ```
 
-### 品味规则（taste-lint）
 
 项目使用自定义 ESLint 插件 `taste-lint`，复用自 llm-simple-router 项目的通用规则：
 

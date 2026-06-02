@@ -19,6 +19,14 @@ declare module "@mariozechner/pi-coding-agent" {
 			theme: Theme;
 			custom<T = void>(factory: (tui: any, theme: any, kb: any, done: () => void) => any): Promise<T>;
 		};
+		model: any;
+		signal: AbortSignal | undefined;
+		isIdle(): boolean;
+		abort(): void;
+		hasPendingMessages(): boolean;
+		shutdown(): void;
+		compact(options?: any): void;
+		getSystemPrompt(): string;
 	}
 	export type ContextEvent = any;
 	export type ContextUsage = any;
@@ -45,6 +53,9 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type ToolCallEvent = any;
 	export type ToolResultEvent = any;
 	export type FileEntry = any;
+	export type ReadonlyFooterDataProvider = any;
+	export type ExtensionContextActions = any;
+	export type ExtensionCommandContextActions = any;
 
 	export function getAgentDir(): string;
 	export function getMarkdownTheme(): Theme;
@@ -67,10 +78,15 @@ declare module "@mariozechner/pi-tui" {
 	export class Markdown {
 		constructor(text: string, x?: number, y?: number, theme?: any);
 	}
+	export class Component {}
+	export function matchesKey(key: any, binding: any): boolean;
+	export function truncateToWidth(text: string, width: number): string;
 }
 
 declare module "@mariozechner/pi-ai" {
 	export function StringEnum<T extends readonly string[]>(values: T, options?: Record<string, unknown>): T[number];
+	export type Message = any;
+	export type AssistantMessage = any;
 }
 
 declare module "@earendil-works/pi-coding-agent" {
@@ -106,4 +122,9 @@ declare module "typebox" {
 		Unknown(options?: Record<string, any>): any;
 	};
 	export type Static<T> = Record<string, any>;
+}
+
+declare module "js-yaml" {
+	export function load(text: string, opts?: Record<string, unknown>): unknown;
+	export function dump(obj: unknown, opts?: Record<string, unknown>): string;
 }

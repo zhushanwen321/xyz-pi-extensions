@@ -62,7 +62,7 @@ export default function contextEngineeringExtension(pi: ExtensionAPI): void {
     frozenFreshState = createFrozenFreshState();
   });
 
-  pi.on("context", (event, ctx) => {
+  pi.on("context", (event: any, ctx: any) => {
     try {
       // Pi Extension API types differ from our internal message types.
       // Both sides define the same shape but TypeScript can't verify across packages.
@@ -86,7 +86,7 @@ export default function contextEngineeringExtension(pi: ExtensionAPI): void {
     description: "Recall original content compressed by context engineering. Use when you need the full content of an expired, truncated, or condensed tool result.",
     promptSnippet: "recall_context(id) — retrieve original content compressed by context engineering",
     parameters: RecallParams,
-    execute: async (_tcId, params, _sig, _upd, _ctx) => recallResult(params.id, store),
+    execute: async (_tcId: string, params: any, _sig: any, _upd: any, _ctx: any) => recallResult(params.id, store),
   });
 
   pi.registerCommand("context-engineering", {

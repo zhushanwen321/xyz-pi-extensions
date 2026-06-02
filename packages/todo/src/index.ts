@@ -10,9 +10,9 @@
  */
 
 import { StringEnum } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { matchesKey, Text, truncateToWidth } from "@mariozechner/pi-tui";
-import { Type } from "typebox";
+	import { Type, type Static } from "typebox";
 
 // ── 数据模型 ─────────────────────────────────────────
 
@@ -603,22 +603,22 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (_event: any, ctx: ExtensionContext) => {
 		reconstructState(ctx);
 		refreshDisplay(ctx);
 	});
-	pi.on("session_tree", async (_event, ctx) => {
+	pi.on("session_tree", async (_event: any, ctx: ExtensionContext) => {
 		reconstructState(ctx);
 		refreshDisplay(ctx);
 	});
 
 	// v3: 追踪用户消息轮数
-	pi.on("agent_start", async (_event, _ctx) => {
+	pi.on("agent_start", async (_event: any, _ctx: ExtensionContext) => {
 		userMessageCount++;
 	});
 
 	// v3: 自动清空与提醒检查
-	pi.on("before_agent_start", async (_event, ctx) => {
+	pi.on("before_agent_start", async (_event: any, ctx: ExtensionContext) => {
 		try {
 			// 1. 自动清空：全部完成后经过 2 轮用户消息
 			if (allCompletedAtCount !== null && userMessageCount - allCompletedAtCount >= AUTO_CLEAR_DELAY_ROUNDS) {
@@ -700,8 +700,8 @@ export default function (pi: ExtensionAPI) {
 		],
 		parameters: TodoParams,
 
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const result = await executeTodoAction(params, ctx);
+		async execute(_toolCallId: string, params: Static<typeof TodoParams>, _signal: AbortSignal | undefined, _onUpdate: any, ctx: ExtensionContext) {
+			const result = await executeTodoAction(params as any, ctx);
 			// Append input params to error results for debugging
 			const details = result.details as { error?: string } | undefined;
 			if (details?.error) {
@@ -714,7 +714,7 @@ export default function (pi: ExtensionAPI) {
 			return result;
 		},
 
-		renderCall(args, theme, _context) {
+		renderCall(args: any, theme: Theme, _context?: any) {
 			let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", args.action);
 			if (args.texts && args.texts.length > 0) text += ` ${theme.fg("dim", `(${args.texts.length} items)`)}`;
 			if (args.ids && args.ids.length > 0) text += ` ${theme.fg("accent", `#${args.ids.join(", #")}`)}`;
@@ -724,20 +724,20 @@ export default function (pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, options, theme, _context) {
+		renderResult(result: any, options: any, theme: Theme, _context?: any) {
 			return renderTodoResult(result, options, theme);
 		},
 	});
 
 	pi.registerCommand("todos", {
 		description: "\u67e5\u770b\u5f53\u524d\u5206\u652f\u7684\u6240\u6709 todo",
-		handler: async (_args, ctx) => {
+		handler: async (_args: string | undefined, ctx: ExtensionCommandContext) => {
 			if (!ctx.hasUI) {
 				ctx.ui.notify("/todos \u9700\u8981\u4ea4\u4e92\u6a21\u5f0f", "error");
 				return;
 			}
 
-			await ctx.ui.custom<void>((_tui, theme, _kb, done) => {
+			await ctx.ui.custom((_tui: any, theme: Theme, _kb: any, done: () => void) => {
 				return new TodoListComponent(todos, theme, () => done());
 			});
 		},

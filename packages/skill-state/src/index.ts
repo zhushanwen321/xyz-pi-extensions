@@ -9,7 +9,7 @@
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { CustomEntry, ExtensionAPI, ExtensionContext, SessionEntry, Theme } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import {
   type SkillStateRuntimeState,
   type TrackedItem,
@@ -328,11 +328,11 @@ export default function skillStateExtension(pi: ExtensionAPI): void {
 
   // ── Event: tool_call（FR-1, AC-1/2/3）────────────
 
-  pi.on("tool_call", async (event, ctx) => handleToolCall(event, pi, state, ctx));
+  pi.on("tool_call", async (event: any, ctx: ExtensionContext) => handleToolCall(event, pi, state, ctx));
 
   // ── Event: turn_end（FR-3, AC-6）──────────────────
 
-  pi.on("turn_end", async (event, ctx) => handleTurnEnd(event, pi, state, ctx));
+  pi.on("turn_end", async (event: any, ctx: ExtensionContext) => handleTurnEnd(event, pi, state, ctx));
 
   // ── Event: before_agent_start（FR-8, AC-8）───────
 
@@ -342,7 +342,7 @@ export default function skillStateExtension(pi: ExtensionAPI): void {
 
   const messageTypes = ["skill-state-context", "skill-state-remind", "skill-state-force-record"];
   for (const customType of messageTypes) {
-    pi.registerMessageRenderer(customType, (message, _options, theme) => {
+    pi.registerMessageRenderer(customType, (message: any, _options: any, theme: Theme) => {
       const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
       return new Text(theme.fg("accent", "[SKILL-STATE] ") + theme.fg("dim", content), 0, 0);
     });
@@ -368,16 +368,16 @@ export default function skillStateExtension(pi: ExtensionAPI): void {
     ],
     parameters: SkillStateParams,
 
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const result = await executeSkillState(pi, state, params, ctx);
+    async execute(_toolCallId: string, params: Static<typeof SkillStateParams>, _signal: AbortSignal | undefined, _onUpdate: any, ctx: ExtensionContext) {
+      const result = await executeSkillState(pi, state, params as any, ctx);
       return result;
     },
 
-    renderCall(args, theme, _context) {
+    renderCall(args: any, theme: Theme, _context?: any) {
       return renderSkillStateCall(args as Record<string, unknown>, theme);
     },
 
-    renderResult(result, options, theme, _context) {
+    renderResult(result: any, options: any, theme: Theme, _context?: any) {
       return renderSkillStateResult(result, options, theme);
     },
   });

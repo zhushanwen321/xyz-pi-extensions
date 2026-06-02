@@ -237,7 +237,7 @@ export async function executeGoalAction(
 						`如需追加任务请用 add_tasks，如需全部重新规划请用 /goal update。`,
 				);
 			}
-			state.tasks = params.tasks.map((desc, i) => ({
+			state.tasks = params.tasks.map((desc: string, i: number) => ({
 				id: i + 1,
 				description: normalizeDescription(desc),
 				status: "pending" as const,
@@ -256,7 +256,7 @@ export async function executeGoalAction(
 			const startId = state.tasks.length > 0
 				? Math.max(...state.tasks.map((t) => t.id)) + 1
 				: 1;
-			const newTasks: GoalTask[] = params.tasks.map((desc, i) => ({
+			const newTasks: GoalTask[] = params.tasks.map((desc: string, i: number) => ({
 				id: startId + i,
 				description: normalizeDescription(desc),
 				status: "pending" as const,
@@ -273,8 +273,8 @@ export async function executeGoalAction(
 			if (!params.updates || params.updates.length === 0) {
 				throw new Error("update_tasks requires a non-empty updates array");
 			}
-			const taskIds = params.updates.map((u) => u.taskId);
-			const duplicateIds = taskIds.filter((id, i) => taskIds.indexOf(id) !== i);
+			const taskIds = params.updates.map((u: { taskId: number; status: string; evidence?: string }) => u.taskId);
+			const duplicateIds = taskIds.filter((id: number, i: number) => taskIds.indexOf(id) !== i);
 			if (duplicateIds.length > 0) {
 				throw new Error(`重复的 taskId: ${[...new Set(duplicateIds)].join(", ")}`);
 			}
@@ -400,11 +400,11 @@ export async function executeGoalAction(
 			}
 			const subtasks = parentTask.subtasks ?? [];
 			const startId = subtasks.length > 0 ? Math.max(...subtasks.map((s) => s.id)) + 1 : 1;
-			const trimmed = params.texts.map((t) => t.trim()).filter((t) => t.length > 0);
+			const trimmed = params.texts.map((t: string) => t.trim()).filter((t: string) => t.length > 0);
 			if (trimmed.length === 0) {
 				throw new Error("texts 中至少需要一个非空字符串");
 			}
-			const newSubtasks: Subtask[] = trimmed.map((text, i) => ({
+			const newSubtasks: Subtask[] = trimmed.map((text: string, i: number) => ({
 				id: startId + i,
 				text,
 				status: "pending" as const,

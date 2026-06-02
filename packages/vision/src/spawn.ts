@@ -185,7 +185,7 @@ export async function runSingleVisionAgent(params: {
 
 		const invocation = getPiInvocation(args);
 
-		await new Promise<void>((resolve, reject) => {
+		await new Promise<void>((resolve, _reject) => {
 			const proc: ChildProcess = spawn(invocation.command, invocation.args, {
 				cwd,
 				env: { ...process.env },

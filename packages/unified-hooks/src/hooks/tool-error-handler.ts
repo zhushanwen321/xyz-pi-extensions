@@ -8,7 +8,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 export function setupToolErrorHandler(pi: ExtensionAPI): void {
-  pi.on("tool_execution_end", async (event) => {
+  pi.on("tool_execution_end", async (event: any) => {
     if (!event.isError) return;
     console.log(`[unified-hooks] ${event.toolName} error (callId=${event.toolCallId})`);
   });
