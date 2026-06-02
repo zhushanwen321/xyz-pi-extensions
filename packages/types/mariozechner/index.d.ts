@@ -7,9 +7,15 @@
 declare module "@mariozechner/pi-coding-agent" {
 	// Re-export everything as `any` — CI only verifies syntax/structure
 	export type ExtensionAPI = any;
+	export type ExtensionFactory = (pi: ExtensionAPI) => void | Promise<void>;
+
 	export interface ExtensionContext {
 		cwd: string;
 		sessionManager: SessionManager;
+		modelRegistry: {
+			getAvailable(): any[];
+			find(provider: string, modelId: string): any | undefined;
+		};
 		getContextUsage(): ContextUsage | undefined;
 		hasUI: boolean;
 		ui: {

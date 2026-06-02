@@ -1,0 +1,26 @@
+{
+  "name": "@zhushanwen/pi-model-switch",
+  "version": "0.1.0",
+  "description": "Intelligent model recommendation and switching for Pi coding agent",
+  "type": "module",
+  "main": "index.ts",
+  "keywords": ["pi-package", "pi", "pi-coding-agent", "extension", "model", "switch", "advisor"],
+  "license": "MIT",
+  "files": [
+    "index.ts",
+    "src/**/*.ts",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "dependencies": {
+    "@zhushanwen/pi-quota-providers": "workspace:*"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "scripts": {
+    "typecheck": "npx tsc --noEmit"
+  }
+}
