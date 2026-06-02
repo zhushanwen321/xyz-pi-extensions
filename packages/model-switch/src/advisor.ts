@@ -49,7 +49,7 @@ export function computeQuotaSnapshot(cache: CacheData): QuotaSnapshot {
  */
 export function computeStickiness(
 	entries: SessionEntries,
-	config?: ModelPolicy,
+	_config?: ModelPolicy,
 ): StickinessInfo {
 	let lastModelChangeIdx = -1;
 	let lastCompactionIdx = -1;
