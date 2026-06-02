@@ -31,6 +31,15 @@ export interface PlanConfig {
 	};
 	/** 预算目标百分比 */
 	budgetTarget?: number;
+	/** 高峰期策略：conserve=节省 Z.ai，normal=不特殊处理 */
+	peakStrategy?: "conserve" | "normal";
+	/** 滚动窗口大小（小时） */
+	rollingWindowHours?: number;
+	/** opencode-go 套餐限额阈值 */
+	thresholds?: {
+		rollingLimitPct?: number;
+		weeklyLimitPct?: number;
+	};
 }
 
 export interface StickinessConfig {
@@ -46,26 +55,29 @@ export interface ModelPolicy {
 	stickiness: StickinessConfig;
 }
 
-// ── 推荐引擎类型 ─────────────────────────────────────────
-
-export interface Recommendation {
-	/** 推荐的模型 alias（如 "glm-5.1"） */
-	model: string;
-	/** Pi provider 名 */
-	provider: string;
-	/** Pi model ID */
-	modelId: string;
-	/** 原因描述 */
-	reason: string;
-	/** 是否因粘性覆盖了预算推荐 */
-	stickyOverride: boolean;
-	/** 预算推荐的 alias（可能与最终不同） */
-	budgetModel: string;
-}
+// ── 用量快照类型 ─────────────────────────────────────────
 
 export interface QuotaSnapshot {
 	zai: { pct: number; resetSec: number } | null;
-	ocg: { rollingPct: number; weeklyPct: number; resetSec: number } | null;
+	ocg: {
+		rollingPct: number;
+		rollingResetSec: number;
+		weeklyPct: number;
+		weeklyResetSec: number;
+		monthlyPct: number;
+		monthlyResetSec: number;
+	} | null;
+}
+
+// ── 粘性信息类型 ─────────────────────────────────────────
+
+export interface StickinessInfo {
+	/** switch/compaction 后的 assistant turn 数 */
+	turns: number;
+	/** 累积 input tokens */
+	inputTokens: number;
+	/** compaction 后 ≤1 turn */
+	justCompacted: boolean;
 }
 
 // ── Setup 类型 ──────────────────────────────────────────

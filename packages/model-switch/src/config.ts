@@ -62,5 +62,21 @@ export function loadConfig(): ModelPolicy | null {
 		return null;
 	}
 
-	return config as unknown as ModelPolicy;
+	const typed = config as unknown as ModelPolicy;
+	applyDefaults(typed);
+	return typed;
+}
+
+/** 向后兼容：为旧配置填充新字段默认值 */
+function applyDefaults(config: ModelPolicy): void {
+	for (const plan of Object.values(config.plans)) {
+		if (plan.peakStrategy === undefined) plan.peakStrategy = "conserve";
+		if (plan.rollingWindowHours === undefined) plan.rollingWindowHours = 5;
+		if (plan.thresholds === undefined) {
+			plan.thresholds = { rollingLimitPct: 80, weeklyLimitPct: 80 };
+		} else {
+			if (plan.thresholds.rollingLimitPct === undefined) plan.thresholds.rollingLimitPct = 80;
+			if (plan.thresholds.weeklyLimitPct === undefined) plan.thresholds.weeklyLimitPct = 80;
+		}
+	}
 }

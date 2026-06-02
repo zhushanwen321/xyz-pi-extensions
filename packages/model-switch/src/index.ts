@@ -1,7 +1,7 @@
 /**
- * Pi Model Switch — 智能模型推荐与切换扩展
+ * Pi Model Switch — 上下文注入 + 模型切换扩展
  *
- * before_agent_start 注入推荐提示 + switch_model 工具。
+ * before_agent_start 注入数据+规则（不推荐具体模型） + switch_model 工具。
  * 配置文件不存在时降级为仅手动切换工具。
  */
 
@@ -11,8 +11,8 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { readCache } from "@zhushanwen/pi-quota-providers";
 
 import { loadConfig } from "./config";
-import { computeRecommendation, computeQuotaSnapshot, detectScene } from "./advisor";
-import { formatAdvisorPrompt } from "./prompt";
+import { computeQuotaSnapshot, computeStickiness } from "./advisor";
+import { formatContextPrompt } from "./prompt";
 import { generatePolicyConfig, readEnabledModels, getConfigPath } from "./setup";
 import { getCurrentModelId, asSessionEntries, type ModelPolicy } from "./types";
 
@@ -49,14 +49,21 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 		if (!state.config) return;
 
 		try {
-			const prompt = ctx.getSystemPrompt();
 			const currentModel = getCurrentModelId(ctx);
-			const scene = detectScene(prompt);
 			const entries = asSessionEntries(ctx.sessionManager.getBranch());
+			const cache = readCache();
 
-			const rec = computeRecommendation(state.config, scene, currentModel, entries);
-			const snapshot = computeQuotaSnapshot(readCache());
-			const injection = formatAdvisorPrompt(rec, snapshot, state.config, new Date());
+			const snapshot = computeQuotaSnapshot(cache);
+			const stickiness = computeStickiness(entries, state.config);
+
+			const injection = formatContextPrompt({
+				currentModel,
+				stickiness,
+				snapshot,
+				config: state.config,
+				now: new Date(),
+			});
+
 			return { systemPrompt: `\n${injection}` };
 		} catch {
 			return;
@@ -80,14 +87,14 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 		name: "switch_model",
 		label: "Switch Model",
 		description:
-			"List configured models, search by alias/name, switch to another model, or show current recommendation. "
+			"List configured models, search by alias/name, switch to another model, or show current data snapshot and rules. "
 			+ "Configured models are defined in model-policy.json.",
 		promptSnippet:
 			"Use this tool when the user asks to list/search/switch models, requests a specific model/provider, "
-			+ "or when you need to respond to the Model Advisor recommendation.",
+			+ "or when you need to see the current model context data.",
 		parameters: Type.Object({
 			action: StringEnum(["list", "search", "switch", "recommend", "setup"], {
-				description: "Action: list (show all), search (filter), switch (change), recommend (show advice), setup (generate config)",
+				description: "Action: list (show all), search (filter), switch (change), recommend (show data+rules), setup (generate config)",
 			}),
 			query: Type.Optional(
 				Type.String({
@@ -195,22 +202,28 @@ async function handleSwitch(state: { config: ModelPolicy | null }, pi: Extension
 
 function handleRecommend(state: { config: ModelPolicy | null }, ctx: ExtensionContext): ToolRes {
 	if (!state.config) {
-		return res("No model policy configured. No recommendation available.");
+		return res("No model policy configured. No data available.");
 	}
 
 	try {
 		const currentModel = getCurrentModelId(ctx);
-		const prompt = ctx.getSystemPrompt();
-		const scene = detectScene(prompt);
 		const entries = asSessionEntries(ctx.sessionManager.getBranch());
+		const cache = readCache();
 
-		const rec = computeRecommendation(state.config, scene, currentModel, entries);
-		const snapshot = computeQuotaSnapshot(readCache());
-		const formatted = formatAdvisorPrompt(rec, snapshot, state.config, new Date());
+		const snapshot = computeQuotaSnapshot(cache);
+		const stickiness = computeStickiness(entries, state.config);
 
-		return res(`Current recommendation:\n\n${formatted}`);
+		const formatted = formatContextPrompt({
+			currentModel,
+			stickiness,
+			snapshot,
+			config: state.config,
+			now: new Date(),
+		});
+
+		return res(`Current model context (what AI sees):\n\n${formatted}`);
 	} catch (err) {
-		return res(`Failed to compute recommendation: ${(err as Error).message}`, { error: true });
+		return res(`Failed to compute context: ${(err as Error).message}`, { error: true });
 	}
 }
 

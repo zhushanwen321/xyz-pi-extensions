@@ -176,7 +176,7 @@ export function generatePolicyConfig(
 function buildSummary(
 	groups: ProviderGroup[],
 	scenes: Record<string, string[]>,
-	plans: Record<string, { priority: number; peak?: { start: number; end: number; multiplier: number }; budgetTarget?: number }>,
+	plans: Record<string, { priority: number; peak?: { start: number; end: number; multiplier: number }; budgetTarget?: number; peakStrategy?: "conserve" | "normal"; rollingWindowHours?: number; thresholds?: { rollingLimitPct?: number; weeklyLimitPct?: number } }>,
 ): string {
 	const lines: string[] = ["Model Policy Auto-Generated Config:", "", "Providers:"];
 
@@ -198,7 +198,10 @@ function buildSummary(
 	for (const [key, plan] of Object.entries(plans)) {
 		const peak = plan.peak ? ` peak ${plan.peak.start}:00-${plan.peak.end}:00 (${plan.peak.multiplier}x)` : "";
 		const budget = plan.budgetTarget ? ` budget ${plan.budgetTarget}%` : "";
-		lines.push(`  ${key}: priority ${plan.priority}${peak}${budget}`);
+		const strategy = plan.peakStrategy ? ` strategy=${plan.peakStrategy}` : "";
+		const window = plan.rollingWindowHours ? ` window=${plan.rollingWindowHours}h` : "";
+		const thresholds = plan.thresholds ? ` thresholds=rolling:${plan.thresholds.rollingLimitPct}%,weekly:${plan.thresholds.weeklyLimitPct}%` : "";
+		lines.push(`  ${key}: priority ${plan.priority}${peak}${budget}${strategy}${window}${thresholds}`);
 	}
 
 	lines.push("", "Review the config above. Tell me to adjust anything, or say 'confirm' to write it.");
@@ -229,15 +232,20 @@ function inferAlias(m: ModelInfo): string {
 	return m.modelId.replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-");
 }
 
-function inferPlans(groups: ProviderGroup[]): Record<string, { priority: number; peak?: { start: number; end: number; multiplier: number }; budgetTarget?: number }> {
-	const plans: Record<string, { priority: number; peak?: { start: number; end: number; multiplier: number }; budgetTarget?: number }> = {};
+function inferPlans(groups: ProviderGroup[]): Record<string, { priority: number; peak?: { start: number; end: number; multiplier: number }; budgetTarget?: number; peakStrategy?: "conserve" | "normal"; rollingWindowHours?: number; thresholds?: { rollingLimitPct?: number; weeklyLimitPct?: number } }> {
+	const plans: Record<string, { priority: number; peak?: { start: number; end: number; multiplier: number }; budgetTarget?: number; peakStrategy?: "conserve" | "normal"; rollingWindowHours?: number; thresholds?: { rollingLimitPct?: number; weeklyLimitPct?: number } }> = {};
 	let priority = 1;
 
 	for (const group of groups) {
 		const planKey = inferPlanKey(group.provider);
 		if (plans[planKey]) continue;
 
-		const plan: { priority: number; peak?: { start: number; end: number; multiplier: number }; budgetTarget?: number } = { priority };
+		const plan: { priority: number; peak?: { start: number; end: number; multiplier: number }; budgetTarget?: number; peakStrategy?: "conserve" | "normal"; rollingWindowHours?: number; thresholds?: { rollingLimitPct?: number; weeklyLimitPct?: number } } = {
+			priority,
+			peakStrategy: "conserve",
+			rollingWindowHours: 5,
+			thresholds: { rollingLimitPct: 80, weeklyLimitPct: 80 },
+		};
 		if (planKey === "zai") {
 			plan.peak = { start: 14, end: 18, multiplier: 3 };
 			plan.budgetTarget = 85;
