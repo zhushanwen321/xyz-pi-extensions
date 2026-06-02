@@ -1,0 +1,146 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "构造模拟 cache/config/stickiness 数据",
+        "调用 formatContextPrompt(now=10:00)",
+        "验证输出 9 行：[Model Context], Current, Stickiness, Time Off-peak, Z.ai, ocg, Rule off-peak, Scene, Switch",
+        "逐行检查关键字：9/9 通过"
+      ],
+      "evidence": "node --input-type=module 直接调用纯函数验证"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "构造 off-peak 注入（10:00）和 peak 注入（15:00）",
+        "计算字符数：off-peak 476 chars, peak 520 chars",
+        "按 3.5 chars/token 估算：off-peak ≈136 tokens, peak ≈149 tokens",
+        "assert 两者均 ≤200 tokens"
+      ],
+      "evidence": "off-peak=136 tokens, peak=149 tokens, 均在 200 以内"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "从 statusline_cache.json 读取 zhipu.tokensPct=8",
+        "调用 computeQuotaSnapshot(cacheFull)",
+        "验证 snapshot.zai.pct === 8",
+        "assert 值一致"
+      ],
+      "evidence": "cache.zhipu.tokensPct=8 → snapshot.zai.pct=8 ✅"
+    },
+    {
+      "caseId": "TC-2-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "从 statusline_cache.json 读取 opencodeGo 数据",
+        "调用 computeQuotaSnapshot(cacheFull)",
+        "验证 rollingPct=11, rollingResetSec=211, weeklyPct=32, weeklyResetSec=457150, monthlyPct=66, monthlyResetSec=1935630",
+        "assert 6/6 数值全部匹配"
+      ],
+      "evidence": "ocg 6 个数值全部与 cache 原始数据一致"
+    },
+    {
+      "caseId": "TC-2-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "构造空 cache: { updatedAt: 0 }",
+        "调用 computeQuotaSnapshot(cacheEmpty)",
+        "验证 snapshot.zai === null && snapshot.ocg === null",
+        "调用 formatContextPrompt，验证输出不含 Z.ai: 和 ocg: 行"
+      ],
+      "evidence": "空 cache → null snapshot → quota 行跳过，其余注入正常"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "构造 entries: [message, compaction, message(user)]",
+        "调用 computeStickiness(entries)",
+        "验证 justCompacted === true",
+        "调用 formatContextPrompt 验证包含 'Free switch (just compacted)'"
+      ],
+      "evidence": "compaction 后 0 assistant turn → justCompacted=true → 'Free switch'"
+    },
+    {
+      "caseId": "TC-3-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "构造 entries: [model_change, 3x assistant(8k+7k+6k)]",
+        "调用 computeStickiness(entries) → turns=3, inputTokens=21000",
+        "调用 formatContextPrompt 验证包含 'Prefer staying (warm cache)'"
+      ],
+      "evidence": "3 turns + 21k tokens → minTurns=3, minInputTokens=20000 → 'Prefer staying'"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "调用 formatContextPrompt(now=14:00) → 包含 'Peak hours'",
+        "调用 formatContextPrompt(now=17:59) → 包含 'Peak hours'",
+        "调用 formatContextPrompt(now=10:00) → 包含 'Off-peak'",
+        "assert 三个时间点标记正确"
+      ],
+      "evidence": "14:00=Peak, 17:59=Peak, 10:00=Off-peak ✅"
+    },
+    {
+      "caseId": "TC-4-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "调用 formatContextPrompt(now=15:00, peak)",
+        "验证 Rule 行包含 'ocg near limit'",
+        "验证 Rule 行包含 'zai resetting soon'",
+        "验证 Rule 行包含 'zai underutilized'"
+      ],
+      "evidence": "高峰期规则包含三个条件短语 ✅"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "构造旧配置（plans 中无 peakStrategy/rollingWindowHours/thresholds）",
+        "调用 formatContextPrompt 验证不崩溃",
+        "验证输出包含 [Model Context] 和 Switch:"
+      ],
+      "evidence": "旧配置注入正常，无异常"
+    },
+    {
+      "caseId": "TC-6-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "grep computeRecommendation packages/model-switch/src/advisor.ts → 无结果",
+        "grep detectScene packages/model-switch/src/advisor.ts → 无结果",
+        "grep budgetDecision packages/model-switch/src/advisor.ts → 无结果",
+        "grep Recommendation packages/model-switch/src/types.ts → 无结果"
+      ],
+      "evidence": "4/4 推荐引擎函数/类型已删除"
+    },
+    {
+      "caseId": "TC-7-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "grep setup.ts 中 inferPlans 函数体",
+        "验证包含 peakStrategy: 'conserve'",
+        "验证包含 rollingWindowHours: 5",
+        "验证包含 thresholds: { rollingLimitPct: 80, weeklyLimitPct: 80 }"
+      ],
+      "evidence": "setup.ts inferPlans 生成三个新字段且默认值正确"
+    }
+  ]
+}
