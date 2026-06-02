@@ -4,11 +4,16 @@
   "description": "Load CLAUDE.md rules for Pi coding agent",
   "main": "index.ts",
   "type": "module",
-  "files": ["index.ts"],
+  "files": [
+    "index.ts"
+  ],
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": ">=0.1.0"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
   }
 }

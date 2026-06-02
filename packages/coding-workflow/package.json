@@ -20,5 +20,9 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/js-yaml": "^4.0.0"
   }
 }

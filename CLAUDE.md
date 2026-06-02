@@ -62,6 +62,7 @@ Schema：`docs/third-party-extensions/extensions.schema.json`
 ### 当前分支文档
 
 - [CONTEXT.md](./CONTEXT.md) — 领域术语表（Pi 平台概念 + 本项目概念 + 歧义标记）
+- [docs/pi-extension-standards.md](./docs/pi-extension-standards.md) — **Pi Extension 开发规范**（所有新增/修改 extension 前必须阅读）
 - [docs/adr/](./docs/adr/) — 架构决策记录（已做出的决策，不可逆）
   - [001-subagent-architecture.md](./docs/adr/001-subagent-architecture.md) — Subagent 进程隔离、上下文传递、background 模式、能力边界、模型选择
   - [002-goal-7-state-machine.md](./docs/adr/002-goal-7-state-machine.md) — Goal 为什么有 7 种状态（time_limited + cancelled），以及为什么没有 usage_limited
@@ -496,6 +497,17 @@ GUI 组件（`TaskListWidget` 等）是 xyz-agent 的工作，扩展侧不需要
 6. **向后兼容**：旧版 xyz-agent 不识别 `_render` 字段会忽略它。旧版扩展不输出 `_render` 字段时，xyz-agent 使用 `content` 文本 fallback。两端都可以独立升级。
 
 ## 代码规范
+
+### Pi Extension 开发规范
+
+所有扩展的开发必须遵循 [docs/pi-extension-standards.md](./docs/pi-extension-standards.md) 中定义的规范，包括但不限于：
+- 包结构与入口模式
+- Tool/Command 注册与 execute 规范
+- 事件生命周期与状态管理
+- 错误处理（stale context 保护、防重入）
+- 类型安全与依赖管理
+
+新增扩展前先阅读规范中的「新扩展检查清单」章节。
 
 ### TypeScript
 
