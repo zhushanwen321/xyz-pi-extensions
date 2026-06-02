@@ -1,0 +1,164 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify complete_goal sets completedAtTurnIndex (tool-handler.ts:334)",
+        "code_review: verify handleBeforeAgentStart checks turnsInTerminal >= AUTO_CLEAR_TURNS (index.ts:382-385)",
+        "code_review: verify AUTO_CLEAR_TURNS = 2 (constants.ts:43)",
+        "code_review: verify writeGoalHistoryEntry called before auto-clear (tool-handler.ts:335)"
+      ],
+      "evidence": "Static code analysis — complete_goal→completedAtTurnIndex→writeGoalHistoryEntry→persistGoalState; handleBeforeAgentStart→turnsInTerminal>=2→clearGoalSession"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify budget_limited sets completedAtTurnIndex (index.ts:552-553)",
+        "code_review: verify budget_limited is in TERMINAL_STATUSES (state.ts:28-32)",
+        "code_review: verify same auto-clear path covers budget_limited via isTerminalStatus check"
+      ],
+      "evidence": "Static code analysis — budget_limited∈TERMINAL_STATUSES, same handleBeforeAgentStart auto-clear branch"
+    },
+    {
+      "caseId": "TC-1-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify cancel_goal calls clearGoalSession directly (tool-handler.ts:367-370)",
+        "code_review: verify /goal clear also calls clearGoalSession directly (index.ts:283-286)",
+        "code_review: verify both paths bypass 2-round wait"
+      ],
+      "evidence": "Static code analysis — cancel_goal and /goal clear both immediately clearGoalSession"
+    },
+    {
+      "caseId": "TC-1-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify updateWidget checks isTerminalStatus (tool-handler.ts:134)",
+        "code_review: verify terminal path calls renderTerminalStatusLine (tool-handler.ts:135)",
+        "code_review: verify renderTerminalStatusLine returns single-line string (widget.ts:88)",
+        "code_review: verify handleBeforeAgentStart also folds widget in terminal state (index.ts:390)"
+      ],
+      "evidence": "Static code analysis — terminal widget renders single-line status, no task list"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify TASK_STALL_TURN_THRESHOLD = 10 (constants.ts:42)",
+        "code_review: verify staleness calculation: currentTurnIndex - task.lastUpdatedTurn (index.ts:414)",
+        "code_review: verify threshold check uses >= (index.ts:415)",
+        "code_review: verify only non-terminal tasks checked (index.ts:412)",
+        "code_review: verify stalenessReminderPrompt injected via return message (index.ts:455-462)"
+      ],
+      "evidence": "Static code analysis — staleness check in handleBeforeAgentStart with 10-turn threshold"
+    },
+    {
+      "caseId": "TC-2-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify stale task lastUpdatedTurn reset (index.ts:447)",
+        "code_review: verify stale subtask lastUpdatedTurn reset (index.ts:449-451)",
+        "code_review: verify reset happens before returning staleness message"
+      ],
+      "evidence": "Static code analysis — task.lastUpdatedTurn = state.currentTurnIndex after staleness detection"
+    },
+    {
+      "caseId": "TC-2-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify allTerminal flag tracking (index.ts:409,413)",
+        "code_review: verify allTerminal && tasks.length > 0 check (index.ts:433)",
+        "code_review: verify stalenessReminderPrompt called with allTasksTerminal=true (index.ts:433-441)"
+      ],
+      "evidence": "Static code analysis — edge case: all tasks terminal but goal not completed triggers complete_goal prompt"
+    },
+    {
+      "caseId": "TC-2-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify turn_end event handler (index.ts:834)",
+        "code_review: verify currentTurnIndex++ increment (index.ts:836)"
+      ],
+      "evidence": "Static code analysis — currentTurnIndex incremented in turn_end handler"
+    },
+    {
+      "caseId": "TC-2-05",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify update_tasks case sets task.lastUpdatedTurn = state.currentTurnIndex (tool-handler.ts:297)"
+      ],
+      "evidence": "Static code analysis — lastUpdatedTurn updated on task status change"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify StringEnum contains 'add_subtasks' (tool-handler.ts:60)",
+        "code_review: verify switch case 'add_subtasks' exists (tool-handler.ts:387)"
+      ],
+      "evidence": "Static code analysis — add_subtasks action name consistent in enum and switch"
+    },
+    {
+      "caseId": "TC-3-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify StringEnum contains 'update_subtasks' and 'delete_subtasks' (tool-handler.ts:61-62)",
+        "code_review: verify switch cases exist (tool-handler.ts:421, 455)"
+      ],
+      "evidence": "Static code analysis — update_subtasks and delete_subtasks action names consistent"
+    },
+    {
+      "caseId": "TC-3-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify deserializeState handles subtasks ?? subTodos fallback (state.ts:183)"
+      ],
+      "evidence": "Static code analysis — backward compat: rawSubtasks = (t.subtasks ?? t.subTodos)"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify handleGoalCommand processes 'history' subcommand (index.ts:235)",
+        "code_review: verify reads goal-history entries (index.ts:237-239)",
+        "code_review: verify displays objective, status, task count, elapsed time (index.ts:264-269)"
+      ],
+      "evidence": "Static code analysis — /goal history reads HISTORY_ENTRY_TYPE entries and formats output"
+    },
+    {
+      "caseId": "TC-4-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify empty history shows notification (index.ts:250)"
+      ],
+      "evidence": "Static code analysis — ctx.ui.notify('暂无历史 Goal', 'info') when no entries"
+    },
+    {
+      "caseId": "TC-4-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: verify HISTORY_ENTRY_TYPE constant (tool-handler.ts:39)",
+        "code_review: verify clearGoalSession does not filter/remove entries (tool-handler.ts:147-153)",
+        "code_review: verify reconstructGoalState only trims history entries beyond MAX_HISTORY_ENTRIES (index.ts:126-133)"
+      ],
+      "evidence": "Static code analysis — clearGoalSession clears memory only; history entries preserved in session entries"
+    }
+  ]
+}

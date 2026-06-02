@@ -1,0 +1,152 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "manual",
+      "title": "Skill 加载自动检测",
+      "description": "AI read SKILL.md 时自动创建 TrackedItem 并注入 steering",
+      "steps": [
+        "要求 AI 读取 ~/.pi/agent/skills/diagnose/SKILL.md",
+        "观察 TUI 是否出现 [SKILL-STATE] steering 消息",
+        "调用 skill_state(action=list) 确认 TrackedItem 存在且 status=loaded"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "manual",
+      "title": "Skill 名称提取",
+      "description": "从不同路径格式正确提取 skill 名称",
+      "steps": [
+        "读取 /Users/xxx/.pi/agent/skills/diagnose/SKILL.md → 验证 name=diagnose",
+        "读取 ~/.agents/skills/brainstorming/SKILL.md → 验证 name=brainstorming",
+        "读取 /tmp/test/SKILL.md → 验证 name=test"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "manual",
+      "title": "非终态去重",
+      "description": "同一 skill 非终态时不重复创建 TrackedItem",
+      "steps": [
+        "读取 diagnose/SKILL.md 创建 TrackedItem",
+        "再次读取 diagnose/SKILL.md",
+        "调用 skill_state(action=list) 确认只有 1 个 diagnose item"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "manual",
+      "title": "终态后可重新追踪",
+      "description": "终态 skill 重新加载时创建新 TrackedItem",
+      "steps": [
+        "读取 diagnose/SKILL.md 创建 item",
+        "调用 skill_state(action=update, id=X, status=completed) 终态化",
+        "再次读取 diagnose/SKILL.md",
+        "调用 skill_state(action=list) 确认有新 item（新 id）"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "manual",
+      "title": "loaded→completed 转换",
+      "description": "AI 标记 skill 执行成功",
+      "steps": [
+        "创建 loaded TrackedItem",
+        "调用 skill_state(action=update, id=X, status=completed)",
+        "验证 item.status=completed（终态）"
+      ]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "manual",
+      "title": "loaded→error 转换并累加 errorCount",
+      "description": "AI 标记 skill 执行异常，errorCount 递增",
+      "steps": [
+        "创建 loaded TrackedItem",
+        "调用 skill_state(action=update, id=X, status=error, detail=原因)",
+        "验证 item.status=error, errorCount=1",
+        "再次调用 skill_state(action=update, id=X, status=error)",
+        "验证 errorCount=2"
+      ]
+    },
+    {
+      "id": "TC-3-03",
+      "type": "manual",
+      "title": "非法转换拒绝",
+      "description": "loaded→recorded 被拒绝",
+      "steps": [
+        "创建 loaded TrackedItem",
+        "调用 skill_state(action=update, id=X, status=recorded)",
+        "验证返回错误信息"
+      ]
+    },
+    {
+      "id": "TC-3-04",
+      "type": "manual",
+      "title": "errorCount≥2 触发强制记录",
+      "description": "errorCount 达到 2 时注入 FR-4 steering",
+      "steps": [
+        "创建 loaded item → update status=error (errorCount=1)",
+        "再次 update status=error (errorCount=2)",
+        "观察 TUI 是否出现强制记录 steering 消息"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "manual",
+      "title": "10 turn 提醒触发",
+      "description": "loaded 后 10 turn 未终态时注入提醒",
+      "steps": [
+        "创建 loaded TrackedItem (turnIndex=0)",
+        "执行 9 个 AI turn（触发 turn_end 9 次）",
+        "验证无提醒",
+        "执行第 10 个 turn",
+        "验证注入 [SKILL-STATE] 提醒"
+      ]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "manual",
+      "title": "提醒间隔 10 turn",
+      "description": "提醒后 10 turn 内不重复提醒",
+      "steps": [
+        "第 10 turn 触发提醒",
+        "继续 9 个 turn → 无提醒",
+        "第 20 turn → 再次提醒"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "manual",
+      "title": "Session 恢复保留非终态",
+      "description": "session_start 时恢复非终态 item",
+      "steps": [
+        "创建 2 个 item（1 loaded, 1 completed）",
+        "触发 session_start（重建）",
+        "调用 skill_state(action=list) 确认只有 loaded item"
+      ]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "manual",
+      "title": "before_agent_start 注入",
+      "description": "新 agent loop 开始时注入活跃追踪上下文",
+      "steps": [
+        "创建 loaded TrackedItem",
+        "发送新用户消息触发新 agent loop",
+        "验证 AI 收到上下文消息列出活跃追踪"
+      ]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "manual",
+      "title": "list 返回完整状态",
+      "description": "skill_state list 返回所有 TrackedItem",
+      "steps": [
+        "创建 3 个 item（不同状态）",
+        "调用 skill_state(action=list)",
+        "验证返回 3 个 item，包含完整字段"
+      ]
+    }
+  ]
+}

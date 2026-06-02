@@ -1,0 +1,188 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run — Microcompact (AC-1) > '8 个 read toolResult，最后一个 assistant 65 分钟前 → 前 3 个被清理'",
+        "Verify 3 oldest toolResults replaced with '[Old tool result content cleared]'",
+        "Verify recent 5 toolResults unchanged",
+        "Verify cleared toolResults NOT in recall store"
+      ],
+      "evidence": "vitest: 44 passed, 0 failed — compressor.test.ts:Microcompact > 8 个 read toolResult"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run — Microcompact (AC-1) > '30 分钟内不触发 MC'",
+        "Create messages with last assistant at now - 30min",
+        "Verify no toolResults cleared, mcTriggered=false"
+      ],
+      "evidence": "vitest: 44 passed, 0 failed — compressor.test.ts:Microcompact > 30 分钟内不触发 MC"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run — Budget (AC-2, AC-3) > '5 个 toolResult 总计 250K chars，最大被持久化'",
+        "Create 5 toolResults (4x 20K + 1x 170K = 250K), budget limit 200K",
+        "Verify largest (170K) replaced with '[Persisted output' format",
+        "Verify other 4 toolResults unchanged",
+        "Verify original content stored in recall store"
+      ],
+      "evidence": "vitest: 44 passed, 0 failed — compressor.test.ts:Budget > 5 个 toolResult 总计 250K chars"
+    },
+    {
+      "caseId": "TC-2-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run — Budget per-message isolation (TC-2-02)",
+        "Create two user message groups, each with 3x 20K = 60K toolResults (under 200K budget)",
+        "Verify no toolResults persisted (each group under budget independently)",
+        "Verify store.size() === 0"
+      ],
+      "evidence": "vitest: 44 passed, 0 failed — compressor.test.ts:Budget per-message isolation"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run — Frozen replacement across turns (TC-3-01)",
+        "Turn 1: processBudget persists 150K toolResult, ffState marks it frozen",
+        "Turn 2: processBudget sees frozen toolResult, uses cached replacement",
+        "Verify replacement string is identical between turns"
+      ],
+      "evidence": "vitest: 44 passed, 0 failed — compressor.test.ts:Frozen replacement across turns"
+    },
+    {
+      "caseId": "TC-3-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run — Fresh evaluation (TC-3-02)",
+        "Create new toolResult not in frozen set, 150K chars over 100K budget",
+        "Verify processBudget evaluates as fresh and persists",
+        "Verify ffState.isFrozen('c-new') === true",
+        "Verify store.size() === 1"
+      ],
+      "evidence": "vitest: 44 passed, 0 failed — compressor.test.ts:Fresh evaluation"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run — Compact Boundary (AC-4, AC-7) > 'compactionSummary 在 index 5，之前的 toolResult 不被 MC 处理'",
+        "Create messages with compactionSummary at index 5",
+        "Verify pre-boundary expired toolResult NOT processed",
+        "Verify post-boundary toolResult processed normally"
+      ],
+      "evidence": "vitest: 44 passed, 0 failed — compressor.test.ts:Compact Boundary > compactionSummary 在 index 5"
+    },
+    {
+      "caseId": "TC-4-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run — Compact Boundary > '无 compactionSummary 时正常处理'",
+        "Create messages without compactionSummary",
+        "Verify all toolResults processed normally by compression layers"
+      ],
+      "evidence": "vitest: 44 passed, 0 failed — compressor.test.ts:Compact Boundary > 无 compactionSummary 时正常处理"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run — L1 Protected Turn (AC-5) > '12K chars toolResult 在最近 2 轮内 → 不被 condense'",
+        "Create 12K toolResult in protected turn (last 2 turns)",
+        "Verify toolResult NOT condensed, original text preserved"
+      ],
+      "evidence": "vitest: 44 passed, 0 failed — compressor.test.ts:L1 Protected Turn > 12K chars toolResult 在最近 2 轮内"
+    },
+    {
+      "caseId": "TC-5-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run — L1 Protected Turn (AC-5) > '12K chars toolResult 在保护范围外 → 被 condense'",
+        "Create 12K toolResult in old turn (outside protected 2 turns)",
+        "Verify toolResult IS condensed with '[Condensed (ID: ...]' format"
+      ],
+      "evidence": "vitest: 44 passed, 0 failed — compressor.test.ts:L1 Protected Turn > 12K chars toolResult 在保护范围外"
+    },
+    {
+      "caseId": "TC-6-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run — Integration: TC-11 MC/Budget Commands > 'mc off → config.mc.enabled 为 false' + '禁用后 compressContext 中对应层不触发'",
+        "Execute handleContextEngineeringCommand('mc off')",
+        "Verify config.mc.enabled === false",
+        "Run compressContext, verify mcTriggered === false",
+        "Execute handleContextEngineeringCommand('mc on')",
+        "Verify config.mc.enabled === true"
+      ],
+      "evidence": "vitest: 44 passed, 0 failed — integration.test.ts:TC-11 MC/Budget Commands"
+    },
+    {
+      "caseId": "TC-6-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run — Integration: TC-11 MC/Budget Commands > 'budget off → config.budget.enabled 为 false' + '禁用后对应层不触发'",
+        "Execute handleContextEngineeringCommand('budget off')",
+        "Verify config.budget.enabled === false",
+        "Run compressContext, verify budgetPersisted === 0",
+        "Execute handleContextEngineeringCommand('budget on')",
+        "Verify config.budget.enabled === true"
+      ],
+      "evidence": "vitest: 44 passed, 0 failed — integration.test.ts:TC-11 MC/Budget Commands"
+    },
+    {
+      "caseId": "TC-7-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run — Compact Boundary > 'compactionSummary 在 index 5' validates findCompactBoundary detection",
+        "Create user message with content containing 'compactionSummary'",
+        "Call findCompactBoundary, verify correct index returned"
+      ],
+      "evidence": "vitest: 44 passed, 0 failed — compressor.test.ts:Compact Boundary tests validate findCompactBoundary"
+    },
+    {
+      "caseId": "TC-8-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run — L0 keepRecent > '8 个 toolResult 全部超 30 分钟，keepRecent=5'",
+        "Create 8 toolResults all > 30min old, keepRecent=5, protectRecentTurns=0",
+        "Verify newest 5 NOT expired (protected by keepRecent)",
+        "Verify oldest 3 expired"
+      ],
+      "evidence": "vitest: 44 passed, 0 failed — compressor.test.ts:L0 keepRecent"
+    },
+    {
+      "caseId": "TC-9-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run — Full pipeline order (TC-9-01) > 'MC → Budget → L0 → L1 → L2 executes in correct order'",
+        "Create complex message list: old expired, large (12K), over-budget, high usage (95%)",
+        "Call compressContext with all layers enabled",
+        "Verify L0 stats.l0Expired >= 1 (expired toolResult in turn 1)",
+        "Verify L1 stats.l1Condensed >= 1 (12K toolResult in turn 2, outside protected)",
+        "Verify L2 stats.l2Triggered === true (95% > 90%)",
+        "Verify stats.validationFailed === false"
+      ],
+      "evidence": "vitest: 44 passed, 0 failed — compressor.test.ts:Full pipeline order"
+    }
+  ]
+}

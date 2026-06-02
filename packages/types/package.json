@@ -1,0 +1,8 @@
+{
+  "name": "@zhushanwen/pi-types",
+  "version": "0.1.0",
+  "description": "Shared type definitions for Pi extensions (private, not published)",
+  "private": true,
+  "main": "mariozechner/index.ts",
+  "files": ["mariozechner/"]
+}

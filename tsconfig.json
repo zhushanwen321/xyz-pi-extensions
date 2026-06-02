@@ -41,17 +41,12 @@
     }
   },
   "include": [
-    "shared/**/*.ts",
-    "goal/**/*.ts",
-    "todo/**/*.ts",
-    "subagent/**/*.ts",
-    "usage-tracker/**/*.ts",
-    "workflow/**/*.ts",
-    "infinite-context/**/*.ts"
+    "packages/**/*.ts"
   ],
   "exclude": [
     "node_modules",
     ".superpowers",
-    ".xyz-harness"
+    ".xyz-harness",
+    "**/__tests__"
   ]
 }

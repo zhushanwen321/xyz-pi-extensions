@@ -2,22 +2,82 @@
 
 ## 项目概述
 
-Pi coding agent 的扩展工具箱。每个扩展是一个独立可安装的 Pi 插件，解决 AI coding agent 工作流中的特定问题。当前包含：
+Pi coding agent 的扩展工具箱 monorepo。每个 extension 是独立可发布的 npm 包（`@zhushanwen/pi-*`），解决 AI coding agent 工作流中的特定问题。
 
-- **goal/** — 持久化目标驱动自主循环，7 态状态机，evidence-based 完成和 token/时间预算
-- **todo/** — 轻量三态任务清单（pending/in_progress/completed），`/todos` 命令 + `todo` 工具
-- **subagent/** — 任务委派与并行执行，支持 single/parallel/chain/background 四种模式
+### Monorepo 架构
 
-扩展通过 symlink 安装到 `~/.pi/agent/extensions/<name>` → 源目录。
+```
+xyz-pi-extensions/
+├── packages/                    # 可发布的 npm 包
+│   ├── goal/                → @zhushanwen/pi-goal
+│   ├── todo/                → @zhushanwen/pi-todo
+│   ├── vision/             → @zhushanwen/pi-vision
+│   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills)
+│   ├── claude-rules-loader/ → @zhushanwen/pi-claude-rules-loader
+│   ├── context-engineering/ → @zhushanwen/pi-context-engineering
+│   ├── skill-state/         → @zhushanwen/pi-skill-state
+│   ├── evolve-daily/        → @zhushanwen/pi-evolve-daily (含 evolve skills)
+│   ├── statusline/          → @zhushanwen/pi-statusline
+│   ├── unified-hooks/       → @zhushanwen/pi-unified-hooks
+│   ├── workflow/            → @zhushanwen/pi-workflow
+│   ├── taste-lint/          → @zhushanwen/pi-taste-lint
+│   └── types/               → @zhushanwen/pi-types (private, 不发布)
+├── skills/                      # 独立 skills（无所属 extension，GitHub 分发）
+├── scripts/                     # 共享脚本
+├── docs/                        # 统一文档
+├── .changeset/                  # 版本管理
+├── pnpm-workspace.yaml
+└── package.json
+```
+
+**设计原则**：
+- `packages/` = 一切有 package.json 的东西。根目录不混入可发布包
+- Skills 跟着 owner 走：extension-bundled skills 通过 `resources_discover` 自动注册
+- 独立 skills 不进 packages/，它们是 Markdown 资源不是包
+- types 是 private 包，仅通过 `workspace:*` 供其他包引用
+- coding-workflow 内置 model.ts 用于 resolveModelByComplexity，subagent 功能由 pi-subagents（npm）提供
+- Harness 是逻辑概念，不存在叫 "harness" 的物理目录
+
+### 社区扩展借鉴
+
+[docs/third-party-extensions/](./docs/third-party-extensions/) — 记录从社区借鉴的扩展。
+
+数据源：`docs/third-party-extensions/extensions.yaml`（source of truth）
+Schema：`docs/third-party-extensions/extensions.schema.json`
+校验：`python3 scripts/validate-extensions-yaml.py`
+
+**操作规范**：每次新增/变更社区扩展（安装、fork、借鉴思路），必须同步更新 `extensions.yaml` 并运行校验脚本。如需深度分析，创建对应的 `analysis.md`。
 
 ## 文档索引
 
+### 长期文档（main 分支）
+
+- [docs/research/](./docs/research/) — 调研报告（跨分支共享，存 main 分支）
+  - `infinite-context-survey.md` — 通用方案调研（学术论文、开源项目、商业产品）
+  - `infinite-context-research-report.md` — 学术论文/产品详细分析
+  - `hermes-agent-research.md` — Hermes Agent 记忆/上下文管理调研
+  - `openclaw-research.md` — OpenClaw 记忆/上下文管理调研
+  - `coding-agents-context-research.md` — Claude Code/Aider/Qwen Code/OpenCode 对比调研
+
+### 当前分支文档
+
 - [CONTEXT.md](./CONTEXT.md) — 领域术语表（Pi 平台概念 + 本项目概念 + 歧义标记）
-- [docs/adr/](./docs/adr/) — 架构决策记录
+- [docs/adr/](./docs/adr/) — 架构决策记录（已做出的决策，不可逆）
   - [001-subagent-architecture.md](./docs/adr/001-subagent-architecture.md) — Subagent 进程隔离、上下文传递、background 模式、能力边界、模型选择
   - [002-goal-7-state-machine.md](./docs/adr/002-goal-7-state-machine.md) — Goal 为什么有 7 种状态（time_limited + cancelled），以及为什么没有 usage_limited
   - [003-evidence-based-completion.md](./docs/adr/003-evidence-based-completion.md) — Goal 为什么强制任务分解 + evidence，以及代价
+- [docs/evolution/](./docs/evolution/) — 架构演进与 Brainstorming（决策前的思考过程，可迭代）
+  - `001-context-compression-redesign.md` — 上下文压缩方案重新设计（基于调研的压缩流水线设计）
 - `.xyz-harness/` — xyz-harness 工作流产出物（spec、plan、test cases），按 `<date>-<slug>/` 组织，应纳入版本控制
+
+### 文档规范
+
+| 目录 | 性质 | 格式 | 生命周期 |
+|------|------|------|----------|
+| `docs/adr/` | 已做出的决策 | `NNN-<topic>.md`，含 Status/Context/Decision/Consequences | 永久 |
+| `docs/evolution/` | 决策前的探索 | `NNN-<topic>.md`，标注 draft/active/superseded | 迭代到决策或废弃 |
+| `docs/research/` | 外部调研 | `<topic>-research.md` | 长期参考 |
+| `.xyz-harness/` | 工作流产出 | 按 `<date>-<slug>/` 组织 | 随分支
 
 ## 技术栈
 
@@ -26,8 +86,9 @@ Pi coding agent 的扩展工具箱。每个扩展是一个独立可安装的 Pi 
 - typebox（参数 schema 定义）
 - pi-tui（终端 UI 组件：Text, Container, Spacer, Markdown 等）
 - pi-ai（StringEnum 等工具）
+- pnpm workspaces + changesets（monorepo 管理和版本发布）
 
-**依赖说明**：扩展没有自己的 `node_modules`，所有 `@mariozechner/*` 和 `typebox` 依赖由 Pi 运行时提供。本地开发时 `tsc --noEmit` 通过 `paths` 映射到全局安装的 Pi 包获取类型。
+**依赖说明**：扩展没有自己的 `node_modules`（开发时由 pnpm workspace 管理）。运行时 `@mariozechner/*` 和 `typebox` 依赖由 Pi 运行时提供。本地开发时 `tsc --noEmit` 通过 `paths` 映射到全局安装的 Pi 包获取类型。
 
 ## 架构
 
@@ -52,11 +113,107 @@ Pi coding agent 的扩展工具箱。每个扩展是一个独立可安装的 Pi 
 ## 常用命令
 
 ```bash
-# 类型检查（需要全局安装了 pi）
-cd xyz-pi-extensions && npx tsc --noEmit
+# 全量类型检查
+pnpm -r typecheck
 
-# 单个扩展类型检查
-cd xyz-pi-extensions/goal && npx tsc --noEmit
+# 单包类型检查
+pnpm --filter @zhushanwen/pi-goal typecheck
+
+# 全量 lint
+pnpm -r lint
+
+# 单包 lint
+pnpm --filter @zhushanwen/pi-goal lint
+
+# 创建版本变更记录
+pnpm changeset # 交互式选择受影响的包和版本类型
+
+# 本地执行版本 bump（预览）
+pnpm changeset version
+
+# 提交版本变更和 changeset
+git add -A
+git commit -m "chore: bump versions"
+git push
+
+# 发布（本地直接发布，需要 npm login）
+npm login --registry https://registry.npmjs.org/
+pnpm changeset publish
+
+# 发布（dry run）
+pnpm changeset publish --dry-run
+
+# 校验 third-party extensions 注册表
+python3 scripts/validate-extensions-yaml.py
+```
+
+### 发布流程（GitHub Actions）
+
+项目通过 GitHub Actions 自动发布 npm 包。触发条件：push tag `v*`。
+
+```bash
+# 1. 创建 changeset（选择受影响的包 + patch/minor/major）
+pnpm changeset
+git add .changeset/
+git commit -m "chore: add changeset"
+
+# 2. 版本 bump
+pnpm changeset version
+git add -A && git commit -m "chore: bump versions" && git push
+
+# 3. 打 tag 触发 GitHub Actions 发布
+git tag v0.x.x && git push origin v0.x.x
+```
+
+GitHub Actions 自动执行：`pnpm changeset publish` + 创建 GitHub Release。
+
+**前提条件（已满足）：**
+- GitHub Secrets 中已配置 `NPM_TOKEN`
+- 所有 `@zhushanwen/pi-*` 包已在 npmjs.org 上首次发布过
+```
+
+### 预发布流程（dev 分支）
+
+项目支持在 `dev-*` 分支上发布预发布包（prerelease），与 main 分支的正式发布完全隔离。
+
+**两条发布轨道对比：**
+
+| | main（正式） | dev-x.x.x（预发布） |
+|---|---|---|
+| **触发** | 推送 tag `v*` | PR 合并到 `dev-*` 分支（push） |
+| **版本格式** | `0.1.0`, `0.1.1` | `0.2.0-dev.0`, `0.2.0-dev.1` |
+| **npm tag** | `latest`（默认） | `dev` |
+| **安装方式** | `npm install @zhushanwen/pi-xxx` | `npm install @zhushanwen/pi-xxx@dev` |
+| **版本管理** | changeset 自动 bump | 手动改 package.json |
+
+**Workflow 文件：** `release.yml`（tag `v*` 触发）+ `release-dev.yml`（`dev-*` 分支 push 触发）。
+
+```bash
+# 1. 创建 dev 分支
+git checkout -b dev-0.2.0 main
+
+# 2. 手动改需要发布的包的版本（加 prerelease 后缀）
+#    packages/goal/package.json: "version": "0.2.0-dev.0"
+git add -A && git commit -m "chore: bump to 0.2.0-dev.0"
+git push origin dev-0.2.0
+
+# 3. 后续功能开发：开 PR 到 dev-0.2.0
+#    PR 合并后自动触发 release-dev workflow
+#    首次合并会发布 0.2.0-dev.0
+
+# 4. 下一轮 prerelease：再改版本号
+#    package.json: "version": "0.2.0-dev.1"
+#    新 PR 合并 → 发布 0.2.0-dev.1
+
+# 5. 开发完成，合并到 main
+#    改回正式版本 0.2.0，走正常 changeset 流程
+```
+
+**关键点：**
+- `changeset publish --tag dev` 只发布 npm 上不存在的版本。同版本号再合并会静默跳过，必须手动升版本（`dev.0` → `dev.1`）
+- `--tag dev` 确保正式用户 `npm install` 不会装到 dev 版本，只有显式 `@dev` 才安装
+- dev 分支不需要打 git tag，PR 合并的 push 事件直接触发
+- npm 禁止覆盖已发布的同版本号，正式版和 prerelease 都一样
 ```
 
 ## 关键约束
@@ -350,16 +507,72 @@ GUI 组件（`TaskListWidget` 等）是 xyz-agent 的工作，扩展侧不需要
 
 ## 质量检查
 
+### 类型检查零容忍
+
+pre-commit hook 会运行 `tsc --noEmit`，任何类型错误都会阻止提交。
+
+**核心规则：全量修复，不接受「不是本次引入」作为跳过理由。**
+
+- `tsc --noEmit` 报告的错误必须全部修复，无论是否本次修改引入
+- 禁止 `SKIP_LINT=1 git commit` 跳过 hook，除非是紧急 hotfix 且后续立即修复
+- 禁止 `--no-verify` 提交，除非是紧急 hotfix 且后续立即修复
+- 修复时从 `packages/types/mariozechner/index.d.ts` 的 stub 开始检查——缺失的导出声明会导致下游包报错
+- 回调参数缺少类型注解（TS7006 `implicitly has an 'any' type`）是代码质量问题，必须补全类型
+- 如果修复量过大（>50 个错误），使用 subagent 并行处理，不要手动一个一个修
+
+### 检查命令
+
 ```bash
-# 类型检查
-npm run typecheck
-# 或 npx tsc --noEmit
+# 全量类型检查
+npx tsc --noEmit
 
-# ESLint 品味检查（0 error 为通过）
-npm run lint
+# 全量 lint
+pnpm -r lint
 
-# 自动修复
-npm run lint:fix
+# 单包检查
+pnpm --filter @zhushanwen/pi-goal typecheck
+pnpm --filter @zhushanwen/pi-goal lint
+
+# 跳过 pre-commit hook（仅紧急 hotfix）
+SKIP_LINT=1 git commit -m "..."
+
+# 手动验证（启动 Pi 后）
+/goal Fix the typo in README --tokens 10000
+/todos
+```
+
+### Git Hooks
+
+项目使用 `.githooks/pre-commit`（通过 `git config core.hooksPath .githooks` 激活），包含：
+
+1. `tsc --noEmit` — 全量 TypeScript 类型检查
+2. `eslint` — 仅检查 staged 的 `.ts` 文件
+
+bare+worktree 模式下 hook 自动检测 rebase 状态并跳过。
+
+### 类型 Stub 维护（`packages/types/`）
+
+`packages/types/mariozechner/index.d.ts` 是 CI 环境的类型桩（ambient module declarations）。本地开发时 `tsconfig.json` 的 `paths` 优先解析到真实 Pi SDK 类型。
+
+**当 Pi SDK 更新或新增导入时，必须同步更新此 stub 文件。** 新增的 `export` 声明缺失会导致本地 typecheck 全量报错。检查方式：
+
+```bash
+# 确认哪些导入缺失
+npx tsc --noEmit 2>&1 | grep "has no exported member"
+```
+
+添加 stub 声明的模式：`export type XxxName = any;`（类型）或 `export function xxx(): void;`（函数）。
+
+```bash
+# 全量类型检查
+pnpm -r typecheck
+
+# 全量 lint
+pnpm -r lint
+
+# 单包检查
+pnpm --filter @zhushanwen/pi-goal typecheck
+pnpm --filter @zhushanwen/pi-goal lint
 
 # 跳过 pre-commit hook
 SKIP_LINT=1 git commit -m "..."
@@ -369,7 +582,6 @@ SKIP_LINT=1 git commit -m "..."
 /todos
 ```
 
-### 品味规则（taste-lint）
 
 项目使用自定义 ESLint 插件 `taste-lint`，复用自 llm-simple-router 项目的通用规则：
 
@@ -383,12 +595,46 @@ SKIP_LINT=1 git commit -m "..."
 
 规则源文件：`taste-lint/base.mjs` + `taste-lint/rules/`
 
-## 安装新扩展
+## 安装指南
+
+### npm 包安装（推荐）
 
 ```bash
-# 全局安装
-ln -s /path/to/xyz-pi-extensions/<name> ~/.pi/agent/extensions/<name>
+# 安装单个 extension
+npm install @zhushanwen/pi-goal
 
-# 项目级安装
-ln -s /path/to/xyz-pi-extensions/<name> .pi/extensions/<name>
+# Pi 加载方式
+pi --extension node_modules/@zhushanwen/pi-goal/src/index.ts
 ```
+
+Extension-bundled skills 通过 `resources_discover` 事件自动注册，无需手动安装。
+
+### 独立 Skills（GitHub 分发）
+
+无所属 extension 的 skills 需要手动安装：
+
+```bash
+# Pi 的 skills 目录
+ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.pi/agent/skills/<name>
+
+# Claude Code 的 skills 目录
+ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
+```
+
+### 当前包清单
+
+| 包名 | npm name | 说明 | 内嵌 Skills |
+|------|----------|------|------------|
+| `packages/goal/` | `@zhushanwen/pi-goal` | 持久化目标驱动循环，7 态状态机 | — |
+| `packages/todo/` | `@zhushanwen/pi-todo` | 轻量三态任务清单 | — |
+| `packages/vision/` | `@zhushanwen/pi-vision` | 图片分析（vision model + memory session） | — |
+| `packages/coding-workflow/` | `@zhushanwen/pi-coding-workflow` | 5-Phase 编码工作流 | ~20 个 xyz-harness-* skills |
+| `packages/claude-rules-loader/` | `@zhushanwen/pi-claude-rules-loader` | 加载 CLAUDE.md 规则 | — |
+| `packages/context-engineering/` | `@zhushanwen/pi-context-engineering` | 渐进式上下文压缩 | — |
+| `packages/skill-state/` | `@zhushanwen/pi-skill-state` | Skill 执行状态追踪 | — |
+| `packages/evolve-daily/` | `@zhushanwen/pi-evolve-daily` | 每日自动数据收集 | evolve, evolve-apply, evolve-report |
+| `packages/statusline/` | `@zhushanwen/pi-statusline` | Pi 状态栏 | — |
+| `packages/unified-hooks/` | `@zhushanwen/pi-unified-hooks` | Hook 管理 | — |
+| `packages/workflow/` | `@zhushanwen/pi-workflow` | 通用 DAG 执行引擎 | — |
+| `packages/taste-lint/` | `@zhushanwen/pi-taste-lint` | ESLint 品味规则 | — |
+| `packages/types/` | `@zhushanwen/pi-types` (private) | 共享类型定义 | — |

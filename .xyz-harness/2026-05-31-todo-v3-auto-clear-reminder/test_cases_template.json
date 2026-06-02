@@ -1,0 +1,102 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "manual",
+      "title": "自动清空：3 个 todo 完成后 2 轮消息自动清空",
+      "description": "添加 3 个 todo，全部完成，发送 2 条消息，第 3 条消息时列表应被清空",
+      "steps": [
+        "调用 todo add 添加 3 个 todo",
+        "调用 todo update 依次标记 #1 #2 #3 为 completed",
+        "发送 2 条用户消息（如 'ok'）",
+        "发送第 3 条用户消息",
+        "调用 todo list 验证列表为空"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "manual",
+      "title": "自动清空前添加新 todo 取消清空",
+      "description": "全部完成后，在自动清空前添加新 todo，验证列表不被清空",
+      "steps": [
+        "调用 todo add 添加 3 个 todo",
+        "全部标记 completed",
+        "发送 1 条用户消息",
+        "调用 todo add 添加 1 个新 todo",
+        "发送 2 条用户消息",
+        "调用 todo list 验证列表仍有新 todo"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "manual",
+      "title": "Todo Reminder：10 轮未调用触发提醒",
+      "description": "添加 todo 后 10 轮不调用，验证 agent 收到提醒",
+      "steps": [
+        "调用 todo add 添加 2 个 todo",
+        "连续发送 10 条用户消息（不调用 todo 工具）",
+        "观察 agent 是否在响应中提及 todo 提醒"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "manual",
+      "title": "Todo Reminder：调用后重置计数",
+      "description": "第 8 轮调用 todo，验证计数重置",
+      "steps": [
+        "调用 todo add 添加 2 个 todo",
+        "发送 8 条用户消息",
+        "调用 todo list（触发 lastTodoCallCount 更新）",
+        "再发送 9 条消息",
+        "验证无提醒",
+        "发送第 10 条消息",
+        "验证触发提醒"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "manual",
+      "title": "Verification Nudge：3+ 任务无验证关键词触发",
+      "description": "完成 3 个不含验证关键词的 todo，验证触发 nudge",
+      "steps": [
+        "调用 todo add 添加 3 个 todo（不含 验证/verif 关键词）",
+        "全部标记 completed",
+        "观察 agent 是否建议添加验证步骤"
+      ]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "manual",
+      "title": "Verification Nudge：有关键词不触发",
+      "description": "完成 4 个 todo（其中 1 个含验证关键词），验证不触发",
+      "steps": [
+        "调用 todo add 添加 4 个 todo（1 个含 '验证' 关键词）",
+        "全部标记 completed",
+        "验证 agent 不提及验证提醒"
+      ]
+    },
+    {
+      "id": "TC-3-03",
+      "type": "manual",
+      "title": "Verification Nudge：少于 3 个不触发",
+      "description": "完成 2 个 todo，验证不触发 nudge",
+      "steps": [
+        "调用 todo add 添加 2 个 todo",
+        "全部标记 completed",
+        "验证 agent 不提及验证提醒"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "manual",
+      "title": "Session 恢复后状态重置",
+      "description": "重启 Pi 后验证提醒追踪状态重置为初始值",
+      "steps": [
+        "添加 todo 并操作",
+        "重启 Pi（/reload 或重新启动）",
+        "验证 todo 列表从 entries 恢复",
+        "验证提醒计数器已重置"
+      ]
+    }
+  ]
+}

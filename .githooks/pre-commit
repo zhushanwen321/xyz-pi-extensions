@@ -10,10 +10,16 @@ if [[ "${SKIP_LINT:-}" == "1" ]]; then
 fi
 
 # rebase 中跳过 hook，完成后手动跑一次全量验证
-if git rev-parse --git-path rebase-merge >/dev/null 2>&1 && \
-   [ -d "$(git rev-parse --git-path rebase-merge)" ]; then
-    echo "[pre-commit] rebase 进行中，跳过 hook"
-    exit 0
+#
+# 检测原理：rebase replay 时 git 通过环境变量指向实际 gitdir。
+# 在 bare+worktree 模式下，worktree 内的 .git 是文本文件指向 bare repo，
+# 因此 --git-path rebase-merge 返回的相对路径在 worktree 下不存在。
+# 改用 --git-dir 获取实际 gitdir 再检查。
+#
+if GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) && \
+   [ -d "$GIT_DIR/rebase-merge" ]; then
+  echo "[pre-commit] rebase 进行中，跳过 hook"
+  exit 0
 fi
 
 C_RED='\033[0;31m'

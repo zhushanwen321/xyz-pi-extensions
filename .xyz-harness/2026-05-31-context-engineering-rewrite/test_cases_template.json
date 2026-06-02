@@ -1,0 +1,185 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "Microcompact clears old compactable toolResults after 60 min gap",
+      "description": "Given 8 compactable toolResults and last assistant 65min ago, when context fires, then oldest 3 are cleared with '[Old tool result content cleared]' and recent 5 kept",
+      "steps": [
+        "Create 8 compactable toolResults with timestamps spread over 65 minutes",
+        "Set last assistant message timestamp to now - 65min",
+        "Call compressContext with mc config enabled",
+        "Verify oldest 3 toolResults replaced with '[Old tool result content cleared]'",
+        "Verify recent 5 toolResults unchanged",
+        "Verify cleared toolResults are NOT in recall store"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "integration",
+      "title": "Microcompact does not trigger within gap threshold",
+      "description": "Given last assistant message 30 min ago (< 60 min threshold), Microcompact should not clear any toolResults",
+      "steps": [
+        "Create messages with last assistant at now - 30min",
+        "Call compressContext with mc config",
+        "Verify no toolResults cleared",
+        "Verify mcTriggered=false"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "Budget persists largest fresh toolResult when over per-message limit",
+      "description": "Given a user message with 5 toolResults totaling 250K chars, the largest fresh one should be persisted to recall store",
+      "steps": [
+        "Create user message with 5 toolResults (250K total chars)",
+        "Call compressContext with budget config enabled",
+        "Verify largest toolResult replaced with '<persisted-output>' format",
+        "Verify other 4 toolResults unchanged",
+        "Verify persisted content is in recall store and recall returns full original"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "integration",
+      "title": "Budget per-message isolation",
+      "description": "Each user message's toolResults are evaluated independently",
+      "steps": [
+        "Create two user messages, each with toolResults under budget",
+        "Call compressContext",
+        "Verify no toolResults persisted"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "Frozen toolResult keeps same replacement across turns",
+      "description": "A toolResult frozen in Turn 1 uses the same replacement in Turn 2",
+      "steps": [
+        "Turn 1: processBudget persists toolResult A (100K), ffState marks A as frozen",
+        "Turn 2: processBudget sees A is frozen, uses cached replacement",
+        "Verify replacement string is identical between turns"
+      ]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "integration",
+      "title": "Fresh toolResult is evaluated normally",
+      "description": "A new toolResult not in seenIds is evaluated by budget logic",
+      "steps": [
+        "Create messages with a new toolResult B (not frozen)",
+        "Call processBudget",
+        "Verify B is evaluated as fresh and persisted if over budget"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "integration",
+      "title": "Compact boundary skips pre-boundary messages",
+      "description": "Messages before compactionSummary are not processed by any compression layer",
+      "steps": [
+        "Create messages with compactionSummary at index 5",
+        "Pre-boundary: expired toolResult at index 2 (should NOT be expired)",
+        "Post-boundary: normal toolResult at index 8 (should be processed normally)",
+        "Call compressContext",
+        "Verify index 2 unchanged, index 8 processed normally"
+      ]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "integration",
+      "title": "No compactionSummary means all messages processed",
+      "description": "When no compactionSummary exists, all messages participate in compression",
+      "steps": [
+        "Create messages without any compactionSummary",
+        "Include an expired toolResult",
+        "Call compressContext",
+        "Verify expired toolResult is processed normally"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "integration",
+      "title": "L1 skips toolResults in protected turns",
+      "description": "A 12K toolResult in the last 2 turns is not condensed",
+      "steps": [
+        "Create messages with 12K toolResult in protected turn (last 2 turns)",
+        "Call compressContext with l1 config (protectRecentTurns=2)",
+        "Verify toolResult NOT condensed"
+      ]
+    },
+    {
+      "id": "TC-5-02",
+      "type": "integration",
+      "title": "L1 condenses toolResults outside protected turns",
+      "description": "A 12K toolResult outside the last 2 turns IS condensed",
+      "steps": [
+        "Create messages with 12K toolResult in old turn (outside protected 2 turns)",
+        "Call compressContext",
+        "Verify toolResult IS condensed with '[Condensed (ID: ...]'"
+      ]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "integration",
+      "title": "mc on/off command toggles Microcompact",
+      "description": "/context-engineering mc off disables Microcompact, /context-engineering mc on re-enables it",
+      "steps": [
+        "Execute '/context-engineering mc off'",
+        "Trigger context event with expired gap",
+        "Verify no Microcompact clearing",
+        "Execute '/context-engineering mc on'",
+        "Trigger context event with expired gap",
+        "Verify Microcompact clearing works"
+      ]
+    },
+    {
+      "id": "TC-6-02",
+      "type": "integration",
+      "title": "budget on/off command toggles Budget",
+      "description": "/context-engineering budget off disables Budget, re-enable with on",
+      "steps": [
+        "Execute '/context-engineering budget off'",
+        "Trigger context event with over-budget toolResults",
+        "Verify no Budget persistence",
+        "Execute '/context-engineering budget on'",
+        "Verify Budget persistence works"
+      ]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "integration",
+      "title": "Native compact produces recognizable compactionSummary",
+      "description": "After Pi native compact, compactionSummary message is detectable by findCompactBoundary",
+      "steps": [
+        "Simulate messages list with compactionSummary format",
+        "Call findCompactBoundary",
+        "Verify correct index returned"
+      ]
+    },
+    {
+      "id": "TC-8-01",
+      "type": "integration",
+      "title": "L0 keepRecent protects newest compactable toolResults",
+      "description": "Even if expired by time, the most recent 5 compactable toolResults are kept",
+      "steps": [
+        "Create 8 expired toolResults (all > 30min)",
+        "Set l0.keepRecent=5",
+        "Call compressContext",
+        "Verify newest 5 NOT expired, oldest 3 expired"
+      ]
+    },
+    {
+      "id": "TC-9-01",
+      "type": "integration",
+      "title": "Full pipeline: Microcompact → Budget → L0 → L1 → L2",
+      "description": "All compression stages execute in correct order with correct data flow",
+      "steps": [
+        "Create complex message list: old toolResults, over-budget, large content, high usage",
+        "Call compressContext with all layers enabled",
+        "Verify execution order: mc first, then budget, then L0, then L1, then L2",
+        "Verify stats reflect all layers' contributions"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,94 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: 验证 update case 中 allCompleted = todos.every(t => t.status === 'completed') 时设置 allCompletedAtCount = userMessageCount",
+        "code_review: 验证 before_agent_start 中条件 userMessageCount - allCompletedAtCount >= AUTO_CLEAR_DELAY_ROUNDS (2)",
+        "trace: add 3 todos → update #1 completed → update #2 completed → update #3 completed (allCompletedAtCount = N) → agent_start N+1 (diff=1, skip) → agent_start N+2 (diff=2, trigger clear)",
+        "确认清空后 todos=[], nextId=1, allCompletedAtCount=null, refreshDisplay(ctx) 被调用"
+      ],
+      "evidence": "auto-clear 逻辑推演正确，>= 2 在第 2 轮触发清空"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: 验证 add case 中 allCompletedAtCount = null 重置逻辑",
+        "trace: 全部完成 (allCompletedAtCount=N) → 1 消息 → add 新 todo (allCompletedAtCount=null) → 2 消息 → before_agent_start 检查 allCompletedAtCount===null, 跳过清空",
+        "确认列表仍包含新添加的 todo"
+      ],
+      "evidence": "add 操作正确重置 allCompletedAtCount=null，阻断自动清空"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: 验证 before_agent_start 第 3 分支条件 todos.length > 0 && allCompletedAtCount === null && diff >= TODO_REMINDER_INTERVAL (10)",
+        "trace: add 2 todos (lastTodoCallCount=N) → 10 次 agent_start (userMessageCount=N+10) → before_agent_start 检查 N+10-N=10 >= 10, 触发",
+        "确认返回 customType='todo-reminder', display=false"
+      ],
+      "evidence": "reminder 条件正确，10 轮后触发"
+    },
+    {
+      "caseId": "TC-2-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: 验证 executeTodoAction 入口 lastTodoCallCount = userMessageCount",
+        "trace: add 2 todos (lastTodoCallCount=N) → 8 消息 → todo list (lastTodoCallCount=N+8) → 9 消息 → diff=9 < 10, 不触发 → 1 消息 → diff=10 >= 10, 触发",
+        "确认调用 todo 后计数重置，需要再等 10 轮才触发"
+      ],
+      "evidence": "lastTodoCallCount 正确重置，计数窗口从调用点重新计算"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: 验证 nudge 条件 allCompletedAtCount !== null && todos.length >= VERIFICATION_NUDGE_THRESHOLD (3) && !todos.some(/verif|验证/i)",
+        "trace: add 3 todos（无验证关键词） → 全部 completed → before_agent_start 检查 allCompletedAtCount!=null, length=3>=3, 无匹配 → 触发 nudge",
+        "确认返回 customType='todo-verification-nudge', display=false, lastReminderCount 更新"
+      ],
+      "evidence": "nudge 条件正确触发，无验证关键词时生效"
+    },
+    {
+      "caseId": "TC-3-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: 验证 /verif|验证/i.test(t.text) 正则匹配",
+        "trace: add 4 todos（1 个含 '验证'） → 全部 completed → before_agent_start 检查 todos.some() 返回 true → !true = false, 跳过 nudge",
+        "确认存在验证关键词时不触发 nudge"
+      ],
+      "evidence": "正则匹配 /verif|验证/i 正确识别验证步骤"
+    },
+    {
+      "caseId": "TC-3-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: 验证 VERIFICATION_NUDGE_THRESHOLD = 3",
+        "trace: add 2 todos → 全部 completed → before_agent_start 检查 todos.length=2 < 3, 跳过 nudge",
+        "确认少于 3 个任务时不触发"
+      ],
+      "evidence": "阈值 3 正确，2 个任务不触发 nudge"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "code_review: 验证 reconstructState 重置 userMessageCount=0, allCompletedAtCount=null, lastTodoCallCount=0, lastReminderCount=0",
+        "code_review: 验证 todos 从 session entries 恢复（遍历 entries 找 toolResult + toolName==='todo'）",
+        "code_review: 验证 nextId 从 details.nextId 或 Math.max(ids)+1 恢复",
+        "确认重启后提醒状态归零，todo 列表从持久化数据恢复"
+      ],
+      "evidence": "reconstructState 正确重置 v3 状态，todos 从 entries 恢复"
+    }
+  ]
+}

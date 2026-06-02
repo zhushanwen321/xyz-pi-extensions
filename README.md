@@ -1,54 +1,57 @@
 # xyz-pi-extensions
 
-Collection of custom extensions for [Pi coding agent](https://github.com/badlogic/pi-mono).
+[Pi](https://github.com/badlogic/pi-mono) coding agent 的扩展插件集合。pnpm monorepo。
 
-## Extensions
+## 自研扩展
 
-### [goal](./goal/)
+| 包名 | 说明 | 详情 |
+|------|------|------|
+| **coding-workflow** | 5 阶段编码工作流（spec → plan → dev → test → pr），门控 + review + retrospect | [→ README](./packages/coding-workflow/README.md) |
+| **goal** | `/goal` 目标驱动自主循环，任务追踪 + 证据验证 + 预算控制 | [→ README](./packages/goal/README.md) |
+| **workflow** | 多 Agent 编排引擎，JS 脚本驱动，agent / parallel / pipeline API | [→ README](./packages/workflow/README.md) |
+| **context-engineering** | 渐进式上下文压缩（L0/L1/L2）+ recall 召回 | [→ README](./packages/context-engineering/README.md) |
+| **todo** | 轻量级三态任务清单，session 持久化 | [→ README](./packages/todo/README.md) |
+| **vision** | 多模态图片分析工具，会话隔离 | [→ README](./packages/vision/README.md) |
+| **statusline** | 自定义状态栏（上下文用量、Token 速度、套餐额度） | [→ README](./packages/statusline/README.md) |
+| **evolve-daily** | 每日进化数据采集 + `/evolve` 分析建议 | [→ README](./packages/evolve-daily/README.md) |
+| **skill-state** | 自动 skill 执行追踪，状态机生命周期管理 | [→ README](./packages/skill-state/README.md) |
+| **unified-hooks** | 统一 hooks 管理器（edit 空白自动修复等） | [→ README](./packages/unified-hooks/README.md) |
+| **claude-rules-loader** | 加载 `.claude/rules/` 到 Pi system prompt | [→ README](./packages/claude-rules-loader/README.md) |
+| **taste-lint** | 代码品味 ESLint 规则集（5 条自定义规则） | [→ README](./packages/taste-lint/README.md) |
+| **types** | 共享类型定义（私有，不发布） | [→ README](./packages/types/README.md) |
 
-Codex-style `/goal` command — persistent goal-driven autonomous loop with evidence-based completion, token/time budgets, blocked detection, and steering templates.
+## 第三方推荐插件
 
-```bash
-/goal Fix all failing tests --tokens 500000 --timeout 30
-```
+| 包名 | 说明 | 安装 |
+|------|------|------|
+| **pi-subagents** | 任务委派：single / parallel / chain / async 模式，subagent 可复用 session | `pi install npm:pi-subagents` |
+| **pi-mcp-adapter** | MCP 协议适配器，连接 MCP 服务器并调用其工具 | `pi install npm:pi-mcp-adapter` |
+| **visual-explainer** | 生成可视化 HTML 页面（架构图、diff review、计划审查、数据表格） | `pi install npm:visual-explainer` |
+| **pi-annotate** | 视觉标注工具，在浏览器中选择元素并添加评论 | `pi install npm:pi-annotate` |
+| **pi-rewind-hook** | Git 自动检查点，支持文件/对话回退恢复 | `pi install npm:pi-rewind-hook` |
 
-### [workflow](./workflow/)
+均来自 [nicobailon](https://github.com/nicobailon)。
 
-Multi-agent orchestration engine — write JS scripts to define agent pipelines, run them via `/workflow run` or the `workflow-run` tool. Supports `agent()`, `parallel()`, `pipeline()` APIs, pause/resume, cross-session recovery, and token budget control.
+## 安装方式
 
-```bash
-/workflow run my-review --args directory="src/"
-```
-
-**适合场景**：批量代码审查、批量重构、文档生成流水线、多模型对比等确定性自动化任务。**不适合**需要与用户交互的场景（如 brainstorming），这类场景请用主线程 AI 直接对话。
-
-### [subagent](./subagent/)
-
-Task delegation & parallel execution — dispatch subagents in single/parallel/chain/background modes. Each subagent runs in an isolated Pi process.
-
-```
-> 并行审查这 3 个文件的代码质量
-（AI 自动通过 subagent tool 并发 dispatch）
-```
-
-### [todo](./todo/)
-
-Lightweight task list — `/todos` command + `todo` tool with pending/in_progress/completed states.
-
-```bash
-/todos
-```
-
-## Installation
-
-Each extension can be installed globally or per-project by symlinking into the Pi extensions directory:
+### 正式安装（npm）
 
 ```bash
-# Global
-ln -s /path/to/xyz-pi-extensions/<name> ~/.pi/agent/extensions/<name>
+pi install npm:@zhushanwen/pi-<name>
+```
 
-# Project-local
-ln -s /path/to/xyz-pi-extensions/<name> .pi/extensions/<name>
+### 本地开发测试（symlink）
+
+```bash
+ln -s $(pwd)/packages/<name> ~/.pi/agent/extensions/<name>
+```
+
+修改代码后 `/reload` 即可生效。
+
+### 临时测试（不修改配置）
+
+```bash
+pi -e ./packages/<name>
 ```
 
 ## License
