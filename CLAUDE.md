@@ -37,6 +37,22 @@ xyz-pi-extensions/
 - coding-workflow 内置 model.ts 用于 resolveModelByComplexity，subagent 功能由 pi-subagents（npm）提供
 - Harness 是逻辑概念，不存在叫 "harness" 的物理目录
 
+**目录归属原则**（ADR-016）：
+
+| 功能 | 归属目录 | 示例 |
+|------|---------|------|
+| Pi 扩展（产品） | `packages/` | goal, todo, vision |
+| 开发工具（githook/CI） | `tools/` 或 `.githooks/` | taste-lint, validate-*.py |
+| 内部共享依赖（非扩展） | `packages/`（需评估内联） | quota-providers |
+| CI 类型桩 | `types/`（根目录） | mariozechner/index.d.ts |
+| 独立 skills | `skills/` | evolve, zcommit |
+| 独立工具 | `scripts/` | pi-session-analyzer |
+
+**硬性约束**：
+- npm install 必须能跑：`dependencies` 中的包必须在 npm 上可获取，`workspace:*` publish 时转为具体版本号，`private: true` 的包不能作为依赖
+- 一个功能一个位置：禁止同一份代码在 monorepo 里存在两个副本
+- githook 工具就近放置：服务于 pre-commit hook 的工具放 `tools/` 或 `.githooks/`
+
 ### 社区扩展借鉴
 
 [docs/third-party-extensions/](./docs/third-party-extensions/) — 记录从社区借鉴的扩展。
