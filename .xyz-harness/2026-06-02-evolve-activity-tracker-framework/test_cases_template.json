@@ -1,0 +1,150 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "createTracker registers all Pi event listeners and tool",
+      "description": "Verify createTracker(pi, config) registers pi.on for tool_call, turn_end, session_start, session_tree, before_agent_start, and pi.registerTool with correct name",
+      "steps": [
+        "Call createTracker with mock pi object and skillExecutionConfig",
+        "Assert pi.on called with 'tool_call', 'turn_end', 'session_start', 'session_tree', 'before_agent_start'",
+        "Assert pi.registerTool called with name='skill_state'"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "Skill SKILL.md read triggers TrackedItem creation",
+      "description": "When AI reads a file ending with SKILL.md, a TrackedItem is created with status=loaded and steering is injected",
+      "steps": [
+        "Emit tool_call event with toolName='read', path='/path/to/my-skill/SKILL.md'",
+        "Assert pi.appendEntry called with entryType='evolve-tracker-skill'",
+        "Assert pi.sendUserMessage called with deliverAs='steer'",
+        "Assert created item has name='my-skill', status='loaded'"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "integration",
+      "title": "Non-SKILL.md read does not trigger tracking",
+      "description": "Reading a regular file should not create a TrackedItem",
+      "steps": [
+        "Emit tool_call event with toolName='read', path='/path/to/config.json'",
+        "Assert pi.appendEntry NOT called",
+        "Assert pi.sendUserMessage NOT called"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "State transition loaded→completed succeeds",
+      "description": "Calling skill_state(action=update, id=N, status=completed) transitions item from loaded to completed",
+      "steps": [
+        "Create a TrackedItem with status='loaded'",
+        "Call tool execute with action='update', id=N, status='completed'",
+        "Assert item.status === 'completed'",
+        "Assert result.details.updatedId === N"
+      ]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "integration",
+      "title": "State transition from terminal state fails",
+      "description": "Attempting to update a completed item returns error",
+      "steps": [
+        "Create a TrackedItem with status='completed'",
+        "Call tool execute with action='update', id=N, status='error'",
+        "Assert result.isError === true",
+        "Assert item.status remains 'completed'"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "integration",
+      "title": "Error accumulation triggers forced recording steering",
+      "description": "After errorCount reaches threshold, onError steering is injected",
+      "steps": [
+        "Create TrackedItem with status='loaded'",
+        "Call update with status='error' (first time)",
+        "Call update with status='error' (second time)",
+        "Assert pi.sendUserMessage called with errorForceRecord content"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "integration",
+      "title": "Session restore filters terminal items",
+      "description": "reconstructState from entries containing completed items only restores non-terminal ones",
+      "steps": [
+        "Create entries with 2 items: one completed, one loaded",
+        "Trigger session_start event with mock ctx containing these entries",
+        "Assert runtime state has 1 item (the loaded one)"
+      ]
+    },
+    {
+      "id": "TC-5-02",
+      "type": "integration",
+      "title": "Session restore reads old skill-state-tracker entries",
+      "description": "Backward compatibility: old entryType 'skill-state-tracker' is recognized and parsed",
+      "steps": [
+        "Create entry with customType='skill-state-tracker', data containing items with skillMdPath field",
+        "Trigger session_start event",
+        "Assert items restored with metadata.skillMdPath populated"
+      ]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "integration",
+      "title": "Reminder steering injected after remindInterval turns",
+      "description": "Non-terminal items receive onRemind steering after remindInterval turns",
+      "steps": [
+        "Create TrackedItem with loadedAtTurn=0",
+        "Emit turn_end events until currentTurnIndex >= remindInterval (10)",
+        "Assert pi.sendUserMessage called with onRemind content"
+      ]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "api",
+      "title": "tracker.py extracts stats from sessions with tracker entries",
+      "description": "Python extractor correctly groups and computes tracker statistics",
+      "steps": [
+        "Create mock session with evolve-tracker-skill entry containing items",
+        "Call tracker.extract(sessions)",
+        "Assert result contains total_items > 0, completed_rate, error_rate",
+        "Assert samples array has items with session_id, trigger_context"
+      ]
+    },
+    {
+      "id": "TC-7-02",
+      "type": "api",
+      "title": "tracker.py returns empty stats when no tracker entries",
+      "description": "Sessions without tracker entries produce empty result",
+      "steps": [
+        "Create mock session with no evolve-tracker entries",
+        "Call tracker.extract(sessions)",
+        "Assert result equals {'skill_execution': {'total_items': 0}}"
+      ]
+    },
+    {
+      "id": "TC-8-01",
+      "type": "integration",
+      "title": "Existing detectors unaffected by tracker integration",
+      "description": "All existing evolve-daily detectors continue working after tracker integration",
+      "steps": [
+        "Run python3 run_tests.py",
+        "Assert all existing tests pass"
+      ]
+    },
+    {
+      "id": "TC-9-01",
+      "type": "manual",
+      "title": "skill-state package removed",
+      "description": "Verify packages/skill-state/ directory no longer exists",
+      "steps": [
+        "Run: test ! -d packages/skill-state",
+        "Assert exit code 0"
+      ]
+    }
+  ]
+}

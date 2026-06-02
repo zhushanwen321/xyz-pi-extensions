@@ -1,0 +1,81 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "api",
+      "title": "Compact extractor 统计正确性",
+      "description": "验证 compact extractor 能正确统计 compactionSummary 消息",
+      "steps": ["创建包含 compactionSummary 的 session JSONL", "运行 compact extractor", "验证 total_compacts 和 compacts_per_session"]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "api",
+      "title": "Compact extractor 空 session",
+      "description": "验证 compact extractor 处理空 session 列表",
+      "steps": ["传入空 session 列表", "运行 compact extractor", "验证返回空统计"]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "api",
+      "title": "Context extractor 利用率计算",
+      "description": "验证 context extractor 能正确计算估算利用率",
+      "steps": ["创建包含 model_change 的 session JSONL", "运行 context extractor", "验证 avg_estimated_utilization 在合理范围内"]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "api",
+      "title": "Subagent extractor 调用统计",
+      "description": "验证 subagent extractor 能正确统计调用次数和失败率",
+      "steps": ["创建包含 subagent 调用的 session JSONL", "运行 subagent extractor", "验证 total_calls 和 failure_rate"]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "api",
+      "title": "Tool errors extractor 错误分类",
+      "description": "验证 tool_errors extractor 能正确分类参数错误和运行时错误",
+      "steps": ["创建包含工具错误的 session JSONL", "运行 tool_errors extractor", "验证 param_errors 和 runtime_errors"]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "api",
+      "title": "Workflow extractor 阶段统计",
+      "description": "验证 workflow extractor 能正确统计各阶段耗时",
+      "steps": ["创建包含 workflow 调用的 session JSONL", "运行 workflow extractor", "验证 phase_stats 包含五个阶段"]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "api",
+      "title": "Goal quality extractor 任务统计",
+      "description": "验证 goal_quality extractor 能正确统计任务完成率",
+      "steps": ["创建包含 goal-state 的 session JSONL", "运行 goal_quality extractor", "验证 task_stats.completion_rate"]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "api",
+      "title": "Miner rule compact-high-frequency",
+      "description": "验证 compact-high-frequency 规则在阈值超标时触发",
+      "steps": ["创建 avg_compacts >= 3 的 daily-reports", "运行规则", "验证返回 issue"]
+    },
+    {
+      "id": "TC-7-02",
+      "type": "api",
+      "title": "Miner rule param-error-rate",
+      "description": "验证 param-error-rate 规则在阈值超标时触发",
+      "steps": ["创建 param_error_rate >= 0.25 的 daily-reports", "运行规则", "验证返回 issue"]
+    },
+    {
+      "id": "TC-8-01",
+      "type": "api",
+      "title": "Extractor 自动发现",
+      "description": "验证 extractors/__init__.py 能自动发现所有 extractor",
+      "steps": ["运行 discover_extractors()", "验证返回的 dict 包含所有 extractor"]
+    },
+    {
+      "id": "TC-8-02",
+      "type": "api",
+      "title": "Extractor 失败隔离",
+      "description": "验证单个 extractor 失败不影响其他 extractor",
+      "steps": ["创建一个会抛异常的 extractor", "运行 run_extractors()", "验证其他 extractor 正常返回结果"]
+    }
+  ]
+}

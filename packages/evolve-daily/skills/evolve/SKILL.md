@@ -120,6 +120,37 @@ Use these to identify:
 - **Mixed-trigger skills** — both paths used; healthy signal
 - **Never-triggered skills** — candidates for removal or description improvement
 
+#### 3e. New Dimension Analysis
+
+读取 daily-reports 中的新增字段，按优先级分析：
+
+1. **Tool Parameter Errors**（tool_error_stats）
+   - `param_error_rate > 25%` → 高优先级建议
+   - 某工具参数错误集中 → 针对性建议
+
+2. **Goal Task Quality**（goal_quality_stats）
+   - `task_completion_rate < 50%` → 任务拆分优化建议
+   - evidence 质量低 → Evidence 要求强化建议
+
+3. **Subagent Efficiency**（subagent_stats）
+   - `failure_rate > 20%` → task prompt 优化建议
+   - `retry_rate > 15%` → 任务拆分优化建议
+
+4. **Compact Efficiency**（compact_stats + context_stats）
+   - `compacts_per_session ≥ 3` → 上下文管理优化建议
+   - 上下文利用率持续偏高 → 工具输出优化建议
+
+5. **Workflow Efficiency**（workflow_stats）
+   - 某阶段耗时占比 > 50% → 流程优化建议
+   - gate 重试频繁 → gate 检查项优化建议
+
+6. **Todo Usage**（todo_stats）
+   - `abandon_rate > 25%` → Todo 使用模式优化建议
+
+每个维度的分析结果应作为 actionable issues 写入 feedback-records。
+对于高优先级发现（超过阈值的指标），生成 EvolutionSuggestion 对象并加入
+第 4 步的 suggestions 列表中。
+
 ### 4. Generate Suggestions
 
 For each actionable finding, create an EvolutionSuggestion object:
