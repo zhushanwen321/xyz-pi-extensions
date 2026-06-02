@@ -1,10 +1,16 @@
 {
   "name": "@zhushanwen/pi-skill-state",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Automatic skill execution tracker for Pi — state-machine driven skill lifecycle management.",
+  "type": "module",
   "main": "src/index.ts",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
   "keywords": [
-    "pi",
+    "pi-package",
     "extension",
     "skill",
     "tracker",

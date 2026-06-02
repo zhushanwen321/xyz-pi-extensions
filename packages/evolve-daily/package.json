@@ -1,8 +1,20 @@
 {
   "name": "@zhushanwen/pi-evolve-daily",
-    "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Daily evolution data collector — runs Python analyzer on first session of the day.",
+  "type": "module",
   "main": "src/index.ts",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "keywords": [
+    "pi-package"
+  ],
   "files": [
     "src/",
     "index.ts",
@@ -14,5 +26,8 @@
   },
   "scripts": {
     "typecheck": "npx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
   }
 }
