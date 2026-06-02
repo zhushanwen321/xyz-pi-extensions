@@ -15,8 +15,7 @@ xyz-pi-extensions/
 │   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills)
 │   ├── claude-rules-loader/ → @zhushanwen/pi-claude-rules-loader
 │   ├── context-engineering/ → @zhushanwen/pi-context-engineering
-│   ├── skill-state/         → @zhushanwen/pi-skill-state
-│   ├── evolve-daily/        → @zhushanwen/pi-evolve-daily (含 evolve skills)
+│   ├── evolve-daily/        → @zhushanwen/pi-evolve-daily (含 evolve skills + tracker 框架)
 │   ├── statusline/          → @zhushanwen/pi-statusline
 │   ├── unified-hooks/       → @zhushanwen/pi-unified-hooks
 │   ├── workflow/            → @zhushanwen/pi-workflow
@@ -694,8 +693,7 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `packages/coding-workflow/` | `@zhushanwen/pi-coding-workflow` | 5-Phase 编码工作流 | ~20 个 xyz-harness-* skills |
 | `packages/claude-rules-loader/` | `@zhushanwen/pi-claude-rules-loader` | 加载 CLAUDE.md 规则 | — |
 | `packages/context-engineering/` | `@zhushanwen/pi-context-engineering` | 渐进式上下文压缩 | — |
-| `packages/skill-state/` | `@zhushanwen/pi-skill-state` | Skill 执行状态追踪 | — |
-| `packages/evolve-daily/` | `@zhushanwen/pi-evolve-daily` | 每日自动数据收集 | evolve, evolve-apply, evolve-report |
+| `packages/evolve-daily/` | `@zhushanwen/pi-evolve-daily` | 每日数据收集 + Tracker 框架 | evolve, evolve-apply, evolve-report |
 | `packages/statusline/` | `@zhushanwen/pi-statusline` | Pi 状态栏 | — |
 | `packages/unified-hooks/` | `@zhushanwen/pi-unified-hooks` | Hook 管理 | — |
 | `packages/workflow/` | `@zhushanwen/pi-workflow` | 通用 DAG 执行引擎 | — |

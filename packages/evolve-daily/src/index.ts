@@ -11,6 +11,8 @@ import { createCompactDetector } from "./detectors/compact";
 import { createSubagentDetector } from "./detectors/subagent-result";
 import { createParamErrorDetector } from "./detectors/param-error";
 import { createGoalQualityDetector } from "./detectors/goal-quality";
+import { createTracker } from "./trackers/core";
+import { skillExecutionConfig } from "./trackers/skill-execution";
 
 // 资源文件（Python 脚本）相对于扩展目录自身定位，不依赖外部绝对路径
 const EXT_DIR = dirname(fileURLToPath(import.meta.url)); // src/
@@ -58,6 +60,9 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
       console.error("[evolve-daily] analyzer failed:", e);
     }
   });
+
+  // ── L2c: Tracker 主动追踪（createTracker 在闭包内调用） ──
+  createTracker(pi, skillExecutionConfig);
 
   // ── L2a: Compact 实时追踪 — 监听 session_compact 事件 ──
   const compactDetector = createCompactDetector(
