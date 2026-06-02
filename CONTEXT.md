@@ -159,6 +159,25 @@ LLM 通过 `recall_context` 工具按 ID 获取被压缩前的原始内容。Con
 **Turn Boundary**
 以 user 消息为分界的消息分组，用于判断 Protected Turn 范围。
 
+### Evolve 自进化系统
+
+**Detector**
+被动观测器。监听 Pi 事件 → match() → appendEntry() 写入数据，不解入 AI 行为。适用于 compact 频率、tool 错误率等纯统计场景。AI 不知道自己在被追踪。
+_Avoid_: 检测器
+
+**Tracker**
+主动引导器。监听 Pi 事件 → steering 注入 → AI 调用 tool 汇报状态 → 状态机流转。适用于 skill 使用、错误修复等需要 AI 自我汇报的场景。
+_Avoid_: 追踪器
+
+**TrackedItem**
+Tracker 状态机中的单个实例。包含 id、name、status（loaded/completed/error/recorded）、metadata、anchor。由 createTracker 工厂函数管理生命周期。
+
+**Anchor**
+TrackedItem 中的数据锚点字段（triggerType/triggerTurn/triggerSummary），记录触发事件的时间位置和摘要。供 L3 Python extractor 在 session JSONL 中定位原始上下文。
+
+**Sample**
+L3 extractor 从 session JSONL 提取的叙事级上下文片段。包含 trigger_context、ai_response、turns_to_complete 等字段。附加到 daily-report.json 的 issue 中，供 L4 /evolve LLM 进行具体分析。
+
 ## Flagged Ambiguities
 
 **"压缩"同时存在于 Pi 原生（Compaction）和 Context Engineering（L0/L1/L2）**
