@@ -13,6 +13,17 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SetupResult } from "./types";
 
+// ── Setup 内部类型 ──────────────────────────────────────
+
+interface InferredPlanConfig {
+	priority: number;
+	peak?: { start: number; end: number; multiplier: number };
+	budgetTarget?: number;
+	peakStrategy?: "conserve" | "normal";
+	rollingWindowHours?: number;
+	thresholds?: { rollingLimitPct?: number; weeklyLimitPct?: number };
+}
+
 const PI_AGENT_DIR = join(homedir(), ".pi", "agent");
 const CONFIG_DIR = join(PI_AGENT_DIR, "extensions", "model-switch");
 const CONFIG_PATH = join(CONFIG_DIR, "model-policy.json");
@@ -176,7 +187,7 @@ export function generatePolicyConfig(
 function buildSummary(
 	groups: ProviderGroup[],
 	scenes: Record<string, string[]>,
-	plans: Record<string, { priority: number; peak?: { start: number; end: number; multiplier: number }; budgetTarget?: number; peakStrategy?: "conserve" | "normal"; rollingWindowHours?: number; thresholds?: { rollingLimitPct?: number; weeklyLimitPct?: number } }>,
+	plans: Record<string, InferredPlanConfig>,
 ): string {
 	const lines: string[] = ["Model Policy Auto-Generated Config:", "", "Providers:"];
 
@@ -232,15 +243,15 @@ function inferAlias(m: ModelInfo): string {
 	return m.modelId.replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-");
 }
 
-function inferPlans(groups: ProviderGroup[]): Record<string, { priority: number; peak?: { start: number; end: number; multiplier: number }; budgetTarget?: number; peakStrategy?: "conserve" | "normal"; rollingWindowHours?: number; thresholds?: { rollingLimitPct?: number; weeklyLimitPct?: number } }> {
-	const plans: Record<string, { priority: number; peak?: { start: number; end: number; multiplier: number }; budgetTarget?: number; peakStrategy?: "conserve" | "normal"; rollingWindowHours?: number; thresholds?: { rollingLimitPct?: number; weeklyLimitPct?: number } }> = {};
+function inferPlans(groups: ProviderGroup[]): Record<string, InferredPlanConfig> {
+	const plans: Record<string, InferredPlanConfig> = {};
 	let priority = 1;
 
 	for (const group of groups) {
 		const planKey = inferPlanKey(group.provider);
 		if (plans[planKey]) continue;
 
-		const plan: { priority: number; peak?: { start: number; end: number; multiplier: number }; budgetTarget?: number; peakStrategy?: "conserve" | "normal"; rollingWindowHours?: number; thresholds?: { rollingLimitPct?: number; weeklyLimitPct?: number } } = {
+		const plan: InferredPlanConfig = {
 			priority,
 			peakStrategy: "conserve",
 			rollingWindowHours: 5,

@@ -65,7 +65,8 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 			});
 
 			return { systemPrompt: `\n${injection}` };
-		} catch {
+		} catch (err) {
+			console.warn("[model-switch] context injection failed:", err);
 			return;
 		}
 	});
@@ -83,6 +84,12 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 		},
 	});
 
+	registerSwitchTool(pi, state);
+}
+
+// ── Tool 注册 ──────────────────────────────────────────
+
+function registerSwitchTool(pi: ExtensionAPI, state: SessionState): void {
 	pi.registerTool({
 		name: "switch_model",
 		label: "Switch Model",

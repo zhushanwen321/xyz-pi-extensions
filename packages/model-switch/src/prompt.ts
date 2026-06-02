@@ -23,6 +23,12 @@ export interface ContextPromptData {
 	now: Date;
 }
 
+/** 粘性判断阈值 */
+interface StickinessThresholds {
+	minTurns: number;
+	minInputTokens: number;
+}
+
 // ── 公共 API ────────────────────────────────────────────
 
 /**
@@ -32,11 +38,12 @@ export function formatContextPrompt(data: ContextPromptData): string {
 	const { currentModel, stickiness, snapshot, config, now } = data;
 	const plan = findPrimaryPlanPeak(config);
 	const isPeak = plan ? plan.start <= now.getHours() && now.getHours() < plan.end : false;
+	const stickinessThresholds = resolveStickinessThresholds(config);
 
 	const lines: string[] = [];
 	lines.push("[Model Context]");
 	lines.push(formatCurrentLine(currentModel, stickiness));
-	lines.push(formatStickinessLine(stickiness));
+	lines.push(formatStickinessLine(stickiness, stickinessThresholds));
 	lines.push(formatTimeLine(now, plan));
 	if (snapshot.zai) lines.push(formatZaiLine(snapshot.zai));
 	if (snapshot.ocg) lines.push(formatOcgLine(snapshot.ocg));
@@ -54,9 +61,16 @@ function formatCurrentLine(model: string, stickiness: StickinessInfo): string {
 	return `Current: ${model} (${stickiness.turns} turns, ~${inputK}k input)`;
 }
 
-function formatStickinessLine(stickiness: StickinessInfo): string {
+function resolveStickinessThresholds(config: ModelPolicy): StickinessThresholds {
+	return {
+		minTurns: config.stickiness?.minTurns ?? 3,
+		minInputTokens: config.stickiness?.minInputTokens ?? 20_000,
+	};
+}
+
+function formatStickinessLine(stickiness: StickinessInfo, thresholds: StickinessThresholds): string {
 	if (stickiness.justCompacted) return "Stickiness: Free switch (just compacted).";
-	if (stickiness.turns >= 3 && stickiness.inputTokens >= 20_000) return "Stickiness: Prefer staying (warm cache).";
+	if (stickiness.turns >= thresholds.minTurns && stickiness.inputTokens >= thresholds.minInputTokens) return "Stickiness: Prefer staying (warm cache).";
 	return "Stickiness: Switch OK (cold cache).";
 }
 

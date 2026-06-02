@@ -51,9 +51,6 @@ export function computeStickiness(
 	entries: SessionEntries,
 	config?: ModelPolicy,
 ): StickinessInfo {
-	const minTurns = config?.stickiness?.minTurns ?? 3;
-	const minInputTokens = config?.stickiness?.minInputTokens ?? 20_000;
-
 	let lastModelChangeIdx = -1;
 	let lastCompactionIdx = -1;
 
