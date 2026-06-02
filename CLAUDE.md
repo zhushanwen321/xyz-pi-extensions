@@ -11,7 +11,7 @@ xyz-pi-extensions/
 ├── packages/                    # 可发布的 npm 包
 │   ├── goal/                → @zhushanwen/pi-goal
 │   ├── todo/                → @zhushanwen/pi-todo
-│   ├── subagent/            → @zhushanwen/pi-subagent
+│   ├── vision/             → @zhushanwen/pi-vision
 │   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills)
 │   ├── claude-rules-loader/ → @zhushanwen/pi-claude-rules-loader
 │   ├── context-engineering/ → @zhushanwen/pi-context-engineering
@@ -35,17 +35,18 @@ xyz-pi-extensions/
 - Skills 跟着 owner 走：extension-bundled skills 通过 `resources_discover` 自动注册
 - 独立 skills 不进 packages/，它们是 Markdown 资源不是包
 - types 是 private 包，仅通过 `workspace:*` 供其他包引用
-- coding-workflow 通过 `workspace:*` 依赖 subagent 包，不内嵌重复实现
+- coding-workflow 内置 model.ts 用于 resolveModelByComplexity，subagent 功能由 pi-subagents（npm）提供
 - Harness 是逻辑概念，不存在叫 "harness" 的物理目录
 
 ### 社区扩展借鉴
 
-[docs/third-party-extensions/](./docs/third-party-extensions/) — 记录从社区借鉴的扩展，分为三种来源：
-- **direct-install**：直接安装使用（如 pi-hashline-edit）
-- **fork-modified**：Fork 后修改
-- **self-written**：自主开发，部分借鉴思路
+[docs/third-party-extensions/](./docs/third-party-extensions/) — 记录从社区借鉴的扩展。
 
-**操作规范**：每次新增/变更社区扩展（安装、fork、借鉴思路），必须同步更新 `docs/third-party-extensions/README.md` 清单和对应的分析文档。这是强制流程，不要跳过。
+数据源：`docs/third-party-extensions/extensions.yaml`（source of truth）
+Schema：`docs/third-party-extensions/extensions.schema.json`
+校验：`python3 scripts/validate-extensions-yaml.py`
+
+**操作规范**：每次新增/变更社区扩展（安装、fork、借鉴思路），必须同步更新 `extensions.yaml` 并运行校验脚本。如需深度分析，创建对应的 `analysis.md`。
 
 ## 文档索引
 
@@ -127,8 +128,12 @@ pnpm --filter @zhushanwen/pi-goal lint
 # 创建版本变更记录
 pnpm changeset
 
+
 # 发布（dry run）
 pnpm changeset publish --dry-run
+
+# 校验 third-party extensions 注册表
+python3 scripts/validate-extensions-yaml.py
 ```
 
 ## 关键约束
@@ -487,7 +492,7 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 |------|----------|------|------------|
 | `packages/goal/` | `@zhushanwen/pi-goal` | 持久化目标驱动循环，7 态状态机 | — |
 | `packages/todo/` | `@zhushanwen/pi-todo` | 轻量三态任务清单 | — |
-| `packages/subagent/` | `@zhushanwen/pi-subagent` | 任务委派与并行执行 | — |
+| `packages/vision/` | `@zhushanwen/pi-vision` | 图片分析（vision model + memory session） | — |
 | `packages/coding-workflow/` | `@zhushanwen/pi-coding-workflow` | 5-Phase 编码工作流 | ~20 个 xyz-harness-* skills |
 | `packages/claude-rules-loader/` | `@zhushanwen/pi-claude-rules-loader` | 加载 CLAUDE.md 规则 | — |
 | `packages/context-engineering/` | `@zhushanwen/pi-context-engineering` | 渐进式上下文压缩 | — |

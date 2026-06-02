@@ -1,6 +1,10 @@
-# Third-Party Extensions Borrowed Reference
+# Third-Party Extensions Registry
 
-记录从社区借鉴的 Pi 扩展，分为三种来源：
+> **Source of truth**: [`extensions.yaml`](./extensions.yaml)
+> Schema: [`extensions.schema.json`](./extensions.schema.json)
+> Validate: `python3 scripts/validate-extensions-yaml.py`
+
+## 来源分类
 
 | 来源 | 含义 | 目录命名 |
 |------|------|----------|
@@ -8,38 +12,35 @@
 | **fork-modified** | Fork 后根据自身需求修改 | `fork-<name>/` |
 | **self-written** | 完全自主开发（可能借鉴了思路） | 已在项目根目录各扩展中 |
 
-每个扩展目录包含一个 `analysis.md`，记录：
-- 原始仓库地址和 stars
-- 选择该来源的理由
-- 借鉴的核心思路
-- 与我们现有扩展的关系
-- 使用体验和后续计划
+每个扩展目录包含一个 `analysis.md`，记录原始仓库、选择理由、核心思路、与现有扩展的关系。
 
 ## 扩展清单
 
-### direct-install（直接安装）
+下表由 `extensions.yaml` 生成。修改时请编辑 YAML，不要直接改本表。
 
-| 扩展名 | 原始仓库 | Stars | 安装日期 | 用途 |
-|--------|----------|-------|---------|------|
-| pi-hashline-edit | RimuruW/pi-hashline-edit | 76 | 2025-06-01 | 内容锚定编辑，消除行号偏移问题 |
-| pi-interactive-shell | nicobailon/pi-interactive-shell | 513 | 2026-06-01 | 交互式 Shell 控制，PTY 仿真 + 四种运行模式 |
-| pi-ask-user | edlsh/pi-ask-user | — | 2026-06-01 | 结构化用户问答，LLM 主动向用户提问确认 |
-### fork-modified（Fork 修改）
+### direct-install
+
+| 扩展名 | 仓库 | Stars | 安装日期 | 状态 | 用途 |
+|--------|------|------:|---------|------|------|
+| pi-hashline-edit | [RimuruW/pi-hashline-edit](https://github.com/RimuruW/pi-hashline-edit) | 76 | 2025-06-01 | active | 内容锚定编辑，消除行号偏移 |
+| pi-interactive-shell | [nicobailon/pi-interactive-shell](https://github.com/nicobailon/pi-interactive-shell) | 513 | 2026-06-01 | active | 交互式 Shell，PTY 仿真 + 四种模式 |
+| pi-ask-user | [edlsh/pi-ask-user](https://github.com/edlsh/pi-ask-user) | — | 2026-06-01 | active | 结构化用户问答 |
+| pi-subagents | [nicobailon/pi-subagents](https://github.com/nicobailon/pi-subagents) | — | 2026-06-01 | active | 完整 subagent 系统，替代自研 |
+
+### fork-modified
 
 _暂无_
 
-### self-written（自主开发）
+### self-written
 
-这些是本项目自主开发的扩展，部分借鉴了社区思路：
-
-| 扩展名 | 借鉴来源 | 说明 |
-|--------|----------|------|
-| context-engineering | magic-context, pi-context-prune | 渐进式上下文压缩，借鉴了工具调用树修剪和 CAS 存储 |
-| evolve-daily + skills/evolve* | autocontext | 使用数据收集 + 进化建议，借鉴了 knowledge 蒸馏思路 |
-| goal | 无 | 完全自主：持久化目标驱动，7 态状态机 |
-| todo | 无 | 完全自主：轻量三态任务清单 |
-| subagent | 无 | 完全自主：任务委派与并行执行 |
-| skill-state | 无 | 完全自主：Skill 执行追踪 |
+| 扩展名 | 借鉴来源 | 状态 | 说明 |
+|--------|----------|------|------|
+| context-engineering | magic-context, pi-context-prune | active | 渐进式上下文压缩 |
+| evolve-daily | autocontext | active | 数据收集 + 进化建议 |
+| goal | — | active | 持久化目标驱动，7 态状态机 |
+| todo | — | active | 轻量三态任务清单 |
+| skill-state | — | active | Skill 执行追踪 |
+| ~~subagent~~ | — | replaced | 已被 pi-subagents 替代 |
 
 ## 决策原则
 
@@ -47,7 +48,7 @@ _暂无_
 2. **Fork 修改**：核心思路好但需要适配我们的架构/约定 → fork 后修改
 3. **自主开发**：我们有独特设计或社区无对应方案 → 自主开发（可借鉴思路）
 
-每次新增或变更扩展来源时，更新本文件和对应的分析文档。
+每次新增或变更扩展来源时，更新 `extensions.yaml` 并运行校验脚本。
 
 ## 深度架构分析
 
