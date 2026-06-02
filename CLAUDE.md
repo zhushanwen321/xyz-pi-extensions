@@ -46,7 +46,7 @@ xyz-pi-extensions/
 | 内部共享依赖（非扩展） | `packages/`（需评估内联） | quota-providers |
 | CI 类型桩 | `types/`（根目录） | mariozechner/index.d.ts |
 | 独立 skills | `skills/` | evolve, zcommit |
-| 独立工具 | `scripts/` | pi-session-analyzer |
+| 独立工具 | `scripts/` | （待填充） |
 
 **硬性约束**：
 - npm install 必须能跑：`dependencies` 中的包必须在 npm 上可获取，`workspace:*` publish 时转为具体版本号，`private: true` 的包不能作为依赖

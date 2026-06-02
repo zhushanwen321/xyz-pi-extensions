@@ -95,7 +95,7 @@ echo -e "${C_GREEN}[ OK ]${C_RESET} pi manifest 检查通过"
 STAGED_PKG=$(git diff --cached --name-only --diff-filter=ACM | grep 'packages/.*/package.json$' || true)
 if [[ -n "$STAGED_PKG" ]]; then
   echo "--- package.json 深度检查 ---"
-  for pkg_json in $STAGED_PKG; do
+  while IFS= read -r pkg_json; do
     dir=$(dirname "$pkg_json")
     name=$(basename "$dir")
     [[ "$name" == "taste-lint" ]] && continue
@@ -145,7 +145,7 @@ print('OK')
     fi
 
     echo -e "  ${C_GREEN}[ OK ]${C_RESET} $name: 深度检查通过"
-  done
+  done <<< "$STAGED_PKG"
 fi
 
 if [[ $HAS_ERROR -eq 1 ]]; then

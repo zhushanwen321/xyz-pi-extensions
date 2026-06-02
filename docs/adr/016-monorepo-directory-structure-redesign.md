@@ -107,5 +107,5 @@ xyz-pi-extensions/
 3. `packages/types/` → `types/`（根目录）
 4. `packages/quota-providers/` → 评估后决定：去 private 发布 或 内联到 model-switch + statusline
 5. `scripts/validate-*.py` → `tools/`
-6. 删除 `scripts/pi-session-analyzer/`（死代码）
+6. ~~删除 `scripts/pi-session-analyzer/`（死代码）~~ ✅ 已完成
 7. 更新 `pnpm-workspace.yaml`、`tsconfig.json` paths、CI 配置、CLAUDE.md
