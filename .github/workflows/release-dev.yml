@@ -1,0 +1,37 @@
+name: Release Dev
+
+on:
+  push:
+    branches:
+      - 'dev-*'
+
+concurrency:
+  group: release-dev-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  prerelease:
+    runs-on: ubuntu-latest
+    # 只在 dev-* 分支本身触发，PR 中的 push 不触发
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Publish prerelease to npm
+        run: pnpm changeset publish --tag dev
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
