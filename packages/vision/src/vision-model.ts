@@ -2,14 +2,12 @@
  * Vision model configuration and resolution for image analysis.
  *
  * Loads vision model entries from ~/.pi/agent/vision-models.json,
- * selects the best available model with fallback chain,
- * and generates memory session identifiers.
+ * selects the best available model with fallback chain.
  */
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createHash } from "node:crypto";
 
 // ──────────────────────── Types ────────────────────────
 
@@ -130,36 +128,10 @@ export function resolveVisionModelSync(): { ok: true; ref: string; thinkingLevel
 		thinkingLevel: best.thinkingLevel,
 	};
 }
+// ──────────────────────── Fork ────────────────────────
 
-// ──────────────────────── Thinking Level ────────────────────────
-
-export function thinkingToPi(level: ThinkingLevel): string {
-	return THINKING_TO_PI[level];
-}
-
-// ──────────────────────── Memory ID ────────────────────────
-
-function sanitizeMemoryId(memory: string): string {
-	const truncated = memory.length > 56 ? memory.slice(0, 56) : memory;
-	const sanitized = truncated.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-	const hash = createHash("sha256").update(memory).digest("hex").slice(0, 8);
-	return `${sanitized}-${hash}`;
-}
-
-export function buildVisionMemoryId(imagePath: string): string {
-	const hash = createHash("sha256").update(imagePath).digest("hex").slice(0, 8);
-	return sanitizeMemoryId(`vision-${hash}`);
-}
-
-// ──────────────────────── Memory Session ────────────────────────
-
-export function resolveMemorySessionFile(
-	mainSessionFile: string,
-	memoryId: string,
-): string | null {
-	if (!mainSessionFile) return null;
-	const baseName = path.basename(mainSessionFile, ".jsonl");
-	const dir = path.dirname(mainSessionFile);
-	const sanitized = sanitizeMemoryId(memoryId);
-	return path.join(dir, `${baseName}.mem-${sanitized}.jsonl`);
-}
+export const FORK_PREAMBLE =
+	"You are a delegated vision analysis agent running from a fork of the parent session. " +
+	"Treat the inherited conversation as reference-only context, not a live thread to continue. " +
+	"Do not continue or answer prior messages as if they are waiting for a reply. " +
+	"Your sole job is to analyze the specified image and return focused conclusions using your tools.";

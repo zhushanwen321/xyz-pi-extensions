@@ -1,8 +1,8 @@
 /**
  * Pi subprocess spawning for vision analysis.
  *
- * Minimal single-agent foreground executor extracted from the old subagent package.
- * Only supports the synchronous single-run mode needed for analyze_image.
+ * Minimal single-agent foreground executor.
+ * Supports fresh and fork context modes.
  */
 
 import * as fs from "node:fs";
@@ -38,11 +38,6 @@ export interface VisionResult {
 	durationMs?: number;
 }
 
-export interface MemorySession {
-	filePath: string;
-	mainSessionFile: string;
-	action: "create" | "resume";
-}
 
 export type OnUpdateCallback = (partial: {
 	content: Array<{ type: string; text: string }>;
@@ -126,7 +121,7 @@ export async function runSingleVisionAgent(params: {
 	tools?: string;
 	signal?: AbortSignal;
 	onUpdate?: OnUpdateCallback;
-	memorySession?: MemorySession;
+	forkSessionFile?: string;
 }): Promise<VisionResult> {
 	const {
 		task,
@@ -137,7 +132,7 @@ export async function runSingleVisionAgent(params: {
 		tools = "read,bash,grep",
 		signal,
 		onUpdate,
-		memorySession,
+		forkSessionFile,
 	} = params;
 
 	const result: VisionResult = {
@@ -173,10 +168,9 @@ export async function runSingleVisionAgent(params: {
 		const THINKING_TO_PI: Record<ThinkingLevel, string> = { high: "high", max: "xhigh" };
 		args.push("--thinking", THINKING_TO_PI[thinkingLevel]);
 	}
-
-	// Memory session: pass session file as --session
-	if (memorySession) {
-		args.push("--session", memorySession.filePath);
+	// Fork context: reuse parent session branch
+	if (forkSessionFile) {
+		args.push("--session", forkSessionFile);
 	}
 
 	let tmpPromptPath: string | null = null;

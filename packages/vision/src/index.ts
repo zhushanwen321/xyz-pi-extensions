@@ -2,23 +2,22 @@
  * @zhushanwen/pi-vision — Image analysis tool using multimodal vision models.
  *
  * Spawns a dedicated Pi child process with a vision-capable model to analyze images.
- * Supports memory sessions for multi-turn follow-up questions on the same image.
+ * Supports fork context: inherits parent session for context-aware analysis.
  * Reads model configuration from ~/.pi/agent/vision-models.json.
  */
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type ExtensionAPI, getMarkdownTheme } from "@mariozechner/pi-coding-agent";
+import { type ExtensionAPI, SessionManager } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import {
 	VISION_ALLOWED_TOOLS,
 	VISION_SYSTEM_PROMPT,
+	FORK_PREAMBLE,
 	loadVisionModels,
 	resolveVisionModelSync,
-	buildVisionMemoryId,
-	resolveMemorySessionFile,
 } from "./vision-model.js";
 import {
 	type OnUpdateCallback,
@@ -33,6 +32,10 @@ import {
 const AnalyzeImageParams = Type.Object({
 	image_path: Type.String({ description: "Image file path. Relative paths resolved via cwd." }),
 	question: Type.String({ description: "The question to answer about the image" }),
+	context: Type.Optional(Type.String({
+		enum: ["fresh", "fork"],
+		description: "Context mode: 'fork' inherits parent session so the vision agent understands prior discussion (e.g. what bug you're investigating). 'fresh' starts clean. Default: 'fresh'.",
+	})),
 });
 
 // ──────────────────────── Types ────────────────────────
@@ -40,9 +43,7 @@ const AnalyzeImageParams = Type.Object({
 interface VisionDetails {
 	mode: "vision";
 	resolvedModel: string;
-	memoryId?: string;
-	memoryAction?: "create" | "resume";
-	memoryFile?: string;
+	context: "fresh" | "fork";
 	usage?: {
 		input: number;
 		output: number;
@@ -52,22 +53,27 @@ interface VisionDetails {
 	durationMs?: number;
 }
 
+/**
+ * Copy parent session file to a temp location for fork context.
+ * Simple approach: file copy + pass as --session to child process.
+ * The child Pi process will resume from the copied session.
+ */
+function createForkSessionFile(parentSessionFile: string): string | undefined {
+	try {
+		if (!fs.existsSync(parentSessionFile)) return undefined;
+		const dir = path.join(os.tmpdir(), "pi-vision");
+		fs.mkdirSync(dir, { recursive: true });
+		const forkFile = path.join(dir, `fork-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jsonl`);
+		fs.copyFileSync(parentSessionFile, forkFile);
+		return forkFile;
+	} catch {
+		return undefined;
+	}
+}
+
 // ──────────────────────── Extension ────────────────────────
 
 export default function visionExtension(pi: ExtensionAPI) {
-	// Session-scoped state for memory file tracking
-	const sessionMemoryFiles = new Map<string, Set<string>>();
-	let lastSessionId = "";
-
-	function getMemoryFiles(sessionId: string): Set<string> {
-		let files = sessionMemoryFiles.get(sessionId);
-		if (!files) {
-			files = new Set();
-			sessionMemoryFiles.set(sessionId, files);
-		}
-		return files;
-	}
-
 	pi.registerTool({
 		name: "analyze_image",
 		label: "Analyze Image",
@@ -80,21 +86,20 @@ export default function visionExtension(pi: ExtensionAPI) {
 			"",
 			"Requires ~/.pi/agent/vision-models.json with at least one vision model entry.",
 			"",
-			"Supports memory sessions: same image path reuses prior context for follow-up questions.",
+			"Context modes:",
+			"- 'fresh' (default): clean session, no prior context.",
+			"- 'fork': inherits parent session so the vision agent understands what you've been discussing (e.g. which bug, what code change, what error). Use this when the image analysis needs context from the current conversation.",
 		].join("\n"),
 		parameters: AnalyzeImageParams,
 		promptSnippet: "Analyze images using a multimodal vision model",
 		promptGuidelines: [
-			"Provide image_path and question — the tool handles model selection and memory internally",
+			"Provide image_path and question — the tool handles model selection internally",
 			"Relative paths are resolved via cwd",
-			"Same image reuses memory context; different images get independent sessions",
+			"Use context: 'fork' when the image analysis needs to understand prior discussion (e.g. analyzing a screenshot of an error the user just described)",
 		],
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			cleanupOldTempFiles();
-
-			const sessionId = ctx.sessionManager.getSessionId();
-			lastSessionId = sessionId;
 
 			// ── Validate image path ──
 			const rawPath = params.image_path as string;
@@ -105,7 +110,7 @@ export default function visionExtension(pi: ExtensionAPI) {
 			if (!fs.existsSync(absoluteImagePath)) {
 				return {
 					content: [{ type: "text" as const, text: `Image file not found: ${absoluteImagePath}` }],
-					details: { mode: "vision" as const, resolvedModel: "" },
+					details: { mode: "vision" as const, resolvedModel: "", context: "fresh" as const },
 					isError: true,
 				};
 			}
@@ -115,7 +120,7 @@ export default function visionExtension(pi: ExtensionAPI) {
 			if (!modelResult.ok) {
 				return {
 					content: [{ type: "text" as const, text: modelResult.error }],
-					details: { mode: "vision" as const, resolvedModel: "" },
+					details: { mode: "vision" as const, resolvedModel: "", context: "fresh" as const },
 					isError: true,
 				};
 			}
@@ -123,27 +128,30 @@ export default function visionExtension(pi: ExtensionAPI) {
 			const resolvedModel = modelResult.ref;
 			const resolvedThinking = modelResult.thinkingLevel;
 
-			// ── Build memory session ──
-			const memoryId = buildVisionMemoryId(absoluteImagePath);
-			const mainSessionFile = ctx.sessionManager.getSessionFile();
-			let memorySession: { filePath: string; mainSessionFile: string; action: "create" | "resume" } | undefined;
-			let memoryDegraded = false;
+			// ── Resolve context mode ──
+			const contextMode: "fresh" | "fork" = params.context === "fork" ? "fork" : "fresh";
+			let forkSessionFile: string | undefined;
+			let forkDegraded = false;
 
-			if (mainSessionFile) {
-				const filePath = resolveMemorySessionFile(mainSessionFile, memoryId);
-				if (filePath) {
-					const action = fs.existsSync(filePath) ? "resume" as const : "create" as const;
-					memorySession = { filePath, mainSessionFile, action };
-					getMemoryFiles(sessionId).add(filePath);
+			if (contextMode === "fork") {
+				const parentSessionFile = ctx.sessionManager.getSessionFile();
+
+				if (parentSessionFile) {
+					forkSessionFile = createForkSessionFile(parentSessionFile);
 				}
-			} else {
-				memoryDegraded = true;
+				if (!forkSessionFile) {
+					forkDegraded = true;
+				}
 			}
 
-			// ── Spawn vision subagent ──
+			// ── Build task ──
 			const question = params.question as string;
-			const task = `读取图片 ${absoluteImagePath}，分析以下问题：${question}。仅输出分析结论。`;
+			const effectiveContext = contextMode === "fork" && !forkDegraded ? "fork" : "fresh";
+			const task = effectiveContext === "fork"
+				? `${FORK_PREAMBLE}\n\nTask:\n读取图片 ${absoluteImagePath}，结合之前讨论的上下文，分析以下问题：${question}。仅输出分析结论。`
+				: `读取图片 ${absoluteImagePath}，分析以下问题：${question}。仅输出分析结论。`;
 
+			// ── Spawn vision subagent ──
 			const result = await runSingleVisionAgent({
 				task,
 				systemPrompt: VISION_SYSTEM_PROMPT,
@@ -153,7 +161,7 @@ export default function visionExtension(pi: ExtensionAPI) {
 				tools: VISION_ALLOWED_TOOLS,
 				signal,
 				onUpdate: onUpdate as OnUpdateCallback | undefined,
-				memorySession,
+				forkSessionFile,
 			});
 
 			const isError = result.exitCode !== 0
@@ -163,6 +171,7 @@ export default function visionExtension(pi: ExtensionAPI) {
 			const details: VisionDetails = {
 				mode: "vision",
 				resolvedModel,
+				context: effectiveContext,
 				usage: {
 					input: result.usage.input,
 					output: result.usage.output,
@@ -172,14 +181,8 @@ export default function visionExtension(pi: ExtensionAPI) {
 				durationMs: result.durationMs,
 			};
 
-			if (memorySession) {
-				details.memoryId = memoryId;
-				details.memoryAction = memorySession.action;
-				details.memoryFile = memorySession.filePath;
-			}
-
-			const degradation = memoryDegraded
-				? "\n[Warning: Memory session unavailable — in-memory session, vision context will not persist across calls.]"
+			const degradation = forkDegraded && contextMode === "fork"
+				? "\n[Warning: Fork session unavailable — fell back to fresh context.]"
 				: "";
 
 			if (isError) {
@@ -202,9 +205,10 @@ export default function visionExtension(pi: ExtensionAPI) {
 			const home = os.homedir();
 			const shortPath = rawPath.startsWith(home) ? `~${rawPath.slice(home.length)}` : rawPath;
 			const modelDisplay = theme.fg("dim", ` ${loadVisionModels()?.models?.[0]?.id ?? "vision"}`);
+			const ctxLabel = args.context === "fork" ? theme.fg("accent", " [fork]") : "";
 
 			return new Text(
-				`${theme.fg("warning", "⏳")} ${theme.fg("toolTitle", theme.bold("analyze_image"))}${modelDisplay}\n  ${theme.fg("accent", shortPath)}`,
+				`${theme.fg("warning", "⏳")} ${theme.fg("toolTitle", theme.bold("analyze_image"))}${modelDisplay}${ctxLabel}\n  ${theme.fg("accent", shortPath)}`,
 				0, 0,
 			);
 		},
@@ -226,7 +230,8 @@ export default function visionExtension(pi: ExtensionAPI) {
 
 			if (details?.durationMs) {
 				const secs = (details.durationMs / 1000).toFixed(1);
-				lines.push(`  ${theme.fg("dim", `${secs}s`)}${details.memoryAction === "resume" ? ` ${theme.fg("dim", "· memory resumed")}` : ""}`);
+				const forkLabel = details.context === "fork" ? ` ${theme.fg("dim", "· forked")}` : "";
+				lines.push(`  ${theme.fg("dim", `${secs}s`)}${forkLabel}`);
 			}
 
 			if (expanded) {
@@ -239,18 +244,5 @@ export default function visionExtension(pi: ExtensionAPI) {
 
 			return new Text(lines.join("\n"), 0, 0);
 		},
-	});
-
-	// ── Cleanup on session shutdown ──
-	pi.on("session_shutdown", () => {
-		const sessionId = lastSessionId;
-		const files = sessionMemoryFiles.get(sessionId);
-		if (files) {
-			for (const f of files) {
-				try { fs.unlinkSync(f); } catch { /* already gone */ }
-			}
-			files.clear();
-			sessionMemoryFiles.delete(sessionId);
-		}
 	});
 }
