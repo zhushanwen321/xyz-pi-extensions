@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-coding-workflow",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "5-phase coding workflow orchestration",
   "main": "index.ts",
   "type": "module",
@@ -11,6 +11,17 @@
     "skills/",
     "agents/",
     "commands/"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "keywords": [
+    "pi-package"
   ],
   "dependencies": {
     "js-yaml": "^4.1.0"
