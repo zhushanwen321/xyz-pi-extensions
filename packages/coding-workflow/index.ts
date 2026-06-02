@@ -110,6 +110,8 @@ const MAX_COMPACT_RETRIES = 3; // per phase-start
 
 // Runtime state (not persisted)
 const activeSubprocesses: ChildProcess[] = [];
+// Set by init when Phase 1 skill is injected via steer; checked by before_agent_start to skip re-injection
+let phase1SkillInjectedByInit = false;
 
 // ─── Helpers ─────────────────────────────────────────────
 
@@ -658,17 +660,43 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 			persistState(pi, state);
 			updateWidget(ctx, state);
 
+			// Inject Phase 1 skill immediately via steer (don't wait for next turn)
+			let skillInjected = false;
+			try {
+				const phaseConfig = PHASES[0]!;
+				const skillContent = skillResolver.resolve(phaseConfig.skillName);
+				const injection =
+					`[CODING WORKFLOW]` + "\n\n" +
+					`Current Task: ${phaseConfig.name}\n` +
+					`Workspace: ${topicDir}\n\n` +
+					`YOUR GOAL:\n` +
+					`1. Read the skill instructions below carefully\n` +
+					`2. Produce all required deliverables\n` +
+					`3. Call coding-workflow-gate(phase=1) to submit\n\n` +
+					`RULES:\n` +
+					`- ONLY do what the skill below tells you to do\n` +
+					`- Do NOT skip ahead, plan ahead, or do anything outside the skill scope\n` +
+					`- If gate returns FAIL: fix the specific items listed, then retry\n` +
+					`- If gate returns PASS: follow the instructions in the gate result message exactly\n` +
+					`- 每个阶段完成时，必须提交并推送所有代码和文档（特别是 .xyz-harness/ 和 docs/ 目录）。确保 git status --short 无未跟踪文件后再提交\n\n` +
+					`--- Skill Instructions ---\n${skillContent}\n--- End Skill Instructions ---`;
+
+				pi.sendUserMessage(injection, { deliverAs: "steer" });
+				skillInjected = true;
+				phase1SkillInjectedByInit = true;
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.warn(`[coding-workflow] Failed to inject Phase 1 skill in init: ${msg}`);
+			}
+
 			ctx.ui.notify(`Coding workflow initialized: ${topicName}`, "info");
 
+			const resultText = skillInjected
+				? `Workflow initialized: ${topicName}\nWorkspace: ${topicDir}\n\nPhase 1 (Spec) skill 已注入。按 steer 指令产出 spec.md，然后调用 coding-workflow-gate(phase=1)。`
+				: `Workflow initialized: ${topicName}\nWorkspace: ${topicDir}\n\nPhase 1 skill 注入失败，下个 turn 会通过 before_agent_start 重试。`;
+
 			return {
-				content: [{
-					type: "text",
-					text:
-						`Workflow initialized: ${topicName}\n` +
-						`Workspace: ${topicDir}\n\n` +
-						`Phase 1 skill instructions will be injected automatically. ` +
-						`Follow the skill to produce spec.md, then call coding-workflow-gate(phase=1).`,
-				}],
+				content: [{ type: "text", text: resultText }],
 			};
 		},
 
@@ -1104,6 +1132,12 @@ function checkProjectProtection(projectRoot: string): string[] {
 			filePath: string;
 		}>;
 		skillResolver.setSkills(loadedSkills);
+
+		// Skip Phase 1 injection if init already injected via steer
+		if (phase1SkillInjectedByInit && state.currentPhase === 1) {
+			phase1SkillInjectedByInit = false;
+			return;
+		}
 
 		// Check if current phase has already passed gate — compact failed and rolled back
 		if (state.phaseResults[state.currentPhase] === "passed") {
