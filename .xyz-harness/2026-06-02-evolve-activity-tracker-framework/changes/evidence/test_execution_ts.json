@@ -102,42 +102,6 @@
         "Assert turn_end handler exists"
       ],
       "evidence": "interval=true, onRemind=true, turnEnd=true"
-    },
-    {
-      "caseId": "TC-7-01",
-      "round": 1,
-      "passed": true,
-      "execute_steps": [
-        "Run test_tc7_01_tracker_extracts_stats()"
-      ],
-      "evidence": "{\"stats\": {\"total_items\": 2, \"completed_rate\": 0.5, \"error_rate\": 0.5, \"samples\": [{\"session_id\": \"session-1\", \"item_name\": \"my-skill\", \"status\": \"completed\", \"trigger_type\": \"tool_call\", \"trigger_tur"
-    },
-    {
-      "caseId": "TC-7-02",
-      "round": 1,
-      "passed": true,
-      "execute_steps": [
-        "Run test_tc7_02_tracker_empty_sessions()"
-      ],
-      "evidence": "{\"result\": {\"skill_execution\": {\"total_items\": 0}}}"
-    },
-    {
-      "caseId": "TC-8-01",
-      "round": 1,
-      "passed": true,
-      "execute_steps": [
-        "Run test_tc8_01_existing_extractors()"
-      ],
-      "evidence": "{\"extractors\": [\"compact\", \"context\", \"goal_quality\", \"subagent\", \"tool_errors\", \"tracker\", \"workflow\"]}"
-    },
-    {
-      "caseId": "TC-9-01",
-      "round": 1,
-      "passed": true,
-      "execute_steps": [
-        "Run test_tc9_01_skill_state_removed()"
-      ],
-      "evidence": "{\"path\": \"/Users/zhushanwen/Code/xyz-pi-extensions-workspace/feat-evolve-everything/packages/skill-state\", \"exists\": false}"
     }
   ]
 }
