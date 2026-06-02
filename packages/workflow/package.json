@@ -1,7 +1,7 @@
 {
   "name": "@zhushanwen/pi-workflow",
   "version": "0.1.0",
-  "description": "Multi-agent workflow orchestration for Pi — stateful workflow management with persistence, state machine, and execution tracing.",
+  "description": "Multi-agent workflow orchestration for Pi \u2014 stateful workflow management with persistence, state machine, and execution tracing.",
   "main": "index.ts",
   "keywords": [
     "pi",
@@ -20,5 +20,8 @@
   },
   "scripts": {
     "typecheck": "npx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
   }
 }

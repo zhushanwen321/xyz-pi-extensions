@@ -1,7 +1,7 @@
 {
   "name": "@zhushanwen/pi-evolve-daily",
-    "version": "0.1.1",
-  "description": "Daily evolution data collector — runs Python analyzer on first session of the day.",
+  "version": "0.1.1",
+  "description": "Daily evolution data collector \u2014 runs Python analyzer on first session of the day.",
   "main": "src/index.ts",
   "files": [
     "src/",
@@ -14,5 +14,8 @@
   },
   "scripts": {
     "typecheck": "npx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
   }
 }
