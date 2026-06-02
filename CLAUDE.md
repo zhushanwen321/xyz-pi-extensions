@@ -149,45 +149,27 @@ python3 scripts/validate-extensions-yaml.py
 
 ### 发布流程（GitHub Actions）
 
-项目通过 GitHub Actions 自动发布 npm 包。
+项目通过 GitHub Actions 自动发布 npm 包。触发条件：push tag `v*`。
 
-**发布步骤：**
+```bash
+# 1. 创建 changeset（选择受影响的包 + patch/minor/major）
+pnpm changeset
+git add .changeset/
+git commit -m "chore: add changeset"
 
-1. 本地创建 changeset：
-   ```bash
-   pnpm changeset         # 选择受影响的包 + patch/minor/major
-   git add .changeset/
-   git commit -m "chore: add changeset"
-   ```
+# 2. 版本 bump
+pnpm changeset version
+git add -A && git commit -m "chore: bump versions" && git push
 
-2. 本地执行版本 bump：
-   ```bash
-   pnpm changeset version  # 自动 bump package.json 版本号
-   git add -A
-   git commit -m "chore: bump versions"
-   git push
-   ```
+# 3. 打 tag 触发 GitHub Actions 发布
+git tag v0.x.x && git push origin v0.x.x
+```
 
-3. 打 release tag 触发 GitHub Actions 发布：
-   ```bash
-   git tag v<version>
-   git push origin v<version>
-   ```
-
-   GitHub Actions 自动执行：
-   - `.github/workflows/release.yml`（触发条件：push tag `v*`）
-   - `pnpm changeset publish`（需要 `secrets.NPM_TOKEN`，已配置）
-   - 创建 GitHub Release（自动生成 release notes）
+GitHub Actions 自动执行：`pnpm changeset publish` + 创建 GitHub Release。
 
 **前提条件（已满足）：**
 - GitHub Secrets 中已配置 `NPM_TOKEN`
 - 所有 `@zhushanwen/pi-*` 包已在 npmjs.org 上首次发布过
-
-# 发布（dry run）
-pnpm changeset publish --dry-run
-
-# 校验 third-party extensions 注册表
-python3 scripts/validate-extensions-yaml.py
 ```
 
 ## 关键约束
