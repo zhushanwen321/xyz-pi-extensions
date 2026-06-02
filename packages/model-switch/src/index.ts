@@ -17,6 +17,7 @@ import { loadConfig, type ModelPolicy } from "./config";
 import { computeRecommendation, computeQuotaSnapshot, detectScene } from "./advisor";
 import { formatAdvisorPrompt } from "./prompt";
 import { generatePolicyConfig, readEnabledModels, getConfigPath } from "./setup";
+import { getCurrentModelId } from "./types";
 
 interface SessionState {
 	config: ModelPolicy | null;
@@ -35,9 +36,7 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 		if (!state.config) return;
 
 		const prompt = ctx.getSystemPrompt();
-		const currentModel = ctx.model
-			? `${(ctx.model as Record<string, string>).provider}/${(ctx.model as Record<string, string>).id}`
-			: "";
+		const currentModel = getCurrentModelId(ctx);
 		const scene = detectScene(prompt);
 
 		const entries = ctx.sessionManager.getBranch() as Array<{ type: string; [key: string]: unknown }>;
@@ -107,9 +106,7 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 					};
 				}
 
-				const currentModel = ctx.model
-					? `${(ctx.model as Record<string, string>).provider}/${(ctx.model as Record<string, string>).id}`
-					: "";
+				const currentModel = getCurrentModelId(ctx);
 
 				const lines: string[] = [];
 				for (const [alias, entry] of Object.entries(state.config.models)) {
@@ -214,9 +211,7 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 					};
 				}
 
-				const currentModel = ctx.model
-					? `${(ctx.model as Record<string, string>).provider}/${(ctx.model as Record<string, string>).id}`
-					: "";
+				const currentModel = getCurrentModelId(ctx);
 				const prompt = ctx.getSystemPrompt();
 				const scene = detectScene(prompt);
 				const entries = ctx.sessionManager.getBranch() as Array<{ type: string; [key: string]: unknown }>;
@@ -285,42 +280,47 @@ async function switchToModel(
 	modelId: string,
 	alias: string,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
-	const currentModel = ctx.model
-		? `${(ctx.model as Record<string, string>).provider}/${(ctx.model as Record<string, string>).id}`
-		: "";
+	try {
+		const currentModel = getCurrentModelId(ctx);
 
-	if (currentModel === `${provider}/${modelId}`) {
+		if (currentModel === `${provider}/${modelId}`) {
+			return {
+				content: [{ type: "text" as const, text: `Already using ${alias} (${provider}/${modelId}).` }],
+			};
+		}
+
+		// 从 modelRegistry 找到模型对象
+		const match = ctx.modelRegistry.find(provider, modelId);
+		if (!match) {
+			return {
+				content: [{ type: "text" as const, text: `Model ${provider}/${modelId} not available (API key may not be configured).` }],
+				isError: true,
+			};
+		}
+
+		const success = await pi.setModel(match);
+		if (!success) {
+			return {
+				content: [{ type: "text" as const, text: `Failed to switch to ${provider}/${modelId}.` }],
+				isError: true,
+			};
+		}
+
+		// 记录 model_change 自定义 entry（用于下一个 turn 的粘性计算）
+		ctx.sessionManager.appendCustomEntry?.("model_change", {
+			provider,
+			modelId,
+			alias,
+			timestamp: new Date().toISOString(),
+		});
+
 		return {
-			content: [{ type: "text" as const, text: `Already using ${alias} (${provider}/${modelId}).` }],
+			content: [{ type: "text" as const, text: `Switched to ${alias} (${provider}/${modelId}).` }],
 		};
-	}
-
-	// 从 modelRegistry 找到模型对象
-	const match = ctx.modelRegistry.find(provider, modelId);
-	if (!match) {
+	} catch (err) {
 		return {
-			content: [{ type: "text" as const, text: `Model ${provider}/${modelId} not available (API key may not be configured).` }],
+			content: [{ type: "text" as const, text: `Error switching to ${provider}/${modelId}: ${err instanceof Error ? err.message : String(err)}` }],
 			isError: true,
 		};
 	}
-
-	const success = await pi.setModel(match);
-	if (!success) {
-		return {
-			content: [{ type: "text" as const, text: `Failed to switch to ${provider}/${modelId}.` }],
-			isError: true,
-		};
-	}
-
-	// 记录 model_change 自定义 entry（用于下一个 turn 的粘性计算）
-	ctx.sessionManager.appendCustomEntry?.("model_change", {
-		provider,
-		modelId,
-		alias,
-		timestamp: new Date().toISOString(),
-	});
-
-	return {
-		content: [{ type: "text" as const, text: `Switched to ${alias} (${provider}/${modelId}).` }],
-	};
 }

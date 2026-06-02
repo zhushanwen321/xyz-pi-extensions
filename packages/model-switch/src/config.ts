@@ -1,7 +1,7 @@
 /**
  * Model Switch — 配置文件加载 + 类型定义
  *
- * 从 ~/.pi/agent/model-policy.json 加载配置。
+ * 从 ~/.pi/agent/extensions/model-switch/model-policy.json 加载配置。
  * 文件不存在或格式错误时返回 null（降级模式）。
  */
 
@@ -55,7 +55,8 @@ export interface ModelPolicy {
 
 // ── 配置加载 ─────────────────────────────────────────────
 
-const CONFIG_PATH = join(homedir(), ".pi", "agent", "model-policy.json");
+const CONFIG_DIR = join(homedir(), ".pi", "agent", "extensions", "model-switch");
+const CONFIG_PATH = join(CONFIG_DIR, "model-policy.json");
 
 /**
  * 加载模型策略配置文件。

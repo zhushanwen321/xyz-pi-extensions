@@ -16,7 +16,7 @@ pi install npm:@zhushanwen/pi-model-switch
 
 ### 1. 生成配置
 
-首次使用需要生成 `~/.pi/agent/model-policy.json` 配置文件。
+首次使用需要生成 `~/.pi/agent/extensions/model-switch/model-policy.json` 配置文件。
 
 **方式 A：自动生成（推荐）**
 
@@ -30,7 +30,7 @@ pi install npm:@zhushanwen/pi-model-switch
 
 **方式 B：手动创建**
 
-按照下方配置格式手动创建 `~/.pi/agent/model-policy.json`。
+按照下方配置格式手动创建 `~/.pi/agent/extensions/model-switch/model-policy.json`。
 
 ### 2. 配置生效
 
@@ -52,7 +52,7 @@ AI: (调用 switch_model action=switch query=ds-pro)
 
 ## 配置文件格式
 
-`~/.pi/agent/model-policy.json`：
+`~/.pi/agent/extensions/model-switch/model-policy.json`：
 
 ```json
 {
@@ -128,7 +128,7 @@ AI: (调用 switch_model action=switch query=ds-pro)
 
 | Action | 说明 |
 |--------|------|
-| `list` | 列出配置中所有模型（标注当前模型） |
+| `switch_model` | 列出配置中所有模型（标注当前模型） |
 | `search` | 按别名/provider/modelId 模糊搜索 |
 | `switch` | 切换到指定模型 |
 | `recommend` | 查看当前推荐结果和原因 |

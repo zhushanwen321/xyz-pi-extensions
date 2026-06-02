@@ -12,7 +12,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const CONFIG_DIR = join(homedir(), ".pi", "agent");
+const PI_AGENT_DIR = join(homedir(), ".pi", "agent");
+const CONFIG_DIR = join(PI_AGENT_DIR, "extensions", "model-switch");
 const CONFIG_PATH = join(CONFIG_DIR, "model-policy.json");
 
 // ── 模型信息提取 ───────────────────────────────────────
@@ -334,7 +335,7 @@ export function writePolicyConfig(json: string): { ok: true; path: string } | { 
 
 /** 读取 settings.json 中的 enabledModels */
 export function readEnabledModels(): string[] | undefined {
-	const settingsPath = join(CONFIG_DIR, "settings.json");
+	const settingsPath = join(PI_AGENT_DIR, "settings.json");
 	try {
 		if (!existsSync(settingsPath)) return undefined;
 		const raw = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
@@ -350,7 +351,7 @@ export function readEnabledModels(): string[] | undefined {
  * 未配置时的 system prompt 注入片段。
  */
 export const SETUP_HINT = `[Model Advisor]
-Status: NOT CONFIGURED — ~/.pi/agent/model-policy.json not found.
+Status: NOT CONFIGURED — ~/.pi/agent/extensions/model-switch/model-policy.json not found.
 The model-switch extension is installed but has no configuration.
 To set up: tell the user to run /setup-model-policy (auto-generates config from their models).
 Or use switch_model with action="setup" for manual description-based generation.
