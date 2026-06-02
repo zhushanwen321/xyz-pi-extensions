@@ -126,6 +126,58 @@ pnpm -r lint
 pnpm --filter @zhushanwen/pi-goal lint
 
 # 创建版本变更记录
+pnpm changeset # 交互式选择受影响的包和版本类型
+
+# 本地执行版本 bump（预览）
+pnpm changeset version
+
+# 提交版本变更和 changeset
+git add -A
+git commit -m "chore: bump versions"
+git push
+
+# 发布（本地直接发布，需要 npm login）
+npm login --registry https://registry.npmjs.org/
+pnpm changeset publish
+
+# 发布（dry run）
+pnpm changeset publish --dry-run
+
+# 校验 third-party extensions 注册表
+python3 scripts/validate-extensions-yaml.py
+```
+
+### 发布流程（GitHub Actions）
+
+项目通过 GitHub Actions 自动发布 npm 包。
+
+**发布步骤：**
+
+1. 本地创建 changeset：
+   ```bash
+   pnpm changeset         # 选择受影响的包 + patch/minor/major
+   git add .changeset/
+   git commit -m "chore: add changeset"
+   git push
+   ```
+
+2. 合并到 main 后，本地执行版本 bump：
+   ```bash
+   pnpm changeset version  # 自动 bump package.json 版本号
+   git add -A
+   git commit -m "chore: bump versions"
+   git push
+   ```
+
+3. GitHub Actions 自动：
+   - 运行 `.github/workflows/release.yml`
+   - 执行 `pnpm changeset publish`（需要 `secrets.NPM_TOKEN`）
+   - 推送版本 tags
+
+**前提条件：**
+- GitHub Secrets 中配置 `NPM_TOKEN`（npm access token with publish permission）
+- `NPM_TOKEN` 需要是 Automation token 或 classic token（非 granular）
+- 首次发布的包需要先在 npmjs.org 上通过 `npm publish --access public` 创建（scoped package 默认 private）
 pnpm changeset
 
 

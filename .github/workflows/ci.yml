@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
+  lint-and-typecheck:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,22 +28,5 @@ jobs:
       - name: ESLint
         run: pnpm exec eslint .
 
-  # typecheck 有 233 个 pre-existing TS 错误（Pi SDK 类型导出不全），
-  # 暂时设为 non-blocking，仅输出警告
-  typecheck:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
       - name: TypeCheck
-        run: pnpm exec tsc --noEmit || true
+        run: pnpm exec tsc --noEmit
