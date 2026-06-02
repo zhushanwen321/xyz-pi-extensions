@@ -210,9 +210,7 @@ export const PROBLEM_REGISTRY: ProblemDefinition[] = [
       extractor: "goal_quality",
       minerRules: [
         "goal-low-completion",
-        "goal-high-cancel",
         "goal-low-evidence",
-        "goal-low-evidence-quality",
         "goal-stall-frequent",
         "todo-high-abandon",
       ],

@@ -124,36 +124,34 @@ def extract(sessions: list[dict]) -> dict:
     low_quality_count = sum(1 for s in evidence_scores if s < 0.4)
 
     return {
-        "goal_quality_stats": {
-            "goals_total": goals_total,
-            "goals_completed": goals_completed,
-            "goals_budget_limited": goals_budget_limited,
-            "goals_cancelled": goals_cancelled,
-            "completion_rate": goals_completed / max(goals_total, 1),
-            "avg_tasks_per_goal": total_tasks / max(goals_total, 1),
-            "task_stats": {
-                "total": total_tasks,
-                "completed": completed_tasks,
-                "cancelled": cancelled_tasks,
-                "pending": pending_tasks,
-                "completion_rate": completed_tasks / max(total_tasks, 1),
-                "cancel_rate": cancelled_tasks / max(total_tasks, 1),
-            },
-            "evidence_stats": {
-                "tasks_with_evidence": tasks_with_evidence,
-                "evidence_rate": tasks_with_evidence / max(total_tasks, 1),
-                "avg_evidence_score": avg_evidence_score,
-                "low_quality_evidence_count": low_quality_count,
-            },
-            "stall_stats": {
-                "goals_with_stall": 1 if stall_count > 0 else 0,
-                "stall_rate": (1 if stall_count > 0 else 0) / max(goals_total, 1),
-                "avg_stall_count": stall_count / max(goals_total, 1),
-            },
-            "token_stats": {
-                "avg_tokens_per_goal": total_tokens / max(goals_total, 1),
-                "avg_tokens_per_task": total_tokens / max(total_tasks, 1),
-            },
+        "goals_total": goals_total,
+        "goals_completed": goals_completed,
+        "goals_budget_limited": goals_budget_limited,
+        "goals_cancelled": goals_cancelled,
+        "completion_rate": goals_completed / max(goals_total, 1),
+        "avg_tasks_per_goal": total_tasks / max(goals_total, 1),
+        "task_stats": {
+            "total": total_tasks,
+            "completed": completed_tasks,
+            "cancelled": cancelled_tasks,
+            "pending": pending_tasks,
+            "completion_rate": completed_tasks / max(total_tasks, 1),
+            "cancel_rate": cancelled_tasks / max(total_tasks, 1),
+        },
+        "evidence_stats": {
+            "tasks_with_evidence": tasks_with_evidence,
+            "evidence_rate": tasks_with_evidence / max(total_tasks, 1),
+            "avg_evidence_score": avg_evidence_score,
+            "low_quality_evidence_count": low_quality_count,
+        },
+        "stall_stats": {
+            "goals_with_stall": 1 if stall_count > 0 else 0,
+            "stall_rate": (1 if stall_count > 0 else 0) / max(goals_total, 1),
+            "avg_stall_count": stall_count / max(goals_total, 1),
+        },
+        "token_stats": {
+            "avg_tokens_per_goal": total_tokens / max(goals_total, 1),
+            "avg_tokens_per_task": total_tokens / max(total_tasks, 1),
         },
         "todo_stats": {
             "total_todos": todo_total,
