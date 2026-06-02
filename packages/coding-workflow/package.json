@@ -13,7 +13,6 @@
     "commands/"
   ],
   "dependencies": {
-    "@zhushanwen/pi-subagent": "workspace:*",
     "js-yaml": "^4.1.0"
   },
   "peerDependencies": {

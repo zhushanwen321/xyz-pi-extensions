@@ -29,9 +29,6 @@ importers:
       '@mariozechner/pi-coding-agent':
         specifier: '>=0.1.0'
         version: 0.73.1(ws@8.21.0)(zod@4.4.3)
-      '@zhushanwen/pi-subagent':
-        specifier: workspace:*
-        version: link:../subagent
       js-yaml:
         specifier: ^4.1.0
         version: 4.2.0
@@ -66,12 +63,6 @@ importers:
         specifier: '*'
         version: 0.73.1(ws@8.21.0)(zod@4.4.3)
 
-  packages/subagent:
-    dependencies:
-      '@mariozechner/pi-coding-agent':
-        specifier: '*'
-        version: 0.73.1(ws@8.21.0)(zod@4.4.3)
-
   packages/taste-lint:
     dependencies:
       eslint:
@@ -94,6 +85,12 @@ importers:
       typebox:
         specifier: '*'
         version: 1.1.39
+
+  packages/vision:
+    dependencies:
+      '@mariozechner/pi-coding-agent':
+        specifier: '*'
+        version: 0.73.1(ws@8.21.0)(zod@4.4.3)
 
   packages/workflow:
     dependencies:

@@ -18,7 +18,7 @@ import {
 import {
 	resolveModelByComplexity,
 	COMPLEXITY_DEFAULT_THINKING,
-} from "@zhushanwen/pi-subagent";
+} from "./model.js";
 
 // ─── Types ────────────────────────────────────────────────
 

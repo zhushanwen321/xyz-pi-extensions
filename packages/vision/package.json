@@ -1,14 +1,14 @@
 {
-  "name": "@zhushanwen/pi-subagent",
+  "name": "@zhushanwen/pi-vision",
   "version": "0.1.0",
-  "description": "Subagent delegation tool — parallel/chain/single execution with model selection, background jobs, and TUI rendering.",
-  "main": "src/index.ts",
+  "description": "Image analysis tool using multimodal vision models with memory sessions.",
+  "main": "index.ts",
+  "type": "module",
   "keywords": [
     "pi",
     "extension",
-    "subagent",
-    "parallel",
-    "background"
+    "vision",
+    "image-analysis"
   ],
   "license": "MIT",
   "files": [

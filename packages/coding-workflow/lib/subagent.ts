@@ -9,8 +9,8 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Message } from "@mariozechner/pi-ai";
 import { withFileMutationQueue } from "@mariozechner/pi-coding-agent";
-import type { ThinkingLevel } from "@zhushanwen/pi-subagent";
-import { THINKING_TO_PI } from "@zhushanwen/pi-subagent";
+import type { ThinkingLevel } from "./model.js";
+import { THINKING_TO_PI } from "./model.js";
 
 // ─── Types ────────────────────────────────────────────────
 
