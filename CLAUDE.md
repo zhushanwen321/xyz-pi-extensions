@@ -137,7 +137,7 @@ git add -A
 git commit -m "chore: bump versions"
 git push
 
-# 发布（dry run 预览）
+# 发布（dry run 预览，不实际发布）
 pnpm changeset publish --dry-run
 
 # 校验 third-party extensions 注册表
