@@ -89,7 +89,7 @@ def extract(sessions: list[dict]) -> dict:
             cumulative_chars += _extract_content_length(msg)
 
             # compact 事件
-            if msg.get("role") == "compactionSummary":
+            if msg.get("type") == "compaction":
                 total_compacts += 1
                 if current_model and current_model in MODEL_CONTEXT_LIMITS:
                     limit = MODEL_CONTEXT_LIMITS[current_model]

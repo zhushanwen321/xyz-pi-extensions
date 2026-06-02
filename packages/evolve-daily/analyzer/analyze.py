@@ -118,8 +118,10 @@ def generate_report(sessions: list[dict], format: str = "json") -> dict:
     Returns:
         分析报告字典。
     """
-    # 运行所有 extractors
-    extractor_results = run_extractors(sessions)
+    # 运行所有 extractors（传入当前工作目录作为 project_root）
+    project_root = str(Path.cwd())
+    extractor_results = run_extractors(sessions, project_root=project_root)
+
 
     # 运行所有 miner rules
     issues = run_rules(extractor_results)

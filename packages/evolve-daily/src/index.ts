@@ -21,13 +21,11 @@ const ANALYZER_PATH = join(
 // 删除旧 extension 后残留的 .md 文件可忽略。
 const REPORTS_DIR = join(homedir(), ".pi/agent/evolution-data/daily-reports");
 
-/** Detector 工厂创建的对象的统一接口 */
-interface DetectorInstance {
+/** tool_result 事件中匹配的工具结果 detector */
+interface ToolResultDetector {
   problemId: string;
-  events: string[];
   match(event: Record<string, unknown>): boolean;
   createItem(event: Record<string, unknown>): { id: string; problemId: string; status: string; detail?: string };
-  steering(item: { id: string; problemId: string; status: string; detail?: string }): string;
 }
 
 export default function evolveDailyExtension(pi: ExtensionAPI) {
@@ -63,11 +61,32 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
     }
   });
 
-  // ── L2: 实时追踪 detectors ──
-  const detectors: DetectorInstance[] = [
-    createCompactDetector(
-      PROBLEM_REGISTRY.find((p) => p.id === "compact-frequency")!
-    ),
+  // ── L2a: Compact 实时追踪 — 监听 session_compact 事件 ──
+  const compactDetector = createCompactDetector(
+    PROBLEM_REGISTRY.find((p) => p.id === "compact-frequency")!
+  );
+
+  pi.on("session_compact", async (event: Record<string, unknown>) => {
+    try {
+      const item = compactDetector.createItem(event);
+      pi.appendEntry("evolve-feedback", {
+        problemId: item.problemId,
+        itemId: item.id,
+        status: item.status,
+        detail: item.detail ?? null,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.error(
+        `[evolve-daily] compact detector error:`,
+        e
+      );
+    }
+  });
+
+  // ── L2b: 工具结果实时追踪 — 监听 tool_result 事件 ──
+  // subagent/param-error/goal-quality detectors 检查 event.type === "tool_result"
+  const toolDetectors: ToolResultDetector[] = [
     createSubagentDetector(
       PROBLEM_REGISTRY.find((p) => p.id === "subagent-efficiency")!
     ),
@@ -80,9 +99,9 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
   ];
 
   pi.on(
-    "tool_execution_end",
+    "tool_result",
     async (event: Record<string, unknown>, _ctx?: unknown) => {
-      for (const detector of detectors) {
+      for (const detector of toolDetectors) {
         try {
           if (detector.match(event)) {
             const item = detector.createItem(event);

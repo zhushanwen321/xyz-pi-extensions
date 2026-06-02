@@ -35,20 +35,26 @@ def discover_extractors() -> dict[str, object]:
     return extractors
 
 
-def run_extractors(sessions: list[dict]) -> dict:
+def run_extractors(sessions: list[dict], project_root: str = "") -> dict:
     """运行所有 extractor，每个 extractor 独立运行，失败时返回空结果。
 
     Args:
         sessions: session JSONL 解析后的字典列表。
+        project_root: 项目根目录路径（可选，用于 workflow extractor 扫描 .xyz-harness/）。
 
     Returns:
         合并后的提取结果，key 为 "{extractor_name}_stats"。
     """
+    import inspect
     results: dict = {}
     extractors = discover_extractors()
     for name, extractor in extractors.items():
         try:
-            results[f"{name}_stats"] = extractor.extract(sessions)  # type: ignore[attr-defined]
+            sig = inspect.signature(extractor.extract)
+            if "project_root" in sig.parameters:
+                results[f"{name}_stats"] = extractor.extract(sessions, project_root=project_root)  # type: ignore[attr-defined]
+            else:
+                results[f"{name}_stats"] = extractor.extract(sessions)  # type: ignore[attr-defined]
         except Exception as exc:
             print(f"[evolve] Warning: Extractor {name} failed: {exc}")
             results[f"{name}_stats"] = {}

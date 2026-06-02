@@ -6,8 +6,7 @@ export interface CompactTrackedItem {
   id: string;
   problemId: "compact-frequency";
   sessionId: string;
-  turnIndex: number;
-  messagesBefore: number;
+  tokensBefore: number;
   detected: boolean;
   status: "pending" | "completed" | "error" | "dismissed";
   detail?: string;
@@ -16,26 +15,20 @@ export interface CompactTrackedItem {
 export function createCompactDetector(problem: ProblemDefinition) {
   return {
     problemId: problem.id,
-    events: problem.detector.events,
 
-    match(event: { type: string; message?: { role: string } }): boolean {
-      if (event.type !== "message_end") return false;
-      if (!event.message) return false;
-      return event.message.role === "compactionSummary";
-    },
-
+    /**
+     * 从 session_compact 事件创建 tracked item。
+     * compact 不通过通用的 tool_execution_end handler，
+     * 而是独立监听 pi.on("session_compact") 事件。
+     */
     createItem(event: {
-      type: string;
-      message?: { role: string };
-      turnIndex?: number;
-      messagesBefore?: number;
+      compactionEntry?: { tokensBefore?: number };
     }): CompactTrackedItem {
       return {
         id: `compact-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         problemId: problem.id as "compact-frequency",
         sessionId: "",
-        turnIndex: event.turnIndex ?? 0,
-        messagesBefore: event.messagesBefore ?? 0,
+        tokensBefore: event.compactionEntry?.tokensBefore ?? 0,
         detected: true,
         status: "pending",
       };
@@ -44,7 +37,7 @@ export function createCompactDetector(problem: ProblemDefinition) {
     steering(item: CompactTrackedItem): string {
       return problem.detector.steering
         .replace("{{id}}", item.id)
-        .replace("{{turnIndex}}", String(item.turnIndex));
+        .replace("{{tokensBefore}}", String(item.tokensBefore));
     },
   };
 }

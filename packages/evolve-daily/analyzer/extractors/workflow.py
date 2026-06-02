@@ -1,7 +1,9 @@
 """分析 coding-workflow 各阶段耗时。"""
 
+import re
 from typing import Any
 from datetime import datetime
+from pathlib import Path
 
 
 def _parse_iso_timestamp(ts: str) -> datetime | None:
@@ -14,13 +16,102 @@ def _parse_iso_timestamp(ts: str) -> datetime | None:
         return None
 
 
-def extract(sessions: list[dict]) -> dict:
+def _parse_frontmatter_int(content: str, field: str) -> int:
+    """从 YAML frontmatter 中解析整数字段。"""
+    match = re.search(rf"^{field}:\s*(\d+)", content, re.M)
+    if match:
+        return int(match.group(1))
+    return 0
+
+
+def _scan_harness_reviews(harness_dir: Path) -> tuple[int, dict[str, int]]:
+    """扫描 .xyz-harness/ 目录下的 review 文件。
+
+    Returns:
+        (total_must_fix, by_phase) 元素组。
+    """
+    total_must_fix = 0
+    by_phase: dict[str, int] = {}
+    reviews_dir = harness_dir / "changes" / "reviews"
+    if not reviews_dir.exists():
+        return 0, {}
+
+    for review_file in reviews_dir.glob("*.md"):
+        try:
+            content = review_file.read_text(encoding="utf-8")
+            must_fix = _parse_frontmatter_int(content, "must_fix")
+            total_must_fix += must_fix
+            # 从文件名提取 phase
+            name = review_file.stem.lower()
+            for phase in ["spec", "plan", "dev", "test", "pr"]:
+                if phase in name and "review" in name and "gate" not in name:
+                    by_phase[phase] = by_phase.get(phase, 0) + must_fix
+                    break
+        except Exception:
+            continue
+    return total_must_fix, by_phase
+
+
+def _scan_harness_retrospects(harness_dir: Path) -> tuple[int, int]:
+    """扫描 .xyz-harness/ 目录下的 retrospect 文件。
+
+    Returns:
+        (written_count, expected_count) 元素组。
+    """
+    written = 0
+    expected = 5  # 每个 workflow 期望 5 个 phase 的 retrospect
+    reviews_dir = harness_dir / "changes" / "reviews"
+    if not reviews_dir.exists():
+        return 0, expected
+
+    for phase in ["spec", "plan", "dev", "test", "overall"]:
+        if list(reviews_dir.glob(f"{phase}_retrospect.md")):
+            written += 1
+    return written, expected
+
+
+def _scan_all_harness_dirs(project_root: str) -> tuple[int, dict[str, int], int, int]:
+    """扫描项目根目录下所有 .xyz-harness/<topic>/ 目录。
+
+    Returns:
+        (total_must_fix, by_phase, retrospect_written, retrospect_expected)
+    """
+    total_must_fix = 0
+    by_phase: dict[str, int] = {}
+    retrospect_written = 0
+    retrospect_expected = 0
+
+    if not project_root:
+        return 0, {}, 0, 0
+
+    harness_root = Path(project_root) / ".xyz-harness"
+    if not harness_root.exists():
+        return 0, {}, 0, 0
+
+    for topic_dir in harness_root.iterdir():
+        if not topic_dir.is_dir():
+            continue
+        reviews_must_fix, reviews_by_phase = _scan_harness_reviews(topic_dir)
+        total_must_fix += reviews_must_fix
+        for phase, count in reviews_by_phase.items():
+            by_phase[phase] = by_phase.get(phase, 0) + count
+
+        written, expected = _scan_harness_retrospects(topic_dir)
+        retrospect_written += written
+        retrospect_expected += expected
+
+    return total_must_fix, by_phase, retrospect_written, retrospect_expected
+
+
+def extract(sessions: list[dict], project_root: str = "") -> dict:
     """从 session 列表中提取工作流统计。
 
     分析 coding-workflow 各阶段的耗时、gate 通过率、完成/放弃数等。
+    同时扫描 .xyz-harness/ 目录下的 review 和 retrospect 文件。
 
     Args:
         sessions: session JSONL 解析后的字典列表。
+        project_root: 项目根目录路径（用于扫描 .xyz-harness/ 文件）。
 
     Returns:
         包含工作流阶段耗时和通过率统计信息。
@@ -35,9 +126,6 @@ def extract(sessions: list[dict]) -> dict:
         "pr": [],
     }
     gate_results: dict[str, dict[str, int]] = {}
-    review_findings_total = 0
-    retrospect_written = 0
-    retrospect_expected = 0
 
     for session in sessions:
         messages = session.get("messages", [])
@@ -125,6 +213,11 @@ def extract(sessions: list[dict]) -> dict:
         stats["avg_minutes"] for stats in phase_stats.values()
     )
 
+    # 从 .xyz-harness/ 目录扫描 review 和 retrospect 文件
+    review_must_fix, review_by_phase, retrospect_written, retrospect_expected = (
+        _scan_all_harness_dirs(project_root)
+    )
+
     return {
         "workflows_completed": workflows_completed,
         "workflows_abandoned": workflows_abandoned,
@@ -132,9 +225,9 @@ def extract(sessions: list[dict]) -> dict:
         "phase_stats": phase_stats,
         "gate_results": gate_results,
         "review_findings": {
-            "total_must_fix": review_findings_total,
-            "avg_per_workflow": review_findings_total / max(workflows_completed, 1),
-            "by_phase": {},
+            "total_must_fix": review_must_fix,
+            "avg_per_workflow": review_must_fix / max(workflows_completed, 1),
+            "by_phase": review_by_phase,
         },
         "retrospect_coverage": {
             "written": retrospect_written,
