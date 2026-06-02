@@ -13,7 +13,7 @@ import type {
   Theme,
 } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import type { Static } from "typebox";
+
 
 import {
   canTransition,
@@ -22,7 +22,7 @@ import {
   isTerminalStatus,
   serializeState,
   TrackerParams,
-  type Anchor,
+
   type TrackedItem,
   type TrackerDetails,
   type TrackerRuntimeState,

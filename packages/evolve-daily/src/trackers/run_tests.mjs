@@ -60,7 +60,7 @@ let failCount = 0;
 
 function record(caseId, passed, steps, evidence) {
   results.push({ caseId, round: 1, passed, execute_steps: steps, evidence });
-  passed ? passCount++ : failCount++;
+  if (passed) { passCount++; } else { failCount++; }
   console.log(`  ${caseId}: ${passed ? "PASS" : "FAIL"}${passed ? "" : " — " + evidence}`);
 }
 
