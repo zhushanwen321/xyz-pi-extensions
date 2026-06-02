@@ -1,14 +1,27 @@
 {
   "name": "@zhushanwen/pi-claude-rules-loader",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Load CLAUDE.md rules for Pi coding agent",
   "main": "index.ts",
   "type": "module",
-  "files": ["index.ts"],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "files": [
+    "index.ts"
+  ],
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": ">=0.1.0"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
   }
 }

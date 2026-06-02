@@ -1,5 +1,5 @@
 #!/bin/bash
-# pre-commit — 类型检查 + ESLint 品味检查
+# pre-commit — 类型检查 + ESLint 品味检查 + pi manifest 检查
 #
 # 跳过方式：SKIP_LINT=1 git commit -m "..."
 set -euo pipefail
@@ -10,12 +10,6 @@ if [[ "${SKIP_LINT:-}" == "1" ]]; then
 fi
 
 # rebase 中跳过 hook，完成后手动跑一次全量验证
-#
-# 检测原理：rebase replay 时 git 通过环境变量指向实际 gitdir。
-# 在 bare+worktree 模式下，worktree 内的 .git 是文本文件指向 bare repo，
-# 因此 --git-path rebase-merge 返回的相对路径在 worktree 下不存在。
-# 改用 --git-dir 获取实际 gitdir 再检查。
-#
 if GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) && \
    [ -d "$GIT_DIR/rebase-merge" ]; then
   echo "[pre-commit] rebase 进行中，跳过 hook"
@@ -24,12 +18,84 @@ fi
 
 C_RED='\033[0;31m'
 C_GREEN='\033[0;32m'
+C_YELLOW='\033[0;33m'
 C_RESET='\033[0m'
+
+# ── 0. pi manifest 检查 ──────────────────────────────────
+echo "--- pi manifest 检查 ---"
+HAS_ERROR=0
+for pkg_json in packages/*/package.json; do
+  dir=$(dirname "$pkg_json")
+  name=$(basename "$dir")
+
+  # 跳过 private 包、非扩展包、taste-lint (ESLint config)
+  if [[ "$name" == "taste-lint" ]]; then
+    continue
+  fi
+  is_private=$(python3 -c "import json; print(json.load(open('$pkg_json')).get('private', False))" 2>/dev/null)
+  if [[ "$is_private" == "True" ]]; then
+    continue
+  fi
+
+  # 检查 pi.extensions 字段
+  has_pi_ext=$(python3 -c "
+import json
+import os
+d=json.load(open('$pkg_json'))
+pi=d.get('pi',{})
+exts=pi.get('extensions',[])
+if exts:
+    # 验证入口文件存在
+    for e in exts:
+        p=os.path.join('$dir', e.lstrip('./'))
+        if not os.path.isfile(p):
+            print(f'MISSING_ENTRY:{e}')
+            exit(0)
+    print('OK')
+else:
+    print('NO_PI_EXTENSIONS')
+" 2>/dev/null)
+
+  if [[ "$has_pi_ext" == "OK" ]]; then
+    echo -e "  ${C_GREEN}[ OK ]${C_RESET} $name: pi.extensions 已声明"
+  elif [[ "$has_pi_ext" == NO_PI_EXTENSIONS* ]]; then
+    echo -e "  ${C_RED}[FAIL]${C_RESET} $name: 缺少 pi.extensions 字段"
+    echo -e "         ${C_YELLOW}修复：在 package.json 中添加 \"pi\": { \"extensions\": [\"./src/index.ts\"] }${C_RESET}"
+    HAS_ERROR=1
+  elif [[ "$has_pi_ext" == MISSING_ENTRY* ]]; then
+    entry=${has_pi_ext#MISSING_ENTRY:}
+    echo -e "  ${C_RED}[FAIL]${C_RESET} $name: pi.extensions 声明的入口 $entry 不存在"
+    HAS_ERROR=1
+  fi
+
+  # 检查 type: module
+  has_type_module=$(python3 -c "import json; print(json.load(open('$pkg_json')).get('type') == 'module')" 2>/dev/null)
+  if [[ "$has_type_module" != "True" ]]; then
+    echo -e "  ${C_RED}[FAIL]${C_RESET} $name: 缺少 \"type\": \"module\""
+    HAS_ERROR=1
+  fi
+
+  # 检查 pi-package keyword
+  has_kw=$(python3 -c "import json; print('pi-package' in json.load(open('$pkg_json')).get('keywords',[]))" 2>/dev/null)
+  if [[ "$has_kw" != "True" ]]; then
+    echo -e "  ${C_RED}[FAIL]${C_RESET} $name: keywords 缺少 \"pi-package\""
+    HAS_ERROR=1
+  fi
+done
+
+if [[ $HAS_ERROR -eq 1 ]]; then
+  echo ""
+  echo -e "${C_RED}[FAIL]${C_RESET} pi manifest 检查失败"
+  echo -e "${C_YELLOW}无论是否本次修改导致，都需要修复，不得跳过${C_RESET}"
+  exit 1
+fi
+echo -e "${C_GREEN}[ OK ]${C_RESET} pi manifest 检查通过"
 
 # ── 1. tsc 类型检查 ──────────────────────────────────────
 echo "--- tsc --noEmit ---"
 if ! npx tsc --noEmit 2>&1; then
   echo -e "${C_RED}[FAIL]${C_RESET} TypeScript 类型检查失败"
+  echo -e "${C_YELLOW}无论是否本次修改导致，都需要修复，不得跳过${C_RESET}"
   exit 1
 fi
 echo -e "${C_GREEN}[ OK ]${C_RESET} tsc 通过"
@@ -46,6 +112,7 @@ echo "--- eslint ---"
 # 将 staged 文件列表传给 eslint
 if ! npx eslint $STAGED 2>&1; then
   echo -e "${C_RED}[FAIL]${C_RESET} ESLint 检查失败"
+  echo -e "${C_YELLOW}无论是否本次修改导致，都需要修复，不得跳过${C_RESET}"
   echo "修复：npm run lint:fix 或 SKIP_LINT=1 git commit 跳过"
   exit 1
 fi
