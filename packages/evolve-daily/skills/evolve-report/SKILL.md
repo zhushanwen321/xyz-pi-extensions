@@ -44,6 +44,58 @@ User says "/evolve-report", "evolve-report", "查看报告", "进化报告",
    - Token consumption (input/output)
    - Anomalies and signals
    - Improvement suggestions (if any in the report)
+4. **New Dimensions** — if present in the report, display additional sections:
+
+   #### Tool Parameter Errors (`tool_error_stats`)
+
+   Display when `tool_error_stats` field exists:
+   - Param error rate per tool (highlight tools with rate > 25%)
+   - Top parameter error patterns with occurrence counts
+   - Actionable issues from feedback-records (if any)
+
+   #### Goal Task Quality (`goal_quality_stats`)
+
+   Display when `goal_quality_stats` field exists:
+   - Task completion rate (highlight if < 50%)
+   - Average tasks per goal
+   - Evidence quality distribution (high/medium/low)
+   - Actionable issues: task splitting, evidence requirements
+
+   #### Subagent Efficiency (`subagent_stats`)
+
+   Display when `subagent_stats` field exists:
+   - Success / failure / retry counts
+   - Failure rate (highlight if > 20%)
+   - Retry rate (highlight if > 15%)
+   - Actionable issues: task prompt optimization, task splitting
+
+   #### Compact & Context Efficiency (`compact_stats` + `context_stats`)
+
+   Display when either field exists:
+   - Average compacts per session (highlight if ≥ 3)
+   - Context utilization trend (rising / stable / falling)
+   - Actionable issues: context management, tool output optimization
+
+   #### Workflow Efficiency (`workflow_stats`)
+
+   Display when `workflow_stats` field exists:
+   - Per-phase duration breakdown (highlight phase > 50% of total)
+   - Gate retry frequency per phase
+   - Actionable issues: workflow optimization, gate criteria tuning
+
+   #### Todo Usage (`todo_stats`)
+
+   Display when `todo_stats` field exists:
+   - Completion / abandon / in-progress counts
+   - Abandon rate (highlight if > 25%)
+   - Actionable issues: todo usage pattern optimization
+
+   **Formatting guidelines for new dimensions:**
+   - Use a consistent section header format: `### Dimension Name`
+   - Show metrics as key-value pairs or simple tables
+   - Prefix actionable issues with `⚠` marker
+   - If a dimension field is missing from the report, skip that section entirely
+   - Group all new dimension sections under a `## Extended Metrics` heading
 
 ### List Reports
 
