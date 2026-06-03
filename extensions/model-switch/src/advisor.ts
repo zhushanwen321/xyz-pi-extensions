@@ -1,14 +1,20 @@
 /**
- * Model Switch — 推荐引擎
+ * Model Switch — 数据提取层
  *
- * 三层决策：
- * 1. 场景硬性需求（vision/planning → 固定模型，不受预算影响）
- * 2. KV Cache 粘性保护（连续 turn 数 + input tokens 阈值）
- * 3. 预算决策（高峰期 vs 非高峰期，套餐用量）
+ * 从 cache 和 session entries 中提取结构化数据供 prompt 注入。
+ * 从 provider-plan 映射计算实时推荐。
  */
 
 import type { CacheData } from "@zhushanwen/pi-quota-providers";
-import type { ModelPolicy, Recommendation, QuotaSnapshot, SessionEntries } from "./types";
+import type {
+	ModelPolicy,
+	PlanConfig,
+	PlanQuota,
+	QuotaSnapshot,
+	SessionEntries,
+	StickinessInfo,
+	RecommendInfo,
+} from "./types";
 
 // ── 时间常量 ────────────────────────────────────────────
 
@@ -16,133 +22,39 @@ const SECONDS_PER_DAY = 86400;
 const SECONDS_PER_HOUR = 3600;
 const SECONDS_PER_MINUTE = 60;
 
+// ── 业务阈值常�� ─────────────────────────────────────────
+
+/** Z.ai rolling 窗口安全阀：超过此百分比时，即使在非 peak 也禁用 */
+const ZAI_SAFETY_VALVE = 95;
+
+/** peak 时段窗口使用率阈值：超过此值时，若 peak 与窗口前半段重叠则禁用 */
+const PEAK_WINDOW_THRESHOLD = 50;
+
 // ── 公共 API ────────────────────────────────────────────
 
 /**
- * 计算推荐模型。
+ * 从缓存数据中计算所有 plan 的用量快照。
+ * 通过 plan 名匹配 cache key（quota-provider 的 id）。
  */
-export function computeRecommendation(
-	config: ModelPolicy,
-	scene: string,
-	currentModel: string,
-	sessionEntries: SessionEntries,
-): Recommendation {
-	const sceneAliases = config.scenes[scene];
-	if (!sceneAliases || sceneAliases.length === 0) {
-		const fallback = findFirstModel(config);
-		if (!fallback) throw new Error("No models configured");
-		return makeRec(config, fallback, "Default (no scene config)", fallback);
-	}
-
-	// 第 1 层：场景硬性需求
-	if (isHardScene(scene)) {
-		const alias = sceneAliases[0]!;
-		return makeRec(config, alias, `Scene: ${scene}, fixed model`, alias);
-	}
-
-	// 第 3 层：预算决策
-	const snapshot = computeQuotaSnapshotFromCache(sessionEntries);
-	const now = new Date();
-	const { planKey, planInfo } = findPrimaryPlan(config);
-	const budgetResult = budgetDecision(snapshot, planInfo, now, planKey);
-
-	const budgetAlias = sceneAliases.find((a) => config.models[a]?.plan === budgetResult.provider);
-	const finalBudgetAlias = budgetAlias ?? sceneAliases[0]!;
-
-	// 第 2 层：粘性检查
-	const stickyInfo = computeStickiness(sessionEntries, config);
-	const currentAlias = findAliasForModel(config, currentModel);
-	const shouldSwitch = finalBudgetAlias !== currentAlias;
-
-	if (shouldSwitch && currentAlias && stickyInfo.isSticky && !budgetResult.urgent) {
-		const curEntry = config.models[currentAlias];
-		return {
-			model: currentAlias,
-			provider: curEntry?.provider ?? currentModel.split("/")[0] ?? "",
-			modelId: curEntry?.modelId ?? currentModel.split("/")[1] ?? "",
-			reason: `Staying on ${currentModel} due to KV cache (${stickyInfo.turns} turns / ${stickyInfo.inputTokens} tokens). Switch cost > peak surcharge.`,
-			stickyOverride: true,
-			budgetModel: finalBudgetAlias,
-		};
-	}
-
-	return makeRec(config, finalBudgetAlias, budgetReason(budgetResult, planInfo, now, planKey), finalBudgetAlias);
-}
-
-/**
- * 从缓存数据中计算套餐快照。
- */
-export function computeQuotaSnapshot(cache: CacheData): QuotaSnapshot {
+export function computeQuotaSnapshot(cache: CacheData, config: ModelPolicy): QuotaSnapshot {
 	const cacheRec = cache as Record<string, unknown>;
-	const zaiData = cacheRec["zhipu"] as Record<string, unknown> | undefined;
-	const ocgData = cacheRec["opencodeGo"] as Record<string, unknown> | undefined;
+	const plans: Record<string, PlanQuota> = {};
 
-	return {
-		zai: zaiData
-			? {
-					pct: (zaiData.tokensPct as number) ?? 0,
-					resetSec: parseZaiResetTime((zaiData.resetTime as string) ?? ""),
-				}
-			: null,
-		ocg: ocgData
-			? {
-					rollingPct: ((ocgData.rolling as Record<string, unknown> | undefined)?.usagePercent as number) ?? 0,
-					weeklyPct: ((ocgData.weekly as Record<string, unknown> | undefined)?.usagePercent as number) ?? 0,
-					resetSec: ((ocgData.rolling as Record<string, unknown> | undefined)?.resetInSec as number) ?? 0,
-				}
-			: null,
-	};
+	for (const planName of Object.keys(config.plans)) {
+		const quota = extractSingleQuota(planName, cacheRec);
+		if (quota) plans[planName] = quota;
+	}
+
+	return { plans };
 }
 
 /**
- * 检测当前场景。
+ * 从 session entries 中提取粘性信息。
  */
-export function detectScene(prompt: string, toolName?: string): string {
-	if (toolName === "analyze_image" || /\bimage\b/i.test(prompt)) return "vision";
-	if (/\b(plan|architecture|design)\b/i.test(prompt)) return "planning";
-	return "coding";
-}
-
-// ── 内部工具 ────────────────────────────────────────────
-
-const HARD_SCENES = new Set(["vision", "planning"]);
-
-function isHardScene(scene: string): boolean {
-	return HARD_SCENES.has(scene);
-}
-
-/** 从 session entries 获取 cache 数据并计算 snapshot */
-function computeQuotaSnapshotFromCache(_entries: SessionEntries): QuotaSnapshot {
-	// readCache 需要从 quota-providers 动态导入
-	// 当前直接返回空 snapshot，由 index.ts 调用时传入
-	return { zai: null, ocg: null };
-}
-
-function parseZaiResetTime(label: string): number {
-	if (!label) return 0;
-	const dM = label.match(/(\d+)d/);
-	const hM = label.match(/(\d+)h/);
-	const mM = label.match(/(\d+)m/);
-	let sec = 0;
-	if (dM) sec += Number(dM[1]) * SECONDS_PER_DAY;
-	if (hM) sec += Number(hM[1]) * SECONDS_PER_HOUR;
-	if (mM) sec += Number(mM[1]) * SECONDS_PER_MINUTE;
-	return sec;
-}
-
-interface StickinessInfo {
-	isSticky: boolean;
-	turns: number;
-	inputTokens: number;
-}
-
-function computeStickiness(
+export function computeStickiness(
 	entries: SessionEntries,
-	config?: ModelPolicy,
+	_config?: ModelPolicy,
 ): StickinessInfo {
-	const minTurns = config?.stickiness?.minTurns ?? 3;
-	const minInputTokens = config?.stickiness?.minInputTokens ?? 20_000;
-
 	let lastModelChangeIdx = -1;
 	let lastCompactionIdx = -1;
 
@@ -153,17 +65,16 @@ function computeStickiness(
 		if (lastModelChangeIdx !== -1 && lastCompactionIdx !== -1) break;
 	}
 
-	const stickStartIdx = Math.max(lastModelChangeIdx, lastCompactionIdx);
+	const justCompacted = lastCompactionIdx >= 0 && countTurnsAfter(entries, lastCompactionIdx) <= 1;
 
-	if (lastCompactionIdx >= 0) {
-		const compactionTurnCount = countTurnsAfter(entries, lastCompactionIdx);
-		if (compactionTurnCount <= 1) {
-			return { isSticky: false, turns: 0, inputTokens: 0 };
-		}
+	if (justCompacted) {
+		return { turns: 0, inputTokens: 0, justCompacted: true };
 	}
 
+	const stickStartIdx = Math.max(lastModelChangeIdx, lastCompactionIdx);
 	let turns = 0;
 	let inputTokens = 0;
+
 	for (let i = stickStartIdx + 1; i < entries.length; i++) {
 		const e = entries[i]!;
 		if (e.type === "message") {
@@ -175,7 +86,151 @@ function computeStickiness(
 		}
 	}
 
-	return { isSticky: turns >= minTurns && inputTokens >= minInputTokens, turns, inputTokens };
+	return { turns, inputTokens, justCompacted: false };
+}
+
+/**
+ * 计算高峰期推荐结论（仅针对有 peak 配置的 plan）。
+ * 当前专用于 zhipu 的 peak 时段判断。
+ *
+ * 规则：
+ * - 非高峰期 → ok
+ * - 高峰期，且 5h 窗口后半段与 peak 重叠 → ok（即将 reset）
+ * - 高峰期，且 5h 窗口前半段与 peak 重叠，用量 >50% → avoid
+ */
+export function computePeakRecommend(
+	now: Date,
+	config: ModelPolicy,
+	snapshot: QuotaSnapshot,
+): RecommendInfo {
+	// 找到有 peak 配置的 plan
+	const peakPlan = findPeakPlan(config);
+	if (!peakPlan) return { result: "ok", reason: "Off-peak" };
+
+	const [planName, planCfg] = peakPlan;
+	const peak = planCfg.peak!;
+	const h = now.getHours();
+	const inPeak = h >= peak.start && h < peak.end;
+
+	if (!inPeak) return { result: "ok", reason: "Off-peak" };
+
+	const quota = snapshot.plans[planName];
+	if (!quota || quota.pct === null) {
+		return { result: "avoid", reason: "Peak hours, no quota data" };
+	}
+
+	if (quota.pct > ZAI_SAFETY_VALVE) {
+		return { result: "avoid", reason: `Peak hours, ${quota.pct}% used (near limit)` };
+	}
+
+	const winHours = planCfg.rollingWindowHours ?? 5;
+	const winSec = winHours * SECONDS_PER_HOUR;
+
+	if (quota.resetSec === null || quota.resetSec <= 0 || quota.resetSec >= winSec) {
+		// 无法确定窗口位置，保守处理
+		return { result: quota.pct > PEAK_WINDOW_THRESHOLD ? "avoid" : "ok", reason: inPeak ? `Peak hours, ${quota.pct}% used` : "Off-peak" };
+	}
+
+	const elapsedSec = winSec - quota.resetSec;
+	const windowStartMs = now.getTime() - elapsedSec * 1000;
+	const windowMidMs = windowStartMs + (winSec / 2) * 1000;
+
+	const peakStartMs = new Date(now).setHours(peak.start, 0, 0, 0);
+	const peakEndMs = new Date(now).setHours(peak.end, 0, 0, 0);
+
+	const peakInFirstHalf = peakStartMs < windowMidMs && peakEndMs > windowStartMs;
+
+	if (peakInFirstHalf && quota.pct > PEAK_WINDOW_THRESHOLD) {
+		return { result: "avoid", reason: `Peak hours, >50% window (${quota.pct}%), peak overlaps early window` };
+	}
+
+	return { result: "ok", reason: `Peak hours, ${!peakInFirstHalf ? "peak overlaps late window" : `${quota.pct}% used, within budget`}` };
+}
+
+// ── 内部工具 ────────────────────────────────────────────
+
+/**
+ * 从 cache 中提取单个 plan 的用量快照。
+ * 自动适配各 provider 的不同原始数据格式。
+ */
+function extractSingleQuota(planName: string, cacheRec: Record<string, unknown>): PlanQuota | null {
+	const raw = cacheRec[planName];
+	if (!raw || typeof raw !== "object") return null;
+	const d = raw as Record<string, unknown>;
+
+	// Pattern 1: zhipu 风格 { tokensPct, resetTime: "3h48m" }
+	if (typeof d.tokensPct === "number") {
+		return {
+			pct: d.tokensPct as number,
+			resetSec: parseZaiResetTime((d.resetTime as string) ?? ""),
+			label: planName,
+		};
+	}
+
+	// Pattern 2: opencode-go 风格 { rolling: { usagePercent, resetInSec } }
+	const rolling = d.rolling as Record<string, unknown> | undefined;
+	if (rolling && typeof rolling.usagePercent === "number") {
+		return {
+			pct: rolling.usagePercent as number,
+			resetSec: (rolling.resetInSec as number) ?? null,
+			label: planName,
+		};
+	}
+
+	// Pattern 3: kimi 风格 { rollingWindow: { usedPct, resetTime: ISO } }
+	const rw = d.rollingWindow as Record<string, unknown> | undefined;
+	if (rw && typeof rw.usedPct === "number") {
+		return {
+			pct: rw.usedPct as number,
+			resetSec: parseIsoRemaining((rw.resetTime as string) ?? ""),
+			label: planName,
+		};
+	}
+
+	// Pattern 4: minimax 风格 { models: [{ model_name, remains_time, current_interval_remaining_percent }] }
+	const models = d.models as Array<Record<string, unknown>> | undefined;
+	if (models && Array.isArray(models)) {
+		const general = models.find((m) => m.model_name === "general") as Record<string, unknown> | undefined;
+		if (general) {
+			const remPct = general.current_interval_remaining_percent as number | undefined;
+			const used = remPct !== undefined ? Math.max(0, Math.min(100, 100 - remPct)) : null;
+			const remainsMs = general.remains_time as number | undefined;
+			if (used !== null) {
+				return { pct: used, resetSec: remainsMs ? Math.ceil(remainsMs / 1000) : null, label: planName };
+			}
+		}
+	}
+
+	return null;
+}
+
+/** 查找配置中 priority 最高的有 peak 设置的 plan */
+function findPeakPlan(config: ModelPolicy): [string, PlanConfig] | null {
+	const entries = Object.entries(config.plans).filter(([, p]) => p.peak);
+	if (entries.length === 0) return null;
+	entries.sort(([, a], [, b]) => a.priority - b.priority);
+	return entries[0]!;
+}
+
+/** 解析 Z.ai 的 resetTime（"3h48m" → 秒） */
+export function parseZaiResetTime(label: string): number {
+	if (!label) return 0;
+	const dM = label.match(/(\d+)d/);
+	const hM = label.match(/(\d+)h/);
+	const mM = label.match(/(\d+)m/);
+	let sec = 0;
+	if (dM) sec += Number(dM[1]) * SECONDS_PER_DAY;
+	if (hM) sec += Number(hM[1]) * SECONDS_PER_HOUR;
+	if (mM) sec += Number(mM[1]) * SECONDS_PER_MINUTE;
+	return sec;
+}
+
+/** 解析 ISO 剩余时间 → 秒 */
+function parseIsoRemaining(iso: string): number {
+	if (!iso) return 0;
+	const target = new Date(iso).getTime();
+	const now = Date.now();
+	return Math.max(0, Math.ceil((target - now) / 1000));
 }
 
 function countTurnsAfter(entries: SessionEntries, startIdx: number): number {
@@ -188,94 +243,4 @@ function countTurnsAfter(entries: SessionEntries, startIdx: number): number {
 		}
 	}
 	return count;
-}
-
-interface PlanInfo {
-	peak?: { start: number; end: number; multiplier: number };
-	budgetTarget?: number;
-}
-
-interface BudgetResult {
-	provider: string;
-	urgent?: boolean;
-}
-
-const BUDGET_TARGET_DEFAULT = 80;
-const OCG_NEAR_LIMIT_PCT = 80;
-const URGENCY_RESET_SEC = 3600;
-const URGENCY_REMAINING_PCT = 15;
-
-function budgetDecision(snapshot: QuotaSnapshot, plan: PlanInfo, now: Date, planKey: string): BudgetResult {
-	const zai = snapshot.zai;
-	const ocg = snapshot.ocg;
-	const fallbackPlanKey = findFallbackPlanKey(planKey);
-
-	if (!zai) return { provider: planKey };
-
-	const budgetTarget = plan.budgetTarget ?? BUDGET_TARGET_DEFAULT;
-	const zaiRemaining = budgetTarget - zai.pct;
-	const isPeak = plan.peak ? plan.peak.start <= now.getHours() && now.getHours() < plan.peak.end : false;
-
-	if (!isPeak) return { provider: planKey };
-
-	const urgency = zai.resetSec < URGENCY_RESET_SEC && zaiRemaining > URGENCY_REMAINING_PCT;
-	if (urgency) return { provider: planKey, urgent: true };
-	if (zaiRemaining <= 0) return { provider: fallbackPlanKey };
-	if (ocg && ocg.rollingPct > OCG_NEAR_LIMIT_PCT) return { provider: planKey };
-
-	return { provider: fallbackPlanKey };
-}
-
-function findPrimaryPlan(config: ModelPolicy): { planKey: string; planInfo: PlanInfo } {
-	const plans = Object.entries(config.plans)
-		.filter(([, p]) => p.peak || p.budgetTarget != null)
-		.sort(([, a], [, b]) => a.priority - b.priority);
-
-	if (plans.length === 0) {
-		const firstEntry = Object.entries(config.plans)[0];
-		if (firstEntry) return { planKey: firstEntry[0], planInfo: {} };
-		return { planKey: "", planInfo: {} };
-	}
-
-	const [key, plan] = plans[0]!;
-	return { planKey: key, planInfo: { peak: plan.peak, budgetTarget: plan.budgetTarget } };
-}
-
-function findFallbackPlanKey(primaryPlanKey: string): string {
-	if (primaryPlanKey !== "opencode-go") return "opencode-go";
-	return "zai";
-}
-
-function makeRec(config: ModelPolicy, alias: string, reason: string, budgetAlias: string): Recommendation {
-	const entry = config.models[alias];
-	if (!entry) {
-		return { model: alias, provider: "", modelId: "", reason, stickyOverride: false, budgetModel: budgetAlias };
-	}
-	return { model: alias, provider: entry.provider, modelId: entry.modelId, reason, stickyOverride: false, budgetModel: budgetAlias };
-}
-
-function budgetReason(result: BudgetResult, plan: PlanInfo, now: Date, planKey: string): string {
-	const isPeak = plan.peak ? plan.peak.start <= now.getHours() && now.getHours() < plan.peak.end : false;
-	if (!isPeak) return "Non-peak hours, budget sufficient for Z.ai";
-	if (result.urgent) return "Urgency: Z.ai window resetting soon with sufficient budget";
-	if (result.provider !== planKey) return "Peak hours, saving Z.ai quota for later";
-	return "Peak hours but opencode-go near limit, staying on Z.ai";
-}
-
-function findAliasForModel(config: ModelPolicy, currentModel: string): string | undefined {
-	if (!currentModel) return undefined;
-	const [provider, modelId] = currentModel.split("/");
-	if (!provider || !modelId) return undefined;
-	for (const [alias, entry] of Object.entries(config.models)) {
-		if (entry.provider === provider && entry.modelId === modelId) return alias;
-	}
-	return undefined;
-}
-
-function findFirstModel(config: ModelPolicy): string | undefined {
-	for (const sceneModels of Object.values(config.scenes)) {
-		if (sceneModels.length > 0) return sceneModels[0];
-	}
-	const modelKeys = Object.keys(config.models);
-	return modelKeys.length > 0 ? modelKeys[0] : undefined;
 }

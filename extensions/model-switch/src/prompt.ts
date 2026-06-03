@@ -1,103 +1,150 @@
 /**
- * Model Switch — Prompt 注入格式化
+ * Model Switch — Context Prompt 注入格式化
  *
- * 将推荐信息格式化为 ~150-200 tokens 的注入文本。
+ * session_start：注入模型能力表（[Available Models]）
+ * before_agent_start：注入数据+推荐（[Model Context]）
+ *
+ * 设计原则：每行自解释，避免缩写标签，让 AI 不需要猜测字段含义。
  */
 
-import type { ModelPolicy, Recommendation, QuotaSnapshot } from "./types";
+import type { ModelPolicy, QuotaSnapshot, StickinessInfo, RecommendInfo } from "./types";
 
 // ── 时间常量 ────────────────────────────────────────────
 
 const SECONDS_PER_HOUR = 3600;
 const SECONDS_PER_MINUTE = 60;
-const PAD_LENGTH = 2;
+
+// ── 数据结构 ────────────────────────────────────────────
+
+export interface ContextPromptData {
+	currentModel: string;
+	stickiness: StickinessInfo;
+	snapshot: QuotaSnapshot;
+	recommend: RecommendInfo;
+	config: ModelPolicy;
+	now: Date;
+}
+
+// ── session_start：模型能力表 ────────────────────────────
 
 /**
- * 格式化推荐信息为 system prompt 注入文本。
+ * 格式化 [Available Models] 表，session_start / resume 时注入一次。
+ * AI 应参考此列表识别用户请求的模型是否能满足需求（如图片处理需 image 能力）。
  */
-export function formatAdvisorPrompt(
-	rec: Recommendation,
-	snapshot: QuotaSnapshot,
-	config: ModelPolicy,
-	now: Date,
-): string {
-	const lines: string[] = [];
-	lines.push("[Model Advisor]");
-	lines.push(formatStatusLine(config, now));
-	lines.push(formatQuotaLine(snapshot));
-	lines.push("");
+export function formatSessionModels(config: ModelPolicy): string {
+	const lines: string[] = [
+		"[Available Models — models you can switch to via switch_model tool]",
+	];
 
-	if (rec.stickyOverride) {
-		lines.push(`>>> Budget recommends: ${rec.budgetModel}, BUT staying on ${rec.provider}/${rec.modelId}`);
-		lines.push(`Reason: ${rec.reason}`);
-		lines.push("Override: use switch_model tool to force switch.");
-	} else {
-		lines.push(`>>> Recommended: ${rec.provider}/${rec.modelId} (${rec.reason})`);
-		lines.push(formatSceneGuide(config, now));
-		lines.push("To switch: use switch_model tool");
+	for (const [provider, pcfg] of Object.entries(config.models)) {
+		for (const [alias, entry] of Object.entries(pcfg.models)) {
+			const caps = entry.capabilities.join(", ");
+			lines.push(`  ${alias} (${provider}) [${caps}]`);
+		}
 	}
+
+	lines.push("Switch to the best model for each task. Check capabilities above for image/text support.");
+
+	return lines.join("\n");
+}
+
+// ── before_agent_start：上下文注入 ───────────────────────
+
+/**
+ * 格式化上下文注入文本（每轮注入）。
+ *
+ * 行说明：
+ *   [Model Context] — 本段描述模型切换所需的当前运行时环境。AI 应据此决定是否需要切换。
+ *   Model — 当前正在使用的模型 + 上下文占用（turns=input轮次, tokens=已消耗输入token数）
+ *   Context warmth — 上下文是否"温热"：warm 意味着切换会丢失已缓存的 token，cold 意味着切换代价低
+ *   Time — 当前时间 + 高峰期标记（zhipu 在 peak 时段 3x 计费）
+ *   Advice — 基于用量+时间计算的推荐：ok to use（可用）/ avoid（建议避免）
+ *   usage — 各套餐用量：百分比 + 窗口重置倒计时
+ *   Scenes — 使用场景→可用模型映射
+ *   Action — 执行切换的方法
+ */
+export function formatContextPrompt(data: ContextPromptData): string {
+	const { currentModel, stickiness, snapshot, recommend, config, now } = data;
+	const plan = findPrimaryPlanPeak(config);
+	const stickinessThresholds = resolveStickinessThresholds(config);
+
+	const lines: string[] = [];
+	lines.push("[Model Context — switch models based on this data]");
+	lines.push(formatModelLine(currentModel, stickiness));
+	lines.push(formatWarmthLine(stickiness, stickinessThresholds));
+	lines.push(formatTimeLine(now, plan));
+	lines.push(formatAdviceLine(recommend));
+
+	// Quota lines — 每个有数据的 plan 一行
+	const quotaLines = formatQuotaLines(snapshot);
+	if (quotaLines.length > 0) lines.push(...quotaLines);
+
+	lines.push(formatSceneLine(config));
+	lines.push("Action: call switch_model tool (change applies next turn).");
 
 	return lines.join("\n");
 }
 
 // ── 内部格式化 ──────────────────────────────────────────
 
-function formatStatusLine(config: ModelPolicy, now: Date): string {
-	const plan = findPrimaryPlanPeak(config);
-	if (!plan) return "Status: Off-peak hours";
-
-	const h = now.getHours();
-	const m = now.getMinutes();
-	const isPeak = plan.start <= h && h < plan.end;
-
-	if (!isPeak) return "Status: Off-peak hours";
-
-	const timeStr = `${String(h).padStart(PAD_LENGTH, "0")}:${String(m).padStart(PAD_LENGTH, "0")}`;
-	const endStr = `${String(plan.end).padStart(PAD_LENGTH, "0")}:00`;
-	return `Status: Peak hours (${timeStr}, ${plan.multiplier}x Z.ai cost until ${endStr})`;
+function formatModelLine(model: string, stickiness: StickinessInfo): string {
+	const inputK = Math.round(stickiness.inputTokens / 1000);
+	return `Model: ${model} (${stickiness.turns} conversation turns, ~${inputK}k input tokens in context)`;
 }
 
-function formatQuotaLine(snapshot: QuotaSnapshot): string {
+function resolveStickinessThresholds(config: ModelPolicy): { minTurns: number; minInputTokens: number } {
+	return {
+		minTurns: config.stickiness?.minTurns ?? 3,
+		minInputTokens: config.stickiness?.minInputTokens ?? 20_000,
+	};
+}
+
+function formatWarmthLine(
+	stickiness: StickinessInfo,
+	thresholds: { minTurns: number; minInputTokens: number },
+): string {
+	if (stickiness.justCompacted) return "Context warmth: Cold (conversation was just compressed — no cost to switch).";
+	if (stickiness.turns >= thresholds.minTurns && stickiness.inputTokens >= thresholds.minInputTokens) {
+		return `Context warmth: Warm (${stickiness.turns} turns, ~${Math.round(stickiness.inputTokens / 1000)}k tokens cached — switching loses this cache)`;
+	}
+	return "Context warmth: Cold (few turns or tokens — switching loses little).";
+}
+
+function formatTimeLine(now: Date, plan: { start: number; end: number; multiplier: number } | undefined): string {
+	const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+	if (!plan) return `Time: ${timeStr} | Off-peak`;
+	const isPeak = plan.start <= now.getHours() && now.getHours() < plan.end;
+	if (!isPeak) return `Time: ${timeStr} | Off-peak`;
+	return `Time: ${timeStr} | Peak hours (${plan.start}:00-${plan.end}:00, zhipu tokens cost ${plan.multiplier}x normal)`;
+}
+
+function formatAdviceLine(recommend: RecommendInfo): string {
+	if (recommend.result === "ok") {
+		return `Advice: zhipu is ok to use (${recommend.reason})`;
+	}
+	return `Advice: avoid zhipu if possible (${recommend.reason})`;
+}
+
+function formatQuotaLines(snapshot: QuotaSnapshot): string[] {
+	const entries = Object.entries(snapshot.plans);
+	if (entries.length === 0) return [];
+
+	const lines: string[] = [];
+	for (const [planName, quota] of entries) {
+		const pctText = quota.pct !== null ? `${Math.round(quota.pct)}% of window used` : "usage data unavailable";
+		const resetText = quota.resetSec !== null ? `resets in ${formatResetSec(quota.resetSec)}` : "";
+		lines.push(`  ${planName}: ${pctText}${resetText ? ", " + resetText : ""}`);
+	}
+	return lines;
+}
+
+function formatSceneLine(config: ModelPolicy): string {
 	const parts: string[] = [];
-
-	if (snapshot.zai) {
-		const resetStr = formatResetSec(snapshot.zai.resetSec);
-		parts.push(`Z.ai: ${Math.round(snapshot.zai.pct)}% [5h: ${resetStr}]`);
-	}
-
-	if (snapshot.ocg) {
-		parts.push(`opencode-go: rolling ${Math.round(snapshot.ocg.rollingPct)}%, weekly ${Math.round(snapshot.ocg.weeklyPct)}%`);
-	}
-
-	return parts.join(" | ");
-}
-
-function formatSceneGuide(config: ModelPolicy, now: Date): string {
-	const sceneParts: string[] = [];
-
 	for (const [scene, aliases] of Object.entries(config.scenes)) {
 		if (aliases.length === 0) continue;
-
-		if (scene === "coding") {
-			const plan = findPrimaryPlanPeak(config);
-			const isPeak = plan ? plan.start <= now.getHours() && now.getHours() < plan.end : false;
-
-			const models = aliases.map((alias) => {
-				const entry = config.models[alias];
-				const label = entry ? `${entry.provider}/${entry.modelId}` : alias;
-				return isPeak ? `${label}(after ${plan?.end ?? 18}:00)/${label}(now)` : label;
-			});
-			sceneParts.push(`${scene}\u2192${models.join("/")}`);
-		} else {
-			const models = aliases.map((alias) => {
-				const entry = config.models[alias];
-				return entry ? `${entry.provider}/${entry.modelId}` : alias;
-			});
-			sceneParts.push(`${scene}\u2192${models.join("/")}`);
-		}
+		parts.push(`${scene}→${aliases.join("/")}`);
 	}
-
-	return `Scene guide: ${sceneParts.join(" | ")}`;
+	return `Scenes: ${parts.join(" | ")}`;
 }
 
 function findPrimaryPlanPeak(config: ModelPolicy): { start: number; end: number; multiplier: number } | undefined {
@@ -108,10 +155,10 @@ function findPrimaryPlanPeak(config: ModelPolicy): { start: number; end: number;
 }
 
 function formatResetSec(sec: number): string {
-	if (sec <= 0) return "";
+	if (sec <= 0) return "?";
 	const h = Math.floor(sec / SECONDS_PER_HOUR);
 	const m = Math.floor((sec % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
-	if (h > 0) return `${h}h${m.toString().padStart(PAD_LENGTH, "0")}m`;
+	if (h > 0) return `${h}h${m.toString().padStart(2, "0")}m`;
 	if (m > 0) return `${m}m`;
 	return "<1m";
 }

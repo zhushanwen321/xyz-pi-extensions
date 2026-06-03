@@ -1,30 +1,53 @@
 /**
- * Model Switch — 配置自动生成
+ * Model Switch — 配置自动生成（v2）
  *
  * /setup-model-policy 命令流程：
  * 1. 读取 enabledModels 或降级到全部可用模型
- * 2. 按 provider 分组
+ * 2. 按 provider 分组（使用 models.json 的 provider 名）
  * 3. 推断场景偏好和套餐规则
  * 4. 展示给用户确认
+ *
+ * 输出配置格式（v2）：
+ *   models: 以 models.json provider 名为 key，内嵌 plan + models 表
+ *   plans: 以计划名为 key（对应 quota-provider cache key）
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SetupResult } from "./types";
 
-const PI_AGENT_DIR = join(homedir(), ".pi", "agent");
-const CONFIG_DIR = join(PI_AGENT_DIR, "extensions", "model-switch");
-const CONFIG_PATH = join(CONFIG_DIR, "model-policy.json");
+// ── Provider → Plan 映射 ───────────────────────────────
+// models.json provider → quota-provider cache key
+
+const PROVIDER_TO_PLAN: Record<string, string> = {
+	"zhipu-coding-plan": "zhipu",
+	"zhipu-coding-plan-router": "zhipu",
+	"opencode-go": "opencode-go",
+	"opencode-go-router": "opencode-go",
+	"kimi-coding-plan": "kimi-coding",
+	"kimi-coding-plan-router": "kimi-coding",
+	"minimax-token-plan": "minimax",
+	"minimax-token-plan-router": "minimax",
+};
+
+const PLAN_PRIORITY: Record<string, number> = {
+	zhipu: 1,
+	"opencode-go": 2,
+	"kimi-coding": 3,
+	minimax: 4,
+};
 
 // ── 模型信息提取 ───────────────────────────────────────
 
 interface ModelInfo {
-	provider: string;
+	provider: string;   // models.json provider key（不含 -router）
+	plan: string;       // quota-provider cache key
 	modelId: string;
 	name: string;
 	reasoning: boolean;
 	vision: boolean;
+	input: readonly string[];
 }
 
 type ModelRegistryLike = {
@@ -40,94 +63,61 @@ type ModelRegistryLike = {
 function extractModels(registry: ModelRegistryLike, enabledModels?: string[]): ModelInfo[] {
 	const all = registry.getAvailable();
 
-	if (enabledModels && enabledModels.length > 0) {
-		const enabled = new Set(enabledModels.map((m) => m.toLowerCase()));
-		return all
-			.filter((m) => enabled.has(`${m.provider}/${m.id}`.toLowerCase()))
-			.map(toModelInfo);
+	const enabledSet = enabledModels?.length
+		? new Set(enabledModels.map((m) => m.toLowerCase()))
+		: null;
+
+	const result: ModelInfo[] = [];
+	for (const m of all) {
+		if (enabledSet && !enabledSet.has(`${m.provider}/${m.id}`.toLowerCase())) continue;
+
+		const plan = PROVIDER_TO_PLAN[m.provider];
+		if (!plan) continue; // Unknown provider, skip
+
+		// 去掉 -router 后缀作为配置中的 provider key
+		const providerKey = m.provider.replace(/-router$/, "");
+
+		result.push({
+			provider: providerKey,
+			plan,
+			modelId: m.id,
+			name: m.name ?? m.id,
+			reasoning: m.reasoning ?? false,
+			vision: m.input?.includes("image") ?? false,
+			input: m.input ?? ["text"],
+		});
 	}
 
-	return all.map(toModelInfo);
-}
-
-function toModelInfo(m: { provider: string; id: string; name?: string; reasoning?: boolean; input?: readonly string[] }): ModelInfo {
-	return {
-		provider: m.provider,
-		modelId: m.id,
-		name: m.name ?? m.id,
-		reasoning: m.reasoning ?? false,
-		vision: m.input?.includes("image") ?? false,
-	};
-}
-
-// ── Provider 分组 ──────────────────────────────────────
-
-interface ProviderGroup {
-	provider: string;
-	models: ModelInfo[];
-}
-
-function groupByProvider(models: ModelInfo[]): ProviderGroup[] {
-	const map = new Map<string, ModelInfo[]>();
-	for (const m of models) {
-		let group = map.get(m.provider);
-		if (!group) {
-			group = [];
-			map.set(m.provider, group);
-		}
-		group.push(m);
-	}
-	const result: ProviderGroup[] = [];
-	for (const [provider, groupModels] of map) {
-		result.push({ provider, models: groupModels });
-	}
 	return result;
 }
 
 // ── 场景推断 ────────────────────────────────────────────
 
 function inferCapabilities(m: ModelInfo): string[] {
-	const caps: string[] = [];
-	if (m.vision) caps.push("vision");
-	if (m.reasoning) caps.push("reasoning");
+	const caps: string[] = [...m.input];
+	if (m.reasoning && !caps.includes("reasoning")) caps.push("reasoning");
 	caps.push("coding");
 	caps.push("chat");
-	return caps;
+	return [...new Set(caps)];
 }
 
-function inferScenes(
-	modelEntries: Record<string, { provider: string; modelId: string; plan: string; capabilities: string[] }>,
-): Record<string, string[]> {
+function inferScenes(modelAliases: Record<string, ModelInfo>): Record<string, string[]> {
 	const visionAliases: string[] = [];
-	const planningAliases: string[] = [];
+	const reasoningAliases: string[] = [];
 	const codingAliases: string[] = [];
-	const chatAliases: string[] = [];
 
-	for (const [alias, entry] of Object.entries(modelEntries)) {
-		if (entry.capabilities.includes("vision")) visionAliases.push(alias);
-		if (entry.capabilities.includes("reasoning")) planningAliases.push(alias);
-		if (!entry.capabilities.includes("vision") && !entry.capabilities.includes("reasoning")) {
-			codingAliases.push(alias);
-			chatAliases.push(alias);
-		}
+	for (const [alias, info] of Object.entries(modelAliases)) {
+		if (info.input.includes("image")) visionAliases.push(alias);
+		if (info.reasoning) reasoningAliases.push(alias);
+		codingAliases.push(alias);
 	}
 
-	if (codingAliases.length === 0) {
-		for (const [alias, entry] of Object.entries(modelEntries)) {
-			if (entry.capabilities.includes("reasoning")) codingAliases.push(alias);
-		}
-	}
+	const scenes: Record<string, string[]> = {};
 
-	const scenes: Record<string, string[]> = {
-		vision: visionAliases,
-		planning: planningAliases,
-		coding: codingAliases.length > 0 ? codingAliases : planningAliases,
-		chat: chatAliases.length > 0 ? chatAliases : codingAliases,
-	};
-
-	for (const key of Object.keys(scenes)) {
-		if (scenes[key]!.length === 0) delete scenes[key];
-	}
+	if (visionAliases.length > 0) scenes.vision = visionAliases;
+	if (reasoningAliases.length > 0) scenes.planning = reasoningAliases;
+	scenes.coding = codingAliases;
+	scenes.chat = codingAliases;
 
 	return scenes;
 }
@@ -139,36 +129,64 @@ export function generatePolicyConfig(
 	enabledModels?: string[],
 ): SetupResult {
 	const models = extractModels(modelRegistry, enabledModels);
-	const groups = groupByProvider(models);
 
-	const modelEntries: Record<string, { provider: string; modelId: string; plan: string; capabilities: string[] }> = {};
+	// 按 provider 分组
+	const providerGroups = groupByProvider(models);
 
-	for (const group of groups) {
-		const planKey = inferPlanKey(group.provider);
+	// 构建 models 段
+	const policyModels: Record<string, { plan: string; models: Record<string, { modelId: string; capabilities: string[] }> }> = {};
+	const allAliases: Record<string, ModelInfo> = {};
+
+	for (const group of providerGroups) {
+		const providerModels: Record<string, { modelId: string; capabilities: string[] }> = {};
 		for (const m of group.models) {
 			const alias = inferAlias(m);
-			modelEntries[alias] = {
-				provider: group.provider,
+			providerModels[alias] = {
 				modelId: m.modelId,
-				plan: planKey,
 				capabilities: inferCapabilities(m),
 			};
+			allAliases[alias] = m;
 		}
+		policyModels[group.provider] = {
+			plan: group.plan,
+			models: providerModels,
+		};
 	}
 
-	const scenes = inferScenes(modelEntries);
-	const plans = inferPlans(groups);
+	const scenes = inferScenes(allAliases);
+
+	// 构建 plans 段
+	const policyPlans: Record<string, { priority: number; peak?: { start: number; end: number; multiplier: number }; peakStrategy: string; rollingWindowHours: number; thresholds: { rollingLimitPct: number; weeklyLimitPct: number } }> = {};
+	const seenPlans = new Set<string>();
+
+	for (const group of providerGroups) {
+		if (seenPlans.has(group.plan)) continue;
+		seenPlans.add(group.plan);
+
+		const plan: { priority: number; peak?: { start: number; end: number; multiplier: number }; peakStrategy: string; rollingWindowHours: number; thresholds: { rollingLimitPct: number; weeklyLimitPct: number } } = {
+			priority: PLAN_PRIORITY[group.plan] ?? seenPlans.size,
+			peakStrategy: "conserve",
+			rollingWindowHours: 5,
+			thresholds: { rollingLimitPct: 80, weeklyLimitPct: 80 },
+		};
+
+		if (group.plan === "zhipu") {
+			plan.peak = { start: 14, end: 18, multiplier: 3 };
+		}
+
+		policyPlans[group.plan] = plan;
+	}
 
 	const config = {
-		version: 1,
-		models: modelEntries,
+		version: 2,
+		models: policyModels,
 		scenes,
-		plans,
-		stickiness: { minTurns: 3, minInputTokens: 20000 },
+		plans: policyPlans,
+		stickiness: { minTurns: 3, minInputTokens: 20_000 },
 	};
 
 	const json = JSON.stringify(config, null, 2);
-	const summary = buildSummary(groups, scenes, plans);
+	const summary = buildSummary(providerGroups, scenes, policyPlans);
 
 	return { json, summary };
 }
@@ -176,16 +194,16 @@ export function generatePolicyConfig(
 function buildSummary(
 	groups: ProviderGroup[],
 	scenes: Record<string, string[]>,
-	plans: Record<string, { priority: number; peak?: { start: number; end: number; multiplier: number }; budgetTarget?: number }>,
+	plans: Record<string, { priority: number; peak?: { start: number; end: number; multiplier: number }; peakStrategy: string; rollingWindowHours: number; thresholds: { rollingLimitPct: number; weeklyLimitPct: number } }>,
 ): string {
-	const lines: string[] = ["Model Policy Auto-Generated Config:", "", "Providers:"];
+	const lines: string[] = ["Model Policy v2 — Auto-generated Config:", "", "Providers:"];
 
 	for (const group of groups) {
-		const planKey = inferPlanKey(group.provider);
-		lines.push(`  ${group.provider} (plan: ${planKey}, priority: ${plans[planKey]?.priority ?? "?"})`);
+		const planCfg = plans[group.plan];
+		lines.push(`  ${group.provider} (plan: ${group.plan}, priority: ${planCfg?.priority ?? "?"})`);
 		for (const m of group.models) {
 			const caps = inferCapabilities(m).join(", ");
-			lines.push(`    ${inferAlias(m)} \u2192 ${m.modelId} [${caps}]`);
+			lines.push(`    ${inferAlias(m)} → ${m.modelId} [${caps}]`);
 		}
 	}
 
@@ -197,23 +215,38 @@ function buildSummary(
 	lines.push("", "Plans:");
 	for (const [key, plan] of Object.entries(plans)) {
 		const peak = plan.peak ? ` peak ${plan.peak.start}:00-${plan.peak.end}:00 (${plan.peak.multiplier}x)` : "";
-		const budget = plan.budgetTarget ? ` budget ${plan.budgetTarget}%` : "";
-		lines.push(`  ${key}: priority ${plan.priority}${peak}${budget}`);
+		const strategy = ` strategy=${plan.peakStrategy}`;
+		const window = ` window=${plan.rollingWindowHours}h`;
+		const thresholds = ` thresholds=rolling:${plan.thresholds.rollingLimitPct}%,weekly:${plan.thresholds.weeklyLimitPct}%`;
+		lines.push(`  ${key}: priority ${plan.priority}${peak}${strategy}${window}${thresholds}`);
 	}
 
 	lines.push("", "Review the config above. Tell me to adjust anything, or say 'confirm' to write it.");
 	return lines.join("\n");
 }
 
-// ── 推断辅助 ────────────────────────────────────────────
+// ── Provider 分组 ──────────────────────────────────────
 
-function inferPlanKey(provider: string): string {
-	if (provider.includes("zhipu") || provider.includes("zai")) return "zai";
-	if (provider.includes("opencode")) return "opencode-go";
-	if (provider.includes("kimi")) return "kimi-coding";
-	if (provider.includes("minimax") || provider.includes("deepseek")) return "opencode-go";
-	return provider;
+interface ProviderGroup {
+	provider: string;
+	plan: string;
+	models: ModelInfo[];
 }
+
+function groupByProvider(models: ModelInfo[]): ProviderGroup[] {
+	const map = new Map<string, ProviderGroup>();
+	for (const m of models) {
+		let group = map.get(m.provider);
+		if (!group) {
+			group = { provider: m.provider, plan: m.plan, models: [] };
+			map.set(m.provider, group);
+		}
+		group.models.push(m);
+	}
+	return [...map.values()];
+}
+
+// ── 推断辅助 ────────────────────────────────────────────
 
 function inferAlias(m: ModelInfo): string {
 	const id = m.modelId.toLowerCase();
@@ -229,35 +262,18 @@ function inferAlias(m: ModelInfo): string {
 	return m.modelId.replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-");
 }
 
-function inferPlans(groups: ProviderGroup[]): Record<string, { priority: number; peak?: { start: number; end: number; multiplier: number }; budgetTarget?: number }> {
-	const plans: Record<string, { priority: number; peak?: { start: number; end: number; multiplier: number }; budgetTarget?: number }> = {};
-	let priority = 1;
-
-	for (const group of groups) {
-		const planKey = inferPlanKey(group.provider);
-		if (plans[planKey]) continue;
-
-		const plan: { priority: number; peak?: { start: number; end: number; multiplier: number }; budgetTarget?: number } = { priority };
-		if (planKey === "zai") {
-			plan.peak = { start: 14, end: 18, multiplier: 3 };
-			plan.budgetTarget = 85;
-		}
-
-		plans[planKey] = plan;
-		priority++;
-	}
-
-	return plans;
-}
-
 // ── 文件操作 ────────────────────────────────────────────
+
+const PI_AGENT_DIR = join(homedir(), ".pi", "agent");
+const CONFIG_DIR = join(PI_AGENT_DIR, "extensions", "model-switch");
+const CONFIG_PATH = join(CONFIG_DIR, "model-policy.json");
 
 export function getConfigPath(): string {
 	return CONFIG_PATH;
 }
 
-export function writePolicyConfig(json: string): { ok: true; path: string } | { ok: false; error: string } {
-	if (existsSync(CONFIG_PATH)) {
+export function writePolicyConfig(json: string, overwrite = false): { ok: true; path: string } | { ok: false; error: string } {
+	if (!overwrite && existsSync(CONFIG_PATH)) {
 		return { ok: false, error: `Config already exists at ${CONFIG_PATH}. Delete it first to regenerate.` };
 	}
 
@@ -273,6 +289,31 @@ export function writePolicyConfig(json: string): { ok: true; path: string } | { 
 		return { ok: true, path: CONFIG_PATH };
 	} catch (err) {
 		return { ok: false, error: `Failed to write: ${(err as Error).message}` };
+	}
+}
+
+export function deletePolicyConfig(): { ok: true; path: string } | { ok: false; error: string } {
+	if (!existsSync(CONFIG_PATH)) {
+		return { ok: false, error: `No config file at ${CONFIG_PATH}.` };
+	}
+	try {
+		unlinkSync(CONFIG_PATH);
+		return { ok: true, path: CONFIG_PATH };
+	} catch (err) {
+		return { ok: false, error: `Failed to delete: ${(err as Error).message}` };
+	}
+}
+
+export function readPolicyConfigContent(): { ok: true; content: string; path: string } | { ok: false; error: string } {
+	if (!existsSync(CONFIG_PATH)) {
+		return { ok: false, error: `No config file at ${CONFIG_PATH}. Run /setup-model-policy to generate one.` };
+	}
+	try {
+		const content = readFileSync(CONFIG_PATH, "utf-8");
+		JSON.parse(content);
+		return { ok: true, content, path: CONFIG_PATH };
+	} catch (err) {
+		return { ok: false, error: `Failed to read config: ${(err as Error).message}` };
 	}
 }
 

@@ -2,35 +2,44 @@
  * Model Switch — 共享类型定义
  *
  * 所有跨文件的类型、常量集中管理。
- * 参考 pi-extension-standards §3.2。
  */
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-// ── 配置类型 ────────────────────────────────────────────
+// ── 模型条目（v2：内嵌在 ProviderConfig 中）─────────────
 
 export interface ModelEntry {
-	/** Pi provider 名（如 "zhipu"） */
-	provider: string;
-	/** Pi model ID（如 "glm-5.1-plus"） */
+	/** Pi model ID（如 "glm-5.1"、"ds-flash"） */
 	modelId: string;
-	/** 套餐标识（关联 plans 中的 key） */
-	plan: string;
-	/** 模型能力标记 */
+	/** 输入模态，如 ["text", "image"] */
 	capabilities: string[];
 }
 
+// ── Provider 配置（v2：models 的 value 类型）────────────
+
+export interface ProviderConfig {
+	/** 套餐标识（匹配 plans 中的 key 和 quota-provider cache key） */
+	plan: string;
+	/** 该 provider 下的模型表 */
+	models: Record<string, ModelEntry>;
+}
+
+// ── 套餐配置 ───────────────────────────────────────────
+
 export interface PlanConfig {
-	/** 优先级（越小越优先） */
 	priority: number;
-	/** 高峰期配置 */
 	peak?: {
 		start: number;
 		end: number;
 		multiplier: number;
 	};
-	/** 预算目标百分比 */
 	budgetTarget?: number;
+	peakStrategy?: "conserve" | "normal";
+	rollingWindowHours?: number;
+	thresholds?: {
+		rollingLimitPct?: number;
+		weeklyLimitPct?: number;
+	};
 }
 
 export interface StickinessConfig {
@@ -38,46 +47,61 @@ export interface StickinessConfig {
 	minInputTokens: number;
 }
 
+// ── 主配置（v2）─────────────────────────────────────────
+
 export interface ModelPolicy {
 	version: number;
-	models: Record<string, ModelEntry>;
+	/** provider 名（来自 models.json） → 配置 */
+	models: Record<string, ProviderConfig>;
 	scenes: Record<string, string[]>;
+	/** plan 名（与 quota-provider cache key 对齐） → 套餐配置 */
 	plans: Record<string, PlanConfig>;
 	stickiness: StickinessConfig;
 }
 
-// ── 推荐引擎类型 ─────────────────────────────────────────
+// ── 用量快照（泛化：任何 plan 均可提取）───────────────────
 
-export interface Recommendation {
-	/** 推荐的模型 alias（如 "glm-5.1"） */
-	model: string;
-	/** Pi provider 名 */
-	provider: string;
-	/** Pi model ID */
-	modelId: string;
-	/** 原因描述 */
-	reason: string;
-	/** 是否因粘性覆盖了预算推荐 */
-	stickyOverride: boolean;
-	/** 预算推荐的 alias（可能与最终不同） */
-	budgetModel: string;
+export interface PlanQuota {
+	/** 主窗口用量百分比（zhipu→tokensPct, opencode-go→rolling.usagePercent） */
+	pct: number | null;
+	/** 主窗口剩余秒数 */
+	resetSec: number | null;
+	/** 显示标签 */
+	label: string;
 }
 
 export interface QuotaSnapshot {
-	zai: { pct: number; resetSec: number } | null;
-	ocg: { rollingPct: number; weeklyPct: number; resetSec: number } | null;
+	/** plan 名 → 用量快照 */
+	plans: Record<string, PlanQuota>;
 }
 
-// ── Setup 类型 ──────────────────────────────────────────
+// ── 粘性信息 ───────────────────────────────────────────
+
+export interface StickinessInfo {
+	turns: number;
+	inputTokens: number;
+	justCompacted: boolean;
+}
+
+// ── 推荐结果 ───────────────────────────────────────────
+
+export type RecommendResult = "ok" | "avoid";
+
+export interface RecommendInfo {
+	/** 推荐结论 */
+	result: RecommendResult;
+	/** 推荐理由 */
+	reason: string;
+}
+
+// ── Setup 结果 ─────────────────────────────────────────
 
 export interface SetupResult {
-	/** 生成的配置 JSON 字符串 */
 	json: string;
-	/** 格式化的可读摘要 */
 	summary: string;
 }
 
-// ── 工具函数 ────────────────────────────────────────────
+// ── 工具函数 ───────────────────────────────────────────
 
 /**
  * 从 ctx 中提取当前模型的 "provider/modelId" 字符串。
@@ -91,7 +115,29 @@ export function getCurrentModelId(ctx: ExtensionContext): string {
 /** session entries 的通用类型（getBranch() 返回值） */
 export type SessionEntries = Array<{ type: string; [key: string]: unknown }>;
 
-/** 安全类型断言：getBranch() 返回 SessionEntry[]，需要通过 unknown 中转 */
+/** 安全类型断言 */
 export function asSessionEntries(entries: unknown): SessionEntries {
 	return entries as SessionEntries;
+}
+
+// ── 模型能力表（用于 session_start 注入）────────────────
+
+export interface ModelCapability {
+	alias: string;
+	provider: string;
+	modelId: string;
+	capabilities: string[];
+}
+
+/**
+ * 从 config 中提取所有模型的能力表。
+ */
+export function extractModelCapabilities(config: ModelPolicy): ModelCapability[] {
+	const result: ModelCapability[] = [];
+	for (const [provider, pcfg] of Object.entries(config.models)) {
+		for (const [alias, entry] of Object.entries(pcfg.models)) {
+			result.push({ alias, provider, modelId: entry.modelId, capabilities: entry.capabilities });
+		}
+	}
+	return result;
 }

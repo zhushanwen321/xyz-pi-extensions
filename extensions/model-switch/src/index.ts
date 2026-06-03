@@ -1,8 +1,9 @@
 /**
- * Pi Model Switch — 智能模型推荐与切换扩展
+ * Pi Model Switch — 上下文注入 + 模型切换扩展
  *
- * before_agent_start 注入推荐提示 + switch_model 工具。
- * 配置文件不存在时降级为仅手动切换工具。
+ * session_start/resume：注入 [Available Models] 能力表
+ * before_agent_start 每轮注入：数据 + 推荐（[Model Context]）
+ * switch_model tool：list/search/switch/recommend/setup
  */
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -11,9 +12,9 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { readCache } from "@zhushanwen/pi-quota-providers";
 
 import { loadConfig } from "./config";
-import { computeRecommendation, computeQuotaSnapshot, detectScene } from "./advisor";
-import { formatAdvisorPrompt } from "./prompt";
-import { generatePolicyConfig, readEnabledModels, getConfigPath } from "./setup";
+import { computeQuotaSnapshot, computeStickiness, computePeakRecommend } from "./advisor";
+import { formatSessionModels, formatContextPrompt } from "./prompt";
+import { generatePolicyConfig, readEnabledModels, getConfigPath, deletePolicyConfig, readPolicyConfigContent } from "./setup";
 import { getCurrentModelId, asSessionEntries, type ModelPolicy } from "./types";
 
 // ── Tool 返回值 helper ──────────────────────────────────
@@ -34,31 +35,54 @@ function res(text: string, opts?: { error?: boolean }): ToolRes {
 
 interface SessionState {
 	config: ModelPolicy | null;
+	/** 首次 before_agent_start 时注入 [Available Models] */
+	injectedModelTable: boolean;
 }
 
 // ── 扩展入口 ────────────────────────────────────────────
 
 export default function modelSwitchExtension(pi: ExtensionAPI) {
-	const state: SessionState = { config: null };
+	const state: SessionState = { config: null, injectedModelTable: false };
 
 	pi.on("session_start", async (_event: unknown, _ctx: ExtensionContext) => {
 		state.config = loadConfig();
+		state.injectedModelTable = false;
 	});
 
 	pi.on("before_agent_start", async (_event: unknown, ctx: ExtensionContext) => {
 		if (!state.config) return;
 
 		try {
-			const prompt = ctx.getSystemPrompt();
 			const currentModel = getCurrentModelId(ctx);
-			const scene = detectScene(prompt);
 			const entries = asSessionEntries(ctx.sessionManager.getBranch());
+			const cache = readCache();
+			const config = state.config;
 
-			const rec = computeRecommendation(state.config, scene, currentModel, entries);
-			const snapshot = computeQuotaSnapshot(readCache());
-			const injection = formatAdvisorPrompt(rec, snapshot, state.config, new Date());
-			return { systemPrompt: `\n${injection}` };
-		} catch {
+			// 计算快照 + 推荐
+			const snapshot = computeQuotaSnapshot(cache, config);
+			const stickiness = computeStickiness(entries, config);
+			const recommend = computePeakRecommend(new Date(), config, snapshot);
+
+			// 注入 [Model Context]（每轮）
+			const injection = formatContextPrompt({
+				currentModel,
+				stickiness,
+				snapshot,
+				recommend,
+				config,
+				now: new Date(),
+			});
+
+			// 首次注入 [Available Models]（session_start / resume 后一次）
+			let modelTable = "";
+			if (!state.injectedModelTable) {
+				modelTable = "\n" + formatSessionModels(config);
+				state.injectedModelTable = true;
+			}
+
+			return { systemPrompt: `\n${injection}${modelTable}` };
+		} catch (err) {
+			console.warn("[model-switch] context injection failed:", err);
 			return;
 		}
 	});
@@ -76,18 +100,26 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 		},
 	});
 
+	registerSwitchTool(pi, state);
+}
+
+// ── Tool 注册 ──────────────────────────────────────────
+
+function registerSwitchTool(pi: ExtensionAPI, state: SessionState): void {
 	pi.registerTool({
 		name: "switch_model",
 		label: "Switch Model",
 		description:
-			"List configured models, search by alias/name, switch to another model, or show current recommendation. "
-			+ "Configured models are defined in model-policy.json.",
+			"List configured models, search by alias/name, switch to another model, or show current data snapshot and rules. "
+			+ "Configured models are defined in model-policy.json. "
+			+ "Setup sub-actions: 'setup delete' (remove config), 'setup list' (show config), 'setup edit' (LLM-guided edit), 'setup' (generate new).",
 		promptSnippet:
 			"Use this tool when the user asks to list/search/switch models, requests a specific model/provider, "
-			+ "or when you need to respond to the Model Advisor recommendation.",
+			+ "or when you need to see the current model context data. "
+			+ "For policy management: 'setup delete' to remove, 'setup list' to view, 'setup edit' to modify through conversation.",
 		parameters: Type.Object({
 			action: StringEnum(["list", "search", "switch", "recommend", "setup"], {
-				description: "Action: list (show all), search (filter), switch (change), recommend (show advice), setup (generate config)",
+				description: "Action: list (show all), search (filter), switch (change), recommend (show data+rules), setup (generate config)",
 			}),
 			query: Type.Optional(
 				Type.String({
@@ -109,7 +141,7 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 			if (action === "search") return handleSearch(state, query);
 			if (action === "switch") return handleSwitch(state, pi, ctx, query);
 			if (action === "recommend") return handleRecommend(state, ctx);
-			if (action === "setup") return handleSetup(state, ctx);
+			if (action === "setup") return handleSetup(state, ctx, params.query);
 
 			return res(`Unknown action: ${action}. Supported: list, search, switch, recommend, setup.`, { error: true });
 		},
@@ -118,7 +150,7 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 
 // ── Action Handlers ────────────────────────────────────
 
-function handleList(state: { config: ModelPolicy | null }, ctx: ExtensionContext): ToolRes {
+function handleList(state: SessionState, ctx: ExtensionContext): ToolRes {
 	if (!state.config) {
 		return res("No model policy configured. Run /setup-model-policy to generate one.");
 	}
@@ -126,109 +158,149 @@ function handleList(state: { config: ModelPolicy | null }, ctx: ExtensionContext
 	const currentModel = getCurrentModelId(ctx);
 	const lines: string[] = [];
 
-	for (const [alias, entry] of Object.entries(state.config.models)) {
-		const modelStr = `${entry.provider}/${entry.modelId}`;
-		const marker = modelStr === currentModel ? " \u2190 current" : "";
-		const caps = entry.capabilities.length > 0 ? ` [${entry.capabilities.join(", ")}]` : "";
-		lines.push(`  ${alias} \u2192 ${modelStr}${marker}${caps}`);
+	for (const [provider, pcfg] of Object.entries(state.config.models)) {
+		lines.push(`  ${provider} (plan: ${pcfg.plan}):`);
+		for (const [alias, entry] of Object.entries(pcfg.models)) {
+			const modelStr = `${pcfg.plan}/${entry.modelId}`;
+			const caps = entry.capabilities.length > 0 ? ` [${entry.capabilities.join(", ")}]` : "";
+			const current = modelStr === currentModel ? " ← current" : "";
+			lines.push(`    ${alias} → ${modelStr}${current}${caps}`);
+		}
 	}
 
 	const sceneInfo = Object.entries(state.config.scenes)
 		.map(([s, aliases]) => `  ${s}: ${aliases.join(", ")}`)
 		.join("\n");
 
-	return res(`Configured models (${Object.keys(state.config.models).length}):\n\n${lines.join("\n")}\n\nScenes:\n${sceneInfo}`);
+	return res(`Configured models:\n\n${lines.join("\n")}\n\nScenes:\n${sceneInfo}`);
 }
 
-function handleSearch(state: { config: ModelPolicy | null }, query: string): ToolRes {
-	if (!state.config) {
-		return res("No model policy configured.");
+function handleSearch(state: SessionState, query: string): ToolRes {
+	if (!state.config) return res("No model policy configured.");
+	if (!query) return res("Please provide a search query.", { error: true });
+
+	const matches: Array<{ provider: string; alias: string; entry: { modelId: string; capabilities: string[] } }> = [];
+
+	for (const [provider, pcfg] of Object.entries(state.config.models)) {
+		for (const [alias, entry] of Object.entries(pcfg.models)) {
+			if (alias.toLowerCase().includes(query)
+				|| entry.modelId.toLowerCase().includes(query)
+				|| provider.toLowerCase().includes(query)) {
+				matches.push({ provider, alias, entry });
+			}
+		}
 	}
 
-	if (!query) {
-		return res("Please provide a search query.", { error: true });
-	}
+	if (matches.length === 0) return res(`No models matching "${query}".`);
 
-	const matches = Object.entries(state.config.models).filter(
-		([alias, entry]) =>
-			alias.toLowerCase().includes(query)
-			|| entry.provider.toLowerCase().includes(query)
-			|| entry.modelId.toLowerCase().includes(query),
+	const lines = matches.map(
+		(m) => `  ${m.alias} (${m.provider}) → ${m.entry.modelId} [${m.entry.capabilities.join(", ")}]`,
 	);
-
-	if (matches.length === 0) {
-		return res(`No models matching "${query}".`);
-	}
-
-	const lines = matches.map(([alias, entry]) => `  ${alias} \u2192 ${entry.provider}/${entry.modelId} [${entry.capabilities.join(", ")}]`);
 	return res(`Models matching "${query}" (${matches.length}):\n\n${lines.join("\n")}`);
 }
 
-async function handleSwitch(state: { config: ModelPolicy | null }, pi: ExtensionAPI, ctx: ExtensionContext, query: string): Promise<ToolRes> {
-	if (!state.config) {
-		return res("No model policy configured. Cannot switch.", { error: true });
+async function handleSwitch(state: SessionState, pi: ExtensionAPI, ctx: ExtensionContext, query: string): Promise<ToolRes> {
+	if (!state.config) return res("No model policy configured. Cannot switch.", { error: true });
+	if (!query) return res("Please specify a model alias to switch to (e.g., 'glm-5.1').", { error: true });
+
+	// Search by alias
+	for (const [, pcfg] of Object.entries(state.config.models)) {
+		for (const [alias, entry] of Object.entries(pcfg.models)) {
+			if (alias.toLowerCase() === query || entry.modelId.toLowerCase() === query) {
+				return switchToModel(pi, ctx, pcfg.plan, entry.modelId, alias);
+			}
+		}
 	}
 
-	if (!query) {
-		return res("Please specify a model alias to switch to (e.g., 'glm-5.1') or use 'search' first.", { error: true });
+	// Fuzzy search by modelId
+	for (const [, pcfg] of Object.entries(state.config.models)) {
+		for (const [alias, entry] of Object.entries(pcfg.models)) {
+			if (alias.toLowerCase().includes(query) || entry.modelId.toLowerCase().includes(query)) {
+				return switchToModel(pi, ctx, pcfg.plan, entry.modelId, alias);
+			}
+		}
 	}
 
-	const exactEntry = state.config.models[query];
-	if (exactEntry) {
-		return switchToModel(pi, ctx, exactEntry.provider, exactEntry.modelId, query);
-	}
-
-	const fuzzyEntry = Object.entries(state.config.models).find(
-		([alias, entry]) =>
-			alias.toLowerCase() === query
-			|| entry.modelId.toLowerCase() === query
-			|| `${entry.provider}/${entry.modelId}`.toLowerCase() === query,
-	);
-
-	if (!fuzzyEntry) {
-		return res(`No model matching "${query}". Use 'list' to see available models or 'search' to find by keyword.`, { error: true });
-	}
-
-	const [matchedAlias, matchedEntry] = fuzzyEntry;
-	return switchToModel(pi, ctx, matchedEntry.provider, matchedEntry.modelId, matchedAlias);
+	return res(`No model matching "${query}". Use 'list' to see available models.`, { error: true });
 }
 
-function handleRecommend(state: { config: ModelPolicy | null }, ctx: ExtensionContext): ToolRes {
-	if (!state.config) {
-		return res("No model policy configured. No recommendation available.");
-	}
+function handleRecommend(state: SessionState, ctx: ExtensionContext): ToolRes {
+	if (!state.config) return res("No model policy configured.");
 
 	try {
 		const currentModel = getCurrentModelId(ctx);
-		const prompt = ctx.getSystemPrompt();
-		const scene = detectScene(prompt);
 		const entries = asSessionEntries(ctx.sessionManager.getBranch());
+		const cache = readCache();
+		const config = state.config;
 
-		const rec = computeRecommendation(state.config, scene, currentModel, entries);
-		const snapshot = computeQuotaSnapshot(readCache());
-		const formatted = formatAdvisorPrompt(rec, snapshot, state.config, new Date());
+		const snapshot = computeQuotaSnapshot(cache, config);
+		const stickiness = computeStickiness(entries, config);
+		const recommend = computePeakRecommend(new Date(), config, snapshot);
 
-		return res(`Current recommendation:\n\n${formatted}`);
+		const formatted = formatContextPrompt({
+			currentModel,
+			stickiness,
+			snapshot,
+			recommend,
+			config,
+			now: new Date(),
+		});
+
+		return res(`Current model context:\n\n${formatted}`);
 	} catch (err) {
-		return res(`Failed to compute recommendation: ${(err as Error).message}`, { error: true });
+		return res(`Failed to compute context: ${(err as Error).message}`, { error: true });
 	}
 }
 
-function handleSetup(state: { config: ModelPolicy | null }, ctx: ExtensionContext): ToolRes {
+function handleSetup(state: SessionState, ctx: ExtensionContext, query?: string): ToolRes {
+	const subAction = (query ?? "").trim().toLowerCase();
+
+	if (subAction === "delete") {
+		const result = deletePolicyConfig();
+		if (result.ok) {
+			state.config = null;
+			return res(`Config deleted: ${result.path}. Run /setup-model-policy to regenerate.`);
+		}
+		return res(result.error, { error: true });
+	}
+
+	if (subAction === "list") {
+		const result = readPolicyConfigContent();
+		if (!result.ok) return res(result.error, { error: true });
+		return res(`Current model-policy.json (${result.path}):\n\n\`\`\`json\n${result.content}\n\`\`\``);
+	}
+
+	if (subAction === "edit") {
+		const result = readPolicyConfigContent();
+		if (!result.ok) return res(result.error, { error: true });
+		return res([
+			"Current model-policy.json for editing:\n",
+			"```json",
+			result.content,
+			"```\n",
+			"Tell me what you want to change. Examples:",
+			'- "Change peak hours to 12-18"',
+			'- "Add model X to coding scene"',
+			'- "Set opencode-go rolling threshold to 90%"',
+			'- "Remove minimax from the config"\n',
+			"I'll modify the config and confirm with you before saving. Say 'save' when ready.",
+		].join("\n"));
+	}
+
+	// No sub-action: generate new config
 	if (state.config) {
-		return res(`Config already exists at ${getConfigPath()}. Delete it first if you want to regenerate.`);
+		return res(`Config already exists at ${getConfigPath()}. Use 'setup delete' to remove, 'setup list' to view, or 'setup edit' to modify.`);
 	}
 
 	const enabledModels = readEnabledModels();
-	const result = generatePolicyConfig(ctx.modelRegistry, enabledModels);
+	const genResult = generatePolicyConfig(ctx.modelRegistry, enabledModels);
 
 	return res([
-		"Auto-generated model-policy.json based on your configured models.",
+		"Auto-generated model-policy.json (v2).",
 		"Review the config below. If it looks correct, write it to " + getConfigPath() + " using the write tool.",
-		"Adjust any values before writing (e.g. peak hours, scene preferences, budget target).",
 		"",
 		"```json",
-		result.json,
+		genResult.json,
 		"```",
 	].join("\n"));
 }
@@ -243,20 +315,10 @@ async function switchToModel(
 	alias: string,
 ): Promise<ToolRes> {
 	try {
-		const currentModel = getCurrentModelId(ctx);
-
-		if (currentModel === `${provider}/${modelId}`) {
-			return res(`Already using ${alias} (${provider}/${modelId}).`);
-		}
-
+		// 尝试直接匹配 Pi 模型 registry（provider 可能含 -router 后缀）
 		const match = ctx.modelRegistry.find(provider, modelId);
 		if (!match) {
-			return res(`Model ${provider}/${modelId} not available (API key may not be configured).`, { error: true });
-		}
-
-		const success = await pi.setModel(match);
-		if (!success) {
-			return res(`Failed to switch to ${provider}/${modelId}.`, { error: true });
+			return res(`Model ${provider}/${modelId} not available.`, { error: true });
 		}
 
 		pi.appendEntry("model_change", {
@@ -268,6 +330,6 @@ async function switchToModel(
 
 		return res(`Switched to ${alias} (${provider}/${modelId}).`);
 	} catch (err) {
-		return res(`Error switching to ${provider}/${modelId}: ${err instanceof Error ? err.message : String(err)}`, { error: true });
+		return res(`Error switching: ${err instanceof Error ? err.message : String(err)}`, { error: true });
 	}
 }

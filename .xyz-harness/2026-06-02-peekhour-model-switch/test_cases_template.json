@@ -1,0 +1,88 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "非高峰期注入包含完整字段",
+      "description": "验证 10:00 时注入包含 Current/Stickiness/Time/Z.ai/ocg/Rule/Scene/Switch 所有行",
+      "steps": ["启动 Pi + model-policy.json", "发送消息", "检查 system prompt 含 [Model Context]", "逐行验证 8 个字段"]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "integration",
+      "title": "注入文本不超过 200 tokens",
+      "description": "用 tokenizer 验证高峰期和低峰期两种注入文本均 ≤200 tokens",
+      "steps": ["收集高峰期注入文本", "收集低峰期注入文本", "用 DeepSeek tokenizer 计数", "assert ≤200"]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "Z.ai pct 来自 cache.zhipu.tokensPct",
+      "description": "验证注入中 Z.ai 百分比与 statusline_cache.json 中 zhipu.tokensPct 一致",
+      "steps": ["读取 cache 文件获取 tokensPct", "发送消息", "检查注入文本中 Z.ai 百分比", "assert 值一致"]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "integration",
+      "title": "ocg 三窗口数据来自 cache",
+      "description": "验证 rolling/weekly/monthly 的 pct 和 reset 全部正确提取",
+      "steps": ["读取 cache 文件获取 opencodeGo 数据", "发送消息", "检查注入文本中 ocg 行", "assert 6 个数值全部匹配"]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "integration",
+      "title": "Cache 为空时跳过 quota 行",
+      "description": "删除 cache 文件后验证注入不包含 Z.ai 和 ocg 行",
+      "steps": ["删除 statusline_cache.json", "重启 Pi", "发送消息", "检查注入不含 Z.ai 行", "检查注入不含 ocg 行"]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "粘性提取 — compaction 后 0 turn",
+      "description": "compaction 后第一条消息的注入显示 free switch",
+      "steps": ["长对话触发 compaction", "发送第一条消息", "检查 Stickiness 行含 free switch"]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "integration",
+      "title": "粘性提取 — 3 turns 后 warm cache",
+      "description": "model_change 后 3 turns + 20k tokens 的注入显示 prefer staying",
+      "steps": ["切换模型", "发送 3+ 条消息累积 20k tokens", "检查 Stickiness 行含 prefer staying"]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "integration",
+      "title": "高峰期 14:00-17:59 标记",
+      "description": "验证 14:00 和 17:59 显示 Peak，10:00 显示 Off-peak",
+      "steps": ["mock 时间为 14:00", "验证含 Peak", "mock 时间为 10:00", "验证含 Off-peak"]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "integration",
+      "title": "高峰期规则包含三个条件",
+      "description": "Peak 规则文本包含 ocg near limit、zai resetting soon、zai underutilized",
+      "steps": ["mock 时间为高峰期", "发送消息", "检查 Rule 行包含三个条件短语"]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "integration",
+      "title": "旧配置向后兼容",
+      "description": "不含 peakStrategy/rollingWindowHours/thresholds 的配置正常加载",
+      "steps": ["使用旧格式 model-policy.json", "启动 Pi", "发送消息", "验证注入正常且不崩溃"]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "integration",
+      "title": "推荐引擎函数已删除",
+      "description": "grep 验证 computeRecommendation/detectScene/budgetDecision 不再存在于 advisor.ts",
+      "steps": ["grep computeRecommendation advisor.ts", "grep detectScene advisor.ts", "grep budgetDecision advisor.ts", "assert 全部无结果"]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "integration",
+      "title": "setup 生成新字段",
+      "description": "setup 命令生成的 JSON 包含 peakStrategy=conserve, rollingWindowHours=5, thresholds",
+      "steps": ["删除已有配置", "运行 /setup-model-policy", "检查生成的 JSON", "assert 包含三个新字段且默认值正确"]
+    }
+  ]
+}
