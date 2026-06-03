@@ -42,7 +42,13 @@ description: >-
 ### Step 1: 收集上下文
 
 ```bash
-SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
+# 找到 review-context.sh 的实际路径并执行
+# 该脚本和本 SKILL.md 在同一目录下
+SKILL_DIR="$(find ~/.pi/agent ~/.agents -maxdepth 4 -path "*/code-review-worktree" -type d 2>/dev/null | head -1)"
+if [ -z "$SKILL_DIR" ]; then
+  echo '{"harness_mode":"none","dimensions":[],"effort":"simple","total_files":0}'
+  exit 1
+fi
 bash "${SKILL_DIR}/review-context.sh"
 ```
 
@@ -91,8 +97,11 @@ task: |
   变更文件: {files}
   获取 diff: 在 {cwd} 下执行 git diff {against}...HEAD -- {files}
   输出到: {output_path}
+  skill_path: {对应 skill 的 SKILL.md 路径}
   {维度特有参数}
 ```
+
+`skill_path` 的确定方式：从 Pi 注入的技能列表（`before_agent_start` 事件中的 `skills` 参数）找到对应 skill 的 `filePath`。如果对应 skill 不在注入列表中，跳过此参数。
 
 维度特有参数：
 
@@ -100,7 +109,7 @@ task: |
 |-------|---------|
 | review-blr | `spec_path: {harness_dir}/spec.md` |
 | review-standards | `claude_md_path: {cwd}/CLAUDE.md`（可选） |
-| review-taste | `lang: {primary_lang}`（可选） |
+| review-taste | `lang: {primary_lang}`（可选），`essence_path` 和 `taste_path`（品味文档路径，可选） |
 | review-integration | `blr_result_path: {output}/business_logic_review_v1.md` |
 | review-dataflow | `signals: {dataflow_signals}` |
 

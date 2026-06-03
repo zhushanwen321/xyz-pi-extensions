@@ -22,9 +22,15 @@ import {
 	type NormalizedQuotaRow,
 	type QuotaProvider,
 } from "./types.js";
+import { MS_PER_SEC } from "../time.js";
 
 const API_URL =
 	"https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains";
+
+/** 默认 fetch 超时（毫秒） */
+const FETCH_TIMEOUT_MS = 5000;
+/** 百分比标度 */
+const PERCENT_SCALE = 100;
 
 interface MinimaxBaseResp {
 	status_code?: number;
@@ -64,7 +70,7 @@ async function fetchMinimax(): Promise<MinimaxData | null> {
 				"content-type": "application/json",
 				accept: "application/json",
 			},
-			signal: AbortSignal.timeout(5000),
+			signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
 		});
 		if (!resp.ok) return null;
 	const data = (await resp.json()) as MinimaxApiResponse;
@@ -84,7 +90,8 @@ const isActive = (s: number | undefined) => s === 1;
 
 export const minimaxProvider: QuotaProvider<MinimaxData> = {
 	id: "minimax",
-	label: "minimax-token",
+	label: "minimax-token-plan",
+	category: "token-plan",
 	fetch: fetchMinimax,
 	normalize(raw): NormalizedQuotaRow | null {
 		// 关注 model_name === "general"（文本/LLM 用量），过滤掉 video 等无关项
@@ -122,9 +129,9 @@ function toWindow(
 ): { pct: number | null; resetSec: number | null } {
 	if (!isActive(status)) return INFINITE_WIN;
 	const rem = Number(remainingPercent ?? 0);
-	// 已用百分比 = 100 - 剩余
-	const used = Math.max(0, Math.min(100, 100 - rem));
+	// 已用百分比 = PERCENT_SCALE - 剩余
+	const used = Math.max(0, Math.min(PERCENT_SCALE, PERCENT_SCALE - rem));
 	const resetSec =
-		remainsMs && remainsMs > 0 ? Math.ceil(remainsMs / 1000) : null;
+		remainsMs && remainsMs > 0 ? Math.ceil(remainsMs / MS_PER_SEC) : null;
 	return { pct: used, resetSec };
 }

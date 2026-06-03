@@ -43,7 +43,7 @@ Stage 1 需求讨论完成。接下来进入 Stage 2：Spec 编写。
 1. **编写 spec.md** — 包含：目标、架构决策、验收标准(AC)、数据流(如涉及)、受影响文件列表、已做决策、行为约束、已有基础设施。**每个文件路径必须从项目根开始写完整，每个函数/接口必须写明签名和位置。你的文档是给另一个 agent 的完整指令——不要假设对方知道你在说什么。**
 2. **六要素完整性检查** — 逐一检查 Outcomes/Scope/Constraints/Decisions/Verification/已有基础设施是否覆盖。
 3. **歧义扫描** — 扫描全文，将模糊描述标记为 `[AMBIGUOUS]`，逐一与用户确认解决。
-4. **引用扫描** — 运行 `spec-ref-scan.sh` 验证引用完整性。脚本位置：Pi 环境为 `~/.pi/agent/skills/xyz-harness-dev-flow/scripts/spec-ref-scan.sh`，项目内为 `skills/xyz-harness-dev-flow/scripts/spec-ref-scan.sh`（优先项目内，不存在时用全局路径）。命令：`bash {脚本路径} <project_root> <spec_path>`。有问题则修复 spec 后重新扫描。
+4. **引用扫描** — 运行 `spec-ref-scan.sh` 验证引用完整性。脚本位置：先在项目内查找 `skills/xyz-harness-dev-flow/scripts/spec-ref-scan.sh`，不存在时通过 `find ~/.pi/agent ~/.agents -path "*/xyz-harness-dev-flow/scripts/spec-ref-scan.sh" 2>/dev/null | head -1` 自动定位。命令：`bash {脚本路径} <project_root> <spec_path>`。有问题则修复 spec 后重新扫描。
 
 **完成标志**：spec.md 已写入产出目录，六要素检查通过，引用扫描通过，无未解决的 [AMBIGUOUS]。
 
@@ -280,7 +280,7 @@ Phase 1 全部完成。产出物：
 
 ## Phase 2 启动指令
 
-Stage 8 用户确认通过后，**必须读取** `skills/xyz-harness-dev-flow/references/phase2-launch-template.md` 模板文件（绝对路径：`~/.pi/agent/skills/xyz-harness-dev-flow/references/phase2-launch-template.md`），按模板中的变量填充说明逐项替换 `{{变量}}`，然后将完整提示词输出给用户。
+Stage 8 用户确认通过后，**必须读取** `skills/xyz-harness-dev-flow/references/phase2-launch-template.md` 模板文件（先在项目内查找，不存在时通过 `find ~/.pi/agent ~/.agents -path "*/xyz-harness-dev-flow/references/phase2-launch-template.md" 2>/dev/null | head -1` 定位），按模板中的变量填充说明逐项替换 `{{变量}}`，然后将完整提示词输出给用户。
 
 **输出格式：**
 
