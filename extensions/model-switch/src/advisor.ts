@@ -210,7 +210,6 @@ export function resolveModelForScene(scene: string, now?: Date): string | undefi
 				priority,
 				isPeakAvoid,
 			});
-			break; // Found the provider for this alias
 		}
 	}
 
