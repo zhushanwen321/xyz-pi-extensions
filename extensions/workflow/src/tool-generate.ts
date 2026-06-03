@@ -31,44 +31,18 @@ export function registerGenerateTool(pi: ExtensionAPI) {
     description:
       "Generate a temporary workflow script from AI-generated code. " +
       "Writes the script to .pi/workflows/.tmp/ for execution.\n" +
-      "\nWhen to use: When the user describes a task in natural language via /workflow " +
-      "and no existing workflow matches. AI generates a JS script, then uses this tool to write it.\n" +
-      "\nIMPORTANT: Always show the generated script path to the user and wait for confirmation before executing.\n" +
-      "\n== Script Format Requirements ==\n" +
-      "\nRuntime environment:\n" +
-      "- Script runs inside an async IIFE in a Worker thread. Top-level await IS supported.\n" +
-      "- DO NOT use import/export (ESM) syntax. Use require() for Node.js built-ins.\n" +
-      "- The script's return value IS captured and sent back to the main thread.\n" +
-      "\nMeta declaration (required at top level):\n" +
-      "  const meta = { name: 'workflow-name', description: '...', phases: ['phase1', 'phase2'] };\n" +
-      "\nInjected globals (pre-defined, do NOT redeclare):\n" +
-      "  agent(opts) — Call an AI agent. Returns parsedOutput (structured data) or content (string).\n" +
-      "    opts: { prompt: string, schema?: object, model?: string, description?: string }\n" +
-      "  parallel(calls) — Run multiple agent() calls concurrently via Promise.all.\n" +
-      "    calls: Array<AgentOpts> — array of agent opts objects\n" +
-      "  pipeline(stages) — Execute stages sequentially, each receives previous result.\n" +
-      "    stages: Array<(prevResult?) => Promise<any>>\n" +
-      "  $ARGS — Object with workflow arguments (from /workflow run --args key=val).\n" +
-      "  $WORKSPACE — Absolute path to the project workspace root.\n" +
-      "  $BUDGET — Budget info: { usedTokens, usedCost, maxTokens?, maxTimeMs? }.\n" +
-      "\nConstraints:\n" +
-      "- agent() calls must be deterministic in order for pause/resume to work correctly.\n" +
-      "- parallel() has no concurrency limit — be mindful of API rate limits.\n" +
-      "- Throwing an error aborts the workflow (after retries).\n" +
-      "- Use require() for Node.js built-ins: const fs = require('node:fs');\n" +
-      "\nExample minimal script:\n" +
-      "  const meta = { name: 'hello', description: 'Hello workflow', phases: ['greet'] };\n" +
-      "  const target = $ARGS.target ?? 'world';\n" +
-      "  const result = await agent({ prompt: `Say hello to ${target}`, description: 'greet' });\n" +
-      "  return { greeting: result };",
+      "\nWhen to use: When (1) user requests /workflow and no existing workflow matches, or " +
+      "(2) workflow-run auto mode returns 'no match' and the task needs a new pipeline. " +
+      "AI generates a JS script, then uses this tool to write it.\n" +
+      "\nIMPORTANT: Always show the generated script path to the user and wait for confirmation before executing.",
     promptSnippet: "Generate a temporary workflow script from AI-generated code",
     promptGuidelines: [
-      "Use when user describes a task via /workflow and no existing workflow matches",
-      "Script runs in async IIFE Worker — NO import/export, use require() and const meta = {...}",
-      "Always show the generated script path and wait for user confirmation before running",
-      "After user confirms, use workflow-run to execute the generated script",
-      "Injected globals: agent({prompt, schema?, model?, description?}), parallel(calls), pipeline(stages), $ARGS, $WORKSPACE, $BUDGET",
-      "agent() returns parsedOutput (structured) or content (string). Script return value is captured.",
+      "Use workflow-generate when: (1) user requests /workflow and no existing script matches, (2) workflow-run auto mode returns no match, or (3) the task needs a new reusable pipeline. Never auto-generate for tasks that can be done directly with bash/subagent.",
+      "Before using workflow-generate, load the workflow-script-format skill for complete format reference (injected globals, constraints, examples).",
+      "workflow-generate scripts run in a CJS Worker — NO import/export, use require() for Node built-ins, const meta = {...} at top level is required.",
+      "Keep workflow scripts under 100 lines. Scripts are orchestration glue (agent calls + flow control), not business logic.",
+      "Always show the generated script path and wait for user confirmation. After confirmation, use workflow-run with the exact name and mode='force' to execute.",
+      "Positive: user runs /workflow pre-commit and no script exists → workflow-generate. Or workflow-run auto mode returns 'no match' → workflow-generate. Negative: user says 'check types' → use bash directly, not workflow-generate.",
     ],
     parameters: WorkflowGenerateParams,
 

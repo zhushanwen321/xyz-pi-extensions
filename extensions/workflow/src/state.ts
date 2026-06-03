@@ -16,7 +16,6 @@
 // ── Status type ───────────────────────────────────────────────
 
 export type WorkflowStatus =
-  | "created"
   | "running"
   | "paused"
   | "completed"
@@ -26,7 +25,6 @@ export type WorkflowStatus =
   | "time_limited";
 
 export const ALL_STATUSES: readonly WorkflowStatus[] = [
-  "created",
   "running",
   "paused",
   "completed",
@@ -89,6 +87,8 @@ export interface WorkflowInstance {
   completedAt?: string;
   budget: WorkflowBudget;
   error?: string;
+  /** Captured return value from workflow script (set on "return" message) */
+  scriptResult?: unknown;
 }
 
 // ── Serialization types ───────────────────────────────────────
@@ -110,6 +110,7 @@ interface SerializedWorkflowInstance {
   completedAt?: string;
   budget?: WorkflowBudget;
   error?: string;
+  scriptResult?: unknown;
 }
 
 export interface WorkflowStateEntry {
@@ -129,7 +130,6 @@ export const TERMINAL_STATUSES: readonly WorkflowStatus[] = [
 
 /** All transitions defined. Empty array = terminal state (no outgoing transitions). */
 export const VALID_TRANSITIONS: Record<WorkflowStatus, WorkflowStatus[]> = {
-  created: ["running"],
   running: ["paused", "completed", "failed", "aborted", "budget_limited", "time_limited"],
   paused: ["running", "aborted"],
   completed: [],
@@ -181,6 +181,7 @@ export function serializeInstance(instance: WorkflowInstance): SerializedWorkflo
     completedAt: instance.completedAt,
     budget: instance.budget,
     error: instance.error,
+    scriptResult: instance.scriptResult,
   };
 }
 
@@ -189,10 +190,13 @@ export function serializeInstance(instance: WorkflowInstance): SerializedWorkflo
  * Backward compatible: missing budget fields get defaults.
  */
 export function deserializeInstance(data: SerializedWorkflowInstance): WorkflowInstance {
+  // Backward compat: old "created" status is dead after removing the create action
+  const rawStatus = data.status as string;
+  const status: WorkflowStatus = rawStatus === "created" ? "running" : data.status;
   return {
     runId: data.runId,
     name: data.name,
-    status: data.status,
+    status,
     callCache: new Map(
       (data.callCache ?? []).map((entry: SerializedCallCacheEntry) => [entry.key, entry.value]),
     ),
@@ -203,6 +207,7 @@ export function deserializeInstance(data: SerializedWorkflowInstance): WorkflowI
     completedAt: data.completedAt,
     budget: data.budget ?? { usedTokens: 0, usedCost: 0 },
     error: data.error,
+    scriptResult: data.scriptResult,
   };
 }
 
@@ -243,11 +248,12 @@ export function createInstance(params: {
   name: string;
   worker: string;
   budget?: Partial<WorkflowBudget>;
+  status?: WorkflowStatus;
 }): WorkflowInstance {
   return {
     runId: params.runId,
     name: params.name,
-    status: "created",
+    status: params.status ?? "running",
     callCache: new Map(),
     trace: [],
     worker: params.worker,

@@ -17,7 +17,7 @@ import { renameSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { type WorkflowOrchestrator } from "./orchestrator.js";
-import { type WorkflowInstance, isTerminal } from "./state.js";
+import { type WorkflowInstance } from "./state.js";
 import { loadWorkflows } from "./config-loader.js";
 
 // ── Types ──────────────────────────────────────────────────────
@@ -52,10 +52,29 @@ export function sendCompletionNotification(
   if (notifiedRunIds.has(runId)) return;
   notifiedRunIds.add(runId);
 
+  // FR-2: Build content with optional scriptResult summary + trace summary
+  const parts: string[] = [];
+  parts.push(`Workflow '${instance.name}' completed: ${instance.status}`);
+
+  if (instance.scriptResult !== undefined && instance.scriptResult !== null) {
+    const serialized = JSON.stringify(instance.scriptResult, null, 2);
+    const truncated = serialized.length > 2000 ? serialized.slice(0, 2000) + "\n... (truncated)" : serialized;
+    parts.push("");
+    parts.push("--- Script Result ---");
+    parts.push(truncated);
+  }
+
+  parts.push("");
+  parts.push("--- Agent Trace ---");
+  for (const node of instance.trace) {
+    parts.push(`[${node.stepIndex}] ${node.agent}: ${node.status}`);
+  }
+
+  const content = parts.join("\n");
+
   api.sendMessage({
     customType: "workflow-result",
-    content:
-      `Workflow '${instance.name}' (${runId.slice(0, 16)}...) completed: ${instance.status}`,
+    content,
     display: true,
     details: {
       runId,
@@ -69,7 +88,7 @@ export function sendCompletionNotification(
           items: instance.trace.map((node) => ({
             label: `[${node.stepIndex}] ${node.agent}: ${node.task.slice(0, 80)}`,
             status: statusToItemStatus(node.status),
-            detail: node.result?.content?.slice(0, 120),
+            detail: node.result?.content?.slice(0, 500),
           })),
           summary: `Status: ${instance.status} | ${instance.trace.length} agent calls`,
         },
@@ -124,32 +143,7 @@ function parseRunArgs(tokens: string[]): ParsedRunArgs {
   return result;
 }
 
-// ── Poll helper ────────────────────────────────────────────────
 
-/**
- * Start polling a workflow instance for terminal state.
- * Calls sendCompletionNotification when done. The timer is unref'd
- * so it does not prevent process exit.
- */
-function pollForCompletion(
-  api: ExtensionAPI,
-  orch: WorkflowOrchestrator,
-  runId: string,
-): void {
-  const pollInterval = setInterval(() => {
-    const inst = orch.getInstance(runId);
-    if (!inst || isTerminal(inst.status)) {
-      clearInterval(pollInterval);
-      if (inst) {
-        sendCompletionNotification(api, runId, inst);
-      }
-    }
-  }, 2000);
-
-  if (typeof pollInterval === "object" && "unref" in pollInterval) {
-    pollInterval.unref();
-  }
-}
 
 // ── Command registration ───────────────────────────────────────
 
@@ -170,15 +164,17 @@ export function registerWorkflowCommands(
       "Workflow management.",
       "Subcommands:",
       "  run <name> [--args key=val ...] [--tokens N] [--time N]  Start a workflow",
-      "  list              List running workflow instances",
+      "  list              List running instances and available scripts",
       "  abort <run-id>    Abort a running workflow",
+      "  save <tmp-name> [--as <name>]  Save a temporary workflow as permanent",
+      "  delete <name>     Delete a workflow script",
       "",
       "Shorthand: /workflows opens the interactive panel.",
     ].join("\n"),
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       const parts = args.trim().split(/\s+/);
       if (parts.length === 0) {
-        ctx.ui.notify("Usage: /workflow run|list|abort", "warning");
+        ctx.ui.notify("Usage: /workflow run|list|abort|save|delete", "warning");
         return;
       }
 
@@ -212,16 +208,30 @@ export function registerWorkflowCommands(
               `Started '${parsed.name}' (${runId.slice(0, 16)}...)`,
               "info",
             );
-            pollForCompletion(api, orch, runId);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             // If workflow not found, pass to AI to handle
             if (msg.includes("not found") || msg.includes("unavailable")) {
+              // Load available workflows for suggestions
+              let availableList = "";
+              try {
+                const workflows = await loadWorkflows();
+                const available = workflows.filter((wf) => wf.available);
+                if (available.length > 0) {
+                  availableList = "\n\nAvailable workflow scripts:\n" +
+                    available.map((wf) => `  - ${wf.name}: ${wf.description || "(no description)"}`).join("\n");
+                } else {
+                  availableList = "\n\nNo workflow scripts are currently available.";
+                }
+              } catch {
+                availableList = "";
+              }
+
               api.sendUserMessage(
-                `The user tried to run /workflow run '${parsed.name}' but no workflow script with that name was found. ` +
-                `The original /workflow run input was:\n${args.trim()}\n\n` +
-                `Available workflow scripts can be found in .pi/workflows/ and ~/.pi/agent/workflows/. ` +
-                `If no workflow matches, execute the task directly using subagents.`
+                `The user tried to run /workflow run '${parsed.name}' but no exact match was found. ` +
+                `The original /workflow run input was:\n${args.trim()}${availableList}\n\n` +
+                `Use workflow-run with name='${parsed.name}' and mode='auto' — the tool will search by description, ` +
+                `list candidates if any match, or suggest creating a new workflow.`
               );
             } else {
               ctx.ui.notify(`Failed: ${msg}`, "error");
@@ -236,9 +246,10 @@ export function registerWorkflowCommands(
           let scriptSection = "";
           try {
             const workflows = await loadWorkflows();
-            if (workflows.length > 0) {
+            const available = workflows.filter((wf) => wf.available);
+            if (available.length > 0) {
               scriptSection = "\nAvailable workflows:\n" +
-                workflows
+                available
                   .map((wf) => `  [${wf.source}] ${wf.name} — ${wf.description || "(no description)"}`)
                   .join("\n");
             }
@@ -317,6 +328,26 @@ export function registerWorkflowCommands(
           return;
         }
 
+        // ── delete ──
+        case "delete": {
+          const name = parts[1];
+          if (!name) {
+            ctx.ui.notify("Usage: /workflow delete <name>", "warning");
+            return;
+          }
+
+          try {
+            const isRunning = (n: string) =>
+              orch.list().some((i) => i.name === n && i.status === "running");
+            const result = deleteWorkflow(name, isRunning);
+            ctx.ui.notify(result, "info");
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            ctx.ui.notify(`Delete failed: ${msg}`, "error");
+          }
+          return;
+        }
+
         default: {
           // Unknown subcommand — check if it could be a workflow name or natural language
           // Collect available workflows and pass to AI for routing
@@ -324,8 +355,9 @@ export function registerWorkflowCommands(
           let workflowList = "";
           try {
             const workflows = await loadWorkflows();
-            if (workflows.length > 0) {
-              workflowList = workflows
+            const available = workflows.filter((wf) => wf.available);
+            if (available.length > 0) {
+              workflowList = available
                 .map((wf) => `  [${wf.source}] ${wf.name} — ${wf.description || "(no description)"}`)
                 .join("\n");
             }
@@ -340,11 +372,10 @@ export function registerWorkflowCommands(
           api.sendUserMessage(
             `The user typed /workflow with input: "${userInput}"` +
             listSection +
-            `\n\nPlease determine:\n` +
-            `1. If any existing workflow matches the user's intent, read its script and evaluate suitability.\n` +
-            `2. If matched, list matches and ask the user to confirm: use existing or create new.\n` +
-            `3. If no match, use workflow-generate to create a new temporary workflow.\n` +
-            `4. Before execution, ALWAYS show the script path and wait for user confirmation.`,
+            `\n\nMatch by workflow name and description (do NOT read script files). Then:\n` +
+            `1. If a workflow matches, use workflow-run with name='${userInput}' and mode='auto'. The tool will confirm with the user.\n` +
+            `2. If no match, use workflow-generate to create a new temporary workflow.\n` +
+            `3. Before executing a generated workflow, ALWAYS show the script path and wait for user confirmation.`,
           );
           return;
         }
@@ -440,8 +471,8 @@ export function registerWorkflowCommands(
         if (action === "Run") {
           api.sendUserMessage(
             `The user selected workflow '${meta.name}' from the /workflows panel and chose Run. ` +
-            `Script path: ${availableScripts.find((s) => s.name === meta.name)?.path ?? "unknown"}\n` +
-            `Show the script path and wait for user confirmation before executing.`,
+            `Use workflow-run with name='${meta.name}' and mode='force' to execute directly. ` +
+            `The user already confirmed by selecting it from the panel.`,
           );
         } else if (action === "Save") {
           try {

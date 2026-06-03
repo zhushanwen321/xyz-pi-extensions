@@ -186,10 +186,16 @@ importers:
       '@sinclair/typebox':
         specifier: '*'
         version: 0.34.49
+      '@zhushanwen/pi-model-switch':
+        specifier: workspace:*
+        version: link:../model-switch
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
         version: 24.12.4
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(@types/node@24.12.4)(vite@8.0.16(@types/node@24.12.4)(jiti@2.7.0)(yaml@2.9.0))
 
   shared/quota-providers:
     dependencies:

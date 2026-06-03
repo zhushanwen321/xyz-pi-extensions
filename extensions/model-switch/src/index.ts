@@ -333,3 +333,6 @@ async function switchToModel(
 		return res(`Error switching: ${err instanceof Error ? err.message : String(err)}`, { error: true });
 	}
 }
+
+// Re-export for programmatic usage (e.g., workflow extension)
+export { resolveModelForScene } from "./advisor";

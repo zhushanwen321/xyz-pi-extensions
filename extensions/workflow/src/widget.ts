@@ -68,7 +68,7 @@ export function renderWorkflowList(
   theme: Theme,
 ): string[] {
   if (instances.length === 0) {
-    return [theme.fg("muted", "  No workflows")];
+    return [];
   }
 
   const lines: string[] = [];

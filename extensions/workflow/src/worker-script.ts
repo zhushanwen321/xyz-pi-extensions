@@ -6,8 +6,8 @@
  *
  * Compatible with Claude Code Workflow script format:
  *   - agent(promptString)
- *   - agent(promptString, { label?, schema?, model? })
- *   - agent({ prompt, schema?, model?, description? })
+ *   - agent(promptString, { label?, schema?, model?, scene? })
+ *   - agent({ prompt, schema?, model?, scene?, description? })
  *   - parallel([agent(...), ...]) or parallel([{ task, agent }, ...])
  *   - pipeline([stageFn, ...])
  *   - phase(name), log(msg)
@@ -52,7 +52,7 @@ export interface WorkerScriptData {
 // ── WorkerInMsg type (for main-thread consumption) ──────────
 
 export type WorkerInMsg =
-  | { type: "agent-call"; callId: number; opts: { prompt: string; schema?: unknown; model?: string; description?: string } }
+  | { type: "agent-call"; callId: number; opts: { prompt: string; schema?: unknown; model?: string; scene?: string; description?: string } }
   | { type: "return"; runId: string; result: unknown }
   | { type: "error"; runId: string; error: string };
 
@@ -145,6 +145,7 @@ export function buildWorkerScript(userScript: string): string {
     '        description: (secondArg && typeof secondArg === "object" && secondArg.label) || undefined,',
     '        schema: (secondArg && typeof secondArg === "object" && secondArg.schema) || undefined,',
     '        model: (secondArg && typeof secondArg === "object" && secondArg.model) || undefined,',
+    '        scene: (secondArg && typeof secondArg === "object" && secondArg.scene) || undefined,',
     '      };',
     '    } else if (typeof firstArg === "object" && firstArg !== null) {',
     '      if (firstArg.prompt) {',
@@ -155,6 +156,7 @@ export function buildWorkerScript(userScript: string): string {
     '          description: firstArg.label || firstArg.description || firstArg.agent,',
     '          schema: firstArg.schema,',
     '          model: firstArg.model,',
+    '          scene: firstArg.scene,',
     '        };',
     '      } else {',
     '        opts = firstArg;',

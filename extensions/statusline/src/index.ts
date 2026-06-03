@@ -182,7 +182,8 @@ function registerSessionLifecycle(pi: ExtensionAPI): void {
 		});
 		refreshTotals(state, ctx);
 
-		ctx.ui.setFooter((t: { requestRender(): void }, theme: Theme, footerData: ReadonlyFooterDataProvider) => {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK ExtensionContext.ui 类型缺失 setFooter
+		(ctx.ui as any).setFooter((t: { requestRender(): void }, theme: Theme, footerData: ReadonlyFooterDataProvider) => {
 			tui = t;
 			const unsub = footerData.onBranchChange(() => t.requestRender());
 			return {
