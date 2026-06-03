@@ -8,6 +8,7 @@
 import type { CacheData } from "@zhushanwen/pi-quota-providers";
 import type {
 	ModelPolicy,
+	PlanConfig,
 	PlanQuota,
 	QuotaSnapshot,
 	SessionEntries,
@@ -20,6 +21,14 @@ import type {
 const SECONDS_PER_DAY = 86400;
 const SECONDS_PER_HOUR = 3600;
 const SECONDS_PER_MINUTE = 60;
+
+// ── 业务阈值常�� ─────────────────────────────────────────
+
+/** Z.ai rolling 窗口安全阀：超过此百分比时，即使在非 peak 也禁用 */
+const ZAI_SAFETY_VALVE = 95;
+
+/** peak 时段窗口使用率阈值：超过此值时，若 peak 与窗口前半段重叠则禁用 */
+const PEAK_WINDOW_THRESHOLD = 50;
 
 // ── 公共 API ────────────────────────────────────────────
 
@@ -110,7 +119,7 @@ export function computePeakRecommend(
 		return { result: "avoid", reason: "Peak hours, no quota data" };
 	}
 
-	if (quota.pct > 95) {
+	if (quota.pct > ZAI_SAFETY_VALVE) {
 		return { result: "avoid", reason: `Peak hours, ${quota.pct}% used (near limit)` };
 	}
 
@@ -119,7 +128,7 @@ export function computePeakRecommend(
 
 	if (quota.resetSec === null || quota.resetSec <= 0 || quota.resetSec >= winSec) {
 		// 无法确定窗口位置，保守处理
-		return { result: quota.pct > 50 ? "avoid" : "ok", reason: inPeak ? `Peak hours, ${quota.pct}% used` : "Off-peak" };
+		return { result: quota.pct > PEAK_WINDOW_THRESHOLD ? "avoid" : "ok", reason: inPeak ? `Peak hours, ${quota.pct}% used` : "Off-peak" };
 	}
 
 	const elapsedSec = winSec - quota.resetSec;
@@ -131,7 +140,7 @@ export function computePeakRecommend(
 
 	const peakInFirstHalf = peakStartMs < windowMidMs && peakEndMs > windowStartMs;
 
-	if (peakInFirstHalf && quota.pct > 50) {
+	if (peakInFirstHalf && quota.pct > PEAK_WINDOW_THRESHOLD) {
 		return { result: "avoid", reason: `Peak hours, >50% window (${quota.pct}%), peak overlaps early window` };
 	}
 
@@ -196,7 +205,7 @@ function extractSingleQuota(planName: string, cacheRec: Record<string, unknown>)
 }
 
 /** 查找配置中 priority 最高的有 peak 设置的 plan */
-function findPeakPlan(config: ModelPolicy): [string, import("./types").PlanConfig] | null {
+function findPeakPlan(config: ModelPolicy): [string, PlanConfig] | null {
 	const entries = Object.entries(config.plans).filter(([, p]) => p.peak);
 	if (entries.length === 0) return null;
 	entries.sort(([, a], [, b]) => a.priority - b.priority);
