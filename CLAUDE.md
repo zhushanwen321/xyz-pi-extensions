@@ -607,9 +607,13 @@ npx tsc --noEmit
 # 全量 lint
 pnpm -r lint
 
+# 全量测试
+pnpm -r test
+
 # 单包检查
 pnpm --filter @zhushanwen/pi-goal typecheck
 pnpm --filter @zhushanwen/pi-goal lint
+pnpm --filter @zhushanwen/pi-statusline test
 
 # 跳过 pre-commit hook（仅紧急 hotfix）
 SKIP_LINT=1 git commit -m "..."
@@ -625,6 +629,7 @@ SKIP_LINT=1 git commit -m "..."
 
 1. `tsc --noEmit` — 全量 TypeScript 类型检查
 2. `eslint` — 仅检查 staged 的 `.ts` 文件
+3. `vitest` — 按需触发：仅当 staged 文件涉及的包有 `src/__tests__/` 时运行
 
 bare+worktree 模式下 hook 自动检测 rebase 状态并跳过。
 
@@ -672,6 +677,54 @@ SKIP_LINT=1 git commit -m "..."
 - `no-magic-numbers` — 语义化命名（0/1/-1 豁免）
 
 规则源文件：`taste-lint/base.mjs` + `taste-lint/rules/`
+
+### 测试规范
+
+#### 测试框架
+
+使用 vitest（`^4.1.8`），禁止 `node:test`。
+
+#### 测试文件约定
+
+- 测试文件放在 `src/__tests__/` 目录下，命名 `*.test.ts`
+- 每个有测试的包需要 `vitest.config.ts`（放在包根目录）
+- `tsconfig.json` 已 exclude `**/__tests__` 和 `**/vitest.config.ts`，无需额外配置
+- 新增 exclude 规则时必须更新 `tsconfig.json` 的 `exclude` 数组
+
+#### 运行命令
+
+```bash
+# 全量测试（跑所有有 test script 的包）
+pnpm -r test
+
+# 单包测试
+pnpm --filter @zhushanwen/pi-statusline test
+
+# 监听模式
+pnpm --filter @zhushanwen/pi-statusline test:watch
+```
+
+#### 可测试性设计
+
+- 纯格式化/计算逻辑从 `index.ts` 提取到独立模块（如 `format.ts`、`speed.ts`），不依赖 Pi 运行时（ExtensionAPI、Theme 等）
+- Pi 运行时类型通过 `PlainPallet`/`plainThemeFg` 等无 ANSI 替代品绕过
+- 测试文件只 import 被测模块的导出函数，不 import Pi SDK
+
+#### vitest.config.ts alias 约定
+
+| 包位置 | 需要 alias | 示例 |
+|--------|------------|------|
+| `extensions/*` | `@zhushanwen/pi-quota-providers` → `../../shared/quota-providers/src/index.ts` | statusline |
+| `shared/*` | `@mariozechner/pi-coding-agent` → workspace root `shared/types/mariozechner/index` | quota-providers |
+
+所有 vitest.config.ts 的 `include` 统一为 `["src/__tests__/**/*.test.ts"]`。
+
+#### 添加新包测试的检查清单
+
+1. `pnpm --filter <pkg> add -D vitest`
+2. 创建 `vitest.config.ts`（参考已有包的配置）
+3. `package.json` 添加 `"test": "vitest run"` script
+4. 创建 `src/__tests__/` 目录和测试文件
 
 ## 安装指南
 
