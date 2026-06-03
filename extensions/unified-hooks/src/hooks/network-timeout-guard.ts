@@ -54,11 +54,11 @@ export function setupNetworkTimeoutGuard(pi: ExtensionAPI): void {
     return {
       block: true,
       reason:
-        `[network-timeout-guard] 检测到网络命令 (${networkLabel}) 但未设置 timeout。\n` +
-        `请执行以下任一操作：\n` +
-        `1. 设置 bash 工具的 timeout 参数（推荐 60-120 秒）\n` +
-        `2. 如果命令耗时不明确，先通过 timeout: 30 试探，超时后再调整\n` +
-        `3. 访问境外站点（npmjs.org / GitHub / PyPI）可能需要代理，超时后执行 proxy 切换代理再重试`,
+        `[network-timeout-guard] Detected network command (${networkLabel}) without timeout.\n` +
+        `Please do one of the following:\n` +
+        `1. Set the bash tool's timeout parameter (recommended: 60-120s)\n` +
+        `2. If duration is unclear, start with timeout: 30 to probe, then adjust after timeout\n` +
+        `3. Accessing overseas sites (npmjs.org / GitHub / PyPI) may require a proxy — on timeout, run 'proxy' to enable proxy and retry`,
     };
   });
 }

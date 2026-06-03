@@ -41,12 +41,12 @@ const VALID_STATUSES = ["pending", "in_progress", "completed"] as const;
 
 const TodoParams = Type.Object({
 	action: StringEnum(["list", "add", "update", "delete", "clear"] as const),
-	text: Type.Optional(Type.String({ description: "Todo 文本（update 时使用）" })),
-	id: Type.Optional(Type.Number({ description: "Todo ID（update 时使用）" })),
-	texts: Type.Optional(Type.Array(Type.String(), { description: "Todo 文本列表（add 时使用）" })),
-	ids: Type.Optional(Type.Array(Type.Number(), { description: "Todo ID 列表（delete 时使用）" })),
+	text: Type.Optional(Type.String({ description: "Todo text (for update action)" })),
+	id: Type.Optional(Type.Number({ description: "Todo ID (for update action)" })),
+	texts: Type.Optional(Type.Array(Type.String(), { description: "Todo text list (for add action)" })),
+	ids: Type.Optional(Type.Array(Type.Number(), { description: "Todo ID list (for delete action)" })),
 	status: Type.Optional(
-		StringEnum(VALID_STATUSES, { description: "目标状态（update 时使用）" }),
+		StringEnum(VALID_STATUSES, { description: "Target status (for update action)" }),
 	),
 });
 
@@ -93,11 +93,11 @@ class TodoListComponent {
 		lines.push("");
 
 		if (this.todos.length === 0) {
-			lines.push(truncateToWidth(`  ${th.fg("dim", "\u6682\u65e0 todo\u3002\u8ba9 agent \u6dfb\u52a0\u4e00\u4e9b\uff01")}`, width));
+			lines.push(truncateToWidth(`  ${th.fg("dim", "No todos yet. Ask the agent to add some!")}`, width));
 		} else {
 			const completed = this.todos.filter((t) => t.status === "completed").length;
 			const total = this.todos.length;
-			lines.push(truncateToWidth(`  ${th.fg("muted", `${completed}/${total} \u5df2\u5b8c\u6210`)}`, width));
+			lines.push(truncateToWidth(`  ${th.fg("muted", `${completed}/${total} completed`)}`, width));
 			lines.push("");
 
 			for (const todo of this.todos) {
@@ -114,7 +114,7 @@ class TodoListComponent {
 		}
 
 		lines.push("");
-		lines.push(truncateToWidth(`  ${th.fg("dim", "\u6309 Escape \u5173\u95ed")}`, width));
+		lines.push(truncateToWidth(`  ${th.fg("dim", "Press Escape to close")}`, width));
 		lines.push("");
 
 		this.cachedWidth = width;
@@ -192,7 +192,7 @@ function buildRender(todoList: Todo[]): TodoDetails["_render"] {
 	const total = todoList.length;
 	return {
 		type: "task-list" as const,
-		summary: `${completed}/${total} 已完成`,
+		summary: `${completed}/${total} completed`,
 		data: {
 			items: todoList.map((t) => ({ id: t.id, text: t.text, status: t.status })),
 			meta: {},
@@ -211,9 +211,9 @@ const TODO_REMINDER_INTERVAL = 10;
 
 function buildTodoListText(todoList: Todo[], options: { expanded: boolean }, theme: Theme): string {
 	if (todoList.length === 0) {
-		return theme.fg("dim", "\u6682\u65e0 todo");
+		return theme.fg("dim", "No todos");
 	}
-	let listText = theme.fg("muted", `${todoList.length} \u9879 todo\uff1a`);
+	let listText = theme.fg("muted", `${todoList.length} todos:`);
 	const display = options.expanded ? todoList : todoList.slice(0, MAX_COLLAPSED_ITEMS);
 	for (const t of display) {
 		const status = getDisplayStatus(t);
@@ -228,7 +228,7 @@ function buildTodoListText(todoList: Todo[], options: { expanded: boolean }, the
 		listText += `\n${mark} ${theme.fg("accent", `#${t.id}`)} ${itemText}`;
 	}
 	if (!options.expanded && todoList.length > MAX_COLLAPSED_ITEMS) {
-		listText += `\n${theme.fg("dim", `... \u8fd8\u6709 ${todoList.length - MAX_COLLAPSED_ITEMS} \u9879`)}`;
+		listText += `\n${theme.fg("dim", `... ${todoList.length - MAX_COLLAPSED_ITEMS} more`)}`;
 	}
 	return listText;
 }
@@ -244,7 +244,7 @@ function renderTodoResult(result: unknown, options: { expanded: boolean }, theme
 	}
 
 	if (details.error) {
-		return new Text(theme.fg("error", `\u9519\u8bef: ${details.error}`), 0, 0);
+		return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
 	}
 
 	const todoList = details.todos;
@@ -281,7 +281,7 @@ function renderTodoResult(result: unknown, options: { expanded: boolean }, theme
 		default: {
 			const text = r.content[0];
 			const msg = text?.type === "text" ? (text.text ?? "") : "";
-			return new Text(theme.fg("dim", msg || "\u5b8c\u6210"), 0, 0);
+			return new Text(theme.fg("dim", msg || "Done"), 0, 0);
 		}
 	}
 }
@@ -334,14 +334,14 @@ export default function (pi: ExtensionAPI) {
 								return `[${mark}] #${t.id}: ${t.text}`;
 							})
 							.join("\n")
-					: "\u6682\u65e0 todo";
+					: "No todos";
 				break;
 			}
 
 			case "add": {
 				if (!params.texts || params.texts.length === 0) {
 					return {
-						content: [{ type: "text" as const, text: "\u9519\u8bef\uff1aadd \u9700\u8981 texts \u53c2\u6570\uff08\u975e\u7a7a\u6570\u7ec4\uff09" }],
+						content: [{ type: "text" as const, text: "Error: add requires texts parameter (non-empty array)" }],
 						details: {
 							action: "add" as const,
 							todos: [...todos],
@@ -354,7 +354,7 @@ export default function (pi: ExtensionAPI) {
 				const trimmed = params.texts.map((t) => t.trim()).filter((t) => t.length > 0);
 				if (trimmed.length === 0) {
 					return {
-						content: [{ type: "text" as const, text: "\u9519\u8bef\uff1atexts \u4e2d\u81f3\u5c11\u9700\u8981\u4e00\u4e2a\u975e\u7a7a\u5b57\u7b26\u4e32" }],
+						content: [{ type: "text" as const, text: "Error: texts must contain at least one non-empty string" }],
 						details: {
 							action: "add" as const,
 							todos: [...todos],
@@ -369,7 +369,7 @@ export default function (pi: ExtensionAPI) {
 					todos.push({ id: nextId++, text: t, status: "pending" });
 				}
 				const endId = nextId - 1;
-				resultText = `\u5df2\u6dfb\u52a0 ${trimmed.length} \u9879 todo (#${startId}-#${endId})`;
+				resultText = `Added ${trimmed.length} todos (#${startId}-#${endId})`;
 				// v3: 新增 todo 表示未全部完成
 				allCompletedAtCount = null;
 				break;
@@ -378,7 +378,7 @@ export default function (pi: ExtensionAPI) {
 			case "update": {
 				if (params.id === undefined) {
 					return {
-						content: [{ type: "text" as const, text: "\u9519\u8bef\uff1aupdate \u9700\u8981 id \u53c2\u6570" }],
+						content: [{ type: "text" as const, text: "Error: update requires id parameter" }],
 						details: {
 							action: "update" as const,
 							todos: [...todos],
@@ -390,7 +390,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				if (params.status === undefined && params.text === undefined) {
 					return {
-						content: [{ type: "text" as const, text: "\u9519\u8bef\uff1aupdate \u81f3\u5c11\u9700\u8981 status \u6216 text \u53c2\u6570" }],
+						content: [{ type: "text" as const, text: "Error: update requires at least status or text parameter" }],
 						details: {
 							action: "update" as const,
 							todos: [...todos],
@@ -402,7 +402,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				if (params.text !== undefined && params.text === "") {
 					return {
-						content: [{ type: "text" as const, text: "\u9519\u8bef\uff1atext \u4e0d\u80fd\u4e3a\u7a7a\u5b57\u7b26\u4e32" }],
+						content: [{ type: "text" as const, text: "Error: text cannot be empty string" }],
 						details: {
 							action: "update" as const,
 							todos: [...todos],
@@ -420,7 +420,7 @@ export default function (pi: ExtensionAPI) {
 						content: [
 							{
 								type: "text" as const,
-								text: `\u9519\u8bef\uff1astatus \u53ea\u63a5\u53d7 ${VALID_STATUSES.join(" / ")}`,
+								text: `Error: status only accepts ${VALID_STATUSES.join(" / ")}`,
 							},
 						],
 						details: {
@@ -436,7 +436,7 @@ export default function (pi: ExtensionAPI) {
 				const todo = todos.find((t) => t.id === params.id);
 				if (!todo) {
 					return {
-						content: [{ type: "text" as const, text: `Todo #${params.id} \u4e0d\u5b58\u5728` }],
+						content: [{ type: "text" as const, text: `Todo #${params.id} not found` }],
 						details: {
 							action: "update" as const,
 							todos: [...todos],
@@ -463,13 +463,13 @@ export default function (pi: ExtensionAPI) {
 					todo.text = params.text;
 				}
 
-				const parts: string[] = [`\u5df2\u66f4\u65b0 todo #${todo.id}`];
-				if (params.status !== undefined) parts.push(`\u72b6\u6001 \u2192 ${params.status}`);
-				if (params.text !== undefined) parts.push(`\u6587\u672c \u2192 "${todo.text}"`);
-				resultText = parts.join("\uff0c");
+				const parts: string[] = [`Updated todo #${todo.id}`];
+				if (params.status !== undefined) parts.push(`status → ${params.status}`);
+				if (params.text !== undefined) parts.push(`text → "${todo.text}"`);
+				resultText = parts.join(", ");
 
 				if (isLastCompletion) {
-					resultText += "\n\n\u6240\u6709 todo \u5df2\u5b8c\u6210\u3002\u8bf7\u603b\u7ed3\u5de5\u4f5c\u6210\u679c\u3002";
+					resultText += "\n\nAll todos completed. Please summarize your work.";
 				}
 
 				// v3: 检查是否所有 todo 已完成
@@ -485,7 +485,7 @@ export default function (pi: ExtensionAPI) {
 			case "delete": {
 				if (!params.ids || params.ids.length === 0) {
 					return {
-						content: [{ type: "text" as const, text: "\u9519\u8bef\uff1adelete \u9700\u8981 ids \u53c2\u6570\uff08\u975e\u7a7a\u6570\u7ec4\uff09" }],
+						content: [{ type: "text" as const, text: "Error: delete requires ids parameter (non-empty array)" }],
 						details: {
 							action: "delete" as const,
 							todos: [...todos],
@@ -500,7 +500,7 @@ export default function (pi: ExtensionAPI) {
 				if (missing.length > 0) {
 					const missingStr = missing.map((id) => `#${id}`).join(", ");
 					return {
-						content: [{ type: "text" as const, text: `\u9519\u8bef\uff1aTodo ${missingStr} \u4e0d\u5b58\u5728` }],
+						content: [{ type: "text" as const, text: `Error: Todo ${missingStr} not found` }],
 						details: {
 							action: "delete" as const,
 							todos: [...todos],
@@ -518,7 +518,7 @@ export default function (pi: ExtensionAPI) {
 						removedIds.push(id);
 					}
 				}
-				resultText = `\u5df2\u5220\u9664 ${removedIds.length} \u9879 (#${removedIds.join(", #")})\uff0c\u5269\u4f59 ${todos.length} \u9879`;
+				resultText = `Deleted ${removedIds.length} items (#${removedIds.join(", #")}), ${todos.length} remaining`;
 				break;
 			}
 
@@ -526,7 +526,7 @@ export default function (pi: ExtensionAPI) {
 				const count = todos.length;
 				todos = [];
 				nextId = 1;
-				resultText = count > 0 ? `\u5df2\u6e05\u7a7a ${count} \u9879 todo` : "\u6682\u65e0 todo\uff0c\u65e0\u9700\u6e05\u7a7a";
+				resultText = count > 0 ? `Cleared ${count} todos` : "No todos to clear";
 				// v3: 手动清空后重置
 				allCompletedAtCount = null;
 				break;
@@ -534,7 +534,7 @@ export default function (pi: ExtensionAPI) {
 
 			default:
 				return {
-					content: [{ type: "text" as const, text: `\u672a\u77e5 action: ${params.action}` }],
+					content: [{ type: "text" as const, text: `Unknown action: ${params.action}` }],
 					details: {
 						action: "list" as const,
 						todos: [...todos],
@@ -630,7 +630,7 @@ export default function (pi: ExtensionAPI) {
 				return {
 					message: {
 						customType: "todo-auto-clear",
-						content: `所有 ${count} 个 todo 已完成，列表已自动清空。`,
+						content: `All ${count} todos completed, list auto-cleared.`,
 						display: true,
 					},
 				};
@@ -646,7 +646,7 @@ export default function (pi: ExtensionAPI) {
 				return {
 					message: {
 						customType: "todo-verification-nudge",
-						content: "你刚完成了 3+ 个任务但没有验证步骤。建议在总结前添加验证任务。",
+						content: "You completed 3+ tasks without a verification step. Consider adding a verification task before summarizing.",
 						display: true,
 					},
 				};
@@ -663,7 +663,7 @@ export default function (pi: ExtensionAPI) {
 				return {
 					message: {
 						customType: "todo-reminder",
-						content: "Todo 工具最近没有被使用。如果你在处理任务，建议使用它来跟踪进度。",
+						content: "The todo tool hasn't been used recently. If working on tasks, consider using it to track progress.",
 						display: true,
 					},
 				};
@@ -681,23 +681,23 @@ export default function (pi: ExtensionAPI) {
 		name: "todo",
 		label: "Todo",
 		description:
-			"\u7ba1\u7406 todo \u6e05\u5355\u3002" +
-			"\n\n\u53ef\u7528 action\uff1a" +
-			"\n- list\uff1a\u67e5\u770b\u6240\u6709 todo" +
-			"\n- add\uff1a\u6279\u91cf\u6dfb\u52a0 todo\uff08\u9700\u8981 texts \u6570\u7ec4\uff09" +
-			"\n- update\uff1a\u66f4\u65b0 todo\uff08\u9700\u8981 id\uff0c\u53ef\u9009 status/text\uff09" +
-			"\n- delete\uff1a\u6279\u91cf\u5220\u9664 todo\uff08\u9700\u8981 ids \u6570\u7ec4\uff09" +
-			"\n- clear\uff1a\u6e05\u7a7a\u6240\u6709 todo \u5e76\u91cd\u7f6e ID",
-		promptSnippet: "\u8f7b\u91cf\u7ea7\u4efb\u52a1\u6e05\u5355\u3002\u591a\u6b65\u9aa4\u5de5\u4f5c\u65f6\u8ffd\u8e2a\u8fdb\u5ea6\uff0c\u4e0d\u5fc5\u7b49 /goal \u6a21\u5f0f",
+			"Manage a todo list." +
+			"\n\nAvailable actions:" +
+			"\n- list: View all todos" +
+			"\n- add: Batch add todos (requires texts array)" +
+			"\n- update: Update a todo (requires id, optional status/text)" +
+			"\n- delete: Batch delete todos (requires ids array)" +
+			"\n- clear: Clear all todos and reset IDs",
+		promptSnippet: "Lightweight task list for tracking progress on multi-step work, without requiring /goal mode",
 		promptGuidelines: [
-			"[使用场景] 多步骤任务（3+步）、需要追踪进度、用户明确要求时使用 todo",
-			"[不适用] 单步操作、任务简单可直接完成、已在用 goal_manager 时",
-			"[时机] 开始工作前创建，完成时立即标记",
-			"[状态] 同一时间最多一个 in_progress，完成后立即标记 completed",
-			"[粒度] 一个 todo 对应一个可验证的工作单元，3-8 项为宜",
-			"[完成] 所有 todo 完成后会自动清空（保留 2 轮后）",
-			"[验证] 完成 3+ 任务时建议添加验证步骤",
-			"[定位] 不要用 todo 替代 goal_manager，两者定位不同",
+			"[Usage] Use for multi-step tasks (3+ steps), progress tracking, or when explicitly requested",
+			"[Not for] Single-step operations, trivial tasks, or when goal_manager is already active",
+			"[Timing] Create before starting work, mark completed immediately when done",
+			"[Status] At most one in_progress at a time; mark completed immediately",
+			"[Granularity] One todo per verifiable work unit, 3-8 items ideal",
+			"[Completion] All todos auto-clear when completed (retained for 2 turns)",
+			"[Verification] When completing 3+ tasks, consider adding a verification step",
+			"[Scope] Do not use todo as a substitute for goal_manager — they serve different purposes",
 		],
 		parameters: TodoParams,
 
@@ -732,10 +732,10 @@ export default function (pi: ExtensionAPI) {
 
 	// ── Command: /todos ─────────────────────────────────
 	pi.registerCommand("todos", {
-		description: "\u67e5\u770b\u5f53\u524d\u5206\u652f\u7684\u6240\u6709 todo",
+		description: "View all todos for the current branch",
 		handler: async (_args: string | undefined, ctx: ExtensionCommandContext) => {
 			if (!ctx.hasUI) {
-				ctx.ui.notify("/todos \u9700\u8981\u4ea4\u4e92\u6a21\u5f0f", "error");
+				ctx.ui.notify("/todos requires interactive mode", "error");
 				return;
 			}
 

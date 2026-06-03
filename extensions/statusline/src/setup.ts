@@ -23,7 +23,7 @@ import { buildGenerateDemoPrompt } from "./setup-prompts.js";
 
 export function registerSetupCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("setup-statusline", {
-		description: "生成 statusline 的 providers.json + secrets.json demo（LLM 引导）",
+		description: "Generate statusline providers.json + secrets.json demo (LLM-guided)",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			const configDir = getConfigDir();
 			const providersPath = getProvidersConfigPath();

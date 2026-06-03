@@ -41,31 +41,31 @@ const PHASES: PhaseConfig[] = [
 		phase: 1, name: "Spec", skillName: "xyz-harness-brainstorming",
 		reviewPrefix: "spec_review", retrospectPrefix: "spec_retrospect",
 		deliverables: ["spec.md"],
-		reviewMode: "模式一：计划评审（审查 spec 完整性）",
+		reviewMode: "Mode 1: Plan review (verify spec completeness)",
 	},
 	{
 		phase: 2, name: "Plan", skillName: "xyz-harness-writing-plans",
 		reviewPrefix: "plan_review", retrospectPrefix: "plan_retrospect",
 		deliverables: ["plan.md", "e2e-test-plan.md", "test_cases_template.json", "use-cases.md", "non-functional-design.md"],
-		reviewMode: "模式一：计划评审（审查 plan 可行性）",
+		reviewMode: "Mode 1: Plan review (verify plan feasibility)",
 	},
 	{
 		phase: 3, name: "Dev", skillName: "xyz-harness-phase-dev",
 		reviewPrefix: ["business_logic_review", "standards_review", "robustness_review", "integration_review", "taste_review"], retrospectPrefix: "dev_retrospect",
 		deliverables: ["changes/evidence/test_results.md"],
-		reviewMode: "模式二：编码评审（审查代码实现是否满足 spec）",
+		reviewMode: "Mode 2: Code review (verify implementation against spec)",
 	},
 	{
 		phase: 4, name: "Test", skillName: "xyz-harness-phase-test",
 		reviewPrefix: "", retrospectPrefix: "test_retrospect",
 		deliverables: ["changes/evidence/test_execution.json"],
-		reviewMode: "模式三：测试评审（审查测试覆盖度和质量）",
+		reviewMode: "Mode 3: Test review (verify test coverage and quality)",
 	},
 	{
 		phase: 5, name: "PR", skillName: "xyz-harness-phase-pr",
 		reviewPrefix: "pr_review", retrospectPrefix: "overall_retrospect",
 		deliverables: ["changes/evidence/pr_evidence.md", "changes/evidence/ci_results.md"],
-		reviewMode: "编码评审（审查 PR 变更完整性和 CI 结果）",
+		reviewMode: "Code review (verify PR completeness and CI results)",
 	},
 ];
 
@@ -420,7 +420,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 					return {
 						content: [{
 							type: "text",
-							text: `Gate 已通过，复盘已存在（${retrospectPath}）。直接调用 coding-workflow-phase-start() 进入下一阶段。`,
+							text: `Gate passed, retrospect already exists (${retrospectPath}). Call coding-workflow-phase-start() to proceed to the next phase.`,
 						}],
 					};
 				} else {
@@ -430,7 +430,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 					return {
 						content: [{
 							type: "text",
-							text: `Gate 已通过，但复盘缺失。按 steer 指令写复盘，然后调用 coding-workflow-phase-start()。`,
+							text: `Gate passed, but retrospect is missing. Write the retrospect per the steer instructions, then call coding-workflow-phase-start().`,
 						}],
 					};
 				}
@@ -537,13 +537,13 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 
 			if (params.phase >= 5) {
 				pi.sendUserMessage(
-					retrospectFollowUp + `\n\n这是最后一个 phase，写完复盘后工作流结束。`,
+					retrospectFollowUp + `\n\nThis is the final phase. After writing the retrospect, the workflow ends.`,
 					{ deliverAs: "steer" },
 				);
 				return {
 					content: [{
 						type: "text",
-						text: `Gate PASSED. All deliverables verified.${usageLine ? ` ${usageLine}` : ""}\n\n按 steer 指令写完复盘后，工作流结束。`,
+						text: `Gate PASSED. All deliverables verified.${usageLine ? ` ${usageLine}` : ""}\n\nWrite the retrospect per the steer instructions, then the workflow ends.`,
 					}],
 				};
 			}
@@ -552,7 +552,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 			return {
 				content: [{
 					type: "text",
-					text: `Gate PASSED. Review: verdict=pass, must_fix=0.${usageLine ? ` ${usageLine}` : ""}\n\nIMPORTANT: 按 steer 指令写完复盘后，再调用 coding-workflow-phase-start() 进入下一阶段。`,
+					text: `Gate PASSED. Review: verdict=pass, must_fix=0.${usageLine ? ` ${usageLine}` : ""}\n\nIMPORTANT: Write the retrospect per the steer instructions, then call coding-workflow-phase-start() to proceed to the next phase.`,
 				}],
 			};
 		},
@@ -676,7 +676,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 					`- Do NOT skip ahead, plan ahead, or do anything outside the skill scope\n` +
 					`- If gate returns FAIL: fix the specific items listed, then retry\n` +
 					`- If gate returns PASS: follow the instructions in the gate result message exactly\n` +
-					`- 每个阶段完成时，必须提交并推送所有代码和文档（特别是 .xyz-harness/ 和 docs/ 目录）。确保 git status --short 无未跟踪文件后再提交\n\n` +
+					`- After completing each phase, commit and push all code and docs (especially .xyz-harness/ and docs/). Ensure 'git status --short' shows no untracked files before committing\n\n` +
 					`--- Skill Instructions ---\n${skillContent}\n--- End Skill Instructions ---`;
 
 				pi.sendUserMessage(injection, { deliverAs: "steer" });
@@ -690,8 +690,8 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 			ctx.ui.notify(`Coding workflow initialized: ${topicName}`, "info");
 
 			const resultText = skillInjected
-				? `Workflow initialized: ${topicName}\nWorkspace: ${topicDir}\n\nPhase 1 (Spec) skill 已注入。按 steer 指令产出 spec.md，然后调用 coding-workflow-gate(phase=1)。`
-				: `Workflow initialized: ${topicName}\nWorkspace: ${topicDir}\n\nPhase 1 skill 注入失败，下个 turn 会通过 before_agent_start 重试。`;
+				? `Workflow initialized: ${topicName}\nWorkspace: ${topicDir}\n\nPhase 1 (Spec) skill injected. Produce spec.md per the steer instructions, then call coding-workflow-gate(phase=1).`
+				: `Workflow initialized: ${topicName}\nWorkspace: ${topicDir}\n\nPhase 1 skill injection failed — it will be re-injected via before_agent_start on the next turn.`;
 
 			return {
 				content: [{ type: "text", text: resultText }],
@@ -774,7 +774,7 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 						} catch { /* treat as invalid */ }
 					}
 					if (!hasValidVerdict) {
-						missingRetrospects.push(`Phase ${p} (${prevConfig.name}): frontmatter 缺少 verdict — ${retrospectPath}`);
+						missingRetrospects.push(`Phase ${p} (${prevConfig.name}): frontmatter missing verdict — ${retrospectPath}`);
 					}
 				}
 			}
@@ -853,8 +853,8 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 					updateWidget(ctx, state);
 					pi.sendUserMessage(
 						`Compact failed (attempt ${state.compactRetryCount}/${MAX_COMPACT_RETRIES}): ${error.message}\n\n` +
-						`Gate 已通过，复盘已完成。只需调用 coding-workflow-phase-start() 重试 compact。\n` +
-						`不需要重新做 phase 工作，也不需要重新调 gate。`,
+						`Gate passed, retrospect completed. Just call coding-workflow-phase-start() to retry after compact.\n` +
+						`No need to redo phase work or re-run gate.`,
 						{ deliverAs: "steer" },
 					);
 				},
@@ -971,27 +971,27 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 			let requirementContext: string;
 			if (trimmed) {
 				requirementContext =
-					`用户的需求如下：\n\n---\n${trimmed}\n---\n\n` +
-					`请根据以上需求，生成一个简短的英文 slug（小写、连字符分隔，不超过 60 字符），\n` +
-					`然后调用 coding-workflow-init(slug="你的slug") 完成初始化。`;
+					`The user's requirement is as follows:\n\n---\n${trimmed}\n---\n\n` +
+					`Based on the above requirement, generate a short English slug (lowercase, hyphen-separated, max 60 chars),\n` +
+					`then call coding-workflow-init(slug=\"your-slug\") to initialize.`;
 			} else {
 				const messages = extractRecentUserMessages(ctx);
 				const recentContext = messages.length > 0
-					? `\n\n---\n以下是最近的用户消息摘要：\n${messages.map((m, i) => `[${i + 1}] ${m.slice(0, 500)}`).join("\n")}\n---\n`
+					? `\n\n---\nHere is a summary of recent user messages:\n${messages.map((m, i) => `[${i + 1}] ${m.slice(0, 500)}`).join("\n")}\n---\n`
 					: "";
 				requirementContext =
-					`请根据之前对话中讨论的需求，生成一个简短的英文 slug。${recentContext}`;
+					`Based on the previously discussed requirements, generate a short English slug.${recentContext}`;
 			}
 
 			// command handler runs while agent is idle — no deliverAs needed
 			pi.sendUserMessage(
-				`[CODING WORKFLOW] 需求已记录。\n\n` +
+				`[CODING WORKFLOW] Requirement recorded.\n\n` +
 				requirementContext +
-				`\n\nslug 要求：\n` +
-				`- 简洁准确地概括需求核心\n` +
-				`- 纯英文、小写、连字符分隔\n` +
-				`- 例如：user-auth、cart-coupon、api-rate-limit\n` +
-				`- 不要包含日期前缀（系统自动添加）`
+				`\n\nSlug requirements:\n` +
+				`- Concisely and accurately summarize the core requirement\n` +
+				`- English only, lowercase, hyphen-separated\n` +
+				`- Examples: user-auth, cart-coupon, api-rate-limit\n` +
+				`- Do not include a date prefix (added automatically)`
 			);
 		},
 	});
@@ -1069,7 +1069,7 @@ function checkProjectProtection(projectRoot: string): string[] {
 		try {
 			const tsconfig = JSON.parse(fs.readFileSync(tsconfigPath, "utf-8"));
 			if (!tsconfig.compilerOptions?.strict) {
-				warnings.push("tsconfig.json 未开启 strict 模式");
+				warnings.push("tsconfig.json does not have strict mode enabled");
 			}
 		} catch { /* ignore */ }
 	}
@@ -1085,7 +1085,7 @@ function checkProjectProtection(projectRoot: string): string[] {
 			try {
 				const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
 				const deps = { ...pkg.devDependencies, ...pkg.dependencies } as Record<string, string>;
-				if (!deps.eslint) warnings.push("ESLint 未安装或未配置");
+				if (!deps.eslint) warnings.push("ESLint is not installed or not configured");
 			} catch { /* ignore */ }
 		}
 	}
@@ -1096,7 +1096,7 @@ function checkProjectProtection(projectRoot: string): string[] {
 		try {
 			const content = fs.readFileSync(pyprojPath, "utf-8");
 			if (!content.includes("[tool.ruff]")) {
-				warnings.push("pyproject.toml 缺少 [tool.ruff] 配置");
+				warnings.push("pyproject.toml missing [tool.ruff] configuration");
 			}
 		} catch { /* ignore */ }
 	}
@@ -1104,13 +1104,13 @@ function checkProjectProtection(projectRoot: string): string[] {
 	// Check git hook
 	const hookPath = path.join(projectRoot, ".git", "hooks", "pre-commit");
 	if (!fs.existsSync(hookPath)) {
-		warnings.push("Git pre-commit hook 未安装");
+		warnings.push("Git pre-commit hook not installed");
 	}
 
 	// Check CI
 	const workflowsDir = path.join(projectRoot, ".github", "workflows");
 	if (!fs.existsSync(workflowsDir) || fs.readdirSync(workflowsDir).length === 0) {
-		warnings.push("CI pipeline 未配置（.github/workflows/）");
+		warnings.push("CI pipeline not configured (.github/workflows/)");
 	}
 
 	return warnings;
@@ -1145,9 +1145,9 @@ function checkProjectProtection(projectRoot: string): string[] {
 					customType: "coding-workflow-context",
 					content:
 						`[CODING WORKFLOW — WAITING]\n\n` +
-						`Phase ${state.currentPhase} (${phaseConfig.name}) 的 gate 已通过。\n` +
-						`当前目标：调用 coding-workflow-phase-start() 进入下一阶段。\n\n` +
-						`不需要做其他事情。`,
+						`Phase ${state.currentPhase} (${phaseConfig.name}) gate passed.\n` +
+						`Current objective: call coding-workflow-phase-start() to proceed to the next phase.\n\n` +
+						`Nothing else to do.`,
 					display: true,
 				},
 			};
@@ -1176,7 +1176,7 @@ function checkProjectProtection(projectRoot: string): string[] {
 					} catch { /* treat as invalid */ }
 				}
 				if (!hasValidVerdict) {
-					missingRetrospects.push(`Phase ${p} (${prevConfig.name}): frontmatter 缺少 verdict — ${retrospectPath}`);
+					missingRetrospects.push(`Phase ${p} (${prevConfig.name}): frontmatter missing verdict — ${retrospectPath}`);
 				}
 			}
 		}
@@ -1188,13 +1188,13 @@ function checkProjectProtection(projectRoot: string): string[] {
 					customType: "coding-workflow-context",
 					content:
 						`[CODING WORKFLOW BLOCKED]\n\n` +
-						`Phase ${state.currentPhase} (${phaseConfig.name}) 无法启动。以下前置 phase 的复盘缺失或不完整：\n\n` +
+						`Phase ${state.currentPhase} (${phaseConfig.name}) cannot start. The following prerequisite phase retrospects are missing or incomplete:\n\n` +
 						`${fixInstructions}\n\n` +
-						`复盘是强制性的，不能跳过。按以下步骤补齐：\n` +
-						`1. read ${retrospectSkillPath} 获取复盘方法论\n` +
-						`2. 对每个缺失的复盘，基于该 phase 的产出文件编写 retrospect\n` +
-						`3. YAML frontmatter 必须包含 verdict 字段\n` +
-						`4. 所有复盘补齐后，重新开始当前 turn（状态会自动重新检查）`,
+						`Retrospects are mandatory and cannot be skipped. Complete them as follows:\n` +
+						`1. read ${retrospectSkillPath} to get the retrospect methodology\n` +
+						`2. For each missing retrospect, write it based on that phase's deliverable files\n` +
+						`3. YAML frontmatter must include a verdict field\n` +
+						`4. After all retrospects are complete, restart the current turn (status will be auto-rechecked)`,
 					display: true,
 				},
 			};
@@ -1227,7 +1227,7 @@ function checkProjectProtection(projectRoot: string): string[] {
 			`- Do NOT skip ahead, plan ahead, or do anything outside the skill scope\n` +
 			`- If gate returns FAIL: fix the specific items listed, then retry\n` +
 			`- If gate returns PASS: follow the instructions in the gate result message exactly\n` +
-			`- 每个阶段完成时，必须提交并推送所有代码和文档（特别是 .xyz-harness/ 和 docs/ 目录）。确保 git status --short 无未跟踪文件后再提交\n\n` +
+			`- After completing each phase, commit and push all code and docs (especially .xyz-harness/ and docs/). Ensure 'git status --short' shows no untracked files before committing\n\n` +
 			`--- Skill Instructions ---\n${skillContent}\n--- End Skill Instructions ---`;
 
 		// Phase 5 special constraint
@@ -1244,9 +1244,9 @@ function checkProjectProtection(projectRoot: string): string[] {
 			if (protectionWarnings.length > 0) {
 				injection +=
 					`\n\n⚠ PROJECT PROTECTION CHECK:\n` +
-					`以下防护未就位，可能导致代码不合规或 CI 失败：\n` +
+					`The following safeguards are not in place, which may cause code non-compliance or CI failures:\n` +
 					protectionWarnings.map((w) => `  - ${w}`).join("\n") +
-					`\n建议：开始编码前先补齐基础防护，参考 xyz-harness-code-standard-protection skill。`;
+					`\nRecommendation: establish basic safeguards before coding — see the xyz-harness-code-standard-protection skill.`;
 			}
 		}
 

@@ -61,19 +61,19 @@ export const GoalManagerParams = Type.Object({
 		"update_subtasks",
 		"delete_subtasks",
 	] as const),
-	tasks: Type.Optional(Type.Array(Type.String(), { description: "Task descriptions. 每条必须是一行简短摘要（不超过 60 字），不含换行或 markdown" })),
+	tasks: Type.Optional(Type.Array(Type.String(), { description: "Task descriptions. Each must be a one-line summary (max 60 chars), no newlines or markdown" })),
 	updates: Type.Optional(Type.Array(Type.Object({
 		taskId: Type.Number(),
 		status: StringEnum(GOAL_TASK_STATUSES),
 		evidence: Type.Optional(Type.String()),
 	}))),
-	taskId: Type.Optional(Type.Number({ description: "Task ID（subtask 操作时必需）" })),
-	texts: Type.Optional(Type.Array(Type.String(), { description: "Subtask 文本列表（add_subtasks 时使用）" })),
+	taskId: Type.Optional(Type.Number({ description: "Task ID (required for subtask operations)" })),
+	texts: Type.Optional(Type.Array(Type.String(), { description: "Subtask text list (for add_subtasks)" })),
 	subUpdates: Type.Optional(Type.Array(Type.Object({
 		subId: Type.Number(),
 		status: StringEnum(SUBTASK_STATUSES),
 	}))),
-	subIds: Type.Optional(Type.Array(Type.Number(), { description: "Subtask ID 列表（delete_subtasks 时使用）" })),
+	subIds: Type.Optional(Type.Array(Type.Number(), { description: "Subtask ID list (for delete_subtasks)" })),
 	evidence: Type.Optional(Type.String({ description: "Evidence for completion (required for complete_goal)" })),
 	reason: Type.Optional(Type.String({ description: "Reason for being blocked (required for report_blocked)" })),
 	cancelReason: Type.Optional(Type.String({ description: "Why the user wants to cancel (required for cancel_goal)" })),
@@ -160,12 +160,12 @@ export function makeGoalResult(session: GoalSession, text: string) {
 	const budgetInfo: string[] = [];
 	if (state.budget.tokenBudget) {
 		const remaining = Math.max(state.budget.tokenBudget - state.tokensUsed, 0);
-		budgetInfo.push(`Token: ${state.tokensUsed}/${state.budget.tokenBudget} (剩余 ${remaining})`);
+		budgetInfo.push(`Token: ${state.tokensUsed}/${state.budget.tokenBudget} (${remaining} remaining)`);
 	}
 	if (state.budget.timeBudgetMinutes) {
 		const elapsed = getElapsedTimeSeconds(state);
 		const remaining = Math.max(state.budget.timeBudgetMinutes * SECONDS_PER_MINUTE - elapsed, 0);
-		budgetInfo.push(`时间: ${Math.floor(elapsed / SECONDS_PER_MINUTE)}分/${state.budget.timeBudgetMinutes}分 (剩余 ${Math.floor(remaining / SECONDS_PER_MINUTE)}分)`);
+		budgetInfo.push(`Time: ${Math.floor(elapsed / SECONDS_PER_MINUTE)}m/${state.budget.timeBudgetMinutes}m (${Math.floor(remaining / SECONDS_PER_MINUTE)}m remaining)`);
 	}
 	const suffix = budgetInfo.length > 0 ? `\n\n[Budget] ${budgetInfo.join(" | ")}` : "";
 	return {
@@ -177,7 +177,7 @@ export function makeGoalResult(session: GoalSession, text: string) {
 			status: state.status,
 			_render: {
 				type: "task-list" as const,
-				summary: `${getCompletedCount(state.tasks)}/${state.tasks.length} 完成`,
+				summary: `${getCompletedCount(state.tasks)}/${state.tasks.length} completed`,
 				data: {
 					items: state.tasks.map((t) => ({
 						id: t.id,
@@ -192,8 +192,8 @@ export function makeGoalResult(session: GoalSession, text: string) {
 					})),
 					meta: {
 						...(state.budget.tokenBudget ? { "Token": `${state.tokensUsed}/${state.budget.tokenBudget}` } : {}),
-						...(state.budget.timeBudgetMinutes ? { "时间": `${Math.floor(getElapsedTimeSeconds(state) / SECONDS_PER_MINUTE)}分/${state.budget.timeBudgetMinutes}分` } : {}),
-						"轮次": `${state.turnCount}/${state.budget.maxTurns}`,
+						...(state.budget.timeBudgetMinutes ? { "Time": `${Math.floor(getElapsedTimeSeconds(state) / SECONDS_PER_MINUTE)}m/${state.budget.timeBudgetMinutes}m` } : {}),
+						"Turn": `${state.turnCount}/${state.budget.maxTurns}`,
 					},
 				},
 			},
@@ -222,7 +222,7 @@ export async function executeGoalAction(
 ) {
 	const state = session.state;
 	if (!state) {
-		throw new Error("Goal 模式未激活。使用 /goal <objective> 启动。");
+		throw new Error("Goal mode not active. Use /goal <objective> to start.");
 	}
 
 	switch (params.action) {
@@ -233,8 +233,7 @@ export async function executeGoalAction(
 			const existingIncomplete = getIncompleteTasks(state.tasks);
 			if (state.tasks.length > 0 && existingIncomplete.length > 0) {
 				throw new Error(
-					`已有 ${state.tasks.length} 个任务（${existingIncomplete.length} 个未完成）。` +
-						`如需追加任务请用 add_tasks，如需全部重新规划请用 /goal update。`,
+					`Already has ${state.tasks.length} tasks (${existingIncomplete.length} incomplete). Use add_tasks to append, or /goal update to re-plan.`,
 				);
 			}
 			state.tasks = params.tasks.map((desc: string, i: number) => ({
@@ -245,7 +244,7 @@ export async function executeGoalAction(
 			}));
 			persistGoalState(pi, session, ctx);
 			return makeGoalResult(session,
-				`已创建 ${state.tasks.length} 个任务：\n${state.tasks.map((t) => `  #${t.id}: ${t.description}`).join("\n")}`,
+				`Created ${state.tasks.length} tasks:\n${state.tasks.map((t) => `  #${t.id}: ${t.description}`).join("\n")}`,
 			);
 		}
 
@@ -265,7 +264,7 @@ export async function executeGoalAction(
 			state.tasks.push(...newTasks);
 			persistGoalState(pi, session, ctx);
 			return makeGoalResult(session,
-				`已追加 ${newTasks.length} 个任务：\n${newTasks.map((t) => `  #${t.id}: ${t.description}`).join("\n")}`,
+				`Appended ${newTasks.length} tasks:\n${newTasks.map((t) => `  #${t.id}: ${t.description}`).join("\n")}`,
 			);
 		}
 
@@ -276,7 +275,7 @@ export async function executeGoalAction(
 			const taskIds = params.updates.map((u: { taskId: number; status: string; evidence?: string }) => u.taskId);
 			const duplicateIds = taskIds.filter((id: number, i: number) => taskIds.indexOf(id) !== i);
 			if (duplicateIds.length > 0) {
-				throw new Error(`重复的 taskId: ${[...new Set(duplicateIds)].join(", ")}`);
+				throw new Error(`Duplicate taskIds: ${[...new Set(duplicateIds)].join(", ")}`);
 			}
 			for (const u of params.updates) {
 				const task = state.tasks.find((t) => t.id === u.taskId);
@@ -284,10 +283,10 @@ export async function executeGoalAction(
 					throw new Error(`Task #${u.taskId} not found`);
 				}
 				if (isTerminalTaskStatus(task.status)) {
-					throw new Error(`Task #${task.id} 已处于终态 (${task.status})，不可变更`);
+					throw new Error(`Task #${task.id} already in terminal state (${task.status}), cannot be changed`);
 				}
 				if (u.status === "completed" && (!u.evidence || u.evidence.trim() === "")) {
-					throw new Error(`Task #${task.id}: completed 必须提供 evidence`);
+					throw new Error(`Task #${task.id}: completed requires evidence`);
 				}
 			}
 			const results: string[] = [];
@@ -305,7 +304,7 @@ export async function executeGoalAction(
 				}
 			}
 			persistGoalState(pi, session, ctx);
-			return makeGoalResult(session, `已更新 ${results.length} 个任务：\n${results.join("\n")}`);
+			return makeGoalResult(session, `Updated ${results.length} tasks:\n${results.join("\n")}`);
 		}
 
 		case "list_tasks": {
@@ -314,54 +313,53 @@ export async function executeGoalAction(
 
 		case "complete_goal": {
 			if (!params.evidence || params.evidence.trim() === "") {
-				throw new Error("complete_goal requires evidence — 提供具体的证据证明目标已达成");
+				throw new Error("complete_goal requires evidence — provide concrete proof that the objective has been achieved");
 			}
 			if (state.tasks.length === 0) {
-				throw new Error("请先使用 create_tasks 创建任务清单，再完成目标。");
+				throw new Error("Create a task list with create_tasks before completing the goal.");
 			}
 			const incomplete = getIncompleteTasks(state.tasks);
 			if (incomplete.length > 0) {
 				throw new Error(
-					`还有 ${incomplete.length} 个任务未完成：${incomplete.map((t) => `#${t.id}`).join(", ")}。` +
-						`请先完成这些任务或提供理由说明为什么它们不需要完成。`,
+					`${incomplete.length} tasks still incomplete: ${incomplete.map((t) => `#${t.id}`).join(", ")}. Complete them first or explain why they don't need completion.`,
 				);
 			}
 			const completedCount = getCompletedCount(state.tasks);
 			if (completedCount === 0) {
-				throw new Error("至少需要完成一个任务才能完成目标。全部取消不算达成。");
+				throw new Error("At least one task must be completed. All-cancelled does not count.");
 			}
 			state.status = transitionStatus(state.status, "complete");
 			state.completedAtTurnIndex = state.currentTurnIndex;
 			writeGoalHistoryEntry(pi, session);
 			persistGoalState(pi, session, ctx);
 			const budgetReport: string[] = [];
-			budgetReport.push(`总轮次: ${state.turnCount}`);
-			budgetReport.push(`任务完成: ${getCompletedCount(state.tasks)}/${state.tasks.length}`);
+			budgetReport.push(`Total turns: ${state.turnCount}`);
+			budgetReport.push(`Tasks completed: ${getCompletedCount(state.tasks)}/${state.tasks.length}`);
 			if (state.budget.tokenBudget) {
-				budgetReport.push(`Token 消耗: ${state.tokensUsed}/${state.budget.tokenBudget}`);
+				budgetReport.push(`Token usage: ${state.tokensUsed}/${state.budget.tokenBudget}`);
 			}
 			const elapsed = getElapsedTimeSeconds(state);
-			budgetReport.push(`用时: ${Math.floor(elapsed / SECONDS_PER_MINUTE)}分${Math.floor(elapsed % SECONDS_PER_MINUTE)}秒`);
+			budgetReport.push(`Duration: ${Math.floor(elapsed / SECONDS_PER_MINUTE)}m${Math.floor(elapsed % SECONDS_PER_MINUTE)}s`);
 			return makeGoalResult(session,
-				`目标已完成!\n证据: ${params.evidence}\n\n--- Budget Report ---\n${budgetReport.join("\n")}`,
+				`Objective completed!\nEvidence: ${params.evidence}\n\n--- Budget Report ---\n${budgetReport.join("\n")}`,
 			);
 		}
 
 		case "report_blocked": {
 			if (!params.reason || params.reason.trim() === "") {
-				throw new Error("report_blocked requires reason — 说明阻塞原因");
+				throw new Error("report_blocked requires reason — describe what is blocking you");
 			}
 			state.lastBlockerReason = params.reason;
 			state.status = transitionStatus(state.status, "blocked");
 			persistGoalState(pi, session, ctx);
-			return makeGoalResult(session, `已报告阻塞。原因: ${params.reason}`);
+			return makeGoalResult(session, `Blocked reported. Reason: ${params.reason}`);
 		}
 
 		case "cancel_goal": {
 			if (isTerminalStatus(state.status)) {
-				throw new Error(`Goal 已处于终态 (${state.status})。`);
+				throw new Error(`Goal is already in terminal state (${state.status}).`);
 			}
-			const reason = params.cancelReason ?? "用户要求取消";
+			const reason = params.cancelReason ?? "User requested cancellation";
 			const goalId = state.goalId;
 			state.status = "cancelled";
 			state.completedAtTurnIndex = state.currentTurnIndex;
@@ -369,7 +367,7 @@ export async function executeGoalAction(
 			persistGoalState(pi, session, ctx);
 			clearGoalSession(session, ctx);
 			return {
-				content: [{ type: "text" as const, text: `Goal 已取消: ${reason}` }],
+				content: [{ type: "text" as const, text: `Goal cancelled: ${reason}` }],
 				details: {
 					action: "cancel",
 					tasks: [],
@@ -377,7 +375,7 @@ export async function executeGoalAction(
 					status: "cancelled",
 					_render: {
 						type: "task-list" as const,
-						summary: "已取消",
+						summary: "Cancelled",
 						data: { items: [], meta: {} },
 					},
 				} satisfies GoalManagerDetails,
@@ -396,13 +394,13 @@ export async function executeGoalAction(
 				throw new Error(`Task #${params.taskId} not found`);
 			}
 			if (isTerminalTaskStatus(parentTask.status)) {
-				throw new Error(`Task #${parentTask.id} 已处于终态 (${parentTask.status})，不能添加 subtask`);
+				throw new Error(`Task #${parentTask.id} already in terminal state (${parentTask.status}), cannot add subtask`);
 			}
 			const subtasks = parentTask.subtasks ?? [];
 			const startId = subtasks.length > 0 ? Math.max(...subtasks.map((s) => s.id)) + 1 : 1;
 			const trimmed = params.texts.map((t: string) => t.trim()).filter((t: string) => t.length > 0);
 			if (trimmed.length === 0) {
-				throw new Error("texts 中至少需要一个非空字符串");
+				throw new Error("texts requires at least one non-empty string");
 			}
 			const newSubtasks: Subtask[] = trimmed.map((text: string, i: number) => ({
 				id: startId + i,
@@ -413,7 +411,7 @@ export async function executeGoalAction(
 			parentTask.subtasks = [...subtasks, ...newSubtasks];
 			persistGoalState(pi, session, ctx);
 			return makeGoalResult(session,
-				`已给 Task #${parentTask.id} 添加 ${newSubtasks.length} 项 subtask：\n` +
+				`Added ${newSubtasks.length} subtasks to Task #${parentTask.id}:\n` +
 				newSubtasks.map((s) => `  - #${parentTask.id}.${s.id}: ${s.text}`).join("\n"),
 			);
 		}
@@ -430,7 +428,7 @@ export async function executeGoalAction(
 				throw new Error(`Task #${params.taskId} not found`);
 			}
 			if (!targetTask.subtasks || targetTask.subtasks.length === 0) {
-				throw new Error(`Task #${params.taskId} 没有 subtask`);
+				throw new Error(`Task #${params.taskId} has no subtasks`);
 			}
 			const results: string[] = [];
 			for (const u of params.subUpdates) {
@@ -439,7 +437,7 @@ export async function executeGoalAction(
 					throw new Error(`Subtask #${params.taskId}.${u.subId} not found`);
 				}
 				if (sub.status === "completed") {
-					throw new Error(`Subtask #${params.taskId}.${sub.id} 已完成，不可变更`);
+					throw new Error(`Subtask #${params.taskId}.${sub.id} already completed, cannot be changed`);
 				}
 				const prev = sub.status;
 				sub.status = u.status;
@@ -448,7 +446,7 @@ export async function executeGoalAction(
 			}
 			persistGoalState(pi, session, ctx);
 			return makeGoalResult(session,
-				`已更新 ${results.length} 项 subtask：\n${results.join("\n")}`,
+				`Updated ${results.length} subtasks:\n${results.join("\n")}`,
 			);
 		}
 
@@ -464,7 +462,7 @@ export async function executeGoalAction(
 				throw new Error(`Task #${params.taskId} not found`);
 			}
 			if (!delTask.subtasks || delTask.subtasks.length === 0) {
-				throw new Error(`Task #${params.taskId} 没有 subtask`);
+				throw new Error(`Task #${params.taskId} has no subtasks`);
 			}
 			const uniqueIds = [...new Set(params.subIds)];
 			const missing = uniqueIds.filter((id) => !delTask.subtasks!.some((s) => s.id === id));
@@ -477,7 +475,7 @@ export async function executeGoalAction(
 			}
 			persistGoalState(pi, session, ctx);
 			return makeGoalResult(session,
-				`已删除 ${uniqueIds.length} 项 subtask，Task #${params.taskId} 剩余 ${delTask.subtasks?.length ?? 0} 项`,
+				`Deleted ${uniqueIds.length} subtasks, Task #${params.taskId} has ${delTask.subtasks?.length ?? 0} remaining`,
 			);
 		}
 

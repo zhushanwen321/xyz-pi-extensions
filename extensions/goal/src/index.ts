@@ -150,19 +150,19 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 	switch (parsed.action) {
 		case "status": {
 			if (!session.state) {
-				ctx.ui.notify("Goal 模式未激活。使用 /goal <objective> 启动。", "info");
+				ctx.ui.notify("Goal mode not active. Use /goal <objective> to start.", "info");
 				return;
 			}
 			const completed = getCompletedCount(session.state.tasks);
 			const total = session.state.tasks.length;
 			const elapsed = getElapsedTimeSeconds(session.state);
 			const lines = [
-				`目标: ${session.state.objective}`,
-				`状态: ${session.state.status}`,
-				`轮次: ${session.state.turnCount}/${session.state.budget.maxTurns}`,
-				`任务: ${completed}/${total} 完成`,
-				`无进展轮数: ${session.state.stallCount}`,
-				`已用时间: ${Math.floor(elapsed / SECONDS_PER_MINUTE)}分${Math.floor(elapsed % SECONDS_PER_MINUTE)}秒`,
+				`Objective: ${session.state.objective}`,
+				`Status: ${session.state.status}`,
+				`Turn: ${session.state.turnCount}/${session.state.budget.maxTurns}`,
+				`Tasks: ${completed}/${total} completed`,
+				`Stall turns: ${session.state.stallCount}`,
+				`Time elapsed: ${Math.floor(elapsed / SECONDS_PER_MINUTE)}m${Math.floor(elapsed % SECONDS_PER_MINUTE)}s`,
 				session.state.budget.tokenBudget ? `Token: ${session.state.tokensUsed}/${session.state.budget.tokenBudget}` : null,
 				`Goal ID: ${session.state.goalId}`,
 			].filter(Boolean);
@@ -172,31 +172,31 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 
 		case "pause": {
 			if (!session.state) {
-				ctx.ui.notify("Goal 模式未激活。", "warning");
+				ctx.ui.notify("Goal mode not active.", "warning");
 				return;
 			}
 			if (isTerminalStatus(session.state.status)) {
-				ctx.ui.notify(`Goal 已处于终态 (${session.state.status})，无法暂停。`, "warning");
+				ctx.ui.notify(`Goal is in terminal state (${session.state.status}), cannot pause.`, "warning");
 				return;
 			}
 			session.state.status = transitionStatus(session.state.status, "paused");
 			persistGoalState(pi, session, ctx);
 			updateWidget(session, ctx);
-			ctx.ui.notify("Goal 已暂停。使用 /goal resume 恢复。", "info");
+			ctx.ui.notify("Goal paused. Use /goal resume to continue.", "info");
 			return;
 		}
 
 		case "resume": {
 			if (!session.state) {
-				ctx.ui.notify("Goal 模式未激活。", "warning");
+				ctx.ui.notify("Goal mode not active.", "warning");
 				return;
 			}
 			if (isTerminalStatus(session.state.status)) {
-				ctx.ui.notify(`Goal 已处于终态 (${session.state.status})，无法恢复。`, "warning");
+				ctx.ui.notify(`Goal is in terminal state (${session.state.status}), cannot resume.`, "warning");
 				return;
 			}
 			if (session.state.status !== "paused" && session.state.status !== "blocked") {
-				ctx.ui.notify("Goal 未暂停或阻塞，无需恢复。", "info");
+				ctx.ui.notify("Goal is not paused or blocked, no need to resume.", "info");
 				return;
 			}
 			session.state.status = "active";
@@ -210,7 +210,7 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 				session.state.status = transitionStatus(session.state.status, dim === "token" ? "budget_limited" : "time_limited");
 				persistGoalState(pi, session, ctx);
 				updateWidget(session, ctx);
-				ctx.ui.notify(`${dim === "token" ? "Token" : "时间"} 预算已耗尽，无法恢复。使用 /goal clear 清除。`, "warning");
+				ctx.ui.notify(`${dim === "token" ? "Token" : "Time"} budget exhausted, cannot resume. Use /goal clear to reset.`, "warning");
 				return;
 			}
 
@@ -220,17 +220,17 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 			const incomplete = getIncompleteTasks(session.state.tasks);
 			if (incomplete.length > 0) {
 				pi.sendUserMessage(
-					`Goal 已恢复。继续执行剩余 ${incomplete.length} 个任务。` +
+					`Goal resumed. Continuing with ${incomplete.length} remaining tasks.` +
 					(session.state.lastBlockerReason ? `
 
-上次阻塞原因: ${session.state.lastBlockerReason}。请尝试不同的方法。` : "") +
+Previous blocker: ${session.state.lastBlockerReason}. Try a different approach.` : "") +
 					`
 
-目标: ${session.state.objective}`,
+Objective: ${session.state.objective}`,
 					{ deliverAs: "followUp" },
 				);
 			} else {
-				ctx.ui.notify("所有任务已完成。", "info");
+				ctx.ui.notify("All tasks completed.", "info");
 			}
 			return;
 		}
@@ -250,13 +250,13 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 			}>>;
 
 			if (historyEntries.length === 0) {
-				ctx.ui.notify("暂无历史 Goal", "info");
+				ctx.ui.notify("No goal history", "info");
 				return;
 			}
 
 			// 按时间倒序
 			const sorted = [...historyEntries].reverse();
-			const lines: string[] = ["历史 Goal：\n"];
+			const lines: string[] = ["Goal history:\n"];
 			for (let i = 0; i < sorted.length; i++) {
 				const h = sorted[i]!.data;
 				if (!h) continue;
@@ -271,7 +271,7 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 				const mins = Math.floor(h.elapsedSeconds / SECONDS_PER_MINUTE);
 				const secs = Math.floor(h.elapsedSeconds % SECONDS_PER_MINUTE);
 				lines.push(`${i + 1}. ${statusIcon} ${objDisplay}`);
-				lines.push(`   ${h.completedTasks}/${h.totalTasks} 任务 | ${mins}分${secs}秒 | ${h.status}`);
+				lines.push(`   ${h.completedTasks}/${h.totalTasks} tasks | ${mins}m${secs}s | ${h.status}`);
 			}
 			ctx.ui.notify(lines.join("\n"), "info");
 			return;
@@ -279,7 +279,7 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 
 		case "clear": {
 			if (!session.state) {
-				ctx.ui.notify("Goal 模式未激活。", "info");
+				ctx.ui.notify("Goal mode not active.", "info");
 				return;
 			}
 			session.state.status = "cancelled";
@@ -287,17 +287,17 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 			writeGoalHistoryEntry(pi, session);
 			persistGoalState(pi, session, ctx);
 			clearGoalSession(session, ctx);
-			ctx.ui.notify("Goal 已清除。", "info");
+			ctx.ui.notify("Goal cleared.", "info");
 			return;
 		}
 
 		case "update": {
 			if (!session.state) {
-				ctx.ui.notify("Goal 模式未激活。", "warning");
+				ctx.ui.notify("Goal mode not active.", "warning");
 				return;
 			}
 			if (!parsed.objective) {
-				ctx.ui.notify("用法: /goal update <new-objective>", "warning");
+				ctx.ui.notify("Usage: /goal update <new-objective>", "warning");
 				return;
 			}
 			const oldObjective = session.state.objective;
@@ -313,7 +313,7 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 			session.tasksCompletedAtAgentStart = 0;
 			persistGoalState(pi, session, ctx);
 			updateWidget(session, ctx);
-			ctx.ui.notify(`目标已更新:\n旧: ${oldObjective}\n新: ${parsed.objective}`, "info");
+			ctx.ui.notify(`Objective updated:\nPrevious: ${oldObjective}\nNew: ${parsed.objective}`, "info");
 
 			if (isActiveStatus(session.state.status)) {
 				pi.sendUserMessage(objectiveUpdatedPrompt(session.state, oldObjective), { deliverAs: "steer" });
@@ -323,16 +323,16 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 
 		case "set": {
 			if (!parsed.objective) {
-				ctx.ui.notify("用法: /goal <objective> [--tokens N] [--timeout N]", "warning");
+				ctx.ui.notify("Usage: /goal <objective> [--tokens N] [--timeout N]", "warning");
 				return;
 			}
 			if (!parsed.objective.trim()) {
-				ctx.ui.notify("目标描述不能为空。", "warning");
+				ctx.ui.notify("Objective cannot be empty.", "warning");
 				return;
 			}
 			if (session.state && !isTerminalStatus(session.state.status)) {
 				ctx.ui.notify(
-					`已取消旧 Goal: ${session.state.objective}\n(新目标已启动)`,
+					`Cancelled previous Goal: ${session.state.objective}\n(new goal started)`,
 					"info",
 				);
 				session.state.status = "cancelled";
@@ -342,7 +342,7 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 			}
 
 			if (parsed.budget?.tokenBudget !== undefined && parsed.budget.tokenBudget <= 0) {
-				ctx.ui.notify("Token 预算必须大于 0。", "warning");
+				ctx.ui.notify("Token budget must be greater than 0.", "warning");
 				return;
 			}
 			const budget: Partial<BudgetConfig> = {};
@@ -359,11 +359,11 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 			updateWidget(session, ctx);
 
 			const budgetNotice: string[] = [];
-			if (budget.tokenBudget) budgetNotice.push(`Token 预算: ${budget.tokenBudget}`);
-			if (budget.timeBudgetMinutes) budgetNotice.push(`时间预算: ${budget.timeBudgetMinutes} 分钟`);
+			if (budget.tokenBudget) budgetNotice.push(`Token budget: ${budget.tokenBudget}`);
+			if (budget.timeBudgetMinutes) budgetNotice.push(`Time budget: ${budget.timeBudgetMinutes} min`);
 			const notice = [
-				`Goal 已启动: ${parsed.objective}`,
-				`最大轮次: ${budget.maxTurns}`,
+				`Goal started: ${parsed.objective}`,
+				`Max turns: ${budget.maxTurns}`,
 				...budgetNotice,
 			].join("\n");
 			ctx.ui.notify(notice, "info");
@@ -477,11 +477,11 @@ async function handleBeforeAgentStart(pi: ExtensionAPI, session: GoalSession, ct
 			message: {
 				customType: "goal-context-exceeded",
 				content:
-					"[GOAL — 上下文空间不足，必须立即收尾]\n" +
-					"1. 用 goal_manager 的 list_tasks 查看剩余任务\n" +
-					"2. 只标记你真正完成且有证据的任务\n" +
-					"3. 总结当前进度和剩余工作\n" +
-					"不要再开始新任务。",
+					"[GOAL — context space low, must wrap up now]\n" +
+					"1. Use goal_manager's list_tasks to check remaining tasks\n" +
+					"2. Only mark tasks you genuinely completed with evidence\n" +
+					"3. Summarize current progress and remaining work\n" +
+					"Do not start new tasks.",
 				display: false,
 			},
 		};
@@ -510,7 +510,7 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 		if (checkStale()) return;
 		updateWidget(session, ctx);
 		ctx.ui.notify(
-			`目标已完成 ✓ (${getCompletedCount(session.state.tasks)}/${session.state.tasks.length} 任务, ${session.state.turnCount} 轮)`,
+			`Objective completed ✓ (${getCompletedCount(session.state.tasks)}/${session.state.tasks.length} tasks, ${session.state.turnCount} turns)`,
 			"info",
 		);
 		return;
@@ -520,7 +520,7 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 		persistGoalState(pi, session, ctx);
 		if (checkStale()) return;
 		updateWidget(session, ctx);
-		ctx.ui.notify("Goal 被阻塞。使用 /goal resume 恢复或 /goal clear 清除。", "warning");
+		ctx.ui.notify("Goal blocked. Use /goal resume to continue or /goal clear to reset.", "warning");
 		return;
 	}
 
@@ -542,10 +542,10 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 	for (const w of budgetResult.warnings) {
 		if (w.type === "warning90") {
 			session.state.budgetWarning90Sent = true;
-			ctx.ui.notify(`${w.dimension === "token" ? "Token" : "时间"} 预算已用 90%，请开始收尾。`, "warning");
+			ctx.ui.notify(`${w.dimension === "token" ? "Token" : "Time"} budget 90% used — start wrapping up.`, "warning");
 		} else if (w.type === "warning70") {
 			session.state.budgetWarning70Sent = true;
-			ctx.ui.notify(`${w.dimension === "token" ? "Token" : "时间"} 预算已用 70%，注意控制范围。`, "info");
+			ctx.ui.notify(`${w.dimension === "token" ? "Token" : "Time"} budget 70% used — keep scope in check.`, "info");
 		}
 	}
 
@@ -560,8 +560,8 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 		updateWidget(session, ctx);
 		ctx.ui.notify(
 			dim === "token"
-				? "Token 预算已耗尽，Goal 已终止。"
-				: `时间预算耗尽 (${session.state.budget.timeBudgetMinutes} 分钟)，Goal 已终止。`,
+				? "Token budget exhausted, Goal terminated."
+				: `Time budget exhausted (${session.state.budget.timeBudgetMinutes} min), Goal terminated.`,
 			"warning",
 		);
 		return;
@@ -595,7 +595,7 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 			if (checkStale()) return;
 			updateWidget(session, ctx);
 			ctx.ui.notify(
-				`所有任务已完成，Goal 自动结束。(${progress.completedCount}/${progress.totalCount} 任务, ${session.state.turnCount} 轮)`,
+				`All tasks completed, Goal auto-closed. (${progress.completedCount}/${progress.totalCount} tasks, ${session.state.turnCount} turns)`,
 				"info",
 			);
 			return;
@@ -603,15 +603,15 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 
 		if (progress.budgetTight) {
 			pi.sendUserMessage(
-				`所有任务已完成，且 token 预算已用 ${Math.round(session.state.tokensUsed / session.state.budget.tokenBudget! * PERCENT_FACTOR)}%。` +
-				`请立即调用 goal_manager 的 complete_goal 完成目标，提供整体 evidence。` +
-				`\n\n目标: ${session.state.objective}`,
+				`All tasks completed, token budget ${Math.round(session.state.tokensUsed / session.state.budget.tokenBudget! * PERCENT_FACTOR)}% used.` +
+				`Call goal_manager's complete_goal now with overall evidence.` +
+				`\n\nObjective: ${session.state.objective}`,
 				{ deliverAs: "steer" },
 			);
 		} else {
 			pi.sendUserMessage(
-				`所有 ${progress.totalCount} 个任务已完成。请调用 goal_manager 的 complete_goal 完成目标，提供整体 evidence。` +
-					`\n\n目标: ${session.state.objective}`,
+				`All ${progress.totalCount} tasks completed. Call goal_manager's complete_goal with overall evidence.` +
+					`\n\nObjective: ${session.state.objective}`,
 				{ deliverAs: "followUp" },
 			);
 		}
@@ -630,14 +630,14 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 			if (checkStale()) return;
 			updateWidget(session, ctx);
 			ctx.ui.notify(
-				`已达最大轮次 (${session.state.budget.maxTurns})，LLM 未创建任务清单。`,
+				`Max turns reached (${session.state.budget.maxTurns}), LLM did not create task list.`,
 				"warning",
 			);
 			return;
 		}
 		pi.sendUserMessage(
-			`你尚未创建任务清单。请立即调用 goal_manager 的 create_tasks 将工作拆分为具体可验证的任务步骤。` +
-				`\n\n目标: ${session.state.objective}`,
+			`No task list created yet. Call goal_manager's create_tasks immediately to decompose the work into verifiable task steps.` +
+				`\n\nObjective: ${session.state.objective}`,
 			{ deliverAs: "followUp" },
 		);
 		persistGoalState(pi, session, ctx);
@@ -655,7 +655,7 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 		if (checkStale()) return;
 		updateWidget(session, ctx);
 		ctx.ui.notify(
-			`已达最大轮次 (${session.state.budget.maxTurns})，还有 ${incomplete.length} 个任务未完成。`,
+			`Max turns reached (${session.state.budget.maxTurns}), ${incomplete.length} tasks still incomplete.`,
 			"warning",
 		);
 		return;
@@ -675,7 +675,7 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 		if (checkStale()) return;
 		updateWidget(session, ctx);
 		ctx.ui.notify(
-			`已连续 ${session.state.stallCount} 轮无进展，Goal 自动阻塞。使用 /goal resume 恢复或 /goal clear 清除。`,
+			`${session.state.stallCount} consecutive turns without progress, Goal auto-blocked. Use /goal resume to continue or /goal clear to reset.`,
 			"warning",
 		);
 		return;
@@ -715,33 +715,33 @@ export default function goalExtension(pi: ExtensionAPI) {
 		name: "goal_manager",
 		label: "Goal Manager",
 		description:
-			"Goal 模式任务管理器。此工具仅在用户通过 /goal 命令启动目标后才可用，AI 不能主动触发此功能。如果 Goal 模式未激活，调用此工具会报错。" +
-			"\n\n可用 action:" +
-			"\n- create_tasks: 首次拆分目标为任务清单（每个 goal 开始时调用一次）。每条 task description 必须是一行简短摘要（不超过 60 字），不要包含换行、markdown、详细参数" +
-			"\n- add_tasks: 向已有任务清单追加新任务（执行中发现遗漏时使用）。每条 task description 必须是一行简短摘要（不超过 60 字），不要包含换行、markdown、详细参数" +
-			"\n- update_tasks: 批量更新任务状态（completed 必须带 evidence，cancelled 不阻碍 goal 完成）" +
-			"\n- list_tasks: 查看进度和剩余预算" +
-			"\n- complete_goal: 标记目标达成（必须所有任务完成 + evidence）" +
-			"\n- cancel_goal: 取消当前目标（用户要求退出/停止时使用）" +
-			"\n- report_blocked: 报告阻塞（遇到无法解决的问题时使用）" +
-			"\n- add_subtasks: 给指定 task 添加 subtask（参数: taskId, texts[]）。Goal 模式下用此替代 todo 工具" +
-			"\n- update_subtasks: 批量更新 subtask 状态（参数: taskId, subUpdates[]）" +
-			"\n- delete_subtasks: 删除指定 task 的 subtask（参数: taskId, subIds[]）",
-		promptSnippet: "管理 /goal 模式的任务清单、完成状态和退出",
+			"Goal mode task manager. This tool is only available after starting a goal via the /goal command. AI cannot trigger it proactively. If Goal mode is not active, calling this tool will error." +
+			"\n\nAvailable actions:" +
+			"\n- create_tasks: Decompose the objective into a task list (call once at goal start). Each task description must be a one-line summary (max 60 chars), no newlines or markdown" +
+			"\n- add_tasks: Append new tasks to the existing list (when omissions are discovered). Each task description must be a one-line summary (max 60 chars), no newlines or markdown" +
+			"\n- update_tasks: Batch update task statuses (completed requires evidence, cancelled does not block goal completion)" +
+			"\n- list_tasks: View progress and remaining budget" +
+			"\n- complete_goal: Mark the objective as achieved (all tasks must be completed + evidence)" +
+			"\n- cancel_goal: Cancel the current goal (use when user wants to exit/stop)" +
+			"\n- report_blocked: Report being blocked (use when encountering unsolvable issues)" +
+			"\n- add_subtasks: Add subtasks to a specified task (params: taskId, texts[]). Use this instead of todo tool in Goal mode" +
+			"\n- update_subtasks: Batch update subtask statuses (params: taskId, subUpdates[])" +
+			"\n- delete_subtasks: Delete subtasks from a specified task (params: taskId, subIds[])",
+		promptSnippet: "Manage task list, completion status, and exit for /goal mode",
 		promptGuidelines: [
-			"[工作流] 收到目标后，第一步必须调用 create_tasks 拆分任务。已有任务清单时不要重复调用",
-			"[格式] 每个 task description 必须是一行简短摘要，不超过 60 个字符。不要包含换行符、markdown 格式、详细参数列表——这些放在执行阶段处理。示例: '修复 hook-registry 去重逻辑' 而不是 '修复 hook-registry 去重逻辑 + transport-execute enhancementConfig 防护 + failover-loop ...'",
-			"[追加] 执行中发现遗漏的子任务时，使用 add_tasks 追加，不要尝试重新 create_tasks",
-			"[完成] 每完成一个任务调用 update_tasks 将状态设为 completed，必须提供 evidence（具体证据，如'测试 X 通过'、'文件 F 已创建'）",
-			"[目标完成] 只有所有任务完成且有整体证据时，才能调用 complete_goal",
-			"[退出] 当用户说'停止'、'退出'、'取消'、'stop'、'exit'、'cancel'、'不用了'、'结束'等表示不想继续时，立即调用 cancel_goal 取消目标，不要引导用户走 complete_goal 流程",
-			"[阻塞] 遇到无法解决的技术问题时调用 report_blocked 说明原因",
-			"[进度] 随时可用 list_tasks 查看剩余任务和预算，",
-			"[取消] 取消任务时使用 update_tasks 将状态设为 cancelled，取消的任务不阻碍 goal 完成",
-			"[禁止] 不要在没有 evidence 的情况下将任务标记为 completed，也不要在没有 evidence 时调用 complete_goal",
-			"[禁止] 不要在用户明确想退出时强制要求完成任务——直接 cancel_goal",
-			"[禁止] 不要重复调用 create_tasks 覆盖已有未完成任务，如需追加请用 add_tasks",
-			"[subtask] Goal 模式下需要细粒度步骤追踪时，使用 add_subtasks 给 task 添加 subtask，不要使用 todo 工具",
+			"[Workflow] After receiving the objective, the first step must be create_tasks to decompose. Do not re-call if task list already exists",
+			"[Format] Each task description must be a one-line summary, max 60 chars. No newlines, markdown, or detailed parameter lists — those go in execution phase. Example: 'Fix hook-registry dedup logic' not 'Fix hook-registry dedup + transport-execute enhancementConfig guard + failover-loop ...'",
+			"[Append] When discovering omissions during execution, use add_tasks to append — do not re-call create_tasks",
+			"[Completion] After completing a task, call update_tasks with status=completed and provide evidence (e.g. 'test X passed', 'file F created')",
+			"[Goal completion] Only call complete_goal when all tasks are completed with overall evidence",
+			"[Exit] When user says 'stop', 'exit', 'cancel', '不用了', '结束', etc. indicating they don't want to continue, immediately call cancel_goal — do not guide them through complete_goal",
+			"[Blocked] When encountering unsolvable technical issues, call report_blocked with the reason",
+			"[Progress] Use list_tasks anytime to check remaining tasks and budget",
+			"[Cancel] To cancel a task, use update_tasks with status=cancelled. Cancelled tasks do not block goal completion",
+			"[Forbidden] Do not mark tasks as completed without evidence, and do not call complete_goal without evidence",
+			"[Forbidden] Do not force task completion when the user explicitly wants to exit — call cancel_goal directly",
+			"[Forbidden] Do not re-call create_tasks to overwrite existing incomplete tasks — use add_tasks to append",
+			"[Subtask] For fine-grained step tracking in Goal mode, use add_subtasks — do not use the todo tool",
 		],
 		parameters: GoalManagerParams,
 
@@ -777,7 +777,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 			}
 			const tasks = details.tasks;
 			const completed = tasks.filter((t) => t.status === "completed").length;
-			const summary = theme.fg("success", `✓ ${completed}/${tasks.length} 完成`);
+			const summary = theme.fg("success", `✓ ${completed}/${tasks.length} completed`);
 			if (!expanded || tasks.length === 0) {
 				return new Text(summary, 0, 0);
 			}
@@ -816,7 +816,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("goal", {
 		description:
-			"目标驱动模式: /goal <objective> [--tokens N] [--timeout N] [--max-turns N] | /goal pause | /goal resume | /goal clear | /goal update <new-objective> | /goal status | /goal history",
+			"Goal-driven mode: /goal <objective> [--tokens N] [--timeout N] [--max-turns N] | /goal pause | /goal resume | /goal clear | /goal update <new-objective> | /goal status | /goal history",
 		handler: async (args: string | undefined, ctx: ExtensionCommandContext) => {
 			await handleGoalCommand(pi, session, args, ctx);
 		},
@@ -890,9 +890,9 @@ export default function goalExtension(pi: ExtensionAPI) {
 		pi.registerMessageRenderer(customType, (message: any, _options: any, theme: Theme) => {
 			const prefix =
 				message.customType === "goal-context-exceeded"
-					? theme.fg("error", "[GOAL 预算] ")
+					? theme.fg("error", "[GOAL Budget] ")
 					: message.customType === "goal-staleness-reminder"
-						? theme.fg("warning", "[GOAL 提醒] ")
+						? theme.fg("warning", "[GOAL Reminder] ")
 						: theme.fg("accent", "[GOAL] ");
 			const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
 			return new Text(prefix + theme.fg("dim", content), 0, 0);
