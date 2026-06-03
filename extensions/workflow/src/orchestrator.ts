@@ -21,6 +21,7 @@ import { Worker } from "node:worker_threads";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import { AgentPool, type AgentCallOpts } from "./agent-pool.js";
+import { resolveModel } from "./model-resolver.js";
 import { getWorkflow } from "./config-loader.js";
 import { appendTraceNode } from "./execution-trace.js";
 import {
@@ -486,13 +487,17 @@ export class WorkflowOrchestrator {
       return;
     }
 
+    // Resolve model from scene if needed
+    const resolvedModel = resolveModel(opts);
+    const enrichedOpts = resolvedModel ? { ...opts, model: resolvedModel } : opts;
+
     // Record pending trace node
     const now = new Date().toISOString();
     const node: ExecutionTraceNode = {
       stepIndex: callId,
       agent: opts.description ?? "unknown",
       task: opts.prompt.slice(0, 200),
-      model: opts.model ?? "default",
+      model: enrichedOpts.model ?? "default",
       status: "running",
       startedAt: now,
     };
@@ -501,7 +506,7 @@ export class WorkflowOrchestrator {
     this.onTraceUpdate?.(runId);
 
     // Enqueue via AgentPool with retry
-    this.executeWithRetry(runId, callId, opts, instance, node);
+    this.executeWithRetry(runId, callId, enrichedOpts, instance, node);
   }
 
   /**

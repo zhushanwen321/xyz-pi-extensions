@@ -182,6 +182,9 @@ importers:
       '@sinclair/typebox':
         specifier: '*'
         version: 0.34.49
+      '@zhushanwen/pi-model-switch':
+        specifier: workspace:*
+        version: link:../model-switch
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
