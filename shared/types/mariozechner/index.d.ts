@@ -85,6 +85,7 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type CustomMessageEntry = any;
 	export type ToolCallEvent = any;
 	export type ToolResultEvent = any;
+	export type BashOperations = any;
 	export type FileEntry = any;
 	export type ReadonlyFooterDataProvider = any;
 	export type ExtensionContextActions = any;
@@ -94,6 +95,7 @@ declare module "@mariozechner/pi-coding-agent" {
 	export function getMarkdownTheme(): Theme;
 	export function parseFrontmatter<T = Record<string, unknown>>(text: string): { frontmatter: T; body: string };
 	export function withFileMutationQueue(filePath: string, fn: () => Promise<void>): Promise<void>;
+	export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations;
 }
 
 declare module "@mariozechner/pi-tui" {

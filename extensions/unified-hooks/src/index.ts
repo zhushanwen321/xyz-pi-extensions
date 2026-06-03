@@ -11,10 +11,12 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 export { setupToolErrorHandler } from "./hooks/tool-error-handler";
 export { setupNetworkTimeoutGuard } from "./hooks/network-timeout-guard";
 export { setupTestTimeoutGuard } from "./hooks/test-timeout-guard";
+export { setupBashRcLoader } from "./hooks/bash-rc-loader";
 
 import { setupToolErrorHandler } from "./hooks/tool-error-handler";
 import { setupNetworkTimeoutGuard } from "./hooks/network-timeout-guard";
 import { setupTestTimeoutGuard } from "./hooks/test-timeout-guard";
+import { setupBashRcLoader } from "./hooks/bash-rc-loader";
 
 /**
  * Extension factory - registers all unified hooks
@@ -29,6 +31,7 @@ export default function unifiedHooksExtension(pi: ExtensionAPI): void {
     { name: "tool-error-handler", setup: setupToolErrorHandler },
     { name: "network-timeout-guard", setup: setupNetworkTimeoutGuard },
     { name: "test-timeout-guard", setup: setupTestTimeoutGuard },
+    { name: "bash-rc-loader", setup: setupBashRcLoader },
   ];
 
   for (const hook of hookModules) {
