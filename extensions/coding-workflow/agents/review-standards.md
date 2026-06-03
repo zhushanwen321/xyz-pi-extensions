@@ -1,6 +1,5 @@
 ---
 description: "编码规范审查。两阶段：先运行项目 lint/typecheck，再 AI 对比 CLAUDE.md 规范。读取 xyz-harness-standards-reviewer skill。"
-model: glm-5.1
 name: review-standards
 ---
 
@@ -15,10 +14,11 @@ task prompt 中必须包含：
 - `cwd`：工作目录
 - `output`：输出路径
 - `claude_md_path`：CLAUDE.md 路径（可选，默认为项目根目录）
+- `skill_path`：方法论 SKILL.md 路径（由分派者传入，指向 xyz-harness-standards-reviewer）
 
 ## 执行步骤
 
-1. **加载方法论**：read `~/.pi/agent/skills/xyz-harness-standards-reviewer/SKILL.md`。
+1. **加载方法论**：如果 task prompt 提供了 `skill_path`，则 read 该路径获取方法论。如果不存在或未提供，在项目 `skills/` 目录下查找同名 skill。若均找不到则跳过方法论加载。
 2. **Phase A — 自动化检查**：在 cwd 下运行项目配置的 lint 和 typecheck 命令（如 `eslint`、`tsc --noEmit`、`mypy` 等）。记录所有报错和警告。
 3. **Phase B — AI 规范对比**：read CLAUDE.md，提取编码规范条目（禁止模式、命名规范、架构约束等），逐条对比变更代码。
 4. **输出审查报告**到 `output` 路径。

@@ -1,6 +1,5 @@
 ---
 description: "数据流审查。检查模块边界、调用链路完整性、数据流断点。读取 xyz-harness-integration-reviewer skill，跳过 BLR 依赖。"
-model: glm-5.1
 name: review-dataflow
 ---
 
@@ -15,10 +14,11 @@ task prompt 中必须包含：
 - `cwd`：工作目录
 - `output`：输出路径
 - `signals`：检测到的数据流信号描述（可选）
+- `skill_path`：方法论 SKILL.md 路径（可选，由分派者传入，指向 xyz-harness-integration-reviewer）
 
 ## 执行步骤
 
-1. **加载方法论**：read `~/.pi/agent/skills/xyz-harness-integration-reviewer/SKILL.md`，跳过 BLR 消费步骤（standalone 模式无 BLR 产出）。
+1. **加载方法论**：如果 task prompt 提供了 `skill_path`，则 read 该路径获取方法论，跳过 BLR 消费步骤（standalone 模式无 BLR 产出）。如果不存在或未提供，跳过方法论加载，直接做静态分析。
 2. **获取代码变更**：在 cwd 下执行 `git diff main...HEAD -- {files}` 获取 diff。
 3. **四维度审查**（不依赖 BLR 模拟数据）：
    - **D1 数据格式转换**：模块边界处数据序列化/反序列化是否正确

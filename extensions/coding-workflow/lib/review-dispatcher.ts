@@ -15,10 +15,6 @@ import {
 	type SingleResult,
 	type OnUpdateCallback,
 } from "./subagent.js";
-import {
-	resolveModelByComplexity,
-	COMPLEXITY_DEFAULT_THINKING,
-} from "./model.js";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -126,11 +122,6 @@ export async function dispatchReviewSubagent(
 	onUpdate?: OnUpdateCallback,
 	processRegistry?: ChildProcess[],
 ): Promise<ReviewDispatchResult> {
-	const modelResult = await resolveModelByComplexity("medium", {});
-	if (!modelResult.ok) {
-		return { success: false, reviewPath: "", error: modelResult.error };
-	}
-
 	const systemPrompt = skillResolver.resolve("xyz-harness-gate-reviewer");
 	const skillPath = skillResolver.resolvePath("xyz-harness-gate-reviewer");
 	const reviewPath = path.join(
@@ -143,8 +134,6 @@ export async function dispatchReviewSubagent(
 	const result = await runSingleAgent({
 		task: taskPrompt,
 		systemPrompt,
-		resolvedModel: modelResult.ref,
-		thinkingLevel: COMPLEXITY_DEFAULT_THINKING.medium,
 		cwd: topicDir,
 		signal,
 		onUpdate,
