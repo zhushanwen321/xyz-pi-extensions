@@ -72,7 +72,7 @@ export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string
 			text += th.fg("error", " | ⊘ Blocked");
 			break;
 		case "complete":
-			text += th.fg("success", " | ✓ Done");
+			text += th.fg("success", " | ✓ Completed");
 			break;
 		case "budget_limited":
 			text += th.fg("error", " | ⊗ Token budget exhausted");
@@ -96,7 +96,7 @@ export function renderTerminalStatusLine(state: GoalRuntimeState, th: ThemeLike)
 	// 状态后缀
 	switch (state.status) {
 		case "complete":
-			text += th.fg("success", " ✓ Done");
+			text += th.fg("success", " ✓ Completed");
 			break;
 		case "budget_limited":
 			text += th.fg("error", " ⊗ Token budget exhausted");

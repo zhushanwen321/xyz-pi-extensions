@@ -33,7 +33,7 @@ export function continuationPrompt(state: GoalRuntimeState): string {
 
 	// Budget info (single line, Codex style)
 	const budgetLine = formatBudgetLine(state);
-	const stallLine = state.stallCount > 0 ? `\nStall: ${state.stallCount}/${state.budget.maxStallTurns} turns without progress` : "";
+	const stallLine = state.stallCount > 0 ? `\nStall: ${state.stallCount}/${state.budget.maxStallTurns} turns stalled` : "";
 
 	// Task summary (only IDs, not full descriptions — descriptions in before_agent_start)
 	const taskLine = total > 0
@@ -67,7 +67,7 @@ export function budgetLimitPrompt(state: GoalRuntimeState, limitType: "token" | 
 
 	return (
 		`<goal_context>\n` +
-		`[GOAL — ${limitType === "token" ? "TOKEN budget" : "time budget"}almost exhausted]\n\n` +
+		`[GOAL — ${limitType === "token" ? "TOKEN budget" : "time budget"} almost exhausted]\n\n` +
 		`<objective>\n${objective}\n</objective>\n\n` +
 		`Current progress: ${completedCount}/${total} tasks completed\n` +
 		`${incompleteSummary}\n` +
@@ -153,7 +153,7 @@ export function stalenessReminderPrompt(
 		for (const item of staleTasks) {
 			lines.push(`  #${item.task.id}: ${item.task.description} (${item.staleTurns} turns idle)`);
 			for (const s of item.staleSubtasks) {
-				lines.push(`    - ${s.text} (${s.staleTurns} turn)`);
+				lines.push(`    - ${s.text} (${s.staleTurns} turns)`);
 			}
 		}
 		lines.push("\nCheck these tasks — call update_tasks to report progress or cancel tasks that are no longer needed.");
