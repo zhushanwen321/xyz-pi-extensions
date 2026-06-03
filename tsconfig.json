@@ -46,7 +46,8 @@
     }
   },
   "include": [
-    "packages/**/*.ts"
+    "extensions/**/*.ts",
+    "shared/**/*.ts"
   ],
   "exclude": [
     "node_modules",

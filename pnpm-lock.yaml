@@ -21,7 +21,7 @@ importers:
         specifier: ^8.60.0
         version: 8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3)
 
-  packages/claude-rules-loader:
+  extensions/claude-rules-loader:
     dependencies:
       '@mariozechner/pi-coding-agent':
         specifier: '>=0.1.0'
@@ -31,7 +31,7 @@ importers:
         specifier: ^24.0.0
         version: 24.12.4
 
-  packages/coding-workflow:
+  extensions/coding-workflow:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: '*'
@@ -56,7 +56,7 @@ importers:
         specifier: ^24.0.0
         version: 24.12.4
 
-  packages/context-engineering:
+  extensions/context-engineering:
     dependencies:
       '@mariozechner/pi-coding-agent':
         specifier: '*'
@@ -65,7 +65,7 @@ importers:
         specifier: '*'
         version: 0.34.49
 
-  packages/evolve-daily:
+  extensions/evolve-daily:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: '*'
@@ -84,7 +84,7 @@ importers:
         specifier: ^24.0.0
         version: 24.12.4
 
-  packages/goal:
+  extensions/goal:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: '*'
@@ -99,7 +99,7 @@ importers:
         specifier: '*'
         version: 0.34.49
 
-  packages/model-switch:
+  extensions/model-switch:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: '*'
@@ -112,15 +112,9 @@ importers:
         version: 0.34.49
       '@zhushanwen/pi-quota-providers':
         specifier: workspace:*
-        version: link:../quota-providers
+        version: link:../../shared/quota-providers
 
-  packages/quota-providers:
-    dependencies:
-      '@mariozechner/pi-coding-agent':
-        specifier: '*'
-        version: 0.73.1(ws@8.21.0)(zod@4.4.3)
-
-  packages/statusline:
+  extensions/statusline:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: '*'
@@ -133,15 +127,9 @@ importers:
         version: 0.73.1(ws@8.21.0)(zod@4.4.3)
       '@zhushanwen/pi-quota-providers':
         specifier: workspace:*
-        version: link:../quota-providers
+        version: link:../../shared/quota-providers
 
-  packages/taste-lint:
-    dependencies:
-      eslint:
-        specifier: '>=9'
-        version: 9.39.4(jiti@2.7.0)
-
-  packages/todo:
+  extensions/todo:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: '*'
@@ -156,9 +144,7 @@ importers:
         specifier: '*'
         version: 0.34.49
 
-  packages/types: {}
-
-  packages/unified-hooks:
+  extensions/unified-hooks:
     dependencies:
       '@mariozechner/pi-coding-agent':
         specifier: '*'
@@ -167,7 +153,7 @@ importers:
         specifier: '*'
         version: 1.1.39
 
-  packages/vision:
+  extensions/vision:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: '*'
@@ -182,7 +168,7 @@ importers:
         specifier: '*'
         version: 0.34.49
 
-  packages/workflow:
+  extensions/workflow:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: '*'
@@ -200,6 +186,20 @@ importers:
       '@types/node':
         specifier: ^24.0.0
         version: 24.12.4
+
+  shared/quota-providers:
+    dependencies:
+      '@mariozechner/pi-coding-agent':
+        specifier: '*'
+        version: 0.73.1(ws@8.21.0)(zod@4.4.3)
+
+  shared/taste-lint:
+    dependencies:
+      eslint:
+        specifier: '>=9'
+        version: 9.39.4(jiti@2.7.0)
+
+  shared/types: {}
 
 packages:
 
