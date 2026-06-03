@@ -441,6 +441,8 @@ export class WorkflowOrchestrator {
       case "return": {
         // P0-1: Guard against stale return messages after terminate/pause/budget
         if (isTerminal(instance.status) || instance.status === "budget_limited" || instance.status === "paused") return;
+        // FR-1: Capture script return value
+        instance.scriptResult = msg.result;
         instance.completedAt = new Date().toISOString();
         transitionStatus(instance, "completed");
         this.workers.delete(runId);

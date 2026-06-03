@@ -87,6 +87,8 @@ export interface WorkflowInstance {
   completedAt?: string;
   budget: WorkflowBudget;
   error?: string;
+  /** Captured return value from workflow script (set on "return" message) */
+  scriptResult?: unknown;
 }
 
 // ── Serialization types ───────────────────────────────────────
@@ -108,6 +110,7 @@ interface SerializedWorkflowInstance {
   completedAt?: string;
   budget?: WorkflowBudget;
   error?: string;
+  scriptResult?: unknown;
 }
 
 export interface WorkflowStateEntry {
@@ -178,6 +181,7 @@ export function serializeInstance(instance: WorkflowInstance): SerializedWorkflo
     completedAt: instance.completedAt,
     budget: instance.budget,
     error: instance.error,
+    scriptResult: instance.scriptResult,
   };
 }
 
@@ -203,6 +207,7 @@ export function deserializeInstance(data: SerializedWorkflowInstance): WorkflowI
     completedAt: data.completedAt,
     budget: data.budget ?? { usedTokens: 0, usedCost: 0 },
     error: data.error,
+    scriptResult: data.scriptResult,
   };
 }
 

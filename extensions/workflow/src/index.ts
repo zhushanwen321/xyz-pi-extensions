@@ -15,6 +15,8 @@ import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-cod
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 import { Type, type Static } from "typebox";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import {
   type WorkflowInstance,
@@ -480,25 +482,16 @@ export default function workflowExtension(pi: ExtensionAPI) {
     description:
       "Run a named workflow script in the background. The script runs in a Worker thread " +
       "with agent()/parallel()/pipeline() APIs for multi-step agent orchestration.\n\n" +
-      "When to use workflow-run INSTEAD of subagent:\n" +
-      "  - The task follows a fixed, deterministic pipeline (not interactive)\n" +
-      "  - You need parallel() to run multiple agents concurrently on the SAME task\n" +
-      "  - The task should run in the background without blocking the conversation\n" +
-      "  - The user explicitly asks to run a workflow by name\n\n" +
-      "When to use subagent INSTEAD of workflow-run:\n" +
-      "  - The task is a one-off delegation (not a reusable pipeline)\n" +
-      "  - You need the agent to interact with the user\n" +
-      "  - You need chain/sequential modes with output passing\n" +
-      "  - The task doesn't match any existing workflow script\n\n" +
       "Available workflows are discovered from .pi/workflows/ and ~/.pi/agent/workflows/. " +
       "Returns immediately with a runId; results arrive asynchronously.",
     promptSnippet:
       "Run a named workflow script with agent/parallel/pipeline APIs in background",
     promptGuidelines: [
-      "Use workflow-run for deterministic, non-interactive agent pipelines that run in the background",
-      "Prefer subagent for one-off tasks, interactive work, or tasks without a matching script",
-      "The tool returns immediately; workflow results arrive as a background message",
-      "Optional --tokens and --time enforce budget limits",
+      "Use workflow-run when the user explicitly requests a workflow by name, or when a reusable script-based pipeline is needed.",
+      "Use subagent for simple one-off delegations where the main agent orchestrates. Use workflow-run for persistent, complex pipelines that should be saved as reusable scripts and not occupy the main agent's context.",
+      "workflow-run supports pause/resume/retry/skip and budget control (--tokens, --time). subagent supports interactive sessions and fork/fresh context.",
+      "Do NOT use workflow-run for single-step tasks that bash can handle directly. workflow-run is for multi-step agent pipelines saved as .js scripts.",
+      "The tool returns immediately with a runId. Check status with workflow { action: status }. Results arrive as a background message.",
     ],
     parameters: WorkflowRunParams,
 
@@ -592,5 +585,31 @@ export default function workflowExtension(pi: ExtensionAPI) {
   registerWorkflowCommands(pi, orchestrators, cmdState);
   registerGenerateTool(pi);
   // registerWorkflowShortcuts(pi, orchestrators, cmdState); // shortcuts disabled for now
+
+  // ── Auto-inject script format spec on workflow-generate calls ──────
+  // When AI calls workflow-generate, inject the full format reference as
+  // a steering message so it's available in the next LLM call for corrections.
+  const skillPath = resolve(import.meta.dirname!, "skills/workflow-script-format/SKILL.md");
+  let cachedFormatSpec: string | undefined;
+
+  pi.on("tool_call", async (event: Record<string, unknown>) => {
+    if (event.toolName !== "workflow-generate") return;
+
+    if (!cachedFormatSpec) {
+      try {
+        const raw = readFileSync(skillPath, "utf-8");
+        // Strip YAML frontmatter (---...---)
+        const body = raw.replace(/^---[\s\S]*?---\n*/, "");
+        cachedFormatSpec = body.trim();
+      } catch {
+        return; // SKILL.md not found — skip injection
+      }
+    }
+
+    pi.sendUserMessage(
+      `[Workflow Script Format Reference — MANDATORY]\n${cachedFormatSpec}`,
+      { deliverAs: "steer" },
+    );
+  });
 
 }

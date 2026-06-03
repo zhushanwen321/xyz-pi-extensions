@@ -52,10 +52,29 @@ export function sendCompletionNotification(
   if (notifiedRunIds.has(runId)) return;
   notifiedRunIds.add(runId);
 
+  // FR-2: Build content with optional scriptResult summary + trace summary
+  const parts: string[] = [];
+  parts.push(`Workflow '${instance.name}' completed: ${instance.status}`);
+
+  if (instance.scriptResult !== undefined && instance.scriptResult !== null) {
+    const serialized = JSON.stringify(instance.scriptResult, null, 2);
+    const truncated = serialized.length > 2000 ? serialized.slice(0, 2000) + "\n... (truncated)" : serialized;
+    parts.push("");
+    parts.push("--- Script Result ---");
+    parts.push(truncated);
+  }
+
+  parts.push("");
+  parts.push("--- Agent Trace ---");
+  for (const node of instance.trace) {
+    parts.push(`[${node.stepIndex}] ${node.agent}: ${node.status}`);
+  }
+
+  const content = parts.join("\n");
+
   api.sendMessage({
     customType: "workflow-result",
-    content:
-      `Workflow '${instance.name}' (${runId.slice(0, 16)}...) completed: ${instance.status}`,
+    content,
     display: true,
     details: {
       runId,
@@ -69,7 +88,7 @@ export function sendCompletionNotification(
           items: instance.trace.map((node) => ({
             label: `[${node.stepIndex}] ${node.agent}: ${node.task.slice(0, 80)}`,
             status: statusToItemStatus(node.status),
-            detail: node.result?.content?.slice(0, 120),
+            detail: node.result?.content?.slice(0, 500),
           })),
           summary: `Status: ${instance.status} | ${instance.trace.length} agent calls`,
         },
@@ -193,11 +212,26 @@ export function registerWorkflowCommands(
             const msg = err instanceof Error ? err.message : String(err);
             // If workflow not found, pass to AI to handle
             if (msg.includes("not found") || msg.includes("unavailable")) {
+              // Load available workflows for suggestions
+              let availableList = "";
+              try {
+                const workflows = await loadWorkflows();
+                const available = workflows.filter((wf) => wf.available);
+                if (available.length > 0) {
+                  availableList = "\n\nAvailable workflow scripts:\n" +
+                    available.map((wf) => `  - ${wf.name}: ${wf.description || "(no description)"}`).join("\n");
+                } else {
+                  availableList = "\n\nNo workflow scripts are currently available.";
+                }
+              } catch {
+                availableList = "";
+              }
+
               api.sendUserMessage(
                 `The user tried to run /workflow run '${parsed.name}' but no workflow script with that name was found. ` +
-                `The original /workflow run input was:\n${args.trim()}\n\n` +
-                `Available workflow scripts can be found in .pi/workflows/ and ~/.pi/agent/workflows/. ` +
-                `If no workflow matches, execute the task directly using subagents.`
+                `The original /workflow run input was:\n${args.trim()}${availableList}\n\n` +
+                `Ask the user: do they want to create a new workflow script (use workflow-generate), ` +
+                `or did they mean a different workflow from the list above?`
               );
             } else {
               ctx.ui.notify(`Failed: ${msg}`, "error");
@@ -338,11 +372,10 @@ export function registerWorkflowCommands(
           api.sendUserMessage(
             `The user typed /workflow with input: "${userInput}"` +
             listSection +
-            `\n\nPlease determine:\n` +
-            `1. If any existing workflow matches the user's intent, read its script and evaluate suitability.\n` +
-            `2. If matched, list matches and ask the user to confirm: use existing or create new.\n` +
-            `3. If no match, use workflow-generate to create a new temporary workflow.\n` +
-            `4. Before execution, ALWAYS show the script path and wait for user confirmation.`,
+            `\n\nMatch by workflow name and description (do NOT read script files). Then:\n` +
+            `1. If a workflow matches by name/description, ask the user to confirm: use it or create new.\n` +
+            `2. If no match, use workflow-generate to create a new temporary workflow.\n` +
+            `3. Before execution, ALWAYS show the script path and wait for user confirmation.`,
           );
           return;
         }
