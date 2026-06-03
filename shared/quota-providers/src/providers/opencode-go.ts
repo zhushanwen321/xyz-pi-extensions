@@ -100,6 +100,7 @@ function parseOpenCodeGo(html: string): OpenCodeGoData | null {
 export const opencodeGoProvider: QuotaProvider<OpenCodeGoData> = {
 	id: "opencode-go",
 	label: "opencode-go",
+	category: "token-plan",
 	fetch: fetchOpenCodeGo,
 	normalize(raw): NormalizedQuotaRow | null {
 		if (!raw?.rolling || !raw?.weekly || !raw?.monthly) return null;

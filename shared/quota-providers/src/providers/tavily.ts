@@ -94,6 +94,7 @@ async function readTavily(): Promise<TavilyData | null> {
 export const tavilyProvider: QuotaProvider<TavilyData> = {
 	id: "tavily",
 	label: "tavily",
+	category: "search-tool",
 	fetch: readTavily,
 	normalize(_raw): NormalizedQuotaRow | null {
 		return null; // 渲染层从 cache.tavily 单独取 available/total

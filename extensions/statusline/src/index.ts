@@ -2,95 +2,50 @@
  * Pi Statusline — 自定义状态栏
  *
  * 布局：
- * Line 1: 目录/仓库名 · 分支 │ session-name │ provider : model [thinking level]
- * Line 2: ctx │ speed current+t/s day+t/s │ tavily
- * Line 3-5: 套餐用量（统一列对齐）
- *   Z.ai-pro      5h  XXX% [bar] ZzHh · wk  ∞ · mh  ∞  reset ZhZm
- *   opencode-go   5h  XXX% [bar] ZhZm · wk XXX% [bar] Zdh · mh XXX% [bar] Zdh
- *   kimi-coding   5h  XXX% [bar] ZhZm · wk XXX% [bar] Zdh · mh  ∞
- * Line 6: 时间 · 费用 · 会话ID
+ * Line 1: 父目录/子目录 · ⎇ branch │ worktree
+ * Line 2: provider/model [thinking level]
+ * Line 3: ctx X/Y 23% │ from · run · last │ ↑↓ in/out │ <sessionId>
+ * Line 4: search-tool 行（tavily 234/1000次 23% | anysearch 250/500次 50%）
+ * Line 5+: token-plans 行（去 bar，列对齐）
+ *
+ * 配置：通过 ~/.pi/agent/config/{providers,secrets}.json 声明式管理
  */
 
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth } from "@mariozechner/pi-tui";
 
-// ── 本地事件类型 ───────────────────────────────────────
-// Pi SDK 将 ContextEvent 定义为 any，此处用具体接口替代
-interface PiMessageEvent {
-  message: { role: string } & Record<string, unknown>;
-}
-
-interface PiThinkingLevelEvent {
-  level: string;
-}
 import {
 	readCache,
 	triggerUpdate,
 	trackSpeed,
-	PROVIDERS,
+	buildRuntimeProviders,
 	type CacheData,
 	type SpeedData,
 	type QuotaWindow,
+	type QuotaProvider,
 } from "@zhushanwen/pi-quota-providers";
+import { registerSetupCommand } from "./setup.js";
+
+// ── 本地事件类型 ───────────────────────────────────────
+interface PiMessageEvent {
+	message: { role: string } & Record<string, unknown>;
+}
+
+interface PiThinkingLevelEvent {
+	level: string;
+}
+
 // ── 常量 ───────────────────────────────────────────────
 
 const SEP = "│";
 const DOT = "·";
-const WIDE_THRESHOLD = 100;
 const RUN_UPDATE_MS = 5000;
 
-/** 标题列宽（按最长 "opencode-go"=11, +4 空格余量） */
-const TITLE_COL_W = 15;
+/** 标题列宽（按最长 "minimax-token-plan"=18，+1 空格余量） */
+const TITLE_COL_W = 19;
 
-// ── Bar rendering (no ANSI) ──────────────────────────
-
-/** Render a usage bar with Unicode block chars and semantic fg tokens. */
-function barSegment(pct: number, theme: Theme, w = 6): string {
-	const p = Math.max(0, Math.min(100, Math.round(pct)));
-	const filled = Math.floor((p * w) / 100);
-	const fillToken =
-		p >= 80 ? "error"
-			: p >= 60 ? "warning"
-			: p >= 40 ? "accent"
-			: "success";
-	return theme.fg(fillToken, "█".repeat(filled)) + theme.fg("muted", "░".repeat(w - filled));
-}
-
-/** 构建一个窗口列，所有单元格 data 区域固定可见宽度。 */
-function winCol(
-	label: string,
-	pct: number | null,
-	resetSec: number | null,
-	wide: boolean,
-	d: (s: string) => string,
-	v: (s: string) => string,
-	theme: Theme,
-): string {
-	const l = d(label);
-	if (pct === null) {
-		const dataW = wide ? 20 : 12;
-		return `${l}  ${v(padCenter("∞", dataW))}`;
-	}
-	const pctStr = `${String(Math.round(pct)).padStart(3)}%`;
-	const rtRaw = resetSec && resetSec > 0 ? fmtResetSec(resetSec) : "";
-	const rtStr = rtRaw.padEnd(6);
-
-	if (wide) {
-		const bar = barSegment(pct, theme, 6);
-		return `${l}  ${v(pctStr)}  ${bar}  ${v(rtStr)}`;
-	}
-	return `${l}  ${v(pctStr)}  ${v(rtStr)}`;
-}
-
-/** 将 str 居中到 width 宽度，用空格填充 */
-function padCenter(str: string, width: number): string {
-	const pad = width - str.length;
-	if (pad <= 0) return str.slice(0, width);
-	const left = Math.floor(pad / 2);
-	const right = pad - left;
-	return " ".repeat(left) + str + " ".repeat(right);
-}
+// ── 工具函数 ───────────────────────────────────────────
 
 function fmtDuration(ms: number): string {
 	const s = Math.floor(ms / 1000);
@@ -116,34 +71,12 @@ function fmtResetSec(sec: number): string {
 	return `${m}m`;
 }
 
-// ── 归一化的套餐窗口列 ─────────────────────────────────
-
-interface QuotaRow {
-	name: string;
-	wins: [QuotaWindow, QuotaWindow, QuotaWindow];
-}
-
-const COLS = [
-	{ key: "5h", label: "5h" },
-	{ key: "week", label: "wk" },
-	{ key: "month", label: "mh" },
-] as const;
-
-/** 将缓存数据归一化为对齐的行数组（走注册表）。 */
-function normalizeRows(cache: CacheData): QuotaRow[] {
-	const rows: QuotaRow[] = [];
-	for (const p of PROVIDERS) {
-		try {
-			const raw = (cache as Record<string, unknown>)[p.id];
-			if (!raw) continue;
-			const norm = p.normalize(raw);
-			if (!norm) continue;
-			rows.push({ name: norm.label || p.label, wins: norm.wins });
-		} catch {
-			// 单个 provider normalize 失败不影响其他 provider 显示
-		}
-	}
-	return rows;
+/** 按百分比返回语义色 token */
+function pctColor(pct: number): "error" | "warning" | "accent" | "success" {
+	if (pct >= 80) return "error";
+	if (pct >= 60) return "warning";
+	if (pct >= 40) return "accent";
+	return "success";
 }
 
 // ── 状态 ───────────────────────────────────────────────
@@ -162,13 +95,13 @@ interface State {
 	usedPct: number;
 	contextTokens: number;
 	contextWindow: number;
-	treeTokens: number;
-	treeId: string;
 }
 
 // ── 扩展入口 ───────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+	registerSetupCommand(pi);
+
 	const state: State = {
 		sessionStart: 0,
 		lastLlmTime: 0,
@@ -183,8 +116,6 @@ export default function (pi: ExtensionAPI) {
 		usedPct: 0,
 		contextTokens: 0,
 		contextWindow: 0,
-		treeTokens: 0,
-		treeId: "",
 	};
 
 	let tui: { requestRender(): void } | null = null;
@@ -197,7 +128,7 @@ export default function (pi: ExtensionAPI) {
 		state.thinkingLevel = pi.getThinkingLevel();
 		refreshTotals(state, ctx);
 
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any — SDK ExtensionContext.ui 类型缺失 setFooter
+		// SDK ExtensionContext.ui 类型缺失 setFooter，临时绕过
 		(ctx.ui as any).setFooter((t: { requestRender(): void }, theme: Theme, footerData: ReadonlyFooterDataProvider) => {
 			tui = t;
 			const unsub = footerData.onBranchChange(() => t.requestRender());
@@ -287,25 +218,38 @@ function refreshContextUsage(st: State, ctx: ExtensionContext): void {
 	st.contextTokens = usage.tokens;
 	st.contextWindow = contextWindow;
 	st.usedPct = Math.min(Math.round((usage.tokens / contextWindow) * 100), 100);
-	refreshTreeTokens(st, ctx);
-}
-
-/** 从 session entries 中读取最新 ic-compact-tree 的 totalTokens */
-function refreshTreeTokens(st: State, ctx: ExtensionContext): void {
-	let latestTokens: number | undefined;
-	let latestTreeId: string | undefined;
-	for (const e of ctx.sessionManager.getEntries()) {
-		if (e.type === "custom" && (e as { customType: string }).customType === "ic-compact-tree") {
-			const data = (e as { data?: { totalTokens?: number; treeId?: string } }).data;
-			if (data?.totalTokens != null) latestTokens = data.totalTokens;
-			if (data?.treeId != null) latestTreeId = data.treeId;
-		}
-	}
-	st.treeTokens = latestTokens ?? 0;
-	st.treeId = latestTreeId ?? "";
 }
 
 // ── 渲染 ───────────────────────────────────────────────
+
+interface QuotaRow {
+	name: string;
+	wins: [QuotaWindow, QuotaWindow, QuotaWindow];
+}
+
+const COLS = [
+	{ key: "5h", label: "5h" },
+	{ key: "week", label: "wk" },
+	{ key: "month", label: "mh" },
+] as const;
+
+/** 缓存数据 → 归一化行（用于 token-plans 显示） */
+function normalizeRows(cache: CacheData, providers: QuotaProvider[]): QuotaRow[] {
+	const rows: QuotaRow[] = [];
+	for (const p of providers) {
+		if (p.category !== "token-plan") continue;
+		try {
+			const raw = (cache as Record<string, unknown>)[p.id];
+			if (!raw) continue;
+			const norm = p.normalize(raw);
+			if (!norm) continue;
+			rows.push({ name: norm.label || p.label, wins: norm.wins });
+		} catch {
+			// 单个 provider normalize 失败不影响其他
+		}
+	}
+	return rows;
+}
 
 function buildLines(
 	ctx: ExtensionContext,
@@ -315,7 +259,7 @@ function buildLines(
 	st: State,
 ): string[] {
 	const cache = readCache();
-	const wide = width >= WIDE_THRESHOLD;
+	const providers = buildRuntimeProviders();
 
 	const fg = (c: string, t: string) => theme.fg(c, t);
 	const d = (s: string) => fg("dim", s);
@@ -328,104 +272,42 @@ function buildLines(
 	const lines: string[] = [];
 
 	// ═══════════════════════════════════════════════════
-	// Line 1: 目录/仓库 · 分支 │ session-name │ provider : model [thinking]
+	// Line 1: 父目录/子目录 · ⎇ branch │ worktree
 	// ═══════════════════════════════════════════════════
 	const branch = fd.getGitBranch();
 	const cwd = ctx.cwd || "";
+	const segs = cwd.split("/").filter(Boolean);
+	const dirLabel = segs.slice(-2).join("/") || cwd;
 
-	const idParts: string[] = [];
-	if (branch) {
-		const segs = cwd.split("/").filter(Boolean);
-		const repoName = segs.slice(-2).join("/");
-		if (repoName) idParts.push(a(repoName));
-		idParts.push(`⎇ ${g(branch)}`);
-	} else {
-		const segs = cwd.split("/").filter(Boolean);
-		const last2 = segs.slice(-2).join("/");
-		if (last2) idParts.push(a(last2));
-	}
+	const line1Parts: string[] = [a(dirLabel)];
+	if (branch) line1Parts.push(`⎇ ${g(branch)}`);
+	line1Parts.push(d("worktree"));
+	lines.push(line1Parts.join(` ${DOT} `));
 
-	let line1 = idParts.join(` ${DOT} `);
-
-	// Session name (set by /name command)
-	const sessionName = ctx.sessionManager.getSessionName();
-	if (sessionName) {
-		line1 += ` ${SEP} ${a(sessionName)}`;
-	}
-
+	// ═══════════════════════════════════════════════════
+	// Line 2: provider/model [thinking level]
+	// ═══════════════════════════════════════════════════
 	const model = ctx.model;
 	if (model) {
 		const provider = model.provider || "";
-		const provShort = provider.includes("/")
-			? provider.split("/").pop()!
-			: provider;
 		const modelId = model.id || model.name || "unknown";
 		const tlPart = st.thinkingLevel ? ` ${m(`[${st.thinkingLevel}]`)}` : "";
-		line1 += ` ${SEP} ${d(provShort)} : ${a(modelId)}${tlPart}`;
-	}
-	if (line1) lines.push(line1);
-
-	// ═══════════════════════════════════════════════════
-	// Line 2: ctx │ speed current+t/s day+t/s │ tavily
-	// ═══════════════════════════════════════════════════
-	const ctxSizeStr =
-		st.contextWindow > 0
-			? `${d("ctx")} ${v(fmtTokens(st.contextTokens))}/${v(fmtTokens(st.contextWindow))}`
-			: `${d("ctx")} ${v(`${st.usedPct}%`)}`;
-	const ctxBarStr = wide
-		? `${barSegment(st.usedPct, theme)} ${v(`${st.usedPct}%`)}`
-		: `${v(`${st.usedPct}%`)}`;
-
-	const line2Parts: string[] = [`${ctxSizeStr} ${ctxBarStr}`];
-
-	// tree-ctx：格式和 ctx 相同，始终展示
-	if (st.contextWindow > 0) {
-		const treePctRaw = (st.treeTokens / st.contextWindow) * 100;
-		const treePct = Math.min(Math.round(treePctRaw), 100);
-		const treeDisplayPct = treePct === 0 && st.treeTokens > 0 ? "<1" : `${treePct}`;
-		const treeSizeStr = `${d("tree")} ${v(fmtTokens(st.treeTokens))}/${v(fmtTokens(st.contextWindow))}`;
-		const treeBarStr = wide
-			? `${barSegment(treePct || 1, theme)} ${v(`${treeDisplayPct}%`)}`
-			: `${v(`${treeDisplayPct}%`)}`;
-		line2Parts.push(`${treeSizeStr} ${treeBarStr}`);
-	}
-
-	const sp: string[] = [];
-	if (st.speed.current > 0)
-		sp.push(`${g(`${st.speed.current}`)}${d("t/s")}`);
-	if (st.speed.day > 0)
-		sp.push(`${d("day")} ${g(`${st.speed.day}`)}${d("t/s")}`);
-	if (sp.length)
-		line2Parts.push(`${d("speed")} ${sp.join(` ${DOT} `)}`);
-
-	const tv = cache["tavily"] as { available: number; total: number } | undefined;
-	if (tv)
-		line2Parts.push(`${d("tavily")} ${g(`${tv.available}`)}/${v(`${tv.total}`)}`);
-
-	lines.push(line2Parts.join(` ${SEP} `));
-
-	// ═══════════════════════════════════════════════════
-	// Line 3+: 套餐用量（归一化 → 统一列渲染）
-	// ═══════════════════════════════════════════════════
-	const rows = normalizeRows(cache);
-	for (const row of rows) {
-		const title = d(row.name.padEnd(TITLE_COL_W));
-		const cells = COLS.map((col, i) => {
-			const win = row.wins[i]!;
-			return winCol(col.label, win.pct, win.resetSec, wide, d, v, theme);
-		});
-		lines.push(title + cells.join(` ${DOT} `));
+		lines.push(`${d(provider)}/${a(modelId)}${tlPart}`);
 	}
 
 	// ═══════════════════════════════════════════════════
-	// 末行: 时间 · 费用 · 会话ID
+	// Line 3: ctx X/Y 23% │ from · run · last │ ↑↓ in/out │ <sessionId>
 	// ═══════════════════════════════════════════════════
+	const ctxPct = st.usedPct;
+	const ctxPctCol = theme.fg(pctColor(ctxPct), `${ctxPct}%`);
+	const ctxStr = st.contextWindow > 0
+		? `${d("ctx")} ${v(fmtTokens(st.contextTokens))}/${v(fmtTokens(st.contextWindow))} ${ctxPctCol}`
+		: `${d("ctx")} ${ctxPctCol}`;
+
 	const tp: string[] = [];
 	if (st.sessionStart) {
 		const from = new Date(st.sessionStart);
-		tp.push(
-			`${d("from")} ${g(`${from.getHours()}:${String(from.getMinutes()).padStart(2, "0")}`)}`,
-		);
+		tp.push(`${d("from")} ${g(`${from.getHours()}:${String(from.getMinutes()).padStart(2, "0")}`)}`);
 	}
 	const shouldRefreshRun =
 		!st.isAgentBusy &&
@@ -437,30 +319,67 @@ function buildLines(
 	if (displayRunMs > 0) tp.push(`${d("run")} ${g(fmtDuration(displayRunMs))}`);
 	if (st.lastLlmTime) {
 		const ago = Math.floor((Date.now() - st.lastLlmTime) / 1000);
-		tp.push(
-			`${d("last")} ${w(ago < 60 ? `${ago}s` : `${Math.floor(ago / 60)}m${ago % 60}s`)}`,
-		);
+		tp.push(`${d("last")} ${w(ago < 60 ? `${ago}s` : `${Math.floor(ago / 60)}m${ago % 60}s`)}`);
 	}
 
-	const sid =
-		ctx.sessionManager
-			.getSessionFile()
-			?.split("/")
-			.pop()
-			?.slice(-12) || "";
+	const sid = ctx.sessionManager.getSessionFile()?.split("/").pop()?.slice(-12) || "";
+	const fmt = (n: number) => n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}k`;
+	const tps = `${d("↑↓")} ${v(fmt(st.totalInp))}/${v(fmt(st.totalOut))}`;
 
-	const info: string[] = [];
-	if (tp.length) info.push(tp.join(` ${DOT} `));
-	if (st.totalCost > 0) info.push(`${d("cost")} ${w(`$${st.totalCost.toFixed(3)}`)}`);
-	if (st.totalInp > 0 || st.totalOut > 0) {
-		const fmt = (n: number) => (n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}k`);
-		info.push(`${d("↑↓")} ${v(fmt(st.totalInp))}/${v(fmt(st.totalOut))}`);
+	const line3Parts: string[] = [ctxStr];
+	if (tp.length) line3Parts.push(tp.join(` ${DOT} `));
+	if (st.totalInp > 0 || st.totalOut > 0) line3Parts.push(tps);
+	if (sid) line3Parts.push(m(sid));
+	lines.push(line3Parts.join(` ${SEP} `));
+
+	// ═══════════════════════════════════════════════════
+	// Line 4: 搜索工具行（去 bar，tavily 234/1000次 23% | anysearch 250/500次 50%）
+	// ═══════════════════════════════════════════════════
+	const searchParts: string[] = [];
+	for (const p of providers) {
+		if (p.category !== "search-tool") continue;
+		const raw = (cache as Record<string, unknown>)[p.id] as
+			| { available: number; total: number; used?: number }
+			| undefined;
+		if (!raw) continue;
+		const used = raw.used ?? raw.available;
+		const total = raw.total;
+		if (!total || total <= 0) continue;
+		const pct = Math.round((used / total) * 100);
+		const pctCol = theme.fg(pctColor(pct), `${pct}%`);
+		searchParts.push(`${d(p.label)} ${g(`${used}`)}/${v(`${total}`)}${d("次")} ${pctCol}`);
 	}
-	const treeSid = st.treeId ? st.treeId.replace(/^tree_/, "").slice(-8) : "";
-	if (treeSid) info.push(`${d("tree")} ${m(treeSid)}`);
-	if (sid) info.push(m(sid));
+	if (searchParts.length) lines.push(searchParts.join(" | "));
 
-	if (info.length) lines.push(info.join(` ${SEP} `));
+	// ═══════════════════════════════════════════════════
+	// Line 5+: token-plans 行（去 bar，列对齐）
+	// ═══════════════════════════════════════════════════
+	const rows = normalizeRows(cache, providers);
+	for (const row of rows) {
+		const title = d(row.name.padEnd(TITLE_COL_W));
+		const cells = COLS.map((col, i) => {
+			const win = row.wins[i]!;
+			return formatWinCol(col.label, win, d, v, theme);
+		});
+		lines.push(title + cells.join(` ${DOT} `));
+	}
 
 	return lines.map((l) => truncateToWidth(l, width));
+}
+
+/** 渲染单个窗口列：label pct% [reset]（无 bar） */
+function formatWinCol(
+	label: string,
+	win: QuotaWindow,
+	d: (s: string) => string,
+	v: (s: string) => string,
+	theme: Theme,
+): string {
+	if (win.pct === null) {
+		return `${d(label)}  ${v("∞")}`;
+	}
+	const pctStr = `${String(Math.round(win.pct)).padStart(3)}%`;
+	const rtRaw = win.resetSec && win.resetSec > 0 ? fmtResetSec(win.resetSec) : "";
+	const rtStr = rtRaw ? v(rtRaw.padStart(7)) : " ".repeat(7);
+	return `${d(label)}  ${theme.fg(pctColor(win.pct), pctStr)}  ${rtStr}`;
 }

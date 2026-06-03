@@ -84,7 +84,8 @@ const isActive = (s: number | undefined) => s === 1;
 
 export const minimaxProvider: QuotaProvider<MinimaxData> = {
 	id: "minimax",
-	label: "minimax-token",
+	label: "minimax-token-plan",
+	category: "token-plan",
 	fetch: fetchMinimax,
 	normalize(raw): NormalizedQuotaRow | null {
 		// 关注 model_name === "general"（文本/LLM 用量），过滤掉 video 等无关项

@@ -119,7 +119,8 @@ function processZhipu(data: ZhipuApiResponse): ZhipuData | null {
 
 export const zhipuProvider: QuotaProvider<ZhipuData> = {
 	id: "zhipu",
-	label: "Z.ai", // fallback；实际显示来自 raw.label（Z.ai-pro 等）
+	label: "zhipu-coding-plan", // fallback；实际显示来自 raw.label
+	category: "token-plan",
 	fetch: fetchZhipu,
 	normalize(raw): NormalizedQuotaRow | null {
 		const resetSec = raw.resetTime ? parseZaiResetSec(raw.resetTime) : null;

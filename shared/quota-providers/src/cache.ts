@@ -8,15 +8,15 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { join } from "node:path";
 import { PROVIDERS } from "./providers/index.js";
+import { getCachePath, getSpeedDir } from "./paths.js";
 
 // ── Paths ──────────────────────────────────────────────
-const HOME = homedir();
-const PI_DIR = join(HOME, ".pi");
-const CACHE_PATH = join(PI_DIR, "statusline_cache.json");
-const SPEED_DIR = join(PI_DIR, "token-stats");
+const PI_DIR = getAgentDir();
+const CACHE_PATH = getCachePath();
+const SPEED_DIR = getSpeedDir();
 const CACHE_TTL_MS = 300_000; // 5 分钟：套餐用量刷新间隔
 
 // ── CacheData（动态 schema，无需手动维护字段）───────
