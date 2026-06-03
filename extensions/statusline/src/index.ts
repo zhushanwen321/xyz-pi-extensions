@@ -129,7 +129,7 @@ export default function (pi: ExtensionAPI) {
 		refreshTotals(state, ctx);
 
 		// SDK ExtensionContext.ui 类型缺失 setFooter，临时绕过
-		(ctx.ui as any).setFooter((t: { requestRender(): void }, theme: Theme, footerData: ReadonlyFooterDataProvider) => {
+		ctx.ui.setFooter((t: { requestRender(): void }, theme: Theme, footerData: ReadonlyFooterDataProvider) => {
 			tui = t;
 			const unsub = footerData.onBranchChange(() => t.requestRender());
 			return {
@@ -244,8 +244,8 @@ function normalizeRows(cache: CacheData, providers: QuotaProvider[]): QuotaRow[]
 			const norm = p.normalize(raw);
 			if (!norm) continue;
 			rows.push({ name: norm.label || p.label, wins: norm.wins });
-		} catch {
-			// 单个 provider normalize 失败不影响其他
+		} catch (e) {
+			console.warn(`[statusline] normalize failed for ${p.id}:`, e);
 		}
 	}
 	return rows;

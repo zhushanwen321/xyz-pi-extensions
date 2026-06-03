@@ -29,7 +29,12 @@ export function registerSetupCommand(pi: ExtensionAPI): void {
 			const providersPath = getProvidersConfigPath();
 			const secretsPath = getSecretsPath();
 
-			mkdirSync(configDir, { recursive: true });
+			try {
+				mkdirSync(configDir, { recursive: true });
+			} catch (e) {
+				ctx.ui.notify(`Failed to create ${configDir}: ${(e as Error).message}`, "error");
+				return;
+			}
 
 			const hasProviders = existsSync(providersPath);
 			const hasSecrets = existsSync(secretsPath);
@@ -54,7 +59,12 @@ export function registerSetupCommand(pi: ExtensionAPI): void {
 				missing,
 			});
 
-			await ctx.sessionManager.appendEntry("user", prompt);
+			try {
+				await ctx.sessionManager.appendEntry("user", prompt);
+			} catch (e) {
+				ctx.ui.notify(`Failed to inject setup prompt: ${(e as Error).message}`, "error");
+				return;
+			}
 			ctx.ui.notify(`Setup wizard started. Will generate: ${missing.join(", ")}`, "info");
 		},
 	});

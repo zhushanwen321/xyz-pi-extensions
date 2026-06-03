@@ -34,10 +34,21 @@ export function getSpeedDir(): string {
 	return join(getAgentDir(), "token-stats");
 }
 
-/** 解析 ${ENV_VAR} 引用 */
+/** 记录已 warn 过的 env var，避免每次 render 都打印 */
+const warnedEnvVars = new Set<string>();
+
+/** 解析 ${ENV_VAR} 引用；环境变量缺失时 warn 一次并返回空串 */
 export function resolveEnvRef(value: string): string {
 	const m = value.match(/^\$\{([A-Z_][A-Z0-9_]*)\}$/);
 	if (!m) return value;
-	const envVal = process.env[m[1]!];
-	return envVal ?? "";
+	const name = m[1]!;
+	const envVal = process.env[name];
+	if (envVal === undefined) {
+		if (!warnedEnvVars.has(name)) {
+			console.warn(`[statusline] env var ${name} is not set`);
+			warnedEnvVars.add(name);
+		}
+		return "";
+	}
+	return envVal;
 }

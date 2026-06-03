@@ -32,7 +32,8 @@ export function loadProvidersConfig(): ProvidersConfig {
 			"token-plans": normalizeList((raw as Record<string, unknown>)["token-plans"]),
 			"search-tools": normalizeList((raw as Record<string, unknown>)["search-tools"]),
 		};
-	} catch {
+	} catch (e) {
+		console.warn(`[statusline] failed to parse ${path}:`, e);
 		return EMPTY;
 	}
 }
