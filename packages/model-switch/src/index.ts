@@ -14,8 +14,8 @@ import { readCache } from "@zhushanwen/pi-quota-providers";
 import { loadConfig } from "./config";
 import { computeQuotaSnapshot, computeStickiness, computePeakRecommend } from "./advisor";
 import { formatSessionModels, formatContextPrompt } from "./prompt";
-import { generatePolicyConfig, readEnabledModels, getConfigPath, deletePolicyConfig, readPolicyConfigContent, writePolicyConfig } from "./setup";
-import { getCurrentModelId, asSessionEntries, extractModelCapabilities, type ModelPolicy } from "./types";
+import { generatePolicyConfig, readEnabledModels, getConfigPath, deletePolicyConfig, readPolicyConfigContent } from "./setup";
+import { getCurrentModelId, asSessionEntries, type ModelPolicy } from "./types";
 
 // ── Tool 返回值 helper ──────────────────────────────────
 
@@ -315,8 +315,6 @@ async function switchToModel(
 	alias: string,
 ): Promise<ToolRes> {
 	try {
-		const currentModel = getCurrentModelId(ctx);
-
 		// 尝试直接匹配 Pi 模型 registry（provider 可能含 -router 后缀）
 		const match = ctx.modelRegistry.find(provider, modelId);
 		if (!match) {
