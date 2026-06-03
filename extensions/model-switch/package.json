@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-model-switch",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Intelligent model recommendation and switching for Pi coding agent",
   "type": "module",
   "main": "index.ts",

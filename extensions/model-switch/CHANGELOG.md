@@ -1,5 +1,16 @@
 # @zhushanwen/pi-model-switch
 
+## 0.2.0
+
+### Minor Changes
+
+- model-switch v2 redesign: provider-keyed config, deterministic recommend, clear prompt labels. quota-providers: normalize IDs to kebab-case.
+
+### Patch Changes
+
+- Updated dependencies
+  - @zhushanwen/pi-quota-providers@0.1.2
+
 ## 0.1.1
 
 ### Patch Changes

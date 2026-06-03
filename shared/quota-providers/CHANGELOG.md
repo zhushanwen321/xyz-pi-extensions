@@ -1,5 +1,11 @@
 # @zhushanwen/pi-quota-providers
 
+## 0.1.2
+
+### Patch Changes
+
+- model-switch v2 redesign: provider-keyed config, deterministic recommend, clear prompt labels. quota-providers: normalize IDs to kebab-case.
+
 ## 0.1.1
 
 ### Patch Changes
