@@ -162,6 +162,29 @@ pnpm changeset publish --dry-run
 python3 scripts/validate-extensions-yaml.py
 ```
 
+### 版本管理
+
+**核心原则：各包独立版本号，通过 changeset 管理。**
+
+- 根 `package.json` 的 `version`（当前 `0.0.7`）无实际发布意义，仅代表 monorepo 整体迭代序号
+- 各 `extensions/*` 和 `shared/*` 子包版本独立，不联动
+- `changeset config.json` 的 `fixed` 为空，确认独立版本模式
+- `merge-worktree` 的 `bump patch/minor/major` 只 bump 根版本号，不影响子包
+
+**子包版本 bump 规则：**
+
+| 变更类型 | bump 级别 | 示例 |
+|----------|-----------|------|
+| Bug 修复、对齐修正、fallback 补充 | `patch` | 状态栏对齐修复 → `0.4.0` → `0.4.1` |
+| 新功能、新 provider、新增 API | `minor` | 新增 speed 显示 → `0.4.0` → `0.5.0` |
+| 破坏性变更（API 不兼容） | `major` | 重构导出接口 → `0.4.0` → `1.0.0` |
+
+**操作流程：**
+
+1. `pnpm changeset` — 交互式选择受影响的包和版本级别
+2. `pnpm changeset version` — 根据 changeset 文件 bump 各包版本
+3. 提交变更 + 打 tag → GitHub Actions 自动发布
+
 ### 发布流程（GitHub Actions）
 
 **[强制] 禁止本地发布（`npm publish` / `pnpm changeset publish`），必须走 GitHub Actions。**

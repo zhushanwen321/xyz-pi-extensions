@@ -10,10 +10,10 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 /**
  * Commands that indicate network activity.
- * Matched against the beginning of the bash command string.
+ * Matched against any segment of the bash command string (supports &&/||/; chaining).
  */
 const NETWORK_COMMAND_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
-  { pattern: /(^|\s|&&|\|{1,2}|;)\s*(pnpm|npm|yarn|bun)\s+(install|add|i|ci|update|upgrade|dlx|exec|create|init|run\s+\S+)/, label: "package manager" },
+  { pattern: /(^|\s|&&|\|{1,2}|;)\s*(pnpm|npm|yarn|bun)\s+(install|add|i|ci|update|upgrade|dlx|exec|create|init)/, label: "package manager" },
   { pattern: /(^|\s|&&|\|{1,2}|;)\s*(pip|pip3|uv|poetry|conda)\s+(install|add|sync|download|run)/, label: "Python package manager" },
   { pattern: /(^|\s|&&|\|{1,2}|;)\s*curl\s/, label: "curl" },
   { pattern: /(^|\s|&&|\|{1,2}|;)\s*wget\s/, label: "wget" },
