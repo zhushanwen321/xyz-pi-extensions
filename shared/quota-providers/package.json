@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-quota-providers",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Quota provider data fetching and caching layer for Pi extensions",
   "type": "module",
   "main": "src/index.ts",
