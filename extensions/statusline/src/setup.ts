@@ -59,12 +59,7 @@ export function registerSetupCommand(pi: ExtensionAPI): void {
 				missing,
 			});
 
-			try {
-				await ctx.sessionManager.appendEntry("user", prompt);
-			} catch (e) {
-				ctx.ui.notify(`Failed to inject setup prompt: ${(e as Error).message}`, "error");
-				return;
-			}
+			pi.sendUserMessage(prompt);
 			ctx.ui.notify(`Setup wizard started. Will generate: ${missing.join(", ")}`, "info");
 		},
 	});
