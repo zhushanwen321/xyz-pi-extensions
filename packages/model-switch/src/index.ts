@@ -13,7 +13,7 @@ import { readCache } from "@zhushanwen/pi-quota-providers";
 import { loadConfig } from "./config";
 import { computeQuotaSnapshot, computeStickiness } from "./advisor";
 import { formatContextPrompt } from "./prompt";
-import { generatePolicyConfig, readEnabledModels, getConfigPath } from "./setup";
+import { generatePolicyConfig, readEnabledModels, getConfigPath, deletePolicyConfig, readPolicyConfigContent, writePolicyConfig } from "./setup";
 import { getCurrentModelId, asSessionEntries, type ModelPolicy } from "./types";
 
 // ── Tool 返回值 helper ──────────────────────────────────
@@ -95,10 +95,12 @@ function registerSwitchTool(pi: ExtensionAPI, state: SessionState): void {
 		label: "Switch Model",
 		description:
 			"List configured models, search by alias/name, switch to another model, or show current data snapshot and rules. "
-			+ "Configured models are defined in model-policy.json.",
+			+ "Configured models are defined in model-policy.json. "
+			+ "Setup sub-actions: 'setup delete' (remove config), 'setup list' (show config), 'setup edit' (LLM-guided edit), 'setup' (generate new).",
 		promptSnippet:
 			"Use this tool when the user asks to list/search/switch models, requests a specific model/provider, "
-			+ "or when you need to see the current model context data.",
+			+ "or when you need to see the current model context data. "
+			+ "For policy management: 'setup delete' to remove, 'setup list' to view, 'setup edit' to modify through conversation.",
 		parameters: Type.Object({
 			action: StringEnum(["list", "search", "switch", "recommend", "setup"], {
 				description: "Action: list (show all), search (filter), switch (change), recommend (show data+rules), setup (generate config)",
@@ -123,7 +125,7 @@ function registerSwitchTool(pi: ExtensionAPI, state: SessionState): void {
 			if (action === "search") return handleSearch(state, query);
 			if (action === "switch") return handleSwitch(state, pi, ctx, query);
 			if (action === "recommend") return handleRecommend(state, ctx);
-			if (action === "setup") return handleSetup(state, ctx);
+			if (action === "setup") return handleSetup(state, ctx, params.query);
 
 			return res(`Unknown action: ${action}. Supported: list, search, switch, recommend, setup.`, { error: true });
 		},
@@ -234,13 +236,51 @@ function handleRecommend(state: { config: ModelPolicy | null }, ctx: ExtensionCo
 	}
 }
 
-function handleSetup(state: { config: ModelPolicy | null }, ctx: ExtensionContext): ToolRes {
+function handleSetup(state: { config: ModelPolicy | null }, ctx: ExtensionContext, query?: string): ToolRes {
+	const subAction = (query ?? "").trim().toLowerCase();
+
+	// --delete: 删除现有配置
+	if (subAction === "delete") {
+		const result = deletePolicyConfig();
+		if (result.ok) {
+			state.config = null;
+			return res(`Config deleted: ${result.path}. Run /setup-model-policy to regenerate.`);
+		}
+		return res(result.error, { error: true });
+	}
+
+	// --list: 显示现有配置
+	if (subAction === "list") {
+		const result = readPolicyConfigContent();
+		if (!result.ok) return res(result.error, { error: true });
+		return res(`Current model-policy.json (${result.path}):\n\n\`\`\`json\n${result.content}\n\`\`\``);
+	}
+
+	// --edit: 进入 LLM 对话编辑模式
+	if (subAction === "edit") {
+		const result = readPolicyConfigContent();
+		if (!result.ok) return res(result.error, { error: true });
+		return res([
+			"Current model-policy.json for editing:\n",
+			"```json",
+			result.content,
+			"```\n",
+			"Tell me what you want to change. Examples:",
+			"- \"Change peak hours to 12-18\"",
+			"- \"Add model X to coding scene\"",
+			"- \"Set ocg rolling threshold to 90%\"",
+			"- \"Remove minimax from the config\"\n",
+			"I'll modify the config and confirm with you before saving. Say 'save' when ready.",
+		].join("\n"));
+	}
+
+	// 无 query: 生成新配置（原有逻辑）
 	if (state.config) {
-		return res(`Config already exists at ${getConfigPath()}. Delete it first if you want to regenerate.`);
+		return res(`Config already exists at ${getConfigPath()}. Use 'setup delete' to remove, 'setup list' to view, or 'setup edit' to modify.`);
 	}
 
 	const enabledModels = readEnabledModels();
-	const result = generatePolicyConfig(ctx.modelRegistry, enabledModels);
+	const genResult = generatePolicyConfig(ctx.modelRegistry, enabledModels);
 
 	return res([
 		"Auto-generated model-policy.json based on your configured models.",
@@ -248,7 +288,7 @@ function handleSetup(state: { config: ModelPolicy | null }, ctx: ExtensionContex
 		"Adjust any values before writing (e.g. peak hours, scene preferences, budget target).",
 		"",
 		"```json",
-		result.json,
+		genResult.json,
 		"```",
 	].join("\n"));
 }

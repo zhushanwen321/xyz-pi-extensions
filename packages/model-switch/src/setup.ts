@@ -8,7 +8,7 @@
  * 4. 展示给用户确认
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SetupResult } from "./types";
@@ -275,8 +275,8 @@ export function getConfigPath(): string {
 	return CONFIG_PATH;
 }
 
-export function writePolicyConfig(json: string): { ok: true; path: string } | { ok: false; error: string } {
-	if (existsSync(CONFIG_PATH)) {
+export function writePolicyConfig(json: string, overwrite = false): { ok: true; path: string } | { ok: false; error: string } {
+	if (!overwrite && existsSync(CONFIG_PATH)) {
 		return { ok: false, error: `Config already exists at ${CONFIG_PATH}. Delete it first to regenerate.` };
 	}
 
@@ -292,6 +292,31 @@ export function writePolicyConfig(json: string): { ok: true; path: string } | { 
 		return { ok: true, path: CONFIG_PATH };
 	} catch (err) {
 		return { ok: false, error: `Failed to write: ${(err as Error).message}` };
+	}
+}
+
+export function deletePolicyConfig(): { ok: true; path: string } | { ok: false; error: string } {
+	if (!existsSync(CONFIG_PATH)) {
+		return { ok: false, error: `No config file at ${CONFIG_PATH}.` };
+	}
+	try {
+		unlinkSync(CONFIG_PATH);
+		return { ok: true, path: CONFIG_PATH };
+	} catch (err) {
+		return { ok: false, error: `Failed to delete: ${(err as Error).message}` };
+	}
+}
+
+export function readPolicyConfigContent(): { ok: true; content: string; path: string } | { ok: false; error: string } {
+	if (!existsSync(CONFIG_PATH)) {
+		return { ok: false, error: `No config file at ${CONFIG_PATH}. Run /setup-model-policy to generate one.` };
+	}
+	try {
+		const content = readFileSync(CONFIG_PATH, "utf-8");
+		JSON.parse(content); // validate JSON
+		return { ok: true, content, path: CONFIG_PATH };
+	} catch (err) {
+		return { ok: false, error: `Failed to read config: ${(err as Error).message}` };
 	}
 }
 
