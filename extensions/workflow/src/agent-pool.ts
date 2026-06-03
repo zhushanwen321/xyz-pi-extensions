@@ -32,11 +32,12 @@ export interface AgentCallOpts {
    * `parsedOutput` on the result.
    */
   schema?: Record<string, unknown>;
-  /**
-   * Model to use (e.g. "router-openai/glm-5.1").
-   * When omitted, pi's default model is used.
+  /** Model to use (e.g. "router-openai/glm-5.1").
+   *   When omitted, pi's default model is used.
    */
   model?: string;
+  /** Scene name for model-switch advisor recommendation. */
+  scene?: string;
   /** Human-readable description for logging and debugging. */
   description?: string;
 }
