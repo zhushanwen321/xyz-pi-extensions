@@ -25,9 +25,9 @@
     "@zhushanwen/pi-quota-providers": "workspace:*"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-tui": "*",
-    "@earendil-works/pi-ai": "*"
+    "@mariozechner/pi-coding-agent": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-tui": {
@@ -38,6 +38,11 @@
     }
   },
   "scripts": {
-    "typecheck": "npx tsc --noEmit"
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.8"
   }
 }
