@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-statusline",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Pi statusline extension — shows context usage, token speed, and provider quota in the footer.",
   "type": "module",
   "main": "src/index.ts",
@@ -30,8 +30,12 @@
     "@earendil-works/pi-ai": "*"
   },
   "peerDependenciesMeta": {
-    "@earendil-works/pi-tui": { "optional": true },
-    "@earendil-works/pi-ai": { "optional": true }
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "@earendil-works/pi-ai": {
+      "optional": true
+    }
   },
   "scripts": {
     "typecheck": "npx tsc --noEmit"

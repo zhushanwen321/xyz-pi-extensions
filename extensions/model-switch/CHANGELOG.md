@@ -1,13 +1,9 @@
-# @zhushanwen/pi-evolve-daily
+# @zhushanwen/pi-model-switch
 
-## 0.1.5
+## 0.1.1
 
 ### Patch Changes
 
 - Fix GATE_SCRIPT_PATH path for npm packaging, module-level state encapsulation, execute error handling compliance, peerDependencies cleanup, ANSI escaping removal, and directory restructuring
-
-## 0.1.4
-
-### Patch Changes
-
-- ba20dca: bump patch version for evolve
+- Updated dependencies
+  - @zhushanwen/pi-quota-providers@0.1.1

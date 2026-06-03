@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-vision",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Image analysis tool using multimodal vision models with memory sessions.",
   "main": "index.ts",
   "type": "module",
@@ -27,8 +27,12 @@
     "@sinclair/typebox": "*"
   },
   "peerDependenciesMeta": {
-    "@earendil-works/pi-tui": { "optional": true },
-    "@earendil-works/pi-ai": { "optional": true }
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "@earendil-works/pi-ai": {
+      "optional": true
+    }
   },
   "scripts": {
     "typecheck": "npx tsc --noEmit"
