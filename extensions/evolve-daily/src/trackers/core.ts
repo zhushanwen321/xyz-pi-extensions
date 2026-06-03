@@ -78,7 +78,7 @@ function formatItemList<TMeta>(
   items: TrackedItem<TMeta>[],
   trackerName: string,
 ): string {
-  if (items.length === 0) return `无活跃追踪（${trackerName}）。`;
+  if (items.length === 0) return `No active tracked items (${trackerName}).`;
   return items
     .map(
       (item) =>
@@ -340,22 +340,22 @@ export function createTracker<TMeta>(
 
       // ── update ──
       if (params.id === undefined) {
-        return { content: [{ type: "text", text: "update 操作需要 id 参数" }], isError: true };
+        return { content: [{ type: "text", text: "update action requires id parameter" }], isError: true };
       }
       if (params.status === undefined) {
-        return { content: [{ type: "text", text: "update 操作需要 status 参数" }], isError: true };
+        return { content: [{ type: "text", text: "update action requires status parameter" }], isError: true };
       }
 
       const itemIndex = state.items.findIndex(
         (item) => item.id === params.id,
       );
       if (itemIndex === -1) {
-        return { content: [{ type: "text", text: `TrackedItem id=${params.id} 不存在` }], isError: true };
+        return { content: [{ type: "text", text: `TrackedItem id=${params.id} not found` }], isError: true };
       }
 
       const item = state.items[itemIndex];
       if (!canTransition(item.status, params.status)) {
-        return { content: [{ type: "text", text: `非法转换: ${item.status} → ${params.status}（当前 ${item.status}，终态不可变更或该路径不允许）` }], isError: true };
+        return { content: [{ type: "text", text: `Invalid transition: ${item.status} → ${params.status} (current: ${item.status}, terminal states are immutable or path not allowed)` }], isError: true };
       }
 
       // 执行转换
@@ -373,7 +373,7 @@ export function createTracker<TMeta>(
 
       persistState(ctx);
 
-      const statusText = isTerminalStatus(item.status) ? "（终态）" : "";
+      const statusText = isTerminalStatus(item.status) ? " (terminal)" : "";
       return {
         content: [
           {
@@ -428,7 +428,7 @@ export function createTracker<TMeta>(
       const details = result.details as TrackerDetails<TMeta>;
       if (details.error) {
         return new Text(
-          theme.fg("error", `[${config.name}] 错误: ${details.error}`),
+          theme.fg("error", `[${config.name}] Error: ${details.error}`),
           0,
           0,
         );

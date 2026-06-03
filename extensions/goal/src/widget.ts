@@ -42,10 +42,10 @@ export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string
 	let text = th.fg("accent", `◆ Goal`) + th.fg("muted", ` ${state.turnCount}/${state.budget.maxTurns}`);
 
 	if (total > 0) {
-		text += th.fg("muted", ` | ${completedCount}/${total} 任务`);
+		text += th.fg("muted", ` | ${completedCount}/${total} tasks`);
 		const cancelledCount = state.tasks.filter(t => t.status === "cancelled").length;
 		if (cancelledCount > 0) {
-			text += th.fg("dim", `, ${cancelledCount} 取消`);
+			text += th.fg("dim", `, ${cancelledCount} cancelled`);
 		}
 	}
 
@@ -60,25 +60,25 @@ export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string
 	}
 
 	if (state.stallCount > 0) {
-		text += th.fg("warning", ` | ⚠ ${state.stallCount}轮无进展`);
+		text += th.fg("warning", ` | ⚠ ${state.stallCount} turns stalled`);
 	}
 
 	// Status suffix
 	switch (state.status) {
 		case "paused":
-			text += th.fg("warning", " | ⏸ 暂停");
+			text += th.fg("warning", " | ⏸ Paused");
 			break;
 		case "blocked":
-			text += th.fg("error", " | ⊘ 阻塞");
+			text += th.fg("error", " | ⊘ Blocked");
 			break;
 		case "complete":
-			text += th.fg("success", " | ✓ 完成");
+			text += th.fg("success", " | ✓ Completed");
 			break;
 		case "budget_limited":
-			text += th.fg("error", " | ⊗ Token 预算耗尽");
+			text += th.fg("error", " | ⊗ Token budget exhausted");
 			break;
 		case "time_limited":
-			text += th.fg("error", " | ⏱ 时间预算耗尽");
+			text += th.fg("error", " | ⏱ Time budget exhausted");
 			break;
 	}
 
@@ -96,19 +96,19 @@ export function renderTerminalStatusLine(state: GoalRuntimeState, th: ThemeLike)
 	// 状态后缀
 	switch (state.status) {
 		case "complete":
-			text += th.fg("success", " ✓ 完成");
+			text += th.fg("success", " ✓ Completed");
 			break;
 		case "budget_limited":
-			text += th.fg("error", " ⊗ Token 预算耗尽");
+			text += th.fg("error", " ⊗ Token budget exhausted");
 			break;
 		case "time_limited":
-			text += th.fg("error", " ⏱ 时间预算耗尽");
+			text += th.fg("error", " ⏱ Time budget exhausted");
 			break;
 		default:
 			break;
 	}
 
-	text += th.fg("muted", ` | ${completedCount}/${total} 任务`);
+	text += th.fg("muted", ` | ${completedCount}/${total} tasks`);
 
 	// 预算摘要
 	if (state.budget.tokenBudget && state.budget.tokenBudget > 0) {
@@ -137,11 +137,11 @@ export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): strin
 	const objDisplay = objSingleLine.length > OBJECTIVE_DISPLAY_LIMIT
 		? objSingleLine.slice(0, OBJECTIVE_TRUNCATE_KEEP) + "..."
 		: objSingleLine;
-	lines.push(th.fg("dim", `目标: ${objDisplay}`));
+	lines.push(th.fg("dim", `Objective: ${objDisplay}`));
 
 	// Task list
 	if (total === 0) {
-		lines.push(th.fg("dim", "  等待创建任务清单..."));
+		lines.push(th.fg("dim", "  Waiting for task list creation..."));
 	} else {
 		for (const t of state.tasks) {
 			const desc = toSingleLine(t.description);
@@ -178,7 +178,7 @@ export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): strin
 		const pct = getTimeUsagePercent(state) / PERCENT_FACTOR;
 		const elapsed = getElapsedTimeSeconds(state);
 		const mins = Math.floor(elapsed / SECONDS_PER_MINUTE);
-		lines.push(`  时间: ${renderProgressBar(pct)} ${mins}/${state.budget.timeBudgetMinutes}分钟`);
+		lines.push(`  Time: ${renderProgressBar(pct)} ${mins}/${state.budget.timeBudgetMinutes}min`);
 	}
 
 	return lines;

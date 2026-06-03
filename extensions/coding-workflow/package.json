@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-coding-workflow",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "5-phase coding workflow orchestration",
   "main": "index.ts",
   "type": "module",

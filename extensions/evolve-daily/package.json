@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-evolve-daily",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Daily evolution data collector — runs Python analyzer on first session of the day.",
   "type": "module",
   "main": "src/index.ts",

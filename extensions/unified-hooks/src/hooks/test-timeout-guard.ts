@@ -87,11 +87,11 @@ export function setupTestTimeoutGuard(pi: ExtensionAPI): void {
     return {
       block: true,
       reason:
-        `[test-timeout-guard] 检测到测试命令 (${testLabel}) 但未设置 timeout。\n` +
-        `测试执行时间不确定，未设置 timeout 可能导致无限等待。请执行以下任一操作：\n` +
-        `1. 设置 bash 工具的 timeout 参数（单元测试推荐 60-120 秒，E2E 测试推荐 180-300 秒）\n` +
-        `2. 如果测试套件较大或耗时未知，先用较短 timeout（如 30 秒）试探执行时间\n` +
-        `3. 对于已知耗时的测试（如 cargo test、gradle test），适当放宽到 300 秒`,
+        `[test-timeout-guard] Detected test command (${testLabel}) without timeout.\n` +
+        `Test duration is unpredictable — without timeout the process may hang indefinitely. Please do one of the following:\n` +
+        `1. Set the bash tool's timeout parameter (60-120s for unit tests, 180-300s for E2E tests)\n` +
+        `2. If test suite size or duration is unknown, start with a short timeout (e.g. 30s) to probe\n` +
+        `3. For known slow tests (cargo test, gradle test, etc.), allow up to 300s`,
     };
   });
 }

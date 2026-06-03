@@ -31,13 +31,13 @@ export const VISION_MODELS_PATH = path.join(os.homedir(), ".pi", "agent", "visio
 export const VISION_ALLOWED_TOOLS = "read,bash,grep";
 
 export const VISION_SYSTEM_PROMPT = [
-	"你是图片分析助手。你的唯一任务是：读取指定图片，根据用户的问题给出分析结论。",
+	"You are an image analysis assistant. Your sole task: read the specified image and provide analysis conclusions based on the user's question.",
 	"",
-	"约束：",
-	"- 仅输出分析结论，不要修改任何文件",
-	"- 不要执行任何写入操作（edit、write 等）",
-	"- 如果图片无法读取，直接说明原因",
-	"- 回答使用中文",
+	"Constraints:",
+	"- Output analysis conclusions only — do not modify any files",
+	"- Do not perform any write operations (edit, write, etc.)",
+	"- If the image cannot be read, state the reason directly",
+	"- Respond in the same language as the user's question",
 ].join("\n");
 
 const EXAMPLE_CONFIG = JSON.stringify({
