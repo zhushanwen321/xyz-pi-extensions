@@ -7,7 +7,7 @@
  *   session_shutdown — clean up session-scoped state
  *
  * Tool: "workflow"
- *   Actions: create, start, pause, resume, complete, fail, abort, status
+ *   Actions: pause, resume, abort, status
  *   Enforces state machine rules (terminal states are irreversible)
  */
 
@@ -27,6 +27,7 @@ import {
 import { WorkflowOrchestrator, type WorkflowInstanceSummary } from "./orchestrator.js";
 import {
   registerWorkflowCommands,
+  sendCompletionNotification,
   type WorkflowCommandsState,
 } from "./commands.js";
 import { renderWorkflowList } from "./widget.js";
@@ -35,21 +36,14 @@ import { registerGenerateTool } from "./tool-generate.js";
 // ── Parameter schema ──────────────────────────────────────────
 
 const WorkflowAction = StringEnum(
-  ["create", "start", "pause", "resume", "complete", "fail", "abort", "status"] as const,
+  ["pause", "resume", "abort", "status"] as const,
   { description: "Workflow action to execute" },
 );
 
 const WorkflowParams = Type.Object({
   action: WorkflowAction,
-  runId: Type.Optional(Type.String({ description: "Workflow run ID" })),
-  name: Type.Optional(Type.String({ description: "Workflow name (required for create)" })),
-  worker: Type.Optional(
-    Type.String({ description: "Default worker agent for this workflow", default: "general-purpose" }),
-  ),
-  maxTokens: Type.Optional(Type.Number({ description: "Maximum token budget" })),
-  maxCost: Type.Optional(Type.Number({ description: "Maximum cost budget" })),
-  maxTimeMs: Type.Optional(Type.Number({ description: "Maximum time budget in milliseconds" })),
-  error: Type.Optional(Type.String({ description: "Error message (used with fail/abort)" })),
+  runId: Type.Optional(Type.String({ description: "Workflow run ID (required for pause/resume/abort)" })),
+  error: Type.Optional(Type.String({ description: "Error/reason message (optional, used with abort)" })),
 });
 
 // ── Details type for TUI / _render ────────────────────────────
@@ -175,6 +169,13 @@ export default function workflowExtension(pi: ExtensionAPI) {
       }
     };
 
+    // Event-driven completion notification (replaces polling)
+    // Fires when a workflow reaches any terminal state
+    orch.onCompletion = (runId) => {
+      const instance = orch.getInstance(runId);
+      if (instance) sendCompletionNotification(pi, runId, instance);
+    };
+
     // Set up TUI widget showing workflow list overview
     if (ctx.hasUI) {
       const summaryList = orch.list();
@@ -199,6 +200,11 @@ export default function workflowExtension(pi: ExtensionAPI) {
       if (ctx.hasUI) {
         ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
       }
+    };
+
+    orch.onCompletion = (runId) => {
+      const instance = orch.getInstance(runId);
+      if (instance) sendCompletionNotification(pi, runId, instance);
     };
 
     if (ctx.hasUI) {
@@ -227,10 +233,10 @@ export default function workflowExtension(pi: ExtensionAPI) {
     name: "workflow",
     label: "Workflow",
     description:
-      "Manage running workflow instances (pause, resume, abort, status).\n" +
+      "Control running workflow instances: pause, resume, abort, or check status.\n" +
       "\n" +
-      "Do NOT use this tool to start a workflow — use `workflow-run` instead.\n" +
-      "This tool is for checking status or controlling already-running workflows.\n" +
+      "For STARTING a new workflow, use \`workflow-run\` instead.\n" +
+      "This tool ONLY controls already-running workflows.\n" +
       "\n" +
       "Actions:\n" +
       "  status   — List all workflow instances in current session\n" +
@@ -259,51 +265,9 @@ export default function workflowExtension(pi: ExtensionAPI) {
       const action = params.action as string;
 
       switch (action) {
-        // ── Create ──
-        case "create": {
-          const name = params.name as string | undefined;
-          if (!name) {
-            return {
-              content: [{ type: "text" as const, text: "Error: 'name' is required for create action" }],
-              details: { action: "create", instances: [] } satisfies WorkflowDetails,
-              isError: true,
-            };
-          }
-          const runId =
-            (params.runId as string | undefined) ??
-            `wf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-          const worker = (params.worker as string | undefined) ?? "general-purpose";
-
-          orch.createInstance({
-            runId,
-            name,
-            worker,
-            budget: {
-              maxTokens: params.maxTokens as number | undefined,
-              maxCost: params.maxCost as number | undefined,
-              maxTimeMs: params.maxTimeMs as number | undefined,
-            },
-          });
-
-          const summaries = orch.list();
-          return {
-            content: [
-              { type: "text" as const, text: `Created workflow: ${name} (${runId}) [created]` },
-            ],
-            details: {
-              action: "create",
-              instances: summaries.map(toInstanceSummary),
-              _render: buildRender(summaries),
-            } satisfies WorkflowDetails,
-          };
-        }
-
-        // ── State transitions ──
-        case "start":
+        // ── Control (pause / resume / abort) ──
         case "pause":
         case "resume":
-        case "complete":
-        case "fail":
         case "abort": {
           const runId = params.runId as string | undefined;
           if (!runId) {
@@ -324,65 +288,49 @@ export default function workflowExtension(pi: ExtensionAPI) {
           }
 
           const actionToTarget: Record<string, WorkflowStatus> = {
-            start: "running",
             pause: "paused",
             resume: "running",
-            complete: "completed",
-            fail: "failed",
             abort: "aborted",
           };
-
           const targetStatus = actionToTarget[action];
-          if (!targetStatus) {
+
+          // Delegate to orchestrator (handles Worker lifecycle)
+          if (action === "abort" && (params.error as string | undefined)) {
+            instance.error = params.error as string;
+          }
+          try {
+            if (action === "pause") orch.pause(runId);
+            else if (action === "resume") orch.resume(runId);
+            else orch.abort(runId);
+
+            const summaries = orch.list();
             return {
-              content: [{ type: "text" as const, text: `Error: unknown action '${action}'` }],
-              details: { action, instances: orch.list().map(toInstanceSummary) } satisfies WorkflowDetails,
-              isError: true,
+              content: [{
+                type: "text" as const,
+                text: `Workflow '${instance.name}' (${runId}): → ${instance.status}`,
+              }],
+              details: {
+                action,
+                instances: summaries.map(toInstanceSummary),
+                _render: buildRender(summaries),
+              } satisfies WorkflowDetails,
             };
+          } catch {
+            // Orchestrator method failed — fall through to direct state machine
           }
 
-          // For pause/resume/abort: delegate to orchestrator (handles Worker lifecycle)
-          if (action === "pause" || action === "resume" || action === "abort") {
-            if (action === "abort" && (params.error as string | undefined)) {
-              instance.error = params.error as string;
-            }
-            try {
-              if (action === "pause") orch.pause(runId);
-              else if (action === "resume") orch.resume(runId);
-              else orch.abort(runId);
-
-              const summaries = orch.list();
-              return {
-                content: [{
-                  type: "text" as const,
-                  text: `Workflow '${instance.name}' (${runId}): → ${instance.status}`,
-                }],
-                details: {
-                  action,
-                  instances: summaries.map(toInstanceSummary),
-                  _render: buildRender(summaries),
-                } satisfies WorkflowDetails,
-              };
-            } catch {
-              // Orchestrator method failed — fall through to direct state machine
-            }
-          }
-
-          // Direct state machine transition (start/complete/fail, or orchestrator fallback)
+          // Fallback: direct state machine transition if orchestrator fails
           try {
             const oldStatus = instance.status;
             transitionStatus(instance, targetStatus);
 
-            // Set timestamps
-            if (targetStatus === "running" && oldStatus === "created") {
-              instance.startedAt = new Date().toISOString();
-            } else if (targetStatus === "running" && oldStatus === "paused") {
+            if (targetStatus === "running" && oldStatus === "paused") {
               instance.pausedAt = undefined;
             } else if (targetStatus === "paused") {
               instance.pausedAt = new Date().toISOString();
             } else if (isTerminal(targetStatus)) {
               instance.completedAt = new Date().toISOString();
-              if (action === "fail" || action === "abort") {
+              if (action === "abort") {
                 instance.error = (params.error as string | undefined) ?? instance.error;
               }
             }

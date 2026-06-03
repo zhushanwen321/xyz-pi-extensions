@@ -103,6 +103,8 @@ export class WorkflowOrchestrator {
   private readonly ctx: ExtensionContext;
   /** Called after every trace node state change for live TUI updates */
   onTraceUpdate?: (runId: string) => void;
+  /** Called when a workflow reaches a terminal state (completed/failed/aborted/budget_limited/time_limited) */
+  onCompletion?: (runId: string) => void;
 
   constructor(
     pi: ExtensionAPI,
@@ -141,10 +143,10 @@ export class WorkflowOrchestrator {
       runId,
       name,
       worker: workflow.path,
+      status: "running",
       budget: { maxTokens: budgetTokens, maxTimeMs: budgetTimeMs },
     });
     instance.startedAt = new Date().toISOString();
-    transitionStatus(instance, "running");
 
     this.runMetaMap.set(runId, { scriptSource, args, budgetTokens, budgetTimeMs });
     this.instances.set(runId, instance);
@@ -237,6 +239,7 @@ export class WorkflowOrchestrator {
     transitionStatus(instance, "aborted");
     this.terminateWorker(runId);
     this.persistState();
+    this.onCompletion?.(runId);
   }
 
   /**
@@ -355,22 +358,6 @@ export class WorkflowOrchestrator {
     }
   }
 
-  /**
-   * Create a state-machine-only instance (no Worker thread).
-   * Used by the workflow tool's create action.
-   */
-  createInstance(params: {
-    runId: string;
-    name: string;
-    worker: string;
-    budget?: Partial<WorkflowBudget>;
-  }): WorkflowInstance {
-    const instance = createStateInstance(params);
-    this.instances.set(params.runId, instance);
-    this.persistState();
-    return instance;
-  }
-
   // ── Worker lifecycle ────────────────────────────────────────
 
   /**
@@ -459,6 +446,7 @@ export class WorkflowOrchestrator {
         this.workers.delete(runId);
         this.persistState();
         this.onTraceUpdate?.(runId);
+        this.onCompletion?.(runId);
         break;
       }
       case "error": {
@@ -586,6 +574,7 @@ export class WorkflowOrchestrator {
     instance.completedAt = new Date().toISOString();
     transitionStatus(instance, "failed");
     this.persistState();
+    this.onCompletion?.(runId);
   }
 
   /**
@@ -611,6 +600,7 @@ export class WorkflowOrchestrator {
       instance.completedAt = new Date().toISOString();
       transitionStatus(instance, "failed");
       this.persistState();
+      this.onCompletion?.(runId);
     }
   }
 
@@ -643,6 +633,7 @@ export class WorkflowOrchestrator {
       transitionStatus(instance, "failed");
       this.terminateWorker(runId);
       this.persistState();
+      this.onCompletion?.(runId);
     }
   }
 
@@ -687,6 +678,7 @@ export class WorkflowOrchestrator {
       instance.completedAt = new Date().toISOString();
       transitionStatus(instance, "budget_limited");
       this.persistState();
+      this.onCompletion?.(runId);
     }
   }
 
@@ -713,6 +705,7 @@ export class WorkflowOrchestrator {
         instance.completedAt = new Date().toISOString();
         transitionStatus(instance, "time_limited");
         this.persistState();
+        this.onCompletion?.(runId);
       }
     }, maxTimeMs);
     timer.unref();

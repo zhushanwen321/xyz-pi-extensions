@@ -28,6 +28,7 @@ import {
 	type QuotaProvider,
 } from "@zhushanwen/pi-quota-providers";
 import { registerSetupCommand } from "./setup.js";
+import { formatSpeedPart, splitPath, tailSessionId } from "./format.js";
 
 // ── 本地事件类型 ───────────────────────────────────────
 interface PiMessageEvent {
@@ -36,12 +37,6 @@ interface PiMessageEvent {
 
 interface PiThinkingLevelEvent {
 	level: string;
-}
-
-interface SearchToolRaw {
-	available?: number;
-	used?: number;
-	total?: number;
 }
 
 // ── 时间常量 ───────────────────────────────────────────
@@ -126,17 +121,6 @@ function pctColor(pct: number): "error" | "warning" | "accent" | "success" {
 	if (pct >= PCT_MED) return "warning";
 	if (pct >= PCT_LOW) return "accent";
 	return "success";
-}
-
-/** 把 cwd 切成段，按系统分隔符（macOS/Linux: /；Windows: \） */
-function splitPath(p: string): string[] {
-	return p.split(sep).filter(Boolean);
-}
-
-/** 截取 sessionId 文件名的末尾 N 字符（去路径） */
-function tailSessionId(filePath: string | undefined, n: number): string {
-	if (!filePath) return "";
-	return filePath.split(sep).pop()?.slice(-n) ?? "";
 }
 
 /** 当前 cwd 是否在 git worktree 内（粗略：看 .git 是文件还是目录） */
@@ -332,7 +316,8 @@ function normalizeRows(cache: CacheData, providers: QuotaProvider[]): QuotaRow[]
 			if (!raw) continue;
 			const norm = p.normalize(raw);
 			if (!norm) continue;
-			rows.push({ name: norm.label || p.label, wins: norm.wins });
+			// 优先使用 providers.json 配置的 label，fallback 到 normalize 返回的 label
+			rows.push({ name: p.label || norm.label, wins: norm.wins });
 		// eslint-disable-next-line taste/no-silent-catch -- render 容错：单 provider normalize 失败不应拖垮整个 statusline
 		} catch (e) {
 			console.warn(`[statusline] normalize failed for ${p.id}:`, e);
@@ -362,7 +347,11 @@ function buildLine2(ctx: ExtensionContext, st: StatuslineRuntimeState, p: Pallet
 	const provider = model.provider || "";
 	const modelId = model.id || model.name || "unknown";
 	const tlPart = st.thinkingLevel ? ` ${p.m(`[${st.thinkingLevel}]`)}` : "";
-	return `${p.d(provider)}/${p.a(modelId)}${tlPart}`;
+
+	const speedPart = formatSpeedPart(st.speed, p);
+	const speedPrefix = speedPart ? ` ${speedPart}` : "";
+
+	return `${p.d(provider)}/${p.a(modelId)}${tlPart}${speedPrefix}`;
 }
 
 function buildLine3(
@@ -420,10 +409,11 @@ function buildSearchLine(
 	const parts: string[] = [];
 	for (const prov of providers) {
 		if (prov.category !== "search-tool") continue;
-		const raw = (cache as Record<string, unknown>)[prov.id] as SearchToolRaw | undefined;
+		const raw = (cache as Record<string, unknown>)[prov.id] as Record<string, unknown> | undefined;
 		if (!raw) continue;
-		const used = raw.used ?? raw.available;
-		const total = raw.total;
+		// 优先使用 planUsage/planLimit（API 调用次数），fallback 到 available/total（key 数量）
+		const used = (raw.planUsage as number) ?? (raw.available as number);
+		const total = (raw.planLimit as number) ?? (raw.total as number);
 		if (used === undefined || !total || total <= 0) continue;
 		const pct = Math.round((used / total) * PERCENT_SCALE);
 		const pctCol = theme.fg(pctColor(pct), `${pct}%`);
@@ -451,8 +441,10 @@ function buildTokenPlanLines(
 
 /** 渲染单个窗口列：label pct% [reset]（无 bar） */
 function formatWinCol(label: string, win: QuotaWindow, p: Pallet, theme: Theme): string {
+	const pctWidth = PCT_COL_W + 1; // "NNN%" = padStart(3) + 1 = 4 chars
 	if (win.pct === null) {
-		return `${p.d(label)}  ${p.v("∞")}`;
+		// 无限：∞ 右对齐到 pctStr 宽度，reset 用 -- 占位
+		return `${p.d(label)}  ${p.v("∞".padStart(pctWidth))}  ${p.v("--".padStart(RESET_COL_W))}`;
 	}
 	const pctStr = `${String(Math.round(win.pct)).padStart(PCT_COL_W)}%`;
 	const rtRaw = win.resetSec != null && win.resetSec > 0 ? fmtResetSec(win.resetSec) : "";

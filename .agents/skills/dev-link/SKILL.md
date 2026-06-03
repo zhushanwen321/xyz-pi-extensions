@@ -36,7 +36,7 @@ description: >-
 ### 切换到本地（默认）
 
 1. 从 `~/.pi/agent/settings.json` 的 `packages` 数组移除 `npm:@zhushanwen/pi-xxx`
-2. 创建 `~/.pi/agent/extensions/xxx` → `$(pwd)/packages/xxx` symlink
+2. 创建 `~/.pi/agent/extensions/xxx` → `$(pwd)/extensions/xxx` symlink
 3. 删除 npm 缓存 `node_modules/@zhushanwen/pi-xxx`
 
 ### 恢复 npm（`--npm`）

@@ -30,3 +30,6 @@ jobs:
 
       - name: TypeCheck
         run: pnpm exec tsc --noEmit
+
+      - name: Test
+        run: pnpm -r test

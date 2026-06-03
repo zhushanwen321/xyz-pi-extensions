@@ -76,7 +76,7 @@ link_local() {
 	local short="$1"
 	local npm="$2"
 	local pkg_dir
-	pkg_dir="$(pwd)/packages/$short"
+	pkg_dir="$(pwd)/extensions/$short"
 
 	if [ ! -d "$pkg_dir" ]; then
 		echo "❌ Package directory not found: $pkg_dir"
@@ -84,19 +84,13 @@ link_local() {
 		exit 1
 	fi
 
-	# 1. 从 settings.json 移除 npm 条目
-	node -e "
-		const fs = require('fs');
-		const s = JSON.parse(fs.readFileSync('$SETTINGS', 'utf-8'));
-		const before = s.packages.length;
-		s.packages = s.packages.filter(p => p !== 'npm:$npm');
-		if (s.packages.length < before) {
-			fs.writeFileSync('$SETTINGS', JSON.stringify(s, null, 2) + '\n');
-			console.log('  removed npm:$npm from settings.json');
-		} else {
-			console.log('  npm:$npm not in settings.json (already removed)');
-		}
-	"
+	# 1. 用 pi uninstall 卸载 npm 包（同时清理 package.json + settings.json + node_modules）
+	if [ -d "$NPM_DIR/$npm" ]; then
+		echo "  running pi uninstall npm:$npm ..."
+		pi uninstall "npm:$npm" 2>&1 | sed 's/^/    /'
+	else
+		echo "  npm package not installed, skipping uninstall"
+	fi
 
 	# 2. 创建 symlink
 	mkdir -p "$EXTENSIONS_DIR"
@@ -108,13 +102,6 @@ link_local() {
 	ln -s "$pkg_dir" "$ext_path"
 	echo "  linked $ext_path → $pkg_dir"
 
-	# 3. 清理 npm 缓存
-	local npm_cache="$NPM_DIR/$npm"
-	if [ -d "$npm_cache" ]; then
-		rm -rf "$npm_cache"
-		echo "  removed npm cache $npm_cache"
-	fi
-
 	echo "✅ $short → local symlink (restart Pi to take effect)"
 }
 
@@ -124,22 +111,7 @@ link_npm() {
 	local short="$1"
 	local npm="$2"
 
-	# 1. 向 settings.json 添加 npm 条目
-	node -e "
-		const fs = require('fs');
-		const s = JSON.parse(fs.readFileSync('$SETTINGS', 'utf-8'));
-		if (!s.packages) s.packages = [];
-		const entry = 'npm:$npm';
-		if (!s.packages.includes(entry)) {
-			s.packages.push(entry);
-			fs.writeFileSync('$SETTINGS', JSON.stringify(s, null, 2) + '\n');
-			console.log('  added npm:$npm to settings.json');
-		} else {
-			console.log('  npm:$npm already in settings.json');
-		}
-	"
-
-	# 2. 删除 symlink
+	# 1. 删除 symlink
 	local ext_path="$EXTENSIONS_DIR/$short"
 	if [ -L "$ext_path" ]; then
 		rm -f "$ext_path"
@@ -148,14 +120,11 @@ link_npm() {
 		echo "  no symlink at $ext_path"
 	fi
 
-	# 3. 清理 npm 缓存（Pi 启动时自动重装）
-	local npm_cache="$NPM_DIR/$npm"
-	if [ -d "$npm_cache" ]; then
-		rm -rf "$npm_cache"
-		echo "  removed npm cache (Pi will reinstall on startup)"
-	fi
+	# 2. 用 pi install 安装 npm 包（同时写 package.json + settings.json + npm install）
+	echo "  running pi install npm:$npm ..."
+	pi install "npm:$npm" 2>&1 | sed 's/^/    /'
 
-	echo "✅ $short → npm (restart Pi to install & load)"
+	echo "✅ $short → npm (restart Pi to load)"
 }
 
 # ── 列表模式 ────────────────────────────────────────────
@@ -166,8 +135,8 @@ list_all() {
 	printf "%-20s %-35s %s\n" "SHORT" "NPM" "STATUS"
 	printf "%-20s %-35s %s\n" "-----" "---" "------"
 
-	# 从当前 worktree 的 packages/ 扫描
-	for pkg_dir in packages/*/; do
+	# 从当前 worktree 的 extensions/ 扫描
+	for pkg_dir in extensions/*/; do
 		[ -f "$pkg_dir/package.json" ] || continue
 		local short
 		short="$(basename "$pkg_dir")"

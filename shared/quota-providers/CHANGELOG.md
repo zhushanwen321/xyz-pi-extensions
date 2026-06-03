@@ -1,5 +1,11 @@
 # @zhushanwen/pi-quota-providers
 
+## 0.4.1
+
+### Patch Changes
+
+- Fix statusline alignment, add speed display, add 76 tests
+
 ## 0.4.0
 
 ### Minor Changes

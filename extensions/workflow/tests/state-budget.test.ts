@@ -1,0 +1,514 @@
+// 测试框架：vitest（从 vitest 导入 describe/it/expect/vi/beforeEach）
+// 运行命令：npx vitest run tests/state-budget.test.ts
+
+import { describe, it, expect } from "vitest";
+import {
+  isTerminal,
+  canTransition,
+  transitionStatus,
+  createInstance,
+  serializeInstance,
+  deserializeInstance,
+  deserializeState,
+  ALL_STATUSES,
+  TERMINAL_STATUSES,
+  VALID_TRANSITIONS,
+  ENTRY_TYPE,
+  type WorkflowInstance,
+  type WorkflowStatus,
+} from "../src/state";
+import { BudgetTracker } from "../src/budget";
+
+// ═══════════════════════════════════════════════════════════════
+// state.ts
+// ═══════════════════════════════════════════════════════════════
+
+describe("state.ts", () => {
+  // ── isTerminal ────────────────────────────────────────────
+  describe("isTerminal()", () => {
+    it("returns true for all 5 terminal statuses", () => {
+      expect(isTerminal("completed")).toBe(true);
+      expect(isTerminal("failed")).toBe(true);
+      expect(isTerminal("aborted")).toBe(true);
+      expect(isTerminal("budget_limited")).toBe(true);
+      expect(isTerminal("time_limited")).toBe(true);
+    });
+
+    it("returns false for non-terminal statuses", () => {
+      expect(isTerminal("running")).toBe(false);
+      expect(isTerminal("paused")).toBe(false);
+    });
+  });
+
+  // ── canTransition ─────────────────────────────────────────
+  describe("canTransition()", () => {
+    it("allows valid transitions from running", () => {
+      expect(canTransition("running", "paused")).toBe(true);
+      expect(canTransition("running", "completed")).toBe(true);
+      expect(canTransition("running", "failed")).toBe(true);
+      expect(canTransition("running", "aborted")).toBe(true);
+    });
+
+    it("allows valid transitions from paused", () => {
+      expect(canTransition("paused", "running")).toBe(true);
+      expect(canTransition("paused", "aborted")).toBe(true);
+    });
+
+    it("rejects invalid transitions from terminal states", () => {
+      expect(canTransition("completed", "running")).toBe(false);
+      expect(canTransition("failed", "running")).toBe(false);
+      expect(canTransition("aborted", "running")).toBe(false);
+      expect(canTransition("budget_limited", "paused")).toBe(false);
+      expect(canTransition("time_limited", "failed")).toBe(false);
+    });
+
+    it("rejects invalid transitions from non-terminal states", () => {
+      expect(canTransition("running", "running")).toBe(false);
+      expect(canTransition("paused", "completed")).toBe(false);
+    });
+  });
+
+  // ── transitionStatus ──────────────────────────────────────
+  describe("transitionStatus()", () => {
+    function makeInstance(status: WorkflowStatus): WorkflowInstance {
+      return {
+        runId: "test-run",
+        name: "test",
+        status,
+        callCache: new Map(),
+        trace: [],
+        worker: "agent-1",
+        budget: { usedTokens: 0, usedCost: 0 },
+      };
+    }
+
+    it("updates instance status on valid transition", () => {
+      const inst = makeInstance("running");
+      transitionStatus(inst, "paused");
+      expect(inst.status).toBe("paused");
+
+      transitionStatus(inst, "running");
+      expect(inst.status).toBe("running");
+    });
+
+    it("throws on invalid transition from terminal state", () => {
+      const inst = makeInstance("completed");
+      expect(() => transitionStatus(inst, "running")).toThrow(
+        /Invalid state transition/,
+      );
+    });
+
+    it("throws on invalid transition between incompatible states", () => {
+      const inst = makeInstance("paused");
+      expect(() => transitionStatus(inst, "completed")).toThrow(
+        /Invalid state transition/,
+      );
+    });
+
+    it("returns the new status", () => {
+      const inst = makeInstance("running");
+      const result = transitionStatus(inst, "failed");
+      expect(result).toBe("failed");
+      expect(inst.status).toBe("failed");
+    });
+  });
+
+  // ── createInstance ────────────────────────────────────────
+  describe("createInstance()", () => {
+    it("creates instance with default status=running", () => {
+      const inst = createInstance({
+        runId: "r1",
+        name: "wf1",
+        worker: "agent-1",
+      });
+      expect(inst.status).toBe("running");
+      expect(inst.runId).toBe("r1");
+      expect(inst.name).toBe("wf1");
+      expect(inst.worker).toBe("agent-1");
+      expect(inst.callCache).toBeInstanceOf(Map);
+      expect(inst.callCache.size).toBe(0);
+      expect(inst.trace).toEqual([]);
+    });
+
+    it("creates instance with custom status", () => {
+      const inst = createInstance({
+        runId: "r2",
+        name: "wf2",
+        worker: "agent-2",
+        status: "paused",
+      });
+      expect(inst.status).toBe("paused");
+    });
+
+    it("initializes budget fields with defaults", () => {
+      const inst = createInstance({
+        runId: "r3",
+        name: "wf3",
+        worker: "agent-1",
+      });
+      expect(inst.budget).toEqual({
+        maxTokens: undefined,
+        maxCost: undefined,
+        maxTimeMs: undefined,
+        usedTokens: 0,
+        usedCost: 0,
+      });
+    });
+
+    it("merges partial budget overrides", () => {
+      const inst = createInstance({
+        runId: "r4",
+        name: "wf4",
+        worker: "agent-1",
+        budget: { maxTokens: 100_000, maxCost: 5.0 },
+      });
+      expect(inst.budget.maxTokens).toBe(100_000);
+      expect(inst.budget.maxCost).toBe(5.0);
+      expect(inst.budget.maxTimeMs).toBeUndefined();
+      expect(inst.budget.usedTokens).toBe(0);
+      expect(inst.budget.usedCost).toBe(0);
+    });
+  });
+
+  // ── serializeInstance / deserializeInstance round-trip ────
+  describe("serialize/deserialize round-trip", () => {
+    it("preserves all key fields through serialize → deserialize", () => {
+      const original = createInstance({
+        runId: "rt-1",
+        name: "round-trip-test",
+        worker: "agent-x",
+        budget: { maxTokens: 50_000, maxCost: 2.5 },
+      });
+      original.status = "completed";
+      original.startedAt = "2026-01-01T00:00:00Z";
+      original.completedAt = "2026-01-01T00:10:00Z";
+      original.callCache.set(0, { content: "result-0" });
+      original.callCache.set(1, {
+        content: "result-1",
+        usage: { input: 100, output: 50, cost: 0.01, contextTokens: 150, turns: 1, cacheRead: 0, cacheWrite: 0 },
+        durationMs: 3000,
+      });
+      original.trace.push({
+        stepIndex: 0,
+        agent: "agent-x",
+        task: "do stuff",
+        model: "gpt-4",
+        status: "completed",
+      });
+
+      const serialized = serializeInstance(original);
+      const restored = deserializeInstance(serialized);
+
+      expect(restored.runId).toBe(original.runId);
+      expect(restored.name).toBe(original.name);
+      expect(restored.status).toBe(original.status);
+      expect(restored.worker).toBe(original.worker);
+      expect(restored.startedAt).toBe(original.startedAt);
+      expect(restored.completedAt).toBe(original.completedAt);
+      expect(restored.budget).toEqual(original.budget);
+      expect(restored.trace).toEqual(original.trace);
+      expect(restored.callCache.size).toBe(2);
+      expect(restored.callCache.get(0)?.content).toBe("result-0");
+      expect(restored.callCache.get(1)?.usage?.input).toBe(100);
+    });
+  });
+
+  // ── deserializeInstance backward compat ──────────────────
+  describe("deserializeInstance() backward compat", () => {
+    it('maps legacy "created" status to "running"', () => {
+      const data = {
+        runId: "legacy-1",
+        name: "old-wf",
+        status: "created",
+        callCache: [],
+        trace: [],
+        worker: "agent-1",
+      };
+      const inst = deserializeInstance(data);
+      expect(inst.status).toBe("running");
+    });
+
+    it("preserves modern status values", () => {
+      const data = {
+        runId: "modern-1",
+        name: "new-wf",
+        status: "paused",
+        callCache: [],
+        trace: [],
+        worker: "agent-1",
+      };
+      const inst = deserializeInstance(data);
+      expect(inst.status).toBe("paused");
+    });
+
+    it("provides default budget when missing", () => {
+      const data = {
+        runId: "no-budget",
+        name: "wf",
+        status: "running",
+        callCache: [],
+        trace: [],
+        worker: "agent-1",
+      };
+      const inst = deserializeInstance(data);
+      expect(inst.budget).toEqual({ usedTokens: 0, usedCost: 0 });
+    });
+
+    it("handles null/undefined callCache gracefully", () => {
+      const data = {
+        runId: "null-cache",
+        name: "wf",
+        status: "running",
+        callCache: null,
+        trace: null,
+        worker: "agent-1",
+      };
+      const inst = deserializeInstance(data);
+      expect(inst.callCache.size).toBe(0);
+      expect(inst.trace).toEqual([]);
+    });
+  });
+
+  // ── deserializeState ─────────────────────────────────────
+  describe("deserializeState()", () => {
+    it("returns populated Map from valid entries", () => {
+      const entry = {
+        type: ENTRY_TYPE,
+        instances: [
+          {
+            runId: "r1",
+            name: "wf1",
+            status: "running",
+            callCache: [],
+            trace: [],
+            worker: "a1",
+          },
+          {
+            runId: "r2",
+            name: "wf2",
+            status: "completed",
+            callCache: [],
+            trace: [],
+            worker: "a2",
+          },
+        ],
+      };
+      const map = deserializeState(entry);
+      expect(map.size).toBe(2);
+      expect(map.get("r1")?.status).toBe("running");
+      expect(map.get("r2")?.status).toBe("completed");
+    });
+
+    it("returns empty Map for wrong type", () => {
+      const entry = { type: "other-type", instances: [] };
+      const map = deserializeState(entry);
+      expect(map.size).toBe(0);
+    });
+
+    it("returns empty Map for undefined/null input", () => {
+      expect(deserializeState(undefined).size).toBe(0);
+      expect(deserializeState(null).size).toBe(0);
+    });
+
+    it("returns empty Map for non-object input", () => {
+      expect(deserializeState("string").size).toBe(0);
+      expect(deserializeState(42).size).toBe(0);
+    });
+
+    it("skips malformed instances without crashing", () => {
+      const entry = {
+        type: ENTRY_TYPE,
+        instances: [
+          {
+            runId: "good",
+            name: "valid",
+            status: "running",
+            callCache: [],
+            trace: [],
+            worker: "a1",
+          },
+          // malformed: missing required fields — deserializeInstance may throw or not
+          { status: "running" },
+          // another bad one
+          null,
+        ],
+      };
+      const map = deserializeState(entry);
+      // at least the good one survives; bad ones are skipped
+      expect(map.has("good")).toBe(true);
+      // null/missing-runId entries won't crash the whole loop
+      expect(map.size).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  // ── Constants ─────────────────────────────────────────────
+  describe("constants", () => {
+    it("ALL_STATUSES contains exactly 7 statuses", () => {
+      expect(ALL_STATUSES).toHaveLength(7);
+      const expected: readonly WorkflowStatus[] = [
+        "running", "paused", "completed", "failed",
+        "aborted", "budget_limited", "time_limited",
+      ];
+      expect(ALL_STATUSES).toEqual(expected);
+    });
+
+    it("TERMINAL_STATUSES contains exactly 5 statuses", () => {
+      expect(TERMINAL_STATUSES).toHaveLength(5);
+      const expected: readonly WorkflowStatus[] = [
+        "completed", "failed", "aborted", "budget_limited", "time_limited",
+      ];
+      expect(TERMINAL_STATUSES).toEqual(expected);
+    });
+
+    it("terminal states have empty transition lists in VALID_TRANSITIONS", () => {
+      for (const ts of TERMINAL_STATUSES) {
+        expect(VALID_TRANSITIONS[ts]).toEqual([]);
+      }
+    });
+
+    it("running has valid outgoing transitions", () => {
+      expect(VALID_TRANSITIONS.running).toContain("paused");
+      expect(VALID_TRANSITIONS.running).toContain("completed");
+      expect(VALID_TRANSITIONS.running).toContain("failed");
+      expect(VALID_TRANSITIONS.running).toContain("aborted");
+      expect(VALID_TRANSITIONS.running).toContain("budget_limited");
+      expect(VALID_TRANSITIONS.running).toContain("time_limited");
+    });
+
+    it("paused can go to running or aborted", () => {
+      expect(VALID_TRANSITIONS.paused).toEqual(["running", "aborted"]);
+    });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// budget.ts
+// ═══════════════════════════════════════════════════════════════
+
+describe("BudgetTracker", () => {
+  // ── Constructor ───────────────────────────────────────────
+  describe("constructor", () => {
+    it("accepts positive total without time limit", () => {
+      const b = new BudgetTracker(1000);
+      expect(b.used).toBe(0);
+      expect(b.remaining).toBe(1000);
+    });
+
+    it("accepts positive total with positive time limit", () => {
+      const b = new BudgetTracker(1000, 30);
+      expect(b.remaining).toBe(1000);
+    });
+
+    it("throws when total <= 0", () => {
+      expect(() => new BudgetTracker(0)).toThrow(/total must be positive/);
+      expect(() => new BudgetTracker(-5)).toThrow(/total must be positive/);
+    });
+
+    it("throws when timeLimitMinutes <= 0", () => {
+      expect(() => new BudgetTracker(1000, 0)).toThrow(
+        /timeLimitMinutes must be positive/,
+      );
+      expect(() => new BudgetTracker(1000, -10)).toThrow(
+        /timeLimitMinutes must be positive/,
+      );
+    });
+  });
+
+  // ── addUsage ──────────────────────────────────────────────
+  describe("addUsage()", () => {
+    it("accumulates token usage", () => {
+      const b = new BudgetTracker(10_000);
+      b.addUsage(500, 200);
+      expect(b.used).toBe(700);
+
+      b.addUsage(300, 100);
+      expect(b.used).toBe(1100);
+    });
+
+    it("throws on negative input tokens", () => {
+      const b = new BudgetTracker(1000);
+      expect(() => b.addUsage(-1, 0)).toThrow(/cannot be negative/);
+    });
+
+    it("throws on negative output tokens", () => {
+      const b = new BudgetTracker(1000);
+      expect(() => b.addUsage(0, -1)).toThrow(/cannot be negative/);
+    });
+
+    it("accepts zero values", () => {
+      const b = new BudgetTracker(1000);
+      b.addUsage(0, 0);
+      expect(b.used).toBe(0);
+    });
+  });
+
+  // ── isExhausted / isWarning / remaining / usagePercent ────
+  describe("budget queries", () => {
+    it("isExhausted is false below total, true at or above total", () => {
+      const b = new BudgetTracker(1000);
+      b.addUsage(500, 0);
+      expect(b.isExhausted).toBe(false);
+
+      b.addUsage(500, 0);
+      expect(b.isExhausted).toBe(true);
+    });
+
+    it("isExhausted remains true when over budget", () => {
+      const b = new BudgetTracker(1000);
+      b.addUsage(1200, 0);
+      expect(b.isExhausted).toBe(true);
+    });
+
+    it("remaining clamps to 0 when over budget", () => {
+      const b = new BudgetTracker(1000);
+      b.addUsage(1200, 0);
+      expect(b.remaining).toBe(0);
+    });
+
+    it("remaining returns correct value when under budget", () => {
+      const b = new BudgetTracker(1000);
+      b.addUsage(300, 0);
+      expect(b.remaining).toBe(700);
+    });
+
+    it("isWarning is false below 90%, true at or above 90%", () => {
+      const b = new BudgetTracker(1000);
+      b.addUsage(890, 0);
+      expect(b.isWarning).toBe(false);
+
+      b.addUsage(10, 0); // total 900 = 90%
+      expect(b.isWarning).toBe(true);
+    });
+
+    it("usagePercent returns correct percentage", () => {
+      const b = new BudgetTracker(1000);
+      expect(b.usagePercent).toBe(0);
+
+      b.addUsage(250, 0);
+      expect(b.usagePercent).toBe(25);
+
+      b.addUsage(250, 0);
+      expect(b.usagePercent).toBe(50);
+    });
+
+    it("usagePercent can exceed 100", () => {
+      const b = new BudgetTracker(100);
+      b.addUsage(150, 0);
+      expect(b.usagePercent).toBe(150);
+    });
+  });
+
+  // ── isTimeLimited ─────────────────────────────────────────
+  describe("isTimeLimited", () => {
+    it("returns false when no time limit is set", () => {
+      const b = new BudgetTracker(1000);
+      expect(b.isTimeLimited).toBe(false);
+    });
+
+    it("returns false when time limit is set but not yet elapsed", () => {
+      // 60 minutes — far from elapsed in a unit test
+      const b = new BudgetTracker(1000, 60);
+      expect(b.isTimeLimited).toBe(false);
+    });
+  });
+});

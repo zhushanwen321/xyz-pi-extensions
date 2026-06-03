@@ -17,7 +17,7 @@ import { renameSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { type WorkflowOrchestrator } from "./orchestrator.js";
-import { type WorkflowInstance, isTerminal } from "./state.js";
+import { type WorkflowInstance } from "./state.js";
 import { loadWorkflows } from "./config-loader.js";
 
 // ── Types ──────────────────────────────────────────────────────
@@ -124,32 +124,7 @@ function parseRunArgs(tokens: string[]): ParsedRunArgs {
   return result;
 }
 
-// ── Poll helper ────────────────────────────────────────────────
 
-/**
- * Start polling a workflow instance for terminal state.
- * Calls sendCompletionNotification when done. The timer is unref'd
- * so it does not prevent process exit.
- */
-function pollForCompletion(
-  api: ExtensionAPI,
-  orch: WorkflowOrchestrator,
-  runId: string,
-): void {
-  const pollInterval = setInterval(() => {
-    const inst = orch.getInstance(runId);
-    if (!inst || isTerminal(inst.status)) {
-      clearInterval(pollInterval);
-      if (inst) {
-        sendCompletionNotification(api, runId, inst);
-      }
-    }
-  }, 2000);
-
-  if (typeof pollInterval === "object" && "unref" in pollInterval) {
-    pollInterval.unref();
-  }
-}
 
 // ── Command registration ───────────────────────────────────────
 
@@ -170,15 +145,17 @@ export function registerWorkflowCommands(
       "Workflow management.",
       "Subcommands:",
       "  run <name> [--args key=val ...] [--tokens N] [--time N]  Start a workflow",
-      "  list              List running workflow instances",
+      "  list              List running instances and available scripts",
       "  abort <run-id>    Abort a running workflow",
+      "  save <tmp-name> [--as <name>]  Save a temporary workflow as permanent",
+      "  delete <name>     Delete a workflow script",
       "",
       "Shorthand: /workflows opens the interactive panel.",
     ].join("\n"),
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       const parts = args.trim().split(/\s+/);
       if (parts.length === 0) {
-        ctx.ui.notify("Usage: /workflow run|list|abort", "warning");
+        ctx.ui.notify("Usage: /workflow run|list|abort|save|delete", "warning");
         return;
       }
 
@@ -212,7 +189,6 @@ export function registerWorkflowCommands(
               `Started '${parsed.name}' (${runId.slice(0, 16)}...)`,
               "info",
             );
-            pollForCompletion(api, orch, runId);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             // If workflow not found, pass to AI to handle
@@ -236,9 +212,10 @@ export function registerWorkflowCommands(
           let scriptSection = "";
           try {
             const workflows = await loadWorkflows();
-            if (workflows.length > 0) {
+            const available = workflows.filter((wf) => wf.available);
+            if (available.length > 0) {
               scriptSection = "\nAvailable workflows:\n" +
-                workflows
+                available
                   .map((wf) => `  [${wf.source}] ${wf.name} — ${wf.description || "(no description)"}`)
                   .join("\n");
             }
@@ -317,6 +294,26 @@ export function registerWorkflowCommands(
           return;
         }
 
+        // ── delete ──
+        case "delete": {
+          const name = parts[1];
+          if (!name) {
+            ctx.ui.notify("Usage: /workflow delete <name>", "warning");
+            return;
+          }
+
+          try {
+            const isRunning = (n: string) =>
+              orch.list().some((i) => i.name === n && i.status === "running");
+            const result = deleteWorkflow(name, isRunning);
+            ctx.ui.notify(result, "info");
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            ctx.ui.notify(`Delete failed: ${msg}`, "error");
+          }
+          return;
+        }
+
         default: {
           // Unknown subcommand — check if it could be a workflow name or natural language
           // Collect available workflows and pass to AI for routing
@@ -324,8 +321,9 @@ export function registerWorkflowCommands(
           let workflowList = "";
           try {
             const workflows = await loadWorkflows();
-            if (workflows.length > 0) {
-              workflowList = workflows
+            const available = workflows.filter((wf) => wf.available);
+            if (available.length > 0) {
+              workflowList = available
                 .map((wf) => `  [${wf.source}] ${wf.name} — ${wf.description || "(no description)"}`)
                 .join("\n");
             }
