@@ -6,6 +6,7 @@
  */
 
 import type { CacheData } from "@zhushanwen/pi-quota-providers";
+import { readCache } from "@zhushanwen/pi-quota-providers";
 import type {
 	ModelPolicy,
 	PlanConfig,
@@ -15,6 +16,7 @@ import type {
 	StickinessInfo,
 	RecommendInfo,
 } from "./types";
+import { loadConfig } from "./config";
 
 // ── 时间常量 ────────────────────────────────────────────
 
@@ -145,6 +147,92 @@ export function computePeakRecommend(
 	}
 
 	return { result: "ok", reason: `Peak hours, ${!peakInFirstHalf ? "peak overlaps late window" : `${quota.pct}% used, within budget`}` };
+}
+
+// ── Scene-based Model Resolution ───────────────────────
+
+interface Candidate {
+	alias: string;
+	providerKey: string;
+	modelId: string;
+	plan: string;
+	priority: number;
+	isPeakAvoid: boolean;
+}
+
+/**
+ * 根据 scene 名推荐最优模型。
+ * 优先级排序：非 peak avoid 优先 → priority 数值小优先。
+ * 返回 "providerKey/modelId" 或 undefined。
+ */
+export function resolveModelForScene(scene: string, now?: Date): string | undefined {
+	const config = loadConfig();
+	if (!config) {
+		console.warn(`[model-switch] resolveModelForScene: no config loaded`);
+		return undefined;
+	}
+
+	const aliases = config.scenes[scene];
+	if (!aliases || aliases.length === 0) {
+		console.warn(`[model-switch] resolveModelForScene: scene "${scene}" not found`);
+		return undefined;
+	}
+
+	// Global quota + peak state (computed once)
+	const cache = readCache();
+	const snapshot = computeQuotaSnapshot(cache, config);
+	const peakRecommend = computePeakRecommend(now ?? new Date(), config, snapshot);
+
+	// Find the peak plan name (only one peak plan exists per config)
+	const peakPlan = findPeakPlan(config);
+	const peakPlanName = peakPlan ? peakPlan[0] : null;
+
+	// Collect candidates with metadata
+	const candidates: Candidate[] = [];
+
+	for (const alias of aliases) {
+		// Find which provider has this alias
+		for (const [providerKey, pcfg] of Object.entries(config.models)) {
+			const entry = pcfg.models[alias];
+			if (!entry) continue;
+
+			const planCfg = config.plans[pcfg.plan];
+			const priority = planCfg?.priority ?? 99;
+
+			// Only mark as peak avoid if THIS candidate's plan matches the peak plan
+			const isPeakAvoid = pcfg.plan === peakPlanName && peakRecommend.result === "avoid";
+
+			candidates.push({
+				alias,
+				providerKey,
+				modelId: entry.modelId,
+				plan: pcfg.plan,
+				priority,
+				isPeakAvoid,
+			});
+			break; // Found the provider for this alias
+		}
+	}
+
+	if (candidates.length === 0) {
+		console.warn(`[model-switch] resolveModelForScene: no candidates found for scene "${scene}"`);
+		return undefined;
+	}
+
+	// Sort: non-avoid first, then by priority (ascending = higher priority first)
+	candidates.sort((a, b) => {
+		if (a.isPeakAvoid !== b.isPeakAvoid) return a.isPeakAvoid ? 1 : -1;
+		return a.priority - b.priority;
+	});
+
+	// Return first non-avoid candidate
+	const best = candidates[0];
+	if (best.isPeakAvoid) {
+		console.info(`[model-switch] resolveModelForScene: all candidates peak avoid for scene "${scene}"`);
+		return undefined;
+	}
+
+	return `${best.providerKey}/${best.modelId}`;
 }
 
 // ── 内部工具 ────────────────────────────────────────────
