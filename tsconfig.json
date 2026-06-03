@@ -53,6 +53,7 @@
     "node_modules",
     ".superpowers",
     ".xyz-harness",
-    "**/__tests__"
+    "**/__tests__",
+    "**/tests/**"
   ]
 }
