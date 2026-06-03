@@ -14,7 +14,7 @@ npx vitest run extensions/model-switch/tests/resolveModelForScene.test.ts
 
  RUN  v4.1.8
 
- ❯ tests/resolveModelForScene.test.ts (7 tests) 5ms
+ ❯ tests/resolveModelForScene.test.ts (7 tests) 4ms
      ✓ TC-1-01: non-peak, scene exists → returns first candidate by priority
      ✓ TC-1-02: peak, zhipu avoid → returns non-peak candidate
      ✓ TC-1-03: scene not found → returns undefined + warn
@@ -25,7 +25,6 @@ npx vitest run extensions/model-switch/tests/resolveModelForScene.test.ts
 
  Test Files  1 passed (1)
       Tests  7 passed (7)
-   Duration  118ms
 ```
 
 **All 7 resolveModelForScene tests passed.**
@@ -46,7 +45,6 @@ npx vitest run extensions/workflow/tests/resolveModel.test.ts
 
  Test Files  1 passed (1)
       Tests  5 passed (5)
-   Duration  85ms
 ```
 
 **All 5 resolveModel tests passed.**
@@ -54,15 +52,15 @@ npx vitest run extensions/workflow/tests/resolveModel.test.ts
 ## Type Check
 
 ```
-npx tsc --noEmit
-
-(no errors in source files)
+npx tsc --noEmit 2>&1 | grep -v tests/ | grep -v vitest
+(no output — 0 errors in source files)
 ```
 
-**TypeScript type check passed (test files excluded from strict checking).**
+**TypeScript type check passed.**
 
 ## Summary
 
 - **12 tests total, 12 passed, 0 failed**
 - **TypeScript strict mode: 0 errors in source files**
-- **Modified files:** 7 source files + 2 test files
+- **Modified files:** 8 source files + 2 test files
+- **Pre-existing fix:** handleWorkerExit race condition in orchestrator.ts (3 rounds of review)

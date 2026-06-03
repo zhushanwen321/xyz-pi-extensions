@@ -408,7 +408,7 @@ export class WorkflowOrchestrator {
     });
 
     worker.on("exit", (code: number) => {
-      this.handleWorkerExit(runId, code);
+      this.handleWorkerExit(runId, code, worker);
     });
 
     this.workers.set(runId, worker);
@@ -591,10 +591,15 @@ export class WorkflowOrchestrator {
   /**
    * Handle Worker thread exit.
    */
-  private handleWorkerExit(runId: string, code: number): void {
+  private handleWorkerExit(runId: string, code: number, exitedWorker: Worker): void {
     const instance = this.instances.get(runId);
     if (!instance) return;
 
+    // Guard: only process exit if the exited worker is still the current one.
+    // Prevents race: terminateWorker(old) → startWorker(new) → old exit fires →
+    // would delete new worker and incorrectly mark instance as failed.
+    const currentWorker = this.workers.get(runId);
+    if (currentWorker !== exitedWorker) return;
     this.workers.delete(runId);
 
     // Paused/terminal exits are intentional — skip failure marking
