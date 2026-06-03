@@ -30,12 +30,15 @@ export interface NormalizedQuotaRow {
  *
  * - `id`: 在 CacheData 上的 key，**新增字段后须更新 readCacheSync 的旧值兼容**。
  * - `label`: 默认显示名（fallback）；normalize 返回的对象里若带 label 则优先使用。
+ * - `category`: 决定 statusline 渲染位置 — token-plan 走 3 窗口行，search-tool 走搜索工具行。
  * - `fetch()`: 拉取原始数据。失败/无凭证返回 null。
  * - `normalize(raw)`: 把原始数据归一化为单行。无法解析返回 null（不显示该行）。
+ *   search-tool 的 normalize 仍可返回 null（renderer 直接读 raw）。
  */
 export interface QuotaProvider<T = unknown> {
 	id: string;
 	label: string;
+	category: "token-plan" | "search-tool";
 	fetch(): Promise<T | null>;
 	normalize(raw: T): NormalizedQuotaRow | null;
 }

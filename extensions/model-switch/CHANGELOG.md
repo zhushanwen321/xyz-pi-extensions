@@ -1,5 +1,12 @@
 # @zhushanwen/pi-model-switch
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies [045ade1]
+  - @zhushanwen/pi-quota-providers@0.4.0
+
 ## 0.2.0
 
 ### Minor Changes

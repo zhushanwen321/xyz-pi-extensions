@@ -1,6 +1,5 @@
 ---
 description: "健壮性审查。六维度检查错误处理、异常管理、日志、fail-fast、测试友好性、调试友好性。读取 xyz-harness-robustness-reviewer skill。"
-model: glm-5.1
 name: review-robustness
 ---
 
@@ -14,10 +13,11 @@ task prompt 中必须包含：
 - `files`：变更文件列表
 - `cwd`：工作目录
 - `output`：输出路径
+- `skill_path`：方法论 SKILL.md 路径（由分派者传入，指向 xyz-harness-robustness-reviewer）
 
 ## 执行步骤
 
-1. **加载方法论**：read `~/.pi/agent/skills/xyz-harness-robustness-reviewer/SKILL.md`。
+1. **加载方法论**：如果 task prompt 提供了 `skill_path`，则 read 该路径获取方法论。如果不存在或未提供，在项目 `skills/` 目录下查找同名 skill。若均找不到则跳过方法论加载。
 2. **获取代码变更**：在 cwd 下执行 `git diff main...HEAD -- {files}` 获取 diff。
 3. **六维度审查**：
    - **D1 错误处理**：返回值检查、null/undefined 防护、错误码处理

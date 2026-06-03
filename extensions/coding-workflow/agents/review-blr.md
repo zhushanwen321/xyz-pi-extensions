@@ -1,6 +1,5 @@
 ---
 description: "业务逻辑审查。验证代码实现是否完整覆盖 spec 中所有业务用例。读取 xyz-harness-business-logic-reviewer skill 获取方法论。"
-model: glm-5.1
 name: review-blr
 ---
 
@@ -15,10 +14,11 @@ task prompt 中必须包含：
 - `cwd`：工作目录
 - `output`：输出路径
 - `spec_path`：spec.md 路径
+- `skill_path`：方法论 SKILL.md 路径（由分派者传入，指向 xyz-harness-business-logic-reviewer）
 
 ## 执行步骤
 
-1. **加载方法论**：read `~/.pi/agent/skills/xyz-harness-business-logic-reviewer/SKILL.md`。不存在时在项目 `skills/` 目录下查找同名 skill。
+1. **加载方法论**：如果 task prompt 提供了 `skill_path`，则 read 该路径获取方法论。如果不存在或未提供，在项目 `skills/` 目录下查找同名 skill。若均找不到则跳过（仅做静态分析）。
 2. **读取业务用例**：read `spec_path` 获取所有业务用例定义。
 3. **获取代码变更**：在 cwd 下执行 `git diff main...HEAD -- {files}` 获取 diff。
 4. **逻辑推演**：对每个业务用例构造模拟数据，沿执行路径逐步推演，验证：

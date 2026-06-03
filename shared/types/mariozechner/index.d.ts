@@ -22,6 +22,7 @@ declare module "@mariozechner/pi-coding-agent" {
 			notify(msg: string, type?: string): void;
 			setStatus(id: string, msg: any): void;
 			setWidget(id: string, widget: any): void;
+			setFooter(factory: any): void;
 			theme: Theme;
 			custom<T = void>(factory: (tui: any, theme: any, kb: any, done: () => void) => any): Promise<T>;
 		};

@@ -42,7 +42,12 @@ python3 scripts/check_gate.py {topic_dir} {phase_number}
 
 例如：
 ```bash
-python3 ~/.pi/agent/skills/xyz-harness-gate/scripts/check_gate.py .xyz-harness/2026-05-17-system-setting 2
+# 脚本在 skill 同一目录下的 scripts/check_gate.py
+SKILL_DIR=$(cd "$(dirname "$0")" \&\& pwd 2>/dev/null)
+if [ -z "$SKILL_DIR" ]; then
+  SKILL_DIR=$(find ~/.pi/agent ~/.agents -maxdepth 4 -path "*/xyz-harness-gate" -type d 2>/dev/null | head -1)
+fi
+python3 "${SKILL_DIR}/scripts/check_gate.py" .xyz-harness/2026-05-17-system-setting 2
 ```
 
 脚本会自动检查该 phase 的所有交付物并输出结构化报告。

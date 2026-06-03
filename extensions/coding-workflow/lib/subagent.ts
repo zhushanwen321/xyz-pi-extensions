@@ -9,8 +9,15 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Message } from "@mariozechner/pi-ai";
 import { withFileMutationQueue } from "@mariozechner/pi-coding-agent";
-import type { ThinkingLevel } from "./model.js";
-import { THINKING_TO_PI } from "./model.js";
+
+// ─── Thinking level types (moved from model.ts which was removed) ────
+
+type ThinkingLevel = "high" | "max";
+
+const THINKING_TO_PI: Record<ThinkingLevel, string> = {
+	high: "high",
+	max: "xhigh",
+};
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -149,7 +156,8 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 export async function runSingleAgent(params: {
 	task: string;
 	systemPrompt: string;
-	resolvedModel: string;
+	/** Optional model reference (e.g. "provider/id"). Omit to use Pi's default model. */
+	resolvedModel?: string;
 	thinkingLevel?: ThinkingLevel;
 	cwd: string;
 	tools?: string;
@@ -197,9 +205,11 @@ export async function runSingleAgent(params: {
 
 	const args: string[] = [
 		"--mode", "json", "-p", "--no-session",
-		"--model", resolvedModel,
 		"--tools", tools,
 	];
+	if (resolvedModel) {
+		args.push("--model", resolvedModel);
+	}
 	if (thinkingLevel) {
 		args.push("--thinking", THINKING_TO_PI[thinkingLevel]);
 	}

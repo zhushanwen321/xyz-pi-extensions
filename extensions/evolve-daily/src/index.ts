@@ -69,7 +69,7 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
     PROBLEM_REGISTRY.find((p) => p.id === "compact-frequency")!
   );
 
-  pi.on("session_compact", async (event: Record<string, unknown>) => {
+  (pi.on as any)("session_compact", async (event: Record<string, unknown>) => {
     try {
       const item = compactDetector.createItem(event);
       pi.appendEntry("evolve-feedback", {
@@ -101,7 +101,7 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
     ),
   ];
 
-  pi.on(
+  (pi.on as any)(
     "tool_result",
     async (event: Record<string, unknown>, _ctx?: unknown) => {
       for (const detector of toolDetectors) {

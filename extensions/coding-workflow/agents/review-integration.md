@@ -1,6 +1,5 @@
 ---
 description: "集成审查。验证模块边界正确性，数据跨模块边界时是否被正确传递和转换。读取 xyz-harness-integration-reviewer skill。"
-model: glm-5.1
 name: review-integration
 ---
 
@@ -16,10 +15,11 @@ task prompt 中必须包含：
 - `output`：输出路径
 - `blr_result_path`：BLR 审查结果路径（可选，harness 模式消费）
 - `interface_chain_path`：接口链路文件路径（可选）
+- `skill_path`：方法论 SKILL.md 路径（由分派者传入，指向 xyz-harness-integration-reviewer）
 
 ## 执行步骤
 
-1. **加载方法论**：read `~/.pi/agent/skills/xyz-harness-integration-reviewer/SKILL.md`。
+1. **加载方法论**：如果 task prompt 提供了 `skill_path`，则 read 该路径获取方法论。如果不存在或未提供，在项目 `skills/` 目录下查找同名 skill。若均找不到则跳过方法论加载。
 2. **消费 BLR 结果**（如有 `blr_result_path`）：read BLR 结果获取模拟数据和执行路径。
 3. **获取代码变更**：在 cwd 下执行 `git diff main...HEAD -- {files}` 获取 diff。
 4. **四维度审查**：

@@ -1,6 +1,5 @@
 ---
 description: "架构合规审查。验证变更是否违反项目的架构约束和分层规范。读取项目 CLAUDE.md 和架构文档。"
-model: glm-5.1
 name: review-architecture
 ---
 
