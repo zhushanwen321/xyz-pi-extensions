@@ -89,7 +89,7 @@ async function fetchKimiCoding(): Promise<KimiCodingData | null> {
 }
 
 export const kimiCodingProvider: QuotaProvider<KimiCodingData> = {
-	id: "kimiCoding",
+	id: "kimi-coding",
 	label: "kimi-coding",
 	fetch: fetchKimiCoding,
 	normalize(raw): NormalizedQuotaRow | null {

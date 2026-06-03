@@ -98,7 +98,7 @@ function parseOpenCodeGo(html: string): OpenCodeGoData | null {
 }
 
 export const opencodeGoProvider: QuotaProvider<OpenCodeGoData> = {
-	id: "opencodeGo",
+	id: "opencode-go",
 	label: "opencode-go",
 	fetch: fetchOpenCodeGo,
 	normalize(raw): NormalizedQuotaRow | null {
