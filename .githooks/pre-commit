@@ -24,14 +24,12 @@ C_RESET='\033[0m'
 # ── 0. pi manifest 检查 ──────────────────────────────────
 echo "--- pi manifest 检查 ---"
 HAS_ERROR=0
-for pkg_json in packages/*/package.json; do
+for pkg_json in extensions/*/package.json; do
+  [ -f "$pkg_json" ] || continue
   dir=$(dirname "$pkg_json")
   name=$(basename "$dir")
 
-  # 跳过 private 包、非扩展包、taste-lint (ESLint config)
-  if [[ "$name" == "taste-lint" ]]; then
-    continue
-  fi
+  # 跳过 private 包
   is_private=$(python3 -c "import json; print(json.load(open('$pkg_json')).get('private', False))" 2>/dev/null)
   if [[ "$is_private" == "True" ]]; then
     continue
@@ -92,7 +90,7 @@ fi
 echo -e "${C_GREEN}[ OK ]${C_RESET} pi manifest 检查通过"
 
 # ── 0b. package.json 深度检查（peerDeps / files / 包名）──
-STAGED_PKG=$(git diff --cached --name-only --diff-filter=ACM | grep 'packages/.*/package.json$' || true)
+STAGED_PKG=$(git diff --cached --name-only --diff-filter=ACM | grep -E '(extensions|shared)/.*/package.json$' || true)
 if [[ -n "$STAGED_PKG" ]]; then
   echo "--- package.json 深度检查 ---"
   while IFS= read -r pkg_json; do

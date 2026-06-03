@@ -1,4 +1,4 @@
-import tasteConfig from './packages/taste-lint/base.mjs';
+import tasteConfig from './shared/taste-lint/base.mjs';
 
 export default [
   ...tasteConfig,
