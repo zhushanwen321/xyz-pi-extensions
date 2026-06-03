@@ -3,7 +3,14 @@
  *
  * 中英文切换：基于 Intl.DateTimeFormat().resolvedOptions().locale
  * 失败/非 zh locale → 英文
+ *
+ * demo 模板：providers.json 的结构由 quota-providers.PROVIDERS 动态生成
+ *   （新增 provider 自动出现，无需改本文件）
+ * secrets.json 的 env var 映射在下面 DEFAULT_SECRETS 集中维护
+ *   （用户编辑后会自动覆盖默认值）
  */
+
+import { PROVIDERS } from "@zhushanwen/pi-quota-providers";
 
 export type Locale = "zh" | "en";
 
@@ -23,25 +30,56 @@ export interface SetupPromptArgs {
 	missing: string[];
 }
 
-const DEMO_PROVIDERS_JSON = `{
-  "token-plans": [
-    { "id": "zhipu", "label": "zhipu-coding-plan", "enabled": true, "fetcher": "zhipu" },
-    { "id": "opencode-go", "label": "opencode-go", "enabled": true, "fetcher": "opencode-go" },
-    { "id": "kimi-coding", "label": "kimi-coding-plan", "enabled": true, "fetcher": "kimi-coding" },
-    { "id": "minimax", "label": "minimax-token-plan", "enabled": true, "fetcher": "minimax" }
-  ],
-  "search-tools": [
-    { "id": "tavily", "label": "tavily", "enabled": true, "fetcher": "tavily" }
-  ]
-}`;
+/** provider.id → 默认 secret 字段（key=value 形式，value 是 env var 占位符） */
+const DEFAULT_SECRETS: Record<string, Record<string, string>> = {
+	zhipu: { token: "${ZAI_AUTH_TOKEN}" },
+	"opencode-go": { token: "${OPENCODE_GO_TOKEN}" },
+	"kimi-coding": { token: "${KIMI_AUTH_TOKEN}" },
+	minimax: { token: "${MINIMAX_TOKEN}" },
+	tavily: { apiKey: "${TAVILY_API_KEY}" },
+};
 
-const DEMO_SECRETS_JSON = `{
-  "zhipu": { "token": "\${ZAI_AUTH_TOKEN}" },
-  "opencode-go": { "token": "\${OPENCODE_GO_TOKEN}" },
-  "kimi-coding": { "token": "\${KIMI_AUTH_TOKEN}" },
-  "minimax": { "token": "\${MINIMAX_TOKEN}" },
-  "tavily": { "apiKey": "\${TAVILY_API_KEY}" }
-}`;
+/** 从 PROVIDERS 动态生成 providers.json demo（自动跟随新增 provider） */
+function buildDemoProvidersJson(): string {
+	// 按 category 分组
+	const groups: Record<string, string[]> = { "token-plans": [], "search-tools": [] };
+	for (const p of PROVIDERS) {
+		const key = p.category === "search-tool" ? "search-tools" : "token-plans";
+		groups[key]!.push(JSON.stringify({
+			id: p.id,
+			label: p.label,
+			enabled: true,
+			fetcher: p.id,
+		}));
+	}
+
+	const lines: string[] = ["{"];
+	const sections: string[] = [];
+	for (const [key, items] of Object.entries(groups)) {
+		if (items.length === 0) continue;
+		sections.push(`  "${key}": [\n${items.map((s) => `    ${s}`).join(",\n")}\n  ]`);
+	}
+	lines.push(sections.join(",\n"));
+	lines.push("}");
+	return lines.join("\n");
+}
+
+/** 从 DEFAULT_SECRETS 动态生成 secrets.json demo（仅含 PROVIDERS 实际支持的） */
+function buildDemoSecretsJson(): string {
+	const lines: string[] = ["{"];
+	const sections: string[] = [];
+	for (const p of PROVIDERS) {
+		const fields = DEFAULT_SECRETS[p.id];
+		if (!fields) continue;
+		const fieldStr = Object.entries(fields)
+			.map(([k, v]) => `    "${k}": "${v}"`)
+			.join(",\n");
+		sections.push(`  "${p.id}": {\n${fieldStr}\n  }`);
+	}
+	lines.push(sections.join(",\n"));
+	lines.push("}");
+	return lines.join("\n");
+}
 
 const T = {
 	zh: {
@@ -94,12 +132,12 @@ export function buildGenerateDemoPrompt(args: SetupPromptArgs): string {
 		"",
 		t.providersHeader,
 		"```json",
-		DEMO_PROVIDERS_JSON,
+		buildDemoProvidersJson(),
 		"```",
 		"",
 		t.secretsHeader,
 		"```json",
-		DEMO_SECRETS_JSON,
+		buildDemoSecretsJson(),
 		"```",
 		"",
 		t.completeHeader,

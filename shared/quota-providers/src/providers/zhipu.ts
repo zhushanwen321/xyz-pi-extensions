@@ -6,6 +6,7 @@ import {
 	type NormalizedQuotaRow,
 	type QuotaProvider,
 } from "./types.js";
+import { MS_PER_SEC, SEC_PER_MIN, SEC_PER_HOUR, SEC_PER_DAY } from "../time.js";
 
 const HOME = homedir();
 
@@ -36,6 +37,8 @@ interface ZhipuApiResponse {
 }
 
 async function fetchZhipu(): Promise<ZhipuData | null> {
+	const timeoutMs = 5000;
+
 	// 优先环境变量，兼容文件
 	let token = process.env.ZAI_AUTH_TOKEN ?? "";
 	if (!token) {
@@ -67,7 +70,7 @@ async function fetchZhipu(): Promise<ZhipuData | null> {
 						"https://bigmodel.cn/usercenter/glm-coding/usage",
 					"user-agent": "Mozilla/5.0",
 				},
-				signal: AbortSignal.timeout(5000),
+				signal: AbortSignal.timeout(timeoutMs),
 			},
 		);
 		if (!resp.ok) return null;
@@ -103,11 +106,11 @@ function processZhipu(data: ZhipuApiResponse): ZhipuData | null {
 	let resetTime = "";
 	if (resetMs) {
 		const rem =
-			Math.floor(resetMs / 1000) - Math.floor(Date.now() / 1000);
+			Math.floor(resetMs / MS_PER_SEC) - Math.floor(Date.now() / MS_PER_SEC);
 		if (rem > 0) {
-			const days = Math.floor(rem / 86400);
-			const hrs = Math.floor((rem % 86400) / 3600);
-			const mins = Math.floor((rem % 3600) / 60);
+			const days = Math.floor(rem / SEC_PER_DAY);
+			const hrs = Math.floor((rem % SEC_PER_DAY) / SEC_PER_HOUR);
+			const mins = Math.floor((rem % SEC_PER_HOUR) / SEC_PER_MIN);
 			if (days > 0) resetTime = `${days}d${hrs}h`;
 			else if (hrs > 0) resetTime = `${hrs}h${mins}m`;
 			else resetTime = `${mins}m`;
@@ -141,8 +144,8 @@ function parseZaiResetSec(label: string): number {
 	const hM = label.match(/(\d+)h/);
 	const mM = label.match(/(\d+)m/);
 	let sec = 0;
-	if (dM) sec += Number(dM[1]) * 86400;
-	if (hM) sec += Number(hM[1]) * 3600;
-	if (mM) sec += Number(mM[1]) * 60;
+	if (dM) sec += Number(dM[1]) * SEC_PER_DAY;
+	if (hM) sec += Number(hM[1]) * SEC_PER_HOUR;
+	if (mM) sec += Number(mM[1]) * SEC_PER_MIN;
 	return sec;
 }

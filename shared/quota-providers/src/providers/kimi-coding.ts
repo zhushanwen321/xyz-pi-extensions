@@ -6,6 +6,12 @@ import {
 	type NormalizedQuotaRow,
 	type QuotaProvider,
 } from "./types.js";
+import { MS_PER_SEC } from "../time.js";
+
+/** 默认 fetch 超时（毫秒） */
+const FETCH_TIMEOUT_MS = 5000;
+/** 百分比标度 */
+const PERCENT_SCALE = 100;
 
 const HOME = homedir();
 const SECRETS_DIR = join(HOME, ".pi", "agent", "secrets");
@@ -58,7 +64,7 @@ async function fetchKimiCoding(): Promise<KimiCodingData | null> {
 				authorization: `Bearer ${apiKey}`,
 				"content-type": "application/json",
 			},
-			signal: AbortSignal.timeout(5000),
+			signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
 		});
 		if (!resp.ok) return null;
 	const data = (await resp.json()) as KimiApiResponse;
@@ -75,7 +81,7 @@ async function fetchKimiCoding(): Promise<KimiCodingData | null> {
 				remaining: winRemaining,
 				usedPct:
 					winLimit > 0
-						? Math.round(((winLimit - winRemaining) / winLimit) * 100)
+						? Math.round(((winLimit - winRemaining) / winLimit) * PERCENT_SCALE)
 						: 0,
 				resetTime: win?.detail?.resetTime ?? "",
 			},
@@ -109,7 +115,7 @@ export const kimiCodingProvider: QuotaProvider<KimiCodingData> = {
 		const kiWk =
 			raw.dailyLimit > 0
 				? {
-						pct: Math.round((raw.dailyUsed / raw.dailyLimit) * 100),
+						pct: Math.round((raw.dailyUsed / raw.dailyLimit) * PERCENT_SCALE),
 						resetSec: raw.dailyResetTime
 							? isoResetRemaining(raw.dailyResetTime)
 							: null,
@@ -127,6 +133,6 @@ export const kimiCodingProvider: QuotaProvider<KimiCodingData> = {
 function isoResetRemaining(iso: string): number {
 	return Math.max(
 		0,
-		Math.floor((new Date(iso).getTime() - Date.now()) / 1000),
+		Math.floor((new Date(iso).getTime() - Date.now()) / MS_PER_SEC),
 	);
 }
