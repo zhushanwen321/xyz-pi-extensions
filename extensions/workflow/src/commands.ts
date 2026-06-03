@@ -228,10 +228,10 @@ export function registerWorkflowCommands(
               }
 
               api.sendUserMessage(
-                `The user tried to run /workflow run '${parsed.name}' but no workflow script with that name was found. ` +
+                `The user tried to run /workflow run '${parsed.name}' but no exact match was found. ` +
                 `The original /workflow run input was:\n${args.trim()}${availableList}\n\n` +
-                `Ask the user: do they want to create a new workflow script (use workflow-generate), ` +
-                `or did they mean a different workflow from the list above?`
+                `Use workflow-run with name='${parsed.name}' and mode='auto' — the tool will search by description, ` +
+                `list candidates if any match, or suggest creating a new workflow.`
               );
             } else {
               ctx.ui.notify(`Failed: ${msg}`, "error");
@@ -373,9 +373,9 @@ export function registerWorkflowCommands(
             `The user typed /workflow with input: "${userInput}"` +
             listSection +
             `\n\nMatch by workflow name and description (do NOT read script files). Then:\n` +
-            `1. If a workflow matches by name/description, ask the user to confirm: use it or create new.\n` +
+            `1. If a workflow matches, use workflow-run with name='${userInput}' and mode='auto'. The tool will confirm with the user.\n` +
             `2. If no match, use workflow-generate to create a new temporary workflow.\n` +
-            `3. Before execution, ALWAYS show the script path and wait for user confirmation.`,
+            `3. Before executing a generated workflow, ALWAYS show the script path and wait for user confirmation.`,
           );
           return;
         }
@@ -471,8 +471,8 @@ export function registerWorkflowCommands(
         if (action === "Run") {
           api.sendUserMessage(
             `The user selected workflow '${meta.name}' from the /workflows panel and chose Run. ` +
-            `Script path: ${availableScripts.find((s) => s.name === meta.name)?.path ?? "unknown"}\n` +
-            `Show the script path and wait for user confirmation before executing.`,
+            `Use workflow-run with name='${meta.name}' and mode='force' to execute directly. ` +
+            `The user already confirmed by selecting it from the panel.`,
           );
         } else if (action === "Save") {
           try {

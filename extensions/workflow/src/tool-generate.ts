@@ -31,17 +31,18 @@ export function registerGenerateTool(pi: ExtensionAPI) {
     description:
       "Generate a temporary workflow script from AI-generated code. " +
       "Writes the script to .pi/workflows/.tmp/ for execution.\n" +
-      "\nWhen to use: When the user explicitly requests /workflow and no existing workflow matches. " +
+      "\nWhen to use: When (1) user requests /workflow and no existing workflow matches, or " +
+      "(2) workflow-run auto mode returns 'no match' and the task needs a new pipeline. " +
       "AI generates a JS script, then uses this tool to write it.\n" +
       "\nIMPORTANT: Always show the generated script path to the user and wait for confirmation before executing.",
     promptSnippet: "Generate a temporary workflow script from AI-generated code",
     promptGuidelines: [
-      "Use workflow-generate ONLY when the user explicitly requests a workflow via /workflow command. Never auto-generate workflow scripts for tasks that can be done directly with bash/subagent.",
+      "Use workflow-generate when: (1) user requests /workflow and no existing script matches, (2) workflow-run auto mode returns no match, or (3) the task needs a new reusable pipeline. Never auto-generate for tasks that can be done directly with bash/subagent.",
       "Before using workflow-generate, load the workflow-script-format skill for complete format reference (injected globals, constraints, examples).",
       "workflow-generate scripts run in a CJS Worker — NO import/export, use require() for Node built-ins, const meta = {...} at top level is required.",
       "Keep workflow scripts under 100 lines. Scripts are orchestration glue (agent calls + flow control), not business logic.",
-      "Always show the generated script path and wait for user confirmation before running with workflow-run.",
-      "Positive: user runs /workflow pre-commit and no script exists → workflow-generate. Negative: user says 'check types' → use bash directly, not workflow-generate.",
+      "Always show the generated script path and wait for user confirmation. After confirmation, use workflow-run with the exact name and mode='force' to execute.",
+      "Positive: user runs /workflow pre-commit and no script exists → workflow-generate. Or workflow-run auto mode returns 'no match' → workflow-generate. Negative: user says 'check types' → use bash directly, not workflow-generate.",
     ],
     parameters: WorkflowGenerateParams,
 

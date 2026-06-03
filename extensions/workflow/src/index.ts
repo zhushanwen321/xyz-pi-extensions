@@ -444,7 +444,12 @@ export default function workflowExtension(pi: ExtensionAPI) {
   // ── Tool: workflow-run ──────────────────────────────────────
 
   const WorkflowRunParams = Type.Object({
-    name: Type.String({ description: "Workflow name to execute" }),
+    name: Type.String({ description: "Exact workflow name or natural language task description" }),
+    mode: Type.Optional(
+      StringEnum(["auto", "force"] as const, {
+        description: "'auto' (default): search existing workflows, confirm with user. 'force': skip confirmation, AI decides",
+      }),
+    ),
     args: Type.Optional(
       Type.Record(Type.String(), Type.Unknown(), {
         description: "Arguments passed to workflow as key-value pairs",
@@ -480,18 +485,29 @@ export default function workflowExtension(pi: ExtensionAPI) {
     name: "workflow-run",
     label: "Workflow Run",
     description:
-      "Run a named workflow script in the background. The script runs in a Worker thread " +
-      "with agent()/parallel()/pipeline() APIs for multi-step agent orchestration.\n\n" +
-      "Available workflows are discovered from .pi/workflows/ and ~/.pi/agent/workflows/. " +
-      "Returns immediately with a runId; results arrive asynchronously.",
+      "Run a workflow by exact name or natural language task description. Searches .pi/workflows/ " +
+      "for matching scripts before executing.\n\n" +
+      "Two modes:\n" +
+      "- auto (default): Searches existing workflows first. Exact match → run after user confirmation. " +
+      "Fuzzy match → list candidates for user to choose. No match → suggest workflow-generate. " +
+      "Always confirms with user before execution.\n" +
+      "- force: Skips confirmation. AI decides best match or returns error if none found. " +
+      "Use only when user explicitly says \"just run it\" or \"skip confirmation\".\n\n" +
+      "When to use:\n" +
+      "- User says \"run workflow X\" → exact name, auto mode\n" +
+      "- User describes a task that sounds like a workflow → natural language, auto mode\n" +
+      "- User says \"just do it\" or \"no need to ask\" → force mode\n" +
+      "- User asks for a reusable pipeline → auto mode, may lead to workflow-generate\n\n" +
+      "Do NOT use for single-step tasks that bash can handle directly.",
     promptSnippet:
-      "Run a named workflow script with agent/parallel/pipeline APIs in background",
+      "Run a workflow by name or task description with auto-discovery",
     promptGuidelines: [
-      "Use workflow-run when the user explicitly requests a workflow by name, or when a reusable script-based pipeline is needed.",
-      "Use subagent for simple one-off delegations where the main agent orchestrates. Use workflow-run for persistent, complex pipelines that should be saved as reusable scripts and not occupy the main agent's context.",
-      "workflow-run supports pause/resume/retry/skip and budget control (--tokens, --time). subagent supports interactive sessions and fork/fresh context.",
-      "Do NOT use workflow-run for single-step tasks that bash can handle directly. workflow-run is for multi-step agent pipelines saved as .js scripts.",
-      "The tool returns immediately with a runId. Check status with workflow { action: status }. Results arrive as a background message.",
+      "Default to auto mode. Only use force when user explicitly skips confirmation.",
+      "name can be an exact workflow name OR a natural language task description.",
+      "When name is descriptive (not an exact workflow name), the tool searches existing workflows by description.",
+      "If no workflow matches, the tool returns suggestions. Use workflow-generate to create one, then confirm with user.",
+      "Do NOT use workflow-run for single-step tasks. It's for multi-step agent pipelines.",
+      "After workflow-run returns 'started', results arrive asynchronously. Check with workflow { action: status }.",
     ],
     parameters: WorkflowRunParams,
 
@@ -507,44 +523,115 @@ export default function workflowExtension(pi: ExtensionAPI) {
       }
 
       const name = params.name as string;
+      const mode = (params.mode as string | undefined) ?? "auto";
       const args = (params.args as Record<string, unknown> | undefined) ?? {};
       const tokens = params.tokens as number | undefined;
       const time = params.time as number | undefined;
 
-      const runId = await orch.run(name, args, tokens, time);
-      cmdState.lastRunId = runId;
+      // ── Discovery: search existing workflows ──────────────
+      const { loadWorkflows } = await import("./config-loader.js");
+      let allWorkflows: Awaited<ReturnType<typeof loadWorkflows>>;
+      try {
+        allWorkflows = await loadWorkflows();
+      } catch {
+        allWorkflows = [];
+      }
+      const available = allWorkflows.filter((wf) => wf.available);
 
-      // Update widget
-      if (ctx.hasUI) {
-        const summaryList = orch.list();
-        ctx.ui.setWidget("workflow", renderWorkflowList(summaryList, ctx.ui.theme));
+      // Step 1: Exact name match
+      const exactMatch = available.find(
+        (wf) => wf.name === name,
+      );
+
+      if (exactMatch) {
+        if (mode === "force") {
+          // Force mode: run directly
+          const runId = await orch.run(name, args, tokens, time);
+          cmdState.lastRunId = runId;
+          if (ctx.hasUI) {
+            ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
+          }
+          return {
+            content: [{ type: "text" as const, text: `Started workflow '${name}' (${runId}) [force mode]` }],
+            details: { action: "run", runId, status: "running", name } satisfies WorkflowRunDetails,
+          };
+        }
+        // Auto mode: confirm with user
+        pi.sendUserMessage(
+          `Found workflow '${exactMatch.name}': ${exactMatch.description || "(no description)"}\n` +
+          `Source: [${exactMatch.source}] Path: ${exactMatch.path}\n\n` +
+          `Confirm: use workflow-run with name '${exactMatch.name}' and mode 'force' to execute, ` +
+          `or tell the user the path and wait for their confirmation.`,
+        );
+        return {
+          content: [{ type: "text" as const, text: `Found exact match: '${exactMatch.name}'. Awaiting user confirmation.` }],
+          details: { action: "run", runId: "", status: "pending", name: exactMatch.name } satisfies WorkflowRunDetails,
+        };
       }
 
-      return {
-        content: [
-          {
+      // Step 2: Fuzzy match by description/name keywords
+      const inputLower = name.toLowerCase();
+      const inputWords = inputLower.split(/\s+/).filter((w) => w.length > 2);
+      const candidates = available.filter((wf) => {
+        const text = `${wf.name} ${wf.description}`.toLowerCase();
+        return inputWords.some((w) => text.includes(w));
+      });
+
+      if (candidates.length > 0) {
+        const candidateList = candidates
+          .map((wf) => `  - ${wf.name}: ${wf.description || "(no description)"} [${wf.source}]`)
+          .join("\n");
+
+        if (mode === "force") {
+          // Force mode: pick first candidate and run
+          const best = candidates[0];
+          const runId = await orch.run(best.name, args, tokens, time);
+          cmdState.lastRunId = runId;
+          if (ctx.hasUI) {
+            ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
+          }
+          return {
+            content: [{ type: "text" as const, text: `Started workflow '${best.name}' (${runId}) [force mode, fuzzy match]` }],
+            details: { action: "run", runId, status: "running", name: best.name } satisfies WorkflowRunDetails,
+          };
+        }
+        // Auto mode: list candidates for user
+        pi.sendUserMessage(
+          `No exact match for '${name}', but found ${candidates.length} related workflow(s):\n${candidateList}\n\n` +
+          `Ask the user which one to use, or if they want to create a new workflow. ` +
+          `If they choose one, use workflow-run with the exact name and mode 'force'.`,
+        );
+        return {
+          content: [{ type: "text" as const, text: `Found ${candidates.length} fuzzy match(es) for '${name}'. Awaiting user choice.` }],
+          details: { action: "run", runId: "", status: "pending", name } satisfies WorkflowRunDetails,
+        };
+      }
+
+      // Step 3: No match
+      const fullList = available.length > 0
+        ? available.map((wf) => `  - ${wf.name}: ${wf.description || "(no description)"}`).join("\n")
+        : "  (none)";
+
+      if (mode === "force") {
+        return {
+          content: [{
             type: "text" as const,
-            text: `Started workflow '${name}' (${runId})`,
-          },
-        ],
-        details: {
-          action: "run",
-          runId,
-          status: "running",
-          name,
-          _render: {
-            type: "task-list" as const,
-            data: {
-              title: `Workflow: ${name}`,
-              items: [
-                {
-                  label: `Started ${runId.slice(0, 16)}...`,
-                  status: "in_progress" as const,
-                },
-              ],
-            },
-          },
-        } satisfies WorkflowRunDetails,
+            text: `No matching workflow for '${name}'. Available:\n${fullList}\n\nRe-run with mode='auto' for interactive selection, or use workflow-generate to create a new workflow.`,
+          }],
+          isError: true,
+        };
+      }
+      // Auto mode: suggest creating new
+      pi.sendUserMessage(
+        `No workflow matches '${name}'. Available workflows:\n${fullList}\n\n` +
+          `Suggestions:\n` +
+          `1. If one of the above looks suitable, use workflow-run with its exact name.\n` +
+          `2. If none fits, use workflow-generate to create a new temporary workflow.\n` +
+          `3. Before executing a generated workflow, ALWAYS show the script path and wait for user confirmation.`,
+      );
+      return {
+        content: [{ type: "text" as const, text: `No match for '${name}'. Suggestions sent to conversation.` }],
+        details: { action: "run", runId: "", status: "pending", name } satisfies WorkflowRunDetails,
       };
     },
 
