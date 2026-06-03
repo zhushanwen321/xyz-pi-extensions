@@ -33,20 +33,20 @@ export function continuationPrompt(state: GoalRuntimeState): string {
 
 	// Budget info (single line, Codex style)
 	const budgetLine = formatBudgetLine(state);
-	const stallLine = state.stallCount > 0 ? `\nStall: ${state.stallCount}/${state.budget.maxStallTurns}轮无进展` : "";
+	const stallLine = state.stallCount > 0 ? `\nStall: ${state.stallCount}/${state.budget.maxStallTurns} turns without progress` : "";
 
 	// Task summary (only IDs, not full descriptions — descriptions in before_agent_start)
 	const taskLine = total > 0
-		? `Tasks: ${completedCount}/${total}${incomplete.length > 0 ? ` (剩余: ${incomplete.map(t => `#${t.id}`).join(",")})` : " ✓"}`
-		: "Tasks: 未创建。请立即 create_tasks。";
+		? `Tasks: ${completedCount}/${total}${incomplete.length > 0 ? ` (remaining: ${incomplete.map(t => `#${t.id}`).join(",")})` : " ✓"}`
+		: "Tasks: Not created. Call create_tasks immediately.";
 
 	return (
 		`<goal_context>\n` +
 		`[GOAL] Turn ${state.turnCount}/${state.budget.maxTurns}${budgetLine}${stallLine}\n` +
 		`<objective>${objective}</objective>\n` +
 		`${taskLine}\n` +
-		`Rules: create_tasks→update_tasks(evidence)→complete_goal(evidence). blocked→report_blocked(reason). subtask: add_subtasks/update_subtasks (替代 todo 工具).\n` +
-		`Audit: 逐项验证每个需求有权威证据。不因预算耗尽标记完成，不因困难标记阻塞。\n` +
+		`Rules: create_tasks→update_tasks(evidence)→complete_goal(evidence). blocked→report_blocked(reason). subtask: add_subtasks/update_subtasks (replaces todo tool).\n` +
+		`Audit: Verify each requirement has authoritative evidence. Do not mark completed due to budget exhaustion, do not mark blocked due to difficulty.\n` +
 		`</goal_context>`
 	);
 }
@@ -62,24 +62,24 @@ export function budgetLimitPrompt(state: GoalRuntimeState, limitType: "token" | 
 	const incomplete = getIncompleteTasks(state.tasks);
 	const incompleteSummary =
 		incomplete.length > 0
-			? `未完成: ${incomplete.map((t) => `#${t.id}`).join(", ")}`
-			: "所有任务已完成。";
+			? `Incomplete: ${incomplete.map((t) => `#${t.id}`).join(", ")}`
+			: "All tasks completed.";
 
 	return (
 		`<goal_context>\n` +
-		`[GOAL — ${limitType === "token" ? "TOKEN 预算" : "时间预算"}即将耗尽]\n\n` +
+		`[GOAL — ${limitType === "token" ? "TOKEN budget" : "time budget"}almost exhausted]\n\n` +
 		`<objective>\n${objective}\n</objective>\n\n` +
-		`当前进度: ${completedCount}/${total} 任务完成\n` +
+		`Current progress: ${completedCount}/${total} tasks completed\n` +
 		`${incompleteSummary}\n` +
 		(limitType === "token"
-			? `Token 已使用: ${state.tokensUsed} / ${state.budget.tokenBudget ?? "未知"}\n`
-			: `已用时间: ${Math.floor(elapsed / SECONDS_PER_MINUTE)}分${Math.floor(elapsed % SECONDS_PER_MINUTE)}秒 / ${state.budget.timeBudgetMinutes ?? "未知"}分钟\n`) +
-		`\n你必须立即收尾:\n` +
-		`1. 用 goal_manager 的 list_tasks 查看剩余任务\n` +
-		`2. 只标记你真正完成且有证据的任务\n` +
-		`3. 如果目标已达成，调用 goal_manager 的 complete_goal 完成目标\n` +
-		`4. 总结当前进度和剩余工作\n` +
-		`不要再开始新任务。不要因为预算耗尽就标记完成。\n` +
+			? `Tokens used: ${state.tokensUsed} / ${state.budget.tokenBudget ?? "unknown"}\n`
+			: `Time elapsed: ${Math.floor(elapsed / SECONDS_PER_MINUTE)}m${Math.floor(elapsed % SECONDS_PER_MINUTE)}s / ${state.budget.timeBudgetMinutes ?? "unknown"} min\n`) +
+		`\nYou must wrap up immediately:\n` +
+		`1. Use goal_manager's list_tasks to check remaining tasks\n` +
+		`2. Only mark tasks you have genuinely completed with evidence\n` +
+		`3. If the objective is met, call goal_manager's complete_goal\n` +
+		`4. Summarize current progress and remaining work\n` +
+		`Do not start new tasks. Do not mark completed due to budget exhaustion.\n` +
 		`</goal_context>`
 	);
 }
@@ -92,14 +92,14 @@ export function objectiveUpdatedPrompt(state: GoalRuntimeState, oldObjective: st
 
 	return (
 		`<goal_context>\n` +
-		`[GOAL — 目标已更新]\n\n` +
-		`旧目标: ${escapedOld}\n` +
+		`[GOAL — Objective updated]\n\n` +
+		`Previous objective: ${escapedOld}\n` +
 		`<untrusted_objective>\n${newObjective}\n</untrusted_objective>\n\n` +
-		`这个新目标取代了之前的所有目标上下文。你需要:\n` +
-		`1. 立即停止朝旧目标方向的工作\n` +
-		`2. 重新评估任务清单，必要时调用 goal_manager 的 create_tasks 重新拆分\n` +
-		`3. 只在旧目标的工作也对新目标有帮助时才继续\n` +
-		`4. 按照新目标继续工作\n` +
+		`This new objective supersedes all prior objective context. You must:\n` +
+		`1. Immediately stop working toward the old objective\n` +
+		`2. Re-evaluate the task list — call goal_manager's create_tasks to re-decompose if needed\n` +
+		`3. Only continue old work if it also serves the new objective\n` +
+		`4. Proceed with the new objective\n` +
 		`</goal_context>`
 	);
 }
@@ -114,17 +114,17 @@ export function contextInjectionPrompt(state: GoalRuntimeState): string {
 
 	return (
 		`<goal_context>\n` +
-		`[GOAL 模式已激活]\n\n` +
+		`[GOAL mode activated]\n\n` +
 		`<objective>\n${objective}\n</objective>\n` +
-		`状态: ${state.status}\n` +
-		`轮次: ${state.turnCount}/${state.budget.maxTurns}${budgetInfo}\n` +
-		`任务进度: ${completedCount}/${total}\n\n` +
-		`严格规则:\n` +
-		`1. 第一步必须调用 goal_manager 的 create_tasks 拆分任务（如果尚未创建）\n` +
-		`2. 每完成一个任务调用 update_tasks 将状态设为 completed，并提供 evidence\n` +
-		`3. 只有提供具体证据时才能调用 complete_goal\n` +
-		`4. 遇到阻塞调用 report_blocked\n` +
-		`5. Goal 模式下不要使用 todo 工具，使用 add_subtasks / update_subtasks 追踪细粒度步骤\n` +
+		`Status: ${state.status}\n` +
+		`Turn: ${state.turnCount}/${state.budget.maxTurns}${budgetInfo}\n` +
+		`Task progress: ${completedCount}/${total}\n\n` +
+		`Strict rules:\n` +
+		`1. First step: call goal_manager's create_tasks to decompose tasks (if not yet created)\n` +
+		`2. After completing a task, call update_tasks with status=completed and provide evidence\n` +
+		`3. Only call complete_goal with concrete evidence\n` +
+		`4. If blocked, call report_blocked\n` +
+		`5. In Goal mode, do not use the todo tool — use add_subtasks / update_subtasks for fine-grained tracking\n` +
 		`</goal_context>`
 	);
 }
@@ -144,22 +144,22 @@ export function stalenessReminderPrompt(
 	const lines: string[] = [];
 
 	lines.push("<goal_context>");
-	lines.push("[GOAL 提醒 — 有任务停滞]\n");
+	lines.push("[GOAL reminder — tasks stalled]\n");
 
 	if (allTerminal) {
-		lines.push("所有任务已完成，但 goal_manager 未关闭。请调用 complete_goal 或 cancel_goal。");
+		lines.push("All tasks completed but goal_manager is still open. Call complete_goal or cancel_goal.");
 	} else {
-		lines.push(`以下任务已超过 ${TASK_STALL_TURN_THRESHOLD} turn 未更新：\n`);
+		lines.push(`The following tasks have exceeded ${TASK_STALL_TURN_THRESHOLD} turns without update:\n`);
 		for (const item of staleTasks) {
-			lines.push(`  #${item.task.id}: ${item.task.description} (${item.staleTurns} turn 未操作)`);
+			lines.push(`  #${item.task.id}: ${item.task.description} (${item.staleTurns} turns idle)`);
 			for (const s of item.staleSubtasks) {
 				lines.push(`    - ${s.text} (${s.staleTurns} turn)`);
 			}
 		}
-		lines.push("\n请检查这些任务的状态，调用 update_tasks 更新进展或 cancel 不再需要的任务。");
+		lines.push("\nCheck these tasks — call update_tasks to report progress or cancel tasks that are no longer needed.");
 	}
 
-	lines.push(`\n目标: ${objective}`);
+	lines.push(`\nObjective: ${objective}`);
 	lines.push(`Turn: ${state.turnCount}/${state.budget.maxTurns}`);
 	lines.push("</goal_context>");
 
@@ -177,7 +177,7 @@ function formatBudgetInfo(state: GoalRuntimeState): string {
 	if (state.budget.timeBudgetMinutes) {
 		const elapsed = getElapsedTimeSeconds(state);
 		const pct = Math.round((elapsed / (state.budget.timeBudgetMinutes * SECONDS_PER_MINUTE)) * PERCENT_FACTOR);
-		parts.push(`时间: ${pct}%`);
+		parts.push(`Time: ${pct}%`);
 	}
 	return parts.length > 0 ? ` (${parts.join(", ")})` : "";
 }
@@ -197,13 +197,13 @@ function formatBudgetLine(state: GoalRuntimeState): string {
 }
 
 export function formatTaskList(tasks: GoalTask[]): string {
-	if (tasks.length === 0) return "暂无任务。";
+	if (tasks.length === 0) return "No tasks yet.";
 	const completed = tasks.filter(t => t.status === "completed");
 	const active = tasks.filter(t => t.status === "in_progress" || t.status === "pending");
 	const cancelled = tasks.filter(t => t.status === "cancelled");
 	const lines: string[] = [];
 	if (active.length > 0) {
-		lines.push(`进行中/待执行 (${active.length}):`);
+		lines.push(`In progress / Pending (${active.length}):`);
 		for (const t of active) {
 			const icon = t.status === "in_progress" ? "●" : "☐";
 			lines.push(`  ${icon} #${t.id}: ${t.description}`);
@@ -216,17 +216,17 @@ export function formatTaskList(tasks: GoalTask[]): string {
 		}
 	}
 	if (completed.length > 0) {
-		lines.push(`已完成 (${completed.length}):`);
+		lines.push(`Completed (${completed.length}):`);
 		for (const t of completed) {
 			const evidence = t.evidence ? ` — ${t.evidence}` : "";
 			lines.push(`  ✓ #${t.id}: ${t.description}${evidence}`);
 		}
 	}
 	if (cancelled.length > 0) {
-		lines.push(`已取消 (${cancelled.length}):`);
+		lines.push(`Cancelled (${cancelled.length}):`);
 		for (const t of cancelled) lines.push(`  ✗ #${t.id}: ${t.description}`);
 	}
-	const summary = `${completed.length}/${tasks.length} 完成` + (cancelled.length > 0 ? `, ${cancelled.length} 已取消` : "");
+	const summary = `${completed.length}/${tasks.length} completed` + (cancelled.length > 0 ? `, ${cancelled.length} cancelled` : "");
 	lines.push(summary);
 	return lines.join("\n");
 }

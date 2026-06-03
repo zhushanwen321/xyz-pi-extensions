@@ -185,7 +185,7 @@ export function buildSearchLine(
 		if (used === undefined || !total || total <= 0) continue;
 		const pct = Math.round((used / total) * PERCENT_SCALE);
 		const pctCol = themeFg(pctColor(pct), `${pct}%`);
-		parts.push(`${p.d(prov.label)} ${p.g(`${used}`)}/${p.v(`${total}`)}${p.d("次")} ${pctCol}`);
+		parts.push(`${p.d(prov.label)} ${p.g(`${used}`)}/${p.v(`${total}`)} ${pctCol}`);
 	}
 	return parts.join(" | ");
 }

@@ -148,8 +148,8 @@ export default function visionExtension(pi: ExtensionAPI) {
 			const question = params.question as string;
 			const effectiveContext = contextMode === "fork" && !forkDegraded ? "fork" : "fresh";
 			const task = effectiveContext === "fork"
-				? `${FORK_PREAMBLE}\n\nTask:\n读取图片 ${absoluteImagePath}，结合之前讨论的上下文，分析以下问题：${question}。仅输出分析结论。`
-				: `读取图片 ${absoluteImagePath}，分析以下问题：${question}。仅输出分析结论。`;
+				? `${FORK_PREAMBLE}\n\nTask:\nRead image ${absoluteImagePath}, considering the prior discussion context, analyze: ${question}. Output analysis conclusions only.`
+				: `Read image ${absoluteImagePath}, analyze: ${question}. Output analysis conclusions only.`;
 
 			// ── Spawn vision subagent ──
 			const result = await runSingleVisionAgent({

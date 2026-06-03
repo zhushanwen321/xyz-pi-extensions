@@ -79,15 +79,15 @@ export interface TrackerDetails<
 export const TrackerParams = Type.Object({
   action: StringEnum(["update", "list"] as const),
   id: Type.Optional(
-    Type.Number({ description: "TrackedItem ID（update 必填）" }),
+    Type.Number({ description: "TrackedItem ID (required for update)" }),
   ),
   status: Type.Optional(
     StringEnum(["completed", "error", "recorded"] as const, {
-      description: "目标状态（update 必填）",
+      description: "Target status (required for update)",
     }),
   ),
   detail: Type.Optional(
-    Type.String({ description: "附加说明（如 error 原因）" }),
+    Type.String({ description: "Additional notes (e.g. error reason)" }),
   ),
 });
 
