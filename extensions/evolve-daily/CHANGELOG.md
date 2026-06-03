@@ -1,5 +1,11 @@
 # @zhushanwen/pi-evolve-daily
 
+## 0.1.6
+
+### Patch Changes
+
+- e19ed88: fix: remove hardcoded models and paths from review agents; fix Pi SDK type compat in evolve-daily and workflow
+
 ## 0.1.5
 
 ### Patch Changes
