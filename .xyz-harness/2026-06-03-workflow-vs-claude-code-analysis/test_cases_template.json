@@ -60,6 +60,18 @@
       ]
     },
     {
+      "id": "TC-1-06",
+      "type": "api",
+      "title": "resolveModelForScene respects priority sorting regardless of scene list order",
+      "description": "scenes.coding = ['ds-flash', 'glm-5.1'] but zhipu has priority=1 → returns 'zhipu/glm-5.1'",
+      "steps": [
+        "mock loadConfig with scenes.coding = ['ds-flash', 'glm-5.1']",
+        "mock non-peak time",
+        "call resolveModelForScene('coding')",
+        "assert result === 'zhipu/glm-5.1' (priority 1 beats ds-flash priority 2)"
+      ]
+    },
+    {
       "id": "TC-3-01",
       "type": "api",
       "title": "resolveModel returns explicit model when opts.model set",

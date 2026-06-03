@@ -76,9 +76,12 @@ export function resolveModelForScene(scene: string): string | undefined;
 
 **内部逻辑**：
 1. `loadConfig()` → `config.scenes[scene]` → 如 `["glm-5.1", "ds-flash", "minimax-m3"]`
-2. 对每个候选 alias，查 `config.models[provider].models[alias]` 获取 `{ modelId, plan }`
-3. 对每个 plan 查 `computePeakRecommend()` → result 为 `"avoid"` 则跳过
-4. 返回第一个 `result === "ok"` 的 `plan/modelId`
+2. 对每个候选 alias，遍历 `config.models` 找到匹配的 provider（`providerKey`）和 `{ modelId, plan }`
+3. 调一次 `computeQuotaSnapshot(cache, config)` 得全局快照，再调一次 `computePeakRecommend()` 得系统级 peak 状态（该函数是系统级的，只看 peak plan，不区分候选）
+4. 对每个候选，判断是否 peak avoid：仅当候选的 plan 匹配 peak plan 且 peak 结果为 "avoid" 时标记为 avoid
+5. 过滤掉 avoid 候选，剩余按 priority 排序（priority 数值小的优先）
+6. 返回排序后首个候选的 `providerKey/modelId`（如 `"zhipu/glm-5.1"`，这是 Pi `--model` flag 的正确格式）
+7. 全部 avoid 或无候选 → 返回 `undefined`
 
 ### FR-4: workflow 依赖声明
 

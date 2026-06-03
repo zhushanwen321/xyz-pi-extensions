@@ -23,7 +23,8 @@ complexity: L1
 | `extensions/model-switch/src/index.ts` | modify | BG1 | re-export `resolveModelForScene` |
 | `extensions/workflow/src/agent-pool.ts` | modify | BG2 | `AgentCallOpts` 新增 `scene` 字段 |
 | `extensions/workflow/src/worker-script.ts` | modify | BG2 | `agent()` 注入代码传递 `scene` 字段 |
-| `extensions/workflow/src/orchestrator.ts` | modify | BG2 | 新增 `resolveModel()` 函数，集成到 `handleAgentCall()` |
+| `extensions/workflow/src/orchestrator.ts` | modify | BG2 | 集成 `resolveModel()` 到 `handleAgentCall()` |
+| `extensions/workflow/src/model-resolver.ts` | create | BG2 | 从 orchestrator 提取的模型解析纯函数 |
 | `extensions/workflow/package.json` | modify | BG2 | 添加 `@zhushanwen/pi-model-switch` 依赖 |
 | `extensions/model-switch/tests/resolveModelForScene.test.ts` | create | BG1 | `resolveModelForScene()` 单元测试 |
 | `extensions/workflow/tests/resolveModel.test.ts` | create | BG2 | orchestrator 模型解析集成测试 |
@@ -107,12 +108,21 @@ export function resolveModelForScene(scene: string): string | undefined
 1. 调用 `loadConfig()` — 返回 null 则 warn 并返回 undefined
 2. 查 `config.scenes[scene]` — 不存在则 warn 并返回 undefined
 3. 获取 `readCache()` 中的 quota 数据
-4. 对每个候选 alias，遍历 `config.models` 找到匹配的 provider（`pcfg.models[alias]`）
-5. 对找到的 provider，查 `config.plans[pcfg.plan]`
-6. 调 `computeQuotaSnapshot(cache, config)` + `computePeakRecommend(now, config, snapshot)`
-7. 检查该 plan 的 recommend 结果，`result === "avoid"` 则跳过
-8. 返回第一个 `result !== "avoid"` 的 `pcfg.plan/modelEntry.modelId`（字符串拼接为 `"plan/modelId"`）
-9. 全部 avoid 则 info 日志并返回 undefined
+4. **调一次** `computeQuotaSnapshot(cache, config)` 得到全局快照
+5. **调一次** `computePeakRecommend(now, config, snapshot)` 得到系统级 peak 状态（该函数是系统级的：内部通过 `findPeakPlan()` 找到唯一 peak plan，不区分候选）
+6. 收集所有候选到 `Candidate[]` 数组，每个元素包含 `{ alias, providerKey, modelId, plan, priority, isPeakAvoid }`
+7. 遍历 `config.models` 找每个候选 alias 的 provider：
+   - 对 `config.models` 的每个 `[providerKey, pcfg]`，检查 `pcfg.models[alias]` 是否存在
+   - 找到后记录 `providerKey`、`modelId`、`pcfg.plan`、`config.plans[pcfg.plan].priority`
+   - 判断 `isPeakAvoid`：仅当候选的 `pcfg.plan` 等于 `findPeakPlan(config)` 返回的 planName 且 `peakRecommend.result === "avoid"` 时为 true
+8. 按 spec FR-3 排序：`isPeakAvoid === false` 优先 → `priority` 数值小的优先（priority 1 > priority 2）
+9. 返回排序后首个候选的 `providerKey/modelId`（这是 Pi `--model` flag 的正确格式）
+10. 全部 avoid 或无候选 → info 日志并返回 undefined
+
+关键设计决策：
+- `computePeakRecommend` **只调用一次**（在循环外），避免 per-candidate 重复调用
+- `isPeakAvoid` 通过比对候选的 plan 与 peak plan 名称来判断，而非对每个候选调 `computePeakRecommend`
+- 返回 `providerKey/modelId`（如 `"zhipu/glm-5.1"`），不是 `plan/modelId`。`providerKey` 是 `config.models` 的 key（遍历时的外层 key）
 
 需要在 advisor.ts 顶部新增 import：
 ```typescript
@@ -135,11 +145,12 @@ export { resolveModelForScene } from "./advisor";
 测试框架使用 vitest（从 vitest 导入 describe/it/expect/vi），运行命令 `npx vitest run`，禁止 node:test 和 tsx --test。
 
 测试用例覆盖：
-- TC-1-01: config 存在 + scene 存在 + 非 peak → 返回第一个候选模型
-- TC-1-02: config 存在 + scene 存在 + 第一个 peak avoid → 返回第二个候选
+- TC-1-01: config 存在 + scene 存在 + 非 peak → 返回 `"zhipu/glm-5.1"`（第一个候选，priority 1）
+- TC-1-02: config 存在 + scene 存在 + zhipu peak avoid → 返回 `"opencode-go/ds-flash"`（跳过 peak plan 的 zhipu，选择非 peak 的 opencode-go）
 - TC-1-03: config 存在 + scene 不存在 → 返回 undefined + warn 日志
 - TC-1-04: config 不存在（loadConfig 返回 null） → 返回 undefined + warn 日志
-- TC-1-05: 所有候选都是 avoid → 返回 undefined + info 日志
+- TC-1-05: 所有候选都是 peak avoid → 返回 undefined + info 日志
+- TC-1-06: scenes 列表顺序与 priority 不一致（如 `["ds-flash", "glm-5.1"]`）+ 非 peak → 仍返回 `"zhipu/glm-5.1"`（priority 排序后取首个）
 
 mock 策略：mock `./config` 的 `loadConfig` 和 `@zhushanwen/pi-quota-providers` 的 `readCache`。`computeQuotaSnapshot` 和 `computePeakRecommend` 不需要 mock（纯计算函数）。
 
@@ -159,6 +170,12 @@ const mockConfig: ModelPolicy = {
   stickiness: { minTurns: 3, minInputTokens: 1000 },
 };
 ```
+
+测试中 mock `computePeakRecommend`：
+- peak 时段：返回 `{ result: "avoid", reason: "Peak hours" }`（只影响 plan 匹配 peakPlan 的候选）
+- 非 peak：返回 `{ result: "ok", reason: "Off-peak" }`
+
+也 mock `findPeakPlan`（或通过 mock config 间接控制）：返回 `["zhipu", config.plans.zhipu]`。
 
 - [ ] **Step 4: 运行测试确认全部通过**
 
