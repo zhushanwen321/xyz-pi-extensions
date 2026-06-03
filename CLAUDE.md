@@ -15,8 +15,7 @@ xyz-pi-extensions/
 │   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills)
 │   ├── claude-rules-loader/ → @zhushanwen/pi-claude-rules-loader
 │   ├── context-engineering/ → @zhushanwen/pi-context-engineering
-│   ├── skill-state/         → @zhushanwen/pi-skill-state
-│   ├── evolve-daily/        → @zhushanwen/pi-evolve-daily (含 evolve skills)
+│   ├── evolve-daily/        → @zhushanwen/pi-evolve-daily (含 evolve skills + tracker 框架)
 │   ├── statusline/          → @zhushanwen/pi-statusline
 │   ├── unified-hooks/       → @zhushanwen/pi-unified-hooks
 │   ├── workflow/            → @zhushanwen/pi-workflow
@@ -37,6 +36,22 @@ xyz-pi-extensions/
 - types 是 private 包，仅通过 `workspace:*` 供其他包引用
 - coding-workflow 内置 model.ts 用于 resolveModelByComplexity，subagent 功能由 pi-subagents（npm）提供
 - Harness 是逻辑概念，不存在叫 "harness" 的物理目录
+
+**目录归属原则**（ADR-016）：
+
+| 功能 | 归属目录 | 示例 |
+|------|---------|------|
+| Pi 扩展（产品） | `packages/` | goal, todo, vision |
+| 开发工具（githook/CI） | `tools/` 或 `.githooks/` | taste-lint, validate-*.py |
+| 内部共享依赖（非扩展） | `packages/`（需评估内联） | quota-providers |
+| CI 类型桩 | `types/`（根目录） | mariozechner/index.d.ts |
+| 独立 skills | `skills/` | evolve, zcommit |
+| 独立工具 | `scripts/` | （待填充） |
+
+**硬性约束**：
+- npm install 必须能跑：`dependencies` 中的包必须在 npm 上可获取，`workspace:*` publish 时转为具体版本号，`private: true` 的包不能作为依赖
+- 一个功能一个位置：禁止同一份代码在 monorepo 里存在两个副本
+- githook 工具就近放置：服务于 pre-commit hook 的工具放 `tools/` 或 `.githooks/`
 
 ### 社区扩展借鉴
 
@@ -692,8 +707,7 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `packages/coding-workflow/` | `@zhushanwen/pi-coding-workflow` | 5-Phase 编码工作流 | ~20 个 xyz-harness-* skills |
 | `packages/claude-rules-loader/` | `@zhushanwen/pi-claude-rules-loader` | 加载 CLAUDE.md 规则 | — |
 | `packages/context-engineering/` | `@zhushanwen/pi-context-engineering` | 渐进式上下文压缩 | — |
-| `packages/skill-state/` | `@zhushanwen/pi-skill-state` | Skill 执行状态追踪 | — |
-| `packages/evolve-daily/` | `@zhushanwen/pi-evolve-daily` | 每日自动数据收集 | evolve, evolve-apply, evolve-report |
+| `packages/evolve-daily/` | `@zhushanwen/pi-evolve-daily` | 每日数据收集 + Tracker 框架 | evolve, evolve-apply, evolve-report |
 | `packages/statusline/` | `@zhushanwen/pi-statusline` | Pi 状态栏 | — |
 | `packages/unified-hooks/` | `@zhushanwen/pi-unified-hooks` | Hook 管理 | — |
 | `packages/workflow/` | `@zhushanwen/pi-workflow` | 通用 DAG 执行引擎 | — |

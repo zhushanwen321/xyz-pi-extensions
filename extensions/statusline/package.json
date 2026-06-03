@@ -1,0 +1,39 @@
+{
+  "name": "@zhushanwen/pi-statusline",
+  "version": "0.1.1",
+  "description": "Pi statusline extension — shows context usage, token speed, and provider quota in the footer.",
+  "type": "module",
+  "main": "src/index.ts",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "keywords": [
+    "pi-package",
+    "extension",
+    "statusline",
+    "footer",
+    "quota"
+  ],
+  "license": "MIT",
+  "files": [
+    "src/",
+    "index.ts"
+  ],
+  "dependencies": {
+    "@zhushanwen/pi-quota-providers": "workspace:*"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-ai": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-tui": { "optional": true },
+    "@earendil-works/pi-ai": { "optional": true }
+  },
+  "scripts": {
+    "typecheck": "npx tsc --noEmit"
+  }
+}

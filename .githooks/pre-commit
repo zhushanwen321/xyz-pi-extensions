@@ -1,5 +1,5 @@
 #!/bin/bash
-# pre-commit — 类型检查 + ESLint 品味检查 + pi manifest 检查
+# pre-commit — 类型检查 + ESLint 品味检查 + pi manifest 检查 + scripts 校验
 #
 # 跳过方式：SKIP_LINT=1 git commit -m "..."
 set -euo pipefail
@@ -24,14 +24,12 @@ C_RESET='\033[0m'
 # ── 0. pi manifest 检查 ──────────────────────────────────
 echo "--- pi manifest 检查 ---"
 HAS_ERROR=0
-for pkg_json in packages/*/package.json; do
+for pkg_json in extensions/*/package.json; do
+  [ -f "$pkg_json" ] || continue
   dir=$(dirname "$pkg_json")
   name=$(basename "$dir")
 
-  # 跳过 private 包、非扩展包、taste-lint (ESLint config)
-  if [[ "$name" == "taste-lint" ]]; then
-    continue
-  fi
+  # 跳过 private 包
   is_private=$(python3 -c "import json; print(json.load(open('$pkg_json')).get('private', False))" 2>/dev/null)
   if [[ "$is_private" == "True" ]]; then
     continue
@@ -90,6 +88,95 @@ if [[ $HAS_ERROR -eq 1 ]]; then
   exit 1
 fi
 echo -e "${C_GREEN}[ OK ]${C_RESET} pi manifest 检查通过"
+
+# ── 0b. package.json 深度检查（peerDeps / files / 包名）──
+STAGED_PKG=$(git diff --cached --name-only --diff-filter=ACM | grep -E '(extensions|shared)/.*/package.json$' || true)
+if [[ -n "$STAGED_PKG" ]]; then
+  echo "--- package.json 深度检查 ---"
+  while IFS= read -r pkg_json; do
+    dir=$(dirname "$pkg_json")
+    name=$(basename "$dir")
+    [[ "$name" == "taste-lint" ]] && continue
+    is_private=$(python3 -c "import json; print(json.load(open('$pkg_json')).get('private', False))" 2>/dev/null)
+    [[ "$is_private" == "True" ]] && continue
+
+    # 包名格式
+    pkg_name=$(python3 -c "import json; print(json.load(open('$pkg_json')).get('name', ''))" 2>/dev/null)
+    if [[ ! "$pkg_name" =~ ^@zhushanwen/pi- ]]; then
+      echo -e "  ${C_RED}[FAIL]${C_RESET} $name: 包名 '$pkg_name' 不符合 @zhushanwen/pi-* 格式"
+      HAS_ERROR=1
+    fi
+
+    # peerDependencies 含 @mariozechner/pi-coding-agent
+    has_core_dep=$(python3 -c "
+import json
+d=json.load(open('$pkg_json'))
+peers=d.get('peerDependencies',{})
+print('OK' if '@mariozechner/pi-coding-agent' in peers else 'MISSING')
+" 2>/dev/null)
+    if [[ "$has_core_dep" == "MISSING" ]]; then
+      echo -e "  ${C_RED}[FAIL]${C_RESET} $name: peerDependencies 缺少 @mariozechner/pi-coding-agent"
+      HAS_ERROR=1
+    fi
+
+    # files 包含入口 .ts
+    has_files_entry=$(python3 -c "
+import json, glob, os
+d=json.load(open('$pkg_json'))
+files=d.get('files',[])
+pi_exts=d.get('pi',{}).get('extensions',[])
+if not pi_exts:
+    print('SKIP')
+    exit(0)
+for ext in pi_exts:
+    entry=ext.lstrip('./')
+    matched=any(entry.startswith(f.rstrip('/')) if f.endswith('/') else entry in f for f in files)
+    if not matched:
+        print(f'MISSING:{entry}')
+        exit(0)
+print('OK')
+" 2>/dev/null)
+    if [[ "$has_files_entry" == MISSING* ]]; then
+      entry=${has_files_entry#MISSING:}
+      echo -e "  ${C_RED}[FAIL]${C_RESET} $name: files 未包含入口 ${entry}，npm publish 后会丢失"
+      HAS_ERROR=1
+    fi
+
+    echo -e "  ${C_GREEN}[ OK ]${C_RESET} $name: 深度检查通过"
+  done <<< "$STAGED_PKG"
+fi
+
+if [[ $HAS_ERROR -eq 1 ]]; then
+  echo ""
+  echo -e "${C_RED}[FAIL]${C_RESET} package.json 深度检查失败"
+  echo -e "${C_YELLOW}无论是否本次修改导致，都需要修复，不得跳过${C_RESET}"
+  exit 1
+fi
+
+# ── 0c. scripts 校验（按需触发）─────────────────────
+STAGED_YAML=$(git diff --cached --name-only --diff-filter=ACM | grep 'docs/third-party-extensions/extensions.yaml$' || true)
+STAGED_SKILLS=$(git diff --cached --name-only --diff-filter=ACM | grep 'SKILL\.md$' || true)
+
+if [[ -n "$STAGED_YAML" ]]; then
+  echo "--- validate-extensions-yaml ---"
+  if ! python3 scripts/validate-extensions-yaml.py 2>&1; then
+    echo -e "${C_RED}[FAIL]${C_RESET} extensions.yaml 校验失败"
+    echo -e "${C_YELLOW}修复后重新提交${C_RESET}"
+    exit 1
+  fi
+  echo -e "${C_GREEN}[ OK ]${C_RESET} extensions.yaml 校验通过"
+fi
+
+if [[ -n "$STAGED_SKILLS" ]]; then
+  echo "--- validate-skill-yaml ---"
+  SKILL_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep 'SKILL\.md$')
+  if ! python3 scripts/validate-skill-yaml.py $SKILL_FILES 2>&1; then
+    echo -e "${C_RED}[FAIL]${C_RESET} SKILL.md YAML frontmatter 校验失败"
+    echo -e "${C_YELLOW}修复后重新提交，或用 python3 scripts/validate-skill-yaml.py --fix <files> 自动修复${C_RESET}"
+    exit 1
+  fi
+  echo -e "${C_GREEN}[ OK ]${C_RESET} SKILL.md YAML frontmatter 校验通过"
+fi
 
 # ── 1. tsc 类型检查 ──────────────────────────────────────
 echo "--- tsc --noEmit ---"

@@ -1,0 +1,143 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read core.ts source",
+        "Assert pi.on(config.triggerEvent) exists",
+        "Assert pi.on('turn_end') exists",
+        "Assert pi.on('session_start') exists",
+        "Assert pi.on('session_tree') exists",
+        "Assert pi.on('before_agent_start') exists",
+        "Assert pi.registerTool exists"
+      ],
+      "evidence": "toolCall=true, turnEnd=true, sessStart=true, sessTree=true, before=true, tool=true"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Call triggerMatch({toolName:'read', path:'/path/to/my-skill/SKILL.md'})",
+        "Assert match.name === 'my-skill'",
+        "Assert match.metadata.skillMdPath is set"
+      ],
+      "evidence": "match={\"name\":\"my-skill\",\"metadata\":{\"skillMdPath\":\"/path/to/my-skill/SKILL.md\"},\"summary\":\"read /path/to/my-skill/SKILL.md\"}"
+    },
+    {
+      "caseId": "TC-2-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Call triggerMatch({toolName:'read', path:'/path/to/config.json'})",
+        "Assert match === null"
+      ],
+      "evidence": "match=null"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Call canTransition('loaded', 'completed')",
+        "Assert returns true"
+      ],
+      "evidence": "result=true"
+    },
+    {
+      "caseId": "TC-3-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Call canTransition('completed', 'error')",
+        "Assert returns false",
+        "Call canTransition('recorded', 'loaded')",
+        "Assert returns false"
+      ],
+      "evidence": "completed→error=false, recorded→loaded=false"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read core.ts source",
+        "Assert errorThreshold comparison exists",
+        "Assert errorCount increment exists",
+        "Assert steering.onError injection exists"
+      ],
+      "evidence": "threshold=true, increment=true, onError=true"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read core.ts source",
+        "Assert reconstructState function exists",
+        "Assert filter with isTerminalStatus exists"
+      ],
+      "evidence": "filter=true, reconstruct=true"
+    },
+    {
+      "caseId": "TC-5-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read skill-execution.ts: assert legacyEntryTypes contains 'skill-state-tracker'",
+        "Read types.ts: assert deserializeState handles skillMdPath mapping"
+      ],
+      "evidence": "legacy=true, mapping=true"
+    },
+    {
+      "caseId": "TC-6-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read core.ts source",
+        "Assert remindInterval check exists",
+        "Assert steering.onRemind injection exists",
+        "Assert turn_end handler exists"
+      ],
+      "evidence": "interval=true, onRemind=true, turnEnd=true"
+    },
+    {
+      "caseId": "TC-7-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run test_tc7_01_tracker_extracts_stats()"
+      ],
+      "evidence": "{\"stats\": {\"total_items\": 2, \"completed_rate\": 0.5, \"error_rate\": 0.5, \"samples\": [{\"session_id\": \"session-1\", \"item_name\": \"my-skill\", \"status\": \"completed\", \"trigger_type\": \"tool_call\", \"trigger_tur"
+    },
+    {
+      "caseId": "TC-7-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run test_tc7_02_tracker_empty_sessions()"
+      ],
+      "evidence": "{\"result\": {\"skill_execution\": {\"total_items\": 0}}}"
+    },
+    {
+      "caseId": "TC-8-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run test_tc8_01_existing_extractors()"
+      ],
+      "evidence": "{\"extractors\": [\"compact\", \"context\", \"goal_quality\", \"subagent\", \"tool_errors\", \"tracker\", \"workflow\"]}"
+    },
+    {
+      "caseId": "TC-9-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run test_tc9_01_skill_state_removed()"
+      ],
+      "evidence": "{\"path\": \"/Users/zhushanwen/Code/xyz-pi-extensions-workspace/feat-evolve-everything/packages/skill-state\", \"exists\": false}"
+    }
+  ]
+}
