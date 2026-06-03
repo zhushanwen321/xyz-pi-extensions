@@ -331,3 +331,4 @@ function countTurnsAfter(entries: SessionEntries, startIdx: number): number {
 	}
 	return count;
 }
+
