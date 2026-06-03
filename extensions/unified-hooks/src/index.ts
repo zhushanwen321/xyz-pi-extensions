@@ -9,8 +9,12 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 // Re-export hook modules for easy access
 export { setupToolErrorHandler } from "./hooks/tool-error-handler";
+export { setupNetworkTimeoutGuard } from "./hooks/network-timeout-guard";
+export { setupTestTimeoutGuard } from "./hooks/test-timeout-guard";
 
 import { setupToolErrorHandler } from "./hooks/tool-error-handler";
+import { setupNetworkTimeoutGuard } from "./hooks/network-timeout-guard";
+import { setupTestTimeoutGuard } from "./hooks/test-timeout-guard";
 
 /**
  * Extension factory - registers all unified hooks
@@ -23,6 +27,8 @@ export default function unifiedHooksExtension(pi: ExtensionAPI): void {
   // with hash-anchor mode, making oldText-based guard unreachable
   const hookModules = [
     { name: "tool-error-handler", setup: setupToolErrorHandler },
+    { name: "network-timeout-guard", setup: setupNetworkTimeoutGuard },
+    { name: "test-timeout-guard", setup: setupTestTimeoutGuard },
   ];
 
   for (const hook of hookModules) {

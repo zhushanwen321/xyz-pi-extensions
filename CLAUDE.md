@@ -162,6 +162,29 @@ pnpm changeset publish --dry-run
 python3 scripts/validate-extensions-yaml.py
 ```
 
+### 版本管理
+
+**核心原则：各包独立版本号，通过 changeset 管理。**
+
+- 根 `package.json` 的 `version`（当前 `0.0.7`）无实际发布意义，仅代表 monorepo 整体迭代序号
+- 各 `extensions/*` 和 `shared/*` 子包版本独立，不联动
+- `changeset config.json` 的 `fixed` 为空，确认独立版本模式
+- `merge-worktree` 的 `bump patch/minor/major` 只 bump 根版本号，不影响子包
+
+**子包版本 bump 规则：**
+
+| 变更类型 | bump 级别 | 示例 |
+|----------|-----------|------|
+| Bug 修复、对齐修正、fallback 补充 | `patch` | 状态栏对齐修复 → `0.4.0` → `0.4.1` |
+| 新功能、新 provider、新增 API | `minor` | 新增 speed 显示 → `0.4.0` → `0.5.0` |
+| 破坏性变更（API 不兼容） | `major` | 重构导出接口 → `0.4.0` → `1.0.0` |
+
+**操作流程：**
+
+1. `pnpm changeset` — 交互式选择受影响的包和版本级别
+2. `pnpm changeset version` — 根据 changeset 文件 bump 各包版本
+3. 提交变更 + 打 tag → GitHub Actions 自动发布
+
 ### 发布流程（GitHub Actions）
 
 **[强制] 禁止本地发布（`npm publish` / `pnpm changeset publish`），必须走 GitHub Actions。**
@@ -607,9 +630,13 @@ npx tsc --noEmit
 # 全量 lint
 pnpm -r lint
 
+# 全量测试
+pnpm -r test
+
 # 单包检查
 pnpm --filter @zhushanwen/pi-goal typecheck
 pnpm --filter @zhushanwen/pi-goal lint
+pnpm --filter @zhushanwen/pi-statusline test
 
 # 跳过 pre-commit hook（仅紧急 hotfix）
 SKIP_LINT=1 git commit -m "..."
@@ -625,6 +652,7 @@ SKIP_LINT=1 git commit -m "..."
 
 1. `tsc --noEmit` — 全量 TypeScript 类型检查
 2. `eslint` — 仅检查 staged 的 `.ts` 文件
+3. `vitest` — 按需触发：仅当 staged 文件涉及的包有 `src/__tests__/` 时运行
 
 bare+worktree 模式下 hook 自动检测 rebase 状态并跳过。
 
@@ -672,6 +700,54 @@ SKIP_LINT=1 git commit -m "..."
 - `no-magic-numbers` — 语义化命名（0/1/-1 豁免）
 
 规则源文件：`taste-lint/base.mjs` + `taste-lint/rules/`
+
+### 测试规范
+
+#### 测试框架
+
+使用 vitest（`^4.1.8`），禁止 `node:test`。
+
+#### 测试文件约定
+
+- 测试文件放在 `src/__tests__/` 目录下，命名 `*.test.ts`
+- 每个有测试的包需要 `vitest.config.ts`（放在包根目录）
+- `tsconfig.json` 已 exclude `**/__tests__` 和 `**/vitest.config.ts`，无需额外配置
+- 新增 exclude 规则时必须更新 `tsconfig.json` 的 `exclude` 数组
+
+#### 运行命令
+
+```bash
+# 全量测试（跑所有有 test script 的包）
+pnpm -r test
+
+# 单包测试
+pnpm --filter @zhushanwen/pi-statusline test
+
+# 监听模式
+pnpm --filter @zhushanwen/pi-statusline test:watch
+```
+
+#### 可测试性设计
+
+- 纯格式化/计算逻辑从 `index.ts` 提取到独立模块（如 `format.ts`、`speed.ts`），不依赖 Pi 运行时（ExtensionAPI、Theme 等）
+- Pi 运行时类型通过 `PlainPallet`/`plainThemeFg` 等无 ANSI 替代品绕过
+- 测试文件只 import 被测模块的导出函数，不 import Pi SDK
+
+#### vitest.config.ts alias 约定
+
+| 包位置 | 需要 alias | 示例 |
+|--------|------------|------|
+| `extensions/*` | `@zhushanwen/pi-quota-providers` → `../../shared/quota-providers/src/index.ts` | statusline |
+| `shared/*` | `@mariozechner/pi-coding-agent` → workspace root `shared/types/mariozechner/index` | quota-providers |
+
+所有 vitest.config.ts 的 `include` 统一为 `["src/__tests__/**/*.test.ts"]`。
+
+#### 添加新包测试的检查清单
+
+1. `pnpm --filter <pkg> add -D vitest`
+2. 创建 `vitest.config.ts`（参考已有包的配置）
+3. `package.json` 添加 `"test": "vitest run"` script
+4. 创建 `src/__tests__/` 目录和测试文件
 
 ## 安装指南
 

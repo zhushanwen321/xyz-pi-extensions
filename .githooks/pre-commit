@@ -204,3 +204,28 @@ if ! npx eslint $STAGED 2>&1; then
   exit 1
 fi
 echo -e "${C_GREEN}[ OK ]${C_RESET} eslint 通过"
+
+# ── 3. 单元测试（按需触发）──────────────────────────────
+# 检测 staged .ts 文件涉及的包，如果该包有 __tests__/ 则跑 vitest
+TEST_PKGS=()
+for f in $(git diff --cached --name-only --diff-filter=ACM | grep '\.ts$' | grep -v __tests__ | grep -v vitest.config); do
+  # 提取包路径: extensions/statusline/src/foo.ts → extensions/statusline
+  pkg_dir=$(echo "$f" | grep -oE '^(extensions|shared)/[^/]+' || true)
+  if [[ -n "$pkg_dir" && -d "$pkg_dir/src/__tests__" ]] && ! echo "${TEST_PKGS[@]}" | grep -q "$pkg_dir"; then
+    TEST_PKGS+=("$pkg_dir")
+  fi
+done
+
+if [[ ${#TEST_PKGS[@]} -gt 0 ]]; then
+  echo "--- vitest ---"
+  for pkg in "${TEST_PKGS[@]}"; do
+    pkg_name=$(python3 -c "import json; print(json.load(open('$pkg/package.json')).get('name', '$pkg'))" 2>/dev/null || echo "$pkg")
+    echo "  测试 $pkg_name ..."
+    if ! npx vitest run --config "$pkg/vitest.config.ts" 2>&1; then
+      echo -e "${C_RED}[FAIL]${C_RESET} $pkg_name 测试失败"
+      echo -e "${C_YELLOW}无论是否本次修改导致，都需要修复，不得跳过${C_RESET}"
+      exit 1
+    fi
+  done
+  echo -e "${C_GREEN}[ OK ]${C_RESET} vitest 通过"
+fi

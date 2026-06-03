@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { PROVIDERS } from "./providers/index.js";
 import { getCachePath, getSpeedDir } from "./paths.js";
 import { MS_PER_SEC, SEC_PER_MIN, MIN_PER_HOUR, SEC_PER_DAY } from "./time.js";
+import { avgSpeed, type SpeedRecord } from "./speed.js";
 
 const DAY_MS = SEC_PER_DAY * MS_PER_SEC;
 
@@ -124,7 +125,7 @@ function readCacheSync(): CacheData {
 // ── Token Speed（与 provider 无关，保留在此）──────────────
 
 // 每条记录存储 [outputTokens, durationMs]，用于正确计算加权平均速度
-type SpeedRecord = [number, number];
+// SpeedRecord 类型已移至 speed.ts
 
 export function trackSpeed(
 	outputTokens: number,
@@ -177,19 +178,7 @@ export function trackSpeed(
 		console.warn(`[statusline] speed record write failed:`, e);
 	}
 
-	// 加权平均：sum(tokens) / sum(duration) * MS_PER_SEC
-	const avgSpeed = (entries: SpeedRecord[]): number => {
-		let totalTokens = 0;
-		let totalDuration = 0;
-		for (const entry of entries) {
-			if (!Array.isArray(entry) || entry.length < SPEED_RECORD_FIELDS) continue;
-			totalTokens += entry[0];
-			totalDuration += entry[1];
-		}
-		return totalDuration > 0
-			? Math.round((totalTokens / totalDuration) * MS_PER_SEC)
-			: 0;
-	};
+// avgSpeed 已移至 speed.ts，此处通过 import 使用
 
 	const dayEntries: SpeedRecord[] = [];
 	const d7Entries: SpeedRecord[] = [];

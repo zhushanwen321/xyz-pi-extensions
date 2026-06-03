@@ -8,6 +8,9 @@ import {
 
 const HOME = homedir();
 
+/** Tavily 免费套餐每个 API key 的月调用上限 */
+const FREE_TIER_PER_KEY_LIMIT = 1000;
+
 
 interface TavilyUsageEntry {
 	credits: number;
@@ -71,11 +74,16 @@ async function readTavily(): Promise<TavilyData | null> {
 			if (!planName) planName = v.plan_name ?? "";
 		}
 
+		// api_usage 缺失时（旧版 state.json），用 credits 近似 planUsage，
+		// 用 key 数量 × 每密钥上限近似 planLimit
+		const effectivePlanUsage = planUsage > 0 ? planUsage : credits;
+		const effectivePlanLimit = planLimit > 0 ? planLimit : total * FREE_TIER_PER_KEY_LIMIT;
+
 		return {
 			available: total - exhausted,
 			total,
-			planUsage,
-			planLimit,
+			planUsage: effectivePlanUsage,
+			planLimit: effectivePlanLimit,
 			planName,
 			keyUsage,
 			keyLimit,

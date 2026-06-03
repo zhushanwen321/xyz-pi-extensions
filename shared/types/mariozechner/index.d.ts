@@ -11,7 +11,7 @@ declare module "@mariozechner/pi-coding-agent" {
 
 	export interface ExtensionContext {
 		cwd: string;
-		sessionManager: SessionManager;
+		sessionManager: ReadonlySessionManager;
 		modelRegistry: {
 			getAvailable(): any[];
 			find(provider: string, modelId: string): any | undefined;
@@ -37,11 +37,37 @@ declare module "@mariozechner/pi-coding-agent" {
 	}
 	export type ContextEvent = any;
 	export type ContextUsage = any;
+	export type ReadonlySessionManager = Pick<SessionManager, "getCwd" | "getSessionDir" | "getSessionId" | "getSessionFile" | "getLeafId" | "getLeafEntry" | "getEntry" | "getLabel" | "getBranch" | "getHeader" | "getEntries" | "getTree" | "getSessionName">;
+
 	export interface SessionManager {
 		getSessionId(): string;
+		getSessionFile(): string | undefined;
+		getSessionDir(): string;
+		getCwd(): string;
 		getEntries(): SessionEntry[];
 		getBranch(): any[];
-		[key: string]: any;
+		getLeafId(): string | null;
+		getLeafEntry(): SessionEntry | undefined;
+		getEntry(id: string): SessionEntry | undefined;
+		getHeader(): any | null;
+		getTree(): any[];
+		getSessionName(): string | undefined;
+		// Write methods (available on full SessionManager, NOT on ReadonlySessionManager)
+		appendMessage(message: any): string;
+		appendCustomEntry(customType: string, data?: unknown): string;
+		appendCustomMessageEntry<T = unknown>(customType: string, content: string | any[], display: boolean, details?: T): string;
+		appendCompaction(summary: string, firstKeptEntryId: string, tokensBefore: number, details?: unknown, fromHook?: boolean): string;
+		appendThinkingLevelChange(thinkingLevel: string): string;
+		appendModelChange(provider: string, modelId: string): string;
+		appendSessionInfo(name: string): string;
+		appendLabelChange(targetId: string, label: string | undefined): string;
+		branch(branchFromId: string): void;
+		branchWithSummary(branchFromId: string | null, summary: string, details?: unknown, fromHook?: boolean): string;
+		resetLeaf(): void;
+		buildSessionContext(): { messages: any[]; thinkingLevel: string; model: any | null };
+		setSessionFile(sessionFile: string): void;
+		isPersisted(): boolean;
+		newSession(options?: any): string | undefined;
 	}
 
 	export type SessionEntry = any;
