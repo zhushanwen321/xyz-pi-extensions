@@ -3,9 +3,11 @@
  *
  * session_start：注入模型能力表（[Available Models]）
  * before_agent_start：注入数据+推荐（[Model Context]）
+ *
+ * 设计原则：每行自解释，避免缩写标签，让 AI 不需要猜测字段含义。
  */
 
-import type { ModelPolicy, QuotaSnapshot, StickinessInfo, RecommendInfo, ModelCapability } from "./types";
+import type { ModelPolicy, QuotaSnapshot, StickinessInfo, RecommendInfo } from "./types";
 
 // ── 时间常量 ────────────────────────────────────────────
 
@@ -26,11 +28,13 @@ export interface ContextPromptData {
 // ── session_start：模型能力表 ────────────────────────────
 
 /**
- * 格式化 [Available Models] 表，session_start / resume 时注入。
- * 仅包含 config 中配置的模型。
+ * 格式化 [Available Models] 表，session_start / resume 时注入一次。
+ * AI 应参考此列表识别用户请求的模型是否能满足需求（如图片处理需 image 能力）。
  */
 export function formatSessionModels(config: ModelPolicy): string {
-	const lines: string[] = ["[Available Models]"];
+	const lines: string[] = [
+		"[Available Models — models you can switch to via switch_model tool]",
+	];
 
 	for (const [provider, pcfg] of Object.entries(config.models)) {
 		for (const [alias, entry] of Object.entries(pcfg.models)) {
@@ -39,42 +43,53 @@ export function formatSessionModels(config: ModelPolicy): string {
 		}
 	}
 
+	lines.push("Switch to the best model for each task. Check capabilities above for image/text support.");
+
 	return lines.join("\n");
 }
 
 // ── before_agent_start：上下文注入 ───────────────────────
 
 /**
- * 格式化上下文注入文本（每轮注入 ~180-220 tokens）。
+ * 格式化上下文注入文本（每轮注入）。
+ *
+ * 行说明：
+ *   [Model Context] — 本段描述模型切换所需的当前运行时环境。AI 应据此决定是否需要切换。
+ *   Model — 当前正在使用的模型 + 上下文占用（turns=input轮次, tokens=已消耗输入token数）
+ *   Context warmth — 上下文是否"温热"：warm 意味着切换会丢失已缓存的 token，cold 意味着切换代价低
+ *   Time — 当前时间 + 高峰期标记（zhipu 在 peak 时段 3x 计费）
+ *   Advice — 基于用量+时间计算的推荐：ok to use（可用）/ avoid（建议避免）
+ *   usage — 各套餐用量：百分比 + 窗口重置倒计时
+ *   Scenes — 使用场景→可用模型映射
+ *   Action — 执行切换的方法
  */
 export function formatContextPrompt(data: ContextPromptData): string {
 	const { currentModel, stickiness, snapshot, recommend, config, now } = data;
 	const plan = findPrimaryPlanPeak(config);
-	const isPeak = plan ? plan.start <= now.getHours() && now.getHours() < plan.end : false;
 	const stickinessThresholds = resolveStickinessThresholds(config);
 
 	const lines: string[] = [];
-	lines.push("[Model Context]");
-	lines.push(formatCurrentLine(currentModel, stickiness));
-	lines.push(formatStickinessLine(stickiness, stickinessThresholds));
+	lines.push("[Model Context — switch models based on this data]");
+	lines.push(formatModelLine(currentModel, stickiness));
+	lines.push(formatWarmthLine(stickiness, stickinessThresholds));
 	lines.push(formatTimeLine(now, plan));
-	lines.push(formatRecommendLine(recommend));
+	lines.push(formatAdviceLine(recommend));
 
 	// Quota lines — 每个有数据的 plan 一行
 	const quotaLines = formatQuotaLines(snapshot);
 	if (quotaLines.length > 0) lines.push(...quotaLines);
 
 	lines.push(formatSceneLine(config));
-	lines.push("Switch: use switch_model tool (takes effect next turn).");
+	lines.push("Action: call switch_model tool (change applies next turn).");
 
 	return lines.join("\n");
 }
 
 // ── 内部格式化 ──────────────────────────────────────────
 
-function formatCurrentLine(model: string, stickiness: StickinessInfo): string {
+function formatModelLine(model: string, stickiness: StickinessInfo): string {
 	const inputK = Math.round(stickiness.inputTokens / 1000);
-	return `Current: ${model} (${stickiness.turns} turns, ~${inputK}k input)`;
+	return `Model: ${model} (${stickiness.turns} conversation turns, ~${inputK}k input tokens in context)`;
 }
 
 function resolveStickinessThresholds(config: ModelPolicy): { minTurns: number; minInputTokens: number } {
@@ -84,13 +99,15 @@ function resolveStickinessThresholds(config: ModelPolicy): { minTurns: number; m
 	};
 }
 
-function formatStickinessLine(
+function formatWarmthLine(
 	stickiness: StickinessInfo,
 	thresholds: { minTurns: number; minInputTokens: number },
 ): string {
-	if (stickiness.justCompacted) return "Stickiness: Free switch (just compacted).";
-	if (stickiness.turns >= thresholds.minTurns && stickiness.inputTokens >= thresholds.minInputTokens) return "Stickiness: Prefer staying (warm cache).";
-	return "Stickiness: Switch OK (cold cache).";
+	if (stickiness.justCompacted) return "Context warmth: Cold (conversation was just compressed — no cost to switch).";
+	if (stickiness.turns >= thresholds.minTurns && stickiness.inputTokens >= thresholds.minInputTokens) {
+		return `Context warmth: Warm (${stickiness.turns} turns, ~${Math.round(stickiness.inputTokens / 1000)}k tokens cached — switching loses this cache)`;
+	}
+	return "Context warmth: Cold (few turns or tokens — switching loses little).";
 }
 
 function formatTimeLine(now: Date, plan: { start: number; end: number; multiplier: number } | undefined): string {
@@ -98,22 +115,27 @@ function formatTimeLine(now: Date, plan: { start: number; end: number; multiplie
 	if (!plan) return `Time: ${timeStr} | Off-peak`;
 	const isPeak = plan.start <= now.getHours() && now.getHours() < plan.end;
 	if (!isPeak) return `Time: ${timeStr} | Off-peak`;
-	return `Time: ${timeStr} | Peak hours (${plan.start}-${plan.end}, ${plan.multiplier}x cost)`;
+	return `Time: ${timeStr} | Peak hours (${plan.start}:00-${plan.end}:00, zhipu tokens cost ${plan.multiplier}x normal)`;
 }
 
-function formatRecommendLine(recommend: RecommendInfo): string {
-	return `Recommend: ${recommend.result} (${recommend.reason})`;
+function formatAdviceLine(recommend: RecommendInfo): string {
+	if (recommend.result === "ok") {
+		return `Advice: zhipu is ok to use (${recommend.reason})`;
+	}
+	return `Advice: avoid zhipu if possible (${recommend.reason})`;
 }
 
 function formatQuotaLines(snapshot: QuotaSnapshot): string[] {
 	const entries = Object.entries(snapshot.plans);
 	if (entries.length === 0) return [];
 
-	return entries.map(([planName, quota]) => {
-		const pct = quota.pct !== null ? `${Math.round(quota.pct)}%` : "?";
-		const reset = quota.resetSec !== null ? `[reset ${formatResetSec(quota.resetSec)}]` : "";
-		return `  ${planName}: ${pct}${reset ? " " + reset : ""}`;
-	});
+	const lines: string[] = [];
+	for (const [planName, quota] of entries) {
+		const pctText = quota.pct !== null ? `${Math.round(quota.pct)}% of window used` : "usage data unavailable";
+		const resetText = quota.resetSec !== null ? `resets in ${formatResetSec(quota.resetSec)}` : "";
+		lines.push(`  ${planName}: ${pctText}${resetText ? ", " + resetText : ""}`);
+	}
+	return lines;
 }
 
 function formatSceneLine(config: ModelPolicy): string {
@@ -122,7 +144,7 @@ function formatSceneLine(config: ModelPolicy): string {
 		if (aliases.length === 0) continue;
 		parts.push(`${scene}→${aliases.join("/")}`);
 	}
-	return `Scene: ${parts.join(" | ")}`;
+	return `Scenes: ${parts.join(" | ")}`;
 }
 
 function findPrimaryPlanPeak(config: ModelPolicy): { start: number; end: number; multiplier: number } | undefined {
