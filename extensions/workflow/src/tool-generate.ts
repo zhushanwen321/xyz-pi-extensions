@@ -72,7 +72,7 @@ export function registerGenerateTool(pi: ExtensionAPI) {
     ],
     parameters: WorkflowGenerateParams,
 
-    async execute(_toolCallId: string, params: Static<typeof WorkflowGenerateParams>, _signal: AbortSignal | undefined, _onUpdate: any, _ctx: any) {
+    async execute(_toolCallId: string, params: Static<typeof WorkflowGenerateParams>, _signal: AbortSignal | undefined, _onUpdate: any, _ctx: any): Promise<any> {
       const name = params.name as string;
       const script = params.script as string;
 

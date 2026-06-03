@@ -8,6 +8,11 @@ import {
 
 const HOME = homedir();
 const SECRETS_DIR = join(HOME, ".pi", "agent", "secrets");
+
+/** 默认 fetch 超时（毫秒） */
+const FETCH_TIMEOUT_MS = 8000;
+/** HTTP 200 状态码 */
+const HTTP_OK = 200;
 const OPENCODE_COOKIE_PATH = join(SECRETS_DIR, "opencode-cookie.txt");
 const OPENCODE_WORKSPACE_URL =
 	"https://opencode.ai/workspace/wrk_01KM5Q3EEQEHZJ3V5PXF5JCR62/go";
@@ -38,11 +43,11 @@ async function fetchOpenCodeGo(): Promise<OpenCodeGoData | null> {
 				cookie,
 				"user-agent": "Mozilla/5.0",
 			},
-			signal: AbortSignal.timeout(8000),
+			signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
 			redirect: "manual",
 		});
 		// 需要 cookie 才能获取数据，302 说明 cookie 过期
-		if (resp.status !== 200) return null;
+		if (resp.status !== HTTP_OK) return null;
 		const html = await resp.text();
 		return parseOpenCodeGo(html);
 	} catch {
@@ -100,6 +105,7 @@ function parseOpenCodeGo(html: string): OpenCodeGoData | null {
 export const opencodeGoProvider: QuotaProvider<OpenCodeGoData> = {
 	id: "opencode-go",
 	label: "opencode-go",
+	category: "token-plan",
 	fetch: fetchOpenCodeGo,
 	normalize(raw): NormalizedQuotaRow | null {
 		if (!raw?.rolling || !raw?.weekly || !raw?.monthly) return null;

@@ -8,16 +8,35 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { join } from "node:path";
 import { PROVIDERS } from "./providers/index.js";
+import { getCachePath, getSpeedDir } from "./paths.js";
+import { MS_PER_SEC, SEC_PER_MIN, MIN_PER_HOUR, SEC_PER_DAY } from "./time.js";
+
+const DAY_MS = SEC_PER_DAY * MS_PER_SEC;
+
+// ── 缓存 / 统计常量 ─────────────────────────────────────
+
+/** 套餐用量刷新间隔（5 分钟） */
+const TTL_MINUTES = 5;
+const CACHE_TTL_MS = TTL_MINUTES * MIN_PER_HOUR * SEC_PER_MIN * MS_PER_SEC;
+/** cache JSON 写入的 pretty-print indent */
+const JSON_INDENT = 2;
+/** SpeedRecord 元组长度（[tokens, duration]） */
+const SPEED_RECORD_FIELDS = 2;
+/** 触发节流：实际请求频率不低于 TTL/2 */
+const TTL_THROTTLE_DIVISOR = 2;
+/** token 速度统计保留天数 */
+const SPEED_RETENTION_DAYS = 30;
+/** token 速度统计窗口（最近 7 天） */
+const SPEED_D7_DAYS = 7;
 
 // ── Paths ──────────────────────────────────────────────
-const HOME = homedir();
-const PI_DIR = join(HOME, ".pi");
-const CACHE_PATH = join(PI_DIR, "statusline_cache.json");
-const SPEED_DIR = join(PI_DIR, "token-stats");
-const CACHE_TTL_MS = 300_000; // 5 分钟：套餐用量刷新间隔
+
+const PI_DIR = getAgentDir();
+const CACHE_PATH = getCachePath();
+const SPEED_DIR = getSpeedDir();
 
 // ── CacheData（动态 schema，无需手动维护字段）───────
 // provider 数据以 provider.id 为 key 存储，类型安全由 provider normalize 保证。
@@ -49,14 +68,16 @@ let lastUpdateAt = 0; // 上次实际发起网络请求的时间
 export function triggerUpdate(): void {
 	if (updating) return;
 	// 距上次实际请求不足 TTL 一半时跳过，避免 message_end 高频触发
-	if (Date.now() - lastUpdateAt < CACHE_TTL_MS / 2) return;
+	if (Date.now() - lastUpdateAt < CACHE_TTL_MS / TTL_THROTTLE_DIVISOR) return;
 	updating = true;
 	lastUpdateAt = Date.now();
 	doUpdate()
 		.finally(() => {
 			updating = false;
 		})
-		.catch(() => {});
+		.catch((e) => {
+			console.warn("[statusline] doUpdate failed:", e);
+		});
 }
 
 async function doUpdate(): Promise<void> {
@@ -80,10 +101,11 @@ async function doUpdate(): Promise<void> {
 	try {
 		mkdirSync(PI_DIR, { recursive: true });
 		const tmpPath = `${CACHE_PATH}.tmp`;
-		writeFileSync(tmpPath, JSON.stringify(cache, null, 2), "utf-8");
+		writeFileSync(tmpPath, JSON.stringify(cache, null, JSON_INDENT), "utf-8");
 		renameSync(tmpPath, CACHE_PATH);
-	} catch {
-		// 写入失败不影响下次读取（保留旧缓存）
+	// eslint-disable-next-line taste/no-silent-catch -- 磁盘写失败属于容错路径：保留旧缓存，下次 triggerUpdate 会重试
+	} catch (e) {
+		console.warn(`[statusline] cache write failed (keeping old):`, e);
 	}
 }
 
@@ -93,7 +115,8 @@ function readCacheSync(): CacheData {
 		if (typeof parsed !== "object" || parsed === null) return { ...EMPTY_CACHE };
 		// 确保 updatedAt 存在，其余字段原样保留（由 provider 动态管理）
 		return { ...parsed, updatedAt: parsed.updatedAt ?? 0 };
-	} catch {
+	} catch (e) {
+		console.warn(`[statusline] cache read failed (using empty):`, e);
 		return { ...EMPTY_CACHE };
 	}
 }
@@ -109,12 +132,12 @@ export function trackSpeed(
 	model: string,
 ): SpeedData {
 	const current =
-		durationMs > 0 ? Math.round((outputTokens / durationMs) * 1000) : 0;
+		durationMs > 0 ? Math.round((outputTokens / durationMs) * MS_PER_SEC) : 0;
 	if (!model || current <= 0) return { current, day: 0, d7: 0, d30: 0 };
 
 	const safeName = model.replace(/[/\\\s:]/g, "_");
 	const filePath = join(SPEED_DIR, `${safeName}.json`);
-	const today = new Date().toISOString().slice(0, 10);
+	const today = new Date().toISOString().slice(0, DATE_STR_LEN);
 
 	const records: Record<string, SpeedRecord[]> = {};
 	try {
@@ -126,21 +149,22 @@ export function trackSpeed(
 				if (entries.length > 0 && !Array.isArray(entries[0])) continue;
 				// 过滤掉同日期内混入的旧格式纯数字
 				records[date] = entries.filter(
-					(e): e is SpeedRecord => Array.isArray(e) && e.length >= 2,
+					(e): e is SpeedRecord => Array.isArray(e) && e.length >= SPEED_RECORD_FIELDS,
 				);
 			}
 		}
-	} catch {
-		/* istanbul ignore next — 文件损坏时回退到空记录 */
+	// eslint-disable-next-line taste/no-silent-catch -- 速度文件损坏属于容错路径：fallback 到空 records，重新积累
+	} catch (e) {
+		console.warn(`[statusline] speed record read failed (using empty):`, e);
 	}
 
 	if (!records[today]) records[today] = [];
 	records[today].push([outputTokens, durationMs]);
 
-	// 清理 30 天前的数据
-	const cutoff = new Date(Date.now() - 30 * 86_400_000)
+	// 清理过期数据
+	const cutoff = new Date(Date.now() - SPEED_RETENTION_DAYS * DAY_MS)
 		.toISOString()
-		.slice(0, 10);
+		.slice(0, DATE_STR_LEN);
 	for (const d of Object.keys(records)) {
 		if (d < cutoff) delete records[d];
 	}
@@ -148,21 +172,22 @@ export function trackSpeed(
 	try {
 		mkdirSync(SPEED_DIR, { recursive: true });
 		writeFileSync(filePath, JSON.stringify(records));
-	} catch {
-		/* istanbul ignore next — 写入失败不影响功能 */
+	// eslint-disable-next-line taste/no-silent-catch -- 速度文件写失败属于容错路径：本次速度不持久化，下次 trackSpeed 重新记录
+	} catch (e) {
+		console.warn(`[statusline] speed record write failed:`, e);
 	}
 
-	// 加权平均：sum(tokens) / sum(duration) * 1000
+	// 加权平均：sum(tokens) / sum(duration) * MS_PER_SEC
 	const avgSpeed = (entries: SpeedRecord[]): number => {
 		let totalTokens = 0;
 		let totalDuration = 0;
 		for (const entry of entries) {
-			if (!Array.isArray(entry) || entry.length < 2) continue;
+			if (!Array.isArray(entry) || entry.length < SPEED_RECORD_FIELDS) continue;
 			totalTokens += entry[0];
 			totalDuration += entry[1];
 		}
 		return totalDuration > 0
-			? Math.round((totalTokens / totalDuration) * 1000)
+			? Math.round((totalTokens / totalDuration) * MS_PER_SEC)
 			: 0;
 	};
 
@@ -173,7 +198,7 @@ export function trackSpeed(
 
 	for (const [date, entries] of Object.entries(records)) {
 		d30Entries.push(...entries);
-		if ((now - new Date(date).getTime()) / 86_400_000 < 7) {
+		if ((now - new Date(date).getTime()) / DAY_MS < SPEED_D7_DAYS) {
 			d7Entries.push(...entries);
 		}
 		if (date === today) {
@@ -188,3 +213,6 @@ export function trackSpeed(
 		d30: avgSpeed(d30Entries),
 	};
 }
+
+/** ISO date 字符串长度（YYYY-MM-DD） */
+const DATE_STR_LEN = 10;
