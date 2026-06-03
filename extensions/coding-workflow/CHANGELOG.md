@@ -1,5 +1,11 @@
 # @zhushanwen/pi-coding-workflow
 
+## 0.1.5
+
+### Patch Changes
+
+- 4de6d3a: i18n adaptation: replace all hardcoded Chinese strings with English across 7 extensions
+
 ## 0.1.4
 
 ### Patch Changes
