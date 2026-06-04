@@ -99,10 +99,11 @@ const TIMEOUT_DISPLAY_DIVISOR = 1000;
 
 export interface AgentPoolOptions {
   maxConcurrency?: number;
+  /** Workflow name for soft-limit warning context */
+  runName?: string;
   /** Called once when totalCallCount first exceeds SOFT_MAX_AGENTS_WARNING */
   onSoftLimitReached?: (info: {
-    /** Agent description (from AgentCallOpts.description or generated callId) */
-    description: string;
+    runName: string;
     totalCalls: number;
   }) => void;
 }
@@ -113,8 +114,9 @@ export class AgentPool {
   private readonly maxConcurrency: number;
   private readonly queue: QueueEntry[] = [];
   private readonly onSoftLimitReached?: (
-    info: { description: string; totalCalls: number },
+    info: { runName: string; totalCalls: number },
   ) => void;
+  private readonly runName: string;
   private active = 0;
   private totalCallCount = 0;
   private softWarningSent = false;
@@ -123,9 +125,11 @@ export class AgentPool {
     if (typeof opts === "number") {
       this.maxConcurrency = opts;
       this.onSoftLimitReached = undefined;
+      this.runName = "unknown";
     } else {
       this.maxConcurrency = opts.maxConcurrency ?? DEFAULT_CONCURRENCY;
       this.onSoftLimitReached = opts.onSoftLimitReached;
+      this.runName = opts.runName ?? "unknown";
     }
   }
 
@@ -175,7 +179,7 @@ export class AgentPool {
     try {
       // Real spawn — increment counter and check soft limit
       this.totalCallCount++;
-      this.maybeEmitSoftWarning(opts.description ?? callId);
+      this.maybeEmitSoftWarning();
 
       const result = await this.spawnAndParse(opts, callId, startedAt);
       resolve(result);
@@ -195,7 +199,7 @@ export class AgentPool {
    * Emit the soft-limit warning once when totalCallCount exceeds
    * SOFT_MAX_AGENTS_WARNING. Errors in the callback are swallowed.
    */
-  private maybeEmitSoftWarning(description: string): void {
+  private maybeEmitSoftWarning(): void {
     if (
       this.totalCallCount > SOFT_MAX_AGENTS_WARNING &&
       !this.softWarningSent
@@ -203,7 +207,7 @@ export class AgentPool {
       this.softWarningSent = true;
       try {
         this.onSoftLimitReached?.({
-          description,
+          runName: this.runName,
           totalCalls: this.totalCallCount,
         });
       // eslint-disable-next-line taste/no-silent-catch

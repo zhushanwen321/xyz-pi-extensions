@@ -66,6 +66,8 @@ describe("state_lost + verifyStrategy", () => {
     // Type-level: serialized trace node type does not expose verifyStrategy
     type SerializedNode = ReturnType<typeof serializeInstance>["trace"][number];
     expectTypeOf<SerializedNode>().not.toHaveProperty("verifyStrategy");
+    // Runtime: verifyStrategy is stripped from serialized output
     expect(serialized.trace).toHaveLength(1);
+    expect((serialized.trace[0] as Record<string, unknown>).verifyStrategy).toBeUndefined();
   });
 });

@@ -186,7 +186,7 @@ export function serializeInstance(instance: WorkflowInstance): SerializedWorkflo
     name: instance.name,
     status: instance.status,
     callCache: Array.from(instance.callCache.entries()).map(([key, value]) => ({ key, value })),
-    trace: instance.trace,
+    trace: instance.trace.map(({ verifyStrategy: _verifyStrategy, ...rest }) => rest),
     worker: instance.worker,
     startedAt: instance.startedAt,
     pausedAt: instance.pausedAt,

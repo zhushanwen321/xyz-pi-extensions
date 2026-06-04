@@ -22,7 +22,7 @@ import { Worker } from "node:worker_threads";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { AgentPool, type AgentCallOpts, type AgentPoolOptions } from "./agent-pool.js";
+import { AgentPool, type AgentCallOpts } from "./agent-pool.js";
 import { resolveModel } from "./model-resolver.js";
 import { getWorkflow } from "./config-loader.js";
 import { appendTraceNode } from "./execution-trace.js";
@@ -106,7 +106,7 @@ export class WorkflowOrchestrator {
   private readonly workers = new Map<string, Worker>();
   private readonly runMetaMap = new Map<string, RunMeta>();
   private readonly retryCounts = new Map<string, number>();
-  private readonly agentPool: AgentPool;
+  private readonly runPools = new Map<string, AgentPool>();
   private readonly pi: ExtensionAPI;
   private readonly ctx: ExtensionContext;
   private readonly sessionDir: string;
@@ -118,8 +118,8 @@ export class WorkflowOrchestrator {
   constructor(
     pi: ExtensionAPI,
     ctx: ExtensionContext,
-    maxConcurrency?: number,
-    poolOptions?: AgentPoolOptions,
+    _maxConcurrency?: number,
+    _poolOptions?: Record<string, never>,
   ) {
     this.pi = pi;
     this.ctx = ctx;
@@ -135,29 +135,7 @@ export class WorkflowOrchestrator {
     if (fs.existsSync(sessionScopedDir)) {
       this.sessionDir = sessionScopedDir;
     }
-
-    // Merge default soft-limit callback with any caller-provided options
-    // Budget info is resolved inside the closure (AgentPool doesn't hold budget refs)
-    const defaultOnSoftLimit = ({ description, totalCalls }: {
-      description: string;
-      totalCalls: number;
-    }) => {
-      // Find the first running instance to include budget in the warning
-      const runningInstance = Array.from(this.instances.values())
-        .find((inst) => inst.status === "running");
-      const budgetPart = runningInstance
-        ? `Budget: ${runningInstance.budget.usedTokens}/${runningInstance.budget.maxTokens ?? "unlimited"} tokens.`
-        : "";
-      (this.pi as unknown as { sendUserMessage: (msg: string) => void }).sendUserMessage(
-        `[workflow] Reached ${totalCalls} agent calls (last: '${description}'). ${budgetPart} Consider aborting if this is unintended.`,
-      );
-    };
-
-    this.agentPool = new AgentPool({
-      maxConcurrency,
-      ...poolOptions,
-      onSoftLimitReached: poolOptions?.onSoftLimitReached ?? defaultOnSoftLimit,
-    });
+    // AgentPool is created per-workflow-run in `run()`, not in constructor
   }
 
   // ── Public API ──────────────────────────────────────────────
@@ -191,6 +169,21 @@ export class WorkflowOrchestrator {
       budget: { maxTokens: budgetTokens, maxTimeMs: budgetTimeMs },
     });
     instance.startedAt = new Date().toISOString();
+
+    // Create per-workflow AgentPool with soft-limit warning callback
+    // Each workflow run gets its own pool so agent call counts are isolated per AC-4.5
+    const pool = new AgentPool({
+      maxConcurrency: 4,
+      runName: instance.name,
+      onSoftLimitReached: ({ runName, totalCalls }) => {
+        (this.pi as unknown as { sendUserMessage: (msg: string) => void }).sendUserMessage(
+          `[workflow:${runName}] Reached ${totalCalls} agent calls. ` +
+          `Budget: ${instance.budget.usedTokens}/${instance.budget.maxTokens ?? "unlimited"} tokens. ` +
+          `Consider aborting if this is unintended.`,
+        );
+      },
+    });
+    this.runPools.set(runId, pool);
 
     this.runMetaMap.set(runId, { scriptSource, args, budgetTokens, budgetTimeMs });
     this.instances.set(runId, instance);
@@ -543,7 +536,7 @@ export class WorkflowOrchestrator {
     appendTraceNode(this.pi, runId, node);
     this.onTraceUpdate?.(runId);
 
-    // Enqueue via AgentPool with retry
+    // Enqueue via per-run AgentPool with retry
     this.executeWithRetry(runId, callId, enrichedOpts, instance, node);
   }
 
@@ -559,7 +552,12 @@ export class WorkflowOrchestrator {
     node: ExecutionTraceNode,
     attempt = 1,
   ): Promise<void> {
-    this.agentPool.enqueue(opts).then(async (poolResult) => {
+    const pool = this.runPools.get(runId);
+    if (!pool) {
+      // Pool already cleaned up (workflow terminated) — skip
+      return;
+    }
+    pool.enqueue(opts).then(async (poolResult) => {
       // P0-2: Stale state check — instance may have been paused/aborted during agent call
       if (instance.status !== "running") return;
 

@@ -404,7 +404,7 @@ describe("AgentPool — soft warning infrastructure", () => {
     expect(callback).toHaveBeenCalledWith(
       expect.objectContaining({
         totalCalls: count,
-        description: expect.any(String),
+        runName: expect.any(String),
       }),
     );
   });
@@ -507,11 +507,12 @@ describe("AgentPool — soft warning infrastructure", () => {
     expect(callback2).not.toHaveBeenCalled();
   });
 
-  it("callback_receives_description_and_totalCalls", () => {
+  it("callback_receives_runName_and_totalCalls", () => {
     const callback = vi.fn();
     const count = SOFT_MAX_AGENTS_WARNING + 1;
     const pool = new AgentPool({
       maxConcurrency: count,
+      runName: "test-workflow",
       onSoftLimitReached: callback,
     });
 
@@ -519,14 +520,14 @@ describe("AgentPool — soft warning infrastructure", () => {
     for (let i = 0; i < count; i++) {
       const proc = createMockProcess();
       mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
-      pool.enqueue({ prompt: `call-${i}`, description: `my-run-${i}` });
+      pool.enqueue({ prompt: `call-${i}` });
       completeSuccess(proc, `result-${i}`);
     }
 
     expect(callback).toHaveBeenCalledTimes(1);
     const arg = callback.mock.calls[0][0];
-    expect(arg).toHaveProperty("description");
-    expect(typeof arg.description).toBe("string");
+    expect(arg).toHaveProperty("runName");
+    expect(arg.runName).toBe("test-workflow");
     expect(arg).toHaveProperty("totalCalls");
     expect(arg.totalCalls).toBe(count);
   });

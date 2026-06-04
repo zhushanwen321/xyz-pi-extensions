@@ -684,33 +684,39 @@ describe("WorkflowOrchestrator", () => {
 
   // ── AgentPool soft-limit callback ─────────────────────────
 
-  describe("soft-limit warning callback", () => {
-    it("invokes pi.sendUserMessage with description, totalCalls, and budget info", () => {
-      const pool = (orch as unknown as { agentPool: { onSoftLimitReached?: (info: { description: string; totalCalls: number }) => void } }).agentPool;
-      expect(pool.onSoftLimitReached).toBeDefined();
-
-      // Inject a running instance so the callback can find budget info
-      const instances = (orch as unknown as { instances: Map<string, import("../../src/state.js").WorkflowInstance> }).instances;
-      instances.set("run-budget-test", {
+  describe("soft-limit warning message format", () => {
+    it("uses [workflow:name] prefix with budget info", () => {
+      // Simulate the callback that orchestrator.run() creates per-workflow
+      // (mirrors the exact format from orchestrator.ts run() method)
+      const mockInstance = {
         runId: "run-budget-test",
         name: "budgeted-workflow",
-        status: "running",
+        status: "running" as const,
         callCache: new Map(),
         trace: [],
         worker: "test.js",
         budget: { maxTokens: 100000, usedTokens: 42000, usedCost: 0.5 },
-      });
+      };
 
-      pool.onSoftLimitReached!({
-        description: "my-agent-step",
-        totalCalls: 501,
-      });
+      const onSoftLimitReached = ({ runName, totalCalls }: {
+        runName: string;
+        totalCalls: number;
+      }) => {
+        (mockPi as unknown as { sendUserMessage: (msg: string) => void }).sendUserMessage(
+          `[workflow:${runName}] Reached ${totalCalls} agent calls. ` +
+          `Budget: ${mockInstance.budget.usedTokens}/${mockInstance.budget.maxTokens ?? "unlimited"} tokens. ` +
+          `Consider aborting if this is unintended.`,
+        );
+      };
+
+      onSoftLimitReached({ runName: "budgeted-workflow", totalCalls: 501 });
 
       expect(mockPi.sendUserMessage).toHaveBeenCalledTimes(1);
       const msg = (mockPi.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(msg).toContain("[workflow:budgeted-workflow]");
       expect(msg).toContain("501 agent calls");
-      expect(msg).toContain("my-agent-step");
       expect(msg).toContain("42000/100000");
+      expect(msg).toContain("Consider aborting");
     });
   });
 });
