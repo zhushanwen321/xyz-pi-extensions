@@ -609,22 +609,22 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	// ── 事件处理器 ──────────────────────────────────────
-	pi.on("session_start", async (_event: any, ctx: ExtensionContext) => {
+	pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
 		reconstructState(ctx);
 		refreshDisplay(ctx);
 	});
-	pi.on("session_tree", async (_event: any, ctx: ExtensionContext) => {
+	pi.on("session_tree", async (_event: unknown, ctx: ExtensionContext) => {
 		reconstructState(ctx);
 		refreshDisplay(ctx);
 	});
 
 	// v3: 追踪用户消息轮数
-	pi.on("agent_start", async (_event: any, _ctx: ExtensionContext) => {
+	pi.on("agent_start", async (_event: unknown, _ctx: ExtensionContext) => {
 		userMessageCount++;
 	});
 
 	// v3: Task 6 - before_agent_start 注入 todo context (display: false)
-	pi.on("before_agent_start", async (_event: any, ctx: ExtensionContext) => {
+	pi.on("before_agent_start", async (_event: unknown, ctx: ExtensionContext) => {
 		try {
 			if (todos.length === 0) return undefined;
 
@@ -660,7 +660,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// v3: Task 5 - agent_end: auto-close + stall + verify 循环
-	pi.on("agent_end", async (_event: any, ctx: ExtensionContext) => {
+	pi.on("agent_end", async (_event: unknown, ctx: ExtensionContext) => {
 		try {
 			// 1. 检查验证失败 (completed + verifyText + attempts >= MAX)
 			const verifyFailed = todos.find(
