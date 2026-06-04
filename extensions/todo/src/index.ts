@@ -303,8 +303,7 @@ export default function (pi: ExtensionAPI) {
 	) {
 		let resultText = "";
 
-		// v3: 追踪 todo 工具调用轮数
-		userMessageCount++;
+		// v3: 记录本次 todo 工具调用轮次（userMessageCount 在 agent_start 中递增）
 		lastTodoCallCount = userMessageCount;
 
 		switch (params.action) {
@@ -690,13 +689,14 @@ export default function (pi: ExtensionAPI) {
 					t.verifyAttempts < MAX_VERIFY_ATTEMPTS,
 			);
 			if (needsVerify) {
-				needsVerify.verifyAttempts++;
-				refreshDisplay(ctx);
+				// 注意: verifyAttempts 不在 agent_end 中自动递增
+				// 增量在 update handler 中: AI 将 completed→in_progress 时显式表示验证失败
+				// 这确保任务可以保持在 completed 状态（AI 通过验证后不做任何操作）
 				pi.deliver({
 					deliverAs: "steer",
 					display: false,
 					customType: "todo-context",
-					message: `<todo_context>\n[TODO] Task #${needsVerify.id} "${needsVerify.text}" needs verification (attempt ${needsVerify.verifyAttempts}/${MAX_VERIFY_ATTEMPTS}):\n${needsVerify.verifyText}\n</todo_context>`,
+					message: `<todo_context>\n[TODO] Task #${needsVerify.id} "${needsVerify.text}" needs verification:\n${needsVerify.verifyText}\n</todo_context>`,
 				});
 				return;
 			}
