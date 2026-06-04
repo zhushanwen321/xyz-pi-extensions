@@ -177,7 +177,8 @@ function renderWidgetLines(todoList: Todo[], th: Theme): string[] {
 						: th.fg("dim", "\u25cb");
 		const id = th.fg("accent", `#${t.id}`);
 		const text = t.status === "completed" ? th.fg("dim", t.text) : th.fg("text", t.text);
-		lines.push(`  ${mark} ${id} ${text}`);
+		const verifyTag = t.verifyText ? th.fg("warning", " [待验证]") : th.fg("dim", " [无需验证]");
+		lines.push(`  ${mark} ${id} ${text}${verifyTag}`);
 	}
 
 	return lines;
