@@ -765,17 +765,17 @@ export default function (pi: ExtensionAPI) {
 			"\n- add: Batch add todos (requires texts array, optional verifyTexts)" +
 			"\n- update: Update a todo (requires id, optional status/text)" +
 			"\n- delete: Batch delete todos (requires ids array)" +
-			"\n- clear: Clear all todos and reset IDs",
-		promptSnippet: "Lightweight task list for tracking progress on multi-step work, without requiring /goal mode",
+			"\n- clear: Clear all todos and reset IDs"
+		+ "\nWhen /goal is active, do NOT use this tool — use goal_manager's add_subtasks instead.",
+		promptSnippet: "Use todo when breaking multi-step work into trackable items during normal (non-goal) conversation. Not for single-step operations.",
 		promptGuidelines: [
-			"[Usage] Use for multi-step tasks (3+ steps), progress tracking, or when explicitly requested",
-			"[Not for] Single-step operations, trivial tasks, or when goal_manager is already active",
-			"[Timing] Create before starting work, mark completed immediately when done",
-			"[Status] At most one in_progress at a time; mark completed immediately",
-			"[Granularity] One todo per verifiable work unit, 3-8 items ideal",
-			"[Completion] All todos auto-clear when completed (retained for 2 turns)",
-			"[Verification] When completing 3+ tasks, consider adding a verification step",
-			"[Scope] Do not use todo as a substitute for goal_manager — they serve different purposes",
+			"[Usage] 多步骤工作（3+步）时使用。AI 自发创建，无需用户触发",
+			"[Goal 冲突] /goal 激活后禁止使用 todo — 改用 add_subtasks",
+			"[批量优先] 完成多项任务时使用 updates[] 批量更新，减少工具调用次数",
+			"[验证] 复杂任务创建时附带 verifyText，定义验证逻辑。有 [待验证] 的任务必须在 completed 前执行验证",
+			"[验证失败] 验证失败 2 次后任务进入 failed 状态，由用户决定",
+			"[自动闭合] 全部完成后工具会在几轮后自动清理，无需手动 clear",
+			"[Not for] 单步操作、简单对话、/goal 已激活时",
 		],
 		parameters: TodoParams,
 
@@ -808,6 +808,21 @@ export default function (pi: ExtensionAPI) {
 		renderResult(result: unknown, options: { expanded: boolean }, theme: Theme, _context?: unknown) {
 			return renderTodoResult(result, options, theme);
 		},
+	});
+
+	// ── Message Renderer: todo-context ───────────────────
+	pi.registerMessageRenderer("todo-context", (message: any, _options: any, theme: Theme) => {
+		const text = message?.message || "";
+		const match = text.match(/\[TODO\]\s*(All\s+)?(\d+)?\s*tasks?\s*(pending|completed|auto-cleared)?/i);
+		if (match) {
+			const status = match[3]?.toLowerCase() || "";
+			const count = match[2] || "?";
+			if (status === "completed" || status === "auto-cleared") {
+				return new Text(`[TODO] All tasks completed ✓`, 0, 0);
+			}
+			return new Text(`[TODO] ${count} tasks pending`, 0, 0);
+		}
+		return new Text("[TODO] Pending tasks", 0, 0);
 	});
 
 	// ── Command: /todos ─────────────────────────────────
