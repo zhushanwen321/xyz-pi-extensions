@@ -1,0 +1,41 @@
+{
+  "test_execution": [
+    {"caseId": "TC-1-01", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/orchestrator.test.ts — persistState writes external JSONL file + pointer entry"], "evidence": "orchestrator.test.ts: persistState creates dir + appendFile + appendEntry('workflow-state-link')"},
+    {"caseId": "TC-1-02", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/orchestrator.test.ts — persistState appends to existing file"], "evidence": "orchestrator.test.ts: second persistState appends new line to same JSONL file"},
+    {"caseId": "TC-1-03", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/index.test.ts — reconstructState reads pointer entries and loads external files"], "evidence": "index.test.ts: reconstructState reads workflow-state-link entries, deduplicates by runId, loads JSONL files"},
+    {"caseId": "TC-1-04", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/index.test.ts — missing external file triggers ctx.ui.notify warning"], "evidence": "index.test.ts: reconstructState with missing file calls ctx.ui.notify with warning"},
+    {"caseId": "TC-1-05", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/index.test.ts — old workflow-state entries silently ignored"], "evidence": "index.test.ts: reconstructState filters only workflow-state-link customType, old entries skipped"},
+    {"caseId": "TC-1-06", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/state.test.ts — state_lost is terminal with empty transitions"], "evidence": "state.test.ts: isTerminal('state_lost') === true, VALID_TRANSITIONS['state_lost'] === []"},
+    {"caseId": "TC-1-07", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/state.test.ts — ALL_STATUSES includes state_lost"], "evidence": "state.test.ts: ALL_STATUSES contains 'state_lost', count = 8"},
+    {"caseId": "TC-1-08", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/state.test.ts — VALID_TRANSITIONS has 8 entries"], "evidence": "state.test.ts: Object.keys(VALID_TRANSITIONS).length === 8"},
+
+    {"caseId": "TC-2-01", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/index.test.ts — auto mode triggers ctx.ui.confirm"], "evidence": "index.test.ts: confirm mock called with title 'Run workflow?' and workflow name"},
+    {"caseId": "TC-2-02", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/index.test.ts — user declines returns status=declined"], "evidence": "index.test.ts: confirm returns false → details.status === 'declined', workflow not started"},
+    {"caseId": "TC-2-03", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/index.test.ts — user approves + session memory + appendEntry"], "evidence": "index.test.ts: confirm returns true → sessionApprovals.has(name), appendEntry('workflow-approval-memory') called"},
+    {"caseId": "TC-2-04", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/index.test.ts — second run skips confirm (session memory)"], "evidence": "index.test.ts: sessionApprovals already has name → confirm not called again"},
+    {"caseId": "TC-2-05", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/index.test.ts — session_start rehydrates from workflow-approval-memory entries"], "evidence": "index.test.ts: bootstrap with approval entries → sessionApprovals populated before tool call"},
+    {"caseId": "TC-2-06", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/index.test.ts — force mode skips confirm + sets confirmSkipped"], "evidence": "index.test.ts: mode=force → confirm not called, details.confirmSkipped === true"},
+    {"caseId": "TC-2-07", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/index.test.ts — tmp workflow always confirms (no memory)"], "evidence": "index.test.ts: source=tmp → confirm called every time regardless of sessionApprovals"},
+    {"caseId": "TC-2-08", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/index.test.ts — hasUI=false falls back to sendUserMessage"], "evidence": "index.test.ts: ctx.hasUI=false → confirm not called, sendUserMessage called instead"},
+
+    {"caseId": "TC-3-01", "round": 1, "passed": true, "execute_steps": ["file check — SKILL.md contains Verification Patterns section with Pattern A + Pattern B"], "evidence": "skills/workflow-script-format/SKILL.md: ## Verification Patterns section with code examples"},
+    {"caseId": "TC-3-02", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/tool-generate.test.ts — promptGuidelines array has verification rule"], "evidence": "tool-generate.test.ts: promptGuidelines contains entry with 'verifiable' keyword"},
+    {"caseId": "TC-3-03", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/state.test.ts — verifyStrategy optional field on ExecutionTraceNode"], "evidence": "state.test.ts: ExecutionTraceNode accepts verifyStrategy='internal'|'follow-up'|'none'"},
+    {"caseId": "TC-3-04", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/state.test.ts — serializeInstance output preserves verifyStrategy in trace"], "evidence": "state.test.ts: round-trip serialize→deserialize preserves verifyStrategy field (Omit is compile-time only)"},
+
+    {"caseId": "TC-4-01", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/agent-pool.test.ts — soft warning fires at 500 threshold"], "evidence": "agent-pool.test.ts: totalCallCount=500 → onSoftLimitReached callback fired"},
+    {"caseId": "TC-4-02", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/agent-pool.test.ts — soft warning fires only once"], "evidence": "agent-pool.test.ts: totalCallCount=600 → callback called exactly 1 time (softWarningSent=true guard)"},
+    {"caseId": "TC-4-03", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/agent-pool.test.ts — new AgentPool instance resets counter"], "evidence": "agent-pool.test.ts: new AgentPool() → totalCallCount=0, softWarningSent=false"},
+    {"caseId": "TC-4-04", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/agent-pool.test.ts — cache hit doesn't increment counter"], "evidence": "agent-pool.test.ts: same callId → totalCallCount unchanged (cache hit path skips increment)"},
+    {"caseId": "TC-4-05", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/agent-pool.test.ts — callback error doesn't affect dispatch"], "evidence": "agent-pool.test.ts: onSoftLimitReached throws → pool.run() still resolves successfully"},
+    {"caseId": "TC-4-06", "round": 1, "passed": true, "execute_steps": ["npx vitest run tests/agent-pool.test.ts — AgentPoolOptions interface accepts callback"], "evidence": "agent-pool.test.ts: new AgentPool({ maxConcurrency: 4, onSoftLimitReached: fn }) works"},
+
+    {"caseId": "TC-5-01", "round": 1, "passed": true, "execute_steps": ["file check — docs/workflow-research/07-下一步行动与决策.md exists with required sections"], "evidence": "file exists: 5 decision summaries + link to spec + out-of-scope + no ADR section"},
+    {"caseId": "TC-5-02", "round": 1, "passed": true, "execute_steps": ["file check — CONTEXT.md contains new terms"], "evidence": "CONTEXT.md: External State Pointer / State-Lost / Approval Memory / Verification Strategy"},
+    {"caseId": "TC-5-03", "round": 1, "passed": true, "execute_steps": ["file check — docs/adr/ has no new files (no ADR needed)"], "evidence": "docs/adr/ unchanged — all 5 decisions are reversible"},
+
+    {"caseId": "TC-6-01", "round": 1, "passed": true, "execute_steps": ["npx vitest run — 172 tests, 0 failures"], "evidence": "vitest output: 10 test files, 172 passed, 0 failed, 320ms"},
+    {"caseId": "TC-6-02", "round": 1, "passed": true, "execute_steps": ["npx tsc --noEmit — 0 errors (12/12 packages)"], "evidence": "pnpm -r typecheck: all 12 packages Done, 0 errors"},
+    {"caseId": "TC-6-03", "round": 1, "passed": true, "execute_steps": ["npx eslint — 0 errors, 90 warnings (all pre-existing)"], "evidence": "eslint output: 0 errors, 90 warnings (magic numbers in existing code)"}
+  ]
+}
