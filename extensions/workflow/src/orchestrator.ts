@@ -175,14 +175,15 @@ export class WorkflowOrchestrator {
     const pool = new AgentPool({
       maxConcurrency: 4,
       runName: instance.name,
-      onSoftLimitReached: ({ runName, totalCalls }) => {
+      onSoftLimitReached: ({ runName, totalCalls, budget }) => {
         (this.pi as unknown as { sendUserMessage: (msg: string) => void }).sendUserMessage(
           `[workflow:${runName}] Reached ${totalCalls} agent calls. ` +
-          `Budget: ${instance.budget.usedTokens}/${instance.budget.maxTokens ?? "unlimited"} tokens. ` +
+          `Budget: ${budget.usedTokens}/${budget.maxTokens ?? "unlimited"} tokens. ` +
           `Consider aborting if this is unintended.`,
         );
       },
     });
+    pool.setBudget(instance.budget);
     this.runPools.set(runId, pool);
 
     this.runMetaMap.set(runId, { scriptSource, args, budgetTokens, budgetTimeMs });

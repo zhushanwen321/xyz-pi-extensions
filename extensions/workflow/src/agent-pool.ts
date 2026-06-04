@@ -20,6 +20,8 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { randomUUID } from "node:crypto";
 
+import type { WorkflowBudget } from "./state.js";
+
 // ── Public types ──────────────────────────────────────────────
 
 export interface AgentCallOpts {
@@ -105,6 +107,7 @@ export interface AgentPoolOptions {
   onSoftLimitReached?: (info: {
     runName: string;
     totalCalls: number;
+    budget: WorkflowBudget;
   }) => void;
 }
 
@@ -114,12 +117,13 @@ export class AgentPool {
   private readonly maxConcurrency: number;
   private readonly queue: QueueEntry[] = [];
   private readonly onSoftLimitReached?: (
-    info: { runName: string; totalCalls: number },
+    info: { runName: string; totalCalls: number; budget: WorkflowBudget },
   ) => void;
   private readonly runName: string;
   private active = 0;
   private totalCallCount = 0;
   private softWarningSent = false;
+  private budgetRef?: WorkflowBudget;
 
   constructor(opts: AgentPoolOptions | number = {}) {
     if (typeof opts === "number") {
@@ -131,6 +135,11 @@ export class AgentPool {
       this.onSoftLimitReached = opts.onSoftLimitReached;
       this.runName = opts.runName ?? "unknown";
     }
+  }
+
+  /** Bind a budget object for soft-limit warning reporting. */
+  setBudget(budget: WorkflowBudget): void {
+    this.budgetRef = budget;
   }
 
   /** Number of currently in-flight agent calls. */
@@ -179,7 +188,7 @@ export class AgentPool {
     try {
       // Real spawn — increment counter and check soft limit
       this.totalCallCount++;
-      this.maybeEmitSoftWarning();
+      if (this.budgetRef) this.maybeEmitSoftWarning(this.budgetRef);
 
       const result = await this.spawnAndParse(opts, callId, startedAt);
       resolve(result);
@@ -199,7 +208,7 @@ export class AgentPool {
    * Emit the soft-limit warning once when totalCallCount exceeds
    * SOFT_MAX_AGENTS_WARNING. Errors in the callback are swallowed.
    */
-  private maybeEmitSoftWarning(): void {
+  private maybeEmitSoftWarning(budget: WorkflowBudget): void {
     if (
       this.totalCallCount > SOFT_MAX_AGENTS_WARNING &&
       !this.softWarningSent
@@ -209,6 +218,7 @@ export class AgentPool {
         this.onSoftLimitReached?.({
           runName: this.runName,
           totalCalls: this.totalCallCount,
+          budget,
         });
       // eslint-disable-next-line taste/no-silent-catch
       } catch {

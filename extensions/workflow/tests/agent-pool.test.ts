@@ -386,6 +386,7 @@ describe("AgentPool — soft warning infrastructure", () => {
       maxConcurrency: count,
       onSoftLimitReached: callback,
     });
+    pool.setBudget({ usedTokens: 0, usedCost: 0, maxTokens: 100000 });
     const anyPool = pool as any;
 
     // With concurrency >= 501, drain() starts all calls synchronously.
@@ -435,6 +436,7 @@ describe("AgentPool — soft warning infrastructure", () => {
       maxConcurrency: 600,
       onSoftLimitReached: callback,
     });
+    pool.setBudget({ usedTokens: 0, usedCost: 0 });
     const anyPool = pool as any;
 
     // Simulate 600 real spawns — callback should fire exactly once
@@ -480,10 +482,12 @@ describe("AgentPool — soft warning infrastructure", () => {
       maxConcurrency: 501,
       onSoftLimitReached: callback1,
     });
+    pool1.setBudget({ usedTokens: 0, usedCost: 0 });
     const pool2 = new AgentPool({
       maxConcurrency: 100,
       onSoftLimitReached: callback2,
     });
+    pool2.setBudget({ usedTokens: 0, usedCost: 0 });
 
     // pool1: 501 calls -> should fire
     for (let i = 0; i < SOFT_MAX_AGENTS_WARNING + 1; i++) {
@@ -507,7 +511,7 @@ describe("AgentPool — soft warning infrastructure", () => {
     expect(callback2).not.toHaveBeenCalled();
   });
 
-  it("callback_receives_runName_and_totalCalls", () => {
+  it("callback_receives_runName_budget_and_totalCalls", () => {
     const callback = vi.fn();
     const count = SOFT_MAX_AGENTS_WARNING + 1;
     const pool = new AgentPool({
@@ -515,6 +519,7 @@ describe("AgentPool — soft warning infrastructure", () => {
       runName: "test-workflow",
       onSoftLimitReached: callback,
     });
+    pool.setBudget({ usedTokens: 5000, usedCost: 0.5, maxTokens: 100000 });
 
     // Fire 501 calls
     for (let i = 0; i < count; i++) {
@@ -530,6 +535,8 @@ describe("AgentPool — soft warning infrastructure", () => {
     expect(arg.runName).toBe("test-workflow");
     expect(arg).toHaveProperty("totalCalls");
     expect(arg.totalCalls).toBe(count);
+    expect(arg).toHaveProperty("budget");
+    expect(arg.budget).toEqual({ usedTokens: 5000, usedCost: 0.5, maxTokens: 100000 });
   });
 
   it("workflow_continues_after_callback_throws", async () => {
@@ -541,6 +548,7 @@ describe("AgentPool — soft warning infrastructure", () => {
       maxConcurrency: count,
       onSoftLimitReached: callback,
     });
+    pool.setBudget({ usedTokens: 0, usedCost: 0 });
     const _anyPool = pool as any;
 
     // Enqueue all 502 calls — with concurrency=502 all start immediately

@@ -698,18 +698,19 @@ describe("WorkflowOrchestrator", () => {
         budget: { maxTokens: 100000, usedTokens: 42000, usedCost: 0.5 },
       };
 
-      const onSoftLimitReached = ({ runName, totalCalls }: {
+      const onSoftLimitReached = ({ runName, totalCalls, budget }: {
         runName: string;
         totalCalls: number;
+        budget: { usedTokens: number; maxTokens?: number; usedCost: number };
       }) => {
         (mockPi as unknown as { sendUserMessage: (msg: string) => void }).sendUserMessage(
           `[workflow:${runName}] Reached ${totalCalls} agent calls. ` +
-          `Budget: ${mockInstance.budget.usedTokens}/${mockInstance.budget.maxTokens ?? "unlimited"} tokens. ` +
+          `Budget: ${budget.usedTokens}/${budget.maxTokens ?? "unlimited"} tokens. ` +
           `Consider aborting if this is unintended.`,
         );
       };
 
-      onSoftLimitReached({ runName: "budgeted-workflow", totalCalls: 501 });
+      onSoftLimitReached({ runName: "budgeted-workflow", totalCalls: 501, budget: mockInstance.budget });
 
       expect(mockPi.sendUserMessage).toHaveBeenCalledTimes(1);
       const msg = (mockPi.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
