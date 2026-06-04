@@ -50,10 +50,12 @@ const TodoParams = Type.Object({
 				id: Type.Number(),
 				status: Type.Optional(Type.String()),
 				text: Type.Optional(Type.String()),
+				verified: Type.Optional(Type.Boolean({ description: "Required true when marking completed on tasks with verifyText" })),
 			}),
 			{ description: "Batch updates array (takes priority over single id/status/text)" },
 		),
 	),
+	verified: Type.Optional(Type.Boolean({ description: "Required true when marking completed on a task with verifyText" })),
 });
 
 // ── 常量 ────────────────────────────────────────────
@@ -183,8 +185,6 @@ function renderWidgetLines(todoList: Todo[], th: Theme): string[] {
 
 // buildRender 已从 model.ts 导入
 
-/** v3: 自动清空延迟轮数（全部完成后保留 N 轮用户消息） */
-const AUTO_CLEAR_DELAY_ROUNDS = 2;
 /** v3: Stall 检测阈值（无 todo 活动轮数 → stall 提醒） */
 const STALL_THRESHOLD = 5;
 /** v3: 提醒间隔（上次 todo 调用后轮数 → 提醒） */
@@ -283,7 +283,6 @@ export default function (pi: ExtensionAPI) {
 
 	// v3: 用户消息轮数与提醒追踪
 	let userMessageCount = 0;
-	let allCompletedAtCount: number | null = null;
 	let lastTodoCallCount = 0;
 	let stallNotified = false;
 	let verifyNudgedIds = new Set<number>(); // 已发送过验证提醒的任务 ID，避免重复 nag
@@ -301,7 +300,7 @@ export default function (pi: ExtensionAPI) {
 
 	// ── Tool execute handler ─────────────────────────────
 	function executeTodoAction(
-		params: { action: string; text?: string; id?: number; texts?: string[]; ids?: number[]; status?: string; verifyTexts?: string[]; updates?: Array<{ id: number; status?: string; text?: string }> },
+		params: { action: string; text?: string; id?: number; texts?: string[]; ids?: number[]; status?: string; verifyTexts?: string[]; updates?: Array<{ id: number; status?: string; text?: string; verified?: boolean }>; verified?: boolean },
 		ctx: ExtensionContext,
 	) {
 		let resultText = "";
@@ -350,7 +349,6 @@ export default function (pi: ExtensionAPI) {
 				nextId = addResult.newNextId;
 				resultText = addResult.resultText!;
 				// v3: 新增 todo 表示未全部完成
-				allCompletedAtCount = null;
 				break;
 			}
 
@@ -373,13 +371,21 @@ export default function (pi: ExtensionAPI) {
 					todos = result.updatedTodos;
 					resultText = result.resultText || "";
 
-					// v3: 检查是否所有 todo 已完成
-					const allCompleted = todos.every((t) => t.status === "completed");
-					if (allCompleted && todos.length > 0) {
-						allCompletedAtCount = userMessageCount;
-					} else {
-						allCompletedAtCount = null;
+					// 检查是否有验证拦截
+					if (result.verifyRequired && result.verifyRequired.length > 0) {
+						return {
+							content: [{ type: "text" as const, text: resultText }],
+							details: {
+								action: "update" as const,
+								todos: [...todos],
+								nextId,
+								error: "verify required",
+								_render: buildRender(todos),
+							} as TodoDetails,
+						};
 					}
+
+
 					break;
 				}
 				// Single update: original logic continues
@@ -454,6 +460,24 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 
+				// 验证拦截：有 verifyText 的任务 → completed 时需要 verified=true
+				if (
+					params.status === "completed" &&
+					params.verified !== true &&
+					todo.verifyText
+				) {
+					return {
+						content: [{ type: "text" as const, text: `⚠️ Task #${todo.id} "${todo.text}" has verification requirement.\nPlease verify first: ${todo.verifyText}\nThen call: todo update(id=${todo.id}, status=completed, verified=true)` }],
+						details: {
+							action: "update" as const,
+							todos: [...todos],
+							nextId,
+							error: "verify required",
+							_render: buildRender(todos),
+						} as TodoDetails,
+					};
+				}
+
 				// T5 完成引导：判断是否是最后一个 pending 即将完成
 				const incompleteBefore = todos.filter(
 					(t) => t.status !== "completed",
@@ -485,13 +509,7 @@ export default function (pi: ExtensionAPI) {
 					resultText += "\n\nAll todos completed. Please summarize your work.";
 				}
 
-				// v3: 检查是否所有 todo 已完成
-				const allCompleted = todos.every((t) => t.status === "completed");
-				if (allCompleted && todos.length > 0) {
-					allCompletedAtCount = userMessageCount;
-				} else {
-					allCompletedAtCount = null;
-				}
+
 				break;
 			}
 
@@ -541,7 +559,6 @@ export default function (pi: ExtensionAPI) {
 				nextId = 1;
 				resultText = count > 0 ? `Cleared ${count} todos` : "No todos to clear";
 				// v3: 手动清空后重置
-				allCompletedAtCount = null;
 				break;
 			}
 
@@ -578,7 +595,6 @@ export default function (pi: ExtensionAPI) {
 
 		// v3: 重置提醒追踪状态
 		userMessageCount = 0;
-		allCompletedAtCount = null;
 		lastTodoCallCount = 0;
 		stallNotified = false;
 		verifyNudgedIds = new Set();
@@ -613,6 +629,13 @@ export default function (pi: ExtensionAPI) {
 			for (let j = staleIndices.length - 1; j >= 0; j--) {
 				entries.splice(staleIndices[j], 1);
 			}
+		}
+
+		// 修复 auto-clear：重建后如果所有 todo 都 completed，直接清空
+		// 所以必须在 reconstructState 中处理 all-completed 状态
+		if (todos.length > 0 && todos.every((t) => t.status === "completed")) {
+			todos = [];
+			nextId = 1;
 		}
 	}
 
@@ -666,59 +689,12 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	// v3: Task 5 - agent_end: auto-close + stall + verify 循环
-	pi.on("agent_end", async (_event: unknown, ctx: ExtensionContext) => {
+	// agent_end: stall + reminder (验证拦截在 executeTodoAction，auto-clear 在 reconstructState)
+	pi.on("agent_end", async (_event: unknown, _ctx: ExtensionContext) => {
 		try {
-			// Helper: 注入 steer context（进 AI 上下文）
-			const injectContext = (content: string) => {
-				pi.sendUserMessage(content, { deliverAs: "steer" });
-			};
-
-			// 1. 检查验证失败 (completed + verifyText + attempts >= MAX)
-			const verifyFailed = todos.find(
-				(t) =>
-					t.status === "completed" &&
-					t.verifyText &&
-					t.verifyAttempts >= MAX_VERIFY_ATTEMPTS,
-			);
-			if (verifyFailed) {
-				verifyFailed.status = "failed";
-				refreshDisplay(ctx);
-				injectContext(`<todo_context>\n[TODO] Turn ${userMessageCount} — Task #${verifyFailed.id} "${verifyFailed.text}" failed verification after ${MAX_VERIFY_ATTEMPTS} attempts.\n</todo_context>`);
-				return;
-			}
-
-			// 2. 检查待验证任务 (completed + verifyText + attempts < MAX + 未提醒过)
-			const needsVerify = todos.find(
-				(t) =>
-					t.status === "completed" &&
-					t.verifyText &&
-					t.verifyAttempts < MAX_VERIFY_ATTEMPTS &&
-					!verifyNudgedIds.has(t.id),
-			);
-			if (needsVerify) {
-				verifyNudgedIds.add(needsVerify.id);
-				injectContext(`<todo_context>\n[TODO] Turn ${userMessageCount} — Task #${needsVerify.id} "${needsVerify.text}" needs verification:\n${needsVerify.verifyText}\n</todo_context>`);
-			}
-
-			// 3. 自动清空: 全部完成经过 2 轮
-			if (
-				allCompletedAtCount !== null &&
-				userMessageCount - allCompletedAtCount >= AUTO_CLEAR_DELAY_ROUNDS
-			) {
-				const count = todos.length;
-				todos = [];
-				nextId = 1;
-				allCompletedAtCount = null;
-				refreshDisplay(ctx);
-				injectContext(`<todo_context>\n[TODO] Turn ${userMessageCount} — All ${count} todos completed, list auto-cleared.\n</todo_context>`);
-				return;
-			}
-
-			// 4. Stall 检测: 5 轮未调用 todo 且还有未完成任务
+			// Stall 检测: 5 轮未调用 todo 且还有未完成任务
 			if (
 				todos.length > 0 &&
-				allCompletedAtCount === null &&
 				!stallNotified &&
 				userMessageCount - lastTodoCallCount >= STALL_THRESHOLD
 			) {
@@ -727,25 +703,38 @@ export default function (pi: ExtensionAPI) {
 				const completedCount = todos.filter((t) => t.status === "completed").length;
 				const pendingText = todos
 					.filter((t) => t.status !== "completed")
-					.map((t) => `#${t.id}: ${t.text}`)
+					.map((t) => {
+						const verifyTag = t.verifyText
+							? ` [待验证: ${t.verifyText}]`
+							: " [无需验证]";
+						return `#${t.id}: ${t.text}${verifyTag}`;
+					})
 					.join("\n");
-				injectContext(`<todo_context>\n[TODO] Turn ${userMessageCount} — ${pendingCount} tasks pending, ${completedCount} completed\n${pendingText}\n</todo_context>`);
+				pi.sendUserMessage(`<todo_context>\n[TODO] Turn ${userMessageCount} — ${pendingCount} tasks pending, ${completedCount} completed\n${pendingText}\n\nRules:\n- 优先使用 updates[] 批量更新\n- [待验证] 的任务必须传 verified=true 才能标记 completed\n- 全部完成后工具自动闭合\n</todo_context>`, { deliverAs: "steer" });
 				return;
 			}
 
-			// 5. 提醒: 3 轮未调用 todo
+			// 提醒: 3 轮未调用 todo
 			if (
 				todos.length > 0 &&
-				allCompletedAtCount === null &&
 				userMessageCount - lastTodoCallCount >= REMINDER_INTERVAL
 			) {
-				injectContext(`<todo_context>\n[TODO] Turn ${userMessageCount} — You have ${todos.length} tasks. Consider updating progress.\n</todo_context>`);
+				const pendingCount = todos.filter((t) => t.status !== "completed").length;
+				const completedCount = todos.filter((t) => t.status === "completed").length;
+				const pendingText = todos
+					.filter((t) => t.status !== "completed")
+					.map((t) => {
+						const verifyTag = t.verifyText
+							? ` [待验证: ${t.verifyText}]`
+							: " [无需验证]";
+						return `#${t.id}: ${t.text}${verifyTag}`;
+					})
+					.join("\n");
+				pi.sendUserMessage(`<todo_context>\n[TODO] Turn ${userMessageCount} — ${pendingCount} tasks pending, ${completedCount} completed\n${pendingText}\n\nRules:\n- 优先使用 updates[] 批量更新\n- [待验证] 的任务必须传 verified=true 才能标记 completed\n- 全部完成后工具自动闭合\n</todo_context>`, { deliverAs: "steer" });
 				return;
 			}
 		} catch (e) {
-			// 非关键路径，异常时静默降级
 			console.debug("[todo] agent_end error:", e);
-			return;
 		}
 	});
 
@@ -767,9 +756,9 @@ export default function (pi: ExtensionAPI) {
 			"[Usage] 多步骤工作（3+步）时使用。AI 自发创建，无需用户触发",
 			"[Goal 冲突] /goal 激活后禁止使用 todo — 改用 add_subtasks",
 			"[批量优先] 完成多项任务时使用 updates[] 批量更新，减少工具调用次数",
-			"[验证] 复杂任务创建时附带 verifyText，定义验证逻辑。有 [待验证] 的任务必须在 completed 前执行验证",
+			"[验证] 有 verifyText 的任务，必须传 verified=true 才能标记 completed。先验证后确认",
 			"[验证失败] 验证失败 2 次后任务进入 failed 状态，由用户决定",
-			"[自动闭合] 全部完成后工具会在几轮后自动清理，无需手动 clear",
+			"[自动闭合] 全部完成后工具自动清理，无需手动 clear",
 			"[Not for] 单步操作、简单对话、/goal 已激活时",
 		],
 		parameters: TodoParams,

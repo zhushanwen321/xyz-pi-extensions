@@ -498,6 +498,101 @@ describe("verifyAttempts increment on re-open", () => {
 		expect(todo.verifyAttempts).toBe(0); // no verifyText → no increment
 	});
 });
+// ── verified 参数拦截 ────────────────────────────
+
+describe("verified parameter - update with verifyText", () => {
+	it("should block completed on verifyText task without verified=true", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "fix auth", status: "in_progress", verifyText: "check status codes", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "completed" }]);
+
+		expect(result.error).toBeUndefined();
+		expect(result.verifyRequired).toBeDefined();
+		expect(result.verifyRequired!.length).toBe(1);
+		expect(result.verifyRequired![0].id).toBe(1);
+		expect(result.verifyRequired![0].verifyText).toBe("check status codes");
+		expect(result.updatedTodos[0].status).toBe("in_progress"); // 未变更
+	});
+
+	it("should allow completed on verifyText task with verified=true", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "fix auth", status: "in_progress", verifyText: "check status codes", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "completed", verified: true }]);
+
+		expect(result.error).toBeUndefined();
+		expect(result.verifyRequired).toBeUndefined();
+		expect(result.updatedTodos[0].status).toBe("completed");
+	});
+
+	it("should allow completed on task without verifyText (no verified needed)", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "simple task", status: "in_progress", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "completed" }]);
+
+		expect(result.error).toBeUndefined();
+		expect(result.verifyRequired).toBeUndefined();
+		expect(result.updatedTodos[0].status).toBe("completed");
+	});
+
+	it("should block batch completed when any has verifyText without verified", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "task A", status: "in_progress", verifyText: "check A", verifyAttempts: 0 },
+			{ id: 2, text: "task B", status: "in_progress", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [
+			{ id: 1, status: "completed" },
+			{ id: 2, status: "completed" },
+		]);
+
+		expect(result.verifyRequired).toBeDefined();
+		expect(result.verifyRequired!.length).toBe(1); // 只有 #1 有 verifyText
+		expect(result.verifyRequired![0].id).toBe(1);
+		expect(result.updatedTodos[0].status).toBe("in_progress"); // 未变更
+		expect(result.updatedTodos[1].status).toBe("in_progress"); // 未变更
+	});
+
+	it("should allow batch completed when all verifyText tasks have verified=true", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "task A", status: "in_progress", verifyText: "check A", verifyAttempts: 0 },
+			{ id: 2, text: "task B", status: "in_progress", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [
+			{ id: 1, status: "completed", verified: true },
+			{ id: 2, status: "completed" },
+		]);
+
+		expect(result.error).toBeUndefined();
+		expect(result.verifyRequired).toBeUndefined();
+		expect(result.updatedTodos[0].status).toBe("completed");
+		expect(result.updatedTodos[1].status).toBe("completed");
+	});
+
+	it("verifyRequired result should include verifyText for AI guidance", () => {
+		const todos: Todo[] = [
+			{ id: 3, text: "fix login", status: "in_progress", verifyText: "密码错误时返回正确错误码", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [{ id: 3, status: "completed" }]);
+
+		expect(result.resultText).toContain("verified=true");
+		expect(result.resultText).toContain("验证标准");
+		expect(result.resultText).toContain("密码错误时返回正确错误码");
+	});
+
+	it("should allow non-completed status changes without verified", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "task A", status: "pending", verifyText: "check A", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "in_progress" }]);
+
+		expect(result.error).toBeUndefined();
+		expect(result.verifyRequired).toBeUndefined();
+		expect(result.updatedTodos[0].status).toBe("in_progress");
+	});
+});
+
 // ── buildRender ───────────────────────────────────────
 
 describe("buildRender", () => {

@@ -155,17 +155,23 @@ export interface UpdateResult {
 	updatedTodos: Todo[];
 	error?: string;
 	resultText?: string;
+	/** 拦截的任务 ID 及其 verifyText（需要验证） */
+	verifyRequired?: Array<{ id: number; text: string; verifyText: string }>;
 }
 
 /**
  * 处理 todo batch update 的核心逻辑。
  * All-or-nothing: 任一验证失败，所有变更不生效。
+ *
+ * verified 参数：有 verifyText 的任务标记 completed 时，必须传 verified=true 才能通过。
+ * 否则返回 verifyRequired 列表，由调用方决定如何处理。
+ *
  * @param currentTodos 当前 todo 列表
  * @param updates 批量更新项数组
  */
 export function updateTodos(
 	currentTodos: Todo[],
-	updates: Array<{ id: number; status?: string; text?: string }>,
+	updates: Array<{ id: number; status?: string; text?: string; verified?: boolean }>,
 ): UpdateResult {
 	// 验证: no duplicate ids
 	const ids = updates.map((u) => u.id);
@@ -201,6 +207,27 @@ export function updateTodos(
 			};
 		}
 	}
+
+	// 验证拦截：有 verifyText 的任务 → completed 时需要 verified=true
+	const verifyRequiredItems: Array<{ id: number; text: string; verifyText: string }> = [];
+	for (const u of updates) {
+		if (u.status !== "completed" || u.verified === true) continue;
+		const todo = currentTodos.find((t) => t.id === u.id);
+		if (todo?.verifyText) {
+			verifyRequiredItems.push({ id: todo.id, text: todo.text, verifyText: todo.verifyText });
+		}
+	}
+	if (verifyRequiredItems.length > 0) {
+		const lines = verifyRequiredItems.map(
+			(v) => `  #${v.id}: ${v.text} — 验证标准: ${v.verifyText}`,
+		);
+		return {
+			updatedTodos: currentTodos, // 不变更
+			resultText: `⚠️ 以下任务有验证要求，请先验证通过后再传 verified=true 标记完成:\n${lines.join("\n")}`,
+			verifyRequired: verifyRequiredItems,
+		};
+	}
+
 	// Apply all (safe since all validated)
 	const updated = currentTodos.map((t) => {
 		const u = updates.find((u) => u.id === t.id);
