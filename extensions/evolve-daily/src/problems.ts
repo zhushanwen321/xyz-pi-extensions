@@ -49,6 +49,23 @@ interface TrackedItemTemplate {
   status: string;
 }
 
+// ── Severity thresholds ──────────────────────────────
+
+const COMPACT_HIGH_THRESHOLD = 3;
+const COMPACT_MEDIUM_THRESHOLD = 2;
+const CONTEXT_UTILIZATION_MEDIUM = 0.7;
+const CONTEXT_UTILIZATION_HIGH = 0.9;
+const GOAL_LOW_COMPLETION_HIGH = 0.5;
+const GOAL_HIGH_CANCEL = 0.4;
+const GOAL_LOW_COMPLETION_MEDIUM = 0.7;
+const GOAL_MEDIUM_CANCEL = 0.2;
+const SUBAGENT_FAILURE_MEDIUM = 0.2;
+const SUBAGENT_FAILURE_HIGH = 0.4;
+const PARAM_ERROR_MEDIUM = 0.1;
+const PARAM_ERROR_HIGH = 0.25;
+const WORKFLOW_PHASE_RATIO_HIGH = 0.7;
+const WORKFLOW_PHASE_RATIO_MEDIUM = 0.5;
+
 export const PROBLEM_REGISTRY: ProblemDefinition[] = [
   {
     id: "compact-frequency",
@@ -58,8 +75,8 @@ export const PROBLEM_REGISTRY: ProblemDefinition[] = [
       metric: "custom",
       custom: (data) => {
         const rate = data.compactsPerSession as number;
-        if (rate >= 3) return "high";
-        if (rate >= 2) return "medium";
+        if (rate >= COMPACT_HIGH_THRESHOLD) return "high";
+        if (rate >= COMPACT_MEDIUM_THRESHOLD) return "medium";
         return "low";
       },
     },
@@ -86,7 +103,7 @@ export const PROBLEM_REGISTRY: ProblemDefinition[] = [
     category: "context",
     severity: {
       metric: "rate",
-      thresholds: { medium: 0.7, high: 0.9 },
+      thresholds: { medium: CONTEXT_UTILIZATION_MEDIUM, high: CONTEXT_UTILIZATION_HIGH },
     },
     detector: {
       events: ["turn_end"],
@@ -111,7 +128,7 @@ export const PROBLEM_REGISTRY: ProblemDefinition[] = [
     category: "subagent",
     severity: {
       metric: "rate",
-      thresholds: { medium: 0.2, high: 0.4 },
+      thresholds: { medium: SUBAGENT_FAILURE_MEDIUM, high: SUBAGENT_FAILURE_HIGH },
     },
     detector: {
       events: ["tool_result"],
@@ -136,7 +153,7 @@ export const PROBLEM_REGISTRY: ProblemDefinition[] = [
     category: "tool",
     severity: {
       metric: "rate",
-      thresholds: { medium: 0.1, high: 0.25 },
+      thresholds: { medium: PARAM_ERROR_MEDIUM, high: PARAM_ERROR_HIGH },
     },
     detector: {
       events: ["tool_result"],
@@ -163,8 +180,8 @@ export const PROBLEM_REGISTRY: ProblemDefinition[] = [
       metric: "custom",
       custom: (data) => {
         const maxPhaseRatio = data.maxPhaseDurationRatio as number;
-        if (maxPhaseRatio > 0.7) return "high";
-        if (maxPhaseRatio > 0.5) return "medium";
+        if (maxPhaseRatio > WORKFLOW_PHASE_RATIO_HIGH) return "high";
+        if (maxPhaseRatio > WORKFLOW_PHASE_RATIO_MEDIUM) return "medium";
         return "low";
       },
     },
@@ -194,8 +211,8 @@ export const PROBLEM_REGISTRY: ProblemDefinition[] = [
       custom: (data) => {
         const completionRate = data.taskCompletionRate as number;
         const cancelRate = data.taskCancelRate as number;
-        if (completionRate < 0.5 || cancelRate > 0.4) return "high";
-        if (completionRate < 0.7 || cancelRate > 0.2) return "medium";
+        if (completionRate < GOAL_LOW_COMPLETION_HIGH || cancelRate > GOAL_HIGH_CANCEL) return "high";
+        if (completionRate < GOAL_LOW_COMPLETION_MEDIUM || cancelRate > GOAL_MEDIUM_CANCEL) return "medium";
         return "low";
       },
     },

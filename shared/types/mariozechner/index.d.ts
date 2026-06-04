@@ -20,9 +20,12 @@ declare module "@mariozechner/pi-coding-agent" {
 		hasUI: boolean;
 		ui: {
 			notify(msg: string, type?: string): void;
-			setStatus(id: string, msg: any): void;
-			setWidget(id: string, widget: any): void;
-			setFooter(factory: any): void;
+			confirm(title: string, message: string, opts?: unknown): Promise<boolean>;
+			select(title: string, options: string[], opts?: unknown): Promise<string | undefined>;
+			input(title: string, placeholder?: string, opts?: unknown): Promise<string | undefined>;
+			setStatus(key: string, text: string | undefined): void;
+			setWidget(key: string, content: unknown, options?: unknown): void;
+			setFooter(factory: unknown): void;
 			theme: Theme;
 			custom<T = void>(factory: (tui: any, theme: any, kb: any, done: () => void) => any): Promise<T>;
 		};
@@ -75,7 +78,7 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type Theme = any;
 	export type ThemeColor = string;
 	export type ExtensionCommandContext = any;
-	export type AgentToolResult<T = any> = { content: Array<{ type: string; text: string }>; details: T };
+	export type AgentToolResult<T = any> = { content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; details: T };
 	export type TurnEndEvent = any;
 	export type SessionBeforeCompactEvent = any;
 	export type SessionStartEvent = any;
@@ -126,7 +129,7 @@ declare module "@earendil-works/pi-coding-agent" {
 	export * from "@mariozechner/pi-coding-agent";
 	// Additional exports used by subagent/extension
 	export type Message = any;
-	export type AgentToolResult<T = any> = { content: Array<{ type: string; text: string }>; details: T };
+	export type AgentToolResult<T = any> = { content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; details: T };
 	export function parseFrontmatter<T = Record<string, unknown>>(text: string): { frontmatter: T; body: string };
 }
 declare module "@earendil-works/pi-tui" {

@@ -211,7 +211,7 @@ TEST_PKGS=()
 for f in $(git diff --cached --name-only --diff-filter=ACM | grep '\.ts$' | grep -v __tests__ | grep -v vitest.config); do
   # 提取包路径: extensions/statusline/src/foo.ts → extensions/statusline
   pkg_dir=$(echo "$f" | grep -oE '^(extensions|shared)/[^/]+' || true)
-  if [[ -n "$pkg_dir" && -d "$pkg_dir/src/__tests__" ]] && ! echo "${TEST_PKGS[@]}" | grep -q "$pkg_dir"; then
+  if [[ -n "$pkg_dir" && -d "$pkg_dir/src/__tests__" ]] && ! printf '%s\n' "${TEST_PKGS[@]:-}" | grep -q "$pkg_dir"; then
     TEST_PKGS+=("$pkg_dir")
   fi
 done

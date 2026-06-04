@@ -740,12 +740,13 @@ export default function goalExtension(pi: ExtensionAPI) {
 		],
 		parameters: GoalManagerParams,
 
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi tool callback type
 		async execute(_toolCallId: string, params: Static<typeof GoalManagerParams>, _signal: AbortSignal | undefined, _onUpdate: any, ctx: ExtensionContext) {
 			try {
 				return await executeGoalAction(pi, session, params, ctx);
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
-				const inputSummary = JSON.stringify(params, null, 2);
+				const inputSummary = JSON.stringify(params, null, 2); // eslint-disable-line no-magic-numbers -- JSON.stringify indent
 				return {
 					content: [{ type: "text", text: `${msg}\n\nInput: ${inputSummary}` }],
 					isError: true,
@@ -753,6 +754,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 			}
 		},
 
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi render callback args
 		renderCall(args: any, theme: Theme) {
 			let text = theme.fg("toolTitle", theme.bold("goal_manager ")) + theme.fg("muted", args.action);
 			if (args.tasks) text += ` ${theme.fg("dim", `(${args.tasks.length} tasks)`)}`;
@@ -764,6 +766,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi render callback args
 		renderResult(result: any, { expanded }: any, theme: Theme) {
 			const details = result.details as GoalManagerDetails | undefined;
 			if (!details || !Array.isArray(details.tasks)) {
@@ -818,7 +821,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 	});
 
 	// ── Event: before_agent_start ──────────────────────
-
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
 	pi.on("before_agent_start", async (_event: any, ctx: ExtensionContext) => {
 		return handleBeforeAgentStart(pi, session, ctx);
 	});
@@ -831,7 +834,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 	});
 
 	// ── Event: turn_end ────────────────────────────────
-
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
 	pi.on("turn_end", async (_event: any, ctx: ExtensionContext) => {
 		if (!session.state) return;
 		session.state.currentTurnIndex++;
@@ -839,7 +842,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 	});
 
 	// ── Event: message_end (token accounting) ──────────
-
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
 	pi.on("message_end", async (event: any, _ctx: ExtensionContext) => {
 		if (!session.state || !isActiveStatus(session.state.status)) return;
 		if (event.message.role !== "assistant") return;
@@ -858,13 +861,13 @@ export default function goalExtension(pi: ExtensionAPI) {
 	});
 
 	// ── Event: agent_end ───────────────────────────────
-
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
 	pi.on("agent_end", async (_event: any, ctx: ExtensionContext) => {
 		await handleAgentEnd(pi, session, ctx);
 	});
 
 	// ── Event: session_start (state reconstruction) ───
-
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
 	pi.on("session_start", async (_event: any, ctx: ExtensionContext) => {
 		reconstructGoalState(pi, session, ctx);
 		if (session.state) {
@@ -882,6 +885,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 	];
 
 	for (const customType of goalMessageTypes) {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi render callback args
 		pi.registerMessageRenderer(customType, (message: any, _options: any, theme: Theme) => {
 			const prefix =
 				message.customType === "goal-context-exceeded"

@@ -148,11 +148,14 @@ export function loadConfig(
 
 // ── 命令参数解析 ──
 
+// 命令参数最小部分数（target + action）
+const MIN_COMMAND_TOKENS = 2;
+
 export function parseLevelArgs(
   args: string,
 ): { target: "global" | "l0" | "l1" | "l2" | "mc" | "budget"; action: "on" | "off" } | null {
   const tokens = args.trim().split(/\s+/);
-  if (tokens.length < 2) {
+  if (tokens.length < MIN_COMMAND_TOKENS) {
     return null;
   }
 

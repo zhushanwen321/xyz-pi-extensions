@@ -23,6 +23,7 @@ import { loadConfig } from "./config";
 const SECONDS_PER_DAY = 86400;
 const SECONDS_PER_HOUR = 3600;
 const SECONDS_PER_MINUTE = 60;
+const MS_PER_SEC = 1000;
 
 // ── 业务阈值常�� ─────────────────────────────────────────
 
@@ -31,6 +32,18 @@ const ZAI_SAFETY_VALVE = 95;
 
 /** peak 时段窗口使用率阈值：超过此值时，若 peak 与窗口前半段重叠则禁用 */
 const PEAK_WINDOW_THRESHOLD = 50;
+
+/** rollingWindowHours 默认值 */
+const DEFAULT_ROLLING_WINDOW_HOURS = 5;
+
+/** 未配置 priority 时的回退值 */
+const FALLBACK_PRIORITY = 99;
+
+/** 百分比上限（用于 minimax remaining → used 转换） */
+const PERCENT_FULL = 100;
+
+/** 窗口二等分除数 */
+const HALF = 2;
 
 // ── 公共 API ────────────────────────────────────────────
 
@@ -125,7 +138,7 @@ export function computePeakRecommend(
 		return { result: "avoid", reason: `Peak hours, ${quota.pct}% used (near limit)` };
 	}
 
-	const winHours = planCfg.rollingWindowHours ?? 5;
+	const winHours = planCfg.rollingWindowHours ?? DEFAULT_ROLLING_WINDOW_HOURS;
 	const winSec = winHours * SECONDS_PER_HOUR;
 
 	if (quota.resetSec === null || quota.resetSec <= 0 || quota.resetSec >= winSec) {
@@ -134,8 +147,8 @@ export function computePeakRecommend(
 	}
 
 	const elapsedSec = winSec - quota.resetSec;
-	const windowStartMs = now.getTime() - elapsedSec * 1000;
-	const windowMidMs = windowStartMs + (winSec / 2) * 1000;
+	const windowStartMs = now.getTime() - elapsedSec * MS_PER_SEC;
+	const windowMidMs = windowStartMs + (winSec / HALF) * MS_PER_SEC;
 
 	const peakStartMs = new Date(now).setHours(peak.start, 0, 0, 0);
 	const peakEndMs = new Date(now).setHours(peak.end, 0, 0, 0);
@@ -197,7 +210,7 @@ export function resolveModelForScene(scene: string, now?: Date): string | undefi
 			if (!entry) continue;
 
 			const planCfg = config.plans[pcfg.plan];
-			const priority = planCfg?.priority ?? 99;
+			const priority = planCfg?.priority ?? FALLBACK_PRIORITY;
 
 			// Only mark as peak avoid if THIS candidate's plan matches the peak plan
 			const isPeakAvoid = pcfg.plan === peakPlanName && peakRecommend.result === "avoid";
@@ -280,10 +293,10 @@ function extractSingleQuota(planName: string, cacheRec: Record<string, unknown>)
 		const general = models.find((m) => m.model_name === "general") as Record<string, unknown> | undefined;
 		if (general) {
 			const remPct = general.current_interval_remaining_percent as number | undefined;
-			const used = remPct !== undefined ? Math.max(0, Math.min(100, 100 - remPct)) : null;
+			const used = remPct !== undefined ? Math.max(0, Math.min(PERCENT_FULL, PERCENT_FULL - remPct)) : null;
 			const remainsMs = general.remains_time as number | undefined;
 			if (used !== null) {
-				return { pct: used, resetSec: remainsMs ? Math.ceil(remainsMs / 1000) : null, label: planName };
+				return { pct: used, resetSec: remainsMs ? Math.ceil(remainsMs / MS_PER_SEC) : null, label: planName };
 			}
 		}
 	}
@@ -317,7 +330,7 @@ function parseIsoRemaining(iso: string): number {
 	if (!iso) return 0;
 	const target = new Date(iso).getTime();
 	const now = Date.now();
-	return Math.max(0, Math.ceil((target - now) / 1000));
+	return Math.max(0, Math.ceil((target - now) / MS_PER_SEC));
 }
 
 function countTurnsAfter(entries: SessionEntries, startIdx: number): number {

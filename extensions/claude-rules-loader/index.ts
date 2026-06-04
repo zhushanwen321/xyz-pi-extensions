@@ -98,7 +98,8 @@ function findMarkdownFiles(dir: string, visited?: Set<string>): string[] {
       }
     }
   } catch {
-    // EACCES, ENOENT — skip silently
+    // EACCES, ENOENT — skip silently (directory may not exist)
+    return results;
   }
 
   return results.sort();
@@ -136,6 +137,7 @@ export default function claudeRulesLoader(pi: ExtensionAPI) {
   let unconditionalRules: RuleFile[] = [];
   let conditionalRules: RuleFile[] = [];
 
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
 	pi.on("session_start", async (_event: any, ctx: any) => {
     const homeDir = process.env.HOME || process.env.USERPROFILE || "";
     const allRules: RuleFile[] = [];
@@ -198,6 +200,7 @@ export default function claudeRulesLoader(pi: ExtensionAPI) {
     }
   });
 
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
 	pi.on("before_agent_start", async (event: any) => {
     const parts: string[] = [];
 

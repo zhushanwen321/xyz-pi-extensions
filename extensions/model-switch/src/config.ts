@@ -20,6 +20,8 @@ export { CONFIG_PATH };
  * 加载模型策略配置文件。
  * 返回 null 表示无配置或不兼容版本。
  */
+const SUPPORTED_CONFIG_VERSION = 2;
+
 export function loadConfig(): ModelPolicy | null {
 	if (!existsSync(CONFIG_PATH)) {
 		return null;
@@ -46,7 +48,7 @@ export function loadConfig(): ModelPolicy | null {
 		return null;
 	}
 
-	if (config.version !== 2) {
+	if (config.version !== SUPPORTED_CONFIG_VERSION) {
 		console.warn(`[model-switch] Unsupported config version: ${String(config.version)}`);
 		return null;
 	}

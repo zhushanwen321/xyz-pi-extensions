@@ -27,6 +27,15 @@ import {
 	runSingleVisionAgent,
 } from "./spawn.js";
 
+// ── Constants ───────────────────────────────────────
+
+const FORK_ID_RADIX = 36;
+const FORK_ID_SLICE_START = 2;
+const FORK_ID_SLICE_END = 8;
+const MS_PER_SEC = 1000;
+const OUTPUT_PREVIEW_SLICE_LIMIT = 120;
+const TEXT_SPLIT_FIRST_N = 2;
+
 // ──────────────────────── Parameters ────────────────────────
 
 const AnalyzeImageParams = Type.Object({
@@ -63,10 +72,11 @@ function createForkSessionFile(parentSessionFile: string): string | undefined {
 		if (!fs.existsSync(parentSessionFile)) return undefined;
 		const dir = path.join(os.tmpdir(), "pi-vision");
 		fs.mkdirSync(dir, { recursive: true });
-		const forkFile = path.join(dir, `fork-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jsonl`);
+		const forkFile = path.join(dir, `fork-${Date.now()}-${Math.random().toString(FORK_ID_RADIX).slice(FORK_ID_SLICE_START, FORK_ID_SLICE_END)}.jsonl`);
 		fs.copyFileSync(parentSessionFile, forkFile);
 		return forkFile;
-	} catch {
+	} catch (forkErr) {
+		console.warn("[vision] createForkSessionFile failed:", forkErr);
 		return undefined;
 	}
 }
@@ -98,7 +108,7 @@ export default function visionExtension(pi: ExtensionAPI) {
 			"Use context: 'fork' when the image analysis needs to understand prior discussion (e.g. analyzing a screenshot of an error the user just described)",
 		],
 
-		async execute(_toolCallId: string, params: Static<typeof AnalyzeImageParams>, signal: AbortSignal | undefined, onUpdate: any, ctx: ExtensionContext) {
+		async execute(_toolCallId: string, params: Static<typeof AnalyzeImageParams>, signal: AbortSignal | undefined, onUpdate: ((update: unknown) => void) | undefined, ctx: ExtensionContext) {
 			cleanupOldTempFiles();
 
 			// ── Validate image path ──
@@ -200,7 +210,7 @@ export default function visionExtension(pi: ExtensionAPI) {
 			};
 		},
 
-		renderCall(args: any, theme: Theme) {
+		renderCall(args: Record<string, unknown>, theme: Theme) {
 			const rawPath = args.image_path as string;
 			const home = os.homedir();
 			const shortPath = rawPath.startsWith(home) ? `~${rawPath.slice(home.length)}` : rawPath;
@@ -213,7 +223,7 @@ export default function visionExtension(pi: ExtensionAPI) {
 			);
 		},
 
-		renderResult(result: any, { expanded }: any, theme: Theme) {
+		renderResult(result: { content: Array<{ type: string; text: string }>; details?: VisionDetails; isError?: boolean }, { expanded }: { expanded?: boolean }, theme: Theme) {
 			const text = result.content[0];
 			if (!text || text.type !== "text") return new Text("(no output)", 0, 0);
 
@@ -229,7 +239,7 @@ export default function visionExtension(pi: ExtensionAPI) {
 			lines.push(`${icon} ${theme.fg("toolTitle", theme.bold("analyze_image"))} ${theme.fg("dim", model)}`);
 
 			if (details?.durationMs) {
-				const secs = (details.durationMs / 1000).toFixed(1);
+				const secs = (details.durationMs / MS_PER_SEC).toFixed(1);
 				const forkLabel = details.context === "fork" ? ` ${theme.fg("dim", "· forked")}` : "";
 				lines.push(`  ${theme.fg("dim", `${secs}s`)}${forkLabel}`);
 			}
@@ -238,8 +248,8 @@ export default function visionExtension(pi: ExtensionAPI) {
 				lines.push("");
 				lines.push(text.text);
 			} else {
-				const firstLine = text.text.split("\n", 2)[0] ?? "";
-				lines.push(`  ${theme.fg("dim", `⎿  ${firstLine.slice(0, 120)}`)}`);
+				const firstLine = text.text.split("\n", TEXT_SPLIT_FIRST_N)[0] ?? "";
+				lines.push(`  ${theme.fg("dim", `⎿  ${firstLine.slice(0, OUTPUT_PREVIEW_SLICE_LIMIT)}`)}`);
 			}
 
 			return new Text(lines.join("\n"), 0, 0);
