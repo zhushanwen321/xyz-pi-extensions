@@ -2,8 +2,7 @@
 name: code-review
 description: >-
   审查代码变更。触发词："review"、"审查代码"、"code review"、
-  "帮我看看代码"。审查当前 worktree 的变更，关注 monorepo 子包间
-  依赖、类型安全、扩展接口兼容性。仅用于 xyz-pi-extensions 项目。
+  "帮我看看代码"。仅用于 xyz-pi-extensions 项目。
 ---
 
 # Code Review
@@ -45,8 +44,8 @@ git diff main...HEAD
 在人工审查前，先运行 fallow 静态分析获取基线数据：
 
 ```bash
-# 安装 fallow（如未安装）
-npm install -g @sourcemeta/fallow
+# 检查 fallow 是否已安装
+npm list -g @sourcemeta/fallow 2>/dev/null || npm install -g @sourcemeta/fallow
 
 # 扫描当前变更涉及的文件
 fallow scan $(git diff main...HEAD --name-only)
@@ -74,3 +73,12 @@ Pass / 需修改 / 阻塞
 ## 亮点
 ...
 ```
+
+---
+
+## 标记说明
+
+| 标记 | 含义 | 修改约束 |
+|------|------|----------|
+| `[MANDATORY]` | 流程强制要求。不遵守会导致流程失败或产生严重后果 | 必须严格遵守 |
+| `[OPTIONAL]` | 可选步骤。可根据实际情况决定是否执行 | 可根据项目需求调整 |

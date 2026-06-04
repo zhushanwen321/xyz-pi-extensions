@@ -2,8 +2,7 @@
 name: merge
 description: >-
   合并分支并发布。触发词："合并"、"merge"、"发布"、"release"、
-  "上线"。执行 8 阶段合并发布流程，changeset 独立版本模式，
-  npm registry 交付物验证。仅用于 xyz-pi-extensions 项目。
+  "上线"。仅用于 xyz-pi-extensions 项目。
 ---
 
 # Merge
@@ -12,7 +11,7 @@ description: >-
 
 ### 阶段 0: 初始化
 ```bash
-cd ~/Code/xyz-pi-extensions-workspace
+cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace
 bash ~/.agents/skills/merge-worktree/stages/0-init.sh main patch
 ```
 
@@ -41,6 +40,7 @@ pnpm changeset version
 
 # bump 根版本（monorepo 迭代序号）
 npm version patch --no-git-tag-version
+# $NEW_VER 来自 bump 后的根 package.json 版本号
 NEW_VER=$(node -p "require('./package.json').version")
 
 # commit + tag + push
@@ -58,7 +58,7 @@ bash ~/.agents/skills/merge-worktree/stages/5-release.sh
 
 ### 阶段 6: 交付物验证（项目特化）
 
-验证 npm registry 包：
+以下验证脚本已在本地，直接执行即可：
 
 ```bash
 for f in extensions/*/package.json shared/*/package.json; do
@@ -82,3 +82,12 @@ bash ~/.agents/skills/merge-worktree/stages/7-cleanup.sh
 - **发布委托**：`scripts/publish.sh` 消费 changeset + bump 根版本
 - **交付物**：npm registry 包，无 GitHub Release assets
 - **Custom Hooks**：当前无
+
+---
+
+## 标记说明
+
+| 标记 | 含义 | 修改约束 |
+|------|------|----------|
+| `[MANDATORY]` | 流程强制要求。不遵守会导致流程失败或产生严重后果 | 必须严格遵守 |
+| `[OPTIONAL]` | 可选步骤。可根据实际情况决定是否执行 | 可根据项目需求调整 |
