@@ -11,6 +11,7 @@ import {
   compressContext,
   type CompressionStats,
   type AgentMessage as CompressorMessage,
+  type ContextUsage as CompressorContextUsage,
 } from "./compressor";
 import { handleContextEngineeringCommand, handleContextStatsCommand } from "./commands";
 
@@ -62,13 +63,13 @@ export default function contextEngineeringExtension(pi: ExtensionAPI): void {
     frozenFreshState = createFrozenFreshState();
   });
 
-  pi.on("context", (event: any, ctx: any) => {
+  pi.on("context", (event: { messages: unknown[] }, ctx: { getContextUsage(): unknown }) => {
     try {
       // Pi Extension API types differ from our internal message types.
       // Both sides define the same shape but TypeScript can't verify across packages.
       // If Pi's message format changes, compressContext will gracefully fail via the catch below.
       const msgs = event.messages as unknown as CompressorMessage[];
-      const result = compressContext(msgs, config, store, ctx.getContextUsage() as unknown as Parameters<typeof compressContext>[3], frozenFreshState);
+      const result = compressContext(msgs, config, store, ctx.getContextUsage() as unknown as CompressorContextUsage, frozenFreshState);
       addStats(cumulativeStats, result.stats);
       return { messages: result.messages as unknown as (typeof event.messages)[number][] };
     } catch (err) {
@@ -86,7 +87,7 @@ export default function contextEngineeringExtension(pi: ExtensionAPI): void {
     description: "Recall original content compressed by context engineering. Use when you need the full content of an expired, truncated, or condensed tool result.",
     promptSnippet: "recall_context(id) — retrieve original content compressed by context engineering",
     parameters: RecallParams,
-    execute: async (_tcId: string, params: any, _sig: any, _upd: any, _ctx: any) => recallResult(params.id, store),
+    execute: async (_tcId: string, params: { id: string }, _sig: unknown, _upd: unknown, _ctx: unknown) => recallResult(params.id, store),
   });
 
   pi.registerCommand("context-engineering", {

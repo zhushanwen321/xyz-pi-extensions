@@ -20,6 +20,8 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { randomUUID } from "node:crypto";
 
+import type { WorkflowBudget } from "./state.js";
+
 // ── Public types ──────────────────────────────────────────────
 
 export interface AgentCallOpts {
@@ -90,18 +92,54 @@ interface ParsedPipelineEvent {
 
 // ── Constants ─────────────────────────────────────────────────
 
+export const SOFT_MAX_AGENTS_WARNING = 500;
 const DEFAULT_CONCURRENCY = 4;
 const PROCESS_TIMEOUT_MS = 120_000; // 2 minutes
+const UUID_SLICE_LENGTH = 8;
+const JSON_INDENT = 2;
+const TIMEOUT_DISPLAY_DIVISOR = 1000;
+
+export interface AgentPoolOptions {
+  maxConcurrency?: number;
+  /** Workflow name for soft-limit warning context */
+  runName?: string;
+  /** Called once when totalCallCount first exceeds SOFT_MAX_AGENTS_WARNING */
+  onSoftLimitReached?: (info: {
+    runName: string;
+    totalCalls: number;
+    budget: WorkflowBudget;
+  }) => void;
+}
 
 // ── AgentPool ─────────────────────────────────────────────────
 
 export class AgentPool {
   private readonly maxConcurrency: number;
   private readonly queue: QueueEntry[] = [];
+  private readonly onSoftLimitReached?: (
+    info: { runName: string; totalCalls: number; budget: WorkflowBudget },
+  ) => void;
+  private readonly runName: string;
   private active = 0;
+  private totalCallCount = 0;
+  private softWarningSent = false;
+  private budgetRef?: WorkflowBudget;
 
-  constructor(maxConcurrency = DEFAULT_CONCURRENCY) {
-    this.maxConcurrency = maxConcurrency;
+  constructor(opts: AgentPoolOptions | number = {}) {
+    if (typeof opts === "number") {
+      this.maxConcurrency = opts;
+      this.onSoftLimitReached = undefined;
+      this.runName = "unknown";
+    } else {
+      this.maxConcurrency = opts.maxConcurrency ?? DEFAULT_CONCURRENCY;
+      this.onSoftLimitReached = opts.onSoftLimitReached;
+      this.runName = opts.runName ?? "unknown";
+    }
+  }
+
+  /** Bind a budget object for soft-limit warning reporting. */
+  setBudget(budget: WorkflowBudget): void {
+    this.budgetRef = budget;
   }
 
   /** Number of currently in-flight agent calls. */
@@ -124,7 +162,7 @@ export class AgentPool {
    */
   enqueue(opts: AgentCallOpts): Promise<AgentResult> {
     return new Promise<AgentResult>((resolve) => {
-      const callId = `agent-${randomUUID().slice(0, 8)}`;
+      const callId = `agent-${randomUUID().slice(0, UUID_SLICE_LENGTH)}`;
       const entry: QueueEntry = { opts, resolve, callId, startedAt: Date.now() };
       this.queue.push(entry);
       this.drain();
@@ -148,6 +186,10 @@ export class AgentPool {
     const { opts, resolve, callId, startedAt } = entry;
 
     try {
+      // Real spawn — increment counter and check soft limit
+      this.totalCallCount++;
+      if (this.budgetRef) this.maybeEmitSoftWarning(this.budgetRef);
+
       const result = await this.spawnAndParse(opts, callId, startedAt);
       resolve(result);
     } catch (err) {
@@ -159,6 +201,29 @@ export class AgentPool {
         success: false,
         error: message,
       });
+    }
+  }
+
+  /**
+   * Emit the soft-limit warning once when totalCallCount exceeds
+   * SOFT_MAX_AGENTS_WARNING. Errors in the callback are swallowed.
+   */
+  private maybeEmitSoftWarning(budget: WorkflowBudget): void {
+    if (
+      this.totalCallCount > SOFT_MAX_AGENTS_WARNING &&
+      !this.softWarningSent
+    ) {
+      this.softWarningSent = true;
+      try {
+        this.onSoftLimitReached?.({
+          runName: this.runName,
+          totalCalls: this.totalCallCount,
+          budget,
+        });
+      // eslint-disable-next-line taste/no-silent-catch
+      } catch {
+        // callback errors must not affect dispatch
+      }
     }
   }
 
@@ -177,7 +242,7 @@ export class AgentPool {
     // output valid JSON matching the schema, then append the prompt.
     let prompt = opts.prompt;
     if (opts.schema) {
-      const schemaJson = JSON.stringify(opts.schema, null, 2);
+      const schemaJson = JSON.stringify(opts.schema, null, JSON_INDENT);
       prompt = [
         `You MUST respond with ONLY a valid JSON object conforming to this JSON schema:`,
         ``,
@@ -246,6 +311,7 @@ export class AgentPool {
     if (pipeline.output.trim() && opts.schema) {
       try {
         parsedOutput = JSON.parse(pipeline.output);
+      // eslint-disable-next-line taste/no-silent-catch
       } catch {
         // Output is not valid JSON — leave parsedOutput undefined
       }
@@ -300,6 +366,7 @@ async function runPiProcess(
         try {
           const event = JSON.parse(line) as Record<string, unknown>;
           processJsonlEvent(event, pipeline);
+        // eslint-disable-next-line taste/no-silent-catch
         } catch {
           // Skip malformed JSON lines
         }
@@ -316,7 +383,7 @@ async function runPiProcess(
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      stderr += `Process timed out after ${PROCESS_TIMEOUT_MS / 1000}s, sending SIGKILL`;
+      stderr += `Process timed out after ${PROCESS_TIMEOUT_MS / TIMEOUT_DISPLAY_DIVISOR}s, sending SIGKILL`;
       proc.kill("SIGKILL");
       resolve(1);
     }, PROCESS_TIMEOUT_MS);
@@ -336,6 +403,7 @@ async function runPiProcess(
         try {
           const event = JSON.parse(buffer) as Record<string, unknown>;
           processJsonlEvent(event, pipeline);
+        // eslint-disable-next-line taste/no-silent-catch
         } catch {
           // Ignore trailing garbage
         }

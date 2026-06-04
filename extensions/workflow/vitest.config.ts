@@ -1,0 +1,26 @@
+import { defineConfig } from "vitest/config";
+import path from "node:path";
+
+/**
+ * Vitest config for tests/ directory (tests that need to import src/index.ts).
+ *
+ * External Pi SDK packages are aliased to shared/types stubs or inline mocks
+ * so that vitest's module resolution succeeds without the real packages installed.
+ */
+export default defineConfig({
+  test: {
+    include: ["tests/**/*.test.ts"],
+  },
+  resolve: {
+    alias: {
+      // Pi SDK packages → mock modules (vitest will use vi.mock for actual logic)
+      "@mariozechner/pi-coding-agent": path.resolve(__dirname, "../../shared/types/mariozechner/index.ts"),
+      "@mariozechner/pi-ai": path.resolve(__dirname, "mocks/pi-ai.ts"),
+      "@mariozechner/pi-tui": path.resolve(__dirname, "mocks/pi-tui.ts"),
+      "@earendil-works/pi-tui": path.resolve(__dirname, "mocks/pi-tui.ts"),
+      "@earendil-works/pi-ai": path.resolve(__dirname, "mocks/pi-ai.ts"),
+      "@earendil-works/pi-coding-agent": path.resolve(__dirname, "../../shared/types/mariozechner/index.ts"),
+      "typebox": path.resolve(__dirname, "mocks/typebox.ts"),
+    },
+  },
+});

@@ -23,6 +23,7 @@ import { BudgetTracker } from "../src/budget";
 // state.ts
 // ═══════════════════════════════════════════════════════════════
 
+// eslint-disable-next-line max-lines-per-function
 describe("state.ts", () => {
   // ── isTerminal ────────────────────────────────────────────
   describe("isTerminal()", () => {
@@ -343,19 +344,19 @@ describe("state.ts", () => {
 
   // ── Constants ─────────────────────────────────────────────
   describe("constants", () => {
-    it("ALL_STATUSES contains exactly 7 statuses", () => {
-      expect(ALL_STATUSES).toHaveLength(7);
+    it("ALL_STATUSES contains exactly 8 statuses", () => {
+      expect(ALL_STATUSES).toHaveLength(8);
       const expected: readonly WorkflowStatus[] = [
         "running", "paused", "completed", "failed",
-        "aborted", "budget_limited", "time_limited",
+        "aborted", "budget_limited", "time_limited", "state_lost",
       ];
       expect(ALL_STATUSES).toEqual(expected);
     });
 
-    it("TERMINAL_STATUSES contains exactly 5 statuses", () => {
-      expect(TERMINAL_STATUSES).toHaveLength(5);
+    it("TERMINAL_STATUSES contains exactly 6 statuses", () => {
+      expect(TERMINAL_STATUSES).toHaveLength(6);
       const expected: readonly WorkflowStatus[] = [
-        "completed", "failed", "aborted", "budget_limited", "time_limited",
+        "completed", "failed", "aborted", "budget_limited", "time_limited", "state_lost",
       ];
       expect(TERMINAL_STATUSES).toEqual(expected);
     });

@@ -161,8 +161,9 @@ export function normalizeRows(
 			if (!norm) continue;
 			// 优先使用 providers.json 配置的 label，fallback 到 normalize 返回的 label
 			rows.push({ name: p.label || norm.label, wins: norm.wins });
-		} catch {
-			// eslint-disable-next-line taste/no-silent-catch -- 单 provider normalize 失败不应拖垮整个 statusline
+		// eslint-disable-next-line taste/no-silent-catch
+		} catch (normalizeErr) {
+			console.warn("[statusline] normalize failed:", normalizeErr);
 		}
 	}
 	return rows;

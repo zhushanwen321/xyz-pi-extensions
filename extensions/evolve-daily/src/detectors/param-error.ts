@@ -2,6 +2,13 @@
 
 import type { ProblemDefinition } from "../problems";
 
+// ── ID generation constants ──────────────────────────
+
+const RANDOM_ID_RADIX = 36;
+const RANDOM_ID_SLICE_START = 2;
+const RANDOM_ID_SLICE_END = 7;
+const ERROR_PREVIEW_MAX_LENGTH = 200;
+
 export interface ParamErrorTrackedItem {
   id: string;
   problemId: "tool-param-validation";
@@ -70,12 +77,12 @@ export function createParamErrorDetector(problem: ProblemDefinition) {
     }): ParamErrorTrackedItem {
       const errorMessage = event.content ?? "";
       return {
-        id: `param-error-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id: `param-error-${Date.now()}-${Math.random().toString(RANDOM_ID_RADIX).slice(RANDOM_ID_SLICE_START, RANDOM_ID_SLICE_END)}`,
         problemId: problem.id as "tool-param-validation",
         sessionId: "",
         toolName: event.toolName ?? "unknown",
         errorType: classifyError(errorMessage),
-        errorPreview: errorMessage.slice(0, 200),
+        errorPreview: errorMessage.slice(0, ERROR_PREVIEW_MAX_LENGTH),
         status: "pending",
       };
     },

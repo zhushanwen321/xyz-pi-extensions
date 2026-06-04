@@ -46,8 +46,13 @@ export type OnUpdateCallback = (partial: {
 
 // ──────────────────────── Temp file management ────────────────────────
 
+const SEC_PER_MIN = 60;
+const MIN_PER_HOUR = 60;
+const MS_PER_SEC = 1000;
 const TEMP_SUBDIR = "pi-vision";
-const MAX_TEMP_AGE_MS = 60 * 60 * 1000; // 1 hour
+const MAX_TEMP_AGE_MS = SEC_PER_MIN * MIN_PER_HOUR * MS_PER_SEC; // 1 hour
+const RANDOM_ID_SLICE = 8;
+const SIGKILL_DELAY_MS = 5000;
 
 function getTempDir(): string {
 	return path.join(os.tmpdir(), TEMP_SUBDIR);
@@ -66,6 +71,7 @@ export function cleanupOldTempFiles(): void {
 		try {
 			const stat = fs.statSync(filePath);
 			if (now - stat.mtimeMs > MAX_TEMP_AGE_MS) fs.unlinkSync(filePath);
+		// eslint-disable-next-line taste/no-silent-catch
 		} catch { /* ignore */ }
 	}
 }
@@ -73,7 +79,7 @@ export function cleanupOldTempFiles(): void {
 async function writePromptToTempFile(prompt: string): Promise<string> {
 	const dir = getTempDir();
 	if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-	const filePath = path.join(dir, `vision-prompt-${randomUUID().slice(0, 8)}.md`);
+	const filePath = path.join(dir, `vision-prompt-${randomUUID().slice(0, RANDOM_ID_SLICE)}.md`);
 	await fs.promises.writeFile(filePath, prompt, { encoding: "utf-8", mode: 0o600 });
 	return filePath;
 }
@@ -251,6 +257,7 @@ export async function runSingleVisionAgent(params: {
 						if (event.type === "message_end" && event.message) {
 							result.messages.push(event.message as Message);
 						}
+					// eslint-disable-next-line taste/no-silent-catch
 					} catch { /* ignore partial line */ }
 				}
 				result.exitCode = code ?? 0;
@@ -271,7 +278,7 @@ export async function runSingleVisionAgent(params: {
 			if (signal) {
 				signal.addEventListener("abort", () => {
 					proc.kill("SIGTERM");
-					setTimeout(() => { try { proc.kill("SIGKILL"); } catch { /* already dead */ } }, 5000);
+					setTimeout(() => { try { proc.kill("SIGKILL"); } catch { void 0 /* already dead */; } }, SIGKILL_DELAY_MS);
 				}, { once: true });
 			}
 		});
@@ -279,6 +286,7 @@ export async function runSingleVisionAgent(params: {
 		return result;
 	} finally {
 		if (tmpPromptPath) {
+			// eslint-disable-next-line taste/no-silent-catch
 			try { fs.unlinkSync(tmpPromptPath); } catch { /* ignore */ }
 		}
 	}

@@ -43,10 +43,11 @@ export function registerGenerateTool(pi: ExtensionAPI) {
       "Keep workflow scripts under 100 lines. Scripts are orchestration glue (agent calls + flow control), not business logic.",
       "Always show the generated script path and wait for user confirmation. After confirmation, use workflow-run with the exact name and mode='force' to execute.",
       "Positive: user runs /workflow pre-commit and no script exists → workflow-generate. Or workflow-run auto mode returns 'no match' → workflow-generate. Negative: user says 'check types' → use bash directly, not workflow-generate.",
+      "Each agent() call should be verifiable. For trivial steps, embed self-check instructions in the prompt and require a structured output. For critical steps, add a follow-up agent() that explicitly verifies the previous result. Do NOT skip verification entirely — every workflow must have at least one verification point per critical execution path.",
     ],
     parameters: WorkflowGenerateParams,
 
-    async execute(_toolCallId: string, params: Static<typeof WorkflowGenerateParams>, _signal: AbortSignal | undefined, _onUpdate: any, _ctx: any): Promise<any> {
+    async execute(_toolCallId: string, params: Static<typeof WorkflowGenerateParams>, _signal: AbortSignal | undefined, _onUpdate: unknown, _ctx: unknown): Promise<{ content: Array<{ type: "text"; text: string }>; details: { action: string; path: string; name: string; status: string } | undefined; isError?: boolean }> {
       const name = params.name as string;
       const script = params.script as string;
 
@@ -58,6 +59,7 @@ export function registerGenerateTool(pi: ExtensionAPI) {
       if (/\bimport\s+(?:type\s+)?[\w{*]/.test(strippedScript)) {
         return {
           content: [{ type: "text", text: "Script uses ESM 'import' syntax. Workflow scripts run in a CJS Worker — use require() instead. Example: const fs = require('node:fs');" }],
+          details: undefined,
           isError: true,
         };
       }
@@ -66,6 +68,7 @@ export function registerGenerateTool(pi: ExtensionAPI) {
       if (otherExports && !hasExportMeta) {
         return {
           content: [{ type: "text", text: "Script uses ESM 'export' syntax (non-meta). Workflow scripts run in a CJS Worker — use 'const meta = {...}' at the top level instead of 'export const meta'." }],
+          details: undefined,
           isError: true,
         };
       }
@@ -74,6 +77,7 @@ export function registerGenerateTool(pi: ExtensionAPI) {
       if (!script.includes("const meta") && !script.includes("export const meta")) {
         return {
           content: [{ type: "text", text: "Script must contain a meta declaration: const meta = { name, description, phases }" }],
+          details: undefined,
           isError: true,
         };
       }
@@ -82,6 +86,7 @@ export function registerGenerateTool(pi: ExtensionAPI) {
       if (!/\bagent\s*\(/.test(strippedScript)) {
         return {
           content: [{ type: "text", text: "Script does not contain any agent() calls. A workflow must call agent() at least once to do useful work. Example: const result = await agent({ prompt: '...' });" }],
+          details: undefined,
           isError: true,
         };
       }
@@ -92,6 +97,7 @@ export function registerGenerateTool(pi: ExtensionAPI) {
       if (hasModuleExportsExecute && !hasTopLevelAwait) {
         return {
           content: [{ type: "text", text: "Script defines module.exports.execute() but never calls it at the top level. Either call execute() directly at the bottom of the script, or use top-level agent() calls instead of wrapping in execute(). Example: const meta = {...}; const result = await agent({ prompt: '...' }); return result;" }],
+          details: undefined,
           isError: true,
         };
       }
@@ -107,6 +113,7 @@ export function registerGenerateTool(pi: ExtensionAPI) {
         const msg = err instanceof Error ? err.message : String(err);
         return {
           content: [{ type: "text", text: `Syntax error in script: ${msg}` }],
+          details: undefined,
           isError: true,
         };
       }
@@ -117,6 +124,7 @@ export function registerGenerateTool(pi: ExtensionAPI) {
       if (conflict) {
         return {
           content: [{ type: "text", text: `Name conflict: '${name}' already exists as [${conflict.source}] at ${conflict.path}. Choose a different name.` }],
+          details: undefined,
           isError: true,
         };
       }
@@ -148,15 +156,15 @@ export function registerGenerateTool(pi: ExtensionAPI) {
       };
     },
 
-    renderCall(args: any, theme: Theme, _context?: any) {
-      const name = args.name as string;
+    renderCall(args: Static<typeof WorkflowGenerateParams>, theme: Theme, _context?: unknown) {
+      const name = args.name;
       const text =
         theme.fg("toolTitle", theme.bold("workflow-generate ")) +
         theme.fg("accent", name);
       return new Text(text, 0, 0);
     },
 
-    renderResult(result: any, _options: any, _theme: Theme, _context?: any) {
+    renderResult(result: { content: Array<{ type: "text" | "image"; text?: string }> }, _options: unknown, _theme: Theme, _context?: unknown) {
       const text = result.content[0];
       return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
     },

@@ -60,7 +60,7 @@ function findWorkspaceRoot(): string {
   let dir = process.cwd();
   const root = resolve("/");
 
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < WORKSPACE_ROOT_MAX_DEPTH; i++) {
     // Check for bare repo marker
     const barePath = resolve(dir, ".bare");
     if (fsSync.existsSync(barePath)) {
@@ -83,6 +83,9 @@ function findWorkspaceRoot(): string {
   return process.cwd();
 }
 
+// ── Constants ─────────────────────────────────────────────────
+
+const WORKSPACE_ROOT_MAX_DEPTH = 20;
 const USER_DIR = resolve(homedir(), ".pi/agent/workflows");
 const CACHE_TTL_MS = 60_000;
 
@@ -241,11 +244,14 @@ export async function loadWorkflows(): Promise<CachedWorkflowMeta[]> {
   const workspaceRoot = findWorkspaceRoot();
   const projectDir = resolve(workspaceRoot, ".pi/workflows");
   const tmpDir = resolve(workspaceRoot, ".pi/workflows/.tmp");
-  const [projectWorkflows, userWorkflows, tmpWorkflows] = await Promise.all([
+  const results = await Promise.allSettled([
     scanDirectory(projectDir, "saved"),
     scanDirectory(USER_DIR, "saved"),
     scanDirectory(tmpDir, "tmp"),
   ]);
+  const projectWorkflows = results[0].status === "fulfilled" ? results[0].value : [];
+  const userWorkflows = results[1].status === "fulfilled" ? results[1].value : [];
+  const tmpWorkflows = results[2].status === "fulfilled" ? results[2].value : [];
 
   // Deduplicate by priority: tmp > project > user
   // Use a Map keyed by name — later entries overwrite earlier ones
