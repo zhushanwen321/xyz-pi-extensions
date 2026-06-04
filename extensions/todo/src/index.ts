@@ -818,7 +818,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// ── Message Renderer: todo-context ───────────────────
-	pi.registerMessageRenderer("todo-context", (message: Record<string, unknown>, _options: unknown, theme: Theme) => {
+	pi.registerMessageRenderer("todo-context", (message: Record<string, unknown>, _options: unknown, _theme: Theme) => {
 		const text = (typeof message?.message === "string" ? message.message : "") as string;
 		const match = text.match(/\[TODO\]\s*(All\s+)?(\d+)?\s*tasks?\s*(pending|completed|auto-cleared)?/i);
 		if (match) {
