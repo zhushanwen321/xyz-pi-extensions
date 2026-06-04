@@ -22,7 +22,8 @@ complexity: L1
 | `extensions/workflow/src/state.ts` | modify | BG1-T1 | Add `state_lost` to `WorkflowStatus`, `ALL_STATUSES`, `TERMINAL_STATUSES`, `VALID_TRANSITIONS` (empty outgoing) |
 | `shared/types/mariozechner/index.d.ts` | modify | BG1-T2 | Add `confirm`, `select`, `input`, `setStatus`, `setWidget`, `setFooter` to `ui` interface |
 | `extensions/workflow/src/agent-pool.ts` | modify | BG1-T3 | Add `totalCallCount`, `softWarningSent`, `onSoftLimitReached` callback, `SOFT_MAX_AGENTS_WARNING` constant, `AgentPoolOptions` interface |
-| `extensions/workflow/src/orchestrator.ts` | modify | BG2-T4 | Rewrite `persistState()`: write external file + pointer entry. Reconstruct logic: read pointer entries. AgentPool injection with `onSoftLimitReached` callback. |
+| `extensions/workflow/src/orchestrator.ts` | modify | BG2-T4 | Rewrite `persistState()`: write external file + pointer entry. AgentPool injection with `onSoftLimitReached` callback. |
+| `extensions/workflow/src/index.ts` | modify | BG2-T4 | Rewrite `reconstructState()`: read pointer entries, ignore old `workflow-state` entries, handle missing/corrupt files with `ctx.ui.notify`. |
 | `extensions/workflow/src/index.ts` | modify | BG3-T5 | `workflow-run` tool: `auto` mode → `ctx.ui.confirm`; `sessionApprovals` Set; rehydrate from `workflow-approval-memory` entries on `session_start`; `confirmSkipped: true` on force; tmp workflow special handling; `ctx.hasUI` fallback to `sendUserMessage` |
 | `extensions/workflow/skills/workflow-script-format/SKILL.md` | modify | BG4-T6 | Add "Verification Patterns" section with Pattern A (node-internal) + Pattern B (follow-up) code examples |
 | `extensions/workflow/src/tool-generate.ts` | modify | BG4-T7 | Append verification rule to `promptGuidelines` array |
@@ -33,7 +34,7 @@ complexity: L1
 | `extensions/workflow/src/__tests__/index.test.ts` | create | BG3-T5 | Approval gate + session memory + tmp + hasUI tests |
 | `extensions/workflow/src/__tests__/tool-generate.test.ts` | create | BG4-T7 | promptGuidelines contains verification keyword |
 
-**Total: 8 source files (5 modify + 3 create), 5 test files (all create).**
+**Total: 9 source files (6 modify + 3 create), 5 test files (all create).**
 
 ---
 
@@ -189,10 +190,11 @@ complexity: L1
 
 [ AgentPool dispatch() real spawn ]
   └─ this.totalCallCount += 1
-  └─ if (totalCallCount > SOFT_MAX_AGENTS_WARNING && !softWarningSent) {
-       softWarningSent = true
-       this.onSoftLimitReached?.({ runName, totalCalls, budget })
-     }
+  └─ maybeEmitSoftWarning(runName, budget)
+       └─ if (totalCallCount > SOFT_MAX_AGENTS_WARNING && !softWarningSent) {
+            softWarningSent = true
+            this.onSoftLimitReached?.({ runName, totalCalls, budget })
+          }
 
 [ WorkflowOrchestrator AgentPool construction ]
   └─ new AgentPool({
@@ -214,6 +216,7 @@ complexity: L1
 | AC-1.2 | `WorkflowOrchestrator.reconstructState` | reconstructState → read pointer → deserialize | BG2-T4 |
 | AC-1.3 | `WorkflowOrchestrator.reconstructState` | reconstructState on missing file → notify + skip | BG2-T4 |
 | AC-1.4 | `WorkflowStatus` (state_lost) + `TERMINAL_STATUSES` + `VALID_TRANSITIONS` | enum extension | BG1-T1 |
+| FR-1.5 (backward compat) | `WorkflowOrchestrator.reconstructState` | (no separate AC; covered by AC-1.3 notify + skip) | BG2-T4 |
 | AC-2.1 | `workflow-run` tool auto+confirm | auto → confirm | BG3-T5 |
 | AC-2.2 | `sessionApprovals` Set | cache hit skip | BG3-T5 |
 | AC-2.3 | `session_start` handler | rehydrate from entries | BG3-T5 |
@@ -428,7 +431,12 @@ No `rejected` or `postponed` items. All metrics adopted.
 | Model | high (cross-file changes) |
 | 注入上下文 | Task 描述 + spec FR-1.1-1.5/4.3 + AC-1.1-1.3/4.1-4.6 + orchestrator.ts + index.ts + state.ts |
 | 读取文件 | `orchestrator.ts` (relevant sections) + `index.ts` (relevant sections) + `state.ts` (full) + `agent-pool.ts` (full) |
-| 修改/创建文件 | `orchestrator.ts` + `index.ts` (reconstructState) + `__tests__/orchestrator.test.ts` |
+| 修改/创建文件 | `orchestrator.ts` + `index.ts` (reconstructState, `index.ts:99-124` 区域) + `__tests__/orchestrator.test.ts` |
+
+**跨文件变更说明：** BG2-T4 和 BG3-T5 共同修改 `index.ts`，但作用域隔离：
+- BG2-T4 改 `reconstructState` 区域（`index.ts:99-124`）
+- BG3-T5 改 `session_start` handler（`index.ts:155-180`）+ `workflow-run` tool 区域（`index.ts:484-642`）
+- 通过行号范围严格隔离，无冲突。
 
 **Implementation outline:**
 

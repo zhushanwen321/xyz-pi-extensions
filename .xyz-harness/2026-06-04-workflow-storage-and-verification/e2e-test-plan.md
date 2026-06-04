@@ -28,7 +28,7 @@ verdict: pass
    - 之前跑的 workflow instance 正确恢复(status / callCache / trace / scriptResult)
    - `ctx.ui.notify` **未**被调用(因为文件完整,无丢失)
 
-**Spec AC coverage:** AC-1.1, AC-1.2, AC-1.3, AC-1.4, AC-1.5
+**Spec AC coverage:** AC-1.1, AC-1.2, AC-1.3, AC-1.4 (FR-1.5 backward compat 由 AC-1.3 覆盖)
 
 ---
 

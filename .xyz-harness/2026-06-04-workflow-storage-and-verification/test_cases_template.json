@@ -94,7 +94,7 @@
       "id": "TC-1-08",
       "type": "api",
       "title": "reconstructState ignores old workflow-state entries",
-      "description": "AC-1.5 (FR-1.5 backward compat): Old workflow-state entries in session JSONL are silently ignored",
+      "description": "FR-1.5 backward compat (covered by AC-1.3): Old workflow-state entries in session JSONL are silently ignored",
       "steps": [
         "mock ctx.sessionManager with old 'workflow-state' entry (customType=workflow-state)",
         "call reconstructState",
