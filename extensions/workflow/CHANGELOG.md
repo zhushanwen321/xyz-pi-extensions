@@ -1,5 +1,11 @@
 # @zhushanwen/pi-workflow
 
+## 0.1.4
+
+### Patch Changes
+
+- Add auto/force mode to workflow-run tool with progressive discovery
+
 ## 0.1.3
 
 ### Patch Changes

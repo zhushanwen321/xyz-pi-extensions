@@ -2,16 +2,16 @@
  * Workflow Extension — Config Loader
  *
  * Scans .pi/workflows/ (project-level) and ~/.pi/agent/workflows/ (user-level)
- * directories for workflow script files, extracts meta information using
- * Worker threads with dynamic import(), and caches results.
+ * directories for workflow script files, extracts meta information via regex
+ * (no code execution), and caches results.
  *
  * Failed imports are marked available=false — the loader never throws.
  */
 
-import { access, readdir } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
+import * as fsSync from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { Worker } from "node:worker_threads";
 
 // ── Public types ──────────────────────────────────────────────
 
@@ -45,10 +45,45 @@ interface CacheEntry {
   cachedAt: number;
 }
 
-// ── Constants ─────────────────────────────────────────────────
+// ── Workspace root detection ─────────────────────────────────
+
+/**
+ * Find the workspace root directory by walking up from cwd.
+ *
+ * In bare+worktree setups, cwd is a worktree subdirectory, not the
+ * workspace root. We detect the root by looking for `.bare/` or
+ * `.pi/` directories.
+ *
+ * Falls back to cwd if no marker is found.
+ */
+function findWorkspaceRoot(): string {
+  let dir = process.cwd();
+  const root = resolve("/");
+
+  for (let i = 0; i < 20; i++) {
+    // Check for bare repo marker
+    const barePath = resolve(dir, ".bare");
+    if (fsSync.existsSync(barePath)) {
+      return dir;
+    }
+    // Check for .pi directory marker (works in normal repos)
+    const piPath = resolve(dir, ".pi");
+    if (fsSync.existsSync(piPath)) {
+      return dir;
+    }
+    // Check for .git (normal git repo)
+    const gitPath = resolve(dir, ".git");
+    if (fsSync.existsSync(gitPath)) {
+      return dir;
+    }
+    if (dir === root) break;
+    dir = resolve(dir, "..");
+  }
+
+  return process.cwd();
+}
 
 const USER_DIR = resolve(homedir(), ".pi/agent/workflows");
-const WORKER_TIMEOUT_MS = 10_000;
 const CACHE_TTL_MS = 60_000;
 
 // ── Cache ─────────────────────────────────────────────────────
@@ -72,83 +107,74 @@ function stem(filePath: string): string {
   return dot > 0 ? base.slice(0, dot) : base;
 }
 
-// ── Worker-based meta extraction ──────────────────────────────
+// ── Regex-based meta extraction ─────────────────────────────
 
 /**
- * Import a workflow script in a temporary Worker to extract its meta export.
+ * Extract the `meta` object from a workflow script using regex.
  *
- * Using a Worker isolate prevents the import from polluting the main thread's
- * module cache and provides a sandbox for crash-prone scripts.
+ * This avoids executing user code (no Worker/import/require), so it works
+ * regardless of whether the script uses CJS, ESM, top-level await, or
+ * references runtime globals like `agent()` or `$ARGS`.
+ *
+ * Supports both `const meta = { ... }` and `export const meta = { ... }`.
  */
-function extractMetaViaWorker(scriptPath: string): Promise<WorkerResult> {
-  return new Promise<WorkerResult>((resolvePromise) => {
-    const code = `
-      const { parentPort, workerData } = require("worker_threads");
-      (async () => {
-        try {
-          const mod = await import(workerData.scriptPath);
-          const raw = mod.meta;
-          if (raw && typeof raw === "object" && typeof raw.name === "string") {
-            parentPort.postMessage({
-              success: true,
-              meta: {
-                name: raw.name,
-                description: typeof raw.description === "string" ? raw.description : "",
-                phases: Array.isArray(raw.phases)
-                  ? raw.phases.filter(function (p) { return typeof p === "string"; })
-                  : [],
-              },
-            });
-          } else {
-            parentPort.postMessage({
-              success: false,
-              error: "Script does not export a valid 'meta' object",
-            });
-          }
-        } catch (err) {
-          parentPort.postMessage({
-            success: false,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      })();
-    `;
+async function extractMetaViaRegex(scriptPath: string): Promise<WorkerResult> {
+  try {
+    const content = await readFile(scriptPath, "utf-8");
 
-    const worker = new Worker(code, {
-      eval: true,
-      workerData: { scriptPath },
-    });
-    worker.unref();
-
-    let settled = false;
-
-    function settle(result: WorkerResult): void {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolvePromise(result);
-      worker.terminate().catch(() => { /* ignore terminate errors */ });
+    // Match `const meta = { ... }` or `export const meta = { ... }`
+    // Use the rest-of-line approach: capture everything from the opening { to
+    // the closing } (greedy) on the same statement.
+    const metaPattern = /(?:export\s+)?const\s+meta\s*=\s*(\{[^]*?\});?\s*$/m;
+    const match = metaPattern.exec(content);
+    if (!match) {
+      return { success: false, error: "No 'const meta = { ... }' declaration found" };
     }
 
-    const timer = setTimeout(() => {
-      settle({ success: false, error: "Worker timed out" });
-    }, WORKER_TIMEOUT_MS);
-    timer.unref();
+    // Evaluate the captured object literal in a safe sandbox
+    const metaObj = safeEvalObject(match[1]);
+    if (!metaObj || typeof metaObj !== "object") {
+      return { success: false, error: "Failed to parse meta object" };
+    }
 
-    worker.on("message", (msg: WorkerResult) => {
-      settle(msg);
-    });
+    if (typeof metaObj.name !== "string") {
+      return { success: false, error: "meta.name must be a string" };
+    }
 
-    worker.on("error", (err: Error) => {
-      settle({ success: false, error: err.message });
-    });
+    return {
+      success: true,
+      meta: {
+        name: metaObj.name,
+        description: typeof metaObj.description === "string" ? metaObj.description : "",
+        phases: Array.isArray(metaObj.phases)
+          ? metaObj.phases.filter((p: unknown) => typeof p === "string") as string[]
+          : [],
+      },
+    };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
 
-    worker.on("exit", (code: number) => {
-      if (!settled) {
-        settle({ success: false, error: `Worker exited with code ${code}` });
-      }
-    });
-  });
+/**
+ * Safely evaluate a simple object literal string.
+ * Uses `new Function` to avoid eval() while still supporting basic JS
+ * literal syntax (strings, numbers, arrays, nested objects).
+ *
+ * Returns undefined if the string cannot be safely evaluated.
+ */
+function safeEvalObject(literal: string): Record<string, unknown> | undefined {
+  try {
+    // Wrap in parentheses to force expression evaluation
+    const fn = new Function(`return (${literal});`);
+    const result = fn();
+    if (typeof result === "object" && result !== null && !Array.isArray(result)) {
+      return result as Record<string, unknown>;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // ── Directory scanning ────────────────────────────────────────
@@ -173,7 +199,7 @@ async function scanDirectory(dirPath: string, source: WorkflowSource): Promise<C
 
   for (const filePath of scriptFiles) {
     const fallbackName = stem(filePath);
-    const result = await extractMetaViaWorker(filePath);
+    const result = await extractMetaViaRegex(filePath);
 
     if (result.success && result.meta) {
       results.push({
@@ -212,8 +238,9 @@ async function scanDirectory(dirPath: string, source: WorkflowSource): Promise<C
  * Never throws. Failed imports are returned with available=false.
  */
 export async function loadWorkflows(): Promise<CachedWorkflowMeta[]> {
-  const projectDir = resolve(".pi/workflows");
-  const tmpDir = resolve(".pi/workflows/.tmp");
+  const workspaceRoot = findWorkspaceRoot();
+  const projectDir = resolve(workspaceRoot, ".pi/workflows");
+  const tmpDir = resolve(workspaceRoot, ".pi/workflows/.tmp");
   const [projectWorkflows, userWorkflows, tmpWorkflows] = await Promise.all([
     scanDirectory(projectDir, "saved"),
     scanDirectory(USER_DIR, "saved"),

@@ -54,6 +54,7 @@
     ".superpowers",
     ".xyz-harness",
     "**/__tests__",
+    "**/tests/**",
     "**/vitest.config.ts"
   ]
 }

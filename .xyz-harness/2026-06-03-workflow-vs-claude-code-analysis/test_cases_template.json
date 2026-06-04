@@ -1,0 +1,129 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "api",
+      "title": "resolveModelForScene returns first candidate when not peak",
+      "description": "config.scenes.coding = ['glm-5.1', 'ds-flash'], non-peak → returns 'zhipu/glm-5.1'",
+      "steps": [
+        "mock loadConfig to return mockConfig with scenes.coding",
+        "mock readCache to return empty cache",
+        "call resolveModelForScene('coding')",
+        "assert result === 'zhipu/glm-5.1'"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "api",
+      "title": "resolveModelForScene skips peak-avoid model",
+      "description": "first candidate peak avoid → returns second candidate",
+      "steps": [
+        "mock loadConfig with zhipu peak config",
+        "mock system time to 15:00 (peak)",
+        "call resolveModelForScene('coding')",
+        "assert result === 'opencode-go/ds-flash'"
+      ]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "api",
+      "title": "resolveModelForScene returns undefined for unknown scene",
+      "description": "scene 'nonexistent' not in config.scenes → undefined + warn log",
+      "steps": [
+        "mock loadConfig to return mockConfig",
+        "call resolveModelForScene('nonexistent')",
+        "assert result === undefined",
+        "assert console.warn called with scene not found message"
+      ]
+    },
+    {
+      "id": "TC-1-04",
+      "type": "api",
+      "title": "resolveModelForScene returns undefined when no config",
+      "description": "loadConfig returns null → undefined + warn log",
+      "steps": [
+        "mock loadConfig to return null",
+        "call resolveModelForScene('coding')",
+        "assert result === undefined"
+      ]
+    },
+    {
+      "id": "TC-1-05",
+      "type": "api",
+      "title": "resolveModelForScene returns undefined when all candidates avoid",
+      "description": "all plans in peak → info log + undefined",
+      "steps": [
+        "mock loadConfig with all plans in peak",
+        "mock system time to peak",
+        "call resolveModelForScene('coding')",
+        "assert result === undefined"
+      ]
+    },
+    {
+      "id": "TC-1-06",
+      "type": "api",
+      "title": "resolveModelForScene respects priority sorting regardless of scene list order",
+      "description": "scenes.coding = ['ds-flash', 'glm-5.1'] but zhipu has priority=1 → returns 'zhipu/glm-5.1'",
+      "steps": [
+        "mock loadConfig with scenes.coding = ['ds-flash', 'glm-5.1']",
+        "mock non-peak time",
+        "call resolveModelForScene('coding')",
+        "assert result === 'zhipu/glm-5.1' (priority 1 beats ds-flash priority 2)"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "api",
+      "title": "resolveModel returns explicit model when opts.model set",
+      "description": "opts.model='minimax/m3' → returns 'minimax/m3', ignores scene",
+      "steps": [
+        "call resolveModel({ model: 'minimax/m3', scene: 'coding', prompt: '' })",
+        "assert result === 'minimax/m3'"
+      ]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "api",
+      "title": "resolveModel calls advisor when scene set and no model",
+      "description": "opts.scene='coding', no model → calls resolveModelForScene",
+      "steps": [
+        "mock resolveModelForScene to return 'zhipu/glm-5.1'",
+        "call resolveModel({ scene: 'coding', prompt: '' })",
+        "assert result === 'zhipu/glm-5.1'"
+      ]
+    },
+    {
+      "id": "TC-3-03",
+      "type": "api",
+      "title": "resolveModel returns undefined when no model and no scene",
+      "description": "bare opts → undefined",
+      "steps": [
+        "call resolveModel({ prompt: '' })",
+        "assert result === undefined"
+      ]
+    },
+    {
+      "id": "TC-3-04",
+      "type": "api",
+      "title": "resolveModel catches advisor exception and returns undefined",
+      "description": "resolveModelForScene throws → catch + warn + undefined",
+      "steps": [
+        "mock resolveModelForScene to throw Error('fail')",
+        "call resolveModel({ scene: 'coding', prompt: '' })",
+        "assert result === undefined",
+        "assert console.warn called"
+      ]
+    },
+    {
+      "id": "TC-3-05",
+      "type": "api",
+      "title": "resolveModel returns undefined when advisor returns undefined",
+      "description": "advisor can't find model → fallback to default",
+      "steps": [
+        "mock resolveModelForScene to return undefined",
+        "call resolveModel({ scene: 'coding', prompt: '' })",
+        "assert result === undefined"
+      ]
+    }
+  ]
+}

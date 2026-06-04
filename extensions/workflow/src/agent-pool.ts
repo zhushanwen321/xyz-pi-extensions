@@ -32,11 +32,12 @@ export interface AgentCallOpts {
    * `parsedOutput` on the result.
    */
   schema?: Record<string, unknown>;
-  /**
-   * Model to use (e.g. "router-openai/glm-5.1").
-   * When omitted, pi's default model is used.
+  /** Model to use (e.g. "router-openai/glm-5.1").
+   *   When omitted, pi's default model is used.
    */
   model?: string;
+  /** Scene name for model-switch advisor recommendation. */
+  scene?: string;
   /** Human-readable description for logging and debugging. */
   description?: string;
 }
@@ -90,6 +91,7 @@ interface ParsedPipelineEvent {
 // ── Constants ─────────────────────────────────────────────────
 
 const DEFAULT_CONCURRENCY = 4;
+const PROCESS_TIMEOUT_MS = 120_000; // 2 minutes
 
 // ── AgentPool ─────────────────────────────────────────────────
 
@@ -287,6 +289,7 @@ async function runPiProcess(
       stdio: ["ignore", "pipe", "pipe"],
     });
     let buffer = "";
+    let settled = false;
 
     function processChunk(chunk: string): void {
       buffer += chunk;
@@ -302,6 +305,22 @@ async function runPiProcess(
         }
       }
     }
+
+    function settle(code: number): void {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(code);
+    }
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      stderr += `Process timed out after ${PROCESS_TIMEOUT_MS / 1000}s, sending SIGKILL`;
+      proc.kill("SIGKILL");
+      resolve(1);
+    }, PROCESS_TIMEOUT_MS);
+    timer.unref();
 
     proc.stdout.on("data", (data: Buffer) => {
       processChunk(data.toString());
@@ -321,11 +340,12 @@ async function runPiProcess(
           // Ignore trailing garbage
         }
       }
-      resolve(code ?? 0);
+      settle(code ?? 0);
     });
 
     proc.on("error", (err: Error) => {
       stderr += err.message;
+      clearTimeout(timer);
       reject(err);
     });
   });

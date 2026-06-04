@@ -21,6 +21,7 @@ import { Worker } from "node:worker_threads";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import { AgentPool, type AgentCallOpts } from "./agent-pool.js";
+import { resolveModel } from "./model-resolver.js";
 import { getWorkflow } from "./config-loader.js";
 import { appendTraceNode } from "./execution-trace.js";
 import {
@@ -102,6 +103,8 @@ export class WorkflowOrchestrator {
   private readonly ctx: ExtensionContext;
   /** Called after every trace node state change for live TUI updates */
   onTraceUpdate?: (runId: string) => void;
+  /** Called when a workflow reaches a terminal state (completed/failed/aborted/budget_limited/time_limited) */
+  onCompletion?: (runId: string) => void;
 
   constructor(
     pi: ExtensionAPI,
@@ -140,10 +143,10 @@ export class WorkflowOrchestrator {
       runId,
       name,
       worker: workflow.path,
+      status: "running",
       budget: { maxTokens: budgetTokens, maxTimeMs: budgetTimeMs },
     });
     instance.startedAt = new Date().toISOString();
-    transitionStatus(instance, "running");
 
     this.runMetaMap.set(runId, { scriptSource, args, budgetTokens, budgetTimeMs });
     this.instances.set(runId, instance);
@@ -236,6 +239,7 @@ export class WorkflowOrchestrator {
     transitionStatus(instance, "aborted");
     this.terminateWorker(runId);
     this.persistState();
+    this.onCompletion?.(runId);
   }
 
   /**
@@ -354,22 +358,6 @@ export class WorkflowOrchestrator {
     }
   }
 
-  /**
-   * Create a state-machine-only instance (no Worker thread).
-   * Used by the workflow tool's create action.
-   */
-  createInstance(params: {
-    runId: string;
-    name: string;
-    worker: string;
-    budget?: Partial<WorkflowBudget>;
-  }): WorkflowInstance {
-    const instance = createStateInstance(params);
-    this.instances.set(params.runId, instance);
-    this.persistState();
-    return instance;
-  }
-
   // ── Worker lifecycle ────────────────────────────────────────
 
   /**
@@ -407,7 +395,7 @@ export class WorkflowOrchestrator {
     });
 
     worker.on("exit", (code: number) => {
-      this.handleWorkerExit(runId, code);
+      this.handleWorkerExit(runId, code, worker);
     });
 
     this.workers.set(runId, worker);
@@ -453,11 +441,14 @@ export class WorkflowOrchestrator {
       case "return": {
         // P0-1: Guard against stale return messages after terminate/pause/budget
         if (isTerminal(instance.status) || instance.status === "budget_limited" || instance.status === "paused") return;
+        // FR-1: Capture script return value
+        instance.scriptResult = msg.result;
         instance.completedAt = new Date().toISOString();
         transitionStatus(instance, "completed");
         this.workers.delete(runId);
         this.persistState();
         this.onTraceUpdate?.(runId);
+        this.onCompletion?.(runId);
         break;
       }
       case "error": {
@@ -486,13 +477,17 @@ export class WorkflowOrchestrator {
       return;
     }
 
+    // Resolve model from scene if needed
+    const resolvedModel = resolveModel(opts);
+    const enrichedOpts = resolvedModel ? { ...opts, model: resolvedModel } : opts;
+
     // Record pending trace node
     const now = new Date().toISOString();
     const node: ExecutionTraceNode = {
       stepIndex: callId,
       agent: opts.description ?? "unknown",
       task: opts.prompt.slice(0, 200),
-      model: opts.model ?? "default",
+      model: enrichedOpts.model ?? "default",
       status: "running",
       startedAt: now,
     };
@@ -501,7 +496,7 @@ export class WorkflowOrchestrator {
     this.onTraceUpdate?.(runId);
 
     // Enqueue via AgentPool with retry
-    this.executeWithRetry(runId, callId, opts, instance, node);
+    this.executeWithRetry(runId, callId, enrichedOpts, instance, node);
   }
 
   /**
@@ -581,15 +576,21 @@ export class WorkflowOrchestrator {
     instance.completedAt = new Date().toISOString();
     transitionStatus(instance, "failed");
     this.persistState();
+    this.onCompletion?.(runId);
   }
 
   /**
    * Handle Worker thread exit.
    */
-  private handleWorkerExit(runId: string, code: number): void {
+  private handleWorkerExit(runId: string, code: number, exitedWorker: Worker): void {
     const instance = this.instances.get(runId);
     if (!instance) return;
 
+    // Guard: only process exit if the exited worker is still the current one.
+    // Prevents race: terminateWorker(old) → startWorker(new) → old exit fires →
+    // would delete new worker and incorrectly mark instance as failed.
+    const currentWorker = this.workers.get(runId);
+    if (currentWorker !== exitedWorker) return;
     this.workers.delete(runId);
 
     // Paused/terminal exits are intentional — skip failure marking
@@ -601,6 +602,7 @@ export class WorkflowOrchestrator {
       instance.completedAt = new Date().toISOString();
       transitionStatus(instance, "failed");
       this.persistState();
+      this.onCompletion?.(runId);
     }
   }
 
@@ -633,6 +635,7 @@ export class WorkflowOrchestrator {
       transitionStatus(instance, "failed");
       this.terminateWorker(runId);
       this.persistState();
+      this.onCompletion?.(runId);
     }
   }
 
@@ -677,6 +680,7 @@ export class WorkflowOrchestrator {
       instance.completedAt = new Date().toISOString();
       transitionStatus(instance, "budget_limited");
       this.persistState();
+      this.onCompletion?.(runId);
     }
   }
 
@@ -703,6 +707,7 @@ export class WorkflowOrchestrator {
         instance.completedAt = new Date().toISOString();
         transitionStatus(instance, "time_limited");
         this.persistState();
+        this.onCompletion?.(runId);
       }
     }, maxTimeMs);
     timer.unref();

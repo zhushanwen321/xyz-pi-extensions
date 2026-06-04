@@ -1,0 +1,128 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run extensions/model-switch/tests/resolveModelForScene.test.ts",
+        "TC-1-01: mock loadConfig with scenes.coding = ['glm-5.1', 'ds-flash'], non-peak",
+        "assert resolveModelForScene('coding') === 'zhipu/glm-5.1'"
+      ],
+      "evidence": "vitest output: TC-1-01 passed"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run extensions/model-switch/tests/resolveModelForScene.test.ts",
+        "TC-1-02: mock loadConfig with zhipu peak, mock peak time",
+        "assert resolveModelForScene('coding') === 'opencode-go/ds-flash' (skipped peak-avoid)"
+      ],
+      "evidence": "vitest output: TC-1-02 passed"
+    },
+    {
+      "caseId": "TC-1-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run extensions/model-switch/tests/resolveModelForScene.test.ts",
+        "TC-1-03: call resolveModelForScene('nonexistent')",
+        "assert result === undefined + console.warn called"
+      ],
+      "evidence": "vitest output: TC-1-03 passed"
+    },
+    {
+      "caseId": "TC-1-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run extensions/model-switch/tests/resolveModelForScene.test.ts",
+        "TC-1-04: mock loadConfig returns null",
+        "assert resolveModelForScene('coding') === undefined"
+      ],
+      "evidence": "vitest output: TC-1-04 passed"
+    },
+    {
+      "caseId": "TC-1-05",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run extensions/model-switch/tests/resolveModelForScene.test.ts",
+        "TC-1-05: mock all candidates peak-avoid",
+        "assert resolveModelForScene('coding') === undefined"
+      ],
+      "evidence": "vitest output: TC-1-05 passed"
+    },
+    {
+      "caseId": "TC-1-06",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run extensions/model-switch/tests/resolveModelForScene.test.ts",
+        "TC-1-06: scenes.coding = ['ds-flash', 'glm-5.1'], zhipu priority=1 < opencode-go priority=2",
+        "assert resolveModelForScene('coding') === 'zhipu/glm-5.1' (priority wins over list order)"
+      ],
+      "evidence": "vitest output: TC-1-06 passed"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run extensions/workflow/tests/resolveModel.test.ts",
+        "TC-3-01: call resolveModel({ model: 'minimax/m3', scene: 'coding', prompt: '' })",
+        "assert result === 'minimax/m3', advisor not called"
+      ],
+      "evidence": "vitest output: TC-3-01 passed"
+    },
+    {
+      "caseId": "TC-3-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run extensions/workflow/tests/resolveModel.test.ts",
+        "TC-3-02: mock resolveModelForScene returns 'zhipu/glm-5.1'",
+        "call resolveModel({ scene: 'coding', prompt: '' })",
+        "assert result === 'zhipu/glm-5.1'"
+      ],
+      "evidence": "vitest output: TC-3-02 passed"
+    },
+    {
+      "caseId": "TC-3-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run extensions/workflow/tests/resolveModel.test.ts",
+        "TC-3-03: call resolveModel({ prompt: '' })",
+        "assert result === undefined, advisor not called"
+      ],
+      "evidence": "vitest output: TC-3-03 passed"
+    },
+    {
+      "caseId": "TC-3-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run extensions/workflow/tests/resolveModel.test.ts",
+        "TC-3-04: mock resolveModelForScene throws Error('advisor crash')",
+        "call resolveModel({ scene: 'coding', prompt: '' })",
+        "assert result === undefined + console.warn called with 'resolveModelForScene failed'"
+      ],
+      "evidence": "vitest output: TC-3-04 passed"
+    },
+    {
+      "caseId": "TC-3-05",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "npx vitest run extensions/workflow/tests/resolveModel.test.ts",
+        "TC-3-05: mock resolveModelForScene returns undefined",
+        "call resolveModel({ scene: 'coding', prompt: '' })",
+        "assert result === undefined + console.warn called"
+      ],
+      "evidence": "vitest output: TC-3-05 passed"
+    }
+  ]
+}
