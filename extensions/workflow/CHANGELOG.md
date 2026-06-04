@@ -1,5 +1,11 @@
 # @zhushanwen/pi-workflow
 
+## 0.1.5
+
+### Patch Changes
+
+- Add storage externalization, approval/verification gates, soft budget warning, and AgentPool optimizations
+
 ## 0.1.4
 
 ### Patch Changes
