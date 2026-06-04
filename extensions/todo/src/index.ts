@@ -24,6 +24,8 @@ import {
 	getDisplayStatus,
 	buildRender,
 	addTodos,
+	updateTodos,
+	formatTodoLine,
 } from "./model";
 
 // ── TodoParams schema（依赖 Pi 运行时包） ────────────
@@ -41,6 +43,16 @@ const TodoParams = Type.Object({
 		Type.Array(Type.String(), {
 			description: "Verification text list (one per texts entry, for add action)",
 		}),
+	),
+	updates: Type.Optional(
+		Type.Array(
+			Type.Object({
+				id: Type.Number(),
+				status: Type.Optional(Type.String()),
+				text: Type.Optional(Type.String()),
+			}),
+			{ description: "Batch updates array (takes priority over single id/status/text)" },
+		),
 	),
 });
 
@@ -105,7 +117,8 @@ class TodoListComponent {
 								: th.fg("dim", "\u25cb");
 				const id = th.fg("accent", `#${todo.id}`);
 				const text = todo.status === "completed" ? th.fg("dim", todo.text) : th.fg("text", todo.text);
-				lines.push(truncateToWidth(`  ${mark} ${id} ${text}`, width));
+				const verifyTag = todo.verifyText ? th.fg("warning", " [待验证]") : th.fg("dim", " [无需验证]");
+				lines.push(truncateToWidth(`  ${mark} ${id} ${text}${verifyTag}`, width));
 			}
 		}
 
@@ -284,7 +297,7 @@ export default function (pi: ExtensionAPI) {
 
 	// ── Tool execute handler ─────────────────────────────
 	function executeTodoAction(
-		params: { action: string; text?: string; id?: number; texts?: string[]; ids?: number[]; status?: string; verifyTexts?: string[] },
+		params: { action: string; text?: string; id?: number; texts?: string[]; ids?: number[]; status?: string; verifyTexts?: string[]; updates?: Array<{ id: number; status?: string; text?: string }> },
 		ctx: ExtensionContext,
 	) {
 		let resultText = "";
@@ -295,19 +308,7 @@ export default function (pi: ExtensionAPI) {
 		switch (params.action) {
 			case "list": {
 				resultText = todos.length
-					? todos
-							.map((t) => {
-								const mark =
-									t.status === "completed"
-										? "x"
-										: t.status === "in_progress"
-											? "~"
-											: t.status === "failed"
-												? "!"
-												: " ";
-								return `[${mark}] #${t.id}: ${t.text}`;
-							})
-							.join("\n")
+					? todos.map((t) => formatTodoLine(t)).join("\n")
 					: "No todos";
 				break;
 			}
@@ -349,6 +350,34 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			case "update": {
+				// Batch updates[] takes priority over single id/status/text
+				if (params.updates && params.updates.length > 0) {
+					const result = updateTodos(todos, params.updates);
+					if (result.error) {
+						return {
+							content: [{ type: "text" as const, text: result.resultText! }],
+							details: {
+								action: "update" as const,
+								todos: [...todos],
+								nextId,
+								error: result.error,
+								_render: buildRender(todos),
+							} as TodoDetails,
+						};
+					}
+					todos = result.updatedTodos;
+					resultText = result.resultText || "";
+
+					// v3: 检查是否所有 todo 已完成
+					const allCompleted = todos.every((t) => t.status === "completed");
+					if (allCompleted && todos.length > 0) {
+						allCompletedAtCount = userMessageCount;
+					} else {
+						allCompletedAtCount = null;
+					}
+					break;
+				}
+				// Single update: original logic continues
 				if (params.id === undefined) {
 					return {
 						content: [{ type: "text" as const, text: "Error: update requires id parameter" }],

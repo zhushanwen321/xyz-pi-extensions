@@ -148,3 +148,83 @@ export function addTodos(
 		resultText: `Added ${trimmed.length} todos (#${startId}-#${endId})`,
 	};
 }
+
+// ── Update 逻辑（纯函数，可测试） ──────────────────
+
+export interface UpdateResult {
+	updatedTodos: Todo[];
+	error?: string;
+	resultText?: string;
+}
+
+/**
+ * 处理 todo batch update 的核心逻辑。
+ * All-or-nothing: 任一验证失败，所有变更不生效。
+ * @param currentTodos 当前 todo 列表
+ * @param updates 批量更新项数组
+ */
+export function updateTodos(
+	currentTodos: Todo[],
+	updates: Array<{ id: number; status?: string; text?: string }>,
+): UpdateResult {
+	// 验证: no duplicate ids
+	const ids = updates.map((u) => u.id);
+	if (new Set(ids).size !== ids.length) {
+		return {
+			updatedTodos: currentTodos,
+			error: "duplicate ids in updates",
+			resultText: "Error: duplicate ids in updates",
+		};
+	}
+	// 验证: all ids exist and each has at least one change
+	for (const u of updates) {
+		const todo = currentTodos.find((t) => t.id === u.id);
+		if (!todo) {
+			return {
+				updatedTodos: currentTodos,
+				error: `id ${u.id} not found`,
+				resultText: `Error: Todo #${u.id} not found`,
+			};
+		}
+		if (!u.status && !u.text) {
+			return {
+				updatedTodos: currentTodos,
+				error: `update item for id ${u.id} has neither status nor text`,
+				resultText: `Error: update item for id ${u.id} has neither status nor text`,
+			};
+		}
+	}
+	// Apply all (safe since all validated)
+	const updated = currentTodos.map((t) => {
+		const u = updates.find((u) => u.id === t.id);
+		if (!u) return t;
+		return {
+			...t,
+			...(u.status ? { status: u.status as Todo["status"] } : {}),
+			...(u.text ? { text: u.text } : {}),
+		};
+	});
+	return {
+		updatedTodos: updated,
+		resultText: `Updated ${updates.length} todo(s)`,
+	};
+}
+
+// ── 格式化辅助 ───────────────────────────────────────
+
+/** 格式化单条 todo 为纯文本行（AI 可读），含 verifyText 原文 */
+export function formatTodoLine(t: Todo): string {
+	const mark =
+		t.status === "completed"
+			? "x"
+			: t.status === "in_progress"
+				? "~"
+				: t.status === "failed"
+					? "!"
+					: " ";
+	let line = `[${mark}] #${t.id}: ${t.text}`;
+	if (t.verifyText) {
+		line += ` | 验证: ${t.verifyText}`;
+	}
+	return line;
+}

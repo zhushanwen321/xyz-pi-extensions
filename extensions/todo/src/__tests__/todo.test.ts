@@ -5,6 +5,8 @@ import {
 	migrateTodo,
 	addTodos,
 	buildRender,
+	updateTodos,
+	formatTodoLine,
 } from "../model";
 
 // ── Task 1: 数据模型增强 + 向后兼容 ──────────────────
@@ -143,6 +145,102 @@ describe("todo add verifyTexts - Task 2", () => {
 		expect(result.newTodos[1].id).toBe(2);
 		expect(result.newTodos[1].text).toBe("new task");
 		expect(result.newNextId).toBe(3);
+	});
+});
+
+// ── Task 3: todo update batch updates[] ──────────────
+
+describe("todo update batch - Task 3", () => {
+	it("should update multiple todos with updates[]", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "A", status: "pending", verifyAttempts: 0 },
+			{ id: 2, text: "B", status: "in_progress", verifyAttempts: 0 },
+			{ id: 3, text: "C", status: "pending", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [
+			{ id: 1, status: "completed" },
+			{ id: 2, text: "B updated" },
+			{ id: 3, status: "failed", text: "C failed" },
+		]);
+
+		expect(result.error).toBeUndefined();
+		expect(result.updatedTodos).toHaveLength(3);
+		expect(result.updatedTodos[0].status).toBe("completed");
+		expect(result.updatedTodos[0].text).toBe("A");
+		expect(result.updatedTodos[1].text).toBe("B updated");
+		expect(result.updatedTodos[1].status).toBe("in_progress"); // unchanged
+		expect(result.updatedTodos[2].status).toBe("failed");
+		expect(result.updatedTodos[2].text).toBe("C failed");
+		expect(result.resultText).toBe("Updated 3 todo(s)");
+	});
+
+	it("should reject duplicate ids in updates[]", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "A", status: "pending", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [
+			{ id: 1, status: "completed" },
+			{ id: 1, status: "pending" },
+		]);
+
+		expect(result.error).toBe("duplicate ids in updates");
+		expect(result.updatedTodos).toEqual(todos); // unchanged
+	});
+
+	it("should reject non-existent ids in updates[] (all-or-nothing)", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "A", status: "pending", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [
+			{ id: 1, status: "completed" },
+			{ id: 999, status: "pending" },
+		]);
+
+		expect(result.error).toBe("id 999 not found");
+		expect(result.updatedTodos[0].status).toBe("pending"); // #1 not modified
+	});
+
+	it("should reject updates[] item missing both status and text", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "A", status: "pending", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [{ id: 1 }]);
+
+		expect(result.error).toContain("neither status nor text");
+		expect(result.updatedTodos[0].status).toBe("pending"); // unchanged
+	});
+});
+
+// ── Task 4: todo list verifyText ────────────────────
+
+describe("todo list verifyText - Task 4", () => {
+	it("should include verifyText in list output when present", () => {
+		const todo: Todo = {
+			id: 1,
+			text: "check output",
+			status: "pending",
+			verifyText: "check X",
+			verifyAttempts: 0,
+		};
+		const line = formatTodoLine(todo);
+
+		expect(line).toContain(" | 验证: check X");
+		expect(line).toContain("#1");
+		expect(line).toContain("check output");
+	});
+
+	it("should not include verify suffix when verifyText is absent", () => {
+		const todo: Todo = {
+			id: 2,
+			text: "plain task",
+			status: "completed",
+			verifyAttempts: 0,
+		};
+		const line = formatTodoLine(todo);
+
+		expect(line).not.toContain("验证");
+		expect(line).toContain("#2");
+		expect(line).toContain("plain task");
 	});
 });
 
