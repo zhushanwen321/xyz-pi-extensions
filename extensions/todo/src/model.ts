@@ -176,7 +176,7 @@ export function updateTodos(
 			resultText: "Error: duplicate ids in updates",
 		};
 	}
-	// 验证: all ids exist and each has at least one change
+	// 验证: all ids exist and each has at least one change, and valid status
 	for (const u of updates) {
 		const todo = currentTodos.find((t) => t.id === u.id);
 		if (!todo) {
@@ -191,6 +191,13 @@ export function updateTodos(
 				updatedTodos: currentTodos,
 				error: `update item for id ${u.id} has neither status nor text`,
 				resultText: `Error: update item for id ${u.id} has neither status nor text`,
+			};
+		}
+		if (u.status && !VALID_STATUSES.includes(u.status as (typeof VALID_STATUSES)[number])) {
+			return {
+				updatedTodos: currentTodos,
+				error: `invalid status: ${u.status}`,
+				resultText: `Error: invalid status '${u.status}' for update item id ${u.id}`,
 			};
 		}
 	}

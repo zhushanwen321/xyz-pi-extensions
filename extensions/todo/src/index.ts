@@ -461,8 +461,12 @@ export default function (pi: ExtensionAPI) {
 					incompleteBefore[0].id === todo.id;
 
 				if (params.status !== undefined) {
+					const oldStatus = todo.status;
 					todo.status = params.status as Todo["status"];
-				}
+					// 检测验证失败: AI 将 completed 任务改回 in_progress (表明验证失败，重新实现)
+					if (oldStatus === "completed" && params.status === "in_progress" && todo.verifyText && todo.verifyAttempts < MAX_VERIFY_ATTEMPTS) {
+						todo.verifyAttempts++;
+					}
 				if (params.text !== undefined) {
 					todo.text = params.text;
 				}
@@ -650,7 +654,8 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.setStatus("todo", `📋 ${pendingTodos.length} pending`);
 
 			return undefined;
-		} catch {
+		} catch (e) {
+			console.debug("[todo] before_agent_start error:", e);
 			return undefined;
 		}
 	});
@@ -748,8 +753,9 @@ export default function (pi: ExtensionAPI) {
 				});
 				return;
 			}
-		} catch {
+		} catch (e) {
 			// 非关键路径，异常时静默降级
+			console.debug("[todo] agent_end error:", e);
 			return;
 		}
 	});
@@ -811,8 +817,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// ── Message Renderer: todo-context ───────────────────
-	pi.registerMessageRenderer("todo-context", (message: any, _options: any, theme: Theme) => {
-		const text = message?.message || "";
+	pi.registerMessageRenderer("todo-context", (message: Record<string, unknown>, _options: unknown, theme: Theme) => {
+		const text = (typeof message?.message === "string" ? message.message : "") as string;
 		const match = text.match(/\[TODO\]\s*(All\s+)?(\d+)?\s*tasks?\s*(pending|completed|auto-cleared)?/i);
 		if (match) {
 			const status = match[3]?.toLowerCase() || "";

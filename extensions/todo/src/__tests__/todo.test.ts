@@ -329,92 +329,36 @@ describe("agent_end loop logic - Task 5", () => {
 		expect(needsVerify).toBeUndefined();
 	});
 
-	it("should increment verifyAttempts when triggering verification", () => {
+	it("should increment verifyAttempts when AI re-opens completed task with verifyText", () => {
 		const todos: Todo[] = [
-			{
-				id: 1,
-				text: "task A",
-				status: "completed",
-				verifyText: "check A",
-				verifyAttempts: 0,
-			},
+			{ id: 1, text: "task A", status: "completed", verifyText: "check A", verifyAttempts: 0 },
 		];
 
-		// Step 1: verify-failed check (attempts 0 < 2 → skip)
-		const failed = todos.find(
-			(t) =>
-				t.status === "completed" &&
-				t.verifyText &&
-				t.verifyAttempts >= MAX_VERIFY_ATTEMPTS,
-		);
-		expect(failed).toBeUndefined();
+		// agent_end injects context but does NOT auto-increment verifyAttempts
+		// increment happens when AI explicitly re-opens the task (completed → in_progress)
 
-		// Step 2: needs-verify check (attempts 0 < 2 → found)
-		const needsVerify = todos.find(
-			(t) =>
-				t.status === "completed" &&
-				t.verifyText &&
-				t.verifyAttempts < MAX_VERIFY_ATTEMPTS,
-		);
-		expect(needsVerify).toBeDefined();
+		// AI fails verification, re-opens: completed → in_progress + increment
+		todos[0].status = "in_progress";
+		todos[0].verifyAttempts++;
+		expect(todos[0].verifyAttempts).toBe(1);
 
-		// Simulate increment
-		needsVerify!.verifyAttempts++;
-		expect(needsVerify!.verifyAttempts).toBe(1);
+		// AI reworks, marks completed again
+		todos[0].status = "completed";
+		// agent_end still finds it (1 < 2)
+		const needVerify = todos.find(t => t.status === "completed" && t.verifyText && t.verifyAttempts < MAX_VERIFY_ATTEMPTS);
+		expect(needVerify).toBeDefined();
 
-		// Second completion: attempts=1 < 2 → verify again → increments to 2
-		const stillNeeds = todos.find(
-			(t) =>
-				t.status === "completed" &&
-				t.verifyText &&
-				t.verifyAttempts < MAX_VERIFY_ATTEMPTS,
-		);
-		expect(stillNeeds).toBeDefined();
-		stillNeeds!.verifyAttempts++;
-		expect(stillNeeds!.verifyAttempts).toBe(2);
+		// AI fails again, re-opens
+		todos[0].status = "in_progress";
+		todos[0].verifyAttempts++;
+		expect(todos[0].verifyAttempts).toBe(2);
 
-		// Third completion: attempts=2 < 2? No → needsVerify undefined
-		// verify-failed check: attempts=2 >= 2? Yes → mark failed
-		const nextFailed = todos.find(
-			(t) =>
-				t.status === "completed" &&
-				t.verifyText &&
-				t.verifyAttempts >= MAX_VERIFY_ATTEMPTS,
-		);
-		expect(nextFailed).toBeDefined();
-		nextFailed!.status = "failed";
-		expect(nextFailed!.status).toBe("failed");
-	});
-
-	it("should mark failed when attempts reach max (verify-failed catches before needs-verify)", () => {
-		const todos: Todo[] = [
-			{
-				id: 1,
-				text: "task A",
-				status: "completed",
-				verifyText: "check A",
-				verifyAttempts: MAX_VERIFY_ATTEMPTS,
-			},
-		];
-
-		// Step 1 (verify-failed check) should catch this
-		const failed = todos.find(
-			(t) =>
-				t.status === "completed" &&
-				t.verifyText &&
-				t.verifyAttempts >= MAX_VERIFY_ATTEMPTS,
-		);
+		// AI marks completed, now verify-failed should catch it
+		todos[0].status = "completed";
+		const failed = todos.find(t => t.status === "completed" && t.verifyText && t.verifyAttempts >= MAX_VERIFY_ATTEMPTS);
 		expect(failed).toBeDefined();
-		expect(failed!.id).toBe(1);
-
-		// Step 2 (needs-verify) should NOT find it
-		const needsVerify = todos.find(
-			(t) =>
-				t.status === "completed" &&
-				t.verifyText &&
-				t.verifyAttempts < MAX_VERIFY_ATTEMPTS,
-		);
-		expect(needsVerify).toBeUndefined();
+		failed!.status = "failed";
+		expect(failed!.status).toBe("failed");
 	});
 
 	it("should detect stall when no todo activity for threshold rounds", () => {
@@ -506,6 +450,54 @@ describe("agent_end loop logic - Task 5", () => {
 	});
 });
 
+// ── batch update sanity ──────────────────────────────
+
+describe("batch update validation - Task 3b", () => {
+	it("should reject invalid status values in updates[]", () => {
+		const todos: Todo[] = [{ id: 1, text: "A", status: "pending", verifyAttempts: 0 }];
+		const result = updateTodos(todos, [{ id: 1, status: "banana" }]);
+		expect(result.error).toContain("invalid status");
+		expect(result.updatedTodos[0].status).toBe("pending"); // unchanged
+	});
+
+	it("should accept valid status values in updates[]", () => {
+		const todos: Todo[] = [{ id: 1, text: "A", status: "pending", verifyAttempts: 0 }];
+		const result = updateTodos(todos, [{ id: 1, status: "completed" }]);
+		expect(result.error).toBeUndefined();
+		expect(result.updatedTodos[0].status).toBe("completed");
+	});
+});
+
+// ── verifyAttempts increment on re-open ─────────────
+
+describe("verifyAttempts increment on re-open", () => {
+	it("should increment verifyAttempts when status changes from completed to in_progress with verifyText", () => {
+		// Simulates: agent_end injects context → AI verifies → fails → re-opens
+		const todo: Todo = { id: 1, text: "fix auth", status: "completed", verifyText: "check status codes", verifyAttempts: 0 };
+
+		// AI re-opens the task (completed → in_progress)
+		const oldStatus = todo.status;
+		todo.status = "in_progress";
+		if (oldStatus === "completed" && todo.verifyText && todo.verifyAttempts < 2) {
+			todo.verifyAttempts++;
+		}
+
+		expect(todo.verifyAttempts).toBe(1);
+		expect(todo.status).toBe("in_progress");
+	});
+
+	it("should NOT increment verifyAttempts when re-opening task without verifyText", () => {
+		const todo: Todo = { id: 1, text: "simple task", status: "completed", verifyAttempts: 0 };
+
+		const oldStatus = todo.status;
+		todo.status = "in_progress";
+		if (oldStatus === "completed" && todo.verifyText && todo.verifyAttempts < 2) {
+			todo.verifyAttempts++;
+		}
+
+		expect(todo.verifyAttempts).toBe(0); // no verifyText → no increment
+	});
+});
 // ── buildRender ───────────────────────────────────────
 
 describe("buildRender", () => {
