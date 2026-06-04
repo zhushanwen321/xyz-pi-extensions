@@ -643,17 +643,16 @@ export default function (pi: ExtensionAPI) {
 			const contextStr =
 				`<todo_context>\n[TODO] ${pendingTodos.length} tasks pending\n${lines.join("\n")}\n\nRules:\n- 优先使用 updates[] 批量更新\n- [待验证] 的任务必须验证通过后才能 completed\n- 全部完成后工具自动闭合\n</todo_context>`;
 
-			pi.deliver({
-				deliverAs: "steer",
-				display: false,
-				customType: "todo-context",
-				message: contextStr,
-			});
-
 			// 更新状态栏
 			ctx.ui.setStatus("todo", `📋 ${pendingTodos.length} pending`);
 
-			return undefined;
+			return {
+				message: {
+					customType: "todo-context",
+					content: contextStr,
+					display: false,
+				},
+			};
 		} catch (e) {
 			console.debug("[todo] before_agent_start error:", e);
 			return undefined;
@@ -673,12 +672,7 @@ export default function (pi: ExtensionAPI) {
 			if (verifyFailed) {
 				verifyFailed.status = "failed";
 				refreshDisplay(ctx);
-				pi.deliver({
-					deliverAs: "steer",
-					display: false,
-					customType: "todo-context",
-					message: `<todo_context>\n[TODO] Task #${verifyFailed.id} "${verifyFailed.text}" failed verification after ${MAX_VERIFY_ATTEMPTS} attempts.\n</todo_context>`,
-				});
+				pi.sendUserMessage(`<todo_context>\n[TODO] Task #${verifyFailed.id} "${verifyFailed.text}" failed verification after ${MAX_VERIFY_ATTEMPTS} attempts.\n</todo_context>`, { deliverAs: "steer" });
 				return;
 			}
 
@@ -693,12 +687,7 @@ export default function (pi: ExtensionAPI) {
 				// 注意: verifyAttempts 不在 agent_end 中自动递增
 				// 增量在 update handler 中: AI 将 completed→in_progress 时显式表示验证失败
 				// 这确保任务可以保持在 completed 状态（AI 通过验证后不做任何操作）
-				pi.deliver({
-					deliverAs: "steer",
-					display: false,
-					customType: "todo-context",
-					message: `<todo_context>\n[TODO] Task #${needsVerify.id} "${needsVerify.text}" needs verification:\n${needsVerify.verifyText}\n</todo_context>`,
-				});
+				pi.sendUserMessage(`<todo_context>\n[TODO] Task #${needsVerify.id} "${needsVerify.text}" needs verification:\n${needsVerify.verifyText}\n</todo_context>`, { deliverAs: "steer" });
 				return;
 			}
 
@@ -712,12 +701,7 @@ export default function (pi: ExtensionAPI) {
 				nextId = 1;
 				allCompletedAtCount = null;
 				refreshDisplay(ctx);
-				pi.deliver({
-					deliverAs: "steer",
-					display: false,
-					customType: "todo-context",
-					message: `<todo_context>\n[TODO] All ${count} todos completed, list auto-cleared.\n</todo_context>`,
-				});
+				pi.sendUserMessage(`<todo_context>\n[TODO] All ${count} todos completed, list auto-cleared.\n</todo_context>`, { deliverAs: "steer" });
 				return;
 			}
 
@@ -731,12 +715,7 @@ export default function (pi: ExtensionAPI) {
 					.filter((t) => t.status !== "completed")
 					.map((t) => `#${t.id}: ${t.text}`)
 					.join("\n");
-				pi.deliver({
-					deliverAs: "steer",
-					display: false,
-					customType: "todo-context",
-					message: `<todo_context>\n[TODO] You have ${todos.length} pending tasks:\n${pendingText}\n</todo_context>`,
-				});
+				pi.sendUserMessage(`<todo_context>\n[TODO] You have ${todos.length} pending tasks:\n${pendingText}\n</todo_context>`, { deliverAs: "steer" });
 				return;
 			}
 
@@ -746,12 +725,7 @@ export default function (pi: ExtensionAPI) {
 				allCompletedAtCount === null &&
 				userMessageCount - lastTodoCallCount >= REMINDER_INTERVAL
 			) {
-				pi.deliver({
-					deliverAs: "steer",
-					display: false,
-					customType: "todo-context",
-					message: `<todo_context>\n[TODO] You have ${todos.length} tasks. Consider updating progress.\n</todo_context>`,
-				});
+				pi.sendUserMessage(`<todo_context>\n[TODO] You have ${todos.length} tasks. Consider updating progress.\n</todo_context>`, { deliverAs: "steer" });
 				return;
 			}
 		} catch (e) {
