@@ -92,7 +92,7 @@ updates?: Array<{
 3. **自动验证触发**：有任务被 mark 为 `completed` 且含 `verifyText` → 自动注入验证上下文
 4. **验证失败处理**：`verifyAttempts >= 2` → 状态设为 `failed`，通知用户
 
-Context 注入格式（参考 goal 的 `<goal_context>` 模式）：
+Context 注入格式（参考 goal 的 `<goal_context>` 模式，下为 `agent_end` 中的示例；`before_agent_start` 注入不包含 Turn X，因事件本身已在轮次起点触发）：
 
 ```
 <todo_context>
@@ -109,15 +109,15 @@ Rules:
 
 verifyText 原文在 `<todo_context>` 中完整暴露，AI 可以根据内容执行验证。TUI 仅显示 `[待验证]` 标签（不含具体内容），保持 UI 简洁。
 
-Context 注入使用 `display: false`（进 AI 上下文，不显示在 TUI 消息中），避免干扰用户视线。
+Context 注入进 AI 上下文但不显示在 TUI 消息中。`before_agent_start` 通过 handler return `{ message: { display: false } }`，`agent_end` 使用 `pi.sendUserMessage(content, { deliverAs: "steer" })` — 两者功能等价，均避免干扰用户视线。
 
 ### FR-5: `before_agent_start` 改造
 
 替换现有 v3 的三个 `display: true` 提醒消息（todo-auto-clear、todo-verification-nudge、todo-reminder）：
 
 - **不再使用** `display: true` 的消息注入方式（当前方式不进 AI 上下文）
-- 改为与 FR-4 相同的 `<todo_context>` 注入（`display: false`）
-- `before_agent_start` 中注入未完成任务的概览，`agent_end` 中做验证/提醒
+- 改为 `<todo_context>` 注入（handler return `{ message: { display: false } }`），内容聚焦待完成任务概览，不包含 Turn X 和 completed 计数（因事件在轮次起点触发，agent_end 单独处理完整详情）
+- `before_agent_start` 中注入 pending 任务概览，`agent_end` 中做验证/提醒/stall
 - 保持 TUI 状态栏和 widget 不变（这部分工作正常）
 
 ### FR-6: `registerMessageRenderer`

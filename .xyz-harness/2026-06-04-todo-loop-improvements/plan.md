@@ -828,9 +828,9 @@ git commit -m "feat(todo): register message renderer for todo-context type"
 Remove these items:
 1. Constant `VERIFICATION_NUDGE_THRESHOLD = 3` (replaced by MAX_VERIFY_ATTEMPTS)
 2. Constant `TODO_REMINDER_INTERVAL = 10` (replaced by REMINDER_INTERVAL = 3)
-3. The `userMessageCount` increment in `agent_start` handler (no longer used for reminders)
-4. All `allCompletedAtCount` tracking in the old auto-clear (moved to agent_end)
-5. Old display:true pi.deliver calls with customType "todo-auto-clear", "todo-verification-nudge", "todo-reminder"
+3. Old display:true pi.deliver calls with customType "todo-auto-clear", "todo-verification-nudge", "todo-reminder"
+
+Note: Do NOT remove `userMessageCount`/`allCompletedAtCount` — they are re-used by the new `agent_end` handler for round-tracking and auto-close delay.
 
 - [ ] **Step 2: Run test to ensure nothing broken**
 
