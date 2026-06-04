@@ -1,5 +1,11 @@
 # @zhushanwen/pi-goal
 
+## 0.1.4
+
+### Patch Changes
+
+- ffd4c59: fix: remove hasPendingInjection blocking agent_end continuation; align maxTurns with currentTurnIndex
+
 ## 0.1.3
 
 ### Patch Changes
