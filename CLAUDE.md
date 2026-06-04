@@ -169,7 +169,7 @@ python3 scripts/validate-extensions-yaml.py
 - 根 `package.json` 的 `version`（当前 `0.0.7`）无实际发布意义，仅代表 monorepo 整体迭代序号
 - 各 `extensions/*` 和 `shared/*` 子包版本独立，不联动
 - `changeset config.json` 的 `fixed` 为空，确认独立版本模式
-- `merge-worktree` 的 `bump patch/minor/major` 只 bump 根版本号，不影响子包
+- merge-worktree 阶段 4 通过 `scripts/publish.sh` 委托发布，支持 changeset 子包版本 bump
 
 **子包版本 bump 规则：**
 
@@ -179,11 +179,21 @@ python3 scripts/validate-extensions-yaml.py
 | 新功能、新 provider、新增 API | `minor` | 新增 speed 显示 → `0.4.0` → `0.5.0` |
 | 破坏性变更（API 不兼容） | `major` | 重构导出接口 → `0.4.0` → `1.0.0` |
 
-**操作流程：**
+**操作流程（手动）：**
 
 1. `pnpm changeset` — 交互式选择受影响的包和版本级别
 2. `pnpm changeset version` — 根据 changeset 文件 bump 各包版本
 3. 提交变更 + 打 tag → GitHub Actions 自动发布
+
+**操作流程（merge-worktree 自动）：**
+
+merge-worktree 阶段 4 检测到 `scripts/publish.sh` 后自动委托，执行：
+1. `pnpm changeset version`（消费已有的 changeset 文件）
+2. bump 根版本号（monorepo 迭代序号）
+3. commit + tag `v{根版本}` + push
+4. release.yml 由 tag 触发，执行 `pnpm changeset publish` 发布到 npm
+
+⚠️ **PR 中必须包含 changeset 文件**（通过 `pnpm changeset` 创建），否则阶段 4 只 bump 根版本号，子包不会发布。
 
 ### 发布流程（GitHub Actions）
 
@@ -192,20 +202,31 @@ python3 scripts/validate-extensions-yaml.py
 项目通过 GitHub Actions 自动发布 npm 包。触发条件：push tag `v*`。
 
 ```bash
-# 1. 创建 changeset（选择受影响的包 + patch/minor/major）
+# 1. 在 PR 分支中创建 changeset（选择受影响的包 + patch/minor/major）
 pnpm changeset
-git add .changeset/
-git commit -m "chore: add changeset"
+git add .changeset/ && git commit -m "chore: add changeset"
 
-# 2. 版本 bump
+# 2. PR 合并后，merge-worktree 阶段 4 自动执行 publish.sh：
+#    - pnpm changeset version（bump 子包版本）
+#    - bump 根版本号 + commit + tag + push
+#    - release.yml 自动发布到 npm
+```
+
+**⚠️ 如果不用 merge-worktree，手动发布流程：**
+
+```bash
+# 1. 创建 changeset + bump
+pnpm changeset
 pnpm changeset version
-git add -A && git commit -m "chore: bump versions" && git push
+git add -A && git commit -m "chore: bump versions"
 
-# 3. 打 tag 触发 GitHub Actions 发布
+# 2. 打 tag 触发发布
 git tag v0.x.x && git push origin v0.x.x
 ```
 
 GitHub Actions 自动执行：`pnpm changeset publish` + 创建 GitHub Release。
+
+**npm monorepo 项目的交付物验证**：GitHub Release 无构建产物（只有 source code）。实际交付物是 npm registry 上的包。阶段 6 通过 `npm view` 验证。
 
 **前提条件（已满足）：**
 - GitHub Secrets 中已配置 `NPM_TOKEN`
