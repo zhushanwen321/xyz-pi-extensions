@@ -47,7 +47,7 @@ export function registerGenerateTool(pi: ExtensionAPI) {
     ],
     parameters: WorkflowGenerateParams,
 
-    async execute(_toolCallId: string, params: Static<typeof WorkflowGenerateParams>, _signal: AbortSignal | undefined, _onUpdate: any, _ctx: any): Promise<any> {
+    async execute(_toolCallId: string, params: Static<typeof WorkflowGenerateParams>, _signal: AbortSignal | undefined, _onUpdate: unknown, _ctx: unknown): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean; details?: Record<string, unknown> }> {
       const name = params.name as string;
       const script = params.script as string;
 
@@ -149,15 +149,15 @@ export function registerGenerateTool(pi: ExtensionAPI) {
       };
     },
 
-    renderCall(args: any, theme: Theme, _context?: any) {
-      const name = args.name as string;
+    renderCall(args: Static<typeof WorkflowGenerateParams>, theme: Theme, _context?: unknown) {
+      const name = args.name;
       const text =
         theme.fg("toolTitle", theme.bold("workflow-generate ")) +
         theme.fg("accent", name);
       return new Text(text, 0, 0);
     },
 
-    renderResult(result: any, _options: any, _theme: Theme, _context?: any) {
+    renderResult(result: { content: Array<{ type: string; text: string }> }, _options: unknown, _theme: Theme, _context?: unknown) {
       const text = result.content[0];
       return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
     },

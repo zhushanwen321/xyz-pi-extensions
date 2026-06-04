@@ -21,6 +21,13 @@ const ANALYZER_PATH = join(EXT_DIR, "..", "analyzer", "analyze.py");
 // 运行时数据目录使用 Pi 平台约定路径（homedir + .pi/agent/）
 const REPORTS_DIR = join(homedir(), ".pi", "agent", "evolution-data", "daily-reports");
 
+const DATE_SLICE_END = 10;
+const ANALYZER_TIMEOUT_MS = 30_000;
+
+type PiOnAny = {
+  on(event: string, handler: (...args: unknown[]) => Promise<void> | void): void;
+};
+
 /** tool_result 事件中匹配的工具结果 detector */
 interface ToolResultDetector {
   problemId: string;
@@ -31,7 +38,7 @@ interface ToolResultDetector {
 export default function evolveDailyExtension(pi: ExtensionAPI) {
   // ── L1: session_start 时调用 Python analyzer ──
   pi.on("session_start", async () => {
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const today = new Date().toISOString().slice(0, DATE_SLICE_END); // YYYY-MM-DD
     const reportPath = join(REPORTS_DIR, `${today}.json`);
 
     if (existsSync(reportPath)) return;
@@ -48,12 +55,13 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
           "--output",
           reportPath,
         ],
-        { timeout: 30_000 }
+        { timeout: ANALYZER_TIMEOUT_MS }
       );
     } catch (e) {
       // Clean up partial output if analyzer failed mid-write
       try {
         unlinkSync(reportPath);
+      // eslint-disable-next-line taste/no-silent-catch
       } catch {
         /* already gone */
       }
@@ -69,9 +77,10 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
     PROBLEM_REGISTRY.find((p) => p.id === "compact-frequency")!
   );
 
-  (pi.on as any)("session_compact", async (event: Record<string, unknown>) => {
+  (pi.on as unknown as PiOnAny).on("session_compact", async (event: unknown) => {
+    const ev = event as Record<string, unknown>;
     try {
-      const item = compactDetector.createItem(event);
+      const item = compactDetector.createItem(ev);
       pi.appendEntry("evolve-feedback", {
         problemId: item.problemId,
         itemId: item.id,
@@ -79,6 +88,7 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
         detail: item.detail ?? null,
         timestamp: new Date().toISOString(),
       });
+    // eslint-disable-next-line taste/no-silent-catch
     } catch (e) {
       console.error(
         `[evolve-daily] compact detector error:`,
@@ -101,13 +111,14 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
     ),
   ];
 
-  (pi.on as any)(
+  (pi.on as unknown as PiOnAny).on(
     "tool_result",
-    async (event: Record<string, unknown>, _ctx?: unknown) => {
+    async (event: unknown, _ctx?: unknown) => {
+      const ev = event as Record<string, unknown>;
       for (const detector of toolDetectors) {
         try {
-          if (detector.match(event)) {
-            const item = detector.createItem(event);
+          if (detector.match(ev)) {
+            const item = detector.createItem(ev);
             pi.appendEntry("evolve-feedback", {
               problemId: item.problemId,
               itemId: item.id,
@@ -116,6 +127,7 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
               timestamp: new Date().toISOString(),
             });
           }
+        // eslint-disable-next-line taste/no-silent-catch
         } catch (e) {
           console.error(
             `[evolve-daily] detector ${detector.problemId} error:`,

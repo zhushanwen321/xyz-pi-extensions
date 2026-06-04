@@ -4,6 +4,9 @@ import type { CompressionStats } from "./compressor";
 
 // ── 格式化辅助 ──
 
+// 百分比转换因子（小数 → 整数百分比）
+const PERCENT_FACTOR = 100;
+
 function formatConfigSummary(config: ContextEngineeringConfig): string {
   const lines = [
     "Context Engineering Plugin",
@@ -64,7 +67,7 @@ function formatConfigSummary(config: ContextEngineeringConfig): string {
   if (config.l2.enabled) {
     lines.push("L2 (Emergency compression):");
     lines.push("  Enabled: true");
-    const thresholdPercent = Math.round(config.l2.emergencyThreshold * 100);
+    const thresholdPercent = Math.round(config.l2.emergencyThreshold * PERCENT_FACTOR);
     lines.push(
       `  Threshold: ${thresholdPercent}% | Protect recent: ${config.l2.protectRecentTurns} turns`,
     );

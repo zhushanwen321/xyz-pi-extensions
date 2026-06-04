@@ -74,28 +74,68 @@ interface WorkflowDetails {
   };
 }
 
-// ── Extension factory ─────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────
+
+const MS_PER_SEC = 1000;
+const RUNID_SLICE_LENGTH = 20;
+const RUNID_SHORT_LENGTH = 16;
+const INPUT_WORD_MIN_LENGTH = 2;
+
+// ── Helper: _render descriptor builder ────────────────────────
+
+function buildRender(
+  summaries: WorkflowInstanceSummary[],
+): WorkflowDetails["_render"] {
+  const items = summaries;
+  const active = items.filter(
+    (i) => i.status === "running" || i.status === "paused",
+  ).length;
+  const finished = items.filter((i) => isTerminal(i.status)).length;
+  return {
+    type: "summary-table",
+    summary: `${items.length} workflows: ${active} active, ${finished} finished`,
+    data: {
+      title: "Workflows",
+      columns: [
+        { key: "name", label: "Name", valueType: "text" },
+        { key: "status", label: "Status", valueType: "status" },
+        { key: "worker", label: "Worker", valueType: "text" },
+        { key: "duration", label: "Duration", valueType: "duration" },
+      ],
+      rows: items.map((inst) => {
+        const duration =
+          inst.startedAt && inst.completedAt
+            ? `${((new Date(inst.completedAt).getTime() - new Date(inst.startedAt).getTime()) / MS_PER_SEC).toFixed(0)}s`
+            : inst.startedAt
+              ? `${((Date.now() - new Date(inst.startedAt).getTime()) / MS_PER_SEC).toFixed(0)}s (running)`
+              : "-";
+        return { name: inst.name, status: inst.status, worker: inst.worker, duration };
+      }),
+    },
+  };
+}
+
+function toInstanceSummary(summary: WorkflowInstanceSummary): InstanceSummary {
+  return {
+    runId: summary.runId,
+    name: summary.name,
+    status: summary.status,
+    startedAt: summary.startedAt,
+    completedAt: summary.completedAt,
+    error: summary.error,
+  };
+}
 
 export default function workflowExtension(pi: ExtensionAPI) {
   let lastSessionId = "";
   const orchestrators = new Map<string, WorkflowOrchestrator>();
   const cmdState: WorkflowCommandsState = { lastRunId: null };
-
-  // Session-scoped approval memory: tracks which project workflows the user
-  // has already confirmed this session, so we skip re-asking.
   const sessionApprovals = new Set<string>();
 
-  /**
-   * Rebuild workflow state from external JSONL files.
-   * Reads workflow-state-link pointer entries, loads JSONL files,
-   * and deserializes each line into WorkflowInstance objects.
-   */
   async function reconstructState(ctx: ExtensionContext): Promise<Map<string, WorkflowInstance>> {
     const instances = new Map<string, WorkflowInstance>();
     try {
       const entries = ctx.sessionManager.getEntries();
-
-      // Filter pointer entries, dedup by runId (keep last)
       const pointers = new Map<string, { path: string }>();
       for (const entry of entries) {
         if (entry.type !== "custom") continue;
@@ -106,7 +146,6 @@ export default function workflowExtension(pi: ExtensionAPI) {
           pointers.set(data.runId, { path: data.path });
         }
       }
-
       // Load each pointer's JSONL file
       for (const [runId, pointer] of pointers) {
         try {
@@ -117,6 +156,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
               const parsed = JSON.parse(line) as Parameters<typeof deserializeInstance>[0];
               const instance = deserializeInstance(parsed);
               instances.set(instance.runId, instance);
+            // eslint-disable-next-line taste/no-silent-catch
             } catch {
               // Skip malformed lines
             }
@@ -125,60 +165,16 @@ export default function workflowExtension(pi: ExtensionAPI) {
           ctx.ui.notify(`WARN: missing or corrupt state for ${runId}`, "warning");
         }
       }
+    // eslint-disable-next-line taste/no-silent-catch
     } catch {
       // If getEntries fails, return empty map
     }
     return instances;
   }
 
-  // ── Build _render descriptor ────────────────────────────────
-
-  function buildRender(
-    summaries: WorkflowInstanceSummary[],
-  ): WorkflowDetails["_render"] {
-    const items = summaries;
-    const active = items.filter(
-      (i) => i.status === "running" || i.status === "paused",
-    ).length;
-    const finished = items.filter((i) => isTerminal(i.status)).length;
-    return {
-      type: "summary-table",
-      summary: `${items.length} workflows: ${active} active, ${finished} finished`,
-      data: {
-        title: "Workflows",
-        columns: [
-          { key: "name", label: "Name", valueType: "text" },
-          { key: "status", label: "Status", valueType: "status" },
-          { key: "worker", label: "Worker", valueType: "text" },
-          { key: "duration", label: "Duration", valueType: "duration" },
-        ],
-        rows: items.map((inst) => {
-          const duration =
-            inst.startedAt && inst.completedAt
-              ? `${((new Date(inst.completedAt).getTime() - new Date(inst.startedAt).getTime()) / 1000).toFixed(0)}s`
-              : inst.startedAt
-                ? `${((Date.now() - new Date(inst.startedAt).getTime()) / 1000).toFixed(0)}s (running)`
-                : "-";
-          return { name: inst.name, status: inst.status, worker: inst.worker, duration };
-        }),
-      },
-    };
-  }
-
-  function toInstanceSummary(summary: WorkflowInstanceSummary): InstanceSummary {
-    return {
-      runId: summary.runId,
-      name: summary.name,
-      status: summary.status,
-      startedAt: summary.startedAt,
-      completedAt: summary.completedAt,
-      error: summary.error,
-    };
-  }
-
   // ── Events ──────────────────────────────────────────────────
 
-  pi.on("session_start", async (_event: any, ctx: ExtensionContext) => {
+  pi.on("session_start", async (_event: Record<string, unknown>, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     lastSessionId = sessionId;
 
@@ -200,53 +196,30 @@ export default function workflowExtension(pi: ExtensionAPI) {
 
     // Live progress: refresh widget on every trace node change
     orch.onTraceUpdate = (_runId) => {
-      if (ctx.hasUI) {
-        ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
-      }
+      if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
     };
-
-    // Event-driven completion notification (replaces polling)
-    // Fires when a workflow reaches any terminal state
     orch.onCompletion = (runId) => {
       const instance = orch.getInstance(runId);
       if (instance) sendCompletionNotification(pi, runId, instance);
     };
-
-    // Set up TUI widget showing workflow list overview
-    if (ctx.hasUI) {
-      const summaryList = orch.list();
-      ctx.ui.setWidget("workflow", renderWorkflowList(summaryList, ctx.ui.theme));
-    }
+    if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
   });
 
-  pi.on("session_tree", async (_event: any, ctx: ExtensionContext) => {
+  pi.on("session_tree", async (_event: Record<string, unknown>, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     lastSessionId = sessionId;
-
-    // Create orchestrator for the new session context
     const orch = new WorkflowOrchestrator(pi, ctx);
     orchestrators.set(sessionId, orch);
-
-    // Restore reconstructed state into orchestrator
     const instances = await reconstructState(ctx);
     orch.restoreInstances(instances);
-
-    // Live progress: refresh widget on every trace node change
     orch.onTraceUpdate = (_runId) => {
-      if (ctx.hasUI) {
-        ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
-      }
+      if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
     };
-
     orch.onCompletion = (runId) => {
       const instance = orch.getInstance(runId);
       if (instance) sendCompletionNotification(pi, runId, instance);
     };
-
-    if (ctx.hasUI) {
-      const summaryList = orch.list();
-      ctx.ui.setWidget("workflow", renderWorkflowList(summaryList, ctx.ui.theme));
-    }
+    if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
   });
 
   pi.on("session_shutdown", async () => {
@@ -288,7 +261,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
     ],
     parameters: WorkflowParams,
 
-    async execute(_toolCallId: string, params: Static<typeof WorkflowParams>, _signal: AbortSignal | undefined, _onUpdate: any, ctx: ExtensionContext) {
+    async execute(_toolCallId: string, params: Static<typeof WorkflowParams>, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
       const sessionId = ctx.sessionManager.getSessionId();
       lastSessionId = sessionId;
       const orch = orchestrators.get(sessionId);
@@ -351,6 +324,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
                 _render: buildRender(summaries),
               } satisfies WorkflowDetails,
             };
+          // eslint-disable-next-line taste/no-silent-catch
           } catch {
             // Orchestrator method failed — fall through to direct state machine
           }
@@ -411,9 +385,9 @@ export default function workflowExtension(pi: ExtensionAPI) {
             .map((s) => {
               const duration =
                 s.startedAt
-                  ? ` (${((Date.now() - new Date(s.startedAt).getTime()) / 1000).toFixed(0)}s)`
+                  ? ` (${((Date.now() - new Date(s.startedAt).getTime()) / MS_PER_SEC).toFixed(0)}s)`
                   : "";
-              return `[${s.status}] ${s.name} (${s.runId.slice(0, 20)})${duration}` +
+              return `[${s.status}] ${s.name} (${s.runId.slice(0, RUNID_SLICE_LENGTH)})${duration}` +
                 (s.error ? ` error: ${s.error}` : "");
             })
             .join("\n");
@@ -438,21 +412,22 @@ export default function workflowExtension(pi: ExtensionAPI) {
       }
     },
 
-    renderCall(args: any, theme: Theme, _context?: any) {
+    renderCall(args: Record<string, unknown>, theme: Theme, _context?: unknown) {
       const action = args.action as string;
       let text =
         theme.fg("toolTitle", theme.bold("workflow ")) +
         theme.fg("muted", action);
       if (args.name) text += ` ${theme.fg("accent", args.name as string)}`;
-      if (args.runId) text += ` ${theme.fg("dim", (args.runId as string).slice(0, 20))}`;
+      if (args.runId) text += ` ${theme.fg("dim", (args.runId as string).slice(0, RUNID_SLICE_LENGTH))}`;
       if (args.error) text += ` ${theme.fg("error", "error")}`;
       return new Text(text, 0, 0);
     },
 
-    renderResult(result: any, _options: any, theme: Theme, _context?: any) {
+    renderResult(result: Record<string, unknown>, _options: unknown, theme: Theme, _context?: unknown) {
       const details = result.details as WorkflowDetails | undefined;
       if (!details) {
-        const text = result.content[0];
+        const content = result.content as Array<{ type: string; text: string }> | undefined;
+        const text = content?.[0];
         return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
       }
 
@@ -464,270 +439,21 @@ export default function workflowExtension(pi: ExtensionAPI) {
               : inst.status === "running" ? "warning"
               : inst.status === "failed" || inst.status === "aborted" ? "error"
               : "muted";
-            return `${theme.fg(color, `[${inst.status}]`)} ${theme.fg("accent", inst.name)} ${theme.fg("dim", inst.runId.slice(0, 16))}${inst.error ? ` ${theme.fg("error", inst.error)}` : ""}`;
+            return `${theme.fg(color, `[${inst.status}]`)} ${theme.fg("accent", inst.name)} ${theme.fg("dim", inst.runId.slice(0, RUNID_SHORT_LENGTH))}${inst.error ? ` ${theme.fg("error", inst.error)}` : ""}`;
           })
           .join("\n");
         return new Text(lines, 0, 0);
       }
 
-      const text = result.content[0];
+      const content = result.content as Array<{ type: string; text: string }> | undefined;
+      const text = content?.[0];
       return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
     },
   });
 
   // ── Tool: workflow-run ──────────────────────────────────────
 
-  const WorkflowRunParams = Type.Object({
-    name: Type.String({ description: "Exact workflow name or natural language task description" }),
-    mode: Type.Optional(
-      StringEnum(["auto", "force"] as const, {
-        description: "'auto' (default): search existing workflows, confirm with user. 'force': skip confirmation, AI decides",
-      }),
-    ),
-    args: Type.Optional(
-      Type.Record(Type.String(), Type.Unknown(), {
-        description: "Arguments passed to workflow as key-value pairs",
-      }),
-    ),
-    tokens: Type.Optional(
-      Type.Number({ description: "Maximum token budget" }),
-    ),
-    time: Type.Optional(
-      Type.Number({ description: "Maximum time budget in milliseconds" }),
-    ),
-  });
-
-  interface WorkflowRunDetails {
-    action: "run";
-    runId: string;
-    status: string;
-    name: string;
-    confirmSkipped?: boolean;
-    _render?: {
-      type: "task-list";
-      data: {
-        title: string;
-        items: Array<{
-          label: string;
-          status: "pending" | "in_progress" | "completed" | "failed" | "cancelled";
-          detail?: string;
-        }>;
-      };
-    };
-  }
-
-  pi.registerTool({
-    name: "workflow-run",
-    label: "Workflow Run",
-    description:
-      "Run a workflow by exact name or natural language task description. Searches .pi/workflows/ " +
-      "for matching scripts before executing.\n\n" +
-      "Two modes:\n" +
-      "- auto (default): Searches existing workflows first. Exact match → run after user confirmation. " +
-      "Fuzzy match → list candidates for user to choose. No match → suggest workflow-generate. " +
-      "Always confirms with user before execution.\n" +
-      "- force: Skips confirmation. AI decides best match or returns error if none found. " +
-      "Use only when user explicitly says \"just run it\" or \"skip confirmation\".\n\n" +
-      "When to use:\n" +
-      "- User says \"run workflow X\" → exact name, auto mode\n" +
-      "- User describes a task that sounds like a workflow → natural language, auto mode\n" +
-      "- User says \"just do it\" or \"no need to ask\" → force mode\n" +
-      "- User asks for a reusable pipeline → auto mode, may lead to workflow-generate\n\n" +
-      "Do NOT use for single-step tasks that bash can handle directly.",
-    promptSnippet:
-      "Run a workflow by name or task description with auto-discovery",
-    promptGuidelines: [
-      "Default to auto mode. Only use force when user explicitly skips confirmation.",
-      "name can be an exact workflow name OR a natural language task description.",
-      "When name is descriptive (not an exact workflow name), the tool searches existing workflows by description.",
-      "If no workflow matches, the tool returns suggestions. Use workflow-generate to create one, then confirm with user.",
-      "Do NOT use workflow-run for single-step tasks. It's for multi-step agent pipelines.",
-      "After workflow-run returns 'started', results arrive asynchronously. Check with workflow { action: status }.",
-    ],
-    parameters: WorkflowRunParams,
-
-    async execute(_toolCallId: string, params: Static<typeof WorkflowRunParams>, _signal: AbortSignal | undefined, _onUpdate: any, ctx: ExtensionContext) {
-      const sessionId = ctx.sessionManager.getSessionId();
-      lastSessionId = sessionId;
-      const orch = orchestrators.get(sessionId);
-      if (!orch) {
-        return {
-          content: [{ type: "text", text: "Workflow orchestrator not initialized" }],
-          isError: true,
-        };
-      }
-
-      const name = params.name as string;
-      const mode = (params.mode as string | undefined) ?? "auto";
-      const args = (params.args as Record<string, unknown> | undefined) ?? {};
-      const tokens = params.tokens as number | undefined;
-      const time = params.time as number | undefined;
-
-      // ── Discovery: search existing workflows ──────────────
-      const { loadWorkflows } = await import("./config-loader.js");
-      let allWorkflows: Awaited<ReturnType<typeof loadWorkflows>>;
-      try {
-        allWorkflows = await loadWorkflows();
-      } catch {
-        allWorkflows = [];
-      }
-      const available = allWorkflows.filter((wf) => wf.available);
-
-      // Step 1: Exact name match
-      const exactMatch = available.find(
-        (wf) => wf.name === name,
-      );
-
-      if (exactMatch) {
-        if (mode === "force") {
-          // Force mode: run directly, skip all checks
-          const runId = await orch.run(name, args, tokens, time);
-          cmdState.lastRunId = runId;
-          if (ctx.hasUI) {
-            ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
-          }
-          return {
-            content: [{ type: "text" as const, text: `Started workflow '${name}' (${runId}) [force mode]` }],
-            details: { action: "run", runId, status: "running", name, confirmSkipped: true as const } satisfies WorkflowRunDetails,
-          };
-        }
-
-        // Auto mode with exact match: confirm gate with session memory
-        if (ctx.hasUI) {
-          const isTmp = exactMatch.source === "tmp";
-          const shouldConfirm = isTmp || !sessionApprovals.has(exactMatch.name);
-          if (shouldConfirm) {
-            const ok = await ctx.ui.confirm(
-              "Run workflow?",
-              `Workflow: ${exactMatch.name}\nDescription: ${exactMatch.description ?? "(none)"}\nSource: [${exactMatch.source}]\nPath: ${exactMatch.path ?? "(none)"}`,
-            );
-            if (!ok) {
-              return {
-                content: [{ type: "text" as const, text: `User declined to run '${exactMatch.name}'.` }],
-                details: { action: "run" as const, runId: "", status: "declined", name: exactMatch.name },
-              };
-            }
-            if (!isTmp) {
-              sessionApprovals.add(exactMatch.name);
-              pi.appendEntry("workflow-approval-memory", { workflowName: exactMatch.name, approvedAt: new Date().toISOString() });
-            }
-          }
-        } else {
-          // hasUI=false fallback
-          pi.sendUserMessage(`Confirm to run '${exactMatch.name}'? (RPC mode — auto-confirm not available, proceed with caution)`, { deliverAs: "steer" });
-        }
-
-        // Proceed to run after approval
-        const runId = await orch.run(name, args, tokens, time);
-        cmdState.lastRunId = runId;
-        if (ctx.hasUI) {
-          ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
-        }
-        return {
-          content: [{ type: "text" as const, text: `Started workflow '${exactMatch.name}' (${runId})` }],
-          details: { action: "run", runId, status: "running", name: exactMatch.name } satisfies WorkflowRunDetails,
-        };
-      }
-
-      // Step 2: Fuzzy match by description/name keywords
-      const inputLower = name.toLowerCase();
-      const inputWords = inputLower.split(/\s+/).filter((w) => w.length > 2);
-      const candidates = available.filter((wf) => {
-        const text = `${wf.name} ${wf.description}`.toLowerCase();
-        return inputWords.some((w) => text.includes(w));
-      });
-
-      if (candidates.length > 0) {
-        const candidateList = candidates
-          .map((wf) => `  - ${wf.name}: ${wf.description || "(no description)"} [${wf.source}]`)
-          .join("\n");
-
-        if (mode === "force") {
-          // Force mode: pick first candidate and run
-          const best = candidates[0];
-          const runId = await orch.run(best.name, args, tokens, time);
-          cmdState.lastRunId = runId;
-          if (ctx.hasUI) {
-            ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
-          }
-          return {
-            content: [{ type: "text" as const, text: `Started workflow '${best.name}' (${runId}) [force mode, fuzzy match]` }],
-            details: { action: "run", runId, status: "running", name: best.name, confirmSkipped: true as const } satisfies WorkflowRunDetails,
-          };
-        }
-        // Auto mode: list candidates for user
-        pi.sendUserMessage(
-          `No exact match for '${name}', but found ${candidates.length} related workflow(s):\n${candidateList}\n\n` +
-          `Ask the user which one to use, or if they want to create a new workflow. ` +
-          `If they choose one, use workflow-run with the exact name and mode 'force'.`,
-          { deliverAs: "steer" },
-        );
-        return {
-          content: [{ type: "text" as const, text: `Found ${candidates.length} fuzzy match(es) for '${name}'. Awaiting user choice.` }],
-          details: { action: "run", runId: "", status: "pending", name } satisfies WorkflowRunDetails,
-        };
-      }
-
-      // Step 3: No match
-      const fullList = available.length > 0
-        ? available.map((wf) => `  - ${wf.name}: ${wf.description || "(no description)"}`).join("\n")
-        : "  (none)";
-
-      if (mode === "force") {
-        return {
-          content: [{
-            type: "text" as const,
-            text: `No matching workflow for '${name}'. Available:\n${fullList}\n\nRe-run with mode='auto' for interactive selection, or use workflow-generate to create a new workflow.`,
-          }],
-          isError: true,
-        };
-      }
-      // Auto mode: suggest creating new
-      pi.sendUserMessage(
-        `No workflow matches '${name}'. Available workflows:\n${fullList}\n\n` +
-          `Suggestions:\n` +
-          `1. If one of the above looks suitable, use workflow-run with its exact name.\n` +
-          `2. If none fits, use workflow-generate to create a new temporary workflow.\n` +
-          `3. Before executing a generated workflow, ALWAYS show the script path and wait for user confirmation.`,
-        { deliverAs: "steer" },
-      );
-      return {
-        content: [{ type: "text" as const, text: `No match for '${name}'. Suggestions sent to conversation.` }],
-        details: { action: "run", runId: "", status: "pending", name } satisfies WorkflowRunDetails,
-      };
-    },
-
-    renderCall(args: any, theme: Theme, _context?: any) {
-      const name = args.name as string;
-      const text =
-        theme.fg("toolTitle", theme.bold("workflow-run ")) +
-        theme.fg("accent", name);
-      return new Text(text, 0, 0);
-    },
-
-    renderResult(result: any, _options: any, theme: Theme, _context?: any) {
-      const details = result.details as WorkflowRunDetails | undefined;
-      if (!details) {
-        const text = result.content[0];
-        return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
-      }
-
-      const statusColor =
-        details.status === "completed"
-          ? "success"
-          : details.status === "running"
-            ? "warning"
-            : details.status === "failed" || details.status === "aborted"
-              ? "error"
-              : "muted";
-
-      const text =
-        `${theme.fg(statusColor as "success" | "warning" | "error" | "muted", `[${details.status}]`)}` +
-        ` ${theme.fg("accent", details.name)}` +
-        ` ${theme.fg("dim", details.runId.slice(0, 16))}`;
-      return new Text(text, 0, 0);
-    },
-  });
+  registerWorkflowRunTool(pi, orchestrators, cmdState, sessionApprovals, { lastSessionId });
 
   // ── Commands & Shortcuts ───────────────────────────────────
 
@@ -761,4 +487,161 @@ export default function workflowExtension(pi: ExtensionAPI) {
     );
   });
 
+}
+
+// ── Extracted: workflow-run tool registration ────────────────
+
+const _WorkflowRunParams = Type.Object({
+  name: Type.String({ description: "Exact workflow name or natural language task description" }),
+  mode: Type.Optional(StringEnum(["auto", "force"] as const, {
+    description: "'auto' (default): search existing workflows, confirm with user. 'force': skip confirmation, AI decides",
+  })),
+  args: Type.Optional(Type.Record(Type.String(), Type.Unknown(), {
+    description: "Arguments passed to workflow as key-value pairs",
+  })),
+  tokens: Type.Optional(Type.Number({ description: "Maximum token budget" })),
+  time: Type.Optional(Type.Number({ description: "Maximum time budget in milliseconds" })),
+});
+
+interface _WorkflowRunDetails {
+  action: "run"; runId: string; status: string; name: string;
+  confirmSkipped?: boolean;
+  _render?: { type: "task-list"; data: { title: string; items: Array<{ label: string; status: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; detail?: string }> } };
+}
+
+interface _LastSessionRef { lastSessionId: string }
+
+function registerWorkflowRunTool(
+  pi: ExtensionAPI,
+  orchestrators: Map<string, WorkflowOrchestrator>,
+  cmdState: WorkflowCommandsState,
+  sessionApprovals: Set<string>,
+  lsRef: _LastSessionRef,
+): void {
+  pi.registerTool({
+    name: "workflow-run",
+    label: "Workflow Run",
+    description:
+      "Run a workflow by exact name or natural language task description. Searches .pi/workflows/ " +
+      "for matching scripts before executing.\n\nTwo modes:\n" +
+      "- auto (default): Searches existing workflows first. Exact match → run after user confirmation. " +
+      "Fuzzy match → list candidates for user to choose. No match → suggest workflow-generate. " +
+      "Always confirms with user before execution.\n" +
+      "- force: Skips confirmation. AI decides best match or returns error if none found. " +
+      "Use only when user explicitly says \"just run it\" or \"skip confirmation\".\n\nWhen to use:\n" +
+      "- User says \"run workflow X\" → exact name, auto mode\n" +
+      "- User describes a task that sounds like a workflow → natural language, auto mode\n" +
+      "- User says \"just do it\" or \"no need to ask\" → force mode\n" +
+      "- User asks for a reusable pipeline → auto mode, may lead to workflow-generate\n\n" +
+      "Do NOT use for single-step tasks that bash can handle directly.",
+    promptSnippet: "Run a workflow by name or task description with auto-discovery",
+    promptGuidelines: [
+      "Default to auto mode. Only use force when user explicitly skips confirmation.",
+      "name can be an exact workflow name OR a natural language task description.",
+      "When name is descriptive (not an exact workflow name), the tool searches existing workflows by description.",
+      "If no workflow matches, the tool returns suggestions. Use workflow-generate to create one, then confirm with user.",
+      "Do NOT use workflow-run for single-step tasks. It's for multi-step agent pipelines.",
+      "After workflow-run returns 'started', results arrive asynchronously. Check with workflow { action: status }.",
+    ],
+    parameters: _WorkflowRunParams,
+
+    async execute(_toolCallId: string, params: Static<typeof _WorkflowRunParams>, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+      const sessionId = ctx.sessionManager.getSessionId();
+      lsRef.lastSessionId = sessionId;
+      const orch = orchestrators.get(sessionId);
+      if (!orch) return { content: [{ type: "text", text: "Workflow orchestrator not initialized" }], isError: true };
+
+      const name = params.name;
+      const mode = params.mode ?? "auto";
+      const args = params.args ?? {};
+      const tokens = params.tokens;
+      const time = params.time;
+
+      const { loadWorkflows } = await import("./config-loader.js");
+      let allWorkflows: Awaited<ReturnType<typeof loadWorkflows>>;
+      try { allWorkflows = await loadWorkflows(); } catch { allWorkflows = []; }
+      const available = allWorkflows.filter((wf) => wf.available);
+
+      const exactMatch = available.find((wf) => wf.name === name);
+      if (exactMatch) {
+        if (mode === "force") {
+          const runId = await orch.run(name, args, tokens, time);
+          cmdState.lastRunId = runId;
+          if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
+          return { content: [{ type: "text" as const, text: `Started workflow '${name}' (${runId}) [force mode]` }], details: { action: "run", runId, status: "running", name, confirmSkipped: true as const } satisfies _WorkflowRunDetails };
+        }
+        if (ctx.hasUI) {
+          const isTmp = exactMatch.source === "tmp";
+          const shouldConfirm = isTmp || !sessionApprovals.has(exactMatch.name);
+          if (shouldConfirm) {
+            const ok = await ctx.ui.confirm("Run workflow?",
+              `Workflow: ${exactMatch.name}\nDescription: ${exactMatch.description ?? "(none)"}\nSource: [${exactMatch.source}]\nPath: ${exactMatch.path ?? "(none)"}`);
+            if (!ok) return { content: [{ type: "text" as const, text: `User declined to run '${exactMatch.name}'.` }], details: { action: "run" as const, runId: "", status: "declined", name: exactMatch.name } };
+            if (!isTmp) {
+              sessionApprovals.add(exactMatch.name);
+              pi.appendEntry("workflow-approval-memory", { workflowName: exactMatch.name, approvedAt: new Date().toISOString() });
+            }
+          }
+        } else {
+          pi.sendUserMessage(`Confirm to run '${exactMatch.name}'? (RPC mode — auto-confirm not available, proceed with caution)`, { deliverAs: "steer" });
+        }
+        const runId = await orch.run(name, args, tokens, time);
+        cmdState.lastRunId = runId;
+        if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
+        return { content: [{ type: "text" as const, text: `Started workflow '${exactMatch.name}' (${runId})` }], details: { action: "run", runId, status: "running", name: exactMatch.name } satisfies _WorkflowRunDetails };
+      }
+
+      const inputLower = name.toLowerCase();
+      const inputWords = inputLower.split(/\s+/).filter((w: string) => w.length > INPUT_WORD_MIN_LENGTH);
+      const candidates = available.filter((wf) => {
+        const text = `${wf.name} ${wf.description}`.toLowerCase();
+        return inputWords.some((w: string) => text.includes(w));
+      });
+
+      if (candidates.length > 0) {
+        const candidateList = candidates.map((wf) => `  - ${wf.name}: ${wf.description || "(no description)"} [${wf.source}]`).join("\n");
+        if (mode === "force") {
+          const best = candidates[0];
+          const runId = await orch.run(best.name, args, tokens, time);
+          cmdState.lastRunId = runId;
+          if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
+          return { content: [{ type: "text" as const, text: `Started workflow '${best.name}' (${runId}) [force mode, fuzzy match]` }], details: { action: "run", runId, status: "running", name: best.name, confirmSkipped: true as const } satisfies _WorkflowRunDetails };
+        }
+        pi.sendUserMessage(`No exact match for '${name}', but found ${candidates.length} related workflow(s):\n${candidateList}\n\nAsk the user which one to use, or if they want to create a new workflow. If they choose one, use workflow-run with the exact name and mode 'force'.`, { deliverAs: "steer" });
+        return { content: [{ type: "text" as const, text: `Found ${candidates.length} fuzzy match(es) for '${name}'. Awaiting user choice.` }], details: { action: "run", runId: "", status: "pending", name } satisfies _WorkflowRunDetails };
+      }
+
+      const fullList = available.length > 0 ? available.map((wf) => `  - ${wf.name}: ${wf.description || "(no description)"}`).join("\n") : "  (none)";
+      if (mode === "force") {
+        return { content: [{ type: "text" as const, text: `No matching workflow for '${name}'. Available:\n${fullList}\n\nRe-run with mode='auto' for interactive selection, or use workflow-generate to create a new workflow.` }], isError: true };
+      }
+      pi.sendUserMessage(
+        `No workflow matches '${name}'. Available workflows:\n${fullList}\n\nSuggestions:\n1. If one of the above looks suitable, use workflow-run with its exact name.\n2. If none fits, use workflow-generate to create a new temporary workflow.\n3. Before executing a generated workflow, ALWAYS show the script path and wait for user confirmation.`,
+        { deliverAs: "steer" });
+      return { content: [{ type: "text" as const, text: `No match for '${name}'. Suggestions sent to conversation.` }], details: { action: "run", runId: "", status: "pending", name } satisfies _WorkflowRunDetails };
+    },
+
+    renderCall(args: Record<string, unknown>, theme: Theme, _context?: unknown) {
+      const name = args.name as string;
+      return new Text(theme.fg("toolTitle", theme.bold("workflow-run ")) + theme.fg("accent", name), 0, 0);
+    },
+
+    renderResult(result: Record<string, unknown>, _options: unknown, theme: Theme, _context?: unknown) {
+      const details = result.details as _WorkflowRunDetails | undefined;
+      if (!details) {
+        const content = result.content as Array<{ type: string; text: string }> | undefined;
+        const text = content?.[0];
+        return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
+      }
+      const statusColor =
+        details.status === "completed" ? "success"
+        : details.status === "running" ? "warning"
+        : details.status === "failed" || details.status === "aborted" ? "error" : "muted";
+      const text =
+        `${theme.fg(statusColor as "success" | "warning" | "error" | "muted", `[${details.status}]`)}` +
+        ` ${theme.fg("accent", details.name)}` +
+        ` ${theme.fg("dim", details.runId.slice(0, RUNID_SHORT_LENGTH))}`;
+      return new Text(text, 0, 0);
+    },
+  });
 }

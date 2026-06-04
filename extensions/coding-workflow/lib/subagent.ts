@@ -52,11 +52,17 @@ export type OnUpdateCallback = (partial: {
 
 // ─── Formatting helpers ──────────────────────────────────
 
+// ─── Token formatting thresholds ────────────────────────
+const TOKEN_K_THRESHOLD = 1000;
+const TOKEN_K_PRECISION_THRESHOLD = 10000;
+const TOKEN_M_THRESHOLD = 1000000;
+const COST_DECIMAL_PLACES = 4;
+
 export function formatTokens(count: number): string {
-	if (count < 1000) return count.toString();
-	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-	if (count < 1000000) return `${Math.round(count / 1000)}k`;
-	return `${(count / 1000000).toFixed(1)}M`;
+	if (count < TOKEN_K_THRESHOLD) return count.toString();
+	if (count < TOKEN_K_PRECISION_THRESHOLD) return `${(count / TOKEN_K_THRESHOLD).toFixed(1)}k`;
+	if (count < TOKEN_M_THRESHOLD) return `${Math.round(count / TOKEN_K_THRESHOLD)}k`;
+	return `${(count / TOKEN_M_THRESHOLD).toFixed(1)}M`;
 }
 
 export function formatUsageStats(usage: UsageStats, model?: string): string {
@@ -66,7 +72,7 @@ export function formatUsageStats(usage: UsageStats, model?: string): string {
 	if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
 	if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
 	if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
-	if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
+	if (usage.cost) parts.push(`$${usage.cost.toFixed(COST_DECIMAL_PLACES)}`);
 	if (usage.contextTokens && usage.contextTokens > 0) {
 		parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
 	}
@@ -90,8 +96,13 @@ export function getFinalOutput(messages: Message[]): string {
 
 // ─── Temp file management ────────────────────────────────
 
+const MS_PER_SECOND = 1000;
+const SECONDS_PER_MINUTE = 60;
+const MINUTES_PER_HOUR = 60;
+const MS_PER_HOUR = MINUTES_PER_HOUR * SECONDS_PER_MINUTE * MS_PER_SECOND;
+const UUID_SLICE_LENGTH = 8;
 const TEMP_SUBDIR = "pi-coding-workflow";
-const MAX_TEMP_AGE_MS = 60 * 60 * 1000; // 1 hour
+const MAX_TEMP_AGE_MS = MS_PER_HOUR;
 
 function getTempDir(): string {
 	return path.join(os.tmpdir(), TEMP_SUBDIR);
@@ -109,8 +120,10 @@ export function cleanupOldTempFiles(): void {
 		const filePath = path.join(dir, entry.name);
 		try {
 			const stat = fs.statSync(filePath);
-			if (now - stat.mtimeMs > MAX_TEMP_AGE_MS) fs.unlinkSync(filePath);
-		} catch { /* ignore */ }
+			if (now - stat.mtimeMs > MAX_TEMP_AGE_MS) {
+				try { fs.unlinkSync(filePath); } catch { /* best-effort: stale temp files are harmless */ void undefined; }
+			}
+		} catch { /* stat failure: file may have been removed concurrently */ void undefined; }
 	}
 }
 
@@ -122,7 +135,7 @@ async function writePromptToTempFile(
 	if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 	const safeName = label.replace(/[^\w.-]+/g, "_");
 	const filePath = path.join(
-		dir, `prompt-${safeName}-${randomUUID().slice(0, 8)}.md`,
+		dir, `prompt-${safeName}-${randomUUID().slice(0, UUID_SLICE_LENGTH)}.md`,
 	);
 	await withFileMutationQueue(filePath, async () => {
 		await fs.promises.writeFile(filePath, prompt, {
@@ -288,7 +301,7 @@ export async function runSingleAgent(params: {
 		return result;
 	} finally {
 		if (tmpPromptPath) {
-			try { fs.unlinkSync(tmpPromptPath); } catch { /* ignore */ }
+			try { fs.unlinkSync(tmpPromptPath); } catch { /* best-effort: temp file deletion failure is non-critical */ void undefined; }
 		}
 	}
 }

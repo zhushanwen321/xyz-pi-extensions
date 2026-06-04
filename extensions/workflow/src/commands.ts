@@ -20,6 +20,17 @@ import { type WorkflowOrchestrator } from "./orchestrator.js";
 import { type WorkflowInstance } from "./state.js";
 import { loadWorkflows } from "./config-loader.js";
 
+// ── Constants ─────────────────────────────────────────────────
+
+const JSON_INDENT = 2;
+const MAX_RESULT_LENGTH = 2000;
+const RUNID_SHORT_LENGTH = 12;
+const RUNID_SLICE_LENGTH = 16;
+const TASK_SHORT_LENGTH = 80;
+const CONTENT_TRUNC_LENGTH = 500;
+const SPLIT_LIMIT = 2;
+const TASK_PREVIEW_LENGTH = 60;
+
 // ── Types ──────────────────────────────────────────────────────
 
 export interface WorkflowCommandsState {
@@ -57,8 +68,8 @@ export function sendCompletionNotification(
   parts.push(`Workflow '${instance.name}' completed: ${instance.status}`);
 
   if (instance.scriptResult !== undefined && instance.scriptResult !== null) {
-    const serialized = JSON.stringify(instance.scriptResult, null, 2);
-    const truncated = serialized.length > 2000 ? serialized.slice(0, 2000) + "\n... (truncated)" : serialized;
+    const serialized = JSON.stringify(instance.scriptResult, null, JSON_INDENT);
+    const truncated = serialized.length > MAX_RESULT_LENGTH ? serialized.slice(0, MAX_RESULT_LENGTH) + "\n... (truncated)" : serialized;
     parts.push("");
     parts.push("--- Script Result ---");
     parts.push(truncated);
@@ -84,11 +95,11 @@ export function sendCompletionNotification(
       _render: {
         type: "task-list" as const,
         data: {
-          title: `Workflow: ${instance.name} (${runId.slice(0, 12)}...)`,
+          title: `Workflow: ${instance.name} (${runId.slice(0, RUNID_SHORT_LENGTH)}...)`,
           items: instance.trace.map((node) => ({
-            label: `[${node.stepIndex}] ${node.agent}: ${node.task.slice(0, 80)}`,
+            label: `[${node.stepIndex}] ${node.agent}: ${node.task.slice(0, TASK_SHORT_LENGTH)}`,
             status: statusToItemStatus(node.status),
-            detail: node.result?.content?.slice(0, 500),
+            detail: node.result?.content?.slice(0, CONTENT_TRUNC_LENGTH),
           })),
           summary: `Status: ${instance.status} | ${instance.trace.length} agent calls`,
         },
@@ -116,8 +127,8 @@ function parseRunArgs(tokens: string[]): ParsedRunArgs {
     if (token === "--args") {
       i++;
       while (i < tokens.length && !tokens[i].startsWith("--")) {
-        const kv = tokens[i].split("=", 2);
-        if (kv.length === 2) {
+        const kv = tokens[i].split("=", SPLIT_LIMIT);
+        if (kv.length === SPLIT_LIMIT) {
           result.args[kv[0]] = kv[1];
         }
         i++;
@@ -205,7 +216,7 @@ export function registerWorkflowCommands(
             );
             cmdState.lastRunId = runId;
             ctx.ui.notify(
-              `Started '${parsed.name}' (${runId.slice(0, 16)}...)`,
+              `Started '${parsed.name}' (${runId.slice(0, RUNID_SLICE_LENGTH)}...)`,
               "info",
             );
           } catch (err) {
@@ -253,8 +264,9 @@ export function registerWorkflowCommands(
                   .map((wf) => `  [${wf.source}] ${wf.name} — ${wf.description || "(no description)"}`)
                   .join("\n");
             }
-          } catch {
-            // Ignore load errors
+          // eslint-disable-next-line taste/no-silent-catch
+          } catch (err) {
+            console.warn("Failed to load workflows for list:", err);
           }
 
           const instances = orch.list();
@@ -272,7 +284,7 @@ export function registerWorkflowCommands(
                 ? new Date(inst.startedAt).toLocaleTimeString()
                 : "-";
               return (
-                `  [${inst.status}] ${inst.name} (${inst.runId.slice(0, 16)}...) ${ts}` +
+                `  [${inst.status}] ${inst.name} (${inst.runId.slice(0, RUNID_SLICE_LENGTH)}...) ${ts}` +
                 (inst.error ? ` error: ${inst.error}` : "")
               );
             }));
@@ -295,7 +307,7 @@ export function registerWorkflowCommands(
           }
           try {
             orch.abort(runId);
-            ctx.ui.notify(`Aborted ${runId.slice(0, 16)}...`, "info");
+            ctx.ui.notify(`Aborted ${runId.slice(0, RUNID_SLICE_LENGTH)}...`, "info");
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             ctx.ui.notify(`Abort failed: ${msg}`, "error");
@@ -361,8 +373,9 @@ export function registerWorkflowCommands(
                 .map((wf) => `  [${wf.source}] ${wf.name} — ${wf.description || "(no description)"}`)
                 .join("\n");
             }
-          } catch {
-            // Ignore load errors — proceed without workflow list
+          // eslint-disable-next-line taste/no-silent-catch
+          } catch (err) {
+            console.warn("Failed to load workflows for routing:", err);
           }
 
           const listSection = workflowList
@@ -410,8 +423,9 @@ export function registerWorkflowCommands(
           source: wf.source,
           path: wf.path,
         }));
-      } catch {
-        // Ignore load errors
+      // eslint-disable-next-line taste/no-silent-catch
+      } catch (err) {
+        console.warn("Failed to load workflows for panel:", err);
       }
 
       if (instances.length === 0 && availableScripts.length === 0) {
@@ -424,7 +438,7 @@ export function registerWorkflowCommands(
       const entryMeta: Array<{ type: "instance"; runId: string } | { type: "script"; name: string; source: string }> = [];
 
       for (const inst of instances) {
-        entries.push(`${inst.name} (${inst.runId.slice(0, 12)}...) [${inst.status}]`);
+        entries.push(`${inst.name} (${inst.runId.slice(0, RUNID_SHORT_LENGTH)}...) [${inst.status}]`);
         entryMeta.push({ type: "instance", runId: inst.runId });
       }
       for (const wf of availableScripts) {
@@ -448,11 +462,11 @@ export function registerWorkflowCommands(
 
         const traceLines = instance.trace.map(
           (node) =>
-            `  [${node.stepIndex}] ${node.agent}: ${node.status} — ${node.task.slice(0, 60)}`,
+            `  [${node.stepIndex}] ${node.agent}: ${node.status} — ${node.task.slice(0, TASK_PREVIEW_LENGTH)}`,
         );
         ctx.ui.notify(
           [
-            `Workflow: ${instance.name} (${instance.runId.slice(0, 16)}...)`,
+            `Workflow: ${instance.name} (${instance.runId.slice(0, RUNID_SLICE_LENGTH)}...)`,
             `Status: ${instance.status}`,
             `Nodes: ${instance.trace.length}`,
             ...traceLines,

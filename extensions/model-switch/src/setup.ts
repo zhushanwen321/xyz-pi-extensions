@@ -17,6 +17,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SetupResult } from "./types";
 
+/** JSON 输出缩进 */
+const JSON_INDENT_SIZE = 2;
+
 // ── Provider → Plan 映射 ───────────────────────────────
 // models.json provider → quota-provider cache key
 
@@ -185,7 +188,7 @@ export function generatePolicyConfig(
 		stickiness: { minTurns: 3, minInputTokens: 20_000 },
 	};
 
-	const json = JSON.stringify(config, null, 2);
+	const json = JSON.stringify(config, null, JSON_INDENT_SIZE);
 	const summary = buildSummary(providerGroups, scenes, policyPlans);
 
 	return { json, summary };

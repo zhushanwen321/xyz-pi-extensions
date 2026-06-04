@@ -1,5 +1,6 @@
 // 测试框架：vitest（从 vitest 导入 describe/it/expect/vi/beforeEach）
 // 运行命令：npx vitest run tests/index.test.ts
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";

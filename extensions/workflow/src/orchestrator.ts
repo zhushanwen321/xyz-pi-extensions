@@ -92,6 +92,12 @@ type WorkerInMsg = AgentCallMsg | ReturnMsg | ErrorMsg;
 const MAX_WORKER_RETRIES = 3;
 const RETRY_BACKOFF_MS = 1000;
 const MAX_AGENT_RETRIES = 3;
+const RUNID_RADIX = 36;
+const RUNID_SLICE_START = 2;
+const RUNID_SLICE_LENGTH = 8;
+const PROMPT_PREVIEW_LENGTH = 200;
+const EXPONENTIAL_BACKOFF_BASE = 2;
+const BUDGET_WARNING_THRESHOLD = 0.9;
 
 // ── Orchestrator ──────────────────────────────────────────────
 
@@ -158,7 +164,7 @@ export class WorkflowOrchestrator {
     // Read and normalize script: strip 'export' from 'export const meta' for CJS Worker
     let scriptSource = fs.readFileSync(workflow.path, "utf-8");
     scriptSource = scriptSource.replace(/\bexport\s+const\s+meta\b/, "const meta");
-    const runId = `wf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const runId = `wf-${Date.now()}-${Math.random().toString(RUNID_RADIX).slice(RUNID_SLICE_START, RUNID_SLICE_LENGTH)}`;
 
     const instance = createStateInstance({
       runId,
@@ -335,8 +341,12 @@ export class WorkflowOrchestrator {
     if (this.workers.has(runId)) {
       try {
         this.postMessage(runId, { type: "agent-result", callId, result: placeholder, cached: true });
-      } catch {
-        // P1-8: Worker may have exited between has() and postMessage()
+      }
+      // eslint-disable-next-line taste/no-silent-catch
+      catch (err) {
+        // P1-8: Worker may have exited between has() and postMessage().
+        // This is an expected race condition — no recovery needed.
+        console.warn(`skipNode: failed to post message for ${runId}:`, err);
       }
     }
 
@@ -430,7 +440,7 @@ export class WorkflowOrchestrator {
     const worker = this.workers.get(runId);
     if (worker) {
       this.workers.delete(runId);
-      worker.terminate().catch(() => { /* ignore terminate errors */ });
+      worker.terminate().catch(() => { console.warn(`Failed to terminate worker for ${runId}`); });
     }
   }
 
@@ -507,7 +517,7 @@ export class WorkflowOrchestrator {
     const node: ExecutionTraceNode = {
       stepIndex: callId,
       agent: opts.description ?? "unknown",
-      task: opts.prompt.slice(0, 200),
+      task: opts.prompt.slice(0, PROMPT_PREVIEW_LENGTH),
       model: enrichedOpts.model ?? "default",
       status: "running",
       startedAt: now,
@@ -546,7 +556,7 @@ export class WorkflowOrchestrator {
 
       // Retry on failure with exponential backoff
       if (!poolResult.success && attempt < MAX_AGENT_RETRIES) {
-        const delay = RETRY_BACKOFF_MS * Math.pow(2, attempt - 1);
+        const delay = RETRY_BACKOFF_MS * Math.pow(EXPONENTIAL_BACKOFF_BASE, attempt - 1);
         setTimeout(() => {
           // P0-2: Stale state check before retry
           if (instance.status !== "running") return;
@@ -641,7 +651,7 @@ export class WorkflowOrchestrator {
     if (attempt <= MAX_WORKER_RETRIES) {
       this.terminateWorker(runId);
 
-      const delay = RETRY_BACKOFF_MS * Math.pow(2, attempt - 1);
+      const delay = RETRY_BACKOFF_MS * Math.pow(EXPONENTIAL_BACKOFF_BASE, attempt - 1);
       setTimeout(() => {
         // P0-3: Stale state check before restart
         if (instance.status !== "running") return;
@@ -684,12 +694,12 @@ export class WorkflowOrchestrator {
     }
 
     // Send warning at 90% threshold (only once)
-    if (!exceeded && !b._budgetWarningSent && b.maxTokens !== undefined && b.usedTokens >= b.maxTokens * 0.9) {
+    if (!exceeded && !b._budgetWarningSent && b.maxTokens !== undefined && b.usedTokens >= b.maxTokens * BUDGET_WARNING_THRESHOLD) {
       b._budgetWarningSent = true;
       this.postMessage(runId, {
         type: "budget-warning",
         budget: b,
-        reason: `Token budget warning: ${b.usedTokens} >= ${Math.floor(b.maxTokens * 0.9)} (90%)`,
+        reason: `Token budget warning: ${b.usedTokens} >= ${Math.floor(b.maxTokens * BUDGET_WARNING_THRESHOLD)} (90%)`,
       });
     }
 

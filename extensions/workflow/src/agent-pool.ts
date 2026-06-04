@@ -93,6 +93,9 @@ interface ParsedPipelineEvent {
 export const SOFT_MAX_AGENTS_WARNING = 500;
 const DEFAULT_CONCURRENCY = 4;
 const PROCESS_TIMEOUT_MS = 120_000; // 2 minutes
+const UUID_SLICE_LENGTH = 8;
+const JSON_INDENT = 2;
+const TIMEOUT_DISPLAY_DIVISOR = 1000;
 
 // ── Budget type (mirrors BudgetTracker shape for callback signature) ──
 
@@ -155,7 +158,7 @@ export class AgentPool {
    */
   enqueue(opts: AgentCallOpts): Promise<AgentResult> {
     return new Promise<AgentResult>((resolve) => {
-      const callId = `agent-${randomUUID().slice(0, 8)}`;
+      const callId = `agent-${randomUUID().slice(0, UUID_SLICE_LENGTH)}`;
       const entry: QueueEntry = { opts, resolve, callId, startedAt: Date.now() };
       this.queue.push(entry);
       this.drain();
@@ -229,6 +232,7 @@ export class AgentPool {
           totalCalls: this.totalCallCount,
           budget,
         });
+      // eslint-disable-next-line taste/no-silent-catch
       } catch {
         // callback errors must not affect dispatch
       }
@@ -250,7 +254,7 @@ export class AgentPool {
     // output valid JSON matching the schema, then append the prompt.
     let prompt = opts.prompt;
     if (opts.schema) {
-      const schemaJson = JSON.stringify(opts.schema, null, 2);
+      const schemaJson = JSON.stringify(opts.schema, null, JSON_INDENT);
       prompt = [
         `You MUST respond with ONLY a valid JSON object conforming to this JSON schema:`,
         ``,
@@ -319,6 +323,7 @@ export class AgentPool {
     if (pipeline.output.trim() && opts.schema) {
       try {
         parsedOutput = JSON.parse(pipeline.output);
+      // eslint-disable-next-line taste/no-silent-catch
       } catch {
         // Output is not valid JSON — leave parsedOutput undefined
       }
@@ -373,6 +378,7 @@ async function runPiProcess(
         try {
           const event = JSON.parse(line) as Record<string, unknown>;
           processJsonlEvent(event, pipeline);
+        // eslint-disable-next-line taste/no-silent-catch
         } catch {
           // Skip malformed JSON lines
         }
@@ -389,7 +395,7 @@ async function runPiProcess(
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      stderr += `Process timed out after ${PROCESS_TIMEOUT_MS / 1000}s, sending SIGKILL`;
+      stderr += `Process timed out after ${PROCESS_TIMEOUT_MS / TIMEOUT_DISPLAY_DIVISOR}s, sending SIGKILL`;
       proc.kill("SIGKILL");
       resolve(1);
     }, PROCESS_TIMEOUT_MS);
@@ -409,6 +415,7 @@ async function runPiProcess(
         try {
           const event = JSON.parse(buffer) as Record<string, unknown>;
           processJsonlEvent(event, pipeline);
+        // eslint-disable-next-line taste/no-silent-catch
         } catch {
           // Ignore trailing garbage
         }

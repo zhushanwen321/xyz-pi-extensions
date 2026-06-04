@@ -72,6 +72,7 @@ function detectTestCommand(command: string): string | null {
 }
 
 export function setupTestTimeoutGuard(pi: ExtensionAPI): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
   pi.on("tool_call", async (event: any) => {
     if (event.toolName !== "bash") return;
 

@@ -16,7 +16,8 @@ import {
 	type OnUpdateCallback,
 } from "./subagent.js";
 
-// ─── Types ────────────────────────────────────────────────
+/** Phase number for the final (PR) phase. */
+const FINAL_PHASE = 5;
 
 /** Minimal phase config needed by review dispatcher. */
 export interface PhaseConfigForReview {
@@ -80,7 +81,7 @@ export function buildRetrospectFollowUp(
 		topicDir, "changes", "reviews",
 		`${phaseConfig.retrospectPrefix}.md`,
 	);
-	const isOverall = phaseConfig.phase === 5;
+	const isOverall = phaseConfig.phase === FINAL_PHASE;
 	const retrospectSkillPath = skillResolver.resolvePath("harness-retrospect");
 
 	const parts = [
@@ -93,7 +94,7 @@ export function buildRetrospectFollowUp(
 
 	if (isOverall) {
 		const prevRetrospects = allPhases
-			.filter((p) => p.phase < 5)
+			.filter((p) => p.phase < FINAL_PHASE)
 			.map((p) => `   - ${path.join(topicDir, "changes", "reviews", `${p.retrospectPrefix}.md`)}`)
 			.join("\n");
 		parts.push(

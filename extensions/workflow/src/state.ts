@@ -240,6 +240,7 @@ export function deserializeState(entry: unknown): Map<string, WorkflowInstance> 
       try {
         const instance = deserializeInstance(inst);
         instances.set(instance.runId, instance);
+      // eslint-disable-next-line taste/no-silent-catch
       } catch {
         // Skip malformed entries for backward compatibility
       }

@@ -37,6 +37,7 @@ function detectNetworkCommand(command: string): string | null {
 }
 
 export function setupNetworkTimeoutGuard(pi: ExtensionAPI): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
   pi.on("tool_call", async (event: any) => {
     // Only intercept bash tool calls
     if (event.toolName !== "bash") return;

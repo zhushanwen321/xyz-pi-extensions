@@ -14,6 +14,18 @@ import type { ModelPolicy, QuotaSnapshot, StickinessInfo, RecommendInfo } from "
 const SECONDS_PER_HOUR = 3600;
 const SECONDS_PER_MINUTE = 60;
 
+// ── 格式化常量 ──────────────────────────────────────────
+
+/** token 数转 k 单位的除数 */
+const TOKENS_PER_K = 1000;
+
+/** 时间字符串最小位数（"09" 格式） */
+const TIME_DIGIT_COUNT = 2;
+
+/** 粘性阈值默认值 */
+const DEFAULT_STICKINESS_MIN_TURNS = 3;
+const DEFAULT_STICKINESS_MIN_INPUT_TOKENS = 20_000;
+
 // ── 数据结构 ────────────────────────────────────────────
 
 export interface ContextPromptData {
@@ -88,14 +100,14 @@ export function formatContextPrompt(data: ContextPromptData): string {
 // ── 内部格式化 ──────────────────────────────────────────
 
 function formatModelLine(model: string, stickiness: StickinessInfo): string {
-	const inputK = Math.round(stickiness.inputTokens / 1000);
+	const inputK = Math.round(stickiness.inputTokens / TOKENS_PER_K);
 	return `Model: ${model} (${stickiness.turns} conversation turns, ~${inputK}k input tokens in context)`;
 }
 
 function resolveStickinessThresholds(config: ModelPolicy): { minTurns: number; minInputTokens: number } {
 	return {
-		minTurns: config.stickiness?.minTurns ?? 3,
-		minInputTokens: config.stickiness?.minInputTokens ?? 20_000,
+		minTurns: config.stickiness?.minTurns ?? DEFAULT_STICKINESS_MIN_TURNS,
+		minInputTokens: config.stickiness?.minInputTokens ?? DEFAULT_STICKINESS_MIN_INPUT_TOKENS,
 	};
 }
 
@@ -105,13 +117,13 @@ function formatWarmthLine(
 ): string {
 	if (stickiness.justCompacted) return "Context warmth: Cold (conversation was just compressed — no cost to switch).";
 	if (stickiness.turns >= thresholds.minTurns && stickiness.inputTokens >= thresholds.minInputTokens) {
-		return `Context warmth: Warm (${stickiness.turns} turns, ~${Math.round(stickiness.inputTokens / 1000)}k tokens cached — switching loses this cache)`;
+		return `Context warmth: Warm (${stickiness.turns} turns, ~${Math.round(stickiness.inputTokens / TOKENS_PER_K)}k tokens cached — switching loses this cache)`;
 	}
 	return "Context warmth: Cold (few turns or tokens — switching loses little).";
 }
 
 function formatTimeLine(now: Date, plan: { start: number; end: number; multiplier: number } | undefined): string {
-	const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+	const timeStr = `${String(now.getHours()).padStart(TIME_DIGIT_COUNT, "0")}:${String(now.getMinutes()).padStart(TIME_DIGIT_COUNT, "0")}`;
 	if (!plan) return `Time: ${timeStr} | Off-peak`;
 	const isPeak = plan.start <= now.getHours() && now.getHours() < plan.end;
 	if (!isPeak) return `Time: ${timeStr} | Off-peak`;
@@ -158,7 +170,7 @@ function formatResetSec(sec: number): string {
 	if (sec <= 0) return "?";
 	const h = Math.floor(sec / SECONDS_PER_HOUR);
 	const m = Math.floor((sec % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
-	if (h > 0) return `${h}h${m.toString().padStart(2, "0")}m`;
+	if (h > 0) return `${h}h${m.toString().padStart(TIME_DIGIT_COUNT, "0")}m`;
 	if (m > 0) return `${m}m`;
 	return "<1m";
 }

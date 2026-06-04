@@ -98,6 +98,7 @@ function makeInstanceMap(
 // Tests
 // ═══════════════════════════════════════════════════════════════
 
+// eslint-disable-next-line max-lines-per-function
 describe("WorkflowOrchestrator", () => {
   let orch: WorkflowOrchestrator;
   let mockPi: ReturnType<typeof makeMockPi>;

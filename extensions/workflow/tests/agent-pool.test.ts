@@ -1,5 +1,6 @@
 // 测试框架：vitest（从 vitest 导入 describe/it/expect/vi/beforeEach）
 // 运行命令：npx vitest run tests/agent-pool.test.ts
+/* eslint-disable @typescript-eslint/no-explicit-any, taste/prefer-allsettled */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";

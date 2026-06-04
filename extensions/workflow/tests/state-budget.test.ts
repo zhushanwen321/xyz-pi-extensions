@@ -23,6 +23,7 @@ import { BudgetTracker } from "../src/budget";
 // state.ts
 // ═══════════════════════════════════════════════════════════════
 
+// eslint-disable-next-line max-lines-per-function
 describe("state.ts", () => {
   // ── isTerminal ────────────────────────────────────────────
   describe("isTerminal()", () => {

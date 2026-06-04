@@ -14,6 +14,13 @@
  *   if (budget.isTimeLimited) { ... }
  */
 
+// ── Constants ─────────────────────────────────────────────────
+
+const MS_PER_MINUTE = 60;
+const MS_PER_SECOND = 1000;
+const WARNING_THRESHOLD = 0.9;
+const PERCENT_MULTIPLIER = 100;
+
 // ── BudgetTracker ─────────────────────────────────────────────
 
 export class BudgetTracker {
@@ -37,7 +44,7 @@ export class BudgetTracker {
     }
     this._total = total;
     this._timeLimitMs =
-      timeLimitMinutes !== undefined ? timeLimitMinutes * 60 * 1000 : undefined;
+      timeLimitMinutes !== undefined ? timeLimitMinutes * MS_PER_MINUTE * MS_PER_SECOND : undefined;
     this._startTime = Date.now();
     this._used = 0;
   }
@@ -72,7 +79,7 @@ export class BudgetTracker {
 
   /** True when used / total >= 0.9 (90 % warning threshold). */
   get isWarning(): boolean {
-    return this._used / this._total >= 0.9;
+    return this._used / this._total >= WARNING_THRESHOLD;
   }
 
   /** True when a time limit was set and elapsed time exceeds it. */
@@ -83,6 +90,6 @@ export class BudgetTracker {
 
   /** Usage as a percentage (0–100). */
   get usagePercent(): number {
-    return (this._used / this._total) * 100;
+    return (this._used / this._total) * PERCENT_MULTIPLIER;
   }
 }

@@ -17,4 +17,4 @@ export const Type = {
   Unknown: () => ({}),
 };
 
-export type Static<_T> = any;
+export type Static<_T> = unknown;

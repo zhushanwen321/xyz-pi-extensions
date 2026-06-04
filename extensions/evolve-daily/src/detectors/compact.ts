@@ -12,6 +12,12 @@ export interface CompactTrackedItem {
   detail?: string;
 }
 
+// ── ID generation constants ──────────────────────────
+
+const RANDOM_ID_RADIX = 36;
+const RANDOM_ID_SLICE_START = 2;
+const RANDOM_ID_SLICE_END = 7;
+
 export function createCompactDetector(problem: ProblemDefinition) {
   return {
     problemId: problem.id,
@@ -25,7 +31,7 @@ export function createCompactDetector(problem: ProblemDefinition) {
       compactionEntry?: { tokensBefore?: number };
     }): CompactTrackedItem {
       return {
-        id: `compact-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id: `compact-${Date.now()}-${Math.random().toString(RANDOM_ID_RADIX).slice(RANDOM_ID_SLICE_START, RANDOM_ID_SLICE_END)}`,
         problemId: problem.id as "compact-frequency",
         sessionId: "",
         tokensBefore: event.compactionEntry?.tokensBefore ?? 0,
