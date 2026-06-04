@@ -157,6 +157,36 @@ declare module "typebox" {
 	export type Static<T> = Record<string, any>;
 }
 
+declare module "@zhushanwen/pi-quota-providers" {
+	export function loadProviderConfig(...args: any[]): any;
+	export function loadQuotaConfig(...args: any[]): any;
+	export function readCache(...args: any[]): CacheData;
+	export function triggerUpdate(...args: any[]): void;
+	export function trackSpeed(...args: any[]): void;
+	export function buildRuntimeProviders(...args: any[]): any[];
+	export function getConfigDir(...args: any[]): string;
+	export function getProvidersConfigPath(...args: any[]): string;
+	export function getSecretsPath(...args: any[]): string;
+	export function loadProvidersConfig(...args: any[]): any;
+	export function loadSecrets(...args: any[]): any;
+	export const PROVIDERS: any[];
+	export const INFINITE_WIN: QuotaWindow;
+	export type CacheData = any;
+	export type SpeedData = any;
+	export type QuotaWindow = any;
+	export type QuotaProvider = any;
+	export type NormalizedQuotaRow = any;
+	export type ProviderConfig = any;
+	export type QuotaConfig = any;
+	export type ResolvedProvider = any;
+}
+
+declare module "@zhushanwen/pi-model-switch" {
+	export function resolveModelByComplexity(...args: any[]): any;
+	export function resolveModelForScene(...args: any[]): any;
+	export type ModelAdvisorResult = any;
+}
+
 declare module "js-yaml" {
 	export function load(text: string, opts?: Record<string, unknown>): unknown;
 	export function dump(obj: unknown, opts?: Record<string, unknown>): string;
