@@ -685,9 +685,21 @@ describe("WorkflowOrchestrator", () => {
   // ── AgentPool soft-limit callback ─────────────────────────
 
   describe("soft-limit warning callback", () => {
-    it("invokes pi.sendUserMessage with description and totalCalls", () => {
+    it("invokes pi.sendUserMessage with description, totalCalls, and budget info", () => {
       const pool = (orch as unknown as { agentPool: { onSoftLimitReached?: (info: { description: string; totalCalls: number }) => void } }).agentPool;
       expect(pool.onSoftLimitReached).toBeDefined();
+
+      // Inject a running instance so the callback can find budget info
+      const instances = (orch as unknown as { instances: Map<string, import("../../src/state.js").WorkflowInstance> }).instances;
+      instances.set("run-budget-test", {
+        runId: "run-budget-test",
+        name: "budgeted-workflow",
+        status: "running",
+        callCache: new Map(),
+        trace: [],
+        worker: "test.js",
+        budget: { maxTokens: 100000, usedTokens: 42000, usedCost: 0.5 },
+      });
 
       pool.onSoftLimitReached!({
         description: "my-agent-step",
@@ -698,6 +710,7 @@ describe("WorkflowOrchestrator", () => {
       const msg = (mockPi.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
       expect(msg).toContain("501 agent calls");
       expect(msg).toContain("my-agent-step");
+      expect(msg).toContain("42000/100000");
     });
   });
 });

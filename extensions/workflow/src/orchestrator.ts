@@ -137,12 +137,19 @@ export class WorkflowOrchestrator {
     }
 
     // Merge default soft-limit callback with any caller-provided options
+    // Budget info is resolved inside the closure (AgentPool doesn't hold budget refs)
     const defaultOnSoftLimit = ({ description, totalCalls }: {
       description: string;
       totalCalls: number;
     }) => {
+      // Find the first running instance to include budget in the warning
+      const runningInstance = Array.from(this.instances.values())
+        .find((inst) => inst.status === "running");
+      const budgetPart = runningInstance
+        ? `Budget: ${runningInstance.budget.usedTokens}/${runningInstance.budget.maxTokens ?? "unlimited"} tokens.`
+        : "";
       (this.pi as unknown as { sendUserMessage: (msg: string) => void }).sendUserMessage(
-        `[workflow] Reached ${totalCalls} agent calls (last: '${description}'). Consider aborting if this is unintended.`,
+        `[workflow] Reached ${totalCalls} agent calls (last: '${description}'). ${budgetPart} Consider aborting if this is unintended.`,
       );
     };
 

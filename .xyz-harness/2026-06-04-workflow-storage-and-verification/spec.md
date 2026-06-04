@@ -116,7 +116,7 @@ VALID_TRANSITIONS: 没有 outgoing transitions(state_lost 是终态)
 - JSONL 解析失败(malformed line)
 - 权限拒绝
 
-当 `reconstructState` 遇到无法读取的 pointer,在 logs (`ctx.ui.notify`) 输出警告,跳过该 runId。**不**为丢失的 run 创建占位 instance(用户会主动重跑)。
+当 `reconstructState` 遇到无法读取的 pointer,在 logs (`ctx.ui.notify`) 输出警告,并为该 runId 创建一个 `state_lost` 状态的占位 instance(name=`(state lost) ${runId}`, worker=`(unknown)`)。占位 instance 在 workflow status 列表中可见,提示用户该 workflow 曾经存在但状态已丢失,需要重新跑。
 
 **FR-1.7 性能预算**
 
@@ -370,7 +370,7 @@ export const SOFT_MAX_AGENTS_WARNING = 500;
 
 **AC-1.2** 关闭 Pi、重启、`session_start` 重建: 之前跑的 workflow instances 正确 rehydrate(状态、trace、callCache 完整)。
 
-**AC-1.3** 外部 state 文件被删除(模拟 `rm {sessionDir}/workflow-state/{runId}.jsonl`): `reconstructState` 不抛错,跳过该 runId,`ctx.ui.notify` 输出一行 warning。
+**AC-1.3** 外部 state 文件被删除(模拟 `rm {sessionDir}/workflow-state/{runId}.jsonl`): `reconstructState` 不抛错,创建 `state_lost` 占位 instance,`ctx.ui.notify` 输出一行 warning。
 
 **AC-1.4** `state.ts:18-25` `WorkflowStatus` 包含 `"state_lost"`,`TERMINAL_STATUSES` 包含 `"state_lost"`,`VALID_TRANSITIONS["state_lost"]` 为 `[]`。
 
