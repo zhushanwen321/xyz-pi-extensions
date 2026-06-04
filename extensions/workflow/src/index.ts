@@ -522,26 +522,19 @@ function registerWorkflowRunTool(
     name: "workflow-run",
     label: "Workflow Run",
     description:
-      "Run a workflow by exact name or natural language task description. Searches .pi/workflows/ " +
-      "for matching scripts before executing.\n\nTwo modes:\n" +
-      "- auto (default): Searches existing workflows first. Exact match → run after user confirmation. " +
-      "Fuzzy match → list candidates for user to choose. No match → suggest workflow-generate. " +
-      "Always confirms with user before execution.\n" +
-      "- force: Skips confirmation. AI decides best match or returns error if none found. " +
-      "Use only when user explicitly says \"just run it\" or \"skip confirmation\".\n\nWhen to use:\n" +
-      "- User says \"run workflow X\" → exact name, auto mode\n" +
-      "- User describes a task that sounds like a workflow → natural language, auto mode\n" +
-      "- User says \"just do it\" or \"no need to ask\" → force mode\n" +
-      "- User asks for a reusable pipeline → auto mode, may lead to workflow-generate\n\n" +
-      "Do NOT use for single-step tasks that bash can handle directly.",
-    promptSnippet: "Run a workflow by name or task description with auto-discovery",
+      "Execute a project workflow. When user says \"workflow\", \"执行X的workflow\", or \"run X\", " +
+      "use this tool BEFORE reading skill files. Pass natural language as 'name' (e.g. user says " +
+      "\"PR的workflow\" → name='PR的workflow'). Auto mode discovers matches by name + description, " +
+      "then confirms with user. mode='force' skips confirmation (only when user explicitly demands it). " +
+      "NOT for single-step bash tasks.",
+    promptSnippet: "Execute a workflow by name or description",
     promptGuidelines: [
-      "Default to auto mode. Only use force when user explicitly skips confirmation.",
-      "name can be an exact workflow name OR a natural language task description.",
-      "When name is descriptive (not an exact workflow name), the tool searches existing workflows by description.",
-      "If no workflow matches, the tool returns suggestions. Use workflow-generate to create one, then confirm with user.",
-      "Do NOT use workflow-run for single-step tasks. It's for multi-step agent pipelines.",
-      "After workflow-run returns 'started', results arrive asynchronously. Check with workflow { action: status }.",
+      "PRIORITY: When user says 'workflow', '执行workflow', 'run workflow', try workflow-run FIRST. Do NOT read workflow-related skill files or documentation — the tool handles discovery.",
+      "Pass user's natural language directly as 'name'. Auto mode searches by exact name AND description keywords. No need to manually find the workflow script first.",
+      "Default to auto mode. Only use force when user explicitly demands to skip confirmation.",
+      "If no workflow matches, the tool returns suggestions — follow its guidance. Use workflow-generate only when creating a brand new workflow from scratch.",
+      "NOT for single-step tasks (use bash). NOT for reading workflow documentation (use read).",
+      "After starting, results arrive asynchronously. Check status with: workflow { action: status }",
     ],
     parameters: _WorkflowRunParams,
 
