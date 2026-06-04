@@ -186,6 +186,8 @@ function renderWidgetLines(todoList: Todo[], th: Theme): string[] {
 
 // buildRender 已从 model.ts 导入
 
+/** v3: 全部完成后保留的轮数，之后再自动 clear */
+const AUTO_CLEAR_DELAY_ROUNDS = 2;
 /** v3: Stall 检测阈值（无 todo 活动轮数 → stall 提醒） */
 const STALL_THRESHOLD = 5;
 /** v3: 提醒间隔（上次 todo 调用后轮数 → 提醒） */
@@ -286,6 +288,7 @@ export default function (pi: ExtensionAPI) {
 	let userMessageCount = 0;
 	let lastTodoCallCount = 0;
 	let stallNotified = false;
+	let allCompletedAtCount: number | null = null; // 全部 completed 首次检测到的 userMessageCount
 	let verifyNudgedIds = new Set<number>(); // 已发送过验证提醒的任务 ID，避免重复 nag
 
 	// ── 刷新显示（依赖闭包 state） ─────────────────────
@@ -297,6 +300,22 @@ export default function (pi: ExtensionAPI) {
 		} else {
 			ctx.ui.setWidget("todo", renderWidgetLines(todos, ctx.ui.theme));
 		}
+	}
+
+	/** 构建 pending 任务的 <todo_context> 字符串（agent_end stall/reminder 共用） */
+	function buildPendingContext(turnCount: number): string {
+		const pendingTodos = todos.filter((t) => t.status !== "completed");
+		const pendingCount = pendingTodos.length;
+		const completedCount = todos.filter((t) => t.status === "completed").length;
+		const lines = pendingTodos
+			.map((t) => {
+				const verifyTag = t.verifyText
+					? ` [待验证: ${t.verifyText}]`
+					: " [无需验证]";
+				return `#${t.id}: ${t.text}${verifyTag}`;
+			})
+			.join("\n");
+		return `<todo_context>\n[TODO] Turn ${turnCount} — ${pendingCount} tasks pending, ${completedCount} completed\n${lines}\n\nRules:\n- 优先使用 updates[] 批量更新\n- [待验证] 的任务必须传 verified=true 才能标记 completed\n- 全部完成后工具自动闭合\n</todo_context>`;
 	}
 
 	// ── Tool execute handler ─────────────────────────────
@@ -558,6 +577,7 @@ export default function (pi: ExtensionAPI) {
 				const count = todos.length;
 				todos = [];
 				nextId = 1;
+				allCompletedAtCount = null;
 				resultText = count > 0 ? `Cleared ${count} todos` : "No todos to clear";
 				// v3: 手动清空后重置
 				break;
@@ -598,6 +618,7 @@ export default function (pi: ExtensionAPI) {
 		userMessageCount = 0;
 		lastTodoCallCount = 0;
 		stallNotified = false;
+		allCompletedAtCount = null;
 		verifyNudgedIds = new Set();
 
 		const entries = ctx.sessionManager.getEntries();
@@ -632,12 +653,7 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
-		// 修复 auto-clear：重建后如果所有 todo 都 completed，直接清空
-		// 所以必须在 reconstructState 中处理 all-completed 状态
-		if (todos.length > 0 && todos.every((t) => t.status === "completed")) {
-			todos = [];
-			nextId = 1;
-		}
+		// auto-clear 由 agent_end 延迟处理（AUTO_CLEAR_DELAY_ROUNDS），不再在此立即清空
 	}
 
 	// ── 事件处理器 ──────────────────────────────────────
@@ -690,48 +706,62 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	// agent_end: stall + reminder (验证拦截在 executeTodoAction，auto-clear 在 reconstructState)
+	// agent_end: auto-clear + verify-failed + stall + reminder
 	pi.on("agent_end", async (_event: unknown, _ctx: ExtensionContext) => {
 		try {
-			// Stall 检测: 5 轮未调用 todo 且还有未完成任务
+			if (todos.length === 0) return;
+
+			// 1. Auto-clear: 所有 todo 都 completed → 延迟 AUTO_CLEAR_DELAY_ROUNDS 后 clear
+			const allCompleted = todos.every((t) => t.status === "completed");
+			if (allCompleted) {
+				if (allCompletedAtCount === null) {
+					allCompletedAtCount = userMessageCount;
+				}
+				if (userMessageCount - allCompletedAtCount >= AUTO_CLEAR_DELAY_ROUNDS) {
+					todos = [];
+					nextId = 1;
+					allCompletedAtCount = null;
+					refreshDisplay(_ctx);
+				}
+				return;
+			} else {
+				allCompletedAtCount = null;
+			}
+
+			// 2. Verify 失败处理: verifyAttempts >= MAX 且仍为 completed → 设 failed
+			const failedIds: number[] = [];
+			for (const t of todos) {
+				if (
+					t.status === "completed" &&
+					t.verifyText &&
+					t.verifyAttempts >= MAX_VERIFY_ATTEMPTS
+				) {
+					t.status = "failed";
+					failedIds.push(t.id);
+				}
+			}
+			if (failedIds.length > 0) {
+				refreshDisplay(_ctx);
+				pi.sendUserMessage(
+					`<todo_context>\n[TODO] 验证失败: Task ${failedIds.map((id) => "#" + id).join(", ")} 已重试 ${MAX_VERIFY_ATTEMPTS} 次仍未通过，已标记为 failed。请决定是否手动 override。\n</todo_context>`,
+					{ deliverAs: "steer" },
+				);
+				return;
+			}
+
+			// 3. Stall 检测: STALL_THRESHOLD 轮未调用 todo 且还有未完成任务
 			if (
-				todos.length > 0 &&
 				!stallNotified &&
 				userMessageCount - lastTodoCallCount >= STALL_THRESHOLD
 			) {
 				stallNotified = true;
-				const pendingCount = todos.filter((t) => t.status !== "completed").length;
-				const completedCount = todos.filter((t) => t.status === "completed").length;
-				const pendingText = todos
-					.filter((t) => t.status !== "completed")
-					.map((t) => {
-						const verifyTag = t.verifyText
-							? ` [待验证: ${t.verifyText}]`
-							: " [无需验证]";
-						return `#${t.id}: ${t.text}${verifyTag}`;
-					})
-					.join("\n");
-				pi.sendUserMessage(`<todo_context>\n[TODO] Turn ${userMessageCount} — ${pendingCount} tasks pending, ${completedCount} completed\n${pendingText}\n\nRules:\n- 优先使用 updates[] 批量更新\n- [待验证] 的任务必须传 verified=true 才能标记 completed\n- 全部完成后工具自动闭合\n</todo_context>`, { deliverAs: "steer" });
+				pi.sendUserMessage(buildPendingContext(userMessageCount), { deliverAs: "steer" });
 				return;
 			}
 
-			// 提醒: 3 轮未调用 todo
-			if (
-				todos.length > 0 &&
-				userMessageCount - lastTodoCallCount >= REMINDER_INTERVAL
-			) {
-				const pendingCount = todos.filter((t) => t.status !== "completed").length;
-				const completedCount = todos.filter((t) => t.status === "completed").length;
-				const pendingText = todos
-					.filter((t) => t.status !== "completed")
-					.map((t) => {
-						const verifyTag = t.verifyText
-							? ` [待验证: ${t.verifyText}]`
-							: " [无需验证]";
-						return `#${t.id}: ${t.text}${verifyTag}`;
-					})
-					.join("\n");
-				pi.sendUserMessage(`<todo_context>\n[TODO] Turn ${userMessageCount} — ${pendingCount} tasks pending, ${completedCount} completed\n${pendingText}\n\nRules:\n- 优先使用 updates[] 批量更新\n- [待验证] 的任务必须传 verified=true 才能标记 completed\n- 全部完成后工具自动闭合\n</todo_context>`, { deliverAs: "steer" });
+			// 4. 提醒: REMINDER_INTERVAL 轮未调用 todo
+			if (userMessageCount - lastTodoCallCount >= REMINDER_INTERVAL) {
+				pi.sendUserMessage(buildPendingContext(userMessageCount), { deliverAs: "steer" });
 				return;
 			}
 		} catch (e) {
