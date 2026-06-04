@@ -4,11 +4,11 @@ verdict: pass
 absorbed: false
 topic: "2026-06-04-workflow-storage-and-verification"
 harness_issues:
-  - "Subagent dispatch 不保证输出文件存在后才返回。多次出现 subagent 报告完成但输出文件为空或不完整的情况。建议：subagent 返回后加 read 验证输出文件存在且非空，失败则重试。"
-  - "ESLint 错误修复是 subagent-driven-development 的已知痛点：subagent 写的代码常有 unused vars / unused params，主 agent 需要额外修复循环。建议：在 subagent task prompt 中显式加入 'ESLint no-unused-vars 规则要求所有 unused 变量加 _ 前缀' 的约束。"
-  - "robustness_review_v1.md YAML frontmatter 被 subagent 包在 ```yaml``` code block 里而非 --- 分隔符之间，gate 解析失败。建议：review subagent prompt 中显式要求 'YAML frontmatter 必须用 --- 分隔符包裹，禁止用 ```yaml``` code block'。"
-  - "5-step specialized review 中 Taste Review 找到 1 个 P0（index.ts 566 行），但 gate 只检查 verdict/must_fix，不区分 P0/P1/P2。P0 应该引起注意但当前机制不区分。建议：gate 对 taste_review 的 P0 计数加一个 WARNING 级别（不 block 但提醒）。"
-  - "git pre-commit hook 的 ESLint 检查对所有 staged .ts 文件运行，包括 mocks/ 和 tests/。subagent 创建的 mock 文件（typebox.ts）因 unused type 参数报错。建议：ESLint 配置对 mocks/ 目录放宽 no-unused-vars 规则。"
+  - 'Subagent dispatch 输出不可靠：subagent 报告完成后输出文件可能为空。建议：dispatch 后加 read 验证，失败则重试。'
+  - 'ESLint 错误修复循环：subagent 写的代码常有 unused vars。建议：subagent task prompt 加 ESLint 约束。'
+  - 'Review YAML frontmatter 格式错误：subagent 用 code block 而非 three-dash 分隔符。建议 prompt 显式要求 three-dash 分隔符。'
+  - 'Gate 不区分 P0/P1/P2：taste_review P0 未引起注意。建议 gate 对 P0 加 WARNING 级别。'
+  - 'Pre-commit ESLint 对 mocks/ 报错：subagent 创建的 mock 文件有 unused type 参数。建议 ESLint 对 mocks/ 放宽规则。'
 ---
 
 # Phase 3 Retrospect — Dev
