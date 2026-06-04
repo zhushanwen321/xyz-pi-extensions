@@ -1,0 +1,195 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "api",
+      "title": "Todo data model — backward compat migration",
+      "description": "Verify that old session data without verifyText/verifyAttempts loads correctly",
+      "steps": [
+        "Create old-format todo entry via appendEntry (no verifyText, no verifyAttempts, status: completed)",
+        "Reconstruct state via ctx.sessionManager.getEntries()",
+        "Verify verifyText is undefined, verifyAttempts is 0"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "api",
+      "title": "Todo data model — failed status accepted",
+      "description": "Verify that 'failed' is a valid status value in VALID_STATUSES",
+      "steps": [
+        "Call todo update(id=1, status=failed)",
+        "Verify todo status becomes 'failed'",
+        "Verify TUI shows verification failure indicator"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "api",
+      "title": "todo add with verifyTexts parameter",
+      "description": "Verify that verifyTexts maps correctly to todos",
+      "steps": [
+        "Call todo add(texts=['A','B','C'], verifyTexts=['Verify A'])",
+        "Verify #1 has verifyText='Verify A', #2 and #3 have verifyText=undefined",
+        "Verify TUI shows #1: A [待验证], #2: B [无需验证], #3: C [无需验证]"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "api",
+      "title": "todo add without verifyTexts",
+      "description": "Verify that add without verifyTexts defaults to undefined",
+      "steps": [
+        "Call todo add(texts=['A'])",
+        "Verify #1 has verifyText=undefined",
+        "Verify TUI shows [无需验证]"
+      ]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "api",
+      "title": "todo add verifyTexts length exceeds texts length",
+      "description": "Verify that longer verifyTexts than texts returns error",
+      "steps": [
+        "Call todo add(texts=['A'], verifyTexts=['V1','V2'])",
+        "Verify error response: 'verifyTexts length exceeds texts length'"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "api",
+      "title": "todo update batch updates[]",
+      "description": "Verify that updates[] updates multiple todos in one call",
+      "steps": [
+        "Call todo add(texts=['A','B','C'])",
+        "Call todo update(updates=[{id:1,status:completed},{id:2,status:completed},{id:3,status:in_progress}])",
+        "Verify #1 status=completed, #2 status=completed, #3 status=in_progress",
+        "Verify all updates happened in single tool call"
+      ]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "api",
+      "title": "todo update batch duplicate ids",
+      "description": "Verify that duplicate ids in updates[] returns error",
+      "steps": [
+        "Call todo update(updates=[{id:1,status:completed},{id:1,status:pending}])",
+        "Verify error: 'duplicate ids in updates'",
+        "Verify no todos were modified (all-or-nothing)"
+      ]
+    },
+    {
+      "id": "TC-3-03",
+      "type": "api",
+      "title": "todo update batch non-existent id",
+      "description": "Verify that non-existent ids in updates[] returns all-or-nothing error",
+      "steps": [
+        "Call todo update(updates=[{id:1,status:completed},{id:999,status:pending}])",
+        "Verify error: 'id 999 not found'",
+        "Verify #1 was NOT modified (rollback)"
+      ]
+    },
+    {
+      "id": "TC-3-04",
+      "type": "api",
+      "title": "todo update single item backward compat",
+      "description": "Verify that old-style update(id=1, status=completed) still works",
+      "steps": [
+        "Call todo add(texts=['A'])",
+        "Call todo update(id=1, status=completed)",
+        "Verify #1 status=completed"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "api",
+      "title": "agent_end auto-close",
+      "description": "Verify that all-completed triggers auto-clear after 2 rounds",
+      "steps": [
+        "Call todo add(texts=['A'])",
+        "Call todo update(id=1, status=completed)",
+        "Trigger 2 agent_end rounds (simulate AI turns)",
+        "Verify todos array is empty"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "integration",
+      "title": "verifyText auto-verification trigger",
+      "description": "Verify that agent_end injects verification context for tasks with verifyText",
+      "steps": [
+        "todo add(texts=['Fix auth'], verifyTexts=['Check error codes'])",
+        "todo update(id=1, status=completed)",
+        "Verify agent_end injects display:false message with customType=todo-context",
+        "Verify context message contains the verifyText 'Check error codes'"
+      ]
+    },
+    {
+      "id": "TC-5-02",
+      "type": "integration",
+      "title": "verifyText verification failure -> failed status",
+      "description": "Verify that 2 failed verification attempts set status to failed",
+      "steps": [
+        "todo add(texts=['Fix auth'], verifyTexts=['Check error codes'])",
+        "todo update(id=1, status=completed) -> agent_end triggers verify",
+        "AI reports verification failed -> verifyAttempts=1",
+        "todo update(id=1, status=in_progress) -> AI reworks",
+        "todo update(id=1, status=completed) -> agent_end triggers verify again",
+        "AI reports verification failed again -> verifyAttempts=2 -> status=failed",
+        "Verify TUI shows [验证失败]"
+      ]
+    },
+    {
+      "id": "TC-5-03",
+      "type": "integration",
+      "title": "no verifyText skips verification",
+      "description": "Verify that tasks without verifyText don't trigger verification",
+      "steps": [
+        "todo add(texts=['Create dir'])",
+        "todo update(id=1, status=completed)",
+        "Verify no verification context is injected at agent_end"
+      ]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "manual",
+      "title": "Prompt — goal conflict avoidance",
+      "description": "Verify that AI respects promptGuidelines about not using todo during goal",
+      "steps": [
+        "Start /goal with a task",
+        "Tell AI '帮我分解这个目标'",
+        "Verify AI uses goal_manager add_subtasks, not todo add"
+      ]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "manual",
+      "title": "Prompt — usage trigger",
+      "description": "Verify that AI uses todo for multi-step work without /goal",
+      "steps": [
+        "Tell AI '重构这个模块，分几步来做'",
+        "Verify AI creates todos without user asking for it",
+        "Verify AI uses updates[] for batch status changes"
+      ]
+    },
+    {
+      "id": "TC-8-01",
+      "type": "ui",
+      "title": "Message renderer for todo-context",
+      "description": "Verify that todo-context messages are rendered correctly in TUI",
+      "steps": [
+        "Have agent_end inject a todo-context message",
+        "Verify TUI displays '[TODO] N tasks pending' (collapsed)"
+      ]
+    },
+    {
+      "id": "TC-9-01",
+      "type": "api",
+      "title": "Static type check passes",
+      "description": "Verify that tsc --noEmit passes for todo extension",
+      "steps": [
+        "Run: cd extensions/todo && npx tsc --noEmit",
+        "Verify exit code 0"
+      ]
+    }
+  ]
+}
