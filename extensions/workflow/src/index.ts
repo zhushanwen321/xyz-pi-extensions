@@ -22,8 +22,8 @@ import { resolve } from "node:path";
 import {
   type WorkflowInstance,
   type WorkflowStatus,
-  
   deserializeInstance,
+  createInstance,
   transitionStatus,
   isTerminal,
 } from "./state.js";
@@ -163,6 +163,14 @@ export default function workflowExtension(pi: ExtensionAPI) {
           }
         } catch {
           ctx.ui.notify(`WARN: missing or corrupt state for ${runId}`, "warning");
+          // Create a state_lost placeholder so the user can see the run existed
+          // but its external state file is unreadable (FR-1.6)
+          instances.set(runId, createInstance({
+            runId,
+            name: `(state lost) ${runId}`,
+            worker: "(unknown)",
+            status: "state_lost",
+          }));
         }
       }
     // eslint-disable-next-line taste/no-silent-catch

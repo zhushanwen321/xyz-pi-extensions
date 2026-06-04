@@ -685,27 +685,19 @@ describe("WorkflowOrchestrator", () => {
   // ── AgentPool soft-limit callback ─────────────────────────
 
   describe("soft-limit warning callback", () => {
-    it("invokes pi.sendUserMessage with runName and budget info", () => {
-      // The orchestrator constructor wires onSoftLimitReached to call
-      // this.pi.sendUserMessage with a specific message format.
-      // We test the wiring by accessing the pool's internal callback
-      // and invoking it, then verifying pi.sendUserMessage was called.
-      //
-      // Access private agentPool via type cast
-      const pool = (orch as unknown as { agentPool: { onSoftLimitReached?: (info: { runName: string; totalCalls: number; budget: { used: number; total: number } }) => void } }).agentPool;
+    it("invokes pi.sendUserMessage with description and totalCalls", () => {
+      const pool = (orch as unknown as { agentPool: { onSoftLimitReached?: (info: { description: string; totalCalls: number }) => void } }).agentPool;
       expect(pool.onSoftLimitReached).toBeDefined();
 
-      // Trigger the callback
       pool.onSoftLimitReached!({
-        runName: "test-workflow",
+        description: "my-agent-step",
         totalCalls: 501,
-        budget: { used: 5000, total: 10000, remaining: 5000, isExhausted: false },
       });
 
       expect(mockPi.sendUserMessage).toHaveBeenCalledTimes(1);
       const msg = (mockPi.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(msg).toContain("Reached 500 agent calls");
-      expect(msg).toContain("test-workflow");
+      expect(msg).toContain("501 agent calls");
+      expect(msg).toContain("my-agent-step");
     });
   });
 });

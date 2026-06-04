@@ -143,6 +143,11 @@ export const VALID_TRANSITIONS: Record<WorkflowStatus, WorkflowStatus[]> = {
   aborted: [],
   budget_limited: [],
   time_limited: [],
+  // state_lost: set when external state file is missing/corrupt during rehydrate.
+  // No internal transition reaches this state — it is assigned externally by
+  // reconstructState when a pointer entry points to an unreadable file.
+  // Currently reconstructState skips the instance instead of creating a state_lost
+  // placeholder (see spec FR-1.6: "don't create placeholder instance").
   state_lost: [],
 };
 

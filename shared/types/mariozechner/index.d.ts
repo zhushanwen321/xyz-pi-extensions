@@ -78,7 +78,7 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type Theme = any;
 	export type ThemeColor = string;
 	export type ExtensionCommandContext = any;
-	export type AgentToolResult<T = any> = { content: Array<{ type: string; text: string }>; details: T };
+	export type AgentToolResult<T = any> = { content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; details: T };
 	export type TurnEndEvent = any;
 	export type SessionBeforeCompactEvent = any;
 	export type SessionStartEvent = any;
@@ -129,7 +129,7 @@ declare module "@earendil-works/pi-coding-agent" {
 	export * from "@mariozechner/pi-coding-agent";
 	// Additional exports used by subagent/extension
 	export type Message = any;
-	export type AgentToolResult<T = any> = { content: Array<{ type: string; text: string }>; details: T };
+	export type AgentToolResult<T = any> = { content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; details: T };
 	export function parseFrontmatter<T = Record<string, unknown>>(text: string): { frontmatter: T; body: string };
 }
 declare module "@earendil-works/pi-tui" {

@@ -127,6 +127,9 @@ export class WorkflowOrchestrator {
 
     // Override with session-scoped directory (same as Pi's session JSONL location).
     // Pi encodes the project path as: /a/b/c → --a-b-c-- (subdirectory under sessions/).
+    // RISK: This relies on Pi's internal directory naming convention. If Pi changes
+    // the encoding scheme, state files will be orphaned. No public API exposes
+    // the session directory path — fallback to ~/.pi/agent/ if detection fails.
     const sessionSlug = "--" + process.cwd().replace(/^\//, "").replace(/\//g, "-") + "--";
     const sessionScopedDir = path.join(homedir(), ".pi", "agent", "sessions", sessionSlug);
     if (fs.existsSync(sessionScopedDir)) {
@@ -134,13 +137,12 @@ export class WorkflowOrchestrator {
     }
 
     // Merge default soft-limit callback with any caller-provided options
-    const defaultOnSoftLimit = ({ runName, budget }: {
-      runName: string;
+    const defaultOnSoftLimit = ({ description, totalCalls }: {
+      description: string;
       totalCalls: number;
-      budget: { used: number; total: number };
     }) => {
       (this.pi as unknown as { sendUserMessage: (msg: string) => void }).sendUserMessage(
-        `[workflow:${runName}] Reached 500 agent calls. Budget: ${budget.used}/${budget.total ?? "unlimited"} tokens. Consider aborting if this is unintended.`,
+        `[workflow] Reached ${totalCalls} agent calls (last: '${description}'). Consider aborting if this is unintended.`,
       );
     };
 

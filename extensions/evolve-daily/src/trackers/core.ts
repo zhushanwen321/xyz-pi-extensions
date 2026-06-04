@@ -13,6 +13,7 @@ import type {
   Theme,
 } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
+import type { Static } from "typebox";
 
 import {
   canTransition,
@@ -39,8 +40,8 @@ type PiOnAny = {
 type RenderOptions = { expanded?: boolean };
 
 type ToolResult = {
-  content: Array<{ type: string; text: string }>;
-  details?: Record<string, unknown>;
+  content: Array<{ type: "text"; text: string }>;
+  details: Record<string, unknown> | undefined;
   isError?: boolean;
 };
 
@@ -399,8 +400,8 @@ export function createTracker<TMeta>(
 
     async execute(
       _toolCallId: string,
-      params: Record<string, unknown>,
-      _signal: unknown,
+      params: Static<typeof TrackerParams>,
+      _signal: AbortSignal | undefined,
       _onUpdate: unknown,
       ctx: ExtensionContext,
     ): Promise<ToolResult> {
@@ -425,22 +426,22 @@ export function createTracker<TMeta>(
       const updateId = params.id as number | undefined;
       const updateStatus = params.status as string | undefined;
       if (updateId === undefined) {
-        return { content: [{ type: "text", text: "update action requires id parameter" }], isError: true };
+        return { content: [{ type: "text", text: "update action requires id parameter" }], details: undefined, isError: true };
       }
       if (updateStatus === undefined) {
-        return { content: [{ type: "text", text: "update action requires status parameter" }], isError: true };
+        return { content: [{ type: "text", text: "update action requires status parameter" }], details: undefined, isError: true };
       }
 
       const itemIndex = state.items.findIndex(
         (item) => item.id === updateId,
       );
       if (itemIndex === -1) {
-        return { content: [{ type: "text", text: `TrackedItem id=${updateId} not found` }], isError: true };
+        return { content: [{ type: "text", text: `TrackedItem id=${updateId} not found` }], details: undefined, isError: true };
       }
 
       const item = state.items[itemIndex];
       if (!canTransition(item.status, updateStatus as TrackedItemStatus)) {
-        return { content: [{ type: "text", text: `Invalid transition: ${item.status} → ${updateStatus} (current: ${item.status}, terminal states are immutable or path not allowed)` }], isError: true };
+        return { content: [{ type: "text", text: `Invalid transition: ${item.status} → ${updateStatus} (current: ${item.status}, terminal states are immutable or path not allowed)` }], details: undefined, isError: true };
       }
 
       // 执行转换
@@ -484,12 +485,12 @@ export function createTracker<TMeta>(
     },
 
     renderResult(
-      result: ToolResult,
-      options: RenderOptions,
+      result: { content: Array<{ type: "text"; text?: string } | { type: "image"; data: string; mimeType: string }>; details?: Record<string, unknown> },
+      _options: unknown,
       theme: Theme,
       _context?: unknown,
     ) {
-      return renderTrackerResult(result, options, config, theme);
+      return renderTrackerResult(result as ToolResult, { expanded: (_options as Record<string, unknown> | undefined)?.expanded as boolean | undefined }, config, theme);
     },
   });
 }

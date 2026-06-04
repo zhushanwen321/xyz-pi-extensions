@@ -404,8 +404,7 @@ describe("AgentPool — soft warning infrastructure", () => {
     expect(callback).toHaveBeenCalledWith(
       expect.objectContaining({
         totalCalls: count,
-        runName: expect.any(String),
-        budget: expect.any(Object),
+        description: expect.any(String),
       }),
     );
   });
@@ -451,47 +450,26 @@ describe("AgentPool — soft warning infrastructure", () => {
   });
 
   it("cache_hit_does_not_increment", async () => {
-    const pool = new AgentPool({ maxConcurrency: 1 });
+    // After _callCache removal, every call is a real spawn.
+    // This test now verifies that each enqueue() increments totalCallCount.
+    const pool = new AgentPool({ maxConcurrency: 2 });
     const anyPool = pool as any;
-    const knownCallId = "test-cache-hit";
-    const fakeResult = {
-      callId: knownCallId,
-      output: "cached",
-      durationMs: 0,
-      success: true,
-    };
-
-    // Pre-populate cache
-    anyPool._callCache.set(knownCallId, fakeResult);
-    expect(anyPool.totalCallCount).toBe(0);
-
-    // Call run() directly with a cached callId — should resolve
-    // from cache without incrementing totalCallCount
-    const mockEntry = {
-      opts: { prompt: "test" },
-      resolve: vi.fn(),
-      callId: knownCallId,
-      startedAt: Date.now(),
-    };
-    await anyPool.run(mockEntry);
 
     expect(anyPool.totalCallCount).toBe(0);
-    expect(mockEntry.resolve).toHaveBeenCalledWith(fakeResult);
 
-    // Now call run() with a NEW callId — should increment totalCallCount
-    const proc = createMockProcess();
-    mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
-    const entry2 = {
-      opts: { prompt: "new call" },
-      resolve: vi.fn(),
-      callId: "new-call-id",
-      startedAt: Date.now(),
-    };
-    const runPromise = anyPool.run(entry2);
-    completeSuccess(proc, "fresh result");
-    await runPromise;
+    // First call
+    const proc1 = createMockProcess();
+    mockSpawn.mockReturnValueOnce(proc1 as unknown as ChildProcess);
+    pool.enqueue({ prompt: "call-1" });
+    completeSuccess(proc1, "result-1");
 
-    expect(anyPool.totalCallCount).toBe(1);
+    // Second call
+    const proc2 = createMockProcess();
+    mockSpawn.mockReturnValueOnce(proc2 as unknown as ChildProcess);
+    pool.enqueue({ prompt: "call-2" });
+    completeSuccess(proc2, "result-2");
+
+    expect(anyPool.totalCallCount).toBe(2);
   });
 
   it("per_instance_counter_is_independent", () => {
@@ -529,7 +507,7 @@ describe("AgentPool — soft warning infrastructure", () => {
     expect(callback2).not.toHaveBeenCalled();
   });
 
-  it("callback_receives_runName_and_budget", () => {
+  it("callback_receives_description_and_totalCalls", () => {
     const callback = vi.fn();
     const count = SOFT_MAX_AGENTS_WARNING + 1;
     const pool = new AgentPool({
@@ -547,15 +525,10 @@ describe("AgentPool — soft warning infrastructure", () => {
 
     expect(callback).toHaveBeenCalledTimes(1);
     const arg = callback.mock.calls[0][0];
-    expect(arg).toHaveProperty("runName");
-    expect(typeof arg.runName).toBe("string");
+    expect(arg).toHaveProperty("description");
+    expect(typeof arg.description).toBe("string");
     expect(arg).toHaveProperty("totalCalls");
     expect(arg.totalCalls).toBe(count);
-    expect(arg).toHaveProperty("budget");
-    expect(arg.budget).toHaveProperty("total");
-    expect(arg.budget).toHaveProperty("used");
-    expect(arg.budget).toHaveProperty("remaining");
-    expect(arg.budget).toHaveProperty("isExhausted");
   });
 
   it("workflow_continues_after_callback_throws", async () => {

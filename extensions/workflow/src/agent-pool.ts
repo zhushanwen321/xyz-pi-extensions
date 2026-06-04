@@ -97,21 +97,13 @@ const UUID_SLICE_LENGTH = 8;
 const JSON_INDENT = 2;
 const TIMEOUT_DISPLAY_DIVISOR = 1000;
 
-// ── Budget type (mirrors BudgetTracker shape for callback signature) ──
-
-export interface WorkflowBudget {
-  total: number;
-  used: number;
-  remaining: number;
-  isExhausted: boolean;
-}
-
 export interface AgentPoolOptions {
   maxConcurrency?: number;
+  /** Called once when totalCallCount first exceeds SOFT_MAX_AGENTS_WARNING */
   onSoftLimitReached?: (info: {
-    runName: string;
+    /** Agent description (from AgentCallOpts.description or generated callId) */
+    description: string;
     totalCalls: number;
-    budget: WorkflowBudget;
   }) => void;
 }
 
@@ -121,12 +113,11 @@ export class AgentPool {
   private readonly maxConcurrency: number;
   private readonly queue: QueueEntry[] = [];
   private readonly onSoftLimitReached?: (
-    info: { runName: string; totalCalls: number; budget: WorkflowBudget },
+    info: { description: string; totalCalls: number },
   ) => void;
   private active = 0;
   private totalCallCount = 0;
   private softWarningSent = false;
-  private readonly _callCache = new Map<string, AgentResult>();
 
   constructor(opts: AgentPoolOptions | number = {}) {
     if (typeof opts === "number") {
@@ -182,24 +173,11 @@ export class AgentPool {
     const { opts, resolve, callId, startedAt } = entry;
 
     try {
-      // Cache check — same callId returns cached result, no spawn
-      const cached = this._callCache.get(callId);
-      if (cached) {
-        resolve(cached);
-        return;
-      }
-
       // Real spawn — increment counter and check soft limit
       this.totalCallCount++;
-      this.maybeEmitSoftWarning(opts.description ?? callId, {
-        total: 0,
-        used: 0,
-        remaining: 0,
-        isExhausted: false,
-      });
+      this.maybeEmitSoftWarning(opts.description ?? callId);
 
       const result = await this.spawnAndParse(opts, callId, startedAt);
-      this._callCache.set(callId, result);
       resolve(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -217,10 +195,7 @@ export class AgentPool {
    * Emit the soft-limit warning once when totalCallCount exceeds
    * SOFT_MAX_AGENTS_WARNING. Errors in the callback are swallowed.
    */
-  private maybeEmitSoftWarning(
-    runName: string,
-    budget: WorkflowBudget,
-  ): void {
+  private maybeEmitSoftWarning(description: string): void {
     if (
       this.totalCallCount > SOFT_MAX_AGENTS_WARNING &&
       !this.softWarningSent
@@ -228,9 +203,8 @@ export class AgentPool {
       this.softWarningSent = true;
       try {
         this.onSoftLimitReached?.({
-          runName,
+          description,
           totalCalls: this.totalCallCount,
-          budget,
         });
       // eslint-disable-next-line taste/no-silent-catch
       } catch {
