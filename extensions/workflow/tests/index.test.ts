@@ -272,6 +272,7 @@ describe("workflow-run approval gate", () => {
     expect(ctx.ui.confirm).not.toHaveBeenCalled();
     expect(pi.sendUserMessage).toHaveBeenCalledWith(
       expect.stringContaining("RPC mode"),
+      { deliverAs: "steer" },
     );
     // hasUI=false still runs the workflow (no interactive gate)
     expect(mockRun).toHaveBeenCalledTimes(1);
