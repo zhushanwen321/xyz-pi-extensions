@@ -614,7 +614,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
           }
         } else {
           // hasUI=false fallback
-          pi.sendUserMessage(`Confirm to run '${exactMatch.name}'? (RPC mode — auto-confirm not available, proceed with caution)`);
+          pi.sendUserMessage(`Confirm to run '${exactMatch.name}'? (RPC mode — auto-confirm not available, proceed with caution)`, { deliverAs: "steer" });
         }
 
         // Proceed to run after approval
@@ -660,6 +660,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
           `No exact match for '${name}', but found ${candidates.length} related workflow(s):\n${candidateList}\n\n` +
           `Ask the user which one to use, or if they want to create a new workflow. ` +
           `If they choose one, use workflow-run with the exact name and mode 'force'.`,
+          { deliverAs: "steer" },
         );
         return {
           content: [{ type: "text" as const, text: `Found ${candidates.length} fuzzy match(es) for '${name}'. Awaiting user choice.` }],
@@ -688,6 +689,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
           `1. If one of the above looks suitable, use workflow-run with its exact name.\n` +
           `2. If none fits, use workflow-generate to create a new temporary workflow.\n` +
           `3. Before executing a generated workflow, ALWAYS show the script path and wait for user confirmation.`,
+        { deliverAs: "steer" },
       );
       return {
         content: [{ type: "text" as const, text: `No match for '${name}'. Suggestions sent to conversation.` }],
