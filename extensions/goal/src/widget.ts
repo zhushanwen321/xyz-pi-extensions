@@ -39,7 +39,7 @@ export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string
 	const completedCount = getCompletedCount(state.tasks);
 	const total = state.tasks.length;
 
-	let text = th.fg("accent", `◆ Goal`) + th.fg("muted", ` ${state.turnCount}/${state.budget.maxTurns}`);
+	let text = th.fg("accent", `◆ Goal`) + th.fg("muted", ` ${state.currentTurnIndex}/${state.budget.maxTurns}`);
 
 	if (total > 0) {
 		text += th.fg("muted", ` | ${completedCount}/${total} tasks`);

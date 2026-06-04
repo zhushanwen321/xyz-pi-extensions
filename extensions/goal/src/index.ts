@@ -12,7 +12,7 @@
  * 健壮性保障：
  * - goalId snapshot 防止旧回调操作新 goal
  * - 时间累计统一由 persistState 管理，无双写
- * - 防重入保护（hasPendingInjection）
+ * - before_agent_start 注入 context，agent_end 负责 continuation（预算检查/进度评估/续跑）
  * - deserializeState 向后兼容旧格式
  */
 
@@ -159,7 +159,7 @@ async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: s
 			const lines = [
 				`Objective: ${session.state.objective}`,
 				`Status: ${session.state.status}`,
-				`Turn: ${session.state.turnCount}/${session.state.budget.maxTurns}`,
+				`Turn: ${session.state.currentTurnIndex}/${session.state.budget.maxTurns}`,
 				`Tasks: ${completed}/${total} completed`,
 				`Stall turns: ${session.state.stallCount}`,
 				`Time elapsed: ${Math.floor(elapsed / SECONDS_PER_MINUTE)}m${Math.floor(elapsed % SECONDS_PER_MINUTE)}s`,
@@ -306,6 +306,7 @@ Objective: ${session.state.objective}`,
 			session.state.tasks = [];
 			session.state.stallCount = 0;
 			session.state.turnCount = 0;
+			session.state.currentTurnIndex = 0;
 			session.state.lastProgressTurn = 0;
 			session.state.budgetLimitSteeringSent = false;
 			session.state.budgetWarning70Sent = false;
@@ -510,7 +511,7 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 		if (checkStale()) return;
 		updateWidget(session, ctx);
 		ctx.ui.notify(
-			`Objective completed ✓ (${getCompletedCount(session.state.tasks)}/${session.state.tasks.length} tasks, ${session.state.turnCount} turns)`,
+			`Objective completed ✓ (${getCompletedCount(session.state.tasks)}/${session.state.tasks.length} tasks, ${session.state.currentTurnIndex} turns)`,
 			"info",
 		);
 		return;
@@ -525,12 +526,6 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 	}
 
 	if (!isActiveStatus(session.state.status)) return;
-
-	// 防重入
-	if (session.hasPendingInjection) {
-		session.hasPendingInjection = false;
-		return;
-	}
 
 	if (checkStale()) return;
 
@@ -595,7 +590,7 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 			if (checkStale()) return;
 			updateWidget(session, ctx);
 			ctx.ui.notify(
-				`All tasks completed, Goal auto-closed. (${progress.completedCount}/${progress.totalCount} tasks, ${session.state.turnCount} turns)`,
+				`All tasks completed, Goal auto-closed. (${progress.completedCount}/${progress.totalCount} tasks, ${session.state.currentTurnIndex} turns)`,
 				"info",
 			);
 			return;
@@ -666,7 +661,7 @@ async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 		session.state.stallCount++;
 	} else {
 		session.state.stallCount = 0;
-		session.state.lastProgressTurn = session.state.turnCount;
+		session.state.lastProgressTurn = session.state.currentTurnIndex;
 	}
 
 	if (session.state.stallCount >= session.state.budget.maxStallTurns) {

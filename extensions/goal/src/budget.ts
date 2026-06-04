@@ -147,7 +147,7 @@ export function checkProgress(state: GoalRuntimeState, tasksCompletedAtStart: nu
 	return {
 		allTasksDone: totalCount > 0 && incomplete.length === 0 && completedCount > 0,
 		noTasksCreated: totalCount === 0,
-		maxTurnsReached: state.turnCount >= state.budget.maxTurns,
+		maxTurnsReached: state.currentTurnIndex >= state.budget.maxTurns,
 		isStalled: progressThisRound === 0,
 		budgetTight: Boolean(
 			state.budget.tokenBudget &&
