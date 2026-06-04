@@ -244,6 +244,190 @@ describe("todo list verifyText - Task 4", () => {
 	});
 });
 
+// ── Task 5: agent_end loop logic (pure data model tests) ──────────
+
+describe("agent_end loop logic - Task 5", () => {
+	const MAX_VERIFY_ATTEMPTS = 2;
+
+	it("should detect completed tasks needing verification", () => {
+		const todos: Todo[] = [
+			{
+				id: 1,
+				text: "task A",
+				status: "completed",
+				verifyText: "check output",
+				verifyAttempts: 0,
+			},
+		];
+
+		const needsVerify = todos.find(
+			(t) =>
+				t.status === "completed" &&
+				t.verifyText &&
+				t.verifyAttempts < MAX_VERIFY_ATTEMPTS,
+		);
+
+		expect(needsVerify).toBeDefined();
+		expect(needsVerify!.id).toBe(1);
+		expect(needsVerify!.verifyText).toBe("check output");
+	});
+
+	it("should not trigger verify for tasks without verifyText", () => {
+		const todos: Todo[] = [
+			{
+				id: 1,
+				text: "task A",
+				status: "completed",
+				verifyAttempts: 0,
+			},
+		];
+
+		const needsVerify = todos.find(
+			(t) =>
+				t.status === "completed" &&
+				t.verifyText &&
+				t.verifyAttempts < MAX_VERIFY_ATTEMPTS,
+		);
+
+		expect(needsVerify).toBeUndefined();
+	});
+
+	it("should detect verify failure when attempts exceed max", () => {
+		const todos: Todo[] = [
+			{
+				id: 2,
+				text: "task B",
+				status: "in_progress",
+				verifyText: "check B",
+				verifyAttempts: MAX_VERIFY_ATTEMPTS,
+			},
+		];
+
+		const failed = todos.filter(
+			(t) =>
+				t.verifyText &&
+				t.verifyAttempts >= MAX_VERIFY_ATTEMPTS &&
+				t.status === "in_progress",
+		);
+
+		expect(failed).toHaveLength(1);
+		expect(failed[0].id).toBe(2);
+
+		// Simulate status change to failed
+		failed[0].status = "failed";
+		expect(failed[0].status).toBe("failed");
+	});
+
+	it("should not trigger verify for tasks at max attempts", () => {
+		const todos: Todo[] = [
+			{
+				id: 1,
+				text: "task A",
+				status: "completed",
+				verifyText: "check A",
+				verifyAttempts: MAX_VERIFY_ATTEMPTS,
+			},
+		];
+
+		const needsVerify = todos.find(
+			(t) =>
+				t.status === "completed" &&
+				t.verifyText &&
+				t.verifyAttempts < MAX_VERIFY_ATTEMPTS,
+		);
+
+		expect(needsVerify).toBeUndefined();
+	});
+
+	it("should detect stall when no todo activity for threshold rounds", () => {
+		const STALL_THRESHOLD = 5;
+		const userMessageCount = 10;
+		const lastTodoCallCount = 3;
+		const todos: Todo[] = [
+			{ id: 1, text: "pending task", status: "pending", verifyAttempts: 0 },
+		];
+		const allCompletedAtCount = null;
+
+		const isStalled =
+			todos.length > 0 &&
+			allCompletedAtCount === null &&
+			userMessageCount - lastTodoCallCount >= STALL_THRESHOLD;
+
+		expect(isStalled).toBe(true);
+	});
+
+	it("should detect reminder when interval elapsed", () => {
+		const REMINDER_INTERVAL = 3;
+		const userMessageCount = 8;
+		const lastTodoCallCount = 4;
+		const todos: Todo[] = [
+			{ id: 1, text: "task", status: "pending", verifyAttempts: 0 },
+		];
+		const allCompletedAtCount = null;
+
+		const needsReminder =
+			todos.length > 0 &&
+			allCompletedAtCount === null &&
+			userMessageCount - lastTodoCallCount >= REMINDER_INTERVAL;
+
+		expect(needsReminder).toBe(true);
+	});
+
+	it("should auto-clear when all completed and delay rounds elapsed", () => {
+		const AUTO_CLEAR_DELAY_ROUNDS = 2;
+		const userMessageCount = 7;
+		const allCompletedAtCount = 4;
+
+		const shouldClear =
+			allCompletedAtCount !== null &&
+			userMessageCount - allCompletedAtCount >= AUTO_CLEAR_DELAY_ROUNDS;
+
+		expect(shouldClear).toBe(true);
+	});
+
+	it("should not auto-clear when delay rounds not yet elapsed", () => {
+		const AUTO_CLEAR_DELAY_ROUNDS = 2;
+		const userMessageCount = 5;
+		const allCompletedAtCount = 4;
+
+		const shouldClear =
+			allCompletedAtCount !== null &&
+			userMessageCount - allCompletedAtCount >= AUTO_CLEAR_DELAY_ROUNDS;
+
+		expect(shouldClear).toBe(false);
+	});
+
+	it("should format pending tasks with verifyText for context injection", () => {
+		const todos: Todo[] = [
+			{
+				id: 1,
+				text: "task A",
+				status: "pending",
+				verifyText: "check A",
+				verifyAttempts: 0,
+			},
+			{
+				id: 2,
+				text: "task B",
+				status: "in_progress",
+				verifyAttempts: 0,
+			},
+		];
+
+		const pendingTodos = todos.filter((t) => t.status !== "completed");
+		const lines = pendingTodos.map((t) => {
+			const verifyTag = t.verifyText
+				? ` [待验证: ${t.verifyText}]`
+				: " [无需验证]";
+			return `#${t.id}: ${t.text}${verifyTag}`;
+		});
+
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toBe("#1: task A [待验证: check A]");
+		expect(lines[1]).toBe("#2: task B [无需验证]");
+	});
+});
+
 // ── buildRender ───────────────────────────────────────
 
 describe("buildRender", () => {

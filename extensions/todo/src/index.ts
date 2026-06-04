@@ -185,10 +185,12 @@ function renderWidgetLines(todoList: Todo[], th: Theme): string[] {
 
 /** v3: 自动清空延迟轮数（全部完成后保留 N 轮用户消息） */
 const AUTO_CLEAR_DELAY_ROUNDS = 2;
-/** v3: Verification Nudge 触发阈值（完成 N 个任务以上时检查） */
-const VERIFICATION_NUDGE_THRESHOLD = 3;
-/** v3: Todo Reminder 触发间隔（N 轮未调用 todo 工具时提醒） */
-const TODO_REMINDER_INTERVAL = 10;
+/** v3: Stall 检测阈值（无 todo 活动轮数 → stall 提醒） */
+const STALL_THRESHOLD = 5;
+/** v3: 提醒间隔（上次 todo 调用后轮数 → 提醒） */
+const REMINDER_INTERVAL = 3;
+/** v3: 最大验证失败次数 */
+const MAX_VERIFY_ATTEMPTS = 2;
 
 // ── 列表渲染辅助函数 ─────────────────────────────────
 
@@ -282,7 +284,6 @@ export default function (pi: ExtensionAPI) {
 	let userMessageCount = 0;
 	let allCompletedAtCount: number | null = null;
 	let lastTodoCallCount = 0;
-	let lastReminderCount = 0;
 
 	// ── 刷新显示（依赖闭包 state） ─────────────────────
 	function refreshDisplay(ctx: ExtensionContext): void {
@@ -303,6 +304,7 @@ export default function (pi: ExtensionAPI) {
 		let resultText = "";
 
 		// v3: 追踪 todo 工具调用轮数
+		userMessageCount++;
 		lastTodoCallCount = userMessageCount;
 
 		switch (params.action) {
@@ -569,7 +571,6 @@ export default function (pi: ExtensionAPI) {
 		userMessageCount = 0;
 		allCompletedAtCount = null;
 		lastTodoCallCount = 0;
-		lastReminderCount = 0;
 
 		const entries = ctx.sessionManager.getEntries();
 		let latestIdx = -1;
@@ -619,62 +620,135 @@ export default function (pi: ExtensionAPI) {
 		userMessageCount++;
 	});
 
-	// v3: 自动清空与提醒检查
+	// v3: Task 6 - before_agent_start 注入 todo context (display: false)
 	pi.on("before_agent_start", async (_event: any, ctx: ExtensionContext) => {
 		try {
-			// 1. 自动清空：全部完成后经过 2 轮用户消息
-			if (allCompletedAtCount !== null && userMessageCount - allCompletedAtCount >= AUTO_CLEAR_DELAY_ROUNDS) {
+			if (todos.length === 0) return undefined;
+
+			const pendingTodos = todos.filter((t) => t.status !== "completed");
+			if (pendingTodos.length === 0) return undefined;
+
+			// 格式化 pending 任务 (含 verifyText 供 AI 阅读)
+			const lines = pendingTodos.map((t) => {
+				const verifyTag = t.verifyText
+					? ` [待验证: ${t.verifyText}]`
+					: " [无需验证]";
+				return `#${t.id}: ${t.text}${verifyTag}`;
+			});
+
+			const contextStr =
+				`<todo_context>\n[TODO] ${pendingTodos.length} tasks pending\n${lines.join("\n")}\n\nRules:\n- 优先使用 updates[] 批量更新\n- [待验证] 的任务必须验证通过后才能 completed\n- 全部完成后工具自动闭合\n</todo_context>`;
+
+			pi.deliver({
+				deliverAs: "steer",
+				display: false,
+				customType: "todo-context",
+				message: contextStr,
+			});
+
+			// 更新状态栏
+			ctx.ui.setStatus("todo", `📋 ${pendingTodos.length} pending`);
+
+			return undefined;
+		} catch {
+			return undefined;
+		}
+	});
+
+	// v3: Task 5 - agent_end: auto-close + stall + verify 循环
+	pi.on("agent_end", async (_event: any, ctx: ExtensionContext) => {
+		try {
+			// 1. 检查是否有待验证任务 (completed + verifyText + attempts < MAX)
+			const needsVerify = todos.find(
+				(t) =>
+					t.status === "completed" &&
+					t.verifyText &&
+					t.verifyAttempts < MAX_VERIFY_ATTEMPTS,
+			);
+			if (needsVerify) {
+				pi.deliver({
+					deliverAs: "steer",
+					display: false,
+					customType: "todo-context",
+					message: `<todo_context>\n[TODO] Task #${needsVerify.id} "${needsVerify.text}" needs verification:\n${needsVerify.verifyText}\n</todo_context>`,
+				});
+				return;
+			}
+
+			// 2. 检查验证失败 (in_progress + 已超过最大尝试)
+			for (const t of todos) {
+				if (
+					t.verifyText &&
+					t.verifyAttempts >= MAX_VERIFY_ATTEMPTS &&
+					t.status === "in_progress"
+				) {
+					t.status = "failed";
+					refreshDisplay(ctx);
+					pi.deliver({
+						deliverAs: "steer",
+						display: false,
+						customType: "todo-context",
+						message: `<todo_context>\n[TODO] Task #${t.id} "${t.text}" failed verification after ${MAX_VERIFY_ATTEMPTS} attempts.\n</todo_context>`,
+					});
+					return;
+				}
+			}
+
+			// 3. 自动清空: 全部完成经过 2 轮
+			if (
+				allCompletedAtCount !== null &&
+				userMessageCount - allCompletedAtCount >= AUTO_CLEAR_DELAY_ROUNDS
+			) {
 				const count = todos.length;
 				todos = [];
 				nextId = 1;
 				allCompletedAtCount = null;
 				refreshDisplay(ctx);
-				return {
-					message: {
-						customType: "todo-auto-clear",
-						content: `All ${count} todos completed, list auto-cleared.`,
-						display: true,
-					},
-				};
+				pi.deliver({
+					deliverAs: "steer",
+					display: false,
+					customType: "todo-context",
+					message: `<todo_context>\n[TODO] All ${count} todos completed, list auto-cleared.\n</todo_context>`,
+				});
+				return;
 			}
 
-			// 2. Verification Nudge：完成 3+ 任务且无验证步骤
-			if (
-				allCompletedAtCount !== null &&
-				todos.length >= VERIFICATION_NUDGE_THRESHOLD &&
-				!todos.some((t) => /verif|验证/i.test(t.text))
-			) {
-				lastReminderCount = userMessageCount;
-				return {
-					message: {
-						customType: "todo-verification-nudge",
-						content: "You completed 3+ tasks without a verification step. Consider adding a verification task before summarizing.",
-						display: true,
-					},
-				};
-			}
-
-			// 3. Todo Reminder：10 轮未调用 todo 工具
+			// 4. Stall 检测: 5 轮未调用 todo 且还有未完成任务
 			if (
 				todos.length > 0 &&
 				allCompletedAtCount === null &&
-				userMessageCount - lastTodoCallCount >= TODO_REMINDER_INTERVAL &&
-				userMessageCount - lastReminderCount >= TODO_REMINDER_INTERVAL
+				userMessageCount - lastTodoCallCount >= STALL_THRESHOLD
 			) {
-				lastReminderCount = userMessageCount;
-				return {
-					message: {
-						customType: "todo-reminder",
-						content: "The todo tool hasn't been used recently. If working on tasks, consider using it to track progress.",
-						display: true,
-					},
-				};
+				const pendingText = todos
+					.filter((t) => t.status !== "completed")
+					.map((t) => `#${t.id}: ${t.text}`)
+					.join("\n");
+				pi.deliver({
+					deliverAs: "steer",
+					display: false,
+					customType: "todo-context",
+					message: `<todo_context>\n[TODO] You have ${todos.length} pending tasks:\n${pendingText}\n</todo_context>`,
+				});
+				return;
 			}
 
-			return undefined;
+			// 5. 提醒: 3 轮未调用 todo
+			if (
+				todos.length > 0 &&
+				allCompletedAtCount === null &&
+				userMessageCount - lastTodoCallCount >= REMINDER_INTERVAL
+			) {
+				pi.deliver({
+					deliverAs: "steer",
+					display: false,
+					customType: "todo-context",
+					message: `<todo_context>\n[TODO] You have ${todos.length} tasks. Consider updating progress.\n</todo_context>`,
+				});
+				return;
+			}
 		} catch {
-			// v3: 提醒/清空非关键路径，异常时静默降级不影响 agent 循环
-			return undefined;
+			// 非关键路径，异常时静默降级
+			return;
 		}
 	});
 
