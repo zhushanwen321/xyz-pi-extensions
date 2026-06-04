@@ -42,7 +42,7 @@ export function continuationPrompt(state: GoalRuntimeState): string {
 
 	return (
 		`<goal_context>\n` +
-		`[GOAL] Turn ${state.turnCount}/${state.budget.maxTurns}${budgetLine}${stallLine}\n` +
+		`[GOAL] Turn ${state.currentTurnIndex}/${state.budget.maxTurns}${budgetLine}${stallLine}\n` +
 		`<objective>${objective}</objective>\n` +
 		`${taskLine}\n` +
 		`Rules: create_tasks→update_tasks(evidence)→complete_goal(evidence). blocked→report_blocked(reason). subtask: add_subtasks/update_subtasks (replaces todo tool).\n` +
@@ -117,7 +117,7 @@ export function contextInjectionPrompt(state: GoalRuntimeState): string {
 		`[GOAL mode activated]\n\n` +
 		`<objective>\n${objective}\n</objective>\n` +
 		`Status: ${state.status}\n` +
-		`Turn: ${state.turnCount}/${state.budget.maxTurns}${budgetInfo}\n` +
+		`Turn: ${state.currentTurnIndex}/${state.budget.maxTurns}${budgetInfo}\n` +
 		`Task progress: ${completedCount}/${total}\n\n` +
 		`Strict rules:\n` +
 		`1. First step: call goal_manager's create_tasks to decompose tasks (if not yet created)\n` +
@@ -160,7 +160,7 @@ export function stalenessReminderPrompt(
 	}
 
 	lines.push(`\nObjective: ${objective}`);
-	lines.push(`Turn: ${state.turnCount}/${state.budget.maxTurns}`);
+	lines.push(`Turn: ${state.currentTurnIndex}/${state.budget.maxTurns}`);
 	lines.push("</goal_context>");
 
 	return lines.join("\n");

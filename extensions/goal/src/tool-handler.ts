@@ -193,7 +193,7 @@ export function makeGoalResult(session: GoalSession, text: string) {
 					meta: {
 						...(state.budget.tokenBudget ? { "Token": `${state.tokensUsed}/${state.budget.tokenBudget}` } : {}),
 						...(state.budget.timeBudgetMinutes ? { "Time": `${Math.floor(getElapsedTimeSeconds(state) / SECONDS_PER_MINUTE)}m/${state.budget.timeBudgetMinutes}m` } : {}),
-						"Turn": `${state.turnCount}/${state.budget.maxTurns}`,
+						"Turn": `${state.currentTurnIndex}/${state.budget.maxTurns}`,
 					},
 				},
 			},
@@ -333,7 +333,7 @@ export async function executeGoalAction(
 			writeGoalHistoryEntry(pi, session);
 			persistGoalState(pi, session, ctx);
 			const budgetReport: string[] = [];
-			budgetReport.push(`Total turns: ${state.turnCount}`);
+			budgetReport.push(`Total turns: ${state.currentTurnIndex}`);
 			budgetReport.push(`Tasks completed: ${getCompletedCount(state.tasks)}/${state.tasks.length}`);
 			if (state.budget.tokenBudget) {
 				budgetReport.push(`Token usage: ${state.tokensUsed}/${state.budget.tokenBudget}`);
