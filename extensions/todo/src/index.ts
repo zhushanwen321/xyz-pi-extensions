@@ -324,7 +324,6 @@ export default function (pi: ExtensionAPI) {
 	let lastTodoCallCount = 0;
 	let stallNotified = false;
 	let allCompletedAtCount: number | null = null; // 全部 completed 首次检测到的 userMessageCount
-	let verifyNudgedIds = new Set<number>(); // 已发送过验证提醒的任务 ID，避免重复 nag
 
 	// ── 刷新显示（依赖闭包 state） ─────────────────────
 	function refreshDisplay(ctx: ExtensionContext): void {
@@ -580,7 +579,6 @@ export default function (pi: ExtensionAPI) {
 					if (params.status === "in_progress" && todo.verifyText && todo.verifyAttempts < MAX_VERIFY_ATTEMPTS) {
 						if (oldStatus === "completed" || oldStatus === "verifying") {
 							todo.verifyAttempts++;
-							verifyNudgedIds.delete(todo.id);
 						}
 					}
 				}
@@ -687,7 +685,6 @@ export default function (pi: ExtensionAPI) {
 		lastTodoCallCount = 0;
 		stallNotified = false;
 		allCompletedAtCount = null;
-		verifyNudgedIds = new Set();
 
 		const entries = ctx.sessionManager.getEntries();
 		let latestIdx = -1;

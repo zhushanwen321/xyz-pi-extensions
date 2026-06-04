@@ -10,9 +10,13 @@ description: >-
 ## 8 阶段流程
 
 ### 阶段 0: 初始化
+
+⚠️ **关键**：第一个参数是 **feature worktree 目录名**（如 `feat-add-extension`），不是 `main`。脚本会自动检测 `$WS_ROOT/main` 用于 bump/tag/push。传 `main` 会导致阶段 7 删除 main worktree。
+
 ```bash
+CURRENT_WT=$(basename $(pwd))  # 如果从 feature worktree 的上级目录调用
 cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace
-bash ~/.agents/skills/merge-worktree/stages/0-init.sh main patch
+bash ~/.agents/skills/merge-worktree/stages/0-init.sh $CURRENT_WT patch
 ```
 
 ### 阶段 1: 本地验证
@@ -30,26 +34,15 @@ bash ~/.agents/skills/merge-worktree/stages/2-pr-merge.sh
 bash ~/.agents/skills/merge-worktree/stages/3-post-merge-ci.sh
 ```
 
-### 阶段 4: 版本 bump + 发布（项目特化）
+### 阶段 4: 版本 bump + 发布
 
-本项目使用 changeset 独立版本模式：
+全局 `4-publish.sh` 会自动检测 `scripts/publish.sh` 并委托执行（含 changeset 消费 + bump 根版本 + tag + push）。
 
 ```bash
-# 消费 changeset
-pnpm changeset version
-
-# bump 根版本（monorepo 迭代序号）
-npm version patch --no-git-tag-version
-# $NEW_VER 来自 bump 后的根 package.json 版本号
-NEW_VER=$(node -p "require('./package.json').version")
-
-# commit + tag + push
-git add -A
-git commit -m "chore: bump versions (root → $NEW_VER)" 2>/dev/null || true
-TAG="v$NEW_VER"
-git tag "$TAG" 2>/dev/null || echo "Tag $TAG 已存在"
-git push origin HEAD:refs/heads/main --tags
+bash ~/.agents/skills/merge-worktree/stages/4-publish.sh
 ```
+
+**changeset 注意**：PR 中必须包含 `pnpm changeset` 创建的 changeset 文件，否则 merge 后子包不会 bump。
 
 ### 阶段 5: Release Notes + Release
 ```bash

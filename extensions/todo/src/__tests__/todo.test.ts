@@ -713,3 +713,47 @@ describe("buildRender", () => {
 		expect(render!.data.items).toHaveLength(0);
 	});
 });
+
+// ── batch update verifyAttempts increment ───────────
+
+describe("batch update verifyAttempts increment", () => {
+	it("should increment verifyAttempts when batch reverts completed → in_progress with verifyText", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "fix auth", status: "completed", verifyText: "check codes", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "in_progress" }]);
+
+		expect(result.error).toBeUndefined();
+		expect(result.updatedTodos[0].verifyAttempts).toBe(1);
+	});
+
+	it("should increment verifyAttempts when batch reverts verifying → in_progress with verifyText", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "fix auth", status: "verifying", verifyText: "check codes", verifyAttempts: 1, evidence: "testing" },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "in_progress" }]);
+
+		expect(result.error).toBeUndefined();
+		expect(result.updatedTodos[0].verifyAttempts).toBe(2);
+	});
+
+	it("should NOT increment verifyAttempts for tasks without verifyText", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "simple", status: "completed", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "in_progress" }]);
+
+		expect(result.error).toBeUndefined();
+		expect(result.updatedTodos[0].verifyAttempts).toBe(0);
+	});
+
+	it("should NOT increment verifyAttempts when already at MAX (2)", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "fix auth", status: "completed", verifyText: "check codes", verifyAttempts: 2 },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "in_progress" }]);
+
+		expect(result.error).toBeUndefined();
+		expect(result.updatedTodos[0].verifyAttempts).toBe(2); // capped
+	});
+});

@@ -164,6 +164,8 @@ export interface UpdateResult {
 
 /** evidence 最小长度 */
 const MIN_EVIDENCE_LENGTH = 10;
+/** 最大验证重试次数 */
+const MAX_VERIFY_ATTEMPTS = 2;
 
 /**
  * 处理 todo batch update 的核心逻辑。
@@ -266,6 +268,15 @@ export function updateTodos(
 		// verifying 或 completed 时写入 evidence
 		if (u.evidence && (u.status === "verifying" || u.status === "completed")) {
 			patch.evidence = u.evidence.trim();
+		}
+		// verifying/completed → in_progress: verifyAttempts++（验证失败回退）
+		if (
+			u.status === "in_progress" &&
+			t.verifyText &&
+			t.verifyAttempts < MAX_VERIFY_ATTEMPTS &&
+			(t.status === "completed" || t.status === "verifying")
+		) {
+			patch.verifyAttempts = t.verifyAttempts + 1;
 		}
 		return { ...t, ...patch };
 	});
