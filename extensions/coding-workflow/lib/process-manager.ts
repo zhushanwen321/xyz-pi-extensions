@@ -15,10 +15,16 @@ import type { ChildProcess } from "node:child_process";
 
 // ─── Constants ───────────────────────────────────────────
 
+const MS_PER_SECOND = 1000;
+const SECONDS_PER_MINUTE = 60;
+const GLOBAL_TIMEOUT_MINUTES = 10;
+const ACTIVITY_TIMEOUT_MINUTES = 5;
+const GRACEFUL_KILL_DELAY_MS = 5000;
+
 /** 10 min global timeout */
-export const DEFAULT_GLOBAL_TIMEOUT_MS = 10 * 60 * 1000;
+export const DEFAULT_GLOBAL_TIMEOUT_MS = GLOBAL_TIMEOUT_MINUTES * SECONDS_PER_MINUTE * MS_PER_SECOND;
 /** 5 min no-activity timeout */
-export const DEFAULT_ACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
+export const DEFAULT_ACTIVITY_TIMEOUT_MS = ACTIVITY_TIMEOUT_MINUTES * SECONDS_PER_MINUTE * MS_PER_SECOND;
 
 // ─── Types ───────────────────────────────────────────────
 
@@ -90,12 +96,12 @@ export class ProcessManager {
 				clearTimeout(activityTimer);
 				activityTimer = setTimeout(() => {
 					if (!settled) {
-						stderr += `\nSubagent timed out: no activity for ${Math.round(activityTimeoutMs / 1000)} seconds`;
+						stderr += `\nSubagent timed out: no activity for ${Math.round(activityTimeoutMs / MS_PER_SECOND)} seconds`;
 						proc.kill("SIGTERM");
 						setTimeout(() => {
 							if (!proc.killed) proc.kill("SIGKILL");
 							settle(1);
-						}, 5000);
+						}, GRACEFUL_KILL_DELAY_MS);
 					}
 				}, activityTimeoutMs);
 			};
@@ -104,7 +110,7 @@ export class ProcessManager {
 			// Global timer: hard cap regardless of activity
 			const globalTimer = setTimeout(() => {
 				if (!settled) {
-					stderr += `\nSubagent timed out: ${Math.round(globalTimeoutMs / 60000)} minute global limit exceeded`;
+					stderr += `\nSubagent timed out: ${Math.round(globalTimeoutMs / (SECONDS_PER_MINUTE * MS_PER_SECOND))} minute global limit exceeded`;
 					proc.kill("SIGKILL");
 					settle(1);
 				}
@@ -135,7 +141,7 @@ export class ProcessManager {
 					proc.kill("SIGTERM");
 					setTimeout(() => {
 						if (!proc.killed) proc.kill("SIGKILL");
-					}, 5000);
+					}, GRACEFUL_KILL_DELAY_MS);
 				};
 				if (signal.aborted) killProc();
 				else signal.addEventListener("abort", killProc, { once: true });

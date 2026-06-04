@@ -2,6 +2,12 @@
 
 import type { ProblemDefinition } from "../problems";
 
+// ── ID generation constants ──────────────────────────
+
+const RANDOM_ID_RADIX = 36;
+const RANDOM_ID_SLICE_START = 2;
+const RANDOM_ID_SLICE_END = 7;
+
 export interface SubagentTrackedItem {
   id: string;
   problemId: "subagent-efficiency";
@@ -45,7 +51,7 @@ export function createSubagentDetector(problem: ProblemDefinition) {
       taskPrompt?: string;
     }): SubagentTrackedItem {
       return {
-        id: `subagent-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id: `subagent-${Date.now()}-${Math.random().toString(RANDOM_ID_RADIX).slice(RANDOM_ID_SLICE_START, RANDOM_ID_SLICE_END)}`,
         problemId: problem.id as "subagent-efficiency",
         sessionId: "",
         taskType: classifyTaskType(event.taskPrompt ?? ""),

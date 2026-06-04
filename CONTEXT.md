@@ -178,6 +178,24 @@ TrackedItem 中的数据锚点字段（triggerType/triggerTurn/triggerSummary）
 **Sample**
 L3 extractor 从 session JSONL 提取的叙事级上下文片段。包含 trigger_context、ai_response、turns_to_complete 等字段。附加到 daily-report.json 的 issue 中，供 L4 /evolve LLM 进行具体分析。
 
+### Workflow
+
+**External State Pointer**
+session JSONL 中指向外部 state 文件的轻量 entry（`customType === "workflow-state-link"`），字段含 runId、path、updatedAt。用于替代内联 state 持久化，解决主 JSONL 膨胀问题。
+_Avoid_: reference, alias, stub
+
+**State-Lost**
+workflow 终态，表示外部 state 文件不可读（删除/损坏/权限拒绝），无法 rehydrate。属 TERMINAL_STATUSES，无 outgoing transitions。
+_Avoid_: broken, missing, dead
+
+**Approval Memory**
+session-level 持久化已确认 workflow 名称集合，通过 `workflow-approval-memory` entries 跨 session_start 重建。`workflow-run` tool 的 `auto` 模式走此 cache 避免重复弹 confirm UI。临时 workflow（`.tmp/` 目录）不进入此 cache。
+_Avoid_: trust list, whitelist
+
+**Verification Strategy**
+workflow 节点验证模式分类，可选值 `internal` / `follow-up` / `none`。仅在 `ExecutionTraceNode.verifyStrategy?` 可选字段存在，**不**序列化到 JSONL。是 debug 辅助，不强制 AI 标注。
+_Avoid_: check mode, validation level
+
 ## Flagged Ambiguities
 
 **"压缩"同时存在于 Pi 原生（Compaction）和 Context Engineering（L0/L1/L2）**

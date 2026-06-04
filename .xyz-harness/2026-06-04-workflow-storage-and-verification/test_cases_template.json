@@ -1,0 +1,403 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "api",
+      "title": "persistState writes external state file",
+      "description": "AC-1.1: Run workflow, verify external JSONL file is written with serialized instances",
+      "steps": [
+        "create WorkflowInstance in test",
+        "call orchestrator.persistState()",
+        "verify file at {sessionDir}/workflow-state/{runId}.jsonl exists",
+        "read file, parse JSONL lines",
+        "assert at least 1 valid line, content matches serializedInstance"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "api",
+      "title": "persistState writes workflow-state-link pointer entry",
+      "description": "AC-1.1: Verify pi.appendEntry called with customType 'workflow-state-link' and shape {runId, path, updatedAt}",
+      "steps": [
+        "mock pi.appendEntry",
+        "call orchestrator.persistState()",
+        "verify appendEntry called with 'workflow-state-link' customType",
+        "verify data shape: { runId: string, path: string, updatedAt: ISO string }"
+      ]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "api",
+      "title": "persistState does NOT write old workflow-state entry",
+      "description": "AC-1.1: Verify the old 'workflow-state' entry type is no longer written",
+      "steps": [
+        "mock pi.appendEntry",
+        "call orchestrator.persistState()",
+        "verify appendEntry is NEVER called with 'workflow-state' customType"
+      ]
+    },
+    {
+      "id": "TC-1-04",
+      "type": "integration",
+      "title": "reconstructState reads pointer entries and loads instances",
+      "description": "AC-1.2: Append workflow-state-link entries, verify reconstructState loads instances from external files",
+      "steps": [
+        "create WorkflowInstance, run persistState",
+        "create new ctx.sessionManager.getEntries() returning the pointer entries",
+        "call index.reconstructState(ctx)",
+        "verify WorkflowOrchestrator.instances contains the runId",
+        "verify status / callCache / trace are restored"
+      ]
+    },
+    {
+      "id": "TC-1-05",
+      "type": "integration",
+      "title": "reconstructState skips missing external state file",
+      "description": "AC-1.3: Pointer entry points to non-existent file, verify reconstructState skips and notifies",
+      "steps": [
+        "mock ctx.sessionManager with pointer to non-existent path",
+        "mock ctx.ui.notify",
+        "call reconstructState",
+        "verify no exception thrown",
+        "verify ctx.ui.notify called with warning",
+        "verify instance NOT in WorkflowOrchestrator.instances"
+      ]
+    },
+    {
+      "id": "TC-1-06",
+      "type": "integration",
+      "title": "reconstructState skips corrupt JSONL line",
+      "description": "AC-1.3: External file has malformed JSON line, verify reconstructState skips that line and notifies",
+      "steps": [
+        "create external file with: '{\"valid\":true}\\nMALFORMED\\n{\"valid\":true}'",
+        "create pointer entry",
+        "call reconstructState",
+        "verify ctx.ui.notify called",
+        "verify at least 1 valid instance loaded (the malformed line skipped)"
+      ]
+    },
+    {
+      "id": "TC-1-07",
+      "type": "api",
+      "title": "WorkflowStatus includes state_lost as terminal",
+      "description": "AC-1.4: Verify state.ts exports state_lost in WorkflowStatus, ALL_STATUSES, TERMINAL_STATUSES, VALID_TRANSITIONS with empty outgoing",
+      "steps": [
+        "import { WorkflowStatus, ALL_STATUSES, TERMINAL_STATUSES, VALID_TRANSITIONS } from 'state'",
+        "assert 'state_lost' in WorkflowStatus union (compile-time check)",
+        "assert ALL_STATUSES includes 'state_lost'",
+        "assert TERMINAL_STATUSES includes 'state_lost'",
+        "assert isTerminal('state_lost') === true",
+        "assert VALID_TRANSITIONS['state_lost'].length === 0"
+      ]
+    },
+    {
+      "id": "TC-1-08",
+      "type": "api",
+      "title": "reconstructState ignores old workflow-state entries",
+      "description": "FR-1.5 backward compat (covered by AC-1.3): Old workflow-state entries in session JSONL are silently ignored",
+      "steps": [
+        "mock ctx.sessionManager with old 'workflow-state' entry (customType=workflow-state)",
+        "call reconstructState",
+        "verify no error thrown",
+        "verify old entry not loaded as instance"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "api",
+      "title": "workflow-run auto mode with confirm=yes runs workflow",
+      "description": "AC-2.1: User presses y in UI confirm, workflow starts",
+      "steps": [
+        "register workflow 'test-confirm-yes' with exact match",
+        "mock ctx.ui.confirm to return Promise.resolve(true)",
+        "call workflow-run tool with mode='auto'",
+        "verify ctx.ui.confirm called with title='Run workflow?'",
+        "verify orchestrator.run() invoked",
+        "verify result contains runId"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "api",
+      "title": "workflow-run auto mode with confirm=no declines",
+      "description": "AC-2.1: User presses n in UI confirm, workflow does NOT run",
+      "steps": [
+        "register workflow 'test-confirm-no' with exact match",
+        "mock ctx.ui.confirm to return Promise.resolve(false)",
+        "call workflow-run tool with mode='auto'",
+        "verify ctx.ui.confirm called",
+        "verify result.details.status === 'declined'",
+        "verify orchestrator.run() NOT invoked"
+      ]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "api",
+      "title": "sessionApprovals cache skip confirm on second call",
+      "description": "AC-2.2: First call confirms, second call (same name) does not call confirm",
+      "steps": [
+        "register workflow 'test-cache' with exact match",
+        "first call: mock confirm=true, verify confirm called",
+        "second call: mock confirm and assert it was NEVER called",
+        "verify orchestrator.run() invoked both times"
+      ]
+    },
+    {
+      "id": "TC-2-04",
+      "type": "integration",
+      "title": "session_start rehydrates sessionApprovals from entries",
+      "description": "AC-2.3: Pre-existing workflow-approval-memory entries populate sessionApprovals Set",
+      "steps": [
+        "prepend 2 workflow-approval-memory entries: {workflowName: 'w1', approvedAt: '...'} and {workflowName: 'w2', approvedAt: '...'}",
+        "trigger session_start handler",
+        "call workflow-run for 'w1' (mock confirm)",
+        "verify confirm NOT called (cache hit from rehydrated memory)"
+      ]
+    },
+    {
+      "id": "TC-2-05",
+      "type": "api",
+      "title": "hasUI=false falls back to sendUserMessage",
+      "description": "AC-2.4: RPC mode (no UI), auto mode uses sendUserMessage, not ctx.ui.confirm",
+      "steps": [
+        "set ctx.hasUI = false",
+        "register workflow 'test-rpc' with exact match",
+        "mock ctx.ui.confirm (must NOT be called)",
+        "mock pi.sendUserMessage",
+        "call workflow-run with mode='auto'",
+        "verify ctx.ui.confirm NEVER called",
+        "verify pi.sendUserMessage called"
+      ]
+    },
+    {
+      "id": "TC-2-06",
+      "type": "api",
+      "title": "force mode skips confirm and sets confirmSkipped",
+      "description": "AC-2.5: mode='force' bypasses UI confirm, sets details.confirmSkipped=true",
+      "steps": [
+        "register workflow 'test-force' with exact match",
+        "mock ctx.ui.confirm (must NOT be called)",
+        "call workflow-run with mode='force'",
+        "verify ctx.ui.confirm NEVER called",
+        "verify orchestrator.run() invoked",
+        "verify result.details.confirmSkipped === true"
+      ]
+    },
+    {
+      "id": "TC-2-07",
+      "type": "api",
+      "title": "tmp workflow always confirms, never enters sessionApprovals",
+      "description": "AC-2.6: Tmp workflow (source='tmp') always shows confirm UI, even on second call",
+      "steps": [
+        "register tmp workflow 'test-tmp' with source='tmp'",
+        "first call: mock confirm=true, verify confirm called",
+        "verify sessionApprovals does NOT contain 'test-tmp'",
+        "second call: mock confirm=true, verify confirm called AGAIN (not cached)"
+      ]
+    },
+    {
+      "id": "TC-2-08",
+      "type": "api",
+      "title": "shared stub ui interface includes confirm and select",
+      "description": "AC-2.7: shared/types/mariozechner/index.d.ts ui interface has confirm/select/input methods",
+      "steps": [
+        "read shared/types/mariozechner/index.d.ts",
+        "verify ui.confirm signature: (title, message, opts?) => Promise<boolean>",
+        "verify ui.select signature: (title, options, opts?) => Promise<string | undefined>",
+        "verify ui.input signature: (title, placeholder?, opts?) => Promise<string | undefined>",
+        "verify pnpm -r typecheck passes (compile-time check)"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "manual",
+      "title": "SKILL.md contains Verification Patterns section with Pattern A and Pattern B",
+      "description": "AC-3.1: extensions/workflow/skills/workflow-script-format/SKILL.md has the new section",
+      "steps": [
+        "open extensions/workflow/skills/workflow-script-format/SKILL.md",
+        "verify contains heading '## Verification Patterns'",
+        "verify contains 'Pattern A' code example",
+        "verify contains 'Pattern B' code example",
+        "verify contains decision tree or anti-pattern note"
+      ]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "api",
+      "title": "tool-generate promptGuidelines includes verification rule",
+      "description": "AC-3.2: tool-generate.ts promptGuidelines array contains a verification-related rule",
+      "steps": [
+        "import { promptGuidelines } from 'tool-generate' (or read source)",
+        "verify array contains at least 1 item mentioning 'verifiable' or 'verification'",
+        "verify mentions 'self-check' or 'follow-up' (Pattern A or B)"
+      ]
+    },
+    {
+      "id": "TC-3-03",
+      "type": "manual",
+      "title": "orchestrator.ts and worker-script.ts not modified for verification",
+      "description": "AC-3.3: git diff shows no changes to orchestrator.ts agent() or worker-script.ts agent() implementations",
+      "steps": [
+        "git diff main -- extensions/workflow/src/orchestrator.ts (only persistState/reconstructState changes allowed)",
+        "git diff main -- extensions/workflow/src/worker-script.ts (must be empty)",
+        "verify no new fields added to agent() signature"
+      ]
+    },
+    {
+      "id": "TC-3-04",
+      "type": "api",
+      "title": "ExecutionTraceNode verifyStrategy optional and not serialized",
+      "description": "AC-3.4: verifyStrategy exists as optional field on ExecutionTraceNode, but serializeInstance excludes it",
+      "steps": [
+        "create ExecutionTraceNode with verifyStrategy='internal'",
+        "call serializeInstance() on parent WorkflowInstance",
+        "assert serialized.trace[0] does NOT have 'verifyStrategy' key (JSON.stringify + parse to verify)"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "api",
+      "title": "AgentPool soft warning fires once at 501st call",
+      "description": "AC-4.1: When totalCallCount first > 500, callback fires exactly once",
+      "steps": [
+        "create AgentPool with mock onSoftLimitReached callback",
+        "dispatch 500 times (mock fast spawn, no cache hits)",
+        "verify callback NEVER called yet",
+        "dispatch 501st time",
+        "verify callback called once with totalCalls=501",
+        "dispatch 600th time",
+        "verify callback still called exactly 1 time total"
+      ]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "api",
+      "title": "Soft warning message format",
+      "description": "AC-4.2: sendUserMessage called with exact format string",
+      "steps": [
+        "create AgentPool with onSoftLimitReached that captures the args",
+        "dispatch 501 times",
+        "verify callback args.budget.usedTokens / .maxTokens are passed through",
+        "verify orchestrator-side pi.sendUserMessage called with template '[workflow:${runName}] Reached 500 agent calls. Budget: ${used}/${max} tokens. Consider aborting if this is unintended.'"
+      ]
+    },
+    {
+      "id": "TC-4-03",
+      "type": "api",
+      "title": "Workflow continues after warning (no throw)",
+      "description": "AC-4.3: After warning fires, dispatch still processes",
+      "steps": [
+        "create AgentPool with onSoftLimitReached that throws (verify no impact)",
+        "dispatch 501 times",
+        "catch any thrown error from callback",
+        "verify 502nd dispatch still processes (callback error isolated by try/catch in impl)"
+      ]
+    },
+    {
+      "id": "TC-4-04",
+      "type": "api",
+      "title": "Cache hit does not increment totalCallCount",
+      "description": "AC-4.4: totalCallCount only increments on real spawn, not cache hit",
+      "steps": [
+        "create AgentPool with mock dispatch that simulates cache hit (same callId)",
+        "call dispatch 5 times with same callId",
+        "verify totalCallCount === 1 (only 1 real spawn)",
+        "call dispatch with different callId",
+        "verify totalCallCount === 2"
+      ]
+    },
+    {
+      "id": "TC-4-05",
+      "type": "api",
+      "title": "Per-WorkflowPool counter is independent",
+      "description": "AC-4.5: Each AgentPool instance has its own counter",
+      "steps": [
+        "create pool1, dispatch 600 times → softWarningSent=true",
+        "create pool2, dispatch 100 times",
+        "verify pool2.softWarningSent === false (fresh instance)",
+        "verify pool2.totalCallCount === 100 (started from 0)"
+      ]
+    },
+    {
+      "id": "TC-4-06",
+      "type": "api",
+      "title": "AgentPoolOptions.onSoftLimitReached callback injection",
+      "description": "AC-4.6: AgentPool constructor accepts onSoftLimitReached callback, AgentPool does NOT hold ExtensionAPI ref",
+      "steps": [
+        "import AgentPool, AgentPoolOptions",
+        "verify AgentPoolOptions has onSoftLimitReached: (info: {runName, totalCalls, budget}) => void field",
+        "create AgentPool with onSoftLimitReached callback",
+        "verify AgentPool instance does NOT have a 'pi' property (only 'onSoftLimitReached' ref)",
+        "verify orchestrator code creates AgentPool with onSoftLimitReached: ({...}) => this.pi.sendUserMessage(...)"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "manual",
+      "title": "docs/workflow-research/07-下一步行动与决策.md exists with required sections",
+      "description": "AC-5.1: Decision summary doc exists with 5 decision summaries, link to spec, timeline, out-of-scope",
+      "steps": [
+        "verify file exists: docs/workflow-research/07-下一步行动与决策.md",
+        "verify contains 5 decision summaries (1-2 sentences each)",
+        "verify contains link to .xyz-harness/2026-06-04-workflow-storage-and-verification/spec.md",
+        "verify contains 'Out-of-scope' list with 4 items (nested workflow, 硬 maxAgents, auto/force 重命名, 真正 GC)",
+        "verify contains 'Why no ADR' or equivalent section"
+      ]
+    },
+    {
+      "id": "TC-5-02",
+      "type": "manual",
+      "title": "CONTEXT.md includes 4 new workflow terms",
+      "description": "AC-5.2: Phase 1 update done; verify terms present",
+      "steps": [
+        "verify file CONTEXT.md contains 'External State Pointer'",
+        "verify contains 'State-Lost'",
+        "verify contains 'Approval Memory'",
+        "verify contains 'Verification Strategy'"
+      ]
+    },
+    {
+      "id": "TC-5-03",
+      "type": "manual",
+      "title": "No new ADR created for this spec",
+      "description": "AC-5.3: docs/adr/ has no new file from this phase",
+      "steps": [
+        "list docs/adr/ directory",
+        "verify no file with date prefix from this work (no 2026-06-04-* ADR)"
+      ]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "api",
+      "title": "Test suite has at least 13 new tests",
+      "description": "AC-6.1: Count new tests added across all test files",
+      "steps": [
+        "run pnpm --filter @zhushanwen/pi-workflow test --reporter=verbose",
+        "count new test names (containing 'state_lost' or 'external' or 'confirm' or 'soft' or 'verification')",
+        "assert count >= 13"
+      ]
+    },
+    {
+      "id": "TC-6-02",
+      "type": "api",
+      "title": "All tests pass",
+      "description": "AC-6.2: Existing 140 + new tests all pass",
+      "steps": [
+        "run pnpm --filter @zhushanwen/pi-workflow test",
+        "verify exit code 0",
+        "verify total test count >= 153"
+      ]
+    },
+    {
+      "id": "TC-6-03",
+      "type": "api",
+      "title": "Typecheck passes for all packages",
+      "description": "AC-6.3: After stub update, full repo typecheck passes",
+      "steps": [
+        "run pnpm -r typecheck",
+        "verify exit code 0",
+        "verify no TS errors in any package"
+      ]
+    }
+  ]
+}

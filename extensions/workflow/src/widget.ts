@@ -18,6 +18,18 @@ import {
 import type { WorkflowOrchestrator, WorkflowInstanceSummary } from "./orchestrator.js";
 import type { WorkflowInstance } from "./state.js";
 
+// ── Constants ─────────────────────────────────────────────────
+
+const MS_PER_SEC = 1000;
+const TASK_PREVIEW_LENGTH = 60;
+const DETAIL_TASK_PREVIEW_LENGTH = 80;
+const ERROR_PREVIEW_LENGTH = 120;
+const RUNID_PREVIEW_LENGTH = 20;
+const SHORT_RUNID_LENGTH = 16;
+const DURATION_DECIMALS = 0;
+const NODE_DURATION_DECIMALS = 1;
+const COST_DECIMALS = 4;
+
 // ── Color helpers ──────────────────────────────────────────────
 
 /** Map a workflow status to a TUI theme color token. */
@@ -75,9 +87,9 @@ export function renderWorkflowList(
   for (const inst of instances) {
     const elapsed =
       inst.startedAt && inst.completedAt
-        ? `${((new Date(inst.completedAt).getTime() - new Date(inst.startedAt).getTime()) / 1000).toFixed(0)}s`
+        ? `${((new Date(inst.completedAt).getTime() - new Date(inst.startedAt).getTime()) / MS_PER_SEC).toFixed(DURATION_DECIMALS)}s`
         : inst.startedAt
-          ? `${((Date.now() - new Date(inst.startedAt).getTime()) / 1000).toFixed(0)}s`
+          ? `${((Date.now() - new Date(inst.startedAt).getTime()) / MS_PER_SEC).toFixed(DURATION_DECIMALS)}s`
           : "-";
 
     // Header line: status + name + elapsed + budget
@@ -98,12 +110,12 @@ export function renderWorkflowList(
           : "\u25CB";
         const nodeDuration =
           node.startedAt && node.completedAt
-            ? `${((new Date(node.completedAt).getTime() - new Date(node.startedAt).getTime()) / 1000).toFixed(1)}s`
+            ? `${((new Date(node.completedAt).getTime() - new Date(node.startedAt).getTime()) / MS_PER_SEC).toFixed(NODE_DURATION_DECIMALS)}s`
             : node.startedAt
-              ? `${((Date.now() - new Date(node.startedAt).getTime()) / 1000).toFixed(0)}s...`
+              ? `${((Date.now() - new Date(node.startedAt).getTime()) / MS_PER_SEC).toFixed(DURATION_DECIMALS)}s...`
               : "";
         const taskPreview =
-          node.task.length > 60 ? `${node.task.slice(0, 60)}...` : node.task;
+          node.task.length > TASK_PREVIEW_LENGTH ? `${node.task.slice(0, TASK_PREVIEW_LENGTH)}...` : node.task;
         lines.push(
           `  ${icon} ${theme.fg("dim", `#${node.stepIndex}`)} ${theme.fg("muted", taskPreview)} ${theme.fg("dim", nodeDuration)}`,
         );
@@ -126,7 +138,7 @@ export function renderWorkflowDetail(
   const container = new Container();
 
   // ── Header line ──
-  const header = `${theme.fg("toolTitle", theme.bold(instance.name))} ${statusColor(instance.status, theme)} ${theme.fg("dim", instance.runId.slice(0, 20))}`;
+  const header = `${theme.fg("toolTitle", theme.bold(instance.name))} ${statusColor(instance.status, theme)} ${theme.fg("dim", instance.runId.slice(0, RUNID_PREVIEW_LENGTH))}`;
   container.addChild(new Text(header, 0, 0));
   container.addChild(new Spacer(1));
 
@@ -134,11 +146,11 @@ export function renderWorkflowDetail(
   const b = instance.budget;
   const budgetParts: string[] = [];
   budgetParts.push(`Token: ${b.usedTokens}${b.maxTokens !== undefined ? ` / ${b.maxTokens}` : ""}`);
-  budgetParts.push(`Cost: ${b.usedCost.toFixed(4)}${b.maxCost !== undefined ? ` / ${b.maxCost}` : ""}`);
+  budgetParts.push(`Cost: ${b.usedCost.toFixed(COST_DECIMALS)}${b.maxCost !== undefined ? ` / ${b.maxCost}` : ""}`);
   if (instance.startedAt) {
     const elapsed = instance.completedAt
-      ? `${((new Date(instance.completedAt).getTime() - new Date(instance.startedAt).getTime()) / 1000).toFixed(0)}s`
-      : `${((Date.now() - new Date(instance.startedAt).getTime()) / 1000).toFixed(0)}s (running)`;
+      ? `${((new Date(instance.completedAt).getTime() - new Date(instance.startedAt).getTime()) / MS_PER_SEC).toFixed(DURATION_DECIMALS)}s`
+      : `${((Date.now() - new Date(instance.startedAt).getTime()) / MS_PER_SEC).toFixed(DURATION_DECIMALS)}s (running)`;
     budgetParts.push(`Time: ${elapsed}`);
   }
   container.addChild(new Text(theme.fg("dim", budgetParts.join(" | ")), 0, 0));
@@ -164,15 +176,15 @@ export function renderWorkflowDetail(
 
       // Task preview
       const taskPreview =
-        node.task.length > 80
-          ? `${node.task.slice(0, 80)}...`
+        node.task.length > DETAIL_TASK_PREVIEW_LENGTH
+          ? `${node.task.slice(0, DETAIL_TASK_PREVIEW_LENGTH)}...`
           : node.task;
       container.addChild(new Text(theme.fg("dim", `  ${taskPreview}`), 0, 0));
 
       // Error detail on failed nodes
       if (node.status === "failed" && node.result?.error) {
         container.addChild(
-          new Text(theme.fg("error", `  Error: ${node.result.error.slice(0, 120)}`), 0, 0),
+          new Text(theme.fg("error", `  Error: ${node.result.error.slice(0, ERROR_PREVIEW_LENGTH)}`), 0, 0),
         );
       }
 
@@ -216,7 +228,7 @@ export function registerWorkflowShortcuts(
 
       try {
         orch.pause(runId);
-        ctx.ui.notify(`Paused ${runId.slice(0, 16)}...`, "info");
+        ctx.ui.notify(`Paused ${runId.slice(0, SHORT_RUNID_LENGTH)}...`, "info");
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         ctx.ui.notify(`Pause failed: ${msg}`, "error");
@@ -240,7 +252,7 @@ export function registerWorkflowShortcuts(
 
       try {
         orch.abort(runId);
-        ctx.ui.notify(`Aborted ${runId.slice(0, 16)}...`, "info");
+        ctx.ui.notify(`Aborted ${runId.slice(0, SHORT_RUNID_LENGTH)}...`, "info");
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         ctx.ui.notify(`Abort failed: ${msg}`, "error");
@@ -279,7 +291,7 @@ export function registerWorkflowShortcuts(
         );
         cmdState.lastRunId = newRunId;
         ctx.ui.notify(
-          `Retrying '${instance.name}' → ${newRunId.slice(0, 16)}...`,
+          `Retrying '${instance.name}' → ${newRunId.slice(0, SHORT_RUNID_LENGTH)}...`,
           "info",
         );
       } catch (err) {

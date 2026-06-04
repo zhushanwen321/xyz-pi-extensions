@@ -40,6 +40,12 @@ export const VISION_SYSTEM_PROMPT = [
 	"- Respond in the same language as the user's question",
 ].join("\n");
 
+// ── Constants ───────────────────────────────────────
+
+const JSON_INDENT = 2;
+const SEC_PER_MIN = 60;
+const MS_PER_SEC = 1000;
+
 const EXAMPLE_CONFIG = JSON.stringify({
 	models: [
 		{
@@ -50,7 +56,7 @@ const EXAMPLE_CONFIG = JSON.stringify({
 			fallbacks: [{ id: "qwen-vl-max", provider: "router-openai" }],
 		},
 	],
-}, null, 2);
+}, null, JSON_INDENT);
 
 /** Map vision ThinkingLevel to Pi CLI --thinking flag values. */
 const _THINKING_TO_PI: Record<ThinkingLevel, string> = {
@@ -60,7 +66,9 @@ const _THINKING_TO_PI: Record<ThinkingLevel, string> = {
 
 // ──────────────────────── Internal cache ────────────────────────
 
-const CACHE_TTL_MS = 60 * 1000;
+// ── Internal cache ──────────────────────────────────
+
+const CACHE_TTL_MS = SEC_PER_MIN * MS_PER_SEC;
 let _cachedConfig: VisionModelsConfig | null | undefined = undefined;
 let _cachedConfigTimestamp = 0;
 

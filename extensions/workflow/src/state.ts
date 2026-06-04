@@ -22,7 +22,8 @@ export type WorkflowStatus =
   | "failed"
   | "aborted"
   | "budget_limited"
-  | "time_limited";
+  | "time_limited"
+  | "state_lost";
 
 export const ALL_STATUSES: readonly WorkflowStatus[] = [
   "running",
@@ -32,6 +33,7 @@ export const ALL_STATUSES: readonly WorkflowStatus[] = [
   "aborted",
   "budget_limited",
   "time_limited",
+  "state_lost",
 ] as const;
 
 // ── Supporting types ──────────────────────────────────────────
@@ -73,6 +75,7 @@ export interface ExecutionTraceNode {
   completedAt?: string;
   result?: AgentResult;
   error?: string;
+  verifyStrategy?: "internal" | "follow-up" | "none";
 }
 
 export interface WorkflowInstance {
@@ -98,12 +101,14 @@ interface SerializedCallCacheEntry {
   value: AgentResult;
 }
 
+type SerializedExecutionTraceNode = Omit<ExecutionTraceNode, "verifyStrategy">;
+
 interface SerializedWorkflowInstance {
   runId: string;
   name: string;
   status: WorkflowStatus;
   callCache: SerializedCallCacheEntry[];
-  trace: ExecutionTraceNode[];
+  trace: SerializedExecutionTraceNode[];
   worker: string;
   startedAt?: string;
   pausedAt?: string;
@@ -126,6 +131,7 @@ export const TERMINAL_STATUSES: readonly WorkflowStatus[] = [
   "aborted",
   "budget_limited",
   "time_limited",
+  "state_lost",
 ] as const;
 
 /** All transitions defined. Empty array = terminal state (no outgoing transitions). */
@@ -137,6 +143,12 @@ export const VALID_TRANSITIONS: Record<WorkflowStatus, WorkflowStatus[]> = {
   aborted: [],
   budget_limited: [],
   time_limited: [],
+  // state_lost: set when external state file is missing/corrupt during rehydrate.
+  // No internal transition reaches this state — it is assigned externally by
+  // reconstructState when a pointer entry points to an unreadable file.
+  // Currently reconstructState creates a state_lost placeholder instance so
+  // the user can see the run existed (see index.ts reconstructState).
+  state_lost: [],
 };
 
 export function isTerminal(status: WorkflowStatus): boolean {
@@ -174,7 +186,7 @@ export function serializeInstance(instance: WorkflowInstance): SerializedWorkflo
     name: instance.name,
     status: instance.status,
     callCache: Array.from(instance.callCache.entries()).map(([key, value]) => ({ key, value })),
-    trace: instance.trace,
+    trace: instance.trace.map(({ verifyStrategy: _verifyStrategy, ...rest }) => rest),
     worker: instance.worker,
     startedAt: instance.startedAt,
     pausedAt: instance.pausedAt,
@@ -233,6 +245,7 @@ export function deserializeState(entry: unknown): Map<string, WorkflowInstance> 
       try {
         const instance = deserializeInstance(inst);
         instances.set(instance.runId, instance);
+      // eslint-disable-next-line taste/no-silent-catch
       } catch {
         // Skip malformed entries for backward compatibility
       }

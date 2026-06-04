@@ -13,7 +13,7 @@ import type {
   Theme,
 } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-
+import type { Static } from "typebox";
 
 import {
   canTransition,
@@ -24,9 +24,26 @@ import {
   TrackerParams,
 
   type TrackedItem,
+  type TrackedItemStatus,
   type TrackerDetails,
   type TrackerRuntimeState,
 } from "./types";
+
+// ── Pi SDK custom event API type ──────────────────────
+
+type PiOnAny = {
+  on(event: string, handler: (...args: unknown[]) => unknown): void;
+};
+
+// ── Tool execute/render param types ──────────────────
+
+type RenderOptions = { expanded?: boolean };
+
+type ToolResult = {
+  content: Array<{ type: "text"; text: string }>;
+  details: Record<string, unknown> | undefined;
+  isError?: boolean;
+};
 
 // ── Tracker 配置接口（避免 types.ts 引入 Pi API 类型）──
 
@@ -87,6 +104,74 @@ function formatItemList<TMeta>(
         (item.detail ? ` detail="${item.detail}"` : ""),
     )
     .join("\n");
+}
+
+// ── Tool render helpers (extracted to keep createTracker ≤300 lines) ──
+
+function renderTrackerCall<TMeta>(
+  args: Record<string, unknown>,
+  config: TrackerConfig<TMeta>,
+  theme: Theme,
+): Text {
+  const parts = [
+    theme.fg("toolTitle", theme.bold(`${config.toolName} `)),
+    theme.fg("muted", String(args.action ?? "")),
+  ];
+  if (args.id !== undefined)
+    parts.push(theme.fg("accent", `#${String(args.id)}`));
+  if (args.status !== undefined)
+    parts.push(theme.fg("warning", String(args.status)));
+  if (args.detail !== undefined)
+    parts.push(theme.fg("dim", `"${String(args.detail)}"`));
+  return new Text(parts.join(" "), 0, 0);
+}
+
+function renderTrackerResult<TMeta>(
+  result: ToolResult,
+  options: RenderOptions,
+  config: TrackerConfig<TMeta>,
+  theme: Theme,
+): Text {
+  if (config.renderResult && result.details) {
+    return config.renderResult(
+      result.details as unknown as TrackerDetails<TMeta>,
+      options,
+      theme,
+    );
+  }
+
+  if (!result.details) {
+    return new Text(theme.fg("dim", "(no details)"), 0, 0);
+  }
+
+  // 框架默认渲染
+  const details = result.details as unknown as TrackerDetails<TMeta>;
+  if (details.error) {
+    return new Text(
+      theme.fg("error", `[${config.name}] Error: ${details.error}`),
+      0,
+      0,
+    );
+  }
+
+  const prefix = theme.fg("accent", `[${config.name}] `);
+  const summary = `${details.action}: ${details.items.length} items`;
+
+  if (!options.expanded) {
+    return new Text(prefix + theme.fg("dim", summary), 0, 0);
+  }
+
+  const items = details.items
+    .map((item) => {
+      const terminal = isTerminalStatus(item.status) ? " ✓" : "";
+      return `  #${item.id} ${item.name} [${item.status}]${terminal}`;
+    })
+    .join("\n");
+  return new Text(
+    prefix + summary + "\n" + theme.fg("dim", items),
+    0,
+    0,
+  );
 }
 
 // ── 工厂函数 ────────────────────────────────────────
@@ -181,10 +266,10 @@ export function createTracker<TMeta>(
   // ── Event: triggerEvent (e.g. tool_call) ───────────
 
   // Pi 事件系统支持任意字符串事件名，但类型定义不完整（与 session_compact 同）
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (pi as any).on(
+  (pi as unknown as PiOnAny).on(
     config.triggerEvent,
-    async (event: unknown, ctx: ExtensionContext) => {
+    async (event, nextCtx) => {
+      const ctx = nextCtx as ExtensionContext;
       const match = config.triggerMatch(event);
       if (!match) return;
 
@@ -223,10 +308,11 @@ export function createTracker<TMeta>(
 
   // ── Event: turn_end（remind 检查）─────────────────
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (pi as any).on(
+  (pi as unknown as PiOnAny).on(
     "turn_end",
-    async (event: Record<string, unknown>, ctx: ExtensionContext) => {
+    async (rawEvent, nextCtx) => {
+      const event = rawEvent as Record<string, unknown>;
+      const ctx = nextCtx as ExtensionContext;
       const eventTurnIndex = event.turnIndex;
       if (typeof eventTurnIndex === "number") {
         state.currentTurnIndex = eventTurnIndex;
@@ -285,8 +371,7 @@ export function createTracker<TMeta>(
     pi.registerMessageRenderer(
       customType,
       (
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        message: any,
+        message: { content: string | unknown },
         _options: unknown,
         theme: Theme,
       ) => {
@@ -313,14 +398,13 @@ export function createTracker<TMeta>(
     promptGuidelines: config.promptGuidelines,
     parameters: TrackerParams,
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async execute(
       _toolCallId: string,
-      params: any,
-      _signal: any,
-      _onUpdate: any,
+      params: Static<typeof TrackerParams>,
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
       ctx: ExtensionContext,
-    ): Promise<any> {
+    ): Promise<ToolResult> {
       // ── list ──
       if (params.action === "list") {
         return {
@@ -339,30 +423,32 @@ export function createTracker<TMeta>(
       }
 
       // ── update ──
-      if (params.id === undefined) {
-        return { content: [{ type: "text", text: "update action requires id parameter" }], isError: true };
+      const updateId = params.id as number | undefined;
+      const updateStatus = params.status as string | undefined;
+      if (updateId === undefined) {
+        return { content: [{ type: "text", text: "update action requires id parameter" }], details: undefined, isError: true };
       }
-      if (params.status === undefined) {
-        return { content: [{ type: "text", text: "update action requires status parameter" }], isError: true };
+      if (updateStatus === undefined) {
+        return { content: [{ type: "text", text: "update action requires status parameter" }], details: undefined, isError: true };
       }
 
       const itemIndex = state.items.findIndex(
-        (item) => item.id === params.id,
+        (item) => item.id === updateId,
       );
       if (itemIndex === -1) {
-        return { content: [{ type: "text", text: `TrackedItem id=${params.id} not found` }], isError: true };
+        return { content: [{ type: "text", text: `TrackedItem id=${updateId} not found` }], details: undefined, isError: true };
       }
 
       const item = state.items[itemIndex];
-      if (!canTransition(item.status, params.status)) {
-        return { content: [{ type: "text", text: `Invalid transition: ${item.status} → ${params.status} (current: ${item.status}, terminal states are immutable or path not allowed)` }], isError: true };
+      if (!canTransition(item.status, updateStatus as TrackedItemStatus)) {
+        return { content: [{ type: "text", text: `Invalid transition: ${item.status} → ${updateStatus} (current: ${item.status}, terminal states are immutable or path not allowed)` }], details: undefined, isError: true };
       }
 
       // 执行转换
-      item.status = params.status;
-      item.detail = params.detail ?? item.detail;
+      item.status = updateStatus as TrackedItemStatus;
+      item.detail = (params.detail as string | undefined | null) ?? item.detail;
 
-      if (params.status === "error") {
+      if (updateStatus === "error") {
         item.errorCount += 1;
         if (item.errorCount >= config.errorThreshold) {
           await pi.sendUserMessage(config.steering.onError(item), {
@@ -390,68 +476,21 @@ export function createTracker<TMeta>(
       };
     },
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     renderCall(
-      args: any,
+      args: Record<string, unknown>,
       theme: Theme,
       _context?: unknown,
     ) {
-      const parts = [
-        theme.fg("toolTitle", theme.bold(`${config.toolName} `)),
-        theme.fg("muted", String(args.action ?? "")),
-      ];
-      if (args.id !== undefined)
-        parts.push(theme.fg("accent", `#${String(args.id)}`));
-      if (args.status !== undefined)
-        parts.push(theme.fg("warning", String(args.status)));
-      if (args.detail !== undefined)
-        parts.push(theme.fg("dim", `"${String(args.detail)}"`));
-      return new Text(parts.join(" "), 0, 0);
+      return renderTrackerCall(args, config, theme);
     },
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     renderResult(
-      result: any,
-      options: any,
+      result: { content: Array<{ type: "text"; text?: string } | { type: "image"; data: string; mimeType: string }>; details?: Record<string, unknown> },
+      _options: unknown,
       theme: Theme,
       _context?: unknown,
     ) {
-      if (config.renderResult) {
-        return config.renderResult(
-          result.details as TrackerDetails<TMeta>,
-          options,
-          theme,
-        );
-      }
-
-      // 框架默认渲染
-      const details = result.details as TrackerDetails<TMeta>;
-      if (details.error) {
-        return new Text(
-          theme.fg("error", `[${config.name}] Error: ${details.error}`),
-          0,
-          0,
-        );
-      }
-
-      const prefix = theme.fg("accent", `[${config.name}] `);
-      const summary = `${details.action}: ${details.items.length} items`;
-
-      if (!options.expanded) {
-        return new Text(prefix + theme.fg("dim", summary), 0, 0);
-      }
-
-      const items = details.items
-        .map((item) => {
-          const terminal = isTerminalStatus(item.status) ? " ✓" : "";
-          return `  #${item.id} ${item.name} [${item.status}]${terminal}`;
-        })
-        .join("\n");
-      return new Text(
-        prefix + summary + "\n" + theme.fg("dim", items),
-        0,
-        0,
-      );
+      return renderTrackerResult(result as ToolResult, { expanded: (_options as Record<string, unknown> | undefined)?.expanded as boolean | undefined }, config, theme);
     },
   });
 }
