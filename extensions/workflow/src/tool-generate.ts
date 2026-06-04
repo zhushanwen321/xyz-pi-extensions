@@ -43,6 +43,7 @@ export function registerGenerateTool(pi: ExtensionAPI) {
       "Keep workflow scripts under 100 lines. Scripts are orchestration glue (agent calls + flow control), not business logic.",
       "Always show the generated script path and wait for user confirmation. After confirmation, use workflow-run with the exact name and mode='force' to execute.",
       "Positive: user runs /workflow pre-commit and no script exists → workflow-generate. Or workflow-run auto mode returns 'no match' → workflow-generate. Negative: user says 'check types' → use bash directly, not workflow-generate.",
+      "Each agent() call should be verifiable. For trivial steps, embed self-check instructions in the prompt and require a structured output. For critical steps, add a follow-up agent() that explicitly verifies the previous result. Do NOT skip verification entirely — every workflow must have at least one verification point per critical execution path.",
     ],
     parameters: WorkflowGenerateParams,
 

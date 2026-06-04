@@ -16,11 +16,13 @@
  */
 
 import * as fs from "node:fs";
+import * as path from "node:path";
+import { homedir } from "node:os";
 import { Worker } from "node:worker_threads";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { AgentPool, type AgentCallOpts } from "./agent-pool.js";
+import { AgentPool, type AgentCallOpts, type AgentPoolOptions } from "./agent-pool.js";
 import { resolveModel } from "./model-resolver.js";
 import { getWorkflow } from "./config-loader.js";
 import { appendTraceNode } from "./execution-trace.js";
@@ -33,7 +35,7 @@ import {
   createInstance as createStateInstance,
   transitionStatus,
   isTerminal,
-  serializeState,
+  serializeInstance,
 } from "./state.js";
 import { buildWorkerScript } from "./worker-script.js";
 
@@ -101,6 +103,7 @@ export class WorkflowOrchestrator {
   private readonly agentPool: AgentPool;
   private readonly pi: ExtensionAPI;
   private readonly ctx: ExtensionContext;
+  private readonly sessionDir: string;
   /** Called after every trace node state change for live TUI updates */
   onTraceUpdate?: (runId: string) => void;
   /** Called when a workflow reaches a terminal state (completed/failed/aborted/budget_limited/time_limited) */
@@ -110,10 +113,28 @@ export class WorkflowOrchestrator {
     pi: ExtensionAPI,
     ctx: ExtensionContext,
     maxConcurrency?: number,
+    poolOptions?: AgentPoolOptions,
   ) {
     this.pi = pi;
     this.ctx = ctx;
-    this.agentPool = new AgentPool(maxConcurrency);
+    this.sessionDir = path.join(homedir(), ".pi", "agent");
+
+    // Merge default soft-limit callback with any caller-provided options
+    const defaultOnSoftLimit = ({ runName, budget }: {
+      runName: string;
+      totalCalls: number;
+      budget: { used: number; total: number };
+    }) => {
+      (this.pi as unknown as { sendUserMessage: (msg: string) => void }).sendUserMessage(
+        `[workflow:${runName}] Reached 500 agent calls. Budget: ${budget.used}/${budget.total ?? "unlimited"} tokens. Consider aborting if this is unintended.`,
+      );
+    };
+
+    this.agentPool = new AgentPool({
+      maxConcurrency,
+      ...poolOptions,
+      onSoftLimitReached: poolOptions?.onSoftLimitReached ?? defaultOnSoftLimit,
+    });
   }
 
   // ── Public API ──────────────────────────────────────────────
@@ -150,7 +171,7 @@ export class WorkflowOrchestrator {
 
     this.runMetaMap.set(runId, { scriptSource, args, budgetTokens, budgetTimeMs });
     this.instances.set(runId, instance);
-    this.persistState();
+    await this.persistState();
 
     this.startWorker(runId, instance, scriptSource, args);
 
@@ -165,7 +186,7 @@ export class WorkflowOrchestrator {
    * Pause a running workflow. Terminates the Worker thread but preserves
    * the callCache so it can be resumed later from the point of interruption.
    */
-  pause(runId: string): void {
+  async pause(runId: string): Promise<void> {
     const instance = this.instances.get(runId);
     if (!instance) {
       throw new Error(`Workflow '${runId}' not found`);
@@ -180,7 +201,7 @@ export class WorkflowOrchestrator {
     instance.pausedAt = new Date().toISOString();
     transitionStatus(instance, "paused");
     this.terminateWorker(runId);
-    this.persistState();
+    await this.persistState();
   }
 
   /**
@@ -188,7 +209,7 @@ export class WorkflowOrchestrator {
    * preserved callCache. Cached agent calls replay immediately from
    * the cache; uncached calls dispatch fresh.
    */
-  resume(runId: string): void {
+  async resume(runId: string): Promise<void> {
     const instance = this.instances.get(runId);
     if (!instance) {
       throw new Error(`Workflow '${runId}' not found`);
@@ -214,14 +235,14 @@ export class WorkflowOrchestrator {
     }
     // State-machine-only instances (no runMeta): just transition status
 
-    this.persistState();
+    await this.persistState();
   }
 
   /**
    * Abort a workflow immediately. Terminates the Worker thread and
    * marks the instance as aborted (terminal state).
    */
-  abort(runId: string): void {
+  async abort(runId: string): Promise<void> {
     const instance = this.instances.get(runId);
     if (!instance) {
       throw new Error(`Workflow '${runId}' not found`);
@@ -238,7 +259,7 @@ export class WorkflowOrchestrator {
     instance.completedAt = new Date().toISOString();
     transitionStatus(instance, "aborted");
     this.terminateWorker(runId);
-    this.persistState();
+    await this.persistState();
     this.onCompletion?.(runId);
   }
 
@@ -248,7 +269,7 @@ export class WorkflowOrchestrator {
    * The script re-executes from the top — completed calls replay from
    * cache, the retried call dispatches fresh.
    */
-  retryNode(runId: string, callId: number): void {
+  async retryNode(runId: string, callId: number): Promise<void> {
     const instance = this.instances.get(runId);
     if (!instance) {
       throw new Error(`Workflow '${runId}' not found`);
@@ -281,7 +302,7 @@ export class WorkflowOrchestrator {
       this.startWorker(runId, instance, meta.scriptSource, meta.args);
     }
 
-    this.persistState();
+    await this.persistState();
   }
 
   /**
@@ -290,7 +311,7 @@ export class WorkflowOrchestrator {
    * If the worker is actively running and a pending call exists for
    * this callId, sends the cached result directly.
    */
-  skipNode(runId: string, callId: number): void {
+  async skipNode(runId: string, callId: number): Promise<void> {
     const instance = this.instances.get(runId);
     if (!instance) {
       throw new Error(`Workflow '${runId}' not found`);
@@ -319,7 +340,7 @@ export class WorkflowOrchestrator {
       }
     }
 
-    this.persistState();
+    await this.persistState();
   }
 
   /**
@@ -428,7 +449,7 @@ export class WorkflowOrchestrator {
   /**
    * Route a message from the worker thread based on its type.
    */
-  private handleWorkerMessage(runId: string, raw: unknown): void {
+  private async handleWorkerMessage(runId: string, raw: unknown): Promise<void> {
     const msg = raw as WorkerInMsg;
 
     const instance = this.instances.get(runId);
@@ -446,7 +467,7 @@ export class WorkflowOrchestrator {
         instance.completedAt = new Date().toISOString();
         transitionStatus(instance, "completed");
         this.workers.delete(runId);
-        this.persistState();
+        await this.persistState();
         this.onTraceUpdate?.(runId);
         this.onCompletion?.(runId);
         break;
@@ -464,12 +485,12 @@ export class WorkflowOrchestrator {
    * Process an agent-call from the worker. Checks callCache first;
    * on miss, enqueues via AgentPool, caches the result, and responds.
    */
-  private handleAgentCall(
+  private async handleAgentCall(
     runId: string,
     instance: WorkflowInstance,
     callId: number,
     opts: AgentCallOpts,
-  ): void {
+  ): Promise<void> {
     // Cache hit — respond immediately
     const cached = instance.callCache.get(callId);
     if (cached) {
@@ -503,15 +524,15 @@ export class WorkflowOrchestrator {
    * Execute an agent call with retry logic. Retries up to MAX_AGENT_RETRIES
    * on failure with exponential backoff (1s, 2s, 4s).
    */
-  private executeWithRetry(
+  private async executeWithRetry(
     runId: string,
     callId: number,
     opts: AgentCallOpts,
     instance: WorkflowInstance,
     node: ExecutionTraceNode,
     attempt = 1,
-  ): void {
-    this.agentPool.enqueue(opts).then((poolResult) => {
+  ): Promise<void> {
+    this.agentPool.enqueue(opts).then(async (poolResult) => {
       // P0-2: Stale state check — instance may have been paused/aborted during agent call
       if (instance.status !== "running") return;
 
@@ -556,9 +577,9 @@ export class WorkflowOrchestrator {
       }
 
       // Enforce budget limits
-      this.checkBudget(runId);
+      await this.checkBudget(runId);
 
-      this.persistState();
+      await this.persistState();
       this.onTraceUpdate?.(runId);
     });
   }
@@ -566,7 +587,7 @@ export class WorkflowOrchestrator {
   /**
    * Handle a Worker thread uncaught error.
    */
-  private handleWorkerError(runId: string, err: Error): void {
+  private async handleWorkerError(runId: string, err: Error): Promise<void> {
     const instance = this.instances.get(runId);
     if (!instance || isTerminal(instance.status)) return;
 
@@ -575,14 +596,14 @@ export class WorkflowOrchestrator {
     // P1-5: Mark failed — error event may not be followed by exit event
     instance.completedAt = new Date().toISOString();
     transitionStatus(instance, "failed");
-    this.persistState();
+    await this.persistState();
     this.onCompletion?.(runId);
   }
 
   /**
    * Handle Worker thread exit.
    */
-  private handleWorkerExit(runId: string, code: number, exitedWorker: Worker): void {
+  private async handleWorkerExit(runId: string, code: number, exitedWorker: Worker): Promise<void> {
     const instance = this.instances.get(runId);
     if (!instance) return;
 
@@ -601,7 +622,7 @@ export class WorkflowOrchestrator {
       instance.error = `Worker exited with code ${code}`;
       instance.completedAt = new Date().toISOString();
       transitionStatus(instance, "failed");
-      this.persistState();
+      await this.persistState();
       this.onCompletion?.(runId);
     }
   }
@@ -610,7 +631,7 @@ export class WorkflowOrchestrator {
    * Handle a workflow script-level error (type: "error" from worker).
    * Retries with exponential backoff up to MAX_WORKER_RETRIES.
    */
-  private handleScriptError(runId: string, errorMsg: string): void {
+  private async handleScriptError(runId: string, errorMsg: string): Promise<void> {
     const instance = this.instances.get(runId);
     if (!instance || isTerminal(instance.status)) return;
 
@@ -634,7 +655,7 @@ export class WorkflowOrchestrator {
       instance.completedAt = new Date().toISOString();
       transitionStatus(instance, "failed");
       this.terminateWorker(runId);
-      this.persistState();
+      await this.persistState();
       this.onCompletion?.(runId);
     }
   }
@@ -646,7 +667,7 @@ export class WorkflowOrchestrator {
    * to the Worker, terminate it, and mark the instance as
    * budget_limited (terminal).
    */
-  private checkBudget(runId: string): void {
+  private async checkBudget(runId: string): Promise<void> {
     const instance = this.instances.get(runId);
     if (!instance || isTerminal(instance.status)) return;
 
@@ -679,7 +700,7 @@ export class WorkflowOrchestrator {
       instance.error = reason;
       instance.completedAt = new Date().toISOString();
       transitionStatus(instance, "budget_limited");
-      this.persistState();
+      await this.persistState();
       this.onCompletion?.(runId);
     }
   }
@@ -689,7 +710,7 @@ export class WorkflowOrchestrator {
    * and marks the instance as time_limited if still running.
    */
   private scheduleTimeBudgetCheck(runId: string, maxTimeMs: number): void {
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       const instance = this.instances.get(runId);
       if (!instance || isTerminal(instance.status) || instance.status !== "running") return;
       if (!instance.startedAt) return;
@@ -706,7 +727,7 @@ export class WorkflowOrchestrator {
         instance.error = `Time budget exceeded: ${elapsed}ms >= ${maxTimeMs}ms`;
         instance.completedAt = new Date().toISOString();
         transitionStatus(instance, "time_limited");
-        this.persistState();
+        await this.persistState();
         this.onCompletion?.(runId);
       }
     }, maxTimeMs);
@@ -716,14 +737,25 @@ export class WorkflowOrchestrator {
   // ── Persistence ─────────────────────────────────────────────
 
   /**
-   * Flush the current state to session JSONL via pi.appendEntry.
+   * Flush the current state to external JSONL files + pointer entries.
    *
-   * GC strategy: this method only appends entries. Deduplication and
-   * pruning happen naturally in reconstructState (index.ts), which reads
-   * all workflow-state entries but only keeps the last valid snapshot per
-   * runId. Old entries accumulate in the JSONL but are ignored on rehydrate.
+   * For each instance: writes a JSONL file under <sessionDir>/workflow-state/<runId>.jsonl
+   * and appends a workflow-state-link pointer entry via pi.appendEntry.
    */
-  persistState(): void {
-    this.pi.appendEntry("workflow-state", serializeState(this.instances));
+  async persistState(): Promise<void> {
+    for (const instance of this.instances.values()) {
+      const filePath = path.join(this.sessionDir, "workflow-state", `${instance.runId}.jsonl`);
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.promises.appendFile(
+        filePath,
+        JSON.stringify(serializeInstance(instance)) + "\n",
+        "utf8",
+      );
+      this.pi.appendEntry("workflow-state-link", {
+        runId: instance.runId,
+        path: filePath,
+        updatedAt: new Date().toISOString(),
+      });
+    }
   }
 }

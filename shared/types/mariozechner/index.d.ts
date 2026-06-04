@@ -20,9 +20,12 @@ declare module "@mariozechner/pi-coding-agent" {
 		hasUI: boolean;
 		ui: {
 			notify(msg: string, type?: string): void;
-			setStatus(id: string, msg: any): void;
-			setWidget(id: string, widget: any): void;
-			setFooter(factory: any): void;
+			confirm(title: string, message: string, opts?: unknown): Promise<boolean>;
+			select(title: string, options: string[], opts?: unknown): Promise<string | undefined>;
+			input(title: string, placeholder?: string, opts?: unknown): Promise<string | undefined>;
+			setStatus(key: string, text: string | undefined): void;
+			setWidget(key: string, content: unknown, options?: unknown): void;
+			setFooter(factory: unknown): void;
 			theme: Theme;
 			custom<T = void>(factory: (tui: any, theme: any, kb: any, done: () => void) => any): Promise<T>;
 		};

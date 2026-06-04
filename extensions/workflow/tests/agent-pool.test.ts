@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { spawn, type ChildProcess } from "node:child_process";
-import { AgentPool } from "../src/agent-pool";
+import { AgentPool, SOFT_MAX_AGENTS_WARNING } from "../src/agent-pool";
 
 vi.mock("node:child_process", () => ({
   spawn: vi.fn(),
@@ -361,5 +361,229 @@ describe("AgentPool", () => {
       expect(result.output).toBe("");
       expect(result.usage).toBeUndefined();
     });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Soft warning infrastructure tests
+// ═══════════════════════════════════════════════════════════════
+
+describe("AgentPool — soft warning infrastructure", () => {
+  beforeEach(() => {
+    mockSpawn.mockReset();
+  });
+
+  it("initial totalCallCount is zero", () => {
+    const pool = new AgentPool();
+    expect((pool as any).totalCallCount).toBe(0);
+  });
+
+  it("soft_warning_fires_once_at_501", () => {
+    const callback = vi.fn();
+    const count = SOFT_MAX_AGENTS_WARNING + 1; // 501
+    const pool = new AgentPool({
+      maxConcurrency: count,
+      onSoftLimitReached: callback,
+    });
+    const anyPool = pool as any;
+
+    // With concurrency >= 501, drain() starts all calls synchronously.
+    // Each run() increments totalCallCount before its first await.
+    for (let i = 0; i < count; i++) {
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
+      pool.enqueue({ prompt: `call-${i}` });
+      completeSuccess(proc, `result-${i}`);
+    }
+
+    // After 501 calls, totalCallCount should be 501
+    expect(anyPool.totalCallCount).toBe(count);
+    // Callback should have been called exactly once
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        totalCalls: count,
+        runName: expect.any(String),
+        budget: expect.any(Object),
+      }),
+    );
+  });
+
+  it("soft_warning_does_not_fire_under_500", () => {
+    const callback = vi.fn();
+    const pool = new AgentPool({
+      maxConcurrency: SOFT_MAX_AGENTS_WARNING,
+      onSoftLimitReached: callback,
+    });
+    const anyPool = pool as any;
+
+    // Simulate exactly 500 real spawns — 500 is NOT > 500
+    for (let i = 0; i < SOFT_MAX_AGENTS_WARNING; i++) {
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
+      pool.enqueue({ prompt: `call-${i}` });
+      completeSuccess(proc, `result-${i}`);
+    }
+
+    expect(anyPool.totalCallCount).toBe(SOFT_MAX_AGENTS_WARNING);
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("soft_warning_does_not_fire_twice", () => {
+    const callback = vi.fn();
+    const pool = new AgentPool({
+      maxConcurrency: 600,
+      onSoftLimitReached: callback,
+    });
+    const anyPool = pool as any;
+
+    // Simulate 600 real spawns — callback should fire exactly once
+    for (let i = 0; i < 600; i++) {
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
+      pool.enqueue({ prompt: `call-${i}` });
+      completeSuccess(proc, `result-${i}`);
+    }
+
+    expect(anyPool.totalCallCount).toBe(600);
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("cache_hit_does_not_increment", async () => {
+    const pool = new AgentPool({ maxConcurrency: 1 });
+    const anyPool = pool as any;
+    const knownCallId = "test-cache-hit";
+    const fakeResult = {
+      callId: knownCallId,
+      output: "cached",
+      durationMs: 0,
+      success: true,
+    };
+
+    // Pre-populate cache
+    anyPool._callCache.set(knownCallId, fakeResult);
+    expect(anyPool.totalCallCount).toBe(0);
+
+    // Call run() directly with a cached callId — should resolve
+    // from cache without incrementing totalCallCount
+    const mockEntry = {
+      opts: { prompt: "test" },
+      resolve: vi.fn(),
+      callId: knownCallId,
+      startedAt: Date.now(),
+    };
+    await anyPool.run(mockEntry);
+
+    expect(anyPool.totalCallCount).toBe(0);
+    expect(mockEntry.resolve).toHaveBeenCalledWith(fakeResult);
+
+    // Now call run() with a NEW callId — should increment totalCallCount
+    const proc = createMockProcess();
+    mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
+    const entry2 = {
+      opts: { prompt: "new call" },
+      resolve: vi.fn(),
+      callId: "new-call-id",
+      startedAt: Date.now(),
+    };
+    const runPromise = anyPool.run(entry2);
+    completeSuccess(proc, "fresh result");
+    await runPromise;
+
+    expect(anyPool.totalCallCount).toBe(1);
+  });
+
+  it("per_instance_counter_is_independent", () => {
+    const callback1 = vi.fn();
+    const callback2 = vi.fn();
+
+    const pool1 = new AgentPool({
+      maxConcurrency: 501,
+      onSoftLimitReached: callback1,
+    });
+    const pool2 = new AgentPool({
+      maxConcurrency: 100,
+      onSoftLimitReached: callback2,
+    });
+
+    // pool1: 501 calls -> should fire
+    for (let i = 0; i < SOFT_MAX_AGENTS_WARNING + 1; i++) {
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
+      pool1.enqueue({ prompt: `p1-${i}` });
+      completeSuccess(proc, `done-${i}`);
+    }
+
+    // pool2: 100 calls -> should NOT fire
+    for (let i = 0; i < 100; i++) {
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
+      pool2.enqueue({ prompt: `p2-${i}` });
+      completeSuccess(proc, `done-${i}`);
+    }
+
+    expect((pool1 as any).totalCallCount).toBe(SOFT_MAX_AGENTS_WARNING + 1);
+    expect((pool2 as any).totalCallCount).toBe(100);
+    expect(callback1).toHaveBeenCalledTimes(1);
+    expect(callback2).not.toHaveBeenCalled();
+  });
+
+  it("callback_receives_runName_and_budget", () => {
+    const callback = vi.fn();
+    const count = SOFT_MAX_AGENTS_WARNING + 1;
+    const pool = new AgentPool({
+      maxConcurrency: count,
+      onSoftLimitReached: callback,
+    });
+
+    // Fire 501 calls
+    for (let i = 0; i < count; i++) {
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
+      pool.enqueue({ prompt: `call-${i}`, description: `my-run-${i}` });
+      completeSuccess(proc, `result-${i}`);
+    }
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    const arg = callback.mock.calls[0][0];
+    expect(arg).toHaveProperty("runName");
+    expect(typeof arg.runName).toBe("string");
+    expect(arg).toHaveProperty("totalCalls");
+    expect(arg.totalCalls).toBe(count);
+    expect(arg).toHaveProperty("budget");
+    expect(arg.budget).toHaveProperty("total");
+    expect(arg.budget).toHaveProperty("used");
+    expect(arg.budget).toHaveProperty("remaining");
+    expect(arg.budget).toHaveProperty("isExhausted");
+  });
+
+  it("workflow_continues_after_callback_throws", async () => {
+    const callback = vi.fn(() => {
+      throw new Error("callback exploded");
+    });
+    const count = SOFT_MAX_AGENTS_WARNING + 2; // 502
+    const pool = new AgentPool({
+      maxConcurrency: count,
+      onSoftLimitReached: callback,
+    });
+    const _anyPool = pool as any;
+
+    // Enqueue all 502 calls — with concurrency=502 all start immediately
+    const promises: Promise<import("../src/agent-pool").AgentResult>[] = [];
+    for (let i = 0; i < count; i++) {
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
+      const p = pool.enqueue({ prompt: `call-${i}` });
+      promises.push(p);
+      completeSuccess(proc, `result-${i}`);
+    }
+
+    const results = await Promise.all(promises);
+
+    // Callback was called (and threw)
+    expect(callback).toHaveBeenCalledTimes(1);
+    // All results succeeded despite the throw
+    expect(results).toHaveLength(count);
+    expect(results.every((r) => r.success)).toBe(true);
   });
 });

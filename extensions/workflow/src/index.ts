@@ -16,13 +16,14 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 import { Type, type Static } from "typebox";
 import { readFileSync } from "node:fs";
+import * as fs from "node:fs";
 import { resolve } from "node:path";
 
 import {
   type WorkflowInstance,
   type WorkflowStatus,
-  ENTRY_TYPE,
-  deserializeState,
+  
+  deserializeInstance,
   transitionStatus,
   isTerminal,
 } from "./state.js";
@@ -80,27 +81,52 @@ export default function workflowExtension(pi: ExtensionAPI) {
   const orchestrators = new Map<string, WorkflowOrchestrator>();
   const cmdState: WorkflowCommandsState = { lastRunId: null };
 
+  // Session-scoped approval memory: tracks which project workflows the user
+  // has already confirmed this session, so we skip re-asking.
+  const sessionApprovals = new Set<string>();
+
   /**
-   * Rebuild workflow state from Session JSONL custom entries.
-   * Reads entries with ENTRY_TYPE and reconstructs the instances map.
+   * Rebuild workflow state from external JSONL files.
+   * Reads workflow-state-link pointer entries, loads JSONL files,
+   * and deserializes each line into WorkflowInstance objects.
    */
-  function reconstructState(ctx: ExtensionContext): Map<string, WorkflowInstance> {
+  async function reconstructState(ctx: ExtensionContext): Promise<Map<string, WorkflowInstance>> {
     const instances = new Map<string, WorkflowInstance>();
     try {
-      const entries = ctx.sessionManager.getBranch();
+      const entries = ctx.sessionManager.getEntries();
+
+      // Filter pointer entries, dedup by runId (keep last)
+      const pointers = new Map<string, { path: string }>();
       for (const entry of entries) {
         if (entry.type !== "custom") continue;
         const custom = entry as unknown as { customType?: string; data?: unknown };
-        if (custom.customType !== ENTRY_TYPE) continue;
-        if (custom.data && typeof custom.data === "object") {
-          const restored = deserializeState(custom.data);
-          for (const [runId, instance] of restored) {
-            instances.set(runId, instance);
+        if (custom.customType !== "workflow-state-link") continue;
+        const data = custom.data as { runId?: string; path?: string } | undefined;
+        if (data?.runId && data?.path) {
+          pointers.set(data.runId, { path: data.path });
+        }
+      }
+
+      // Load each pointer's JSONL file
+      for (const [runId, pointer] of pointers) {
+        try {
+          const content = await fs.promises.readFile(pointer.path, "utf8");
+          const lines = content.split("\n").filter((l) => l.trim());
+          for (const line of lines) {
+            try {
+              const parsed = JSON.parse(line) as Parameters<typeof deserializeInstance>[0];
+              const instance = deserializeInstance(parsed);
+              instances.set(instance.runId, instance);
+            } catch {
+              // Skip malformed lines
+            }
           }
+        } catch {
+          ctx.ui.notify(`WARN: missing or corrupt state for ${runId}`, "warning");
         }
       }
     } catch {
-      // If getBranch or deserialize fail, return empty map
+      // If getEntries fails, return empty map
     }
     return instances;
   }
@@ -156,12 +182,20 @@ export default function workflowExtension(pi: ExtensionAPI) {
     const sessionId = ctx.sessionManager.getSessionId();
     lastSessionId = sessionId;
 
+    // Rehydrate session approvals from persisted entries
+    for (const entry of ctx.sessionManager.getEntries()) {
+      if (entry.customType === "workflow-approval-memory") {
+        const data = entry.data as { workflowName: string } | undefined;
+        if (data?.workflowName) sessionApprovals.add(data.workflowName);
+      }
+    }
+
     // Create orchestrator (sole instance holder)
     const orch = new WorkflowOrchestrator(pi, ctx);
     orchestrators.set(sessionId, orch);
 
     // Restore reconstructed state into orchestrator
-    const instances = reconstructState(ctx);
+    const instances = await reconstructState(ctx);
     orch.restoreInstances(instances);
 
     // Live progress: refresh widget on every trace node change
@@ -194,7 +228,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
     orchestrators.set(sessionId, orch);
 
     // Restore reconstructed state into orchestrator
-    const instances = reconstructState(ctx);
+    const instances = await reconstructState(ctx);
     orch.restoreInstances(instances);
 
     // Live progress: refresh widget on every trace node change
@@ -468,6 +502,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
     runId: string;
     status: string;
     name: string;
+    confirmSkipped?: boolean;
     _render?: {
       type: "task-list";
       data: {
@@ -545,7 +580,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
 
       if (exactMatch) {
         if (mode === "force") {
-          // Force mode: run directly
+          // Force mode: run directly, skip all checks
           const runId = await orch.run(name, args, tokens, time);
           cmdState.lastRunId = runId;
           if (ctx.hasUI) {
@@ -553,19 +588,44 @@ export default function workflowExtension(pi: ExtensionAPI) {
           }
           return {
             content: [{ type: "text" as const, text: `Started workflow '${name}' (${runId}) [force mode]` }],
-            details: { action: "run", runId, status: "running", name } satisfies WorkflowRunDetails,
+            details: { action: "run", runId, status: "running", name, confirmSkipped: true as const } satisfies WorkflowRunDetails,
           };
         }
-        // Auto mode: confirm with user
-        pi.sendUserMessage(
-          `Found workflow '${exactMatch.name}': ${exactMatch.description || "(no description)"}\n` +
-          `Source: [${exactMatch.source}] Path: ${exactMatch.path}\n\n` +
-          `Confirm: use workflow-run with name '${exactMatch.name}' and mode 'force' to execute, ` +
-          `or tell the user the path and wait for their confirmation.`,
-        );
+
+        // Auto mode with exact match: confirm gate with session memory
+        if (ctx.hasUI) {
+          const isTmp = exactMatch.source === "tmp";
+          const shouldConfirm = isTmp || !sessionApprovals.has(exactMatch.name);
+          if (shouldConfirm) {
+            const ok = await ctx.ui.confirm(
+              "Run workflow?",
+              `Workflow: ${exactMatch.name}\nDescription: ${exactMatch.description ?? "(none)"}\nSource: [${exactMatch.source}]\nPath: ${exactMatch.path ?? "(none)"}`,
+            );
+            if (!ok) {
+              return {
+                content: [{ type: "text" as const, text: `User declined to run '${exactMatch.name}'.` }],
+                details: { action: "run" as const, runId: "", status: "declined", name: exactMatch.name },
+              };
+            }
+            if (!isTmp) {
+              sessionApprovals.add(exactMatch.name);
+              pi.appendEntry("workflow-approval-memory", { workflowName: exactMatch.name, approvedAt: new Date().toISOString() });
+            }
+          }
+        } else {
+          // hasUI=false fallback
+          pi.sendUserMessage(`Confirm to run '${exactMatch.name}'? (RPC mode — auto-confirm not available, proceed with caution)`);
+        }
+
+        // Proceed to run after approval
+        const runId = await orch.run(name, args, tokens, time);
+        cmdState.lastRunId = runId;
+        if (ctx.hasUI) {
+          ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
+        }
         return {
-          content: [{ type: "text" as const, text: `Found exact match: '${exactMatch.name}'. Awaiting user confirmation.` }],
-          details: { action: "run", runId: "", status: "pending", name: exactMatch.name } satisfies WorkflowRunDetails,
+          content: [{ type: "text" as const, text: `Started workflow '${exactMatch.name}' (${runId})` }],
+          details: { action: "run", runId, status: "running", name: exactMatch.name } satisfies WorkflowRunDetails,
         };
       }
 
@@ -592,7 +652,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
           }
           return {
             content: [{ type: "text" as const, text: `Started workflow '${best.name}' (${runId}) [force mode, fuzzy match]` }],
-            details: { action: "run", runId, status: "running", name: best.name } satisfies WorkflowRunDetails,
+            details: { action: "run", runId, status: "running", name: best.name, confirmSkipped: true as const } satisfies WorkflowRunDetails,
           };
         }
         // Auto mode: list candidates for user

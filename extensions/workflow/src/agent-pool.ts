@@ -90,18 +90,49 @@ interface ParsedPipelineEvent {
 
 // ── Constants ─────────────────────────────────────────────────
 
+export const SOFT_MAX_AGENTS_WARNING = 500;
 const DEFAULT_CONCURRENCY = 4;
 const PROCESS_TIMEOUT_MS = 120_000; // 2 minutes
+
+// ── Budget type (mirrors BudgetTracker shape for callback signature) ──
+
+export interface WorkflowBudget {
+  total: number;
+  used: number;
+  remaining: number;
+  isExhausted: boolean;
+}
+
+export interface AgentPoolOptions {
+  maxConcurrency?: number;
+  onSoftLimitReached?: (info: {
+    runName: string;
+    totalCalls: number;
+    budget: WorkflowBudget;
+  }) => void;
+}
 
 // ── AgentPool ─────────────────────────────────────────────────
 
 export class AgentPool {
   private readonly maxConcurrency: number;
   private readonly queue: QueueEntry[] = [];
+  private readonly onSoftLimitReached?: (
+    info: { runName: string; totalCalls: number; budget: WorkflowBudget },
+  ) => void;
   private active = 0;
+  private totalCallCount = 0;
+  private softWarningSent = false;
+  private readonly _callCache = new Map<string, AgentResult>();
 
-  constructor(maxConcurrency = DEFAULT_CONCURRENCY) {
-    this.maxConcurrency = maxConcurrency;
+  constructor(opts: AgentPoolOptions | number = {}) {
+    if (typeof opts === "number") {
+      this.maxConcurrency = opts;
+      this.onSoftLimitReached = undefined;
+    } else {
+      this.maxConcurrency = opts.maxConcurrency ?? DEFAULT_CONCURRENCY;
+      this.onSoftLimitReached = opts.onSoftLimitReached;
+    }
   }
 
   /** Number of currently in-flight agent calls. */
@@ -148,7 +179,24 @@ export class AgentPool {
     const { opts, resolve, callId, startedAt } = entry;
 
     try {
+      // Cache check — same callId returns cached result, no spawn
+      const cached = this._callCache.get(callId);
+      if (cached) {
+        resolve(cached);
+        return;
+      }
+
+      // Real spawn — increment counter and check soft limit
+      this.totalCallCount++;
+      this.maybeEmitSoftWarning(opts.description ?? callId, {
+        total: 0,
+        used: 0,
+        remaining: 0,
+        isExhausted: false,
+      });
+
       const result = await this.spawnAndParse(opts, callId, startedAt);
+      this._callCache.set(callId, result);
       resolve(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -159,6 +207,31 @@ export class AgentPool {
         success: false,
         error: message,
       });
+    }
+  }
+
+  /**
+   * Emit the soft-limit warning once when totalCallCount exceeds
+   * SOFT_MAX_AGENTS_WARNING. Errors in the callback are swallowed.
+   */
+  private maybeEmitSoftWarning(
+    runName: string,
+    budget: WorkflowBudget,
+  ): void {
+    if (
+      this.totalCallCount > SOFT_MAX_AGENTS_WARNING &&
+      !this.softWarningSent
+    ) {
+      this.softWarningSent = true;
+      try {
+        this.onSoftLimitReached?.({
+          runName,
+          totalCalls: this.totalCallCount,
+          budget,
+        });
+      } catch {
+        // callback errors must not affect dispatch
+      }
     }
   }
 
