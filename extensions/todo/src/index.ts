@@ -284,6 +284,7 @@ export default function (pi: ExtensionAPI) {
 	let userMessageCount = 0;
 	let allCompletedAtCount: number | null = null;
 	let lastTodoCallCount = 0;
+	let stallNotified = false;
 
 	// ── 刷新显示（依赖闭包 state） ─────────────────────
 	function refreshDisplay(ctx: ExtensionContext): void {
@@ -305,6 +306,7 @@ export default function (pi: ExtensionAPI) {
 
 		// v3: 记录本次 todo 工具调用轮次（userMessageCount 在 agent_start 中递增）
 		lastTodoCallCount = userMessageCount;
+		stallNotified = false;
 
 		switch (params.action) {
 			case "list": {
@@ -575,6 +577,7 @@ export default function (pi: ExtensionAPI) {
 		userMessageCount = 0;
 		allCompletedAtCount = null;
 		lastTodoCallCount = 0;
+		stallNotified = false;
 
 		const entries = ctx.sessionManager.getEntries();
 		let latestIdx = -1;
@@ -688,7 +691,6 @@ export default function (pi: ExtensionAPI) {
 				// 增量在 update handler 中: AI 将 completed→in_progress 时显式表示验证失败
 				// 这确保任务可以保持在 completed 状态（AI 通过验证后不做任何操作）
 				pi.sendUserMessage(`<todo_context>\n[TODO] Task #${needsVerify.id} "${needsVerify.text}" needs verification:\n${needsVerify.verifyText}\n</todo_context>`, { deliverAs: "steer" });
-				return;
 			}
 
 			// 3. 自动清空: 全部完成经过 2 轮
@@ -709,8 +711,10 @@ export default function (pi: ExtensionAPI) {
 			if (
 				todos.length > 0 &&
 				allCompletedAtCount === null &&
+				!stallNotified &&
 				userMessageCount - lastTodoCallCount >= STALL_THRESHOLD
 			) {
+				stallNotified = true;
 				const pendingText = todos
 					.filter((t) => t.status !== "completed")
 					.map((t) => `#${t.id}: ${t.text}`)
