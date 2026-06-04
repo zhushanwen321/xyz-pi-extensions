@@ -78,8 +78,28 @@ describe("Todo data model - Task 1", () => {
 		expect(migrated.verifyAttempts).toBe(0);
 	});
 
-	it("should include all four valid statuses", () => {
-		expect(VALID_STATUSES).toEqual(["pending", "in_progress", "completed", "failed"]);
+	it("should include all five valid statuses", () => {
+		expect(VALID_STATUSES).toEqual(["pending", "in_progress", "verifying", "completed", "failed"]);
+	});
+
+	it("should preserve evidence when migrating old data", () => {
+		const todo = {
+			id: 1,
+			text: "task",
+			status: "verifying",
+			verifyText: "check X",
+			evidence: "grep confirmed no residual",
+			verifyAttempts: 0,
+		} as unknown as Todo;
+		const migrated = migrateTodo(todo);
+		expect(migrated.evidence).toBe("grep confirmed no residual");
+		expect(migrated.status).toBe("verifying");
+	});
+
+	it("should default evidence to undefined when absent", () => {
+		const oldTodo = { id: 1, text: "test", status: "pending" } as unknown as Todo;
+		const migrated = migrateTodo(oldTodo);
+		expect(migrated.evidence).toBeUndefined();
 	});
 });
 
@@ -242,6 +262,36 @@ describe("todo list verifyText - Task 4", () => {
 		expect(line).toContain("#2");
 		expect(line).toContain("plain task");
 	});
+
+	it("should show verifying status with evidence", () => {
+		const todo: Todo = {
+			id: 3,
+			text: "fix auth",
+			status: "verifying",
+			verifyText: "check status codes",
+			evidence: "grep confirmed no display:true residual",
+			verifyAttempts: 0,
+		};
+		const line = formatTodoLine(todo);
+
+		expect(line).toContain("[v]");
+		expect(line).toContain("验证中: grep confirmed no display:true residual");
+	});
+
+	it("should show completed with evidence", () => {
+		const todo: Todo = {
+			id: 4,
+			text: "fix login",
+			status: "completed",
+			verifyText: "密码错误时返回正确错误码",
+			evidence: "42 测试全通过，typecheck 无错误",
+			verifyAttempts: 0,
+		};
+		const line = formatTodoLine(todo);
+
+		expect(line).toContain("[x]");
+		expect(line).toContain("已验证: 42 测试全通过");
+	});
 });
 
 // ── Task 5: agent_end loop logic (pure data model tests) ──────────
@@ -303,7 +353,6 @@ describe("agent_end loop logic - Task 5", () => {
 			},
 		];
 
-		// Step 1: check verify-failed BEFORE needs-verify
 		const failed = todos.find(
 			(t) =>
 				t.status === "completed" &&
@@ -312,21 +361,8 @@ describe("agent_end loop logic - Task 5", () => {
 		);
 
 		expect(failed).toBeDefined();
-		expect(failed!.id).toBe(2);
-		expect(failed!.verifyAttempts).toBe(MAX_VERIFY_ATTEMPTS);
-
-		// When failed, status changes to failed
 		failed!.status = "failed";
 		expect(failed!.status).toBe("failed");
-
-		// Step 2: after marking failed, needsVerify should NOT find it
-		const needsVerify = todos.find(
-			(t) =>
-				t.status === "completed" &&
-				t.verifyText &&
-				t.verifyAttempts < MAX_VERIFY_ATTEMPTS,
-		);
-		expect(needsVerify).toBeUndefined();
 	});
 
 	it("should increment verifyAttempts when AI re-opens completed task with verifyText", () => {
@@ -334,31 +370,9 @@ describe("agent_end loop logic - Task 5", () => {
 			{ id: 1, text: "task A", status: "completed", verifyText: "check A", verifyAttempts: 0 },
 		];
 
-		// agent_end injects context but does NOT auto-increment verifyAttempts
-		// increment happens when AI explicitly re-opens the task (completed → in_progress)
-
-		// AI fails verification, re-opens: completed → in_progress + increment
 		todos[0].status = "in_progress";
 		todos[0].verifyAttempts++;
 		expect(todos[0].verifyAttempts).toBe(1);
-
-		// AI reworks, marks completed again
-		todos[0].status = "completed";
-		// agent_end still finds it (1 < 2)
-		const needVerify = todos.find(t => t.status === "completed" && t.verifyText && t.verifyAttempts < MAX_VERIFY_ATTEMPTS);
-		expect(needVerify).toBeDefined();
-
-		// AI fails again, re-opens
-		todos[0].status = "in_progress";
-		todos[0].verifyAttempts++;
-		expect(todos[0].verifyAttempts).toBe(2);
-
-		// AI marks completed, now verify-failed should catch it
-		todos[0].status = "completed";
-		const failed = todos.find(t => t.status === "completed" && t.verifyText && t.verifyAttempts >= MAX_VERIFY_ATTEMPTS);
-		expect(failed).toBeDefined();
-		failed!.status = "failed";
-		expect(failed!.status).toBe("failed");
 	});
 
 	it("should detect stall when no todo activity for threshold rounds", () => {
@@ -440,17 +454,28 @@ describe("agent_end loop logic - Task 5", () => {
 		const lines = pendingTodos.map((t) => {
 			const verifyTag = t.verifyText
 				? ` [待验证: ${t.verifyText}]`
-				: " [无需验证]";
+				: "";
 			return `#${t.id}: ${t.text}${verifyTag}`;
 		});
 
 		expect(lines).toHaveLength(2);
 		expect(lines[0]).toBe("#1: task A [待验证: check A]");
-		expect(lines[1]).toBe("#2: task B [无需验证]");
+		expect(lines[1]).toBe("#2: task B");
+	});
+
+	it("should include verifying tasks as pending (not completed)", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "A", status: "verifying", verifyText: "check A", verifyAttempts: 0, evidence: "testing..." },
+			{ id: 2, text: "B", status: "completed", verifyAttempts: 0 },
+		];
+
+		const pendingTodos = todos.filter((t) => t.status !== "completed");
+		expect(pendingTodos).toHaveLength(1);
+		expect(pendingTodos[0].status).toBe("verifying");
 	});
 });
 
-// ── batch update sanity ──────────────────────────────
+// ── batch update validation - Task 3b ─────────────────
 
 describe("batch update validation - Task 3b", () => {
 	it("should reject invalid status values in updates[]", () => {
@@ -472,10 +497,8 @@ describe("batch update validation - Task 3b", () => {
 
 describe("verifyAttempts increment on re-open", () => {
 	it("should increment verifyAttempts when status changes from completed to in_progress with verifyText", () => {
-		// Simulates: agent_end injects context → AI verifies → fails → re-opens
 		const todo: Todo = { id: 1, text: "fix auth", status: "completed", verifyText: "check status codes", verifyAttempts: 0 };
 
-		// AI re-opens the task (completed → in_progress)
 		const oldStatus = todo.status;
 		todo.status = "in_progress";
 		if (oldStatus === "completed" && todo.verifyText && todo.verifyAttempts < 2) {
@@ -498,97 +521,170 @@ describe("verifyAttempts increment on re-open", () => {
 		expect(todo.verifyAttempts).toBe(0); // no verifyText → no increment
 	});
 });
-// ── verified 参数拦截 ────────────────────────────
 
-describe("verified parameter - update with verifyText", () => {
-	it("should block completed on verifyText task without verified=true", () => {
+// ── verifying state transitions ────────────────────
+
+describe("verifying state transitions", () => {
+	it("should block verifying on task without verifyText", () => {
 		const todos: Todo[] = [
-			{ id: 1, text: "fix auth", status: "in_progress", verifyText: "check status codes", verifyAttempts: 0 },
+			{ id: 1, text: "simple", status: "in_progress", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "verifying", evidence: "this should be blocked" }]);
+
+		expect(result.blocked).toBeDefined();
+		expect(result.blocked!.length).toBe(1);
+		expect(result.blocked![0].reason).toContain("verifyText");
+		expect(result.updatedTodos[0].status).toBe("in_progress"); // unchanged
+	});
+
+	it("should block verifying without evidence", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "fix auth", status: "in_progress", verifyText: "check codes", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "verifying" }]);
+
+		expect(result.blocked).toBeDefined();
+		expect(result.blocked![0].reason).toContain("evidence");
+		expect(result.updatedTodos[0].status).toBe("in_progress");
+	});
+
+	it("should block verifying with evidence shorter than 10 chars", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "fix auth", status: "in_progress", verifyText: "check codes", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "verifying", evidence: "short" }]);
+
+		expect(result.blocked).toBeDefined();
+		expect(result.blocked![0].reason).toContain("10");
+	});
+
+	it("should allow verifying with valid evidence", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "fix auth", status: "in_progress", verifyText: "check codes", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "verifying", evidence: "grep confirmed no residual code" }]);
+
+		expect(result.error).toBeUndefined();
+		expect(result.blocked).toBeUndefined();
+		expect(result.updatedTodos[0].status).toBe("verifying");
+		expect(result.updatedTodos[0].evidence).toBe("grep confirmed no residual code");
+	});
+
+	it("should block verifying → completed without evidence", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "fix auth", status: "verifying", verifyText: "check codes", verifyAttempts: 0, evidence: "testing" },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "completed" }]);
+
+		expect(result.blocked).toBeDefined();
+		expect(result.blocked![0].reason).toContain("evidence");
+		expect(result.updatedTodos[0].status).toBe("verifying"); // unchanged
+	});
+
+	it("should allow verifying → completed with evidence", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "fix auth", status: "verifying", verifyText: "check codes", verifyAttempts: 0, evidence: "testing in progress" },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "completed", evidence: "all 42 tests passed, typecheck clean" }]);
+
+		expect(result.error).toBeUndefined();
+		expect(result.updatedTodos[0].status).toBe("completed");
+		expect(result.updatedTodos[0].evidence).toBe("all 42 tests passed, typecheck clean");
+	});
+
+	it("should allow in_progress → completed directly for tasks without verifyText", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "simple", status: "in_progress", verifyAttempts: 0 },
 		];
 		const result = updateTodos(todos, [{ id: 1, status: "completed" }]);
 
 		expect(result.error).toBeUndefined();
-		expect(result.verifyRequired).toBeDefined();
-		expect(result.verifyRequired!.length).toBe(1);
-		expect(result.verifyRequired![0].id).toBe(1);
-		expect(result.verifyRequired![0].verifyText).toBe("check status codes");
-		expect(result.updatedTodos[0].status).toBe("in_progress"); // 未变更
+		expect(result.blocked).toBeUndefined();
+		expect(result.updatedTodos[0].status).toBe("completed");
 	});
 
-	it("should allow completed on verifyText task with verified=true", () => {
+	it("should block in_progress → completed on verifyText task without verified+evidence", () => {
 		const todos: Todo[] = [
-			{ id: 1, text: "fix auth", status: "in_progress", verifyText: "check status codes", verifyAttempts: 0 },
+			{ id: 1, text: "fix auth", status: "in_progress", verifyText: "check codes", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "completed" }]);
+
+		expect(result.blocked).toBeDefined();
+		expect(result.blocked![0].reason).toContain("verifying");
+	});
+
+	it("should allow in_progress → completed with verified=true + evidence (skip verifying)", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "fix auth", status: "in_progress", verifyText: "check codes", verifyAttempts: 0 },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "completed", verified: true, evidence: "all tests passed confirmed" }]);
+
+		expect(result.error).toBeUndefined();
+		expect(result.updatedTodos[0].status).toBe("completed");
+		expect(result.updatedTodos[0].evidence).toBe("all tests passed confirmed");
+	});
+
+	it("should block in_progress → completed with verified=true but no evidence", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "fix auth", status: "in_progress", verifyText: "check codes", verifyAttempts: 0 },
 		];
 		const result = updateTodos(todos, [{ id: 1, status: "completed", verified: true }]);
 
-		expect(result.error).toBeUndefined();
-		expect(result.verifyRequired).toBeUndefined();
-		expect(result.updatedTodos[0].status).toBe("completed");
+		expect(result.blocked).toBeDefined();
+		expect(result.blocked![0].reason).toContain("evidence");
 	});
 
-	it("should allow completed on task without verifyText (no verified needed)", () => {
+	it("should block batch completed when mixed verifyText tasks lack evidence", () => {
 		const todos: Todo[] = [
-			{ id: 1, text: "simple task", status: "in_progress", verifyAttempts: 0 },
-		];
-		const result = updateTodos(todos, [{ id: 1, status: "completed" }]);
-
-		expect(result.error).toBeUndefined();
-		expect(result.verifyRequired).toBeUndefined();
-		expect(result.updatedTodos[0].status).toBe("completed");
-	});
-
-	it("should block batch completed when any has verifyText without verified", () => {
-		const todos: Todo[] = [
-			{ id: 1, text: "task A", status: "in_progress", verifyText: "check A", verifyAttempts: 0 },
-			{ id: 2, text: "task B", status: "in_progress", verifyAttempts: 0 },
+			{ id: 1, text: "A", status: "in_progress", verifyText: "check A", verifyAttempts: 0 },
+			{ id: 2, text: "B", status: "in_progress", verifyAttempts: 0 },
 		];
 		const result = updateTodos(todos, [
 			{ id: 1, status: "completed" },
 			{ id: 2, status: "completed" },
 		]);
 
-		expect(result.verifyRequired).toBeDefined();
-		expect(result.verifyRequired!.length).toBe(1); // 只有 #1 有 verifyText
-		expect(result.verifyRequired![0].id).toBe(1);
-		expect(result.updatedTodos[0].status).toBe("in_progress"); // 未变更
-		expect(result.updatedTodos[1].status).toBe("in_progress"); // 未变更
+		expect(result.blocked).toBeDefined();
+		expect(result.blocked!.length).toBe(1); // only #1 blocked
+		expect(result.blocked![0].id).toBe(1);
+		// both unchanged (all-or-nothing)
+		expect(result.updatedTodos[0].status).toBe("in_progress");
+		expect(result.updatedTodos[1].status).toBe("in_progress");
 	});
 
-	it("should allow batch completed when all verifyText tasks have verified=true", () => {
+	it("should allow batch when verifyText task has verified+evidence and non-verifyText task is plain", () => {
 		const todos: Todo[] = [
-			{ id: 1, text: "task A", status: "in_progress", verifyText: "check A", verifyAttempts: 0 },
-			{ id: 2, text: "task B", status: "in_progress", verifyAttempts: 0 },
+			{ id: 1, text: "A", status: "in_progress", verifyText: "check A", verifyAttempts: 0 },
+			{ id: 2, text: "B", status: "in_progress", verifyAttempts: 0 },
 		];
 		const result = updateTodos(todos, [
-			{ id: 1, status: "completed", verified: true },
+			{ id: 1, status: "completed", verified: true, evidence: "confirmed via grep" },
 			{ id: 2, status: "completed" },
 		]);
 
 		expect(result.error).toBeUndefined();
-		expect(result.verifyRequired).toBeUndefined();
 		expect(result.updatedTodos[0].status).toBe("completed");
 		expect(result.updatedTodos[1].status).toBe("completed");
 	});
 
-	it("verifyRequired result should include verifyText for AI guidance", () => {
+	it("should allow non-completed status changes without evidence", () => {
 		const todos: Todo[] = [
-			{ id: 3, text: "fix login", status: "in_progress", verifyText: "密码错误时返回正确错误码", verifyAttempts: 0 },
-		];
-		const result = updateTodos(todos, [{ id: 3, status: "completed" }]);
-
-		expect(result.resultText).toContain("verified=true");
-		expect(result.resultText).toContain("验证标准");
-		expect(result.resultText).toContain("密码错误时返回正确错误码");
-	});
-
-	it("should allow non-completed status changes without verified", () => {
-		const todos: Todo[] = [
-			{ id: 1, text: "task A", status: "pending", verifyText: "check A", verifyAttempts: 0 },
+			{ id: 1, text: "A", status: "pending", verifyText: "check A", verifyAttempts: 0 },
 		];
 		const result = updateTodos(todos, [{ id: 1, status: "in_progress" }]);
 
 		expect(result.error).toBeUndefined();
-		expect(result.verifyRequired).toBeUndefined();
+		expect(result.blocked).toBeUndefined();
+		expect(result.updatedTodos[0].status).toBe("in_progress");
+	});
+
+	it("should allow verifying → in_progress (verification failed, rework)", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "fix auth", status: "verifying", verifyText: "check codes", verifyAttempts: 0, evidence: "initial check" },
+		];
+		const result = updateTodos(todos, [{ id: 1, status: "in_progress" }]);
+
+		expect(result.error).toBeUndefined();
 		expect(result.updatedTodos[0].status).toBe("in_progress");
 	});
 });

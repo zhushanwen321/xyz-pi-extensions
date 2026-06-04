@@ -35,8 +35,9 @@ All tests are under `extensions/todo/src/__tests__/` matching existing test conv
 | id | number | Unique identifier |
 | text | string | Task description (TUI visible) |
 | verifyText | string? | Verification logic (AI readable only) |
-| status | "pending" \| "in_progress" \| "completed" \| "failed" | Task lifecycle status |
+| status | "pending" \| "in_progress" \| "verifying" \| "completed" \| "failed" | Task lifecycle status |
 | verifyAttempts | number | Failed verification count (0/1/2) |
+| evidence | string? | Verification conclusion, written on verifying/completed |
 
 #### Function: migrateTodo
 
@@ -52,7 +53,7 @@ All tests are under `extensions/todo/src/__tests__/` matching existing test conv
 | STALL_THRESHOLD | 5 | Rounds without any todo activity before marking stalled |
 | REMINDER_INTERVAL | 3 | Rounds since last todo call before injecting reminder |
 | MAX_VERIFY_ATTEMPTS | 2 | Max failed verification retries before marking failed |
-| VALID_STATUSES | "pending"\|"in_progress"\|"completed"\|"failed" | Allowed status values |
+| VALID_STATUSES | "pending"\|"in_progress"\|"verifying"\|"completed"\|"failed" | Allowed status values |
 
 #### Data: TodoParams (typebox schema)
 
@@ -65,7 +66,7 @@ All tests are under `extensions/todo/src/__tests__/` matching existing test conv
 | verifyTexts | string[]? | Verification text list (batch add, NEW) |
 | ids | number[]? | Todo ID list (batch delete) |
 | status | string? | Target status (single update) |
-| updates | Array\<{id:number, status?:string, text?:string}\>? | Batch updates (NEW, takes priority over single update params) |
+| updates | Array\<{id:number, status?:string, text?:string, verified?:boolean, evidence?:string}\>? | Batch updates (NEW, takes priority over single update params) |
 
 ## Spec Coverage Matrix
 

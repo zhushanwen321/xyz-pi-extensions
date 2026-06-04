@@ -50,12 +50,14 @@ const TodoParams = Type.Object({
 				id: Type.Number(),
 				status: Type.Optional(Type.String()),
 				text: Type.Optional(Type.String()),
-				verified: Type.Optional(Type.Boolean({ description: "Required true when marking completed on tasks with verifyText" })),
+				verified: Type.Optional(Type.Boolean({ description: "Required true when skipping verifying to mark completed on tasks with verifyText" })),
+				evidence: Type.Optional(Type.String({ description: "Verification evidence (≥10 chars, required for verifying→completed or in_progress→verifying)" })),
 			}),
 			{ description: "Batch updates array (takes priority over single id/status/text)" },
 		),
 	),
-	verified: Type.Optional(Type.Boolean({ description: "Required true when marking completed on a task with verifyText" })),
+	verified: Type.Optional(Type.Boolean({ description: "Required true when skipping verifying to mark completed on a task with verifyText" })),
+	evidence: Type.Optional(Type.String({ description: "Verification evidence (≥10 chars, required for verifying/completed on tasks with verifyText)" })),
 });
 
 // ── 常量 ────────────────────────────────────────────
@@ -112,14 +114,25 @@ class TodoListComponent {
 				const mark =
 					todo.status === "completed"
 						? th.fg("success", "\u2713")
-						: todo.status === "in_progress"
-							? th.fg("warning", "\u25cf")
-							: todo.status === "failed"
-								? th.fg("error", "\u2717")
-								: th.fg("dim", "\u25cb");
+						: todo.status === "verifying"
+							? th.fg("warning", "\u25d0")
+							: todo.status === "in_progress"
+								? th.fg("warning", "\u25cf")
+								: todo.status === "failed"
+									? th.fg("error", "\u2717")
+									: th.fg("dim", "\u25cb");
 				const id = th.fg("accent", `#${todo.id}`);
 				const text = todo.status === "completed" ? th.fg("dim", todo.text) : th.fg("text", todo.text);
-				const verifyTag = todo.verifyText ? th.fg("warning", " [待验证]") : th.fg("dim", " [无需验证]");
+				let verifyTag = "";
+				if (todo.status === "verifying") {
+					verifyTag = th.fg("warning", ` [验证中${todo.evidence ? ": " + todo.evidence.slice(0, 30) : ""}]`);
+				} else if (todo.verifyText && todo.status !== "completed") {
+					verifyTag = th.fg("warning", " [待验证]");
+				} else if (todo.status === "completed" && todo.verifyText) {
+					verifyTag = th.fg("success", " [已验证]");
+				} else if (todo.verifyText === undefined) {
+					verifyTag = th.fg("dim", " [无需验证]");
+				}
 				lines.push(truncateToWidth(`  ${mark} ${id} ${text}${verifyTag}`, width));
 			}
 		}
@@ -170,14 +183,25 @@ function renderWidgetLines(todoList: Todo[], th: Theme): string[] {
 		const mark =
 			t.status === "completed"
 				? th.fg("success", "\u2713")
-				: t.status === "in_progress"
-					? th.fg("warning", "\u25cf")
-					: t.status === "failed"
-						? th.fg("error", "\u2717")
-						: th.fg("dim", "\u25cb");
+				: t.status === "verifying"
+					? th.fg("warning", "\u25d0")
+					: t.status === "in_progress"
+						? th.fg("warning", "\u25cf")
+						: t.status === "failed"
+							? th.fg("error", "\u2717")
+							: th.fg("dim", "\u25cb");
 		const id = th.fg("accent", `#${t.id}`);
 		const text = t.status === "completed" ? th.fg("dim", t.text) : th.fg("text", t.text);
-		const verifyTag = t.verifyText ? th.fg("warning", " [待验证]") : th.fg("dim", " [无需验证]");
+		let verifyTag = "";
+		if (t.status === "verifying") {
+			verifyTag = th.fg("warning", ` [验证中${t.evidence ? ": " + t.evidence.slice(0, 30) : ""}]`);
+		} else if (t.verifyText && t.status !== "completed") {
+			verifyTag = th.fg("warning", " [待验证]");
+		} else if (t.status === "completed" && t.verifyText) {
+			verifyTag = th.fg("success", " [已验证]");
+		} else if (t.verifyText === undefined) {
+			verifyTag = th.fg("dim", " [无需验证]");
+		}
 		lines.push(`  ${mark} ${id} ${text}${verifyTag}`);
 	}
 
@@ -208,14 +232,25 @@ function buildTodoListText(todoList: Todo[], options: { expanded: boolean }, the
 		const mark =
 			status === "completed"
 				? theme.fg("success", "\u2713")
-				: status === "in_progress"
-					? theme.fg("warning", "\u25cf")
-					: status === "failed"
-						? theme.fg("error", "\u2717")
-						: theme.fg("dim", "\u25cb");
+				: status === "verifying"
+					? theme.fg("warning", "\u25d0")
+					: status === "in_progress"
+						? theme.fg("warning", "\u25cf")
+						: status === "failed"
+							? theme.fg("error", "\u2717")
+							: theme.fg("dim", "\u25cb");
 		const itemText =
 			status === "completed" ? theme.fg("dim", t.text) : theme.fg("muted", t.text);
-		const verifyTag = t.verifyText ? theme.fg("warning", " [待验证]") : theme.fg("dim", " [无需验证]");
+		let verifyTag = "";
+		if (status === "verifying") {
+			verifyTag = theme.fg("warning", ` [验证中${t.evidence ? ": " + t.evidence.slice(0, 30) : ""}]`);
+		} else if (t.verifyText && status !== "completed") {
+			verifyTag = theme.fg("warning", " [待验证]");
+		} else if (status === "completed" && t.verifyText) {
+			verifyTag = theme.fg("success", " [已验证]");
+		} else if (t.verifyText === undefined) {
+			verifyTag = theme.fg("dim", " [无需验证]");
+		}
 		listText += `\n${mark} ${theme.fg("accent", `#${t.id}`)} ${itemText}${verifyTag}`;
 	}
 	if (!options.expanded && todoList.length > MAX_COLLAPSED_ITEMS) {
@@ -309,18 +344,21 @@ export default function (pi: ExtensionAPI) {
 		const completedCount = todos.filter((t) => t.status === "completed").length;
 		const lines = pendingTodos
 			.map((t) => {
-				const verifyTag = t.verifyText
-					? ` [待验证: ${t.verifyText}]`
-					: " [无需验证]";
+				let verifyTag = "";
+				if (t.status === "verifying") {
+					verifyTag = ` [验证中${t.evidence ? ": " + t.evidence : ""}] → 需要 evidence 完成验证`;
+				} else if (t.verifyText) {
+					verifyTag = ` [待验证: ${t.verifyText}]`;
+				}
 				return `#${t.id}: ${t.text}${verifyTag}`;
 			})
 			.join("\n");
-		return `<todo_context>\n[TODO] Turn ${turnCount} — ${pendingCount} tasks pending, ${completedCount} completed\n${lines}\n\nRules:\n- 优先使用 updates[] 批量更新\n- [待验证] 的任务必须传 verified=true 才能标记 completed\n- 全部完成后工具自动闭合\n</todo_context>`;
+		return `<todo_context>\n[TODO] Turn ${turnCount} — ${pendingCount} tasks pending, ${completedCount} completed\n${lines}\n\nRules:\n- 优先使用 updates[] 批量更新\n- 有 verifyText 的任务: 先标 verifying(evidence="验证进度") → 再标 completed(evidence="验证结论")\n- 无 verifyText 的任务可直接 completed\n- 全部完成后工具自动闭合\n</todo_context>`;
 	}
 
 	// ── Tool execute handler ─────────────────────────────
 	function executeTodoAction(
-		params: { action: string; text?: string; id?: number; texts?: string[]; ids?: number[]; status?: string; verifyTexts?: string[]; updates?: Array<{ id: number; status?: string; text?: string; verified?: boolean }>; verified?: boolean },
+		params: { action: string; text?: string; id?: number; texts?: string[]; ids?: number[]; status?: string; verifyTexts?: string[]; updates?: Array<{ id: number; status?: string; text?: string; verified?: boolean; evidence?: string }>; verified?: boolean; evidence?: string },
 		ctx: ExtensionContext,
 	) {
 		let resultText = "";
@@ -391,15 +429,15 @@ export default function (pi: ExtensionAPI) {
 					todos = result.updatedTodos;
 					resultText = result.resultText || "";
 
-					// 检查是否有验证拦截
-					if (result.verifyRequired && result.verifyRequired.length > 0) {
+					// 检查是否有状态转换拦截
+					if (result.blocked && result.blocked.length > 0) {
 						return {
 							content: [{ type: "text" as const, text: resultText }],
 							details: {
 								action: "update" as const,
 								todos: [...todos],
 								nextId,
-								error: "verify required",
+								error: "blocked",
 								_render: buildRender(todos),
 							} as TodoDetails,
 						};
@@ -480,22 +518,46 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 
-				// 验证拦截：有 verifyText 的任务 → completed 时需要 verified=true
-				if (
-					params.status === "completed" &&
-					params.verified !== true &&
-					todo.verifyText
-				) {
-					return {
-						content: [{ type: "text" as const, text: `⚠️ Task #${todo.id} "${todo.text}" has verification requirement.\nPlease verify first: ${todo.verifyText}\nThen call: todo update(id=${todo.id}, status=completed, verified=true)` }],
-						details: {
-							action: "update" as const,
-							todos: [...todos],
-							nextId,
-							error: "verify required",
-							_render: buildRender(todos),
-						} as TodoDetails,
-					};
+				// 状态转换拦截
+				const MIN_EVIDENCE_LEN = 10;
+
+				if (params.status === "verifying") {
+					if (!todo.verifyText) {
+						return {
+							content: [{ type: "text" as const, text: `Error: #${todo.id} 无 verifyText，不能进入 verifying 状态` }],
+							details: { action: "update" as const, todos: [...todos], nextId, error: "no verifyText", _render: buildRender(todos) } as TodoDetails,
+						};
+					}
+					if (!params.evidence || params.evidence.trim().length < MIN_EVIDENCE_LEN) {
+						return {
+							content: [{ type: "text" as const, text: `⚠️ Task #${todo.id} 进入 verifying 需要 evidence（≥${MIN_EVIDENCE_LEN} 字符），说明当前验证进度。\n验证标准: ${todo.verifyText}` }],
+							details: { action: "update" as const, todos: [...todos], nextId, error: "evidence required", _render: buildRender(todos) } as TodoDetails,
+						};
+					}
+				} else if (params.status === "completed") {
+					if (todo.verifyText && todo.status !== "verifying") {
+						// 有 verifyText 但未经过 verifying → 需要 verified=true + evidence
+						if (params.verified !== true) {
+							return {
+								content: [{ type: "text" as const, text: `⚠️ Task #${todo.id} "${todo.text}" 有验证要求。\n请先: todo update(id=${todo.id}, status=verifying, evidence="验证进度")\n或跳过: todo update(id=${todo.id}, status=completed, verified=true, evidence="验证结论")\n验证标准: ${todo.verifyText}` }],
+								details: { action: "update" as const, todos: [...todos], nextId, error: "verify required", _render: buildRender(todos) } as TodoDetails,
+							};
+						}
+						if (!params.evidence || params.evidence.trim().length < MIN_EVIDENCE_LEN) {
+							return {
+								content: [{ type: "text" as const, text: `⚠️ Task #${todo.id} 跳过 verifying 直接 completed 时需要 evidence（≥${MIN_EVIDENCE_LEN} 字符），说明验证结论。` }],
+								details: { action: "update" as const, todos: [...todos], nextId, error: "evidence required", _render: buildRender(todos) } as TodoDetails,
+							};
+						}
+					} else if (todo.status === "verifying") {
+						// verifying → completed: 需要 evidence
+						if (!params.evidence || params.evidence.trim().length < MIN_EVIDENCE_LEN) {
+							return {
+								content: [{ type: "text" as const, text: `⚠️ Task #${todo.id} 从 verifying 到 completed 需要 evidence（≥${MIN_EVIDENCE_LEN} 字符），说明验证结论。` }],
+								details: { action: "update" as const, todos: [...todos], nextId, error: "evidence required", _render: buildRender(todos) } as TodoDetails,
+							};
+						}
+					}
 				}
 
 				// T5 完成引导：判断是否是最后一个 pending 即将完成
@@ -510,10 +572,16 @@ export default function (pi: ExtensionAPI) {
 				if (params.status !== undefined) {
 					const oldStatus = todo.status;
 					todo.status = params.status as Todo["status"];
-					// 检测验证失败: AI 将 completed 任务改回 in_progress (表明验证失败，重新实现)
-					if (oldStatus === "completed" && params.status === "in_progress" && todo.verifyText && todo.verifyAttempts < MAX_VERIFY_ATTEMPTS) {
-						todo.verifyAttempts++;
-						verifyNudgedIds.delete(todo.id); // 重置，允许下次 completed 时重新提醒
+					// 写入 evidence
+					if (params.evidence && (params.status === "verifying" || params.status === "completed")) {
+						todo.evidence = params.evidence.trim();
+					}
+					// 检测验证失败: completed/verifying → in_progress
+					if (params.status === "in_progress" && todo.verifyText && todo.verifyAttempts < MAX_VERIFY_ATTEMPTS) {
+						if (oldStatus === "completed" || oldStatus === "verifying") {
+							todo.verifyAttempts++;
+							verifyNudgedIds.delete(todo.id);
+						}
 					}
 				}
 				if (params.text !== undefined) {
@@ -679,16 +747,19 @@ export default function (pi: ExtensionAPI) {
 			const pendingTodos = todos.filter((t) => t.status !== "completed");
 			if (pendingTodos.length === 0) return undefined;
 
-			// 格式化 pending 任务 (含 verifyText 供 AI 阅读)
+			// 格式化 pending 任务 (含 verifying 状态和 verifyText)
 			const lines = pendingTodos.map((t) => {
-				const verifyTag = t.verifyText
-					? ` [待验证: ${t.verifyText}]`
-					: " [无需验证]";
+				let verifyTag = "";
+				if (t.status === "verifying") {
+					verifyTag = ` [验证中${t.evidence ? ": " + t.evidence : ""}] → 需要 evidence 完成验证`;
+				} else if (t.verifyText) {
+					verifyTag = ` [待验证: ${t.verifyText}]`;
+				}
 				return `#${t.id}: ${t.text}${verifyTag}`;
 			});
 
 			const contextStr =
-				`<todo_context>\n[TODO] ${pendingTodos.length} tasks pending\n${lines.join("\n")}\n\nRules:\n- 优先使用 updates[] 批量更新\n- [待验证] 的任务必须验证通过后才能 completed\n- 全部完成后工具自动闭合\n</todo_context>`;
+				`<todo_context>\n[TODO] ${pendingTodos.length} tasks pending\n${lines.join("\n")}\n\nRules:\n- 有 verifyText 的任务: 先标 verifying(evidence="验证进度") → 再标 completed(evidence="验证结论")\n- 无 verifyText 的任务可直接 completed\n- 全部完成后工具自动闭合\n</todo_context>`;
 
 			// 更新状态栏
 			ctx.ui.setStatus("todo", `📋 ${pendingTodos.length} pending`);
@@ -744,7 +815,7 @@ export default function (pi: ExtensionAPI) {
 				refreshDisplay(_ctx);
 				pi.sendUserMessage(
 					`<todo_context>\n[TODO] 验证失败: Task ${failedIds.map((id) => "#" + id).join(", ")} 已重试 ${MAX_VERIFY_ATTEMPTS} 次仍未通过，已标记为 failed。请决定是否手动 override。\n</todo_context>`,
-					{ deliverAs: "steer" },
+					{ deliverAs: "steer", customType: "todo-context" },
 				);
 				return;
 			}
@@ -755,13 +826,13 @@ export default function (pi: ExtensionAPI) {
 				userMessageCount - lastTodoCallCount >= STALL_THRESHOLD
 			) {
 				stallNotified = true;
-				pi.sendUserMessage(buildPendingContext(userMessageCount), { deliverAs: "steer" });
+				pi.sendUserMessage(buildPendingContext(userMessageCount), { deliverAs: "steer", customType: "todo-context" });
 				return;
 			}
 
 			// 4. 提醒: REMINDER_INTERVAL 轮未调用 todo
 			if (userMessageCount - lastTodoCallCount >= REMINDER_INTERVAL) {
-				pi.sendUserMessage(buildPendingContext(userMessageCount), { deliverAs: "steer" });
+				pi.sendUserMessage(buildPendingContext(userMessageCount), { deliverAs: "steer", customType: "todo-context" });
 				return;
 			}
 		} catch (e) {
@@ -787,8 +858,9 @@ export default function (pi: ExtensionAPI) {
 			"[Usage] 多步骤工作（3+步）时使用。AI 自发创建，无需用户触发",
 			"[Goal 冲突] /goal 激活后禁止使用 todo — 改用 add_subtasks",
 			"[批量优先] 完成多项任务时使用 updates[] 批量更新，减少工具调用次数",
-			"[验证] 有 verifyText 的任务，必须传 verified=true 才能标记 completed。先验证后确认",
-			"[验证失败] 验证失败 2 次后任务进入 failed 状态，由用户决定",
+			"[验证流程] 有 verifyText 的任务: in_progress → verifying(evidence=\"验证进度\") → completed(evidence=\"验证结论\")。evidence ≥ 10 字符",
+			"[跳过验证] 有 verifyText 但想直接 completed: 必须传 verified=true + evidence",
+			"[验证失败] verifying/completed 被改回 in_progress 时 verifyAttempts++，2 次后进入 failed",
 			"[自动闭合] 全部完成后工具自动清理，无需手动 clear",
 			"[Not for] 单步操作、简单对话、/goal 已激活时",
 		],

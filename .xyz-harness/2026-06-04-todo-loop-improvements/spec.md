@@ -25,14 +25,14 @@ interface Todo {
   id: number;
   text: string;           // 任务描述，TUI 展示
   verifyText?: string;    // 验证描述（可选），AI 读取但 TUI 不展示具体内容
-  status: "pending" | "in_progress" | "completed" | "failed";
+  status: "pending" | "in_progress" | "verifying" | "completed" | "failed";
   verifyAttempts: number;  // 已失败的验证次数
 }
 ```
 
 - `text`：不变，TUI 显示
 - `verifyText?`：新增。存在时 TUI 行末显示 `[待验证]`（不含具体内容），不存在时显示 `[无需验证]`。AI 通过 `<todo_context>` 注入读到 `verifyText` 原文，作为验证标准
-- `status`：新增 `"failed"` 状态（验证失败 2 次后进入），允许用户手动 override
+- `status`：新增 `"failed"` 和 `"verifying"` 状态（验证失败 2 次后进入 `failed`；`verifying` 为验证进行中的过渡态），允许用户手动 override
 - `verifyAttempts`：新增。0/1/2，达到 2 后不再自动重试
 
 向后兼容：`verifyText` 缺失视为 `[无需验证]`，`verifyAttempts` 缺失视为 0，旧 `"completed"` 状态保持不变。
@@ -78,8 +78,8 @@ updates?: Array<{
 `list` action 的文本输出（AI 直接读取）中，有 verifyText 的任务追加 `| 验证: <verifyText>` 后缀。TUI 显示不变（`renderResult` 仅显示 `[待验证]` 标签）。
 
 ```
-[pending] #1: 修复登录模块 | 验证: 密码错误时返回正确错误码
-[completed] #2: 创建目录
+[x] #1: 修复登录模块 | 验证: 密码错误时返回正确错误码
+[x] #2: 创建目录
 ```
 
 ### FR-4: `agent_end` 循环（核心新增）
@@ -156,13 +156,12 @@ Context 注入进 AI 上下文但不显示在 TUI 消息中。`before_agent_star
 | `STALL_THRESHOLD` | 5 | 任务无更新的停滞阈值（轮） |
 | `REMINDER_INTERVAL` | 3 | 距上次 todo 调用的提醒间隔（轮） |
 | `MAX_VERIFY_ATTEMPTS` | 2 | 验证最大重试次数 |
-| `MAX_TASK_DESC_LENGTH` | 80 | 任务描述最大长度（已有，不变） |
 
 ## Acceptance Criteria
 
 ### AC-1: 数据模型
 - [ ] `Todo` 接口包含 `verifyText?: string` 字段
-- [ ] `Todo` 接口包含 `status: "failed"` 枚举值
+- [ ] `Todo` 接口包含 `status: "failed"` 和 `status: "verifying"` 枚举值
 - [ ] `Todo` 接口包含 `verifyAttempts: number` 字段
 - [ ] 旧 session 数据反序列化时，缺失字段自动补默认值
 
