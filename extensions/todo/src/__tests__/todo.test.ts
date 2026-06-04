@@ -292,33 +292,101 @@ describe("agent_end loop logic - Task 5", () => {
 		expect(needsVerify).toBeUndefined();
 	});
 
-	it("should detect verify failure when attempts exceed max", () => {
+	it("should detect verify failure when attempts exceed max (completed status)", () => {
 		const todos: Todo[] = [
 			{
 				id: 2,
 				text: "task B",
-				status: "in_progress",
+				status: "completed",
 				verifyText: "check B",
 				verifyAttempts: MAX_VERIFY_ATTEMPTS,
 			},
 		];
 
-		const failed = todos.filter(
+		// Step 1: check verify-failed BEFORE needs-verify
+		const failed = todos.find(
 			(t) =>
+				t.status === "completed" &&
 				t.verifyText &&
-				t.verifyAttempts >= MAX_VERIFY_ATTEMPTS &&
-				t.status === "in_progress",
+				t.verifyAttempts >= MAX_VERIFY_ATTEMPTS,
 		);
 
-		expect(failed).toHaveLength(1);
-		expect(failed[0].id).toBe(2);
+		expect(failed).toBeDefined();
+		expect(failed!.id).toBe(2);
+		expect(failed!.verifyAttempts).toBe(MAX_VERIFY_ATTEMPTS);
 
-		// Simulate status change to failed
-		failed[0].status = "failed";
-		expect(failed[0].status).toBe("failed");
+		// When failed, status changes to failed
+		failed!.status = "failed";
+		expect(failed!.status).toBe("failed");
+
+		// Step 2: after marking failed, needsVerify should NOT find it
+		const needsVerify = todos.find(
+			(t) =>
+				t.status === "completed" &&
+				t.verifyText &&
+				t.verifyAttempts < MAX_VERIFY_ATTEMPTS,
+		);
+		expect(needsVerify).toBeUndefined();
 	});
 
-	it("should not trigger verify for tasks at max attempts", () => {
+	it("should increment verifyAttempts when triggering verification", () => {
+		const todos: Todo[] = [
+			{
+				id: 1,
+				text: "task A",
+				status: "completed",
+				verifyText: "check A",
+				verifyAttempts: 0,
+			},
+		];
+
+		// Step 1: verify-failed check (attempts 0 < 2 → skip)
+		const failed = todos.find(
+			(t) =>
+				t.status === "completed" &&
+				t.verifyText &&
+				t.verifyAttempts >= MAX_VERIFY_ATTEMPTS,
+		);
+		expect(failed).toBeUndefined();
+
+		// Step 2: needs-verify check (attempts 0 < 2 → found)
+		const needsVerify = todos.find(
+			(t) =>
+				t.status === "completed" &&
+				t.verifyText &&
+				t.verifyAttempts < MAX_VERIFY_ATTEMPTS,
+		);
+		expect(needsVerify).toBeDefined();
+
+		// Simulate increment
+		needsVerify!.verifyAttempts++;
+		expect(needsVerify!.verifyAttempts).toBe(1);
+
+		// Second completion: attempts=1 < 2 → verify again → increments to 2
+		const stillNeeds = todos.find(
+			(t) =>
+				t.status === "completed" &&
+				t.verifyText &&
+				t.verifyAttempts < MAX_VERIFY_ATTEMPTS,
+		);
+		expect(stillNeeds).toBeDefined();
+		stillNeeds!.verifyAttempts++;
+		expect(stillNeeds!.verifyAttempts).toBe(2);
+
+		// Third completion: attempts=2 < 2? No → needsVerify undefined
+		// verify-failed check: attempts=2 >= 2? Yes → mark failed
+		const nextFailed = todos.find(
+			(t) =>
+				t.status === "completed" &&
+				t.verifyText &&
+				t.verifyAttempts >= MAX_VERIFY_ATTEMPTS,
+		);
+		expect(nextFailed).toBeDefined();
+		nextFailed!.status = "failed";
+		expect(nextFailed!.status).toBe("failed");
+	});
+
+	it("should mark failed when attempts reach max (verify-failed catches before needs-verify)", () => {
 		const todos: Todo[] = [
 			{
 				id: 1,
@@ -329,13 +397,23 @@ describe("agent_end loop logic - Task 5", () => {
 			},
 		];
 
+		// Step 1 (verify-failed check) should catch this
+		const failed = todos.find(
+			(t) =>
+				t.status === "completed" &&
+				t.verifyText &&
+				t.verifyAttempts >= MAX_VERIFY_ATTEMPTS,
+		);
+		expect(failed).toBeDefined();
+		expect(failed!.id).toBe(1);
+
+		// Step 2 (needs-verify) should NOT find it
 		const needsVerify = todos.find(
 			(t) =>
 				t.status === "completed" &&
 				t.verifyText &&
 				t.verifyAttempts < MAX_VERIFY_ATTEMPTS,
 		);
-
 		expect(needsVerify).toBeUndefined();
 	});
 

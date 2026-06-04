@@ -658,7 +658,26 @@ export default function (pi: ExtensionAPI) {
 	// v3: Task 5 - agent_end: auto-close + stall + verify 循环
 	pi.on("agent_end", async (_event: any, ctx: ExtensionContext) => {
 		try {
-			// 1. 检查是否有待验证任务 (completed + verifyText + attempts < MAX)
+			// 1. 检查验证失败 (completed + verifyText + attempts >= MAX)
+			const verifyFailed = todos.find(
+				(t) =>
+					t.status === "completed" &&
+					t.verifyText &&
+					t.verifyAttempts >= MAX_VERIFY_ATTEMPTS,
+			);
+			if (verifyFailed) {
+				verifyFailed.status = "failed";
+				refreshDisplay(ctx);
+				pi.deliver({
+					deliverAs: "steer",
+					display: false,
+					customType: "todo-context",
+					message: `<todo_context>\n[TODO] Task #${verifyFailed.id} "${verifyFailed.text}" failed verification after ${MAX_VERIFY_ATTEMPTS} attempts.\n</todo_context>`,
+				});
+				return;
+			}
+
+			// 2. 检查待验证任务 (completed + verifyText + attempts < MAX)
 			const needsVerify = todos.find(
 				(t) =>
 					t.status === "completed" &&
@@ -666,32 +685,15 @@ export default function (pi: ExtensionAPI) {
 					t.verifyAttempts < MAX_VERIFY_ATTEMPTS,
 			);
 			if (needsVerify) {
+				needsVerify.verifyAttempts++;
+				refreshDisplay(ctx);
 				pi.deliver({
 					deliverAs: "steer",
 					display: false,
 					customType: "todo-context",
-					message: `<todo_context>\n[TODO] Task #${needsVerify.id} "${needsVerify.text}" needs verification:\n${needsVerify.verifyText}\n</todo_context>`,
+					message: `<todo_context>\n[TODO] Task #${needsVerify.id} "${needsVerify.text}" needs verification (attempt ${needsVerify.verifyAttempts}/${MAX_VERIFY_ATTEMPTS}):\n${needsVerify.verifyText}\n</todo_context>`,
 				});
 				return;
-			}
-
-			// 2. 检查验证失败 (in_progress + 已超过最大尝试)
-			for (const t of todos) {
-				if (
-					t.verifyText &&
-					t.verifyAttempts >= MAX_VERIFY_ATTEMPTS &&
-					t.status === "in_progress"
-				) {
-					t.status = "failed";
-					refreshDisplay(ctx);
-					pi.deliver({
-						deliverAs: "steer",
-						display: false,
-						customType: "todo-context",
-						message: `<todo_context>\n[TODO] Task #${t.id} "${t.text}" failed verification after ${MAX_VERIFY_ATTEMPTS} attempts.\n</todo_context>`,
-					});
-					return;
-				}
 			}
 
 			// 3. 自动清空: 全部完成经过 2 轮
