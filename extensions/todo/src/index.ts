@@ -212,7 +212,8 @@ function buildTodoListText(todoList: Todo[], options: { expanded: boolean }, the
 						: theme.fg("dim", "\u25cb");
 		const itemText =
 			status === "completed" ? theme.fg("dim", t.text) : theme.fg("muted", t.text);
-		listText += `\n${mark} ${theme.fg("accent", `#${t.id}`)} ${itemText}`;
+		const verifyTag = t.verifyText ? theme.fg("warning", " [待验证]") : theme.fg("dim", " [无需验证]");
+		listText += `\n${mark} ${theme.fg("accent", `#${t.id}`)} ${itemText}${verifyTag}`;
 	}
 	if (!options.expanded && todoList.length > MAX_COLLAPSED_ITEMS) {
 		listText += `\n${theme.fg("dim", `... ${todoList.length - MAX_COLLAPSED_ITEMS} more`)}`;
@@ -285,6 +286,7 @@ export default function (pi: ExtensionAPI) {
 	let allCompletedAtCount: number | null = null;
 	let lastTodoCallCount = 0;
 	let stallNotified = false;
+	let verifyNudgedIds = new Set<number>(); // 已发送过验证提醒的任务 ID，避免重复 nag
 
 	// ── 刷新显示（依赖闭包 state） ─────────────────────
 	function refreshDisplay(ctx: ExtensionContext): void {
@@ -467,6 +469,7 @@ export default function (pi: ExtensionAPI) {
 					// 检测验证失败: AI 将 completed 任务改回 in_progress (表明验证失败，重新实现)
 					if (oldStatus === "completed" && params.status === "in_progress" && todo.verifyText && todo.verifyAttempts < MAX_VERIFY_ATTEMPTS) {
 						todo.verifyAttempts++;
+						verifyNudgedIds.delete(todo.id); // 重置，允许下次 completed 时重新提醒
 					}
 				}
 				if (params.text !== undefined) {
@@ -578,6 +581,7 @@ export default function (pi: ExtensionAPI) {
 		allCompletedAtCount = null;
 		lastTodoCallCount = 0;
 		stallNotified = false;
+		verifyNudgedIds = new Set();
 
 		const entries = ctx.sessionManager.getEntries();
 		let latestIdx = -1;
@@ -665,6 +669,11 @@ export default function (pi: ExtensionAPI) {
 	// v3: Task 5 - agent_end: auto-close + stall + verify 循环
 	pi.on("agent_end", async (_event: unknown, ctx: ExtensionContext) => {
 		try {
+			// Helper: 注入 steer context（进 AI 上下文）
+			const injectContext = (content: string) => {
+				pi.sendUserMessage(content, { deliverAs: "steer" });
+			};
+
 			// 1. 检查验证失败 (completed + verifyText + attempts >= MAX)
 			const verifyFailed = todos.find(
 				(t) =>
@@ -675,22 +684,21 @@ export default function (pi: ExtensionAPI) {
 			if (verifyFailed) {
 				verifyFailed.status = "failed";
 				refreshDisplay(ctx);
-				pi.sendUserMessage(`<todo_context>\n[TODO] Task #${verifyFailed.id} "${verifyFailed.text}" failed verification after ${MAX_VERIFY_ATTEMPTS} attempts.\n</todo_context>`, { deliverAs: "steer" });
+				injectContext(`<todo_context>\n[TODO] Turn ${userMessageCount} — Task #${verifyFailed.id} "${verifyFailed.text}" failed verification after ${MAX_VERIFY_ATTEMPTS} attempts.\n</todo_context>`);
 				return;
 			}
 
-			// 2. 检查待验证任务 (completed + verifyText + attempts < MAX)
+			// 2. 检查待验证任务 (completed + verifyText + attempts < MAX + 未提醒过)
 			const needsVerify = todos.find(
 				(t) =>
 					t.status === "completed" &&
 					t.verifyText &&
-					t.verifyAttempts < MAX_VERIFY_ATTEMPTS,
+					t.verifyAttempts < MAX_VERIFY_ATTEMPTS &&
+					!verifyNudgedIds.has(t.id),
 			);
 			if (needsVerify) {
-				// 注意: verifyAttempts 不在 agent_end 中自动递增
-				// 增量在 update handler 中: AI 将 completed→in_progress 时显式表示验证失败
-				// 这确保任务可以保持在 completed 状态（AI 通过验证后不做任何操作）
-				pi.sendUserMessage(`<todo_context>\n[TODO] Task #${needsVerify.id} "${needsVerify.text}" needs verification:\n${needsVerify.verifyText}\n</todo_context>`, { deliverAs: "steer" });
+				verifyNudgedIds.add(needsVerify.id);
+				injectContext(`<todo_context>\n[TODO] Turn ${userMessageCount} — Task #${needsVerify.id} "${needsVerify.text}" needs verification:\n${needsVerify.verifyText}\n</todo_context>`);
 			}
 
 			// 3. 自动清空: 全部完成经过 2 轮
@@ -703,7 +711,7 @@ export default function (pi: ExtensionAPI) {
 				nextId = 1;
 				allCompletedAtCount = null;
 				refreshDisplay(ctx);
-				pi.sendUserMessage(`<todo_context>\n[TODO] All ${count} todos completed, list auto-cleared.\n</todo_context>`, { deliverAs: "steer" });
+				injectContext(`<todo_context>\n[TODO] Turn ${userMessageCount} — All ${count} todos completed, list auto-cleared.\n</todo_context>`);
 				return;
 			}
 
@@ -715,11 +723,13 @@ export default function (pi: ExtensionAPI) {
 				userMessageCount - lastTodoCallCount >= STALL_THRESHOLD
 			) {
 				stallNotified = true;
+				const pendingCount = todos.filter((t) => t.status !== "completed").length;
+				const completedCount = todos.filter((t) => t.status === "completed").length;
 				const pendingText = todos
 					.filter((t) => t.status !== "completed")
 					.map((t) => `#${t.id}: ${t.text}`)
 					.join("\n");
-				pi.sendUserMessage(`<todo_context>\n[TODO] You have ${todos.length} pending tasks:\n${pendingText}\n</todo_context>`, { deliverAs: "steer" });
+				injectContext(`<todo_context>\n[TODO] Turn ${userMessageCount} — ${pendingCount} tasks pending, ${completedCount} completed\n${pendingText}\n</todo_context>`);
 				return;
 			}
 
@@ -729,7 +739,7 @@ export default function (pi: ExtensionAPI) {
 				allCompletedAtCount === null &&
 				userMessageCount - lastTodoCallCount >= REMINDER_INTERVAL
 			) {
-				pi.sendUserMessage(`<todo_context>\n[TODO] You have ${todos.length} tasks. Consider updating progress.\n</todo_context>`, { deliverAs: "steer" });
+				injectContext(`<todo_context>\n[TODO] Turn ${userMessageCount} — You have ${todos.length} tasks. Consider updating progress.\n</todo_context>`);
 				return;
 			}
 		} catch (e) {
@@ -795,19 +805,21 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	// ── Message Renderer: todo-context ───────────────────
-	pi.registerMessageRenderer("todo-context", (message: Record<string, unknown>, _options: unknown, _theme: Theme) => {
-		const text = (typeof message?.message === "string" ? message.message : "") as string;
-		const match = text.match(/\[TODO\]\s*(All\s+)?(\d+)?\s*tasks?\s*(pending|completed|auto-cleared)?/i);
+	// ── registerMessageRenderer for todo-context ───────
+	pi.registerMessageRenderer("todo-context", (message: Record<string, unknown>, _options: unknown, theme: Theme) => {
+		const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+		const match = content.match(/\[TODO\]\s*(?:Turn \d+ — )?(\d+)\s*tasks?\s*(pending|completed)/);
+		let displayText: string;
 		if (match) {
-			const status = match[3]?.toLowerCase() || "";
-			const count = match[2] || "?";
-			if (status === "completed" || status === "auto-cleared") {
-				return new Text(`[TODO] All tasks completed ✓`, 0, 0);
-			}
-			return new Text(`[TODO] ${count} tasks pending`, 0, 0);
+			const count = match[1];
+			displayText = match[2] === "completed"
+				? theme.fg("success", `[TODO] All ${count} tasks completed \u2713`)
+				: theme.fg("warning", `[TODO] ${count} tasks pending`);
+		} else {
+			const firstLine = content.split("\n").find((l: string) => l.includes("[TODO]")) || "[TODO]";
+			displayText = theme.fg("accent", firstLine.trim());
 		}
-		return new Text("[TODO] Pending tasks", 0, 0);
+		return new Text(displayText, 0, 0);
 	});
 
 	// ── Command: /todos ─────────────────────────────────
