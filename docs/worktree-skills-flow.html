@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Worktree Skills 全栈流程图</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-card: #161b22;
+    --bg-card2: #1c2128;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-dim: #8b949e;
+    --text-muted: #484f58;
+    --accent-blue: #58a6ff;
+    --accent-orange: #f0883e;
+    --accent-green: #3fb950;
+    --accent-purple: #bc8cff;
+    --accent-red: #f85149;
+    --accent-yellow: #d29922;
+    --accent-cyan: #39c5cf;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+    line-height: 1.6;
+    padding: 20px;
+    min-width: 1400px;
+  }
+  h1 {
+    text-align: center;
+    font-size: 24px;
+    margin-bottom: 8px;
+    color: var(--accent-blue);
+  }
+  .subtitle {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 13px;
+    margin-bottom: 24px;
+  }
+
+  /* Legend */
+  .legend {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    margin-bottom: 20px;
+    font-size: 12px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-dim);
+  }
+  .legend-dot { width: 12px; height: 12px; border-radius: 3px; }
+  .legend-dot.generic { background: var(--accent-blue); }
+  .legend-dot.hook { background: var(--accent-orange); }
+  .legend-dot.project { background: var(--accent-green); }
+  .legend-dot.optional { background: var(--text-muted); }
+
+  /* ===== Skill Entry Points ===== */
+  .skills-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    justify-content: center;
+  }
+  .skill-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    min-width: 130px;
+    text-align: center;
+    font-size: 12px;
+  }
+  .skill-card .icon {
+    font-size: 18px;
+    margin-bottom: 4px;
+  }
+  .skill-card .name {
+    font-weight: 600;
+    color: var(--accent-blue);
+    font-size: 11px;
+  }
+  .skill-card .desc {
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 3px;
+  }
+
+  /* ===== Main Timeline Container ===== */
+  .timeline-wrapper {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .timeline-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--accent-blue);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* ===== Phase Row ===== */
+  .phase-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 8px;
+    align-items: stretch;
+  }
+  .phase-num {
+    width: 40px;
+    min-width: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 16px;
+    color: var(--accent-blue);
+    border-right: 2px solid var(--border);
+    padding-right: 8px;
+  }
+  .phase-body {
+    flex: 1;
+    display: flex;
+    gap: 12px;
+    align-items: stretch;
+  }
+
+  /* ===== Node Types ===== */
+  .node {
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 11px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .node-title {
+    font-weight: 600;
+    font-size: 12px;
+  }
+  .node-detail {
+    color: var(--text-dim);
+    font-size: 10px;
+    line-height: 1.5;
+  }
+  .node-detail code {
+    background: rgba(255,255,255,0.06);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 9px;
+  }
+
+  .node-generic {
+    background: rgba(88,166,255,0.08);
+    border: 1px solid rgba(88,166,255,0.25);
+  }
+  .node-generic .node-title { color: var(--accent-blue); }
+
+  .node-hook {
+    background: rgba(240,136,62,0.08);
+    border: 1px dashed rgba(240,136,62,0.35);
+  }
+  .node-hook .node-title { color: var(--accent-orange); }
+
+  .node-project {
+    background: rgba(63,185,80,0.08);
+    border: 1px solid rgba(63,185,80,0.25);
+  }
+  .node-project .node-title { color: var(--accent-green); }
+
+  .node-optional {
+    background: rgba(255,255,255,0.03);
+    border: 1px dashed var(--text-muted);
+  }
+  .node-optional .node-title { color: var(--text-dim); }
+
+  .node-wide { min-width: 260px; flex: 1; }
+  .node-narrow { min-width: 180px; }
+
+  /* ===== Arrows ===== */
+  .arrow {
+    display: flex;
+    align-items: center;
+    color: var(--text-muted);
+    font-size: 18px;
+    padding: 0 4px;
+  }
+
+  /* ===== Project Badges ===== */
+  .proj-badges {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
+  .proj-badge {
+    font-size: 9px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .proj-badge.llm { border-color: rgba(188,140,255,0.4); color: var(--accent-purple); }
+  .proj-badge.agent { border-color: rgba(57,197,207,0.4); color: var(--accent-cyan); }
+  .proj-badge.ext { border-color: rgba(63,185,80,0.4); color: var(--accent-green); }
+
+  /* ===== Branch Row (side flows) ===== */
+  .branch-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 8px;
+    padding-left: 52px;
+  }
+  .branch-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    padding: 8px 0;
+    min-width: 80px;
+    text-align: right;
+    border-right: 1px dashed var(--border);
+    margin-right: 8px;
+  }
+
+  /* ===== Side Flow Container ===== */
+  .side-flows {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 20px;
+  }
+  .side-flow {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .side-flow-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent-purple);
+    margin-bottom: 12px;
+  }
+  .side-flow-body {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  /* ===== Project Comparison Table ===== */
+  .comparison-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    margin-top: 12px;
+  }
+  .comparison-table th,
+  .comparison-table td {
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .comparison-table th {
+    background: var(--bg-card2);
+    color: var(--accent-blue);
+    font-weight: 600;
+  }
+  .comparison-table td {
+    color: var(--text-dim);
+  }
+  .comparison-table .has-it {
+    color: var(--accent-green);
+    font-weight: 600;
+  }
+  .comparison-table .none {
+    color: var(--text-muted);
+  }
+
+  /* ===== Hook Detail Panel ===== */
+  .hook-detail {
+    background: var(--bg-card2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 20px;
+  }
+  .hook-detail-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent-orange);
+    margin-bottom: 12px;
+  }
+  .hook-item {
+    display: flex;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .hook-item:last-child { border-bottom: none; }
+  .hook-name {
+    min-width: 200px;
+    font-weight: 600;
+    color: var(--accent-orange);
+    font-size: 12px;
+  }
+  .hook-who {
+    min-width: 140px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .hook-what {
+    flex: 1;
+    font-size: 11px;
+    color: var(--text);
+  }
+
+  /* ===== Section Divider ===== */
+  .section-divider {
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--border), transparent);
+    margin: 24px 0;
+  }
+</style>
+</head>
+<body>
+
+<h1>Worktree Skills 全栈流程</h1>
+<div class="subtitle">
+  8 个 Skill + 5 个 Custom Hook 扩展点 + 4 个项目级定制<br>
+  扫描范围: ~/Code/ 下 11 个项目 | 通用逻辑 (蓝) | 扩展 Hook (橙虚线) | 项目特化 (绿)
+</div>
+
+<!-- Legend -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot generic"></div>通用逻辑 (所有项目共用)</div>
+  <div class="legend-item"><div class="legend-dot hook"></div>扩展 Hook (可选, .bare/custom-hooks/)</div>
+  <div class="legend-item"><div class="legend-dot project"></div>项目特化 (scripts/publish.sh 或 CI 差异)</div>
+  <div class="legend-item"><div class="legend-dot optional"></div>可选/条件分支</div>
+</div>
+
+<!-- ===== Skill Entry Points ===== -->
+<div class="skills-row">
+  <div class="skill-card">
+    <div class="icon">1</div>
+    <div class="name">create-worktree</div>
+    <div class="desc">创建 worktree<br>调用 setup-worktree.sh</div>
+  </div>
+  <div class="skill-card">
+    <div class="icon">2</div>
+    <div class="name">workspace-worktree</div>
+    <div class="desc">管理 workspace<br>list / sync / status</div>
+  </div>
+  <div class="skill-card">
+    <div class="icon">3</div>
+    <div class="name">pr-worktree</div>
+    <div class="desc">提交 PR<br>zcommit + pre-merge-check</div>
+  </div>
+  <div class="skill-card">
+    <div class="icon">4</div>
+    <div class="name">merge-worktree</div>
+    <div class="desc">8 阶段合并发布<br>核心流程引擎</div>
+  </div>
+  <div class="skill-card">
+    <div class="icon">5</div>
+    <div class="name">remove-worktree</div>
+    <div class="desc">清理 worktree<br>阶段 7 调用</div>
+  </div>
+  <div class="skill-card">
+    <div class="icon">6</div>
+    <div class="name">code-review-worktree</div>
+    <div class="desc">代码审查<br>pr-worktree 可选引用</div>
+  </div>
+  <div class="skill-card">
+    <div class="icon">7</div>
+    <div class="name">lightmerge-branch</div>
+    <div class="desc">多分支集成测试<br>独立使用</div>
+  </div>
+  <div class="skill-card">
+    <div class="icon">8</div>
+    <div class="name">zcommit</div>
+    <div class="desc">智能 commit<br>pr-worktree 引用</div>
+  </div>
+</div>
+
+<!-- ===== Main Timeline: Merge Workflow ===== -->
+<div class="timeline-wrapper">
+  <div class="timeline-title">
+    <span>&#9654;</span> merge-worktree 8 阶段主流程 (阶段 0 &#8594; 阶段 7)
+  </div>
+
+  <!-- Phase 0 -->
+  <div class="phase-row">
+    <div class="phase-num">0</div>
+    <div class="phase-body">
+      <div class="node node-generic node-wide">
+        <div class="node-title">初始化 (0-init.sh)</div>
+        <div class="node-detail">
+          解析参数 &rarr; 检测 workspace / main worktree &rarr; 查找 PR &rarr; 创建状态文件
+          <code>.merge-worktree-state.env</code>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 1 -->
+  <div class="phase-row">
+    <div class="phase-num">1</div>
+    <div class="phase-body">
+      <div class="node node-generic node-wide">
+        <div class="node-title">本地验证 (1-local-check.sh)</div>
+        <div class="node-detail">
+          运行 pre-merge hook &rarr; pre-merge-check.sh<br>
+          依赖安装 &rarr; tsc --noEmit &rarr; lint &rarr; test &rarr; build &rarr; git 状态检查
+        </div>
+      </div>
+      <div class="node node-hook node-narrow">
+        <div class="node-title">&#128206; pre-merge.sh</div>
+        <div class="node-detail">
+          合并前版本同步 / 预检<br>
+          <span class="proj-badges"><span class="proj-badge llm">llm-simple-router</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 2 -->
+  <div class="phase-row">
+    <div class="phase-num">2</div>
+    <div class="phase-body">
+      <div class="node node-generic node-wide">
+        <div class="node-title">PR CI + 合并 (2-pr-merge.sh)</div>
+        <div class="node-detail">
+          wait-for-ci.sh 等待 PR CI &rarr; 通过则 <code>gh pr merge --merge --no-ff</code><br>
+          PR 已 merged 则幂等跳过
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 3 -->
+  <div class="phase-row">
+    <div class="phase-num">3</div>
+    <div class="phase-body">
+      <div class="node node-generic node-wide">
+        <div class="node-title">Post-merge CI (3-post-merge-ci.sh)</div>
+        <div class="node-detail">
+          wait-for-ci.sh 等待 main 分支 CI 通过<br>
+          前置检查: gh workflow list 确认项目有 CI &rarr; 120s 触发窗口 &rarr; 轮询直到完成
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 4 -->
+  <div class="phase-row">
+    <div class="phase-num">4</div>
+    <div class="phase-body">
+      <div class="node node-generic node-wide">
+        <div class="node-title">版本 bump + 发布 (4-publish.sh)</div>
+        <div class="node-detail">
+          读取当前版本 &rarr; bump &rarr; 同步子包版本 &rarr; hooks &rarr; tag &rarr; push &rarr; 等 Release CI
+        </div>
+      </div>
+      <div class="node node-hook node-narrow">
+        <div class="node-title">&#128206; read-version.sh</div>
+        <div class="node-detail">
+          自定义版本号来源<br>
+          <span class="proj-badges"><span class="proj-badge llm">llm-simple-router</span></span>
+        </div>
+      </div>
+      <div class="node node-hook node-narrow">
+        <div class="node-title">&#128206; post-bump.sh</div>
+        <div class="node-detail">
+          版本同步到子 package.json<br>
+          <span class="proj-badges"><span class="proj-badge llm">llm-simple-router</span><span class="proj-badge agent">xyz-agent</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 4 Project Branch -->
+  <div class="branch-row">
+    <div class="branch-label">发布委托<br>分支</div>
+    <div class="node node-project node-wide">
+      <div class="node-title">scripts/publish.sh (项目级发布脚本)</div>
+      <div class="node-detail">
+        <b>llm-simple-router</b>: 本地触发 gh workflow run publish.yml &rarr; 等待 GHA 完成 &rarr; 验证 npm + docker + Release asset<br>
+        <b>xyz-pi-extensions</b>: pnpm changeset version &rarr; 消费 changeset &rarr; bump 根版本 &rarr; commit + tag + push &rarr; 触发 release.yml<br>
+        <b>xyz-agent</b>: 无 publish.sh，由 release.yml 自动处理 Electron build
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 5 -->
+  <div class="phase-row">
+    <div class="phase-num">5</div>
+    <div class="phase-body">
+      <div class="node node-generic node-wide">
+        <div class="node-title">Release Notes + Release 创建 (5-release.sh)</div>
+        <div class="node-detail">
+          生成 commit 清单 &rarr; hooks 预处理 &rarr; 生成/读取 release notes &rarr; 等 Draft Release &rarr; 创建/更新 Release
+        </div>
+      </div>
+      <div class="node node-hook node-narrow">
+        <div class="node-title">&#128206; generate-release-notes.sh</div>
+        <div class="node-detail">
+          过滤噪音 commit<br>
+          <span class="proj-badges"><span class="proj-badge agent">xyz-agent</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 6 -->
+  <div class="phase-row">
+    <div class="phase-num">6</div>
+    <div class="phase-body">
+      <div class="node node-generic node-wide">
+        <div class="node-title">确认交付物 (6-verify.sh) &#9888; 硬门禁</div>
+        <div class="node-detail">
+          检查 Release 存在 &rarr; 产物数量 > 0 &rarr; Draft 状态 &rarr; 写入 checkpoint
+          <code>deliverables-verified</code><br>
+          <b>llm-simple-router</b>: 验证 .tar.gz / docker image<br>
+          <b>xyz-agent</b>: 验证 .dmg / .exe / .AppImage<br>
+          <b>xyz-pi-extensions</b>: npm view 验证 registry 包版本
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 7 -->
+  <div class="phase-row">
+    <div class="phase-num">7</div>
+    <div class="phase-body">
+      <div class="node node-generic node-wide">
+        <div class="node-title">清理 worktree (7-cleanup.sh)</div>
+        <div class="node-detail">
+          检查 <code>deliverables-verified</code> 门禁 &rarr; remove-worktree.sh &rarr; 同步其他 worktree &rarr; 清理临时文件 &rarr; 日志轮转
+        </div>
+      </div>
+      <div class="node node-generic node-narrow">
+        <div class="node-title">&#8594; remove-worktree</div>
+        <div class="node-detail">
+          删除 feature worktree<br>检查分支是否已合并
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Project Comparison ===== -->
+<div class="timeline-wrapper">
+  <div class="timeline-title">
+    <span>&#128200;</span> 4 个项目流程定制对比
+  </div>
+  <table class="comparison-table">
+    <tr>
+      <th style="min-width: 140px;">项目</th>
+      <th style="min-width: 120px;">技术栈</th>
+      <th style="min-width: 140px;">Custom Hooks</th>
+      <th style="min-width: 120px;">scripts/publish.sh</th>
+      <th style="min-width: 140px;">CI Workflows</th>
+      <th style="min-width: 180px;">交付物</th>
+    </tr>
+    <tr>
+      <td><b>llm-simple-router</b></td>
+      <td>TypeScript / Node</td>
+      <td class="has-it">
+        setup-worktree<br>
+        pre-merge &#8594; 根版本同步<br>
+        read-version &#8594; router/pkg 读版本<br>
+        post-bump &#8594; 同步所有子 pkg
+      </td>
+      <td class="has-it">
+        135L<br>
+        触发 GHA publish.yml<br>
+        验证 npm + docker + Release
+      </td>
+      <td>ci.yml, publish.yml, release.yml</td>
+      <td>npm 包, Docker image, GitHub Release (linux-x64.tar.gz)</td>
+    </tr>
+    <tr>
+      <td><b>xyz-agent</b></td>
+      <td>Electron + Vue3</td>
+      <td class="has-it">
+        setup-worktree &#8594; Electron 二进制缓存 (192L!)<br>
+        post-bump &#8594; 同步子 pkg (跳过 resources/pi)<br>
+        generate-release-notes &#8594; 过滤 commit
+      </td>
+      <td class="none">无 (GHA 自动 build)</td>
+      <td>ci.yml, release.yml</td>
+      <td>.dmg (macOS), .exe (Windows), .AppImage (Linux)</td>
+    </tr>
+    <tr>
+      <td><b>xyz-pi-extensions</b></td>
+      <td>TypeScript / pnpm monorepo</td>
+      <td class="none">无</td>
+      <td class="has-it">
+        67L<br>
+        changeset 独立版本<br>
+        bump 根版本 + tag
+      </td>
+      <td>ci.yml, release.yml, release-dev.yml</td>
+      <td>npm registry 包 (@zhushanwen/pi-*)</td>
+    </tr>
+    <tr>
+      <td><b>dag-executor</b></td>
+      <td>Python FastAPI + Vue3</td>
+      <td class="has-it">setup-worktree (19L)</td>
+      <td class="none">无</td>
+      <td>ci.yml, release.yml</td>
+      <td>Docker image (推测)</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ===== Side Flows ===== -->
+<div class="side-flows">
+  <!-- PR Flow -->
+  <div class="side-flow">
+    <div class="side-flow-title">&#128229; pr-worktree 提交流程</div>
+    <div class="side-flow-body">
+      <div class="node node-generic node-narrow">
+        <div class="node-title">pre-merge-check.sh</div>
+        <div class="node-detail">tsc + lint + test + build</div>
+      </div>
+      <div class="arrow">&#8594;</div>
+      <div class="node node-optional node-narrow">
+        <div class="node-title">code-review-worktree</div>
+        <div class="node-detail">>30 文件时建议审查</div>
+      </div>
+      <div class="arrow">&#8594;</div>
+      <div class="node node-generic node-narrow">
+        <div class="node-title">git commit</div>
+        <div class="node-detail">用户提供 message</div>
+      </div>
+      <div class="arrow">&#8594;</div>
+      <div class="node node-optional node-narrow">
+        <div class="node-title">zcommit</div>
+        <div class="node-detail">自动生成 commit msg</div>
+      </div>
+      <div class="arrow">&#8594;</div>
+      <div class="node node-generic node-narrow">
+        <div class="node-title">git push + gh pr create</div>
+        <div class="node-detail">推送并创建 PR</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Flow -->
+  <div class="side-flow">
+    <div class="side-flow-title">&#128736; create-worktree + setup-worktree 流程</div>
+    <div class="side-flow-body">
+      <div class="node node-generic node-narrow">
+        <div class="node-title">git-cwt (shell fn)</div>
+        <div class="node-detail">创建 worktree 目录</div>
+      </div>
+      <div class="arrow">&#8594;</div>
+      <div class="node node-hook node-narrow">
+        <div class="node-title">setup-worktree.sh</div>
+        <div class="node-detail">
+          安装依赖 / 复制 vendor / Electron 缓存<br>
+          <span class="proj-badges"><span class="proj-badge agent">xyz-agent (192L)</span><span class="proj-badge llm">llm-simple-router</span><span class="proj-badge">dag-executor</span></span>
+        </div>
+      </div>
+      <div class="arrow">&#8594;</div>
+      <div class="node node-generic node-narrow">
+        <div class="node-title">开发环境就绪</div>
+        <div class="node-detail">开始编码</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Custom Hooks Detail ===== -->
+<div class="hook-detail">
+  <div class="hook-detail-title">&#128206; Custom Hooks 扩展点详情 (5 个 Hook + 环境变量)</div>
+  <div class="hook-item">
+    <div class="hook-name">setup-worktree.sh</div>
+    <div class="hook-who">git-cwt 创建后调用</div>
+    <div class="hook-what">
+      xyz-agent: Electron 二进制缓存 (~242MB)、vendor 子模块复制、依赖安装<br>
+      llm-simple-router: 依赖安装 + git hooks 配置<br>
+      dag-executor: Python 虚拟环境 + 依赖安装
+    </div>
+  </div>
+  <div class="hook-item">
+    <div class="hook-name">pre-merge.sh</div>
+    <div class="hook-who">merge 阶段 1 调用</div>
+    <div class="hook-what">
+      llm-simple-router: 同步根 package.json 版本从 router/package.json<br>
+      dag-executor / xyz-agent: 无此 hook
+    </div>
+  </div>
+  <div class="hook-item">
+    <div class="hook-name">read-version.sh</div>
+    <div class="hook-who">merge 阶段 4 调用</div>
+    <div class="hook-what">
+      llm-simple-router: 从 router/package.json 读取版本（根 pkg 无 version 字段）<br>
+      其他项目: 无此 hook，默认从根 package.json 读取
+    </div>
+  </div>
+  <div class="hook-item">
+    <div class="hook-name">post-bump.sh</div>
+    <div class="hook-who">merge 阶段 4 bump 后调用</div>
+    <div class="hook-what">
+      llm-simple-router: 将新版本同步到所有子 package.json<br>
+      xyz-agent: 同上，但跳过 <code>resources/pi/</code> 下的第三方 package.json
+    </div>
+  </div>
+  <div class="hook-item">
+    <div class="hook-name">generate-release-notes.sh</div>
+    <div class="hook-who">merge 阶段 5 调用</div>
+    <div class="hook-what">
+      xyz-agent: 过滤 commit 清单，只保留 feat/fix/perf/breaking，排除 CI/build/chore<br>
+      llm-simple-router: 无此 hook，使用默认规则
+    </div>
+  </div>
+</div>
+
+<!-- ===== Data Sources ===== -->
+<div style="margin-top: 20px; font-size: 10px; color: var(--text-muted); text-align: center;">
+  数据来源: ~/.agents/skills/{merge,pr,create,remove,workspace}-worktree/ + ~/.agents/skills/{code-review-worktree,lightmerge-branch,zcommit}/<br>
+  项目扫描: ~/Code/*-workspace/ (11 个项目) | 生成时间: 2026-06-04
+</div>
+
+</body>
+</html>
