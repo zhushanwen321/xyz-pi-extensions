@@ -2,42 +2,33 @@
  * Todo Extension v2 - 三态任务清单，支持状态栏和 entry GC
  *
  * 改动要点：
- * - done: boolean → status: "pending" | "in_progress" | "completed"
+ * - done: boolean → status: "pending" | "in_progress" | "completed" | "failed"
  * - toggle → update（id + 可选 status/text，带参数守卫）
  * - 新增 delete action
  * - 状态栏通过 ctx.ui.setStatus 显示进度
  * - reconstructState 向后兼容旧 done 字段 + entry GC
+ * - 支持 verifyText/verifyAttempts 字段（数据模型增强）
+ * - add 支持 verifyTexts 参数（验证文本映射）
  */
 
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { matchesKey, Text, truncateToWidth } from "@mariozechner/pi-tui";
-	import { Type, type Static } from "typebox";
+import { Type, type Static } from "typebox";
 
-// ── 数据模型 ─────────────────────────────────────────
+import {
+	type Todo,
+	type TodoDetails,
+	VALID_STATUSES,
+	migrateTodo,
+	getDisplayStatus,
+	buildRender,
+	addTodos,
+	updateTodos,
+	formatTodoLine,
+} from "./model";
 
-interface Todo {
-	id: number;
-	text: string;
-	status: "pending" | "in_progress" | "completed";
-}
-
-interface TodoDetails {
-	action: "list" | "add" | "update" | "delete" | "clear";
-	todos: Todo[];
-	nextId: number;
-	error?: string;
-	_render?: {
-		type: "task-list";
-		summary?: string;
-		data: {
-			items: Array<{ id: number; text: string; status: string }>;
-			meta: Record<string, string>;
-		};
-	};
-}
-
-const VALID_STATUSES = ["pending", "in_progress", "completed"] as const;
+// ── TodoParams schema（依赖 Pi 运行时包） ────────────
 
 const TodoParams = Type.Object({
 	action: StringEnum(["list", "add", "update", "delete", "clear"] as const),
@@ -48,6 +39,25 @@ const TodoParams = Type.Object({
 	status: Type.Optional(
 		StringEnum(VALID_STATUSES, { description: "Target status (for update action)" }),
 	),
+	verifyTexts: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "Verification text list (one per texts entry, for add action)",
+		}),
+	),
+	updates: Type.Optional(
+		Type.Array(
+			Type.Object({
+				id: Type.Number(),
+				status: Type.Optional(Type.String()),
+				text: Type.Optional(Type.String()),
+				verified: Type.Optional(Type.Boolean({ description: "Required true when skipping verifying to mark completed on tasks with verifyText" })),
+				evidence: Type.Optional(Type.String({ description: "Verification evidence (≥10 chars, required for verifying→completed or in_progress→verifying)" })),
+			}),
+			{ description: "Batch updates array (takes priority over single id/status/text)" },
+		),
+	),
+	verified: Type.Optional(Type.Boolean({ description: "Required true when skipping verifying to mark completed on a task with verifyText" })),
+	evidence: Type.Optional(Type.String({ description: "Verification evidence (≥10 chars, required for verifying/completed on tasks with verifyText)" })),
 });
 
 // ── 常量 ────────────────────────────────────────────
@@ -104,12 +114,26 @@ class TodoListComponent {
 				const mark =
 					todo.status === "completed"
 						? th.fg("success", "\u2713")
-						: todo.status === "in_progress"
-							? th.fg("warning", "\u25cf")
-							: th.fg("dim", "\u25cb");
+						: todo.status === "verifying"
+							? th.fg("warning", "\u25d0")
+							: todo.status === "in_progress"
+								? th.fg("warning", "\u25cf")
+								: todo.status === "failed"
+									? th.fg("error", "\u2717")
+									: th.fg("dim", "\u25cb");
 				const id = th.fg("accent", `#${todo.id}`);
 				const text = todo.status === "completed" ? th.fg("dim", todo.text) : th.fg("text", todo.text);
-				lines.push(truncateToWidth(`  ${mark} ${id} ${text}`, width));
+				let verifyTag = "";
+				if (todo.status === "verifying") {
+					verifyTag = th.fg("warning", ` [验证中${todo.evidence ? ": " + todo.evidence.slice(0, 30) : ""}]`);
+				} else if (todo.verifyText && todo.status !== "completed") {
+					verifyTag = th.fg("warning", " [待验证]");
+				} else if (todo.status === "completed" && todo.verifyText) {
+					verifyTag = th.fg("success", " [已验证]");
+				} else if (todo.verifyText === undefined) {
+					verifyTag = th.fg("dim", " [无需验证]");
+				}
+				lines.push(truncateToWidth(`  ${mark} ${id} ${text}${verifyTag}`, width));
 			}
 		}
 
@@ -129,44 +153,6 @@ class TodoListComponent {
 }
 
 // ── 辅助函数 ─────────────────────────────────────────
-
-// ── Session state (module-level, rebuilt on session_start) ──
-
-interface TodoSession {
-	todos: Todo[];
-	nextId: number;
-	userMessageCount: number;
-	allCompletedAtCount: number | null;
-	lastTodoCallCount: number;
-	lastReminderCount: number;
-}
-
-function createSession(): TodoSession {
-	return {
-		todos: [],
-		nextId: 1,
-		userMessageCount: 0,
-		allCompletedAtCount: null,
-		lastTodoCallCount: 0,
-		lastReminderCount: 0,
-	};
-}
-
-/** 兼容旧格式：旧 entry 可能有 done: boolean，转换为 status */
-function migrateTodo(raw: Todo): Todo {
-	const record = raw as unknown as Record<string, unknown>;
-	if (typeof record.status === "string" && VALID_STATUSES.includes(record.status as Todo["status"])) {
-		return raw;
-	}
-	// 旧格式兜底：done → completed，否则 pending
-	const { done, ...rest } = record as unknown as { done?: boolean; id: number; text: string };
-	return { id: rest.id, text: rest.text, status: done === true ? "completed" : "pending" };
-}
-
-/** 渲染层获取状态：先 migrate 再取 status */
-function getDisplayStatus(t: Todo): string {
-	return migrateTodo(t).status;
-}
 
 /** 渲染状态栏文本 */
 function renderStatusText(todoList: Todo[], th: Theme): string {
@@ -197,62 +183,41 @@ function renderWidgetLines(todoList: Todo[], th: Theme): string[] {
 		const mark =
 			t.status === "completed"
 				? th.fg("success", "\u2713")
-				: t.status === "in_progress"
-					? th.fg("warning", "\u25cf")
-					: th.fg("dim", "\u25cb");
+				: t.status === "verifying"
+					? th.fg("warning", "\u25d0")
+					: t.status === "in_progress"
+						? th.fg("warning", "\u25cf")
+						: t.status === "failed"
+							? th.fg("error", "\u2717")
+							: th.fg("dim", "\u25cb");
 		const id = th.fg("accent", `#${t.id}`);
 		const text = t.status === "completed" ? th.fg("dim", t.text) : th.fg("text", t.text);
-		lines.push(`  ${mark} ${id} ${text}`);
+		let verifyTag = "";
+		if (t.status === "verifying") {
+			verifyTag = th.fg("warning", ` [验证中${t.evidence ? ": " + t.evidence.slice(0, 30) : ""}]`);
+		} else if (t.verifyText && t.status !== "completed") {
+			verifyTag = th.fg("warning", " [待验证]");
+		} else if (t.status === "completed" && t.verifyText) {
+			verifyTag = th.fg("success", " [已验证]");
+		} else if (t.verifyText === undefined) {
+			verifyTag = th.fg("dim", " [无需验证]");
+		}
+		lines.push(`  ${mark} ${id} ${text}${verifyTag}`);
 	}
 
 	return lines;
 }
 
-/** 构建 _render 描述符 */
-function buildRender(todoList: Todo[]): TodoDetails["_render"] {
-	const completed = todoList.filter((t) => t.status === "completed").length;
-	const total = todoList.length;
-	return {
-		type: "task-list" as const,
-		summary: `${completed}/${total} completed`,
-		data: {
-			items: todoList.map((t) => ({ id: t.id, text: t.text, status: t.status })),
-			meta: {},
-		},
-	};
-}
+// buildRender 已从 model.ts 导入
 
-/** 构建错误结果 */
-function makeTodoErrorResult(session: TodoSession, action: TodoDetails["action"], error: string, errorMsg: string): { content: Array<{ type: "text"; text: string }>; details: TodoDetails } {
-	return {
-		content: [{ type: "text" as const, text: errorMsg }],
-		details: {
-			action,
-			todos: [...session.todos],
-			nextId: session.nextId,
-			error,
-			_render: buildRender(session.todos),
-		} as TodoDetails,
-	};
-}
-
-/** 刷新显示 */
-function refreshDisplay(session: TodoSession, ctx: ExtensionContext): void {
-	const statusText = renderStatusText(session.todos, ctx.ui.theme);
-	ctx.ui.setStatus("todo", statusText || undefined);
-	if (session.todos.length === 0) {
-		ctx.ui.setWidget("todo", undefined);
-	} else {
-		ctx.ui.setWidget("todo", renderWidgetLines(session.todos, ctx.ui.theme));
-	}
-}
-
-/** v3: 自动清空延迟轮数（全部完成后保留 N 轮用户消息） */
+/** v3: 全部完成后保留的轮数，之后再自动 clear */
 const AUTO_CLEAR_DELAY_ROUNDS = 2;
-/** v3: Verification Nudge 触发阈值（完成 N 个任务以上时检查） */
-const VERIFICATION_NUDGE_THRESHOLD = 3;
-/** v3: Todo Reminder 触发间隔（N 轮未调用 todo 工具时提醒） */
-const TODO_REMINDER_INTERVAL = 10;
+/** v3: Stall 检测阈值（无 todo 活动轮数 → stall 提醒） */
+const STALL_THRESHOLD = 5;
+/** v3: 提醒间隔（上次 todo 调用后轮数 → 提醒） */
+const REMINDER_INTERVAL = 3;
+/** v3: 最大验证失败次数 */
+const MAX_VERIFY_ATTEMPTS = 2;
 
 // ── 列表渲染辅助函数 ─────────────────────────────────
 
@@ -267,12 +232,26 @@ function buildTodoListText(todoList: Todo[], options: { expanded: boolean }, the
 		const mark =
 			status === "completed"
 				? theme.fg("success", "\u2713")
-				: status === "in_progress"
-					? theme.fg("warning", "\u25cf")
-					: theme.fg("dim", "\u25cb");
+				: status === "verifying"
+					? theme.fg("warning", "\u25d0")
+					: status === "in_progress"
+						? theme.fg("warning", "\u25cf")
+						: status === "failed"
+							? theme.fg("error", "\u2717")
+							: theme.fg("dim", "\u25cb");
 		const itemText =
 			status === "completed" ? theme.fg("dim", t.text) : theme.fg("muted", t.text);
-		listText += `\n${mark} ${theme.fg("accent", `#${t.id}`)} ${itemText}`;
+		let verifyTag = "";
+		if (status === "verifying") {
+			verifyTag = theme.fg("warning", ` [验证中${t.evidence ? ": " + t.evidence.slice(0, 30) : ""}]`);
+		} else if (t.verifyText && status !== "completed") {
+			verifyTag = theme.fg("warning", " [待验证]");
+		} else if (status === "completed" && t.verifyText) {
+			verifyTag = theme.fg("success", " [已验证]");
+		} else if (t.verifyText === undefined) {
+			verifyTag = theme.fg("dim", " [无需验证]");
+		}
+		listText += `\n${mark} ${theme.fg("accent", `#${t.id}`)} ${itemText}${verifyTag}`;
 	}
 	if (!options.expanded && todoList.length > MAX_COLLAPSED_ITEMS) {
 		listText += `\n${theme.fg("dim", `... ${todoList.length - MAX_COLLAPSED_ITEMS} more`)}`;
@@ -333,381 +312,604 @@ function renderTodoResult(result: unknown, options: { expanded: boolean }, theme
 	}
 }
 
-/** Update action handler */
-function handleUpdateAction(session: TodoSession, params: { id?: number; status?: string; text?: string }): { content: Array<{ type: "text"; text: string }>; details: TodoDetails } | { resultText: string } {
-	if (params.id === undefined) {
-		return makeTodoErrorResult(session, "update", "id required", "Error: update requires id parameter");
-	}
-	if (params.status === undefined && params.text === undefined) {
-		return makeTodoErrorResult(session, "update", "need status or text", "Error: update requires at least status or text parameter");
-	}
-	if (params.text !== undefined && params.text === "") {
-		return makeTodoErrorResult(session, "update", "text empty", "Error: text cannot be empty string");
-	}
-	if (
-		params.status !== undefined &&
-		!VALID_STATUSES.includes(params.status as (typeof VALID_STATUSES)[number])
-	) {
-		return makeTodoErrorResult(session, "update", `invalid status: ${params.status}`, `Error: status only accepts ${VALID_STATUSES.join(" / ")}`);
-	}
-
-	const todo = session.todos.find((t) => t.id === params.id);
-	if (!todo) {
-		return makeTodoErrorResult(session, "update", `#${params.id} not found`, `Todo #${params.id} not found`);
-	}
-
-	// T5 完成引导：判断是否是最后一个 pending 即将完成
-	const incompleteBefore = session.todos.filter((t) => t.status !== "completed");
-	const isLastCompletion =
-		params.status === "completed" &&
-		incompleteBefore.length === 1 &&
-		incompleteBefore[0].id === todo.id;
-
-	if (params.status !== undefined) {
-		todo.status = params.status as Todo["status"];
-	}
-	if (params.text !== undefined) {
-		todo.text = params.text;
-	}
-
-	const parts: string[] = [`Updated todo #${todo.id}`];
-	if (params.status !== undefined) parts.push(`status → ${params.status}`);
-	if (params.text !== undefined) parts.push(`text → "${todo.text}"`);
-	let resultText = parts.join(", ");
-
-	if (isLastCompletion) {
-		resultText += "\n\nAll todos completed. Please summarize your work.";
-	}
-
-	// v3: 检查是否所有 todo 已完成
-	const allCompleted = session.todos.every((t) => t.status === "completed");
-	if (allCompleted && session.todos.length > 0) {
-		session.allCompletedAtCount = session.userMessageCount;
-	} else {
-		session.allCompletedAtCount = null;
-	}
-	return { resultText };
-}
-
-/** Add action handler */
-function handleAddAction(session: TodoSession, params: { texts?: string[] }): { content: Array<{ type: "text"; text: string }>; details: TodoDetails } | { resultText: string } {
-	if (!params.texts || params.texts.length === 0) {
-		return makeTodoErrorResult(session, "add", "texts required", "Error: add requires texts parameter (non-empty array)");
-	}
-	const trimmed = params.texts.map((t) => t.trim()).filter((t) => t.length > 0);
-	if (trimmed.length === 0) {
-		return makeTodoErrorResult(session, "add", "all texts empty", "Error: texts must contain at least one non-empty string");
-	}
-	const startId = session.nextId;
-	for (const t of trimmed) {
-		session.todos.push({ id: session.nextId++, text: t, status: "pending" });
-	}
-	const endId = session.nextId - 1;
-	// v3: 新增 todo 表示未全部完成
-	session.allCompletedAtCount = null;
-	return { resultText: `Added ${trimmed.length} todos (#${startId}-#${endId})` };
-}
-
-/** Delete action handler */
-function handleDeleteAction(session: TodoSession, params: { ids?: number[] }): { content: Array<{ type: "text"; text: string }>; details: TodoDetails } | { resultText: string } {
-	if (!params.ids || params.ids.length === 0) {
-		return makeTodoErrorResult(session, "delete", "ids required", "Error: delete requires ids parameter (non-empty array)");
-	}
-	const uniqueIds = [...new Set(params.ids)];
-	const missing = uniqueIds.filter((id) => !session.todos.some((t) => t.id === id));
-	if (missing.length > 0) {
-		const missingStr = missing.map((id) => `#${id}`).join(", ");
-		return makeTodoErrorResult(session, "delete", `#${missing.map((id) => id).join(", #")} not found`, `Error: Todo ${missingStr} not found`);
-	}
-	const removedIds: number[] = [];
-	for (const id of uniqueIds) {
-		const idx = session.todos.findIndex((t) => t.id === id);
-		if (idx !== -1) {
-			session.todos.splice(idx, 1);
-			removedIds.push(id);
-		}
-	}
-	return { resultText: `Deleted ${removedIds.length} items (#${removedIds.join(", #")}), ${session.todos.length} remaining` };
-}
-
-/** Tool execute handler */
-function executeTodoAction(
-	session: TodoSession,
-	params: { action: string; text?: string; id?: number; texts?: string[]; ids?: number[]; status?: string },
-	ctx: ExtensionContext,
-) {
-	let resultText = "";
-
-	// v3: 追踪 todo 工具调用轮数
-	session.lastTodoCallCount = session.userMessageCount;
-
-	switch (params.action) {
-		case "list": {
-			resultText = session.todos.length
-				? session.todos
-						.map((t) => {
-							const mark =
-								t.status === "completed"
-									? "x"
-									: t.status === "in_progress"
-										? "~"
-										: " ";
-							return `[${mark}] #${t.id}: ${t.text}`;
-						})
-						.join("\n")
-				: "No todos";
-			break;
-		}
-
-		case "add": {
-			const addResult = handleAddAction(session, params);
-			if ("details" in addResult) return addResult;
-			resultText = addResult.resultText;
-			break;
-		}
-
-		case "update": {
-			const updateResult = handleUpdateAction(session, params);
-			if ("details" in updateResult) return updateResult;
-			resultText = updateResult.resultText;
-			break;
-		}
-
-		case "delete": {
-			const deleteResult = handleDeleteAction(session, params);
-			if ("details" in deleteResult) return deleteResult;
-			resultText = deleteResult.resultText;
-			break;
-		}
-
-		case "clear": {
-			const count = session.todos.length;
-			session.todos = [];
-			session.nextId = 1;
-			resultText = count > 0 ? `Cleared ${count} todos` : "No todos to clear";
-			// v3: 手动清空后重置
-			session.allCompletedAtCount = null;
-			break;
-		}
-
-		default:
-			return {
-				content: [{ type: "text" as const, text: `Unknown action: ${params.action}` }],
-				details: {
-					action: "list" as const,
-					todos: [...session.todos],
-					nextId: session.nextId,
-					error: `unknown action: ${params.action}`,
-					_render: buildRender(session.todos),
-				} as TodoDetails,
-			};
-	}
-
-	refreshDisplay(session, ctx);
-
-	return {
-		content: [{ type: "text" as const, text: resultText }],
-		details: {
-			action: params.action as TodoDetails["action"],
-			todos: [...session.todos],
-			nextId: session.nextId,
-			_render: buildRender(session.todos),
-		} as TodoDetails,
-	};
-}
-
-/** 状态重建 */
-function reconstructState(session: TodoSession, ctx: ExtensionContext) {
-	session.todos = [];
-	session.nextId = 1;
-
-	// v3: 重置提醒追踪状态
-	session.userMessageCount = 0;
-	session.allCompletedAtCount = null;
-	session.lastTodoCallCount = 0;
-	session.lastReminderCount = 0;
-
-	const entries = ctx.sessionManager.getEntries();
-	let latestIdx = -1;
-
-	for (let i = 0; i < entries.length; i++) {
-		const entry = entries[i];
-		if (entry.type !== "message") continue;
-		const msg = entry.message;
-		if (msg.role !== "toolResult" || msg.toolName !== "todo") continue;
-
-		const details = msg.details as TodoDetails | undefined;
-		if (details?.todos && Array.isArray(details.todos)) {
-			session.todos = details.todos.map((t) => migrateTodo(t));
-			session.nextId = details.nextId ?? (session.todos.length > 0 ? Math.max(...session.todos.map((t) => t.id)) + 1 : 1);
-			latestIdx = i;
-		}
-	}
-
-	if (latestIdx >= 0) {
-		const staleIndices: number[] = [];
-		for (let i = 0; i < latestIdx; i++) {
-			const entry = entries[i];
-			if (entry.type !== "message") continue;
-			const msg = entry.message;
-			if (msg.role === "toolResult" && msg.toolName === "todo") {
-				staleIndices.push(i);
-			}
-		}
-		for (let j = staleIndices.length - 1; j >= 0; j--) {
-			entries.splice(staleIndices[j], 1);
-		}
-	}
-}
-
 // ── 扩展入口 ─────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-	const session = createSession();
+	// ── 闭包内状态（session 隔离） ─────────────────────
+	let todos: Todo[] = [];
+	let nextId = 1;
 
-	// ── Register event handlers ──────────────────────
-	function registerEventHandlers(): void {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
-		pi.on("session_start", async (_event: any, ctx: ExtensionContext) => {
-			reconstructState(session, ctx);
-			refreshDisplay(session, ctx);
-		});
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
-		pi.on("session_tree", async (_event: any, ctx: ExtensionContext) => {
-			reconstructState(session, ctx);
-			refreshDisplay(session, ctx);
-		});
+	// v3: 用户消息轮数与提醒追踪
+	let userMessageCount = 0;
+	let lastTodoCallCount = 0;
+	let stallNotified = false;
+	let allCompletedAtCount: number | null = null; // 全部 completed 首次检测到的 userMessageCount
 
-		// v3: 追踪用户消息轮数
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
-		pi.on("agent_start", async (_event: any, _ctx: ExtensionContext) => {
-			session.userMessageCount++;
-		});
-
-		// v3: 自动清空与提醒检查
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
-		pi.on("before_agent_start", async (_event: any, ctx: ExtensionContext) => {
-			try {
-				// 1. 自动清空：全部完成后经过 2 轮用户消息
-				if (session.allCompletedAtCount !== null && session.userMessageCount - session.allCompletedAtCount >= AUTO_CLEAR_DELAY_ROUNDS) {
-					const count = session.todos.length;
-					session.todos = [];
-					session.nextId = 1;
-					session.allCompletedAtCount = null;
-					refreshDisplay(session, ctx);
-					return {
-						message: {
-							customType: "todo-auto-clear",
-							content: `All ${count} todos completed, list auto-cleared.`,
-							display: true,
-						},
-					};
-				}
-
-				// 2. Verification Nudge：完成 3+ 任务且无验证步骤
-				if (
-					session.allCompletedAtCount !== null &&
-					session.todos.length >= VERIFICATION_NUDGE_THRESHOLD &&
-					!session.todos.some((t) => /verif|验证/i.test(t.text))
-				) {
-					session.lastReminderCount = session.userMessageCount;
-					return {
-						message: {
-							customType: "todo-verification-nudge",
-							content: "You completed 3+ tasks without a verification step. Consider adding a verification task before summarizing.",
-							display: true,
-						},
-					};
-				}
-
-				// 3. Todo Reminder：10 轮未调用 todo 工具
-				if (
-					session.todos.length > 0 &&
-					session.allCompletedAtCount === null &&
-					session.userMessageCount - session.lastTodoCallCount >= TODO_REMINDER_INTERVAL &&
-					session.userMessageCount - session.lastReminderCount >= TODO_REMINDER_INTERVAL
-				) {
-					session.lastReminderCount = session.userMessageCount;
-					return {
-						message: {
-							customType: "todo-reminder",
-							content: "The todo tool hasn't been used recently. If working on tasks, consider using it to track progress.",
-							display: true,
-						},
-					};
-				}
-
-				return undefined;
-			} catch {
-				// v3: 提醒/清空非关键路径，异常时静默降级不影响 agent 循环
-				return undefined;
-			}
-		});
+	// ── 刷新显示（依赖闭包 state） ─────────────────────
+	function refreshDisplay(ctx: ExtensionContext): void {
+		const statusText = renderStatusText(todos, ctx.ui.theme);
+		ctx.ui.setStatus("todo", statusText || undefined);
+		if (todos.length === 0) {
+			ctx.ui.setWidget("todo", undefined);
+		} else {
+			ctx.ui.setWidget("todo", renderWidgetLines(todos, ctx.ui.theme));
+		}
 	}
 
-	registerEventHandlers();
+	/** 构建 pending 任务的 <todo_context> 字符串（agent_end stall/reminder 共用） */
+	function buildPendingContext(turnCount: number): string {
+		const pendingTodos = todos.filter((t) => t.status !== "completed");
+		const pendingCount = pendingTodos.length;
+		const completedCount = todos.filter((t) => t.status === "completed").length;
+		const lines = pendingTodos
+			.map((t) => {
+				let verifyTag = "";
+				if (t.status === "verifying") {
+					verifyTag = ` [验证中${t.evidence ? ": " + t.evidence : ""}] → 需要 evidence 完成验证`;
+				} else if (t.verifyText) {
+					verifyTag = ` [待验证: ${t.verifyText}]`;
+				}
+				return `#${t.id}: ${t.text}${verifyTag}`;
+			})
+			.join("\n");
+		return `<todo_context>\n[TODO] Turn ${turnCount} — ${pendingCount} tasks pending, ${completedCount} completed\n${lines}\n\nRules:\n- 优先使用 updates[] 批量更新\n- 有 verifyText 的任务: 先标 verifying(evidence="验证进度") → 再标 completed(evidence="验证结论")\n- 无 verifyText 的任务可直接 completed\n- 全部完成后工具自动闭合\n</todo_context>`;
+	}
 
-	// ── Register todo tool ───────────────────────────
-	function registerTodoTool(): void {
-		pi.registerTool({
-			name: "todo",
-			label: "Todo",
-			description:
-				"Manage a todo list." +
-				"\n\nAvailable actions:" +
-				"\n- list: View all todos" +
-				"\n- add: Batch add todos (requires texts array)" +
-				"\n- update: Update a todo (requires id, optional status/text)" +
-				"\n- delete: Batch delete todos (requires ids array)" +
-				"\n- clear: Clear all todos and reset IDs",
-			promptSnippet: "Lightweight task list for tracking progress on multi-step work, without requiring /goal mode",
-			promptGuidelines: [
-				"[Usage] Use for multi-step tasks (3+ steps), progress tracking, or when explicitly requested",
-				"[Not for] Single-step operations, trivial tasks, or when goal_manager is already active",
-				"[Timing] Create before starting work, mark completed immediately when done",
-				"[Status] At most one in_progress at a time; mark completed immediately",
-				"[Granularity] One todo per verifiable work unit, 3-8 items ideal",
-				"[Completion] All todos auto-clear when completed (retained for 2 turns)",
-				"[Verification] When completing 3+ tasks, consider adding a verification step",
-				"[Scope] Do not use todo as a substitute for goal_manager — they serve different purposes",
-			],
-			parameters: TodoParams,
+	// ── Tool execute handler ─────────────────────────────
+	function executeTodoAction(
+		params: { action: string; text?: string; id?: number; texts?: string[]; ids?: number[]; status?: string; verifyTexts?: string[]; updates?: Array<{ id: number; status?: string; text?: string; verified?: boolean; evidence?: string }>; verified?: boolean; evidence?: string },
+		ctx: ExtensionContext,
+	) {
+		let resultText = "";
 
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi tool callback type
-			async execute(_toolCallId: string, params: Static<typeof TodoParams>, _signal: AbortSignal | undefined, _onUpdate: any, ctx: ExtensionContext) {
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi params type narrowing
-				const result = executeTodoAction(session, params as any, ctx);
-				// Append input params to error results for debugging
-				const details = result.details as { error?: string } | undefined;
-				if (details?.error) {
-					const textPart = result.content[0];
-					if (textPart?.type === "text") {
-						const inputSummary = JSON.stringify(params);
-						textPart.text += `\nInput: ${inputSummary}`;
+		// v3: 记录本次 todo 工具调用轮次（userMessageCount 在 agent_start 中递增）
+		lastTodoCallCount = userMessageCount;
+		stallNotified = false;
+
+		switch (params.action) {
+			case "list": {
+				resultText = todos.length
+					? todos.map((t) => formatTodoLine(t)).join("\n")
+					: "No todos";
+				break;
+			}
+
+			case "add": {
+				if (!params.texts || params.texts.length === 0) {
+					return {
+						content: [{ type: "text" as const, text: "Error: add requires texts parameter (non-empty array)" }],
+						details: {
+							action: "add" as const,
+							todos: [...todos],
+							nextId,
+							error: "texts required",
+							_render: buildRender(todos),
+						} as TodoDetails,
+					};
+				}
+
+				const addResult = addTodos(todos, nextId, params.texts, params.verifyTexts);
+				if (addResult.error) {
+					return {
+						content: [{ type: "text" as const, text: addResult.resultText! }],
+						details: {
+							action: "add" as const,
+							todos: [...todos],
+							nextId,
+							error: addResult.error,
+							_render: buildRender(todos),
+						} as TodoDetails,
+					};
+				}
+
+				todos = addResult.newTodos;
+				nextId = addResult.newNextId;
+				resultText = addResult.resultText!;
+				// v3: 新增 todo 表示未全部完成
+				break;
+			}
+
+			case "update": {
+				// Batch updates[] takes priority over single id/status/text
+				if (params.updates && params.updates.length > 0) {
+					const result = updateTodos(todos, params.updates);
+					if (result.error) {
+						return {
+							content: [{ type: "text" as const, text: result.resultText! }],
+							details: {
+								action: "update" as const,
+								todos: [...todos],
+								nextId,
+								error: result.error,
+								_render: buildRender(todos),
+							} as TodoDetails,
+						};
+					}
+					todos = result.updatedTodos;
+					resultText = result.resultText || "";
+
+					// 检查是否有状态转换拦截
+					if (result.blocked && result.blocked.length > 0) {
+						return {
+							content: [{ type: "text" as const, text: resultText }],
+							details: {
+								action: "update" as const,
+								todos: [...todos],
+								nextId,
+								error: "blocked",
+								_render: buildRender(todos),
+							} as TodoDetails,
+						};
+					}
+
+
+					break;
+				}
+				// Single update: original logic continues
+				if (params.id === undefined) {
+					return {
+						content: [{ type: "text" as const, text: "Error: update requires id parameter" }],
+						details: {
+							action: "update" as const,
+							todos: [...todos],
+							nextId,
+							error: "id required",
+							_render: buildRender(todos),
+						} as TodoDetails,
+					};
+				}
+				if (params.status === undefined && params.text === undefined) {
+					return {
+						content: [{ type: "text" as const, text: "Error: update requires at least status or text parameter" }],
+						details: {
+							action: "update" as const,
+							todos: [...todos],
+							nextId,
+							error: "need status or text",
+							_render: buildRender(todos),
+						} as TodoDetails,
+					};
+				}
+				if (params.text !== undefined && params.text === "") {
+					return {
+						content: [{ type: "text" as const, text: "Error: text cannot be empty string" }],
+						details: {
+							action: "update" as const,
+							todos: [...todos],
+							nextId,
+							error: "text empty",
+							_render: buildRender(todos),
+						} as TodoDetails,
+					};
+				}
+				if (
+					params.status !== undefined &&
+					!VALID_STATUSES.includes(params.status as (typeof VALID_STATUSES)[number])
+				) {
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: `Error: status only accepts ${VALID_STATUSES.join(" / ")}`,
+							},
+						],
+						details: {
+							action: "update" as const,
+							todos: [...todos],
+							nextId,
+							error: `invalid status: ${params.status}`,
+							_render: buildRender(todos),
+						} as TodoDetails,
+					};
+				}
+
+				const todo = todos.find((t) => t.id === params.id);
+				if (!todo) {
+					return {
+						content: [{ type: "text" as const, text: `Todo #${params.id} not found` }],
+						details: {
+							action: "update" as const,
+							todos: [...todos],
+							nextId,
+							error: `#${params.id} not found`,
+							_render: buildRender(todos),
+						} as TodoDetails,
+					};
+				}
+
+				// 状态转换拦截
+				const MIN_EVIDENCE_LEN = 10;
+
+				if (params.status === "verifying") {
+					if (!todo.verifyText) {
+						return {
+							content: [{ type: "text" as const, text: `Error: #${todo.id} 无 verifyText，不能进入 verifying 状态` }],
+							details: { action: "update" as const, todos: [...todos], nextId, error: "no verifyText", _render: buildRender(todos) } as TodoDetails,
+						};
+					}
+					if (!params.evidence || params.evidence.trim().length < MIN_EVIDENCE_LEN) {
+						return {
+							content: [{ type: "text" as const, text: `⚠️ Task #${todo.id} 进入 verifying 需要 evidence（≥${MIN_EVIDENCE_LEN} 字符），说明当前验证进度。\n验证标准: ${todo.verifyText}` }],
+							details: { action: "update" as const, todos: [...todos], nextId, error: "evidence required", _render: buildRender(todos) } as TodoDetails,
+						};
+					}
+				} else if (params.status === "completed") {
+					if (todo.verifyText && todo.status !== "verifying") {
+						// 有 verifyText 但未经过 verifying → 需要 verified=true + evidence
+						if (params.verified !== true) {
+							return {
+								content: [{ type: "text" as const, text: `⚠️ Task #${todo.id} "${todo.text}" 有验证要求。\n请先: todo update(id=${todo.id}, status=verifying, evidence="验证进度")\n或跳过: todo update(id=${todo.id}, status=completed, verified=true, evidence="验证结论")\n验证标准: ${todo.verifyText}` }],
+								details: { action: "update" as const, todos: [...todos], nextId, error: "verify required", _render: buildRender(todos) } as TodoDetails,
+							};
+						}
+						if (!params.evidence || params.evidence.trim().length < MIN_EVIDENCE_LEN) {
+							return {
+								content: [{ type: "text" as const, text: `⚠️ Task #${todo.id} 跳过 verifying 直接 completed 时需要 evidence（≥${MIN_EVIDENCE_LEN} 字符），说明验证结论。` }],
+								details: { action: "update" as const, todos: [...todos], nextId, error: "evidence required", _render: buildRender(todos) } as TodoDetails,
+							};
+						}
+					} else if (todo.status === "verifying") {
+						// verifying → completed: 需要 evidence
+						if (!params.evidence || params.evidence.trim().length < MIN_EVIDENCE_LEN) {
+							return {
+								content: [{ type: "text" as const, text: `⚠️ Task #${todo.id} 从 verifying 到 completed 需要 evidence（≥${MIN_EVIDENCE_LEN} 字符），说明验证结论。` }],
+								details: { action: "update" as const, todos: [...todos], nextId, error: "evidence required", _render: buildRender(todos) } as TodoDetails,
+							};
+						}
 					}
 				}
-				return result;
-			},
 
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi render callback args
-			renderCall(args: any, theme: Theme, _context?: any) {
-				let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", args.action);
-				if (args.texts && args.texts.length > 0) text += ` ${theme.fg("dim", `(${args.texts.length} items)`)}`;
-				if (args.ids && args.ids.length > 0) text += ` ${theme.fg("accent", `#${args.ids.join(", #")}`)}`;
-				if (args.id !== undefined) text += ` ${theme.fg("accent", `#${args.id}`)}`;
-				if (args.text) text += ` ${theme.fg("dim", `"${args.text}"`)}`;
-				if (args.status) text += ` ${theme.fg("warning", args.status)}`;
-				return new Text(text, 0, 0);
-			},
+				// T5 完成引导：判断是否是最后一个 pending 即将完成
+				const incompleteBefore = todos.filter(
+					(t) => t.status !== "completed",
+				);
+				const isLastCompletion =
+					params.status === "completed" &&
+					incompleteBefore.length === 1 &&
+					incompleteBefore[0].id === todo.id;
 
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi render callback args
-			renderResult(result: any, options: any, theme: Theme, _context?: any) {
-				return renderTodoResult(result, options, theme);
-			},
-		});
+				if (params.status !== undefined) {
+					const oldStatus = todo.status;
+					todo.status = params.status as Todo["status"];
+					// 写入 evidence
+					if (params.evidence && (params.status === "verifying" || params.status === "completed")) {
+						todo.evidence = params.evidence.trim();
+					}
+					// 检测验证失败: completed/verifying → in_progress
+					if (params.status === "in_progress" && todo.verifyText && todo.verifyAttempts < MAX_VERIFY_ATTEMPTS) {
+						if (oldStatus === "completed" || oldStatus === "verifying") {
+							todo.verifyAttempts++;
+						}
+					}
+				}
+				if (params.text !== undefined) {
+					todo.text = params.text;
+				}
+
+				const parts: string[] = [`Updated todo #${todo.id}`];
+				if (params.status !== undefined) parts.push(`status → ${params.status}`);
+				if (params.text !== undefined) parts.push(`text → "${todo.text}"`);
+				resultText = parts.join(", ");
+
+				if (isLastCompletion) {
+					resultText += "\n\nAll todos completed. Please summarize your work.";
+				}
+
+
+				break;
+			}
+
+			case "delete": {
+				if (!params.ids || params.ids.length === 0) {
+					return {
+						content: [{ type: "text" as const, text: "Error: delete requires ids parameter (non-empty array)" }],
+						details: {
+							action: "delete" as const,
+							todos: [...todos],
+							nextId,
+							error: "ids required",
+							_render: buildRender(todos),
+						} as TodoDetails,
+					};
+				}
+				const uniqueIds = [...new Set(params.ids)];
+				const missing = uniqueIds.filter((id) => !todos.some((t) => t.id === id));
+				if (missing.length > 0) {
+					const missingStr = missing.map((id) => `#${id}`).join(", ");
+					return {
+						content: [{ type: "text" as const, text: `Error: Todo ${missingStr} not found` }],
+						details: {
+							action: "delete" as const,
+							todos: [...todos],
+							nextId,
+							error: `#${missing.map((id) => id).join(", #")} not found`,
+							_render: buildRender(todos),
+						} as TodoDetails,
+					};
+				}
+				const removedIds: number[] = [];
+				for (const id of uniqueIds) {
+					const idx = todos.findIndex((t) => t.id === id);
+					if (idx !== -1) {
+						todos.splice(idx, 1);
+						removedIds.push(id);
+					}
+				}
+				resultText = `Deleted ${removedIds.length} items (#${removedIds.join(", #")}), ${todos.length} remaining`;
+				break;
+			}
+
+			case "clear": {
+				const count = todos.length;
+				todos = [];
+				nextId = 1;
+				allCompletedAtCount = null;
+				resultText = count > 0 ? `Cleared ${count} todos` : "No todos to clear";
+				// v3: 手动清空后重置
+				break;
+			}
+
+			default:
+				return {
+					content: [{ type: "text" as const, text: `Unknown action: ${params.action}` }],
+					details: {
+						action: "list" as const,
+						todos: [...todos],
+						nextId,
+						error: `unknown action: ${params.action}`,
+						_render: buildRender(todos),
+					} as TodoDetails,
+				};
+		}
+
+		refreshDisplay(ctx);
+
+		return {
+			content: [{ type: "text" as const, text: resultText }],
+			details: {
+				action: params.action as TodoDetails["action"],
+				todos: [...todos],
+				nextId,
+				_render: buildRender(todos),
+			} as TodoDetails,
+		};
 	}
 
-	registerTodoTool();
+	// ── 状态重建 ───────────────────────────────────────
+	function reconstructState(ctx: ExtensionContext) {
+		todos = [];
+		nextId = 1;
+
+		// v3: 重置提醒追踪状态
+		userMessageCount = 0;
+		lastTodoCallCount = 0;
+		stallNotified = false;
+		allCompletedAtCount = null;
+
+		const entries = ctx.sessionManager.getEntries();
+		let latestIdx = -1;
+
+		for (let i = 0; i < entries.length; i++) {
+			const entry = entries[i];
+			if (entry.type !== "message") continue;
+			const msg = entry.message;
+			if (msg.role !== "toolResult" || msg.toolName !== "todo") continue;
+
+			const details = msg.details as TodoDetails | undefined;
+			if (details?.todos && Array.isArray(details.todos)) {
+				todos = details.todos.map((t) => migrateTodo(t));
+				nextId = details.nextId ?? (todos.length > 0 ? Math.max(...todos.map((t) => t.id)) + 1 : 1);
+				latestIdx = i;
+			}
+		}
+
+		if (latestIdx >= 0) {
+			const staleIndices: number[] = [];
+			for (let i = 0; i < latestIdx; i++) {
+				const entry = entries[i];
+				if (entry.type !== "message") continue;
+				const msg = entry.message;
+				if (msg.role === "toolResult" && msg.toolName === "todo") {
+					staleIndices.push(i);
+				}
+			}
+			for (let j = staleIndices.length - 1; j >= 0; j--) {
+				entries.splice(staleIndices[j], 1);
+			}
+		}
+
+		// auto-clear 由 agent_end 延迟处理（AUTO_CLEAR_DELAY_ROUNDS），不再在此立即清空
+	}
+
+	// ── 事件处理器 ──────────────────────────────────────
+	pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
+		reconstructState(ctx);
+		refreshDisplay(ctx);
+	});
+	pi.on("session_tree", async (_event: unknown, ctx: ExtensionContext) => {
+		reconstructState(ctx);
+		refreshDisplay(ctx);
+	});
+
+	// v3: 追踪用户消息轮数
+	pi.on("agent_start", async (_event: unknown, _ctx: ExtensionContext) => {
+		userMessageCount++;
+	});
+
+	// v3: Task 6 - before_agent_start 注入 todo context (display: false)
+	pi.on("before_agent_start", async (_event: unknown, ctx: ExtensionContext) => {
+		try {
+			if (todos.length === 0) return undefined;
+
+			const pendingTodos = todos.filter((t) => t.status !== "completed");
+			if (pendingTodos.length === 0) return undefined;
+
+			// 格式化 pending 任务 (含 verifying 状态和 verifyText)
+			const lines = pendingTodos.map((t) => {
+				let verifyTag = "";
+				if (t.status === "verifying") {
+					verifyTag = ` [验证中${t.evidence ? ": " + t.evidence : ""}] → 需要 evidence 完成验证`;
+				} else if (t.verifyText) {
+					verifyTag = ` [待验证: ${t.verifyText}]`;
+				}
+				return `#${t.id}: ${t.text}${verifyTag}`;
+			});
+
+			const contextStr =
+				`<todo_context>\n[TODO] ${pendingTodos.length} tasks pending\n${lines.join("\n")}\n\nRules:\n- 有 verifyText 的任务: 先标 verifying(evidence="验证进度") → 再标 completed(evidence="验证结论")\n- 无 verifyText 的任务可直接 completed\n- 全部完成后工具自动闭合\n</todo_context>`;
+
+			// 更新状态栏
+			ctx.ui.setStatus("todo", `📋 ${pendingTodos.length} pending`);
+
+			return {
+				message: {
+					customType: "todo-context",
+					content: contextStr,
+					display: false,
+				},
+			};
+		} catch (e) {
+			console.debug("[todo] before_agent_start error:", e);
+			return undefined;
+		}
+	});
+
+	// agent_end: auto-clear + verify-failed + stall + reminder
+	pi.on("agent_end", async (_event: unknown, _ctx: ExtensionContext) => {
+		try {
+			if (todos.length === 0) return;
+
+			// 1. Auto-clear: 所有 todo 都 completed → 延迟 AUTO_CLEAR_DELAY_ROUNDS 后 clear
+			const allCompleted = todos.every((t) => t.status === "completed");
+			if (allCompleted) {
+				if (allCompletedAtCount === null) {
+					allCompletedAtCount = userMessageCount;
+				}
+				if (userMessageCount - allCompletedAtCount >= AUTO_CLEAR_DELAY_ROUNDS) {
+					todos = [];
+					nextId = 1;
+					allCompletedAtCount = null;
+					refreshDisplay(_ctx);
+				}
+				return;
+			} else {
+				allCompletedAtCount = null;
+			}
+
+			// 2. Verify 失败处理: verifyAttempts >= MAX 且仍为 completed → 设 failed
+			const failedIds: number[] = [];
+			for (const t of todos) {
+				if (
+					t.status === "completed" &&
+					t.verifyText &&
+					t.verifyAttempts >= MAX_VERIFY_ATTEMPTS
+				) {
+					t.status = "failed";
+					failedIds.push(t.id);
+				}
+			}
+			if (failedIds.length > 0) {
+				refreshDisplay(_ctx);
+				pi.sendUserMessage(
+					`<todo_context>\n[TODO] 验证失败: Task ${failedIds.map((id) => "#" + id).join(", ")} 已重试 ${MAX_VERIFY_ATTEMPTS} 次仍未通过，已标记为 failed。请决定是否手动 override。\n</todo_context>`,
+					{ deliverAs: "steer", customType: "todo-context" },
+				);
+				return;
+			}
+
+			// 3. Stall 检测: STALL_THRESHOLD 轮未调用 todo 且还有未完成任务
+			if (
+				!stallNotified &&
+				userMessageCount - lastTodoCallCount >= STALL_THRESHOLD
+			) {
+				stallNotified = true;
+				pi.sendUserMessage(buildPendingContext(userMessageCount), { deliverAs: "steer", customType: "todo-context" });
+				return;
+			}
+
+			// 4. 提醒: REMINDER_INTERVAL 轮未调用 todo
+			if (userMessageCount - lastTodoCallCount >= REMINDER_INTERVAL) {
+				pi.sendUserMessage(buildPendingContext(userMessageCount), { deliverAs: "steer", customType: "todo-context" });
+				return;
+			}
+		} catch (e) {
+			console.debug("[todo] agent_end error:", e);
+		}
+	});
+
+	// ── Tool: todo ──────────────────────────────────────
+	pi.registerTool({
+		name: "todo",
+		label: "Todo",
+		description:
+			"Manage a todo list." +
+			"\n\nAvailable actions:" +
+			"\n- list: View all todos" +
+			"\n- add: Batch add todos (requires texts array, optional verifyTexts)" +
+			"\n- update: Update a todo (requires id, optional status/text)" +
+			"\n- delete: Batch delete todos (requires ids array)" +
+			"\n- clear: Clear all todos and reset IDs"
+		+ "\nWhen /goal is active, do NOT use this tool — use goal_manager's add_subtasks instead.",
+		promptSnippet: "Use todo when breaking multi-step work into trackable items during normal (non-goal) conversation. Not for single-step operations.",
+		promptGuidelines: [
+			"[Usage] 多步骤工作（3+步）时使用。AI 自发创建，无需用户触发",
+			"[Goal 冲突] /goal 激活后禁止使用 todo — 改用 add_subtasks",
+			"[批量优先] 完成多项任务时使用 updates[] 批量更新，减少工具调用次数",
+			"[验证流程] 有 verifyText 的任务: in_progress → verifying(evidence=\"验证进度\") → completed(evidence=\"验证结论\")。evidence ≥ 10 字符",
+			"[跳过验证] 有 verifyText 但想直接 completed: 必须传 verified=true + evidence",
+			"[验证失败] verifying/completed 被改回 in_progress 时 verifyAttempts++，2 次后进入 failed",
+			"[自动闭合] 全部完成后工具自动清理，无需手动 clear",
+			"[Not for] 单步操作、简单对话、/goal 已激活时",
+		],
+		parameters: TodoParams,
+
+		async execute(_toolCallId: string, params: Static<typeof TodoParams>, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			const result = executeTodoAction(params as Parameters<typeof executeTodoAction>[0], ctx);
+			// Append input params to error results for debugging
+			const details = result.details as { error?: string } | undefined;
+			if (details?.error) {
+				const textPart = result.content[0];
+				if (textPart?.type === "text") {
+					const inputSummary = JSON.stringify(params);
+					textPart.text += `\nInput: ${inputSummary}`;
+				}
+			}
+			return result;
+		},
+
+		renderCall(args: Record<string, unknown>, theme: Theme, _context?: unknown) {
+			let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", args.action as string);
+			const texts = args.texts as string[] | undefined;
+			const ids = args.ids as number[] | undefined;
+			if (texts && texts.length > 0) text += ` ${theme.fg("dim", `(${texts.length} items)`)}`;
+			if (ids && ids.length > 0) text += ` ${theme.fg("accent", `#${ids.join(", #")}`)}`;
+			if (args.id !== undefined) text += ` ${theme.fg("accent", `#${args.id}`)}`;
+			if (args.text) text += ` ${theme.fg("dim", `"${args.text}"`)}`;
+			if (args.status) text += ` ${theme.fg("warning", args.status as string)}`;
+			return new Text(text, 0, 0);
+		},
+
+		renderResult(result: unknown, options: { expanded: boolean }, theme: Theme, _context?: unknown) {
+			return renderTodoResult(result, options, theme);
+		},
+	});
+
+	// ── registerMessageRenderer for todo-context ───────
+	pi.registerMessageRenderer("todo-context", (message: Record<string, unknown>, _options: unknown, theme: Theme) => {
+		const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+		const match = content.match(/\[TODO\]\s*(?:Turn \d+ — )?(\d+)\s*tasks?\s*(pending|completed)/);
+		let displayText: string;
+		if (match) {
+			const count = match[1];
+			displayText = match[2] === "completed"
+				? theme.fg("success", `[TODO] All ${count} tasks completed \u2713`)
+				: theme.fg("warning", `[TODO] ${count} tasks pending`);
+		} else {
+			const firstLine = content.split("\n").find((l: string) => l.includes("[TODO]")) || "[TODO]";
+			displayText = theme.fg("accent", firstLine.trim());
+		}
+		return new Text(displayText, 0, 0);
+	});
 
 	// ── Command: /todos ─────────────────────────────────
 	pi.registerCommand("todos", {
@@ -718,9 +920,8 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi UI callback args
-			await ctx.ui.custom((_tui: any, theme: Theme, _kb: any, done: () => void) => {
-				return new TodoListComponent(session.todos, theme, () => done());
+			await ctx.ui.custom((_tui: unknown, theme: Theme, _kb: unknown, done: () => void) => {
+				return new TodoListComponent(todos, theme, () => done());
 			});
 		},
 	});

@@ -216,12 +216,12 @@ for f in $(git diff --cached --name-only --diff-filter=ACM | grep '\.ts$' | grep
   fi
 done
 
-if [[ ${#TEST_PKGS[@]} -gt 0 ]]; then
+if [[ ${#TEST_PKGS[@]:-} -gt 0 ]]; then
   echo "--- vitest ---"
   for pkg in "${TEST_PKGS[@]}"; do
     pkg_name=$(python3 -c "import json; print(json.load(open('$pkg/package.json')).get('name', '$pkg'))" 2>/dev/null || echo "$pkg")
     echo "  测试 $pkg_name ..."
-    if ! npx vitest run --config "$pkg/vitest.config.ts" 2>&1; then
+    if ! (cd "$pkg" && npx vitest run) 2>&1; then
       echo -e "${C_RED}[FAIL]${C_RESET} $pkg_name 测试失败"
       echo -e "${C_YELLOW}无论是否本次修改导致，都需要修复，不得跳过${C_RESET}"
       exit 1

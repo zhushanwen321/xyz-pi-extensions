@@ -21,6 +21,9 @@
     "src/",
     "index.ts"
   ],
+  "devDependencies": {
+    "vitest": "^4.1.8"
+  },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
@@ -36,6 +39,7 @@
     }
   },
   "scripts": {
-    "typecheck": "npx tsc --noEmit"
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run"
   }
 }
