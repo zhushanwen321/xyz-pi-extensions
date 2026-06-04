@@ -466,6 +466,7 @@ export default function (pi: ExtensionAPI) {
 					if (oldStatus === "completed" && params.status === "in_progress" && todo.verifyText && todo.verifyAttempts < MAX_VERIFY_ATTEMPTS) {
 						todo.verifyAttempts++;
 					}
+				}
 				if (params.text !== undefined) {
 					todo.text = params.text;
 				}

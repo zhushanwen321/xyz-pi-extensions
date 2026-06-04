@@ -1,0 +1,177 @@
+{
+  "test_execution": [
+    {
+      "caseId": "TC-1-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run vitest: 'should load old data without verifyText/verifyAttempts'",
+        "run vitest: 'should set verifyAttempts default to 0 when migrating old data'",
+        "run vitest: 'should preserve verifyText when present in old data'"
+      ],
+      "evidence": "35/35 tests pass, 3 tests cover migration"
+    },
+    {
+      "caseId": "TC-1-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run vitest: 'should accept failed status'",
+        "run vitest: 'should include all four valid statuses'"
+      ],
+      "evidence": "VALID_STATUSES includes 'failed' and all 4 statuses accepted"
+    },
+    {
+      "caseId": "TC-2-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run vitest: 'should map verifyTexts to todos at corresponding indices'",
+        "Verify #1 gets verifyText, #2-#3 don't"
+      ],
+      "evidence": "addTodos maps verifyTexts by index"
+    },
+    {
+      "caseId": "TC-2-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run vitest: 'should work without verifyTexts (backward compat)'",
+        "Verify returning addTodos without verifyTexts defaults to undefined"
+      ],
+      "evidence": "verifyText defaults to undefined when omitted"
+    },
+    {
+      "caseId": "TC-2-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run vitest: 'should reject verifyTexts longer than texts'",
+        "Verify error message contains 'verifyTexts length exceeds texts length'"
+      ],
+      "evidence": "error returned for mismatched lengths"
+    },
+    {
+      "caseId": "TC-3-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run vitest: 'should update multiple todos with updates[]'",
+        "Verify multi-todo status updates in single call"
+      ],
+      "evidence": "3 todos updated in single batch, statuses verified"
+    },
+    {
+      "caseId": "TC-3-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run vitest: 'should reject duplicate ids in updates[]'",
+        "Verify error: 'duplicate ids in updates'"
+      ],
+      "evidence": "error returned, todos unchanged"
+    },
+    {
+      "caseId": "TC-3-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run vitest: 'should reject non-existent ids in updates[] (all-or-nothing)'",
+        "Verify error: 'id 999 not found'"
+      ],
+      "evidence": "error returned, existing todo not modified"
+    },
+    {
+      "caseId": "TC-3-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: verify executeTodoAction handles both updates[] and single id/status paths",
+        "Verify old-style update(id=1, status=completed) follows non-batch code path"
+      ],
+      "evidence": "executeTodoAction dispatches single-item path when no updates[] param"
+    },
+    {
+      "caseId": "TC-4-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run vitest: 'should auto-clear when all completed and delay rounds elapsed'",
+        "run vitest: 'should not auto-clear when delay rounds not yet elapsed'"
+      ],
+      "evidence": "auto-clear triggers after AUTO_CLEAR_DELAY_ROUNDS=2"
+    },
+    {
+      "caseId": "TC-5-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run vitest: 'should detect completed tasks needing verification'",
+        "run vitest: 'should format pending tasks with verifyText for context injection'",
+        "Code review: agent_end injects display:false with customType=todo-context"
+      ],
+      "evidence": "agent_end context injection verified in code; filtered needs-verify logic tested"
+    },
+    {
+      "caseId": "TC-5-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run vitest: 'should detect verify failure when attempts exceed max (completed status)'",
+        "run vitest: 'should increment verifyAttempts when AI re-opens completed task with verifyText'",
+        "Verify 2 failed attempts -> status=failed; TUI shows verification failure indicator"
+      ],
+      "evidence": "verify-failed check before needs-verify; status transitions to 'failed' after MAX_VERIFY_ATTEMPTS=2"
+    },
+    {
+      "caseId": "TC-5-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "run vitest: 'should not trigger verify for tasks without verifyText'",
+        "Verify needs-verify returns undefined when verifyText absent"
+      ],
+      "evidence": "agent_end skips tasks without verifyText"
+    },
+    {
+      "caseId": "TC-6-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: verify promptGuidelines for goal conflict avoidance",
+        "Goal extension and todo extension both register tools; goal tool is contextually preferred when /goal active"
+      ],
+      "evidence": "todo tool has promptGuidelines section advising against use during active goal"
+    },
+    {
+      "caseId": "TC-7-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: verify todo tool instructions include usage triggers for multi-step work",
+        "Verify prompt describes when AI should proactively use todo (no active /goal, multi-step)"
+      ],
+      "evidence": "todo tool instructions include proactive usage guidance"
+    },
+    {
+      "caseId": "TC-8-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Code review: verify registerMessageRenderer exists for todo-context",
+        "Verify renderer handles [TODO] prefix and produces status summary"
+      ],
+      "evidence": "pi.registerMessageRenderer('todo-context', ...) registered in index.ts"
+    },
+    {
+      "caseId": "TC-9-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Run: npx tsc --noEmit for extensions/todo",
+        "Verify no todo-specific type errors"
+      ],
+      "evidence": "todo extension compiles clean; pre-existing errors in model-switch/statusline unrelated"
+    }
+  ]
+}
