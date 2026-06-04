@@ -23,10 +23,10 @@ import { loadWorkflows } from "./config-loader.js";
 // ── Constants ─────────────────────────────────────────────────
 
 const JSON_INDENT = 2;
-const MAX_RESULT_LENGTH = 2000;
+const MAX_RESULT_LENGTH = 8000;
 const RUNID_SHORT_LENGTH = 12;
 const RUNID_SLICE_LENGTH = 16;
-const TASK_SHORT_LENGTH = 80;
+const TASK_SHORT_LENGTH = 150;
 const CONTENT_TRUNC_LENGTH = 500;
 const SPLIT_LIMIT = 2;
 const TASK_PREVIEW_LENGTH = 60;

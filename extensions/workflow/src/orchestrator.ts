@@ -125,6 +125,14 @@ export class WorkflowOrchestrator {
     this.ctx = ctx;
     this.sessionDir = path.join(homedir(), ".pi", "agent");
 
+    // Override with session-scoped directory (same as Pi's session JSONL location).
+    // Pi encodes the project path as: /a/b/c → --a-b-c-- (subdirectory under sessions/).
+    const sessionSlug = "--" + process.cwd().replace(/^\//, "").replace(/\//g, "-") + "--";
+    const sessionScopedDir = path.join(homedir(), ".pi", "agent", "sessions", sessionSlug);
+    if (fs.existsSync(sessionScopedDir)) {
+      this.sessionDir = sessionScopedDir;
+    }
+
     // Merge default soft-limit callback with any caller-provided options
     const defaultOnSoftLimit = ({ runName, budget }: {
       runName: string;
