@@ -2,42 +2,31 @@
  * Todo Extension v2 - 三态任务清单，支持状态栏和 entry GC
  *
  * 改动要点：
- * - done: boolean → status: "pending" | "in_progress" | "completed"
+ * - done: boolean → status: "pending" | "in_progress" | "completed" | "failed"
  * - toggle → update（id + 可选 status/text，带参数守卫）
  * - 新增 delete action
  * - 状态栏通过 ctx.ui.setStatus 显示进度
  * - reconstructState 向后兼容旧 done 字段 + entry GC
+ * - 支持 verifyText/verifyAttempts 字段（数据模型增强）
+ * - add 支持 verifyTexts 参数（验证文本映射）
  */
 
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { matchesKey, Text, truncateToWidth } from "@mariozechner/pi-tui";
-	import { Type, type Static } from "typebox";
+import { Type, type Static } from "typebox";
 
-// ── 数据模型 ─────────────────────────────────────────
+import {
+	type Todo,
+	type TodoDetails,
+	VALID_STATUSES,
+	migrateTodo,
+	getDisplayStatus,
+	buildRender,
+	addTodos,
+} from "./model";
 
-interface Todo {
-	id: number;
-	text: string;
-	status: "pending" | "in_progress" | "completed";
-}
-
-interface TodoDetails {
-	action: "list" | "add" | "update" | "delete" | "clear";
-	todos: Todo[];
-	nextId: number;
-	error?: string;
-	_render?: {
-		type: "task-list";
-		summary?: string;
-		data: {
-			items: Array<{ id: number; text: string; status: string }>;
-			meta: Record<string, string>;
-		};
-	};
-}
-
-const VALID_STATUSES = ["pending", "in_progress", "completed"] as const;
+// ── TodoParams schema（依赖 Pi 运行时包） ────────────
 
 const TodoParams = Type.Object({
 	action: StringEnum(["list", "add", "update", "delete", "clear"] as const),
@@ -47,6 +36,11 @@ const TodoParams = Type.Object({
 	ids: Type.Optional(Type.Array(Type.Number(), { description: "Todo ID list (for delete action)" })),
 	status: Type.Optional(
 		StringEnum(VALID_STATUSES, { description: "Target status (for update action)" }),
+	),
+	verifyTexts: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "Verification text list (one per texts entry, for add action)",
+		}),
 	),
 });
 
@@ -106,7 +100,9 @@ class TodoListComponent {
 						? th.fg("success", "\u2713")
 						: todo.status === "in_progress"
 							? th.fg("warning", "\u25cf")
-							: th.fg("dim", "\u25cb");
+							: todo.status === "failed"
+								? th.fg("error", "\u2717")
+								: th.fg("dim", "\u25cb");
 				const id = th.fg("accent", `#${todo.id}`);
 				const text = todo.status === "completed" ? th.fg("dim", todo.text) : th.fg("text", todo.text);
 				lines.push(truncateToWidth(`  ${mark} ${id} ${text}`, width));
@@ -129,22 +125,6 @@ class TodoListComponent {
 }
 
 // ── 辅助函数 ─────────────────────────────────────────
-
-/** 兼容旧格式：旧 entry 可能有 done: boolean，转换为 status */
-function migrateTodo(raw: Todo): Todo {
-	const record = raw as unknown as Record<string, unknown>;
-	if (typeof record.status === "string" && VALID_STATUSES.includes(record.status as Todo["status"])) {
-		return raw;
-	}
-	// 旧格式兜底：done → completed，否则 pending
-	const { done, ...rest } = record as unknown as { done?: boolean; id: number; text: string };
-	return { id: rest.id, text: rest.text, status: done === true ? "completed" : "pending" };
-}
-
-/** 渲染层获取状态：先 migrate 再取 status */
-function getDisplayStatus(t: Todo): string {
-	return migrateTodo(t).status;
-}
 
 /** 渲染状态栏文本 */
 function renderStatusText(todoList: Todo[], th: Theme): string {
@@ -177,7 +157,9 @@ function renderWidgetLines(todoList: Todo[], th: Theme): string[] {
 				? th.fg("success", "\u2713")
 				: t.status === "in_progress"
 					? th.fg("warning", "\u25cf")
-					: th.fg("dim", "\u25cb");
+					: t.status === "failed"
+						? th.fg("error", "\u2717")
+						: th.fg("dim", "\u25cb");
 		const id = th.fg("accent", `#${t.id}`);
 		const text = t.status === "completed" ? th.fg("dim", t.text) : th.fg("text", t.text);
 		lines.push(`  ${mark} ${id} ${text}`);
@@ -186,19 +168,7 @@ function renderWidgetLines(todoList: Todo[], th: Theme): string[] {
 	return lines;
 }
 
-/** 构建 _render 描述符 */
-function buildRender(todoList: Todo[]): TodoDetails["_render"] {
-	const completed = todoList.filter((t) => t.status === "completed").length;
-	const total = todoList.length;
-	return {
-		type: "task-list" as const,
-		summary: `${completed}/${total} completed`,
-		data: {
-			items: todoList.map((t) => ({ id: t.id, text: t.text, status: t.status })),
-			meta: {},
-		},
-	};
-}
+// buildRender 已从 model.ts 导入
 
 /** v3: 自动清空延迟轮数（全部完成后保留 N 轮用户消息） */
 const AUTO_CLEAR_DELAY_ROUNDS = 2;
@@ -222,7 +192,9 @@ function buildTodoListText(todoList: Todo[], options: { expanded: boolean }, the
 				? theme.fg("success", "\u2713")
 				: status === "in_progress"
 					? theme.fg("warning", "\u25cf")
-					: theme.fg("dim", "\u25cb");
+					: status === "failed"
+						? theme.fg("error", "\u2717")
+						: theme.fg("dim", "\u25cb");
 		const itemText =
 			status === "completed" ? theme.fg("dim", t.text) : theme.fg("muted", t.text);
 		listText += `\n${mark} ${theme.fg("accent", `#${t.id}`)} ${itemText}`;
@@ -312,7 +284,7 @@ export default function (pi: ExtensionAPI) {
 
 	// ── Tool execute handler ─────────────────────────────
 	function executeTodoAction(
-		params: { action: string; text?: string; id?: number; texts?: string[]; ids?: number[]; status?: string },
+		params: { action: string; text?: string; id?: number; texts?: string[]; ids?: number[]; status?: string; verifyTexts?: string[] },
 		ctx: ExtensionContext,
 	) {
 		let resultText = "";
@@ -330,7 +302,9 @@ export default function (pi: ExtensionAPI) {
 										? "x"
 										: t.status === "in_progress"
 											? "~"
-											: " ";
+											: t.status === "failed"
+												? "!"
+												: " ";
 								return `[${mark}] #${t.id}: ${t.text}`;
 							})
 							.join("\n")
@@ -348,28 +322,27 @@ export default function (pi: ExtensionAPI) {
 							nextId,
 							error: "texts required",
 							_render: buildRender(todos),
-					} as TodoDetails,
+						} as TodoDetails,
 					};
 				}
-				const trimmed = params.texts.map((t) => t.trim()).filter((t) => t.length > 0);
-				if (trimmed.length === 0) {
+
+				const addResult = addTodos(todos, nextId, params.texts, params.verifyTexts);
+				if (addResult.error) {
 					return {
-						content: [{ type: "text" as const, text: "Error: texts must contain at least one non-empty string" }],
+						content: [{ type: "text" as const, text: addResult.resultText! }],
 						details: {
 							action: "add" as const,
 							todos: [...todos],
 							nextId,
-							error: "all texts empty",
+							error: addResult.error,
 							_render: buildRender(todos),
-					} as TodoDetails,
+						} as TodoDetails,
 					};
 				}
-				const startId = nextId;
-				for (const t of trimmed) {
-					todos.push({ id: nextId++, text: t, status: "pending" });
-				}
-				const endId = nextId - 1;
-				resultText = `Added ${trimmed.length} todos (#${startId}-#${endId})`;
+
+				todos = addResult.newTodos;
+				nextId = addResult.newNextId;
+				resultText = addResult.resultText!;
 				// v3: 新增 todo 表示未全部完成
 				allCompletedAtCount = null;
 				break;
@@ -385,7 +358,7 @@ export default function (pi: ExtensionAPI) {
 							nextId,
 							error: "id required",
 							_render: buildRender(todos),
-					} as TodoDetails,
+						} as TodoDetails,
 					};
 				}
 				if (params.status === undefined && params.text === undefined) {
@@ -397,7 +370,7 @@ export default function (pi: ExtensionAPI) {
 							nextId,
 							error: "need status or text",
 							_render: buildRender(todos),
-					} as TodoDetails,
+						} as TodoDetails,
 					};
 				}
 				if (params.text !== undefined && params.text === "") {
@@ -409,7 +382,7 @@ export default function (pi: ExtensionAPI) {
 							nextId,
 							error: "text empty",
 							_render: buildRender(todos),
-					} as TodoDetails,
+						} as TodoDetails,
 					};
 				}
 				if (
@@ -429,7 +402,7 @@ export default function (pi: ExtensionAPI) {
 							nextId,
 							error: `invalid status: ${params.status}`,
 							_render: buildRender(todos),
-					} as TodoDetails,
+						} as TodoDetails,
 					};
 				}
 
@@ -443,7 +416,7 @@ export default function (pi: ExtensionAPI) {
 							nextId,
 							error: `#${params.id} not found`,
 							_render: buildRender(todos),
-					} as TodoDetails,
+						} as TodoDetails,
 					};
 				}
 
@@ -492,7 +465,7 @@ export default function (pi: ExtensionAPI) {
 							nextId,
 							error: "ids required",
 							_render: buildRender(todos),
-					} as TodoDetails,
+						} as TodoDetails,
 					};
 				}
 				const uniqueIds = [...new Set(params.ids)];
@@ -507,7 +480,7 @@ export default function (pi: ExtensionAPI) {
 							nextId,
 							error: `#${missing.map((id) => id).join(", #")} not found`,
 							_render: buildRender(todos),
-					} as TodoDetails,
+						} as TodoDetails,
 					};
 				}
 				const removedIds: number[] = [];
@@ -684,7 +657,7 @@ export default function (pi: ExtensionAPI) {
 			"Manage a todo list." +
 			"\n\nAvailable actions:" +
 			"\n- list: View all todos" +
-			"\n- add: Batch add todos (requires texts array)" +
+			"\n- add: Batch add todos (requires texts array, optional verifyTexts)" +
 			"\n- update: Update a todo (requires id, optional status/text)" +
 			"\n- delete: Batch delete todos (requires ids array)" +
 			"\n- clear: Clear all todos and reset IDs",
@@ -701,8 +674,8 @@ export default function (pi: ExtensionAPI) {
 		],
 		parameters: TodoParams,
 
-		async execute(_toolCallId: string, params: Static<typeof TodoParams>, _signal: AbortSignal | undefined, _onUpdate: any, ctx: ExtensionContext) {
-			const result = executeTodoAction(params as any, ctx);
+		async execute(_toolCallId: string, params: Static<typeof TodoParams>, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			const result = executeTodoAction(params as Parameters<typeof executeTodoAction>[0], ctx);
 			// Append input params to error results for debugging
 			const details = result.details as { error?: string } | undefined;
 			if (details?.error) {
@@ -715,17 +688,19 @@ export default function (pi: ExtensionAPI) {
 			return result;
 		},
 
-		renderCall(args: any, theme: Theme, _context?: any) {
-			let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", args.action);
-			if (args.texts && args.texts.length > 0) text += ` ${theme.fg("dim", `(${args.texts.length} items)`)}`;
-			if (args.ids && args.ids.length > 0) text += ` ${theme.fg("accent", `#${args.ids.join(", #")}`)}`;
+		renderCall(args: Record<string, unknown>, theme: Theme, _context?: unknown) {
+			let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", args.action as string);
+			const texts = args.texts as string[] | undefined;
+			const ids = args.ids as number[] | undefined;
+			if (texts && texts.length > 0) text += ` ${theme.fg("dim", `(${texts.length} items)`)}`;
+			if (ids && ids.length > 0) text += ` ${theme.fg("accent", `#${ids.join(", #")}`)}`;
 			if (args.id !== undefined) text += ` ${theme.fg("accent", `#${args.id}`)}`;
 			if (args.text) text += ` ${theme.fg("dim", `"${args.text}"`)}`;
-			if (args.status) text += ` ${theme.fg("warning", args.status)}`;
+			if (args.status) text += ` ${theme.fg("warning", args.status as string)}`;
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result: any, options: any, theme: Theme, _context?: any) {
+		renderResult(result: unknown, options: { expanded: boolean }, theme: Theme, _context?: unknown) {
 			return renderTodoResult(result, options, theme);
 		},
 	});
@@ -739,7 +714,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			await ctx.ui.custom((_tui: any, theme: Theme, _kb: any, done: () => void) => {
+			await ctx.ui.custom((_tui: unknown, theme: Theme, _kb: unknown, done: () => void) => {
 				return new TodoListComponent(todos, theme, () => done());
 			});
 		},
