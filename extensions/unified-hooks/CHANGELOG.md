@@ -1,5 +1,11 @@
 # @zhushanwen/pi-unified-hooks
 
+## 0.0.4
+
+### Patch Changes
+
+- Audit and fix all 11 extensions against project specifications
+
 ## 0.0.3
 
 ### Patch Changes

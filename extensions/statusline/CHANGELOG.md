@@ -1,5 +1,11 @@
 # @zhushanwen/pi-statusline
 
+## 0.4.3
+
+### Patch Changes
+
+- Audit and fix all 11 extensions against project specifications
+
 ## 0.4.2
 
 ### Patch Changes

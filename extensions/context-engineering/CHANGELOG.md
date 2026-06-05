@@ -1,5 +1,11 @@
 # @zhushanwen/pi-context-engineering
 
+## 0.1.3
+
+### Patch Changes
+
+- Audit and fix all 11 extensions against project specifications
+
 ## 0.1.2
 
 ### Patch Changes

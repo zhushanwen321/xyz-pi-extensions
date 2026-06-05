@@ -1,5 +1,11 @@
 # @zhushanwen/pi-model-switch
 
+## 0.2.6
+
+### Patch Changes
+
+- Audit and fix all 11 extensions against project specifications
+
 ## 0.2.5
 
 ### Patch Changes

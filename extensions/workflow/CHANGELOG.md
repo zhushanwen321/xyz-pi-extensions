@@ -1,5 +1,13 @@
 # @zhushanwen/pi-workflow
 
+## 0.1.6
+
+### Patch Changes
+
+- Audit and fix all 11 extensions against project specifications
+- Updated dependencies
+  - @zhushanwen/pi-model-switch@0.2.6
+
 ## 0.1.5
 
 ### Patch Changes

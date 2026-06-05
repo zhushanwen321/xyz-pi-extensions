@@ -1,9 +1,12 @@
 {
   "name": "@zhushanwen/pi-taste-lint",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "ESLint plugin with custom taste rules for Pi extensions",
   "main": "base.mjs",
-  "files": ["base.mjs", "rules/"],
+  "files": [
+    "base.mjs",
+    "rules/"
+  ],
   "peerDependencies": {
     "eslint": ">=9"
   }

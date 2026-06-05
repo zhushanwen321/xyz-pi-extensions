@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-context-engineering",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Progressive context compression for Pi — L0 zero-cost cleanup, L1 rule-based condensation, L2 emergency truncation, with recall mechanism.",
   "type": "module",
   "main": "src/index.ts",

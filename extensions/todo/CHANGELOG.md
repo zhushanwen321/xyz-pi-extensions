@@ -1,5 +1,11 @@
 # @zhushanwen/pi-todo
 
+## 0.1.5
+
+### Patch Changes
+
+- Audit and fix all 11 extensions against project specifications
+
 ## 0.1.4
 
 ### Patch Changes
