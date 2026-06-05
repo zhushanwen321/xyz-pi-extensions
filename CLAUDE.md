@@ -25,7 +25,7 @@ xyz-pi-extensions/
 │   ├── taste-lint/          → @zhushanwen/pi-taste-lint
 │   └── types/               → @zhushanwen/pi-types
 ├── skills/                      # 独立 skills（无所属 extension，GitHub 分发）
-├── scripts/                     # 共享脚本
+├── scripts/                     # 项目运维脚本（非 gate 类）
 ├── docs/                        # 统一文档
 ├── .changeset/                  # 版本管理
 ├── pnpm-workspace.yaml
@@ -48,7 +48,7 @@ xyz-pi-extensions/
 | Pi 扩展（产品） | `extensions/` | goal, todo, vision, statusline |
 | 内部共享依赖 | `shared/` | quota-providers, types, taste-lint |
 | 独立 skills | `skills/` | vision-analysis, zcommit |
-| 共享脚本 | `scripts/` | validate-extensions-yaml.py |
+| 共享脚本 | `scripts/` | publish.sh（运维）；gate 脚本见 `.githooks/` |
 
 **硬性约束**：
 - npm install 必须能跑：`dependencies` 中的包必须在 npm 上可获取，`workspace:*` publish 时转为具体版本号，`private: true` 的包不能作为依赖
@@ -62,7 +62,7 @@ xyz-pi-extensions/
 
 数据源：`docs/third-party-extensions/extensions.yaml`（source of truth）
 Schema：`docs/third-party-extensions/extensions.schema.json`
-校验：`python3 scripts/validate-extensions-yaml.py`
+校验：`python3 .githooks/validate-extensions-yaml`
 
 **操作规范**：每次新增/变更社区扩展（安装、fork、借鉴思路），必须同步更新 `extensions.yaml` 并运行校验脚本。如需深度分析，创建对应的 `analysis.md`。
 
@@ -76,6 +76,9 @@ Schema：`docs/third-party-extensions/extensions.schema.json`
   - `hermes-agent-research.md` — Hermes Agent 记忆/上下文管理调研
   - `openclaw-research.md` — OpenClaw 记忆/上下文管理调研
   - `coding-agents-context-research.md` — Claude Code/Aider/Qwen Code/OpenCode 对比调研
+  - `pi-extension-production-guide.md` — 生产级 Pi Extension 开发指南（基于 pi-subagents 等调研）
+- [docs/monorepo-conventions.md](./docs/monorepo-conventions.md) — **Monorepo 约定与结构规范**（目录结构、命名、依赖发布规则）
+- [docs/quality-gates.md](./docs/quality-gates.md) — **质量门控与 Git Hooks**（pre-commit 检查项、阻断级别、跳过条件）
 
 ### 当前分支文档
 
@@ -159,126 +162,27 @@ git push
 pnpm changeset publish --dry-run
 
 # 校验 third-party extensions 注册表
-python3 scripts/validate-extensions-yaml.py
+python3 .githooks/validate-extensions-yaml
+
+# 结构检查（独立于 pre-commit）
+bash .githooks/check-structure
 ```
+
+## 脚本与 Git Hooks 目录约定
+
+| 目录 | 用途 | 内容 |
+|------|------|------|
+| `.githooks/` | **[强制]** 所有 gate/intercept 类脚本。被 git hook 调用或手动运行做质量门控。 | Hook 入口（`pre-commit`）+ 校验脚本（`validate-*`）+ 结构检查（`check-structure`） |
+| `scripts/` | **[强制]** 项目运维脚本。不被 hook 调用，仅人手动运行或 CI 调用。 | 发布脚本（`publish.sh`）等非 gate 类运维工具 |
+
+**判定规则**：
+- 凡是"检查是否合规"的脚本 → `.githooks/`（gate/intercept 性质）
+- 凡是"做某件事"的脚本 → `scripts/`（operational 性质）
+- `.githooks/` 中的脚本也可以被人直接调用（如 `python3 .githooks/validate-extensions-yaml`）
 
 ### 版本管理
 
 **核心原则：各包独立版本号，通过 changeset 管理。**
-
-- 根 `package.json` 的 `version`（当前 `0.0.7`）无实际发布意义，仅代表 monorepo 整体迭代序号
-- 各 `extensions/*` 和 `shared/*` 子包版本独立，不联动
-- `changeset config.json` 的 `fixed` 为空，确认独立版本模式
-- merge-worktree 阶段 4 由 AI 逐步执行（消费 changeset → 逐一验证子包版本 → bump 根版本 → tag + push），`scripts/publish.sh` 可作为参考但非强制
-
-**子包版本 bump 规则：**
-
-| 变更类型 | bump 级别 | 示例 |
-|----------|-----------|------|
-| Bug 修复、对齐修正、fallback 补充 | `patch` | 状态栏对齐修复 → `0.4.0` → `0.4.1` |
-| 新功能、新 provider、新增 API | `minor` | 新增 speed 显示 → `0.4.0` → `0.5.0` |
-| 破坏性变更（API 不兼容） | `major` | 重构导出接口 → `0.4.0` → `1.0.0` |
-
-**操作流程（手动）：**
-
-1. `pnpm changeset` — 交互式选择受影响的包和版本级别
-2. `pnpm changeset version` — 根据 changeset 文件 bump 各包版本
-3. 提交变更 + 打 tag → GitHub Actions 自动发布
-
-**操作流程（merge-worktree 阶段 4）：**
-
-AI 逐步执行，每步可检查和补救：
-1. 检查 changeset 文件是否存在，确认覆盖的子包
-2. `pnpm changeset version` 消费 changeset
-3. 逐一验证每个子包新版本号，发现遗漏当场补救
-4. bump 根版本号（`npm version patch --no-git-tag-version`）
-5. commit + tag `v{根版本}` + push
-6. release.yml 由 tag 触发，执行 `pnpm changeset publish` 发布到 npm
-
-⚠️ **PR 中必须包含 changeset 文件**（通过 `pnpm changeset` 创建），否则阶段 4 只 bump 根版本号，子包不会发布。
-
-### 发布流程（GitHub Actions）
-
-**[强制] 禁止本地发布（`npm publish` / `pnpm changeset publish`），必须走 GitHub Actions。**
-
-项目通过 GitHub Actions 自动发布 npm 包。触发条件：push tag `v*`。
-
-```bash
-# 1. 在 PR 分支中创建 changeset（选择受影响的包 + patch/minor/major）
-pnpm changeset
-git add .changeset/ && git commit -m "chore: add changeset"
-
-# 2. PR 合并后，merge-worktree 阶段 4 逐步执行：
-#    - pnpm changeset version（bump 子包版本）
-#    - 逐一验证子包版本号，补救遗漏
-#    - bump 根版本号 + commit + tag + push
-#    - release.yml 自动发布到 npm
-```
-
-**⚠️ 如果不用 merge-worktree，手动发布流程：**
-
-```bash
-# 1. 创建 changeset + bump
-pnpm changeset
-pnpm changeset version
-git add -A && git commit -m "chore: bump versions"
-
-# 2. 打 tag 触发发布
-git tag v0.x.x && git push origin v0.x.x
-```
-
-GitHub Actions 自动执行：`pnpm changeset publish` + 创建 GitHub Release。
-
-**npm monorepo 项目的交付物验证**：GitHub Release 无构建产物（只有 source code）。实际交付物是 npm registry 上的包。阶段 6 通过 `npm view` 验证。
-
-**前提条件（已满足）：**
-- GitHub Secrets 中已配置 `NPM_TOKEN`
-- 所有 `@zhushanwen/pi-*` 包已在 npmjs.org 上首次发布过
-```
-
-### 预发布流程（dev 分支）
-
-项目支持在 `dev-*` 分支上发布预发布包（prerelease），与 main 分支的正式发布完全隔离。
-
-**两条发布轨道对比：**
-
-| | main（正式） | dev-x.x.x（预发布） |
-|---|---|---|
-| **触发** | 推送 tag `v*` | PR 合并到 `dev-*` 分支（push） |
-| **版本格式** | `0.1.0`, `0.1.1` | `0.2.0-dev.0`, `0.2.0-dev.1` |
-| **npm tag** | `latest`（默认） | `dev` |
-| **安装方式** | `npm install @zhushanwen/pi-xxx` | `npm install @zhushanwen/pi-xxx@dev` |
-| **版本管理** | changeset 自动 bump | 手动改 package.json |
-
-**Workflow 文件：** `release.yml`（tag `v*` 触发）+ `release-dev.yml`（`dev-*` 分支 push 触发）。
-
-```bash
-# 1. 创建 dev 分支
-git checkout -b dev-0.2.0 main
-
-# 2. 手动改需要发布的包的版本（加 prerelease 后缀）
-#    extensions/goal/package.json: "version": "0.2.0-dev.0"
-git add -A && git commit -m "chore: bump to 0.2.0-dev.0"
-git push origin dev-0.2.0
-
-# 3. 后续功能开发：开 PR 到 dev-0.2.0
-#    PR 合并后自动触发 release-dev workflow
-#    首次合并会发布 0.2.0-dev.0
-
-# 4. 下一轮 prerelease：再改版本号
-#    package.json: "version": "0.2.0-dev.1"
-#    新 PR 合并 → 发布 0.2.0-dev.1
-
-# 5. 开发完成，合并到 main
-#    改回正式版本 0.2.0，走正常 changeset 流程
-```
-
-**关键点：**
-- `changeset publish --tag dev` 只发布 npm 上不存在的版本。同版本号再合并会静默跳过，必须手动升版本（`dev.0` → `dev.1`）
-- `--tag dev` 确保正式用户 `npm install` 不会装到 dev 版本，只有显式 `@dev` 才安装
-- dev 分支不需要打 git tag，PR 合并的 push 事件直接触发
-- npm 禁止覆盖已发布的同版本号，正式版和 prerelease 都一样
-```
 
 ## 扩展安装红线
 
@@ -677,8 +581,27 @@ SKIP_LINT=1 git commit -m "..."
 1. `tsc --noEmit` — 全量 TypeScript 类型检查
 2. `eslint` — 仅检查 staged 的 `.ts` 文件
 3. `vitest` — 按需触发：仅当 staged 文件涉及的包有 `src/__tests__/` 时运行
+4. 文件行数上限检查 — >1000 行阻断，>500 行警告
+5. CLAUDE.md 同步检查 — extensions/ 目录变化时验证 CLAUDE.md 同步更新
+6. pi manifest 检查 — package.json 的 pi.extensions/type:module/keywords
+7. package.json 深度检查 — 包名格式、peerDeps、files
+8. scripts 校验 — extensions.yaml + SKILL.md YAML 格式
 
 bare+worktree 模式下 hook 自动检测 rebase 状态并跳过。
+
+详见：[docs/quality-gates.md](./docs/quality-gates.md)
+
+### 独立结构检查
+
+```bash
+# 完整结构检查（不阻断 commit，可手动运行）
+bash .githooks/check-structure
+
+# 快速模式（仅阻断级别）
+bash .githooks/check-structure --quick
+```
+
+检查项包括：扩展入口文件存在、CLAUDE.md 同步、文件行数上限、入口模式、模块级变量、package.json files 字段完整性。
 
 ### 类型 Stub 维护（`shared/types/`）
 

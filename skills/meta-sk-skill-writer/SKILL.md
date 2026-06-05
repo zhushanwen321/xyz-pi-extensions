@@ -33,7 +33,7 @@ description: "Use when executing implementation plans with independent tasks"
 
 ### Description 格式
 
-description 是 YAML frontmatter，格式错误导致 Pi 启动报错。read `references/yaml-guide.md` 获取完整格式规范。核心原则：`>-` 折叠块标量为推荐默认格式（无需转义、不会配对失败）；双引号仅用于极短的纯英文 description（无冒号/引号）；禁止无引号 plain string。写完运行验证：`python3 scripts/validate-skill-yaml.py skills/*/SKILL.md`
+description 是 YAML frontmatter，格式错误导致 Pi 启动报错。read `references/yaml-guide.md` 获取完整格式规范。核心原则：`>-` 折叠块标量为推荐默认格式（无需转义、不会配对失败）；双引号仅用于极短的纯英文 description（无冒号/引号）；禁止无引号 plain string。写完运行验证：`python3 .githooks/validate-skill-yaml skills/*/SKILL.md`
 
 ## SKILL.md 结构
 

@@ -2,7 +2,7 @@
 
 > **Source of truth**: [`extensions.yaml`](./extensions.yaml)
 > Schema: [`extensions.schema.json`](./extensions.schema.json)
-> Validate: `python3 scripts/validate-extensions-yaml.py`
+> Validate: `python3 .githooks/validate-extensions-yaml`
 
 ## 来源分类
 
