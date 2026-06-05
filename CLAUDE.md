@@ -158,8 +158,9 @@ git add -A
 git commit -m "chore: bump versions"
 git push
 
-# 发布（dry run 预览，不实际发布）
+# 发布（仅 dry-run 预览，禁止在本地直接 publish）
 pnpm changeset publish --dry-run
+# ⚠️ 禁止在本地执行 pnpm changeset publish — 由 CI 或 merge skill 流程处理
 
 # 校验 third-party extensions 注册表
 python3 .githooks/validate-extensions-yaml
