@@ -114,8 +114,12 @@ function registerSwitchTool(pi: ExtensionAPI, state: SessionState): void {
 			+ "Configured models are defined in model-policy.json. "
 			+ "Setup sub-actions: 'setup delete' (remove config), 'setup list' (show config), 'setup edit' (LLM-guided edit), 'setup' (generate new).",
 		promptSnippet:
-			"Use this tool when the user asks to list/search/switch models, requests a specific model/provider, "
-			+ "or when you need to see the current model context data. "
+			"Use this tool to manage models. TRIGGERS: "
+			+ "(1) User asks to list/search/switch models or mentions a specific model/provider. "
+			+ "(2) [Model Context] advice says 'avoid' — proactively switch to a cheaper alternative from the same scene. "
+			+ "(3) Starting a simple task (file reads, quick edits, grep) — switch to the cheapest capable model to conserve quota. "
+			+ "(4) Starting a complex task (architecture, refactoring, multi-file changes) — switch to the best reasoning model. "
+			+ "(5) User mentions cost/quota concerns — recommend and switch to optimize usage. "
 			+ "For policy management: 'setup delete' to remove, 'setup list' to view, 'setup edit' to modify through conversation.",
 		parameters: Type.Object({
 			action: StringEnum(["list", "search", "switch", "recommend", "setup"], {

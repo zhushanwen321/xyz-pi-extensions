@@ -92,7 +92,7 @@ export function formatContextPrompt(data: ContextPromptData): string {
 	if (quotaLines.length > 0) lines.push(...quotaLines);
 
 	lines.push(formatSceneLine(config));
-	lines.push("Action: call switch_model tool (change applies next turn).");
+	lines.push(formatActionLine(recommend, snapshot, config));
 
 	return lines.join("\n");
 }
@@ -173,4 +173,55 @@ function formatResetSec(sec: number): string {
 	if (h > 0) return `${h}h${m.toString().padStart(TIME_DIGIT_COUNT, "0")}m`;
 	if (m > 0) return `${m}m`;
 	return "<1m";
+}
+
+/** 根据推荐结果生成明确的行动指令 */
+function formatActionLine(recommend: RecommendInfo, snapshot: QuotaSnapshot, config: ModelPolicy): string {
+	if (recommend.result === "ok") {
+		return "Action: current model is fine. Switch if task complexity changes (switch_model tool).";
+	}
+
+	// recommend === "avoid": 找到一个非 peak avoid 的替代模型
+	const alternative = findCheapestAlternative(snapshot, config);
+	if (alternative) {
+		return `Action: RECOMMENDED — switch to ${alternative.alias} (${alternative.provider}/${alternative.modelId}) to save quota. Call: switch_model(action="switch", query="${alternative.alias}").`;
+	}
+
+	return `Action: consider switching to a cheaper model. Call: switch_model(action="switch", query="...").`;
+}
+
+interface AlternativeModel {
+	alias: string;
+	provider: string;
+	modelId: string;
+}
+
+/** 找到用量最低的可用替代模型 */
+function findCheapestAlternative(snapshot: QuotaSnapshot, config: ModelPolicy): AlternativeModel | null {
+	// 收集所有非 peak plan 的模型
+	const candidates: Array<AlternativeModel & { usage: number | null }> = [];
+
+	for (const [provider, pcfg] of Object.entries(config.models)) {
+		const planCfg = config.plans[pcfg.plan];
+		// 跳过有 peak 且当前建议 avoid 的 plan
+		if (planCfg?.peak) continue;
+
+		const quota = snapshot.plans[pcfg.plan];
+		const usage = quota?.pct ?? null;
+
+		for (const [alias, entry] of Object.entries(pcfg.models)) {
+			candidates.push({ alias, provider, modelId: entry.modelId, usage });
+		}
+	}
+
+	if (candidates.length === 0) return null;
+
+	// 优先选用量最低的
+	candidates.sort((a, b) => {
+		const aU = a.usage ?? Number.MAX_SAFE_INTEGER;
+		const bU = b.usage ?? Number.MAX_SAFE_INTEGER;
+		return aU - bU;
+	});
+
+	return candidates[0] ?? null;
 }
