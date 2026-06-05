@@ -201,8 +201,8 @@ importers:
         specifier: '*'
         version: 0.34.49
       '@zhushanwen/pi-model-switch':
-        specifier: workspace:*
-        version: link:../model-switch
+        specifier: '*'
+        version: 0.2.6(@mariozechner/pi-ai@0.73.1(ws@8.21.0)(zod@4.4.3))(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))(@sinclair/typebox@0.34.49)
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -930,6 +930,18 @@ packages:
 
   '@vitest/utils@4.1.8':
     resolution: {integrity: sha512-uOJamYALNhfJ6iolExyQM40yIQwDqYnkKtQ5VCiSe17E33H0aQ/u+1GlRuz4LZBk6Mm3sg90G9hEbmEt37C1Zg==}
+
+  '@zhushanwen/pi-model-switch@0.2.6':
+    resolution: {integrity: sha512-HAulLKpNi8F28DSuUWPsLHfxwCyRSAyDKUH4udt0KimbQepWawlixW+DzYrWN02doFbCNC8iPlxhLiWx8b/rEQ==}
+    peerDependencies:
+      '@mariozechner/pi-ai': '*'
+      '@mariozechner/pi-coding-agent': '*'
+      '@sinclair/typebox': '*'
+
+  '@zhushanwen/pi-quota-providers@0.4.1':
+    resolution: {integrity: sha512-mNEVm+sKjD59cqDI3StoczWQpn8i7SpWGDkP8jXIDA6YhmGKV5DE+mOdzKymz9pROCHDAaPfQ+CAqPFkhEcNHw==}
+    peerDependencies:
+      '@mariozechner/pi-coding-agent': '*'
 
   acorn-jsx@5.3.2:
     resolution: {integrity: sha512-rq9s+JNhf0IChjtDXxllJ7g41oZk5SlXtp0LHwyA5cejwn7vKmKp4pPri6YEePv2PU65sAsegbXtIinmDFDXgQ==}
@@ -3196,6 +3208,17 @@ snapshots:
       '@vitest/pretty-format': 4.1.8
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.0
+
+  '@zhushanwen/pi-model-switch@0.2.6(@mariozechner/pi-ai@0.73.1(ws@8.21.0)(zod@4.4.3))(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))(@sinclair/typebox@0.34.49)':
+    dependencies:
+      '@mariozechner/pi-ai': 0.73.1(ws@8.21.0)(zod@4.4.3)
+      '@mariozechner/pi-coding-agent': 0.73.1(ws@8.21.0)(zod@4.4.3)
+      '@sinclair/typebox': 0.34.49
+      '@zhushanwen/pi-quota-providers': 0.4.1(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))
+
+  '@zhushanwen/pi-quota-providers@0.4.1(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))':
+    dependencies:
+      '@mariozechner/pi-coding-agent': 0.73.1(ws@8.21.0)(zod@4.4.3)
 
   acorn-jsx@5.3.2(acorn@8.16.0):
     dependencies:
