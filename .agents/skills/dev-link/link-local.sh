@@ -31,13 +31,18 @@ resolve_name() {
 	fi
 }
 
-# ── 检查 npm 是否已注册到 settings.json ──────────────────
-is_npm_registered() {
+# ── 检查 npm 包是否存在（settings.json 注册 或 node_modules 物理存在）──
+is_npm_present() {
 	local npm_name="$1"
+	local npm_dir="$HOME/.pi/agent/npm/node_modules/$npm_name"
+	# 检查 settings.json 注册
 	node -e "
 		const s = JSON.parse(require('fs').readFileSync(process.env.SETTINGS,'utf-8'));
 		process.exit(s.packages?.includes('npm:' + process.env.NPM_CHECK) ? 0 : 1);
-	" 2>/dev/null
+	" 2>/dev/null && return 0
+	# 检查 node_modules 物理存在
+	[ -d "$npm_dir" ] && return 0
+	return 1
 }
 
 # ── 检查 symlink 是否存在且指向正确 ──────────────────────
@@ -89,7 +94,7 @@ main() {
 	fi
 
 	# ── 步骤 1: 卸载 npm 版本（容错：没装过也不报错）──
-	if NPM_CHECK="$NPM_NAME" is_npm_registered "$NPM_NAME"; then
+	if NPM_CHECK="$NPM_NAME" is_npm_present "$NPM_NAME"; then
 		echo "  卸载 npm 版本 ..."
 		pi uninstall "$NPM_ENTRY" 2>&1 | sed 's/^/    /'
 	else
