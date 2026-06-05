@@ -25,9 +25,8 @@ const REPORTS_DIR = join(homedir(), ".pi", "agent", "evolution-data", "daily-rep
 const DATE_SLICE_END = 10;
 const ANALYZER_TIMEOUT_MS = 30_000;
 
-type PiOnAny = {
-  on(event: string, handler: (...args: unknown[]) => Promise<void> | void): void;
-};
+/** Pi API 的 on 方法重载签名（覆盖非标事件名） */
+type PiOnAny = { on(event: string, handler: (...args: unknown[]) => Promise<void> | void): void };
 
 /** tool_result 事件中匹配的工具结果 detector */
 interface ToolResultDetector {
@@ -78,7 +77,7 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
     PROBLEM_REGISTRY.find((p) => p.id === "compact-frequency")!
   );
 
-  (pi.on as unknown as PiOnAny).on("session_compact", async (event: unknown) => {
+  (pi as unknown as PiOnAny).on("session_compact", async (event: unknown) => {
     const ev = event as Record<string, unknown>;
     try {
       const item = compactDetector.createItem(ev);
@@ -112,7 +111,7 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
     ),
   ];
 
-  (pi.on as unknown as PiOnAny).on(
+  (pi as unknown as PiOnAny).on(
     "tool_result",
     async (event: unknown, _ctx?: unknown) => {
       const ev = event as Record<string, unknown>;
