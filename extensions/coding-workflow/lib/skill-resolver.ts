@@ -9,8 +9,8 @@
  */
 
 import * as fs from "node:fs";
-import * as path from "node:path";
 import * as os from "node:os";
+import * as path from "node:path";
 
 export class SkillResolver {
 	#skills: Array<{ name: string; filePath: string }> = [];

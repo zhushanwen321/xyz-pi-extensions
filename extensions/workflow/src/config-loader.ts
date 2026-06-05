@@ -8,8 +8,8 @@
  * Failed imports are marked available=false — the loader never throws.
  */
 
-import { access, readdir, readFile } from "node:fs/promises";
 import * as fsSync from "node:fs";
+import { access, readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
@@ -91,7 +91,19 @@ const CACHE_TTL_MS = 60_000;
 
 // ── Cache ─────────────────────────────────────────────────────
 
-const cache = new Map<string, CacheEntry>();
+// P1-4: Keyed by workspace root so that switching projects does not
+// serve stale entries. A single module-level Map is now segmented by
+// `workspaceRoot`. invalidateCache() clears all workspaces' entries.
+const cache = new Map<string, Map<string, CacheEntry>>();
+
+function getCacheBucket(workspaceRoot: string): Map<string, CacheEntry> {
+  let bucket = cache.get(workspaceRoot);
+  if (!bucket) {
+    bucket = new Map<string, CacheEntry>();
+    cache.set(workspaceRoot, bucket);
+  }
+  return bucket;
+}
 
 function isCacheValid(entry: CacheEntry): boolean {
   return Date.now() - entry.cachedAt < CACHE_TTL_MS;
@@ -272,10 +284,11 @@ export async function loadWorkflows(): Promise<CachedWorkflowMeta[]> {
 
   const merged = Array.from(mergedMap.values());
 
-  // Update cache
+  // Update cache (scoped to current workspace root)
+  const bucket = getCacheBucket(workspaceRoot);
   const now = Date.now();
   for (const wf of merged) {
-    cache.set(wf.name, { meta: wf, cachedAt: now });
+    bucket.set(wf.name, { meta: wf, cachedAt: now });
   }
 
   return merged;
@@ -286,7 +299,9 @@ export async function loadWorkflows(): Promise<CachedWorkflowMeta[]> {
  * Returns cached result if still valid, otherwise triggers a fresh load.
  */
 export async function getWorkflow(name: string): Promise<CachedWorkflowMeta | undefined> {
-  const cached = cache.get(name);
+  const workspaceRoot = findWorkspaceRoot();
+  const bucket = getCacheBucket(workspaceRoot);
+  const cached = bucket.get(name);
   if (cached && isCacheValid(cached)) {
     return cached.meta;
   }

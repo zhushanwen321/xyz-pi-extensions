@@ -92,6 +92,8 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type ReadonlyFooterDataProvider = any;
 	export type ExtensionContextActions = any;
 	export type ExtensionCommandContextActions = any;
+	export type BeforeAgentStartEvent = any;
+	export type BeforeAgentStartEventResult = any;
 
 	export function getAgentDir(): string;
 	export function getMarkdownTheme(): Theme;

@@ -1,5 +1,6 @@
-import { defineConfig } from "vitest/config";
 import path from "node:path";
+
+import { defineConfig } from "vitest/config";
 
 /**
  * Vitest config for tests/ directory (tests that need to import src/index.ts).

@@ -10,6 +10,7 @@
  */
 
 import { existsSync, mkdirSync } from "node:fs";
+
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import {
@@ -19,6 +20,7 @@ import {
 	loadProvidersConfig,
 	loadSecrets,
 } from "@zhushanwen/pi-quota-providers";
+
 import { buildGenerateDemoPrompt } from "./setup-prompts.js";
 
 export function registerSetupCommand(pi: ExtensionAPI): void {

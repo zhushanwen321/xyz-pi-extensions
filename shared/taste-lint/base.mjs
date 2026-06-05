@@ -11,6 +11,7 @@
  * 依赖：typescript-eslint
  */
 import tseslint from 'typescript-eslint';
+import simpleImportSort from 'eslint-plugin-simple-import-sort';
 import preferAllsettled from './rules/prefer-allsettled.mjs';
 import noSilentCatch from './rules/no-silent-catch.mjs';
 import noUnboundedWhileTrue from './rules/no-unbounded-while-true.mjs';
@@ -55,6 +56,10 @@ export const tasteRules = {
   'no-eval': 'error',
   'no-implied-eval': 'error',
 
+  // Import 排序
+  'simple-import-sort/imports': 'warn',
+  'simple-import-sort/exports': 'warn',
+
   // 品味自定义规则
   'taste/prefer-allsettled': 'warn',
   'taste/no-silent-catch': 'warn',
@@ -67,7 +72,7 @@ export default [
   ...tseslint.configs.recommended,
   {
     files: ['**/*.ts'],
-    plugins: { taste: tastePlugin },
+    plugins: { taste: tastePlugin, 'simple-import-sort': simpleImportSort },
     rules: tasteRules,
   },
   {

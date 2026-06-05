@@ -119,20 +119,21 @@ export function loadConfig(
   settingsPath?: string,
 ): ContextEngineeringConfig {
   const filePath =
-    settingsPath ?? join(homedir(), ".pi", "agent", "settings.json");
+    settingsPath ?? join(homedir(), ".pi", "agent", "extensions", "context-engineering", "config.json");
 
   let raw: string;
   try {
     raw = readFileSync(filePath, "utf-8");
-  } catch {
-    return { ...DEFAULT_CONFIG };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { ...DEFAULT_CONFIG };
+    throw new Error(`Failed to read config ${filePath}: ${(err as Error).message}`);
   }
 
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return { ...DEFAULT_CONFIG };
+  } catch (err) {
+    throw new Error(`Invalid JSON in ${filePath}: ${(err as Error).message}`);
   }
 
   const override = parsed["context-engineering"];

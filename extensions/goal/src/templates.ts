@@ -9,9 +9,9 @@
  * 所有模板中的 objective 文本都经过 XML 转义，防止 prompt 注入。
  */
 
+import { PERCENT_FACTOR, SECONDS_PER_MINUTE, TASK_STALL_TURN_THRESHOLD } from "./constants";
 import type { GoalRuntimeState, GoalTask } from "./state";
-import { getIncompleteTasks, getCompletedCount, getElapsedTimeSeconds } from "./state";
-import { SECONDS_PER_MINUTE, PERCENT_FACTOR, TASK_STALL_TURN_THRESHOLD } from "./constants";
+import { getCompletedCount, getElapsedTimeSeconds,getIncompleteTasks } from "./state";
 
 // ── XML 转义（防止 objective 中的 XML 标签破坏 prompt 结构）──
 

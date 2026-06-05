@@ -4,16 +4,16 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 
-import { loadConfig, type ContextEngineeringConfig } from "./config";
-import { createRecallStore, type RecallStore } from "./recall-store";
-import { createFrozenFreshState, type FrozenFreshState } from "./frozen-fresh";
+import { handleContextEngineeringCommand, handleContextStatsCommand } from "./commands";
 import {
+  type AgentMessage as CompressorMessage,
   compressContext,
   type CompressionStats,
-  type AgentMessage as CompressorMessage,
   type ContextUsage as CompressorContextUsage,
 } from "./compressor";
-import { handleContextEngineeringCommand, handleContextStatsCommand } from "./commands";
+import { type ContextEngineeringConfig,loadConfig } from "./config";
+import { createFrozenFreshState, type FrozenFreshState } from "./frozen-fresh";
+import { createRecallStore, type RecallStore } from "./recall-store";
 
 const RecallParams = Type.Object({
   id: Type.String({ description: "Context ID (ctx-xxxxxxxx) to recall" }),
@@ -79,6 +79,10 @@ export default function contextEngineeringExtension(pi: ExtensionAPI): void {
       }
       return {};
     }
+  });
+
+  pi.on("session_tree", async () => {
+    // 切换分支后，cumulativeStats 将在下次 context 事件时自然更新
   });
 
   pi.registerTool({

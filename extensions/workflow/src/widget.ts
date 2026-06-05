@@ -9,13 +9,13 @@
 
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import {
+  type Component,
   Container,
   Spacer,
   Text,
-  type Component,
 } from "@mariozechner/pi-tui";
 
-import type { WorkflowOrchestrator, WorkflowInstanceSummary } from "./orchestrator.js";
+import type { WorkflowInstanceSummary,WorkflowOrchestrator } from "./orchestrator.js";
 import type { WorkflowInstance } from "./state.js";
 
 // ── Constants ─────────────────────────────────────────────────

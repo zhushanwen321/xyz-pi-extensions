@@ -11,30 +11,31 @@
  *   Enforces state machine rules (terminal states are irreversible)
  */
 
-import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
-import { StringEnum } from "@mariozechner/pi-ai";
-import { Text } from "@mariozechner/pi-tui";
-import { Type, type Static } from "typebox";
-import { readFileSync } from "node:fs";
 import * as fs from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import {
-  type WorkflowInstance,
-  type WorkflowStatus,
-  deserializeInstance,
-  createInstance,
-  transitionStatus,
-  isTerminal,
-} from "./state.js";
-import { WorkflowOrchestrator, type WorkflowInstanceSummary } from "./orchestrator.js";
+import { StringEnum } from "@mariozechner/pi-ai";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
+import { type Static,Type } from "typebox";
+
 import {
   registerWorkflowCommands,
   sendCompletionNotification,
   type WorkflowCommandsState,
 } from "./commands.js";
-import { renderWorkflowList } from "./widget.js";
+import { type WorkflowInstanceSummary,WorkflowOrchestrator } from "./orchestrator.js";
+import {
+  createInstance,
+  deserializeInstance,
+  isTerminal,
+  transitionStatus,
+  type WorkflowInstance,
+  type WorkflowStatus,
+} from "./state.js";
 import { registerGenerateTool } from "./tool-generate.js";
+import { renderWorkflowList } from "./widget.js";
 
 // ── Parameter schema ──────────────────────────────────────────
 
@@ -131,6 +132,10 @@ export default function workflowExtension(pi: ExtensionAPI) {
   const orchestrators = new Map<string, WorkflowOrchestrator>();
   const cmdState: WorkflowCommandsState = { lastRunId: null };
   const sessionApprovals = new Set<string>();
+  // P1-3: Per-factory dedup Set for completion notifications (was module-level in commands.ts)
+  const notifiedRunIds = new Set<string>();
+  // P1-6: Reentry guard flag to prevent concurrent tool execute calls from clobbering orchestrator state
+  let isProcessing = false;
 
   async function reconstructState(ctx: ExtensionContext): Promise<Map<string, WorkflowInstance>> {
     const instances = new Map<string, WorkflowInstance>();
@@ -208,7 +213,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
     };
     orch.onCompletion = (runId) => {
       const instance = orch.getInstance(runId);
-      if (instance) sendCompletionNotification(pi, runId, instance);
+      if (instance) sendCompletionNotification(pi, runId, instance, notifiedRunIds);
     };
     if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
   });
@@ -219,13 +224,25 @@ export default function workflowExtension(pi: ExtensionAPI) {
     const orch = new WorkflowOrchestrator(pi, ctx);
     orchestrators.set(sessionId, orch);
     const instances = await reconstructState(ctx);
+    // P1-7: Drop pending state from old branches — running workers no longer exist
+    for (const inst of instances.values()) {
+      if (inst.status === "running") {
+        inst.pausedAt = new Date().toISOString();
+        try {
+          transitionStatus(inst, "paused");
+        // eslint-disable-next-line taste/no-silent-catch
+        } catch {
+          // State machine refused — leave as-is
+        }
+      }
+    }
     orch.restoreInstances(instances);
     orch.onTraceUpdate = (_runId) => {
       if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
     };
     orch.onCompletion = (runId) => {
       const instance = orch.getInstance(runId);
-      if (instance) sendCompletionNotification(pi, runId, instance);
+      if (instance) sendCompletionNotification(pi, runId, instance, notifiedRunIds);
     };
     if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
   });
@@ -269,7 +286,23 @@ export default function workflowExtension(pi: ExtensionAPI) {
     ],
     parameters: WorkflowParams,
 
-    async execute(_toolCallId: string, params: Static<typeof WorkflowParams>, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+    async execute(_toolCallId: string, params: Static<typeof WorkflowParams>, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+      // P1-2: Honor abort signal up-front
+      if (signal?.aborted) {
+        return {
+          content: [{ type: "text" as const, text: "Operation aborted before start" }],
+          isError: true,
+        };
+      }
+      // P1-6: Reentry guard — prevent concurrent tool calls from clobbering orchestrator state
+      if (isProcessing) {
+        return {
+          content: [{ type: "text" as const, text: "Another workflow operation is in progress; please wait for it to complete before issuing another command." }],
+          isError: true,
+        };
+      }
+      isProcessing = true;
+      try {
       const sessionId = ctx.sessionManager.getSessionId();
       lastSessionId = sessionId;
       const orch = orchestrators.get(sessionId);
@@ -418,6 +451,10 @@ export default function workflowExtension(pi: ExtensionAPI) {
           };
         }
       }
+      } finally {
+        // P1-6: Always release the reentry guard
+        isProcessing = false;
+      }
     },
 
     renderCall(args: Record<string, unknown>, theme: Theme, _context?: unknown) {
@@ -461,7 +498,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
 
   // ── Tool: workflow-run ──────────────────────────────────────
 
-  registerWorkflowRunTool(pi, orchestrators, cmdState, sessionApprovals, { lastSessionId });
+  registerWorkflowRunTool(pi, orchestrators, cmdState, sessionApprovals, { lastSessionId }, { isProcessing });
 
   // ── Commands & Shortcuts ───────────────────────────────────
 
@@ -518,6 +555,7 @@ interface _WorkflowRunDetails {
 }
 
 interface _LastSessionRef { lastSessionId: string }
+interface _ReentryGuardRef { isProcessing: boolean }
 
 function registerWorkflowRunTool(
   pi: ExtensionAPI,
@@ -525,6 +563,7 @@ function registerWorkflowRunTool(
   cmdState: WorkflowCommandsState,
   sessionApprovals: Set<string>,
   lsRef: _LastSessionRef,
+  reentryRef: _ReentryGuardRef,
 ): void {
   pi.registerTool({
     name: "workflow-run",
@@ -546,7 +585,16 @@ function registerWorkflowRunTool(
     ],
     parameters: _WorkflowRunParams,
 
-    async execute(_toolCallId: string, params: Static<typeof _WorkflowRunParams>, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+    async execute(_toolCallId: string, params: Static<typeof _WorkflowRunParams>, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+      // P1-6: Reentry guard for the run tool (lifecycle operations share state)
+      if (reentryRef.isProcessing) {
+        return {
+          content: [{ type: "text" as const, text: "Another workflow operation is in progress; please wait for it to complete before issuing another command." }],
+          isError: true,
+        };
+      }
+      reentryRef.isProcessing = true;
+      try {
       const sessionId = ctx.sessionManager.getSessionId();
       lsRef.lastSessionId = sessionId;
       const orch = orchestrators.get(sessionId);
@@ -566,7 +614,7 @@ function registerWorkflowRunTool(
       const exactMatch = available.find((wf) => wf.name === name);
       if (exactMatch) {
         if (mode === "force") {
-          const runId = await orch.run(name, args, tokens, time);
+          const runId = await orch.run(name, args, tokens, time, signal);
           cmdState.lastRunId = runId;
           if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
           return { content: [{ type: "text" as const, text: `Started workflow '${name}' (${runId}) [force mode]` }], details: { action: "run", runId, status: "running", name, confirmSkipped: true as const } satisfies _WorkflowRunDetails };
@@ -586,7 +634,7 @@ function registerWorkflowRunTool(
         } else {
           pi.sendUserMessage(`Confirm to run '${exactMatch.name}'? (RPC mode — auto-confirm not available, proceed with caution)`, { deliverAs: "steer" });
         }
-        const runId = await orch.run(name, args, tokens, time);
+        const runId = await orch.run(name, args, tokens, time, signal);
         cmdState.lastRunId = runId;
         if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
         return { content: [{ type: "text" as const, text: `Started workflow '${exactMatch.name}' (${runId})` }], details: { action: "run", runId, status: "running", name: exactMatch.name } satisfies _WorkflowRunDetails };
@@ -603,7 +651,7 @@ function registerWorkflowRunTool(
         const candidateList = candidates.map((wf) => `  - ${wf.name}: ${wf.description || "(no description)"} [${wf.source}]`).join("\n");
         if (mode === "force") {
           const best = candidates[0];
-          const runId = await orch.run(best.name, args, tokens, time);
+          const runId = await orch.run(best.name, args, tokens, time, signal);
           cmdState.lastRunId = runId;
           if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
           return { content: [{ type: "text" as const, text: `Started workflow '${best.name}' (${runId}) [force mode, fuzzy match]` }], details: { action: "run", runId, status: "running", name: best.name, confirmSkipped: true as const } satisfies _WorkflowRunDetails };
@@ -620,6 +668,10 @@ function registerWorkflowRunTool(
         `No workflow matches '${name}'. Available workflows:\n${fullList}\n\nSuggestions:\n1. If one of the above looks suitable, use workflow-run with its exact name.\n2. If none fits, use workflow-generate to create a new temporary workflow.\n3. Before executing a generated workflow, ALWAYS show the script path and wait for user confirmation.`,
         { deliverAs: "steer" });
       return { content: [{ type: "text" as const, text: `No match for '${name}'. Suggestions sent to conversation.` }], details: { action: "run", runId: "", status: "pending", name } satisfies _WorkflowRunDetails };
+      } finally {
+        // P1-6: Always release the reentry guard
+        reentryRef.isProcessing = false;
+      }
     },
 
     renderCall(args: Record<string, unknown>, theme: Theme, _context?: unknown) {

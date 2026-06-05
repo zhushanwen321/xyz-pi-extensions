@@ -1,22 +1,23 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect,it } from "vitest";
+
+import { handleContextEngineeringCommand, handleContextStatsCommand } from "../commands";
 import {
-  compressContext,
-  validateToolPairing,
-  getToolResultText,
   type AgentMessage,
-  type ToolCall,
   type AssistantMessage,
-  type ToolResultMessage,
   type BashExecutionMessage,
-  type UserMessage,
+  compressContext,
+  type ContextUsage,
+  getToolResultText,
   type TextContent,
   type ThinkingContent,
-  type ContextUsage,
+  type ToolCall,
+  type ToolResultMessage,
+  type UserMessage,
+  validateToolPairing,
 } from "../compressor";
-import { createRecallStore } from "../recall-store";
-import { DEFAULT_CONFIG, type ContextEngineeringConfig } from "../config";
+import { type ContextEngineeringConfig,DEFAULT_CONFIG } from "../config";
 import { createFrozenFreshState } from "../frozen-fresh";
-import { handleContextEngineeringCommand, handleContextStatsCommand } from "../commands";
+import { createRecallStore } from "../recall-store";
 
 // ── Helpers ──
 

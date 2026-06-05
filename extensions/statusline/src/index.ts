@@ -13,22 +13,34 @@
 
 import { existsSync } from "node:fs";
 import { join, sep } from "node:path";
+
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider, Theme } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth } from "@mariozechner/pi-tui";
+import {
+	buildRuntimeProviders,
+	readCache,
+	type SpeedData,
+	trackSpeed,
+	triggerUpdate,
+} from "@zhushanwen/pi-quota-providers";
 
 import {
-	readCache,
-	triggerUpdate,
-	trackSpeed,
-	buildRuntimeProviders,
-	type CacheData,
-	type SpeedData,
-	type QuotaWindow,
-	type QuotaProvider,
-} from "@zhushanwen/pi-quota-providers";
+	buildSearchLine,
+	buildTokenPlanLines,
+	fmtCount,
+	fmtDuration,
+	fmtTokens,
+	formatSpeedPart,
+	MIN_PAD,
+	MS_PER_SEC,
+	pctColor,
+	PERCENT_SCALE,
+	SEC_PER_MIN,
+	splitPath,
+	tailSessionId,
+} from "./format.js";
 import { registerSetupCommand } from "./setup.js";
-import { formatSpeedPart, splitPath, tailSessionId } from "./format.js";
 
 // ── 本地事件类型 ───────────────────────────────────────
 interface PiMessageEvent {
@@ -39,93 +51,79 @@ interface PiThinkingLevelEvent {
 	level: string;
 }
 
-// ── 时间常量 ───────────────────────────────────────────
-
-const MS_PER_SEC = 1000;
-const SEC_PER_MIN = 60;
-const MIN_PER_HOUR = 60;
-const HOURS_PER_DAY = 24;
-const SEC_PER_HOUR = SEC_PER_MIN * MIN_PER_HOUR;
-const SEC_PER_DAY = SEC_PER_HOUR * HOURS_PER_DAY;
-
 // ── 渲染常量 ───────────────────────────────────────────
 
 const SEP = "│";
 const DOT = "·";
 const RUN_UPDATE_MS = 5000;
-/** 标题列宽（按最长 "minimax-token-plan"=18，+1 空格余量） */
-const TITLE_COL_W = 19;
-/** reset 时间列宽（fmtResetSec 最长 "12d23h"=6 + 1 空格余量） */
-const RESET_COL_W = 7;
-/** pct 列宽（"100%"=4，但 padStart(3) 给 " 23%"=4） */
-const PCT_COL_W = 3;
 /** sessionId 截取末尾字符数 */
 const SESSION_ID_TAIL = 12;
 /** 路径展示的层数（cwd 倒数 N 段） */
 const DIR_DEPTH = 2;
-/** 分/秒 pad 宽度 */
-const MIN_PAD = 2;
 /** bogus replay 阈值：output > 50 tokens 但 duration < 100ms 视为重放，跳过速度统计 */
 const BOGUS_OUTPUT_THRESHOLD = 50;
 const BOGUS_DURATION_THRESHOLD_MS = 100;
-
-// ── 阈值常量 ───────────────────────────────────────────
-
-/** token 数字单位阈值 */
-const KILO = 1_000;
-const MILLION = 1_000_000;
-
-/** pct 颜色分档 */
-const PCT_HIGH = 80;
-const PCT_MED = 60;
-const PCT_LOW = 40;
-/** 百分比标度 */
-const PERCENT_SCALE = 100;
 
 /** contextWindow fallback */
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 
 // ── 工具函数 ───────────────────────────────────────────
 
-function fmtDuration(ms: number): string {
-	const s = Math.floor(ms / MS_PER_SEC);
-	if (s < SEC_PER_MIN) return `${s}s`;
-	const m = Math.floor(s / SEC_PER_MIN);
-	if (m < MIN_PER_HOUR) return `${m}m${String(s % SEC_PER_MIN).padStart(MIN_PAD, "0")}s`;
-	return `${Math.floor(m / MIN_PER_HOUR)}h${String(m % MIN_PER_HOUR).padStart(MIN_PAD, "0")}m`;
-}
-
-function fmtTokens(n: number): string {
-	if (n >= MILLION) return `${(n / MILLION).toFixed(1)}M`;
-	if (n >= KILO) return `${(n / KILO).toFixed(1)}K`;
-	return `${n}`;
-}
-
-function fmtResetSec(sec: number): string {
-	if (sec <= 0) return "";
-	const d = Math.floor(sec / SEC_PER_DAY);
-	const h = Math.floor((sec % SEC_PER_DAY) / SEC_PER_HOUR);
-	const m = Math.floor((sec % SEC_PER_HOUR) / SEC_PER_MIN);
-	if (d > 0) return `${d}d${h}h`;
-	if (h > 0) return `${h}h${m}m`;
-	return `${m}m`;
-}
-
-function fmtCount(n: number): string {
-	return n < KILO ? `${n}` : `${(n / KILO).toFixed(1)}k`;
-}
-
-/** 按百分比返回语义色 token */
-function pctColor(pct: number): "error" | "warning" | "accent" | "success" {
-	if (pct >= PCT_HIGH) return "error";
-	if (pct >= PCT_MED) return "warning";
-	if (pct >= PCT_LOW) return "accent";
-	return "success";
-}
-
 /** 当前 cwd 是否在 git worktree 内（粗略：看 .git 是文件还是目录） */
 function isWorktree(cwd: string): boolean {
 	return existsSync(join(cwd, ".git"));
+}
+
+// ── Footer API 适配类型 ─────────────────────────────────
+
+/** Tui 句柄（Pi TUI 提供的渲染接口） */
+interface TuiHandle {
+	requestRender(): void;
+}
+
+/** Footer 渲染句柄（setFooter 回调的返回值） */
+interface FooterHandle {
+	dispose(): void;
+	invalidate(): void;
+	render(width: number): string[];
+}
+
+/** SDK 缺失的 setFooter 类型 — 仅本扩展需要
+ *  绕过 `as any`：先用 `as unknown as` 明确意图，配合类型接口提供类型检查
+ *  @todo SDK 补齐 setFooter 类型后移除本接口 */
+interface UiWithFooter {
+	setFooter(
+		fn: (tui: TuiHandle, theme: Theme, footerData: ReadonlyFooterDataProvider) => FooterHandle,
+	): void;
+}
+
+/** 引用包装：让 helper 写入闭包变量 */
+interface TuiRef {
+	current: TuiHandle | null;
+}
+
+/** 注册 statusline footer。从 session_start handler 提取。 */
+function initFooter(
+	ctx: ExtensionContext,
+	state: StatuslineRuntimeState,
+	tuiRef: TuiRef,
+): void {
+	(ctx.ui as unknown as UiWithFooter).setFooter(
+		(t: TuiHandle, theme: Theme, footerData: ReadonlyFooterDataProvider) => {
+			tuiRef.current = t;
+			const unsub = footerData.onBranchChange(() => t.requestRender());
+			return {
+				dispose() {
+					unsub();
+					tuiRef.current = null;
+				},
+				invalidate() {},
+				render(width: number) {
+					return buildLines(ctx, theme, footerData, width, state);
+				},
+			};
+		},
+	);
 }
 
 // ── 状态 ───────────────────────────────────────────────
@@ -173,7 +171,7 @@ export default function statuslineExtension(pi: ExtensionAPI) {
 
 function registerSessionLifecycle(pi: ExtensionAPI): void {
 	const state: StatuslineRuntimeState = makeInitialState();
-	let tui: { requestRender(): void } | null = null;
+	const tuiRef: TuiRef = { current: null };
 
 	pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
 		Object.assign(state, makeInitialState(), {
@@ -181,20 +179,7 @@ function registerSessionLifecycle(pi: ExtensionAPI): void {
 			thinkingLevel: pi.getThinkingLevel(),
 		});
 		refreshTotals(state, ctx);
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK ExtensionContext.ui 类型缺失 setFooter
-		(ctx.ui as any).setFooter((t: { requestRender(): void }, theme: Theme, footerData: ReadonlyFooterDataProvider) => {
-			tui = t;
-			const unsub = footerData.onBranchChange(() => t.requestRender());
-			return {
-				dispose() { unsub(); tui = null; },
-				invalidate() {},
-				render(width: number) {
-					return buildLines(ctx, theme, footerData, width, state);
-				},
-			};
-		});
-
+		initFooter(ctx, state, tuiRef);
 		triggerUpdate();
 	});
 
@@ -220,27 +205,34 @@ function registerSessionLifecycle(pi: ExtensionAPI): void {
 		state.totalOut += msg.usage.output;
 		state.totalCost += msg.usage.cost.total;
 		refreshContextUsage(state, ctx);
-		tui?.requestRender();
+		tuiRef.current?.requestRender();
 		triggerUpdate();
 	});
 
 	pi.on("turn_end", () => {
 		state.isAgentBusy = false;
 		state.lastRunUpdate = Date.now();
-		tui?.requestRender();
+		tuiRef.current?.requestRender();
 	});
 	pi.on("agent_end", () => {
 		state.isAgentBusy = false;
 		state.lastRunUpdate = Date.now();
-		tui?.requestRender();
+		tuiRef.current?.requestRender();
 	});
+	pi.on("session_tree", async (_event: unknown, ctx: ExtensionContext) => {
+		// 切换分支后重建状态栏数据
+		Object.assign(state, makeInitialState(), { sessionStart: Date.now() });
+		refreshTotals(state, ctx);
+		triggerUpdate();
+	});
+
 	pi.on("model_select", () => {
 		state.thinkingLevel = pi.getThinkingLevel();
-		tui?.requestRender();
+		tuiRef.current?.requestRender();
 	});
 	pi.on("thinking_level_select", (event: PiThinkingLevelEvent) => {
 		state.thinkingLevel = event.level;
-		if (!state.isAgentBusy) tui?.requestRender();
+		if (!state.isAgentBusy) tuiRef.current?.requestRender();
 	});
 }
 
@@ -274,17 +266,6 @@ function refreshContextUsage(st: StatuslineRuntimeState, ctx: ExtensionContext):
 
 // ── 渲染 ───────────────────────────────────────────────
 
-interface QuotaRow {
-	name: string;
-	wins: [QuotaWindow, QuotaWindow, QuotaWindow];
-}
-
-const COLS = [
-	{ key: "5h", label: "5h" },
-	{ key: "week", label: "wk" },
-	{ key: "month", label: "mh" },
-] as const;
-
 type Pallet = {
 	d: (s: string) => string;
 	v: (s: string) => string;
@@ -304,26 +285,6 @@ function makePalette(theme: Theme): Pallet {
 		a: (s) => fg("accent", s),
 		m: (s) => fg("muted", s),
 	};
-}
-
-/** 缓存数据 → 归一化行（用于 token-plans 显示） */
-function normalizeRows(cache: CacheData, providers: QuotaProvider[]): QuotaRow[] {
-	const rows: QuotaRow[] = [];
-	for (const p of providers) {
-		if (p.category !== "token-plan") continue;
-		try {
-			const raw = (cache as Record<string, unknown>)[p.id];
-			if (!raw) continue;
-			const norm = p.normalize(raw);
-			if (!norm) continue;
-			// 优先使用 providers.json 配置的 label，fallback 到 normalize 返回的 label
-			rows.push({ name: p.label || norm.label, wins: norm.wins });
-		// eslint-disable-next-line taste/no-silent-catch -- render 容错：单 provider normalize 失败不应拖垮整个 statusline
-		} catch (e) {
-			console.warn(`[statusline] normalize failed for ${p.id}:`, e);
-		}
-	}
-	return rows;
 }
 
 // ── 5 个独立行渲染函数 ─────────────────────────────────
@@ -400,58 +361,6 @@ function computeRunMs(st: StatuslineRuntimeState): number {
 	return 0;
 }
 
-function buildSearchLine(
-	cache: CacheData,
-	providers: QuotaProvider[],
-	p: Pallet,
-	theme: Theme,
-): string {
-	const parts: string[] = [];
-	for (const prov of providers) {
-		if (prov.category !== "search-tool") continue;
-		const raw = (cache as Record<string, unknown>)[prov.id] as Record<string, unknown> | undefined;
-		if (!raw) continue;
-		// 优先使用 planUsage/planLimit（API 调用次数），fallback 到 available/total（key 数量）
-		const used = (raw.planUsage as number) ?? (raw.available as number);
-		const total = (raw.planLimit as number) ?? (raw.total as number);
-		if (used === undefined || !total || total <= 0) continue;
-		const pct = Math.round((used / total) * PERCENT_SCALE);
-		const pctCol = theme.fg(pctColor(pct), `${pct}%`);
-		parts.push(`${p.d(prov.label)} ${p.g(`${used}`)}/${p.v(`${total}`)} ${pctCol}`);
-	}
-	return parts.join(" | ");
-}
-
-function buildTokenPlanLines(
-	cache: CacheData,
-	providers: QuotaProvider[],
-	p: Pallet,
-	theme: Theme,
-): string[] {
-	const rows = normalizeRows(cache, providers);
-	return rows.map((row) => {
-		const title = p.d(row.name.padEnd(TITLE_COL_W));
-		const cells = COLS.map((col, i) => {
-			const win = row.wins[i]!;
-			return formatWinCol(col.label, win, p, theme);
-		});
-		return title + cells.join(` ${DOT} `);
-	});
-}
-
-/** 渲染单个窗口列：label pct% [reset]（无 bar） */
-function formatWinCol(label: string, win: QuotaWindow, p: Pallet, theme: Theme): string {
-	const pctWidth = PCT_COL_W + 1; // "NNN%" = padStart(3) + 1 = 4 chars
-	if (win.pct === null) {
-		// 无限：∞ 右对齐到 pctStr 宽度，reset 用 -- 占位
-		return `${p.d(label)}  ${p.v("∞".padStart(pctWidth))}  ${p.v("--".padStart(RESET_COL_W))}`;
-	}
-	const pctStr = `${String(Math.round(win.pct)).padStart(PCT_COL_W)}%`;
-	const rtRaw = win.resetSec != null && win.resetSec > 0 ? fmtResetSec(win.resetSec) : "";
-	const rtStr = rtRaw ? p.v(rtRaw.padStart(RESET_COL_W)) : " ".repeat(RESET_COL_W);
-	return `${p.d(label)}  ${theme.fg(pctColor(win.pct), pctStr)}  ${rtStr}`;
-}
-
 function buildLines(
 	ctx: ExtensionContext,
 	theme: Theme,
@@ -462,13 +371,14 @@ function buildLines(
 	const cache = readCache();
 	const providers = buildRuntimeProviders();
 	const palette = makePalette(theme);
+	const themeFg = (token: string, text: string) => theme.fg(token, text);
 
 	const lines: string[] = [
 		buildLine1(ctx, fd, palette),
 		buildLine2(ctx, st, palette),
 		buildLine3(ctx, st, palette, theme),
-		buildSearchLine(cache, providers, palette, theme),
-		...buildTokenPlanLines(cache, providers, palette, theme),
+		buildSearchLine(cache, providers, palette, themeFg),
+		...buildTokenPlanLines(cache, providers, palette, themeFg),
 	];
 
 	// 过滤空行（line2/line3 在某些状态下可能空，line4 没搜索工具时空）

@@ -12,6 +12,7 @@
   "keywords": [
     "pi-package"
   ],
+  "license": "MIT",
   "files": [
     "index.ts"
   ],

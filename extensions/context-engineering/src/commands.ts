@@ -1,6 +1,6 @@
+import type { CompressionStats } from "./compressor";
 import type { ContextEngineeringConfig } from "./config";
 import { parseLevelArgs } from "./config";
-import type { CompressionStats } from "./compressor";
 
 // ── 格式化辅助 ──
 
@@ -146,6 +146,8 @@ export function handleContextEngineeringCommand(
       config.l2.enabled = onOff;
       return `L2 (Emergency compression) ${action === "on" ? "enabled" : "disabled"}.`;
   }
+  // Defensive fallback — should be unreachable if parseLevelArgs validates correctly
+  return USAGE_HELP;
 }
 
 export function handleContextStatsCommand(stats: CompressionStats): string {

@@ -6,24 +6,25 @@
  * 2. Mock 回归测试：用固定数据防止未来格式变化破坏对齐
  */
 
-import { describe, it, expect } from "vitest";
+import type { NormalizedQuotaRow,QuotaProvider, QuotaWindow } from "@zhushanwen/pi-quota-providers";
 import { INFINITE_WIN } from "@zhushanwen/pi-quota-providers";
-import type { QuotaWindow, QuotaProvider, NormalizedQuotaRow } from "@zhushanwen/pi-quota-providers";
+import { describe, expect,it } from "vitest";
+
 import {
-	formatWinCol,
-	buildTokenPlanLines,
 	buildSearchLine,
-	normalizeRows,
-	formatSpeedPart,
-	splitPath,
-	tailSessionId,
-	fmtResetSec,
-	fmtDuration,
-	fmtTokens,
+	buildTokenPlanLines,
 	fmtCount,
+	fmtDuration,
+	fmtResetSec,
+	fmtTokens,
+	formatSpeedPart,
+	formatWinCol,
+	normalizeRows,
 	pctColor,
 	plainPallet,
 	plainThemeFg,
+	splitPath,
+	tailSessionId,
 } from "../format.js";
 
 // ── 辅助：从渲染文本中提取 `·` 的位置 ─────────────────

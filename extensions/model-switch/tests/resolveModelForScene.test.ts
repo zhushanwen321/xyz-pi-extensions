@@ -5,9 +5,10 @@
  * 运行命令：npx vitest run tests/resolveModelForScene.test.ts
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { ModelPolicy } from "../../src/types";
 import type { CacheData } from "@zhushanwen/pi-quota-providers";
+import { beforeEach,describe, expect, it, vi } from "vitest";
+
+import type { ModelPolicy } from "../../src/types";
 
 // Hoisted mocks — vitest hoists these before any import
 const { mockLoadConfig, mockReadCache } = vi.hoisted(() => ({

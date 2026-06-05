@@ -23,20 +23,21 @@
   "keywords": [
     "pi-package"
   ],
+  "license": "MIT",
   "dependencies": {
     "js-yaml": "^4.1.0"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": ">=0.1.0",
-    "@earendil-works/pi-tui": "*",
-    "@earendil-works/pi-ai": "*",
+    "@mariozechner/pi-tui": "*",
+    "@mariozechner/pi-ai": "*",
     "@sinclair/typebox": "*"
   },
   "peerDependenciesMeta": {
-    "@earendil-works/pi-tui": {
+    "@mariozechner/pi-tui": {
       "optional": true
     },
-    "@earendil-works/pi-ai": {
+    "@mariozechner/pi-ai": {
       "optional": true
     }
   },

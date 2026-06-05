@@ -1,9 +1,10 @@
 // 测试框架：vitest（从 vitest 导入 describe/it/expect/vi/beforeEach）
 // 运行命令：npx vitest run tests/orchestrator.test.ts
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import * as path from "node:path";
 import * as fs from "node:fs";
+import * as path from "node:path";
+
+import { afterEach,beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock fs.promises before importing the module under test
 vi.mock("node:fs", async () => {
@@ -24,14 +25,15 @@ vi.mock("@zhushanwen/pi-model-switch", () => ({
   resolveModelForScene: vi.fn().mockReturnValue(undefined),
 }));
 
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+
 import { WorkflowOrchestrator } from "../src/orchestrator";
 import {
+  type AgentResult,
   createInstance,
   serializeInstance,
   type WorkflowInstance,
-  type AgentResult,
 } from "../src/state";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 // ── Helpers ──────────────────────────────────────────────────
 

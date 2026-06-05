@@ -9,12 +9,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ModelPolicy, ProviderConfig, PlanConfig } from "./types";
+
+import type { ModelPolicy, PlanConfig,ProviderConfig } from "./types";
 
 const CONFIG_DIR = join(homedir(), ".pi", "agent");
 const CONFIG_PATH = join(CONFIG_DIR, "model-policy.json");
 
-export { CONFIG_PATH };
+export { CONFIG_DIR, CONFIG_PATH };
 
 /**
  * 加载模型策略配置文件。

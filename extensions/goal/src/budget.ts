@@ -6,17 +6,17 @@
  * 不再需要了解阈值细节。
  */
 
-import type { GoalRuntimeState } from "./state";
-import { getElapsedTimeSeconds } from "./state";
 import {
-	SECONDS_PER_MINUTE,
-	PERCENT_FACTOR,
+	BUDGET_PERCENT_HIGH,
+	BUDGET_PERCENT_LOW,
 	BUDGET_RATIO_HIGH,
 	BUDGET_RATIO_LOW,
 	BUDGET_RATIO_TIGHT,
-	BUDGET_PERCENT_HIGH,
-	BUDGET_PERCENT_LOW,
+	PERCENT_FACTOR,
+	SECONDS_PER_MINUTE,
 } from "./constants";
+import type { GoalRuntimeState } from "./state";
+import { getElapsedTimeSeconds } from "./state";
 
 // ── 决策类型 ────────────────────────────────────────
 

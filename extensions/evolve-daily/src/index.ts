@@ -1,16 +1,17 @@
 // packages/evolve-daily/src/index.ts
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { existsSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { PROBLEM_REGISTRY } from "./problems";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+
 import { createCompactDetector } from "./detectors/compact";
-import { createSubagentDetector } from "./detectors/subagent-result";
-import { createParamErrorDetector } from "./detectors/param-error";
 import { createGoalQualityDetector } from "./detectors/goal-quality";
+import { createParamErrorDetector } from "./detectors/param-error";
+import { createSubagentDetector } from "./detectors/subagent-result";
+import { PROBLEM_REGISTRY } from "./problems";
 import { createTracker } from "./trackers/core";
 import { skillExecutionConfig } from "./trackers/skill-execution";
 
@@ -37,7 +38,7 @@ interface ToolResultDetector {
 
 export default function evolveDailyExtension(pi: ExtensionAPI) {
   // ── L1: session_start 时调用 Python analyzer ──
-  pi.on("session_start", async () => {
+  pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
     const today = new Date().toISOString().slice(0, DATE_SLICE_END); // YYYY-MM-DD
     const reportPath = join(REPORTS_DIR, `${today}.json`);
 
@@ -55,7 +56,7 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
           "--output",
           reportPath,
         ],
-        { timeout: ANALYZER_TIMEOUT_MS }
+        { timeout: ANALYZER_TIMEOUT_MS, signal: ctx.signal }
       );
     } catch (e) {
       // Clean up partial output if analyzer failed mid-write

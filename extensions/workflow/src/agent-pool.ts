@@ -17,8 +17,8 @@
  */
 
 import { spawn } from "node:child_process";
-import * as fs from "node:fs";
 import { randomUUID } from "node:crypto";
+import * as fs from "node:fs";
 
 import type { WorkflowBudget } from "./state.js";
 
@@ -81,6 +81,8 @@ interface QueueEntry {
   resolve: (result: AgentResult) => void;
   callId: string;
   startedAt: number;
+  /** P1-2: Abort signal — propagates to the pi subprocess so it can be killed. */
+  signal?: AbortSignal;
 }
 
 interface ParsedPipelineEvent {
@@ -159,12 +161,50 @@ export class AgentPool {
    * The returned promise resolves with the AgentResult on both success
    * and failure — never rejects. Error details are carried in the
    * `error` and `success` fields of the result.
+   *
+   * The optional `signal` (P1-2) is propagated to the pi subprocess:
+   *   - Pre-aborted signal: rejected synchronously with success=false.
+   *   - Abort during queue: removed from queue, returns aborted result.
+   *   - Abort during run: subprocess receives SIGKILL via runPiProcess.
    */
-  enqueue(opts: AgentCallOpts): Promise<AgentResult> {
+  enqueue(opts: AgentCallOpts, signal?: AbortSignal): Promise<AgentResult> {
     return new Promise<AgentResult>((resolve) => {
       const callId = `agent-${randomUUID().slice(0, UUID_SLICE_LENGTH)}`;
-      const entry: QueueEntry = { opts, resolve, callId, startedAt: Date.now() };
+      const entry: QueueEntry = { opts, resolve, callId, startedAt: Date.now(), signal };
       this.queue.push(entry);
+
+      // P1-2: If a signal is provided, honor pre-abort and register abort listener
+      if (signal) {
+        if (signal.aborted) {
+          const idx = this.queue.indexOf(entry);
+          if (idx !== -1) this.queue.splice(idx, 1);
+          resolve({
+            callId,
+            output: "",
+            durationMs: Date.now() - entry.startedAt,
+            success: false,
+            error: "Operation aborted before start",
+          });
+          return;
+        }
+        const onAbort = () => {
+          const idx = this.queue.indexOf(entry);
+          if (idx !== -1) {
+            // Still queued — remove and resolve with abort
+            this.queue.splice(idx, 1);
+            resolve({
+              callId,
+              output: "",
+              durationMs: Date.now() - entry.startedAt,
+              success: false,
+              error: "Operation aborted while queued",
+            });
+          }
+          // If already running, runPiProcess owns the abort handling
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+
       this.drain();
     });
   }
@@ -183,14 +223,14 @@ export class AgentPool {
 
   /** Run a single agent call and settle the promise with the result. */
   private async run(entry: QueueEntry): Promise<void> {
-    const { opts, resolve, callId, startedAt } = entry;
+    const { opts, resolve, callId, startedAt, signal } = entry;
 
     try {
       // Real spawn — increment counter and check soft limit
       this.totalCallCount++;
       if (this.budgetRef) this.maybeEmitSoftWarning(this.budgetRef);
 
-      const result = await this.spawnAndParse(opts, callId, startedAt);
+      const result = await this.spawnAndParse(opts, callId, startedAt, signal);
       resolve(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -281,6 +321,7 @@ export class AgentPool {
     opts: AgentCallOpts,
     callId: string,
     startedAt: number,
+    signal?: AbortSignal,
   ): Promise<AgentResult> {
     const args = this.buildArgs(opts);
     const { command, args: cmdArgs } = this.resolveInvocation(args);
@@ -290,7 +331,7 @@ export class AgentPool {
     let exitCode: number;
 
     try {
-      const result = await runPiProcess(command, cmdArgs, pipeline);
+      const result = await runPiProcess(command, cmdArgs, pipeline, signal);
       exitCode = result.exitCode;
       stderr = result.stderr;
     } catch (err) {
@@ -342,11 +383,15 @@ function makeEmptyPipeline(): ParsedPipelineEvent {
  * Spawn a pi --mode json process and stream-parse JSONL from stdout.
  * Returns the exit code and any stderr output.
  * The `pipeline` accumulator is mutated in place as lines arrive.
+ *
+ * P1-2: When `signal` is provided, the subprocess receives SIGKILL on
+ * abort. The exit code 1 is returned with an explanatory stderr message.
  */
 async function runPiProcess(
   command: string,
   cmdArgs: string[],
   pipeline: ParsedPipelineEvent,
+  signal?: AbortSignal,
 ): Promise<{ exitCode: number; stderr: string }> {
   let stderr = "";
   const exitCode = await new Promise<number>((resolve, reject) => {
@@ -356,6 +401,7 @@ async function runPiProcess(
     });
     let buffer = "";
     let settled = false;
+    let aborted = false;
 
     function processChunk(chunk: string): void {
       buffer += chunk;
@@ -377,6 +423,7 @@ async function runPiProcess(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (abortHandler) signal?.removeEventListener("abort", abortHandler);
       resolve(code);
     }
 
@@ -388,6 +435,27 @@ async function runPiProcess(
       resolve(1);
     }, PROCESS_TIMEOUT_MS);
     timer.unref();
+
+    // P1-2: Wire abort signal to SIGKILL the subprocess
+    const abortHandler = signal
+      ? () => {
+          if (settled) return;
+          aborted = true;
+          stderr += "Operation aborted, sending SIGKILL";
+          proc.kill("SIGKILL");
+        }
+      : undefined;
+    if (abortHandler && !signal?.aborted) {
+      signal!.addEventListener("abort", abortHandler, { once: true });
+    } else if (signal?.aborted) {
+      // Already aborted — resolve quickly without spawning
+      settled = true;
+      clearTimeout(timer);
+      stderr += "Operation aborted before start";
+      resolve(1);
+      proc.kill("SIGKILL");
+      return;
+    }
 
     proc.stdout.on("data", (data: Buffer) => {
       processChunk(data.toString());
@@ -408,12 +476,14 @@ async function runPiProcess(
           // Ignore trailing garbage
         }
       }
-      settle(code ?? 0);
+      // P1-2: Normalize exit code for abort so caller can detect it
+      settle(aborted ? 1 : (code ?? 0));
     });
 
     proc.on("error", (err: Error) => {
       stderr += err.message;
       clearTimeout(timer);
+      if (abortHandler) signal?.removeEventListener("abort", abortHandler);
       reject(err);
     });
   });

@@ -7,10 +7,21 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
+/**
+ * Subset of `ToolExecutionEndEvent` fields used by this hook.
+ * Local interface because the SDK's full event type is not re-exported
+ * by the CI ambient type stubs in `shared/types/mariozechner/index.d.ts`.
+ */
+interface ToolExecutionEndLikeEvent {
+  isError: boolean;
+  toolName: string;
+  toolCallId: string;
+}
+
 export function setupToolErrorHandler(pi: ExtensionAPI): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
-  pi.on("tool_execution_end", async (event: any) => {
-    if (!event.isError) return;
-    console.log(`[unified-hooks] ${event.toolName} error (callId=${event.toolCallId})`);
+  pi.on("tool_execution_end", async (event: unknown) => {
+    const e = event as ToolExecutionEndLikeEvent;
+    if (!e.isError) return;
+    console.log(`[unified-hooks] ${e.toolName} error (callId=${e.toolCallId})`);
   });
 }

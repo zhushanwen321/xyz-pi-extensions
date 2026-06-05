@@ -5,8 +5,9 @@
  * Extracted from Orchestrator for testability.
  */
 
-import type { AgentCallOpts } from "./agent-pool";
 import { resolveModelForScene } from "@zhushanwen/pi-model-switch";
+
+import type { AgentCallOpts } from "./agent-pool";
 
 /**
  * 根据调用选项解析目标模型。

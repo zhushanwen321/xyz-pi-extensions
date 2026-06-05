@@ -71,12 +71,22 @@ function detectTestCommand(command: string): string | null {
   return null;
 }
 
-export function setupTestTimeoutGuard(pi: ExtensionAPI): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
-  pi.on("tool_call", async (event: any) => {
-    if (event.toolName !== "bash") return;
+/**
+ * Subset of `BashToolCallEvent` fields used by this hook.
+ * Local interface because the SDK's full event type is not re-exported
+ * by the CI ambient type stubs in `shared/types/mariozechner/index.d.ts`.
+ */
+interface BashToolCallLikeEvent {
+  toolName: string;
+  input: { command: string; timeout?: number };
+}
 
-    const { command, timeout } = event.input as { command: string; timeout?: number };
+export function setupTestTimeoutGuard(pi: ExtensionAPI): void {
+  pi.on("tool_call", async (event: unknown) => {
+    const e = event as BashToolCallLikeEvent;
+    if (e.toolName !== "bash") return;
+
+    const { command, timeout } = e.input;
 
     const testLabel = detectTestCommand(command);
     if (!testLabel) return;

@@ -4,7 +4,18 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+
 import * as yaml from "js-yaml";
+
+// ─── Stale context detection ────────────────────────────
+
+const STALE_CONTEXT_PATTERNS = ["aborted", "context canceled", "stale context", "stalecontext"];
+
+/** Check if an error indicates a stale / canceled context (e.g. after compact). */
+export function isStaleContextError(error: Error): boolean {
+	const msg = error.message.toLowerCase();
+	return STALE_CONTEXT_PATTERNS.some((p) => msg.includes(p));
+}
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -30,6 +41,20 @@ export interface WorkflowState {
 	pendingInit: boolean;
 	pendingRequirement: string;
 }
+
+/** Default initial state for a coding workflow session. */
+export const DEFAULT_STATE: WorkflowState = {
+	isActive: false,
+	currentPhase: 0,
+	topicDir: "",
+	topicName: "",
+	phaseResults: {},
+	gateInProgress: false,
+	gateRetryCount: 0,
+	compactRetryCount: 0,
+	pendingInit: false,
+	pendingRequirement: "",
+};
 
 // ─── Constants ────────────────────────────────────────────
 

@@ -6,22 +6,22 @@
  * switch_model tool：list/search/switch/recommend/setup
  */
 
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Type } from "typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { readCache } from "@zhushanwen/pi-quota-providers";
+import { Type } from "typebox";
 
+import { computePeakRecommend,computeQuotaSnapshot, computeStickiness } from "./advisor";
 import { loadConfig } from "./config";
-import { computeQuotaSnapshot, computeStickiness, computePeakRecommend } from "./advisor";
-import { formatSessionModels, formatContextPrompt } from "./prompt";
-import { generatePolicyConfig, readEnabledModels, getConfigPath, deletePolicyConfig, readPolicyConfigContent } from "./setup";
-import { getCurrentModelId, asSessionEntries, type ModelPolicy } from "./types";
+import { formatContextPrompt,formatSessionModels } from "./prompt";
+import { deletePolicyConfig, generatePolicyConfig, getConfigPath, readEnabledModels, readPolicyConfigContent } from "./setup";
+import { asSessionEntries, getCurrentModelId, type ModelPolicy } from "./types";
 
 // ── Tool 返回值 helper ──────────────────────────────────
 
 interface ToolRes {
 	content: Array<{ type: "text"; text: string }>;
-	details: Record<string, never>;
+	details: Record<string, unknown>;
 	isError?: boolean;
 }
 

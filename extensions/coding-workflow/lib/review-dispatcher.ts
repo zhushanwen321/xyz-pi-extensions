@@ -5,15 +5,16 @@
  * Content quality review is done by expert-reviewer during phase execution.
  */
 
-import * as path from "node:path";
 import type { ChildProcess } from "node:child_process";
+import * as path from "node:path";
+
 import type { SkillResolver } from "./skill-resolver.js";
 import {
-	runSingleAgent,
-	getFinalOutput,
 	cleanupOldTempFiles,
-	type SingleResult,
+	getFinalOutput,
 	type OnUpdateCallback,
+	runSingleAgent,
+	type SingleResult,
 } from "./subagent.js";
 
 /** Phase number for the final (PR) phase. */

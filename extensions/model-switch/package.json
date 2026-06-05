@@ -29,13 +29,8 @@
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
-    "@earendil-works/pi-ai": "*",
+    "@mariozechner/pi-ai": "*",
     "@sinclair/typebox": "*"
-  },
-  "peerDependenciesMeta": {
-    "@earendil-works/pi-ai": {
-      "optional": true
-    }
   },
   "scripts": {
     "typecheck": "npx tsc --noEmit"
