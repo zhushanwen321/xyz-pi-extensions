@@ -93,11 +93,28 @@ main() {
 		exit 0
 	fi
 
-	# ── 步骤 1: 卸载 npm 版本（容错：没装过也不报错）──
-	if NPM_CHECK="$NPM_NAME" is_npm_present "$NPM_NAME"; then
-		echo "  卸载 npm 版本 ..."
-		pi uninstall "$NPM_ENTRY" 2>&1 | sed 's/^/    /'
-	else
+	# ── 步骤 1: 卸载 npm 版本（settings + node_modules 都要清理）──
+	local npm_dir="$HOME/.pi/agent/npm/node_modules/$NPM_NAME"
+	local need_uninstall=false
+
+	# 1a: settings.json 中有注册条目 → pi uninstall 移除
+	if NPM_CHECK="$NPM_NAME" node -e "
+		const s = JSON.parse(require('fs').readFileSync(process.env.SETTINGS,'utf-8'));
+		process.exit(s.packages?.includes('npm:' + process.env.NPM_CHECK) ? 0 : 1);
+	" 2>/dev/null; then
+		echo "  清理 settings.json 注册: $NPM_ENTRY"
+		pi uninstall "$NPM_ENTRY" 2>&1 | sed 's/^/    /' || true
+		need_uninstall=true
+	fi
+
+	# 1b: node_modules 物理残留 → 直接删除目录
+	if [ -d "$npm_dir" ]; then
+		echo "  清理 node_modules 残留: $npm_dir"
+		rm -rf "$npm_dir"
+		need_uninstall=true
+	fi
+
+	if [ "$need_uninstall" = false ]; then
 		echo "  npm 版本未安装，跳过卸载"
 	fi
 
