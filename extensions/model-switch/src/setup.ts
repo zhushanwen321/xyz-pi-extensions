@@ -267,8 +267,7 @@ function inferAlias(m: ModelInfo): string {
 
 // ── 文件操作 ────────────────────────────────────────────
 
-const PI_AGENT_DIR = join(homedir(), ".pi", "agent");
-const CONFIG_DIR = join(PI_AGENT_DIR, "extensions", "model-switch");
+const CONFIG_DIR = join(homedir(), ".pi", "agent");
 const CONFIG_PATH = join(CONFIG_DIR, "model-policy.json");
 
 export function getConfigPath(): string {
@@ -321,7 +320,7 @@ export function readPolicyConfigContent(): { ok: true; content: string; path: st
 }
 
 export function readEnabledModels(): string[] | undefined {
-	const settingsPath = join(PI_AGENT_DIR, "settings.json");
+	const settingsPath = join(CONFIG_DIR, "settings.json");
 	try {
 		if (!existsSync(settingsPath)) return undefined;
 		const raw = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
