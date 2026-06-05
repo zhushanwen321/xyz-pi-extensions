@@ -1,23 +1,24 @@
 // 测试框架：vitest（从 vitest 导入 describe/it/expect/vi/beforeEach）
 // 运行命令：npx vitest run tests/state-budget.test.ts
 
-import { describe, it, expect } from "vitest";
+import { describe, expect,it } from "vitest";
+
+import { BudgetTracker } from "../src/budget";
 import {
-  isTerminal,
+  ALL_STATUSES,
   canTransition,
-  transitionStatus,
   createInstance,
-  serializeInstance,
   deserializeInstance,
   deserializeState,
-  ALL_STATUSES,
-  TERMINAL_STATUSES,
-  VALID_TRANSITIONS,
   ENTRY_TYPE,
+  isTerminal,
+  serializeInstance,
+  TERMINAL_STATUSES,
+  transitionStatus,
+  VALID_TRANSITIONS,
   type WorkflowInstance,
   type WorkflowStatus,
 } from "../src/state";
-import { BudgetTracker } from "../src/budget";
 
 // ═══════════════════════════════════════════════════════════════
 // state.ts

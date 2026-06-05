@@ -67,8 +67,8 @@ description: >-
 
 ```bash
 # 检查所有 skill
-python3 scripts/validate-skill-yaml.py skills/*/SKILL.md
+python3 .githooks/validate-skill-yaml skills/*/SKILL.md
 
 # 自动修复问题 description（双引号转义过多 → 转换为 >-）
-python3 scripts/validate-skill-yaml.py --fix skills/*/SKILL.md
+python3 .githooks/validate-skill-yaml --fix skills/*/SKILL.md
 ```

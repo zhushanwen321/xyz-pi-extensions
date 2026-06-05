@@ -3,16 +3,17 @@
  */
 
 import type { ThemeColor } from "@mariozechner/pi-coding-agent";
-import type { GoalRuntimeState } from "./state";
-import { getCompletedCount, getElapsedTimeSeconds } from "./state";
-import { getTokenUsagePercent, getTimeUsagePercent, getBudgetColor } from "./budget.js";
+
+import { getBudgetColor,getTimeUsagePercent, getTokenUsagePercent } from "./budget.js";
 import {
-	SECONDS_PER_MINUTE,
-	PERCENT_FACTOR,
-	PROGRESS_BAR_DEFAULT_WIDTH,
 	OBJECTIVE_DISPLAY_LIMIT,
 	OBJECTIVE_TRUNCATE_KEEP,
+	PERCENT_FACTOR,
+	PROGRESS_BAR_DEFAULT_WIDTH,
+	SECONDS_PER_MINUTE,
 } from "./constants";
+import type { GoalRuntimeState } from "./state";
+import { getCompletedCount, getElapsedTimeSeconds } from "./state";
 
 /**
  * 将多行文本压缩为单行，用于 widget 渲染。

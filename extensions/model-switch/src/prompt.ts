@@ -7,7 +7,7 @@
  * 设计原则：每行自解释，避免缩写标签，让 AI 不需要猜测字段含义。
  */
 
-import type { ModelPolicy, QuotaSnapshot, StickinessInfo, RecommendInfo } from "./types";
+import type { ModelPolicy, QuotaSnapshot, RecommendInfo,StickinessInfo } from "./types";
 
 // ── 时间常量 ────────────────────────────────────────────
 

@@ -2,9 +2,11 @@
 // 运行命令：npx vitest run tests/agent-pool.test.ts
 /* eslint-disable @typescript-eslint/no-explicit-any, taste/prefer-allsettled */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { type ChildProcess,spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { spawn, type ChildProcess } from "node:child_process";
+
+import { beforeEach,describe, expect, it, vi } from "vitest";
+
 import { AgentPool, SOFT_MAX_AGENTS_WARNING } from "../src/agent-pool";
 
 vi.mock("node:child_process", () => ({

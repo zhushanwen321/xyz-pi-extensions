@@ -5,7 +5,8 @@
  * 运行命令：npx vitest run tests/resolveModel.test.ts
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach,describe, expect, it, vi } from "vitest";
+
 import type { AgentCallOpts } from "../src/agent-pool";
 
 const { mockResolveModelForScene } = vi.hoisted(() => ({

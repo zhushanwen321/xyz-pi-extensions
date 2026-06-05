@@ -12,13 +12,14 @@
  * for GUI display.
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
-import { renameSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 
+import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+
+import { loadWorkflows } from "./config-loader.js";
 import { type WorkflowOrchestrator } from "./orchestrator.js";
 import { type WorkflowInstance } from "./state.js";
-import { loadWorkflows } from "./config-loader.js";
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -52,13 +53,19 @@ const statusToItemStatus = (
 /**
  * Send a completion notification via pi.sendMessage when a workflow
  * reaches a terminal state. Includes a _render descriptor for GUI.
+ *
+ * The `notifiedRunIds` Set is provided by the caller so that dedup
+ * state is scoped to the factory/extension instance, not shared
+ * across all callers globally. A default module-level Set is used
+ * for backwards compatibility with direct callers (e.g. tests).
  */
-const notifiedRunIds = new Set<string>();
+const defaultNotifiedRunIds = new Set<string>();
 
 export function sendCompletionNotification(
   api: ExtensionAPI,
   runId: string,
   instance: WorkflowInstance,
+  notifiedRunIds: Set<string> = defaultNotifiedRunIds,
 ): void {
   if (notifiedRunIds.has(runId)) return;
   notifiedRunIds.add(runId);

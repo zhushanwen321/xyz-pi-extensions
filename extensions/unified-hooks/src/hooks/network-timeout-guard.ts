@@ -36,13 +36,23 @@ function detectNetworkCommand(command: string): string | null {
   return null;
 }
 
-export function setupNetworkTimeoutGuard(pi: ExtensionAPI): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
-  pi.on("tool_call", async (event: any) => {
-    // Only intercept bash tool calls
-    if (event.toolName !== "bash") return;
+/**
+ * Subset of `BashToolCallEvent` fields used by this hook.
+ * Local interface because the SDK's full event type is not re-exported
+ * by the CI ambient type stubs in `shared/types/mariozechner/index.d.ts`.
+ */
+interface BashToolCallLikeEvent {
+  toolName: string;
+  input: { command: string; timeout?: number };
+}
 
-    const { command, timeout } = event.input as { command: string; timeout?: number };
+export function setupNetworkTimeoutGuard(pi: ExtensionAPI): void {
+  pi.on("tool_call", async (event: unknown) => {
+    // Only intercept bash tool calls
+    const e = event as BashToolCallLikeEvent;
+    if (e.toolName !== "bash") return;
+
+    const { command, timeout } = e.input;
 
     // No network command detected — let it through
     const networkLabel = detectNetworkCommand(command);

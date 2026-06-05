@@ -1,5 +1,6 @@
 // 测试框架: vitest | 运行命令: npx vitest run tests/worker-script.test.ts
-import { describe, it, expect } from "vitest";
+import { describe, expect,it } from "vitest";
+
 import { buildWorkerScript } from "../src/worker-script";
 
 describe("buildWorkerScript", () => {

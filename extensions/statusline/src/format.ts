@@ -5,12 +5,12 @@
  * 不依赖 Pi 运行时（ExtensionAPI / Theme），只做数据→字符串转换。
  */
 
-import type { QuotaWindow, QuotaProvider } from "@zhushanwen/pi-quota-providers";
+import type { QuotaProvider,QuotaWindow } from "@zhushanwen/pi-quota-providers";
 
 // ── 时间常量 ───────────────────────────────────────────
 
-const MS_PER_SEC = 1000;
-const SEC_PER_MIN = 60;
+export const MS_PER_SEC = 1000;
+export const SEC_PER_MIN = 60;
 const MIN_PER_HOUR = 60;
 const HOURS_PER_DAY = 24;
 const SEC_PER_HOUR = SEC_PER_MIN * MIN_PER_HOUR;
@@ -18,7 +18,7 @@ const SEC_PER_DAY = SEC_PER_HOUR * HOURS_PER_DAY;
 
 // ── token 数字单位阈值 ─────────────────────────────────
 
-const KILO = 1_000;
+export const KILO = 1_000;
 const MILLION = 1_000_000;
 
 // ── 百分比阈值 ─────────────────────────────────────────
@@ -26,7 +26,7 @@ const MILLION = 1_000_000;
 const PCT_HIGH = 80;
 const PCT_MED = 60;
 const PCT_LOW = 40;
-const PERCENT_SCALE = 100;
+export const PERCENT_SCALE = 100;
 
 // ── 渲染常量 ───────────────────────────────────────────
 
@@ -47,7 +47,7 @@ export const COLS = [
 
 // ── 格式化函数 ─────────────────────────────────────────
 
-const MIN_PAD = 2;
+export const MIN_PAD = 2;
 
 export function fmtDuration(ms: number): string {
 	const s = Math.floor(ms / MS_PER_SEC);

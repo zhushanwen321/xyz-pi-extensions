@@ -21,11 +21,10 @@ import {
   deserializeState,
   isTerminalStatus,
   serializeState,
-  TrackerParams,
-
   type TrackedItem,
   type TrackedItemStatus,
   type TrackerDetails,
+  TrackerParams,
   type TrackerRuntimeState,
 } from "./types";
 
@@ -34,6 +33,23 @@ import {
 type PiOnAny = {
   on(event: string, handler: (...args: unknown[]) => unknown): void;
 };
+
+// ── Stale context detection ──────────────────────────
+
+const STALE_CONTEXT_PATTERNS = [
+  "Extension context no longer active",
+  "aborted",
+  "context canceled",
+  "stale context",
+  "stalecontext",
+];
+
+/** Detect errors that indicate the Pi session has been torn down (compact/reload/exit). */
+function isStaleContextError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const msg = error.message.toLowerCase();
+  return STALE_CONTEXT_PATTERNS.some((p) => msg.includes(p));
+}
 
 // ── Tool execute/render param types ──────────────────
 
@@ -185,8 +201,19 @@ export function createTracker<TMeta>(
   // ── 持久化 + GC ───────────────────────────────────
 
   function persistState(ctx: ExtensionContext): void {
-    pi.appendEntry(config.entryType, serializeState(state));
-    const entries = ctx.sessionManager.getEntries();
+    let entries: SessionEntry[];
+    try {
+      pi.appendEntry(config.entryType, serializeState(state));
+      entries = ctx.sessionManager.getEntries();
+    } catch (e) {
+      if (isStaleContextError(e)) {
+        console.warn(
+          `[${config.name}] skip persist: stale context (${(e as Error).message})`,
+        );
+        return;
+      }
+      throw e;
+    }
     const staleIndices: number[] = [];
     let foundLatest = false;
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -206,7 +233,19 @@ export function createTracker<TMeta>(
   // ── 状态恢复 ──────────────────────────────────────
 
   function reconstructState(ctx: ExtensionContext): void {
-    const entries = ctx.sessionManager.getEntries();
+    let entries: SessionEntry[];
+    try {
+      entries = ctx.sessionManager.getEntries();
+    } catch (e) {
+      if (isStaleContextError(e)) {
+        console.warn(
+          `[${config.name}] skip reconstruct: stale context (${(e as Error).message})`,
+        );
+        state = createInitialState<TMeta>();
+        return;
+      }
+      throw e;
+    }
     const allTypes = [config.entryType, ...(config.legacyEntryTypes ?? [])];
 
     let latestData: Record<string, unknown> | undefined;

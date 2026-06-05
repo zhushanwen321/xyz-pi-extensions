@@ -7,12 +7,14 @@
  * and name conflict checking.
  */
 
-import type { ExtensionAPI, Theme } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
-import { Type, type Static } from "typebox";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve as pathResolve } from "node:path";
-import { loadWorkflows, invalidateCache } from "./config-loader.js";
+
+import type { ExtensionAPI, Theme } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
+import { type Static,Type } from "typebox";
+
+import { invalidateCache,loadWorkflows } from "./config-loader.js";
 
 // ── Parameter schema ──────────────────────────────────────────
 
@@ -47,7 +49,15 @@ export function registerGenerateTool(pi: ExtensionAPI) {
     ],
     parameters: WorkflowGenerateParams,
 
-    async execute(_toolCallId: string, params: Static<typeof WorkflowGenerateParams>, _signal: AbortSignal | undefined, _onUpdate: unknown, _ctx: unknown): Promise<{ content: Array<{ type: "text"; text: string }>; details: { action: string; path: string; name: string; status: string } | undefined; isError?: boolean }> {
+    async execute(_toolCallId: string, params: Static<typeof WorkflowGenerateParams>, signal: AbortSignal | undefined, _onUpdate: unknown, _ctx: unknown): Promise<{ content: Array<{ type: "text"; text: string }>; details: { action: string; path: string; name: string; status: string } | undefined; isError?: boolean }> {
+      // P1-2: Honor abort signal up-front (tool-generate ops are mostly sync file I/O)
+      if (signal?.aborted) {
+        return {
+          content: [{ type: "text", text: "Operation aborted before start" }],
+          details: undefined,
+          isError: true,
+        };
+      }
       const name = params.name as string;
       const script = params.script as string;
 

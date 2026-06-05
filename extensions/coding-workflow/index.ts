@@ -8,38 +8,41 @@
  * Commands: /coding-workflow, /coding-workflow-status, /coding-workflow-abort
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
-import { Type } from "typebox";
+import type { ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ChildProcess } from "node:child_process";
-import { SkillResolver } from "./lib/skill-resolver.js";
+
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
+import { Type } from "typebox";
+
 import {
-	type PhaseConfig,
-	type WorkflowState,
+	DEFAULT_STATE,
 	extractRecentUserMessages,
 	FINAL_PHASE,
 	MAX_SLUG_LENGTH,
+	type PhaseConfig,
 	REQUIREMENT_EXCERPT_LENGTH,
+	type WorkflowState,
 } from "./lib/helpers.js";
+import { SkillResolver } from "./lib/skill-resolver.js";
 import {
-	type HandlerContext,
-	type ToolExecuteContext,
-	type RenderArgs,
-	type ThemeLike,
-	type RenderResultLike,
 	type BeforeAgentStartEvent,
+	buildBeforeAgentStartMessage,
 	executeGateTool,
 	executeInitTool,
 	executePhaseStartTool,
-	buildBeforeAgentStartMessage,
+	type HandlerContext,
+	type RenderArgs,
 	renderGateCall,
-	renderToolResult,
 	renderInitCall,
 	renderInitResult,
 	renderPhaseStartCall,
+	type RenderResultLike,
+	renderToolResult,
+	type ThemeLike,
+	type ToolExecuteContext,
 } from "./lib/tool-handlers.js";
 
 // ─── Phase definitions ───────────────────────────────────
@@ -82,19 +85,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GATE_SCRIPT_PATH = path.join(__dirname, "scripts", "gate-check.py");
 
 // ─── State ───────────────────────────────────────────────
-
-const DEFAULT_STATE: WorkflowState = {
-	isActive: false,
-	currentPhase: 0,
-	topicDir: "",
-	topicName: "",
-	phaseResults: {},
-	gateInProgress: false,
-	gateRetryCount: 0,
-	compactRetryCount: 0,
-	pendingInit: false,
-	pendingRequirement: "",
-};
 
 const MAX_GATE_RETRIES = 10;
 const MAX_COMPACT_RETRIES = 3;
@@ -146,6 +136,8 @@ function persistState(pi: ExtensionAPI, state: WorkflowState): void {
 		phaseResults: state.phaseResults,
 		pendingInit: state.pendingInit,
 		pendingRequirement: state.pendingRequirement,
+		gateRetryCount: state.gateRetryCount,
+		compactRetryCount: state.compactRetryCount,
 	});
 }
 
@@ -166,7 +158,7 @@ function reconstructState(ctx: ExtensionContext, state: WorkflowState): void {
 				state.topicName = data.topicName ?? "";
 				state.phaseResults = data.phaseResults ?? {};
 				state.gateInProgress = false;
-				state.gateRetryCount = 0;
+				state.gateRetryCount = data.gateRetryCount ?? 0;
 				state.compactRetryCount = data.compactRetryCount ?? 0;
 				state.pendingInit = data.pendingInit ?? false;
 				state.pendingRequirement = data.pendingRequirement ?? "";
@@ -445,6 +437,22 @@ export default function codingWorkflowExtension(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
 		reconstructState(ctx, state);
+		updateWidget(ctx, state);
+	});
+
+	// ── Event: session_tree ──────────────────────────────
+
+	pi.on("session_tree", async (_event: unknown, ctx: ExtensionContext) => {
+		// Kill any running subprocesses from the old branch
+		for (const proc of activeSubprocesses) {
+			try { proc.kill("SIGTERM"); } catch { /* process already terminated */ void undefined; }
+		}
+		activeSubprocesses.length = 0;
+		// Clear in-flight state from the old branch
+		state.gateInProgress = false;
+		state.gateRetryCount = 0;
+		state.pendingInit = false;
+		persistState(pi, state);
 		updateWidget(ctx, state);
 	});
 

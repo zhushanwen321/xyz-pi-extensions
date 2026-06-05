@@ -10,8 +10,8 @@
  * - settled flag 防止重复 resolve
  */
 
-import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 
 // ─── Constants ───────────────────────────────────────────
 

@@ -36,6 +36,18 @@ export type ValidStatus = (typeof VALID_STATUSES)[number];
 
 // ── 迁移/兼容 ───────────────────────────────────────
 
+// ── Stale Context Detection ──────────────────────────
+
+const STALE_CONTEXT_PATTERNS = ["aborted", "context canceled", "stale context", "stalecontext", "extension context no longer active"];
+
+/** 检查错误是否表示 stale / canceled context（如 session 重建 / compact 后） */
+export function isStaleContextError(error: Error | unknown): boolean {
+	const msg = error instanceof Error ? error.message : String(error);
+	const lower = msg.toLowerCase();
+	return STALE_CONTEXT_PATTERNS.some((p) => lower.includes(p));
+}
+
+
 /** 兼容旧格式：旧 entry 可能有 done: boolean，转换为 status；旧数据缺少 verifyText/verifyAttempts 时填充默认值 */
 export function migrateTodo(raw: Todo): Todo {
 	const record = raw as unknown as Record<string, unknown>;

@@ -1,16 +1,17 @@
 // packages/evolve-daily/src/index.ts
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { existsSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { PROBLEM_REGISTRY } from "./problems";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+
 import { createCompactDetector } from "./detectors/compact";
-import { createSubagentDetector } from "./detectors/subagent-result";
-import { createParamErrorDetector } from "./detectors/param-error";
 import { createGoalQualityDetector } from "./detectors/goal-quality";
+import { createParamErrorDetector } from "./detectors/param-error";
+import { createSubagentDetector } from "./detectors/subagent-result";
+import { PROBLEM_REGISTRY } from "./problems";
 import { createTracker } from "./trackers/core";
 import { skillExecutionConfig } from "./trackers/skill-execution";
 
@@ -24,9 +25,8 @@ const REPORTS_DIR = join(homedir(), ".pi", "agent", "evolution-data", "daily-rep
 const DATE_SLICE_END = 10;
 const ANALYZER_TIMEOUT_MS = 30_000;
 
-type PiOnAny = {
-  on(event: string, handler: (...args: unknown[]) => Promise<void> | void): void;
-};
+/** Pi API 的 on 方法重载签名（覆盖非标事件名） */
+type PiOnAny = { on(event: string, handler: (...args: unknown[]) => Promise<void> | void): void };
 
 /** tool_result 事件中匹配的工具结果 detector */
 interface ToolResultDetector {
@@ -37,7 +37,7 @@ interface ToolResultDetector {
 
 export default function evolveDailyExtension(pi: ExtensionAPI) {
   // ── L1: session_start 时调用 Python analyzer ──
-  pi.on("session_start", async () => {
+  pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
     const today = new Date().toISOString().slice(0, DATE_SLICE_END); // YYYY-MM-DD
     const reportPath = join(REPORTS_DIR, `${today}.json`);
 
@@ -55,7 +55,7 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
           "--output",
           reportPath,
         ],
-        { timeout: ANALYZER_TIMEOUT_MS }
+        { timeout: ANALYZER_TIMEOUT_MS, signal: ctx.signal }
       );
     } catch (e) {
       // Clean up partial output if analyzer failed mid-write
@@ -77,7 +77,7 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
     PROBLEM_REGISTRY.find((p) => p.id === "compact-frequency")!
   );
 
-  (pi.on as unknown as PiOnAny).on("session_compact", async (event: unknown) => {
+  (pi as unknown as PiOnAny).on("session_compact", async (event: unknown) => {
     const ev = event as Record<string, unknown>;
     try {
       const item = compactDetector.createItem(ev);
@@ -111,7 +111,7 @@ export default function evolveDailyExtension(pi: ExtensionAPI) {
     ),
   ];
 
-  (pi.on as unknown as PiOnAny).on(
+  (pi as unknown as PiOnAny).on(
     "tool_result",
     async (event: unknown, _ctx?: unknown) => {
       const ev = event as Record<string, unknown>;

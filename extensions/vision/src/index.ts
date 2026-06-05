@@ -9,23 +9,24 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type ExtensionAPI, type ExtensionContext, type Theme } from "@mariozechner/pi-coding-agent";
+
+import { type AgentToolResult, type ExtensionAPI, type ExtensionContext, type Theme } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import { Type, type Static } from "typebox";
+import { type Static,Type } from "typebox";
+
 import {
-	VISION_ALLOWED_TOOLS,
-	VISION_SYSTEM_PROMPT,
-	FORK_PREAMBLE,
-	loadVisionModels,
-	resolveVisionModelSync,
-} from "./vision-model.js";
-import {
-	type OnUpdateCallback,
-	
 	cleanupOldTempFiles,
 	getFinalOutput,
+	type OnUpdateCallback,
 	runSingleVisionAgent,
+	type VisionResult,
 } from "./spawn.js";
+import {
+	createVisionModelApi,
+	FORK_PREAMBLE,
+	VISION_ALLOWED_TOOLS,
+	VISION_SYSTEM_PROMPT,
+} from "./vision-model.js";
 
 // ── Constants ───────────────────────────────────────
 
@@ -35,6 +36,12 @@ const FORK_ID_SLICE_END = 8;
 const MS_PER_SEC = 1000;
 const OUTPUT_PREVIEW_SLICE_LIMIT = 120;
 const TEXT_SPLIT_FIRST_N = 2;
+const EMPTY_MODEL_DETAILS: VisionDetails = {
+	mode: "vision",
+	resolvedModel: "",
+	context: "fresh",
+};
+const FORK_DEGRADED_WARNING = "\n[Warning: Fork session unavailable — fell back to fresh context.]";
 
 // ──────────────────────── Parameters ────────────────────────
 
@@ -62,6 +69,8 @@ interface VisionDetails {
 	durationMs?: number;
 }
 
+type VisionToolResult = AgentToolResult<VisionDetails> & { isError?: boolean };
+
 /**
  * Copy parent session file to a temp location for fork context.
  * Simple approach: file copy + pass as --session to child process.
@@ -81,9 +90,116 @@ function createForkSessionFile(parentSessionFile: string): string | undefined {
 	}
 }
 
+// ──────────────────────── Execute helpers ────────────────────────
+
+/** Validate image path; returns either the resolved absolute path or an error result. */
+function validateImagePath(
+	params: Static<typeof AnalyzeImageParams>,
+	cwd: string,
+): { ok: true; path: string } | { ok: false; result: VisionToolResult } {
+	const absoluteImagePath = path.isAbsolute(params.image_path)
+		? params.image_path
+		: path.resolve(cwd, params.image_path);
+
+	if (!fs.existsSync(absoluteImagePath)) {
+		return {
+			ok: false,
+			result: {
+				content: [{ type: "text" as const, text: `Image file not found: ${absoluteImagePath}` }],
+				details: { ...EMPTY_MODEL_DETAILS },
+				isError: true,
+			},
+		};
+	}
+	return { ok: true, path: absoluteImagePath };
+}
+
+/** Build the "no vision model configured" error result. */
+function buildMissingModelResult(error: string): VisionToolResult {
+	return {
+		content: [{ type: "text" as const, text: error }],
+		details: { ...EMPTY_MODEL_DETAILS },
+		isError: true,
+	};
+}
+
+/** Resolve fork session file for `fork` mode, recording whether fallback occurred. */
+function resolveForkContext(
+	contextMode: "fresh" | "fork",
+	ctx: ExtensionContext,
+): { forkSessionFile: string | undefined; forkDegraded: boolean } {
+	if (contextMode !== "fork") {
+		return { forkSessionFile: undefined, forkDegraded: false };
+	}
+	const parentSessionFile = ctx.sessionManager.getSessionFile();
+	const forkSessionFile = parentSessionFile
+		? createForkSessionFile(parentSessionFile)
+		: undefined;
+	return { forkSessionFile, forkDegraded: !forkSessionFile };
+}
+
+/** Build the task prompt sent to the vision subagent. */
+function buildVisionTask(
+	question: string,
+	absoluteImagePath: string,
+	effectiveContext: "fresh" | "fork",
+): string {
+	return effectiveContext === "fork"
+		? `${FORK_PREAMBLE}\n\nTask:\nRead image ${absoluteImagePath}, considering the prior discussion context, analyze: ${question}. Output analysis conclusions only.`
+		: `Read image ${absoluteImagePath}, analyze: ${question}. Output analysis conclusions only.`;
+}
+
+/** Build the structured details payload attached to the tool result. */
+function buildVisionDetails(
+	result: VisionResult,
+	resolvedModel: string,
+	effectiveContext: "fresh" | "fork",
+): VisionDetails {
+	return {
+		mode: "vision",
+		resolvedModel,
+		context: effectiveContext,
+		usage: {
+			input: result.usage.input,
+			output: result.usage.output,
+			turns: result.usage.turns,
+			cost: result.usage.cost,
+		},
+		durationMs: result.durationMs,
+	};
+}
+
+/** Build the final tool result (error or success) with optional degradation warning. */
+function buildVisionResult(
+	result: VisionResult,
+	details: VisionDetails,
+	degradation: string,
+): VisionToolResult {
+	const isError = result.exitCode !== 0
+		|| result.stopReason === "error"
+		|| result.stopReason === "aborted";
+
+	if (isError) {
+		const errorMsg = result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+		return {
+			content: [{ type: "text" as const, text: `Vision analysis failed: ${errorMsg}${degradation}` }],
+			details,
+			isError: true,
+		};
+	}
+
+	return {
+		content: [{ type: "text" as const, text: (getFinalOutput(result.messages) || "(no output)") + degradation }],
+		details,
+	};
+}
+
 // ──────────────────────── Extension ────────────────────────
 
 export default function visionExtension(pi: ExtensionAPI) {
+	// Per-instance state: vision-model cache is owned by the factory closure.
+	const visionModel = createVisionModelApi();
+
 	pi.registerTool({
 		name: "analyze_image",
 		label: "Analyze Image",
@@ -111,57 +227,21 @@ export default function visionExtension(pi: ExtensionAPI) {
 		async execute(_toolCallId: string, params: Static<typeof AnalyzeImageParams>, signal: AbortSignal | undefined, onUpdate: ((update: unknown) => void) | undefined, ctx: ExtensionContext) {
 			cleanupOldTempFiles();
 
-			// ── Validate image path ──
-			const rawPath = params.image_path as string;
-			const absoluteImagePath = path.isAbsolute(rawPath)
-				? rawPath
-				: path.resolve(ctx.cwd, rawPath);
+			const pathCheck = validateImagePath(params, ctx.cwd);
+			if (!pathCheck.ok) return pathCheck.result;
+			const absoluteImagePath = pathCheck.path;
 
-			if (!fs.existsSync(absoluteImagePath)) {
-				return {
-					content: [{ type: "text" as const, text: `Image file not found: ${absoluteImagePath}` }],
-					details: { mode: "vision" as const, resolvedModel: "", context: "fresh" as const },
-					isError: true,
-				};
-			}
-
-			// ── Resolve vision model ──
-			const modelResult = resolveVisionModelSync();
-			if (!modelResult.ok) {
-				return {
-					content: [{ type: "text" as const, text: modelResult.error }],
-					details: { mode: "vision" as const, resolvedModel: "", context: "fresh" as const },
-					isError: true,
-				};
-			}
-
+			const modelResult = visionModel.resolveVisionModelSync();
+			if (!modelResult.ok) return buildMissingModelResult(modelResult.error);
 			const resolvedModel = modelResult.ref;
 			const resolvedThinking = modelResult.thinkingLevel;
 
-			// ── Resolve context mode ──
 			const contextMode: "fresh" | "fork" = params.context === "fork" ? "fork" : "fresh";
-			let forkSessionFile: string | undefined;
-			let forkDegraded = false;
+			const { forkSessionFile, forkDegraded } = resolveForkContext(contextMode, ctx);
 
-			if (contextMode === "fork") {
-				const parentSessionFile = ctx.sessionManager.getSessionFile();
+			const effectiveContext: "fresh" | "fork" = contextMode === "fork" && !forkDegraded ? "fork" : "fresh";
+			const task = buildVisionTask(params.question, absoluteImagePath, effectiveContext);
 
-				if (parentSessionFile) {
-					forkSessionFile = createForkSessionFile(parentSessionFile);
-				}
-				if (!forkSessionFile) {
-					forkDegraded = true;
-				}
-			}
-
-			// ── Build task ──
-			const question = params.question as string;
-			const effectiveContext = contextMode === "fork" && !forkDegraded ? "fork" : "fresh";
-			const task = effectiveContext === "fork"
-				? `${FORK_PREAMBLE}\n\nTask:\nRead image ${absoluteImagePath}, considering the prior discussion context, analyze: ${question}. Output analysis conclusions only.`
-				: `Read image ${absoluteImagePath}, analyze: ${question}. Output analysis conclusions only.`;
-
-			// ── Spawn vision subagent ──
 			const result = await runSingleVisionAgent({
 				task,
 				systemPrompt: VISION_SYSTEM_PROMPT,
@@ -174,47 +254,16 @@ export default function visionExtension(pi: ExtensionAPI) {
 				forkSessionFile,
 			});
 
-			const isError = result.exitCode !== 0
-				|| result.stopReason === "error"
-				|| result.stopReason === "aborted";
-
-			const details: VisionDetails = {
-				mode: "vision",
-				resolvedModel,
-				context: effectiveContext,
-				usage: {
-					input: result.usage.input,
-					output: result.usage.output,
-					turns: result.usage.turns,
-					cost: result.usage.cost,
-				},
-				durationMs: result.durationMs,
-			};
-
-			const degradation = forkDegraded && contextMode === "fork"
-				? "\n[Warning: Fork session unavailable — fell back to fresh context.]"
-				: "";
-
-			if (isError) {
-				const errorMsg = result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
-				return {
-					content: [{ type: "text" as const, text: `Vision analysis failed: ${errorMsg}${degradation}` }],
-					details,
-					isError: true,
-				};
-			}
-
-			return {
-				content: [{ type: "text" as const, text: (getFinalOutput(result.messages) || "(no output)") + degradation }],
-				details,
-			};
+			const details = buildVisionDetails(result, resolvedModel, effectiveContext);
+			const degradation = forkDegraded && contextMode === "fork" ? FORK_DEGRADED_WARNING : "";
+			return buildVisionResult(result, details, degradation);
 		},
 
 		renderCall(args: Record<string, unknown>, theme: Theme) {
 			const rawPath = args.image_path as string;
 			const home = os.homedir();
 			const shortPath = rawPath.startsWith(home) ? `~${rawPath.slice(home.length)}` : rawPath;
-			const modelDisplay = theme.fg("dim", ` ${loadVisionModels()?.models?.[0]?.id ?? "vision"}`);
+			const modelDisplay = theme.fg("dim", ` ${visionModel.loadVisionModels()?.models?.[0]?.id ?? "vision"}`);
 			const ctxLabel = args.context === "fork" ? theme.fg("accent", " [fork]") : "";
 
 			return new Text(

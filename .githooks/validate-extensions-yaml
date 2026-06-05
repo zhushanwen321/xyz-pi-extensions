@@ -13,8 +13,8 @@ Checks:
 9. dates are valid YYYY-MM-DD format
 
 Usage:
-  python3 scripts/validate-extensions-yaml.py
-  python3 scripts/validate-extensions-yaml.py --fix  (reserved, currently no auto-fix)
+  python3 .githooks/validate-extensions-yaml
+  python3 .githooks/validate-extensions-yaml --fix  (reserved, currently no auto-fix)
 """
 
 import os

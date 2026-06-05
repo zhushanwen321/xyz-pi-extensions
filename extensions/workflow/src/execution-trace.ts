@@ -9,7 +9,8 @@
  * Data shape: { runId: string; node: ExecutionTraceNode }
  */
 
-import type { ExtensionAPI, ExtensionContext, SessionEntry, CustomEntry } from "@mariozechner/pi-coding-agent";
+import type { CustomEntry,ExtensionAPI, ExtensionContext, SessionEntry } from "@mariozechner/pi-coding-agent";
+
 import type { ExecutionTraceNode } from "./state.js";
 
 // ── Constants ───────────────────────────────────────────────────

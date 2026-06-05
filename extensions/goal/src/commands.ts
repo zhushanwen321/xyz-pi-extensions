@@ -2,8 +2,8 @@
  * /goal 命令定义和参数解析
  */
 
+import { MAX_STALL_CAP, MAX_TURNS_CAP, UPDATE_PREFIX_LENGTH } from "./constants";
 import type { BudgetConfig } from "./state";
-import { MAX_TURNS_CAP, MAX_STALL_CAP, UPDATE_PREFIX_LENGTH } from "./constants";
 
 export interface GoalCommandArgs {
 	action: "set" | "status" | "pause" | "resume" | "clear" | "update" | "history";

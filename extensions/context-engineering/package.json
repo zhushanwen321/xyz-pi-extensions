@@ -22,7 +22,7 @@
   ],
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
-    "@sinclair/typebox": "*"
+    "typebox": "*"
   },
   "scripts": {
     "typecheck": "npx tsc --noEmit",

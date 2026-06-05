@@ -2,13 +2,15 @@
 // Only single foreground mode needed (no parallel/chain/background).
 
 import type { ChildProcess } from "node:child_process";
-import { ProcessManager } from "./process-manager.js";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { randomUUID } from "node:crypto";
+
 import type { Message } from "@mariozechner/pi-ai";
 import { withFileMutationQueue } from "@mariozechner/pi-coding-agent";
+
+import { ProcessManager } from "./process-manager.js";
 
 // ─── Thinking level types (moved from model.ts which was removed) ────
 

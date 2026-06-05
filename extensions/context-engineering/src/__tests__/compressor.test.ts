@@ -1,24 +1,25 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect,it } from "vitest";
+
 import {
-  compressContext,
-  validateToolPairing,
-  getToolResultText,
-  processMicrocompact,
-  processBudget,
-  findCompactBoundary,
   type AgentMessage,
-  type ToolCall,
   type AssistantMessage,
-  type ToolResultMessage,
   type BashExecutionMessage,
-  type UserMessage,
+  compressContext,
+  type ContextUsage,
+  findCompactBoundary,
+  getToolResultText,
+  processBudget,
+  processMicrocompact,
   type TextContent,
   type ThinkingContent,
-  type ContextUsage,
+  type ToolCall,
+  type ToolResultMessage,
+  type UserMessage,
+  validateToolPairing,
 } from "../compressor";
-import { createRecallStore } from "../recall-store";
-import { createFrozenFreshState } from "../frozen-fresh";
 import { DEFAULT_CONFIG } from "../config";
+import { createFrozenFreshState } from "../frozen-fresh";
+import { createRecallStore } from "../recall-store";
 
 // ── Test helpers ──
 

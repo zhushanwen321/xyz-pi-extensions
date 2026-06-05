@@ -28,6 +28,7 @@ export async function runGateScript(
 	gateScriptPath: string,
 	topicDir: string,
 	phase: number,
+	signal?: AbortSignal,
 ): Promise<GateResult> {
 	return new Promise((resolve) => {
 		let settled = false;
@@ -36,6 +37,12 @@ export async function runGateScript(
 			settled = true;
 			resolve(result);
 		};
+
+		// If signal already aborted, bail immediately
+		if (signal?.aborted) {
+			settle({ passed: false, output: "Gate check aborted before start" });
+			return;
+		}
 
 		const proc = spawn("python3", [gateScriptPath, topicDir, String(phase), "--json"], {
 			shell: false,
@@ -48,6 +55,16 @@ export async function runGateScript(
 			proc.kill("SIGKILL");
 			settle({ passed: false, output: "Gate check script timed out after 30s" });
 		}, GATE_SCRIPT_TIMEOUT_MS);
+
+		// Listen for external abort
+		if (signal) {
+			signal.addEventListener("abort", () => {
+				proc.kill("SIGTERM");
+				setTimeout(() => {
+					if (!proc.killed) proc.kill("SIGKILL");
+				}, 2000);
+			}, { once: true });
+		}
 
 		proc.stdout.on("data", (d) => { stdout += d.toString(); });
 		proc.stderr.on("data", (d) => { stderr += d.toString(); });

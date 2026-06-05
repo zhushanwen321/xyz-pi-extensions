@@ -14,70 +14,102 @@
  * - 时间累计统一由 persistState 管理，无双写
  * - before_agent_start 注入 context，agent_end 负责 continuation（预算检查/进度评估/续跑）
  * - deserializeState 向后兼容旧格式
+ * - isProcessing 防重入（agent_end 重入时直接返回）
  */
 
-import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext, CustomEntry, Theme } from "@mariozechner/pi-coding-agent";
-
+import type { CustomEntry, ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { type Static } from "typebox";
 
-
+import { handleAgentEnd } from "./agent-end-handler";
+import { handleBeforeAgentStart } from "./before-agent-start-handler";
+import { handleGoalCommand } from "./command-handler";
 import {
-	type GoalTask,
-	type BudgetConfig,
-	DEFAULT_BUDGET,
-	createInitialState,
-	transitionStatus,
-	isTerminalStatus,
-	isTerminalTaskStatus,
-	isActiveStatus,
+	MAX_HISTORY_ENTRIES,
+} from "./constants";
+import {
 	deserializeState,
 	getCompletedCount,
-	getIncompleteTasks,
-	getElapsedTimeSeconds,
+	isActiveStatus,
+	isTerminalStatus,
 } from "./state";
-
-import { parseGoalArgs } from "./commands";
 import {
-	continuationPrompt,
-	budgetLimitPrompt,
-	objectiveUpdatedPrompt,
-	contextInjectionPrompt,
-	stalenessReminderPrompt,
-} from "./templates";
-
-import { renderTerminalStatusLine } from "./widget";
-import { toSingleLine } from "./widget";
-
-import {
-	SECONDS_PER_MINUTE,
-	CONTEXT_USAGE_RATIO_LIMIT,
-	PERCENT_FACTOR,
-	TASK_STALL_TURN_THRESHOLD,
-	AUTO_CLEAR_TURNS,
-	MAX_HISTORY_ENTRIES,
-	OBJECTIVE_DISPLAY_LIMIT,
-	OBJECTIVE_TRUNCATE_KEEP,
-} from "./constants";
-
-import {
-	checkBudgetOnTurnEnd,
-	checkBudgetOnResume,
-	checkProgress,
-} from "./budget.js";
-
-import {
-	type GoalSession,
+	executeGoalAction,
 	type GoalManagerDetails,
 	GoalManagerParams,
-	executeGoalAction,
-	persistGoalState,
-	clearGoalSession,
-	updateWidget,
-	writeGoalHistoryEntry,
-	isGoalEntry,
+	type GoalSession,
 	HISTORY_ENTRY_TYPE,
+	isGoalEntry,
+	isStaleContextError,
+	updateWidget,
 } from "./tool-handler";
+import { toSingleLine } from "./widget";
+
+// ── Local Interfaces (avoid `any` on Pi callback/event signatures) ────
+
+/** Fields accessed from BeforeAgentStartEvent */
+interface BeforeAgentStartLikeEvent {
+	type: "before_agent_start";
+	prompt: string;
+	systemPrompt: string;
+}
+
+/** Fields accessed from TurnEndEvent */
+interface TurnEndLikeEvent {
+	type: "turn_end";
+	turnIndex: number;
+}
+
+/** Subset of AgentMessage.usage accessed in message_end handler */
+interface LikeUsage {
+	input?: number;
+	output?: number;
+	cacheRead?: number;
+	totalTokens?: number;
+}
+
+/** Fields accessed from MessageEndEvent */
+interface MessageEndLikeEvent {
+	type: "message_end";
+	message: {
+		role: string;
+		usage?: LikeUsage;
+	};
+}
+
+/** Fields accessed from AgentEndEvent */
+interface AgentEndLikeEvent {
+	type: "agent_end";
+	messages: unknown[];
+}
+
+/** Fields accessed from SessionStartEvent */
+interface SessionStartLikeEvent {
+	type: "session_start";
+	reason: string;
+}
+
+/** Shape of CustomMessage passed to registerMessageRenderer */
+interface LikeCustomMessage {
+	customType: string;
+	content: string | unknown;
+}
+
+/** Options bag for registerMessageRenderer callback */
+interface LikeMessageRenderOptions {
+	expanded: boolean;
+}
+
+/** Result shape accessed in renderResult */
+interface LikeToolResult {
+	content: Array<{ type: string; text?: string }>;
+	details?: GoalManagerDetails;
+}
+
+/** Options bag for renderResult callback */
+interface LikeToolRenderResultOptions {
+	expanded: boolean;
+}
 
 // ── State Reconstruction ─────────────────────────────
 
@@ -93,7 +125,6 @@ function reconstructGoalState(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 				try {
 					session.state = deserializeState(data);
 				} catch {
-					// 旧格式 goal-state entry，视为无活跃 goal
 					session.state = null;
 				}
 			}
@@ -103,30 +134,27 @@ function reconstructGoalState(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 
 	if (!session.state) return;
 
-	// 非终态 → 恢复为 active（session 重启后 resume）
+	// 非终态 → 恢复为 active
 	if (!isTerminalStatus(session.state.status) && session.state.status !== "paused") {
 		session.state.status = "active";
 		session.state.timeStartedAt = Date.now();
 	}
 
-	// Entry GC — 标记旧的 goal-state entries 以便清理
+	// Entry GC — 标记旧的 goal-state entries
 	const goalEntryIndices: number[] = [];
 	let latestFound = false;
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
 		if (isGoalEntry(entry)) {
-			if (!latestFound) {
-				latestFound = true;
-			} else {
-				goalEntryIndices.push(i);
-			}
+			if (!latestFound) latestFound = true;
+			else goalEntryIndices.push(i);
 		}
 	}
 	for (const idx of goalEntryIndices) {
 		entries.splice(idx, 1);
 	}
 
-	// Goal-history entry GC — 保留最近 MAX_HISTORY_ENTRIES 条
+	// Goal-history entry GC
 	const historyIndices: number[] = [];
 	for (let i = 0; i < entries.length; i++) {
 		const entry = entries[i]!;
@@ -142,559 +170,6 @@ function reconstructGoalState(pi: ExtensionAPI, session: GoalSession, ctx: Exten
 	}
 }
 
-// ── Command Handler ───────────────────────────────────
-
-async function handleGoalCommand(pi: ExtensionAPI, session: GoalSession, args: string | undefined, ctx: ExtensionContext): Promise<void> {
-	const parsed = parseGoalArgs(args ?? "");
-
-	switch (parsed.action) {
-		case "status": {
-			if (!session.state) {
-				ctx.ui.notify("Goal mode not active. Use /goal <objective> to start.", "info");
-				return;
-			}
-			const completed = getCompletedCount(session.state.tasks);
-			const total = session.state.tasks.length;
-			const elapsed = getElapsedTimeSeconds(session.state);
-			const lines = [
-				`Objective: ${session.state.objective}`,
-				`Status: ${session.state.status}`,
-				`Turn: ${session.state.currentTurnIndex}/${session.state.budget.maxTurns}`,
-				`Tasks: ${completed}/${total} completed`,
-				`Stall turns: ${session.state.stallCount}`,
-				`Time elapsed: ${Math.floor(elapsed / SECONDS_PER_MINUTE)}m${Math.floor(elapsed % SECONDS_PER_MINUTE)}s`,
-				session.state.budget.tokenBudget ? `Token: ${session.state.tokensUsed}/${session.state.budget.tokenBudget}` : null,
-				`Goal ID: ${session.state.goalId}`,
-			].filter(Boolean);
-			ctx.ui.notify(lines.join("\n"), "info");
-			return;
-		}
-
-		case "pause": {
-			if (!session.state) {
-				ctx.ui.notify("Goal mode not active.", "warning");
-				return;
-			}
-			if (isTerminalStatus(session.state.status)) {
-				ctx.ui.notify(`Goal is in terminal state (${session.state.status}), cannot pause.`, "warning");
-				return;
-			}
-			session.state.status = transitionStatus(session.state.status, "paused");
-			persistGoalState(pi, session, ctx);
-			updateWidget(session, ctx);
-			ctx.ui.notify("Goal paused. Use /goal resume to continue.", "info");
-			return;
-		}
-
-		case "resume": {
-			if (!session.state) {
-				ctx.ui.notify("Goal mode not active.", "warning");
-				return;
-			}
-			if (isTerminalStatus(session.state.status)) {
-				ctx.ui.notify(`Goal is in terminal state (${session.state.status}), cannot resume.`, "warning");
-				return;
-			}
-			if (session.state.status !== "paused" && session.state.status !== "blocked") {
-				ctx.ui.notify("Goal is not paused or blocked, no need to resume.", "info");
-				return;
-			}
-			session.state.status = "active";
-			session.state.stallCount = 0;
-			session.state.timeStartedAt = Date.now();
-
-			// Resume 时重检预算（复用 budget.ts 的决策函数）
-			const resumeBudgetCheck = checkBudgetOnResume(session.state);
-			if (resumeBudgetCheck) {
-				const dim = resumeBudgetCheck.dimension;
-				session.state.status = transitionStatus(session.state.status, dim === "token" ? "budget_limited" : "time_limited");
-				persistGoalState(pi, session, ctx);
-				updateWidget(session, ctx);
-				ctx.ui.notify(`${dim === "token" ? "Token" : "Time"} budget exhausted, cannot resume. Use /goal clear to reset.`, "warning");
-				return;
-			}
-
-			persistGoalState(pi, session, ctx);
-			updateWidget(session, ctx);
-
-			const incomplete = getIncompleteTasks(session.state.tasks);
-			if (incomplete.length > 0) {
-				pi.sendUserMessage(
-					`Goal resumed. Continuing with ${incomplete.length} remaining tasks.` +
-					(session.state.lastBlockerReason ? `
-
-Previous blocker: ${session.state.lastBlockerReason}. Try a different approach.` : "") +
-					`
-
-Objective: ${session.state.objective}`,
-					{ deliverAs: "followUp" },
-				);
-			} else {
-				ctx.ui.notify("All tasks completed.", "info");
-			}
-			return;
-		}
-
-		case "history": {
-			const entries = ctx.sessionManager.getEntries();
-			const historyEntries = entries.filter(
-				(e) => e.type === "custom" && (e as CustomEntry).customType === HISTORY_ENTRY_TYPE,
-			) as Array<CustomEntry<{
-				goalId: string;
-				objective: string;
-				status: string;
-				completedTasks: number;
-				totalTasks: number;
-				elapsedSeconds: number;
-				timestamp: number;
-			}>>;
-
-			if (historyEntries.length === 0) {
-				ctx.ui.notify("No goal history", "info");
-				return;
-			}
-
-			// 按时间倒序
-			const sorted = [...historyEntries].reverse();
-			const lines: string[] = ["Goal history:\n"];
-			for (let i = 0; i < sorted.length; i++) {
-				const h = sorted[i]!.data;
-				if (!h) continue;
-				const statusIcon =
-					h.status === "complete" ? "✓" :
-					h.status === "cancelled" ? "✗" :
-					h.status === "budget_limited" ? "⊗" :
-					h.status === "time_limited" ? "⏱" : "?";
-				const objDisplay = h.objective.length > OBJECTIVE_DISPLAY_LIMIT
-					? h.objective.slice(0, OBJECTIVE_TRUNCATE_KEEP) + "..."
-					: h.objective;
-				const mins = Math.floor(h.elapsedSeconds / SECONDS_PER_MINUTE);
-				const secs = Math.floor(h.elapsedSeconds % SECONDS_PER_MINUTE);
-				lines.push(`${i + 1}. ${statusIcon} ${objDisplay}`);
-				lines.push(`   ${h.completedTasks}/${h.totalTasks} tasks | ${mins}m${secs}s | ${h.status}`);
-			}
-			ctx.ui.notify(lines.join("\n"), "info");
-			return;
-		}
-
-		case "clear": {
-			if (!session.state) {
-				ctx.ui.notify("Goal mode not active.", "info");
-				return;
-			}
-			session.state.status = "cancelled";
-			session.state.completedAtTurnIndex = session.state.currentTurnIndex;
-			writeGoalHistoryEntry(pi, session);
-			persistGoalState(pi, session, ctx);
-			clearGoalSession(session, ctx);
-			ctx.ui.notify("Goal cleared.", "info");
-			return;
-		}
-
-		case "update": {
-			if (!session.state) {
-				ctx.ui.notify("Goal mode not active.", "warning");
-				return;
-			}
-			if (!parsed.objective) {
-				ctx.ui.notify("Usage: /goal update <new-objective>", "warning");
-				return;
-			}
-			const oldObjective = session.state.objective;
-			session.state.objective = parsed.objective;
-			session.state.objectiveUpdatedAt = Date.now();
-			session.state.tasks = [];
-			session.state.stallCount = 0;
-			session.state.turnCount = 0;
-			session.state.currentTurnIndex = 0;
-			session.state.lastProgressTurn = 0;
-			session.state.budgetLimitSteeringSent = false;
-			session.state.budgetWarning70Sent = false;
-			session.state.budgetWarning90Sent = false;
-			session.tasksCompletedAtAgentStart = 0;
-			persistGoalState(pi, session, ctx);
-			updateWidget(session, ctx);
-			ctx.ui.notify(`Objective updated:\nPrevious: ${oldObjective}\nNew: ${parsed.objective}`, "info");
-
-			if (isActiveStatus(session.state.status)) {
-				pi.sendUserMessage(objectiveUpdatedPrompt(session.state, oldObjective), { deliverAs: "steer" });
-			}
-			return;
-		}
-
-		case "set": {
-			if (!parsed.objective) {
-				ctx.ui.notify("Usage: /goal <objective> [--tokens N] [--timeout N]", "warning");
-				return;
-			}
-			if (!parsed.objective.trim()) {
-				ctx.ui.notify("Objective cannot be empty.", "warning");
-				return;
-			}
-			if (session.state && !isTerminalStatus(session.state.status)) {
-				ctx.ui.notify(
-					`Cancelled previous Goal: ${session.state.objective}\n(new goal started)`,
-					"info",
-				);
-				session.state.status = "cancelled";
-				session.state.completedAtTurnIndex = session.state.currentTurnIndex;
-				writeGoalHistoryEntry(pi, session);
-				persistGoalState(pi, session, ctx);
-			}
-
-			if (parsed.budget?.tokenBudget !== undefined && parsed.budget.tokenBudget <= 0) {
-				ctx.ui.notify("Token budget must be greater than 0.", "warning");
-				return;
-			}
-			const budget: Partial<BudgetConfig> = {};
-			if (parsed.budget?.tokenBudget) budget.tokenBudget = parsed.budget.tokenBudget;
-			if (parsed.budget?.timeBudgetMinutes) budget.timeBudgetMinutes = parsed.budget.timeBudgetMinutes;
-			budget.maxTurns = parsed.budget?.maxTurns ?? DEFAULT_BUDGET.maxTurns;
-			budget.maxStallTurns = parsed.budget?.maxStallTurns ?? DEFAULT_BUDGET.maxStallTurns;
-
-			session.state = createInitialState(parsed.objective, budget);
-			session.tasksCompletedAtAgentStart = 0;
-			session.hasPendingInjection = false;
-
-			persistGoalState(pi, session, ctx);
-			updateWidget(session, ctx);
-
-			const budgetNotice: string[] = [];
-			if (budget.tokenBudget) budgetNotice.push(`Token budget: ${budget.tokenBudget}`);
-			if (budget.timeBudgetMinutes) budgetNotice.push(`Time budget: ${budget.timeBudgetMinutes} min`);
-			const notice = [
-				`Goal started: ${parsed.objective}`,
-				`Max turns: ${budget.maxTurns}`,
-				...budgetNotice,
-			].join("\n");
-			ctx.ui.notify(notice, "info");
-
-			pi.sendUserMessage(parsed.objective, { deliverAs: "followUp" });
-			return;
-		}
-	}
-}
-
-// ── Event: before_agent_start Handler ─────────────────
-
-async function handleBeforeAgentStart(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionContext) {
-	if (!session.state) return;
-
-	// 终态处理：自动清理或折叠 status bar
-	if (isTerminalStatus(session.state.status)) {
-		const state = session.state;
-		const turnsInTerminal = state.currentTurnIndex - (state.completedAtTurnIndex ?? 0);
-
-		if (turnsInTerminal >= AUTO_CLEAR_TURNS) {
-			clearGoalSession(session, ctx);
-			return;
-		}
-
-		// 折叠 status bar（不渲染 task 列表）
-		const statusText = renderTerminalStatusLine(state, ctx.ui.theme);
-		if (statusText) {
-			ctx.ui.setStatus("goal", statusText);
-		}
-		ctx.ui.setWidget("goal", undefined);
-		return;
-	}
-
-	if (!isActiveStatus(session.state.status)) return;
-
-	session.hasPendingInjection = true;
-
-	// 停滞检查
-	const state = session.state;
-	const staleTasks: Array<{
-		task: GoalTask;
-		staleTurns: number;
-		staleSubtasks: Array<{ text: string; staleTurns: number }>;
-	}> = [];
-	let allTerminal = true;
-
-	for (const task of state.tasks) {
-		if (!isTerminalTaskStatus(task.status)) {
-			allTerminal = false;
-			const staleTurns = state.currentTurnIndex - task.lastUpdatedTurn;
-			if (staleTurns >= TASK_STALL_TURN_THRESHOLD) {
-				const staleSubtasks: Array<{ text: string; staleTurns: number }> = [];
-				if (task.subtasks) {
-					for (const s of task.subtasks) {
-						if (s.status !== "completed") {
-							const subStale = state.currentTurnIndex - s.lastUpdatedTurn;
-							if (subStale >= TASK_STALL_TURN_THRESHOLD) {
-								staleSubtasks.push({ text: s.text, staleTurns: subStale });
-							}
-						}
-					}
-				}
-				staleTasks.push({ task, staleTurns, staleSubtasks });
-			}
-		}
-	}
-
-	// 边界：所有 task 已终态但 goal 仍 active
-	if (allTerminal && state.tasks.length > 0) {
-		return {
-			message: {
-				customType: "goal-staleness-reminder",
-				content: stalenessReminderPrompt(state, [], true),
-				display: false,
-			},
-		};
-	}
-
-	// 有停滞项 → 注入提醒
-	if (staleTasks.length > 0) {
-		// 重置被提醒项的 lastUpdatedTurn
-		for (const item of staleTasks) {
-			item.task.lastUpdatedTurn = state.currentTurnIndex;
-			if (item.task.subtasks) {
-				for (const s of item.task.subtasks) {
-					if (s.status !== "completed") {
-						s.lastUpdatedTurn = state.currentTurnIndex;
-					}
-				}
-			}
-		}
-
-		return {
-			message: {
-				customType: "goal-staleness-reminder",
-				content: stalenessReminderPrompt(state, staleTasks, false),
-				display: false,
-			},
-		};
-	}
-
-	// 无停滞 → 继续原有 context injection
-	const usage = ctx.getContextUsage();
-	if (usage && usage.contextWindow > 0 && (usage.tokens ?? 0) / usage.contextWindow > CONTEXT_USAGE_RATIO_LIMIT) {
-		session.state.status = transitionStatus(session.state.status, "paused");
-		persistGoalState(pi, session, ctx);
-		updateWidget(session, ctx);
-
-		return {
-			message: {
-				customType: "goal-context-exceeded",
-				content:
-					"[GOAL — context space low, must wrap up now]\n" +
-					"1. Use goal_manager's list_tasks to check remaining tasks\n" +
-					"2. Only mark tasks you genuinely completed with evidence\n" +
-					"3. Summarize current progress and remaining work\n" +
-					"Do not start new tasks.",
-				display: false,
-			},
-		};
-	}
-
-	return {
-		message: {
-			customType: "goal-context",
-			content: contextInjectionPrompt(session.state),
-			display: false,
-		},
-	};
-}
-
-// ── Event: agent_end Handler ──────────────────────────
-
-async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionContext): Promise<void> {
-	if (!session.state) return;
-
-	const snapshotGoalId = session.state.goalId;
-	const checkStale = () => !session.state || session.state.goalId !== snapshotGoalId;
-
-	// 终态处理：complete / blocked 只需 persist + notify
-	if (session.state.status === "complete") {
-		persistGoalState(pi, session, ctx);
-		if (checkStale()) return;
-		updateWidget(session, ctx);
-		ctx.ui.notify(
-			`Objective completed ✓ (${getCompletedCount(session.state.tasks)}/${session.state.tasks.length} tasks, ${session.state.currentTurnIndex} turns)`,
-			"info",
-		);
-		return;
-	}
-
-	if (session.state.status === "blocked") {
-		persistGoalState(pi, session, ctx);
-		if (checkStale()) return;
-		updateWidget(session, ctx);
-		ctx.ui.notify("Goal blocked. Use /goal resume to continue or /goal clear to reset.", "warning");
-		return;
-	}
-
-	if (!isActiveStatus(session.state.status)) return;
-
-	if (checkStale()) return;
-
-	// ── 预算策略（集中检查）──
-
-	const budgetResult = checkBudgetOnTurnEnd(session.state);
-
-	// 发送预警
-	for (const w of budgetResult.warnings) {
-		if (w.type === "warning90") {
-			session.state.budgetWarning90Sent = true;
-			ctx.ui.notify(`${w.dimension === "token" ? "Token" : "Time"} budget 90% used — start wrapping up.`, "warning");
-		} else if (w.type === "warning70") {
-			session.state.budgetWarning70Sent = true;
-			ctx.ui.notify(`${w.dimension === "token" ? "Token" : "Time"} budget 70% used — keep scope in check.`, "info");
-		}
-	}
-
-	// 预算耗尽 → 终止
-	if (budgetResult.terminal) {
-		const dim = budgetResult.terminal.dimension;
-		session.state.status = transitionStatus(session.state.status, dim === "token" ? "budget_limited" : "time_limited");
-		session.state.completedAtTurnIndex = session.state.currentTurnIndex;
-		writeGoalHistoryEntry(pi, session);
-		persistGoalState(pi, session, ctx);
-		if (checkStale()) return;
-		updateWidget(session, ctx);
-		ctx.ui.notify(
-			dim === "token"
-				? "Token budget exhausted, Goal terminated."
-				: `Time budget exhausted (${session.state.budget.timeBudgetMinutes} min), Goal terminated.`,
-			"warning",
-		);
-		return;
-	}
-
-	// 90% steering → 发送收尾指令
-	if (budgetResult.shouldSendSteering) {
-		session.state.budgetLimitSteeringSent = true;
-		persistGoalState(pi, session, ctx);
-		if (checkStale()) return;
-		updateWidget(session, ctx);
-		pi.sendUserMessage(budgetLimitPrompt(session.state, "token"), { deliverAs: "steer" });
-		return;
-	}
-
-	if (checkStale()) return;
-
-	// ── Turn 递增 + 进展评估 ──
-
-	session.state.turnCount++;
-
-	const progress = checkProgress(session.state, session.tasksCompletedAtAgentStart);
-
-	// 所有任务完成 → 提示 complete_goal
-	if (progress.allTasksDone) {
-		if (progress.maxTurnsReached) {
-			session.state.status = transitionStatus(session.state.status, "complete");
-			session.state.completedAtTurnIndex = session.state.currentTurnIndex;
-			writeGoalHistoryEntry(pi, session);
-			persistGoalState(pi, session, ctx);
-			if (checkStale()) return;
-			updateWidget(session, ctx);
-			ctx.ui.notify(
-				`All tasks completed, Goal auto-closed. (${progress.completedCount}/${progress.totalCount} tasks, ${session.state.currentTurnIndex} turns)`,
-				"info",
-			);
-			return;
-		}
-
-		if (progress.budgetTight) {
-			pi.sendUserMessage(
-				`All tasks completed, token budget ${Math.round(session.state.tokensUsed / session.state.budget.tokenBudget! * PERCENT_FACTOR)}% used.` +
-				`Call goal_manager's complete_goal now with overall evidence.` +
-				`\n\nObjective: ${session.state.objective}`,
-				{ deliverAs: "steer" },
-			);
-		} else {
-			pi.sendUserMessage(
-				`All ${progress.totalCount} tasks completed. Call goal_manager's complete_goal with overall evidence.` +
-					`\n\nObjective: ${session.state.objective}`,
-				{ deliverAs: "followUp" },
-			);
-		}
-		persistGoalState(pi, session, ctx);
-		updateWidget(session, ctx);
-		return;
-	}
-
-	// 没有任务创建 → 提醒 create_tasks
-	if (progress.noTasksCreated) {
-		if (progress.maxTurnsReached) {
-			session.state.status = transitionStatus(session.state.status, "cancelled");
-			session.state.completedAtTurnIndex = session.state.currentTurnIndex;
-			writeGoalHistoryEntry(pi, session);
-			persistGoalState(pi, session, ctx);
-			if (checkStale()) return;
-			updateWidget(session, ctx);
-			ctx.ui.notify(
-				`Max turns reached (${session.state.budget.maxTurns}), LLM did not create task list.`,
-				"warning",
-			);
-			return;
-		}
-		pi.sendUserMessage(
-			`No task list created yet. Call goal_manager's create_tasks immediately to decompose the work into verifiable task steps.` +
-				`\n\nObjective: ${session.state.objective}`,
-			{ deliverAs: "followUp" },
-		);
-		persistGoalState(pi, session, ctx);
-		updateWidget(session, ctx);
-		return;
-	}
-
-	// 最大轮次 → 取消
-	if (progress.maxTurnsReached) {
-		const incomplete = getIncompleteTasks(session.state.tasks);
-		session.state.status = transitionStatus(session.state.status, "cancelled");
-		session.state.completedAtTurnIndex = session.state.currentTurnIndex;
-		writeGoalHistoryEntry(pi, session);
-		persistGoalState(pi, session, ctx);
-		if (checkStale()) return;
-		updateWidget(session, ctx);
-		ctx.ui.notify(
-			`Max turns reached (${session.state.budget.maxTurns}), ${incomplete.length} tasks still incomplete.`,
-			"warning",
-		);
-		return;
-	}
-
-	// Stall 检测
-	if (progress.isStalled) {
-		session.state.stallCount++;
-	} else {
-		session.state.stallCount = 0;
-		session.state.lastProgressTurn = session.state.currentTurnIndex;
-	}
-
-	if (session.state.stallCount >= session.state.budget.maxStallTurns) {
-		session.state.status = transitionStatus(session.state.status, "blocked");
-		persistGoalState(pi, session, ctx);
-		if (checkStale()) return;
-		updateWidget(session, ctx);
-		ctx.ui.notify(
-			`${session.state.stallCount} consecutive turns without progress, Goal auto-blocked. Use /goal resume to continue or /goal clear to reset.`,
-			"warning",
-		);
-		return;
-	}
-
-	if (checkStale()) return;
-
-	// 去抖：本 turn 无 token 消耗则不发 continuation
-	const tokenDelta = session.state.tokensUsed - session.state.lastTurnTokensUsed;
-	session.state.lastTurnTokensUsed = session.state.tokensUsed;
-
-	if (tokenDelta === 0) {
-		persistGoalState(pi, session, ctx);
-		updateWidget(session, ctx);
-		return;
-	}
-
-	// Normal continuation
-	persistGoalState(pi, session, ctx);
-	updateWidget(session, ctx);
-
-	pi.sendUserMessage(continuationPrompt(session.state), { deliverAs: "followUp" });
-}
-
 // ── Extension Factory ─────────────────────────────────
 
 export default function goalExtension(pi: ExtensionAPI) {
@@ -702,6 +177,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		state: null,
 		tasksCompletedAtAgentStart: 0,
 		hasPendingInjection: false,
+		isProcessing: false, // P1-3: 防重入
 	};
 
 	// ── Tool: goal_manager ─────────────────────────────
@@ -740,11 +216,18 @@ export default function goalExtension(pi: ExtensionAPI) {
 		],
 		parameters: GoalManagerParams,
 
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi tool callback type
-		async execute(_toolCallId: string, params: Static<typeof GoalManagerParams>, _signal: AbortSignal | undefined, _onUpdate: any, ctx: ExtensionContext) {
+		async execute(_toolCallId: string, params: Static<typeof GoalManagerParams>, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
 			try {
-				return await executeGoalAction(pi, session, params, ctx);
+				// P1-4: 透传 signal
+				return await executeGoalAction(pi, session, params, ctx, signal);
 			} catch (err) {
+				// P1-2: Stale context 检测 — 静默吞掉
+				if (isStaleContextError(err)) {
+					return {
+						content: [{ type: "text" as const, text: "Goal context stale after compact or session replacement." }],
+						isError: true as const,
+					};
+				}
 				const msg = err instanceof Error ? err.message : String(err);
 				const inputSummary = JSON.stringify(params, null, 2); // eslint-disable-line no-magic-numbers -- JSON.stringify indent
 				return {
@@ -754,8 +237,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 			}
 		},
 
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi render callback args
-		renderCall(args: any, theme: Theme) {
+		renderCall(args: Static<typeof GoalManagerParams>, theme: Theme) {
 			let text = theme.fg("toolTitle", theme.bold("goal_manager ")) + theme.fg("muted", args.action);
 			if (args.tasks) text += ` ${theme.fg("dim", `(${args.tasks.length} tasks)`)}`;
 			if (args.updates) text += ` ${theme.fg("dim", `(${args.updates.length} updates)`)}`;
@@ -766,12 +248,11 @@ export default function goalExtension(pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi render callback args
-		renderResult(result: any, { expanded }: any, theme: Theme) {
+		renderResult(result: LikeToolResult, { expanded }: LikeToolRenderResultOptions, theme: Theme) {
 			const details = result.details as GoalManagerDetails | undefined;
 			if (!details || !Array.isArray(details.tasks)) {
 				const text = result.content[0];
-				return new Text(text?.type === "text" ? text.text : "", 0, 0);
+				return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
 			}
 			const tasks = details.tasks;
 			const completed = tasks.filter((t) => t.status === "completed").length;
@@ -821,8 +302,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 	});
 
 	// ── Event: before_agent_start ──────────────────────
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
-	pi.on("before_agent_start", async (_event: any, ctx: ExtensionContext) => {
+	pi.on("before_agent_start", async (_event: BeforeAgentStartLikeEvent, ctx: ExtensionContext) => {
 		return handleBeforeAgentStart(pi, session, ctx);
 	});
 
@@ -834,16 +314,14 @@ export default function goalExtension(pi: ExtensionAPI) {
 	});
 
 	// ── Event: turn_end ────────────────────────────────
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
-	pi.on("turn_end", async (_event: any, ctx: ExtensionContext) => {
+	pi.on("turn_end", async (_event: TurnEndLikeEvent, ctx: ExtensionContext) => {
 		if (!session.state) return;
 		session.state.currentTurnIndex++;
 		updateWidget(session, ctx);
 	});
 
 	// ── Event: message_end (token accounting) ──────────
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
-	pi.on("message_end", async (event: any, _ctx: ExtensionContext) => {
+	pi.on("message_end", async (event: MessageEndLikeEvent, _ctx: ExtensionContext) => {
 		if (!session.state || !isActiveStatus(session.state.status)) return;
 		if (event.message.role !== "assistant") return;
 
@@ -861,14 +339,12 @@ export default function goalExtension(pi: ExtensionAPI) {
 	});
 
 	// ── Event: agent_end ───────────────────────────────
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
-	pi.on("agent_end", async (_event: any, ctx: ExtensionContext) => {
+	pi.on("agent_end", async (_event: AgentEndLikeEvent, ctx: ExtensionContext) => {
 		await handleAgentEnd(pi, session, ctx);
 	});
 
 	// ── Event: session_start (state reconstruction) ───
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
-	pi.on("session_start", async (_event: any, ctx: ExtensionContext) => {
+	pi.on("session_start", async (_event: SessionStartLikeEvent, ctx: ExtensionContext) => {
 		reconstructGoalState(pi, session, ctx);
 		if (session.state) {
 			session.tasksCompletedAtAgentStart = getCompletedCount(session.state.tasks);
@@ -885,8 +361,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 	];
 
 	for (const customType of goalMessageTypes) {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi render callback args
-		pi.registerMessageRenderer(customType, (message: any, _options: any, theme: Theme) => {
+		pi.registerMessageRenderer(customType, (message: LikeCustomMessage, _options: LikeMessageRenderOptions, theme: Theme) => {
 			const prefix =
 				message.customType === "goal-context-exceeded"
 					? theme.fg("error", "[GOAL Budget] ")

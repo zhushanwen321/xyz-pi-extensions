@@ -1,0 +1,313 @@
+#!/bin/bash
+# check-structure — 项目结构完整性检查（独立运行，非 pre-commit hook）
+#
+# 用法：
+#   bash .githooks/check-structure           # 完整检查
+#   bash .githooks/check-structure --quick   # 快速检查（仅阻断级别）
+#   bash .githooks/check-structure --fix     # 自动修复可修复项
+#
+# 检查项：
+#   1. 扩展入口文件存在
+#   2. CLAUDE.md 扩展清单同步
+#   3. 文件行数上限
+#   4. 入口模式检查（export default function）
+#   5. 模块级变量检查
+#   6. package.json 完整性
+set -euo pipefail
+
+MODE="${1:-full}"
+C_RED='\033[0;31m'
+C_GREEN='\033[0;32m'
+C_YELLOW='\033[0;33m'
+C_RESET='\033[0m'
+ISSUES=0
+WARNINGS=0
+
+log_pass() { echo -e "  ${C_GREEN}[PASS]${C_RESET} $1"; }
+log_warn() { echo -e "  ${C_YELLOW}[WARN]${C_RESET} $1"; WARNINGS=$((WARNINGS + 1)); }
+log_fail() { echo -e "  ${C_RED}[FAIL]${C_RESET} $1"; ISSUES=$((ISSUES + 1)); }
+log_info() { echo -e "  ${C_RESET}[INFO]${C_RESET} $1"; }
+
+# ─── 1. 扩展入口文件存在 ────────────────────────────────
+echo "=== 1. 扩展入口文件存在 ==="
+for pkg_json in extensions/*/package.json; do
+  [ -f "$pkg_json" ] || continue
+  dir=$(dirname "$pkg_json")
+  name=$(basename "$dir")
+
+  # 跳过 private 包
+  is_private=$(python3 -c "import json; print(json.load(open('$pkg_json')).get('private', False))" 2>/dev/null)
+  [[ "$is_private" == "True" ]] && continue
+
+  exts=$(python3 -c "import json; d=json.load(open('$pkg_json')); print('\n'.join(d.get('pi',{}).get('extensions',[])))" 2>/dev/null)
+  if [[ -z "$exts" ]]; then
+    log_fail "$name: 缺少 pi.extensions 声明"
+    continue
+  fi
+
+  while IFS= read -r entry; do
+    entry_path="${dir}/${entry#./}"
+    if [[ -f "$entry_path" ]]; then
+      log_pass "$name: $entry 存在"
+    else
+      log_fail "$name: $entry 不存在 ($entry_path)"
+    fi
+  done <<< "$exts"
+done
+
+# ─── 2. CLAUDE.md 扩展清单同步 ─────────────────────────
+echo ""
+echo "=== 2. CLAUDE.md 扩展清单同步 ==="
+if [[ -f CLAUDE.md ]]; then
+  # 提取 extensions/ 下的目录列表
+  ACTUAL_EXTS=$(find extensions -maxdepth 1 -mindepth 1 -type d -exec basename {} \; | sort | tr '\n' ' ')
+  # 提取 CLAUDE.md 中 extensions/ 段落列出的包
+  DOC_EXTS=$(python3 <<'PYEOF'
+import re
+with open('CLAUDE.md') as f:
+    content = f.read()
+found = re.findall(r'\|\s*`extensions/(\S+?)/`\s*\|', content)
+if not found:
+    found = re.findall(r'extensions/(\S+?)/\s*→', content)
+print(' '.join(sorted(set(found))))
+PYEOF
+)
+
+  if [[ -z "$DOC_EXTS" ]]; then
+    log_info "未从 CLAUDE.md 提取到扩展清单（表格格式可能变化，请手动检查）"
+  else
+    MISSING_IN_DOC=()
+    MISSING_ON_DISK=()
+    for ext in $ACTUAL_EXTS; do
+      [[ -z "$ext" ]] && continue
+      if [[ ! " $DOC_EXTS " =~ " $ext " ]]; then
+        MISSING_IN_DOC+=("$ext")
+      fi
+    done
+    for ext in $DOC_EXTS; do
+      [[ -z "$ext" ]] && continue
+      if [[ ! " $ACTUAL_EXTS " =~ " $ext " ]]; then
+        MISSING_ON_DISK+=("$ext")
+      fi
+    done
+
+    for ext in "${MISSING_IN_DOC[@]}"; do
+      [[ -z "$ext" ]] && continue
+      log_fail "CLAUDE.md 缺少: extensions/$ext/"
+    done
+    for ext in "${MISSING_ON_DISK[@]}"; do
+      [[ -z "$ext" ]] && continue
+      log_warn "CLAUDE.md 引用了不存在的: extensions/$ext/"
+    done
+
+    if [[ ${#MISSING_IN_DOC[@]} -eq 0 && ${#MISSING_ON_DISK[@]} -eq 0 ]]; then
+      log_pass "CLAUDE.md 与 extensions/ 目录一致"
+    fi
+  fi
+else
+  log_warn "CLAUDE.md 不存在，跳过"
+fi
+
+# ─── 3. 文件行数上限 ─────────────────────────────────────
+echo ""
+echo "=== 3. 文件行数上限（>500 警告，>1000 报错）==="
+MAX_WARN=500
+MAX_ERROR=1000
+
+while IFS= read -r -d '' file; do
+  lines=$(wc -l < "$file" | tr -d ' ')
+  if [[ "$lines" -ge "$MAX_ERROR" ]]; then
+    log_fail "$file: $lines 行（超过 $MAX_ERROR 上限）"
+  elif [[ "$lines" -ge "$MAX_WARN" ]]; then
+    log_warn "$file: $lines 行（超过 $MAX_WARN 建议值）"
+  fi
+done < <(find extensions shared -name "*.ts" -not -path "*/__tests__/*" -not -name "*.d.ts" -print0 2>/dev/null)
+
+if [[ "$ISSUES" -eq 0 ]] && [[ "$WARNINGS" -eq 0 ]]; then
+  log_pass "所有文件均低于 $MAX_WARN 行"
+fi
+
+# ─── 4. 入口模式检查 ────────────────────────────────────
+echo ""
+echo "=== 4. 入口 export default function 模式 ==="
+for pkg_json in extensions/*/package.json; do
+  [ -f "$pkg_json" ] || continue
+  dir=$(dirname "$pkg_json")
+  name=$(basename "$dir")
+
+  is_private=$(python3 -c "import json; print(json.load(open('$pkg_json')).get('private', False))" 2>/dev/null)
+  [[ "$is_private" == "True" ]] && continue
+
+  exts=$(python3 -c "import json; d=json.load(open('$pkg_json')); print('\n'.join(d.get('pi',{}).get('extensions',[])))" 2>/dev/null)
+  [[ -z "$exts" ]] && continue
+
+  while IFS= read -r entry; do
+    entry_path="${dir}/${entry#./}"
+    [[ ! -f "$entry_path" ]] && continue
+
+    has_default_export=$(python3 -c "
+import re
+with open('$entry_path') as f:
+    content = f.read()
+if re.search(r'export\s+default\s+(async\s+)?function', content):
+    print('OK')
+elif re.search(r'export\s+\{\s*default\s*\s*(as\s+\S+)?\s*\}\s*from', content):
+    print('REEXPORT')
+elif re.search(r'export\s+\{\s*default\s*\}', content):
+    print('REEXPORT')
+else:
+    print('MISSING')
+" 2>/dev/null)
+
+    if [[ "$has_default_export" == "OK" ]]; then
+      log_pass "$name: 入口含 export default function"
+    elif [[ "$has_default_export" == "REEXPORT" ]]; then
+      # 检查 re-export 目标文件是否有 default export
+      reexport_target=$(python3 -c "
+import re, os
+with open('$entry_path') as f:
+    content = f.read()
+m = re.search(r\"from\s+['\\\"]([^'\\\"]+)['\\\"]\", content)
+if m:
+    target = m.group(1)
+    if not target.endswith('.ts'): target += '.ts'
+    resolved = os.path.join(os.path.dirname('$entry_path'), target)
+    if os.path.isfile(resolved):
+        with open(resolved) as tf:
+            target_content = tf.read()
+        if re.search(r'export\s+default\s+(async\s+)?function', target_content):
+            print('OK:' + resolved)
+        else:
+            print('MISSING:' + resolved)
+    else:
+        print('NOT_FOUND:' + resolved)
+else:
+    print('PARSE_ERROR')
+" 2>/dev/null)
+
+      if [[ "$reexport_target" == OK:* ]]; then
+        log_pass "$name: re-export 目标含 default export (${reexport_target#OK:})"
+      else
+        log_fail "$name: re-export 目标无 default export ($reexport_target)"
+      fi
+    else
+      log_fail "$name: 入口缺少 export default function"
+    fi
+  done <<< "$exts"
+done
+
+# ─── 5. 模块级 let/var 检查 ────────────────────────────
+echo ""
+echo "=== 5. 模块级可变变量检查 ==="
+for pkg_json in extensions/*/package.json; do
+  [ -f "$pkg_json" ] || continue
+  dir=$(dirname "$pkg_json")
+  name=$(basename "$dir")
+
+  is_private=$(python3 -c "import json; print(json.load(open('$pkg_json')).get('private', False))" 2>/dev/null)
+  [[ "$is_private" == "True" ]] && continue
+
+  # 检查所有 .ts 源文件（不仅仅是入口）
+  violations=$(python3 -c "
+import os, re
+violations = []
+src_dir = os.path.join('$dir', 'src')
+index_file = os.path.join('$dir', 'index.ts')
+files_to_check = [index_file] if os.path.isfile(index_file) else []
+if os.path.isdir(src_dir):
+    for root, dirs, files in os.walk(src_dir):
+        for f in files:
+            if f.endswith('.ts') and not f.endswith('.d.ts') and '__tests__' not in root:
+                files_to_check.append(os.path.join(root, f))
+for filepath in files_to_check:
+    try:
+        with open(filepath) as f:
+            lines = f.readlines()
+    except: continue
+    level = 0
+    in_function = False
+    for lineno, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if re.match(r'^(export\s+)?(async\s+)?function\s|=>\s*\{', stripped):
+            in_function = True
+        level += stripped.count('{')
+        level -= stripped.count('}')
+        if level == 0:
+            in_function = False
+        if not in_function and level == 0:
+            if re.match(r'^(let|var)\s+.+\s*=', stripped) and not (stripped.startswith('let _') or stripped.startswith('var _')):
+                violations.append(f'{os.path.relpath(filepath)}:{lineno}: {stripped[:120]}')
+    # count lines
+    lines_count = len(lines)
+    if lines_count > 1000:
+        violations.append(f'{os.path.relpath(filepath)}: 文件 {lines_count} 行（超过 1000 行上限）')
+if violations:
+    for v in violations[:5]:
+        print(v)
+" 2>/dev/null)
+  if [[ -n "$violations" ]]; then
+    log_fail "$name: 发现模块级问题"
+    echo "$violations" | while IFS= read -r line; do echo "         $line"; done
+  else
+    log_pass "$name: 无模块级问题"
+  fi
+done
+
+# ─── 6. package.json files 字段检查 ────────────────────
+echo ""
+echo "=== 6. package.json files 字段包含入口 ==="
+for pkg_json in extensions/*/package.json; do
+  [ -f "$pkg_json" ] || continue
+  dir=$(dirname "$pkg_json")
+  name=$(basename "$dir")
+
+  is_private=$(python3 -c "import json; print(json.load(open('$pkg_json')).get('private', False))" 2>/dev/null)
+  [[ "$is_private" == "True" ]] && continue
+
+  check_result=$(python3 -c "
+import json, os
+d = json.load(open('$pkg_json'))
+files = d.get('files', [])
+pi_exts = d.get('pi', {}).get('extensions', [])
+if not pi_exts:
+    print('NO_EXT')
+    exit(0)
+for ext in pi_exts:
+    entry = ext.lstrip('./')
+    matched = any(
+        entry.startswith(f.rstrip('/')) if f.endswith('/') else entry in f or (f.endswith('/**/*') and entry.startswith(f.rstrip('/**/*')))
+        for f in files
+    )
+    if not matched:
+        print(f'MISSING:{entry}')
+        exit(0)
+print('OK')
+" 2>/dev/null)
+
+  if [[ "$check_result" == "OK" ]]; then
+    log_pass "$name: files 包含入口"
+  elif [[ "$check_result" == MISSING:* ]]; then
+    entry=${check_result#MISSING:}
+    log_fail "$name: files 不包含入口 $entry"
+  fi
+done
+
+# ─── 总结 ─────────────────────────────────────────────
+echo ""
+echo "────────────────────────────────────────"
+if [[ "$ISSUES" -eq 0 ]] && [[ "$WARNINGS" -eq 0 ]]; then
+  echo -e "${C_GREEN}所有检查通过！${C_RESET}"
+  exit 0
+elif [[ "$ISSUES" -eq 0 ]]; then
+  echo -e "${C_YELLOW}$WARNINGS 个警告（不阻断），请考虑修复${C_RESET}"
+  exit 0
+else
+  echo -e "${C_RED}$ISSUES 个错误, $WARNINGS 个警告${C_RESET}"
+  if [[ "$MODE" == "--quick" ]]; then
+    echo -e "${C_RED}快速检查模式：错误阻断${C_RESET}"
+    exit 1
+  else
+    echo -e "${C_RED}完整检查模式：错误阻断${C_RESET}"
+    exit 1
+  fi
+fi

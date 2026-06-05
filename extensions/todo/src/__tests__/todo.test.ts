@@ -1,12 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect,it } from "vitest";
+
 import {
-	type Todo,
-	VALID_STATUSES,
-	migrateTodo,
 	addTodos,
 	buildRender,
-	updateTodos,
 	formatTodoLine,
+	migrateTodo,
+	type Todo,
+	updateTodos,
+	VALID_STATUSES,
 } from "../model";
 
 // ── Task 1: 数据模型增强 + 向后兼容 ──────────────────

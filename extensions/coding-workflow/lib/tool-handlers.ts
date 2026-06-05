@@ -5,31 +5,35 @@
  * This extraction keeps the main extension factory function under 300 lines.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import { formatUsageStats } from "./subagent.js";
+
 import { runGateScript } from "./gate-runner.js";
-import { dispatchReviewSubagent, buildRetrospectFollowUp } from "./review-dispatcher.js";
-import { SkillResolver } from "./skill-resolver.js";
 import {
-	type PhaseConfig,
-	type WorkflowState,
-	parseReviewVerdict,
-	hasValidYamlVerdict,
+	buildSkillInjection,
 	checkMissingRetrospects,
 	checkMissingReviews,
 	checkProjectProtection,
-	buildSkillInjection,
-	REVIEW_MANDATORY_FROM_PHASE,
+	DEFAULT_STATE,
 	FINAL_PHASE,
+	hasValidYamlVerdict,
+	isStaleContextError,
 	MAX_SLUG_LENGTH,
 	MIN_SLUG_LENGTH,
-	REVIEW_PREVIEW_LENGTH,
+	parseReviewVerdict,
+	type PhaseConfig,
 	RESULT_PREVIEW_LINES,
+	REVIEW_MANDATORY_FROM_PHASE,
+	REVIEW_PREVIEW_LENGTH,
+	type WorkflowState,
 } from "./helpers.js";
+import { buildRetrospectFollowUp,dispatchReviewSubagent } from "./review-dispatcher.js";
+import { SkillResolver } from "./skill-resolver.js";
+import { formatUsageStats } from "./subagent.js";
 
 // ─── Shared types ────────────────────────────────────────
 
@@ -186,7 +190,7 @@ export async function executeGateTool(hctx: HandlerContext, tctx: ToolExecuteCon
 	const phaseConfig = phases[phase - 1];
 
 	// 1. Run gate script
-	const gateResult = await runGateScript(gateScriptPath, state.topicDir, phase);
+	const gateResult = await runGateScript(gateScriptPath, state.topicDir, phase, signal);
 	if (!gateResult.passed) {
 		state.gateInProgress = false;
 		hctx.persistState(pi, state);
@@ -361,7 +365,7 @@ export async function executeInitTool(hctx: HandlerContext, tctx: ToolExecuteCon
 
 	const resultText = skillInjected
 		? `Workflow initialized: ${topicName}\nWorkspace: ${topicDir}\n\nPhase 1 (Spec) skill injected. Produce spec.md per the steer instructions, then call coding-workflow-gate(phase=1).`
-		: `Workflow initialized: ${topicName}\nWorkspace: ${topicDir}\n\nPhase 1 skill injection failed — it will be re-injected via before_agent_start on the next turn.`;
+		: `Workflow initialized: ${topicName}\nWorkspace: ${topicDir}\n\nPhase 1 skill injection deferred to before_agent_start on the next turn.`;
 
 	return { content: [{ type: "text", text: resultText }] };
 }
@@ -454,8 +458,18 @@ export async function executePhaseStartTool(hctx: HandlerContext, tctx: ToolExec
 			);
 		},
 		onError: (error: Error) => {
+			if (isStaleContextError(error)) {
+				// State is no longer trustworthy — abort the workflow
+				Object.assign(state, { ...DEFAULT_STATE });
+				hctx.persistState(pi, state);
+				hctx.updateWidget(ctx, state);
+				ctx.ui.notify("Workflow aborted: stale context after compact.", "warning");
+				return;
+			}
 			console.warn(`[coding-workflow] Compact failed: ${error.message}`);
 			state.currentPhase -= 1;
+			state.compactRetryCount -= 1;
+			if (state.compactRetryCount < 0) state.compactRetryCount = 0;
 			hctx.persistState(pi, state);
 			hctx.updateWidget(ctx, state);
 			pi.sendUserMessage(

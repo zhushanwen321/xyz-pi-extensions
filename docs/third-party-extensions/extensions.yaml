@@ -1,6 +1,6 @@
 # Third-party extensions registry
 # Source of truth for all borrowed / self-written extensions.
-# Run `python3 scripts/validate-extensions-yaml.py` to validate.
+# Run `python3 .githooks/validate-extensions-yaml` to validate.
 
 extensions:
   # ── direct-install ──────────────────────────────────────────────

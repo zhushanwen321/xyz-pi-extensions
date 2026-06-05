@@ -1,12 +1,14 @@
 // 测试框架：vitest（从 vitest 导入 describe/it/expect/vi/beforeEach）
 // 运行命令：npx vitest run tests/commands-generate.test.ts
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { join } from "node:path";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import type { WorkflowInstance } from "../src/state";
+import { join } from "node:path";
+
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { afterEach,beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { WorkflowInstance } from "../src/state";
 
 // ── Mock 外部依赖（必须在 import 被测模块之前） ──────────────
 
@@ -50,7 +52,7 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-import { sendCompletionNotification, deleteWorkflow } from "../src/commands";
+import { deleteWorkflow,sendCompletionNotification } from "../src/commands";
 import { registerGenerateTool } from "../src/tool-generate";
 
 // ── Helpers ──────────────────────────────────────────────────

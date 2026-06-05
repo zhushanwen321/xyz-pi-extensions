@@ -1,15 +1,16 @@
 // 测试框架：vitest（从 vitest 导入 describe/it/expect/vi/beforeEach/afterEach）
 // 运行命令：npx vitest run tests/config-loader.test.ts
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync,writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { afterEach,beforeEach, describe, expect, it } from "vitest";
+
 import {
   getWorkflow,
-  loadWorkflows,
   invalidateCache,
+  loadWorkflows,
 } from "../src/config-loader";
 
 // ── Helpers ──────────────────────────────────────────────────

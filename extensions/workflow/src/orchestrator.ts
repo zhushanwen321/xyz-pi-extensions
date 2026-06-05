@@ -16,26 +16,26 @@
  */
 
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { homedir } from "node:os";
+import * as path from "node:path";
 import { Worker } from "node:worker_threads";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { AgentPool, type AgentCallOpts } from "./agent-pool.js";
-import { resolveModel } from "./model-resolver.js";
+import { type AgentCallOpts,AgentPool } from "./agent-pool.js";
 import { getWorkflow } from "./config-loader.js";
 import { appendTraceNode } from "./execution-trace.js";
+import { resolveModel } from "./model-resolver.js";
 import {
   type AgentResult as StateAgentResult,
-  type ExecutionTraceNode,
-  type WorkflowInstance,
-  type WorkflowBudget,
-  type WorkflowStatus,
   createInstance as createStateInstance,
-  transitionStatus,
+  type ExecutionTraceNode,
   isTerminal,
   serializeInstance,
+  transitionStatus,
+  type WorkflowBudget,
+  type WorkflowInstance,
+  type WorkflowStatus,
 } from "./state.js";
 import { buildWorkerScript } from "./worker-script.js";
 
@@ -64,6 +64,9 @@ interface RunMeta {
   args: Record<string, unknown>;
   budgetTokens?: number;
   budgetTimeMs?: number;
+  /** P1-2: Abort signal from the tool execute caller — propagated to AgentPool
+   *  and used to pause the workflow if triggered. */
+  signal?: AbortSignal;
 }
 
 /** Worker→Main message shapes. */
@@ -98,6 +101,17 @@ const RUNID_SLICE_LENGTH = 8;
 const PROMPT_PREVIEW_LENGTH = 200;
 const EXPONENTIAL_BACKOFF_BASE = 2;
 const BUDGET_WARNING_THRESHOLD = 0.9;
+
+// P1-5: Stale context detection — matches patterns reported when
+// pi's session context was compacted or canceled between agent calls.
+const STALE_CONTEXT_PATTERNS = ["stale context", "stalecontext", "context canceled", "aborted"];
+
+/** Check if an error message indicates a stale/canceled pi session context. */
+function isStaleContextErrorMsg(msg: string | undefined): boolean {
+  if (!msg) return false;
+  const lower = msg.toLowerCase();
+  return STALE_CONTEXT_PATTERNS.some((p) => lower.includes(p));
+}
 
 // ── Orchestrator ──────────────────────────────────────────────
 
@@ -144,13 +158,23 @@ export class WorkflowOrchestrator {
    * Start a workflow. Reads the workflow script file via config-loader,
    * builds a Worker thread with injected globals, and returns a runId
    * for subsequent lifecycle operations.
+   *
+   * The optional `signal` is propagated to the AgentPool so that the
+   * underlying pi subprocess can be killed when the caller aborts.
+   * If the signal is already aborted, no work is started.
    */
   async run(
     name: string,
     args: Record<string, unknown>,
     budgetTokens?: number,
     budgetTimeMs?: number,
+    signal?: AbortSignal,
   ): Promise<string> {
+    // P1-2: Honor pre-aborted signal — fail fast before any setup
+    if (signal?.aborted) {
+      throw new Error("Workflow run aborted before start");
+    }
+
     const workflow = await getWorkflow(name);
     if (!workflow || !workflow.available) {
       throw new Error(`Workflow '${name}' not found or unavailable`);
@@ -186,9 +210,28 @@ export class WorkflowOrchestrator {
     pool.setBudget(instance.budget);
     this.runPools.set(runId, pool);
 
-    this.runMetaMap.set(runId, { scriptSource, args, budgetTokens, budgetTimeMs });
+    this.runMetaMap.set(runId, { scriptSource, args, budgetTokens, budgetTimeMs, signal });
     this.instances.set(runId, instance);
     await this.persistState();
+
+    // P1-2: Listen for abort — pause the workflow so it can be resumed
+    if (signal) {
+      const onAbort = () => {
+        const inst = this.instances.get(runId);
+        if (inst && inst.status === "running") {
+          inst.pausedAt = new Date().toISOString();
+          try {
+            transitionStatus(inst, "paused");
+          // eslint-disable-next-line taste/no-silent-catch
+          } catch {
+            // State machine refused — leave as-is
+          }
+          this.terminateWorker(runId);
+          void this.persistState();
+        }
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
 
     this.startWorker(runId, instance, scriptSource, args);
 
@@ -558,9 +601,43 @@ export class WorkflowOrchestrator {
       // Pool already cleaned up (workflow terminated) — skip
       return;
     }
-    pool.enqueue(opts).then(async (poolResult) => {
+    // P1-2: Propagate abort signal to AgentPool so the pi subprocess can be killed
+    const meta = this.runMetaMap.get(runId);
+    pool.enqueue(opts, meta?.signal).then(async (poolResult) => {
       // P0-2: Stale state check — instance may have been paused/aborted during agent call
       if (instance.status !== "running") return;
+
+      // P1-5: Stale context detection — do not retry when pi's session context
+      // is stale (e.g. after compact). Retrying the same call would just fail again.
+      if (!poolResult.success && isStaleContextErrorMsg(poolResult.error)) {
+        // Mark trace node as failed and surface to worker
+        const traceNode = instance.trace.find((n) => n.stepIndex === callId);
+        if (traceNode) {
+          traceNode.status = "failed";
+          traceNode.result = {
+            content: poolResult.output,
+            parsedOutput: poolResult.parsedOutput,
+            usage: poolResult.usage,
+            durationMs: poolResult.durationMs,
+            error: poolResult.error,
+          };
+          traceNode.completedAt = new Date().toISOString();
+          appendTraceNode(this.pi, runId, traceNode);
+        }
+        this.postMessage(runId, {
+          type: "agent-result",
+          callId,
+          result: {
+            content: poolResult.output,
+            usage: poolResult.usage,
+            error: poolResult.error,
+          },
+          cached: false,
+        });
+        await this.persistState();
+        this.onTraceUpdate?.(runId);
+        return;
+      }
 
       const result: StateAgentResult = {
         content: poolResult.output,
@@ -576,6 +653,8 @@ export class WorkflowOrchestrator {
         setTimeout(() => {
           // P0-2: Stale state check before retry
           if (instance.status !== "running") return;
+          // P1-2: Skip retry if caller aborted
+          if (meta?.signal?.aborted) return;
           this.executeWithRetry(runId, callId, opts, instance, node, attempt + 1);
         }, delay);
         return;

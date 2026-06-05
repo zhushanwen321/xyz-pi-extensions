@@ -12,9 +12,10 @@
  *   plans: 以计划名为 key（对应 quota-provider cache key）
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, unlinkSync,writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { CONFIG_DIR, CONFIG_PATH } from "./config";
 import type { SetupResult } from "./types";
 
 /** JSON 输出缩进 */
@@ -266,9 +267,6 @@ function inferAlias(m: ModelInfo): string {
 }
 
 // ── 文件操作 ────────────────────────────────────────────
-
-const CONFIG_DIR = join(homedir(), ".pi", "agent");
-const CONFIG_PATH = join(CONFIG_DIR, "model-policy.json");
 
 export function getConfigPath(): string {
 	return CONFIG_PATH;

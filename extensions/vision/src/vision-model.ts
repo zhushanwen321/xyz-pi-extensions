@@ -3,6 +3,10 @@
  *
  * Loads vision model entries from ~/.pi/agent/vision-models.json,
  * selects the best available model with fallback chain.
+ *
+ * State (cached config + timestamp) is encapsulated in the
+ * `createVisionModelApi()` factory closure so multiple extension
+ * instances do not share cache state.
  */
 
 import * as fs from "node:fs";
@@ -23,6 +27,15 @@ export interface VisionModelEntry {
 
 export interface VisionModelsConfig {
 	models: VisionModelEntry[];
+}
+
+export type ResolveVisionModelResult =
+	| { ok: true; ref: string; thinkingLevel?: ThinkingLevel }
+	| { ok: false; error: string };
+
+export interface VisionModelApi {
+	loadVisionModels: () => VisionModelsConfig | null;
+	resolveVisionModelSync: () => ResolveVisionModelResult;
 }
 
 // ──────────────────────── Constants ────────────────────────
@@ -64,78 +77,6 @@ const _THINKING_TO_PI: Record<ThinkingLevel, string> = {
 	max: "xhigh",
 };
 
-// ──────────────────────── Internal cache ────────────────────────
-
-// ── Internal cache ──────────────────────────────────
-
-const CACHE_TTL_MS = SEC_PER_MIN * MS_PER_SEC;
-let _cachedConfig: VisionModelsConfig | null | undefined = undefined;
-let _cachedConfigTimestamp = 0;
-
-// ──────────────────────── Config loader ────────────────────────
-
-export function loadVisionModels(): VisionModelsConfig | null {
-	if (_cachedConfig !== undefined && Date.now() - _cachedConfigTimestamp < CACHE_TTL_MS) {
-		return _cachedConfig;
-	}
-	try {
-		const content = fs.readFileSync(VISION_MODELS_PATH, "utf-8");
-		const parsed = JSON.parse(content) as VisionModelsConfig;
-		if (parsed.models) {
-			for (const m of parsed.models) {
-				if (!m.provider) {
-					console.warn(`[vision] Model entry "${m.id}" has no provider field, will be skipped.`);
-				}
-			}
-		}
-		_cachedConfig = parsed;
-		_cachedConfigTimestamp = Date.now();
-		return parsed;
-	} catch {
-		_cachedConfig = null;
-		_cachedConfigTimestamp = Date.now();
-		return null;
-	}
-}
-
-// ──────────────────────── Model resolution ────────────────────────
-
-/**
- * Select the first available vision model from config.
- * Returns the model ref and its thinking level.
- */
-export function resolveVisionModelSync(): { ok: true; ref: string; thinkingLevel?: ThinkingLevel } | { ok: false; error: string } {
-	const config = loadVisionModels();
-	if (!config?.models?.length) {
-		return {
-			ok: false,
-			error: [
-				`vision-models.json not found or empty at ${VISION_MODELS_PATH}`,
-				"Create the file with vision model entries. Example format:",
-				EXAMPLE_CONFIG,
-			].join("\n\n"),
-		};
-	}
-
-	const candidates = [...config.models]
-		.filter((m) => m.provider)
-		.sort((a, b) => a.order - b.order);
-
-	if (candidates.length === 0) {
-		return {
-			ok: false,
-			error: `No valid vision model entries in ${VISION_MODELS_PATH}. All entries are missing provider field.`,
-		};
-	}
-
-	// Return first candidate (runtime will validate availability)
-	const best = candidates[0]!;
-	return {
-		ok: true,
-		ref: `${best.provider}/${best.id}`,
-		thinkingLevel: best.thinkingLevel,
-	};
-}
 // ──────────────────────── Fork ────────────────────────
 
 export const FORK_PREAMBLE =
@@ -143,3 +84,78 @@ export const FORK_PREAMBLE =
 	"Treat the inherited conversation as reference-only context, not a live thread to continue. " +
 	"Do not continue or answer prior messages as if they are waiting for a reply. " +
 	"Your sole job is to analyze the specified image and return focused conclusions using your tools.";
+
+// ──────────────────────── Factory ────────────────────────
+
+/**
+ * Create a stateful vision-model API bound to a single extension instance.
+ * Cache state lives in the closure to avoid cross-instance pollution.
+ */
+export function createVisionModelApi(): VisionModelApi {
+	const CACHE_TTL_MS = SEC_PER_MIN * MS_PER_SEC;
+	let cachedConfig: VisionModelsConfig | null | undefined = undefined;
+	let cachedConfigTimestamp = 0;
+
+	function loadVisionModels(): VisionModelsConfig | null {
+		if (cachedConfig !== undefined && Date.now() - cachedConfigTimestamp < CACHE_TTL_MS) {
+			return cachedConfig;
+		}
+		try {
+			const content = fs.readFileSync(VISION_MODELS_PATH, "utf-8");
+			const parsed = JSON.parse(content) as VisionModelsConfig;
+			if (parsed.models) {
+				for (const m of parsed.models) {
+					if (!m.provider) {
+						console.warn(`[vision] Model entry "${m.id}" has no provider field, will be skipped.`);
+					}
+				}
+			}
+			cachedConfig = parsed;
+			cachedConfigTimestamp = Date.now();
+			return parsed;
+		} catch {
+			cachedConfig = null;
+			cachedConfigTimestamp = Date.now();
+			return null;
+		}
+	}
+
+	/**
+	 * Select the first available vision model from config.
+	 * Returns the model ref and its thinking level.
+	 */
+	function resolveVisionModelSync(): ResolveVisionModelResult {
+		const config = loadVisionModels();
+		if (!config?.models?.length) {
+			return {
+				ok: false,
+				error: [
+					`vision-models.json not found or empty at ${VISION_MODELS_PATH}`,
+					"Create the file with vision model entries. Example format:",
+					EXAMPLE_CONFIG,
+				].join("\n\n"),
+			};
+		}
+
+		const candidates = [...config.models]
+			.filter((m) => m.provider)
+			.sort((a, b) => a.order - b.order);
+
+		if (candidates.length === 0) {
+			return {
+				ok: false,
+				error: `No valid vision model entries in ${VISION_MODELS_PATH}. All entries are missing provider field.`,
+			};
+		}
+
+		// Return first candidate (runtime will validate availability)
+		const best = candidates[0]!;
+		return {
+			ok: true,
+			ref: `${best.provider}/${best.id}`,
+			thinkingLevel: best.thinkingLevel,
+		};
+	}
+
+	return { loadVisionModels, resolveVisionModelSync };
+}

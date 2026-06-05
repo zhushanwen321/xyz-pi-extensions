@@ -16,8 +16,16 @@
  */
 
 import * as fs from "node:fs";
+import { homedir } from "node:os";
 import * as path from "node:path";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
+import type {
+    BeforeAgentStartEvent,
+    BeforeAgentStartEventResult,
+    ExtensionAPI,
+    ExtensionContext,
+    SessionStartEvent,
+} from "@mariozechner/pi-coding-agent";
 
 interface RuleFile {
   /** Display path for identification (e.g. "~/.claude/rules/form-validation.md") */
@@ -133,106 +141,170 @@ function loadRulesFromDir(
 		.filter((r): r is RuleFile => r !== null);
 }
 
-export default function claudeRulesLoader(pi: ExtensionAPI) {
-  let unconditionalRules: RuleFile[] = [];
-  let conditionalRules: RuleFile[] = [];
+function isStaleContextError(error: unknown): boolean {
+    return error instanceof Error
+        && error.message.includes("Extension context no longer active");
+}
 
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
-	pi.on("session_start", async (_event: any, ctx: any) => {
-    const homeDir = process.env.HOME || process.env.USERPROFILE || "";
+function safeNotify(
+    ctx: ExtensionContext,
+    msg: string,
+    type: "info" | "warning" | "error" = "info",
+): void {
+    try {
+        ctx.ui.notify(msg, type);
+    } catch (err) {
+        if (!isStaleContextError(err)) throw err;
+    }
+}
+
+/**
+ * Walk from cwd up to root and return directory list in root → cwd order.
+ */
+function collectProjectDirs(cwd: string): string[] {
+    const dirs: string[] = [];
+    if (!cwd) return dirs;
+    let current = cwd;
+    while (current && current !== path.parse(current).root) {
+        dirs.push(current);
+        const parent = path.dirname(current);
+        if (parent === current) break; // guard against pathological paths
+        current = parent;
+    }
+    if (current) {
+        dirs.push(path.parse(current).root);
+    }
+    dirs.reverse(); // root → CWD
+    return dirs;
+}
+
+/**
+ * Collect all rule files from global (~/.claude/rules/) and project directories.
+ * Project directories are walked from root to cwd (closer to cwd = higher priority).
+ */
+function collectAllRules(cwd: string): RuleFile[] {
     const allRules: RuleFile[] = [];
 
     // 1. Global rules: ~/.claude/rules/
-    if (homeDir) {
-      allRules.push(
+    allRules.push(
         ...loadRulesFromDir(
-          path.join(homeDir, ".claude", "rules"),
-          "~/.claude/rules",
+            path.join(homedir(), ".claude", "rules"),
+            "~/.claude/rules",
         ),
-      );
-    }
+    );
 
     // 2. Project rules: walk from root to CWD (like Claude Code)
     // Track loaded real paths to avoid duplicating when walk overlaps with global dir
     const loadedRealPaths = new Set<string>(
-      allRules.map((r) => r.realPath),
+        allRules.map((r) => r.realPath),
     );
 
-    const dirs: string[] = [];
-    let current = ctx.cwd;
-    while (current !== path.parse(current).root) {
-      dirs.push(current);
-      current = path.dirname(current);
-    }
-    dirs.push(path.parse(current).root); // include root itself
-    dirs.reverse(); // root → CWD, later dirs have higher priority
-
+    const dirs = collectProjectDirs(cwd);
     for (const dir of dirs) {
-      const relDir = path.relative(ctx.cwd, dir) || ".";
-      const projectRules = loadRulesFromDir(
-        path.join(dir, ".claude", "rules"),
-        `.claude/rules (${relDir})`,
-      );
-      // Deduplicate by realPath (global already loaded, skip if walk hits same dir)
-      for (const rule of projectRules) {
-        if (!loadedRealPaths.has(rule.realPath)) {
-          allRules.push(rule);
-          loadedRealPaths.add(rule.realPath);
+        const relDir = path.relative(cwd, dir) || ".";
+        const projectRules = loadRulesFromDir(
+            path.join(dir, ".claude", "rules"),
+            `.claude/rules (${relDir})`,
+        );
+        // Deduplicate by realPath (global already loaded, skip if walk hits same dir)
+        for (const rule of projectRules) {
+            if (!loadedRealPaths.has(rule.realPath)) {
+                allRules.push(rule);
+                loadedRealPaths.add(rule.realPath);
+            }
         }
-      }
     }
 
-    // Separate conditional vs unconditional
-    // Sort once at load time for KV cache stability
-    unconditionalRules = allRules
-      .filter((r) => !r.globs)
-      .sort((a, b) => a.path.localeCompare(b.path));
-    conditionalRules = allRules
-      .filter((r) => r.globs)
-      .sort((a, b) => a.path.localeCompare(b.path));
+    return allRules;
+}
 
-    const total = unconditionalRules.length + conditionalRules.length;
+/**
+ * Partition rules into unconditional and conditional, sorted deterministically.
+ * Sort once at load time for KV cache stability.
+ */
+function partitionRules(rules: RuleFile[]): {
+    unconditional: RuleFile[];
+    conditional: RuleFile[];
+} {
+    return {
+        unconditional: rules
+            .filter((r) => !r.globs)
+            .sort((a, b) => a.path.localeCompare(b.path)),
+        conditional: rules
+            .filter((r) => r.globs)
+            .sort((a, b) => a.path.localeCompare(b.path)),
+    };
+}
+
+/**
+ * Notify user about loaded rule counts.
+ */
+function notifyRuleCounts(
+    ctx: ExtensionContext,
+    unconditional: number,
+    conditional: number,
+): void {
+    const total = unconditional + conditional;
     if (total > 0) {
-      ctx.ui.notify(
-        `Claude rules: ${unconditionalRules.length} loaded, ${conditionalRules.length} conditional`,
-        "info",
-      );
+        safeNotify(
+            ctx,
+            `Claude rules: ${unconditional} loaded, ${conditional} conditional`,
+            "info",
+        );
     }
-  });
+}
 
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pi event types are typed as `any` in CI stubs
-	pi.on("before_agent_start", async (event: any) => {
+/**
+ * Build the system prompt suffix from loaded rules, or null if no rules.
+ */
+function buildSystemPromptSuffix(
+    unconditional: RuleFile[],
+    conditional: RuleFile[],
+): string | null {
     const parts: string[] = [];
 
     // Unconditional rules: full content injected into system prompt
-    if (unconditionalRules.length > 0) {
-      const rulesContent = unconditionalRules
-        .map((r) => `### ${r.path}\n\n${r.content}`)
-        .join("\n\n---\n\n");
+    if (unconditional.length > 0) {
+        const rulesContent = unconditional
+            .map((r) => `### ${r.path}\n\n${r.content}`)
+            .join("\n\n---\n\n");
 
-      parts.push(
-        `## Rules (auto-loaded from .claude/rules/)\n\n${rulesContent}`,
-      );
+        parts.push(
+            `## Rules (auto-loaded from .claude/rules/)\n\n${rulesContent}`,
+        );
     }
 
     // Conditional rules: list only — agent reads on demand
-    if (conditionalRules.length > 0) {
+    if (conditional.length > 0) {
+        const condList = conditional
+            .map((r) => `- \`${r.path}\` (applies to: ${r.globs!.join(", ")})`)
+            .join("\n");
 
-      const condList = conditionalRules
-        .map((r) => `- \`${r.path}\` (applies to: ${r.globs!.join(", ")})`)
-        .join("\n");
-
-      parts.push(
-        `## Conditional Rules\n\n` +
-          `The following rules apply to specific file patterns. ` +
-          `Use the read tool to load them when working on matching files:\n\n${condList}`,
-      );
+        parts.push(
+            `## Conditional Rules\n\n` +
+            `The following rules apply to specific file patterns. ` +
+            `Use the read tool to load them when working on matching files:\n\n${condList}`,
+        );
     }
 
-    if (parts.length === 0) return;
+    return parts.length > 0 ? parts.join("\n\n") : null;
+}
 
-    return {
-      systemPrompt: event.systemPrompt + "\n\n" + parts.join("\n\n") + "\n",
-    };
-  });
+export default function claudeRulesLoader(pi: ExtensionAPI) {
+    let unconditionalRules: RuleFile[] = [];
+    let conditionalRules: RuleFile[] = [];
+
+    pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext) => {
+        const allRules = collectAllRules(ctx.cwd);
+        const partitioned = partitionRules(allRules);
+        unconditionalRules = partitioned.unconditional;
+        conditionalRules = partitioned.conditional;
+        notifyRuleCounts(ctx, unconditionalRules.length, conditionalRules.length);
+    });
+
+    pi.on("before_agent_start", async (event: BeforeAgentStartEvent, _ctx: ExtensionContext): Promise<BeforeAgentStartEventResult | void> => {
+        const suffix = buildSystemPromptSuffix(unconditionalRules, conditionalRules);
+        if (!suffix) return;
+        return { systemPrompt: event.systemPrompt + "\n\n" + suffix + "\n" };
+    });
 }

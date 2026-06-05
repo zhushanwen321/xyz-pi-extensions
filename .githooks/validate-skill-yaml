@@ -15,9 +15,9 @@ Auto-fix (--fix):
 - Preserves all other frontmatter fields exactly
 
 Usage:
-  python3 scripts/validate-skill-yaml.py skills/*/SKILL.md
-  python3 scripts/validate-skill-yaml.py --fix skills/*/SKILL.md
-  python3 scripts/validate-skill-yaml.py ~/.pi/agent/skills/*/SKILL.md
+  python3 .githooks/validate-skill-yaml skills/*/SKILL.md
+  python3 .githooks/validate-skill-yaml --fix skills/*/SKILL.md
+  python3 .githooks/validate-skill-yaml ~/.pi/agent/skills/*/SKILL.md
 """
 
 import re
