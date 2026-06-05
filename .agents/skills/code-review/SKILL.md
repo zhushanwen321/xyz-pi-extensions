@@ -44,11 +44,17 @@ git diff main...HEAD
 在人工审查前，先运行 fallow 静态分析获取基线数据：
 
 ```bash
-# 检查 fallow 是否已安装
-npm list -g @sourcemeta/fallow 2>/dev/null || npm install -g @sourcemeta/fallow
+# 检查 fallow 是否已安装（包名是 fallow，不是 @sourcemeta/fallow）
+which fallow 2>/dev/null || npm install -g fallow
 
-# 扫描当前变更涉及的文件
-fallow scan $(git diff main...HEAD --name-only)
+# 审计变更文件的代码质量（dead-code + complexity + duplication）
+fallow audit --base main --format json --quiet
+
+# 若只需复杂度热点
+fallow health --top 10 --format json --quiet
+
+# 若只需重复代码
+fallow dupes --format json --quiet
 ```
 
 关注以下指标：

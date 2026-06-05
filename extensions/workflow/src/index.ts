@@ -35,7 +35,7 @@ import {
   type WorkflowStatus,
 } from "./state.js";
 import { registerGenerateTool } from "./tool-generate.js";
-import { renderWorkflowList } from "./widget.js";
+import { renderWorkflowList, registerWorkflowShortcuts } from "./widget.js";
 
 // ── Parameter schema ──────────────────────────────────────────
 
@@ -280,8 +280,9 @@ export default function workflowExtension(pi: ExtensionAPI) {
     promptSnippet:
       "Check workflow status, or pause/resume/abort a running workflow",
     promptGuidelines: [
-      "Use workflow tool for status checks and lifecycle control of running workflows",
+      "Use workflow tool for lifecycle control: pause, resume, abort.",
       "To START a new workflow, use workflow-run tool instead",
+      "Only check status (action: status) when the user explicitly asks. Never poll in a loop.",
       "Workflows can be paused and resumed across sessions",
     ],
     parameters: WorkflowParams,
@@ -504,7 +505,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
 
   registerWorkflowCommands(pi, orchestrators, cmdState);
   registerGenerateTool(pi);
-  // registerWorkflowShortcuts(pi, orchestrators, cmdState); // shortcuts disabled for now
+  registerWorkflowShortcuts(pi, orchestrators, cmdState);
 
   // ── Auto-inject script format spec on workflow-generate calls ──────
   // When AI calls workflow-generate, inject the full format reference as
@@ -581,7 +582,7 @@ function registerWorkflowRunTool(
       "Default to auto mode. Only use force when user explicitly demands to skip confirmation.",
       "If no workflow matches, the tool returns suggestions — follow its guidance. Use workflow-generate only when creating a brand new workflow from scratch.",
       "NOT for single-step tasks (use bash). NOT for reading workflow documentation (use read).",
-      "After starting, results arrive asynchronously. Check status with: workflow { action: status }",
+      "Do NOT poll workflow status after starting. Workflows run in background — results appear automatically when done. Only use workflow { action: status } when the user explicitly asks about progress.",
     ],
     parameters: _WorkflowRunParams,
 
@@ -617,7 +618,7 @@ function registerWorkflowRunTool(
           const runId = await orch.run(name, args, tokens, time, signal);
           cmdState.lastRunId = runId;
           if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
-          return { content: [{ type: "text" as const, text: `Started workflow '${name}' (${runId}) [force mode]` }], details: { action: "run", runId, status: "running", name, confirmSkipped: true as const } satisfies _WorkflowRunDetails };
+          return { content: [{ type: "text" as const, text: `Started workflow '${name}' (${runId}) [force mode]. Running in background — do NOT poll status.` }], details: { action: "run", runId, status: "running", name, confirmSkipped: true as const } satisfies _WorkflowRunDetails };
         }
         if (ctx.hasUI) {
           const isTmp = exactMatch.source === "tmp";
@@ -637,7 +638,7 @@ function registerWorkflowRunTool(
         const runId = await orch.run(name, args, tokens, time, signal);
         cmdState.lastRunId = runId;
         if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
-        return { content: [{ type: "text" as const, text: `Started workflow '${exactMatch.name}' (${runId})` }], details: { action: "run", runId, status: "running", name: exactMatch.name } satisfies _WorkflowRunDetails };
+        return { content: [{ type: "text" as const, text: `Started workflow '${exactMatch.name}' (${runId}). Running in background — do NOT poll status.` }], details: { action: "run", runId, status: "running", name: exactMatch.name } satisfies _WorkflowRunDetails };
       }
 
       const inputLower = name.toLowerCase();
@@ -654,7 +655,7 @@ function registerWorkflowRunTool(
           const runId = await orch.run(best.name, args, tokens, time, signal);
           cmdState.lastRunId = runId;
           if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
-          return { content: [{ type: "text" as const, text: `Started workflow '${best.name}' (${runId}) [force mode, fuzzy match]` }], details: { action: "run", runId, status: "running", name: best.name, confirmSkipped: true as const } satisfies _WorkflowRunDetails };
+          return { content: [{ type: "text" as const, text: `Started workflow '${best.name}' (${runId}) [force mode, fuzzy match]. Running in background — do NOT poll status.` }], details: { action: "run", runId, status: "running", name: best.name, confirmSkipped: true as const } satisfies _WorkflowRunDetails };
         }
         pi.sendUserMessage(`No exact match for '${name}', but found ${candidates.length} related workflow(s):\n${candidateList}\n\nAsk the user which one to use, or if they want to create a new workflow. If they choose one, use workflow-run with the exact name and mode 'force'.`, { deliverAs: "steer" });
         return { content: [{ type: "text" as const, text: `Found ${candidates.length} fuzzy match(es) for '${name}'. Awaiting user choice.` }], details: { action: "run", runId: "", status: "pending", name } satisfies _WorkflowRunDetails };

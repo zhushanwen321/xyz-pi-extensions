@@ -21,7 +21,8 @@ import type { WorkflowInstance } from "./state.js";
 // ── Constants ─────────────────────────────────────────────────
 
 const MS_PER_SEC = 1000;
-const TASK_PREVIEW_LENGTH = 60;
+const TASK_PREVIEW_LENGTH = 50;
+const MAX_VISIBLE_NODES = 6;
 const DETAIL_TASK_PREVIEW_LENGTH = 80;
 const ERROR_PREVIEW_LENGTH = 120;
 const RUNID_PREVIEW_LENGTH = 20;
@@ -68,6 +69,116 @@ function nodeColor(node: { status: string }, theme: Theme): string {
   }
 }
 
+// ── Node collapsing helper ───────────────────────────────────
+
+type CollapsedEntry =
+  | { type: "node"; node: { stepIndex: number; status: string; agent: string; task: string; startedAt?: string; completedAt?: string } }
+  | { type: "summary"; count: number; names: string; totalDuration: string };
+
+/**
+ * Collapse consecutive completed nodes into a single summary line
+ * when total nodes exceed MAX_VISIBLE_NODES.
+ */
+function collapseNodes(
+  nodes: Array<{ stepIndex: number; status: string; agent: string; task: string; startedAt?: string; completedAt?: string }>,
+): CollapsedEntry[] {
+  if (nodes.length <= MAX_VISIBLE_NODES) {
+    return nodes.map((node) => ({ type: "node" as const, node }));
+  }
+
+  const result: CollapsedEntry[] = [];
+  let completedBatch: typeof nodes = [];
+
+  const flushCompleted = () => {
+    if (completedBatch.length === 0) return;
+    if (completedBatch.length === 1) {
+      result.push({ type: "node", node: completedBatch[0] });
+    } else {
+      const names = completedBatch
+        .map((n) => n.agent !== "unknown" ? n.agent : `#${n.stepIndex}`)
+        .join(", ");
+      const totalMs = completedBatch.reduce((sum, n) => {
+        if (!n.startedAt || !n.completedAt) return sum;
+        return sum + (new Date(n.completedAt).getTime() - new Date(n.startedAt).getTime());
+      }, 0);
+      result.push({
+        type: "summary",
+        count: completedBatch.length,
+        names,
+        totalDuration: `${(totalMs / MS_PER_SEC).toFixed(NODE_DURATION_DECIMALS)}s`,
+      });
+    }
+    completedBatch = [];
+  };
+
+  for (const node of nodes) {
+    if (node.status === "completed") {
+      completedBatch.push(node);
+    } else {
+      flushCompleted();
+      result.push({ type: "node", node });
+    }
+  }
+  flushCompleted();
+
+  return result;
+}
+
+// ── Trace node helpers ────────────────────────────────────────
+
+/** Deduplicate trace nodes by stepIndex, keeping the latest entry. */
+function dedupeTraceNodes(
+  traceNodes: Array<{ stepIndex: number; status: string; agent: string; task: string; startedAt?: string; completedAt?: string }>,
+): Array<{ stepIndex: number; status: string; agent: string; task: string; startedAt?: string; completedAt?: string }> {
+  const deduped = new Map<number, typeof traceNodes[0]>();
+  for (const node of traceNodes) {
+    deduped.set(node.stepIndex, node);
+  }
+  return Array.from(deduped.values()).sort((a, b) => a.stepIndex - b.stepIndex);
+}
+
+/** Format a node's icon (ASCII, no emoji). */
+function nodeIcon(status: string): string {
+  return status === "completed" ? "✓"
+    : status === "running" ? "●"
+    : status === "failed" ? "✗"
+    : "○";
+}
+
+/** Compute duration string for a trace node. */
+function nodeDurationStr(node: { startedAt?: string; completedAt?: string }): string {
+  return node.startedAt && node.completedAt
+    ? `${((new Date(node.completedAt).getTime() - new Date(node.startedAt).getTime()) / MS_PER_SEC).toFixed(NODE_DURATION_DECIMALS)}s`
+    : node.startedAt
+      ? `${((Date.now() - new Date(node.startedAt).getTime()) / MS_PER_SEC).toFixed(DURATION_DECIMALS)}s...`
+      : "";
+}
+
+/** Derive display label from agent description or task prompt. */
+function nodeLabel(node: { agent: string; task: string }): string {
+  const raw = (node.agent && node.agent !== "unknown")
+    ? node.agent
+    : node.task.replace(/[\r\n]+/g, " ").slice(0, 30);
+  return raw.length > TASK_PREVIEW_LENGTH
+    ? `${raw.slice(0, TASK_PREVIEW_LENGTH)}...` : raw;
+}
+
+/** Render a single collapsed entry (summary or node) to a themed line. */
+function renderCollapsedItem(
+  item: CollapsedEntry,
+  theme: Theme,
+): string {
+  if (item.type === "summary") {
+    return `  ${theme.fg("dim", `✓ ${item.count} completed (${item.names}) ${item.totalDuration}`)}`;
+  }
+  const node = item.node;
+  const icon = nodeIcon(node.status);
+  const duration = nodeDurationStr(node);
+  const label = nodeLabel(node);
+  const textColor = node.status === "completed" ? "dim" : "muted";
+  return `  ${icon} ${theme.fg("dim", `#${node.stepIndex}`)} ${theme.fg(textColor, label)} ${theme.fg("dim", duration)}`;
+}
+
 // ── setWidget renderer: workflow list overview ─────────────────
 
 /**
@@ -101,24 +212,12 @@ export function renderWorkflowList(
       `${statusColor(inst.status, theme)} ${theme.fg("accent", inst.name)} ${theme.fg("dim", elapsed)}${theme.fg("muted", progress)}`,
     );
 
-    // Trace node lines (like subagent collapsed view)
+    // Trace node lines (deduped, collapsed)
     if (inst.traceNodes && inst.traceNodes.length > 0) {
-      for (const node of inst.traceNodes) {
-        const icon = node.status === "completed" ? "\u2705"
-          : node.status === "running" ? "\u23F3"
-          : node.status === "failed" ? "\u274C"
-          : "\u25CB";
-        const nodeDuration =
-          node.startedAt && node.completedAt
-            ? `${((new Date(node.completedAt).getTime() - new Date(node.startedAt).getTime()) / MS_PER_SEC).toFixed(NODE_DURATION_DECIMALS)}s`
-            : node.startedAt
-              ? `${((Date.now() - new Date(node.startedAt).getTime()) / MS_PER_SEC).toFixed(DURATION_DECIMALS)}s...`
-              : "";
-        const taskPreview =
-          node.task.length > TASK_PREVIEW_LENGTH ? `${node.task.slice(0, TASK_PREVIEW_LENGTH)}...` : node.task;
-        lines.push(
-          `  ${icon} ${theme.fg("dim", `#${node.stepIndex}`)} ${theme.fg("muted", taskPreview)} ${theme.fg("dim", nodeDuration)}`,
-        );
+      const nodes = dedupeTraceNodes(inst.traceNodes);
+      const collapsed = collapseNodes(nodes);
+      for (const item of collapsed) {
+        lines.push(renderCollapsedItem(item, theme));
       }
     }
   }
