@@ -1,5 +1,11 @@
 # @zhushanwen/pi-workflow
 
+## 0.1.8
+
+### Patch Changes
+
+- Fix model polling, widget rendering, and reduce complexity
+
 ## 0.1.6
 
 ### Patch Changes
