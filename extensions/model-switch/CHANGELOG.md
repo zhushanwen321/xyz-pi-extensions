@@ -1,5 +1,17 @@
 # @zhushanwen/pi-model-switch
 
+## 0.2.7
+
+### Patch Changes
+
+- Fix systemPrompt overwrite bug and KV cache hostile injection
+
+  - Bug A: systemPrompt was completely replacing base prompt instead of appending to event.systemPrompt
+  - Bug B: Dynamic context injected into systemPrompt every turn broke KV prefix cache (~10x cost). Split into static systemPrompt (injected once) + dynamic customType message (per-turn)
+  - Extract computeSnapshotAndRecommend() to eliminate duplication
+  - Extract findModelMatch() to reduce handleSwitch complexity
+  - Add @mariozechner/pi-tui and typebox to peerDependencies
+
 ## 0.2.6
 
 ### Patch Changes
