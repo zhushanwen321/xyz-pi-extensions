@@ -56,6 +56,7 @@ vi.mock("../src/commands.js", () => ({
 
 vi.mock("../src/widget.js", () => ({
   renderWorkflowList: vi.fn().mockReturnValue({}),
+  registerWorkflowShortcuts: vi.fn(),
 }));
 
 vi.mock("../src/tool-generate.js", () => ({
