@@ -1,10 +1,14 @@
 /**
  * Model Switch — Context Prompt 注入格式化
  *
- * session_start：注入模型能力表（[Available Models]）
- * before_agent_start：注入数据+推荐（[Model Context]）
+ * session_start：注入模型能力表（[Available Models]）→ systemPrompt（静态，仅首次）
+ * before_agent_start：注入数据+推荐（[Model Context]）→ custom message（动态，每轮）
  *
  * 设计原则：每行自解释，避免缩写标签，让 AI 不需要猜测字段含义。
+ *
+ * KV cache 注意：
+ *   formatSessionModels 的输出在 session 期间固定不变（注入 systemPrompt）。
+ *   formatContextPrompt 的输出每轮变化（注入 message），不影响 prefix cache。
  */
 
 import type { ModelPolicy, QuotaSnapshot, RecommendInfo,StickinessInfo } from "./types";

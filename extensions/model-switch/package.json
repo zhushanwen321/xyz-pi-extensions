@@ -30,7 +30,14 @@
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-ai": "*",
-    "@sinclair/typebox": "*"
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*",
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-tui": {
+      "optional": true
+    }
   },
   "scripts": {
     "typecheck": "npx tsc --noEmit"

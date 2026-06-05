@@ -1,13 +1,20 @@
 /**
  * Pi Model Switch — 上下文注入 + 模型切换扩展
  *
- * session_start/resume：注入 [Available Models] 能力表
- * before_agent_start 每轮注入：数据 + 推荐（[Model Context]）
+ * session_start/resume：注入 [Available Models] 能力表（systemPrompt，字节稳定 → KV cache 友好）
+ * before_agent_start 每轮注入：数据 + 推荐（[Model Context]，通过 message 注入 → 不影响 system prompt prefix cache）
  * switch_model tool：list/search/switch/recommend/setup
+ *
+ * KV cache 策略：
+ *   - systemPrompt 仅在首次 before_agent_start 时注入 [Available Models] + Scenes 映射，
+ *     内容在 session 期间固定不变，确保 prefix 字节稳定。
+ *   - 动态数据（turns、tokens、时间、用量、Advice）通过 customType message 注入，
+ *     每轮变化不影响 system prompt 的 cache 命中。
  */
 
 import { StringEnum } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
 import { readCache } from "@zhushanwen/pi-quota-providers";
 import { Type } from "typebox";
 
@@ -35,8 +42,27 @@ function res(text: string, opts?: { error?: boolean }): ToolRes {
 
 interface SessionState {
 	config: ModelPolicy | null;
-	/** 首次 before_agent_start 时注入 [Available Models] */
+	/** 首次 before_agent_start 时注入 [Available Models] 到 systemPrompt */
 	injectedModelTable: boolean;
+}
+
+// ── Local interfaces (avoid `any` on Pi callback/event signatures) ────
+
+/** Fields accessed from BeforeAgentStartEvent */
+interface BeforeAgentStartLikeEvent {
+	type: "before_agent_start";
+	systemPrompt: string;
+}
+
+/** Shape of CustomMessage passed to registerMessageRenderer */
+interface LikeCustomMessage {
+	customType: string;
+	content: string | unknown;
+}
+
+/** Options bag for registerMessageRenderer callback */
+interface LikeMessageRenderOptions {
+	expanded: boolean;
 }
 
 // ── 扩展入口 ────────────────────────────────────────────
@@ -49,38 +75,40 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 		state.injectedModelTable = false;
 	});
 
-	pi.on("before_agent_start", async (_event: unknown, ctx: ExtensionContext) => {
+	pi.on("before_agent_start", async (event: BeforeAgentStartLikeEvent, ctx: ExtensionContext) => {
 		if (!state.config) return;
 
 		try {
 			const currentModel = getCurrentModelId(ctx);
-			const entries = asSessionEntries(ctx.sessionManager.getBranch());
-			const cache = readCache();
-			const config = state.config;
+			const { snapshot, stickiness, recommend } = computeSnapshotAndRecommend(ctx, state.config);
 
-			// 计算快照 + 推荐
-			const snapshot = computeQuotaSnapshot(cache, config);
-			const stickiness = computeStickiness(entries, config);
-			const recommend = computePeakRecommend(new Date(), config, snapshot);
+			// ① 静态 systemPrompt：仅首次注入 [Available Models]（字节稳定 → KV cache 友好）
+			//    必须包含 event.systemPrompt，否则会覆盖掉 base prompt + 其他扩展的注入
+			let systemPromptPatch: string | undefined;
+			if (!state.injectedModelTable) {
+				const staticBlock = formatSessionModels(state.config);
+				systemPromptPatch = `${event.systemPrompt}\n\n${staticBlock}\n`;
+				state.injectedModelTable = true;
+			}
 
-			// 注入 [Model Context]（每轮）
-			const injection = formatContextPrompt({
+			// ② 动态 context：每轮作为 custom message 注入（不影响 system prompt prefix cache）
+			const dynamicContent = formatContextPrompt({
 				currentModel,
 				stickiness,
 				snapshot,
 				recommend,
-				config,
+				config: state.config,
 				now: new Date(),
 			});
 
-			// 首次注入 [Available Models]（session_start / resume 后一次）
-			let modelTable = "";
-			if (!state.injectedModelTable) {
-				modelTable = "\n" + formatSessionModels(config);
-				state.injectedModelTable = true;
-			}
-
-			return { systemPrompt: `\n${injection}${modelTable}` };
+			return {
+				...(systemPromptPatch ? { systemPrompt: systemPromptPatch } : {}),
+				message: {
+					customType: "model-context",
+					content: dynamicContent,
+					display: false,
+				},
+			};
 		} catch (err) {
 			console.warn("[model-switch] context injection failed:", err);
 			return;
@@ -99,6 +127,15 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 			ctx.ui.notify(result.summary, "info");
 		},
 	});
+
+	// ── Message Renderer for model-context ──────────────────────
+	pi.registerMessageRenderer(
+		"model-context",
+		(message: LikeCustomMessage, _options: LikeMessageRenderOptions, theme: Theme) => {
+			const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+			return new Text(theme.fg("muted", content), 0, 0);
+		},
+	);
 
 	registerSwitchTool(pi, state);
 }
@@ -207,25 +244,34 @@ async function handleSwitch(state: SessionState, pi: ExtensionAPI, ctx: Extensio
 	if (!state.config) return res("No model policy configured. Cannot switch.", { error: true });
 	if (!query) return res("Please specify a model alias to switch to (e.g., 'glm-5.1').", { error: true });
 
-	// Search by alias
-	for (const [, pcfg] of Object.entries(state.config.models)) {
+	const match = findModelMatch(state.config, query);
+	if (!match) return res(`No model matching "${query}". Use 'list' to see available models.`, { error: true });
+
+	return switchToModel(pi, ctx, match.plan, match.modelId, match.alias);
+}
+
+/** Exact match (alias or modelId), then fuzzy fallback. */
+function findModelMatch(
+	config: ModelPolicy,
+	query: string,
+): { plan: string; modelId: string; alias: string } | undefined {
+	// Exact match
+	for (const [, pcfg] of Object.entries(config.models)) {
 		for (const [alias, entry] of Object.entries(pcfg.models)) {
 			if (alias.toLowerCase() === query || entry.modelId.toLowerCase() === query) {
-				return switchToModel(pi, ctx, pcfg.plan, entry.modelId, alias);
+				return { plan: pcfg.plan, modelId: entry.modelId, alias };
 			}
 		}
 	}
-
-	// Fuzzy search by modelId
-	for (const [, pcfg] of Object.entries(state.config.models)) {
+	// Fuzzy match
+	for (const [, pcfg] of Object.entries(config.models)) {
 		for (const [alias, entry] of Object.entries(pcfg.models)) {
 			if (alias.toLowerCase().includes(query) || entry.modelId.toLowerCase().includes(query)) {
-				return switchToModel(pi, ctx, pcfg.plan, entry.modelId, alias);
+				return { plan: pcfg.plan, modelId: entry.modelId, alias };
 			}
 		}
 	}
-
-	return res(`No model matching "${query}". Use 'list' to see available models.`, { error: true });
+	return undefined;
 }
 
 function handleRecommend(state: SessionState, ctx: ExtensionContext): ToolRes {
@@ -233,20 +279,14 @@ function handleRecommend(state: SessionState, ctx: ExtensionContext): ToolRes {
 
 	try {
 		const currentModel = getCurrentModelId(ctx);
-		const entries = asSessionEntries(ctx.sessionManager.getBranch());
-		const cache = readCache();
-		const config = state.config;
-
-		const snapshot = computeQuotaSnapshot(cache, config);
-		const stickiness = computeStickiness(entries, config);
-		const recommend = computePeakRecommend(new Date(), config, snapshot);
+		const { snapshot, stickiness, recommend } = computeSnapshotAndRecommend(ctx, state.config);
 
 		const formatted = formatContextPrompt({
 			currentModel,
 			stickiness,
 			snapshot,
 			recommend,
-			config,
+			config: state.config,
 			now: new Date(),
 		});
 
@@ -310,6 +350,16 @@ function handleSetup(state: SessionState, ctx: ExtensionContext, query?: string)
 }
 
 // ── 辅助函数 ────────────────────────────────────────────
+
+/** Shared quota snapshot + stickiness + recommend computation. */
+function computeSnapshotAndRecommend(ctx: ExtensionContext, config: ModelPolicy) {
+	const entries = asSessionEntries(ctx.sessionManager.getBranch());
+	const cache = readCache();
+	const snapshot = computeQuotaSnapshot(cache, config);
+	const stickiness = computeStickiness(entries, config);
+	const recommend = computePeakRecommend(new Date(), config, snapshot);
+	return { snapshot, stickiness, recommend };
+}
 
 async function switchToModel(
 	pi: ExtensionAPI,
