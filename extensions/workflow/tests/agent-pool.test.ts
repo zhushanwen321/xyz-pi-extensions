@@ -167,6 +167,24 @@ describe("AgentPool", () => {
       expect(result.success).toBe(true);
       expect(result.parsedOutput).toBeUndefined();
     });
+
+    it("extracts JSON from markdown code block wrapper", async () => {
+      const pool = new AgentPool(2);
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+
+      const schema = { type: "object", properties: { mustFix: { type: "boolean" } } };
+      const payload = "```json\n{\"mustFix\": true}\n```";
+      const jsonl = messageEndJsonl(payload, { input: 10, output: 5 });
+
+      const resultPromise = pool.enqueue({ prompt: "check issues", schema });
+      proc.stdout.emit("data", Buffer.from(jsonl + "\n"));
+      proc.emit("close", 0);
+
+      const result = await resultPromise;
+      expect(result.success).toBe(true);
+      expect(result.parsedOutput).toEqual({ mustFix: true });
+    });
   });
 
   // ── enqueue — failure path ─────────────────────────────────

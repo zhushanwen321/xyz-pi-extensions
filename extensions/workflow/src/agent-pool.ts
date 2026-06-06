@@ -292,7 +292,15 @@ export class AgentPool {
         ``,
         schemaJson,
         ``,
-        `Do not include any text before or after the JSON object.`,
+        `Correct response:`,
+        `{"mustFix": true, "issues": ["..."]}`,
+        ``,
+        `Wrong responses (do NOT do this):`,
+        `- \`\`\`json\n{...}\n\`\`\` (markdown code block wrapping)`,
+        `- Here is the result: {...} (prefix text before JSON)`,
+        `- {"mustFix": true} Hope this helps (suffix text after JSON)`,
+        ``,
+        `Do not include any text before or after the JSON object. No markdown, no explanation.`,
         `---`,
         prompt,
       ].join("\n");
@@ -354,12 +362,7 @@ export class AgentPool {
 
     let parsedOutput: unknown | undefined;
     if (pipeline.output.trim() && opts.schema) {
-      try {
-        parsedOutput = JSON.parse(pipeline.output);
-      // eslint-disable-next-line taste/no-silent-catch
-      } catch {
-        // Output is not valid JSON — leave parsedOutput undefined
-      }
+      parsedOutput = extractJSON(pipeline.output) ?? undefined;
     }
 
     return {
@@ -375,6 +378,43 @@ export class AgentPool {
 }
 
 // ── Helpers ───────────────────────────────────────────────────
+
+/**
+ * Extract and parse JSON from a string that may contain markdown code blocks
+ * or surrounding text. Strategy: find the outermost balanced `{...}` or `[...]`
+ * and parse that substring.
+ */
+function extractJSON(raw: string): unknown {
+  const trimmed = raw.trim();
+
+  // Try direct parse first (fast path)
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // fall through
+  }
+
+  // Find outermost balanced braces or brackets
+  const openIdx = trimmed.indexOf('{');
+  const bracketIdx = trimmed.indexOf('[');
+  let start: number;
+  let closeChar: string;
+  if (openIdx === -1 && bracketIdx === -1) return undefined;
+  if (openIdx === -1) { start = bracketIdx; closeChar = ']'; }
+  else if (bracketIdx === -1) { start = openIdx; closeChar = '}'; }
+  else { start = Math.min(openIdx, bracketIdx); closeChar = start === openIdx ? '}' : ']'; }
+
+  // Find matching close from the end
+  const end = trimmed.lastIndexOf(closeChar);
+  if (end <= start) return undefined;
+
+  const candidate = trimmed.slice(start, end + 1);
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    return undefined;
+  }
+}
 
 function makeEmptyPipeline(): ParsedPipelineEvent {
   return {
