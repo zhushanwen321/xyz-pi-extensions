@@ -8,8 +8,8 @@
 |------|------|
 | 阶段 | Phase 1 Spec（需求分析） |
 | Skill | `xyz-harness-brainstorming` |
-| 执行者 | 主 Agent（phase 内部步骤）、Workflow（review-gate）、Subagent（retrospect） |
-| 产出物 | spec.md + use-cases.md + non-functional-design.md |
+| 执行者 | 主 Agent（phase 内部步骤 + retrospect）、Workflow（review-gate） |
+| 产出物 | spec.md（use-cases.md 和 non-functional-design.md 推迟到 Phase 2） |
 
 ## 完整流程
 
@@ -19,11 +19,11 @@
    → focus on 当前目标：完成 spec 阶段的 review-gate
 2. [固定] Brainstorming + 用户讨论（多轮）
 3. [Goal] 用户手动触发 /goal（Brainstorming 完成后，准备编写交付物时）
-   → 任务列表：spec.md / use-cases.md / non-functional-design.md
-4. [固定] 主 agent 按顺序编写 spec 交付物（每完成一个 md 更新 goal）
+   → 任务列表：spec.md
+4. [固定] 主 agent 编写 spec.md（完成后更新 goal）
 5. [Workflow] Review-Gate（循环，最多 3 轮）
 6. [脚本] Phase-Gate（脚本检查，最多 5 次重试）
-7. [Subagent] Retrospect（fork session）→ 产出 `phase1_retrospect.md`
+7. [主 Agent] Retrospect（steer 指令执行）→ 产出 `phase1_retrospect.md`
 → 过渡：主 agent 调用 coding-workflow-phase-start(phase=2)
 ```
 
@@ -37,12 +37,19 @@
 
 **任务列表**：
 1. Write spec.md
-2. Write use-cases.md
-3. Write non-functional-design.md
+
+> **产出物范围说明**：Phase 1 只产出 spec.md。use-cases.md 和 non-functional-design.md 推迟到 Phase 2，因为这两个文件需要基于 plan 的架构设计才能细化（Phase 1 阶段 spec 尚未定案，不适合写详细用例和非功能设计）。Phase 2 的 L1/L2 任务列表和产出物清单中包含这两个文件。
 
 **注入方式**：SKILL.md 中增加指导“Brainstorming 完成、准备编写 spec 交付物时，建议用户使用 /goal 工具初始化任务追踪”。Steering prompt 在 `before_agent_start` 时注入，主 agent 收到后在 brainstorming 完成后提示用户触发 `/goal`。
 
 **为什么 Phase 1 不自动注入**：Phase 1 的 brainstorming（步骤 2）可能持续多轮，需求在讨论过程中逐渐明确。自动注入会在需求未定时就创建任务列表，导致任务不准确。Phase 2 则不同——进入时 spec 已定，可以直接注入。
+
+**完成条件**：Brainstorming 阶段在以下任一条件下视为完成：
+1. 用户明确说"开始写 spec"、"可以了"、"继续"等表示结束讨论的指令
+2. 用户连续 2 轮回复没有提出新的需求或修改意见（仅确认或补充细节）
+3. 主 agent 判断核心需求（spec 的用户故事、验收标准、非功能约束）已全部明确，并主动向用户确认"需求是否已明确，可以开始编写 spec？"
+
+条件 3 由主 agent 主观判断，但必须在 steering prompt 中指导主 agent 主动触发确认，而非被动等待用户指令。
 
 ## Review-Gate
 
@@ -64,7 +71,10 @@
 
 **连续不降处理**：如果连续 2 轮 must_fix 数量没有下降（例如 5→5→5），Workflow 退出循环并将结果返回主 agent，由主 agent 决定是否继续（需用户确认）或接受当前质量。
 
-> 各 phase 的连续不降阈值统一为 2 轮，最大轮数统一为 3。Phase 4 的 Test-Fix Loop 阈值不同（见 Phase 4 spec），因为测试修复的反馈周期更短（跑测试→看结果→修代码），需要更多轮数才能收敛。
+> **阈值规则**（适用于 Phase 1/2/3 的 Review-Gate）：
+> - 连续不降阈值：**2 轮**（连续 2 轮 must_fix 数量未下降 → 人工介入）
+> - 最大轮数：**3**（无论是否收敛，3 轮后强制退出循环）
+> - Phase 4 的 Test-Fix Loop 阈值不同（连续 3 轮、最大 10 轮），因为测试修复的反馈周期更短（跑测试→看结果→修代码），需要更多轮数才能收敛。详见 Phase 4 spec。
 
 ## Phase-Gate
 
@@ -85,9 +95,9 @@
 | 文件 | Review-Gate 检查 | Phase-Gate（脚本） |
 |------|-----------------|----------------|
 | spec.md | ✅ 内容审查 | ✅ 格式 + YAML |
-| use-cases.md | ✅ 内容审查 | ✅ 格式 + YAML |
-| non-functional-design.md | ✅ 内容审查 | ✅ 格式 + YAML |
 | phase1_retrospect.md | — | — |
+
+> use-cases.md 和 non-functional-design.md 在 Phase 2 产出（见 Phase 2 spec）。
 
 ## SKILL.md 变更
 

@@ -8,7 +8,7 @@
 |------|------|
 | 阶段 | Phase 2 Plan（方案设计） |
 | Skill | `xyz-harness-writing-plans` |
-| 执行者 | 主 Agent（phase 内部步骤）、Workflow（review-gate）、Subagent（retrospect） |
+| 执行者 | 主 Agent（phase 内部步骤 + retrospect）、Workflow（review-gate） |
 | 产出物 | L1: 5 个文件 / L2: 9 个文件 |
 
 ## 完整流程
@@ -21,7 +21,7 @@
 5. [主 Agent] ADR 评估 — 不用 subagent
 6. [Workflow] Review-Gate（循环，最多 3 轮）
 7. [脚本] Phase-Gate（脚本检查）
-8. [Subagent] Retrospect（fork session）→ 产出 `phase2_retrospect.md`
+8. [主 Agent] Retrospect（steer 指令执行）→ 产出 `phase2_retrospect.md`
 → 过渡：主 agent 调用 coding-workflow-phase-start(phase=3)
 ```
 
@@ -55,6 +55,10 @@
 - Write interface_chain.json
 
 > 注：`add_tasks()` 追加后，goal 中的实际编号为 6-9（排在 L1 的 5 个任务之后）。编写顺序需按 Step 1-6 执行（见"交付物编写顺序"），不按 goal 任务编号顺序。Steering prompt 中需明确"按 Step 顺序编写，不按 goal 任务编号顺序"。
+
+
+
+**时序约束**：复杂度评估必须在标记任何 Goal 任务为 `in_progress` 之前完成。Steering prompt 中必须指导主 agent "进入 Phase 2 后，第一步是完成复杂度评估（L1/L2），评估为 L2 时立即调用 `goal_manager.add_tasks()` 追加额外任务，然后再开始 Step 1 编写 plan.md"。如果主 agent 在评估前已开始编写交付物，Goal 进度百分比会在追加任务时跳变（如 5 任务完成 3 个 = 60%，追加 4 个后变为 9 任务完成 3 个 = 33%），导致进度追踪不准确。
 
 **API 调用**：
 ```typescript
@@ -169,6 +173,28 @@ groups:
 - 同一 Wave 内的 Group 可并行执行（最多 3 个 subagent）
 - 不同 Wave 之间串行
 - Wave = DAG 拓扑排序分层
+
+**嵌入规范**：plan.md 中的 Execution Groups 必须遵循以下格式：
+
+```markdown
+## Execution Groups
+
+\`\`\`yaml
+groups:
+  - id: BG1
+    depends_on: []
+    provides: [基础数据接口]
+    wave: 1
+  - id: BG2
+    depends_on: [BG1]
+    provides: [业务接口]
+    wave: 2
+\`\`\`
+```
+
+- 必须在 `## Execution Groups` 章节下
+- 必须使用 YAML 围栏代码块（` ```yaml ... ``` `）
+- Phase 3 的 `extractExecutionGroups()` 函数按此格式解析定位
 
 ## Review-Gate
 
