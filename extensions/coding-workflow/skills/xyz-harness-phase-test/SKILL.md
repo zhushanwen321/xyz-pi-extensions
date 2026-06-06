@@ -32,7 +32,7 @@ Gate FAIL 后回到循环起点继续：
 |------|--------|-------|-------|------|
 | Execute Tests | 主 agent | — | 无（直接执行） | bash 命令 |
 | Fix Failures | 主 agent | — | 无（直接修复） | edit/write |
-| Retrospect | subagent | general-purpose | harness-retrospect | task prompt 指定 read |
+| Retrospect | subagent | general-purpose | xyz-harness-retrospect | task prompt 指定 read |
 
 ## Purpose
 

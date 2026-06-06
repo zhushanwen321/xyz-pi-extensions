@@ -34,7 +34,7 @@ Gate FAIL 后回到循环起点继续：
 |------|--------|-------|-------|------|
 | Push + PR + CI | 主 agent | — | 无（直接操作） | bash + gh CLI |
 | Gate Check + Merge | 主 agent | — | 无（直接操作） | gate 验证后 merge |
-| Retrospect (整体) | subagent | general-purpose | harness-retrospect | task prompt 指定 read |
+| Retrospect (整体) | subagent | general-purpose | xyz-harness-retrospect | task prompt 指定 read |
 
 ## Purpose
 

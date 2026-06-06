@@ -34,7 +34,7 @@ description: >-
 | Step 8: Terminology & ADR | 主 agent | — | 无 | MUST + Nullable |
 | Step 10: Transition | 主 agent | — | writing-plans | 主 agent 加载下一 skill |
 | Spec Review | subagent | general-purpose | expert-reviewer | task prompt 指定 read |
-| Retrospect | subagent | general-purpose | harness-retrospect | task prompt 指定 read |
+| Retrospect | subagent | general-purpose | xyz-harness-retrospect | task prompt 指定 read |
 
 # Brainstorming Ideas Into Designs
 

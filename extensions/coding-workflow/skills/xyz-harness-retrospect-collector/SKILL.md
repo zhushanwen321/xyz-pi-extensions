@@ -1,5 +1,5 @@
 ---
-name: harness-retrospect-collector
+name: xyz-harness-retrospect-collector
 description: >-
   Retrospect collector for xyz-harness. Scans retrospect files, tracks absorption status, aggregates improvement suggestions. Trigger: "collect retrospects", "retrospect status", "scan retrospects", "absorb retrospect".
 tools:

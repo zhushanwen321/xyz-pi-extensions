@@ -83,7 +83,7 @@ export function buildRetrospectFollowUp(
 		`${phaseConfig.retrospectPrefix}.md`,
 	);
 	const isOverall = phaseConfig.phase === FINAL_PHASE;
-	const retrospectSkillPath = skillResolver.resolvePath("harness-retrospect");
+	const retrospectSkillPath = skillResolver.resolvePath("xyz-harness-retrospect");
 
 	const parts = [
 		`Now execute the ${isOverall ? "overall " : ""}retrospect for Phase ${phaseConfig.phase} (${phaseConfig.name}).`,

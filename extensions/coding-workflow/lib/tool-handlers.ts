@@ -403,7 +403,7 @@ export async function executePhaseStartTool(hctx: HandlerContext, tctx: ToolExec
 				text:
 					`BLOCKED: Retrospect check failed. Missing or invalid:\n\n` +
 					`${fixInstructions}\n\n` +
-					`Read harness-retrospect skill, write the missing retrospects, then call coding-workflow-phase-start() again.`,
+					`Read xyz-harness-retrospect skill, write the missing retrospects, then call coding-workflow-phase-start() again.`,
 			}],
 			isError: true,
 		};
@@ -528,7 +528,7 @@ export function buildBeforeAgentStartMessage(hctx: HandlerContext, event: Before
 	// Check ALL prior phases' retrospects
 	const missingRetrospects = checkMissingRetrospects(phases, state.currentPhase, state.topicDir);
 	if (missingRetrospects.length > 0) {
-		const retrospectSkillPath = skillResolver.resolvePath("harness-retrospect");
+		const retrospectSkillPath = skillResolver.resolvePath("xyz-harness-retrospect");
 		const fixInstructions = missingRetrospects.map((m) => `  - ${m}`).join("\n");
 		return {
 			message: {
