@@ -96,7 +96,11 @@ interface ParsedPipelineEvent {
 
 export const SOFT_MAX_AGENTS_WARNING = 500;
 const DEFAULT_CONCURRENCY = 4;
-const PROCESS_TIMEOUT_MS = 120_000; // 2 minutes
+// 24-hour safety net — prevents zombie pi subprocesses if all other
+// cleanup paths (abort signal, budget enforcement) fail.
+// Business-level timeouts are handled by orchestrator's budget enforcement.
+const ONE_DAY_MS = 86_400_000;
+const PROCESS_TIMEOUT_MS = ONE_DAY_MS;
 const UUID_SLICE_LENGTH = 8;
 const JSON_INDENT = 2;
 const TIMEOUT_DISPLAY_DIVISOR = 1000;
@@ -519,7 +523,7 @@ function processJsonlEvent(event: Record<string, unknown>, pipeline: ParsedPipel
         pipeline.usage.output += u.output ?? 0;
         pipeline.usage.cacheRead += u.cacheRead ?? 0;
         pipeline.usage.cacheWrite += u.cacheWrite ?? 0;
-        pipeline.usage.cost += u.cost ?? 0;
+        pipeline.usage.cost += Number(u.cost) || 0;
         pipeline.usage.contextTokens = u.totalTokens ?? u.contextTokens ?? 0;
         pipeline.usage.turns++;
       }

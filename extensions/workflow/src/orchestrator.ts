@@ -121,6 +121,8 @@ export class WorkflowOrchestrator {
   private readonly runMetaMap = new Map<string, RunMeta>();
   private readonly retryCounts = new Map<string, number>();
   private readonly runPools = new Map<string, AgentPool>();
+  /** Per-run AbortController for killing agent subprocesses on terminate/pause/abort. */
+  private readonly runAbortControllers = new Map<string, AbortController>();
   private readonly pi: ExtensionAPI;
   private readonly ctx: ExtensionContext;
   private readonly sessionDir: string;
@@ -194,6 +196,14 @@ export class WorkflowOrchestrator {
     });
     instance.startedAt = new Date().toISOString();
 
+    this.runMetaMap.set(runId, { scriptSource, args, budgetTokens, budgetTimeMs, signal });
+    this.instances.set(runId, instance);
+
+    // Create per-run AbortController for agent subprocess cleanup.
+    // Orchestrator owns this controller — abort() on terminate/pause/abort.
+    const runAbortController = new AbortController();
+    this.runAbortControllers.set(runId, runAbortController);
+
     // Create per-workflow AgentPool with soft-limit warning callback
     // Each workflow run gets its own pool so agent call counts are isolated per AC-4.5
     const pool = new AgentPool({
@@ -210,11 +220,16 @@ export class WorkflowOrchestrator {
     pool.setBudget(instance.budget);
     this.runPools.set(runId, pool);
 
-    this.runMetaMap.set(runId, { scriptSource, args, budgetTokens, budgetTimeMs, signal });
-    this.instances.set(runId, instance);
+    // P1-2: Also abort agent subprocesses when the tool-level signal fires
+    if (signal) {
+      const onToolAbort = () => runAbortController.abort();
+      signal.addEventListener("abort", onToolAbort, { once: true });
+    }
     await this.persistState();
 
     // P1-2: Listen for abort — pause the workflow so it can be resumed
+    // NOTE: This listener handles pause logic; the tool-signal → runAbortController
+    // forwarding above handles killing the active agent subprocess.
     if (signal) {
       const onAbort = () => {
         const inst = this.instances.get(runId);
@@ -285,6 +300,9 @@ export class WorkflowOrchestrator {
 
     const meta = this.runMetaMap.get(runId);
     if (meta) {
+      // Recreate AbortController for the resumed run (old one was aborted on pause)
+      this.recreateRunAbortController(runId);
+
       // Worker-backed instance: restart Worker with preserved callCache
       this.startWorker(runId, instance, meta.scriptSource, meta.args);
 
@@ -359,6 +377,8 @@ export class WorkflowOrchestrator {
 
     const meta = this.runMetaMap.get(runId);
     if (meta) {
+      // Recreate AbortController after terminate (old was aborted)
+      this.recreateRunAbortController(runId);
       this.startWorker(runId, instance, meta.scriptSource, meta.args);
     }
 
@@ -487,10 +507,31 @@ export class WorkflowOrchestrator {
   }
 
   /**
-   * Terminate and clean up a worker thread. Fires and forgets the
-   * terminate promise — the exit handler handles state reconciliation.
+   * Recreate AbortController for a run after terminateWorker aborted the old one.
+   * Also re-wires the tool-level signal to the new controller.
+   */
+  private recreateRunAbortController(runId: string): void {
+    const newController = new AbortController();
+    this.runAbortControllers.set(runId, newController);
+    const meta = this.runMetaMap.get(runId);
+    if (meta?.signal && !meta.signal.aborted) {
+      const onToolAbort = () => newController.abort();
+      meta.signal.addEventListener("abort", onToolAbort, { once: true });
+    }
+  }
+
+  /**
+   * Terminate and clean up a worker thread. Also aborts all in-flight
+   * agent subprocesses via the per-run AbortController.
    */
   private terminateWorker(runId: string): void {
+    // Abort all agent subprocesses for this run
+    const controller = this.runAbortControllers.get(runId);
+    if (controller) {
+      this.runAbortControllers.delete(runId);
+      controller.abort();
+    }
+
     const worker = this.workers.get(runId);
     if (worker) {
       this.workers.delete(runId);
@@ -601,9 +642,9 @@ export class WorkflowOrchestrator {
       // Pool already cleaned up (workflow terminated) — skip
       return;
     }
-    // P1-2: Propagate abort signal to AgentPool so the pi subprocess can be killed
-    const meta = this.runMetaMap.get(runId);
-    pool.enqueue(opts, meta?.signal).then(async (poolResult) => {
+    // P1-2: Use per-run AbortController signal so terminateWorker can kill subprocesses
+    const runController = this.runAbortControllers.get(runId);
+    pool.enqueue(opts, runController?.signal).then(async (poolResult) => {
       // P0-2: Stale state check — instance may have been paused/aborted during agent call
       if (instance.status !== "running") return;
 
@@ -653,8 +694,8 @@ export class WorkflowOrchestrator {
         setTimeout(() => {
           // P0-2: Stale state check before retry
           if (instance.status !== "running") return;
-          // P1-2: Skip retry if caller aborted
-          if (meta?.signal?.aborted) return;
+          // Skip retry if run was aborted (controller removed by terminateWorker)
+          if (!this.runAbortControllers.has(runId)) return;
           this.executeWithRetry(runId, callId, opts, instance, node, attempt + 1);
         }, delay);
         return;
@@ -752,6 +793,8 @@ export class WorkflowOrchestrator {
         if (instance.status !== "running") return;
         const meta = this.runMetaMap.get(runId);
         if (meta && instance) {
+          // Recreate AbortController after terminate (old was aborted)
+          this.recreateRunAbortController(runId);
           this.startWorker(runId, instance, meta.scriptSource, meta.args);
         }
       }, delay);
