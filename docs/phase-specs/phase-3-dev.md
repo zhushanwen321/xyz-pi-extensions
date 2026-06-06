@@ -10,7 +10,7 @@
 | Skill | `xyz-harness-phase-dev` |
 | 执行者 | 主 Agent + Subagent（按 Wave 编码）+ Workflow（Review-Gate） |
 | 测试范围 | **单元测试**（TDD 产出，与代码一起编写） |
-| 产出物 | 代码 + 单元测试 + review 报告（6 份）+ test_results.md + retrospect |
+| 产出物 | 代码 + 单元测试 + review 报告（6 份）+ simulated_data/*.json + test_results.md + phase3_retrospect.md |
 
 ## 完整流程
 
@@ -19,12 +19,19 @@
 2. [Goal] phase-start 自动注入 initializeGoalFromExternal()
 3. [主 Agent] 防护预检（Step 0）
 4. [主 Agent/Subagent] 按 Goal 任务顺序执行（见 Goal 配置）
-5. [Workflow] Review-Gate（整体是一个 Workflow，内含两阶段）
+5. [Workflow] Review-Gate（整体是一个 Workflow，内含三阶段）
    阶段一：前置检查（单次，不循环）
+   阶段一.五：模拟数据生成（如阶段一通过）
    阶段二：并行审查 + Fix Worker 循环
 6. [脚本+防伪造] Phase-Gate
 7. [Subagent] Retrospect（fork session）
 ```
+
+## Phase 过渡
+
+**Phase 2 → Phase 3**：Phase 2 Retrospect 完成后，主 agent 调用 `coding-workflow-phase-start(phase=3)`。该 tool handler 执行 compact，注入 Phase 3 steering prompt，并自动初始化 goal（从 plan.md 读取 Execution Groups 构建任务列表）。
+
+**Phase 3 → Phase 4**：Phase 3 Retrospect 完成后，主 agent 调用 `coding-workflow-phase-start(phase=4)`。该 tool handler 执行 compact，注入 Phase 4 steering prompt。
 
 ## Goal 配置
 
@@ -69,6 +76,8 @@ Task N+3: 写 test_results.md + git commit + push
 
 **test_results.md 的内容**：Phase 3 的 test_results.md 只记录单元测试的运行结果。格式中应区分 `type: unit`。
 
+**重新初始化策略**：阶段一失败后，不重建目标（保留历史），而是将所有任务状态重置为待处理。主代理根据审查报告调整编码策略后按序执行。
+
 **API 调用**：
 ```typescript
 import { initializeGoalFromExternal } from "@zhushanwen/pi-goal";
@@ -95,7 +104,14 @@ function buildDevGoalTasks(groups: ExecutionGroup[]): string[] {
 
 ## Review-Gate
 
-**整体是一个 Workflow**，内含两个阶段。
+**整体是一个 Workflow**，内含三个阶段。
+
+**三阶段执行语义**：
+- **阶段一**：单次执行（不循环），失败则退出整个 Review-Gate 回到主代理编码
+- **阶段一.五**：自动执行（非循环），基于阶段一的 `simulated_data_paths` 字段生成模拟数据文件
+- **阶段二**：循环执行（最多 3 轮），审查→修复→重新审查，must_fix=0 时通过
+
+"最多 3 轮"仅适用于阶段二。阶段一/一.五没有轮数概念。
 
 ### 阶段一：前置检查（单次，不循环）
 
@@ -109,17 +125,20 @@ function buildDevGoalTasks(groups: ExecutionGroup[]): string[] {
 
 **失败处理**：
 ```
-FAIL → 退出 workflow → 主 agent 重新启动 goal → 检查缺失能力
+FAIL → 退出 workflow → 主 agent 重置 goal 状态 → 检查缺失能力
      → 重新拆分 Wave → 编码 → 测试验证 → commit → 重新提交 review-gate
 ```
 
 打回主 agent 后不回到 review-gate，而是回到编码阶段。**这与 Phase 1/2 不同**：Phase 1/2 review-gate 失败后循环内 agent 直接修复（文档修改成本低），Phase 3 review-gate 失败后回到主 agent 编码（代码修改成本高，需要重新 TDD → 测试 → commit）。
-1. 重新启动 goal（`initializeGoalFromExternal()` 或重置现有 goal 状态）
+1. 调用 `goal_manager` 重置操作：将现有 goal 的所有任务状态重置为 pending（而不是重建，保留历史记录）
 2. 主 agent 分析 spec-plan-conformance 报告中的问题
 3. 重新拆分 Wave（可能需要调整 Execution Groups）
+   > **Execution Groups 调整权限**：主 agent 有权在 Phase 3 内微调 Execution Groups（如拆分过大的 Group、调整 Wave 归属），但不允许删除或合并 Phase 2 定义的 Group。微调后需在 plan.md 中更新对应 Group 的 `wave` 和 `depends_on` 字段。如果调整超过 30% 的 Group，建议回到 Phase 2 重新规划。
 4. 重新编码 → 测试验证 → commit → 重新提交 review-gate（从阶段一开始）
 
 ### 阶段二：并行审查 + Fix Worker 循环（最多 3 轮）
+
+> **命名说明**：Phase 3 的 Fix Worker 同时负责"汇总判断 + 修复"（不同于 Phase 4 的 Fix Worker 只负责"修复"）。在实现中命名为 `review-sync-fix-worker.md` 以区分。
 
 **Step 1: 并行审查**
 
@@ -143,6 +162,12 @@ Fix Worker 同时负责汇总判断和修复，一个节点完成：
 3. must_fix > 0 → 进入修复流程：
    - 收集所有 must_fix 项，**按涉及文件分组**（不是按 Wave 分组）
    - 同一文件的所有 must_fix（可能来自多个 reviewer）由**同一个 subagent 串行处理**，避免并行修改同一文件导致冲突
+   - **修复优先级（同一文件内多个 reviewer 的 must_fix）**：
+     1. **Taste** → 最高优先级（结构性变更如拆函数、重命名，会改变后续修复的上下文）
+     2. **Standards** → 其次（类型注解、import 规范）
+     3. **Robustness** → 再次（try-catch、错误处理）
+     4. **Integration** → 最后（接口签名，依赖前面修复完成）
+     5. **Business Logic** → 与上述按需穿插（逻辑正确性优先于风格）
    - 不同文件之间可以并行（但每个文件独占一个 subagent）
    - 所有修复完成后 git commit
    - 回到 Step 1 重新并行审查
@@ -166,7 +191,7 @@ Fix Worker 同时负责汇总判断和修复，一个节点完成：
 | 脚本检查 | 文档完整性 + YAML frontmatter + placeholder 扫描 |
 | 防伪造 | `xyz-harness-gate-reviewer` subagent |
 
-**与 Phase 1/2 的差异**：Phase 1/2 只有脚本检查。Phase 3 额外增加防伪造检查。原因：Phase 3 产出的是代码和测试结果，AI 更容易伪造（编造测试结果、跳过实际运行），需要独立 subagent 验证真实性。
+**与 Phase 1/2 的差异**：Phase 1/2 只有脚本检查（🟢 基础严格度）。Phase 3 增加防伪造检查（🟡 标准严格度）。原因：Phase 3 产出的是代码和测试结果，AI 更容易伪造（编造测试结果、跳过实际运行），需要独立 subagent 验证真实性。
 
 **防伪造检查内容**：
 - review 报告内容非空（不是空文件或占位符）
@@ -179,9 +204,42 @@ Fix Worker 同时负责汇总判断和修复，一个节点完成：
 
 **Integration reviewer 输入源**：阶段一的 spec-plan-conformance-reviewer 报告中包含「模拟数据路径」字段，列出用于验证集成接口的模拟数据文件路径。Integration reviewer 读取该字段获取模拟数据，不再依赖独立的 BLR 报告。
 
+**spec-plan-conformance-reviewer 输出格式**：
+
+YAML frontmatter 必须包含：
+```yaml
+verdict: pass | fail
+must_fix: <number>
+review_metrics:
+  spec_coverage: <percentage>
+  plan_coverage: <percentage>
+  ac_coverage: <percentage>
+  simulated_data_paths:
+    - path: changes/reviews/phase-3/simulated_data/xxx.json
+      description: 用户 API 响应模拟数据（供 Integration Reviewer 使用）
+```
+
+`simulated_data_paths` 字段列出 Integration Reviewer 需要的模拟数据文件路径。模拟数据的生成流程：
+
+**阶段一.五（模拟数据生成）**：
+1. 阶段一通过后，Workflow 读取 spec-plan-conformance-reviewer 报告中的 `simulated_data_paths` 字段
+2. 根据字段中的路径列表和描述，dispatch 一个 subagent 生成模拟数据文件（JSON fixture）
+3. 模拟数据文件存放在 `changes/reviews/phase-3/simulated_data/` 目录下
+4. 生成完成后进入阶段二并行审查
+
+**为什么需要阶段一.五**：Integration Reviewer 在阶段二 Step 1 并行审查时需要模拟数据来验证模块间接口。如果模拟数据不存在，Integration Reviewer 会因缺少输入而跳过审查或产出不完整的报告。阶段一和阶段二之间必须插入模拟数据生成步骤。
+
 **失败处理**：
 - 返回主 agent，告知修复后**直接重新提交 phase-gate**
 - **跳过 review-gate**
+
+## 代理修改文件后的上下文同步
+
+Review-Gate 中的代理（阶段一的 spec-plan-conformance-reviewer、阶段二的各 reviewer 和 Fix Worker）会直接修改项目文件。这些修改发生在 workflow 的独立 pi 进程中，主代理的上下文不会自动更新。
+
+**同步策略**：Workflow 完成后，gate tool handler 读取修改后的文件内容，在返回给主代理的结果中附带关键变更摘要（修改了哪些文件、主要变更内容）。主代理收到后可按需读取最新文件。
+
+**如果 Review-Gate 整体失败**（阶段一失败退出）：主代理收到的结果中包含完整的审查报告路径和关键发现，主代理据此决定编码调整方案。此时主代理应重新读取 spec.md、plan.md 和相关源文件以获取最新版本。
 
 ## 产出物
 
@@ -201,7 +259,8 @@ Fix Worker 同时负责汇总判断和修复，一个节点完成：
 | 文件 | 说明 |
 |------|------|
 | test_results.md | 测试结果（verdict: pass, all_passing: true） |
-| dev_retrospect.md | Retrospect |
+| simulated_data/*.json | 阶段一.五 自动生成的模拟数据文件 |
+| phase3_retrospect.md | Retrospect |
 
 ### 交付物检查清单
 
@@ -213,8 +272,9 @@ Fix Worker 同时负责汇总判断和修复，一个节点完成：
 | robustness_review_v{N}.md | ✅ 内容 | ✅ YAML |
 | fallow_report_v{N}.md | ✅ 内容 | ✅ YAML |
 | integration_review_v{N}.md | ✅ 内容 | ✅ YAML |
+| simulated_data/*.json | — | ✅ 存在 |
 | test_results.md | — | ✅ YAML + 防伪造 |
-| dev_retrospect.md | — | ✅ YAML |
+| phase3_retrospect.md | — | ✅ YAML |
 
 ## SKILL.md 变更
 
@@ -242,7 +302,7 @@ Fix Worker 同时负责汇总判断和修复，一个节点完成：
 | `xyz-harness-robustness-reviewer` | 复用 SKILL.md | Robustness 审查 |
 | `fallow-reviewer.md` | 新建 | Code Quality 审查（包装 fallow CLI，格式化 JSON 为 review 报告） |
 | `xyz-harness-integration-reviewer` | 复用 SKILL.md | Integration 审查 |
-| `fix-worker.md` | 新建 | 阶段二 Fix Worker：汇总 + 判断 + 修复 |
+| `review-sync-fix-worker.md` | 新建 | 阶段二 Review-Sync-Fix Worker：汇总 5 个 reviewer 结果 + 判断退出 + 修复代码 |
 | `xyz-harness-gate-reviewer` | 复用 SKILL.md | Phase-Gate 防伪造检查 |
 
 ### 项目规范文件传递方式

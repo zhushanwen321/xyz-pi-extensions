@@ -18,12 +18,12 @@
    → 告知主 agent 整体 5-phase 执行流程
    → focus on 当前目标：完成 spec 阶段的 review-gate
 2. [固定] Brainstorming + 用户讨论（多轮）
-3. [Goal] 用户手动触发 /goal（SKILL.md 引导 + steering prompt 提示）
-   → steering prompt 明确：Brainstorming 完成、准备编写交付物时，提示用户 /goal
+3. [Goal] phase-start 自动注入 initializeGoalFromExternal()
+   → 任务列表：spec.md / use-cases.md / non-functional-design.md
 4. [固定] 主 agent 按顺序编写 spec 交付物（每完成一个 md 更新 goal）
 5. [Workflow] Review-Gate（循环，最多 3 轮）
-6. [脚本] Phase-Gate（最多重试 5 次）
-7. [Subagent] Retrospect（fork session）
+6. [脚本] Phase-Gate（脚本检查）
+7. [Subagent] Retrospect（fork session）→ 产出 `phase1_retrospect.md`
 → 过渡：主 agent 调用 coding-workflow-phase-start(phase=2)
 ```
 
@@ -33,14 +33,24 @@
 
 ## Goal 配置
 
-**触发方式**：用户手动 `/goal`
+**触发方式**：`phase-start` 自动注入（`initializeGoalFromExternal()` API）
 
 **任务列表**：
-1. spec.md
-2. use-cases.md
-3. non-functional-design.md
+1. Write spec.md
+2. Write use-cases.md
+3. Write non-functional-design.md
 
-**注入方式**：SKILL.md 中增加指导"Brainstorming 完成、准备编写 spec 交付物时，建议用户使用 /goal 工具初始化任务追踪"。Steering prompt 在 `before_agent_start` 时注入，主 agent 收到后在合适时机提示用户。
+**API 调用**：
+```typescript
+import { initializeGoalFromExternal } from "@zhushanwen/pi-goal";
+
+// executePhaseStartTool 中，Phase 1 入口
+initializeGoalFromExternal(pi, ctx, "Phase 1: 完成 spec 阶段交付物", [
+  "Write spec.md",
+  "Write use-cases.md",
+  "Write non-functional-design.md",
+]);
+```
 
 ## Review-Gate
 
@@ -60,12 +70,18 @@
 }
 ```
 
+**连续不降处理**：如果连续 2 轮 must_fix 数量没有下降（例如 5→5→5），Workflow 退出循环并将结果返回主 agent，由主 agent 决定是否继续（需用户确认）或接受当前质量。
+
+> 各 phase 的连续不降阈值统一为 2 轮，最大轮数统一为 3。Phase 4 的 Test-Fix Loop 阈值不同（见 Phase 4 spec），因为测试修复的反馈周期更短（跑测试→看结果→修代码），需要更多轮数才能收敛。
+
 ## Phase-Gate
 
 | 项目 | 说明 |
 |------|------|
-| 模式 | 一次性脚本检查 |
+| 模式 | 脚本检查（无防伪造） |
 | 检查项 | 文档完整性 + YAML frontmatter + placeholder 扫描 |
+| 严格度 | 🟢 基础（仅脚本） |
+| 失败处理 | 返回主 agent 修复，修复后直接重新提交 phase-gate（跳过 review-gate） |
 | 最大重试 | 5 次 |
 
 **失败处理**：
@@ -74,11 +90,12 @@
 
 ## 产出物
 
-| 文件 | Review-Gate 检查 | Phase-Gate 检查 |
+| 文件 | Review-Gate 检查 | Phase-Gate（脚本） |
 |------|-----------------|----------------|
 | spec.md | ✅ 内容审查 | ✅ 格式 + YAML |
 | use-cases.md | ✅ 内容审查 | ✅ 格式 + YAML |
 | non-functional-design.md | ✅ 内容审查 | ✅ 格式 + YAML |
+| phase1_retrospect.md | — | — |
 
 ## SKILL.md 变更
 
@@ -88,7 +105,7 @@
 | **删除** | Gate Handoff 章节（单独 session 提交 gate） |
 | **保留** | Quick Overview → Brainstorm → Terminology → Scan → Write |
 | **新增** | 整体 5-phase 执行流程指导（focus on review-gate） |
-| **新增** | Goal 追踪建议（steering prompt 中提示用户 /goal，限定在 brainstorming 完成后） |
+| **新增** | Goal 自动追踪（initializeGoalFromExternal() API 在 phase-start 注入） |
 | **新增** | "完成后调用 coding-workflow-gate(phase=1)" |
 
 ## 可视化

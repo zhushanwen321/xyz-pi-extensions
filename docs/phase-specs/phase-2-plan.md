@@ -20,8 +20,8 @@
 4. [主 Agent] 按 Step 顺序编写 plan 交付物（不并行，不 dispatch subagent）
 5. [主 Agent] ADR 评估 — 不用 subagent
 6. [Workflow] Review-Gate（循环，最多 3 轮）
-7. [脚本] Phase-Gate（最多重试 5 次）
-8. [Subagent] Retrospect（fork session）
+7. [脚本] Phase-Gate（脚本检查）
+8. [Subagent] Retrospect（fork session）→ 产出 `phase2_retrospect.md`
 → 过渡：主 agent 调用 coding-workflow-phase-start(phase=3)
 ```
 
@@ -41,18 +41,20 @@
 2. Steering prompt 中指导主 agent 先做复杂度评估
 3. 评估为 L2 时，主 agent 调用 `goal_manager.add_tasks()` 追加 4 个额外任务
 
-**L1 任务列表**（默认注入）：
+**L1 任务列表**（默认注入，5 个任务）：
 1. Write plan.md (with Execution Groups)
-2. Write e2e-test-plan.md + test_cases_template.json
-3. Write use-cases.md + non-functional-design.md
+2. Write e2e-test-plan.md
+3. Write test_cases_template.json
+4. Write use-cases.md
+5. Write non-functional-design.md
 
-**L2 追加任务**（评估为 L2 时追加）：
-4. Write plan-api-contract.md
-5. Write plan-backend.md
-6. Write plan-frontend.md
-7. Write interface_chain.json
+**L2 追加任务**（评估为 L2 时，调用 `goal_manager.add_tasks()` 追加到 L1 列表末尾）：
+- Write plan-api-contract.md
+- Write plan-backend.md
+- Write plan-frontend.md
+- Write interface_chain.json
 
-> 注：追加后任务 4-7 的编写顺序需按 Step 2-4 执行（见"交付物编写顺序"），不按 goal 任务编号顺序。Steering prompt 中需明确"按 Step 顺序编写，不按 goal 任务编号顺序"。
+> 注：`add_tasks()` 追加后，goal 中的实际编号为 6-9（排在 L1 的 5 个任务之后）。编写顺序需按 Step 1-6 执行（见"交付物编写顺序"），不按 goal 任务编号顺序。Steering prompt 中需明确"按 Step 顺序编写，不按 goal 任务编号顺序"。
 
 **API 调用**：
 ```typescript
@@ -142,6 +144,8 @@ Step 2: e2e-test-plan.md + test_cases_template.json
 Step 3: use-cases.md + non-functional-design.md（可在 Step 1-2 期间任意时刻执行）
 ```
 
+> **Goal 任务与 Step 的映射**：L1 的 5 个 Goal 任务按文件粒度划分，但 Step 按逻辑分组（Step 2 包含 e2e-test-plan.md + test_cases_template.json）。主 agent 在完成一个 Step 内的所有文件后，逐个更新对应的 Goal 任务状态。如果 Step 中某个文件失败，只标记该文件对应的 Goal 任务为 failed，不影响同 Step 其他文件。
+
 ## 任务依赖关系（供 Phase 3 使用）
 
 plan.md 中每个 Execution Group 必须标注：
@@ -175,6 +179,7 @@ groups:
 | L2 Agent | `plan-requirements-reviewer.md` + `plan-bl-requirements-reviewer.md`（**串行**审查） |
 | 循环 | agent 审查 + 直接修复 → must_fix=0 退出 |
 | 最大轮数 | 3 |
+| 连续不降 | 2 轮 → 人工介入 |
 
 **内部结构**：
 ```
@@ -186,13 +191,21 @@ groups:
 }
 ```
 
+**为什么串行不用并行**：Phase 2 的产出物是文档（plan.md 等），两个 reviewer 同时修改同一文件会导致冲突。文档数量不多（最多 9 个文件），串行执行的额外耗时可接受。
+
+**连续不降阈值说明**：与 Phase 1 一致，2 轮不降→人工介入，最大 3 轮。
+
 ## Phase-Gate
 
 | 项目 | 说明 |
 |------|------|
-| 模式 | 一次性脚本检查 |
+| 模式 | 脚本检查（无防伪造） |
 | 检查项 | 文档完整性 + YAML frontmatter + placeholder 扫描 |
+| 严格度 | 🟢 基础（仅脚本） |
+| 失败处理 | 返回主 agent 修复，修复后直接重新提交 phase-gate（跳过 review-gate） |
 | 最大重试 | 5 次 |
+
+**通过后动作**：Phase-Gate 通过后，gate tool handler 将当前 commit hash 记录到 phase state 文件（`coding-workflow-p{N}.json`）中的 `phase2_gate_commit` 字段。该 hash 供 Phase 4 一致性检查使用——验证 `test_cases_template.json` 未被后续篡改。
 
 **失败处理**：
 - 返回主 agent，告知修复后**直接重新提交 phase-gate**
@@ -212,7 +225,7 @@ groups:
 
 ## 产出物清单
 
-| 文件 | L1 | L2 | Review-Gate | Phase-Gate |
+| 文件 | L1 | L2 | Review-Gate | Phase-Gate（脚本） |
 |------|:--:|:--:|:-----------:|:----------:|
 | plan.md | ✅ | ✅ | ✅ 内容 | ✅ 格式 |
 | e2e-test-plan.md | ✅ | ✅ | ✅ 内容 | ✅ 格式 |
@@ -223,6 +236,7 @@ groups:
 | plan-frontend.md | ❌ | ✅ | ✅ 内容 | ✅ 格式 |
 | plan-api-contract.md | ❌ | ✅ | ✅ 内容 | ✅ 格式 |
 | interface_chain.json | ❌ | ✅ | ✅ 内容 | ✅ 格式 |
+| phase2_retrospect.md | — | — | — | — |
 
 ## 可视化
 
