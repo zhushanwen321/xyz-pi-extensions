@@ -159,9 +159,11 @@ git add -A
 git commit -m "chore: bump versions"
 git push
 
-# 发布（仅 dry-run 预览，禁止在本地直接 publish）
-pnpm changeset publish --dry-run
-# ⚠️ 禁止在本地执行 pnpm changeset publish — 由 CI 或 merge skill 流程处理
+# 发布 — 由 GitHub Actions 自动完成
+# ⚠️ 禁止在本地执行 pnpm changeset publish 或 npm publish
+# 流程：push tag v* → release.yml 自动触发 pnpm changeset publish
+# 新包首次发布需要确保 npm scope 下有权限（NPM_TOKEN secret 已配置）
+pnpm changeset publish --dry-run  # 仅预览，不实际发布
 
 # 校验 third-party extensions 注册表
 python3 .githooks/validate-extensions-yaml
