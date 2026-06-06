@@ -19,7 +19,8 @@ xyz-pi-extensions/
 │   ├── statusline/          → @zhushanwen/pi-statusline
 │   ├── unified-hooks/       → @zhushanwen/pi-unified-hooks
 │   ├── workflow/            → @zhushanwen/pi-workflow
-│   └── model-switch/        → @zhushanwen/pi-model-switch
+│   ├── model-switch/        → @zhushanwen/pi-model-switch
+│   └── turn-timing/         → @zhushanwen/pi-turn-timing
 ├── shared/                      # 内部共享包（private，不独立发布）
 │   ├── quota-providers/     → @zhushanwen/pi-quota-providers
 │   ├── taste-lint/          → @zhushanwen/pi-taste-lint
@@ -158,9 +159,11 @@ git add -A
 git commit -m "chore: bump versions"
 git push
 
-# 发布（仅 dry-run 预览，禁止在本地直接 publish）
-pnpm changeset publish --dry-run
-# ⚠️ 禁止在本地执行 pnpm changeset publish — 由 CI 或 merge skill 流程处理
+# 发布 — 由 GitHub Actions 自动完成
+# ⚠️ 禁止在本地执行 pnpm changeset publish 或 npm publish
+# 流程：push tag v* → release.yml 自动触发 pnpm changeset publish
+# 新包首次发布需要确保 npm scope 下有权限（NPM_TOKEN secret 已配置）
+pnpm changeset publish --dry-run  # 仅预览，不实际发布
 
 # 校验 third-party extensions 注册表
 python3 .githooks/validate-extensions-yaml
@@ -741,6 +744,7 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `extensions/unified-hooks/` | `@zhushanwen/pi-unified-hooks` | Hook 管理 | — |
 | `extensions/workflow/` | `@zhushanwen/pi-workflow` | 通用 DAG 执行引擎 | — |
 | `extensions/model-switch/` | `@zhushanwen/pi-model-switch` | 模型切换 | — |
+| `extensions/turn-timing/` | `@zhushanwen/pi-turn-timing` | Turn 各阶段耗时记录 | — |
 
 **`shared/`** — 内部共享包（private）
 
