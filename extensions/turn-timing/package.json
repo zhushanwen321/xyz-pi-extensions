@@ -1,11 +1,13 @@
 {
   "name": "@zhushanwen/pi-turn-timing",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Record per-phase execution timing (thinking, text, toolcall generation, tool execution) for each turn",
   "type": "module",
   "main": "index.ts",
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   },
   "keywords": [
     "pi-package",
