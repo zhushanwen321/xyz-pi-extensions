@@ -220,6 +220,8 @@ bash .githooks/check-structure
 }
 ```
 
+**[强制]** `pi.extensions` 必须为 `["./index.ts"]`，禁止 `["./src/index.ts"]`。顶层 `index.ts` re-export `src/index.ts`，确保 Pi 扩展加载列表统一显示纯包名。
+
 ## 关键约束
 
 ### 运行环境

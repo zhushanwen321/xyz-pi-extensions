@@ -78,6 +78,8 @@
     "skills": ["./skills"],
     "prompts": ["./prompts"]
   },
+
+`pi.extensions` **必须**为 `["./index.ts"]`，禁止使用 `["./src/index.ts"]`。顶层 `index.ts` 作为 re-export 胶水层（`export { default } from "./src/index.ts"`），确保 Pi 扩展加载列表中统一显示纯包名而非包名+子路径。
   "keywords": ["pi-package", "pi", "pi-coding-agent", "extension"],
   "peerDependencies": { /* 见第 9 节 */ },
   "main": "index.ts"  // 非必须，但建议
