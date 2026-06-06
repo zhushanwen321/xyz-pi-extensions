@@ -54,23 +54,24 @@ Phase 配置声明 gate 链：
 
 ### Reviewer Agent 文件规划
 
-| Phase | Agent 文件 | 来源 |
-|-------|-----------|------|
-| 1 Spec | `spec-reviewer.md` | **新建**，参考 superpowers spec-document-reviewer |
-| 2 Plan | `plan-reviewer.md` | **新建**，参考 superpowers plan-document-reviewer |
-| 3 Dev | 现有 5 个 SKILL.md | **不新建**，已有专项 reviewer |
-| 4 Test | `test-reviewer.md` | **新建**，基于 expert-reviewer 测试评审模式 |
+| Phase | Review-Gate Agent | Phase-Gate Agent |
+|-------|-------------------|-----------------|
+| 1 Spec | `spec-requirements-reviewer.md` | `deliverables-reviewer.md` |
+| 2 Plan L1 | `plan-requirements-reviewer.md` | `deliverables-reviewer.md` |
+| 2 Plan L2 | `plan-requirements-reviewer.md` + `plan-bl-requirements-reviewer.md` | `deliverables-reviewer.md` |
+| 3 Dev | 5 个现有 SKILL.md + `sync-agent.md` | `deliverables-reviewer.md` |
+| 4 Test | `test-requirements-reviewer.md` | `deliverables-reviewer.md` |
 
-### Review-Gate 内部节点
+### 两层 Gate 设计
 
-```
-Round N:
-  单 reviewer Phase (1/2/4): review → fix（2 节点）
-  多 reviewer Phase (3):      parallel review → sync → fix（3 节点）
-  → Round N+1 或 passed
-```
+每个 phase 有两层 gate，职责不同：
 
-关键决策：Review 和 Fix 分离，Fix 由独立 subagent 执行（消除 confirmation bias），单 worker 串行修复（避免文件冲突）。
+| Gate | 审查内容 | 模式 |
+|------|---------|------|
+| **Review-Gate** | 需求/内容质量 | Phase 1/2/4: 单次检查，失败回退上游；Phase 3: 循环 workflow |
+| **Phase-Gate** | 文档格式 + 防造假 | 所有 Phase: 统一 workflow（循环 doc-fix → script → 防造假） |
+
+Review-Gate 通过后自动触发 Phase-Gate。主 agent 只调一次 `coding-workflow-gate`。
 
 ### Retrospect 执行方式
 
@@ -80,33 +81,32 @@ Retrospect subagent **fork 主 session 的对话历史**后执行复盘。需要
 - Harness 体验（工具是否好用、流程是否顺畅）
 - 教训提炼（什么该做没做、什么做了不该做）
 
-### 各 Phase 的 Review-Gate 配置
+### 各 Phase 的 Gate 配置
 
-| Phase | Reviewer Skill | 审查维度 |
-|-------|---------------|---------|
-| 1 Spec | `xyz-harness-expert-reviewer`（计划评审模式） | spec 完整性、AC 可量化、FR/NFR 覆盖 |
-| 2 Plan | `xyz-harness-expert-reviewer`（计划评审模式） | spec↔plan 一致性、任务覆盖 |
-| 3 Dev | 5 个专项 reviewer（BLR/Standards/Taste/Robustness/Integration） | 业务逻辑、规范、品味、健壮性、集成 |
-| 4 Test | `xyz-harness-expert-reviewer`（测试评审模式） | 覆盖度、断言有效性 |
-| 5 PR | 不引入 | 纯汇总 |
+| Phase | Review-Gate | Phase-Gate |
+|-------|------------|------------|
+| 1 Spec | 单次 subagent（spec-requirements-reviewer.md），失败回退 brainstorming | workflow |
+| 2 Plan L1 | 单次 subagent（plan-requirements-reviewer.md），失败回退 plan 编写 | workflow |
+| 2 Plan L2 | 并行 subagent，失败回退 plan 编写 | workflow |
+| 3 Dev | 循环 workflow: parallel 5 reviewer → sync → fix | workflow |
+| 4 Test | 单次 subagent（test-requirements-reviewer.md），失败回退 test 编写 | workflow |
 
 ### 各 Phase 流程变更
 
 #### Phase 1 Spec
 
 ```
-Step 1-6（产出 spec.md）                ← 不变
-    ↓
-review-gate                             ← 替代 "Spec Review" 章节
-    ↓
-phase-gate                              ← 替代 "Gate Handoff"（自动化）
-    ↓
-Retrospect（fork session）               ← 不变
-    ↓
-git push + Phase Transition              ← 不变
+1. [Skill] xyz-harness-brainstorming
+2. [固定] Brainstorming + 用户讨论（多轮）
+3. [固定] 编写 spec 交付物
+4. [Subagent] Review-Gate: spec-requirements-reviewer.md
+   → FAIL: 列出待澄清问题，回退到步骤 2
+   → PASS: 自动触发 Phase-Gate
+5. [Workflow] Phase-Gate: 循环 deliverables-reviewer.md → script → 防造假
+6. [Subagent] Retrospect (fork session)
 ```
 
-SKILL.md 改动：删除 "Spec Review" + "Gate Handoff" 章节，改为 "完成后调用 review-gate"。
+SKILL.md 改动：删除 "Spec Review" + "Gate Handoff" 章节。
 
 #### Phase 2 Plan
 

@@ -36,35 +36,63 @@ Phase 内部用步骤编排（review-gate 循环、parallel subagent）表达细
 
 ## Decision
 
-### 整体流程
+### 两层 Gate 设计
+
+每个 phase 有两层 gate，职责不同：
+
+| Gate | 审查内容 | 模式 |
+|------|---------|------|
+| **Review-Gate** | 需求/内容质量 | Phase 1/2/4: 单次检查；Phase 3: 循环 workflow |
+| **Phase-Gate** | 文档格式 + 防造假 | 所有 Phase: 统一 workflow |
+
+**执行顺序**：Review-Gate 通过 → 自动触发 Phase-Gate。
+
+**Review-Gate 的两种模式**：
 
 ```
-主 Agent 产出 → 调用 review-gate tool
-                    ↓
-            ┌─ dispatch reviewer subagent ─┐
-            │         ↓                    │
-            │   解析 must_fix 数量          │
-            │         ↓                    │
-            │   must_fix > 0 ?             │
-            │   YES → 注入修复指导给主 agent │
-            │         ↓                    │
-            │   主 agent 修复后重新调用      │
-            │   review-gate                │
-            │         ↓                    │
-            └── NO → 通过 ─────────────────┘
-                    ↓
-            自动进入 phase-gate
+Phase 1/2/4（需求审查，无循环）:
+  subagent 检查需求完整性
+  → FAIL: 列出待澄清问题，回退到上游步骤
+  → PASS: 自动触发 phase-gate
+
+Phase 3（代码审查，循环 workflow）:
+  ┌─ parallel review ─┐
+  │  reviewer_1..N     │
+  └───────────────────┘
+          ↓
+  sync（去重+排序+依赖分析 → fix-plan.md）
+          ↓
+  fix worker（串行修复 + git commit）
+          ↓
+  must_fix > 0 ? → Round N+1 : passed
 ```
+
+**Phase-Gate 统一模式**（所有 phase 相同）：
+
+```
+Phase-Gate Workflow:
+  1. 循环: doc-review-and-fix（直到无 MUST-FIX）
+  2. 固定脚本: Python gate script
+  3. 防造假检查
+  4. 通过 → dispatch retrospect subagent
+```
+
+**为什么 Phase 1/2/4 的 Review-Gate 不做循环**：
+审查的是人类可判断的需求完整性，失败的根因是理解不足，需要回到上游步骤重新讨论。subagent 循环无法解决"需求没想清楚"的问题。
+
+**为什么 Phase 3 的 Review-Gate 做循环**：
+审查的是代码质量，失败的根因是代码错误，subagent 可以自动修复。
 
 ### 5 阶段适配性
 
-| 阶段 | Review-Gate | Reviewer Skill | 审查内容 |
-|------|-------------|---------------|---------|
-| Phase 1 Spec | ✅ 引入 | `xyz-harness-expert-reviewer`（计划评审模式） | spec 完整性、AC 可量化、FR/NFR 覆盖 |
-| Phase 2 Plan | ✅ 引入 | `xyz-harness-expert-reviewer`（计划评审模式） | spec↔plan 一致性、任务覆盖、AC 矩阵、Execution Groups |
-| Phase 3 Dev | ✅ 引入（最高优先） | 5 个专项 reviewer（见下表） | 业务逻辑、规范、品味、健壮性、集成 |
-| Phase 4 Test | ✅ 引入 | `xyz-harness-expert-reviewer`（测试评审模式） | 覆盖度、断言有效性、mock 合理性 |
-| Phase 5 PR | ❌ 不引入 | — | 纯汇总，前 4 阶段已保证 |
+| 阶段 | Review-Gate | Review-Gate Agent | Phase-Gate |
+|------|-------------|-------------------|------------|
+| Phase 1 Spec | ✅ 单次检查 | `spec-requirements-reviewer.md` | ✅ workflow |
+| Phase 2 Plan L1 | ✅ 单次检查 | `plan-requirements-reviewer.md` | ✅ workflow |
+| Phase 2 Plan L2 | ✅ 并行检查 | `plan-requirements-reviewer.md` + `plan-bl-requirements-reviewer.md` | ✅ workflow |
+| Phase 3 Dev | ✅ 循环 workflow | 5 个现有 SKILL.md | ✅ workflow |
+| Phase 4 Test | ✅ 单次检查 | `test-requirements-reviewer.md` | ✅ workflow |
+| Phase 5 PR | ❌ 不引入 | — | ✅ workflow |
 
 ### Phase 3 Dev 的 5 维度审查
 
@@ -193,14 +221,15 @@ Round N:
 | **依赖分析** | 标注哪些问题涉及同一文件/函数，需要一起修复 |
 | **生成 fix-plan.md** | fix worker 需要合并后的问题清单，不是 N 份独立报告 |
 
-### 各 Phase 的节点配置
+### 各 Phase 的 Gate 配置
 
-| Phase | L1 节点 | L2 节点 | 原因 |
-|-------|---------|---------|------|
-| 1 Spec | 2（review→fix） | — | 单 reviewer，无 L2 分级 |
-| 2 Plan | 2（review→fix） | 3（parallel→sync→fix） | L1 单 reviewer；L2 双 reviewer（plan + bl）需 parallel + sync |
-| 3 Dev | — | 3（parallel→sync→fix） | 5 维度需并行 + 去重（统一 3 节点，无 L1 模式） |
-| 4 Test | 2（review→fix） | — | 单 reviewer，无 L2 分级 |
+| Phase | Review-Gate | Phase-Gate |
+|-------|------------|------------|
+| 1 Spec | 单次 subagent（spec-requirements-reviewer.md），失败回退 brainstorming | workflow: 循环 deliverables-reviewer.md → script → 防造假 |
+| 2 Plan L1 | 单次 subagent（plan-requirements-reviewer.md），失败回退 plan 编写 | workflow: 循环 deliverables-reviewer.md → script → 防造假 |
+| 2 Plan L2 | 并行 subagent（plan-requirements + plan-bl-reviewer），失败回退 plan 编写 | workflow: 循环 deliverables-reviewer.md → script → 防造假 |
+| 3 Dev | 循环 workflow: parallel 5 reviewer → sync → fix，最多 3 轮 | workflow: 循环 deliverables-reviewer.md → script → 防造假 |
+| 4 Test | 单次 subagent（test-requirements-reviewer.md），失败回退 test 编写 | workflow: 循环 deliverables-reviewer.md → script → 防造假 |
 
 ## Reviewer Agent 设计
 
@@ -213,13 +242,13 @@ Round N:
 
 ### Agent 文件规划
 
-| Phase | Agent 文件 | 位置 | 来源 |
-|-------|-----------|------|------|
-| 1 Spec | `spec-reviewer.md` | `~/.pi/agent/agents/` | **新建**，参考 superpowers spec-document-reviewer |
-| 2 Plan | `plan-reviewer.md` | `~/.pi/agent/agents/` | **新建**，审查总纲+通用交付物 |
-| 2 Plan (L2) | `plan-bl-reviewer.md` | `~/.pi/agent/agents/` | **新建**，审查接口契约+子文档 |
-| 3 Dev | 现有 5 个 SKILL.md | `extensions/coding-workflow/skills/` | **不新建**，已有专项 reviewer |
-| 4 Test | `test-reviewer.md` | `~/.pi/agent/agents/` | **新建**，基于 expert-reviewer 测试评审模式 |
+| Phase | Review-Gate Agent | Phase-Gate Agent |
+|-------|-------------------|-----------------|
+| 1 Spec | `spec-requirements-reviewer.md` | `deliverables-reviewer.md`（通用） |
+| 2 Plan L1 | `plan-requirements-reviewer.md` | `deliverables-reviewer.md` |
+| 2 Plan L2 | `plan-requirements-reviewer.md` + `plan-bl-requirements-reviewer.md` | `deliverables-reviewer.md` |
+| 3 Dev | 5 个现有 SKILL.md + `sync-agent.md` | `deliverables-reviewer.md` |
+| 4 Test | `test-requirements-reviewer.md` | `deliverables-reviewer.md` |
 
 ### Agent.md 结构模板
 
@@ -436,10 +465,10 @@ gates:
 
 ## 职责分离
 
-| 机制 | 职责 | 审查者 | 循环 |
-|------|------|--------|------|
-| **Review-Gate**（新） | 内容质量审查 | content reviewer subagent | review-fix-review 直到 must_fix=0 |
-| **Phase-Gate**（现有） | 脚本检查 + 反欺诈 | gate-reviewer subagent | gate 脚本 retry（最多 10 次） |
+| 机制 | 审查内容 | 失败行为 | 执行者 |
+|------|---------|---------|--------|
+| **Review-Gate** | 需求完整性/代码质量 | Phase 1/2/4: 回退上游步骤；Phase 3: 循环修复 | 独立 subagent |
+| **Phase-Gate** | 文档格式 + 防造假 | 循环修复直到通过 | Workflow（循环 doc-fix → script → 防造假） |
 
 执行顺序：Review-Gate 通过 → 自动进入 Phase-Gate。
 
