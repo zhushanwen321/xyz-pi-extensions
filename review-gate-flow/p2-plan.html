@@ -63,7 +63,7 @@ code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:10px;
   <div class="arr">→</div>
   <div class="node skill" style="flex:1"><div class="tag">主 Agent</div><div class="title">复杂度评估</div><div class="info"><span class="tab l1">L1</span><span class="tab l2">L2</span></div></div>
   <div class="arr">→</div>
-  <div class="node goal" style="flex:1.2"><div class="tag">Goal（自动注入）</div><div class="title">phase-start 自动初始化</div><div class="info">initializeGoalFromExternal()<br>根据 L1/L2 写入任务列表</div></div>
+  <div class="node goal" style="flex:1.2"><div class="tag">Goal（自动注入）</div><div class="title">phase-start 初始化</div><div class="info">先注入 L1 默认任务<br>评估 L2 后 add_tasks 追加</div></div>
   <div class="arr">→</div>
   <div class="node skill" style="flex:2.5"><div class="tag">主 Agent</div><div class="title">按 Step 顺序编写 plan 交付物</div><div class="info">不并行、不用 subagent、按序执行</div></div>
   <div class="arr">→</div>
@@ -74,7 +74,7 @@ code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:10px;
 <div class="flow">
   <div class="node wf" style="flex:2.5"><div class="tag">Workflow</div><div class="title">Review-Gate（循环）</div><div class="info">agent 审查+修复 → 判断退出 → 最多 3 轮</div></div>
   <div class="arr">→</div>
-  <div class="node gate" style="flex:2"><div class="tag">Phase-Gate</div><div class="title">脚本检查</div><div class="info">文档完整性 + YAML + placeholder</div></div>
+  <div class="node gate" style="flex:2"><div class="tag">Phase-Gate</div><div class="title">脚本检查</div><div class="info">文档完整性 + YAML + placeholder（最多 5 次）</div></div>
   <div class="arr">→</div>
   <div class="node retro" style="flex:1"><div class="tag">Subagent</div><div class="title">Retrospect</div><div class="info">fork session</div></div>
 </div>
@@ -83,21 +83,20 @@ code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:10px;
 <div class="detail purple">
   <h3>Review-Gate 内部（Workflow 循环）</h3>
   <div class="loop">
-    <div class="lp disp">Agent: plan-requirements-reviewer.md（+ L2: plan-bl-requirements-reviewer.md 并行）</div><div class="la">→</div>
+    <div class="lp disp">Agent: plan-requirements-reviewer.md（+ L2: plan-bl-requirements-reviewer.md 串行）</div><div class="la">→</div>
     <div class="lp chk">must_fix = 0?</div><div class="la">→</div>
     <div class="lp fix">YES → 继续循环</div><div class="la">|</div>
     <div class="lp disp">NO → 通过</div>
   </div>
-  <div class="note">最多 3 轮。L2 时两个 reviewer 并行审查。</div>
+  <div class="note">最多 3 轮。L2 时两个 reviewer 串行执行（避免同时修改文件冲突）。</div>
 </div>
 
 <!-- Phase-Gate Detail -->
 <div class="detail red">
-  <h3>Phase-Gate（脚本检查）</h3>
-  <table><tr><th>检查项</th><th>说明</th></tr>
-  <tr><td>文档完整性</td><td>所有必需交付物存在且非空</td></tr>
-  <tr><td>YAML frontmatter</td><td>格式正确，字段合法</td></tr>
-  <tr><td>Placeholder 扫描</td><td>无 TODO / TBD / 待填写</td></tr></table>
+  <h3>Phase-Gate（2 步）</h3>
+  <table><tr><th>步骤</th><th>执行者</th><th>说明</th></tr>
+  <tr><td>1. 脚本检查</td><td>脚本</td><td>文档完整性 + YAML frontmatter + placeholder 扫描</td></tr>
+  <tr><td>2. 防伪造检查</td><td>AI Agent</td><td>验证文档内容非空、非占位</td></tr></table>
   <div class="fail-arrow">FAIL → 打回主 agent 修复 → 修复后直接重新提交 phase-gate（跳过 review-gate）</div>
 </div>
 
@@ -139,12 +138,11 @@ code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:10px;
 <div class="detail blue">
   <h3>Goal 自动注入方式</h3>
   <div style="font-size:11px;color:var(--dm)">
-    Phase 2 进入时（<code>executePhaseStartTool</code> compact 后），coding-workflow 自动调用 goal extension 导出的 <code>initializeGoalFromExternal()</code> API。<br>
-    根据 L1/L2 复杂度写入不同的任务列表。主 agent 不需要用户手动触发 <code>/goal</code>，后续调用 <code>goal_manager.update_tasks</code> 追踪进度。
+    Phase 2 入口时先注入 L1 默认任务（3 个）。Steering prompt 指导主 agent 先做复杂度评估，评估为 L2 后调用 <code>goal_manager.add_tasks()</code> 追加 4 个额外任务。
   </div>
-  <table style="margin-top:8px"><tr><th>复杂度</th><th>任务列表</th></tr>
-  <tr><td><span class="tab l1">L1</span></td><td>plan.md → e2e-test-plan.md + test_cases_template.json → use-cases.md + non-functional-design.md</td></tr>
-  <tr><td><span class="tab l2">L2</span></td><td>plan.md → plan-api-contract.md → plan-backend.md + plan-frontend.md → interface_chain.json → e2e-test-plan.md + test_cases_template.json → use-cases.md + non-functional-design.md</td></tr></table>
+  <table style="margin-top:8px"><tr><th>阶段</th><th>任务</th></tr>
+  <tr><td>入口注入（L1 默认）</td><td>plan.md → e2e-test-plan.md + test_cases_template.json → use-cases.md + non-functional-design.md</td></tr>
+  <tr><td>L2 追加（评估后）</td><td>plan-api-contract.md → plan-backend.md → plan-frontend.md → interface_chain.json</td></tr></table>
 </div>
 
 </div></body></html>

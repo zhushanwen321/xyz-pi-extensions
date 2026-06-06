@@ -9,7 +9,8 @@
 | 阶段 | Phase 3 Dev（编码实现） |
 | Skill | `xyz-harness-phase-dev` |
 | 执行者 | 主 Agent + Subagent（按 Wave 编码）+ Workflow（Review-Gate） |
-| 产出物 | 代码 + 测试 + review 报告（6 份）+ test_results.md + retrospect |
+| 测试范围 | **单元测试**（TDD 产出，与代码一起编写） |
+| 产出物 | 代码 + 单元测试 + review 报告（6 份）+ test_results.md + retrospect |
 
 ## 完整流程
 
@@ -45,6 +46,28 @@ Task N+3: 写 test_results.md + git commit + push
 **Task 1 完成标准**：测试文件存在，运行后全部失败（RED 状态）——TDD 的起点。
 
 **Task 2..N-1 完成标准**：对应 Wave 的所有测试通过（GREEN 状态）。
+
+## 测试分层：Phase 3 负责单元测试
+
+| 测试类型 | Phase | 说明 |
+|---------|-------|------|
+| **单元测试** | **Phase 3** | TDD 流程内产出，测试单个函数/模块/组件的逻辑 |
+| API 集成测试 | Phase 4 | 测试多模块协作、API 契约 |
+| E2E 测试（API 端到端） | Phase 4 | 测试完整 API 链路 |
+| E2E 测试（UI 端到端） | Phase 4 | Playwright 测试完整用户流程 |
+
+**Phase 3 的单元测试范围**：
+- 函数级：纯逻辑函数的输入输出测试
+- 模块级：单个模块/服务的公开接口测试
+- 组件级（前端）：Vue/React 组件的 props/events/render 测试
+- TDD 红-绿-重构循环产出的所有测试
+
+**不属于 Phase 3 的测试**：
+- 需要多个 Execution Group 完成后才能运行的测试（→ Phase 4 集成测试）
+- 需要完整前后端联调的测试（→ Phase 4 E2E 测试）
+- 需要真实数据库/网络连接的测试（→ Phase 4 集成测试，Phase 3 用 mock）
+
+**test_results.md 的内容**：Phase 3 的 test_results.md 只记录单元测试的运行结果。格式中应区分 `type: unit`。
 
 **API 调用**：
 ```typescript
@@ -90,7 +113,7 @@ FAIL → 退出 workflow → 主 agent 重新启动 goal → 检查缺失能力
      → 重新拆分 Wave → 编码 → 测试验证 → commit → 重新提交 review-gate
 ```
 
-打回主 agent 后不回到 review-gate，而是回到编码阶段：
+打回主 agent 后不回到 review-gate，而是回到编码阶段。**这与 Phase 1/2 不同**：Phase 1/2 review-gate 失败后循环内 agent 直接修复（文档修改成本低），Phase 3 review-gate 失败后回到主 agent 编码（代码修改成本高，需要重新 TDD → 测试 → commit）。
 1. 重新启动 goal（`initializeGoalFromExternal()` 或重置现有 goal 状态）
 2. 主 agent 分析 spec-plan-conformance 报告中的问题
 3. 重新拆分 Wave（可能需要调整 Execution Groups）
@@ -108,7 +131,9 @@ FAIL → 退出 workflow → 主 agent 重新启动 goal → 检查缺失能力
 | Code Quality | `fallow audit --format json` | 变更文件 | fallow_report_v{N}.md |
 | Integration | `xyz-harness-integration-reviewer` | 源代码 | integration_review_v{N}.md |
 
-**Fallow 审查**：`fallow audit --format json --base main`，对变更文件做 dead-code + complexity + duplication 综合审计。退出码 1 = "issues found"（正常），需要 `|| true`。
+**Fallow 审查**：通过 `fallow-reviewer.md`（新建 agent）包装 `fallow audit --format json --base main` 调用。该 agent 在 task prompt 中执行 fallow CLI，将 JSON 结果转为结构化 review 报告。退出码 1 = "issues found"（正常），需要 `|| true`。
+
+**注意**：fallow 是 CLI 工具不是 SKILL.md，不能直接用 workflow 的 `agent()` 调用。需要 `fallow-reviewer.md` 作为 agent 包装层——它读取 fallow 的 JSON 输出，提取 error 级别问题（unused-export/unused-dep/boundary-violation），格式化为统一的 review 报告（YAML frontmatter + must_fix 计数）。
 
 **Step 2: Fix Worker（汇总 + 判断 + 修复）**
 
@@ -116,12 +141,13 @@ Fix Worker 同时负责汇总判断和修复，一个节点完成：
 1. 汇总 5 个 reviewer 的 must_fix 计数
 2. must_fix = 0 → **Review-Gate PASSED** → 进入 Phase-Gate
 3. must_fix > 0 → 进入修复流程：
-   - 收集所有 must_fix 项，按涉及文件分组
-   - 分析文件间依赖关系（A 文件的修复依赖 B 文件先修好）
-   - 按 Wave 拆分修复任务（同 Wave 无依赖可并行）
-   - 按 Wave 执行 subagent 修复
-   - git commit
+   - 收集所有 must_fix 项，**按涉及文件分组**（不是按 Wave 分组）
+   - 同一文件的所有 must_fix（可能来自多个 reviewer）由**同一个 subagent 串行处理**，避免并行修改同一文件导致冲突
+   - 不同文件之间可以并行（但每个文件独占一个 subagent）
+   - 所有修复完成后 git commit
    - 回到 Step 1 重新并行审查
+
+**修复粒度**：文件级分组，不是 Wave 级分组。原因：多个 reviewer 可能对同一文件发现问题（如 `auth.ts` 同时有 standards 和 robustness 问题），并行修复同一文件会冲突。
 
 **循环终止条件**：
 
@@ -146,6 +172,12 @@ Fix Worker 同时负责汇总判断和修复，一个节点完成：
 - review 报告内容非空（不是空文件或占位符）
 - test_results.md 包含实际命令输出（不是编造的）
 - 代码变更真实存在（git diff 有实际改动）
+
+**版本号规则**：review 报告文件名中的 `{N}` 随修复轮数递增（v1→v2→v3）。Phase-Gate 只检查最新版本（N = 最大轮数），旧版本保留供参考但不纳入 gate 检查。
+
+**git diff 基准**：每轮并行审查中所有 reviewer 统一使用 `git diff main`（或 `git diff origin/main`），而不是累积 diff。Fix Worker commit 后，下一轮 reviewer 看到的是新的完整 diff。
+
+**Integration reviewer 输入源**：阶段一的 spec-plan-conformance-reviewer 报告中包含「模拟数据路径」字段，列出用于验证集成接口的模拟数据文件路径。Integration reviewer 读取该字段获取模拟数据，不再依赖独立的 BLR 报告。
 
 **失败处理**：
 - 返回主 agent，告知修复后**直接重新提交 phase-gate**
@@ -208,10 +240,20 @@ Fix Worker 同时负责汇总判断和修复，一个节点完成：
 | `xyz-harness-standards-reviewer` | 复用 SKILL.md | Standards 审查 |
 | `ts-taste-check` / `rust-taste-check` | 复用 SKILL.md | Taste 审查 |
 | `xyz-harness-robustness-reviewer` | 复用 SKILL.md | Robustness 审查 |
-| `fallow`（CLI） | 外部工具 | Code Quality 审查 |
+| `fallow-reviewer.md` | 新建 | Code Quality 审查（包装 fallow CLI，格式化 JSON 为 review 报告） |
 | `xyz-harness-integration-reviewer` | 复用 SKILL.md | Integration 审查 |
 | `fix-worker.md` | 新建 | 阶段二 Fix Worker：汇总 + 判断 + 修复 |
 | `xyz-harness-gate-reviewer` | 复用 SKILL.md | Phase-Gate 防伪造检查 |
+
+### 项目规范文件传递方式
+
+部分 reviewer（standards、taste）需要读取项目自己的规范文件。采用 **subagent 自行查找并读取** 方案：
+
+1. **SKILL.md 定义查找步骤** — 每个 reviewer 的 SKILL.md 中已定义规范文件查找逻辑（如 standards-reviewer 的 Phase A/B 检测 lint 配置 + 读 CLAUDE.md，taste-reviewer 检测项目类型 + 读 `~/.codetaste/essence.md`）
+2. **subagent 自行读取** — subagent 有 `read`/`bash` 工具，按 SKILL.md 指引自行查找和读取。subagent 是独立 `pi --mode json` 进程，读文件不占用主 agent 上下文
+3. **`cwd` 设为项目根目录** — dispatch subagent 时必须将 `cwd` 参数设为项目根目录，确保相对路径（如 `CLAUDE.md`、`pyproject.toml`）能正确解析
+
+**不采用主 agent 预读注入的方案**。原因：项目规范路径不固定（CLAUDE.md / .editorconfig / pyproject.toml / ~/.codetaste/essence.md），subagent 按 SKILL.md 指引查找比主 agent 预判更灵活，且避免主 agent 上下文被规范内容膨胀。
 
 ## 可视化
 

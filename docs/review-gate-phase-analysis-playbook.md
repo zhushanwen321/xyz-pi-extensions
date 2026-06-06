@@ -1,43 +1,68 @@
 # Review-Gate Phase 分析范式
 
-用于分析每个 phase 的 gate 配置。每个 phase 有两层 gate:review-gate(需求/内容审查)和 phase-gate(文档格式审查),顺序执行。
+用于分析每个 phase 的 gate 配置。**权威文档以 `docs/phase-specs/phase-{1-4}-*.md` 为准,本文档是交叉引用摘要。**
 
 ## Gate 分层设计
 
-### Review-Gate(需求/内容审查)
+### 总览
 
-审查交付物的**内容质量**:需求是否穷尽、逻辑是否正确、设计是否合理。
+| Phase | Review-Gate 模式 | Phase-Gate 模式 |
+|-------|------------------|------------------|
+| 1 Spec | ✅ Workflow 循环(agent 审查+修复,最多 3 轮) | 2 步:脚本检查 + AI Agent 防伪造 |
+| 2 Plan | ✅ Workflow 循环(agent 审查+修复,最多 3 轮) | 2 步:脚本检查 + AI Agent 防伪造 |
+| 3 Dev | ✅ Workflow 循环(前置审查 + 并行 6 维度,最多 3 轮) | 2 步:脚本检查 + AI Agent 防伪造(严格) |
+| 4 Test | ❌ **无 Review-Gate**(Test-Fix Loop 替代) | 3 步:脚本检查 + 一致性检查 + 深度质疑(最严格) |
+| 5 PR | ❌ 无 | 2 步:脚本检查 + AI Agent 防伪造 |
 
-| Phase | 模式 | 失败行为 |
-|-------|------|---------|
-| 1 Spec | Workflow 循环(agent 审查+修复) | 循环内自动修复,最多 3 轮 |
-| 2 Plan | Workflow 循环(agent 审查+修复) | 循环内自动修复,最多 3 轮 |
-| 3 Dev | 循环 workflow(parallel review → sync → fix) | 循环内自动修复,最多 3 轮 |
-| 4 Test | Workflow 循环(agent 审查+修复) | 循环内自动修复,最多 3 轮 |
+### Review-Gate(Phase 1/2/3 内容质量审查)
 
-**说明**:所有 phase 的 review-gate 都是 workflow 循环模式。Phase 3 差异在于多维度并行审查 + sync-agent,其他 phase 是单个 agent 审查+修复。循环内 reviewer 发现问题后直接修复,修完重新审查,直到 must_fix=0。
+审查交付物的**内容质量**:需求是否穷尽、逻辑是否正确、代码是否符合 spec+plan。
 
-### Phase-Gate(文档格式检查)
+**Phase 1/2**:单个 agent 审查+修复循环。agent 发现问题后直接修复,修完重新审查,直到 must_fix=0。
 
-所有 phase 共享简化的脚本检查模式。**一次性脚本检查,失败打回主 agent。**
+**Phase 3**:两阶段循环。阶段一:spec-plan-conformance-reviewer(独立循环,代码是否符合 spec+plan)。阶段二:6 维度并行审查(BLR/Standards/Taste/Robustness/Fallow/Integration)+ sync-agent + Fix Worker。
 
-```
-Phase-Gate 执行:
-  1. 统一脚本检查:文档完整性 + YAML frontmatter + placeholder 扫描
-  2. 通过 → dispatch retrospect subagent
-  3. 失败 → 返回主 agent,告知修复后直接重新提交 phase-gate
-     (跳过 review-gate,因为内容质量已在 review-gate 中通过)
-```
+**Phase 4 不需要 Review-Gate**--Test-Fix Loop Workflow 替代了内容审查角色。测试-修复循环本身保障了测试质量(每个 case 必须通过或充分跳过),Phase-Gate 的严格防伪造检查替代了 review-gate 的质量验证。
 
-Phase-gate 不关心内容是否正确(那是 review-gate 的职责),只关心格式是否合规。
+### Phase-Gate(所有 phase 统一 2 步模式)
+
+所有 phase 共享统一的 2 步 Phase-Gate:
+
+| 步骤 | 执行者 | 说明 |
+|------|--------|------|
+| 1. 脚本检查 | 脚本 | 文档完整性 + YAML frontmatter + placeholder 扫描 |
+| 2. 防伪造检查 | AI Agent(gate-reviewer subagent) | 验证内容非空、非占位、非伪造 |
+
+**严格度分级**:
+
+| Phase | 脚本检查 | 防伪造严格度 |
+|-------|---------|-------------|
+| 1/2 Spec/Plan | ✅ | 🟡 标准:验证内容非空、非占位 |
+| 3 Dev | ✅ | 🔴 严格:额外验证代码变更真实存在、review 报告非伪造 |
+| 4 Test | ✅ | 🔴🔴 最严格:3 层次(脚本 + 一致性比对 + 深度质疑),核心 case 逐条比对,非核心抽查 |
+| 5 PR | ✅ | 🟡 标准 |
+
+**失败处理**:返回主 agent,告知修复后**直接重新提交 phase-gate**(跳过 review-gate,因为内容质量已在 review-gate 或 test-fix loop 中通过)。
+
+Phase-Gate 不关心内容是否正确(那是 review-gate/test-fix loop 的职责),只关心格式合规和真实性。
 
 ### 两层 Gate 的关系
 
 ```
-Review-Gate PASSED → 自动触发 Phase-Gate → Phase-Gate PASSED → Retrospect → 下一 Phase
+Phase 1/2/3:
+  Review-Gate PASSED → 自动触发 Phase-Gate → Phase-Gate PASSED → Retrospect
+
+Phase 4:
+  Test-Fix Loop PASSED → 直接触发 Phase-Gate → Phase-Gate PASSED → Retrospect
+
+Phase 5:
+  Phase-Gate PASSED → Overall Retrospect
 ```
 
-主 agent 只感知到调一次 `coding-workflow-gate(phase=N)`,gate tool 内部先跑 review-gate 再跑 phase-gate。
+主 agent 只感知到调一次 `coding-workflow-gate(phase=N)`。gate tool 内部按 phase 路由:
+- Phase 1/2/3:先跑 review-gate,再跑 phase-gate
+- Phase 4:先跑 test-fix loop workflow,再跑 phase-gate
+- Phase 5:只跑 phase-gate
 
 ## 分析步骤
 
@@ -54,7 +79,7 @@ Review-Gate PASSED → 自动触发 Phase-Gate → Phase-Gate PASSED → Retrosp
 
 | 问题 | 选项 |
 |------|------|
-| 模式? | 单次检查(Phase 1/2/4)/ 循环 workflow(Phase 3) |
+| 模式? | Phase 1/2/3: 循环 workflow; Phase 4: 无(test-fix loop 替代) |
 | 需要几个 reviewer? | 1 个 / 多个 |
 | 是否有复杂度分级(L1/L2)? | 是(每级独立配置)/ 否 |
 | 需要 agent.md 还是复用现有? | 新建 agent.md / 复用现有 SKILL.md |
@@ -67,14 +92,16 @@ Review-Gate PASSED → 自动触发 Phase-Gate → Phase-Gate PASSED → Retrosp
 
 ### 3 Phase-Gate 配置
 
-所有 phase 共享简化的脚本检查模式。**不再是 workflow 循环**,而是一次性脚本检查。
+所有 phase 共享统一的 2 步 Phase-Gate:脚本检查 + AI Agent 防伪造检查。
 
 | 组件 | 说明 |
 |------|------|
-| 统一脚本检查 | 检查文档完整性、YAML frontmatter 格式、placeholder 扫描、字段合法性 |
-| 失败处理 | 返回主 agent,告知修复后直接重新提交 phase-gate(**不再经过 review-gate**) |
+| 脚本检查 | 文档完整性 + YAML frontmatter + placeholder 扫描 |
+| 防伪造检查 | AI Agent 验证内容非空、非占位、非伪造 |
 
-**关键变更**:Phase-Gate 不再内部循环 doc-review-and-fix。原因:格式问题通常简单且机械,主 agent 自己就能修,不需要 subagent 循环。失败后直接打回主 agent 修复,修复后**直接重新提交 phase-gate**(跳过 review-gate,因为内容质量已经在 review-gate 中通过)。
+**严格度按 phase 分级**(见上方 Phase-Gate 表格)。Phase 4 的防伪造最严格(3 层次:脚本 + 一致性比对 + 深度质疑)。
+
+**失败处理**:返回主 agent 修复,修复后**直接重新提交 phase-gate**(跳过 review-gate/test-fix loop,因为内容质量已在前面通过)。
 
 ### 4 循环终止条件
 
@@ -86,11 +113,11 @@ Review-Gate PASSED → 自动触发 Phase-Gate → Phase-Gate PASSED → Retrosp
 | 达到最大轮数(3) | 强制通过(警告) |
 | 连续 2 轮 must_fix 不降 | 人工介入 |
 
-**Phase-Gate(所有 phase,脚本检查)**:
+**Phase-Gate(所有 phase,2 步检查)**:
 
 | 条件 | 行为 |
 |------|------|
-| 脚本检查全部通过 | 通过,进入 retrospect |
+| 脚本检查 + 防伪造检查全部通过 | 通过,进入 retrospect |
 | 有失败项 | 返回主 agent 修复,修复后直接重新提交 phase-gate |
 
 ### 5 与现有流程的变更点
@@ -253,28 +280,26 @@ Step 3: use-cases.md + non-functional-design.md
 8. [Subagent] Retrospect (fork session)
 ```
 
-**Goal 工具注入方式**:
+**Goal 工具注入方式**：
 
-Phase 2 进入时(`executePhaseStartTool` compact 后),coding-workflow 自动调用 goal extension 导出的 `initializeGoalFromExternal()` API,根据 L1/L2 复杂度写入不同的任务列表:
+Phase 2 进入时（`executePhaseStartTool` 入口），先注入 L1 默认任务列表。Steering prompt 指导主 agent 先做复杂度评估，评估为 L2 后调用 `goal_manager.add_tasks()` 追加额外任务。
+
+**L1 默认任务**（入口注入）：
+1. Write plan.md (with Execution Groups)
+2. Write e2e-test-plan.md + test_cases_template.json
+3. Write use-cases.md + non-functional-design.md
+
+**L2 追加任务**（评估为 L2 后追加）：
+4. Write plan-api-contract.md
+5. Write plan-backend.md
+6. Write plan-frontend.md
+7. Write interface_chain.json
 
 ```typescript
-const L1_TASKS = [
-  "Write plan.md (with Execution Groups)",
-  "Write e2e-test-plan.md + test_cases_template.json",
-  "Write use-cases.md + non-functional-design.md",
-];
-
-const L2_TASKS = [
-  "Write plan.md (architecture overview)",
-  "Write plan-api-contract.md",
-  "Write plan-backend.md + plan-frontend.md",
-  "Write interface_chain.json",
-  "Write e2e-test-plan.md + test_cases_template.json",
-  "Write use-cases.md + non-functional-design.md",
-];
+import { initializeGoalFromExternal } from "@zhushanwen/pi-goal";
+initializeGoalFromExternal(pi, ctx, "Phase 2: 完成 plan 阶段交付物", L1_TASKS);
+// steering prompt 指导主 agent 评估后 add_tasks
 ```
-
-主 agent 不需要用户手动触发 `/goal`,goal state 已由 coding-workflow 自动创建。主 agent 后续调用 `goal_manager.update_tasks` 追踪进度。
 
 ### Phase 3 Dev
 
@@ -435,9 +460,9 @@ Review-Gate(Workflow):
 | 脚本检查 | 统一脚本:文档完整性 + YAML frontmatter + placeholder 扫描 |
 | 防伪造检查 | `xyz-harness-gate-reviewer` subagent:验证 review 报告内容非空、test_results 包含实际命令输出、代码变更真实存在 |
 
-**Phase 3 Phase-Gate 与 Phase 1/2 的差异**:
+**Phase 3 Phase-Gate 严格度**：
 
-Phase 1/2 的 Phase-Gate 只做脚本检查。Phase 3 的 Phase-Gate 额外增加防伪造检查,使用现有的 `xyz-harness-gate-reviewer` skill。原因:Phase 3 产出的是代码和测试结果,AI 更容易伪造(编造测试结果、跳过实际运行),需要独立 subagent 验证真实性。
+所有 phase 都是 2 步（脚本检查 + 防伪造检查）。Phase 3 的防伪造比 Phase 1/2 更严格：额外验证代码变更真实存在、review 报告内容非空、test_results 包含实际命令输出。使用现有的 `xyz-harness-gate-reviewer` skill。
 
 #### 4 循环终止条件
 
@@ -572,117 +597,35 @@ function buildDevGoalTasks(groups: ExecutionGroup[]): string[] {
 
 ### Phase 4 Test
 
+> **详细规格见 `docs/phase-specs/phase-4-test.md`。本节为摘要。**
+
 | 步骤 | 配置 |
 |------|------|
-| 1 产出物 | test_execution.json + test_retrospect.md |
-| 2 Review-Gate | Workflow 循环:agent 审查+修复 → 判断退出。最多 3 轮 |
-| 3 Phase-Gate | 脚本检查(文档完整性+YAML+placeholder),失败打回主 agent 直接修复 |
-| 4 终止 | Review-Gate 最多 3 轮;Phase-Gate 脚本通过即止 |
-| 5 变更 | 新增 Goal 追踪 + Wave 并行化 + 不可测试项声明 |
+| 1 产出物 | test-execute-v{N}-core.json + test-execute-v{N}-noncore.json + test_retrospect.md |
+| 2 Review-Gate | ❌ **无**(Test-Fix Loop Workflow 替代) |
+| 3 Test-Fix Loop | 2 个串行 Workflow:先核心业务 case,再非核心 case。无限循环直到全部通过 |
+| 4 Phase-Gate | 3 层次严格防伪造(脚本检查 + 一致性比对 + 深度质疑) |
+| 5 终止 | Loop 最大 10 Turn 或连续 3 轮 failed 不降 |
+| 6 变更 | 去掉 Review-Gate;新增 Test-Fix Loop;Phase-Gate 最严格 |
 
-#### 1 产出物分析
+#### 核心机制:Test-Fix Loop Workflow
 
-| 问题 | 答案 |
-|------|------|
-| 产出物是什么? | test_execution.json(测试执行记录)+ test_retrospect.md |
-| 产出物复杂度? | **中**(测试用例数取决于 plan,可能有 10-50 个用例) |
-| 内容审查重点? | 测试覆盖度、断言有效性、失败用例修复质量 |
-| 格式审查重点? | test_execution.json 格式(round/passed/caseId 字段) |
+Phase 4 与其他 phase 的核心区别:**测试需要反复执行(测试→修复→重测)**,不是一次性 Wave 并行。因此用 Workflow Loop 替代 Review-Gate。
 
-#### 2 Review-Gate 配置
+Loop 内部:构造/读取版本化 test-execute JSON → Wave 并行测试 → 汇总判断 → Fix Worker 修复 → 回到 Loop 顶部。
 
-| 问题 | 答案 |
-|------|------|
-| 模式? | **Workflow 循环** |
-| 需要几个 reviewer? | **1 个**(test-requirements-reviewer.md) |
+2 个串行 Workflow:Workflow 1(核心业务 case)全部通过后才开始 Workflow 2(非核心 case)。
 
-Agent: `test-requirements-reviewer.md`
-审查内容:测试覆盖度、断言有效性、mock 合理性、边界场景覆盖、不可测试项标记
-输入:test_cases_template.json + test_execution.json + e2e-test-plan.md
-输出:`changes/reviews/phase-4/test_requirements_review_v{N}.md`
+**case 过滤逻辑**:从 test_cases_template.json 构造 test-execute v1 时,**只取 phase=4 的 case**(phase=3 的 unit case 已在 Phase 3 TDD 中执行完毕)。
 
-#### 3 Phase-Gate 配置
+#### Phase-Gate:3 层次严格防伪造
 
-同所有 phase:统一脚本检查(文档完整性+YAML+placeholder),失败打回主 agent 直接修复。
-
-#### 4 循环终止条件
-
-**Review-Gate**:最多 3 轮。must_fix=0 通过。
-
-**Phase-Gate**:脚本检查通过即止。
-
-#### 5 与现有流程的变更点
-
-| 操作 | 目标 |
-|------|------|
-| **新增** | Goal 追踪:用户触发 /goal,每个测试组作为一个任务 |
-| **新增** | Wave 并行化:按 e2e-test-plan.md 中的 Wave 编排 dispatch 测试 subagent |
-| **新增** | 不可测试项声明:从 plan 中提取 manual 类型用例,输出给用户手动验证 |
-| **新增** | Playwright 并行:需要多个 browser 进程时,启动多个 subagent 并行执行 |
-| **保留** | test_execution.json 格式不变 |
-| **保留** | Self-Check 中的 FR→TC 覆盖矩阵 |
-
-**完整流程**:
-```
-1. [Skill] xyz-harness-phase-test
-2. [主 Agent] 读取 test_cases_template.json + e2e-test-plan.md
-3. [主 Agent] 分析依赖关系和并行化机会:
-   - 按用例的 depends_on / test_group / wave 字段构建 DAG
-   - 按环境依赖(backend-only / frontend-only / full-stack)分组
-   - 识别需要 Playwright 的前端测试
-4. [Goal] 用户触发 /goal,每个测试 Wave 作为一个任务:
-   - Wave 1: 独立 API 测试(无依赖)
-   - Wave 2: 依赖 Wave 1 数据的集成测试
-   - Wave N: ...
-   - Final: 不可测试项列表(输出给用户)
-5. [Subagent] 按 Wave 编排执行测试:
-   - 同一 Wave 内的测试用例并行 dispatch(最多 3 个 subagent)
-   - API 测试:curl/httpx 直接调用
-   - Frontend 测试:Playwright browser 进程并行
-   - Integration 测试:service-level 验证
-   - 每个子任务完成一个用例组,写入 test_execution.json 片段
-6. [主 Agent] 合并所有 Wave 的 test_execution.json 片段
-7. [主 Agent] 标记不可测试项(type: manual),输出手动验证清单给用户
-8. [Workflow] Review-Gate(循环):
-   8a. [Agent] test-requirements-reviewer.md 审查 + 直接修复
-   8b. 判断:must_fix = 0 → 通过 / > 0 → 继续循环
-   最多 3 轮
-9. [脚本] Phase-Gate: 统一脚本检查
-   → FAIL: 返回主 agent,告知修复后直接重新提交 phase-gate
-   → PASS: 继续
-10. [Subagent] Retrospect (fork session)
-```
-
-**Wave 并行化示例**:
-
-```
-Wave 1 (3 subagents 并行):
-  Subagent-1: [TC-1-01, TC-1-02] - Auth API 测试
-  Subagent-2: [TC-2-01, TC-2-02] - Config API 测试
-  Subagent-3: [TC-3-01] - Health Check 测试
-
-Wave 2 (2 subagents 并行):
-  Subagent-4: [TC-4-01, TC-4-02] - 需要 Wave 1 创建的用户数据的集成测试
-  Subagent-5: [TC-5-01] - Frontend Playwright 测试(独立 browser 进程)
-
-Final:
-  [TC-6-01] - 手动验证:支付流程(不可自动化)
-  [TC-6-02] - 手动验证:邮件发送
-```
-
-**Playwright 并行说明**:
-- 每个 frontend 测试 subagent 启动独立的 Playwright browser 进程
-- 测试数据隔离:每个 subagent 使用独立的测试用户账号
-- 浏览器调试:subagent 可通过 browser-automation skill 截图定位问题
-- 同一 Wave 内最多 2 个 Playwright subagent(避免资源争抢)
-
-**不可测试项处理**:
-- Phase 2 plan 中标记为 `verification_method: manual` / `type: manual` 的用例
-- Phase 4 输出"手动验证清单"给用户,包含:
-  - 用例 ID + 描述
-  - 手动验证步骤
-  - 预期结果
-- 手动验证结果不进入 test_execution.json(不阻塞 phase-gate)
+| 层次 | 检查内容 | 🔴 核心 | 🟡 非核心 |
+|------|---------|---------|----------|
+| 1. 脚本检查 | JSON 格式 + 最终 version 全部 passed/skipped | ✅ | ✅ |
+| 2. 一致性比对 | test_cases_template.json 与 Phase 2 commit 版本比对 | 逐字节 | 抽查 |
+| 3. 跳过理由质疑 | 每个 skipped case 的理由是否充分 | 必须环境日志 | 文字说明 |
+| 3. 测试结果真实性 | evidence 是否包含实际命令输出 | 必须执行日志 | 通过即可 |
 
 ## Agent 文件规划
 
@@ -692,7 +635,7 @@ Final:
 | 2 Plan L1 | `plan-requirements-reviewer.md` | `deliverables-reviewer.md` |
 | 2 Plan L2 | `plan-requirements-reviewer.md` + `plan-bl-requirements-reviewer.md` | `deliverables-reviewer.md` |
 | 3 Dev | `spec-plan-conformance-reviewer.md`(新建,前置节点)+ 5 个现有 SKILL.md + `fallow`(CLI)+ `sync-agent.md` | `deliverables-reviewer.md` |
-| 4 Test | `test-requirements-reviewer.md` | `deliverables-reviewer.md` |
+| 4 Test | ❌ 无(Test-Fix Loop 替代) | `deliverables-reviewer.md` + 严格 3 层次防伪造 |
 
 ## 分析历史
 
@@ -701,4 +644,4 @@ Final:
 | Spec | 第 3 轮 | Review-Gate 改为 Workflow 循环(agent 审查+修复+判断退出);Phase-Gate 简化为脚本检查(失败打回主 agent 直接修复,不再经过 review-gate);新增 Goal 追踪(用户手动触发) |
 | Plan | 第 3 轮 | 前 4 步(skill/评估/编写/ADR)改为主 agent 顺序执行不用 subagent;新增 Goal 追踪;Review-Gate 改为 Workflow 循环;Phase-Gate 简化 |
 | Dev | 第 4 轮 | 新增前置节点 spec-plan-conformance-reviewer(独立循环)+ Fallow 审查维度;Review-Gate 两阶段:先规格符合性,再并行 5 维度质量审查 |
-| Test | 第 3 轮 | Review-Gate 改为 Workflow 循环；新增 Goal 追踪 + Wave 并行化（按 DAG 编排 subagent）+ Playwright 并行 + 不可测试项声明；Phase-Gate 简化 |
+| Test | 第 4 轮 | 去掉 Review-Gate；改为 Test-Fix Loop Workflow（无限循环，2 个串行 workflow）；Phase-Gate 最严格防伪造（3 层次）；产出物改为 test-execute-v{N}.json（版本化状态管理） |

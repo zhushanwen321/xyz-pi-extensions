@@ -70,7 +70,7 @@ code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:10px;
 <div class="flow">
   <div class="node wf" style="flex:2.5"><div class="tag">Workflow</div><div class="title">Review-Gate（循环）</div><div class="info">agent 审查 + 修复 → 判断退出 → 最多 3 轮</div></div>
   <div class="arr">→</div>
-  <div class="node gate" style="flex:2"><div class="tag">Phase-Gate</div><div class="title">脚本检查</div><div class="info">文档完整性 + YAML + placeholder</div></div>
+  <div class="node gate" style="flex:2"><div class="tag">Phase-Gate</div><div class="title">脚本检查</div><div class="info">文档完整性 + YAML + placeholder（最多 5 次）</div></div>
   <div class="arr">→</div>
   <div class="node retro" style="flex:1"><div class="tag">Subagent</div><div class="title">Retrospect</div><div class="info">fork session</div></div>
 </div>
@@ -92,20 +92,19 @@ code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:10px;
 
 <!-- Phase-Gate Detail -->
 <div class="detail red">
-  <h3>Phase-Gate（脚本检查）</h3>
-  <table><tr><th>检查项</th><th>说明</th></tr>
-  <tr><td>文档完整性</td><td>所有必需交付物存在且非空</td></tr>
-  <tr><td>YAML frontmatter</td><td>格式正确，字段合法</td></tr>
-  <tr><td>Placeholder 扫描</td><td>无 TODO / TBD / 待填写</td></tr></table>
+  <h3>Phase-Gate（2 步）</h3>
+  <table><tr><th>步骤</th><th>执行者</th><th>说明</th></tr>
+  <tr><td>1. 脚本检查</td><td>脚本</td><td>文档完整性 + YAML frontmatter + placeholder 扫描</td></tr>
+  <tr><td>2. 防伪造检查</td><td>AI Agent</td><td>验证文档内容非空、非占位</td></tr></table>
   <div class="fail-arrow">FAIL → 打回主 agent 修复 → 修复后直接重新提交 phase-gate（跳过 review-gate）</div>
 </div>
 
 <!-- Goal Injection -->
 <div class="detail blue">
-  <h3>Goal 工具注入方式</h3>
+  <h3>Goal 自动注入方式</h3>
   <div style="font-size:11px;color:var(--dm)">
-    Phase 1 需要用户手动触发 <code>/goal</code>。SKILL.md 中增加指导“编写 spec 交付物前，建议用户使用 /goal 工具初始化任务追踪”。<br>
-    Steering prompt 在 <code>before_agent_start</code> 时注入，主 agent 收到后提示用户，由用户触发 /goal。
+    Phase 1 进入时，coding-workflow 自动调用 goal extension 导出的 <code>initializeGoalFromExternal()</code> API。<br>
+    自动写入任务列表（每个 spec 交付物一个任务），主 agent 后续调用 <code>goal_manager.update_tasks</code> 追踪进度。不需要用户手动触发 /goal。
   </div>
 </div>
 

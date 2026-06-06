@@ -117,7 +117,7 @@ code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:10px;
       <tr><td>Standards</td><td><code>xyz-harness-standards-reviewer</code></td><td>standards_review_v{N}.md</td></tr>
       <tr><td>Taste</td><td><code>ts-taste-check</code> / <code>rust-taste-check</code></td><td>ts_taste_review_v{N}.md</td></tr>
       <tr><td>Robustness</td><td><code>xyz-harness-robustness-reviewer</code></td><td>robustness_review_v{N}.md</td></tr>
-      <tr style="background:rgba(227,179,65,.06)"><td>Code Quality</td><td><code>fallow audit --format json</code></td><td>fallow_report_v{N}.md</td></tr>
+      <tr style="background:rgba(227,179,65,.06)"><td>Code Quality</td><td><code>fallow-reviewer.md</code>（包装 fallow CLI）</td><td>fallow_report_v{N}.md</td></tr>
       <tr><td>Integration</td><td><code>xyz-harness-integration-reviewer</code></td><td>integration_review_v{N}.md</td></tr>
     </table>
   </div>
@@ -132,24 +132,23 @@ code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:10px;
     </div>
     <div class="loop" style="margin-top:6px">
       <div class="lp fix">收集 must_fix → 按文件分组</div><div class="la">→</div>
-      <div class="lp fix">分析依赖关系 → Wave 拆分</div><div class="la">→</div>
-      <div class="lp fix">按 Wave subagent 修复</div><div class="la">→</div>
+      <div class="lp fix">同文件串行修复，不同文件可并行</div><div class="la">→</div>
       <div class="lp fix">git commit</div><div class="la">→</div>
-      <div class="lp disp">回到 Step 1</div>
+      <div class="lp disp">回到 Step 1（git diff main）</div>
     </div>
-    <div class="note">Fix Worker 同时负责汇总判断和修复，不是单独的 sync-agent。最多 3 轮。</div>
+    <div class="note">修复粒度：文件级分组（非 Wave 级），同文件串行修复避免冲突。每轮 git diff 统一用 <code>git diff main</code>。Phase-Gate 只检查最新版本报告。</div>
   </div>
 
 </div><!-- end gate-call -->
 
 <!-- Phase-Gate -->
 <div class="detail gate-detail">
-  <h3>Phase-Gate（脚本检查 + 防伪造，与 Phase 1/2 不同）</h3>
-  <table><tr><th>检查项</th><th>说明</th></tr>
-  <tr><td>脚本检查</td><td>文档完整性 + YAML frontmatter + placeholder 扫描</td></tr>
-  <tr><td style="color:var(--rd)">防伪造检查</td><td><code>xyz-harness-gate-reviewer</code> subagent:验证 review 报告非空、test_results 包含实际命令输出、代码变更真实存在</td></tr></table>
-  <div class="fail-arrow">FAIL → 打回主 agent 修复 → 修复后直接提交 phase-gate（跳过 review-gate）</div>
-  <div class="note">Phase 1/2 只有脚本检查。Phase 3 额外增加防伪造检查，因为代码和测试结果更容易被 AI 伪造。</div>
+  <h3>Phase-Gate（2 步，阶段二通过后自动触发）</h3>
+  <table><tr><th>步骤</th><th>执行者</th><th>说明</th></tr>
+  <tr><td>1. 脚本检查</td><td>脚本</td><td>文档完整性 + YAML frontmatter + placeholder 扫描（最多 5 次）</td></tr>
+  <tr><td style="color:var(--rd)">2. 防伪造检查</td><td>AI Agent（gate-reviewer subagent）</td><td>验证 review 报告非空、test_results 包含实际命令输出、代码变更真实存在</td></tr></table>
+  <div class="fail-arrow">FAIL → 打回主 agent 修复 → 修复后直接重新提交 phase-gate（跳过 review-gate）</div>
+  <div class="note">Phase 3 的防伪造检查比 Phase 1/2 更严格：额外验证代码变更真实存在、测试结果包含实际命令输出。</div>
 </div>
 
 <!-- Retrospect -->
