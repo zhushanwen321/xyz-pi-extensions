@@ -1,0 +1,32 @@
+{
+  "name": "@zhushanwen/pi-turn-timing",
+  "version": "0.1.0",
+  "description": "Record per-phase execution timing (thinking, text, toolcall generation, tool execution) for each turn",
+  "type": "module",
+  "main": "index.ts",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "keywords": [
+    "pi-package",
+    "extension",
+    "timing",
+    "performance"
+  ],
+  "license": "MIT",
+  "files": [
+    "src/",
+    "index.ts"
+  ],
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "scripts": {
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.8"
+  }
+}
