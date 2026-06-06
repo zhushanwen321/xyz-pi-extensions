@@ -93,14 +93,22 @@ git fetch origin main
 git merge --ff-only origin/main 2>&1 || true
 ```
 
-### 阶段 5: Release Notes + Release
-```bash
-bash ~/.agents/skills/merge-worktree/stages/5-release.sh
-```
+### 阶段 5: 等待 CI 发布完成
+
+**[MANDATORY] npm 发布由 GitHub Actions 自动完成，禁止在本地执行 `pnpm changeset publish` 或 `npm publish`。**
+
+发布流程：
+1. 阶段 4.4 推送 `v*` tag → 触发 `.github/workflows/release.yml`
+2. CI 自动执行 `pnpm changeset publish`（通过 `NPM_TOKEN` secret 认证）
+3. CI 自动创建 GitHub Release（`softprops/action-gh-release`）
+
+等待 CI 完成后，进入阶段 6 验证。
+
+⚠️ **新包首次发布**：如果本次包含全新的 npm 包（之前从未发布过），需要确认 `NPM_TOKEN` 对应的 npm 账号在 `@zhushanwen` scope 下有发布权限。首次需要手动在 npm 网站创建包或用 `npm publish --access public`（需先 `npm login`）。
 
 ### 阶段 6: 交付物验证（项目特化）
 
-以下验证脚本已在本地，直接执行即可：
+确认 CI 发布成功后验证：
 
 ```bash
 for f in extensions/*/package.json shared/*/package.json; do
@@ -108,9 +116,14 @@ for f in extensions/*/package.json shared/*/package.json; do
   PKG_VER=$(node -p "require('$f').version" 2>/dev/null || echo "?")
   if [ -n "$PKG_NAME" ]; then
     npm view "$PKG_NAME@$PKG_VER" version 2>/dev/null && \
-      echo "  $PKG_NAME@$PKG_VER" || echo "  MISSING: $PKG_NAME@$PKG_VER"
+      echo "  ✅ $PKG_NAME@$PKG_VER" || echo "  ❌ MISSING: $PKG_NAME@$PKG_VER"
   fi
 done
+```
+
+也可通过 GitHub Actions 页面确认 release workflow 是否成功：
+```bash
+gh run list --workflow=release.yml --limit=1
 ```
 
 ### 阶段 7: 清理
@@ -121,9 +134,10 @@ bash ~/.agents/skills/merge-worktree/stages/7-cleanup.sh
 ## 项目特化要点
 
 - **版本管理**：changeset 独立版本，子包版本各不同
-- **发布委托**：`scripts/publish.sh` 消费 changeset + bump 根版本
-- **交付物**：npm registry 包，无 GitHub Release assets
-- **Custom Hooks**：当前无
+- **发布方式**：push tag `v*` → GitHub Actions (`release.yml`) 自动 `pnpm changeset publish` + GitHub Release
+- **禁止本地发布**：`pnpm changeset publish` 和 `npm publish` 均由 CI 执行，本地只做 bump + tag + push
+- **新包首次发布**：需确认 npm scope 权限，可能需要手动 `npm login` + `npm publish --access public` 初始化
+- **交付物**：npm registry 包 + GitHub Release（自动生成 release notes）
 
 ---
 
