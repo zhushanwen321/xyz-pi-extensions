@@ -204,6 +204,8 @@ Turn 2+ 不重跑所有 case，只重跑：
 5. git commit（commit message 包含修复的 case ID）
 6. 回到 Loop 顶部，触发 Turn N+1
 
+**与 Phase 3 Fix Worker 的关系**：Phase 4 的 Fix Worker 是独立的，不遵循 Phase 3 Review-Gate 的修复优先级（Taste > Standards > Robustness > Integration）。Phase 4 Fix Worker 的唯一目标是让测试通过，修复优先级按 case 类型决定：核心业务 case > 非核心 case。Phase 3 的 review 报告不作为 Phase 4 Fix Worker 的输入。
+
 ### Loop 退出条件
 
 | 条件 | 行为 |
@@ -340,13 +342,17 @@ Phase 4 没有 Review-Gate（测试-修复循环已保障质量），但 **Phase
 | 状态不一致（JSON 中有 failed case 但 summary 写 all_passed） | 主 agent 审查并修正 → 重新提交 phase-gate |
 | case 一致性问题（test_cases_template.json 被篡改） | 回到 Phase 2 重新确认 |
 
+**最大重试 5 次**（与 Phase 1/2/3 一致）。超过 5 次仍失败时，打回主 agent 并附带最后一次失败报告，由用户决定后续动作。
+
 **关键区分**：**内容格式问题**直接修，**测试实质问题**需回到 Test-Fix Loop。
 
 ### Retrospect 触发
 
-- Phase-Gate **通过**后自动 dispatch Retrospect subagent（fork session）
+- Phase-Gate **通过**后，主 agent dispatch Retrospect subagent（fork session）
 - Phase-Gate **失败**后打回主 agent 修复，修复通过后重新提交 phase-gate，phase-gate 通过后再 dispatch Retrospect
 - Retrospect 始终在 Phase-Gate 通过后触发，不会跳过
+
+**与其他 Phase 一致**：Phase 1/2/3 也是 Phase-Gate 通过后由主 agent dispatch Retrospect（流程图中的 `[Subagent] Retrospect` 步骤）。
 
 ## 主 Agent 与 Subagent 职责分离
 

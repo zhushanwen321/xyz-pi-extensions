@@ -1,6 +1,18 @@
 # 004: Review-Gate 自动循环审查机制
 
-Status: active
+> **⚠️ SUPERSeded — 本文档已被以下文档取代：**
+> - 各 Phase 详细规格：`docs/phase-specs/phase-{1-4}-*.md`
+> - 统一分析范式：`docs/review-gate-phase-analysis-playbook.md`
+> - 架构决策记录：`docs/adr/018-review-gate-auto-loop.md`
+>
+> 本文档的以下设计已变更：
+> - Phase 1/2/4 Review-Gate：从"单次检查无循环"改为"Workflow 循环"
+> - Phase 4：去掉 Review-Gate，改为 Test-Fix Loop Workflow
+> - Phase-Gate：从"统一 workflow 循环 doc-fix"改为"2 步（脚本检查 + AI Agent 防伪造）"
+>
+> 请以上述 phase-specs 和 playbook 为准。
+
+Status: ~~active~~ superseded
 
 ## Phase 划分决策
 
@@ -601,8 +613,8 @@ const L2_TASKS = [
 
 | Phase | 是否自动初始化 Goal | 说明 |
 |-------|-------------------|------|
-| Phase 1 Spec | ❌ 用户手动 `/goal` | spec 交付物较少（3 个），手动触发足够 |
-| Phase 2 Plan | ✅ 自动初始化 | 根据 L1/L2 复杂度生成不同任务列表，避免遗漏 |
+| Phase 1 Spec | ❌ 用户手动 `/goal` | brainstorming 需求未定时不宜自动创建任务，手动触发更准确 |
+| Phase 2 Plan | ✅ 自动初始化 | 入口注入 L1 默认任务，评估为 L2 后通过 add_tasks 追加额外任务 |
 | Phase 3 Dev | ✅ 自动初始化 | 按 spec+plan 的 Execution Groups 生成任务：TDD测试→Wave编码→多轮测试→commit |
 | Phase 4 Test | ❌ 用户手动 `/goal` | 任务较少 |
 | Phase 5 PR | ❌ 不需要 | 纯汇总 |
