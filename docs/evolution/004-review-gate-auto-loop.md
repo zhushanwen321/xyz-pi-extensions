@@ -533,10 +533,85 @@ git push + Phase Transition              ← 不变
 | "Gate Handoff" | **删除**（自动流转） |
 | "Phase Transition" | **简化**（不再手动切换 session） |
 
+## Goal Extension 协作：自动化任务追踪
+
+### 问题
+
+Goal 模式需要用户手动触发 `/goal` 命令启动，AI 无法主动发起。但 coding-workflow 的 Phase 2 需要在进入时自动初始化任务追踪（根据 L1/L2 复杂度生成不同的任务列表）。
+
+### 方案：Goal Extension 导出编程 API
+
+Goal extension 新增导出函数 `initializeGoalFromExternal()`，供 coding-workflow 等 extension 在 tool handler 内部直接调用，绕过 `/goal` 命令的限制。
+
+**Goal Extension 侧改动**：
+
+```typescript
+// goal/src/index.ts 新增导出
+export function initializeGoalFromExternal(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  objective: string,
+  tasks: string[],
+  budget?: Partial<BudgetConfig>,
+): void {
+  // 1. 创建 goal state（复用 createInitialState）
+  // 2. 写入 tasks（生成 id、status=pending）
+  // 3. 持久化到 SessionManager（pi.appendEntry）
+  // 4. 更新 widget（statusline 显示）
+}
+```
+
+**Coding-Workflow 侧调用**：
+
+```typescript
+// coding-workflow/lib/tool-handlers.ts
+import { initializeGoalFromExternal } from "@zhushanwen/pi-goal";
+
+// executePhaseStartTool 中，Phase 2 compact 后的 steering prompt 注入
+if (state.currentPhase === 2) {
+  const complexity = assessComplexity(state.topicDir); // 读 spec 判断 L1/L2
+  const taskList = complexity === "L2" ? L2_TASKS : L1_TASKS;
+  initializeGoalFromExternal(pi, ctx, "Phase 2: 完成 plan 阶段交付物", taskList);
+  // goal state 已创建，主 agent 后续调用 goal_manager.update_tasks 即可追踪
+}
+```
+
+**任务列表定义**：
+
+```typescript
+const L1_TASKS = [
+  "Write plan.md (with Execution Groups)",
+  "Write e2e-test-plan.md + test_cases_template.json",
+  "Write use-cases.md + non-functional-design.md",
+];
+
+const L2_TASKS = [
+  "Write plan.md (architecture overview)",
+  "Write plan-api-contract.md",
+  "Write plan-backend.md + plan-frontend.md",
+  "Write interface_chain.json",
+  "Write e2e-test-plan.md + test_cases_template.json",
+  "Write use-cases.md + non-functional-design.md",
+];
+```
+
+**为什么不用方案 2（直接写 entry）**：goal state 的 schema 由 goal extension 私有定义，直接写 `pi.appendEntry("goal-state", ...)` 会导致 schema 不兼容风险。通过导出函数调用，类型安全有保障，schema 变更时编译器报错。
+
+### 适用范围
+
+| Phase | 是否自动初始化 Goal | 说明 |
+|-------|-------------------|------|
+| Phase 1 Spec | ❌ 用户手动 `/goal` | spec 交付物较少（3 个），手动触发足够 |
+| Phase 2 Plan | ✅ 自动初始化 | 根据 L1/L2 复杂度生成不同任务列表，避免遗漏 |
+| Phase 3 Dev | ✅ 自动初始化 | 按 spec+plan 的 Execution Groups 生成任务：TDD测试→Wave编码→多轮测试→commit |
+| Phase 4 Test | ❌ 用户手动 `/goal` | 任务较少 |
+| Phase 5 PR | ❌ 不需要 | 纯汇总 |
+
 ## 实施优先级
 
-1. **Gate Pipeline 抽象 + 接口定义** — 基础设施
-2. **Phase 3 Dev review-gate（workflow script）** — 收益最大，验证第 3 层编排
-3. **Phase 1-2 Spec/Plan review-gate** — 纯文档循环代价低
-4. **Phase 4 Test review-gate** — 观察 Phase 3 效果后决定
-5. **用户自定义 gate 扩展** — gates.yaml 加载
+1. **Goal Extension 导出 `initializeGoalFromExternal()`** — 基础设施（Phase 2/3 都需要）
+2. **Gate Pipeline 抽象 + 接口定义** — 基础设施
+3. **Phase 3 Dev review-gate（workflow script）** — 收益最大，验证第 3 层编排
+4. **Phase 1-2 Spec/Plan review-gate** — 纯文档循环代价低
+5. **Phase 4 Test review-gate** — 观察 Phase 3 效果后决定
+6. **用户自定义 gate 扩展** — gates.yaml 加载

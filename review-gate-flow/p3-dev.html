@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Phase 3 Dev — Review-Gate 流程</title>
+<style>
+:root{--bg:#0d1017;--sf:#161b22;--bd:#21262d;--tx:#e6edf3;--dm:#7d8590;--bl:#58a6ff;--gn:#3fb950;--or:#d29922;--rd:#f85149;--pu:#bc8cff;--cy:#39d353;--yl:#e3b341;--pk:#db61a2;--te:#2dd4bf;--cf:#34d399}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--tx);font-family:'SF Pro Display',-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.6;padding:32px}
+.wrap{max-width:1400px;margin:0 auto}
+h1{font-size:22px;font-weight:700;margin-bottom:4px}h1 span{color:var(--bl)}
+.desc{color:var(--dm);font-size:13px;margin-bottom:28px}
+.legend{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px;padding:10px 16px;background:var(--sf);border-radius:8px;border:1px solid var(--bd);font-size:11px}
+.lg{display:flex;align-items:center;gap:5px}
+.lc{width:22px;height:14px;border-radius:3px;flex-shrink:0}
+.lc.skill{background:var(--bl)}.lc.fixed{background:var(--te)}.lc.sub{background:var(--gn)}.lc.wf{background:var(--pu)}.lc.gate{background:var(--rd)}.lc.retro{background:var(--pk)}.lc.conf{background:var(--cf)}.lc.fall{background:var(--yl)}.lc.goal{background:var(--cy)}
+.flow{display:flex;align-items:stretch;gap:0;margin-bottom:12px;flex-wrap:wrap}
+.node{padding:10px 14px;border-radius:8px;margin:2px;position:relative;flex:1;min-width:120px}
+.node .tag{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px}
+.node .title{font-size:12px;font-weight:600}
+.node .info{font-size:10px;color:var(--dm);margin-top:2px}
+.node.skill{background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.3)}.node.skill .tag{color:var(--bl)}
+.node.fixed{background:rgba(45,212,191,.08);border:1px solid rgba(45,212,191,.25)}.node.fixed .tag{color:var(--te)}
+.node.sub{background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.3)}.node.sub .tag{color:var(--gn)}
+.node.wf{background:rgba(188,140,255,.1);border:1px solid rgba(188,140,255,.3)}.node.wf .tag{color:var(--pu)}
+.node.gate{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3)}.node.gate .tag{color:var(--rd)}
+.node.retro{background:rgba(219,97,162,.1);border:1px solid rgba(219,97,162,.3)}.node.retro .tag{color:var(--pk)}
+.node.conf{background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.3)}.node.conf .tag{color:var(--cf)}
+.node.fall{background:rgba(227,179,65,.08);border:1px solid rgba(227,179,65,.2)}.node.fall .tag{color:var(--yl)}
+.node.goal{background:rgba(57,211,83,.08);border:1px solid rgba(57,211,83,.25)}.node.goal .tag{color:var(--cy)}
+.arr{display:flex;align-items:center;color:var(--dm);font-size:16px;padding:0 2px;flex-shrink:0}
+.detail{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:14px;margin-top:14px}
+.detail h3{font-size:13px;margin-bottom:8px}
+.detail.conf-detail{background:rgba(52,211,153,.05);border-color:rgba(52,211,153,.2)}.detail.conf-detail h3{color:var(--cf)}
+.detail.review-detail{background:rgba(188,140,255,.05);border-color:rgba(188,140,255,.2)}.detail.review-detail h3{color:var(--pu)}
+.detail.fix-detail{background:rgba(63,185,80,.05);border-color:rgba(63,185,80,.2)}.detail.fix-detail h3{color:var(--gn)}
+.detail.gate-detail{background:rgba(248,81,73,.05);border-color:rgba(248,81,73,.2)}.detail.gate-detail h3{color:var(--rd)}
+.detail.goal-detail{background:rgba(57,211,83,.05);border-color:rgba(57,211,83,.2)}.detail.goal-detail h3{color:var(--cy)}
+table{width:100%;border-collapse:collapse;font-size:11px;margin-top:6px}
+th{text-align:left;padding:5px 8px;background:rgba(0,0,0,.25);color:var(--dm);font-size:10px;text-transform:uppercase;letter-spacing:.3px}
+td{padding:4px 8px;border-top:1px solid var(--bd)}
+code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:10px;color:#79c0ff}
+.loop{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:8px 0}
+.lp{padding:5px 9px;border-radius:5px;font-size:10px;font-weight:500}
+.lp.disp{background:rgba(188,140,255,.12);border:1px solid rgba(188,140,255,.25);color:var(--pu)}
+.lp.fix{background:rgba(63,185,80,.12);border:1px solid rgba(63,185,80,.25);color:var(--gn)}
+.lp.chk{background:rgba(210,153,34,.12);border:1px solid rgba(210,153,34,.25);color:var(--or)}
+.lp.cnf{background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.25);color:var(--cf)}
+.la{color:var(--dm);font-size:10px}
+.note{font-size:10px;color:var(--dm);margin-top:6px}
+.fail-arrow{color:var(--or);font-size:11px;font-weight:600;margin-top:4px}
+.section-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;padding:4px 10px;background:rgba(0,0,0,.3);border-radius:4px;display:inline-block}
+.gate-call{background:rgba(188,140,255,.04);border:2px solid rgba(188,140,255,.2);border-radius:10px;padding:16px;margin:14px 0}
+.phase-label{font-size:11px;font-weight:700;padding:3px 8px;border-radius:4px;margin-bottom:8px;display:inline-block}
+.phase-label.p1{background:rgba(52,211,153,.15);color:var(--cf)}.phase-label.p2{background:rgba(188,140,255,.15);color:var(--pu)}
+</style></head><body><div class="wrap">
+<h1><span>Phase 3</span> Dev（编码实现）</h1>
+<p class="desc">goal 自动初始化 → 防护预检 → TDD/Wave 编码 → 测试验证 → commit → <strong>review-gate workflow</strong>（前置检查 + 并行审查循环）→ phase-gate（脚本 + 防伪造）→ retrospect</p>
+
+<div class="legend">
+  <div class="lg"><div class="lc skill"></div>Skill</div>
+  <div class="lg"><div class="lc goal"></div>Goal</div>
+  <div class="lg"><div class="lc fixed"></div>固定步骤</div>
+  <div class="lg"><div class="lc sub"></div>Subagent</div>
+  <div class="lg"><div class="lc conf"></div>前置审查</div>
+  <div class="lg"><div class="lc fall"></div>Fallow</div>
+  <div class="lg"><div class="lc gate"></div>Phase-Gate</div>
+  <div class="lg"><div class="lc retro"></div>Retrospect</div>
+</div>
+
+<!-- Row 1: Skill → Goal → 预检 -->
+<div class="flow">
+  <div class="node skill" style="flex:1.5"><div class="tag">Skill</div><div class="title">xyz-harness-phase-dev</div></div>
+  <div class="arr">→</div>
+  <div class="node goal" style="flex:1.2"><div class="tag">Goal</div><div class="title">自动初始化</div><div class="info">initializeGoalFromExternal()</div></div>
+  <div class="arr">→</div>
+  <div class="node fixed" style="flex:1"><div class="tag">固定步骤</div><div class="title">防护预检</div></div>
+</div>
+
+<div class="section-label" style="color:var(--cy)">Goal 任务执行（按 spec+plan 动态拆分）</div>
+
+<div class="flow">
+  <div class="node sub" style="flex:1.5"><div class="tag">Task 1</div><div class="title">TDD 测试编写</div><div class="info">全部 RED</div></div>
+  <div class="arr">→</div>
+  <div class="node sub" style="flex:1.5"><div class="tag">Task 2</div><div class="title">Wave 1 编码</div><div class="info">全部 GREEN</div></div>
+  <div class="arr">→</div>
+  <div class="node sub" style="flex:1"><div class="tag">Task 3</div><div class="title">Wave 2...</div><div class="info">按 Wave 扩展</div></div>
+  <div class="arr">→</div>
+  <div class="node fixed" style="flex:1"><div class="tag">Task N</div><div class="title">全量测试×3</div><div class="info">修复→复跑→再跑</div></div>
+  <div class="arr">→</div>
+  <div class="node fixed" style="flex:1.2"><div class="tag">Task N+1</div><div class="title">test_results + commit</div></div>
+</div>
+
+<div class="section-label" style="color:var(--pu)">调用 coding-workflow-gate(phase=3) — Review-Gate 整体是一个 Workflow</div>
+
+<div class="gate-call">
+
+  <!-- 阶段一：前置检查 -->
+  <div class="phase-label p1">阶段一：前置检查（单次，不循环）</div>
+
+  <div class="detail conf-detail" style="margin-top:4px">
+    <div class="loop">
+      <div class="lp cnf">spec-plan-conformance-reviewer.md（含 BLR）</div><div class="la">→</div>
+      <div class="lp chk">must_fix = 0?</div><div class="la">→</div>
+      <div class="lp cnf">YES → 通过，进入阶段二</div><div class="la">|</div>
+      <div class="lp" style="background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.25);color:var(--rd)">NO → 打回主 agent</div>
+    </div>
+    <table><tr><th>Agent</th><th>输入</th><th>审查内容</th></tr>
+    <tr><td><code>spec-plan-conformance-reviewer.md</code>（新建，合并 BLR）</td><td>spec.md + plan.md + use-cases.md + git diff + 源代码</td><td>代码是否符合 spec+plan 描述 + 业务逻辑正确性 + AC 覆盖</td></tr></table>
+    <div class="fail-arrow">FAIL → 退出 workflow → 主 agent 重新启动 goal → 检查缺失 → 重新拆分 Wave → 编码 → 测试 → commit → 重新提交 review-gate</div>
+  </div>
+
+  <!-- 阶段二：并行审查 + 循环修复 -->
+  <div class="phase-label p2" style="margin-top:16px">阶段二：并行审查 + 循环修复（最多 3 轮）</div>
+
+  <div class="detail review-detail" style="margin-top:4px">
+    <h3>Step 1: 并行审查</h3>
+    <table>
+      <tr><th>维度</th><th>Agent / Skill</th><th>输出</th></tr>
+      <tr><td>Standards</td><td><code>xyz-harness-standards-reviewer</code></td><td>standards_review_v{N}.md</td></tr>
+      <tr><td>Taste</td><td><code>ts-taste-check</code> / <code>rust-taste-check</code></td><td>ts_taste_review_v{N}.md</td></tr>
+      <tr><td>Robustness</td><td><code>xyz-harness-robustness-reviewer</code></td><td>robustness_review_v{N}.md</td></tr>
+      <tr style="background:rgba(227,179,65,.06)"><td>Code Quality</td><td><code>fallow audit --format json</code></td><td>fallow_report_v{N}.md</td></tr>
+      <tr><td>Integration</td><td><code>xyz-harness-integration-reviewer</code></td><td>integration_review_v{N}.md</td></tr>
+    </table>
+  </div>
+
+  <div class="detail" style="background:rgba(210,153,34,.05);border-color:rgba(210,153,34,.2);margin-top:8px">
+    <h3 style="color:var(--or)">Step 2: Fix Worker（汇总 + 判断 + 修复）</h3>
+    <div class="loop">
+      <div class="lp fix">汇总 5 份 review 报告</div><div class="la">→</div>
+      <div class="lp chk">must_fix = 0?</div><div class="la">→</div>
+      <div class="lp fix">YES → Review-Gate PASSED → 进入 Phase-Gate</div><div class="la">|</div>
+      <div class="lp" style="background:rgba(63,185,80,.12);border:1px solid rgba(63,185,80,.25);color:var(--gn)">NO → 修复流程</div>
+    </div>
+    <div class="loop" style="margin-top:6px">
+      <div class="lp fix">收集 must_fix → 按文件分组</div><div class="la">→</div>
+      <div class="lp fix">分析依赖关系 → Wave 拆分</div><div class="la">→</div>
+      <div class="lp fix">按 Wave subagent 修复</div><div class="la">→</div>
+      <div class="lp fix">git commit</div><div class="la">→</div>
+      <div class="lp disp">回到 Step 1</div>
+    </div>
+    <div class="note">Fix Worker 同时负责汇总判断和修复，不是单独的 sync-agent。最多 3 轮。</div>
+  </div>
+
+</div><!-- end gate-call -->
+
+<!-- Phase-Gate -->
+<div class="detail gate-detail">
+  <h3>Phase-Gate（脚本检查 + 防伪造，与 Phase 1/2 不同）</h3>
+  <table><tr><th>检查项</th><th>说明</th></tr>
+  <tr><td>脚本检查</td><td>文档完整性 + YAML frontmatter + placeholder 扫描</td></tr>
+  <tr><td style="color:var(--rd)">防伪造检查</td><td><code>xyz-harness-gate-reviewer</code> subagent:验证 review 报告非空、test_results 包含实际命令输出、代码变更真实存在</td></tr></table>
+  <div class="fail-arrow">FAIL → 打回主 agent 修复 → 修复后直接提交 phase-gate（跳过 review-gate）</div>
+  <div class="note">Phase 1/2 只有脚本检查。Phase 3 额外增加防伪造检查，因为代码和测试结果更容易被 AI 伪造。</div>
+</div>
+
+<!-- Retrospect -->
+<div class="flow" style="margin-top:8px">
+  <div class="node retro" style="flex:1"><div class="tag">Subagent</div><div class="title">Retrospect</div><div class="info">fork session</div></div>
+  <div class="arr">→</div>
+  <div class="node skill" style="flex:2"><div class="tag">主 Agent</div><div class="title">进入 Phase 4</div></div>
+</div>
+
+</div></body></html>
