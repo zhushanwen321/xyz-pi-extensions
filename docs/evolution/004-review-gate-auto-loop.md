@@ -195,12 +195,12 @@ Round N:
 
 ### 各 Phase 的节点配置
 
-| Phase | 节点配置 | 原因 |
-|-------|---------|------|
-| 1 Spec | review → fix（2 节点） | 单 reviewer，无需 parallel/sync |
-| 2 Plan | review → fix（2 节点） | 同上 |
-| 3 Dev | parallel review → sync → fix（3 节点） | 5 维度需并行 + 去重 |
-| 4 Test | review → fix（2 节点） | 单 reviewer，无需 parallel/sync |
+| Phase | L1 节点 | L2 节点 | 原因 |
+|-------|---------|---------|------|
+| 1 Spec | 2（review→fix） | — | 单 reviewer，无 L2 分级 |
+| 2 Plan | 2（review→fix） | 3（parallel→sync→fix） | L1 单 reviewer；L2 双 reviewer（plan + bl）需 parallel + sync |
+| 3 Dev | — | 3（parallel→sync→fix） | 5 维度需并行 + 去重（统一 3 节点，无 L1 模式） |
+| 4 Test | 2（review→fix） | — | 单 reviewer，无 L2 分级 |
 
 ## Reviewer Agent 设计
 
@@ -216,7 +216,8 @@ Round N:
 | Phase | Agent 文件 | 位置 | 来源 |
 |-------|-----------|------|------|
 | 1 Spec | `spec-reviewer.md` | `~/.pi/agent/agents/` | **新建**，参考 superpowers spec-document-reviewer |
-| 2 Plan | `plan-reviewer.md` | `~/.pi/agent/agents/` | **新建**，参考 superpowers plan-document-reviewer |
+| 2 Plan | `plan-reviewer.md` | `~/.pi/agent/agents/` | **新建**，审查总纲+通用交付物 |
+| 2 Plan (L2) | `plan-bl-reviewer.md` | `~/.pi/agent/agents/` | **新建**，审查接口契约+子文档 |
 | 3 Dev | 现有 5 个 SKILL.md | `extensions/coding-workflow/skills/` | **不新建**，已有专项 reviewer |
 | 4 Test | `test-reviewer.md` | `~/.pi/agent/agents/` | **新建**，基于 expert-reviewer 测试评审模式 |
 

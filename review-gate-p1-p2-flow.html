@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Review-Gate Phase 1 & Phase 2 Flow</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e0e0e8;
+    --text-dim: #8888a0;
+    --accent-blue: #4a9eff;
+    --accent-green: #3ddc84;
+    --accent-orange: #ff9f43;
+    --accent-purple: #b388ff;
+    --accent-red: #ff6b6b;
+    --accent-cyan: #4dd0e1;
+    --accent-yellow: #ffd54f;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+    line-height: 1.5;
+    padding: 40px 20px;
+  }
+  h1 { text-align: center; font-size: 28px; margin-bottom: 8px; font-weight: 700; }
+  .subtitle { text-align: center; color: var(--text-dim); font-size: 14px; margin-bottom: 40px; }
+
+  /* Legend */
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 16px; justify-content: center;
+    margin-bottom: 48px; padding: 16px 24px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    max-width: 900px; margin-left: auto; margin-right: auto;
+  }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .legend-box {
+    width: 32px; height: 18px; border-radius: 3px; flex-shrink: 0;
+  }
+  .legend-box.fixed { background: var(--accent-blue); }
+  .legend-box.skill { background: var(--accent-green); }
+  .legend-box.agent { background: var(--accent-purple); }
+  .legend-box.workflow { background: var(--accent-orange); }
+  .legend-box.fix-worker { background: var(--accent-red); }
+  .legend-box.gate { background: var(--accent-cyan); }
+  .legend-box.retro { background: var(--accent-yellow); }
+
+  /* Phase Container */
+  .phase-container {
+    max-width: 960px; margin: 0 auto 60px auto;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    overflow: hidden;
+  }
+  .phase-header {
+    padding: 20px 28px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 16px;
+  }
+  .phase-badge {
+    font-size: 13px; font-weight: 600; padding: 4px 12px; border-radius: 4px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .phase-badge.p1 { background: #1a3a5c; color: var(--accent-blue); }
+  .phase-badge.p2 { background: #3a2a1a; color: var(--accent-orange); }
+  .phase-title { font-size: 20px; font-weight: 700; }
+  .phase-summary { color: var(--text-dim); font-size: 13px; margin-left: auto; }
+
+  /* Flow */
+  .flow { padding: 28px; display: flex; flex-direction: column; gap: 0; align-items: center; }
+
+  /* Node */
+  .node {
+    width: 100%; max-width: 700px; padding: 16px 20px;
+    border-radius: 8px; border: 2px solid transparent;
+    position: relative;
+  }
+  .node.fixed {
+    background: rgba(74,158,255,0.08); border-color: var(--accent-blue);
+  }
+  .node.skill {
+    background: rgba(61,220,132,0.08); border-color: var(--accent-green);
+  }
+  .node.workflow {
+    background: rgba(255,159,67,0.06); border-color: var(--accent-orange);
+  }
+  .node.gate {
+    background: rgba(77,208,225,0.08); border-color: var(--accent-cyan);
+  }
+  .node.retro {
+    background: rgba(255,213,79,0.08); border-color: var(--accent-yellow);
+  }
+
+  .node-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .node-type {
+    font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 3px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .node.fixed .node-type { background: rgba(74,158,255,0.2); color: var(--accent-blue); }
+  .node.skill .node-type { background: rgba(61,220,132,0.2); color: var(--accent-green); }
+  .node.workflow .node-type { background: rgba(255,159,67,0.2); color: var(--accent-orange); }
+  .node.gate .node-type { background: rgba(77,208,225,0.2); color: var(--accent-cyan); }
+  .node.retro .node-type { background: rgba(255,213,79,0.2); color: var(--accent-yellow); }
+
+  .node-name { font-weight: 600; font-size: 15px; }
+  .node-detail { color: var(--text-dim); font-size: 12px; margin-top: 4px; }
+  .node-resource {
+    display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 3px;
+    margin-right: 6px; margin-top: 6px;
+  }
+  .res-skill { background: rgba(61,220,132,0.15); color: var(--accent-green); }
+  .res-agent { background: rgba(179,136,255,0.15); color: var(--accent-purple); }
+  .res-workflow { background: rgba(255,159,67,0.15); color: var(--accent-orange); }
+  .res-ext { background: rgba(74,158,255,0.15); color: var(--accent-blue); }
+
+  /* Arrow */
+  .arrow {
+    width: 2px; height: 28px; position: relative; margin: 0 auto;
+  }
+  .arrow::after {
+    content: ''; position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
+    border-left: 6px solid transparent; border-right: 6px solid transparent;
+    border-top: 8px solid var(--border);
+  }
+  .arrow::before {
+    content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    background: var(--border);
+  }
+
+  /* Arrow with label */
+  .arrow-label {
+    display: flex; align-items: center; gap: 0; flex-direction: column;
+    margin: 0 auto;
+  }
+  .arrow-label .arrow { margin: 0; }
+  .arrow-text {
+    font-size: 11px; color: var(--text-dim); padding: 2px 8px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+    margin-bottom: -4px; z-index: 1; position: relative;
+  }
+
+  /* Workflow internal block */
+  .wf-internal {
+    background: rgba(255,159,67,0.04); border: 1px dashed rgba(255,159,67,0.3);
+    border-radius: 8px; padding: 20px 16px; margin-top: 8px;
+    width: 100%;
+  }
+  .wf-title {
+    font-size: 12px; font-weight: 700; color: var(--accent-orange);
+    margin-bottom: 12px; text-align: center;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .wf-flow { display: flex; flex-direction: column; gap: 0; align-items: center; }
+
+  .wf-node {
+    padding: 10px 16px; border-radius: 6px; width: 100%; max-width: 560px;
+    border: 1px solid;
+  }
+  .wf-node.agent-n { background: rgba(179,136,255,0.06); border-color: rgba(179,136,255,0.3); }
+  .wf-node.fix-n { background: rgba(255,107,107,0.06); border-color: rgba(255,107,107,0.3); }
+  .wf-node .wf-node-header { display: flex; align-items: center; gap: 8px; }
+  .wf-node .wf-node-name { font-size: 13px; font-weight: 600; }
+  .wf-node .wf-node-type {
+    font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 2px;
+    text-transform: uppercase;
+  }
+  .wf-node.agent-n .wf-node-type { background: rgba(179,136,255,0.2); color: var(--accent-purple); }
+  .wf-node.fix-n .wf-node-type { background: rgba(255,107,107,0.2); color: var(--accent-red); }
+  .wf-node .wf-node-detail { font-size: 11px; color: var(--text-dim); margin-top: 3px; }
+  .wf-node .node-resource { font-size: 10px; padding: 1px 6px; }
+
+  .wf-arrow { width: 2px; height: 20px; background: rgba(255,159,67,0.3); position: relative; }
+  .wf-arrow::after {
+    content: ''; position: absolute; bottom: -1px; left: 50%; transform: translateX(-50%);
+    border-left: 4px solid transparent; border-right: 4px solid transparent;
+    border-top: 5px solid rgba(255,159,67,0.3);
+  }
+
+  /* Loop indicator */
+  .loop-label {
+    font-size: 11px; color: var(--accent-orange); text-align: center;
+    padding: 4px 12px; border: 1px dashed rgba(255,159,67,0.4); border-radius: 4px;
+    margin: 4px 0;
+    width: fit-content;
+  }
+
+  /* Parallel block */
+  .parallel-block {
+    display: flex; gap: 12px; width: 100%; max-width: 560px; justify-content: center;
+  }
+  .parallel-block .wf-node { max-width: 260px; flex: 1; }
+
+  /* Decision diamond */
+  .decision {
+    display: flex; align-items: center; justify-content: center; gap: 12px;
+    padding: 8px 16px;
+  }
+  .decision-text {
+    font-size: 12px; color: var(--text-dim); font-style: italic;
+  }
+  .decision-yes { color: var(--accent-green); font-weight: 600; font-style: normal; }
+  .decision-no { color: var(--accent-red); font-weight: 600; font-style: normal; }
+
+  /* L1/L2 toggle */
+  .toggle-container {
+    display: flex; gap: 0; margin: 8px 0 4px 0;
+    border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+    width: fit-content;
+  }
+  .toggle-btn {
+    padding: 6px 16px; font-size: 12px; font-weight: 600; cursor: default;
+    border: none; background: transparent; color: var(--text-dim);
+  }
+  .toggle-btn.active { background: rgba(255,159,67,0.15); color: var(--accent-orange); }
+</style>
+</head>
+<body>
+
+<h1>Review-Gate Auto-Loop Flow</h1>
+<p class="subtitle">Phase 1 (Spec) & Phase 2 (Plan) — 完整流程可视化</p>
+
+<!-- Legend -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-box fixed"></div>固定流程（主 Agent 执行）</div>
+  <div class="legend-item"><div class="legend-box skill"></div>Skill 加载</div>
+  <div class="legend-item"><div class="legend-box agent"></div>Subagent（独立进程）</div>
+  <div class="legend-item"><div class="legend-box workflow"></div>Workflow Script</div>
+  <div class="legend-item"><div class="legend-box fix-worker"></div>Fix Worker</div>
+  <div class="legend-item"><div class="legend-box gate"></div>Phase Gate</div>
+  <div class="legend-item"><div class="legend-box retro"></div>Retrospect</div>
+</div>
+
+<!-- ==================== PHASE 1 SPEC ==================== -->
+<div class="phase-container">
+  <div class="phase-header">
+    <span class="phase-badge p1">Phase 1</span>
+    <span class="phase-title">Spec</span>
+    <span class="phase-summary">2 节点 · 单 reviewer · review → fix</span>
+  </div>
+  <div class="flow">
+
+    <!-- Step 1: Skill Load -->
+    <div class="node skill">
+      <div class="node-header">
+        <span class="node-type">Skill</span>
+        <span class="node-name">加载 Brainstorming Skill</span>
+      </div>
+      <div class="node-detail">主 Agent 按 SKILL.md 指导执行 brainstorming 流程</div>
+      <span class="node-resource res-skill">xyz-harness-brainstorming</span>
+    </div>
+
+    <div class="arrow"></div>
+
+    <!-- Step 2: Spec Writing -->
+    <div class="node fixed">
+      <div class="node-header">
+        <span class="node-type">固定流程</span>
+        <span class="node-name">编写 spec.md + 子文档</span>
+      </div>
+      <div class="node-detail">主 Agent 按 skill 指导产出 spec.md、use-cases.md、non-functional-design.md 等</div>
+      <span class="node-resource res-skill">xyz-harness-brainstorming</span>
+    </div>
+
+    <div class="arrow"></div>
+
+    <!-- Step 3: Review-Gate (Workflow) -->
+    <div class="node workflow">
+      <div class="node-header">
+        <span class="node-type">Workflow</span>
+        <span class="node-name">Review-Gate（自动循环）</span>
+      </div>
+      <div class="node-detail">Workflow Extension 执行 review-fix 循环，最多 3 轮</div>
+      <span class="node-resource res-workflow">review-gate-p1.js</span>
+      <span class="node-resource res-ext">@zhushanwen/pi-workflow</span>
+
+      <!-- Workflow Internal -->
+      <div class="wf-internal">
+        <div class="wf-title">Workflow 内部执行流程</div>
+        <div class="wf-flow">
+
+          <!-- Round Start -->
+          <div class="loop-label">⟳ Round N（max 3）</div>
+
+          <!-- Node 1: Reviewer -->
+          <div class="wf-node agent-n">
+            <div class="wf-node-header">
+              <span class="wf-node-type">Subagent</span>
+              <span class="wf-node-name">Spec Reviewer</span>
+            </div>
+            <div class="wf-node-detail">审查 spec.md + 子文档的完整性、一致性、清晰度、YAGNI。产出 YAML frontmatter 报告。</div>
+            <span class="node-resource res-agent">spec-reviewer.md</span>
+          </div>
+
+          <div class="wf-arrow"></div>
+
+          <!-- Decision -->
+          <div class="decision">
+            <span class="decision-text">must_fix == 0 ?</span>
+            <span class="decision-yes">YES → passed</span>
+            <span class="decision-no">NO ↓</span>
+          </div>
+
+          <div class="wf-arrow"></div>
+
+          <!-- Node 2: Fix Worker -->
+          <div class="wf-node fix-n">
+            <div class="wf-node-header">
+              <span class="wf-node-type">Fix Worker</span>
+              <span class="wf-node-name">修复 spec 交付物</span>
+            </div>
+            <div class="wf-node-detail">按 review 报告修复所有 must_fix 问题。完成后 git commit。</div>
+            <span class="node-resource res-agent">fix-worker（内置 prompt）</span>
+          </div>
+
+          <div class="wf-arrow"></div>
+
+          <div class="loop-label">→ Round N+1（re-review）</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow"></div>
+
+    <!-- Step 4: Phase Gate -->
+    <div class="node gate">
+      <div class="node-header">
+        <span class="node-type">Gate</span>
+        <span class="node-name">Phase 1 Gate Check</span>
+      </div>
+      <div class="node-detail">检查文件存在性、YAML frontmatter 格式、verdict 值</div>
+      <span class="node-resource res-skill">xyz-harness-gate</span>
+      <span class="node-resource res-ext">coding-workflow (tool)</span>
+    </div>
+
+    <div class="arrow"></div>
+
+    <!-- Step 5: Retrospect -->
+    <div class="node retro">
+      <div class="node-header">
+        <span class="node-type">Retrospect</span>
+        <span class="node-name">Phase 1 复盘</span>
+      </div>
+      <div class="node-detail">Fork 主 session 上下文，回顾执行过程并提炼改进建议</div>
+      <span class="node-resource res-agent">general-purpose</span>
+      <span class="node-resource res-skill">xyz-harness-retrospect</span>
+    </div>
+
+  </div>
+</div>
+
+<!-- ==================== PHASE 2 PLAN ==================== -->
+<div class="phase-container">
+  <div class="phase-header">
+    <span class="phase-badge p2">Phase 2</span>
+    <span class="phase-title">Plan</span>
+    <span class="phase-summary">L1: 2 节点 · L2: 3 节点（parallel + sync + fix）</span>
+  </div>
+  <div class="flow">
+
+    <!-- Step 1: Skill Load -->
+    <div class="node skill">
+      <div class="node-header">
+        <span class="node-type">Skill</span>
+        <span class="node-name">加载 Writing Plans Skill</span>
+      </div>
+      <div class="node-detail">主 Agent 按 SKILL.md 指导执行 plan 编写流程</div>
+      <span class="node-resource res-skill">xyz-harness-writing-plans</span>
+    </div>
+
+    <div class="arrow"></div>
+
+    <!-- Step 2: Complexity Assessment -->
+    <div class="node fixed">
+      <div class="node-header">
+        <span class="node-type">固定流程</span>
+        <span class="node-name">复杂度评估（L1 / L2）</span>
+      </div>
+      <div class="node-detail">评估 spec 的架构复杂度。任一维度命中 L2 → 整体 L2。写入 plan.md YAML <code>complexity</code> 字段。</div>
+      <span class="node-resource res-skill">xyz-harness-writing-plans</span>
+    </div>
+
+    <div class="arrow"></div>
+
+    <!-- Step 3: Plan Writing -->
+    <div class="node fixed">
+      <div class="node-header">
+        <span class="node-type">固定流程</span>
+        <span class="node-name">编写 plan 交付物</span>
+      </div>
+      <div class="node-detail">L1: plan.md + e2e-test-plan.md + test_cases_template.json + use-cases.md + non-functional-design.md<br>L2: 额外产出 plan-backend.md + plan-frontend.md + plan-api-contract.md + interface_chain.json</div>
+      <span class="node-resource res-skill">xyz-harness-writing-plans</span>
+    </div>
+
+    <div class="arrow"></div>
+
+    <!-- Step 4: ADR Evaluation -->
+    <div class="node fixed">
+      <div class="node-header">
+        <span class="node-type">固定流程</span>
+        <span class="node-name">ADR 评估</span>
+      </div>
+      <div class="node-detail">扫描 plan 中的新决策，满足三条件（难以逆转 + 无上下文会惊讶 + 真实权衡）则创建 ADR。产出可为空。</div>
+      <span class="node-resource res-skill">xyz-harness-writing-plans</span>
+    </div>
+
+    <div class="arrow"></div>
+
+    <!-- Step 5: Review-Gate (Workflow) -->
+    <div class="node workflow">
+      <div class="node-header">
+        <span class="node-type">Workflow</span>
+        <span class="node-name">Review-Gate（自动循环）</span>
+      </div>
+      <div class="node-detail">Workflow Extension 读取 plan.yaml complexity 字段，按 L1/L2 分支执行不同节点配置</div>
+      <span class="node-resource res-workflow">review-gate-p2.js</span>
+      <span class="node-resource res-ext">@zhushanwen/pi-workflow</span>
+
+      <!-- Workflow Internal - L1 -->
+      <div class="wf-internal" style="margin-bottom: 16px;">
+        <div class="wf-title">L1 分支 — 2 节点（单 reviewer）</div>
+        <div class="wf-flow">
+          <div class="loop-label">⟳ Round N（max 3）</div>
+
+          <div class="wf-node agent-n">
+            <div class="wf-node-header">
+              <span class="wf-node-type">Subagent</span>
+              <span class="wf-node-name">Plan Reviewer</span>
+            </div>
+            <div class="wf-node-detail">审查 plan.md + e2e-test-plan + test_cases + use-cases + non-functional-design。整体可行性 + AC 覆盖 + placeholder 扫描。</div>
+            <span class="node-resource res-agent">plan-reviewer.md</span>
+          </div>
+
+          <div class="wf-arrow"></div>
+
+          <div class="decision">
+            <span class="decision-text">must_fix == 0 ?</span>
+            <span class="decision-yes">YES → passed</span>
+            <span class="decision-no">NO ↓</span>
+          </div>
+
+          <div class="wf-arrow"></div>
+
+          <div class="wf-node fix-n">
+            <div class="wf-node-header">
+              <span class="wf-node-type">Fix Worker</span>
+              <span class="wf-node-name">修复 plan 交付物</span>
+            </div>
+            <div class="wf-node-detail">按 review 报告修复。完成后 git commit。</div>
+            <span class="node-resource res-agent">fix-worker（内置 prompt）</span>
+          </div>
+
+          <div class="wf-arrow"></div>
+          <div class="loop-label">→ Round N+1</div>
+        </div>
+      </div>
+
+      <!-- Workflow Internal - L2 -->
+      <div class="wf-internal">
+        <div class="wf-title">L2 分支 — 3 节点（parallel + sync + fix）</div>
+        <div class="wf-flow">
+          <div class="loop-label">⟳ Round N（max 3）</div>
+
+          <!-- Parallel Review -->
+          <div class="parallel-block">
+            <div class="wf-node agent-n">
+              <div class="wf-node-header">
+                <span class="wf-node-type">Subagent</span>
+                <span class="wf-node-name">Plan Reviewer</span>
+              </div>
+              <div class="wf-node-detail">审查总纲 + 5 个通用交付物</div>
+              <span class="node-resource res-agent">plan-reviewer.md</span>
+            </div>
+            <div class="wf-node agent-n">
+              <div class="wf-node-header">
+                <span class="wf-node-type">Subagent</span>
+                <span class="wf-node-name">Plan BL Reviewer</span>
+              </div>
+              <div class="wf-node-detail">审查 interface_chain.json + 子文档 + use-cases</div>
+              <span class="node-resource res-agent">plan-bl-reviewer.md</span>
+            </div>
+          </div>
+
+          <div class="wf-arrow"></div>
+
+          <!-- Sync -->
+          <div class="wf-node agent-n">
+            <div class="wf-node-header">
+              <span class="wf-node-type">Subagent</span>
+              <span class="wf-node-name">Sync（合并去重）</span>
+            </div>
+            <div class="wf-node-detail">去重 + 排序（Standards → BLR → Robustness → Taste）+ 依赖分析 → fix-plan.md</div>
+            <span class="node-resource res-agent">sync-agent（内置 prompt）</span>
+          </div>
+
+          <div class="wf-arrow"></div>
+
+          <div class="decision">
+            <span class="decision-text">must_fix == 0 ?</span>
+            <span class="decision-yes">YES → passed</span>
+            <span class="decision-no">NO ↓</span>
+          </div>
+
+          <div class="wf-arrow"></div>
+
+          <!-- Fix Worker -->
+          <div class="wf-node fix-n">
+            <div class="wf-node-header">
+              <span class="wf-node-type">Fix Worker</span>
+              <span class="wf-node-name">修复 plan 交付物</span>
+            </div>
+            <div class="wf-node-detail">按 fix-plan.md 修复。完成后 git commit。</div>
+            <span class="node-resource res-agent">fix-worker（内置 prompt）</span>
+          </div>
+
+          <div class="wf-arrow"></div>
+          <div class="loop-label">→ Round N+1</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow"></div>
+
+    <!-- Step 6: Phase Gate -->
+    <div class="node gate">
+      <div class="node-header">
+        <span class="node-type">Gate</span>
+        <span class="node-name">Phase 2 Gate Check</span>
+      </div>
+      <div class="node-detail">检查文件存在性、YAML frontmatter、interface_chain.json（L2）、AC 覆盖矩阵</div>
+      <span class="node-resource res-skill">xyz-harness-gate</span>
+      <span class="node-resource res-ext">coding-workflow (tool)</span>
+    </div>
+
+    <div class="arrow"></div>
+
+    <!-- Step 7: Retrospect -->
+    <div class="node retro">
+      <div class="node-header">
+        <span class="node-type">Retrospect</span>
+        <span class="node-name">Phase 2 复盘</span>
+      </div>
+      <div class="node-detail">Fork 主 session 上下文，回顾 plan 编写和 review-gate 执行过程</div>
+      <span class="node-resource res-agent">general-purpose</span>
+      <span class="node-resource res-skill">xyz-harness-retrospect</span>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>
