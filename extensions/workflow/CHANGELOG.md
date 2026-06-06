@@ -1,5 +1,11 @@
 # @zhushanwen/pi-workflow
 
+## 0.1.9
+
+### Patch Changes
+
+- f7367e8: Fix agent subprocess killed prematurely by 120s hard timeout. Increase to 24h safety net and add proper abort signal propagation on terminate/pause/abort.
+
 ## 0.1.8
 
 ### Patch Changes

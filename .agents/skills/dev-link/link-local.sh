@@ -31,20 +31,6 @@ resolve_name() {
 	fi
 }
 
-# ── 检查 npm 包是否存在（settings.json 注册 或 node_modules 物理存在）──
-is_npm_present() {
-	local npm_name="$1"
-	local npm_dir="$HOME/.pi/agent/npm/node_modules/$npm_name"
-	# 检查 settings.json 注册
-	node -e "
-		const s = JSON.parse(require('fs').readFileSync(process.env.SETTINGS,'utf-8'));
-		process.exit(s.packages?.includes('npm:' + process.env.NPM_CHECK) ? 0 : 1);
-	" 2>/dev/null && return 0
-	# 检查 node_modules 物理存在
-	[ -d "$npm_dir" ] && return 0
-	return 1
-}
-
 # ── 检查 symlink 是否存在且指向正确 ──────────────────────
 is_symlink_correct() {
 	local short="$1"
@@ -94,28 +80,15 @@ main() {
 	fi
 
 	# ── 步骤 1: 卸载 npm 版本（settings + node_modules 都要清理）──
+	# 无条件执行 pi uninstall，避免 node_modules 残留导致 tool conflict
+	echo "  卸载 npm 版本: $NPM_ENTRY"
+	pi uninstall "$NPM_ENTRY" 2>&1 | sed 's/^/    /' || true
+
+	# 兜底：pi uninstall 可能不删 node_modules 物理目录
 	local npm_dir="$HOME/.pi/agent/npm/node_modules/$NPM_NAME"
-	local need_uninstall=false
-
-	# 1a: settings.json 中有注册条目 → pi uninstall 移除
-	if NPM_CHECK="$NPM_NAME" node -e "
-		const s = JSON.parse(require('fs').readFileSync(process.env.SETTINGS,'utf-8'));
-		process.exit(s.packages?.includes('npm:' + process.env.NPM_CHECK) ? 0 : 1);
-	" 2>/dev/null; then
-		echo "  清理 settings.json 注册: $NPM_ENTRY"
-		pi uninstall "$NPM_ENTRY" 2>&1 | sed 's/^/    /' || true
-		need_uninstall=true
-	fi
-
-	# 1b: node_modules 物理残留 → 直接删除目录
 	if [ -d "$npm_dir" ]; then
 		echo "  清理 node_modules 残留: $npm_dir"
 		rm -rf "$npm_dir"
-		need_uninstall=true
-	fi
-
-	if [ "$need_uninstall" = false ]; then
-		echo "  npm 版本未安装，跳过卸载"
 	fi
 
 	# ── 步骤 2: 清理旧 symlink（不删普通目录）──
