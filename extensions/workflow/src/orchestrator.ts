@@ -26,6 +26,7 @@ import { type AgentCallOpts,AgentPool } from "./agent-pool.js";
 import { getWorkflow } from "./config-loader.js";
 import { appendTraceNode } from "./execution-trace.js";
 import { resolveModel } from "./model-resolver.js";
+import { lintScript } from "./script-lint.js";
 import {
   type AgentResult as StateAgentResult,
   createInstance as createStateInstance,
@@ -185,6 +186,22 @@ export class WorkflowOrchestrator {
     // Read and normalize script: strip 'export' from 'export const meta' for CJS Worker
     let scriptSource = fs.readFileSync(workflow.path, "utf-8");
     scriptSource = scriptSource.replace(/\bexport\s+const\s+meta\b/, "const meta");
+
+    // Pre-flight lint: catch common API misuse before executing
+    const lintResult = lintScript(scriptSource);
+    if (!lintResult.valid) {
+      const errors = lintResult.findings
+        .filter((f) => f.severity === "error")
+        .map((f) => `  L${f.line}: ${f.message}\n         Suggestion: ${f.suggestion}`)
+        .join("\n");
+      throw new Error(
+        `Workflow script '${name}' has ${lintResult.findings.filter((f) => f.severity === "error").length} error(s):\n${errors}`,
+      );
+    }
+    // Log warnings (non-blocking)
+    for (const w of lintResult.findings.filter((f) => f.severity === "warning")) {
+      console.warn(`[workflow] Script lint warning at L${w.line}: ${w.message}`);
+    }
     const runId = `wf-${Date.now()}-${Math.random().toString(RUNID_RADIX).slice(RUNID_SLICE_START, RUNID_SLICE_LENGTH)}`;
 
     const instance = createStateInstance({
