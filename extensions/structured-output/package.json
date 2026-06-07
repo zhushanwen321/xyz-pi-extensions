@@ -1,15 +1,25 @@
 {
   "name": "@zhushanwen/pi-structured-output",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Structured output tool for Pi — enforces JSON Schema via tool call mechanism with Ajv validation",
   "type": "module",
   "main": "index.ts",
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
-  "keywords": ["pi-package", "extension", "structured-output", "json-schema"],
+  "keywords": [
+    "pi-package",
+    "extension",
+    "structured-output",
+    "json-schema"
+  ],
   "license": "MIT",
-  "files": ["src/", "index.ts"],
+  "files": [
+    "src/",
+    "index.ts"
+  ],
   "dependencies": {
     "ajv": "^8.17.0"
   },
