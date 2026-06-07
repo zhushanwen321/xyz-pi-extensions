@@ -205,6 +205,10 @@ export class AgentRegistry {
  *   fields via regex and use the rest as systemPrompt. If not found, treat
  *   entire file as systemPrompt with filename as name.
  * - If no frontmatter, filename (minus .md) is name, entire content is systemPrompt.
+ *
+ * Limitation: uses simple indexOf to find the closing `---`, so YAML field values
+ * containing `---` on its own line would cause premature truncation. Acceptable
+ * for Pi agent files where frontmatter only contains simple key: value pairs.
  */
 function parseFrontmatter(content: string, fileName: string): FrontmatterResult {
   const baseName = fileName.replace(/\.md$/, "");
