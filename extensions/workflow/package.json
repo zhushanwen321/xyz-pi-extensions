@@ -32,13 +32,16 @@
     "@mariozechner/pi-ai": "*",
     "@sinclair/typebox": "*",
     "@zhushanwen/pi-model-switch": "*",
-    "@zhushanwen/pi-structured-output": "*"
+    "@zhushanwen/pi-structured-output": "workspace:*"
   },
   "peerDependenciesMeta": {
     "@mariozechner/pi-tui": {
       "optional": true
     },
     "@mariozechner/pi-ai": {
+      "optional": true
+    },
+    "@zhushanwen/pi-structured-output": {
       "optional": true
     }
   },
