@@ -52,7 +52,7 @@ export interface WorkerScriptData {
 // ── WorkerInMsg type (for main-thread consumption) ──────────
 
 export type WorkerInMsg =
-  | { type: "agent-call"; callId: number; opts: { prompt: string; schema?: unknown; model?: string; scene?: string; description?: string } }
+  | { type: "agent-call"; callId: number; opts: { prompt: string; schema?: unknown; model?: string; scene?: string; description?: string; agent?: string } }
   | { type: "return"; runId: string; result: unknown }
   | { type: "error"; runId: string; error: string };
 

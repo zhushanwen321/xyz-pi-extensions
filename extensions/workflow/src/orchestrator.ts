@@ -15,6 +15,7 @@
  *   skipNode() → add placeholder to callCache, mark trace
  */
 
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -123,6 +124,8 @@ export class WorkflowOrchestrator {
   private readonly retryCounts = new Map<string, number>();
   private readonly runPools = new Map<string, AgentPool>();
   private readonly agentRegistry: AgentRegistry;
+  /** Active temp files created for agent system prompts — cleaned up on completion or abort. */
+  private readonly activeTempFiles = new Set<string>();
   private readonly pi: ExtensionAPI;
   private readonly ctx: ExtensionContext;
   private readonly sessionDir: string;
@@ -170,6 +173,28 @@ export class WorkflowOrchestrator {
       source: a.source,
       model: a.model,
     }));
+  }
+
+  /** Clean up a temp file created for agent system prompt. */
+  private cleanupTempFile(filePath: string): void {
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      // File may already be deleted or never created — safe to ignore
+    }
+    this.activeTempFiles.delete(filePath);
+  }
+
+  /** Clean up all remaining active temp files (e.g. on abort/error). */
+  cleanupAllTempFiles(): void {
+    for (const filePath of this.activeTempFiles) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch {
+        // swallow
+      }
+    }
+    this.activeTempFiles.clear();
   }
 
   /**
@@ -337,6 +362,7 @@ export class WorkflowOrchestrator {
     instance.completedAt = new Date().toISOString();
     transitionStatus(instance, "aborted");
     this.terminateWorker(runId);
+    this.cleanupAllTempFiles();
     await this.persistState();
     this.onCompletion?.(runId);
   }
@@ -597,8 +623,9 @@ export class WorkflowOrchestrator {
       // Write systemPrompt to temp file
       const tmpDir = path.join(os.tmpdir(), "pi-workflow");
       fs.mkdirSync(tmpDir, { recursive: true });
-      const tmpFile = path.join(tmpDir, `agent-prompt-${crypto.randomUUID()}.md`);
+      const tmpFile = path.join(tmpDir, `agent-prompt-${randomUUID()}.md`);
       fs.writeFileSync(tmpFile, discovered.systemPrompt, "utf-8");
+      this.activeTempFiles.add(tmpFile);
 
       // Merge: opts.model overrides discovered.model
       const agentModel = opts.model || discovered.model;
@@ -684,7 +711,7 @@ export class WorkflowOrchestrator {
 
         // Cleanup temp file on stale context early return
         if (opts.systemPromptFile) {
-          try { fs.unlinkSync(opts.systemPromptFile); } catch { /* swallow */ }
+          this.cleanupTempFile(opts.systemPromptFile);
         }
         return;
       }
@@ -739,7 +766,7 @@ export class WorkflowOrchestrator {
 
       // Cleanup temp file if it was created for agent system prompt
       if (opts.systemPromptFile) {
-        try { fs.unlinkSync(opts.systemPromptFile); } catch { /* swallow */ }
+        this.cleanupTempFile(opts.systemPromptFile);
       }
     });
   }
@@ -756,6 +783,7 @@ export class WorkflowOrchestrator {
     // P1-5: Mark failed — error event may not be followed by exit event
     instance.completedAt = new Date().toISOString();
     transitionStatus(instance, "failed");
+    this.cleanupAllTempFiles();
     await this.persistState();
     this.onCompletion?.(runId);
   }
