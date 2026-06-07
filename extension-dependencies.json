@@ -1,0 +1,88 @@
+{
+  "$schema": "./extension-dependencies.schema.json",
+  "extensions": [
+    {
+      "name": "@zhushanwen/pi-workflow",
+      "directory": "extensions/workflow",
+      "dependsOn": [
+        {
+          "package": "@zhushanwen/pi-structured-output",
+          "type": "runtime",
+          "reason": "workflow agent 子进程需要 structured-output tool 实现 schema 结构化输出"
+        },
+        {
+          "package": "@zhushanwen/pi-model-switch",
+          "type": "optional",
+          "reason": "有则按复杂度选模型，无则用默认模型"
+        }
+      ]
+    },
+    {
+      "name": "@zhushanwen/pi-statusline",
+      "directory": "extensions/statusline",
+      "dependsOn": [
+        {
+          "package": "@zhushanwen/pi-quota-providers",
+          "type": "package",
+          "reason": "直接 import quota-providers 的 provider/quota 配置解析逻辑"
+        }
+      ]
+    },
+    {
+      "name": "@zhushanwen/pi-model-switch",
+      "directory": "extensions/model-switch",
+      "dependsOn": [
+        {
+          "package": "@zhushanwen/pi-quota-providers",
+          "type": "package",
+          "reason": "直接 import quota-providers 的 provider 解析逻辑"
+        }
+      ]
+    },
+    {
+      "name": "@zhushanwen/pi-goal",
+      "directory": "extensions/goal",
+      "dependsOn": []
+    },
+    {
+      "name": "@zhushanwen/pi-todo",
+      "directory": "extensions/todo",
+      "dependsOn": []
+    },
+    {
+      "name": "@zhushanwen/pi-vision",
+      "directory": "extensions/vision",
+      "dependsOn": []
+    },
+    {
+      "name": "@zhushanwen/pi-coding-workflow",
+      "directory": "extensions/coding-workflow",
+      "dependsOn": []
+    },
+    {
+      "name": "@zhushanwen/pi-claude-rules-loader",
+      "directory": "extensions/claude-rules-loader",
+      "dependsOn": []
+    },
+    {
+      "name": "@zhushanwen/pi-context-engineering",
+      "directory": "extensions/context-engineering",
+      "dependsOn": []
+    },
+    {
+      "name": "@zhushanwen/pi-evolve-daily",
+      "directory": "extensions/evolve-daily",
+      "dependsOn": []
+    },
+    {
+      "name": "@zhushanwen/pi-unified-hooks",
+      "directory": "extensions/unified-hooks",
+      "dependsOn": []
+    },
+    {
+      "name": "@zhushanwen/pi-turn-timing",
+      "directory": "extensions/turn-timing",
+      "dependsOn": []
+    }
+  ]
+}
