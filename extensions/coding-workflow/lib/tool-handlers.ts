@@ -6,6 +6,7 @@
  */
 
 import type { ChildProcess } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -33,7 +34,8 @@ import {
 } from "./helpers.js";
 import { buildRetrospectFollowUp,dispatchReviewSubagent } from "./review-dispatcher.js";
 import { SkillResolver } from "./skill-resolver.js";
-import { formatUsageStats } from "./subagent.js";
+import { formatUsageStats, getFinalOutput } from "./subagent.js";
+import { runReviewGateLoop } from "./review-gate-impl.js";
 
 // ─── Shared types ────────────────────────────────────────
 
@@ -83,6 +85,8 @@ export interface HandlerContext {
 }
 
 // ─── Gate tool handler ───────────────────────────────────
+
+// ─── Gate tool handler ────────────────────────────────────
 
 export async function executeGateTool(hctx: HandlerContext, tctx: ToolExecuteContext) {
 	const { state, pi, skillResolver, activeSubprocesses, phases, gateScriptPath, maxGateRetries } = hctx;
@@ -189,7 +193,24 @@ export async function executeGateTool(hctx: HandlerContext, tctx: ToolExecuteCon
 
 	const phaseConfig = phases[phase - 1];
 
-	// 1. Run gate script
+	// ── Step 1: Review-Gate (content quality loop) ──────────
+	// Spec: max 3 rounds, consecutive 2 rounds no improvement → escalate
+	const reviewGateResult = await runReviewGateLoop(
+		phaseConfig, state.topicDir, skillResolver, signal, onUpdate, activeSubprocesses,
+	);
+	if (!reviewGateResult.passed) {
+		state.gateInProgress = false;
+		hctx.persistState(pi, state);
+		return {
+			content: [{
+				type: "text",
+				text: `Review-Gate FAILED after ${reviewGateResult.rounds} rounds (last must_fix=${reviewGateResult.lastMustFix}).\n\n${reviewGateResult.summary}\n\nFix the issues above, then call coding-workflow-gate(phase=${phase}) again.`,
+			}],
+			isError: true,
+		};
+	}
+
+	// ── Step 2: Phase-Gate (script check) ─────────────────
 	const gateResult = await runGateScript(gateScriptPath, state.topicDir, phase, signal);
 	if (!gateResult.passed) {
 		state.gateInProgress = false;
@@ -208,6 +229,13 @@ export async function executeGateTool(hctx: HandlerContext, tctx: ToolExecuteCon
 			skillResolver, signal, onUpdate,
 			activeSubprocesses,
 		);
+
+		// Auto git-add review artifacts to prevent untracked-file gate failures
+		if (reviewResult.success && fs.existsSync(reviewResult.reviewPath)) {
+			try {
+				execFileSync("git", ["add", reviewResult.reviewPath], { cwd: state.topicDir, timeout: 10_000 });
+			} catch { /* git add failure is non-critical */ void undefined; }
+		}
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		state.gateInProgress = false;
@@ -428,6 +456,27 @@ export async function executePhaseStartTool(hctx: HandlerContext, tctx: ToolExec
 	state.currentPhase += 1;
 	hctx.persistState(pi, state);
 	hctx.updateWidget(ctx, state);
+
+	// Initialize goal for Phase 2 (L1 default tasks)
+	if (state.currentPhase === 2) {
+		try {
+			const goalInit = (pi as unknown as Record<string, unknown>).__goalInit as
+				| ((objective: string, tasks: string[], budget?: Record<string, unknown>) => boolean)
+				| undefined;
+			if (goalInit) {
+				goalInit(
+					"Phase 2: Complete plan phase deliverables",
+					[
+						"Write plan.md (with Execution Groups)",
+						"Write e2e-test-plan.md",
+						"Write test_cases_template.json",
+						"Write use-cases.md",
+						"Write non-functional-design.md",
+					],
+				);
+			}
+		} catch { /* goal init failure is non-blocking */ void undefined; }
+	}
 
 	if (state.currentPhase > FINAL_PHASE) {
 		state.isActive = false;

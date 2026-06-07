@@ -354,11 +354,10 @@ def validate_plan_bl_review(topic_dir, checks):
 
 
 def check_untracked_files(topic_dir, checks):
-    """Check for git-untracked files in critical project directories.
+    """Check for git-untracked files in the current topic directory.
 
-    Scans the whole repo for files not tracked by git. Files under
-    .xyz-harness/ and docs/ are treated as FAIL (critical artifacts
-    must be committed). Other untracked files are informational only.
+    Only scans files under the current topic's directory tree, not the
+    entire repo. This prevents parallel topics from blocking each other.
     """
     abs_topic = os.path.abspath(topic_dir)
     cwd = abs_topic if os.path.isdir(abs_topic) else os.path.dirname(abs_topic)
@@ -387,20 +386,23 @@ def check_untracked_files(topic_dir, checks):
         checks.append(("untracked files", PASS, "all files tracked"))
         return
 
-    critical_prefixes = (".xyz-harness/", "docs/")
-    critical = [f for f in untracked if any(f.startswith(p) for p in critical_prefixes)]
-    other = [f for f in untracked if not any(f.startswith(p) for p in critical_prefixes)]
+    # Only check files under the current topic directory
+    topic_relpath = os.path.relpath(abs_topic, cwd)
+    topic_prefix = topic_relpath + os.sep
+
+    critical = [f for f in untracked if f.startswith(topic_prefix)]
+    other = [f for f in untracked if not f.startswith(topic_prefix)]
 
     if critical:
         display = critical[:10]
         suffix = f" (+{len(critical) - 10} more)" if len(critical) > 10 else ""
         checks.append((
-            "untracked files (critical)",
+            "untracked files (topic)",
             FAIL,
-            f"{len(critical)} untracked in .xyz-harness/ or docs/: {', '.join(display)}{suffix}",
+            f"{len(critical)} untracked under {topic_prefix}: {', '.join(display)}{suffix}",
         ))
     else:
-        checks.append(("untracked files (critical)", PASS, ".xyz-harness/ and docs/ fully tracked"))
+        checks.append(("untracked files (topic)", PASS, "topic directory fully tracked"))
 
     if other:
         display = other[:5]

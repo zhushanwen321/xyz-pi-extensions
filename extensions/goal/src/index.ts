@@ -28,6 +28,7 @@ import {
 	MAX_HISTORY_ENTRIES,
 } from "./constants";
 import {
+	createInitialState,
 	deserializeState,
 	getCompletedCount,
 	isActiveStatus,
@@ -372,4 +373,38 @@ export default function goalExtension(pi: ExtensionAPI) {
 			return new Text(prefix + theme.fg("dim", content), 0, 0);
 		});
 	}
+
+	// ── External API: initializeGoalFromExternal ──────────
+
+	/**
+	 * Allow other extensions (e.g. coding-workflow) to programmatically initialize a goal.
+	 * Skips the /goal command flow — directly creates state + tasks.
+	 * Returns true if initialized, false if goal already active.
+	 */
+	function initializeGoalFromExternal(
+		objective: string,
+		tasks: string[],
+		budget?: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number },
+	): boolean {
+		if (session.state && isActiveStatus(session.state.status)) {
+			return false;
+		}
+
+		session.state = createInitialState(objective, budget);
+		session.tasksCompletedAtAgentStart = 0;
+
+		// Create tasks (same logic as handleCreateTasks)
+		session.state.tasks = tasks.map((desc, i) => ({
+			id: i + 1,
+			description: desc.length > 60 ? desc.slice(0, 57) + "..." : desc,
+			status: "pending" as const,
+			lastUpdatedTurn: session.state!.currentTurnIndex,
+		}));
+
+		return true;
+	}
+
+	// Expose on pi for cross-extension access
+	const api = pi as unknown as Record<string, unknown>;
+	api.__goalInit = initializeGoalFromExternal;
 }
