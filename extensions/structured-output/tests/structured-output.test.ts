@@ -127,13 +127,9 @@ describe("STRUCTURED_OUTPUT_SCHEMA env var parsing", () => {
 
   it("Ajv validateSchema returns false for invalid schema structure", () => {
     const ajv = new Ajv({ strict: false });
-    // Schema with invalid type value
+    // Schema with invalid type value — compile throws in non-strict mode too
     const badSchema = { type: "not-a-real-type" };
-    // Ajv in non-strict mode may still compile this, but let's verify behavior
-    // More realistic: check that a deeply invalid schema fails compilation
-    const compileResult = ajv.compile(badSchema);
-    // The compile should succeed (Ajv is lenient), but validation should work predictably
-    expect(typeof compileResult).toBe("function");
+    expect(() => ajv.compile(badSchema)).toThrow();
   });
 });
 
