@@ -83,17 +83,31 @@ def _load_from_file(input_file: str) -> list[dict]:
 
 
 def _load_session_file(file_path: Path) -> dict | None:
-    """加载单个 JSONL session 文件。"""
+    """加载单个 JSONL session 文件。
+
+    Pi 的 JSONL 格式中，工具调用结果嵌套在 message 类型事件里：
+    {"type": "message", "message": {"role": "toolResult", ...}}
+    extractor 需要直接访问 role/toolName 等字段，
+    所以这里将 message 类型事件的内层 message 展开。
+    """
     try:
         messages = []
         with open(file_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if line:
-                    try:
-                        messages.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                # 展开 message 类型：用内层 message 替代外层包装
+                # 这样 extractor 的 msg.get("role") 等可以正常工作
+                if entry.get("type") == "message" and "message" in entry:
+                    messages.append(entry["message"])
+                else:
+                    messages.append(entry)
 
         if not messages:
             return None
