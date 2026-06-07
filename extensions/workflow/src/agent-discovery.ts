@@ -94,6 +94,7 @@ export class AgentRegistry {
     try {
       entries = fs.readdirSync(extensionsDir);
     } catch {
+      // Directory not readable — skip
       return;
     }
 
@@ -114,6 +115,7 @@ export class AgentRegistry {
     try {
       entries = fs.readdirSync(nodeModulesDir);
     } catch {
+      // node_modules not readable — skip
       return;
     }
 
@@ -125,6 +127,7 @@ export class AgentRegistry {
         try {
           scopedEntries = fs.readdirSync(entryPath);
         } catch {
+          // Scoped directory not readable — skip
           continue;
         }
         for (const scopedPkg of scopedEntries) {
@@ -147,6 +150,7 @@ export class AgentRegistry {
     try {
       entries = fs.readdirSync(dir);
     } catch {
+      // Agents directory not readable — skip
       return;
     }
 
@@ -166,6 +170,7 @@ export class AgentRegistry {
     try {
       content = fs.readFileSync(filePath, "utf-8");
     } catch {
+      // File not readable — skip
       return;
     }
 
@@ -185,6 +190,7 @@ export class AgentRegistry {
     try {
       return fs.statSync(dirPath).isDirectory();
     } catch {
+      // Path doesn't exist or not accessible — skip
       return false;
     }
   }
@@ -202,26 +208,27 @@ export class AgentRegistry {
  */
 function parseFrontmatter(content: string, fileName: string): FrontmatterResult {
   const baseName = fileName.replace(/\.md$/, "");
+  // Length of the opening "---" delimiter plus the newline that follows it
+  const FM_DELIM_LEN = "---".length;
 
   if (!content.startsWith("---")) {
     return { name: baseName, systemPrompt: content.trim() };
   }
 
-  // Look for closing ---
-  // Start search after the opening --- (offset by 3 to skip it)
-  const closeIdx = content.indexOf("---", 3);
+  // Look for closing ---, starting after the opening delimiter
+  const closeIdx = content.indexOf("---", FM_DELIM_LEN);
 
   // Unclosed frontmatter — entire file as systemPrompt, filename as name
   if (closeIdx === -1) {
     return { name: baseName, systemPrompt: content.trim() };
   }
 
-  const yamlBlock = content.slice(3, closeIdx);
-  const body = content.slice(closeIdx + 3).trim();
+  const yamlBlock = content.slice(FM_DELIM_LEN, closeIdx);
+  const body = content.slice(closeIdx + FM_DELIM_LEN).trim();
 
   const name = extractYamlField(yamlBlock, "name") || baseName;
   const model = extractYamlField(yamlBlock, "model");
-  const description = extractYamlDescription(yamlBlock);
+  const description = extractYamlField(yamlBlock, "description");
 
   return {
     name,
@@ -246,7 +253,3 @@ function extractYamlField(yaml: string, key: string): string | null {
   return value || null;
 }
 
-/** Extract description field, handling quoted and unquoted values. */
-function extractYamlDescription(yaml: string): string | null {
-  return extractYamlField(yaml, "description");
-}

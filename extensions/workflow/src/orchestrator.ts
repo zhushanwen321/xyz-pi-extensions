@@ -179,8 +179,9 @@ export class WorkflowOrchestrator {
   private cleanupTempFile(filePath: string): void {
     try {
       fs.unlinkSync(filePath);
+    // eslint-disable-next-line taste/no-silent-catch
     } catch {
-      // File may already be deleted or never created — safe to ignore
+      // File may already be deleted or never created
     }
     this.activeTempFiles.delete(filePath);
   }
@@ -190,8 +191,9 @@ export class WorkflowOrchestrator {
     for (const filePath of this.activeTempFiles) {
       try {
         fs.unlinkSync(filePath);
+      // eslint-disable-next-line taste/no-silent-catch
       } catch {
-        // swallow
+        // File may already be deleted or never created
       }
     }
     this.activeTempFiles.clear();
