@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Evolve Daily — 整体架构图</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #161922;
+    --surface2: #1e2230;
+    --border: #2a2f3e;
+    --text: #e2e8f0;
+    --text-dim: #8892a8;
+    --accent-blue: #60a5fa;
+    --accent-green: #34d399;
+    --accent-orange: #fbbf24;
+    --accent-red: #f87171;
+    --accent-purple: #a78bfa;
+    --accent-cyan: #22d3ee;
+    --accent-pink: #f472b6;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace;
+    background: var(--bg);
+    color: var(--text);
+    padding: 40px;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+  h1 {
+    text-align: center;
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .subtitle {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 13px;
+    margin-bottom: 48px;
+  }
+
+  /* ── Flow Container ── */
+  .flow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  /* ── Layer ── */
+  .layer {
+    width: 100%;
+    position: relative;
+  }
+  .layer-label {
+    position: absolute;
+    left: -8px;
+    top: 50%;
+    transform: translateY(-50%) rotate(-90deg);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    white-space: nowrap;
+    opacity: 0.6;
+  }
+
+  /* ── Box ── */
+  .box {
+    border-radius: 10px;
+    padding: 16px 20px;
+    position: relative;
+  }
+  .box-title {
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .box-title .icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+
+  /* ── Arrows ── */
+  .arrow-down {
+    display: flex;
+    justify-content: center;
+    padding: 6px 0;
+  }
+  .arrow-down svg { display: block; }
+  .arrow-label {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-align: center;
+    margin-top: 2px;
+  }
+
+  /* ── Grid ── */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .grid-4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 14px; }
+
+  /* ── Tag ── */
+  .tag {
+    display: inline-block;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    margin: 2px 2px 2px 0;
+    white-space: nowrap;
+  }
+  .tag-blue { background: rgba(96,165,250,0.15); color: var(--accent-blue); }
+  .tag-green { background: rgba(52,211,153,0.15); color: var(--accent-green); }
+  .tag-orange { background: rgba(251,191,36,0.15); color: var(--accent-orange); }
+  .tag-red { background: rgba(248,113,113,0.15); color: var(--accent-red); }
+  .tag-purple { background: rgba(167,139,250,0.15); color: var(--accent-purple); }
+  .tag-cyan { background: rgba(34,211,238,0.15); color: var(--accent-cyan); }
+  .tag-pink { background: rgba(244,114,182,0.15); color: var(--accent-pink); }
+
+  /* ── Item list ── */
+  .item-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+  }
+  .item {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 5px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  /* ── Section divider ── */
+  .divider {
+    width: 100%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border), transparent);
+    margin: 32px 0;
+  }
+
+  /* ── Problem Cards ── */
+  .problem-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    width: 100%;
+  }
+  .problem-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    transition: border-color 0.2s;
+  }
+  .problem-card:hover {
+    border-color: var(--accent-blue);
+  }
+  .problem-id {
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+  }
+  .problem-name {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .problem-meta {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  /* ── Skill cards ── */
+  .skill-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+  }
+  .skill-card .skill-name {
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .skill-card .skill-desc {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
+  /* ── Data store ── */
+  .data-store {
+    background: var(--surface);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    padding: 14px 20px;
+    text-align: center;
+  }
+  .data-store .store-icon {
+    font-size: 20px;
+    margin-bottom: 4px;
+  }
+  .data-store .store-path {
+    font-size: 11px;
+    color: var(--accent-cyan);
+    margin-top: 4px;
+    word-break: break-all;
+  }
+
+  /* ── Legend ── */
+  .legend {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 32px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+  }
+
+  /* ── Responsive ── */
+  @media (max-width: 900px) {
+    body { padding: 20px; }
+    .grid-4 { grid-template-columns: 1fr 1fr; }
+    .problem-grid { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 600px) {
+    .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+    .problem-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Evolve Daily Architecture</h1>
+<p class="subtitle">Pi Agent 自适应进化系统 — 数据采集 → 离线分析 → 实时反馈 → 行动建议</p>
+
+<!-- Legend -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--accent-blue)"></div> 实时管线 (TS)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--accent-green)"></div> 离线管线 (Python)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--accent-orange)"></div> Problem Registry</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--accent-purple)"></div> Skills 层</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--accent-cyan)"></div> 数据存储</div>
+</div>
+
+<div class="flow">
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<!-- L0: Pi Runtime Events                                       -->
+<!-- ════════════════════════════════════════════════════════════ -->
+<div class="layer">
+  <div class="box" style="background: rgba(96,165,250,0.06); border: 1px solid rgba(96,165,250,0.2);">
+    <div class="box-title">
+      <span class="icon" style="background:rgba(96,165,250,0.2); color:var(--accent-blue);">⚡</span>
+      <span style="color:var(--accent-blue);">Pi Runtime Events</span>
+      <span style="color:var(--text-dim); font-weight:400; font-size:12px; margin-left:auto;">extension 入口 src/index.ts 监听</span>
+    </div>
+    <div class="item-list">
+      <span class="item" style="border-color:rgba(96,165,250,0.3);">session_start</span>
+      <span class="item" style="border-color:rgba(96,165,250,0.3);">session_compact</span>
+      <span class="item" style="border-color:rgba(96,165,250,0.3);">tool_result</span>
+      <span class="item" style="border-color:rgba(96,165,250,0.3);">tool_call</span>
+      <span class="item" style="border-color:rgba(96,165,250,0.3);">turn_end</span>
+      <span class="item" style="border-color:rgba(96,165,250,0.3);">session_tree</span>
+      <span class="item" style="border-color:rgba(96,165,250,0.3);">before_agent_start</span>
+    </div>
+  </div>
+</div>
+
+<!-- Arrow -->
+<div class="arrow-down">
+  <svg width="400" height="36" viewBox="0 0 400 36">
+    <defs>
+      <marker id="ah1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#60a5fa"/>
+      </marker>
+    </defs>
+    <!-- Left branch: real-time -->
+    <line x1="120" y1="4" x2="120" y2="28" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#ah1)"/>
+    <text x="120" y="36" text-anchor="middle" fill="#60a5fa" font-size="10">实时事件</text>
+    <!-- Right branch: session_start trigger -->
+    <line x1="280" y1="4" x2="280" y2="28" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah1)"/>
+    <text x="280" y="36" text-anchor="middle" fill="#34d399" font-size="10">每日首次触发</text>
+  </svg>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<!-- L1: Two Parallel Pipelines                                  -->
+<!-- ════════════════════════════════════════════════════════════ -->
+<div class="grid-2">
+
+  <!-- L1-RT: Real-time Pipeline (TypeScript) -->
+  <div class="layer">
+    <div class="box" style="background: rgba(96,165,250,0.06); border: 1px solid rgba(96,165,250,0.2);">
+      <div class="box-title">
+        <span class="icon" style="background:rgba(96,165,250,0.2); color:var(--accent-blue);">L2</span>
+        <span style="color:var(--accent-blue);">实时管线 (TypeScript)</span>
+      </div>
+      <p style="font-size:11px; color:var(--text-dim); margin-bottom:12px;">
+        在 Pi 进程内运行，监听事件并即时写入 feedback entries
+      </p>
+
+      <!-- Detectors -->
+      <div style="margin-bottom:12px;">
+        <div style="font-size:11px; color:var(--accent-blue); font-weight:600; margin-bottom:6px;">
+          Detectors（事件匹配 → appendEntry）
+        </div>
+        <div class="item-list">
+          <span class="item" style="border-color:rgba(96,165,250,0.25);">
+            📦 compact<br><span style="color:var(--text-dim);font-size:10px;">session_compact</span>
+          </span>
+          <span class="item" style="border-color:rgba(96,165,250,0.25);">
+            🤖 subagent-result<br><span style="color:var(--text-dim);font-size:10px;">tool_result</span>
+          </span>
+          <span class="item" style="border-color:rgba(96,165,250,0.25);">
+            ⚠️ param-error<br><span style="color:var(--text-dim);font-size:10px;">tool_result isError</span>
+          </span>
+          <span class="item" style="border-color:rgba(96,165,250,0.25);">
+            🎯 goal-quality<br><span style="color:var(--text-dim);font-size:10px;">goal_manager result</span>
+          </span>
+        </div>
+      </div>
+
+      <!-- Tracker Framework -->
+      <div style="background:var(--surface2); border-radius:6px; padding:10px 14px;">
+        <div style="font-size:11px; color:var(--accent-blue); font-weight:600; margin-bottom:6px;">
+          Tracker Framework（createTracker 工厂）
+        </div>
+        <div style="font-size:11px; color:var(--text-dim); line-height:1.7;">
+          <div><span class="tag tag-blue">状态机</span> loaded → in_progress → completed/error</div>
+          <div><span class="tag tag-blue">steering</span> onCreate / onRemind / onError 注入 AI 上下文</div>
+          <div><span class="tag tag-blue">持久化</span> appendEntry + GC 旧 entries</div>
+          <div><span class="tag tag-blue">remind</span> turn_end 周期性提醒未完成任务</div>
+          <div style="margin-top:4px; color:var(--text);">当前实例：<strong>skill-execution tracker</strong></div>
+        </div>
+      </div>
+
+      <!-- Output -->
+      <div style="margin-top:10px;">
+        <div style="font-size:10px; color:var(--accent-cyan);">→ pi.appendEntry("evolve-feedback", {...})</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- L1-Offline: Offline Pipeline (Python) -->
+  <div class="layer">
+    <div class="box" style="background: rgba(52,211,153,0.06); border: 1px solid rgba(52,211,153,0.2);">
+      <div class="box-title">
+        <span class="icon" style="background:rgba(52,211,153,0.2); color:var(--accent-green);">L1</span>
+        <span style="color:var(--accent-green);">离线管线 (Python)</span>
+      </div>
+      <p style="font-size:11px; color:var(--text-dim); margin-bottom:12px;">
+        session_start 触发 pi.exec("python3 ...") ，每日最多运行一次
+      </p>
+
+      <!-- Pipeline Steps -->
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <!-- Step 1: Parser -->
+        <div style="background:var(--surface2); border-radius:6px; padding:8px 12px;">
+          <div style="font-size:11px; font-weight:600; color:var(--accent-green);">① Parser</div>
+          <div style="font-size:10px; color:var(--text-dim);">parse_all_sessions() — 扫描 ~/.pi/agent/sessions/*.jsonl</div>
+        </div>
+        <!-- Step 2: Extractors (old) -->
+        <div style="background:var(--surface2); border-radius:6px; padding:8px 12px;">
+          <div style="font-size:11px; font-weight:600; color:var(--accent-green);">② Scripts Extractors (scripts/extractors/) — 9 类信号</div>
+          <div class="item-list">
+            <span class="tag tag-green">tools</span>
+            <span class="tag tag-green">tokens</span>
+            <span class="tag tag-green">errors</span>
+            <span class="tag tag-green">users</span>
+            <span class="tag tag-green">skills</span>
+            <span class="tag tag-green">cross_project</span>
+            <span class="tag tag-green">satisfaction</span>
+            <span class="tag tag-green">skill_state</span>
+          </div>
+        </div>
+        <!-- Step 2b: Analyzer Extractors -->
+        <div style="background:var(--surface2); border-radius:6px; padding:8px 12px;">
+          <div style="font-size:11px; font-weight:600; color:var(--accent-green);">②' Analyzer Extractors (analyzer/extractors/) — 7 维度</div>
+          <div class="item-list">
+            <span class="tag tag-green">compact</span>
+            <span class="tag tag-green">context</span>
+            <span class="tag tag-green">goal_quality</span>
+            <span class="tag tag-green">subagent</span>
+            <span class="tag tag-green">tool_errors</span>
+            <span class="tag tag-green">tracker</span>
+            <span class="tag tag-green">workflow</span>
+          </div>
+        </div>
+        <!-- Step 3: Miner / Rules -->
+        <div style="background:var(--surface2); border-radius:6px; padding:8px 12px;">
+          <div style="font-size:11px; font-weight:600; color:var(--accent-green);">③ Miner + Rules — 模式聚合 &amp; 问题挖掘</div>
+          <div style="font-size:10px; color:var(--text-dim); margin-top:4px;">
+            <strong>miner.py</strong> — 9 条规则 → Top-N actionable issues + skill health (KEEP/REFINE/DORMANT)
+          </div>
+          <div style="font-size:10px; color:var(--text-dim); margin-top:2px;">
+            <strong>analyzer/rules/</strong> — 14 条规则 → 按 problem_id 分类
+          </div>
+        </div>
+        <!-- Step 4: Reporter -->
+        <div style="background:var(--surface2); border-radius:6px; padding:8px 12px;">
+          <div style="font-size:11px; font-weight:600; color:var(--accent-green);">④ Reporter</div>
+          <div style="font-size:10px; color:var(--text-dim);">to_json_string() / to_markdown()</div>
+        </div>
+      </div>
+
+      <!-- Output -->
+      <div style="margin-top:10px;">
+        <div style="font-size:10px; color:var(--accent-cyan);">→ ~/.pi/agent/evolution-data/daily-reports/YYYY-MM-DD.json</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Arrow to Data Store -->
+<div class="arrow-down">
+  <svg width="200" height="32" viewBox="0 0 200 32">
+    <defs>
+      <marker id="ah2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#22d3ee"/>
+      </marker>
+    </defs>
+    <line x1="100" y1="4" x2="100" y2="26" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ah2)"/>
+  </svg>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<!-- Data Stores                                                 -->
+<!-- ════════════════════════════════════════════════════════════ -->
+<div class="grid-2">
+  <div class="data-store">
+    <div class="store-icon">📋</div>
+    <div style="font-size:13px; font-weight:600;">Session Entries</div>
+    <div style="font-size:11px; color:var(--text-dim); margin-top:4px;">
+      evolve-feedback entries（实时 detector 写入）
+    </div>
+    <div class="store-path">session JSONL (in-memory via ctx.sessionManager)</div>
+  </div>
+  <div class="data-store">
+    <div class="store-icon">📊</div>
+    <div style="font-size:13px; font-weight:600;">Daily Reports</div>
+    <div style="font-size:11px; color:var(--text-dim); margin-top:4px;">
+      Python analyzer 深度分析 JSON 报告
+    </div>
+    <div class="store-path">~/.pi/agent/evolution-data/daily-reports/*.json</div>
+  </div>
+</div>
+
+<!-- Arrow to Skills -->
+<div class="arrow-down">
+  <svg width="400" height="36" viewBox="0 0 400 36">
+    <defs>
+      <marker id="ah3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#a78bfa"/>
+      </marker>
+    </defs>
+    <line x1="100" y1="4" x2="100" y2="28" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ah3)"/>
+    <text x="100" y="36" text-anchor="middle" fill="#a78bfa" font-size="10">用户触发</text>
+    <line x1="300" y1="4" x2="300" y2="28" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ah3)"/>
+    <text x="300" y="36" text-anchor="middle" fill="#a78bfa" font-size="10">用户触发</text>
+  </svg>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<!-- Skills Layer                                                -->
+<!-- ════════════════════════════════════════════════════════════ -->
+<div class="layer">
+  <div class="box" style="background: rgba(167,139,250,0.06); border: 1px solid rgba(167,139,250,0.2);">
+    <div class="box-title">
+      <span class="icon" style="background:rgba(167,139,250,0.2); color:var(--accent-purple);">🧠</span>
+      <span style="color:var(--accent-purple);">Skills 层 (skills/)</span>
+      <span style="color:var(--text-dim); font-weight:400; font-size:12px; margin-left:auto;">用户通过 /evolve 等命令触发</span>
+    </div>
+    <div class="grid-3" style="margin-top:4px;">
+      <div class="skill-card">
+        <div class="skill-name" style="color:var(--accent-purple);">/evolve</div>
+        <div class="skill-desc">
+          读取 daily-reports + history.jsonl，通过 LLM 生成改进建议。
+          支持时间范围、维度聚焦。
+          输出 suggestions 写入 history。
+        </div>
+        <div class="item-list" style="margin-top:8px;">
+          <span class="tag tag-purple">读取报告</span>
+          <span class="tag tag-purple">LLM 分析</span>
+          <span class="tag tag-purple">生成建议</span>
+        </div>
+      </div>
+      <div class="skill-card">
+        <div class="skill-name" style="color:var(--accent-purple);">/evolve-apply</div>
+        <div class="skill-desc">
+          管理建议生命周期：list、apply（写入 CLAUDE.md/skills）、skip、rollback。
+          追踪每条建议的采纳状态和效果。
+        </div>
+        <div class="item-list" style="margin-top:8px;">
+          <span class="tag tag-purple">应用建议</span>
+          <span class="tag tag-purple">回滚</span>
+          <span class="tag tag-purple">状态管理</span>
+        </div>
+      </div>
+      <div class="skill-card">
+        <div class="skill-name" style="color:var(--accent-purple);">/evolve-report</div>
+        <div class="skill-desc">
+          查看进化报告和使用统计。Session 数据、工具使用、Token 消耗、趋势分析。
+        </div>
+        <div class="item-list" style="margin-top:8px;">
+          <span class="tag tag-purple">报告展示</span>
+          <span class="tag tag-purple">趋势图</span>
+          <span class="tag tag-purple">统计</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Arrow to Problem Registry -->
+<div class="arrow-down">
+  <svg width="300" height="32" viewBox="0 0 300 32">
+    <defs>
+      <marker id="ah4" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#fbbf24"/>
+      </marker>
+    </defs>
+    <line x1="150" y1="4" x2="150" y2="26" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ah4)"/>
+  </svg>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<!-- Problem Registry                                            -->
+<!-- ════════════════════════════════════════════════════════════ -->
+<div class="layer">
+  <div class="box" style="background: rgba(251,191,36,0.06); border: 1px solid rgba(251,191,36,0.2);">
+    <div class="box-title">
+      <span class="icon" style="background:rgba(251,191,36,0.2); color:var(--accent-orange);">🎯</span>
+      <span style="color:var(--accent-orange);">Problem Registry (src/problems.ts)</span>
+      <span style="color:var(--text-dim); font-weight:400; font-size:12px; margin-left:auto;">6 个 ProblemDefinition — 连接 Detector ↔ Analyzer Rule</span>
+    </div>
+    <div class="problem-grid" style="margin-top:8px;">
+      <div class="problem-card">
+        <div class="problem-id">compact-frequency</div>
+        <div class="problem-name" style="color:var(--accent-cyan);">Compact 频率</div>
+        <div class="problem-meta">
+          <span class="tag tag-cyan">context</span>
+          <span class="tag tag-blue">session_compact</span>
+        </div>
+        <div style="font-size:10px; color:var(--text-dim); margin-top:6px;">
+          ≥3 次/session → high<br>
+          rules: compact-high-frequency, compact-early-trigger
+        </div>
+      </div>
+      <div class="problem-card">
+        <div class="problem-id">context-utilization</div>
+        <div class="problem-name" style="color:var(--accent-cyan);">上下文利用率</div>
+        <div class="problem-meta">
+          <span class="tag tag-cyan">context</span>
+          <span class="tag tag-blue">turn_end</span>
+        </div>
+        <div style="font-size:10px; color:var(--text-dim); margin-top:6px;">
+          &gt;70% → medium, &gt;90% → high<br>
+          rule: context-high-utilization
+        </div>
+      </div>
+      <div class="problem-card">
+        <div class="problem-id">subagent-efficiency</div>
+        <div class="problem-name" style="color:var(--accent-pink);">Subagent 效率</div>
+        <div class="problem-meta">
+          <span class="tag tag-pink">subagent</span>
+          <span class="tag tag-blue">tool_result</span>
+        </div>
+        <div style="font-size:10px; color:var(--text-dim); margin-top:6px;">
+          失败率 &gt;20% → medium, &gt;40% → high<br>
+          rules: subagent-failure-rate, subagent-high-retry
+        </div>
+      </div>
+      <div class="problem-card">
+        <div class="problem-id">tool-param-validation</div>
+        <div class="problem-name" style="color:var(--accent-red);">工具参数校验失败</div>
+        <div class="problem-meta">
+          <span class="tag tag-red">tool</span>
+          <span class="tag tag-blue">tool_result isError</span>
+        </div>
+        <div style="font-size:10px; color:var(--text-dim); margin-top:6px;">
+          &gt;10% → medium, &gt;25% → high<br>
+          rules: param-error-rate, edit-match-failure, low-self-correction
+        </div>
+      </div>
+      <div class="problem-card">
+        <div class="problem-id">workflow-phase-duration</div>
+        <div class="problem-name" style="color:var(--accent-orange);">工作流阶段耗时</div>
+        <div class="problem-meta">
+          <span class="tag tag-orange">workflow</span>
+          <span class="tag tag-blue">coding-workflow-gate</span>
+        </div>
+        <div style="font-size:10px; color:var(--text-dim); margin-top:6px;">
+          阶段占比 &gt;50% → medium<br>
+          rules: workflow-slow-phase, workflow-gate-retry
+        </div>
+      </div>
+      <div class="problem-card">
+        <div class="problem-id">goal-task-quality</div>
+        <div class="problem-name" style="color:var(--accent-orange);">Goal 任务分解质量</div>
+        <div class="problem-meta">
+          <span class="tag tag-orange">workflow</span>
+          <span class="tag tag-blue">goal_manager</span>
+        </div>
+        <div style="font-size:10px; color:var(--text-dim); margin-top:6px;">
+          完成率 &lt;70% → medium<br>
+          rules: goal-low-completion, goal-stall-frequent, todo-high-abandon
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Final output -->
+<div class="arrow-down">
+  <svg width="200" height="32" viewBox="0 0 200 32">
+    <defs>
+      <marker id="ah5" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#34d399"/>
+      </marker>
+    </defs>
+    <line x1="100" y1="4" x2="100" y2="26" stroke="#34d399" stroke-width="1.5" marker-end="url(#ah5)"/>
+  </svg>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<!-- Output / Feedback                                           -->
+<!-- ════════════════════════════════════════════════════════════ -->
+<div class="layer">
+  <div class="box" style="background: rgba(52,211,153,0.08); border: 1px solid rgba(52,211,153,0.3);">
+    <div class="box-title">
+      <span class="icon" style="background:rgba(52,211,153,0.2); color:var(--accent-green);">✅</span>
+      <span style="color:var(--accent-green);">进化产出（写入目标文件）</span>
+    </div>
+    <div class="grid-3">
+      <div style="text-align:center; padding:10px;">
+        <div style="font-size:20px; margin-bottom:4px;">📝</div>
+        <div style="font-size:12px; font-weight:600;">CLAUDE.md</div>
+        <div style="font-size:10px; color:var(--text-dim);">新规则 / 修正指令</div>
+      </div>
+      <div style="text-align:center; padding:10px;">
+        <div style="font-size:20px; margin-bottom:4px;">🔧</div>
+        <div style="font-size:12px; font-weight:600;">SKILL.md</div>
+        <div style="font-size:10px; color:var(--text-dim);">触发词优化 / 流程调整</div>
+      </div>
+      <div style="text-align:center; padding:10px;">
+        <div style="font-size:20px; margin-bottom:4px;">⚙️</div>
+        <div style="font-size:12px; font-weight:600;">Extension Config</div>
+        <div style="font-size:10px; color:var(--text-dim);">阈值 / 参数调优</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<!-- Directory Map                                               -->
+<!-- ════════════════════════════════════════════════════════════ -->
+<div class="divider"></div>
+
+<div style="max-width:1200px; margin:0 auto;">
+  <div style="font-size:16px; font-weight:700; margin-bottom:16px; color:var(--accent-blue);">
+    📁 目录结构映射
+  </div>
+  <div class="grid-2">
+    <!-- TS side -->
+    <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px; font-size:11px; line-height:2;">
+      <div style="color:var(--accent-blue); font-weight:700; margin-bottom:4px;">src/ — TypeScript 实时层</div>
+      <div><span style="color:var(--accent-orange);">index.ts</span> — 入口，注册事件监听</div>
+      <div><span style="color:var(--accent-orange);">problems.ts</span> — Problem Registry (6 定义)</div>
+      <div style="color:var(--text-dim); padding-left:16px;">
+        detectors/ — 4 个事件匹配器
+        <div>├ compact.ts</div>
+        <div>├ goal-quality.ts</div>
+        <div>├ param-error.ts</div>
+        <div>└ subagent-result.ts</div>
+      </div>
+      <div style="color:var(--text-dim); padding-left:16px;">
+        trackers/ — Tracker 框架
+        <div>├ core.ts — createTracker 工厂</div>
+        <div>├ types.ts — 状态机定义</div>
+        <div>├ skill-execution.ts — skill 执行追踪配置</div>
+        <div>└ run_tests.mjs — 测试运行器</div>
+      </div>
+    </div>
+    <!-- Python side -->
+    <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px; font-size:11px; line-height:2;">
+      <div style="color:var(--accent-green); font-weight:700; margin-bottom:4px;">scripts/ + analyzer/ — Python 离线层</div>
+      <div><span style="color:var(--accent-orange);">scripts/analyze.py</span> — 旧管线 CLI 入口</div>
+      <div><span style="color:var(--accent-orange);">analyzer/analyze.py</span> — 新管线 CLI 入口</div>
+      <div style="color:var(--text-dim); padding-left:16px;">
+        scripts/extractors/ — 9 类信号提取
+        <div>├ tools / tokens / errors / users</div>
+        <div>├ skills / cross_project / satisfaction</div>
+        <div>└ skill_state</div>
+      </div>
+      <div style="color:var(--text-dim); padding-left:16px;">
+        analyzer/extractors/ — 7 维度提取
+        <div>├ compact / context / goal_quality</div>
+        <div>├ subagent / tool_errors / tracker</div>
+        <div>└ workflow</div>
+      </div>
+      <div style="color:var(--text-dim); padding-left:16px;">
+        analyzer/rules/ — 14 条分析规则
+      </div>
+      <div><span style="color:var(--accent-orange);">scripts/miner.py</span> — 模式聚合 + skill 健康度</div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /.flow -->
+
+</body>
+</html>

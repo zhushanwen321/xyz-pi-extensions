@@ -42,7 +42,7 @@ def load_sessions(since_days: int = 1, input_file: str | None = None) -> list[di
     cutoff = datetime.now() - timedelta(days=since_days)
     sessions = []
 
-    for session_file in sessions_dir.glob("*.jsonl"):
+    for session_file in sessions_dir.rglob("*.jsonl"):
         try:
             # 从文件名解析日期
             file_date = datetime.fromisoformat(session_file.stem[:10])
