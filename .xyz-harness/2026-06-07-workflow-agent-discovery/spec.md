@@ -175,8 +175,9 @@ opts = {
 **FR-4.2 临时文件管理**
 
 - 写入 `os.tmpdir()/pi-workflow/agent-prompt-{uuid}.md`
-- 子进程退出后立即删除（在 `spawnAndParse` 的 finally 块中）
+- 子进程退出后立即删除（在 orchestrator `executeWithRetry` 的 then 回调中，以及 abort/handleWorkerError 路径的 `cleanupAllTempFiles` 中）
 - 防止并发冲突：每次调用独立的 UUID 文件名
+- Orchestrator 维护 `activeTempFiles` Set 跟踪所有活跃临时文件，确保异常路径也能清理
 
 **FR-4.3 错误处理**
 
@@ -252,8 +253,8 @@ Workflow: discovered 12 agents (4 project, 8 package)
 
 ### AC-6: npm 包完整性
 
-- [ ] `extensions/workflow/package.json` 的 `files` 字段包含 `"agents/"`
-- [ ] `npm pack --dry-run` 输出中包含 `agents/` 目录下的文件
+- [ ] `@zhushanwen/pi-coding-workflow` 的 `package.json` `files` 字段包含 `"agents/"`，确保 review agent 文件随包分发
+- [ ] `@zhushanwen/pi-workflow` 的 `package.json` 无需声明 `agents/`（该包不自带 agent 文件，只负责发现其他包的 agents）
 
 ## Constraints
 
@@ -262,7 +263,6 @@ Workflow: discovered 12 agents (4 project, 8 package)
 - **不改 pi CLI**：`--append-system-prompt` 已是 pi 原生参数，无需改动
 - **单文件 ≤ 300 行**：agent-discovery.ts 控制在 200 行以内
 - **同步发现**：`discoverAll()` 在 session_start 时同步执行（文件 IO 少，< 100ms）
-- **package.json files 字段**：`extensions/workflow/package.json` 的 `files` 需要加入 `"agents/"`，确保 npm publish 后 agent 文件随包分发（当前只有 `src/`, `index.ts`, `skills/`）
 
 ## 业务用例
 

@@ -685,6 +685,10 @@ git commit -m "feat(workflow): add agent discovery logging and status agents lis
 
 **Type:** backend
 
+**Status:** ~~已取消~~ — pi-workflow 包自身不包含 `agents/` 目录，无需声明。实际需要 `agents/` 声明的是 `@zhushanwen/pi-coding-workflow`（其 package.json 已包含）。
+
+**Type:** backend
+
 **Files:**
 - Modify: `extensions/workflow/package.json`
 
