@@ -1,5 +1,20 @@
 # ADR 018: Review-Gate 自动循环审查机制
 
+> **⚠️ SUPERSEDED — 本 ADR 已被以下文档取代：**
+> - 各 Phase 详细规格：`docs/phase-specs/phase-{1-4}-*.md`
+> - 统一分析范式：`docs/review-gate-phase-analysis-playbook.md`
+>
+> 本 ADR 中的以下决策已变更：
+> - Phase 1/2/4 Review-Gate：从"单次无循环"改为"Workflow 循环（agent 审查+修复）"
+> - Phase 4：去掉 Review-Gate，改为 Test-Fix Loop Workflow（测试-修复循环）
+> - Phase-Gate：从"统一 workflow 循环 doc-fix"改为"2 步（脚本检查 + AI Agent 防伪造）"
+> - Phase 3 Review-Gate：前置节点从"单 reviewer"改为"spec-plan-conformance-reviewer（独立循环）"
+> - Phase 3 Review-Gate：新增 Fallow 静态分析审查维度
+>
+> 请以 `docs/phase-specs/` 为准。
+
+Status: ~~accepted~~ superseded
+
 ## Status
 
 Proposed
@@ -123,6 +138,20 @@ SKILL.md 改动：删除 "Spec Review" + "Gate Handoff" 章节。
 #### Phase 5 PR
 
 不变，不引入 review-gate。
+
+### 项目规范文件传递方式（方案 B：subagent 自行查找）
+
+reviewer subagent 需要读取项目自己的规范文件（CLAUDE.md、~/.codetaste/essence.md 等）进行审查。采用 **subagent 自行查找并读取** 方案，不通过主 agent 预处理或注入。
+
+**实现方式**：
+1. subagent 的 SKILL.md 中定义规范文件查找步骤（如 standards-reviewer 的 Phase B Step 1）
+2. subagent 有 `read` 和 `bash` 工具，按 SKILL.md 指引自行查找和读取
+3. dispatch subagent 时 `cwd` 设为项目根目录，确保相对路径正确
+
+**理由**：
+- 现有 standards-reviewer SKILL.md 已实现此模式（Phase A 检测 lint 配置 + Phase B 读 CLAUDE.md）
+- subagent 是独立进程，读文件不占用主 agent 上下文
+- 项目规范路径不固定（CLAUDE.md / .editorconfig / pyproject.toml / ~/.codetaste/essence.md），subagent 按 SKILL.md 指引查找比主 agent 预判更灵活
 
 ## Consequences
 

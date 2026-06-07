@@ -21,19 +21,22 @@
 3. [Goal] 用户手动触发 /goal（Brainstorming 完成后，准备编写交付物时）
    → 任务列表：spec.md
 4. [固定] 主 agent 编写 spec.md（完成后更新 goal）
-5. [Workflow] Review-Gate（循环，最多 3 轮）
-6. [脚本] Phase-Gate（脚本检查，最多 5 次重试）
-7. [主 Agent] Retrospect（steer 指令执行）→ 产出 `phase1_retrospect.md`
+5. [主 Agent] 调用 coding-workflow-gate(phase=1)
+   → gate tool 内部路由：先跑 Review-Gate，最多 3 轮
+   → Review-Gate 通过后再跑 Phase-Gate（脚本检查，最多 5 次重试）
+6. [主 Agent] Retrospect（Phase-Gate 通过后，gate tool handler 通过 steer 指令触发）→ 产出 `phase1_retrospect.md`
 → 过渡：主 agent 调用 coding-workflow-phase-start(phase=2)
 ```
 
 ## Phase 过渡
 
-**Phase 1 → Phase 2**：Retrospect 完成后，主 agent 调用 `coding-workflow-phase-start(phase=2)`。该 tool handler 执行 compact，注入 Phase 2 steering prompt。
+**Phase 1 → Phase 2**：Retrospect 完成后，主 agent 调用 `coding-workflow-phase-start(phase=2)`。该 tool handler 执行 compact，注入 Phase 2 steering prompt，**并自动初始化 Phase 2 的 goal 任务列表**（先默认注入 L1 任务列表，复杂度评估为 L2 时再由主 agent 调用 `goal_manager.add_tasks()` 追加额外任务，详见 Phase 2 spec 的 Goal 配置章节）。
 
 ## Goal 配置
 
 **触发方式**：用户手动 `/goal`
+
+**触发时机**：Brainstorming 完成后、开始编写 spec.md 之前。Steering prompt 中指导主 agent 在 brainstorming 完成的确认点（见下方"完成条件"）提示用户触发 `/goal`。
 
 **任务列表**：
 1. Write spec.md
@@ -90,14 +93,24 @@
 - 返回主 agent，告知修复后**直接重新提交 phase-gate**
 - **跳过 review-gate**（内容质量已在 review-gate 中通过）
 
+**通过后动作**：Phase-Gate 通过后，gate tool handler 通过 steer 指令触发主 agent 执行 Retrospect（与 Phase 2/3/4 一致）。
+
 ## 产出物
 
 | 文件 | Review-Gate 检查 | Phase-Gate（脚本） |
 |------|-----------------|----------------|
 | spec.md | ✅ 内容审查 | ✅ 格式 + YAML |
-| phase1_retrospect.md | — | — |
+| phase1_retrospect.md | — | — | `changes/reviews/phase-1/phase1_retrospect.md` |
 
 > use-cases.md 和 non-functional-design.md 在 Phase 2 产出（见 Phase 2 spec）。
+
+## 代理修改文件后的上下文同步
+
+Review-Gate 中的 agent (`spec-requirements-reviewer.md`) 会直接修改 spec.md。这些修改发生在 Workflow 的独立 pi 进程中，主 agent 的上下文不会自动更新。
+
+**同步策略**：Workflow 完成后，gate tool handler 读取修改后的 spec.md 内容，在返回给主 agent 的结果中附带关键变更摘要（修改了哪些章节、主要变更内容）。主 agent 收到后可按需读取最新文件。
+
+**说明**：Phase 1 的 review-gate 修改的文档量较小（通常 1 个 spec.md），上下文同步的复杂度低于 Phase 2/3（多文件）。
 
 ## SKILL.md 变更
 
@@ -107,8 +120,16 @@
 | **删除** | Gate Handoff 章节（单独 session 提交 gate） |
 | **保留** | Quick Overview → Brainstorm → Terminology → Scan → Write |
 | **新增** | 整体 5-phase 执行流程指导（focus on review-gate） |
-| **新增** | Goal 追踪建议（steering prompt 中提示用户 /goal，限定在 brainstorming 完成后） |
+| **新增** | Goal 追踪建议（steering prompt 中提示用户 /goal，限定在 brainstorming 完成后；Phase 2 起的 Goal 改由 `phase-start` 自动注入） |
 | **新增** | "完成后调用 coding-workflow-gate(phase=1)" |
+
+## Agent 文件规划
+
+| Agent | 新建/复用 | 职责 |
+|-------|----------|------|
+| `spec-requirements-reviewer.md` | 新建 | Review-Gate 审查 + 直接修复 spec.md |
+
+**项目规范文件传递方式**：与 Phase 3 一致——subagent 自行查找并读取项目规范文件（CLAUDE.md），`cwd` 设为项目根目录。详见 Phase 3 spec 的"项目规范文件传递方式"小节。
 
 ## 可视化
 

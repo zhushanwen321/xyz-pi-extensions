@@ -18,10 +18,12 @@
 2. [主 Agent] 复杂度评估（L1/L2）— 不用 subagent
 3. [Goal] phase-start 自动注入（先注入 L1 默认任务，评估为 L2 后追加额外任务）
 4. [主 Agent] 按 Step 顺序编写 plan 交付物（不并行，不 dispatch subagent）
-5. [主 Agent] ADR 评估 — 不用 subagent
-6. [Workflow] Review-Gate（循环，最多 3 轮）
-7. [脚本] Phase-Gate（脚本检查）
-8. [主 Agent] Retrospect（steer 指令执行）→ 产出 `phase2_retrospect.md`
+5. [主 Agent] ADR 评估 — 不用 subagent（评估结论写入 plan.md 的 "## ADR 评估" 章节）
+6. [主 Agent] 调用 coding-workflow-gate(phase=2)
+   → gate tool 内部路由：先跑 Review-Gate，最多 3 轮
+   → L2 时 Review-Gate 内含两个 reviewer 串行执行
+   → Review-Gate 通过后再跑 Phase-Gate（脚本检查，最多 5 次重试）
+7. [主 Agent] Retrospect（Phase-Gate 通过后，gate tool handler 通过 steer 指令触发）→ 产出 `phase2_retrospect.md`
 → 过渡：主 agent 调用 coding-workflow-phase-start(phase=3)
 ```
 
@@ -78,6 +80,8 @@ initializeGoalFromExternal(pi, ctx, "Phase 2: 完成 plan 阶段交付物", L1_T
 | L2 | 9 个 | 多模块、前后端分离、有接口契约、有模块间依赖 |
 
 **L1 产出物**：plan.md, e2e-test-plan.md, test_cases_template.json, use-cases.md, non-functional-design.md
+
+> **Phase 1 推迟项**：use-cases.md 和 non-functional-design.md 是 Phase 1 推迟到 Phase 2 的产出物（因为这两个文件需要基于 plan 的架构设计才能细化）。Phase 2 的 L1 任务列表将这两个文件纳入。
 
 **L2 额外产出物**：plan-backend.md, plan-frontend.md, plan-api-contract.md, interface_chain.json
 
@@ -195,6 +199,9 @@ groups:
 - 必须在 `## Execution Groups` 章节下
 - 必须使用 YAML 围栏代码块（` ```yaml ... ``` `）
 - Phase 3 的 `extractExecutionGroups()` 函数按此格式解析定位
+- **L1 项目也必须包含 Execution Groups 章节**（即使只有 1 个 Group，作为 Phase 3 Goal 任务构建的输入）
+
+> **Phase 3 微调权限**：Phase 3 的主 agent 允许在 EG 调整不超过 30% 的前提下微调 Execution Groups（拆分过大的 Group、调整 Wave 归属、修改 depends_on）。超过 30% 的调整**建议**回退到 Phase 2 重新规划（需用户确认）。详见 Phase 3 spec 的"Execution Groups 调整权限"章节。
 
 ## Review-Gate
 
@@ -231,11 +238,23 @@ groups:
 | 失败处理 | 返回主 agent 修复，修复后直接重新提交 phase-gate（跳过 review-gate） |
 | 最大重试 | 5 次 |
 
-**通过后动作**：Phase-Gate 通过后，gate tool handler 将当前 commit hash 记录到 phase state 文件（`coding-workflow-p{N}.json`）中的 `phase2_gate_commit` 字段。该 hash 供 Phase 4 一致性检查使用——验证 `test_cases_template.json` 未被后续篡改。
+**通过后动作**：Phase-Gate 通过后，gate tool handler 执行以下两个动作：
+1. 通过 steer 指令触发主 agent 执行 Retrospect（与 Phase 1/3/4 一致）
+2. 将当前 commit hash 记录到 phase state 文件 `coding-workflow-p2.json` 中的 `phase2_gate_commit` 字段。该 hash 供 Phase 4 一致性检查使用——验证 `test_cases_template.json` 未被后续篡改。
+
+> **commit hash 记录时机**：每次 Phase-Gate 重新提交并通过时，commit hash 都用最新的 commit 覆盖前值（不使用最初通过时的 hash），确保 Phase 4 检查的是"Phase 2 gate 最近一次通过时的 commit"。
 
 **失败处理**：
 - 返回主 agent，告知修复后**直接重新提交 phase-gate**
 - **跳过 review-gate**
+
+## 代理修改文件后的上下文同步
+
+Review-Gate 中的 agent（`plan-requirements-reviewer.md`、`plan-bl-requirements-reviewer.md`）会直接修改 plan 文档。这些修改发生在 Workflow 的独立 pi 进程中，主 agent 的上下文不会自动更新。
+
+**同步策略**：Workflow 完成后，gate tool handler 读取修改后的 plan 文档内容，在返回给主 agent 的结果中附带关键变更摘要（修改了哪些文件、主要变更内容）。主 agent 收到后可按需读取最新文件。
+
+**说明**：Phase 2 的 review-gate 修改的文档量中等（L1 = 5 个文件 / L2 = 9 个文件），上下文同步复杂度介于 Phase 1（1 个文件）和 Phase 3（多代码文件）之间。
 
 ## SKILL.md 变更
 
@@ -262,7 +281,18 @@ groups:
 | plan-frontend.md | ❌ | ✅ | ✅ 内容 | ✅ 格式 |
 | plan-api-contract.md | ❌ | ✅ | ✅ 内容 | ✅ 格式 |
 | interface_chain.json | ❌ | ✅ | ✅ 内容 | ✅ 格式 |
-| phase2_retrospect.md | — | — | — | — |
+| phase2_retrospect.md | — | — | — | `changes/reviews/phase-2/phase2_retrospect.md` |
+
+## Agent 文件规划
+
+| Agent | 新建/复用 | 职责 |
+|-------|----------|------|
+| `plan-requirements-reviewer.md` | 新建 | L1/L2 共用 Review-Gate 审查：覆盖规格符合性 + plan 结构合理性（Execution Groups、API 契约、interface_chain） |
+| `plan-bl-requirements-reviewer.md` | 新建 | L2 专用 Review-Gate 审查：在 `plan-requirements-reviewer` 之后串行执行，专注业务逻辑覆盖（use-case → Execution Group 映射、边界条件、跨模块业务流） |
+
+**L2 双 agent 串行原因**：Phase 2 的产出物是文档（plan.md 等），两个 reviewer 同时修改同一文件会导致冲突。文档数量不多（最多 9 个文件），串行执行的额外耗时可接受。
+
+**项目规范文件传递方式**：与 Phase 3 一致——subagent 自行查找并读取项目规范文件（CLAUDE.md），`cwd` 设为项目根目录。详见 Phase 3 spec 的"项目规范文件传递方式"小节。
 
 ## 可视化
 
