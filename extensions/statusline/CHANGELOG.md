@@ -1,5 +1,11 @@
 # @zhushanwen/pi-statusline
 
+## 0.4.4
+
+### Patch Changes
+
+- 15b68f6: Fix evolve analyzer to find session files in project subdirectories, unify pi.extensions to ./index.ts
+
 ## 0.4.3
 
 ### Patch Changes
