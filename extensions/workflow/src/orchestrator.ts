@@ -622,28 +622,37 @@ export class WorkflowOrchestrator {
         return;
       }
 
-      let tmpFile: string;
-      try {
-        // Write systemPrompt to temp file
-        const tmpDir = path.join(os.tmpdir(), "pi-workflow");
-        fs.mkdirSync(tmpDir, { recursive: true });
-        tmpFile = path.join(tmpDir, `agent-prompt-${randomUUID()}.md`);
-        fs.writeFileSync(tmpFile, discovered.systemPrompt, "utf-8");
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        const errorResult: StateAgentResult = {
-          content: "",
-          error: `Temp file write error: ${msg}`,
-        };
-        instance.callCache.set(callId, errorResult);
-        this.postMessage(runId, { type: "agent-result", callId, result: errorResult, cached: false });
-        return;
+      // FR-4.3: empty systemPrompt → skip --append-system-prompt injection
+      const hasSystemPrompt = discovered.systemPrompt.trim().length > 0;
+      let systemPromptFile: string | undefined;
+      if (hasSystemPrompt) {
+        try {
+          // Write systemPrompt to temp file
+          const tmpDir = path.join(os.tmpdir(), "pi-workflow");
+          fs.mkdirSync(tmpDir, { recursive: true });
+          const tmpFile = path.join(tmpDir, `agent-prompt-${randomUUID()}.md`);
+          fs.writeFileSync(tmpFile, discovered.systemPrompt, "utf-8");
+          this.activeTempFiles.add(tmpFile);
+          systemPromptFile = tmpFile;
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const errorResult: StateAgentResult = {
+            content: "",
+            error: `Temp file write error: ${msg}`,
+          };
+          instance.callCache.set(callId, errorResult);
+          this.postMessage(runId, { type: "agent-result", callId, result: errorResult, cached: false });
+          return;
+        }
       }
-      this.activeTempFiles.add(tmpFile);
 
       // Merge: opts.model overrides discovered.model
       const agentModel = opts.model || discovered.model;
-      enrichedOpts = { ...opts, model: agentModel, systemPromptFile: tmpFile };
+      enrichedOpts = {
+        ...opts,
+        model: agentModel,
+        ...(systemPromptFile ? { systemPromptFile } : {}),
+      };
     }
 
     // Resolve model from scene if needed

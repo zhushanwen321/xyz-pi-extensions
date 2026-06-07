@@ -212,7 +212,8 @@ export class AgentRegistry {
  */
 function parseFrontmatter(content: string, fileName: string): FrontmatterResult {
   const baseName = fileName.replace(/\.md$/, "");
-  // Length of the opening "---" delimiter plus the newline that follows it
+  // Length of the opening "---" delimiter (3 chars). The closing ---
+  // search starts after this position, not after a newline — see closeIdx.
   const FM_DELIM_LEN = "---".length;
 
   if (!content.startsWith("---")) {

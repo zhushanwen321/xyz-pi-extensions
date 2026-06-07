@@ -167,6 +167,74 @@ describe("AgentPool", () => {
       expect(result.success).toBe(true);
       expect(result.parsedOutput).toBeUndefined();
     });
+
+    it("injects --append-system-prompt when systemPromptFile is set", async () => {
+      const pool = new AgentPool(2);
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+
+      const jsonl = messageEndJsonl("ok", { input: 1, output: 1 });
+      const resultPromise = pool.enqueue({
+        prompt: "use this prompt",
+        systemPromptFile: "/tmp/agent-prompt-abc.md",
+      });
+      proc.stdout.emit("data", Buffer.from(jsonl + "\n"));
+      proc.emit("close", 0);
+
+      await resultPromise;
+
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      const spawnArgs = mockSpawn.mock.calls[0]![1] as string[];
+      // Args layout: ["--mode","json","-p","--no-session",
+      //               "--append-system-prompt", <file>, <prompt>]
+      const promptIdx = spawnArgs.indexOf("--append-system-prompt");
+      expect(promptIdx).toBeGreaterThanOrEqual(0);
+      expect(spawnArgs[promptIdx + 1]).toBe("/tmp/agent-prompt-abc.md");
+      // Prompt is the last positional arg
+      expect(spawnArgs[spawnArgs.length - 1]).toBe("use this prompt");
+    });
+
+    it("omits --append-system-prompt when systemPromptFile is not set", async () => {
+      const pool = new AgentPool(2);
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+
+      const jsonl = messageEndJsonl("ok", { input: 1, output: 1 });
+      const resultPromise = pool.enqueue({ prompt: "no system prompt" });
+      proc.stdout.emit("data", Buffer.from(jsonl + "\n"));
+      proc.emit("close", 0);
+
+      await resultPromise;
+
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      const spawnArgs = mockSpawn.mock.calls[0]![1] as string[];
+      expect(spawnArgs).not.toContain("--append-system-prompt");
+    });
+
+    it("passes --model before --append-system-prompt when both are set", async () => {
+      const pool = new AgentPool(2);
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+
+      const jsonl = messageEndJsonl("ok", { input: 1, output: 1 });
+      const resultPromise = pool.enqueue({
+        prompt: "task",
+        model: "ds-flash",
+        systemPromptFile: "/tmp/p.md",
+      });
+      proc.stdout.emit("data", Buffer.from(jsonl + "\n"));
+      proc.emit("close", 0);
+
+      await resultPromise;
+
+      const spawnArgs = mockSpawn.mock.calls[0]![1] as string[];
+      const modelIdx = spawnArgs.indexOf("--model");
+      const promptIdx = spawnArgs.indexOf("--append-system-prompt");
+      expect(modelIdx).toBeGreaterThanOrEqual(0);
+      expect(spawnArgs[modelIdx + 1]).toBe("ds-flash");
+      expect(promptIdx).toBeGreaterThanOrEqual(0);
+      expect(spawnArgs[promptIdx + 1]).toBe("/tmp/p.md");
+    });
   });
 
   // ── enqueue — failure path ─────────────────────────────────
