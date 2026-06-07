@@ -1,5 +1,11 @@
 # @zhushanwen/pi-workflow
 
+## 0.1.10
+
+### Patch Changes
+
+- 18b88fa: Fix agent subprocess killed prematurely by 120s timeout and add abort propagation for cleanup
+
 ## 0.1.9
 
 ### Patch Changes
