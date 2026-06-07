@@ -1,5 +1,11 @@
 # @zhushanwen/pi-evolve-daily
 
+## 0.1.10
+
+### Patch Changes
+
+- 896e85b: Fix session JSONL loader to flatten nested message events for extractors
+
 ## 0.1.9
 
 ### Patch Changes
