@@ -344,8 +344,10 @@ export class AgentPool {
 
     const durationMs = Date.now() - startedAt;
 
-    // Schema requested but no structured-output tool call AND no other tool call
-    // (if the agent used a different tool, we trust its judgment)
+    // Schema requested but no structured-output tool call AND no other tool call.
+    // If the agent called any other tool (read/bash/etc), we skip this block —
+    // the agent is doing useful work and will likely call structured-output in a
+    // subsequent turn (enforced by the extension's turn_end hook).
     if (opts.schema && pipeline.parsedOutput === undefined && !pipeline.hasToolCall) {
       // Transitional fallback: if structured-output extension is not installed
       // (e.g. older agent images), try parsing text output as JSON.
