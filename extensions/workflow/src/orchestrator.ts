@@ -306,6 +306,9 @@ export class WorkflowOrchestrator {
     instance.pausedAt = new Date().toISOString();
     transitionStatus(instance, "paused");
     this.terminateWorker(runId);
+    // Cleanup in-flight temp files from agent calls that were killed mid-flight.
+    // Without this, files written for --append-system-prompt leak to disk.
+    this.cleanupAllTempFiles();
     await this.persistState();
   }
 
@@ -866,6 +869,8 @@ export class WorkflowOrchestrator {
       instance.completedAt = new Date().toISOString();
       transitionStatus(instance, "failed");
       this.terminateWorker(runId);
+      // Cleanup in-flight agent temp files that were killed mid-flight.
+      this.cleanupAllTempFiles();
       await this.persistState();
       this.onCompletion?.(runId);
     }
@@ -907,6 +912,8 @@ export class WorkflowOrchestrator {
     if (exceeded) {
       this.postMessage(runId, { type: "budget-warning", budget: b, reason });
       this.terminateWorker(runId);
+      // Cleanup in-flight agent temp files that were killed mid-flight.
+      this.cleanupAllTempFiles();
 
       instance.error = reason;
       instance.completedAt = new Date().toISOString();
@@ -934,6 +941,8 @@ export class WorkflowOrchestrator {
           reason: `Time budget exceeded: ${elapsed}ms >= ${maxTimeMs}ms`,
         });
         this.terminateWorker(runId);
+        // Cleanup in-flight agent temp files that were killed mid-flight.
+        this.cleanupAllTempFiles();
 
         instance.error = `Time budget exceeded: ${elapsed}ms >= ${maxTimeMs}ms`;
         instance.completedAt = new Date().toISOString();

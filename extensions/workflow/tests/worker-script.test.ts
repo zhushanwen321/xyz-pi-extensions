@@ -81,4 +81,12 @@ describe("buildWorkerScript", () => {
     // main thread's AgentRegistry can resolve the agent by name.
     expect(result).toMatch(/agent:\s*firstArg\.agent/);
   });
+
+  it("生成的脚本是可解析的合法 JavaScript（防 missing-comma 回归）", () => {
+    // Regression guard: a missing comma in the object literal would cause
+    // a SyntaxError at worker thread start. Validate with new Function().
+    expect(() => {
+      new Function(result);
+    }).not.toThrow();
+  });
 });

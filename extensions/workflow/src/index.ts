@@ -234,6 +234,12 @@ export default function workflowExtension(pi: ExtensionAPI) {
   pi.on("session_tree", async (_event: Record<string, unknown>, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     lastSessionId = sessionId;
+    // Dispose the previous branch's orchestrator (cleanup in-flight agent temp files).
+    // Without this, switching branches mid-run leaks temp files.
+    const previousOrch = orchestrators.get(sessionId);
+    if (previousOrch) {
+      previousOrch.cleanupAllTempFiles();
+    }
     const orch = new WorkflowOrchestrator(pi, ctx);
     orchestrators.set(sessionId, orch);
     const instances = await reconstructState(ctx);
