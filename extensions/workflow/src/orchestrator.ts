@@ -15,9 +15,7 @@
  *   skipNode() → add placeholder to callCache, mark trace
  */
 
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import { homedir } from "node:os";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
@@ -141,7 +139,7 @@ export class WorkflowOrchestrator {
   ) {
     this.pi = pi;
     this.ctx = ctx;
-    this.sessionDir = path.join(homedir(), ".pi", "agent");
+    this.sessionDir = path.join(os.homedir(), ".pi", "agent");
 
     // Override with session-scoped directory (same as Pi's session JSONL location).
     // Pi encodes the project path as: /a/b/c → --a-b-c-- (subdirectory under sessions/).
@@ -149,7 +147,7 @@ export class WorkflowOrchestrator {
     // the encoding scheme, state files will be orphaned. No public API exposes
     // the session directory path — fallback to ~/.pi/agent/ if detection fails.
     const sessionSlug = "--" + process.cwd().replace(/^\//, "").replace(/\//g, "-") + "--";
-    const sessionScopedDir = path.join(homedir(), ".pi", "agent", "sessions", sessionSlug);
+    const sessionScopedDir = path.join(os.homedir(), ".pi", "agent", "sessions", sessionSlug);
     if (fs.existsSync(sessionScopedDir)) {
       this.sessionDir = sessionScopedDir;
     }

@@ -77,7 +77,7 @@ You are a standards reviewer.
 // ── Tests ────────────────────────────────────────────────────
 
 describe("AgentRegistry", () => {
-  let fixture: { root: string; cleanup: () => void } | undefined;
+  let fixture: { root: string; homeDir: string; cleanup: () => void } | undefined;
 
   afterEach(() => {
     fixture?.cleanup();
