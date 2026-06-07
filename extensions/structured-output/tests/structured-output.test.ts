@@ -247,7 +247,7 @@ describe("Enforcement flag logic", () => {
   });
 
   it("sendUserMessage should be called when flag is false at turn_end", () => {
-    let hasStructuredOutputCall = false;
+    const hasStructuredOutputCall = false;
     const sendUserMessage = vi.fn();
 
     // Simulate turn_end without structured-output call
@@ -260,7 +260,7 @@ describe("Enforcement flag logic", () => {
   });
 
   it("sendUserMessage should NOT be called when flag is true at turn_end", () => {
-    let hasStructuredOutputCall = true;
+    const hasStructuredOutputCall = true;
     const sendUserMessage = vi.fn();
 
     if (!hasStructuredOutputCall) {
