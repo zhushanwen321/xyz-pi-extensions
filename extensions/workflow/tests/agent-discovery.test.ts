@@ -33,9 +33,13 @@ import { AgentRegistry } from "../src/agent-discovery";
 /** 创建临时目录结构，返回 root 路径和 cleanup 函数 */
 function createTempFixture(structure: Record<string, string>): {
   root: string;
+  homeDir: string;
   cleanup: () => void;
 } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-disc-test-"));
+  // Isolated home directory to prevent real user agents from interfering
+  const homeDir = path.join(root, "__home__");
+  fs.mkdirSync(homeDir, { recursive: true });
   for (const [relPath, content] of Object.entries(structure)) {
     const fullPath = path.join(root, relPath);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
@@ -43,6 +47,7 @@ function createTempFixture(structure: Record<string, string>): {
   }
   return {
     root,
+    homeDir,
     cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -86,7 +91,7 @@ describe("AgentRegistry", () => {
       ".pi/agents/review-taste.md": AGENT_WITH_FM,
     });
 
-    const registry = new AgentRegistry(fixture.root);
+    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
 
     const agent = registry.resolve("review-taste");
@@ -105,7 +110,7 @@ describe("AgentRegistry", () => {
       ".pi/npm/node_modules/@zhushanwen/pi-coding-workflow/agents/review-standards.md": AGENT_MODEL_ONLY,
     });
 
-    const registry = new AgentRegistry(fixture.root);
+    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
 
     const agent = registry.resolve("review-standards");
@@ -132,7 +137,7 @@ Project version of review-taste.
       ".pi/npm/node_modules/@zhushanwen/pi-coding-workflow/agents/review-taste.md": AGENT_WITH_FM,
     });
 
-    const registry = new AgentRegistry(fixture.root);
+    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
 
     const agent = registry.resolve("review-taste");
@@ -150,7 +155,7 @@ Project version of review-taste.
       ".pi/agents/real-agent.md": AGENT_WITH_FM,
     });
 
-    const registry = new AgentRegistry(fixture.root);
+    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
 
     expect(registry.resolve("_draft")).toBeUndefined();
@@ -166,7 +171,7 @@ Project version of review-taste.
       ".pi/agents/review.chain.md": AGENT_BARE,
     });
 
-    const registry = new AgentRegistry(fixture.root);
+    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
 
     // review.chain.md should be skipped; "review.chain" should NOT be found
@@ -180,7 +185,7 @@ Project version of review-taste.
       ".pi/agents/bare-agent.md": AGENT_BARE,
     });
 
-    const registry = new AgentRegistry(fixture.root);
+    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
 
     const agent = registry.resolve("bare-agent");
@@ -207,7 +212,7 @@ System prompt body here.
       ".pi/agents/my-reviewer.md": content,
     });
 
-    const registry = new AgentRegistry(fixture.root);
+    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
 
     const agent = registry.resolve("my-reviewer");
@@ -226,7 +231,7 @@ System prompt body here.
       ".pi/agents/.gitkeep": "",
     });
 
-    const registry = new AgentRegistry(fixture.root);
+    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     expect(() => registry.discoverAll()).not.toThrow();
     expect(registry.list()).toHaveLength(0);
   });
@@ -234,9 +239,15 @@ System prompt body here.
   // ── TC-1-09: 不存在的 cwd 不报错 ──
 
   it("TC-1-09: handles non-existent cwd gracefully", () => {
-    const registry = new AgentRegistry("/nonexistent/path/that/does/not/exist");
-    expect(() => registry.discoverAll()).not.toThrow();
-    expect(registry.list()).toHaveLength(0);
+    // Use an isolated homeDir so real user agents don't appear
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "agent-disc-home-"));
+    try {
+      const registry = new AgentRegistry("/nonexistent/path/that/does/not/exist", tempHome);
+      expect(() => registry.discoverAll()).not.toThrow();
+      expect(registry.list()).toHaveLength(0);
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 
   // ── TC-1-10: scoped npm 包 ──
@@ -252,7 +263,7 @@ Scoped package agent.
 `,
     });
 
-    const registry = new AgentRegistry(fixture.root);
+    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
 
     const agent = registry.resolve("scoped-agent");
@@ -265,7 +276,7 @@ Scoped package agent.
   it("TC-1-11: resolve() returns undefined for non-existent agent", () => {
     fixture = createTempFixture({});
 
-    const registry = new AgentRegistry(fixture.root);
+    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
 
     expect(registry.resolve("nonexistent")).toBeUndefined();
@@ -284,7 +295,7 @@ Beta agent.
 `,
     });
 
-    const registry = new AgentRegistry(fixture.root);
+    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
 
     const agents = registry.list();
@@ -301,7 +312,7 @@ Beta agent.
       ".pi/agents/alpha.md": AGENT_WITH_FM,
     });
 
-    const registry = new AgentRegistry(fixture.root);
+    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
     expect(registry.resolve("review-taste")).toBeDefined();
 
@@ -330,7 +341,7 @@ User-level system prompt.
 `,
     });
 
-    const registry = new AgentRegistry(fixture.root);
+    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
 
     const agent = registry.resolve("user-like");
@@ -351,7 +362,7 @@ Extension agent.
 `,
     });
 
-    const registry = new AgentRegistry(fixture.root);
+    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
 
     const agent = registry.resolve("ext-agent");
@@ -375,7 +386,7 @@ Still usable as system prompt.
       ".pi/agents/broken.md": content,
     });
 
-    const registry = new AgentRegistry(fixture.root);
+    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
 
     // Should still parse (our simple regex parser is lenient)
@@ -398,7 +409,7 @@ This is all treated as content.
       ".pi/agents/unclosed.md": content,
     });
 
-    const registry = new AgentRegistry(fixture.root);
+    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
 
     const agent = registry.resolve("unclosed");

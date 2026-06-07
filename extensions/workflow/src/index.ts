@@ -64,6 +64,7 @@ interface InstanceSummary {
 interface WorkflowDetails {
   action: string;
   instances: InstanceSummary[];
+  agents?: Array<{ name: string; source: string; model?: string }>;
   _render?: {
     type: "summary-table";
     data: {
@@ -206,6 +207,12 @@ export default function workflowExtension(pi: ExtensionAPI) {
     // Restore reconstructed state into orchestrator
     const instances = await reconstructState(ctx);
     orch.restoreInstances(instances);
+
+    // Log discovered agents
+    const agentCount = orch.getAgentCount();
+    if (agentCount > 0) {
+      pi.notify(`Workflow: discovered ${agentCount} agents`);
+    }
 
     // Live progress: refresh widget on every trace node change
     orch.onTraceUpdate = (_runId) => {
@@ -419,7 +426,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
           if (summaries.length === 0) {
             return {
               content: [{ type: "text" as const, text: "No workflows in current session." }],
-              details: { action: "status", instances: [], _render: buildRender(summaries) } satisfies WorkflowDetails,
+              details: { action: "status", instances: [], agents: orch.getAgents(), _render: buildRender(summaries) } satisfies WorkflowDetails,
             };
           }
 
@@ -439,6 +446,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
             details: {
               action: "status",
               instances: summaries.map(toInstanceSummary),
+              agents: orch.getAgents(),
               _render: buildRender(summaries),
             } satisfies WorkflowDetails,
           };

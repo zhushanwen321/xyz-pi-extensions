@@ -42,6 +42,13 @@ export interface AgentCallOpts {
   scene?: string;
   /** Human-readable description for logging and debugging. */
   description?: string;
+  /** Agent name to resolve from AgentRegistry. When set, the resolved
+   *  agent's systemPrompt is injected via --append-system-prompt. */
+  agent?: string;
+  /** Absolute path to a temp file containing the agent's systemPrompt.
+   *  Set by the orchestrator after resolving the agent name. Used by
+   *  buildArgs() to inject --append-system-prompt. */
+  systemPromptFile?: string;
 }
 
 export interface AgentResult {
@@ -276,6 +283,11 @@ export class AgentPool {
 
     if (opts.model) {
       args.push("--model", opts.model);
+    }
+
+    // Inject agent system prompt if resolved
+    if (opts.systemPromptFile) {
+      args.push("--append-system-prompt", opts.systemPromptFile);
     }
 
     // Build the prompt: if schema is provided, instruct the model to

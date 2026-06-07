@@ -15,13 +15,16 @@
  *   skipNode() → add placeholder to callCache, mark trace
  */
 
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import { homedir } from "node:os";
+import * as os from "node:os";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
+import { AgentRegistry } from "./agent-discovery.js";
 import { type AgentCallOpts,AgentPool } from "./agent-pool.js";
 import { getWorkflow } from "./config-loader.js";
 import { appendTraceNode } from "./execution-trace.js";
@@ -121,6 +124,7 @@ export class WorkflowOrchestrator {
   private readonly runMetaMap = new Map<string, RunMeta>();
   private readonly retryCounts = new Map<string, number>();
   private readonly runPools = new Map<string, AgentPool>();
+  private readonly agentRegistry: AgentRegistry;
   private readonly pi: ExtensionAPI;
   private readonly ctx: ExtensionContext;
   private readonly sessionDir: string;
@@ -150,9 +154,25 @@ export class WorkflowOrchestrator {
       this.sessionDir = sessionScopedDir;
     }
     // AgentPool is created per-workflow-run in `run()`, not in constructor
+    this.agentRegistry = new AgentRegistry(process.cwd());
+    this.agentRegistry.discoverAll();
   }
 
   // ── Public API ──────────────────────────────────────────────
+
+  /** Return the number of discovered agents. */
+  getAgentCount(): number {
+    return this.agentRegistry.list().length;
+  }
+
+  /** Return a summary of all discovered agents. */
+  getAgents(): Array<{ name: string; source: string; model?: string }> {
+    return this.agentRegistry.list().map((a) => ({
+      name: a.name,
+      source: a.source,
+      model: a.model,
+    }));
+  }
 
   /**
    * Start a workflow. Reads the workflow script file via config-loader,
@@ -562,9 +582,36 @@ export class WorkflowOrchestrator {
       return;
     }
 
+    // Agent resolution: resolve agent name to systemPrompt file
+    let enrichedOpts = opts;
+    if (opts.agent) {
+      const discovered = this.agentRegistry.resolve(opts.agent);
+      if (!discovered) {
+        const errorResult: StateAgentResult = {
+          content: "",
+          error: `Agent not found: ${opts.agent}`,
+        };
+        instance.callCache.set(callId, errorResult);
+        this.postMessage(runId, { type: "agent-result", callId, result: errorResult, cached: false });
+        return;
+      }
+
+      // Write systemPrompt to temp file
+      const tmpDir = path.join(os.tmpdir(), "pi-workflow");
+      fs.mkdirSync(tmpDir, { recursive: true });
+      const tmpFile = path.join(tmpDir, `agent-prompt-${crypto.randomUUID()}.md`);
+      fs.writeFileSync(tmpFile, discovered.systemPrompt, "utf-8");
+
+      // Merge: opts.model overrides discovered.model
+      const agentModel = opts.model || discovered.model;
+      enrichedOpts = { ...opts, model: agentModel, systemPromptFile: tmpFile };
+    }
+
     // Resolve model from scene if needed
-    const resolvedModel = resolveModel(opts);
-    const enrichedOpts = resolvedModel ? { ...opts, model: resolvedModel } : opts;
+    const resolvedModel = resolveModel(enrichedOpts);
+    if (resolvedModel) {
+      enrichedOpts = { ...enrichedOpts, model: resolvedModel };
+    }
 
     // Record pending trace node
     const now = new Date().toISOString();
@@ -636,6 +683,11 @@ export class WorkflowOrchestrator {
         });
         await this.persistState();
         this.onTraceUpdate?.(runId);
+
+        // Cleanup temp file on stale context early return
+        if (opts.systemPromptFile) {
+          try { fs.unlinkSync(opts.systemPromptFile); } catch { /* swallow */ }
+        }
         return;
       }
 
@@ -686,6 +738,11 @@ export class WorkflowOrchestrator {
 
       await this.persistState();
       this.onTraceUpdate?.(runId);
+
+      // Cleanup temp file if it was created for agent system prompt
+      if (opts.systemPromptFile) {
+        try { fs.unlinkSync(opts.systemPromptFile); } catch { /* swallow */ }
+      }
     });
   }
 
