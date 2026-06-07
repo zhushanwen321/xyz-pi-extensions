@@ -1,18 +1,8 @@
 /**
- * Workflow Extension — Orchestrator
+ * Workflow orchestrator — manages lifecycle, Worker threads, agent calls,
+ * callCache, budget enforcement, and state persistence.
  *
- * Core workflow runtime engine. Manages lifecycle, Worker threads, agent
- * call routing, callCache, budget enforcement, and state persistence.
- *
- * Lifecycle:
- *   run() → Worker thread with injected agent/parallel/pipeline globals
- *         → Worker sends agent-call messages → AgentPool enqueue → response
- *         → Worker completes → mark completed
- *   pause() → terminate Worker, keep callCache for resume
- *   resume() → new Worker with preserved callCache, script re-executes
- *   abort() → terminate Worker, mark aborted (terminal)
- *   retryNode() → clear cached entry, restart Worker
- *   skipNode() → add placeholder to callCache, mark trace
+ * Lifecycle: run → pause/resume → abort. Agent calls routed via AgentPool.
  */
 
 import { randomUUID } from "node:crypto";
@@ -28,6 +18,7 @@ import { type AgentCallOpts,AgentPool } from "./agent-pool.js";
 import { getWorkflow } from "./config-loader.js";
 import { appendTraceNode } from "./execution-trace.js";
 import { resolveModel } from "./model-resolver.js";
+import { lintScript } from "./script-lint.js";
 import {
   type AgentResult as StateAgentResult,
   createInstance as createStateInstance,
@@ -126,6 +117,8 @@ export class WorkflowOrchestrator {
   private readonly agentRegistry: AgentRegistry;
   /** Active temp files created for agent system prompts — cleaned up on completion or abort. */
   private readonly activeTempFiles = new Set<string>();
+  /** Per-run AbortController for killing agent subprocesses on terminate/pause/abort. */
+  private readonly runAbortControllers = new Map<string, AbortController>();
   private readonly pi: ExtensionAPI;
   private readonly ctx: ExtensionContext;
   private readonly sessionDir: string;
@@ -175,39 +168,21 @@ export class WorkflowOrchestrator {
     }));
   }
 
-  /** Clean up a temp file created for agent system prompt. */
+  /** Clean up temp files created for agent system prompts. */
   private cleanupTempFile(filePath: string): void {
-    try {
-      fs.unlinkSync(filePath);
-    // eslint-disable-next-line taste/no-silent-catch
-    } catch {
-      // File may already be deleted or never created
-    }
+    try { fs.unlinkSync(filePath); } catch { /* already deleted */ void undefined; }
     this.activeTempFiles.delete(filePath);
   }
 
   /** Clean up all remaining active temp files (e.g. on abort/error). */
   cleanupAllTempFiles(): void {
-    for (const filePath of this.activeTempFiles) {
-      try {
-        fs.unlinkSync(filePath);
-      // eslint-disable-next-line taste/no-silent-catch
-      } catch {
-        // File may already be deleted or never created
-      }
+    for (const fp of this.activeTempFiles) {
+      try { fs.unlinkSync(fp); } catch { /* already deleted */ void undefined; }
     }
     this.activeTempFiles.clear();
   }
 
-  /**
-   * Start a workflow. Reads the workflow script file via config-loader,
-   * builds a Worker thread with injected globals, and returns a runId
-   * for subsequent lifecycle operations.
-   *
-   * The optional `signal` is propagated to the AgentPool so that the
-   * underlying pi subprocess can be killed when the caller aborts.
-   * If the signal is already aborted, no work is started.
-   */
+  /** Start a workflow. Returns runId for lifecycle operations. Signal propagated to AgentPool. */
   async run(
     name: string,
     args: Record<string, unknown>,
@@ -228,6 +203,22 @@ export class WorkflowOrchestrator {
     // Read and normalize script: strip 'export' from 'export const meta' for CJS Worker
     let scriptSource = fs.readFileSync(workflow.path, "utf-8");
     scriptSource = scriptSource.replace(/\bexport\s+const\s+meta\b/, "const meta");
+
+    // Pre-flight lint: catch common API misuse before executing
+    const lintResult = lintScript(scriptSource);
+    if (!lintResult.valid) {
+      const errors = lintResult.findings
+        .filter((f) => f.severity === "error")
+        .map((f) => `  L${f.line}: ${f.message}\n         Suggestion: ${f.suggestion}`)
+        .join("\n");
+      throw new Error(
+        `Workflow script '${name}' has ${lintResult.findings.filter((f) => f.severity === "error").length} error(s):\n${errors}`,
+      );
+    }
+    // Log warnings (non-blocking)
+    for (const w of lintResult.findings.filter((f) => f.severity === "warning")) {
+      console.warn(`[workflow] Script lint warning at L${w.line}: ${w.message}`);
+    }
     const runId = `wf-${Date.now()}-${Math.random().toString(RUNID_RADIX).slice(RUNID_SLICE_START, RUNID_SLICE_LENGTH)}`;
 
     const instance = createStateInstance({
@@ -238,6 +229,14 @@ export class WorkflowOrchestrator {
       budget: { maxTokens: budgetTokens, maxTimeMs: budgetTimeMs },
     });
     instance.startedAt = new Date().toISOString();
+
+    this.runMetaMap.set(runId, { scriptSource, args, budgetTokens, budgetTimeMs, signal });
+    this.instances.set(runId, instance);
+
+    // Create per-run AbortController for agent subprocess cleanup.
+    // Orchestrator owns this controller — abort() on terminate/pause/abort.
+    const runAbortController = new AbortController();
+    this.runAbortControllers.set(runId, runAbortController);
 
     // Create per-workflow AgentPool with soft-limit warning callback
     // Each workflow run gets its own pool so agent call counts are isolated per AC-4.5
@@ -255,11 +254,16 @@ export class WorkflowOrchestrator {
     pool.setBudget(instance.budget);
     this.runPools.set(runId, pool);
 
-    this.runMetaMap.set(runId, { scriptSource, args, budgetTokens, budgetTimeMs, signal });
-    this.instances.set(runId, instance);
+    // P1-2: Also abort agent subprocesses when the tool-level signal fires
+    if (signal) {
+      const onToolAbort = () => runAbortController.abort();
+      signal.addEventListener("abort", onToolAbort, { once: true });
+    }
     await this.persistState();
 
     // P1-2: Listen for abort — pause the workflow so it can be resumed
+    // NOTE: This listener handles pause logic; the tool-signal → runAbortController
+    // forwarding above handles killing the active agent subprocess.
     if (signal) {
       const onAbort = () => {
         const inst = this.instances.get(runId);
@@ -333,6 +337,9 @@ export class WorkflowOrchestrator {
 
     const meta = this.runMetaMap.get(runId);
     if (meta) {
+      // Recreate AbortController for the resumed run (old one was aborted on pause)
+      this.recreateRunAbortController(runId);
+
       // Worker-backed instance: restart Worker with preserved callCache
       this.startWorker(runId, instance, meta.scriptSource, meta.args);
 
@@ -408,18 +415,15 @@ export class WorkflowOrchestrator {
 
     const meta = this.runMetaMap.get(runId);
     if (meta) {
+      // Recreate AbortController after terminate (old was aborted)
+      this.recreateRunAbortController(runId);
       this.startWorker(runId, instance, meta.scriptSource, meta.args);
     }
 
     await this.persistState();
   }
 
-  /**
-   * Skip a specific agent call. Injects a placeholder into the
-   * callCache so that on resume/retry the call resolves immediately.
-   * If the worker is actively running and a pending call exists for
-   * this callId, sends the cached result directly.
-   */
+  /** Skip a specific agent call. Injects placeholder into callCache for immediate resolution. */
   async skipNode(runId: string, callId: number): Promise<void> {
     const instance = this.instances.get(runId);
     if (!instance) {
@@ -536,10 +540,31 @@ export class WorkflowOrchestrator {
   }
 
   /**
-   * Terminate and clean up a worker thread. Fires and forgets the
-   * terminate promise — the exit handler handles state reconciliation.
+   * Recreate AbortController for a run after terminateWorker aborted the old one.
+   * Also re-wires the tool-level signal to the new controller.
+   */
+  private recreateRunAbortController(runId: string): void {
+    const newController = new AbortController();
+    this.runAbortControllers.set(runId, newController);
+    const meta = this.runMetaMap.get(runId);
+    if (meta?.signal && !meta.signal.aborted) {
+      const onToolAbort = () => newController.abort();
+      meta.signal.addEventListener("abort", onToolAbort, { once: true });
+    }
+  }
+
+  /**
+   * Terminate and clean up a worker thread. Also aborts all in-flight
+   * agent subprocesses via the per-run AbortController.
    */
   private terminateWorker(runId: string): void {
+    // Abort all agent subprocesses for this run
+    const controller = this.runAbortControllers.get(runId);
+    if (controller) {
+      this.runAbortControllers.delete(runId);
+      controller.abort();
+    }
+
     const worker = this.workers.get(runId);
     if (worker) {
       this.workers.delete(runId);
@@ -594,6 +619,34 @@ export class WorkflowOrchestrator {
     }
   }
 
+  /** Resolve agent name to systemPrompt file, write temp file if needed. */
+  private resolveAgentOpts(opts: AgentCallOpts): { opts: AgentCallOpts; error?: string } {
+    if (!opts.agent) return { opts };
+    const discovered = this.agentRegistry.resolve(opts.agent);
+    if (!discovered) return { opts, error: `Agent not found: ${opts.agent}` };
+
+    const hasSystemPrompt = discovered.systemPrompt.trim().length > 0;
+    let systemPromptFile: string | undefined;
+    if (hasSystemPrompt) {
+      try {
+        const tmpDir = path.join(os.tmpdir(), "pi-workflow");
+        fs.mkdirSync(tmpDir, { recursive: true });
+        const tmpFile = path.join(tmpDir, `agent-prompt-${randomUUID()}.md`);
+        fs.writeFileSync(tmpFile, discovered.systemPrompt, "utf-8");
+        this.activeTempFiles.add(tmpFile);
+        systemPromptFile = tmpFile;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { opts, error: `Temp file write error: ${msg}` };
+      }
+    }
+
+    const agentModel = opts.model || discovered.model;
+    return {
+      opts: { ...opts, model: agentModel, ...(systemPromptFile ? { systemPromptFile } : {}) },
+    };
+  }
+
   /**
    * Process an agent-call from the worker. Checks callCache first;
    * on miss, enqueues via AgentPool, caches the result, and responds.
@@ -604,59 +657,21 @@ export class WorkflowOrchestrator {
     callId: number,
     opts: AgentCallOpts,
   ): Promise<void> {
-    // Cache hit — respond immediately
     const cached = instance.callCache.get(callId);
     if (cached) {
       this.postMessage(runId, { type: "agent-result", callId, result: cached, cached: true });
       return;
     }
 
-    // Agent resolution: resolve agent name to systemPrompt file
-    let enrichedOpts = opts;
-    if (opts.agent) {
-      const discovered = this.agentRegistry.resolve(opts.agent);
-      if (!discovered) {
-        const errorResult: StateAgentResult = {
-          content: "",
-          error: `Agent not found: ${opts.agent}`,
-        };
-        instance.callCache.set(callId, errorResult);
-        this.postMessage(runId, { type: "agent-result", callId, result: errorResult, cached: false });
-        return;
-      }
-
-      // FR-4.3: empty systemPrompt → skip --append-system-prompt injection
-      const hasSystemPrompt = discovered.systemPrompt.trim().length > 0;
-      let systemPromptFile: string | undefined;
-      if (hasSystemPrompt) {
-        try {
-          // Write systemPrompt to temp file
-          const tmpDir = path.join(os.tmpdir(), "pi-workflow");
-          fs.mkdirSync(tmpDir, { recursive: true });
-          const tmpFile = path.join(tmpDir, `agent-prompt-${randomUUID()}.md`);
-          fs.writeFileSync(tmpFile, discovered.systemPrompt, "utf-8");
-          this.activeTempFiles.add(tmpFile);
-          systemPromptFile = tmpFile;
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          const errorResult: StateAgentResult = {
-            content: "",
-            error: `Temp file write error: ${msg}`,
-          };
-          instance.callCache.set(callId, errorResult);
-          this.postMessage(runId, { type: "agent-result", callId, result: errorResult, cached: false });
-          return;
-        }
-      }
-
-      // Merge: opts.model overrides discovered.model
-      const agentModel = opts.model || discovered.model;
-      enrichedOpts = {
-        ...opts,
-        model: agentModel,
-        ...(systemPromptFile ? { systemPromptFile } : {}),
-      };
+    // Agent resolution
+    const resolved = this.resolveAgentOpts(opts);
+    if (resolved.error) {
+      const errorResult: StateAgentResult = { content: "", error: resolved.error };
+      instance.callCache.set(callId, errorResult);
+      this.postMessage(runId, { type: "agent-result", callId, result: errorResult, cached: false });
+      return;
     }
+    let enrichedOpts = resolved.opts;
 
     // Resolve model from scene if needed
     const resolvedModel = resolveModel(enrichedOpts);
@@ -699,9 +714,9 @@ export class WorkflowOrchestrator {
       // Pool already cleaned up (workflow terminated) — skip
       return;
     }
-    // P1-2: Propagate abort signal to AgentPool so the pi subprocess can be killed
-    const meta = this.runMetaMap.get(runId);
-    pool.enqueue(opts, meta?.signal).then(async (poolResult) => {
+    // P1-2: Use per-run AbortController signal so terminateWorker can kill subprocesses
+    const runController = this.runAbortControllers.get(runId);
+    pool.enqueue(opts, runController?.signal).then(async (poolResult) => {
       // P0-2: Stale state check — instance may have been paused/aborted during agent call
       if (instance.status !== "running") return;
 
@@ -756,8 +771,8 @@ export class WorkflowOrchestrator {
         setTimeout(() => {
           // P0-2: Stale state check before retry
           if (instance.status !== "running") return;
-          // P1-2: Skip retry if caller aborted
-          if (meta?.signal?.aborted) return;
+          // Skip retry if run was aborted (controller removed by terminateWorker)
+          if (!this.runAbortControllers.has(runId)) return;
           this.executeWithRetry(runId, callId, opts, instance, node, attempt + 1);
         }, delay);
         return;
@@ -861,6 +876,8 @@ export class WorkflowOrchestrator {
         if (instance.status !== "running") return;
         const meta = this.runMetaMap.get(runId);
         if (meta && instance) {
+          // Recreate AbortController after terminate (old was aborted)
+          this.recreateRunAbortController(runId);
           this.startWorker(runId, instance, meta.scriptSource, meta.args);
         }
       }, delay);

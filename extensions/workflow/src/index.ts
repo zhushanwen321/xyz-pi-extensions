@@ -35,7 +35,7 @@ import {
   type WorkflowStatus,
 } from "./state.js";
 import { registerGenerateTool } from "./tool-generate.js";
-import { renderWorkflowList, registerWorkflowShortcuts } from "./widget.js";
+import { registerWorkflowShortcuts, renderWorkflowList } from "./widget.js";
 
 // ── Parameter schema ──────────────────────────────────────────
 
@@ -128,7 +128,7 @@ function toInstanceSummary(summary: WorkflowInstanceSummary): InstanceSummary {
   };
 }
 
-export default function workflowExtension(pi: ExtensionAPI) {
+export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-line max-lines-per-function
   let lastSessionId = "";
   const orchestrators = new Map<string, WorkflowOrchestrator>();
   const cmdState: WorkflowCommandsState = { lastRunId: null };
@@ -525,6 +525,7 @@ export default function workflowExtension(pi: ExtensionAPI) {
 
   registerWorkflowCommands(pi, orchestrators, cmdState);
   registerGenerateTool(pi);
+  registerWorkflowLintTool(pi);
   registerWorkflowShortcuts(pi, orchestrators, cmdState);
 
   // ── Auto-inject script format spec on workflow-generate calls ──────
@@ -716,6 +717,71 @@ function registerWorkflowRunTool(
         ` ${theme.fg("accent", details.name)}` +
         ` ${theme.fg("dim", details.runId.slice(0, RUNID_SHORT_LENGTH))}`;
       return new Text(text, 0, 0);
+    },
+  });
+}
+
+function registerWorkflowLintTool(
+  pi: ExtensionAPI,
+): void {
+  pi.registerTool({
+    name: "workflow-lint",
+    label: "Workflow Lint",
+    description:
+      "Statically check a workflow script for common API misuse before execution. " +
+      "Catches errors like `outputSchema` (should be `schema`), `result.output` (agent returns unwrapped value), " +
+      "and fragile file-based state passing between agent calls. " +
+      "Use when the user asks to validate/check a workflow script, or before running a generated workflow.",
+    promptSnippet: "Lint a workflow script for errors",
+    promptGuidelines: [
+      "Use when user asks to check/validate a workflow script before execution.",
+      "Not for linting TypeScript source files — only for workflow .js scripts.",
+    ],
+    parameters: Type.Object({
+      name: Type.String({ description: "Workflow script name to lint" }),
+    }),
+
+    async execute(_toolCallId: string, params: Static<typeof WorkflowParams>, _signal: AbortSignal | undefined, _onUpdate: unknown, _ctx: ExtensionContext) {
+      const { lintScript } = await import("./script-lint.js");
+      const { loadWorkflows } = await import("./config-loader.js");
+
+      let allWorkflows: Awaited<ReturnType<typeof loadWorkflows>>;
+      try { allWorkflows = await loadWorkflows(); } catch { allWorkflows = []; }
+
+      const wf = allWorkflows.find((w) => w.name === params.name && w.available);
+      if (!wf?.path) {
+        return { content: [{ type: "text" as const, text: `Workflow '${params.name}' not found.` }], isError: true };
+      }
+
+      const source = fs.readFileSync(wf.path, "utf-8");
+      const result = lintScript(source);
+
+      if (result.findings.length === 0) {
+        return { content: [{ type: "text" as const, text: `✅ No issues found in '${params.name}'.` }] };
+      }
+
+      const lines = result.findings.map((f) => {
+        const icon = f.severity === "error" ? "❌" : "⚠️";
+        return `${icon} L${f.line}: ${f.message}\n   Suggestion: ${f.suggestion}`;
+      });
+      return {
+        content: [{
+          type: "text" as const,
+          text: `${result.valid ? "Warnings" : "Errors"} found in '${params.name}':\n\n${lines.join("\n\n")}`,
+        }],
+        isError: !result.valid,
+      };
+    },
+
+    renderCall(args: Record<string, unknown>, theme: Theme, _context?: unknown) {
+      const name = args.name as string;
+      return new Text(theme.fg("toolTitle", theme.bold("workflow-lint ")) + theme.fg("accent", name), 0, 0);
+    },
+
+    renderResult(result: Record<string, unknown>, _options: unknown, _theme: Theme, _context?: unknown) {
+      const content = result.content as Array<{ type: string; text: string }> | undefined;
+      const text = content?.[0];
+      return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
     },
   });
 }

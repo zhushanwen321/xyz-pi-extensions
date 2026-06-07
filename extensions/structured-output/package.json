@@ -1,34 +1,38 @@
 {
-  "name": "@zhushanwen/pi-context-engineering",
-  "version": "0.1.4",
-  "description": "Progressive context compression for Pi — L0 zero-cost cleanup, L1 rule-based condensation, L2 emergency truncation, with recall mechanism.",
+  "name": "@zhushanwen/pi-structured-output",
+  "version": "0.2.0",
+  "description": "Structured output tool for Pi — enforces JSON Schema via tool call mechanism with Ajv validation",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "index.ts",
   "pi": {
     "extensions": [
-      "./index.ts"
+      "./src/index.ts"
     ]
   },
   "keywords": [
     "pi-package",
     "extension",
-    "context",
-    "compression"
+    "structured-output",
+    "json-schema"
   ],
   "license": "MIT",
   "files": [
     "src/",
     "index.ts"
   ],
+  "dependencies": {
+    "ajv": "^8.17.0"
+  },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
-    "typebox": "*"
+    "@sinclair/typebox": "*"
   },
   "scripts": {
     "typecheck": "npx tsc --noEmit",
     "test": "vitest run"
   },
   "devDependencies": {
+    "@types/node": "^24.0.0",
     "vitest": "^4.1.8"
   }
 }

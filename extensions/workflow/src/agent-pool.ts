@@ -97,13 +97,21 @@ interface ParsedPipelineEvent {
   usage: AgentUsage;
   model?: string;
   stopReason?: string;
+  /** Structured output extracted from tool_execution_start event. */
+  parsedOutput?: unknown;
+  /** Whether any tool_execution_start event was seen (for schema failure detection). */
+  hasToolCall?: boolean;
 }
 
 // ── Constants ─────────────────────────────────────────────────
 
 export const SOFT_MAX_AGENTS_WARNING = 500;
 const DEFAULT_CONCURRENCY = 4;
-const PROCESS_TIMEOUT_MS = 120_000; // 2 minutes
+// 24-hour safety net — prevents zombie pi subprocesses if all other
+// cleanup paths (abort signal, budget enforcement) fail.
+// Business-level timeouts are handled by orchestrator's budget enforcement.
+const ONE_DAY_MS = 86_400_000;
+const PROCESS_TIMEOUT_MS = ONE_DAY_MS;
 const UUID_SLICE_LENGTH = 8;
 const JSON_INDENT = 2;
 const TIMEOUT_DISPLAY_DIVISOR = 1000;
@@ -342,8 +350,14 @@ export class AgentPool {
     let stderr = "";
     let exitCode: number;
 
+    // Inject schema via environment variable for structured-output extension
+    const env: Record<string, string | undefined> = { ...process.env };
+    if (opts.schema) {
+      env.STRUCTURED_OUTPUT_SCHEMA = JSON.stringify(opts.schema);
+    }
+
     try {
-      const result = await runPiProcess(command, cmdArgs, pipeline, signal);
+      const result = await runPiProcess(command, cmdArgs, pipeline, signal, env);
       exitCode = result.exitCode;
       stderr = result.stderr;
     } catch (err) {
@@ -358,31 +372,55 @@ export class AgentPool {
     }
 
     const durationMs = Date.now() - startedAt;
-    const success = exitCode === 0;
 
-    let parsedOutput: unknown | undefined;
-    if (pipeline.output.trim() && opts.schema) {
-      try {
-        parsedOutput = JSON.parse(pipeline.output);
-      // eslint-disable-next-line taste/no-silent-catch
-      } catch {
-        // Output is not valid JSON — leave parsedOutput undefined
+    // Schema requested but no structured-output tool call AND no other tool call.
+    // If the agent called any other tool (read/bash/etc), we skip this block —
+    // the agent is doing useful work and will likely call structured-output in a
+    // subsequent turn (enforced by the extension's turn_end hook).
+    if (opts.schema && pipeline.parsedOutput === undefined && !pipeline.hasToolCall) {
+      // Transitional fallback: if structured-output extension is not installed
+      // (e.g. older agent images), try parsing text output as JSON.
+      // TODO: remove this fallback once structured-output is universally adopted.
+      const trimmed = pipeline.output.trim();
+      if (trimmed) {
+        try {
+          pipeline.parsedOutput = JSON.parse(trimmed);
+        } catch {
+          // Not valid JSON — return failure
+          return {
+            callId,
+            output: pipeline.output,
+            durationMs,
+            success: false,
+            error: "Agent did not produce structured output (tool call missing or failed)",
+          };
+        }
+      } else {
+        return {
+          callId,
+          output: pipeline.output,
+          durationMs,
+          success: false,
+          error: "Agent did not produce structured output (tool call missing or failed)",
+        };
       }
     }
 
     return {
       callId,
       output: pipeline.output,
-      parsedOutput,
+      parsedOutput: pipeline.parsedOutput,
       usage: pipeline.usage.turns > 0 ? pipeline.usage : undefined,
       durationMs,
-      success,
-      error: success ? undefined : (stderr || `Exit code ${exitCode}`),
+      success: exitCode === 0,
+      error: exitCode === 0 ? undefined : (stderr || `Exit code ${exitCode}`),
     };
   }
 }
 
 // ── Helpers ───────────────────────────────────────────────────
+
+
 
 function makeEmptyPipeline(): ParsedPipelineEvent {
   return {
@@ -404,12 +442,14 @@ async function runPiProcess(
   cmdArgs: string[],
   pipeline: ParsedPipelineEvent,
   signal?: AbortSignal,
+  env?: Record<string, string | undefined>,
 ): Promise<{ exitCode: number; stderr: string }> {
   let stderr = "";
   const exitCode = await new Promise<number>((resolve, reject) => {
     const proc = spawn(command, cmdArgs, {
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
+      env: env ?? process.env,
     });
     let buffer = "";
     let settled = false;
@@ -510,6 +550,14 @@ async function runPiProcess(
  * Mutates `pipeline` in place with O(1) memory overhead per event.
  */
 function processJsonlEvent(event: Record<string, unknown>, pipeline: ParsedPipelineEvent): void {
+  if (event.type === "tool_execution_start") {
+    if (event.toolName === "structured-output") {
+      pipeline.parsedOutput = event.args;
+    }
+    pipeline.hasToolCall = true;
+    return;
+  }
+
   if (event.type === "message_end" && event.message) {
     const msg = event.message as Record<string, unknown>;
     if (msg.role === "assistant") {
@@ -531,7 +579,7 @@ function processJsonlEvent(event: Record<string, unknown>, pipeline: ParsedPipel
         pipeline.usage.output += u.output ?? 0;
         pipeline.usage.cacheRead += u.cacheRead ?? 0;
         pipeline.usage.cacheWrite += u.cacheWrite ?? 0;
-        pipeline.usage.cost += u.cost ?? 0;
+        pipeline.usage.cost += Number(u.cost) || 0;
         pipeline.usage.contextTokens = u.totalTokens ?? u.contextTokens ?? 0;
         pipeline.usage.turns++;
       }

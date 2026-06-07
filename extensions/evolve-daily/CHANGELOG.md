@@ -1,5 +1,17 @@
 # @zhushanwen/pi-evolve-daily
 
+## 0.1.10
+
+### Patch Changes
+
+- 896e85b: Fix session JSONL loader to flatten nested message events for extractors
+
+## 0.1.9
+
+### Patch Changes
+
+- 15b68f6: Fix evolve analyzer to find session files in project subdirectories, unify pi.extensions to ./index.ts
+
 ## 0.1.8
 
 ### Patch Changes

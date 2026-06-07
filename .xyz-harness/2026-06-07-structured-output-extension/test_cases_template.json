@@ -1,0 +1,109 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "structured-output tool returns parsed JSON object",
+      "description": "Agent with schema { type: object, properties: { answer: string } } calls structured-output tool, agent-pool extracts parsedOutput from tool_execution_start",
+      "steps": [
+        "Spawn pi subprocess with STRUCTURED_OUTPUT_SCHEMA env var",
+        "LLM calls structured-output({ answer: 'hello' })",
+        "agent-pool processJsonlEvent captures tool_execution_start",
+        "parsedOutput equals { answer: 'hello' } (JS object, not string)"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "integration",
+      "title": "Enforcement hook triggers sendUserMessage on missing tool call",
+      "description": "LLM ends turn without calling structured-output → turn_end handler sends reminder",
+      "steps": [
+        "Spawn pi subprocess with STRUCTURED_OUTPUT_SCHEMA env var",
+        "LLM responds with text only (no tool call)",
+        "turn_end handler detects no structured-output call",
+        "sendUserMessage injects reminder",
+        "LLM calls structured-output in next turn"
+      ]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "integration",
+      "title": "Ajv validation failure returns tool error to LLM",
+      "description": "LLM calls structured-output with invalid data → tool throws → LLM corrects",
+      "steps": [
+        "Schema requires { count: number }",
+        "LLM calls structured-output({ count: 'not-a-number' })",
+        "Tool throws Error with Ajv error details",
+        "LLM receives tool error, calls again with correct type"
+      ]
+    },
+    {
+      "id": "TC-1-04",
+      "type": "integration",
+      "title": "tool_call hook blocks non-workflow usage",
+      "description": "LLM tries to call structured-output without STRUCTURED_OUTPUT_SCHEMA env var",
+      "steps": [
+        "Start Pi without STRUCTURED_OUTPUT_SCHEMA",
+        "LLM attempts to call structured-output tool",
+        "tool_call hook returns { block: true, reason: '...' }",
+        "Tool call is blocked with explanation"
+      ]
+    },
+    {
+      "id": "TC-1-05",
+      "type": "integration",
+      "title": "No env var → no tool registered",
+      "description": "Without STRUCTURED_OUTPUT_SCHEMA, extension is completely silent",
+      "steps": [
+        "Start Pi session without STRUCTURED_OUTPUT_SCHEMA",
+        "Verify structured-output tool is not in tool list",
+        "Verify no system prompt modification",
+        "Agent works normally"
+      ]
+    },
+    {
+      "id": "TC-1-06",
+      "type": "integration",
+      "title": "Invalid schema → silent skip with stderr log",
+      "description": "STRUCTURED_OUTPUT_SCHEMA contains invalid JSON or invalid JSON Schema",
+      "steps": [
+        "Set STRUCTURED_OUTPUT_SCHEMA to '{invalid json'",
+        "Extension logs error to stderr",
+        "No tool registered, no crash",
+        "Agent runs normally"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "agent-pool extracts parsedOutput from tool_execution_start",
+      "description": "processJsonlEvent correctly handles tool_execution_start event",
+      "steps": [
+        "processJsonlEvent receives { type: 'tool_execution_start', toolName: 'structured-output', args: { key: 'value' } }",
+        "pipeline.parsedOutput is set to { key: 'value' }"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "integration",
+      "title": "Schema present + no tool call → agent-level failure",
+      "description": "FR-4 second layer: parsedOutput undefined with schema → return failure result",
+      "steps": [
+        "spawnAndParse with opts.schema set",
+        "Subprocess exits without tool_execution_start for structured-output",
+        "Result has success: false with error message"
+      ]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "integration",
+      "title": "No schema → no STRUCTURED_OUTPUT_SCHEMA env var",
+      "description": "Non-schema agent calls work exactly as before",
+      "steps": [
+        "enqueue({ prompt: 'hello' }) without schema",
+        "spawnAndParse does NOT set STRUCTURED_OUTPUT_SCHEMA env var",
+        "Result uses content (text output), parsedOutput undefined"
+      ]
+    }
+  ]
+}

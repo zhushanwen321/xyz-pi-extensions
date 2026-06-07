@@ -151,7 +151,7 @@ describe("AgentPool", () => {
       expect(result.parsedOutput).toEqual({ name: "Alice" });
     });
 
-    it("leaves parsedOutput undefined when schema is provided but output is not valid JSON", async () => {
+    it("returns failure when schema present but output is not valid JSON (no tool call)", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
       mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
@@ -161,6 +161,53 @@ describe("AgentPool", () => {
 
       const resultPromise = pool.enqueue({ prompt: "broken json", schema });
       proc.stdout.emit("data", Buffer.from(jsonl + "\n"));
+      proc.emit("close", 0);
+
+      const result = await resultPromise;
+      // Without structured-output tool call, schema presence triggers failure
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("structured output");
+    });
+
+    it("extracts parsedOutput from tool_execution_start event", async () => {
+      const pool = new AgentPool(2);
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+
+      const schema = { type: "object", properties: { mustFix: { type: "boolean" } } };
+      const toolStartJsonl = JSON.stringify({
+        type: "tool_execution_start",
+        toolCallId: "tc-1",
+        toolName: "structured-output",
+        args: { mustFix: true, issues: ["bug"] },
+      });
+      const msgEndJsonl = messageEndJsonl("", { input: 10, output: 5 });
+
+      const resultPromise = pool.enqueue({ prompt: "check issues", schema });
+      proc.stdout.emit("data", Buffer.from(toolStartJsonl + "\n" + msgEndJsonl + "\n"));
+      proc.emit("close", 0);
+
+      const result = await resultPromise;
+      expect(result.success).toBe(true);
+      expect(result.parsedOutput).toEqual({ mustFix: true, issues: ["bug"] });
+    });
+
+    it("ignores tool_execution_start for other tools", async () => {
+      const pool = new AgentPool(2);
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+
+      const schema = { type: "object" };
+      const toolStartJsonl = JSON.stringify({
+        type: "tool_execution_start",
+        toolCallId: "tc-1",
+        toolName: "some-other-tool",
+        args: { foo: "bar" },
+      });
+      const msgEndJsonl = messageEndJsonl("text output", { input: 10, output: 5 });
+
+      const resultPromise = pool.enqueue({ prompt: "test", schema });
+      proc.stdout.emit("data", Buffer.from(toolStartJsonl + "\n" + msgEndJsonl + "\n"));
       proc.emit("close", 0);
 
       const result = await resultPromise;
@@ -185,12 +232,9 @@ describe("AgentPool", () => {
 
       expect(mockSpawn).toHaveBeenCalledTimes(1);
       const spawnArgs = mockSpawn.mock.calls[0]![1] as string[];
-      // Args layout: ["--mode","json","-p","--no-session",
-      //               "--append-system-prompt", <file>, <prompt>]
       const promptIdx = spawnArgs.indexOf("--append-system-prompt");
       expect(promptIdx).toBeGreaterThanOrEqual(0);
       expect(spawnArgs[promptIdx + 1]).toBe("/tmp/agent-prompt-abc.md");
-      // Prompt is the last positional arg
       expect(spawnArgs[spawnArgs.length - 1]).toBe("use this prompt");
     });
 
@@ -234,6 +278,23 @@ describe("AgentPool", () => {
       expect(spawnArgs[modelIdx + 1]).toBe("ds-flash");
       expect(promptIdx).toBeGreaterThanOrEqual(0);
       expect(spawnArgs[promptIdx + 1]).toBe("/tmp/p.md");
+    });
+
+    it("returns failure when schema present but no structured-output tool call", async () => {
+      const pool = new AgentPool(2);
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+
+      const schema = { type: "object", properties: { answer: { type: "string" } } };
+      const msgEndJsonl = messageEndJsonl("I think the answer is 42", { input: 10, output: 5 });
+
+      const resultPromise = pool.enqueue({ prompt: "what is the answer", schema });
+      proc.stdout.emit("data", Buffer.from(msgEndJsonl + "\n"));
+      proc.emit("close", 0);
+
+      const result = await resultPromise;
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("structured output");
     });
   });
 

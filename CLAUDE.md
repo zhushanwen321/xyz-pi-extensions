@@ -17,6 +17,7 @@ xyz-pi-extensions/
 │   ├── context-engineering/ → @zhushanwen/pi-context-engineering
 │   ├── evolve-daily/        → @zhushanwen/pi-evolve-daily (含 evolve skills + tracker 框架)
 │   ├── statusline/          → @zhushanwen/pi-statusline
+│   ├── structured-output/   → @zhushanwen/pi-structured-output
 │   ├── unified-hooks/       → @zhushanwen/pi-unified-hooks
 │   ├── workflow/            → @zhushanwen/pi-workflow
 │   ├── model-switch/        → @zhushanwen/pi-model-switch
@@ -30,6 +31,8 @@ xyz-pi-extensions/
 ├── docs/                        # 统一文档
 ├── .changeset/                  # 版本管理
 ├── pnpm-workspace.yaml
+├── extension-dependencies.json   # Extension 依赖关系声明
+├── extension-dependencies.schema.json
 └── package.json
 ```
 
@@ -222,6 +225,8 @@ bash .githooks/check-structure
   }
 }
 ```
+
+**[强制]** `pi.extensions` 必须为 `["./index.ts"]`，禁止 `["./src/index.ts"]`。顶层 `index.ts` re-export `src/index.ts`，确保 Pi 扩展加载列表统一显示纯包名。
 
 ## 关键约束
 
@@ -741,6 +746,7 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `extensions/context-engineering/` | `@zhushanwen/pi-context-engineering` | 渐进式上下文压缩 | — |
 | `extensions/evolve-daily/` | `@zhushanwen/pi-evolve-daily` | 每日数据收集 + Tracker 框架 | evolve, evolve-apply, evolve-report |
 | `extensions/statusline/` | `@zhushanwen/pi-statusline` | Pi 状态栏 | — |
+| `extensions/structured-output/` | `@zhushanwen/pi-structured-output` | Schema 结构化输出（tool call 机制） | — |
 | `extensions/unified-hooks/` | `@zhushanwen/pi-unified-hooks` | Hook 管理 | — |
 | `extensions/workflow/` | `@zhushanwen/pi-workflow` | 通用 DAG 执行引擎 | — |
 | `extensions/model-switch/` | `@zhushanwen/pi-model-switch` | 模型切换 | — |
@@ -753,3 +759,28 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `shared/quota-providers/` | `@zhushanwen/pi-quota-providers` | Quota/Provider 配置加载 |
 | `shared/taste-lint/` | `@zhushanwen/pi-taste-lint` | ESLint 品味规则 |
 | `shared/types/` | `@zhushanwen/pi-types` | 共享类型定义 |
+
+### Extension 依赖管理 [MANDATORY]
+
+所有 extension 之间的依赖关系必须在根目录的 `extension-dependencies.json` 中声明。新增、修改、删除 extension 时必须同步更新此文件。
+
+**数据文件**：
+- `extension-dependencies.json` — 依赖关系数据（source of truth）
+- `extension-dependencies.schema.json` — JSON Schema 校验
+
+**依赖类型**：
+
+| 类型 | 标识 | 含义 | 在 package.json 中体现 |
+|------|------|------|----------------------|
+| **runtime** | `"runtime"` | 运行时需要对方 extension 已安装，但代码层面不 import | 不体现（通过 pi 自动加载 extension） |
+| **package** | `"package"` | npm 包级别依赖，代码中直接 import 对方的模块 | 必须在 `dependencies` 或 `peerDependencies` 中声明 |
+| **optional** | `"optional"` | 功能增强，缺失时降级运行 | 在 `peerDependencies` + `peerDependenciesMeta.optional: true` 中声明 |
+
+**更新时机**：
+1. 新增 extension → 添加条目，声明所有依赖
+2. 新增/移除/修改依赖 → 更新对应的 `dependsOn` 数组
+3. 删除 extension → 移除条目，检查是否有其他 extension 依赖它
+
+**校验**：`npx ajv-cli validate -s extension-dependencies.schema.json -d extension-dependencies.json`
+
+详见：[ADR-018](./docs/adr/018-structured-output-extension.md)

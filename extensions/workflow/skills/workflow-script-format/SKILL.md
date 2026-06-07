@@ -30,13 +30,29 @@ const meta = { name: 'workflow-name', description: '...', phases: ['phase1', 'ph
 
 Returns `parsedOutput` (structured data when schema provided) or `content` (string).
 
+**[MANDATORY] Structured output rule:** When you need JSON/structured data from an agent, you MUST pass `schema`. The `schema` parameter triggers a tool-call mechanism where the LLM calls a `structured-output` tool to return validated JSON — this is reliable. NEVER ask the agent to "output JSON in a code block" or use regex to extract JSON from text.
+
 ```javascript
+// ✅ CORRECT: use schema parameter — returns parsed JS object directly
 const result = await agent({
-  prompt: 'Analyze this code',
-  schema: { type: 'object', properties: { score: { type: 'number' } } },
-  model: 'anthropic/claude-sonnet-4',
-  description: 'code-analysis'
+  prompt: 'Analyze this code and rate it',
+  schema: {
+    type: 'object',
+    properties: {
+      score: { type: 'number' },
+      issues: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['score'],
+  },
+  description: 'code-analysis',
 });
+// result is already a parsed object: { score: 8, issues: [...] }
+```
+
+```javascript
+// ❌ WRONG: prompt-based JSON extraction — fragile, LLM often wraps in markdown
+const result = await agent({ prompt: 'Analyze code. Output JSON: { "score": N }' });
+// result is a string, you'd need regex to extract — DON'T do this
 ```
 
 ### `parallel(calls)` — Run multiple agent calls concurrently
@@ -78,20 +94,32 @@ const final = await pipeline([
 ## Complete Example
 
 ```javascript
-const meta = { name: 'pre-commit-check', description: 'Run tsc + lint + test', phases: ['check'] };
+const meta = { name: 'review-fix-loop', description: 'Loop: review → fix → commit until clean', phases: ['review-fix'] };
 
-const [tscResult, lintResult] = await parallel([
-  agent({ prompt: 'Run npx tsc --noEmit and report errors', description: 'tsc' }),
-  agent({ prompt: 'Run pnpm lint and report errors', description: 'lint' }),
-]);
+const MAX_ROUNDS = 10;
+let round = 0;
 
-const testResult = await agent({ prompt: 'Run pnpm test and report results', description: 'test' });
+while (round < MAX_ROUNDS) {
+  round++;
+  const result = await agent({
+    prompt: `Round ${round}: Review git diff main...HEAD. Fix all issues. Commit with: fix: review round ${round}.`,
+    schema: {
+      type: 'object',
+      properties: {
+        mustFix: { type: 'number', description: 'Number of MUST-fix issues found' },
+        suggestions: { type: 'number', description: 'Number of suggestions' },
+        summary: { type: 'string' },
+      },
+      required: ['mustFix'],
+    },
+    description: `review-round-${round}`,
+  });
 
-return {
-  tsc: tscResult.includes('error') ? 'failed' : 'passed',
-  lint: lintResult.includes('error') ? 'failed' : 'passed',
-  test: testResult.includes('FAIL') ? 'failed' : 'passed',
-};
+  // result is already a parsed object thanks to schema
+  if (result.mustFix === 0) break;
+}
+
+return { rounds: round, clean: true };
 ```
 
 ## Script Size Guideline
@@ -111,7 +139,6 @@ Embed self-check instructions directly in the prompt and require a structured ou
 // Example: classify severity of a code review finding
 const result = await agent({
   prompt: `Classify the severity of this finding: "${findingText}".
-Output JSON: { severity: 'high'|'medium'|'low', reason: string, selfCheck: { valid: bool, reason: string } }
 The selfCheck field MUST reflect whether severity and reason are both present and consistent.`,
   schema: {
     type: 'object',
@@ -125,8 +152,8 @@ The selfCheck field MUST reflect whether severity and reason are both present an
   description: 'classify-severity',
 });
 
-if (!result.parsedOutput.selfCheck.valid) {
-  throw new Error(`self-check failed: ${result.parsedOutput.selfCheck.reason}`);
+if (!result.selfCheck.valid) {
+  throw new Error(`self-check failed: ${result.selfCheck.reason}`);
 }
 ```
 
@@ -139,22 +166,34 @@ A second `agent()` call that explicitly verifies the previous result. Best for: 
 ```javascript
 // Example: review a file, then verify the review is complete
 const review = await agent({
-  prompt: `Review ${file} for issues. Output JSON: { findings: [{ severity, reason }] }`,
-  schema: { ... },
+  prompt: `Review ${file} for issues. Report each finding with severity and reason.`,
+  schema: {
+    type: 'object',
+    properties: {
+      findings: { type: 'array', items: { type: 'object', properties: { severity: { type: 'string' }, reason: { type: 'string' } } } } },
+    },
+    required: ['findings'],
+  },
   description: `review-${file}`,
 });
 
 const verify = await agent({
   prompt: `You are verifying a code review. The previous output was:
-${JSON.stringify(review.parsedOutput)}
-Did the review cover: (1) all functions in the file, (2) at least 3 potential issues, (3) severity rating for each?
-Output JSON: { valid: bool, missingItems: string[] }`,
-  schema: { ... },
+${JSON.stringify(review)}
+Did the review cover: (1) all functions in the file, (2) at least 3 potential issues, (3) severity rating for each?`,
+  schema: {
+    type: 'object',
+    properties: {
+      valid: { type: 'boolean' },
+      missingItems: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['valid'],
+  },
   description: `verify-review-${file}`,
 });
 
-if (!verify.parsedOutput.valid) {
-  throw new Error(`verification failed for ${file}: ${verify.parsedOutput.missingItems.join(', ')}`);
+if (!verify.valid) {
+  throw new Error(`verification failed for ${file}: ${verify.missingItems.join(', ')}`);
 }
 ```
 
