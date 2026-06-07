@@ -11,9 +11,10 @@
 
 import Ajv, { type ValidateFunction } from "ajv";
 import { Type } from "@sinclair/typebox";
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 
-type PiAPI = any; // Extension API — typed as any for stub compatibility
+/** Pi Extension API — typed as any because shared stub has no real signatures */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type PiAPI = any;
 
 const ENV_KEY = "STRUCTURED_OUTPUT_SCHEMA";
 const TOOL_NAME = "structured-output";
@@ -79,31 +80,30 @@ export default function structuredOutputExtension(pi: PiAPI): void {
   });
 
   // System prompt injection
-  (pi as PiAPI).on("before_agent_start", async (_event: unknown, ctx: { addSystemInstruction: (s: string) => void }) => {
+  pi.on("before_agent_start", async (_event: unknown, ctx: { addSystemInstruction: (s: string) => void }) => {
     ctx.addSystemInstruction(SYSTEM_PROMPT);
   });
 
   // Enforcement: track tool calls via tool_execution_start flag
   let hasStructuredOutputCall = false;
 
-  (pi as PiAPI).on("tool_execution_start", async (event: { toolName: string }) => {
+  pi.on("tool_execution_start", async (event: { toolName: string }) => {
     if (event.toolName === TOOL_NAME) {
       hasStructuredOutputCall = true;
     }
   });
 
-  (pi as PiAPI).on("turn_end", async () => {
+  pi.on("turn_end", async () => {
     if (!hasStructuredOutputCall) {
-      (pi as PiAPI).sendUserMessage(ENFORCEMENT_MESSAGE);
+      pi.sendUserMessage(ENFORCEMENT_MESSAGE);
     }
   });
 
   // Block non-workflow usage
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (pi as PiAPI).on("tool_call", async (event: { toolName: string }): Promise<any> => {
+  pi.on("tool_call", async (event: { toolName: string }) => {
     if (event.toolName === TOOL_NAME && !process.env[ENV_KEY]) {
       return {
-        block: true,
+        block: true as const,
         reason: "This tool is only available in workflow structured-output mode",
       };
     }

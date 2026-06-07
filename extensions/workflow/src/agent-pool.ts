@@ -347,7 +347,9 @@ export class AgentPool {
     // Schema requested but no structured-output tool call AND no other tool call
     // (if the agent used a different tool, we trust its judgment)
     if (opts.schema && pipeline.parsedOutput === undefined && !pipeline.hasToolCall) {
-      // Try parsing output text as JSON (fallback for agents without structured-output)
+      // Transitional fallback: if structured-output extension is not installed
+      // (e.g. older agent images), try parsing text output as JSON.
+      // TODO: remove this fallback once structured-output is universally adopted.
       const trimmed = pipeline.output.trim();
       if (trimmed) {
         try {

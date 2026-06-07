@@ -35,7 +35,7 @@ import {
   type WorkflowStatus,
 } from "./state.js";
 import { registerGenerateTool } from "./tool-generate.js";
-import { registerWorkflowShortcuts,renderWorkflowList } from "./widget.js";
+import { registerWorkflowShortcuts, renderWorkflowList } from "./widget.js";
 
 // ── Parameter schema ──────────────────────────────────────────
 
