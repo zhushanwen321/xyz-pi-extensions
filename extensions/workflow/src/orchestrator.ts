@@ -656,7 +656,7 @@ export class WorkflowOrchestrator {
     const now = new Date().toISOString();
     const node: ExecutionTraceNode = {
       stepIndex: callId,
-      agent: opts.description ?? "unknown",
+      agent: opts.description ?? opts.agent ?? "unknown",
       task: opts.prompt.slice(0, PROMPT_PREVIEW_LENGTH),
       model: enrichedOpts.model ?? "default",
       status: "running",

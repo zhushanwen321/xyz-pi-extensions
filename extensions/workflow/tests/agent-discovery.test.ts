@@ -178,18 +178,6 @@ Project version of review-taste.
     expect(registry.resolve("review.chain")).toBeUndefined();
   });
 
-  it("TC-1-05b: skips .chain.json files", () => {
-    fixture = createTempFixture({
-      ".pi/agents/workflow.chain.json": "{ steps: [] }",
-    });
-
-    const registry = new AgentRegistry(fixture.root, fixture.homeDir);
-    registry.discoverAll();
-
-    // .chain.json should be skipped (not a .md file anyway, but the rule exists)
-    expect(registry.list()).toHaveLength(0);
-  });
-
   // ── TC-1-06: 无 frontmatter → 文件名作 name ──
 
   it("TC-1-06: uses filename as name when no frontmatter", () => {

@@ -158,7 +158,6 @@ export class AgentRegistry {
       if (!entry.endsWith(".md")) continue;
       if (entry.startsWith("_")) continue;
       if (entry.endsWith(".chain.md")) continue;
-      if (entry.endsWith(".chain.json")) continue;
 
       const filePath = path.join(dir, entry);
       this.processFile(filePath, entry, source);
@@ -247,8 +246,11 @@ function extractYamlField(yaml: string, key: string): string | null {
   if (!match) return null;
 
   let value = match[1].trim();
-  // Strip surrounding double quotes
-  if (value.startsWith('"') && value.endsWith('"')) {
+  // Strip surrounding quotes (double or single)
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
     value = value.slice(1, -1);
   }
   return value || null;
