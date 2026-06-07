@@ -33,6 +33,7 @@ import {
 	getCompletedCount,
 	isActiveStatus,
 	isTerminalStatus,
+	type GoalExternalInit,
 } from "./state";
 import {
 	executeGoalAction,
@@ -418,5 +419,5 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	// Expose on pi for cross-extension access
 	const api = pi as unknown as Record<string, unknown>;
-	api.__goalInit = initializeGoalFromExternal;
+	api.__goalInit = initializeGoalFromExternal satisfies GoalExternalInit;
 }

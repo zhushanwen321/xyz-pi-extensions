@@ -15,6 +15,25 @@
 
 import { MS_PER_SECOND } from "./constants";
 
+// ── Cross-extension API type ─────────────────────────────
+
+/** Budget options for external goal initialization. */
+export interface GoalExternalBudget {
+	tokenBudget?: number;
+	timeBudgetMinutes?: number;
+	maxTurns?: number;
+}
+
+/**
+ * Function signature for programmatically initializing a goal from another extension.
+ * Exposed via `pi.__goalInit` by the goal extension.
+ */
+export type GoalExternalInit = (
+	objective: string,
+	tasks: string[],
+	budget?: GoalExternalBudget,
+) => boolean;
+
 // ── Goal 状态枚举 ──────────────────────────────────────
 
 export type GoalStatus =

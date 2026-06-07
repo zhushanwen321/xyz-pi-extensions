@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { parseReviewVerdict } from "./helpers.js";
-// SkillResolver used in parameter types for future agent resolution
+// SkillResolver reserved for future agent-based review dispatch
 import type { SkillResolver } from "./skill-resolver.js";
 import { runSingleAgent } from "./subagent.js";
 
@@ -32,6 +32,12 @@ interface ToolExecuteContextLike {
 
 const REVIEW_GATE_MAX_ROUNDS = 3;
 const REVIEW_GATE_STAGNATION_THRESHOLD = 2;
+const STDERR_PREVIEW_LENGTH = 100;
+
+// Phase numbers for routing
+const PHASE_TEST_FIX = 4;
+const PHASE_THREE_STAGE_REVIEW = 3;
+const PHASE_REVIEW_SKIP_THRESHOLD = 5;
 
 function autoGitAdd(cwd: string, filePath: string): void {
 	if (fs.existsSync(filePath)) {
@@ -87,15 +93,15 @@ export async function runReviewGateLoop(
 	processRegistry: ChildProcess[] | undefined,
 ): Promise<ReviewGateResult> {
 	// Phase 4 has Test-Fix Loop instead of review-gate
-	if (phaseConfig.phase === 4) {
+	if (phaseConfig.phase === PHASE_TEST_FIX) {
 		return runTestFixLoop(topicDir, signal, onUpdate, processRegistry);
 	}
 	// Phase 3 has a special three-stage review-gate
-	if (phaseConfig.phase === 3) {
+	if (phaseConfig.phase === PHASE_THREE_STAGE_REVIEW) {
 		return runPhase3ReviewGate(topicDir, skillResolver, signal, onUpdate, processRegistry);
 	}
 	// Phase 5 (PR) doesn't need review-gate
-	if (phaseConfig.phase >= 5) {
+	if (phaseConfig.phase >= PHASE_REVIEW_SKIP_THRESHOLD) {
 		return { passed: true, rounds: 0, lastMustFix: 0, summary: "Review-Gate skipped", reviewPath: "" };
 	}
 
@@ -299,7 +305,7 @@ async function runTestFixLoop(
 			});
 
 			if (result.exitCode !== 0) {
-				summaries.push(`[${wf}] Round ${round}: agent failed (${result.stderr.slice(0, 100)})`);
+				summaries.push(`[${wf}] Round ${round}: agent failed (${result.stderr.slice(0, STDERR_PREVIEW_LENGTH)})`);
 				continue;
 			}
 

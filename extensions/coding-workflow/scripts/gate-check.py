@@ -397,7 +397,8 @@ def check_untracked_files(topic_dir, checks):
         topic_prefix = topic_relpath + os.sep
         critical = [f for f in untracked if f.startswith(topic_prefix)]
         display_prefix = topic_prefix
-    other = [f for f in untracked if f not in set(critical)]
+    critical_set = set(critical)
+    other = [f for f in untracked if f not in critical_set]
 
     if critical:
         display = critical[:10]

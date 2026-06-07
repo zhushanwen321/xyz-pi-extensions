@@ -458,9 +458,9 @@ export async function executePhaseStartTool(hctx: HandlerContext, tctx: ToolExec
 	// Initialize goal for Phase 2 (L1 default tasks)
 	if (state.currentPhase === 2) {
 		try {
-			const goalInit = (pi as unknown as Record<string, unknown>).__goalInit as
-				| ((objective: string, tasks: string[], budget?: Record<string, unknown>) => boolean)
-				| undefined;
+			// Type matches goal extension's GoalExternalInit (see extensions/goal/src/state.ts)
+			type GoalInitFn = (objective: string, tasks: string[], budget?: Record<string, unknown>) => boolean;
+			const goalInit = (pi as unknown as Record<string, unknown>).__goalInit as GoalInitFn | undefined;
 			if (goalInit) {
 				goalInit(
 					"Phase 2: Complete plan phase deliverables",
