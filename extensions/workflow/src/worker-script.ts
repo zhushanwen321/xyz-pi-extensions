@@ -153,7 +153,7 @@ export function buildWorkerScript(userScript: string): string {
     '      } else if (firstArg.task || firstArg.agent) {',
     '        opts = {',
     '          prompt: firstArg.task || firstArg.prompt || "",',
-    '          description: firstArg.label || firstArg.description || firstArg.agent,',
+    '          description: firstArg.label || firstArg.description,',
     '          agent: firstArg.agent,',
     '          schema: firstArg.schema,',
     '          model: firstArg.model,',
