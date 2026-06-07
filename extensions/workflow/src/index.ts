@@ -208,10 +208,16 @@ export default function workflowExtension(pi: ExtensionAPI) {
     const instances = await reconstructState(ctx);
     orch.restoreInstances(instances);
 
-    // Log discovered agents
+    // Log discovered agents with source breakdown
     const agentCount = orch.getAgentCount();
     if (agentCount > 0) {
-      pi.notify(`Workflow: discovered ${agentCount} agents`);
+      const agents = orch.getAgents();
+      const bySource = agents.reduce<Record<string, number>>((acc, a) => {
+        acc[a.source] = (acc[a.source] || 0) + 1;
+        return acc;
+      }, {});
+      const breakdown = Object.entries(bySource).map(([s, c]) => `${c} ${s}`).join(", ");
+      pi.notify(`Workflow: discovered ${agentCount} agents (${breakdown})`);
     }
 
     // Live progress: refresh widget on every trace node change

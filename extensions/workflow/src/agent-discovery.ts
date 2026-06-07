@@ -158,6 +158,7 @@ export class AgentRegistry {
       if (!entry.endsWith(".md")) continue;
       if (entry.startsWith("_")) continue;
       if (entry.endsWith(".chain.md")) continue;
+      if (entry.endsWith(".chain.json")) continue;
 
       const filePath = path.join(dir, entry);
       this.processFile(filePath, entry, source);

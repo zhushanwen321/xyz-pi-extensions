@@ -622,11 +622,23 @@ export class WorkflowOrchestrator {
         return;
       }
 
-      // Write systemPrompt to temp file
-      const tmpDir = path.join(os.tmpdir(), "pi-workflow");
-      fs.mkdirSync(tmpDir, { recursive: true });
-      const tmpFile = path.join(tmpDir, `agent-prompt-${randomUUID()}.md`);
-      fs.writeFileSync(tmpFile, discovered.systemPrompt, "utf-8");
+      let tmpFile: string;
+      try {
+        // Write systemPrompt to temp file
+        const tmpDir = path.join(os.tmpdir(), "pi-workflow");
+        fs.mkdirSync(tmpDir, { recursive: true });
+        tmpFile = path.join(tmpDir, `agent-prompt-${randomUUID()}.md`);
+        fs.writeFileSync(tmpFile, discovered.systemPrompt, "utf-8");
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const errorResult: StateAgentResult = {
+          content: "",
+          error: `Temp file write error: ${msg}`,
+        };
+        instance.callCache.set(callId, errorResult);
+        this.postMessage(runId, { type: "agent-result", callId, result: errorResult, cached: false });
+        return;
+      }
       this.activeTempFiles.add(tmpFile);
 
       // Merge: opts.model overrides discovered.model
