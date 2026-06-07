@@ -47,7 +47,7 @@ verdict: pass
 | 6 | npm 包 | `~/.pi/agent/npm/node_modules/@*/*/agents/*.md` | 全局 scoped npm 包 agent |
 | 7 | npm 包 | `{cwd}/.pi/npm/node_modules/*/agents/*.md` | 项目 npm 包 agent |
 | 8 | npm 包 | `{cwd}/.pi/npm/node_modules/@*/*/agents/*.md` | 项目 scoped npm 包 agent |
-| 9 | Local extension | `extensions/*/agents/*.md`（项目内） | 本地开发用 |
+| 9 | Local extension | `extensions/*/agents/*.md`（项目内） | 仅本地开发时有效。npm 安装后由优先级 5-8 覆盖 |
 
 **FR-1.2 目录扫描规则**
 
@@ -96,12 +96,12 @@ interface DiscoveredAgent {
 
 - **初始化**：`session_start` 事件触发 `discoverAll(cwd)`，一次性扫描全部路径
 - **缓存**：结果存入 `Map<string, DiscoveredAgent>`（key = agent name）
-- **失效**：`/reload` 命令时调用 `invalidate()` + 重新 `discoverAll(cwd)`
+- **失效**：pi-core 的 `/reload` 会触发新的 `session_start(reason="reload")`，重建整个 orchestrator（含 AgentRegistry），无需单独 invalidate 逻辑
 - **不监听文件变化**：workflow 运行期间 agent 文件不会变
 
 **FR-2.3 存储位置**
 
-AgentRegistry 实例挂在 WorkflowOrchestrator 上（per-session），不使用全局变量。
+AgentRegistry 实例在 `WorkflowOrchestrator` 构造时创建（per-session），随 orchestrator 生命周期。不使用全局变量。
 
 ### FR-3: agent() API 扩展
 
@@ -131,17 +131,31 @@ const result = await agent({ agent: "review-taste", prompt: "Review src/index.ts
 const result = await agent({ agent: "review-taste", model: "ds-pro", prompt: "Deep review" })
 ```
 
-**FR-3.3 Worker Script 注入变更**
+**FR-3.3 Worker Script 修正**
 
-`worker-script.ts` 的 `agent()` 全局函数签名扩展：
+`worker-script.ts` 的 `agent()` 函数当前已处理 `firstArg.agent`（第 158 行的 `firstArg.task || firstArg.agent` 分支），但存在一个 bug：把 `firstArg.agent` 值赋给了 `opts.description` 而非 `opts.agent`。
+
+**修正内容**：在该分支中，将 `agent` 字段透传到 `opts`：
 
 ```javascript
-// 现有字符串形式不变
-agent(promptString)
-agent(promptString, { schema?, model?, scene? })
+// 修正前（bug）
+opts = {
+  prompt: firstArg.task || firstArg.prompt || "",
+  description: firstArg.label || firstArg.description || firstArg.agent,
+  schema: firstArg.schema,
+  model: firstArg.model,
+  scene: firstArg.scene,
+};
 
-// 新增对象形式
-agent({ agent: "name", prompt: "...", schema?, model?, scene? })
+// 修正后
+opts = {
+  prompt: firstArg.task || firstArg.prompt || "",
+  description: firstArg.label || firstArg.description,
+  agent: firstArg.agent,  // 透传 agent name
+  schema: firstArg.schema,
+  model: firstArg.model,
+  scene: firstArg.scene,
+};
 ```
 
 内部传递：当 `opts.agent` 非空时，Worker 发送 `{ type: "agent-call", callId, opts }` 给主线程，主线程的 `handleAgentCall` 负责解析。
@@ -236,6 +250,11 @@ Workflow: discovered 12 agents (4 project, 8 package)
 - [ ] 现有 workflow 脚本无需修改
 - [ ] AgentRegistry 为空时不影响任何功能
 
+### AC-6: npm 包完整性
+
+- [ ] `extensions/workflow/package.json` 的 `files` 字段包含 `"agents/"`
+- [ ] `npm pack --dry-run` 输出中包含 `agents/` 目录下的文件
+
 ## Constraints
 
 - **不依赖 pi-subagents 代码**：自己实现发现逻辑，避免循环依赖
@@ -243,6 +262,7 @@ Workflow: discovered 12 agents (4 project, 8 package)
 - **不改 pi CLI**：`--append-system-prompt` 已是 pi 原生参数，无需改动
 - **单文件 ≤ 300 行**：agent-discovery.ts 控制在 200 行以内
 - **同步发现**：`discoverAll()` 在 session_start 时同步执行（文件 IO 少，< 100ms）
+- **package.json files 字段**：`extensions/workflow/package.json` 的 `files` 需要加入 `"agents/"`，确保 npm publish 后 agent 文件随包分发（当前只有 `src/`, `index.ts`, `skills/`）
 
 ## 业务用例
 
