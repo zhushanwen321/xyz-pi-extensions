@@ -392,10 +392,12 @@ def check_untracked_files(topic_dir, checks):
         # Topic is repo root — use original .xyz-harness/ + docs/ prefixes
         critical_prefixes = (".xyz-harness/", "docs/")
         critical = [f for f in untracked if any(f.startswith(p) for p in critical_prefixes)]
+        display_prefix = ".xyz-harness/ or docs/"
     else:
         topic_prefix = topic_relpath + os.sep
         critical = [f for f in untracked if f.startswith(topic_prefix)]
-    other = [f for f in untracked if f not in critical]
+        display_prefix = topic_prefix
+    other = [f for f in untracked if f not in set(critical)]
 
     if critical:
         display = critical[:10]
@@ -403,7 +405,7 @@ def check_untracked_files(topic_dir, checks):
         checks.append((
             "untracked files (topic)",
             FAIL,
-            f"{len(critical)} untracked under {topic_prefix}: {', '.join(display)}{suffix}",
+            f"{len(critical)} untracked under {display_prefix}: {', '.join(display)}{suffix}",
         ))
     else:
         checks.append(("untracked files (topic)", PASS, "topic directory fully tracked"))

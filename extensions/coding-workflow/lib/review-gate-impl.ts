@@ -45,8 +45,8 @@ function buildReviewGatePrompt(
 	phaseConfig: { phase: number; name: string; deliverables: string[]; reviewMode: string },
 	topicDir: string,
 	version: number,
+	reviewPrefix: string,
 ): string {
-	const reviewPrefix = "review"; // simplified
 	const reviewsDir = path.join(topicDir, "changes", "reviews");
 	const reviewFileName = `${reviewPrefix}_v${version}.md`;
 	const reviewPath = path.join(reviewsDir, reviewFileName);
@@ -109,7 +109,7 @@ export async function runReviewGateLoop(
 	const summaries: string[] = [];
 
 	for (let round = 1; round <= REVIEW_GATE_MAX_ROUNDS; round++) {
-		const taskPrompt = buildReviewGatePrompt(phaseConfig, topicDir, round);
+		const taskPrompt = buildReviewGatePrompt(phaseConfig, topicDir, round, reviewPrefix);
 		const systemPrompt = `You are an expert code reviewer. Be thorough but fair. Focus on actionable findings.`;
 
 		const result = await runSingleAgent({
