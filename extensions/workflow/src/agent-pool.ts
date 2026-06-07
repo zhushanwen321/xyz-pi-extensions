@@ -90,6 +90,10 @@ interface ParsedPipelineEvent {
   usage: AgentUsage;
   model?: string;
   stopReason?: string;
+  /** Structured output extracted from tool_execution_start event. */
+  parsedOutput?: unknown;
+  /** Whether any tool_execution_start event was seen (for schema failure detection). */
+  hasToolCall?: boolean;
 }
 
 // ── Constants ─────────────────────────────────────────────────
@@ -102,7 +106,6 @@ const DEFAULT_CONCURRENCY = 4;
 const ONE_DAY_MS = 86_400_000;
 const PROCESS_TIMEOUT_MS = ONE_DAY_MS;
 const UUID_SLICE_LENGTH = 8;
-const JSON_INDENT = 2;
 const TIMEOUT_DISPLAY_DIVISOR = 1000;
 
 export interface AgentPoolOptions {
@@ -282,31 +285,7 @@ export class AgentPool {
       args.push("--model", opts.model);
     }
 
-    // Build the prompt: if schema is provided, instruct the model to
-    // output valid JSON matching the schema, then append the prompt.
-    let prompt = opts.prompt;
-    if (opts.schema) {
-      const schemaJson = JSON.stringify(opts.schema, null, JSON_INDENT);
-      prompt = [
-        `You MUST respond with ONLY a valid JSON object conforming to this JSON schema:`,
-        ``,
-        schemaJson,
-        ``,
-        `Correct response:`,
-        `{"mustFix": true, "issues": ["..."]}`,
-        ``,
-        `Wrong responses (do NOT do this):`,
-        `- \`\`\`json\n{...}\n\`\`\` (markdown code block wrapping)`,
-        `- Here is the result: {...} (prefix text before JSON)`,
-        `- {"mustFix": true} Hope this helps (suffix text after JSON)`,
-        ``,
-        `Do not include any text before or after the JSON object. No markdown, no explanation.`,
-        `---`,
-        prompt,
-      ].join("\n");
-    }
-
-    args.push(prompt);
+    args.push(opts.prompt);
     return args;
   }
 
@@ -342,8 +321,14 @@ export class AgentPool {
     let stderr = "";
     let exitCode: number;
 
+    // Inject schema via environment variable for structured-output extension
+    const env: Record<string, string | undefined> = { ...process.env };
+    if (opts.schema) {
+      env.STRUCTURED_OUTPUT_SCHEMA = JSON.stringify(opts.schema);
+    }
+
     try {
-      const result = await runPiProcess(command, cmdArgs, pipeline, signal);
+      const result = await runPiProcess(command, cmdArgs, pipeline, signal, env);
       exitCode = result.exitCode;
       stderr = result.stderr;
     } catch (err) {
@@ -358,63 +343,51 @@ export class AgentPool {
     }
 
     const durationMs = Date.now() - startedAt;
-    const success = exitCode === 0;
 
-    let parsedOutput: unknown | undefined;
-    if (pipeline.output.trim() && opts.schema) {
-      parsedOutput = extractJSON(pipeline.output) ?? undefined;
+    // Schema requested but no structured-output tool call AND no other tool call
+    // (if the agent used a different tool, we trust its judgment)
+    if (opts.schema && pipeline.parsedOutput === undefined && !pipeline.hasToolCall) {
+      // Try parsing output text as JSON (fallback for agents without structured-output)
+      const trimmed = pipeline.output.trim();
+      if (trimmed) {
+        try {
+          pipeline.parsedOutput = JSON.parse(trimmed);
+        } catch {
+          // Not valid JSON — return failure
+          return {
+            callId,
+            output: pipeline.output,
+            durationMs,
+            success: false,
+            error: "Agent did not produce structured output (tool call missing or failed)",
+          };
+        }
+      } else {
+        return {
+          callId,
+          output: pipeline.output,
+          durationMs,
+          success: false,
+          error: "Agent did not produce structured output (tool call missing or failed)",
+        };
+      }
     }
 
     return {
       callId,
       output: pipeline.output,
-      parsedOutput,
+      parsedOutput: pipeline.parsedOutput,
       usage: pipeline.usage.turns > 0 ? pipeline.usage : undefined,
       durationMs,
-      success,
-      error: success ? undefined : (stderr || `Exit code ${exitCode}`),
+      success: exitCode === 0,
+      error: exitCode === 0 ? undefined : (stderr || `Exit code ${exitCode}`),
     };
   }
 }
 
 // ── Helpers ───────────────────────────────────────────────────
 
-/**
- * Extract and parse JSON from a string that may contain markdown code blocks
- * or surrounding text. Strategy: find the outermost balanced `{...}` or `[...]`
- * and parse that substring.
- */
-function extractJSON(raw: string): unknown {
-  const trimmed = raw.trim();
 
-  // Try direct parse first (fast path)
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    // fall through
-  }
-
-  // Find outermost balanced braces or brackets
-  const openIdx = trimmed.indexOf('{');
-  const bracketIdx = trimmed.indexOf('[');
-  let start: number;
-  let closeChar: string;
-  if (openIdx === -1 && bracketIdx === -1) return undefined;
-  if (openIdx === -1) { start = bracketIdx; closeChar = ']'; }
-  else if (bracketIdx === -1) { start = openIdx; closeChar = '}'; }
-  else { start = Math.min(openIdx, bracketIdx); closeChar = start === openIdx ? '}' : ']'; }
-
-  // Find matching close from the end
-  const end = trimmed.lastIndexOf(closeChar);
-  if (end <= start) return undefined;
-
-  const candidate = trimmed.slice(start, end + 1);
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    return undefined;
-  }
-}
 
 function makeEmptyPipeline(): ParsedPipelineEvent {
   return {
@@ -436,12 +409,14 @@ async function runPiProcess(
   cmdArgs: string[],
   pipeline: ParsedPipelineEvent,
   signal?: AbortSignal,
+  env?: Record<string, string | undefined>,
 ): Promise<{ exitCode: number; stderr: string }> {
   let stderr = "";
   const exitCode = await new Promise<number>((resolve, reject) => {
     const proc = spawn(command, cmdArgs, {
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
+      env: env ?? process.env,
     });
     let buffer = "";
     let settled = false;
@@ -542,6 +517,14 @@ async function runPiProcess(
  * Mutates `pipeline` in place with O(1) memory overhead per event.
  */
 function processJsonlEvent(event: Record<string, unknown>, pipeline: ParsedPipelineEvent): void {
+  if (event.type === "tool_execution_start") {
+    if (event.toolName === "structured-output") {
+      pipeline.parsedOutput = event.args;
+    }
+    pipeline.hasToolCall = true;
+    return;
+  }
+
   if (event.type === "message_end" && event.message) {
     const msg = event.message as Record<string, unknown>;
     if (msg.role === "assistant") {

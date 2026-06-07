@@ -31,7 +31,8 @@
     "@mariozechner/pi-tui": "*",
     "@mariozechner/pi-ai": "*",
     "@sinclair/typebox": "*",
-    "@zhushanwen/pi-model-switch": "*"
+    "@zhushanwen/pi-model-switch": "*",
+    "@zhushanwen/pi-structured-output": "*"
   },
   "peerDependenciesMeta": {
     "@mariozechner/pi-tui": {
