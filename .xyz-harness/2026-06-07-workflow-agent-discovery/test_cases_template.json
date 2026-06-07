@@ -1,0 +1,95 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "Project agent file discovered from .pi/agents/",
+      "description": "Place an agent .md file in project's .pi/agents/ dir, verify AgentRegistry.resolve() returns it",
+      "steps": ["create .pi/agents/test-agent.md with frontmatter", "call registry.discoverAll()", "call registry.resolve('test-agent')", "verify result matches file content"]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "integration",
+      "title": "npm package agent discovered from node_modules",
+      "description": "Agent files in installed npm package's agents/ directory are discovered",
+      "steps": ["verify @zhushanwen/pi-coding-workflow has agents/ dir", "call registry.discoverAll()", "call registry.resolve('review-taste')", "verify result is non-null"]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "integration",
+      "title": "Priority override: project agent wins over package agent",
+      "description": "Same-name agent in project path overrides npm package version",
+      "steps": ["create .pi/agents/review-taste.md with custom content", "call registry.discoverAll()", "call registry.resolve('review-taste')", "verify filePath points to project version"]
+    },
+    {
+      "id": "TC-1-04",
+      "type": "integration",
+      "title": "Files starting with _ are skipped",
+      "description": "Agent files with _ prefix are not discovered",
+      "steps": ["create .pi/agents/_draft.md", "call registry.discoverAll()", "call registry.resolve('_draft')", "verify result is undefined"]
+    },
+    {
+      "id": "TC-1-05",
+      "type": "integration",
+      "title": ".chain.md files are skipped",
+      "description": "Files ending with .chain.md are not discovered as agents",
+      "steps": ["create .pi/agents/foo.chain.md", "call registry.discoverAll()", "call registry.resolve('foo.chain')", "verify result is undefined"]
+    },
+    {
+      "id": "TC-1-06",
+      "type": "integration",
+      "title": "No frontmatter: filename used as agent name",
+      "description": "Agent .md file without YAML frontmatter uses filename as name",
+      "steps": ["create .pi/agents/bare.md without frontmatter", "call registry.discoverAll()", "call registry.resolve('bare')", "verify name is 'bare' and systemPrompt is full file content"]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "agent({ agent: 'name' }) injects systemPrompt",
+      "description": "Calling agent() with agent name resolves and injects systemPrompt via --append-system-prompt",
+      "steps": ["ensure review-taste agent is discoverable", "run workflow script with agent({ agent: 'review-taste', prompt: 'test' })", "verify pi subprocess receives --append-system-prompt arg"]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "integration",
+      "title": "Agent model used as default",
+      "description": "When agent has model in frontmatter and no opts.model, agent.model is used",
+      "steps": ["ensure agent with model: ds-flash exists", "call agent({ agent: 'name', prompt: 'test' })", "verify pi subprocess receives --model ds-flash"]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "integration",
+      "title": "opts.model overrides agent.model",
+      "description": "Explicit opts.model takes precedence over agent frontmatter model",
+      "steps": ["ensure agent with model: ds-flash exists", "call agent({ agent: 'name', model: 'ds-pro', prompt: 'test' })", "verify pi subprocess receives --model ds-pro"]
+    },
+    {
+      "id": "TC-2-04",
+      "type": "integration",
+      "title": "Agent not found returns error",
+      "description": "Non-existent agent name returns structured error",
+      "steps": ["call agent({ agent: 'nonexistent', prompt: 'test' })", "verify result has success: false and error containing 'Agent not found'"]
+    },
+    {
+      "id": "TC-2-05",
+      "type": "integration",
+      "title": "Old agent('string') syntax unaffected",
+      "description": "Legacy string-only agent() call works without any agent discovery",
+      "steps": ["call agent('just a prompt')", "verify pi subprocess runs normally without --append-system-prompt"]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "Temp file cleaned up after subprocess exits",
+      "description": "System prompt temp file is deleted after agent call completes",
+      "steps": ["call agent({ agent: 'name', prompt: 'test' })", "capture temp file path from logs", "verify file does not exist after call completes"]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "manual",
+      "title": "npm pack includes agents directory",
+      "description": "package.json files field includes agents/ and npm pack includes it",
+      "steps": ["verify package.json has 'agents/' in files array", "run npm pack --dry-run", "verify output includes agents/ entries"]
+    }
+  ]
+}
