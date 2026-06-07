@@ -34,7 +34,7 @@ import {
 } from "./helpers.js";
 import { buildRetrospectFollowUp,dispatchReviewSubagent } from "./review-dispatcher.js";
 import { SkillResolver } from "./skill-resolver.js";
-import { formatUsageStats, getFinalOutput } from "./subagent.js";
+import { formatUsageStats } from "./subagent.js";
 import { runReviewGateLoop } from "./review-gate-impl.js";
 
 // ─── Shared types ────────────────────────────────────────
@@ -83,8 +83,6 @@ export interface HandlerContext {
 	persistState: (pi: ExtensionAPI, state: WorkflowState) => void;
 	updateWidget: (ctx: ExtensionContext, state: WorkflowState) => void;
 }
-
-// ─── Gate tool handler ───────────────────────────────────
 
 // ─── Gate tool handler ────────────────────────────────────
 

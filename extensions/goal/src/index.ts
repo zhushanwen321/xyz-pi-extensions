@@ -42,6 +42,7 @@ import {
 	HISTORY_ENTRY_TYPE,
 	isGoalEntry,
 	isStaleContextError,
+	persistGoalState,
 	updateWidget,
 } from "./tool-handler";
 import { toSingleLine } from "./widget";
@@ -181,7 +182,8 @@ export default function goalExtension(pi: ExtensionAPI) {
 		isProcessing: false, // P1-3: 防重入
 	};
 
-	// ── Tool: goal_manager ─────────────────────────────
+	// Capture latest ctx for external API (initializeGoalFromExternal needs it for persistGoalState)
+	let lastCtx: ExtensionContext | undefined;
 
 	pi.registerTool({
 		name: "goal_manager",
@@ -218,6 +220,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		parameters: GoalManagerParams,
 
 		async execute(_toolCallId: string, params: Static<typeof GoalManagerParams>, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			lastCtx = ctx;
 			try {
 				// P1-4: 透传 signal
 				return await executeGoalAction(pi, session, params, ctx, signal);
@@ -304,6 +307,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	// ── Event: before_agent_start ──────────────────────
 	pi.on("before_agent_start", async (_event: BeforeAgentStartLikeEvent, ctx: ExtensionContext) => {
+		lastCtx = ctx;
 		return handleBeforeAgentStart(pi, session, ctx);
 	});
 
@@ -346,6 +350,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	// ── Event: session_start (state reconstruction) ───
 	pi.on("session_start", async (_event: SessionStartLikeEvent, ctx: ExtensionContext) => {
+		lastCtx = ctx;
 		reconstructGoalState(pi, session, ctx);
 		if (session.state) {
 			session.tasksCompletedAtAgentStart = getCompletedCount(session.state.tasks);
@@ -400,6 +405,13 @@ export default function goalExtension(pi: ExtensionAPI) {
 			status: "pending" as const,
 			lastUpdatedTurn: session.state!.currentTurnIndex,
 		}));
+
+		// Persist state so it survives session reconstruction
+		// Note: ctx is captured from the last event handler invocation — acceptable
+		// because initializeGoalFromExternal is called synchronously during tool execution.
+		if (lastCtx) {
+			persistGoalState(pi, session, lastCtx);
+		}
 
 		return true;
 	}

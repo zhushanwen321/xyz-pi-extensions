@@ -9,8 +9,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { parseReviewVerdict } from "./helpers.js";
+// SkillResolver used in parameter types for future agent resolution
 import type { SkillResolver } from "./skill-resolver.js";
-import { getFinalOutput, runSingleAgent } from "./subagent.js";
+import { runSingleAgent } from "./subagent.js";
 
 // ─── Types ────────────────────────────────────────────────
 
