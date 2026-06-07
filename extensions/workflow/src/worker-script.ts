@@ -154,7 +154,7 @@ export function buildWorkerScript(userScript: string): string {
     '        opts = {',
     '          prompt: firstArg.task || firstArg.prompt || "",',
     '          description: firstArg.label || firstArg.description || firstArg.agent,',
-    '          agent: firstArg.agent',,
+    '          agent: firstArg.agent',
     '          schema: firstArg.schema,',
     '          model: firstArg.model,',
     '          scene: firstArg.scene,',
