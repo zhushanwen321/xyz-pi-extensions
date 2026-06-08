@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-vision",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Image analysis tool using multimodal vision models with memory sessions.",
   "main": "index.ts",
   "type": "module",

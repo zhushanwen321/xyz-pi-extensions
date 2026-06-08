@@ -1,5 +1,11 @@
 # @zhushanwen/pi-vision
 
+## 0.1.5
+
+### Patch Changes
+
+- Fix silent failures: throw on error, add model fallback chain, clean stderr noise
+
 ## 0.1.4
 
 ### Patch Changes
