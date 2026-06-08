@@ -97,8 +97,12 @@ interface ParsedPipelineEvent {
   usage: AgentUsage;
   model?: string;
   stopReason?: string;
-  /** Structured output extracted from tool_execution_start event. */
+  /** Structured output confirmed by tool_execution_end (only after successful validation). */
   parsedOutput?: unknown;
+  /** Pending args from tool_execution_start, awaiting tool_execution_end confirmation. */
+  pendingStructuredArgs?: unknown;
+  /** Pending toolCallId to match against tool_execution_end. */
+  pendingStructuredCallId?: string;
   /** Whether any tool_execution_start event was seen (for schema failure detection). */
   hasToolCall?: boolean;
 }
@@ -552,9 +556,24 @@ async function runPiProcess(
 function processJsonlEvent(event: Record<string, unknown>, pipeline: ParsedPipelineEvent): void {
   if (event.type === "tool_execution_start") {
     if (event.toolName === "structured-output") {
-      pipeline.parsedOutput = event.args;
+      // Stage 1: stash args pending confirmation from tool_execution_end.
+      // tool_execution_start fires BEFORE execute(), so args may be invalid.
+      pipeline.pendingStructuredArgs = event.args;
+      pipeline.pendingStructuredCallId = event.toolCallId as string | undefined;
     }
     pipeline.hasToolCall = true;
+    return;
+  }
+
+  if (event.type === "tool_execution_end") {
+    // Stage 2: confirm structured output only on successful execution.
+    if (event.toolName === "structured-output" && !event.isError) {
+      // tool_execution_end fires AFTER execute(), so Ajv validation passed.
+      pipeline.parsedOutput = pipeline.pendingStructuredArgs;
+    }
+    // Clear pending regardless of success/failure
+    pipeline.pendingStructuredArgs = undefined;
+    pipeline.pendingStructuredCallId = undefined;
     return;
   }
 
