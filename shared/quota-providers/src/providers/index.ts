@@ -9,6 +9,7 @@
  */
 
 import { kimiCodingProvider } from "./kimi-coding.js";
+import { mimoProvider } from "./mimo.js";
 import { minimaxProvider } from "./minimax.js";
 import { opencodeGoProvider } from "./opencode-go.js";
 import type { QuotaProvider } from "./types.js";
@@ -25,6 +26,7 @@ export const PROVIDERS: QuotaProvider[] = [
 	opencodeGoProvider,
 	kimiCodingProvider,
 	minimaxProvider,
+	mimoProvider,
 	tavilyProvider,
 ];
 

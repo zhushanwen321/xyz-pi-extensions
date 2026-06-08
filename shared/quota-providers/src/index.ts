@@ -15,4 +15,5 @@ export type { ZhipuData } from "./providers/zhipu.js";
 export type { OpenCodeGoData } from "./providers/opencode-go.js";
 export type { KimiCodingData } from "./providers/kimi-coding.js";
 export type { MinimaxData } from "./providers/minimax.js";
+export type { MimoData } from "./providers/mimo.js";
 export type { TavilyData } from "./providers/tavily.js";

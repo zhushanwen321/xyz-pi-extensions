@@ -10,7 +10,10 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { join } from "node:path";
-import { PROVIDERS } from "./providers/index.js";
+// 架构修复：doUpdate 用 buildRuntimeProviders() 替代静态 PROVIDERS，
+// 使 providers.json 中 enabled=false 的 provider 不会被 fetch。
+// registry.ts 内部 import PROVIDERS，此处不直接引用。
+import { buildRuntimeProviders } from "./registry.js";
 import { getCachePath, getSpeedDir } from "./paths.js";
 import { MS_PER_SEC, SEC_PER_MIN, MIN_PER_HOUR, SEC_PER_DAY } from "./time.js";
 import { avgSpeed, type SpeedRecord } from "./speed.js";
@@ -83,11 +86,12 @@ export function triggerUpdate(): void {
 
 async function doUpdate(): Promise<void> {
 	const old = readCacheSync();
-	const results = await Promise.allSettled(PROVIDERS.map((p) => p.fetch()));
+	const providers = buildRuntimeProviders();
+	const results = await Promise.allSettled(providers.map((p) => p.fetch()));
 
 	const cache: Record<string, unknown> = { updatedAt: Date.now() };
-	for (let i = 0; i < PROVIDERS.length; i++) {
-		const p = PROVIDERS[i]!;
+	for (let i = 0; i < providers.length; i++) {
+		const p = providers[i]!;
 		const r = results[i]!;
 		const oldVal = (old as Record<string, unknown>)[p.id] ?? null;
 		if (r.status === "rejected") {
