@@ -727,6 +727,7 @@ export class WorkflowOrchestrator {
         const traceNode = instance.trace.find((n) => n.stepIndex === callId);
         if (traceNode) {
           traceNode.status = "failed";
+          traceNode.sessionId = poolResult.sessionId;
           traceNode.result = {
             content: poolResult.output,
             parsedOutput: poolResult.parsedOutput,
@@ -788,6 +789,7 @@ export class WorkflowOrchestrator {
       const traceNode = instance.trace.find((n) => n.stepIndex === callId);
       if (traceNode) {
         traceNode.status = poolResult.success ? "completed" : "failed";
+        traceNode.sessionId = poolResult.sessionId;
         traceNode.result = result;
         traceNode.completedAt = new Date().toISOString();
         appendTraceNode(this.pi, runId, traceNode);

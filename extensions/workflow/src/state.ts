@@ -76,6 +76,11 @@ export interface ExecutionTraceNode {
   result?: AgentResult;
   error?: string;
   verifyStrategy?: "internal" | "follow-up" | "none";
+  /**
+   * Pi session ID (uuidv7) for the subagent process.
+   * Used to locate the session JSONL for post-run inspection.
+   */
+  sessionId?: string;
 }
 
 export interface WorkflowInstance {
