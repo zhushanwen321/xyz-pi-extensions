@@ -4,7 +4,23 @@
 
 ### Minor Changes
 
+- Gate Pipeline + Workflow-driven Review-Gate & Test-Fix Loop (P0-P3)
+
+  - Gate Pipeline abstraction: configurable gate chain per phase (review-gate, phase-gate, test-fix-loop)
+  - Workflow integration via `pi.__workflowRun` with `runSingleAgent` fallback
+  - Phase 1/2 Review-Gate: workflow scripts with L1/L2 routing
+  - Phase 3 Review-Gate: 3-stage nested loop (conformance → simulated-data → 5 parallel reviewers + fix-worker)
+  - Phase 4 Test-Fix Loop: core→noncore serial, 10-round with incremental strategy
+  - 11 agent files, 4 workflow scripts
+  - Phase 3 dynamic goal injection, retrospect context injection
+  - 4 SKILL.md files updated with workflow gate guidance
+
+## 0.3.0
+
+### Minor Changes
+
 - Gate Pipeline (P0): configurable gate chain abstraction (`lib/gates/`)
+
   - `Gate`/`GateContext`/`GateResult` interfaces
   - `ReviewGate` — dual-path: `pi.__workflowRun` preferred, `runSingleAgent` fallback
   - `PhaseGate` — reuses `runGateScript`
@@ -12,12 +28,14 @@
   - `executeGateTool` refactored from hardcoded review→phase to configurable gate chain
 
 - Workflow integration (P1): `pi.__workflowRun` cross-extension call channel
+
   - `WorkflowOrchestrator.runAndWait()` — synchronous wait with 10min timeout
   - 3 Phase 1/2 agent files: `spec-requirements-reviewer`, `plan-requirements-reviewer`, `plan-bl-requirements-reviewer`
   - 2 workflow scripts: `phase1-review-gate.js`, `phase2-review-gate.js` (L1/L2 routing)
   - ReviewGate upgraded from stub to full `pi.__workflowRun` integration with fallback
 
 - Phase 3/4 workflows (P2): complete Review-Gate + Test-Fix Loop coverage
+
   - 8 agent files: `spec-plan-conformance-reviewer`, `simulated-data-generator`, `fallow-reviewer`, `review-sync-fix-worker`, `file-fix-subagent`, `test-execute-coordinator`, `test-fix-worker`, `test-case-subagent`
   - 2 workflow scripts: `phase3-review-gate.js` (3-stage nested loop), `phase4-test-fix-loop.js` (core→noncore serial)
   - TestFixLoopGate upgraded from stub to full `pi.__workflowRun` integration

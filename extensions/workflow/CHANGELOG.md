@@ -1,5 +1,15 @@
 # @zhushanwen/pi-workflow
 
+## 0.3.0
+
+### Minor Changes
+
+- Add `runAndWait()` method and `pi.__workflowRun` cross-extension channel
+
+  - `WorkflowOrchestrator.runAndWait()`: synchronous wait with configurable timeout
+  - `pi.__workflowRun` exposed in session_start for cross-extension programmatic access
+  - Extract `orchestrator-budget.ts` for reuse
+
 ## 0.2.2
 
 ### Patch Changes

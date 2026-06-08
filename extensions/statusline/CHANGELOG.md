@@ -1,5 +1,11 @@
 # @zhushanwen/pi-statusline
 
+## 0.4.6
+
+### Patch Changes
+
+- Fix re-export path from `.js` to `.ts` in index.ts
+
 ## 0.4.5
 
 ### Patch Changes
