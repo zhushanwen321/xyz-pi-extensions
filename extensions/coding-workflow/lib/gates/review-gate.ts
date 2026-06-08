@@ -11,9 +11,9 @@ import * as path from "node:path";
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-import type { Gate, GateContext, GateResult } from "./gate.js";
 import { getReviewGateStatePath } from "../helpers.js";
-import { runReviewGateLoop, type ReviewGateResult } from "../review-gate-impl.js";
+import { type ReviewGateResult,runReviewGateLoop } from "../review-gate-impl.js";
+import type { Gate, GateContext, GateResult } from "./gate.js";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -46,15 +46,15 @@ type RunReviewGateLoopOnUpdate = (partial: { content: Array<{ type: string; text
 export class ReviewGate implements Gate {
 	readonly name = "review-gate" as const;
 
-	/** Review-Gate workflow timeout: 15 minutes (longer reviews need more time). */
+	// eslint-disable-next-line no-magic-numbers -- timeout 15 minutes in ms
 	private static readonly WORKFLOW_TIMEOUT_MS = 15 * 60_000;
-	/** Maximum rounds for review-gate loop. */
+	// eslint-disable-next-line no-magic-numbers -- max review rounds
 	private static readonly MAX_ROUNDS = 3;
-	/** Phase 2 complexity routing. */
+	// eslint-disable-next-line no-magic-numbers -- Phase 2 complexity routing
 	private static readonly COMPLEXITY_ROUTING_PHASE = 2;
-	/** Stagnation threshold: rounds without must_fix decrease. */
+	// eslint-disable-next-line no-magic-numbers -- stagnation threshold
 	private static readonly STAGNATION_THRESHOLD = 2;
-	/** JSON.stringify indentation. */
+	// eslint-disable-next-line no-magic-numbers -- JSON indent
 	private static readonly JSON_INDENT = 2;
 
 	async run(ctx: GateContext): Promise<GateResult> {
@@ -202,6 +202,7 @@ export class ReviewGate implements Gate {
 		const statePath = getReviewGateStatePath(topicDir, phase);
 		try {
 			await fs.promises.writeFile(statePath, JSON.stringify(data, null, ReviewGate.JSON_INDENT));
+		// eslint-disable-next-line taste/no-silent-catch -- state persistence is non-critical, logging suffices
 		} catch (err) {
 			console.error(`[coding-workflow] Failed to persist review-gate state to ${statePath}: ${err instanceof Error ? err.message : String(err)}`);
 		}

@@ -9,10 +9,10 @@ import * as fs from "node:fs";
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
+import { getReviewGateStatePath } from "../helpers.js";
+import { type ReviewGateResult,runReviewGateLoop } from "../review-gate-impl.js";
 // fallow-ignore-file — implements Gate interface members consumed via polymorphism
 import type { Gate, GateContext, GateResult } from "./gate.js";
-import { getReviewGateStatePath } from "../helpers.js";
-import { runReviewGateLoop, type ReviewGateResult } from "../review-gate-impl.js";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -46,15 +46,15 @@ type RunReviewGateLoopOnUpdate = (partial: { content: Array<{ type: string; text
 export class TestFixLoopGate implements Gate {
   readonly name = "test-fix-loop";
 
-  /** Test-Fix Loop workflow timeout: 15 minutes (test-fix cycles may be long). */
+  // eslint-disable-next-line no-magic-numbers -- timeout 15 minutes in ms
   private static readonly WORKFLOW_TIMEOUT_MS = 15 * 60_000;
-  /** Maximum test-fix rounds. */
+  // eslint-disable-next-line no-magic-numbers -- max test-fix rounds
   private static readonly MAX_ROUNDS = 10;
-  /** Stagnation threshold: rounds without failed count decrease. */
+  // eslint-disable-next-line no-magic-numbers -- stagnation threshold
   private static readonly MAX_STAGNATION = 3;
-  /** Phase number for state file naming. */
+  // eslint-disable-next-line no-magic-numbers -- Phase 4 state file
   private static readonly STATE_PHASE = 4;
-  /** JSON.stringify indentation. */
+  // eslint-disable-next-line no-magic-numbers -- JSON indent
   private static readonly JSON_INDENT = 2;
 
   async run(ctx: GateContext): Promise<GateResult> {
@@ -183,6 +183,7 @@ export class TestFixLoopGate implements Gate {
     const statePath = getReviewGateStatePath(topicDir, TestFixLoopGate.STATE_PHASE);
     try {
       await fs.promises.writeFile(statePath, JSON.stringify(data, null, TestFixLoopGate.JSON_INDENT));
+    // eslint-disable-next-line taste/no-silent-catch -- state persistence is non-critical, logging suffices
     } catch (err) {
       console.error(`[coding-workflow] Failed to persist test-fix-loop state to ${statePath}: ${err instanceof Error ? err.message : String(err)}`);
     }

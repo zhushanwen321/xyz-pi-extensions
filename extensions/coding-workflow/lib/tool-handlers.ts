@@ -12,8 +12,8 @@ import * as path from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { PhaseGate, ReviewGate, TestFixLoopGate } from "./gates/index.js";
 import type { Gate } from "./gates/index.js";
+import { PhaseGate, ReviewGate, TestFixLoopGate } from "./gates/index.js";
 import {
 	buildSkillInjection,
 	checkMissingRetrospects,
