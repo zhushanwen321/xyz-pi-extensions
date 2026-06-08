@@ -8,15 +8,17 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { join } from "node:path";
+
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
+
+import { getCachePath, getSpeedDir } from "./paths.js";
 // 架构修复：doUpdate 用 buildRuntimeProviders() 替代静态 PROVIDERS，
 // 使 providers.json 中 enabled=false 的 provider 不会被 fetch。
 // registry.ts 内部 import PROVIDERS，此处不直接引用。
 import { buildRuntimeProviders } from "./registry.js";
-import { getCachePath, getSpeedDir } from "./paths.js";
-import { MS_PER_SEC, SEC_PER_MIN, MIN_PER_HOUR, SEC_PER_DAY } from "./time.js";
 import { avgSpeed, type SpeedRecord } from "./speed.js";
+import { MIN_PER_HOUR, MS_PER_SEC, SEC_PER_DAY,SEC_PER_MIN } from "./time.js";
 
 const DAY_MS = SEC_PER_DAY * MS_PER_SEC;
 
