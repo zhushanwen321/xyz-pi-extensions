@@ -1,5 +1,11 @@
 # @zhushanwen/pi-quota-providers
 
+## 0.5.0
+
+### Minor Changes
+
+- Add Mimo (Xiaomi) token-plan provider with cookie auth, fix cache to respect providers.json enabled flag
+
 ## 0.4.1
 
 ### Patch Changes

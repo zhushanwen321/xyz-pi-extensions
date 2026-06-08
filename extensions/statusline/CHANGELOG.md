@@ -1,5 +1,12 @@
 # @zhushanwen/pi-statusline
 
+## 0.4.5
+
+### Patch Changes
+
+- Updated dependencies
+  - @zhushanwen/pi-quota-providers@0.5.0
+
 ## 0.4.4
 
 ### Patch Changes
