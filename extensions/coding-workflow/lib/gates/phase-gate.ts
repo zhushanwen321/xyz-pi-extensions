@@ -5,6 +5,7 @@
 import { runGateScript } from "../gate-runner.js";
 import type { Gate, GateContext, GateResult } from "./gate.js";
 
+// fallow-ignore-file — implements Gate interface members consumed via polymorphism
 export class PhaseGate implements Gate {
   readonly name = "phase-gate";
 

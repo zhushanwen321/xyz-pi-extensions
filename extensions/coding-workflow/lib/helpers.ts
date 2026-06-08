@@ -332,6 +332,7 @@ export function getReviewGateStatePath(topicDir: string, phase: number): string 
 }
 
 /** Path to the review reports directory for a given phase. */
+// fallow-ignore-next-line unused-export — reserved for P2 workflow scripts
 export function getReviewReportsDir(topicDir: string, phase: number): string {
 	return path.join(topicDir, "changes", "reviews", `phase-${phase}`);
 }

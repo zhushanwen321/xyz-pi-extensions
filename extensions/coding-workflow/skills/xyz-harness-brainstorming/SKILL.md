@@ -408,83 +408,21 @@ spec.md 写完后、用户审核前，执行以下两个子步骤：
 
 Fix any issues inline. No need to re-review — just fix and move on.
 
-## Spec Review (独立审查)
+## Gate 调用
 
-写完 spec.md 后，dispatch 独立审查 subagent：
+完成 spec.md 编写后，**不要**手动运行任何审查流程。直接调用：
 
-1. Dispatch subagent：
-   - **Agent**: general-purpose
-   - **Model**: 按 taskComplexity 自动选择（review: medium）
-   - **Task prompt**:
-     ```
-     你是独立审查专家。按以下步骤执行审查：
-
-     1. read `skills/xyz-harness-expert-reviewer/SKILL.md`，找到「模式一：计划评审」章节，重点检查第 1 项 spec 完整性
-     2. read `CLAUDE.md`（获取项目架构约束）
-     3. read 待审查文件：`{topic_dir}/spec.md`
-     4. 按方法论逐项审查，将结果写入：
-        `{topic_dir}/changes/reviews/spec_review_v1.md`
-     5. YAML frontmatter 必须包含:
-        - `verdict`: "pass" 或 "fail"
-        - `must_fix`: 数字（open MUST_FIX 问题数量）
-     ```
-
-2. 审查轮次：
-   - must_fix == 0 → 通过
-   - must_fix > 0 → 修复 spec.md 后重新 dispatch（产出 spec_review_v2.md），最多 3 轮
-   - 3 轮后仍有 must_fix > 0 → 停止，记录未解决问题，由用户决定
-
-### spec_review 输出格式
-
-| 字段 | 类型 | 必填 | 允许值 | 说明 |
-|------|------|------|--------|------|
-| `verdict` | string | 是 | `"pass"` | 评审通过标志 |
-| `must_fix` | number | 是 | `0` | 必须修复的问题数量 |
-
-**模板：**
-````
-```markdown
----
-verdict: pass
-must_fix: 0
----
-
-# Spec Review — {topic}
-
-## Summary
-{one-line review conclusion}
-
-## Issues Found
-{list issues with severity levels}
-
-## Conclusion
-{verdict justification}
 ```
-````
+coding-workflow-gate(phase=1)
+```
+
+Review-Gate 会自动启动 workflow 循环审查 + 修复。如果 gate 返回 FAIL，按修复指引修改 spec.md 后重新调用。
 
 ## Retrospect (复盘)
 
-**触发时机：**
-- **Auto Mode：** coding-workflow 扩展在 gate PASS 后自动 dispatch retrospect subagent
-- **Manual Mode：** 当用户告知 gate check 通过后，手动 dispatch retrospect subagent
+**触发时机：** coding-workflow 扩展在 gate PASS 后自动 dispatch retrospect steer。
 
-然后进入 Phase 2。
-
-1. Dispatch subagent：
-   - **Agent**: general-purpose
-   - **Model**: 按 taskComplexity 自动选择（retrospect: low）
-   - **Task prompt**:
-     ```
-     你是复盘分析师。按以下步骤执行：
-
-     1. 回顾 system prompt 中已包含的复盘方法论
-     2. read 以下交付物文件：
-        - `{topic_dir}/spec.md`
-        - `{topic_dir}/changes/reviews/spec_review_v*.md`
-     3. 按方法论覆盖两个维度（Phase 执行 + Harness 体验），将结果写入：
-        `{topic_dir}/changes/reviews/spec_retrospect.md`
-     4. YAML frontmatter: `phase: spec`, `verdict: pass`
-     ```
+Retrospect steer 会包含当前 phase 关键交付物的摘要。按 steer 指令执行复盘即可。
 
 ## Self-Check
 
@@ -514,22 +452,9 @@ git push
 
 确保 `.xyz-harness/` 和 `docs/` 目录下的所有产出文件都被 git 跟踪。
 
-## Gate Handoff
-
-在独立 Pi session 中检查 gate：
-
-```bash
-python3 skills/xyz-harness-gate/scripts/check_gate.py {topic_dir} 1
-```
-
-或打开新的 Pi session，加载 xyz-harness-gate skill，告诉它：
-> "Check Phase 1 gate for topic `{topic}`"
-
 ## Phase Transition
 
-Phase 1 完成后，告知用户：
-
-> "Phase 1 complete. spec.md created at {path}. Please run gate check in a separate session. When gate passes, come back and I'll run the retrospective. Then say 'start Phase 2' to continue."
+Phase 1 gate 通过后，retrospect 会自动触发。完成 retrospect 后调用 `coding-workflow-phase-start()` 进入 Phase 2。
 
 ## Key Principles
 

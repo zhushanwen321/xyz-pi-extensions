@@ -6,6 +6,7 @@
  */
 
 import type { ChildProcess } from "node:child_process";
+import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type { SkillResolver } from "./skill-resolver.js";
@@ -72,6 +73,31 @@ function buildGateReviewTaskPrompt(
 
 // ─── Retrospect followUp ──────────────────────────────────
 
+const CONTEXT_SUMMARY_MAX_CHARS = 500;
+
+/** Build a brief summary of deliverable contents for retrospect context injection. */
+function buildContextSummary(
+	phaseConfig: PhaseConfigForReview,
+	topicDir: string,
+): string {
+	const summaries: string[] = [];
+
+	for (const deliverable of phaseConfig.deliverables) {
+		const filePath = path.join(topicDir, deliverable);
+		if (!fs.existsSync(filePath)) continue;
+
+		try {
+			const content = fs.readFileSync(filePath, "utf8");
+			const preview = content.slice(0, CONTEXT_SUMMARY_MAX_CHARS).trim();
+			if (preview) {
+				summaries.push(`### ${deliverable}\n${preview}...`);
+			}
+		} catch { /* skip unreadable files */ }
+	}
+
+	return summaries.join("\n\n");
+}
+
 export function buildRetrospectFollowUp(
 	phaseConfig: PhaseConfigForReview,
 	topicDir: string,
@@ -107,8 +133,17 @@ export function buildRetrospectFollowUp(
 	parts.push(
 		`4. Write the retrospect to: ${retrospectPath}`,
 		`5. YAML frontmatter: \`phase: ${phaseConfig.name.toLowerCase()}\`, \`verdict: pass\``,
-		``,
-		`After completion, call coding-workflow-phase-start() to proceed to the next phase.`,
+	);
+
+	// Inject deliverable context summary for richer retrospect
+	const contextSummary = buildContextSummary(phaseConfig, topicDir);
+	if (contextSummary) {
+		parts.push("", "---", "Key deliverable summaries (for retrospect reference):", contextSummary);
+	}
+
+	parts.push(
+		"",
+		"After completion, call coding-workflow-phase-start() to proceed to the next phase.",
 	);
 
 	return parts.join("\n");

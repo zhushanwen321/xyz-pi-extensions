@@ -1,5 +1,33 @@
 # @zhushanwen/pi-coding-workflow
 
+## 0.3.0
+
+### Minor Changes
+
+- Gate Pipeline (P0): configurable gate chain abstraction (`lib/gates/`)
+  - `Gate`/`GateContext`/`GateResult` interfaces
+  - `ReviewGate` — dual-path: `pi.__workflowRun` preferred, `runSingleAgent` fallback
+  - `PhaseGate` — reuses `runGateScript`
+  - `TestFixLoopGate` — dual-path: `pi.__workflowRun` preferred, `runSingleAgent` fallback
+  - `executeGateTool` refactored from hardcoded review→phase to configurable gate chain
+
+- Workflow integration (P1): `pi.__workflowRun` cross-extension call channel
+  - `WorkflowOrchestrator.runAndWait()` — synchronous wait with 10min timeout
+  - 3 Phase 1/2 agent files: `spec-requirements-reviewer`, `plan-requirements-reviewer`, `plan-bl-requirements-reviewer`
+  - 2 workflow scripts: `phase1-review-gate.js`, `phase2-review-gate.js` (L1/L2 routing)
+  - ReviewGate upgraded from stub to full `pi.__workflowRun` integration with fallback
+
+- Phase 3/4 workflows (P2): complete Review-Gate + Test-Fix Loop coverage
+  - 8 agent files: `spec-plan-conformance-reviewer`, `simulated-data-generator`, `fallow-reviewer`, `review-sync-fix-worker`, `file-fix-subagent`, `test-execute-coordinator`, `test-fix-worker`, `test-case-subagent`
+  - 2 workflow scripts: `phase3-review-gate.js` (3-stage nested loop), `phase4-test-fix-loop.js` (core→noncore serial)
+  - TestFixLoopGate upgraded from stub to full `pi.__workflowRun` integration
+
+- Goal + Retrospect + SKILL.md cleanup (P3): experience polish
+  - Phase 3 dynamic goal task injection (from plan.md Execution Groups)
+  - Retrospect context injection (deliverable summaries in steer prompt)
+  - 4 SKILL.md files cleaned: removed manual review/gate handoff sections, added workflow gate guidance
+  - ADR-019: coding-workflow depends on workflow extension
+
 ## 0.2.0
 
 ### Minor Changes

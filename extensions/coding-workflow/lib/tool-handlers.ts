@@ -36,6 +36,37 @@ import { buildRetrospectFollowUp, dispatchReviewSubagent } from "./review-dispat
 import { SkillResolver } from "./skill-resolver.js";
 import { formatUsageStats } from "./subagent.js";
 
+// ─── Goal task helpers ────────────────────────────────────
+
+/** Max description length for goal_manager.create_tasks (60 chars). */
+const GOAL_TASK_DESC_MAX = 60;
+
+/** Parse plan.md Execution Groups / Tasks into goal task descriptions. */
+function buildDevGoalTasks(planPath: string): string[] {
+	if (!fs.existsSync(planPath)) return [];
+	const content = fs.readFileSync(planPath, "utf8");
+	const tasks: string[] = [];
+
+	// Primary: ### Task N: {title} or ### Task N.M: {title}
+	const taskRegex = /^###\s+Task\s+\d+(?:\.\d+)?\s*[:：]\s*(.+)$/gm;
+	let match: RegExpExecArray | null;
+	while ((match = taskRegex.exec(content)) !== null) {
+		const desc = match[1]!.trim();
+		if (desc) tasks.push(desc.slice(0, GOAL_TASK_DESC_MAX));
+	}
+
+	// Fallback: ### BG{N}: {title} or ### Execution Group N: {title}
+	if (tasks.length === 0) {
+		const egRegex = /^###\s+(?:BG\d+|Execution\s+Group\s+\d+)\s*[:\-]\s*(.+)$/gm;
+		while ((match = egRegex.exec(content)) !== null) {
+			const desc = match[1]!.trim();
+			if (desc) tasks.push(desc.slice(0, GOAL_TASK_DESC_MAX));
+		}
+	}
+
+	return tasks;
+}
+
 // ─── Shared types ────────────────────────────────────────
 
 /** Pi tool execute parameter types (any-free wrappers). */
@@ -481,6 +512,22 @@ export async function executePhaseStartTool(hctx: HandlerContext, tctx: ToolExec
 						"Write non-functional-design.md",
 					],
 				);
+			}
+		} catch { /* goal init failure is non-blocking */ void undefined; }
+	}
+
+	// Phase 3: Dynamic goal tasks from plan.md Execution Groups
+	const PHASE_DEV_GOAL_INIT = 3;
+	if (state.currentPhase === PHASE_DEV_GOAL_INIT) {
+		try {
+			type GoalInitFn = (objective: string, tasks: string[], budget?: Record<string, unknown>) => boolean;
+			const goalInit = (pi as unknown as Record<string, unknown>).__goalInit as GoalInitFn | undefined;
+			if (goalInit) {
+				const planPath = path.join(state.topicDir, "plan.md");
+				const taskList = buildDevGoalTasks(planPath);
+				if (taskList.length > 0) {
+					goalInit("Phase 3: Dev coding implementation", taskList);
+				}
 			}
 		} catch { /* goal init failure is non-blocking */ void undefined; }
 	}

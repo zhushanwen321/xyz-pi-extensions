@@ -4,6 +4,8 @@
  * 不可用时降级到 runSingleAgent（P0 逻辑）。
  */
 
+// fallow-ignore-file — implements Gate interface members consumed via polymorphism
+
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -192,8 +194,9 @@ export class ReviewGate implements Gate {
 		const statePath = getReviewGateStatePath(topicDir, phase);
 		try {
 			await fs.promises.writeFile(statePath, JSON.stringify(data, null, 2));
-		} catch {
-			// State persistence failure is non-critical
+		} catch (err) {
+			// State persistence failure is non-critical but worth logging
+			console.warn(`[coding-workflow] Failed to persist review-gate state to ${statePath}: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 }
