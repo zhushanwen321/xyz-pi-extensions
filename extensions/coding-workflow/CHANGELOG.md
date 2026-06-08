@@ -1,5 +1,15 @@
 # @zhushanwen/pi-coding-workflow
 
+## 0.2.0
+
+### Minor Changes
+
+- Add Review-Gate auto-loop, Test-Fix Loop, and cross-extension Goal integration
+
+  - goal: expose `initializeGoalFromExternal()` via `pi.__goalInit` for cross-extension access
+  - coding-workflow: Review-Gate standard loop (Phase 1/2), Phase 3 three-stage review, Phase 4 Test-Fix Loop, Goal auto-init, Phase-Gate bug fixes
+  - workflow: agent file discovery (project/user/npm/local), `resolveAgentOpts()` extraction, structured output failure handling
+
 ## 0.1.6
 
 ### Patch Changes
