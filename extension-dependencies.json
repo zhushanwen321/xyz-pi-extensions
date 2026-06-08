@@ -57,7 +57,13 @@
     {
       "name": "@zhushanwen/pi-coding-workflow",
       "directory": "extensions/coding-workflow",
-      "dependsOn": []
+      "dependsOn": [
+        {
+          "package": "@zhushanwen/pi-workflow",
+          "type": "optional",
+          "reason": "Review-Gate / Test-Fix Loop 通过 pi.__workflowRun 启动 workflow 脚本，缺失时降级为 runSingleAgent"
+        }
+      ]
     },
     {
       "name": "@zhushanwen/pi-claude-rules-loader",

@@ -20,7 +20,7 @@ description: >-
 
 Gate FAIL 后不是从头开始，而是回到循环起点继续：
 
-- **Gate FAIL（must_fix > 0）**：回到 Step 4（Five-Step Specialized Review），根据 review 反馈修复代码，重新 dispatch review subagent
+- **Gate FAIL（must_fix > 0）**：Review-Gate 会自动循环审查 + 修复。如果阶段一 FAIL（代码与 spec/plan 不一致），回到 TDD 流程重新编码
 - **测试失败**：回到 Step 1（TDD），修复失败的测试用例，重新走 TDD 流程
 - **Self-Check 不通过**：就地修复，不需要回退
 
@@ -173,131 +173,32 @@ fi
 - Frontend: run build command
 - Verify all existing tests still pass
 
-### 4. Five-Step Specialized Review (五步专项审查)
+## Goal 自动追踪
 
-将传统单步 code_review 替换为 5 步专项审查，分两批执行：
+Phase 3 启动时，Goal 任务列表会自动从 plan.md 的 Execution Groups 构建。每个 Task 对应一个 Goal task。完成编码后手动更新对应的 task 状态。
 
-#### Batch 1: 4 个并行审查
+## Gate 调用
 
-同时 dispatch 4 个独立审查 subagent：
-
-1. **Business Logic Review (BLR)** — 业务逻辑审查
-   - Agent: general-purpose
-   - Skill: xyz-harness-business-logic-reviewer (dev 模式)
-   - 输入: use-cases.md + git diff + 源代码
-   - 输出: `{topic_dir}/changes/reviews/business_logic_review_v1.md`
-   - 产出模拟业务数据和执行路径（供 integration review 消费）
-
-2. **Standards Review** — 规范审查
-   - Agent: general-purpose
-   - Skill: xyz-harness-standards-reviewer
-   - 输入: git diff + CLAUDE.md
-   - 输出: `{topic_dir}/changes/reviews/standards_review_v1.md`
-   - Phase A: 自动 lint/typecheck（如项目有配置）
-   - Phase B: AI 对比 CLAUDE.md 编码规范
-
-3. **Taste Review** — 代码品味审查
-   - TypeScript 项目: dispatch ts-taste-check subagent
-   - Rust 项目: dispatch rust-taste-check subagent
-   - Python 项目: read `~/.codetaste/essence.md` 获取通用品味原则（不存在则跳过），在 task prompt 中注入
-   - 纯文档/脚本项目: 跳过 taste review，在 standards_review 中注明
-   - 输出: `{topic_dir}/changes/reviews/ts_taste_review_v1.md` 或 `rust_taste_review_v1.md` 或 `taste_review_v1.md`（Python 项目）
-
-4. **Robustness Review** — 健壮性审查
-   - Agent: general-purpose
-   - Skill: xyz-harness-robustness-reviewer
-   - 输入: git diff
-   - 输出: `{topic_dir}/changes/reviews/robustness_review_v1.md`
-   - 六维度: 错误处理、异常、日志、fail-fast、测试友好、调试友好
-
-#### Batch 2: 1 个串行审查（依赖 BLR 产出）
-
-5. **Integration Review** — 集成审查
-   - Agent: general-purpose
-   - Skill: xyz-harness-integration-reviewer
-   - 输入: business_logic_review_v1.md（模拟数据和执行路径）+ 代码文件
-   - 输出: `{topic_dir}/changes/reviews/integration_review_v1.md`
-   - **必须等待 BLR 完成后再 dispatch**
-
-#### 执行编排
+完成编码和单元测试后，直接调用：
 
 ```
-Batch 1 (4 parallel):
-  ┌─ BLR ──────────────┐
-  ├─ Standards Review ──┤
-  ├─ Taste Review ──────┤──→ Batch 2 (1 sequential):
-  └─ Robustness Review ─┘     Integration Review (depends on BLR output)
+coding-workflow-gate(phase=3)
 ```
 
-#### 审查轮次
+Review-Gate 会自动执行三阶段审查：
+1. **阶段一**：Spec-Plan Conformance（规格符合性）
+2. **阶段一.五**：Simulated Data Generation（模拟数据生成）
+3. **阶段二**：Code Quality Review-Fix Loop（并行审查 + 自动修复）
 
-每个审查独立迭代：
-- must_fix == 0 → 通过
-- must_fix > 0 → 修复代码后重新 dispatch 该步审查（产出 v2），最多 2 轮
-- 所有 5 步审查必须全部通过（verdict: pass, must_fix: 0）
+如果阶段一 FAIL，说明代码与 spec/plan 不一致，需要重新编码。回到 TDD 流程修复。
 
-#### 无 lint 项目处理
-
-项目无 lint/typecheck 配置时：
-- Standards Review 跳过 Phase A，仅执行 Phase B（AI 规范对比）
-- review 产出不包含 `linter_passed` / `typecheck_passed` 字段
-- 报告中标注 "项目未配置 lint/typecheck，跳过自动检查"
-
-#### Python 项目 Taste Review Fallback
-
-Python 项目无专用 taste-check skill 时：
-- read `~/.codetaste/essence.md` 获取通用品味原则（不存在则跳过）
-- 如果文件不存在: 跳过 taste review，在 standards_review 中注明 "Python 项目，无专用 taste skill，已跳过"
-- 如果文件存在: 将内容注入 taste review subagent 的 task prompt 作为参考，产出 `taste_review_v1.md`
-
-#### 各步 review 输出格式
-
-每个 review 文件的 YAML frontmatter:
-
-| 字段 | 类型 | 必填 | 允许值 | 说明 |
-|------|------|------|--------|------|
-| `verdict` | string | 是 | `"pass"` | 评审通过标志 |
-| `must_fix` | number | 是 | `0` | 必须修复的问题数量 |
-| `review_metrics` | object | 否 | — | 价值追踪数据 |
-
-review_metrics 子字段（可选）:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `files_reviewed` | number | 审查的文件数量 |
-| `issues_found` | number | 发现的问题总数 |
-| `must_fix_count` | number | MUST FIX 数量 |
-| `low_count` | number | LOW 数量 |
-| `info_count` | number | INFO 数量 |
-| `duration_estimate` | string | 预估耗时（分钟） |
+如果阶段二有 must_fix，Fix Worker 会自动按文件分组修复。你不需要手动处理审查发现。
 
 ### 4a. Retrospect (复盘)
 
-**触发时机：**
-- **Auto Mode：** coding-workflow 扩展在 gate PASS 后自动 dispatch retrospect subagent
-- **Manual Mode：** 当用户告知 gate check 通过后，手动 dispatch retrospect subagent
+**触发时机：** coding-workflow 扩展在 gate PASS 后自动 dispatch retrospect steer。
 
-然后进入 Phase 4。
-
-1. Dispatch subagent：
-   - **Agent**: general-purpose
-   - **Model**: 由 coding-workflow 扩展按 taskComplexity 自动选择（retrospect: low）
-   - **Task prompt**:
-     ```
-     你是复盘分析师。按以下步骤执行：
-
-     1. 回顾 system prompt 中已包含的复盘方法论
-     2. read 以下交付物文件：
-        - `{topic_dir}/changes/evidence/test_results.md`
-        - `{topic_dir}/changes/reviews/business_logic_review_v*.md`
-        - `{topic_dir}/changes/reviews/integration_review_v*.md`
-        - `{topic_dir}/changes/reviews/standards_review_v*.md`
-        - `{topic_dir}/changes/reviews/*taste_review_v*.md`
-        - `{topic_dir}/changes/reviews/robustness_review_v*.md`
-     3. 按方法论覆盖两个维度（Phase 执行 + Harness 体验），将结果写入：
-        `{topic_dir}/changes/reviews/dev_retrospect.md`
-     4. YAML frontmatter: `phase: dev`, `verdict: pass`
-     ```
+Retrospect steer 会包含当前 phase 关键交付物的摘要。按 steer 指令执行复盘即可。
 
 ### 5. Document Test Results
 
@@ -345,7 +246,6 @@ Build successful.
 - [ ] All implementation tasks from plan.md completed
 - [ ] 测试命令实际执行并确认 0 failures（不是"应该通过"）
 - [ ] test_results.md exists with all_passing: true（布尔值，不是字符串）
-- [ ] All 5 specialized reviews exist with verdict: pass, must_fix: 0 (business_logic, integration, standards, taste, robustness)
 - [ ] 运行 gate check 脚本确认：
   ```bash
   python3 skills/xyz-harness-gate/scripts/check_gate.py {topic_dir} 3
@@ -365,26 +265,9 @@ git push
 
 确保 `.xyz-harness/`、`docs/` 和源代码目录下的所有变更都被 git 跟踪。
 
-### 7. Gate Handoff
+### 7. Phase Transition
 
-When opening a separate gate check conversation, submit these files:
-
-| File | Path |
-|------|------|
-| Business logic review | `{topic}/changes/reviews/business_logic_review_v*.md` |
-| Integration review | `{topic}/changes/reviews/integration_review_v*.md` |
-| Standards review | `{topic}/changes/reviews/standards_review_v*.md` |
-| Taste review | `{topic}/changes/reviews/*taste_review_v*.md` |
-| Robustness review | `{topic}/changes/reviews/robustness_review_v*.md` |
-| Test results | `{topic}/changes/evidence/test_results.md` |
-| Retrospect | `{topic}/changes/reviews/dev_retrospect.md` |
-
-Open a new Pi session, load the xyz-harness-gate skill, and tell it:
-> "Check Phase 3 gate for topic `{topic}`"
-
-### 8. Tell user
-
-When done: "Phase 3 complete. Code implemented and reviewed. Please run gate check in a separate session. When gate passes, come back and I'll run the retrospective. Then say 'start Phase 4' to continue."
+Phase 3 gate 通过后，retrospect 会自动触发。完成 retrospect 后调用 `coding-workflow-phase-start()` 进入 Phase 4。
 
 ## Self-Check Checklist
 

@@ -11,9 +11,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
 
-import { runGateScript } from "./gate-runner.js";
+import type { Gate } from "./gates/index.js";
+import { PhaseGate, ReviewGate, TestFixLoopGate } from "./gates/index.js";
 import {
 	buildSkillInjection,
 	checkMissingRetrospects,
@@ -27,15 +27,46 @@ import {
 	MIN_SLUG_LENGTH,
 	parseReviewVerdict,
 	type PhaseConfig,
-	RESULT_PREVIEW_LINES,
+} from "./helpers.js";
+import {
 	REVIEW_MANDATORY_FROM_PHASE,
 	REVIEW_PREVIEW_LENGTH,
 	type WorkflowState,
 } from "./helpers.js";
-import { buildRetrospectFollowUp,dispatchReviewSubagent } from "./review-dispatcher.js";
+import { buildRetrospectFollowUp, dispatchReviewSubagent } from "./review-dispatcher.js";
 import { SkillResolver } from "./skill-resolver.js";
 import { formatUsageStats } from "./subagent.js";
-import { runReviewGateLoop } from "./review-gate-impl.js";
+
+// ─── Goal task helpers ────────────────────────────────────
+
+/** Max description length for goal_manager.create_tasks (60 chars). */
+const GOAL_TASK_DESC_MAX = 60;
+
+/** Parse plan.md Execution Groups / Tasks into goal task descriptions. */
+function buildDevGoalTasks(planPath: string): string[] {
+	if (!fs.existsSync(planPath)) return [];
+	const content = fs.readFileSync(planPath, "utf8");
+	const tasks: string[] = [];
+
+	// Primary: ### Task N: {title} or ### Task N.M: {title}
+	const taskRegex = /^###\s+Task\s+\d+(?:\.\d+)?\s*[:：]\s*(.+)$/gm;
+	let match: RegExpExecArray | null;
+	while ((match = taskRegex.exec(content)) !== null) {
+		const desc = match[1]!.trim();
+		if (desc) tasks.push(desc.slice(0, GOAL_TASK_DESC_MAX));
+	}
+
+	// Fallback: ### BG{N}: {title} or ### Execution Group N: {title}
+	if (tasks.length === 0) {
+		const egRegex = /^###\s+(?:BG\d+|Execution\s+Group\s+\d+)\s*[:\-]\s*(.+)$/gm;
+		while ((match = egRegex.exec(content)) !== null) {
+			const desc = match[1]!.trim();
+			if (desc) tasks.push(desc.slice(0, GOAL_TASK_DESC_MAX));
+		}
+	}
+
+	return tasks;
+}
 
 // ─── Shared types ────────────────────────────────────────
 
@@ -51,22 +82,6 @@ export interface ToolExecuteContext {
 	signal: AbortSignal;
 	onUpdate: (partial: { content: Array<{ type: string; text: string }>; usage?: unknown }) => void;
 	ctx: ExtensionContext;
-}
-
-/** Render context types */
-export interface RenderArgs {
-	phase?: number;
-	slug?: string;
-}
-
-export interface ThemeLike {
-	fg(token: string, text: string): string;
-	bold(text: string): string;
-}
-
-export interface RenderResultLike {
-	content: Array<{ type: string; text?: string }>;
-	isError?: boolean;
 }
 
 /** Closure context shared across all tool handlers. */
@@ -191,32 +206,38 @@ export async function executeGateTool(hctx: HandlerContext, tctx: ToolExecuteCon
 
 	const phaseConfig = phases[phase - 1];
 
-	// ── Step 1: Review-Gate (content quality loop) ──────────
-	// Spec: max 3 rounds, consecutive 2 rounds no improvement → escalate
-	const reviewGateResult = await runReviewGateLoop(
-		phaseConfig, state.topicDir, skillResolver, signal, onUpdate, activeSubprocesses,
-	);
-	if (!reviewGateResult.passed) {
-		state.gateInProgress = false;
-		hctx.persistState(pi, state);
-		return {
-			content: [{
-				type: "text",
-				text: `Review-Gate FAILED after ${reviewGateResult.rounds} rounds (last must_fix=${reviewGateResult.lastMustFix}).\n\n${reviewGateResult.summary}\n\nFix the issues above, then call coding-workflow-gate(phase=${phase}) again.`,
-			}],
-			isError: true,
-		};
-	}
+	// ── Gate Pipeline: execute configured gate chain ────────
+	const gateRegistry: Record<string, Gate> = {
+		"review-gate": new ReviewGate(),
+		"phase-gate": new PhaseGate(gateScriptPath),
+		"test-fix-loop": new TestFixLoopGate(),
+	};
 
-	// ── Step 2: Phase-Gate (script check) ─────────────────
-	const gateResult = await runGateScript(gateScriptPath, state.topicDir, phase, signal);
-	if (!gateResult.passed) {
-		state.gateInProgress = false;
-		hctx.persistState(pi, state);
-		return {
-			content: [{ type: "text", text: `Gate FAILED. The following issues must be fixed:\n\n${gateResult.output}\n\nFix each item above, then call coding-workflow-gate(phase=${phase}) again.` }],
-			isError: true,
-		};
+	for (const gateName of phaseConfig.gates) {
+		const gate = gateRegistry[gateName];
+		if (!gate) continue; // unknown gate — skip
+		const result = await gate.run({
+			phase,
+			topicDir: state.topicDir,
+			state,
+			phaseConfig,
+			pi,
+			skillResolver,
+			signal,
+			onUpdate,
+			processRegistry: activeSubprocesses,
+		});
+		if (!result.passed) {
+			state.gateInProgress = false;
+			hctx.persistState(pi, state);
+			return {
+				content: [{
+					type: "text",
+					text: result.fixGuidance ?? `Gate '${gateName}' failed. Fix the issues, then call coding-workflow-gate(phase=${phase}) again.`,
+				}],
+				isError: true,
+			};
+		}
 	}
 
 	// 2. Dispatch review subagent
@@ -292,23 +313,40 @@ export async function executeGateTool(hctx: HandlerContext, tctx: ToolExecuteCon
 		? formatUsageStats(reviewResult.result.usage, reviewResult.result.model)
 		: "";
 
-	const retrospectFollowUp = buildRetrospectFollowUp(phaseConfig, state.topicDir, skillResolver, phases);
+	// Build retrospect steer — failures here must not cause gate to return error
+	// since state is already persisted as passed.
+	let retrospectFollowUp = "";
+	try {
+		retrospectFollowUp = buildRetrospectFollowUp(phaseConfig, state.topicDir, skillResolver, phases);
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		console.warn(`[coding-workflow] Failed to build retrospect follow-up: ${msg}`);
+	}
+
+	const baseMessage = `Gate PASSED. Review: verdict=pass, must_fix=0.${usageLine ? ` ${usageLine}` : ""}`;
+	const retrospectInstruction = "\n\nIMPORTANT: Write the retrospect per the steer instructions, then call coding-workflow-phase-start() to proceed to the next phase.";
 
 	if (phase >= FINAL_PHASE) {
-		pi.sendUserMessage(
-			retrospectFollowUp + "\n\nThis is the final phase. After writing the retrospect, the workflow ends.",
-			{ deliverAs: "steer" },
-		);
+		try {
+			pi.sendUserMessage(
+				retrospectFollowUp + "\n\nThis is the final phase. After writing the retrospect, the workflow ends.",
+				{ deliverAs: "steer" },
+			);
+		} catch { /* steer delivery failure is non-critical */ void undefined; }
 		return {
-			content: [{ type: "text", text: `Gate PASSED. All deliverables verified.${usageLine ? ` ${usageLine}` : ""}\n\nWrite the retrospect per the steer instructions, then the workflow ends.` }],
+			content: [{ type: "text", text: `${baseMessage}\n\nWrite the retrospect per the steer instructions, then the workflow ends.` }],
 		};
 	}
 
-	pi.sendUserMessage(retrospectFollowUp, { deliverAs: "steer" });
+	try {
+		if (retrospectFollowUp) {
+			pi.sendUserMessage(retrospectFollowUp, { deliverAs: "steer" });
+		}
+	} catch { /* steer delivery failure is non-critical */ void undefined; }
 	return {
 		content: [{
 			type: "text",
-			text: `Gate PASSED. Review: verdict=pass, must_fix=0.${usageLine ? ` ${usageLine}` : ""}\n\nIMPORTANT: Write the retrospect per the steer instructions, then call coding-workflow-phase-start() to proceed to the next phase.`,
+			text: `${baseMessage}${retrospectInstruction}`,
 		}],
 	};
 }
@@ -455,8 +493,11 @@ export async function executePhaseStartTool(hctx: HandlerContext, tctx: ToolExec
 	hctx.persistState(pi, state);
 	hctx.updateWidget(ctx, state);
 
+	/** Phase number where goal extension initializes with default L1 tasks */
+	const PHASE_GOAL_INIT = 2;
+
 	// Initialize goal for Phase 2 (L1 default tasks)
-	if (state.currentPhase === 2) {
+	if (state.currentPhase === PHASE_GOAL_INIT) {
 		try {
 			// Type matches goal extension's GoalExternalInit (see extensions/goal/src/state.ts)
 			type GoalInitFn = (objective: string, tasks: string[], budget?: Record<string, unknown>) => boolean;
@@ -472,6 +513,22 @@ export async function executePhaseStartTool(hctx: HandlerContext, tctx: ToolExec
 						"Write non-functional-design.md",
 					],
 				);
+			}
+		} catch { /* goal init failure is non-blocking */ void undefined; }
+	}
+
+	// Phase 3: Dynamic goal tasks from plan.md Execution Groups
+	const PHASE_DEV_GOAL_INIT = 3;
+	if (state.currentPhase === PHASE_DEV_GOAL_INIT) {
+		try {
+			type GoalInitFn = (objective: string, tasks: string[], budget?: Record<string, unknown>) => boolean;
+			const goalInit = (pi as unknown as Record<string, unknown>).__goalInit as GoalInitFn | undefined;
+			if (goalInit) {
+				const planPath = path.join(state.topicDir, "plan.md");
+				const taskList = buildDevGoalTasks(planPath);
+				if (taskList.length > 0) {
+					goalInit("Phase 3: Dev coding implementation", taskList);
+				}
 			}
 		} catch { /* goal init failure is non-blocking */ void undefined; }
 	}
@@ -633,49 +690,6 @@ export function buildBeforeAgentStartMessage(hctx: HandlerContext, event: Before
 			display: false,
 		},
 	};
-}
-
-// ─── Render helpers ──────────────────────────────────────
-
-export function renderGateCall(args: RenderArgs, theme: ThemeLike, topicDir: string, phases: PhaseConfig[]): Text {
-	const phaseConfig = phases[(args.phase ?? 0) - 1];
-	return new Text(
-		theme.fg("toolTitle", theme.bold("coding-workflow-gate ")) +
-		theme.fg("accent", `Phase ${args.phase} (${phaseConfig?.name ?? "?"})`) +
-		theme.fg("muted", ` ${topicDir || ""}`),
-		0, 0,
-	);
-}
-
-export function renderToolResult(result: RenderResultLike, theme: ThemeLike): Text {
-	const text = result.content[0]?.type === "text" ? (result.content[0].text ?? "") : "";
-	const icon = result.isError
-		? theme.fg("error", "✗")
-		: theme.fg("success", "✓");
-	const preview = text.split("\n").slice(0, RESULT_PREVIEW_LINES).join("\n");
-	return new Text(`${icon} ${preview}`, 0, 0);
-}
-
-export function renderInitCall(args: RenderArgs, theme: ThemeLike): Text {
-	return new Text(
-		theme.fg("toolTitle", theme.bold("coding-workflow-init ")) +
-		theme.fg("accent", String(args.slug ?? "?")),
-		0, 0,
-	);
-}
-
-export function renderInitResult(result: RenderResultLike, theme: ThemeLike): Text {
-	const text = result.content[0]?.type === "text" ? (result.content[0].text ?? "") : "";
-	const icon = result.isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
-	return new Text(`${icon} ${text.split("\n")[0]}`, 0, 0);
-}
-
-export function renderPhaseStartCall(currentPhase: number, theme: ThemeLike): Text {
-	return new Text(
-		theme.fg("toolTitle", theme.bold("coding-workflow-phase-start ")) +
-		theme.fg("accent", `Phase ${currentPhase} → ${currentPhase + 1}`),
-		0, 0,
-	);
 }
 
 // persistState and updateWidget are provided via HandlerContext

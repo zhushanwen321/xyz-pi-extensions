@@ -167,7 +167,8 @@ else:
 import re, os
 with open('$entry_path') as f:
     content = f.read()
-m = re.search(r\"from\s+['\\\"]([^'\\\"]+)['\\\"]\", content)
+# Find the re-export that carries 'default'
+m = re.search(r\"export\s+\{[^}]*\bdefault\b[^}]*\}\s+from\s+['\\\"]([^'\\\"]+)['\\\"]\", content)
 if m:
     target = m.group(1)
     if not target.endswith('.ts'): target += '.ts'

@@ -27,6 +27,8 @@ export interface PhaseConfig {
 	retrospectPrefix: string;
 	deliverables: string[];
 	reviewMode: string;
+	/** Gate chain for this phase, executed in order. E.g. ["review-gate", "phase-gate"]. */
+	gates: string[];
 }
 
 export interface WorkflowState {
@@ -320,4 +322,17 @@ export function buildSkillInjection(
 		`- After completing each phase, commit and push all code and docs (especially .xyz-harness/ and docs/). Ensure 'git status --short' shows no untracked files before committing\n\n` +
 		`--- Skill Instructions ---\n${skillContent}\n--- End Skill Instructions ---`
 	);
+}
+
+// ─── Review-Gate state paths ─────────────────────────────
+
+/** Path to the review-gate state file for a given phase. */
+export function getReviewGateStatePath(topicDir: string, phase: number): string {
+	return path.join(topicDir, `.review-gate-p${phase}.json`);
+}
+
+/** Path to the review reports directory for a given phase. */
+// fallow-ignore-next-line unused-export — reserved for P2 workflow scripts
+export function getReviewReportsDir(topicDir: string, phase: number): string {
+	return path.join(topicDir, "changes", "reviews", `phase-${phase}`);
 }

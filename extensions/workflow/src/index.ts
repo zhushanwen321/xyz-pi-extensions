@@ -229,6 +229,16 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
       if (instance) sendCompletionNotification(pi, runId, instance, notifiedRunIds);
     };
     if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
+
+    // Expose pi.__workflowRun for cross-extension programmatic access
+    // (same pattern as goal extension's pi.__goalInit)
+    const api = pi as unknown as Record<string, unknown>;
+    api.__workflowRun = async (
+      workflowName: string,
+      workflowArgs: Record<string, unknown>,
+      workflowSignal?: AbortSignal,
+      workflowTimeoutMs?: number,
+    ) => orch.runAndWait(workflowName, workflowArgs, workflowSignal, workflowTimeoutMs);
   });
 
   pi.on("session_tree", async (_event: Record<string, unknown>, ctx: ExtensionContext) => {

@@ -26,14 +26,7 @@ import {
 	REQUIREMENT_EXCERPT_LENGTH,
 	type WorkflowState,
 } from "./lib/helpers.js";
-import { SkillResolver } from "./lib/skill-resolver.js";
 import {
-	type BeforeAgentStartEvent,
-	buildBeforeAgentStartMessage,
-	executeGateTool,
-	executeInitTool,
-	executePhaseStartTool,
-	type HandlerContext,
 	type RenderArgs,
 	renderGateCall,
 	renderInitCall,
@@ -42,6 +35,15 @@ import {
 	type RenderResultLike,
 	renderToolResult,
 	type ThemeLike,
+} from "./lib/render-helpers.js";
+import { SkillResolver } from "./lib/skill-resolver.js";
+import {
+	type BeforeAgentStartEvent,
+	buildBeforeAgentStartMessage,
+	executeGateTool,
+	executeInitTool,
+	executePhaseStartTool,
+	type HandlerContext,
 	type ToolExecuteContext,
 } from "./lib/tool-handlers.js";
 
@@ -53,30 +55,35 @@ const PHASES: PhaseConfig[] = [
 		reviewPrefix: "spec_review", retrospectPrefix: "spec_retrospect",
 		deliverables: ["spec.md"],
 		reviewMode: "Mode 1: Plan review (verify spec completeness)",
+		gates: ["review-gate", "phase-gate"],
 	},
 	{
 		phase: 2, name: "Plan", skillName: "xyz-harness-writing-plans",
 		reviewPrefix: "plan_review", retrospectPrefix: "plan_retrospect",
 		deliverables: ["plan.md", "e2e-test-plan.md", "test_cases_template.json", "use-cases.md", "non-functional-design.md"],
 		reviewMode: "Mode 1: Plan review (verify plan feasibility)",
+		gates: ["review-gate", "phase-gate"],
 	},
 	{
 		phase: 3, name: "Dev", skillName: "xyz-harness-phase-dev",
 		reviewPrefix: ["business_logic_review", "standards_review", "robustness_review", "integration_review", "ts_taste_review", "rust_taste_review", "taste_review"], retrospectPrefix: "dev_retrospect",
 		deliverables: ["changes/evidence/test_results.md"],
 		reviewMode: "Mode 2: Code review (verify implementation against spec)",
+		gates: ["review-gate", "phase-gate"],
 	},
 	{
 		phase: 4, name: "Test", skillName: "xyz-harness-phase-test",
 		reviewPrefix: "", retrospectPrefix: "test_retrospect",
 		deliverables: ["changes/evidence/test_execution.json"],
 		reviewMode: "Mode 3: Test review (verify test coverage and quality)",
+		gates: ["test-fix-loop", "phase-gate"],
 	},
 	{
 		phase: 5, name: "PR", skillName: "xyz-harness-phase-pr",
 		reviewPrefix: "pr_review", retrospectPrefix: "overall_retrospect",
 		deliverables: ["changes/evidence/pr_evidence.md", "changes/evidence/ci_results.md"],
 		reviewMode: "Code review (verify PR completeness and CI results)",
+		gates: ["phase-gate"],
 	},
 ];
 

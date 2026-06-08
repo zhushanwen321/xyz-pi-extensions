@@ -120,33 +120,50 @@ Create or update `{topic}/changes/evidence/test_execution.json` with format:
 - gate 只检查**最大 round 号那轮**的 `passed` 值
 - `execute_steps` 必须有实际步骤描述，不能是空数组
 
-### 4. Fix Failures
+## Test-Fix Loop Workflow
 
-If any test fails: diagnose → fix → re-run → update execution json.
+Phase 4 使用 Test-Fix Loop Workflow，不再需要手动 review。
 
-### 4a. Retrospect (复盘)
+核心流程：
+1. 完成测试准备工作（启动 dev server、数据库等基础设施）
+2. 调用 `coding-workflow-gate(phase=4)`
+3. Test-Fix Loop 自动执行：
+   - 核心 case 循环（最多 10 轮）
+   - 非核心 case 循环（核心全部 passed 后，最多 10 轮）
+4. 每轮：coordinator 构造 test-execute JSON → Wave 测试 → Fix Worker 修复
 
-**触发时机：**
-- **Auto Mode：** coding-workflow 扩展在 gate PASS 后自动 dispatch retrospect subagent
-- **Manual Mode：** 当用户告知 gate check 通过后，手动 dispatch retrospect subagent
+### test-execute JSON 版本化
 
-然后进入 Phase 5。
+每轮测试结果写入：
+- `{topicDir}/changes/reviews/phase-4/test-execute-v{round}-{scope}.json`
 
-1. Dispatch subagent：
-   - **Agent**: general-purpose
-   - **Model**: 按 taskComplexity 自动选择（retrospect: low）
-   - **Task prompt**:
-     ```
-     你是复盘分析师。按以下步骤执行：
+JSON 格式：
+```json
+{
+  "version": 1,
+  "scope": "core|noncore",
+  "timestamp": "2026-06-08T10:30:00Z",
+  "summary": { "total": 10, "passed": 8, "failed": 2, "skipped": 0, "fixed": 0 },
+  "cases": [
+    { "id": "TC-001", "name": "...", "status": "passed|failed|skipped|fixed", "evidence": "..." }
+  ]
+}
+```
 
-     1. 回顾 system prompt 中已包含的复盘方法论
-     2. read 以下交付物文件：
-        - `{topic_dir}/test_cases_template.json`
-        - `{topic_dir}/changes/evidence/test_execution.json`
-     3. 按方法论覆盖两个维度（Phase 执行 + Harness 体验），将结果写入：
-        `{topic_dir}/changes/reviews/test_retrospect.md`
-     4. YAML frontmatter: `phase: test`, `verdict: pass`
-     ```
+### 增量测试策略
+
+第 2 轮起不重跑所有 case，只重跑：
+- 上一轮 status='fixed' 的 case（已修复待验证）
+- `depends_on` 包含这些 case 的下游 case
+
+### Phase-Gate 严格防伪造
+
+Phase 4 的 Phase-Gate 会验证：
+- test-execute JSON 存在且格式正确
+- 所有核心 case 状态为 passed 或 skipped
+- 非核心 case 的失败率在可接受范围内
+
+请确保测试结果真实可靠。
 
 ### 5. Self-Check
 
@@ -174,22 +191,9 @@ git push
 
 确保 `.xyz-harness/` 目录下的测试产出文件都被 git 跟踪。
 
-### 7. Gate Handoff
+### 7. Phase Transition
 
-When opening a separate gate check conversation, submit this file:
-
-| File | Path |
-|------|------|
-| Test execution | `{topic}/changes/evidence/test_execution.json` |
-
-The gate will cross-reference against `{topic}/test_cases_template.json`.
-
-Open a new Pi session, load the xyz-harness-gate skill, and tell it:
-> "Check Phase 4 gate for topic `{topic}`"
-
-### 7. Tell user
-
-When done: "Phase 4 complete. All tests pass. Please run gate check in a separate session. When gate passes, come back and I'll run the retrospective. Then say 'start Phase 5' to continue."
+Phase 4 gate 通过后，retrospect 会自动触发。完成 retrospect 后调用 `coding-workflow-phase-start()` 进入 Phase 5。
 
 ## Self-Check Checklist
 
