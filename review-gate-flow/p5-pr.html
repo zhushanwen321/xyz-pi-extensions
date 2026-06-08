@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Phase 5 PR — Review-Gate 流程</title>
+<style>
+:root{--bg:#0d1017;--sf:#161b22;--bd:#21262d;--tx:#e6edf3;--dm:#7d8590;--bl:#58a6ff;--rd:#f85149;--pu:#bc8cff;--pk:#db61a2;--cy:#39d353}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--tx);font-family:'SF Pro Display',-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.6;padding:32px}
+.wrap{max-width:1100px;margin:0 auto}
+h1{font-size:22px;font-weight:700;margin-bottom:4px}h1 span{color:var(--dm)}
+.desc{color:var(--dm);font-size:13px;margin-bottom:28px}
+.flow{display:flex;align-items:stretch;gap:0;margin-bottom:16px;flex-wrap:wrap;opacity:.7}
+.node{padding:12px 16px;border-radius:8px;margin:2px;position:relative;flex:1;min-width:140px}
+.node .tag{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px}
+.node .title{font-size:13px;font-weight:600}
+.node .info{font-size:11px;color:var(--dm);margin-top:3px}
+.node.skill{background:rgba(88,166,255,.08);border:1px solid rgba(88,166,255,.2)}.node.skill .tag{color:var(--bl)}
+.node.wf{background:rgba(188,140,255,.08);border:1px solid rgba(188,140,255,.2)}.node.wf .tag{color:var(--pu)}
+.arr{display:flex;align-items:center;color:var(--dm);font-size:18px;padding:0 2px;flex-shrink:0}
+.detail{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:16px;margin-top:16px}
+.detail h3{font-size:13px;color:var(--dm);margin-bottom:8px}
+.note{background:rgba(125,133,144,.08);border:1px dashed rgba(125,133,144,.3);border-radius:10px;padding:16px;margin-top:16px}
+.note h3{font-size:13px;color:var(--or);margin-bottom:8px}
+table{width:100%;border-collapse:collapse;font-size:11px;margin-top:6px}
+th{text-align:left;padding:5px 8px;background:rgba(0,0,0,.25);color:var(--dm);font-size:10px;text-transform:uppercase;letter-spacing:.3px}
+td{padding:4px 8px;border-top:1px solid var(--bd)}
+code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:10px;color:#79c0ff}
+</style></head><body><div class="wrap">
+<h1><span>Phase 5</span> PR（提交发布）</h1>
+<p class="desc">纯汇总阶段，无 review-gate。Phase 1-4 的 review-gate 已保证内容质量。</p>
+
+<div class="flow">
+  <div class="node skill" style="flex:3"><div class="tag">Skill</div><div class="title">xyz-harness-phase-pr</div><div class="info">收集证据 → 生成 PR 描述 → 推送代码</div></div>
+  <div class="arr">→</div>
+  <div class="node wf" style="flex:2.5"><div class="tag">Workflow</div><div class="title">Phase-Gate（含 Overall Retrospect）</div><div class="info">循环 doc-fix → Python script → 防造假 → Overall Retrospect</div></div>
+</div>
+
+<div class="note">
+  <h3>为什么 Phase 5 不引入 Review-Gate？</h3>
+  <table><tr><th>原因</th><th>说明</th></tr>
+  <tr><td>纯汇总阶段</td><td>Phase 5 不产出新的设计/代码，只收集 Phase 1-4 的产出物和证据</td></tr>
+  <tr><td>前置保障</td><td>Phase 1-4 各自有 review-gate + phase-gate 双重审查，质量问题已在各阶段解决</td></tr>
+  <tr><td>避免冗余</td><td>对已审查过的内容再次审查，投入产出比极低</td></tr></table>
+</div>
+
+<div class="detail">
+  <h3>Phase-Gate 特殊配置</h3>
+  <table><tr><th>组件</th><th>说明</th></tr>
+  <tr><td>Overall Retrospect</td><td>汇总 Phase 1-4 的回顾，产出整体改进建议</td></tr>
+  <tr><td>Python gate script</td><td>check_gate.py {topic_dir} 5 — 最终检查所有产出物</td></tr></table>
+</div>
+
+</div></body></html>

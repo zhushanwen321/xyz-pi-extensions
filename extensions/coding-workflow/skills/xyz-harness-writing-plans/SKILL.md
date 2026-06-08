@@ -32,7 +32,7 @@ description: >-
 | L2: plan-frontend | subagent | general-purpose | writing-plans (L2 章节) | task prompt 指定 read |
 | L2: API 对齐 | subagent | general-purpose | 无 | 读取 sub-documents 对比 |
 | Plan Review | subagent | general-purpose | expert-reviewer | task prompt 指定 read |
-| Retrospect | subagent | general-purpose | harness-retrospect | task prompt 指定 read |
+| Retrospect | subagent | general-purpose | xyz-harness-retrospect | task prompt 指定 read |
 
 # Writing Plans
 

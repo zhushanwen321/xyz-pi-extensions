@@ -28,10 +28,12 @@ import {
 	MAX_HISTORY_ENTRIES,
 } from "./constants";
 import {
+	createInitialState,
 	deserializeState,
 	getCompletedCount,
 	isActiveStatus,
 	isTerminalStatus,
+	type GoalExternalInit,
 } from "./state";
 import {
 	executeGoalAction,
@@ -41,6 +43,7 @@ import {
 	HISTORY_ENTRY_TYPE,
 	isGoalEntry,
 	isStaleContextError,
+	persistGoalState,
 	updateWidget,
 } from "./tool-handler";
 import { toSingleLine } from "./widget";
@@ -180,7 +183,8 @@ export default function goalExtension(pi: ExtensionAPI) {
 		isProcessing: false, // P1-3: 防重入
 	};
 
-	// ── Tool: goal_manager ─────────────────────────────
+	// Capture latest ctx for external API (initializeGoalFromExternal needs it for persistGoalState)
+	let lastCtx: ExtensionContext | undefined;
 
 	pi.registerTool({
 		name: "goal_manager",
@@ -217,6 +221,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		parameters: GoalManagerParams,
 
 		async execute(_toolCallId: string, params: Static<typeof GoalManagerParams>, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+			lastCtx = ctx;
 			try {
 				// P1-4: 透传 signal
 				return await executeGoalAction(pi, session, params, ctx, signal);
@@ -303,6 +308,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	// ── Event: before_agent_start ──────────────────────
 	pi.on("before_agent_start", async (_event: BeforeAgentStartLikeEvent, ctx: ExtensionContext) => {
+		lastCtx = ctx;
 		return handleBeforeAgentStart(pi, session, ctx);
 	});
 
@@ -345,6 +351,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	// ── Event: session_start (state reconstruction) ───
 	pi.on("session_start", async (_event: SessionStartLikeEvent, ctx: ExtensionContext) => {
+		lastCtx = ctx;
 		reconstructGoalState(pi, session, ctx);
 		if (session.state) {
 			session.tasksCompletedAtAgentStart = getCompletedCount(session.state.tasks);
@@ -372,4 +379,45 @@ export default function goalExtension(pi: ExtensionAPI) {
 			return new Text(prefix + theme.fg("dim", content), 0, 0);
 		});
 	}
+
+	// ── External API: initializeGoalFromExternal ──────────
+
+	/**
+	 * Allow other extensions (e.g. coding-workflow) to programmatically initialize a goal.
+	 * Skips the /goal command flow — directly creates state + tasks.
+	 * Returns true if initialized, false if goal already active.
+	 */
+	function initializeGoalFromExternal(
+		objective: string,
+		tasks: string[],
+		budget?: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number },
+	): boolean {
+		if (session.state && isActiveStatus(session.state.status)) {
+			return false;
+		}
+
+		session.state = createInitialState(objective, budget);
+		session.tasksCompletedAtAgentStart = 0;
+
+		// Create tasks (same logic as handleCreateTasks)
+		session.state.tasks = tasks.map((desc, i) => ({
+			id: i + 1,
+			description: desc.length > 60 ? desc.slice(0, 57) + "..." : desc,
+			status: "pending" as const,
+			lastUpdatedTurn: session.state!.currentTurnIndex,
+		}));
+
+		// Persist state so it survives session reconstruction
+		// Note: ctx is captured from the last event handler invocation — acceptable
+		// because initializeGoalFromExternal is called synchronously during tool execution.
+		if (lastCtx) {
+			persistGoalState(pi, session, lastCtx);
+		}
+
+		return true;
+	}
+
+	// Expose on pi for cross-extension access
+	const api = pi as unknown as Record<string, unknown>;
+	api.__goalInit = initializeGoalFromExternal satisfies GoalExternalInit;
 }

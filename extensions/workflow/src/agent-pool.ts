@@ -42,6 +42,13 @@ export interface AgentCallOpts {
   scene?: string;
   /** Human-readable description for logging and debugging. */
   description?: string;
+  /** Agent name to resolve from AgentRegistry. When set, the resolved
+   *  agent's systemPrompt is injected via --append-system-prompt. */
+  agent?: string;
+  /** Absolute path to a temp file containing the agent's systemPrompt.
+   *  Set by the orchestrator after resolving the agent name. Used by
+   *  buildArgs() to inject --append-system-prompt. */
+  systemPromptFile?: string;
 }
 
 export interface AgentResult {
@@ -106,6 +113,7 @@ const DEFAULT_CONCURRENCY = 4;
 const ONE_DAY_MS = 86_400_000;
 const PROCESS_TIMEOUT_MS = ONE_DAY_MS;
 const UUID_SLICE_LENGTH = 8;
+const JSON_INDENT = 2;
 const TIMEOUT_DISPLAY_DIVISOR = 1000;
 
 export interface AgentPoolOptions {
@@ -285,7 +293,28 @@ export class AgentPool {
       args.push("--model", opts.model);
     }
 
-    args.push(opts.prompt);
+    // Inject agent system prompt if resolved
+    if (opts.systemPromptFile) {
+      args.push("--append-system-prompt", opts.systemPromptFile);
+    }
+
+    // Build the prompt: if schema is provided, instruct the model to
+    // output valid JSON matching the schema, then append the prompt.
+    let prompt = opts.prompt;
+    if (opts.schema) {
+      const schemaJson = JSON.stringify(opts.schema, null, JSON_INDENT);
+      prompt = [
+        `You MUST respond with ONLY a valid JSON object conforming to this JSON schema:`,
+        ``,
+        schemaJson,
+        ``,
+        `Do not include any text before or after the JSON object.`,
+        `---`,
+        prompt,
+      ].join("\n");
+    }
+
+    args.push(prompt);
     return args;
   }
 

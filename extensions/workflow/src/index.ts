@@ -64,6 +64,7 @@ interface InstanceSummary {
 interface WorkflowDetails {
   action: string;
   instances: InstanceSummary[];
+  agents?: Array<{ name: string; source: string; model?: string }>;
   _render?: {
     type: "summary-table";
     data: {
@@ -207,6 +208,18 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
     const instances = await reconstructState(ctx);
     orch.restoreInstances(instances);
 
+    // Log discovered agents with source breakdown
+    const agentCount = orch.getAgentCount();
+    if (agentCount > 0) {
+      const agents = orch.getAgents();
+      const bySource = agents.reduce<Record<string, number>>((acc, a) => {
+        acc[a.source] = (acc[a.source] || 0) + 1;
+        return acc;
+      }, {});
+      const breakdown = Object.entries(bySource).map(([s, c]) => `${c} ${s}`).join(", ");
+      pi.notify(`Workflow: discovered ${agentCount} agents (${breakdown})`);
+    }
+
     // Live progress: refresh widget on every trace node change
     orch.onTraceUpdate = (_runId) => {
       if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
@@ -221,6 +234,12 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
   pi.on("session_tree", async (_event: Record<string, unknown>, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     lastSessionId = sessionId;
+    // Dispose the previous branch's orchestrator (cleanup in-flight agent temp files).
+    // Without this, switching branches mid-run leaks temp files.
+    const previousOrch = orchestrators.get(sessionId);
+    if (previousOrch) {
+      previousOrch.cleanupAllTempFiles();
+    }
     const orch = new WorkflowOrchestrator(pi, ctx);
     orchestrators.set(sessionId, orch);
     const instances = await reconstructState(ctx);
@@ -419,7 +438,7 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
           if (summaries.length === 0) {
             return {
               content: [{ type: "text" as const, text: "No workflows in current session." }],
-              details: { action: "status", instances: [], _render: buildRender(summaries) } satisfies WorkflowDetails,
+              details: { action: "status", instances: [], agents: orch.getAgents(), _render: buildRender(summaries) } satisfies WorkflowDetails,
             };
           }
 
@@ -439,6 +458,7 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
             details: {
               action: "status",
               instances: summaries.map(toInstanceSummary),
+              agents: orch.getAgents(),
               _render: buildRender(summaries),
             } satisfies WorkflowDetails,
           };

@@ -71,6 +71,22 @@ describe("buildWorkerScript", () => {
 
   it("包含 module.exports.execute 自动调用逻辑", () => {
     expect(result).toContain("module.exports.execute");
-    expect(result).toContain("typeof module.exports.execute === \"function\"");
+    expect(result).toContain('typeof module.exports.execute === "function"');
+  });
+
+  // ── agent() 字段透传（FR-3.3 + Task 2） ──
+
+  it("agent() opts 包含 agent 字段（透传 firstArg.agent）", () => {
+    // The generated worker script must set `agent: firstArg.agent` so the
+    // main thread's AgentRegistry can resolve the agent by name.
+    expect(result).toMatch(/agent:\s*firstArg\.agent/);
+  });
+
+  it("生成的脚本是可解析的合法 JavaScript（防 missing-comma 回归）", () => {
+    // Regression guard: a missing comma in the object literal would cause
+    // a SyntaxError at worker thread start. Validate with new Function().
+    expect(() => {
+      new Function(result);
+    }).not.toThrow();
   });
 });

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Phase 4 Test — Test-Fix Loop 流程</title>
+<style>
+:root{--bg:#0d1017;--sf:#161b22;--bd:#21262d;--tx:#e6edf3;--dm:#7d8590;--bl:#58a6ff;--gn:#3fb950;--or:#d29922;--rd:#f85149;--pu:#bc8cff;--cy:#39d353;--pk:#db61a2;--te:#2dd4bf;--yl:#e3b341}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--tx);font-family:'SF Pro Display',-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.6;padding:32px}
+.wrap{max-width:1400px;margin:0 auto}
+h1{font-size:22px;font-weight:700;margin-bottom:4px}h1 span{color:var(--bl)}
+.desc{color:var(--dm);font-size:13px;margin-bottom:28px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:24px;padding:10px 16px;background:var(--sf);border-radius:8px;border:1px solid var(--bd);font-size:11px}
+.lg{display:flex;align-items:center;gap:5px}
+.lc{width:22px;height:14px;border-radius:3px;flex-shrink:0}
+.lc.skill{background:var(--bl)}.lc.fixed{background:var(--te)}.lc.wf{background:var(--pu)}.lc.gate{background:var(--rd)}.lc.retro{background:var(--pk)}.lc.sub{background:var(--gn)}.lc.fix{background:var(--or)}
+.flow{display:flex;align-items:stretch;gap:0;margin-bottom:14px;flex-wrap:wrap}
+.node{padding:11px 14px;border-radius:8px;margin:2px;position:relative;flex:1;min-width:120px}
+.node .tag{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px}
+.node .title{font-size:12px;font-weight:600}
+.node .info{font-size:10px;color:var(--dm);margin-top:2px}
+.node.skill{background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.3)}.node.skill .tag{color:var(--bl)}
+.node.fixed{background:rgba(45,212,191,.08);border:1px solid rgba(45,212,191,.25)}.node.fixed .tag{color:var(--te)}
+.node.wf{background:rgba(188,140,255,.1);border:1px solid rgba(188,140,255,.3)}.node.wf .tag{color:var(--pu)}
+.node.gate{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3)}.node.gate .tag{color:var(--rd)}
+.node.retro{background:rgba(219,97,162,.1);border:1px solid rgba(219,97,162,.3)}.node.retro .tag{color:var(--pk)}
+.node.sub{background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.3)}.node.sub .tag{color:var(--gn)}
+.node.fix{background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3)}.node.fix .tag{color:var(--or)}
+.arr{display:flex;align-items:center;color:var(--dm);font-size:16px;padding:0 2px;flex-shrink:0}
+.detail{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:14px;margin-top:14px}
+.detail h3{font-size:13px;margin-bottom:8px}
+.detail.purple h3{color:var(--pu)}.detail.red h3{color:var(--rd)}.detail.blue h3{color:var(--bl)}.detail.green h3{color:var(--gn)}.detail.orange h3{color:var(--or)}
+table{width:100%;border-collapse:collapse;font-size:11px;margin-top:6px}
+th{text-align:left;padding:5px 8px;background:rgba(0,0,0,.25);color:var(--dm);font-size:10px;text-transform:uppercase;letter-spacing:.3px}
+td{padding:4px 8px;border-top:1px solid var(--bd)}
+code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:10px;color:#79c0ff}
+.badge{display:inline-block;padding:2px 7px;border-radius:3px;font-size:9px;font-weight:700;margin-right:3px}
+.badge.core{background:rgba(248,81,73,.15);color:var(--rd)}.badge.noncore{background:rgba(88,166,255,.15);color:var(--bl)}
+.note{font-size:10px;color:var(--dm);margin-top:6px}
+.fail-arrow{color:var(--or);font-size:11px;font-weight:600;margin-top:4px}
+.loop-box{background:rgba(188,140,255,.06);border:2px solid rgba(188,140,255,.3);border-radius:10px;padding:14px;margin:14px 0}
+.loop-box h3{color:var(--pu);font-size:13px;margin-bottom:10px}
+.loop-step{display:flex;align-items:stretch;gap:0;margin-bottom:6px;flex-wrap:wrap}
+</style></head><body><div class="wrap">
+<h1><span>Phase 4</span> Test（集成测试 + E2E 测试）</h1>
+<p class="desc">核心机制：Test-Fix Loop Workflow（测试-修复无限循环）。两个串行 workflow：先核心业务，再非核心。无 Review-Gate（循环已保障质量），Phase-Gate 严格防伪造。</p>
+
+<div class="legend">
+  <div class="lg"><div class="lc skill"></div>主 Agent</div>
+  <div class="lg"><div class="lc wf"></div>Workflow</div>
+  <div class="lg"><div class="lc sub"></div>Subagent（测试）</div>
+  <div class="lg"><div class="lc fix"></div>Fix Worker</div>
+  <div class="lg"><div class="lc gate"></div>Phase-Gate（严格防伪造）</div>
+  <div class="lg"><div class="lc retro"></div>Retrospect</div>
+</div>
+
+<!-- Row 1: Skill → Analysis → Start infra -->
+<div class="flow">
+  <div class="node skill" style="flex:1.5"><div class="tag">Skill</div><div class="title">xyz-harness-phase-test</div></div>
+  <div class="arr">→</div>
+  <div class="node skill" style="flex:1.5"><div class="tag">主 Agent</div><div class="title">分类 case + 依赖分析</div><div class="info"><span class="badge core">核心</span><span class="badge noncore">非核心</span></div></div>
+  <div class="arr">→</div>
+  <div class="node skill" style="flex:1"><div class="tag">主 Agent</div><div class="title">启动基础设施</div><div class="info">dev server / backend / DB</div></div>
+</div>
+
+<!-- Row 2: Workflow 1 (Core) → Workflow 2 (Non-core) -->
+<div class="flow">
+  <div class="node wf" style="flex:3;border-width:2px"><div class="tag">Workflow 1</div><div class="title">Test-Fix Loop（核心业务 Case）</div><div class="info">注册/登录/支付/核心 API CRUD / 核心用户旅程</div></div>
+  <div class="arr">→</div>
+  <div class="node wf" style="flex:3;border-width:2px"><div class="tag">Workflow 2</div><div class="title">Test-Fix Loop（非核心 Case）</div><div class="info">边缘场景 / 内部管理 / 分页排序 / 非核心 UI</div></div>
+</div>
+
+<!-- Row 3: Manual checklist → Phase-Gate → Retrospect -->
+<div class="flow">
+  <div class="node fixed" style="flex:1.5"><div class="tag">固定步骤</div><div class="title">手动验证清单</div><div class="info">输出给用户</div></div>
+  <div class="arr">→</div>
+  <div class="node gate" style="flex:2.5"><div class="tag">Phase-Gate（严格防伪造）</div><div class="title">脚本检查 + 一致性检查 + 深度质疑</div><div class="info">🔴 核心严格 / 🟡 非核心适当放宽</div></div>
+  <div class="arr">→</div>
+  <div class="node retro" style="flex:1"><div class="tag">Subagent</div><div class="title">Retrospect</div></div>
+</div>
+
+<!-- Test-Fix Loop Detail -->
+<div class="loop-box">
+  <h3>Test-Fix Loop 内部结构（每个 Workflow 内的无限循环）</h3>
+
+  <div class="loop-step">
+    <div class="node wf" style="flex:2"><div class="tag">Step 1</div><div class="title">构造/读取 test-execute-v{N}.json</div><div class="info">Turn 1: 从 template 构造 v1<br>Turn 2+: 读取上轮，增量生成 v{N}</div></div>
+    <div class="arr">→</div>
+    <div class="node wf" style="flex:1.5"><div class="tag">Step 2</div><div class="title">分派 Wave 并行测试</div><div class="info">DAG 拓扑排序，每 Wave 最多 3 subagent</div></div>
+    <div class="arr">→</div>
+    <div class="node sub" style="flex:1.5"><div class="tag">Step 3</div><div class="title">Subagent 执行测试</div><div class="info">更新 case 状态：<br>✅ passed / ⏭ skipped（附理由）<br>❌ failed（附表现+分析）</div></div>
+  </div>
+
+  <div class="loop-step">
+    <div class="node wf" style="flex:1.5"><div class="tag">Step 4</div><div class="title">汇总判断</div><div class="info">全部 passed/skipped + 跳过理由充分？<br>→ YES: 退出 Loop<br>→ NO: 继续</div></div>
+    <div class="arr">→</div>
+    <div class="node fix" style="flex:2.5"><div class="tag">Step 5</div><div class="title">Fix Worker</div><div class="info">分析 failed → 修复代码/测试 → 更新状态为 fixed（附 bug_cause）<br>→ git commit → 回到 Step 1（Turn N+1）</div></div>
+  </div>
+
+  <div class="note">退出条件：全部通过 + 跳过充分 → 退出 | 最大 10 轮 → 强制退出 | 连续 3 轮 failed 不降 → 报告阻塞</div>
+</div>
+
+<!-- JSON Structure -->
+<div class="detail blue">
+  <h3>test-execute-v{N}.json 状态流转</h3>
+  <table><tr><th>状态</th><th>含义</th><th>后续</th></tr>
+  <tr><td><code>passed</code></td><td>测试通过</td><td>不再重跑</td></tr>
+  <tr><td><code>skipped</code></td><td>跳过（附 skip_reason）</td><td>Phase-Gate 质疑理由</td></tr>
+  <tr><td><code>failed</code></td><td>不通过（附 failure.symptom + analysis）</td><td>进入 Fix Worker</td></tr>
+  <tr><td><code>fixed</code></td><td>已修复（附 fix_description + bug_cause）</td><td>下一 Turn 重新测试</td></tr></table>
+  <div class="note">Turn N+1 只重跑 fixed case + 其下游 case（增量策略）。</div>
+</div>
+
+<!-- Phase-Gate Detail -->
+<div class="detail red">
+  <h3>Phase-Gate：3 层次严格防伪造</h3>
+  <table><tr><th>层次</th><th>检查内容</th><th>🔴 核心</th><th>🟡 非核心</th></tr>
+  <tr><td>1. 脚本检查</td><td>JSON 格式 + 最终 version 全部 passed/skipped</td><td>✅</td><td>✅</td></tr>
+  <tr><td>2. 一致性检查</td><td>test_cases_template.json 与 Phase 2 commit 版本比对</td><td>逐字节比对</td><td>抽查关键字段</td></tr>
+  <tr><td>2. Case 与 Spec/Plan</td><td>每个 case 是否和 spec.md、plan.md 定义一致</td><td>逐条比对</td><td>抽查</td></tr>
+  <tr><td>3. 跳过理由质疑</td><td>每个 skipped case：为什么跳过？环境日志？</td><td>必须提供环境日志</td><td>文字说明即可</td></tr>
+  <tr><td>3. 测试结果真实性</td><td>evidence 是否包含实际命令输出/断言结果</td><td>必须有执行日志</td><td>通过即可</td></tr>
+  <tr><td>3. 修复记录完整性</td><td>fixed case 是否有 fix_description + bug_cause</td><td>完整记录</td><td>fix_description 即可</td></tr></table>
+  <div class="fail-arrow">FAIL → 打回主 agent 修复 → 修复后直接重新提交 phase-gate（不回到 workflow loop）</div>
+  <div class="note">如果 test_cases_template.json 被篡改（与 Phase 2 commit 不一致），需要回到 Phase 2 重新确认。</div>
+</div>
+
+<!-- No Review-Gate -->
+<div class="detail green">
+  <h3>为什么 Phase 4 不需要 Review-Gate？</h3>
+  <div style="font-size:12px;color:var(--dm)">
+    其他阶段（1/2/3）的 Review-Gate 是"审查产出物质量"。但 Phase 4 的测试-修复循环本身就是质量保障——每个 case 必须通过或充分跳过。<br>
+    Phase-Gate 的严格防伪造检查替代了 Review-Gate 的角色，且更深入（一致性比对、跳过理由质疑、修复记录审查）。
+  </div>
+</div>
+
+<!-- E2E Best Practices -->
+<div class="detail blue">
+  <h3>E2E 测试最佳实践（嵌入测试节点指导）</h3>
+  <table><tr><th>实践</th><th>说明</th></tr>
+  <tr><td>以用户旅程为中心</td><td>E2E case 映射 spec use-case，不映射 Execution Group</td></tr>
+  <tr><td>稳定选择器</td><td>使用 data-testid，不依赖 CSS class / DOM 结构</td></tr>
+  <tr><td>测试隔离</td><td>每个 subagent 独立测试数据，不依赖执行顺序</td></tr>
+  <tr><td>智能等待</td><td>禁止 waitForTimeout，用 web-first assertion</td></tr>
+  <tr><td>增量重跑</td><td>Turn N+1 只重跑 fixed case + 下游 case</td></tr></table>
+</div>
+
+</div></body></html>

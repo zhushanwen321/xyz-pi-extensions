@@ -62,7 +62,7 @@ const PHASES: PhaseConfig[] = [
 	},
 	{
 		phase: 3, name: "Dev", skillName: "xyz-harness-phase-dev",
-		reviewPrefix: ["business_logic_review", "standards_review", "robustness_review", "integration_review", "taste_review"], retrospectPrefix: "dev_retrospect",
+		reviewPrefix: ["business_logic_review", "standards_review", "robustness_review", "integration_review", "ts_taste_review", "rust_taste_review", "taste_review"], retrospectPrefix: "dev_retrospect",
 		deliverables: ["changes/evidence/test_results.md"],
 		reviewMode: "Mode 2: Code review (verify implementation against spec)",
 	},

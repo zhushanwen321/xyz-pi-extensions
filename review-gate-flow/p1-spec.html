@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Phase 1 Spec — Review-Gate 流程</title>
+<style>
+:root{--bg:#0d1017;--sf:#161b22;--bd:#21262d;--tx:#e6edf3;--dm:#7d8590;--bl:#58a6ff;--gn:#3fb950;--or:#d29922;--rd:#f85149;--pu:#bc8cff;--cy:#39d353;--pk:#db61a2;--te:#2dd4bf}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--tx);font-family:'SF Pro Display',-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.6;padding:32px}
+.wrap{max-width:1200px;margin:0 auto}
+h1{font-size:22px;font-weight:700;margin-bottom:4px}h1 span{color:var(--bl)}
+.desc{color:var(--dm);font-size:13px;margin-bottom:28px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:24px;padding:10px 16px;background:var(--sf);border-radius:8px;border:1px solid var(--bd);font-size:11px}
+.lg{display:flex;align-items:center;gap:5px}
+.lc{width:22px;height:14px;border-radius:3px;flex-shrink:0}
+.lc.skill{background:var(--bl)}.lc.fixed{background:var(--te)}.lc.sub{background:var(--gn)}.lc.wf{background:var(--pu)}.lc.gate{background:var(--rd)}.lc.retro{background:var(--pk)}.lc.goal{background:var(--cy)}
+.flow{display:flex;align-items:stretch;gap:0;margin-bottom:14px;flex-wrap:wrap}
+.node{padding:11px 14px;border-radius:8px;margin:2px;position:relative;flex:1;min-width:150px}
+.node .tag{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px}
+.node .title{font-size:12px;font-weight:600}
+.node .info{font-size:10px;color:var(--dm);margin-top:2px}
+.node.skill{background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.3)}.node.skill .tag{color:var(--bl)}
+.node.fixed{background:rgba(45,212,191,.08);border:1px solid rgba(45,212,191,.25)}.node.fixed .tag{color:var(--te)}
+.node.sub{background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.3)}.node.sub .tag{color:var(--gn)}
+.node.wf{background:rgba(188,140,255,.1);border:1px solid rgba(188,140,255,.3)}.node.wf .tag{color:var(--pu)}
+.node.gate{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3)}.node.gate .tag{color:var(--rd)}
+.node.retro{background:rgba(219,97,162,.1);border:1px solid rgba(219,97,162,.3)}.node.retro .tag{color:var(--pk)}
+.node.goal{background:rgba(57,211,83,.08);border:1px solid rgba(57,211,83,.25)}.node.goal .tag{color:var(--cy)}
+.arr{display:flex;align-items:center;color:var(--dm);font-size:16px;padding:0 2px;flex-shrink:0}
+.detail{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:14px;margin-top:14px}
+.detail h3{font-size:13px;margin-bottom:8px}
+.detail.purple h3{color:var(--pu)}.detail.red h3{color:var(--rd)}.detail.blue h3{color:var(--bl)}
+table{width:100%;border-collapse:collapse;font-size:11px;margin-top:6px}
+th{text-align:left;padding:5px 8px;background:rgba(0,0,0,.25);color:var(--dm);font-size:10px;text-transform:uppercase;letter-spacing:.3px}
+td{padding:4px 8px;border-top:1px solid var(--bd)}
+code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:10px;color:#79c0ff}
+.loop{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:8px 0}
+.lp{padding:5px 9px;border-radius:5px;font-size:10px;font-weight:500}
+.lp.disp{background:rgba(188,140,255,.12);border:1px solid rgba(188,140,255,.25);color:var(--pu)}
+.lp.chk{background:rgba(210,153,34,.12);border:1px solid rgba(210,153,34,.25);color:var(--or)}
+.lp.fix{background:rgba(63,185,80,.12);border:1px solid rgba(63,185,80,.25);color:var(--gn)}
+.la{color:var(--dm);font-size:10px}
+.note{font-size:10px;color:var(--dm);margin-top:6px}
+.fail-arrow{color:var(--or);font-size:11px;font-weight:600;margin-top:4px}
+</style></head><body><div class="wrap">
+<h1><span>Phase 1</span> Spec（需求分析）</h1>
+<p class="desc">整体流程指导 → brainstorming → goal 追踪 → 编写 spec → review-gate（workflow 循环）→ phase-gate（脚本检查）→ retrospect</p>
+
+<div class="legend">
+  <div class="lg"><div class="lc skill"></div>Skill（主 Agent）</div>
+  <div class="lg"><div class="lc fixed"></div>固定步骤</div>
+  <div class="lg"><div class="lc goal"></div>Goal（用户手动 /goal）</div>
+  <div class="lg"><div class="lc wf"></div>Workflow</div>
+  <div class="lg"><div class="lc gate"></div>Phase-Gate（脚本）</div>
+  <div class="lg"><div class="lc retro"></div>Retrospect</div>
+</div>
+
+<!-- Row 1: Skill → Overview → Brainstorm -->
+<div class="flow">
+  <div class="node skill" style="flex:2"><div class="tag">Skill</div><div class="title">xyz-harness-brainstorming</div><div class="info">告知整体 5-phase 流程 + focus on review-gate</div></div>
+  <div class="arr">→</div>
+  <div class="node fixed" style="flex:2.5"><div class="tag">固定步骤</div><div class="title">Brainstorming + 用户讨论</div><div class="info">Quick Overview → Brainstorm → Terminology → Scan</div></div>
+</div>
+
+<!-- Row 2: Goal → Write spec -->
+<div class="flow">
+  <div class="node goal" style="flex:1.5"><div class="tag">Goal（用户手动）</div><div class="title">用户触发 /goal</div><div class="info">Task 1: spec.md<br>Task 2: use-cases.md<br>Task 3: non-functional-design.md</div></div>
+  <div class="arr">→</div>
+  <div class="node fixed" style="flex:3"><div class="tag">固定步骤</div><div class="title">主 Agent 按顺序编写 spec 交付物</div><div class="info">每完成一个 md 文档更新 goal 状态</div></div>
+</div>
+
+<!-- Row 3: Review-Gate → Phase-Gate → Retrospect -->
+<div class="flow">
+  <div class="node wf" style="flex:2.5"><div class="tag">Workflow</div><div class="title">Review-Gate（循环）</div><div class="info">agent 审查 + 修复 → 判断退出 → 最多 3 轮</div></div>
+  <div class="arr">→</div>
+  <div class="node gate" style="flex:2"><div class="tag">Phase-Gate</div><div class="title">脚本检查</div><div class="info">文档完整性 + YAML + placeholder（最多 5 次）</div></div>
+  <div class="arr">→</div>
+  <div class="node retro" style="flex:1"><div class="tag">Subagent</div><div class="title">Retrospect</div><div class="info">fork session</div></div>
+</div>
+
+<!-- Review-Gate Detail -->
+<div class="detail purple">
+  <h3>Review-Gate 内部（Workflow 循环）</h3>
+  <div class="loop">
+    <div class="lp disp">Agent: spec-requirements-reviewer.md</div><div class="la">→</div>
+    <div class="lp chk">must_fix = 0?</div><div class="la">→</div>
+    <div class="lp fix">YES → 继续循环（修复后重新审查）</div><div class="la">|</div>
+    <div class="lp disp">NO → 通过</div>
+  </div>
+  <table><tr><th>节点</th><th>Agent</th><th>职责</th></tr>
+  <tr><td>审查+修复</td><td><code>spec-requirements-reviewer.md</code></td><td>审查 spec 内容质量 + 直接修复问题</td></tr>
+  <tr><td>退出判断</td><td>workflow 逻辑</td><td>must_fix = 0 时退出循环，否则继续</td></tr></table>
+  <div class="note">最多 3 轮。连续 2 轮 must_fix 不降 → 人工介入。</div>
+</div>
+
+<!-- Phase-Gate Detail -->
+<div class="detail red">
+  <h3>Phase-Gate（2 步）</h3>
+  <table><tr><th>步骤</th><th>执行者</th><th>说明</th></tr>
+  <tr><td>1. 脚本检查</td><td>脚本</td><td>文档完整性 + YAML frontmatter + placeholder 扫描</td></tr>
+  <tr><td>2. 防伪造检查</td><td>AI Agent</td><td>验证文档内容非空、非占位</td></tr></table>
+  <div class="fail-arrow">FAIL → 打回主 agent 修复 → 修复后直接重新提交 phase-gate（跳过 review-gate）</div>
+</div>
+
+<!-- Goal Injection -->
+<div class="detail blue">
+  <h3>Goal 自动注入方式</h3>
+  <div style="font-size:11px;color:var(--dm)">
+    Phase 1 进入时，coding-workflow 自动调用 goal extension 导出的 <code>initializeGoalFromExternal()</code> API。<br>
+    自动写入任务列表（每个 spec 交付物一个任务），主 agent 后续调用 <code>goal_manager.update_tasks</code> 追踪进度。不需要用户手动触发 /goal。
+  </div>
+</div>
+
+</div></body></html>

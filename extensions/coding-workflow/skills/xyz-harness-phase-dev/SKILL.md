@@ -36,7 +36,7 @@ Gate FAIL 后不是从头开始，而是回到循环起点继续：
 |------|--------|-------|-------|------|
 | TDD + 编码 | 主 agent | — | test-driven-development + backend-dev / frontend-dev | 主 agent 上下文加载 |
 | Code Review | subagent | general-purpose | expert-reviewer | task prompt 指定 read |
-| Retrospect | subagent | general-purpose | harness-retrospect | task prompt 指定 read |
+| Retrospect | subagent | general-purpose | xyz-harness-retrospect | task prompt 指定 read |
 
 **复杂路径（5+ tasks，跨前后端）：**
 
@@ -48,7 +48,7 @@ Gate FAIL 后不是从头开始，而是回到循环起点继续：
 | 前端编码 | subagent | general-purpose | frontend-dev | task prompt 指定 read |
 | Task spec 检查 | subagent | general-purpose | expert-reviewer | task prompt 指定 read |
 | Code Review | subagent | general-purpose | expert-reviewer | task prompt 指定 read |
-| Retrospect | subagent | general-purpose | harness-retrospect | task prompt 指定 read |
+| Retrospect | subagent | general-purpose | xyz-harness-retrospect | task prompt 指定 read |
 
 > **注意：** 复杂路径下主 agent 不写任何实现代码，全部通过 subagent 完成（参见 subagent-driven-development 的"禁码铁律"）。简单路径下主 agent 直接编码，不加载 subagent-driven-development。
 
