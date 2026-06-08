@@ -1,5 +1,11 @@
 # @zhushanwen/pi-workflow
 
+## 0.2.2
+
+### Patch Changes
+
+- Expose subagent sessionId for post-run session log access
+
 ## 0.2.1
 
 ### Patch Changes

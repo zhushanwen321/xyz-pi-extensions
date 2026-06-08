@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-workflow",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Multi-agent workflow orchestration for Pi — stateful workflow management with persistence, state machine, and execution tracing.",
   "type": "module",
   "main": "index.ts",
