@@ -923,6 +923,48 @@ export class WorkflowOrchestrator {
     }
   }
 
+  // ── Synchronous run (for programmatic callers) ────────────
+
+  /**
+   * Run a workflow and wait for it to complete (synchronous from caller's POV).
+   * Polls instance status at 500ms intervals until terminal state.
+   *
+   * Designed for cross-extension programmatic calls (e.g. pi.__workflowRun).
+   * NOT intended for interactive use — use `run()` + lifecycle tools instead.
+   */
+  async runAndWait(
+    name: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+    timeoutMs: number = 600_000, // 10 minutes
+  ): Promise<{ status: string; scriptResult?: unknown; error?: string; runId: string }> {
+    const runId = await this.run(name, args, undefined, undefined, signal);
+
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (signal?.aborted) {
+        try { await this.abort(runId); } catch { /* already terminal */ void undefined; }
+        return { status: "aborted", runId, error: "Aborted by signal" };
+      }
+      const instance = this.instances.get(runId);
+      if (!instance) {
+        return { status: "unknown", runId, error: "Instance not found" };
+      }
+      if (isTerminal(instance.status)) {
+        return {
+          status: instance.status,
+          scriptResult: instance.scriptResult,
+          error: instance.error,
+          runId,
+        };
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    // Timeout — abort the workflow
+    try { await this.abort(runId); } catch { /* already terminal */ void undefined; }
+    return { status: "timeout", runId, error: `Workflow timed out after ${timeoutMs}ms` };
+  }
+
   // ── Persistence ─────────────────────────────────────────────
 
   /**

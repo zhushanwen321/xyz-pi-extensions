@@ -12,7 +12,7 @@ import * as path from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { runGateScript } from "./gate-runner.js";
+import { PhaseGate, ReviewGate, TestFixLoopGate, type Gate } from "./gates/index.js";
 import {
 	buildSkillInjection,
 	checkMissingRetrospects,
@@ -33,7 +33,6 @@ import {
 	type WorkflowState,
 } from "./helpers.js";
 import { buildRetrospectFollowUp, dispatchReviewSubagent } from "./review-dispatcher.js";
-import { runReviewGateLoop } from "./review-gate-impl.js";
 import { SkillResolver } from "./skill-resolver.js";
 import { formatUsageStats } from "./subagent.js";
 
@@ -175,32 +174,38 @@ export async function executeGateTool(hctx: HandlerContext, tctx: ToolExecuteCon
 
 	const phaseConfig = phases[phase - 1];
 
-	// ── Step 1: Review-Gate (content quality loop) ──────────
-	// Spec: max 3 rounds, consecutive 2 rounds no improvement → escalate
-	const reviewGateResult = await runReviewGateLoop(
-		phaseConfig, state.topicDir, skillResolver, signal, onUpdate, activeSubprocesses,
-	);
-	if (!reviewGateResult.passed) {
-		state.gateInProgress = false;
-		hctx.persistState(pi, state);
-		return {
-			content: [{
-				type: "text",
-				text: `Review-Gate FAILED after ${reviewGateResult.rounds} rounds (last must_fix=${reviewGateResult.lastMustFix}).\n\n${reviewGateResult.summary}\n\nFix the issues above, then call coding-workflow-gate(phase=${phase}) again.`,
-			}],
-			isError: true,
-		};
-	}
+	// ── Gate Pipeline: execute configured gate chain ────────
+	const gateRegistry: Record<string, Gate> = {
+		"review-gate": new ReviewGate(),
+		"phase-gate": new PhaseGate(gateScriptPath),
+		"test-fix-loop": new TestFixLoopGate(),
+	};
 
-	// ── Step 2: Phase-Gate (script check) ─────────────────
-	const gateResult = await runGateScript(gateScriptPath, state.topicDir, phase, signal);
-	if (!gateResult.passed) {
-		state.gateInProgress = false;
-		hctx.persistState(pi, state);
-		return {
-			content: [{ type: "text", text: `Gate FAILED. The following issues must be fixed:\n\n${gateResult.output}\n\nFix each item above, then call coding-workflow-gate(phase=${phase}) again.` }],
-			isError: true,
-		};
+	for (const gateName of phaseConfig.gates) {
+		const gate = gateRegistry[gateName];
+		if (!gate) continue; // unknown gate — skip
+		const result = await gate.run({
+			phase,
+			topicDir: state.topicDir,
+			state,
+			phaseConfig,
+			pi,
+			skillResolver,
+			signal,
+			onUpdate,
+			processRegistry: activeSubprocesses,
+		});
+		if (!result.passed) {
+			state.gateInProgress = false;
+			hctx.persistState(pi, state);
+			return {
+				content: [{
+					type: "text",
+					text: result.fixGuidance ?? `Gate '${gateName}' failed. Fix the issues, then call coding-workflow-gate(phase=${phase}) again.`,
+				}],
+				isError: true,
+			};
+		}
 	}
 
 	// 2. Dispatch review subagent
