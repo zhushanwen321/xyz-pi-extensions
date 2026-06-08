@@ -29,13 +29,14 @@ export interface VisionModelsConfig {
 	models: VisionModelEntry[];
 }
 
-export type ResolveVisionModelResult =
-	| { ok: true; ref: string; thinkingLevel?: ThinkingLevel }
-	| { ok: false; error: string };
+export interface ResolvedModelEntry {
+	ref: string;
+	thinkingLevel?: ThinkingLevel;
+}
 
 export interface VisionModelApi {
 	loadVisionModels: () => VisionModelsConfig | null;
-	resolveVisionModelSync: () => ResolveVisionModelResult;
+	resolveVisionModelsSync: () => ResolvedModelEntry[];
 }
 
 // ──────────────────────── Constants ────────────────────────
@@ -55,27 +56,8 @@ export const VISION_SYSTEM_PROMPT = [
 
 // ── Constants ───────────────────────────────────────
 
-const JSON_INDENT = 2;
 const SEC_PER_MIN = 60;
 const MS_PER_SEC = 1000;
-
-const EXAMPLE_CONFIG = JSON.stringify({
-	models: [
-		{
-			id: "glm-4.6v",
-			provider: "router-openai",
-			order: 1,
-			thinkingLevel: "high",
-			fallbacks: [{ id: "qwen-vl-max", provider: "router-openai" }],
-		},
-	],
-}, null, JSON_INDENT);
-
-/** Map vision ThinkingLevel to Pi CLI --thinking flag values. */
-const _THINKING_TO_PI: Record<ThinkingLevel, string> = {
-	high: "high",
-	max: "xhigh",
-};
 
 // ──────────────────────── Fork ────────────────────────
 
@@ -121,41 +103,21 @@ export function createVisionModelApi(): VisionModelApi {
 	}
 
 	/**
-	 * Select the first available vision model from config.
-	 * Returns the model ref and its thinking level.
+	 * Resolve all vision model candidates from config, ordered by priority.
+	 * Caller should try each in order, falling back on failure.
 	 */
-	function resolveVisionModelSync(): ResolveVisionModelResult {
+	function resolveVisionModelsSync(): ResolvedModelEntry[] {
 		const config = loadVisionModels();
-		if (!config?.models?.length) {
-			return {
-				ok: false,
-				error: [
-					`vision-models.json not found or empty at ${VISION_MODELS_PATH}`,
-					"Create the file with vision model entries. Example format:",
-					EXAMPLE_CONFIG,
-				].join("\n\n"),
-			};
-		}
+		if (!config?.models?.length) return [];
 
-		const candidates = [...config.models]
+		return [...config.models]
 			.filter((m) => m.provider)
-			.sort((a, b) => a.order - b.order);
-
-		if (candidates.length === 0) {
-			return {
-				ok: false,
-				error: `No valid vision model entries in ${VISION_MODELS_PATH}. All entries are missing provider field.`,
-			};
-		}
-
-		// Return first candidate (runtime will validate availability)
-		const best = candidates[0]!;
-		return {
-			ok: true,
-			ref: `${best.provider}/${best.id}`,
-			thinkingLevel: best.thinkingLevel,
-		};
+			.sort((a, b) => a.order - b.order)
+			.map((m) => ({
+				ref: `${m.provider}/${m.id}`,
+				thinkingLevel: m.thinkingLevel,
+			}));
 	}
 
-	return { loadVisionModels, resolveVisionModelSync };
+	return { loadVisionModels, resolveVisionModelsSync };
 }
