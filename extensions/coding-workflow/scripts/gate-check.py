@@ -98,13 +98,26 @@ def check_field_bool(data, field, expected=True):
     return True, f"'{field}'={val}"
 
 
+import re
+
+
 def find_latest_review(topic_dir, prefix):
-    """Find the latest review file matching a prefix pattern."""
+    """Find the latest review file matching a prefix pattern.
+    
+    Sorts by the version number embedded in the filename (e.g. v10 > v9)
+    rather than lexicographic order (where v9 > v10 incorrectly).
+    """
     pattern = os.path.join(topic_dir, "changes", "reviews", f"{prefix}*.md")
-    files = sorted(glob.glob(pattern))
+    files = glob.glob(pattern)
     if not files:
         return None
-    return files[-1]
+
+    def _version_key(filepath: str) -> int:
+        basename = os.path.basename(filepath)
+        m = re.search(r"_v(\d+)", basename)
+        return int(m.group(1)) if m else 0
+
+    return max(files, key=_version_key)
 
 
 def _flatten_review_fields(data):

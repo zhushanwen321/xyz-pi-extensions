@@ -2,7 +2,10 @@
  * SkillResolver — unified skill discovery and caching for the coding-workflow extension.
  *
  * Primary source: Pi skills list injected via before_agent_start.
- * Fallback: conventional paths (~/.pi/agent/skills/{name}/SKILL.md and project .pi/skills/).
+ * Fallback search order:
+ *   1. Extension-bundled skills (./skills/{name}/SKILL.md relative to extension root)
+ *   2. User-level (~/.pi/agent/skills/{name}/SKILL.md)
+ *   3. Project-level ({cwd}/.pi/skills/{name}/SKILL.md)
  *
  * The fallback ensures the extension works even when the session was started
  * before a skill was installed (Pi caches skills at session start).
@@ -11,6 +14,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Extension root: lib/ → ../ (where skills/ directory lives)
+const EXTENSION_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export class SkillResolver {
 	#skills: Array<{ name: string; filePath: string }> = [];
@@ -26,11 +33,15 @@ export class SkillResolver {
 
 	/**
 	 * Try to find skill file path via conventional paths when not in injected list.
-	 * Checks: user-level (~/.pi/agent/skills/) and project-level (.pi/skills/).
+	 * Search order: extension-bundled → user-level → project-level.
 	 */
 	#findFallbackPath(name: string): string | undefined {
 		const candidates = [
+			// 1. Extension-bundled skills (npm package or local dev)
+			path.join(EXTENSION_ROOT, "skills", name, "SKILL.md"),
+			// 2. User-level installed skills
 			path.join(os.homedir(), ".pi", "agent", "skills", name, "SKILL.md"),
+			// 3. Project-level skills
 			path.join(process.cwd(), ".pi", "skills", name, "SKILL.md"),
 		];
 		for (const candidate of candidates) {

@@ -292,23 +292,40 @@ export async function executeGateTool(hctx: HandlerContext, tctx: ToolExecuteCon
 		? formatUsageStats(reviewResult.result.usage, reviewResult.result.model)
 		: "";
 
-	const retrospectFollowUp = buildRetrospectFollowUp(phaseConfig, state.topicDir, skillResolver, phases);
+	// Build retrospect steer — failures here must not cause gate to return error
+	// since state is already persisted as passed.
+	let retrospectFollowUp = "";
+	try {
+		retrospectFollowUp = buildRetrospectFollowUp(phaseConfig, state.topicDir, skillResolver, phases);
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		console.warn(`[coding-workflow] Failed to build retrospect follow-up: ${msg}`);
+	}
+
+	const baseMessage = `Gate PASSED. Review: verdict=pass, must_fix=0.${usageLine ? ` ${usageLine}` : ""}`;
+	const retrospectInstruction = "\n\nIMPORTANT: Write the retrospect per the steer instructions, then call coding-workflow-phase-start() to proceed to the next phase.";
 
 	if (phase >= FINAL_PHASE) {
-		pi.sendUserMessage(
-			retrospectFollowUp + "\n\nThis is the final phase. After writing the retrospect, the workflow ends.",
-			{ deliverAs: "steer" },
-		);
+		try {
+			pi.sendUserMessage(
+				retrospectFollowUp + "\n\nThis is the final phase. After writing the retrospect, the workflow ends.",
+				{ deliverAs: "steer" },
+			);
+		} catch { /* steer delivery failure is non-critical */ void undefined; }
 		return {
-			content: [{ type: "text", text: `Gate PASSED. All deliverables verified.${usageLine ? ` ${usageLine}` : ""}\n\nWrite the retrospect per the steer instructions, then the workflow ends.` }],
+			content: [{ type: "text", text: `${baseMessage}\n\nWrite the retrospect per the steer instructions, then the workflow ends.` }],
 		};
 	}
 
-	pi.sendUserMessage(retrospectFollowUp, { deliverAs: "steer" });
+	try {
+		if (retrospectFollowUp) {
+			pi.sendUserMessage(retrospectFollowUp, { deliverAs: "steer" });
+		}
+	} catch { /* steer delivery failure is non-critical */ void undefined; }
 	return {
 		content: [{
 			type: "text",
-			text: `Gate PASSED. Review: verdict=pass, must_fix=0.${usageLine ? ` ${usageLine}` : ""}\n\nIMPORTANT: Write the retrospect per the steer instructions, then call coding-workflow-phase-start() to proceed to the next phase.`,
+			text: `${baseMessage}${retrospectInstruction}`,
 		}],
 	};
 }
