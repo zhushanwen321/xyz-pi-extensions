@@ -62,6 +62,12 @@ export interface AgentResult {
   success: boolean;
   /** Error description on failure. Undefined on success. */
   error?: string;
+  /**
+   * Pi session ID for the subagent process (uuidv7).
+   * Present when pi emits a session header (default in --mode json).
+   * Can be used to locate the session JSONL file for post-run inspection.
+   */
+  sessionId?: string;
 }
 
 export interface AgentUsage {
@@ -94,6 +100,8 @@ interface ParsedPipelineEvent {
   parsedOutput?: unknown;
   /** Whether any tool_execution_start event was seen (for schema failure detection). */
   hasToolCall?: boolean;
+  /** Session ID extracted from the first JSONL event (type=session header). */
+  sessionId?: string;
 }
 
 // ── Constants ─────────────────────────────────────────────────
@@ -276,10 +284,10 @@ export class AgentPool {
 
   /**
    * Build pi CLI arguments from call options.
-   * Always uses --mode json --print --no-session for one-shot execution.
+   * Always uses --mode json --print for one-shot execution.
    */
   private buildArgs(opts: AgentCallOpts): string[] {
-    const args: string[] = ["--mode", "json", "-p", "--no-session"];
+    const args: string[] = ["--mode", "json", "-p"];
 
     if (opts.model) {
       args.push("--model", opts.model);
@@ -385,6 +393,7 @@ export class AgentPool {
       durationMs,
       success: exitCode === 0,
       error: exitCode === 0 ? undefined : (stderr || `Exit code ${exitCode}`),
+      sessionId: pipeline.sessionId,
     };
   }
 }
@@ -397,6 +406,7 @@ function makeEmptyPipeline(): ParsedPipelineEvent {
   return {
     output: "",
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+    sessionId: undefined,
   };
 }
 
@@ -521,6 +531,14 @@ async function runPiProcess(
  * Mutates `pipeline` in place with O(1) memory overhead per event.
  */
 function processJsonlEvent(event: Record<string, unknown>, pipeline: ParsedPipelineEvent): void {
+  // First event in --mode json stdout: session header with ID for locating session JSONL
+  if (event.type === "session") {
+    if (typeof event.id === "string") {
+      pipeline.sessionId = event.id;
+    }
+    return;
+  }
+
   if (event.type === "tool_execution_start") {
     if (event.toolName === "structured-output") {
       pipeline.parsedOutput = event.args;
