@@ -26,14 +26,7 @@ import {
 	REQUIREMENT_EXCERPT_LENGTH,
 	type WorkflowState,
 } from "./lib/helpers.js";
-import { SkillResolver } from "./lib/skill-resolver.js";
 import {
-	type BeforeAgentStartEvent,
-	buildBeforeAgentStartMessage,
-	executeGateTool,
-	executeInitTool,
-	executePhaseStartTool,
-	type HandlerContext,
 	type RenderArgs,
 	renderGateCall,
 	renderInitCall,
@@ -42,6 +35,15 @@ import {
 	type RenderResultLike,
 	renderToolResult,
 	type ThemeLike,
+} from "./lib/render-helpers.js";
+import { SkillResolver } from "./lib/skill-resolver.js";
+import {
+	type BeforeAgentStartEvent,
+	buildBeforeAgentStartMessage,
+	executeGateTool,
+	executeInitTool,
+	executePhaseStartTool,
+	type HandlerContext,
 	type ToolExecuteContext,
 } from "./lib/tool-handlers.js";
 
