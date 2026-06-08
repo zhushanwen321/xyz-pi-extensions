@@ -25,6 +25,7 @@ import {
 	createVisionModelApi,
 	FORK_PREAMBLE,
 	VISION_ALLOWED_TOOLS,
+	VISION_MODELS_PATH,
 	VISION_SYSTEM_PROMPT,
 } from "./vision-model.js";
 
@@ -36,11 +37,6 @@ const FORK_ID_SLICE_END = 8;
 const MS_PER_SEC = 1000;
 const OUTPUT_PREVIEW_SLICE_LIMIT = 120;
 const TEXT_SPLIT_FIRST_N = 2;
-const EMPTY_MODEL_DETAILS: VisionDetails = {
-	mode: "vision",
-	resolvedModel: "",
-	context: "fresh",
-};
 const FORK_DEGRADED_WARNING = "\n[Warning: Fork session unavailable — fell back to fresh context.]";
 
 // ──────────────────────── Parameters ────────────────────────
@@ -69,7 +65,34 @@ interface VisionDetails {
 	durationMs?: number;
 }
 
-type VisionToolResult = AgentToolResult<VisionDetails> & { isError?: boolean };
+// ──────────────────────── Helpers ────────────────────────
+
+/** Filter stderr lines: skip known noise, keep meaningful error messages. */
+const STDERR_NOISE_PREFIXES = [
+	"[unified-hooks]",
+	"Use /login to log into",
+	"  /Users/",
+	"  pi-coding-agent/docs/",
+];
+
+function extractMeaningfulStderr(stderr: string): string {
+	return stderr
+		.split("\n")
+		.map((l) => l.trim())
+		.filter((l) => l && !STDERR_NOISE_PREFIXES.some((p) => l.startsWith(p)))
+		.join("\n");
+}
+
+const EXAMPLE_CONFIG = JSON.stringify({
+	models: [
+		{
+			id: "mimo-v2.5",
+			provider: "opencode-go-router",
+			order: 1,
+			thinkingLevel: "high",
+		},
+	],
+}, null, 2);
 
 /**
  * Copy parent session file to a temp location for fork context.
@@ -90,37 +113,19 @@ function createForkSessionFile(parentSessionFile: string): string | undefined {
 	}
 }
 
-// ──────────────────────── Execute helpers ────────────────────────
-
-/** Validate image path; returns either the resolved absolute path or an error result. */
+/** Validate image path; returns the resolved absolute path or throws. */
 function validateImagePath(
 	params: Static<typeof AnalyzeImageParams>,
 	cwd: string,
-): { ok: true; path: string } | { ok: false; result: VisionToolResult } {
+): string {
 	const absoluteImagePath = path.isAbsolute(params.image_path)
 		? params.image_path
 		: path.resolve(cwd, params.image_path);
 
 	if (!fs.existsSync(absoluteImagePath)) {
-		return {
-			ok: false,
-			result: {
-				content: [{ type: "text" as const, text: `Image file not found: ${absoluteImagePath}` }],
-				details: { ...EMPTY_MODEL_DETAILS },
-				isError: true,
-			},
-		};
+		throw new Error(`Image file not found: ${absoluteImagePath}`);
 	}
-	return { ok: true, path: absoluteImagePath };
-}
-
-/** Build the "no vision model configured" error result. */
-function buildMissingModelResult(error: string): VisionToolResult {
-	return {
-		content: [{ type: "text" as const, text: error }],
-		details: { ...EMPTY_MODEL_DETAILS },
-		isError: true,
-	};
+	return absoluteImagePath;
 }
 
 /** Resolve fork session file for `fork` mode, recording whether fallback occurred. */
@@ -169,23 +174,27 @@ function buildVisionDetails(
 	};
 }
 
-/** Build the final tool result (error or success) with optional degradation warning. */
+/** Check if a VisionResult indicates spawn-level failure (no model was ever reached). */
+function isSpawnFailure(result: VisionResult): boolean {
+	return result.exitCode !== 0
+		&& result.usage.turns === 0
+		&& result.messages.length === 0;
+}
+
+/** Build the final tool result on success, or throw on failure. */
 function buildVisionResult(
 	result: VisionResult,
 	details: VisionDetails,
 	degradation: string,
-): VisionToolResult {
+): AgentToolResult<VisionDetails> {
 	const isError = result.exitCode !== 0
 		|| result.stopReason === "error"
 		|| result.stopReason === "aborted";
 
 	if (isError) {
-		const errorMsg = result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
-		return {
-			content: [{ type: "text" as const, text: `Vision analysis failed: ${errorMsg}${degradation}` }],
-			details,
-			isError: true,
-		};
+		const rawErr = result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+		const cleanErr = extractMeaningfulStderr(rawErr);
+		throw new Error(`Vision analysis failed (${details.resolvedModel}): ${cleanErr || rawErr}${degradation}`);
 	}
 
 	return {
@@ -227,43 +236,60 @@ export default function visionExtension(pi: ExtensionAPI) {
 		async execute(_toolCallId: string, params: Static<typeof AnalyzeImageParams>, signal: AbortSignal | undefined, onUpdate: ((update: unknown) => void) | undefined, ctx: ExtensionContext) {
 			cleanupOldTempFiles();
 
-			const pathCheck = validateImagePath(params, ctx.cwd);
-			if (!pathCheck.ok) return pathCheck.result;
-			const absoluteImagePath = pathCheck.path;
+			const absoluteImagePath = validateImagePath(params, ctx.cwd);
 
-			const modelResult = visionModel.resolveVisionModelSync();
-			if (!modelResult.ok) return buildMissingModelResult(modelResult.error);
-			const resolvedModel = modelResult.ref;
-			const resolvedThinking = modelResult.thinkingLevel;
+			const candidates = visionModel.resolveVisionModelsSync();
+			if (candidates.length === 0) {
+				throw new Error(
+					`No vision models configured. Create ${VISION_MODELS_PATH} with model entries. Example:\n${EXAMPLE_CONFIG}`,
+				);
+			}
 
 			const contextMode: "fresh" | "fork" = params.context === "fork" ? "fork" : "fresh";
 			const { forkSessionFile, forkDegraded } = resolveForkContext(contextMode, ctx);
 
 			const effectiveContext: "fresh" | "fork" = contextMode === "fork" && !forkDegraded ? "fork" : "fresh";
-			const task = buildVisionTask(params.question, absoluteImagePath, effectiveContext);
-
-			const result = await runSingleVisionAgent({
-				task,
-				systemPrompt: VISION_SYSTEM_PROMPT,
-				resolvedModel,
-				thinkingLevel: resolvedThinking,
-				cwd: ctx.cwd,
-				tools: VISION_ALLOWED_TOOLS,
-				signal,
-				onUpdate: onUpdate as OnUpdateCallback | undefined,
-				forkSessionFile,
-			});
-
-			const details = buildVisionDetails(result, resolvedModel, effectiveContext);
 			const degradation = forkDegraded && contextMode === "fork" ? FORK_DEGRADED_WARNING : "";
-			return buildVisionResult(result, details, degradation);
+
+			// Try each candidate model in priority order until one succeeds
+			const errors: string[] = [];
+			for (const candidate of candidates) {
+				const task = buildVisionTask(params.question, absoluteImagePath, effectiveContext);
+				const result = await runSingleVisionAgent({
+					task,
+					systemPrompt: VISION_SYSTEM_PROMPT,
+					resolvedModel: candidate.ref,
+					thinkingLevel: candidate.thinkingLevel,
+					cwd: ctx.cwd,
+					tools: VISION_ALLOWED_TOOLS,
+					signal,
+					onUpdate: onUpdate as OnUpdateCallback | undefined,
+					forkSessionFile,
+				});
+
+				// Spawn failure (provider missing, auth error, etc.) — try next candidate
+				if (isSpawnFailure(result)) {
+					const cleanErr = extractMeaningfulStderr(result.stderr || "unknown error");
+					errors.push(`${candidate.ref}: ${cleanErr}`);
+					continue;
+				}
+
+				const details = buildVisionDetails(result, candidate.ref, effectiveContext);
+				return buildVisionResult(result, details, degradation);
+			}
+
+			// All candidates exhausted
+			throw new Error(
+				`All vision models failed:\n${errors.map((e) => `  - ${e}`).join("\n")}`,
+			);
 		},
 
 		renderCall(args: Record<string, unknown>, theme: Theme) {
 			const rawPath = args.image_path as string;
 			const home = os.homedir();
 			const shortPath = rawPath.startsWith(home) ? `~${rawPath.slice(home.length)}` : rawPath;
-			const modelDisplay = theme.fg("dim", ` ${visionModel.loadVisionModels()?.models?.[0]?.id ?? "vision"}`);
+			const resolvedModel = visionModel.resolveVisionModelsSync()[0]?.ref;
+			const modelDisplay = theme.fg("dim", ` ${resolvedModel ?? "vision"}`);
 			const ctxLabel = args.context === "fork" ? theme.fg("accent", " [fork]") : "";
 
 			return new Text(
@@ -272,15 +298,11 @@ export default function visionExtension(pi: ExtensionAPI) {
 			);
 		},
 
-		renderResult(result: { content: Array<{ type: string; text: string }>; details?: VisionDetails; isError?: boolean }, { expanded }: { expanded?: boolean }, theme: Theme) {
+		renderResult(result: { content: Array<{ type: string; text: string }>; details?: VisionDetails }, { expanded }: { expanded?: boolean }, theme: Theme) {
 			const text = result.content[0];
 			if (!text || text.type !== "text") return new Text("(no output)", 0, 0);
 
 			const details = result.details as VisionDetails | undefined;
-
-			if (result.isError) {
-				return new Text(theme.fg("error", `✗ analyze_image failed\n  ${text.text}`), 0, 0);
-			}
 
 			const lines: string[] = [];
 			const icon = theme.fg("success", "✓");
