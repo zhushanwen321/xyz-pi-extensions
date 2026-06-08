@@ -169,7 +169,7 @@ describe("AgentPool", () => {
       expect(result.error).toContain("structured output");
     });
 
-    it("extracts parsedOutput from tool_execution_start event", async () => {
+    it("extracts parsedOutput after successful tool_execution_end", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
       mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
@@ -181,15 +181,50 @@ describe("AgentPool", () => {
         toolName: "structured-output",
         args: { mustFix: true, issues: ["bug"] },
       });
+      const toolEndJsonl = JSON.stringify({
+        type: "tool_execution_end",
+        toolCallId: "tc-1",
+        toolName: "structured-output",
+        isError: false,
+      });
       const msgEndJsonl = messageEndJsonl("", { input: 10, output: 5 });
 
       const resultPromise = pool.enqueue({ prompt: "check issues", schema });
-      proc.stdout.emit("data", Buffer.from(toolStartJsonl + "\n" + msgEndJsonl + "\n"));
+      proc.stdout.emit("data", Buffer.from(toolStartJsonl + "\n" + toolEndJsonl + "\n" + msgEndJsonl + "\n"));
       proc.emit("close", 0);
 
       const result = await resultPromise;
       expect(result.success).toBe(true);
       expect(result.parsedOutput).toEqual({ mustFix: true, issues: ["bug"] });
+    });
+
+    it("does not capture parsedOutput when tool_execution_end has error", async () => {
+      const pool = new AgentPool(2);
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+
+      const schema = { type: "object", properties: { mustFix: { type: "boolean" } } };
+      const toolStartJsonl = JSON.stringify({
+        type: "tool_execution_start",
+        toolCallId: "tc-1",
+        toolName: "structured-output",
+        args: { mustFix: true, issues: ["bug"] },
+      });
+      const toolEndJsonl = JSON.stringify({
+        type: "tool_execution_end",
+        toolCallId: "tc-1",
+        toolName: "structured-output",
+        isError: true,
+      });
+      const msgEndJsonl = messageEndJsonl("", { input: 10, output: 5 });
+
+      const resultPromise = pool.enqueue({ prompt: "check issues", schema });
+      proc.stdout.emit("data", Buffer.from(toolStartJsonl + "\n" + toolEndJsonl + "\n" + msgEndJsonl + "\n"));
+      proc.emit("close", 0);
+
+      const result = await resultPromise;
+      // Validation failed — parsedOutput should NOT be captured
+      expect(result.parsedOutput).toBeUndefined();
     });
 
     it("ignores tool_execution_start for other tools", async () => {
