@@ -9,11 +9,10 @@ import * as fs from "node:fs";
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-import { getReviewGateStatePath } from "../helpers.js";
 // fallow-ignore-file — implements Gate interface members consumed via polymorphism
-
-import { runReviewGateLoop, type ReviewGateResult } from "../review-gate-impl.js";
 import type { Gate, GateContext, GateResult } from "./gate.js";
+import { getReviewGateStatePath } from "../helpers.js";
+import { runReviewGateLoop, type ReviewGateResult } from "../review-gate-impl.js";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -49,6 +48,14 @@ export class TestFixLoopGate implements Gate {
 
   /** Test-Fix Loop workflow timeout: 15 minutes (test-fix cycles may be long). */
   private static readonly WORKFLOW_TIMEOUT_MS = 15 * 60_000;
+  /** Maximum test-fix rounds. */
+  private static readonly MAX_ROUNDS = 10;
+  /** Stagnation threshold: rounds without failed count decrease. */
+  private static readonly MAX_STAGNATION = 3;
+  /** Phase number for state file naming. */
+  private static readonly STATE_PHASE = 4;
+  /** JSON.stringify indentation. */
+  private static readonly JSON_INDENT = 2;
 
   async run(ctx: GateContext): Promise<GateResult> {
     const workflowRun = this.getWorkflowRun(ctx.pi);
@@ -166,18 +173,18 @@ export class TestFixLoopGate implements Gate {
     return {
       topicDir: ctx.topicDir,
       phase: ctx.phase,
-      maxRounds: 10,
-      maxStagnation: 3,
+      maxRounds: TestFixLoopGate.MAX_ROUNDS,
+      maxStagnation: TestFixLoopGate.MAX_STAGNATION,
     };
   }
 
   /** Write .review-gate-p4.json state file for post-hoc inspection. */
   private async persistState(topicDir: string, data: WorkflowTestFixResult): Promise<void> {
-    const statePath = getReviewGateStatePath(topicDir, 4);
+    const statePath = getReviewGateStatePath(topicDir, TestFixLoopGate.STATE_PHASE);
     try {
-      await fs.promises.writeFile(statePath, JSON.stringify(data, null, 2));
-    } catch {
-      // State persistence failure is non-critical
+      await fs.promises.writeFile(statePath, JSON.stringify(data, null, TestFixLoopGate.JSON_INDENT));
+    } catch (err) {
+      console.error(`[coding-workflow] Failed to persist test-fix-loop state to ${statePath}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }

@@ -92,7 +92,10 @@ function buildContextSummary(
 			if (preview) {
 				summaries.push(`### ${deliverable}\n${preview}...`);
 			}
-		} catch { /* skip unreadable files */ }
+		} catch {
+			// File may not exist or be unreadable — skip without failing
+			void undefined;
+		}
 	}
 
 	return summaries.join("\n\n");

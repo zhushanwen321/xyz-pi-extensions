@@ -11,9 +11,9 @@ import * as path from "node:path";
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
+import type { Gate, GateContext, GateResult } from "./gate.js";
 import { getReviewGateStatePath } from "../helpers.js";
 import { runReviewGateLoop, type ReviewGateResult } from "../review-gate-impl.js";
-import type { Gate, GateContext, GateResult } from "./gate.js";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -48,6 +48,14 @@ export class ReviewGate implements Gate {
 
 	/** Review-Gate workflow timeout: 15 minutes (longer reviews need more time). */
 	private static readonly WORKFLOW_TIMEOUT_MS = 15 * 60_000;
+	/** Maximum rounds for review-gate loop. */
+	private static readonly MAX_ROUNDS = 3;
+	/** Phase 2 complexity routing. */
+	private static readonly COMPLEXITY_ROUTING_PHASE = 2;
+	/** Stagnation threshold: rounds without must_fix decrease. */
+	private static readonly STAGNATION_THRESHOLD = 2;
+	/** JSON.stringify indentation. */
+	private static readonly JSON_INDENT = 2;
 
 	async run(ctx: GateContext): Promise<GateResult> {
 		const workflowRun = this.getWorkflowRun(ctx.pi);
@@ -87,7 +95,7 @@ export class ReviewGate implements Gate {
 
 		if (!data.passed) {
 			const reason = data.stagnation
-				? `Stagnation: must_fix did not decrease for 2 consecutive rounds (last=${data.lastMustFix}).`
+				? `Stagnation: must_fix did not decrease for ${ReviewGate.STAGNATION_THRESHOLD} consecutive rounds (last=${data.lastMustFix}).`
 				: data.maxRounds
 					? `Max rounds (${data.rounds}) reached (last must_fix=${data.lastMustFix}).`
 					: `Failed after ${data.rounds} rounds (last must_fix=${data.lastMustFix}).`;
@@ -166,11 +174,11 @@ export class ReviewGate implements Gate {
 		const args: Record<string, unknown> = {
 			topicDir: ctx.topicDir,
 			phase: ctx.phase,
-			maxRounds: 3,
+			maxRounds: ReviewGate.MAX_ROUNDS,
 		};
 
 		// Phase 2: pass complexity for L1/L2 routing
-		if (ctx.phase === 2) {
+		if (ctx.phase === ReviewGate.COMPLEXITY_ROUTING_PHASE) {
 			args.complexity = this.resolveComplexity(ctx.topicDir);
 		}
 
@@ -193,10 +201,9 @@ export class ReviewGate implements Gate {
 	private async persistState(topicDir: string, phase: number, data: WorkflowReviewResult): Promise<void> {
 		const statePath = getReviewGateStatePath(topicDir, phase);
 		try {
-			await fs.promises.writeFile(statePath, JSON.stringify(data, null, 2));
+			await fs.promises.writeFile(statePath, JSON.stringify(data, null, ReviewGate.JSON_INDENT));
 		} catch (err) {
-			// State persistence failure is non-critical but worth logging
-			console.warn(`[coding-workflow] Failed to persist review-gate state to ${statePath}: ${err instanceof Error ? err.message : String(err)}`);
+			console.error(`[coding-workflow] Failed to persist review-gate state to ${statePath}: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 }
