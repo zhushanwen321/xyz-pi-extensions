@@ -1,5 +1,13 @@
 # @zhushanwen/pi-workflow
 
+## 0.2.1
+
+### Patch Changes
+
+- Fix parsedOutput capture: two-phase validation (tool_execution_start stash + tool_execution_end confirm)
+- Updated dependencies
+  - @zhushanwen/pi-structured-output@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes
