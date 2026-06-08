@@ -31,6 +31,7 @@ import {
   type WorkflowStatus,
 } from "./state.js";
 import { buildWorkerScript } from "./worker-script.js";
+import { checkBudget, scheduleTimeBudgetCheck } from "./orchestrator-budget.js";
 
 // ── Public types ──────────────────────────────────────────────
 
@@ -93,7 +94,6 @@ const RUNID_SLICE_START = 2;
 const RUNID_SLICE_LENGTH = 8;
 const PROMPT_PREVIEW_LENGTH = 200;
 const EXPONENTIAL_BACKOFF_BASE = 2;
-const BUDGET_WARNING_THRESHOLD = 0.9;
 
 // P1-5: Stale context detection — matches patterns reported when
 // pi's session context was compacted or canceled between agent calls.
@@ -285,7 +285,18 @@ export class WorkflowOrchestrator {
     this.startWorker(runId, instance, scriptSource, args);
 
     if (budgetTimeMs) {
-      this.scheduleTimeBudgetCheck(runId, budgetTimeMs);
+      scheduleTimeBudgetCheck(
+        (id) => this.instances.get(id),
+        runId,
+        budgetTimeMs,
+        {
+          postMessage: (id, msg) => this.postMessage(id, msg),
+          terminateWorker: (id) => this.terminateWorker(id),
+          cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
+          persistState: () => this.persistState(),
+          onCompletion: (id) => this.onCompletion?.(id),
+        },
+      );
     }
 
     return runId;
@@ -345,7 +356,18 @@ export class WorkflowOrchestrator {
 
       // P1-6: Re-schedule time budget check after resume
       if (meta.budgetTimeMs) {
-        this.scheduleTimeBudgetCheck(runId, meta.budgetTimeMs);
+        scheduleTimeBudgetCheck(
+          (id) => this.instances.get(id),
+          runId,
+          meta.budgetTimeMs,
+          {
+            postMessage: (id, msg) => this.postMessage(id, msg),
+            terminateWorker: (id) => this.terminateWorker(id),
+            cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
+            persistState: () => this.persistState(),
+            onCompletion: (id) => this.onCompletion?.(id),
+          },
+        );
       }
     }
     // State-machine-only instances (no runMeta): just transition status
@@ -802,7 +824,13 @@ export class WorkflowOrchestrator {
       }
 
       // Enforce budget limits
-      await this.checkBudget(runId);
+      await checkBudget(this.instances.get(runId), runId, {
+        postMessage: (id, msg) => this.postMessage(id, msg),
+        terminateWorker: (id) => this.terminateWorker(id),
+        cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
+        persistState: () => this.persistState(),
+        onCompletion: (id) => this.onCompletion?.(id),
+      });
 
       await this.persistState();
       this.onTraceUpdate?.(runId);
@@ -893,84 +921,6 @@ export class WorkflowOrchestrator {
       await this.persistState();
       this.onCompletion?.(runId);
     }
-  }
-
-  // ── Budget enforcement ──────────────────────────────────────
-
-  /**
-   * Check token and cost budgets. If exceeded, send a budget-warning
-   * to the Worker, terminate it, and mark the instance as
-   * budget_limited (terminal).
-   */
-  private async checkBudget(runId: string): Promise<void> {
-    const instance = this.instances.get(runId);
-    if (!instance || isTerminal(instance.status)) return;
-
-    const b = instance.budget;
-    let exceeded = false;
-    let reason = "";
-
-    if (b.maxTokens !== undefined && b.usedTokens >= b.maxTokens) {
-      exceeded = true;
-      reason = `Token budget exceeded: ${b.usedTokens} >= ${b.maxTokens}`;
-    } else if (b.maxCost !== undefined && b.usedCost >= b.maxCost) {
-      exceeded = true;
-      reason = `Cost budget exceeded: ${b.usedCost} >= ${b.maxCost}`;
-    }
-
-    // Send warning at 90% threshold (only once)
-    if (!exceeded && !b._budgetWarningSent && b.maxTokens !== undefined && b.usedTokens >= b.maxTokens * BUDGET_WARNING_THRESHOLD) {
-      b._budgetWarningSent = true;
-      this.postMessage(runId, {
-        type: "budget-warning",
-        budget: b,
-        reason: `Token budget warning: ${b.usedTokens} >= ${Math.floor(b.maxTokens * BUDGET_WARNING_THRESHOLD)} (90%)`,
-      });
-    }
-
-    if (exceeded) {
-      this.postMessage(runId, { type: "budget-warning", budget: b, reason });
-      this.terminateWorker(runId);
-      // Cleanup in-flight agent temp files that were killed mid-flight.
-      this.cleanupAllTempFiles();
-
-      instance.error = reason;
-      instance.completedAt = new Date().toISOString();
-      transitionStatus(instance, "budget_limited");
-      await this.persistState();
-      this.onCompletion?.(runId);
-    }
-  }
-
-  /**
-   * Schedule a one-shot time budget check. Fires after maxTimeMs
-   * and marks the instance as time_limited if still running.
-   */
-  private scheduleTimeBudgetCheck(runId: string, maxTimeMs: number): void {
-    const timer = setTimeout(async () => {
-      const instance = this.instances.get(runId);
-      if (!instance || isTerminal(instance.status) || instance.status !== "running") return;
-      if (!instance.startedAt) return;
-
-      const elapsed = Date.now() - new Date(instance.startedAt).getTime();
-      if (elapsed >= maxTimeMs) {
-        this.postMessage(runId, {
-          type: "budget-warning",
-          budget: instance.budget,
-          reason: `Time budget exceeded: ${elapsed}ms >= ${maxTimeMs}ms`,
-        });
-        this.terminateWorker(runId);
-        // Cleanup in-flight agent temp files that were killed mid-flight.
-        this.cleanupAllTempFiles();
-
-        instance.error = `Time budget exceeded: ${elapsed}ms >= ${maxTimeMs}ms`;
-        instance.completedAt = new Date().toISOString();
-        transitionStatus(instance, "time_limited");
-        await this.persistState();
-        this.onCompletion?.(runId);
-      }
-    }, maxTimeMs);
-    timer.unref();
   }
 
   // ── Persistence ─────────────────────────────────────────────

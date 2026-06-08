@@ -1,0 +1,19 @@
+{
+  "name": "@zhushanwen/pi-coding-workflow-v2",
+  "version": "0.2.0",
+  "description": "Coding workflow orchestration with Workflow Extension integration",
+  "main": "src/index.ts",
+  "type": "module",
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "keywords": ["pi-package", "coding-workflow", "phase-orchestration"],
+  "dependencies": {
+    "typebox": "^0.34.0"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": ">=0.1.0",
+    "@earendil-works/pi-tui": "*",
+    "@zhushanwen/pi-workflow": "*"
+  }
+}
