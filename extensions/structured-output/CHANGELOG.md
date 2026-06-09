@@ -1,5 +1,11 @@
 # @zhushanwen/pi-structured-output
 
+## 0.2.2
+
+### Patch Changes
+
+- Fix pi.extensions path: ./src/index.ts → ./index.ts
+
 ## 0.2.1
 
 ### Patch Changes
