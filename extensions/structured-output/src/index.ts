@@ -38,24 +38,29 @@ export default function structuredOutputExtension(pi: PiAPI): void {
 		label: "Structured Output",
 		description:
 			"Return structured output validated against a JSON Schema. "
-			+ "Call this tool when you need to produce structured data (JSON). "
-			+ "Pass the `schema` (JSON Schema object) and `data` (the value to validate). "
-			+ "The tool validates `data` against `schema` and returns it on success.",
+			+ "Call this tool to produce validated JSON data. "
+			+ "Pass `schema` (a JSON Schema draft-07 object) and `data` (the value to validate).\n\n"
+			+ "✅ Correct: schema={type:'object',properties:{name:{type:'string'},age:{type:'number'}},required:['name']}, data={name:'Alice',age:30}\n"
+			+ "✅ Correct: schema={type:'array',items:{type:'string'}}, data=['a','b','c']\n"
+			+ "✅ Correct: schema={type:'string',enum:['low','medium','high']}, data='medium'\n\n"
+			+ "❌ Wrong: putting the answer in text instead of calling this tool\n"
+			+ "❌ Wrong: data not matching schema (e.g. schema requires number but data is string)\n"
+			+ "❌ Wrong: schema={type:'object'} with data='hello' (string ≠ object)",
 		promptSnippet:
 			"Use structured-output to return validated JSON data. "
-			+ "Pass schema (JSON Schema) and data (your output). "
-			+ "Workflow scripts: always use this tool instead of raw JSON in text.",
+			+ "Pass schema (JSON Schema draft-07) and data (your output). "
+			+ "Example: {schema:{type:'object',properties:{score:{type:'number'}},required:['score']}, data:{score:8}}",
 		promptGuidelines: [
-			"Pass a valid JSON Schema in the `schema` parameter.",
-			"Pass the data to validate in the `data` parameter.",
-			"Do not output JSON in text — use this tool instead.",
+			"schema must be a valid JSON Schema (draft-07). data must conform to it.",
+			"Both primitive types (string, number, boolean) and complex types (object, array) are valid schema roots.",
+			"Do not output JSON in text — call this tool instead.",
 		],
 		parameters: Type.Object({
-			schema: Type.Object({}, {
-				description: "JSON Schema object that `data` must conform to",
+			schema: Type.Any({
+				description: "JSON Schema draft-07 object. Example: {type:'object',properties:{name:{type:'string'}},required:['name']}",
 			}),
 			data: Type.Any({
-				description: "The value to validate against `schema`",
+				description: "The value to validate against schema. Example: {name:'Alice'}",
 			}),
 		}),
 		async execute(

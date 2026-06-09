@@ -1,5 +1,11 @@
 # @zhushanwen/pi-structured-output
 
+## 0.3.1
+
+### Patch Changes
+
+- Add positive/negative examples to tool description; fix schema param type to accept any JSON Schema shape
+
 ## 0.3.0
 
 ### Minor Changes

@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-structured-output",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Structured output tool for Pi — enforces JSON Schema via tool call mechanism with Ajv validation",
   "type": "module",
   "main": "index.ts",
