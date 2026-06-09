@@ -29,7 +29,7 @@ describe("buildWorkerScript", () => {
   });
 
   it("注入 pipeline() 函数定义", () => {
-    expect(result).toContain("async function pipeline(stages)");
+    expect(result).toContain("async function pipeline(firstArg, ...restStages)");
   });
 
   it("注入 $ARGS / $WORKSPACE / $BUDGET 常量", () => {
