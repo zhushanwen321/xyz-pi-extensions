@@ -18,25 +18,25 @@ import { getCachePath, getSpeedDir } from "./paths.js";
 // registry.ts 内部 import PROVIDERS，此处不直接引用。
 import { buildRuntimeProviders } from "./registry.js";
 import { avgSpeed, type SpeedRecord } from "./speed.js";
-import { MIN_PER_HOUR, MS_PER_SEC, SEC_PER_DAY,SEC_PER_MIN } from "./time.js";
+import { MIN_PER_HOUR, MS_PER_SEC, SEC_PER_DAY, SEC_PER_MIN } from "./time.js";
 
 const DAY_MS = SEC_PER_DAY * MS_PER_SEC;
 
 // ── 缓存 / 统计常量 ─────────────────────────────────────
 
-/** 套餐用量刷新间隔（5 分钟） */
-const TTL_MINUTES = 5;
+/** 套餐用量刷新间隔（2 分钟） */
+const TTL_MINUTES = 2;
 const CACHE_TTL_MS = TTL_MINUTES * MIN_PER_HOUR * SEC_PER_MIN * MS_PER_SEC;
 /** cache JSON 写入的 pretty-print indent */
 const JSON_INDENT = 2;
-/** SpeedRecord 元组长度（[tokens, duration]） */
-const SPEED_RECORD_FIELDS = 2;
-/** 触发节流：实际请求频率不低于 TTL/2 */
-const TTL_THROTTLE_DIVISOR = 2;
 /** token 速度统计保留天数 */
 const SPEED_RETENTION_DAYS = 30;
 /** token 速度统计窗口（最近 7 天） */
 const SPEED_D7_DAYS = 7;
+/** ISO date 字符串长度（YYYY-MM-DD） */
+const DATE_STR_LEN = 10;
+/** 每日记录的最小元组长度 */
+const RECORD_MIN_FIELDS = 2;
 
 // ── Paths ──────────────────────────────────────────────
 
@@ -60,6 +60,14 @@ export interface SpeedData {
 	d30: number;
 }
 
+/** 缓存命中率数据 */
+export interface CacheRatioData {
+	/** 当前请求命中率 (0~100)，无缓存信息时为 null */
+	current: number | null;
+	/** 当天加权平均命中率 (0~100)，无数据时为 null */
+	day: number | null;
+}
+
 // ── Cache 公共 API ─────────────────────────────────────
 
 export function readCache(): CacheData {
@@ -73,8 +81,7 @@ let lastUpdateAt = 0; // 上次实际发起网络请求的时间
 
 export function triggerUpdate(): void {
 	if (updating) return;
-	// 距上次实际请求不足 TTL 一半时跳过，避免 message_end 高频触发
-	if (Date.now() - lastUpdateAt < CACHE_TTL_MS / TTL_THROTTLE_DIVISOR) return;
+	if (Date.now() - lastUpdateAt < CACHE_TTL_MS) return;
 	updating = true;
 	lastUpdateAt = Date.now();
 	doUpdate()
@@ -128,6 +135,63 @@ function readCacheSync(): CacheData {
 	}
 }
 
+// ── 持久化工具 ───────────────────────────────────────
+
+/**
+ * 读取、追加、清理、写回按日期分组的记录文件。
+ *
+ * trackSpeed 和 trackCacheRatio 共享的
+ * "读 JSON → filter → append → GC → write" 模式。
+ */
+function persistDailyRecord<T extends unknown[]>(
+	dir: string,
+	filePath: string,
+	record: T,
+	recordName: string,
+): Record<string, T[]> {
+	const today = new Date().toISOString().slice(0, DATE_STR_LEN);
+	const records: Record<string, T[]> = {};
+
+	// 读取已有数据
+	try {
+		if (existsSync(filePath)) {
+			const raw = JSON.parse(readFileSync(filePath, "utf-8"));
+			for (const [date, entries] of Object.entries(raw as Record<string, unknown>)) {
+				if (!Array.isArray(entries)) continue;
+				records[date] = entries.filter(
+					(e): e is T => Array.isArray(e) && e.length >= RECORD_MIN_FIELDS,
+				);
+			}
+		}
+	// eslint-disable-next-line taste/no-silent-catch -- 文件损坏属于容错路径：fallback 到空 records
+	} catch (e) {
+		console.warn(`[statusline] ${recordName} record read failed (using empty):`, e);
+	}
+
+	// 追加今日记录
+	if (!records[today]) records[today] = [];
+	records[today].push(record);
+
+	// 清理过期数据
+	const cutoff = new Date(Date.now() - SPEED_RETENTION_DAYS * DAY_MS)
+		.toISOString()
+		.slice(0, DATE_STR_LEN);
+	for (const d of Object.keys(records)) {
+		if (d < cutoff) delete records[d];
+	}
+
+	// 写回
+	try {
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(filePath, JSON.stringify(records));
+	// eslint-disable-next-line taste/no-silent-catch -- 写入失败属于容错路径
+	} catch (e) {
+		console.warn(`[statusline] ${recordName} record write failed:`, e);
+	}
+
+	return records;
+}
+
 // ── Token Speed（与 provider 无关，保留在此）──────────────
 
 // 每条记录存储 [outputTokens, durationMs]，用于正确计算加权平均速度
@@ -144,47 +208,11 @@ export function trackSpeed(
 
 	const safeName = model.replace(/[/\\\s:]/g, "_");
 	const filePath = join(SPEED_DIR, `${safeName}.json`);
+
+	const records = persistDailyRecord(
+		SPEED_DIR, filePath, [outputTokens, durationMs] as SpeedRecord, "speed",
+	);
 	const today = new Date().toISOString().slice(0, DATE_STR_LEN);
-
-	const records: Record<string, SpeedRecord[]> = {};
-	try {
-		if (existsSync(filePath)) {
-			const raw = JSON.parse(readFileSync(filePath, "utf-8"));
-			for (const [date, entries] of Object.entries(raw)) {
-				// 跳过旧格式（number[]）或混合格式
-				if (!Array.isArray(entries)) continue;
-				if (entries.length > 0 && !Array.isArray(entries[0])) continue;
-				// 过滤掉同日期内混入的旧格式纯数字
-				records[date] = entries.filter(
-					(e): e is SpeedRecord => Array.isArray(e) && e.length >= SPEED_RECORD_FIELDS,
-				);
-			}
-		}
-	// eslint-disable-next-line taste/no-silent-catch -- 速度文件损坏属于容错路径：fallback 到空 records，重新积累
-	} catch (e) {
-		console.warn(`[statusline] speed record read failed (using empty):`, e);
-	}
-
-	if (!records[today]) records[today] = [];
-	records[today].push([outputTokens, durationMs]);
-
-	// 清理过期数据
-	const cutoff = new Date(Date.now() - SPEED_RETENTION_DAYS * DAY_MS)
-		.toISOString()
-		.slice(0, DATE_STR_LEN);
-	for (const d of Object.keys(records)) {
-		if (d < cutoff) delete records[d];
-	}
-
-	try {
-		mkdirSync(SPEED_DIR, { recursive: true });
-		writeFileSync(filePath, JSON.stringify(records));
-	// eslint-disable-next-line taste/no-silent-catch -- 速度文件写失败属于容错路径：本次速度不持久化，下次 trackSpeed 重新记录
-	} catch (e) {
-		console.warn(`[statusline] speed record write failed:`, e);
-	}
-
-// avgSpeed 已移至 speed.ts，此处通过 import 使用
 
 	const dayEntries: SpeedRecord[] = [];
 	const d7Entries: SpeedRecord[] = [];
@@ -209,5 +237,49 @@ export function trackSpeed(
 	};
 }
 
-/** ISO date 字符串长度（YYYY-MM-DD） */
-const DATE_STR_LEN = 10;
+// ── Cache Ratio ─────────────────────────────────────────
+
+const PERCENT_SCALE = 100;
+
+/** 缓存命中率记录：[cacheRead, promptTotal=input+cacheRead+cacheWrite] */
+type CacheRatioRecord = [number, number];
+
+/** 缓存命中率统计目录 */
+const CACHE_RATIO_DIR = join(getAgentDir(), "cache-ratio");
+
+export function trackCacheRatio(
+	usage: { input: number; cacheRead: number; cacheWrite: number },
+	model: string,
+): CacheRatioData {
+	const { input, cacheRead, cacheWrite } = usage;
+	const promptTotal = input + cacheRead + cacheWrite;
+
+	// 无缓存信息时直接返回 null
+	if (promptTotal <= 0) return { current: null, day: null };
+
+	const current = Math.round((cacheRead / promptTotal) * PERCENT_SCALE);
+
+	if (!model) return { current, day: null };
+
+	const safeName = model.replace(/[/\\\s:]/g, "_");
+	const filePath = join(CACHE_RATIO_DIR, `${safeName}.json`);
+
+	const records = persistDailyRecord(
+		CACHE_RATIO_DIR, filePath, [cacheRead, promptTotal] as CacheRatioRecord, "cache-ratio",
+	);
+	const today = new Date().toISOString().slice(0, DATE_STR_LEN);
+
+	// 计算当天加权平均命中率
+	const dayEntries = records[today] ?? [];
+	let sumRead = 0;
+	let sumTotal = 0;
+	for (const [r, t] of dayEntries) {
+		sumRead += r;
+		sumTotal += t;
+	}
+	const day = sumTotal > 0 ? Math.round((sumRead / sumTotal) * PERCENT_SCALE) : null;
+
+	return { current, day };
+}
+
+// avgSpeed 已移至 speed.ts，此处通过 import 使用

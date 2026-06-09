@@ -4,7 +4,7 @@
  * 所有类型和函数从子模块重新导出。
  */
 
-export { type CacheData, readCache, type SpeedData,trackSpeed, triggerUpdate } from "./cache.js";
+export { type CacheData, type CacheRatioData, readCache, type SpeedData,trackCacheRatio, trackSpeed, triggerUpdate } from "./cache.js";
 export { loadProvidersConfig, type ProviderDecl,type ProvidersConfig } from "./config.js";
 export { getCachePath, getConfigDir, getProvidersConfigPath, getSecretsPath, getSpeedDir, resolveEnvRef } from "./paths.js";
 export { providerById,PROVIDERS } from "./providers/index.js";

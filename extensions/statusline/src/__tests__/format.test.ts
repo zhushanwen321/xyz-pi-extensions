@@ -17,6 +17,7 @@ import {
 	fmtDuration,
 	fmtResetSec,
 	fmtTokens,
+	formatCacheRatioPart,
 	formatSpeedPart,
 	formatWinCol,
 	normalizeRows,
@@ -605,5 +606,29 @@ describe("formatSpeedPart", () => {
 
 	it("负数不显示", () => {
 		expect(formatSpeedPart({ current: -1, day: -1 }, plainPallet)).toBe("");
+	});
+});
+
+// 8. formatCacheRatioPart — buildLine2 缓存命中率部分
+// ════════════════════════════════════════════════════════
+
+describe("formatCacheRatioPart", () => {
+	it("current + day 都有", () => {
+		const result = formatCacheRatioPart({ current: 85, day: 72 }, plainPallet);
+		expect(result).toBe("│ cache 85% · day 72%");
+	});
+
+	it("只有 current", () => {
+		const result = formatCacheRatioPart({ current: 50, day: null }, plainPallet);
+		expect(result).toBe("│ cache 50%");
+	});
+
+	it("只有 day", () => {
+		const result = formatCacheRatioPart({ current: null, day: 30 }, plainPallet);
+		expect(result).toBe("│ cache day 30%");
+	});
+
+	it("都为 null 时返回空串", () => {
+		expect(formatCacheRatioPart({ current: null, day: null }, plainPallet)).toBe("");
 	});
 });
