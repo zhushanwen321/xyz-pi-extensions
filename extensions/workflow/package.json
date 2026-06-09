@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-workflow",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Multi-agent workflow orchestration for Pi — stateful workflow management with persistence, state machine, and execution tracing.",
   "type": "module",
   "main": "index.ts",
@@ -32,7 +32,7 @@
     "@mariozechner/pi-ai": "*",
     "@sinclair/typebox": "*",
     "@zhushanwen/pi-model-switch": "*",
-    "@zhushanwen/pi-structured-output": "workspace:*"
+    "@zhushanwen/pi-structured-output": "*"
   },
   "peerDependenciesMeta": {
     "@mariozechner/pi-tui": {

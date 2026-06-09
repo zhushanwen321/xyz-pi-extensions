@@ -1,5 +1,11 @@
 # @zhushanwen/pi-workflow
 
+## 0.3.2
+
+### Patch Changes
+
+- Fix structured-output peerDep version range: workspace:_ → _
+
 ## 0.3.1
 
 ### Patch Changes
