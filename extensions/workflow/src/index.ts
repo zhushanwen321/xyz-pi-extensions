@@ -283,9 +283,7 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
     const orch = orchestrators.get(sessionId);
     if (orch) {
       const running = orch.list().filter((s) => s.status === "running");
-      for (const inst of running) {
-        orch.pause(inst.runId);
-      }
+      await Promise.allSettled(running.map((inst) => orch.pause(inst.runId)));
     }
     orchestrators.delete(sessionId);
   });
@@ -379,9 +377,9 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
             instance.error = params.error as string;
           }
           try {
-            if (action === "pause") orch.pause(runId);
-            else if (action === "resume") orch.resume(runId);
-            else orch.abort(runId);
+            if (action === "pause") await orch.pause(runId);
+            else if (action === "resume") await orch.resume(runId);
+            else await orch.abort(runId);
 
             const summaries = orch.list();
             return {
@@ -397,10 +395,32 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
             };
           // eslint-disable-next-line taste/no-silent-catch
           } catch {
-            // Orchestrator method failed — fall through to direct state machine
+            // Orchestrator method failed — fall through to idempotent check or direct state machine
           }
 
-          // Fallback: direct state machine transition if orchestrator fails
+          // Idempotent: if the workflow is already in the target state (or a terminal state for abort),
+          // return success instead of attempting an invalid state transition.
+          if (
+            instance.status === targetStatus ||
+            (action === "abort" && isTerminal(instance.status)) ||
+            (action === "pause" && instance.status !== "running") ||
+            (action === "resume" && instance.status !== "paused")
+          ) {
+            const summaries = orch.list();
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Workflow '${instance.name}' (${runId}): already ${instance.status}`,
+              }],
+              details: {
+                action,
+                instances: summaries.map(toInstanceSummary),
+                _render: buildRender(summaries),
+              } satisfies WorkflowDetails,
+            };
+          }
+
+          // Last resort: direct state machine transition (e.g. orchestrator in inconsistent state)
           try {
             const oldStatus = instance.status;
             transitionStatus(instance, targetStatus);
@@ -416,7 +436,7 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
               }
             }
 
-            orch.persistState();
+            await orch.persistState();
 
             const summaries = orch.list();
             return {
