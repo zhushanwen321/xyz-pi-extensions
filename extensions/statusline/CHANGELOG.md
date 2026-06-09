@@ -1,5 +1,13 @@
 # @zhushanwen/pi-statusline
 
+## 0.4.7
+
+### Patch Changes
+
+- 00fb8bd: Add cache hit ratio display and session name to statusline
+- Updated dependencies [00fb8bd]
+  - @zhushanwen/pi-quota-providers@0.5.1
+
 ## 0.4.6
 
 ### Patch Changes
