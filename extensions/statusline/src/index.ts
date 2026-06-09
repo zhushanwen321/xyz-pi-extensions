@@ -19,8 +19,10 @@ import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider, Theme 
 import { truncateToWidth } from "@mariozechner/pi-tui";
 import {
 	buildRuntimeProviders,
+	type CacheRatioData,
 	readCache,
 	type SpeedData,
+	trackCacheRatio,
 	trackSpeed,
 	triggerUpdate,
 } from "@zhushanwen/pi-quota-providers";
@@ -31,6 +33,7 @@ import {
 	fmtCount,
 	fmtDuration,
 	fmtTokens,
+	formatCacheRatioPart,
 	formatSpeedPart,
 	MIN_PAD,
 	MS_PER_SEC,
@@ -133,6 +136,7 @@ interface StatuslineRuntimeState {
 	lastLlmTime: number;
 	assistantStart: number;
 	speed: SpeedData;
+	cacheRatio: CacheRatioData;
 	lastRunUpdate: number;
 	isAgentBusy: boolean;
 	thinkingLevel: string;
@@ -142,6 +146,7 @@ interface StatuslineRuntimeState {
 	usedPct: number;
 	contextTokens: number;
 	contextWindow: number;
+	sessionName: string | undefined;
 }
 
 function makeInitialState(): StatuslineRuntimeState {
@@ -150,6 +155,7 @@ function makeInitialState(): StatuslineRuntimeState {
 		lastLlmTime: 0,
 		assistantStart: 0,
 		speed: { current: 0, day: 0, d7: 0, d30: 0 },
+		cacheRatio: { current: null, day: null },
 		lastRunUpdate: 0,
 		isAgentBusy: false,
 		thinkingLevel: "",
@@ -159,6 +165,7 @@ function makeInitialState(): StatuslineRuntimeState {
 		usedPct: 0,
 		contextTokens: 0,
 		contextWindow: 0,
+		sessionName: undefined,
 	};
 }
 
@@ -177,6 +184,7 @@ function registerSessionLifecycle(pi: ExtensionAPI): void {
 		Object.assign(state, makeInitialState(), {
 			sessionStart: Date.now(),
 			thinkingLevel: pi.getThinkingLevel(),
+			sessionName: ctx.sessionManager.getSessionName() ?? undefined,
 		});
 		refreshTotals(state, ctx);
 		initFooter(ctx, state, tuiRef);
@@ -201,6 +209,10 @@ function registerSessionLifecycle(pi: ExtensionAPI): void {
 			return;
 		}
 		state.speed = trackSpeed(msg.usage.output, dur, ctx.model?.id ?? "");
+		state.cacheRatio = trackCacheRatio(
+			{ input: msg.usage.input, cacheRead: msg.usage.cacheRead ?? 0, cacheWrite: msg.usage.cacheWrite ?? 0 },
+			ctx.model?.id ?? "",
+		);
 		state.totalInp += msg.usage.input;
 		state.totalOut += msg.usage.output;
 		state.totalCost += msg.usage.cost.total;
@@ -221,7 +233,10 @@ function registerSessionLifecycle(pi: ExtensionAPI): void {
 	});
 	pi.on("session_tree", async (_event: unknown, ctx: ExtensionContext) => {
 		// 切换分支后重建状态栏数据
-		Object.assign(state, makeInitialState(), { sessionStart: Date.now() });
+		Object.assign(state, makeInitialState(), {
+			sessionStart: Date.now(),
+			sessionName: ctx.sessionManager.getSessionName() ?? undefined,
+		});
 		refreshTotals(state, ctx);
 		triggerUpdate();
 	});
@@ -312,7 +327,10 @@ function buildLine2(ctx: ExtensionContext, st: StatuslineRuntimeState, p: Pallet
 	const speedPart = formatSpeedPart(st.speed, p);
 	const speedPrefix = speedPart ? ` ${speedPart}` : "";
 
-	return `${p.d(provider)}/${p.a(modelId)}${tlPart}${speedPrefix}`;
+	const cachePart = formatCacheRatioPart(st.cacheRatio, p);
+	const cachePrefix = cachePart ? ` ${cachePart}` : "";
+
+	return `${p.d(provider)}/${p.a(modelId)}${tlPart}${speedPrefix}${cachePrefix}`;
 }
 
 function buildLine3(
@@ -341,12 +359,14 @@ function buildLine3(
 	}
 
 	const sid = tailSessionId(ctx.sessionManager.getSessionFile(), SESSION_ID_TAIL);
+	const namePart = st.sessionName ? p.a(st.sessionName) : "";
 
 	const parts: string[] = [ctxStr];
 	if (tp.length) parts.push(tp.join(` ${DOT} `));
 	if (st.totalInp > 0 || st.totalOut > 0) {
 		parts.push(`${p.d("↑↓")} ${p.v(fmtCount(st.totalInp))}/${p.v(fmtCount(st.totalOut))}`);
 	}
+	if (namePart) parts.push(namePart);
 	if (sid) parts.push(p.m(sid));
 	return parts.join(` ${SEP} `);
 }

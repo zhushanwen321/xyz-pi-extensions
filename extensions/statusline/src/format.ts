@@ -100,6 +100,21 @@ export function formatSpeedPart(sp: SpeedLike, p: PlainPallet): string {
 	return parts.length ? `│ ${p.d("speed")} ${parts.join(" · ")}` : "";
 }
 
+// ── 缓存命中率渲染 ─────────────────────────────────────
+
+export interface CacheRatioLike {
+	current: number | null;
+	day: number | null;
+}
+
+/** 渲染缓存命中率部分：cache 85% · day 72%（无数据返回空串） */
+export function formatCacheRatioPart(cr: CacheRatioLike, p: PlainPallet): string {
+	const parts: string[] = [];
+	if (cr.current !== null) parts.push(`${p.g(`${cr.current}`)}${p.d("%")}`);
+	if (cr.day !== null) parts.push(`${p.d("day")} ${p.g(`${cr.day}`)}${p.d("%")}`);
+	return parts.length ? `│ ${p.d("cache")} ${parts.join(" · ")}` : "";
+}
+
 // ── 路径工具 ─────────────────────────────────────────
 
 /** 把路径切成段（按系统分隔符） */

@@ -168,6 +168,7 @@ declare module "@zhushanwen/pi-quota-providers" {
 	export function readCache(...args: any[]): CacheData;
 	export function triggerUpdate(...args: any[]): void;
 	export function trackSpeed(...args: any[]): void;
+	export function trackCacheRatio(...args: any[]): any;
 	export function buildRuntimeProviders(...args: any[]): any[];
 	export function getConfigDir(...args: any[]): string;
 	export function getProvidersConfigPath(...args: any[]): string;
@@ -178,6 +179,7 @@ declare module "@zhushanwen/pi-quota-providers" {
 	export const INFINITE_WIN: QuotaWindow;
 	export type CacheData = any;
 	export type SpeedData = any;
+	export type CacheRatioData = any;
 	export type QuotaWindow = any;
 	export type QuotaProvider = any;
 	export type NormalizedQuotaRow = any;
