@@ -1,5 +1,11 @@
 # @zhushanwen/pi-workflow
 
+## 1.0.1
+
+### Patch Changes
+
+- Fix unhandled rejection crash when aborting/pausing/resuming workflows in terminal or non-applicable states
+
 ## 1.0.0
 
 ### Minor Changes
