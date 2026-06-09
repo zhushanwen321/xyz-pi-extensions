@@ -1,5 +1,11 @@
 # @zhushanwen/pi-structured-output
 
+## 0.3.0
+
+### Minor Changes
+
+- structured-output: unconditional global tool (schema+data params), remove env-gated mode. workflow: remove text fallback, rely on tool call only.
+
 ## 0.2.2
 
 ### Patch Changes

@@ -133,17 +133,28 @@ describe("AgentPool", () => {
       expect(result.usage!.turns).toBe(2);
     });
 
-    it("parses structured output when schema is provided and output is valid JSON", async () => {
+    it("parses structured output when schema is provided and tool call succeeds", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
       mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
 
       const schema = { type: "object", properties: { name: { type: "string" } } };
-      const payload = JSON.stringify({ name: "Alice" });
-      const jsonl = messageEndJsonl(payload, { input: 10, output: 5 });
+      const toolStartJsonl = JSON.stringify({
+        type: "tool_execution_start",
+        toolCallId: "tc-1",
+        toolName: "structured-output",
+        args: { name: "Alice" },
+      });
+      const toolEndJsonl = JSON.stringify({
+        type: "tool_execution_end",
+        toolCallId: "tc-1",
+        toolName: "structured-output",
+        isError: false,
+      });
+      const msgEndJsonl = messageEndJsonl("", { input: 10, output: 5 });
 
       const resultPromise = pool.enqueue({ prompt: "give me a name", schema });
-      proc.stdout.emit("data", Buffer.from(jsonl + "\n"));
+      proc.stdout.emit("data", Buffer.from(toolStartJsonl + "\n" + toolEndJsonl + "\n" + msgEndJsonl + "\n"));
       proc.emit("close", 0);
 
       const result = await resultPromise;
@@ -151,7 +162,7 @@ describe("AgentPool", () => {
       expect(result.parsedOutput).toEqual({ name: "Alice" });
     });
 
-    it("returns failure when schema present but output is not valid JSON (no tool call)", async () => {
+    it("returns failure when schema present but no structured-output tool call", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
       mockSpawn.mockReturnValue(proc as unknown as ChildProcess);

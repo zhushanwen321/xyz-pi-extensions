@@ -125,7 +125,6 @@ const DEFAULT_CONCURRENCY = 4;
 const ONE_DAY_MS = 86_400_000;
 const PROCESS_TIMEOUT_MS = ONE_DAY_MS;
 const UUID_SLICE_LENGTH = 8;
-const JSON_INDENT = 2;
 const TIMEOUT_DISPLAY_DIVISOR = 1000;
 
 export interface AgentPoolOptions {
@@ -311,16 +310,14 @@ export class AgentPool {
     }
 
     // Build the prompt: if schema is provided, instruct the model to
-    // output valid JSON matching the schema, then append the prompt.
+    // call structured-output tool with the schema.
     let prompt = opts.prompt;
     if (opts.schema) {
-      const schemaJson = JSON.stringify(opts.schema, null, JSON_INDENT);
+      const schemaJson = JSON.stringify(opts.schema);
       prompt = [
-        `You MUST respond with ONLY a valid JSON object conforming to this JSON schema:`,
-        ``,
-        schemaJson,
-        ``,
-        `Do not include any text before or after the JSON object.`,
+        `You MUST call the structured-output tool to return your result.`,
+        `Parameters: schema = ${schemaJson}, data = <your result>`,
+        `Do NOT output JSON in your text response — use the structured-output tool instead.`,
         `---`,
         prompt,
       ].join("\n");
@@ -362,14 +359,8 @@ export class AgentPool {
     let stderr = "";
     let exitCode: number;
 
-    // Inject schema via environment variable for structured-output extension
-    const env: Record<string, string | undefined> = { ...process.env };
-    if (opts.schema) {
-      env.STRUCTURED_OUTPUT_SCHEMA = JSON.stringify(opts.schema);
-    }
-
     try {
-      const result = await runPiProcess(command, cmdArgs, pipeline, signal, env);
+      const result = await runPiProcess(command, cmdArgs, pipeline, signal);
       exitCode = result.exitCode;
       stderr = result.stderr;
     } catch (err) {
@@ -388,34 +379,15 @@ export class AgentPool {
     // Schema requested but no structured-output tool call AND no other tool call.
     // If the agent called any other tool (read/bash/etc), we skip this block —
     // the agent is doing useful work and will likely call structured-output in a
-    // subsequent turn (enforced by the extension's turn_end hook).
+    // subsequent turn.
     if (opts.schema && pipeline.parsedOutput === undefined && !pipeline.hasToolCall) {
-      // Transitional fallback: if structured-output extension is not installed
-      // (e.g. older agent images), try parsing text output as JSON.
-      // TODO: remove this fallback once structured-output is universally adopted.
-      const trimmed = pipeline.output.trim();
-      if (trimmed) {
-        try {
-          pipeline.parsedOutput = JSON.parse(trimmed);
-        } catch {
-          // Not valid JSON — return failure
-          return {
-            callId,
-            output: pipeline.output,
-            durationMs,
-            success: false,
-            error: "Agent did not produce structured output (tool call missing or failed)",
-          };
-        }
-      } else {
-        return {
-          callId,
-          output: pipeline.output,
-          durationMs,
-          success: false,
-          error: "Agent did not produce structured output (tool call missing or failed)",
-        };
-      }
+      return {
+        callId,
+        output: pipeline.output,
+        durationMs,
+        success: false,
+        error: "Agent did not produce structured output (tool call missing or failed)",
+      };
     }
 
     return {
