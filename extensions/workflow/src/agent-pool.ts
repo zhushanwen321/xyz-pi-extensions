@@ -45,10 +45,10 @@ export interface AgentCallOpts {
   /** Agent name to resolve from AgentRegistry. When set, the resolved
    *  agent's systemPrompt is injected via --append-system-prompt. */
   agent?: string;
-  /** Absolute path to a temp file containing the agent's systemPrompt.
-   *  Set by the orchestrator after resolving the agent name. Used by
-   *  buildArgs() to inject --append-system-prompt. */
-  systemPromptFile?: string;
+  /** Absolute paths to temp files containing system prompt injections.
+   *  Set by the orchestrator: agent systemPrompt + schema injection files.
+   *  buildArgs() injects each via --append-system-prompt. */
+  systemPromptFiles?: string[];
 }
 
 export interface AgentResult {
@@ -304,24 +304,14 @@ export class AgentPool {
       args.push("--model", opts.model);
     }
 
-    // Inject agent system prompt if resolved
-    if (opts.systemPromptFile) {
-      args.push("--append-system-prompt", opts.systemPromptFile);
+    // Inject system prompt files (agent systemPrompt + schema injection)
+    if (opts.systemPromptFiles) {
+      for (const fp of opts.systemPromptFiles) {
+        args.push("--append-system-prompt", fp);
+      }
     }
 
-    // Build the prompt: if schema is provided, instruct the model to
-    // call structured-output tool with the schema.
-    let prompt = opts.prompt;
-    if (opts.schema) {
-      const schemaJson = JSON.stringify(opts.schema);
-      prompt = [
-        `You MUST call the structured-output tool to return your result.`,
-        `Parameters: schema = ${schemaJson}, data = <your result>`,
-        `Do NOT output JSON in your text response — use the structured-output tool instead.`,
-        `---`,
-        prompt,
-      ].join("\n");
-    }
+    const prompt = opts.prompt;
 
     args.push(prompt);
     return args;
@@ -376,18 +366,31 @@ export class AgentPool {
 
     const durationMs = Date.now() - startedAt;
 
-    // Schema requested but no structured-output tool call AND no other tool call.
-    // If the agent called any other tool (read/bash/etc), we skip this block —
-    // the agent is doing useful work and will likely call structured-output in a
-    // subsequent turn.
-    if (opts.schema && pipeline.parsedOutput === undefined && !pipeline.hasToolCall) {
-      return {
-        callId,
-        output: pipeline.output,
-        durationMs,
-        success: false,
-        error: "Agent did not produce structured output (tool call missing or failed)",
-      };
+    // Schema requested but no structured-output result
+    if (opts.schema && pipeline.parsedOutput === undefined) {
+      // Case 1: No tool call at all — retry once with stronger prompt
+      if (!pipeline.hasToolCall) {
+        const retryResult = await this.retrySchemaCall(opts, callId, startedAt, signal);
+        if (retryResult) return retryResult;
+        // Retry also failed
+        return {
+          callId,
+          output: pipeline.output,
+          durationMs: Date.now() - startedAt,
+          success: false,
+          error: "Agent did not produce structured output after retry (tool call missing or failed)",
+        };
+      }
+      // Case 2: Other tool calls but no SO + process exited — fail (blind-spot fix)
+      if (exitCode === 0) {
+        return {
+          callId,
+          output: pipeline.output,
+          durationMs,
+          success: false,
+          error: "Agent completed without calling structured-output tool",
+        };
+      }
     }
 
     return {
@@ -400,6 +403,55 @@ export class AgentPool {
       error: exitCode === 0 ? undefined : (stderr || `Exit code ${exitCode}`),
       sessionId: pipeline.sessionId,
     };
+  }
+
+  /**
+   * Retry a schema call with stronger prompt emphasis.
+   * Returns AgentResult on success, undefined on failure (caller handles).
+   */
+  private async retrySchemaCall(
+    opts: AgentCallOpts,
+    callId: string,
+    startedAt: number,
+    signal?: AbortSignal,
+  ): Promise<AgentResult | undefined> {
+    if (signal?.aborted) return undefined;
+
+    // Build retry prompt with stronger emphasis
+    const retryPrompt = [
+      "[RETRY - CRITICAL INSTRUCTION]",
+      "Your previous attempt did not call the structured-output tool. This is MANDATORY.",
+      "You MUST call the structured-output tool NOW.",
+      "Do NOT output JSON in your text response.",
+      "---",
+      opts.prompt,
+    ].join("\n");
+
+    const retryOpts: AgentCallOpts = { ...opts, prompt: retryPrompt };
+    const args = this.buildArgs(retryOpts);
+    const { command, args: cmdArgs } = this.resolveInvocation(args);
+
+    const pipeline = makeEmptyPipeline();
+
+    try {
+      await runPiProcess(command, cmdArgs, pipeline, signal);
+    } catch {
+      return undefined;
+    }
+
+    if (pipeline.parsedOutput !== undefined) {
+      return {
+        callId,
+        output: pipeline.output,
+        parsedOutput: pipeline.parsedOutput,
+        usage: pipeline.usage.turns > 0 ? pipeline.usage : undefined,
+        durationMs: Date.now() - startedAt,
+        success: true,
+        sessionId: pipeline.sessionId,
+      };
+    }
+
+    return undefined;
   }
 }
 

@@ -71,6 +71,8 @@ export interface ExecutionTraceNode {
   task: string;
   model: string;
   status: "pending" | "running" | "completed" | "failed";
+  /** Phase name for TUI grouping. Set from explicit opts.phase or global _currentPhase. */
+  phase?: string;
   startedAt?: string;
   completedAt?: string;
   result?: AgentResult;

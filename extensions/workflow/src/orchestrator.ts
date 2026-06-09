@@ -5,7 +5,6 @@
  * Lifecycle: run → pause/resume → abort. Agent calls routed via AgentPool.
  */
 
-import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -13,6 +12,7 @@ import { Worker } from "node:worker_threads";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
+import { cleanupAllTempFiles as cleanupAllFiles, cleanupTempFile as cleanupFile, resolveAgentOpts as resolveOpts } from "./agent-opts-resolver.js";
 import { AgentRegistry } from "./agent-discovery.js";
 import { type AgentCallOpts,AgentPool } from "./agent-pool.js";
 import { getWorkflow } from "./config-loader.js";
@@ -68,6 +68,7 @@ interface AgentCallMsg {
   type: "agent-call";
   callId: number;
   opts: AgentCallOpts;
+  phase?: string;
 }
 
 interface ReturnMsg {
@@ -117,6 +118,10 @@ export class WorkflowOrchestrator {
   private readonly agentRegistry: AgentRegistry;
   /** Active temp files created for agent system prompts — cleaned up on completion or abort. */
   private readonly activeTempFiles = new Set<string>();
+  // Bound helpers that carry activeTempFiles closure
+  private cleanupTempFile = (fp: string) => cleanupFile(fp, this.activeTempFiles);
+  /** Bound helper for agent-opts-resolver temp file cleanup. */
+  cleanupAllTempFiles = () => cleanupAllFiles(this.activeTempFiles);
   /** Per-run AbortController for killing agent subprocesses on terminate/pause/abort. */
   private readonly runAbortControllers = new Map<string, AbortController>();
   private readonly pi: ExtensionAPI;
@@ -168,19 +173,7 @@ export class WorkflowOrchestrator {
     }));
   }
 
-  /** Clean up temp files created for agent system prompts. */
-  private cleanupTempFile(filePath: string): void {
-    try { fs.unlinkSync(filePath); } catch { /* already deleted */ void undefined; }
-    this.activeTempFiles.delete(filePath);
-  }
 
-  /** Clean up all remaining active temp files (e.g. on abort/error). */
-  cleanupAllTempFiles(): void {
-    for (const fp of this.activeTempFiles) {
-      try { fs.unlinkSync(fp); } catch { /* already deleted */ void undefined; }
-    }
-    this.activeTempFiles.clear();
-  }
 
   /** Start a workflow. Returns runId for lifecycle operations. Signal propagated to AgentPool. */
   async run(
@@ -617,7 +610,7 @@ export class WorkflowOrchestrator {
 
     switch (msg.type) {
       case "agent-call":
-        this.handleAgentCall(runId, instance, msg.callId, msg.opts);
+        this.handleAgentCall(runId, instance, msg.callId, msg.opts, msg.phase);
         break;
       case "return": {
         // P0-1: Guard against stale return messages after terminate/pause/budget
@@ -641,32 +634,9 @@ export class WorkflowOrchestrator {
     }
   }
 
-  /** Resolve agent name to systemPrompt file, write temp file if needed. */
+  /** Resolve agent name and schema to systemPromptFiles (delegates to agent-opts-resolver). */
   private resolveAgentOpts(opts: AgentCallOpts): { opts: AgentCallOpts; error?: string } {
-    if (!opts.agent) return { opts };
-    const discovered = this.agentRegistry.resolve(opts.agent);
-    if (!discovered) return { opts, error: `Agent not found: ${opts.agent}` };
-
-    const hasSystemPrompt = discovered.systemPrompt.trim().length > 0;
-    let systemPromptFile: string | undefined;
-    if (hasSystemPrompt) {
-      try {
-        const tmpDir = path.join(os.tmpdir(), "pi-workflow");
-        fs.mkdirSync(tmpDir, { recursive: true });
-        const tmpFile = path.join(tmpDir, `agent-prompt-${randomUUID()}.md`);
-        fs.writeFileSync(tmpFile, discovered.systemPrompt, "utf-8");
-        this.activeTempFiles.add(tmpFile);
-        systemPromptFile = tmpFile;
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { opts, error: `Temp file write error: ${msg}` };
-      }
-    }
-
-    const agentModel = opts.model || discovered.model;
-    return {
-      opts: { ...opts, model: agentModel, ...(systemPromptFile ? { systemPromptFile } : {}) },
-    };
+    return resolveOpts(opts, this.agentRegistry, this.sessionDir, this.activeTempFiles);
   }
 
   /**
@@ -678,6 +648,7 @@ export class WorkflowOrchestrator {
     instance: WorkflowInstance,
     callId: number,
     opts: AgentCallOpts,
+    phase?: string,
   ): Promise<void> {
     const cached = instance.callCache.get(callId);
     if (cached) {
@@ -709,6 +680,7 @@ export class WorkflowOrchestrator {
       task: opts.prompt.slice(0, PROMPT_PREVIEW_LENGTH),
       model: enrichedOpts.model ?? "default",
       status: "running",
+      phase,
       startedAt: now,
     };
     instance.trace.push(node);
@@ -774,8 +746,10 @@ export class WorkflowOrchestrator {
         this.onTraceUpdate?.(runId);
 
         // Cleanup temp file on stale context early return
-        if (opts.systemPromptFile) {
-          this.cleanupTempFile(opts.systemPromptFile);
+        if (opts.systemPromptFiles) {
+          for (const fp of opts.systemPromptFiles) {
+            this.cleanupTempFile(fp);
+          }
         }
         return;
       }
@@ -823,6 +797,12 @@ export class WorkflowOrchestrator {
         instance.budget.usedCost += poolResult.usage.cost;
       }
 
+      // Push budget update to worker for dynamic budget functions
+      this.postMessage(runId, {
+        type: "budget-update",
+        budget: { usedTokens: instance.budget.usedTokens, usedCost: instance.budget.usedCost },
+      });
+
       // Enforce budget limits
       await checkBudget(this.instances.get(runId), runId, {
         postMessage: (id, msg) => this.postMessage(id, msg),
@@ -836,8 +816,10 @@ export class WorkflowOrchestrator {
       this.onTraceUpdate?.(runId);
 
       // Cleanup temp file if it was created for agent system prompt
-      if (opts.systemPromptFile) {
-        this.cleanupTempFile(opts.systemPromptFile);
+      if (opts.systemPromptFiles) {
+        for (const fp of opts.systemPromptFiles) {
+          this.cleanupTempFile(fp);
+        }
       }
     });
   }

@@ -18,7 +18,7 @@ import { resolve } from "node:path";
 export interface WorkflowMeta {
   name: string;
   description: string;
-  phases: string[];
+  phases: (string | { title: string; detail?: string })[];
 }
 
 export type WorkflowSource = "saved" | "tmp";
@@ -162,7 +162,9 @@ async function extractMetaViaRegex(scriptPath: string): Promise<WorkerResult> {
         name: metaObj.name,
         description: typeof metaObj.description === "string" ? metaObj.description : "",
         phases: Array.isArray(metaObj.phases)
-          ? metaObj.phases.filter((p: unknown) => typeof p === "string") as string[]
+          ? metaObj.phases.filter(
+              (p: unknown) => typeof p === "string" || (typeof p === "object" && p !== null && "title" in p),
+            ) as (string | { title: string; detail?: string })[]
           : [],
       },
     };
