@@ -1,5 +1,13 @@
 # @zhushanwen/pi-workflow
 
+## 0.3.1
+
+### Patch Changes
+
+- Remove per-turn context injection from model-switch; make model-switch an optional peer dep of workflow
+- Updated dependencies
+  - @zhushanwen/pi-model-switch@0.2.10
+
 ## 0.3.0
 
 ### Minor Changes

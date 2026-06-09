@@ -696,7 +696,7 @@ export class WorkflowOrchestrator {
     let enrichedOpts = resolved.opts;
 
     // Resolve model from scene if needed
-    const resolvedModel = resolveModel(enrichedOpts);
+    const resolvedModel = await resolveModel(enrichedOpts);
     if (resolvedModel) {
       enrichedOpts = { ...enrichedOpts, model: resolvedModel };
     }

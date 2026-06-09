@@ -1,26 +1,21 @@
 /**
- * Pi Model Switch — 上下文注入 + 模型切换扩展
+ * Pi Model Switch — 模型切换扩展
  *
- * session_start/resume：注入 [Available Models] 能力表（systemPrompt，字节稳定 → KV cache 友好）
- * before_agent_start 每轮注入：数据 + 推荐（[Model Context]，通过 message 注入 → 不影响 system prompt prefix cache）
+ * session_start/resume：注入精简的 [Available Models] 能力表（systemPrompt，仅首次，KV cache 友好）
  * switch_model tool：list/search/switch/recommend/setup
  *
- * KV cache 策略：
- *   - systemPrompt 仅在首次 before_agent_start 时注入 [Available Models] + Scenes 映射，
- *     内容在 session 期间固定不变，确保 prefix 字节稳定。
- *   - 动态数据（turns、tokens、时间、用量、Advice）通过 customType message 注入，
- *     每轮变化不影响 system prompt 的 cache 命中。
+ * 推荐功能（recommend action）仍保留 quota/snapshot/stickiness 计算逻辑，
+ * 但不再每轮自动注入上下文——仅当 AI 主动调用 recommend 时才计算。
  */
 
 import { StringEnum } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { readCache } from "@zhushanwen/pi-quota-providers";
 import { Type } from "typebox";
 
-import { computePeakRecommend,computeQuotaSnapshot, computeStickiness } from "./advisor";
+import { computePeakRecommend, computeQuotaSnapshot, computeStickiness } from "./advisor";
 import { loadConfig } from "./config";
-import { formatContextPrompt,formatSessionModels } from "./prompt";
+import { formatContextPrompt, formatSessionModels } from "./prompt";
 import { deletePolicyConfig, generatePolicyConfig, getConfigPath, readEnabledModels, readPolicyConfigContent } from "./setup";
 import { asSessionEntries, getCurrentModelId, type ModelPolicy } from "./types";
 
@@ -54,17 +49,6 @@ interface BeforeAgentStartLikeEvent {
 	systemPrompt: string;
 }
 
-/** Shape of CustomMessage passed to registerMessageRenderer */
-interface LikeCustomMessage {
-	customType: string;
-	content: string | unknown;
-}
-
-/** Options bag for registerMessageRenderer callback */
-interface LikeMessageRenderOptions {
-	expanded: boolean;
-}
-
 // ── 扩展入口 ────────────────────────────────────────────
 
 export default function modelSwitchExtension(pi: ExtensionAPI) {
@@ -75,44 +59,18 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 		state.injectedModelTable = false;
 	});
 
-	pi.on("before_agent_start", async (event: BeforeAgentStartLikeEvent, ctx: ExtensionContext) => {
+	pi.on("before_agent_start", async (event: BeforeAgentStartLikeEvent, _ctx: ExtensionContext) => {
 		if (!state.config) return;
 
-		try {
-			const currentModel = getCurrentModelId(ctx);
-			const { snapshot, stickiness, recommend } = computeSnapshotAndRecommend(ctx, state.config);
-
-			// ① 静态 systemPrompt：仅首次注入 [Available Models]（字节稳定 → KV cache 友好）
-			//    必须包含 event.systemPrompt，否则会覆盖掉 base prompt + 其他扩展的注入
-			let systemPromptPatch: string | undefined;
-			if (!state.injectedModelTable) {
-				const staticBlock = formatSessionModels(state.config);
-				systemPromptPatch = `${event.systemPrompt}\n\n${staticBlock}\n`;
-				state.injectedModelTable = true;
-			}
-
-			// ② 动态 context：每轮作为 custom message 注入（不影响 system prompt prefix cache）
-			const dynamicContent = formatContextPrompt({
-				currentModel,
-				stickiness,
-				snapshot,
-				recommend,
-				config: state.config,
-				now: new Date(),
-			});
-
+		// 首次注入精简的 [Available Models] 到 systemPrompt（字节稳定 → KV cache 友好）
+		if (!state.injectedModelTable) {
+			const staticBlock = formatSessionModels(state.config);
+			state.injectedModelTable = true;
 			return {
-				...(systemPromptPatch ? { systemPrompt: systemPromptPatch } : {}),
-				message: {
-					customType: "model-context",
-					content: dynamicContent,
-					display: false,
-				},
+				systemPrompt: `${event.systemPrompt}\n\n${staticBlock}\n`,
 			};
-		} catch (err) {
-			console.warn("[model-switch] context injection failed:", err);
-			return;
 		}
+		return;
 	});
 
 	pi.registerCommand("setup-model-policy", {
@@ -127,15 +85,6 @@ export default function modelSwitchExtension(pi: ExtensionAPI) {
 			ctx.ui.notify(result.summary, "info");
 		},
 	});
-
-	// ── Message Renderer for model-context ──────────────────────
-	pi.registerMessageRenderer(
-		"model-context",
-		(message: LikeCustomMessage, _options: LikeMessageRenderOptions, theme: Theme) => {
-			const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
-			return new Text(theme.fg("muted", content), 0, 0);
-		},
-	);
 
 	registerSwitchTool(pi, state);
 }
@@ -153,10 +102,9 @@ function registerSwitchTool(pi: ExtensionAPI, state: SessionState): void {
 		promptSnippet:
 			"Use this tool to manage models. TRIGGERS: "
 			+ "(1) User asks to list/search/switch models or mentions a specific model/provider. "
-			+ "(2) [Model Context] advice says 'avoid' — proactively switch to a cheaper alternative from the same scene. "
-			+ "(3) Starting a simple task (file reads, quick edits, grep) — switch to the cheapest capable model to conserve quota. "
-			+ "(4) Starting a complex task (architecture, refactoring, multi-file changes) — switch to the best reasoning model. "
-			+ "(5) User mentions cost/quota concerns — recommend and switch to optimize usage. "
+			+ "(2) Starting a simple task (file reads, quick edits, grep) — switch to the cheapest capable model to conserve quota. "
+			+ "(3) Starting a complex task (architecture, refactoring, multi-file changes) — switch to the best reasoning model. "
+			+ "(4) User mentions cost/quota concerns — recommend and switch to optimize usage. "
 			+ "For policy management: 'setup delete' to remove, 'setup list' to view, 'setup edit' to modify through conversation.",
 		parameters: Type.Object({
 			action: StringEnum(["list", "search", "switch", "recommend", "setup"], {
@@ -351,7 +299,7 @@ function handleSetup(state: SessionState, ctx: ExtensionContext, query?: string)
 
 // ── 辅助函数 ────────────────────────────────────────────
 
-/** Shared quota snapshot + stickiness + recommend computation. */
+/** Shared quota snapshot + stickiness + recommend computation (for recommend tool action). */
 function computeSnapshotAndRecommend(ctx: ExtensionContext, config: ModelPolicy) {
 	const entries = asSessionEntries(ctx.sessionManager.getBranch());
 	const cache = readCache();

@@ -1,14 +1,8 @@
 /**
- * Model Switch — Context Prompt 注入格式化
+ * Model Switch — Prompt formatting
  *
- * session_start：注入模型能力表（[Available Models]）→ systemPrompt（静态，仅首次）
- * before_agent_start：注入数据+推荐（[Model Context]）→ custom message（动态，每轮）
- *
- * 设计原则：每行自解释，避免缩写标签，让 AI 不需要猜测字段含义。
- *
- * KV cache 注意：
- *   formatSessionModels 的输出在 session 期间固定不变（注入 systemPrompt）。
- *   formatContextPrompt 的输出每轮变化（注入 message），不影响 prefix cache。
+ * formatSessionModels: session_start 时注入的精简模型表（systemPrompt，仅首次）
+ * formatContextPrompt: recommend action 按需调用时的完整上下文（quota/snapshot/stickiness）
  */
 
 import type { ModelPolicy, QuotaSnapshot, RecommendInfo,StickinessInfo } from "./types";
@@ -49,17 +43,23 @@ export interface ContextPromptData {
  */
 export function formatSessionModels(config: ModelPolicy): string {
 	const lines: string[] = [
-		"[Available Models — models you can switch to via switch_model tool]",
+		"[Models — switch via switch_model tool]",
 	];
 
 	for (const [provider, pcfg] of Object.entries(config.models)) {
 		for (const [alias, entry] of Object.entries(pcfg.models)) {
-			const caps = entry.capabilities.join(", ");
-			lines.push(`  ${alias} (${provider}) [${caps}]`);
+			const caps = entry.capabilities.length > 0 ? ` [${entry.capabilities.join(", ")}]` : "";
+			lines.push(`  ${alias}: ${provider}/${entry.modelId}${caps}`);
 		}
 	}
 
-	lines.push("Switch to the best model for each task. Check capabilities above for image/text support.");
+	// Scenes mapping
+	const sceneParts = Object.entries(config.scenes)
+		.filter(([, aliases]) => aliases.length > 0)
+		.map(([scene, aliases]) => `${scene}→${aliases.join("/")}`);
+	if (sceneParts.length > 0) {
+		lines.push(`Scenes: ${sceneParts.join(" | ")}`);
+	}
 
 	return lines.join("\n");
 }
