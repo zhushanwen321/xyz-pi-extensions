@@ -39,7 +39,7 @@ export const ALL_STATUSES: readonly WorkflowStatus[] = [
 // ── Supporting types ──────────────────────────────────────────
 
 // ── Tool call tracking (FR-7) ──────────────────────────────
-// Mirror of agent-pool.ToolCallEntry — keep fields in sync.
+// Canonical definition — agent-pool.ts re-exports from here.
 
 export interface ToolCallEntry {
   /** Tool name. */

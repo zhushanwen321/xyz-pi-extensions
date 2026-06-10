@@ -122,9 +122,23 @@ export function cleanupAllTempFiles(activeTempFiles: Set<string>): void {
   activeTempFiles.clear();
 }
 
-// ── Skill path resolution ─────────────────────────────────────
+// ── Skill path resolution (with npm dir cache) ─────────────────────
 
 const SKILL_DIR_NAMES = ["SKILL.md", "skill.md"];
+
+/** Cached npm skill candidate paths — built once on first call. */
+let npmSkillCandidates: string[] | null = null;
+
+function getNpmSkillCandidates(npmSkillsDir: string): string[] {
+  if (npmSkillCandidates !== null) return npmSkillCandidates;
+  npmSkillCandidates = [];
+  try {
+    for (const pkg of fs.readdirSync(npmSkillsDir)) {
+      npmSkillCandidates.push(path.join(npmSkillsDir, pkg, "skills"));
+    }
+  } catch { /* npm dir not found */ }
+  return npmSkillCandidates;
+}
 
 /**
  * Resolve a skill name to its directory or SKILL.md path.
@@ -142,14 +156,11 @@ export function resolveSkillPath(skillName: string): string | undefined {
     path.join(os.homedir(), ".pi/agent/skills", skillName),
   ];
 
-  // npm package skills
+  // npm package skills (cached)
   const npmSkillsDir = path.join(os.homedir(), ".pi/agent/npm/node_modules");
-  try {
-    for (const pkg of fs.readdirSync(npmSkillsDir)) {
-      const pkgSkills = path.join(npmSkillsDir, pkg, "skills", skillName);
-      candidates.push(pkgSkills);
-    }
-  } catch { /* npm dir not found */ }
+  for (const pkgSkillsBase of getNpmSkillCandidates(npmSkillsDir)) {
+    candidates.push(path.join(pkgSkillsBase, skillName));
+  }
 
   for (const dir of candidates) {
     if (fs.existsSync(dir)) {

@@ -116,17 +116,23 @@ function createToolDefinition() {
  * 检测逻辑：在 tool_execution_end 事件中追踪是否有成功的 structured-output 调用。
  */
 function setupWorkflowHook(pi: PiAPI, schemaJson: string): void {
-	let soCalledThisTurn = false;
+	// ── soCalledThisTurn 时序依赖说明 ──
+	// Pi 的事件顺序保证：tool_execution_end → Pi 内部错误处理 → 模型下一个 turn → turn_end
+	// 这意味着同一 turn 内，所有 tool_execution_end 事件都在 turn_end 之前触发。
+	// 因此 soCallCount 在 turn_end 读取时已经反映了本 turn 的所有 tool 调用结果。
+	// 如果 model 先调 structured-output 失败（isError=true），soCallCount++ 但 soSucceededEver 仍 false，
+	// Pi 的自然错误修正流程会在下一 turn 重试，我们只在本 turn 完全未调用时才注入 steering message。
+	let soCallCount = 0;
 	let soSucceededEver = false;
 	let hookRetryCount = 0;
 
 	// 追踪 structured-output 调用
-	// 成功调用 → 标记 soSucceededEver=true，后续不再注入
-	// 失败调用 → soCalledThisTurn=true 但 soSucceededEver 仍 false，让 Pi 自行重试
+	// 成功调用 → soSucceededEver=true，后续不再注入
+	// 失败调用 → soCallCount++ 但 soSucceededEver 仍 false，让 Pi 自行重试
 	pi.on("tool_execution_end", async (event: unknown) => {
 		const e = event as { toolName: string; isError: boolean };
 		if (e.toolName === TOOL_NAME) {
-			soCalledThisTurn = true;
+			soCallCount++;
 			if (!e.isError) {
 				soSucceededEver = true;
 			}
@@ -137,9 +143,10 @@ function setupWorkflowHook(pi: PiAPI, schemaJson: string): void {
 		// 已经成功调用过 structured-output，不再干预
 		if (soSucceededEver) return;
 
-		// 本 turn 调了但失败了（isError=true），Pi 会自动返回错误让模型修正
-		if (soCalledThisTurn) {
-			soCalledThisTurn = false;
+		// 本 turn 调了 structured-output（无论成功失败），让 Pi 自然处理
+		// 失败时 Pi 会自动返回错误让模型修正，不需要 hook 干预
+		if (soCallCount > 0) {
+			soCallCount = 0;
 			return;
 		}
 
