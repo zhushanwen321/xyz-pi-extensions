@@ -451,7 +451,8 @@ function renderLevel2(
   // Right: full detail
   const node = agents[state.agentIdx];
   if (node) {
-    // Divider under title
+    // Title + divider
+    rightLines.push(theme.fg("muted", "Detail"));
     rightLines.push("─".repeat(mainWidth));
     // FR-4.1: 2 lines — status + model, then stats + elapsed
     const elapsed = formatElapsed(
