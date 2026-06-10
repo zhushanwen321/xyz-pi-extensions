@@ -6,6 +6,7 @@
 
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 import { AgentRegistry } from "./agent-discovery.js";
@@ -56,6 +57,15 @@ export function resolveAgentOpts(
     }
 
     opts = { ...opts, model: opts.model || discovered.model };
+  }
+
+  // Resolve skill name to SKILL.md path
+  if (opts.skill) {
+    const skillPath = resolveSkillPath(opts.skill);
+    if (!skillPath) {
+      return { opts, error: `Skill not found: ${opts.skill}. Searched .agents/skills/ and ~/.pi/agent/skills/` };
+    }
+    opts = { ...opts, skillPath };
   }
 
   // Inject schema as structured-output instruction via --append-system-prompt
@@ -110,4 +120,48 @@ export function cleanupAllTempFiles(activeTempFiles: Set<string>): void {
     try { fs.unlinkSync(fp); } catch { /* already deleted */ void undefined; }
   }
   activeTempFiles.clear();
+}
+
+// ── Skill path resolution ─────────────────────────────────────
+
+const SKILL_DIR_NAMES = ["SKILL.md", "skill.md"];
+
+/**
+ * Resolve a skill name to its directory or SKILL.md path.
+ * Search order:
+ *   1. Project-level: .agents/skills/<name>/
+ *   2. Global: ~/.pi/agent/skills/<name>/
+ *   3. npm packages: ~/.pi/agent/npm/node_modules/<pkg>/skills/<name>/
+ * Returns the directory path if found, undefined otherwise.
+ */
+export function resolveSkillPath(skillName: string): string | undefined {
+  const candidates = [
+    // Project-level
+    path.resolve(process.cwd(), ".agents/skills", skillName),
+    // Global user skills
+    path.join(os.homedir(), ".pi/agent/skills", skillName),
+  ];
+
+  // npm package skills
+  const npmSkillsDir = path.join(os.homedir(), ".pi/agent/npm/node_modules");
+  try {
+    for (const pkg of fs.readdirSync(npmSkillsDir)) {
+      const pkgSkills = path.join(npmSkillsDir, pkg, "skills", skillName);
+      candidates.push(pkgSkills);
+    }
+  } catch { /* npm dir not found */ }
+
+  for (const dir of candidates) {
+    if (fs.existsSync(dir)) {
+      // Prefer the directory path — pi --skill accepts directories
+      return dir;
+    }
+    // Also check if it's a file (unlikely but handle)
+    for (const name of SKILL_DIR_NAMES) {
+      const file = path.join(dir, name);
+      if (fs.existsSync(file)) return dir;
+    }
+  }
+
+  return undefined;
 }

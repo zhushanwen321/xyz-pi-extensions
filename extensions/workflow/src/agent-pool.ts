@@ -42,6 +42,12 @@ export interface AgentCallOpts {
   model?: string;
   /** Scene name for model-switch advisor recommendation. */
   scene?: string;
+  /** Skill name to load (e.g. "code-review"). Resolved to SKILL.md path
+   *  and injected via --skill flag in the subprocess. */
+  skill?: string;
+  /** Resolved absolute path to the skill directory or SKILL.md file.
+   *  Set by agent-opts-resolver when opts.skill is present. */
+  skillPath?: string;
   /** Human-readable description for logging and debugging. */
   description?: string;
   /** Agent name to resolve from AgentRegistry. When set, the resolved
@@ -337,6 +343,11 @@ export class AgentPool {
       for (const fp of opts.systemPromptFiles) {
         args.push("--append-system-prompt", fp);
       }
+    }
+
+    // Inject skill via --skill flag
+    if (opts.skillPath) {
+      args.push("--skill", opts.skillPath);
     }
 
     const prompt = opts.prompt;
