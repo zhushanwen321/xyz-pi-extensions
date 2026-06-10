@@ -208,7 +208,6 @@ function processKey(
     return false;
   }
 
-  if (data === "s") { saveTraceToFile(instance, ctx); return false; }
   return false;
 }
 
