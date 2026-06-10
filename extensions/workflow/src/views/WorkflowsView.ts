@@ -284,17 +284,20 @@ function renderView(
 
   const nameLine = theme.bold(instance.name);
   const rightPart = theme.fg("muted", headerRight);
-  const padLen = Math.max(0, width - visibleLen(nameLine) - visibleLen(rightPart) - 1);
-  lines.push(nameLine + " ".repeat(padLen) + rightPart);
+  lines.push(nameLine);
 
+  // FR-2.2: line 2 = description + stats (right-aligned)
+  // When no description, just show stats
   if (instance.description) {
-    const maxDesc = width - 2;
+    const maxDesc = width - visibleLen(rightPart) - 2;
     const descText = instance.description.length > maxDesc
       ? instance.description.slice(0, maxDesc - 1) + ELLIPSIS
       : instance.description;
-    lines.push(theme.fg("dim", descText));
-  } else if (instance.error) {
-    lines.push(theme.fg("error", instance.error.slice(0, width - 2)));
+    const descPart = theme.fg("dim", descText);
+    const padLen = Math.max(0, width - visibleLen(descPart) - visibleLen(rightPart) - 1);
+    lines.push(descPart + " ".repeat(padLen) + rightPart);
+  } else {
+    lines.push(rightPart);
   }
   lines.push("─".repeat(width));
 
