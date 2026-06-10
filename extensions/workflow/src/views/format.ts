@@ -161,8 +161,7 @@ export function buildPhaseGroups(nodes: ExecutionTraceNode[]): PhaseGroup[] {
   for (const [name, phaseNodes] of map) {
     if (phaseNodes.length > 0) {
       result.push({
-        // Hide phase header when it's just the fallback
-        name: name === NO_PHASE ? "" : name,
+        name: name === NO_PHASE ? "(default)" : name,
         nodes: phaseNodes,
         doneCount: phaseNodes.filter((n) => n.status === "completed").length,
       });

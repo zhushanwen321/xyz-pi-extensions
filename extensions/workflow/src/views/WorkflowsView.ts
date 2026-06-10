@@ -383,16 +383,20 @@ function renderLevel1(
     leftLines.push(`${pointer}${dot} ${pg.name} ${pg.doneCount}/${pg.nodes.length}`);
   }
 
-  // Right: selected agent summary
-  const node = agents[state.agentIdx];
-  if (node) {
-    rightLines.push(`${statusDotStr(node.status, theme)} ${node.status === "completed" ? "Completed" : node.status} · ${node.model}`);
-    rightLines.push(theme.fg("dim", formatTokenStat(node.result?.usage, node.result?.toolCalls)));
-
-    // Preview first 3 lines of task
-    const preview = node.task.split("\n").slice(0, 3);
-    rightLines.push("", theme.fg("muted", `Prompt preview (${node.task.split("\\n").length} lines):`));
-    rightLines.push(...preview.map((l) => `  ${l}`));
+  // Right: agent list for current phase (selectable, same format as level 0)
+  for (let i = 0; i < agents.length; i++) {
+    const node = agents[i];
+    const isSelected = i === state.agentIdx;
+    const pointer = isSelected ? "❯ " : "  ";
+    const dot = statusDotStr(node.status, theme);
+    const elapsed = formatElapsed(
+      node.startedAt,
+      node.completedAt ? new Date(node.completedAt).getTime() : Date.now(),
+    );
+    const tok = node.result?.usage;
+    const tokStr = tok ? `${Math.round((tok.input + tok.output) / 1000)}k tok` : "";
+    const tcCount = node.result?.toolCalls?.length ?? 0;
+    rightLines.push(`${pointer}${dot} ${node.agent}    ${node.model}    ${tokStr} · ${tcCount} tools · ${elapsed}`);
   }
 
   mergeBody(lines, leftLines, rightLines, width);
