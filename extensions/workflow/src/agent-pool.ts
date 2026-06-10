@@ -29,9 +29,11 @@ export interface AgentCallOpts {
   prompt: string;
   /**
    * Optional JSON schema for structured output.
-   * When provided, the schema is appended to the prompt as an instruction
-   * and the resulting output is parsed as JSON (via `JSON.parse`) into
-   * `parsedOutput` on the result.
+   * When provided, the schema is passed via PI_WORKFLOW_SCHEMA env to the subprocess,
+   * which activates the structured-output tool + turn_end hook.
+   * The tool's execute() validates model output against the schema.
+   * On success, `parsedOutput` on the result is set to `tool_execution_end.result.details`
+   * (the validated, parsed data object — not the raw tool call args).
    */
   schema?: Record<string, unknown>;
   /** Model to use (e.g. "router-openai/glm-5.1").
@@ -49,6 +51,10 @@ export interface AgentCallOpts {
    *  Set by the orchestrator: agent systemPrompt + schema injection files.
    *  buildArgs() injects each via --append-system-prompt. */
   systemPromptFiles?: string[];
+  /** Schema JSON for PI_WORKFLOW_SCHEMA env var.
+   *  Set by agent-opts-resolver when opts.schema is present.
+   *  agent-pool passes it as env var to activate structured-output tool + hook. */
+  schemaEnv?: string;
 }
 
 export interface AgentResult {
@@ -75,6 +81,18 @@ export interface AgentResult {
    * Can be used to locate the session JSONL file for post-run inspection.
    */
   sessionId?: string;
+  /** All tool calls collected from JSONL stream (FR-7). */
+  toolCalls: ToolCallEntry[];
+}
+
+// ── Tool call tracking (FR-7) ──────────────────────────────
+// Mirror of state.ToolCallEntry — keep fields in sync.
+
+export interface ToolCallEntry {
+  /** Tool name from JSONL event.toolName (e.g. "Bash", "Skill", "Read"). */
+  name: string;
+  /** Serialized args preview. Full storage; render-time truncation by formatActivityLine. */
+  input: string;
 }
 
 export interface AgentUsage {
@@ -103,7 +121,12 @@ interface ParsedPipelineEvent {
   usage: AgentUsage;
   model?: string;
   stopReason?: string;
-  /** Structured output confirmed by tool_execution_end (only after successful validation). */
+  /**
+   * Structured output from successful structured-output tool call.
+   * Source: `tool_execution_end.result.details` — the validated & parsed data object
+   * returned by the extension's execute(). NOT the raw tool call args (which may contain
+   * JSON strings for schema/data that models sometimes pass).
+   */
   parsedOutput?: unknown;
   /** Pending args from tool_execution_start, awaiting tool_execution_end confirmation. */
   pendingStructuredArgs?: unknown;
@@ -113,6 +136,8 @@ interface ParsedPipelineEvent {
   hasToolCall?: boolean;
   /** Session ID extracted from the first JSONL event (type=session header). */
   sessionId?: string;
+  /** All tool calls collected from JSONL stream (FR-7). */
+  toolCalls: ToolCallEntry[];
 }
 
 // ── Constants ─────────────────────────────────────────────────
@@ -210,6 +235,7 @@ export class AgentPool {
             durationMs: Date.now() - entry.startedAt,
             success: false,
             error: "Operation aborted before start",
+            toolCalls: [],
           });
           return;
         }
@@ -224,6 +250,7 @@ export class AgentPool {
               durationMs: Date.now() - entry.startedAt,
               success: false,
               error: "Operation aborted while queued",
+              toolCalls: [],
             });
           }
           // If already running, runPiProcess owns the abort handling
@@ -266,6 +293,7 @@ export class AgentPool {
         durationMs: Date.now() - startedAt,
         success: false,
         error: message,
+        toolCalls: [],
       });
     }
   }
@@ -345,12 +373,18 @@ export class AgentPool {
     const args = this.buildArgs(opts);
     const { command, args: cmdArgs } = this.resolveInvocation(args);
 
+    // Build env with PI_WORKFLOW_SCHEMA for structured-output conditional activation
+    const env: Record<string, string | undefined> = { ...process.env };
+    if (opts.schemaEnv) {
+      env.PI_WORKFLOW_SCHEMA = opts.schemaEnv;
+    }
+
     const pipeline = makeEmptyPipeline();
     let stderr = "";
     let exitCode: number;
 
     try {
-      const result = await runPiProcess(command, cmdArgs, pipeline, signal);
+      const result = await runPiProcess(command, cmdArgs, pipeline, signal, env);
       exitCode = result.exitCode;
       stderr = result.stderr;
     } catch (err) {
@@ -361,6 +395,7 @@ export class AgentPool {
         durationMs: Date.now() - startedAt,
         success: false,
         error: message,
+        toolCalls: [],
       };
     }
 
@@ -368,17 +403,15 @@ export class AgentPool {
 
     // Schema requested but no structured-output result
     if (opts.schema && pipeline.parsedOutput === undefined) {
-      // Case 1: No tool call at all — retry once with stronger prompt
+      // Case 1: No tool call at all — fail immediately; orchestrator handles retries
       if (!pipeline.hasToolCall) {
-        const retryResult = await this.retrySchemaCall(opts, callId, startedAt, signal);
-        if (retryResult) return retryResult;
-        // Retry also failed
         return {
           callId,
           output: pipeline.output,
           durationMs: Date.now() - startedAt,
           success: false,
-          error: "Agent did not produce structured output after retry (tool call missing or failed)",
+          error: "Agent did not call structured-output tool",
+          toolCalls: pipeline.toolCalls,
         };
       }
       // Case 2: Other tool calls but no SO + process exited — fail (blind-spot fix)
@@ -389,6 +422,7 @@ export class AgentPool {
           durationMs,
           success: false,
           error: "Agent completed without calling structured-output tool",
+          toolCalls: pipeline.toolCalls,
         };
       }
     }
@@ -402,57 +436,10 @@ export class AgentPool {
       success: exitCode === 0,
       error: exitCode === 0 ? undefined : (stderr || `Exit code ${exitCode}`),
       sessionId: pipeline.sessionId,
+      toolCalls: pipeline.toolCalls,
     };
   }
 
-  /**
-   * Retry a schema call with stronger prompt emphasis.
-   * Returns AgentResult on success, undefined on failure (caller handles).
-   */
-  private async retrySchemaCall(
-    opts: AgentCallOpts,
-    callId: string,
-    startedAt: number,
-    signal?: AbortSignal,
-  ): Promise<AgentResult | undefined> {
-    if (signal?.aborted) return undefined;
-
-    // Build retry prompt with stronger emphasis
-    const retryPrompt = [
-      "[RETRY - CRITICAL INSTRUCTION]",
-      "Your previous attempt did not call the structured-output tool. This is MANDATORY.",
-      "You MUST call the structured-output tool NOW.",
-      "Do NOT output JSON in your text response.",
-      "---",
-      opts.prompt,
-    ].join("\n");
-
-    const retryOpts: AgentCallOpts = { ...opts, prompt: retryPrompt };
-    const args = this.buildArgs(retryOpts);
-    const { command, args: cmdArgs } = this.resolveInvocation(args);
-
-    const pipeline = makeEmptyPipeline();
-
-    try {
-      await runPiProcess(command, cmdArgs, pipeline, signal);
-    } catch {
-      return undefined;
-    }
-
-    if (pipeline.parsedOutput !== undefined) {
-      return {
-        callId,
-        output: pipeline.output,
-        parsedOutput: pipeline.parsedOutput,
-        usage: pipeline.usage.turns > 0 ? pipeline.usage : undefined,
-        durationMs: Date.now() - startedAt,
-        success: true,
-        sessionId: pipeline.sessionId,
-      };
-    }
-
-    return undefined;
-  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -464,6 +451,7 @@ function makeEmptyPipeline(): ParsedPipelineEvent {
     output: "",
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
     sessionId: undefined,
+    toolCalls: [],
   };
 }
 
@@ -603,6 +591,11 @@ function processJsonlEvent(event: Record<string, unknown>, pipeline: ParsedPipel
       pipeline.pendingStructuredArgs = event.args;
       pipeline.pendingStructuredCallId = event.toolCallId as string | undefined;
     }
+    // Collect ALL tool calls (FR-7.2) — full storage, render-time truncation
+    const input = typeof event.args === 'object' && event.args !== null
+      ? JSON.stringify(event.args)
+      : String(event.args ?? '');
+    pipeline.toolCalls.push({ name: String(event.toolName ?? 'unknown'), input });
     pipeline.hasToolCall = true;
     return;
   }
@@ -610,8 +603,17 @@ function processJsonlEvent(event: Record<string, unknown>, pipeline: ParsedPipel
   if (event.type === "tool_execution_end") {
     // Stage 2: confirm structured output only on successful execution.
     if (event.toolName === "structured-output" && !event.isError) {
-      // tool_execution_end fires AFTER execute(), so Ajv validation passed.
-      pipeline.parsedOutput = pipeline.pendingStructuredArgs;
+      // Use result.details (parsed & validated by structured-output extension)
+      // instead of start args (which may contain JSON strings for data/schema).
+      const result = event.result as Record<string, unknown> | undefined;
+      const details = result?.details;
+      if (details && typeof details === "object") {
+        pipeline.parsedOutput = details as Record<string, unknown>;
+      } else {
+        // Should never happen: tool_execution_end with isError=false but no details.
+        // Keep pendingStructuredArgs as degraded fallback for robustness.
+        pipeline.parsedOutput = pipeline.pendingStructuredArgs;
+      }
     }
     // Clear pending regardless of success/failure
     pipeline.pendingStructuredArgs = undefined;

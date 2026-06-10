@@ -59,6 +59,7 @@ export function resolveAgentOpts(
   }
 
   // Inject schema as structured-output instruction via --append-system-prompt
+  // and set environment variable for conditional tool + hook activation.
   if (opts.schema) {
     try {
       const tmpDir = path.join(sessionDir, "workflow-tmp");
@@ -66,13 +67,26 @@ export function resolveAgentOpts(
       const tmpFile = path.join(tmpDir, `so-${randomUUID().slice(0, UUID_SLICE_LEN)}.txt`);
       const schemaJson = JSON.stringify(opts.schema);
       const content = [
-        "You MUST call the structured-output tool to return your result.",
-        `Parameters: schema = ${schemaJson}, data = <your result>`,
-        "Do NOT output JSON in your text response — use the structured-output tool instead.",
+        "## MANDATORY: Structured Output Requirement",
+        "",
+        "This task requires structured output.",
+        "Your FINAL action must be calling the `structured-output` tool.",
+        "",
+        `structured-output parameters:`,
+        `  schema = ${schemaJson}`,
+        `  data = <your result conforming to the schema above>`,
+        "",
+        "Rules:",
+        "- Do NOT output JSON in your text response — use the structured-output tool.",
+        "- Do NOT skip this step. The structured-output call IS your result.",
+        "- Complete all other work FIRST, then call structured-output as the last action.",
       ].join("\n");
       fs.writeFileSync(tmpFile, content, "utf-8");
       activeTempFiles.add(tmpFile);
       systemPromptFiles.push(tmpFile);
+
+      // Set env var for structured-output extension to activate tool + hook
+      opts = { ...opts, schemaEnv: schemaJson };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return { opts, error: `Schema temp file write error: ${msg}` };

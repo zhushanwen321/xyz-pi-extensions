@@ -38,6 +38,16 @@ export const ALL_STATUSES: readonly WorkflowStatus[] = [
 
 // ── Supporting types ──────────────────────────────────────────
 
+// ── Tool call tracking (FR-7) ──────────────────────────────
+// Mirror of agent-pool.ToolCallEntry — keep fields in sync.
+
+export interface ToolCallEntry {
+  /** Tool name. */
+  name: string;
+  /** Args preview string. */
+  input: string;
+}
+
 export interface WorkflowBudget {
   maxTokens?: number;
   maxCost?: number;
@@ -50,7 +60,7 @@ export interface WorkflowBudget {
 
 export interface AgentResult {
   content: string;
-  /** Structured output parsed from agent response when schema was provided */
+  /** Validated data object from structured-output tool (when schema was provided). Source: tool_execution_end.result.details */
   parsedOutput?: unknown;
   usage?: {
     input: number;
@@ -63,6 +73,8 @@ export interface AgentResult {
   };
   durationMs?: number;
   error?: string;
+  /** Tool calls collected from agent JSONL stream (FR-7). */
+  toolCalls?: ToolCallEntry[];
 }
 
 export interface ExecutionTraceNode {
