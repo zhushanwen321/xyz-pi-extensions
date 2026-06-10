@@ -87,7 +87,7 @@ complexity: L1
 
 | Function | Signature | Returns | Edge Cases | Spec Ref |
 |----------|-----------|---------|------------|----------|
-| groupByPhase | `(nodes: ExecutionTraceNode[]) => Map<string, ExecutionTraceNode[]>` | Map | Empty trace → empty Map; no phase → "(no phase)" group | AC-7 |
+| groupByPhase | `(nodes: ExecutionTraceNode[]) => Map<string, ExecutionTraceNode[]>` | Map | Empty trace → empty Map; no phase → unnamed group (hidden from sidebar) | AC-7 |
 | formatSidebarNode | `(node: ExecutionTraceNode, selected: boolean, width: number) => string` | string | Width < 10 → truncate aggressively | AC-9 |
 | formatActivityLine | `(entry: ToolCallEntry, maxWidth: number) => string` | string | maxWidh < 10 → name only | AC-13 |
 | formatElapsed | `(startedAt?: string, now: number) => string` | string | startedAt undefined → "-" | AC-4 |
@@ -112,7 +112,7 @@ complexity: L1
 | AC-11 | formatTokenStat | usage + toolCalls → stat string | Task 1, 3 |
 | AC-12 | WorkflowsView prompt fold | task lines > 20 → fold with … | Task 3 |
 | AC-13 | formatActivityLine | toolCall → Tool(args) | Task 1, 3 |
-| AC-14 | WorkflowsView 👉 handler | toggle prompt expand | Task 3 |
+| AC-14 | WorkflowsView Enter handler | toggle prompt expand | Task 3 |
 | AC-15 | WorkflowEventEmitter.subscribe | open → subscribe, close → unsubscribe | Task 2 |
 | AC-16 | WorkflowEventEmitter tick | subscription count → interval lifecycle | Task 2 |
 | AC-17 | WorkflowsView x handler | confirm → orchestrator.abort | Task 3 |
@@ -136,14 +136,14 @@ complexity: L1
 | AC-4 header 两行 + elapsed | adopted | Task 3 |
 | AC-5 sidebar 24 列格式 | adopted | Task 3 |
 | AC-6 双栏 │ 拼接 | adopted | Task 3 |
-| AC-7 (no phase) 兜底组 | adopted | Task 3 |
+| AC-7 single phase skip | adopted | Task 3 |
 | AC-8 ↓ 导航 | adopted | Task 3 |
 | AC-9 sidebar ● 状态色 | adopted | Task 3 |
 | AC-10 context title | adopted | Task 3 |
 | AC-11 tok · tool calls 统计 | adopted | Task 1, 3 |
 | AC-12 prompt … 折叠 | adopted | Task 3 |
 | AC-13 Activity 结构化列表 | adopted | Task 1, 3 |
-| AC-14 👉 展开 prompt | adopted | Task 3 |
+| AC-14 Enter 展开 prompt | adopted | Task 3 |
 | AC-15 subscribe/unsubscribe | adopted | Task 2 |
 | AC-16 tick interval 清理 | adopted | Task 2 |
 | AC-17 x abort + confirm | adopted | Task 3 |
@@ -443,7 +443,7 @@ LEVEL 2 — 执行详情 (↑↓ agent · ⏎ prompt · p pause · s save · esc
 - getSubscriptionCount 返回正确值
 
 `workflows-view.test.ts`:
-- groupByPhase: 按 phase 分组，无 phase 归入 "(no phase)"
+- groupByPhase: 按 phase 分组，无 phase 归入 unnamed group（跳过 Level 0）
 - groupByPhase: 空数组返回空 Map
 - formatSidebarNode: 选中节点有 ❯ 前缀，宽度截断
 - formatSidebarNode: ● 颜色按状态映射

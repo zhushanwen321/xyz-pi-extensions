@@ -239,7 +239,7 @@ function saveTraceToFile(instance: WorkflowInstance, ctx: ExtensionContext): voi
   lines.push(`Budget: ${instance.budget.usedTokens}/${instance.budget.maxTokens ?? "unlimited"} tokens, $${instance.budget.usedCost.toFixed(4)}`, "");
   const phases = buildPhaseGroups(instance.trace);
   for (const pg of phases) {
-    lines.push(`## Phase: ${pg.name || "(default)"}`, "");
+    lines.push(`## Phase: ${pg.name || "(unnamed)"}`, "");
     for (const node of pg.nodes) {
       lines.push(`### [#${node.stepIndex}] ${node.agent} — ${node.status}`);
       lines.push(`- Model: ${node.model}`);
@@ -345,7 +345,12 @@ function renderLevel0(
     leftLines.push(`${pointer}${dot} ${pg.name} ${pg.doneCount}/${pg.nodes.length}`);
   }
 
-  // Right: agent overview — all agents across all phases
+  // Right: context title + all agents across all phases
+  const phase = phases[state.phaseIdx];
+  if (phase) {
+    const title = phase.name ? `${phase.name} · ${phase.nodes.length} agents` : `${phase.nodes.length} agents`;
+    rightLines.push(theme.fg("muted", title));
+  }
   for (const pg of phases) {
     for (const node of pg.nodes) {
       const dot = statusDotStr(node.status, theme);
@@ -386,7 +391,12 @@ function renderLevel1(
     leftLines.push(`${pointer}${dot} ${pg.name} ${pg.doneCount}/${pg.nodes.length}`);
   }
 
-  // Right: agent list for current phase (selectable, same format as level 0)
+  // Right: context title + agent list for current phase
+  const currentPhase = phases[state.phaseIdx];
+  if (currentPhase) {
+    const title = currentPhase.name ? `${currentPhase.name} · ${currentPhase.nodes.length} agents` : `${currentPhase.nodes.length} agents`;
+    rightLines.push(theme.fg("muted", title));
+  }
   for (let i = 0; i < agents.length; i++) {
     const node = agents[i];
     const isSelected = i === state.agentIdx;
@@ -419,13 +429,23 @@ function renderLevel2(
   const leftLines: string[] = [];
   const rightLines: string[] = [];
 
-  // Left: agent list (same as level 1, for context)
+  // Left: agent list with full info (model + tok + tools + time)
   for (let i = 0; i < agents.length; i++) {
     const a = agents[i];
     const isSelected = i === state.agentIdx;
     const pointer = isSelected ? "❯ " : "  ";
     const dot = statusDotStr(a.status, theme);
-    leftLines.push(`${pointer}${dot} ${a.agent}`);
+    const elapsed = formatElapsed(
+      a.startedAt,
+      a.completedAt ? new Date(a.completedAt).getTime() : Date.now(),
+    );
+    const tok = a.result?.usage;
+    const tokStr = tok ? `${Math.round((tok.input + tok.output) / 1000)}k` : "";
+    const tcCount = a.result?.toolCalls?.length ?? 0;
+    const parts = [`${pointer}${dot} ${a.agent}`];
+    if (tokStr) parts.push(`${tokStr} · ${tcCount}t`);
+    parts.push(elapsed);
+    leftLines.push(parts.join(" "));
   }
 
   // Right: full detail

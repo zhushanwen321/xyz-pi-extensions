@@ -25,7 +25,7 @@ Pi TUI 已有 `ctx.ui.custom(component)` 接管整个 TUI 的机制（docs/tui.m
 - 单 workflow 多层级导航（按 runId 进入 → phases 树 → node 详情）
 - 实时刷新：orchestrator 暴露订阅 API（不靠 setInterval 轮询）
 - Activity 区域用增强的 agent-pool toolCalls[] 结构化列表（每行 `ToolName(argsPreview)`）
-- Phase 树按 `node.phase` 字段分组，无 phase 归入 "(no phase)"
+- Phase 树按 `node.phase` 字段分组，无 phase 隐藏 phase 选择层，直接进入 agent 列表层
 
 ## Functional Requirements
 
@@ -107,9 +107,9 @@ Pi TUI 已有 `ctx.ui.custom(component)` 接管整个 TUI 的机制（docs/tui.m
 | AC-9 | FR-3.3 | sidebar 节点行 `❯ ● <agentName> <model>`，● 颜色 pending 灰 / running 高亮 / completed 绿 / failed 红 |
 | AC-10 | FR-2.4 | main 顶部 context title 显示 `<phaseName> · N agent` |
 | AC-11 | FR-4.2 | 统计行显示 `N tok · M tool calls`，随 agent 运行实时递增 |
-| AC-12 | FR-4.3 | prompt > 20 行时折叠，显示 `… N more lines`（U+2026 单字符） |
+| AC-12 | FR-4.2 | prompt > 3 行时折叠，显示 `… N more lines`（U+2026 单字符） |
 | AC-13 | FR-4.4 | Activity 显示结构化列表 `Skill(code-review)`、`Bash(git diff ...)`，非全文输出 |
-| AC-14 | FR-4.6 | `👉` 展开 prompt section，再次 `👉` 折叠 |
+| AC-14 | FR-4.6 | Enter 展开 prompt section，再次 Enter 折叠 |
 | AC-15 | FR-5.1 | 视图打开时调 `subscribe(runId, listener)`，关闭时 `unsubscribe` 触发 |
 | AC-16 | FR-5.4 | 没有任何视图打开时，orchestrator 内部无活跃 setInterval |
 | AC-17 | FR-6.1 | `p` 键 pause/resume，terminal 状态时 notify |

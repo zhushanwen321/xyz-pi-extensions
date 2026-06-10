@@ -3,7 +3,7 @@
  *
  * Commands:
  *   /workflow run <name> [--args key=val ...] [--tokens N] [--time N]
- *   /workflows              — interactive panel (delegates to widget overlay)
+ *   /workflows              — fullscreen workflow view (three-level navigation)
  *   /workflow list          — list running workflows
  *   /workflow abort <run-id>
  *
@@ -314,7 +314,7 @@ export function registerWorkflowCommands(
             return;
           }
           try {
-            orch.abort(runId);
+            await orch.abort(runId);
             ctx.ui.notify(`Aborted ${runId.slice(0, RUNID_SLICE_LENGTH)}...`, "info");
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
