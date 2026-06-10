@@ -440,30 +440,33 @@ export function registerWorkflowCommands(
         return;
       }
 
-      // No runId — filter running/paused, select or enter directly (FR-1.2)
-      const active = orch.list().filter(
-        (s) => s.status === "running" || s.status === "paused",
-      );
+      // No runId — list all instances (active first), select or enter directly
+      const all = orch.list();
 
-      if (active.length === 0) {
-        ctx.ui.notify("No active workflows. Use /workflow list to see all.", "info");
+      if (all.length === 0) {
+        ctx.ui.notify("No workflows found. Use /workflow <name> to start one.", "info");
         return;
       }
 
-      if (active.length === 1) {
-        // Single active workflow — enter directly (FR-1.2)
-        await createWorkflowsView(orch, active[0].runId, ctx.ui.theme, ctx);
-        return;
-      }
-
-      // Multiple — SelectList sorted by startedAt descending
-      active.sort((a, b) => {
+      // Sort: running/paused first, then by startedAt descending
+      const statusOrder: Record<string, number> = { running: 0, paused: 1, completed: 2, failed: 3 };
+      all.sort((a, b) => {
+        const sa = statusOrder[a.status] ?? 9;
+        const sb = statusOrder[b.status] ?? 9;
+        if (sa !== sb) return sa - sb;
         const ta = a.startedAt ? new Date(a.startedAt).getTime() : 0;
         const tb = b.startedAt ? new Date(b.startedAt).getTime() : 0;
         return tb - ta;
       });
 
-      const entries = active.map(
+      // Single instance — enter directly
+      if (all.length === 1) {
+        await createWorkflowsView(orch, all[0].runId, ctx.ui.theme, ctx);
+        return;
+      }
+
+      // Multiple — SelectList
+      const entries = all.map(
         (s) => `${s.name} [${s.status}] (${s.runId.slice(0, RUNID_SHORT_LENGTH)}...)`,
       );
       const selected = await ctx.ui.select("Select workflow:", entries);
@@ -472,7 +475,7 @@ export function registerWorkflowCommands(
       const idx = entries.indexOf(selected);
       if (idx === -1) return;
 
-      await createWorkflowsView(orch, active[idx].runId, ctx.ui.theme, ctx);
+      await createWorkflowsView(orch, all[idx].runId, ctx.ui.theme, ctx);
     },
   });
 }

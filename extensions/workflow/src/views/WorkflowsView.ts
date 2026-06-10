@@ -56,7 +56,8 @@ export function createWorkflowsView(
     const state = { selectedIndex: 0, promptExpanded: false, disposed: false };
     // Cached render output — invalidated on state change or theme change
     const cache = { width: undefined as number | undefined, lines: undefined as string[] | undefined };
-    const requestRender = () => (tui as { requestRender(): void }).requestRender();
+    const tuiAny = tui as { requestRender(): void; terminal: { rows: number } };
+    const requestRender = () => tuiAny.requestRender();
 
     const unsubscribe = orchestrator.events.subscribe(runId, () => {
       if (!state.disposed) requestRender();
@@ -77,9 +78,14 @@ export function createWorkflowsView(
       render(width: number): string[] {
         if (cache.lines && cache.width === width) return cache.lines;
         const inst = orchestrator.getInstance(runId);
-        const lines = inst
+        const raw = inst
           ? renderView(inst, theme, width, state.selectedIndex, state.promptExpanded)
           : ["(workflow not found)"];
+        // Pad to full terminal height so overlay covers entire screen
+        const termHeight = tuiAny.terminal.rows;
+        const lines = raw.length < termHeight
+          ? [...raw, ...Array.from({ length: termHeight - raw.length }, () => "")]
+          : raw;
         cache.width = width;
         cache.lines = lines;
         return lines;
