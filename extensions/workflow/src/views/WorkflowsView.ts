@@ -31,6 +31,7 @@ import {
   groupByPhase,
   isTerminalStatus,
   OUTPUT_TRUNCATE_BYTES,
+  padVisible,
   PROMPT_FOLD_LINES,
   SIDEBAR_WIDTH,
   statusDotStr,
@@ -342,7 +343,7 @@ function renderView(
 
   const bodyHeight = Math.max(sidebarLines.length, mainLines.length);
   for (let i = 0; i < bodyHeight; i++) {
-    const left = (sidebarLines[i] ?? "").padEnd(SIDEBAR_WIDTH).slice(0, SIDEBAR_WIDTH);
+    const left = padVisible(sidebarLines[i] ?? "", SIDEBAR_WIDTH);
     lines.push(left + "│" + (mainLines[i] ?? ""));
   }
 

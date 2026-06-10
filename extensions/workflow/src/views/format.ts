@@ -135,3 +135,10 @@ export function visibleLen(s: string): number {
   // eslint-disable-next-line no-control-regex
   return s.replace(/\x1b\[[0-9;]*m/g, "").replace(/\x1b\][^\x07]*\x07/g, "").length;
 }
+
+/** Pad an ANSI-escaped string to a target *visible* width. */
+export function padVisible(s: string, width: number): string {
+  const vl = visibleLen(s);
+  if (vl >= width) return s;
+  return s + " ".repeat(width - vl);
+}

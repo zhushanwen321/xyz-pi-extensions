@@ -15,6 +15,8 @@ import {
   formatElapsed,
   formatTokenStat,
   statusDotStr,
+  padVisible,
+  visibleLen,
 } from "../views/format.js";
 import type { ExecutionTraceNode } from "../state.js";
 
@@ -228,5 +230,42 @@ describe("statusDotStr", () => {
 
   it("maps unknown to muted token", () => {
     expect(statusDotStr("pending", fakeTheme)).toBe("●");
+  });
+});
+
+// ── visibleLen + padVisible ───────────────────────────────────
+
+describe("visibleLen", () => {
+  it("counts plain text length", () => {
+    expect(visibleLen("hello")).toBe(5);
+  });
+
+  it("strips ANSI escape codes", () => {
+    expect(visibleLen("\x1b[1m\x1b[32mbold-green\x1b[0m\x1b[0m")).toBe(10);
+  });
+
+  it("empty string", () => {
+    expect(visibleLen("")).toBe(0);
+  });
+});
+
+describe("padVisible", () => {
+  it("pads plain string to target width", () => {
+    expect(padVisible("abc", 6)).toBe("abc   ");
+  });
+
+  it("does not pad if already at width", () => {
+    expect(padVisible("abc", 3)).toBe("abc");
+  });
+
+  it("does not pad if exceeding width", () => {
+    expect(padVisible("abcdef", 3)).toBe("abcdef");
+  });
+
+  it("pads ANSI string by visible width", () => {
+    const ansi = "\x1b[1mabc\x1b[0m";
+    const result = padVisible(ansi, 6);
+    expect(visibleLen(result)).toBe(6);
+    expect(result.endsWith("   ")).toBe(true);
   });
 });
