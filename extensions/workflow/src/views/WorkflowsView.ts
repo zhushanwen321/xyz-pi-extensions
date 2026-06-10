@@ -33,7 +33,6 @@ import {
   formatElapsed,
   formatTokenStat,
   isTerminalStatus,
-  OUTPUT_TRUNCATE_BYTES,
   padVisible,
   PROMPT_FOLD_LINES,
   SIDEBAR_WIDTH,
@@ -147,10 +146,21 @@ function processKey(
 
   // Level 2 (Detail)
   if (state.level === 2) {
+    // ↑↓ navigate agents within current phase
+    if (matchesKey(data, Key.up)) {
+      if (state.agentIdx > 0) { state.agentIdx--; state.promptExpanded = false; return true; }
+      return false;
+    }
+    if (matchesKey(data, Key.down)) {
+      const agents = phases[state.phaseIdx]?.nodes ?? [];
+      if (state.agentIdx < agents.length - 1) { state.agentIdx++; state.promptExpanded = false; return true; }
+      return false;
+    }
     if (data === "\r" || data === "\n" || data === "I") {
       state.promptExpanded = !state.promptExpanded;
       return true;
     }
+    if (data === "p") { handlePauseResume(orchestrator, runId, instance, ctx); return false; }
     if (data === "s") { saveTraceToFile(instance, ctx); return false; }
     return false;
   }
@@ -200,6 +210,22 @@ function processKey(
 }
 
 // ── Save trace ────────────────────────────────────────────────
+
+function handlePauseResume(
+  orchestrator: WorkflowOrchestrator,
+  runId: string,
+  instance: WorkflowInstance,
+  ctx: ExtensionContext,
+): void {
+  if (isTerminalStatus(instance.status)) {
+    ctx.ui.notify(`Workflow already ${instance.status}`, "warning");
+    return;
+  }
+  const action = instance.status === "running" ? "pause" : "resume";
+  void (action === "pause" ? orchestrator.pause(runId) : orchestrator.resume(runId))
+    .then(() => ctx.ui.notify(`Workflow ${action}d`, "info"))
+    .catch((err: Error) => ctx.ui.notify(`${action} failed: ${err.message}`, "error"));
+}
 
 function saveTraceToFile(instance: WorkflowInstance, ctx: ExtensionContext): void {
   const dir = path.join(os.homedir(), ".pi", "agent", "workflow-traces");
@@ -277,7 +303,7 @@ function renderView(
   if (state.level === 0) {
     renderLevel0(lines, phases, state, theme, width, mainWidth);
   } else if (state.level === 1) {
-    renderLevel1(lines, phase, agents, state, theme, width, mainWidth);
+    renderLevel1(lines, phases, agents, state, theme, width, mainWidth);
   } else {
     renderLevel2(lines, phase, agents, state, theme, width, mainWidth);
   }
@@ -288,7 +314,7 @@ function renderView(
     ? "↑↓ phase · ⏎ enter · esc back"
     : state.level === 1
       ? "↑↓ agent · ⏎ detail · esc back"
-      : "⏎ prompt · s save · esc back";
+      : "↑↓ agent · ⏎ prompt · p pause · s save · esc back";
   lines.push(theme.fg("muted", footer));
 
   return lines;
@@ -316,10 +342,9 @@ function renderLevel0(
     leftLines.push(`${pointer}${dot} ${pg.name} ${pg.doneCount}/${pg.nodes.length}`);
   }
 
-  // Right: agent overview for selected phase
-  const phase = phases[state.phaseIdx];
-  if (phase) {
-    for (const node of phase.nodes) {
+  // Right: agent overview — all agents across all phases
+  for (const pg of phases) {
+    for (const node of pg.nodes) {
       const dot = statusDotStr(node.status, theme);
       const elapsed = formatElapsed(
         node.startedAt,
@@ -339,7 +364,7 @@ function renderLevel0(
 
 function renderLevel1(
   lines: string[],
-  phase: PhaseGroup,
+  phases: PhaseGroup[],
   agents: import("../state.js").ExecutionTraceNode[],
   state: ViewState,
   theme: ThemeLike,
@@ -349,13 +374,13 @@ function renderLevel1(
   const leftLines: string[] = [];
   const rightLines: string[] = [];
 
-  // Left: agent list
-  for (let i = 0; i < agents.length; i++) {
-    const node = agents[i];
-    const isSelected = i === state.agentIdx;
+  // Left: phase list (same as level 0, for context)
+  for (let i = 0; i < phases.length; i++) {
+    const pg = phases[i];
+    const isSelected = i === state.phaseIdx;
     const pointer = isSelected ? "❯ " : "  ";
-    const dot = statusDotStr(node.status, theme);
-    leftLines.push(`${pointer}${dot} ${node.agent}`);
+    const dot = statusDotStr(pg.doneCount === pg.nodes.length ? "completed" : "running", theme);
+    leftLines.push(`${pointer}${dot} ${pg.name} ${pg.doneCount}/${pg.nodes.length}`);
   }
 
   // Right: selected agent summary
@@ -437,18 +462,17 @@ function renderLevel2(
     }
     rightLines.push("");
 
-    // Outcome
+    // Outcome: show last meaningful text output
     rightLines.push(theme.fg("muted", "Outcome"));
     if (node.status === "running") {
       rightLines.push(theme.fg("dim", "  Still running..."));
     } else if (node.result?.error) {
       rightLines.push(theme.fg("error", `  ${node.result.error.slice(0, mainWidth - 4)}`));
     } else if (node.result?.content) {
-      let content = node.result.content;
-      if (content.length > OUTPUT_TRUNCATE_BYTES) {
-        content = content.slice(0, OUTPUT_TRUNCATE_BYTES) + `\n${ELLIPSIS} (truncated)`;
-      }
-      rightLines.push(...content.split("\n").slice(0, 20).map((l) => `  ${l}`));
+      const allLines = node.result.content.split("\n");
+      // Show last 5 lines of output
+      const tail = allLines.slice(-5);
+      rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - 4)}`));
     }
   }
 
