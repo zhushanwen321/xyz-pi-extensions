@@ -225,6 +225,7 @@ export class WorkflowOrchestrator {
       budget: { maxTokens: budgetTokens, maxTimeMs: budgetTimeMs },
     });
     instance.startedAt = new Date().toISOString();
+    instance.description = workflow.description;
 
     this.runMetaMap.set(runId, { scriptSource, args, budgetTokens, budgetTimeMs, signal });
     this.instances.set(runId, instance);

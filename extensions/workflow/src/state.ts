@@ -100,6 +100,7 @@ export interface ExecutionTraceNode {
 export interface WorkflowInstance {
   runId: string;
   name: string;
+  description?: string;
   status: WorkflowStatus;
   callCache: Map<number, AgentResult>;
   trace: ExecutionTraceNode[];

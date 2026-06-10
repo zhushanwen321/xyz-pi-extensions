@@ -44,7 +44,7 @@ export function isTerminalStatus(status: WorkflowStatus): boolean {
 export function groupByPhase(nodes: ExecutionTraceNode[]): Map<string, ExecutionTraceNode[]> {
   const map = new Map<string, ExecutionTraceNode[]>();
   for (const node of nodes) {
-    const phase = node.phase || "(no phase)";
+    const phase = node.phase || "(default)";
     let arr = map.get(phase);
     if (!arr) {
       arr = [];

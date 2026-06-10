@@ -255,15 +255,25 @@ function renderView(
   const completed = instance.trace.filter((n) => n.status === "completed").length;
   const total = instance.trace.length;
   const elapsed = formatElapsed(instance.startedAt);
-  const headerRight = `${completed}/${total} agents · ${elapsed}`;
+  const statusTag = isTerminalStatus(instance.status) ? " · done" : "";
+  const headerRight = `${completed}/${total} agents · ${elapsed}${statusTag}`;
 
-  lines.push(theme.bold(instance.name));
-  const descLine = instance.error ? theme.fg("error", instance.error.slice(0, 60)) : "";
+  // Line 1: workflow name (bold) + stats (right-aligned)
+  const nameLine = theme.bold(instance.name);
   const rightPart = theme.fg("muted", headerRight);
-  const padLen = descLine
-    ? Math.max(0, width - visibleLen(descLine) - visibleLen(rightPart) - 2)
-    : Math.max(0, width - visibleLen(rightPart));
-  lines.push(descLine ? descLine + " ".repeat(padLen) + rightPart : " ".repeat(padLen) + rightPart);
+  const padLen = Math.max(0, width - visibleLen(nameLine) - visibleLen(rightPart) - 1);
+  lines.push(nameLine + " ".repeat(padLen) + rightPart);
+
+  // Line 2: description (truncated)
+  if (instance.description) {
+    const descVisible = width - 2;
+    const descText = instance.description.length > descVisible
+      ? instance.description.slice(0, descVisible - 1) + ELLIPSIS
+      : instance.description;
+    lines.push(theme.fg("dim", descText));
+  } else if (instance.error) {
+    lines.push(theme.fg("error", instance.error.slice(0, width - 2)));
+  }
   lines.push("─".repeat(width));
 
   const phaseMap = groupByPhase(instance.trace);
@@ -274,7 +284,7 @@ function renderView(
   for (const entry of flatEntries) {
     if (entry.index === selectedIndex && entry.type === "node" && entry.node) {
       selectedNode = entry.node;
-      selectedPhase = entry.node.phase || "(no phase)";
+      selectedPhase = entry.node.phase || "(default)";
     }
   }
 
@@ -295,8 +305,8 @@ function renderView(
   const mainLines: string[] = [];
 
   if (selectedNode) {
-    const phaseNodes = phaseMap.get(selectedPhase ?? "(no phase)") ?? [];
-    mainLines.push(theme.fg("accent", `${selectedPhase ?? "(no phase)"} · ${phaseNodes.length} agent`), "");
+    const phaseNodes = phaseMap.get(selectedPhase ?? "(default)") ?? [];
+    mainLines.push(theme.fg("accent", `${selectedPhase ?? "(default)"} · ${phaseNodes.length} agent`), "");
     mainLines.push(theme.bold(selectedNode.agent));
     mainLines.push(`${statusDotStr(selectedNode.status, theme)} ${selectedNode.status} · ${selectedNode.model}`);
     mainLines.push(theme.fg("dim", formatTokenStat(

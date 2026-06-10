@@ -62,7 +62,7 @@ describe("groupByPhase", () => {
     expect(result.get("build")!.length).toBe(1);
   });
 
-  it("nodes without phase go to (no phase) group", () => {
+  it("nodes without phase go to (default) group", () => {
     const nodes = [
       makeNode({ stepIndex: 0, agent: "a" }),
       makeNode({ stepIndex: 1, phase: "build", agent: "b" }),
@@ -70,7 +70,7 @@ describe("groupByPhase", () => {
 
     const result = groupByPhase(nodes);
 
-    expect(result.get("(no phase)")!.length).toBe(1);
+    expect(result.get("(default)")!.length).toBe(1);
     expect(result.get("build")!.length).toBe(1);
   });
 
