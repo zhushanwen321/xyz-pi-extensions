@@ -19,7 +19,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { matchesKey, Key } from "@mariozechner/pi-tui";
+import { matchesKey, Key, truncateToWidth } from "@mariozechner/pi-tui";
 
 import type { WorkflowOrchestrator } from "../../orchestrator.js";
 import type { WorkflowInstance } from "../../domain/state.js";
@@ -43,6 +43,15 @@ import {
 } from "./format.js";
 
 const MAX_TOOL_CALLS_DISPLAY = 3;
+
+function statusLabel(status: string, theme: ThemeLike): string {
+  switch (status) {
+    case "completed": return theme.fg("success", status);
+    case "running": return theme.fg("warning", status);
+    case "failed": return theme.fg("error", status);
+    default: return theme.fg("muted", status);
+  }
+}
 
 // ── View state ────────────────────────────────────────────────
 
@@ -70,10 +79,8 @@ export function createWorkflowsView(
       return { render: () => [], invalidate() {}, handleInput() {} };
     }
 
-    const phases = buildPhaseGroups(instance.trace);
-    // Skip level 0 when only 1 phase — go directly to agent list
     const initialState: ViewState = {
-      level: phases.length > 1 ? 0 : 1,
+      level: 0,
       phaseIdx: 0,
       agentIdx: 0,
       promptExpanded: false,
@@ -381,7 +388,6 @@ function renderLevel1(
   const leftLines: string[] = [];
   const rightLines: string[] = [];
 
-  // Left: sidebar title + phase list
   leftLines.push(theme.fg("muted", "Phases"));
   leftLines.push("─".repeat(SIDEBAR_WIDTH));
   for (let i = 0; i < phases.length; i++) {
@@ -426,23 +432,16 @@ function renderLevel2(
   const leftLines: string[] = [];
   const rightLines: string[] = [];
 
-  // Left: agent list with full info (model + tok + tools + time)
+  // Left: agent names (truncate to fit sidebar, no dot/stats)
   for (let i = 0; i < agents.length; i++) {
     const a = agents[i];
     const isSelected = i === state.agentIdx;
     const pointer = isSelected ? "❯ " : "  ";
-    const dot = statusDotStr(a.status, theme);
-    const elapsed = formatElapsed(
-      a.startedAt,
-      a.completedAt ? new Date(a.completedAt).getTime() : Date.now(),
-    );
-    const tok = a.result?.usage;
-    const tokStr = tok ? `${Math.round((tok.input + tok.output) / 1000)}k` : "";
-    const tcCount = a.result?.toolCalls?.length ?? 0;
-    const parts = [`${pointer}${dot} ${a.agent}`];
-    if (tokStr) parts.push(`${tokStr} · ${tcCount}t`);
-    parts.push(elapsed);
-    leftLines.push(parts.join(" "));
+    const maxNameWidth = SIDEBAR_WIDTH - 4; // pointer(2) + spaces(2)
+    const agentName = visibleLen(a.agent) > maxNameWidth
+      ? truncateToWidth(a.agent, maxNameWidth - 1) + ELLIPSIS
+      : a.agent;
+    leftLines.push(`${pointer}${agentName}`);
   }
 
   // Right: full detail
@@ -453,7 +452,7 @@ function renderLevel2(
       node.startedAt,
       node.completedAt ? new Date(node.completedAt).getTime() : Date.now(),
     );
-    rightLines.push(`${statusDotStr(node.status, theme)} ${node.status} · ${node.model}`);
+    rightLines.push(`${statusDotStr(node.status, theme)} ${statusLabel(node.status, theme)} · ${node.model}`);
     rightLines.push(theme.fg("dim", formatTokenStat(node.result?.usage, node.result?.toolCalls, elapsed)));
     rightLines.push("");
 
