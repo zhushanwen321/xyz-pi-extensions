@@ -284,6 +284,7 @@ function renderView(
   if (phases.length === 0) return ["(no agents)"];
 
   // ── Header ──
+  const contentWidth = width - 2; // 2 chars for left/right border
   const completed = instance.trace.filter((n) => n.status === "completed").length;
   const total = instance.trace.length;
   const elapsed = formatElapsed(instance.startedAt);
@@ -292,7 +293,9 @@ function renderView(
 
   const nameLine = theme.bold(instance.name);
   const rightPart = theme.fg("muted", headerRight);
-  lines.push(nameLine);
+  // Top border
+  lines.push("╭" + "─".repeat(contentWidth) + "╮");
+  lines.push("│" + nameLine + "│");
 
   // FR-2.2: line 2 = description + stats (right-aligned)
   // When no description, just show stats
@@ -303,16 +306,18 @@ function renderView(
       : instance.description;
     const descPart = theme.fg("dim", descText);
     const padLen = Math.max(0, width - visibleLen(descPart) - visibleLen(rightPart) - 1);
-    lines.push(descPart + " ".repeat(padLen) + rightPart);
+    lines.push("│" + descPart + " ".repeat(padLen) + rightPart + "│");
   } else {
-    lines.push(rightPart);
+    lines.push("│" + rightPart + "│");
   }
-  lines.push("─".repeat(width));
+  lines.push("├" + "─".repeat(contentWidth) + "┤");
 
   // ── Body ──
   const phase = phases[state.phaseIdx] ?? phases[0];
   const agents = phase.nodes;
-  const mainWidth = width - SIDEBAR_WIDTH - 1;
+  const mainWidth = contentWidth - SIDEBAR_WIDTH - 1;
+
+  const bodyStart = lines.length;
 
   if (state.level === 0) {
     renderLevel0(lines, phases, state, theme, width, mainWidth);
@@ -322,14 +327,20 @@ function renderView(
     renderLevel2(lines, phase, agents, state, theme, width, mainWidth);
   }
 
+  // Wrap body lines with left/right border
+  for (let i = bodyStart; i < lines.length; i++) {
+    lines[i] = "│" + lines[i] + "│";
+  }
+
   // ── Footer ──
-  lines.push("─".repeat(width));
+  lines.push("├" + "─".repeat(contentWidth) + "┤");
   const footer = state.level === 0
     ? "↑↓ phase · ⏎ enter · esc back"
     : state.level === 1
       ? "↑↓ agent · ⏎ detail · esc back"
       : "↑↓ agent · ⏎ prompt · p pause · s save · esc back";
-  lines.push(theme.fg("muted", footer));
+  lines.push("│" + theme.fg("muted", footer) + "│");
+  lines.push("╰" + "─".repeat(contentWidth) + "╯");
 
   return lines;
 }
