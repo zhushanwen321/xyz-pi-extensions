@@ -119,6 +119,11 @@ declare module "@mariozechner/pi-tui" {
 	export class Component {}
 	export function matchesKey(key: any, binding: any): boolean;
 	export function truncateToWidth(text: string, width: number): string;
+	export const Key: {
+		escape: string; up: string; down: string; left: string; right: string;
+		enter: string; space: string; tab: string; backspace: string; delete: string;
+		ctrl(k: string): string; shift(k: string): string; alt(k: string): string;
+	};
 }
 
 declare module "@mariozechner/pi-ai" {

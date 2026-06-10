@@ -20,7 +20,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 
-import type { WorkflowBudget } from "./state.js";
+import type { WorkflowBudget, ToolCallEntry } from "./state.js";
 
 // ── Public types ──────────────────────────────────────────────
 
@@ -91,15 +91,7 @@ export interface AgentResult {
   toolCalls: ToolCallEntry[];
 }
 
-// ── Tool call tracking (FR-7) ──────────────────────────────
-// Mirror of state.ToolCallEntry — keep fields in sync.
-
-export interface ToolCallEntry {
-  /** Tool name from JSONL event.toolName (e.g. "Bash", "Skill", "Read"). */
-  name: string;
-  /** Serialized args preview. Full storage; render-time truncation by formatActivityLine. */
-  input: string;
-}
+// ToolCallEntry imported from state.ts (canonical definition)
 
 export interface AgentUsage {
   input: number;

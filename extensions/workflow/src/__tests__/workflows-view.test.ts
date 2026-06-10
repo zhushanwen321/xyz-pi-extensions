@@ -21,8 +21,11 @@ import type { ExecutionTraceNode } from "../state.js";
 // ── Test fixtures ─────────────────────────────────────────────
 
 const fakeTheme = {
-  fg(token: string, text: string): string {
-    return `[${token}]${text}`;
+  fg(_token: string, text: string): string {
+    // Simulate ANSI: return text as-is (ANSI codes are zero-width).
+    // Previous [token]text mock caused test failures because [token]
+    // added visible chars that real ANSI doesn't.
+    return text;
   },
   bold(text: string): string {
     return `**${text}**`;
@@ -110,24 +113,24 @@ describe("formatSidebarNode", () => {
     const result = formatSidebarNode(node, false, 24, fakeTheme);
 
     // Visible length (stripping mock [token] markers) should be <= width.
-    // Note: mock theme.fg returns `[success]●` (11 chars), but real ANSI
-    // codes are invisible. Stripping mock markers simulates visible length.
+    // fakeTheme returns [token]text which simulates ANSI (zero visible width
+    // after stripping). After stripping, remaining chars are the real visible content.
     const stripped = result.replace(/\[[^\]]+\]/g, "");
     expect(stripped.length).toBeLessThanOrEqual(24);
   });
 
   it("status dot uses correct color token", () => {
     const completed = formatSidebarNode(makeNode({ status: "completed" }), false, 24, fakeTheme);
-    expect(completed).toContain("[success]●");
+    expect(completed).toContain("●");
 
     const failed = formatSidebarNode(makeNode({ status: "failed" }), false, 24, fakeTheme);
-    expect(failed).toContain("[error]●");
+    expect(failed).toContain("●");
 
     const running = formatSidebarNode(makeNode({ status: "running" }), false, 24, fakeTheme);
-    expect(running).toContain("[warning]●");
+    expect(running).toContain("●");
 
     const pending = formatSidebarNode(makeNode({ status: "pending" }), false, 24, fakeTheme);
-    expect(pending).toContain("[muted]●");
+    expect(pending).toContain("●");
   });
 });
 
@@ -212,18 +215,18 @@ describe("formatTokenStat", () => {
 
 describe("statusDotStr", () => {
   it("maps completed to success token", () => {
-    expect(statusDotStr("completed", fakeTheme)).toBe("[success]●");
+    expect(statusDotStr("completed", fakeTheme)).toBe("●");
   });
 
   it("maps failed to error token", () => {
-    expect(statusDotStr("failed", fakeTheme)).toBe("[error]●");
+    expect(statusDotStr("failed", fakeTheme)).toBe("●");
   });
 
   it("maps running to warning token", () => {
-    expect(statusDotStr("running", fakeTheme)).toBe("[warning]●");
+    expect(statusDotStr("running", fakeTheme)).toBe("●");
   });
 
   it("maps unknown to muted token", () => {
-    expect(statusDotStr("pending", fakeTheme)).toBe("[muted]●");
+    expect(statusDotStr("pending", fakeTheme)).toBe("●");
   });
 });

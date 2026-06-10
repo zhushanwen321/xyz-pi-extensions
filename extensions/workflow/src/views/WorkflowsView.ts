@@ -1,8 +1,9 @@
 /**
  * Workflow Fullscreen TUI View (FR-1 through FR-8)
  *
- * Replaces the old widget with a single fullscreen view providing
- * real-time phases navigation, structured Activity, and in-view workflow control.
+ * Uses ctx.ui.custom() factory pattern — the canonical Pi TUI approach.
+ * The factory receives (tui, theme, keybindings, done) and returns a
+ * component object implementing render/handleInput/invalidate.
  */
 
 import * as fs from "node:fs";
@@ -10,6 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { matchesKey, Key } from "@mariozechner/pi-tui";
 
 import type { WorkflowOrchestrator } from "../orchestrator.js";
 import type { ExecutionTraceNode, WorkflowInstance, WorkflowStatus } from "../state.js";
@@ -20,7 +22,6 @@ import {
   ELLIPSIS,
   formatActivityLine,
   formatElapsed,
-  formatSidebarNode,
   formatTokenStat,
   groupByPhase,
   isTerminalStatus,
@@ -31,7 +32,7 @@ import {
   visibleLen,
 } from "./format.js";
 
-// ── View Component factory ────────────────────────────────────
+// ── View factory ──────────────────────────────────────────────
 
 export function createWorkflowsView(
   orchestrator: WorkflowOrchestrator,
@@ -39,30 +40,18 @@ export function createWorkflowsView(
   theme: ThemeLike,
   ctx: ExtensionContext,
 ): Promise<void> {
-  return ctx.ui.custom((tui: unknown, _th: unknown, _kb: unknown, done: () => void) => {
+  return ctx.ui.custom<void>((tui: unknown, _theme: unknown, _kb: unknown, done: () => void) => {
     const instance = orchestrator.getInstance(runId);
-    if (!instance) { done(); return { invalidate() {}, render() { return []; }, handleInput() {} }; }
-
-    const tuiObj = tui as { addChild?: (c: unknown) => void; setFocus?: (c: unknown) => void; requestRender?: () => void } | null;
+    if (!instance) {
+      ctx.ui.notify("Workflow not found", "warning");
+      done();
+      return { render: () => [], invalidate() {}, handleInput() {} };
+    }
 
     const state = { selectedIndex: 0, promptExpanded: false, disposed: false };
 
-    const requestRender = () => { tuiObj?.requestRender?.(); };
-
-    const view = {
-      invalidate() { requestRender(); },
-      render(width: number): string[] {
-        const inst = orchestrator.getInstance(runId);
-        if (!inst) return ["(workflow not found)"];
-        return renderView(inst, theme, width, state.selectedIndex, state.promptExpanded);
-      },
-      handleInput(data: string): void {
-        handleKey(data, orchestrator, runId, state, theme, ctx, done, requestRender);
-      },
-    };
-
     const unsubscribe = orchestrator.events.subscribe(runId, () => {
-      if (!state.disposed) requestRender();
+      if (!state.disposed) (tui as { requestRender(): void }).requestRender();
     });
 
     const wrappedDone = () => {
@@ -72,17 +61,29 @@ export function createWorkflowsView(
       done();
     };
 
-    tuiObj?.addChild?.(view);
-    tuiObj?.setFocus?.(view);
-    (view as Record<string, unknown>)._done = wrappedDone;
+    const component = {
+      invalidate(): void {},
+      render(width: number): string[] {
+        const inst = orchestrator.getInstance(runId);
+        if (!inst) return ["(workflow not found)"];
+        return renderView(inst, theme, width, state.selectedIndex, state.promptExpanded);
+      },
+      handleInput(data: string): void {
+        if (state.disposed) return;
+        const reRender = processKeyInput(
+          data, orchestrator, runId, state, theme, ctx, wrappedDone,
+        );
+        if (reRender) (tui as { requestRender(): void }).requestRender();
+      },
+    };
 
-    return view;
+    return component;
   });
 }
 
-// ── Keyboard handler ──────────────────────────────────────────
+// ── Keyboard handler (returns true if re-render needed) ───────
 
-function handleKey(
+function processKeyInput(
   data: string,
   orchestrator: WorkflowOrchestrator,
   runId: string,
@@ -90,82 +91,81 @@ function handleKey(
   theme: ThemeLike,
   ctx: ExtensionContext,
   done: () => void,
-  requestRender: () => void,
-): void {
+): boolean {
   const instance = orchestrator.getInstance(runId);
-  if (!instance) return;
+  if (!instance) return false;
 
   const terminal = isTerminalStatus(instance.status as WorkflowStatus);
   const phaseMap = groupByPhase(instance.trace as ExecutionTraceNode[]);
   const flatEntries = buildFlatEntries(phaseMap);
 
-  switch (data) {
-    case "\x1b": case "escape": {
-      if (state.disposed) return;
-      state.disposed = true;
-      done();
-      break;
-    }
-    case "\x1b[A": case "up": {
-      if (flatEntries.length === 0) break;
-      for (let i = state.selectedIndex - 1; i >= 0; i--) {
-        if (flatEntries[i].type === "node") { state.selectedIndex = i; break; }
-      }
-      requestRender();
-      break;
-    }
-    case "\x1b[B": case "down": {
-      if (flatEntries.length === 0) break;
-      for (let i = state.selectedIndex + 1; i < flatEntries.length; i++) {
-        if (flatEntries[i].type === "node") { state.selectedIndex = i; break; }
-      }
-      requestRender();
-      break;
-    }
-    case "I": { // shift+i → 👉 toggle prompt expand (FR-4.6)
-      state.promptExpanded = !state.promptExpanded;
-      requestRender();
-      break;
-    }
-    case "x": { // FR-6.1: abort with confirm
-      if (terminal) { ctx.ui.notify(`Workflow already ${instance.status}`, "warning"); break; }
-      void ctx.ui.confirm("Stop this workflow?", `${instance.name} (${runId.slice(0, 8)}...)`).then((ok) => {
-        if (!ok) return;
-        void orchestrator.abort(runId)
-          .then(() => ctx.ui.notify("Workflow aborted", "info"))
-          .catch((err) => ctx.ui.notify(`Abort failed: ${err instanceof Error ? err.message : String(err)}`, "error"));
-      });
-      break;
-    }
-    case "p": { // FR-6.2: pause/resume with confirm
-      if (terminal) { ctx.ui.notify(`Workflow already ${instance.status}`, "warning"); break; }
-      const action = instance.status === "running" ? "pause" : "resume";
-      void ctx.ui.confirm(`${action === "pause" ? "Pause" : "Resume"} this workflow?`, `${instance.name}`).then((ok) => {
-        if (!ok) return;
-        const op = action === "pause"
-          ? orchestrator.pause(runId)
-          : orchestrator.resume(runId);
-        void op
-          .then(() => ctx.ui.notify(`Workflow ${action}d`, "info"))
-          .catch((err) => ctx.ui.notify(`${action} failed: ${err instanceof Error ? err.message : String(err)}`, "error"));
-      });
-      break;
-    }
-    case "r": { // FR-6.3: restart (node detail view only)
-      if (terminal) { ctx.ui.notify(`Workflow already ${instance.status}`, "warning"); break; }
-      void ctx.ui.confirm("Restart from scratch?", `This will start a new run of '${instance.name}'`).then((ok) => {
-        if (!ok) return;
-        void orchestrator.run(instance.name, {}, instance.budget.maxTokens, instance.budget.maxTimeMs)
-          .then((newRunId) => ctx.ui.notify(`Restarted → ${newRunId.slice(0, 8)}...`, "info"))
-          .catch((err) => ctx.ui.notify(`Restart failed: ${err instanceof Error ? err.message : String(err)}`, "error"));
-      });
-      break;
-    }
-    case "s": { // FR-6.7: save trace to file
-      saveTraceToFile(instance, ctx);
-      break;
-    }
+  if (matchesKey(data, Key.escape)) {
+    done();
+    return false;
   }
+
+  if (matchesKey(data, Key.up)) {
+    if (flatEntries.length === 0) return false;
+    for (let i = state.selectedIndex - 1; i >= 0; i--) {
+      if (flatEntries[i].type === "node") { state.selectedIndex = i; return true; }
+    }
+    return false;
+  }
+
+  if (matchesKey(data, Key.down)) {
+    if (flatEntries.length === 0) return false;
+    for (let i = state.selectedIndex + 1; i < flatEntries.length; i++) {
+      if (flatEntries[i].type === "node") { state.selectedIndex = i; return true; }
+    }
+    return false;
+  }
+
+  if (data === "I") {
+    state.promptExpanded = !state.promptExpanded;
+    return true;
+  }
+
+  if (data === "x") {
+    if (terminal) { ctx.ui.notify(`Workflow already ${instance.status}`, "warning"); return false; }
+    void ctx.ui.confirm("Stop this workflow?", `${instance.name} (${runId.slice(0, 8)}...)`).then((ok) => {
+      if (!ok) return;
+      void orchestrator.abort(runId)
+        .then(() => ctx.ui.notify("Workflow aborted", "info"))
+        .catch((err: Error) => ctx.ui.notify(`Abort failed: ${err.message}`, "error"));
+    });
+    return false;
+  }
+
+  if (data === "p") {
+    if (terminal) { ctx.ui.notify(`Workflow already ${instance.status}`, "warning"); return false; }
+    const action = instance.status === "running" ? "pause" : "resume";
+    void ctx.ui.confirm(`${action === "pause" ? "Pause" : "Resume"} this workflow?`, `${instance.name}`).then((ok) => {
+      if (!ok) return;
+      const op = action === "pause" ? orchestrator.pause(runId) : orchestrator.resume(runId);
+      void op
+        .then(() => ctx.ui.notify(`Workflow ${action}d`, "info"))
+        .catch((err: Error) => ctx.ui.notify(`${action} failed: ${err.message}`, "error"));
+    });
+    return false;
+  }
+
+  if (data === "r") {
+    if (terminal) { ctx.ui.notify(`Workflow already ${instance.status}`, "warning"); return false; }
+    void ctx.ui.confirm("Restart from scratch?", `This will start a new run of '${instance.name}'`).then((ok) => {
+      if (!ok) return;
+      void orchestrator.run(instance.name, {}, instance.budget.maxTokens, instance.budget.maxTimeMs)
+        .then((newRunId) => ctx.ui.notify(`Restarted → ${newRunId.slice(0, 8)}...`, "info"))
+        .catch((err: Error) => ctx.ui.notify(`Restart failed: ${err.message}`, "error"));
+    });
+    return false;
+  }
+
+  if (data === "s") {
+    saveTraceToFile(instance, ctx);
+    return false;
+  }
+
+  return false;
 }
 
 // ── Save trace to file ────────────────────────────────────────
@@ -217,7 +217,6 @@ function renderView(
 ): string[] {
   const lines: string[] = [];
 
-  // ── Header (2 lines + separator) ──
   const completed = instance.trace.filter((n) => n.status === "completed").length;
   const total = instance.trace.length;
   const elapsed = formatElapsed(instance.startedAt);
@@ -232,7 +231,6 @@ function renderView(
   lines.push(descLine ? descLine + " ".repeat(padLen) + rightPart : " ".repeat(padLen) + rightPart);
   lines.push("─".repeat(width));
 
-  // ── Body (sidebar + main) ──
   const phaseMap = groupByPhase(instance.trace as ExecutionTraceNode[]);
   const flatEntries = buildFlatEntries(phaseMap);
 
@@ -272,7 +270,6 @@ function renderView(
     )));
     mainLines.push("");
 
-    // Prompt section
     const taskLines = selectedNode.task.split("\n");
     const lineCount = taskLines.length;
     mainLines.push(theme.fg("muted", `Prompt · ${lineCount} lines · 👉 ${promptExpanded ? "collapse" : "expand"}`));
@@ -284,7 +281,6 @@ function renderView(
     }
     mainLines.push("");
 
-    // Activity section
     const toolCalls = selectedNode.result?.toolCalls;
     mainLines.push(theme.fg("muted", "Activity"));
     if (toolCalls && toolCalls.length > 0) {
@@ -294,7 +290,6 @@ function renderView(
     }
     mainLines.push("");
 
-    // Outcome section
     mainLines.push(theme.fg("muted", "Outcome"));
     if (selectedNode.status === "running") {
       mainLines.push(theme.fg("dim", "  Still running..."));
@@ -303,7 +298,7 @@ function renderView(
     } else if (selectedNode.result?.content) {
       let content = selectedNode.result.content;
       if (content.length > OUTPUT_TRUNCATE_BYTES) {
-        content = content.slice(0, OUTPUT_TRUNCATE_BYTES) + `\n${ELLIPSIS} (truncated, see full output via result)`;
+        content = content.slice(0, OUTPUT_TRUNCATE_BYTES) + `\n${ELLIPSIS} (truncated)`;
       }
       mainLines.push(...content.split("\n").slice(0, 20).map((l) => `  ${l}`));
     }
@@ -311,14 +306,12 @@ function renderView(
     mainLines.push(theme.fg("muted", "Select an agent node to view details"));
   }
 
-  // Combine sidebar + main with │ separator
   const bodyHeight = Math.max(sidebarLines.length, mainLines.length);
   for (let i = 0; i < bodyHeight; i++) {
     const left = (sidebarLines[i] ?? "").padEnd(SIDEBAR_WIDTH).slice(0, SIDEBAR_WIDTH);
     lines.push(left + "│" + (mainLines[i] ?? ""));
   }
 
-  // ── Footer ──
   lines.push("─".repeat(width));
   const footer = selectedNode
     ? "↑↓ agent · 👉 prompt · x stop · r restart · p pause · esc back · s save"
@@ -327,3 +320,6 @@ function renderView(
 
   return lines;
 }
+
+// re-export for tests
+import { formatSidebarNode } from "./format.js";
