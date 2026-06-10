@@ -454,10 +454,13 @@ function renderLevel2(
   // Right: full detail
   const node = agents[state.agentIdx];
   if (node) {
-    // Header
-    rightLines.push(theme.bold(node.agent));
+    // FR-4.1: 2 lines — status + model, then stats + elapsed
+    const elapsed = formatElapsed(
+      node.startedAt,
+      node.completedAt ? new Date(node.completedAt).getTime() : Date.now(),
+    );
     rightLines.push(`${statusDotStr(node.status, theme)} ${node.status} · ${node.model}`);
-    rightLines.push(theme.fg("dim", formatTokenStat(node.result?.usage, node.result?.toolCalls)));
+    rightLines.push(theme.fg("dim", formatTokenStat(node.result?.usage, node.result?.toolCalls, elapsed)));
     rightLines.push("");
 
     // Prompt

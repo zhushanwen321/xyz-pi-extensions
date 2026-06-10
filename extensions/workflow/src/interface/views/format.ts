@@ -75,10 +75,12 @@ export function formatElapsed(startedAt?: string, now: number = Date.now()): str
 export function formatTokenStat(
   usage?: { input: number; output: number },
   toolCalls?: ToolCallEntry[],
+  elapsed?: string,
 ): string {
   const tokens = usage ? usage.input + usage.output : 0;
   const tools = toolCalls?.length ?? 0;
-  return `${tokens} tok · ${tools} tool calls`;
+  const base = `${tokens} tok · ${tools} tool calls`;
+  return elapsed ? `${base} · ${elapsed}` : base;
 }
 
 /** Format a sidebar node line with status indicator. */

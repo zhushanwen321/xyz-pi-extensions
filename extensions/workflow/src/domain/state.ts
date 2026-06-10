@@ -126,6 +126,7 @@ type SerializedExecutionTraceNode = Omit<ExecutionTraceNode, "verifyStrategy">;
 interface SerializedWorkflowInstance {
   runId: string;
   name: string;
+  description?: string;
   status: WorkflowStatus;
   callCache: SerializedCallCacheEntry[];
   trace: SerializedExecutionTraceNode[];
@@ -204,6 +205,7 @@ export function serializeInstance(instance: WorkflowInstance): SerializedWorkflo
   return {
     runId: instance.runId,
     name: instance.name,
+    description: instance.description,
     status: instance.status,
     callCache: Array.from(instance.callCache.entries()).map(([key, value]) => ({ key, value })),
     trace: instance.trace.map(({ verifyStrategy: _verifyStrategy, ...rest }) => rest),
@@ -228,6 +230,7 @@ export function deserializeInstance(data: SerializedWorkflowInstance): WorkflowI
   return {
     runId: data.runId,
     name: data.name,
+    description: data.description,
     status,
     callCache: new Map(
       (data.callCache ?? []).map((entry: SerializedCallCacheEntry) => [entry.key, entry.value]),
