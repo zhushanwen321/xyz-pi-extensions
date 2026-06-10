@@ -52,12 +52,13 @@ export function createWorkflowsView(
       return { render: () => [], invalidate() {}, handleInput() {} };
     }
 
-    // Find first selectable agent index
-    const phases = buildPhaseGroups(instance.trace);
-    const firstAgentIdx = phases.length > 0 && phases[0].nodes.length > 0 ? 1 : 0;
+    // Find first selectable agent entry
+    const initPhases = buildPhaseGroups(instance.trace);
+    const initEntries = buildSidebar(initPhases);
+    const firstAgent = initEntries.findIndex((e) => e.type === "agent");
 
     const state = {
-      selectedIdx: firstAgentIdx, // 0-based among all selectable+header lines
+      selectedIdx: firstAgent >= 0 ? firstAgent : 0,
       promptExpanded: false,
       disposed: false,
     };
@@ -118,7 +119,10 @@ interface SidebarEntry {
 function buildSidebar(phases: PhaseGroup[]): SidebarEntry[] {
   const entries: SidebarEntry[] = [];
   for (const pg of phases) {
-    entries.push({ type: "phase", phaseGroup: pg });
+    // Only add phase header when name is non-empty (skip fallback)
+    if (pg.name) {
+      entries.push({ type: "phase", phaseGroup: pg });
+    }
     for (const node of pg.nodes) {
       entries.push({ type: "agent", node });
     }
