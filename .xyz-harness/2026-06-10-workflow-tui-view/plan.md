@@ -275,28 +275,60 @@ complexity: L1
 **View Architecture:**
 
 ```
+LEVEL 0 — Phase 概览 (↑↓ phase · ⏎ enter · esc back)
 ┌──────────────────────────────────────────────────────────────┐
 │ <name> (bold)                                                 │
-│ <description> (muted)                    N/M agents · <elapsed> │
+│ <description> (muted)            N/M agents · <elapsed> · done │
 │──────────────────────────────────────────────────────────────│
-│ Phases         │ <context title: phaseName · N agent>          │
-│ ❯ 1 Ph1 0/2   │ <node title: agentName> (bold)                │
-│   2 Ph2 0/1   │ ● <Status> · <model>                          │
-│                │ <N> tok · <M> tool calls                      │
-│                │                                                │
-│                │ Prompt · <N> lines · 👉 expand                │
-│                │   <preview...>                                │
-│                │                                                │
-│                │ Activity                                      │
-│                │   ToolName(argsPreview)                        │
-│                │                                                │
-│                │ Outcome                                       │
-│                │   Still running...                            │
-│                │                                                │
+│ Phases         │ Review · 3 agents                            │
+│ ❯ Review 2/3  │  ● review-1    glm-5.1    148.6k tok · 47… │
+│   Fix    2/2  │  ● review-2    glm-5.1    122.6k tok · 54… │
+│               │  ● review-3    glm-5.1    0 tok · 4 tools… │
+│               │                                                │
 ├──────────────────────────────────────────────────────────────┤
-│ ↑↓ agent · 👉 prompt · x stop · r restart · p pause · ...    │
+│ ↑↓ phase · ⏎ enter · esc back                                │
+└──────────────────────────────────────────────────────────────┘
+
+LEVEL 1 — Agent 选择 (↑↓ agent · ⏎ detail · esc back)
+┌──────────────────────────────────────────────────────────────┐
+│ <name> (bold)                                                 │
+│ <description> (muted)            N/M agents · <elapsed> · done │
+│──────────────────────────────────────────────────────────────│
+│ Phases         │ Review · 3 agents                            │
+│ ❯ Review 2/3  │❯ ● review-1    glm-5.1    148.6k tok · 47… │
+│   Fix    2/2  │  ● review-2    glm-5.1    122.6k tok · 54… │
+│               │  ● review-3    glm-5.1    0 tok · 4 tools… │
+│               │                                                │
+├──────────────────────────────────────────────────────────────┤
+│ ↑↓ agent · ⏎ detail · esc back                               │
+└──────────────────────────────────────────────────────────────┘
+
+LEVEL 2 — 执行详情 (↑↓ agent · ⏎ prompt · p pause · s save · esc back)
+┌──────────────────────────────────────────────────────────────┐
+│ <name> (bold)                                                 │
+│ <description> (muted)            N/M agents · <elapsed> · done │
+│──────────────────────────────────────────────────────────────│
+│ ❯ ● review-1  │  ● completed · glm-5.1                       │
+│   ● review-2  │  148.6k tok · 47 tool calls · 6m 30s        │
+│               │                                                │
+│               │  Prompt · 20 lines · ⏎ expand                │
+│               │    Iteration 1 of a review-fix loop.         │
+│               │    … 18 more lines                           │
+│               │                                                │
+│               │  Activity · last 3 of 47 tool calls          │
+│               │    Write(/tmp/report-1.md)                   │
+│               │    Bash(cat > /tmp/report-1.md << 'REPORT…') │
+│               │    Bash(cat /tmp/report-1.md | head -5)      │
+│               │                                                │
+│               │  Outcome                                      │
+│               │    Now I have enough information to write... │
+│               │                                                │
+├──────────────────────────────────────────────────────────────┤
+│ ↑↓ agent · ⏎ prompt · p pause · s save · esc back            │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+**只有 1 个 phase 时**：跳过 Level 0，直接进入 Level 1（agent 列表）。左侧不显示 phase 选择，直接显示 agent 列表。
 
 **Key Implementation Points:**
 
@@ -306,10 +338,19 @@ complexity: L1
    - 纯函数提取到顶层导出（供测试）：`groupByPhase`, `formatSidebarNode`, `formatActivityLine`, `formatElapsed`, `formatTokenStat`
    - `ctx.ui.custom()` 接受 Component，组件内部 `onKeyEvent` 处理键盘
    - 订阅 `orchestrator.events.subscribe(runId, listener)`，listener 调 `component.invalidate()` 触发重渲染
-   - esc → `ctx.ui.custom(null)` 关闭视图 + `unsubscribe()`
+   - 三层导航：Level 0（Phase 概览）→ Level 1（Agent 选择）→ Level 2（执行详情）
+   - 只有 1 个 phase 时跳过 Level 0，直接进入 Level 1
+   - Level 0 右侧显示所有 agent 平铺列表（跨 phase）
+   - Level 1 右侧显示当前 phase 的 agent 列表（可选择）
+   - Level 2 右侧显示执行详情（4 模块：状态、Prompt、Activity、Outcome）
+   - Prompt 默认折叠前 3 行，按 Enter 展开
+   - Activity 显示最近 3 次 tool call
+   - Outcome 显示最后 5 行 output
+   - Esc 逐层退回，Level 0 按 Esc 关闭视图 + `unsubscribe()`
    - `s` → `fs.promises.writeFile` 保存 trace markdown 到 `~/.pi/agent/workflow-traces/<runId>.md`
-   - **FR-4.7**: prompt output 超过 100KB 时，截断内容 + 显示 `(truncated, see full output via result)`
-   - **FR-6.5**: 所有 action（abort/pause/resume/restart）触发后**不自动关闭视图**，用户继续在视图中看状态变化
+   - `p` → pause/resume
+   - **FR-4.7**: prompt output 超过 100KB 时，截断内容 + 显示 `(truncated)`
+   - **FR-6.5**: 所有 action 触发后**不自动关闭视图**，用户继续在视图中看状态变化
    - **FR-3.2**: sidebar 第二层 nodes 按 `stepIndex` 升序排列
 
 2. **index.ts 改动**:
@@ -351,17 +392,16 @@ complexity: L1
    ```
 
 **Footer 快捷键逻辑 (FR-2.5):**
-- 概览视图（selectedPhaseIndex >= 0 && selectedNodeIndex < 0）: `↑↓ select · x stop workflow · p pause · esc back · s save`
-- 节点详情视图（selectedNodeIndex >= 0）: `↑↓ agent · 👉 prompt · x stop · r restart · p pause · esc back · s save`
+- Level 0（Phase 概览）：`↑↓ phase · ⏎ enter · esc back`
+- Level 1（Agent 选择）：`↑↓ agent · ⏎ detail · esc back`
+- Level 2（执行详情）：`↑↓ agent · ⏎ prompt · p pause · s save · esc back`
 
 **键盘处理:**
-- `↑/↓`: sidebar 节点间切换（跨 phase）
-- `👉` (shift+i 或专用键): toggle prompt expand
-- `x`: confirm → abort
-- `r`: confirm → run (仅节点详情视图)
-- `p`: confirm → pause/resume
-- `s`: save trace to file
-- `esc`: close view
+- `↑/↓`: 当前层级内切换选中项
+- `Enter`: Level 0 → 进入 Level 1；Level 1 → 进入 Level 2；Level 2 → toggle prompt expand
+- `p`: pause/resume（仅 Level 2）
+- `s`: save trace to file（仅 Level 2）
+- `Esc`: 退回上一层级，Level 0 按 Esc 关闭视图
 
 **Color Mapping (FR-4.1):**
 - pending: `theme.fg("muted", "●")`

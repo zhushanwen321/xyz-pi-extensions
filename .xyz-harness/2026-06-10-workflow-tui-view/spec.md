@@ -31,35 +31,39 @@ Pi TUI 已有 `ctx.ui.custom(component)` 接管整个 TUI 的机制（docs/tui.m
 
 ### FR-1: 命令入口
 - **FR-1.1** 注册命令 `/workflows [runId]`，无参时弹出 SelectList 选择 active+paused workflow，有参数时直接进入全屏视图
-- **FR-1.2** SelectList 候选来自 `orchestrator.getInstanceSummaries()` 过滤后 `status in ["running", "paused"]` 的实例，按 `startedAt` 倒序
+- **FR-1.2** SelectList 候选来自 `orchestrator.getInstanceSummaries()` 所有实例，按状态优先级排序 running > paused > completed > failed，同状态按 `startedAt` 倒序
 - **FR-1.3** 选中后 `ctx.ui.custom(WorkflowsView, { runId })` 接管 TUI 渲染区
 - **FR-1.4** esc 关闭全屏视图，回到 Pi 主交互界面
 - **FR-1.5** 命令处理函数返回值丢弃（不调用 `ctx.ui.setEditorText`）
 
 ### FR-2: 视图布局
 - **FR-2.1** 全屏视图分三段：header / body (sidebar + main) / footer，header 与 body 之间用 `─` 横线分隔
-- **FR-2.2** header 两行：第 1 行 workflow name（粗体），第 2 行 description（灰色）+ 右对齐 `N/M agents · elapsed`（M = trace 总数，N = completed 数，elapsed 1s 内实时更新）
-- **FR-2.3** sidebar 固定 24 列宽度，标题 `Phases`，下方显示 phases 树（按 `node.phase` 字段分组）
-- **FR-2.4** main 区域顶部显示 context title（`<phaseName> · <N> agent`），下方固定显示当前选中节点的详情：状态行 / 统计行 / Prompt / Activity / Outcome
-- **FR-2.5** footer 快捷键因视图状态不同：
-  - 概览视图（sidebar 在 phase 节点，无 agent 选中）：`↑↓ select · x stop workflow · p pause · esc back · s save`
-  - 节点详情视图（sidebar 选中具体 agent 节点）：`↑↓ agent · 👉 prompt · x stop · r restart · p pause · esc back · s save`
-- **FR-2.6** 双栏布局由**手工** ANSI 字符 `│` 拼接两个子组件 render 输出实现（pi-tui 0.73.1 Box 不支持 flex direction，**已验证**：box.d.ts:5-12 children: Component[] 只能垂直堆叠）
+- **FR-2.2** header 两行：第 1 行 workflow name（粗体），第 2 行 description（灰色）+ 右对齐 `N/M agents · elapsed · <status>`
+- **FR-2.3** sidebar 固定 24 列宽度，标题 `Phases`，下方显示 phases 列表（按 `node.phase` 字段分组）。有 phase 名称时显示 phase 名，无 phase 时隐藏 phase 选择层，直接进入 agent 列表层
+- **FR-2.4** main 区域顶部显示 context title（`<phaseName> · <N> agents`），下方显示当前层级的内容
+- **FR-2.5** footer 快捷键因层级不同：
+  - Level 0（Phase 概览）：`↑↓ phase · ⏎ enter · esc back`
+  - Level 1（Agent 选择）：`↑↓ agent · ⏎ detail · esc back`
+  - Level 2（执行详情）：`↑↓ agent · ⏎ prompt · p pause · s save · esc back`
+- **FR-2.6** 双栏布局由**手工** ANSI 字符 `│` 拼接两个子组件 render 输出实现（pi-tui 0.73.1 Box 不支持 flex direction，**已验证**）
+- **FR-2.7** 只有 1 个 phase 时，跳过 Level 0，直接进入 Level 1（agent 列表）
 
-### FR-3: Phases 树导航
-- **FR-3.1** 第一层按 phase 分组：phase 标题行 `<序号> <phaseName> <completedCount>/<totalCount>`，无 phase 归入 `"(no phase)"` 兜底组。当前选中 phase 用 `❯` 标识
-- **FR-3.2** 第二层是 phase 内的 nodes，按 stepIndex 升序
-- **FR-3.3** 每个 node 行：`❯ ● <agentName> <model>`，❯ 标识当前选中节点。● 颜色按状态（pending 灰 / running 高亮 / completed 绿 / failed 红）。长 agent 名 truncateToWidth
-- **FR-3.4** `↑/↓` 在 sidebar 节点间切换（同一 phase 内 + 跨 phase），选中节点变化时 main 区域只重渲染
+### FR-3: 三层导航
+- **FR-3.1** Level 0（Phase 概览）：左侧 phase 列表，标题 `Phases`，下方显示 phase 名称 + 完成数（如 `Review 2/3`）。右侧显示所有 agent 平铺列表（跨 phase），每行 `agent名称 + 模型 + tok + tools + 时间`。Enter 选中 phase 后进入 Level 1
+- **FR-3.2** Level 1（Agent 选择）：左侧 phase 列表（同 Level 0），右侧显示当前 phase 的 agent 列表（可选择），每行格式同 Level 0 右侧。Enter 选中 agent 后进入 Level 2
+- **FR-3.3** Level 2（执行详情）：左侧 agent 列表（同 Level 1），右侧显示选中 agent 的完整执行详情，分 4 个模块纵向布局
+- **FR-3.4** `↑/↓` 在当前层级内切换选中项。Esc 退回上一层级，Level 0 按 Esc 关闭视图
+- **FR-3.5** 只有 1 个 phase 时跳过 Level 0，直接进入 Level 1
+- **FR-3.6** 每个 node 行：状态 dot + agent 名称 + 模型 + tok + tools + 时间。● 颜色按状态（pending 灰 / running 高亮 / completed 绿 / failed 红）
 
-### FR-4: 节点详情
-- **FR-4.1** 节点标题行 `<agentName>`（粗体），下方状态行 `● <Status> · <model>`，● 颜色按状态用 theme token（`success`/`warning`/`error`/`muted`）
-- **FR-4.2** 统计行：`<tokenCount> tok · <toolCallsCount> tool calls`，实时更新。数据源为 `AgentResult.usage` 和 `AgentResult.toolCalls.length`
-- **FR-4.3** Prompt section：标题 `Prompt · <N> lines · 👉 expand`，内容为 `node.task` 全文，默认折叠为前 20 行 + `… <N> more lines`（`…` 为 U+2026 单字符 ellipsis）
-- **FR-4.4** Activity section：标题 `Activity`，内容为结构化工具调用列表，每行 `ToolName(argsPreview)`，args 超长时截断 + `…`。数据源为 `node.result.toolCalls[]`（见 FR-7）
-- **FR-4.5** Outcome section：node running 时显示 `Still running...`；completed 时显示 result 摘要；failed 时显示 `result.error`
-- **FR-4.6** `👉` 键切换 prompt section 的展开/折叠
-- **FR-4.7** output 超过 100KB 时截断 + `(truncated, see full output via result)` 提示
+### FR-4: 节点详情（Level 2 右侧）
+- **FR-4.1** 模块 1（状态行）：第一行 `● <Status> · <model>`，● 颜色按状态。第二行 `<N> tok · <M> tool calls · <elapsed>`
+- **FR-4.2** 模块 2（Prompt）：标题 `Prompt · <N> lines · ⏎ expand`，内容为 `node.task`，默认折叠为前 3 行 + `… <N> more lines`。按 Enter 展开全文，再按折叠
+- **FR-4.3** 模块 3（Activity）：标题 `Activity · last 3 of <N> tool calls`（N > 3 时）或 `Activity · <N> tool calls`（N ≤ 3 时）。内容为最近 3 次 tool call，每行 `ToolName(argsPreview)`
+- **FR-4.4** 模块 4（Outcome）：标题 `Outcome`，内容为最后 5 行 output text。running 时显示 `Still running...`，failed 时显示 error
+- **FR-4.5** 4 个模块之间各空一行分隔
+- **FR-4.6** `⏎` 键切换 prompt section 的展开/折叠
+- **FR-4.7** output 超过 100KB 时截断 + `(truncated)` 提示
 
 ### FR-5: Orchestrator 订阅 API
 - **FR-5.1** 在 `extensions/workflow/src/orchestrator-events.ts` 新增 `subscribe(runId, listener) => unsubscribe` 方法
@@ -70,13 +74,9 @@ Pi TUI 已有 `ctx.ui.custom(component)` 接管整个 TUI 的机制（docs/tui.m
 - **FR-5.6** listener 调用同步 push 事件，不使用 microtask 队列（保证视图状态最终一致即可）
 
 ### FR-6: 视图内控制动作
-- **FR-6.1** `x` 键：弹 confirm dialog "Stop this workflow?"，确认后调 `orchestrator.abort(runId)`，notify 结果
-- **FR-6.2** `p` 键：弹 confirm dialog "Pause this workflow?"，确认后调 `orchestrator.pause(runId)`，notify 结果
-- **FR-6.3** `r` 键（仅节点详情视图可用）：弹 confirm dialog "Restart from scratch?"，确认后调 `orchestrator.run(name, args, tokens, timeMs)`，notify 新 runId
-- **FR-6.4** workflow 已 terminal 状态时，x/p/r 不弹 dialog，直接 notify "Workflow already <status>"
-- **FR-6.5** action 触发后视图**不自动关闭**，用户继续在视图中看状态变化
-- **FR-6.6** confirm dialog 用 `ctx.ui.confirm()`（docs/tui.md § Built-in 已声明），不引入新组件
-- **FR-6.7** `s` 键：保存当前 workflow 运行 trace 到文件（`~/.pi/agent/workflow-traces/<runId>.md`），notify 文件路径
+- **FR-6.1** `p` 键（仅 Level 2）：running 状态调 `orchestrator.pause(runId)`，paused 状态调 `orchestrator.resume(runId)`，terminal 状态 notify "Workflow already <status>"
+- **FR-6.2** action 触发后视图**不自动关闭**，用户继续在视图中看状态变化
+- **FR-6.3** `s` 键（仅 Level 2）：保存当前 workflow 运行 trace 到文件（`~/.pi/agent/workflow-traces/<runId>.md`），notify 文件路径
 
 ### FR-7: Agent-pool 数据增强
 - **FR-7.1** `AgentResult` 接口新增 `toolCalls: ToolCallEntry[]` 字段，其中 `ToolCallEntry = { name: string; input: string }`
@@ -102,7 +102,7 @@ Pi TUI 已有 `ctx.ui.custom(component)` 接管整个 TUI 的机制（docs/tui.m
 | AC-4 | FR-2.2 | header 两行：第 1 行 name（粗体），第 2 行 description + 右对齐 `0/3 agents · 12s`，elapsed 1s 内更新 |
 | AC-5 | FR-2.3 | sidebar 固定 24 列，phase 标题行 `<序号> <phaseName> <completed>/<total>`，超长 truncateToWidth |
 | AC-6 | FR-2.6 | 双栏布局中间有 `│` 字符拼接，宽度 = terminal width - 1 |
-| AC-7 | FR-3.1 | trace 节点无 phase 字段时归入 `"(no phase)"` 组 |
+| AC-7 | FR-3.5 | 只有 1 个 phase 时跳过 Level 0，直接进入 Level 1 |
 | AC-8 | FR-3.4 | `↓` 选中下一个节点，main 区域更新为该节点的详情 |
 | AC-9 | FR-3.3 | sidebar 节点行 `❯ ● <agentName> <model>`，● 颜色 pending 灰 / running 高亮 / completed 绿 / failed 红 |
 | AC-10 | FR-2.4 | main 顶部 context title 显示 `<phaseName> · N agent` |
@@ -112,10 +112,10 @@ Pi TUI 已有 `ctx.ui.custom(component)` 接管整个 TUI 的机制（docs/tui.m
 | AC-14 | FR-4.6 | `👉` 展开 prompt section，再次 `👉` 折叠 |
 | AC-15 | FR-5.1 | 视图打开时调 `subscribe(runId, listener)`，关闭时 `unsubscribe` 触发 |
 | AC-16 | FR-5.4 | 没有任何视图打开时，orchestrator 内部无活跃 setInterval |
-| AC-17 | FR-6.1 | `x` 弹 confirm dialog，确认后 orchestrator.abort 被调用且状态变 `aborted` |
-| AC-18 | FR-6.4 | workflow 已 completed 时按 `x`，notify 不弹 dialog |
-| AC-19 | FR-6.7 | `s` 保存 trace 到文件，notify 文件路径 |
-| AC-20 | FR-2.5 | 概览 footer 无 `r restart`/`👉`；节点详情 footer 有 `r restart`/`👉`/`s save` |
+| AC-17 | FR-6.1 | `p` 键 pause/resume，terminal 状态时 notify |
+| AC-18 | FR-6.1 | workflow 已 completed 时按 `p`，notify 不弹 dialog |
+| AC-19 | FR-6.3 | `s` 保存 trace 到文件，notify 文件路径 |
+| AC-20 | FR-2.5 | Level 0 footer: `↑↓ phase · ⏎ enter · esc back`；Level 1: `↑↓ agent · ⏎ detail · esc back`；Level 2: `↑↓ agent · ⏎ prompt · p pause · s save · esc back` |
 | AC-21 | FR-8.1 | `grep -rn "renderWorkflowDetail" extensions/workflow/src/` 无结果 |
 | AC-22 | FR-8.5 | `grep -rn "registerShortcut.*ctrl+shift[p|x|r]" extensions/workflow/src/` 无结果 |
 | AC-23 | FR-7.1 | `AgentResult` 新增 `toolCalls: ToolCallEntry[]` 字段，TypeScript 类型检查通过 |
