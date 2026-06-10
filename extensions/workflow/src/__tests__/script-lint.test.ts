@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lintScript } from "../script-lint";
+import { lintScript } from "../infra/script-lint";
 
 describe("lintScript", () => {
   it("passes a clean script", () => {

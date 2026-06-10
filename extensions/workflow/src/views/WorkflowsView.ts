@@ -22,7 +22,7 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { matchesKey, Key } from "@mariozechner/pi-tui";
 
 import type { WorkflowOrchestrator } from "../orchestrator.js";
-import type { WorkflowInstance } from "../state.js";
+import type { WorkflowInstance } from "../domain/state.js";
 
 import {
   type PhaseGroup,
@@ -376,7 +376,7 @@ function renderLevel0(
 function renderLevel1(
   lines: string[],
   phases: PhaseGroup[],
-  agents: import("../state.js").ExecutionTraceNode[],
+  agents: import("../domain/state.js").ExecutionTraceNode[],
   state: ViewState,
   theme: ThemeLike,
   width: number,
@@ -423,7 +423,7 @@ function renderLevel1(
 function renderLevel2(
   lines: string[],
   phase: PhaseGroup,
-  agents: import("../state.js").ExecutionTraceNode[],
+  agents: import("../domain/state.js").ExecutionTraceNode[],
   state: ViewState,
   theme: ThemeLike,
   width: number,

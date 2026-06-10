@@ -20,7 +20,7 @@ import {
   buildPhaseGroups,
   formatAgentOneLiner,
 } from "../views/format.js";
-import type { ExecutionTraceNode } from "../state.js";
+import type { ExecutionTraceNode } from "../domain/state.js";
 
 // ── Test fixtures ─────────────────────────────────────────────
 

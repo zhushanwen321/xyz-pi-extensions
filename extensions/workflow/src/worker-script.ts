@@ -30,7 +30,7 @@
  *     { type: "abort", reason: string }
  */
 
-import type { AgentResult } from "./state.js";
+import type { AgentResult } from "./domain/state.js";
 
 // ── Worker data shape (for main-thread consumption) ──────────
 

@@ -11,7 +11,7 @@ import {
   serializeInstance,
   TERMINAL_STATUSES,
   VALID_TRANSITIONS,
-} from "../src/state";
+} from "../src/domain/state";
 
 describe("state_lost + verifyStrategy", () => {
   it("state_lost_is_terminal", () => {

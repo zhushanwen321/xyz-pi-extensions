@@ -28,7 +28,7 @@ const TEST_TMP_WORKFLOW = {
   source: "tmp",
 };
 
-vi.mock("../src/config-loader.js", () => ({
+vi.mock("../src/infra/config-loader.js", () => ({
   loadWorkflows: vi.fn().mockResolvedValue([TEST_SAVED_WORKFLOW, TEST_TMP_WORKFLOW]),
   getWorkflow: vi.fn(),
   invalidateCache: vi.fn(),

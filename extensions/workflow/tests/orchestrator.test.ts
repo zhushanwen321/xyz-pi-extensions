@@ -33,7 +33,7 @@ import {
   createInstance,
   serializeInstance,
   type WorkflowInstance,
-} from "../src/state";
+} from "../src/domain/state";
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -517,7 +517,7 @@ describe("WorkflowOrchestrator", () => {
       // Access the internal reconstructState via the module
       // Since reconstructState is inside the factory, we test through the session_start flow.
       // For unit testing, we directly test the file reading and deserialization.
-      const instances = new Map<string, import("../src/state").WorkflowInstance>();
+      const instances = new Map<string, import("../src/domain/state").WorkflowInstance>();
       const entries = mockCtx.sessionManager.getEntries();
       const pointers = new Map<string, { path: string }>();
       for (const entry of entries) {
@@ -532,8 +532,8 @@ describe("WorkflowOrchestrator", () => {
         const content = await fs.promises.readFile(pointer.path, "utf8");
         const lines = content.split("\n").filter((l) => l.trim());
         for (const line of lines) {
-          const parsed = JSON.parse(line) as Parameters<typeof import("../src/state").deserializeInstance>[0];
-          const deserialized = import("../src/state").then((m) => m.deserializeInstance(parsed));
+          const parsed = JSON.parse(line) as Parameters<typeof import("../src/domain/state").deserializeInstance>[0];
+          const deserialized = import("../src/domain/state").then((m) => m.deserializeInstance(parsed));
           const inst = await deserialized;
           instances.set(inst.runId, inst);
         }
@@ -599,14 +599,14 @@ describe("WorkflowOrchestrator", () => {
         }
       }
 
-      const instances = new Map<string, import("../src/state").WorkflowInstance>();
+      const instances = new Map<string, import("../src/domain/state").WorkflowInstance>();
       for (const [runId, pointer] of pointers) {
         try {
           const content = await fs.promises.readFile(pointer.path, "utf8");
           const lines = content.split("\n").filter((l) => l.trim());
           for (const line of lines) {
-            const parsed = JSON.parse(line) as Parameters<typeof import("../src/state").deserializeInstance>[0];
-            const inst = await import("../src/state").then((m) => m.deserializeInstance(parsed));
+            const parsed = JSON.parse(line) as Parameters<typeof import("../src/domain/state").deserializeInstance>[0];
+            const inst = await import("../src/domain/state").then((m) => m.deserializeInstance(parsed));
             instances.set(inst.runId, inst);
           }
         } catch {
@@ -647,14 +647,14 @@ describe("WorkflowOrchestrator", () => {
         }
       }
 
-      const instances = new Map<string, import("../src/state").WorkflowInstance>();
+      const instances = new Map<string, import("../src/domain/state").WorkflowInstance>();
       for (const [runId, pointer] of pointers) {
         try {
           const content = await fs.promises.readFile(pointer.path, "utf8");
           const lines = content.split("\n").filter((l) => l.trim());
           for (const line of lines) {
-            const parsed = JSON.parse(line) as Parameters<typeof import("../src/state").deserializeInstance>[0];
-            const inst = await import("../src/state").then((m) => m.deserializeInstance(parsed));
+            const parsed = JSON.parse(line) as Parameters<typeof import("../src/domain/state").deserializeInstance>[0];
+            const inst = await import("../src/domain/state").then((m) => m.deserializeInstance(parsed));
             instances.set(inst.runId, inst);
           }
         } catch {

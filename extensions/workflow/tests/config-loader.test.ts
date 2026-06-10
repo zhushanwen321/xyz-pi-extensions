@@ -11,7 +11,7 @@ import {
   getWorkflow,
   invalidateCache,
   loadWorkflows,
-} from "../src/config-loader";
+} from "../src/infra/config-loader";
 
 // ── Helpers ──────────────────────────────────────────────────
 

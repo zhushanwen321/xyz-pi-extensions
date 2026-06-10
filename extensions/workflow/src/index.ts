@@ -33,7 +33,7 @@ import {
   transitionStatus,
   type WorkflowInstance,
   type WorkflowStatus,
-} from "./state.js";
+} from "./domain/state.js";
 import { registerGenerateTool } from "./tool-generate.js";
 
 // ── Parameter schema ──────────────────────────────────────────
@@ -670,7 +670,7 @@ function registerWorkflowRunTool(
       const tokens = params.tokens;
       const time = params.time;
 
-      const { loadWorkflows } = await import("./config-loader.js");
+      const { loadWorkflows } = await import("./infra/config-loader.js");
       let allWorkflows: Awaited<ReturnType<typeof loadWorkflows>>;
       try { allWorkflows = await loadWorkflows(); } catch { allWorkflows = []; }
       const available = allWorkflows.filter((wf) => wf.available);
@@ -781,8 +781,8 @@ function registerWorkflowLintTool(
     }),
 
     async execute(_toolCallId: string, params: Static<typeof WorkflowParams>, _signal: AbortSignal | undefined, _onUpdate: unknown, _ctx: ExtensionContext) {
-      const { lintScript } = await import("./script-lint.js");
-      const { loadWorkflows } = await import("./config-loader.js");
+      const { lintScript } = await import("./infra/script-lint.js");
+      const { loadWorkflows } = await import("./infra/config-loader.js");
 
       let allWorkflows: Awaited<ReturnType<typeof loadWorkflows>>;
       try { allWorkflows = await loadWorkflows(); } catch { allWorkflows = []; }

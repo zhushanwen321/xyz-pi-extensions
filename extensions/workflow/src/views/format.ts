@@ -5,7 +5,7 @@
  * All functions are pure: no Pi runtime, no side effects.
  */
 
-import type { ExecutionTraceNode, ToolCallEntry, WorkflowStatus } from "../state.js";
+import type { ExecutionTraceNode, ToolCallEntry, WorkflowStatus } from "../domain/state.js";
 import { truncateToWidth } from "@mariozechner/pi-tui";
 
 // ── Constants ─────────────────────────────────────────────────

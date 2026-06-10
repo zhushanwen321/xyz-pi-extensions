@@ -14,7 +14,7 @@ import type { ExtensionAPI, Theme } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { type Static,Type } from "typebox";
 
-import { invalidateCache,loadWorkflows } from "./config-loader.js";
+import { invalidateCache,loadWorkflows } from "./infra/config-loader.js";
 
 // ── Parameter schema ──────────────────────────────────────────
 

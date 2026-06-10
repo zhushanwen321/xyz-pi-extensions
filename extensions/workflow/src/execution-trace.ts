@@ -11,7 +11,7 @@
 
 import type { CustomEntry,ExtensionAPI, ExtensionContext, SessionEntry } from "@mariozechner/pi-coding-agent";
 
-import type { ExecutionTraceNode } from "./state.js";
+import type { ExecutionTraceNode } from "./domain/state.js";
 
 // ── Constants ───────────────────────────────────────────────────
 

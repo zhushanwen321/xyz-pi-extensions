@@ -12,13 +12,13 @@ import { Worker } from "node:worker_threads";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { cleanupAllTempFiles as cleanupAllFiles, cleanupTempFile as cleanupFile, resolveAgentOpts as resolveOpts } from "./agent-opts-resolver.js";
-import { AgentRegistry } from "./agent-discovery.js";
+import { cleanupAllTempFiles as cleanupAllFiles, cleanupTempFile as cleanupFile, resolveAgentOpts as resolveOpts } from "./infra/agent-opts-resolver.js";
+import { AgentRegistry } from "./infra/agent-discovery.js";
 import { type AgentCallOpts,AgentPool } from "./agent-pool.js";
-import { getWorkflow } from "./config-loader.js";
+import { getWorkflow } from "./infra/config-loader.js";
 import { appendTraceNode } from "./execution-trace.js";
 import { resolveModel } from "./model-resolver.js";
-import { lintScript } from "./script-lint.js";
+import { lintScript } from "./infra/script-lint.js";
 import {
   type AgentResult as StateAgentResult,
   createInstance as createStateInstance,
@@ -29,7 +29,7 @@ import {
   type WorkflowBudget,
   type WorkflowInstance,
   type WorkflowStatus,
-} from "./state.js";
+} from "./domain/state.js";
 import { WorkflowEventEmitter } from "./orchestrator-events.js";
 import { buildWorkerScript } from "./worker-script.js";
 import { checkBudget, scheduleTimeBudgetCheck } from "./orchestrator-budget.js";

@@ -11,7 +11,7 @@
  *   - Tick events fire every 1000ms with Date.now()
  */
 
-import type { WorkflowStatus } from "./state.js";
+import type { WorkflowStatus } from "./domain/state.js";
 
 // ── Public types ──────────────────────────────────────────────
 

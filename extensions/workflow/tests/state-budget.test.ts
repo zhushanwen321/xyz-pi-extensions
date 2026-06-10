@@ -17,7 +17,7 @@ import {
   VALID_TRANSITIONS,
   type WorkflowInstance,
   type WorkflowStatus,
-} from "../src/state";
+} from "../src/domain/state";
 
 // ═══════════════════════════════════════════════════════════════
 // state.ts

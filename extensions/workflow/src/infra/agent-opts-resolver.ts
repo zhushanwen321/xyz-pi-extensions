@@ -10,7 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { AgentRegistry } from "./agent-discovery.js";
-import type { AgentCallOpts } from "./agent-pool.js";
+import type { AgentCallOpts } from "../agent-pool.js";
 
 const UUID_SLICE_LEN = 8;
 

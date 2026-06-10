@@ -26,7 +26,7 @@ import * as path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { AgentRegistry } from "../src/agent-discovery";
+import { AgentRegistry } from "../src/infra/agent-discovery";
 
 // ── Test Fixtures ────────────────────────────────────────────
 
