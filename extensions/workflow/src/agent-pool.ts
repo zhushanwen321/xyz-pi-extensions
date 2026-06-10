@@ -376,10 +376,15 @@ export class AgentPool {
     const args = this.buildArgs(opts);
     const { command, args: cmdArgs } = this.resolveInvocation(args);
 
-    // Build env with PI_WORKFLOW_SCHEMA for structured-output conditional activation
-    const env: Record<string, string | undefined> = { ...process.env };
+    // Build env with PI_WORKFLOW_SCHEMA for structured-output conditional activation.
+    // Filter out undefined values — child_process.spawn requires all env values to be strings.
+    const rawEnv: Record<string, string | undefined> = { ...process.env };
     if (opts.schemaEnv) {
-      env.PI_WORKFLOW_SCHEMA = opts.schemaEnv;
+      rawEnv.PI_WORKFLOW_SCHEMA = opts.schemaEnv;
+    }
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(rawEnv)) {
+      if (v !== undefined) env[k] = v;
     }
 
     const pipeline = makeEmptyPipeline();
@@ -471,7 +476,7 @@ async function runPiProcess(
   cmdArgs: string[],
   pipeline: ParsedPipelineEvent,
   signal?: AbortSignal,
-  env?: Record<string, string | undefined>,
+  env?: Record<string, string>,
 ): Promise<{ exitCode: number; stderr: string }> {
   let stderr = "";
   const exitCode = await new Promise<number>((resolve, reject) => {

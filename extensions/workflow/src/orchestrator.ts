@@ -94,7 +94,6 @@ const MAX_AGENT_RETRIES = 3;
 const RUNID_RADIX = 36;
 const RUNID_SLICE_START = 2;
 const RUNID_SLICE_LENGTH = 8;
-const PROMPT_PREVIEW_LENGTH = 200;
 const EXPONENTIAL_BACKOFF_BASE = 2;
 
 // P1-5: Stale context detection — matches patterns reported when
@@ -685,7 +684,7 @@ export class WorkflowOrchestrator {
     const node: ExecutionTraceNode = {
       stepIndex: callId,
       agent: opts.description ?? opts.agent ?? "unknown",
-      task: opts.prompt.slice(0, PROMPT_PREVIEW_LENGTH),
+      task: opts.prompt,
       model: enrichedOpts.model ?? "default",
       status: "running",
       phase,

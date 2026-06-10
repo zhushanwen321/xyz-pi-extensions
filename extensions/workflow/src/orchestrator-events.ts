@@ -104,8 +104,14 @@ export class WorkflowEventEmitter {
     if (this.tickTimer) return;
     this.tickTimer = setInterval(() => {
       const now = Date.now();
-      for (const [_runId, set] of this.listeners) {
-        for (const listener of set) {
+      // Snapshot listeners to avoid mutation during iteration.
+      // A listener may call unsubscribe() synchronously, which would
+      // modify the map/set while we're iterating it.
+      const snapshot = [...this.listeners.entries()].map(
+        ([runId, set]) => [runId, [...set]] as const,
+      );
+      for (const [_runId, listeners] of snapshot) {
+        for (const listener of listeners) {
           try {
             listener({ type: "tick", now });
           } catch (err) {

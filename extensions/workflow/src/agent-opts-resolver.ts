@@ -126,18 +126,15 @@ export function cleanupAllTempFiles(activeTempFiles: Set<string>): void {
 
 const SKILL_DIR_NAMES = ["SKILL.md", "skill.md"];
 
-/** Cached npm skill candidate paths — built once on first call. */
-let npmSkillCandidates: string[] | null = null;
-
+/** List npm skill candidate paths — re-scans each call to pick up newly installed packages. */
 function getNpmSkillCandidates(npmSkillsDir: string): string[] {
-  if (npmSkillCandidates !== null) return npmSkillCandidates;
-  npmSkillCandidates = [];
+  const candidates: string[] = [];
   try {
     for (const pkg of fs.readdirSync(npmSkillsDir)) {
-      npmSkillCandidates.push(path.join(npmSkillsDir, pkg, "skills"));
+      candidates.push(path.join(npmSkillsDir, pkg, "skills"));
     }
   } catch { /* npm dir not found */ }
-  return npmSkillCandidates;
+  return candidates;
 }
 
 /**

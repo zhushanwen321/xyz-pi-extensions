@@ -175,10 +175,11 @@ function setupWorkflowHook(pi: PiAPI, schemaJson: string): void {
 export default function structuredOutputExtension(pi: PiAPI): void {
 	const schemaEnv = process.env[ENV_SCHEMA];
 
+	// Always register the tool so it's available in all sessions (interactive, workflow, etc.)
+	pi.registerTool(createToolDefinition());
+
 	if (schemaEnv) {
-		// ── Workflow 模式：注册工具 + hook ──
-		pi.registerTool(createToolDefinition());
+		// ── Workflow 模式：额外注册 hook 强制调用 ──
 		setupWorkflowHook(pi, schemaEnv);
 	}
-	// 日常模式：不注册任何东西，完全静默
 }
