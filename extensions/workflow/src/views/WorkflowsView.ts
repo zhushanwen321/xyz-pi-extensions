@@ -41,7 +41,7 @@ export function createWorkflowsView(
 ): Promise<void> {
   return ctx.ui.custom((tui: unknown, _th: unknown, _kb: unknown, done: () => void) => {
     const instance = orchestrator.getInstance(runId);
-    if (!instance) { done(); return undefined; }
+    if (!instance) { done(); return { invalidate() {}, render() { return []; }, handleInput() {} }; }
 
     const tuiObj = tui as { addChild?: (c: unknown) => void; setFocus?: (c: unknown) => void; requestRender?: () => void } | null;
 
@@ -76,7 +76,7 @@ export function createWorkflowsView(
     tuiObj?.setFocus?.(view);
     (view as Record<string, unknown>)._done = wrappedDone;
 
-    return undefined;
+    return view;
   });
 }
 
