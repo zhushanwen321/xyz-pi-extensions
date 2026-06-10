@@ -357,6 +357,7 @@ function renderLevel0(
   // Right: all agents across all phases
   const totalAgents = phases.reduce((sum, p) => sum + p.nodes.length, 0);
   rightLines.push(theme.fg("muted", `All phases · ${totalAgents} agents`));
+  rightLines.push("─".repeat(_mainWidth));
   for (const pg of phases) {
     for (const node of pg.nodes) {
       const dot = statusDotStr(node.status, theme);
@@ -399,6 +400,7 @@ function renderLevel1(
   if (currentPhase) {
     const title = currentPhase.name ? `${currentPhase.name} · ${currentPhase.nodes.length} agents` : `${currentPhase.nodes.length} agents`;
     rightLines.push(theme.fg("muted", title));
+    rightLines.push("─".repeat(_mainWidth));
   }
   for (let i = 0; i < agents.length; i++) {
     const node = agents[i];
@@ -432,7 +434,9 @@ function renderLevel2(
   const leftLines: string[] = [];
   const rightLines: string[] = [];
 
-  // Left: agent names (truncate to fit sidebar, no dot/stats)
+  // Left: agents title + agent names
+  leftLines.push(theme.fg("muted", "Agents"));
+  leftLines.push("─".repeat(SIDEBAR_WIDTH));
   for (let i = 0; i < agents.length; i++) {
     const a = agents[i];
     const isSelected = i === state.agentIdx;
@@ -447,6 +451,8 @@ function renderLevel2(
   // Right: full detail
   const node = agents[state.agentIdx];
   if (node) {
+    // Divider under title
+    rightLines.push("─".repeat(mainWidth));
     // FR-4.1: 2 lines — status + model, then stats + elapsed
     const elapsed = formatElapsed(
       node.startedAt,
