@@ -1,10 +1,17 @@
 /**
- * Workflow Fullscreen TUI View — Single-level, agent-centric.
+ * Workflow Fullscreen TUI View — Three-level navigation.
  *
- * Left sidebar: phase headers (non-selectable) + agent list (selectable)
- * Right panel: selected agent execution detail
+ * Level 0 (Phase):
+ *   Left = phase list, Right = agent overview in selected phase
+ *   ↑↓ navigate phases · Enter drill into agent list · esc exit
  *
- * Keys: ↑↓ navigate agents · ⏎ expand prompt · esc back · s save
+ * Level 1 (Agent):
+ *   Left = agent list in current phase, Right = selected agent summary
+ *   ↑↓ navigate agents · Enter drill into detail · esc back to phase
+ *
+ * Level 2 (Detail):
+ *   Full agent execution detail (prompt, activity, outcome)
+ *   ⏎ expand/collapse prompt · esc back to agent list · s save trace
  */
 
 import * as fs from "node:fs";
@@ -36,6 +43,16 @@ import {
 
 const MAX_TOOL_CALLS_DISPLAY = 3;
 
+// ── View state ────────────────────────────────────────────────
+
+interface ViewState {
+  level: 0 | 1 | 2;
+  phaseIdx: number;
+  agentIdx: number;
+  promptExpanded: boolean;
+  disposed: boolean;
+}
+
 // ── View factory ──────────────────────────────────────────────
 
 export function createWorkflowsView(
@@ -52,16 +69,14 @@ export function createWorkflowsView(
       return { render: () => [], invalidate() {}, handleInput() {} };
     }
 
-    // Find first selectable agent entry
-    const initPhases = buildPhaseGroups(instance.trace);
-    const initEntries = buildSidebar(initPhases);
-    const firstAgent = initEntries.findIndex((e) => e.type === "agent");
-
-    const state = {
-      selectedIdx: firstAgent >= 0 ? firstAgent : 0,
+    const state: ViewState = {
+      level: 0,
+      phaseIdx: 0,
+      agentIdx: 0,
       promptExpanded: false,
       disposed: false,
     };
+
     const cache = { width: undefined as number | undefined, lines: undefined as string[] | undefined };
     const tuiAny = tui as { requestRender(): void; terminal: { rows: number } };
     const requestRender = () => tuiAny.requestRender();
@@ -108,79 +123,79 @@ export function createWorkflowsView(
   });
 }
 
-// ── Build sidebar entries: phase headers + agent nodes ────────
-
-interface SidebarEntry {
-  type: "phase" | "agent";
-  phaseGroup?: PhaseGroup;
-  node?: import("../state.js").ExecutionTraceNode;
-}
-
-function buildSidebar(phases: PhaseGroup[]): SidebarEntry[] {
-  const entries: SidebarEntry[] = [];
-  for (const pg of phases) {
-    // Only add phase header when name is non-empty (skip fallback)
-    if (pg.name) {
-      entries.push({ type: "phase", phaseGroup: pg });
-    }
-    for (const node of pg.nodes) {
-      entries.push({ type: "agent", node });
-    }
-  }
-  return entries;
-}
-
-/** Find next agent entry index in direction (+1 or -1). */
-function findNextAgent(entries: SidebarEntry[], from: number, dir: number): number {
-  let i = from + dir;
-  while (i >= 0 && i < entries.length) {
-    if (entries[i].type === "agent") return i;
-    i += dir;
-  }
-  return from;
-}
-
 // ── Keyboard ──────────────────────────────────────────────────
 
 function processKey(
   data: string,
   orchestrator: WorkflowOrchestrator,
   runId: string,
-  state: { selectedIdx: number; promptExpanded: boolean; disposed: boolean },
+  state: ViewState,
   ctx: ExtensionContext,
   done: () => void,
 ): boolean {
   const instance = orchestrator.getInstance(runId);
   if (!instance) return false;
+  const phases = buildPhaseGroups(instance.trace);
+  if (phases.length === 0) return false;
 
-  if (matchesKey(data, Key.escape)) { done(); return false; }
+  // Escape: level back or exit
+  if (matchesKey(data, Key.escape)) {
+    if (state.level === 0) { done(); return false; }
+    state.level = (state.level - 1) as 0 | 1 | 2;
+    return true;
+  }
 
+  // Level 2 (Detail)
+  if (state.level === 2) {
+    if (data === "\r" || data === "\n" || data === "I") {
+      state.promptExpanded = !state.promptExpanded;
+      return true;
+    }
+    if (data === "s") { saveTraceToFile(instance, ctx); return false; }
+    return false;
+  }
+
+  // Level 0 & 1: up/down navigation
   if (matchesKey(data, Key.up)) {
-    const phases = buildPhaseGroups(instance.trace);
-    const entries = buildSidebar(phases);
-    const next = findNextAgent(entries, state.selectedIdx, -1);
-    if (next !== state.selectedIdx) { state.selectedIdx = next; return true; }
+    if (state.level === 0 && state.phaseIdx > 0) {
+      state.phaseIdx--;
+      state.agentIdx = 0;
+      return true;
+    }
+    if (state.level === 1 && state.agentIdx > 0) {
+      state.agentIdx--;
+      return true;
+    }
     return false;
   }
 
   if (matchesKey(data, Key.down)) {
-    const phases = buildPhaseGroups(instance.trace);
-    const entries = buildSidebar(phases);
-    const next = findNextAgent(entries, state.selectedIdx, 1);
-    if (next !== state.selectedIdx) { state.selectedIdx = next; return true; }
+    if (state.level === 0 && state.phaseIdx < phases.length - 1) {
+      state.phaseIdx++;
+      state.agentIdx = 0;
+      return true;
+    }
+    if (state.level === 1) {
+      const agents = phases[state.phaseIdx]?.nodes ?? [];
+      if (state.agentIdx < agents.length - 1) { state.agentIdx++; return true; }
+    }
     return false;
   }
 
-  if (data === "\r" || data === "\n" || data === "I") {
-    state.promptExpanded = !state.promptExpanded;
-    return true;
-  }
-
-  if (data === "s") {
-    saveTraceToFile(instance, ctx);
+  // Enter: drill down
+  if (data === "\r" || data === "\n") {
+    if (state.level === 0) {
+      const agents = phases[state.phaseIdx]?.nodes ?? [];
+      if (agents.length > 0) { state.level = 1; state.agentIdx = 0; return true; }
+    } else if (state.level === 1) {
+      state.level = 2;
+      state.promptExpanded = false;
+      return true;
+    }
     return false;
   }
 
+  if (data === "s") { saveTraceToFile(instance, ctx); return false; }
   return false;
 }
 
@@ -195,12 +210,11 @@ function saveTraceToFile(instance: WorkflowInstance, ctx: ExtensionContext): voi
   lines.push(`Budget: ${instance.budget.usedTokens}/${instance.budget.maxTokens ?? "unlimited"} tokens, $${instance.budget.usedCost.toFixed(4)}`, "");
   const phases = buildPhaseGroups(instance.trace);
   for (const pg of phases) {
-    lines.push(`## Phase: ${pg.name}`, "");
+    lines.push(`## Phase: ${pg.name || "(default)"}`, "");
     for (const node of pg.nodes) {
       lines.push(`### [#${node.stepIndex}] ${node.agent} — ${node.status}`);
       lines.push(`- Model: ${node.model}`);
-      const dur = formatElapsed(node.startedAt, node.completedAt ? new Date(node.completedAt).getTime() : Date.now());
-      lines.push(`- Duration: ${dur}`, "");
+      lines.push(`- Duration: ${formatElapsed(node.startedAt, node.completedAt ? new Date(node.completedAt).getTime() : Date.now())}`, "");
       lines.push("**Prompt:**", node.task, "");
       if (node.result?.toolCalls && node.result.toolCalls.length > 0) {
         lines.push("**Activity:**");
@@ -226,11 +240,11 @@ function renderView(
   instance: WorkflowInstance,
   theme: ThemeLike,
   width: number,
-  state: { selectedIdx: number; promptExpanded: boolean },
+  state: ViewState,
 ): string[] {
   const lines: string[] = [];
   const phases = buildPhaseGroups(instance.trace);
-  const entries = buildSidebar(phases);
+  if (phases.length === 0) return ["(no agents)"];
 
   // ── Header ──
   const completed = instance.trace.filter((n) => n.status === "completed").length;
@@ -255,36 +269,144 @@ function renderView(
   }
   lines.push("─".repeat(width));
 
-  // ── Body: sidebar + detail ──
-  const selectedNode = entries[state.selectedIdx]?.node;
-  const leftLines: string[] = [];
-  const rightLines: string[] = [];
+  // ── Body ──
+  const phase = phases[state.phaseIdx] ?? phases[0];
+  const agents = phase.nodes;
   const mainWidth = width - SIDEBAR_WIDTH - 1;
 
-  // Left sidebar
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
-    if (entry.type === "phase") {
-      const pg = entry.phaseGroup!;
-      const dot = statusDotStr(pg.doneCount === pg.nodes.length ? "completed" : "running", theme);
-      leftLines.push(`  ${dot} ${pg.name} ${pg.doneCount}/${pg.nodes.length}`);
-    } else {
-      const isSelected = i === state.selectedIdx;
-      const pointer = isSelected ? "❯ " : "  ";
-      const dot = statusDotStr(entry.node!.status, theme);
-      const label = entry.node!.agent;
-      leftLines.push(`${pointer}${dot} ${label}`);
+  if (state.level === 0) {
+    renderLevel0(lines, phases, state, theme, width, mainWidth);
+  } else if (state.level === 1) {
+    renderLevel1(lines, phase, agents, state, theme, width, mainWidth);
+  } else {
+    renderLevel2(lines, phase, agents, state, theme, width, mainWidth);
+  }
+
+  // ── Footer ──
+  lines.push("─".repeat(width));
+  const footer = state.level === 0
+    ? "↑↓ phase · ⏎ enter · esc back"
+    : state.level === 1
+      ? "↑↓ agent · ⏎ detail · esc back"
+      : "⏎ prompt · s save · esc back";
+  lines.push(theme.fg("muted", footer));
+
+  return lines;
+}
+
+// ── Level 0: Phase selection ──────────────────────────────────
+
+function renderLevel0(
+  lines: string[],
+  phases: PhaseGroup[],
+  state: ViewState,
+  theme: ThemeLike,
+  width: number,
+  _mainWidth: number,
+): void {
+  const leftLines: string[] = [];
+  const rightLines: string[] = [];
+
+  // Left: phase list
+  for (let i = 0; i < phases.length; i++) {
+    const pg = phases[i];
+    const isSelected = i === state.phaseIdx;
+    const pointer = isSelected ? "❯ " : "  ";
+    const dot = statusDotStr(pg.doneCount === pg.nodes.length ? "completed" : "running", theme);
+    leftLines.push(`${pointer}${dot} ${pg.name} ${pg.doneCount}/${pg.nodes.length}`);
+  }
+
+  // Right: agent overview for selected phase
+  const phase = phases[state.phaseIdx];
+  if (phase) {
+    for (const node of phase.nodes) {
+      const dot = statusDotStr(node.status, theme);
+      const elapsed = formatElapsed(
+        node.startedAt,
+        node.completedAt ? new Date(node.completedAt).getTime() : Date.now(),
+      );
+      const tok = node.result?.usage;
+      const tokStr = tok ? `${Math.round((tok.input + tok.output) / 1000)}k tok` : "";
+      const tcCount = node.result?.toolCalls?.length ?? 0;
+      rightLines.push(`  ${dot} ${node.agent}    ${node.model}    ${tokStr} · ${tcCount} tools · ${elapsed}`);
     }
   }
 
-  // Right panel: selected agent detail
-  if (selectedNode) {
-    rightLines.push(`${statusDotStr(selectedNode.status, theme)} ${selectedNode.status} · ${selectedNode.model}`);
-    rightLines.push(theme.fg("dim", formatTokenStat(selectedNode.result?.usage, selectedNode.result?.toolCalls)));
+  mergeBody(lines, leftLines, rightLines, width);
+}
+
+// ── Level 1: Agent selection ──────────────────────────────────
+
+function renderLevel1(
+  lines: string[],
+  phase: PhaseGroup,
+  agents: import("../state.js").ExecutionTraceNode[],
+  state: ViewState,
+  theme: ThemeLike,
+  width: number,
+  _mainWidth: number,
+): void {
+  const leftLines: string[] = [];
+  const rightLines: string[] = [];
+
+  // Left: agent list
+  for (let i = 0; i < agents.length; i++) {
+    const node = agents[i];
+    const isSelected = i === state.agentIdx;
+    const pointer = isSelected ? "❯ " : "  ";
+    const dot = statusDotStr(node.status, theme);
+    leftLines.push(`${pointer}${dot} ${node.agent}`);
+  }
+
+  // Right: selected agent summary
+  const node = agents[state.agentIdx];
+  if (node) {
+    rightLines.push(`${statusDotStr(node.status, theme)} ${node.status === "completed" ? "Completed" : node.status} · ${node.model}`);
+    rightLines.push(theme.fg("dim", formatTokenStat(node.result?.usage, node.result?.toolCalls)));
+
+    // Preview first 3 lines of task
+    const preview = node.task.split("\n").slice(0, 3);
+    rightLines.push("", theme.fg("muted", `Prompt preview (${node.task.split("\\n").length} lines):`));
+    rightLines.push(...preview.map((l) => `  ${l}`));
+  }
+
+  mergeBody(lines, leftLines, rightLines, width);
+}
+
+// ── Level 2: Execution detail ─────────────────────────────────
+
+function renderLevel2(
+  lines: string[],
+  phase: PhaseGroup,
+  agents: import("../state.js").ExecutionTraceNode[],
+  state: ViewState,
+  theme: ThemeLike,
+  width: number,
+  mainWidth: number,
+): void {
+  const leftLines: string[] = [];
+  const rightLines: string[] = [];
+
+  // Left: agent list (same as level 1, for context)
+  for (let i = 0; i < agents.length; i++) {
+    const a = agents[i];
+    const isSelected = i === state.agentIdx;
+    const pointer = isSelected ? "❯ " : "  ";
+    const dot = statusDotStr(a.status, theme);
+    leftLines.push(`${pointer}${dot} ${a.agent}`);
+  }
+
+  // Right: full detail
+  const node = agents[state.agentIdx];
+  if (node) {
+    // Header
+    rightLines.push(theme.bold(node.agent));
+    rightLines.push(`${statusDotStr(node.status, theme)} ${node.status} · ${node.model}`);
+    rightLines.push(theme.fg("dim", formatTokenStat(node.result?.usage, node.result?.toolCalls)));
     rightLines.push("");
 
     // Prompt
-    const taskLines = selectedNode.task.split("\n");
+    const taskLines = node.task.split("\n");
     const lineCount = taskLines.length;
     rightLines.push(theme.fg("muted", `Prompt · ${lineCount} lines · ⏎ ${state.promptExpanded ? "collapse" : "expand"}`));
     if (state.promptExpanded || lineCount <= PROMPT_FOLD_LINES) {
@@ -296,7 +418,7 @@ function renderView(
     rightLines.push("");
 
     // Activity
-    const toolCalls = selectedNode.result?.toolCalls ?? [];
+    const toolCalls = node.result?.toolCalls ?? [];
     const totalCount = toolCalls.length;
     if (totalCount > 0) {
       const showCount = Math.min(MAX_TOOL_CALLS_DISPLAY, totalCount);
@@ -311,37 +433,39 @@ function renderView(
       }
     } else {
       rightLines.push(theme.fg("muted", "Activity"));
-      rightLines.push(theme.fg("dim", `  ${selectedNode.status === "running" ? "(no tool calls yet)" : "(no activity recorded)"}`));
+      rightLines.push(theme.fg("dim", `  ${node.status === "running" ? "(no tool calls yet)" : "(no activity recorded)"}`));
     }
     rightLines.push("");
 
     // Outcome
     rightLines.push(theme.fg("muted", "Outcome"));
-    if (selectedNode.status === "running") {
+    if (node.status === "running") {
       rightLines.push(theme.fg("dim", "  Still running..."));
-    } else if (selectedNode.result?.error) {
-      rightLines.push(theme.fg("error", `  ${selectedNode.result.error.slice(0, mainWidth - 4)}`));
-    } else if (selectedNode.result?.content) {
-      let content = selectedNode.result.content;
+    } else if (node.result?.error) {
+      rightLines.push(theme.fg("error", `  ${node.result.error.slice(0, mainWidth - 4)}`));
+    } else if (node.result?.content) {
+      let content = node.result.content;
       if (content.length > OUTPUT_TRUNCATE_BYTES) {
         content = content.slice(0, OUTPUT_TRUNCATE_BYTES) + `\n${ELLIPSIS} (truncated)`;
       }
       rightLines.push(...content.split("\n").slice(0, 20).map((l) => `  ${l}`));
     }
-  } else {
-    rightLines.push(theme.fg("muted", "Select an agent to view details"));
   }
 
-  // Merge
+  mergeBody(lines, leftLines, rightLines, width);
+}
+
+// ── Helpers ───────────────────────────────────────────────────
+
+function mergeBody(
+  lines: string[],
+  leftLines: string[],
+  rightLines: string[],
+  _width: number,
+): void {
   const bodyHeight = Math.max(leftLines.length, rightLines.length);
   for (let i = 0; i < bodyHeight; i++) {
     const left = padVisible(leftLines[i] ?? "", SIDEBAR_WIDTH);
     lines.push(left + "│" + (rightLines[i] ?? ""));
   }
-
-  // ── Footer ──
-  lines.push("─".repeat(width));
-  lines.push(theme.fg("muted", "↑↓ agent · ⏎ prompt · esc back · s save"));
-
-  return lines;
 }
