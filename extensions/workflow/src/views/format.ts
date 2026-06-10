@@ -142,3 +142,74 @@ export function padVisible(s: string, width: number): string {
   if (vl >= width) return s;
   return s + " ".repeat(width - vl);
 }
+
+// ── Phase group (filters empty phases) ────────────────────────
+
+export interface PhaseGroup {
+  name: string;
+  nodes: ExecutionTraceNode[];
+  doneCount: number;
+}
+
+/** Build phase groups, filtering out phases with 0 agents. */
+export function buildPhaseGroups(nodes: ExecutionTraceNode[]): PhaseGroup[] {
+  const map = groupByPhase(nodes);
+  const result: PhaseGroup[] = [];
+  for (const [name, phaseNodes] of map) {
+    if (phaseNodes.length > 0) {
+      result.push({
+        name,
+        nodes: phaseNodes,
+        doneCount: phaseNodes.filter((n) => n.status === "completed").length,
+      });
+    }
+  }
+  return result;
+}
+
+// ── Agent one-liner for overview right panel ──────────────────
+
+const TOKEN_K = 1000;
+
+export function formatAgentOneLiner(node: ExecutionTraceNode, theme: ThemeLike): string {
+  const dot = statusDotStr(node.status, theme);
+  const elapsed = formatElapsed(
+    node.startedAt,
+    node.completedAt ? new Date(node.completedAt).getTime() : Date.now(),
+  );
+  const tok = node.result?.usage;
+  const tokStr = tok
+    ? `${Math.round((tok.input + tok.output) / TOKEN_K)}k tok`
+    : "";
+  const tcCount = node.result?.toolCalls?.length ?? 0;
+  const parts = [dot, node.agent, node.model];
+  if (tokStr) parts.push(`${tokStr} · ${tcCount} tools`);
+  parts.push(elapsed);
+  return parts.join("    ");
+}
+
+// ── Border helpers ────────────────────────────────────────────
+
+/** Render a top border with embedded titles: ╭ Title ───┬ Title ───╮ */
+export function renderTopBorder(
+  leftTitle: string,
+  rightTitle: string,
+  leftWidth: number,
+  totalWidth: number,
+): string {
+  // leftWidth includes the ╭ char
+  const leftInner = leftWidth - 1;
+  const rightInner = totalWidth - leftWidth - 2; // ┬ and ╮
+  const lt = ` ${leftTitle} `;
+  const leftDashes = "─".repeat(Math.max(0, leftInner - lt.length));
+  const rt = ` ${rightTitle} `;
+  const rightDashes = "─".repeat(Math.max(0, rightInner - rt.length));
+  return `╭${lt}${leftDashes}┬${rt}${rightDashes}╮`;
+}
+
+/** Render a bottom border: ╰──────────┴──────────╯ */
+export function renderBottomBorder(leftWidth: number, totalWidth: number): string {
+  const leftInner = leftWidth - 1;
+  const rightInner = totalWidth - leftWidth - 2;
+  return `╰${"─".repeat(leftInner)}┴${"─".repeat(rightInner)}╯`;
+}

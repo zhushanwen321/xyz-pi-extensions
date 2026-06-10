@@ -17,6 +17,8 @@ import {
   statusDotStr,
   padVisible,
   visibleLen,
+  buildPhaseGroups,
+  formatAgentOneLiner,
 } from "../views/format.js";
 import type { ExecutionTraceNode } from "../state.js";
 
@@ -267,5 +269,54 @@ describe("padVisible", () => {
     const result = padVisible(ansi, 6);
     expect(visibleLen(result)).toBe(6);
     expect(result.endsWith("   ")).toBe(true);
+  });
+});
+
+// ── buildPhaseGroups ──────────────────────────────────────────
+
+describe("buildPhaseGroups", () => {
+  it("filters out phases with 0 agents", () => {
+    const nodes = [
+      makeNode({ stepIndex: 0, phase: "Review", agent: "review-1" }),
+      makeNode({ stepIndex: 1, phase: "Fix", agent: "fix-1" }),
+    ];
+    const groups = buildPhaseGroups(nodes);
+    expect(groups).toHaveLength(2);
+    expect(groups[0].name).toBe("Review");
+    expect(groups[0].nodes).toHaveLength(1);
+    expect(groups[1].name).toBe("Fix");
+  });
+
+  it("aggregates nodes per phase", () => {
+    const nodes = [
+      makeNode({ stepIndex: 0, phase: "Review", agent: "review-1" }),
+      makeNode({ stepIndex: 1, phase: "Review", agent: "review-2" }),
+      makeNode({ stepIndex: 2, phase: "Fix", agent: "fix-1" }),
+    ];
+    const groups = buildPhaseGroups(nodes);
+    expect(groups).toHaveLength(2);
+    expect(groups[0].nodes).toHaveLength(2);
+    expect(groups[0].doneCount).toBe(0);
+  });
+
+  it("counts completed nodes", () => {
+    const nodes = [
+      makeNode({ stepIndex: 0, phase: "Review", status: "completed" }),
+      makeNode({ stepIndex: 1, phase: "Review", status: "running" }),
+    ];
+    const groups = buildPhaseGroups(nodes);
+    expect(groups[0].doneCount).toBe(1);
+  });
+});
+
+// ── formatAgentOneLiner ────────────────────────────────────────
+
+describe("formatAgentOneLiner", () => {
+  it("formats agent with status dot and name", () => {
+    const node = makeNode({ agent: "review-1", model: "glm-5.1" });
+    const result = formatAgentOneLiner(node, fakeTheme);
+    expect(result).toContain("review-1");
+    expect(result).toContain("glm-5.1");
+    expect(result).toContain("●");
   });
 });

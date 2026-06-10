@@ -1,14 +1,16 @@
 /**
- * Workflow Fullscreen TUI View (FR-1 through FR-8)
+ * Workflow Fullscreen TUI View — Two-level navigation model.
  *
- * Uses ctx.ui.custom() with overlay mode to render a fullscreen panel
- * on top of the existing UI. Overlay mode allows stacking confirms
- * (x/p/r keys) and properly covers the terminal screen.
+ * Overview mode:
+ *   Left sidebar = phase list, Right panel = agent list in selected phase
+ *   ↑↓ navigate left panel, Tab/→ focus right panel, ↑↓ navigate agents
+ *   Enter drills into agent detail
  *
- * Selection model:
- * - Both phase headers and agent nodes are selectable via ↑↓
- * - Selecting a phase header shows a phase summary on the right
- * - Selecting an agent node shows the agent detail view
+ * Detail mode:
+ *   Left sidebar = agent list (was right panel), Right panel = agent execution detail
+ *   ↑↓ navigate agents, Escape/← returns to overview
+ *
+ * Overlay mode renders on top of existing UI. Confirm dialogs stack on overlay.
  */
 
 import * as fs from "node:fs";
@@ -22,22 +24,27 @@ import type { WorkflowOrchestrator } from "../orchestrator.js";
 import type { WorkflowInstance } from "../state.js";
 
 import {
+  type PhaseGroup,
   type ThemeLike,
-  buildFlatEntries,
+  buildPhaseGroups,
   ELLIPSIS,
   formatActivityLine,
+  formatAgentOneLiner,
   formatElapsed,
-  formatSidebarNode,
   formatTokenStat,
-  groupByPhase,
   isTerminalStatus,
   OUTPUT_TRUNCATE_BYTES,
   padVisible,
   PROMPT_FOLD_LINES,
+  renderBottomBorder,
+  renderTopBorder,
   SIDEBAR_WIDTH,
   statusDotStr,
   visibleLen,
 } from "./format.js";
+
+/** Max tool calls to display in detail view. */
+const MAX_TOOL_CALLS_DISPLAY = 3;
 
 // ── View factory ──────────────────────────────────────────────
 
@@ -55,7 +62,15 @@ export function createWorkflowsView(
       return { render: () => [], invalidate() {}, handleInput() {} };
     }
 
-    const state = { selectedIndex: 0, promptExpanded: false, disposed: false };
+    const state = {
+      mode: "overview" as "overview" | "detail",
+      focusPanel: "left" as "left" | "right",
+      phaseIdx: 0,
+      agentIdx: 0,
+      promptExpanded: false,
+      disposed: false,
+    };
+
     const cache = { width: undefined as number | undefined, lines: undefined as string[] | undefined };
     const tuiAny = tui as { requestRender(): void; terminal: { rows: number } };
     const requestRender = () => tuiAny.requestRender();
@@ -72,15 +87,12 @@ export function createWorkflowsView(
     };
 
     const component = {
-      invalidate(): void {
-        cache.width = undefined;
-        cache.lines = undefined;
-      },
+      invalidate(): void { cache.width = undefined; cache.lines = undefined; },
       render(width: number): string[] {
         if (cache.lines && cache.width === width) return cache.lines;
         const inst = orchestrator.getInstance(runId);
         const raw = inst
-          ? renderView(inst, theme, width, state.selectedIndex, state.promptExpanded)
+          ? renderView(inst, theme, width, state)
           : ["(workflow not found)"];
         const termHeight = tuiAny.terminal.rows;
         const lines = raw.length < termHeight
@@ -92,26 +104,15 @@ export function createWorkflowsView(
       },
       handleInput(data: string): void {
         if (state.disposed) return;
-        const reRender = processKeyInput(
-          data, orchestrator, runId, state, ctx, wrappedDone,
-        );
-        if (reRender) {
-          cache.width = undefined;
-          cache.lines = undefined;
-          requestRender();
-        }
+        const reRender = processKeyInput(data, orchestrator, runId, state, ctx, wrappedDone);
+        if (reRender) { cache.width = undefined; cache.lines = undefined; requestRender(); }
       },
     };
 
     return component;
   }, {
     overlay: true,
-    overlayOptions: {
-      anchor: "center" as const,
-      width: "100%",
-      maxHeight: "100%",
-      margin: 0,
-    },
+    overlayOptions: { anchor: "center" as const, width: "100%", maxHeight: "100%", margin: 0 },
   });
 }
 
@@ -121,47 +122,111 @@ function processKeyInput(
   data: string,
   orchestrator: WorkflowOrchestrator,
   runId: string,
-  state: { selectedIndex: number; promptExpanded: boolean; disposed: boolean },
+  state: {
+    mode: "overview" | "detail";
+    focusPanel: "left" | "right";
+    phaseIdx: number;
+    agentIdx: number;
+    promptExpanded: boolean;
+    disposed: boolean;
+  },
   ctx: ExtensionContext,
   done: () => void,
 ): boolean {
   const instance = orchestrator.getInstance(runId);
   if (!instance) return false;
-
-  const terminal = isTerminalStatus(instance.status);
-  const phaseMap = groupByPhase(instance.trace);
-  const flatEntries = buildFlatEntries(phaseMap);
-
-  if (flatEntries.length === 0) return false;
+  const phases = buildPhaseGroups(instance.trace);
+  if (phases.length === 0) return false;
 
   if (matchesKey(data, Key.escape)) {
+    if (state.mode === "detail") {
+      state.mode = "overview";
+      state.focusPanel = "right";
+      return true;
+    }
     done();
     return false;
   }
 
-  // ↑↓ navigate all entries (phase headers + nodes)
-  if (matchesKey(data, Key.up)) {
-    if (state.selectedIndex > 0) {
-      state.selectedIndex--;
+  // ── Detail mode ──
+  if (state.mode === "detail") {
+    const agents = phases[state.phaseIdx]?.nodes ?? [];
+    if (matchesKey(data, Key.up)) {
+      if (state.agentIdx > 0) { state.agentIdx--; return true; }
+      return false;
+    }
+    if (matchesKey(data, Key.down)) {
+      if (state.agentIdx < agents.length - 1) { state.agentIdx++; return true; }
+      return false;
+    }
+    if (data === "I") { state.promptExpanded = !state.promptExpanded; return true; }
+    return handleActionKeys(data, orchestrator, runId, instance, ctx);
+  }
+
+  // ── Overview mode ──
+  // Tab / → / ← switch panel focus
+  if (data === "\t" || matchesKey(data, Key.right) || matchesKey(data, Key.left)) {
+    if (state.focusPanel === "left") {
+      const agents = phases[state.phaseIdx]?.nodes ?? [];
+      if (agents.length > 0) { state.focusPanel = "right"; return true; }
+    } else {
+      state.focusPanel = "left";
       return true;
     }
     return false;
   }
 
-  if (matchesKey(data, Key.down)) {
-    if (state.selectedIndex < flatEntries.length - 1) {
-      state.selectedIndex++;
+  // Enter: drill into agent detail
+  if (data === "\r" || data === "\n") {
+    if (state.focusPanel === "right") {
+      state.mode = "detail";
       return true;
     }
     return false;
   }
 
-  if (data === "I") {
-    state.promptExpanded = !state.promptExpanded;
-    return true;
+  // Navigation
+  if (state.focusPanel === "left") {
+    if (matchesKey(data, Key.up)) {
+      if (state.phaseIdx > 0) {
+        state.phaseIdx--;
+        state.agentIdx = 0;
+        return true;
+      }
+      return false;
+    }
+    if (matchesKey(data, Key.down)) {
+      if (state.phaseIdx < phases.length - 1) {
+        state.phaseIdx++;
+        state.agentIdx = 0;
+        return true;
+      }
+      return false;
+    }
+  } else {
+    const agents = phases[state.phaseIdx]?.nodes ?? [];
+    if (matchesKey(data, Key.up)) {
+      if (state.agentIdx > 0) { state.agentIdx--; return true; }
+      return false;
+    }
+    if (matchesKey(data, Key.down)) {
+      if (state.agentIdx < agents.length - 1) { state.agentIdx++; return true; }
+      return false;
+    }
   }
 
-  // Actions with confirm (overlay mode supports stacking)
+  if (data === "I") { state.promptExpanded = !state.promptExpanded; return true; }
+  return handleActionKeys(data, orchestrator, runId, instance, ctx);
+}
+
+function handleActionKeys(
+  data: string,
+  orchestrator: WorkflowOrchestrator,
+  runId: string,
+  instance: WorkflowInstance,
+  ctx: ExtensionContext,
+): boolean {
+  const terminal = isTerminalStatus(instance.status);
   if (data === "x") {
     if (terminal) { ctx.ui.notify(`Workflow already ${instance.status}`, "warning"); return false; }
     void ctx.ui.confirm("Stop this workflow?", `${instance.name} (${runId.slice(0, 8)}...)`).then((ok) => {
@@ -172,7 +237,6 @@ function processKeyInput(
     });
     return false;
   }
-
   if (data === "p") {
     if (terminal) { ctx.ui.notify(`Workflow already ${instance.status}`, "warning"); return false; }
     const action = instance.status === "running" ? "pause" : "resume";
@@ -185,7 +249,6 @@ function processKeyInput(
     });
     return false;
   }
-
   if (data === "r") {
     if (terminal) { ctx.ui.notify(`Workflow already ${instance.status}`, "warning"); return false; }
     void ctx.ui.confirm("Restart from scratch?", `This will start a new run of '${instance.name}'`).then((ok) => {
@@ -196,12 +259,10 @@ function processKeyInput(
     });
     return false;
   }
-
   if (data === "s") {
     saveTraceToFile(instance, ctx);
     return false;
   }
-
   return false;
 }
 
@@ -210,16 +271,14 @@ function processKeyInput(
 function saveTraceToFile(instance: WorkflowInstance, ctx: ExtensionContext): void {
   const dir = path.join(os.homedir(), ".pi", "agent", "workflow-traces");
   const filePath = path.join(dir, `${instance.runId}.md`);
-
   const lines: string[] = [];
   lines.push(`# Workflow Trace: ${instance.name} (${instance.runId})`, "");
   lines.push(`Status: ${instance.status} | Started: ${instance.startedAt ?? "-"} | Duration: ${formatElapsed(instance.startedAt)}`);
   lines.push(`Budget: ${instance.budget.usedTokens}/${instance.budget.maxTokens ?? "unlimited"} tokens, $${instance.budget.usedCost.toFixed(4)}`, "");
-
-  const phaseMap = groupByPhase(instance.trace);
-  for (const [phase, nodes] of phaseMap) {
-    lines.push(`## Phase: ${phase}`, "");
-    for (const node of nodes) {
+  const phases = buildPhaseGroups(instance.trace);
+  for (const pg of phases) {
+    lines.push(`## Phase: ${pg.name}`, "");
+    for (const node of pg.nodes) {
       lines.push(`### [#${node.stepIndex}] ${node.agent} — ${node.status}`);
       lines.push(`- Model: ${node.model}`);
       lines.push(`- Duration: ${formatElapsed(node.startedAt, node.completedAt ? new Date(node.completedAt).getTime() : Date.now())}`, "");
@@ -236,23 +295,29 @@ function saveTraceToFile(instance: WorkflowInstance, ctx: ExtensionContext): voi
       lines.push("");
     }
   }
-
   fs.promises.mkdir(dir, { recursive: true })
     .then(() => fs.promises.writeFile(filePath, lines.join("\n"), "utf8"))
     .then(() => ctx.ui.notify(`Trace saved: ${filePath}`, "info"))
     .catch((err: Error) => ctx.ui.notify(`Save failed: ${err.message}`, "error"));
 }
 
-// ── Main render function ──────────────────────────────────────
+// ── Main render ───────────────────────────────────────────────
 
 function renderView(
   instance: WorkflowInstance,
   theme: ThemeLike,
   width: number,
-  selectedIndex: number,
-  promptExpanded: boolean,
+  state: {
+    mode: "overview" | "detail";
+    focusPanel: "left" | "right";
+    phaseIdx: number;
+    agentIdx: number;
+    promptExpanded: boolean;
+  },
 ): string[] {
   const lines: string[] = [];
+  const phases = buildPhaseGroups(instance.trace);
+  if (phases.length === 0) return ["(no agents)"];
 
   // ── Header ──
   const completed = instance.trace.filter((n) => n.status === "completed").length;
@@ -275,111 +340,161 @@ function renderView(
   } else if (instance.error) {
     lines.push(theme.fg("error", instance.error.slice(0, width - 2)));
   }
-  lines.push("─".repeat(width));
 
-  // ── Body: sidebar + main area ──
-  const phaseMap = groupByPhase(instance.trace);
-  const flatEntries = buildFlatEntries(phaseMap);
+  // ── Dispatch to mode-specific renderer ──
+  const bodyLines = state.mode === "overview"
+    ? renderOverview(phases, state, theme, width)
+    : renderDetail(phases, state, theme, width);
 
-  // Resolve selected entry
-  const selectedEntry = flatEntries[selectedIndex];
+  lines.push(...bodyLines);
 
-  // Sidebar
-  const sidebarLines: string[] = [theme.fg("muted", theme.bold("Phases"))];
-  for (const entry of flatEntries) {
-    const isSelected = entry.index === selectedIndex;
+  // ── Footer ──
+  lines.push(renderBottomBorder(SIDEBAR_WIDTH, width));
+  const footer = state.mode === "overview"
+    ? "↑↓ navigate · Tab switch panel · Enter detail · x stop · p pause · s save · esc back"
+    : "↑↓ agent · I expand · x stop · p pause · s save · esc back";
+  lines.push(theme.fg("muted", footer));
+
+  return lines;
+}
+
+// ── Overview mode ─────────────────────────────────────────────
+
+function renderOverview(
+  phases: PhaseGroup[],
+  state: { focusPanel: "left" | "right"; phaseIdx: number; agentIdx: number },
+  theme: ThemeLike,
+  width: number,
+): string[] {
+  const lines: string[] = [];
+  const phase = phases[state.phaseIdx] ?? phases[0];
+  const leftTitle = "Phases";
+  const rightTitle = `${phase.name} · ${phase.nodes.length} agent${phase.nodes.length !== 1 ? "s" : ""}`;
+  lines.push(renderTopBorder(leftTitle, rightTitle, SIDEBAR_WIDTH, width));
+
+  const leftLines: string[] = [];
+  const rightLines: string[] = [];
+
+  // Left: phase list
+  for (let i = 0; i < phases.length; i++) {
+    const pg = phases[i];
+    const isSelected = i === state.phaseIdx;
     const pointer = isSelected ? "❯ " : "  ";
-    if (entry.type === "phase") {
-      const phaseNodes = phaseMap.get(entry.phase!) ?? [];
-      const doneCount = phaseNodes.filter((n) => n.status === "completed").length;
-      const label = entry.phase!.slice(0, 12);
-      const count = `${doneCount}/${phaseNodes.length}`;
-      sidebarLines.push(pointer + label + " " + count);
-    } else if (entry.node) {
-      // Agent node: show status dot + agent name, with selection highlight
-      sidebarLines.push(pointer + formatSidebarNode(entry.node, isSelected, SIDEBAR_WIDTH - 2, theme).trimStart());
-    }
+    const dot = statusDotStr(pg.doneCount === pg.nodes.length ? "completed" : "running", theme);
+    leftLines.push(`${pointer}${dot} ${pg.name} ${pg.doneCount}/${pg.nodes.length}`);
   }
 
-  // Main area
-  const mainWidth = width - SIDEBAR_WIDTH - 1;
-  const mainLines: string[] = [];
+  // Right: agent list in selected phase
+  for (let i = 0; i < phase.nodes.length; i++) {
+    const node = phase.nodes[i];
+    const isSelected = state.focusPanel === "right" && i === state.agentIdx;
+    const pointer = isSelected ? "❯ " : "  ";
+    rightLines.push(pointer + formatAgentOneLiner(node, theme));
+  }
 
-  if (selectedEntry?.type === "phase") {
-    // Phase selected: show all agents in this phase
-    const phaseName = selectedEntry.phase!;
-    const nodes = phaseMap.get(phaseName) ?? [];
-    mainLines.push(theme.fg("accent", theme.bold(phaseName)), "");
-    mainLines.push(theme.fg("muted", `${nodes.length} agent(s) in this phase`), "");
+  // Merge into bordered body
+  const bodyHeight = Math.max(leftLines.length, rightLines.length);
+  for (let i = 0; i < bodyHeight; i++) {
+    const left = padVisible(leftLines[i] ?? "", SIDEBAR_WIDTH - 1);
+    lines.push(`│${left}│${rightLines[i] ?? ""}`);
+  }
 
-    for (const node of nodes) {
-      const dot = statusDotStr(node.status, theme);
-      mainLines.push(`  ${dot} ${node.agent} · ${node.model}`);
-      mainLines.push(theme.fg("dim", `    ${formatTokenStat(node.result?.usage, node.result?.toolCalls)}`));
-    }
-  } else if (selectedEntry?.type === "node" && selectedEntry.node) {
-    const node = selectedEntry.node;
-    const phaseName = node.phase || "(default)";
-    const phaseNodes = phaseMap.get(phaseName) ?? [];
+  return lines;
+}
 
-    mainLines.push(theme.fg("accent", `${phaseName} · ${phaseNodes.length} agent`), "");
-    mainLines.push(theme.bold(node.agent));
-    mainLines.push(`${statusDotStr(node.status, theme)} ${node.status} · ${node.model}`);
-    mainLines.push(theme.fg("dim", formatTokenStat(
-      node.result?.usage,
-      node.result?.toolCalls,
-    )));
-    mainLines.push("");
+// ── Detail mode ───────────────────────────────────────────────
+
+function renderDetail(
+  phases: PhaseGroup[],
+  state: { phaseIdx: number; agentIdx: number; promptExpanded: boolean },
+  theme: ThemeLike,
+  width: number,
+): string[] {
+  const lines: string[] = [];
+  const phase = phases[state.phaseIdx] ?? phases[0];
+  const agents = phase.nodes;
+  const node = agents[state.agentIdx] ?? agents[0];
+
+  const leftTitle = `${phase.name} · ${agents.length} agent${agents.length !== 1 ? "s" : ""}`;
+  const rightTitle = node?.agent ?? "unknown";
+  lines.push(renderTopBorder(leftTitle, rightTitle, SIDEBAR_WIDTH, width));
+
+  const leftLines: string[] = [];
+  const rightLines: string[] = [];
+
+  // Left: agent list
+  for (let i = 0; i < agents.length; i++) {
+    const a = agents[i];
+    const isSelected = i === state.agentIdx;
+    const pointer = isSelected ? "❯ " : "  ";
+    const dot = statusDotStr(a.status, theme);
+    leftLines.push(`${pointer}${dot} ${a.agent}`);
+  }
+
+  // Right: agent execution detail
+  if (node) {
+    const mainWidth = width - SIDEBAR_WIDTH - 2;
+
+    // Status line
+    const statusLine = `${statusDotStr(node.status, theme)} ${node.status === "completed" ? "Completed" : node.status} · ${node.model}`;
+    rightLines.push(statusLine);
+    rightLines.push(theme.fg("dim", formatTokenStat(node.result?.usage, node.result?.toolCalls)));
+    rightLines.push("");
 
     // Prompt section
     const taskLines = node.task.split("\n");
     const lineCount = taskLines.length;
-    mainLines.push(theme.fg("muted", `Prompt · ${lineCount} lines · I ${promptExpanded ? "collapse" : "expand"}`));
-    if (promptExpanded || lineCount <= PROMPT_FOLD_LINES) {
-      mainLines.push(...taskLines.map((l) => `  ${l}`));
+    rightLines.push(theme.fg("muted", `Prompt · ${lineCount} lines · ⏎ ${state.promptExpanded ? "collapse" : "expand"}`));
+    if (state.promptExpanded || lineCount <= PROMPT_FOLD_LINES) {
+      rightLines.push(...taskLines.map((l) => `  ${l}`));
     } else {
-      mainLines.push(...taskLines.slice(0, PROMPT_FOLD_LINES).map((l) => `  ${l}`));
-      mainLines.push(theme.fg("dim", `  ${ELLIPSIS} ${lineCount - PROMPT_FOLD_LINES} more lines`));
+      rightLines.push(...taskLines.slice(0, PROMPT_FOLD_LINES).map((l) => `  ${l}`));
+      rightLines.push(theme.fg("dim", `  ${ELLIPSIS} ${lineCount - PROMPT_FOLD_LINES} more lines`));
     }
-    mainLines.push("");
+    rightLines.push("");
 
     // Activity section
-    const toolCalls = node.result?.toolCalls;
-    mainLines.push(theme.fg("muted", "Activity"));
-    if (toolCalls && toolCalls.length > 0) {
-      for (const tc of toolCalls) mainLines.push(`  ${formatActivityLine(tc, mainWidth - 2)}`);
+    const toolCalls = node.result?.toolCalls ?? [];
+    const totalCount = toolCalls.length;
+    if (totalCount > 0) {
+      const showCount = Math.min(MAX_TOOL_CALLS_DISPLAY, totalCount);
+      const isTruncated = totalCount > MAX_TOOL_CALLS_DISPLAY;
+      const label = isTruncated
+        ? `Activity · last ${showCount} of ${totalCount} tool calls`
+        : `Activity · ${totalCount} tool call${totalCount !== 1 ? "s" : ""}`;
+      rightLines.push(theme.fg("muted", label));
+      // Show last N
+      const start = totalCount - showCount;
+      for (let i = start; i < totalCount; i++) {
+        rightLines.push(`  ${formatActivityLine(toolCalls[i], mainWidth - 2)}`);
+      }
     } else {
-      mainLines.push(theme.fg("dim", `  ${node.status === "running" ? "(no tool calls yet)" : "(no activity recorded)"}`));
+      rightLines.push(theme.fg("muted", "Activity"));
+      rightLines.push(theme.fg("dim", `  ${node.status === "running" ? "(no tool calls yet)" : "(no activity recorded)"}`));
     }
-    mainLines.push("");
+    rightLines.push("");
 
     // Outcome section
-    mainLines.push(theme.fg("muted", "Outcome"));
+    rightLines.push(theme.fg("muted", "Outcome"));
     if (node.status === "running") {
-      mainLines.push(theme.fg("dim", "  Still running..."));
+      rightLines.push(theme.fg("dim", "  Still running..."));
     } else if (node.result?.error) {
-      mainLines.push(theme.fg("error", `  ${node.result.error.slice(0, 200)}`));
+      rightLines.push(theme.fg("error", `  ${node.result.error.slice(0, mainWidth - 4)}`));
     } else if (node.result?.content) {
       let content = node.result.content;
       if (content.length > OUTPUT_TRUNCATE_BYTES) {
         content = content.slice(0, OUTPUT_TRUNCATE_BYTES) + `\n${ELLIPSIS} (truncated)`;
       }
-      mainLines.push(...content.split("\n").slice(0, 20).map((l) => `  ${l}`));
+      rightLines.push(...content.split("\n").slice(0, 20).map((l) => `  ${l}`));
     }
-  } else {
-    mainLines.push(theme.fg("muted", "No items to display"));
   }
 
-  // Combine sidebar + main
-  const bodyHeight = Math.max(sidebarLines.length, mainLines.length);
+  // Merge into bordered body
+  const bodyHeight = Math.max(leftLines.length, rightLines.length);
   for (let i = 0; i < bodyHeight; i++) {
-    const left = padVisible(sidebarLines[i] ?? "", SIDEBAR_WIDTH);
-    lines.push(left + "│" + (mainLines[i] ?? ""));
+    const left = padVisible(leftLines[i] ?? "", SIDEBAR_WIDTH - 1);
+    lines.push(`│${left}│${rightLines[i] ?? ""}`);
   }
-
-  // ── Footer ──
-  lines.push("─".repeat(width));
-  lines.push(theme.fg("muted", "↑↓ navigate · I expand prompt · x stop · r restart · p pause · s save · esc back"));
 
   return lines;
 }
