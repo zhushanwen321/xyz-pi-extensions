@@ -216,7 +216,7 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
         return acc;
       }, {});
       const breakdown = Object.entries(bySource).map(([s, c]) => `${c} ${s}`).join(", ");
-      pi.notify(`Workflow: discovered ${agentCount} agents (${breakdown})`);
+      console.log(`[workflow] discovered ${agentCount} agents (${breakdown})`);
     }
 
     // Live progress: event-driven updates handled by WorkflowsView subscription
