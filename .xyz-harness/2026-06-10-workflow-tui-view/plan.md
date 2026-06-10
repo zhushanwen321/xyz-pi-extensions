@@ -173,22 +173,34 @@ complexity: L1
 
 **Interface Changes:**
 
-1. `agent-pool.ts`: 新增 `ToolCallEntry = { name: string; input: string }` 导出类型。`AgentResult` 新增 `toolCalls: ToolCallEntry[]`。`ParsedPipelineEvent` 新增 `toolCalls: ToolCallEntry[]`。`processJsonlEvent` 在 `tool_execution_start` 分支（非仅 structured-output）追加 `{ name: event.toolName, input: serializeArgs(event.args) }`。`spawnAndParse` 返回时映射 `pipeline.toolCalls`。
+1. `agent-pool.ts`: 新增 `ToolCallEntry = { name: string; input: string }` 导出类型。`AgentResult` 新增 `toolCalls: ToolCallEntry[]`（默认 `[]`）。`ParsedPipelineEvent` 新增 `toolCalls: ToolCallEntry[]`（`makeEmptyPipeline` 初始化为 `[]`）。
 
-2. `state.ts`: 新增 `ToolCallEntry = { name: string; input: string }` 导出类型（独立定义，不 import agent-pool 以避免循环依赖）。`AgentResult` 新增 `toolCalls?: ToolCallEntry[]`。
+   `processJsonlEvent` 在 `tool_execution_start` 分支中，**在 `pipeline.hasToolCall = true` 之前**，对**所有** tool call 追加（不仅 structured-output）：
+   ```typescript
+   // 在 if (event.toolName === "structured-output") { ... } 之后、pipeline.hasToolCall = true 之前
+   const input = typeof event.args === 'object' && event.args !== null
+     ? JSON.stringify(event.args)
+     : String(event.args ?? '');
+   pipeline.toolCalls.push({ name: String(event.toolName ?? 'unknown'), input });
+   ```
+   input **完整存储，不截断**（截断由渲染层 formatActivityLine 负责，见 FR-7.3）。
 
-3. `orchestrator.ts` `executeWithRetry` (~line 747): 映射 `toolCalls: poolResult.toolCalls`。
+   `spawnAndParse` 返回时映射 `toolCalls: pipeline.toolCalls`。
+
+2. `state.ts`: 新增 `ToolCallEntry = { name: string; input: string }` 导出类型（独立定义，不 import agent-pool 以避免循环依赖）。`AgentResult` 新增 `toolCalls?: ToolCallEntry[]`。字段结构与 agent-pool 完全相同，orchestrator 映射时直接赋值 `toolCalls: poolResult.toolCalls`。
+
+3. `orchestrator.ts` `executeWithRetry` (~line 747): 映射 `toolCalls: poolResult.toolCalls`。stale context 分支 (~line 755) 同样映射。
 
 **Serialization Notes:** `toolCalls` 是 `Array<{ name: string; input: string }>`，纯 JSON 可序列化，state.ts 的 serialize/deserialize 自动覆盖。
 
 **Edge Cases:**
 - `toolCalls` 为空数组（agent 未调用任何工具）→ 渲染时显示 "(no tool calls yet)"
-- `event.args` 为 null/undefined → input 序列化为 "(no args)"
-- Bash tool 的 args 是 `{ command: string }` → input 取 `event.args.command`
+- `event.args` 为 null/undefined → input 序列化为空字符串
+- `event.toolName` 缺失 → name 记录为 "unknown"
 
-- [ ] Step 1: agent-pool.ts — 新增 ToolCallEntry 类型，AgentResult 加 toolCalls，ParsedPipelineEvent 加 toolCalls，processJsonlEvent 收集，spawnAndParse 映射
-- [ ] Step 2: state.ts — 新增 ToolCallEntry 类型，AgentResult 加 toolCalls
-- [ ] Step 3: orchestrator.ts — executeWithRetry 映射 toolCalls，stale context 分支也映射
+- [ ] Step 1: agent-pool.ts — 新增 ToolCallEntry 类型，AgentResult 加 toolCalls，ParsedPipelineEvent 加 toolCalls，makeEmptyPipeline 初始化 toolCalls=[]。processJsonlEvent 在 tool_execution_start 分支、pipeline.hasToolCall=true 之前收集所有 tool call（input 完整不截断）。spawnAndParse 返回映射 toolCalls
+- [ ] Step 2: state.ts — 新增 ToolCallEntry 类型（独立定义），AgentResult 加 toolCalls
+- [ ] Step 3: orchestrator.ts — executeWithRetry (~L747) 和 stale context 分支 (~L755) 都映射 toolCalls: poolResult.toolCalls
 - [ ] Step 4: `npx tsc --noEmit` 通过
 - [ ] Step 5: Commit: `feat(workflow): add toolCalls to AgentResult for structured Activity`
 
@@ -215,11 +227,19 @@ complexity: L1
 - `emit(runId, event)`: 同步调用所有 listener，异常 catch + console.error
 - tick interval: `setInterval(1000ms)`, 仅当 `totalSubscriptionCount > 0` 时运行，降为 0 时 `clearInterval`
 
-`orchestrator.ts` 改动：
-- 新增 `public readonly events = new WorkflowEventEmitter()` 属性
-- `transitionStatus()` 后调 `this.events.emit(runId, { type: "status", status })`
-- `appendTraceNode()` 后调 `this.events.emit(runId, { type: "trace", node })`
-- `executeWithRetry` trace node 更新后调 `this.events.emit(runId, { type: "node-update", stepIndex, node })`
+`orchestrator.ts` 改动——新增 `public readonly events = new WorkflowEventEmitter()` 属性，在以下**具体调用点**插入 emit：
+
+| 方法 | 行号范围 | emit 类型 | 位置说明 |
+|------|---------|-----------|----------|
+| `pause()` | ~L315 | `{ type: "status" }` | `transitionStatus(inst, "paused")` 之后 |
+| `resume()` | ~L340 | `{ type: "status" }` | `transitionStatus(instance, "running")` 之后 |
+| `abort()` | ~L390 | `{ type: "status" }` | `transitionStatus(instance, "aborted")` 之后 |
+| `executeWithRetry` | ~L687 | `{ type: "trace" }` | `appendTraceNode(this.pi, runId, node)` 之后（初始 trace 节点创建） |
+| `executeWithRetry` | ~L733 | `{ type: "node-update" }` | stale context 分支 trace node 更新后 |
+| `executeWithRetry` | ~L791 | `{ type: "node-update" }` | 正常完成 trace node 更新后 |
+| `handleWorkerError` | ~L838 | `{ type: "status" }` | `transitionStatus(instance, "failed")` 之后 |
+| `handleWorkerExit` | ~L865, ~L899 | `{ type: "status" }` | `transitionStatus(instance, "failed")` 之后 |
+| `onCompletion` 内部 | ~L621 | `{ type: "status" }` | `transitionStatus(instance, "completed")` 之后 |
 
 **Edge Cases:**
 - listener 抛异常 → catch 吞掉，不影响其他 listener 或 orchestrator
@@ -227,7 +247,7 @@ complexity: L1
 - tick interval 泄漏 → getSubscriptionCount 归零时必须 clear
 
 - [ ] Step 1: 创建 orchestrator-events.ts（WorkflowEventEmitter 类）
-- [ ] Step 2: orchestrator.ts — 实例化 emitter，在 transitionStatus/appendTraceNode/executeWithRetry 处加 emit
+- [ ] Step 2: orchestrator.ts — 实例化 emitter (`public readonly events = new WorkflowEventEmitter()`)，在 pause(~L315)、resume(~L340)、abort(~L390)、executeWithRetry(~L687/~L733/~L791)、handleWorkerError(~L838)、handleWorkerExit(~L865/~L899)、onCompletion(~L621) 处加 emit 调用
 - [ ] Step 3: `npx tsc --noEmit` 通过
 - [ ] Step 4: Commit: `feat(workflow): add orchestrator event subscription API`
 
@@ -246,6 +266,11 @@ complexity: L1
 
 **Description:**
 实现全屏 TUI 视图组件，替代现有 widget。视图通过 `ctx.ui.custom()` 接管整个 TUI 渲染区。更新 /workflows 命令入口。删除 widget.ts 及所有 setWidget/shortcut 注册。
+
+**视图数据源：**
+- `instance` = `orchestrator.getInstance(runId)` — 提供 name, status, startedAt, description, budget, trace
+- `orchestrator.events.subscribe(runId, listener)` — 实时事件流（status 变化 / trace 更新 / tick）
+- listener 调用 `component.invalidate()` 触发重渲染
 
 **View Architecture:**
 
@@ -277,21 +302,53 @@ complexity: L1
 
 1. **WorkflowsView.ts** (~400 行上限):
    - 工厂函数 `createWorkflowsView(orchestrator, runId, theme, ctx)` → 返回 `Component`
+   - 通过 `orchestrator.getInstance(runId)` 获取 instance（name/status/startedAt/trace/budget）
    - 纯函数提取到顶层导出（供测试）：`groupByPhase`, `formatSidebarNode`, `formatActivityLine`, `formatElapsed`, `formatTokenStat`
    - `ctx.ui.custom()` 接受 Component，组件内部 `onKeyEvent` 处理键盘
    - 订阅 `orchestrator.events.subscribe(runId, listener)`，listener 调 `component.invalidate()` 触发重渲染
    - esc → `ctx.ui.custom(null)` 关闭视图 + `unsubscribe()`
    - `s` → `fs.promises.writeFile` 保存 trace markdown 到 `~/.pi/agent/workflow-traces/<runId>.md`
+   - **FR-4.7**: prompt output 超过 100KB 时，截断内容 + 显示 `(truncated, see full output via result)`
+   - **FR-6.5**: 所有 action（abort/pause/resume/restart）触发后**不自动关闭视图**，用户继续在视图中看状态变化
+   - **FR-3.2**: sidebar 第二层 nodes 按 `stepIndex` 升序排列
 
 2. **index.ts 改动**:
    - 删除 `import { registerWorkflowShortcuts, renderWorkflowList } from "./widget.js"`
-   - 删除 `orch.onTraceUpdate` 中的 `setWidget` 调用
+   - 删除所有 `orch.onTraceUpdate` 中的 `setWidget` 调用（session_start 和 session_tree 中的两处）
    - 删除 `registerWorkflowShortcuts(pi, orchestrators, cmdState)` 调用
-   - 更新 `/workflows` 命令 handler：有 runId 参数时 `ctx.ui.custom(createWorkflowsView(...))`，无参数时 SelectList 选择后 `ctx.ui.custom(...)`
+   - 删除 `ctx.hasUI` 条件下的 `setWidget` 初始调用
+   - 更新 `/workflows` 命令 handler：
+     - 有 runId 参数时直接 `ctx.ui.custom(createWorkflowsView(orch, runId, ctx.ui.theme, ctx))`
+     - 无参数时：先 `orch.list()` 过滤 `status in ["running", "paused"]`，如果只有 1 个直接进入；多个则 SelectList 选择后进入
+   - **FR-1.5**: 命令 handler 返回 void，不调用 `ctx.ui.setEditorText`
 
 3. **widget.ts 删除**:
-   - 确认无其他文件 import widget.ts（grep 验证）
+   - 确认无其他文件 import widget.ts（`grep -rn "from.*widget" extensions/workflow/src/` 验证）
    - 删除文件
+
+4. **`s save` trace markdown 格式**:
+   ```markdown
+   # Workflow Trace: <name> (<runId>)
+   
+   Status: <status> | Started: <startedAt> | Duration: <elapsed>
+   Budget: <usedTokens>/<maxTokens> tokens, $<usedCost>
+   
+   ## Phase: <phaseName>
+   
+   ### [#<stepIndex>] <agentName> — <status>
+   - Model: <model>
+   - Duration: <duration>
+   
+   **Prompt:**
+   <task full text>
+   
+   **Activity:**
+   - Bash(git diff main...HEAD)
+   - Skill(code-review)
+   
+   **Outcome:**
+   <result or error>
+   ```
 
 **Footer 快捷键逻辑 (FR-2.5):**
 - 概览视图（selectedPhaseIndex >= 0 && selectedNodeIndex < 0）: `↑↓ select · x stop workflow · p pause · esc back · s save`
@@ -312,9 +369,9 @@ complexity: L1
 - completed: `theme.fg("success", "●")`
 - failed: `theme.fg("error", "●")`
 
-- [ ] Step 1: 创建 `views/WorkflowsView.ts`（纯函数 + 工厂函数 + 键盘处理 + 订阅）
-- [ ] Step 2: 更新 `index.ts`（删除 widget 引用，更新 /workflows 命令）
-- [ ] Step 3: 删除 `widget.ts`，grep 确认无残留 import
+- [ ] Step 1: 创建 `views/WorkflowsView.ts`（纯函数 + 工厂函数 + 键盘处理 + 订阅 + FR-4.7 100KB 截断 + FR-6.5 action 不关闭 + FR-3.2 stepIndex 升序）
+- [ ] Step 2: 更新 `index.ts`（删除 widget 引用 + setWidget 调用 + shortcut 注册，更新 /workflows 命令：过滤 running/paused、单实例直接进入、FR-1.5 返回 void）
+- [ ] Step 3: 删除 `widget.ts`，`grep -rn "from.*widget" extensions/workflow/src/` 确认无残留 import
 - [ ] Step 4: `npx tsc --noEmit` 通过
 - [ ] Step 5: `pnpm --filter @zhushanwen/pi-workflow lint` 通过
 - [ ] Step 6: Commit: `feat(workflow): replace widget with fullscreen TUI view`
@@ -379,7 +436,7 @@ complexity: L1
 | 配置项 | 值 |
 |--------|---|
 | Agent | general-purpose |
-| 注入上下文 | spec FR-7, agent-pool.ts processJsonlEvent 函数, state.ts AgentResult 类型, orchestrator.ts executeWithRetry 映射段 |
+| 注入上下文 | spec FR-7, agent-pool.ts processJsonlEvent 函数（tool_execution_start 分支，在 pipeline.hasToolCall=true 之前 push），state.ts AgentResult 类型，orchestrator.ts executeWithRetry(~L747) 和 stale context 分支(~L755) 的 result 映射段 |
 | 读取文件 | `extensions/workflow/src/agent-pool.ts`, `extensions/workflow/src/state.ts`, `extensions/workflow/src/orchestrator.ts` |
 | 修改文件 | 同上 |
 
@@ -387,7 +444,7 @@ complexity: L1
 
 #### BG2: 事件系统
 
-**Description:** 新增 orchestrator-events.ts 订阅 API，orchestrator 加 emit 调用点。
+**Description:** 新增 orchestrator-events.ts 订阅 API，orchestrator 在 9 个具体调用点插入 emit（pause/resume/abort/executeWithRetry×3/handleWorkerError/handleWorkerExit×2/onCompletion）。
 
 **Tasks:** Task 2
 
@@ -398,7 +455,7 @@ complexity: L1
 | 配置项 | 值 |
 |--------|---|
 | Agent | general-purpose |
-| 注入上下文 | spec FR-5, orchestrator.ts transitionStatus/appendTraceNode/executeWithRetry 调用位置 |
+| 注入上下文 | spec FR-5, orchestrator.ts 具体行号：pause(~L315), resume(~L340), abort(~L390), executeWithRetry(~L687/~L733/~L791), handleWorkerError(~L838), handleWorkerExit(~L865/~L899), onCompletion(~L621) |
 | 读取文件 | `extensions/workflow/src/orchestrator.ts`, `extensions/workflow/src/state.ts` |
 | 创建文件 | `extensions/workflow/src/orchestrator-events.ts` |
 | 修改文件 | `extensions/workflow/src/orchestrator.ts` |
@@ -418,8 +475,8 @@ complexity: L1
 | 配置项 | 值 |
 |--------|---|
 | Agent | general-purpose |
-| 注入上下文 | spec FR-1/2/3/4/6/8, TUI 截图 ASCII 还原, pi-tui API, ctx.ui.custom() 用法 |
-| 读取文件 | `extensions/workflow/src/index.ts`, `extensions/workflow/src/widget.ts`, `extensions/workflow/src/orchestrator.ts`, `extensions/workflow/src/state.ts` |
+| 注入上下文 | spec FR-1/2/3/4/6/8, TUI 截图 ASCII 还原（handoff §1）, pi-tui API（Text/Container/Component），ctx.ui.custom() 用法（docs/tui.md § Using Components），FR-1.2 过滤 running/paused, FR-1.5 返回 void, FR-3.2 stepIndex 升序, FR-4.7 100KB 截断, FR-6.5 action 不关闭视图 |
+| 读取文件 | `extensions/workflow/src/index.ts`, `extensions/workflow/src/widget.ts`, `extensions/workflow/src/orchestrator.ts`, `extensions/workflow/src/state.ts`, `extensions/workflow/src/agent-pool.ts`, `extensions/workflow/src/orchestrator-events.ts` |
 | 创建文件 | `extensions/workflow/src/views/WorkflowsView.ts` |
 | 修改文件 | `extensions/workflow/src/index.ts` |
 | 删除文件 | `extensions/workflow/src/widget.ts` |
