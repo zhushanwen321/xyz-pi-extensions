@@ -68,13 +68,16 @@ export function createWorkflowsView(
       return { render: () => [], invalidate() {}, handleInput() {} };
     }
 
-    const state: ViewState = {
-      level: 0,
+    const phases = buildPhaseGroups(instance.trace);
+    // Skip level 0 when only 1 phase — go directly to agent list
+    const initialState: ViewState = {
+      level: phases.length > 1 ? 0 : 1,
       phaseIdx: 0,
       agentIdx: 0,
       promptExpanded: false,
       disposed: false,
     };
+    const state = initialState;
 
     const cache = { width: undefined as number | undefined, lines: undefined as string[] | undefined };
     const tuiAny = tui as { requestRender(): void; terminal: { rows: number } };
