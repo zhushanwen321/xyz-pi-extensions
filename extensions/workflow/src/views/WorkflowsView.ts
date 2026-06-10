@@ -4,6 +4,11 @@
  * Uses ctx.ui.custom() factory pattern — the canonical Pi TUI approach.
  * The factory receives (tui, theme, keybindings, done) and returns a
  * component object implementing render/handleInput/invalidate.
+ *
+ * NOTE: x/p/r keys execute actions directly without confirm dialogs.
+ * ctx.ui.confirm() calls ctx.ui.custom() internally, which would replace
+ * the current fullscreen view (non-overlay mode cannot stack). Future
+ * enhancement: migrate to overlay mode to support confirm stacking.
  */
 
 import * as fs from "node:fs";
@@ -14,14 +19,16 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { matchesKey, Key } from "@mariozechner/pi-tui";
 
 import type { WorkflowOrchestrator } from "../orchestrator.js";
-import type { ExecutionTraceNode, WorkflowInstance, WorkflowStatus } from "../state.js";
+import type { WorkflowInstance } from "../state.js";
 
 import {
+  type FlatEntry,
   type ThemeLike,
   buildFlatEntries,
   ELLIPSIS,
   formatActivityLine,
   formatElapsed,
+  formatSidebarNode,
   formatTokenStat,
   groupByPhase,
   isTerminalStatus,
@@ -49,9 +56,12 @@ export function createWorkflowsView(
     }
 
     const state = { selectedIndex: 0, promptExpanded: false, disposed: false };
+    // Cached render output — invalidated on state change or theme change
+    const cache = { width: undefined as number | undefined, lines: undefined as string[] | undefined };
+    const requestRender = () => (tui as { requestRender(): void }).requestRender();
 
     const unsubscribe = orchestrator.events.subscribe(runId, () => {
-      if (!state.disposed) (tui as { requestRender(): void }).requestRender();
+      if (!state.disposed) requestRender();
     });
 
     const wrappedDone = () => {
@@ -62,18 +72,30 @@ export function createWorkflowsView(
     };
 
     const component = {
-      invalidate(): void {},
+      invalidate(): void {
+        cache.width = undefined;
+        cache.lines = undefined;
+      },
       render(width: number): string[] {
+        if (cache.lines && cache.width === width) return cache.lines;
         const inst = orchestrator.getInstance(runId);
-        if (!inst) return ["(workflow not found)"];
-        return renderView(inst, theme, width, state.selectedIndex, state.promptExpanded);
+        const lines = inst
+          ? renderView(inst, theme, width, state.selectedIndex, state.promptExpanded)
+          : ["(workflow not found)"];
+        cache.width = width;
+        cache.lines = lines;
+        return lines;
       },
       handleInput(data: string): void {
         if (state.disposed) return;
         const reRender = processKeyInput(
-          data, orchestrator, runId, state, theme, ctx, wrappedDone,
+          data, orchestrator, runId, state, ctx, wrappedDone,
         );
-        if (reRender) (tui as { requestRender(): void }).requestRender();
+        if (reRender) {
+          cache.width = undefined;
+          cache.lines = undefined;
+          requestRender();
+        }
       },
     };
 
@@ -88,15 +110,14 @@ function processKeyInput(
   orchestrator: WorkflowOrchestrator,
   runId: string,
   state: { selectedIndex: number; promptExpanded: boolean; disposed: boolean },
-  theme: ThemeLike,
   ctx: ExtensionContext,
   done: () => void,
 ): boolean {
   const instance = orchestrator.getInstance(runId);
   if (!instance) return false;
 
-  const terminal = isTerminalStatus(instance.status as WorkflowStatus);
-  const phaseMap = groupByPhase(instance.trace as ExecutionTraceNode[]);
+  const terminal = isTerminalStatus(instance.status);
+  const phaseMap = groupByPhase(instance.trace);
   const flatEntries = buildFlatEntries(phaseMap);
 
   if (matchesKey(data, Key.escape)) {
@@ -125,38 +146,34 @@ function processKeyInput(
     return true;
   }
 
+  // Actions execute directly (no confirm — see module-level NOTE)
   if (data === "x") {
     if (terminal) { ctx.ui.notify(`Workflow already ${instance.status}`, "warning"); return false; }
-    void ctx.ui.confirm("Stop this workflow?", `${instance.name} (${runId.slice(0, 8)}...)`).then((ok) => {
-      if (!ok) return;
-      void orchestrator.abort(runId)
-        .then(() => ctx.ui.notify("Workflow aborted", "info"))
-        .catch((err: Error) => ctx.ui.notify(`Abort failed: ${err.message}`, "error"));
-    });
+    void orchestrator.abort(runId)
+      .then(() => ctx.ui.notify("Workflow aborted", "info"))
+      .catch((err: Error) => ctx.ui.notify(`Abort failed: ${err.message}`, "error"));
     return false;
   }
 
   if (data === "p") {
     if (terminal) { ctx.ui.notify(`Workflow already ${instance.status}`, "warning"); return false; }
-    const action = instance.status === "running" ? "pause" : "resume";
-    void ctx.ui.confirm(`${action === "pause" ? "Pause" : "Resume"} this workflow?`, `${instance.name}`).then((ok) => {
-      if (!ok) return;
-      const op = action === "pause" ? orchestrator.pause(runId) : orchestrator.resume(runId);
-      void op
-        .then(() => ctx.ui.notify(`Workflow ${action}d`, "info"))
-        .catch((err: Error) => ctx.ui.notify(`${action} failed: ${err.message}`, "error"));
-    });
+    if (instance.status === "running") {
+      void orchestrator.pause(runId)
+        .then(() => ctx.ui.notify("Workflow paused", "info"))
+        .catch((err: Error) => ctx.ui.notify(`Pause failed: ${err.message}`, "error"));
+    } else if (instance.status === "paused") {
+      void orchestrator.resume(runId)
+        .then(() => ctx.ui.notify("Workflow resumed", "info"))
+        .catch((err: Error) => ctx.ui.notify(`Resume failed: ${err.message}`, "error"));
+    }
     return false;
   }
 
   if (data === "r") {
     if (terminal) { ctx.ui.notify(`Workflow already ${instance.status}`, "warning"); return false; }
-    void ctx.ui.confirm("Restart from scratch?", `This will start a new run of '${instance.name}'`).then((ok) => {
-      if (!ok) return;
-      void orchestrator.run(instance.name, {}, instance.budget.maxTokens, instance.budget.maxTimeMs)
-        .then((newRunId) => ctx.ui.notify(`Restarted → ${newRunId.slice(0, 8)}...`, "info"))
-        .catch((err: Error) => ctx.ui.notify(`Restart failed: ${err.message}`, "error"));
-    });
+    void orchestrator.run(instance.name, {}, instance.budget.maxTokens, instance.budget.maxTimeMs)
+      .then((newRunId) => ctx.ui.notify(`Restarted → ${newRunId.slice(0, 8)}...`, "info"))
+      .catch((err: Error) => ctx.ui.notify(`Restart failed: ${err.message}`, "error"));
     return false;
   }
 
@@ -179,7 +196,7 @@ function saveTraceToFile(instance: WorkflowInstance, ctx: ExtensionContext): voi
   lines.push(`Status: ${instance.status} | Started: ${instance.startedAt ?? "-"} | Duration: ${formatElapsed(instance.startedAt)}`);
   lines.push(`Budget: ${instance.budget.usedTokens}/${instance.budget.maxTokens ?? "unlimited"} tokens, $${instance.budget.usedCost.toFixed(4)}`, "");
 
-  const phaseMap = groupByPhase(instance.trace as ExecutionTraceNode[]);
+  const phaseMap = groupByPhase(instance.trace);
   for (const [phase, nodes] of phaseMap) {
     lines.push(`## Phase: ${phase}`, "");
     for (const node of nodes) {
@@ -231,10 +248,10 @@ function renderView(
   lines.push(descLine ? descLine + " ".repeat(padLen) + rightPart : " ".repeat(padLen) + rightPart);
   lines.push("─".repeat(width));
 
-  const phaseMap = groupByPhase(instance.trace as ExecutionTraceNode[]);
+  const phaseMap = groupByPhase(instance.trace);
   const flatEntries = buildFlatEntries(phaseMap);
 
-  let selectedNode: ExecutionTraceNode | undefined;
+  let selectedNode: FlatEntry["node"] = undefined;
   let selectedPhase: string | undefined;
   for (const entry of flatEntries) {
     if (entry.index === selectedIndex && entry.type === "node" && entry.node) {
@@ -265,7 +282,7 @@ function renderView(
     mainLines.push(theme.bold(selectedNode.agent));
     mainLines.push(`${statusDotStr(selectedNode.status, theme)} ${selectedNode.status} · ${selectedNode.model}`);
     mainLines.push(theme.fg("dim", formatTokenStat(
-      selectedNode.result?.usage as { input: number; output: number } | undefined,
+      selectedNode.result?.usage,
       selectedNode.result?.toolCalls,
     )));
     mainLines.push("");
@@ -320,6 +337,3 @@ function renderView(
 
   return lines;
 }
-
-// re-export for tests
-import { formatSidebarNode } from "./format.js";
