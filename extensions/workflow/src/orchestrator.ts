@@ -517,6 +517,16 @@ export class WorkflowOrchestrator {
     }
   }
 
+  /**
+   * Reconstruct workflow instances from session JSONL and restore them.
+   * Delegates to state-store's reconstructState, then calls restoreInstances.
+   */
+  async reconstructAndRestore(): Promise<void> {
+    const { reconstructState } = await import("./infra/state-store.js");
+    const instances = await reconstructState(this.ctx);
+    this.restoreInstances(instances);
+  }
+
   // ── Worker lifecycle ────────────────────────────────────────
 
   /**

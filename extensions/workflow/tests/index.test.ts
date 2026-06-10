@@ -40,6 +40,7 @@ vi.mock("../src/orchestrator.js", () => ({
     this.list = mockList;
     this.getInstance = vi.fn().mockReturnValue(undefined);
     this.restoreInstances = vi.fn();
+    this.reconstructAndRestore = vi.fn();
     this.getAgentCount = vi.fn().mockReturnValue(0);
     this.getAgents = vi.fn().mockReturnValue([]);
     this.pause = vi.fn();

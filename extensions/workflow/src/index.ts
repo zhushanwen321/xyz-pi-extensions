@@ -31,7 +31,6 @@ import {
   transitionStatus,
   type WorkflowStatus,
 } from "./domain/state.js";
-import { reconstructState } from "./infra/state-store.js";
 import { registerGenerateTool } from "./interface/tool-generate.js";
 
 // ── Parameter schema ──────────────────────────────────────────
@@ -154,8 +153,7 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
     orchestrators.set(sessionId, orch);
 
     // Restore reconstructed state into orchestrator
-    const instances = await reconstructState(ctx);
-    orch.restoreInstances(instances);
+    await orch.reconstructAndRestore();
 
     // Log discovered agents with source breakdown
     const agentCount = orch.getAgentCount();
@@ -198,10 +196,12 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
     }
     const orch = new WorkflowOrchestrator(pi, ctx);
     orchestrators.set(sessionId, orch);
-    const instances = await reconstructState(ctx);
+    await orch.reconstructAndRestore();
     // P1-7: Drop pending state from old branches — running workers no longer exist
-    for (const inst of instances.values()) {
-      if (inst.status === "running") {
+    for (const summary of orch.list()) {
+      if (summary.status === "running") {
+        const inst = orch.getInstance(summary.runId);
+        if (!inst) continue;
         inst.pausedAt = new Date().toISOString();
         try {
           transitionStatus(inst, "paused");
@@ -211,7 +211,6 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
         }
       }
     }
-    orch.restoreInstances(instances);
     orch.onTraceUpdate = undefined;
     orch.onCompletion = (runId) => {
       const instance = orch.getInstance(runId);
