@@ -1,14 +1,12 @@
 /**
  * Workflow Fullscreen TUI View (FR-1 through FR-8)
  *
- * Uses ctx.ui.custom() factory pattern — the canonical Pi TUI approach.
+ * Uses ctx.ui.custom() with overlay mode to render a fullscreen panel
+ * on top of the existing UI. Overlay mode allows stacking confirms
+ * (x/p/r keys) and properly covers the terminal screen.
+ *
  * The factory receives (tui, theme, keybindings, done) and returns a
  * component object implementing render/handleInput/invalidate.
- *
- * NOTE: x/p/r keys execute actions directly without confirm dialogs.
- * ctx.ui.confirm() calls ctx.ui.custom() internally, which would replace
- * the current fullscreen view (non-overlay mode cannot stack). Future
- * enhancement: migrate to overlay mode to support confirm stacking.
  */
 
 import * as fs from "node:fs";
@@ -100,6 +98,14 @@ export function createWorkflowsView(
     };
 
     return component;
+  }, {
+    overlay: true,
+    overlayOptions: {
+      anchor: "center" as const,
+      width: "100%",
+      maxHeight: "100%",
+      margin: 0,
+    },
   });
 }
 
@@ -146,34 +152,39 @@ function processKeyInput(
     return true;
   }
 
-  // Actions execute directly (no confirm — see module-level NOTE)
+  // Actions with confirm (overlay mode supports stacking)
   if (data === "x") {
     if (terminal) { ctx.ui.notify(`Workflow already ${instance.status}`, "warning"); return false; }
-    void orchestrator.abort(runId)
-      .then(() => ctx.ui.notify("Workflow aborted", "info"))
-      .catch((err: Error) => ctx.ui.notify(`Abort failed: ${err.message}`, "error"));
+    void ctx.ui.confirm("Stop this workflow?", `${instance.name} (${runId.slice(0, 8)}...)`).then((ok) => {
+      if (!ok) return;
+      void orchestrator.abort(runId)
+        .then(() => ctx.ui.notify("Workflow aborted", "info"))
+        .catch((err: Error) => ctx.ui.notify(`Abort failed: ${err.message}`, "error"));
+    });
     return false;
   }
 
   if (data === "p") {
     if (terminal) { ctx.ui.notify(`Workflow already ${instance.status}`, "warning"); return false; }
-    if (instance.status === "running") {
-      void orchestrator.pause(runId)
-        .then(() => ctx.ui.notify("Workflow paused", "info"))
-        .catch((err: Error) => ctx.ui.notify(`Pause failed: ${err.message}`, "error"));
-    } else if (instance.status === "paused") {
-      void orchestrator.resume(runId)
-        .then(() => ctx.ui.notify("Workflow resumed", "info"))
-        .catch((err: Error) => ctx.ui.notify(`Resume failed: ${err.message}`, "error"));
-    }
+    const action = instance.status === "running" ? "pause" : "resume";
+    void ctx.ui.confirm(`${action === "pause" ? "Pause" : "Resume"} this workflow?`, `${instance.name}`).then((ok) => {
+      if (!ok) return;
+      const op = action === "pause" ? orchestrator.pause(runId) : orchestrator.resume(runId);
+      void op
+        .then(() => ctx.ui.notify(`Workflow ${action}d`, "info"))
+        .catch((err: Error) => ctx.ui.notify(`${action} failed: ${err.message}`, "error"));
+    });
     return false;
   }
 
   if (data === "r") {
     if (terminal) { ctx.ui.notify(`Workflow already ${instance.status}`, "warning"); return false; }
-    void orchestrator.run(instance.name, {}, instance.budget.maxTokens, instance.budget.maxTimeMs)
-      .then((newRunId) => ctx.ui.notify(`Restarted → ${newRunId.slice(0, 8)}...`, "info"))
-      .catch((err: Error) => ctx.ui.notify(`Restart failed: ${err.message}`, "error"));
+    void ctx.ui.confirm("Restart from scratch?", `This will start a new run of '${instance.name}'`).then((ok) => {
+      if (!ok) return;
+      void orchestrator.run(instance.name, {}, instance.budget.maxTokens, instance.budget.maxTimeMs)
+        .then((newRunId) => ctx.ui.notify(`Restarted → ${newRunId.slice(0, 8)}...`, "info"))
+        .catch((err: Error) => ctx.ui.notify(`Restart failed: ${err.message}`, "error"));
+    });
     return false;
   }
 

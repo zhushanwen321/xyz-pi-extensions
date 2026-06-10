@@ -27,7 +27,7 @@ declare module "@mariozechner/pi-coding-agent" {
 			setWidget(key: string, content: unknown, options?: unknown): void;
 			setFooter(factory: unknown): void;
 			theme: Theme;
-			custom<T = void>(factory: (tui: any, theme: any, kb: any, done: () => void) => any): Promise<T>;
+			custom<T = void>(factory: (tui: any, theme: any, kb: any, done: (result: T) => void) => any, options?: { overlay?: boolean; overlayOptions?: Record<string, unknown> }): Promise<T>;
 		};
 		model: any;
 		signal: AbortSignal | undefined;
