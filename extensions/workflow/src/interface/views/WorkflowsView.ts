@@ -34,6 +34,7 @@ import {
   formatPhaseLine,
   formatTokenStat,
   isTerminalStatus,
+  OUTPUT_TRUNCATE_BYTES,
   padVisible,
   PROMPT_FOLD_LINES,
   SIDEBAR_WIDTH,
@@ -495,10 +496,18 @@ function renderLevel2(
     } else if (node.result?.error) {
       rightLines.push(theme.fg("error", `  ${node.result.error.slice(0, mainWidth - 4)}`));
     } else if (node.result?.content) {
-      const allLines = node.result.content.split("\n");
-      // Show last 5 lines of output
-      const tail = allLines.slice(-5);
-      rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - 4)}`));
+      const raw = node.result.content;
+      if (Buffer.byteLength(raw, "utf8") > OUTPUT_TRUNCATE_BYTES) {
+        const truncated = raw.slice(0, OUTPUT_TRUNCATE_BYTES);
+        const allLines = truncated.split("\n");
+        const tail = allLines.slice(-5);
+        rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - 4)}`));
+        rightLines.push(theme.fg("dim", "  (truncated)"));
+      } else {
+        const allLines = raw.split("\n");
+        const tail = allLines.slice(-5);
+        rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - 4)}`));
+      }
     }
   }
 
