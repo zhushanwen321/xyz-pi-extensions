@@ -1,0 +1,179 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "agent-pool collects toolCalls from JSONL tool_execution_start events",
+      "description": "processJsonlEvent should push { name, input } to pipeline.toolCalls for every tool_execution_start, not just structured-output",
+      "steps": [
+        "Create mock JSONL event: { type: 'tool_execution_start', toolName: 'Bash', args: { command: 'git diff' } }",
+        "Call processJsonlEvent with empty pipeline",
+        "Assert pipeline.toolCalls.length === 1",
+        "Assert pipeline.toolCalls[0].name === 'Bash'",
+        "Assert pipeline.toolCalls[0].input contains 'git diff'"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "integration",
+      "title": "state AgentResult includes toolCalls field",
+      "description": "Serialize/deserialize roundtrip preserves toolCalls array",
+      "steps": [
+        "Create AgentResult with toolCalls: [{ name: 'Read', input: 'file.ts' }]",
+        "Serialize via serializeInstance",
+        "Deserialize via deserializeInstance",
+        "Assert result.toolCalls deep equals original"
+      ]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "integration",
+      "title": "orchestrator maps toolCalls from pool result to state result",
+      "description": "executeWithRetry maps poolResult.toolCalls to StateAgentResult.toolCalls",
+      "steps": [
+        "Verify orchestrator.ts executeWithRetry result construction includes toolCalls field"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "subscribe triggers listener on emit",
+      "description": "After subscribe, emit should synchronously call listener with event",
+      "steps": [
+        "Create WorkflowEventEmitter",
+        "Subscribe with mock listener",
+        "Emit event",
+        "Assert listener called once with correct event"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "integration",
+      "title": "unsubscribe stops listener calls",
+      "description": "After unsubscribe, emit should not trigger listener",
+      "steps": [
+        "Subscribe + unsubscribe",
+        "Emit event",
+        "Assert listener not called"
+      ]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "integration",
+      "title": "listener exception does not propagate",
+      "description": "Listener throws → other listeners and emit continue normally",
+      "steps": [
+        "Subscribe listener1 that throws",
+        "Subscribe listener2 that records calls",
+        "Emit event",
+        "Assert listener2 was still called"
+      ]
+    },
+    {
+      "id": "TC-2-04",
+      "type": "integration",
+      "title": "tick interval lifecycle",
+      "description": "Interval starts on first subscribe, stops when all unsubscribe",
+      "steps": [
+        "vi.useFakeTimers()",
+        "Subscribe listener1",
+        "vi.advanceTimersByTime(1000)",
+        "Assert listener1 received tick event",
+        "Unsubscribe listener1",
+        "vi.advanceTimersByTime(2000)",
+        "Assert no additional tick events"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "unit",
+      "title": "groupByPhase groups nodes by phase field",
+      "description": "Nodes with same phase grouped together, no phase → '(no phase)'",
+      "steps": [
+        "Create nodes: [{ phase: 'Review' }, { phase: 'Review' }, { phase: undefined }]",
+        "Call groupByPhase(nodes)",
+        "Assert Map has 'Review' with 2 nodes and '(no phase)' with 1 node"
+      ]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "unit",
+      "title": "formatSidebarNode truncates at width",
+      "description": "Output string visibleWidth ≤ specified width",
+      "steps": [
+        "Call formatSidebarNode with long agent name, width=20",
+        "Assert output visibleWidth ≤ 20"
+      ]
+    },
+    {
+      "id": "TC-3-03",
+      "type": "unit",
+      "title": "formatActivityLine formats ToolName(args)",
+      "description": "Output is 'Bash(git diff ...)' format with truncation",
+      "steps": [
+        "Call formatActivityLine({ name: 'Bash', input: 'git diff main...HEAD' }, 40)",
+        "Assert output starts with 'Bash(' and ends with ')'"
+      ]
+    },
+    {
+      "id": "TC-3-04",
+      "type": "unit",
+      "title": "formatElapsed computes seconds from startedAt",
+      "description": "Returns 'Ns' format, '-' when no startedAt",
+      "steps": [
+        "Call formatElapsed with ISO string 60s ago",
+        "Assert output is '60s'",
+        "Call formatElapsed(undefined, Date.now())",
+        "Assert output is '-'"
+      ]
+    },
+    {
+      "id": "TC-3-05",
+      "type": "unit",
+      "title": "formatTokenStat shows token and tool call counts",
+      "description": "Returns 'N tok · M tool calls' format",
+      "steps": [
+        "Call with usage={ input: 100, output: 50, turns: 1 } and toolCalls.length=3",
+        "Assert output contains '150 tok' and '3 tool calls'"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "manual",
+      "title": "Full view opens via /workflows command",
+      "description": "End-to-end: /workflows → SelectList → select → fullscreen view renders",
+      "steps": [
+        "Start a workflow via /workflow run",
+        "Type /workflows",
+        "Select the running workflow from list",
+        "Verify fullscreen view appears with correct layout"
+      ]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "manual",
+      "title": "Keyboard navigation and control",
+      "description": "Verify all keyboard shortcuts work correctly",
+      "steps": [
+        "Open fullscreen view",
+        "Press ↓ to navigate nodes",
+        "Press 👉 to expand/collapse prompt",
+        "Press x to abort (with confirm)",
+        "Press s to save trace",
+        "Press esc to close"
+      ]
+    },
+    {
+      "id": "TC-4-03",
+      "type": "manual",
+      "title": "80x24 terminal rendering",
+      "description": "Verify view renders correctly in minimum terminal size",
+      "steps": [
+        "Set terminal to 80x24",
+        "Open fullscreen view",
+        "Verify no horizontal overflow",
+        "Verify all sections visible"
+      ]
+    }
+  ]
+}
