@@ -16,9 +16,10 @@
  * Create one instance per session to avoid cross-session state leakage.
  */
 
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import * as fs from "node:fs";
+
+import { buildArgs, resolveInvocation, runPiProcess } from "./infra/pi-runner.js";
+import { makeEmptyPipeline } from "./infra/jsonl-parser.js";
 
 import type { WorkflowBudget, ToolCallEntry } from "./domain/state.js";
 
@@ -91,8 +92,6 @@ export interface AgentResult {
   toolCalls: ToolCallEntry[];
 }
 
-// ToolCallEntry imported from state.ts (canonical definition)
-
 export interface AgentUsage {
   input: number;
   output: number;
@@ -114,41 +113,11 @@ interface QueueEntry {
   signal?: AbortSignal;
 }
 
-interface ParsedPipelineEvent {
-  output: string;
-  usage: AgentUsage;
-  model?: string;
-  stopReason?: string;
-  /**
-   * Structured output from successful structured-output tool call.
-   * Source: `tool_execution_end.result.details` — the validated & parsed data object
-   * returned by the extension's execute(). NOT the raw tool call args (which may contain
-   * JSON strings for schema/data that models sometimes pass).
-   */
-  parsedOutput?: unknown;
-  /** Pending args from tool_execution_start, awaiting tool_execution_end confirmation. */
-  pendingStructuredArgs?: unknown;
-  /** Pending toolCallId to match against tool_execution_end. */
-  pendingStructuredCallId?: string;
-  /** Whether any tool_execution_start event was seen (for schema failure detection). */
-  hasToolCall?: boolean;
-  /** Session ID extracted from the first JSONL event (type=session header). */
-  sessionId?: string;
-  /** All tool calls collected from JSONL stream (FR-7). */
-  toolCalls: ToolCallEntry[];
-}
-
 // ── Constants ─────────────────────────────────────────────────
 
 export const SOFT_MAX_AGENTS_WARNING = 500;
 const DEFAULT_CONCURRENCY = 4;
-// 24-hour safety net — prevents zombie pi subprocesses if all other
-// cleanup paths (abort signal, budget enforcement) fail.
-// Business-level timeouts are handled by orchestrator's budget enforcement.
-const ONE_DAY_MS = 86_400_000;
-const PROCESS_TIMEOUT_MS = ONE_DAY_MS;
 const UUID_SLICE_LENGTH = 8;
-const TIMEOUT_DISPLAY_DIVISOR = 1000;
 
 export interface AgentPoolOptions {
   maxConcurrency?: number;
@@ -210,11 +179,6 @@ export class AgentPool {
    * The returned promise resolves with the AgentResult on both success
    * and failure — never rejects. Error details are carried in the
    * `error` and `success` fields of the result.
-   *
-   * The optional `signal` (P1-2) is propagated to the pi subprocess:
-   *   - Pre-aborted signal: rejected synchronously with success=false.
-   *   - Abort during queue: removed from queue, returns aborted result.
-   *   - Abort during run: subprocess receives SIGKILL via runPiProcess.
    */
   enqueue(opts: AgentCallOpts, signal?: AbortSignal): Promise<AgentResult> {
     return new Promise<AgentResult>((resolve) => {
@@ -222,7 +186,6 @@ export class AgentPool {
       const entry: QueueEntry = { opts, resolve, callId, startedAt: Date.now(), signal };
       this.queue.push(entry);
 
-      // P1-2: If a signal is provided, honor pre-abort and register abort listener
       if (signal) {
         if (signal.aborted) {
           const idx = this.queue.indexOf(entry);
@@ -240,7 +203,6 @@ export class AgentPool {
         const onAbort = () => {
           const idx = this.queue.indexOf(entry);
           if (idx !== -1) {
-            // Still queued — remove and resolve with abort
             this.queue.splice(idx, 1);
             resolve({
               callId,
@@ -251,7 +213,6 @@ export class AgentPool {
               toolCalls: [],
             });
           }
-          // If already running, runPiProcess owns the abort handling
         };
         signal.addEventListener("abort", onAbort, { once: true });
       }
@@ -277,12 +238,80 @@ export class AgentPool {
     const { opts, resolve, callId, startedAt, signal } = entry;
 
     try {
-      // Real spawn — increment counter and check soft limit
       this.totalCallCount++;
       if (this.budgetRef) this.maybeEmitSoftWarning(this.budgetRef);
 
-      const result = await this.spawnAndParse(opts, callId, startedAt, signal);
-      resolve(result);
+      const args = buildArgs(opts);
+      const { command, args: cmdArgs } = resolveInvocation(args);
+
+      const rawEnv: Record<string, string | undefined> = { ...process.env };
+      if (opts.schemaEnv) {
+        rawEnv.PI_WORKFLOW_SCHEMA = opts.schemaEnv;
+      }
+      const env: Record<string, string> = {};
+      for (const [k, v] of Object.entries(rawEnv)) {
+        if (v !== undefined) env[k] = v;
+      }
+
+      const pipeline = makeEmptyPipeline();
+      let stderr = "";
+      let exitCode: number;
+
+      try {
+        const result = await runPiProcess(command, cmdArgs, pipeline, signal, env);
+        exitCode = result.exitCode;
+        stderr = result.stderr;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        resolve({
+          callId,
+          output: "",
+          durationMs: Date.now() - startedAt,
+          success: false,
+          error: message,
+          toolCalls: [],
+        });
+        return;
+      }
+
+      const durationMs = Date.now() - startedAt;
+
+      if (opts.schema && pipeline.parsedOutput === undefined) {
+        if (!pipeline.hasToolCall) {
+          resolve({
+            callId,
+            output: pipeline.output,
+            durationMs: Date.now() - startedAt,
+            success: false,
+            error: "Agent did not call structured-output tool",
+            toolCalls: pipeline.toolCalls,
+          });
+          return;
+        }
+        if (exitCode === 0) {
+          resolve({
+            callId,
+            output: pipeline.output,
+            durationMs,
+            success: false,
+            error: "Agent completed without calling structured-output tool",
+            toolCalls: pipeline.toolCalls,
+          });
+          return;
+        }
+      }
+
+      resolve({
+        callId,
+        output: pipeline.output,
+        parsedOutput: pipeline.parsedOutput,
+        usage: pipeline.usage.turns > 0 ? pipeline.usage : undefined,
+        durationMs,
+        success: exitCode === 0,
+        error: exitCode === 0 ? undefined : (stderr || `Exit code ${exitCode}`),
+        sessionId: pipeline.sessionId,
+        toolCalls: pipeline.toolCalls,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       resolve({
@@ -316,347 +345,6 @@ export class AgentPool {
       } catch {
         // callback errors must not affect dispatch
       }
-    }
-  }
-
-  /**
-   * Build pi CLI arguments from call options.
-   * Always uses --mode json --print for one-shot execution.
-   */
-  private buildArgs(opts: AgentCallOpts): string[] {
-    const args: string[] = ["--mode", "json", "-p"];
-
-    if (opts.model) {
-      args.push("--model", opts.model);
-    }
-
-    // Inject system prompt files (agent systemPrompt + schema injection)
-    if (opts.systemPromptFiles) {
-      for (const fp of opts.systemPromptFiles) {
-        args.push("--append-system-prompt", fp);
-      }
-    }
-
-    // Inject skill via --skill flag
-    if (opts.skillPath) {
-      args.push("--skill", opts.skillPath);
-    }
-
-    const prompt = opts.prompt;
-
-    args.push(prompt);
-    return args;
-  }
-
-  /**
-   * Resolve the pi binary invocation.
-   * Prefers the current Node.js process + argv[1] (running as an extension),
-   * falling back to "pi" on PATH.
-   */
-  private resolveInvocation(extraArgs: string[]): { command: string; args: string[] } {
-    const currentScript = process.argv[1];
-    if (currentScript && fs.existsSync(currentScript)) {
-      return { command: process.execPath, args: [currentScript, ...extraArgs] };
-    }
-    return { command: "pi", args: extraArgs };
-  }
-
-  /**
-   * Spawn a pi --mode json process, stream-parse JSONL lines from stdout,
-   * accumulate usage and output, and return an AgentResult.
-   *
-   * Never throws — errors are captured in the AgentResult fields.
-   */
-  private async spawnAndParse(
-    opts: AgentCallOpts,
-    callId: string,
-    startedAt: number,
-    signal?: AbortSignal,
-  ): Promise<AgentResult> {
-    const args = this.buildArgs(opts);
-    const { command, args: cmdArgs } = this.resolveInvocation(args);
-
-    // Build env with PI_WORKFLOW_SCHEMA for structured-output conditional activation.
-    // Filter out undefined values — child_process.spawn requires all env values to be strings.
-    const rawEnv: Record<string, string | undefined> = { ...process.env };
-    if (opts.schemaEnv) {
-      rawEnv.PI_WORKFLOW_SCHEMA = opts.schemaEnv;
-    }
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(rawEnv)) {
-      if (v !== undefined) env[k] = v;
-    }
-
-    const pipeline = makeEmptyPipeline();
-    let stderr = "";
-    let exitCode: number;
-
-    try {
-      const result = await runPiProcess(command, cmdArgs, pipeline, signal, env);
-      exitCode = result.exitCode;
-      stderr = result.stderr;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return {
-        callId,
-        output: "",
-        durationMs: Date.now() - startedAt,
-        success: false,
-        error: message,
-        toolCalls: [],
-      };
-    }
-
-    const durationMs = Date.now() - startedAt;
-
-    // Schema requested but no structured-output result
-    if (opts.schema && pipeline.parsedOutput === undefined) {
-      // Case 1: No tool call at all — fail immediately; orchestrator handles retries
-      if (!pipeline.hasToolCall) {
-        return {
-          callId,
-          output: pipeline.output,
-          durationMs: Date.now() - startedAt,
-          success: false,
-          error: "Agent did not call structured-output tool",
-          toolCalls: pipeline.toolCalls,
-        };
-      }
-      // Case 2: Other tool calls but no SO + process exited — fail (blind-spot fix)
-      if (exitCode === 0) {
-        return {
-          callId,
-          output: pipeline.output,
-          durationMs,
-          success: false,
-          error: "Agent completed without calling structured-output tool",
-          toolCalls: pipeline.toolCalls,
-        };
-      }
-    }
-
-    return {
-      callId,
-      output: pipeline.output,
-      parsedOutput: pipeline.parsedOutput,
-      usage: pipeline.usage.turns > 0 ? pipeline.usage : undefined,
-      durationMs,
-      success: exitCode === 0,
-      error: exitCode === 0 ? undefined : (stderr || `Exit code ${exitCode}`),
-      sessionId: pipeline.sessionId,
-      toolCalls: pipeline.toolCalls,
-    };
-  }
-
-}
-
-// ── Helpers ───────────────────────────────────────────────────
-
-
-
-function makeEmptyPipeline(): ParsedPipelineEvent {
-  return {
-    output: "",
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-    sessionId: undefined,
-    toolCalls: [],
-  };
-}
-
-/**
- * Spawn a pi --mode json process and stream-parse JSONL from stdout.
- * Returns the exit code and any stderr output.
- * The `pipeline` accumulator is mutated in place as lines arrive.
- *
- * P1-2: When `signal` is provided, the subprocess receives SIGKILL on
- * abort. The exit code 1 is returned with an explanatory stderr message.
- */
-async function runPiProcess(
-  command: string,
-  cmdArgs: string[],
-  pipeline: ParsedPipelineEvent,
-  signal?: AbortSignal,
-  env?: Record<string, string>,
-): Promise<{ exitCode: number; stderr: string }> {
-  let stderr = "";
-  const exitCode = await new Promise<number>((resolve, reject) => {
-    const proc = spawn(command, cmdArgs, {
-      shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: env ?? process.env,
-    });
-    let buffer = "";
-    let settled = false;
-    let aborted = false;
-
-    function processChunk(chunk: string): void {
-      buffer += chunk;
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const event = JSON.parse(line) as Record<string, unknown>;
-          processJsonlEvent(event, pipeline);
-        // eslint-disable-next-line taste/no-silent-catch
-        } catch {
-          // Skip malformed JSON lines
-        }
-      }
-    }
-
-    function settle(code: number): void {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (abortHandler) signal?.removeEventListener("abort", abortHandler);
-      resolve(code);
-    }
-
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      stderr += `Process timed out after ${PROCESS_TIMEOUT_MS / TIMEOUT_DISPLAY_DIVISOR}s, sending SIGKILL`;
-      proc.kill("SIGKILL");
-      resolve(1);
-    }, PROCESS_TIMEOUT_MS);
-    timer.unref();
-
-    // P1-2: Wire abort signal to SIGKILL the subprocess
-    const abortHandler = signal
-      ? () => {
-          if (settled) return;
-          aborted = true;
-          stderr += "Operation aborted, sending SIGKILL";
-          proc.kill("SIGKILL");
-        }
-      : undefined;
-    if (abortHandler && !signal?.aborted) {
-      signal!.addEventListener("abort", abortHandler, { once: true });
-    } else if (signal?.aborted) {
-      // Already aborted — resolve quickly without spawning
-      settled = true;
-      clearTimeout(timer);
-      stderr += "Operation aborted before start";
-      resolve(1);
-      proc.kill("SIGKILL");
-      return;
-    }
-
-    proc.stdout.on("data", (data: Buffer) => {
-      processChunk(data.toString());
-    });
-
-    proc.stderr.on("data", (data: Buffer) => {
-      stderr += data.toString();
-    });
-
-    proc.on("close", (code) => {
-      // Flush remaining buffer on EOF
-      if (buffer.trim()) {
-        try {
-          const event = JSON.parse(buffer) as Record<string, unknown>;
-          processJsonlEvent(event, pipeline);
-        // eslint-disable-next-line taste/no-silent-catch
-        } catch {
-          // Ignore trailing garbage
-        }
-      }
-      // P1-2: Normalize exit code for abort so caller can detect it
-      settle(aborted ? 1 : (code ?? 0));
-    });
-
-    proc.on("error", (err: Error) => {
-      stderr += err.message;
-      clearTimeout(timer);
-      if (abortHandler) signal?.removeEventListener("abort", abortHandler);
-      reject(err);
-    });
-  });
-
-  return { exitCode, stderr };
-}
-
-// ── JSONL line processor ──────────────────────────────────────
-
-/**
- * Process a single JSONL event from pi --mode json stdout.
- * Mutates `pipeline` in place with O(1) memory overhead per event.
- */
-function processJsonlEvent(event: Record<string, unknown>, pipeline: ParsedPipelineEvent): void {
-  // First event in --mode json stdout: session header with ID for locating session JSONL
-  if (event.type === "session") {
-    if (typeof event.id === "string") {
-      pipeline.sessionId = event.id;
-    }
-    return;
-  }
-
-  if (event.type === "tool_execution_start") {
-    if (event.toolName === "structured-output") {
-      // Stage 1: stash args pending confirmation from tool_execution_end.
-      // tool_execution_start fires BEFORE execute(), so args may be invalid.
-      pipeline.pendingStructuredArgs = event.args;
-      pipeline.pendingStructuredCallId = event.toolCallId as string | undefined;
-    }
-    // Collect ALL tool calls (FR-7.2) — full storage, render-time truncation
-    const input = typeof event.args === 'object' && event.args !== null
-      ? JSON.stringify(event.args)
-      : String(event.args ?? '');
-    pipeline.toolCalls.push({ name: String(event.toolName ?? 'unknown'), input });
-    pipeline.hasToolCall = true;
-    return;
-  }
-
-  if (event.type === "tool_execution_end") {
-    // Stage 2: confirm structured output only on successful execution.
-    if (event.toolName === "structured-output" && !event.isError) {
-      // Use result.details (parsed & validated by structured-output extension)
-      // instead of start args (which may contain JSON strings for data/schema).
-      const result = event.result as Record<string, unknown> | undefined;
-      const details = result?.details;
-      if (details && typeof details === "object") {
-        pipeline.parsedOutput = details as Record<string, unknown>;
-      } else {
-        // Should never happen: tool_execution_end with isError=false but no details.
-        // Keep pendingStructuredArgs as degraded fallback for robustness.
-        pipeline.parsedOutput = pipeline.pendingStructuredArgs;
-      }
-    }
-    // Clear pending regardless of success/failure
-    pipeline.pendingStructuredArgs = undefined;
-    pipeline.pendingStructuredCallId = undefined;
-    return;
-  }
-
-  if (event.type === "message_end" && event.message) {
-    const msg = event.message as Record<string, unknown>;
-    if (msg.role === "assistant") {
-      const content = msg.content;
-      if (Array.isArray(content)) {
-        for (const part of content) {
-          if (typeof part === "object" && part !== null && (part as Record<string, unknown>).type === "text") {
-            const text = (part as Record<string, unknown>).text;
-            if (typeof text === "string") {
-              pipeline.output += text;
-            }
-          }
-        }
-      }
-
-      const u = msg.usage as Record<string, number> | undefined;
-      if (u) {
-        pipeline.usage.input += u.input ?? 0;
-        pipeline.usage.output += u.output ?? 0;
-        pipeline.usage.cacheRead += u.cacheRead ?? 0;
-        pipeline.usage.cacheWrite += u.cacheWrite ?? 0;
-        pipeline.usage.cost += Number(u.cost) || 0;
-        pipeline.usage.contextTokens = u.totalTokens ?? u.contextTokens ?? 0;
-        pipeline.usage.turns++;
-      }
-
-      if (typeof msg.model === "string") pipeline.model = msg.model;
-      if (typeof msg.stopReason === "string") pipeline.stopReason = msg.stopReason;
     }
   }
 }
