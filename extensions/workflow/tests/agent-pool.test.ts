@@ -162,13 +162,10 @@ describe("AgentPool", () => {
       expect(result.parsedOutput).toEqual({ name: "Alice" });
     });
 
-    it("retries once then fails when schema present but no structured-output tool call", async () => {
+    it("fails immediately when schema present but no structured-output tool call", async () => {
       const pool = new AgentPool(2);
       const proc1 = createMockProcess();
-      const proc2 = createMockProcess();
-      mockSpawn
-        .mockReturnValueOnce(proc1 as unknown as ChildProcess)
-        .mockReturnValueOnce(proc2 as unknown as ChildProcess);
+      mockSpawn.mockReturnValueOnce(proc1 as unknown as ChildProcess);
 
       const schema = { type: "object" };
       const jsonl = messageEndJsonl("not valid json {", { input: 10, output: 5 });
@@ -178,15 +175,10 @@ describe("AgentPool", () => {
       proc1.stdout.emit("data", Buffer.from(jsonl + "\n"));
       proc1.emit("close", 0);
 
-      // Wait for retry to start, then feed second mock result
-      await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(2));
-      proc2.stdout.emit("data", Buffer.from(messageEndJsonl("still no SO", { input: 5, output: 3 }) + "\n"));
-      proc2.emit("close", 0);
-
       const result = await resultPromise;
-      // After retry failure, should report error
+      // Should fail immediately without retry (orchestrator handles retries)
       expect(result.success).toBe(false);
-      expect(result.error).toContain("structured output");
+      expect(result.error).toContain("structured-output");
     });
 
     it("extracts parsedOutput after successful tool_execution_end", async () => {
@@ -336,13 +328,10 @@ describe("AgentPool", () => {
       expect(spawnArgs[promptIdx + 1]).toBe("/tmp/p.md");
     });
 
-    it("retries once then fails when schema present but no structured-output tool call", async () => {
+    it("fails immediately when schema present but no structured-output tool call", async () => {
       const pool = new AgentPool(2);
       const proc1 = createMockProcess();
-      const proc2 = createMockProcess();
-      mockSpawn
-        .mockReturnValueOnce(proc1 as unknown as ChildProcess)
-        .mockReturnValueOnce(proc2 as unknown as ChildProcess);
+      mockSpawn.mockReturnValueOnce(proc1 as unknown as ChildProcess);
 
       const schema = { type: "object", properties: { answer: { type: "string" } } };
       const msgEndJsonl = messageEndJsonl("I think the answer is 42", { input: 10, output: 5 });
@@ -351,14 +340,10 @@ describe("AgentPool", () => {
       proc1.stdout.emit("data", Buffer.from(msgEndJsonl + "\n"));
       proc1.emit("close", 0);
 
-      // Wait for retry to start
-      await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(2));
-      proc2.stdout.emit("data", Buffer.from(messageEndJsonl("still no", { input: 5, output: 3 }) + "\n"));
-      proc2.emit("close", 0);
-
       const result = await resultPromise;
+      // Fails immediately without retry (orchestrator handles retries)
       expect(result.success).toBe(false);
-      expect(result.error).toContain("structured output");
+      expect(result.error).toContain("structured-output");
     });
   });
 

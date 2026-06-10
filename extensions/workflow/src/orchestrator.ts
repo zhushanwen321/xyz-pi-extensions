@@ -30,6 +30,7 @@ import {
   type WorkflowInstance,
   type WorkflowStatus,
 } from "./state.js";
+import { WorkflowEventEmitter } from "./orchestrator-events.js";
 import { buildWorkerScript } from "./worker-script.js";
 import { checkBudget, scheduleTimeBudgetCheck } from "./orchestrator-budget.js";
 
@@ -131,6 +132,8 @@ export class WorkflowOrchestrator {
   onTraceUpdate?: (runId: string) => void;
   /** Called when a workflow reaches a terminal state (completed/failed/aborted/budget_limited/time_limited) */
   onCompletion?: (runId: string) => void;
+  /** Event emitter for real-time TUI subscriptions (FR-5). */
+  readonly events = new WorkflowEventEmitter();
 
   constructor(
     pi: ExtensionAPI,
@@ -313,6 +316,7 @@ export class WorkflowOrchestrator {
     // Set paused status BEFORE terminating so the exit handler skips cleanup
     instance.pausedAt = new Date().toISOString();
     transitionStatus(instance, "paused");
+    this.events.emit(runId, { type: "status", status: "paused" });
     this.terminateWorker(runId);
     // Cleanup in-flight temp files from agent calls that were killed mid-flight.
     // Without this, files written for --append-system-prompt leak to disk.
@@ -338,6 +342,7 @@ export class WorkflowOrchestrator {
 
     instance.pausedAt = undefined;
     transitionStatus(instance, "running");
+    this.events.emit(runId, { type: "status", status: "running" });
 
     const meta = this.runMetaMap.get(runId);
     if (meta) {
@@ -388,6 +393,7 @@ export class WorkflowOrchestrator {
     // Set terminal status BEFORE terminating
     instance.completedAt = new Date().toISOString();
     transitionStatus(instance, "aborted");
+    this.events.emit(runId, { type: "status", status: "aborted" });
     this.terminateWorker(runId);
     this.cleanupAllTempFiles();
     await this.persistState();
@@ -619,6 +625,7 @@ export class WorkflowOrchestrator {
         instance.scriptResult = msg.result;
         instance.completedAt = new Date().toISOString();
         transitionStatus(instance, "completed");
+        this.events.emit(runId, { type: "status", status: "completed" });
         this.workers.delete(runId);
         await this.persistState();
         this.onTraceUpdate?.(runId);
@@ -685,9 +692,8 @@ export class WorkflowOrchestrator {
     };
     instance.trace.push(node);
     appendTraceNode(this.pi, runId, node);
+    this.events.emit(runId, { type: "trace", node: { stepIndex: node.stepIndex, agent: node.agent, status: node.status, phase: node.phase } });
     this.onTraceUpdate?.(runId);
-
-    // Enqueue via per-run AgentPool with retry
     this.executeWithRetry(runId, callId, enrichedOpts, instance, node);
   }
 
@@ -728,9 +734,11 @@ export class WorkflowOrchestrator {
             usage: poolResult.usage,
             durationMs: poolResult.durationMs,
             error: poolResult.error,
+            toolCalls: poolResult.toolCalls,
           };
           traceNode.completedAt = new Date().toISOString();
           appendTraceNode(this.pi, runId, traceNode);
+          this.events.emit(runId, { type: "node-update", stepIndex: callId, node: { stepIndex: traceNode.stepIndex, agent: traceNode.agent, status: traceNode.status, phase: traceNode.phase } });
         }
         this.postMessage(runId, {
           type: "agent-result",
@@ -739,6 +747,7 @@ export class WorkflowOrchestrator {
             content: poolResult.output,
             usage: poolResult.usage,
             error: poolResult.error,
+            toolCalls: poolResult.toolCalls,
           },
           cached: false,
         });
@@ -760,6 +769,7 @@ export class WorkflowOrchestrator {
         usage: poolResult.usage,
         durationMs: poolResult.durationMs,
         error: poolResult.success ? undefined : poolResult.error,
+        toolCalls: poolResult.toolCalls,
       };
 
       // Retry on failure with exponential backoff
@@ -789,9 +799,8 @@ export class WorkflowOrchestrator {
         traceNode.result = result;
         traceNode.completedAt = new Date().toISOString();
         appendTraceNode(this.pi, runId, traceNode);
+        this.events.emit(runId, { type: "node-update", stepIndex: callId, node: { stepIndex: traceNode.stepIndex, agent: traceNode.agent, status: traceNode.status, phase: traceNode.phase } });
       }
-
-      // Accumulate budget
       if (poolResult.usage) {
         instance.budget.usedTokens += poolResult.usage.input + poolResult.usage.output;
         instance.budget.usedCost += poolResult.usage.cost;
@@ -836,6 +845,7 @@ export class WorkflowOrchestrator {
     // P1-5: Mark failed — error event may not be followed by exit event
     instance.completedAt = new Date().toISOString();
     transitionStatus(instance, "failed");
+    this.events.emit(runId, { type: "status", status: "failed" });
     this.cleanupAllTempFiles();
     await this.persistState();
     this.onCompletion?.(runId);
@@ -863,6 +873,7 @@ export class WorkflowOrchestrator {
       instance.error = `Worker exited with code ${code}`;
       instance.completedAt = new Date().toISOString();
       transitionStatus(instance, "failed");
+      this.events.emit(runId, { type: "status", status: "failed" });
       await this.persistState();
       this.onCompletion?.(runId);
     }
@@ -897,6 +908,7 @@ export class WorkflowOrchestrator {
       instance.error = `Workflow failed after ${MAX_WORKER_RETRIES} retries: ${errorMsg}`;
       instance.completedAt = new Date().toISOString();
       transitionStatus(instance, "failed");
+      this.events.emit(runId, { type: "status", status: "failed" });
       this.terminateWorker(runId);
       // Cleanup in-flight agent temp files that were killed mid-flight.
       this.cleanupAllTempFiles();

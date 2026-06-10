@@ -20,6 +20,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-cod
 import { loadWorkflows } from "./config-loader.js";
 import { type WorkflowOrchestrator } from "./orchestrator.js";
 import { type WorkflowInstance } from "./state.js";
+import { createWorkflowsView } from "./views/WorkflowsView.js";
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -30,7 +31,7 @@ const RUNID_SLICE_LENGTH = 16;
 const TASK_SHORT_LENGTH = 150;
 const CONTENT_TRUNC_LENGTH = 500;
 const SPLIT_LIMIT = 2;
-const TASK_PREVIEW_LENGTH = 60;
+const _TASK_PREVIEW_LENGTH = 60;
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -406,8 +407,8 @@ export function registerWorkflowCommands(
   // ── /workflows — interactive panel ───────────────────────────
 
   api.registerCommand("workflows", {
-    description: "Open interactive workflow overview panel",
-    handler: async (_args: string, ctx: ExtensionCommandContext) => {
+    description: "Open workflow fullscreen view. /workflows [runId] to open specific workflow.",
+    handler: async (args: string, ctx: ExtensionCommandContext) => {
       if (!ctx.hasUI) {
         ctx.ui.notify("/workflows requires interactive mode", "error");
         return;
@@ -420,101 +421,58 @@ export function registerWorkflowCommands(
         return;
       }
 
-      // Build combined list: running instances + available scripts
-      const instances = orch.list();
-      let availableScripts: Array<{ name: string; description: string; source: string; path: string }> = [];
-      try {
-        availableScripts = (await loadWorkflows()).map((wf) => ({
-          name: wf.name,
-          description: wf.description,
-          source: wf.source,
-          path: wf.path,
-        }));
-      // eslint-disable-next-line taste/no-silent-catch
-      } catch (err) {
-        console.warn("Failed to load workflows for panel:", err);
-      }
-
-      if (instances.length === 0 && availableScripts.length === 0) {
-        ctx.ui.notify("No workflows available", "info");
+      // Direct entry by runId (FR-1.1)
+      const directRunId = args.trim();
+      if (directRunId) {
+        const instance = orch.getInstance(directRunId);
+        if (!instance) {
+          // Try prefix match
+          const all = orch.list();
+          const matched = all.filter((s) => s.runId.startsWith(directRunId));
+          if (matched.length === 1) {
+            await createWorkflowsView(orch, matched[0].runId, ctx.ui.theme, ctx);
+            return;
+          }
+          ctx.ui.notify(`Workflow '${directRunId}' not found`, "error");
+          return;
+        }
+        await createWorkflowsView(orch, directRunId, ctx.ui.theme, ctx);
         return;
       }
 
-      // Build display entries
-      const entries: string[] = [];
-      const entryMeta: Array<{ type: "instance"; runId: string } | { type: "script"; name: string; source: string }> = [];
+      // No runId — filter running/paused, select or enter directly (FR-1.2)
+      const active = orch.list().filter(
+        (s) => s.status === "running" || s.status === "paused",
+      );
 
-      for (const inst of instances) {
-        entries.push(`${inst.name} (${inst.runId.slice(0, RUNID_SHORT_LENGTH)}...) [${inst.status}]`);
-        entryMeta.push({ type: "instance", runId: inst.runId });
-      }
-      for (const wf of availableScripts) {
-        entries.push(`[${wf.source}] ${wf.name} — ${wf.description || "(no description)"}`);
-        entryMeta.push({ type: "script", name: wf.name, source: wf.source });
+      if (active.length === 0) {
+        ctx.ui.notify("No active workflows. Use /workflow list to see all.", "info");
+        return;
       }
 
+      if (active.length === 1) {
+        // Single active workflow — enter directly (FR-1.2)
+        await createWorkflowsView(orch, active[0].runId, ctx.ui.theme, ctx);
+        return;
+      }
+
+      // Multiple — SelectList sorted by startedAt descending
+      active.sort((a, b) => {
+        const ta = a.startedAt ? new Date(a.startedAt).getTime() : 0;
+        const tb = b.startedAt ? new Date(b.startedAt).getTime() : 0;
+        return tb - ta;
+      });
+
+      const entries = active.map(
+        (s) => `${s.name} [${s.status}] (${s.runId.slice(0, RUNID_SHORT_LENGTH)}...)`,
+      );
       const selected = await ctx.ui.select("Select workflow:", entries);
       if (!selected) return;
 
       const idx = entries.indexOf(selected);
       if (idx === -1) return;
 
-      const meta = entryMeta[idx];
-      if (!meta) return;
-
-      if (meta.type === "instance") {
-        // Show instance details
-        const instance = orch.getInstance(meta.runId);
-        if (!instance) return;
-
-        const traceLines = instance.trace.map(
-          (node) =>
-            `  [${node.stepIndex}] ${node.agent}: ${node.status} — ${node.task.slice(0, TASK_PREVIEW_LENGTH)}`,
-        );
-        ctx.ui.notify(
-          [
-            `Workflow: ${instance.name} (${instance.runId.slice(0, RUNID_SLICE_LENGTH)}...)`,
-            `Status: ${instance.status}`,
-            `Nodes: ${instance.trace.length}`,
-            ...traceLines,
-          ].join("\n"),
-          "info",
-        );
-      } else {
-        // Script selected — offer actions
-        const actions = ["Run", ...(meta.source === "tmp" ? ["Save"] : []), "Delete"];
-        const action = await ctx.ui.select(
-          `Workflow: ${meta.name} [${meta.source}]`,
-          actions,
-        );
-        if (!action) return;
-
-        if (action === "Run") {
-          api.sendUserMessage(
-            `The user selected workflow '${meta.name}' from the /workflows panel and chose Run. ` +
-            `Use workflow-run with name='${meta.name}' and mode='force' to execute directly. ` +
-            `The user already confirmed by selecting it from the panel.`,
-          );
-        } else if (action === "Save") {
-          try {
-            const result = await saveWorkflow(meta.name);
-            ctx.ui.notify(result, "info");
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            ctx.ui.notify(`Save failed: ${msg}`, "error");
-          }
-        } else if (action === "Delete") {
-          const isRunning = (name: string) =>
-            orch.list().some((i) => i.name === name && i.status === "running");
-          try {
-            const result = deleteWorkflow(meta.name, isRunning);
-            ctx.ui.notify(result, "info");
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            ctx.ui.notify(`Delete failed: ${msg}`, "error");
-          }
-        }
-      }
+      await createWorkflowsView(orch, active[idx].runId, ctx.ui.theme, ctx);
     },
   });
 }

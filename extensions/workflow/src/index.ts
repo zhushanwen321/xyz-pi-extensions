@@ -35,7 +35,6 @@ import {
   type WorkflowStatus,
 } from "./state.js";
 import { registerGenerateTool } from "./tool-generate.js";
-import { registerWorkflowShortcuts, renderWorkflowList } from "./widget.js";
 
 // ── Parameter schema ──────────────────────────────────────────
 
@@ -220,15 +219,12 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
       pi.notify(`Workflow: discovered ${agentCount} agents (${breakdown})`);
     }
 
-    // Live progress: refresh widget on every trace node change
-    orch.onTraceUpdate = (_runId) => {
-      if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
-    };
+    // Live progress: event-driven updates handled by WorkflowsView subscription
+    orch.onTraceUpdate = undefined;
     orch.onCompletion = (runId) => {
       const instance = orch.getInstance(runId);
       if (instance) sendCompletionNotification(pi, runId, instance, notifiedRunIds);
     };
-    if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
 
     // Expose pi.__workflowRun for cross-extension programmatic access
     // (same pattern as goal extension's pi.__goalInit)
@@ -266,14 +262,11 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
       }
     }
     orch.restoreInstances(instances);
-    orch.onTraceUpdate = (_runId) => {
-      if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
-    };
+    orch.onTraceUpdate = undefined;
     orch.onCompletion = (runId) => {
       const instance = orch.getInstance(runId);
       if (instance) sendCompletionNotification(pi, runId, instance, notifiedRunIds);
     };
-    if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
   });
 
   pi.on("session_shutdown", async () => {
@@ -371,6 +364,25 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
             abort: "aborted",
           };
           const targetStatus = actionToTarget[action];
+
+          // Pre-flight: reject invalid transitions before touching the orchestrator
+          if (
+            (action === "pause" && instance.status !== "running") ||
+            (action === "resume" && instance.status !== "paused")
+          ) {
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Error: cannot ${action} workflow '${instance.name}' (${runId}): current status is '${instance.status}', expected '${action === "pause" ? "running" : "paused"}'`,
+              }],
+              details: {
+                action,
+                instances: orch.list().map(toInstanceSummary),
+                _render: buildRender(orch.list()),
+              } satisfies WorkflowDetails,
+              isError: true,
+            };
+          }
 
           // Delegate to orchestrator (handles Worker lifecycle)
           if (action === "abort" && (params.error as string | undefined)) {
@@ -557,7 +569,6 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
   registerWorkflowCommands(pi, orchestrators, cmdState);
   registerGenerateTool(pi);
   registerWorkflowLintTool(pi);
-  registerWorkflowShortcuts(pi, orchestrators, cmdState);
 
   // ── Auto-inject script format spec on workflow-generate calls ──────
   // When AI calls workflow-generate, inject the full format reference as
@@ -669,7 +680,6 @@ function registerWorkflowRunTool(
         if (mode === "force") {
           const runId = await orch.run(name, args, tokens, time, signal);
           cmdState.lastRunId = runId;
-          if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
           return { content: [{ type: "text" as const, text: `Started workflow '${name}' (${runId}) [force mode]. Running in background — do NOT poll status.` }], details: { action: "run", runId, status: "running", name, confirmSkipped: true as const } satisfies _WorkflowRunDetails };
         }
         if (ctx.hasUI) {
@@ -689,7 +699,6 @@ function registerWorkflowRunTool(
         }
         const runId = await orch.run(name, args, tokens, time, signal);
         cmdState.lastRunId = runId;
-        if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
         return { content: [{ type: "text" as const, text: `Started workflow '${exactMatch.name}' (${runId}). Running in background — do NOT poll status.` }], details: { action: "run", runId, status: "running", name: exactMatch.name } satisfies _WorkflowRunDetails };
       }
 
@@ -706,7 +715,6 @@ function registerWorkflowRunTool(
           const best = candidates[0];
           const runId = await orch.run(best.name, args, tokens, time, signal);
           cmdState.lastRunId = runId;
-          if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
           return { content: [{ type: "text" as const, text: `Started workflow '${best.name}' (${runId}) [force mode, fuzzy match]. Running in background — do NOT poll status.` }], details: { action: "run", runId, status: "running", name: best.name, confirmSkipped: true as const } satisfies _WorkflowRunDetails };
         }
         pi.sendUserMessage(`No exact match for '${name}', but found ${candidates.length} related workflow(s):\n${candidateList}\n\nAsk the user which one to use, or if they want to create a new workflow. If they choose one, use workflow-run with the exact name and mode 'force'.`, { deliverAs: "steer" });
