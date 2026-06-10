@@ -31,6 +31,7 @@ import {
   ELLIPSIS,
   formatActivityLine,
   formatElapsed,
+  formatPhaseLine,
   formatTokenStat,
   isTerminalStatus,
   padVisible,
@@ -338,21 +339,16 @@ function renderLevel0(
   const leftLines: string[] = [];
   const rightLines: string[] = [];
 
-  // Left: phase list
+  // Left: sidebar title + phase list
+  leftLines.push(theme.fg("muted", "Phases"));
+  leftLines.push("─".repeat(SIDEBAR_WIDTH));
   for (let i = 0; i < phases.length; i++) {
-    const pg = phases[i];
-    const isSelected = i === state.phaseIdx;
-    const pointer = isSelected ? "❯ " : "  ";
-    const dot = statusDotStr(pg.doneCount === pg.nodes.length ? "completed" : "running", theme);
-    leftLines.push(`${pointer}${dot} ${pg.name} ${pg.doneCount}/${pg.nodes.length}`);
+    leftLines.push(formatPhaseLine(phases[i], i, i === state.phaseIdx, theme, SIDEBAR_WIDTH));
   }
 
-  // Right: context title + all agents across all phases
-  const phase = phases[state.phaseIdx];
-  if (phase) {
-    const title = phase.name ? `${phase.name} · ${phase.nodes.length} agents` : `${phase.nodes.length} agents`;
-    rightLines.push(theme.fg("muted", title));
-  }
+  // Right: all agents across all phases
+  const totalAgents = phases.reduce((sum, p) => sum + p.nodes.length, 0);
+  rightLines.push(theme.fg("muted", `All phases · ${totalAgents} agents`));
   for (const pg of phases) {
     for (const node of pg.nodes) {
       const dot = statusDotStr(node.status, theme);
@@ -384,13 +380,11 @@ function renderLevel1(
   const leftLines: string[] = [];
   const rightLines: string[] = [];
 
-  // Left: phase list (same as level 0, for context)
+  // Left: sidebar title + phase list
+  leftLines.push(theme.fg("muted", "Phases"));
+  leftLines.push("─".repeat(SIDEBAR_WIDTH));
   for (let i = 0; i < phases.length; i++) {
-    const pg = phases[i];
-    const isSelected = i === state.phaseIdx;
-    const pointer = isSelected ? "❯ " : "  ";
-    const dot = statusDotStr(pg.doneCount === pg.nodes.length ? "completed" : "running", theme);
-    leftLines.push(`${pointer}${dot} ${pg.name} ${pg.doneCount}/${pg.nodes.length}`);
+    leftLines.push(formatPhaseLine(phases[i], i, i === state.phaseIdx, theme, SIDEBAR_WIDTH));
   }
 
   // Right: context title + agent list for current phase

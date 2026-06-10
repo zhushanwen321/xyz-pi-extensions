@@ -172,6 +172,26 @@ export function buildPhaseGroups(nodes: ExecutionTraceNode[]): PhaseGroup[] {
   return result;
 }
 
+// ── Sidebar phase line formatter ─────────────────────────────
+
+export function formatPhaseLine(
+  pg: PhaseGroup,
+  idx: number,
+  isSelected: boolean,
+  theme: ThemeLike,
+  maxWidth: number,
+): string {
+  const pointer = isSelected ? "❯ " : "  ";
+  const dot = statusDotStr(pg.doneCount === pg.nodes.length ? "completed" : "running", theme);
+  const name = pg.name || "(unnamed)";
+  const label = `${idx + 1} ${name} ${pg.doneCount}/${pg.nodes.length}`;
+  const budget = maxWidth - 4; // pointer(2) + dot(1) + space(1)
+  const truncated = visibleLen(label) > budget
+    ? truncateToWidth(label, budget - 1) + ELLIPSIS
+    : label;
+  return `${pointer}${dot} ${truncated}`;
+}
+
 // ── Agent one-liner for overview right panel ──────────────────
 
 const TOKEN_K = 1000;
