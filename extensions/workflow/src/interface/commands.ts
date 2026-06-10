@@ -17,9 +17,9 @@ import { resolve } from "node:path";
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 
-import { loadWorkflows } from "./infra/config-loader.js";
-import { type WorkflowOrchestrator } from "./orchestrator.js";
-import { type WorkflowInstance } from "./domain/state.js";
+import { loadWorkflows } from "../infra/config-loader.js";
+import { type WorkflowOrchestrator } from "../orchestrator.js";
+import { type WorkflowInstance } from "../domain/state.js";
 import { createWorkflowsView } from "./views/WorkflowsView.js";
 
 // ── Constants ─────────────────────────────────────────────────

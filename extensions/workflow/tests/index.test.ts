@@ -51,7 +51,7 @@ vi.mock("../src/orchestrator.js", () => ({
   }),
 }));
 
-vi.mock("../src/commands.js", () => ({
+vi.mock("../src/interface/commands.js", () => ({
   registerWorkflowCommands: vi.fn(),
   sendCompletionNotification: vi.fn(),
 }));
@@ -61,7 +61,7 @@ vi.mock("../src/widget.js", () => ({
   registerWorkflowShortcuts: vi.fn(),
 }));
 
-vi.mock("../src/tool-generate.js", () => ({
+vi.mock("../src/interface/tool-generate.js", () => ({
   registerGenerateTool: vi.fn(),
 }));
 

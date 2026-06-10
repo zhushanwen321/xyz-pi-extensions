@@ -9,7 +9,7 @@ import * as vm from "node:vm";
 
 import { describe, expect, it } from "vitest";
 
-import { buildWorkerScript } from "../src/worker-script";
+import { buildWorkerScript } from "../src/engine/worker-script";
 
 // ── Helpers ─────────────────────────────────────────────────
 

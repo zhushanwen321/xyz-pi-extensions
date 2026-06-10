@@ -52,8 +52,8 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-import { deleteWorkflow,sendCompletionNotification } from "../src/commands";
-import { registerGenerateTool } from "../src/tool-generate";
+import { deleteWorkflow,sendCompletionNotification } from "../src/interface/commands";
+import { registerGenerateTool } from "../src/interface/tool-generate";
 
 // ── Helpers ──────────────────────────────────────────────────
 

@@ -1,4 +1,4 @@
-import { isTerminal, transitionStatus, type WorkflowInstance } from "./domain/state.js";
+import { isTerminal, transitionStatus, type WorkflowInstance } from "../domain/state.js";
 
 const BUDGET_WARNING_THRESHOLD = 0.9;
 

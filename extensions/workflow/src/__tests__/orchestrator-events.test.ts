@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { WorkflowEventEmitter } from "../orchestrator-events.js";
+import { WorkflowEventEmitter } from "../engine/orchestrator-events.js";
 
 describe("WorkflowEventEmitter", () => {
   let emitter: WorkflowEventEmitter;

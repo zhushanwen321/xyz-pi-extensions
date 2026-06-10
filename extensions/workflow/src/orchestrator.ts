@@ -17,7 +17,7 @@ import { AgentRegistry } from "./infra/agent-discovery.js";
 import { type AgentCallOpts,AgentPool } from "./agent-pool.js";
 import { getWorkflow } from "./infra/config-loader.js";
 import { appendTraceNode } from "./execution-trace.js";
-import { resolveModel } from "./model-resolver.js";
+import { resolveModel } from "./engine/model-resolver.js";
 import { lintScript } from "./infra/script-lint.js";
 import {
   type AgentResult as StateAgentResult,
@@ -30,9 +30,9 @@ import {
   type WorkflowInstance,
   type WorkflowStatus,
 } from "./domain/state.js";
-import { WorkflowEventEmitter } from "./orchestrator-events.js";
-import { buildWorkerScript } from "./worker-script.js";
-import { checkBudget, scheduleTimeBudgetCheck } from "./orchestrator-budget.js";
+import { WorkflowEventEmitter } from "./engine/orchestrator-events.js";
+import { buildWorkerScript } from "./engine/worker-script.js";
+import { checkBudget, scheduleTimeBudgetCheck } from "./engine/orchestrator-budget.js";
 
 // ── Public types ──────────────────────────────────────────────
 

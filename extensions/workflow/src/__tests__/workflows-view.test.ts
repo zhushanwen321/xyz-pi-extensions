@@ -19,7 +19,7 @@ import {
   visibleLen,
   buildPhaseGroups,
   formatAgentOneLiner,
-} from "../views/format.js";
+} from "../interface/views/format.js";
 import type { ExecutionTraceNode } from "../domain/state.js";
 
 // ── Test fixtures ─────────────────────────────────────────────

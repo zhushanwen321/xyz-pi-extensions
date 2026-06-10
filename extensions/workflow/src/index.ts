@@ -24,7 +24,7 @@ import {
   registerWorkflowCommands,
   sendCompletionNotification,
   type WorkflowCommandsState,
-} from "./commands.js";
+} from "./interface/commands.js";
 import { type WorkflowInstanceSummary,WorkflowOrchestrator } from "./orchestrator.js";
 import {
   createInstance,
@@ -34,7 +34,7 @@ import {
   type WorkflowInstance,
   type WorkflowStatus,
 } from "./domain/state.js";
-import { registerGenerateTool } from "./tool-generate.js";
+import { registerGenerateTool } from "./interface/tool-generate.js";
 
 // ── Parameter schema ──────────────────────────────────────────
 
