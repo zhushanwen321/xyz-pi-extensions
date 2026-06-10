@@ -24,12 +24,12 @@ import {
   createInstance as createStateInstance,
   type ExecutionTraceNode,
   isTerminal,
-  serializeInstance,
   transitionStatus,
   type WorkflowBudget,
   type WorkflowInstance,
   type WorkflowStatus,
 } from "./domain/state.js";
+import { persistState as persistInstances } from "./infra/state-store.js";
 import { WorkflowEventEmitter } from "./engine/orchestrator-events.js";
 import { buildWorkerScript } from "./engine/worker-script.js";
 import { checkBudget, scheduleTimeBudgetCheck } from "./engine/orchestrator-budget.js";
@@ -962,25 +962,10 @@ export class WorkflowOrchestrator {
   // ── Persistence ─────────────────────────────────────────────
 
   /**
-   * Flush the current state to external JSONL files + pointer entries.
-   *
-   * For each instance: writes a JSONL file under <sessionDir>/workflow-state/<runId>.jsonl
-   * and appends a workflow-state-link pointer entry via pi.appendEntry.
+   * Flush the current state to external JSONL files (delegates to state-store).
+   * Kept as instance method to preserve public API used by index.ts.
    */
   async persistState(): Promise<void> {
-    for (const instance of this.instances.values()) {
-      const filePath = path.join(this.sessionDir, "workflow-state", `${instance.runId}.jsonl`);
-      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.promises.appendFile(
-        filePath,
-        JSON.stringify(serializeInstance(instance)) + "\n",
-        "utf8",
-      );
-      this.pi.appendEntry("workflow-state-link", {
-        runId: instance.runId,
-        path: filePath,
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    await persistInstances(this.pi, this.sessionDir, this.instances);
   }
 }

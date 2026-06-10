@@ -14,7 +14,7 @@ vi.mock("node:fs", async () => {
     promises: {
       ...actual.promises,
       mkdir: vi.fn().mockResolvedValue(undefined),
-      appendFile: vi.fn().mockResolvedValue(undefined),
+      writeFile: vi.fn().mockResolvedValue(undefined),
       readFile: vi.fn(),
     },
   };
@@ -435,15 +435,15 @@ describe("WorkflowOrchestrator", () => {
   describe("persistState()", () => {
     const fsMock = vi.mocked(fs.promises);
 
-    it("writes external file via fs.appendFile with correct path", async () => {
+    it("writes external file via fs.writeFile with correct path", async () => {
       const inst = makeInstance("wf-ext-file", "running");
       orch.restoreInstances(makeInstanceMap(inst));
 
       await orch.persistState();
 
       expect(fsMock.mkdir).toHaveBeenCalled();
-      expect(fsMock.appendFile).toHaveBeenCalledTimes(1);
-      const [filePath, content] = fsMock.appendFile.mock.calls[0]!;
+      expect(fsMock.writeFile).toHaveBeenCalledTimes(1);
+      const [filePath, content] = fsMock.writeFile.mock.calls[0]!;
       expect(filePath).toContain(path.join("workflow-state", "wf-ext-file.jsonl"));
       expect(typeof content).toBe("string");
       // Content should be valid JSONL (one line)

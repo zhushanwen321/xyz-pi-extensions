@@ -27,13 +27,11 @@ import {
 } from "./interface/commands.js";
 import { type WorkflowInstanceSummary,WorkflowOrchestrator } from "./orchestrator.js";
 import {
-  createInstance,
-  deserializeInstance,
   isTerminal,
   transitionStatus,
-  type WorkflowInstance,
   type WorkflowStatus,
 } from "./domain/state.js";
+import { reconstructState } from "./infra/state-store.js";
 import { registerGenerateTool } from "./interface/tool-generate.js";
 
 // ── Parameter schema ──────────────────────────────────────────
@@ -136,54 +134,6 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
   const notifiedRunIds = new Set<string>();
   // P1-6: Reentry guard — shared object so both workflow and workflow-run tools see the same flag
   const guard = { isProcessing: false };
-
-  async function reconstructState(ctx: ExtensionContext): Promise<Map<string, WorkflowInstance>> {
-    const instances = new Map<string, WorkflowInstance>();
-    try {
-      const entries = ctx.sessionManager.getEntries();
-      const pointers = new Map<string, { path: string }>();
-      for (const entry of entries) {
-        if (entry.type !== "custom") continue;
-        const custom = entry as unknown as { customType?: string; data?: unknown };
-        if (custom.customType !== "workflow-state-link") continue;
-        const data = custom.data as { runId?: string; path?: string } | undefined;
-        if (data?.runId && data?.path) {
-          pointers.set(data.runId, { path: data.path });
-        }
-      }
-      // Load each pointer's JSONL file
-      for (const [runId, pointer] of pointers) {
-        try {
-          const content = await fs.promises.readFile(pointer.path, "utf8");
-          const lines = content.split("\n").filter((l) => l.trim());
-          for (const line of lines) {
-            try {
-              const parsed = JSON.parse(line) as Parameters<typeof deserializeInstance>[0];
-              const instance = deserializeInstance(parsed);
-              instances.set(instance.runId, instance);
-            // eslint-disable-next-line taste/no-silent-catch
-            } catch {
-              // Skip malformed lines
-            }
-          }
-        } catch {
-          ctx.ui.notify(`WARN: missing or corrupt state for ${runId}`, "warning");
-          // Create a state_lost placeholder so the user can see the run existed
-          // but its external state file is unreadable (FR-1.6)
-          instances.set(runId, createInstance({
-            runId,
-            name: `(state lost) ${runId}`,
-            worker: "(unknown)",
-            status: "state_lost",
-          }));
-        }
-      }
-    // eslint-disable-next-line taste/no-silent-catch
-    } catch {
-      // If getEntries fails, return empty map
-    }
-    return instances;
-  }
 
   // ── Events ──────────────────────────────────────────────────
 
