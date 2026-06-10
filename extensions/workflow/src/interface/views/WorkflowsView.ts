@@ -329,11 +329,12 @@ function renderView(
     renderLevel2(lines, phase, agents, state, theme, width, mainWidth);
   }
 
-  // Pad body to at least 2/3 screen height
-  const headerFooterLines = 6; // ╭, name, desc/stats, ├, ├, ╰
+  // Pad body to at least 2/3 screen height (with middle separator)
+  const headerFooterLines = 6; // ╭, name, desc/stats, ├, ╰, (footer outside)
   const minBodyHeight = Math.max(3, Math.floor(termRows * 2 / 3) - headerFooterLines);
+  const emptyBodyLine = padVisible("", SIDEBAR_WIDTH) + "│" + padVisible("", mainWidth);
   while (lines.length - bodyStart < minBodyHeight) {
-    lines.push(padVisible("", contentWidth));
+    lines.push(emptyBodyLine);
   }
 
   // Wrap body lines with left/right border, ensuring exact contentWidth
