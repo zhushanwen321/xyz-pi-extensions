@@ -108,7 +108,7 @@ export function createWorkflowsView(
       render(width: number): string[] {
         if (cache.lines && cache.width === width) return cache.lines;
         const inst = orchestrator.getInstance(runId);
-        const raw = inst ? renderView(inst, theme, width, state) : ["(workflow not found)"];
+        const raw = inst ? renderView(inst, theme, width, state, tuiAny.terminal.rows) : ["(workflow not found)"];
         const termHeight = tuiAny.terminal.rows;
         const lines = raw.length < termHeight
           ? [...raw, ...Array.from({ length: termHeight - raw.length }, () => "")]
@@ -278,6 +278,7 @@ function renderView(
   theme: ThemeLike,
   width: number,
   state: ViewState,
+  termRows: number,
 ): string[] {
   const lines: string[] = [];
   const phases = buildPhaseGroups(instance.trace);
@@ -293,22 +294,23 @@ function renderView(
 
   const nameLine = theme.bold(instance.name);
   const rightPart = theme.fg("muted", headerRight);
+
   // Top border
   lines.push("╭" + "─".repeat(contentWidth) + "╮");
-  lines.push("│" + nameLine + "│");
+  // Line 1: workflow name, right-padded to contentWidth
+  lines.push("│" + padVisible(nameLine, contentWidth) + "│");
 
   // FR-2.2: line 2 = description + stats (right-aligned)
-  // When no description, just show stats
   if (instance.description) {
-    const maxDesc = width - visibleLen(rightPart) - 2;
+    const maxDesc = contentWidth - visibleLen(rightPart) - 1;
     const descText = instance.description.length > maxDesc
       ? instance.description.slice(0, maxDesc - 1) + ELLIPSIS
       : instance.description;
     const descPart = theme.fg("dim", descText);
-    const padLen = Math.max(0, width - visibleLen(descPart) - visibleLen(rightPart) - 1);
+    const padLen = Math.max(0, contentWidth - visibleLen(descPart) - visibleLen(rightPart));
     lines.push("│" + descPart + " ".repeat(padLen) + rightPart + "│");
   } else {
-    lines.push("│" + rightPart + "│");
+    lines.push("│" + padVisible(rightPart, contentWidth) + "│");
   }
   lines.push("├" + "─".repeat(contentWidth) + "┤");
 
@@ -327,20 +329,29 @@ function renderView(
     renderLevel2(lines, phase, agents, state, theme, width, mainWidth);
   }
 
-  // Wrap body lines with left/right border
-  for (let i = bodyStart; i < lines.length; i++) {
-    lines[i] = "│" + lines[i] + "│";
+  // Pad body to at least 2/3 screen height
+  const headerFooterLines = 6; // ╭, name, desc/stats, ├, ├, ╰
+  const minBodyHeight = Math.max(3, Math.floor(termRows * 2 / 3) - headerFooterLines);
+  while (lines.length - bodyStart < minBodyHeight) {
+    lines.push(padVisible("", contentWidth));
   }
 
-  // ── Footer ──
-  lines.push("├" + "─".repeat(contentWidth) + "┤");
+  // Wrap body lines with left/right border, ensuring exact contentWidth
+  for (let i = bodyStart; i < lines.length; i++) {
+    lines[i] = "│" + padVisible(lines[i], contentWidth) + "│";
+  }
+
+  // Bottom border
+  lines.push("╰" + "─".repeat(contentWidth) + "╯");
+
+  // Footer: outside the border box
   const footer = state.level === 0
     ? "↑↓ phase · ⏎ enter · esc back"
     : state.level === 1
       ? "↑↓ agent · ⏎ detail · esc back"
       : "↑↓ agent · ⏎ prompt · p pause · s save · esc back";
-  lines.push("│" + theme.fg("muted", footer) + "│");
-  lines.push("╰" + "─".repeat(contentWidth) + "╯");
+  lines.push("");
+  lines.push(theme.fg("muted", footer));
 
   return lines;
 }
