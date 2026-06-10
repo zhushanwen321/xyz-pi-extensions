@@ -154,14 +154,14 @@ export interface PhaseGroup {
 /** The fallback phase name when node has no explicit phase. */
 const NO_PHASE = "(default)";
 
-/** Build phase groups. Nodes without a phase are placed in a group without header. */
+/** Build phase groups. Nodes without a phase are placed in an unnamed group. */
 export function buildPhaseGroups(nodes: ExecutionTraceNode[]): PhaseGroup[] {
   const map = groupByPhase(nodes);
   const result: PhaseGroup[] = [];
   for (const [name, phaseNodes] of map) {
     if (phaseNodes.length > 0) {
       result.push({
-        name: name === NO_PHASE ? "(default)" : name,
+        name: name === NO_PHASE ? "" : name,
         nodes: phaseNodes,
         doneCount: phaseNodes.filter((n) => n.status === "completed").length,
       });
