@@ -8,7 +8,7 @@
  * When unavailable, scene-based resolution is silently skipped.
  */
 
-import type { AgentCallOpts } from "../agent-pool";
+import type { AgentCallOpts } from "../infra/agent-pool";
 
 /** Lazy-loaded reference to resolveModelForScene from pi-model-switch (optional). */
 let _resolveModelForScene: ((scene: string) => string | undefined) | null | undefined = undefined;

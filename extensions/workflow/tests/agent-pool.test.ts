@@ -7,7 +7,7 @@ import { EventEmitter } from "node:events";
 
 import { beforeEach,describe, expect, it, vi } from "vitest";
 
-import { AgentPool, SOFT_MAX_AGENTS_WARNING } from "../src/agent-pool";
+import { AgentPool, SOFT_MAX_AGENTS_WARNING } from "../src/infra/agent-pool";
 
 vi.mock("node:child_process", () => ({
   spawn: vi.fn(),

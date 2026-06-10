@@ -14,9 +14,9 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 
 import { cleanupAllTempFiles as cleanupAllFiles, cleanupTempFile as cleanupFile, resolveAgentOpts as resolveOpts } from "./infra/agent-opts-resolver.js";
 import { AgentRegistry } from "./infra/agent-discovery.js";
-import { type AgentCallOpts,AgentPool } from "./agent-pool.js";
+import { type AgentCallOpts,AgentPool } from "./infra/agent-pool.js";
 import { getWorkflow } from "./infra/config-loader.js";
-import { appendTraceNode } from "./execution-trace.js";
+import { appendTraceNode } from "./infra/execution-trace.js";
 import { resolveModel } from "./engine/model-resolver.js";
 import { lintScript } from "./infra/script-lint.js";
 import {
