@@ -3,7 +3,6 @@
 
 import { describe, expect,it } from "vitest";
 
-import { BudgetTracker } from "../src/budget";
 import {
   ALL_STATUSES,
   canTransition,
@@ -18,7 +17,7 @@ import {
   VALID_TRANSITIONS,
   type WorkflowInstance,
   type WorkflowStatus,
-} from "../src/state";
+} from "../src/domain/state";
 
 // ═══════════════════════════════════════════════════════════════
 // state.ts
@@ -383,134 +382,4 @@ describe("state.ts", () => {
   });
 });
 
-// ═══════════════════════════════════════════════════════════════
-// budget.ts
-// ═══════════════════════════════════════════════════════════════
 
-describe("BudgetTracker", () => {
-  // ── Constructor ───────────────────────────────────────────
-  describe("constructor", () => {
-    it("accepts positive total without time limit", () => {
-      const b = new BudgetTracker(1000);
-      expect(b.used).toBe(0);
-      expect(b.remaining).toBe(1000);
-    });
-
-    it("accepts positive total with positive time limit", () => {
-      const b = new BudgetTracker(1000, 30);
-      expect(b.remaining).toBe(1000);
-    });
-
-    it("throws when total <= 0", () => {
-      expect(() => new BudgetTracker(0)).toThrow(/total must be positive/);
-      expect(() => new BudgetTracker(-5)).toThrow(/total must be positive/);
-    });
-
-    it("throws when timeLimitMinutes <= 0", () => {
-      expect(() => new BudgetTracker(1000, 0)).toThrow(
-        /timeLimitMinutes must be positive/,
-      );
-      expect(() => new BudgetTracker(1000, -10)).toThrow(
-        /timeLimitMinutes must be positive/,
-      );
-    });
-  });
-
-  // ── addUsage ──────────────────────────────────────────────
-  describe("addUsage()", () => {
-    it("accumulates token usage", () => {
-      const b = new BudgetTracker(10_000);
-      b.addUsage(500, 200);
-      expect(b.used).toBe(700);
-
-      b.addUsage(300, 100);
-      expect(b.used).toBe(1100);
-    });
-
-    it("throws on negative input tokens", () => {
-      const b = new BudgetTracker(1000);
-      expect(() => b.addUsage(-1, 0)).toThrow(/cannot be negative/);
-    });
-
-    it("throws on negative output tokens", () => {
-      const b = new BudgetTracker(1000);
-      expect(() => b.addUsage(0, -1)).toThrow(/cannot be negative/);
-    });
-
-    it("accepts zero values", () => {
-      const b = new BudgetTracker(1000);
-      b.addUsage(0, 0);
-      expect(b.used).toBe(0);
-    });
-  });
-
-  // ── isExhausted / isWarning / remaining / usagePercent ────
-  describe("budget queries", () => {
-    it("isExhausted is false below total, true at or above total", () => {
-      const b = new BudgetTracker(1000);
-      b.addUsage(500, 0);
-      expect(b.isExhausted).toBe(false);
-
-      b.addUsage(500, 0);
-      expect(b.isExhausted).toBe(true);
-    });
-
-    it("isExhausted remains true when over budget", () => {
-      const b = new BudgetTracker(1000);
-      b.addUsage(1200, 0);
-      expect(b.isExhausted).toBe(true);
-    });
-
-    it("remaining clamps to 0 when over budget", () => {
-      const b = new BudgetTracker(1000);
-      b.addUsage(1200, 0);
-      expect(b.remaining).toBe(0);
-    });
-
-    it("remaining returns correct value when under budget", () => {
-      const b = new BudgetTracker(1000);
-      b.addUsage(300, 0);
-      expect(b.remaining).toBe(700);
-    });
-
-    it("isWarning is false below 90%, true at or above 90%", () => {
-      const b = new BudgetTracker(1000);
-      b.addUsage(890, 0);
-      expect(b.isWarning).toBe(false);
-
-      b.addUsage(10, 0); // total 900 = 90%
-      expect(b.isWarning).toBe(true);
-    });
-
-    it("usagePercent returns correct percentage", () => {
-      const b = new BudgetTracker(1000);
-      expect(b.usagePercent).toBe(0);
-
-      b.addUsage(250, 0);
-      expect(b.usagePercent).toBe(25);
-
-      b.addUsage(250, 0);
-      expect(b.usagePercent).toBe(50);
-    });
-
-    it("usagePercent can exceed 100", () => {
-      const b = new BudgetTracker(100);
-      b.addUsage(150, 0);
-      expect(b.usagePercent).toBe(150);
-    });
-  });
-
-  // ── isTimeLimited ─────────────────────────────────────────
-  describe("isTimeLimited", () => {
-    it("returns false when no time limit is set", () => {
-      const b = new BudgetTracker(1000);
-      expect(b.isTimeLimited).toBe(false);
-    });
-
-    it("returns false when time limit is set but not yet elapsed", () => {
-      // 60 minutes — far from elapsed in a unit test
-      const b = new BudgetTracker(1000, 60);
-      expect(b.isTimeLimited).toBe(false);
-    });
-  });
-});

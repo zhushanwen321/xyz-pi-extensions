@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Workflow 数据流分析</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'SF Mono', 'Fira Code', monospace; background: #0d1117; color: #c9d1d9; padding: 40px; }
+h1 { color: #58a6ff; margin-bottom: 8px; font-size: 20px; }
+.subtitle { color: #8b949e; margin-bottom: 32px; font-size: 13px; }
+.container { display: flex; gap: 32px; margin-bottom: 40px; }
+.box { border: 1px solid #30363d; border-radius: 8px; padding: 20px; flex: 1; }
+.box h2 { color: #58a6ff; font-size: 14px; margin-bottom: 12px; border-bottom: 1px solid #21262d; padding-bottom: 8px; }
+.box h3 { color: #d2a8ff; font-size: 12px; margin: 12px 0 6px; }
+.field { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
+.field .name { color: #79c0ff; min-width: 120px; }
+.field .type { color: #8b949e; font-size: 11px; }
+.field .value { color: #7ee787; }
+.field .missing { color: #f85149; }
+.field .source { color: #d29922; font-size: 10px; }
+.arrow { text-align: center; color: #8b949e; font-size: 24px; padding: 20px 0; }
+.flow { border: 2px solid #f0883e; border-radius: 8px; padding: 16px; margin: 16px 0; background: #161b22; }
+.flow .label { color: #f0883e; font-size: 12px; font-weight: bold; margin-bottom: 8px; }
+.problem { border: 2px solid #f85149; border-radius: 8px; padding: 16px; margin: 16px 0; background: #161b22; }
+.problem .label { color: #f85149; font-size: 12px; font-weight: bold; margin-bottom: 8px; }
+.fix { border: 2px solid #3fb950; border-radius: 8px; padding: 16px; margin: 16px 0; background: #161b22; }
+.fix .label { color: #3fb950; font-size: 12px; font-weight: bold; margin-bottom: 8px; }
+code { background: #21262d; padding: 2px 6px; border-radius: 4px; font-size: 11px; color: #e6edf3; }
+.highlight { background: #f8514933; padding: 2px 4px; border-radius: 2px; }
+.ok { background: #3fb95033; padding: 2px 4px; border-radius: 2px; }
+.vs { display: flex; gap: 24px; }
+.vs > div { flex: 1; }
+table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 11px; }
+th { text-align: left; color: #8b949e; padding: 4px 8px; border-bottom: 1px solid #30363d; }
+td { padding: 4px 8px; border-bottom: 1px solid #21262d; }
+.tag { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; }
+.tag-script { background: #1f6feb33; color: #58a6ff; }
+.tag-runtime { background: #f0883e33; color: #f0883e; }
+.tag-tui { background: #d2a8ff33; color: #d2a8ff; }
+.tag-bug { background: #f8514933; color: #f85149; }
+</style>
+</head>
+<body>
+
+<h1>Workflow 数据流分析</h1>
+<p class="subtitle">为什么 description 没有显示？信息是怎么获取的？</p>
+
+<!-- Section 1: Two data sources -->
+<div class="container">
+  <div class="box">
+    <h2>📦 数据源 A：脚本原始信息</h2>
+    <p style="font-size:11px; color:#8b949e; margin-bottom:12px;">来自 workflow 脚本文件（.pi/workflows/*.js）</p>
+    
+    <h3>config-loader.ts — extractMetaViaRegex()</h3>
+    <div class="field">
+      <span class="name">meta.name</span>
+      <span class="type">string</span>
+      <span class="value">"review-fix-loop"</span>
+    </div>
+    <div class="field">
+      <span class="name">meta.description</span>
+      <span class="type">string</span>
+      <span class="value ok">"Review-fix loop: code-review → fix..."</span>
+    </div>
+    <div class="field">
+      <span class="name">meta.phases</span>
+      <span class="type">array</span>
+      <span class="value">[{title:"Review"}, {title:"Judge"}, ...]</span>
+    </div>
+    
+    <div class="flow">
+      <div class="label">存储位置</div>
+      <code>CachedWorkflowMeta</code> — 内存缓存，按 workspace 分桶<br>
+      通过 <code>getWorkflow(name)</code> 或 <code>loadWorkflows()</code> 读取
+    </div>
+    
+    <p style="font-size:11px; color:#3fb950; margin-top:8px;">✅ 信息完整，始终可用</p>
+  </div>
+  
+  <div class="box">
+    <h2>⚡ 数据源 B：执行运行时信息</h2>
+    <p style="font-size:11px; color:#8b949e; margin-bottom:12px;">来自 orchestrator 运行 workflow 后产生的实例</p>
+    
+    <h3>state.ts — WorkflowInstance</h3>
+    <div class="field">
+      <span class="name">instance.name</span>
+      <span class="type">string</span>
+      <span class="value">"review-fix-loop"</span>
+    </div>
+    <div class="field">
+      <span class="name">instance.description</span>
+      <span class="type">string?</span>
+      <span class="value missing">undefined ← 旧实例没有！</span>
+    </div>
+    <div class="field">
+      <span class="name">instance.status</span>
+      <span class="type">WorkflowStatus</span>
+      <span class="value">"completed"</span>
+    </div>
+    <div class="field">
+      <span class="name">instance.trace</span>
+      <span class="type">ExecutionTraceNode[]</span>
+      <span class="value">[{agent, task, model, status, phase, ...}]</span>
+    </div>
+    <div class="field">
+      <span class="name">instance.worker</span>
+      <span class="type">string</span>
+      <span class="value">"/path/to/review-fix-loop.js"</span>
+    </div>
+    
+    <div class="flow">
+      <div class="label">存储位置</div>
+      <code>orchestrator.instances</code> Map — 按 runId 索引<br>
+      通过 <code>orchestrator.getInstance(runId)</code> 读取
+    </div>
+    
+    <p style="font-size:11px; color:#f85149; margin-top:8px;">⚠️ description 只在 run() 时从 A 拷贝一次</p>
+  </div>
+</div>
+
+<!-- Section 2: Data flow diagram -->
+<div class="box" style="max-width: 900px;">
+  <h2>🔗 数据流：脚本 → 实例 → TUI</h2>
+  
+  <div style="display:flex; align-items:center; gap:16px; margin:16px 0;">
+    <div style="flex:1; text-align:center;">
+      <div class="tag tag-script">.pi/workflows/review-fix-loop.js</div>
+      <div style="font-size:11px; color:#8b949e; margin-top:4px;">export const meta = { name, description, phases }</div>
+    </div>
+    <div style="font-size:20px; color:#8b949e;">→</div>
+    <div style="flex:1; text-align:center;">
+      <div class="tag tag-runtime">config-loader.ts</div>
+      <div style="font-size:11px; color:#8b949e; margin-top:4px;">extractMetaViaRegex() → CachedWorkflowMeta</div>
+    </div>
+    <div style="font-size:20px; color:#8b949e;">→</div>
+    <div style="flex:1; text-align:center;">
+      <div class="tag tag-runtime">getWorkflow(name)</div>
+      <div style="font-size:11px; color:#8b949e; margin-top:4px;">返回 { name, description, phases }</div>
+    </div>
+  </div>
+  
+  <div class="arrow">↓ orchestrator.run() 调用</div>
+  
+  <div style="display:flex; align-items:center; gap:16px; margin:16px 0;">
+    <div style="flex:1; text-align:center;">
+      <div class="tag tag-runtime">orchestrator.ts:227</div>
+      <div style="font-size:11px; color:#8b949e; margin-top:4px;">instance.description = workflow.description</div>
+    </div>
+    <div style="font-size:20px; color:#f85149;">← 只在这里拷贝一次！</div>
+  </div>
+  
+  <div class="arrow">↓</div>
+  
+  <div style="display:flex; align-items:center; gap:16px; margin:16px 0;">
+    <div style="flex:1; text-align:center;">
+      <div class="tag tag-runtime">WorkflowInstance</div>
+      <div style="font-size:11px; color:#8b949e; margin-top:4px;">{ name, description?, status, trace[], worker }</div>
+    </div>
+    <div style="font-size:20px; color:#8b949e;">→</div>
+    <div style="flex:1; text-align:center;">
+      <div class="tag tag-tui">WorkflowsView.ts</div>
+      <div style="font-size:11px; color:#8b949e; margin-top:4px;">orchestrator.getInstance(runId) → renderView()</div>
+    </div>
+  </div>
+</div>
+
+<!-- Section 3: The Problem -->
+<div class="problem" style="max-width: 900px;">
+  <div class="label">🐛 问题根因</div>
+  
+  <div class="vs">
+    <div>
+      <h3 style="color:#f85149; font-size:12px;">旧实例（run 在代码改动之前）</h3>
+      <table>
+        <tr><th>字段</th><th>值</th><th>来源</th></tr>
+        <tr><td>name</td><td class="ok">"review-fix-loop"</td><td>run() 时设置</td></tr>
+        <tr><td>description</td><td class="highlight">undefined</td><td>run() 时没有这个赋值</td></tr>
+        <tr><td>worker</td><td class="ok">"/path/to/script.js"</td><td>run() 时设置</td></tr>
+      </table>
+    </div>
+    <div>
+      <h3 style="color:#3fb950; font-size:12px;">新实例（run 在代码改动之后）</h3>
+      <table>
+        <tr><th>字段</th><th>值</th><th>来源</th></tr>
+        <tr><td>name</td><td class="ok">"review-fix-loop"</td><td>run() 时设置</td></tr>
+        <tr><td>description</td><td class="ok">"Review-fix loop..."</td><td>run() 时从 A 拷贝</td></tr>
+        <tr><td>worker</td><td class="ok">"/path/to/script.js"</td><td>run() 时设置</td></tr>
+      </table>
+    </div>
+  </div>
+  
+  <div style="margin-top:16px; font-size:12px; color:#f85149;">
+    <strong>关键问题：</strong>TUI 读的是 <code>instance.description</code>（数据源 B），而不是从 <code>instance.worker</code> 路径回去读脚本的 <code>meta.description</code>（数据源 A）。<br>
+    <br>
+    <strong>为什么不读 A？</strong> 因为 TUI 只拿到 <code>orchestrator.getInstance(runId)</code>，没有拿到 config-loader。<br>
+    <br>
+    <strong>本质问题：</strong>信息不应该是"拷贝"，应该是"引用"。description 是脚本的属性，不是执行的属性。
+  </div>
+</div>
+
+<!-- Section 4: Architecture comparison -->
+<div class="container">
+  <div class="box">
+    <h2>❌ 当前架构（拷贝模式）</h2>
+    <pre style="font-size:11px; color:#f85149;">
+脚本 meta.description
+       │
+       ▼  run() 时拷贝一次
+Instance.description  ← 旧实例没有
+       │
+       ▼
+TUI reads instance.description
+    </pre>
+    <p style="font-size:11px; color:#f85149; margin-top:8px;">
+      问题：旧实例、序列化/反序列化、description 更新都不会同步
+    </p>
+  </div>
+  
+  <div class="box">
+    <h2>✅ 正确架构（引用模式）</h2>
+    <pre style="font-size:11px; color:#3fb950;">
+脚本 meta.description  ← 始终可用
+       │
+       ▼  TUI 需要时读取
+TUI reads via instance.worker
+       → extractMetaViaRegex(worker)
+       → meta.description
+    </pre>
+    <p style="font-size:11px; color:#3fb950; margin-top:8px;">
+      优点：description 始终从脚本读取，永远是最新的
+    </p>
+  </div>
+</div>
+
+<!-- Section 5: Fix proposal -->
+<div class="fix" style="max-width: 900px;">
+  <div class="label">💡 修复方案</div>
+  
+  <p style="font-size:12px; margin-bottom:12px;">
+    方案 A：<strong>TUI 层 fallback</strong>（最小改动）
+  </p>
+  <pre style="font-size:11px; background:#21262d; padding:12px; border-radius:4px;">
+// WorkflowsView.ts renderView()
+let desc = instance.description;
+<span class="highlight">// 如果 instance 没有 description，从脚本 meta 读取</span>
+if (!desc && instance.worker) {
+  try {
+    const meta = await extractMetaViaRegex(instance.worker);
+    desc = meta.success ? meta.meta.description : undefined;
+  } catch { /* ignore */ }
+}
+  </pre>
+  
+  <p style="font-size:12px; margin:16px 0 12px;">
+    方案 B：<strong>orchestrator 层修复</strong>（根本修复）
+  </p>
+  <pre style="font-size:11px; background:#21262d; padding:12px; border-radius:4px;">
+// orchestrator.ts getInstance()
+getInstance(runId: string): WorkflowInstance | undefined {
+  const inst = this.instances.get(runId);
+  if (inst && !inst.description && inst.worker) {
+    // 懒加载：从脚本 meta 回填 description
+    const meta = extractMetaViaRegex(inst.worker);
+    // extractMetaViaRegex 是 async...需要改签名
+  }
+  return inst;
+}
+  </pre>
+  
+  <p style="font-size:12px; margin:16px 0 12px;">
+    方案 C：<strong>run() 时兜底</strong>（最简单）
+  </p>
+  <pre style="font-size:11px; background:#21262d; padding:12px; border-radius:4px;">
+// orchestrator.ts run() — 已有 instance.description = workflow.description
+// 但 getWorkflow() 可能返回空 description
+// 修复：确保 getWorkflow() 始终返回 description
+instance.description = workflow.description || "";
+  </pre>
+</div>
+
+<!-- Section 6: File relationships -->
+<div class="box" style="max-width: 900px;">
+  <h2>📁 文件关系图</h2>
+  <pre style="font-size:11px; line-height:1.6;">
+.pi/workflows/review-fix-loop.js
+  │  (export const meta = { name, description, phases })
+  │
+  ├──────────────────────────────────┐
+  ▼                                  ▼
+config-loader.ts                   orchestrator.ts
+  │  extractMetaViaRegex()           │  run(name, args, ...)
+  │  → CachedWorkflowMeta            │  getWorkflow(name)
+  │  { name, description, phases }   │  instance.description = workflow.description
+  │                                  │  (line 227 — 只拷贝一次)
+  │                                  │
+  └──────────┬───────────────────────┘
+             ▼
+        state.ts — WorkflowInstance
+             │  { name, description?, status, trace[], worker }
+             │
+             ▼
+        commands.ts — /workflows handler
+             │  orchestrator.getInstance(runId)
+             │
+             ▼
+        views/WorkflowsView.ts — renderView()
+             │  instance.description  ← 读这里
+             │  if (instance.description) { ... }
+             │
+             ▼
+        TUI 输出
+  </pre>
+</div>
+
+</body>
+</html>

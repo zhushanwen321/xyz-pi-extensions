@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { afterEach,beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { WorkflowInstance } from "../src/state";
+import type { WorkflowInstance } from "../src/domain/state";
 
 // ── Mock 外部依赖（必须在 import 被测模块之前） ──────────────
 
@@ -23,7 +23,7 @@ const { mockMkdirSync, mockWriteFileSync } = vi.hoisted(() => ({
 }));
 
 // commands.ts / tool-generate.ts 导入 config-loader
-vi.mock("../src/config-loader.js", () => ({
+vi.mock("../src/infra/config-loader.js", () => ({
   loadWorkflows: mockLoadWorkflows,
   invalidateCache: mockInvalidateCache,
 }));
@@ -52,8 +52,8 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-import { deleteWorkflow,sendCompletionNotification } from "../src/commands";
-import { registerGenerateTool } from "../src/tool-generate";
+import { deleteWorkflow,sendCompletionNotification } from "../src/interface/commands";
+import { registerGenerateTool } from "../src/interface/tool-generate";
 
 // ── Helpers ──────────────────────────────────────────────────
 

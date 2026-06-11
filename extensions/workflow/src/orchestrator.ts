@@ -5,7 +5,6 @@
  * Lifecycle: run → pause/resume → abort. Agent calls routed via AgentPool.
  */
 
-import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -13,25 +12,28 @@ import { Worker } from "node:worker_threads";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { AgentRegistry } from "./agent-discovery.js";
-import { type AgentCallOpts,AgentPool } from "./agent-pool.js";
-import { getWorkflow } from "./config-loader.js";
-import { appendTraceNode } from "./execution-trace.js";
-import { resolveModel } from "./model-resolver.js";
-import { lintScript } from "./script-lint.js";
+import { cleanupAllTempFiles as cleanupAllFiles, cleanupTempFile as cleanupFile, resolveAgentOpts as resolveOpts } from "./infra/agent-opts-resolver.js";
+import { AgentRegistry } from "./infra/agent-discovery.js";
+import { type AgentCallOpts,AgentPool } from "./infra/agent-pool.js";
+import { getWorkflow } from "./infra/config-loader.js";
+import { appendTraceNode } from "./infra/execution-trace.js";
+import { resolveModel } from "./engine/model-resolver.js";
+import { lintScript } from "./infra/script-lint.js";
 import {
   type AgentResult as StateAgentResult,
   createInstance as createStateInstance,
   type ExecutionTraceNode,
   isTerminal,
-  serializeInstance,
   transitionStatus,
   type WorkflowBudget,
   type WorkflowInstance,
   type WorkflowStatus,
-} from "./state.js";
-import { buildWorkerScript } from "./worker-script.js";
-import { checkBudget, scheduleTimeBudgetCheck } from "./orchestrator-budget.js";
+} from "./domain/state.js";
+import { persistState as persistInstances } from "./infra/state-store.js";
+import { WorkflowEventEmitter } from "./engine/orchestrator-events.js";
+import { type WorkerInMsg as ImportedWorkerInMsg, buildWorkerScript } from "./engine/worker-script.js";
+import { checkBudget, scheduleTimeBudgetCheck } from "./engine/orchestrator-budget.js";
+import { handleWorkerError, handleWorkerExit, handleScriptError, type ErrorHandlerContext } from "./engine/error-handlers.js";
 
 // ── Public types ──────────────────────────────────────────────
 
@@ -63,36 +65,16 @@ interface RunMeta {
   signal?: AbortSignal;
 }
 
-/** Worker→Main message shapes. */
-interface AgentCallMsg {
-  type: "agent-call";
-  callId: number;
-  opts: AgentCallOpts;
-}
-
-interface ReturnMsg {
-  type: "return";
-  runId: string;
-  result: unknown;
-}
-
-interface ErrorMsg {
-  type: "error";
-  runId: string;
-  error: string;
-}
-
-type WorkerInMsg = AgentCallMsg | ReturnMsg | ErrorMsg;
+/** Worker→Main message type — unified with worker-script.ts definition. */
+type WorkerInMsg = ImportedWorkerInMsg;
 
 // ── Constants ─────────────────────────────────────────────────
 
-const MAX_WORKER_RETRIES = 3;
 const RETRY_BACKOFF_MS = 1000;
 const MAX_AGENT_RETRIES = 3;
 const RUNID_RADIX = 36;
 const RUNID_SLICE_START = 2;
 const RUNID_SLICE_LENGTH = 8;
-const PROMPT_PREVIEW_LENGTH = 200;
 const EXPONENTIAL_BACKOFF_BASE = 2;
 
 // P1-5: Stale context detection — matches patterns reported when
@@ -117,6 +99,10 @@ export class WorkflowOrchestrator {
   private readonly agentRegistry: AgentRegistry;
   /** Active temp files created for agent system prompts — cleaned up on completion or abort. */
   private readonly activeTempFiles = new Set<string>();
+  // Bound helpers that carry activeTempFiles closure
+  private cleanupTempFile = (fp: string) => cleanupFile(fp, this.activeTempFiles);
+  /** Bound helper for agent-opts-resolver temp file cleanup. */
+  cleanupAllTempFiles = () => cleanupAllFiles(this.activeTempFiles);
   /** Per-run AbortController for killing agent subprocesses on terminate/pause/abort. */
   private readonly runAbortControllers = new Map<string, AbortController>();
   private readonly pi: ExtensionAPI;
@@ -126,6 +112,8 @@ export class WorkflowOrchestrator {
   onTraceUpdate?: (runId: string) => void;
   /** Called when a workflow reaches a terminal state (completed/failed/aborted/budget_limited/time_limited) */
   onCompletion?: (runId: string) => void;
+  /** Event emitter for real-time TUI subscriptions (FR-5). */
+  readonly events = new WorkflowEventEmitter();
 
   constructor(
     pi: ExtensionAPI,
@@ -168,19 +156,7 @@ export class WorkflowOrchestrator {
     }));
   }
 
-  /** Clean up temp files created for agent system prompts. */
-  private cleanupTempFile(filePath: string): void {
-    try { fs.unlinkSync(filePath); } catch { /* already deleted */ void undefined; }
-    this.activeTempFiles.delete(filePath);
-  }
 
-  /** Clean up all remaining active temp files (e.g. on abort/error). */
-  cleanupAllTempFiles(): void {
-    for (const fp of this.activeTempFiles) {
-      try { fs.unlinkSync(fp); } catch { /* already deleted */ void undefined; }
-    }
-    this.activeTempFiles.clear();
-  }
 
   /** Start a workflow. Returns runId for lifecycle operations. Signal propagated to AgentPool. */
   async run(
@@ -229,6 +205,7 @@ export class WorkflowOrchestrator {
       budget: { maxTokens: budgetTokens, maxTimeMs: budgetTimeMs },
     });
     instance.startedAt = new Date().toISOString();
+    instance.description = workflow.description;
 
     this.runMetaMap.set(runId, { scriptSource, args, budgetTokens, budgetTimeMs, signal });
     this.instances.set(runId, instance);
@@ -320,6 +297,7 @@ export class WorkflowOrchestrator {
     // Set paused status BEFORE terminating so the exit handler skips cleanup
     instance.pausedAt = new Date().toISOString();
     transitionStatus(instance, "paused");
+    this.events.emit(runId, { type: "status", status: "paused" });
     this.terminateWorker(runId);
     // Cleanup in-flight temp files from agent calls that were killed mid-flight.
     // Without this, files written for --append-system-prompt leak to disk.
@@ -345,6 +323,7 @@ export class WorkflowOrchestrator {
 
     instance.pausedAt = undefined;
     transitionStatus(instance, "running");
+    this.events.emit(runId, { type: "status", status: "running" });
 
     const meta = this.runMetaMap.get(runId);
     if (meta) {
@@ -395,8 +374,10 @@ export class WorkflowOrchestrator {
     // Set terminal status BEFORE terminating
     instance.completedAt = new Date().toISOString();
     transitionStatus(instance, "aborted");
+    this.events.emit(runId, { type: "status", status: "aborted" });
     this.terminateWorker(runId);
     this.cleanupAllTempFiles();
+    this.runPools.delete(runId);
     await this.persistState();
     this.onCompletion?.(runId);
   }
@@ -483,6 +464,86 @@ export class WorkflowOrchestrator {
   }
 
   /**
+   * Restart a workflow: create a fresh instance from the same script,
+   * then clean up the old one. Returns the new runId.
+   *
+   * Note: intentionally does NOT forward the original AbortSignal to the
+   * new instance. Restart is a user-initiated action — the new run should
+   * have an independent lifecycle from the original tool-execute caller's
+   * signal (which may already be aborted).
+   */
+  async restart(runId: string): Promise<string> {
+    const instance = this.instances.get(runId);
+    if (!instance) {
+      throw new Error(`Workflow '${runId}' not found`);
+    }
+
+    const meta = this.runMetaMap.get(runId);
+    if (!meta) {
+      throw new Error("No metadata for restart — cannot re-run without original script");
+    }
+
+    const name = instance.name;
+    const scriptSource = meta.scriptSource;
+    const args = meta.args;
+    const budgetTokens = meta.budgetTokens;
+    const budgetTimeMs = meta.budgetTimeMs;
+
+    // 1. Abort old instance if still alive
+    if (instance.status === "running" || instance.status === "paused") {
+      instance.completedAt = new Date().toISOString();
+      transitionStatus(instance, "aborted");
+      this.events.emit(runId, { type: "status", status: "aborted" });
+      this.terminateWorker(runId);
+      this.cleanupAllTempFiles();
+    }
+
+    // 2. Create new instance directly from cached scriptSource
+    //    Bypass getWorkflow() + fs.readFileSync() since we already have the script.
+    const newRunId = `wf-${Date.now()}-${Math.random().toString(RUNID_RADIX).slice(RUNID_SLICE_START, RUNID_SLICE_LENGTH)}`;
+    const newInstance = createStateInstance({
+      runId: newRunId,
+      name,
+      worker: instance.worker,
+      budget: { maxTokens: budgetTokens, maxTimeMs: budgetTimeMs },
+    });
+    newInstance.startedAt = new Date().toISOString();
+
+    this.instances.set(newRunId, newInstance);
+    this.runMetaMap.set(newRunId, { scriptSource, args, budgetTokens, budgetTimeMs });
+    this.startWorker(newRunId, newInstance, scriptSource, args);
+
+    // 3. Schedule time budget check if needed
+    if (budgetTimeMs) {
+      scheduleTimeBudgetCheck(
+        (id) => this.instances.get(id),
+        newRunId,
+        budgetTimeMs,
+        {
+          postMessage: (id, msg) => this.postMessage(id, msg),
+          terminateWorker: (id) => this.terminateWorker(id),
+          cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
+          persistState: () => this.persistState(),
+          onCompletion: (id) => this.onCompletion?.(id),
+        },
+      );
+    }
+
+    // 4. Persist new instance before cleaning old one
+    await this.persistState();
+
+    // 5. Clean up old instance
+    this.instances.delete(runId);
+    this.runMetaMap.delete(runId);
+    this.retryCounts.delete(runId);
+    this.runAbortControllers.delete(runId);
+    this.runPools.delete(runId);
+    await this.persistState();
+
+    return newRunId;
+  }
+
+  /**
    * List all workflow instances in the current session as summaries.
    */
   list(): WorkflowInstanceSummary[] {
@@ -518,6 +579,16 @@ export class WorkflowOrchestrator {
     }
   }
 
+  /**
+   * Reconstruct workflow instances from session JSONL and restore them.
+   * Delegates to state-store's reconstructState, then calls restoreInstances.
+   */
+  async reconstructAndRestore(): Promise<void> {
+    const { reconstructState } = await import("./infra/state-store.js");
+    const instances = await reconstructState(this.ctx);
+    this.restoreInstances(instances);
+  }
+
   // ── Worker lifecycle ────────────────────────────────────────
 
   /**
@@ -551,11 +622,11 @@ export class WorkflowOrchestrator {
     });
 
     worker.on("error", (err: Error) => {
-      this.handleWorkerError(runId, err);
+      handleWorkerError(this.errorHandlerContext(), runId, err);
     });
 
     worker.on("exit", (code: number) => {
-      this.handleWorkerExit(runId, code, worker);
+      handleWorkerExit(this.errorHandlerContext(), runId, code, worker);
     });
 
     this.workers.set(runId, worker);
@@ -604,6 +675,24 @@ export class WorkflowOrchestrator {
     }
   }
 
+  /** Build the context object for error handler functions. */
+  private errorHandlerContext(): ErrorHandlerContext {
+    return {
+      instances: this.instances,
+      workers: this.workers,
+      retryCounts: this.retryCounts,
+      getRunMeta: (id) => this.runMetaMap.get(id),
+      events: this.events,
+      terminateWorker: (id) => this.terminateWorker(id),
+      recreateRunAbortController: (id) => this.recreateRunAbortController(id),
+      startWorker: (id, inst, src, args) => this.startWorker(id, inst, src, args),
+      cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
+      persistState: () => this.persistState(),
+      onCompletion: (id) => this.onCompletion?.(id),
+      deleteRunPool: (id) => this.runPools.delete(id),
+    };
+  }
+
   // ── Message routing ─────────────────────────────────────────
 
   /**
@@ -617,7 +706,7 @@ export class WorkflowOrchestrator {
 
     switch (msg.type) {
       case "agent-call":
-        this.handleAgentCall(runId, instance, msg.callId, msg.opts);
+        this.handleAgentCall(runId, instance, msg.callId, msg.opts as AgentCallOpts, msg.phase);
         break;
       case "return": {
         // P0-1: Guard against stale return messages after terminate/pause/budget
@@ -626,7 +715,9 @@ export class WorkflowOrchestrator {
         instance.scriptResult = msg.result;
         instance.completedAt = new Date().toISOString();
         transitionStatus(instance, "completed");
+        this.events.emit(runId, { type: "status", status: "completed" });
         this.workers.delete(runId);
+        this.runPools.delete(runId);
         await this.persistState();
         this.onTraceUpdate?.(runId);
         this.onCompletion?.(runId);
@@ -635,38 +726,15 @@ export class WorkflowOrchestrator {
       case "error": {
         // P0-1: Guard against stale error messages after terminate/pause/budget
         if (isTerminal(instance.status) || instance.status === "budget_limited" || instance.status === "paused") return;
-        this.handleScriptError(runId, msg.error);
+        handleScriptError(this.errorHandlerContext(), runId, msg.error);
         break;
       }
     }
   }
 
-  /** Resolve agent name to systemPrompt file, write temp file if needed. */
+  /** Resolve agent name and schema to systemPromptFiles (delegates to agent-opts-resolver). */
   private resolveAgentOpts(opts: AgentCallOpts): { opts: AgentCallOpts; error?: string } {
-    if (!opts.agent) return { opts };
-    const discovered = this.agentRegistry.resolve(opts.agent);
-    if (!discovered) return { opts, error: `Agent not found: ${opts.agent}` };
-
-    const hasSystemPrompt = discovered.systemPrompt.trim().length > 0;
-    let systemPromptFile: string | undefined;
-    if (hasSystemPrompt) {
-      try {
-        const tmpDir = path.join(os.tmpdir(), "pi-workflow");
-        fs.mkdirSync(tmpDir, { recursive: true });
-        const tmpFile = path.join(tmpDir, `agent-prompt-${randomUUID()}.md`);
-        fs.writeFileSync(tmpFile, discovered.systemPrompt, "utf-8");
-        this.activeTempFiles.add(tmpFile);
-        systemPromptFile = tmpFile;
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { opts, error: `Temp file write error: ${msg}` };
-      }
-    }
-
-    const agentModel = opts.model || discovered.model;
-    return {
-      opts: { ...opts, model: agentModel, ...(systemPromptFile ? { systemPromptFile } : {}) },
-    };
+    return resolveOpts(opts, this.agentRegistry, this.sessionDir, this.activeTempFiles);
   }
 
   /**
@@ -678,6 +746,7 @@ export class WorkflowOrchestrator {
     instance: WorkflowInstance,
     callId: number,
     opts: AgentCallOpts,
+    phase?: string,
   ): Promise<void> {
     const cached = instance.callCache.get(callId);
     if (cached) {
@@ -706,16 +775,16 @@ export class WorkflowOrchestrator {
     const node: ExecutionTraceNode = {
       stepIndex: callId,
       agent: opts.description ?? opts.agent ?? "unknown",
-      task: opts.prompt.slice(0, PROMPT_PREVIEW_LENGTH),
+      task: opts.prompt,
       model: enrichedOpts.model ?? "default",
       status: "running",
+      phase,
       startedAt: now,
     };
     instance.trace.push(node);
     appendTraceNode(this.pi, runId, node);
+    this.events.emit(runId, { type: "trace", node: { stepIndex: node.stepIndex, agent: node.agent, status: node.status, phase: node.phase } });
     this.onTraceUpdate?.(runId);
-
-    // Enqueue via per-run AgentPool with retry
     this.executeWithRetry(runId, callId, enrichedOpts, instance, node);
   }
 
@@ -756,9 +825,11 @@ export class WorkflowOrchestrator {
             usage: poolResult.usage,
             durationMs: poolResult.durationMs,
             error: poolResult.error,
+            toolCalls: poolResult.toolCalls,
           };
           traceNode.completedAt = new Date().toISOString();
           appendTraceNode(this.pi, runId, traceNode);
+          this.events.emit(runId, { type: "node-update", stepIndex: callId, node: { stepIndex: traceNode.stepIndex, agent: traceNode.agent, status: traceNode.status, phase: traceNode.phase } });
         }
         this.postMessage(runId, {
           type: "agent-result",
@@ -767,6 +838,7 @@ export class WorkflowOrchestrator {
             content: poolResult.output,
             usage: poolResult.usage,
             error: poolResult.error,
+            toolCalls: poolResult.toolCalls,
           },
           cached: false,
         });
@@ -774,8 +846,10 @@ export class WorkflowOrchestrator {
         this.onTraceUpdate?.(runId);
 
         // Cleanup temp file on stale context early return
-        if (opts.systemPromptFile) {
-          this.cleanupTempFile(opts.systemPromptFile);
+        if (opts.systemPromptFiles) {
+          for (const fp of opts.systemPromptFiles) {
+            this.cleanupTempFile(fp);
+          }
         }
         return;
       }
@@ -786,6 +860,7 @@ export class WorkflowOrchestrator {
         usage: poolResult.usage,
         durationMs: poolResult.durationMs,
         error: poolResult.success ? undefined : poolResult.error,
+        toolCalls: poolResult.toolCalls,
       };
 
       // Retry on failure with exponential backoff
@@ -815,13 +890,18 @@ export class WorkflowOrchestrator {
         traceNode.result = result;
         traceNode.completedAt = new Date().toISOString();
         appendTraceNode(this.pi, runId, traceNode);
+        this.events.emit(runId, { type: "node-update", stepIndex: callId, node: { stepIndex: traceNode.stepIndex, agent: traceNode.agent, status: traceNode.status, phase: traceNode.phase } });
       }
-
-      // Accumulate budget
       if (poolResult.usage) {
         instance.budget.usedTokens += poolResult.usage.input + poolResult.usage.output;
         instance.budget.usedCost += poolResult.usage.cost;
       }
+
+      // Push budget update to worker for dynamic budget functions
+      this.postMessage(runId, {
+        type: "budget-update",
+        budget: { usedTokens: instance.budget.usedTokens, usedCost: instance.budget.usedCost },
+      });
 
       // Enforce budget limits
       await checkBudget(this.instances.get(runId), runId, {
@@ -836,91 +916,12 @@ export class WorkflowOrchestrator {
       this.onTraceUpdate?.(runId);
 
       // Cleanup temp file if it was created for agent system prompt
-      if (opts.systemPromptFile) {
-        this.cleanupTempFile(opts.systemPromptFile);
+      if (opts.systemPromptFiles) {
+        for (const fp of opts.systemPromptFiles) {
+          this.cleanupTempFile(fp);
+        }
       }
     });
-  }
-
-  /**
-   * Handle a Worker thread uncaught error.
-   */
-  private async handleWorkerError(runId: string, err: Error): Promise<void> {
-    const instance = this.instances.get(runId);
-    if (!instance || isTerminal(instance.status)) return;
-
-    this.workers.delete(runId);
-    instance.error = err.message;
-    // P1-5: Mark failed — error event may not be followed by exit event
-    instance.completedAt = new Date().toISOString();
-    transitionStatus(instance, "failed");
-    this.cleanupAllTempFiles();
-    await this.persistState();
-    this.onCompletion?.(runId);
-  }
-
-  /**
-   * Handle Worker thread exit.
-   */
-  private async handleWorkerExit(runId: string, code: number, exitedWorker: Worker): Promise<void> {
-    const instance = this.instances.get(runId);
-    if (!instance) return;
-
-    // Guard: only process exit if the exited worker is still the current one.
-    // Prevents race: terminateWorker(old) → startWorker(new) → old exit fires →
-    // would delete new worker and incorrectly mark instance as failed.
-    const currentWorker = this.workers.get(runId);
-    if (currentWorker !== exitedWorker) return;
-    this.workers.delete(runId);
-
-    // Paused/terminal exits are intentional — skip failure marking
-    if (instance.status === "paused" || isTerminal(instance.status)) return;
-
-    // Non-zero exit without explicit error message → mark as failed
-    if (code !== 0 && !instance.error) {
-      instance.error = `Worker exited with code ${code}`;
-      instance.completedAt = new Date().toISOString();
-      transitionStatus(instance, "failed");
-      await this.persistState();
-      this.onCompletion?.(runId);
-    }
-  }
-
-  /**
-   * Handle a workflow script-level error (type: "error" from worker).
-   * Retries with exponential backoff up to MAX_WORKER_RETRIES.
-   */
-  private async handleScriptError(runId: string, errorMsg: string): Promise<void> {
-    const instance = this.instances.get(runId);
-    if (!instance || isTerminal(instance.status)) return;
-
-    const attempt = (this.retryCounts.get(runId) ?? 0) + 1;
-    this.retryCounts.set(runId, attempt);
-
-    if (attempt <= MAX_WORKER_RETRIES) {
-      this.terminateWorker(runId);
-
-      const delay = RETRY_BACKOFF_MS * Math.pow(EXPONENTIAL_BACKOFF_BASE, attempt - 1);
-      setTimeout(() => {
-        // P0-3: Stale state check before restart
-        if (instance.status !== "running") return;
-        const meta = this.runMetaMap.get(runId);
-        if (meta && instance) {
-          // Recreate AbortController after terminate (old was aborted)
-          this.recreateRunAbortController(runId);
-          this.startWorker(runId, instance, meta.scriptSource, meta.args);
-        }
-      }, delay);
-    } else {
-      instance.error = `Workflow failed after ${MAX_WORKER_RETRIES} retries: ${errorMsg}`;
-      instance.completedAt = new Date().toISOString();
-      transitionStatus(instance, "failed");
-      this.terminateWorker(runId);
-      // Cleanup in-flight agent temp files that were killed mid-flight.
-      this.cleanupAllTempFiles();
-      await this.persistState();
-      this.onCompletion?.(runId);
-    }
   }
 
   // ── Synchronous run (for programmatic callers) ────────────
@@ -968,25 +969,10 @@ export class WorkflowOrchestrator {
   // ── Persistence ─────────────────────────────────────────────
 
   /**
-   * Flush the current state to external JSONL files + pointer entries.
-   *
-   * For each instance: writes a JSONL file under <sessionDir>/workflow-state/<runId>.jsonl
-   * and appends a workflow-state-link pointer entry via pi.appendEntry.
+   * Flush the current state to external JSONL files (delegates to state-store).
+   * Kept as instance method to preserve public API used by index.ts.
    */
   async persistState(): Promise<void> {
-    for (const instance of this.instances.values()) {
-      const filePath = path.join(this.sessionDir, "workflow-state", `${instance.runId}.jsonl`);
-      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.promises.appendFile(
-        filePath,
-        JSON.stringify(serializeInstance(instance)) + "\n",
-        "utf8",
-      );
-      this.pi.appendEntry("workflow-state-link", {
-        runId: instance.runId,
-        path: filePath,
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    await persistInstances(this.pi, this.sessionDir, this.instances);
   }
 }

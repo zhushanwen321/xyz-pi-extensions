@@ -7,7 +7,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AgentCallOpts } from "../src/agent-pool";
+import type { AgentCallOpts } from "../src/infra/agent-pool";
 
 const { mockResolveModelForScene } = vi.hoisted(() => ({
 	mockResolveModelForScene: vi.fn<(scene: string) => string | undefined>(),
@@ -17,7 +17,7 @@ vi.mock("@zhushanwen/pi-model-switch", () => ({
 	resolveModelForScene: mockResolveModelForScene,
 }));
 
-import { resolveModel } from "../src/model-resolver";
+import { resolveModel } from "../src/engine/model-resolver";
 
 describe("resolveModel", () => {
 	beforeEach(() => {
