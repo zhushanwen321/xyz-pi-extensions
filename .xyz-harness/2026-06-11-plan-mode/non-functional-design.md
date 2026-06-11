@@ -30,7 +30,7 @@ verdict: pass
 
 ## 4. 业务安全
 
-**SKILL.md 作为 AI 行为指令:** Plan mode 的 SKILL.md 告知 AI 禁止编辑非 plan 文件。这是提示词约束，非硬性拦截。
+**command.ts 内联提示词作为 AI 行为指令:** Plan mode 的 command.ts 内联提示词告知 AI 禁止编辑非 plan 文件。这是提示词约束，非硬性拦截。
 
 **风险:** AI 可能违反约束执行写入操作（概率低）。
 

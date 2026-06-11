@@ -214,7 +214,7 @@ complexity: L1
 
 **Dependencies:** BG0
 
-#### BG2: Compact + SKILL
+#### BG2: Compact + 模板
 
 **Description:** compact/tree handler、steer 注入。templates.ts 和 widget.ts 已移至 BG1，compact.ts 通过 dynamic import 被 BG1 的 tool.ts 调用。
 
@@ -246,7 +246,7 @@ complexity: L1
 ## Dependency Graph & Wave Schedule
 
 ```
-BG0 (项目同步) ──→ BG1 (核心状态) ──→ BG2 (模板+Compact+TUI+SKILL)
+BG0 (项目同步) ──→ BG1 (核心状态) ──→ BG2 (Compact + 模板)
 ```
 
 | Wave | Groups | 说明 |
@@ -268,7 +268,7 @@ BG0 (项目同步) ──→ BG1 (核心状态) ──→ BG2 (模板+Compact+TU
 - Modify: `extension-dependencies.json`
 - Create: `.changeset/plan-mode-init.md`
 
-- [ ] **Step 1: Update CLAUDE.md**
+- [x] **Step 1: Update CLAUDE.md**
 
 在 "Monorepo 架构" 的 extensions 列表中添加：
 ```
@@ -280,7 +280,7 @@ BG0 (项目同步) ──→ BG1 (核心状态) ──→ BG2 (模板+Compact+TU
 | `extensions/plan/` | `@zhushanwen/pi-plan` | 轻量级 Plan Mode（brainstorming + writing-plans） | plan-mode |
 ```
 
-- [ ] **Step 2: Update extension-dependencies.json**
+- [x] **Step 2: Update extension-dependencies.json**
 
 在 `extension-dependencies.json` 中添加 pi-plan 条目：
 ```json
@@ -292,7 +292,7 @@ BG0 (项目同步) ──→ BG1 (核心状态) ──→ BG2 (模板+Compact+TU
 }
 ```
 
-- [ ] **Step 3: Create changeset**
+- [x] **Step 3: Create changeset**
 
 创建 `.changeset/plan-mode-init.md`：
 ```markdown
@@ -303,7 +303,7 @@ BG0 (项目同步) ──→ BG1 (核心状态) ──→ BG2 (模板+Compact+TU
 Add new @zhushanwen/pi-plan extension: lightweight plan mode with brainstorming + writing-plans capabilities
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add CLAUDE.md extension-dependencies.json .changeset/plan-mode-init.md
@@ -323,7 +323,7 @@ git commit -m "chore: register @zhushanwen/pi-plan in project structure"
 - Create: `extensions/plan/src/state.ts`
 - Test: `extensions/plan/src/__tests__/state.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```typescript
 // extensions/plan/src/__tests__/state.test.ts
@@ -380,12 +380,12 @@ describe("PlanState", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run extensions/plan/src/__tests__/state.test.ts`
 Expected: FAIL with "Cannot find module '../state.js'"
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```typescript
 // extensions/plan/src/state.ts
@@ -474,8 +474,7 @@ export function reconstructPlanState(ctx: ExtensionContext): PlanState {
   "type": "module",
   "main": "src/index.ts",
   "pi": {
-    "extensions": ["./index.ts"],
-    "skills": ["./skills"]
+    "extensions": ["./index.ts"]
   },
   "keywords": ["pi-package", "extension"],
   "license": "MIT",
@@ -540,12 +539,12 @@ export default defineConfig({
 });
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run extensions/plan/src/__tests__/state.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/plan/
@@ -560,7 +559,7 @@ git commit -m "feat(plan): add package structure and state types with session is
 - Modify: `extensions/plan/src/index.ts`
 - Test: `extensions/plan/src/__tests__/state.test.ts` (extend)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```typescript
 // extensions/plan/src/__tests__/state.test.ts (add to existing)
@@ -625,12 +624,12 @@ describe("State persistence", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it passes**
+- [x] **Step 2: Run test to verify it passes**
 
 Run: `npx vitest run extensions/plan/src/__tests__/state.test.ts`
 Expected: PASS (persistence functions already implemented in Task 1)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add extensions/plan/src/__tests__/state.test.ts
@@ -646,7 +645,7 @@ git commit -m "test(plan): add state persistence tests"
 - Modify: `extensions/plan/src/index.ts`
 - Test: `extensions/plan/src/__tests__/tool.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```typescript
 // extensions/plan/src/__tests__/tool.test.ts
@@ -676,12 +675,12 @@ describe("Plan Tool", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run extensions/plan/src/__tests__/tool.test.ts`
 Expected: FAIL with "Cannot find module '../tool.js'"
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```typescript
 // extensions/plan/src/tool.ts
@@ -822,12 +821,12 @@ export function registerPlanTool(
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run extensions/plan/src/__tests__/tool.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/plan/src/tool.ts extensions/plan/src/index.ts extensions/plan/src/__tests__/tool.test.ts
@@ -842,7 +841,7 @@ git commit -m "feat(plan): add plan tool with 5 action handlers and session isol
 - Create: `extensions/plan/src/command.ts`
 - Modify: `extensions/plan/src/index.ts`
 
-- [ ] **Step 1: Write the implementation**
+- [x] **Step 1: Write the implementation**
 
 ```typescript
 // extensions/plan/src/command.ts
@@ -953,19 +952,37 @@ export function registerPlanCommand(
       persistPlanState(pi, state);
       updatePlanWidget(ctx, state);
 
-      // Inject skill context
+      // Inject plan mode system prompt inline (no separate SKILL.md)
       pi.sendUserMessage(
         `[PLAN MODE] Entered plan mode.\n\n` +
         `Requirement: ${trimmed || "(from conversation context)"}\n` +
         `Plan file: ${planFilePath}\n\n` +
-        `Follow the plan-mode skill instructions to begin brainstorming.`,
+        `## Constraints\n` +
+        `- READ-ONLY: Do NOT edit any files except the plan file (${planFilePath}).\n` +
+        `- Do NOT run write commands on non-plan files.\n` +
+        `- All plan content goes to the plan file only.\n\n` +
+        `## Phase B: Brainstorming\n` +
+        `1. **Quick Overview**: ls project root, read README, package.json — build context (< 30s).\n` +
+        `2. **Explore before asking**: grep/read code first. Only ask user for preferences.\n` +
+        `3. **Progressive questioning**: Ask 2-3 questions at a time. Use ask_user tool if available.\n` +
+        `4. **Propose 2-3 approaches** with trade-offs + recommendation.\n` +
+        `5. **Assumption audit**: Grep-verify interfaces/types exist. Mark [UNVERIFIED] what can't be verified.\n\n` +
+        `## Phase C: Writing\n` +
+        `1. Call plan tool (list-template) to show available templates.\n` +
+        `2. After user selects template, call plan tool (select-template).\n` +
+        `3. Write chapters in template order — do NOT skip unwritten chapters.\n` +
+        `4. Write all chapters in one turn, then ask user to review.\n\n` +
+        `## Phase D: Completion\n` +
+        `1. Ask user to review the complete plan.\n` +
+        `2. Call plan tool (complete) with isolation method (compact/tree/direct).\n` +
+        `3. After plan complete: check subagent capability → suggest goal + wave or single-agent execution.`,
       );
     },
   });
 }
 ```
 
-- [ ] **Step 2: Update index.ts**
+- [x] **Step 2: Update index.ts**
 
 ```typescript
 // extensions/plan/src/index.ts
@@ -1009,7 +1026,7 @@ export default function planExtension(pi: ExtensionAPI) {
 }
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add extensions/plan/src/command.ts extensions/plan/src/index.ts
@@ -1030,7 +1047,7 @@ git commit -m "feat(plan): add /plan command with abort/status/reentry and sessi
 - Create: `extensions/plan/templates/implementation-plan.md`
 - Test: `extensions/plan/src/__tests__/templates.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```typescript
 // extensions/plan/src/__tests__/templates.test.ts
@@ -1068,12 +1085,12 @@ describe("Template system", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run extensions/plan/src/__tests__/templates.test.ts`
 Expected: FAIL with "Cannot find module '../templates.js'"
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```typescript
 // extensions/plan/src/templates.ts
@@ -1304,12 +1321,12 @@ status: draft
 <!-- 如何验证实现正确性 -->
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run extensions/plan/src/__tests__/templates.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/plan/src/templates.ts extensions/plan/src/widget.ts extensions/plan/templates/ extensions/plan/src/__tests__/templates.test.ts
@@ -1323,7 +1340,7 @@ git commit -m "feat(plan): add template system with 5 builtin templates and TUI 
 **Files:**
 - Create: `extensions/plan/src/compact.ts`
 
-- [ ] **Step 1: Implement compact handler**
+- [x] **Step 1: Implement compact handler**
 
 ```typescript
 // extensions/plan/src/compact.ts
@@ -1426,7 +1443,7 @@ export function handlePlanComplete(
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add extensions/plan/src/compact.ts
