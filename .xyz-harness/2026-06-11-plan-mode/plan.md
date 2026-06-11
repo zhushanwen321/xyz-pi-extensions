@@ -27,6 +27,7 @@ complexity: L1
 | `extensions/plan/package.json` | create | BG1 | 包配置 |
 | `extensions/plan/index.ts` | create | BG1 | 顶层 re-export |
 | `extensions/plan/tsconfig.json` | create | BG1 | TypeScript 配置 |
+| `extensions/plan/vitest.config.ts` | create | BG1 | Vitest 配置 |
 | `extensions/plan/src/index.ts` | create | BG1 | Extension 入口（工厂函数 + 注册） |
 | `extensions/plan/src/state.ts` | create | BG1 | 状态类型定义 + 持久化逻辑 + session Map |
 | `extensions/plan/src/tool.ts` | create | BG1 | plan tool 注册 + 5 个 action handler |
@@ -327,6 +328,7 @@ git commit -m "chore: register @zhushanwen/pi-plan in project structure"
 - Create: `extensions/plan/package.json`
 - Create: `extensions/plan/index.ts`
 - Create: `extensions/plan/tsconfig.json`
+- Create: `extensions/plan/vitest.config.ts`
 - Create: `extensions/plan/src/index.ts`
 - Create: `extensions/plan/src/state.ts`
 - Test: `extensions/plan/src/__tests__/state.test.ts`
@@ -518,6 +520,26 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 export default function planExtension(pi: ExtensionAPI) {
   // Registration will be added in subsequent tasks
 }
+```
+
+```typescript
+// extensions/plan/vitest.config.ts
+import { defineConfig } from "vitest/config";
+import path from "node:path";
+
+export default defineConfig({
+  test: {
+    include: ["src/__tests__/**/*.test.ts"],
+  },
+  resolve: {
+    alias: {
+      "@mariozechner/pi-coding-agent": path.resolve(
+        __dirname,
+        "../../shared/types/mariozechner/index",
+      ),
+    },
+  },
+});
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
