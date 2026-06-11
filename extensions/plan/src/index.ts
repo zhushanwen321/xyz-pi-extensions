@@ -15,7 +15,7 @@ export default function planExtension(pi: ExtensionAPI) {
   // Dynamic import compact handlers (BG2) — avoids cross-group static import
   import("./compact.js").then(({ registerPlanEventHandlers }) => {
     registerPlanEventHandlers(pi, sessions);
-  }).catch(() => { /* compact is optional at load time */ });
+  }).catch((_e: unknown) => { /* compact.ts missing — extension works without it */ });
 
   // Reconstruct state on session start
   pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
