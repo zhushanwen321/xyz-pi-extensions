@@ -22,7 +22,7 @@ Plan mode 填补这个空白：融合 brainstorming（需求探索）+ writing-p
 | FR-1.4 | `/plan` 不带描述时，若当前在 plan mode，显示状态（阶段、plan 文件路径） |
 | FR-1.5 | 进入时创建 plan session 状态，存储在 `ctx.sessionManager`（per-session 隔离） |
 | FR-1.6 | 进入时生成 plan 文件路径 `/tmp/plan-{slug}.md` |
-| FR-1.7 | 进入时通过 skill 加载 plan mode 系统提示词（只读约束 + 流程指引） |
+| FR-1.7 | 进入时通过 command 内联注入 plan mode 系统提示词（只读约束 + 流程指引） |
 | FR-1.8 | 重入时先读已有 plan 文件，判断是新任务覆盖还是同一任务迭代 |
 
 ### FR-2: Brainstorming 流程
@@ -172,7 +172,7 @@ Plan mode 填补这个空白：融合 brainstorming（需求探索）+ writing-p
 **中等复杂度**。核心机制（状态管理、compact、goal API）在 coding-workflow 中已有成熟实现可参考。主要新增工作：
 1. Plan tool 的 5 个 action handler
 2. 模板系统（5 内置 + 自定义发现）
-3. SKILL.md 提示词（brainstorming + writing 流程融合）
+3. command.ts 内联提示词（brainstorming + writing 流程融合）
 4. session_before_compact / session_before_tree handler
 
 无数据库、无网络、无复杂算法。风险集中在提示词质量和跨 extension API 调用的稳定性。

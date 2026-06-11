@@ -107,12 +107,30 @@ export function registerPlanCommand(
       persistPlanState(pi, state);
       updatePlanWidget(ctx, state);
 
-      // Inject skill context
+      // Inject plan mode system prompt inline (no separate SKILL.md)
       pi.sendUserMessage(
         `[PLAN MODE] Entered plan mode.\n\n` +
         `Requirement: ${trimmed || "(from conversation context)"}\n` +
         `Plan file: ${planFilePath}\n\n` +
-        `Follow the plan-mode skill instructions to begin brainstorming.`,
+        `## Constraints\n` +
+        `- READ-ONLY: Do NOT edit any files except the plan file (${planFilePath}).\n` +
+        `- Do NOT run write commands (mkdir, echo, sed, etc.) on non-plan files.\n` +
+        `- All plan content goes to the plan file only.\n\n` +
+        `## Phase B: Brainstorming\n` +
+        `1. **Quick Overview**: ls project root, read README, package.json — build context (< 30s).\n` +
+        `2. **Explore before asking**: grep/read code first. Only ask user for preferences, not code-fact questions.\n` +
+        `3. **Progressive questioning**: Ask 2-3 questions at a time. Use ask_user tool if available.\n` +
+        `4. **Propose 2-3 approaches** with trade-offs + recommendation.\n` +
+        `5. **Assumption audit**: Grep-verify interfaces/types exist. Mark [UNVERIFIED] what can't be verified.\n\n` +
+        `## Phase C: Writing\n` +
+        `1. Call plan tool (list-template) to show available templates.\n` +
+        `2. After user selects template, call plan tool (select-template).\n` +
+        `3. Write chapters in template order — do NOT skip unwritten chapters.\n` +
+        `4. Write all chapters in one turn, then ask user to review.\n\n` +
+        `## Phase D: Completion\n` +
+        `1. Ask user to review the complete plan.\n` +
+        `2. Call plan tool (complete) with isolation method (compact/tree/direct).\n` +
+        `3. After plan complete: check subagent capability → suggest goal + wave or single-agent execution.`,
       );
     },
   });

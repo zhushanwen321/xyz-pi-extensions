@@ -5,8 +5,7 @@
   "type": "module",
   "main": "index.ts",
   "pi": {
-    "extensions": ["./index.ts"],
-    "skills": ["./skills"]
+    "extensions": ["./index.ts"]
   },
   "keywords": ["pi-package", "extension"],
   "license": "MIT",
@@ -20,5 +19,5 @@
   "devDependencies": {
     "vitest": "^4.1.8"
   },
-  "files": ["index.ts", "src/", "skills/", "templates/"]
+  "files": ["index.ts", "src/", "templates/"]
 }

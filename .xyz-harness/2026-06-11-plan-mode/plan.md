@@ -9,7 +9,7 @@ complexity: L1
 
 **Goal:** 实现一个轻量级 Plan Mode 扩展，融合 brainstorming + writing-plans 能力，通过 `/plan` 命令触发，产出临时 plan 文件，退出后可衔接 goal 工具执行。
 
-**Architecture:** 新建 `extensions/plan/` 包（`@zhushanwen/pi-plan`），包含 plan tool（5 个 action）、`/plan` command、SKILL.md 提示词、模板系统。**状态存储在 `ctx.sessionManager`（per-session 隔离）**，不用闭包变量缓存。上下文隔离通过 `ctx.compact()` 实现，Goal API 通过 `pi.__goalInit` 调用。
+**Architecture:** 新建 `extensions/plan/` 包（`@zhushanwen/pi-plan`），包含 plan tool（5 个 action）、`/plan` command（内联 plan mode 提示词）、模板系统。**状态存储在 `ctx.sessionManager`（per-session 隔离）**，不用闭包变量缓存。上下文隔离通过 `ctx.compact()` 实现，Goal API 通过 `pi.__goalInit` 调用。
 
 **Tech Stack:** TypeScript, Pi Extension API, typebox, pi-tui (Text)
 
@@ -35,7 +35,6 @@ complexity: L1
 | `extensions/plan/src/templates.ts` | create | BG1 | 模板发现 + 加载逻辑 |
 | `extensions/plan/src/compact.ts` | create | BG2 | compact/tree handler + steer 注入 |
 | `extensions/plan/src/widget.ts` | create | BG1 | TUI 状态栏渲染 |
-| `extensions/plan/skills/plan-mode/SKILL.md` | create | BG2 | Plan mode 系统提示词 |
 | `extensions/plan/templates/*.md` | create | BG2 | 5 个内置模板文件 |
 | `extensions/plan/src/__tests__/state.test.ts` | create | BG1 | 状态管理测试 |
 | `extensions/plan/src/__tests__/templates.test.ts` | create | BG1 | 模板系统测试 |
@@ -122,9 +121,9 @@ complexity: L1
 | Spec AC | Interface Method | Data Flow | Task |
 |---------|-----------------|-----------|------|
 | AC-1 | executePlanTool(action="start") | /plan command → executePlanTool | Task 3, 4 |
-| AC-2 | — | SKILL.md 提示词约束 | Task 7 |
-| AC-3 | — | SKILL.md 提示词约束 | Task 7 |
-| AC-4 | — | SKILL.md 提示词约束 | Task 7 |
+| AC-2 | — | command 内联提示词约束 | Task 4 |
+| AC-3 | — | command 内联提示词约束 | Task 4 |
+| AC-4 | — | command 内联提示词约束 | Task 4 |
 | AC-5 | loadTemplate() | templates → write | Task 5 |
 | AC-6 | executePlanTool(action="abort") | /plan abort → executePlanTool | Task 4 |
 | AC-7 | handlePlanComplete(isolation="compact") | complete → compact → steer | Task 6 |
@@ -138,9 +137,9 @@ complexity: L1
 | Spec 指标 | 采纳状态 | 对应 Task |
 |-----------|---------|----------|
 | AC-1 进入 plan mode | adopted | Task 3, 4 |
-| AC-2 先探索再提问 | adopted | Task 7 (SKILL.md) |
-| AC-3 提出 2-3 方案 | adopted | Task 7 (SKILL.md) |
-| AC-4 按章节顺序填写 | adopted | Task 7 (SKILL.md) |
+| AC-2 先探索再提问 | adopted | Task 4 (command 内联提示词) |
+| AC-3 提出 2-3 方案 | adopted | Task 4 (command 内联提示词) |
+| AC-4 按章节顺序填写 | adopted | Task 4 (command 内联提示词) |
 | AC-5 Plan 文件格式正确 | adopted | Task 5 |
 | AC-6 abort 可取消 | adopted | Task 4 |
 | AC-7 compact 成功时读取 plan | adopted | Task 6 |
@@ -217,9 +216,9 @@ complexity: L1
 
 #### BG2: Compact + SKILL
 
-**Description:** compact/tree handler、steer 注入、SKILL.md。templates.ts 和 widget.ts 已移至 BG1，compact.ts 通过 dynamic import 被 BG1 的 tool.ts 调用。
+**Description:** compact/tree handler、steer 注入。templates.ts 和 widget.ts 已移至 BG1，compact.ts 通过 dynamic import 被 BG1 的 tool.ts 调用。
 
-**Tasks:** Task 6, Task 7
+**Tasks:** Task 6
 
 **Files (预估):** 8 个文件（8 create）
 
@@ -231,23 +230,14 @@ complexity: L1
 | Model | taskComplexity: medium |
 | 注入上下文 | Task 描述 + spec FR-5, FR-6 + coding-workflow compact 参考 |
 | 读取文件 | extensions/coding-workflow/lib/tool-handlers.ts (compact 逻辑) |
-| 修改/创建文件 | extensions/plan/src/compact.ts, extensions/plan/skills/*, extensions/plan/templates/* |
+| 修改/创建文件 | extensions/plan/src/compact.ts, extensions/plan/templates/* |
 
 **Execution Flow (BG2 内部):** 串行派遣
-
-  Task 5:
-    1. general-purpose → 写失败测试
-    2. general-purpose → 写实现代码
-    3. general-purpose → spec 合规检查
 
   Task 6 (depends on Task 5):
     1. general-purpose → 写失败测试
     2. general-purpose → 写实现代码
     3. general-purpose → spec 合规检查
-
-  Task 7 (depends on Task 5, Task 6):
-    1. general-purpose → 写 SKILL.md + widget
-    2. general-purpose → spec 合规检查
 
 **Dependencies:** BG1
 
@@ -263,7 +253,7 @@ BG0 (项目同步) ──→ BG1 (核心状态) ──→ BG2 (模板+Compact+TU
 |------|--------|------|
 | Wave 1 | BG0 | 项目结构同步，无依赖 |
 | Wave 2 | BG1 | 核心状态管理，依赖 BG0 |
-| Wave 3 | BG2 | 模板+Compact+TUI+SKILL，依赖 BG1 |
+| Wave 3 | BG2 | Compact + 模板，依赖 BG1 |
 
 ---
 
@@ -499,7 +489,7 @@ export function reconstructPlanState(ctx: ExtensionContext): PlanState {
   "devDependencies": {
     "vitest": "^4.1.8"
   },
-  "files": ["index.ts", "src/", "skills/", "templates/"]
+  "files": ["index.ts", "src/", "templates/"]
 }
 ```
 
@@ -1441,89 +1431,6 @@ export function handlePlanComplete(
 ```bash
 git add extensions/plan/src/compact.ts
 git commit -m "feat(plan): add compact handler with proper error signature and tree case fix"
-```
-
-### Task 7: SKILL.md 系统提示词
-
-**Type:** backend
-
-**Files:**
-- Create: `extensions/plan/skills/plan-mode/SKILL.md`
-
-- [ ] **Step 1: Create SKILL.md**
-
-```markdown
----
-name: plan-mode
-description: "Plan mode system prompt for brainstorming and writing implementation plans."
----
-
-# Plan Mode
-
-You are in **Plan Mode**. Follow these instructions strictly.
-
-## Constraints
-
-- **READ-ONLY**: Do NOT edit any files except the plan file. Do NOT run write commands.
-- **Plan file only**: All writing goes to the plan file at `{planFilePath}`.
-
-## Phase B: Brainstorming
-
-### B1: Quick Overview
-- `ls` project root, read README, package.json
-- Build basic context (< 30 seconds)
-
-### B2: Progressive Questioning
-- Ask 2-3 questions at a time
-- **Use `ask_user` tool** (from pi-ask-user) when available for structured questions
-- Explore code first (grep/read) before asking user
-- Distinguish: explorable (code can answer) vs user-preference (ask user)
-
-### B3: Propose Approaches
-- Propose 2-3 approaches with trade-offs
-- Give recommendation with reasoning
-
-### B4: Assumption Audit
-- Extract assumptions from design
-- Grep-verify interfaces/types exist
-- Mark unverified assumptions as `[UNVERIFIED]`
-
-## Phase C: Writing
-
-### Template Selection
-1. Call `plan` tool (list-template) to show available templates
-2. User selects template
-3. Call `plan` tool (select-template) to load
-
-### Chapter Writing
-- Write chapters in order (follow template section sequence)
-- Do NOT skip unwritten chapters
-- Can go back to edit previous chapters
-- Write all chapters in one turn, then ask user to review
-
-## Phase D: Completion
-
-### D1: User Review
-- Ask user to review the complete plan
-- If changes requested, modify and re-present
-
-### D2: Context Isolation
-- Call `plan` tool (complete) with isolation method
-- Options: compact (recommended), tree, direct
-
-### D3: Implementation Handoff
-After plan complete:
-1. **Check subagent capability**: Look for `subagent` tool in registered tools
-2. **If subagent available**: Suggest starting goal + wave parallel execution
-3. **If no subagent**: Suggest single-agent phased execution
-4. **Read plan file** and propose execution strategy based on plan content
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add extensions/plan/skills/plan-mode/SKILL.md
-git commit -m "feat(plan): add SKILL.md with ask_user, subagent detection, and implementation handoff"
 ```
 
 ---
