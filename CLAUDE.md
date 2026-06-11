@@ -21,7 +21,8 @@ xyz-pi-extensions/
 │   ├── unified-hooks/       → @zhushanwen/pi-unified-hooks
 │   ├── workflow/            → @zhushanwen/pi-workflow
 │   ├── model-switch/        → @zhushanwen/pi-model-switch
-│   └── turn-timing/         → @zhushanwen/pi-turn-timing
+│   ├── turn-timing/         → @zhushanwen/pi-turn-timing
+│   └── plan/                → @zhushanwen/pi-plan
 ├── shared/                      # 内部共享包（private，不独立发布）
 │   ├── quota-providers/     → @zhushanwen/pi-quota-providers
 │   ├── taste-lint/          → @zhushanwen/pi-taste-lint
@@ -751,6 +752,7 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `extensions/workflow/` | `@zhushanwen/pi-workflow` | 通用 DAG 执行引擎 | — |
 | `extensions/model-switch/` | `@zhushanwen/pi-model-switch` | 模型切换 | — |
 | `extensions/turn-timing/` | `@zhushanwen/pi-turn-timing` | Turn 各阶段耗时记录 | — |
+| `extensions/plan/` | `@zhushanwen/pi-plan` | 轻量级 Plan Mode（brainstorming + writing-plans） | plan-mode |
 
 **`shared/`** — 内部共享包（private）
 
