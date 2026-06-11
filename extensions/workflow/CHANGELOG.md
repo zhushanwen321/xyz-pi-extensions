@@ -1,5 +1,17 @@
 # @zhushanwen/pi-workflow
 
+## 1.1.0
+
+### Minor Changes
+
+- feat(workflow): CC compat, structured output reliability, fullscreen TUI view, domain refactor
+
+  - Claude Code format compatibility (outputSchema → schema mapping)
+  - Structured output reliability with conditional activation
+  - Fullscreen TUI view with three-level navigation (phase → agent → detail)
+  - Domain layer architecture refactor (domain/engine/infra/interface)
+  - 65 new tests (284 → 349), 21 code review fixes
+
 ## 1.0.1
 
 ### Patch Changes
