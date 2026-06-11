@@ -1,35 +1,37 @@
+import * as fs from "node:fs";
+
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+
 import type { PlanSessionMap, PlanState } from "./state.js";
 import { getPlanState } from "./state.js";
-import * as fs from "node:fs";
 
 export function registerPlanEventHandlers(
   pi: ExtensionAPI,
   sessions: PlanSessionMap,
 ): void {
   // session_before_compact: customize compaction summary with plan content
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (pi as any).on("session_before_compact", async (event: { preparation?: { firstKeptEntryId?: string; tokensBefore?: number } }, ctx: ExtensionContext) => {
+  pi.on("session_before_compact", async (event: { preparation?: { firstKeptEntryId?: string; tokensBefore?: number } }, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     const state = getPlanState(sessions, sessionId, ctx);
-    if (!state.isActive || state.phase !== "complete") return {};
+    if (!state.isActive) return {};
 
-    const prep = (event as { preparation?: { firstKeptEntryId?: string; tokensBefore?: number } })?.preparation;
+    const prep = event?.preparation;
 
     // Read plan file content for recovery after compact
-    let planContent = "";
-    try {
-      planContent = fs.readFileSync(state.planFilePath, "utf-8");
-    } catch {
-      planContent = "(plan file could not be read)";
-    }
+    const planContent = readPlanFileSafe(state.planFilePath);
+
+    // Include phase info for non-complete phases
+    const phaseNote = state.phase !== "complete"
+      ? `\nPhase: ${state.phase}. Plan was in progress — review and continue.`
+      : "\nAwaiting user decision on execution. Do NOT auto-proceed.";
 
     return {
       compaction: {
         summary:
-          `Plan mode completed. Plan file: ${state.planFilePath}\n\n` +
+          `Plan mode active (${state.phase}). Plan file: ${state.planFilePath}\n\n` +
           `## Plan Content\n${planContent}\n\n` +
-          `Awaiting user decision on execution. Do NOT auto-proceed.`,
+          `Requirement: ${state.requirement}` +
+          phaseNote,
         firstKeptEntryId: prep?.firstKeptEntryId,
         tokensBefore: prep?.tokensBefore,
       },
@@ -37,26 +39,44 @@ export function registerPlanEventHandlers(
   });
 
   // session_before_tree: customize tree summary with plan content
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (pi as any).on("session_before_tree", async (_event: unknown, ctx: ExtensionContext) => {
+  pi.on("session_before_tree", async (_event: unknown, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     const state = getPlanState(sessions, sessionId, ctx);
-    if (!state.isActive || state.phase !== "complete") return {};
+    if (!state.isActive) return {};
 
-    let planContent = "";
-    try {
-      planContent = fs.readFileSync(state.planFilePath, "utf-8");
-    } catch {
-      planContent = "(plan file could not be read)";
-    }
+    const planContent = readPlanFileSafe(state.planFilePath);
 
     return {
       summary:
-        `Plan mode completed. Plan file: ${state.planFilePath}\n\n` +
+        `Plan mode active (${state.phase}). Plan file: ${state.planFilePath}\n\n` +
         `## Plan Content\n${planContent}\n\n` +
         `Read the plan file and execute the implementation.`,
     };
   });
+}
+
+/** Read plan file, return content or error message */
+function readPlanFileSafe(planFilePath: string): string {
+  try {
+    return fs.readFileSync(planFilePath, "utf-8");
+  } catch {
+    return "(plan file could not be read)";
+  }
+}
+
+/** Detect whether subagent capability is available */
+function detectSubagentCapability(pi: ExtensionAPI): boolean {
+  try {
+    const api = pi as unknown as Record<string, unknown>;
+    // Check if pi-subagents package registers a subagent tool
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tools = (api as any)._registeredTools as Map<string, unknown> | undefined;
+    if (tools && tools.has("subagent")) return true;
+    // Fallback: check __goalInit presence as proxy for goal extension
+    return typeof api.__goalInit === "function";
+  } catch {
+    return false;
+  }
 }
 
 /** Try to initialize goal via programming interface */
@@ -72,13 +92,8 @@ function tryGoalInit(pi: ExtensionAPI, planFilePath: string): boolean {
     const goalInit = api.__goalInit as GoalInitFn | undefined;
     if (typeof goalInit !== "function") return false;
 
-    // Read plan file and extract steps from "## 实现步骤" or "## 实施步骤" section
-    let planContent = "";
-    try {
-      planContent = fs.readFileSync(planFilePath, "utf-8");
-    } catch {
-      return false;
-    }
+    const planContent = readPlanFileSafe(planFilePath);
+    if (planContent.startsWith("(")) return false; // read failed
 
     const objective = `Execute plan: ${planFilePath}`;
     const tasks = extractPlanSteps(planContent);
@@ -114,17 +129,28 @@ export function extractPlanSteps(planContent: string): string[] {
     }
   }
 
-  // Fallback: if no steps section found, look for any numbered items
+  // Fallback: if no steps section found, look for any numbered items (limit MAX_FALLBACK_STEPS)
+  const MAX_FALLBACK_STEPS = 10;
   if (steps.length === 0) {
     for (const line of planContent.split("\n")) {
       const match = line.match(/^\s*\d+\.\s+(.+)/);
       if (match && match[1].trim()) {
         steps.push(match[1].trim());
+        if (steps.length >= MAX_FALLBACK_STEPS) break;
       }
     }
   }
 
   return steps;
+}
+
+/** Build execution suggestion based on subagent availability */
+function buildExecutionSuggestion(pi: ExtensionAPI): string {
+  const hasSubagent = detectSubagentCapability(pi);
+  if (hasSubagent) {
+    return "Subagent capability detected. Suggest starting goal + wave parallel development for multi-file tasks.";
+  }
+  return "No subagent capability detected. Suggest single-agent step-by-step execution.";
 }
 
 export function handlePlanComplete(
@@ -134,10 +160,12 @@ export function handlePlanComplete(
   isolation: string,
 ): void {
   const planFilePath = state.planFilePath;
+  const execSuggestion = buildExecutionSuggestion(pi);
 
   const executeMessage =
     `Plan approved by user. Plan file: ${planFilePath}\n\n` +
-    `Read the plan file and start implementing.`;
+    `Read the plan file and start implementing.\n` +
+    execSuggestion;
 
   switch (isolation) {
     case "compact": {

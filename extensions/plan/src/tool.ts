@@ -1,12 +1,16 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
-import { StringEnum } from "@mariozechner/pi-ai";
-import type { PlanSessionMap } from "./state.js";
-import { getPlanState, persistPlanState } from "./state.js";
-import { listTemplates, loadTemplate } from "./templates.js";
-import { updatePlanWidget } from "./widget.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+
+import { StringEnum } from "@mariozechner/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
+
+import type { PlanSessionMap } from "./state.js";
+import { getPlanState, persistPlanState, resetPlanState } from "./state.js";
+import { listTemplates, loadTemplate } from "./templates.js";
+import { updatePlanWidget } from "./widget.js";
+
+const JSON_INDENT = 2;
 
 export const PLAN_ACTIONS = [
   "list-template",
@@ -22,19 +26,23 @@ export function validateAction(action: string): action is PlanAction {
   return (PLAN_ACTIONS as readonly string[]).includes(action);
 }
 
+/** Restore the default full tool set after exiting plan mode. */
+function restoreFullToolSet(pi: ExtensionAPI): void {
+  pi.setActiveTools(undefined);
+}
+
 export function registerPlanTool(
   pi: ExtensionAPI,
   sessions: PlanSessionMap,
 ): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (pi as any).registerTool({
+  pi.registerTool({
     name: "plan",
     label: "Plan Mode",
     description:
       "Plan mode tool for brainstorming and writing implementation plans. " +
       "Actions: list-template, select-template, create-template, complete, abort.",
     parameters: Type.Object({
-      action: Type.String({ description: "Action to perform" }),
+      action: StringEnum(PLAN_ACTIONS, { description: "Action to perform" }),
       templateName: Type.Optional(Type.String({ description: "Template name (for select-template)" })),
       templateContent: Type.Optional(Type.String({ description: "Template content (for create-template)" })),
       isolation: Type.Optional(StringEnum(["compact", "tree", "direct"])),
@@ -54,12 +62,13 @@ export function registerPlanTool(
 
       const sessionId = ctx.sessionManager.getSessionId();
       const state = getPlanState(sessions, sessionId, ctx);
+      const projectDir = ctx.cwd;
 
       switch (action) {
         case "list-template": {
-          const templates = listTemplates();
+          const templates = listTemplates(projectDir);
           return {
-            content: [{ type: "text" as const, text: JSON.stringify(templates, null, 2) }],
+            content: [{ type: "text" as const, text: JSON.stringify(templates, null, JSON_INDENT) }],
             details: { action, templates },
           };
         }
@@ -69,7 +78,7 @@ export function registerPlanTool(
           if (!templateName) {
             throw new Error("templateName is required for select-template");
           }
-          const content = loadTemplate(templateName);
+          const content = loadTemplate(templateName, projectDir);
           if (!content) {
             throw new Error(`Template not found: ${templateName}`);
           }
@@ -92,7 +101,6 @@ export function registerPlanTool(
           if (!sanitizedName) {
             throw new Error("Invalid template name: must contain alphanumeric characters");
           }
-          const projectDir = process.cwd();
           const templateDir = path.join(projectDir, ".pi", "plan-templates");
           fs.mkdirSync(templateDir, { recursive: true });
           fs.writeFileSync(path.join(templateDir, `${sanitizedName}.md`), templateContent);
@@ -121,10 +129,9 @@ export function registerPlanTool(
           persistPlanState(pi, state);
 
           // Restore full tool set before execution
-          pi.setActiveTools(["read", "bash", "edit", "write"]);
+          restoreFullToolSet(pi);
 
           const isolation = (params.isolation as string) ?? "direct";
-          // Dynamic import: compact.ts is in BG2, tool.ts is in BG1
           const { handlePlanComplete } = await import("./compact.js");
           handlePlanComplete(pi, ctx, state, isolation);
           return {
@@ -134,16 +141,9 @@ export function registerPlanTool(
         }
 
         case "abort": {
-          state.isActive = false;
-          state.phase = "idle";
-          state.planFilePath = "";
-          state.requirement = "";
-          state.templateName = "";
-          persistPlanState(pi, state);
-          sessions.delete(sessionId);
-          updatePlanWidget(ctx, state);
-          // Restore full tool set
-          pi.setActiveTools(["read", "bash", "edit", "write"]);
+          const updatedState = resetPlanState(pi, sessions, sessionId, ctx);
+          updatePlanWidget(ctx, updatedState);
+          restoreFullToolSet(pi);
           return {
             content: [{ type: "text" as const, text: "Plan mode aborted. Full tool access restored." }],
             details: { action },

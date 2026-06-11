@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+
 import type { PlanState } from "./state.js";
 
 export function updatePlanWidget(ctx: ExtensionContext, state: PlanState): void {

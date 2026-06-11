@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext, CustomEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
+import type { CustomEntry, ExtensionAPI, ExtensionContext, SessionEntry } from "@mariozechner/pi-coding-agent";
 
 export type PlanPhase = "idle" | "brainstorming" | "writing" | "complete";
 
@@ -46,6 +46,24 @@ export function persistPlanState(pi: ExtensionAPI, state: PlanState): void {
     requirement: state.requirement,
     templateName: state.templateName,
   });
+}
+
+/** Reset plan state to idle, persist, and clean up session cache. */
+export function resetPlanState(
+  pi: ExtensionAPI,
+  sessions: PlanSessionMap,
+  sessionId: string,
+  ctx: ExtensionContext,
+): PlanState {
+  const state = getPlanState(sessions, sessionId, ctx);
+  state.isActive = false;
+  state.phase = "idle";
+  state.planFilePath = "";
+  state.requirement = "";
+  state.templateName = "";
+  persistPlanState(pi, state);
+  sessions.delete(sessionId);
+  return state;
 }
 
 function isPlanStateEntry(entry: SessionEntry): entry is CustomEntry<Partial<PlanState>> & { customType: "plan-state" } {

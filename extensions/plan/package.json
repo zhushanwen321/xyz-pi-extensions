@@ -10,7 +10,12 @@
   "keywords": ["pi-package", "extension"],
   "license": "MIT",
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": ">=0.73.0"
+    "@mariozechner/pi-coding-agent": ">=0.73.0",
+    "@sinclair/typebox": "*",
+    "@mariozechner/pi-ai": "*"
+  },
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-ai": { "optional": true }
   },
   "scripts": {
     "typecheck": "npx tsc --noEmit",
