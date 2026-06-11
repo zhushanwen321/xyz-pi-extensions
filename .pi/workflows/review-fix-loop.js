@@ -1,14 +1,53 @@
 const meta = {
   name: "review-fix-loop",
-  description: "Review-fix loop: code-review → fix → re-review until clean or max rounds",
+  description: "Review-fix loop: parallel review (5 agents) → aggregate → fix → re-review until clean or max rounds",
   phases: [
-    { title: "Review", detail: "Run code-review skill and produce structured report" },
-    { title: "Fix", detail: "Fix all must-fix issues from review report" },
+    { title: "Scan", detail: "Optional fallow static analysis pre-scan" },
+    { title: "Review", detail: "Run 5 parallel review agents + aggregate into unified report" },
+    { title: "Fix", detail: "Fix all must-fix issues from aggregated review report" },
   ],
 };
 
+// ── Shared schema for all 5 review agents ──────────────────────────
+
+const reviewerSchema = {
+  type: "object",
+  properties: {
+    reportPath: { type: "string", description: "Absolute path to the review report file" },
+    mustFix: { type: "number", description: "Number of must-fix issues found" },
+    suggestions: { type: "number", description: "Number of suggestions found" },
+    summary: { type: "string", description: "Brief summary of findings" },
+  },
+  required: ["reportPath", "mustFix"],
+};
+
+const aggregatorSchema = {
+  type: "object",
+  properties: {
+    aggregatedJson: { type: "string", description: "Path to aggregated.json" },
+    aggregatedMd: { type: "string", description: "Path to aggregated.md" },
+    mustFix: { type: "number", description: "Total must-fix count after dedup" },
+    suggestions: { type: "number", description: "Total suggestions count after dedup" },
+    summary: { type: "string", description: "Brief summary of aggregated findings" },
+  },
+  required: ["aggregatedMd", "mustFix"],
+};
+
+// ── Helpers ────────────────────────────────────────────────────────
+
+function parseResult(raw) {
+  if (typeof raw === "object" && raw !== null) return raw;
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw); } catch { /* fall through */ }
+  }
+  return null;
+}
+
+// ── Main Loop ──────────────────────────────────────────────────────
+
 const MAX = $ARGS.maxRounds ?? 10;
 const STUCK_THRESHOLD = 3;
+const SKIP_FALLOW = $ARGS.skipFallow ?? false;
 let totalFixed = 0;
 let round = 0;
 let clean = false;
@@ -17,62 +56,161 @@ let clean = false;
 let stuckCount = 0;
 let prevTotal = -1;
 
+// Optional fallow scan (once before first round)
+let fallowSummary = "";
+if (!SKIP_FALLOW) {
+  phase("Scan");
+  try {
+    const fallowRaw = await agent({
+      prompt: [
+        "Fallow pre-scan for review-fix-loop.",
+        "",
+        "Steps:",
+        "1. Check if fallow is installed: `which fallow`",
+        "2. If installed, run: `fallow audit --base main --format json --quiet`",
+        "3. Extract: complexity hotspots (>80 lines / >15 cyclomatic), dead code, unused exports, circular deps",
+        "4. Write summary to /tmp/review-fix-loop/fallow-scan.md",
+        "5. If fallow not installed, write a one-line note and skip",
+        "",
+        "Return JSON with the scan summary.",
+      ].join("\n"),
+      schema: {
+        type: "object",
+        properties: {
+          reportPath: { type: "string" },
+          summary: { type: "string" },
+        },
+      },
+      description: "fallow-prescan",
+    });
+    const fallowResult = parseResult(fallowRaw);
+    if (fallowResult && fallowResult.summary) {
+      fallowSummary = fallowResult.summary;
+      log("Fallow scan complete: " + fallowSummary);
+    }
+  } catch {
+    log("Fallow scan skipped (error or not installed).");
+  }
+}
+
 while (round < MAX) {
   round++;
   log(`--- Round ${round}/${MAX} ---`);
 
-  // ── Phase 1: Review ──────────────────────────────────
+  // ── Phase: Review (parallel 5 agents + aggregate) ────────
   phase("Review");
-  const reportPath = `/tmp/review-fix-loop/report-${round}.md`;
+  const roundDir = `/tmp/review-fix-loop/round-${round}`;
 
-  const rv = await agent({
+  // Launch 5 parallel review agents
+  const reviewResults = await parallel([
+    {
+      prompt: [
+        `Round ${round}/${MAX} — BUSINESS LOGIC REVIEW`,
+        "",
+        "Review `git diff main...HEAD` for all changes against main.",
+        "Focus: business logic correctness, boundary conditions, regression risk.",
+        "Write report to: " + roundDir + "/business-logic.md",
+        fallowSummary ? "Fallow pre-scan context: " + fallowSummary : "",
+      ].join("\n"),
+      agent: "review-business-logic",
+      schema: reviewerSchema,
+      description: `review-bl-round-${round}`,
+    },
+    {
+      prompt: [
+        `Round ${round}/${MAX} — MONOREPO IMPACT REVIEW`,
+        "",
+        "Review `git diff main...HEAD` for all changes against main.",
+        "Focus: workspace deps, circular deps, public API changes, extension-dependencies.json.",
+        "Write report to: " + roundDir + "/monorepo-impact.md",
+      ].join("\n"),
+      agent: "review-monorepo-impact",
+      schema: reviewerSchema,
+      description: `review-mono-round-${round}`,
+    },
+    {
+      prompt: [
+        `Round ${round}/${MAX} — TYPE SAFETY REVIEW`,
+        "",
+        "Review `git diff main...HEAD` for all changes against main.",
+        "Focus: complete type annotations, no `any`, use `unknown` or concrete types, run tsc.",
+        "Write report to: " + roundDir + "/type-safety.md",
+      ].join("\n"),
+      agent: "review-type-safety",
+      schema: reviewerSchema,
+      description: `review-types-round-${round}`,
+    },
+    {
+      prompt: [
+        `Round ${round}/${MAX} — EXTENSION API REVIEW`,
+        "",
+        "Review `git diff main...HEAD` for all changes against main.",
+        "Focus: tool/command schema completeness, Pi manifest, backward compat, resource containment.",
+        "Write report to: " + roundDir + "/extension-api.md",
+      ].join("\n"),
+      agent: "review-extension-api",
+      schema: reviewerSchema,
+      description: `review-ext-round-${round}`,
+    },
+    {
+      prompt: [
+        `Round ${round}/${MAX} — TEST COVERAGE REVIEW`,
+        "",
+        "Review `git diff main...HEAD` for all changes against main.",
+        "Focus: tests for new logic, edge case coverage, vitest framework compliance.",
+        "Write report to: " + roundDir + "/test-coverage.md",
+      ].join("\n"),
+      agent: "review-test-coverage",
+      schema: reviewerSchema,
+      description: `review-test-round-${round}`,
+    },
+  ]);
+
+  // Parse results, filter out failed agents
+  const parsedReviews = reviewResults.map(parseResult).filter(Boolean);
+  log(`Completed ${parsedReviews.length}/5 review agents.`);
+
+  // ── Aggregate ────────────────────────────────────────────
+  const agg = await agent({
     prompt: [
-      `Round ${round}/${MAX} — CODE REVIEW`,
+      `Round ${round}/${MAX} — AGGREGATE REVIEWS`,
       "",
-      "Review `git diff main...HEAD` for all changes against main.",
+      "Merge all sub-review results into a unified report.",
+      "",
+      "reviewResults: " + JSON.stringify(parsedReviews),
+      "outputDir: " + roundDir,
+      "round: " + round,
       "",
       "Steps:",
-      "1. Execute a full code review (business logic, types, error handling, tests, code quality)",
-      "2. Classify each finding as must-fix or suggestion",
-      "3. Write the complete review report to " + reportPath,
-      "   The report MUST contain:",
-      '   - Title: "# Review Report — Round ' + round + '"',
-      "   - A Summary section with the must-fix count and suggestion count",
-      "   - Each finding: file path, line range, description, severity",
+      "1. Read each reportPath from reviewResults",
+      "2. Deduplicate overlapping findings by (file, line, description)",
+      "3. Merge statistics across dimensions",
+      "4. Write " + roundDir + "/aggregated.json (structured) and " + roundDir + "/aggregated.md (human-readable)",
       "",
-      "If no issues found, write a report saying \"No issues found\" and set counts to 0.",
+      "Return the aggregated JSON output.",
     ].join("\n"),
-    schema: {
-      type: "object",
-      properties: {
-        reportPath: { type: "string", description: "Absolute path to the review report file" },
-        mustFix: { type: "number", description: "Number of must-fix issues found" },
-        suggestions: { type: "number", description: "Number of suggestions found" },
-        summary: { type: "string", description: "Brief summary of findings" },
-      },
-      required: ["reportPath", "mustFix"],
-    },
-    description: `review-round-${round}`,
-    skill: "code-review",
+    agent: "review-aggregator",
+    schema: aggregatorSchema,
+    description: `aggregate-round-${round}`,
   });
 
-  if (!rv) {
-    log("Review agent returned nothing, stopping.");
+  if (!agg) {
+    log("Aggregator returned nothing, stopping.");
     break;
   }
 
-  const mustFix = rv.mustFix;
-  const suggestions = rv.suggestions ?? 0;
-  log(`Found ${mustFix} must-fix + ${suggestions} suggestion(s). Report: ${rv.reportPath}`);
+  const mustFix = agg.mustFix;
+  const suggestions = agg.suggestions ?? 0;
+  log(`Aggregated: ${mustFix} must-fix + ${suggestions} suggestion(s). Report: ${agg.aggregatedMd}`);
 
-  // ── Gate: clean? ─────────────────────────────────────
+  // ── Gate: clean? ─────────────────────────────────────────
   if (mustFix === 0) {
     clean = true;
     log("Code is clean!");
     break;
   }
 
-  // ── Stuck detection ──────────────────────────────────
+  // ── Stuck detection ──────────────────────────────────────
   const total = mustFix + suggestions;
   if (prevTotal >= 0 && total >= prevTotal) {
     stuckCount++;
@@ -85,22 +223,22 @@ while (round < MAX) {
   }
   prevTotal = total;
 
-  // ── Phase 2: Fix ─────────────────────────────────────
+  // ── Phase: Fix ───────────────────────────────────────────
   phase("Fix");
 
-  // Read report content to inline in fix prompt
+  // Read aggregated report content to inline in fix prompt
   let reportContent;
   try {
-    reportContent = require("fs").readFileSync(rv.reportPath, "utf-8");
+    reportContent = require("fs").readFileSync(agg.aggregatedMd, "utf-8");
   } catch {
-    reportContent = "(could not read report file)";
+    reportContent = "(could not read aggregated report file)";
   }
 
   const fx = await agent({
     prompt: [
-      `Fix round ${round}: Fix ALL must-fix issues from the review report below.`,
+      `Fix round ${round}: Fix ALL must-fix issues from the aggregated review report below.`,
       "",
-      "## Review Report",
+      "## Aggregated Review Report",
       reportContent,
       "",
       "## Instructions",
