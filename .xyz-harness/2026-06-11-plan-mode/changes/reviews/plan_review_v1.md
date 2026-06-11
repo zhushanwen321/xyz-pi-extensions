@@ -1,307 +1,477 @@
 ---
 verdict: fail
-must_fix: 10
+must_fix: 4
+reviewer: content-quality-reviewer
+review_mode: plan_feasibility
+date: 2026-06-11
+files_reviewed:
+  - plan.md
+  - e2e-test-plan.md
+  - test_cases_template.json
+  - use-cases.md
+  - non-functional-design.md
+  - spec.md (cross-check)
+  - plan-mode-design.md (cross-check)
 ---
 
 # Plan Review v1 — Pi Plan Mode Extension
 
-## 评审记录
+## 执行摘要
 
-- 评审时间：2026-06-11
-- 评审类型：Plan 评审（Mode 1: 验证 plan 可实施性）
-- 评审对象：`.xyz-harness/2026-06-11-plan-mode/plan.md` 及关联 e2e-test-plan.md / test_cases_template.json / use-cases.md / non-functional-design.md
-- 评审模式：独立评审（首次 plan review，前序 plan_review_v1.md 为占位文件）
-- 交叉对照：spec.md（v2 已通过）、plan-mode-design.md、extensions/coding-workflow/lib/tool-handlers.ts（compact 参考实现）、extensions/goal/src/index.ts:422（`__goalInit` 实际签名）
+本次审查针对 Phase 2 (Plan) 的 5 份 deliverable 进行 **plan feasibility** 维度的内容质量评估。整体来看，plan.md 思路清晰、覆盖面广、任务分解符合 TDD 流程，e2e-test-plan 和 use-cases 提供了基本的验证和场景锚点。但审查发现 **4 个阻断性问题** 和 **10 个改进项**，主要矛盾集中在三处：
 
-## 总体评估
+1. **plan.md 的任务依赖图与代码 import 关系不一致** — Task 3/4 引用了 Task 5/6 才创建的模块，按 plan 描述的串行依赖无法独立编译。
+2. **use-cases.md 与 design.md 严重脱节** — design.md 列出 11 个 UC，use-cases.md 仅覆盖 4 个，7 个核心场景缺失。
+3. **e2e-test-plan.md 多处场景缺乏可执行性** — AI 行为验证、Pi 多 session 模拟、compact 失败模拟等关键路径没有可落地的验证策略。
+4. **test_cases_template.json 缺少 expected_result 字段** — 18 个 test case 全部缺少期望输出，无法直接驱动自动化测试。
 
-plan.md 整体结构完整：8 个 Task、3 个 Execution Group、Spec Coverage Matrix 覆盖 AC-1~AC-11、接口契约定义了 state/tool/templates/compact 四个模块。**但 plan 在 Pi 运行时 API 假设、模块接线、spec 全量覆盖上存在多处阻塞性问题，若不修复将导致 dev 阶段产生无法工作的代码。**
+**Verdict: fail**。建议修复 MUST_FIX 后重新提交。
 
-10 项 MUST FIX 主要集中于：
-1. **Pi 运行时事件名 / API 签名错误**（3 项）— plan 引用了不存在的 Pi event 名
-2. **核心控制流未接线**（3 项）— `complete` action 不触发 `handlePlanComplete`、`/plan abort` 子命令缺失、plan-mode 重入逻辑缺失
-3. **关键 spec FR 未实现**（2 项）— subagent 能力检测、ask_user 工具使用
-4. **项目约定违反**（2 项）— `extension-dependencies.json` 未更新、`package.json` 字段与项目其他 extension 不一致
+---
 
-## MUST FIX（10 项）
+## 评估总览
 
-### M1. `session_before_compact` / `session_before_tree` 事件名错误（plan.md:1043, 1057）
+| 文件 | 评价 | 关键问题 |
+|------|------|---------|
+| plan.md | 思路清晰，但任务依赖图错误 | Task 3/4 引用 Task 5/6 模块；Task 2 描述不实 |
+| e2e-test-plan.md | 9 个场景齐全，但可执行性差 | AI 行为、session 模拟、compact 失败均缺验证策略 |
+| test_cases_template.json | 18 个 case 覆盖 11 个 AC | 缺 expected_result、priority、negative test |
+| use-cases.md | 4 个 UC，模板质量高 | 缺失 7 个 UC（design.md 列出 11 个） |
+| non-functional-design.md | 5 个维度覆盖基础 | 缺可扩展/可维护/可观测/兼容性/资源管理维度；业务安全评估错误 |
 
-**位置：** `plan.md` Task 7 `compact.ts` 中的 `pi.on("session_before_compact", ...)` 和 `pi.on("session_before_tree", ...)`
+---
 
-**严重度：** must_fix
+## MUST_FIX (4 项，阻断)
 
-**问题：** plan 引用的事件名在 Pi runtime 中**不存在**。证据：
-- `extensions/coding-workflow/index.ts:445, 452` 实际使用 `pi.on("session_start", ...)` 和 `pi.on("session_tree", ...)`，**没有 `_before_` 前缀**
-- `extensions/evolve-daily/src/index.ts:80` 实际使用 `pi.on("session_compact", ...)`，**是 `session_compact` 不是 `session_before_compact`**
-- `extensions/evolve-daily/src/detectors/compact.ts:26` 注释明确写"独立监听 pi.on('session_compact') 事件"
+### MUST_FIX-1: plan.md 任务依赖图与代码 import 关系不一致
 
-**后果：** handlers 永远不会触发，FR-5.6/5.7（自定义压缩摘要 / 注入 plan 文件路径）完全失效。
+**文件:** `plan.md`  
+**位置:** Task 3、Task 4 的代码示例；"Execution Flow (BG1 内部)" 段落
 
-**修复方向：** 把 `session_before_compact` 改为 `session_compact`；`session_before_tree` 改为 `session_tree`。但 `session_tree` 是用户**手动**触发 `/tree` 时才发生的事件，不能在 `complete` action 中自动触发；所以"tree 路径"实际上不是通过 `session_tree` handler 实现的，而是通过 `ctx.ui.notify` 提示用户手动执行（plan 已这么写），handler 只在用户后续手动 `/tree` 时生效。
+**问题描述:**
 
-### M2. `complete` action 未触发 `handlePlanComplete`（plan.md Task 6 + Task 7）
+plan.md 在 "Execution Groups → BG1" 中描述：
 
-**位置：** `plan.md` Task 6 `tool.ts` 的 `case "complete"` 块（行 985-995）和 Task 7 `compact.ts` 的 `handlePlanComplete` 函数
+> Task 3 (depends on Task 1)  
+> Task 4 (depends on Task 1, Task 2)
 
-**严重度：** must_fix
+但 Task 3 的 tool.ts 实际代码（plan.md 第 671-673 行）包含：
 
-**问题：** Task 6 的 `complete` handler 只做了三件事：设置 `phase = "complete"`、持久化、返回 "Plan complete. Switching to implementation..."。它**没有调用** Task 7 导出的 `handlePlanComplete` 函数。`handlePlanComplete` 包含三个关键能力：ask_user 选择 compact/tree/direct、调用 `ctx.compact()`、尝试 `__goalInit`——全部永远不会被执行。
+```typescript
+import { listTemplates, loadTemplate } from "./templates.js";   // Task 5 才创建
+import { handlePlanComplete } from "./compact.js";               // Task 6 才创建
+import { updatePlanWidget } from "./widget.js";                  // Task 5 才创建
+```
 
-**证据：** grep "handlePlanComplete" 全文（plan.md 内）只有一处定义（Task 7），无任何调用方。
+Task 4 的 command.ts（第 828 行）包含：
 
-**后果：** spec FR-5.1~5.8 全部失效。退出 plan mode 时：
-- 用户没有 3 选项对话框（FR-5.2）
-- 不会调用 `ctx.compact()`（FR-5.3）
-- 不会注入执行 steer（FR-5.4~5.5）
-- 不会尝试 `__goalInit`（FR-6.4 / AC-9）
+```typescript
+import { updatePlanWidget } from "./widget.js";                  // Task 5 才创建
+```
 
-**修复方向：** Task 6 的 `complete` case 应该：
-1. 通过 `ask_user` 工具（pi-ask-user 提供的 `ask_user_question`）让用户选择 a/b/c
-2. 根据选择调用 `handlePlanComplete(pi, ctx, state, isolation)`
-3. 用 `pi.sendUserMessage` 配合 `deliverAs: "steer"` 注入提示词
+Task 4 的 index.ts（第 948-951 行）包含：
 
-### M3. `ctx.compact()` 错误处理双重且 try/catch 无效（plan.md:1085-1100）
+```typescript
+import { registerPlanTool } from "./tool.js";                    // Task 3 创建
+import { registerPlanCommand } from "./command.js";              // Task 4 自身
+import { registerPlanEventHandlers } from "./compact.js";       // Task 6 才创建
+import { updatePlanWidget } from "./widget.js";                  // Task 5 才创建
+```
 
-**位置：** `plan.md` Task 7 `compact.ts` `case "compact"` 块
+**实际依赖关系（应调整 plan.md）：**
 
-**严重度：** must_fix
+```
+Task 1 (state + 包结构) ← 无依赖
+Task 5 (templates + widget) ← Task 1
+Task 6 (compact) ← Task 1, Task 5
+Task 3 (tool) ← Task 1, Task 5, Task 6
+Task 4 (command + index) ← Task 1, Task 3, Task 5, Task 6
+```
 
-**问题：** plan 用 `try { ctx.compact({...}) } catch { fallback }` 包裹调用，同时又给 `ctx.compact` 传 `onError` callback 走降级。但：
-1. `ctx.compact()` 是**同步 fire-and-forget** API（对照 `extensions/coding-workflow/lib/tool-handlers.ts:554`，无 await、无返回 Promise），try/catch 捕获不到异步 compact 失败
-2. 即使有同步异常，stack trace 上的 `ctx.compact` 也极少抛异常——它是事件触发器，错误通过 `onError` 回调报告
-3. 错误处理是**双重的**：`onError` 已经走降级，外层 try/catch 又走一次降级。如果外层 try/catch 真的触发了（理论上几乎不会），用户会收到两次 "Compact failed" 通知
+**为何必须修复:**  
+如果 subagent 按 plan.md 描述的依赖关系执行 Task 3，会发现 import 失败但无明确处理方案。`tsc --noEmit` 会因未实现的 module 报错，导致 `pnpm --filter @zhushanwen/pi-plan typecheck` 失败，pre-commit hook 阻断。subagent 会被迫在 Task 3 中临时实现 templates.ts、compact.ts、widget.ts 的 stub，但这与 Task 5/6 的实际实现会产生代码重复和冲突。
 
-**参考正确实现：** `extensions/coding-workflow/lib/tool-handlers.ts:554-590` 只用 `onError: (error: Error) => {...}`，无外层 try/catch。
+**修复建议:**
 
-**修复方向：** 删除外层 try/catch，仅保留 `onError` 回调的错误处理（与 coding-workflow 一致）。
+1. **重排任务顺序**: 将 templates、widget 提到 Task 3 之前，compact 提到 Task 4 之前。  
+2. **或: 调整 BG 分组**: 把 BG1 拆为 BG1a (state + templates + widget) + BG1b (tool + command + compact)。  
+3. **更新 "Spec Coverage Matrix"**: Task 列需反映新的依赖关系。  
+4. **更新 "Dependency Graph & Wave Schedule"**: 调整 Wave 顺序。
 
-### M4. `command.ts` 缺失 `/plan abort` 和 `/plan status` 子命令（plan.md Task 5）
+---
 
-**位置：** `plan.md` Task 5 `command.ts` 行 835-880
+### MUST_FIX-2: use-cases.md 严重缺失核心业务场景
 
-**严重度：** must_fix
+**文件:** `use-cases.md`  
+**对比文件:** `plan-mode-design.md`
 
-**问题：** 当前 `command.ts` 只识别 4 种情况：active+empty（显示状态）、active+text（警告）、inactive+text（进入 plan mode）。缺失：
-1. **FR-7.1** `/plan abort` 在任何阶段均可取消——plan 没有解析 `/plan abort`
-2. **L3 (spec_review_v1)** `/plan status` 子命令——FR-1.4 描述的 "不在 plan mode 时 `/plan` 检测已有 plan 文件" 与 "/plan status" 的语义边界未在 plan 中区分
-3. **FR-1.3** 4 选项对话框 "继续/实现/新建/取消"——plan 完全未实现
+**问题描述:**
 
-**后果：** AC-6（abort 取消）和 L3 评审改进项无法通过。`/plan abort` 是用户在 plan 中想退出的唯一主动方式，没有这个命令则只能通过 `plan` tool (abort) action 取消，UX 严重劣化。
+plan-mode-design.md（第 20-117 行）明确定义了 **11 个 UC**（UC-1 至 UC-11），涵盖：
 
-**修复方向：** 在 `command.ts` handler 的开头增加子命令解析：
-- `if (trimmed === "abort")` → 调用 abort 逻辑
-- `if (trimmed === "status")` → 显示状态
-- 其他 → 走现有的"已进入/未激活"判断
+| UC | design.md 中的描述 | use-cases.md 是否覆盖 |
+|----|---------------------|----------------------|
+| UC-1 | 新功能实现规划（核心场景） | ✅ UC-1 |
+| UC-2 | 复杂 Bug 修复规划 | ✅ UC-2 |
+| UC-3 | 重构规划 | ❌ 缺失 |
+| UC-4 | 快速方案探索（不写代码） | ✅ UC-3（命名差异） |
+| UC-5 | 已有设计文档的实现计划 | ✅ UC-4（命名差异） |
+| UC-6 | Plan 迭代修改（用户中途要求修改章节） | ❌ 缺失 |
+| UC-7 | 中途切换到 Plan Mode（对话中途输入 /plan） | ❌ 缺失 |
+| UC-8 | 取消 Plan Mode | ⚠️ 仅作为 alternative path |
+| UC-9 | 查看已有 Plan（/plan 无参数检测已有文件） | ❌ 缺失 |
+| UC-10 | Plan 完成后进入实现 | ⚠️ 仅作为 UC-1 步骤 11 |
+| UC-11 | 非代码任务规划 | ❌ 缺失 |
 
-### M5. plan-mode 重入处理未实现（FR-1.8）
+**为何必须修复:**
 
-**位置：** `plan.md` Task 5 `command.ts`
+1. **UC-6 (Plan 迭代修改)**: design.md 标注频率"高"，是核心交互模式。涉及"已写章节回头修改"逻辑（spec FR-3.4 已写完的章节可以回头修改），但 use-cases.md 没有对应场景。Phase 3 dev 阶段可能漏掉该功能。
 
-**严重度：** must_fix
+2. **UC-7 (中途切换到 Plan Mode)**: design.md 标注频率"中"，spec FR-1.8 要求"重入时先读已有 plan 文件，判断是新任务覆盖还是同一任务迭代"。当前 plan.md 在 Task 4 中实现了"检测 /tmp 下 plan-*.md 并提示用户选择"，但 use-cases 没有相应场景驱动该行为。
 
-**问题：** FR-1.8 规定"重入时先读已有 plan 文件，判断是新任务覆盖还是同一任务迭代"。Task 5 的 handler 走的是简单的 "isActive 状态判断"，没有处理 "not in plan mode + `/tmp/plan-*.md` 已存在" 的场景。当用户输入 `/plan` 不带参数时，spec 期望：
-- 扫描 `/tmp/plan-*.md`
-- 找到 1+ 个 plan 文件
-- 提示 4 选项（继续/实现/新建/取消）
-- 选"继续"时读 plan 文件并恢复到 writing 阶段
-- 选"实现"时退出 plan mode + 注入执行 steer
-- 选"新建"时覆盖旧文件（spec N5 建议明确"覆盖 vs 新 slug"）
-- 选"取消"时什么也不做
+3. **UC-9 (查看已有 Plan)**: 涉及 spec FR-1.3 重入逻辑的核心 — "若当前不在 plan mode，检测已有 plan 文件并提示用户选择（继续/实现/新建/取消）"。use-cases 缺失意味着 AC-11 多 session 隔离的子场景没有业务背书。
 
-plan.md 完全未涉及此逻辑。
+4. **UC-11 (非代码任务规划)**: design.md 列举了"会议纪要、文档结构"等非代码场景。如果 use-cases 缺失，Phase 3 可能只实现代码场景，遗漏通用规划能力。
 
-**修复方向：** 在 `command.ts` 中：
-- 当 `!state.isActive && !trimmed` 时，扫描 `/tmp/plan-*.md`
-- 如果有，使用 `ask_user` 工具呈现 4 选项（spec N5 建议给每个选项明确语义）
-- 把选中的 plan 文件路径恢复到 state.planFilePath
+**修复建议:**
 
-### M6. SKILL.md 缺失 subagent 能力检测流程（FR-6.1~6.3）
+1. 在 use-cases.md 中补充 UC-3（重构）、UC-6（迭代修改）、UC-7（中途切换）、UC-9（查看已有 Plan）、UC-10（完成后实现）、UC-11（非代码任务）。  
+2. 或者明确说明为什么缩减（哪些 UC 合并到现有 4 个中），并在每个合并后 UC 的 Alternative Paths 中列出被合并场景的差异化处理。  
+3. 更新 AC 覆盖映射表，覆盖新的 UC。
 
-**位置：** `plan.md` Task 8 `skills/plan-mode/SKILL.md`
+---
 
-**严重度：** must_fix
+### MUST_FIX-3: e2e-test-plan.md 多场景缺乏可执行性
 
-**问题：** FR-6.1~6.3 规定 AI 读取 plan 文件后应：
-- FR-6.1: 检查 pi-subagents 包是否已安装 + Pi tool 注册表是否有 subagent tool
-- FR-6.2: 有 subagent → 建议启动 goal + wave 并行开发
-- FR-6.3: 无 subagent → 建议单 agent 分阶段执行
+**文件:** `e2e-test-plan.md`  
+**位置:** TS-2、TS-3、TS-5、TS-6、TS-7、TS-9
 
-plan 的 SKILL.md（Task 8）只描述了 B1~B4（brainstorming）和 Phase C/D（writing + completion）的简化版，**完全没有 subagent 能力检测的步骤**。handlePlanComplete 的 steer message 写的是 "Check for subagent capability and suggest goal + wave execution if available"——这是给 AI 的指令，但 SKILL.md 是 AI 行为的唯一系统提示词入口；不在 SKILL.md 中详细规定，AI 大概率不会执行检测而是直接启动 goal。
+**问题描述:**
 
-**修复方向：** 在 SKILL.md 末尾添加 "Phase D3: Implementation Handoff" 章节：
-1. 读取 plan 文件
-2. 执行 subagent 检测：
-   - `ls node_modules/pi-subagents 2>/dev/null` 或 `cat package.json | grep pi-subagents`
-   - 通过 `getActiveTools()` / `getAllTools()` 检查 subagent tool 是否注册
-3. 根据检测结果给出执行建议
+多个测试场景的验证策略不明确或不可自动化：
 
-### M7. SKILL.md 缺失 ask_user 工具使用规范（FR-2.3）
+1. **TS-2 (Brainstorming 流程)** 第 2 步："验证 AI 先执行代码探索（grep/read）"  
+   - **缺失:** 怎么捕获 AI 的工具调用顺序？需要 Pi 的工具调用日志还是 hook 拦截？
 
-**位置：** `plan.md` Task 8 `skills/plan-mode/SKILL.md`
+2. **TS-2** 第 3 步："验证 AI 提问时区分探索能回答的和需要用户偏好的"  
+   - **缺失:** 怎么量化"区分"？需要 LLM-as-a-judge 吗？
 
-**严重度：** must_fix
+3. **TS-3** 第 2 步："验证 AI 按章节顺序填写"  
+   - **缺失:** plan 文件没有写入时间戳机制，靠什么判断"顺序"？
 
-**问题：** FR-2.3 规定"提问时优先使用 `ask_user` 工具（如已安装 pi-ask-user）"。plan 的 SKILL.md 写的是 "Ask 2-3 questions at a time"（B2 章节），没有任何对 `ask_user` 工具的指引。对照参考实现 `extensions/coding-workflow/skills/xyz-harness-brainstorming/SKILL.md:172` 明确说：
+4. **TS-5 (Complete + Compact)** 第 4-5 步："验证 compact 成功执行" / "验证新上下文中 AI 读取 plan 文件"  
+   - **缺失:** 怎么观测 compact 是否成功？怎么观测"新上下文"？  
+   - 需要 Pi 平台支持 session snapshot / context trace 才能验证。
 
-> **Use `ask_user` tool when available** — if `ask_user` / `ask_user_question` tool is registered (from pi-ask-user or similar extension), prefer it over plain text for structured questions.
+5. **TS-6 (Compact 失败降级)** 第 1 步："模拟 compact 失败"  
+   - **缺失:** 具体的 mock 策略是什么？需要修改 Pi 核心还是注入测试 stub？
 
-plan 应遵循相同模式。
+6. **TS-7 (Goal API 启动)** 第 1 步："确保 goal extension 已安装"  
+   - **缺失:** e2e 测试在哪个环境运行？dev 环境？CI？需要预先安装 pi-goal。
 
-**修复方向：** 在 B2 Progressive Questioning 章节加一段 "Question Tooling"：
-- 优先使用 `ask_user` / `ask_user_question` 工具
-- 备选：纯文本多选
-- 何时用哪种场景
+7. **TS-9 (多 Session 隔离)** 第 1-2 步："在 session A 进入 plan mode"  
+   - **缺失:** Pi 是否支持同时多 session？具体 API 是什么？是 `pi session new` 命令还是 extension 主动 fork？  
+   - 整个测试场景的可行性未经验证。
 
-### M8. onError 回调签名与 coding-workflow 不一致
+**为何必须修复:**
 
-**位置：** `plan.md` Task 7 `compact.ts` 行 1091-1096
+e2e-test-plan 是 Phase 4 (test) 的执行依据。如果这些测试场景的验证方法不明确，Phase 3 实现的代码可能"看起来通过"但实际不可观测。Phase 4 测试编写 subagent 会发现大量场景无法自动化，导致测试覆盖度大幅下降。
 
-**严重度：** must_fix
+**修复建议:**
 
-**问题：** plan 写的是 `onError: () => {...}`（无参数），而 coding-workflow 的参考实现是 `onError: (error: Error) => {...}`（`extensions/coding-workflow/lib/tool-handlers.ts:564`）。这导致错误信息无法传递到 fallback 路径，用户收到的只是通用的 "Compact failed" 通知，而不是具体的错误原因（"stale context", "compaction in progress" 等）。
+1. 每个 TS 增加 **"验证方法"** 段落，明确：
+   - 自动化 / 人工 / LLM judge  
+   - 工具调用日志注入方式  
+   - mock 策略（如需要）  
+2. 对 TS-5/TS-6/TS-9 标注"需要 Pi 平台支持 X 能力"，并降级为"如果在 Pi 当前版本无法验证，则跳过或转为 integration test"。  
+3. TS-9 多 session 隔离如果 Pi 暂不支持，应明确改为"通过 PlanSessionMap 单测验证 + 文档说明手动验证步骤"。
 
-**修复方向：** `onError: (error: Error) => {...}`，并把 error.message 包含在通知文本中。
+---
 
-### M9. `extension-dependencies.json` 未注册新 extension（项目约定违反）
+### MUST_FIX-4: test_cases_template.json 缺少 expected_result 字段
 
-**位置：** 根目录 `extension-dependencies.json`
+**文件:** `test_cases_template.json`  
+**影响范围:** 全部 18 个 test case
 
-**严重度：** must_fix（违反 CLAUDE.md 的 `[MANDATORY]` 条款）
+**问题描述:**
 
-**问题：** CLAUDE.md "Extension 依赖管理 [MANDATORY]" 规定：
-> 所有 extension 之间的依赖关系必须在根目录的 `extension-dependencies.json` 中声明。新增、修改、删除 extension 时必须同步更新此文件。
+当前 schema 仅有 `id`、`type`、`title`、`description`、`steps`，缺少：
 
-plan-mode 对外有 3 个依赖：
-- `@zhushanwen/pi-goal`（package 依赖，调用 `__goalInit`）
-- `pi-ask-user`（optional，使用 `ask_user` 工具）
-- `pi-subagents`（optional，subagent 能力检测）
+1. **`expected_result`** — 自动化测试需要明确期望值。例如 TC-1-01 "Enter plan mode with /plan command"，步骤是 `["Execute /plan with description", "Check state.isActive is true", ...]`，但 `isActive === true` 是隐含的，没有显式 expected_result。
 
-plan.md 完全没有 plan 更新 `extension-dependencies.json`。
+2. **`priority`** — 18 个 test case 无优先级，Phase 4 无法区分 must-pass / nice-to-have / regression-only。
 
-**修复方向：** 在 plan.md 增加一个 Task（建议作为 Task 0 / 准备工作），在 extension 初始化时同步更新 `extension-dependencies.json`，添加 `@zhushanwen/pi-plan` 条目和 3 个 `dependsOn` 记录。
+3. **`ac_coverage`** — 已有覆盖关系但分散在 steps 中没有结构化字段。
 
-### M10. `package.json` 字段与项目其他 extension 不一致
+4. **negative test case 缺失** — 全部 18 个都是 happy path。`plan.md` 中大量 `throw new Error` 路径（未知 action、模板不存在、templateName 为空等）没有对应 test case。
 
-**位置：** `plan.md` Task 1 `package.json`
+**为何必须修复:**
 
-**严重度：** must_fix
+`test_cases_template.json` 是 Phase 4 测试编写的模板。缺少 expected_result 意味着每个测试编写者要自行推断期望值，导致：
 
-**问题：** plan 的 `package.json` 与项目现有 extension（如 `extensions/goal/package.json`）不一致：
+- 同样的 AC 被不同 subagent 实现为不同测试断言  
+- 测试覆盖不一致  
+- Phase 4 gate check 难以判定"哪些 TC 必须通过"
 
-| 字段 | plan 当前值 | 项目其他 extension（如 goal） | 差异 |
-|------|----------|----------------------------|------|
-| `main` | `"index.ts"` | `"src/index.ts"` | 路径错误 |
-| `keywords` | `["pi-package"]` | `["pi-package", "extension", ...]` | 缺 "extension" |
-| `license` | 缺失 | `"MIT"` | 缺 |
-| `peerDependencies` | 缺失 | 完整声明 pi-coding-agent, pi-tui, pi-ai, typebox | 缺 |
+negative test 缺失意味着错误处理路径没有自动化覆盖，与项目"所有 throw new Error 路径必须有测试"的标准（来自 `taste-lint` 规则）不一致。
 
-**后果：** pre-commit hook 的 `pi manifest 检查`（CLAUDE.md 列出）会失败。`npm pack` 行为可能异常。
+**修复建议:**
 
-**修复方向：** 修改 plan 的 Task 1 `package.json` 示例，对齐 goal 等现有 extension 的字段。
+1. 每个 test case 增加 `expected_result` 字段（结构化对象或字符串）。  
+2. 增加 `priority` 字段（`must-pass` / `should-pass` / `regression`）。  
+3. 至少增加 6 个 negative test case：  
+   - TC-N-01: Unknown action throws error  
+   - TC-N-02: select-template with non-existent template  
+   - TC-N-03: create-template with empty templateName  
+   - TC-N-04: create-template with path traversal characters  
+   - TC-N-05: /plan abort when not in plan mode (no-op)  
+   - TC-N-06: loadTemplate with invalid project dir
 
-## LOW（信息级改进，不阻塞）
+---
 
-### L1. `complete` action 应清理 `state.templateName`
+## SHOULD_FIX (10 项，不阻断但建议修复)
 
-`state.templateName` 在 abort 时被清空（行 998-1002），但在 `complete` 时未清空。`complete` 是终止态，模板名无意义。建议在 `case "complete"` 中也 reset（虽然下次进入时会被 `state.requirement = trimmed` 重置）。
+### SHOULD_FIX-1: extension-dependencies.json 声明与代码硬依赖不一致
 
-### L2. 模板系统优先级检查应补充测试
+**文件:** `plan.md` Task 0 Step 2
 
-Task 4 的 `listTemplates` 实现正确实现了 project > global > builtin 优先级，但 templates.test.ts 的测试用例只验证 builtin 列表，没有 project 覆盖 global 的测试。`test_cases_template.json:TC-8-02` 已有此测试，但 plan.md Task 4 的 Step 1 测试代码没有覆盖。
+**问题:**
 
-### L3. 模板路径 `getBuiltinTemplateDir()` 依赖源码运行
+```json
+{
+  "name": "@zhushanwen/pi-plan",
+  "dependsOn": [
+    { "name": "@zhushanwen/pi-goal", "type": "optional" }
+  ]
+}
+```
 
-`getBuiltinTemplateDir()` 用 `path.resolve(__dirname, "..", "templates")` 定位。Pi extension 不编译（运行时由 Pi 加载 .ts），所以 `__dirname` 始终是 `extensions/plan/src/`，路径 `extensions/plan/templates/` 正确。但 plan.md 没有说明"不编译"的部署假设——未来如果有人加 `tsc` 编译到 `dist/`，路径会指向错误位置。建议在 plan.md 顶部 Architecture 段落显式声明 "no build step"。
+但 `compact.ts` 中：
 
-### L4. `create-template` action 缺少路径遍历防护
+```typescript
+const goalInit = (pi as unknown as Record<string, unknown>).__goalInit as GoalInitFn | undefined;
+if (goalInit) {
+  goalInit(...);
+}
+```
 
-`fs.writeFileSync(path.join(templateDir, `${templateName}.md`), templateContent)` 不验证 `templateName` 是否包含 `/`、`..` 等字符。`templateName = "../../../tmp/evil"` 会写到 `templateDir` 之外。Task 6 的实现无路径验证。
+代码逻辑是 "if available, call; if not, skip"。声明为 optional 是合理的（有降级路径），但需要明确：
 
-### L5. `e2e-test-plan.md` TS-5 期望与 plan 实际行为不符
+- `optional` 是因为运行时检测（plan 可独立运行）  
+- **不应**误读为"goal 是 nice-to-have 功能"。plan 的核心场景 UC-1 都依赖 goal 启动。
 
-TS-5 步骤 4 "验证 compact 成功执行" / "验证新上下文中 AI 读取 plan 文件"——但 plan 的 `complete` action（M2）从未调用 `handlePlanComplete`，所以 compact 实际不会执行。TS-5 在 dev 阶段会立即 fail。
+**建议:** 在 plan.md 的 Task 0 Step 2 增加注释，说明 optional 的具体含义（运行时检测 + 缺失降级，不是功能降级）。
 
-### L6. `test_cases_template.json` TC-1-02 与 spec FR-1.3 冲突
+---
 
-TC-1-02 描述 "/plan without args enters plan mode with empty requirement"——但 spec FR-1.3 规定 `/plan` 不带参数且当前不在 plan mode 时应**先检测已有 plan 文件并提示选择**，而不是直接进入 plan mode。测试用例与 spec 行为相反。
+### SHOULD_FIX-2: non-functional-design.md 业务安全评估错误
 
-### L7. `use-cases.md` UC-2 覆盖 AC 重复且未覆盖 AC-6
+**文件:** `non-functional-design.md` 第 4 节
 
-UC-2 描述"bug 修复"覆盖 AC-1, AC-2, AC-4, AC-5, AC-6，但 main flow 步骤 1-9 没有 abort 触发的场景，AC-6（abort 取消）实际只在 alternative path 中提到。use case 的 main flow 应明确展示一个 abort 触发的步骤（如步骤 5 用户觉得信息不足，调用 abort）。
+**原文:**
 
-### L8. `non-functional-design.md` 缺少可观测性 / 日志段落
+> **风险:** AI 可能违反约束执行写入操作（概率低）。
 
-只提到 `ctx.ui.notify` 和 `console.warn` 的隐式使用（实际在 M3 修复后会用到），但没有显式声明：
-- error 路径的日志输出策略（生产 vs debug）
-- 关键状态变更的日志粒度
-- plan 文件 IO 失败的错误传播
+**问题:**
 
-建议增加"Observability"段落。
+LLM 违反提示词约束是常见现象，不是"概率低"。经验上：
 
-### L9. 现有 `plan_review_v1.md` 是占位文件
+- 提示词约束的依从率约 70-90%（取决于模型和复杂度）  
+- 涉及"我会记得不写"这类被动约束，依从率更低  
+- "Plan Mode 期间禁止编辑非 plan 文件" 是个 soft constraint，AI 完全可能误判
 
-当前 `changes/reviews/plan_review_v1.md` 仅有元数据，无实际 review body。本评审覆盖并替换该占位文件。
+**建议:**
 
-## 关键正面观察
+1. 修改为"概率中等"  
+2. 缓解措施除"用户在 review 时可发现并 abort"外，增加：  
+   - 在 TUI widget 中持续显示 "[Plan Mode - READ ONLY]"（视觉强化）  
+   - plan.md Task 6 的 SKILL.md 中要求 AI 每次写工具调用前自我提醒（prompt-level guard）  
+   - 文档明确："plan mode 不做 tool_call 拦截是 spec FR-8.2 的设计选择，违反约束需要 abort 处理"
 
-- **AC 覆盖矩阵完整**：plan.md 的 Spec Coverage Matrix 覆盖 AC-1~AC-11
-- **接口契约清晰**：state、tool、templates、compact 四个模块的函数签名都有定义
-- **测试驱动结构正确**：每个 Task 都有 Step 1 (写失败测试) → Step 2 (验证失败) → Step 3 (实现) → Step 4 (验证通过) → Step 5 (commit) 循环
-- **Vitest 配置正确**：与项目其他 extension 一致
-- **依赖模板系统设计合理**：project > global > builtin 优先级明确
-- **Goal API 引用正确**：`__goalInit` 实际存在于 `extensions/goal/src/index.ts:422`
-- **subagent 设计文档决策明确**：plan-mode-design.md 第 9 节有跨工具对比分析
+---
 
-## 跨文件一致性检查
+### SHOULD_FIX-3: non-functional-design.md 多个 NFR 维度缺失
 
-| 检查项 | plan.md | e2e-test-plan.md | test_cases_template.json | use-cases.md | non-functional-design.md | 结论 |
-|--------|---------|------------------|--------------------------|--------------|--------------------------|------|
-| AC 覆盖 | 11/11 | 9 scenarios, 11 AC | 18 cases, 11 AC | 4 UCs, 8 AC explicit | 未涉及 AC 维度 | 一致 |
-| 模板数量 | 5 builtin | 未涉及 | 未涉及 | 4 UCs 引用 4 templates | 未涉及 | 一致（5 内置 vs 4 UC 引用 4 个，UC-2 提了 bugfix-plan，符合）|
-| 状态机 | 4 phases (idle/brainstorming/writing/complete) | 同 | 同 | 同 | 同 | 一致 |
-| 隔离方式 | 3 options (compact/tree/direct) | TS-5/6 覆盖 2 (compact/direct) | TC-5-01/02/6-01 覆盖 2 | UC-3 提及 direct | §1 稳定性 | **不一致**——plan 提 3 options 但测试只覆盖 2 |
+**文件:** `non-functional-design.md`
+
+**缺失维度:**
+
+1. **可扩展性:** 模板数量增长（>50 个）时性能？新增 plan action 时如何不破坏 API？  
+2. **可维护性:** 模块已按 state/tool/command/compact/widget 拆分，应在 NFR 中明确。测试覆盖率目标？  
+3. **可测试性:** plan extension 是否易于测试？需要 mock 的依赖（pi 对象、ctx）？  
+4. **可观测性:** Plan mode 进入/退出/abort/complete 应有日志或 metrics，当前完全无显式日志。  
+5. **兼容性:** Pi 旧版本兼容？Windows /tmp 路径（`%TEMP%`）？  
+6. **错误处理:** 除 compact 失败降级外，appendEntry 失败、状态文件损坏、template 文件 I/O 错误等路径未讨论。  
+7. **资源管理:** Plan 文件在 /tmp 不主动清理 — /tmp 长期积累风险未讨论。  
+8. **国际化:** SKILL.md 默认语言？模板默认语言（feature-plan.md 是英文）？  
+9. **跨 extension 契约稳定性:** `__goalInit` 通过 `(pi as Record<string, unknown>)` 访问是 hack，pi-goal 重构时 plan 会静默失败。
+
+**建议:** 在 v2 中补充上述维度，每项 1-2 段即可。
+
+---
+
+### SHOULD_FIX-4: plan.md Task 2 描述不实
+
+**文件:** `plan.md` Task 2
+
+**原文:**
+
+> **Type:** backend  
+> **Files:**  
+> - Modify: `extensions/plan/src/index.ts`  
+> - Test: `extensions/plan/src/__tests__/state.test.ts` (extend)
+
+**问题:**
+
+Task 1 已完整实现 `persistPlanState` 和 `reconstructPlanState`（plan.md 第 462-490 行）。Task 2 的 Step 1 只是在 `state.test.ts` 中**追加测试**（plan.md 第 547-588 行），不修改 index.ts 也不引入新功能。
+
+但 Task 2 描述为"State 持久化与重建（per-session）"，像是新功能任务。实际是测试增量任务。
+
+**建议:**
+
+明确标注 "Task 2 类型: test-only (覆盖 Task 1 实现的 persistPlanState/reconstructPlanState 的测试分支)"，或合并到 Task 1。
+
+---
+
+### SHOULD_FIX-5: plan.md compact.ts 中 API 签名需验证
+
+**文件:** `plan.md` Task 6
+
+**问题:**
+
+`compact.ts` 代码示例中：
+
+```typescript
+ctx.compact({
+  customInstructions: ...,
+  onComplete: () => { ... },
+  onError: (_error: Error) => { ... },
+});
+```
+
+`onError: (error: Error) => void` 签名是基于假设。plan.md 引用了"参考 coding-workflow compact 逻辑"，但未在 plan.md 中引用具体代码行号或签名文档。
+
+类似地：
+
+```typescript
+pi.sendUserMessage(steerMessage, { deliverAs: "steer" });
+```
+
+`deliverAs: "steer"` 选项的有效性需验证。
+
+**建议:**
+
+1. 在 plan.md 引用 `extensions/coding-workflow/lib/tool-handlers.ts` 的具体行号和 `ctx.compact` 实际签名。  
+2. Phase 3 实施前，subagent 需先 read 实际 API 验证签名，不要照搬 plan.md 示例。
+
+---
+
+### SHOULD_FIX-6: use-cases.md Module Boundaries 不完整
+
+**文件:** `use-cases.md` 每个 UC 的 Module Boundaries 字段
+
+**问题:**
+
+所有 UC 的 Module Boundaries 都是 "plan extension, goal extension"，但实际涉及：
+
+- **pi-ask-user** — brainstorming 阶段提问（spec FR-2.3）  
+- **pi-subagents** — 实现阶段并行（spec FR-6.1）  
+- **Pi 核心 ctx.compact** — 上下文隔离（spec FR-5.3）  
+- **Pi 核心 session_before_compact handler** — 压缩摘要（spec FR-5.6）
+
+**建议:** 补充所有相关 module，让 Phase 3 实施 subagent 知道完整依赖。
+
+---
+
+### SHOULD_FIX-7: use-cases.md UC-3 "搜索相关资料" 含义不明
+
+**文件:** `use-cases.md` UC-3
+
+**原文:** "AI 搜索相关资料"  
+
+**问题:** "资料" 指什么？网络搜索？读 README？spec 中没明确 plan mode 是否支持网络搜索（WebFetch / WebSearch 工具）。
+
+**建议:** 明确 "AI 探索代码 + 阅读项目文档"。如果需要外部搜索，标注为软能力（依赖 Pi 是否配置 WebSearch 工具）。
+
+---
+
+### SHOULD_FIX-8: e2e-test-plan.md 缺少错误路径测试
+
+**文件:** `e2e-test-plan.md`
+
+**问题:** 9 个 TS 全部是 happy path。`plan.md` 中以下错误处理路径未覆盖：
+
+- TS-N-1: `plan` tool 未知 action 抛错  
+- TS-N-2: `select-template` 模板不存在  
+- TS-N-3: `create-template` 模板名为空 / 含非法字符  
+- TS-N-4: `select-template` / `create-template` 缺必填参数  
+- TS-N-5: /plan abort 时未在 plan mode  
+
+**建议:** 补充 negative test scenarios。
+
+---
+
+### SHOULD_FIX-9: plan.md /tmp 资源管理
+
+**文件:** `plan.md` Task 4 command.ts 代码
+
+**问题:** Plan 文件生成在 `/tmp/plan-{slug}.md`，无清理机制：
+
+- 长期使用 Pi 会在 /tmp 积累大量 plan 文件  
+- slug 截断到 30 字符可能产生冲突（"添加用户认证" vs "添加用户管理"）  
+- 不同 OS（macOS /tmp 1-3 天清理一次 vs Linux 视配置）行为不同
+
+**建议:**
+
+1. 在 plan.md 中明确 /tmp 清理责任（OS 自动 / 用户手动 / 退出 plan mode 时清理）。  
+2. 如果不清理，在 NFR 文档中加一段 "资源管理" 说明累积风险。  
+3. slug 截断 30 字符可能产生 hash 后缀避免冲突：`plan-{slug}-{shortHash}.md`。
+
+---
+
+### SHOULD_FIX-10: plan.md Task 0 changeset 版本号
+
+**文件:** `plan.md` Task 0 Step 3
+
+**原文:**
+
+```markdown
+---
+"@zhushanwen/pi-plan": minor
+---
+```
+
+**问题:** 新包首次发布，changeset 通常用 `patch`（如果是 bug 修复）或 `minor`（如果是新功能）。plan mode 是新功能，`minor` 是合理的。但与 monorepo 其它新包（如 `extensions/structured-output/` 首次发布）对比，确认 convention 一致。
+
+**建议:** 验证 monorepo 历史新包的 changeset convention 保持一致。
+
+---
+
+## NICE_TO_HAVE
+
+1. **test_cases_template.json schema 定义:** 顶层增加 `version` / `created_at` / `schema` 字段，便于版本管理。  
+2. **use-cases.md UC 关系图:** 用 mermaid 描述 4 个 UC 之间的降级关系（如 UC-4 spec 不存在 → 降级到 UC-1）。  
+3. **plan.md 性能数字:** 给出具体的性能预算（"listTemplates < 50ms @ 20 files"），而不仅是"性能无问题"。  
+4. **e2e-test-plan.md TS-9 降级方案:** 如果 Pi 不支持多 session，改为"通过 PlanSessionMap 单测 + 手动验证文档"。
+
+---
 
 ## 修复优先级建议
 
-1. **M1 (事件名) + M3 (compact 错误处理) + M2 (complete 触发 handlePlanComplete) + M8 (onError 签名)** 是 dev 阶段会立即阻断的关键修复，应一次性修齐
-2. **M4 + M5 (subcommands + 重入)** 是 spec 行为完整性修复，UX 影响大
-3. **M6 + M7 (SKILL.md 缺失)** 是 spec 行为完整性修复，AI 行为影响大
-4. **M9 + M10 (项目约定)** 是 pre-commit hook 阻断项，必须修
+| 优先级 | 项目 | 工作量 |
+|--------|------|--------|
+| P0 | MUST_FIX-1（任务依赖图） | 中（重排 4-5 个 Task + 更新 BG/Wave） |
+| P0 | MUST_FIX-2（UC 缺失） | 中（补充 6-7 个 UC + 更新 AC 映射） |
+| P0 | MUST_FIX-3（e2e 可执行性） | 中（每个 TS 增加验证方法段） |
+| P0 | MUST_FIX-4（test case 字段） | 小（schema 升级 + 18 个 case 补字段 + 6 个 negative） |
+| P1 | SHOULD_FIX-2（NFR 业务安全） | 极小 |
+| P1 | SHOULD_FIX-3（NFR 多维度） | 中（补 5-6 个维度） |
+| P2 | 其它 SHOULD_FIX | 分散 |
 
-## 结论
+---
 
-**Fail。** plan.md 的 Task 列表、文件结构、Spec Coverage Matrix 在形式上完整，但**核心控制流存在 3 处未接线**（complete 不触发 handlePlanComplete、subcommands 缺失、重入未实现），**Pi runtime API 假设存在 3 处错误**（事件名、错误处理、回调签名），**关键 spec 行为存在 2 处未在 SKILL.md 体现**（subagent 检测、ask_user 工具），**违反项目约定 2 处**（extension-dependencies.json、package.json 字段）。
+## 总结
 
-修复 10 项 MUST FIX 后，dev 阶段可正常推进。
+plan 的核心思路和架构决策是正确的（5-phase subagent-driven、TDD、per-session 状态、spec 覆盖矩阵）。但 4 个 MUST_FIX 反映的是**计划的可执行性**和**交付物的完整性**问题 — 这是 Phase 3 subagent 执行前的最后质量关。
 
-## 评审元数据
-
-```yaml
-review:
-  type: plan_review
-  round: 1
-  timestamp: "2026-06-11"
-  target: ".xyz-harness/2026-06-11-plan-mode/plan.md"
-  related: [e2e-test-plan.md, test_cases_template.json, use-cases.md, non-functional-design.md]
-  verdict: fail
-  summary: "plan 评审 v1 失败。10 项 MUST FIX，主要为 Pi 事件名错误、核心控制流未接线、spec 行为未在 SKILL.md 体现、项目约定违反。结构与 Spec Coverage Matrix 形式完整，但实施后会立即产生不工作的代码。"
-
-statistics:
-  total_issues: 19
-  must_fix: 10
-  low: 9
-  must_fix_breakdown:
-    - category: "Pi runtime API 错误"
-      count: 3
-      items: [M1, M3, M8]
-    - category: "核心控制流未接线"
-      count: 3
-      items: [M2, M4, M5]
-    - category: "spec 行为未在 SKILL.md 体现"
-      count: 2
-      items: [M6, M7]
-    - category: "项目约定违反"
-      count: 2
-      items: [M9, M10]
-```
+建议**集中修复 MUST_FIX 后重交 v2**。SHOULD_FIX 可在 v2 中选择性修复，不阻断 Phase 3 启动。

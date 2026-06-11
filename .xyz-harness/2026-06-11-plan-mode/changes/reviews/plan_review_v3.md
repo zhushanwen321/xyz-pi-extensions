@@ -1,226 +1,490 @@
 ---
 verdict: fail
-must_fix: 14
+must_fix: 2
 complexity: L1
+review:
+  type: plan_review
+  round: 3
+  mode: "Mode 1: Plan feasibility"
+  timestamp: "2026-06-11T15:20:00+08:00"
+  target: ".xyz-harness/2026-06-11-plan-mode/plan.md"
+  related:
+    - e2e-test-plan.md
+    - test_cases_template.json
+    - use-cases.md
+    - non-functional-design.md
+  reviewer: content-quality-reviewer
+  summary: |
+    独立 v3 评审（重新审查当前 plan.md，非回归 v1/v2）。
+    上一轮 plan_review_v3.md 标记的 14 项 MUST FIX 在当前 plan.md 中**全部已修复**：
+    M2/M3/M4/M5/M6/M7/M8/M9/M10/N1/N11/N12/N13/N14 均已解决。
+    独立审查发现 2 项新 MUST FIX，均为 pre-commit hook 阻断级别的 lint 问题：
+    (1) plan.md Task 3 tool.ts 的 execute 签名中 toolCallId/signal/onUpdate 三个参数
+    均未使用但缺少 `_` 前缀，违反 taste-lint 的 no-unused-vars 规则；
+    (2) plan.md Task 6 compact.ts 的 goal init catch 块为空（只有注释），
+    违反 taste-lint 的 no-silent-catch 规则。
+    此外 11 项 LOW 问题遗留（test 文件缺 import、e2e 缺 negative scenario、
+    test_cases 缺 expected_result、use-cases UC 不足 11、non-functional 缺维度、
+    4/5 内置模板为 stub、M3 外层 try/catch 死代码残留等），均不阻塞 dev。
 ---
 
-# Plan Review v3 — Pi Plan Mode Extension
+# Plan Review v3 — Pi Plan Mode Extension (Independent Round)
 
 ## 评审记录
 
-- **评审时间：** 2026-06-11
+- **评审时间：** 2026-06-11 15:20
 - **评审类型：** Plan 评审（Mode 1: 验证 plan 可实施性）
 - **评审对象：** `.xyz-harness/2026-06-11-plan-mode/plan.md` 及关联 `e2e-test-plan.md` / `test_cases_template.json` / `use-cases.md` / `non-functional-design.md`
-- **前序评审：** plan_review_v1.md（10 项 MUST FIX）、plan_review_v2.md（10 项 MUST FIX，含 v1 独立验证）
-- **评审模式：** 独立 v3 验证 + v2 全部 10 项 + v1 全部 10 项的回归验证
-- **交叉对照：** spec.md（v2 已通过）、plan-mode-design.md、`extensions/coding-workflow/lib/tool-handlers.ts:498-590`（compact 参考实现）、`extensions/goal/src/index.ts:422`（`__goalInit` 实际签名）、`extensions/goal/package.json`（项目其他 extension 字段）、根目录 `extension-dependencies.json`（dependency 注册现状）、Pi SDK 0.73.1 事件签名
+- **交叉对照：** spec.md、`plan-mode-design.md`、`shared/taste-lint/base.mjs`、`shared/taste-lint/rules/no-silent-catch.mjs`、`extensions/todo/src/tool.ts`（execute 签名惯用模式）、`extensions/goal/src/index.ts:390-422`（`__goalInit` 实际签名）、根目录 `tsconfig.json`（strict 模式与 __tests__ 排除）、根目录 `eslint.config.mjs`、根目录 `.githooks/pre-commit`
+- **前序 review 文件：** `plan_review_v3.md`（旧版，评审 14 项 MUST FIX，已全部修复）；`plan_review_v4.md`（PASS）；`plan_review_v1.md`（独立 4 项 MUST FIX）；`plan_review_v2.md`（独立 PASS + 7 LOW）。本评审为独立第三轮。
+- **评审模式：** 重新阅读当前 5 份 deliverable + 项目 lint/tsconfig 配置，独立判断
 
 ## 总体评估
 
-**v2 评审的所有 10 项 MUST FIX 全部未修复**。当前 plan.md 与 v2 评审时内容基本一致，主要 MUST FIX 问题原封不动地保留：
+**当前 plan.md 整体质量高**：8 个 Task（含 Task 0 项目同步）、3 个 Execution Group（BG0/BG1/BG2）、Spec Coverage Matrix 11/11 覆盖、Interface Contracts 完整、TDD 步骤清晰、Wave 1→2→3 串行无循环依赖、单 session 隔离用 `PlanSessionMap = Map<string, PlanState>` 满足 AC-11、`/plan abort` / `/plan status` 子命令 + 重入 4 选项 + `session_before_compact` / `session_before_tree` handler + `__goalInit` API + `create-template` 路径遍历防护 + SKILL.md 含 ask_user / subagent 检测 —— **所有 v3 前序 MUST FIX 已修复**。
 
-- M2（`complete` 不触发 `handlePlanComplete`）— Task 6 的 `case "complete"` 块仍只设置 `phase = "complete"` 并返回
-- M3（`ctx.compact()` 双重错误处理）— Task 7 `case "compact"` 仍用 `try { ... } catch { fallback }` 包裹
-- M4（`/plan abort` 子命令缺失）— Task 5 `command.ts` 仍只识别 4 种情况，无 `abort` / `status` 解析
-- M5（重入逻辑缺失）— Task 5 未处理 "未激活 + 已有 plan 文件" 场景
-- M6（SKILL.md 缺 subagent 检测）— Task 8 SKILL.md 仍只到 Phase C/D，缺 Phase D3 Implementation Handoff
-- M7（SKILL.md 缺 ask_user 工具规范）— Task 8 SKILL.md B2 章节未提 `ask_user` / `ask_user_question`
-- M8（`onError` 签名错误）— Task 7 仍写 `onError: () => {...}`，与 SDK 实际 `(error: Error) => void` 不符
-- M9（`extension-dependencies.json` 未更新）— plan 整个文件无 `extension-dependencies.json` 修改项；根目录文件当前 12 个 extension 中**无 `@zhushanwen/pi-plan`**
-- M10（`package.json` 字段不一致）— Task 1 `main: "index.ts"`（项目其他用 `"src/index.ts"`）、`keywords` 缺 `"extension"`、无 `license`、无 `peerDependencies`
-- N1（`tree` case 错误注入 steer）— Task 7 `case "tree"` 仍调用 `pi.sendUserMessage(steerMessage, ...)`
+但独立审查发现 2 项新的 MUST FIX：
 
-**v3 新发现 4 项 MUST FIX**（N11~N14），均经过独立证据验证：
+1. **plan.md Task 3 tool.ts 的 execute 签名有 3 个未使用参数无 `_` 前缀**（toolCallId / signal / onUpdate），违反项目 taste-lint 的 `@typescript-eslint/no-unused-vars` 规则（`argsIgnorePattern: '^_'`）。`extensions/todo/src/tool.ts` 已有正确模式：`_toolCallId` / `_onUpdate`。Dev 阶段复制 plan 示例代码后会立即在 pre-commit hook 阻断。
 
-- N11：`index.ts` 的 `const state: PlanState` 是工厂函数级闭包变量，**所有 session 共享同一个 `state` 对象**——`session_start` 的 `Object.assign(state, reconstructed)` 会用后启动 session 的状态覆盖先启动 session 的状态。这是 v2 漏掉的关键 multi-session isolation bug，直接违反 AC-11
-- N12：plan 缺 Task 用于更新 `CLAUDE.md` 目录结构——CLAUDE.md `[MANDATORY]` 规定 "新增/删除/重命名 extension 后必须同步更新本文件（CLAUDE.md）的目录结构"
-- N13：plan 缺 changeset 创建任务——项目 `pnpm changeset` 流程要求新包发布时必须配套 changeset
-- N14：plan 内部结构矛盾——File Structure 表把 `command.ts` 标为 BG1、把 `tool.ts` 描述为 "plan tool 注册 + 5 个 action handler"（跨 Task 2 BG1 + Task 6 BG2）；Execution Groups 把 Task 5（command）放在 BG3、把 Task 6 / 7（tool action handler / compact）放在 BG2。两套任务分配自相矛盾
+2. **plan.md Task 6 compact.ts 的 goal init catch 块为空**（`} catch { /* goal init failure is non-blocking */ }`），违反项目 taste-lint 的 `no-silent-catch` 规则（`emptyCatch` 报告）。`shared/taste-lint/rules/no-silent-catch.mjs` 第 56-58 行：`if (body.length === 0) context.report({ node, messageId: 'emptyCatch' })` —— 注释不构成 statement，因此 body.length === 0。Dev 阶段 pre-commit 阻断。
 
-## v2 回归验证（10 项）
+**这两项是 pre-commit hook 阻断级别**，必须在 dev 启动前修复。v1/v2 评审均未发现（v2 LOW #4 只标了 silent catch 为 LOW，未升级到 MUST FIX；v1 焦点在 dependency graph 与 use-cases 完整性）。
 
-| v2 项 | 状态 | 证据 |
-|-------|------|------|
-| M2 (`complete` 不触发 `handlePlanComplete`) | ❌ **未修复** | plan.md Task 6 `case "complete"` 块仍只 set phase + persist + return；grep `handlePlanComplete` 全文仍只有 Task 7 一处定义，无调用方 |
-| M3 (compact 双重错误处理) | ❌ **未修复** | plan.md Task 7 `case "compact"` 仍写 `try { ctx.compact({...}) } catch { ctx.ui.notify("Compact failed, ...", "warning"); pi.sendUserMessage(steerMessage, ...); }` |
-| M4 (`/plan abort` 子命令缺失) | ❌ **未修复** | Task 5 `command.ts` handler 仍只识别 active+empty / active+text / inactive+text 三种情况；无 `if (trimmed === "abort")` 分支；无 `if (trimmed === "status")` 分支 |
-| M5 (重入逻辑缺失) | ❌ **未修复** | Task 5 handler 走简单的 `isActive` 判断，spec FR-1.3 要求的 4 选项对话框（继续/实现/新建/取消）无任何实现 |
-| M6 (SKILL.md 缺 subagent 检测) | ❌ **未修复** | Task 8 SKILL.md 模板仍只到 Phase C (Writing) + Phase D (Completion)；FR-6.1~6.3 的 subagent 能力检测步骤完全缺失 |
-| M7 (SKILL.md 缺 ask_user 工具) | ❌ **未修复** | Task 8 SKILL.md B2 章节仍只写 "Ask 2-3 questions at a time"；未提及 `ask_user` / `ask_user_question` 工具 |
-| M8 (`onError` 签名错误) | ❌ **未修复** | Task 7 `onError: () => {...}`，与 SDK `CompactOptions.onError?: (error: Error) => void` 不一致 |
-| M9 (`extension-dependencies.json` 未更新) | ❌ **未修复** | 根目录 `extension-dependencies.json` 当前 12 个 extension 仍无 `pi-plan` 条目；plan.md File Structure 列表无 `extension-dependencies.json` 修改项 |
-| M10 (`package.json` 字段不一致) | ❌ **未修复** | Task 1 package.json：`main: "index.ts"`（项目其他用 `src/index.ts`）、`keywords: ["pi-package"]`（缺 `extension`）、无 `license: "MIT"`、无 `peerDependencies` |
-| N1 (`tree` case 错误注入 steer) | ❌ **未修复** | Task 7 `case "tree"` 块仍执行 `pi.sendUserMessage(steerMessage, { deliverAs: "steer" })`；与 spec FR-5.4 / plan-mode-design.md 5.4 / D2 三处来源的 "tree 只通知不注入" 不符 |
+## v3 前序 MUST FIX 回归验证（14 项）
 
-**结论：v2 全部 10 项 MUST FIX 全部未修复。**
+| v3 编号 | 描述 | 状态 | 证据 |
+|---------|------|------|------|
+| M2 | `complete` 不触发 `handlePlanComplete` | ✅ **已修复** | plan.md Task 3 `case "complete"` 末尾 `handlePlanComplete(pi, ctx, state, isolation);` |
+| M3 | compact 双重错误处理 | ⚠️ **部分修复** | onError 签名已正为 `(_error: Error)`；**外层 try/catch 仍存在**（LOW #1 详述）|
+| M4 | `/plan abort` 子命令缺失 | ✅ **已修复** | Task 4 command.ts 头部 `if (trimmed === "abort")` 分支完整 + `if (trimmed === "status")` 分支 |
+| M5 | 重入逻辑缺失 | ✅ **已修复** | Task 4 `if (!state.isActive && !trimmed)` 块扫描 `/tmp/plan-*.md` 并 sendUserMessage 4 选项 |
+| M6 | SKILL.md 缺 subagent 检测 | ✅ **已修复** | Task 7 SKILL.md Phase D3 4 步（check subagent tool、wave 并行 / 单 agent 分阶段）|
+| M7 | SKILL.md 缺 ask_user 工具 | ✅ **已修复** | Task 7 SKILL.md B2 "Use `ask_user` tool (from pi-ask-user)" |
+| M8 | `onError` 签名错误 | ✅ **已修复** | Task 6 `onError: (_error: Error) => {...}` |
+| M9 | `extension-dependencies.json` 未更新 | ✅ **已修复** | Task 0 Step 2 添加 `@zhushanwen/pi-plan` 条目（optional pi-goal 依赖）|
+| M10 | `package.json` 字段不一致 | ✅ **已修复** | Task 1 package.json 含 `main: "src/index.ts"`、`keywords: ["pi-package", "extension"]`、`license: "MIT"`、`peerDependencies` |
+| N1 | `tree` case 错误注入 steer | ✅ **已修复** | Task 6 `case "tree"` 只调用 `ctx.ui.notify(...)`，不调用 `pi.sendUserMessage` |
+| N11 | 工厂函数级 `const state` 闭包变量 | ✅ **已修复** | Task 4 index.ts 使用 `const sessions: PlanSessionMap = new Map()` + `session_start` 重建 + `session_end` 清理 |
+| N12 | 缺 CLAUDE.md 更新任务 | ✅ **已修复** | Task 0 Step 1 在 BG0 阶段同步更新 CLAUDE.md 目录结构和"当前包清单" |
+| N13 | 缺 changeset 任务 | ✅ **已修复** | Task 0 Step 3 创建 `.changeset/plan-mode-init.md` |
+| N14 | Task 5 BG 归属 + tool.ts 跨组矛盾 | ✅ **已修复** | File Structure 把 command.ts / tool.ts 都标为 BG1；BG1 = Task 1-4（state / state 测试 / tool / command）；BG2 = Task 5-7（templates / compact / SKILL）|
 
-## v3 新发现 MUST FIX（4 项）
+**结论：v3 前序 14 项 MUST FIX 中 13 项完全修复，1 项（M3）部分修复（不影响功能但有 dead code 残留）。**
 
-### N11. 工厂函数级 `const state` 闭包变量导致多 session 状态互相覆盖（AC-11 直接违反）
+## v3 独立新发现 MUST FIX（2 项）
 
-**位置：** plan.md Task 5 `extensions/plan/src/index.ts` 行 909-924
+### M15. plan.md Task 3 tool.ts execute 签名 3 个未使用参数无 `_` 前缀（pre-commit 阻断）
 
-**严重度：** must_fix
+**位置：** `plan.md` Task 3 Step 3 `tool.ts` 行 716-723
 
-**问题：** 当前实现把 `PlanState` 缓存在工厂函数闭包内：
+**严重度：** must_fix（taste-lint `no-unused-vars` 错误，pre-commit hook 阻断）
+
+**问题：**
 
 ```typescript
-export default function planExtension(pi: ExtensionAPI) {
-  const state: PlanState = { ...DEFAULT_PLAN_STATE };  // ← 所有 session 共享
+async execute(
+  toolCallId: string,                    // ← 未使用，无 _ 前缀
+  params: Record<string, unknown>,
+  signal: AbortSignal,                    // ← 未使用，无 _ 前缀
+  onUpdate: (partial: { content: Array<{ type: string; text: string }> }) => void,  // ← 未使用，无 _ 前缀
+  ctx: ExtensionContext,
+) {
+  const action = params.action as string;
+  ...
+  const sessionId = ctx.sessionId ?? "default";
+  const state = getPlanState(sessions, sessionId, ctx);
+  ...
+```
 
-  // ...
-  registerPlanTool(pi, state, persistPlanState);
-  registerPlanCommand(pi, state, updateWidget);
+函数体内**完全没有引用** `toolCallId` / `signal` / `onUpdate`，只用了 `params` 和 `ctx`。
 
-  pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
-    const reconstructed = reconstructPlanState(ctx);
-    Object.assign(state, reconstructed);  // ← 覆盖共享对象
-  });
+**根因（lint 规则）：** `shared/taste-lint/base.mjs` 第 40 行：
+```javascript
+'@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+```
+
+`argsIgnorePattern: '^_'` 意味着未使用参数必须以 `_` 开头才被忽略。三个参数均无 `_` 前缀 → ESLint `error` 级 → pre-commit hook 阻断 commit。
+
+**项目既有正确模式：** `extensions/todo/src/tool.ts:25`：
+
+```typescript
+async execute(_toolCallId: string, params: Static<typeof TodoParams>, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
+    // P1-5: 尊重 signal —— 异步被取消时提前返回
+    if (signal?.aborted) {
+      return {
+        content: [{ type: "text" as const, text: "Todo call aborted by signal." }],
+```
+
+项目用 `_toolCallId` / `_onUpdate`（带 `_` 前缀）+ `signal` 实际使用（abort 检查）。plan 模式没有 abort 检查需求，但 unused 参数必须带 `_` 前缀。
+
+**修复方向（dev 实施前 1 行修改）：**
+
+方案 A（推荐，匹配 todo 模式）：参数名加 `_` 前缀 + 可选加 abort 检查：
+```typescript
+async execute(
+  _toolCallId: string,
+  params: Record<string, unknown>,
+  signal: AbortSignal,
+  _onUpdate: (partial: { content: Array<{ type: string; text: string }> }) => void,
+  ctx: ExtensionContext,
+) {
+  if (signal?.aborted) {
+    return { content: [{ type: "text" as const, text: "Plan tool aborted by signal." }], details: {} };
+  }
+  ...
+```
+
+方案 B（最小修改）：仅加 `_` 前缀：
+```typescript
+async execute(
+  _toolCallId: string,
+  params: Record<string, unknown>,
+  _signal: AbortSignal,
+  _onUpdate: (partial: { content: Array<{ type: string; text: string }> }) => void,
+  ctx: ExtensionContext,
+) {
+```
+
+**为什么是 MUST FIX（不是 LOW）：**
+- pre-commit hook 会立即阻断 dev 第一次 commit
+- 不是 dev 可以"自然发现并修复"的问题（实施 subagent 复制 plan 代码后才发现）
+- 修复合规成本极低（5 个字符修改），但 plan.md 必须先正确
+
+### M16. plan.md Task 6 compact.ts goal init catch 块为空（pre-commit 阻断）
+
+**位置：** `plan.md` Task 6 Step 1 `compact.ts` 末尾行 1268-1273
+
+**严重度：** must_fix（taste-lint `no-silent-catch` 错误，pre-commit hook 阻断）
+
+**问题：**
+
+```typescript
+  // Try to initialize goal
+  try {
+    const goalInit = (pi as unknown as Record<string, unknown>).__goalInit as GoalInitFn | undefined;
+    if (goalInit) {
+      goalInit(
+        `Execute plan: ${state.planFilePath}`,
+        ["Read plan file", "Execute implementation steps"],
+      );
+    }
+  } catch { /* goal init failure is non-blocking */ }
+```
+
+catch 块**只有一个注释**，无任何语句。注释不构成 statement。
+
+**根因（lint 规则）：** `shared/taste-lint/rules/no-silent-catch.mjs` 第 56-58 行：
+```javascript
+if (body.length === 0) {
+  context.report({ node, messageId: 'emptyCatch' });
 }
 ```
 
-`pi` 进程内可能同时存在多个 session（如不同 worktree、临时 session）。Pi 的 extension 工厂函数对每个进程**只调用一次**——所有 session 共享同一个 `planExtension` 调用产生的闭包，因此共享同一个 `state` 对象引用。
+注释不计为 statement，因此 `body.length === 0` → 报告 `emptyCatch: 空 catch 块吞掉了错误，至少需要记录日志。` → ESLint `error` 级 → pre-commit hook 阻断。
 
-**多 session 时的灾难性时序：**
-1. Session A `session_start` 触发 → `Object.assign(state, A_state)` —— `state` 现在是 A 的
-2. 用户在 A 中执行 `/plan 添加认证` → A 调用 command，state 更新为 A 的 brainstorming 状态，持久化到 A 的 sessionManager
-3. Session B `session_start` 触发 → `Object.assign(state, B_state)` —— **`state` 现在是 B 的，A 的状态被静默丢弃**
-4. A 的用户继续操作（如调用 `plan` tool (abort)）→ 操作的是 B 的 state，**导致 A 的 session 状态错乱**（可能错误地 abort B 的 plan、或在 B 的 plan 上添加 A 的 requirement）
+**修复方向：**
 
-这直接违反 **AC-11**（同一 Pi 进程多 session 时 plan 状态互不干扰）和 **spec FR-9.1**（Plan session 状态存储在 `ctx.sessionManager`，per-session 隔离，不用闭包变量）。
-
-CLAUDE.md 已经明确警告过这种模式：
-> **状态必须存储在 `session_start` 重建的闭包变量或 `ctx.sessionManager` entries 中**
-> `todo` 扩展的 `let todos` 是已知的违反——当前单 session 使用不会有问题，但多 session 时需要重构为闭包内状态
-
-注意原话是"重建的闭包变量"——意味着**每个 session 独立闭包**（用 `Map<sessionId, state>` 形式），而不是所有 session 共享一个变量。
-
-**修复方向：** 两种等价方案，二选一：
-- **方案 A（推荐）：** 在工厂内用 `Map<string, PlanState>` 缓存，`session_start` 时按 sessionId 索引；`session_end` 时清理。Tool / command 接收 `ctx` 参数时按 `ctx.sessionId` 取状态
-- **方案 B：** 彻底去掉闭包缓存，所有读写都通过 `ctx.sessionManager.getEntries()` 走 `reconstructPlanState` / `persistPlanState`。代价：每次 command/tool 调用都要反序列化，性能略差但 multi-session 安全
-
-无论哪种方案，task descriptions 都需要明确写出 session 隔离设计。
-
-### N12. 缺更新根目录 CLAUDE.md 目录结构的任务（项目 [MANDATORY] 约定违反）
-
-**位置：** 根目录 `/Users/zhushanwen/Code/xyz-pi-extensions-workspace/feat-plan-mode/CLAUDE.md` 的 "Monorepo 架构" 段落和"当前包清单"段落
-
-**严重度：** must_fix（违反 CLAUDE.md `[MANDATORY]` 条款）
-
-**问题：** CLAUDE.md 强制规定：
-
-> **新增/删除/重命名 extension 后必须同步更新本文件（CLAUDE.md）的目录结构**，防止 AI 因目录信息过时而定位失败
-
-新 plan extension 应该在以下位置加条目：
-- "Monorepo 架构" 的 extensions 列表：`extensions/plan/ → @zhushanwen/pi-plan`
-- "当前包清单" 的 `extensions/` 表格：包名 `@zhushanwen/pi-plan`、npm name、说明 "Plan mode"、内嵌 Skills "plan-mode"
-
-plan.md 完全没有对应 Task。File Structure 列表中 `shared/types/mariozechner/index.d.ts` 有 modify 项，但 `CLAUDE.md` 没有 modify 项。
-
-**修复方向：** 在 plan.md 增加一个 Task（建议在 Task 1 之前作为 "Task 0: 项目结构同步"），内容：
-- 修改 `CLAUDE.md` 添加 `@zhushanwen/pi-plan` 到 "Monorepo 架构" 目录树
-- 修改 `CLAUDE.md` 添加 `@zhushanwen/pi-plan` 到 "当前包清单" 表格
-- 修改 `CLAUDE.md` 顶部项目结构图，添加 `extensions/plan/` 行
-
-### N13. 缺 changeset 创建任务（项目版本管理必需）
-
-**位置：** 根目录 `.changeset/` 目录
-
-**严重度：** must_fix
-
-**问题：** CLAUDE.md 规定：
-> **核心原则：各包独立版本号，通过 changeset 管理。**
-
-新包 `@zhushanwen/pi-plan` (version 0.1.0) 需要配套 changeset 条目（`.changeset/<random-name>.md`），格式：
-
-```markdown
----
-"@zhushanwen/pi-plan": minor
----
-
-Add new `@zhushanwen/pi-plan` extension: lightweight plan mode with brainstorming + writing-plans capabilities
+最小修改（满足 lint + 保持 non-blocking 语义）：
+```typescript
+  } catch (error) {
+    // goal init 失败不阻塞 plan 完成流程（用户可手动 /goal）
+    console.debug("[plan] goal init failed:", error);
+  }
 ```
 
-plan.md 完全没有 changeset 任务。`.changeset/` 当前只有 `config.json`，无任何变更提案。
+或匹配项目既有 pattern（`extensions/coding-workflow/lib/tool-handlers.ts:520-525` 用 `try { ... } catch { /* non-blocking */ }`）——但**该项目 pattern 也违反 `no-silent-catch` 规则**，只是历史遗留。`/Users/zhushanwen/Code/xyz-pi-extensions-workspace/feat-plan-mode/extensions/coding-workflow/lib/tool-handlers.ts:520` 实际跑 eslint 时也会报错。Plan 不应该沿用错误 pattern。
 
-**修复方向：** 在 plan.md 增加 "Task 0.5: Changeset 创建" 或归入 Task 1 的 Step 0：
-- 创建 `.changeset/<feature-slug>.md`，frontmatter 指定包名和 bump 类型（minor 用于新包首版本，patch 用于 bugfix，major 用于 breaking change）
-- 简述功能变更
+**为什么是 MUST_FIX：**
+- 同 M15，pre-commit hook 阻断
+- catch 块语义是 "non-blocking fallback" 但**没有 fallback 逻辑**，plan.md 应该至少有 console.debug / ctx.ui.notify 之一
+- v2 LOW #4 提到这个 catch 但**未升级到 MUST FIX**——v2 误判其优先级（认为"与 coding-workflow 一致"），但 coding-workflow 的模式本身就是 lint 错误的
 
-### N14. 任务分配 / 文件结构内部矛盾（Task 5 BG 归属、tool.ts 跨组）
+## v3 独立新发现 LOW（11 项，不阻塞）
 
-**位置：** plan.md "File Structure" 表格 vs "Execution Groups" BG1/BG2/BG3 段落
+### LOW #1: M3 外层 try/catch 死代码残留（v3 前序部分修复）
 
-**严重度：** must_fix（影响 subagent 派遣正确性）
+**位置：** `plan.md` Task 6 compact.ts `case "compact"` 块
 
-**问题 1：** File Structure 标 `extensions/plan/src/command.ts | create | BG1`，但 Execution Groups 列 "BG3: TUI + SKILL.md" 包含 "Task 5, Task 8"。Tasks 章节中 Task 5 是 `/plan Command 注册`——command.ts 应该在 BG1（依赖 state 类型）而不是 BG3（依赖 BG1+BG2）。同时 File Structure 中 BG3 只有 widget.ts + SKILL.md 共 2 个文件，与 BG3 "Files (预估): 2 个文件" 一致，但 Task 列表把 command (Task 5) 算入 BG3 是错的。
+**问题：**
+```typescript
+case "compact": {
+  try {
+    ctx.compact({
+      customInstructions: `Plan file: ${state.planFilePath}. Read and execute.`,
+      onComplete: () => { ... },
+      onError: (_error: Error) => { ... fallback ... },
+    });
+  } catch {
+    ctx.ui.notify("Compact failed, continuing without isolation.", "warning");
+    pi.sendUserMessage(steerMessage, { deliverAs: "steer" });
+  }
+  break;
+}
+```
 
-**问题 2：** File Structure 标 `extensions/plan/src/tool.ts | create | BG1`，描述 "plan tool 注册 + 5 个 action handler"。但 Tasks 章节把 tool 注册放 Task 2 (BG1)、把 5 个 action handler 放 Task 6 (BG2)。一个文件被分到两个 BG，subagent 派遣时会冲突（BG1 完成后文件被释放给 BG2，但 BG2 subagent 不知道需要重读）。
+**为什么不修复就 OK：** SDK `agent-session.js:1302-1316` 的 `compact()` 内部用 IIFE 包裹 try/catch，错误只走 `options?.onError?.(err)`，**不会**作为同步异常向外抛出。所以外层 try/catch 永远不会触发，是死代码。但 onError 已处理所有错误路径，fallback 行为正确。
 
-**修复方向：** 修正两个矛盾：
-- Task 5 (Command) 应该归 BG1（依赖 state 类型，不依赖 templates/compact）
-- tool.ts 应该**整体在 BG1**（Task 2 完成时实现 5 个 action handler stub），或者**整体在 BG2**（Task 2 仅在 BG1 写 schema+validateAction，BG2 加 handler）——二选一
-- 同步更新 File Structure 表格的 BG 列和 Execution Groups 的 Files (预估) 数字
+**修复方向（不阻塞 dev）：** 删除外层 try/catch，保留 onError，与 coding-workflow 一致。
 
-## v2 LOW 验证（10 项）
+### LOW #2: Task 1 / Task 2 测试文件缺 import
 
-| v2 LOW 项 | 状态 |
-|-----------|------|
-| L1 (complete action 缺 cleanup state.templateName) | ❌ 未修复（Task 6 complete case 仍无 reset） |
-| L2 (模板优先级测试覆盖) | ❌ 未修复（Task 4 测试仍只验证 builtin 列表） |
-| L3 (no build step 声明) | ❌ 未修复（plan 顶部 Architecture 段落未声明 "无编译步骤"） |
-| L4 (create-template 路径遍历防护) | ❌ 未修复（Task 6 `create-template` 仍用裸字符串拼接） |
-| L5 (e2e-test-plan TS-5 与 plan 不符) | ❌ 未修复（TS-5 仍假设 compact 实际执行，但 M2 未修复时不会） |
-| L6 (TC-1-02 与 spec FR-1.3 冲突) | ❌ 未修复（TC-1-02 仍描述 "无描述时直接进入 plan mode"） |
-| L7 (UC-2 abort 覆盖不全) | ❌ 未修复（UC-2 main flow 9 步无 abort 触发） |
-| L8 (non-functional-design 缺 Observability) | ❌ 未修复（仍无错误日志策略说明） |
-| L9 (compaction 缺 firstKeptEntryId/tokensBefore) | ❌ 未修复（Task 7 handler 返回仍只含 summary） |
-| L10 (GoalInitFn 类型) | ✅ 非缺陷（与 coding-workflow 一致），仍作信息记录 |
+**位置：** `plan.md` Task 1 Step 1 `state.test.ts` 行 471、Task 2 Step 1 `state.test.ts` 行 558
 
-**结论：v2 全部 10 项 LOW 中 9 项未修复（L10 非缺陷除外）。**
+**问题：** 两个测试文件都使用 `ExtensionContext` / `ExtensionAPI` 类型，但 import 语句没有包含：
 
-## 跨文件一致性检查
+```typescript
+// Task 1
+import { describe, it, expect, vi } from "vitest";
+import { DEFAULT_PLAN_STATE, type PlanState, type PlanPhase, type PlanSessionMap, getPlanState } from "../state.js";
+// ← 缺 import { ExtensionContext } from "@mariozechner/pi-coding-agent"
+
+describe("PlanState", () => {
+  ...
+  const mockCtx = {
+    sessionManager: { getEntries: () => [] },
+  } as unknown as ExtensionContext;  // ← TS2304: Cannot find name 'ExtensionContext'
+```
+
+```typescript
+// Task 2
+import { persistPlanState, reconstructPlanState } from "../state.js";
+// ← 缺 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent"
+
+it("persistPlanState calls appendEntry with correct data", () => {
+  const mockPi = { appendEntry: vi.fn() } as unknown as ExtensionAPI;  // ← TS2304
+```
+
+**为什么不是 MUST FIX：** 根 tsconfig 和 `extensions/plan/tsconfig.json` 都 exclude 了 `**/__tests__`，`tsc --noEmit` 不会扫到。Vitest 用 esbuild 转译（容忍未知标识符），vitest run 不会失败。Dev 阶段 IDE 会标红，但不影响 CI。
+
+**修复方向（不阻塞）：** 在测试文件顶部加：
+```typescript
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+```
+
+### LOW #3: `session_before_compact` handler 缺 `firstKeptEntryId` / `tokensBefore` 字段
+
+**位置：** `plan.md` Task 6 compact.ts `registerPlanEventHandlers` 行 1216-1228
+
+**问题：**
+```typescript
+return {
+  compaction: {
+    summary: `Plan mode completed. ...`,
+    // ← 缺 firstKeptEntryId / tokensBefore
+  },
+};
+```
+
+`plan-mode-design.md` 第 5.7 节示例包含这两个字段。SDK 内部从 `extensionCompaction.firstKeptEntryId` 读取用于 `appendCompaction`。缺失时 SDK 用 `getCompaction()` 默认值，行为正确但失去精确控制。
+
+**修复方向（不阻塞）：**
+```typescript
+return {
+  compaction: {
+    summary: ...,
+    firstKeptEntryId: (event as { preparation?: { firstKeptEntryId?: string } })?.preparation?.firstKeptEntryId,
+    tokensBefore: (event as { preparation?: { tokensBefore?: number } })?.preparation?.tokensBefore,
+  },
+};
+```
+
+### LOW #4: e2e-test-plan.md 全部 9 个 TS 缺 negative scenario
+
+**位置：** `e2e-test-plan.md` 全文
+
+**问题：** 9 个测试场景都是 happy path。`plan.md` 中有大量 `throw new Error` 错误处理路径（未知 action、模板不存在、templateName 为空、路径遍历字符、`/plan abort` 不在 plan mode 时等）无对应 E2E 覆盖。
+
+**修复方向（不阻塞 dev）：** 补充 TS-N-1 ~ TS-N-5。
+
+### LOW #5: test_cases_template.json 缺 `expected_result` 字段
+
+**位置：** `test_cases_template.json` 18 个 case
+
+**问题：** 所有 test case 仅有 `id` / `type` / `title` / `description` / `steps`，缺 `expected_result` / `priority` / `ac_coverage` 结构化字段。Phase 4 测试编写 subagent 需要推断期望值。
+
+**修复方向（不阻塞 dev）：** 给每个 case 加 `expected_result` + `priority` 字段。
+
+### LOW #6: use-cases.md 仅 4 个 UC，design.md 列 11 个
+
+**位置：** `use-cases.md` 全文
+
+**问题：** `plan-mode-design.md` 列出 11 个 UC（UC-1 ~ UC-11），当前 use-cases.md 只覆盖 4 个（UC-1~UC-4），缺失：
+- UC-3 (重构规划) — 在 design.md 中独立
+- UC-6 (Plan 迭代修改) — 涉及 spec FR-3.4
+- UC-7 (中途切换到 Plan Mode) — 涉及 spec FR-1.8
+- UC-9 (查看已有 Plan) — 涉及 spec FR-1.3 重入
+- UC-10 (Plan 完成后进入实现) — 当前只作为 UC-1 步骤 11
+- UC-11 (非代码任务规划)
+
+use-cases.md 末尾"未覆盖的 AC"段已声明 AC-10/11 由 TC-8/TC-9 覆盖，但 UC 缺口未解释。
+
+**修复方向（不阻塞 dev）：** 在 use-cases.md 增加一段"为什么缩减"说明（哪些 UC 合并到现有 4 个中），或在每个合并后 UC 的 Alternative Paths 中列出被合并场景的差异化处理。
+
+### LOW #7: non-functional-design.md 缺多个 NFR 维度
+
+**位置：** `non-functional-design.md` 5 个段落（稳定性 / 数据一致性 / 性能 / 业务安全 / 数据安全）
+
+**缺失维度：**
+- 可扩展性（模板 > 50 个时的性能、新增 plan action 的 API 稳定性）
+- 可维护性（模块拆分、测试覆盖率目标）
+- 可观测性（错误日志策略、关键状态变更的日志粒度）
+- 兼容性（Pi 旧版本、Windows /tmp 路径 `%TEMP%`）
+- 错误处理（appendEntry 失败、状态文件损坏、template I/O 错误路径）
+- 资源管理（`/tmp` 长期累积 plan 文件的风险，spec 已声明不主动清理但 NFR 应说明累积影响）
+- 跨 extension 契约稳定性（`__goalInit` 通过 `as Record<string, unknown>` 访问是 hack，pi-goal 重构时 plan 静默失败）
+
+**修复方向（不阻塞 dev）：** 增加 1-2 段覆盖上述维度。
+
+### LOW #8: 4/5 内置模板为 stub，章节结构未定义
+
+**位置：** `plan.md` Task 5 Step 3 `templates/` 目录
+
+**问题：** plan.md 只给出 `feature-plan.md` 的完整内容（6 章节），其他 4 个（bugfix / refactor / research / implementation）只写"（其他 4 个模板类似，各有不同的章节结构）"。
+
+Phase 3 subagent 需要自行设计这 4 个模板的章节结构，缺少规格约束会导致：
+- 各 subagent 设计风格不统一
+- feature-plan 与其他模板章节粒度不一致
+- test case 中断言 `expect(content).toContain("## ")` 太宽松，不能验证章节顺序
+
+**修复方向（不阻塞 dev）：** 在 plan.md 中列出每个模板的预期章节列表（如 bugfix-plan: Symptom / Root Cause / Fix Strategy / Verification / Rollback）。
+
+### LOW #9: `__goalInit` 类型签名不匹配（`Record<string, unknown>` vs 具体 budget 对象）
+
+**位置：** `plan.md` Task 6 compact.ts `GoalInitFn` 类型 + 调用点
+
+**问题：**
+```typescript
+type GoalInitFn = (objective: string, tasks: string[], budget?: Record<string, unknown>) => boolean;
+...
+goalInit(
+  `Execute plan: ${state.planFilePath}`,
+  ["Read plan file", "Execute implementation steps"],
+);
+```
+
+`extensions/goal/src/index.ts:390` 实际签名：
+```typescript
+function initializeGoalFromExternal(
+  objective: string,
+  tasks: string[],
+  budget?: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number },
+): boolean
+```
+
+plan 用了 `Record<string, unknown>` 而非具体 budget 对象。运行时 plan 调用**不传 budget**，所以实际工作，但 `as GoalInitFn` 断言是谎言（签名不兼容）。如果 dev 未来想加 budget 字段，会因类型不严而静默不报错。
+
+**修复方向（不阻塞 dev）：** 把 `GoalInitFn` 类型改为与 `extensions/goal/src/index.ts` 一致：
+```typescript
+type GoalInitFn = (
+  objective: string,
+  tasks: string[],
+  budget?: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number },
+) => boolean;
+```
+
+### LOW #10: Task 2 是 test-only 任务，与 Task 1 重复
+
+**位置：** `plan.md` Task 2 全文
+
+**问题：** Task 1 已实现 `persistPlanState` / `reconstructPlanState`，Task 2 的 Step 1 只是在 `state.test.ts` 中**追加测试**，不修改 index.ts 也不引入新功能。Task 2 Step 2 直接说"Expected: PASS (persistence functions already implemented in Task 1)"——明确承认是补测试。
+
+**为什么不修复就 OK：** v1 SHOULD_FIX-4 已记录，v2 未改。Task 2 拆分有助于 BG1 内部分批派遣（3 个 subagent 而不是 2 个），但描述应为 "test-only (补 Task 1 持久化函数测试)"。
+
+**修复方向（不阻塞 dev）：** 改 Task 2 标题为 "State 持久化测试增量" + Type 改为 "test-only"。
+
+### LOW #11: `/tmp/plan-{slug}.md` 全局共享，跨项目泄漏
+
+**位置：** `plan.md` Task 4 command.ts reentry 扫描 + `non-functional-design.md` §5 数据安全
+
+**问题：** `os.tmpdir() + plan-{slug}.md` 是 OS 级别共享路径。两个不同项目使用 Pi 会在同一 `/tmp/plan-*.md` 池中产生文件。Task 4 reentry 逻辑扫描 `/tmp/plan-*.md` 会**误捡其他项目的 plan 文件**，提示用户的 4 选项（继续/实现/新建/取消）会指向其他项目的 plan。
+
+spec FR-1.6 已规定 `/tmp/plan-{slug}.md`，所以这是 spec 设计选择而非 plan 错误。但 plan 应当显式声明"接受跨项目泄漏"或建议扩展为 `<projectHash>-plan-{slug}.md`（spec 升级到 v2 再改）。
+
+**修复方向（不阻塞 dev）：** 在 plan.md Task 4 reentry 段加注释说明跨项目行为；在 non-functional-design.md §5 数据安全段加"跨项目泄漏风险"小节。
+
+## v3 跨文件一致性检查
 
 | 检查项 | plan.md | e2e-test-plan.md | test_cases_template.json | use-cases.md | non-functional-design.md | 结论 |
 |--------|---------|------------------|--------------------------|--------------|--------------------------|------|
-| AC 覆盖 | 11/11 (matrix) | 9 scenarios, 11 AC | 18 cases, 11 AC | 4 UCs, 8 AC explicit | 未涉及 AC 维度 | 一致（覆盖率同 v2） |
-| 模板数量 | 5 builtin | 未涉及 | 未涉及 | 4 UCs 引用 4 templates | 未涉及 | 一致 |
-| 状态机 | 4 phases | 同 | 同 | 同 | 同 | 一致 |
-| 隔离方式 | 3 options (compact/tree/direct) | TS-5/6 覆盖 2 (compact/direct) | TC-5/6 覆盖 2 | UC-3 提及 direct | §1 稳定性 | **不一致**——plan 提 3 options 但测试仍只覆盖 2 |
-| Extension 依赖 | 未涉及 | 未涉及 | 未涉及 | UC-1 提及 goal extension | 未涉及 | **缺失** |
-| Subagent 检测 | SKILL.md 缺失 | 未涉及 | 未涉及 | UC-1 提及 "wave 并行开发" | 未涉及 | **不一致**——UC 描述了 subagent 能力但 SKILL.md 无对应步骤 |
-| Multi-session 隔离 | N11 缺陷 | TS-9 覆盖（仅测试层） | TC-9-01 覆盖 | 未涉及 | §2 简述 | **不一致**——TS-9 / TC-9-01 测试通过需要 N11 修复 |
+| AC 覆盖 | 11/11 (matrix) | 9 TS, 11 AC | 18 TC, 11 AC | 4 UC 显式 + TC 补 AC-10/11 | 未涉及 | ✅ 一致 |
+| 模板数量 | 5 builtin (1 完整 + 4 stub) | 未涉及 | TC-8 验证 | UC-1~4 引用 4 templates | 未涉及 | ⚠️ stub 模板（LOW #8）|
+| 状态机 | 4 phases | 同 | 同 | 同 | 同 | ✅ 一致 |
+| 隔离方式 | 3 options (compact/tree/direct) | TS-5/6 覆盖 2 (compact/direct) | TC-5/6 覆盖 2 | UC-3 提及 direct | §1 稳定性 | ⚠️ tree 选项无 E2E/TC 覆盖 |
+| Extension 依赖 | Task 0 Step 2 声明 | 未涉及 | 未涉及 | UC-1 提及 goal | 未涉及 | ✅ 一致 |
+| Subagent 检测 | SKILL.md Phase D3 | 未涉及 | 未涉及 | UC-1 提及 "wave 并行" | 未涉及 | ✅ 一致 |
+| Multi-session 隔离 | PlanSessionMap (Task 4) | TS-9 覆盖 | TC-9-01 覆盖 | 未涉及 | §2 简述 | ✅ 一致 |
+| TUI 状态栏 | widget.ts (Task 5) | 未涉及 | TC-10-01/02 覆盖 | 未涉及 | 未涉及 | ✅ 一致 |
+| Lint 兼容 | 2 处违规 (M15/M16) | n/a | n/a | n/a | n/a | ❌ 不一致（pre-commit 阻断）|
 
-## 关键正面观察（与 v2 相同）
+## v3 接口契约审查
 
-- **AC 覆盖矩阵完整**：plan.md Spec Coverage Matrix 覆盖 AC-1~AC-11
-- **接口契约清晰**：state、tool、templates、compact 四个模块函数签名定义完整
-- **测试驱动结构正确**（除 Task 5 缺 TDD 步骤）：每个 Task 都有 Step 1 (写失败测试) → Step 2 (验证失败) → Step 3 (实现) → Step 4 (验证通过) → Step 5 (commit) 循环
-- **Vitest 配置正确**：与项目其他 extension 一致
-- **依赖模板系统设计合理**：project > global > builtin 优先级明确
-- **Goal API 引用正确**：`__goalInit` 实际存在于 `extensions/goal/src/index.ts:422`
-- **Pi 事件名使用正确**（v2 已验证）：`session_before_compact` / `session_before_tree` 是 SDK 中用于自定义 compaction/tree summary 的正确事件
+| 接口 | plan.md 定义 | 实现位置 | 一致性 |
+|------|------------|---------|--------|
+| `PlanPhase` | 4 枚举值 | state.ts | ✅ |
+| `PlanState` | 5 字段 | state.ts | ✅ |
+| `PlanSessionMap` | `Map<string, PlanState>` | state.ts | ✅（v3 关键修复）|
+| `getPlanState` | (sessions, sessionId, ctx) → PlanState | state.ts | ✅ |
+| `persistPlanState` | (pi, state) → void | state.ts | ✅ |
+| `reconstructPlanState` | (ctx) → PlanState | state.ts | ✅ |
+| `executePlanTool` | (pi, ctx, sessions, action, params) → ToolResult | tool.ts | ✅ 但 execute 签名有 lint 问题 (M15) |
+| `listTemplates` | (projectDir?) → TemplateInfo[] | templates.ts | ✅ |
+| `loadTemplate` | (name, projectDir?) → string \| null | templates.ts | ✅ |
+| `handlePlanComplete` | (pi, ctx, state, isolation) → void | compact.ts | ✅ 但 goal init catch 块 lint 问题 (M16) |
+| `updatePlanWidget` | (ctx, state) → void | widget.ts | ✅ |
+
+## v3 后端设计充分性检查（L1）
+
+按 SKILL 的 L1 后端检查清单逐项：
+
+1. **"为什么"而非"做什么"**：✅ Task 3 tool.ts 每个 action 都有清晰目的；Task 6 compact.ts handlePlanComplete 注释解释了 tree case 为何不注入 steer
+2. **存储变更选型理由**：✅ Task 0 Step 2 注释 "Extension 依赖管理 [MANDATORY]"；Task 1 Step 3 state.ts 注释 "per-session 隔离"
+3. **API 端点与业务场景对应**：✅ 5 个 action 对应 spec FR-3.2 / FR-4.4 / FR-5.1 / FR-7.2 / FR-3.2 五个场景
+4. **边界条件 / 异常处理**：
+   - ✅ select-template: `loadTemplate` 返回 null 时 throw
+   - ✅ create-template: 路径遍历防护 + 必填字段校验
+   - ✅ complete: 必传 isolation（default 为 "direct"）
+   - ✅ abort: 不在 plan mode 时 notify "No active plan mode"
+   - ⚠️ LOW #1: compact 错误处理有冗余 try/catch
+   - ❌ M15/M16: lint 规则违反
+5. **非功能性要求对应 task**：✅ Task 5 性能（listTemplates 三层扫描）、Task 6 稳定性（compact 失败降级）
+
+## 关键正面观察
+
+- **AC 覆盖矩阵完整**：plan.md Spec Coverage Matrix 11/11 ACs 全部覆盖
+- **Per-session 隔离用 Map<sessionId, PlanState>**：满足 AC-11 和 spec FR-9.1
+- **`/plan abort` / `/plan status` 子命令完整**：满足 spec FR-1.4 / FR-7.1
+- **Reentry 4 选项对话框**：满足 spec FR-1.3
+- **`session_before_compact` / `session_before_tree` handler 都已实现**：满足 spec FR-5.6 / FR-5.7
+- **`complete` action 调用 `handlePlanComplete`**：满足 spec FR-5.1
+- **`tree` case 只 notify 不 inject steer**：满足 spec FR-5.4
+- **`__goalInit` 调用 + 运行时检测 + 缺失降级**：满足 spec FR-6.4，与 coding-workflow 调用模式一致
+- **SKILL.md 含 ask_user 工具规范**：满足 spec FR-2.3
+- **SKILL.md 含 subagent 检测 4 步骤**：满足 spec FR-6.1~6.3
+- **`create-template` 路径遍历防护**：`templateName.replace(/[^a-zA-Z0-9_-]/g, "")` 拒绝特殊字符
+- **Abort 流程清理完整**：`sessions.delete(sessionId)` + widget 清理
+- **BG 内文件数合理**（BG0: 3, BG1: 7, BG2: 10），均在 ≤10 阈值
+- **Wave 编排串行清晰**（Wave 1 → 2 → 3），无循环依赖
+- **vitest 配置正确**：`extensions/plan/tsconfig.json` 包含 `"exclude": ["src/__tests__", "dist"]`，与项目约定一致
+- **TDD 步骤完整**（除 Task 4 / 6 / 7 偏实现）：Task 1 / 2 / 3 / 5 都有 Step 1 写失败测试 → Step 3 实现 → Step 4 验证
 
 ## 修复优先级建议
 
 按修复优先级（dev 阶段阻断性）：
 
-1. **第一批（dev 会立即阻断）：** M2 + M3 + M8 + N11（核心控制流和 API 错误）
-2. **第二批（spec 行为完整性）：** M4 + M5 + M6 + M7 + N1（subcommand、重入、SKILL.md 完整性）
-3. **第三批（pre-commit hook 阻断）：** M9 + M10 + N12 + N13（项目约定）
-4. **第四批（结构清晰度）：** N14（任务分配内部矛盾）
-5. **LOW（信息改进）：** L1~L9（不阻塞但应同步修复以保证 v4 评审无遗留）
+1. **第一批（dev 会立即阻断）：** M15 + M16（pre-commit hook 阻断）
+2. **第二批（dev 阶段顺手清理）：** LOW #1（死代码）、LOW #2（test import）、LOW #3（firstKeptEntryId）
+3. **第三批（Phase 4 阶段清理）：** LOW #4 + LOW #5（e2e/test_cases 字段补全）
+4. **第四批（Phase 5 / 文档迭代）：** LOW #6 + LOW #7（UC + NFR 完整性）
+5. **第五批（设计精化）：** LOW #8 + LOW #9 + LOW #10 + LOW #11
 
 ## 结论
 
-**Fail。** v3 评审对 v2 全部 10 项 MUST FIX 做严格回归验证——**全部未修复**。v3 独立新发现 4 项 MUST FIX（N11 multi-session isolation bug、N12 CLAUDE.md 缺失更新任务、N13 changeset 缺失、N14 任务分配内部矛盾）。综合 14 项 MUST FIX，dev 阶段会立即遇到 4 类阻断：
+**Fail。** 当前 plan.md 整体设计质量高，所有 v3 前序 14 项 MUST FIX 全部已修复（13 项完全 + 1 项 M3 部分）。但独立审查发现 **2 项新 MUST FIX**（M15 工具签名 unused 参数、M16 goal init 空 catch 块），均会被 pre-commit hook 阻断——dev 阶段实施 subagent 复制 plan 示例代码后会立即遇到。
 
-1. **`complete` 不触发退出流程**（M2）—— 退出 plan mode 时无 compact、无 goal init、无 steer
-2. **多 session 状态互相覆盖**（N11）—— 违反 AC-11
-3. **`/plan abort` 命令不工作**（M4）—— 用户无法取消 plan
-4. **pre-commit hook 阻断**（M9 + M10）—— extension-dependencies.json 缺失 + package.json 字段不匹配
+修复 M15 + M16 后，plan 可进入 dev 阶段无阻断。11 项 LOW 属于代码风格 / 文档完整性 / 测试模板完整度，均可在 dev/Phase 4/Phase 5 阶段清理，不阻塞 v3 评审通过。
 
-修复全部 14 项 MUST FIX 后，dev 阶段可正常推进。**v3 特别提示：N11 是 v2 评审漏掉的关键 bug**，v4 评审应优先验证此项已修。
+**v3 关键提示：M15（unused 参数）和 M16（silent catch）是 v1/v2 评审漏掉的具体 lint 阻断问题。** v1 焦点在 dependency graph 与 use-cases 完整性，v2 焦点在 v3 回归验证 + LOW 标注——两者均未对 plan.md 中的代码示例做 lint 静态检查。v4 评审虽然 PASS，但 review 文档（plan_review_v4.md）只列出"v3 的 14 项 MUST FIX 全部修复"作为 fix_summary，未单独执行 lint 兼容性检查。
 
 ## 评审元数据
 
@@ -228,7 +492,8 @@ plan.md 完全没有 changeset 任务。`.changeset/` 当前只有 `config.json`
 review:
   type: plan_review
   round: 3
-  timestamp: "2026-06-11T14:30:00+08:00"
+  mode: "Mode 1: Plan feasibility"
+  timestamp: "2026-06-11T15:20:00+08:00"
   target: ".xyz-harness/2026-06-11-plan-mode/plan.md"
   related:
     - e2e-test-plan.md
@@ -237,38 +502,23 @@ review:
     - non-functional-design.md
   verdict: fail
   summary: |
-    v2 全部 10 项 MUST FIX 未修复。v3 新发现 4 项 MUST FIX（其中 N11 multi-session
-    isolation bug 是关键 AC-11 违反）。综合 14 项 MUST FIX，dev 阶段会立即遇到
-    4 类阻断：complete 不触发退出流程、多 session 状态互相覆盖、/plan abort 不工作、
-    pre-commit hook 阻断。
+    独立 v3 评审。v3 前序 14 项 MUST FIX 全部已修复（13 完全 + 1 部分）。
+    独立发现 2 项 MUST FIX（M15 unused 参数 + M16 silent catch，pre-commit 阻断）
+    + 11 项 LOW。修复 2 项 MUST FIX 后可进入 dev。
 
 statistics:
-  total_issues: 24
-  must_fix: 14
-  low: 10
+  total_issues: 13
+  must_fix: 2
+  low: 11
   must_fix_breakdown:
-    - category: "Pi runtime API 错误"
-      count: 1
-      items: [M8]
-    - category: "核心控制流未接线"
-      count: 4
-      items: [M2, M4, M5, N11]
-    - category: "spec 行为错误或缺失"
-      count: 3
-      items: [N1, M6, M7]
-    - category: "项目约定违反"
-      count: 4
-      items: [M9, M10, N12, N13]
-    - category: "Pi compact 错误处理"
-      count: 1
-      items: [M3]
-    - category: "plan 内部结构矛盾"
-      count: 1
-      items: [N14]
-  v2_validation:
-    confirmed_unfixed: 10  # M2-M10, N1
-    new_in_v3: 4  # N11, N12, N13, N14
-    false_positive_in_v2: 0
-  v1_validation:
-    confirmed_unfixed: 9  # M2-M10 (M1 已在 v2 验证为 false positive)
+    - category: "taste-lint 阻断（pre-commit hook）"
+      count: 2
+      items: [M15, M16]
+  v3_prior_validation:
+    confirmed_fixed: 13  # M2, M4, M5, M6, M7, M8, M9, M10, N1, N11, N12, N13, N14
+    confirmed_partially_fixed: 1  # M3 (dead code residual)
+    confirmed_unfixed: 0
+  v3_independent_new:
+    must_fix: 2  # M15, M16
+    low: 11
 ```

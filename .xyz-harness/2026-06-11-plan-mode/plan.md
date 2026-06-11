@@ -706,10 +706,10 @@ export function registerPlanTool(
     }),
     promptSnippet: "Use plan tool for plan mode operations",
     async execute(
-      toolCallId: string,
+      _toolCallId: string,
       params: Record<string, unknown>,
-      signal: AbortSignal,
-      onUpdate: (partial: { content: Array<{ type: string; text: string }> }) => void,
+      _signal: AbortSignal,
+      _onUpdate: (partial: { content: Array<{ type: string; text: string }> }) => void,
       ctx: ExtensionContext,
     ) {
       const action = params.action as string;
@@ -1286,7 +1286,7 @@ export function handlePlanComplete(
         ["Read plan file", "Execute implementation steps"],
       );
     }
-  } catch { /* goal init failure is non-blocking */ }
+  } catch (e) { ctx.ui.notify(`Goal init failed: ${e}`, "warning"); }
 }
 ```
 
