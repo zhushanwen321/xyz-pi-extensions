@@ -48,21 +48,23 @@ export function persistPlanState(pi: ExtensionAPI, state: PlanState): void {
   });
 }
 
+function isPlanStateEntry(entry: unknown): entry is { type: "custom"; customType: "plan-state"; data: Partial<PlanState> } {
+  const e = entry as Record<string, unknown>;
+  return e.type === "custom" && e.customType === "plan-state" && typeof e.data === "object" && e.data !== null;
+}
+
 export function reconstructPlanState(ctx: ExtensionContext): PlanState {
   const state = { ...DEFAULT_PLAN_STATE };
   const entries = ctx.sessionManager.getEntries();
 
   for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i] as { type?: string; customType?: string; data?: unknown };
-    if (entry.type === "custom" && entry.customType === "plan-state") {
-      const data = entry.data as Partial<PlanState> | undefined;
-      if (data) {
-        state.isActive = data.isActive ?? false;
-        state.phase = data.phase ?? "idle";
-        state.planFilePath = data.planFilePath ?? "";
-        state.requirement = data.requirement ?? "";
-        state.templateName = data.templateName ?? "";
-      }
+    if (isPlanStateEntry(entries[i])) {
+      const data = entries[i].data;
+      state.isActive = data.isActive ?? false;
+      state.phase = data.phase ?? "idle";
+      state.planFilePath = data.planFilePath ?? "";
+      state.requirement = data.requirement ?? "";
+      state.templateName = data.templateName ?? "";
       break;
     }
   }

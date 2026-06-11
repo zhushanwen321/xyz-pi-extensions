@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,50 +15,35 @@ export function getBuiltinTemplateDir(): string {
   return path.resolve(__dirname, "..", "templates");
 }
 
+function scanTemplateDir(dir: string, source: TemplateInfo["source"], seen: Set<string>): TemplateInfo[] {
+  const results: TemplateInfo[] = [];
+  if (!fs.existsSync(dir)) return results;
+  for (const file of fs.readdirSync(dir)) {
+    if (file.endsWith(".md")) {
+      const name = file.replace(/\.md$/, "");
+      if (!seen.has(name)) {
+        results.push({ name, source, path: path.join(dir, file) });
+        seen.add(name);
+      }
+    }
+  }
+  return results;
+}
+
 export function listTemplates(projectDir?: string): TemplateInfo[] {
-  const templates: TemplateInfo[] = [];
   const seen = new Set<string>();
+  const templates: TemplateInfo[] = [];
 
   // 1. Project-level templates (highest priority)
   if (projectDir) {
-    const projectTemplateDir = path.join(projectDir, ".pi", "plan-templates");
-    if (fs.existsSync(projectTemplateDir)) {
-      for (const file of fs.readdirSync(projectTemplateDir)) {
-        if (file.endsWith(".md")) {
-          const name = file.replace(/\.md$/, "");
-          templates.push({ name, source: "project", path: path.join(projectTemplateDir, file) });
-          seen.add(name);
-        }
-      }
-    }
+    templates.push(...scanTemplateDir(path.join(projectDir, ".pi", "plan-templates"), "project", seen));
   }
 
   // 2. Global templates
-  const globalTemplateDir = path.join(process.env.HOME || "", ".pi", "agent", "plan-templates");
-  if (fs.existsSync(globalTemplateDir)) {
-    for (const file of fs.readdirSync(globalTemplateDir)) {
-      if (file.endsWith(".md")) {
-        const name = file.replace(/\.md$/, "");
-        if (!seen.has(name)) {
-          templates.push({ name, source: "global", path: path.join(globalTemplateDir, file) });
-          seen.add(name);
-        }
-      }
-    }
-  }
+  templates.push(...scanTemplateDir(path.join(os.homedir(), ".pi", "agent", "plan-templates"), "global", seen));
 
   // 3. Builtin templates (lowest priority)
-  const builtinDir = getBuiltinTemplateDir();
-  if (fs.existsSync(builtinDir)) {
-    for (const file of fs.readdirSync(builtinDir)) {
-      if (file.endsWith(".md")) {
-        const name = file.replace(/\.md$/, "");
-        if (!seen.has(name)) {
-          templates.push({ name, source: "builtin", path: path.join(builtinDir, file) });
-        }
-      }
-    }
-  }
+  templates.push(...scanTemplateDir(getBuiltinTemplateDir(), "builtin", seen));
 
   return templates;
 }
