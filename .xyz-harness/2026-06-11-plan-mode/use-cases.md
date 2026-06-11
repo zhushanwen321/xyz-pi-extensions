@@ -102,3 +102,16 @@ verdict: pass
 | UC-4 | AC-1, AC-4, AC-5, AC-6 |
 
 **未覆盖的 AC:** AC-10 (自定义模板发现), AC-11 (多 session 隔离) — 这些通过 TC-8 和 TC-9 测试覆盖。
+
+## UC 合并说明
+
+plan-mode-design.md 列出 11 个 UC，本 use-cases.md 精简为 4 个核心 UC，其余场景通过以下方式覆盖：
+
+| 原始 UC | 合并到 | 覆盖方式 |
+|---------|--------|----------|
+| UC-3 (重构规划) | UC-1 | 模板选择为 refactor-plan |
+| UC-6 (Plan 迭代修改) | UC-1 Alternative Path | 用户不满意 plan → 回到提问 |
+| UC-7 (中途切换到 Plan Mode) | UC-1 Preconditions | 任何对话中输入 /plan |
+| UC-9 (查看已有 Plan) | UC-4 Alternative Path | 重入逻辑检测已有 plan |
+| UC-10 (Plan 完成后进入实现) | UC-1 Postconditions | compact + goal init |
+| UC-11 (非代码任务规划) | UC-3 | research-plan 模板 |

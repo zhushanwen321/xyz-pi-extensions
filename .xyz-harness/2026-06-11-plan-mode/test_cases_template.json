@@ -5,119 +5,200 @@
       "type": "api",
       "title": "Enter plan mode with /plan command",
       "description": "Verify that /plan command creates plan state and sets phase to brainstorming",
-      "steps": ["Execute /plan with description", "Check state.isActive is true", "Check state.phase is 'brainstorming'", "Check planFilePath is generated"]
+      "steps": ["Execute /plan with description", "Check state.isActive is true", "Check state.phase is 'brainstorming'", "Check planFilePath is generated"],
+      "expected_result": "state.isActive=true, state.phase='brainstorming', planFilePath generated",
+      "priority": "P0",
+      "ac_coverage": ["AC-1"]
     },
     {
       "id": "TC-1-02",
       "type": "api",
       "title": "Enter plan mode without description",
-      "description": "Verify that /plan without args enters plan mode with empty requirement",
-      "steps": ["Execute /plan without args", "Check state.isActive is true", "Check state.requirement is empty"]
+      "description": "Verify that /plan without args checks for existing plan files",
+      "steps": ["Execute /plan without args", "Check for existing plan files in /tmp", "Show 4 options if found"],
+      "expected_result": "Shows existing plan files or enters plan mode",
+      "priority": "P1",
+      "ac_coverage": ["AC-1"]
     },
     {
       "id": "TC-2-01",
       "type": "integration",
       "title": "Brainstorming code exploration before questions",
       "description": "Verify AI explores code before asking user questions",
-      "steps": ["Enter plan mode", "Observe AI behavior", "Verify grep/read executed before ask_user"]
+      "steps": ["Enter plan mode", "Observe AI behavior", "Verify grep/read executed before ask_user"],
+      "expected_result": "AI executes code exploration before asking questions",
+      "priority": "P0",
+      "ac_coverage": ["AC-2"]
     },
     {
       "id": "TC-2-02",
       "type": "integration",
       "title": "Brainstorming proposes 2-3 approaches",
       "description": "Verify AI proposes multiple approaches with trade-offs",
-      "steps": ["Enter plan mode with requirement", "Observe AI brainstorming", "Verify at least 2 approaches proposed"]
+      "steps": ["Enter plan mode with requirement", "Observe AI brainstorming", "Verify at least 2 approaches proposed"],
+      "expected_result": "AI proposes 2-3 approaches with recommendation",
+      "priority": "P0",
+      "ac_coverage": ["AC-3"]
     },
     {
       "id": "TC-3-01",
       "type": "api",
       "title": "Plan file chapter ordering",
       "description": "Verify AI writes chapters in template order without skipping",
-      "steps": ["Select template", "Observe AI writing", "Verify chapters written in order"]
+      "steps": ["Select template", "Observe AI writing", "Verify chapters written in order"],
+      "expected_result": "Chapters written in template order, no skipping",
+      "priority": "P0",
+      "ac_coverage": ["AC-4"]
     },
     {
       "id": "TC-3-02",
       "type": "api",
       "title": "Plan file YAML frontmatter",
       "description": "Verify plan file has correct YAML frontmatter",
-      "steps": ["Complete plan writing", "Read plan file", "Verify YAML frontmatter exists with template, created, status fields"]
+      "steps": ["Complete plan writing", "Read plan file", "Verify YAML frontmatter exists with template, created, status fields"],
+      "expected_result": "YAML frontmatter contains template, created, status",
+      "priority": "P0",
+      "ac_coverage": ["AC-5"]
     },
     {
       "id": "TC-4-01",
       "type": "api",
-      "title": "Abort plan mode",
+      "title": "Abort plan mode via /plan abort",
       "description": "Verify /plan abort cancels plan mode and resets state",
-      "steps": ["Enter plan mode", "Execute /plan abort", "Check state.isActive is false", "Check state.phase is 'idle'"]
+      "steps": ["Enter plan mode", "Execute /plan abort", "Check state.isActive is false", "Check state.phase is 'idle'"],
+      "expected_result": "state.isActive=false, state.phase='idle'",
+      "priority": "P0",
+      "ac_coverage": ["AC-6"]
     },
     {
       "id": "TC-4-02",
       "type": "api",
       "title": "Plan tool abort action",
       "description": "Verify plan tool abort action works correctly",
-      "steps": ["Enter plan mode", "Call plan tool with action=abort", "Check state is reset"]
+      "steps": ["Enter plan mode", "Call plan tool with action=abort", "Check state is reset"],
+      "expected_result": "State reset to DEFAULT_PLAN_STATE",
+      "priority": "P0",
+      "ac_coverage": ["AC-6"]
     },
     {
       "id": "TC-5-01",
       "type": "integration",
       "title": "Complete with compact isolation",
       "description": "Verify complete action triggers compact when user selects compact",
-      "steps": ["Complete plan", "Select compact isolation", "Verify compact executed", "Verify steer injected"]
+      "steps": ["Complete plan", "Select compact isolation", "Verify compact executed", "Verify steer injected"],
+      "expected_result": "Compact executed, steer injected with plan path",
+      "priority": "P0",
+      "ac_coverage": ["AC-7"]
     },
     {
       "id": "TC-5-02",
       "type": "integration",
       "title": "Complete with direct isolation",
       "description": "Verify complete action injects steer directly when user selects direct",
-      "steps": ["Complete plan", "Select direct isolation", "Verify steer injected without compact"]
+      "steps": ["Complete plan", "Select direct isolation", "Verify steer injected without compact"],
+      "expected_result": "Steer injected directly without compact",
+      "priority": "P0",
+      "ac_coverage": ["AC-8"]
+    },
+    {
+      "id": "TC-5-03",
+      "type": "integration",
+      "title": "Complete with tree isolation",
+      "description": "Verify complete action with tree isolation only notifies, doesn't inject steer or start goal",
+      "steps": ["Complete plan", "Select tree isolation", "Verify only notification sent", "Verify goal not started"],
+      "expected_result": "Only notify user, no steer injection, no goal init",
+      "priority": "P1",
+      "ac_coverage": ["AC-6"]
     },
     {
       "id": "TC-6-01",
       "type": "integration",
       "title": "Compact failure fallback",
       "description": "Verify fallback to direct continue when compact fails",
-      "steps": ["Simulate compact failure", "Complete plan with compact", "Verify fallback to direct", "Verify user notified"]
+      "steps": ["Simulate compact failure", "Complete plan with compact", "Verify fallback to direct", "Verify user notified"],
+      "expected_result": "Fallback to direct, user notified",
+      "priority": "P0",
+      "ac_coverage": ["AC-8"]
     },
     {
       "id": "TC-7-01",
       "type": "integration",
       "title": "Goal API initialization",
       "description": "Verify __goalInit is called when goal extension is available",
-      "steps": ["Ensure goal extension loaded", "Complete plan", "Verify __goalInit called with plan path"]
+      "steps": ["Ensure goal extension loaded", "Complete plan", "Verify __goalInit called with plan path"],
+      "expected_result": "__goalInit called with plan file path",
+      "priority": "P0",
+      "ac_coverage": ["AC-9"]
     },
     {
       "id": "TC-8-01",
       "type": "api",
       "title": "List templates includes custom templates",
       "description": "Verify list-template action discovers user custom templates",
-      "steps": ["Create template in .pi/plan-templates/", "Call plan tool list-template", "Verify custom template in list"]
+      "steps": ["Create template in .pi/plan-templates/", "Call plan tool list-template", "Verify custom template in list"],
+      "expected_result": "Custom template appears in list",
+      "priority": "P0",
+      "ac_coverage": ["AC-10"]
     },
     {
       "id": "TC-8-02",
       "type": "api",
       "title": "Project template overrides global",
       "description": "Verify project-level template overrides global template with same name",
-      "steps": ["Create same-name template in global and project dirs", "Call list-template", "Verify project template takes precedence"]
+      "steps": ["Create same-name template in global and project dirs", "Call list-template", "Verify project template takes precedence"],
+      "expected_result": "Project template listed before global",
+      "priority": "P1",
+      "ac_coverage": ["AC-10"]
     },
     {
       "id": "TC-9-01",
       "type": "integration",
       "title": "Multi-session state isolation",
       "description": "Verify plan state is isolated between sessions",
-      "steps": ["Enter plan mode in session A", "Enter plan mode in session B", "Verify states are independent"]
+      "steps": ["Enter plan mode in session A", "Enter plan mode in session B", "Verify states are independent"],
+      "expected_result": "Session A and B have independent states",
+      "priority": "P0",
+      "ac_coverage": ["AC-11"]
     },
     {
       "id": "TC-10-01",
       "type": "ui",
       "title": "TUI shows Plan Mode label",
       "description": "Verify TUI status bar shows [Plan Mode] when active",
-      "steps": ["Enter plan mode", "Check TUI widget", "Verify [Plan Mode] displayed"]
+      "steps": ["Enter plan mode", "Check TUI widget", "Verify [Plan Mode] displayed"],
+      "expected_result": "[Plan Mode] displayed in status bar",
+      "priority": "P1",
+      "ac_coverage": ["AC-1"]
     },
     {
       "id": "TC-10-02",
       "type": "ui",
       "title": "TUI hides label when inactive",
       "description": "Verify TUI status bar hides label when plan mode is not active",
-      "steps": ["Abort plan mode", "Check TUI widget", "Verify label hidden"]
+      "steps": ["Abort plan mode", "Check TUI widget", "Verify label hidden"],
+      "expected_result": "[Plan Mode] label hidden",
+      "priority": "P1",
+      "ac_coverage": ["AC-6"]
+    },
+    {
+      "id": "TC-11-01",
+      "type": "api",
+      "title": "Invalid action returns error",
+      "description": "Verify plan tool returns error for unknown action",
+      "steps": ["Call plan tool with action='invalid'", "Verify error returned"],
+      "expected_result": "Error: Unknown plan action",
+      "priority": "P1",
+      "ac_coverage": []
+    },
+    {
+      "id": "TC-12-01",
+      "type": "api",
+      "title": "Template not found returns error",
+      "description": "Verify select-template returns error for non-existent template",
+      "steps": ["Call plan tool select-template with templateName='nonexistent'", "Verify error returned"],
+      "expected_result": "Error: Template not found",
+      "priority": "P1",
+      "ac_coverage": ["AC-5"]
     }
   ]
 }

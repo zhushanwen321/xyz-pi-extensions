@@ -45,3 +45,23 @@ verdict: pass
 **权限控制:** Plan 文件权限继承 /tmp 目录默认权限（通常 755），无额外安全风险。
 
 **跨 extension 调用:** `__goalInit` 是内部 API，通过 `(pi as Record<string, unknown>)` 访问，不暴露给外部。
+
+## 6. 可扩展性
+
+模板数量增长时，`listTemplates()` 扫描 3 个目录，文件数 < 100 时性能无问题。新增 plan action 需修改 `PLAN_ACTIONS` 常量和 `switch` 分支，影响范围可控。
+
+## 7. 可观测性
+
+关键状态变更（进入/退出 plan mode、compact 成功/失败、goal init 成功/失败）通过 `ctx.ui.notify` 输出。错误路径使用 warning 级别，正常路径使用 info 级别。
+
+## 8. 兼容性
+
+`/tmp` 路径在 macOS/Linux 通用。Windows 需使用 `%TEMP%`，当前不支持（Pi 主要面向 macOS/Linux）。Pi 旧版本不支持 `ctx.compact()` 时降级为直接继续。
+
+## 9. 资源管理
+
+`/tmp/plan-*.md` 文件不主动清理。长期使用可能累积大量 plan 文件。建议用户定期清理或使用 `find /tmp -name 'plan-*.md' -mtime +7 -delete`。
+
+## 10. 跨 Extension 契约稳定性
+
+`__goalInit` 通过 `as Record<string, unknown>` 访问是类型断言 hack。pi-goal 重构签名时 plan 会静默失败（catch 块降级）。建议 pi-goal 将 `__goalInit` 声明为公开 API。

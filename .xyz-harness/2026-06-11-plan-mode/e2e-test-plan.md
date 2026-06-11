@@ -129,6 +129,57 @@ verdict: pass
 
 **预期结果:** Session 隔离正确
 
+### TS-10: Complete + Tree 隔离
+
+**AC 覆盖:** AC-6, FR-5.4
+
+**场景:** Plan 完成后选择 tree 隔离方式
+
+**步骤:**
+1. 完成 plan 编写
+2. 调用 `plan` tool (complete, isolation="tree")
+3. 验证只通知用户手动 /tree，不注入 steer
+4. 验证不自动启动 goal
+
+**预期结果:** Tree 隔离只通知，不自动操作
+
+### TS-11: 无效 Action 测试
+
+**AC 覆盖:** FR-3 (边界)
+
+**场景:** 调用 plan tool 时传入无效 action
+
+**步骤:**
+1. 调用 `plan` tool (action="invalid")
+2. 验证返回错误信息
+
+**预期结果:** 返回 "Unknown plan action" 错误
+
+### TS-12: 模板不存在测试
+
+**AC 覆盖:** FR-4 (边界)
+
+**场景:** select-template 时模板不存在
+
+**步骤:**
+1. 调用 `plan` tool (select-template, templateName="nonexistent")
+2. 验证返回错误信息
+
+**预期结果:** 返回 "Template not found" 错误
+
+### TS-13: Goal Extension 未安装测试
+
+**AC 覆盖:** FR-6 (降级)
+
+**场景:** goal extension 未安装时 plan complete
+
+**步骤:**
+1. 卸载 goal extension
+2. 完成 plan 并调用 complete
+3. 验证 goal init 失败时降级通知
+
+**预期结果:** 降级通知用户，不阻塞流程
+
 ## Test Environment
 
 - **Pi 版本:** 最新

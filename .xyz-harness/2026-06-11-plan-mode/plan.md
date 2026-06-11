@@ -32,13 +32,13 @@ complexity: L1
 | `extensions/plan/src/state.ts` | create | BG1 | 状态类型定义 + 持久化逻辑 + session Map |
 | `extensions/plan/src/tool.ts` | create | BG1 | plan tool 注册 + 5 个 action handler |
 | `extensions/plan/src/command.ts` | create | BG1 | `/plan` command 注册（含 abort/status/重入） |
-| `extensions/plan/src/templates.ts` | create | BG2 | 模板发现 + 加载逻辑 |
+| `extensions/plan/src/templates.ts` | create | BG1 | 模板发现 + 加载逻辑 |
 | `extensions/plan/src/compact.ts` | create | BG2 | compact/tree handler + steer 注入 |
-| `extensions/plan/src/widget.ts` | create | BG2 | TUI 状态栏渲染 |
+| `extensions/plan/src/widget.ts` | create | BG1 | TUI 状态栏渲染 |
 | `extensions/plan/skills/plan-mode/SKILL.md` | create | BG2 | Plan mode 系统提示词 |
 | `extensions/plan/templates/*.md` | create | BG2 | 5 个内置模板文件 |
 | `extensions/plan/src/__tests__/state.test.ts` | create | BG1 | 状态管理测试 |
-| `extensions/plan/src/__tests__/templates.test.ts` | create | BG2 | 模板系统测试 |
+| `extensions/plan/src/__tests__/templates.test.ts` | create | BG1 | 模板系统测试 |
 | `extensions/plan/src/__tests__/compact.test.ts` | create | BG2 | compact handler 测试 |
 | `shared/types/mariozechner/index.d.ts` | modify | — | 类型 stub（如需） |
 
@@ -215,13 +215,13 @@ complexity: L1
 
 **Dependencies:** BG0
 
-#### BG2: 模板 + Compact + TUI + SKILL
+#### BG2: Compact + SKILL
 
-**Description:** 模板发现/加载逻辑、5 个内置模板文件、compact/tree handler、steer 注入、TUI widget、SKILL.md。依赖 BG1 的 state 类型和 tool/command 注册。
+**Description:** compact/tree handler、steer 注入、SKILL.md。templates.ts 和 widget.ts 已移至 BG1，compact.ts 通过 dynamic import 被 BG1 的 tool.ts 调用。
 
-**Tasks:** Task 5, Task 6, Task 7
+**Tasks:** Task 6, Task 7
 
-**Files (预估):** 10 个文件（10 create）
+**Files (预估):** 8 个文件（8 create）
 
 **Subagent 配置:**
 
@@ -229,9 +229,9 @@ complexity: L1
 |--------|---|
 | Agent | general-purpose → general-purpose → general-purpose |
 | Model | taskComplexity: medium |
-| 注入上下文 | Task 描述 + spec FR-4, FR-5, FR-10 + coding-workflow compact 参考 |
+| 注入上下文 | Task 描述 + spec FR-5, FR-6 + coding-workflow compact 参考 |
 | 读取文件 | extensions/coding-workflow/lib/tool-handlers.ts (compact 逻辑) |
-| 修改/创建文件 | extensions/plan/src/templates.ts, extensions/plan/src/compact.ts, extensions/plan/src/widget.ts, extensions/plan/skills/*, extensions/plan/templates/* |
+| 修改/创建文件 | extensions/plan/src/compact.ts, extensions/plan/skills/*, extensions/plan/templates/* |
 
 **Execution Flow (BG2 内部):** 串行派遣
 
@@ -338,6 +338,7 @@ git commit -m "chore: register @zhushanwen/pi-plan in project structure"
 ```typescript
 // extensions/plan/src/__tests__/state.test.ts
 import { describe, it, expect, vi } from "vitest";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { DEFAULT_PLAN_STATE, type PlanState, type PlanPhase, type PlanSessionMap, getPlanState } from "../state.js";
 
 describe("PlanState", () => {
@@ -491,6 +492,13 @@ export function reconstructPlanState(ctx: ExtensionContext): PlanState {
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": ">=0.73.0"
   },
+  "scripts": {
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.8"
+  },
   "files": ["index.ts", "src/", "skills/", "templates/"]
 }
 ```
@@ -554,7 +562,7 @@ git add extensions/plan/
 git commit -m "feat(plan): add package structure and state types with session isolation"
 ```
 
-### Task 2: State 持久化与重建（per-session）
+### Task 2: State 持久化测试增量（test-only）
 
 **Type:** backend
 
@@ -566,6 +574,7 @@ git commit -m "feat(plan): add package structure and state types with session is
 
 ```typescript
 // extensions/plan/src/__tests__/state.test.ts (add to existing)
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { persistPlanState, reconstructPlanState } from "../state.js";
 
 describe("State persistence", () => {
@@ -688,10 +697,10 @@ Expected: FAIL with "Cannot find module '../tool.js'"
 // extensions/plan/src/tool.ts
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
+import { StringEnum } from "@mariozechner/pi-ai";
 import type { PlanSessionMap, PlanState } from "./state.js";
 import { getPlanState, persistPlanState } from "./state.js";
 import { listTemplates, loadTemplate } from "./templates.js";
-import { handlePlanComplete } from "./compact.js";
 import { updatePlanWidget } from "./widget.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -724,7 +733,7 @@ export function registerPlanTool(
       action: Type.String({ description: "Action to perform" }),
       templateName: Type.Optional(Type.String({ description: "Template name (for select-template)" })),
       templateContent: Type.Optional(Type.String({ description: "Template content (for create-template)" })),
-      isolation: Type.Optional(Type.String({ description: "Context isolation method for complete: compact, tree, direct" })),
+      isolation: Type.Optional(StringEnum(["compact", "tree", "direct"])),
     }),
     promptSnippet: "Use plan tool for plan mode operations",
     async execute(
@@ -761,6 +770,7 @@ export function registerPlanTool(
             throw new Error(`Template not found: ${templateName}`);
           }
           state.templateName = templateName;
+          state.phase = "writing";
           persistPlanState(pi, state);
           return {
             content: [{ type: "text" as const, text: `Template selected: ${templateName}` }],
@@ -793,6 +803,8 @@ export function registerPlanTool(
           state.phase = "complete";
           persistPlanState(pi, state);
           const isolation = (params.isolation as string) ?? "direct";
+          // Dynamic import: compact.ts is in BG2, tool.ts is in BG1
+          const { handlePlanComplete } = await import("./compact.js");
           handlePlanComplete(pi, ctx, state, isolation);
           return {
             content: [{ type: "text" as const, text: "Plan complete. Switching to implementation..." }],
@@ -938,6 +950,8 @@ export function registerPlanCommand(
         ? trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30)
         : "untitled";
 
+      // 注意：/tmp 是 OS 级共享路径，不同项目的 plan 文件会混在一起
+      // spec v1 设计选择，接受跨项目泄漏风险（reentry 扫描会误捡其他项目的 plan）
       const planFilePath = path.join(os.tmpdir(), `plan-${slug}.md`);
 
       state.isActive = true;
@@ -969,12 +983,20 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { type PlanSessionMap, type PlanState, DEFAULT_PLAN_STATE, reconstructPlanState } from "./state.js";
 import { registerPlanTool } from "./tool.js";
 import { registerPlanCommand } from "./command.js";
-import { registerPlanEventHandlers } from "./compact.js";
 import { updatePlanWidget } from "./widget.js";
 
 export default function planExtension(pi: ExtensionAPI) {
   // Per-session state cache — keyed by sessionId
   const sessions: PlanSessionMap = new Map();
+
+  // Register tool and command with session map (BG1)
+  registerPlanTool(pi, sessions);
+  registerPlanCommand(pi, sessions);
+
+  // Dynamic import compact handlers (BG2) — avoids cross-group static import
+  import("./compact.js").then(({ registerPlanEventHandlers }) => {
+    registerPlanEventHandlers(pi, sessions);
+  }).catch(() => { /* compact is optional at load time */ });
 
   // Register tool and command with session map
   registerPlanTool(pi, sessions);
@@ -1189,7 +1211,108 @@ status: draft
 <!-- 风险和缓解措施 -->
 ```
 
-（其他 4 个模板类似，各有不同的章节结构）
+其他 4 个模板章节结构如下（与 plan-mode-design.md §4.1 一致）：
+
+```markdown
+<!-- extensions/plan/templates/bugfix-plan.md -->
+---
+template: bugfix-plan
+created: ""
+status: draft
+---
+
+# Bugfix Plan: [Bug Name]
+
+## 现象
+<!-- Bug 的具体表现 -->
+
+## 根因分析
+<!-- 通过代码探索和日志分析得出的根因 -->
+
+## 修复策略
+<!-- 修复方案和替代方案 -->
+
+## 受影响文件
+<!-- 需要修改的文件列表 -->
+
+## 回归测试
+<!-- 如何验证修复不会引入新问题 -->
+```
+
+```markdown
+<!-- extensions/plan/templates/refactor-plan.md -->
+---
+template: refactor-plan
+created: ""
+status: draft
+---
+
+# Refactor Plan: [Refactor Name]
+
+## 现状
+<!-- 当前代码的问题 -->
+
+## 目标结构
+<!-- 重构后的目标架构 -->
+
+## 分步骤计划
+<!-- 重构的分步执行计划 -->
+
+## 风险与缓解
+<!-- 重构风险和缓解措施 -->
+
+## 验证
+<!-- 如何验证重构正确性 -->
+```
+
+```markdown
+<!-- extensions/plan/templates/research-plan.md -->
+---
+template: research-plan
+created: ""
+status: draft
+---
+
+# Research Plan: [Topic]
+
+## 问题
+<!-- 需要调研的问题 -->
+
+## 候选方案
+<!-- 候选方案列表 -->
+
+## 对比分析
+<!-- 方案的优劣对比 -->
+
+## 推荐
+<!-- 推荐方案和理由 -->
+
+## 后续步骤
+<!-- 调研结论后的下一步 -->
+```
+
+```markdown
+<!-- extensions/plan/templates/implementation-plan.md -->
+---
+template: implementation-plan
+created: ""
+status: draft
+---
+
+# Implementation Plan: [Feature Name]
+
+## Spec 摘要
+<!-- 对应 spec 的关键要求 -->
+
+## 任务分解
+<!-- 分解为可执行的任务 -->
+
+## 实现顺序
+<!-- 任务的依赖关系和执行顺序 -->
+
+## 验证
+<!-- 如何验证实现正确性 -->
+```
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1218,24 +1341,27 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import type { PlanSessionMap } from "./state.js";
 import { getPlanState, persistPlanState } from "./state.js";
 
-type GoalInitFn = (objective: string, tasks: string[], budget?: Record<string, unknown>) => boolean;
+type GoalInitFn = (objective: string, tasks: string[], budget?: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number }) => boolean;
 
 export function registerPlanEventHandlers(
   pi: ExtensionAPI,
   sessions: PlanSessionMap,
 ): void {
   // session_before_compact: customize compaction summary
-  pi.on("session_before_compact", async (_event: unknown, ctx: ExtensionContext) => {
+  pi.on("session_before_compact", async (event: unknown, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionId ?? "default";
     const state = getPlanState(sessions, sessionId, ctx);
     if (!state.isActive || state.phase !== "complete") return {};
 
+    const prep = (event as { preparation?: { firstKeptEntryId?: string; tokensBefore?: number } })?.preparation;
     return {
       compaction: {
         summary:
           `Plan mode completed. Plan file: ${state.planFilePath}\n\n` +
           `Next step: Read the plan file and execute the implementation.\n` +
           `Use /goal or start implementing directly.`,
+        firstKeptEntryId: prep?.firstKeptEntryId,
+        tokensBefore: prep?.tokensBefore,
       },
     };
   });
@@ -1267,22 +1393,18 @@ export function handlePlanComplete(
 
   switch (isolation) {
     case "compact": {
-      try {
-        ctx.compact({
-          customInstructions: `Plan file: ${state.planFilePath}. Read and execute.`,
-          onComplete: () => {
-            pi.sendUserMessage(steerMessage, { deliverAs: "steer" });
-          },
-          onError: (_error: Error) => {
-            // Fallback to direct continue
-            ctx.ui.notify("Compact failed, continuing without isolation.", "warning");
-            pi.sendUserMessage(steerMessage, { deliverAs: "steer" });
-          },
-        });
-      } catch {
-        ctx.ui.notify("Compact failed, continuing without isolation.", "warning");
-        pi.sendUserMessage(steerMessage, { deliverAs: "steer" });
-      }
+      // SDK compact() 用 IIFE 包裹 try/catch，错误只走 onError，不会向外抛出
+      ctx.compact({
+        customInstructions: `Plan file: ${state.planFilePath}. Read and execute.`,
+        onComplete: () => {
+          pi.sendUserMessage(steerMessage, { deliverAs: "steer" });
+        },
+        onError: (_error: Error) => {
+          // Fallback to direct continue
+          ctx.ui.notify("Compact failed, continuing without isolation.", "warning");
+          pi.sendUserMessage(steerMessage, { deliverAs: "steer" });
+        },
+      });
       break;
     }
 
@@ -1299,16 +1421,18 @@ export function handlePlanComplete(
     }
   }
 
-  // Try to initialize goal
-  try {
-    const goalInit = (pi as unknown as Record<string, unknown>).__goalInit as GoalInitFn | undefined;
-    if (goalInit) {
-      goalInit(
-        `Execute plan: ${state.planFilePath}`,
-        ["Read plan file", "Execute implementation steps"],
-      );
-    }
-  } catch (e) { ctx.ui.notify(`Goal init failed: ${e}`, "warning"); }
+  // Try to initialize goal (skip for tree — user manually controls when to start goal)
+  if (isolation !== "tree") {
+    try {
+      const goalInit = (pi as unknown as Record<string, unknown>).__goalInit as GoalInitFn | undefined;
+      if (goalInit) {
+        goalInit(
+          `Execute plan: ${state.planFilePath}`,
+          ["Read plan file", "Execute implementation steps"],
+        );
+      }
+    } catch (e) { ctx.ui.notify(`Goal init failed: ${e}`, "warning"); }
+  }
 }
 ```
 
