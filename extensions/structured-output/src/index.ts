@@ -56,10 +56,10 @@ export default function structuredOutputExtension(pi: PiAPI): void {
 			"Do not output JSON in text — call this tool instead.",
 		],
 		parameters: Type.Object({
-			schema: Type.Any({
+			schema: Type.Unknown({
 				description: "JSON Schema draft-07 object. Example: {type:'object',properties:{name:{type:'string'}},required:['name']}",
 			}),
-			data: Type.Any({
+			data: Type.Unknown({
 				description: "The value to validate against schema. Example: {name:'Alice'}",
 			}),
 		}),

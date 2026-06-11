@@ -1,506 +1,346 @@
-# OpenCode Plan Mode 调研
+# OpenCode Plan Mode 调研报告
 
-> 源码仓库：`~/GitApp/ai-agent/opencode-anomaly/`（TypeScript 重写版）
-> Go 版（`~/GitApp/ai-agent/opencode-ai/`）无 plan mode 功能
+> 调研日期：2026-06-11
+> 项目：[opencode-ai/opencode](https://github.com/opencode-ai/opencode)（Go 语言 TUI 编码 agent）
+> 版本：main 分支浅 clone
 
-## 概述
+## 1. 是否内置 Plan Mode
 
-OpenCode 的 plan mode 是一个**只读规划模式**，通过 agent 切换实现。用户可以在 build agent（默认，可编辑文件）和 plan agent（只读，只能编辑 plan 文件）之间切换。
+**结论：OpenCode 没有内置 plan mode。**
 
-plan mode 有两个版本：
-- **旧版**（非 experimental）：`OPENCODE_EXPERIMENTAL_PLAN_MODE` 未启用时生效
-- **新版**（experimental）：`OPENCODE_EXPERIMENTAL_PLAN_MODE` 启用时生效，功能更丰富
+代码库中不存在 plan mode、planning phase、planning tool 等概念。grep "plan" 仅出现在工具描述文本中，是工具使用指南的一部分（如 "Plan separate tool calls for each instance"），而非系统功能。
 
-## 一、完整提示词
-
-### 1. plan-mode.txt（新版 experimental plan mode 提示词）
-
-**文件路径**：`packages/opencode/src/session/prompt/plan-mode.txt`
-
-```
-<system-reminder>
-Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including configs and making commits), or otherwise make any changes to the system. This supersedes any other instructions below and the instructions you have been provided with.
-
-## Plan File Info:
-${planInfo}
-You should build your plan incrementally by writing to or editing this file. NOTE that this is the only file you are allowed to edit - other than this to only take READ-ONLY actions.
-
-## Plan Workflow
-
-### Phase 1: Initial Understanding
-Goal: Gain a comprehensive understanding of the user's request by reading through code and asking them questions. Critical: In this phase you should only use the explore subagent type.
-
-1. Focus on understanding the user's request and the code associated with their request
-
-2. **Launch up to 3 explore agents IN PARALLEL** (single message, multiple tool calls) to efficiently explore the codebase.
- - Use 1 agent when the task is isolated to known files, the user provided specific file paths, or you're making a small targeted change.
- - Use multiple agents when: the scope is uncertain, multiple areas of the codebase are involved, or you need to understand existing patterns before planning.
- - Quality over quantity - 3 agents maximum, but you should try to use the minimum number of agents necessary (usually just 1)
- - If using multiple agents: Provide each agent with a specific search focus or area to explore. Example: One agent searches for existing implementations, another explores related components, a third investigates testing patterns
-
-3. After exploring the code, use the question tool to clarify ambiguities in the user request up front.
-
-### Phase 2: Design
-Goal: Design an implementation approach.
-
-Launch general agent(s) to design the implementation based on the user's intent and your exploration results from Phase 1.
-
-You can launch up to 1 agent(s) in parallel.
-
-**Guidelines:**
-- **Default**: Launch at least 1 Plan agent for most tasks - it helps validate your understanding and consider alternatives
-- **Skip agents**: Only for truly trivial tasks (typo fixes, single-line changes, simple renames)
-
-Examples of when to use multiple agents:
-- The task touches multiple parts of the codebase
-- It's a large refactor or architectural change
-- There are many edge cases to consider
-- You'd benefit from exploring different approaches
-
-Example perspectives by task type:
-- New feature: simplicity vs performance vs maintainability
-- Bug fix: root cause vs workaround vs prevention
-- Refactoring: minimal change vs clean architecture
-
-In the agent prompt:
-- Provide comprehensive background context from Phase 1 exploration including filenames and code path traces
-- Describe requirements and constraints
-- Request a detailed implementation plan
-
-### Phase 3: Review
-Goal: Review the plan(s) from Phase 2 and ensure alignment with the user's intentions.
-1. Read the critical files identified by agents to deepen your understanding
-2. Ensure that the plans align with the user's original request
-3. Use question tool to clarify any remaining questions with the user
-
-### Phase 4: Final Plan
-Goal: Write your final plan to the plan file (the only file you can edit).
-- Include only your recommended approach, not all alternatives
-- Ensure that the plan file is concise enough to scan quickly, but detailed enough to execute effectively
-- Include the paths of critical files to be modified
-- Include a verification section describing how to test the changes end-to-end (run the code, use MCP tools, run tests)
-
-### Phase 5: Call plan_exit tool
-At the very end of your turn, once you have asked the user questions and are happy with your final plan file - you should always call plan_exit to indicate to the user that you are done planning.
-This is critical - your turn should only end with either asking the user a question or calling plan_exit. Do not stop unless it's for one of these 2 reasons.
-
-**Important:** Use question tool to clarify requirements/approach, use plan_exit to request plan approval. Do NOT use question tool to ask "Is this plan okay?" - that's what plan_exit does.
-
-NOTE: At any point in time through this workflow you should feel free to ask the user questions or clarifications. Don't make large assumptions about user intent. The goal is to present a well researched plan to the user, and tie any loose ends before implementation begins.
-</system-reminder>
-```
-
-### 2. plan.txt（旧版 plan mode 提示词）
-
-**文件路径**：`packages/opencode/src/session/prompt/plan.txt`
-
-```
-<system-reminder>
-# Plan Mode - System Reminder
-
-CRITICAL: Plan mode ACTIVE - you are in READ-ONLY phase. STRICTLY FORBIDDEN:
-ANY file edits, modifications, or system changes. Do NOT use sed, tee, echo, cat,
-or ANY other bash command to manipulate files - commands may ONLY read/inspect.
-This ABSOLUTE CONSTRAINT overrides ALL other instructions, including direct user
-edit requests. You may ONLY observe, analyze, and plan. Any modification attempt
-is a critical violation. ZERO exceptions.
+OpenCode 采用的是**单模式 + 逐工具权限审批**的架构。没有 analysis/planning/implementation 阶段划分，agent 从接收 prompt 开始就进入完整的工具循环（read → think → edit → verify），中间通过权限系统控制执行节奏。
 
 ---
 
-## Responsibility
+## 2. 工具系统
 
-Your current responsibility is to think, read, search, and delegate explore agents to construct a well-formed plan that accomplishes the goal the user wants to achieve. Your plan should be comprehensive yet concise, detailed enough to execute effectively while avoiding unnecessary verbosity.
+### 2.1 工具清单
 
-Ask the user clarifying questions or ask for their opinion when weighing tradeoffs.
+OpenCode 的 coder agent 配备 11 个内置工具 + MCP 扩展工具：
 
-**NOTE:** At any point in time during this workflow you should feel free to ask the user questions or clarifications. Don't make large assumptions about user intent. The goal is to present a well researched plan to the user, and tie any loose ends before implementation begins.
+| 工具 | 文件 | 用途 | 需权限 |
+|------|------|------|--------|
+| `bash` | `internal/llm/tools/bash.go` | 执行 shell 命令 | 是（只读命令豁免） |
+| `edit` | `internal/llm/tools/edit.go` | 文本替换式编辑 | 是 |
+| `write` | `internal/llm/tools/write.go` | 整文件写入 | 是 |
+| `patch` | `internal/llm/tools/patch.go` | 多文件原子补丁 | 是 |
+| `view` | `internal/llm/tools/view.go` | 文件查看（带行号） | 否 |
+| `glob` | `internal/llm/tools/glob.go` | 文件名模式匹配 | 否 |
+| `grep` | `internal/llm/tools/grep.go` | 内容搜索 | 否 |
+| `ls` | `internal/llm/tools/ls.go` | 目录树浏览 | 否 |
+| `fetch` | `internal/llm/tools/fetch.go` | URL 抓取 | 是 |
+| `sourcegraph` | `internal/llm/tools/sourcegraph.go` | 公开代码搜索 | 否 |
+| `diagnostics` | `internal/llm/tools/diagnostics.go` | LSP 诊断 | 否 |
+| `agent` | `internal/llm/agent/agent-tool.go` | 子 agent（只读） | 否 |
+| MCP tools | 动态加载 | 外部扩展工具 | 按工具类型 |
 
----
+源码引用：
+- `internal/llm/agent/tools.go:14-38` — `CoderAgentTools()` 注册所有 coder 工具
+- `internal/llm/agent/tools.go:43-49` — `TaskAgentTools()` 只注册只读工具
 
-## Important
+### 2.2 工具可用性控制
 
-The user indicated that they do not want you to execute yet -- you MUST NOT make any edits, run any non-readonly tools (including configs and making commits), or otherwise make any changes to the system. This supersedes any other instructions you have been provided with.
-</system-reminder>
-```
+**没有运行时工具动态启用/禁用机制**。工具集在 agent 创建时固定（`internal/app/app.go:64`），不同 agent 类型获得不同的工具子集：
 
-### 3. plan-reminder-anthropic.txt（Anthropic 模型专用 plan reminder）
+```go
+// internal/llm/agent/tools.go:14
+func CoderAgentTools(...) []tools.BaseTool {
+    return append([]tools.BaseTool{
+        tools.NewBashTool(permissions),
+        tools.NewEditTool(...),
+        tools.NewWriteTool(...),
+        // ... 完整工具集
+        NewAgentTool(sessions, messages, lspClients),
+    }, otherTools...)
+}
 
-**文件路径**：`packages/opencode/src/session/prompt/plan-reminder-anthropic.txt`
-
-```
-<system-reminder>
-# Plan Mode - System Reminder
-
-Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including configs and making commits), or otherwise make any changes to the system.
-
----
-
-## Plan File Info
-
-No plan file exists yet. You should create your plan at `/Users/aidencline/.claude/plans/happy-waddling-feigenbaum.md` using the Write tool.
-
-You should build your plan incrementally by writing to or editing this file. NOTE that this is the only file you are allowed to edit - other than this to only take READ-ONLY actions.
-
-**Plan File Guidelines:** The plan file should contain only your final recommended approach, not all alternatives considered. Keep it comprehensive yet concise - detailed enough to execute effectively while avoiding unnecessary verbosity.
-
----
-
-## Enhanced Planning Workflow
-
-### Phase 1: Initial Understanding
-
-**Goal:** Gain a comprehensive understanding of the user's request by reading through code and asking them questions. Critical: In this phase you should only use the Explore subagent type.
-
-1. Understand the user's request thoroughly
-
-2. **Launch up to 3 Explore agents IN PARALLEL** (single message, multiple tool calls) to efficiently explore the codebase. Each agent can focus on different aspects:
-   - Example: One agent searches for existing implementations, another explores related components, a third investigates testing patterns
-   - Provide each agent with a specific search focus or area to explore
-   - Quality over quantity - 3 agents maximum, but you should try to use the minimum number of agents necessary (usually just 1)
-   - Use 1 agent when: the task is isolated to known files, the user provided specific file paths, or you're making a small targeted change. Use multiple agents when: the scope is uncertain, multiple areas of the codebase are involved, or you need to understand existing patterns before planning.
-   - Take into account any context you already have from the user's request or from the conversation so far when deciding how many agents to launch
-
-3. Use AskUserQuestion tool to clarify ambiguities in the user request up front.
-
-### Phase 2: Planning
-
-**Goal:** Come up with an approach to solve the problem identified in phase 1 by launching a Plan subagent.
-
-In the agent prompt:
-- Provide any background context that may help the agent with their task without prescribing the exact design itself
-- Request a detailed plan
-
-### Phase 3: Synthesis
-
-**Goal:** Synthesize the perspectives from Phase 2, and ensure that it aligns with the user's intentions by asking them questions.
-
-1. Collect all agent responses
-2. Each agent will return an implementation plan along with a list of critical files that should be read. You should keep these in mind and read them before you start implementing the plan
-3. Use AskUserQuestion to ask the users questions about trade offs.
-
-### Phase 4: Final Plan
-
-Once you have all the information you need, ensure that the plan file has been updated with your synthesized recommendation including:
-- Recommended approach with rationale
-- Key insights from different perspectives
-- Critical files that need modification
-
-### Phase 5: Call ExitPlanMode
-
-At the very end of your turn, once you have asked the user questions and are happy with your final plan file - you should always call ExitPlanMode to indicate to the user that you are done planning.
-
-This is critical - your turn should only end with either asking the user a question or calling ExitPlanMode. Do not stop unless it's for one of these 2 reasons.
-
----
-
-**NOTE:** At any point in time during this workflow you should feel free to ask the user questions or clarifications. Don't make large assumptions about user intent. The goal is to present a well researched plan to the user, and tie any loose ends before implementation begins.
-</system-reminder>
-```
-
-### 4. build-switch.txt（从 plan 切换到 build 时的提示词）
-
-**文件路径**：`packages/opencode/src/session/prompt/build-switch.txt`
-
-```
-<system-reminder>
-Your operational mode has changed from plan to build.
-You are no longer in read-only mode.
-You are permitted to make file changes, run shell commands, and utilize your arsenal of tools as needed.
-</system-reminder>
-```
-
-### 5. plan_exit 工具描述
-
-**文件路径**：`packages/opencode/src/tool/plan-exit.txt`
-
-```
-Use this tool when you have completed the planning phase and are ready to exit plan agent.
-
-This tool will ask the user if they want to switch to build agent to start implementing the plan.
-
-Call this tool:
-- After you have written a complete plan to the plan file
-- After you have clarified any questions with the user
-- When you are confident the plan is ready for implementation
-
-Do NOT call this tool:
-- Before you have created or finalized the plan
-- If you still have unanswered questions about the implementation
-- If the user has indicated they want to continue planning
-```
-
-### 6. plan_enter 工具描述
-
-**文件路径**：`packages/opencode/src/tool/plan-enter.txt`
-
-```
-Use this tool to suggest switching to plan agent when the user's request would benefit from planning before implementation.
-
-If they explicitly mention wanting to create a plan ALWAYS call this tool first.
-
-This tool will ask the user if they want to switch to plan agent.
-
-Call this tool when:
-- The user's request is complex and would benefit from planning first
-- You want to research and design before making changes
-- The task involves multiple files or significant architectural decisions
-
-Do NOT call this tool:
-- For simple, straightforward tasks
-- When the user explicitly wants immediate implementation
-```
-
-## 二、Plan Mode 的附加机制
-
-### 1. Agent 系统双角色
-
-OpenCode 定义了两个 primary agent：**build** 和 **plan**。
-
-**build agent**（默认）：
-```typescript
-// packages/opencode/src/agent/agent.ts:107-123
-build: {
-  name: "build",
-  description: "The default agent. Executes tools based on configured permissions.",
-  permission: Permission.merge(defaults, {
-    question: "allow",
-    plan_enter: "allow",  // 可以触发进入 plan mode
-  }, user),
-  mode: "primary",
-  native: true,
+// internal/llm/agent/tools.go:43
+func TaskAgentTools(lspClients map[string]*lsp.Client) []tools.BaseTool {
+    return []tools.BaseTool{
+        tools.NewGlobTool(),
+        tools.NewGrepTool(),
+        tools.NewLsTool(),
+        tools.NewSourcegraphTool(),
+        tools.NewViewTool(lspClients),
+    }
 }
 ```
 
-**plan agent**：
-```typescript
-// packages/opencode/src/agent/agent.ts:124-152
-plan: {
-  name: "plan",
-  description: "Plan mode. Disallows all edit tools.",
-  permission: Permission.merge(defaults, {
-    question: "allow",
-    plan_exit: "allow",   // 可以触发退出 plan mode
-    edit: { "*": "deny" },  // 禁止所有编辑
-    // 但允许编辑 plan 文件：
-    edit: { ".opencode/plans/*.md": "allow" },
-    edit: { "<data>/plans/*.md": "allow" },
-  }, user),
-  mode: "primary",
-  native: true,
-}
-```
+**设计决策**：通过 agent 类型而非 mode 切换控制工具集。子 agent（task agent）天生只有只读工具，无法修改文件。
 
-### 2. 权限控制（核心机制）
+---
 
-plan mode 通过**权限系统**而非工具移除来实现只读。plan agent 的权限配置：
+## 3. 模式管理
 
-| 权限 | build agent | plan agent |
-|------|-------------|------------|
-| `*` (全局) | allow | allow（默认） |
-| `edit` (文件编辑) | allow | **deny** |
-| `.opencode/plans/*.md` | — | allow（唯一可编辑） |
-| `question` | allow | allow |
-| `plan_enter` | allow | **deny** |
-| `plan_exit` | **deny** | allow |
+### 3.1 Agent 类型（非 mode）
 
-即 plan agent 通过 `edit: "*": "deny"` 禁止所有文件编辑操作，但允许编辑 `.opencode/plans/` 目录下的 plan 文件。
+OpenCode 定义了 4 种 agent 类型，但它们是**独立的 agent 实例**，不是同一 agent 的不同 mode：
 
-### 3. Plan 文件管理
+```go
+// internal/config/config.go:37-43
+type AgentName string
 
-Plan 文件的路径由 `Session.plan()` 函数决定：
-
-```typescript
-// packages/opencode/src/session/session.ts
-export function plan(input: { slug: string; time: { created: number } }, instance: InstanceContext) {
-  const base = instance.project.vcs
-    ? path.join(instance.worktree, ".opencode", "plans")  // Git 项目中
-    : path.join(Global.Path.data, "plans")                 // 非 Git 项目中
-  return path.join(base, [input.time.created, input.slug].join("-") + ".md")
-}
-```
-
-文件名格式：`<timestamp>-<slug>.md`，存放在 `.opencode/plans/` 目录。
-
-### 4. plan_exit 工具
-
-**文件**：`packages/opencode/src/tool/plan.ts`
-
-plan_exit 是一个专用工具，执行以下逻辑：
-1. 计算当前 session 的 plan 文件路径
-2. 弹出确认对话框："Plan at `<path>` is complete. Would you like to switch to the build agent and start implementing?"
-3. 如果用户选择 Yes：
-   - 创建一条新的 synthetic user message，agent 为 `build`
-   - 注入文本 "The plan at `<path>` has been approved, you can now edit files. Execute the plan"
-   - 切换到 build agent 继续执行
-
-```typescript
-// 关键代码简化
-const msg: SessionLegacy.User = {
-  id: MessageID.ascending(),
-  sessionID: ctx.sessionID,
-  role: "user",
-  time: { created: Date.now() },
-  agent: "build",  // 切换到 build agent
-  model,
-}
-yield* session.updateMessage(msg)
-yield* session.updatePart({
-  type: "text",
-  text: `The plan at ${plan} has been approved, you can now edit files. Execute the plan`,
-  synthetic: true,
-})
-```
-
-### 5. Session Reminders（提示词注入机制）
-
-**文件**：`packages/opencode/src/session/reminders.ts`
-
-OpenCode 在每轮对话中注入提示词（作为 synthetic message part），根据当前 agent 状态和 experimental flag 决定注入内容：
-
-**旧版路径**（`!flags.experimentalPlanMode`）：
-- 如果当前 agent 是 `plan`：注入 `plan.txt`
-- 如果上一条消息来自 plan agent，当前切换到了 build agent：注入 `build-switch.txt`
-
-**新版路径**（`flags.experimentalPlanMode`）：
-- 如果当前不是 plan agent 但上一条是：注入 `build-switch.txt` + plan 文件存在性信息
-- 如果当前是 plan agent 且上一条不是：注入 `plan-mode.txt`（将 `${planInfo}` 替换为实际的 plan 文件路径信息）
-
-```typescript
-// reminders.ts 核心逻辑
-text: PLAN_MODE.replace("${planInfo}", () =>
-  exists
-    ? `A plan file already exists at ${plan}. You can read it and make incremental edits using the edit tool.`
-    : `No plan file exists yet. You should create your plan at ${plan} using the write tool.`,
+const (
+    AgentCoder      AgentName = "coder"      // 主编码 agent，完整工具集
+    AgentSummarizer AgentName = "summarizer"  // 会话摘要
+    AgentTask       AgentName = "task"        // 只读子 agent
+    AgentTitle      AgentName = "title"       // 生成会话标题
 )
 ```
 
-### 6. Feature Flag 控制
+每种 agent 有独立的 model 配置（`internal/config/config.go:48`）：
 
-**文件**：`packages/opencode/src/effect/runtime-flags.ts:47`
-
-```typescript
-experimentalPlanMode: enabledByExperimental("OPENCODE_EXPERIMENTAL_PLAN_MODE"),
+```go
+type Agent struct {
+    Model           models.ModelID `json:"model"`
+    MaxTokens       int            `json:"maxTokens"`
+    ReasoningEffort string         `json:"reasoningEffort"`
+}
 ```
 
-启用条件：`OPENCODE_EXPERIMENTAL=true` 或 `OPENCODE_EXPERIMENTAL_PLAN_MODE=true`
+### 3.2 没有 mode 切换
 
-tool 注册中也受此 flag 控制：
-```typescript
-// registry.ts:272
-...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
-```
+TUI 中没有 plan mode / edit mode / ask mode 的切换机制。用户只有一个交互模式：输入 prompt → agent 自主执行。
 
-即 `plan_exit` 工具只在 experimental plan mode + CLI 客户端下注册。
+唯一的状态切换是 **模型选择对话框**（`ctrl+o`），允许用户在运行时切换模型（`internal/tui/tui.go:503-509`）。
 
-### 7. TUI 自动切换
+### 3.3 非交互模式
 
-**文件**：`packages/opencode/src/cli/cmd/tui/routes/session/index.tsx:298-309`
+通过 `opencode -p "prompt"` 运行时进入非交互模式（`internal/app/app.go:141-181`），此模式自动批准所有权限请求（`a.Permissions.AutoApproveSession(sess.ID)`）。
 
-TUI 监听 tool completion 事件，自动切换 agent：
+---
 
-```typescript
-event.on("message.part.updated", (evt) => {
-  const part = evt.properties.part
-  if (part.type !== "tool") return
-  if (part.sessionID !== route.sessionID) return
-  if (part.state.status !== "completed") return
+## 4. Prompt 模板
 
-  if (part.tool === "plan_exit") {
-    local.agent.set("build")   // plan_exit 完成后自动切到 build
-  } else if (part.tool === "plan_enter") {
-    local.agent.set("plan")    // plan_enter 完成后自动切到 plan
-  }
-})
-```
-
-### 8. Subagent 协作
-
-plan mode 的提示词指示 LLM 在规划阶段使用以下 subagent：
-
-| 阶段 | Subagent | 用途 |
-|------|----------|------|
-| Phase 1 | explore | 代码库探索（最多 3 个并行） |
-| Phase 2 | general | 设计实现方案 |
-| Phase 3 | 无 | 人工审核 agent 方案 |
-| Phase 4 | 无 | 写 plan 文件 |
-| Phase 5 | 无 | 调用 plan_exit |
-
-## 三、完整工作流
+### 4.1 Prompt 体系
 
 ```
-用户发送请求
-    │
-    ▼
-build agent 判断是否需要规划
-    │
-    ├─ 简单任务 → 直接执行
-    │
-    └─ 复杂任务 → 调用 plan_enter 工具
-                    │
-                    ▼
-              用户确认切换到 plan agent
-                    │
-                    ▼
-              plan agent 激活
-              (注入 plan-mode.txt 提示词)
-                    │
-                    ▼
-              Phase 1: 启动 explore subagent 并行探索
-                    │
-                    ▼
-              Phase 2: 启动 general subagent 设计方案
-                    │
-                    ▼
-              Phase 3: 审核方案，向用户提问
-                    │
-                    ▼
-              Phase 4: 写 plan 文件 (.opencode/plans/xxx.md)
-                    │
-                    ▼
-              Phase 5: 调用 plan_exit
-                    │
-                    ▼
-              用户确认是否执行
-                    │
-                    ├─ No → 继续规划
-                    │
-                    └─ Yes → 切换到 build agent
-                              (注入 build-switch.txt + plan 文件路径)
-                              │
-                              ▼
-                        build agent 根据 plan 执行
+GetAgentPrompt() ──┬── AgentCoder → CoderPrompt()
+                   ├── AgentTask → TaskPrompt()
+                   ├── AgentTitle → TitlePrompt()
+                   └── AgentSummarizer → SummarizerPrompt()
 ```
 
-## 四、关键源文件索引
+源码：`internal/llm/prompt/prompt.go:11-29`
 
-| 文件 | 用途 |
+### 4.2 Coder Prompt 分析
+
+Coder prompt 分为两种变体（`internal/llm/prompt/coder.go`）：
+
+- **Anthropic 变体**（`baseAnthropicCoderPrompt`）：详细的行为指南，包含 Memory、Tone/Style、Proactiveness、Following Conventions、Code Style、Doing Tasks 等章节。强调简洁（"fewer than 4 lines"）、不要不必要的解释。
+- **OpenAI 变体**（`baseOpenAICoderPrompt`）：更偏向 OpenAI coding agent 规范，强调 patch 和 git 操作。
+
+两者都**没有 plan 相关指令**。agent 被告知直接执行任务（"You are an agent - please keep going until the user's query is completely resolved"）。
+
+### 4.3 Context Paths（记忆机制）
+
+Prompt 系统会自动加载项目级指令文件（`internal/config/config.go:108-116`）：
+
+```go
+var defaultContextPaths = []string{
+    ".github/copilot-instructions.md",
+    ".cursorrules",
+    ".cursor/rules/",
+    "CLAUDE.md",
+    "CLAUDE.local.md",
+    "opencode.md",
+    "opencode.local.md",
+    "OpenCode.md",
+    "OpenCode.local.md",
+    "OPENCODE.md",
+    "OPENCODE.local.md",
+}
+```
+
+这是 OpenCode 的 "memory" 机制——通过文件注入持久化指令，而非运行时状态。
+
+### 4.4 Task Agent Prompt
+
+```go
+// internal/llm/prompt/task.go:10-14
+"You are an agent for OpenCode. Given the user's prompt, you should use the tools 
+available to you to answer the user's question."
+```
+
+极其简洁——子 agent 不需要 plan，只需要搜索和返回结果。
+
+---
+
+## 5. 用户交互与权限系统
+
+### 5.1 权限模型
+
+OpenCode 的核心人机交互机制是**权限审批**，不是 mode 切换：
+
+```go
+// internal/permission/permission.go:43-47
+type CreatePermissionRequest struct {
+    SessionID   string
+    ToolName    string
+    Description string
+    Action      string
+    Params      any
+    Path        string
+}
+```
+
+**三级审批**（`internal/tui/components/dialog/permission.go:18-21`）：
+
+| 操作 | 效果 |
 |------|------|
-| `packages/opencode/src/session/prompt/plan-mode.txt` | 新版 plan mode 提示词 |
-| `packages/opencode/src/session/prompt/plan.txt` | 旧版 plan mode 提示词 |
-| `packages/opencode/src/session/prompt/plan-reminder-anthropic.txt` | Anthropic 模型专用 plan 提示词 |
-| `packages/opencode/src/session/prompt/build-switch.txt` | plan→build 切换提示词 |
-| `packages/opencode/src/tool/plan-exit.txt` | plan_exit 工具描述 |
-| `packages/opencode/src/tool/plan-enter.txt` | plan_enter 工具描述 |
-| `packages/opencode/src/tool/plan.ts` | plan_exit 工具实现 |
-| `packages/opencode/src/session/reminders.ts` | 提示词注入逻辑 |
-| `packages/opencode/src/agent/agent.ts` | Agent 定义（build/plan） |
-| `packages/opencode/src/tool/registry.ts` | 工具注册 |
-| `packages/opencode/src/session/session.ts` | Session 管理、plan 文件路径 |
-| `packages/opencode/src/effect/runtime-flags.ts` | Feature flag |
-| `packages/opencode/src/permission/index.ts` | 权限系统 |
-| `packages/opencode/src/cli/cmd/tui/routes/session/index.tsx` | TUI 自动切换 |
-| `packages/core/src/plugin/agent.ts` | Core 层 agent 定义（权限声明） |
+| Allow (a) | 仅批准本次操作 |
+| Allow for session (s) | 批准该工具+action+path 组合在整个 session 内有效 |
+| Deny (d) | 拒绝，终止后续 tool call |
 
-## 五、设计要点总结
+### 5.2 安全命令白名单
 
-1. **权限驱动而非工具裁剪**：plan mode 不是通过移除工具实现的，而是通过权限系统禁止 edit/write 操作。这比移除工具更灵活（用户可以通过配置覆盖默认权限）。
+Bash 工具有只读命令白名单（`internal/llm/tools/bash.go:50-56`），白名单内的命令自动跳过权限审批：
 
-2. **Agent 切换模型**：plan 和 build 是两个独立的 primary agent，通过 message 的 `agent` 字段标记当前使用的 agent。切换本质上是创建一条新的 user message 并指定不同 agent。
+```go
+var safeReadOnlyCommands = []string{
+    "ls", "echo", "pwd", "date", ...
+    "git status", "git log", "git diff", ...
+    "go version", "go test", "go build", ...
+}
+```
 
-3. **Plan 文件即合约**：plan mode 的唯一产出是一个 `.md` 文件，build agent 读取这个文件执行。文件路径通过 session 信息动态计算。
+### 5.3 持久权限
 
-4. **Subagent 协作**：plan mode 大量使用 subagent（explore 用于探索、general 用于设计），plan agent 本身只负责编排和最终写入 plan 文件。
+`GrantPersistant()` 将权限存储在 session 级别，后续相同 tool+action+path 组合自动通过（`internal/permission/permission.go:64-68`）。
 
-5. **两代并存**：旧版（plan.txt）是简单的只读提醒；新版（plan-mode.txt）有完整的 5 阶段工作流。通过 `OPENCODE_EXPERIMENTAL_PLAN_MODE` flag 控制。
+### 5.4 文件安全检查
 
-6. **plan_enter/plan_exit 是权限动作而非工具**：它们在权限系统中注册为 action（`plan_enter`、`plan_exit`），build agent 有 `plan_enter: allow`，plan agent 有 `plan_exit: allow`。build agent 的 plan_enter 工具实现似乎由平台层（可能是 Claude Code 兼容层）提供，在 OpenCode 自身的 tool 目录中未找到 plan_enter 的独立实现文件。
+Edit/Write/Patch 工具实现"读后写"安全机制（`internal/llm/tools/edit.go:155-163`）：
+
+1. 必须先用 View 工具读取文件（`getLastReadTime` 检查）
+2. 文件在读取后被修改会报错（modTime > lastRead）
+
+---
+
+## 6. 执行流程
+
+### 6.1 主循环
+
+```
+User prompt → agent.Run() → processGeneration() → loop {
+    streamAndHandleEvents() → tool call → tool.Run() → 
+    permission check → execute → tool result → continue loop
+} → final response
+```
+
+源码：`internal/llm/agent/agent.go:256-310`
+
+### 6.2 子 Agent（Agent Tool）
+
+Coder agent 可以通过 `agent` tool 启动只读子 agent：
+
+```go
+// internal/llm/agent/agent-tool.go:57
+agent, err := NewAgent(config.AgentTask, b.sessions, b.messages, TaskAgentTools(b.lspClients))
+```
+
+子 agent 特点：
+- 只有 Glob/Grep/LS/Sourcegraph/View 工具
+- 单次执行，无状态，结果直接返回给父 agent
+- 可并行启动多个（"Launch multiple agents concurrently whenever possible"）
+- 用途：代码搜索、信息收集
+
+### 6.3 上下文压缩
+
+OpenCode 有会话摘要（compact）功能（`internal/llm/agent/agent.go:357-461`）：
+1. 用户触发 `/compact` 命令
+2. 使用 Summarizer agent 生成对话摘要
+3. 截断历史消息，保留摘要作为新的对话起点
+
+这不是 plan，而是上下文管理。
+
+---
+
+## 7. TUI 组件
+
+### 7.1 对话组件
+
+| 组件 | 文件 | 功能 |
+|------|------|------|
+| Permission Dialog | `dialog/permission.go` | 工具权限审批，带 diff 预览 |
+| Model Dialog | `dialog/models.go` | 模型切换 |
+| Command Palette | `dialog/commands.go` | 命令面板（`/compact`, `/init` 等） |
+| Init Dialog | `dialog/init.go` | 项目初始化确认 |
+| Arguments Dialog | `dialog/arguments.go` | 多参数命令输入 |
+| Help Dialog | `dialog/help.go` | 快捷键帮助 |
+| File Picker | `dialog/filepicker.go` | 文件选择器 |
+| Theme Dialog | `dialog/theme.go` | 主题切换 |
+| Quit Dialog | `dialog/quit.go` | 退出确认 |
+| Session Dialog | `dialog/session.go` | 会话管理 |
+
+### 7.2 权限对话框设计
+
+Permission Dialog 是最关键的交互组件（`dialog/permission.go`）：
+
+- 显示 Tool Name、Path、Diff/Command 内容
+- 三个按钮：Allow / Allow for session / Deny
+- 支持 `a`/`s`/`d` 快捷键直接选择
+- 内容区域使用 viewport 支持滚动查看大 diff
+- 不同工具类型有不同渲染逻辑（bash 显示命令、edit/write 显示 diff）
+
+### 7.3 内置命令
+
+TUI 注册了两个内置命令（`internal/tui/tui.go:916-948`）：
+
+1. **`/init`** — 生成/改进 OpenCode.md 项目记忆文件
+2. **`/compact`** — 触发会话摘要
+
+### 7.4 编辑器
+
+输入区域是 `textarea` 组件（`chat/editor.go`），支持：
+- `enter` / `ctrl+s` 发送消息
+- `ctrl+e` 打开外部编辑器（$EDITOR）
+- 附件管理（图片粘贴，最多 5 个）
+- Tab 补全（`dialog/complete.go`）
+
+---
+
+## 8. 对 Pi Plan 扩展的启示
+
+### 8.1 OpenCode 的 "Plan" 等价物
+
+OpenCode 没有 plan mode，但通过以下机制隐式实现了 plan 的部分功能：
+
+| Plan Mode 功能 | OpenCode 的替代 |
+|----------------|-----------------|
+| 分析阶段 | agent 自主使用 View/Grep/Glob 探索代码 |
+| 制定方案 | LLM 的 thinking（extended thinking） |
+| 用户确认 | 权限审批系统（每步操作可审批/拒绝） |
+| 分阶段执行 | 无，agent 直接连续执行 |
+| 工具限制 | 子 agent 只有只读工具 |
+
+### 8.2 可借鉴的设计
+
+1. **权限审批作为"检查点"**：OpenCode 的权限系统实际上充当了"plan → confirm → execute"中的 confirm 环节。每个写操作都需要用户审批，diff 预览让用户看清将要发生的变化。这比纯 plan mode 更细粒度。
+
+2. **子 Agent 模式**：`agent` tool 创建只读子 agent 做搜索，天然实现了"分析阶段不修改"的隔离。Pi 的 subagent 已经实现了类似功能。
+
+3. **读后写安全**：edit/write 工具要求先 view 再 edit，且检查文件修改时间。这是防止 agent 基于过时信息做修改的好机制。
+
+4. **Context Paths 记忆机制**：自动加载多种格式的规则文件（CLAUDE.md、.cursorrules 等），降低了用户配置成本。Pi 的 claude-rules-loader 已有类似功能。
+
+### 8.3 OpenCode 方案的局限
+
+1. **无显式 plan 输出**：用户看不到 agent 的执行计划，只能在操作时逐个审批。对于复杂任务，用户难以把握全局。
+2. **无法冻结执行**：没有"只分析不执行"的模式。要阻止 agent 执行，只能逐个 deny 权限请求。
+3. **无计划修订**：agent 不会在执行前展示计划让用户修改方向。
+4. **依赖 LLM 自律**：prompt 中要求 agent "think before you act"，但这是软约束，没有系统级保障。
+
+### 8.4 对 Pi Plan 扩展的设计建议
+
+1. **Plan ≠ Mode，Plan = 工具**：与其做 mode 切换（plan mode / code mode），不如让 plan 成为一个可调用的工具/命令。用户随时可以触发 plan，plan 输出是一个结构化文档而非执行状态。
+
+2. **Plan 的价值在"全局预览"**：OpenCode 逐工具审批的粒度太细（每个文件编辑都要审批），而 plan mode 的价值是提供全局视角。Pi plan 应该输出完整的执行计划（文件列表、变更概要、依赖关系），让用户一次审批一个完整方案。
+
+3. **Plan 输出应可持久化**：OpenCode 的 Context Paths 机制表明用户喜欢持久化配置。Plan 应该能保存为文件（如 `.xyz-harness/plan.md`），后续可引用、修订、对比。
+
+4. **Plan 不应限制工具**：OpenCode 的子 agent 只有只读工具，这过度限制了分析能力。Plan 阶段应该可以使用所有工具（包括 bash），只是不执行写入操作。写入操作由 plan 的执行阶段触发。
+
+5. **权限系统与 plan 协同**：Pi 的 plan 执行阶段可以借鉴 OpenCode 的 "Allow for session" 模式——用户批准 plan 后，plan 内的操作可以批量自动执行，无需逐个审批。

@@ -3,7 +3,6 @@ import type { PlanSessionMap } from "./state.js";
 import { getPlanState, persistPlanState } from "./state.js";
 import { updatePlanWidget } from "./widget.js";
 import * as path from "node:path";
-import * as os from "node:os";
 import * as fs from "node:fs";
 
 export function registerPlanCommand(
@@ -34,6 +33,8 @@ export function registerPlanCommand(
         persistPlanState(pi, state);
         sessions.delete(sessionId);
         updatePlanWidget(ctx, state);
+        // Restore full tool set
+        pi.setActiveTools(["read", "bash", "edit", "write"]);
         ctx.ui.notify("Plan mode aborted.", "info");
         return;
       }
@@ -66,15 +67,18 @@ export function registerPlanCommand(
         return;
       }
 
-      // Reentry: check for existing plan files in /tmp
+      // Reentry: check for existing plan files in .xyz-harness/
       if (!state.isActive && !trimmed) {
-        const tmpDir = os.tmpdir();
+        const harnessDir = path.join(process.cwd(), ".xyz-harness");
         let existingPlans: string[] = [];
         try {
-          existingPlans = fs.readdirSync(tmpDir)
-            .filter((f) => f.startsWith("plan-") && f.endsWith(".md"))
-            .map((f) => path.join(tmpDir, f));
-        } catch { /* /tmp read failed — proceed as no existing plans */ }
+          existingPlans = fs.readdirSync(harnessDir)
+            .filter((f) => {
+              const subDir = path.join(harnessDir, f);
+              return fs.statSync(subDir).isDirectory() && fs.existsSync(path.join(subDir, "plan.md"));
+            })
+            .map((f) => path.join(harnessDir, f, "plan.md"));
+        } catch { /* .xyz-harness/ not found — proceed as no existing plans */ }
 
         if (existingPlans.length > 0) {
           pi.sendUserMessage(
@@ -94,9 +98,10 @@ export function registerPlanCommand(
         ? trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30)
         : "untitled";
 
-      // 注意：/tmp 是 OS 级共享路径，不同项目的 plan 文件会混在一起
-      // spec v1 设计选择，接受跨项目泄漏风险（reentry 扫描会误捡其他项目的 plan）
-      const planFilePath = path.join(os.tmpdir(), `plan-${slug}.md`);
+      // 持久化到 .xyz-harness/{slug}/plan.md，与 brainstorming 规则一致
+      const planDir = path.join(process.cwd(), ".xyz-harness", slug);
+      fs.mkdirSync(planDir, { recursive: true });
+      const planFilePath = path.join(planDir, "plan.md");
 
       state.isActive = true;
       state.phase = "brainstorming";
@@ -106,6 +111,9 @@ export function registerPlanCommand(
 
       persistPlanState(pi, state);
       updatePlanWidget(ctx, state);
+
+      // Restrict tools to read-only set during plan mode
+      pi.setActiveTools(["read", "bash", "grep", "find", "ls", "plan"]);
 
       // Inject plan mode system prompt inline (no separate SKILL.md)
       pi.sendUserMessage(

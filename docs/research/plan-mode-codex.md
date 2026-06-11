@@ -1,19 +1,438 @@
-# OpenAI Codex CLI — Plan Mode 调研
+# Codex CLI Plan Mode 调研报告
 
-> 源码目录：`~/GitApp/ai-agent/codex-cli/`
-> 调研日期：2026-06-11
+> 源码版本：codex-cli main 分支（2026-06）
+> 项目语言：Rust（codex-rs/）+ 少量 TypeScript（codex-cli/）
 
-## 1. 完整提示词（System Prompt / Template）
+---
 
-**文件路径**：`codex-rs/collaboration-mode-templates/templates/plan.md`
+## 1. 状态机 / 协作模式
 
-Plan mode 的提示词通过 `collaboration_mode_presets.rs` 加载，作为 `developer_instructions` 注入到 collaboration mode 的 settings 中：
+### 模式枚举
+
+Codex 定义了 4 种 `ModeKind`，其中 TUI 用户可见的只有 2 种：
 
 ```rust
-// codex-rs/models-manager/src/collaboration_mode_presets.rs:22-28
+// protocol/src/config_types.rs:576
+pub enum ModeKind {
+    Plan,
+    #[default]
+    Default,  // alias: code, pair_programming, execute, custom
+    PairProgramming,  // hidden
+    Execute,          // hidden
+}
+
+pub const TUI_VISIBLE_COLLABORATION_MODES: [ModeKind; 2] =
+    [ModeKind::Default, ModeKind::Plan];
+```
+
+**核心设计决策**：将「协作模式」建模为 first-class concept（`CollaborationMode`），而非简单的状态标记。每个模式自带独立的 model、reasoning effort 和 developer instructions。
+
+### 模式数据结构
+
+```rust
+// protocol/src/config_types.rs:623
+pub struct CollaborationMode {
+    pub mode: ModeKind,
+    pub settings: Settings,  // { model, reasoning_effort, developer_instructions }
+}
+```
+
+### 模式 Mask 机制
+
+```rust
+// protocol/src/config_types.rs:702
+pub struct CollaborationModeMask {
+    pub name: String,
+    pub mode: Option<ModeKind>,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<Option<ReasoningEffort>>,
+    pub developer_instructions: Option<Option<String>>,
+}
+```
+
+Mask 是 partial update 结构体，所有字段 optional。用于：
+- 预设切换（plan_preset → default_preset）
+- 按需覆盖 model / reasoning effort
+- 保留未指定字段的当前值
+
+### Plan 模式特有能力
+
+```rust
+impl ModeKind {
+    pub const fn allows_request_user_input(self) -> bool {
+        matches!(self, Self::Plan)
+    }
+}
+```
+
+Plan mode 是唯一允许使用 `request_user_input` 工具的模式——这是 prompt 模板中「多轮提问」功能的底层支撑。
+
+---
+
+## 2. 进入机制
+
+用户有三种方式进入 Plan Mode：
+
+### 2.1 Shift+Tab 循环切换
+
+最核心的 UI 入口。按 `BackTab`（Shift+Tab）在 Default ↔ Plan 间循环：
+
+```rust
+// tui/src/chatwidget/interaction.rs:142
+KeyEvent { code: KeyCode::BackTab, ... }
+    if self.collaboration_modes_enabled()
+        && !self.bottom_pane.is_task_running()
+        && self.bottom_pane.no_modal_or_popup_active() =>
+{
+    self.cycle_collaboration_mode();
+}
+```
+
+```rust
+// tui/src/chatwidget/settings.rs:685
+pub(super) fn cycle_collaboration_mode(&mut self) {
+    let next_mask = collaboration_modes::next_mask(
+        self.model_catalog.as_ref(),
+        self.active_collaboration_mask.as_ref(),
+    );
+    self.set_collaboration_mask_from_user_action(next_mask);
+}
+```
+
+循环逻辑：
+
+```rust
+// tui/src/collaboration_modes.rs
+pub(crate) fn next_mask(model_catalog, current) -> Option<CollaborationModeMask> {
+    let presets = filtered_presets(model_catalog);  // [Default, Plan]
+    let next_index = presets.iter()
+        .position(|mask| mask.mode == current_kind)
+        .map_or(0, |idx| (idx + 1) % presets.len());
+    presets.get(next_index).cloned()
+}
+```
+
+**切换约束**：
+- Turn 运行中禁止切换到不同模式（允许同模式消息排队）
+- 切换时自动更新 session 的 collaboration_mode 设置
+
+### 2.2 关键词 Nudge（提示引导）
+
+当用户在 Default 模式输入含 "plan" 词的文本时，TUI 显示 nudge 提示：
+
+```rust
+// tui/src/chatwidget.rs:802
+fn contains_plan_keyword(text: &str) -> bool {
+    text.split(|ch: char| !ch.is_alphanumeric() && ch != '_')
+        .any(|word| word.eq_ignore_ascii_case("plan"))
+}
+```
+
+Nudge 显示条件（`settings.rs:418`）：
+- 当前在 Default 模式
+- 输入框启用且无 task/modal 运行
+- 非 `/` 或 `!` 开头的命令
+- 包含 "plan" 关键词（精确匹配，不含 "plane"/"planning"）
+- 当前 thread scope 未被 Esc 关闭过
+
+用户按 `BackTab` 接受 nudge → 切换到 Plan 模式；按 `Esc` 关闭 nudge（scope 级别记忆）。
+
+### 2.3 程序化切换
+
+`submit_user_message_with_mode` 方法支持在发送消息时附带目标模式：
+
+```rust
+// plan_implementation.rs:36
+let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+    tx.send(AppEvent::SubmitUserMessageWithMode {
+        text: user_text.clone(),
+        collaboration_mode: mask.clone(),
+    });
+})];
+```
+
+这是 Plan → Execute 确认弹窗的实现基础。
+
+---
+
+## 3. 工具限制
+
+### Plan Mode 下 update_plan 被禁用
+
+Plan Mode 中，`update_plan` 工具调用会直接报错：
+
+```rust
+// core/src/tools/handlers/plan.rs:68
+if turn.collaboration_mode.mode == ModeKind::Plan {
+    return Err(FunctionCallError::RespondToModel(
+        "update_plan is a TODO/checklist tool and is not allowed in Plan mode".to_string(),
+    ));
+}
+```
+
+**设计意图**：`update_plan` 是 Default/Execute 模式下的进度追踪工具（checkbox todo list），与 Plan mode 的 `<proposed_plan>` 输出机制是正交的两套系统。Prompt 模板中明确说明：
+
+> Plan Mode is not changed by user intent, tone, or imperative language.
+> `update_plan` is a checklist/progress/TODOs tool; it does not enter or exit Plan Mode.
+
+### Prompt 层面的 mutating 限制
+
+Plan mode prompt 模板通过 instructions 限制行为，而非工具级硬限制：
+
+- **允许**：读文件、搜索、静态分析、dry-run 命令、build/test（不修改 repo 文件）
+- **禁止**：编辑文件、运行 formatter/linter、apply patch、side-effectful 命令
+
+这是 soft constraint（模型自行遵守），不是 runtime enforcement。
+
+---
+
+## 4. Plan 数据结构
+
+### 4.1 update_plan 工具（进度追踪，非 Plan Mode）
+
+```rust
+// protocol/src/plan_tool.rs
+pub enum StepStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+pub struct PlanItemArg {
+    pub step: String,
+    pub status: StepStatus,
+}
+
+pub struct UpdatePlanArgs {
+    pub explanation: Option<String>,
+    pub plan: Vec<PlanItemArg>,
+}
+```
+
+工具 schema 定义（`plan_spec.rs`）：
+
+```
+name: "update_plan"
+parameters: {
+  explanation?: string,
+  plan: [{ step: string, status: "pending"|"in_progress"|"completed" }]
+}
+constraint: at most one step can be in_progress at a time
+```
+
+### 4.2 Proposed Plan（Plan Mode 输出）
+
+Plan Mode 的最终产出不是通过 tool call，而是通过特殊的 `<proposed_plan>` 标签直接嵌入 assistant 文本输出：
+
+```
+<proposed_plan>
+plan content in markdown
+</proposed_plan>
+```
+
+**解析流程**：
+1. 服务端 streaming 检测到 `<proposed_plan>` 标签
+2. TUI 通过 `PlanDelta` 通知接收流式内容
+3. `on_plan_delta()` → `PlanStreamController` 处理渲染
+4. `on_plan_item_completed()` → 存储到 `transcript.latest_proposed_plan_markdown`
+
+```rust
+// tui/src/chatwidget/streaming.rs:110
+pub(super) fn on_plan_delta(&mut self, delta: String) {
+    if self.active_mode_kind() != ModeKind::Plan { return; }
+    self.transcript.plan_delta_buffer.push_str(&delta);
+    // ... streaming rendering
+}
+
+// tui/src/chatwidget/streaming.rs:142
+pub(super) fn on_plan_item_completed(&mut self, text: String) {
+    self.transcript.latest_proposed_plan_markdown = Some(plan_text.clone());
+    self.transcript.saw_plan_item_this_turn = true;
+    // ... finalize streaming, store to history
+}
+```
+
+---
+
+## 5. Plan → Execute 转换
+
+### 触发条件
+
+Turn 完成时自动检测（`turn_runtime.rs:214`）：
+
+```rust
+pub(super) fn maybe_prompt_plan_implementation(&mut self) {
+    if self.active_mode_kind() != ModeKind::Plan { return; }
+    if !self.transcript.saw_plan_item_this_turn { return; }
+    if self.has_queued_follow_up_messages() { return; }
+    if !self.bottom_pane.no_modal_or_popup_active() { return; }
+    if rate_limit prompt is pending { return; }
+    self.open_plan_implementation_prompt();
+}
+```
+
+**关键条件**：
+- 当前在 Plan 模式
+- 本 turn 产出了 `<proposed_plan>`（`saw_plan_item_this_turn == true`）
+- 没有排队的后续消息
+- 没有 modal/popup 阻塞
+
+### 确认弹窗
+
+```rust
+// tui/src/chatwidget/plan_implementation.rs
+pub(super) fn selection_view_params(...) -> SelectionViewParams {
+    // 三个选项：
+    // 1. "Yes, implement this plan" → SubmitUserMessageWithMode(Default mode, "Implement the plan.")
+    // 2. "Yes, clear context and implement" → ClearUiAndSubmitUserMessage(plan + prefix)
+    // 3. "No, stay in Plan mode" → dismiss
+}
+```
+
+三个选项的语义：
+
+| 选项 | 行为 | 适用场景 |
+|------|------|---------|
+| Yes, implement | 切换到 Default 模式，发送 "Implement the plan." | 上下文充足 |
+| Yes, clear context | 清空上下文，以 plan 文本作为新 session 输入 | 上下文已大量消耗 |
+| No, stay | 继续当前 Plan 模式 | 需要修改 plan |
+
+**Clear Context 的实现**：
+
+```
+"A previous agent produced the plan below to accomplish the user's task.
+Implement the plan in a fresh context. Treat the plan as the source of
+user intent, re-read files as needed, and carry the work through
+implementation and verification.\n\n{plan_markdown}"
+```
+
+上下文用量显示：弹窗中 "Clear context" 选项会展示已用百分比（如 "Fresh thread. Context: 89% used."）。
+
+### 防重入
+
+- Turn 运行中禁止切换到不同模式
+- Replay 的 turn 不会触发 popup
+- 已排队消息时不弹窗
+- 重复 turn complete 只弹一次
+
+---
+
+## 6. 进度追踪
+
+### update_plan 工具（Default/Execute 模式）
+
+`update_plan` 是一个独立于 Plan Mode 的 checkbox/todo 工具，在 Default 和 Execute 模式下可用：
+
+```rust
+// core/src/tools/handlers/plan.rs:39
+fn tool_name(&self) -> ToolName {
+    ToolName::plain("update_plan")
+}
+```
+
+调用流程：
+1. 模型调用 `update_plan({ explanation, plan: [{step, status}] })`
+2. `PlanHandler::handle()` 解析参数
+3. 发送 `EventMsg::PlanUpdate(args)` 事件
+4. TUI 接收后渲染为 checkbox 风格的 todo list
+
+### TUI 渲染
+
+```rust
+// tui/src/history_cell/plans.rs:257
+fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+    // ✔ (crossed_out dim) — completed
+    // □ (cyan bold)       — in_progress
+    // □ (dim)             — pending
+}
+```
+
+**限制**：Plan Mode 下此工具被禁用，避免了「plan the planning」的概念混乱。
+
+---
+
+## 7. TUI 交互
+
+### 7.1 Plan Nudge（输入框下方提示）
+
+当用户在 Default 模式输入含 "plan" 的文本时，输入框下方显示 nudge 条。用户可：
+- `BackTab` 接受 → 切到 Plan 模式
+- `Esc` 关闭 → scope 级别记忆（换 thread 后重新显示）
+
+### 7.2 Mode 指示器
+
+状态栏显示当前 mode 名称。切换时如果有 model/reasoning 变化，在聊天历史中插入信息消息：
+
+```
+"Model changed to gpt-5.4-mini medium for Plan mode."
+```
+
+### 7.3 Plan Streaming 渲染
+
+Plan 内容流式输出时：
+- `PlanStreamController` 管理实时渲染
+- 内容缩进 4 格，带竖线前缀
+- 标题使用 "Proposed Plan" 加粗显示
+- 完成后存储为 `ProposedPlanCell`（支持 resize 重绘）
+
+### 7.4 Plan Implementation 弹窗
+
+Turn 完成且含 proposed plan 时，底部弹出选择框：
+- 标题："Implement this plan?"
+- 三个选项（见第 5 章）
+- 显示 context usage 百分比
+- 支持 `Esc` 关闭
+
+### 7.5 Reasoning Effort 作用域
+
+Plan 模式有独立的 reasoning effort override：
+
+```rust
+// settings.rs:715
+if mask.mode == Some(ModeKind::Plan)
+    && let Some(effort) = self.config.plan_mode_reasoning_effort
+{
+    mask.reasoning_effort = Some(Some(effort));
+}
+```
+
+切换 reasoning 时弹出 scope 选择：
+- "Apply to Plan mode override" — 只影响 Plan
+- "Apply to global default and Plan mode override" — 同时更新全局
+
+---
+
+## 8. 模板系统
+
+### 架构
+
+```
+collaboration-mode-templates/
+├── src/lib.rs          # include_str! 编译时嵌入
+└── templates/
+    ├── plan.md
+    ├── default.md
+    ├── execute.md
+    └── pair_programming.md
+```
+
+```rust
+// collaboration-mode-templates/src/lib.rs
+pub const PLAN: &str = include_str!("../templates/plan.md");
+pub const DEFAULT: &str = include_str!("../templates/default.md");
+pub const EXECUTE: &str = include_str!("../templates/execute.md");
+pub const PAIR_PROGRAMMING: &str = include_str!("../templates/pair_programming.md");
+```
+
+### 注入机制
+
+模板通过 `CollaborationModeMask.developer_instructions` 字段注入到 session：
+
+```rust
+// models-manager/src/collaboration_mode_presets.rs
 fn plan_preset() -> CollaborationModeMask {
     CollaborationModeMask {
-        name: ModeKind::Plan.display_name().to_string(),
+        name: "Plan".to_string(),
         mode: Some(ModeKind::Plan),
         model: None,
         reasoning_effort: Some(Some(ReasoningEffort::Medium)),
@@ -22,339 +441,84 @@ fn plan_preset() -> CollaborationModeMask {
 }
 ```
 
-以下是提示词原文（一字不差）：
+注入位置是 developer message，通过特殊标签包裹：
+
+```rust
+// core/src/context/collaboration_mode_instructions.rs
+fn markers(&self) -> (&'static str, &'static str) {
+    (COLLABORATION_MODE_OPEN_TAG, COLLABORATION_MODE_CLOSE_TAG)
+}
+```
+
+Default 模板支持变量替换（`{{KNOWN_MODE_NAMES}}` → "Default and Plan"），Plan 模板是纯静态文本。
+
+### Plan 模板核心内容
+
+plan.md 的 3 阶段设计：
+
+1. **Phase 1 — Ground in the environment**：先探索后提问，最小化向用户提问
+2. **Phase 2 — Intent chat**：确认目标 + 成功标准 + 范围 + 约束
+3. **Phase 3 — Implementation chat**：确认方案决策完全（decision complete）
+
+关键规则：
+- `request_user_input` 工具优先于直接文字提问
+- 只在 options 有意义时提供多选
+- plan 必须是 decision complete（实施者无需做决策）
+- 最终 plan 用 `<proposed_plan>` 标签包裹
+- 不问 "should I proceed?"
+
+### Execute 模板核心内容
+
+execute.md 的定位是 autonomous execution：
+- Assumptions-first（遇到缺失信息先假设再执行）
+- Long-horizon execution（milestone 拆分 + 逐步验证）
+- 使用 `update_plan` 报告进度
 
 ---
 
-````markdown
-# Plan Mode (Conversational)
+## 对 Pi plan 扩展的启示
 
-You work in 3 phases, and you should *chat your way* to a great plan before finalizing it. A great plan is very detailed—intent- and implementation-wise—so that it can be handed to another engineer or agent to be implemented right away. It must be **decision complete**, where the implementer does not need to make any decisions.
+### 1. 模式与工具的解耦设计值得借鉴
 
-## Mode rules (strict)
+Codex 将「协作模式」（plan/default）和「工具能力」（update_plan/request_user_input）做了清晰解耦：
+- `ModeKind` 控制哪些工具可用（`allows_request_user_input()`）
+- Prompt 模板控制行为约束（soft constraint）
+- 工具 handler 做硬性校验（Plan mode 下 update_plan 报错）
 
-You are in **Plan Mode** until a developer message explicitly ends it.
+**启示**：Pi plan 扩展应明确「plan mode 是模式级概念还是 skill 级概念」，避免工具和模式耦合。
 
-Plan Mode is not changed by user intent, tone, or imperative language. If a user asks for execution while still in Plan Mode, treat it as a request to **plan the execution**, not perform it.
+### 2. Plan 产出是流式文本而非结构化数据
 
-## Plan Mode vs update_plan tool
+Codex 的 `<proposed_plan>` 是纯 Markdown 文本流，不是 JSON/tool call。这让它：
+- 对模型来说生成自然（不强制 schema）
+- 对 TUI 来说渲染灵活（markdown render）
+- 对 clear-context 场景来说拼接简单（文本前缀 + plan body）
 
-Plan Mode is a collaboration mode that can involve requesting user input and eventually issuing a `<proposed_plan>` block.
+**启示**：Pi plan 扩展可以考虑「plan 输出用 markdown 流而非结构化 tool call」，降低模型 compliance 成本。结构化只在 task breakdown 阶段需要。
 
-Separately, `update_plan` is a checklist/progress/TODOs tool; it does not enter or exit Plan Mode. Do not confuse it with Plan mode or try to use it while in Plan mode. If you try to use `update_plan` in Plan mode, it will return an error.
+### 3. 两级进度追踪
 
-## Execution vs. mutation in Plan Mode
+- Plan Mode：`<proposed_plan>` 流式输出 → 最终 plan 文本
+- Execute Mode：`update_plan` 工具 → checkbox todo list
 
-You may explore and execute **non-mutating** actions that improve the plan. You must not perform **mutating** actions.
+两者独立、正交，服务于不同阶段。
 
-### Allowed (non-mutating, plan-improving)
+**启示**：Pi plan 扩展如果引入 execute 阶段，需要独立的进度追踪机制（如 todo 扩展），不应复用 plan 的数据结构。
 
-Actions that gather truth, reduce ambiguity, or validate feasibility without changing repo-tracked state. Examples:
+### 4. 用户确认 + Clear Context 的优雅处理
 
-* Reading or searching files, configs, schemas, types, manifests, and docs
-* Static analysis, inspection, and repo exploration
-* Dry-run style commands when they do not edit repo-tracked files
-* Tests, builds, or checks that may write to caches or build artifacts (for example, `target/`, `.cache/`, or snapshots) so long as they do not edit repo-tracked files
+"Clear context and implement" 选项解决了 plan 阶段消耗大量 context 的实际问题。前置文本将 plan 定义为新 session 的 user intent：
 
-### Not allowed (mutating, plan-executing)
+**启示**：Pi 的 plan → execute 转换也需要考虑 context 消耗。可以借鉴「plan 文本作为新 session 输入」的模式。
 
-Actions that implement the plan or change repo-tracked state. Examples:
+### 5. Nudge 而非强制
 
-* Editing or writing files
-* Running formatters or linters that rewrite files
-* Applying patches, migrations, or codegen that updates repo-tracked files
-* Side-effectful commands whose purpose is to carry out the plan rather than refine it
+Codex 不强制用户进入 Plan mode——它通过关键词检测 + nudge UI 引导用户。用户可以忽略、关闭、或接受。
 
-When in doubt: if the action would reasonably be described as "doing the work" rather than "planning the work," do not do it.
+**启示**：Pi plan 扩展的入口设计应优先考虑「低摩擦引导」而非「强制流程」。
 
-## PHASE 1 — Ground in the environment (explore first, ask second)
+### 6. Preset/Mask 模式实现模式切换
 
-Begin by grounding yourself in the actual environment. Eliminate unknowns in the prompt by discovering facts, not by asking the user. Resolve all questions that can be answered through exploration or inspection. Identify missing or ambiguous details only if they cannot be derived from the environment. Silent exploration between turns is allowed and encouraged.
+`CollaborationModeMask` 的 partial update 设计让模式切换非常灵活——每个 preset 只覆盖自己关心的字段（model、effort、instructions），其余继承当前值。
 
-Before asking the user any question, perform at least one targeted non-mutating exploration pass (for example: search relevant files, inspect likely entrypoints/configs, confirm current implementation shape), unless no local environment/repo is available.
-
-Exception: you may ask clarifying questions about the user's prompt before exploring, ONLY if there are obvious ambiguities or contradictions in the prompt itself. However, if ambiguity might be resolved by exploring, always prefer exploring first.
-
-Do not ask questions that can be answered from the repo or system (for example, "where is this struct?" or "which UI component should we use?" when exploration can make it clear). Only ask once you have exhausted reasonable non-mutating exploration.
-
-## PHASE 2 — Intent chat (what they actually want)
-
-* Keep asking until you can clearly state: goal + success criteria, audience, in/out of scope, constraints, current state, and the key preferences/tradeoffs.
-* Bias toward questions over guessing: if any high-impact ambiguity remains, do NOT plan yet—ask.
-
-## PHASE 3 — Implementation chat (what/how we'll build)
-
-* Once intent is stable, keep asking until the spec is decision complete: approach, interfaces (APIs/schemas/I/O), data flow, edge cases/failure modes, testing + acceptance criteria, rollout/monitoring, and any migrations/compat constraints.
-
-## Asking questions
-
-Critical rules:
-
-* Strongly prefer using the `request_user_input` tool to ask any questions.
-* Offer only meaningful multiple‑choice options; don't include filler choices that are obviously wrong or irrelevant.
-* In rare cases where an unavoidable, important question can't be expressed with reasonable multiple-choice options (due to extreme ambiguity), you may ask it directly without the tool.
-
-You SHOULD ask many questions, but each question must:
-
-* materially change the spec/plan, OR
-* confirm/lock an assumption, OR
-* choose between meaningful tradeoffs.
-* not be answerable by non-mutating commands.
-
-Use the `request_user_input` tool only for decisions that materially change the plan, for confirming important assumptions, or for information that cannot be discovered via non-mutating exploration.
-
-## Two kinds of unknowns (treat differently)
-
-1. **Discoverable facts** (repo/system truth): explore first.
-
-   * Before asking, run targeted searches and check likely sources of truth (configs/manifests/entrypoints/schemas/types/constants).
-   * Ask only if: multiple plausible candidates; nothing found but you need a missing identifier/context; or ambiguity is actually product intent.
-   * If asking, present concrete candidates (paths/service names) + recommend one.
-   * Never ask questions you can answer from your environment (e.g., "where is this struct").
-
-2. **Preferences/tradeoffs** (not discoverable): ask early.
-
-   * These are intent or implementation preferences that cannot be derived from exploration.
-   * Provide 2–4 mutually exclusive options + a recommended default.
-   * If unanswered, proceed with the recommended option and record it as an assumption in the final plan.
-
-## Finalization rule
-
-Only output the final plan when it is decision complete and leaves no decisions to the implementer.
-
-When you present the official plan, wrap it in a `<proposed_plan>` block so the client can render it specially:
-
-1) The opening tag must be on its own line.
-2) Start the plan content on the next line (no text on the same line as the tag).
-3) The closing tag must be on its own line.
-4) Use Markdown inside the block.
-5) Keep the tags exactly as `<proposed_plan>` and `</proposed_plan>` (do not translate or rename them), even if the plan content is in another language.
-
-Example:
-
-<proposed_plan>
-plan content
-</proposed_plan>
-
-plan content should be human and agent digestible. The final plan must be plan-only, concise by default, and include:
-
-* A clear title
-* A brief summary section
-* Important changes or additions to public APIs/interfaces/types
-* Test cases and scenarios
-* Explicit assumptions and defaults chosen where needed
-
-When possible, prefer a compact structure with 3-5 short sections, usually: Summary, Key Changes or Implementation Changes, Test Plan, and Assumptions. Do not include a separate Scope section unless scope boundaries are genuinely important to avoid mistakes.
-
-Prefer grouped implementation bullets by subsystem or behavior over file-by-file inventories. Mention files only when needed to disambiguate a non-obvious change, and avoid naming more than 3 paths unless extra specificity is necessary to prevent mistakes. Prefer behavior-level descriptions over symbol-by-symbol removal lists. For v1 feature-addition plans, do not invent detailed schema, validation, precedence, fallback, or wire-shape policy unless the request establishes it or it is needed to prevent a concrete implementation mistake; prefer the intended capability and minimum interface/behavior changes.
-
-Keep bullets short and avoid explanatory sub-bullets unless they are needed to prevent ambiguity. Prefer the minimum detail needed for implementation safety, not exhaustive coverage. Within each section, compress related changes into a few high-signal bullets and omit branch-by-branch logic, repeated invariants, and long lists of unaffected behavior unless they are necessary to prevent a likely implementation mistake. Avoid repeated repo facts and irrelevant edge-case or rollout detail. For straightforward refactors, keep the plan to a compact summary, key edits, tests, and assumptions. If the user asks for more detail, then expand.
-
-Do not ask "should I proceed?" in the final output. The user can easily switch out of Plan mode and request implementation if you have included a `<proposed_plan>` block in your response. Alternatively, they can decide to stay in Plan mode and continue refining the plan.
-
-Only produce at most one `<proposed_plan>` block per turn, and only when you are presenting a complete spec.
-
-If the user stays in Plan mode and asks for revisions after a prior `<proposed_plan>`, any new `<proposed_plan>` must be a complete replacement.
-````
-
----
-
-## 2. Plan Mode 的附加机制
-
-### 2.1 模式定义与切换
-
-**文件**：`codex-rs/protocol/src/config_types.rs:576-608`
-
-`ModeKind` 枚举定义了所有协作模式：
-
-```rust
-pub enum ModeKind {
-    Plan,
-    #[default]
-    Default,
-    PairProgramming, // hidden
-    Execute,         // hidden
-}
-```
-
-TUI 可见的模式只有 `Plan` 和 `Default`：
-
-```rust
-pub const TUI_VISIBLE_COLLABORATION_MODES: [ModeKind; 2] = [ModeKind::Default, ModeKind::Plan];
-```
-
-**切换机制**：用户通过 TUI 快捷键循环切换 collaboration mode。切换时，`CollaborationModeMask` 覆盖当前设置（mode、model、reasoning_effort、developer_instructions）。
-
-### 2.2 `request_user_input` 工具的可用性
-
-**文件**：`codex-rs/protocol/src/config_types.rs:614-617`
-
-```rust
-pub const fn allows_request_user_input(self) -> bool {
-    matches!(self, Self::Plan)
-}
-```
-
-Plan mode 是**唯一**默认允许使用 `request_user_input` 工具的模式（除非启用 `Feature::DefaultModeRequestUserInput` feature flag）。这意味着在 Plan mode 中，模型有结构化的用户交互能力。
-
-`request_user_input` 工具定义（`codex-rs/core/src/tools/handlers/request_user_input_spec.rs`）：
-- 支持 1-3 个问题
-- 每个问题有 2-3 个互斥选项
-- 选项中推荐项放在第一位，标签后缀 `(Recommended)`
-- 客户端自动添加 "Other" 自由输入选项
-
-### 2.3 `update_plan` 工具在 Plan Mode 中被禁用
-
-**文件**：`codex-rs/core/src/tools/handlers/plan.rs:79-82`
-
-```rust
-if turn.collaboration_mode.mode == ModeKind::Plan {
-    return Err(FunctionCallError::RespondToModel(
-        "update_plan is a TODO/checklist tool and is not allowed in Plan mode".to_string(),
-    ));
-}
-```
-
-`update_plan` 是一个 checklist/progress 工具（用于 Default/Execute 模式中跟踪进度），在 Plan mode 中调用会返回错误。这是为了防止模型混淆 "Plan Mode"（协作模式）和 "update_plan"（进度跟踪工具）。
-
-### 2.4 `<proposed_plan>` 流式解析与专用渲染
-
-**文件**：`codex-rs/utils/stream-parser/src/proposed_plan.rs`
-
-Plan mode 引入了专用的流式解析器 `ProposedPlanParser`，用于实时解析模型输出中的 `<proposed_plan>...</proposed_plan>` 标签块。
-
-**解析逻辑**：
-- 解析器将文本分为 `Normal`、`ProposedPlanStart`、`ProposedPlanDelta`、`ProposedPlanEnd` 四种段
-- `visible_text`（给 TUI 显示的文本）中**不包含** `<proposed_plan>` 块的内容（被剥离）
-- `extracted`（提取的段序列）包含完整的计划文本内容
-
-**Plan mode 专用渲染**：
-
-TUI 层面（`codex-rs/tui/src/chatwidget/streaming.rs:111-127`）：
-- `on_plan_delta()` 方法接收流式计划增量
-- 使用 `PlanStreamController` 做专门的计划内容渲染（独立于普通 assistant message）
-- `on_plan_item_completed()` 完成时将计划文本存入 `transcript.latest_proposed_plan_markdown`
-
-### 2.5 Plan Mode 专属的 Turn 状态管理
-
-**文件**：`codex-rs/core/src/session/turn.rs:1147-1168`
-
-```rust
-struct PlanModeStreamState {
-    pending_agent_message_items: HashMap<String, TurnItem>,
-    started_agent_message_items: HashSet<String>,
-    leading_whitespace_by_item: HashMap<String, String>,
-    plan_item_state: ProposedPlanItemState,
-}
-```
-
-Plan mode 的流式处理有特殊的 agent message 延迟逻辑：
-- Agent message 的 start 事件被推迟到解析器发出**非计划文本**时
-- 这样纯计划输出不会显示为空的 assistant message
-- 每行被缓冲直到可以排除标签前缀
-
-`ProposedPlanItemState` 跟踪计划项的生命周期（`started`/`completed`），用于发送 `TurnItem::Plan` 事件。
-
-### 2.6 Goal 延续在 Plan Mode 中被跳过
-
-**文件**：`codex-rs/core/src/goals.rs:1344, 1489-1493`
-
-```rust
-fn should_ignore_goal_for_mode(mode: ModeKind) -> bool {
-    mode == ModeKind::Plan
-}
-```
-
-Plan mode 中，Goal 系统的自动延续（continuation）被完全禁用。这意味着：
-- 不会在 Plan mode 中自动启动新的 goal turn
-- Goal token 计费也不在 Plan mode 中进行（`codex-rs/ext/goal/src/accounting.rs:77`）
-
-### 2.7 Reasoning Effort 默认值
-
-**文件**：`codex-rs/models-manager/src/collaboration_mode_presets.rs:25`
-
-Plan mode 的 reasoning effort 默认设为 `Medium`（而 Default mode 没有覆盖，使用模型默认值）。用户可以通过配置文件覆盖：
-
-```rust
-// codex-rs/core/src/config/mod.rs:911
-pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
-```
-
-切换到 Plan mode 时，如果用户配置了 `plan_mode_reasoning_effort`，会使用该值（`codex-rs/tui/src/chatwidget/input_flow.rs:168-170`）。
-
-### 2.8 Plan Implementation 提示（实现确认弹窗）
-
-**文件**：`codex-rs/tui/src/chatwidget/plan_implementation.rs`
-
-当 Plan mode 的 turn 产生了 `<proposed_plan>` 块后，TUI 会弹出确认提示：
-
-```
-Implement this plan?
-├── Yes, implement this plan          → 切换到 Default mode，发送 "Implement the plan."
-├── Yes, clear context and implement  → 清除上下文，在新线程中执行计划
-└── No, stay in Plan mode             → 继续规划
-```
-
-**"Clear context and implement"** 的消息前缀：
-> "A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification."
-
-这个机制确保计划完成后有明确的实施路径，同时给用户保留上下文或清除上下文的选择。
-
-### 2.9 Plan Mode Nudge（自动提示切换）
-
-**文件**：`codex-rs/tui/src/chatwidget/settings.rs:418-435`
-
-当用户在 Default mode 中输入包含 "plan" 关键词（词级匹配，不匹配 "plane"/"planning" 等子串）时，TUI 底部会显示提示，建议切换到 Plan mode。
-
-关键词检测逻辑（`codex-rs/tui/src/chatwidget.rs:802-804`）：
-
-```rust
-fn contains_plan_keyword(text: &str) -> bool {
-    text.split(|ch: char| !ch.is_alphanumeric() && ch != '_')
-        .any(|word| word.eq_ignore_ascii_case("plan"))
-}
-```
-
-用户可以 dismiss 这个提示（按 thread scope 记录）。
-
-### 2.10 隐藏标记的剥离
-
-**文件**：`codex-rs/core/src/stream_events_utils.rs:69-87`
-
-Plan mode 中，assistant 输出会剥离 `<proposed_plan>` 块（因为计划内容通过独立的 `PlanItem` 事件发送给客户端）。同时也会剥离 memory citation 标记。
-
-### 2.11 工具注册层面无过滤
-
-Plan mode 在工具注册/路由层面（`codex-rs/core/src/tools/spec_plan.rs`）**不做任何过滤**。所有工具（shell、apply_patch、exec 等）在 Plan mode 中仍然可用。对于 "mutating" 操作的限制完全依赖提示词引导，而非技术层面的拦截。
-
-## 3. 架构总结
-
-### 数据流
-
-```
-用户输入 → TUI → 切换 collaboration mode 为 Plan
-                → 注入 plan.md 提示词作为 developer_instructions
-                → reasoning_effort 设为 Medium（可配置覆盖）
-                → 模型生成回复
-                    → 流式解析器实时解析 <proposed_plan> 块
-                    → TUI 剥离计划块文本，通过专用 PlanItem 渲染
-                    → request_user_input 工具可用
-                    → update_plan 工具禁用
-                    → Goal 延续禁用
-                → 产生 <proposed_plan> 后弹出实现确认
-                    → "Implement this plan?" → 切换到 Default mode 执行
-                    → "Clear context and implement" → 新线程执行
-                    → "Stay in Plan mode" → 继续规划
-```
-
-### 关键设计决策
-
-1. **提示词驱动 vs 工具过滤**：Plan mode 的核心约束（禁止 mutating 操作）完全在提示词层面实现，不在工具注册/执行层面做拦截。这意味着模型可以"违反规则"执行 mutating 操作，但会被 prompt 强烈引导不要这样做。
-
-2. **结构化交互**：Plan mode 是唯一默认启用 `request_user_input` 的模式，强调通过结构化问答来消除歧义。
-
-3. **流式计划解析**：`<proposed_plan>` 标签的解析是流式的，允许 TUI 在计划生成过程中实时渲染，同时将计划文本从普通 assistant message 中分离出来。
-
-4. **计划-执行分离**：Plan mode 和 Default mode 是明确的两阶段设计。Plan mode 产出计划，然后通过确认弹窗切换到 Default mode 执行。甚至支持"清除上下文执行"——在新线程中以计划文本作为输入重新开始。
-
-5. **三阶段对话模型**：提示词定义了三个明确的对话阶段——环境探索（Phase 1）、意图确认（Phase 2）、实现细化（Phase 3），形成渐进式的规划收敛过程。
+**启示**：Pi plan 扩展如果引入模式概念，应采用类似 Mask 的 partial update 模式，而非全量替换。

@@ -103,14 +103,32 @@ export function registerPlanTool(
         }
 
         case "complete": {
+          // P0: User confirmation gate — AI cannot auto-proceed
+          if (typeof ctx.ui.select === "function") {
+            const choice = await ctx.ui.select(
+              "Plan is ready. What next?",
+              ["Execute the plan", "Modify the plan first", "Save for later"],
+            );
+            if (choice !== "Execute the plan") {
+              return {
+                content: [{ type: "text" as const, text: `User chose: ${choice ?? "cancelled"}. Staying in plan mode.` }],
+                details: { action: "complete-cancelled", reason: choice ?? "cancelled" },
+              };
+            }
+          }
+
           state.phase = "complete";
           persistPlanState(pi, state);
+
+          // Restore full tool set before execution
+          pi.setActiveTools(["read", "bash", "edit", "write"]);
+
           const isolation = (params.isolation as string) ?? "direct";
           // Dynamic import: compact.ts is in BG2, tool.ts is in BG1
           const { handlePlanComplete } = await import("./compact.js");
           handlePlanComplete(pi, ctx, state, isolation);
           return {
-            content: [{ type: "text" as const, text: "Plan complete. Switching to implementation..." }],
+            content: [{ type: "text" as const, text: "Plan approved. Starting execution..." }],
             details: { action, planFilePath: state.planFilePath, isolation },
           };
         }
@@ -124,8 +142,10 @@ export function registerPlanTool(
           persistPlanState(pi, state);
           sessions.delete(sessionId);
           updatePlanWidget(ctx, state);
+          // Restore full tool set
+          pi.setActiveTools(["read", "bash", "edit", "write"]);
           return {
-            content: [{ type: "text" as const, text: "Plan mode aborted." }],
+            content: [{ type: "text" as const, text: "Plan mode aborted. Full tool access restored." }],
             details: { action },
           };
         }

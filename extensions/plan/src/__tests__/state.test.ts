@@ -45,7 +45,7 @@ describe("PlanState", () => {
           {
             type: "custom",
             customType: "plan-state",
-            data: { isActive: true, phase: "writing", planFilePath: "/tmp/plan-test.md", requirement: "test", templateName: "feature-plan" },
+            data: { isActive: true, phase: "writing", planFilePath: ".xyz-harness/test/plan.md", requirement: "test", templateName: "feature-plan" },
           },
         ],
       },
@@ -64,7 +64,7 @@ describe("State persistence", () => {
     const state: PlanState = {
       isActive: true,
       phase: "brainstorming",
-      planFilePath: "/tmp/plan-test.md",
+      planFilePath: ".xyz-harness/test/plan.md",
       requirement: "test requirement",
       templateName: "feature-plan",
     };
@@ -74,7 +74,7 @@ describe("State persistence", () => {
     expect(mockPi.appendEntry).toHaveBeenCalledWith("plan-state", {
       isActive: true,
       phase: "brainstorming",
-      planFilePath: "/tmp/plan-test.md",
+      planFilePath: ".xyz-harness/test/plan.md",
       requirement: "test requirement",
       templateName: "feature-plan",
     });
@@ -99,7 +99,7 @@ describe("State persistence", () => {
             data: {
               isActive: true,
               phase: "writing",
-              planFilePath: "/tmp/plan-test.md",
+              planFilePath: ".xyz-harness/test/plan.md",
               requirement: "test",
               templateName: "feature-plan",
             },
@@ -111,6 +111,6 @@ describe("State persistence", () => {
     const state = reconstructPlanState(mockCtx);
     expect(state.isActive).toBe(true);
     expect(state.phase).toBe("writing");
-    expect(state.planFilePath).toBe("/tmp/plan-test.md");
+    expect(state.planFilePath).toBe(".xyz-harness/test/plan.md");
   });
 });
