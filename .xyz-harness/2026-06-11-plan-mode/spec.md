@@ -21,7 +21,7 @@ Plan mode 填补这个空白：融合 brainstorming（需求探索）+ writing-p
 | FR-1.3 | `/plan` 不带描述时，若当前不在 plan mode，检测已有 plan 文件并提示用户选择（继续/实现/新建/取消） |
 | FR-1.4 | `/plan` 不带描述时，若当前在 plan mode，显示状态（阶段、plan 文件路径） |
 | FR-1.5 | 进入时创建 plan session 状态，存储在 `ctx.sessionManager`（per-session 隔离） |
-| FR-1.6 | 进入时生成 plan 文件路径 `/tmp/plan-{slug}.md` |
+| FR-1.6 | 进入时生成 plan 文件路径 `.xyz-harness/{slug}/plan.md`（相对于项目根目录） |
 | FR-1.7 | 进入时通过 command 内联注入 plan mode 系统提示词（只读约束 + 流程指引） |
 | FR-1.8 | 重入时先读已有 plan 文件，判断是新任务覆盖还是同一任务迭代 |
 
@@ -89,14 +89,14 @@ Plan mode 填补这个空白：融合 brainstorming（需求探索）+ writing-p
 |----|------|
 | FR-7.1 | `/plan abort` 可在任何阶段取消 plan mode |
 | FR-7.2 | AI 也可调用 `plan` tool (abort) 取消 |
-| FR-7.3 | 取消后 plan 文件保留在 /tmp 不管，状态清除 |
+| FR-7.3 | 取消后 plan 文件保留在 `.xyz-harness/` 不管，状态清除 |
 
 ### FR-8: 只读约束
 
 | ID | 要求 |
 |----|------|
-| FR-8.1 | Plan mode 期间，提示词告知 AI 禁止编辑非 plan 文件、禁止运行写入类命令 |
-| FR-8.2 | 约束仅通过提示词实现，不使用 `tool_call` 事件拦截 |
+| FR-8.1 | Plan mode 期间，提示词告知 AI 禁止编辑非 plan 文件、禁止运行写入类命令，同时通过 `setActiveTools()` 限制可用工具集 |
+| FR-8.2 | 约束通过提示词 + `setActiveTools()` 工具白名单双重实现，不使用 `tool_call` 事件拦截 |
 | FR-8.3 | 违反约束时用户可在 review 中发现并 abort |
 
 ### FR-9: 状态管理
@@ -134,9 +134,9 @@ Plan mode 填补这个空白：融合 brainstorming（需求探索）+ writing-p
 
 - **运行环境**：Pi extension，进程内执行，非独立进程
 - **TypeScript**，Pi Extension API，typebox schema 定义
-- **只读约束**：纯提示词驱动，不做 `tool_call` 事件拦截
+- **只读约束**：提示词驱动 + `pi.setActiveTools()` 工具白名单双重保障
 - **状态存储**：`ctx.sessionManager`（per-session），不用闭包变量
-- **Plan 文件**：存储在 `/tmp`，不主动清理
+- **Plan 文件**：存储在项目 `.xyz-harness/{slug}/plan.md`，与 harness 产出物目录一致
 - **上下文隔离**：`ctx.compact()` + `session_before_compact` handler，与 coding-workflow 一致的实现模式
 - **Goal API**：通过 `(pi as Record<string, unknown>).__goalInit` 调用，与 coding-workflow 一致的调用模式
 - **无 gate/review/retrospect**：plan mode 不做质量门控
