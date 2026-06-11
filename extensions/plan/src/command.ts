@@ -17,7 +17,7 @@ export function registerPlanCommand(
       "With no args, show status or detect existing plan.",
     handler: async (args: string, ctx: ExtensionContext) => {
       const trimmed = args.trim();
-      const sessionId = ctx.sessionId ?? "default";
+      const sessionId = ctx.sessionManager.getSessionId();
       const state = getPlanState(sessions, sessionId, ctx);
 
       // Subcommand: abort

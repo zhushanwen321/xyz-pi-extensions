@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, CustomEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
 
 export type PlanPhase = "idle" | "brainstorming" | "writing" | "complete";
 
@@ -48,8 +48,8 @@ export function persistPlanState(pi: ExtensionAPI, state: PlanState): void {
   });
 }
 
-function isPlanStateEntry(entry: unknown): entry is { type: "custom"; customType: "plan-state"; data: Partial<PlanState> } {
-  const e = entry as Record<string, unknown>;
+function isPlanStateEntry(entry: SessionEntry): entry is CustomEntry<Partial<PlanState>> & { customType: "plan-state" } {
+  const e = entry as unknown as Record<string, unknown>;
   return e.type === "custom" && e.customType === "plan-state" && typeof e.data === "object" && e.data !== null;
 }
 
@@ -59,7 +59,7 @@ export function reconstructPlanState(ctx: ExtensionContext): PlanState {
 
   for (let i = entries.length - 1; i >= 0; i--) {
     if (isPlanStateEntry(entries[i])) {
-      const data = entries[i].data;
+      const data = (entries[i] as unknown as { data: Partial<PlanState> }).data;
       state.isActive = data.isActive ?? false;
       state.phase = data.phase ?? "idle";
       state.planFilePath = data.planFilePath ?? "";

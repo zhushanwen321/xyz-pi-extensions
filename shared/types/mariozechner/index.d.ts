@@ -162,6 +162,10 @@ declare module "typebox" {
 	export type Static<T> = Record<string, any>;
 }
 
+declare module "@sinclair/typebox" {
+	export * from "typebox";
+}
+
 declare module "@zhushanwen/pi-quota-providers" {
 	export function loadProviderConfig(...args: any[]): any;
 	export function loadQuotaConfig(...args: any[]): any;

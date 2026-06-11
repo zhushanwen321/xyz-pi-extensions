@@ -13,8 +13,9 @@ export function registerPlanEventHandlers(
   sessions: PlanSessionMap,
 ): void {
   // session_before_compact: customize compaction summary
-  pi.on("session_before_compact", async (event: unknown, ctx: ExtensionContext) => {
-    const sessionId = ctx.sessionId ?? "default";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (pi as any).on("session_before_compact", async (event: { preparation?: { firstKeptEntryId?: string; tokensBefore?: number } }, ctx: ExtensionContext) => {
+    const sessionId = ctx.sessionManager.getSessionId();
     const state = getPlanState(sessions, sessionId, ctx);
     if (!state.isActive || state.phase !== "complete") return {};
 
@@ -32,8 +33,9 @@ export function registerPlanEventHandlers(
   });
 
   // session_before_tree: customize tree summary
-  pi.on("session_before_tree", async (_event: unknown, ctx: ExtensionContext) => {
-    const sessionId = ctx.sessionId ?? "default";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (pi as any).on("session_before_tree", async (_event: unknown, ctx: ExtensionContext) => {
+    const sessionId = ctx.sessionManager.getSessionId();
     const state = getPlanState(sessions, sessionId, ctx);
     if (!state.isActive || state.phase !== "complete") return {};
 

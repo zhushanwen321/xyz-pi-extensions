@@ -18,16 +18,11 @@ export default function planExtension(pi: ExtensionAPI) {
   }).catch((_e: unknown) => { /* compact.ts missing — extension works without it */ });
 
   // Reconstruct state on session start
-  pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
-    const sessionId = ctx.sessionId ?? "default";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (pi as any).on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
+    const sessionId = ctx.sessionManager.getSessionId();
     const state = reconstructPlanState(ctx);
     sessions.set(sessionId, state);
     updatePlanWidget(ctx, state);
-  });
-
-  // Clean up on session end
-  pi.on("session_end", async (_event: unknown, ctx: ExtensionContext) => {
-    const sessionId = ctx.sessionId ?? "default";
-    sessions.delete(sessionId);
   });
 }

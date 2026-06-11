@@ -26,7 +26,8 @@ export function registerPlanTool(
   pi: ExtensionAPI,
   sessions: PlanSessionMap,
 ): void {
-  pi.registerTool({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (pi as any).registerTool({
     name: "plan",
     label: "Plan Mode",
     description:
@@ -42,8 +43,8 @@ export function registerPlanTool(
     async execute(
       _toolCallId: string,
       params: Record<string, unknown>,
-      _signal: AbortSignal,
-      _onUpdate: (partial: { content: Array<{ type: string; text: string }> }) => void,
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
       ctx: ExtensionContext,
     ) {
       const action = params.action as string;
@@ -51,7 +52,7 @@ export function registerPlanTool(
         throw new Error(`Unknown plan action: ${action}. Valid actions: ${PLAN_ACTIONS.join(", ")}`);
       }
 
-      const sessionId = ctx.sessionId ?? "default";
+      const sessionId = ctx.sessionManager.getSessionId();
       const state = getPlanState(sessions, sessionId, ctx);
 
       switch (action) {
