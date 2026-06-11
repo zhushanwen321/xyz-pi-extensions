@@ -14,15 +14,15 @@
  *   ⏎ expand/collapse prompt · esc back to agent list · s save trace
  */
 
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import { copyFileSync, existsSync, mkdirSync, promises as fsPromises } from "node:fs";
+import { homedir } from "node:os";
+import { join as pathJoin, resolve } from "node:path";
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { matchesKey, Key, truncateToWidth } from "@mariozechner/pi-tui";
 
 import type { WorkflowOrchestrator } from "../../orchestrator.js";
-import type { WorkflowInstance } from "../../domain/state.js";
+import type { WorkflowInstance, WorkflowStatus } from "../../domain/state.js";
 
 import {
   type PhaseGroup,
@@ -32,6 +32,7 @@ import {
   formatActivityLine,
   formatElapsed,
   formatPhaseLine,
+  formatStatusBadge,
   formatTokenStat,
   isTerminalStatus,
   OUTPUT_TRUNCATE_BYTES,
@@ -61,6 +62,12 @@ interface ViewState {
   agentIdx: number;
   promptExpanded: boolean;
   disposed: boolean;
+  // Save mode
+  saveMode: boolean;
+  saveScope: "project" | "user";
+  saveInputValue: string;
+  saveMessage: string;    // inline feedback in save overlay
+  saveMsgOk: boolean;     // true = success style, false = error style
 }
 
 // ── View factory ──────────────────────────────────────────────
@@ -85,6 +92,11 @@ export function createWorkflowsView(
       agentIdx: 0,
       promptExpanded: false,
       disposed: false,
+      saveMode: false,
+      saveScope: "project",
+      saveInputValue: "",
+      saveMessage: "",
+      saveMsgOk: false,
     };
     const state = initialState;
 
@@ -119,7 +131,7 @@ export function createWorkflowsView(
       },
       handleInput(data: string): void {
         if (state.disposed) return;
-        if (processKey(data, orchestrator, runId, state, ctx, wrappedDone)) {
+        if (processKey(data, orchestrator, runId, state, ctx, wrappedDone, cache, requestRender)) {
           cache.width = undefined;
           cache.lines = undefined;
           requestRender();
@@ -143,22 +155,65 @@ function processKey(
   state: ViewState,
   ctx: ExtensionContext,
   done: () => void,
+  cache: { width: number | undefined; lines: string[] | undefined },
+  requestRender: () => void,
 ): boolean {
   const instance = orchestrator.getInstance(runId);
   if (!instance) return false;
   const phases = buildPhaseGroups(instance.trace);
-  if (phases.length === 0) return false;
 
-  // Escape: level back or exit
+  // 1. Save mode: intercept all input
+  if (state.saveMode) {
+    return processSaveModeInput(data, instance, state, ctx, cache, requestRender);
+  }
+
+  // 2. Escape: level back or exit
   if (matchesKey(data, Key.escape)) {
     if (state.level === 0) { done(); return false; }
     state.level = (state.level - 1) as 0 | 1 | 2;
     return true;
   }
 
-  // Level 2 (Detail)
+  // 3. Global: x → abort
+  if (data === "x") {
+    handleAbort(orchestrator, runId, instance, ctx);
+    return false;
+  }
+
+  // 4. Global: p → pause/resume toggle
+  if (data === "p") {
+    handlePauseResume(orchestrator, runId, instance, ctx);
+    return false;
+  }
+
+  // 5. Global: r → restart (only when terminal or paused)
+  if (data === "r") {
+    if (isTerminalStatus(instance.status) || instance.status === "paused") {
+      handleRestart(orchestrator, runId, instance, ctx, state, done);
+    }
+    return false;
+  }
+
+  // 6. Global: s → enter save mode
+  if (data === "s") {
+    state.saveMode = true;
+    state.saveInputValue = instance.name;
+    state.saveScope = "project";
+    state.saveMessage = "";
+    state.saveMsgOk = false;
+    return true;
+  }
+
+  // 7. Global: S (shift+s) → save trace to file
+  if (data === "S") {
+    saveTraceToFile(instance, ctx);
+    return false;
+  }
+
+  if (phases.length === 0) return false;
+
+  // 8. Level 2 (Detail)
   if (state.level === 2) {
-    // ↑↓ navigate agents within current phase
     if (matchesKey(data, Key.up)) {
       if (state.agentIdx > 0) { state.agentIdx--; state.promptExpanded = false; return true; }
       return false;
@@ -172,12 +227,10 @@ function processKey(
       state.promptExpanded = !state.promptExpanded;
       return true;
     }
-    if (data === "p") { handlePauseResume(orchestrator, runId, instance, ctx); return false; }
-    if (data === "s") { saveTraceToFile(instance, ctx); return false; }
     return false;
   }
 
-  // Level 0 & 1: up/down navigation
+  // 9. Level 0 & 1: up/down navigation
   if (matchesKey(data, Key.up)) {
     if (state.level === 0 && state.phaseIdx > 0) {
       state.phaseIdx--;
@@ -220,6 +273,64 @@ function processKey(
   return false;
 }
 
+// ── Save mode input handling ──────────────────────────────────
+
+function processSaveModeInput(
+  data: string,
+  instance: WorkflowInstance,
+  state: ViewState,
+  ctx: ExtensionContext,
+  cache: { width: number | undefined; lines: string[] | undefined },
+  requestRender: () => void,
+): boolean {
+  // Escape → exit save mode
+  if (matchesKey(data, Key.escape)) {
+    state.saveMode = false;
+    return true;
+  }
+  // Tab → toggle scope
+  if (data === "\t") {
+    state.saveScope = state.saveScope === "project" ? "user" : "project";
+    return true;
+  }
+  // Enter → save
+  if (data === "\r" || data === "\n") {
+    if (!state.saveInputValue.trim()) {
+      state.saveMessage = "Please enter a name";
+      state.saveMsgOk = false;
+      return true;
+    }
+    void doSaveWorkflow(instance, state, ctx).then((result) => {
+      state.saveMessage = result.msg;
+      state.saveMsgOk = result.ok;
+      if (result.ok) {
+        state.saveMode = false;
+      }
+      cache.width = undefined;
+      cache.lines = undefined;
+      requestRender();
+    });
+    return false;
+  }
+  // Backspace → clear message on edit
+  if (data === "\x7f" || data === "\b") {
+    state.saveMessage = "";
+    if (state.saveInputValue.length > 0) {
+      state.saveInputValue = state.saveInputValue.slice(0, -1);
+      return true;
+    }
+    return false;
+  }
+  // Printable chars → clear message on edit
+  if (data.length === 1 && data.charCodeAt(0) >= 32) {
+    state.saveMessage = "";
+    state.saveInputValue += data;
+    return true;
+  }
+  // Block all other keys (↑↓ etc.) from falling through
+  return false;
+}
+
 // ── Save trace ────────────────────────────────────────────────
 
 function handlePauseResume(
@@ -239,8 +350,8 @@ function handlePauseResume(
 }
 
 function saveTraceToFile(instance: WorkflowInstance, ctx: ExtensionContext): void {
-  const dir = path.join(os.homedir(), ".pi", "agent", "workflow-traces");
-  const filePath = path.join(dir, `${instance.runId}.md`);
+  const dir = pathJoin(homedir(), ".pi", "agent", "workflow-traces");
+  const filePath = pathJoin(dir, `${instance.runId}.md`);
   const lines: string[] = [];
   lines.push(`# Workflow Trace: ${instance.name} (${instance.runId})`, "");
   lines.push(`Status: ${instance.status} | Started: ${instance.startedAt ?? "-"} | Duration: ${formatElapsed(instance.startedAt)}`);
@@ -265,10 +376,79 @@ function saveTraceToFile(instance: WorkflowInstance, ctx: ExtensionContext): voi
       lines.push("");
     }
   }
-  fs.promises.mkdir(dir, { recursive: true })
-    .then(() => fs.promises.writeFile(filePath, lines.join("\n"), "utf8"))
+  fsPromises.mkdir(dir, { recursive: true })
+    .then(() => fsPromises.writeFile(filePath, lines.join("\n"), "utf8"))
     .then(() => ctx.ui.notify(`Trace saved: ${filePath}`, "info"))
     .catch((err: Error) => ctx.ui.notify(`Save failed: ${err.message}`, "error"));
+}
+
+function handleAbort(
+  orchestrator: WorkflowOrchestrator,
+  runId: string,
+  instance: WorkflowInstance,
+  ctx: ExtensionContext,
+): void {
+  if (isTerminalStatus(instance.status)) {
+    ctx.ui.notify(`Workflow already ${instance.status}`, "warning");
+    return;
+  }
+  void orchestrator.abort(runId)
+    .then(() => ctx.ui.notify("Workflow aborted", "info"))
+    .catch((err: Error) => ctx.ui.notify(`Abort failed: ${err.message}`, "error"));
+}
+
+function handleRestart(
+  orchestrator: WorkflowOrchestrator,
+  runId: string,
+  instance: WorkflowInstance,
+  ctx: ExtensionContext,
+  state: ViewState,
+  done: () => void,
+): void {
+  // Block renders before async restart to avoid flickering "(workflow not found)"
+  state.disposed = true;
+  void orchestrator.restart(runId)
+    .then((newRunId) => {
+      ctx.ui.notify(`Restarted '${instance.name}' (${newRunId.slice(0, 12)}...)`, "info");
+      done();
+    })
+    .catch((err: Error) => {
+      ctx.ui.notify(`Restart failed: ${err.message}`, "error");
+      state.disposed = false;
+    });
+}
+
+// ── Save workflow script ──────────────────────────────────────
+
+async function doSaveWorkflow(
+  instance: WorkflowInstance,
+  state: ViewState,
+  ctx: ExtensionContext,
+): Promise<{ ok: boolean; msg: string }> {
+  const isTmp = instance.worker.includes("/.tmp/") || instance.worker.includes("\\.tmp\\");
+
+  if (!isTmp) {
+    return { ok: false, msg: "Only temporary workflows can be saved." };
+  }
+
+  const name = state.saveInputValue.trim();
+  const savedDir = state.saveScope === "project"
+    ? resolve(process.cwd(), ".pi/workflows")
+    : resolve(homedir(), ".pi/agent/workflows");
+  const destPath = resolve(savedDir, `${name}.js`);
+
+  if (existsSync(destPath)) {
+    return { ok: false, msg: `'${name}' already exists. Use a different name.` };
+  }
+
+  try {
+    mkdirSync(savedDir, { recursive: true });
+    copyFileSync(instance.worker, destPath);
+    return { ok: true, msg: `Saved '${name}' → ${destPath}` };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, msg: `Save failed: ${msg}` };
+  }
 }
 
 // ── Render ────────────────────────────────────────────────────
@@ -289,8 +469,7 @@ function renderView(
   const completed = instance.trace.filter((n) => n.status === "completed").length;
   const total = instance.trace.length;
   const elapsed = formatElapsed(instance.startedAt);
-  const statusTag = isTerminalStatus(instance.status) ? " · done" : "";
-  const headerRight = `${completed}/${total} agents · ${elapsed}${statusTag}`;
+  const headerRight = `${formatStatusBadge(instance.status, theme)} · ${completed}/${total} agents · ${elapsed}`;
 
   const nameLine = theme.bold(instance.name);
   const rightPart = theme.fg("muted", headerRight);
@@ -345,12 +524,35 @@ function renderView(
   // Bottom border
   lines.push("╰" + "─".repeat(contentWidth) + "╯");
 
-  // Footer: outside the border box
-  const footer = state.level === 0
-    ? "↑↓ phase · ⏎ enter · esc back"
+  // Save overlay (rendered on top of the normal view when saveMode is active)
+  if (state.saveMode) {
+    const overlayLines = renderSaveOverlay(instance, state, theme, width);
+    // Center the overlay vertically — overwrite the middle of the body
+    const overlayStart = Math.max(bodyStart, bodyStart + Math.floor((lines.length - bodyStart - overlayLines.length) / 2));
+    for (let i = 0; i < overlayLines.length && overlayStart + i < lines.length; i++) {
+      lines[overlayStart + i] = overlayLines[i];
+    }
+  }
+
+  // Footer: outside the border box — dynamic based on workflow status
+  const navPart = state.level === 0
+    ? "↑↓ phase · ⏎ enter"
     : state.level === 1
-      ? "↑↓ agent · ⏎ detail · esc back"
-      : "↑↓ agent · ⏎ prompt · p pause · s save · esc back";
+      ? "↑↓ agent · ⏎ detail"
+      : "↑↓ agent · ⏎ prompt";
+  const actionParts: string[] = [];
+  const terminal = isTerminalStatus(instance.status);
+  if (!terminal) {
+    actionParts.push("x stop");
+    actionParts.push(instance.status === "paused" ? "p resume" : "p pause");
+  }
+  if (terminal || instance.status === "paused") {
+    actionParts.push("r restart");
+  }
+  actionParts.push("s save");
+  actionParts.push("S trace");
+  actionParts.push("esc back");
+  const footer = `${navPart} · ${actionParts.join(" · ")}`;
   lines.push("");
   lines.push(theme.fg("muted", footer));
 
@@ -556,4 +758,59 @@ function mergeBody(
     const left = padVisible(leftLines[i] ?? "", SIDEBAR_WIDTH);
     lines.push(left + "│" + (rightLines[i] ?? ""));
   }
+}
+
+// ── Save overlay render ───────────────────────────────────────
+
+function renderSaveOverlay(
+  instance: WorkflowInstance,
+  state: ViewState,
+  theme: ThemeLike,
+  width: number,
+): string[] {
+  const contentWidth = width - 2;
+  const lines: string[] = [];
+
+  lines.push("╭" + "─".repeat(contentWidth) + "╮");
+
+  // Title
+  const title = " Save dynamic workflow";
+  lines.push("│" + padVisible(theme.bold(title), contentWidth) + "│");
+
+  // Scope + destination
+  const scopeLabel = state.saveScope === "project" ? "Project" : "User";
+  const scopeDir = state.saveScope === "project" ? ".pi/workflows/" : "~/.pi/agent/workflows/";
+  const destName = state.saveInputValue || instance.name;
+  const destLine = `${scopeLabel} scope · ${scopeDir}${destName}.js`;
+  lines.push("│" + padVisible(theme.fg("dim", destLine), contentWidth) + "│");
+
+  // Empty line
+  lines.push("│" + padVisible("", contentWidth) + "│");
+
+  // Label
+  lines.push("│" + padVisible("Save as:", contentWidth) + "│");
+
+  // Input line with cursor block
+  const inputLine = `  > ${state.saveInputValue}\u2588`;
+  lines.push("│" + padVisible(inputLine, contentWidth) + "│");
+
+  // Empty line
+  lines.push("│" + padVisible("", contentWidth) + "│");
+
+  // Inline message (error or success)
+  if (state.saveMessage) {
+    const msgStyle = state.saveMsgOk ? "success" : "error";
+    const msgLine = `  ${state.saveMessage}`;
+    lines.push("│" + padVisible(theme.fg(msgStyle, msgLine), contentWidth) + "│");
+  } else {
+    lines.push("│" + padVisible("", contentWidth) + "│");
+  }
+
+  // Hint
+  const hint = "Enter to save · Tab to toggle scope · Esc to cancel";
+  lines.push("│" + padVisible(theme.fg("muted", hint), contentWidth) + "│");
+
+  lines.push("╰" + "─".repeat(contentWidth) + "╯");
+
+  return lines;
 }

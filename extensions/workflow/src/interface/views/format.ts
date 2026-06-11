@@ -38,6 +38,21 @@ export function isTerminalStatus(status: WorkflowStatus): boolean {
   return ["completed", "failed", "aborted", "budget_limited", "time_limited", "state_lost"].includes(status);
 }
 
+/** Format a status badge with color for the header area. */
+export function formatStatusBadge(status: WorkflowStatus, theme: ThemeLike): string {
+  switch (status) {
+    case "running": return theme.fg("warning", "\u25CF running");
+    case "paused": return theme.fg("warning", "\u23F8 PAUSED");
+    case "completed": return theme.fg("success", "\u2713 completed");
+    case "failed": return theme.fg("error", "\u2717 failed");
+    case "aborted": return theme.fg("error", "\u2717 aborted");
+    case "budget_limited": return theme.fg("error", "\u26A0 budget");
+    case "time_limited": return theme.fg("error", "\u26A0 timeout");
+    case "state_lost": return theme.fg("muted", "? lost");
+    default: return theme.fg("muted", status);
+  }
+}
+
 // ── Pure formatting functions ─────────────────────────────────
 
 /** Group trace nodes by phase. Nodes without phase go to "(no phase)". */

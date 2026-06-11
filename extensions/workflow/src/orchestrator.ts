@@ -482,6 +482,85 @@ export class WorkflowOrchestrator {
   }
 
   /**
+   * Restart a workflow: create a fresh instance from the same script,
+   * then clean up the old one. Returns the new runId.
+   *
+   * Note: intentionally does NOT forward the original AbortSignal to the
+   * new instance. Restart is a user-initiated action — the new run should
+   * have an independent lifecycle from the original tool-execute caller's
+   * signal (which may already be aborted).
+   */
+  async restart(runId: string): Promise<string> {
+    const instance = this.instances.get(runId);
+    if (!instance) {
+      throw new Error(`Workflow '${runId}' not found`);
+    }
+
+    const meta = this.runMetaMap.get(runId);
+    if (!meta) {
+      throw new Error("No metadata for restart — cannot re-run without original script");
+    }
+
+    const name = instance.name;
+    const scriptSource = meta.scriptSource;
+    const args = meta.args;
+    const budgetTokens = meta.budgetTokens;
+    const budgetTimeMs = meta.budgetTimeMs;
+
+    // 1. Abort old instance if still alive
+    if (instance.status === "running" || instance.status === "paused") {
+      instance.completedAt = new Date().toISOString();
+      transitionStatus(instance, "aborted");
+      this.events.emit(runId, { type: "status", status: "aborted" });
+      this.terminateWorker(runId);
+      this.cleanupAllTempFiles();
+    }
+
+    // 2. Create new instance directly from cached scriptSource
+    //    Bypass getWorkflow() + fs.readFileSync() since we already have the script.
+    const newRunId = `wf-${Date.now()}-${Math.random().toString(RUNID_RADIX).slice(RUNID_SLICE_START, RUNID_SLICE_LENGTH)}`;
+    const newInstance = createStateInstance({
+      runId: newRunId,
+      name,
+      worker: instance.worker,
+      budget: { maxTokens: budgetTokens, maxTimeMs: budgetTimeMs },
+    });
+    newInstance.startedAt = new Date().toISOString();
+
+    this.instances.set(newRunId, newInstance);
+    this.runMetaMap.set(newRunId, { scriptSource, args, budgetTokens, budgetTimeMs });
+    this.startWorker(newRunId, newInstance, scriptSource, args);
+
+    // 3. Schedule time budget check if needed
+    if (budgetTimeMs) {
+      scheduleTimeBudgetCheck(
+        (id) => this.instances.get(id),
+        newRunId,
+        budgetTimeMs,
+        {
+          postMessage: (id, msg) => this.postMessage(id, msg),
+          terminateWorker: (id) => this.terminateWorker(id),
+          cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
+          persistState: () => this.persistState(),
+          onCompletion: (id) => this.onCompletion?.(id),
+        },
+      );
+    }
+
+    // 4. Persist new instance before cleaning old one
+    await this.persistState();
+
+    // 5. Clean up old instance
+    this.instances.delete(runId);
+    this.runMetaMap.delete(runId);
+    this.retryCounts.delete(runId);
+    this.runAbortControllers.delete(runId);
+    await this.persistState();
+
+    return newRunId;
+  }
+
+  /**
    * List all workflow instances in the current session as summaries.
    */
   list(): WorkflowInstanceSummary[] {

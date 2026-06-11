@@ -14,6 +14,7 @@ import {
   formatActivityLine,
   formatElapsed,
   formatTokenStat,
+  formatStatusBadge,
   statusDotStr,
   padVisible,
   visibleLen,
@@ -317,6 +318,45 @@ describe("formatAgentOneLiner", () => {
     const result = formatAgentOneLiner(node, fakeTheme);
     expect(result).toContain("review-1");
     expect(result).toContain("glm-5.1");
-    expect(result).toContain("●");
+    expect(result).toContain("\u25CF");
+  });
+});
+
+// ── formatStatusBadge ─────────────────────────────────────────
+
+describe("formatStatusBadge", () => {
+  it("maps running to warning with \u25CF", () => {
+    const result = formatStatusBadge("running", fakeTheme);
+    expect(result).toContain("running");
+  });
+
+  it("maps paused to warning with \u23F8", () => {
+    const result = formatStatusBadge("paused", fakeTheme);
+    expect(result).toContain("PAUSED");
+  });
+
+  it("maps completed to success with \u2713", () => {
+    const result = formatStatusBadge("completed", fakeTheme);
+    expect(result).toContain("completed");
+  });
+
+  it("maps failed to error with \u2717", () => {
+    const result = formatStatusBadge("failed", fakeTheme);
+    expect(result).toContain("failed");
+  });
+
+  it("maps aborted to error", () => {
+    const result = formatStatusBadge("aborted", fakeTheme);
+    expect(result).toContain("aborted");
+  });
+
+  it("maps budget_limited to error", () => {
+    const result = formatStatusBadge("budget_limited", fakeTheme);
+    expect(result).toContain("budget");
+  });
+
+  it("maps time_limited to error", () => {
+    const result = formatStatusBadge("time_limited", fakeTheme);
+    expect(result).toContain("timeout");
   });
 });
