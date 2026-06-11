@@ -182,5 +182,48 @@ describe("jsonl-parser.ts", () => {
       expect(p.output).toBe("");
       expect(p.usage.turns).toBe(0);
     });
+
+    it("clears pendingStructuredArgs on non-structured tool_execution_end", () => {
+      const p = makeEmptyPipeline();
+      // Set up pending structured args from a prior structured-output start
+      processJsonlEvent({
+        type: "tool_execution_start",
+        toolName: "structured-output",
+        args: { schema: {}, data: {} },
+        toolCallId: "tc-staged",
+      }, p);
+      expect(p.pendingStructuredArgs).toBeDefined();
+
+      // A different tool ends — should clear pending args but NOT set parsedOutput
+      processJsonlEvent({
+        type: "tool_execution_end",
+        toolName: "bash",
+        isError: false,
+        result: { content: "done" },
+      }, p);
+      expect(p.pendingStructuredArgs).toBeUndefined();
+      expect(p.pendingStructuredCallId).toBeUndefined();
+      expect(p.parsedOutput).toBeUndefined();
+    });
+
+    it("message_end with string content does not set output or parsedOutput", () => {
+      const p = makeEmptyPipeline();
+      processJsonlEvent({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: "plain string",
+          usage: { input: 10, output: 5 },
+        },
+      }, p);
+      // String content is not an array, so no text is extracted into output
+      expect(p.output).toBe("");
+      // parsedOutput is never set by message_end (only by tool_execution_end)
+      expect(p.parsedOutput).toBeUndefined();
+      // Usage is still accumulated even when content is a string
+      expect(p.usage.input).toBe(10);
+      expect(p.usage.output).toBe(5);
+      expect(p.usage.turns).toBe(1);
+    });
   });
 });

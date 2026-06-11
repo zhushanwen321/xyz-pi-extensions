@@ -121,9 +121,7 @@ export class WorkflowEventEmitter {
       }
     }, TICK_INTERVAL_MS);
     // Don't prevent process exit
-    if (this.tickTimer && typeof this.tickTimer === "object" && "unref" in this.tickTimer) {
-      this.tickTimer.unref();
-    }
+    this.tickTimer?.unref();
   }
 
   private stopTick(): void {

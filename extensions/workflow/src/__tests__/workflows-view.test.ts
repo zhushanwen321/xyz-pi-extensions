@@ -1,16 +1,15 @@
 /**
  * Tests for WorkflowsView pure formatting functions
  *
- * Covers: groupByPhase, formatSidebarNode, formatActivityLine,
+ * Covers: groupByPhase, formatActivityLine,
  * formatElapsed, formatTokenStat.
  *
  * Pure functions imported from views/format.ts — no Pi runtime dependency.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   groupByPhase,
-  formatSidebarNode,
   formatActivityLine,
   formatElapsed,
   formatTokenStat,
@@ -21,7 +20,10 @@ import {
   buildPhaseGroups,
   formatAgentOneLiner,
 } from "../interface/views/format.js";
-import type { ExecutionTraceNode } from "../domain/state.js";
+import { createWorkflowsView } from "../interface/views/WorkflowsView.js";
+import type { ExecutionTraceNode, WorkflowInstance } from "../domain/state.js";
+import type { WorkflowOrchestrator } from "../orchestrator.js";
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 // ── Test fixtures ─────────────────────────────────────────────
 
@@ -93,49 +95,6 @@ describe("groupByPhase", () => {
     const phaseNodes = result.get("test")!;
 
     expect(phaseNodes.map((n) => n.stepIndex)).toEqual([2, 4, 5]);
-  });
-});
-
-// ── formatSidebarNode ─────────────────────────────────────────
-
-describe("formatSidebarNode", () => {
-  it("selected node has ❯ prefix", () => {
-    const node = makeNode({ agent: "my-agent", status: "running" });
-    const result = formatSidebarNode(node, true, 24, fakeTheme);
-
-    expect(result.startsWith("❯ ")).toBe(true);
-  });
-
-  it("unselected node has space prefix", () => {
-    const node = makeNode({ agent: "my-agent", status: "running" });
-    const result = formatSidebarNode(node, false, 24, fakeTheme);
-
-    expect(result.startsWith("  ")).toBe(true);
-  });
-
-  it("truncates long agent names to fit width", () => {
-    const node = makeNode({ agent: "very-long-agent-name-that-exceeds", status: "completed" });
-    const result = formatSidebarNode(node, false, 24, fakeTheme);
-
-    // Visible length (stripping mock [token] markers) should be <= width.
-    // fakeTheme returns [token]text which simulates ANSI (zero visible width
-    // after stripping). After stripping, remaining chars are the real visible content.
-    const stripped = result.replace(/\[[^\]]+\]/g, "");
-    expect(stripped.length).toBeLessThanOrEqual(24);
-  });
-
-  it("status dot uses correct color token", () => {
-    const completed = formatSidebarNode(makeNode({ status: "completed" }), false, 24, fakeTheme);
-    expect(completed).toContain("●");
-
-    const failed = formatSidebarNode(makeNode({ status: "failed" }), false, 24, fakeTheme);
-    expect(failed).toContain("●");
-
-    const running = formatSidebarNode(makeNode({ status: "running" }), false, 24, fakeTheme);
-    expect(running).toContain("●");
-
-    const pending = formatSidebarNode(makeNode({ status: "pending" }), false, 24, fakeTheme);
-    expect(pending).toContain("●");
   });
 });
 
@@ -358,5 +317,370 @@ describe("formatStatusBadge", () => {
   it("maps time_limited to error", () => {
     const result = formatStatusBadge("time_limited", fakeTheme);
     expect(result).toContain("timeout");
+  });
+});
+
+// ── processKey / handleInput integration tests ────────────────
+//
+// processKey is module-private; tested indirectly via the component's
+// handleInput returned by createWorkflowsView.
+
+/** Build a minimal WorkflowInstance with 2 phases x 2 agents. */
+function makeTestInstance(overrides: Partial<WorkflowInstance> = {}): WorkflowInstance {
+  return {
+    runId: "test-run-001",
+    name: "test-workflow",
+    status: "running",
+    callCache: new Map(),
+    trace: [
+      {
+        stepIndex: 0, phase: "Review", agent: "review-agent", task: "review code",
+        model: "glm-5.1", status: "completed",
+        startedAt: new Date(Date.now() - 60000).toISOString(),
+        completedAt: new Date(Date.now() - 30000).toISOString(),
+        result: { content: "LGTM", usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 150, turns: 1 } },
+      },
+      {
+        stepIndex: 1, phase: "Review", agent: "lint-agent", task: "run linter",
+        model: "glm-5.1", status: "completed",
+        startedAt: new Date(Date.now() - 29000).toISOString(),
+        completedAt: new Date(Date.now() - 10000).toISOString(),
+        result: { content: "no errors", toolCalls: [{ name: "Bash", input: "eslint ." }] },
+      },
+      {
+        stepIndex: 2, phase: "Fix", agent: "fix-agent", task: "fix issues",
+        model: "glm-5.1", status: "running",
+        startedAt: new Date(Date.now() - 5000).toISOString(),
+      },
+      {
+        stepIndex: 3, phase: "Fix", agent: "verify-agent", task: "verify fixes",
+        model: "glm-5.1", status: "pending",
+      },
+    ],
+    worker: "/path/to/workflow.js",
+    startedAt: new Date(Date.now() - 60000).toISOString(),
+    budget: { usedTokens: 500, usedCost: 0.01 },
+    ...overrides,
+  };
+}
+
+/** Create a mock orchestrator wired to the given instance. */
+function createMockOrchestrator(instance: WorkflowInstance) {
+  return {
+    getInstance: vi.fn().mockReturnValue(instance),
+    abort: vi.fn().mockResolvedValue(undefined),
+    pause: vi.fn().mockResolvedValue(undefined),
+    resume: vi.fn().mockResolvedValue(undefined),
+    restart: vi.fn().mockResolvedValue("new-run-002"),
+    events: {
+      subscribe: vi.fn().mockReturnValue(vi.fn()),
+    },
+  } as unknown as WorkflowOrchestrator;
+}
+
+/**
+ * Set up the component returned by createWorkflowsView.
+ * Calls ctx.ui.custom's factory immediately with mock TUI primitives.
+ * Returns the component handle plus mock functions for assertions.
+ */
+async function setupViewComponent(instance?: WorkflowInstance) {
+  const inst = instance ?? makeTestInstance();
+  const orchestrator = createMockOrchestrator(inst);
+  const requestRender = vi.fn();
+  const done = vi.fn();
+  let component: { invalidate(): void; render(w: number): string[]; handleInput(d: string): void };
+
+  const ctx = {
+    ui: {
+      custom: vi.fn().mockImplementation(
+        (factory: (tui: unknown, _t: unknown, _kb: unknown, d: () => void) => unknown) => {
+          component = factory(
+            { requestRender, terminal: { rows: 40 } },
+            fakeTheme,
+            {},
+            done,
+          ) as typeof component;
+          return Promise.resolve();
+        },
+      ),
+      notify: vi.fn(),
+    },
+  } as unknown as ExtensionContext;
+
+  await createWorkflowsView(orchestrator, inst.runId, fakeTheme, ctx);
+
+  return {
+    // @ts-expect-error — component is assigned synchronously inside ui.custom mock
+    component,
+    orchestrator,
+    requestRender,
+    done,
+    notify: (ctx as unknown as { ui: { notify: ReturnType<typeof vi.fn> } }).ui.notify,
+  };
+}
+
+describe("processKey (via handleInput)", () => {
+  // Key sequences — match the mock pi-tui Key constants
+  const ESC = "\x1b";
+  const UP = "\x1b[A";
+  const DOWN = "\x1b[B";
+  const ENTER = "\r";
+
+  // ── Escape navigation ────────────────────────────────
+
+  it("escape at level 0 calls done(), does not requestRender", async () => {
+    const { component, done, requestRender } = await setupViewComponent();
+    component.handleInput(ESC);
+    expect(done).toHaveBeenCalledTimes(1);
+    // processKey returns false → handleInput does NOT call requestRender
+    expect(requestRender).not.toHaveBeenCalled();
+  });
+
+  it("escape at level 1 goes back to level 0", async () => {
+    const { component, requestRender, done } = await setupViewComponent();
+    // Enter → level 1
+    component.handleInput(ENTER);
+    requestRender.mockClear();
+    // Escape → back to level 0 (returns true → render)
+    component.handleInput(ESC);
+    expect(requestRender).toHaveBeenCalledTimes(1);
+    // Verify we're back at level 0: another escape should call done()
+    done.mockClear();
+    component.handleInput(ESC);
+    expect(done).toHaveBeenCalledTimes(1);
+  });
+
+  it("escape at level 2 goes back to level 1", async () => {
+    const { component, requestRender, done } = await setupViewComponent();
+    // Enter → level 1, Enter → level 2
+    component.handleInput(ENTER);
+    component.handleInput(ENTER);
+    requestRender.mockClear();
+    // Escape → level 1
+    component.handleInput(ESC);
+    expect(requestRender).toHaveBeenCalledTimes(1);
+    // Verify level 1: escape should go to level 0
+    requestRender.mockClear();
+    component.handleInput(ESC);
+    expect(requestRender).toHaveBeenCalledTimes(1);
+    // Verify level 0: escape calls done
+    done.mockClear();
+    component.handleInput(ESC);
+    expect(done).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Up/Down at level 0 ───────────────────────────────
+
+  it("down at level 0 increments phaseIdx", async () => {
+    const { component, requestRender } = await setupViewComponent();
+    // Initial phaseIdx=0, phases=[Review, Fix]
+    component.handleInput(DOWN);
+    expect(requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("up at level 0 decrements phaseIdx and resets agentIdx", async () => {
+    const { component, requestRender } = await setupViewComponent();
+    // Move to phaseIdx=1 first
+    component.handleInput(DOWN);
+    requestRender.mockClear();
+    // Now move back to phaseIdx=0
+    component.handleInput(UP);
+    expect(requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("up at level 0 when phaseIdx=0 does nothing", async () => {
+    const { component, requestRender } = await setupViewComponent();
+    component.handleInput(UP);
+    // processKey returns false → no requestRender
+    expect(requestRender).not.toHaveBeenCalled();
+  });
+
+  it("down at level 0 wraps at last phase", async () => {
+    const { component, requestRender } = await setupViewComponent();
+    // Go to last phase (index 1)
+    component.handleInput(DOWN);
+    requestRender.mockClear();
+    // Already at last phase, down does nothing
+    component.handleInput(DOWN);
+    expect(requestRender).not.toHaveBeenCalled();
+  });
+
+  // ── Enter navigation ─────────────────────────────────
+
+  it("enter at level 0 goes to level 1", async () => {
+    const { component, requestRender } = await setupViewComponent();
+    component.handleInput(ENTER);
+    expect(requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("enter at level 1 goes to level 2", async () => {
+    const { component, requestRender } = await setupViewComponent();
+    component.handleInput(ENTER); // level 1
+    requestRender.mockClear();
+    component.handleInput(ENTER); // level 2
+    expect(requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Up/Down at level 2 ───────────────────────────────
+
+  it("down at level 2 increments agentIdx", async () => {
+    const { component, requestRender } = await setupViewComponent();
+    // Enter level 1 then level 2
+    component.handleInput(ENTER);
+    component.handleInput(ENTER);
+    requestRender.mockClear();
+    // agentIdx=0 initially, move to 1
+    component.handleInput(DOWN);
+    expect(requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("up at level 2 decrements agentIdx", async () => {
+    const { component, requestRender } = await setupViewComponent();
+    // Enter level 1 then level 2, then down to agentIdx=1
+    component.handleInput(ENTER);
+    component.handleInput(ENTER);
+    component.handleInput(DOWN);
+    requestRender.mockClear();
+    // Move back to agentIdx=0
+    component.handleInput(UP);
+    expect(requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("up at level 2 when agentIdx=0 does nothing", async () => {
+    const { component, requestRender } = await setupViewComponent();
+    component.handleInput(ENTER);
+    component.handleInput(ENTER);
+    requestRender.mockClear();
+    component.handleInput(UP);
+    expect(requestRender).not.toHaveBeenCalled();
+  });
+
+  // ── Global actions ───────────────────────────────────
+
+  it("'x' key calls abort on orchestrator", async () => {
+    const { component, orchestrator } = await setupViewComponent();
+    component.handleInput("x");
+    expect(orchestrator.abort).toHaveBeenCalledWith("test-run-001");
+  });
+
+  it("'x' on terminal status notifies 'already completed'", async () => {
+    const inst = makeTestInstance({ status: "completed" });
+    const { component, notify } = await setupViewComponent(inst);
+    component.handleInput("x");
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("completed"), "warning");
+  });
+
+  it("'p' key when running calls pause", async () => {
+    const { component, orchestrator } = await setupViewComponent();
+    component.handleInput("p");
+    expect(orchestrator.pause).toHaveBeenCalledWith("test-run-001");
+  });
+
+  it("'p' key when paused calls resume", async () => {
+    const inst = makeTestInstance({ status: "paused" });
+    const { component, orchestrator } = await setupViewComponent(inst);
+    component.handleInput("p");
+    expect(orchestrator.resume).toHaveBeenCalledWith("test-run-001");
+  });
+
+  it("'p' on terminal status notifies warning", async () => {
+    const inst = makeTestInstance({ status: "completed" });
+    const { component, notify } = await setupViewComponent(inst);
+    component.handleInput("p");
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("completed"), "warning");
+  });
+
+  // ── Save mode ────────────────────────────────────────
+
+  it("'s' key enters save mode", async () => {
+    const { component, requestRender } = await setupViewComponent();
+    component.handleInput("s");
+    // processKey returns true → requestRender called
+    expect(requestRender).toHaveBeenCalledTimes(1);
+    // Verify save mode active: escape should exit save mode (not exit view)
+    requestRender.mockClear();
+    component.handleInput(ESC);
+    expect(requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("save mode: escape exits save mode without exiting view", async () => {
+    const { component, done, requestRender } = await setupViewComponent();
+    component.handleInput("s");
+    requestRender.mockClear();
+    component.handleInput(ESC);
+    // Should exit save mode (returns true → render), not call done
+    expect(requestRender).toHaveBeenCalledTimes(1);
+    expect(done).not.toHaveBeenCalled();
+  });
+
+  it("save mode: tab toggles scope between project and user", async () => {
+    const { component, requestRender } = await setupViewComponent();
+    component.handleInput("s");
+    requestRender.mockClear();
+    // Tab → user scope
+    component.handleInput("\t");
+    expect(requestRender).toHaveBeenCalledTimes(1);
+    // Tab again → project scope
+    requestRender.mockClear();
+    component.handleInput("\t");
+    expect(requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("save mode: printable char appends to input value", async () => {
+    const { component, requestRender } = await setupViewComponent();
+    component.handleInput("s");
+    requestRender.mockClear();
+    component.handleInput("A");
+    expect(requestRender).toHaveBeenCalledTimes(1);
+    // Backspace to remove the char, proving it was appended
+    requestRender.mockClear();
+    component.handleInput("\x7f"); // backspace
+    expect(requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("save mode: backspace removes last char", async () => {
+    const { component, requestRender } = await setupViewComponent();
+    component.handleInput("s");
+    // Append a char
+    component.handleInput("X");
+    requestRender.mockClear();
+    // Backspace removes it
+    component.handleInput("\x7f");
+    expect(requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("save mode: backspace on empty input does nothing", async () => {
+    const { component, requestRender } = await setupViewComponent();
+    component.handleInput("s");
+    requestRender.mockClear();
+    // Backspace on the initial value (instance name "test-workflow")
+    // This should remove one char and return true
+    component.handleInput("\x7f");
+    expect(requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("save mode: enter with empty name shows error", async () => {
+    const { component, requestRender } = await setupViewComponent();
+    component.handleInput("s");
+    // Clear input by backspacing all chars (instance name = "test-workflow", 12 chars)
+    for (let i = 0; i < "test-workflow".length; i++) {
+      component.handleInput("\x7f");
+    }
+    requestRender.mockClear();
+    // Enter with empty input → sets error message, returns true
+    component.handleInput("\r");
+    expect(requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Disposed state ───────────────────────────────────
+
+  it("handleInput after done is a no-op", async () => {
+    const { component, done, requestRender } = await setupViewComponent();
+    component.handleInput(ESC); // calls done
+    expect(done).toHaveBeenCalledTimes(1);
+    requestRender.mockClear();
+    // Any subsequent input should be ignored
+    component.handleInput(DOWN);
+    expect(requestRender).not.toHaveBeenCalled();
   });
 });

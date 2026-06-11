@@ -98,21 +98,6 @@ export function formatTokenStat(
   return elapsed ? `${base} · ${elapsed}` : base;
 }
 
-/** Format a sidebar node line with status indicator. */
-export function formatSidebarNode(
-  node: ExecutionTraceNode,
-  selected: boolean,
-  width: number,
-  theme: ThemeLike,
-): string {
-  const pointer = selected ? "❯ " : "  ";
-  const dot = statusDotStr(node.status, theme);
-  const label = node.agent;
-  const available = width - pointer.length - 2 - 1; // pointer + "● " + space
-  const truncated = available > 5 ? truncateToWidth(label, available) : "";
-  return pointer + dot + " " + truncated;
-}
-
 /** Format a single activity line: ToolName(argsPreview). */
 export function formatActivityLine(entry: ToolCallEntry, maxWidth: number): string {
   if (maxWidth < 10) return entry.name;
@@ -122,27 +107,6 @@ export function formatActivityLine(entry: ToolCallEntry, maxWidth: number): stri
     ? entry.input.slice(0, argsBudget - 1) + ELLIPSIS
     : entry.input;
   return `${entry.name}(${truncated})`;
-}
-
-// ── Sidebar flat list builder ─────────────────────────────────
-
-export interface FlatEntry {
-  type: "phase" | "node";
-  phase?: string;
-  node?: ExecutionTraceNode;
-  index: number;
-}
-
-export function buildFlatEntries(phaseMap: Map<string, ExecutionTraceNode[]>): FlatEntry[] {
-  const entries: FlatEntry[] = [];
-  let idx = 0;
-  for (const [phase, nodes] of phaseMap) {
-    entries.push({ type: "phase", phase, index: idx++ });
-    for (const node of nodes) {
-      entries.push({ type: "node", node, index: idx++ });
-    }
-  }
-  return entries;
 }
 
 // ── ANSI helpers ──────────────────────────────────────────────
@@ -228,28 +192,4 @@ export function formatAgentOneLiner(node: ExecutionTraceNode, theme: ThemeLike):
   return parts.join("    ");
 }
 
-// ── Border helpers ────────────────────────────────────────────
 
-/** Render a top border with embedded titles: ╭ Title ───┬ Title ───╮ */
-export function renderTopBorder(
-  leftTitle: string,
-  rightTitle: string,
-  leftWidth: number,
-  totalWidth: number,
-): string {
-  // leftWidth includes the ╭ char
-  const leftInner = leftWidth - 1;
-  const rightInner = totalWidth - leftWidth - 2; // ┬ and ╮
-  const lt = ` ${leftTitle} `;
-  const leftDashes = "─".repeat(Math.max(0, leftInner - lt.length));
-  const rt = ` ${rightTitle} `;
-  const rightDashes = "─".repeat(Math.max(0, rightInner - rt.length));
-  return `╭${lt}${leftDashes}┬${rt}${rightDashes}╮`;
-}
-
-/** Render a bottom border: ╰──────────┴──────────╯ */
-export function renderBottomBorder(leftWidth: number, totalWidth: number): string {
-  const leftInner = leftWidth - 1;
-  const rightInner = totalWidth - leftWidth - 2;
-  return `╰${"─".repeat(leftInner)}┴${"─".repeat(rightInner)}╯`;
-}

@@ -57,11 +57,6 @@ vi.mock("../src/interface/commands.js", () => ({
   sendCompletionNotification: vi.fn(),
 }));
 
-vi.mock("../src/widget.js", () => ({
-  renderWorkflowList: vi.fn().mockReturnValue({}),
-  registerWorkflowShortcuts: vi.fn(),
-}));
-
 vi.mock("../src/interface/tool-generate.js", () => ({
   registerGenerateTool: vi.fn(),
 }));

@@ -124,6 +124,8 @@ function toInstanceSummary(summary: WorkflowInstanceSummary): InstanceSummary {
   };
 }
 
+// TODO: Extract workflow/workflow-lint tool execute logic to interface/ subdirectory
+// to match the pattern of tool-generate.ts and reduce this entry file below 500 lines.
 export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-line max-lines-per-function
   const lsRef = { lastSessionId: "" };
   const orchestrators = new Map<string, WorkflowOrchestrator>();

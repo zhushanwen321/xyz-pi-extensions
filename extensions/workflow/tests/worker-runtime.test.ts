@@ -19,7 +19,11 @@ function createMockParentPort() {
   const messages: unknown[] = [];
   port.postMessage = (msg: unknown) => {
     messages.push(msg);
-    // Emit to self so internal listeners on parentPort receive it
+    // Intentional self-echo: simulates parent→child message passing.
+    // In a real Worker, postMessage sends to parent and on("message") receives from parent.
+    // This mock conflates both directions, which is sufficient for testing the worker script's
+    // internal message handling but cannot detect bugs where the worker incorrectly receives
+    // its own outbound messages.
     port.emit("message", msg);
   };
   return { port, messages };

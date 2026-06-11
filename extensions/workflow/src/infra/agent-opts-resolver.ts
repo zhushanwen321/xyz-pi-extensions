@@ -124,16 +124,20 @@ export function cleanupAllTempFiles(activeTempFiles: Set<string>): void {
 
 // ── Skill path resolution (with npm dir cache) ─────────────────────
 
-const SKILL_DIR_NAMES = ["SKILL.md", "skill.md"];
+const skillCandidatesCache = new Map<string, string[]>();
 
-/** List npm skill candidate paths — re-scans each call to pick up newly installed packages. */
+/** List npm skill candidate paths — cached per npmSkillsDir. */
 function getNpmSkillCandidates(npmSkillsDir: string): string[] {
+  const cached = skillCandidatesCache.get(npmSkillsDir);
+  if (cached) return cached;
+
   const candidates: string[] = [];
   try {
     for (const pkg of fs.readdirSync(npmSkillsDir)) {
       candidates.push(path.join(npmSkillsDir, pkg, "skills"));
     }
   } catch { /* npm dir not found */ }
+  skillCandidatesCache.set(npmSkillsDir, candidates);
   return candidates;
 }
 
@@ -161,13 +165,7 @@ export function resolveSkillPath(skillName: string): string | undefined {
 
   for (const dir of candidates) {
     if (fs.existsSync(dir)) {
-      // Prefer the directory path — pi --skill accepts directories
       return dir;
-    }
-    // Also check if it's a file (unlikely but handle)
-    for (const name of SKILL_DIR_NAMES) {
-      const file = path.join(dir, name);
-      if (fs.existsSync(file)) return dir;
     }
   }
 

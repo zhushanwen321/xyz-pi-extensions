@@ -31,8 +31,9 @@ import {
 } from "./domain/state.js";
 import { persistState as persistInstances } from "./infra/state-store.js";
 import { WorkflowEventEmitter } from "./engine/orchestrator-events.js";
-import { buildWorkerScript } from "./engine/worker-script.js";
+import { type WorkerInMsg as ImportedWorkerInMsg, buildWorkerScript } from "./engine/worker-script.js";
 import { checkBudget, scheduleTimeBudgetCheck } from "./engine/orchestrator-budget.js";
+import { handleWorkerError, handleWorkerExit, handleScriptError, type ErrorHandlerContext } from "./engine/error-handlers.js";
 
 // ── Public types ──────────────────────────────────────────────
 
@@ -64,31 +65,11 @@ interface RunMeta {
   signal?: AbortSignal;
 }
 
-/** Worker→Main message shapes. */
-interface AgentCallMsg {
-  type: "agent-call";
-  callId: number;
-  opts: AgentCallOpts;
-  phase?: string;
-}
-
-interface ReturnMsg {
-  type: "return";
-  runId: string;
-  result: unknown;
-}
-
-interface ErrorMsg {
-  type: "error";
-  runId: string;
-  error: string;
-}
-
-type WorkerInMsg = AgentCallMsg | ReturnMsg | ErrorMsg;
+/** Worker→Main message type — unified with worker-script.ts definition. */
+type WorkerInMsg = ImportedWorkerInMsg;
 
 // ── Constants ─────────────────────────────────────────────────
 
-const MAX_WORKER_RETRIES = 3;
 const RETRY_BACKOFF_MS = 1000;
 const MAX_AGENT_RETRIES = 3;
 const RUNID_RADIX = 36;
@@ -396,6 +377,7 @@ export class WorkflowOrchestrator {
     this.events.emit(runId, { type: "status", status: "aborted" });
     this.terminateWorker(runId);
     this.cleanupAllTempFiles();
+    this.runPools.delete(runId);
     await this.persistState();
     this.onCompletion?.(runId);
   }
@@ -555,6 +537,7 @@ export class WorkflowOrchestrator {
     this.runMetaMap.delete(runId);
     this.retryCounts.delete(runId);
     this.runAbortControllers.delete(runId);
+    this.runPools.delete(runId);
     await this.persistState();
 
     return newRunId;
@@ -639,11 +622,11 @@ export class WorkflowOrchestrator {
     });
 
     worker.on("error", (err: Error) => {
-      this.handleWorkerError(runId, err);
+      handleWorkerError(this.errorHandlerContext(), runId, err);
     });
 
     worker.on("exit", (code: number) => {
-      this.handleWorkerExit(runId, code, worker);
+      handleWorkerExit(this.errorHandlerContext(), runId, code, worker);
     });
 
     this.workers.set(runId, worker);
@@ -692,6 +675,24 @@ export class WorkflowOrchestrator {
     }
   }
 
+  /** Build the context object for error handler functions. */
+  private errorHandlerContext(): ErrorHandlerContext {
+    return {
+      instances: this.instances,
+      workers: this.workers,
+      retryCounts: this.retryCounts,
+      getRunMeta: (id) => this.runMetaMap.get(id),
+      events: this.events,
+      terminateWorker: (id) => this.terminateWorker(id),
+      recreateRunAbortController: (id) => this.recreateRunAbortController(id),
+      startWorker: (id, inst, src, args) => this.startWorker(id, inst, src, args),
+      cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
+      persistState: () => this.persistState(),
+      onCompletion: (id) => this.onCompletion?.(id),
+      deleteRunPool: (id) => this.runPools.delete(id),
+    };
+  }
+
   // ── Message routing ─────────────────────────────────────────
 
   /**
@@ -705,7 +706,7 @@ export class WorkflowOrchestrator {
 
     switch (msg.type) {
       case "agent-call":
-        this.handleAgentCall(runId, instance, msg.callId, msg.opts, msg.phase);
+        this.handleAgentCall(runId, instance, msg.callId, msg.opts as AgentCallOpts, msg.phase);
         break;
       case "return": {
         // P0-1: Guard against stale return messages after terminate/pause/budget
@@ -716,6 +717,7 @@ export class WorkflowOrchestrator {
         transitionStatus(instance, "completed");
         this.events.emit(runId, { type: "status", status: "completed" });
         this.workers.delete(runId);
+        this.runPools.delete(runId);
         await this.persistState();
         this.onTraceUpdate?.(runId);
         this.onCompletion?.(runId);
@@ -724,7 +726,7 @@ export class WorkflowOrchestrator {
       case "error": {
         // P0-1: Guard against stale error messages after terminate/pause/budget
         if (isTerminal(instance.status) || instance.status === "budget_limited" || instance.status === "paused") return;
-        this.handleScriptError(runId, msg.error);
+        handleScriptError(this.errorHandlerContext(), runId, msg.error);
         break;
       }
     }
@@ -920,90 +922,6 @@ export class WorkflowOrchestrator {
         }
       }
     });
-  }
-
-  /**
-   * Handle a Worker thread uncaught error.
-   */
-  private async handleWorkerError(runId: string, err: Error): Promise<void> {
-    const instance = this.instances.get(runId);
-    if (!instance || isTerminal(instance.status)) return;
-
-    this.workers.delete(runId);
-    instance.error = err.message;
-    // P1-5: Mark failed — error event may not be followed by exit event
-    instance.completedAt = new Date().toISOString();
-    transitionStatus(instance, "failed");
-    this.events.emit(runId, { type: "status", status: "failed" });
-    this.cleanupAllTempFiles();
-    await this.persistState();
-    this.onCompletion?.(runId);
-  }
-
-  /**
-   * Handle Worker thread exit.
-   */
-  private async handleWorkerExit(runId: string, code: number, exitedWorker: Worker): Promise<void> {
-    const instance = this.instances.get(runId);
-    if (!instance) return;
-
-    // Guard: only process exit if the exited worker is still the current one.
-    // Prevents race: terminateWorker(old) → startWorker(new) → old exit fires →
-    // would delete new worker and incorrectly mark instance as failed.
-    const currentWorker = this.workers.get(runId);
-    if (currentWorker !== exitedWorker) return;
-    this.workers.delete(runId);
-
-    // Paused/terminal exits are intentional — skip failure marking
-    if (instance.status === "paused" || isTerminal(instance.status)) return;
-
-    // Non-zero exit without explicit error message → mark as failed
-    if (code !== 0 && !instance.error) {
-      instance.error = `Worker exited with code ${code}`;
-      instance.completedAt = new Date().toISOString();
-      transitionStatus(instance, "failed");
-      this.events.emit(runId, { type: "status", status: "failed" });
-      await this.persistState();
-      this.onCompletion?.(runId);
-    }
-  }
-
-  /**
-   * Handle a workflow script-level error (type: "error" from worker).
-   * Retries with exponential backoff up to MAX_WORKER_RETRIES.
-   */
-  private async handleScriptError(runId: string, errorMsg: string): Promise<void> {
-    const instance = this.instances.get(runId);
-    if (!instance || isTerminal(instance.status)) return;
-
-    const attempt = (this.retryCounts.get(runId) ?? 0) + 1;
-    this.retryCounts.set(runId, attempt);
-
-    if (attempt <= MAX_WORKER_RETRIES) {
-      this.terminateWorker(runId);
-
-      const delay = RETRY_BACKOFF_MS * Math.pow(EXPONENTIAL_BACKOFF_BASE, attempt - 1);
-      setTimeout(() => {
-        // P0-3: Stale state check before restart
-        if (instance.status !== "running") return;
-        const meta = this.runMetaMap.get(runId);
-        if (meta && instance) {
-          // Recreate AbortController after terminate (old was aborted)
-          this.recreateRunAbortController(runId);
-          this.startWorker(runId, instance, meta.scriptSource, meta.args);
-        }
-      }, delay);
-    } else {
-      instance.error = `Workflow failed after ${MAX_WORKER_RETRIES} retries: ${errorMsg}`;
-      instance.completedAt = new Date().toISOString();
-      transitionStatus(instance, "failed");
-      this.events.emit(runId, { type: "status", status: "failed" });
-      this.terminateWorker(runId);
-      // Cleanup in-flight agent temp files that were killed mid-flight.
-      this.cleanupAllTempFiles();
-      await this.persistState();
-      this.onCompletion?.(runId);
-    }
   }
 
   // ── Synchronous run (for programmatic callers) ────────────

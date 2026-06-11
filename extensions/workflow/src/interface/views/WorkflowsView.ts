@@ -22,7 +22,7 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { matchesKey, Key, truncateToWidth } from "@mariozechner/pi-tui";
 
 import type { WorkflowOrchestrator } from "../../orchestrator.js";
-import type { WorkflowInstance, WorkflowStatus } from "../../domain/state.js";
+import type { WorkflowInstance } from "../../domain/state.js";
 
 import {
   type PhaseGroup,
@@ -148,53 +148,29 @@ export function createWorkflowsView(
 
 // ── Keyboard ──────────────────────────────────────────────────
 
-function processKey(
+function processGlobalActions(
   data: string,
   orchestrator: WorkflowOrchestrator,
   runId: string,
-  state: ViewState,
+  instance: WorkflowInstance,
   ctx: ExtensionContext,
+  state: ViewState,
   done: () => void,
-  cache: { width: number | undefined; lines: string[] | undefined },
-  requestRender: () => void,
-): boolean {
-  const instance = orchestrator.getInstance(runId);
-  if (!instance) return false;
-  const phases = buildPhaseGroups(instance.trace);
-
-  // 1. Save mode: intercept all input
-  if (state.saveMode) {
-    return processSaveModeInput(data, instance, state, ctx, cache, requestRender);
-  }
-
-  // 2. Escape: level back or exit
-  if (matchesKey(data, Key.escape)) {
-    if (state.level === 0) { done(); return false; }
-    state.level = (state.level - 1) as 0 | 1 | 2;
-    return true;
-  }
-
-  // 3. Global: x → abort
+): boolean | undefined {
   if (data === "x") {
     handleAbort(orchestrator, runId, instance, ctx);
     return false;
   }
-
-  // 4. Global: p → pause/resume toggle
   if (data === "p") {
     handlePauseResume(orchestrator, runId, instance, ctx);
     return false;
   }
-
-  // 5. Global: r → restart (only when terminal or paused)
   if (data === "r") {
     if (isTerminalStatus(instance.status) || instance.status === "paused") {
       handleRestart(orchestrator, runId, instance, ctx, state, done);
     }
     return false;
   }
-
-  // 6. Global: s → enter save mode
   if (data === "s") {
     state.saveMode = true;
     state.saveInputValue = instance.name;
@@ -203,16 +179,21 @@ function processKey(
     state.saveMsgOk = false;
     return true;
   }
-
-  // 7. Global: S (shift+s) → save trace to file
   if (data === "S") {
     saveTraceToFile(instance, ctx);
     return false;
   }
+  return undefined;
+}
 
+function processNavigation(
+  data: string,
+  phases: PhaseGroup[],
+  state: ViewState,
+): boolean {
   if (phases.length === 0) return false;
 
-  // 8. Level 2 (Detail)
+  // Level 2 (Detail)
   if (state.level === 2) {
     if (matchesKey(data, Key.up)) {
       if (state.agentIdx > 0) { state.agentIdx--; state.promptExpanded = false; return true; }
@@ -230,7 +211,7 @@ function processKey(
     return false;
   }
 
-  // 9. Level 0 & 1: up/down navigation
+  // Level 0 & 1: up/down navigation
   if (matchesKey(data, Key.up)) {
     if (state.level === 0 && state.phaseIdx > 0) {
       state.phaseIdx--;
@@ -271,6 +252,38 @@ function processKey(
   }
 
   return false;
+}
+
+function processKey(
+  data: string,
+  orchestrator: WorkflowOrchestrator,
+  runId: string,
+  state: ViewState,
+  ctx: ExtensionContext,
+  done: () => void,
+  cache: { width: number | undefined; lines: string[] | undefined },
+  requestRender: () => void,
+): boolean {
+  const instance = orchestrator.getInstance(runId);
+  if (!instance) return false;
+  const phases = buildPhaseGroups(instance.trace);
+
+  // 1. Save mode intercept
+  if (state.saveMode) return processSaveModeInput(data, instance, state, ctx, cache, requestRender);
+
+  // 2. Escape: level back or exit
+  if (matchesKey(data, Key.escape)) {
+    if (state.level === 0) { done(); return false; }
+    state.level = (state.level - 1) as 0 | 1 | 2;
+    return true;
+  }
+
+  // 3. Global actions (x/p/r/s/S)
+  const globalResult = processGlobalActions(data, orchestrator, runId, instance, ctx, state, done);
+  if (globalResult !== undefined) return globalResult;
+
+  // 4. Navigation
+  return processNavigation(data, phases, state);
 }
 
 // ── Save mode input handling ──────────────────────────────────
@@ -423,7 +436,7 @@ function handleRestart(
 async function doSaveWorkflow(
   instance: WorkflowInstance,
   state: ViewState,
-  ctx: ExtensionContext,
+  _ctx: ExtensionContext,
 ): Promise<{ ok: boolean; msg: string }> {
   const isTmp = instance.worker.includes("/.tmp/") || instance.worker.includes("\\.tmp\\");
 
@@ -453,19 +466,12 @@ async function doSaveWorkflow(
 
 // ── Render ────────────────────────────────────────────────────
 
-function renderView(
+function renderHeader(
+  lines: string[],
   instance: WorkflowInstance,
   theme: ThemeLike,
-  width: number,
-  state: ViewState,
-  termRows: number,
-): string[] {
-  const lines: string[] = [];
-  const phases = buildPhaseGroups(instance.trace);
-  if (phases.length === 0) return ["(no agents)"];
-
-  // ── Header ──
-  const contentWidth = width - 2; // 2 chars for left/right border
+  contentWidth: number,
+): void {
   const completed = instance.trace.filter((n) => n.status === "completed").length;
   const total = instance.trace.length;
   const elapsed = formatElapsed(instance.startedAt);
@@ -474,12 +480,9 @@ function renderView(
   const nameLine = theme.bold(instance.name);
   const rightPart = theme.fg("muted", headerRight);
 
-  // Top border
   lines.push("╭" + "─".repeat(contentWidth) + "╮");
-  // Line 1: workflow name, right-padded to contentWidth
   lines.push("│" + padVisible(nameLine, contentWidth) + "│");
 
-  // FR-2.2: line 2 = description + stats (right-aligned)
   if (instance.description) {
     const maxDesc = contentWidth - visibleLen(rightPart) - 1;
     const descText = instance.description.length > maxDesc
@@ -492,49 +495,14 @@ function renderView(
     lines.push("│" + padVisible(rightPart, contentWidth) + "│");
   }
   lines.push("├" + "─".repeat(contentWidth) + "┤");
+}
 
-  // ── Body ──
-  const phase = phases[state.phaseIdx] ?? phases[0];
-  const agents = phase.nodes;
-  const mainWidth = contentWidth - SIDEBAR_WIDTH - 1;
-
-  const bodyStart = lines.length;
-
-  if (state.level === 0) {
-    renderLevel0(lines, phases, state, theme, width, mainWidth);
-  } else if (state.level === 1) {
-    renderLevel1(lines, phases, agents, state, theme, width, mainWidth);
-  } else {
-    renderLevel2(lines, phase, agents, state, theme, width, mainWidth);
-  }
-
-  // Pad body to at least 2/3 screen height (with middle separator)
-  const headerFooterLines = 6; // ╭, name, desc/stats, ├, ╰, (footer outside)
-  const minBodyHeight = Math.max(3, Math.floor(termRows * 2 / 3) - headerFooterLines);
-  const emptyBodyLine = padVisible("", SIDEBAR_WIDTH) + "│" + padVisible("", mainWidth);
-  while (lines.length - bodyStart < minBodyHeight) {
-    lines.push(emptyBodyLine);
-  }
-
-  // Wrap body lines with left/right border, ensuring exact contentWidth
-  for (let i = bodyStart; i < lines.length; i++) {
-    lines[i] = "│" + padVisible(lines[i], contentWidth) + "│";
-  }
-
-  // Bottom border
-  lines.push("╰" + "─".repeat(contentWidth) + "╯");
-
-  // Save overlay (rendered on top of the normal view when saveMode is active)
-  if (state.saveMode) {
-    const overlayLines = renderSaveOverlay(instance, state, theme, width);
-    // Center the overlay vertically — overwrite the middle of the body
-    const overlayStart = Math.max(bodyStart, bodyStart + Math.floor((lines.length - bodyStart - overlayLines.length) / 2));
-    for (let i = 0; i < overlayLines.length && overlayStart + i < lines.length; i++) {
-      lines[overlayStart + i] = overlayLines[i];
-    }
-  }
-
-  // Footer: outside the border box — dynamic based on workflow status
+function renderFooter(
+  lines: string[],
+  instance: WorkflowInstance,
+  state: ViewState,
+  theme: ThemeLike,
+): void {
   const navPart = state.level === 0
     ? "↑↓ phase · ⏎ enter"
     : state.level === 1
@@ -555,7 +523,59 @@ function renderView(
   const footer = `${navPart} · ${actionParts.join(" · ")}`;
   lines.push("");
   lines.push(theme.fg("muted", footer));
+}
 
+function renderView(
+  instance: WorkflowInstance,
+  theme: ThemeLike,
+  width: number,
+  state: ViewState,
+  termRows: number,
+): string[] {
+  const lines: string[] = [];
+  const now = Date.now();
+  const phases = buildPhaseGroups(instance.trace);
+  if (phases.length === 0) return ["(no agents)"];
+
+  const contentWidth = width - 2;
+  renderHeader(lines, instance, theme, contentWidth);
+
+  const phase = phases[state.phaseIdx] ?? phases[0];
+  const agents = phase.nodes;
+  const mainWidth = contentWidth - SIDEBAR_WIDTH - 1;
+
+  const bodyStart = lines.length;
+
+  if (state.level === 0) {
+    renderLevel0(lines, phases, state, theme, width, mainWidth, now);
+  } else if (state.level === 1) {
+    renderLevel1(lines, phases, agents, state, theme, width, mainWidth, now);
+  } else {
+    renderLevel2(lines, phase, agents, state, theme, width, mainWidth, now);
+  }
+
+  const headerFooterLines = 6;
+  const minBodyHeight = Math.max(3, Math.floor(termRows * 2 / 3) - headerFooterLines);
+  const emptyBodyLine = padVisible("", SIDEBAR_WIDTH) + "│" + padVisible("", mainWidth);
+  while (lines.length - bodyStart < minBodyHeight) {
+    lines.push(emptyBodyLine);
+  }
+
+  for (let i = bodyStart; i < lines.length; i++) {
+    lines[i] = "│" + padVisible(lines[i], contentWidth) + "│";
+  }
+
+  lines.push("╰" + "─".repeat(contentWidth) + "╯");
+
+  if (state.saveMode) {
+    const overlayLines = renderSaveOverlay(instance, state, theme, width);
+    const overlayStart = Math.max(bodyStart, bodyStart + Math.floor((lines.length - bodyStart - overlayLines.length) / 2));
+    for (let i = 0; i < overlayLines.length && overlayStart + i < lines.length; i++) {
+      lines[overlayStart + i] = overlayLines[i];
+    }
+  }
+
+  renderFooter(lines, instance, state, theme);
   return lines;
 }
 
@@ -567,7 +587,8 @@ function renderLevel0(
   state: ViewState,
   theme: ThemeLike,
   width: number,
-  _mainWidth: number,
+  mainWidth: number,
+  now: number,
 ): void {
   const leftLines: string[] = [];
   const rightLines: string[] = [];
@@ -582,13 +603,13 @@ function renderLevel0(
   // Right: all agents across all phases
   const totalAgents = phases.reduce((sum, p) => sum + p.nodes.length, 0);
   rightLines.push(theme.fg("muted", `All phases · ${totalAgents} agents`));
-  rightLines.push("─".repeat(_mainWidth));
+  rightLines.push("─".repeat(mainWidth));
   for (const pg of phases) {
     for (const node of pg.nodes) {
       const dot = statusDotStr(node.status, theme);
       const elapsed = formatElapsed(
         node.startedAt,
-        node.completedAt ? new Date(node.completedAt).getTime() : Date.now(),
+        node.completedAt ? new Date(node.completedAt).getTime() : now,
       );
       const tok = node.result?.usage;
       const tokStr = tok ? `${Math.round((tok.input + tok.output) / 1000)}k tok` : "";
@@ -597,7 +618,7 @@ function renderLevel0(
     }
   }
 
-  mergeBody(lines, leftLines, rightLines, width);
+  mergeBody(lines, leftLines, rightLines);
 }
 
 // ── Level 1: Agent selection ──────────────────────────────────
@@ -609,7 +630,8 @@ function renderLevel1(
   state: ViewState,
   theme: ThemeLike,
   width: number,
-  _mainWidth: number,
+  mainWidth: number,
+  now: number,
 ): void {
   const leftLines: string[] = [];
   const rightLines: string[] = [];
@@ -625,7 +647,7 @@ function renderLevel1(
   if (currentPhase) {
     const title = currentPhase.name ? `${currentPhase.name} · ${currentPhase.nodes.length} agents` : `${currentPhase.nodes.length} agents`;
     rightLines.push(theme.fg("muted", title));
-    rightLines.push("─".repeat(_mainWidth));
+    rightLines.push("─".repeat(mainWidth));
   }
   for (let i = 0; i < agents.length; i++) {
     const node = agents[i];
@@ -634,7 +656,7 @@ function renderLevel1(
     const dot = statusDotStr(node.status, theme);
     const elapsed = formatElapsed(
       node.startedAt,
-      node.completedAt ? new Date(node.completedAt).getTime() : Date.now(),
+      node.completedAt ? new Date(node.completedAt).getTime() : now,
     );
     const tok = node.result?.usage;
     const tokStr = tok ? `${Math.round((tok.input + tok.output) / 1000)}k tok` : "";
@@ -642,10 +664,82 @@ function renderLevel1(
     rightLines.push(`${pointer}${dot} ${node.agent}    ${node.model}    ${tokStr} · ${tcCount} tools · ${elapsed}`);
   }
 
-  mergeBody(lines, leftLines, rightLines, width);
+  mergeBody(lines, leftLines, rightLines);
 }
 
 // ── Level 2: Execution detail ─────────────────────────────────
+
+function renderPromptSection(
+  rightLines: string[],
+  node: import("../../domain/state.js").ExecutionTraceNode,
+  mainWidth: number,
+  state: ViewState,
+  theme: ThemeLike,
+): void {
+  const taskLines = node.task.split("\n");
+  const lineCount = taskLines.length;
+  rightLines.push(theme.fg("muted", `Prompt · ${lineCount} lines · ⏎ ${state.promptExpanded ? "collapse" : "expand"}`));
+  if (state.promptExpanded || lineCount <= PROMPT_FOLD_LINES) {
+    rightLines.push(...taskLines.map((l) => `  ${l}`));
+  } else {
+    rightLines.push(...taskLines.slice(0, PROMPT_FOLD_LINES).map((l) => `  ${l}`));
+    rightLines.push(theme.fg("dim", `  ${ELLIPSIS} ${lineCount - PROMPT_FOLD_LINES} more lines`));
+  }
+  rightLines.push("");
+}
+
+function renderActivitySection(
+  rightLines: string[],
+  node: import("../../domain/state.js").ExecutionTraceNode,
+  mainWidth: number,
+  theme: ThemeLike,
+): void {
+  const toolCalls = node.result?.toolCalls ?? [];
+  const totalCount = toolCalls.length;
+  if (totalCount > 0) {
+    const showCount = Math.min(MAX_TOOL_CALLS_DISPLAY, totalCount);
+    const isTruncated = totalCount > MAX_TOOL_CALLS_DISPLAY;
+    const label = isTruncated
+      ? `Activity · last ${showCount} of ${totalCount} tool calls`
+      : `Activity · ${totalCount} tool call${totalCount !== 1 ? "s" : ""}`;
+    rightLines.push(theme.fg("muted", label));
+    const start = totalCount - showCount;
+    for (let i = start; i < totalCount; i++) {
+      rightLines.push(`  ${formatActivityLine(toolCalls[i], mainWidth - 2)}`);
+    }
+  } else {
+    rightLines.push(theme.fg("muted", "Activity"));
+    rightLines.push(theme.fg("dim", `  ${node.status === "running" ? "(no tool calls yet)" : "(no activity recorded)"}`));
+  }
+  rightLines.push("");
+}
+
+function renderOutcomeSection(
+  rightLines: string[],
+  node: import("../../domain/state.js").ExecutionTraceNode,
+  mainWidth: number,
+  theme: ThemeLike,
+): void {
+  rightLines.push(theme.fg("muted", "Outcome"));
+  if (node.status === "running") {
+    rightLines.push(theme.fg("dim", "  Still running..."));
+  } else if (node.result?.error) {
+    rightLines.push(theme.fg("error", `  ${node.result.error.slice(0, mainWidth - 4)}`));
+  } else if (node.result?.content) {
+    const raw = node.result.content;
+    if (Buffer.byteLength(raw, "utf8") > OUTPUT_TRUNCATE_BYTES) {
+      const truncated = Buffer.from(raw, "utf8").slice(0, OUTPUT_TRUNCATE_BYTES).toString("utf8");
+      const allLines = truncated.split("\n");
+      const tail = allLines.slice(-5);
+      rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - 4)}`));
+      rightLines.push(theme.fg("dim", "  (truncated)"));
+    } else {
+      const allLines = raw.split("\n");
+      const tail = allLines.slice(-5);
+      rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - 4)}`));
+    }
+  }
+}
 
 function renderLevel2(
   lines: string[],
@@ -655,6 +749,7 @@ function renderLevel2(
   theme: ThemeLike,
   width: number,
   mainWidth: number,
+  now: number,
 ): void {
   const leftLines: string[] = [];
   const rightLines: string[] = [];
@@ -666,7 +761,7 @@ function renderLevel2(
     const a = agents[i];
     const isSelected = i === state.agentIdx;
     const pointer = isSelected ? "❯ " : "  ";
-    const maxNameWidth = SIDEBAR_WIDTH - 4; // pointer(2) + spaces(2)
+    const maxNameWidth = SIDEBAR_WIDTH - 4;
     const agentName = visibleLen(a.agent) > maxNameWidth
       ? truncateToWidth(a.agent, maxNameWidth - 1) + ELLIPSIS
       : a.agent;
@@ -676,73 +771,21 @@ function renderLevel2(
   // Right: full detail
   const node = agents[state.agentIdx];
   if (node) {
-    // Title + divider
-    rightLines.push(theme.fg("muted", "Detail"));
-    rightLines.push("─".repeat(mainWidth));
-    // FR-4.1: 2 lines — status + model, then stats + elapsed
     const elapsed = formatElapsed(
       node.startedAt,
-      node.completedAt ? new Date(node.completedAt).getTime() : Date.now(),
+      node.completedAt ? new Date(node.completedAt).getTime() : now,
     );
+    rightLines.push(theme.fg("muted", "Detail"));
+    rightLines.push("─".repeat(mainWidth));
     rightLines.push(`${statusDotStr(node.status, theme)} ${statusLabel(node.status, theme)} · ${node.model}`);
     rightLines.push(theme.fg("dim", formatTokenStat(node.result?.usage, node.result?.toolCalls, elapsed)));
     rightLines.push("");
-
-    // Prompt
-    const taskLines = node.task.split("\n");
-    const lineCount = taskLines.length;
-    rightLines.push(theme.fg("muted", `Prompt · ${lineCount} lines · ⏎ ${state.promptExpanded ? "collapse" : "expand"}`));
-    if (state.promptExpanded || lineCount <= PROMPT_FOLD_LINES) {
-      rightLines.push(...taskLines.map((l) => `  ${l}`));
-    } else {
-      rightLines.push(...taskLines.slice(0, PROMPT_FOLD_LINES).map((l) => `  ${l}`));
-      rightLines.push(theme.fg("dim", `  ${ELLIPSIS} ${lineCount - PROMPT_FOLD_LINES} more lines`));
-    }
-    rightLines.push("");
-
-    // Activity
-    const toolCalls = node.result?.toolCalls ?? [];
-    const totalCount = toolCalls.length;
-    if (totalCount > 0) {
-      const showCount = Math.min(MAX_TOOL_CALLS_DISPLAY, totalCount);
-      const isTruncated = totalCount > MAX_TOOL_CALLS_DISPLAY;
-      const label = isTruncated
-        ? `Activity · last ${showCount} of ${totalCount} tool calls`
-        : `Activity · ${totalCount} tool call${totalCount !== 1 ? "s" : ""}`;
-      rightLines.push(theme.fg("muted", label));
-      const start = totalCount - showCount;
-      for (let i = start; i < totalCount; i++) {
-        rightLines.push(`  ${formatActivityLine(toolCalls[i], mainWidth - 2)}`);
-      }
-    } else {
-      rightLines.push(theme.fg("muted", "Activity"));
-      rightLines.push(theme.fg("dim", `  ${node.status === "running" ? "(no tool calls yet)" : "(no activity recorded)"}`));
-    }
-    rightLines.push("");
-
-    // Outcome: show last meaningful text output
-    rightLines.push(theme.fg("muted", "Outcome"));
-    if (node.status === "running") {
-      rightLines.push(theme.fg("dim", "  Still running..."));
-    } else if (node.result?.error) {
-      rightLines.push(theme.fg("error", `  ${node.result.error.slice(0, mainWidth - 4)}`));
-    } else if (node.result?.content) {
-      const raw = node.result.content;
-      if (Buffer.byteLength(raw, "utf8") > OUTPUT_TRUNCATE_BYTES) {
-        const truncated = raw.slice(0, OUTPUT_TRUNCATE_BYTES);
-        const allLines = truncated.split("\n");
-        const tail = allLines.slice(-5);
-        rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - 4)}`));
-        rightLines.push(theme.fg("dim", "  (truncated)"));
-      } else {
-        const allLines = raw.split("\n");
-        const tail = allLines.slice(-5);
-        rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - 4)}`));
-      }
-    }
+    renderPromptSection(rightLines, node, mainWidth, state, theme);
+    renderActivitySection(rightLines, node, mainWidth, theme);
+    renderOutcomeSection(rightLines, node, mainWidth, theme);
   }
 
-  mergeBody(lines, leftLines, rightLines, width);
+  mergeBody(lines, leftLines, rightLines);
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -751,7 +794,6 @@ function mergeBody(
   lines: string[],
   leftLines: string[],
   rightLines: string[],
-  _width: number,
 ): void {
   const bodyHeight = Math.max(leftLines.length, rightLines.length);
   for (let i = 0; i < bodyHeight; i++) {
