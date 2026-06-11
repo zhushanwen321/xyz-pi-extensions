@@ -95,6 +95,13 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type BeforeAgentStartEvent = any;
 	export type BeforeAgentStartEventResult = any;
 
+	export function setActiveTools(tools: string[] | undefined): void;
+	export function sendUserMessage(message: string, options?: Record<string, unknown>): void;
+	export function appendEntry(customType: string, data?: unknown): void;
+	export function registerTool(tool: unknown): void;
+	export function registerCommand(name: string, command: unknown): void;
+	export function on(event: string, handler: (...args: any[]) => Promise<unknown>): void;
+
 	export function getAgentDir(): string;
 	export function getMarkdownTheme(): Theme;
 	export function parseFrontmatter<T = Record<string, unknown>>(text: string): { frontmatter: T; body: string };
