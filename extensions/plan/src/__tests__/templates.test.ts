@@ -1,6 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { listTemplates, loadTemplate, getBuiltinTemplateDir } from "../templates.js";
 import * as fs from "node:fs";
+
+import { describe, expect,it } from "vitest";
+
+import { getBuiltinTemplateDir,listTemplates, loadTemplate } from "../templates.js";
 
 describe("Template system", () => {
   it("listTemplates returns builtin templates", () => {

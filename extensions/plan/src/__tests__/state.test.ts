@@ -1,12 +1,13 @@
-import { describe, it, expect, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
+
 import {
   DEFAULT_PLAN_STATE,
-  type PlanState,
-  type PlanPhase,
-  type PlanSessionMap,
   getPlanState,
   persistPlanState,
+  type PlanPhase,
+  type PlanSessionMap,
+  type PlanState,
   reconstructPlanState,
 } from "../state.js";
 
