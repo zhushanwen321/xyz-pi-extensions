@@ -500,7 +500,7 @@ export async function executePhaseStartTool(hctx: HandlerContext, tctx: ToolExec
 	if (state.currentPhase === PHASE_GOAL_INIT) {
 		try {
 			// Type matches goal extension's GoalExternalInit (see extensions/goal/src/state.ts)
-			type GoalInitFn = (objective: string, tasks: string[], budget?: Record<string, unknown>) => boolean;
+			type GoalInitFn = (objective: string, tasks: string[], budget?: Record<string, unknown>, ctx?: ExtensionContext) => boolean;
 			const goalInit = (pi as unknown as Record<string, unknown>).__goalInit as GoalInitFn | undefined;
 			if (goalInit) {
 				goalInit(
@@ -512,6 +512,8 @@ export async function executePhaseStartTool(hctx: HandlerContext, tctx: ToolExec
 						"Write use-cases.md",
 						"Write non-functional-design.md",
 					],
+					undefined,
+					tctx.ctx,
 				);
 			}
 		} catch { /* goal init failure is non-blocking */ void undefined; }
@@ -521,13 +523,13 @@ export async function executePhaseStartTool(hctx: HandlerContext, tctx: ToolExec
 	const PHASE_DEV_GOAL_INIT = 3;
 	if (state.currentPhase === PHASE_DEV_GOAL_INIT) {
 		try {
-			type GoalInitFn = (objective: string, tasks: string[], budget?: Record<string, unknown>) => boolean;
+			type GoalInitFn = (objective: string, tasks: string[], budget?: Record<string, unknown>, ctx?: ExtensionContext) => boolean;
 			const goalInit = (pi as unknown as Record<string, unknown>).__goalInit as GoalInitFn | undefined;
 			if (goalInit) {
 				const planPath = path.join(state.topicDir, "plan.md");
 				const taskList = buildDevGoalTasks(planPath);
 				if (taskList.length > 0) {
-					goalInit("Phase 3: Dev coding implementation", taskList);
+					goalInit("Phase 3: Dev coding implementation", taskList, undefined, tctx.ctx);
 				}
 			}
 		} catch { /* goal init failure is non-blocking */ void undefined; }

@@ -74,7 +74,12 @@ describe("handlePlanComplete", () => {
     expect(ctx.compact).toHaveBeenCalledOnce();
     ctx._onCompleteFns[0]();
     expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.any(String), { deliverAs: "steer" });
-    expect((pi as unknown as Record<string, unknown>).__goalInit).toHaveBeenCalled();
+    expect((pi as unknown as Record<string, unknown>).__goalInit).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.arrayContaining([expect.any(String)]),
+      undefined,
+      ctx,
+    );
   });
 
   it("compact onError: falls back to notify + steer", () => {
@@ -94,11 +99,18 @@ describe("handlePlanComplete", () => {
   });
 
   it("direct isolation: directly sends steer", () => {
+    (pi as unknown as Record<string, unknown>).__goalInit = vi.fn().mockReturnValue(true);
     handlePlanComplete(pi as never, ctx as never, makeActiveState(), "direct");
 
     expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.any(String), { deliverAs: "steer" });
     expect(ctx.compact).not.toHaveBeenCalled();
     expect(ctx.ui.notify).not.toHaveBeenCalled();
+    expect((pi as unknown as Record<string, unknown>).__goalInit).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.arrayContaining([expect.any(String)]),
+      undefined,
+      ctx,
+    );
   });
 });
 
