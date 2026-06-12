@@ -105,6 +105,13 @@ Goal 的资源约束，包含四个维度：
 - **Max Turns** — 最大 agent turn 数（默认 50，上限 100）
 - **Max Stall Turns** — 连续无进展轮数阈值（默认 5，上限 20），触发 blocked
 
+**TaskVerification**
+GoalTask 的可选验证配置，包含 `method`（验证方法描述）和 `expected`（预期结果）。创建 task 时声明，用于引导 AI 在完成代码后执行可量化的验证。
+
+**verified 状态**
+GoalTask 生命周期阶段。当 task 有 verification 配置时，`completed` 不是终态——AI 需执行验证方法（如 `pnpm test`），验证通过后调用 `update_tasks(status=verified, actual=<result>)` 将 task 转为 `verified` 终态。验证结果记录在 `TaskVerification.actual` 字段。无 verification 的 task，`completed` 即为终态。
+_Avoid_: verify_task（已废弃，旧版创建独立验证 task 的方案已移除）
+
 **Stall**
 连续无 **GoalTask** 完成的 turn 数。达到 `maxStallTurns` 时 Goal 自动转为 `blocked`。
 

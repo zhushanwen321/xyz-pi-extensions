@@ -6,13 +6,15 @@ import type { ThemeColor } from "@mariozechner/pi-coding-agent";
 
 import { getBudgetColor,getTimeUsagePercent, getTokenUsagePercent } from "./budget.js";
 import {
+	ELLIPSIS_LENGTH,
 	OBJECTIVE_DISPLAY_LIMIT,
 	OBJECTIVE_TRUNCATE_KEEP,
 	PERCENT_FACTOR,
 	PROGRESS_BAR_DEFAULT_WIDTH,
 	SECONDS_PER_MINUTE,
+	VERIFY_METHOD_WIDGET_LEN,
 } from "./constants";
-import type { GoalRuntimeState } from "./state";
+import type { GoalRuntimeState, GoalTask } from "./state";
 import { getCompletedCount, getElapsedTimeSeconds } from "./state";
 
 /**
@@ -34,16 +36,31 @@ function renderProgressBar(pct: number, width: number = PROGRESS_BAR_DEFAULT_WID
 	return "█".repeat(filled) + "░".repeat(width - filled);
 }
 
+function truncateText(text: string, maxLen: number): string {
+	if (text.length <= maxLen) return text;
+	return text.slice(0, maxLen - ELLIPSIS_LENGTH) + "...";
+}
+
 export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string {
 	if (state.status === "cancelled") return "";
 
-	const completedCount = getCompletedCount(state.tasks);
+	const verifiedCount = state.tasks.filter(t => t.status === "verified").length;
+	const completedCount = state.tasks.filter(t => t.status === "completed").length;
 	const total = state.tasks.length;
+	const doneCount = verifiedCount + completedCount;
 
 	let text = th.fg("accent", `◆ Goal`) + th.fg("muted", ` ${state.currentTurnIndex}/${state.budget.maxTurns}`);
 
 	if (total > 0) {
-		text += th.fg("muted", ` | ${completedCount}/${total} tasks`);
+		text += th.fg("muted", ` | ${doneCount}/${total} tasks`);
+		if (completedCount > 0) {
+			const pendingVerify = state.tasks.filter(t => t.status === "completed" && t.verification).length;
+			if (pendingVerify > 0) {
+				text += th.fg("warning", `, ${pendingVerify} pending verify`);
+			} else if (verifiedCount > 0) {
+				text += th.fg("success", `, ${verifiedCount} verified`);
+			}
+		}
 		const cancelledCount = state.tasks.filter(t => t.status === "cancelled").length;
 		if (cancelledCount > 0) {
 			text += th.fg("dim", `, ${cancelledCount} cancelled`);
@@ -128,49 +145,23 @@ export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): strin
 	if (state.status === "cancelled") return [];
 
 	const total = state.tasks.length;
-
-	// Header line
 	const header = renderStatusLine(state, th);
 	const lines: string[] = [header];
 
-	// Objective (single-line + truncated if too long)
 	const objSingleLine = toSingleLine(state.objective);
 	const objDisplay = objSingleLine.length > OBJECTIVE_DISPLAY_LIMIT
 		? objSingleLine.slice(0, OBJECTIVE_TRUNCATE_KEEP) + "..."
 		: objSingleLine;
 	lines.push(th.fg("dim", `Objective: ${objDisplay}`));
 
-	// Task list
 	if (total === 0) {
 		lines.push(th.fg("dim", "  Waiting for task list creation..."));
 	} else {
 		for (const t of state.tasks) {
-			const desc = toSingleLine(t.description);
-			if (t.status === "completed") {
-				lines.push(`  ${th.fg("success", "✓")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}`);
-			} else if (t.status === "cancelled") {
-				lines.push(`  ${th.fg("dim", "✗")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}`);
-			} else if (t.status === "in_progress") {
-				lines.push(`  ${th.fg("warning", "●")} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}`);
-			} else {
-				lines.push(`  ${th.fg("dim", "☐")} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}`);
-			}
-			// Sub-todo items
-			if (t.subtasks && t.subtasks.length > 0 && t.status !== "cancelled") {
-				for (const s of t.subtasks) {
-					const subIcon = s.status === "completed"
-						? th.fg("success", "✓")
-						: s.status === "in_progress"
-							? th.fg("warning", "●")
-							: th.fg("dim", "○");
-					const subText = s.status === "completed" ? th.fg("dim", s.text) : th.fg("muted", s.text);
-					lines.push(`    ${subIcon} ${th.fg("dim", `${t.id}.${s.id}`)} ${subText}`);
-				}
-			}
+			lines.push(...renderTaskRow(t, th));
 		}
 	}
 
-	// P2-8: Budget progress bars
 	if (state.budget.tokenBudget && state.budget.tokenBudget > 0) {
 		const pct = getTokenUsagePercent(state) / PERCENT_FACTOR;
 		lines.push(`  Token: ${renderProgressBar(pct)} ${Math.round(pct * PERCENT_FACTOR)}%`);
@@ -182,5 +173,53 @@ export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): strin
 		lines.push(`  Time: ${renderProgressBar(pct)} ${mins}/${state.budget.timeBudgetMinutes}min`);
 	}
 
+	return lines;
+}
+
+// ── Task Row Rendering (extracted from renderWidgetLines) ──
+
+/** 渲染单个 task 行（含 verified 状态图标、验证标签、subtask 展开）。 */
+function renderTaskRow(t: GoalTask, th: ThemeLike): string[] {
+	const lines: string[] = [];
+	const desc = toSingleLine(t.description);
+	const verifyTag = t.verification
+		? th.fg("dim", ` [验证: ${truncateText(t.verification.method, VERIFY_METHOD_WIDGET_LEN)}]`)
+		: "";
+
+	if (t.status === "verified") {
+		const actualInfo = t.verification?.actual ? th.fg("dim", ` actual: ${truncateText(t.verification.actual, VERIFY_METHOD_WIDGET_LEN)}`) : "";
+		lines.push(`  ${th.fg("success", "◉")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}${actualInfo}`);
+	} else if (t.status === "completed") {
+		const note = t.verification ? th.fg("warning", " [待验证]") : "";
+		lines.push(`  ${th.fg("success", "✓")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}${note}`);
+	} else if (t.status === "cancelled") {
+		lines.push(`  ${th.fg("dim", "✗")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}`);
+	} else if (t.status === "in_progress") {
+		lines.push(`  ${th.fg("warning", "●")} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}${verifyTag}`);
+	} else {
+		lines.push(`  ${th.fg("dim", "☐")} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}${verifyTag}`);
+	}
+
+	if (t.subtasks && t.subtasks.length > 0 && t.status !== "cancelled") {
+		lines.push(...renderSubtaskLines(t, th));
+	}
+	return lines;
+}
+
+/** 渲染 subtask 行，全部 completed 时折叠不显示。 */
+function renderSubtaskLines(t: GoalTask, th: ThemeLike): string[] {
+	if (!t.subtasks || t.subtasks.length === 0) return [];
+	const allSubCompleted = t.subtasks.every((s) => s.status === "completed");
+	if (allSubCompleted) return [];
+	const lines: string[] = [];
+	for (const s of t.subtasks) {
+		const subIcon = s.status === "completed"
+			? th.fg("success", "✓")
+			: s.status === "in_progress"
+				? th.fg("warning", "●")
+				: th.fg("dim", "○");
+		const subText = s.status === "completed" ? th.fg("dim", s.text) : th.fg("muted", s.text);
+		lines.push(`    ${subIcon} ${th.fg("dim", `${t.id}.${s.id}`)} ${subText}`);
+	}
 	return lines;
 }

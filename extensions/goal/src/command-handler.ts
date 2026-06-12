@@ -31,8 +31,9 @@ import { objectiveUpdatedPrompt } from "./templates";
 import {
 	clearGoalSession,
 	type GoalSession,
+	persistAndUpdate,
 	persistGoalState,
-	updateWidget,
+	sendGoalContextMessage,
 	writeGoalHistoryEntry,
 } from "./tool-handler";
 
@@ -51,6 +52,7 @@ export async function handleGoalCommand(
 		case "resume": return handleResume(pi, session, ctx);
 		case "history": return handleHistory(ctx);
 		case "clear": return handleClear(pi, session, ctx);
+		case "abort": return handleAbort(pi, session, ctx);
 		case "update": return handleUpdate(pi, session, parsed.objective, ctx);
 		case "set": return handleSet(pi, session, parsed.objective ?? "", parsed.budget, ctx);
 	}
@@ -89,8 +91,7 @@ function handlePause(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionConte
 		return;
 	}
 	session.state.status = transitionStatus(session.state.status, "paused");
-	persistGoalState(pi, session, ctx);
-	updateWidget(session, ctx);
+	persistAndUpdate(pi, session, ctx);
 	ctx.ui.notify("Goal paused. Use /goal resume to continue.", "info");
 }
 
@@ -116,13 +117,11 @@ function handleResume(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionCont
 	if (resumeBudgetCheck) {
 		const dim = resumeBudgetCheck.dimension;
 		state.status = transitionStatus(state.status, dim === "token" ? "budget_limited" : "time_limited");
-		persistGoalState(pi, session, ctx);
-		updateWidget(session, ctx);
+		persistAndUpdate(pi, session, ctx);
 		ctx.ui.notify(`${dim === "token" ? "Token" : "Time"} budget exhausted, cannot resume. Use /goal clear to reset.`, "warning");
 		return;
 	}
-	persistGoalState(pi, session, ctx);
-	updateWidget(session, ctx);
+	persistAndUpdate(pi, session, ctx);
 
 	const incomplete = getIncompleteTasks(state.tasks);
 	if (incomplete.length > 0) {
@@ -191,6 +190,29 @@ function handleClear(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionConte
 	ctx.ui.notify("Goal cleared.", "info");
 }
 
+// ── /goal abort ──────────────────────────────────────
+
+function handleAbort(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionContext): void {
+	if (!session.state) { ctx.ui.notify("Goal mode not active.", "info"); return; }
+	if (isTerminalStatus(session.state.status)) {
+		ctx.ui.notify(`Goal is already in terminal state (${session.state.status}).`, "warning");
+		return;
+	}
+	if (session.state.tasks.length > 0) {
+		const nonCancelled = session.state.tasks.filter(t => t.status !== "cancelled");
+		if (nonCancelled.length > 0) {
+			ctx.ui.notify(`Cannot abort: ${nonCancelled.length} non-cancelled tasks exist. Use /goal clear to force cancel.`, "warning");
+			return;
+		}
+	}
+	session.state.status = "cancelled";
+	session.state.completedAtTurnIndex = session.state.currentTurnIndex;
+	writeGoalHistoryEntry(pi, session);
+	persistGoalState(pi, session, ctx);
+	clearGoalSession(session, ctx);
+	ctx.ui.notify("Goal aborted: no work needed.", "info");
+}
+
 // ── /goal update ──────────────────────────────────────
 
 function handleUpdate(
@@ -208,19 +230,17 @@ function handleUpdate(
 	state.objectiveUpdatedAt = Date.now();
 	state.tasks = [];
 	state.stallCount = 0;
-	state.turnCount = 0;
 	state.currentTurnIndex = 0;
 	state.lastProgressTurn = 0;
 	state.budgetLimitSteeringSent = false;
 	state.budgetWarning70Sent = false;
 	state.budgetWarning90Sent = false;
 	session.tasksCompletedAtAgentStart = 0;
-	persistGoalState(pi, session, ctx);
-	updateWidget(session, ctx);
+	persistAndUpdate(pi, session, ctx);
 	ctx.ui.notify(`Objective updated:\nPrevious: ${oldObjective}\nNew: ${newObjective}`, "info");
 
 	if (isActiveStatus(state.status)) {
-		pi.sendUserMessage(objectiveUpdatedPrompt(state, oldObjective), { deliverAs: "steer" });
+		sendGoalContextMessage(pi, objectiveUpdatedPrompt(state, oldObjective), "steer");
 	}
 }
 
@@ -263,8 +283,7 @@ function handleSet(
 	session.tasksCompletedAtAgentStart = 0;
 	session.hasPendingInjection = false;
 
-	persistGoalState(pi, session, ctx);
-	updateWidget(session, ctx);
+	persistAndUpdate(pi, session, ctx);
 
 	const budgetNotice: string[] = [];
 	if (budget.tokenBudget) budgetNotice.push(`Token budget: ${budget.tokenBudget}`);

@@ -10,16 +10,19 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Static } from "typebox";
 
-import { SECONDS_PER_MINUTE } from "./constants";
+import { ELLIPSIS_LENGTH, SECONDS_PER_MINUTE, TASK_DESC_MAX_LENGTH } from "./constants";
 import {
 	getCompletedCount,
 	getElapsedTimeSeconds,
 	getIncompleteTasks,
+	getNextTaskId,
 	type GoalRuntimeState,
 	type GoalTask,
 	isTerminalStatus,
 	isTerminalTaskStatus,
+	isTaskDone,
 	type Subtask,
+	type TaskVerification,
 	transitionStatus,
 } from "./state";
 import { formatTaskList } from "./templates";
@@ -31,6 +34,7 @@ import {
 	type GoalSession,
 	makeGoalResult,
 	persistGoalState,
+	sendGoalContextMessage,
 	writeGoalHistoryEntry,
 } from "./tool-handler";
 
@@ -60,15 +64,17 @@ export const handleCreateTasks: ActionHandler = ({ state, params, pi, session, c
 			`Already has ${state.tasks.length} tasks (${existingIncomplete.length} incomplete). Use add_tasks to append, or /goal update to re-plan.`,
 		);
 	}
+	const verifications = params.verifications;
 	state.tasks = params.tasks.map((desc: string, i: number) => ({
 		id: i + 1,
 		description: normalizeDescription(desc),
 		status: "pending" as const,
+		verification: verifications?.[i] as TaskVerification | undefined,
 		lastUpdatedTurn: state.currentTurnIndex,
 	}));
 	persistGoalState(pi, session, ctx);
 	return makeGoalResult(session,
-		`Created ${state.tasks.length} tasks:\n${state.tasks.map((t) => `  #${t.id}: ${t.description}`).join("\n")}`,
+		`Created ${state.tasks.length} tasks:\n${state.tasks.map((t) => `  #${t.id}: ${t.description}${t.verification ? ` [验证: ${t.verification.method}]` : ""}`).join("\n")}`,
 	);
 };
 
@@ -78,19 +84,19 @@ export const handleAddTasks: ActionHandler = ({ state, params, pi, session, ctx 
 	if (!params.tasks || params.tasks.length === 0) {
 		return errorResult("add_tasks requires a non-empty tasks array");
 	}
-	const startId = state.tasks.length > 0
-		? Math.max(...state.tasks.map((t) => t.id)) + 1
-		: 1;
+	const startId = getNextTaskId(state.tasks);
+	const verifications = params.verifications;
 	const newTasks: GoalTask[] = params.tasks.map((desc: string, i: number) => ({
 		id: startId + i,
 		description: normalizeDescription(desc),
 		status: "pending" as const,
+		verification: verifications?.[i] as TaskVerification | undefined,
 		lastUpdatedTurn: state.currentTurnIndex,
 	}));
 	state.tasks.push(...newTasks);
 	persistGoalState(pi, session, ctx);
 	return makeGoalResult(session,
-		`Appended ${newTasks.length} tasks:\n${newTasks.map((t) => `  #${t.id}: ${t.description}`).join("\n")}`,
+		`Appended ${newTasks.length} tasks:\n${newTasks.map((t) => `  #${t.id}: ${t.description}${t.verification ? ` [验证: ${t.verification.method}]` : ""}`).join("\n")}`,
 	);
 };
 
@@ -102,7 +108,10 @@ export const handleUpdateTasks: ActionHandler = ({ state, params, pi, session, c
 	}
 	const validationErr = validateUpdateTasks(state, params.updates);
 	if (validationErr) return validationErr;
+
 	const results: string[] = [];
+	const tasksNeedingVerification: GoalTask[] = [];
+
 	for (const u of params.updates) {
 		const task = state.tasks.find((t) => t.id === u.taskId)!;
 		const prev = task.status;
@@ -111,17 +120,41 @@ export const handleUpdateTasks: ActionHandler = ({ state, params, pi, session, c
 			task.status = "completed";
 			task.evidence = u.evidence;
 			results.push(`#${task.id}: ${prev} → completed (${u.evidence})`);
+			if (task.verification) {
+				tasksNeedingVerification.push(task);
+			}
+		} else if (u.status === "verified") {
+			task.status = "verified";
+			task.verification!.actual = u.actual;
+			results.push(`#${task.id}: ${prev} → verified (actual: ${u.actual})`);
 		} else {
 			task.status = u.status;
 			results.push(`#${task.id}: ${prev} → ${u.status}`);
 		}
 	}
+
 	persistGoalState(pi, session, ctx);
-	return makeGoalResult(session, `Updated ${results.length} tasks:\n${results.join("\n")}`);
+	if (tasksNeedingVerification.length > 0) {
+		injectVerificationSteering(pi, tasksNeedingVerification);
+	}
+	return makeGoalResult(session, `Updated ${results.length} task actions:\n${results.join("\n")}`);
 };
 
+/** 注入 steering 提示 AI 对已完成的 task 执行验证命令。 */
+function injectVerificationSteering(pi: ExtensionAPI, tasks: GoalTask[]): void {
+	const lines = tasks.map((t) =>
+		`Task #${t.id} requires verification. Run: ${t.verification!.method} (expected: ${t.verification!.expected})\n` +
+		`Then call update_tasks with taskId=${t.id}, status="verified", actual=<result>.`
+	).join("\n\n");
+	sendGoalContextMessage(
+		pi,
+		`[GOAL Verification] Task(s) completed with verification pending:\n${lines}`,
+		"steer",
+	);
+}
+
 /** 验证 update_tasks 的所有更新项；返回首个错误或 null。 */
-function validateUpdateTasks(state: GoalRuntimeState, updates: NonNullable<Static<typeof GoalManagerParams>["updates"]>) {
+export function validateUpdateTasks(state: GoalRuntimeState, updates: NonNullable<Static<typeof GoalManagerParams>["updates"]>) {
 	const taskIds = updates.map((u: { taskId: number }) => u.taskId);
 	const duplicateIds = taskIds.filter((id: number, i: number) => taskIds.indexOf(id) !== i);
 	if (duplicateIds.length > 0) {
@@ -130,11 +163,43 @@ function validateUpdateTasks(state: GoalRuntimeState, updates: NonNullable<Stati
 	for (const u of updates) {
 		const task = state.tasks.find((t) => t.id === u.taskId);
 		if (!task) return errorResult(`Task #${u.taskId} not found`);
-		if (isTerminalTaskStatus(task.status)) {
-			return errorResult(`Task #${task.id} already in terminal state (${task.status}), cannot be changed`);
+
+		// 终态检查
+		if (task.status === "verified" || task.status === "cancelled") {
+			return errorResult(`Task #${task.id} in terminal state (${task.status}), cannot be changed`);
 		}
+		// completed 无 verification：不可变更
+		if (task.status === "completed" && !task.verification) {
+			return errorResult(`Task #${task.id} already completed, cannot be changed`);
+		}
+		// completed 有 verification：只允许 verified
+		if (task.status === "completed" && task.verification && u.status !== "verified") {
+			return errorResult(`Task #${task.id} completed but requires verification. Call update_tasks with status=verified.`);
+		}
+
+		// 合法转换检查
+		const validNext: Record<string, Set<string>> = {
+			pending: new Set(["in_progress", "cancelled"]),
+			in_progress: new Set(["completed", "cancelled"]),
+			completed: new Set(["verified"]),
+		};
+		const allowed = validNext[task.status];
+		if (!allowed || !allowed.has(u.status)) {
+			const hints: Record<string, string> = { pending: "allowed: in_progress or cancelled", in_progress: "allowed: completed or cancelled", completed: "allowed: verified (only if task has verification config)" };
+			return errorResult(`Task #${task.id}: invalid transition ${task.status} → ${u.status}. From ${task.status}, ${hints[task.status] ?? "no transitions allowed"}`);
+		}
+
+		// completed 必须有 evidence
 		if (u.status === "completed" && (!u.evidence || u.evidence.trim() === "")) {
 			return errorResult(`Task #${task.id}: completed requires evidence`);
+		}
+		// verified 必须有 actual
+		if (u.status === "verified" && (!u.actual || u.actual.trim() === "")) {
+			return errorResult(`Task #${task.id}: verified requires actual verification result`);
+		}
+		// verified 要求 task 有 verification 配置
+		if (u.status === "verified" && !task.verification) {
+			return errorResult(`Task #${task.id}: cannot verify a task without verification config`);
 		}
 	}
 	return null;
@@ -155,14 +220,20 @@ export const handleCompleteGoal: ActionHandler = ({ state, params, pi, session, 
 	if (state.tasks.length === 0) {
 		return errorResult("Create a task list with create_tasks before completing the goal.");
 	}
-	const incomplete = getIncompleteTasks(state.tasks);
-	if (incomplete.length > 0) {
+	// 检查所有 task 都已完成（含 verified、cancelled、无 verification 的 completed）
+	const notDone = state.tasks.filter((t) => !isTaskDone(t));
+	if (notDone.length > 0) {
+		const hint = notDone.some((t) => t.status === "completed" && t.verification)
+			? " Some completed tasks still require verification (status=verified)."
+			: "";
 		return errorResult(
-			`${incomplete.length} tasks still incomplete: ${incomplete.map((t) => `#${t.id}`).join(", ")}. Complete them first or explain why they don't need completion.`,
+			`${notDone.length} tasks not done: ${notDone.map((t) => `#${t.id}`).join(", ")}.${hint} Complete them first.`,
 		);
 	}
-	if (getCompletedCount(state.tasks) === 0) {
-		return errorResult("At least one task must be completed. All-cancelled does not count.");
+	// 至少一个 task 必须是 completed 或 verified（不能全 cancelled）
+	const completedOrVerified = state.tasks.filter((t) => t.status === "completed" || t.status === "verified");
+	if (completedOrVerified.length === 0) {
+		return errorResult("At least one task must be completed or verified. All-cancelled does not count.");
 	}
 	state.status = transitionStatus(state.status, "complete");
 	state.completedAtTurnIndex = state.currentTurnIndex;
@@ -237,8 +308,10 @@ export const handleAddSubtasks: ActionHandler = ({ state, params, pi, session, c
 	}
 	const parentTask = state.tasks.find((t) => t.id === params.taskId);
 	if (!parentTask) return errorResult(`Task #${params.taskId} not found`);
-	if (isTerminalTaskStatus(parentTask.status)) {
-		return errorResult(`Task #${parentTask.id} already in terminal state (${parentTask.status}), cannot add subtask`);
+	// isTerminalTaskStatus 不含 completed（completed 有 verification 时需转为 verified）
+	// 这里的 || completed 是有意的业务决策：completed 任务不允许加 subtask
+	if (isTerminalTaskStatus(parentTask.status) || parentTask.status === "completed") {
+		return errorResult(`Task #${parentTask.id} in terminal state (${parentTask.status}), cannot add subtask`);
 	}
 	const subtasks = parentTask.subtasks ?? [];
 	const startId = subtasks.length > 0 ? Math.max(...subtasks.map((s) => s.id)) + 1 : 1;
@@ -316,10 +389,8 @@ export const handleDeleteSubtasks: ActionHandler = ({ state, params, pi, session
 /** 将 AI 传入的 task description 标准化：去换行、截断 */
 function normalizeDescription(desc: string): string {
 	const singleLine = desc.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
-	const ELLIPSIS_LENGTH = 3;
-	const MAX_TASK_DESC_LENGTH = 80;
-	if (singleLine.length > MAX_TASK_DESC_LENGTH) {
-		return singleLine.slice(0, MAX_TASK_DESC_LENGTH - ELLIPSIS_LENGTH) + "...";
+	if (singleLine.length > TASK_DESC_MAX_LENGTH) {
+		return singleLine.slice(0, TASK_DESC_MAX_LENGTH - ELLIPSIS_LENGTH) + "...";
 	}
 	return singleLine;
 }

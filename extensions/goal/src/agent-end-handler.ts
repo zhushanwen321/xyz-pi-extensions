@@ -31,8 +31,8 @@ import {
 } from "./templates";
 import {
 	type GoalSession,
-	persistGoalState,
-	updateWidget,
+	persistAndUpdate,
+	sendGoalContextMessage,
 	writeGoalHistoryEntry,
 } from "./tool-handler";
 
@@ -56,9 +56,17 @@ export async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx
 			await handleTerminalStateAgentEnd(pi, session, ctx, checkStale); return;
 		}
 		if (!isActiveStatus(session.state.status)) return;
+
+		// ESC / user abort during text generation also pauses the goal
+		if (ctx.signal?.aborted) {
+			session.pendingPause = true;
+			const progress = checkProgress(session.state, session.tasksCompletedAtAgentStart);
+			await handleStallAndContinuation(pi, session, ctx, progress, checkStale);
+			return;
+		}
+
 		const budgetAction = await handleBudgetChecks(pi, session, ctx, checkBudgetOnTurnEnd(session.state), checkStale);
 		if (budgetAction !== "continue") return;
-		session.state.turnCount++;
 		const progress = checkProgress(session.state, session.tasksCompletedAtAgentStart);
 		const progressAction = handleProgressAndTasks(pi, session, ctx, progress, checkStale);
 		if (progressAction !== "continue") return;
@@ -81,9 +89,7 @@ async function handleTerminalStateAgentEnd(
 	checkStale: () => boolean,
 ): Promise<void> {
 	const state = session.state!;
-	persistGoalState(pi, session, ctx);
-	if (checkStale()) return;
-	updateWidget(session, ctx);
+	if (persistAndUpdate(pi, session, ctx, checkStale)) return;
 	if (state.status === "complete") {
 		ctx.ui.notify(
 			`Objective completed ✓ (${getCompletedCount(state.tasks)}/${state.tasks.length} tasks, ${state.currentTurnIndex} turns)`,
@@ -118,9 +124,7 @@ async function handleBudgetChecks(
 		session.state!.status = transitionStatus(session.state!.status, dim === "token" ? "budget_limited" : "time_limited");
 		session.state!.completedAtTurnIndex = session.state!.currentTurnIndex;
 		writeGoalHistoryEntry(pi, session);
-		persistGoalState(pi, session, ctx);
-		if (checkStale()) return "stop";
-		updateWidget(session, ctx);
+		if (persistAndUpdate(pi, session, ctx, checkStale)) return "stop";
 		ctx.ui.notify(
 			dim === "token"
 				? "Token budget exhausted, Goal terminated."
@@ -132,10 +136,8 @@ async function handleBudgetChecks(
 	// 90% steering → 收尾
 	if (budgetResult.shouldSendSteering) {
 		session.state!.budgetLimitSteeringSent = true;
-		persistGoalState(pi, session, ctx);
-		if (checkStale()) return "stop";
-		updateWidget(session, ctx);
-		pi.sendUserMessage(budgetLimitPrompt(session.state!, "token"), { deliverAs: "steer" });
+		if (persistAndUpdate(pi, session, ctx, checkStale)) return "stop";
+		sendGoalContextMessage(pi, budgetLimitPrompt(session.state!, "token"), "steer");
 		return "stop";
 	}
 	if (checkStale()) return "stop";
@@ -174,9 +176,7 @@ function handleAllTasksDone(
 		state.status = transitionStatus(state.status, "complete");
 		state.completedAtTurnIndex = state.currentTurnIndex;
 		writeGoalHistoryEntry(pi, session);
-		persistGoalState(pi, session, ctx);
-		if (checkStale()) return "stop";
-		updateWidget(session, ctx);
+		if (persistAndUpdate(pi, session, ctx, checkStale)) return "stop";
 		ctx.ui.notify(
 			`All tasks completed, Goal auto-closed. (${progress.completedCount}/${progress.totalCount} tasks, ${state.currentTurnIndex} turns)`,
 			"info",
@@ -184,21 +184,22 @@ function handleAllTasksDone(
 		return "stop";
 	}
 	if (progress.budgetTight) {
-		pi.sendUserMessage(
+		sendGoalContextMessage(
+			pi,
 			`All tasks completed, token budget ${Math.round(state.tokensUsed / state.budget.tokenBudget! * PERCENT_FACTOR)}% used.` +
 			`Call goal_manager's complete_goal now with overall evidence.` +
 			`\n\nObjective: ${state.objective}`,
-			{ deliverAs: "steer" },
+			"steer",
 		);
 	} else {
-		pi.sendUserMessage(
+		sendGoalContextMessage(
+			pi,
 			`All ${progress.totalCount} tasks completed. Call goal_manager's complete_goal with overall evidence.` +
 				`\n\nObjective: ${state.objective}`,
-			{ deliverAs: "followUp" },
+			"followUp",
 		);
 	}
-	persistGoalState(pi, session, ctx);
-	updateWidget(session, ctx);
+	persistAndUpdate(pi, session, ctx);
 	return "stop";
 }
 
@@ -211,22 +212,20 @@ function handleNoTasksOrMaxTurns(
 		state.status = transitionStatus(state.status, "cancelled");
 		state.completedAtTurnIndex = state.currentTurnIndex;
 		writeGoalHistoryEntry(pi, session);
-		persistGoalState(pi, session, ctx);
-		if (checkStale()) return "stop";
-		updateWidget(session, ctx);
+		if (persistAndUpdate(pi, session, ctx, checkStale)) return "stop";
 		ctx.ui.notify(
 			`Max turns reached (${state.budget.maxTurns}), LLM did not create task list.`,
 			"warning",
 		);
 		return "stop";
 	}
-	pi.sendUserMessage(
-		`No task list created yet. Call goal_manager's create_tasks immediately to decompose the work into verifiable task steps.` +
+	sendGoalContextMessage(
+		pi,
+		`No task list created yet. First check if the objective is already satisfied — if yes, call goal_manager's cancel_goal with cancelReason. Otherwise call create_tasks immediately to decompose the work into verifiable task steps.` +
 			`\n\nObjective: ${state.objective}`,
-		{ deliverAs: "followUp" },
+		"followUp",
 	);
-	persistGoalState(pi, session, ctx);
-	updateWidget(session, ctx);
+	persistAndUpdate(pi, session, ctx);
 	return "stop";
 }
 
@@ -239,9 +238,7 @@ function handleMaxTurnsReached(
 	state.status = transitionStatus(state.status, "cancelled");
 	state.completedAtTurnIndex = state.currentTurnIndex;
 	writeGoalHistoryEntry(pi, session);
-	persistGoalState(pi, session, ctx);
-	if (checkStale()) return "stop";
-	updateWidget(session, ctx);
+	if (persistAndUpdate(pi, session, ctx, checkStale)) return "stop";
 	ctx.ui.notify(
 		`Max turns reached (${state.budget.maxTurns}), ${incomplete.length} tasks still incomplete.`,
 		"warning",
@@ -258,6 +255,15 @@ async function handleStallAndContinuation(
 	const state = session.state!;
 	if (checkStale()) return;
 
+	// ESC pause: if tool call was aborted, pause instead of continuing
+	if (session.pendingPause) {
+		session.pendingPause = false;
+		state.status = transitionStatus(state.status, "paused");
+		if (persistAndUpdate(pi, session, ctx, checkStale)) return;
+		ctx.ui.notify("Goal paused (user interrupt). Use /goal resume to continue.", "info");
+		return;
+	}
+
 	// Stall 检测
 	updateStallCounter(state, progress.isStalled);
 	if (state.stallCount >= state.budget.maxStallTurns) {
@@ -268,13 +274,11 @@ async function handleStallAndContinuation(
 
 	// 去抖 + Continuation
 	if (!consumeTokensForDebounce(state)) {
-		persistGoalState(pi, session, ctx);
-		updateWidget(session, ctx);
+		persistAndUpdate(pi, session, ctx);
 		return;
 	}
-	persistGoalState(pi, session, ctx);
-	updateWidget(session, ctx);
-	pi.sendUserMessage(continuationPrompt(state), { deliverAs: "followUp" });
+	persistAndUpdate(pi, session, ctx);
+	sendGoalContextMessage(pi, continuationPrompt(state), "followUp");
 }
 
 /** 更新 stall 计数。stall 时递增，否则重置。 */
@@ -287,9 +291,7 @@ function updateStallCounter(state: { stallCount: number; lastProgressTurn: numbe
 function markGoalBlocked(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionContext, checkStale: () => boolean): void {
 	const state = session.state!;
 	state.status = transitionStatus(state.status, "blocked");
-	persistGoalState(pi, session, ctx);
-	if (checkStale()) return;
-	updateWidget(session, ctx);
+	if (persistAndUpdate(pi, session, ctx, checkStale)) return;
 	ctx.ui.notify(
 		`${state.stallCount} consecutive turns without progress, Goal auto-blocked. Use /goal resume to continue or /goal clear to reset.`,
 		"warning",

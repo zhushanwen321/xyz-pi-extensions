@@ -9,10 +9,12 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 // Re-export hook modules for easy access
 export { setupNetworkTimeoutGuard } from "./hooks/network-timeout-guard";
+export { setupSubagentListInjector } from "./hooks/subagent-list-injector";
 export { setupTestTimeoutGuard } from "./hooks/test-timeout-guard";
 export { setupToolErrorHandler } from "./hooks/tool-error-handler";
 
 import { setupNetworkTimeoutGuard } from "./hooks/network-timeout-guard";
+import { setupSubagentListInjector } from "./hooks/subagent-list-injector";
 import { setupTestTimeoutGuard } from "./hooks/test-timeout-guard";
 import { setupToolErrorHandler } from "./hooks/tool-error-handler";
 
@@ -29,6 +31,7 @@ export default function unifiedHooksExtension(pi: ExtensionAPI): void {
     { name: "tool-error-handler", setup: setupToolErrorHandler },
     { name: "network-timeout-guard", setup: setupNetworkTimeoutGuard },
     { name: "test-timeout-guard", setup: setupTestTimeoutGuard },
+    { name: "subagent-list-injector", setup: setupSubagentListInjector },
   ];
 
   for (const hook of hookModules) {

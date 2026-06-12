@@ -25,15 +25,17 @@ import { handleAgentEnd } from "./agent-end-handler";
 import { handleBeforeAgentStart } from "./before-agent-start-handler";
 import { handleGoalCommand } from "./command-handler";
 import {
+	ELLIPSIS_LENGTH,
+	EXT_INIT_TASK_DESC_MAX,
 	MAX_HISTORY_ENTRIES,
 } from "./constants";
 import {
 	createInitialState,
 	deserializeState,
 	getCompletedCount,
+	type GoalExternalInit,
 	isActiveStatus,
 	isTerminalStatus,
-	type GoalExternalInit,
 } from "./state";
 import {
 	executeGoalAction,
@@ -181,6 +183,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		tasksCompletedAtAgentStart: 0,
 		hasPendingInjection: false,
 		isProcessing: false, // P1-3: 防重入
+		pendingPause: false, // ESC 中断标记
 	};
 
 	// Capture latest ctx for external API (initializeGoalFromExternal needs it for persistGoalState)
@@ -189,34 +192,46 @@ export default function goalExtension(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "goal_manager",
 		label: "Goal Manager",
-		description:
-			"Goal mode task manager. This tool is only available after starting a goal via the /goal command. AI cannot trigger it proactively. If Goal mode is not active, calling this tool will error." +
-			"\n\nAvailable actions:" +
-			"\n- create_tasks: Decompose the objective into a task list (call once at goal start). Each task description must be a one-line summary (max 60 chars), no newlines or markdown" +
-			"\n- add_tasks: Append new tasks to the existing list (when omissions are discovered). Each task description must be a one-line summary (max 60 chars), no newlines or markdown" +
-			"\n- update_tasks: Batch update task statuses (completed requires evidence, cancelled does not block goal completion)" +
-			"\n- list_tasks: View progress and remaining budget" +
-			"\n- complete_goal: Mark the objective as achieved (all tasks must be completed + evidence)" +
-			"\n- cancel_goal: Cancel the current goal (use when user wants to exit/stop)" +
-			"\n- report_blocked: Report being blocked (use when encountering unsolvable issues)" +
-			"\n- add_subtasks: Add subtasks to a specified task (params: taskId, texts[]). Use this instead of todo tool in Goal mode" +
-			"\n- update_subtasks: Batch update subtask statuses (params: taskId, subUpdates[])" +
-			"\n- delete_subtasks: Delete subtasks from a specified task (params: taskId, subIds[])",
+			description:
+				"Goal mode task manager. This tool is only available after starting a goal via the /goal command. AI cannot trigger it proactively. If Goal mode is not active, calling this tool will error." +
+				"\n\nAvailable actions:" +
+				"\n- create_tasks: Decompose the objective into a task list (call once at goal start). Each task description must be a one-line summary (max 60 chars), no newlines or markdown. Accept verifications array for task verification." +
+				"\n- add_tasks: Append new tasks to the existing list (when omissions are discovered). Fails if no tasks exist yet — use create_tasks first. Each task description must be a one-line summary (max 60 chars), no newlines or markdown. Accept verifications array." +
+				"\n- update_tasks: Batch update task statuses. Must follow state machine: pending→in_progress→completed→verified. Cannot skip states (pending→completed is forbidden). Exactly one task should be in_progress at a time. Completed requires evidence. Cancelled does not block goal completion. Completing a task with verification triggers a verification prompt — then call update_tasks with status=verified and actual=<result>." +
+				"\n- list_tasks: View progress and remaining budget" +
+				"\n- complete_goal: Mark the objective as achieved. Only call when ALL tasks are completed or verified with concrete evidence. Do not mark complete merely because the budget is nearly exhausted or because you are stopping work. Before calling, use list_tasks to verify all tasks are done." +
+				"\n- cancel_goal: Cancel the current goal (use when user wants to exit/stop)" +
+				"\n- report_blocked: Report being blocked. Only use after trying at least 3 alternative approaches to the same blocking condition. Do not use merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification. Requires a specific reason describing what is blocking and what you have already tried." +
+				"\n- add_subtasks: Add subtasks to a specified task (params: taskId, texts[]). Use this instead of todo tool in Goal mode" +
+				"\n- update_subtasks: Batch update subtask statuses (params: taskId, subUpdates[])" +
+				"\n- delete_subtasks: Delete subtasks from a specified task (params: taskId, subIds[])",
 		promptSnippet: "Manage task list, completion status, and exit for /goal mode",
 		promptGuidelines: [
 			"[Workflow] After receiving the objective, the first step must be create_tasks to decompose. Do not re-call if task list already exists",
+			"[Status flow] Tasks must follow this order: pending → in_progress → completed → verified. You CANNOT skip in_progress. Before marking completed, always set status=in_progress first. Transitions: pending→in_progress | pending→cancelled, in_progress→completed | in_progress→cancelled, completed→verified (only if task has verification)",
 			"[Format] Each task description must be a one-line summary, max 60 chars. No newlines, markdown, or detailed parameter lists — those go in execution phase. Example: 'Fix hook-registry dedup logic' not 'Fix hook-registry dedup + transport-execute enhancementConfig guard + failover-loop ...'",
 			"[Append] When discovering omissions during execution, use add_tasks to append — do not re-call create_tasks",
 			"[Completion] After completing a task, call update_tasks with status=completed and provide evidence (e.g. 'test X passed', 'file F created')",
-			"[Goal completion] Only call complete_goal when all tasks are completed with overall evidence",
+			"[Goal completion] Only call complete_goal when all tasks are completed or verified with overall evidence",
 			"[Exit] When user says 'stop', 'exit', 'cancel', '不用了', '结束', etc. indicating they don't want to continue, immediately call cancel_goal — do not guide them through complete_goal",
-			"[Blocked] When encountering unsolvable technical issues, call report_blocked with the reason",
+			"[Blocked] Do not call report_blocked the first time a blocker appears. Try at least 3 alternative approaches first. Only report blocked when genuinely at an impasse without user input — not because work is hard, slow, uncertain, or incomplete. Once you call report_blocked, include what you have already tried in the reason.",
 			"[Progress] Use list_tasks anytime to check remaining tasks and budget",
 			"[Cancel] To cancel a task, use update_tasks with status=cancelled. Cancelled tasks do not block goal completion",
-			"[Forbidden] Do not mark tasks as completed without evidence, and do not call complete_goal without evidence",
+			"[Audit] Before marking a task completed, verify against actual current state (files, command output, test results). Intent, partial progress, or 'it should work' are NOT evidence. Do not redefine success around work already done — preserve original scope. Uncertain or indirect evidence means not completed, keep working.",
+			"[Fidelity] Optimize for movement toward the requested end state, not the easiest passing change. Do not substitute a narrower or safer solution because it is easier to verify. An edit is aligned only if it makes the requested final state more true.",
+			"[Forbidden] Do not mark tasks as completed without evidence, and do not call complete_goal without evidence. Do not mark completed due to budget exhaustion or because you are stopping work.",
 			"[Forbidden] Do not force task completion when the user explicitly wants to exit — call cancel_goal directly",
+			"[Quick exit] When no tasks have been created and you determine the objective is already met, call cancel_goal with cancelReason instead of creating tasks",
 			"[Forbidden] Do not re-call create_tasks to overwrite existing incomplete tasks — use add_tasks to append",
 			"[Subtask] For fine-grained step tracking in Goal mode, use add_subtasks — do not use the todo tool",
+			"[Verification] Each task should have a concrete verification method. Use verifications param in create_tasks/add_tasks. Templates:",
+			"[Verification] - Command: method='pnpm --filter <pkg> typecheck', expected='zero type errors'",
+			"[Verification] - Test: method='pnpm --filter <pkg> test', expected='all tests pass'",
+			"[Verification] - File: method='check <path> exists and contains <content>', expected='file exists with matching content'",
+			"[Verification] - Manual: method='manual check <specific items>', expected='<expected result'",
+			"[Verification] Multiple related tasks can share one verification — set verification on the LAST related task only",
+			"[Verification] Do NOT create a separate 'run tests' task for verification — use verification field instead",
+			"[Verification] When a task with verification is completed, run the verification command with bash. Then call update_tasks with status=verified and actual=<result>",
 		],
 		parameters: GoalManagerParams,
 
@@ -260,35 +275,40 @@ export default function goalExtension(pi: ExtensionAPI) {
 				return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
 			}
 			const tasks = details.tasks;
-			const completed = tasks.filter((t) => t.status === "completed").length;
+			const completed = getCompletedCount(tasks);
 			const summary = theme.fg("success", `✓ ${completed}/${tasks.length} completed`);
 			if (!expanded || tasks.length === 0) {
 				return new Text(summary, 0, 0);
 			}
 			const lines = [summary];
 			for (const t of tasks) {
-				const icon = t.status === "completed"
-					? theme.fg("success", "✓")
-					: t.status === "in_progress"
-						? theme.fg("warning", "●")
-						: t.status === "cancelled"
-							? theme.fg("dim", "✗")
-							: theme.fg("dim", "☐");
+				const icon = t.status === "verified"
+					? theme.fg("success", "◉")
+					: t.status === "completed"
+						? theme.fg("success", "✓")
+						: t.status === "in_progress"
+							? theme.fg("warning", "●")
+							: t.status === "cancelled"
+								? theme.fg("dim", "✗")
+								: theme.fg("dim", "☐");
 				const descText = toSingleLine(t.description);
-				const desc = (t.status === "completed" || t.status === "cancelled")
+				const desc = (t.status === "verified" || t.status === "completed" || t.status === "cancelled")
 					? theme.fg("dim", descText)
 					: theme.fg("text", descText);
 				lines.push(`  ${icon} ${theme.fg("accent", `#${t.id}`)} ${desc}`);
-			// Subtask items in expanded view
+			// Subtask items in expanded view — collapse when all completed
 			if (t.subtasks && t.subtasks.length > 0) {
-				for (const s of t.subtasks) {
-					const subIcon = s.status === "completed"
-						? theme.fg("success", "\u2713")
-						: s.status === "in_progress"
-							? theme.fg("warning", "\u25cf")
-							: theme.fg("dim", "\u25cb");
-					const subText = s.status === "completed" ? theme.fg("dim", s.text) : theme.fg("muted", s.text);
-					lines.push(`    ${subIcon} ${theme.fg("dim", `${t.id}.${s.id}`)} ${subText}`);
+				const allSubCompleted = t.subtasks.every((s: { status: string }) => s.status === "completed");
+				if (!allSubCompleted) {
+					for (const s of t.subtasks) {
+						const subIcon = s.status === "completed"
+							? theme.fg("success", "\u2713")
+							: s.status === "in_progress"
+								? theme.fg("warning", "\u25cf")
+								: theme.fg("dim", "\u25cb");
+						const subText = s.status === "completed" ? theme.fg("dim", s.text) : theme.fg("muted", s.text);
+						lines.push(`    ${subIcon} ${theme.fg("dim", `${t.id}.${s.id}`)} ${subText}`);
+					}
 				}
 			}
 		}
@@ -300,7 +320,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("goal", {
 		description:
-			"Goal-driven mode: /goal <objective> [--tokens N] [--timeout N] [--max-turns N] | /goal pause | /goal resume | /goal clear | /goal update <new-objective> | /goal status | /goal history",
+			"Goal-driven mode: /goal <objective> [--tokens N] [--timeout N] [--max-turns N] | /goal pause | /goal resume | /goal abort | /goal clear | /goal update <new-objective> | /goal status | /goal history",
 		handler: async (args: string | undefined, ctx: ExtensionCommandContext) => {
 			await handleGoalCommand(pi, session, args, ctx);
 		},
@@ -403,7 +423,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		// Create tasks (same logic as handleCreateTasks)
 		session.state.tasks = tasks.map((desc, i) => ({
 			id: i + 1,
-			description: desc.length > 60 ? desc.slice(0, 57) + "..." : desc,
+			description: desc.length > EXT_INIT_TASK_DESC_MAX ? desc.slice(0, EXT_INIT_TASK_DESC_MAX - ELLIPSIS_LENGTH) + "..." : desc,
 			status: "pending" as const,
 			lastUpdatedTurn: session.state!.currentTurnIndex,
 		}));

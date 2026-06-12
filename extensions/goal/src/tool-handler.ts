@@ -39,6 +39,8 @@ export interface GoalSession {
 	hasPendingInjection: boolean;
 	/** 防重入标志：handleAgentEnd / handleBeforeAgentStart 等事件处理器入口检查 */
 	isProcessing: boolean;
+	/** ESC 中断标记：tool call 被 abort 时设为 true，agent_end 检查后进入 paused */
+	pendingPause: boolean;
 }
 
 // ── Stale Context Detection ──────────────────────────
@@ -72,6 +74,7 @@ export const GoalManagerParams = Type.Object({
 		taskId: Type.Number(),
 		status: StringEnum(GOAL_TASK_STATUSES),
 		evidence: Type.Optional(Type.String()),
+		actual: Type.Optional(Type.String({ description: "Actual verification result (required when status=verified)" })),
 	}))),
 	taskId: Type.Optional(Type.Number({ description: "Task ID (required for subtask operations)" })),
 	texts: Type.Optional(Type.Array(Type.String(), { description: "Subtask text list (for add_subtasks)" })),
@@ -80,6 +83,10 @@ export const GoalManagerParams = Type.Object({
 		status: StringEnum(SUBTASK_STATUSES),
 	}))),
 	subIds: Type.Optional(Type.Array(Type.Number(), { description: "Subtask ID list (for delete_subtasks)" })),
+	verifications: Type.Optional(Type.Array(Type.Object({
+		method: Type.String({ description: "Verification method, e.g. 'pnpm --filter <pkg> typecheck'" }),
+		expected: Type.String({ description: "Expected result, e.g. 'zero type errors'" }),
+	}), { description: "Verification configs for each task (1-to-1 with tasks array, for create_tasks/add_tasks)" })),
 	evidence: Type.Optional(Type.String({ description: "Evidence for completion (required for complete_goal)" })),
 	reason: Type.Optional(Type.String({ description: "Reason for being blocked (required for report_blocked)" })),
 	cancelReason: Type.Optional(Type.String({ description: "Why the user wants to cancel (required for cancel_goal)" })),
@@ -113,6 +120,17 @@ export function persistGoalState(pi: ExtensionAPI, session: GoalSession, _ctx: E
 		session.state.timeStartedAt = now;
 	}
 	pi.appendEntry(ENTRY_TYPE, serializeState(session.state));
+}
+
+/** persist + widget 的统一入口。可选 stale check：返回 true 表示 state 已被替换（新 goal），调用方应中止。 */
+export function persistAndUpdate(
+	pi: ExtensionAPI, session: GoalSession, ctx: ExtensionContext,
+	checkStale?: () => boolean,
+): boolean {
+	persistGoalState(pi, session, ctx);
+	if (checkStale?.()) return true;
+	updateWidget(session, ctx);
+	return false;
 }
 
 export function writeGoalHistoryEntry(pi: ExtensionAPI, session: GoalSession): void {
@@ -154,6 +172,7 @@ export function clearGoalSession(session: GoalSession, ctx: ExtensionContext): v
 	session.state = null;
 	session.tasksCompletedAtAgentStart = 0;
 	session.hasPendingInjection = false;
+	session.pendingPause = false;
 	ctx.ui.setWidget("goal", undefined);
 	ctx.ui.setStatus("goal", undefined);
 }
@@ -193,6 +212,9 @@ export function makeGoalResult(session: GoalSession, text: string) {
 						text: t.description,
 						status: t.status,
 						evidence: t.evidence,
+						verification: t.verification
+							? { method: t.verification.method, expected: t.verification.expected, actual: t.verification.actual }
+							: undefined,
 						subtasks: t.subtasks?.map((s) => ({
 							id: s.id,
 							text: s.text,
@@ -230,8 +252,9 @@ export async function executeGoalAction(
 		return errorResult("Goal mode not active. Use /goal <objective> to start.");
 	}
 
-	// P1-4: signal 透传 — 若已 abort 直接返回错误
+	// P1-4: signal 透传 — 若已 abort 标记 pendingPause
 	if (signal?.aborted) {
+		session.pendingPause = true;
 		return errorResult("Tool call aborted by signal.");
 	}
 
@@ -249,4 +272,20 @@ export function errorResult(message: string) {
 		content: [{ type: "text" as const, text: message }],
 		isError: true as const,
 	};
+}
+
+/** Send a hidden custom message that feeds the LLM but is not rendered in TUI. */
+export function sendGoalContextMessage(
+	pi: ExtensionAPI,
+	content: string,
+	deliverAs: "steer" | "followUp",
+): void {
+	pi.sendMessage(
+		{
+			customType: "goal-context",
+			content,
+			display: false,
+		},
+		{ deliverAs },
+	);
 }

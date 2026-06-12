@@ -57,7 +57,7 @@ const TERMINAL_STATUSES: ReadonlySet<GoalStatus> = new Set([
 
 // ── 任务数据结构 ──────────────────────────────────────
 
-export type TaskStatus = "pending" | "in_progress" | "completed" | "cancelled";
+export type TaskStatus = "pending" | "in_progress" | "completed" | "verified" | "cancelled";
 
 export type SubtaskStatus = "pending" | "in_progress" | "completed";
 
@@ -78,11 +78,26 @@ export const GOAL_TASK_STATUSES: readonly TaskStatus[] = [
 	"pending",
 	"in_progress",
 	"completed",
+	"verified",
 	"cancelled",
 ] as const;
 
 export function isTerminalTaskStatus(status: TaskStatus): boolean {
-	return status === "completed" || status === "cancelled";
+	return status === "verified" || status === "cancelled";
+}
+
+/** 业务语义的"完成"：无 verification 的 completed、verified、cancelled */
+export function isTaskDone(task: GoalTask): boolean {
+	if (task.status === "cancelled") return true;
+	if (task.status === "verified") return true;
+	if (task.status === "completed" && !task.verification) return true;
+	return false;
+}
+
+export interface TaskVerification {
+	method: string;    // 验证方法描述，如 "pnpm --filter @zhushanwen/pi-goal typecheck"
+	expected: string;  // 预期结果，如 "tsc --noEmit 零错误"
+	actual?: string;   // verified 时填写的实际验证结果
 }
 
 export interface GoalTask {
@@ -90,6 +105,7 @@ export interface GoalTask {
 	description: string;
 	status: TaskStatus;
 	evidence?: string; // 完成时的证据描述
+	verification?: TaskVerification; // 可选验证配置
 	subtasks?: Subtask[];
 	lastUpdatedTurn: number;
 }
@@ -110,7 +126,6 @@ export interface GoalRuntimeState {
 	objective: string;
 	status: GoalStatus;
 	tasks: GoalTask[];
-	turnCount: number;
 	stallCount: number;
 	tokensUsed: number;
 	timeStartedAt: number; // Date.now() timestamp
@@ -140,7 +155,6 @@ export function createInitialState(objective: string, budget: Partial<BudgetConf
 		objective,
 		status: "active",
 		tasks: [],
-		turnCount: 0,
 		stallCount: 0,
 		tokensUsed: 0,
 		timeStartedAt: Date.now(),
@@ -212,9 +226,13 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 						lastUpdatedTurn: (s.lastUpdatedTurn as number) ?? 0,
 					}))
 			: undefined;
-		return { ...t, subtasks, lastUpdatedTurn: (t.lastUpdatedTurn as number) ?? 0 } as unknown as GoalTask;
+		return {
+			...t,
+			verification: t.verification as TaskVerification | undefined,
+			subtasks,
+			lastUpdatedTurn: (t.lastUpdatedTurn as number) ?? 0,
+		} as unknown as GoalTask;
 	}),
-		turnCount: (data.turnCount as number) ?? 0,
 		stallCount: (data.stallCount as number) ?? 0,
 		tokensUsed: (data.tokensUsed as number) ?? 0,
 		timeStartedAt: (data.timeStartedAt as number) ?? Date.now(),
@@ -235,11 +253,15 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 // ── 进度计算 ──────────────────────────────────────────
 
 export function getCompletedCount(tasks: GoalTask[]): number {
-	return tasks.filter((t) => t.status === "completed").length;
+	return tasks.filter((t) => t.status === "completed" || t.status === "verified").length;
 }
 
 export function getIncompleteTasks(tasks: GoalTask[]): GoalTask[] {
-	return tasks.filter((t) => !isTerminalTaskStatus(t.status));
+	return tasks.filter((t) => !isTaskDone(t));
+}
+
+export function getNextTaskId(tasks: GoalTask[]): number {
+	return tasks.length > 0 ? Math.max(...tasks.map((t) => t.id)) + 1 : 1;
 }
 
 export function getElapsedTimeSeconds(state: GoalRuntimeState): number {
