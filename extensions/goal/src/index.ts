@@ -391,6 +391,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		objective: string,
 		tasks: string[],
 		budget?: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number },
+		ctx?: ExtensionContext,
 	): boolean {
 		if (session.state && isActiveStatus(session.state.status)) {
 			return false;
@@ -407,11 +408,12 @@ export default function goalExtension(pi: ExtensionAPI) {
 			lastUpdatedTurn: session.state!.currentTurnIndex,
 		}));
 
-		// Persist state so it survives session reconstruction
-		// Note: ctx is captured from the last event handler invocation — acceptable
-		// because initializeGoalFromExternal is called synchronously during tool execution.
-		if (lastCtx) {
-			persistGoalState(pi, session, lastCtx);
+		// Persist state so it survives session reconstruction.
+		// Prefer explicitly passed ctx (from the calling extension's tool execute),
+		// fallback to lastCtx captured from this extension's own event handlers.
+		const persistCtx = ctx ?? lastCtx;
+		if (persistCtx) {
+			persistGoalState(pi, session, persistCtx);
 		}
 
 		return true;

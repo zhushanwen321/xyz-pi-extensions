@@ -1,0 +1,353 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+import { StringEnum } from "@mariozechner/pi-ai";
+import type { ExtensionAPI, ExtensionContext, Theme, ThemeColor } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
+import { Type } from "typebox";
+
+import type { PlanSessionMap } from "./state.js";
+import { getPlanState, persistPlanState, resetPlanState } from "./state.js";
+import { listTemplates, loadTemplate } from "./templates.js";
+import { updatePlanWidget } from "./widget.js";
+
+// ── Action types ───────────────────────────────────────────────────
+
+export const PLAN_ACTIONS = [
+  "list-template",
+  "select-template",
+  "create-template",
+  "complete",
+  "abort",
+] as const;
+
+export type PlanAction = (typeof PLAN_ACTIONS)[number];
+
+export function validateAction(action: string): action is PlanAction {
+  return (PLAN_ACTIONS as readonly string[]).includes(action);
+}
+
+// ── Details types ──────────────────────────────────────────────────
+
+interface ListTemplateDetails {
+  action: "list-template";
+  templates: Array<{ name: string; source: string; path: string }>;
+}
+
+interface SelectTemplateDetails {
+  action: "select-template";
+  templateName: string;
+  content: string;
+  phase: string;
+}
+
+interface CreateTemplateDetails {
+  action: "create-template";
+  templateName: string;
+  templateDir: string;
+}
+
+interface CompleteDetails {
+  action: "complete";
+  planFilePath: string;
+  isolation: string;
+  execMode: string;
+}
+
+interface CompleteCancelledDetails {
+  action: "complete-cancelled";
+  reason: string;
+}
+
+interface AbortDetails {
+  action: "abort";
+}
+
+type PlanDetails =
+  | ListTemplateDetails
+  | SelectTemplateDetails
+  | CreateTemplateDetails
+  | CompleteDetails
+  | CompleteCancelledDetails
+  | AbortDetails;
+
+// ── Helpers ────────────────────────────────────────────────────────
+
+/** Restore the default full tool set after exiting plan mode. */
+function restoreFullToolSet(pi: ExtensionAPI): void {
+  const allToolNames = pi.getAllTools().map((t: { name: string }) => t.name);
+  pi.setActiveTools(allToolNames);
+}
+
+/** Compact template list for TUI display. Two-column, max 5 lines. */
+function formatTemplateList(
+  templates: Array<{ name: string; source: string }>,
+): string {
+  const names = templates.map((t) => `${t.name} (${t.source})`);
+  if (names.length === 0) return "No templates available.";
+
+  const MAX_DISPLAY = 8;
+  const HALF = 2;
+  const truncated = names.length > MAX_DISPLAY;
+  const display = names.slice(0, MAX_DISPLAY);
+
+  // Two-column layout
+  const half = Math.ceil(display.length / HALF);
+  const col1 = display.slice(0, half);
+  const col2 = display.slice(half);
+  const lines: string[] = [];
+  for (let i = 0; i < half; i++) {
+    const right = col2[i] ? `    ${half + i + 1} ${col2[i]}` : "";
+    lines.push(`  ${i + 1} ${col1[i] ?? ""}` + right);
+  }
+
+  if (truncated) lines.push(`  ... ${names.length - MAX_DISPLAY} more`);
+  return lines.join("\n");
+}
+
+/** Relative path from project dir */
+function relativePath(fullPath: string, projectDir: string): string {
+  if (fullPath.startsWith(projectDir)) {
+    return fullPath.slice(projectDir.length + 1);
+  }
+  return fullPath;
+}
+
+// ── renderResult ───────────────────────────────────────────────────
+
+function renderPlanResult(
+  result: { content: Array<{ type: string; text?: string }>; details?: PlanDetails },
+  _options: unknown,
+  theme: Theme,
+): Text {
+  const details = result.details;
+  if (!details) {
+    const text = result.content[0];
+    return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
+  }
+
+  const fg = (token: ThemeColor, text: string) => theme.fg(token, text);
+  const NL = "\n";
+
+  switch (details.action) {
+    case "list-template": {
+      const header = fg("accent", `${details.templates.length} 个模板可用`) + NL;
+      const body = formatTemplateList(details.templates) + NL;
+      const hint = fg("dim", "→ plan(select-template, templateName='xxx')");
+      return new Text(header + body + hint, 0, 0);
+    }
+
+    case "select-template": {
+      const header = fg("success", `✓ ${details.templateName}`) + NL;
+      const body = fg("dim", `  brainstorming → ${details.phase}`) + NL;
+      const hint = fg("dim", "→ 按模板章节顺序写 plan.md");
+      return new Text(header + body + hint, 0, 0);
+    }
+
+    case "create-template": {
+      const header = fg("success", `✓ 已创建: ${details.templateName}`) + NL;
+      const body = fg("dim", `  ${details.templateDir}`);
+      return new Text(header + body, 0, 0);
+    }
+
+    case "complete": {
+      const header = fg("success", `✓ Plan 已批准 → ${details.execMode}`) + NL;
+      const body = fg("dim", `  ${details.planFilePath}`) + NL;
+      const info = fg("dim", `  isolation: ${details.isolation} · 工具集已恢复`);
+      return new Text(header + body + info, 0, 0);
+    }
+
+    case "complete-cancelled": {
+      const header = fg("warning", `✗ 用户选择: ${details.reason}`) + NL;
+      const body = fg("dim", "  继续在 plan mode 中");
+      return new Text(header + body, 0, 0);
+    }
+
+    case "abort": {
+      const header = fg("error", "✗ Plan mode 已退出") + NL;
+      const body = fg("dim", "  工具集已恢复");
+      return new Text(header + body, 0, 0);
+    }
+  }
+}
+
+// ── Register tool ──────────────────────────────────────────────────
+
+export function registerPlanTool(
+  pi: ExtensionAPI,
+  sessions: PlanSessionMap,
+): void {
+  pi.registerTool({
+    name: "plan",
+    label: "Plan Mode",
+    description:
+      "Manages plan mode lifecycle (template selection, state transitions, completion). " +
+      "NOT for writing plan content — use the 'write' tool to write plan.md. " +
+      "Actions: list-template, select-template, create-template, complete, abort.",
+    parameters: Type.Object({
+      action: StringEnum(PLAN_ACTIONS, { description: "Action to perform" }),
+      templateName: Type.Optional(Type.String({ description: "Template name (for select-template)" })),
+      templateContent: Type.Optional(Type.String({ description: "Template content (for create-template)" })),
+      isolation: Type.Optional(
+        StringEnum(["compact", "tree", "direct"], {
+          description: "Isolation mode for plan execution (for complete action)",
+        }),
+      ),
+    }),
+    promptSnippet:
+      "## When to use this tool vs 'write'\n" +
+      "Use 'plan' tool ONLY for plan mode state management:\n" +
+      "- list-template / select-template / create-template — template operations\n" +
+      "- complete — user approved plan, exit plan mode\n" +
+      "- abort — cancel plan mode\n" +
+      "\n" +
+      "Use 'write' tool for ALL plan content: writing plan.md, updating plan chapters.\n" +
+      "\n" +
+      "## End-to-end workflow example\n" +
+      "1. /plan 'add dark mode' — user enters plan mode\n" +
+      "2. AI explores codebase (read, grep, bash) — brainstorming\n" +
+      "3. plan(action='list-template') — show available templates\n" +
+      "4. User picks template → plan(action='select-template', templateName='feature-plan')\n" +
+      "5. write({path: planFilePath, content: '...filled template...'}) — write plan content\n" +
+      "6. User reviews → plan(action='complete', isolation='compact') — exit plan mode\n" +
+      "\n" +
+      "## Common mistakes\n" +
+      "❌ plan(action='complete') to 'write the plan' — WRONG, use write tool\n" +
+      "❌ Calling plan tool when user says 'write plan to file' — use write tool\n" +
+      "✅ plan(action='list-template') to discover templates\n" +
+      "✅ plan(action='complete') AFTER plan.md is written AND user approves",
+    renderResult(
+      result: { content: Array<{ type: string; text?: string }>; details?: PlanDetails },
+      options: unknown,
+      theme: Theme,
+    ): Text {
+      return renderPlanResult(result, options, theme);
+    },
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      ctx: ExtensionContext,
+    ): Promise<{ content: Array<{ type: "text"; text: string }>; details: PlanDetails }> {
+      const action = params.action as string;
+      if (!validateAction(action)) {
+        throw new Error(`Unknown plan action: ${action}. Valid actions: ${PLAN_ACTIONS.join(", ")}`);
+      }
+
+      const sessionId = ctx.sessionManager.getSessionId();
+      const state = getPlanState(sessions, sessionId, ctx);
+      const projectDir = ctx.cwd;
+
+      switch (action) {
+        case "list-template": {
+          const templates = listTemplates(projectDir);
+          return {
+            content: [{ type: "text" as const, text: `${templates.length} templates available` }],
+            details: { action: "list-template", templates },
+          };
+        }
+
+        case "select-template": {
+          const templateName = params.templateName as string;
+          if (!templateName) {
+            throw new Error("templateName is required for select-template");
+          }
+          const content = loadTemplate(templateName, projectDir);
+          if (!content) {
+            throw new Error(`Template not found: ${templateName}`);
+          }
+          state.templateName = templateName;
+          state.phase = "writing";
+          persistPlanState(pi, state);
+          return {
+            content: [{ type: "text" as const, text: `Template selected: ${templateName}` }],
+            details: { action: "select-template", templateName, content, phase: state.phase },
+          };
+        }
+
+        case "create-template": {
+          const templateName = params.templateName as string;
+          const templateContent = params.templateContent as string;
+          if (!templateName || !templateContent) {
+            throw new Error("templateName and templateContent are required for create-template");
+          }
+          const sanitizedName = templateName.replace(/[^a-zA-Z0-9_-]/g, "");
+          if (!sanitizedName) {
+            throw new Error("Invalid template name: must contain alphanumeric characters");
+          }
+          const templateDir = path.join(projectDir, ".pi", "plan-templates");
+          fs.mkdirSync(templateDir, { recursive: true });
+          const filePath = path.join(templateDir, `${sanitizedName}.md`);
+          fs.writeFileSync(filePath, templateContent);
+          return {
+            content: [{ type: "text" as const, text: `Template created: ${sanitizedName}` }],
+            details: {
+              action: "create-template",
+              templateName: sanitizedName,
+              templateDir: relativePath(filePath, projectDir),
+            },
+          };
+        }
+
+        case "complete": {
+          // Build execution options filtered by available capabilities
+          const execOptions = ["Subagent-driven execution"];
+          const hasGoal = (await import("./compact.js")).detectGoalCapability(pi);
+          if (hasGoal) execOptions.push("Goal-driven execution (/goal)");
+          execOptions.push("Single-agent (current session)");
+          execOptions.push("Modify the plan first", "Save for later");
+
+          let chosenMode = "single-agent";
+          if (typeof ctx.ui.select === "function") {
+            const choice = await ctx.ui.select("Plan is ready. Choose execution method:", execOptions);
+            if (!choice || choice === "Modify the plan first" || choice === "Save for later") {
+              return {
+                content: [
+                  { type: "text" as const, text: `User chose: ${choice ?? "cancelled"}. Staying in plan mode.` },
+                ],
+                details: { action: "complete-cancelled", reason: choice ?? "cancelled" },
+              };
+            }
+            if (choice === "Subagent-driven execution") chosenMode = "subagent";
+            else if (choice === "Goal-driven execution (/goal)") chosenMode = "goal";
+            else chosenMode = "single-agent";
+          }
+
+          // Persist final phase before cleanup
+          const planFilePath = state.planFilePath;
+          const isolation = (params.isolation as string) ?? "direct";
+          state.phase = "complete";
+          persistPlanState(pi, state);
+
+          // Restore full tool set
+          restoreFullToolSet(pi);
+
+          // Execute completion handler (compact/tree setup)
+          const { handlePlanComplete } = await import("./compact.js");
+          handlePlanComplete(pi, ctx, state, isolation, chosenMode);
+
+          // Reset state and clear widget — same as abort
+          const updatedState = resetPlanState(pi, sessions, sessionId, ctx);
+          updatePlanWidget(ctx, updatedState);
+
+          const displayPath = relativePath(planFilePath, projectDir);
+          return {
+            content: [{ type: "text" as const, text: `Plan approved. File: ${displayPath}` }],
+            details: { action: "complete", planFilePath: displayPath, isolation, execMode: chosenMode },
+          };
+        }
+
+        case "abort": {
+          const updatedState = resetPlanState(pi, sessions, sessionId, ctx);
+          updatePlanWidget(ctx, updatedState);
+          restoreFullToolSet(pi);
+          return {
+            content: [{ type: "text" as const, text: "Plan mode aborted. Full tool access restored." }],
+            details: { action: "abort" },
+          };
+        }
+      }
+    },
+  });
+}

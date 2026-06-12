@@ -62,6 +62,11 @@
           "package": "@zhushanwen/pi-workflow",
           "type": "optional",
           "reason": "Review-Gate / Test-Fix Loop 通过 pi.__workflowRun 启动 workflow 脚本，缺失时降级为 runSingleAgent"
+        },
+        {
+          "package": "@zhushanwen/pi-goal",
+          "type": "optional",
+          "reason": "Phase 2/3 通过 __goalInit 启动 goal，缺失时降级跳过"
         }
       ]
     },
@@ -89,6 +94,17 @@
       "name": "@zhushanwen/pi-turn-timing",
       "directory": "extensions/turn-timing",
       "dependsOn": []
+    },
+    {
+      "name": "@zhushanwen/pi-plan",
+      "directory": "extensions/plan",
+      "dependsOn": [
+        {
+          "package": "@zhushanwen/pi-goal",
+          "type": "optional",
+          "reason": "complete action 通过 __goalInit 启动 goal，缺失时降级通知用户"
+        }
+      ]
     }
   ]
 }

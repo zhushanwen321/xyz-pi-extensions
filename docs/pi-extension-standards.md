@@ -872,6 +872,7 @@ describe("state", () => {
 | 异步操作无信号 | 无法取消，残留资源 | 透传 `signal` |
 | 不设防重入 | 并发操作破坏状态 | `isProcessing` 标志 |
 | agent_end 中启动 LLM 调用 | 上下文已过期 | 只做同步清理 |
+| `pi.setActiveTools(undefined)` | SDK 不支持 undefined 参数，`for...of` 遍历报 "toolNames is not iterable" | 用 `pi.getAllTools().map(t => t.name)` 获取全量工具名列表传入 |
 
 ### 18.2 结构问题（P1）
 

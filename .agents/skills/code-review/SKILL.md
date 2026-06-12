@@ -5,80 +5,41 @@ description: >-
   "帮我看看代码"。仅用于 xyz-pi-extensions 项目。
 ---
 
-# Code Review
+# Code Review（Coordinator）
 
-## 审查范围
+## 角色
 
-当前 worktree 相对于 main 的所有变更：
-```bash
-git diff main...HEAD --stat
-git diff main...HEAD
-```
+本 skill 现在作为审查协调器（review coordinator），不再内含维度审查逻辑。
+维度审查已拆分为 5 个独立 agent，由 `review-fix-loop.js` 工作流以 `parallel()` 并行调度。
 
-## 审查维度
+## 审查维度 → Agent 映射
 
-### 1. 业务逻辑
-- 变更是否解决声明的问题
-- 边界条件是否覆盖
-- 是否有回归风险
+| 维度 | Agent | 说明 |
+|------|-------|------|
+| 业务逻辑 | `review-business-logic` | 正确性、边界条件、回归风险 |
+| Monorepo 影响 | `review-monorepo-impact` | workspace 依赖、循环依赖、公共 API |
+| 类型安全 | `review-type-safety` | 完整标注、禁止 any、tsc 检查 |
+| 扩展接口 | `review-extension-api` | Tool/Command schema、Pi manifest、向后兼容 |
+| 测试覆盖 | `review-test-coverage` | 新逻辑有测试、边缘情况覆盖 |
+| 代码质量（fallow） | Fallow pre-scan step | 死代码、复杂度、重复、未使用导出 |
 
-### 2. monorepo 影响
-- 子包间依赖是否正确（`workspace:*` 引用）
-- 是否引入循环依赖
-- 公共 API 变更是否影响下游包
+## 直接使用（非工作流）
 
-### 3. 类型安全
-- 新增代码是否完整类型标注
-- 禁止 `any`，用 `unknown` 或具体类型
+当用户直接说 "review" 但不在 review-fix-loop 工作流中时，AI 应：
 
-### 4. 扩展接口
-- 新增 tool/command 的 schema 是否完整
-- 向后兼容性
+1. **Fallow 扫描**（可选，如果 fallow 已安装）：
+   ```bash
+   fallow audit --base main --format json --quiet
+   ```
 
-### 5. 测试
-- 新增逻辑是否有对应测试
-- 测试用例是否覆盖边缘情况
+2. **按维度逐一审查**：参考各 agent 的执行步骤，在当前会话中依次覆盖所有维度。
 
-### 6. 代码质量（fallow 扫描）
+3. **输出格式**：与各 agent 相同的表格格式。
 
-在人工审查前，先运行 fallow 静态分析获取基线数据：
+## 与 review-fix-loop 的关系
 
-```bash
-# 检查 fallow 是否已安装（包名是 fallow，不是 @sourcemeta/fallow）
-which fallow 2>/dev/null || npm install -g fallow
-
-# 审计变更文件的代码质量（dead-code + complexity + duplication）
-fallow audit --base main --format json --quiet
-
-# 若只需复杂度热点
-fallow health --top 10 --format json --quiet
-
-# 若只需重复代码
-fallow dupes --format json --quiet
-```
-
-关注以下指标：
-- **复杂度热点**：新增函数是否超过 80 行 / 15 圈复杂度
-- **重复代码**：是否与现有代码有重复
-- **未使用导出**：新增的类型/函数是否被使用
-- **循环依赖**：是否引入新的循环引用
-
-## 输出格式
-
-```
-## 总体评价
-Pass / 需修改 / 阻塞
-
-## fallow 扫描摘要
-<复杂度、重复、未使用导出、循环依赖的统计>
-
-## 发现的问题
-| 严重程度 | 位置 | 问题 | 建议 |
-|----------|------|------|------|
-
-## 亮点
-...
-```
+`review-fix-loop.js` 工作流不再通过 `skill: "code-review"` 调用本 skill，
+而是直接 `parallel()` 5 个 agent + aggregator。本 skill 仅在非工作流场景下提供审查指导。
 
 ---
 

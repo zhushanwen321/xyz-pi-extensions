@@ -61,6 +61,19 @@ Extension + Skill + Prompt Template + Theme 的分发单元，通过 npm 或 git
 
 ## 本项目概念
 
+**Plan Mode**
+用户通过 `/plan [描述]` 触发的轻量级规划模式。融合 brainstorming + writing-plans 能力，产出 plan 文件。退出后可衔接 Goal 执行。与 Coding Workflow 的区别：无 gate/review/retrospect。产出物存储在项目 `.xyz-harness/{slug}/plan.md`。
+_Avoid_: 规划模式（口语可，正式文档用 Plan Mode）
+
+**Plan File**
+Plan Mode 的产出物，存储在 `.xyz-harness/{slug}/plan.md`（相对于项目根目录）。含 YAML frontmatter（template, created, status）和模板章节。生命周期：随项目 `.xyz-harness/` 目录管理。
+
+**Plan Template**
+Plan 文件的模板结构，内置 5 种（feature-plan, bugfix-plan, refactor-plan, research-plan, implementation-plan），支持用户自定义。存放位置：全局 `~/.pi/agent/plan-templates/`，项目级 `<project>/.pi/plan-templates/`。
+
+**Brainstorming**
+Plan Mode 的需求探索阶段（Phase B）。包含 Quick Overview、渐进式提问、方案探索、假设审计四个步骤。借鉴 xyz-harness-brainstorming skill 但更精简。
+
 ### Goal
 
 **Goal**

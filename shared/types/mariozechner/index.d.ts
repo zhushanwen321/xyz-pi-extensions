@@ -81,6 +81,10 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type AgentToolResult<T = any> = { content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; details: T };
 	export type TurnEndEvent = any;
 	export type SessionBeforeCompactEvent = any;
+	export type SessionBeforeCompactResult = any;
+	export type SessionBeforeTreeEvent = any;
+	export type SessionBeforeTreeResult = any;
+	export type SessionShutdownEvent = any;
 	export type SessionStartEvent = any;
 	export type ExtensionHandler = any;
 	export type RegisteredTool = any;
@@ -94,6 +98,13 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type ExtensionCommandContextActions = any;
 	export type BeforeAgentStartEvent = any;
 	export type BeforeAgentStartEventResult = any;
+
+	export function setActiveTools(tools: string[]): void;
+	export function sendUserMessage(message: string, options?: Record<string, unknown>): void;
+	export function appendEntry(customType: string, data?: unknown): void;
+	export function registerTool(tool: unknown): void;
+	export function registerCommand(name: string, command: unknown): void;
+	export function on(event: string, handler: (...args: any[]) => Promise<unknown>): void;
 
 	export function getAgentDir(): string;
 	export function getMarkdownTheme(): Theme;
@@ -167,6 +178,10 @@ declare module "typebox" {
 		Unknown(options?: Record<string, any>): any;
 	};
 	export type Static<T> = Record<string, any>;
+}
+
+declare module "@sinclair/typebox" {
+	export * from "typebox";
 }
 
 declare module "@zhushanwen/pi-quota-providers" {
