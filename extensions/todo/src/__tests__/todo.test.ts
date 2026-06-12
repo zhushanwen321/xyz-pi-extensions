@@ -1,3 +1,4 @@
+import type { Theme } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -9,8 +10,7 @@ import {
 	updateTodos,
 	VALID_STATUSES,
 } from "../model";
-import { renderDualColumn, renderSingleColumn, renderWidgetLines } from "../render";
-import type { Theme } from "@mariozechner/pi-coding-agent";
+import { renderWidgetLines } from "../render";
 
 // ── 数据模型 + 向后兼容 ──────────────────────────────
 

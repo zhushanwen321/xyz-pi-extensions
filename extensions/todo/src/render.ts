@@ -22,9 +22,11 @@ export const FALLBACK_TERM_WIDTH = 80;
  * 扩展侧保守使用 max - 1 = 9 行作为阈值，超过时切换为双列布局，避免触发截断。
  */
 const WIDGET_MAX_LINES = 9;
+const SINGLE_COLUMN_BUDGET = WIDGET_MAX_LINES - 1;
 
 /** 垂直分割线视觉宽度（" │ "） */
 const DIVIDER_VISUAL_WIDTH = 3;
+const ELLIPSIS_MIN_WIDTH = 3;
 
 /** 截断或补齐到精确视觉宽度，截断时追加 "..." */
 function fixedWidth(text: string, width: number): string {
@@ -32,8 +34,8 @@ function fixedWidth(text: string, width: number): string {
 	if (len <= width) {
 		return text + " ".repeat(width - len);
 	}
-	if (width <= 3) return "...".slice(0, width);
-	return truncateToWidth(text, width - 3) + "...";
+	if (width <= ELLIPSIS_MIN_WIDTH) return "...".slice(0, width);
+	return truncateToWidth(text, width - ELLIPSIS_MIN_WIDTH) + "...";
 }
 
 // ── 状态栏 ────────────────────────────────────────────
@@ -66,26 +68,30 @@ export function renderWidgetItem(t: Todo, th: Theme): string {
 }
 
 /** 单列布局渲染（widget 少量任务时使用） */
+const PI_TEXT_PADDING = 2;
+
 export function renderSingleColumn(
 	todos: Todo[],
 	th: Theme,
 	termWidth: number,
 	indent: string,
 ): string[] {
-	const maxWidth = Math.max(1, termWidth - 2); // 预留给 Pi Text 组件的左右 padding
+	const maxWidth = Math.max(1, termWidth - PI_TEXT_PADDING);
 	return todos.map((t) => truncateToWidth(indent + renderWidgetItem(t, th), maxWidth));
 }
 
 /** 双列布局渲染，供 widget 和 component 复用 */
+const COLUMN_COUNT = 2;
+
 export function renderDualColumn(
 	todos: Todo[],
 	th: Theme,
 	termWidth: number,
 	indent: string,
 ): string[] {
-	const colWidth = Math.floor((termWidth - indent.length - DIVIDER_VISUAL_WIDTH) / 2);
+	const colWidth = Math.floor((termWidth - indent.length - DIVIDER_VISUAL_WIDTH) / COLUMN_COUNT);
 	const lines: string[] = [];
-	const half = Math.ceil(todos.length / 2);
+	const half = Math.ceil(todos.length / COLUMN_COUNT);
 	const divider = " " + th.fg("borderMuted", "\u2502") + " ";
 	for (let row = 0; row < half; row++) {
 		const left = fixedWidth(indent + renderWidgetItem(todos[row], th), colWidth);
@@ -115,7 +121,7 @@ export function renderWidgetLines(
 
 	// 标题占 1 行；任务部分超过 WIDGET_MAX_LINES - 1 时启用双列
 	const indent = "  ";
-	if (todoList.length <= WIDGET_MAX_LINES - 1) {
+	if (todoList.length <= SINGLE_COLUMN_BUDGET) {
 		for (const line of renderSingleColumn(todoList, th, width, indent)) {
 			lines.push(line);
 		}
