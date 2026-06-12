@@ -1,0 +1,167 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "Schema injection via --append-system-prompt temp file",
+      "description": "Verify that when agent() is called with schema, a temp file is created and --append-system-prompt is passed to the subprocess",
+      "steps": [
+        "Create workflow script with agent('test', {schema: {type:'object', properties:{result:{type:'string'}}, required:['result']}})",
+        "Run workflow",
+        "Verify temp file exists at <sessionDir>/workflow-tmp/so-agent-*.txt",
+        "Verify temp file content includes structured-output call instruction",
+        "Verify buildArgs output includes --append-system-prompt <path>"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "integration",
+      "title": "Schema with special characters preserved",
+      "description": "Schema containing quotes, newlines, backslashes is correctly written to temp file without corruption",
+      "steps": [
+        "Create schema with special chars: {description: 'test \"quoted\" value\\nwith newline'}",
+        "Write to temp file",
+        "Read temp file and verify JSON matches original schema"
+      ]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "integration",
+      "title": "Structured output retry on first failure",
+      "description": "When subprocess returns no SO and no tool call, system retries once automatically",
+      "steps": [
+        "Mock runPiProcess to return no SO + no tool call on first call, valid SO on second call",
+        "Run agent with schema",
+        "Verify final result is success with correct parsedOutput",
+        "Verify runPiProcess was called exactly twice"
+      ]
+    },
+    {
+      "id": "TC-1-04",
+      "type": "integration",
+      "title": "Blind-spot: tool calls but no structured-output on exit",
+      "description": "When subprocess calls other tools but not structured-output and exits with code 0, return failure",
+      "steps": [
+        "Mock runPiProcess to return hasToolCall=true, no SO, exitCode=0",
+        "Run agent with schema",
+        "Verify result.success === false",
+        "Verify error message mentions structured-output"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "unit",
+      "title": "CC-style phases with title/detail objects",
+      "description": "config-loader correctly parses phases as (string | {title, detail?})[]",
+      "steps": [
+        "Create script with meta = { phases: [{title:'Review'}, {title:'Fix', detail:'fix issues'}] }",
+        "Run extractMetaViaRegex",
+        "Verify phases array contains two objects with correct title and detail fields"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "unit",
+      "title": "args alias in worker-script",
+      "description": "Worker script exposes args as alias for $ARGS",
+      "steps": [
+        "Build worker script with args: {maxIterations: 3}",
+        "Verify generated source contains 'const args = $ARGS'",
+        "Verify args.maxIterations is accessible in script context"
+      ]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "integration",
+      "title": "Implicit phase propagation to trace node",
+      "description": "phase('Review') followed by agent() sets trace node phase to 'Review'",
+      "steps": [
+        "Run workflow: phase('Review'); agent('test task')",
+        "Check ExecutionTraceNode.phase === 'Review'"
+      ]
+    },
+    {
+      "id": "TC-2-04",
+      "type": "unit",
+      "title": "Explicit phase override in agent() call",
+      "description": "agent(prompt, {phase: 'Fix'}) overrides current global _currentPhase",
+      "steps": [
+        "Set _currentPhase = 'Review' in worker",
+        "Call agent('test', {phase: 'Fix'})",
+        "Verify opts.phase sent to main thread is 'Fix'",
+        "Verify trace node phase is 'Fix'"
+      ]
+    },
+    {
+      "id": "TC-2-05",
+      "type": "unit",
+      "title": "parallel() with thunk array",
+      "description": "parallel([() => agent('t1'), () => agent('t2')]) executes both thunks concurrently",
+      "steps": [
+        "Build worker script with parallel([() => agent('task1'), () => agent('task2')])",
+        "Execute and verify two agent-call messages are sent",
+        "Verify both calls run concurrently (not sequentially)"
+      ]
+    },
+    {
+      "id": "TC-2-06",
+      "type": "unit",
+      "title": "pipeline() cartesian product happy path",
+      "description": "pipeline([1,2,3], stage1, stage2) runs 3 items each through 2 stages",
+      "steps": [
+        "Call pipeline([1,2,3], x => agent('process '+x), r => agent('verify '+r))",
+        "Verify 6 agent calls total (3 items × 2 stages)",
+        "Verify results array has length 3"
+      ]
+    },
+    {
+      "id": "TC-2-07",
+      "type": "unit",
+      "title": "pipeline() error isolation",
+      "description": "Single item failure in pipeline produces null, other items unaffected",
+      "steps": [
+        "Call pipeline([1,2,3], stage1_throws_on_2, stage2)",
+        "Verify item 1 result is normal",
+        "Verify item 2 result is null",
+        "Verify item 3 result is normal"
+      ]
+    },
+    {
+      "id": "TC-2-08",
+      "type": "integration",
+      "title": "budget.spent() returns current token consumption",
+      "description": "After agent completes, budget.spent() reflects accumulated usage",
+      "steps": [
+        "Start workflow with budget.maxTokens = 10000",
+        "After first agent completes with usage.input = 500",
+        "Call budget.spent() → verify returns 500",
+        "After second agent completes with usage.input = 300",
+        "Call budget.spent() → verify returns 800"
+      ]
+    },
+    {
+      "id": "TC-2-09",
+      "type": "integration",
+      "title": "budget.remaining() returns non-negative value",
+      "description": "budget.remaining() = max(0, total - spent())",
+      "steps": [
+        "Set budget.total = 1000",
+        "After agents consume 800 tokens",
+        "Verify budget.remaining() === 200",
+        "After agents consume 1200 tokens",
+        "Verify budget.remaining() === 0"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "Backward compatibility with Pi-format scripts",
+      "description": "Existing Pi scripts with string[] phases and $ARGS still work",
+      "steps": [
+        "Create script: const meta = {name:'test', phases:['Phase1']}; module.exports = {meta, execute: async ({agent}) => { await agent('hello'); }}",
+        "Run workflow",
+        "Verify successful execution"
+      ]
+    }
+  ]
+}

@@ -7,7 +7,7 @@ import { EventEmitter } from "node:events";
 
 import { beforeEach,describe, expect, it, vi } from "vitest";
 
-import { AgentPool, SOFT_MAX_AGENTS_WARNING } from "../src/agent-pool";
+import { AgentPool, SOFT_MAX_AGENTS_WARNING } from "../src/infra/agent-pool";
 
 vi.mock("node:child_process", () => ({
   spawn: vi.fn(),
@@ -162,22 +162,23 @@ describe("AgentPool", () => {
       expect(result.parsedOutput).toEqual({ name: "Alice" });
     });
 
-    it("returns failure when schema present but no structured-output tool call", async () => {
+    it("fails immediately when schema present but no structured-output tool call", async () => {
       const pool = new AgentPool(2);
-      const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      const proc1 = createMockProcess();
+      mockSpawn.mockReturnValueOnce(proc1 as unknown as ChildProcess);
 
       const schema = { type: "object" };
       const jsonl = messageEndJsonl("not valid json {", { input: 10, output: 5 });
 
       const resultPromise = pool.enqueue({ prompt: "broken json", schema });
-      proc.stdout.emit("data", Buffer.from(jsonl + "\n"));
-      proc.emit("close", 0);
+      // First attempt: no SO, no tool call
+      proc1.stdout.emit("data", Buffer.from(jsonl + "\n"));
+      proc1.emit("close", 0);
 
       const result = await resultPromise;
-      // Without structured-output tool call, schema presence triggers failure
+      // Should fail immediately without retry (orchestrator handles retries)
       expect(result.success).toBe(false);
-      expect(result.error).toContain("structured output");
+      expect(result.error).toContain("structured-output");
     });
 
     it("extracts parsedOutput after successful tool_execution_end", async () => {
@@ -238,7 +239,7 @@ describe("AgentPool", () => {
       expect(result.parsedOutput).toBeUndefined();
     });
 
-    it("ignores tool_execution_start for other tools", async () => {
+    it("returns failure when other tools called but no structured-output on exit", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
       mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
@@ -257,11 +258,12 @@ describe("AgentPool", () => {
       proc.emit("close", 0);
 
       const result = await resultPromise;
-      expect(result.success).toBe(true);
+      // FR-1.4: hasToolCall=true + exit=0 + no SO → fail (blind-spot fix)
+      expect(result.success).toBe(false);
       expect(result.parsedOutput).toBeUndefined();
     });
 
-    it("injects --append-system-prompt when systemPromptFile is set", async () => {
+    it("injects --append-system-prompt when systemPromptFiles is set", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
       mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
@@ -269,7 +271,7 @@ describe("AgentPool", () => {
       const jsonl = messageEndJsonl("ok", { input: 1, output: 1 });
       const resultPromise = pool.enqueue({
         prompt: "use this prompt",
-        systemPromptFile: "/tmp/agent-prompt-abc.md",
+        systemPromptFiles: ["/tmp/agent-prompt-abc.md"],
       });
       proc.stdout.emit("data", Buffer.from(jsonl + "\n"));
       proc.emit("close", 0);
@@ -284,7 +286,7 @@ describe("AgentPool", () => {
       expect(spawnArgs[spawnArgs.length - 1]).toBe("use this prompt");
     });
 
-    it("omits --append-system-prompt when systemPromptFile is not set", async () => {
+    it("omits --append-system-prompt when systemPromptFiles is not set", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
       mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
@@ -310,7 +312,7 @@ describe("AgentPool", () => {
       const resultPromise = pool.enqueue({
         prompt: "task",
         model: "ds-flash",
-        systemPromptFile: "/tmp/p.md",
+        systemPromptFiles: ["/tmp/p.md"],
       });
       proc.stdout.emit("data", Buffer.from(jsonl + "\n"));
       proc.emit("close", 0);
@@ -326,21 +328,22 @@ describe("AgentPool", () => {
       expect(spawnArgs[promptIdx + 1]).toBe("/tmp/p.md");
     });
 
-    it("returns failure when schema present but no structured-output tool call", async () => {
+    it("fails immediately when schema present but no structured-output tool call", async () => {
       const pool = new AgentPool(2);
-      const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      const proc1 = createMockProcess();
+      mockSpawn.mockReturnValueOnce(proc1 as unknown as ChildProcess);
 
       const schema = { type: "object", properties: { answer: { type: "string" } } };
       const msgEndJsonl = messageEndJsonl("I think the answer is 42", { input: 10, output: 5 });
 
       const resultPromise = pool.enqueue({ prompt: "what is the answer", schema });
-      proc.stdout.emit("data", Buffer.from(msgEndJsonl + "\n"));
-      proc.emit("close", 0);
+      proc1.stdout.emit("data", Buffer.from(msgEndJsonl + "\n"));
+      proc1.emit("close", 0);
 
       const result = await resultPromise;
+      // Fails immediately without retry (orchestrator handles retries)
       expect(result.success).toBe(false);
-      expect(result.error).toContain("structured output");
+      expect(result.error).toContain("structured-output");
     });
   });
 

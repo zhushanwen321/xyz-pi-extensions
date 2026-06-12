@@ -10,6 +10,7 @@
 - **暂停/恢复**：支持暂停/恢复，已完成的 agent 调用不重复执行
 - **跨会话恢复**：Pi 重启后自动检测中断的 workflow
 - **预算控制**：Token / 时间双预算
+- **结构化输出**：agent 调用支持 `schema` 参数，通过 structured-output tool 保证 JSON 输出
 
 ## 安装
 
@@ -50,21 +51,62 @@ const meta = { name: "my-review", description: "批量代码审查" };
 
 或让 AI 通过 `workflow-run` 工具调用。
 
+## 架构
+
+四层 + 共享域模型，依赖方向严格向下：
+
+```
+┌─────────────────────────────────────────┐
+│  Factory (index.ts)                     │  纯胶水：事件注册 + 调用 register*
+├─────────────────────────────────────────┤
+│  Interface (src/interface/)             │  Pi API 表面：参数解析 → 调用 Engine → 格式化输出
+├─────────────────────────────────────────┤
+│  Engine (src/engine/)                   │  状态机 + Worker 协调 + agent 调度 + 预算
+├─────────────────────────────────────────┤
+│  Infrastructure (src/infra/)            │  子进程执行 / JSONL 解析 / 状态持久化 / 文件扫描
+└─────────────────────────────────────────┘
+          ↕ 所有层共享
+┌─────────────────────────────────────────┐
+│  Domain Model (src/domain/)             │  纯数据 + 状态机，零依赖
+└─────────────────────────────────────────┘
+```
+
+依赖规则：Factory → Interface → Engine → Infrastructure。任何层 → Domain Model。反向禁止。
+
 ## 文件结构
 
 ```
 workflow/
-├── index.ts
+├── index.ts                              # Factory — 纯胶水，~150 行
 └── src/
-    ├── index.ts            # 入口 — 工具、命令、事件注册
-    ├── orchestrator.ts     # Worker 生命周期、agent 调度
-    ├── agent-pool.ts       # Pi 子进程池
-    ├── worker-script.ts    # Worker 运行时注入
-    ├── state.ts            # 状态机（7 态）
-    ├── budget.ts           # 预算计算
-    ├── commands.ts         # 命令解析
-    ├── config-loader.ts    # 配置 + workflow 发现
-    ├── execution-trace.ts  # 执行追踪
-    ├── tool-generate.ts    # 工具参数生成
-    └── widget.ts           # TUI 状态面板
+    ├── index.ts                          # 工厂入口
+    ├── domain/
+    │   └── state.ts                      # WorkflowInstance / 状态机（8 态） / 序列化
+    ├── infra/
+    │   ├── agent-pool.ts                 # 并发调度（enqueue / drain）
+    │   ├── pi-runner.ts                  # pi --mode json 子进程管理
+    │   ├── jsonl-parser.ts               # 流式 JSONL 解析
+    │   ├── state-store.ts                # 状态持久化（rewrite 模式）
+    │   ├── config-loader.ts              # workflow 脚本发现 + meta 提取
+    │   ├── agent-discovery.ts            # .md agent 文件扫描
+    │   ├── agent-opts-resolver.ts        # agent/skill/schema → 临时文件
+    │   ├── execution-trace.ts            # 执行追踪节点
+    │   └── script-lint.ts                # 脚本静态 lint
+    ├── engine/
+    │   ├── orchestrator.ts               # 编排核心：状态机 + 协调
+    │   ├── worker-manager.ts             # Worker 线程生命周期
+    │   ├── agent-executor.ts             # agent 调用执行 + 重试
+    │   ├── worker-script.ts              # Worker 运行时代码生成
+    │   ├── orchestrator-events.ts        # 实时事件订阅 API
+    │   ├── orchestrator-budget.ts        # Token/Cost/时间预算
+    │   └── model-resolver.ts             # 模型解析（显式 > scene > 默认）
+    └── interface/
+        ├── tool-workflow.ts              # workflow tool (pause/resume/abort/status)
+        ├── tool-workflow-run.ts          # workflow-run tool (name/mode/args)
+        ├── tool-generate.ts              # workflow-generate tool (脚本生成)
+        ├── tool-lint.ts                  # workflow-lint tool (静态检查)
+        ├── commands.ts                   # /workflow + /workflows 命令
+        └── views/
+            ├── WorkflowsView.ts          # 全屏三级导航 TUI
+            └── format.ts                 # 纯格式化函数
 ```

@@ -11,7 +11,7 @@ import {
   getWorkflow,
   invalidateCache,
   loadWorkflows,
-} from "../src/config-loader";
+} from "../src/infra/config-loader";
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -239,6 +239,61 @@ module.exports = { meta };`,
       const updated = await getWorkflow("fresh");
       expect(updated!.description).toBe("Updated description");
       expect(updated!.phases).toEqual(["a", "b"]);
+    });
+  });
+
+  // ── Phases type extension (AC-2.1) ─────────────────────────
+
+  describe("phases type extension", () => {
+    it("parses phases as array of {title, detail?} objects", async () => {
+      const dir = makeWorkflowDir();
+      writeScript(
+        dir,
+        "phase-obj",
+        `const meta = { name: 'phase-obj', description: 'Object phases', phases: [{title: 'Review'}, {title: 'Fix', detail: 'Apply fixes'}] };`,
+      );
+
+      invalidateCache();
+      const workflows = await loadWorkflows();
+      expect(workflows).toHaveLength(1);
+      expect(workflows[0].phases).toEqual([
+        { title: "Review" },
+        { title: "Fix", detail: "Apply fixes" },
+      ]);
+    });
+
+    it("parses mixed phases (strings and objects)", async () => {
+      const dir = makeWorkflowDir();
+      writeScript(
+        dir,
+        "phase-mix",
+        `const meta = { name: 'phase-mix', description: 'Mixed phases', phases: ['Init', {title: 'Review'}, {title: 'Fix', detail: 'auto'}, 'Done'] };`,
+      );
+
+      invalidateCache();
+      const workflows = await loadWorkflows();
+      expect(workflows).toHaveLength(1);
+      expect(workflows[0].phases).toEqual([
+        "Init",
+        { title: "Review" },
+        { title: "Fix", detail: "auto" },
+        "Done",
+      ]);
+    });
+
+    it("filters out invalid phase entries (numbers, null)", async () => {
+      const dir = makeWorkflowDir();
+      writeScript(
+        dir,
+        "phase-filter",
+        // safeEvalObject will parse 42 and null as-is, which the filter rejects
+        `const meta = { name: 'phase-filter', description: 'Filter bad phases', phases: ['Valid', 42, null, {title: 'Ok'}] };`,
+      );
+
+      invalidateCache();
+      const workflows = await loadWorkflows();
+      expect(workflows).toHaveLength(1);
+      expect(workflows[0].phases).toEqual(["Valid", { title: "Ok" }]);
     });
   });
 });

@@ -24,18 +24,14 @@ import {
   registerWorkflowCommands,
   sendCompletionNotification,
   type WorkflowCommandsState,
-} from "./commands.js";
+} from "./interface/commands.js";
 import { type WorkflowInstanceSummary,WorkflowOrchestrator } from "./orchestrator.js";
 import {
-  createInstance,
-  deserializeInstance,
   isTerminal,
   transitionStatus,
-  type WorkflowInstance,
   type WorkflowStatus,
-} from "./state.js";
-import { registerGenerateTool } from "./tool-generate.js";
-import { registerWorkflowShortcuts, renderWorkflowList } from "./widget.js";
+} from "./domain/state.js";
+import { registerGenerateTool } from "./interface/tool-generate.js";
 
 // ── Parameter schema ──────────────────────────────────────────
 
@@ -128,69 +124,23 @@ function toInstanceSummary(summary: WorkflowInstanceSummary): InstanceSummary {
   };
 }
 
+// TODO: Extract workflow/workflow-lint tool execute logic to interface/ subdirectory
+// to match the pattern of tool-generate.ts and reduce this entry file below 500 lines.
 export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-line max-lines-per-function
-  let lastSessionId = "";
+  const lsRef = { lastSessionId: "" };
   const orchestrators = new Map<string, WorkflowOrchestrator>();
   const cmdState: WorkflowCommandsState = { lastRunId: null };
   const sessionApprovals = new Set<string>();
   // P1-3: Per-factory dedup Set for completion notifications (was module-level in commands.ts)
   const notifiedRunIds = new Set<string>();
-  // P1-6: Reentry guard flag to prevent concurrent tool execute calls from clobbering orchestrator state
-  let isProcessing = false;
-
-  async function reconstructState(ctx: ExtensionContext): Promise<Map<string, WorkflowInstance>> {
-    const instances = new Map<string, WorkflowInstance>();
-    try {
-      const entries = ctx.sessionManager.getEntries();
-      const pointers = new Map<string, { path: string }>();
-      for (const entry of entries) {
-        if (entry.type !== "custom") continue;
-        const custom = entry as unknown as { customType?: string; data?: unknown };
-        if (custom.customType !== "workflow-state-link") continue;
-        const data = custom.data as { runId?: string; path?: string } | undefined;
-        if (data?.runId && data?.path) {
-          pointers.set(data.runId, { path: data.path });
-        }
-      }
-      // Load each pointer's JSONL file
-      for (const [runId, pointer] of pointers) {
-        try {
-          const content = await fs.promises.readFile(pointer.path, "utf8");
-          const lines = content.split("\n").filter((l) => l.trim());
-          for (const line of lines) {
-            try {
-              const parsed = JSON.parse(line) as Parameters<typeof deserializeInstance>[0];
-              const instance = deserializeInstance(parsed);
-              instances.set(instance.runId, instance);
-            // eslint-disable-next-line taste/no-silent-catch
-            } catch {
-              // Skip malformed lines
-            }
-          }
-        } catch {
-          ctx.ui.notify(`WARN: missing or corrupt state for ${runId}`, "warning");
-          // Create a state_lost placeholder so the user can see the run existed
-          // but its external state file is unreadable (FR-1.6)
-          instances.set(runId, createInstance({
-            runId,
-            name: `(state lost) ${runId}`,
-            worker: "(unknown)",
-            status: "state_lost",
-          }));
-        }
-      }
-    // eslint-disable-next-line taste/no-silent-catch
-    } catch {
-      // If getEntries fails, return empty map
-    }
-    return instances;
-  }
+  // P1-6: Reentry guard — shared object so both workflow and workflow-run tools see the same flag
+  const guard = { isProcessing: false };
 
   // ── Events ──────────────────────────────────────────────────
 
   pi.on("session_start", async (_event: Record<string, unknown>, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
-    lastSessionId = sessionId;
+    lsRef.lastSessionId = sessionId;
 
     // Rehydrate session approvals from persisted entries
     for (const entry of ctx.sessionManager.getEntries()) {
@@ -205,8 +155,7 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
     orchestrators.set(sessionId, orch);
 
     // Restore reconstructed state into orchestrator
-    const instances = await reconstructState(ctx);
-    orch.restoreInstances(instances);
+    await orch.reconstructAndRestore();
 
     // Log discovered agents with source breakdown
     const agentCount = orch.getAgentCount();
@@ -217,18 +166,15 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
         return acc;
       }, {});
       const breakdown = Object.entries(bySource).map(([s, c]) => `${c} ${s}`).join(", ");
-      pi.notify(`Workflow: discovered ${agentCount} agents (${breakdown})`);
+      console.log(`[workflow] discovered ${agentCount} agents (${breakdown})`);
     }
 
-    // Live progress: refresh widget on every trace node change
-    orch.onTraceUpdate = (_runId) => {
-      if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
-    };
+    // Live progress: event-driven updates handled by WorkflowsView subscription
+    orch.onTraceUpdate = undefined;
     orch.onCompletion = (runId) => {
       const instance = orch.getInstance(runId);
       if (instance) sendCompletionNotification(pi, runId, instance, notifiedRunIds);
     };
-    if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
 
     // Expose pi.__workflowRun for cross-extension programmatic access
     // (same pattern as goal extension's pi.__goalInit)
@@ -243,7 +189,7 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
 
   pi.on("session_tree", async (_event: Record<string, unknown>, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
-    lastSessionId = sessionId;
+    lsRef.lastSessionId = sessionId;
     // Dispose the previous branch's orchestrator (cleanup in-flight agent temp files).
     // Without this, switching branches mid-run leaks temp files.
     const previousOrch = orchestrators.get(sessionId);
@@ -252,10 +198,12 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
     }
     const orch = new WorkflowOrchestrator(pi, ctx);
     orchestrators.set(sessionId, orch);
-    const instances = await reconstructState(ctx);
+    await orch.reconstructAndRestore();
     // P1-7: Drop pending state from old branches — running workers no longer exist
-    for (const inst of instances.values()) {
-      if (inst.status === "running") {
+    for (const summary of orch.list()) {
+      if (summary.status === "running") {
+        const inst = orch.getInstance(summary.runId);
+        if (!inst) continue;
         inst.pausedAt = new Date().toISOString();
         try {
           transitionStatus(inst, "paused");
@@ -265,20 +213,16 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
         }
       }
     }
-    orch.restoreInstances(instances);
-    orch.onTraceUpdate = (_runId) => {
-      if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
-    };
+    orch.onTraceUpdate = undefined;
     orch.onCompletion = (runId) => {
       const instance = orch.getInstance(runId);
       if (instance) sendCompletionNotification(pi, runId, instance, notifiedRunIds);
     };
-    if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
   });
 
   pi.on("session_shutdown", async () => {
-    // Note: Pi's session_shutdown event does not pass ctx, so we use lastSessionId
-    const sessionId = lastSessionId;
+    // Note: Pi's session_shutdown event does not pass ctx, so we use lastSessionId via shared ref
+    const sessionId = lsRef.lastSessionId;
     // Pause running orchestrators before cleanup
     const orch = orchestrators.get(sessionId);
     if (orch) {
@@ -323,16 +267,16 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
         };
       }
       // P1-6: Reentry guard — prevent concurrent tool calls from clobbering orchestrator state
-      if (isProcessing) {
+      if (guard.isProcessing) {
         return {
           content: [{ type: "text" as const, text: "Another workflow operation is in progress; please wait for it to complete before issuing another command." }],
           isError: true,
         };
       }
-      isProcessing = true;
+      guard.isProcessing = true;
       try {
       const sessionId = ctx.sessionManager.getSessionId();
-      lastSessionId = sessionId;
+      lsRef.lastSessionId = sessionId;
       const orch = orchestrators.get(sessionId);
       if (!orch) {
         return {
@@ -372,10 +316,30 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
           };
           const targetStatus = actionToTarget[action];
 
+          // Pre-flight: reject invalid transitions before touching the orchestrator
+          if (
+            (action === "pause" && instance.status !== "running") ||
+            (action === "resume" && instance.status !== "paused")
+          ) {
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Error: cannot ${action} workflow '${instance.name}' (${runId}): current status is '${instance.status}', expected '${action === "pause" ? "running" : "paused"}'`,
+              }],
+              details: {
+                action,
+                instances: orch.list().map(toInstanceSummary),
+                _render: buildRender(orch.list()),
+              } satisfies WorkflowDetails,
+              isError: true,
+            };
+          }
+
           // Delegate to orchestrator (handles Worker lifecycle)
           if (action === "abort" && (params.error as string | undefined)) {
             instance.error = params.error as string;
           }
+          const oldStatus = instance.status;
           try {
             if (action === "pause") await orch.pause(runId);
             else if (action === "resume") await orch.resume(runId);
@@ -385,7 +349,7 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
             return {
               content: [{
                 type: "text" as const,
-                text: `Workflow '${instance.name}' (${runId}): → ${instance.status}`,
+                text: `Workflow '${instance.name}' (${runId}): ${oldStatus} → ${instance.status}`,
               }],
               details: {
                 action,
@@ -400,12 +364,12 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
 
           // Idempotent: if the workflow is already in the target state (or a terminal state for abort),
           // return success instead of attempting an invalid state transition.
+          // Re-persist to recover from partial orchestrator success (status mutated but persistState threw).
           if (
             instance.status === targetStatus ||
-            (action === "abort" && isTerminal(instance.status)) ||
-            (action === "pause" && instance.status !== "running") ||
-            (action === "resume" && instance.status !== "paused")
+            (action === "abort" && isTerminal(instance.status))
           ) {
+            try { await orch.persistState(); } catch { /* best effort */ }
             const summaries = orch.list();
             return {
               content: [{
@@ -504,7 +468,7 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
       }
       } finally {
         // P1-6: Always release the reentry guard
-        isProcessing = false;
+        guard.isProcessing = false;
       }
     },
 
@@ -549,14 +513,13 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
 
   // ── Tool: workflow-run ──────────────────────────────────────
 
-  registerWorkflowRunTool(pi, orchestrators, cmdState, sessionApprovals, { lastSessionId }, { isProcessing });
+  registerWorkflowRunTool(pi, orchestrators, cmdState, sessionApprovals, lsRef, guard);
 
   // ── Commands & Shortcuts ───────────────────────────────────
 
   registerWorkflowCommands(pi, orchestrators, cmdState);
   registerGenerateTool(pi);
   registerWorkflowLintTool(pi);
-  registerWorkflowShortcuts(pi, orchestrators, cmdState);
 
   // ── Auto-inject script format spec on workflow-generate calls ──────
   // When AI calls workflow-generate, inject the full format reference as
@@ -658,7 +621,7 @@ function registerWorkflowRunTool(
       const tokens = params.tokens;
       const time = params.time;
 
-      const { loadWorkflows } = await import("./config-loader.js");
+      const { loadWorkflows } = await import("./infra/config-loader.js");
       let allWorkflows: Awaited<ReturnType<typeof loadWorkflows>>;
       try { allWorkflows = await loadWorkflows(); } catch { allWorkflows = []; }
       const available = allWorkflows.filter((wf) => wf.available);
@@ -668,7 +631,6 @@ function registerWorkflowRunTool(
         if (mode === "force") {
           const runId = await orch.run(name, args, tokens, time, signal);
           cmdState.lastRunId = runId;
-          if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
           return { content: [{ type: "text" as const, text: `Started workflow '${name}' (${runId}) [force mode]. Running in background — do NOT poll status.` }], details: { action: "run", runId, status: "running", name, confirmSkipped: true as const } satisfies _WorkflowRunDetails };
         }
         if (ctx.hasUI) {
@@ -688,7 +650,6 @@ function registerWorkflowRunTool(
         }
         const runId = await orch.run(name, args, tokens, time, signal);
         cmdState.lastRunId = runId;
-        if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
         return { content: [{ type: "text" as const, text: `Started workflow '${exactMatch.name}' (${runId}). Running in background — do NOT poll status.` }], details: { action: "run", runId, status: "running", name: exactMatch.name } satisfies _WorkflowRunDetails };
       }
 
@@ -705,7 +666,6 @@ function registerWorkflowRunTool(
           const best = candidates[0];
           const runId = await orch.run(best.name, args, tokens, time, signal);
           cmdState.lastRunId = runId;
-          if (ctx.hasUI) ctx.ui.setWidget("workflow", renderWorkflowList(orch.list(), ctx.ui.theme));
           return { content: [{ type: "text" as const, text: `Started workflow '${best.name}' (${runId}) [force mode, fuzzy match]. Running in background — do NOT poll status.` }], details: { action: "run", runId, status: "running", name: best.name, confirmSkipped: true as const } satisfies _WorkflowRunDetails };
         }
         pi.sendUserMessage(`No exact match for '${name}', but found ${candidates.length} related workflow(s):\n${candidateList}\n\nAsk the user which one to use, or if they want to create a new workflow. If they choose one, use workflow-run with the exact name and mode 'force'.`, { deliverAs: "steer" });
@@ -772,8 +732,8 @@ function registerWorkflowLintTool(
     }),
 
     async execute(_toolCallId: string, params: Static<typeof WorkflowParams>, _signal: AbortSignal | undefined, _onUpdate: unknown, _ctx: ExtensionContext) {
-      const { lintScript } = await import("./script-lint.js");
-      const { loadWorkflows } = await import("./config-loader.js");
+      const { lintScript } = await import("./infra/script-lint.js");
+      const { loadWorkflows } = await import("./infra/config-loader.js");
 
       let allWorkflows: Awaited<ReturnType<typeof loadWorkflows>>;
       try { allWorkflows = await loadWorkflows(); } catch { allWorkflows = []; }

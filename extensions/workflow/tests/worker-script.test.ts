@@ -1,7 +1,7 @@
 // 测试框架: vitest | 运行命令: npx vitest run tests/worker-script.test.ts
 import { describe, expect,it } from "vitest";
 
-import { buildWorkerScript } from "../src/worker-script";
+import { buildWorkerScript } from "../src/engine/worker-script";
 
 describe("buildWorkerScript", () => {
   const userScript = 'log("hello from user script");';
@@ -29,7 +29,7 @@ describe("buildWorkerScript", () => {
   });
 
   it("注入 pipeline() 函数定义", () => {
-    expect(result).toContain("async function pipeline(stages)");
+    expect(result).toContain("async function pipeline(firstArg, ...restStages)");
   });
 
   it("注入 $ARGS / $WORKSPACE / $BUDGET 常量", () => {

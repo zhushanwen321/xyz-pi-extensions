@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Workflow Extension — 代码关系图</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+    background: #0a0a0f;
+    color: #e0e0e8;
+    padding: 32px;
+    line-height: 1.6;
+  }
+  h1 {
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, #6ee7b7, #3b82f6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .subtitle { color: #888; font-size: 14px; margin-bottom: 32px; }
+
+  /* Legend */
+  .legend {
+    display: flex; gap: 24px; flex-wrap: wrap;
+    margin-bottom: 32px; padding: 16px 20px;
+    background: #12121a; border-radius: 12px;
+    border: 1px solid #1e1e2e;
+  }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #aaa; }
+  .legend-box {
+    width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0;
+  }
+
+  /* Section */
+  .section { margin-bottom: 48px; }
+  .section-title {
+    font-size: 20px; font-weight: 600; margin-bottom: 4px;
+    color: #c0c0d0;
+  }
+  .section-desc { font-size: 13px; color: #666; margin-bottom: 20px; }
+
+  /* Flow chart container */
+  .flow {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 0; position: relative;
+  }
+
+  /* Node */
+  .node {
+    padding: 10px 18px; border-radius: 8px;
+    font-size: 13px; font-weight: 500;
+    text-align: center; min-width: 200px;
+    position: relative; z-index: 1;
+    border: 1px solid transparent;
+    transition: transform 0.15s, box-shadow 0.15s;
+    cursor: default;
+  }
+  .node:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+  .node .file { font-size: 11px; opacity: 0.6; font-weight: 400; display: block; margin-top: 2px; }
+
+  /* Node types */
+  .n-entry { background: #1a2e1a; border-color: #22c55e44; color: #6ee7b7; }
+  .n-event { background: #1e1a2e; border-color: #8b5cf644; color: #c4b5fd; }
+  .n-tool  { background: #1a2533; border-color: #3b82f644; color: #93c5fd; }
+  .n-core  { background: #2a1a1a; border-color: #ef444444; color: #fca5a5; }
+  .n-infra { background: #1a2222; border-color: #14b8a644; color: #5eead4; }
+  .n-data  { background: #1f1a2e; border-color: #a855f744; color: #d8b4fe; }
+  .n-view  { background: #1e2a1a; border-color: #84cc1644; color: #bef264; }
+  .n-ext   { background: #2a2a1a; border-color: #eab30844; color: #fde047; }
+  .n-proc  { background: #2a1a22; border-color: #ec489944; color: #f9a8d4; }
+
+  /* Arrow */
+  .arrow {
+    width: 2px; height: 20px; background: #333; position: relative;
+  }
+  .arrow::after {
+    content: ''; position: absolute; bottom: -4px; left: 50%; transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid #333;
+  }
+
+  /* Labeled arrow */
+  .arrow-label {
+    display: flex; flex-direction: column; align-items: center; gap: 0;
+  }
+  .arrow-label .label {
+    font-size: 11px; color: #666; padding: 2px 8px;
+    background: #0a0a0f; border-radius: 4px; z-index: 2;
+  }
+
+  /* Branch container */
+  .branch {
+    display: flex; gap: 32px; align-items: flex-start;
+    position: relative; padding-top: 0;
+  }
+  .branch-line {
+    position: absolute; top: -10px; left: 50%; transform: translateX(-50%);
+    width: calc(100% - 120px); height: 2px; background: #333;
+  }
+
+  .branch-col {
+    display: flex; flex-direction: column; align-items: center; gap: 0;
+    flex: 1; max-width: 280px;
+  }
+
+  /* Sequence row */
+  .seq-row {
+    display: flex; align-items: center; gap: 12px; margin: 8px 0;
+    flex-wrap: wrap; justify-content: center;
+  }
+  .seq-row .node { min-width: 140px; }
+  .seq-arrow {
+    font-size: 18px; color: #444; flex-shrink: 0;
+  }
+
+  /* Callout */
+  .callout {
+    background: #111118; border: 1px solid #1e1e2e; border-radius: 8px;
+    padding: 14px 18px; margin: 16px 0; font-size: 12px; color: #888;
+    max-width: 800px;
+  }
+  .callout strong { color: #bbb; }
+
+  /* File dependency graph */
+  .dep-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px; margin: 16px 0;
+  }
+  .dep-card {
+    background: #111118; border: 1px solid #1e1e2e; border-radius: 8px;
+    padding: 12px 14px; font-size: 12px; position: relative;
+  }
+  .dep-card .name { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+  .dep-card .imports { color: #666; font-size: 11px; line-height: 1.5; }
+  .dep-card .lines { position: absolute; top: 8px; right: 10px; font-size: 10px; color: #444; }
+
+  /* Worker internals */
+  .worker-box {
+    background: #0e0e18; border: 2px dashed #333; border-radius: 12px;
+    padding: 20px; margin: 16px 0; max-width: 700px;
+  }
+  .worker-title {
+    font-size: 14px; font-weight: 600; color: #f9a8d4; margin-bottom: 12px;
+    text-align: center;
+  }
+  .worker-flow {
+    display: flex; flex-direction: column; align-items: center; gap: 0;
+  }
+
+  /* Inline badge */
+  .badge {
+    display: inline-block; padding: 1px 6px; border-radius: 4px;
+    font-size: 10px; font-weight: 600; vertical-align: middle;
+  }
+  .badge-ev { background: #1e1a2e; color: #c4b5fd; }
+  .badge-tool { background: #1a2533; color: #93c5fd; }
+  .badge-cmd { background: #1a2222; color: #5eead4; }
+</style>
+</head>
+<body>
+
+<h1>Workflow Extension — 代码关系图</h1>
+<p class="subtitle">extensions/workflow/ — 17 个源文件，6074 行代码 | 核心链路可视化</p>
+
+<!-- Legend -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-box" style="background:#22c55e55"></div>入口/事件</div>
+  <div class="legend-item"><div class="legend-box" style="background:#8b5cf655"></div>Pi 事件</div>
+  <div class="legend-item"><div class="legend-box" style="background:#3b82f655"></div>Tool</div>
+  <div class="legend-item"><div class="legend-box" style="background:#ef444455"></div>Orchestrator</div>
+  <div class="legend-item"><div class="legend-box" style="background:#14b8a655"></div>基础设施</div>
+  <div class="legend-item"><div class="legend-box" style="background:#a855f755"></div>状态/数据</div>
+  <div class="legend-item"><div class="legend-box" style="background:#ec489955"></div>Worker 子进程</div>
+  <div class="legend-item"><div class="legend-box" style="background:#eab30855"></div>外部命令</div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- SECTION 1: Pi 调用 Workflow 的入口链路 -->
+<!-- ═══════════════════════════════════════════ -->
+
+<div class="section">
+  <div class="section-title">链路 1：Pi 调用 Workflow 的入口</div>
+  <div class="section-desc">从 Pi 运行时加载扩展到注册 tools、commands、events 的完整初始化流程</div>
+
+  <div class="flow">
+    <!-- Entry -->
+    <div class="node n-entry">
+      Pi Runtime 加载扩展
+      <span class="file">import workflowExtension from "@zhushanwen/pi-workflow"</span>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="node n-entry">
+      index.ts → workflowExtension(pi)
+      <span class="file">src/index.ts:82 (工厂函数)</span>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="callout" style="text-align:center">
+      <strong>工厂函数执行 5 件事：</strong><br>
+      注册 3 个事件 + 注册 4 个 tool + 注册 commands + 注册 lint tool + 注入 skill spec
+    </div>
+
+    <div class="branch" style="margin-top: 8px">
+      <div class="branch-col">
+        <div class="node n-event">
+          session_start
+          <span class="file">重建 orchestrator + 恢复状态</span>
+        </div>
+        <div class="arrow" style="height:12px"></div>
+        <div class="callout">
+          <strong>关键操作：</strong><br>
+          1. new WorkflowOrchestrator(pi, ctx)<br>
+          2. reconstructState(ctx) → 读 JSONL<br>
+          3. orch.restoreInstances(instances)<br>
+          4. 暴露 pi.__workflowRun<br>
+          5. 设置 orch.onCompletion 回调
+        </div>
+      </div>
+
+      <div class="branch-col">
+        <div class="node n-event">
+          session_tree
+          <span class="file">分支切换时清理旧 orchestrator</span>
+        </div>
+      </div>
+
+      <div class="branch-col">
+        <div class="node n-event">
+          session_shutdown
+          <span class="file">暂停所有 running → 删除 orchestrator</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="height: 24px"></div>
+
+    <!-- Tool Registration -->
+    <div class="callout" style="text-align:center; width:100%">
+      <strong>注册的 4 个 Tool</strong>
+    </div>
+
+    <div class="branch" style="margin-top: 8px">
+      <div class="branch-col">
+        <div class="node n-tool">
+          workflow
+          <span class="file">pause / resume / abort / status</span>
+        </div>
+        <div class="arrow" style="height:12px"></div>
+        <div class="callout">
+          通过 sessionId 查找 orchestrator<br>
+          委托给 orch.pause/resume/abort
+        </div>
+      </div>
+
+      <div class="branch-col">
+        <div class="node n-tool">
+          workflow-run
+          <span class="file">name + mode + args → 启动 workflow</span>
+        </div>
+        <div class="arrow" style="height:12px"></div>
+        <div class="callout">
+          loadWorkflows() → 匹配/模糊搜索<br>
+          ctx.ui.confirm() → orch.run()<br>
+          mode=force 跳过确认
+        </div>
+      </div>
+
+      <div class="branch-col">
+        <div class="node n-tool">
+          workflow-generate
+          <span class="file">AI 生成脚本 → .tmp 目录</span>
+        </div>
+        <div class="arrow" style="height:12px"></div>
+        <div class="callout">
+          ESM 检查 → 语法检查 → 名称冲突<br>
+          → writeFileSync → invalidateCache
+        </div>
+      </div>
+
+      <div class="branch-col">
+        <div class="node n-tool">
+          workflow-lint
+          <span class="file">静态检查脚本 API 误用</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="height: 24px"></div>
+
+    <!-- Commands -->
+    <div class="callout" style="text-align:center; width:100%">
+      <strong>注册的 2 个 Command</strong>
+    </div>
+    <div class="branch" style="margin-top: 8px">
+      <div class="branch-col">
+        <div class="node n-ext">
+          /workflow run|list|abort|save|delete
+          <span class="file">commands.ts</span>
+        </div>
+      </div>
+      <div class="branch-col">
+        <div class="node n-ext">
+          /workflows
+          <span class="file">交互式全屏面板</span>
+        </div>
+        <div class="arrow" style="height:12px"></div>
+        <div class="node n-view">
+          WorkflowsView
+          <span class="file">views/WorkflowsView.ts</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- SECTION 2: Workflow 脚本执行链路 -->
+<!-- ═══════════════════════════════════════════ -->
+
+<div class="section">
+  <div class="section-title">链路 2：Workflow 脚本执行链路</div>
+  <div class="section-desc">从 orch.run() 到 Worker 线程创建、agent() 调用、子进程执行、结果返回的完整生命周期</div>
+
+  <div class="flow">
+    <!-- Step 1: Entry -->
+    <div class="seq-row">
+      <div class="node n-tool" style="min-width:160px">
+        workflow-run<br>execute()
+        <span class="file">index.ts</span>
+      </div>
+      <span class="seq-arrow">→</span>
+      <div class="node n-core" style="min-width:160px">
+        orch.run(name, args)
+        <span class="file">orchestrator.ts</span>
+      </div>
+      <span class="seq-arrow">→</span>
+      <div class="node n-infra" style="min-width:160px">
+        getWorkflow(name)
+        <span class="file">config-loader.ts</span>
+      </div>
+      <span class="seq-arrow">→</span>
+      <div class="node n-infra" style="min-width:160px">
+        lintScript(source)
+        <span class="file">script-lint.ts</span>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>orch.run() 做了什么：</strong><br>
+      ① config-loader 读取 .pi/workflows/ 下的 JS 脚本<br>
+      ② script-lint 静态检查 API 误用（outputSchema、result.output 等）<br>
+      ③ strip export → createInstance → 设置 runMetaMap<br>
+      ④ 创建 AgentPool（每个 run 独立）<br>
+      ⑤ startWorker() 启动 Worker 线程<br>
+      ⑥ scheduleTimeBudgetCheck（如果设了 time budget）
+    </div>
+
+    <div style="height: 8px"></div>
+
+    <!-- Step 2: Worker Creation -->
+    <div class="seq-row">
+      <div class="node n-core" style="min-width:180px">
+        startWorker()
+        <span class="file">orchestrator.ts</span>
+      </div>
+      <span class="seq-arrow">→</span>
+      <div class="node n-proc" style="min-width:240px">
+        buildWorkerScript(userScript)
+        <span class="file">worker-script.ts</span>
+      </div>
+      <span class="seq-arrow">→</span>
+      <div class="node n-proc" style="min-width:200px">
+        new Worker(code, { eval: true })
+        <span class="file">node:worker_threads</span>
+      </div>
+    </div>
+
+    <div style="height: 12px"></div>
+
+    <!-- Worker Box -->
+    <div class="worker-box" style="align-self:center">
+      <div class="worker-title">Worker Thread (隔离执行)</div>
+      <div class="worker-flow">
+        <div class="node n-proc" style="min-width:320px">
+          注入全局函数: agent() / parallel() / pipeline() / phase() / log()
+          <span class="file">$ARGS / $WORKSPACE / $BUDGET 注入</span>
+        </div>
+        <div class="arrow" style="height:12px"></div>
+        <div class="node n-proc" style="min-width:320px">
+          执行用户脚本 (userScript)
+          <span class="file">支持 module.exports.execute 和 top-level await</span>
+        </div>
+        <div class="arrow" style="height:12px"></div>
+
+        <div class="callout" style="width:100%">
+          <strong>agent() 调用协议：</strong><br>
+          ① 检查 callCache → 有缓存直接返回<br>
+          ② parentPort.postMessage({ type: "agent-call", callId, opts })<br>
+          ③ new Promise() 等待 Main Thread 回传结果<br>
+          ④ 收到 agent-result → resolve/promise
+        </div>
+
+        <div style="height: 8px"></div>
+        <div class="seq-row">
+          <div class="node n-proc" style="min-width:140px">
+            agent("prompt")
+          </div>
+          <span class="seq-arrow">→</span>
+          <div class="node n-proc" style="min-width:140px">
+            parallel([...])
+          </div>
+          <span class="seq-arrow">→</span>
+          <div class="node n-proc" style="min-width:140px">
+            pipeline([...])
+          </div>
+        </div>
+
+        <div style="height: 8px"></div>
+        <div class="node n-proc" style="min-width:320px">
+          return result → postMessage({ type: "return", runId, result })
+          <span class="file">脚本执行完毕</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="height: 12px"></div>
+
+    <!-- Step 3: Main Thread Processing -->
+    <div class="callout" style="text-align:center; width:100%">
+      <strong>Main Thread 消息路由</strong>
+    </div>
+
+    <div class="branch" style="margin-top: 8px">
+      <div class="branch-col">
+        <div class="node n-core">
+          agent-call 消息
+          <span class="file">handleWorkerMessage</span>
+        </div>
+        <div class="arrow" style="height:12px"></div>
+        <div class="node n-core">
+          handleAgentCall()
+          <span class="file">orchestrator.ts</span>
+        </div>
+        <div class="arrow" style="height:12px"></div>
+
+        <div class="callout" style="font-size:11px">
+          ① callCache 命中? → 直接回传<br>
+          ② resolveAgentOpts() → 解析 agent/skill/schema<br>
+          ③ resolveModel() → 模型选择<br>
+          ④ 记录 ExecutionTraceNode<br>
+          ⑤ executeWithRetry() → pool.enqueue()
+        </div>
+      </div>
+
+      <div class="branch-col">
+        <div class="node n-data">
+          return 消息
+          <span class="file">脚本完成</span>
+        </div>
+        <div class="arrow" style="height:12px"></div>
+        <div class="callout" style="font-size:11px">
+          instance.scriptResult = result<br>
+          transitionStatus("completed")<br>
+          persistState() → JSONL<br>
+          onCompletion?.() → 通知
+        </div>
+      </div>
+
+      <div class="branch-col">
+        <div class="node n-data">
+          error 消息
+          <span class="file">脚本错误</span>
+        </div>
+        <div class="arrow" style="height:12px"></div>
+        <div class="callout" style="font-size:11px">
+          handleScriptError()<br>
+          重试 ≤ 3 次 (指数退避)<br>
+          超过 → transitionStatus("failed")
+        </div>
+      </div>
+    </div>
+
+    <div style="height: 20px"></div>
+
+    <!-- Step 4: Agent Pool Execution -->
+    <div class="callout" style="text-align:center; width:100%">
+      <strong>Agent 执行：AgentPool → pi 子进程</strong>
+    </div>
+
+    <div class="seq-row" style="margin-top: 8px">
+      <div class="node n-core" style="min-width:140px">
+        executeWithRetry()
+        <span class="file">orchestrator.ts</span>
+      </div>
+      <span class="seq-arrow">→</span>
+      <div class="node n-infra" style="min-width:140px">
+        pool.enqueue(opts, signal)
+        <span class="file">agent-pool.ts</span>
+      </div>
+      <span class="seq-arrow">→</span>
+      <div class="node n-infra" style="min-width:160px">
+        spawnAndParse()
+        <span class="file">pi --mode json -p</span>
+      </div>
+      <span class="seq-arrow">→</span>
+      <div class="node n-proc" style="min-width:160px">
+        pi 子进程
+        <span class="file">child_process.spawn</span>
+      </div>
+    </div>
+
+    <div style="height: 8px"></div>
+
+    <div class="callout" style="width:100%">
+      <strong>AgentPool 细节：</strong><br>
+      • 并发上限: maxConcurrency (默认 4)<br>
+      • 每个 agent 调用 → 独立 pi --mode json 子进程<br>
+      • buildArgs(): --mode json -p [--model] [--skill] [--append-system-prompt]<br>
+      • 流式解析 stdout JSONL: session → tool_execution_start → tool_execution_end → message_end<br>
+      • structured-output: 通过 PI_WORKFLOW_SCHEMA 环境变量激活<br>
+      • AbortSignal → SIGKILL 子进程<br>
+      • 24h 安全超时防僵尸进程
+    </div>
+
+    <div style="height: 8px"></div>
+
+    <!-- Step 5: Result Back -->
+    <div class="seq-row">
+      <div class="node n-proc" style="min-width:140px">
+        pi 子进程<br>JSONL stdout
+      </div>
+      <span class="seq-arrow">→</span>
+      <div class="node n-infra" style="min-width:160px">
+        processJsonlEvent()
+        <span class="file">agent-pool.ts</span>
+      </div>
+      <span class="seq-arrow">→</span>
+      <div class="node n-infra" style="min-width:140px">
+        AgentResult
+        <span class="file">output + usage + parsedOutput</span>
+      </div>
+      <span class="seq-arrow">→</span>
+      <div class="node n-core" style="min-width:140px">
+        callCache.set()
+        <span class="file">orchestrator.ts</span>
+      </div>
+      <span class="seq-arrow">→</span>
+      <div class="node n-proc" style="min-width:140px">
+        postMessage<br>→ Worker
+      </div>
+    </div>
+
+    <div style="height: 8px"></div>
+    <div class="callout" style="width:100%">
+      <strong>结果回传链路：</strong><br>
+      pi 子进程 JSONL → processJsonlEvent() 解析 → AgentResult → callCache 缓存 → Worker 线程 agent() Promise resolve<br>
+      → 脚本继续执行下一步 → ... → 脚本 return → Worker 发送 return 消息 → orchestrator 标记 completed
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- SECTION 3: 文件依赖关系 -->
+<!-- ═══════════════════════════════════════════ -->
+
+<div class="section">
+  <div class="section-title">文件依赖关系图</div>
+  <div class="section-desc">每个源文件的核心职责和 import 依赖</div>
+
+  <div class="dep-grid">
+    <div class="dep-card">
+      <div class="name" style="color:#6ee7b7">index.ts</div>
+      <div class="lines">826 行</div>
+      <div class="imports">
+        → orchestrator.ts<br>
+        → state.ts<br>
+        → commands.ts<br>
+        → tool-generate.ts<br>
+        → config-loader.ts<br>
+        → script-lint.ts<br>
+        → worker-script.ts
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#fca5a5">orchestrator.ts</div>
+      <div class="lines">986 行</div>
+      <div class="imports">
+        → agent-pool.ts<br>
+        → agent-discovery.ts<br>
+        → agent-opts-resolver.ts<br>
+        → config-loader.ts<br>
+        → execution-trace.ts<br>
+        → model-resolver.ts<br>
+        → script-lint.ts<br>
+        → state.ts<br>
+        → orchestrator-events.ts<br>
+        → worker-script.ts<br>
+        → orchestrator-budget.ts
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#5eead4">agent-pool.ts</div>
+      <div class="lines">662 行</div>
+      <div class="imports">
+        → state.ts (ToolCallEntry)<br>
+        child_process.spawn<br>
+        pi --mode json 子进程
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#5eead4">worker-script.ts</div>
+      <div class="lines">261 行</div>
+      <div class="imports">
+        → state.ts (AgentResult)<br>
+        注入: agent/parallel/pipeline/phase/log<br>
+        $ARGS/$WORKSPACE/$BUDGET
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#d8b4fe">state.ts</div>
+      <div class="lines">301 行</div>
+      <div class="imports">
+        纯数据模型，无外部依赖<br>
+        WorkflowInstance / WorkflowStatus<br>
+        ExecutionTraceNode / AgentResult
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#5eead4">config-loader.ts</div>
+      <div class="lines">321 行</div>
+      <div class="imports">
+        无内部依赖<br>
+        扫描 .pi/workflows/ + ~/.pi/agent/workflows/<br>
+        regex 提取 meta (不执行代码)
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#5eead4">agent-discovery.ts</div>
+      <div class="lines">263 行</div>
+      <div class="imports">
+        无内部依赖<br>
+        扫描 project/user/package/local<br>
+        解析 YAML frontmatter
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#5eead4">agent-opts-resolver.ts</div>
+      <div class="lines">175 行</div>
+      <div class="imports">
+        → agent-discovery.ts<br>
+        → agent-pool.ts (AgentCallOpts)<br>
+        写临时文件: systemPrompt + schema
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#93c5fd">commands.ts</div>
+      <div class="lines">540 行</div>
+      <div class="imports">
+        → config-loader.ts<br>
+        → orchestrator.ts<br>
+        → state.ts<br>
+        → views/WorkflowsView.ts
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#93c5fd">tool-generate.ts</div>
+      <div class="lines">182 行</div>
+      <div class="imports">
+        → config-loader.ts<br>
+        写入 .pi/workflows/.tmp/
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#5eead4">script-lint.ts</div>
+      <div class="lines">207 行</div>
+      <div class="imports">
+        无内部依赖<br>
+        静态分析: outputSchema/result.output<br>
+        file-based state passing
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#5eead4">model-resolver.ts</div>
+      <div class="lines">53 行</div>
+      <div class="imports">
+        无内部依赖<br>
+        resolveModel(opts) → 模型选择
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#5eead4">orchestrator-events.ts</div>
+      <div class="lines">135 行</div>
+      <div class="imports">
+        → state.ts (WorkflowStatus)<br>
+        WorkflowEventEmitter: subscribe/emit<br>
+        tick 间隔 1s
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#5eead4">orchestrator-budget.ts</div>
+      <div class="lines">95 行</div>
+      <div class="imports">
+        → state.ts<br>
+        checkBudget() + scheduleTimeBudgetCheck()<br>
+        90% 预警 + 超限终止
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#5eead4">execution-trace.ts</div>
+      <div class="lines">229 行</div>
+      <div class="imports">
+        → state.ts (ExecutionTraceNode)<br>
+        appendTraceNode() → pi.appendEntry
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#5eead4">budget.ts</div>
+      <div class="lines">95 行</div>
+      <div class="imports">
+        → state.ts<br>
+        checkBudget() + scheduleTimeBudgetCheck()<br>
+        90% 预警 + 超限终止
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#bef264">views/WorkflowsView.ts</div>
+      <div class="lines">525 行</div>
+      <div class="imports">
+        → orchestrator.ts<br>
+        → views/format.ts<br>
+        pi-tui 组件渲染
+      </div>
+    </div>
+
+    <div class="dep-card">
+      <div class="name" style="color:#bef264">views/format.ts</div>
+      <div class="lines">218 行</div>
+      <div class="imports">
+        无内部依赖<br>
+        格式化工具函数
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- SECTION 4: 核心数据流 -->
+<!-- ═══════════════════════════════════════════ -->
+
+<div class="section">
+  <div class="section-title">核心数据流总结</div>
+  <div class="section-desc">两条主链路的精简路径</div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+    <!-- Chain 1 -->
+    <div class="callout" style="margin:0">
+      <strong style="color:#6ee7b7">链路 1: Pi → Workflow Tool</strong><br><br>
+      <code style="color:#888">
+        Pi Runtime<br>
+        &nbsp;&nbsp;↓ 加载扩展<br>
+        workflowExtension(pi)<br>
+        &nbsp;&nbsp;↓ session_start<br>
+        new WorkflowOrchestrator(pi, ctx)<br>
+        &nbsp;&nbsp;↓ reconstructState<br>
+        AgentRegistry.discoverAll()<br>
+        &nbsp;&nbsp;↓ 注册完成<br>
+        4 Tools + 2 Commands 可用<br>
+        &nbsp;&nbsp;↓ 用户调用<br>
+        workflow-run execute()<br>
+        &nbsp;&nbsp;↓ loadWorkflows + confirm<br>
+        orch.run(name, args)
+      </code>
+    </div>
+
+    <!-- Chain 2 -->
+    <div class="callout" style="margin:0">
+      <strong style="color:#f9a8d4">链路 2: 脚本执行</strong><br><br>
+      <code style="color:#888">
+        orch.run()<br>
+        &nbsp;&nbsp;↓ config-loader + lint<br>
+        buildWorkerScript(source)<br>
+        &nbsp;&nbsp;↓ new Worker(eval)<br>
+        Worker Thread 运行脚本<br>
+        &nbsp;&nbsp;↓ agent() 调用<br>
+        postMessage → Main Thread<br>
+        &nbsp;&nbsp;↓ handleAgentCall<br>
+        resolveAgentOpts + resolveModel<br>
+        &nbsp;&nbsp;↓ pool.enqueue<br>
+        pi --mode json 子进程<br>
+        &nbsp;&nbsp;↓ JSONL stdout 解析<br>
+        AgentResult → callCache<br>
+        &nbsp;&nbsp;↓ postMessage 回 Worker<br>
+        agent() Promise resolve<br>
+        &nbsp;&nbsp;↓ 脚本 return<br>
+        transitionStatus("completed")<br>
+        &nbsp;&nbsp;↓ persistState + notify
+      </code>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

@@ -28,7 +28,7 @@ const TEST_TMP_WORKFLOW = {
   source: "tmp",
 };
 
-vi.mock("../src/config-loader.js", () => ({
+vi.mock("../src/infra/config-loader.js", () => ({
   loadWorkflows: vi.fn().mockResolvedValue([TEST_SAVED_WORKFLOW, TEST_TMP_WORKFLOW]),
   getWorkflow: vi.fn(),
   invalidateCache: vi.fn(),
@@ -40,6 +40,7 @@ vi.mock("../src/orchestrator.js", () => ({
     this.list = mockList;
     this.getInstance = vi.fn().mockReturnValue(undefined);
     this.restoreInstances = vi.fn();
+    this.reconstructAndRestore = vi.fn();
     this.getAgentCount = vi.fn().mockReturnValue(0);
     this.getAgents = vi.fn().mockReturnValue([]);
     this.pause = vi.fn();
@@ -51,17 +52,12 @@ vi.mock("../src/orchestrator.js", () => ({
   }),
 }));
 
-vi.mock("../src/commands.js", () => ({
+vi.mock("../src/interface/commands.js", () => ({
   registerWorkflowCommands: vi.fn(),
   sendCompletionNotification: vi.fn(),
 }));
 
-vi.mock("../src/widget.js", () => ({
-  renderWorkflowList: vi.fn().mockReturnValue({}),
-  registerWorkflowShortcuts: vi.fn(),
-}));
-
-vi.mock("../src/tool-generate.js", () => ({
+vi.mock("../src/interface/tool-generate.js", () => ({
   registerGenerateTool: vi.fn(),
 }));
 
