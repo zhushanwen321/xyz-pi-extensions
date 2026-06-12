@@ -38,7 +38,7 @@ export function continuationPrompt(state: GoalRuntimeState): string {
 	// Task summary (only IDs, not full descriptions — descriptions in before_agent_start)
 	const taskLine = total > 0
 		? `Tasks: ${completedCount}/${total}${incomplete.length > 0 ? ` (remaining: ${incomplete.map(t => `#${t.id}`).join(",")})` : " ✓"}`
-		: "Tasks: Not created. Call create_tasks immediately.";
+		: "Tasks: Not created. First check if the objective is already met — if yes, call cancel_goal with reason. Otherwise call create_tasks immediately.";
 
 	return (
 		`<goal_context>\n` +

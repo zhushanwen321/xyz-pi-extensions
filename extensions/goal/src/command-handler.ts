@@ -51,6 +51,7 @@ export async function handleGoalCommand(
 		case "resume": return handleResume(pi, session, ctx);
 		case "history": return handleHistory(ctx);
 		case "clear": return handleClear(pi, session, ctx);
+		case "abort": return handleAbort(pi, session, ctx);
 		case "update": return handleUpdate(pi, session, parsed.objective, ctx);
 		case "set": return handleSet(pi, session, parsed.objective ?? "", parsed.budget, ctx);
 	}
@@ -186,6 +187,26 @@ function handleClear(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionConte
 	persistGoalState(pi, session, ctx);
 	clearGoalSession(session, ctx);
 	ctx.ui.notify("Goal cleared.", "info");
+}
+
+// ── /goal abort ──────────────────────────────────────
+
+function handleAbort(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionContext): void {
+	if (!session.state) { ctx.ui.notify("Goal mode not active.", "info"); return; }
+	if (isTerminalStatus(session.state.status)) {
+		ctx.ui.notify(`Goal is already in terminal state (${session.state.status}).`, "warning");
+		return;
+	}
+	if (session.state.tasks && session.state.tasks.length > 0) {
+		ctx.ui.notify(`Cannot abort: ${session.state.tasks.length} tasks already created. Use /goal clear to force cancel.`, "warning");
+		return;
+	}
+	session.state.status = "cancelled";
+	session.state.completedAtTurnIndex = session.state.currentTurnIndex;
+	writeGoalHistoryEntry(pi, session);
+	persistGoalState(pi, session, ctx);
+	clearGoalSession(session, ctx);
+	ctx.ui.notify("Goal aborted: no work needed.", "info");
 }
 
 // ── /goal update ──────────────────────────────────────

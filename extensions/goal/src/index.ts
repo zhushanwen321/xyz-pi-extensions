@@ -218,6 +218,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 			"[Cancel] To cancel a task, use update_tasks with status=cancelled. Cancelled tasks do not block goal completion",
 			"[Forbidden] Do not mark tasks as completed without evidence, and do not call complete_goal without evidence",
 			"[Forbidden] Do not force task completion when the user explicitly wants to exit — call cancel_goal directly",
+			"[Quick exit] When no tasks have been created and you determine the objective is already met, call cancel_goal with cancelReason instead of creating tasks",
 			"[Forbidden] Do not re-call create_tasks to overwrite existing incomplete tasks — use add_tasks to append",
 			"[Subtask] For fine-grained step tracking in Goal mode, use add_subtasks — do not use the todo tool",
 			"[Verification] Each task should have a concrete verification method. Use verifications param in create_tasks/add_tasks. Templates:",
@@ -314,7 +315,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("goal", {
 		description:
-			"Goal-driven mode: /goal <objective> [--tokens N] [--timeout N] [--max-turns N] | /goal pause | /goal resume | /goal clear | /goal update <new-objective> | /goal status | /goal history",
+			"Goal-driven mode: /goal <objective> [--tokens N] [--timeout N] [--max-turns N] | /goal pause | /goal resume | /goal abort | /goal clear | /goal update <new-objective> | /goal status | /goal history",
 		handler: async (args: string | undefined, ctx: ExtensionCommandContext) => {
 			await handleGoalCommand(pi, session, args, ctx);
 		},

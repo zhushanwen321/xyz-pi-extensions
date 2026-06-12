@@ -6,7 +6,7 @@ import { MAX_STALL_CAP, MAX_TURNS_CAP, UPDATE_PREFIX_LENGTH } from "./constants"
 import type { BudgetConfig } from "./state";
 
 export interface GoalCommandArgs {
-	action: "set" | "status" | "pause" | "resume" | "clear" | "update" | "history";
+	action: "set" | "status" | "pause" | "resume" | "clear" | "abort" | "update" | "history";
 	objective?: string;
 	budget?: Partial<BudgetConfig>;
 }
@@ -27,6 +27,9 @@ export function parseGoalArgs(raw: string): GoalCommandArgs {
 	}
 	if (trimmed === "clear") {
 		return { action: "clear" };
+	}
+	if (trimmed === "abort") {
+		return { action: "abort" };
 	}
 	if (trimmed === "history") {
 		return { action: "history" };

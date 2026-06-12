@@ -220,7 +220,7 @@ function handleNoTasksOrMaxTurns(
 	}
 	sendGoalContextMessage(
 		pi,
-		`No task list created yet. Call goal_manager's create_tasks immediately to decompose the work into verifiable task steps.` +
+		`No task list created yet. First check if the objective is already satisfied — if yes, call goal_manager's cancel_goal with cancelReason. Otherwise call create_tasks immediately to decompose the work into verifiable task steps.` +
 			`\n\nObjective: ${state.objective}`,
 		"followUp",
 	);
