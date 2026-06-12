@@ -11,6 +11,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 /** Minimal agent info extracted from .md frontmatter */
@@ -26,10 +27,11 @@ interface AgentEntry {
 function parseAgentFrontmatter(content: string): AgentEntry | null {
 	if (!content.startsWith("---")) return null;
 
-	const endIndex = content.indexOf("\n---", 3);
+	const FRONTMATTER_OPEN_LEN = 3;
+	const endIndex = content.indexOf("\n---", FRONTMATTER_OPEN_LEN);
 	if (endIndex === -1) return null;
 
-	const block = content.slice(3, endIndex);
+	const block = content.slice(FRONTMATTER_OPEN_LEN, endIndex);
 	let name = "";
 	let description = "";
 
@@ -79,8 +81,9 @@ function loadAgentsFromDir(dir: string): AgentEntry[] {
 			if (agent) {
 				entries.push(agent);
 			}
-		} catch {
-			// Skip unreadable files
+		} catch (err) {
+			// Individual file read failure should not block the entire agent list injection
+			console.error(`[subagent-list-injector] skip unreadable file ${filePath}:`, err);
 		}
 	}
 
