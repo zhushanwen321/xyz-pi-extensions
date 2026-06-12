@@ -20,12 +20,45 @@ from extractors import run_extractors
 from rules import run_rules
 
 
-def load_sessions(since_days: int = 1, input_file: str | None = None) -> list[dict]:
+def compute_date_range(
+    since_days: int = 1,
+    target_date: str | None = None,
+    now: datetime | None = None,
+) -> tuple[str, str]:
+    """计算 session 加载的日期范围 [cutoff_date, end_date]。
+
+    使用日历日字符串比较，避免 off-by-one：
+    旧 bug 用精确时间戳 cutoff = now - 1天，文件名日期解析为午夜 00:00 小于 cutoff 被误排除。
+
+    Args:
+        since_days: 加载最近 N 天（日历日）。
+        target_date: 指定某一天（优先级高于 since_days）。
+        now: 当前时间（可注入，用于测试）。
+
+    Returns:
+        (cutoff_date, end_date) 字符串对，格式 YYYY-MM-DD。
+    """
+    if target_date:
+        return target_date, target_date
+    if now is None:
+        now = datetime.now()
+    cutoff_date = (now - timedelta(days=since_days)).strftime("%Y-%m-%d")
+    end_date = now.strftime("%Y-%m-%d")
+    return cutoff_date, end_date
+
+
+def load_sessions(
+    since_days: int = 1,
+    input_file: str | None = None,
+    target_date: str | None = None,
+) -> list[dict]:
     """加载 session JSONL 数据。
 
     Args:
-        since_days: 加载最近 N 天的数据。
-        input_file: 指定输入文件路径（优先级高于 since_days）。
+        since_days: 加载最近 N 天的数据（日历日比较）。
+        input_file: 指定输入文件路径（优先级最高）。
+        target_date: 指定分析某一天的数据（ISO 日期，如 "2026-06-08"）。
+            优先级高于 since_days，加载 target_date 当天的 session。
 
     Returns:
         session 列表。
@@ -39,14 +72,17 @@ def load_sessions(since_days: int = 1, input_file: str | None = None) -> list[di
         print(f"[evolve] Warning: Sessions directory not found: {sessions_dir}")
         return []
 
-    cutoff = datetime.now() - timedelta(days=since_days)
+    # 日历日比较：用日期字符串而非精确时间戳
+    # 避免 off-by-one：file_date "2026-06-07 00:00" vs cutoff "2026-06-07 08:00" 误排除
+    cutoff_date, end_date = compute_date_range(since_days, target_date)
+
     sessions = []
 
     for session_file in sessions_dir.rglob("*.jsonl"):
         try:
-            # 从文件名解析日期
-            file_date = datetime.fromisoformat(session_file.stem[:10])
-            if file_date < cutoff:
+            file_date_str = session_file.stem[:10]
+            # 字符串日期比较：file_date >= cutoff 且 file_date <= end_date
+            if file_date_str < cutoff_date or file_date_str > end_date:
                 continue
         except (ValueError, IndexError):
             # 文件名不是日期格式，跳过
@@ -160,6 +196,7 @@ def generate_report(sessions: list[dict], format: str = "json") -> dict:
 def main():
     parser = argparse.ArgumentParser(description="Evolve Daily Analyzer")
     parser.add_argument("--since", type=str, default="1d", help="分析最近 N 天的数据（如 1d, 7d）")
+    parser.add_argument("--date", type=str, default=None, help="分析指定日期的数据（如 2026-06-08），优先级高于 --since")
     parser.add_argument("--input", type=str, help="指定输入文件路径")
     parser.add_argument("--format", type=str, default="json", choices=["json"], help="输出格式")
     parser.add_argument("--output", type=str, help="输出文件路径")
@@ -175,10 +212,23 @@ def main():
         print(f"[evolve] Error: Invalid --since value: {args.since}")
         sys.exit(1)
 
+    # 验证 --date 参数格式
+    target_date = None
+    if args.date:
+        try:
+            datetime.fromisoformat(args.date)
+            target_date = args.date
+        except ValueError:
+            print(f"[evolve] Error: Invalid --date value: {args.date}, expected ISO date (e.g. 2026-06-08)")
+            sys.exit(1)
+
     # 加载 sessions
     if args.verbose:
-        print(f"[evolve] Loading sessions (since {since_days} days)...")
-    sessions = load_sessions(since_days=since_days, input_file=args.input)
+        if target_date:
+            print(f"[evolve] Loading sessions for date {target_date}...")
+        else:
+            print(f"[evolve] Loading sessions (since {since_days} days)...")
+    sessions = load_sessions(since_days=since_days, input_file=args.input, target_date=target_date)
 
     if not sessions:
         print("[evolve] Warning: No sessions found")
