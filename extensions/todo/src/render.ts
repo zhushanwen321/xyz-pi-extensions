@@ -17,6 +17,12 @@ import {
 const MAX_COLLAPSED_ITEMS = 5;
 export const FALLBACK_TERM_WIDTH = 80;
 
+/**
+ * Pi 对单个 extension widget 的最大字符串行数为 10（InteractiveMode.MAX_WIDGET_LINES）。
+ * 扩展侧保守使用 max - 1 = 9 行作为阈值，超过时切换为双列布局，避免触发截断。
+ */
+const WIDGET_MAX_LINES = 9;
+
 /** 垂直分割线视觉宽度（" │ "） */
 const DIVIDER_VISUAL_WIDTH = 3;
 
@@ -59,6 +65,17 @@ export function renderWidgetItem(t: Todo, th: Theme): string {
 	return `${mark} ${id} ${text}`;
 }
 
+/** 单列布局渲染（widget 少量任务时使用） */
+export function renderSingleColumn(
+	todos: Todo[],
+	th: Theme,
+	termWidth: number,
+	indent: string,
+): string[] {
+	const maxWidth = Math.max(1, termWidth - 2); // 预留给 Pi Text 组件的左右 padding
+	return todos.map((t) => truncateToWidth(indent + renderWidgetItem(t, th), maxWidth));
+}
+
 /** 双列布局渲染，供 widget 和 component 复用 */
 export function renderDualColumn(
 	todos: Todo[],
@@ -81,19 +98,31 @@ export function renderDualColumn(
 	return lines;
 }
 
-/** 渲染 widget 行（双列布局） */
-export function renderWidgetLines(todoList: Todo[], th: Theme): string[] {
+/** 渲染 widget 行（根据任务数自动选择单列或双列布局） */
+export function renderWidgetLines(
+	todoList: Todo[],
+	th: Theme,
+	termWidth?: number,
+): string[] {
 	if (todoList.length === 0) return [];
 
+	const width = termWidth ?? (process.stdout.columns || FALLBACK_TERM_WIDTH);
 	const lines: string[] = [];
 	const completed = todoList.filter((t) => getDisplayStatus(t) === "completed").length;
 	const total = todoList.length;
 
 	lines.push(th.fg("accent", "\u2611") + th.fg("muted", ` ${completed}/${total}`));
 
-	// 双列布局
-	for (const line of renderDualColumn(todoList, th, process.stdout.columns || FALLBACK_TERM_WIDTH, "  ")) {
-		lines.push(line);
+	// 标题占 1 行；任务部分超过 WIDGET_MAX_LINES - 1 时启用双列
+	const indent = "  ";
+	if (todoList.length <= WIDGET_MAX_LINES - 1) {
+		for (const line of renderSingleColumn(todoList, th, width, indent)) {
+			lines.push(line);
+		}
+	} else {
+		for (const line of renderDualColumn(todoList, th, width, indent)) {
+			lines.push(line);
+		}
 	}
 
 	return lines;

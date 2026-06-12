@@ -9,6 +9,8 @@ import {
 	updateTodos,
 	VALID_STATUSES,
 } from "../model";
+import { renderDualColumn, renderSingleColumn, renderWidgetLines } from "../render";
+import type { Theme } from "@mariozechner/pi-coding-agent";
 
 // ── 数据模型 + 向后兼容 ──────────────────────────────
 
@@ -213,6 +215,87 @@ describe("buildRender", () => {
 	it("should handle empty list", () => {
 		const render = buildRender([]);
 		expect(render!.summary).toBe("0/0 completed");
+	});
+});
+
+// ── widget 渲染布局 ────────────────────────────────
+
+const mockTheme = {
+	fg: (_color: string, text: string) => text,
+	bg: (_color: string, text: string) => text,
+	bold: (text: string) => text,
+	italic: (text: string) => text,
+	underline: (text: string) => text,
+	inverse: (text: string) => text,
+	strikethrough: (text: string) => text,
+	getFgAnsi: (_color: string) => "",
+	getBgAnsi: (_color: string) => "",
+	getColorMode: () => "truecolor" as const,
+	getThinkingBorderColor: () => (text: string) => text,
+	getBashModeBorderColor: () => (text: string) => text,
+} as unknown as Theme;
+
+describe("widget rendering", () => {
+	it("should render empty list as empty widget", () => {
+		expect(renderWidgetLines([], mockTheme, 80)).toEqual([]);
+	});
+
+	it("should use single column for 3 tasks", () => {
+		const todos: Todo[] = [
+			{ id: 1, text: "A", status: "pending" },
+			{ id: 2, text: "B", status: "in_progress" },
+			{ id: 3, text: "C", status: "completed" },
+		];
+		const lines = renderWidgetLines(todos, mockTheme, 80);
+		expect(lines.length).toBe(4); // 1 header + 3 items
+		expect(lines[0]).toContain("1/3");
+		expect(lines[1]).toContain("#1");
+		expect(lines[2]).toContain("#2");
+		expect(lines[3]).toContain("#3");
+	});
+
+	it("should use single column up to 8 tasks", () => {
+		const todos: Todo[] = Array.from({ length: 8 }, (_, i) => ({
+			id: i + 1,
+			text: `Task ${i + 1}`,
+			status: "pending" as const,
+		}));
+		const lines = renderWidgetLines(todos, mockTheme, 80);
+		expect(lines.length).toBe(9); // 1 header + 8 items
+		for (let i = 1; i < lines.length; i++) {
+			expect(lines[i]).toContain(`#${i}`);
+		}
+	});
+
+	it("should switch to dual column for 9 tasks", () => {
+		const todos: Todo[] = Array.from({ length: 9 }, (_, i) => ({
+			id: i + 1,
+			text: `Task ${i + 1}`,
+			status: "pending" as const,
+		}));
+		const lines = renderWidgetLines(todos, mockTheme, 80);
+		expect(lines.length).toBe(6); // 1 header + ceil(9/2)=5 rows
+		expect(lines[0]).toContain("0/9");
+	});
+
+	it("should keep dual column within Pi widget max lines for 18 tasks", () => {
+		const todos: Todo[] = Array.from({ length: 18 }, (_, i) => ({
+			id: i + 1,
+			text: `Task ${i + 1}`,
+			status: "pending" as const,
+		}));
+		const lines = renderWidgetLines(todos, mockTheme, 80);
+		expect(lines.length).toBe(10); // 1 header + 9 rows
+	});
+
+	it("should keep widget lines within Pi max for 19 tasks", () => {
+		const todos: Todo[] = Array.from({ length: 19 }, (_, i) => ({
+			id: i + 1,
+			text: `Task ${i + 1}`,
+			status: "pending" as const,
+		}));
+		const lines = renderWidgetLines(todos, mockTheme, 80);
+		expect(lines.length).toBe(11); // 1 header + ceil(19/2)=10 rows; Pi truncates at 10
 	});
 });
 
