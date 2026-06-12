@@ -95,19 +95,42 @@ export async function handleWorkerExit(
 }
 
 /**
+ * Worker-emitted log entry captured by the in-worker console.* interceptor.
+ * Kept here (instead of inline) so the orchestrator can decide how to surface
+ * the messages (TUI widget, pi.sendMessage, etc.) without leaking to the
+ * input area via raw stderr.
+ */
+export interface WorkerLogEntry {
+  level: "log" | "warn" | "error" | "info";
+  message: string;
+}
+
+/**
  * Handle a workflow script-level error (type: "error" from worker).
  * Retries with exponential backoff up to MAX_WORKER_RETRIES.
+ *
+ * @param workerLogs - Captured console.* calls from the worker (never leaked
+ *                     to the input area). Surfaced to the TUI when the
+ *                     workflow reaches a terminal state.
  */
 export async function handleScriptError(
   ctx: ErrorHandlerContext,
   runId: string,
   errorMsg: string,
+  workerLogs: WorkerLogEntry[] = [],
 ): Promise<void> {
   const instance = ctx.instances.get(runId);
   if (!instance || isTerminal(instance.status)) return;
 
   const attempt = (ctx.retryCounts.get(runId) ?? 0) + 1;
   ctx.retryCounts.set(runId, attempt);
+
+  // P2-2: Always attach the latest worker logs to the instance so the
+  // TUI/result view can render them inside the widget area, not the
+  // input prompt. Stale logs from previous attempts are replaced.
+  if (workerLogs.length > 0) {
+    instance.errorLogs = workerLogs;
+  }
 
   if (attempt <= MAX_WORKER_RETRIES) {
     ctx.terminateWorker(runId);

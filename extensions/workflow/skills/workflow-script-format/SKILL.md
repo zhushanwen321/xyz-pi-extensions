@@ -112,7 +112,7 @@ while (round < MAX_ROUNDS) {
       },
       required: ['mustFix'],
     },
-    description: `review-round-${round}`,
+    description: `review-${round}`,
   });
 
   // result is already a parsed object thanks to schema

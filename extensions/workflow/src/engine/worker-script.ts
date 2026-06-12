@@ -51,10 +51,12 @@ export interface WorkerScriptData {
 
 // ── WorkerInMsg type (for main-thread consumption) ──────────
 
+export type WorkerLogEntry = { level: "log" | "warn" | "error" | "info"; message: string };
+
 export type WorkerInMsg =
   | { type: "agent-call"; callId: number; opts: { prompt: string; schema?: unknown; model?: string; scene?: string; description?: string; agent?: string }; phase?: string }
-  | { type: "return"; runId: string; result: unknown }
-  | { type: "error"; runId: string; error: string };
+  | { type: "return"; runId: string; result: unknown; workerLogs?: WorkerLogEntry[] }
+  | { type: "error"; runId: string; error: string; workerLogs?: WorkerLogEntry[] };
 
 // ── Build worker source ─────────────────────────────────────
 
@@ -65,6 +67,11 @@ export type WorkerInMsg =
 export function buildWorkerScript(userScript: string): string {
   return [
     '"use strict";',
+    '// Module-scope: accessible to the outer .catch() for surfacing logs on errors.',
+    'const _workerLogs = [];',
+    'function _pushWorkerLog(level, args) {',
+    '  try { _workerLogs.push({ level, message: args.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(" ") }); } catch (e) { /* swallow */ }',
+    '}',
     '(async () => {',
     '  const { parentPort, workerData } = require("node:worker_threads");',
     '',
@@ -72,13 +79,13 @@ export function buildWorkerScript(userScript: string): string {
     '    throw new Error("Workflow worker: parentPort is null — not running in a Worker thread");',
     '  }',
     '',
-    '  // ── Intercept console.log to avoid TUI status line overlap ──',
-    '  const _origLog = console.log;',
-    '  console.log = function (...args) {',
-    '    _origLog(...args);',
-    '    _origLog("");',
-    '    _origLog("");',
-    '  };',
+    '  // ── Intercept console.* to avoid leaking worker diagnostics into the input area ──',
+    '  // _workerLogs + _pushWorkerLog are declared at module scope (above the IIFE)',
+    '  // so the outer .catch() can include them on script errors.',
+    '  console.log = function (...args) { _pushWorkerLog("log", args); };',
+    '  console.warn = function (...args) { _pushWorkerLog("warn", args); };',
+    '  console.error = function (...args) { _pushWorkerLog("error", args); };',
+    '  console.info = function (...args) { _pushWorkerLog("info", args); };',
     '',
     '  // ── Internal state ──',
     '  let _callIdCounter = 0;',
@@ -184,7 +191,7 @@ export function buildWorkerScript(userScript: string): string {
     '    const _knownFields = new Set(["prompt", "description", "schema", "model", "scene", "label", "task", "agent", "phase", "skill"]);',
     '    const _unknownFields = Object.keys(opts).filter((k) => !_knownFields.has(k));',
     '    if (_unknownFields.length > 0) {',
-    '      console.warn("[workflow] agent() received unknown fields: " + _unknownFields.join(", ") + ". Known fields: prompt, description, schema, model, scene, label, task, agent, phase, skill");',
+    '      _pushWorkerLog("warn", ["[workflow] agent() received unknown fields: " + _unknownFields.join(", ") + ". Known fields: prompt, description, schema, model, scene, label, task, agent, phase, skill"]);',
     '    }',
     '',
     '    const callId = _callIdCounter;',
@@ -251,11 +258,11 @@ export function buildWorkerScript(userScript: string): string {
     '})().then((result) => {',
     '  const { parentPort, workerData } = require("node:worker_threads");',
     '  const runId = (workerData.args && typeof workerData.args === "object" && workerData.args._runId) || "";',
-    '  parentPort.postMessage({ type: "return", runId, result });',
+    '  parentPort.postMessage({ type: "return", runId, result, workerLogs: _workerLogs });',
     '}).catch((err) => {',
     '  const { parentPort, workerData } = require("node:worker_threads");',
     '  const runId = (workerData.args && typeof workerData.args === "object" && workerData.args._runId) || "";',
-    '  parentPort.postMessage({ type: "error", runId, error: err.message || String(err) });',
+    '  parentPort.postMessage({ type: "error", runId, error: err.message || String(err), workerLogs: _workerLogs });',
     '});',
   ].join('\n');
 }

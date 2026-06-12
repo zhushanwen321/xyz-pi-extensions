@@ -85,8 +85,10 @@ export class WorkflowEventEmitter {
     for (const listener of set) {
       try {
         listener(event);
-      } catch (err) {
-        console.error("[workflow-events] listener error:", err);
+      } catch {
+        // Listener errors are isolated: a faulty subscriber must not break
+        // the event loop. Surfacing to the terminal would leak to the
+        // input area and disrupt unrelated workflow views.
       }
     }
   }
@@ -114,8 +116,9 @@ export class WorkflowEventEmitter {
         for (const listener of listeners) {
           try {
             listener({ type: "tick", now });
-          } catch (err) {
-            console.error("[workflow-events] tick listener error:", err);
+          } catch {
+            // Tick listener errors are isolated: same rationale as emit().
+            // Surfacing to the terminal would leak to the input area.
           }
         }
       }
