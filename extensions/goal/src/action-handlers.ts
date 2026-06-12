@@ -108,8 +108,10 @@ export const handleUpdateTasks: ActionHandler = ({ state, params, pi, session, c
 	}
 	const validationErr = validateUpdateTasks(state, params.updates);
 	if (validationErr) return validationErr;
+
 	const results: string[] = [];
 	const verifyTasksToCreate: GoalTask[] = [];
+
 	for (const u of params.updates) {
 		const task = state.tasks.find((t) => t.id === u.taskId)!;
 		const prev = task.status;
@@ -118,47 +120,64 @@ export const handleUpdateTasks: ActionHandler = ({ state, params, pi, session, c
 			task.status = "completed";
 			task.evidence = u.evidence;
 			results.push(`#${task.id}: ${prev} → completed (${u.evidence})`);
-			// Auto-create verify_task if task has verification and is not already a verify_task
-			if (task.verification && !isVerifyTask(task)) {
-				const verifyId = getNextTaskId([...state.tasks, ...verifyTasksToCreate]);
-				const descPreview = task.description.length > VERIFY_DESC_PREVIEW_LEN ? task.description.slice(0, VERIFY_DESC_TRUNCATE_KEEP) + "..." : task.description;
-				const verifyTask: GoalTask = {
-					id: verifyId,
-					description: `[验证] #${task.id} ${descPreview}`,
-					status: "pending" as const,
-					verificationFor: task.id,
-					lastUpdatedTurn: state.currentTurnIndex,
-				};
-				verifyTasksToCreate.push(verifyTask);
-			}
+			const verifyTask = createVerifyTaskFor(task, state.tasks, verifyTasksToCreate);
+			if (verifyTask) verifyTasksToCreate.push(verifyTask);
 		} else {
 			task.status = u.status;
 			results.push(`#${task.id}: ${prev} → ${u.status}`);
 		}
 	}
-	// Append auto-created verify_tasks
+
 	if (verifyTasksToCreate.length > 0) {
 		state.tasks.push(...verifyTasksToCreate);
 		for (const vt of verifyTasksToCreate) {
 			results.push(`Auto-created verify_task #${vt.id}: ${vt.description}`);
 		}
 	}
+
 	persistGoalState(pi, session, ctx);
-	const resultText = `Updated ${results.length} task actions:\n${results.join("\n")}`;
-	// Inject steering to prompt AI to execute verification
 	if (verifyTasksToCreate.length > 0) {
-		const verifyLines = verifyTasksToCreate.map((vt) => {
-			const origTask = state.tasks.find((t) => t.id === vt.verificationFor)!;
-			const v = origTask.verification!;
-			return `#${vt.id}: Execute verification for #${origTask.id} — ${v.method} (expected: ${v.expected})`;
-		}).join("\n");
-		pi.sendUserMessage(
-			`[GOAL Verification] Task(s) completed. Execute verification now:\n${verifyLines}\nRun the verification command with bash, then call update_tasks to mark verify_task #${verifyTasksToCreate[0]!.id} as completed with the result as evidence.`,
-			{ deliverAs: "steer" },
-		);
+		injectVerifySteering(pi, state.tasks, verifyTasksToCreate);
 	}
-	return makeGoalResult(session, resultText);
+	return makeGoalResult(session, `Updated ${results.length} task actions:\n${results.join("\n")}`);
 };
+
+/** 为已完成且有验证配置的 task 创建对应的 verify_task。无验证或已是 verify_task 时返回 null。 */
+function createVerifyTaskFor(
+	task: GoalTask,
+	existingTasks: GoalTask[],
+	pendingVerifyTasks: GoalTask[],
+): GoalTask | null {
+	if (!task.verification || isVerifyTask(task)) return null;
+	const verifyId = getNextTaskId([...existingTasks, ...pendingVerifyTasks]);
+	const descPreview = task.description.length > VERIFY_DESC_PREVIEW_LEN
+		? task.description.slice(0, VERIFY_DESC_TRUNCATE_KEEP) + "..."
+		: task.description;
+	return {
+		id: verifyId,
+		description: `[验证] #${task.id} ${descPreview}`,
+		status: "pending" as const,
+		verificationFor: task.id,
+		lastUpdatedTurn: task.lastUpdatedTurn,
+	};
+}
+
+/** 注入 steering 提示 AI 执行验证命令并标记 verify_task 完成。 */
+function injectVerifySteering(
+	pi: ExtensionAPI,
+	allTasks: GoalTask[],
+	verifyTasks: GoalTask[],
+): void {
+	const verifyLines = verifyTasks.map((vt) => {
+		const origTask = allTasks.find((t) => t.id === vt.verificationFor)!;
+		const v = origTask.verification!;
+		return `#${vt.id}: Execute verification for #${origTask.id} — ${v.method} (expected: ${v.expected})`;
+	}).join("\n");
+	pi.sendUserMessage(
+		`[GOAL Verification] Task(s) completed. Execute verification now:\n${verifyLines}\nRun the verification command with bash, then call update_tasks to mark verify_task #${verifyTasks[0]!.id} as completed with the result as evidence.`,
+		{ deliverAs: "steer" },
+	);
+}
 
 /** 验证 update_tasks 的所有更新项；返回首个错误或 null。 */
 function validateUpdateTasks(state: GoalRuntimeState, updates: NonNullable<Static<typeof GoalManagerParams>["updates"]>) {

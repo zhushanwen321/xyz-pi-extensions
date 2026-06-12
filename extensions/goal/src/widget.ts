@@ -14,7 +14,7 @@ import {
 	SECONDS_PER_MINUTE,
 	VERIFY_METHOD_WIDGET_LEN,
 } from "./constants";
-import type { GoalRuntimeState } from "./state";
+import type { GoalRuntimeState, GoalTask } from "./state";
 import { getCompletedCount, getElapsedTimeSeconds, isVerifyTask } from "./state";
 
 /**
@@ -135,61 +135,23 @@ export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): strin
 	if (state.status === "cancelled") return [];
 
 	const total = state.tasks.length;
-
-	// Header line
 	const header = renderStatusLine(state, th);
 	const lines: string[] = [header];
 
-	// Objective (single-line + truncated if too long)
 	const objSingleLine = toSingleLine(state.objective);
 	const objDisplay = objSingleLine.length > OBJECTIVE_DISPLAY_LIMIT
 		? objSingleLine.slice(0, OBJECTIVE_TRUNCATE_KEEP) + "..."
 		: objSingleLine;
 	lines.push(th.fg("dim", `Objective: ${objDisplay}`));
 
-	// Task list
 	if (total === 0) {
 		lines.push(th.fg("dim", "  Waiting for task list creation..."));
 	} else {
 		for (const t of state.tasks) {
-			const desc = toSingleLine(t.description);
-			const isVerify = isVerifyTask(t);
-			// Show verification tag for non-verify tasks that have verification
-			const verifyTag = !isVerify && t.verification
-				? th.fg("dim", ` [验证: ${truncateText(t.verification.method, VERIFY_METHOD_WIDGET_LEN)}]`)
-				: "";
-
-			if (t.status === "completed") {
-				lines.push(`  ${th.fg("success", "✓")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}${verifyTag}`);
-			} else if (t.status === "cancelled") {
-				lines.push(`  ${th.fg("dim", "✗")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}`);
-			} else if (t.status === "in_progress") {
-				// verify_task uses ◎ icon to distinguish from normal task ●
-				const prefix = isVerify ? th.fg("accent", "◎") : th.fg("warning", "●");
-				lines.push(`  ${prefix} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}${verifyTag}`);
-			} else {
-				const prefix = isVerify ? th.fg("accent", "◎") : th.fg("dim", "☐");
-				lines.push(`  ${prefix} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}${verifyTag}`);
-			}
-			// Subtask collapse: hide subtask rows when ALL subtasks completed
-			if (t.subtasks && t.subtasks.length > 0 && t.status !== "cancelled") {
-				const allSubCompleted = t.subtasks.every((s) => s.status === "completed");
-				if (!allSubCompleted) {
-					for (const s of t.subtasks) {
-						const subIcon = s.status === "completed"
-							? th.fg("success", "✓")
-							: s.status === "in_progress"
-								? th.fg("warning", "●")
-								: th.fg("dim", "○");
-						const subText = s.status === "completed" ? th.fg("dim", s.text) : th.fg("muted", s.text);
-						lines.push(`    ${subIcon} ${th.fg("dim", `${t.id}.${s.id}`)} ${subText}`);
-					}
-				}
-			}
+			lines.push(...renderTaskRow(t, th));
 		}
 	}
 
-	// P2-8: Budget progress bars
 	if (state.budget.tokenBudget && state.budget.tokenBudget > 0) {
 		const pct = getTokenUsagePercent(state) / PERCENT_FACTOR;
 		lines.push(`  Token: ${renderProgressBar(pct)} ${Math.round(pct * PERCENT_FACTOR)}%`);
@@ -201,5 +163,52 @@ export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): strin
 		lines.push(`  Time: ${renderProgressBar(pct)} ${mins}/${state.budget.timeBudgetMinutes}min`);
 	}
 
+	return lines;
+}
+
+// ── Task Row Rendering (extracted from renderWidgetLines) ──
+
+/** 渲染单个 task 行（含 verify_task 图标、验证标签、subtask 展开）。 */
+function renderTaskRow(t: GoalTask, th: ThemeLike): string[] {
+	const lines: string[] = [];
+	const desc = toSingleLine(t.description);
+	const isVerify = isVerifyTask(t);
+	const verifyTag = !isVerify && t.verification
+		? th.fg("dim", ` [验证: ${truncateText(t.verification.method, VERIFY_METHOD_WIDGET_LEN)}]`)
+		: "";
+
+	if (t.status === "completed") {
+		lines.push(`  ${th.fg("success", "✓")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}${verifyTag}`);
+	} else if (t.status === "cancelled") {
+		lines.push(`  ${th.fg("dim", "✗")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}`);
+	} else if (t.status === "in_progress") {
+		const prefix = isVerify ? th.fg("accent", "◎") : th.fg("warning", "●");
+		lines.push(`  ${prefix} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}${verifyTag}`);
+	} else {
+		const prefix = isVerify ? th.fg("accent", "◎") : th.fg("dim", "☐");
+		lines.push(`  ${prefix} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}${verifyTag}`);
+	}
+
+	if (t.subtasks && t.subtasks.length > 0 && t.status !== "cancelled") {
+		lines.push(...renderSubtaskLines(t, th));
+	}
+	return lines;
+}
+
+/** 渲染 subtask 行，全部 completed 时折叠不显示。 */
+function renderSubtaskLines(t: GoalTask, th: ThemeLike): string[] {
+	if (!t.subtasks || t.subtasks.length === 0) return [];
+	const allSubCompleted = t.subtasks.every((s) => s.status === "completed");
+	if (allSubCompleted) return [];
+	const lines: string[] = [];
+	for (const s of t.subtasks) {
+		const subIcon = s.status === "completed"
+			? th.fg("success", "✓")
+			: s.status === "in_progress"
+				? th.fg("warning", "●")
+				: th.fg("dim", "○");
+		const subText = s.status === "completed" ? th.fg("dim", s.text) : th.fg("muted", s.text);
+		lines.push(`    ${subIcon} ${th.fg("dim", `${t.id}.${s.id}`)} ${subText}`);
+	}
 	return lines;
 }
