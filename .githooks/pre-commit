@@ -214,6 +214,45 @@ if [[ -n "$STAGED_SKILLS" ]]; then
   echo -e "${C_GREEN}[ OK ]${C_RESET} SKILL.md YAML frontmatter 校验通过"
 fi
 
+# ── 0d. console.log/info 禁止检查（扩展源码）──────────────────
+# 依据 pi-extension-standards.md §10：禁止在扩展中使用 console.log 和 console.info
+STAGED_EXT_TS=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^extensions/.*\.ts$' | grep -v '\.d\.ts$' | grep -v '__tests__\|\.test\.' || true)
+
+if [[ -n "$STAGED_EXT_TS" ]]; then
+  echo "--- console.log/info 禁止检查 ---"
+  CONSOLE_VIOLATIONS=()
+  while IFS= read -r f; do
+    [[ -z "$f" || ! -f "$f" ]] && continue
+    hits=$(grep -n 'console\.(log\|info)(' "$f" || true)
+    if [[ -n "$hits" ]]; then
+      while IFS= read -r line; do
+        CONSOLE_VIOLATIONS+=("$f: $line")
+      done <<< "$hits"
+    fi
+  done <<< "$STAGED_EXT_TS"
+
+  if [[ ${#CONSOLE_VIOLATIONS[@]} -gt 0 ]]; then
+    echo -e "${C_RED}[FAIL]${C_RESET} 发现 console.log/info 调用（扩展中禁止使用）"
+    echo ""
+    for v in "${CONSOLE_VIOLATIONS[@]}"; do
+      echo "  $v"
+    done
+    echo ""
+    echo -e "${C_RED}不允许跳过，无论是否是本次引入的，必须正面修复${C_RESET}"
+    echo ""
+    echo "替换方案（参见 docs/pi-extension-standards.md §10）："
+    echo "  用户可见消息 → ctx.ui.notify(msg, 'info'/'warning'/'error')"
+    echo "  内部诊断     → console.warn('[ext-name] ...') 或 console.error('[ext-name] ...')"
+    echo "  不可恢复错误 → throw new Error(msg)"
+    echo "  Worker 线程  → 拦截 console.* → 收集数组 → postMessage 回传"
+    echo "  调试开发     → if (process.env.<EXT>_DEBUG) console.error(...)"
+    echo ""
+    echo "紧急 hotfix 可用 SKIP_LINT=1 git commit 跳过"
+    exit 1
+  fi
+  echo -e "${C_GREEN}[ OK ]${C_RESET} console.log/info 检查通过"
+fi
+
 # ── 1. tsc 类型检查 ──────────────────────────────────────
 echo "--- tsc --noEmit ---"
 if ! npx tsc --noEmit 2>&1; then

@@ -40,11 +40,11 @@ describe("resolveModel", () => {
 
 	it("TC-3-03: no model + scene set + advisor returns undefined → returns undefined", async () => {
 		mockResolveModelForScene.mockReturnValue(undefined);
-		const logSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const opts: AgentCallOpts = { prompt: "test", scene: "coding" };
 		await expect(resolveModel(opts)).resolves.toBeUndefined();
-		expect(logSpy).toHaveBeenCalled();
-		logSpy.mockRestore();
+		// Note: model-resolver no longer logs a warning when the advisor
+		// returns undefined — it silently falls back to the default model.
+		// Surfacing to the input area would leak workflow internals.
 	});
 
 	it("TC-3-04: no model + no scene → returns undefined", async () => {
@@ -53,17 +53,14 @@ describe("resolveModel", () => {
 		expect(mockResolveModelForScene).not.toHaveBeenCalled();
 	});
 
-	it("TC-3-05: advisor throws → catch + warn + returns undefined", async () => {
+	it("TC-3-05: advisor throws → catch + returns undefined (no warn to avoid input leak)", async () => {
 		mockResolveModelForScene.mockImplementation(() => {
 			throw new Error("advisor crash");
 		});
-		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const opts: AgentCallOpts = { prompt: "test", scene: "coding" };
 		await expect(resolveModel(opts)).resolves.toBeUndefined();
-		expect(warnSpy).toHaveBeenCalledWith(
-			expect.stringContaining("resolveModelForScene failed"),
-			expect.any(Error),
-		);
-		warnSpy.mockRestore();
+		// Note: model-resolver silently swallows advisor exceptions and falls
+		// back. The previous behavior logged a warning, but that leaked to
+		// the input area via stderr; the caller's flow is unaffected.
 	});
 });

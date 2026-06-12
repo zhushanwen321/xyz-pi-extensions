@@ -453,10 +453,10 @@ export class WorkflowOrchestrator {
         this.postMessage(runId, { type: "agent-result", callId, result: placeholder, cached: true });
       }
       // eslint-disable-next-line taste/no-silent-catch
-      catch (err) {
+      catch {
         // P1-8: Worker may have exited between has() and postMessage().
-        // This is an expected race condition — no recovery needed.
-        console.warn(`skipNode: failed to post message for ${runId}:`, err);
+        // This is an expected race condition — no recovery needed, and
+        // surfacing it would leak to the input area.
       }
     }
 
@@ -661,7 +661,11 @@ export class WorkflowOrchestrator {
     const worker = this.workers.get(runId);
     if (worker) {
       this.workers.delete(runId);
-      worker.terminate().catch(() => { console.warn(`Failed to terminate worker for ${runId}`); });
+      worker.terminate().catch(() => {
+        // Best-effort termination; failures are expected when the worker
+        // is already exiting. Surfacing to terminal would leak to the
+        // input area and confuse the user during normal teardown.
+      });
     }
   }
 
@@ -713,6 +717,10 @@ export class WorkflowOrchestrator {
         if (isTerminal(instance.status) || instance.status === "budget_limited" || instance.status === "paused") return;
         // FR-1: Capture script return value
         instance.scriptResult = msg.result;
+        // P2-2: Surface worker diagnostics via the TUI widget, never the input area.
+        if (Array.isArray(msg.workerLogs) && msg.workerLogs.length > 0) {
+          instance.errorLogs = msg.workerLogs;
+        }
         instance.completedAt = new Date().toISOString();
         transitionStatus(instance, "completed");
         this.events.emit(runId, { type: "status", status: "completed" });
@@ -726,7 +734,7 @@ export class WorkflowOrchestrator {
       case "error": {
         // P0-1: Guard against stale error messages after terminate/pause/budget
         if (isTerminal(instance.status) || instance.status === "budget_limited" || instance.status === "paused") return;
-        handleScriptError(this.errorHandlerContext(), runId, msg.error);
+        handleScriptError(this.errorHandlerContext(), runId, msg.error, Array.isArray(msg.workerLogs) ? msg.workerLogs : undefined);
         break;
       }
     }

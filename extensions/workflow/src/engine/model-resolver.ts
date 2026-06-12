@@ -19,7 +19,7 @@ async function loadSceneResolver(): Promise<typeof _resolveModelForScene> {
 		const mod = await import("@zhushanwen/pi-model-switch");
 		_resolveModelForScene = typeof mod.resolveModelForScene === "function" ? mod.resolveModelForScene : null;
 	} catch {
-		console.info("[workflow] @zhushanwen/pi-model-switch not available, scene-based model resolution disabled");
+		// @zhushanwen/pi-model-switch is an optional peer — silent fallback
 		_resolveModelForScene = null;
 	}
 	return _resolveModelForScene;
@@ -38,14 +38,9 @@ export async function resolveModel(opts: AgentCallOpts): Promise<string | undefi
 		if (!resolver) return undefined;
 		try {
 			const resolved = resolver(opts.scene);
-			if (resolved) {
-				console.log(`[workflow] scene "${opts.scene}" resolved to model: ${resolved}`);
-			} else {
-				console.warn(`[workflow] scene "${opts.scene}" could not resolve to a model, using default`);
-			}
 			return resolved ?? undefined;
-		} catch (err) {
-			console.warn(`[workflow] resolveModelForScene failed for scene "${opts.scene}":`, err);
+		} catch {
+			// Scene resolution failed — return undefined and let the caller fall back
 			return undefined;
 		}
 	}

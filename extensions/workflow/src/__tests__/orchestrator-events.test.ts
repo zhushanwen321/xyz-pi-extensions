@@ -84,18 +84,17 @@ describe("WorkflowEventEmitter", () => {
       throw new Error("boom");
     });
     const goodListener = vi.fn();
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     emitter.subscribe("run-1", errorListener);
     emitter.subscribe("run-1", goodListener);
 
-    emitter.emit("run-1", { type: "status", status: "running" });
+    // Emit must not throw and must reach the second listener. Listener
+    // errors are now silently swallowed (they previously logged via
+    // console.error, which leaked to the input area).
+    expect(() => emitter.emit("run-1", { type: "status", status: "running" })).not.toThrow();
 
     expect(errorListener).toHaveBeenCalledTimes(1);
     expect(goodListener).toHaveBeenCalledTimes(1);
-    expect(errorSpy).toHaveBeenCalled();
-
-    errorSpy.mockRestore();
   });
 
   // ── getSubscriptionCount ───────────────────────────────────

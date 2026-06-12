@@ -273,8 +273,11 @@ export function registerWorkflowCommands(
                   .join("\n");
             }
           // eslint-disable-next-line taste/no-silent-catch
-          } catch (err) {
-            console.warn("Failed to load workflows for list:", err);
+          } catch {
+            // Loading the workflow list is best-effort; the script section
+            // is omitted and the instance list still renders. Surfacing to
+            // the terminal would leak to the input area.
+            scriptSection = "";
           }
 
           const instances = orch.list();
@@ -382,8 +385,11 @@ export function registerWorkflowCommands(
                 .join("\n");
             }
           // eslint-disable-next-line taste/no-silent-catch
-          } catch (err) {
-            console.warn("Failed to load workflows for routing:", err);
+          } catch {
+            // Loading the workflow list is best-effort; the AI routing
+            // message is sent without a list. Surfacing to the terminal
+            // would leak to the input area.
+            workflowList = "";
           }
 
           const listSection = workflowList
