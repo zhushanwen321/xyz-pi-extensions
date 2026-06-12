@@ -56,6 +56,15 @@ export async function handleAgentEnd(pi: ExtensionAPI, session: GoalSession, ctx
 			await handleTerminalStateAgentEnd(pi, session, ctx, checkStale); return;
 		}
 		if (!isActiveStatus(session.state.status)) return;
+
+		// ESC / user abort during text generation also pauses the goal
+		if (ctx.signal?.aborted) {
+			session.pendingPause = true;
+			const progress = checkProgress(session.state, session.tasksCompletedAtAgentStart);
+			await handleStallAndContinuation(pi, session, ctx, progress, checkStale);
+			return;
+		}
+
 		const budgetAction = await handleBudgetChecks(pi, session, ctx, checkBudgetOnTurnEnd(session.state), checkStale);
 		if (budgetAction !== "continue") return;
 		session.state.turnCount++;
@@ -135,7 +144,7 @@ async function handleBudgetChecks(
 		persistGoalState(pi, session, ctx);
 		if (checkStale()) return "stop";
 		updateWidget(session, ctx);
-		pi.sendUserMessage(budgetLimitPrompt(session.state!, "token"), { deliverAs: "steer" });
+		sendGoalContextMessage(pi, budgetLimitPrompt(session.state!, "token"), "steer");
 		return "stop";
 	}
 	if (checkStale()) return "stop";
@@ -184,17 +193,19 @@ function handleAllTasksDone(
 		return "stop";
 	}
 	if (progress.budgetTight) {
-		pi.sendUserMessage(
+		sendGoalContextMessage(
+			pi,
 			`All tasks completed, token budget ${Math.round(state.tokensUsed / state.budget.tokenBudget! * PERCENT_FACTOR)}% used.` +
 			`Call goal_manager's complete_goal now with overall evidence.` +
 			`\n\nObjective: ${state.objective}`,
-			{ deliverAs: "steer" },
+			"steer",
 		);
 	} else {
-		pi.sendUserMessage(
+		sendGoalContextMessage(
+			pi,
 			`All ${progress.totalCount} tasks completed. Call goal_manager's complete_goal with overall evidence.` +
 				`\n\nObjective: ${state.objective}`,
-			{ deliverAs: "followUp" },
+			"followUp",
 		);
 	}
 	persistGoalState(pi, session, ctx);
@@ -220,10 +231,11 @@ function handleNoTasksOrMaxTurns(
 		);
 		return "stop";
 	}
-	pi.sendUserMessage(
+	sendGoalContextMessage(
+		pi,
 		`No task list created yet. Call goal_manager's create_tasks immediately to decompose the work into verifiable task steps.` +
 			`\n\nObjective: ${state.objective}`,
-		{ deliverAs: "followUp" },
+		"followUp",
 	);
 	persistGoalState(pi, session, ctx);
 	updateWidget(session, ctx);
@@ -285,7 +297,23 @@ async function handleStallAndContinuation(
 	}
 	persistGoalState(pi, session, ctx);
 	updateWidget(session, ctx);
-	pi.sendUserMessage(continuationPrompt(state), { deliverAs: "followUp" });
+	sendGoalContextMessage(pi, continuationPrompt(state), "followUp");
+}
+
+/** Send a hidden custom message that feeds the LLM but is not rendered in TUI. */
+function sendGoalContextMessage(
+	pi: ExtensionAPI,
+	content: string,
+	deliverAs: "steer" | "followUp",
+): void {
+	pi.sendMessage(
+		{
+			customType: "goal-context",
+			content,
+			display: false,
+		},
+		{ deliverAs },
+	);
 }
 
 /** 更新 stall 计数。stall 时递增，否则重置。 */
