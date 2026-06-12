@@ -24,6 +24,82 @@ bash ~/.agents/skills/merge-worktree/stages/0-init.sh $CURRENT_WT patch
 bash ~/.agents/skills/merge-worktree/stages/1-local-check.sh
 ```
 
+### 阶段 1.5: Dev-Link Symlink 清理 [MANDATORY]
+
+检查并清理指向当前 worktree 的 extension symlink。**跳过此步骤会导致阶段 7 删除 worktree 后 symlink dangling，Pi 无法启动。**
+
+#### 1.5.1 列出本次 PR 变更的 extension
+
+```bash
+git diff --name-only main...HEAD -- 'extensions/*' | cut -d/ -f2 | sort -u
+```
+
+记录变更的 extension 列表，用于后续判断哪些是全新 extension。
+
+#### 1.5.2 检测指向当前 worktree 的 symlink
+
+```bash
+WT_PATH="$(pwd)"
+for link in ~/.pi/agent/extensions/*/; do
+  [ -L "${link%/}" ] || continue
+  target="$(readlink "${link%/}")"
+  if [[ "$target" == "$WT_PATH"* ]]; then
+    name="$(basename "${link%/}")"
+    echo "  symlink: $name → $target"
+  fi
+done
+```
+
+如果没有检测到指向当前 worktree 的 symlink，跳过后续步骤。
+
+#### 1.5.3 清理 symlink
+
+对每个检测到的 symlink，按 npm 可用性分别处理：
+
+**已发布的 extension**（`npm view` 返回版本号）：
+
+```bash
+bash <dev-link-skill-dir>/link-npm.sh <name>
+```
+
+其中 `<dev-link-skill-dir>` 解析为 dev-link skill 所在目录。
+
+**全新 extension**（`npm view` 404）：
+
+```bash
+SHORT="<name>"
+rm -f ~/.pi/agent/extensions/$SHORT
+# 清理 settings.json 中的 local 条目
+SETTINGS="$HOME/.pi/agent/settings.json" SHORT_CHECK="$SHORT" node -e "
+  const fs = require('fs');
+  const s = JSON.parse(fs.readFileSync(process.env.SETTINGS,'utf-8'));
+  const key = 'extensions/' + process.env.SHORT_CHECK;
+  if (s.packages && s.packages.includes(key)) {
+    s.packages = s.packages.filter(p => p !== key);
+    fs.writeFileSync(process.env.SETTINGS, JSON.stringify(s, null, 2) + '\n');
+  }
+"
+echo "  已删除 symlink: $SHORT (全新 extension，npm 未发布)"
+```
+
+#### 1.5.4 验证清理结果
+
+```bash
+WT_PATH="$(pwd)"
+found=0
+for link in ~/.pi/agent/extensions/*/; do
+  [ -L "${link%/}" ] || continue
+  target="$(readlink "${link%/}")"
+  if [[ "$target" == "$WT_PATH"* ]]; then
+    echo "  ⚠️ 未清理: $(basename "${link%/}") → $target"
+    found=1
+  fi
+done
+[ $found -eq 0 ] && echo "✓ 清理完成，无残留 symlink"
+```
+
+如果仍有残留，**必须手动处理后再继续**。
+
 ### 阶段 2: PR CI + 合并
 ```bash
 bash ~/.agents/skills/merge-worktree/stages/2-pr-merge.sh
@@ -131,6 +207,17 @@ gh run list --workflow=release.yml --limit=1
 bash ~/.agents/skills/merge-worktree/stages/7-cleanup.sh
 ```
 
+**安全网：检查 dangling symlink**
+
+```bash
+for link in ~/.pi/agent/extensions/*/; do
+  [ -L "${link%/}" ] || continue
+  [ -e "${link%/}" ] || echo "  ⚠️ Dangling symlink: $(basename "${link%/}") → $(readlink "${link%/}")"
+done
+```
+
+如有 dangling symlink，说明阶段 1.5 清理遗漏或 worktree 被其他途径删除。必须手动清理。
+
 ## 项目特化要点
 
 - **版本管理**：changeset 独立版本，子包版本各不同
@@ -138,6 +225,7 @@ bash ~/.agents/skills/merge-worktree/stages/7-cleanup.sh
 - **禁止本地发布**：`pnpm changeset publish` 和 `npm publish` 均由 CI 执行，本地只做 bump + tag + push
 - **新包首次发布**：需确认 npm scope 权限，可能需要手动 `npm login` + `npm publish --access public` 初始化
 - **交付物**：npm registry 包 + GitHub Release（自动生成 release notes）
+- **Dev-Link 清理 [MANDATORY]**：merge 前必须清理指向当前 worktree 的 symlink（阶段 1.5）。跳过会导致阶段 7 删除 worktree 后 symlink dangling，Pi 启动失败。使用 dev-link skill 的 `link-npm.sh` 恢复已有 extension；全新 extension 直接删除 symlink
 
 ---
 
@@ -145,5 +233,5 @@ bash ~/.agents/skills/merge-worktree/stages/7-cleanup.sh
 
 | 标记 | 含义 | 修改约束 |
 |------|------|----------|
-| `[MANDATORY]` | 流程强制要求。不遵守会导致流程失败或产生严重后果 | 必须严格遵守 |
+| `[MANDATORY]` | 流流强制要求。不遵守会导致流程失败或产生严重后果 | 必须严格遵守 |
 | `[OPTIONAL]` | 可选步骤。可根据实际情况决定是否执行 | 可根据项目需求调整 |
