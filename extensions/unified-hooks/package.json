@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-unified-hooks",
-  "version": "0.0.5",
+  "version": "0.1.0",
   "description": "Unified hooks extension - collect scattered hooks in one place for easy maintenance",
   "main": "index.ts",
   "type": "module",

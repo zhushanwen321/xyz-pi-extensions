@@ -1,5 +1,11 @@
 # @zhushanwen/pi-unified-hooks
 
+## 0.1.0
+
+### Minor Changes
+
+- Add subagent-list-injector hook to inject available subagent list into system prompt
+
 ## 0.0.5
 
 ### Patch Changes

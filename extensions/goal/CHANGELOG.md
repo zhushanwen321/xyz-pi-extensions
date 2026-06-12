@@ -1,5 +1,11 @@
 # @zhushanwen/pi-goal
 
+## 0.3.0
+
+### Minor Changes
+
+- Goal abort command, task verification lifecycle, ESC pause, subtask support, enriched steering prompts, and unit tests
+
 ## 0.2.0
 
 ### Minor Changes
