@@ -119,6 +119,7 @@ declare module "@mariozechner/pi-tui" {
 	export class Component {}
 	export function matchesKey(key: any, binding: any): boolean;
 	export function truncateToWidth(text: string, width: number): string;
+	export function visibleWidth(str: string): number;
 	export const Key: {
 		escape: string; up: string; down: string; left: string; right: string;
 		enter: string; space: string; tab: string; backspace: string; delete: string;
@@ -144,6 +145,7 @@ declare module "@earendil-works/pi-tui" {
 	export class MarkdownTheme {}
 	export function matchesKey(key: any, binding: any): boolean;
 	export function truncateToWidth(text: string, width: number): string;
+	export function visibleWidth(str: string): number;
 	export class Component {}
 }
 declare module "@earendil-works/pi-ai" {
