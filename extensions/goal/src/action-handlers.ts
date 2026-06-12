@@ -309,6 +309,8 @@ export const handleAddSubtasks: ActionHandler = ({ state, params, pi, session, c
 	}
 	const parentTask = state.tasks.find((t) => t.id === params.taskId);
 	if (!parentTask) return errorResult(`Task #${params.taskId} not found`);
+	// isTerminalTaskStatus 不含 completed（completed 有 verification 时需转为 verified）
+	// 这里的 || completed 是有意的业务决策：completed 任务不允许加 subtask
 	if (isTerminalTaskStatus(parentTask.status) || parentTask.status === "completed") {
 		return errorResult(`Task #${parentTask.id} in terminal state (${parentTask.status}), cannot add subtask`);
 	}

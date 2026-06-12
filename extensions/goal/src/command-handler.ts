@@ -36,6 +36,22 @@ import {
 	writeGoalHistoryEntry,
 } from "./tool-handler";
 
+/** Send a hidden custom message that feeds the LLM but is not rendered in TUI. */
+function sendGoalContextMessage(
+	pi: ExtensionAPI,
+	content: string,
+	deliverAs: "steer" | "followUp",
+): void {
+	pi.sendMessage(
+		{
+			customType: "goal-context",
+			content,
+			display: false,
+		},
+		{ deliverAs },
+	);
+}
+
 // ── Orchestrator ──────────────────────────────────────
 
 export async function handleGoalCommand(
@@ -198,8 +214,11 @@ function handleAbort(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionConte
 		return;
 	}
 	if (session.state.tasks.length > 0) {
-		ctx.ui.notify(`Cannot abort: ${session.state.tasks.length} tasks already created. Use /goal clear to force cancel.`, "warning");
-		return;
+		const nonCancelled = session.state.tasks.filter(t => t.status !== "cancelled");
+		if (nonCancelled.length > 0) {
+			ctx.ui.notify(`Cannot abort: ${nonCancelled.length} non-cancelled tasks exist. Use /goal clear to force cancel.`, "warning");
+			return;
+		}
 	}
 	session.state.status = "cancelled";
 	session.state.completedAtTurnIndex = session.state.currentTurnIndex;
@@ -236,7 +255,7 @@ function handleUpdate(
 	ctx.ui.notify(`Objective updated:\nPrevious: ${oldObjective}\nNew: ${newObjective}`, "info");
 
 	if (isActiveStatus(state.status)) {
-		pi.sendUserMessage(objectiveUpdatedPrompt(state, oldObjective), { deliverAs: "steer" });
+		sendGoalContextMessage(pi, objectiveUpdatedPrompt(state, oldObjective), "steer");
 	}
 }
 

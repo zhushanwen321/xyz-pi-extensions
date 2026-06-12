@@ -18,7 +18,7 @@ import {
 	type GoalTask,
 	isActiveStatus,
 	isTerminalStatus,
-	isTerminalTaskStatus,
+	isTaskDone,
 	transitionStatus,
 } from "./state";
 import {
@@ -99,7 +99,7 @@ function checkStaleness(session: GoalSession) {
 	let allTerminal = true;
 
 	for (const task of state.tasks) {
-		if (!isTerminalTaskStatus(task.status)) {
+		if (!isTaskDone(task)) {
 			allTerminal = false;
 			const staleTurns = state.currentTurnIndex - task.lastUpdatedTurn;
 			if (staleTurns >= TASK_STALL_TURN_THRESHOLD) {

@@ -44,13 +44,23 @@ function truncateText(text: string, maxLen: number): string {
 export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string {
 	if (state.status === "cancelled") return "";
 
-	const completedCount = getCompletedCount(state.tasks);
+	const verifiedCount = state.tasks.filter(t => t.status === "verified").length;
+	const completedCount = state.tasks.filter(t => t.status === "completed").length;
 	const total = state.tasks.length;
+	const doneCount = verifiedCount + completedCount;
 
 	let text = th.fg("accent", `◆ Goal`) + th.fg("muted", ` ${state.currentTurnIndex}/${state.budget.maxTurns}`);
 
 	if (total > 0) {
-		text += th.fg("muted", ` | ${completedCount}/${total} tasks`);
+		text += th.fg("muted", ` | ${doneCount}/${total} tasks`);
+		if (completedCount > 0) {
+			const pendingVerify = state.tasks.filter(t => t.status === "completed" && t.verification).length;
+			if (pendingVerify > 0) {
+				text += th.fg("warning", `, ${pendingVerify} pending verify`);
+			} else if (verifiedCount > 0) {
+				text += th.fg("success", `, ${verifiedCount} verified`);
+			}
+		}
 		const cancelledCount = state.tasks.filter(t => t.status === "cancelled").length;
 		if (cancelledCount > 0) {
 			text += th.fg("dim", `, ${cancelledCount} cancelled`);

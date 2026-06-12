@@ -211,6 +211,9 @@ export function makeGoalResult(session: GoalSession, text: string) {
 						text: t.description,
 						status: t.status,
 						evidence: t.evidence,
+						verification: t.verification
+							? { method: t.verification.method, expected: t.verification.expected, actual: t.verification.actual }
+							: undefined,
 						subtasks: t.subtasks?.map((s) => ({
 							id: s.id,
 							text: s.text,
