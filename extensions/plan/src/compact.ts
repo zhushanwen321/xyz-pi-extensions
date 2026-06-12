@@ -75,11 +75,12 @@ export function detectGoalCapability(pi: ExtensionAPI): boolean {
 }
 
 /** Try to initialize goal via programming interface */
-function tryGoalInit(pi: ExtensionAPI, planFilePath: string): boolean {
+function tryGoalInit(pi: ExtensionAPI, planFilePath: string, ctx: ExtensionContext): boolean {
   type GoalInitFn = (
     objective: string,
     tasks: string[],
     budget?: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number },
+    ctx?: ExtensionContext,
   ) => boolean;
 
   try {
@@ -94,7 +95,7 @@ function tryGoalInit(pi: ExtensionAPI, planFilePath: string): boolean {
     const tasks = extractPlanSteps(planContent);
     if (tasks.length === 0) return false;
 
-    return goalInit(objective, tasks);
+    return goalInit(objective, tasks, undefined, ctx);
   } catch {
     return false;
   }
@@ -169,12 +170,12 @@ export function handlePlanComplete(
         customInstructions: `Plan file: ${planFilePath}. Read plan and execute implementation.`,
         onComplete: () => {
           pi.sendUserMessage(executeMessage, { deliverAs: "steer" });
-          tryGoalInit(pi, planFilePath);
+          tryGoalInit(pi, planFilePath, ctx);
         },
         onError: (_error: Error) => {
           ctx.ui.notify("Compact failed, continuing without isolation.", "warning");
           pi.sendUserMessage(executeMessage, { deliverAs: "steer" });
-          tryGoalInit(pi, planFilePath);
+          tryGoalInit(pi, planFilePath, ctx);
         },
       });
       break;
@@ -188,7 +189,7 @@ export function handlePlanComplete(
     case "direct":
     default: {
       pi.sendUserMessage(executeMessage, { deliverAs: "steer" });
-      tryGoalInit(pi, planFilePath);
+      tryGoalInit(pi, planFilePath, ctx);
       break;
     }
   }

@@ -13,6 +13,7 @@
  * Paused/Blocked 可被 Active 覆盖（用户 resume）
  */
 
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { MS_PER_SECOND } from "./constants";
 
 // ── Cross-extension API type ─────────────────────────────
@@ -32,6 +33,7 @@ export type GoalExternalInit = (
 	objective: string,
 	tasks: string[],
 	budget?: GoalExternalBudget,
+	ctx?: ExtensionContext,
 ) => boolean;
 
 // ── Goal 状态枚举 ──────────────────────────────────────
