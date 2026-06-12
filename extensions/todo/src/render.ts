@@ -73,12 +73,10 @@ export function renderDualColumn(
 	for (let row = 0; row < half; row++) {
 		const left = fixedWidth(indent + renderWidgetItem(todos[row], th), colWidth);
 		const rightIdx = row + half;
-		if (rightIdx < todos.length) {
-			const right = fixedWidth(renderWidgetItem(todos[rightIdx], th), colWidth);
-			lines.push(left + divider + right);
-		} else {
-			lines.push(left);
-		}
+		const right = rightIdx < todos.length
+			? fixedWidth(renderWidgetItem(todos[rightIdx], th), colWidth)
+			: " ".repeat(colWidth);
+		lines.push(left + divider + right);
 	}
 	return lines;
 }
