@@ -6,24 +6,10 @@ import type { Theme } from "@mariozechner/pi-coding-agent";
 import { matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
 
 import type { Todo } from "./model";
+import { FALLBACK_TERM_WIDTH, renderDualColumn } from "./render";
 
 const HEADER_PREFIX_DASHES = 3;
 const HEADER_RESERVED_WIDTH = 10;
-const COL_GAP = 3;
-const FALLBACK_TERM_WIDTH = 80;
-
-/** 渲染单条 todo 行 */
-function renderItem(todo: Todo, th: Theme): string {
-	const mark =
-		todo.status === "completed"
-			? th.fg("success", "\u2713")
-			: todo.status === "in_progress"
-				? th.fg("warning", "\u25cf")
-				: th.fg("dim", "\u25cb");
-	const id = th.fg("accent", `#${todo.id}`);
-	const text = todo.status === "completed" ? th.fg("dim", todo.text) : th.fg("text", todo.text);
-	return `${mark} ${id} ${text}`;
-}
 
 export class TodoListComponent {
 	private todos: Todo[];
@@ -53,7 +39,6 @@ export class TodoListComponent {
 		const th = this.theme;
 		const termWidth = width || FALLBACK_TERM_WIDTH;
 		const indent = "  ";
-		const maxColWidth = Math.floor((termWidth - COL_GAP - indent.length) / 2);
 
 		lines.push("");
 		const title = th.fg("accent", " Todos ");
@@ -70,18 +55,8 @@ export class TodoListComponent {
 			lines.push(truncateToWidth(`${indent}${th.fg("muted", `${completed}/${total} completed`)}`, termWidth));
 			lines.push("");
 
-			// 双列布局
-			const half = Math.ceil(this.todos.length / 2);
-			for (let row = 0; row < half; row++) {
-				const leftStr = truncateToWidth(indent + renderItem(this.todos[row], th), maxColWidth);
-				const rightIdx = row + half;
-				if (rightIdx < this.todos.length) {
-					const rightStr = truncateToWidth(renderItem(this.todos[rightIdx], th), maxColWidth);
-					const padding = " ".repeat(Math.max(1, COL_GAP));
-					lines.push(leftStr + padding + rightStr);
-				} else {
-					lines.push(leftStr);
-				}
+			for (const line of renderDualColumn(this.todos, th, termWidth, indent)) {
+				lines.push(line);
 			}
 		}
 

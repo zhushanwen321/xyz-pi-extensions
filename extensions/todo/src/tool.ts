@@ -231,12 +231,6 @@ export function executeTodoAction(
 	state.lastTodoCallCount = state.userMessageCount;
 	state.stallNotified = false;
 
-	// 有未完成项时重置 completionSteered
-	const hasIncomplete = state.todos.some((t) => t.status !== "completed");
-	if (hasIncomplete) {
-		state.completionSteered = false;
-	}
-
 	let resultText = "";
 
 	switch (params.action) {

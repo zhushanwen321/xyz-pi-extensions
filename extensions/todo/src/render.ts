@@ -15,8 +15,8 @@ import {
 // ── 常量 ────────────────────────────────────────────
 
 const MAX_COLLAPSED_ITEMS = 5;
-const COL_GAP = 3; // 双列间距空格数
-const FALLBACK_TERM_WIDTH = 80;
+export const COL_GAP = 3; // 双列间距空格数
+export const FALLBACK_TERM_WIDTH = 80;
 
 // ── 状态栏 ────────────────────────────────────────────
 
@@ -34,8 +34,8 @@ export function renderStatusText(todoList: Todo[], th: Theme): string {
 
 // ── Widget 双列渲染 ──────────────────────────────────
 
-/** 渲染单条 todo 的 widget 行（不含缩进） */
-function renderWidgetItem(t: Todo, th: Theme): string {
+/** 渲染单条 todo 的 widget 行（不含缩进），供 component.ts 复用 */
+export function renderWidgetItem(t: Todo, th: Theme): string {
 	const mark =
 		t.status === "completed"
 			? th.fg("success", "\u2713")
@@ -45,6 +45,30 @@ function renderWidgetItem(t: Todo, th: Theme): string {
 	const id = th.fg("accent", `#${t.id}`);
 	const text = t.status === "completed" ? th.fg("dim", t.text) : th.fg("text", t.text);
 	return `${mark} ${id} ${text}`;
+}
+
+/** 双列布局渲染，供 widget 和 component 复用 */
+export function renderDualColumn(
+	todos: Todo[],
+	th: Theme,
+	termWidth: number,
+	indent: string,
+): string[] {
+	const maxColWidth = Math.floor((termWidth - COL_GAP - indent.length) / 2);
+	const lines: string[] = [];
+	const half = Math.ceil(todos.length / 2);
+	for (let row = 0; row < half; row++) {
+		const leftStr = truncateToWidth(indent + renderWidgetItem(todos[row], th), maxColWidth);
+		const rightIdx = row + half;
+		if (rightIdx < todos.length) {
+			const rightStr = truncateToWidth(renderWidgetItem(todos[rightIdx], th), maxColWidth);
+			const padding = " ".repeat(Math.max(1, COL_GAP));
+			lines.push(leftStr + padding + rightStr);
+		} else {
+			lines.push(leftStr);
+		}
+	}
+	return lines;
 }
 
 /** 渲染 widget 行（双列布局） */
@@ -58,24 +82,8 @@ export function renderWidgetLines(todoList: Todo[], th: Theme): string[] {
 	lines.push(th.fg("accent", "\u2611") + th.fg("muted", ` ${completed}/${total}`));
 
 	// 双列布局
-	const termWidth = process.stdout.columns || FALLBACK_TERM_WIDTH;
-	const indent = "  ";
-	const leftIndent = indent;
-	const maxColWidth = Math.floor((termWidth - COL_GAP - indent.length) / 2);
-
-	const half = Math.ceil(todoList.length / 2);
-	for (let row = 0; row < half; row++) {
-		const leftItem = todoList[row];
-		const leftStr = truncateToWidth(leftIndent + renderWidgetItem(leftItem, th), maxColWidth);
-		const rightIdx = row + half;
-		if (rightIdx < todoList.length) {
-			const rightStr = truncateToWidth(renderWidgetItem(todoList[rightIdx], th), maxColWidth);
-			// 计算左列实际可见宽度用于对齐
-			const padding = " ".repeat(Math.max(1, COL_GAP));
-			lines.push(leftStr + padding + rightStr);
-		} else {
-			lines.push(leftStr);
-		}
+	for (const line of renderDualColumn(todoList, th, process.stdout.columns || FALLBACK_TERM_WIDTH, "  ")) {
+		lines.push(line);
 	}
 
 	return lines;
