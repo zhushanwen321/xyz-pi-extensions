@@ -15,7 +15,7 @@ import {
 	VERIFY_METHOD_WIDGET_LEN,
 } from "./constants";
 import type { GoalRuntimeState, GoalTask } from "./state";
-import { getCompletedCount, getElapsedTimeSeconds, isVerifyTask } from "./state";
+import { getCompletedCount, getElapsedTimeSeconds } from "./state";
 
 /**
  * 将多行文本压缩为单行，用于 widget 渲染。
@@ -168,25 +168,26 @@ export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): strin
 
 // ── Task Row Rendering (extracted from renderWidgetLines) ──
 
-/** 渲染单个 task 行（含 verify_task 图标、验证标签、subtask 展开）。 */
+/** 渲染单个 task 行（含 verified 状态图标、验证标签、subtask 展开）。 */
 function renderTaskRow(t: GoalTask, th: ThemeLike): string[] {
 	const lines: string[] = [];
 	const desc = toSingleLine(t.description);
-	const isVerify = isVerifyTask(t);
-	const verifyTag = !isVerify && t.verification
+	const verifyTag = t.verification
 		? th.fg("dim", ` [验证: ${truncateText(t.verification.method, VERIFY_METHOD_WIDGET_LEN)}]`)
 		: "";
 
-	if (t.status === "completed") {
-		lines.push(`  ${th.fg("success", "✓")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}${verifyTag}`);
+	if (t.status === "verified") {
+		const actualInfo = t.verification?.actual ? th.fg("dim", ` actual: ${truncateText(t.verification.actual, VERIFY_METHOD_WIDGET_LEN)}`) : "";
+		lines.push(`  ${th.fg("success", "◉")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}${actualInfo}`);
+	} else if (t.status === "completed") {
+		const note = t.verification ? th.fg("warning", " [待验证]") : "";
+		lines.push(`  ${th.fg("success", "✓")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}${note}`);
 	} else if (t.status === "cancelled") {
 		lines.push(`  ${th.fg("dim", "✗")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}`);
 	} else if (t.status === "in_progress") {
-		const prefix = isVerify ? th.fg("accent", "◎") : th.fg("warning", "●");
-		lines.push(`  ${prefix} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}${verifyTag}`);
+		lines.push(`  ${th.fg("warning", "●")} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}${verifyTag}`);
 	} else {
-		const prefix = isVerify ? th.fg("accent", "◎") : th.fg("dim", "☐");
-		lines.push(`  ${prefix} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}${verifyTag}`);
+		lines.push(`  ${th.fg("dim", "☐")} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}${verifyTag}`);
 	}
 
 	if (t.subtasks && t.subtasks.length > 0 && t.status !== "cancelled") {

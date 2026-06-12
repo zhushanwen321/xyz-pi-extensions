@@ -74,6 +74,7 @@ export const GoalManagerParams = Type.Object({
 		taskId: Type.Number(),
 		status: StringEnum(GOAL_TASK_STATUSES),
 		evidence: Type.Optional(Type.String()),
+		actual: Type.Optional(Type.String({ description: "Actual verification result (required when status=verified)" })),
 	}))),
 	taskId: Type.Optional(Type.Number({ description: "Task ID (required for subtask operations)" })),
 	texts: Type.Optional(Type.Array(Type.String(), { description: "Subtask text list (for add_subtasks)" })),

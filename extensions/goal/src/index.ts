@@ -197,9 +197,9 @@ export default function goalExtension(pi: ExtensionAPI) {
 				"\n\nAvailable actions:" +
 				"\n- create_tasks: Decompose the objective into a task list (call once at goal start). Each task description must be a one-line summary (max 60 chars), no newlines or markdown. Accept verifications array for task verification." +
 				"\n- add_tasks: Append new tasks to the existing list (when omissions are discovered). Each task description must be a one-line summary (max 60 chars), no newlines or markdown. Accept verifications array." +
-				"\n- update_tasks: Batch update task statuses (completed requires evidence, cancelled does not block goal completion). Completing a task with verification auto-creates a verify_task." +
+				"\n- update_tasks: Batch update task statuses (completed requires evidence, cancelled does not block goal completion). Completing a task with verification triggers a verification prompt — then call update_tasks with status=verified and actual=<result>." +
 				"\n- list_tasks: View progress and remaining budget" +
-				"\n- complete_goal: Mark the objective as achieved (all tasks AND verify_tasks must be completed + evidence)" +
+				"\n- complete_goal: Mark the objective as achieved (all tasks must be completed or verified + evidence)" +
 				"\n- cancel_goal: Cancel the current goal (use when user wants to exit/stop)" +
 				"\n- report_blocked: Report being blocked (use when encountering unsolvable issues)" +
 				"\n- add_subtasks: Add subtasks to a specified task (params: taskId, texts[]). Use this instead of todo tool in Goal mode" +
@@ -211,7 +211,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 			"[Format] Each task description must be a one-line summary, max 60 chars. No newlines, markdown, or detailed parameter lists — those go in execution phase. Example: 'Fix hook-registry dedup logic' not 'Fix hook-registry dedup + transport-execute enhancementConfig guard + failover-loop ...'",
 			"[Append] When discovering omissions during execution, use add_tasks to append — do not re-call create_tasks",
 			"[Completion] After completing a task, call update_tasks with status=completed and provide evidence (e.g. 'test X passed', 'file F created')",
-			"[Goal completion] Only call complete_goal when all tasks AND verify_tasks are completed with overall evidence",
+			"[Goal completion] Only call complete_goal when all tasks are completed or verified with overall evidence",
 			"[Exit] When user says 'stop', 'exit', 'cancel', '不用了', '结束', etc. indicating they don't want to continue, immediately call cancel_goal — do not guide them through complete_goal",
 			"[Blocked] When encountering unsolvable technical issues, call report_blocked with the reason",
 			"[Progress] Use list_tasks anytime to check remaining tasks and budget",
@@ -227,7 +227,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 			"[Verification] - Manual: method='manual check <specific items>', expected='<expected result'",
 			"[Verification] Multiple related tasks can share one verification — set verification on the LAST related task only",
 			"[Verification] Do NOT create a separate 'run tests' task for verification — use verification field instead",
-			"[Verification] When a task with verification is completed, a verify_task is auto-created. Execute the verification and mark it completed with evidence",
+			"[Verification] When a task with verification is completed, run the verification command with bash. Then call update_tasks with status=verified and actual=<result>",
 		],
 		parameters: GoalManagerParams,
 

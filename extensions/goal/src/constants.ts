@@ -43,8 +43,6 @@ export const TASK_STALL_TURN_THRESHOLD = 10;	// task/subtask 停滞提醒阈值�
 export const AUTO_CLEAR_TURNS = 2;				// 终态后自动清理轮数
 export const MAX_HISTORY_ENTRIES = 20;			// goal-history entry GC 上限
 
-export const VERIFY_DESC_PREVIEW_LEN = 30;		// verify_task description 中原 task 描述的截断长度
-export const VERIFY_DESC_TRUNCATE_KEEP = 27;	// 截断保留长度
 export const VERIFY_METHOD_WIDGET_LEN = 30;	// widget 中验证方法显示的截断长度
 export const EXT_INIT_TASK_DESC_MAX = 60;	// external init 中 task description 截断上限
 export const TASK_DESC_MAX_LENGTH = 80;		// task description 截断上限（normalizeDescription）

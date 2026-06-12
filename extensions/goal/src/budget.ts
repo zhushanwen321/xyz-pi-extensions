@@ -16,7 +16,7 @@ import {
 	SECONDS_PER_MINUTE,
 } from "./constants";
 import type { GoalRuntimeState } from "./state";
-import { getElapsedTimeSeconds } from "./state";
+import { getCompletedCount, getElapsedTimeSeconds, getIncompleteTasks } from "./state";
 
 // ── 决策类型 ────────────────────────────────────────
 
@@ -139,8 +139,8 @@ export interface ProgressCheck {
 }
 
 export function checkProgress(state: GoalRuntimeState, tasksCompletedAtStart: number): ProgressCheck {
-	const incomplete = state.tasks.filter((t) => t.status === "pending" || t.status === "in_progress");
-	const completedCount = state.tasks.filter((t) => t.status === "completed").length;
+	const incomplete = getIncompleteTasks(state.tasks);
+	const completedCount = getCompletedCount(state.tasks);
 	const totalCount = state.tasks.length;
 	const progressThisRound = completedCount - tasksCompletedAtStart;
 

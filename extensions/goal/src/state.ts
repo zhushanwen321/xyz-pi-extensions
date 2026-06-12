@@ -55,7 +55,7 @@ const TERMINAL_STATUSES: ReadonlySet<GoalStatus> = new Set([
 
 // ── 任务数据结构 ──────────────────────────────────────
 
-export type TaskStatus = "pending" | "in_progress" | "completed" | "cancelled";
+export type TaskStatus = "pending" | "in_progress" | "completed" | "verified" | "cancelled";
 
 export type SubtaskStatus = "pending" | "in_progress" | "completed";
 
@@ -76,16 +76,26 @@ export const GOAL_TASK_STATUSES: readonly TaskStatus[] = [
 	"pending",
 	"in_progress",
 	"completed",
+	"verified",
 	"cancelled",
 ] as const;
 
 export function isTerminalTaskStatus(status: TaskStatus): boolean {
-	return status === "completed" || status === "cancelled";
+	return status === "verified" || status === "cancelled";
+}
+
+/** 业务语义的"完成"：无 verification 的 completed、verified、cancelled */
+export function isTaskDone(task: GoalTask): boolean {
+	if (task.status === "cancelled") return true;
+	if (task.status === "verified") return true;
+	if (task.status === "completed" && !task.verification) return true;
+	return false;
 }
 
 export interface TaskVerification {
 	method: string;    // 验证方法描述，如 "pnpm --filter @zhushanwen/pi-goal typecheck"
 	expected: string;  // 预期结果，如 "tsc --noEmit 零错误"
+	actual?: string;   // verified 时填写的实际验证结果
 }
 
 export interface GoalTask {
@@ -94,7 +104,6 @@ export interface GoalTask {
 	status: TaskStatus;
 	evidence?: string; // 完成时的证据描述
 	verification?: TaskVerification; // 可选验证配置
-	verificationFor?: number; // verify_task 关联的原 task ID（有此字段则为 verify_task）
 	subtasks?: Subtask[];
 	lastUpdatedTurn: number;
 }
@@ -220,7 +229,6 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 		return {
 			...t,
 			verification: t.verification as TaskVerification | undefined,
-			verificationFor: t.verificationFor as number | undefined,
 			subtasks,
 			lastUpdatedTurn: (t.lastUpdatedTurn as number) ?? 0,
 		} as unknown as GoalTask;
@@ -246,19 +254,11 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 // ── 进度计算 ──────────────────────────────────────────
 
 export function getCompletedCount(tasks: GoalTask[]): number {
-	return tasks.filter((t) => t.status === "completed").length;
+	return tasks.filter((t) => t.status === "completed" || t.status === "verified").length;
 }
 
 export function getIncompleteTasks(tasks: GoalTask[]): GoalTask[] {
-	return tasks.filter((t) => !isTerminalTaskStatus(t.status));
-}
-
-export function isVerifyTask(task: GoalTask): boolean {
-	return task.verificationFor !== undefined && task.verificationFor > 0;
-}
-
-export function getIncompleteVerifyTasks(tasks: GoalTask[]): GoalTask[] {
-	return tasks.filter((t) => isVerifyTask(t) && !isTerminalTaskStatus(t.status));
+	return tasks.filter((t) => !isTaskDone(t));
 }
 
 export function getNextTaskId(tasks: GoalTask[]): number {
