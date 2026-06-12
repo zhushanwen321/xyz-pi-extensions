@@ -132,9 +132,15 @@ importers:
 
   extensions/plan:
     dependencies:
+      '@mariozechner/pi-ai':
+        specifier: '*'
+        version: 0.73.1(ws@8.21.0)(zod@4.4.3)
       '@mariozechner/pi-coding-agent':
         specifier: '>=0.73.0'
         version: 0.73.1(ws@8.21.0)(zod@4.4.3)
+      '@sinclair/typebox':
+        specifier: '*'
+        version: 0.34.49
     devDependencies:
       vitest:
         specifier: ^4.1.8
