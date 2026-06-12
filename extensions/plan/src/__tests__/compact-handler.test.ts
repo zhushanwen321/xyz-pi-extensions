@@ -151,10 +151,10 @@ describe("registerPlanEventHandlers", () => {
     const handlers = captureHandlers();
 
     const result = await handlers["session_before_tree"]({}, makeCtx() as never);
-    const r = result as { summary: string };
+    const r = result as { summary: { summary: string } };
 
-    expect(r.summary).toContain("Plan content here");
-    expect(r.summary).toContain("/tmp/plan.md");
+    expect(r.summary.summary).toContain("Plan content here");
+    expect(r.summary.summary).toContain("/tmp/plan.md");
   });
 
   it("session_before_tree (inactive): returns empty object {}", async () => {

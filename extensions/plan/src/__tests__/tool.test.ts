@@ -17,6 +17,7 @@ vi.mock("@mariozechner/pi-ai", () => ({
 // Mock compact.js (dynamically imported by complete action)
 vi.mock("../compact.js", () => ({
   handlePlanComplete: vi.fn(),
+  detectGoalCapability: vi.fn(() => false),
 }));
 
 // Mock widget (imported by abort)
@@ -74,9 +75,8 @@ describe("registerPlanTool", () => {
       const { exec } = setup();
       const res = await exec({ action: "list-template" });
       expect(res.content[0].type).toBe("text");
-      const parsed = JSON.parse(res.content[0].text);
-      expect(parsed.length).toBeGreaterThanOrEqual(0);
       expect(res.details.action).toBe("list-template");
+      expect(Array.isArray(res.details.templates)).toBe(true);
     });
   });
 
@@ -96,7 +96,7 @@ describe("registerPlanTool", () => {
       const { exec, pi, sessions } = setup();
       // Use a builtin template name — find one first
       const listRes = await exec({ action: "list-template" });
-      const templates = JSON.parse(listRes.content[0].text) as { name: string }[];
+      const templates = listRes.details.templates as { name: string }[];
       if (templates.length === 0) return; // no builtin templates available
 
       const name = templates[0].name;
@@ -144,15 +144,15 @@ describe("registerPlanTool", () => {
       expect(pi.setActiveTools).not.toHaveBeenCalled();
     });
 
-    it("sets phase to complete and restores tools on execute", async () => {
-      const { exec, ctx, pi, sessions } = setup();
-      (ctx.ui.select as ReturnType<typeof vi.fn>).mockResolvedValue("Execute the plan");
+    it("resets state and restores tools on execute", async () => {
+      const { exec, ctx, pi } = setup();
+      (ctx.ui.select as ReturnType<typeof vi.fn>).mockResolvedValue("Subagent-driven execution");
       const res = await exec({ action: "complete" });
       expect(res.details.action).toBe("complete");
+      expect(res.details.execMode).toBe("subagent");
       expect(pi.setActiveTools).toHaveBeenCalledWith(ALL_TOOL_NAMES);
       expect(handlePlanComplete).toHaveBeenCalled();
-      const state = sessions.get("test-session");
-      expect(state?.phase).toBe("complete");
+      expect(res.details.planFilePath).toBeDefined();
     });
   });
 

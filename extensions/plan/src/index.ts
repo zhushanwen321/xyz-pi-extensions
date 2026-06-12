@@ -33,7 +33,7 @@ export default function planExtension(pi: ExtensionAPI) {
   });
 
   // Clean up on session end
-  pi.on("session_end", async (_event: unknown, ctx: ExtensionContext) => {
+  pi.on("session_shutdown", async (_event: unknown, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     sessions.delete(sessionId);
   });

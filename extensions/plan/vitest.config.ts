@@ -11,6 +11,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@mariozechner/pi-coding-agent": path.resolve(dir, "../../shared/types/mariozechner/index.ts"),
+      "@mariozechner/pi-tui": path.resolve(dir, "../workflow/mocks/pi-tui.ts"),
       "@mariozechner/pi-ai": path.resolve(dir, "../workflow/mocks/pi-ai.ts"),
       "typebox": path.resolve(dir, "../workflow/mocks/typebox.ts"),
     },

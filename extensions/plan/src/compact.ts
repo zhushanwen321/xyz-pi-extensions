@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionBeforeCompactEvent, SessionBeforeTreeEvent } from "@mariozechner/pi-coding-agent";
 
 import type { PlanSessionMap, PlanState } from "./state.js";
 import { getPlanState } from "./state.js";
@@ -9,13 +9,12 @@ export function registerPlanEventHandlers(
   pi: ExtensionAPI,
   sessions: PlanSessionMap,
 ): void {
-  // session_before_compact: customize compaction summary with plan content
-  pi.on("session_before_compact", async (event: { preparation?: { firstKeptEntryId?: string; tokensBefore?: number } }, ctx: ExtensionContext) => {
+  pi.on("session_before_compact", async (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     const state = getPlanState(sessions, sessionId, ctx);
     if (!state.isActive) return {};
 
-    const prep = event?.preparation;
+    const prep = event.preparation;
 
     // Read plan file content for recovery after compact
     const planContent = readPlanFileSafe(state.planFilePath);
@@ -38,8 +37,7 @@ export function registerPlanEventHandlers(
     };
   });
 
-  // session_before_tree: customize tree summary with plan content
-  pi.on("session_before_tree", async (_event: unknown, ctx: ExtensionContext) => {
+  pi.on("session_before_tree", async (_event: SessionBeforeTreeEvent, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     const state = getPlanState(sessions, sessionId, ctx);
     if (!state.isActive) return {};
@@ -47,10 +45,12 @@ export function registerPlanEventHandlers(
     const planContent = readPlanFileSafe(state.planFilePath);
 
     return {
-      summary:
-        `Plan mode active (${state.phase}). Plan file: ${state.planFilePath}\n\n` +
-        `## Plan Content\n${planContent}\n\n` +
-        `Read the plan file and execute the implementation.`,
+      summary: {
+        summary:
+          `Plan mode active (${state.phase}). Plan file: ${state.planFilePath}\n\n` +
+          `## Plan Content\n${planContent}\n\n` +
+          `Read the plan file and execute the implementation.`,
+      },
     };
   });
 }
@@ -64,15 +64,10 @@ function readPlanFileSafe(planFilePath: string): string {
   }
 }
 
-/** Detect whether subagent capability is available */
-function detectSubagentCapability(pi: ExtensionAPI): boolean {
+/** Detect whether goal extension is available via its programming interface */
+export function detectGoalCapability(pi: ExtensionAPI): boolean {
   try {
     const api = pi as unknown as Record<string, unknown>;
-    // Check if pi-subagents package registers a subagent tool
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const tools = (api as any)._registeredTools as Map<string, unknown> | undefined;
-    if (tools && tools.has("subagent")) return true;
-    // Fallback: check __goalInit presence as proxy for goal extension
     return typeof api.__goalInit === "function";
   } catch {
     return false;
@@ -144,28 +139,29 @@ export function extractPlanSteps(planContent: string): string[] {
   return steps;
 }
 
-/** Build execution suggestion based on subagent availability */
-function buildExecutionSuggestion(pi: ExtensionAPI): string {
-  const hasSubagent = detectSubagentCapability(pi);
-  if (hasSubagent) {
-    return "Subagent capability detected. Suggest starting goal + wave parallel development for multi-file tasks.";
-  }
-  return "No subagent capability detected. Suggest single-agent step-by-step execution.";
-}
 
 export function handlePlanComplete(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   state: PlanState,
   isolation: string,
+  execMode: string,
 ): void {
   const planFilePath = state.planFilePath;
-  const execSuggestion = buildExecutionSuggestion(pi);
+
+  // Build mode-specific steer
+  const modeMessages: Record<string, string> = {
+    subagent: "Execute via subagent-driven development: delegate each task to an independent subagent for parallel execution.",
+    goal: "Execute via /goal: set up tracked task decomposition with budget control using the goal extension.",
+    "single-agent": "Execute step by step in the current session.",
+  };
+  const modeHint = modeMessages[execMode] ?? modeMessages["single-agent"];
 
   const executeMessage =
     `Plan approved by user. Plan file: ${planFilePath}\n\n` +
-    `Read the plan file and start implementing.\n` +
-    execSuggestion;
+    `Execution mode: ${execMode}\n` +
+    `${modeHint}\n\n` +
+    `Read the plan file and start implementing.`;
 
   switch (isolation) {
     case "compact": {

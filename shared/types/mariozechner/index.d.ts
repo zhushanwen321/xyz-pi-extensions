@@ -81,6 +81,10 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type AgentToolResult<T = any> = { content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; details: T };
 	export type TurnEndEvent = any;
 	export type SessionBeforeCompactEvent = any;
+	export type SessionBeforeCompactResult = any;
+	export type SessionBeforeTreeEvent = any;
+	export type SessionBeforeTreeResult = any;
+	export type SessionShutdownEvent = any;
 	export type SessionStartEvent = any;
 	export type ExtensionHandler = any;
 	export type RegisteredTool = any;

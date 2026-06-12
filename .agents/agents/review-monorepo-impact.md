@@ -55,14 +55,13 @@ must_fix: <数字>
 
 ## Schema 输出
 
-agent 必须返回 JSON：
+agent 必须通过 `structured-output` tool 返回 JSON：
 
 ```json
 {
-  "reportPath": "<output 路径>",
-  "mustFix": <数字>,
-  "suggestions": <数字>,
-  "summary": "<一段话摘要>"
+  "report_file": "<output 路径>",
+  "must_fix": <数字>,
+  "suggestion": <数字>
 }
 ```
 
