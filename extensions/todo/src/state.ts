@@ -12,11 +12,15 @@ import type { Todo } from "./model";
 export interface TodoSessionState {
 	todos: Todo[];
 	nextId: number;
-	// v3: 用户消息轮数与提醒追踪
+	// 用户消息轮数与提醒追踪
 	userMessageCount: number;
 	lastTodoCallCount: number;
 	stallNotified: boolean;
 	allCompletedAtCount: number | null;
+	/** 全部 completed 时已注入 steer，防止重复 */
+	completionSteered: boolean;
+	/** agent_end 设置、before_agent_start 消费的延迟 steer 消息 */
+	pendingSteerMessage: string | null;
 }
 
 export function createTodoSessionState(): TodoSessionState {
@@ -27,5 +31,7 @@ export function createTodoSessionState(): TodoSessionState {
 		lastTodoCallCount: 0,
 		stallNotified: false,
 		allCompletedAtCount: null,
+		completionSteered: false,
+		pendingSteerMessage: null,
 	};
 }

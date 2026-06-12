@@ -1,19 +1,16 @@
 /**
- * /todos 命令的 TUI 组件 — 独立可关闭的 todo 列表视图。
- *
- * 拆分理由：原 src/index.ts 的 TodoListComponent 占用约 85 行，与渲染函数、
- * tool 注册、事件注册混在一起。独立后 commands.ts 只需引用本组件。
+ * /todos 命令的 TUI 组件 — 独立可关闭的 todo 列表视图（双列布局）。
  */
 
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import { matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
 
 import type { Todo } from "./model";
+import { FALLBACK_TERM_WIDTH, renderDualColumn } from "./render";
 
 const HEADER_PREFIX_DASHES = 3;
 const HEADER_RESERVED_WIDTH = 10;
 
-/** /todos 命令的 TUI 组件 — 独立可关闭的 todo 列表视图 */
 export class TodoListComponent {
 	private todos: Todo[];
 	private theme: Theme;
@@ -40,51 +37,31 @@ export class TodoListComponent {
 
 		const lines: string[] = [];
 		const th = this.theme;
+		const termWidth = width || FALLBACK_TERM_WIDTH;
+		const indent = "  ";
 
 		lines.push("");
 		const title = th.fg("accent", " Todos ");
 		const headerLine =
-			th.fg("borderMuted", "\u2500".repeat(HEADER_PREFIX_DASHES)) + title + th.fg("borderMuted", "\u2500".repeat(Math.max(0, width - HEADER_RESERVED_WIDTH)));
-		lines.push(truncateToWidth(headerLine, width));
+			th.fg("borderMuted", "\u2500".repeat(HEADER_PREFIX_DASHES)) + title + th.fg("borderMuted", "\u2500".repeat(Math.max(0, termWidth - HEADER_RESERVED_WIDTH)));
+		lines.push(truncateToWidth(headerLine, termWidth));
 		lines.push("");
 
 		if (this.todos.length === 0) {
-			lines.push(truncateToWidth(`  ${th.fg("dim", "No todos yet. Ask the agent to add some!")}`, width));
+			lines.push(truncateToWidth(`${indent}${th.fg("dim", "No todos yet. Ask the agent to add some!")}`, termWidth));
 		} else {
 			const completed = this.todos.filter((t) => t.status === "completed").length;
 			const total = this.todos.length;
-			lines.push(truncateToWidth(`  ${th.fg("muted", `${completed}/${total} completed`)}`, width));
+			lines.push(truncateToWidth(`${indent}${th.fg("muted", `${completed}/${total} completed`)}`, termWidth));
 			lines.push("");
 
-			for (const todo of this.todos) {
-				const mark =
-					todo.status === "completed"
-						? th.fg("success", "\u2713")
-						: todo.status === "verifying"
-							? th.fg("warning", "\u25d0")
-							: todo.status === "in_progress"
-								? th.fg("warning", "\u25cf")
-								: todo.status === "failed"
-									? th.fg("error", "\u2717")
-									: th.fg("dim", "\u25cb");
-				const id = th.fg("accent", `#${todo.id}`);
-				const text = todo.status === "completed" ? th.fg("dim", todo.text) : th.fg("text", todo.text);
-				let verifyTag = "";
-				if (todo.status === "verifying") {
-					verifyTag = th.fg("warning", ` [验证中${todo.evidence ? ": " + todo.evidence.slice(0, 30) : ""}]`);
-				} else if (todo.verifyText && todo.status !== "completed") {
-					verifyTag = th.fg("warning", " [待验证]");
-				} else if (todo.status === "completed" && todo.verifyText) {
-					verifyTag = th.fg("success", " [已验证]");
-				} else if (todo.verifyText === undefined) {
-					verifyTag = th.fg("dim", " [无需验证]");
-				}
-				lines.push(truncateToWidth(`  ${mark} ${id} ${text}${verifyTag}`, width));
+			for (const line of renderDualColumn(this.todos, th, termWidth, indent)) {
+				lines.push(line);
 			}
 		}
 
 		lines.push("");
-		lines.push(truncateToWidth(`  ${th.fg("dim", "Press Escape to close")}`, width));
+		lines.push(truncateToWidth(`${indent}${th.fg("dim", "Press Escape to close")}`, termWidth));
 		lines.push("");
 
 		this.cachedWidth = width;
