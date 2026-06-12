@@ -39,7 +39,8 @@ export function registerPlanTool(
     name: "plan",
     label: "Plan Mode",
     description:
-      "Plan mode tool for brainstorming and writing implementation plans. " +
+      "Manages plan mode lifecycle (template selection, state transitions, completion). " +
+      "NOT for writing plan content — use the 'write' tool to write plan.md. " +
       "Actions: list-template, select-template, create-template, complete, abort.",
     parameters: Type.Object({
       action: StringEnum(PLAN_ACTIONS, { description: "Action to perform" }),
@@ -47,7 +48,28 @@ export function registerPlanTool(
       templateContent: Type.Optional(Type.String({ description: "Template content (for create-template)" })),
       isolation: Type.Optional(StringEnum(["compact", "tree", "direct"])),
     }),
-    promptSnippet: "Use plan tool for plan mode operations",
+    promptSnippet:
+      "## When to use this tool vs 'write'\n" +
+      "Use 'plan' tool ONLY for plan mode state management:\n" +
+      "- list-template / select-template / create-template — template operations\n" +
+      "- complete — user approved plan, exit plan mode\n" +
+      "- abort — cancel plan mode\n" +
+      "\n" +
+      "Use 'write' tool for ALL plan content: writing plan.md, updating plan chapters.\n" +
+      "\n" +
+      "## End-to-end workflow example\n" +
+      "1. /plan 'add dark mode' — user enters plan mode\n" +
+      "2. AI explores codebase (read, grep, bash) — brainstorming\n" +
+      "3. plan(action='list-template') — show available templates\n" +
+      "4. User picks template → plan(action='select-template', templateName='feature-plan')\n" +
+      "5. write({path: planFilePath, content: '...filled template...'}) — write plan content\n" +
+      "6. User reviews → plan(action='complete', isolation='compact') — exit plan mode\n" +
+      "\n" +
+      "## Common mistakes\n" +
+      "❌ plan(action='complete') to 'write the plan' — WRONG, use write tool\n" +
+      "❌ Calling plan tool when user says 'write plan to file' — use write tool\n" +
+      "✅ plan(action='list-template') to discover templates\n" +
+      "✅ plan(action='complete') AFTER plan.md is written AND user approves",
     async execute(
       _toolCallId: string,
       params: Record<string, unknown>,
