@@ -6,14 +6,16 @@ import type { ThemeColor } from "@mariozechner/pi-coding-agent";
 
 import { getBudgetColor,getTimeUsagePercent, getTokenUsagePercent } from "./budget.js";
 import {
+	ELLIPSIS_LENGTH,
 	OBJECTIVE_DISPLAY_LIMIT,
 	OBJECTIVE_TRUNCATE_KEEP,
 	PERCENT_FACTOR,
 	PROGRESS_BAR_DEFAULT_WIDTH,
 	SECONDS_PER_MINUTE,
+	VERIFY_METHOD_WIDGET_LEN,
 } from "./constants";
 import type { GoalRuntimeState } from "./state";
-import { getCompletedCount, getElapsedTimeSeconds } from "./state";
+import { getCompletedCount, getElapsedTimeSeconds, isVerifyTask } from "./state";
 
 /**
  * 将多行文本压缩为单行，用于 widget 渲染。
@@ -32,6 +34,11 @@ function renderProgressBar(pct: number, width: number = PROGRESS_BAR_DEFAULT_WID
 	const clamped = Math.min(Math.max(pct, 0), 1);
 	const filled = Math.round(clamped * width);
 	return "█".repeat(filled) + "░".repeat(width - filled);
+}
+
+function truncateText(text: string, maxLen: number): string {
+	if (text.length <= maxLen) return text;
+	return text.slice(0, maxLen - ELLIPSIS_LENGTH) + "...";
 }
 
 export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string {
@@ -146,25 +153,37 @@ export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): strin
 	} else {
 		for (const t of state.tasks) {
 			const desc = toSingleLine(t.description);
+			const isVerify = isVerifyTask(t);
+			// Show verification tag for non-verify tasks that have verification
+			const verifyTag = !isVerify && t.verification
+				? th.fg("dim", ` [验证: ${truncateText(t.verification.method, VERIFY_METHOD_WIDGET_LEN)}]`)
+				: "";
+
 			if (t.status === "completed") {
-				lines.push(`  ${th.fg("success", "✓")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}`);
+				lines.push(`  ${th.fg("success", "✓")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}${verifyTag}`);
 			} else if (t.status === "cancelled") {
 				lines.push(`  ${th.fg("dim", "✗")} ${th.fg("dim", `#${t.id}`)} ${th.fg("dim", desc)}`);
 			} else if (t.status === "in_progress") {
-				lines.push(`  ${th.fg("warning", "●")} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}`);
+				// verify_task uses ◎ icon to distinguish from normal task ●
+				const prefix = isVerify ? th.fg("accent", "◎") : th.fg("warning", "●");
+				lines.push(`  ${prefix} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}${verifyTag}`);
 			} else {
-				lines.push(`  ${th.fg("dim", "☐")} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}`);
+				const prefix = isVerify ? th.fg("accent", "◎") : th.fg("dim", "☐");
+				lines.push(`  ${prefix} ${th.fg("accent", `#${t.id}`)} ${th.fg("text", desc)}${verifyTag}`);
 			}
-			// Sub-todo items
+			// Subtask collapse: hide subtask rows when ALL subtasks completed
 			if (t.subtasks && t.subtasks.length > 0 && t.status !== "cancelled") {
-				for (const s of t.subtasks) {
-					const subIcon = s.status === "completed"
-						? th.fg("success", "✓")
-						: s.status === "in_progress"
-							? th.fg("warning", "●")
-							: th.fg("dim", "○");
-					const subText = s.status === "completed" ? th.fg("dim", s.text) : th.fg("muted", s.text);
-					lines.push(`    ${subIcon} ${th.fg("dim", `${t.id}.${s.id}`)} ${subText}`);
+				const allSubCompleted = t.subtasks.every((s) => s.status === "completed");
+				if (!allSubCompleted) {
+					for (const s of t.subtasks) {
+						const subIcon = s.status === "completed"
+							? th.fg("success", "✓")
+							: s.status === "in_progress"
+								? th.fg("warning", "●")
+								: th.fg("dim", "○");
+						const subText = s.status === "completed" ? th.fg("dim", s.text) : th.fg("muted", s.text);
+						lines.push(`    ${subIcon} ${th.fg("dim", `${t.id}.${s.id}`)} ${subText}`);
+					}
 				}
 			}
 		}

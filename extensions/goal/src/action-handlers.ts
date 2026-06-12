@@ -10,16 +10,20 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Static } from "typebox";
 
-import { SECONDS_PER_MINUTE } from "./constants";
+import { ELLIPSIS_LENGTH, SECONDS_PER_MINUTE, TASK_DESC_MAX_LENGTH,VERIFY_DESC_PREVIEW_LEN, VERIFY_DESC_TRUNCATE_KEEP } from "./constants";
 import {
 	getCompletedCount,
 	getElapsedTimeSeconds,
 	getIncompleteTasks,
+	getIncompleteVerifyTasks,
+	getNextTaskId,
 	type GoalRuntimeState,
 	type GoalTask,
 	isTerminalStatus,
 	isTerminalTaskStatus,
+	isVerifyTask,
 	type Subtask,
+	type TaskVerification,
 	transitionStatus,
 } from "./state";
 import { formatTaskList } from "./templates";
@@ -60,15 +64,17 @@ export const handleCreateTasks: ActionHandler = ({ state, params, pi, session, c
 			`Already has ${state.tasks.length} tasks (${existingIncomplete.length} incomplete). Use add_tasks to append, or /goal update to re-plan.`,
 		);
 	}
+	const verifications = params.verifications;
 	state.tasks = params.tasks.map((desc: string, i: number) => ({
 		id: i + 1,
 		description: normalizeDescription(desc),
 		status: "pending" as const,
+		verification: verifications?.[i] as TaskVerification | undefined,
 		lastUpdatedTurn: state.currentTurnIndex,
 	}));
 	persistGoalState(pi, session, ctx);
 	return makeGoalResult(session,
-		`Created ${state.tasks.length} tasks:\n${state.tasks.map((t) => `  #${t.id}: ${t.description}`).join("\n")}`,
+		`Created ${state.tasks.length} tasks:\n${state.tasks.map((t) => `  #${t.id}: ${t.description}${t.verification ? ` [验证: ${t.verification.method}]` : ""}`).join("\n")}`,
 	);
 };
 
@@ -78,19 +84,19 @@ export const handleAddTasks: ActionHandler = ({ state, params, pi, session, ctx 
 	if (!params.tasks || params.tasks.length === 0) {
 		return errorResult("add_tasks requires a non-empty tasks array");
 	}
-	const startId = state.tasks.length > 0
-		? Math.max(...state.tasks.map((t) => t.id)) + 1
-		: 1;
+	const startId = getNextTaskId(state.tasks);
+	const verifications = params.verifications;
 	const newTasks: GoalTask[] = params.tasks.map((desc: string, i: number) => ({
 		id: startId + i,
 		description: normalizeDescription(desc),
 		status: "pending" as const,
+		verification: verifications?.[i] as TaskVerification | undefined,
 		lastUpdatedTurn: state.currentTurnIndex,
 	}));
 	state.tasks.push(...newTasks);
 	persistGoalState(pi, session, ctx);
 	return makeGoalResult(session,
-		`Appended ${newTasks.length} tasks:\n${newTasks.map((t) => `  #${t.id}: ${t.description}`).join("\n")}`,
+		`Appended ${newTasks.length} tasks:\n${newTasks.map((t) => `  #${t.id}: ${t.description}${t.verification ? ` [验证: ${t.verification.method}]` : ""}`).join("\n")}`,
 	);
 };
 
@@ -103,6 +109,7 @@ export const handleUpdateTasks: ActionHandler = ({ state, params, pi, session, c
 	const validationErr = validateUpdateTasks(state, params.updates);
 	if (validationErr) return validationErr;
 	const results: string[] = [];
+	const verifyTasksToCreate: GoalTask[] = [];
 	for (const u of params.updates) {
 		const task = state.tasks.find((t) => t.id === u.taskId)!;
 		const prev = task.status;
@@ -111,13 +118,46 @@ export const handleUpdateTasks: ActionHandler = ({ state, params, pi, session, c
 			task.status = "completed";
 			task.evidence = u.evidence;
 			results.push(`#${task.id}: ${prev} → completed (${u.evidence})`);
+			// Auto-create verify_task if task has verification and is not already a verify_task
+			if (task.verification && !isVerifyTask(task)) {
+				const verifyId = getNextTaskId([...state.tasks, ...verifyTasksToCreate]);
+				const descPreview = task.description.length > VERIFY_DESC_PREVIEW_LEN ? task.description.slice(0, VERIFY_DESC_TRUNCATE_KEEP) + "..." : task.description;
+				const verifyTask: GoalTask = {
+					id: verifyId,
+					description: `[验证] #${task.id} ${descPreview}`,
+					status: "pending" as const,
+					verificationFor: task.id,
+					lastUpdatedTurn: state.currentTurnIndex,
+				};
+				verifyTasksToCreate.push(verifyTask);
+			}
 		} else {
 			task.status = u.status;
 			results.push(`#${task.id}: ${prev} → ${u.status}`);
 		}
 	}
+	// Append auto-created verify_tasks
+	if (verifyTasksToCreate.length > 0) {
+		state.tasks.push(...verifyTasksToCreate);
+		for (const vt of verifyTasksToCreate) {
+			results.push(`Auto-created verify_task #${vt.id}: ${vt.description}`);
+		}
+	}
 	persistGoalState(pi, session, ctx);
-	return makeGoalResult(session, `Updated ${results.length} tasks:\n${results.join("\n")}`);
+	const resultText = `Updated ${results.length} task actions:\n${results.join("\n")}`;
+	// Inject steering to prompt AI to execute verification
+	if (verifyTasksToCreate.length > 0) {
+		const verifyLines = verifyTasksToCreate.map((vt) => {
+			const origTask = state.tasks.find((t) => t.id === vt.verificationFor)!;
+			const v = origTask.verification!;
+			return `#${vt.id}: Execute verification for #${origTask.id} — ${v.method} (expected: ${v.expected})`;
+		}).join("\n");
+		pi.sendUserMessage(
+			`[GOAL Verification] Task(s) completed. Execute verification now:\n${verifyLines}\nRun the verification command with bash, then call update_tasks to mark verify_task #${verifyTasksToCreate[0]!.id} as completed with the result as evidence.`,
+			{ deliverAs: "steer" },
+		);
+	}
+	return makeGoalResult(session, resultText);
 };
 
 /** 验证 update_tasks 的所有更新项；返回首个错误或 null。 */
@@ -135,6 +175,13 @@ function validateUpdateTasks(state: GoalRuntimeState, updates: NonNullable<Stati
 		}
 		if (u.status === "completed" && (!u.evidence || u.evidence.trim() === "")) {
 			return errorResult(`Task #${task.id}: completed requires evidence`);
+		}
+		// verify_task constraint: cannot complete before original task is completed
+		if (isVerifyTask(task) && u.status === "completed") {
+			const origTask = state.tasks.find((t) => t.id === task.verificationFor);
+			if (origTask && origTask.status !== "completed") {
+				return errorResult(`Verify task #${task.id}: original task #${origTask.id} must be completed first`);
+			}
 		}
 	}
 	return null;
@@ -159,6 +206,13 @@ export const handleCompleteGoal: ActionHandler = ({ state, params, pi, session, 
 	if (incomplete.length > 0) {
 		return errorResult(
 			`${incomplete.length} tasks still incomplete: ${incomplete.map((t) => `#${t.id}`).join(", ")}. Complete them first or explain why they don't need completion.`,
+		);
+	}
+	// Check all verify_tasks are terminal
+	const incompleteVerify = getIncompleteVerifyTasks(state.tasks);
+	if (incompleteVerify.length > 0) {
+		return errorResult(
+			`${incompleteVerify.length} verify_tasks still incomplete: ${incompleteVerify.map((t) => `#${t.id}`).join(", ")}. Execute verifications and mark them completed, or cancel them.`,
 		);
 	}
 	if (getCompletedCount(state.tasks) === 0) {
@@ -316,10 +370,8 @@ export const handleDeleteSubtasks: ActionHandler = ({ state, params, pi, session
 /** 将 AI 传入的 task description 标准化：去换行、截断 */
 function normalizeDescription(desc: string): string {
 	const singleLine = desc.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
-	const ELLIPSIS_LENGTH = 3;
-	const MAX_TASK_DESC_LENGTH = 80;
-	if (singleLine.length > MAX_TASK_DESC_LENGTH) {
-		return singleLine.slice(0, MAX_TASK_DESC_LENGTH - ELLIPSIS_LENGTH) + "...";
+	if (singleLine.length > TASK_DESC_MAX_LENGTH) {
+		return singleLine.slice(0, TASK_DESC_MAX_LENGTH - ELLIPSIS_LENGTH) + "...";
 	}
 	return singleLine;
 }

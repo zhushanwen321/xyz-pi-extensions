@@ -39,6 +39,8 @@ export interface GoalSession {
 	hasPendingInjection: boolean;
 	/** 防重入标志：handleAgentEnd / handleBeforeAgentStart 等事件处理器入口检查 */
 	isProcessing: boolean;
+	/** ESC 中断标记：tool call 被 abort 时设为 true，agent_end 检查后进入 paused */
+	pendingPause: boolean;
 }
 
 // ── Stale Context Detection ──────────────────────────
@@ -80,6 +82,10 @@ export const GoalManagerParams = Type.Object({
 		status: StringEnum(SUBTASK_STATUSES),
 	}))),
 	subIds: Type.Optional(Type.Array(Type.Number(), { description: "Subtask ID list (for delete_subtasks)" })),
+	verifications: Type.Optional(Type.Array(Type.Object({
+		method: Type.String({ description: "Verification method, e.g. 'pnpm --filter <pkg> typecheck'" }),
+		expected: Type.String({ description: "Expected result, e.g. 'zero type errors'" }),
+	}), { description: "Verification configs for each task (1-to-1 with tasks array, for create_tasks/add_tasks)" })),
 	evidence: Type.Optional(Type.String({ description: "Evidence for completion (required for complete_goal)" })),
 	reason: Type.Optional(Type.String({ description: "Reason for being blocked (required for report_blocked)" })),
 	cancelReason: Type.Optional(Type.String({ description: "Why the user wants to cancel (required for cancel_goal)" })),
@@ -230,8 +236,9 @@ export async function executeGoalAction(
 		return errorResult("Goal mode not active. Use /goal <objective> to start.");
 	}
 
-	// P1-4: signal 透传 — 若已 abort 直接返回错误
+	// P1-4: signal 透传 — 若已 abort 标记 pendingPause
 	if (signal?.aborted) {
+		session.pendingPause = true;
 		return errorResult("Tool call aborted by signal.");
 	}
 

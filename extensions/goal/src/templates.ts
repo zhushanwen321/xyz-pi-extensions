@@ -11,7 +11,7 @@
 
 import { PERCENT_FACTOR, SECONDS_PER_MINUTE, TASK_STALL_TURN_THRESHOLD } from "./constants";
 import type { GoalRuntimeState, GoalTask } from "./state";
-import { getCompletedCount, getElapsedTimeSeconds,getIncompleteTasks } from "./state";
+import { getCompletedCount, getElapsedTimeSeconds, getIncompleteTasks, isVerifyTask } from "./state";
 
 // ── XML 转义（防止 objective 中的 XML 标签破坏 prompt 结构）──
 
@@ -46,6 +46,7 @@ export function continuationPrompt(state: GoalRuntimeState): string {
 		`<objective>${objective}</objective>\n` +
 		`${taskLine}\n` +
 		`Rules: create_tasks→update_tasks(evidence)→complete_goal(evidence). blocked→report_blocked(reason). subtask: add_subtasks/update_subtasks (replaces todo tool).\n` +
+		`Verification: When a task with verification is completed, a verify_task is auto-created. Execute verification with bash and mark verify_task completed with evidence.\n` +
 		`Audit: Verify each requirement has authoritative evidence. Do not mark completed due to budget exhaustion, do not mark blocked due to difficulty.\n` +
 		`</goal_context>`
 	);
@@ -122,9 +123,10 @@ export function contextInjectionPrompt(state: GoalRuntimeState): string {
 		`Strict rules:\n` +
 		`1. First step: call goal_manager's create_tasks to decompose tasks (if not yet created)\n` +
 		`2. After completing a task, call update_tasks with status=completed and provide evidence\n` +
-		`3. Only call complete_goal with concrete evidence\n` +
-		`4. If blocked, call report_blocked\n` +
-		`5. In Goal mode, do not use the todo tool — use add_subtasks / update_subtasks for fine-grained tracking\n` +
+		`3. If task has verification, a verify_task is auto-created — execute verification with bash and mark it completed\n` +
+		`4. Only call complete_goal with concrete evidence (all tasks AND verify_tasks must be completed)\n` +
+		`5. If blocked, call report_blocked\n` +
+		`6. In Goal mode, do not use the todo tool — use add_subtasks / update_subtasks for fine-grained tracking\n` +
 		`</goal_context>`
 	);
 }
@@ -198,21 +200,30 @@ function formatBudgetLine(state: GoalRuntimeState): string {
 
 export function formatTaskList(tasks: GoalTask[]): string {
 	if (tasks.length === 0) return "No tasks yet.";
-	const completed = tasks.filter(t => t.status === "completed");
-	const active = tasks.filter(t => t.status === "in_progress" || t.status === "pending");
-	const cancelled = tasks.filter(t => t.status === "cancelled");
+	const completed = tasks.filter(t => t.status === "completed" && !isVerifyTask(t));
+	const active = tasks.filter(t => (t.status === "in_progress" || t.status === "pending") && !isVerifyTask(t));
+	const cancelled = tasks.filter(t => t.status === "cancelled" && !isVerifyTask(t));
+	const verifyTasks = tasks.filter(t => isVerifyTask(t));
 	const lines: string[] = [];
 	if (active.length > 0) {
 		lines.push(`In progress / Pending (${active.length}):`);
 		for (const t of active) {
 			const icon = t.status === "in_progress" ? "●" : "☐";
-			lines.push(`  ${icon} #${t.id}: ${t.description}`);
+			const verifyTag = t.verification ? ` [验证: ${t.verification.method}]` : "";
+			lines.push(`  ${icon} #${t.id}: ${t.description}${verifyTag}`);
 			if (t.subtasks && t.subtasks.length > 0) {
 				for (const s of t.subtasks) {
 					const sIcon = s.status === "completed" ? "✓" : s.status === "in_progress" ? "●" : "○";
 					lines.push(`    ${sIcon} #${t.id}.${s.id}: ${s.text}`);
 				}
 			}
+		}
+	}
+	if (verifyTasks.length > 0) {
+		lines.push(`Verification tasks (${verifyTasks.length}):`);
+		for (const vt of verifyTasks) {
+			const icon = vt.status === "completed" ? "✓" : vt.status === "in_progress" ? "●" : vt.status === "cancelled" ? "✗" : "☐";
+			lines.push(`  ${icon} #${vt.id}: ${vt.description}`);
 		}
 	}
 	if (completed.length > 0) {

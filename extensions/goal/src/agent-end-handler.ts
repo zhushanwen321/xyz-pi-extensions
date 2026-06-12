@@ -258,6 +258,17 @@ async function handleStallAndContinuation(
 	const state = session.state!;
 	if (checkStale()) return;
 
+	// ESC pause: if tool call was aborted, pause instead of continuing
+	if (session.pendingPause) {
+		session.pendingPause = false;
+		state.status = transitionStatus(state.status, "paused");
+		persistGoalState(pi, session, ctx);
+		if (checkStale()) return;
+		updateWidget(session, ctx);
+		ctx.ui.notify("Goal paused (user interrupt). Use /goal resume to continue.", "info");
+		return;
+	}
+
 	// Stall 检测
 	updateStallCounter(state, progress.isStalled);
 	if (state.stallCount >= state.budget.maxStallTurns) {

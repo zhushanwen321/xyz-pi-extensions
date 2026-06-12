@@ -83,11 +83,18 @@ export function isTerminalTaskStatus(status: TaskStatus): boolean {
 	return status === "completed" || status === "cancelled";
 }
 
+export interface TaskVerification {
+	method: string;    // 验证方法描述，如 "pnpm --filter @zhushanwen/pi-goal typecheck"
+	expected: string;  // 预期结果，如 "tsc --noEmit 零错误"
+}
+
 export interface GoalTask {
 	id: number;
 	description: string;
 	status: TaskStatus;
 	evidence?: string; // 完成时的证据描述
+	verification?: TaskVerification; // 可选验证配置
+	verificationFor?: number; // verify_task 关联的原 task ID（有此字段则为 verify_task）
 	subtasks?: Subtask[];
 	lastUpdatedTurn: number;
 }
@@ -210,7 +217,13 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 						lastUpdatedTurn: (s.lastUpdatedTurn as number) ?? 0,
 					}))
 			: undefined;
-		return { ...t, subtasks, lastUpdatedTurn: (t.lastUpdatedTurn as number) ?? 0 } as unknown as GoalTask;
+		return {
+			...t,
+			verification: t.verification as TaskVerification | undefined,
+			verificationFor: t.verificationFor as number | undefined,
+			subtasks,
+			lastUpdatedTurn: (t.lastUpdatedTurn as number) ?? 0,
+		} as unknown as GoalTask;
 	}),
 		turnCount: (data.turnCount as number) ?? 0,
 		stallCount: (data.stallCount as number) ?? 0,
@@ -238,6 +251,18 @@ export function getCompletedCount(tasks: GoalTask[]): number {
 
 export function getIncompleteTasks(tasks: GoalTask[]): GoalTask[] {
 	return tasks.filter((t) => !isTerminalTaskStatus(t.status));
+}
+
+export function isVerifyTask(task: GoalTask): boolean {
+	return task.verificationFor !== undefined && task.verificationFor > 0;
+}
+
+export function getIncompleteVerifyTasks(tasks: GoalTask[]): GoalTask[] {
+	return tasks.filter((t) => isVerifyTask(t) && !isTerminalTaskStatus(t.status));
+}
+
+export function getNextTaskId(tasks: GoalTask[]): number {
+	return tasks.length > 0 ? Math.max(...tasks.map((t) => t.id)) + 1 : 1;
 }
 
 export function getElapsedTimeSeconds(state: GoalRuntimeState): number {
