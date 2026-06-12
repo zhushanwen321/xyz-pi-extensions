@@ -18,6 +18,8 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 
 import { registerPlanCommand } from "../command.js";
 
+const ALL_TOOL_NAMES = ["read", "bash", "grep", "find", "ls", "plan", "write", "edit"];
+
 function createMocks() {
   let capturedHandler: (args: string, ctx: ExtensionContext) => Promise<void>;
 
@@ -28,6 +30,7 @@ function createMocks() {
     appendEntry: vi.fn(),
     setActiveTools: vi.fn(),
     sendUserMessage: vi.fn(),
+    getAllTools: vi.fn(() => ALL_TOOL_NAMES.map((n) => ({ name: n }))),
   } as unknown as ExtensionAPI;
 
   const ctx = {
@@ -87,7 +90,7 @@ describe("registerPlanCommand", () => {
     // Now abort — state is active in the sessions map
     await handler("abort", ctx);
 
-    expect(pi.setActiveTools).toHaveBeenCalledWith(undefined);
+    expect(pi.setActiveTools).toHaveBeenCalledWith(ALL_TOOL_NAMES);
     expect((ctx as ReturnType<typeof createMocks>["ctx"]).ui.notify).toHaveBeenCalledWith("Plan mode aborted.", "info");
   });
 

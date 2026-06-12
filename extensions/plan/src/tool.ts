@@ -28,7 +28,9 @@ export function validateAction(action: string): action is PlanAction {
 
 /** Restore the default full tool set after exiting plan mode. */
 function restoreFullToolSet(pi: ExtensionAPI): void {
-  pi.setActiveTools(undefined);
+  // SDK does NOT support undefined — must pass explicit full tool name list
+  const allToolNames = pi.getAllTools().map((t: { name: string }) => t.name);
+  pi.setActiveTools(allToolNames);
 }
 
 export function registerPlanTool(

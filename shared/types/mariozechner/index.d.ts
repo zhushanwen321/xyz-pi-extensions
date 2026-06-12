@@ -95,7 +95,7 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type BeforeAgentStartEvent = any;
 	export type BeforeAgentStartEventResult = any;
 
-	export function setActiveTools(tools: string[] | undefined): void;
+	export function setActiveTools(tools: string[]): void;
 	export function sendUserMessage(message: string, options?: Record<string, unknown>): void;
 	export function appendEntry(customType: string, data?: unknown): void;
 	export function registerTool(tool: unknown): void;

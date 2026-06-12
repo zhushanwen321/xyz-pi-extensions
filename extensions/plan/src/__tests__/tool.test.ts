@@ -37,6 +37,8 @@ import { PLAN_ACTIONS, registerPlanTool, validateAction } from "../tool.js";
 import { updatePlanWidget } from "../widget.js";
 
 /** Build a fake pi + ctx and capture the execute callback from registerTool. */
+const ALL_TOOL_NAMES = ["read", "bash", "grep", "find", "ls", "plan", "write", "edit"];
+
 function setup() {
   const sessions = new Map();
   let executeFn: (id: string, p: Record<string, unknown>, sig?: AbortSignal, upd?: unknown, ctx?: unknown) => Promise<unknown>;
@@ -44,6 +46,7 @@ function setup() {
     registerTool: vi.fn((tool) => { executeFn = tool.execute; }),
     appendEntry: vi.fn(),
     setActiveTools: vi.fn(),
+    getAllTools: vi.fn(() => ALL_TOOL_NAMES.map((n) => ({ name: n }))),
   } as unknown as Parameters<typeof registerPlanTool>[0];
   registerPlanTool(pi, sessions);
 
@@ -146,7 +149,7 @@ describe("registerPlanTool", () => {
       (ctx.ui.select as ReturnType<typeof vi.fn>).mockResolvedValue("Execute the plan");
       const res = await exec({ action: "complete" });
       expect(res.details.action).toBe("complete");
-      expect(pi.setActiveTools).toHaveBeenCalledWith(undefined);
+      expect(pi.setActiveTools).toHaveBeenCalledWith(ALL_TOOL_NAMES);
       expect(handlePlanComplete).toHaveBeenCalled();
       const state = sessions.get("test-session");
       expect(state?.phase).toBe("complete");
@@ -161,7 +164,7 @@ describe("registerPlanTool", () => {
       sessions.set("test-session", { isActive: true, phase: "writing", planFilePath: "/tmp/plan.md", requirement: "test", templateName: "t" });
       const res = await exec({ action: "abort" });
       expect(res.details.action).toBe("abort");
-      expect(pi.setActiveTools).toHaveBeenCalledWith(undefined);
+      expect(pi.setActiveTools).toHaveBeenCalledWith(ALL_TOOL_NAMES);
       expect(sessions.has("test-session")).toBe(false);
       expect(updatePlanWidget).toHaveBeenCalled();
     });

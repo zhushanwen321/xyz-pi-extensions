@@ -85,8 +85,8 @@ async function handleAbort(
   }
   const updatedState = resetPlanState(pi, sessions, sessionId, ctx);
   updatePlanWidget(ctx, updatedState);
-  // Restore full tool set
-  pi.setActiveTools(undefined);
+  // Restore full tool set (SDK does NOT support undefined)
+  pi.setActiveTools(pi.getAllTools().map((t: { name: string }) => t.name));
   ctx.ui.notify("Plan mode aborted.", "info");
 }
 
