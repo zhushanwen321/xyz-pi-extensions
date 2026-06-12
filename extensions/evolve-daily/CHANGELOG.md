@@ -1,5 +1,11 @@
 # @zhushanwen/pi-evolve-daily
 
+## 0.1.11
+
+### Patch Changes
+
+- Fix off-by-one date comparison, empty report lockout, and goal deduplication bugs in evolve-daily analyzer
+
 ## 0.1.10
 
 ### Patch Changes
