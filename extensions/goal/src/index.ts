@@ -196,12 +196,12 @@ export default function goalExtension(pi: ExtensionAPI) {
 				"Goal mode task manager. This tool is only available after starting a goal via the /goal command. AI cannot trigger it proactively. If Goal mode is not active, calling this tool will error." +
 				"\n\nAvailable actions:" +
 				"\n- create_tasks: Decompose the objective into a task list (call once at goal start). Each task description must be a one-line summary (max 60 chars), no newlines or markdown. Accept verifications array for task verification." +
-				"\n- add_tasks: Append new tasks to the existing list (when omissions are discovered). Each task description must be a one-line summary (max 60 chars), no newlines or markdown. Accept verifications array." +
-				"\n- update_tasks: Batch update task statuses. Must follow state machine: pending→in_progress→completed→verified. Cannot skip states. Completed requires evidence. Cancelled does not block goal completion. Completing a task with verification triggers a verification prompt — then call update_tasks with status=verified and actual=<result>." +
+				"\n- add_tasks: Append new tasks to the existing list (when omissions are discovered). Fails if no tasks exist yet — use create_tasks first. Each task description must be a one-line summary (max 60 chars), no newlines or markdown. Accept verifications array." +
+				"\n- update_tasks: Batch update task statuses. Must follow state machine: pending→in_progress→completed→verified. Cannot skip states (pending→completed is forbidden). Exactly one task should be in_progress at a time. Completed requires evidence. Cancelled does not block goal completion. Completing a task with verification triggers a verification prompt — then call update_tasks with status=verified and actual=<result>." +
 				"\n- list_tasks: View progress and remaining budget" +
-				"\n- complete_goal: Mark the objective as achieved (all tasks must be completed or verified + evidence)" +
+				"\n- complete_goal: Mark the objective as achieved. Only call when ALL tasks are completed or verified with concrete evidence. Do not mark complete merely because the budget is nearly exhausted or because you are stopping work. Before calling, use list_tasks to verify all tasks are done." +
 				"\n- cancel_goal: Cancel the current goal (use when user wants to exit/stop)" +
-				"\n- report_blocked: Report being blocked (use when encountering unsolvable issues)" +
+				"\n- report_blocked: Report being blocked. Only use after trying at least 3 alternative approaches to the same blocking condition. Do not use merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification. Requires a specific reason describing what is blocking and what you have already tried." +
 				"\n- add_subtasks: Add subtasks to a specified task (params: taskId, texts[]). Use this instead of todo tool in Goal mode" +
 				"\n- update_subtasks: Batch update subtask statuses (params: taskId, subUpdates[])" +
 				"\n- delete_subtasks: Delete subtasks from a specified task (params: taskId, subIds[])",
@@ -214,10 +214,12 @@ export default function goalExtension(pi: ExtensionAPI) {
 			"[Completion] After completing a task, call update_tasks with status=completed and provide evidence (e.g. 'test X passed', 'file F created')",
 			"[Goal completion] Only call complete_goal when all tasks are completed or verified with overall evidence",
 			"[Exit] When user says 'stop', 'exit', 'cancel', '不用了', '结束', etc. indicating they don't want to continue, immediately call cancel_goal — do not guide them through complete_goal",
-			"[Blocked] When encountering unsolvable technical issues, call report_blocked with the reason",
+			"[Blocked] Do not call report_blocked the first time a blocker appears. Try at least 3 alternative approaches first. Only report blocked when genuinely at an impasse without user input — not because work is hard, slow, uncertain, or incomplete. Once you call report_blocked, include what you have already tried in the reason.",
 			"[Progress] Use list_tasks anytime to check remaining tasks and budget",
 			"[Cancel] To cancel a task, use update_tasks with status=cancelled. Cancelled tasks do not block goal completion",
-			"[Forbidden] Do not mark tasks as completed without evidence, and do not call complete_goal without evidence",
+			"[Audit] Before marking a task completed, verify against actual current state (files, command output, test results). Intent, partial progress, or 'it should work' are NOT evidence. Do not redefine success around work already done — preserve original scope. Uncertain or indirect evidence means not completed, keep working.",
+			"[Fidelity] Optimize for movement toward the requested end state, not the easiest passing change. Do not substitute a narrower or safer solution because it is easier to verify. An edit is aligned only if it makes the requested final state more true.",
+			"[Forbidden] Do not mark tasks as completed without evidence, and do not call complete_goal without evidence. Do not mark completed due to budget exhaustion or because you are stopping work.",
 			"[Forbidden] Do not force task completion when the user explicitly wants to exit — call cancel_goal directly",
 			"[Quick exit] When no tasks have been created and you determine the objective is already met, call cancel_goal with cancelReason instead of creating tasks",
 			"[Forbidden] Do not re-call create_tasks to overwrite existing incomplete tasks — use add_tasks to append",
