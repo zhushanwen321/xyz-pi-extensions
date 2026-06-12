@@ -241,7 +241,9 @@ export function resolveModelForScene(scene: string, now?: Date): string | undefi
 	// Return first non-avoid candidate
 	const best = candidates[0];
 	if (best.isPeakAvoid) {
-		console.info(`[model-switch] resolveModelForScene: all candidates peak avoid for scene "${scene}"`);
+		// All candidates are in peak-avoid — fall back to default model silently.
+		// The caller (workflow/model-resolver) handles undefined by using the
+		// default model, so no user-visible notification is needed.
 		return undefined;
 	}
 

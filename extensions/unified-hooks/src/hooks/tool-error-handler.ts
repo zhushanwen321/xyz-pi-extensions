@@ -22,6 +22,9 @@ export function setupToolErrorHandler(pi: ExtensionAPI): void {
   pi.on("tool_execution_end", async (event: unknown) => {
     const e = event as ToolExecutionEndLikeEvent;
     if (!e.isError) return;
-    console.log(`[unified-hooks] ${e.toolName} error (callId=${e.toolCallId})`);
+    // Tool error diagnostics are internal — surfacing to the terminal
+    // would leak to the input area. ctx.ui.notify is unnecessary because
+    // tool errors are already surfaced by Pi's own error rendering.
+    console.warn(`[unified-hooks] ${e.toolName} error (callId=${e.toolCallId})`);
   });
 }
