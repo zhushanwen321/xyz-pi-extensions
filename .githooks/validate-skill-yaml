@@ -20,6 +20,8 @@ Usage:
   python3 .githooks/validate-skill-yaml ~/.pi/agent/skills/*/SKILL.md
 """
 
+from __future__ import annotations
+
 import re
 import sys
 import yaml

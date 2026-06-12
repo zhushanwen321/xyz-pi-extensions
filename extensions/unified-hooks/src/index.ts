@@ -41,11 +41,13 @@ export default function unifiedHooksExtension(pi: ExtensionAPI): void {
     }
   }
 
-  // Log hook status on session start for debugging
+  // Hook status is an internal diagnostic — surfacing to the terminal
+  // would leak to the input area. Use console.warn (stderr) for
+  // development debugging; production should be silent.
   pi.on("session_start", () => {
     const enabled = hooks.filter((h) => h.enabled).map((h) => h.name);
     const disabled = hooks.filter((h) => !h.enabled).map((h) => h.name);
-    console.log(
+    console.warn(
       `[unified-hooks] Loaded: ${enabled.join(", ") || "(none)"}${
         disabled.length ? ` | Failed: ${disabled.join(", ")}` : ""
       }`

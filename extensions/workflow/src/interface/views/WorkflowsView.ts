@@ -551,7 +551,7 @@ function renderView(
   } else if (state.level === 1) {
     renderLevel1(lines, phases, agents, state, theme, width, mainWidth, now);
   } else {
-    renderLevel2(lines, phase, agents, state, theme, width, mainWidth, now);
+    renderLevel2(lines, instance, phase, agents, state, theme, width, mainWidth, now);
   }
 
   const headerFooterLines = 6;
@@ -600,12 +600,15 @@ function renderLevel0(
     leftLines.push(formatPhaseLine(phases[i], i, i === state.phaseIdx, theme, SIDEBAR_WIDTH));
   }
 
-  // Right: all agents across all phases
-  const totalAgents = phases.reduce((sum, p) => sum + p.nodes.length, 0);
-  rightLines.push(theme.fg("muted", `All phases · ${totalAgents} agents`));
-  rightLines.push("─".repeat(mainWidth));
-  for (const pg of phases) {
-    for (const node of pg.nodes) {
+  // Right: agents in the currently selected phase only
+  const selectedPhase = phases[state.phaseIdx] ?? phases[0];
+  if (selectedPhase) {
+    const title = selectedPhase.name
+      ? `${selectedPhase.name} · ${selectedPhase.nodes.length} agents`
+      : `${selectedPhase.nodes.length} agents`;
+    rightLines.push(theme.fg("muted", title));
+    rightLines.push("─".repeat(mainWidth));
+    for (const node of selectedPhase.nodes) {
       const dot = statusDotStr(node.status, theme);
       const elapsed = formatElapsed(
         node.startedAt,
@@ -642,7 +645,7 @@ function renderLevel1(
     leftLines.push(formatPhaseLine(phases[i], i, i === state.phaseIdx, theme, SIDEBAR_WIDTH));
   }
 
-  // Right: context title + agent list for current phase
+  // Right: agent list for current phase (agents parameter already scoped to current phase)
   const currentPhase = phases[state.phaseIdx];
   if (currentPhase) {
     const title = currentPhase.name ? `${currentPhase.name} · ${currentPhase.nodes.length} agents` : `${currentPhase.nodes.length} agents`;
@@ -668,6 +671,31 @@ function renderLevel1(
 }
 
 // ── Level 2: Execution detail ─────────────────────────────────
+
+function renderWorkerLogSection(
+  rightLines: string[],
+  instance: WorkflowInstance,
+  mainWidth: number,
+  theme: ThemeLike,
+): void {
+  const logs = instance.errorLogs;
+  if (!logs || logs.length === 0) return;
+  const total = logs.length;
+  const showCount = Math.min(total, 20);
+  const label = total > showCount
+    ? `Worker diagnostics · last ${showCount} of ${total}`
+    : `Worker diagnostics · ${total} entr${total !== 1 ? "ies" : "y"}`;
+  rightLines.push(theme.fg("warning", label));
+  const start = total - showCount;
+  for (let i = start; i < total; i++) {
+    const entry = logs[i];
+    const levelToken = entry.level === "error" ? "error" : entry.level === "warn" ? "warning" : "muted";
+    const prefix = `[${entry.level}]`;
+    const line = `  ${prefix} ${entry.message}`.slice(0, mainWidth - 2);
+    rightLines.push(theme.fg(levelToken, line));
+  }
+  rightLines.push("");
+}
 
 function renderPromptSection(
   rightLines: string[],
@@ -743,6 +771,7 @@ function renderOutcomeSection(
 
 function renderLevel2(
   lines: string[],
+  instance: WorkflowInstance,
   phase: PhaseGroup,
   agents: import("../../domain/state.js").ExecutionTraceNode[],
   state: ViewState,
@@ -780,6 +809,7 @@ function renderLevel2(
     rightLines.push(`${statusDotStr(node.status, theme)} ${statusLabel(node.status, theme)} · ${node.model}`);
     rightLines.push(theme.fg("dim", formatTokenStat(node.result?.usage, node.result?.toolCalls, elapsed)));
     rightLines.push("");
+    renderWorkerLogSection(rightLines, instance, mainWidth, theme);
     renderPromptSection(rightLines, node, mainWidth, state, theme);
     renderActivitySection(rightLines, node, mainWidth, theme);
     renderOutcomeSection(rightLines, node, mainWidth, theme);

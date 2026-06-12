@@ -160,13 +160,18 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
     // Log discovered agents with source breakdown
     const agentCount = orch.getAgentCount();
     if (agentCount > 0) {
-      const agents = orch.getAgents();
-      const bySource = agents.reduce<Record<string, number>>((acc, a) => {
-        acc[a.source] = (acc[a.source] || 0) + 1;
-        return acc;
-      }, {});
-      const breakdown = Object.entries(bySource).map(([s, c]) => `${c} ${s}`).join(", ");
-      console.log(`[workflow] discovered ${agentCount} agents (${breakdown})`);
+      // Agent discovery is a startup diagnostic; surfacing to the terminal
+      // would leak to the input area. The detail is available via
+      // workflow { action: "status" } and the WorkflowsView header.
+      const _agentBreakdown = (() => {
+        const agents = orch.getAgents();
+        const bySource = agents.reduce<Record<string, number>>((acc, a) => {
+          acc[a.source] = (acc[a.source] || 0) + 1;
+          return acc;
+        }, {});
+        return Object.entries(bySource).map(([s, c]) => `${c} ${s}`).join(", ");
+      })();
+      void _agentBreakdown;
     }
 
     // Live progress: event-driven updates handled by WorkflowsView subscription

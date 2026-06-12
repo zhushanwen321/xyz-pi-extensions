@@ -112,6 +112,11 @@ export interface WorkflowInstance {
   error?: string;
   /** Captured return value from workflow script (set on "return" message) */
   scriptResult?: unknown;
+  /**
+   * Worker-emitted console.* entries captured before failure. Surfaced
+   * inside the TUI widget via renderLevel2 — never leaked to the input area.
+   */
+  errorLogs?: Array<{ level: "log" | "warn" | "error" | "info"; message: string }>;
 }
 
 // ── Serialization types ───────────────────────────────────────
@@ -137,6 +142,7 @@ interface SerializedWorkflowInstance {
   budget?: WorkflowBudget;
   error?: string;
   scriptResult?: unknown;
+  errorLogs?: Array<{ level: "log" | "warn" | "error" | "info"; message: string }>;
 }
 
 export interface WorkflowStateEntry {
@@ -216,6 +222,7 @@ export function serializeInstance(instance: WorkflowInstance): SerializedWorkflo
     budget: instance.budget,
     error: instance.error,
     scriptResult: instance.scriptResult,
+    errorLogs: instance.errorLogs && instance.errorLogs.length > 0 ? instance.errorLogs : undefined,
   };
 }
 
@@ -243,6 +250,7 @@ export function deserializeInstance(data: SerializedWorkflowInstance): WorkflowI
     budget: data.budget ?? { usedTokens: 0, usedCost: 0 },
     error: data.error,
     scriptResult: data.scriptResult,
+    errorLogs: data.errorLogs,
   };
 }
 

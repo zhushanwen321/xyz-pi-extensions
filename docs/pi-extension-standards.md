@@ -27,19 +27,20 @@
   - [7. 状态与会话管理](#7-状态与会话管理规范)
   - [8. 配置管理](#8-配置管理规范)
   - [9. 依赖管理](#9-依赖管理规范)
+  - [10. 日志与诊断输出](#10-日志与诊断输出规范)
 - [第二部分：通用的高质量工程规范](#第二部分通用的高质量工程规范)
-  - [10. 错误处理与弹性模式](#10-错误处理与弹性模式规范)
-  - [11. 类型安全](#11-类型安全规范)
-  - [12. 路径与配置硬编码](#12-路径与配置硬编码规范)
-  - [13. 健壮性基础要求](#13-健壮性基础要求规范)
+  - [11. 错误处理与弹性模式](#11-错误处理与弹性模式规范)
+  - [12. 类型安全](#12-类型安全规范)
+  - [13. 路径与配置硬编码](#13-路径与配置硬编码规范)
+  - [14. 健壮性基础要求](#14-健壮性基础要求规范)
 - [第三部分：开发指南](#第三部分开发指南)
-  - [14. TUI 渲染指南](#14-tui-渲染指南)
-  - [15. 模块组织指南](#15-模块组织指南)
-  - [16. 性能指南](#16-性能指南)
-  - [17. 测试指南](#17-测试指南)
+  - [15. TUI 渲染指南](#15-tui-渲染指南)
+  - [16. 模块组织指南](#16-模块组织指南)
+  - [17. 性能指南](#17-性能指南)
+  - [18. 测试指南](#18-测试指南)
 - [第四部分：附录](#第四部分附录)
-  - [18. 反模式清单](#18-反模式清单)
-  - [19. 新扩展检查清单](#19-新扩展检查清单)
+  - [19. 反模式清单](#19-反模式清单)
+  - [20. 新扩展检查清单](#20-新扩展检查清单)
 
 ---
 
@@ -512,11 +513,89 @@ Pi 的 extension loader 使用 [jiti](https://github.com/unjs/jiti) 加载 TypeS
 
 ---
 
+## 10. 日志与诊断输出 **[规范]**
+
+Pi Interactive 模式下，extension 的 `console.log` 输出直接写入终端 stdout，会干扰 TUI 渲染并泄漏到用户输入区域。**必须严格遵守以下规范。**
+
+### 10.1 输出通道选择
+
+| 场景 | 正确做法 | 错误做法 |
+|------|---------|----------|
+| 用户需要看到的状态/错误 | `ctx.ui.notify(msg, "info"/"warning"/"error")` | `console.log(msg)` |
+| 内部诊断（配置加载、模型选择等） | `console.warn("[ext-name] ...")` 或静默 | `console.log("[ext-name] ...")` |
+| 不可恢复错误 | `throw new Error(msg)` | `console.error(msg)` + 继续执行 |
+| 调试开发 | `if (process.env.<EXT>_DEBUG) console.error(...)` | 生产代码中的 `console.log` |
+| Worker 线程 | 拦截 console.* → 收集数组 → postMessage 回传 | 直接 console.* 输出 |
+
+### 10.2 console 方法使用规则
+
+**[规范]** 以下规则不允许跳过，无论是否是本次引入的，必须正面修复：
+
+1. **禁止 `console.log`** — 输出到 stdout，Interactive 模式下泄漏到用户输入区域，干扰 TUI 渲染
+2. **禁止 `console.info`** — 行为与 `console.log` 相同，路由不明确，同样泄漏
+3. **内部诊断用 `console.warn` 或 `console.error`** — 输出到 stderr，不干扰 stdout，但必须带统一前缀（见 10.3）
+4. **不可恢复错误用 `throw`** — 由 Pi 框架的 `ExtensionRunner.onError()` 捕获并渲染到 TUI，比手动 `console.error` 更规范
+5. **生产默认静默** — 正常运行时不输出诊断信息；需要时通过环境变量开启
+6. **重复警告去重** — 可能反复触发的警告用 `Set` 去重，防止刷屏
+
+### 10.3 统一前缀
+
+所有 `console.warn` / `console.error` 必须带 `[extension-name]` 前缀，多扩展混杂输出时可区分来源：
+
+```typescript
+// ✅ CORRECT
+console.warn("[workflow] scene resolution failed, using default model");
+console.error("[goal] state machine invalid transition", err);
+
+// ❌ WRONG: 无前缀
+console.warn("scene resolution failed");
+```
+
+### 10.4 ctx.ui.notify() 使用
+
+`ctx.ui.notify(msg, type?)` 是 Pi SDK 提供的唯一正规用户通知 API：
+
+```typescript
+ctx.ui.notify("Goal paused. Use /goal resume to continue.", "info");
+ctx.ui.notify("Token budget 90% used — start wrapping up.", "warning");
+```
+
+**注意事项：**
+- RPC/JSON 模式下为**空操作**（Pi runner 中 `notify: () => {}`）
+- Interactive 模式渲染到 TUI chat 区域
+- 跨 session 异步使用时，用 `safeNotify()` 包装防止 stale context 错误（参见 11.1）
+
+### 10.5 Worker 线程日志拦截
+
+Worker 线程（`worker_threads` / `child_process`）中的 `console.*` 输出直接写 stderr，不受 Pi 管理。必须拦截并回传主线程：
+
+```typescript
+// Worker 脚本中拦截 console.*
+const _workerLogs: Array<{ level: string; message: string }> = [];
+function _pushWorkerLog(level: string, args: unknown[]) {
+  if (_workerLogs.length >= 1000) _workerLogs.shift(); // 防无界增长
+  try {
+    _workerLogs.push({ level, message: args.map(a => typeof a === "string" ? a : JSON.stringify(a)).join(" ") });
+  } catch { /* swallow */ }
+}
+console.log = (...args) => _pushWorkerLog("log", args);
+console.warn = (...args) => _pushWorkerLog("warn", args);
+console.error = (...args) => _pushWorkerLog("error", args);
+console.info = (...args) => _pushWorkerLog("info", args);
+
+// 结束时通过 postMessage 回传
+parentPort.postMessage({ type: "return", result, workerLogs: _workerLogs });
+```
+
+主线程收到后存储到扩展状态，在 TUI widget 内渲染，不泄漏到输入区域。
+
+---
+
 # 第二部分：通用的高质量工程规范
 
-## 10. 错误处理与弹性模式 **[规范]**
+## 11. 错误处理与弹性模式 **[规范]**
 
-### 10.1 Stale Context 检测
+### 11.1 Stale Context 检测
 
 > 这是 Pi 扩展开发中最常见的崩溃源。Session 关闭后 ctx 过期，访问它会抛异常。
 
@@ -538,7 +617,7 @@ function safeNotify(ctx: any, message: string, type: "info" | "warning" | "error
 }
 ```
 
-### 10.2 异步操作的完整安全模式
+### 11.2 异步操作的完整安全模式
 
 ```typescript
 async function flushPending(ctx: any): Promise<void> {
@@ -562,7 +641,7 @@ async function flushPending(ctx: any): Promise<void> {
 }
 ```
 
-### 10.3 防重入
+### 11.3 防重入
 
 **[规范]** 可能被并发触发的异步操作必须有防重入保护：
 
@@ -580,7 +659,7 @@ async function handleTurnEnd(ctx: any) {
 }
 ```
 
-### 10.4 函数内所有可能的控制流路径必须有显式的 return
+### 11.4 函数内所有可能的控制流路径必须有显式的 return
 
 > 声明了返回类型的函数，遗漏 return 分支会导致 TS2366。
 
@@ -595,13 +674,13 @@ function process(items: string[]): string[] {
 
 ---
 
-## 11. 类型安全 **[规范]**
+## 12. 类型安全 **[规范]**
 
-### 11.1 禁止 any
+### 12.1 禁止 any
 
 所有 `any` 必须替换为具体类型或 `unknown`。这是品味检查的 P0 违规。
 
-### 11.2 Record<string, unknown> 白名单管理
+### 12.2 Record<string, unknown> 白名单管理
 
 **[规范]** 除以下白名单场景外，禁止使用 `Record<string, unknown>`：
 
@@ -615,17 +694,17 @@ function process(items: string[]): string[] {
 
 不在白名单的 `Record<string, unknown>` 必须改为结构化类型。入口处用 `as unknown as ConcreteType` 断言。
 
-### 11.3 跨文件类型定义
+### 12.3 跨文件类型定义
 
 **[规范]** 禁止多文件重复定义同名 interface。共享类型提取到 `types.ts`。
 
 ---
 
-## 12. 路径与配置硬编码 **[规范]**
+## 13. 路径与配置硬编码 **[规范]**
 
 > 来源：多个 Pi 扩展使用硬编码路径导致在不同环境中不可移植。
 
-### 12.1 禁止硬编码路径
+### 13.1 禁止硬编码路径
 
 **[规范]** 所有文件系统路径**禁止**硬编码字符串。必须使用 `path.join()` + 基准路径（`homedir()` / `import.meta.url`）构建。
 
@@ -654,7 +733,7 @@ const skillDir = join(extensionDir, "skills");
 const userConfigDir = join(homedir(), ".pi", "agent", "extensions", "my-extension");
 ```
 
-### 12.2 路径处理工具函数
+### 13.2 路径处理工具函数
 
 ```typescript
 // utils.ts
@@ -666,16 +745,16 @@ export function expandTilde(p: string): string {
 }
 ```
 
-### 12.3 白名单：允许的硬编码场景
+### 13.3 白名单：允许的硬编码场景
 
 - `"node_modules"` / `".pi"` 等标准目录名（概念名，不是绝对路径）
 - 配置文件中的默认路径（用户可覆盖）
 
 ---
 
-## 13. 健壮性基础要求 **[规范]**
+## 14. 健壮性基础要求 **[规范]**
 
-### 13.1 防崩溃
+### 14.1 防崩溃
 
 | 要求 | 说明 |
 |------|------|
@@ -684,7 +763,7 @@ export function expandTilde(p: string): string {
 | 不允许 process.exit | 扩展无权结束进程 |
 | 不允许无限循环 | while(true) 必须有迭代上限 |
 
-### 13.2 资源清理
+### 14.2 资源清理
 
 | 场景 | 要求 |
 |------|------|
@@ -697,9 +776,9 @@ export function expandTilde(p: string): string {
 
 # 第三部分：开发指南
 
-## 14. TUI 渲染 **[指南]**
+## 15. TUI 渲染 **[指南]**
 
-### 14.1 颜色使用
+### 15.1 颜色使用
 
 使用语义 token 着色，不硬编码 ANSI：
 
@@ -716,7 +795,7 @@ theme.fg("dim", "Hint text")
 "\x1b[32mTitle\x1b[0m"
 ```
 
-### 14.2 渲染缓存
+### 15.2 渲染缓存
 
 频繁重新渲染的组件可缓存结果，数据变化时 `invalidate()`：
 
@@ -741,7 +820,7 @@ class MyComponent implements Component {
 }
 ```
 
-### 14.3 Markdown 渲染安全降级
+### 15.3 Markdown 渲染安全降级
 
 `getMarkdownTheme()` 在不同 Pi 版本中行为不同，渲染异常应降级：
 
@@ -758,7 +837,7 @@ export function safeMarkdownTheme(): MarkdownTheme | undefined {
 }
 ```
 
-### 14.4 Widget 注册
+### 15.4 Widget 注册
 
 持久化状态显示推荐使用 `registerWidget`：
 
@@ -770,9 +849,9 @@ ctx.ui.registerWidget(WIDGET_KEY, (theme: Theme) => {
 
 ---
 
-## 15. 模块组织 **[指南]**
+## 16. 模块组织 **[指南]**
 
-### 15.1 简单扩展（1-3 个 Tool）
+### 16.1 简单扩展（1-3 个 Tool）
 
 ```
 pi-my-extension/
@@ -782,7 +861,7 @@ pi-my-extension/
 └── test/
 ```
 
-### 15.2 中等规模扩展
+### 16.2 中等规模扩展
 
 ```
 pi-my-extension/
@@ -797,7 +876,7 @@ pi-my-extension/
 └── test/
 ```
 
-### 15.3 复杂扩展
+### 16.3 复杂扩展
 
 领域驱动结构，如：
 
@@ -812,7 +891,7 @@ src/
 
 ---
 
-## 16. 性能 **[指南]**
+## 17. 性能 **[指南]**
 
 | 场景 | 建议做法 |
 |------|---------|
@@ -824,9 +903,9 @@ src/
 
 ---
 
-## 17. 测试 **[指南]**
+## 18. 测试 **[指南]**
 
-### 17.1 测试框架选择
+### 18.1 测试框架选择
 
 | 场景 | 推荐 |
 |------|------|
@@ -834,7 +913,7 @@ src/
 | 快速验证 | `node --test` |
 | 集成测试 | `vitest` |
 
-### 17.2 测试覆盖重点
+### 18.2 测试覆盖重点
 
 - 配置加载成功/失败路径
 - 状态反序列化旧格式兼容性
@@ -860,9 +939,9 @@ describe("state", () => {
 
 # 第四部分：附录
 
-## 18. 反模式清单
+## 19. 反模式清单
 
-### 18.1 崩溃风险（P0）
+### 19.1 崩溃风险（P0）
 
 | 反模式 | 问题 | 正确做法 |
 |--------|------|---------|
@@ -874,7 +953,7 @@ describe("state", () => {
 | agent_end 中启动 LLM 调用 | 上下文已过期 | 只做同步清理 |
 | `pi.setActiveTools(undefined)` | SDK 不支持 undefined 参数，`for...of` 遍历报 "toolNames is not iterable" | 用 `pi.getAllTools().map(t => t.name)` 获取全量工具名列表传入 |
 
-### 18.2 结构问题（P1）
+### 19.2 结构问题（P1）
 
 | 反模式 | 问题 | 正确做法 |
 |--------|------|---------|
@@ -883,7 +962,7 @@ describe("state", () => {
 | details 与 content 不匹配 | renderResult 解析文本 | details 是唯一数据源 |
 | 硬编码路径 | 不可移植 | `path.join(homedir(), ...)` |
 
-### 18.3 类型问题（P1）
+### 19.3 类型问题（P1）
 
 | 反模式 | 问题 | 正确做法 |
 |--------|------|---------|
@@ -892,7 +971,7 @@ describe("state", () => {
 | 跨文件重复 interface | 改一处漏一处 | 统一 `types.ts` |
 | 必填字段实际不存在 | 运行时 undefined | 如实标注 `?` |
 
-### 18.4 依赖问题（P1）
+### 19.4 依赖问题（P1）
 
 | 反模式 | 问题 | 正确做法 |
 |--------|------|---------|
@@ -900,7 +979,7 @@ describe("state", () => {
 | 不必要的强制依赖 | 安装体积大 | peerDependenciesMeta.optional |
 | files 不含入口 .ts | publish 后丢失 | 包含 `index.ts` |
 
-### 18.5 TUI 问题（P2）
+### 19.5 TUI 问题（P2）
 
 | 反模式 | 问题 | 正确做法 |
 |--------|------|---------|
@@ -911,7 +990,7 @@ describe("state", () => {
 
 ---
 
-## 19. 新扩展检查清单
+## 20. 新扩展检查清单
 
 ### 启动阶段（阻塞性问题）
 
@@ -932,6 +1011,8 @@ describe("state", () => {
 - [ ] 配置加载失败抛有意义错误
 - [ ] 反序列化向后兼容旧 Entry 格式
 - [ ] 无模块级 global let 变量
+- [ ] 无 `console.log` / `console.info`（用 `ctx.ui.notify` 或 `console.warn`/`error`）
+- [ ] Worker 线程拦截 `console.*`（不泄漏到输入区域）
 
 ### 类型阶段（必须通过）
 
