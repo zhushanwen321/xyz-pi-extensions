@@ -63,6 +63,7 @@ export function reconstructState(state: TodoSessionState, ctx: ExtensionContext)
 	state.stallNotified = false;
 	state.allCompletedAtCount = null;
 	state.completionSteered = false;
+	state.pendingSteerMessage = null;
 
 	const entries = ctx.sessionManager.getEntries();
 	let latestIdx = -1;
@@ -119,22 +120,19 @@ function handleAutoClear(state: TodoSessionState): { handled: boolean; cleared: 
 	return { handled: true, cleared: false };
 }
 
-/** 2. 全部 completed 时注入总检查 steer（仅一次） */
-function handleCompletionSteer(state: TodoSessionState, pi: ExtensionAPI): boolean {
+/** 2. 全部 completed 时设置延迟 steer（仅一次），由 before_agent_start 消费 */
+function handleCompletionSteer(state: TodoSessionState): boolean {
 	if (state.completionSteered) return false;
 	const allCompleted = state.todos.length > 0 && state.todos.every((t) => t.status === "completed");
 	if (!allCompleted) return false;
 
 	state.completionSteered = true;
-	pi.sendUserMessage(
-		`<todo_context>\n[TODO] 所有任务已完成。请快速检查每项任务的交付质量。\n</todo_context>`,
-		{ deliverAs: "steer", customType: "todo-context" },
-	);
+	state.pendingSteerMessage = `<todo_context>\n[TODO] 所有任务已完成。请快速检查每项任务的交付质量。\n</todo_context>`;
 	return true;
 }
 
-/** 3. Stall 检测 */
-function handleStallDetection(state: TodoSessionState, pi: ExtensionAPI): boolean {
+/** 3. Stall 检测 — 设置延迟 steer */
+function handleStallDetection(state: TodoSessionState): boolean {
 	if (
 		!state.stallNotified &&
 		state.userMessageCount - state.lastTodoCallCount >= STALL_THRESHOLD
@@ -142,19 +140,19 @@ function handleStallDetection(state: TodoSessionState, pi: ExtensionAPI): boolea
 		state.stallNotified = true;
 		const reminder = buildMinimalReminder(state);
 		if (reminder) {
-			pi.sendUserMessage(reminder, { deliverAs: "steer", customType: "todo-context" });
+			state.pendingSteerMessage = reminder;
 		}
 		return true;
 	}
 	return false;
 }
 
-/** 4. 提醒 */
-function handleReminder(state: TodoSessionState, pi: ExtensionAPI): boolean {
+/** 4. 提醒 — 设置延迟 steer */
+function handleReminder(state: TodoSessionState): boolean {
 	if (state.userMessageCount - state.lastTodoCallCount >= REMINDER_INTERVAL) {
 		const reminder = buildMinimalReminder(state);
 		if (reminder) {
-			pi.sendUserMessage(reminder, { deliverAs: "steer", customType: "todo-context" });
+			state.pendingSteerMessage = reminder;
 		}
 		return true;
 	}
@@ -187,6 +185,13 @@ export function registerTodoEventHandlers(
 			if (pendingTodos.length > 0) {
 				ctx.ui.setStatus("todo", `📋 ${pendingTodos.length} pending`);
 			}
+			// 优先级 1: agent_end 设置的延迟 steer
+			if (state.pendingSteerMessage) {
+				const msg = state.pendingSteerMessage;
+				state.pendingSteerMessage = null;
+				return { message: { customType: "todo-context", content: msg, display: false } };
+			}
+
 			return buildBeforeAgentStartMessage(state);
 		} catch (e) {
 			console.debug("[todo] before_agent_start error:", e);
@@ -199,14 +204,14 @@ export function registerTodoEventHandlers(
 			if (state.todos.length === 0) return;
 
 			// 全部 completed → 总检查 steer（仅一次）
-			handleCompletionSteer(state, pi);
+			handleCompletionSteer(state);
 
 			// auto-clear
 			const ac = handleAutoClear(state);
 			if (ac.handled) { if (ac.cleared) refreshDisplay(ctx); return; }
 
-			if (handleStallDetection(state, pi)) return;
-			handleReminder(state, pi);
+			if (handleStallDetection(state)) return;
+			handleReminder(state);
 		} catch (e) {
 			console.debug("[todo] agent_end error:", e);
 		}

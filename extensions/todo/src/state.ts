@@ -19,6 +19,8 @@ export interface TodoSessionState {
 	allCompletedAtCount: number | null;
 	/** 全部 completed 时已注入 steer，防止重复 */
 	completionSteered: boolean;
+	/** agent_end 设置、before_agent_start 消费的延迟 steer 消息 */
+	pendingSteerMessage: string | null;
 }
 
 export function createTodoSessionState(): TodoSessionState {
@@ -30,5 +32,6 @@ export function createTodoSessionState(): TodoSessionState {
 		stallNotified: false,
 		allCompletedAtCount: null,
 		completionSteered: false,
+		pendingSteerMessage: null,
 	};
 }

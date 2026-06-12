@@ -17,13 +17,13 @@
  * - component.ts: TodoListComponent TUI 组件
  * - tool.ts: TodoParams schema + 5 个 action handler + execute dispatcher + registerTodoTool
  * - handlers.ts: 5 个事件处理器 + reconstructState + buildPendingContext
- * - commands.ts: /todos 命令 + todo-context 消息渲染器
+ * - commands.ts: /todos 命令
  * - index.ts（本文件）: 工厂入口（创建 state + 注册所有 handler）
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { registerTodoContextRenderer,registerTodosCommand } from "./commands";
+import { registerTodosCommand } from "./commands";
 import { registerTodoEventHandlers } from "./handlers";
 import { renderStatusText, renderWidgetLines } from "./render";
 import { createTodoSessionState } from "./state";
@@ -50,5 +50,4 @@ export default function (pi: ExtensionAPI) {
 	registerTodoEventHandlers(pi, state, refreshDisplay);
 	registerTodoTool(pi, state, refreshDisplay);
 	registerTodosCommand(pi, state);
-	registerTodoContextRenderer(pi);
 }

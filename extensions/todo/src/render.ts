@@ -3,7 +3,7 @@
  */
 
 import type { Theme } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
 import {
 	buildRender,
@@ -15,8 +15,20 @@ import {
 // ── 常量 ────────────────────────────────────────────
 
 const MAX_COLLAPSED_ITEMS = 5;
-export const COL_GAP = 3; // 双列间距空格数
 export const FALLBACK_TERM_WIDTH = 80;
+
+/** 垂直分割线视觉宽度（" │ "） */
+const DIVIDER_VISUAL_WIDTH = 3;
+
+/** 截断或补齐到精确视觉宽度，截断时追加 "..." */
+function fixedWidth(text: string, width: number): string {
+	const len = visibleWidth(text);
+	if (len <= width) {
+		return text + " ".repeat(width - len);
+	}
+	if (width <= 3) return "...".slice(0, width);
+	return truncateToWidth(text, width - 3) + "...";
+}
 
 // ── 状态栏 ────────────────────────────────────────────
 
@@ -54,18 +66,18 @@ export function renderDualColumn(
 	termWidth: number,
 	indent: string,
 ): string[] {
-	const maxColWidth = Math.floor((termWidth - COL_GAP - indent.length) / 2);
+	const colWidth = Math.floor((termWidth - indent.length - DIVIDER_VISUAL_WIDTH) / 2);
 	const lines: string[] = [];
 	const half = Math.ceil(todos.length / 2);
+	const divider = " " + th.fg("borderMuted", "\u2502") + " ";
 	for (let row = 0; row < half; row++) {
-		const leftStr = truncateToWidth(indent + renderWidgetItem(todos[row], th), maxColWidth);
+		const left = fixedWidth(indent + renderWidgetItem(todos[row], th), colWidth);
 		const rightIdx = row + half;
 		if (rightIdx < todos.length) {
-			const rightStr = truncateToWidth(renderWidgetItem(todos[rightIdx], th), maxColWidth);
-			const padding = " ".repeat(Math.max(1, COL_GAP));
-			lines.push(leftStr + padding + rightStr);
+			const right = fixedWidth(renderWidgetItem(todos[rightIdx], th), colWidth);
+			lines.push(left + divider + right);
 		} else {
-			lines.push(leftStr);
+			lines.push(left);
 		}
 	}
 	return lines;
