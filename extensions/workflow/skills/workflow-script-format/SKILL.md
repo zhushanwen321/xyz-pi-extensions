@@ -84,6 +84,29 @@ const final = await pipeline([
 - `$WORKSPACE` — Absolute path to the project workspace root
 - `$BUDGET` — Budget info: `{ usedTokens, usedCost, maxTokens?, maxTimeMs? }`
 
+### `description` naming convention [MANDATORY]
+
+`description` 用作 TUI 显示的 agent 标识，必须简短可读。规则：kebab-case，单词间用 `-` 分隔，不含 round/iteration 后缀。
+
+```javascript
+// ✅ CORRECT: kebab-case，单词间用 - 分隔
+agent({ prompt: '...', description: 'review-business-logic' });
+agent({ prompt: '...', description: 'fix-imports' });
+agent({ prompt: '...', description: 'parse-must-fix' });
+
+// ❌ WRONG: 无分隔符拼接（不可读）
+agent({ prompt: '...', description: 'reviewbusinesslogic' });
+agent({ prompt: '...', description: 'fiximports' });
+
+// ❌ WRONG: 冗长描述（不是 label 用途）
+agent({ prompt: '...', description: 'Review business logic against spec requirements' });
+
+// ❌ WRONG: 不必要的 round/iteration 后缀（TUI 自带序号）
+agent({ prompt: '...', description: 'review-business-logic-round-1' });
+// ✅ CORRECT: 去掉 round 后缀
+agent({ prompt: '...', description: 'review-business-logic' });
+```
+
 ## Constraints
 
 - `agent()` calls **must be deterministic in order** for pause/resume to work correctly.
