@@ -12,11 +12,13 @@ import type { Todo } from "./model";
 export interface TodoSessionState {
 	todos: Todo[];
 	nextId: number;
-	// v3: 用户消息轮数与提醒追踪
+	// 用户消息轮数与提醒追踪
 	userMessageCount: number;
 	lastTodoCallCount: number;
 	stallNotified: boolean;
 	allCompletedAtCount: number | null;
+	/** 全部 completed 时已注入 steer，防止重复 */
+	completionSteered: boolean;
 }
 
 export function createTodoSessionState(): TodoSessionState {
@@ -27,5 +29,6 @@ export function createTodoSessionState(): TodoSessionState {
 		lastTodoCallCount: 0,
 		stallNotified: false,
 		allCompletedAtCount: null,
+		completionSteered: false,
 	};
 }

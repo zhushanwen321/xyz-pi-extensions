@@ -1,18 +1,11 @@
 /**
  * Todo tool 注册 + execute dispatcher + 5 个 action handler。
- *
- * 拆分理由：原 src/index.ts 的 executeTodoAction 函数 318 行（远超 80 行
- * 限制），且工厂函数体也 612 行。本文件将 dispatcher 与子 handler 分离，
- * 满足 §11 "单文件 ≤ 500 行" 与 "函数 ≤ 80 行" 规范。
- *
- * 行为契约：所有 handler 行为与原 index.ts 内的 switch case 完全一致；
- * 任何与原代码的偏差都属于 bug。
  */
 
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import { type Static,Type } from "typebox";
+import { type Static, Type } from "typebox";
 
 import {
 	addTodos,
@@ -26,7 +19,7 @@ import {
 import { renderTodoResult } from "./render";
 import type { TodoSessionState } from "./state";
 
-// ── Action 参数类型（dispatcher → handler） ──────────
+// ── Action 参数类型 ──────────────────────────────────
 
 export interface TodoActionParams {
 	action: string;
@@ -35,13 +28,10 @@ export interface TodoActionParams {
 	texts?: string[];
 	ids?: number[];
 	status?: string;
-	verifyTexts?: string[];
-	updates?: Array<{ id: number; status?: string; text?: string; verified?: boolean; evidence?: string }>;
-	verified?: boolean;
-	evidence?: string;
+	updates?: Array<{ id: number; status?: string; text?: string }>;
 }
 
-// ── TodoParams schema（依赖 Pi 运行时包） ────────────
+// ── TodoParams schema ────────────────────────────────
 
 export const TodoParams = Type.Object({
 	action: StringEnum(["list", "add", "update", "delete", "clear"] as const),
@@ -52,27 +42,18 @@ export const TodoParams = Type.Object({
 	status: Type.Optional(
 		StringEnum(VALID_STATUSES, { description: "Target status (for update action)" }),
 	),
-	verifyTexts: Type.Optional(
-		Type.Array(Type.String(), {
-			description: "Verification text list (one per texts entry, for add action)",
-		}),
-	),
 	updates: Type.Optional(
 		Type.Array(
 			Type.Object({
-				id: Type.Number({ description: "Todo ID to update (in batch updates[])" }),
+				id: Type.Number({ description: "Todo ID to update" }),
 				status: Type.Optional(
-					Type.String({ description: "Target status (in batch updates[]); one of pending/in_progress/verifying/completed/failed" }),
+					Type.String({ description: "Target status; one of pending/in_progress/completed" }),
 				),
-				text: Type.Optional(Type.String({ description: "New todo text (in batch updates[])" })),
-				verified: Type.Optional(Type.Boolean({ description: "Required true when skipping verifying to mark completed on tasks with verifyText" })),
-				evidence: Type.Optional(Type.String({ description: "Verification evidence (≥10 chars, required for verifying→completed or in_progress→verifying)" })),
+				text: Type.Optional(Type.String({ description: "New todo text" })),
 			}),
 			{ description: "Batch updates array (takes priority over single id/status/text)" },
 		),
 	),
-	verified: Type.Optional(Type.Boolean({ description: "Required true when skipping verifying to mark completed on a task with verifyText" })),
-	evidence: Type.Optional(Type.String({ description: "Verification evidence (≥10 chars, required for verifying/completed on tasks with verifyText)" })),
 });
 
 // ── 错误结果构造 helper ──────────────────────────────
@@ -98,16 +79,16 @@ function errorResult(
 	};
 }
 
-// ── 5 个 action handler（每个 < 80 行） ──────────────
+// ── 5 个 action handler ──────────────────────────────
 
-/** list action: 格式化所有 todo 列表（AI 可读） */
+/** list action */
 function handleList(state: TodoSessionState): string {
 	return state.todos.length
 		? state.todos.map((t) => formatTodoLine(t)).join("\n")
 		: "No todos";
 }
 
-/** add action: 批量添加 todo */
+/** add action */
 function handleAdd(
 	state: TodoSessionState,
 	params: TodoActionParams,
@@ -116,7 +97,7 @@ function handleAdd(
 		return { resultText: "", error: "texts required" };
 	}
 
-	const addResult = addTodos(state.todos, state.nextId, params.texts, params.verifyTexts);
+	const addResult = addTodos(state.todos, state.nextId, params.texts);
 	if (addResult.error) {
 		return { resultText: addResult.resultText || "", error: addResult.error };
 	}
@@ -126,7 +107,7 @@ function handleAdd(
 	return { resultText: addResult.resultText || "" };
 }
 
-/** update action: 批量 updates[] 路径 */
+/** update action: batch */
 function handleBatchUpdate(
 	state: TodoSessionState,
 	params: TodoActionParams,
@@ -149,30 +130,10 @@ function handleBatchUpdate(
 		};
 	}
 	state.todos = result.updatedTodos;
-	const resultText = result.resultText || "";
-
-	// 检查是否有状态转换拦截
-	if (result.blocked && result.blocked.length > 0) {
-		return {
-			resultText,
-			error: "blocked",
-			earlyReturn: {
-				content: [{ type: "text" as const, text: resultText }],
-				details: {
-					action: "update" as const,
-					todos: [...state.todos],
-					nextId: state.nextId,
-					error: "blocked",
-					_render: buildRender(state.todos),
-				} as TodoDetails,
-			},
-		};
-	}
-
-	return { resultText };
+	return { resultText: result.resultText || "" };
 }
 
-/** update action: 单条 update 路径（含参数验证 + 状态转换拦截 + 应用） */
+/** update action: single */
 function handleSingleUpdate(
 	state: TodoSessionState,
 	params: TodoActionParams,
@@ -190,49 +151,8 @@ function handleSingleUpdate(
 	const todo = state.todos.find((t) => t.id === params.id);
 	if (!todo) return { resultText: "", error: `#${params.id} not found` };
 
-	// 状态转换拦截
-	const MIN_EVIDENCE_LEN = 10;
-	if (params.status === "verifying") {
-		if (!todo.verifyText) return { resultText: "", error: "no verifyText" };
-		if (!params.evidence || params.evidence.trim().length < MIN_EVIDENCE_LEN) {
-			return { resultText: "", error: "evidence required" };
-		}
-	} else if (params.status === "completed") {
-		if (todo.verifyText && todo.status !== "verifying") {
-			if (params.verified !== true) return { resultText: "", error: "verify required" };
-			if (!params.evidence || params.evidence.trim().length < MIN_EVIDENCE_LEN) {
-				return { resultText: "", error: "evidence required" };
-			}
-		} else if (todo.status === "verifying") {
-			if (!params.evidence || params.evidence.trim().length < MIN_EVIDENCE_LEN) {
-				return { resultText: "", error: "evidence required" };
-			}
-		}
-	}
-
-	// T5 完成引导：判断是否是最后一个 pending 即将完成
-	const incompleteBefore = state.todos.filter((t) => t.status !== "completed");
-	const isLastCompletion =
-		params.status === "completed" &&
-		incompleteBefore.length === 1 &&
-		incompleteBefore[0].id === todo.id;
-
 	if (params.status !== undefined) {
-		const oldStatus = todo.status;
 		todo.status = params.status as Todo["status"];
-		if (params.evidence && (params.status === "verifying" || params.status === "completed")) {
-			todo.evidence = params.evidence.trim();
-		}
-		// 检测验证失败: completed/verifying → in_progress
-		if (
-			params.status === "in_progress" &&
-			todo.verifyText &&
-			todo.verifyAttempts < 2 // 来自 MAX_VERIFY_ATTEMPTS（与 handlers.ts / model.ts 保持一致）
-		) {
-			if (oldStatus === "completed" || oldStatus === "verifying") {
-				todo.verifyAttempts++;
-			}
-		}
 	}
 	if (params.text !== undefined) {
 		todo.text = params.text;
@@ -241,29 +161,29 @@ function handleSingleUpdate(
 	const parts: string[] = [`Updated todo #${todo.id}`];
 	if (params.status !== undefined) parts.push(`status → ${params.status}`);
 	if (params.text !== undefined) parts.push(`text → "${todo.text}"`);
-	const resultText = parts.join(", ");
 
-	if (isLastCompletion) {
-		return { resultText: resultText + "\n\nAll todos completed. Please summarize your work." };
+	// 最后一个完成提示
+	const incompleteAfter = state.todos.filter((t) => t.status !== "completed");
+	if (params.status === "completed" && incompleteAfter.length === 0) {
+		return { resultText: parts.join(", ") + "\n\nAll todos completed. Please summarize your work." };
 	}
-	return { resultText };
+	return { resultText: parts.join(", ") };
 }
 
-/** update action: 入口（dispatcher：batch vs single） */
+/** update action: dispatcher */
 function handleUpdate(
 	state: TodoSessionState,
 	params: TodoActionParams,
 ):
 	| { resultText: string; error?: string; earlyReturn?: { content: Array<{ type: "text"; text: string }>; details: TodoDetails } }
 	| undefined {
-	// Batch updates[] takes priority over single id/status/text
 	if (params.updates && params.updates.length > 0) {
 		return handleBatchUpdate(state, params);
 	}
 	return handleSingleUpdate(state, params);
 }
 
-/** delete action: 批量删除 todo */
+/** delete action */
 function handleDelete(
 	state: TodoSessionState,
 	params: TodoActionParams,
@@ -287,19 +207,18 @@ function handleDelete(
 	return { resultText: `Deleted ${removedIds.length} items (#${removedIds.join(", #")}), ${state.todos.length} remaining` };
 }
 
-/** clear action: 清空 todo 列表 */
+/** clear action */
 function handleClear(state: TodoSessionState): string {
 	const count = state.todos.length;
 	state.todos = [];
 	state.nextId = 1;
 	state.allCompletedAtCount = null;
-	// v3: 手动清空后重置
+	state.completionSteered = false;
 	return count > 0 ? `Cleared ${count} todos` : "No todos to clear";
 }
 
-// ── Dispatcher（≤ 80 行，纯 switch 分发） ────────────
+// ── Dispatcher ───────────────────────────────────────
 
-/** Tool execute dispatcher — 接受 TodoActionParams + state + ctx，调用对应 handler */
 export function executeTodoAction(
 	params: TodoActionParams,
 	state: TodoSessionState,
@@ -309,9 +228,14 @@ export function executeTodoAction(
 	content: Array<{ type: "text"; text: string }>;
 	details: TodoDetails;
 } {
-	// v3: 记录本次 todo 工具调用轮次（userMessageCount 在 agent_start 中递增）
 	state.lastTodoCallCount = state.userMessageCount;
 	state.stallNotified = false;
+
+	// 有未完成项时重置 completionSteered
+	const hasIncomplete = state.todos.some((t) => t.status !== "completed");
+	if (hasIncomplete) {
+		state.completionSteered = false;
+	}
 
 	let resultText = "";
 
@@ -330,7 +254,6 @@ export function executeTodoAction(
 				return errorResult("add", state, r.resultText, r.error);
 			}
 			resultText = r.resultText;
-			// v3: 新增 todo 表示未全部完成
 			break;
 		}
 
@@ -342,7 +265,6 @@ export function executeTodoAction(
 			}
 			if (r.earlyReturn) return r.earlyReturn;
 			if (r.error) {
-				// 把原始人类可读错误文本与 error code 关联
 				const errorText = mapUpdateErrorText(state, params, r.error);
 				return errorResult("update", state, errorText, r.error);
 			}
@@ -384,8 +306,7 @@ export function executeTodoAction(
 	};
 }
 
-/** 把 handleUpdate 的 error code 映射回原 index.ts 中的人类可读错误文本 */
-function mapUpdateErrorText(state: TodoSessionState, params: TodoActionParams, code: string): string {
+function mapUpdateErrorText(state: TodoSessionState, _params: TodoActionParams, code: string): string {
 	switch (code) {
 		case "id required":
 			return "Error: update requires id parameter";
@@ -397,19 +318,8 @@ function mapUpdateErrorText(state: TodoSessionState, params: TodoActionParams, c
 			if (code.startsWith("invalid status:")) {
 				return `Error: status only accepts ${VALID_STATUSES.join(" / ")}`;
 			}
-			if (code === "#not found" || /^\#\d+ not found$/.test(code)) {
-				return `Error: Todo ${code.replace(/^#/, "#")} not found`;
-			}
-			if (code === "no verifyText") {
-				const todo = state.todos.find((t) => t.id === params.id);
-				return `Error: #${todo?.id ?? "?"} 无 verifyText，不能进入 verifying 状态`;
-			}
-			if (code === "verify required") {
-				const todo = state.todos.find((t) => t.id === params.id);
-				return `⚠️ Task #${todo?.id ?? "?"} "${todo?.text ?? ""}" 有验证要求。\n请先: todo update(id=${todo?.id}, status=verifying, evidence="验证进度")\n或跳过: todo update(id=${todo?.id}, status=completed, verified=true, evidence="验证结论")\n验证标准: ${todo?.verifyText}`;
-			}
-			if (code === "evidence required") {
-				return "⚠️ evidence required (≥10 chars)";
+			if (code.startsWith("#") && code.includes("not found")) {
+				return `Error: Todo ${code} not found`;
 			}
 			return `Error: ${code}`;
 	}
@@ -417,7 +327,6 @@ function mapUpdateErrorText(state: TodoSessionState, params: TodoActionParams, c
 
 // ── Tool 注册入口 ─────────────────────────────────────
 
-/** 注册 todo tool 到 pi */
 export function registerTodoTool(
 	pi: ExtensionAPI,
 	state: TodoSessionState,
@@ -430,7 +339,7 @@ export function registerTodoTool(
 			"Manage a todo list." +
 			"\n\nAvailable actions:" +
 			"\n- list: View all todos" +
-			"\n- add: Batch add todos (requires texts array, optional verifyTexts)" +
+			"\n- add: Batch add todos (requires texts array)" +
 			"\n- update: Update a todo (requires id, optional status/text)" +
 			"\n- delete: Batch delete todos (requires ids array)" +
 			"\n- clear: Clear all todos and reset IDs"
@@ -440,16 +349,12 @@ export function registerTodoTool(
 			"[Usage] 多步骤工作（3+步）时使用。AI 自发创建，无需用户触发",
 			"[Goal 冲突] /goal 激活后禁止使用 todo — 改用 add_subtasks",
 			"[批量优先] 完成多项任务时使用 updates[] 批量更新，减少工具调用次数",
-			"[验证流程] 有 verifyText 的任务: in_progress → verifying(evidence=\"验证进度\") → completed(evidence=\"验证结论\")。evidence ≥ 10 字符",
-			"[跳过验证] 有 verifyText 但想直接 completed: 必须传 verified=true + evidence",
-			"[验证失败] verifying/completed 被改回 in_progress 时 verifyAttempts++，2 次后进入 failed",
 			"[自动闭合] 全部完成后工具自动清理，无需手动 clear",
 			"[Not for] 单步操作、简单对话、/goal 已激活时",
 		],
 		parameters: TodoParams,
 
 		async execute(_toolCallId: string, params: Static<typeof TodoParams>, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
-			// P1-5: 尊重 signal —— 异步被取消时提前返回
 			if (signal?.aborted) {
 				return {
 					content: [{ type: "text" as const, text: "Todo call aborted by signal." }],
@@ -463,7 +368,6 @@ export function registerTodoTool(
 				};
 			}
 			const result = executeTodoAction(params as TodoActionParams, state, ctx, refreshDisplay);
-			// Append input params to error results for debugging
 			const details = result.details as { error?: string } | undefined;
 			if (details?.error) {
 				const textPart = result.content[0];
