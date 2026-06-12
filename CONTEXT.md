@@ -95,9 +95,9 @@ Goal 的资源约束，包含四个维度：
 **TaskVerification**
 GoalTask 的可选验证配置，包含 `method`（验证方法描述）和 `expected`（预期结果）。创建 task 时声明，用于引导 AI 在完成代码后执行可量化的验证。
 
-**verify_task**
-当有 verification 的 GoalTask 被标记 completed 时，系统自动创建的平级验证 task。description 前缀 `[验证]`，通过 `verificationFor` 字段关联到原 task。verify_task 完成需要 evidence，可被 cancelled 跳过。
-_Avoid_: 验证任务（正式文档用 verify_task）
+**verified 状态**
+GoalTask 生命周期阶段。当 task 有 verification 配置时，`completed` 不是终态——AI 需执行验证方法（如 `pnpm test`），验证通过后调用 `update_tasks(status=verified, actual=<result>)` 将 task 转为 `verified` 终态。验证结果记录在 `TaskVerification.actual` 字段。无 verification 的 task，`completed` 即为终态。
+_Avoid_: verify_task（已废弃，旧版创建独立验证 task 的方案已移除）
 
 **Stall**
 连续无 **GoalTask** 完成的 turn 数。达到 `maxStallTurns` 时 Goal 自动转为 `blocked`。

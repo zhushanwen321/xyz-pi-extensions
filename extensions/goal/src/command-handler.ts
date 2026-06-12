@@ -197,7 +197,7 @@ function handleAbort(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionConte
 		ctx.ui.notify(`Goal is already in terminal state (${session.state.status}).`, "warning");
 		return;
 	}
-	if (session.state.tasks && session.state.tasks.length > 0) {
+	if (session.state.tasks.length > 0) {
 		ctx.ui.notify(`Cannot abort: ${session.state.tasks.length} tasks already created. Use /goal clear to force cancel.`, "warning");
 		return;
 	}
