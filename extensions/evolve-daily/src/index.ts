@@ -1,6 +1,6 @@
 // packages/evolve-daily/src/index.ts
 
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +24,8 @@ const REPORTS_DIR = join(homedir(), ".pi", "agent", "evolution-data", "daily-rep
 
 const DATE_SLICE_END = 10;
 const ANALYZER_TIMEOUT_MS = 30_000;
+/** 回溯填补最多 7 天的缺失/空报告 */
+const BACKFILL_MAX_DAYS = 7;
 
 /** Pi API 的 on 方法重载签名（覆盖非标事件名） */
 type PiOnAny = { on(event: string, handler: (...args: unknown[]) => Promise<void> | void): void };
@@ -37,35 +39,65 @@ interface ToolResultDetector {
 
 export default function evolveDailyExtension(pi: ExtensionAPI) {
   // ── L1: session_start 时调用 Python analyzer ──
+  // 分析前一天的数据（session_start 时当天的 session 刚开始，有意义的数据是昨天的）
+  // 并回溯填补最近 BACKFILL_MAX_DAYS 天内缺失或空（session_count=0）的报告
+  /** 每天毫秒数 */
+  const MS_PER_DAY = 86_400_000;
+
   pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
-    const today = new Date().toISOString().slice(0, DATE_SLICE_END); // YYYY-MM-DD
-    const reportPath = join(REPORTS_DIR, `${today}.json`);
+    // 收集需要（重新）生成的日期
+    const datesToAnalyze: string[] = [];
+    for (let i = 1; i <= BACKFILL_MAX_DAYS; i++) {
+      const date = new Date(Date.now() - i * MS_PER_DAY)
+        .toISOString()
+        .slice(0, DATE_SLICE_END);
+      const reportPath = join(REPORTS_DIR, `${date}.json`);
 
-    if (existsSync(reportPath)) return;
-
-    try {
-      await pi.exec(
-        "python3",
-        [
-          ANALYZER_PATH,
-          "--since",
-          "1d",
-          "--format",
-          "json",
-          "--output",
-          reportPath,
-        ],
-        { timeout: ANALYZER_TIMEOUT_MS, signal: ctx.signal }
-      );
-    } catch (e) {
-      // Clean up partial output if analyzer failed mid-write
-      try {
-        unlinkSync(reportPath);
-      // eslint-disable-next-line taste/no-silent-catch
-      } catch {
-        /* already gone */
+      if (!existsSync(reportPath)) {
+        datesToAnalyze.push(date);
+        continue;
       }
-      console.error("[evolve-daily] analyzer failed:", e);
+
+      // 空报告（session_count=0）允许重跑：可能是 off-by-one bug 或当天过早运行导致
+      try {
+        const content = readFileSync(reportPath, "utf-8");
+        const report = JSON.parse(content) as { session_count?: number };
+        if ((report.session_count ?? 0) === 0) {
+          datesToAnalyze.push(date);
+        }
+      } catch {
+        // 解析失败也重新生成
+        datesToAnalyze.push(date);
+      }
+    }
+
+    if (datesToAnalyze.length === 0) return;
+
+    for (const date of datesToAnalyze) {
+      const reportPath = join(REPORTS_DIR, `${date}.json`);
+      try {
+        await pi.exec(
+          "python3",
+          [
+            ANALYZER_PATH,
+            "--date",
+            date,
+            "--format",
+            "json",
+            "--output",
+            reportPath,
+          ],
+          { timeout: ANALYZER_TIMEOUT_MS, signal: ctx.signal }
+        );
+      } catch (e) {
+        try {
+          unlinkSync(reportPath);
+        // eslint-disable-next-line taste/no-silent-catch
+        } catch {
+          /* already gone */
+        }
+        console.error(`[evolve-daily] analyzer failed for ${date}:`, e);
+      }
     }
   });
 

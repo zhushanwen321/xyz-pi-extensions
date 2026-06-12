@@ -47,8 +47,8 @@ def _extract_text_from_content(content: Any) -> str:
 def extract(sessions: list[dict]) -> dict:
     """从 session 列表中提取 Goal/Todo 质量统计。
 
-    分析 Goal 完成率、任务拆分质量、Evidence 质量、Stall 频率、Token 消耗，
-    以及 Todo 的完成率、放弃率等。
+    按 goalId 去重：每个 goal 只保留最终状态（最后一条 entry），
+    避免运行过程中大量 active 状态的 entry 膨胀分母导致完成率被低估。
 
     Args:
         sessions: session JSONL 解析后的字典列表。
@@ -56,14 +56,8 @@ def extract(sessions: list[dict]) -> dict:
     Returns:
         包含 goal_quality_stats 和 todo_stats 两个维度。
     """
-    goals_total = 0
-    goals_completed = 0
-    goals_budget_limited = 0
-    goals_cancelled = 0
-    all_tasks: list[dict] = []
-    all_evidence: list[str] = []
-    stall_count = 0
-    total_tokens = 0
+    # 按 goalId 收集，后出现的覆盖前面的（时间序列中 later = 更新）
+    goal_final_states: dict[str, dict] = {}
 
     todo_total = 0
     todo_completed = 0
@@ -73,28 +67,12 @@ def extract(sessions: list[dict]) -> dict:
         messages = session.get("messages", [])
 
         for msg in messages:
-            # Goal state entries
+            # Goal state entries — 保留最终状态
             if msg.get("customType") == "goal-state":
-                goals_total += 1
                 state = msg.get("data", {})
-                status = state.get("status", "")
-
-                if status == "complete":
-                    goals_completed += 1
-                elif status == "budget_limited":
-                    goals_budget_limited += 1
-                elif status == "cancelled":
-                    goals_cancelled += 1
-
-                tasks = state.get("tasks", [])
-                for task in tasks:
-                    all_tasks.append(task)
-                    evidence = task.get("evidence", "")
-                    if evidence:
-                        all_evidence.append(evidence)
-
-                stall_count += state.get("stallCount", 0)
-                total_tokens += state.get("tokensUsed", 0)
+                goal_id = state.get("goalId", "")
+                if goal_id:
+                    goal_final_states[goal_id] = state
 
             # Todo tool calls
             if (
@@ -103,13 +81,45 @@ def extract(sessions: list[dict]) -> dict:
             ):
                 content = _extract_text_from_content(msg.get("content", ""))
 
-                # 解析 todo 操作
                 if "add" in content.lower() or "添加" in content:
                     todo_total += 1
                 if "completed" in content.lower() or "完成" in content:
                     todo_completed += 1
                 if "delete" in content.lower() or "删除" in content:
                     todo_abandoned += 1
+
+    # 从最终状态统计 goal 指标
+    goals_total = len(goal_final_states)
+    goals_completed = 0
+    goals_budget_limited = 0
+    goals_cancelled = 0
+    goals_blocked = 0
+    all_tasks: list[dict] = []
+    all_evidence: list[str] = []
+    stall_count = 0
+    total_tokens = 0
+
+    for state in goal_final_states.values():
+        status = state.get("status", "")
+
+        if status == "complete":
+            goals_completed += 1
+        elif status == "budget_limited":
+            goals_budget_limited += 1
+        elif status == "cancelled":
+            goals_cancelled += 1
+        elif status == "blocked":
+            goals_blocked += 1
+
+        tasks = state.get("tasks", [])
+        for task in tasks:
+            all_tasks.append(task)
+            evidence = task.get("evidence", "")
+            if evidence:
+                all_evidence.append(evidence)
+
+        stall_count += state.get("stallCount", 0)
+        total_tokens += state.get("tokensUsed", 0)
 
     # 任务统计
     total_tasks = len(all_tasks)
@@ -128,6 +138,7 @@ def extract(sessions: list[dict]) -> dict:
         "goals_completed": goals_completed,
         "goals_budget_limited": goals_budget_limited,
         "goals_cancelled": goals_cancelled,
+        "goals_blocked": goals_blocked,
         "completion_rate": goals_completed / max(goals_total, 1),
         "avg_tasks_per_goal": total_tasks / max(goals_total, 1),
         "task_stats": {
