@@ -124,7 +124,6 @@ export interface GoalRuntimeState {
 	objective: string;
 	status: GoalStatus;
 	tasks: GoalTask[];
-	turnCount: number;
 	stallCount: number;
 	tokensUsed: number;
 	timeStartedAt: number; // Date.now() timestamp
@@ -154,7 +153,6 @@ export function createInitialState(objective: string, budget: Partial<BudgetConf
 		objective,
 		status: "active",
 		tasks: [],
-		turnCount: 0,
 		stallCount: 0,
 		tokensUsed: 0,
 		timeStartedAt: Date.now(),
@@ -233,7 +231,6 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 			lastUpdatedTurn: (t.lastUpdatedTurn as number) ?? 0,
 		} as unknown as GoalTask;
 	}),
-		turnCount: (data.turnCount as number) ?? 0,
 		stallCount: (data.stallCount as number) ?? 0,
 		tokensUsed: (data.tokensUsed as number) ?? 0,
 		timeStartedAt: (data.timeStartedAt as number) ?? Date.now(),

@@ -31,8 +31,8 @@ import { objectiveUpdatedPrompt } from "./templates";
 import {
 	clearGoalSession,
 	type GoalSession,
+	persistAndUpdate,
 	persistGoalState,
-	updateWidget,
 	writeGoalHistoryEntry,
 } from "./tool-handler";
 
@@ -89,8 +89,7 @@ function handlePause(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionConte
 		return;
 	}
 	session.state.status = transitionStatus(session.state.status, "paused");
-	persistGoalState(pi, session, ctx);
-	updateWidget(session, ctx);
+	persistAndUpdate(pi, session, ctx);
 	ctx.ui.notify("Goal paused. Use /goal resume to continue.", "info");
 }
 
@@ -116,13 +115,11 @@ function handleResume(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionCont
 	if (resumeBudgetCheck) {
 		const dim = resumeBudgetCheck.dimension;
 		state.status = transitionStatus(state.status, dim === "token" ? "budget_limited" : "time_limited");
-		persistGoalState(pi, session, ctx);
-		updateWidget(session, ctx);
+		persistAndUpdate(pi, session, ctx);
 		ctx.ui.notify(`${dim === "token" ? "Token" : "Time"} budget exhausted, cannot resume. Use /goal clear to reset.`, "warning");
 		return;
 	}
-	persistGoalState(pi, session, ctx);
-	updateWidget(session, ctx);
+	persistAndUpdate(pi, session, ctx);
 
 	const incomplete = getIncompleteTasks(state.tasks);
 	if (incomplete.length > 0) {
@@ -208,15 +205,13 @@ function handleUpdate(
 	state.objectiveUpdatedAt = Date.now();
 	state.tasks = [];
 	state.stallCount = 0;
-	state.turnCount = 0;
 	state.currentTurnIndex = 0;
 	state.lastProgressTurn = 0;
 	state.budgetLimitSteeringSent = false;
 	state.budgetWarning70Sent = false;
 	state.budgetWarning90Sent = false;
 	session.tasksCompletedAtAgentStart = 0;
-	persistGoalState(pi, session, ctx);
-	updateWidget(session, ctx);
+	persistAndUpdate(pi, session, ctx);
 	ctx.ui.notify(`Objective updated:\nPrevious: ${oldObjective}\nNew: ${newObjective}`, "info");
 
 	if (isActiveStatus(state.status)) {
@@ -263,8 +258,7 @@ function handleSet(
 	session.tasksCompletedAtAgentStart = 0;
 	session.hasPendingInjection = false;
 
-	persistGoalState(pi, session, ctx);
-	updateWidget(session, ctx);
+	persistAndUpdate(pi, session, ctx);
 
 	const budgetNotice: string[] = [];
 	if (budget.tokenBudget) budgetNotice.push(`Token budget: ${budget.tokenBudget}`);

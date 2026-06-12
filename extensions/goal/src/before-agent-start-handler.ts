@@ -28,8 +28,7 @@ import {
 import {
 	clearGoalSession,
 	type GoalSession,
-	persistGoalState,
-	updateWidget,
+	persistAndUpdate,
 } from "./tool-handler";
 import { renderTerminalStatusLine } from "./widget";
 
@@ -163,8 +162,7 @@ function checkContextUsage(
 	if (usage && usage.contextWindow > 0 && (usage.tokens ?? 0) / usage.contextWindow > CONTEXT_USAGE_RATIO_LIMIT) {
 		const state = session.state!;
 		state.status = transitionStatus(state.status, "paused");
-		persistGoalState(pi, session, ctx);
-		updateWidget(session, ctx);
+		persistAndUpdate(pi, session, ctx);
 		return {
 			message: {
 				customType: "goal-context-exceeded",

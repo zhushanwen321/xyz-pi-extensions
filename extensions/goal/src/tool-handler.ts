@@ -122,6 +122,17 @@ export function persistGoalState(pi: ExtensionAPI, session: GoalSession, _ctx: E
 	pi.appendEntry(ENTRY_TYPE, serializeState(session.state));
 }
 
+/** persist + widget 的统一入口。可选 stale check：返回 true 表示 state 已被替换（新 goal），调用方应中止。 */
+export function persistAndUpdate(
+	pi: ExtensionAPI, session: GoalSession, ctx: ExtensionContext,
+	checkStale?: () => boolean,
+): boolean {
+	persistGoalState(pi, session, ctx);
+	if (checkStale?.()) return true;
+	updateWidget(session, ctx);
+	return false;
+}
+
 export function writeGoalHistoryEntry(pi: ExtensionAPI, session: GoalSession): void {
 	const state = session.state;
 	if (!state) return;
