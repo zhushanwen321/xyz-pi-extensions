@@ -32,6 +32,7 @@ import {
 import {
 	type GoalSession,
 	persistAndUpdate,
+	sendGoalContextMessage,
 	writeGoalHistoryEntry,
 } from "./tool-handler";
 
@@ -278,22 +279,6 @@ async function handleStallAndContinuation(
 	}
 	persistAndUpdate(pi, session, ctx);
 	sendGoalContextMessage(pi, continuationPrompt(state), "followUp");
-}
-
-/** Send a hidden custom message that feeds the LLM but is not rendered in TUI. */
-function sendGoalContextMessage(
-	pi: ExtensionAPI,
-	content: string,
-	deliverAs: "steer" | "followUp",
-): void {
-	pi.sendMessage(
-		{
-			customType: "goal-context",
-			content,
-			display: false,
-		},
-		{ deliverAs },
-	);
 }
 
 /** 更新 stall 计数。stall 时递增，否则重置。 */

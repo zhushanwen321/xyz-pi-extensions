@@ -33,24 +33,9 @@ import {
 	type GoalSession,
 	persistAndUpdate,
 	persistGoalState,
+	sendGoalContextMessage,
 	writeGoalHistoryEntry,
 } from "./tool-handler";
-
-/** Send a hidden custom message that feeds the LLM but is not rendered in TUI. */
-function sendGoalContextMessage(
-	pi: ExtensionAPI,
-	content: string,
-	deliverAs: "steer" | "followUp",
-): void {
-	pi.sendMessage(
-		{
-			customType: "goal-context",
-			content,
-			display: false,
-		},
-		{ deliverAs },
-	);
-}
 
 // ── Orchestrator ──────────────────────────────────────
 

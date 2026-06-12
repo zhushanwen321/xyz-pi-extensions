@@ -172,6 +172,7 @@ export function clearGoalSession(session: GoalSession, ctx: ExtensionContext): v
 	session.state = null;
 	session.tasksCompletedAtAgentStart = 0;
 	session.hasPendingInjection = false;
+	session.pendingPause = false;
 	ctx.ui.setWidget("goal", undefined);
 	ctx.ui.setStatus("goal", undefined);
 }
@@ -271,4 +272,20 @@ export function errorResult(message: string) {
 		content: [{ type: "text" as const, text: message }],
 		isError: true as const,
 	};
+}
+
+/** Send a hidden custom message that feeds the LLM but is not rendered in TUI. */
+export function sendGoalContextMessage(
+	pi: ExtensionAPI,
+	content: string,
+	deliverAs: "steer" | "followUp",
+): void {
+	pi.sendMessage(
+		{
+			customType: "goal-context",
+			content,
+			display: false,
+		},
+		{ deliverAs },
+	);
 }

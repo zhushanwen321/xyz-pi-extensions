@@ -22,9 +22,9 @@
     "index.ts"
   ],
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
     "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-tui": "*",
+    "@mariozechner/pi-coding-agent": "*",
     "@sinclair/typebox": "*"
   },
   "peerDependenciesMeta": {
@@ -36,6 +36,10 @@
     }
   },
   "scripts": {
-    "typecheck": "npx tsc --noEmit"
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.8"
   }
 }

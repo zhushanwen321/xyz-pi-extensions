@@ -197,7 +197,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 				"\n\nAvailable actions:" +
 				"\n- create_tasks: Decompose the objective into a task list (call once at goal start). Each task description must be a one-line summary (max 60 chars), no newlines or markdown. Accept verifications array for task verification." +
 				"\n- add_tasks: Append new tasks to the existing list (when omissions are discovered). Each task description must be a one-line summary (max 60 chars), no newlines or markdown. Accept verifications array." +
-				"\n- update_tasks: Batch update task statuses (completed requires evidence, cancelled does not block goal completion). Completing a task with verification triggers a verification prompt — then call update_tasks with status=verified and actual=<result>." +
+				"\n- update_tasks: Batch update task statuses. Must follow state machine: pending→in_progress→completed→verified. Cannot skip states. Completed requires evidence. Cancelled does not block goal completion. Completing a task with verification triggers a verification prompt — then call update_tasks with status=verified and actual=<result>." +
 				"\n- list_tasks: View progress and remaining budget" +
 				"\n- complete_goal: Mark the objective as achieved (all tasks must be completed or verified + evidence)" +
 				"\n- cancel_goal: Cancel the current goal (use when user wants to exit/stop)" +
@@ -208,6 +208,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		promptSnippet: "Manage task list, completion status, and exit for /goal mode",
 		promptGuidelines: [
 			"[Workflow] After receiving the objective, the first step must be create_tasks to decompose. Do not re-call if task list already exists",
+			"[Status flow] Tasks must follow this order: pending → in_progress → completed → verified. You CANNOT skip in_progress. Before marking completed, always set status=in_progress first. Transitions: pending→in_progress | pending→cancelled, in_progress→completed | in_progress→cancelled, completed→verified (only if task has verification)",
 			"[Format] Each task description must be a one-line summary, max 60 chars. No newlines, markdown, or detailed parameter lists — those go in execution phase. Example: 'Fix hook-registry dedup logic' not 'Fix hook-registry dedup + transport-execute enhancementConfig guard + failover-loop ...'",
 			"[Append] When discovering omissions during execution, use add_tasks to append — do not re-call create_tasks",
 			"[Completion] After completing a task, call update_tasks with status=completed and provide evidence (e.g. 'test X passed', 'file F created')",
@@ -272,22 +273,24 @@ export default function goalExtension(pi: ExtensionAPI) {
 				return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
 			}
 			const tasks = details.tasks;
-			const completed = tasks.filter((t) => t.status === "completed").length;
+			const completed = getCompletedCount(tasks);
 			const summary = theme.fg("success", `✓ ${completed}/${tasks.length} completed`);
 			if (!expanded || tasks.length === 0) {
 				return new Text(summary, 0, 0);
 			}
 			const lines = [summary];
 			for (const t of tasks) {
-				const icon = t.status === "completed"
-					? theme.fg("success", "✓")
-					: t.status === "in_progress"
-						? theme.fg("warning", "●")
-						: t.status === "cancelled"
-							? theme.fg("dim", "✗")
-							: theme.fg("dim", "☐");
+				const icon = t.status === "verified"
+					? theme.fg("success", "◉")
+					: t.status === "completed"
+						? theme.fg("success", "✓")
+						: t.status === "in_progress"
+							? theme.fg("warning", "●")
+							: t.status === "cancelled"
+								? theme.fg("dim", "✗")
+								: theme.fg("dim", "☐");
 				const descText = toSingleLine(t.description);
-				const desc = (t.status === "completed" || t.status === "cancelled")
+				const desc = (t.status === "verified" || t.status === "completed" || t.status === "cancelled")
 					? theme.fg("dim", descText)
 					: theme.fg("text", descText);
 				lines.push(`  ${icon} ${theme.fg("accent", `#${t.id}`)} ${desc}`);

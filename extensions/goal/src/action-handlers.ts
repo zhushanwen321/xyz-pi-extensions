@@ -34,6 +34,7 @@ import {
 	type GoalSession,
 	makeGoalResult,
 	persistGoalState,
+	sendGoalContextMessage,
 	writeGoalHistoryEntry,
 } from "./tool-handler";
 
@@ -145,18 +146,15 @@ function injectVerificationSteering(pi: ExtensionAPI, tasks: GoalTask[]): void {
 		`Task #${t.id} requires verification. Run: ${t.verification!.method} (expected: ${t.verification!.expected})\n` +
 		`Then call update_tasks with taskId=${t.id}, status="verified", actual=<result>.`
 	).join("\n\n");
-	pi.sendMessage(
-		{
-			customType: "goal-context",
-			content: `[GOAL Verification] Task(s) completed with verification pending:\n${lines}`,
-			display: false,
-		},
-		{ deliverAs: "steer" },
+	sendGoalContextMessage(
+		pi,
+		`[GOAL Verification] Task(s) completed with verification pending:\n${lines}`,
+		"steer",
 	);
 }
 
 /** 验证 update_tasks 的所有更新项；返回首个错误或 null。 */
-function validateUpdateTasks(state: GoalRuntimeState, updates: NonNullable<Static<typeof GoalManagerParams>["updates"]>) {
+export function validateUpdateTasks(state: GoalRuntimeState, updates: NonNullable<Static<typeof GoalManagerParams>["updates"]>) {
 	const taskIds = updates.map((u: { taskId: number }) => u.taskId);
 	const duplicateIds = taskIds.filter((id: number, i: number) => taskIds.indexOf(id) !== i);
 	if (duplicateIds.length > 0) {
@@ -187,7 +185,8 @@ function validateUpdateTasks(state: GoalRuntimeState, updates: NonNullable<Stati
 		};
 		const allowed = validNext[task.status];
 		if (!allowed || !allowed.has(u.status)) {
-			return errorResult(`Task #${task.id}: invalid transition ${task.status} → ${u.status}`);
+			const hints: Record<string, string> = { pending: "allowed: in_progress or cancelled", in_progress: "allowed: completed or cancelled", completed: "allowed: verified (only if task has verification config)" };
+			return errorResult(`Task #${task.id}: invalid transition ${task.status} → ${u.status}. From ${task.status}, ${hints[task.status] ?? "no transitions allowed"}`);
 		}
 
 		// completed 必须有 evidence

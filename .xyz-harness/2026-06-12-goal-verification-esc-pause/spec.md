@@ -51,31 +51,31 @@ verifications?: Array<{
 - 如果 `verifications` 缺失或某项为空，该 task 无验证要求
 - tool description 中提供验证模板（见 FR-2.5）
 
-#### FR-2.3: Verify Task — Auto-Created on Task Completion
+#### FR-2.3: Verify Task — Two-Phase State (completed → verified)
+
+> **实现方案说明**：spec 原方案为创建独立 verify_task（平级 task + verificationFor 字段），实际实现改为 **同 task 的两阶段状态转换**。
+> 优点：无额外 task 污染列表、状态机更清晰、无需 verificationFor 关联字段。
+> CONTEXT.md 已标注旧方案废弃。
 
 当 `update_tasks` 将某个 task 标记为 `completed`，且该 task 有 `verification` 字段时：
 
-1. 自动在 task 列表中追加一个 **verify_task**（平级 task，不是 subtask）
-2. verify_task 的结构：
-   - `id`: 紧接当前最大 ID
-   - `description`: `[验证] #{原taskId} {原task描述前30字}`
-   - `status`: `pending`
-   - `verificationFor`: `原taskId`（新增字段，关联到原 task）
-   - `lastUpdatedTurn`: 当前 turn
-3. 通过 `pi.sendUserMessage` 注入 steering 提示 AI 执行验证
-4. AI 用 bash 工具执行验证命令，然后调用 `update_tasks(status=completed, evidence="验证结果")` 标记 verify_task 完成
+1. task 保持 `completed` 状态（不再创建独立 verify_task）
+2. 通过 `sendGoalContextMessage` 注入 steering 提示 AI 执行验证命令
+3. AI 用 bash 工具执行验证命令，然后调用 `update_tasks(status=verified, actual="验证结果")` 标记完成
 
-**verify_task 的完成约束**：
-- verify_task 不能在原 task completed 之前完成
-- verify_task 标记 completed 时同样需要 evidence
-- verify_task 可以被 cancelled（跳过验证）
+**verified 状态约束**：
+- `verified` 是 `TaskStatus` 的新增值
+- 只有 `completed` 且有 `verification` 的 task 可以转为 `verified`
+- `verified` 是终态（与 `cancelled` 并列）
+- `verified` 需要 `actual` 参数（实际验证结果）
+- 无 `verification` 的 `completed` task 仍为终态，不可变更
 
 #### FR-2.4: complete_goal Constraint Update
 
 `complete_goal` 的约束更新：
-- 原有约束（所有 task completed、至少一个 completed）保持不变
-- 新增：所有 verify_task 也必须是终态（completed 或 cancelled）
-- 未完成的 verify_task 阻止 complete_goal
+- 新增 `isTaskDone()` 函数：`verified`、`cancelled`、`completed` 且无 `verification` 均为 done
+- `completed` 且有 `verification` 的 task 不算 done，阻止 `complete_goal`
+- 错误提示中区分 pending-verify 和其他未完成状态
 
 #### FR-2.5: Verification Templates in Tool Description
 
@@ -92,19 +92,15 @@ verifications?: Array<{
 [Verification] 不要单独创建一个"运行测试"task 来做验证——验证应作为 task 的 verification 字段
 ```
 
-#### FR-2.6: Widget Two-Column Layout
+#### FR-2.6: Widget Rendering
 
-`renderWidgetLines` 改为双列布局：
+`renderWidgetLines` 和 `renderResult` 的验证状态渲染：
 
-```
-  ● #1 Fix hook-registry dedup logic     [验证: pnpm test --filter goal]
-  ☐ #2 Add unit tests for budget.ts      [验证: 覆盖率 > 80%]
-  ☐ #3 [验证] #1 Fix hook-registry...    (verify_task, 前缀标识)
-```
-
-- 非验证 task：右侧显示 `验证: {method 截断至40字符}`
-- 无验证的 task：右侧不显示
-- verify_task：description 前缀 `[验证]`，视觉上和普通 task 区分
+- `verified` task：`◉` 图标 + dim 描述色
+- `completed` 有 verification：`✓` 图标 + `[待验证]` 标签
+- `completed` 无 verification：`✓` 图标（现有行为）
+- `in_progress`/`pending` 有 verification：右侧显示 `[验证: {method 截断至30字符}]`
+- Status line：分离 verified/completed/pending-verify 计数
 
 ### FR-3: ESC Key Pause
 
@@ -162,13 +158,14 @@ if (session.pendingPause) {
 
 - Given task #1 有 verification 且被标记 completed
 - When update_tasks 执行
-- Then 自动创建 verify_task `[验证] #1 ...`，状态为 pending，并注入 steering
+- Then 注入 verification steering 提示 AI 执行验证命令
+- And task 状态保持 completed（等待 verified）
 
-- Given 存在未完成的 verify_task
+- Given 存在 completed 但未 verified 的 task（有 verification）
 - When AI 调用 complete_goal
-- Then 返回错误，列出未完成的 verify_task
+- Then 返回错误，提示需要先 verified
 
-- Given 所有 task 和 verify_task 都 completed
+- Given 所有 task 都 isTaskDone（verified / completed 无 verification / cancelled）
 - When AI 调用 complete_goal
 - Then 正常完成
 
@@ -183,10 +180,10 @@ if (session.pendingPause) {
 
 ## Constraints
 
-- **数据向后兼容**：`GoalTask.verification` 和 `GoalTask.verificationFor` 是可选字段，`deserializeState` 需要为缺失字段提供默认值
+- **数据向后兼容**：`GoalTask.verification` 是可选字段，`deserializeState` 为缺失字段提供默认值（undefined）。`verified` 状态在旧数据中不存在，旧 completed task 无 verification 时 isTaskDone 返回 true
 - **Pi 沙箱限制**：verify_task 不能由扩展直接执行命令，只能通过 steering 引导 AI 用 bash 工具执行
-- **ID 连续性**：verify_task 的 ID 和普通 task 共享同一 ID 空间，连续递增
-- **向后兼容**：不破坏现有的 subtask 机制（subtask 是 task 内的嵌套结构，verify_task 是平级 task）
+- **ID 连续性**：task ID 连续递增（verify_task 方案已废弃，不再创建独立 task）
+- **向后兼容**：不破坏现有的 subtask 机制（subtask 是 task 内的嵌套结构）
 
 ### Out of Scope
 - 不改动 todo 扩展的验证机制（todo 的 verifyText 是独立体系）
