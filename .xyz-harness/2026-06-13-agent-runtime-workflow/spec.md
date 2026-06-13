@@ -59,7 +59,25 @@ Pi SDK 提供了 `createAgentSession()` API，可在当前进程内创建独立 
 
 **FR-4.2** 支持 model fallback：首选模型不可用时，按 `modelCandidates` 列表依次尝试。fallback 触发条件：模型在 `ModelRegistry` 中不存在（未配置 provider）。API 运行时错误（rate limit、quota exceeded）不触发 fallback，直接报错。
 
-**FR-4.3** Thinking level 从选定 model 的 `thinkingLevelMap` 字段提取支持的级别。值为 null 的级别排除。model 不支持 reasoning（`model.reasoning === false`）时不注入 thinking level。
+**FR-4.3** Thinking level 从选定 model 的 `thinkingLevelMap` 字段提取支持的级别。`thinkingLevelMap` 是 `{ off?, minimal?, low?, medium?, high?, xhigh? }` 映射到 `string | null`：
+- 值为 `null` = 该级别不可用，必须排除
+- 值为 `string` = 可用，string 是 Pi SDK 内部使用的 provider 侧映射值
+- `model.reasoning === false` = 该模型完全不支持 thinking，跳过 thinking level 选择，不注入
+
+**FR-4.3.1** 调用 `createAgentSession({ thinkingLevel })` 时传入 Pi 内部的级别名（如 `"high"`），Pi SDK 通过 `thinkingLevelMap` 自动转换为 provider 侧值（如 `"max"`）。subagents 不需要自己做映射。
+
+**FR-4.3.2** 当前环境实际可用模型示例（来自 `~/.pi/agent/models.json`）：
+
+| Provider | Models | 可用 Thinking Levels |
+|----------|--------|---------------------|
+| zhipu-coding-plan-router | glm-5.1, glm-5-turbo | xhigh |
+| deepseek-router | ds-flash, ds-pro | high, xhigh |
+| mimo-router | mimo-v2.5, mimo-v2.5-pro | low, medium, high |
+| kimi-coding-plan-router | kimi-for-coding | xhigh |
+| minimax-token-plan-router | minimax-m3 | xhigh |
+| carbon-router | qwen3-0.6b | 无（reasoning=false） |
+
+注意：glm-5.1 的 `thinkingLevelMap` 中 off/minimal/low/medium/high 均为 `null`，仅 `xhigh` 有值。这意味着用户选择 glm-5.1 后，thinking level 只能选 xhigh，不能选其他级别。
 
 ### FR-4.5: Category 系统
 
@@ -80,11 +98,15 @@ Pi SDK 提供了 `createAgentSession()` API，可在当前进程内创建独立 
   "yoloByDefault": false,
   "maxConcurrent": 4,
   "categories": {
-    "coding": { "label": "编码", "model": "anthropic/claude-sonnet-4", "thinkingLevel": "medium" },
-    "...": "..."
+    "coding":   { "label": "编码", "model": "deepseek-router/ds-flash", "thinkingLevel": "high" },
+    "research": { "label": "调研", "model": "mimo-router/mimo-v2.5", "thinkingLevel": "medium" },
+    "testing":  { "label": "测试", "model": "mimo-router/mimo-v2.5", "thinkingLevel": "low" },
+    "vision":   { "label": "视觉", "model": "zhipu-coding-plan-router/glm-5.1", "thinkingLevel": "xhigh" },
+    "planning": { "label": "规划", "model": "deepseek-router/ds-pro", "thinkingLevel": "xhigh" },
+    "general":  { "label": "通用", "model": "mimo-router/mimo-v2.5", "thinkingLevel": "low" }
   },
-  "agentCategoryOverrides": { "worker": "coding", "reviewer": "coding" },
-  "fallback": { "model": "openai/gpt-4.1-mini", "thinkingLevel": "low" }
+  "agentCategoryOverrides": { "worker": "coding", "reviewer": "coding", "scout": "research" },
+  "fallback": { "model": "mimo-router/mimo-v2.5", "thinkingLevel": "low" }
 }
 ```
 
@@ -111,15 +133,39 @@ interface SessionModelState {
 
 **FR-4.8.1** `/subagents config` 命令通过 `ctx.ui.select()` 实现级联交互式配置。
 
-**FR-4.8.2** 交互流程：
+**FR-4.8.2** 交互流程（4 步级联，provider→model→thinking 三者联动）：
 1. 选择操作（Edit category model / Add custom category / Remove custom category / Toggle YOLO / Override agent category / Show current config）
-2. 选择 category → 选择 provider → 选择 model → 选择 thinking level
-3. provider 列表从 `modelRegistry.getAvailable()` 提取去重
-4. model 列表过滤为选中 provider 下的 models
-5. thinking level 列表从 `model.thinkingLevelMap` 提取（排除 null 值和 model.reasoning === false 的情况）
-6. 保存到 config.json
+2. 选择 category
+3. 选择 provider → 选择 model → 选择 thinking level（三者联动，见下）
+4. 保存到 config.json
 
-**FR-4.8.3** 新增自定义 category：通过 `ctx.ui.input()` 输入名称，然后进入 provider/model/thinking 级联选择。
+**FR-4.8.3** Provider → Model → ThinkingLevel 联动选择规则：
+
+```
+Step A: 选择 provider
+  数据源: ctx.modelRegistry.getAvailable() → 去重 model.provider
+  展示: provider 名（完整名如 "zhipu-coding-plan-router"）
+
+Step B: 选择 model（依赖 Step A 选中的 provider）
+  数据源: getAvailable().filter(m => m.provider === selectedProvider)
+  展示: model.name + contextWindow + reasoning 状态
+  示例: "glm-5.1 (200k ctx · reasoning ✓)"
+
+Step C: 选择 thinking level（依赖 Step B 选中的 model）
+  数据源: 从 model.thinkingLevelMap 提取
+  过滤: 排除值为 null 的级别
+  排序: off → minimal → low → medium → high → xhigh
+  特殊: model.reasoning === false 时跳过此步，不设 thinking level
+  示例: glm-5.1 仅显示 "xhigh"；mimo-v2.5 显示 "low, medium, high"；qwen3-0.6b 跳过
+```
+
+**FR-4.8.4** 联动约束总结：
+- 更换 provider 后，model 列表必须刷新（不同 provider 有不同 models）
+- 更换 model 后，thinking level 列表必须刷新（不同 model 支持不同级别）
+- 如果用户当前选的 thinking level 在新 model 上不可用，自动降级到该 model 支持的最高级别
+- `getAvailable()` 只返回有 auth 配置的模型（`modelRegistry.hasConfiguredAuth(model) === true`），未配置 API key 的模型不展示
+
+**FR-4.8.5** 新增自定义 category：通过 `ctx.ui.input()` 输入名称，然后进入 Step A-C 的 provider/model/thinking 级联选择。
 
 ### FR-4.9: YOLO 模式
 
