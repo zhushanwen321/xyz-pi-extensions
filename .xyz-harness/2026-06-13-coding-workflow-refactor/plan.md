@@ -12,25 +12,35 @@ extensions/coding-workflow/
 ├── lib/
 │   ├── orchestrator/                # 编排层
 │   │   ├── pipeline.ts              # Pipeline 执行器：按 config 顺序调用原子操作
-│   │   └── phase-config.ts          # Phase 配置定义（TypeScript 数组，替代硬编码 PHASES）
-│   ├── operations/                  # 8 个原子操作（每个 ≤ 300 行）
-│   │   ├── init.ts                  # A1: workspace 初始化
+│   │   ├── phase-config.ts          # Phase 配置定义（TypeScript 数组 + pipeline 声明）
+│   │   ├── complexity.ts            # 复杂度评估逻辑
+│   │   ├── decompose.ts             # 子问题分解 + manifest 生成
+│   │   ├── wave-scheduler.ts        # 依赖拓扑 → 执行波次推导
+│   │   └── manifest.ts              # manifest.yaml 解析 + 状态聚合
+│   ├── operations/                  # 原子操作（每个 ≤ 300 行）
+│   │   ├── init.ts                  # A1: workspace 初始化 + 复杂度评估入口
 │   │   ├── skill-inject.ts          # A2: skill 内容注入
 │   │   ├── gate-check.ts            # A3: gate 脚本执行
 │   │   ├── review-dispatch.ts       # A4: anti-fraud review subagent
 │   │   ├── review-loop.ts           # A5: 多轮 review-fix 循环
 │   │   ├── test-fix-loop.ts         # A6: core/noncore 测试修复循环
 │   │   ├── retrospect.ts            # A7: 回顾 steer 生成
-│   │   └── phase-transition.ts      # A8: compact + goal init + phase 切换
+│   │   ├── phase-transition.ts      # A8: compact + goal init + phase 切换
+│   │   ├── complexity-assess.ts     # A9: 复杂度评估
+│   │   ├── decompose.ts             # A10: 子问题分解 + manifest + children 目录
+│   │   ├── contract-define.ts       # A11: api-contracts.md 生成
+│   │   ├── contract-check.ts        # A12: 合约一致性验证
+│   │   └── dependency-check.ts      # A13: 依赖约束验证
 │   ├── infra/                       # 共享基础设施
-│   │   ├── subagent-runner.ts       # Pi 进程 spawn + JSON 解析（from subagent.ts）
-│   │   ├── process-manager.ts       # 子进程生命周期管理（现有，搬入）
-│   │   ├── skill-resolver.ts        # Skill 发现 + 缓存（现有，搬入）
-│   │   ├── gate-runner.ts           # Gate 脚本执行（现有，搬入）
-│   │   ├── yaml-parser.ts           # YAML frontmatter 解析（from helpers.ts）
-│   │   └── state-store.ts           # 操作级状态读写（新）
+│   │   ├── subagent-runner.ts       # Pi 进程 spawn + JSON 解析
+│   │   ├── process-manager.ts       # 子进程生命周期管理
+│   │   ├── skill-resolver.ts        # Skill 发现 + 缓存
+│   │   ├── gate-runner.ts           # Gate 脚本执行
+│   │   ├── yaml-parser.ts           # YAML frontmatter 解析
+│   │   ├── state-store.ts           # 操作级状态读写
+│   │   └── format.ts                # Token/usage 格式化
 │   ├── state.ts                     # 全局 WorkflowState 精简版 + persist/reconstruct
-│   └── render.ts                    # TUI 渲染（现有 render-helpers.ts，搬入）
+│   └── render.ts                    # TUI 渲染
 ├── skills/                          # 不动
 ├── agents/                          # 不动
 ├── scripts/                         # 不动
@@ -59,10 +69,7 @@ extensions/coding-workflow/
 
 **2a. 全局状态精简（`lib/state.ts`）**
 
-从现有 `helpers.ts` 的 `WorkflowState` 中提取，移除操作级字段：
-
 ```typescript
-// 精简后的全局状态
 interface WorkflowState {
   isActive: boolean;
   currentPhase: number;
@@ -71,172 +78,132 @@ interface WorkflowState {
   phaseResults: Record<number, "passed">;
   pendingInit: boolean;
   pendingRequirement: string;
+  complexity: "L0" | "L1" | "L2";     // 新增
+  manifest: ManifestData | null;        // 新增：L1/L2 时有值
 }
-// 移除: gateInProgress, gateRetryCount, compactRetryCount → 操作内部管理
 ```
 
 **2b. 操作级状态（`lib/infra/state-store.ts`）**
 
-```typescript
-// 每个操作写自己的状态文件
-interface OperationStateStore {
-  write(topicDir: string, operation: string, phase: number, data: Record<string, unknown>): void;
-  read(topicDir: string, operation: string, phase: number): Record<string, unknown> | null;
-}
-```
+每个操作写自己的状态文件到 topicDir。
 
-**涉及文件：**
-- 新建 `lib/state.ts`
-- 新建 `lib/infra/state-store.ts`
-- 修改 `index.ts` 的 persistState/reconstructState 引用
+### EG-3: Phase 配置提取 + Pipeline 声明
 
-**验证：** typecheck + 手动测试 `/coding-workflow` 初始化后状态正确
-
-### EG-3: Phase 配置提取
-
-将 `index.ts` 中的 `PHASES` 数组提取到 `lib/orchestrator/phase-config.ts`，增加 pipeline 定义：
+将 `PHASES` 提取到 `lib/orchestrator/phase-config.ts`，每个 phase 增加 `pipeline` 字段：
 
 ```typescript
-interface PhaseConfig {
-  phase: number;
-  name: string;
-  skillName: string;
-  reviewPrefix: string | string[];
-  retrospectPrefix: string;
-  deliverables: string[];
-  reviewMode: string;
-  // 新增：声明式 pipeline
-  pipeline: OperationType[];
-}
+const PHASE_CONFIGS: PhaseConfig[] = [
+  {
+    phase: 1, name: "Spec",
+    skillName: "xyz-harness-brainstorming",
+    pipeline: L0_SPEC_PIPELINE,          // 声明式 pipeline
+    // ...
+  },
+  // ...
+];
 
-type OperationType =
-  | "skill-inject"
-  | "gate-check"
-  | "review-dispatch"
-  | "review-loop"
-  | "test-fix-loop"
-  | "retrospect"
-  | "phase-transition";
+const L0_SPEC_PIPELINE: StepConfig[] = [
+  { operation: "skill-inject" },
+  { operation: "review-loop", maxRetries: 3 },
+  { operation: "gate-check" },
+  { operation: "review-dispatch" },
+  { operation: "retrospect", on_fail: "warn_continue" },
+];
 ```
-
-**涉及文件：**
-- 新建 `lib/orchestrator/phase-config.ts`
-- 修改 `index.ts` 的 PHASES 引用
-
-**验证：** typecheck + phase 配置与现有行为一致
 
 ### EG-4: 原子操作提取（核心）
 
-逐个提取原子操作。每个操作是独立文件，导出一个 execute 函数。
+逐个提取原子操作。brainstorming-phase 子系统新增的操作优先：
 
-**提取顺序（按依赖从少到多）：**
+#### Task 4.1: gate-check (A3) — 从 PhaseGate 提取
 
-#### Task 4.1: gate-check (A3)
+#### Task 4.2: review-dispatch (A4) — 从 dispatchReviewSubagent 提取
 
-来源：`lib/gates/phase-gate.ts` → `lib/operations/gate-check.ts`
-- 输入：`{ topicDir, phase, gateScriptPath }`
-- 输出：`{ passed: boolean, checks: GateCheckItem[], fixGuidance?: string }`
-- 无需修改调用方（现有 gate tool 仍然通过 pipeline 调用它）
+#### Task 4.3: review-loop (A5) — 从 runReviewGateLoop + ReviewGate 提取
 
-#### Task 4.2: review-dispatch (A4)
+#### Task 4.4: test-fix-loop (A6) — 从 TestFixLoopGate 提取
 
-来源：`lib/review-dispatcher.ts` → `lib/operations/review-dispatch.ts`
-- 输入：`{ topicDir, phase, phaseConfig }`
-- 输出：`{ success: boolean, reviewPath: string, usage?: UsageStats }`
+#### Task 4.5: skill-inject (A2) — 从 buildBeforeAgentStartMessage 提取
 
-#### Task 4.3: review-loop (A5)
+#### Task 4.6: retrospect (A7) — 从 buildRetrospectFollowUp 提取
 
-来源：`lib/review-gate-impl.ts` + `lib/gates/review-gate.ts` → `lib/operations/review-loop.ts`
-- 输入：`{ topicDir, phase, phaseConfig }`
-- 输出：`{ passed: boolean, rounds: number, lastMustFix: number, summary: string }`
-- 合并 Phase 1/2 标准循环 + Phase 3 三阶段逻辑
+#### Task 4.7: init (A1) — 从 executeInitTool 提取
 
-#### Task 4.4: test-fix-loop (A6)
+#### Task 4.8: phase-transition (A8) — 从 executePhaseStartTool 提取
 
-来源：`lib/gates/test-fix-loop.ts` → `lib/operations/test-fix-loop.ts`
-- 输入：`{ topicDir }`
-- 输出：`{ passed: boolean, rounds: number, summary: string }`
+#### Task 4.9: complexity-assess (A9) — 新建
 
-#### Task 4.5: skill-inject (A2)
+输入：用户需求 + 项目结构
+输出：ComplexityAssessment（L0/L1/L2 + 各维度评分）
+实现：AI 在 init 后通过 steer 评估，结果写入 manifest 或 state
 
-来源：`tool-handlers.ts` 的 `buildBeforeAgentStartMessage` → `lib/operations/skill-inject.ts`
-- 输入：`{ topicDir, phase, phaseConfig }`
-- 输出：`{ message: string | null }`（steer 内容）
+#### Task 4.10: decompose (A10) — 新建
 
-#### Task 4.6: retrospect (A7)
+输入：需求 + 复杂度评估（L1/L2）
+输出：manifest.yaml + children/ 目录 + api-contracts.md 骨架
+实现：AI 通过 steer 指导分解，代码负责创建目录结构和 manifest 文件
 
-来源：`review-dispatcher.ts` 的 `buildRetrospectFollowUp` → `lib/operations/retrospect.ts`
-- 输入：`{ topicDir, phase, phaseConfig }`
-- 输出：`{ steerMessage: string }`
+#### Task 4.11: contract-define (A11) — 新建
 
-#### Task 4.7: init (A1)
+输入：子系统边界 + 依赖关系
+输出：api-contracts.md 各段的 TypeScript 接口
+实现：AI 编写合约内容，代码验证格式
 
-来源：`tool-handlers.ts` 的 `executeInitTool` → `lib/operations/init.ts`
-- 输入：`{ slug, requirement }`
-- 输出：`{ topicDir, topicName, skillInjected: boolean }`
+#### Task 4.12: contract-check (A12) — 新建
 
-#### Task 4.8: phase-transition (A8)
+输入：manifest.yaml + api-contracts.md + 子系统 spec 列表
+输出：合约一致性检查结果
+实现：脚本化检查（锚点存在性、provider/consumer 引用完整性）
 
-来源：`tool-handlers.ts` 的 `executePhaseStartTool` → `lib/operations/phase-transition.ts`
-- 输入：`{ topicDir, currentPhase }`
-- 输出：`{ nextPhase: number, compacted: boolean }`
+#### Task 4.13: dependency-check (A13) — 新建
 
-**每个 Task 的验证：**
-- typecheck 通过
-- 单元可调用（tool 参数传入，返回结构化结果）
+输入：manifest.yaml + 当前子系统名 + 目标 phase
+输出：依赖是否满足
+实现：读取 manifest，检查 depends_on 中子系统的 status
 
-### EG-5: Pipeline 执行器
+### EG-5: Pipeline 执行器 + Wave 调度
 
-新建 `lib/orchestrator/pipeline.ts`，替代 `executeGateTool` 中的硬编码流程：
+新建 `lib/orchestrator/pipeline.ts` + `lib/orchestrator/wave-scheduler.ts`：
 
 ```typescript
 class Pipeline {
   async run(config: PhaseConfig, ctx: PipelineContext): PipelineResult {
     for (const step of config.pipeline) {
-      const result = await this.operations[step].execute(ctx);
-      if (!result.passed) return { passed: false, failedStep: step, ...result };
+      const result = await this.operations[step.operation].execute(ctx);
+      if (!result.passed) {
+        if (step.on_fail === "return") return { passed: false, ...result };
+        if (step.on_fail === "retry") { /* retry logic */ }
+      }
     }
     return { passed: true };
   }
 }
+
+class WaveScheduler {
+  deriveWaves(manifest: Manifest): string[][] {
+    // 拓扑排序 → 并行波次
+  }
+}
 ```
-
-**涉及文件：**
-- 新建 `lib/orchestrator/pipeline.ts`
-- 修改 `index.ts` 的 gate tool handler 调用 pipeline
-
-**验证：** 全流程测试 `/coding-workflow test-topic`
 
 ### EG-6: 入口重构
 
-重写 `index.ts`，只做注册胶水：
-
-1. 注册 3 个原有 tool（gate/init/phase-start），内部调用 pipeline
-2. 注册 8 个新原子操作 tool（独立入口）
-3. 注册 3 个 command（不变）
-4. 注册 5 个 event handler（精简，委托给操作）
-
-**验证：** 全流程 + 单独调用原子操作
+重写 `index.ts`，注册所有 tool（原有 3 个 + 新增 13 个原子操作）。
 
 ### EG-7: 旧代码清理
 
-- 删除 `lib/gates/` 目录（已被 operations/ 替代）
-- 删除 `lib/tool-handlers.ts`（已被 operations/ + orchestrator/ 替代）
-- 删除 `lib/helpers.ts`（已被拆分到 state.ts + infra/ 中）
-- 删除 `lib/review-dispatcher.ts`（已被 operations/review-dispatch.ts 替代）
-- 删除 `lib/review-gate-impl.ts`（已被 operations/review-loop.ts 替代）
-- 删除 `lib/subagent.ts`（已被 infra/subagent-runner.ts 替代）
-
-**验证：** 全量 typecheck + lint + 全流程测试
+删除被替代的旧文件。
 
 ## 风险点
 
 | 风险 | 影响 | 缓解 |
 |------|------|------|
-| 状态管理拆分导致 reconstructState 向后不兼容 | 旧 session 恢复失败 | reconstructState 保持读取旧格式，向后兼容 |
-| before_agent_start 事件处理拆分后 skill 注入时机改变 | Phase 1 无法注入 skill | A2 保留 before_agent_start 注册，确保首次注入 |
-| review-loop 内部 Phase 3 三阶段逻辑复杂度高 | 提取时引入 bug | 先保持原有逻辑不变，只做文件搬迁 + 接口统一 |
-| compact 在 phase-transition 中是异步回调 | 状态管理复杂 | 保持 compact 回调机制不变，只提取到独立函数 |
+| manifest.yaml 向后兼容 | 旧 topicDir 没有 manifest | 叶子节点不需要 manifest，L0 完全兼容 |
+| 复杂度评估不准确 | L1 问题被误判为 L0 | 用户可 override，不强制 |
+| 递归 gate-check 性能 | 深层嵌套时逐级检查 | 软限制 3 层 + 增量检查（缓存已通过状态） |
+| skill 注入上下文膨胀 | L2 时注入系统 spec + 合约 + 子系统 spec | 叶子节点只看自己的 spec + 合约段 |
+| 状态传播延迟 | 并行 wave 中状态更新竞态 | wave 间串行，wave 内子系统无依赖 |
+| before_agent_start 拆分后 skill 注入时机改变 | Phase 1 无法注入 skill | A2 保留 before_agent_start 注册 |
 
 ## 依赖关系
 
@@ -244,10 +211,13 @@ class Pipeline {
 EG-1 (infra 搬迁)
   → EG-2 (状态拆分)
   → EG-3 (phase 配置)
-  → EG-4 (原子操作提取，4.1→4.2→4.3→4.4→4.5→4.6→4.7→4.8)
-  → EG-5 (pipeline 执行器)
+  → EG-4 (原子操作，4.1-4.8 先提取现有，4.9-4.13 新建)
+  → EG-5 (pipeline + wave scheduler)
   → EG-6 (入口重构)
   → EG-7 (旧代码清理)
 ```
 
-EG-1/2/3 可以并行。EG-4 是串行的（每个 task 依赖前一个的接口定义稳定下来）。EG-5/6/7 必须在 EG-4 完成后。
+## 实施优先级
+
+先做 EG-1 ~ EG-4 的 Task 4.1-4.8（L0 的原子操作拆分），确保向后兼容。
+EG-4 的 Task 4.9-4.13 和 EG-5 的 wave 调度是 L1/L2 能力，作为第二批。

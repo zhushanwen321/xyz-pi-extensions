@@ -1,0 +1,26 @@
+name: coding-workflow-refactor
+slug: 2026-06-13-coding-workflow-refactor
+created: "2026-06-13"
+status: spec_in_progress
+
+children:
+  - name: brainstorming-phase
+    path: children/brainstorming-phase
+    status: spec_approved
+    depends_on: []
+    priority: P0
+    description: "brainstorming 阶段的复杂度分级、流程分流、gate 拆解"
+
+  - name: atomic-operations
+    path: children/atomic-operations
+    status: pending
+    depends_on: [brainstorming-phase]
+    priority: P0
+    description: "8 个原子操作的提取和独立 tool 暴露"
+
+  - name: orchestrator
+    path: children/orchestrator
+    status: pending
+    depends_on: [atomic-operations]
+    priority: P0
+    description: "pipeline 执行器、依赖调度、状态传播"
