@@ -562,7 +562,9 @@ const RunOpParams = Type.Object({
   action: StringEnum([
     "complexity-assess", "decompose", "contract-define", "contract-check",
     "dependency-check", "review-loop", "gate-check", "review-dispatch",
-    "retrospect", "phase-transition", "aggregate-status", "skill-inject",
+    "retrospect", "phase-transition", "skill-inject", "test-fix-loop",
+    // 不暴露: init（需要 workflow 未激活状态）
+    // 不暴露: aggregate-status（改为 ManifestStore.aggregateStatus() 内部调用）
   ]),
   topicDir: Type.String({ description: "工作目录路径" }),
   phase: Type.Optional(Type.Number()),
@@ -778,7 +780,7 @@ gate tool handler 中的状态验证（isActive、phase token、前序 phase 通
 
 ### UC-OR5: 查看 L1/L2 子系统状态
 
-开发者调用 `coding-workflow-run-op(action="aggregate-status", topicDir="...")` → 返回各子系统状态聚合结果。
+开发者读取 manifest.yaml，或由编排引擎在系统级回顾前自动调用 `manifestStore.aggregateStatus(topicDir)` 汇总子系统状态。此功能不是独立 Tool，而是 ManifestStore 的内部方法。
 
 ## Complexity Assessment
 

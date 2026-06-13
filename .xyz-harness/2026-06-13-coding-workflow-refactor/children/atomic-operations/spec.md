@@ -100,8 +100,9 @@ interface OperationResult {
 
 ### A1: init — workspace 初始化
 
-**来源**：`executeInitTool`（tool-handlers.ts L289-L368）
+**invocation**: `management`
 
+**来源**：`executeInitTool`（tool-handlers.ts L289-L368）n
 **输入**：
 
 ```typescript
@@ -141,6 +142,8 @@ interface InitOutput {
 ---
 
 ### A2: skill-inject — Skill 内容注入
+
+**invocation**: `management`
 
 **来源**：`buildBeforeAgentStartMessage` + `buildSkillInjection`（tool-handlers.ts, helpers.ts）
 
@@ -192,6 +195,8 @@ interface SkillInjectOutput {
 
 ### A3: gate-check — Gate 脚本执行
 
+**invocation**: `pipeline`
+
 **来源**：`PhaseGate`（gates/phase-gate.ts）+ `gate-runner.ts` + `gate-check.py`
 
 **输入**：
@@ -242,6 +247,8 @@ interface GateCheckOutput {
 
 ### A4: review-dispatch — Anti-fraud 审查
 
+**invocation**: `pipeline`
+
 **来源**：`dispatchReviewSubagent`（review-dispatcher.ts）
 
 **输入**：
@@ -287,6 +294,8 @@ interface ReviewDispatchOutput {
 ---
 
 ### A5: review-loop — 多轮 Review-Fix 循环
+
+**invocation**: `pipeline`
 
 **来源**：`runReviewGateLoop`（review-gate-impl.ts）+ `ReviewGate`（gates/review-gate.ts）
 
@@ -355,6 +364,8 @@ interface ReviewLoopOutput {
 
 ### A6: test-fix-loop — Test-Fix 循环
 
+**invocation**: `pipeline`
+
 **来源**：`runTestFixLoop`（review-gate-impl.ts）+ `TestFixLoopGate`（gates/test-fix-loop.ts）
 
 **输入**：
@@ -417,6 +428,8 @@ interface TestFixLoopOutput {
 
 ### A7: retrospect — 回顾 steer 生成
 
+**invocation**: `pipeline`（on_fail: warn_continue）
+
 **来源**：`buildRetrospectFollowUp`（review-dispatcher.ts）
 
 **输入**：
@@ -471,6 +484,8 @@ interface RetrospectOutput {
 
 ### A8: phase-transition — Phase 切换
 
+**invocation**: `management`
+
 **来源**：`executePhaseStartTool`（tool-handlers.ts L370-L486）
 
 **输入**：
@@ -481,6 +496,13 @@ interface PhaseTransitionInput {
   skipCompact?: boolean;
   /** compact 自定义指令 */
   compactInstructions?: string;
+  /** 子系统间切换模式（L1/L2 时） */
+  subsystemTransition?: {
+    /** 当前子系统名 */
+    from: string;
+    /** 下一个子系统名 */
+    to: string;
+  };
 }
 ```
 
@@ -491,9 +513,15 @@ interface PhaseTransitionOutput {
   previousPhase: number;
   newPhase: number;
   compacted: boolean;
+  committed: boolean;               // 是否执行了 git commit
   goalInitialized: boolean;
   goalTasks?: string[];              // 如果初始化了 goal，返回任务列表
   completed: boolean;                // 是否已完成所有 phase（newPhase > FINAL_PHASE）
+  /** 子系统间切换信息（仅 subsystemTransition 模式） */
+  subsystemTransition?: {
+    from: string;
+    to: string;
+  };
 }
 ```
 
@@ -508,6 +536,14 @@ interface PhaseTransitionOutput {
    - onError(stale context): abort workflow
    - onError(other): 回退 currentPhase，允许重试
 7. Phase > FINAL_PHASE: 完成 workflow，重置状态
+
+**L1/L2 子系统间切换行为**（`subsystemTransition` 模式）：
+1. 执行 `git add + commit`——将当前子系统的所有产出文件（spec.md、reviews/、manifest.yaml 更新）提交到 git，确保磁盘状态与 git 状态一致
+2. 执行 `ctx.compact()`——清理上下文，保留磁盘文件（spec.md、manifest.yaml、api-contracts.md 不受 compact 影响），清理对话历史
+3. 更新 `manifestStore.updateChildStatus(topicDir, from, "spec_approved")`
+4. compact 完成后，编排引擎注入下一个子系统的 skill（通过 A2 skill-inject + extraContext）
+
+**注意**：子系统间切换不走 phase 递增（currentPhase 不变），只是子系统的 compact + commit + skill 切换。
 
 **错误条件**：
 - 当前 phase gate 未通过 → 返回错误
@@ -525,6 +561,8 @@ interface PhaseTransitionOutput {
 ---
 
 ### A9: complexity-assess — 复杂度评估
+
+**invocation**: `interactive`（在 brainstorming Step 1 Quick Overview 后由 AI 触发）
 
 **来源**：新建
 
@@ -586,6 +624,8 @@ interface ComplexityAssessment {
 
 ### A10: decompose — 子问题分解
 
+**invocation**: `interactive`（在 brainstorming 系统级讨论后由 AI 触发）
+
 **来源**：新建
 
 **输入**：
@@ -641,6 +681,8 @@ interface DecomposeOutput {
 
 ### A11: contract-define — 接口合约定义
 
+**invocation**: `interactive`（在子系统边界确定后由 AI 触发）
+
 **来源**：新建
 
 **输入**：
@@ -686,6 +728,8 @@ interface ContractDefineOutput {
 
 ### A12: contract-check — 合约一致性验证
 
+**invocation**: `pipeline`（L1/L2 系统级自动化阶段）
+
 **来源**：新建
 
 **输入**：
@@ -728,6 +772,8 @@ interface ContractCheckOutput {
 ---
 
 ### A13: dependency-check — 依赖约束验证
+
+**invocation**: `pipeline`（L1/L2 子系统级自动化阶段）
 
 **来源**：新建
 

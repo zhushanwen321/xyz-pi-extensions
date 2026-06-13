@@ -47,7 +47,8 @@ spec-clarify 中的操作分为三类，不能混淆：
 |------|---------|--------|------|
 | **自动化操作** | pipeline 自动触发 | 代码 | gate-check, review-dispatch, review-loop, retrospect, contract-check, dependency-check |
 | **交互驱动操作** | 交互对话中由 AI/用户决策触发 | AI + Code | decompose, contract-define, complexity-assess |
-| **管理操作** | 系统状态变更时触发 | 代码 | init, skill-inject, phase-transition, commit, compact, aggregate-status |
+| **管理操作** | 系统状态变更时触发 | 代码 | init, skill-inject, phase-transition |
+| **辅助操作** | 编排引擎内部调用，不暴露为独立 Tool | 代码 | aggregate-status (ManifestStore), commit (phase-transition 内), compact (phase-transition 内) |
 
 **交互驱动操作**的关键特征：
 - 触发时机由对话进程决定（不是 pipeline 自动触发）
@@ -275,7 +276,7 @@ init(slug)
   ═══ 子系统循环结束 ═══
 
   ═══ 自动化阶段：收尾 ═══
-  → aggregate-status()                           # 汇总子系统状态
+  → manifestStore.aggregateStatus(topicDir)      # 汇总子系统状态（ManifestStore 方法）
   → retrospect(system-spec)                      # 系统级回顾
   → phase-transition()                           # 进入 plan phase
   ═══ 自动化阶段结束 ═══
@@ -389,8 +390,10 @@ const RunOpParams = Type.Object({
     "review-dispatch",
     "retrospect",
     "phase-transition",
-    "aggregate-status",
     "skill-inject",
+    "test-fix-loop",
+    // 不暴露: init（需要 workflow 未激活状态）
+    // 不暴露: aggregate-status（改为 ManifestStore.aggregateStatus() 内部调用）
   ]),
   topicDir: Type.String({ description: "工作目录路径" }),
   phase: Type.Optional(Type.Number({ description: "Phase 编号，部分操作需要" })),

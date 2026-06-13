@@ -13,11 +13,10 @@ extensions/coding-workflow/
 │   ├── orchestrator/                # 编排层
 │   │   ├── pipeline.ts              # Pipeline 执行器：按 config 顺序调用原子操作
 │   │   ├── phase-config.ts          # Phase 配置定义（TypeScript 数组 + pipeline 声明）
-│   │   ├── complexity.ts            # 复杂度评估逻辑
-│   │   ├── decompose.ts             # 子问题分解 + manifest 生成
 │   │   ├── order-resolver.ts        # 依赖拓扑 → 串行执行顺序（spec-clarify 用）
 │   │   ├── wave-scheduler.ts        # 依赖拓扑 → 并行波次（dev/test phase 用）
-│   │   └── manifest.ts              # manifest.yaml 解析 + 状态聚合
+│   │   ├── manifest.ts              # manifest.yaml 解析 + 状态聚合
+│   │   └── operation-registry.ts    # 操作注册表
 │   ├── operations/                  # 原子操作（每个 ≤ 300 行）
 │   │   ├── init.ts                  # A1: workspace 初始化 + 复杂度评估入口
 │   │   ├── skill-inject.ts          # A2: skill 内容注入
@@ -163,48 +162,33 @@ const SPEC_AUTOMATED_PIPELINE: StepConfig[] = [
 输出：依赖是否满足
 实现：读取 manifest，检查 depends_on 中子系统的 status
 
-### EG-5: Pipeline 执行器 + 调度器
+### EG-5: Pipeline 执行器 + 调度器 + 注册表
 
-新建 `lib/orchestrator/pipeline.ts` + `lib/orchestrator/order-resolver.ts` + `lib/orchestrator/wave-scheduler.ts`：
+新建 `lib/orchestrator/` 下的 6 个模块（与 orchestrator spec 对齐）：
 
-```typescript
-// pipeline.ts — 执行自动化阶段的 pipeline
-class Pipeline {
-  async run(config: PhaseConfig, ctx: PipelineContext): PipelineResult {
-    for (const step of config.pipeline) {
-      const result = await this.operations[step.operation].execute(ctx);
-      if (!result.passed) {
-        if (step.on_fail === "return") return { passed: false, ...result };
-        if (step.on_fail === "retry") { /* retry logic */ }
-      }
-    }
-    return { passed: true };
-  }
-}
+- `pipeline.ts` — Pipeline 执行器：按 StepConfig 顺序调用操作，处理 on_fail 策略
+- `phase-config.ts` — PhaseConfig 定义 + 5 个 phase 配置 + L1/L2 扩展配置
+- `order-resolver.ts` — 串行调度（Kahn's 拓扑排序 → 一维数组）
+- `wave-scheduler.ts` — 并行波次调度（拓扑排序 → 二维波次数组）
+- `manifest.ts` — ManifestStore：manifest.yaml 解析 + 状态聚合 + 依赖检查 + 子系统状态更新
+- `operation-registry.ts` — OperationRegistry：操作注册 + 按 ID 查找
 
-// order-resolver.ts — spec-clarify 阶段用，返回一维串行序列
-class OrderResolver {
-  deriveOrder(manifest: Manifest): string[] {
-    // 拓扑排序 → 一维串行序列
-    // spec-clarify 阶段严格串行，不并行
-  }
-}
-
-// wave-scheduler.ts — dev/test phase 用，返回二维波次
-class WaveScheduler {
-  deriveWaves(manifest: Manifest): string[][] {
-    // 拓扑排序 → 并行波次（仅用于纯代码执行阶段）
-  }
-}
-```
-
-**为什么需要两个调度器：**
-- `OrderResolver`（串行）：spec-clarify 阶段需要人机交互，同一时间只能做一个子系统
-- `WaveScheduler`（并行）：dev/test phase 纯代码执行，无依赖的子系统可并行
+详见 orchestrator spec FR-OR1 ~ FR-OR6。
 
 ### EG-6: 入口重构
 
-重写 `index.ts`，注册 4 个 tool（原有 3 个 + 新增 `coding-workflow-run-op` 1 个）。13 个原子操作通过 `run-op` 的 `action` 参数暴露，不独立注册。
+重写 `index.ts`（≤ 200 行），注册：
+
+- 4 个 Tool：`coding-workflow-init`, `coding-workflow-gate`, `coding-workflow-phase-start`（保留现有）+ `coding-workflow-run-op`（新增调试用）
+- 3 个 Command：`/coding-workflow`, `/coding-workflow-status`, `/coding-workflow-abort`（保留现有）
+- 4 个 Event：`before_agent_start`, `session_start`, `session_tree`, `turn_end`（保留现有）
+- 1 个 MessageRenderer：`coding-workflow-context`（保留现有）
+
+`coding-workflow-gate` 重构：前置检查（状态验证、前序 phase/review 检查）留在 handler，业务逻辑委托给 Pipeline 执行器。
+
+`coding-workflow-run-op`：直接调用 `registry.get(action).execute()`，支持 12 个操作（排除 init 和 aggregate-status）。
+
+详见 orchestrator spec FR-OR8 ~ FR-OR10。
 
 ### EG-7: 旧代码清理
 
