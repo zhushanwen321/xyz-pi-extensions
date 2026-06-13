@@ -53,26 +53,26 @@ async function getSdk() {
 export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Promise<AgentResult> {
   const startTime = Date.now();
 
-  // 步骤 1: 解析 agent 配置
-  const agentConfig = opts.agent ? ctx.resolveAgent(opts.agent) : undefined;
-  const agentName = opts.agent ?? "default";
-
-  // 步骤 1c: category 推断
-  const category = inferCategory(agentName, agentConfig, ctx.globalConfig.agentCategoryOverrides);
-
-  // 步骤 1a: 模型解析（含 fallback 链）
-  const resolved = resolveModelForAgent({
-    agentName, agentConfig, category,
-    globalConfig: ctx.globalConfig, sessionState: ctx.sessionState,
-    modelRegistry: ctx.modelRegistry,
-    paramOverride: { model: opts.model, thinkingLevel: opts.thinkingLevel },
-  });
-
-  // 步骤 2: 并发控制
+  // 步骤 2: 并发控制（提前 acquire，保持原有行为）
   const pool = opts.pool ?? ctx.globalPool;
   await pool.acquire(opts.priority);
 
   try {
+    // 步骤 1: 解析 agent 配置（在 try 内，确保所有异常被捕获）
+    const agentConfig = opts.agent ? ctx.resolveAgent(opts.agent) : undefined;
+    const agentName = opts.agent ?? "default";
+
+    // 步骤 1c: category 推断
+    const category = inferCategory(agentName, agentConfig, ctx.globalConfig.agentCategoryOverrides);
+
+    // 步骤 1a: 模型解析（含 fallback 链）
+    const resolved = resolveModelForAgent({
+      agentName, agentConfig, category,
+      globalConfig: ctx.globalConfig, sessionState: ctx.sessionState,
+      modelRegistry: ctx.modelRegistry,
+      paramOverride: { model: opts.model, thinkingLevel: opts.thinkingLevel },
+    });
+
     const { DefaultResourceLoader, SessionManager, createAgentSession } = await getSdk();
 
     // 步骤 3: 构建 ResourceLoader（不含 tool 配置）
@@ -148,6 +148,12 @@ export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Pro
     } finally {
       unsubscribe();
       if (signalListener && opts.signal) opts.signal.removeEventListener("abort", signalListener);
+    }
+
+    // I2: 检查 event-bridge 捕获的 message_end error 事件（prompt 可能不抛但 stopReason=error）
+    if (success && bridge.lastError) {
+      success = false;
+      error = bridge.lastError;
     }
 
     // 收集结果

@@ -29,6 +29,8 @@ export function createEventBridge(onEvent: (event: AgentEvent) => void) {
   const toolCalls: ToolCallEntry[] = [];
   // FR-8.3: usage 累加器——累加所有 message_end 事件的 usage
   let usageAccum = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+  // I2: 记录 message_end 中 stopReason=error/aborted 的错误信息（供 runAgent 读取）
+  let lastError: string | undefined;
   // 记录正在进行的 tool 名（toolCallId → toolName），用于 end 时补全
   const pendingTools = new Map<string, string>();
 
@@ -49,8 +51,8 @@ export function createEventBridge(onEvent: (event: AgentEvent) => void) {
         break;
       }
       case "message_update": {
-        // SDK 无 text_delta，从 assistantMessageEvent 提取增量
-        const delta = raw.assistantMessageEvent?.delta ?? raw.assistantMessageEvent?.textDelta;
+        // SDK 无独立 text_delta 事件，从 assistantMessageEvent.delta 提取增量文本
+        const delta = raw.assistantMessageEvent?.delta;
         if (delta) onEvent({ type: "text_delta", delta });
         break;
       }
@@ -64,7 +66,8 @@ export function createEventBridge(onEvent: (event: AgentEvent) => void) {
         if (msg) {
           // 优先检查错误 stopReason
           if (msg.stopReason === "error" || msg.stopReason === "aborted") {
-            onEvent({ type: "error", error: msg.errorMessage ?? msg.stopReason });
+            lastError = msg.errorMessage ?? msg.stopReason;
+            onEvent({ type: "error", error: lastError });
           }
           // usage 提取 + 累加（FR-8.3: 一次 run 可能有多个 message_end）
           if (msg.usage) {
@@ -97,5 +100,6 @@ export function createEventBridge(onEvent: (event: AgentEvent) => void) {
     get turnCount() { return turnCount; },
     get toolCalls() { return toolCalls; },
     get usage() { return usageAccum; },
+    get lastError() { return lastError; },
   };
 }

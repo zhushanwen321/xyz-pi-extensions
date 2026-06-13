@@ -168,8 +168,6 @@ export interface ResolvedModel {
   source: "param" | "per-agent" | "per-category" | "category-default" | "agent-default" | "global-fallback" | "env";
 }
 
-export type SystemPromptStrategy = "replace" | "append" | "none";
-
 // ============================================================
 // FR-4.5: Category
 // ============================================================

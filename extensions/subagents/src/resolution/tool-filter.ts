@@ -21,7 +21,12 @@ export function isExcludedBySuffix(toolName: string, excluded: readonly string[]
  * 5. extensions 策略（false=移除所有 extension tool，白名单=只保留匹配的）
  *
  * 注意：builtin vs extension 的区分基于 tool 名是否以 @ 开头（scoped = extension）。
- * 此函数无法 100% 准确区分 builtin/extension（SDK 层才知），做启发式判断。
+ *
+ * 已知限制：SDK 的 tool 名实际上不总是 @scoped 格式——某些 extension tool 使用
+ * 纯名字（如 "my-tool"）。这意味着 `extensions: false` 对于非 @scoped 的 extension
+ * tool 可能无法正确排除。SDK 的权威区分在 ToolInfo.sourceInfo 中，但 subagents 的
+ * getAllTools() 当前不暴露 sourceInfo（AgentSessionLike 简化了该类型）。
+ * 在 sourceInfo 可用前，`extensions` 策略对 @scoped tool 有效，对纯名字 tool 是尽力而为。
  */
 export function filterTools(opts: {
   allTools: ToolInfo[];
