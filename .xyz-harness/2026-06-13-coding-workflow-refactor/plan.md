@@ -128,7 +128,13 @@ const SPEC_L0_PIPELINE: StepConfig[] = [
 
 不再单独提取。反欺诈审查合并为 review-loop 的 authenticity 维度。review-dispatcher.ts 代码将在 A5 实现时作为素材参考。
 
-#### Task 4.3: review-loop (A5) — 从 runReviewGateLoop + ReviewGate 提取
+#### Task 4.3: review-loop (A5) — 重构为多维度审查
+
+从 `runReviewGateLoop` + `ReviewGate` + `dispatchReviewSubagent` 重构为多维度审查模型：
+- 每个维度独立 subagent、独立 review 文件、独立通过门槛
+- 增量收敛：已通过的维度不再重跑（状态持久化到 `.review-dims.json`）
+- NEEDS_USER 退回机制：`mayNeedUser=true` 的维度可产出需用户决策的问题
+- 反欺诈审查合并为 authenticity 维度（原 A4 review-dispatch）
 
 #### Task 4.4: test-fix-loop (A6) — 从 TestFixLoopGate 提取
 
