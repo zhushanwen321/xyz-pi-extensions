@@ -1,0 +1,28 @@
+{
+  "name": "@zhushanwen/pi-subagents",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.ts",
+  "description": "In-process agent execution runtime for Pi — createAgentSession wrapper, agent discovery, model resolution",
+  "keywords": ["pi-package", "extension", "subagent", "agent-runtime"],
+  "license": "MIT",
+  "files": ["src/", "index.ts"],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {},
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "vitest": "^4.1.8"
+  }
+}

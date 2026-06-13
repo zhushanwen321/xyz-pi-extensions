@@ -753,6 +753,7 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `extensions/model-switch/` | `@zhushanwen/pi-model-switch` | 模型切换 | — |
 | `extensions/turn-timing/` | `@zhushanwen/pi-turn-timing` | Turn 各阶段耗时记录 | — |
 | `extensions/plan/` | `@zhushanwen/pi-plan` | 轻量级 Plan Mode（brainstorming + writing-plans） | — |
+| `extensions/subagents/` | `@zhushanwen/pi-subagents` | 进程内 subagent 执行运行时（agent 发现、模型解析、并发控制） | — |
 
 **`shared/`** — 内部共享包（private）
 
