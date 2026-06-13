@@ -15,7 +15,8 @@ extensions/coding-workflow/
 │   │   ├── phase-config.ts          # Phase 配置定义（TypeScript 数组 + pipeline 声明）
 │   │   ├── complexity.ts            # 复杂度评估逻辑
 │   │   ├── decompose.ts             # 子问题分解 + manifest 生成
-│   │   ├── wave-scheduler.ts        # 依赖拓扑 → 执行波次推导
+│   │   ├── order-resolver.ts        # 依赖拓扑 → 串行执行顺序（spec-clarify 用）
+│   │   ├── wave-scheduler.ts        # 依赖拓扑 → 并行波次（dev/test phase 用）
 │   │   └── manifest.ts              # manifest.yaml 解析 + 状态聚合
 │   ├── operations/                  # 原子操作（每个 ≤ 300 行）
 │   │   ├── init.ts                  # A1: workspace 初始化 + 复杂度评估入口
@@ -87,25 +88,26 @@ interface WorkflowState {
 
 每个操作写自己的状态文件到 topicDir。
 
-### EG-3: Phase 配置提取 + Pipeline 声明
+### EG-3: Phase 配置提取 + 自动化阶段 Pipeline 声明
 
-将 `PHASES` 提取到 `lib/orchestrator/phase-config.ts`，每个 phase 增加 `pipeline` 字段：
+将 `PHASES` 提取到 `lib/orchestrator/phase-config.ts`，每个 phase 的**自动化阶段**增加 `pipeline` 字段：
 
 ```typescript
 const PHASE_CONFIGS: PhaseConfig[] = [
   {
     phase: 1, name: "Spec",
     skillName: "xyz-harness-brainstorming",
-    pipeline: L0_SPEC_PIPELINE,          // 声明式 pipeline
+    pipeline: SPEC_AUTOMATED_PIPELINE,   // 仅自动化阶段
     // ...
   },
   // ...
 ];
 
-const L0_SPEC_PIPELINE: StepConfig[] = [
-  { operation: "skill-inject" },
-  { operation: "review-loop", maxRetries: 3 },
+// 注意：pipeline 只描述自动化阶段（gate + review + retrospect + transition）
+// 交互阶段（brainstorming 10 步）不在 pipeline 中
+const SPEC_AUTOMATED_PIPELINE: StepConfig[] = [
   { operation: "gate-check" },
+  { operation: "review-loop", maxRetries: 3 },
   { operation: "review-dispatch" },
   { operation: "retrospect", on_fail: "warn_continue" },
 ];
@@ -161,11 +163,12 @@ const L0_SPEC_PIPELINE: StepConfig[] = [
 输出：依赖是否满足
 实现：读取 manifest，检查 depends_on 中子系统的 status
 
-### EG-5: Pipeline 执行器 + Wave 调度
+### EG-5: Pipeline 执行器 + 调度器
 
-新建 `lib/orchestrator/pipeline.ts` + `lib/orchestrator/wave-scheduler.ts`：
+新建 `lib/orchestrator/pipeline.ts` + `lib/orchestrator/order-resolver.ts` + `lib/orchestrator/wave-scheduler.ts`：
 
 ```typescript
+// pipeline.ts — 执行自动化阶段的 pipeline
 class Pipeline {
   async run(config: PhaseConfig, ctx: PipelineContext): PipelineResult {
     for (const step of config.pipeline) {
@@ -179,16 +182,29 @@ class Pipeline {
   }
 }
 
+// order-resolver.ts — spec-clarify 阶段用，返回一维串行序列
+class OrderResolver {
+  deriveOrder(manifest: Manifest): string[] {
+    // 拓扑排序 → 一维串行序列
+    // spec-clarify 阶段严格串行，不并行
+  }
+}
+
+// wave-scheduler.ts — dev/test phase 用，返回二维波次
 class WaveScheduler {
   deriveWaves(manifest: Manifest): string[][] {
-    // 拓扑排序 → 并行波次
+    // 拓扑排序 → 并行波次（仅用于纯代码执行阶段）
   }
 }
 ```
 
+**为什么需要两个调度器：**
+- `OrderResolver`（串行）：spec-clarify 阶段需要人机交互，同一时间只能做一个子系统
+- `WaveScheduler`（并行）：dev/test phase 纯代码执行，无依赖的子系统可并行
+
 ### EG-6: 入口重构
 
-重写 `index.ts`，注册所有 tool（原有 3 个 + 新增 13 个原子操作）。
+重写 `index.ts`，注册 4 个 tool（原有 3 个 + 新增 `coding-workflow-run-op` 1 个）。13 个原子操作通过 `run-op` 的 `action` 参数暴露，不独立注册。
 
 ### EG-7: 旧代码清理
 
@@ -202,7 +218,7 @@ class WaveScheduler {
 | 复杂度评估不准确 | L1 问题被误判为 L0 | 用户可 override，不强制 |
 | 递归 gate-check 性能 | 深层嵌套时逐级检查 | 软限制 3 层 + 增量检查（缓存已通过状态） |
 | skill 注入上下文膨胀 | L2 时注入系统 spec + 合约 + 子系统 spec | 叶子节点只看自己的 spec + 合约段 |
-| 状态传播延迟 | 并行 wave 中状态更新竞态 | wave 间串行，wave 内子系统无依赖 |
+| 状态传播延迟 | ~~并行 wave 中状态更新竞态~~ 已移除并行 | spec-clarify 阶段严格串行，无竞态问题 |
 | before_agent_start 拆分后 skill 注入时机改变 | Phase 1 无法注入 skill | A2 保留 before_agent_start 注册 |
 
 ## 依赖关系
@@ -220,4 +236,5 @@ EG-1 (infra 搬迁)
 ## 实施优先级
 
 先做 EG-1 ~ EG-4 的 Task 4.1-4.8（L0 的原子操作拆分），确保向后兼容。
-EG-4 的 Task 4.9-4.13 和 EG-5 的 wave 调度是 L1/L2 能力，作为第二批。
+EG-4 的 Task 4.9-4.13（L1/L2 新增操作）作为第二批。
+EG-5 的 `order-resolver`（串行）和 `wave-scheduler`（并行）分别服务于不同阶段——spec-clarify 用 order-resolver，dev/test 用 wave-scheduler。

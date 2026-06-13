@@ -5,9 +5,9 @@ children:
   - name: spec-clarify-phase
     status: spec_approved
   - name: atomic-operations
-    status: pending
+    status: spec_approved
   - name: orchestrator
-    status: pending
+    status: spec_approved
 ---
 
 # coding-workflow 拆分重构 — 系统级 Spec
@@ -54,9 +54,15 @@ coding-workflow 是一个 5-phase 编码工作流扩展（~2500 行 TS + 827 行
 
 系统支持无限嵌套的子系统 topicDir。任何有 `manifest.yaml` 的目录就是一个 topicDir，`children/` 下可嵌套更多 topicDir。
 
-### GC-7: 依赖声明和自动调度
+### GC-7: 依赖声明和调度策略
 
-子系统间通过 `manifest.yaml` 声明依赖关系。编排引擎从依赖图自动推导执行波次（拓扑排序）。自动检测循环依赖。
+子系统间通过 `manifest.yaml` 声明依赖关系。编排引擎从依赖图自动推导执行顺序（拓扑排序）。自动检测循环依赖。
+
+**调度策略因阶段而异：**
+- **spec-clarify 阶段**：`derive_order` → 一维串行序列（严格串行，因为需要人机交互）
+- **dev/test 阶段**：`derive_waves` → 二维并行波次（纯代码执行，无依赖的子系统可并行）
+
+调度策略选择由阶段性质决定，不由配置决定。
 
 ### GC-8: 正反向关联
 
@@ -128,9 +134,11 @@ interface OperationSpec {
   id: string;                    // 操作 ID
   inputSchema: object;           // typebox schema
   outputSchema: object;          // typebox schema
-  phaseUsage: Record<number, {   // 哪些 phase 用到这个操作
-    position: number;            // 在 pipeline 中的位置
-    args?: Partial<Input>;       // phase 特定的参数覆盖
+  invocation: "pipeline" | "interactive" | "management";  // 触发方式
+  phaseUsage: Record<number, {
+    inPipeline: boolean;         // 是否在自动化 pipeline 中
+    position?: number;           // pipeline 中的位置（仅 inPipeline=true 时）
+    triggerPoint?: string;       // 交互阶段中的触发点描述（仅 invocation=interactive 时）
   }>;
 }
 ```
@@ -202,11 +210,11 @@ interface OperationResult {
 
 ### UC-2: L1 中型问题
 
-`/coding-workflow "给 dag-executor 添加插件热加载"` → 自动评估为 L1 → decompose 生成 manifest.yaml + children/ → 按 wave 做 spec。
+`/coding-workflow "给 dag-executor 添加插件热加载"` → 自动评估为 L1 → decompose 生成 manifest.yaml + children/ → 按 derive_order 顺序逐个做子系统 spec（串行）。
 
 ### UC-3: L2 大型问题
 
-`/coding-workflow "构建完整的权限体系"` → 自动评估为 L2 → 系统架构 spec → 多级子系统 → 依赖拓扑 → 按 wave 逐批。
+`/coding-workflow "构建完整的权限体系"` → 自动评估为 L2 → 系统架构 spec → 多级子系统 → 依赖拓扑 → 按 derive_order 逐个完成子系统 spec（串行，每完成一个 compact）。
 
 ### UC-4: 单独调试原子操作
 
@@ -218,4 +226,4 @@ interface OperationResult {
 
 ## Complexity Assessment
 
-整体：**L2** — 跨 3 个子系统、有依赖拓扑、需要接口合约、涉及状态传播机制。
+整体：**L1** — 跨 3 个子系统、有依赖拓扑、需要接口合约、涉及状态传播机制。spec-clarify 阶段严格串行，无需并行波次调度，复杂度可控。

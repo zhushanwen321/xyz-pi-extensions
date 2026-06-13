@@ -13,14 +13,14 @@ children:
 
   - name: atomic-operations
     path: children/atomic-operations
-    status: pending
+    status: spec_approved
     depends_on: [spec-clarify-phase]
     priority: P0
-    description: "8 个原子操作的提取和独立 tool 暴露"
+    description: "13 个原子操作的提取和独立 tool 暴露（A1-A13）"
 
   - name: orchestrator
     path: children/orchestrator
-    status: pending
+    status: spec_approved
     depends_on: [atomic-operations]
     priority: P0
-    description: "pipeline 执行器、依赖调度、状态传播"
+    description: "Pipeline 执行器、OrderResolver、WaveScheduler、Manifest 解析、入口重构"
