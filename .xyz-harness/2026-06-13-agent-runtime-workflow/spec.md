@@ -37,23 +37,29 @@ Pi SDK 提供了 `createAgentSession()` API，可在当前进程内创建独立 
    - await pool.acquire(opts.priority)
    - try/finally 确保异常时 release
 
-3. 构建 ResourceLoader
+3. 构建 ResourceLoader（**不含 tool 配置**——tool 选择在步骤 4 传入）
    - new DefaultResourceLoader({
        cwd, agentDir,
        appendSystemPrompt: opts.appendSystemPrompt,
        additionalSkillPaths: opts.skillPath ? [opts.skillPath] : undefined,
-       tools: toolFilterResult.allowedTools,      // FR-6
-       excludeTools: toolFilterResult.excludedTools, // FR-6
      })
    - await resourceLoader.reload()
+   - **SDK 约束**：`DefaultResourceLoaderOptions` 没有 `tools`/`excludeTools` 字段。
+     tool 控制只能在 `CreateAgentSessionOptions` 上设置（步骤 4）。
 
-4. 创建 Session
+4. 创建 Session（tool 配置在此传入）
    - const { session } = await createAgentSession({
        model: resolvedModel,           // Model<any> 对象，非 string
        thinkingLevel: resolvedLevel,   // ThinkingLevel 枚举
        resourceLoader,                 // 上面构建的
        sessionManager: SessionManager.inMemory(), // 不持久化子 session
+       // FR-6 tool 过滤：subagents 层把 allowedTools − excludedTools 算成 allowlist
+       tools: resolvedToolAllowlist,   // string[] allowlist；undefined=全部，[]=无（配合 noTools）
      })
+   - **tool 过滤实现（FR-6）**：`resolvedToolAllowlist` 由 tool-filter 计算——
+     从 `session.getAllTools()` 取全部 tool 名，减去 `EXCLUDED_TOOL_NAMES`（FR-6.2）和
+     agent 配置的 `excludeTools`，再按 `builtinTools` 白名单过滤。结果作为 `tools` allowlist 传入。
+     注意：`createAgentSession` 无 `excludeTools` 参数，排除须在 subagents 层预先算成 allowlist。
    - subscribe(session, onEvent 回调) — FR-8 事件桥接
 
 5. 执行（try/finally 确保 dispose）
@@ -171,11 +177,11 @@ interface ManagedSessionOptions {
 
 **FR-1.6** Session 清理：`runAgent()` 内部使用 `try/finally` 模式，无论成功、失败、还是 abort，`finally` 块中都调用 `session.dispose()` 释放内存。如果 `createAgentSession()` 本身抛异常（如模型不可用），则不需要 dispose（session 未创建成功）。
 
-**FR-1.7** `createAgentSession()` 的 `resourceLoader` 配置策略：
+**FR-1.7** `createAgentSession()` 的配置策略：
 - 使用 `DefaultResourceLoader` 构造子 session 的资源加载器
 - `appendSystemPrompt: opts.appendSystemPrompt` — 注入 agent systemPrompt
 - `additionalSkillPaths: opts.skillPath ? [opts.skillPath] : undefined` — 注入 skill
-- `tools` / `excludeTools` — 按 FR-6 的 tool 过滤结果设置
+- **tool 过滤不在 ResourceLoader 上**——`DefaultResourceLoaderOptions` 无 `tools`/`excludeTools` 字段。tool 控制在 `CreateAgentSessionOptions` 上：`tools: string[]`（allowlist）、`noTools?: "all"|"builtin"`。subagents 层把 FR-6 的三层过滤结果（allowed − excluded）预算成 allowlist，传入 `createAgentSession({ tools })`
 - `createAgentSession()` 内部已通过 `resourceLoader` 加载扩展，**不需要**调用 `session.bindExtensions()`（那是 interactive mode 专用）
 
 ### FR-2: Agent 发现与注册（L2）
@@ -449,7 +455,9 @@ const EXCLUDED_TOOL_NAMES: readonly string[] = [
 ] as const;
 ```
 
-`EXCLUDED_TOOL_NAMES` 注入到 `ResourceLoader.excludeTools`（FR-1.1.0 步骤 3），在每次 `runAgent()` 调用中自动生效。
+`EXCLUDED_TOOL_NAMES` 在 subagents 层的 tool-filter 中预先减去（FR-1.1.0 步骤 4），把剩余 tool 名算成 allowlist 传入 `createAgentSession({ tools })`。在每次 `runAgent()` 调用中自动生效。
+
+> **SDK 约束**：`createAgentSession()` 无 `excludeTools` 参数，只有 `tools?: string[]`（allowlist）。因此排除逻辑 = 从全部 tool 名集合中移除被排除的名称，得到 allowlist。全部 tool 名来源：session 创建后 `session.getAllTools().map(t => t.name)`，或从 `resourceLoader.getExtensions()` 收集。
 
 实现时需注意：实际 tool 注册名可能带 `@scope/tool-name` 格式（如 `@zhushanwen/workflow_run`）。排除逻辑应支持**后缀匹配**：检查 toolName 是否以 `EXCLUDED_TOOL_NAMES` 中的任一名字结尾。
 
@@ -473,36 +481,55 @@ const EXCLUDED_TOOL_NAMES: readonly string[] = [
 
 **FR-8.1** 将子 session 的 `AgentSessionEvent` 转换为 agent-runtime 的 `AgentEvent` 回调。
 
-**FR-8.1.1** 事件转换映射：
+**FR-8.1.1** 事件转换映射（基于 `@mariozechner/pi-agent-core` 的 `AgentEvent` 与 `pi-coding-agent` 的 `AgentSessionEvent` 真实定义）：
 
-| Pi SDK AgentSessionEvent | subagents AgentEvent | 附加数据 |
+| Pi SDK AgentSessionEvent | subagents AgentEvent | 附加数据 / 提取逻辑 |
 |---|---|---|
-| `{type: "tool_start", toolName}` | `{type: "tool_start", toolName}` | — |
-| `{type: "tool_end", toolName, result}` | `{type: "tool_end", toolName, result}` | `result` 携带 `content` 和 `details`（structured-output 的 parsedOutput 在 `details` 中） |
-| `{type: "text_delta", delta}` | `{type: "text_delta", delta}` | — |
-| `{type: "agent_end", messages}` | `{type: "turn_end"}` | turn 计数器 +1 |
-| `{type: "message_end", usage}` | `{type: "message_end", usage}` | usage 含 input/output/cacheRead/cacheWrite/cost |
+| `{type: "tool_execution_start", toolCallId, toolName, args}` | `{type: "tool_start", toolName}` | 丢弃 args/toolCallId（subagents 事件只暴露 toolName） |
+| `{type: "tool_execution_end", toolCallId, toolName, result, isError}` | `{type: "tool_end", toolName, result, isError}` | `result` 是 `AgentToolResult`（携带 `content` 和 `details`，structured-output 的 parsedOutput 在 `details` 中） |
+| `{type: "message_update", message, assistantMessageEvent}` | `{type: "text_delta", delta}` | `delta` 从 `assistantMessageEvent` 提取增量文本（SDK 无独立 `text_delta` 事件） |
+| `{type: "turn_end", message, toolResults}` | `{type: "turn_end"}` | turn 计数器 +1。丢弃 message/toolResults 负载（turn_end 仅用于计数和 soft limit 检测） |
+| `{type: "message_end", message}` | `{type: "message_end", usage}` | usage 从 `message.usage`（`AssistantMessage.usage: Usage`）提取 |
 | `{type: "compaction_start"}` | `{type: "compaction"}` | — |
-| `{type: "error", error}` | `{type: "error", error}` | — |
+| `{type: "message_end", message}` 且 `message.stopReason === "error"\|"aborted"` | `{type: "error", error}` | SDK 无独立 `error` 事件，错误通过 `message_end.message.stopReason` + `message.errorMessage` 表达。event-bridge 检查 stopReason 映射为 error 事件 |
 
-> `agent_end { messages }` → `turn_end` 映射中，`messages` 数据被有意丢弃。原因是：`session.messages`（同步属性）是消息历史的权威来源，`prompt()` resolve 后可完整读取。`turn_end` 事件仅用于 turn 计数和 soft limit 检测，无需传递 messages 负载。
+> **SDK 事件名校正**：Pi SDK 实际事件名是 `tool_execution_start`/`tool_execution_end`（非 `tool_start`/`tool_end`），`turn_end`/`turn_start` 是原生事件（非从 `agent_end` 转换）。`agent_end { messages }` 不映射为 turn_end，而是作为整个 run 完成的信号（可忽略或用于生命周期追踪）。
+>
+> **无 messages 负载传递**：`session.messages`（同步属性）是消息历史的权威来源，`prompt()` resolve 后可完整读取。事件流仅用于实时收集 tool call 记录、token usage 和 turn 计数。
 
-**FR-8.1.2** `AgentEvent.tool_end.result` 结构：
+**FR-8.1.2** `AgentEvent.tool_end.result` 结构（对应 SDK 的 `AgentToolResult<T>`）：
 ```typescript
 interface ToolEndEvent {
   type: "tool_end";
   toolName: string;
+  /** SDK AgentToolResult: { content: (TextContent|ImageContent)[]; details: T } */
   result?: {
-    content: Array<{ type: string; text: string }>;
-    details?: Record<string, unknown>;
+    content: Array<{ type: string; text?: string }>;
+    details?: unknown;
   };
+  /** SDK tool_execution_end.isError：true 表示 tool 执行抛异常 */
+  isError: boolean;
 }
 ```
 当 `toolName === "structured-output"` 且 `result.details` 存在时，`runAgent()` 从 `result.details` 中提取 parsedOutput 填充到 `AgentResult.parsedOutput`。
 
-**FR-8.2** 事件类型：`tool_start`、`tool_end`（含 result）、`text_delta`、`turn_end`、`message_end`、`compaction`、`error`。
+**FR-8.2** 事件类型（subagents 对外统一的 AgentEvent union）：`tool_start`、`tool_end`（含 result + isError）、`text_delta`、`turn_end`、`message_end`（含 usage）、`compaction`、`error`。
 
-**FR-8.3** Token usage 从 `message_end` 事件中提取（input/output/cacheRead/cacheWrite/cost）。
+**FR-8.3** Token usage 从 `message_end.message.usage`（`AssistantMessage.usage: Usage`）提取。`Usage` 完整结构：
+```typescript
+interface Usage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: {
+    input: number; output: number; cacheRead: number; cacheWrite: number;
+    total: number;   // ← AgentResult.usage.cost 用此字段
+  };
+}
+```
+`AgentResult.usage.cost` 映射 `Usage.cost.total`。`AgentResult.usage` 累加所有 `message_end` 事件的 usage（一次 run 可能有多个 message_end：主消息 + tool 触发的 follow-up）。
 
 ### FR-9: Workflow Agent-Pool 改造
 
@@ -615,7 +642,7 @@ orchestrator 的 `activeTempFiles` Set 和 `cleanupAllTempFiles()` / `cleanupTem
 
 **FR-9.5.1 Pause/Resume callCache 格式一致性（B3 修复）：**
 
-callCache 存储的 `StateAgentResult` 格式必须与 Worker 的 `parentPort.on('message')` 期望的格式完全一致。Worker 代码（`worker-script.ts` 第 68 行）使用：
+callCache 存储的 `StateAgentResult` 格式必须与 Worker 的 `parentPort.on('message')` 期望的格式完全一致。Worker 代码使用（位于 `engine/worker-script.ts` 的 `buildWorkerScript()` 生成的 Worker 源码字符串中，`parentPort.on("message")` 处理 `agent-result` 分支）：
 ```javascript
 pending.resolve(msg.result.parsedOutput ?? msg.result.content);
 ```
