@@ -22,6 +22,53 @@ Pi SDK 提供了 `createAgentSession()` API，可在当前进程内创建独立 
 
 **FR-1.1** 封装 Pi SDK `createAgentSession()`，提供 `runAgent(options)` 函数，完成从参数解析到 session 创建到执行到结果收集的完整流程。
 
+**FR-1.1.0** `runAgent()` 执行步骤（必须在**主线程**调用，Worker 线程无 Pi SDK 上下文）：
+
+```
+1. 参数解析
+   a. model string ("provider/modelId") → modelRegistry.find(provider, modelId) → Model<any>
+      - find() 返回 null 时走 FR-4.2 的 fallback 链
+      - 找不到任何可用模型时抛出 Error，message 包含尝试过的所有候选
+   b. thinkingLevel string → 验证为 ThinkingLevel 枚举值 ("off"|"minimal"|"low"|"medium"|"high"|"xhigh")
+   c. 从 AgentRegistry 解析 agent 的 systemPrompt/model/tool 配置
+
+2. 并发控制
+   - 获取 pool（opts.pool ?? runtime.globalPool）
+   - await pool.acquire(opts.priority)
+   - try/finally 确保异常时 release
+
+3. 构建 ResourceLoader
+   - new DefaultResourceLoader({
+       cwd, agentDir,
+       appendSystemPrompt: opts.appendSystemPrompt,
+       additionalSkillPaths: opts.skillPath ? [opts.skillPath] : undefined,
+       tools: toolFilterResult.allowedTools,      // FR-6
+       excludeTools: toolFilterResult.excludedTools, // FR-6
+     })
+   - await resourceLoader.reload()
+
+4. 创建 Session
+   - const { session } = await createAgentSession({
+       model: resolvedModel,           // Model<any> 对象，非 string
+       thinkingLevel: resolvedLevel,   // ThinkingLevel 枚举
+       resourceLoader,                 // 上面构建的
+       sessionManager: SessionManager.inMemory(), // 不持久化子 session
+     })
+   - subscribe(session, onEvent 回调) — FR-8 事件桥接
+
+5. 执行（try/finally 确保 dispose）
+   a. 如果有 schema → 拼入 task 末尾（FR-9.6 模板）
+   b. await session.prompt(task)
+   c. prompt resolve 后从 session.messages 提取最终文本
+   d. 从事件流累计的 toolCalls/usage 构建结果
+
+6. Soft turn limit 监控（通过 turn_end 事件计数，FR-1.4）
+
+7. 清理
+   - session.dispose() — 无论成功/失败/abort 都执行
+   - pool.release()
+```
+
 **FR-1.1.1** `RunAgentOptions` 完整类型：
 ```typescript
 interface RunAgentOptions {
@@ -80,13 +127,13 @@ interface AgentResult {
 
 **FR-1.2** 支持 `ManagedSession` 模式：创建 session 后可多次 `prompt()`、`steer()`、`abort()`，不自动销毁。供编排层（如 chain 的多步执行）使用。
 
-**FR-1.3** `prompt()` 返回 `Promise<void>`，在 agent 完成所有 turns 后 resolve（包括 tool call 循环）。`collectResponseText()` 在 `prompt()` resolve 后从 `session.messages` 最后一条 assistant message 提取文本。`subscribe()` 事件流用于实时收集 tool call 记录和 token usage（不需要等到 prompt resolve）。
+**FR-1.3** `prompt()` 返回 `Promise<void>`，在 agent 完成所有 turns 后 resolve（包括 tool call 循环）。Pi SDK 保证 `prompt()` resolve 时 `session.messages` 已包含最终 assistant message（messages 是同步属性，prompt 内部在写入完成后才 resolve Promise）。`collectResponseText()` 在 `prompt()` resolve 后直接读取 `session.messages` 最后一条 assistant message 的 text content，无需额外等待。`subscribe()` 事件流用于实时收集 tool call 记录和 token usage（不需要等到 prompt resolve）。
 
 **FR-1.4** 支持 soft turn limit + hard abort：当 turn 数达到 `maxTurns` 时 steer "wrap up" 消息，grace turns 后 `session.abort()` 硬终止。
 
 **FR-1.5** 支持 `AbortSignal` 外部取消：signal 触发时调用 `session.abort()`。
 
-**FR-1.6** Session 清理：执行完成后调用 `session.dispose()`，释放内存。
+**FR-1.6** Session 清理：`runAgent()` 内部使用 `try/finally` 模式，无论成功、失败、还是 abort，`finally` 块中都调用 `session.dispose()` 释放内存。如果 `createAgentSession()` 本身抛异常（如模型不可用），则不需要 dispose（session 未创建成功）。
 
 **FR-1.7** `createAgentSession()` 的 `resourceLoader` 配置策略：
 - 使用 `DefaultResourceLoader` 构造子 session 的资源加载器
@@ -120,12 +167,23 @@ interface AgentResult {
 
 **FR-4.1** `resolveModelForAgent()` 按 FR-3 的 5 级优先级链解析模型。每级解析结果通过 `modelRegistry.find(provider, modelId)` 验证可用性，不可用时降级到下一级。
 
-**FR-4.2** 支持 model fallback：首选模型不可用时，按 fallback 链依次尝试。fallback 链来源：
-1. Agent frontmatter 的 `modelCandidates: string[]` 字段（如 `["deepseek-router/ds-flash", "mimo-router/mimo-v2.5"]`）
-2. 如果 agent 无 `modelCandidates`，使用全局 `config.json` 的 `fallback` 字段
-3. 如果全局 fallback 也不可用，抛出明确错误
+**FR-4.2** 支持 model fallback：首选模型不可用时，按 fallback 链依次尝试。**完整降级链**：
 
-Fallback 触发条件：模型在 `ModelRegistry` 中不存在或 `hasConfiguredAuth()` 返回 false。API 运行时错误（rate limit、quota exceeded）不触发 fallback，直接报错。
+```
+agent.model                    ← frontmatter 中定义的默认模型
+  ↓ (不可用)
+agent.modelCandidates[0..n]    ← frontmatter 中的候选列表
+  ↓ (全部不可用)
+global config.fallback.model   ← config.json 的 fallback 字段
+  ↓ (不可用)
+env SUBAGENT_MODEL             ← 环境变量
+  ↓ (未设置)
+throw Error("No available model") ← 明确报错，列出尝试过的所有候选
+```
+
+Fallback 触发条件：模型在 `ModelRegistry` 中不存在（`modelRegistry.find(provider, modelId)` 返回 null）或 `hasConfiguredAuth()` 返回 false（未配置 API key）。API 运行时错误（rate limit、quota exceeded）不触发 fallback，直接报错。
+
+每级候选在验证前需要 string→Model 转换：`modelRegistry.find(provider, modelId)` 返回 `Model<any>` 对象。`RunAgentOptions.model` 是 string 格式，`runAgent()` 内部在步骤 1a 完成转换（FR-1.1.0）。
 
 **FR-4.3** Thinking level 从选定 model 的 `thinkingLevelMap` 字段提取支持的级别。`thinkingLevelMap` 是 `{ off?, minimal?, low?, medium?, high?, xhigh? }` 映射到 `string | null`：
 - 值为 `null` = 该级别不可用，必须排除
@@ -180,32 +238,76 @@ Fallback 触发条件：模型在 `ModelRegistry` 中不存在或 `hasConfigured
 
 **FR-4.6.3** `loadGlobalConfig()` 加载配置，缺失字段用默认值填充。文件不存在时返回全默认配置。
 
-**FR-4.6.4** `saveGlobalConfig()` 写入配置，使用 atomic write（写入 temp 文件 → `fs.renameSync` 覆盖目标文件），避免并发写入时的数据损坏。
+**FR-4.6.4** `saveGlobalConfig()` 写入配置，使用 atomic write（写入 temp 文件 → `fs.renameSync` 覆盖目标文件），避免并发写入时的数据损坏。进程内并发保护：使用 `Promise` 队列串行化写操作（`let writeChain = Promise.resolve(); writeChain = writeChain.then(() => actualWrite())`），防止多个 agent 在不同微任务中同时修改 config.json 导致后写覆盖前写。
 
 ### FR-4.7: 会话模型状态
 
 **FR-4.7.1** `SessionModelState` 在工厂闭包内维护，通过 `pi.appendEntry("subagent-model-state", ...)` 持久化到 session，在 `session_start` 时从 entries 恢复。
 
-**FR-4.7.2** 数据结构：
+**FR-4.7.2** 数据结构（使用 Record 而非 Map，确保 `JSON.stringify` 正确序列化）：
 ```typescript
 interface SessionModelState {
   yoloMode: boolean;
-  perAgent: Map<string, { model: string; thinkingLevel?: string }>;
-  perCategory: Map<string, { model: string; thinkingLevel?: string }>;
+  perAgent: Record<string, { model: string; thinkingLevel?: string }>;
+  perCategory: Record<string, { model: string; thinkingLevel?: string }>;
 }
 ```
+注意：`Map` 类型在 `JSON.stringify` 时序列化为 `{}`（空对象），因此使用 `Record` 替代。如果内部实现需要 `Map` 的查找性能，在 `appendEntry` 时用 `Object.fromEntries(map)` 序列化，恢复时用 `new Map(Object.entries(obj))` 反序列化。
 
 **FR-4.7.3** 向后兼容反序列化：字段缺失时用默认值。
 
 ### FR-4.8: `/subagents` 命令
 
-**FR-4.8.1** `/subagents config` 命令通过 `pi.registerCommand("subagents", ...)` 注册，通过 `ctx.ui.select()` 实现级联交互式配置。
+**FR-4.8.1** 命令注册与入口行为：
+- `/subagents`（不带参数）：显示当前配置摘要（所有 category 的 model/thinkingLevel、YOLO 状态、全局并发数）+ 可用子命令列表
+- `/subagents config`：进入交互式配置向导
+- `/subagents config <category>`：快捷路径，直接跳到指定 category 的 provider 选择（省掉前两步）
 
-**FR-4.8.2** 交互流程（4 步级联，provider→model→thinking 三者联动）：
+命令通过 `pi.registerCommand("subagents", ...)` 注册，配置向导通过 `ctx.ui.select()` 实现级联交互。`ctx.ui.select()` 每次调用展示选项列表并返回用户选择，是同步返回 Promise 的简单交互原语。级联通过多个顺序 `await ctx.ui.select()` 调用实现，每步根据前一步结果动态构建选项。
+
+**FR-4.8.2** 交互流程（完整路径 4 步，快捷路径 2 步）：
+
+完整路径（`/subagents config`）：
 1. 选择操作（Edit category model / Add custom category / Remove custom category / Toggle YOLO / Override agent category / Show current config）
 2. 选择 category
 3. 选择 provider → 选择 model → 选择 thinking level（三者联动，见下）
 4. 保存到 config.json
+
+快捷路径（`/subagents config coding`）：
+1. 直接进入 Step A 的 provider 选择（跳过操作选择和 category 选择）
+2. 选择 model → 选择 thinking level
+3. 保存到 config.json
+
+`config-wizard.ts` 伪代码结构：
+```typescript
+async function runConfigWizard(ctx, args: string[]) {
+  const quickCategory = args[0]; // 快捷路径
+  if (!quickCategory) {
+    const operation = await ctx.ui.select({ options: ["Edit category model", ...] });
+    if (operation === "Show current config") { showCurrentConfig(ctx); return; }
+    if (operation === "Toggle YOLO") { toggleYolo(); return; }
+    const category = await ctx.ui.select({ options: getAllCategories() });
+    await editCategoryModel(ctx, category);
+  } else {
+    await editCategoryModel(ctx, quickCategory);
+  }
+}
+
+async function editCategoryModel(ctx, category) {
+  const providers = getAvailableProviders(ctx.modelRegistry);
+  const provider = await ctx.ui.select({ options: providers });        // Step A
+  const models = getModelsForProvider(provider);
+  const model = await ctx.ui.select({ options: models });               // Step B
+  const levels = getAvailableThinkingLevels(model);
+  if (levels.length > 0) {
+    const level = await ctx.ui.select({ options: levelsWithDesc(levels) }); // Step C
+    // levelsWithDesc: ["high — 深度推理，耗时较长", "medium — 平衡推理", ...]
+    saveCategoryConfig(category, model, level);
+  } else {
+    saveCategoryConfig(category, model, undefined);
+  }
+}
+```
 
 **FR-4.8.3** Provider → Model → ThinkingLevel 联动选择规则：
 
@@ -223,8 +325,15 @@ Step C: 选择 thinking level（依赖 Step B 选中的 model）
   数据源: 从 model.thinkingLevelMap 提取
   过滤: 排除值为 null 的级别
   排序: off → minimal → low → medium → high → xhigh
+  展示: 级别名 + 简短说明
+    - off: "off — 不使用推理"
+    - minimal: "minimal — 极轻推理"
+    - low: "low — 轻度推理"
+    - medium: "medium — 平衡推理"
+    - high: "high — 深度推理，耗时较长"
+    - xhigh: "xhigh — 最深度推理，耗时最长"
   特殊: model.reasoning === false 时跳过此步，不设 thinking level
-  示例: glm-5.1 仅显示 "xhigh"；mimo-v2.5 显示 "low, medium, high"；qwen3-0.6b 跳过
+  示例: glm-5.1 仅显示 "xhigh — 最深度推理，耗时最长"；mimo-v2.5 显示 low/medium/high；qwen3-0.6b 跳过
 ```
 
 **FR-4.8.4** 联动约束总结：
@@ -262,7 +371,13 @@ Step C: 选择 thinking level（依赖 Step B 选中的 model）
 
 **FR-7.1** `ConcurrencyPool` 控制最大并发数，由 `SubagentRuntime` 持有全局实例（`maxConcurrent` 来自 `config.json`）。
 
-**FR-7.2** `RunAgentOptions.pool` 可覆盖全局 pool：workflow 传入自己的 `AgentPool` 管理并发，第三方扩展用全局 pool。
+**FR-7.1.1** Workflow 与并发池的关系：
+- orchestrator 不再创建自己的 `AgentPool`（已删除）
+- orchestrator 的 `handleAgentCall()` 直接调用 `runAgent({ pool: runPool })` 传递一个 per-run `ConcurrencyPool` 实例
+- per-run pool 隔离各 workflow run 的并发，互不影响
+- 第三方扩展不传 pool 时使用 `SubagentRuntime` 的全局 pool
+
+**FR-7.2** `RunAgentOptions.pool` 可覆盖全局 pool：orchestrator 传入 per-run `ConcurrencyPool` 实例隔离各 workflow run 的并发，第三方扩展用全局 pool。
 
 **FR-7.3** 支持优先级：高优先级任务插队。
 
@@ -272,13 +387,99 @@ Step C: 选择 thinking level（依赖 Step B 选中的 model）
 
 **FR-8.1** 将子 session 的 `AgentSessionEvent` 转换为 agent-runtime 的 `AgentEvent` 回调。
 
-**FR-8.2** 事件类型：`tool_start`、`tool_end`、`text_delta`、`turn_end`、`message_end`、`compaction`、`error`。
+**FR-8.1.1** 事件转换映射：
+
+| Pi SDK AgentSessionEvent | subagents AgentEvent | 附加数据 |
+|---|---|---|
+| `{type: "tool_start", toolName}` | `{type: "tool_start", toolName}` | — |
+| `{type: "tool_end", toolName, result}` | `{type: "tool_end", toolName, result}` | `result` 携带 `content` 和 `details`（structured-output 的 parsedOutput 在 `details` 中） |
+| `{type: "text_delta", delta}` | `{type: "text_delta", delta}` | — |
+| `{type: "agent_end", messages}` | `{type: "turn_end"}` | turn 计数器 +1 |
+| `{type: "message_end", usage}` | `{type: "message_end", usage}` | usage 含 input/output/cacheRead/cacheWrite/cost |
+| `{type: "compaction_start"}` | `{type: "compaction"}` | — |
+| `{type: "error", error}` | `{type: "error", error}` | — |
+
+**FR-8.1.2** `AgentEvent.tool_end.result` 结构：
+```typescript
+interface ToolEndEvent {
+  type: "tool_end";
+  toolName: string;
+  result?: {
+    content: Array<{ type: string; text: string }>;
+    details?: Record<string, unknown>;
+  };
+}
+```
+当 `toolName === "structured-output"` 且 `result.details` 存在时，`runAgent()` 从 `result.details` 中提取 parsedOutput 填充到 `AgentResult.parsedOutput`。
+
+**FR-8.2** 事件类型：`tool_start`、`tool_end`（含 result）、`text_delta`、`turn_end`、`message_end`、`compaction`、`error`。
 
 **FR-8.3** Token usage 从 `message_end` 事件中提取（input/output/cacheRead/cacheWrite/cost）。
 
 ### FR-9: Workflow Agent-Pool 改造
 
-**FR-9.1** `AgentPool.runAgent()` 从 spawn 子进程改为调用 `agentRuntime.runAgent()`。
+**FR-9.1** `AgentPool` 整体重写为轻量级 `ConcurrencyPool` 包装。原有的 `AgentPool` 类（350 行 spawn 逻辑）替换为直接调用 `agentRuntime.runAgent()`。orchestrator 的 `handleAgentCall()` 流程变更：
+
+```
+旧流程（spawn）:
+  Worker postMessage('agent-call')
+  → orchestrator.handleAgentCall()
+  → resolveAgentOpts() → 构建 spawn 参数
+  → AgentPool.enqueue() → spawn pi 进程 → JSONL 解析
+  → AgentResult → postMessage('agent-result') → Worker
+
+新流程（进程内）:
+  Worker postMessage('agent-call', { callId, opts: AgentCallOpts })
+  → orchestrator.handleAgentCall()
+  → resolveAgentOpts() → 构建 RunAgentOptions（FR-9.4）
+  → runAgent(runOpts) → createAgentSession + prompt + collect
+  → subagents AgentResult → 映射为 Worker AgentResult（FR-9.5）
+  → postMessage('agent-result', { callId, result }) → Worker
+```
+
+**FR-9.1.1 Worker→Main 桥接时序（B1 修复）：**
+
+```
+Worker 线程                    主线程
+─────────────────────────────────────────────────────
+agent("worker", "Fix typo")
+  ↓
+postMessage({
+  type: 'agent-call',
+  callId: 42,
+  opts: { prompt, agent, schema, ... }
+})
+  ↓                              ↓ handleAgentCall(runId, inst, 42, opts)
+  ↓                              ↓ 1. callCache.get(42) → miss
+  ↓                              ↓ 2. resolveAgentOpts(opts)
+  ↓                              ↓    → 构建 RunAgentOptions
+  ↓                              ↓ 3. resolveModel(scene) → model string
+  ↓                              ↓ 4. runAgent(runOpts)
+  ↓                              ↓    → createAgentSession
+  ↓                              ↓    → session.prompt(task)
+  ↓                              ↓    → collectResponseText
+  ↓                              ↓    → AgentResult { text, ... }
+  ↓                              ↓ 5. 映射 AgentResult → Worker格式
+  ↓                              ↓ 6. callCache.set(42, workerResult)
+  ↓                              ↓ 7. appendTraceNode(...)
+await (Promise pending)          ↓ 8. postMessage({
+  ↓                                  type: 'agent-result',
+  ↓                                  callId: 42,
+  ↓                                  result: workerResult
+  ↓                                })
+  ↓                              ↓
+parentPort.on('message')
+  ↓ resolve(msg.result.parsedOutput ?? msg.result.content)
+  ↓
+返回值给 workflow 脚本
+```
+
+关键约束：
+- `createAgentSession()` 只能在主线程调用（Worker 无 Pi SDK 上下文）
+- Worker 的 `agent()` 是 `await` 阻塞的，等 `postMessage` 返回结果
+- 主线程的 `runAgent()` 是异步的，不阻塞事件循环
+- 如果 Worker 被 terminate（pause/abort），进行中的 `runAgent()` 通过 `AbortSignal` 取消（FR-1.5）
+- `runAgent()` 失败时仍返回 `AgentResult(success=false, error=...)`，不抛异常（与旧 AgentPool 行为一致）
 
 **FR-9.2** 删除以下文件（被 agent-runtime 替代）：
 - `infra/pi-runner.ts` — 子进程管理
@@ -287,10 +488,12 @@ Step C: 选择 thinking level（依赖 Step B 选中的 model）
 - `infra/agent-discovery.ts` — agent 发现
 
 **FR-9.3** 保留但适配的文件：
-- `infra/agent-opts-resolver.ts` — 参数解析，改为构建 `RunAgentOptions`
+- `infra/agent-opts-resolver.ts` — 参数解析，改为构建 `RunAgentOptions`。**Temp file 逻辑完全删除**：不再写 temp file 给 `--append-system-prompt`，改为直接读取 agent systemPrompt 内容传入 `RunAgentOptions.appendSystemPrompt` 数组
 - `infra/execution-trace.ts` — 执行追踪，事件源从 JSONL 改为 agent-runtime 回调
 - `infra/state-store.ts` — 状态持久化，不变
 - `infra/config-loader.ts` — workflow 脚本加载，不变
+
+orchestrator 的 `activeTempFiles` Set 和 `cleanupAllTempFiles()` / `cleanupTempFile()` 调用全部移除——不再有 temp file 需要管理。`resolveAgentOpts()` 不再接受 `activeTempFiles` 参数。
 
 **FR-9.4** `AgentCallOpts` → `RunAgentOptions` 转换逻辑（在 `agent-opts-resolver.ts` 中）：
 
@@ -302,7 +505,7 @@ Step C: 选择 thinking level（依赖 Step B 选中的 model）
 | `scene` | *(不映射)* | scene 解析在主线程完成，结果写入 `model` |
 | `schema` | `schema` | 直接映射 |
 | `skill` / `skillPath` | `skillPath` | skill 路径解析保留在 agent-opts-resolver |
-| `systemPromptFiles` | `appendSystemPrompt` | 读取文件内容传入（不再用 temp file + `--append-system-prompt`） |
+| `systemPromptFiles` | `appendSystemPrompt` | 直接读取文件内容，传入字符串数组（不再写 temp file） |
 | `schemaEnv` | *(不映射)* | 废弃。schema 指令通过 `RunAgentOptions.schema` 传递 |
 | `description` | *(不映射)* | 仅用于日志，传给 runAgent 无意义 |
 
@@ -319,13 +522,30 @@ Step C: 选择 thinking level（依赖 Step B 选中的 model）
 | `error` | `error` | 直接映射 |
 | `sessionId` | `sessionId` | 直接映射 |
 | `toolCalls` | `toolCalls` | 直接映射 |
-| *(无)* | `callId` | 从 AgentPool 内部生成 |
+| *(无)* | `callId` | 从 orchestrator 内部生成 |
+| *(无)* | `content` | Worker 需要此字段做 fallback（`msg.result.parsedOutput ?? msg.result.content`）。映射值 = `AgentResult.text` |
+
+**FR-9.5.1 Pause/Resume callCache 格式一致性（B3 修复）：**
+
+callCache 存储的 `StateAgentResult` 格式必须与 Worker 的 `parentPort.on('message')` 期望的格式完全一致。Worker 代码（`worker-script.ts` 第 68 行）使用：
+```javascript
+pending.resolve(msg.result.parsedOutput ?? msg.result.content);
+```
+
+因此 `StateAgentResult` 必须同时包含 `content` 和 `parsedOutput` 字段。映射规则：
+- `content` = subagents `AgentResult.text`（Worker 的 fallback 字段）
+- `output` = subagents `AgentResult.text`（orchestrator 日志用）
+- `parsedOutput` = subagents `AgentResult.parsedOutput`
+- `success` / `error` / `usage` / `toolCalls` / `durationMs` / `sessionId` — 直接映射
+
+Pause 时：进行中的 `runAgent()` 通过 `AbortSignal` 取消，返回 `AgentResult(success=false, error='aborted')`。此结果按上述规则映射为 `StateAgentResult` 写入 callCache。
+Resume 时：Worker 重放 callCache 中的结果，格式正确，无需额外转换。
 
 **FR-9.6** Structured-output 集成方式变更：
 - schema 指令不再通过 temp file + `--append-system-prompt` 注入
 - 不再通过 `PI_WORKFLOW_SCHEMA` env 激活 hook
 - 改为：schema 指令拼入 `RunAgentOptions.task` 末尾（格式与现有 `agent-opts-resolver.ts` 的 `MANDATORY: Structured Output Requirement` 模板相同）
-- `runAgent()` 内部通过事件回调追踪 `structured-output` tool 调用，填充 `AgentResult.parsedOutput`
+- `runAgent()` 内部通过 `tool_end` 事件回调追踪 `structured-output` tool 调用：当 `toolName === "structured-output"` 且 `result.details` 存在时，从 `result.details` 提取 parsedOutput 填充 `AgentResult.parsedOutput`
 - `turn_end` hook 安全网在 v1 不提供。如果 agent 忘记调用 structured-output tool，`AgentResult.parsedOutput` 为 undefined，`AgentResult.error` 记录原因
 
 **FR-9.7** 事件处理从 JSONL 解析改为 agent-runtime 回调。
@@ -364,6 +584,10 @@ Step C: 选择 thinking level（依赖 Step B 选中的 model）
 - `inferCategory(agentName, agentConfig, overrides): string` — 类别推断
 - `forkContext(parentSession: SessionManager): ForkResult` — 父对话 fork
 - `filterTools(config: ToolFilterConfig, allTools: ToolInfo[]): ToolInfo[]` — Tool 过滤
+
+**FR-11.3.1** Runtime 扩展方法（v1 预留）：
+- `registerCategory(name, defaults)` — 注册自定义 category（FR-14.6）
+- `registerHooks(hooks)` — 注册执行钩子（FR-14.7）
 
 **FR-11.4** 类型（全部 export）：`RunAgentOptions`, `AgentResult`, `ManagedSession`, `AgentConfig`, `AgentEvent`, `AgentEventType`, `ModelResolution`, `ToolFilterConfig`, `CategoryDefinition`, `SessionModelState`, `SubagentsGlobalConfig`, `ResolvedModel` 等。
 
@@ -447,7 +671,7 @@ extensions/subagents/
 | **删除** | `infra/jsonl-parser.ts` | 131 | JSONL 解析，被事件回调替代 |
 | **删除** | `engine/model-resolver.ts` | 48 | 模型解析，被 subagents 的 `resolveModel()` 替代 |
 | **删除** | `infra/agent-discovery.ts` | 263 | agent 发现，被 subagents 的 `AgentRegistry` 替代 |
-| **重写** | `infra/agent-pool.ts` | 350 | spawn → `runAgent()`，事件源从 JSONL → 回调 |
+| **重写** | `infra/agent-pool.ts` | 350 | 删除 spawn 逻辑，改为调用 `runAgent()`。类名保留为 `AgentPool` 以减少改动面，内部改为轻量级 `ConcurrencyPool` 包装 |
 | **适配** | `infra/agent-opts-resolver.ts` | 173 | 构建 `RunAgentOptions` 替代 spawn 参数 |
 | **适配** | `infra/execution-trace.ts` | 229 | 事件源从 JSONL → agent-runtime 回调 |
 | **适配** | `engine/error-handlers.ts` | 161 | 异常类型适配 |
@@ -470,9 +694,34 @@ extensions/subagents/
 
 subagents 对 workflow 是 `dependencies`（非 peerDep），因 workflow 编译时需要 import 其类型和函数，且 subagents 不是 Pi 运行时提供的。
 
-### FR-14: 扩展性设计 [DEFERRED]
+### FR-14: 扩展性设计
 
-以下扩展性机制在 v1 中不实现，待后续迭代根据实际需求决定：
+**v1 预留接口（FR-14.6、FR-14.7）：**
+
+**FR-14.6** Category 运行时注册（v1 预留接口，实现为 no-op 或仅内存注册）：
+```typescript
+/** 注册自定义 category 默认配置。写入 config.json 的 categories 字段。 */
+registerCategory(name: string, defaults: CategoryDefinition): void;
+```
+用途：第三方扩展在 `session_start` 时调用 `runtime.registerCategory("vision-analysis", { label: "视觉分析", model: "...", thinkingLevel: "high" })`，将该 category 写入全局配置。v1 实现为直接修改 config.json（FR-4.6 的 load/save 机制）。
+
+**FR-14.7** Agent 执行钩子（v1 预留接口，内部实现为 passthrough）：
+```typescript
+interface SubagentHooks {
+  /** runAgent() 执行前调用。可修改 RunAgentOptions（如注入 systemPrompt）。返回修改后的 opts */
+  beforeRun?: (opts: RunAgentOptions) => RunAgentOptions | Promise<RunAgentOptions>;
+  /** runAgent() 执行后调用。可记录日志/指标。不可修改结果 */
+  afterRun?: (result: AgentResult, opts: RunAgentOptions) => void;
+  /** runAgent() 出错时调用。可替换错误处理策略 */
+  onError?: (error: Error, opts: RunAgentOptions) => void;
+}
+
+/** 注册执行钩子。按注册顺序调用（链式） */
+registerHooks(hooks: SubagentHooks): void;
+```
+v1 实现：`runAgent()` 内部在关键节点调用已注册的 hooks。无注册时为零开销（空数组检查）。第三方可通过 `getRuntime().registerHooks({ beforeRun: ... })` 注入逻辑，无需 fork。
+
+**以下扩展性机制在 v1 中不实现，待后续迭代根据实际需求决定 [DEFERRED]：**
 
 **FR-14.1** Pi Event 通知（跨扩展，松耦合）：通过 `pi.events.emit("subagent:run_start", data)` 在关键节点广播事件。Pi SDK 的 `EventBus.emit()` 是**同步**的、`void` 返回，handler 也是同步的 `(data: unknown) => void`。
 
@@ -540,9 +789,12 @@ subagents 对 workflow 是 `dependencies`（非 peerDep），因 workflow 编译
 ## Constraints
 
 - **Pi SDK API 限制**：`createAgentSession()` 创建的 session 是进程内的，不提供进程级隔离。多个 agent 共享主进程的内存和 LLM API quota
-- **Worker 线程限制**：`agent()` 调用在 Worker 线程中发起，但 `createAgentSession()` 必须在主线程执行（Worker 没有 Pi SDK 上下文）。通信通过 `postMessage`
+- **Worker 线程限制**：`agent()` 调用在 Worker 线程中发起，但 `createAgentSession()` 必须在主线程执行（Worker 没有 Pi SDK 上下文）。通信通过 `postMessage`。完整桥接时序见 FR-9.1.1
+- **模型类型转换**：`RunAgentOptions.model` 是 `string`（"provider/modelId"），Pi SDK 的 `CreateAgentSessionOptions.model` 期望 `Model<any>` 对象。`runAgent()` 内部通过 `modelRegistry.find(provider, modelId)` 转换（FR-1.1.0 步骤 1a）
+- **ThinkingLevel 枚举**：spec 中定义的 `"off"|"minimal"|"low"|"medium"|"high"|"xhigh"` 必须与 Pi SDK 的 `ThinkingLevel` 类型（来自 `@earendil-works/pi-agent-core`）完全一致。实现时需验证枚举值域
 - **扩展加载**：`createAgentSession()` 通过 `resourceLoader` 参数加载扩展（返回 `extensionsResult`）。不需要也不应调用 `session.bindExtensions()`（那是 interactive mode 专用，需要 UI 上下文）。扩展加载失败时 `extensionsResult` 包含错误信息
 - **Session 内存**：每个 `ManagedSession` 在完成前持有完整的消息历史。长 chain 或大 parallel 可能导致内存压力
+- **Abort 行为**：`session.abort()` 会中断当前正在进行的 LLM API 调用并等待 agent idle。Hard abort 后的 `prompt()` resolve 返回已收集的部分结果（`success=false, error='aborted'`）
 - **向后兼容**：workflow 脚本 API（`agent()`、`parallel()`、`pipeline()`）必须保持不变。现有的所有 workflow 脚本无需修改
 - **Pi EventBus 是同步的**：`pi.events.emit()` 返回 void，handler 是 `(data: unknown) => void`，不返回 Promise
 - **无共享状态 API**：Pi SDK 不提供 `getSharedState()`，跨扩展共享数据只能通过 `pi.events`（无类型）或 `globalThis`（无类型）或直接 import（有类型）
@@ -553,6 +805,7 @@ subagents 对 workflow 是 `dependencies`（非 peerDep），因 workflow 编译
 
 - **Actor**: 开发者（通过 `/workflow` 命令）
 - **场景**: 开发者编写了一个 3 步 workflow 脚本（review → fix → test），通过 `/workflow review-pipeline` 触发
+- **桥接路径**: Worker `agent()` → `postMessage('agent-call')` → 主线程 `handleAgentCall()` → `runAgent()` → `createAgentSession` + `prompt` → 结果映射 → `postMessage('agent-result')` → Worker resolve（完整时序见 FR-9.1.1）
 - **预期结果**: 3 个 agent 依次在进程内执行，每步的结果正确传递给下一步，最终汇总结果展示给用户。预期显著减少 agent 调用开销（无进程启动、无重复扩展加载）
 
 ### UC-2: 开发者在运行中的 workflow 里 steer 子 agent [V2]
