@@ -275,12 +275,58 @@ L1/L2 时，在系统级 spec gate 中验证合约一致性。
 - [ ] 合约锚点一致性在系统级 gate 中检查
 - [ ] 循环依赖在 manifest 加载时检测
 
+## Tool 设计策略
+
+### D-SC7: 原子操作的 Tool 暴露策略
+
+日常流程和独立调试使用不同的 Tool 入口：
+
+| 场景 | Tool 名称 | 参数 | 说明 |
+|------|----------|------|------|
+| **日常流程** | `coding-workflow-init` | slug | 保留现有，内部自动编排 pipeline |
+| **日常流程** | `coding-workflow-gate` | phase | 保留现有，内部按 pipeline 配置依次调用原子操作 |
+| **日常流程** | `coding-workflow-phase-start` | （无） | 保留现有，触发 phase 切换 |
+| **独立调试** | `coding-workflow-run-op` | action + 操作特定参数 | 新增，用于单独调用任意原子操作 |
+
+**`coding-workflow-run-op` 参数定义：**
+
+```typescript
+const RunOpParams = Type.Object({
+  action: StringEnum([
+    "complexity-assess",
+    "decompose",
+    "contract-define",
+    "contract-check",
+    "dependency-check",
+    "review-loop",
+    "gate-check",
+    "review-dispatch",
+    "retrospect",
+    "phase-transition",
+    "aggregate-status",
+    "skill-inject",
+  ]),
+  topicDir: Type.String({ description: "工作目录路径" }),
+  phase: Type.Optional(Type.Number({ description: "Phase 编号，部分操作需要" })),
+  maxRounds: Type.Optional(Type.Number({ description: "review-loop 最大轮数，默认 3" })),
+});
+```
+
+**不把 5 个原子操作收口为 1 个 Tool 的原因：**
+1. 日常流程中 AI 通过 `coding-workflow-gate` 和 `coding-workflow-init` 触发编排，不需要知道原子操作的存在
+2. `run-op` 仅用于开发调试和手动执行，AI 不会在日常流程中主动选择它
+3. 每个 action 的参数完全不同，收口成 union schema 增加理解成本
+
+**不使用 "Infra" 标签的原因：**
+gate-check、dependency-check、contract-check 都是 Tool，只是内部不调 AI。它们和 review-loop、review-dispatch 在 Tool 这个维度上是平等的，区别仅在于内部是否有 AI 调用。在可视化中用视觉手段（如填充色深浅）区分，不引入新的分类维度。
+
 ## Constraints
 
 - `xyz-harness-brainstorming` SKILL.md 内容零改动（GC-3）
 - L1/L2 的增量步骤通过编排引擎的参数注入实现，不创建新 SKILL.md 文件
 - 复杂度评估是建议性的，用户可以 override
 - 递归深度软限制 3 层
+- Tool 总数：现有 3 个 + 新增 1 个 `run-op` = 4 个，不新增其他 Tool
 
 ## Decisions
 
