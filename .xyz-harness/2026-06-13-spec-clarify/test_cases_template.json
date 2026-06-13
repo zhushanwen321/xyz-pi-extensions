@@ -1,0 +1,90 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "manual",
+      "title": "references 目录结构正确",
+      "description": "验证改造后只有预期的 4 个 references 文件",
+      "steps": [
+        "运行 find extensions/coding-workflow/skills/xyz-harness-spec-clarify -type f",
+        "确认文件列表为 SKILL.md + references/{subagent-tracing,scenario-tracing,gap-management,clarification}.md",
+        "确认 foundation-round.md / requirement-decomposition.md / convergence-loop.md / clarification-model.md 已删除"
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "manual",
+      "title": "旧机制零残留",
+      "description": "grep 确认所有旧设计关键词在 skill 文件中不出现",
+      "steps": [
+        "grep -rn 'complexity-assess\\|L0/L1/L2\\|requirement-decomposition\\|Decomposition Map\\|两层循环\\|NEEDS_USER\\|model_version\\|DEFERRED-EXT\\|P0/P1/P2\\|Gap Tracker' extensions/coding-workflow/skills/xyz-harness-spec-clarify/",
+        "确认无输出"
+      ]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "manual",
+      "title": "新设计核心元素存在",
+      "description": "确认隔离追踪、二次确认等新机制在文件中有体现",
+      "steps": [
+        "grep -l '独立 subagent\\|隔离上下文' SKILL.md，确认匹配",
+        "grep -l 'CONVERGED\\|从零审视' references/subagent-tracing.md，确认匹配",
+        "grep -l '二次确认' references/gap-management.md，确认匹配"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "manual",
+      "title": "index.ts 路由指向 spec-clarify",
+      "description": "Phase 1 的 skillName 已改为 xyz-harness-spec-clarify",
+      "steps": [
+        "grep 'phase: 1' extensions/coding-workflow/index.ts",
+        "确认输出包含 skillName: xyz-harness-spec-clarify"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "manual",
+      "title": "TypeScript 类型检查通过",
+      "description": "index.ts 改动不引入类型错误",
+      "steps": [
+        "运行 pnpm --filter @zhushanwen/pi-coding-workflow typecheck",
+        "确认零错误"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "manual",
+      "title": "brainstorming skill 保留不变",
+      "description": "选项 1 约束：brainstorming 不改动",
+      "steps": [
+        "确认 extensions/coding-workflow/skills/xyz-harness-brainstorming/SKILL.md 存在",
+        "确认行数为 516"
+      ]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "manual",
+      "title": "track.md 引用已更新",
+      "description": "track.md 中 brainstorming 引用改为 spec-clarify",
+      "steps": [
+        "grep -c spec-clarify extensions/coding-workflow/commands/track.md",
+        "确认输出 ≥ 3"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "manual",
+      "title": "端到端加载流程验证",
+      "description": "启动 Pi 走一遍 spec-clarify 流程，确认 AI 按指令执行",
+      "steps": [
+        "启动 Pi，输入触发 Phase 1 的命令",
+        "确认加载 spec-clarify skill（非 brainstorming）",
+        "观察 Quick Overview + 交互提问执行",
+        "观察独立 subagent 派发",
+        "观察 gap 的 F/K/D 分流处理",
+        "观察收敛后调用 gate"
+      ]
+    }
+  ]
+}
