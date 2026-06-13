@@ -2,7 +2,7 @@
 verdict: pass
 parent: null
 children:
-  - name: brainstorming-phase
+  - name: spec-clarify-phase
     status: spec_approved
   - name: atomic-operations
     status: pending
@@ -24,8 +24,8 @@ coding-workflow 是一个 5-phase 编码工作流扩展（~2500 行 TS + 827 行
 
 | 子系统 | 职责 | 产出目录 |
 |--------|------|---------|
-| **brainstorming-phase** | brainstorming 流程的复杂度分级（L0/L1/L2）、流程分流、gate 拆解、递归 topicDir 结构设计 | `children/brainstorming-phase/` |
-| **atomic-operations** | 8 个原子操作提取为独立 tool，共享基础设施模块化 | `children/atomic-operations/` |
+| **spec-clarify-phase** | spec-clarify 流程的复杂度分级（L0/L1/L2）、流程分流、递归 topicDir 结构设计 | `children/spec-clarify-phase/` |
+| **atomic-operations** | 原子操作提取为独立 tool（含 gate 拆解的详细接口定义），共享基础设施模块化 | `children/atomic-operations/` |
 | **orchestrator** | pipeline 执行器、依赖拓扑调度、状态传播、wave 自动推导 | `children/orchestrator/` |
 
 ## 全局约束
@@ -117,9 +117,9 @@ pending → spec_in_progress → spec_approved → plan_in_progress → plan_app
 
 ## 接口合约
 
-### brainstorming-phase → atomic-operations
+### spec-clarify-phase → atomic-operations
 
-brainstorming-phase 定义每个 phase 需要**哪些**原子操作和**什么顺序**。atomic-operations 负责实现这些操作。
+spec-clarify-phase 定义每个 phase 需要**哪些**原子操作和**什么顺序**。atomic-operations 负责实现这些操作。
 
 **合约接口**：
 
@@ -135,9 +135,9 @@ interface OperationSpec {
 }
 ```
 
-### brainstorming-phase → orchestrator
+### spec-clarify-phase → orchestrator
 
-brainstorming-phase 定义 pipeline 配置的结构。orchestrator 负责执行。
+spec-clarify-phase 定义 pipeline 配置的结构。orchestrator 负责执行。
 
 **合约接口**：
 
@@ -190,7 +190,7 @@ interface OperationResult {
 | 非功能需求 | 无 | 性能或安全 | 性能 + 安全 + 可观测 |
 | topicDir 结构 | 扁平 | 1 级 children | 2+ 级 children |
 
-- **L0**：当前 10 步 brainstorming 流程不变，扁平 topicDir
+- **L0**：当前 spec-clarify 流程不变（10 步 brainstorming skill），扁平 topicDir
 - **L1**：增加子问题分解 + 模块级 spec + api-contracts
 - **L2**：系统架构 spec + 子系统独立 spec + 依赖拓扑 + 风险分级
 

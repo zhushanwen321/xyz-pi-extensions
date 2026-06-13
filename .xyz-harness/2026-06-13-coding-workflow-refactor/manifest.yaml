@@ -4,17 +4,17 @@ created: "2026-06-13"
 status: spec_in_progress
 
 children:
-  - name: brainstorming-phase
-    path: children/brainstorming-phase
+  - name: spec-clarify-phase
+    path: children/spec-clarify-phase
     status: spec_approved
     depends_on: []
     priority: P0
-    description: "brainstorming 阶段的复杂度分级、流程分流、gate 拆解"
+    description: "spec-clarify 阶段的复杂度分级、流程分流、递归 topicDir 支持"
 
   - name: atomic-operations
     path: children/atomic-operations
     status: pending
-    depends_on: [brainstorming-phase]
+    depends_on: [spec-clarify-phase]
     priority: P0
     description: "8 个原子操作的提取和独立 tool 暴露"
 

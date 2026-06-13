@@ -113,7 +113,7 @@ const L0_SPEC_PIPELINE: StepConfig[] = [
 
 ### EG-4: 原子操作提取（核心）
 
-逐个提取原子操作。brainstorming-phase 子系统新增的操作优先：
+逐个提取原子操作。spec-clarify-phase 子系统新增的操作优先：
 
 #### Task 4.1: gate-check (A3) — 从 PhaseGate 提取
 
