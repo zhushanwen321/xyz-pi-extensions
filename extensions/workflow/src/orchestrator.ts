@@ -12,12 +12,12 @@ import { Worker } from "node:worker_threads";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { cleanupAllTempFiles as cleanupAllFiles, cleanupTempFile as cleanupFile, resolveAgentOpts as resolveOpts } from "./infra/agent-opts-resolver.js";
-import { AgentRegistry } from "./infra/agent-discovery.js";
+import { resolveAgentOpts as resolveOpts, type AgentRegistryLike } from "./infra/agent-opts-resolver.js";
 import { type AgentCallOpts,AgentPool } from "./infra/agent-pool.js";
 import { getWorkflow } from "./infra/config-loader.js";
 import { appendTraceNode } from "./infra/execution-trace.js";
 import { resolveModel } from "./engine/model-resolver.js";
+import { getRuntime } from "@zhushanwen/pi-subagents";
 import { lintScript } from "./infra/script-lint.js";
 import {
   type AgentResult as StateAgentResult,
@@ -96,13 +96,7 @@ export class WorkflowOrchestrator {
   private readonly runMetaMap = new Map<string, RunMeta>();
   private readonly retryCounts = new Map<string, number>();
   private readonly runPools = new Map<string, AgentPool>();
-  private readonly agentRegistry: AgentRegistry;
-  /** Active temp files created for agent system prompts — cleaned up on completion or abort. */
-  private readonly activeTempFiles = new Set<string>();
-  // Bound helpers that carry activeTempFiles closure
-  private cleanupTempFile = (fp: string) => cleanupFile(fp, this.activeTempFiles);
-  /** Bound helper for agent-opts-resolver temp file cleanup. */
-  cleanupAllTempFiles = () => cleanupAllFiles(this.activeTempFiles);
+  private readonly agentRegistry: AgentRegistryLike;
   /** Per-run AbortController for killing agent subprocesses on terminate/pause/abort. */
   private readonly runAbortControllers = new Map<string, AbortController>();
   private readonly pi: ExtensionAPI;
@@ -135,21 +129,26 @@ export class WorkflowOrchestrator {
     if (fs.existsSync(sessionScopedDir)) {
       this.sessionDir = sessionScopedDir;
     }
-    // AgentPool is created per-workflow-run in `run()`, not in constructor
-    this.agentRegistry = new AgentRegistry(process.cwd());
-    this.agentRegistry.discoverAll();
+    // Use subagents runtime's AgentRegistry if available, else a local fallback
+    const runtime = getRuntime();
+    this.agentRegistry = runtime
+      ? { resolve: (name) => runtime.agentRegistry.get(name) }
+      : { resolve: () => undefined };
   }
 
   // ── Public API ──────────────────────────────────────────────
 
   /** Return the number of discovered agents. */
   getAgentCount(): number {
-    return this.agentRegistry.list().length;
+    const rt = getRuntime();
+    return rt ? rt.agentRegistry.list().length : 0;
   }
 
   /** Return a summary of all discovered agents. */
   getAgents(): Array<{ name: string; source: string; model?: string }> {
-    return this.agentRegistry.list().map((a) => ({
+    const rt = getRuntime();
+    const list = rt ? rt.agentRegistry.list() : [];
+    return list.map((a) => ({
       name: a.name,
       source: a.source,
       model: a.model,
@@ -269,7 +268,6 @@ export class WorkflowOrchestrator {
         {
           postMessage: (id, msg) => this.postMessage(id, msg),
           terminateWorker: (id) => this.terminateWorker(id),
-          cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
           persistState: () => this.persistState(),
           onCompletion: (id) => this.onCompletion?.(id),
         },
@@ -301,7 +299,6 @@ export class WorkflowOrchestrator {
     this.terminateWorker(runId);
     // Cleanup in-flight temp files from agent calls that were killed mid-flight.
     // Without this, files written for --append-system-prompt leak to disk.
-    this.cleanupAllTempFiles();
     await this.persistState();
   }
 
@@ -342,8 +339,7 @@ export class WorkflowOrchestrator {
           {
             postMessage: (id, msg) => this.postMessage(id, msg),
             terminateWorker: (id) => this.terminateWorker(id),
-            cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
-            persistState: () => this.persistState(),
+              persistState: () => this.persistState(),
             onCompletion: (id) => this.onCompletion?.(id),
           },
         );
@@ -376,7 +372,6 @@ export class WorkflowOrchestrator {
     transitionStatus(instance, "aborted");
     this.events.emit(runId, { type: "status", status: "aborted" });
     this.terminateWorker(runId);
-    this.cleanupAllTempFiles();
     this.runPools.delete(runId);
     await this.persistState();
     this.onCompletion?.(runId);
@@ -495,8 +490,7 @@ export class WorkflowOrchestrator {
       transitionStatus(instance, "aborted");
       this.events.emit(runId, { type: "status", status: "aborted" });
       this.terminateWorker(runId);
-      this.cleanupAllTempFiles();
-    }
+      }
 
     // 2. Create new instance directly from cached scriptSource
     //    Bypass getWorkflow() + fs.readFileSync() since we already have the script.
@@ -522,7 +516,6 @@ export class WorkflowOrchestrator {
         {
           postMessage: (id, msg) => this.postMessage(id, msg),
           terminateWorker: (id) => this.terminateWorker(id),
-          cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
           persistState: () => this.persistState(),
           onCompletion: (id) => this.onCompletion?.(id),
         },
@@ -690,7 +683,6 @@ export class WorkflowOrchestrator {
       terminateWorker: (id) => this.terminateWorker(id),
       recreateRunAbortController: (id) => this.recreateRunAbortController(id),
       startWorker: (id, inst, src, args) => this.startWorker(id, inst, src, args),
-      cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
       persistState: () => this.persistState(),
       onCompletion: (id) => this.onCompletion?.(id),
       deleteRunPool: (id) => this.runPools.delete(id),
@@ -740,9 +732,9 @@ export class WorkflowOrchestrator {
     }
   }
 
-  /** Resolve agent name and schema to systemPromptFiles (delegates to agent-opts-resolver). */
+  /** Resolve agent name, skill, and schema to RunAgentOptions (delegates to agent-opts-resolver). */
   private resolveAgentOpts(opts: AgentCallOpts): { opts: AgentCallOpts; error?: string } {
-    return resolveOpts(opts, this.agentRegistry, this.sessionDir, this.activeTempFiles);
+    return resolveOpts(opts, this.agentRegistry);
   }
 
   /**
@@ -854,11 +846,6 @@ export class WorkflowOrchestrator {
         this.onTraceUpdate?.(runId);
 
         // Cleanup temp file on stale context early return
-        if (opts.systemPromptFiles) {
-          for (const fp of opts.systemPromptFiles) {
-            this.cleanupTempFile(fp);
-          }
-        }
         return;
       }
 
@@ -915,8 +902,7 @@ export class WorkflowOrchestrator {
       await checkBudget(this.instances.get(runId), runId, {
         postMessage: (id, msg) => this.postMessage(id, msg),
         terminateWorker: (id) => this.terminateWorker(id),
-        cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
-        persistState: () => this.persistState(),
+          persistState: () => this.persistState(),
         onCompletion: (id) => this.onCompletion?.(id),
       });
 
@@ -924,11 +910,6 @@ export class WorkflowOrchestrator {
       this.onTraceUpdate?.(runId);
 
       // Cleanup temp file if it was created for agent system prompt
-      if (opts.systemPromptFiles) {
-        for (const fp of opts.systemPromptFiles) {
-          this.cleanupTempFile(fp);
-        }
-      }
     });
   }
 

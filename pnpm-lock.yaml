@@ -274,6 +274,9 @@ importers:
       '@zhushanwen/pi-structured-output':
         specifier: '*'
         version: 0.2.1(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))(@sinclair/typebox@0.34.49)
+      '@zhushanwen/pi-subagents':
+        specifier: workspace:*
+        version: link:../subagents
     devDependencies:
       '@types/node':
         specifier: ^24.0.0

@@ -14,6 +14,11 @@
           "package": "@zhushanwen/pi-model-switch",
           "type": "optional",
           "reason": "有则按复杂度选模型，无则用默认模型"
+        },
+        {
+          "package": "@zhushanwen/pi-subagents",
+          "type": "package",
+          "reason": "进程内 agent 执行运行时（runAgent 替代 spawn 子进程）"
         }
       ]
     },

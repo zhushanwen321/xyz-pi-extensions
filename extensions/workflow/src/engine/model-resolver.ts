@@ -1,48 +1,33 @@
 /**
- * Model resolver — pure function for workflow model resolution.
+ * Model resolver — resolves target model for workflow agent calls.
  *
- * Priority: explicit model param > scene advisor > undefined (Pi default).
- * Extracted from Orchestrator for testability.
+ * 改造前：异步 dynamic import @zhushanwen/pi-model-switch 的 resolveModelForScene。
+ * 改造后：调用 @zhushanwen/pi-subagents 的 resolveModelForScene()（通过 getRuntime()）。
  *
- * @zhushanwen/pi-model-switch is an optional peer dependency.
- * When unavailable, scene-based resolution is silently skipped.
+ * scene 名直接作为 agent 名传入 subagents 5 级配置链解析。
  */
 
-import type { AgentCallOpts } from "../infra/agent-pool";
-
-/** Lazy-loaded reference to resolveModelForScene from pi-model-switch (optional). */
-let _resolveModelForScene: ((scene: string) => string | undefined) | null | undefined = undefined;
-
-async function loadSceneResolver(): Promise<typeof _resolveModelForScene> {
-	if (_resolveModelForScene !== undefined) return _resolveModelForScene;
-	try {
-		const mod = await import("@zhushanwen/pi-model-switch");
-		_resolveModelForScene = typeof mod.resolveModelForScene === "function" ? mod.resolveModelForScene : null;
-	} catch {
-		// @zhushanwen/pi-model-switch is an optional peer — silent fallback
-		_resolveModelForScene = null;
-	}
-	return _resolveModelForScene;
-}
+import type { AgentCallOpts } from "../infra/agent-pool.js";
+import { getRuntime } from "@zhushanwen/pi-subagents";
 
 /**
- * 根据调用选项解析目标模型。
- * 优先级：显式 model > scene advisor > undefined（Pi 默认）
- *
- * 注意：scene 解析是异步的（dynamic import），首次调用可能有微秒延迟。
+ * 解析目标模型。
+ * 优先级：显式 opts.model > subagents resolveModelForScene(scene) > undefined
  */
 export async function resolveModel(opts: AgentCallOpts): Promise<string | undefined> {
-	if (opts.model) return opts.model;
-	if (opts.scene) {
-		const resolver = await loadSceneResolver();
-		if (!resolver) return undefined;
-		try {
-			const resolved = resolver(opts.scene);
-			return resolved ?? undefined;
-		} catch {
-			// Scene resolution failed — return undefined and let the caller fall back
-			return undefined;
-		}
-	}
-	return undefined;
+  if (opts.model) return opts.model;
+
+  if (opts.scene) {
+    const runtime = getRuntime();
+    if (!runtime) return undefined;
+
+    try {
+      const resolved = runtime.resolveModelForScene(opts.scene);
+      return resolved;
+    } catch {
+      return undefined;
+    }
+  }
+
+  return undefined;
 }

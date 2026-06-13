@@ -5,7 +5,7 @@ const BUDGET_WARNING_THRESHOLD = 0.9;
 export interface BudgetCallbacks {
   postMessage(runId: string, msg: unknown): void;
   terminateWorker(runId: string): void;
-  cleanupAllTempFiles(): void;
+  cleanupAllTempFiles?(): void;
   persistState(): Promise<void>;
   onCompletion?(runId: string): void;
 }
@@ -48,7 +48,7 @@ export async function checkBudget(
     callbacks.postMessage(runId, { type: "budget-warning", budget: b, reason });
     callbacks.terminateWorker(runId);
     // Cleanup in-flight agent temp files that were killed mid-flight.
-    callbacks.cleanupAllTempFiles();
+    callbacks.cleanupAllTempFiles?.();
 
     instance.error = reason;
     instance.completedAt = new Date().toISOString();
@@ -82,7 +82,7 @@ export function scheduleTimeBudgetCheck(
       });
       callbacks.terminateWorker(runId);
       // Cleanup in-flight agent temp files that were killed mid-flight.
-      callbacks.cleanupAllTempFiles();
+      callbacks.cleanupAllTempFiles?.();
 
       instance.error = `Time budget exceeded: ${elapsed}ms >= ${maxTimeMs}ms`;
       instance.completedAt = new Date().toISOString();

@@ -230,18 +230,6 @@ describe("WorkflowOrchestrator", () => {
       expect(updated.pausedAt).toBeDefined();
     });
 
-    it("cleans up active temp files (no leak from in-flight agent calls)", async () => {
-      const inst = makeInstance("wf-pause-cleanup", "running");
-      orch.restoreInstances(makeInstanceMap(inst));
-
-      // Spy on cleanupAllTempFiles to verify it's called during pause.
-      // Regression guard: prior versions only cleaned up on abort, leaking
-      // temp files from agent calls killed by the worker terminate.
-      const cleanupSpy = vi.spyOn(orch, "cleanupAllTempFiles");
-      await orch.pause("wf-pause-cleanup");
-      expect(cleanupSpy).toHaveBeenCalledTimes(1);
-      cleanupSpy.mockRestore();
-    });
 
     it("throws when workflow is already paused", async () => {
       const inst = makeInstance("wf-pause-twice", "paused");

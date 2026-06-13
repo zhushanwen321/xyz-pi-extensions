@@ -1,7 +1,7 @@
 {
   "name": "@zhushanwen/pi-workflow",
   "version": "1.1.1",
-  "description": "Multi-agent workflow orchestration for Pi — stateful workflow management with persistence, state machine, and execution tracing.",
+  "description": "Multi-agent workflow orchestration for Pi \u2014 stateful workflow management with persistence, state machine, and execution tracing.",
   "type": "module",
   "main": "index.ts",
   "pi": {
@@ -25,7 +25,9 @@
     "index.ts",
     "skills/"
   ],
-  "dependencies": {},
+  "dependencies": {
+    "@zhushanwen/pi-subagents": "workspace:*"
+  },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*",
