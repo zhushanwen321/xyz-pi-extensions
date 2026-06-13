@@ -42,20 +42,92 @@ Pi SDK 提供了 `createAgentSession()` API，可在当前进程内创建独立 
 
 ### FR-3: Agent 配置合并（L2）
 
-**FR-3.1** 3 级配置优先级（后者覆盖前者）——v1 简化版：
-1. agent 定义文件的默认值（frontmatter）
-2. 调用时参数覆盖（`model`、`tools`、`maxTurns` 等）
-3. 环境变量覆盖（`SUBAGENT_MODEL`，仅作为 fallback）
+**FR-3.1** 5 级配置优先级（后者覆盖前者）：
+1. agent 定义文件的默认值（frontmatter 中的 model 字段）
+2. 全局配置文件 category 默认（`config.json` 中该 category 的 model/thinkingLevel）
+3. 会话级 per-category 状态（本会话中用户为某类别指定的）
+4. 会话级 per-agent 状态（本会话中用户为特定 agent 指定的）
+5. 调用时参数覆盖（tool call params 中的 model/thinkingLevel）
 
-> v2 考虑加入 `invocation-config` 配置文件和 `--force-*` 参数，借鉴 tintinweb 的 5 级体系
+环境变量 `SUBAGENT_MODEL` 作为最终 fallback（无任何匹配时）。
 
 **FR-3.2** System prompt 构建策略：`replace`（agent 的 systemPrompt 替换默认）、`append`（追加到默认）、`none`（不注入）。
 
 ### FR-4: 模型解析（L2）
 
-**FR-4.1** `resolveModel()` 从 complexity 等级（low/medium/high）映射到具体模型，读取 `~/.pi/agent/subagent-models.json` 配置。
+**FR-4.1** `resolveModelForAgent()` 按 FR-3 的 5 级优先级链解析模型。每级解析结果通过 `modelRegistry.find(provider, modelId)` 验证可用性，不可用时降级到下一级。
 
 **FR-4.2** 支持 model fallback：首选模型不可用时，按 `modelCandidates` 列表依次尝试。fallback 触发条件：模型在 `ModelRegistry` 中不存在（未配置 provider）。API 运行时错误（rate limit、quota exceeded）不触发 fallback，直接报错。
+
+**FR-4.3** Thinking level 从选定 model 的 `thinkingLevelMap` 字段提取支持的级别。值为 null 的级别排除。model 不支持 reasoning（`model.reasoning === false`）时不注入 thinking level。
+
+### FR-4.5: Category 系统
+
+**FR-4.5.1** 6 个默认 category：`coding`（编码/修复/重构）、`research`（调研/搜索）、`testing`（测试）、`vision`（图像分析）、`planning`（规划/架构）、`general`（通用 fallback）。
+
+**FR-4.5.2** 用户可在 config.json 的 `categories` 字段中新增自定义 category（key=名称，value=label+model+thinkingLevel）。
+
+**FR-4.5.3** `inferCategory(agentName, agentConfig, overrides)` 推断 agent 类别：优先使用 `agentConfig.category`，其次查 `config.agentCategoryOverrides`，最后按名称约定正则推断。
+
+### FR-4.6: 全局配置
+
+**FR-4.6.1** 配置文件路径：`~/.pi/agent/extensions/subagents/config.json`。
+
+**FR-4.6.2** 配置结构：
+```json
+{
+  "version": 1,
+  "yoloByDefault": false,
+  "maxConcurrent": 4,
+  "categories": {
+    "coding": { "label": "编码", "model": "anthropic/claude-sonnet-4", "thinkingLevel": "medium" },
+    "...": "..."
+  },
+  "agentCategoryOverrides": { "worker": "coding", "reviewer": "coding" },
+  "fallback": { "model": "openai/gpt-4.1-mini", "thinkingLevel": "low" }
+}
+```
+
+**FR-4.6.3** `loadGlobalConfig()` 加载配置，缺失字段用默认值填充。文件不存在时返回全默认配置。
+
+**FR-4.6.4** `saveGlobalConfig()` 写入配置，通过文件锁保证并发安全。
+
+### FR-4.7: 会话模型状态
+
+**FR-4.7.1** `SessionModelState` 在工厂闭包内维护，通过 `pi.appendEntry("subagent-model-state", ...)` 持久化到 session，在 `session_start` 时从 entries 恢复。
+
+**FR-4.7.2** 数据结构：
+```typescript
+interface SessionModelState {
+  yoloMode: boolean;
+  perAgent: Map<string, { model: string; thinkingLevel?: string }>;
+  perCategory: Map<string, { model: string; thinkingLevel?: string }>;
+}
+```
+
+**FR-4.7.3** 向后兼容反序列化：字段缺失时用默认值。
+
+### FR-4.8: `/subagents` 命令
+
+**FR-4.8.1** `/subagents config` 命令通过 `ctx.ui.select()` 实现级联交互式配置。
+
+**FR-4.8.2** 交互流程：
+1. 选择操作（Edit category model / Add custom category / Remove custom category / Toggle YOLO / Override agent category / Show current config）
+2. 选择 category → 选择 provider → 选择 model → 选择 thinking level
+3. provider 列表从 `modelRegistry.getAvailable()` 提取去重
+4. model 列表过滤为选中 provider 下的 models
+5. thinking level 列表从 `model.thinkingLevelMap` 提取（排除 null 值和 model.reasoning === false 的情况）
+6. 保存到 config.json
+
+**FR-4.8.3** 新增自定义 category：通过 `ctx.ui.input()` 输入名称，然后进入 provider/model/thinking 级联选择。
+
+### FR-4.9: YOLO 模式
+
+**FR-4.9.1** YOLO 模式下，`resolveModelForAgent()` 在无任何用户指定时自动按全局配置选择，不阻塞执行。
+
+**FR-4.9.2** YOLO 状态按会话存储（`sessionModelState.yoloMode`），也受 `config.yoloByDefault` 影响。
+
+**FR-4.9.3** 通过 `/subagents config` → Toggle YOLO 切换，或 `config.json` 中 `yoloByDefault: true`。
 
 ### FR-5: 父对话 Fork（L2）
 
@@ -136,11 +208,12 @@ Pi SDK 提供了 `createAgentSession()` API，可在当前进程内创建独立 
 - `BuiltinAgentRegistry` — 注册自定义 builtin agent
 
 **FR-11.3** 工具函数：
-- `resolveModel(complexity: string, candidates?: string[]): Promise<string>` — 模型解析
+- `resolveModelForAgent(agentName, config, sessionState, modelRegistry): ResolvedModel` — 完整的 5 级模型解析
+- `inferCategory(agentName, agentConfig, overrides): string` — 类别推断
 - `forkContext(parentSession: SessionManager): ForkResult` — 父对话 fork
 - `filterTools(config: ToolFilterConfig, allTools: ToolInfo[]): ToolInfo[]` — Tool 过滤
 
-**FR-11.4** 类型（全部 export）：`RunAgentOptions`, `AgentResult`, `ManagedSession`, `AgentConfig`, `AgentEvent`, `AgentEventType`, `ModelResolution`, `ToolFilterConfig` 等。
+**FR-11.4** 类型（全部 export）：`RunAgentOptions`, `AgentResult`, `ManagedSession`, `AgentConfig`, `AgentEvent`, `AgentEventType`, `ModelResolution`, `ToolFilterConfig`, `CategoryDefinition`, `SessionModelState`, `SubagentsGlobalConfig`, `ResolvedModel` 等。
 
 **FR-11.5** Runtime 引用获取：`getRuntime(): SubagentRuntime | undefined` — 返回当前进程内的单例，第三方扩展通过 `import { getRuntime } from "@zhushanwen/pi-subagents"` 获取。
 
@@ -156,6 +229,7 @@ extensions/subagents/
 │   ├── index.ts              # Pi extension 工厂函数
 │   ├── types.ts              # 所有类型 + TypeBox schema + 常量
 │   ├── runtime.ts            # SubagentRuntime 单例（组合所有能力）
+│   ├── category.ts           # Category 定义 + inferCategory()
 │   │
 │   ├── api/                  # 公开 API 层（统一 re-export）
 │   │   └── index.ts          # package 的 public surface
@@ -176,10 +250,26 @@ extensions/subagents/
 │   │   └── builtin-agents.ts  # 内置 agent 定义
 │   │
 │   ├── resolution/           # L2: 配置合并 + 模型解析 + Tool 过滤
-│   │   ├── config-merger.ts   # 3 级配置优先级合并
-│   │   ├── model-resolver.ts  # resolveModel()
+│   │   ├── config-merger.ts   # 5 级配置优先级合并
+│   │   ├── model-resolver.ts  # resolveModelForAgent()
 │   │   ├── tool-filter.ts     # 三层 tool 过滤
 │   │   └── fork-context.ts    # forkContext()
+│   │
+│   ├── config/               # L2: 全局配置管理
+│   │   ├── global-config.ts   # loadGlobalConfig() / saveGlobalConfig()
+│   │   └── config-path.ts     # 路径常量
+│   │
+│   ├── state/                # L2: 会话状态管理
+│   │   └── session-model-state.ts # SessionModelState 持久化/恢复
+│   │
+│   ├── tui/                  # TUI 渲染
+│   │   ├── render-call.ts     # renderCall 渲染（tool 调用预览）
+│   │   ├── render-result.ts   # renderResult 渲染（折叠/展开态）
+│   │   ├── format.ts          # 纯格式化函数（可测试）
+│   │   └── config-wizard.ts   # /subagents config 级联选择
+│   │
+│   ├── commands/             # 命令注册
+│   │   └── config.ts          # /subagents config 命令
 │   │
 │   └── __tests__/
 │       ├── run-agent.test.ts
@@ -187,7 +277,9 @@ extensions/subagents/
 │       ├── agent-registry.test.ts
 │       ├── config-merger.test.ts
 │       ├── model-resolver.test.ts
-│       └── tool-filter.test.ts
+│       ├── tool-filter.test.ts
+│       ├── category.test.ts
+│       └── format.test.ts
 ├── vitest.config.ts
 └── README.md
 ```
@@ -322,6 +414,6 @@ subagents 对 workflow 是 `dependencies`（非 peerDep），因 workflow 编译
 
 ## Complexity Assessment
 
-- **subagents（L1+L2）**: 高。涉及 Pi SDK 的 `createAgentSession` 深度集成、agent 发现的文件系统扫描、配置合并的 3 级优先级、tool 过滤的 3 层机制。估计 1900 行
+- **subagents（L1+L2）**: 高。涉及 Pi SDK 的 `createAgentSession` 深度集成、agent 发现的文件系统扫描、5 级配置优先级合并、category 系统、级联式模型选择 TUI、renderCall/renderResult、会话状态持久化。估计 2800-3000 行
 - **workflow 改造（L3B）**: 中。主要是 `agent-pool.ts` 重写 + 删除 4 个文件 + 接口适配。核心改动集中，风险可控
 - **包管理**: 低。更新 `extension-dependencies.json`、`CLAUDE.md`、`package.json`
