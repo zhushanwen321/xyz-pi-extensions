@@ -10,7 +10,7 @@ description: >-
 |------|---|
 | 所在阶段 | Phase 2 (plan) |
 | 执行者 | 主 agent（规划 + 编排） |
-| 上游 | xyz-harness-brainstorming（产出 spec.md） |
+| 上游 | xyz-harness-spec-clarify（产出 spec.md） |
 | 下游（完成后进入） | Phase 3 (dev) — 加载 phase-dev skill |
 | 回退目标 | 如评审不通过 → 回退到 Phase 2 修改 plan |
 
@@ -91,7 +91,7 @@ verdict: pass
 
 ## Scope Check
 
-If the spec covers multiple independent subsystems, it should have been broken into sub-project specs during brainstorming. If it wasn't, suggest breaking this into separate plans — one per subsystem. Each plan should produce working, testable software on its own.
+If the spec covers multiple independent subsystems, it should have been broken into sub-project specs during Phase 1 clarification. If it wasn't, suggest breaking this into separate plans — one per subsystem. Each plan should produce working, testable software on its own.
 
 ## Complexity Assessment (L1/L2)
 

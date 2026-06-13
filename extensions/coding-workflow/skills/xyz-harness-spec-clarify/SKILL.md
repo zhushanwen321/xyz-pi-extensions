@@ -105,7 +105,7 @@ Every project goes through this process. "Simple" projects are where unexamined 
 | Step 1-2（主 agent 交互） | 本 SKILL.md |
 | Step 3（派 subagent 追踪） | subagent-tracing.md + scenario-tracing.md（注入 subagent task prompt） |
 | Step 4（gap 分流） | gap-management.md |
-| Step 5（派 subagent 复核） | subagent-tracing.md（注入 subagent task prompt） |
+| Step 5（派 subagent 复核） | subagent-tracing.md + scenario-tracing.md（注入 subagent task prompt） |
 | clarification.md 格式 | clarification.md |
 
 ## Step 1: Quick Overview
@@ -234,6 +234,8 @@ Announce at start: "I'm using the spec-clarify skill to clarify requirements and
 
 ### Task prompt 模板
 
+**Dispatch 参数：** 调用 subagent 工具时显式传 `context: "fresh"`（不要依赖默认值——若 general-purpose agent 配置了 `defaultContext: "fork"`，默认会继承对话历史，破坏隔离）。
+
 ```
 你是独立需求追踪 subagent。你的上下文与主 agent 隔离——你不知道主 agent 和用户聊了什么，只根据以下材料独立追踪：
 
@@ -283,9 +285,21 @@ F 是客观事实（代码里有但初稿没提到的信息），subagent 可能
 
 ## Step 5: 收敛复核
 
-gap 处理完后，**再派一次独立 subagent** 重新追踪（同 Step 3 配置，fresh context）。
+gap 处理完后，**再派一次独立 subagent** 重新追踪（同 Step 3 配置，fresh context）。同样显式传 `context: "fresh"`。
 
 主 agent 对自己构建的理解有确认偏误。独立 subagent 不知道上轮查过什么，从零审视，反而能发现主 agent 的盲区。
+
+### Task prompt 差异（区分初始追踪 vs 收敛复核）
+
+隔离上下文的 subagent 无法从 task prompt 判断自己是第 1 次 dispatch（初始追踪）还是第 N 次（收敛复核）。Step 5 必须在 Step 3 task prompt 末尾追加以下指令：
+
+```
+本轮是收敛复核（Round {N}）。除了按 5 视角追踪外，还要执行收敛判定：
+如果追踪无新 gap，在 tracing-round-{N}.md 顶部标注 `CONVERGED` 并列出已追踪的视角。
+详见 subagent-tracing.md 的"收敛判定"章节。
+```
+
+**为什么必须区分：** 如果不区分，subagent 收敛复核时可能只返回 gap 列表而不做 CONVERGED 判定，主 agent 无法区分"这是收敛复核结果（无新 gap = 收敛）"还是"又一轮追踪结果（仍需继续）"。
 
 ### 收敛判定
 
