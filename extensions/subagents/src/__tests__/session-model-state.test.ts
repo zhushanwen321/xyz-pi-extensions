@@ -1,0 +1,42 @@
+// src/__tests__/session-model-state.test.ts
+import { describe, it, expect } from "vitest";
+import { createSessionModelState, setAgentModel, setCategoryModel, serializeState, restoreState } from "../state/session-model-state.ts";
+
+describe("SessionModelState", () => {
+  it("creates with defaults", () => {
+    const state = createSessionModelState(false);
+    expect(state.yoloMode).toBe(false);
+    expect(state.perAgent).toEqual({});
+    expect(state.perCategory).toEqual({});
+  });
+
+  it("setAgentModel stores per-agent override", () => {
+    const state = createSessionModelState(false);
+    setAgentModel(state, "worker", "deepseek-router/ds-flash", "high");
+    expect(state.perAgent.worker).toEqual({ model: "deepseek-router/ds-flash", thinkingLevel: "high" });
+  });
+
+  it("setCategoryModel stores per-category override", () => {
+    const state = createSessionModelState(false);
+    setCategoryModel(state, "coding", "mimo-router/mimo-v2.5", "medium");
+    expect(state.perCategory.coding).toEqual({ model: "mimo-router/mimo-v2.5", thinkingLevel: "medium" });
+  });
+
+  it("serialize/restore round-trips correctly", () => {
+    const state = createSessionModelState(true);
+    setAgentModel(state, "worker", "m/m");
+    setCategoryModel(state, "coding", "c/c", "low");
+    const serialized = serializeState(state);
+    expect(typeof serialized).toBe("string");
+    const restored = restoreState(JSON.parse(serialized), false);
+    expect(restored.yoloMode).toBe(true);
+    expect(restored.perAgent.worker.model).toBe("m/m");
+    expect(restored.perCategory.coding.model).toBe("c/c");
+  });
+
+  it("restore handles missing fields with defaults", () => {
+    const restored = restoreState({}, false);
+    expect(restored.yoloMode).toBe(false);
+    expect(restored.perAgent).toEqual({});
+  });
+});
