@@ -19,16 +19,9 @@
 1. 降级理由（为什么本需求不适用该视角）
 2. 依据（哪个 Quick Overview 发现或用户确认支撑这个判断）
 
-降级理由写入 clarification.md 的 Scenarios 章节。gate 的 gap-analysis 维度不只"知道"降级，还会**校验降级理由是否成立**——如果 subagent 认为降级理由不充分（例如「重构类需求」却涉及数据模型变更却降级了 Data Lifecycle），会返回 NEEDS_CLARIFICATION 要求追踪该视角。
+降级理由写入 `tracing-round-{N}.md`。主 agent 和后续追踪 subagent 会校验降级理由是否成立——如果理由不充分（例如「重构类需求」却涉及数据模型变更却降级了 Data Lifecycle），会要求追踪该视角。
 
 目的：防止 AI 以"不适用"为由跳过追踪，这会违背「5 视角是 forcing function」的核心原则。降级是透明的取舍，不是逃避追踪的借口。
-
-### Deferred 项的处理
-
-Decomposition Map 中标记 `[DEFERRED-EXT]` 的方面：
-- **浅追踪**：记录该方面的存在性 + 扩展点要求，不深入枚举所有分支
-- 例如"支付方式支持"标为 Defer-Ext → 追踪时只记录"需策略接口支持多支付方式，v1 实现一种"，不枚举所有支付方式的完整流程
-- 目的：确保 plan 阶段知道要设计扩展点，但不阻塞当前收敛
 
 ### 通用追踪规则
 
@@ -36,7 +29,7 @@ Decomposition Map 中标记 `[DEFERRED-EXT]` 的方面：
 - 追踪卡住 = 遇到你**不知道**的信息 = gap
 - 每个分支（if/else、成功/失败、边界值）必须单独追踪
 - 已在前面视角追踪过的路径，新视角发现新分支的仍需追踪
-- **YAGNI：只追踪当前需求涉及的路径，不探索无关场景。** P2 gap 可以 defer
+- **YAGNI：只追踪当前需求涉及的路径，不探索无关场景。**
 
 ## Perspective 1: User Journey（用户视角）
 
