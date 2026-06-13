@@ -366,7 +366,7 @@ interface ReviewLoopOutput {
 
 | 维度 ID | 名称 | 审查重点 | mayNeedUser |
 |---------|------|---------|-------------|
-| gap-analysis | 遗漏检查 | clarification.md 模型完整性 + 5 视角场景覆盖 | true |
+| gap-analysis | 遗漏检查 | clarification.md 模型完整性 + 5 视角场景覆盖（**含校验降级视角的理由是否成立**） | true |
 | authenticity | 反欺诈 | 引用的文件/函数是否存在、测试结果是否真实 | false |
 | completeness | 完整性 | 六要素覆盖、AC 可量化、无 [AMBIGUOUS] | false |
 | consistency | 一致性 | 内部引用一致、术语与 CONTEXT.md 对齐 | false |

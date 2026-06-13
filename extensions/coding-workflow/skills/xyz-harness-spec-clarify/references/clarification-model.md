@@ -23,7 +23,7 @@
 
 ## Meta
 - Round: {N} | Model Version: {V} | Open Gaps: {N} | Resolved: {N}
-- Complexity: {L0/L1/L2}
+- Complexity: {L0/L1/L2} — 评估 reasoning: {...}
 - Stagnation Count: {0-3}
 
 ## Requirement
@@ -31,6 +31,9 @@
 
 ## Selected Approach
 {选定的方案} — {推理过程}
+
+## Decomposition Map
+{Round 1 产出的需求/技术拆解图，含清晰度和优先级标注。格式见 `references/requirement-decomposition.md`}
 
 ## Entities
 | ID | Name | Key Fields | Relationships | Source |
@@ -58,6 +61,13 @@
 |----|------|-------------|----------|--------|
 | C01 | perf/security/compat/... | ... | P0/P1/P2 | code/user |
 
+## Deferred Items
+{Defer-Ext 项：标记 `[DEFERRED-EXT]`，记录扩展点设计要求，留给 plan 阶段}
+
+| Aspect | Sub-type | What's Deferred | Extension Point Required |
+|--------|----------|-----------------|--------------------------|
+| ... | ... | ... | ... |
+
 ## Scenarios
 {5 个视角的场景追踪输出，格式见 scenario-tracing.md}
 
@@ -72,7 +82,9 @@
 
 ## 模型构建与更新
 
-**首次构建（Round 2）：**
+**Round 1 骨架：** 创建 clarification.md，写入 Requirement、Selected Approach、Decomposition Map（由 `requirement-decomposition.md` 的 Step 2 产出）。
+
+**首次构建五维度（Round 2）：**
 1. 从代码中提取事实（Facts）：现有实体、接口、状态、枚举值
 2. 从 Round 1 讨论中提取知识（Knowledge）：用户描述的行为、约束
 3. 填入五个维度，每个事实标注来源
@@ -82,4 +94,10 @@
 - 新发现的实体/操作追加到模型
 - 被推翻的假设标记并修正，`assumption` 验证后改为 `code` 或标 `[UNVERIFIED]`
 
-模型版本号（Model Version）每完成一轮更新 +1。收敛循环依赖版本号判断迭代轮次，详见 `convergence-loop.md`。
+模型版本号（Model Version）的递增规则：
+
+- **Round 1 结束创建骨架**：`model_version = 1`（骨架包含 Requirement、Selected Approach、Decomposition Map，五维度还是空的）
+- **每次完成一轮 Step 6-10 完整循环（外层循环）**：`model_version += 1`
+- **内层循环（Step 8↔9 单轮内解决 gap）不递增 version**——只有更新模型维度（Step 6）才算新一轮
+
+收敛条件要求 `model_version ≥ 2`，意味着至少经过一轮 Step 6-10 的完整迭代，不能只用 Round 1 骨架直接声称收敛。

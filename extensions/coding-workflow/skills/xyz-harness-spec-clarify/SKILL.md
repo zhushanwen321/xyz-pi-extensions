@@ -37,17 +37,21 @@ description: >-
 ```
 Round 1: Foundation（一轮）
   └ read references/foundation-round.md
-      Step 1-3: Quick Overview → Clarifying Questions → Approach Selection
+      Step 1: Quick Overview
+      Step 2: complexity-assess（评估 L0/L1/L2，决定后续流程层级）
+      Step 3: Requirement Decomposition（按复杂度结果拆解）
+      Step 4: Clarifying Questions（按 Map 分层提问）
+      Step 5: Approach Selection
 
 Round 2+: Convergence Loop（多轮迭代）
   └ read references/convergence-loop.md（主循环流程）
-      ├ Step 4: Build/Update Model   → references/clarification-model.md
-      ├ Step 5: 5-Perspective Tracing → references/scenario-tracing.md
-      ├ Step 6-7: Gap 管理           → references/gap-management.md
-      └ Step 8: Convergence Check     → 收敛则退出，否则回 Step 4
+      ├ Step 6: Build/Update Model   → references/clarification-model.md
+      ├ Step 7: 5-Perspective Tracing → references/scenario-tracing.md
+      ├ Step 8-9: Gap 管理           → references/gap-management.md
+      └ Step 10: Convergence Check     → 收敛则退出，否则回 Step 6
 
 Exit: Spec Generation
-  └ references/convergence-loop.md 的 Step 9 → 调用 coding-workflow-gate(phase=1)
+  └ references/convergence-loop.md 的 Step 11 → 调用 coding-workflow-gate(phase=1)
 ```
 
 ## 路由表
@@ -57,6 +61,8 @@ Exit: Spec Generation
 | 当前阶段 / 要做的事 | read |
 |---|---|
 | Phase 1 刚启动，做 Round 1 基础 | `references/foundation-round.md` |
+| 评估复杂度（complexity-assess） | `references/foundation-round.md` → Step 2 |
+| 做需求拆解（两大方向 + 优先级标注） | `references/requirement-decomposition.md` |
 | 进入 Round 2+ 收敛循环 | `references/convergence-loop.md` |
 | 做 5 视角场景追踪 | `references/scenario-tracing.md` |
 | 构建 / 更新 `clarification.md` 模型 | `references/clarification-model.md` |

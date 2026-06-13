@@ -2,6 +2,22 @@
 
 Gap 是收敛循环的燃料。追踪卡住的地方就是遗漏。每个 gap 都是避免后续返工的机会——宁可多发现 10 个不必要的，也不要漏掉 1 个关键的。
 
+## Gap Tracker 与 Decomposition Map 的关系
+
+两者是互补的跟踪机制，不重复：
+
+| | Decomposition Map | Gap Tracker |
+|---|---|---|
+| **角色** | 需求的静态拆解（有哪些方面） | 追踪中动态发现的遗漏 |
+| **时机** | Round 1 Step 3 产出 | Round 2+ 追踪时发现 |
+| **内容** | 方面 + 清晰度 + 优先级 | 具体 gap + 类型 + 状态 |
+
+**流转规则：**
+- Decomposition Map 的 `unclear`/`unknown` 方面是 Gap Tracker 的种子——追踪时这些方面产生具体 gap
+- Map 标注的 Defer-Ext 项产生的 gap 自动标 P2（不阻塞收敛）
+- 追踪中发现 Map 未覆盖的新方面 → 追加到 Map（标注 clarity）+ 对应 gap 进 Tracker
+- Map 的 Must-Now 项全部变 clear + Tracker 无 P0/P1 open gap = 收敛条件
+
 ## Gap 分类
 
 | 类型 | 含义 | 来源 | 解决方式 |
@@ -34,7 +50,7 @@ P2 gap 可以 defer，不阻塞收敛。
 | G-003 | F | P0 | P2/E01 | Order.status 的完整枚举值？ | open | — |
 ```
 
-## Gap 解决（Step 7）
+## Gap 解决（Step 9）
 
 按优先级从高到低解决：
 
@@ -50,7 +66,7 @@ P2 gap 可以 defer，不阻塞收敛。
 1. 更新模型对应维度
 2. 更新 Gap Tracker（status → resolved）
 3. 检查是否有新 gap 被触发（用户回答可能引入新问题）
-4. 如果有新 gap → 记录并继续解决
+4. 如果有新 gap → **在当前轮内继续解决**（回到第 1 步，不走新一轮的 Step 6/7）。详见 `convergence-loop.md` 的两层循环结构说明
 
 ## 追踪时的"卡住信号"
 
