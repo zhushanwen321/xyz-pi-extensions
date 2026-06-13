@@ -70,10 +70,10 @@ interface ReviewDimension {
 const PHASE_CONFIGS: PhaseConfig[] = [
   {
     phase: 1, name: "Spec",
-    skillName: "xyz-harness-brainstorming",
+    skillName: "xyz-harness-spec-clarify",
     reviewPrefix: "spec_review",
     retrospectPrefix: "spec_retrospect",
-    deliverables: ["spec.md"],
+    deliverables: ["spec.md", "clarification.md"],
     reviewMode: "Mode 1: Plan review (verify spec completeness)",
     pipeline: [
       { operation: "gate-check", args: { scope: "deliverables" } },
@@ -82,6 +82,12 @@ const PHASE_CONFIGS: PhaseConfig[] = [
       { operation: "retrospect", on_fail: "warn_continue" },
     ],
     dimensions: [
+      {
+        id: "gap-analysis", name: "遗漏检查", reviewPrefix: "gap_analysis_review",
+        systemPrompt: "你是遗漏分析专家。读 clarification.md 和源代码，做 5 视角场景追踪（User Journey / Data Lifecycle / API Contract / State Machine / Failure Path），找出主 agent 可能遗漏的 gap。",
+        focusPrompt: "检查 clarification.md 中的模型是否完整，5 视角场景是否有未覆盖的路径，Gap Tracker 中是否有应发现但未发现的 gap",
+        threshold: { mustFix: 0 }, mayNeedUser: true,
+      },
       {
         id: "authenticity", name: "真实性", reviewPrefix: "authenticity_review",
         systemPrompt: "你是产出物真实性审查专家。验证文件中引用的函数/接口/文件是否存在。",
@@ -368,7 +374,7 @@ manifest.children = [
 - 检测到循环依赖时抛出错误（含环路径描述）
 
 **为什么 spec-clarify 不用 WaveScheduler**：
-见 spec-clarify-phase spec D-SC8 — 人机交互的 brainstorming 无法并行，共享交互线程（用户），信息隐性依赖，compact 时机要求。
+见 spec-clarify-phase spec D-SC8 — 人机交互的收敛循环无法并行，共享交互线程（用户），信息隐性依赖，compact 时机要求。
 
 ---
 
@@ -887,11 +893,11 @@ gate tool handler 中的状态验证（isActive、phase token、前序 phase 通
 
 ### UC-OR1: L0 完整 5-phase 流程
 
-用户 `/coding-workflow "修复按钮样式"` → init(L0) → skill-inject → brainstorming → gate → pipeline(Spec) 通过 → phase-transition → ... → Phase 5 通过 → 完成。
+用户 `/coding-workflow "修复按钮样式"` → init(L0) → skill-inject(spec-clarify) → Round 1 提问+方案 → Round 2+ 收敛循环 → gate → pipeline(Spec) 通过 → phase-transition → ... → Phase 5 通过 → 完成。
 
 ### UC-OR2: L1 带 decompose 的流程
 
-用户 `/coding-workflow "添加插件热加载"` → init → skill-inject → Quick Overview → complexity-assess = L1 → decompose → 3 个子系统 → 按 derive_order 逐个 brainstorming + pipeline → 全部通过 → 系统级回顾 → phase-transition。
+用户 `/coding-workflow "添加插件热加载"` → init → skill-inject(spec-clarify) → Quick Overview → complexity-assess = L1 → decompose → 3 个子系统 → 按 derive_order 逐个收敛循环 + pipeline → 全部通过 → 系统级回顾 → phase-transition。
 
 ### UC-OR3: 调试 gate-check
 

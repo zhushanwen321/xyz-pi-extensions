@@ -101,7 +101,7 @@ interface WorkflowState {
 const PHASE_CONFIGS: PhaseConfig[] = [
   {
     phase: 1, name: "Spec",
-    skillName: "xyz-harness-brainstorming",
+    skillName: "xyz-harness-spec-clarify",
     pipeline: SPEC_AUTOMATED_PIPELINE,   // 仅自动化阶段
     // ...
   },
@@ -109,10 +109,10 @@ const PHASE_CONFIGS: PhaseConfig[] = [
 ];
 
 // 注意：pipeline 只描述自动化阶段（gate + review + retrospect + transition）
-// 交互阶段（brainstorming 10 步）不在 pipeline 中
+// 交互阶段（收敛循环：模型构建 → 场景追踪 → gap 发现 → gap 解决）不在 pipeline 中
 const SPEC_L0_PIPELINE: StepConfig[] = [
   { operation: "gate-check", args: { scope: "deliverables" } },
-  { operation: "review-loop" },    // 多维度：authenticity + completeness + consistency + sufficiency
+  { operation: "review-loop" },    // 多维度：gap-analysis + authenticity + completeness + consistency + sufficiency
   { operation: "gate-check", args: { scope: "reviews" } },
   { operation: "retrospect", on_fail: "warn_continue" },
 ];
