@@ -1,0 +1,258 @@
+// src/types.ts
+//
+// 注意：不从 @mariozechner/pi-coding-agent re-export Model/Usage/ThinkingLevel。
+// vitest mock stub（shared/types/mariozechner/index.d.ts）未导出这些类型，
+// re-export 会导致 "Module has no exported member" 编译错误。
+// 改为自定义最小结构（duck-typed），与 SDK 运行时对象兼容。
+
+/**
+ * 子 agent 不应继承的编排层 tool（防止无限嵌套）。
+ * FR-6.2: 注入到 tool-filter 的排除逻辑中。
+ */
+export const EXCLUDED_TOOL_NAMES: readonly string[] = [
+	"workflow_run",
+	"workflow_pause",
+	"workflow_abort",
+	"workflow_lint",
+	"subagent",
+] as const;
+
+// ============================================================
+// ThinkingLevel 枚举（FR-4.3）— 自定义，与 SDK 类型一致
+// ============================================================
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+// ============================================================
+// Model 最小接口（duck-typed，与 SDK Model<any> 运行时兼容）
+// ============================================================
+export interface ModelInfo {
+	id: string;
+	name: string;
+	provider: string;
+	reasoning: boolean;
+	thinkingLevelMap?: Record<string, string | null>;
+	contextWindow?: number;
+}
+
+// ============================================================
+// FR-1.1.1: RunAgentOptions
+// ============================================================
+export interface RunAgentOptions {
+	/** Task prompt — 发送给 agent 的任务描述 */
+	task: string;
+	/** Agent 名称（从 AgentRegistry 解析 systemPrompt、model 等） */
+	agent?: string;
+	/** 模型 "provider/modelId" 格式（覆盖配置链解析结果） */
+	model?: string;
+	/** Thinking level */
+	thinkingLevel?: string;
+	/** 最大 agent turns（超出时 soft limit + hard abort） */
+	maxTurns?: number;
+	/** Soft limit 后的 grace turns（默认 2） */
+	graceTurns?: number;
+	/** 外部取消信号 */
+	signal?: AbortSignal;
+	/** Skill 路径（注入到 session 的 resourceLoader.additionalSkillPaths） */
+	skillPath?: string;
+	/** Structured-output schema（拼入 task prompt 末尾 + 追踪 structured-output tool 调用） */
+	schema?: Record<string, unknown>;
+	/** System prompt 追加内容（注入到 resourceLoader.appendSystemPrompt） */
+	appendSystemPrompt?: string[];
+	/** 事件回调 */
+	onEvent?: (event: AgentEvent) => void;
+	/** 并发池覆盖（不传则用全局 pool） */
+	pool?: ConcurrencyPool;
+	/** 优先级（0=最高，默认 Infinity=无优先级） */
+	priority?: number;
+}
+
+// ============================================================
+// FR-1.1.2: AgentResult
+// ============================================================
+export interface ToolCallEntry {
+	toolName: string;
+	result?: { content: Array<{ type: string; text?: string }>; details?: unknown };
+	isError: boolean;
+}
+
+export interface AgentResult {
+	text: string;
+	parsedOutput?: unknown;
+	usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
+	turns: number;
+	durationMs: number;
+	success: boolean;
+	error?: string;
+	sessionId: string;
+	toolCalls: ToolCallEntry[];
+}
+
+// ============================================================
+// FR-8.2: AgentEvent（subagents 对外统一事件 union）
+// ============================================================
+export type AgentEventType =
+	| "tool_start"
+	| "tool_end"
+	| "text_delta"
+	| "turn_end"
+	| "message_end"
+	| "compaction"
+	| "error";
+
+export type AgentEvent =
+	| { type: "tool_start"; toolName: string }
+	| { type: "tool_end"; toolName: string; result?: ToolCallEntry["result"]; isError: boolean }
+	| { type: "text_delta"; delta: string }
+	| { type: "turn_end" }
+	| { type: "message_end"; usage: AgentResult["usage"] }
+	| { type: "compaction" }
+	| { type: "error"; error: string };
+
+// ============================================================
+// FR-1.2: ManagedSession
+// ============================================================
+export interface ManagedSession {
+	prompt(task: string, options?: { maxTurns?: number; signal?: AbortSignal }): Promise<AgentResult>;
+	steer(message: string): void;
+	abort(): void;
+	dispose(): void;
+	readonly sessionId: string;
+	readonly alive: boolean;
+}
+
+export interface ManagedSessionOptions {
+	agent?: string;
+	model?: string;
+	thinkingLevel?: string;
+	skillPath?: string;
+	appendSystemPrompt?: string[];
+	onEvent?: (event: AgentEvent) => void;
+}
+
+// ============================================================
+// FR-2: Agent 配置（frontmatter + builtin）
+// ============================================================
+export type AgentSource = "project" | "user" | "package" | "local" | "builtin";
+
+export interface AgentConfig {
+	name: string;
+	systemPrompt: string;
+	/** frontmatter 中的 model 字段（"provider/modelId" 格式），可选 */
+	model?: string;
+	/** 候选模型列表，fallback 链用 */
+	modelCandidates?: string[];
+	description?: string;
+	/** builtin tool 策略：undefined=全部，[]=无，string[]=白名单 */
+	builtinTools?: string[] | undefined;
+	/** extension tool 策略：true=全部，false=无，string[]=白名单 */
+	extensions?: boolean | string[];
+	/** 明确排除的 tool 名 */
+	excludeTools?: string[];
+	/** skills 列表 */
+	skills?: string[];
+	/** category（推断用） */
+	category?: string;
+	source: AgentSource;
+	filePath?: string;
+}
+
+// ============================================================
+// FR-3 / FR-4.1: 配置合并 + 模型解析结果
+// ============================================================
+export interface ResolvedModel {
+	/** Model 对象（已通过 modelRegistry.find 验证可用） */
+	model: ModelInfo;
+	/** thinkingLevel 字符串（已通过 model.thinkingLevelMap 验证） */
+	thinkingLevel?: string;
+	/** 解析来源（调试/日志用） */
+	source: "param" | "per-agent" | "per-category" | "category-default" | "agent-default" | "global-fallback" | "env";
+}
+
+export type SystemPromptStrategy = "replace" | "append" | "none";
+
+// ============================================================
+// FR-4.5: Category
+// ============================================================
+export interface CategoryDefinition {
+	label: string;
+	model: string;
+	thinkingLevel?: string;
+}
+
+// ============================================================
+// FR-4.6: 全局配置
+// ============================================================
+export interface SubagentsGlobalConfig {
+	version: number;
+	yoloByDefault: boolean;
+	maxConcurrent: number;
+	categories: Record<string, CategoryDefinition>;
+	agentCategoryOverrides: Record<string, string>;
+	fallback: { model: string; thinkingLevel?: string };
+}
+
+// ============================================================
+// FR-4.7: 会话模型状态
+// ============================================================
+export interface SessionModelState {
+	yoloMode: boolean;
+	perAgent: Record<string, { model: string; thinkingLevel?: string }>;
+	perCategory: Record<string, { model: string; thinkingLevel?: string }>;
+}
+
+// ============================================================
+// FR-5: Fork
+// ============================================================
+export interface ForkOptions {
+	maxExchanges?: number;
+	maxTokens?: number;
+}
+
+export interface ForkResult {
+	/** 拼接好的父对话文本（已按截断策略处理） */
+	context: string;
+	/** 实际提取的轮数 */
+	exchangeCount: number;
+	/** 是否因 token 限制截断 */
+	truncated: boolean;
+}
+
+// ============================================================
+// FR-6: Tool 过滤
+// ============================================================
+export interface ToolInfo {
+	name: string;
+}
+
+export interface ToolFilterConfig {
+	builtinTools?: string[];
+	extensions?: boolean | string[];
+	excludeTools?: string[];
+}
+
+export interface ToolFilterResult {
+	/** 允许的 tool allowlist（传给 createAgentSession.tools） */
+	allowedTools: string[] | undefined;
+	/** 被排除的 tool 名（日志用） */
+	excludedTools: string[];
+}
+
+// ============================================================
+// FR-7: 并发池（接口定义，实现在 pool/concurrency-pool.ts）
+// ============================================================
+export interface ConcurrencyPool {
+	acquire(priority?: number): Promise<void>;
+	release(): void;
+	readonly activeCount: number;
+	readonly queueLength: number;
+	readonly maxConcurrent: number;
+}
+
+// ============================================================
+// FR-14.7: Hooks（v1 预留接口）
+// ============================================================
+export interface SubagentHooks {
+	beforeRun?: (opts: RunAgentOptions) => RunAgentOptions | Promise<RunAgentOptions>;
+	afterRun?: (result: AgentResult, opts: RunAgentOptions) => void;
+	onError?: (error: Error, opts: RunAgentOptions) => void;
+}
