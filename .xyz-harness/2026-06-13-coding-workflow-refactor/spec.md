@@ -54,6 +54,21 @@ coding-workflow 是一个 5-phase 编码工作流扩展（~2500 行 TS + 827 行
 
 系统支持无限嵌套的子系统 topicDir。任何有 `manifest.yaml` 的目录就是一个 topicDir，`children/` 下可嵌套更多 topicDir。
 
+**manifest.yaml 定位 = 静态分解声明**。manifest.yaml 描述系统结构（子系统列表 + 依赖关系 + 合约索引），创建后不改动。
+
+**子系统状态追踪 = 独立 `.state.json` 文件**。每个子系统的运行时状态存储在 `children/{name}/.state.json`，不混在 manifest.yaml 中。
+
+| 职责 | 文件 | 生命周期 |
+|------|------|----------|
+| 分解声明（children + 依赖 + 合约索引） | `manifest.yaml` | 创建后不变 |
+| 子系统运行时状态 | `children/{name}/.state.json` | 随执行不断更新 |
+| workflow 全局状态 | `pi.appendEntry` + reconstructState | Pi session 管理 |
+
+**为什么不用 manifest.yaml 追踪状态**：
+- manifest 是「描述系统结构的文档」，不应因执行进度而改变
+- git diff 中会充满 status 变更噪音
+- 状态是运行时数据，JSON 比 YAML 更适合（不需要手写、不需要保持格式）
+
 ### GC-7: 依赖声明和调度策略
 
 子系统间通过 `manifest.yaml` 声明依赖关系。编排引擎从依赖图自动推导执行顺序（拓扑排序）。自动检测循环依赖。
@@ -84,10 +99,10 @@ status: string                  # 状态枚举
 children:                       # 子系统列表
   - name: string
     path: string                # 相对于父 topicDir
-    status: string
     depends_on: string[]        # spec 阶段依赖
     dev_depends_on: string[]    # dev 阶段依赖（可选，默认 = depends_on）
     priority: P0 | P1 | P2
+    description: string         # 子系统职责一句话描述
     contract_sections:          # 该子系统参与的合约
       - provides: string        # api-contracts.md 中的锚点
       - consumes: string[]
@@ -107,15 +122,17 @@ pending → spec_in_progress → spec_approved → plan_in_progress → plan_app
 
 ### 依赖传播规则
 
+子系统状态通过 `children/{name}/.state.json` 追踪。编排引擎扫描这些文件判断依赖是否满足。
+
 ```
 子系统 spec gate PASS
-  → manifest.children[name].status = "spec_approved"
+  → children/{name}/.state.json = { status: "spec_approved" }
 
 所有子系统 spec approved 且依赖满足
   → 父级 gate-check(system-spec) 允许 PASS
 
 子系统 dev gate PASS
-  → manifest.children[name].status = "dev_complete"
+  → children/{name}/.state.json = { status: "dev_complete" }
 
 所有子系统 dev complete
   → 父级 integration test 可以开始

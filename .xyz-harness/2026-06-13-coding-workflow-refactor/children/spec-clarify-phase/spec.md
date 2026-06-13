@@ -420,7 +420,7 @@ gate-check、dependency-check、contract-check 都是 Tool，只是内部不调 
 - **子系统 spec 严格串行**——同一时间只能有一个子系统处于交互阶段
 - **每个子系统完成后必须 compact**——spec 文档保留到磁盘，对话历史清理
 - **子系统级 retrospect 是轻量级的**——只覆盖该子系统的 brainstorming 执行质量（不重复系统级回顾的范围）。产出到 children/{name}/changes/reviews/ 下
-- **commit 是管理操作**——subsystem-spec 完成后 git add + commit 所有产出文件（spec.md、reviews/、manifest.yaml 更新），确保磁盘状态与 git 状态一致。不是独立原子操作，是 compact 前的标准化步骤
+- **commit 是管理操作**——subsystem-spec 完成后 git add + commit 所有产出文件（spec.md、reviews/），确保磁盘状态与 git 状态一致。不是独立原子操作，是 compact 前的标准化步骤。同时写入 `children/{name}/.state.json` 记录子系统状态
 
 ## Decisions
 

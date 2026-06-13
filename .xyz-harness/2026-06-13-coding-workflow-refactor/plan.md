@@ -25,7 +25,7 @@ extensions/coding-workflow/
 │   │   ├── review-loop.ts           # A5: 多轮 review-fix 循环
 │   │   ├── test-fix-loop.ts         # A6: core/noncore 测试修复循环
 │   │   ├── retrospect.ts            # A7: 回顾 steer 生成
-│   │   ├── phase-transition.ts      # A8: compact + goal init + phase 切换
+│   │   ├── phase-transition.ts      # A8: compact + goal init + phase/子系统切换（next-phase/next-subsystem/complete）
 │   │   ├── complexity-assess.ts     # A9: 复杂度评估
 │   │   ├── decompose.ts             # A10: 子问题分解 + manifest + children 目录
 │   │   ├── contract-define.ts       # A11: api-contracts.md 生成
@@ -80,8 +80,14 @@ interface WorkflowState {
   pendingRequirement: string;
   complexity: "L0" | "L1" | "L2";     // 新增
   manifest: ManifestData | null;        // 新增：L1/L2 时有值
+  subsystemIndex: number;               // 新增：-1=系统级, 0+=第N个子系统
+  subsystemResults: Record<string, "passed">;  // 新增
 }
 ```
+
+**注意**：`gateInProgress`、`gateRetryCount`、`compactRetryCount` 移除，变为操作局部状态。
+
+子系统运行时状态通过 `children/{name}/.state.json` 追踪（不修改 manifest.yaml）。
 
 **2b. 操作级状态（`lib/infra/state-store.ts`）**
 
@@ -170,7 +176,7 @@ const SPEC_AUTOMATED_PIPELINE: StepConfig[] = [
 - `phase-config.ts` — PhaseConfig 定义 + 5 个 phase 配置 + L1/L2 扩展配置
 - `order-resolver.ts` — 串行调度（Kahn's 拓扑排序 → 一维数组）
 - `wave-scheduler.ts` — 并行波次调度（拓扑排序 → 二维波次数组）
-- `manifest.ts` — ManifestStore：manifest.yaml 解析 + 状态聚合 + 依赖检查 + 子系统状态更新
+- `manifest.ts` — ManifestStore：manifest.yaml 解析 + 状态聚合（从 `children/{name}/.state.json` 读取）+ 依赖检查 + 子系统状态更新（写入 `.state.json`）
 - `operation-registry.ts` — OperationRegistry：操作注册 + 按 ID 查找
 
 详见 orchestrator spec FR-OR1 ~ FR-OR6。

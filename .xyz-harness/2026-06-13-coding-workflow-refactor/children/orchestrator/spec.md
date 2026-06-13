@@ -369,7 +369,6 @@ interface ManifestData {
 interface ManifestChild {
   name: string;
   path: string;
-  status: string;
   depends_on: string[];
   dev_depends_on?: string[];
   priority: "P0" | "P1" | "P2";
@@ -391,8 +390,11 @@ interface ManifestStore {
   /** 加载 manifest（从磁盘或缓存） */
   load(topicDir: string): ManifestData | null;
 
-  /** 更新子系统状态 */
+  /** 更新子系统状态（写入 children/{name}/.state.json） */
   updateChildStatus(topicDir: string, childName: string, status: string): void;
+
+  /** 读取子系统状态（从 children/{name}/.state.json） */
+  getChildStatus(topicDir: string, childName: string): string | null;
 
   /** 聚合所有子系统状态 → 父级状态 */
   aggregateStatus(topicDir: string): string;
@@ -406,11 +408,17 @@ interface ManifestStore {
 }
 ```
 
-**状态聚合规则**：
+**状态聚合规则**（从 `children/{name}/.state.json` 读取）：
 
 ```
-aggregateStatus(manifest):
-  statuses = manifest.children.map(c => c.status)
+aggregateStatus(topicDir):
+  statuses = []
+  for child in manifest.children:
+    stateFile = path.join(topicDir, child.path, ".state.json")
+    if exists(stateFile):
+      statuses.push(JSON.parse(read(stateFile)).status)
+    else:
+      statuses.push("pending")
 
   if all are "pending":               return "pending"
   if any is "spec_in_progress":       return "spec_in_progress"
@@ -429,6 +437,7 @@ aggregateStatus(manifest):
 **向后兼容**：
 - L0 扁平 topicDir 没有 manifest.yaml → `load()` 返回 null
 - 所有依赖 manifest 的操作在 L0 时跳过 manifest 相关逻辑
+- `updateChildStatus` 写入 `children/{name}/.state.json`，不修改 manifest.yaml 本身
 
 ---
 
@@ -479,6 +488,10 @@ interface WorkflowState {
   complexity: "L0" | "L1" | "L2";
   /** L1/L2 的 manifest 数据（L0 时为 null） */
   manifest: ManifestData | null;
+  /** 当前处理的子系统序号（-1 = 系统级，0+ = 第 N 个子系统） */
+  subsystemIndex: number;
+  /** 子系统名 → passed 的映射 */
+  subsystemResults: Record<string, "passed">;
 }
 ```
 
@@ -491,6 +504,8 @@ interface WorkflowState {
 | `compactRetryCount` | ✓ | ✗ | 移到 phase-transition 操作的局部状态 |
 | `complexity` | ✗ | ✓ | 新增：复杂度评估结果 |
 | `manifest` | ✗ | ✓ | 新增：L1/L2 manifest 数据 |
+| `subsystemIndex` | ✗ | ✓ | 新增：当前子系统序号（-1 = 系统级） |
+| `subsystemResults` | ✗ | ✓ | 新增：子系统通过记录 |
 
 **状态持久化**：
 
@@ -501,7 +516,7 @@ interface WorkflowState {
 | 操作 | 可修改字段 |
 |------|-----------|
 | A1 init | isActive, currentPhase, topicDir, topicName, pendingInit, pendingRequirement |
-| A8 phase-transition | currentPhase, phaseResults |
+| A8 phase-transition | currentPhase (next-phase), subsystemIndex (next-subsystem), phaseResults, subsystemResults |
 | A9 complexity-assess | complexity |
 | A10 decompose | manifest |
 | 其他操作 | 无（只读 workflowState） |

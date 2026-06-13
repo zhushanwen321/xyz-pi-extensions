@@ -126,8 +126,9 @@ interface InitOutput {
 1. 规范化 slug（lowercase, `-` 分隔, max 60 chars）
 2. 创建目录结构：`{topicDir}/changes/reviews/`, `{topicDir}/changes/evidence/`
 3. 设置 workflow 状态为 active, currentPhase=1
-4. 调用 A2 (skill-inject) 注入 Phase 1 skill
-5. 持久化状态
+4. 持久化状态
+
+> **注意**：init 不调用 A2 skill-inject。编排引擎在 init 之后按 pipeline 单独调用 skill-inject。init 只负责目录创建和状态初始化。
 
 **错误条件**：
 - slug 为空或过短（< 2 chars）→ 返回错误
@@ -482,7 +483,7 @@ interface RetrospectOutput {
 
 ---
 
-### A8: phase-transition — Phase 切换
+### A8: phase-transition — Phase / 子系统切换
 
 **invocation**: `management`
 
@@ -496,13 +497,8 @@ interface PhaseTransitionInput {
   skipCompact?: boolean;
   /** compact 自定义指令 */
   compactInstructions?: string;
-  /** 子系统间切换模式（L1/L2 时） */
-  subsystemTransition?: {
-    /** 当前子系统名 */
-    from: string;
-    /** 下一个子系统名 */
-    to: string;
-  };
+  /** 切换模式（由编排引擎决定，不由 AI 决定） */
+  mode: "next-phase" | "next-subsystem" | "complete";
 }
 ```
 
@@ -510,18 +506,21 @@ interface PhaseTransitionInput {
 
 ```typescript
 interface PhaseTransitionOutput {
+  /** 切换前的 phase 编号 */
   previousPhase: number;
+  /** 切换后的 phase 编号（mode=next-subsystem 时不变） */
   newPhase: number;
+  /** 切换前的子系统序号（-1 = 系统级） */
+  previousSubsystemIndex: number;
+  /** 切换后的子系统序号（-1 = 系统级） */
+  newSubsystemIndex: number;
   compacted: boolean;
   committed: boolean;               // 是否执行了 git commit
   goalInitialized: boolean;
   goalTasks?: string[];              // 如果初始化了 goal，返回任务列表
-  completed: boolean;                // 是否已完成所有 phase（newPhase > FINAL_PHASE）
-  /** 子系统间切换信息（仅 subsystemTransition 模式） */
-  subsystemTransition?: {
-    from: string;
-    to: string;
-  };
+  completed: boolean;                // 是否已完成所有 phase
+  /** 实际执行的 mode */
+  mode: "next-phase" | "next-subsystem" | "complete";
 }
 ```
 
@@ -537,24 +536,57 @@ interface PhaseTransitionOutput {
    - onError(other): 回退 currentPhase，允许重试
 7. Phase > FINAL_PHASE: 完成 workflow，重置状态
 
-**L1/L2 子系统间切换行为**（`subsystemTransition` 模式）：
-1. 执行 `git add + commit`——将当前子系统的所有产出文件（spec.md、reviews/、manifest.yaml 更新）提交到 git，确保磁盘状态与 git 状态一致
-2. 执行 `ctx.compact()`——清理上下文，保留磁盘文件（spec.md、manifest.yaml、api-contracts.md 不受 compact 影响），清理对话历史
-3. 更新 `manifestStore.updateChildStatus(topicDir, from, "spec_approved")`
-4. compact 完成后，编排引擎注入下一个子系统的 skill（通过 A2 skill-inject + extraContext）
+**三种模式的行为**：
 
-**注意**：子系统间切换不走 phase 递增（currentPhase 不变），只是子系统的 compact + commit + skill 切换。
+**`next-phase`（Phase 间切换）**：
+1. 验证当前 phase gate 已通过
+2. 检查所有前序 phase 的 retrospect 文件完整性
+3. `currentPhase + 1`
+4. Phase 2：初始化 goal（硬编码 L1 任务：plan.md, e2e-test-plan.md 等 5 项）
+5. Phase 3：从 plan.md 解析 Execution Groups 初始化 goal 任务
+6. 执行 `ctx.compact()`
+7. Phase > FINAL_PHASE: mode 自动变为 `complete`
+
+**`next-subsystem`（子系统间切换，L1/L2 时）**：
+1. 执行 `git add + commit`——将当前子系统的所有产出文件（spec.md、reviews/）提交到 git
+2. 写入 `children/{name}/.state.json`——记录子系统状态（如 `{ status: "spec_approved", updatedAt: "..." }`）
+3. `subsystemIndex + 1`
+4. 执行 `ctx.compact()`——保留磁盘文件，清理对话历史
+5. compact 完成后，编排引擎注入下一个子系统的 skill（通过 A2 skill-inject + extraContext）
+
+**注意**：`next-subsystem` 不改变 `currentPhase`，只递增 `subsystemIndex`。
+
+**`complete`（工作流完成）**：
+1. 重置整个 workflowState
+2. 标记 workflow 不再 active
+
+**编排引擎如何选择 mode**：
+
+```
+phase-transition 被 pipeline 调用时:
+  if L0:
+    mode = "next-phase"（或最后一个 phase 时 "complete"）
+  if L1/L2:
+    if subsystemIndex == -1:         // 系统级刚完成
+      mode = "next-subsystem"         // → 切到第一个子系统
+    else:
+      if 还有子系统未完成:
+        mode = "next-subsystem"
+      else:
+        mode = "next-phase"           // 所有子系统完成，切到下一个 phase
+```
 
 **错误条件**：
-- 当前 phase gate 未通过 → 返回错误
-- retrospect 文件缺失或格式错误 → 返回错误（列出缺失项）
+- `next-phase`：当前 phase gate 未通过 → 返回错误
+- `next-phase`：retrospect 文件缺失或格式错误 → 返回错误（列出缺失项）
+- `next-subsystem`：当前子系统 gate 未通过 → 返回错误
 - compact 重试次数耗尽（≥ 3）→ 返回错误，提供手动恢复选项
 - stale context → abort workflow
 
 **状态副作用**：
-- 修改 `workflowState.currentPhase`
-- 修改 `workflowState.compactRetryCount`
-- Phase > FINAL_PHASE 时重置整个 workflowState
+- `next-phase`：修改 `workflowState.currentPhase`，Phase > FINAL_PHASE 时重置整个 workflowState
+- `next-subsystem`：修改 `workflowState.subsystemIndex`，写入 `children/{name}/.state.json`
+- `complete`：重置整个 workflowState
 
 **向后兼容**：与现有 `executePhaseStartTool()` 行为一致。
 
@@ -946,9 +978,11 @@ const PR_PIPELINE: StepConfig[] = [
 ### AC-AO4: 状态隔离
 
 - [ ] A3-A7 不修改 `workflowState`（只读或写操作级状态文件）
-- [ ] 只有 A1, A8 修改 `workflowState`（init 修改 isActive/currentPhase，transition 修改 currentPhase）
+- [ ] A1 修改 `workflowState`（isActive, currentPhase, topicDir, topicName）
+- [ ] A8 根据 mode 修改 `workflowState`（next-phase 修改 currentPhase，next-subsystem 修改 subsystemIndex，complete 重置全部）
 - [ ] A9 修改 `workflowState.complexity`
 - [ ] A10 修改 `workflowState.manifest`
+- [ ] A8 next-subsystem 模式写入 `children/{name}/.state.json`（独立状态文件，不修改 manifest.yaml）
 
 ### AC-AO5: Phase 3 Review-loop 路由
 
@@ -976,9 +1010,9 @@ const PR_PIPELINE: StepConfig[] = [
 
 操作通过注册表管理，不直接 import。编排引擎通过 `registry.get(id)` 查找操作。好处：解耦编排层和操作层，支持运行时动态注册（未来可用于插件化）。
 
-### D-AO2: A1 init 内部调用 A2 skill-inject
+### D-AO2: A1 init 不调用其他操作
 
-init 是唯一内部调用其他操作的操作（调用 skill-inject 注入 Phase 1 skill）。这避免了 init 需要知道 skill 注入的实现细节。通过 OperationRegistry 间接调用。
+init 只负责目录创建和状态初始化。Phase 1 skill 注入由编排引擎在 init 完成后通过 pipeline 调用 A2 skill-inject 完成。这保持了操作间的零耦合——操作之间不存在直接调用关系。
 
 ### D-AO3: Phase 路由在操作内部，不在编排引擎
 
