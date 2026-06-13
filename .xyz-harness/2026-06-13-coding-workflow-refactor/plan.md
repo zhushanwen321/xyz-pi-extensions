@@ -21,7 +21,7 @@ extensions/coding-workflow/
 │   │   ├── init.ts                  # A1: workspace 初始化 + 复杂度评估入口
 │   │   ├── skill-inject.ts          # A2: skill 内容注入
 │   │   ├── gate-check.ts            # A3: gate 脚本执行
-│   │   ├── review-dispatch.ts       # A4: anti-fraud review subagent
+│   │   ├── review-loop.ts         # A5: 多维度审查 + 增量收敛 + NEEDS_USER 退回
 │   │   ├── review-loop.ts           # A5: 多轮 review-fix 循环
 │   │   ├── test-fix-loop.ts         # A6: core/noncore 测试修复循环
 │   │   ├── retrospect.ts            # A7: 回顾 steer 生成
@@ -110,10 +110,10 @@ const PHASE_CONFIGS: PhaseConfig[] = [
 
 // 注意：pipeline 只描述自动化阶段（gate + review + retrospect + transition）
 // 交互阶段（brainstorming 10 步）不在 pipeline 中
-const SPEC_AUTOMATED_PIPELINE: StepConfig[] = [
-  { operation: "gate-check" },
-  { operation: "review-loop", maxRetries: 3 },
-  { operation: "review-dispatch" },
+const SPEC_L0_PIPELINE: StepConfig[] = [
+  { operation: "gate-check", args: { scope: "deliverables" } },
+  { operation: "review-loop" },    // 多维度：authenticity + completeness + consistency + sufficiency
+  { operation: "gate-check", args: { scope: "reviews" } },
   { operation: "retrospect", on_fail: "warn_continue" },
 ];
 ```
@@ -124,7 +124,9 @@ const SPEC_AUTOMATED_PIPELINE: StepConfig[] = [
 
 #### Task 4.1: gate-check (A3) — 从 PhaseGate 提取
 
-#### Task 4.2: review-dispatch (A4) — 从 dispatchReviewSubagent 提取
+#### Task 4.2: review-dispatch (A4) — 已合并到 A5
+
+不再单独提取。反欺诈审查合并为 review-loop 的 authenticity 维度。review-dispatcher.ts 代码将在 A5 实现时作为素材参考。
 
 #### Task 4.3: review-loop (A5) — 从 runReviewGateLoop + ReviewGate 提取
 

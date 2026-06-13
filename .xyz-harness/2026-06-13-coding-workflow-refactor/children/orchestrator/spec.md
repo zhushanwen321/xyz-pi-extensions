@@ -36,12 +36,31 @@ interface PhaseConfig {
   phase: number;                     // Phase 编号（1-5）
   name: string;                      // 显示名（"Spec", "Plan", "Dev", "Test", "PR"）
   skillName: string;                 // 注入的 skill 名称
-  reviewPrefix: string | string[];   // review 文件名前缀
+  reviewPrefix: string | string[];   // review 文件名前缀（向后兼容）
   retrospectPrefix: string;          // retrospect 文件名前缀
   deliverables: string[];            // 该 phase 的交付物路径（相对于 topicDir）
   reviewMode: string;                // review 模式描述
   /** 自动化阶段 pipeline 步骤 */
   pipeline: StepConfig[];
+  /** 该 phase 的审查维度配置 */
+  dimensions: ReviewDimension[];
+}
+
+interface ReviewDimension {
+  /** 维度 ID（用于 review 文件名前缀） */
+  id: string;
+  /** 显示名 */
+  name: string;
+  /** review 文件名前缀 */
+  reviewPrefix: string;
+  /** subagent 的 system prompt */
+  systemPrompt: string;
+  /** 审查聚焦点描述 */
+  focusPrompt: string;
+  /** 通过门槛 */
+  threshold: { mustFix: number };
+  /** 是否可能产出 NEEDS_USER 标签的问题（退回用户澄清） */
+  mayNeedUser: boolean;
 }
 ```
 
@@ -57,25 +76,71 @@ const PHASE_CONFIGS: PhaseConfig[] = [
     deliverables: ["spec.md"],
     reviewMode: "Mode 1: Plan review (verify spec completeness)",
     pipeline: [
-      { operation: "gate-check" },
-      { operation: "review-loop", args: { maxRounds: 3 } },
-      { operation: "review-dispatch" },
+      { operation: "gate-check", args: { scope: "deliverables" } },
+      { operation: "review-loop" },
+      { operation: "gate-check", args: { scope: "reviews" } },
       { operation: "retrospect", on_fail: "warn_continue" },
+    ],
+    dimensions: [
+      {
+        id: "authenticity", name: "真实性", reviewPrefix: "authenticity_review",
+        systemPrompt: "你是产出物真实性审查专家。验证文件中引用的函数/接口/文件是否存在。",
+        focusPrompt: "检查 spec.md 中引用的文件/函数/接口是否真实存在，数据是否客观",
+        threshold: { mustFix: 0 }, mayNeedUser: false,
+      },
+      {
+        id: "completeness", name: "完整性", reviewPrefix: "completeness_review",
+        systemPrompt: "你是需求完整性审查专家。",
+        focusPrompt: "六要素覆盖、AC 可量化、无 [AMBIGUOUS] 残留",
+        threshold: { mustFix: 0 }, mayNeedUser: false,
+      },
+      {
+        id: "consistency", name: "一致性", reviewPrefix: "consistency_review",
+        systemPrompt: "你是一致性审查专家。",
+        focusPrompt: "内部引用一致、术语与 CONTEXT.md 对齐、无矛盾描述",
+        threshold: { mustFix: 0 }, mayNeedUser: false,
+      },
+      {
+        id: "sufficiency", name: "充分性", reviewPrefix: "sufficiency_review",
+        systemPrompt: "你是需求充分性审查专家。评估内容是否足够详细，是否有未澄清的决策点。",
+        focusPrompt: "用例是否覆盖关键场景、边界条件是否有明确策略、约束是否具体",
+        threshold: { mustFix: 0 }, mayNeedUser: true,
+      },
     ],
   },
   {
     phase: 2, name: "Plan",
     skillName: "xyz-harness-writing-plans",
-    reviewPrefix: ["business_logic_review", "standards_review", "robustness_review",
-                    "integration_review", "ts_taste_review", "rust_taste_review", "taste_review"],
+    reviewPrefix: "plan_review",
     retrospectPrefix: "plan_retrospect",
     deliverables: ["plan.md", "e2e-test-plan.md", "test_cases_template.json",
                     "use-cases.md", "non-functional-design.md"],
     reviewMode: "Mode 1: Plan review (verify plan feasibility)",
     pipeline: [
-      { operation: "gate-check" },
-      { operation: "review-loop", args: { maxRounds: 3 } },
+      { operation: "gate-check", args: { scope: "deliverables" } },
+      { operation: "review-loop" },
+      { operation: "gate-check", args: { scope: "reviews" } },
       { operation: "retrospect", on_fail: "warn_continue" },
+    ],
+    dimensions: [
+      {
+        id: "feasibility", name: "可行性", reviewPrefix: "feasibility_review",
+        systemPrompt: "你是实现计划可行性审查专家。",
+        focusPrompt: "任务拆分合理、依赖无环、工作量估算",
+        threshold: { mustFix: 0 }, mayNeedUser: false,
+      },
+      {
+        id: "spec-conformance", name: "spec 一致性", reviewPrefix: "spec_conformance_review",
+        systemPrompt: "你是 spec-plan 一致性审查专家。",
+        focusPrompt: "plan 是否覆盖 spec 所有需求，无遗漏",
+        threshold: { mustFix: 0 }, mayNeedUser: false,
+      },
+      {
+        id: "test-plan-quality", name: "测试计划质量", reviewPrefix: "test_plan_review",
+        systemPrompt: "你是测试计划审查专家。",
+        focusPrompt: "e2e-test-plan 可执行、case 覆盖 AC",
+        threshold: { mustFix: 0 }, mayNeedUser: false,
+      },
     ],
   },
   {
@@ -86,9 +151,30 @@ const PHASE_CONFIGS: PhaseConfig[] = [
     deliverables: ["changes/evidence/test_results.md"],
     reviewMode: "Mode 2: Code review (verify implementation against spec)",
     pipeline: [
-      { operation: "gate-check" },
-      { operation: "review-loop", args: { maxRounds: 3 } },
+      { operation: "gate-check", args: { scope: "deliverables" } },
+      { operation: "review-loop" },
+      { operation: "gate-check", args: { scope: "reviews" } },
       { operation: "retrospect", on_fail: "warn_continue" },
+    ],
+    dimensions: [
+      {
+        id: "spec-conformance", name: "规格符合性", reviewPrefix: "spec_conformance_review",
+        systemPrompt: "你是规格符合性审查专家。",
+        focusPrompt: "代码实现覆盖 spec 所有需求",
+        threshold: { mustFix: 0 }, mayNeedUser: false,
+      },
+      {
+        id: "code-quality", name: "代码质量", reviewPrefix: "code_quality_review",
+        systemPrompt: "你是代码质量审查专家。",
+        focusPrompt: "standards + robustness + integration 审查",
+        threshold: { mustFix: 0 }, mayNeedUser: false,
+      },
+      {
+        id: "taste", name: "代码品味", reviewPrefix: "taste_review",
+        systemPrompt: "你是代码品味审查专家。",
+        focusPrompt: "taste review（ts_taste 或 rust_taste）",
+        threshold: { mustFix: 0 }, mayNeedUser: false,
+      },
     ],
   },
   {
@@ -99,10 +185,12 @@ const PHASE_CONFIGS: PhaseConfig[] = [
     deliverables: ["changes/evidence/test_execution.json"],
     reviewMode: "Mode 3: Test review (verify test coverage and quality)",
     pipeline: [
-      { operation: "gate-check" },
+      { operation: "gate-check", args: { scope: "deliverables" } },
       { operation: "test-fix-loop", args: { maxRounds: 10 } },
+      { operation: "gate-check", args: { scope: "reviews" } },
       { operation: "retrospect", on_fail: "warn_continue" },
     ],
+    dimensions: [],
   },
   {
     phase: 5, name: "PR",
@@ -112,9 +200,10 @@ const PHASE_CONFIGS: PhaseConfig[] = [
     deliverables: ["changes/evidence/pr_evidence.md", "changes/evidence/ci_results.md"],
     reviewMode: "Code review (verify PR completeness and CI results)",
     pipeline: [
-      { operation: "gate-check" },
+      { operation: "gate-check", args: { scope: "deliverables" } },
       { operation: "retrospect", on_fail: "warn_continue" },
     ],
+    dimensions: [],
   },
 ];
 ```
@@ -124,16 +213,18 @@ const PHASE_CONFIGS: PhaseConfig[] = [
 ```typescript
 // L1/L2 系统级 pipeline（替代 Phase 1 的标准 pipeline）
 const SPEC_L12_SYSTEM_PIPELINE: StepConfig[] = [
-  { operation: "gate-check" },
+  { operation: "gate-check", args: { scope: "deliverables" } },
   { operation: "contract-check" },
-  { operation: "review-dispatch" },
+  { operation: "review-loop" },
+  { operation: "gate-check", args: { scope: "reviews" } },
 ];
 
 // L1/L2 子系统级 pipeline
 const SPEC_L12_SUBSYSTEM_PIPELINE: StepConfig[] = [
   { operation: "dependency-check", args: { targetPhase: "spec" } },
-  { operation: "gate-check" },
-  { operation: "review-dispatch" },
+  { operation: "gate-check", args: { scope: "deliverables" } },
+  { operation: "review-loop" },
+  { operation: "gate-check", args: { scope: "reviews" } },
   { operation: "retrospect", on_fail: "warn_continue" },
 ];
 ```
@@ -204,7 +295,7 @@ Pipeline.run(config, ctx):
 
 | 策略 | 行为 | 适用操作 |
 |------|------|---------|
-| `"return"` | 失败立即返回，不继续 | gate-check, review-loop, test-fix-loop, review-dispatch |
+| `"return"` | 失败立即返回，不继续 | gate-check, review-loop, test-fix-loop |
 | `"retry"` | 失败后重试 N 次 | （当前未使用，预留） |
 | `"warn_continue"` | 失败记录警告，继续下一步 | retrospect |
 
@@ -460,12 +551,11 @@ interface OperationRegistry {
 }
 ```
 
-**注册时机**：extension 入口（index.ts）初始化时注册所有 13 个操作。
+**注册时机**：extension 入口（index.ts）初始化时注册所有 12 个操作（A1-A13，其中 A4 review-dispatch 已合并到 A5 review-loop）。
 
 **使用方式**：
 - Pipeline 执行器通过 `registry.get(step.operation)` 查找
 - `run-op` tool 通过 `registry.get(action)` 查找
-- A1 init 内部调用 A2 skill-inject 通过 `registry.get("skill-inject")` 查找
 
 ---
 
@@ -537,18 +627,14 @@ interface WorkflowState {
 
 **`coding-workflow-gate` 重构细节**：
 
-现有 `executeGateTool` 的 6 种职责分配：
+4-Stage 执行模型（成本递增、快速失败）：
 
-| 现有职责 | 分配给 |
-|---------|--------|
-| 验证状态（isActive, pendingInit, phase token） | gate tool handler（前置检查） |
-| 检查前序 phase 通过 | gate tool handler（前置检查） |
-| 检查前序 review 文件 | gate tool handler（前置检查） |
-| 执行 gate pipeline（gate-check → review-loop → ...） | Pipeline 执行器 |
-| 派遣 review subagent | A4 review-dispatch 操作 |
-| 生成回顾 steer | A7 retrospect 操作 |
-
-重构后的 gate tool handler 流程：
+| Stage | 操作 | 成本 | 失败策略 |
+|-------|------|------|----------|
+| 1 | gate-check(scope=deliverables) | 0 token | return |
+| 2 | review-loop(dimensions) | 高（AI subagent） | return + NEEDS_USER 退回 |
+| 3 | gate-check(scope=reviews) | 0 token | return |
+| 4 | retrospect | 低（steer） | warn_continue |
 
 ```
 executeGateTool(params):
@@ -557,16 +643,36 @@ executeGateTool(params):
   validatePriorPhases(state)
   validatePriorReviews(state)
 
-  // 2. 执行 pipeline
-  phaseConfig = PHASE_CONFIGS[state.currentPhase - 1]
-  pipeline = resolvePipeline(phaseConfig, state.complexity)
-  result = pipeline.run(phaseConfig.pipeline, ctx)
+  // 2. Stage 1: 结构合规
+  gateResult1 = gateCheck(scope="deliverables")
+  if !gateResult1.passed: return gateResult1.fixGuidance
 
-  // 3. 处理结果
-  if result.passed:
-    state.phaseResults[params.phase] = "passed"
-    dispatchRetrospectSteer(state, phaseConfig)
-  return result
+  // 3. Stage 2: 多维度审查
+  reviewResult = reviewLoop(phaseConfig.dimensions)
+  
+  // 3a. 需要用户决策的问题 → 退回
+  if reviewResult.needsUserInput:
+    return {
+      passed: false,
+      type: "NEEDS_USER_INPUT",
+      message: formatNeedsUserMessage(reviewResult.needsUserIssues),
+      fixableSummary: formatFixableSummary(reviewResult.fixableIssues),
+    }
+  
+  // 3b. 可自动修复的问题 → 返回修复指引
+  if !reviewResult.passed:
+    return { passed: false, fixGuidance: formatFixGuidance(reviewResult) }
+  
+  // 4. Stage 3: 审查文件合规
+  gateResult2 = gateCheck(scope="reviews")
+  if !gateResult2.passed: return gateResult2.fixGuidance
+  
+  // 5. Stage 4: 回顾
+  dispatchRetrospectSteer(state, phaseConfig)
+  
+  // 6. 成功
+  state.phaseResults[params.phase] = "passed"
+  return PipelineResult(passed=true)
 ```
 
 **新增 Tool**：
@@ -576,10 +682,11 @@ executeGateTool(params):
 const RunOpParams = Type.Object({
   action: StringEnum([
     "complexity-assess", "decompose", "contract-define", "contract-check",
-    "dependency-check", "review-loop", "gate-check", "review-dispatch",
+    "dependency-check", "review-loop", "gate-check",
     "retrospect", "phase-transition", "skill-inject", "test-fix-loop",
     // 不暴露: init（需要 workflow 未激活状态）
     // 不暴露: aggregate-status（改为 ManifestStore.aggregateStatus() 内部调用）
+    // 已移除: review-dispatch（合并到 review-loop 的 authenticity 维度）
   ]),
   topicDir: Type.String({ description: "工作目录路径" }),
   phase: Type.Optional(Type.Number()),
@@ -666,7 +773,7 @@ index.ts（≤ 200 行）
 ├── 注册 3 个 Command（workflow, status, abort）
 ├── 注册 4 个 Event（before_agent_start, session_start, session_tree, turn_end）
 ├── 注册 MessageRenderer（coding-workflow-context）
-├── 初始化 OperationRegistry（注册 13 个操作）
+├── 初始化 OperationRegistry（注册 12 个操作）
 ├── 状态持久化/恢复（persistState, reconstructState）
 └── Widget 更新（updateWidget）
 ```
@@ -694,9 +801,9 @@ index.ts 作为入口，只做注册胶水。所有逻辑委托出去：
 
 ### AC-OR2: 复杂度路由
 
-- [ ] L0 时使用标准 Phase 1 pipeline（gate-check → review-loop → review-dispatch → retrospect）
-- [ ] L1/L2 系统级使用 SPEC_L12_SYSTEM_PIPELINE
-- [ ] L1/L2 子系统级使用 SPEC_L12_SUBSYSTEM_PIPELINE
+- [ ] L0 时使用标准 Phase 1 pipeline（gate-check(deliverables) → review-loop → gate-check(reviews) → retrospect）
+- [ ] L1/L2 系统级使用 SPEC_L12_SYSTEM_PIPELINE（4-stage）
+- [ ] L1/L2 子系统级使用 SPEC_L12_SUBSYSTEM_PIPELINE（4-stage）
 - [ ] 复杂度为 L0 时 `deriveOrder` / `deriveWaves` 不被调用
 
 ### AC-OR3: OrderResolver
@@ -721,14 +828,15 @@ index.ts 作为入口，只做注册胶水。所有逻辑委托出去：
 
 ### AC-OR6: OperationRegistry
 
-- [ ] 注册 13 个操作后 `listIds()` 返回 13 个 ID
+- [ ] 注册 12 个操作后 `listIds()` 返回 12 个 ID（review-dispatch 已移除）
 - [ ] `get("gate-check")` 返回 gate-check 操作实例
 - [ ] `get("nonexistent")` 返回 undefined
+- [ ] `get("review-dispatch")` 返回 undefined（已移除）
 
 ### AC-OR7: Tool 向后兼容
 
 - [ ] `coding-workflow-init` 行为与重构前一致
-- [ ] `coding-workflow-gate` 行为与重构前一致（对 L0 问题）
+- [ ] `coding-workflow-gate` 行为与重构前一致（对 L0 问题，除 review-dispatch 合并到 review-loop 外）
 - [ ] `coding-workflow-phase-start` 行为与重构前一致
 - [ ] `coding-workflow-run-op` 可独立调用任意原子操作
 
@@ -791,7 +899,7 @@ gate tool handler 中的状态验证（isActive、phase token、前序 phase 通
 
 ### UC-OR4: 修改 pipeline 配置
 
-开发者编辑 `phase-config.ts`，移除 Phase 1 的 review-loop：pipeline 变为 `[gate-check, review-dispatch, retrospect]`。不影响其他 phase。
+开发者编辑 `phase-config.ts`，移除 Phase 1 的 review-loop：pipeline 变为 `[gate-check(deliverables), gate-check(reviews), retrospect]`。不影响其他 phase。
 
 ### UC-OR5: 查看 L1/L2 子系统状态
 
