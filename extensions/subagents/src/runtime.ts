@@ -53,6 +53,8 @@ const WIDGET_SUMMARY_MAX = 100;
 const WIDGET_LINGER_MS = 5000;
 /** FR-O1.3: background 完成通知去重 TTL（10 分钟，移植自 notify.ts:56） */
 const BG_NOTIFY_TTL_MS = 10 * 60 * 1000;
+/** FR-O1.5: 合并窗口大小（首个立即发送，窗口内的后续合并） */
+const BG_MERGE_WINDOW_MS = 2000;
 
 /** 进程内单例持有的 background 记录（含 AbortController 供 cancel）。
  * status 此处可写（BackgroundStatus.status 是 readonly，但内部记录需变异） */
@@ -92,6 +94,18 @@ export class SubagentRuntime {
   private readonly _bgRecords = new Map<string, BgRecord>();
   private _bgSeq = 0;
   private _widgetSeq = 0;
+
+  /** FR-O1.5: 合并窗口 pending 通知队列 + 定时器 */
+  private readonly _pendingNotifications: Array<{
+    id: string;
+    status: "done" | "failed" | "cancelled";
+    agent?: string;
+    result?: AgentResult;
+    error?: string;
+    startedAt: number;
+    endedAt?: number;
+  }> = [];
+  private _mergeWindowTimer?: ReturnType<typeof setTimeout>;
 
   /** FR-3.4: 事件总线，供 overlay 视图订阅实时刷新 */
   private readonly _changeListeners = new Set<() => void>();
@@ -624,11 +638,14 @@ export class SubagentRuntime {
   }
 
   /**
-   * FR-O1.1 + FR-O1.3 + FR-O1.7: 发送 background 完成通知到主对话。
-   * 含 TTL 去重 + try/catch 兜底（stale runtime 不误标 failed）。
+   * FR-O1.1 + FR-O1.3 + FR-O1.5 + FR-O1.7: 发送 background 完成通知到主对话。
    *
-   * 注意：本任务实现单条直发；任务 4 在此基础上加合并窗口（首个立即发，
-   * 窗口内后续入队合并）。
+   * 合并窗口策略（G-028 决策）：
+   * - 首个完成事件**立即发送**，同时启动 BG_MERGE_WINDOW_MS 合并窗口
+   * - 窗口内的后续完成事件入队，窗口到期时合并成一条消息发送
+   * - 这样单个 background 零延迟，多个几乎同时完成的 background 被合并防刷屏
+   *
+   * 含 TTL 去重（防 cancel + abort catch 双发）+ try/catch 兜底（G-025 stale runtime）。
    */
   notifyBgCompletion(record: {
     id: string;
@@ -646,6 +663,31 @@ export class SubagentRuntime {
     );
     if (markSeenWithTtl(seen, key, Date.now(), BG_NOTIFY_TTL_MS)) return; // 重复，跳过
 
+    // G-028: 首个事件立即发送，后续入合并窗口
+    if (this._pendingNotifications.length === 0 && !this._mergeWindowTimer) {
+      // 队列空 + 无定时器 → 立即发送这个，并启动合并窗口收集后续
+      this.sendSingleNotification(record);
+      this._mergeWindowTimer = setTimeout(() => {
+        this._mergeWindowTimer = undefined;
+        this.flushPendingNotifications();
+      }, BG_MERGE_WINDOW_MS);
+      this._mergeWindowTimer.unref?.();
+    } else {
+      // 窗口内 → 入队
+      this._pendingNotifications.push(record);
+    }
+  }
+
+  /** FR-O1.7: 发送单条通知（含 try/catch 兜底，G-025 stale runtime） */
+  private sendSingleNotification(record: {
+    id: string;
+    status: "done" | "failed" | "cancelled";
+    agent?: string;
+    result?: AgentResult;
+    error?: string;
+    startedAt: number;
+    endedAt?: number;
+  }): void {
     const content = this.formatBgCompletionMessage(record);
     try {
       this.pi?.sendMessage(
@@ -654,7 +696,6 @@ export class SubagentRuntime {
       );
     } catch {
       // G-025: stale runtime 同步抛错——不标记 background failed（agent 已完成）
-      // fallback: appendEntry 持久化（best-effort）
       try {
         this.pi?.appendEntry("subagent-bg-record", { id: record.id, status: record.status });
       } catch {
@@ -663,9 +704,30 @@ export class SubagentRuntime {
     }
   }
 
-  /** FR-O1.5: flush 合并窗口中 pending 的通知（任务 4 实现完整逻辑） */
+  /** FR-O1.5 G-029: flush 合并窗口中 pending 的通知，合并为一条消息发送 */
   flushPendingNotifications(): void {
-    // placeholder——任务 4 填充合并窗口逻辑
+    if (this._mergeWindowTimer) {
+      clearTimeout(this._mergeWindowTimer);
+      this._mergeWindowTimer = undefined;
+    }
+    const pending = this._pendingNotifications.splice(0);
+    if (pending.length === 0) return;
+    // 合并为一条消息
+    const lines = pending.map((r) => {
+      const status = r.status === "done" ? "completed" : r.status;
+      const agent = r.agent ?? "default";
+      const body = (r.result?.text ?? r.error ?? "(no output)").slice(0, 200);
+      return `Background task ${status}: **${agent}** (${r.id})\n  ${body}`;
+    });
+    const content = `${pending.length} background tasks completed:\n\n${lines.join("\n\n")}`;
+    try {
+      this.pi?.sendMessage(
+        { customType: "subagent-bg-notify", content, display: true },
+        { triggerTurn: true },
+      );
+    } catch {
+      // stale runtime，放弃合并发送（结果仍可通过 getBackground 查询）
+    }
   }
 
   /**

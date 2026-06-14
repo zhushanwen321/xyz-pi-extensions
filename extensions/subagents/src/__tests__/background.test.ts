@@ -9,6 +9,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SubagentRuntime } from "../runtime.ts";
 import type { AgentEvent, AgentResult, BackgroundStatus, RunAgentOptions } from "../types.ts";
 
+/** 等待合并窗口（2000ms）到期 + 余量 */
+const BG_MERGE_WINDOW_WAIT_MS = 2100;
+
 /** FR-O1: mock pi 的形状（含 sendMessage） */
 interface MockPi {
   appendEntry: ReturnType<typeof vi.fn>;
@@ -286,9 +289,13 @@ describe("startBackground eventLog race fix (G-005) + 回注", () => {
     expect(bg2?.eventLog?.some((e) => e.label.includes("tool-bg-2"))).toBe(true);
     expect(bg2?.eventLog?.some((e) => e.label.includes("tool-bg-1"))).toBe(false);
 
-    // 回注：每个 background 完成时发一次 sendMessage（去重 key 不同）
+    // 回注：首个完成立即发 sendMessage（合并窗口语义，FR-O1.5）。
+    // 第二个进合并窗口，窗口到期后合并发送（由 merge window 测试单独验证）。
     await new Promise((r) => setTimeout(r, 10));
-    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(2);
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1);
+    // 等合并窗口到期，第二条（合并）通知发出
+    await new Promise((r) => setTimeout(r, BG_MERGE_WINDOW_WAIT_MS));
+    expect(rt.pi.sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("cancel does not double-send notification (runAgent never resolves)", async () => {
@@ -334,5 +341,95 @@ describe("startBackground eventLog race fix (G-005) + 回注", () => {
     const call = rt.pi.sendMessage.mock.calls[0]!;
     expect(call[0]).toMatchObject({ customType: "subagent-bg-notify" });
     expect(String(call[0].content)).toContain("failed");
+  });
+});
+
+describe("merge window (FR-O1.5)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("first notification sends immediately, subsequent within window are merged", async () => {
+    const rt = makeRuntime();
+
+    // 模拟 3 个快速完成的 background
+    let n = 0;
+    (rt as unknown as { runAgent: ReturnType<typeof vi.fn> }).runAgent = vi.fn(() => {
+      n++;
+      const idx = n;
+      return new Promise<AgentResult>((resolve) => {
+        setTimeout(
+          () =>
+            resolve({
+              text: `out-${idx}`,
+              turns: 1,
+              durationMs: 10,
+              success: true,
+              sessionId: `s-${idx}`,
+              toolCalls: [],
+            }),
+          5,
+        );
+      });
+    });
+
+    rt.startBackground({ task: "a", agent: "worker" });
+    rt.startBackground({ task: "b", agent: "worker" });
+    rt.startBackground({ task: "c", agent: "worker" });
+
+    await new Promise((r) => setTimeout(r, 30)); // 等全部完成
+
+    // 首个立即发送（1 次），后续 2 个进合并窗口
+    const immediateCount = rt.pi.sendMessage.mock.calls.length;
+    expect(immediateCount).toBeGreaterThanOrEqual(1); // 至少首个已发
+
+    // 窗口到期后合并发送 1 条 → 总共 2 次
+    await new Promise((r) => setTimeout(r, 2100)); // 等合并窗口（2000ms）
+    expect(rt.pi.sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(rt.pi.sendMessage.mock.calls.length).toBeLessThanOrEqual(3);
+  });
+
+  it("single background sends exactly one notification (no merge overhead)", async () => {
+    const rt = makeRuntime();
+    rt.startBackground({ task: "solo", agent: "worker" });
+    await new Promise((r) => setTimeout(r, 20));
+    // 单个 background → 立即发 1 条，窗口内无后续 → 不多发
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushPendingNotifications clears timer and sends merged batch", () => {
+    const rt = makeRuntime();
+    // 直接调 notifyBgCompletion 模拟入队（首个会立即发，需先触发一次"首个"再入队）
+    // 触发首个 → 立即发 + 启动窗口
+    rt.notifyBgCompletion({
+      id: "bg-merge-1",
+      status: "done",
+      agent: "worker",
+      result: { text: "first" } as AgentResult,
+      startedAt: Date.now(),
+    });
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1); // 首个立即发
+    // 后续入队（窗口内）
+    rt.notifyBgCompletion({
+      id: "bg-merge-2",
+      status: "done",
+      agent: "reviewer",
+      result: { text: "second" } as AgentResult,
+      startedAt: Date.now(),
+    });
+    rt.notifyBgCompletion({
+      id: "bg-merge-3",
+      status: "failed",
+      agent: "worker",
+      error: "boom",
+      startedAt: Date.now(),
+    });
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1); // 仍在窗口内，未 flush
+    // dispose → flushPendingNotifications → 合并发 1 条
+    rt.dispose();
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(2); // 首个 + 合并 1 条
+    const mergedCall = rt.pi.sendMessage.mock.calls[1]!;
+    expect(mergedCall[0].customType).toBe("subagent-bg-notify");
+    expect(String(mergedCall[0].content)).toContain("2 background tasks");
   });
 });
