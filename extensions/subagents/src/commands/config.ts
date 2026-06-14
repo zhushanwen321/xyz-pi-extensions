@@ -1,8 +1,9 @@
 // src/commands/config.ts
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+
 import { getRuntime } from "../runtime.ts";
-import { formatConfigSummary } from "../tui/format.ts";
 import { runConfigWizard } from "../tui/config-wizard.ts";
+import { formatConfigSummary } from "../tui/format.ts";
 
 /** FR-4.8.1: 注册 /subagents 命令 */
 export function registerSubagentsCommand(pi: ExtensionAPI): void {
@@ -10,7 +11,10 @@ export function registerSubagentsCommand(pi: ExtensionAPI): void {
     description: "Subagents 配置: /subagents [config [category]]",
     handler: async (argsStr: string, ctx: ExtensionCommandContext) => {
       const rt = getRuntime();
-      if (!rt) { ctx.ui.notify("Subagents runtime 未初始化", "error"); return; }
+      if (!rt) {
+        ctx.ui.notify("Subagents runtime 未初始化", "error");
+        return;
+      }
 
       const args = argsStr.trim().split(/\s+/).filter(Boolean);
 
@@ -21,7 +25,7 @@ export function registerSubagentsCommand(pi: ExtensionAPI): void {
       }
 
       // /subagents config [category]
-      const wizardArgs = args.slice(1);
+      const wizardArgs = args.slice(1); // 去掉 "config"
       await runConfigWizard(
         {
           select: (title, options) => ctx.ui.select(title, options),
@@ -32,6 +36,10 @@ export function registerSubagentsCommand(pi: ExtensionAPI): void {
         rt.globalConfig,
         process.env.HOME || process.env.USERPROFILE || ctx.cwd,
         ctx.modelRegistry as never,
+        {
+          // 真实 YOLO 切换：调 runtime.toggleYolo()（mutate sessionState + persist via appendEntry）
+          onToggleYolo: () => rt.toggleYolo(),
+        },
       );
     },
   });
