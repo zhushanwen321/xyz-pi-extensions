@@ -1,5 +1,11 @@
 # @zhushanwen/pi-evolve-daily
 
+## 0.1.12
+
+### Patch Changes
+
+- 92ce2a7: Reduce skill-execution tracker false positives. Improve trigger matching and dedup logic so unrelated skill loads are not miscounted as execution of a tracked skill.
+
 ## 0.1.11
 
 ### Patch Changes
