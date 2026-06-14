@@ -14,6 +14,7 @@ import { createSessionModelState, restoreState, serializeState, setAgentModel, s
 import { AgentWidgetManager, type WidgetAgentState, type WidgetUI } from "./tui/agent-widget.ts";
 import { extractLabelFromArgs } from "./tui/format.ts";
 import {
+  type AgentEvent,
   type AgentEventLogEntry,
   type AgentResult,
   type BackgroundHandle,
@@ -427,16 +428,26 @@ export class SubagentRuntime {
     this.notifyChange();
 
     // detached：不 await，完成后回填
-    // runAgent 内部创建 widgetState（widgetId="run-N"），5s 后归档到 _completedAgents。
-    // 但 background agent 的权威数据源是 _bgRecords（id="bg-N-..."）。
-    // 因此 runAgent 完成时，同时把 eventLog 写入 BgRecord。
+    // G-005 修复：通过 onEvent 闭包直接把事件写入 record.eventLog，
+    // 不再用 widget.listAgents().find(id.startsWith("run-")) 反查（并发时会串号）。
+    // record 是本闭包独占的引用，与其它并发 background 隔离。
+    const userBgOnEvent = opts.onEvent;
+    const bgStartTime = record.startedAt;
     const signal = opts.signal ?? controller.signal;
-    this.runAgent({ ...opts, signal })
+    this.runAgent({
+      ...opts,
+      signal,
+      onEvent: (event: AgentEvent) => {
+        userBgOnEvent?.(event);
+        if (!record.eventLog) record.eventLog = [];
+        updateRecordEventLog(record.eventLog, event, bgStartTime);
+        this.notifyChange();
+      },
+    })
       .then((result) => {
         record.result = result;
         record.status = result.success ? "done" : "failed";
         record.endedAt = Date.now();
-        record.eventLog = this.widget.listAgents().find((a) => a.id.startsWith("run-"))?.eventLog ?? [];
         record.agent = opts.agent ?? "default";
         delete record.controller;
         opts.onComplete?.(record);
@@ -466,13 +477,21 @@ export class SubagentRuntime {
             cwd: this.cwd,
           }),
         );
+        // FR-O1.1: 回注完成通知到主对话（去重 + 合并窗口在 notifyBgCompletion 内处理）
+        this.notifyBgCompletion({
+          id: record.id,
+          status: record.status as "done" | "failed",
+          agent: record.agent,
+          result: record.result,
+          startedAt: record.startedAt,
+          endedAt: record.endedAt,
+        });
         this.notifyChange();
       })
       .catch((err: unknown) => {
         record.status = "failed";
         record.error = err instanceof Error ? err.message : String(err);
         record.endedAt = Date.now();
-        record.eventLog = this.widget.listAgents().find((a) => a.id.startsWith("run-"))?.eventLog ?? [];
         record.agent = opts.agent ?? "default";
         delete record.controller;
         opts.onComplete?.(record);
@@ -491,6 +510,15 @@ export class SubagentRuntime {
             cwd: this.cwd,
           }),
         );
+        // FR-O1.1: 失败也回注（去重 + 合并窗口在 notifyBgCompletion 内处理）
+        this.notifyBgCompletion({
+          id: record.id,
+          status: "failed",
+          agent: record.agent,
+          error: record.error,
+          startedAt: record.startedAt,
+          endedAt: record.endedAt,
+        });
         this.notifyChange();
       });
 
@@ -709,6 +737,22 @@ export function updateWidgetFromEvent(
     s.eventLog.shift();
   }
   s.elapsedSeconds = Math.floor((Date.now() - startTime) / MS_PER_SECOND);
+}
+
+/**
+ * G-005 修复：直接更新 BgRecord.eventLog（复用 updateWidgetFromEvent 的 eventLog 追加逻辑）。
+ *
+ * 从 updateWidgetFromEvent 抽取的纯 eventLog 操作：传入的 eventLog 数组被直接 mutate
+ * （push + ring buffer），调用方持有同一引用即可读到结果。与 widget 反查（listAgents
+ * 找 startsWith("run-")）相比，本方式通过闭包捕获 record，每个 background 的 eventLog
+ * 互不串号。
+ */
+function updateRecordEventLog(eventLog: AgentEventLogEntry[], event: AgentEvent, startTime: number): void {
+  // 构造最小 state：只需 eventLog（直接引用）+ _currentTurnText（text_delta 累积用）。
+  // 其余字段（turns/tokens/activity/elapsedSeconds）会被 updateWidgetFromEvent 写入，
+  // 但 BgRecord 不需要它们，写完即弃。
+  const state = { eventLog, _currentTurnText: "" } as unknown as WidgetAgentState;
+  updateWidgetFromEvent(state, event, startTime);
 }
 
 /** ms → s 换算 */

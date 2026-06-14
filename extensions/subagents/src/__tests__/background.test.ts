@@ -7,7 +7,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SubagentRuntime } from "../runtime.ts";
-import type { AgentResult, BackgroundStatus } from "../types.ts";
+import type { AgentEvent, AgentResult, BackgroundStatus, RunAgentOptions } from "../types.ts";
 
 /** FR-O1: mock pi 的形状（含 sendMessage） */
 interface MockPi {
@@ -239,5 +239,100 @@ describe("PiLike sendMessage (FR-O1)", () => {
       "subagent-bg-record",
       expect.objectContaining({ id: "bg-stale-1", status: "done" }),
     );
+  });
+});
+
+describe("startBackground eventLog race fix (G-005) + 回注", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("each background gets its own eventLog, not the first run- widget", async () => {
+    const rt = makeRuntime();
+
+    // 模拟两个并发 background，各自有不同的 eventLog
+    let callCount = 0;
+    (rt as unknown as { runAgent: ReturnType<typeof vi.fn> }).runAgent = vi.fn((opts: RunAgentOptions) => {
+      callCount++;
+      const myEvents: AgentEvent[] = [
+        { type: "tool_start", toolName: `tool-bg-${callCount}` } as AgentEvent,
+        { type: "tool_end", toolName: `tool-bg-${callCount}`, isError: false } as AgentEvent,
+      ];
+      return new Promise<AgentResult>((resolve) => {
+        // 模拟事件流
+        setTimeout(() => {
+          for (const e of myEvents) opts.onEvent?.(e as AgentEvent);
+          resolve({
+            text: `output-${callCount}`,
+            turns: 1,
+            durationMs: 100,
+            success: true,
+            sessionId: `session-${callCount}`,
+            toolCalls: [],
+          });
+        }, 10);
+      });
+    });
+
+    const handle1 = rt.startBackground({ task: "task-1", agent: "worker" });
+    const handle2 = rt.startBackground({ task: "task-2", agent: "reviewer" });
+
+    await new Promise((r) => setTimeout(r, 50)); // 等 detached 完成
+
+    const bg1 = rt.getBackground(handle1.id);
+    const bg2 = rt.getBackground(handle2.id);
+    expect(bg1?.eventLog?.some((e) => e.label.includes("tool-bg-1"))).toBe(true);
+    expect(bg1?.eventLog?.some((e) => e.label.includes("tool-bg-2"))).toBe(false);
+    expect(bg2?.eventLog?.some((e) => e.label.includes("tool-bg-2"))).toBe(true);
+    expect(bg2?.eventLog?.some((e) => e.label.includes("tool-bg-1"))).toBe(false);
+
+    // 回注：每个 background 完成时发一次 sendMessage（去重 key 不同）
+    await new Promise((r) => setTimeout(r, 10));
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancel does not double-send notification (runAgent never resolves)", async () => {
+    const rt = makeRuntime();
+
+    (rt as unknown as { runAgent: ReturnType<typeof vi.fn> }).runAgent = vi.fn(
+      () => new Promise<AgentResult>(() => {}), // 永不 resolve（保持 running）
+    );
+
+    const handle = rt.startBackground({ task: "long task", agent: "worker" });
+    // cancel 立即触发
+    rt.cancelBackground(handle.id);
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    // runAgent 永不完成 → 不会走 .then/.catch → notifyBgCompletion 不被调用
+    // cancelBackground 本身也不调 notifyBgCompletion
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(0);
+  });
+
+  it("failed background sends a failed notification", async () => {
+    const rt = makeRuntime();
+    (rt as unknown as { runAgent: ReturnType<typeof vi.fn> }).runAgent = vi.fn(
+      async () =>
+        ({
+          text: "",
+          turns: 0,
+          durationMs: 5,
+          success: false,
+          error: "model down",
+          sessionId: "",
+          toolCalls: [],
+        }) as AgentResult,
+    );
+
+    const handle = rt.startBackground({ task: "will fail", agent: "worker" });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const status = rt.getBackground(handle.id);
+    expect(status?.status).toBe("failed");
+    // 回注：发一条 failed 通知
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1);
+    const call = rt.pi.sendMessage.mock.calls[0]!;
+    expect(call[0]).toMatchObject({ customType: "subagent-bg-notify" });
+    expect(String(call[0].content)).toContain("failed");
   });
 });
