@@ -393,12 +393,13 @@ describe("renderSubagentResult — spinner timer lifecycle (FR-2.3)", () => {
     expect(state.timer).toBeUndefined();
   });
 
-  it("does not crash without details (fallback)", () => {
+  it("does not crash with malformed details (fallback)", () => {
     const state = initialToolState();
     const invalidate = vi.fn();
     const context = { state, invalidate };
+    // 模拟 Pi 运行时传入残缺 details（缺 status 字段）→ fallback 到默认 details
     const comp = renderSubagentResult(
-      { content: [{ type: "text", text: "plain" }] },
+      { content: [{ type: "text", text: "plain" }], details: {} } as never,
       { expanded: false },
       fakeTheme,
       context,

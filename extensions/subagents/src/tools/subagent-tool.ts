@@ -57,15 +57,25 @@ const SPINNER_INTERVAL_MS = 250;
  * ⚠️ context.state 由 Pi runtime 初始化为 `{}`（tool-execution.js rendererState = {}），
  * 首次渲染时 frame/timer 均为 undefined。必须在 running 分支入口确保 frame 初始化为 0，
  * 否则 `(undefined + 1) % 10 = NaN`，spinner 帧序列取 [NaN] 得到 undefined。
+ *
+ * ⚠️ 定时器清理前置条件：Pi runtime（tool-execution.js）不对 renderResult 返回的 Component
+ * 调 dispose/destroy。定时器的清理**完全依赖** Pi 在 agent 状态变为 done/failed 后**再次调用**
+ * renderResult（此时进入 else 分支 clearInterval）。sync 模式的 pushUpdate("done"/"failed")
+ * 会触发 onUpdate → Pi 重渲染 → renderResult 再入；background 模式同理。
+ * timer.unref() 保证不阻止进程退出，但运行期若 Pi 因组件隐藏/滚动/session 切换不再调
+ * renderResult，250ms interval 会持续 invalidate 不可见组件（CPU 轻微浪费，非泄漏——
+ * 进程退出时随 unref 清理）。
  */
 export function renderSubagentResult(
-  result: { content: Array<{ type: string; text?: string }>; details?: unknown },
+  result: AgentToolResult<SubagentToolDetails>,
   options: { expanded: boolean },
   theme: { bg(color: string, text: string): string; fg(color: string, text: string): string; bold(text: string): string },
   context: { state: SubagentToolState; invalidate(): void },
 ): SubagentResultComponent {
-  const details = result.details as SubagentToolDetails | undefined;
-  if (!details) {
+  const details = result.details;
+  if (!details || typeof details.status !== "string") {
+    // 防御：Pi 运行时理论上必传 details（SDK 契约 details: T 必选），
+    // 但历史上有空对象传入的场景。结构检查 + fallback 避免崩溃。
     return new SubagentResultComponent(
       { eventLog: [], status: "done", agent: "default", turns: 0, totalTokens: 0, elapsedSeconds: 0 },
       theme,

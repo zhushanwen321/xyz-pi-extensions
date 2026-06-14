@@ -53,20 +53,34 @@ describe("updateWidgetFromEvent — append mode", () => {
     expect(s._currentTurnText).toBe("");
   });
 
-  it("long text chunked to 100-char text_output on first delta, turn_end emits empty summary (FR-1.1b)", () => {
+  it("long text produces multiple text_output chunks, remainder preserved (FR-1.1b, W2)", () => {
     const s = makeWidgetState();
     const longText = "x".repeat(200);
     updateWidgetFromEvent(s, { type: "text_delta", delta: longText }, Date.now());
     updateWidgetFromEvent(s, { type: "turn_end" }, Date.now());
     const entries = s.eventLog ?? [];
-    // 单次 200 字符 delta：累计达 100 时切片 1 条 text_output(label 前 100 字符)，
-    // _currentTurnText 清空（注意：切片把前 100 作为 label 后整个重置，不保留剩余）。
-    // turn_end 时缓冲已空 → summary 为空。
-    expect(entries).toHaveLength(2);
+    // W2: 切片保留余数。200 字符 → while 循环切 2 次（各 100），余 0。
+    // turn_end 时缓冲已空 → summary 为空。共 3 条：2 text_output + 1 turn_end。
+    expect(entries).toHaveLength(3);
     expect(entries[0].type).toBe("text_output");
     expect(entries[0].label).toHaveLength(100);
-    expect(entries[1].type).toBe("turn_end");
-    expect(entries[1].label).toHaveLength(0);
+    expect(entries[1].type).toBe("text_output");
+    expect(entries[1].label).toHaveLength(100);
+    expect(entries[2].type).toBe("turn_end");
+    expect(entries[2].label).toHaveLength(0);
+  });
+
+  it("text remainder carries over to next delta (FR-1.1b, W2)", () => {
+    const s = makeWidgetState();
+    // 150 字符：切片 100（label）+ 余 50。50 < 100 不再切。
+    updateWidgetFromEvent(s, { type: "text_delta", delta: "x".repeat(150) }, Date.now());
+    // 再 60 字符：50+60=110 ≥ 100 → 切 100，余 10
+    updateWidgetFromEvent(s, { type: "text_delta", delta: "y".repeat(60) }, Date.now());
+    updateWidgetFromEvent(s, { type: "turn_end" }, Date.now());
+    const entries = s.eventLog ?? [];
+    // 2 条 text_output（150 切 1 条，余 50；+60=110 切 1 条，余 10）+ turn_end flush 余 10 + turn_end summary
+    const textOutputs = entries.filter((e) => e.type === "text_output");
+    expect(textOutputs.length).toBe(3); // 150切片 + 110切片 + turn_end flush 余10
   });
 
   it("message_end does NOT push eventLog entry (only updates totalTokens)", () => {

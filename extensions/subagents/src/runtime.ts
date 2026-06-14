@@ -455,69 +455,85 @@ export class SubagentRuntime {
         });
       },
     })
-      .then((result) => {
-        record.result = result;
-        record.status = result.success ? "done" : "failed";
-        record.endedAt = Date.now();
-        record.eventLog = bgState.eventLog ?? [];
-        record.agent = opts.agent ?? "default";
-        delete record.controller;
-        opts.onComplete?.(record);
-        this.pi?.events.emit("subagents:bg:done", record);
-        this.pi?.appendEntry("subagent-bg-record", {
-          id,
-          agent: opts.agent,
-          status: record.status,
-          sessionId: result.sessionId,
-        });
-        // ADR-024 L1: background 完成持久化（与 sync 统一）
-        void this._history.append(
-          buildPersistedRecord({
-            id,
-            agent: record.agent,
-            status: record.status,
-            mode: "background",
-            task: opts.task,
-            startedAt: record.startedAt,
-            endedAt: record.endedAt,
-            turns: result.turns,
-            totalTokens: result.usage
-              ? result.usage.input + result.usage.output + result.usage.cacheRead + result.usage.cacheWrite
-              : undefined,
-            resultText: result.text,
-            sessionFile: result.sessionFile ? path.basename(result.sessionFile) : undefined,
-            cwd: this.cwd,
-          }),
-        );
-        this.notifyChange();
-      })
-      .catch((err: unknown) => {
-        record.status = "failed";
-        record.error = err instanceof Error ? err.message : String(err);
-        record.endedAt = Date.now();
-        record.eventLog = bgState.eventLog ?? [];
-        record.agent = opts.agent ?? "default";
-        delete record.controller;
-        opts.onComplete?.(record);
-        this.pi?.events.emit("subagents:bg:done", record);
-        // ADR-024 L1: background 失败持久化
-        void this._history.append(
-          buildPersistedRecord({
-            id,
-            agent: record.agent,
-            status: "failed",
-            mode: "background",
-            task: opts.task,
-            startedAt: record.startedAt,
-            endedAt: record.endedAt,
-            error: record.error,
-            cwd: this.cwd,
-          }),
-        );
-        this.notifyChange();
-      });
+      .then((result) => this.finalizeBgSuccess(record, opts, result, bgState))
+      .catch((err: unknown) => this.finalizeBgFailure(record, opts, err, bgState));
 
     return { id, status: "running" };
+  }
+
+  /** FR-2.5: background 成功完成后的回填 + 持久化（从 startBackground 提取，降函数行数） */
+  private finalizeBgSuccess(
+    record: BgRecord,
+    opts: BackgroundOptions,
+    result: AgentResult,
+    bgState: WidgetAgentState,
+  ): void {
+    record.result = result;
+    record.status = result.success ? "done" : "failed";
+    record.endedAt = Date.now();
+    record.eventLog = bgState.eventLog ?? [];
+    record.agent = opts.agent ?? "default";
+    delete record.controller;
+    opts.onComplete?.(record);
+    this.pi?.events.emit("subagents:bg:done", record);
+    this.pi?.appendEntry("subagent-bg-record", {
+      id: record.id,
+      agent: opts.agent,
+      status: record.status,
+      sessionId: result.sessionId,
+    });
+    // ADR-024 L1: background 完成持久化（与 sync 统一）
+    void this._history.append(
+      buildPersistedRecord({
+        id: record.id,
+        agent: record.agent,
+        status: record.status,
+        mode: "background",
+        task: opts.task,
+        startedAt: record.startedAt,
+        endedAt: record.endedAt,
+        turns: result.turns,
+        totalTokens: result.usage
+          ? result.usage.input + result.usage.output + result.usage.cacheRead + result.usage.cacheWrite
+          : undefined,
+        resultText: result.text,
+        sessionFile: result.sessionFile ? path.basename(result.sessionFile) : undefined,
+        cwd: this.cwd,
+      }),
+    );
+    this.notifyChange();
+  }
+
+  /** FR-2.5: background 失败后的回填 + 持久化（从 startBackground 提取） */
+  private finalizeBgFailure(
+    record: BgRecord,
+    opts: BackgroundOptions,
+    err: unknown,
+    bgState: WidgetAgentState,
+  ): void {
+    record.status = "failed";
+    record.error = err instanceof Error ? err.message : String(err);
+    record.endedAt = Date.now();
+    record.eventLog = bgState.eventLog ?? [];
+    record.agent = opts.agent ?? "default";
+    delete record.controller;
+    opts.onComplete?.(record);
+    this.pi?.events.emit("subagents:bg:done", record);
+    // ADR-024 L1: background 失败持久化
+    void this._history.append(
+      buildPersistedRecord({
+        id: record.id,
+        agent: record.agent,
+        status: "failed",
+        mode: "background",
+        task: opts.task,
+        startedAt: record.startedAt,
+        endedAt: record.endedAt,
+        error: record.error,
+        cwd: this.cwd,
+      }),
+    );
+    this.notifyChange();
   }
 
   /** 查询 background 任务状态（含结果） */
@@ -654,19 +670,22 @@ export function updateWidgetFromEvent(
     }
     case "text_delta": {
       s._currentTurnText = (s._currentTurnText ?? "") + (event.delta ?? "");
-      // FR-1.1b: 节流切片——累计达 TEXT_OUTPUT_CHUNK 产生一条 text_output log entry
-      if ((s._currentTurnText ?? "").length >= TEXT_OUTPUT_CHUNK) {
-        s.eventLog.push({ type: "text_output", label: s._currentTurnText!.slice(0, EVENT_LOG_LABEL_MAX), ts: Date.now() });
-        s._currentTurnText = "";
+      // FR-1.1b: 节流切片——累计达 TEXT_OUTPUT_CHUNK 产生一条 text_output log entry。
+      // 切片后保留余数继续累计（不丢弃），使长文本能产生多条 text_output 快照。
+      while ((s._currentTurnText ?? "").length >= TEXT_OUTPUT_CHUNK) {
+        const buf: string = s._currentTurnText ?? "";
+        s.eventLog.push({ type: "text_output", label: buf.slice(0, EVENT_LOG_LABEL_MAX), ts: Date.now() });
+        s._currentTurnText = buf.slice(EVENT_LOG_LABEL_MAX);
       }
       break;
     }
     case "thinking_delta": {
       s._currentThinking = (s._currentThinking ?? "") + (event.delta ?? "");
-      // FR-1.1a: 节流切片——累计达 THINKING_CHUNK 产生一条 thinking log entry
-      if ((s._currentThinking ?? "").length >= THINKING_CHUNK) {
-        s.eventLog.push({ type: "thinking", label: s._currentThinking!.slice(0, EVENT_LOG_LABEL_MAX), ts: Date.now() });
-        s._currentThinking = "";
+      // FR-1.1a: 节流切片——同 text_output 逻辑，保留余数
+      while ((s._currentThinking ?? "").length >= THINKING_CHUNK) {
+        const buf: string = s._currentThinking ?? "";
+        s.eventLog.push({ type: "thinking", label: buf.slice(0, EVENT_LOG_LABEL_MAX), ts: Date.now() });
+        s._currentThinking = buf.slice(EVENT_LOG_LABEL_MAX);
       }
       break;
     }
