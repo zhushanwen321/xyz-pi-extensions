@@ -1,10 +1,15 @@
 // src/__tests__/subagent-render.test.ts
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 
 import { buildRenderLines, SubagentResultComponent, type SubagentToolDetails } from "../tui/subagent-render.ts";
 
 const fakeTheme = {
   bg(_color: string, text: string): string { return `[bg:${text}]`; },
+};
+
+const passthroughTheme = {
+  bg(_color: string, text: string): string { return text; },
 };
 
 function makeDetails(overrides: Partial<SubagentToolDetails> = {}): SubagentToolDetails {
@@ -90,5 +95,55 @@ describe("SubagentResultComponent", () => {
     const lines = comp.render(80);
     expect(lines[0]).toContain("reviewer");
     expect(lines[0]).toContain("5 turns");
+  });
+
+  it("truncates long single-line result to fit width", () => {
+    const longResult = "A".repeat(10_000);
+    const comp = new SubagentResultComponent(
+      makeDetails({ status: "done", result: longResult }),
+      passthroughTheme,
+    );
+    const width = 80;
+    const lines = comp.render(width);
+    for (const line of lines) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+    // The long result line should be truncated (with ellipsis)
+    const resultLine = lines.find((l) => l.includes("A"));
+    expect(resultLine).toBeDefined();
+    expect(visibleWidth(resultLine!)).toBeLessThanOrEqual(width);
+  });
+
+  it("splits multi-line result and truncates each line to fit width", () => {
+    const multiLineResult = [
+      "short",
+      "B".repeat(5_000),
+      "C".repeat(5_000),
+    ].join("\n");
+    const comp = new SubagentResultComponent(
+      makeDetails({ status: "done", result: multiLineResult }),
+      passthroughTheme,
+    );
+    const width = 60;
+    const lines = comp.render(width);
+    for (const line of lines) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+    // There should be at least two truncated long lines
+    const longLines = lines.filter((l) => l.includes("B") || l.includes("C"));
+    expect(longLines.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("truncates long error message to fit width", () => {
+    const longError = "E".repeat(8_000);
+    const comp = new SubagentResultComponent(
+      makeDetails({ status: "failed", error: longError }),
+      passthroughTheme,
+    );
+    const width = 40;
+    const lines = comp.render(width);
+    for (const line of lines) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
   });
 });

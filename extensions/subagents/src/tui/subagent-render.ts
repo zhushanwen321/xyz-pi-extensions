@@ -5,6 +5,8 @@
 //
 // 不依赖 AgentWidgetManager（widget 已移除），直接从 details 构建渲染内容。
 
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+
 import type { AgentEventLogEntry } from "../types.ts";
 
 // ============================================================
@@ -123,24 +125,32 @@ export class SubagentResultComponent {
     const lines = buildRenderLines(this._details);
     const bgFn = this.getBgFn();
 
-    // 应用背景色 + padding + 全宽填充
+    // 应用背景色 + padding + 全宽填充；超长内容必须截断，否则 Pi TUI
+    // 会抛出 "Rendered line exceeds terminal width" 异常。
     const result: string[] = [];
     const paddingX = 1;
     const leftPad = " ".repeat(paddingX);
+    const padSides = 2;
+    const contentWidth = Math.max(1, width - paddingX * padSides);
 
-    for (const line of lines) {
-      // Pad content to fit width (subtract padding)
-      const contentWidth = Math.max(1, width - paddingX * 2);
-      // Strip ANSI to measure visible length
-      const visibleLen = stripAnsi(line).length;
-      const padNeeded = Math.max(0, contentWidth - visibleLen);
-      const padded = leftPad + line + " ".repeat(padNeeded) + " ";
+    for (const rawLine of lines) {
+      // buildRenderLines 可能把 result/error 直接 push 为一整行，
+      // 其中可能包含换行符；按换行符拆分，每行分别处理。
+      for (const line of rawLine.split("\n")) {
+        const truncated =
+          visibleWidth(line) > contentWidth
+            ? truncateToWidth(line, contentWidth)
+            : line;
+        const visibleLen = visibleWidth(truncated);
+        const padNeeded = Math.max(0, contentWidth - visibleLen);
+        const padded = leftPad + truncated + " ".repeat(padNeeded) + " ";
 
-      // Apply background
-      if (bgFn) {
-        result.push(bgFn(padded));
-      } else {
-        result.push(padded);
+        // Apply background
+        if (bgFn) {
+          result.push(bgFn(padded));
+        } else {
+          result.push(padded);
+        }
       }
     }
 
@@ -157,11 +167,7 @@ export class SubagentResultComponent {
   }
 }
 
-/** Strip ANSI escape sequences for visible length measurement */
-function stripAnsi(str: string): string {
-   
-  return str.replace(/\x1b\[[0-9;]*m/g, "");
-}
+
 
 // ============================================================
 // Factory（供 subagent-tool.ts 调用）
