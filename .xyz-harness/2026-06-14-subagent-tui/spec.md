@@ -242,6 +242,8 @@ function spinnerGlyph(details: SubagentToolDetails): string {
 
 #### FR-3.0: 执行记录留存机制（G-005/G-006/G-012 解决）
 
+> **连带影响（FR-2.0 删除 widget 后）**：以下 FR-3.0 ~ FR-3.5 中所有"widget 数据源"（`widget.listAgents()`、`widget.agents`、`WIDGET_LINGER_MS` 淡出回调）需改为从 runtime 的 running agent map / `_completedAgents` / `_bgRecords` 取。本期 FR-2.0 删除 widget 渲染层时一并调整 `getAllRecords`（`subagents-view.ts:404-457`）的数据源，FR-3 的交互逻辑（j/k/Enter/x/q）保持不变。
+
 **问题**：widget 5 秒淡出后 `removeAgent` 删除 agent（含 eventLog）。已完成 agent 在全屏视图中不可见，UC-3（排查失败）无法满足。
 
 **方案 A（用户确认）**：双层留存：
