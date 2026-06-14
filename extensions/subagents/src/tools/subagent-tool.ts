@@ -24,7 +24,6 @@ import { formatTokens } from "../tui/format.ts";
 import type { WidgetAgentState } from "../tui/agent-widget.ts";
 import { SubagentResultComponent, type SubagentToolDetails } from "../tui/subagent-render.ts";
 import type { AgentEvent, AgentEventLogEntry } from "../types.ts";
-import { MAX_EVENT_LOG_ENTRIES } from "../types.ts";
 
 /** ms to seconds conversion */
 const MS_PER_SECOND = 1000;
@@ -68,7 +67,7 @@ const SPINNER_INTERVAL_MS = 250;
  */
 export function renderSubagentResult(
   result: AgentToolResult<SubagentToolDetails>,
-  options: { expanded: boolean },
+  options: { expanded: boolean; isPartial: boolean },
   theme: { bg(color: string, text: string): string; fg(color: string, text: string): string; bold(text: string): string },
   context: { state: SubagentToolState; invalidate(): void },
 ): SubagentResultComponent {
@@ -334,10 +333,6 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
           // FR-1.3: 统一委托 updateWidgetFromEvent（处理 tool_start/end、text_output/thinking 切片、
           // turn_end summary、message_end token 累加、ring buffer 淘汰）
           updateWidgetFromEvent(toolState, event, startTime);
-          // Ring buffer（updateWidgetFromEvent 已做淘汰，但此处额外防御）
-          while ((toolState.eventLog?.length ?? 0) > MAX_EVENT_LOG_ENTRIES) {
-            toolState.eventLog?.shift();
-          }
           // Push live update
           pushUpdate("running");
         },

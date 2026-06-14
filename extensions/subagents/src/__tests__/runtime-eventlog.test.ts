@@ -81,6 +81,10 @@ describe("updateWidgetFromEvent — append mode", () => {
     // 2 条 text_output（150 切 1 条，余 50；+60=110 切 1 条，余 10）+ turn_end flush 余 10 + turn_end summary
     const textOutputs = entries.filter((e) => e.type === "text_output");
     expect(textOutputs.length).toBe(3); // 150切片 + 110切片 + turn_end flush 余10
+    // 验证每条 label 长度（确保余数正确保留，非丢弃）
+    expect(textOutputs[0].label).toHaveLength(100); // 150 的前 100
+    expect(textOutputs[1].label).toHaveLength(100); // 余 50 + 60 = 110 的前 100
+    expect(textOutputs[2].label).toHaveLength(10);  // turn_end flush 剩余 10
   });
 
   it("message_end does NOT push eventLog entry (only updates totalTokens)", () => {

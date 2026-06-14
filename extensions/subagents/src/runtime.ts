@@ -45,7 +45,11 @@ interface PiLike {
 
 /** background id 的时间戳进制（base36 紧凑表示） */
 const BG_ID_RADIX = 36;
-/** widget 摘要截断长度 */
+/**
+ * widget 摘要截断长度（完成时 result.text 的预览截断）。
+ * 注意：与 EVENT_LOG_LABEL_MAX（types.ts，eventLog label 截断）值相同但语义不同——
+ * 前者截断最终结果文本预览，后者截断流式 eventLog 条目。有意不复用。
+ */
 const WIDGET_SUMMARY_MAX = 100;
 /** widget 完成状态淡出延迟（ms） */
 const WIDGET_LINGER_MS = 5000;

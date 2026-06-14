@@ -241,26 +241,19 @@ describe("resolveModelForAgent runtime method (FR-1.2, C2)", () => {
     expect(rt.resolveModelForAgent("nonexistent-agent")).toBeUndefined();
   });
 
-  it("returns ResolvedModel when a model resolves via fallback chain", () => {
+  it("returns ResolvedModel when fallback chain resolves the model", () => {
     const rt = new SubagentRuntime({
       cwd: "/tmp/x", homeDir: "/tmp/x-none", agentDir: "/tmp/x-agent",
     });
-    // globalConfig 的 fallback.model 需能被 registry.find 解析
-    // SubagentRuntime 构造时 loadGlobalConfig 可能读到默认 fallback。
-    // 注入能匹配 fallback 的 registry：
+    // 注入能匹配的 registry + 确定性的 fallback.model（绕过 loadGlobalConfig 的不确定默认值）
     rt.injectModelRegistry(makeRegistryWithModel() as never);
     rt.injectPi({ appendEntry: vi.fn(), events: { emit: vi.fn() } } as never);
-    // builtin agent "worker" 存在，category 推断为 "coding"，但 categories 无 "coding" 配置
-    // → 走 agent-frontmatter（无）→ global-fallback（需 config.json 有 fallback）
-    // 若 fallback model 不被 registry 识别 → 抛错 → undefined（可接受）
+    rt.globalConfig.fallback.model = "anthropic/claude-sonnet-4.5";
+    // builtin agent "worker" 无 frontmatter model → category 推断 "coding"（无配置）
+    // → 走 global-fallback → registry.find("anthropic", "claude-sonnet-4.5") 命中
     const result = rt.resolveModelForAgent("worker");
-    // 结果取决于 globalConfig.fallback 是否匹配 registry；两种都可接受
-    if (result) {
-      expect(result.model).toBeDefined();
-      expect(typeof result.model.id).toBe("string");
-    } else {
-      // fallback 未匹配也是合法降级
-      expect(result).toBeUndefined();
-    }
+    expect(result).toBeDefined();
+    expect(result!.model.id).toBe("anthropic/claude-sonnet-4.5");
+    expect(result!.source).toBe("global-fallback");
   });
 });

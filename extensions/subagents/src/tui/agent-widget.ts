@@ -5,7 +5,6 @@
 // 仅保留 WidgetAgentState 作为 running agent 状态载体：
 //   - runtime.ts 的 runAgent/startBackground 用它累积 eventLog（updateWidgetFromEvent）
 //   - /subagents list 的 getAllRecords 从 runtime.listRunningAgents() 读取
-//   - format.ts 的 formatStatusSummary 接收它作为参数类型
 
 import type { AgentEventLogEntry } from "../types.ts";
 

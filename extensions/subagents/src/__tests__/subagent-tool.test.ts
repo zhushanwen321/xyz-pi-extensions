@@ -355,7 +355,7 @@ describe("renderSubagentResult — spinner timer lifecycle (FR-2.3)", () => {
     const context = { state, invalidate };
     renderSubagentResult(
       { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "running", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
-      { expanded: false },
+      { expanded: false, isPartial: false },
       fakeTheme,
       context,
     );
@@ -372,7 +372,7 @@ describe("renderSubagentResult — spinner timer lifecycle (FR-2.3)", () => {
     const context = { state, invalidate };
     renderSubagentResult(
       { content: [{ type: "text", text: "ok" }], details: { eventLog: [], status: "done", agent: "w", turns: 1, totalTokens: 100, elapsedSeconds: 5 } },
-      { expanded: false },
+      { expanded: false, isPartial: false },
       fakeTheme,
       context,
     );
@@ -386,7 +386,7 @@ describe("renderSubagentResult — spinner timer lifecycle (FR-2.3)", () => {
     const context = { state, invalidate };
     renderSubagentResult(
       { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "failed", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
-      { expanded: false },
+      { expanded: false, isPartial: false },
       fakeTheme,
       context,
     );
@@ -400,7 +400,7 @@ describe("renderSubagentResult — spinner timer lifecycle (FR-2.3)", () => {
     // 模拟 Pi 运行时传入残缺 details（缺 status 字段）→ fallback 到默认 details
     const comp = renderSubagentResult(
       { content: [{ type: "text", text: "plain" }], details: {} } as never,
-      { expanded: false },
+      { expanded: false, isPartial: false },
       fakeTheme,
       context,
     );
@@ -416,7 +416,7 @@ describe("renderSubagentResult — spinner timer lifecycle (FR-2.3)", () => {
       const context = { state, invalidate };
       const comp = renderSubagentResult(
         { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "running", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
-        { expanded: false },
+        { expanded: false, isPartial: false },
         fakeTheme,
         context,
       );
@@ -446,7 +446,7 @@ describe("renderSubagentResult — spinner timer lifecycle (FR-2.3)", () => {
       // 先以 running 渲染 → 启动定时器
       renderSubagentResult(
         { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "running", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
-        { expanded: false },
+        { expanded: false, isPartial: false },
         fakeTheme,
         context,
       );
@@ -454,7 +454,7 @@ describe("renderSubagentResult — spinner timer lifecycle (FR-2.3)", () => {
       // 同一 state 再以 done 渲染 → 应清理定时器
       renderSubagentResult(
         { content: [{ type: "text", text: "ok" }], details: { eventLog: [], status: "done", agent: "w", turns: 1, totalTokens: 0, elapsedSeconds: 0 } },
-        { expanded: false },
+        { expanded: false, isPartial: false },
         fakeTheme,
         context,
       );
