@@ -7,18 +7,18 @@
  * 用法: node packages/evolve-daily/src/trackers/run_tests.mjs
  */
 
-import { writeFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ── Inline: types.ts 核心逻辑 ──────────────────────
 
-const TERMINAL_STATUSES = new Set(["completed", "recorded"]);
+const TERMINAL_STATUSES = new Set(["completed", "recorded", "dismissed"]);
 const ALLOWED_TRANSITIONS = {
-  loaded: ["completed", "error"],
-  error: ["completed", "error", "recorded"],
+  loaded: ["completed", "error", "dismissed"],
+  error: ["completed", "error", "recorded", "dismissed"],
 };
 
 function isTerminalStatus(status) {
@@ -39,12 +39,20 @@ function extractSkillName(path) {
   return segments[segments.length - 2] ?? null;
 }
 
-function triggerMatch(event) {
+// 方向 A：排除 cwd 内的 SKILL.md（开发/调研场景）
+function isPathInCwd(target, cwd) {
+  const abs = resolve(cwd, target);
+  const prefix = cwd.endsWith(sep) ? cwd : cwd + sep;
+  return abs === cwd || abs.startsWith(prefix);
+}
+
+function triggerMatch(event, ctx) {
   if (event.toolName !== "read") return null;
   const path = event.input && typeof event.input === "object" && event.input.path;
   if (typeof path !== "string") return null;
   const name = extractSkillName(path);
   if (!name) return null;
+  if (ctx && isPathInCwd(path, ctx.cwd)) return null;
   return { name, metadata: { skillMdPath: path }, summary: `read ${path}` };
 }
 
@@ -86,24 +94,48 @@ console.log("Activity Tracker Framework Tests (pure JS)\n");
     `toolCall=${hasToolCall}, turnEnd=${hasTurnEnd}, sessStart=${hasSessionStart}, sessTree=${hasSessionTree}, before=${hasBeforeAgentStart}, tool=${hasRegisterTool}`);
 }
 
-// TC-2-01: SKILL.md read triggers TrackedItem creation
+// TC-2-01: SKILL.md read (outside cwd) triggers TrackedItem creation
 {
   const event = { toolName: "read", input: { path: "/path/to/my-skill/SKILL.md" } };
-  const match = triggerMatch(event);
+  const ctx = { cwd: "/home/user/project" };
+  const match = triggerMatch(event, ctx);
   const passed = match !== null && match.name === "my-skill" && match.metadata.skillMdPath === "/path/to/my-skill/SKILL.md";
   record("TC-2-01", passed,
-    ["Call triggerMatch({toolName:'read', path:'/path/to/my-skill/SKILL.md'})", "Assert match.name === 'my-skill'", "Assert match.metadata.skillMdPath is set"],
+    ["Call triggerMatch with global skill path outside cwd", "Assert match.name === 'my-skill'", "Assert match.metadata.skillMdPath is set"],
     `match=${JSON.stringify(match)}`);
 }
 
 // TC-2-02: Non-SKILL.md read does not trigger
 {
   const event = { toolName: "read", input: { path: "/path/to/config.json" } };
-  const match = triggerMatch(event);
+  const ctx = { cwd: "/home/user/project" };
+  const match = triggerMatch(event, ctx);
   const passed = match === null;
   record("TC-2-02", passed,
-    ["Call triggerMatch({toolName:'read', path:'/path/to/config.json'})", "Assert match === null"],
+    ["Call triggerMatch with non-SKILL.md path", "Assert match === null"],
     `match=${match}`);
+}
+
+// TC-2-03: SKILL.md inside cwd (absolute) does NOT trigger — development/research scenario
+{
+  const event = { toolName: "read", input: { path: "/home/user/project/extensions/skills/foo/SKILL.md" } };
+  const ctx = { cwd: "/home/user/project" };
+  const match = triggerMatch(event, ctx);
+  const passed = match === null;
+  record("TC-2-03", passed,
+    ["Call triggerMatch with SKILL.md inside cwd (absolute)", "Assert match === null (cwd-excluded)"],
+    `match=${match} (cwd-excluded)`);
+}
+
+// TC-2-04: SKILL.md inside cwd (relative) does NOT trigger
+{
+  const event = { toolName: "read", input: { path: "extensions/skills/foo/SKILL.md" } };
+  const ctx = { cwd: "/home/user/project" };
+  const match = triggerMatch(event, ctx);
+  const passed = match === null;
+  record("TC-2-04", passed,
+    ["Call triggerMatch with SKILL.md inside cwd (relative)", "Assert match === null (cwd-excluded)"],
+    `match=${match} (cwd-excluded)`);
 }
 
 // TC-3-01: loaded→completed succeeds
@@ -122,6 +154,24 @@ console.log("Activity Tracker Framework Tests (pure JS)\n");
   record("TC-3-02", passed,
     ["Call canTransition('completed', 'error')", "Assert returns false", "Call canTransition('recorded', 'loaded')", "Assert returns false"],
     `completed→error=${fromCompleted}, recorded→loaded=${fromRecorded}`);
+}
+
+// TC-3-03: dismissed transition allowed from loaded and error
+{
+  const loadedToDismissed = canTransition("loaded", "dismissed");
+  const errorToDismissed = canTransition("error", "dismissed");
+  const passed = loadedToDismissed === true && errorToDismissed === true;
+  record("TC-3-03", passed,
+    ["Call canTransition('loaded', 'dismissed')", "Assert returns true", "Call canTransition('error', 'dismissed')", "Assert returns true"],
+    `loaded→dismissed=${loadedToDismissed}, error→dismissed=${errorToDismissed}`);
+}
+
+// TC-3-04: dismissed is terminal
+{
+  const passed = isTerminalStatus("dismissed") === true && canTransition("dismissed", "completed") === false;
+  record("TC-3-04", passed,
+    ["Call isTerminalStatus('dismissed')", "Assert returns true", "Call canTransition('dismissed', 'completed')", "Assert returns false"],
+    `isTerminal=${isTerminalStatus("dismissed")}, dismissed→completed=${canTransition("dismissed", "completed")}`);
 }
 
 // TC-4-01: Error accumulation (verify threshold logic in source)
@@ -196,7 +246,12 @@ const outputPath = join(
   "evidence",
   "test_execution_ts.json",
 );
-writeFileSync(outputPath, JSON.stringify({ test_execution: results }, null, 2));
-console.log(`\n  Results saved to ${outputPath}`);
+try {
+  mkdirSync(dirname(outputPath), { recursive: true });
+  writeFileSync(outputPath, JSON.stringify({ test_execution: results }, null, 2));
+  console.log(`\n  Results saved to ${outputPath}`);
+} catch (e) {
+  console.log(`\n  (skip saving results: ${e.code ?? e.message})`);
+}
 
 process.exit(failCount > 0 ? 1 : 0);

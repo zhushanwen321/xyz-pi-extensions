@@ -5,6 +5,10 @@
  * 追踪 skill 的加载、执行、异常、记录全生命周期。
  */
 
+import { resolve, sep } from "node:path";
+
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+
 import type { TrackerConfig } from "./core";
 import type { TrackedItem } from "./types";
 
@@ -28,13 +32,24 @@ export function extractSkillName(path: string): string | null {
   return segments[segments.length - MIN_PATH_SEGMENTS] ?? null;
 }
 
+/**
+ * 判断 target 路径是否位于 cwd 之下（用于排除开发/调研场景的 SKILL.md read）。
+ * target 可以是相对或绝对路径，统一 resolve 后比较前缀。
+ */
+export function isPathInCwd(target: string, cwd: string): boolean {
+  const abs = resolve(cwd, target);
+  const prefix = cwd.endsWith(sep) ? cwd : cwd + sep;
+  return abs === cwd || abs.startsWith(prefix);
+}
+
 // ── Steering 模板（从 skill-state/templates.ts 迁移）──
 
 function loadedSteeringPrompt(name: string, id: number): string {
   return (
     `[SKILL-STATE] skill "${name}" loaded and tracking started (id=${id}).\n` +
     `When done, call skill_state(action=update, id=${id}, status=completed).\n` +
-    `If blocked, call skill_state(action=update, id=${id}, status=error, detail="reason").`
+    `If blocked, call skill_state(action=update, id=${id}, status=error, detail="reason").\n` +
+    `If this is a false positive (e.g. you only read SKILL.md for research/development, not to execute it), call skill_state(action=update, id=${id}, status=dismissed).`
   );
 }
 
@@ -42,17 +57,18 @@ function remindSteeringPrompt(
   name: string,
   turnsSinceLoad: number,
 ): string {
-  return `[SKILL-STATE] skill "${name}" loaded ${turnsSinceLoad} turns ago without reaching terminal state. Please call skill_state to update its status.`;
+  return `[SKILL-STATE][INFO] skill "${name}" loaded ${turnsSinceLoad} turns ago without reaching terminal state. Call skill_state to update (use status=dismissed if this was a research/development read).`;
 }
 
 function errorForceRecordPrompt(item: TrackedItem<SkillMeta>): string {
   return (
-    `[SKILL-STATE] skill "${item.name}" has reached ${item.errorCount} errors — issue recording required.\n` +
-    `Immediately call the subagent tool (background mode) with this task:\n` +
+    `[SKILL-STATE][INFO] skill "${item.name}" reached ${item.errorCount} errors.\n` +
+    `First consider: if these errors are false positives (the skill was not genuinely executed — e.g. you only read SKILL.md for research), call skill_state(action=update, id=${item.id}, status=dismissed) to stop tracking.\n` +
+    `Only if the skill was genuinely executed and hit real issues, OPTIONALLY dispatch a subagent (background mode) to:\n` +
     `1. Read ${item.metadata.skillMdPath}\n` +
     `2. Analyze issues encountered during skill "${item.name}" execution based on current session context\n` +
     `3. Generate a structured issue record (skill name, error count, issue description, improvement suggestions)\n` +
-    `After completion, call skill_state(action=update, id=${item.id}, status=recorded).`
+    `Then call skill_state(action=update, id=${item.id}, status=recorded). Recording is optional, not mandatory.`
   );
 }
 
@@ -83,26 +99,32 @@ export const skillExecutionConfig: TrackerConfig<SkillMeta> = {
     "[Trigger] Tracking is auto-created when a skill loads — no manual creation needed",
     "[Transition] After execution, use update status=completed to mark success",
     "[Error] When blocked, use update status=error to mark the exception",
-    "[Record] After 2 accumulated errors, the system requests issue recording — when done, update status=recorded",
+    "[Dismiss] If tracking is a false positive (research/development read, not execution), use update status=dismissed to stop reminders",
+    "[Record] After 2 accumulated errors, issue recording is OPTIONAL — dismiss first if errors are false positives",
     "[Query] Use list anytime to view all tracking states",
   ],
 
   triggerEvent: "tool_call",
-  triggerMatch: (event: unknown) => {
+  triggerMatch: (event: unknown, ctx: ExtensionContext) => {
     const evt = event as Record<string, unknown>;
     if (evt.toolName !== "read") return null;
-    const path = evt.input &&
+    const inputPath = evt.input &&
       typeof evt.input === "object" &&
       (evt.input as Record<string, unknown>).path;
-    if (typeof path !== "string") return null;
+    if (typeof inputPath !== "string") return null;
 
-    const name = extractSkillName(path);
+    const name = extractSkillName(inputPath);
     if (!name) return null;
+
+    // 方向 A：排除 cwd 内的 SKILL.md。
+    // 项目工作区内的 skill 源文件 read 多为开发/调研/改造，而非执行。
+    // 全局 skill（~/.pi/agent/skills/、npm 包 skills/）不受影响。
+    if (isPathInCwd(inputPath, ctx.cwd)) return null;
 
     return {
       name,
-      metadata: { skillMdPath: path } satisfies SkillMeta,
-      summary: `read ${path}`,
+      metadata: { skillMdPath: inputPath } satisfies SkillMeta,
+      summary: `read ${inputPath}`,
     };
   },
 
