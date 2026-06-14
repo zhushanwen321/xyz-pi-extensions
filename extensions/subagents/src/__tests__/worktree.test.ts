@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { cleanupWorktree, createWorktree, pruneWorktrees } from "../core/worktree.ts";
 
@@ -218,4 +218,34 @@ describe("pruneWorktrees", () => {
   it("does not throw in a non-git directory", () => {
     expect(() => pruneWorktrees(tmpDir)).not.toThrow();
   });
+});
+
+// ============================================================
+// 宿主仓库防污染自检
+// ============================================================
+// worktree 测试在 tmpdir 创建真实 git 仓库。历史上曾因继承 GIT_DIR/GIT_INDEX_FILE
+// 环境变量，测试中的 git commit 误打到宿主项目仓库，创建删除所有文件的破坏性 commit。
+// CLEAN_ENV + hook 隔离是主动防御，这里是被动验证：全部测试跑完后，确认宿主仓库
+// 和 tmpdir 没有 pi-agent-* 残留。若此断言失败，说明防御被绕过，需立即排查。
+//
+// 只检查测试可能创建的东西（pi-agent-* worktree / 临时目录），不断言整个仓库
+// 状态，避免用户未提交的改动误报。
+afterAll(() => {
+  // 1. 宿主仓库无 pi-agent-* worktree 残留
+  const repoRoot = (() => {
+    try {
+      return execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"], env: CLEAN_ENV }).trim();
+    } catch {
+      return null;
+    }
+  })();
+  if (repoRoot) {
+    const worktreeList = execFileSync("git", ["worktree", "list"], { encoding: "utf-8", cwd: repoRoot, env: CLEAN_ENV });
+    const leaked = worktreeList.split("\n").filter((l) => /pi-agent-/.test(l));
+    expect(leaked, `宿主仓库残留 worktree:\n${leaked.join("\n")}`).toEqual([]);
+  }
+
+  // 2. tmpdir 无 pi-agent-* 临时目录残留（每个 case 的 afterEach 应已清理）
+  const tmpFiles = fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith("pi-agent-"));
+  expect(tmpFiles, `tmpdir 残留 pi-agent-* 目录: ${tmpFiles.join(", ")}`).toEqual([]);
 });
