@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Subagent 执行架构 — 现状与模式抉择</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-2: #1c2230;
+    --border: #30363d;
+    --border-soft: #21262d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --text-muted: #6e7681;
+    --accent: #58a6ff;
+    --accent-2: #79c0ff;
+    --green: #3fb950;
+    --green-bg: rgba(63, 185, 80, 0.12);
+    --yellow: #d29922;
+    --yellow-bg: rgba(210, 153, 34, 0.12);
+    --red: #f85149;
+    --red-bg: rgba(248, 81, 73, 0.12);
+    --purple: #bc8cff;
+    --purple-bg: rgba(188, 140, 255, 0.12);
+    --orange: #db6d28;
+    --orange-bg: rgba(219, 109, 40, 0.12);
+    --mono: "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Helvetica Neue", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.6;
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 48px 32px 96px; }
+  h1 {
+    font-size: 28px; font-weight: 700; margin: 0 0 8px;
+    letter-spacing: -0.5px;
+    background: linear-gradient(120deg, #fff, var(--accent-2));
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .subtitle { color: var(--text-dim); font-size: 15px; margin-bottom: 8px; }
+  .meta { color: var(--text-muted); font-size: 12px; font-family: var(--mono); margin-bottom: 32px; }
+  h2 {
+    font-size: 20px; font-weight: 600; margin: 48px 0 18px;
+    padding-bottom: 10px; border-bottom: 1px solid var(--border-soft);
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2 .num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border-radius: 8px;
+    background: var(--accent); color: var(--bg);
+    font-size: 13px; font-weight: 700; font-family: var(--mono);
+  }
+  h3 { font-size: 16px; font-weight: 600; margin: 28px 0 12px; color: var(--text); }
+  p { margin: 0 0 12px; color: var(--text-dim); }
+  strong { color: var(--text); font-weight: 600; }
+  code {
+    font-family: var(--mono); font-size: 12.5px;
+    background: var(--panel-2); padding: 1.5px 6px; border-radius: 4px;
+    color: var(--accent-2); border: 1px solid var(--border-soft);
+  }
+  .tag {
+    display: inline-block; font-family: var(--mono); font-size: 11px;
+    padding: 2px 8px; border-radius: 999px; font-weight: 600;
+    vertical-align: middle;
+  }
+  .tag-impl { background: var(--green-bg); color: var(--green); border: 1px solid rgba(63,185,80,0.3); }
+  .tag-draft { background: var(--yellow-bg); color: var(--yellow); border: 1px solid rgba(210,153,34,0.3); }
+  .tag-reject { background: var(--red-bg); color: var(--red); border: 1px solid rgba(248,81,73,0.3); }
+  .tag-option { background: var(--purple-bg); color: var(--purple); border: 1px solid rgba(188,140,255,0.3); }
+
+  /* ========== 架构图 ========== */
+  .arch {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 28px 24px;
+    margin: 16px 0;
+    overflow-x: auto;
+  }
+  .arch-title {
+    font-family: var(--mono); font-size: 12px; color: var(--text-muted);
+    margin-bottom: 20px; letter-spacing: 0.5px; text-transform: uppercase;
+  }
+  .layer {
+    display: flex; align-items: stretch; gap: 0;
+    margin-bottom: 8px; position: relative;
+  }
+  .layer-label {
+    width: 110px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: flex-end;
+    padding-right: 14px;
+    font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .layer-content { flex: 1; display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .node {
+    flex: 1; min-width: 0;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    position: relative;
+    transition: border-color 0.15s, transform 0.15s;
+  }
+  .node:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .node-name { font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: var(--text); margin-bottom: 3px; }
+  .node-desc { font-size: 11.5px; color: var(--text-dim); line-height: 1.45; }
+  .node-file { font-family: var(--mono); font-size: 10px; color: var(--text-muted); margin-top: 5px; }
+
+  .node.entry { border-color: var(--accent); background: rgba(88,166,255,0.06); }
+  .node.entry .node-name { color: var(--accent-2); }
+  .node.exec { border-color: var(--green); background: var(--green-bg); }
+  .node.exec .node-name { color: var(--green); }
+  .node.store { border-color: var(--purple); background: var(--purple-bg); }
+  .node.store .node-name { color: var(--purple); }
+  .node.bridge { border-color: var(--orange); background: var(--orange-bg); }
+  .node.bridge .node-name { color: var(--orange); }
+  .node.ghost { border-style: dashed; border-color: var(--red); background: var(--red-bg); opacity: 0.75; }
+  .node.ghost .node-name { color: var(--red); }
+  .node.ghost .node-desc { color: rgba(248,81,73,0.8); }
+
+  .arrow-down {
+    text-align: center; color: var(--text-muted); font-size: 18px;
+    line-height: 1; margin: 2px 0; font-family: var(--mono);
+  }
+  .arrow-down.with-label { position: relative; }
+  .arrow-down .alabel {
+    font-family: var(--mono); font-size: 10px; color: var(--text-muted);
+    position: absolute; left: 50%; transform: translateX(-50%);
+    background: var(--panel); padding: 0 8px; top: 4px;
+  }
+
+  .process-box {
+    border: 2px dashed var(--border);
+    border-radius: 14px;
+    padding: 18px 16px 14px;
+    margin: 8px 0;
+    position: relative;
+  }
+  .process-box.main-proc { border-color: var(--green); background: rgba(63,185,80,0.025); }
+  .process-box.spawn-proc { border-color: var(--red); background: rgba(248,81,73,0.025); }
+  .process-box-label {
+    position: absolute; top: -10px; left: 18px;
+    background: var(--panel); padding: 0 10px;
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+  }
+  .process-box.main-proc .process-box-label { color: var(--green); }
+  .process-box.spawn-proc .process-box-label { color: var(--red); }
+
+  .split-row { display: flex; gap: 16px; align-items: flex-start; margin: 8px 0; }
+  .split-col { flex: 1; min-width: 0; }
+
+  /* ========== 表格 ========== */
+  .table-wrap {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden; margin: 16px 0;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 11px 14px; text-align: left; vertical-align: top; }
+  th {
+    background: var(--panel-2); color: var(--text-dim);
+    font-weight: 600; font-size: 11.5px; text-transform: uppercase;
+    letter-spacing: 0.4px; border-bottom: 1px solid var(--border);
+  }
+  td { border-bottom: 1px solid var(--border-soft); color: var(--text-dim); }
+  tr:last-child td { border-bottom: none; }
+  td code { font-size: 11.5px; }
+  td.center { text-align: center; }
+  .yes { color: var(--green); font-weight: 600; }
+  .no { color: var(--red); font-weight: 600; }
+  .partial { color: var(--yellow); font-weight: 600; }
+  .na { color: var(--text-muted); }
+
+  /* ========== 场景卡片 ========== */
+  .scene-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 16px 0; }
+  .scene-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px;
+    border-left: 4px solid var(--border);
+  }
+  .scene-card.good { border-left-color: var(--green); }
+  .scene-card.warn { border-left-color: var(--yellow); }
+  .scene-card.bad { border-left-color: var(--red); }
+  .scene-card.future { border-left-color: var(--purple); }
+  .scene-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .scene-icon { font-size: 18px; }
+  .scene-title { font-weight: 600; font-size: 14px; color: var(--text); }
+  .scene-body { font-size: 12.5px; color: var(--text-dim); line-height: 1.55; }
+  .scene-verdict {
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-soft);
+    font-family: var(--mono); font-size: 11px;
+  }
+  .scene-card.good .scene-verdict { color: var(--green); }
+  .scene-card.warn .scene-verdict { color: var(--yellow); }
+  .scene-card.bad .scene-verdict { color: var(--red); }
+  .scene-card.future .scene-verdict { color: var(--purple); }
+
+  /* ========== 决策块 ========== */
+  .decision-tree {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 24px; margin: 16px 0;
+  }
+  .dt-q {
+    text-align: center; padding: 12px 20px;
+    background: var(--panel-2); border: 1px solid var(--accent);
+    border-radius: 10px; font-weight: 600; color: var(--accent-2);
+    margin-bottom: 6px; font-size: 14px;
+  }
+  .dt-branches { display: flex; gap: 12px; }
+  .dt-branch {
+    flex: 1; border-radius: 10px; padding: 14px;
+    border: 1px solid var(--border);
+  }
+  .dt-branch.a { border-color: var(--green); background: var(--green-bg); }
+  .dt-branch.b { border-color: var(--yellow); background: var(--yellow-bg); }
+  .dt-branch.c { border-color: var(--red); background: var(--red-bg); }
+  .dt-branch-label { font-family: var(--mono); font-size: 11px; margin-bottom: 6px; font-weight: 700; }
+  .dt-branch.a .dt-branch-label { color: var(--green); }
+  .dt-branch.b .dt-branch-label { color: var(--yellow); }
+  .dt-branch.c .dt-branch-label { color: var(--red); }
+  .dt-branch-text { font-size: 12.5px; color: var(--text-dim); line-height: 1.5; }
+  .dt-arrows { text-align: center; color: var(--text-muted); font-size: 18px; margin: 4px 0; font-family: var(--mono); }
+
+  /* ========== 调用说明 ========== */
+  .callout {
+    background: var(--panel); border-left: 3px solid var(--accent);
+    padding: 14px 18px; border-radius: 0 8px 8px 0;
+    margin: 14px 0; font-size: 13px; color: var(--text-dim);
+  }
+  .callout.warn { border-left-color: var(--yellow); }
+  .callout.danger { border-left-color: var(--red); }
+  .callout strong { display: block; margin-bottom: 4px; }
+
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 12px 0 4px; font-size: 11.5px; color: var(--text-dim); }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 3px; }
+
+  hr.sep { border: none; border-top: 1px solid var(--border-soft); margin: 40px 0; }
+
+  .footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border-soft); color: var(--text-muted); font-size: 12px; font-family: var(--mono); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Subagent 执行架构</h1>
+  <div class="subtitle">当前实现（纯 in-process）· 与 spawn 模式的抉择分析</div>
+  <div class="meta">
+    repo: feat-subagent-enhance · branch: feat-subagent-enhance · 2026-06-14<br>
+    refs: ADR-022 (in-process) · ADR-024 (L1+L2 持久化) · Evolution 005 (混合模式 draft)
+  </div>
+
+  <!-- ============================================================ -->
+  <h2><span class="num">1</span>当前实现：纯 In-Process 执行</h2>
+
+  <p>所有 subagent 在<strong>同一个 Node.js 进程</strong>内执行，通过 Pi SDK 的 <code>createAgentSession()</code> 创建独立 session。<span class="tag tag-impl">已落地</span> 代码中<strong>没有任何 spawn / child_process 进程隔离后端</strong>，<code>isolation</code> 字段仅支持 <code>undefined</code> 和 <code>"worktree"</code>。</p>
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:var(--accent)"></div>入口/调度</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div>执行核心</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--orange)"></div>事件桥接</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--purple)"></div>持久化</div>
+  </div>
+
+  <div class="arch">
+    <div class="arch-title">↳ 主进程（唯一进程） · 所有 subagent 共享</div>
+
+    <!-- L1: 入口 -->
+    <div class="layer">
+      <div class="layer-label">入口</div>
+      <div class="layer-content">
+        <div class="node entry">
+          <div class="node-name">subagent-tool.ts</div>
+          <div class="node-desc">LLM 调用 <code>subagent</code> 工具 → 路由到 runtime</div>
+          <div class="node-file">tools/subagent-tool.ts</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-down with-label"><span class="alabel">runAgent() / startBackground()</span>↓</div>
+
+    <!-- L2: Runtime -->
+    <div class="layer">
+      <div class="layer-label">调度</div>
+      <div class="layer-content">
+        <div class="node entry">
+          <div class="node-name">SubagentRuntime（单例）</div>
+          <div class="node-desc">
+            <strong>sync:</strong> <code>runAgent()</code> 阻塞等待<br>
+            <strong>background:</strong> <code>startBackground()</code> fire-and-forget Promise → 回填 <code>_bgRecords</code>
+          </div>
+          <div class="node-file">runtime.ts · _bgRecords · _completedAgents</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-down with-label"><span class="alabel">buildContext() 注入依赖</span>↓</div>
+
+    <!-- L3: run-agent 分流 -->
+    <div class="layer">
+      <div class="layer-label">分流</div>
+      <div class="layer-content">
+        <div class="node entry">
+          <div class="node-name">runAgent()</div>
+          <div class="node-desc">
+            ① 并发池 <code>pool.acquire()</code> → ② 解析 agent + 模型 → ③ <strong>isolation 分流</strong>
+          </div>
+          <div class="node-file">core/run-agent.ts:58 · 分流点 :80</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-down with-label"><span class="alabel">if (isolation === "worktree")</span>↓</div>
+
+    <!-- L4: worktree 分叉 -->
+    <div class="split-row">
+      <div class="split-col">
+        <div class="node exec" style="text-align:center;">
+          <div class="node-name">默认（undefined）</div>
+          <div class="node-desc">原地执行 · <code>effectiveCwd = ctx.cwd</code></div>
+        </div>
+      </div>
+      <div class="split-col">
+        <div class="node bridge" style="text-align:center;">
+          <div class="node-name">"worktree"</div>
+          <div class="node-desc">git worktree 副本 · <code>effectiveCwd = workPath</code></div>
+          <div class="node-file">core/worktree.ts</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-down">↓ 汇合</div>
+
+    <!-- L5: session 工厂 -->
+    <div class="layer">
+      <div class="layer-label">Session</div>
+      <div class="layer-content">
+        <div class="node exec">
+          <div class="node-name">createAndConfigureSession()</div>
+          <div class="node-desc">
+            ① <code>DefaultResourceLoader</code>（工具+技能）<br>
+            ② <code>SessionManager.create()</code> → 落盘到 subagent sessionDir<br>
+            ③ <code>filterTools()</code> + <code>setActiveToolsByName()</code><br>
+            ④ <code>createEventBridge()</code> + <code>session.subscribe()</code>
+          </div>
+          <div class="node-file">core/session-factory.ts:144-203</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-down with-label"><span class="alabel">session.prompt(task)</span>↓</div>
+
+    <!-- L6: SDK -->
+    <div class="layer">
+      <div class="layer-label">SDK</div>
+      <div class="layer-content">
+        <div class="node exec">
+          <div class="node-name">Pi SDK · createAgentSession</div>
+          <div class="node-desc">同进程内执行 LLM 循环 · <code>message_end</code> 自动 append session 文件</div>
+          <div class="node-file">@mariozechner/pi-coding-agent</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-down with-label"><span class="alabel">collectResult() → AgentResult</span>↓</div>
+
+    <!-- L7: 持久化 -->
+    <div class="layer">
+      <div class="layer-label">持久化</div>
+      <div class="layer-content">
+        <div class="node store">
+          <div class="node-name">L1 · history.jsonl</div>
+          <div class="node-desc">执行记录 append-only · FIFO 500 · <code>_history.append()</code></div>
+          <div class="node-file">persistence/history-store.ts</div>
+        </div>
+        <div class="node store">
+          <div class="node-name">L2 · sessions/*.jsonl</div>
+          <div class="node-desc">完整对话回放 · TTL 30 天 GC · <code>SessionManager.create</code></div>
+          <div class="node-file">persistence/session-file-gc.ts</div>
+        </div>
+        <div class="node store">
+          <div class="node-name">TUI · widget</div>
+          <div class="node-desc">运行中实时状态 · 完成后 5s linger → <code>_completedAgents</code></div>
+          <div class="node-file">tui/subagent-render.ts</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <strong>关键特性</strong>
+    启动延迟毫秒级 · 复用主进程全部工具 · 可 <code>session.steer()</code> / <code>session.abort()</code> · 支持嵌套 subagent · 多 agent 共享进程内存与 LLM quota
+  </div>
+  <div class="callout danger">
+    <strong>根本约束</strong>
+    background 模式的 detached Promise <strong>随进程死</strong> —— 主进程重启后运行中的 agent 不可恢复（L3 缺失）。已完成记录靠 L1/L2 持久化跨进程可见，但"运行中状态"无法跨重启。
+  </div>
+
+  <!-- ============================================================ -->
+  <hr class="sep">
+  <h2><span class="num">2</span>对照：Spawn 模式（未实现 · draft）</h2>
+
+  <p>Evolution 005 设计的混合模式：保留 in-process 为默认，对标记 <code>isolation: "process"</code> 的 agent 走 spawn 后端。<span class="tag tag-draft">仅文档</span> <span class="tag tag-reject">代码未实现</span></p>
+
+  <div class="arch">
+    <div class="split-row">
+      <!-- 主进程 -->
+      <div class="split-col">
+        <div class="process-box main-proc">
+          <div class="process-box-label">主进程（Pi）</div>
+
+          <div class="node entry">
+            <div class="node-name">runAgent() · 分流点</div>
+            <div class="node-desc">if <code>isolation === "process"</code> → <code>runAgentViaSpawn()</code></div>
+            <div class="node-file">core/run-agent.ts:80（待扩展）</div>
+          </div>
+          <div class="arrow-down">↓</div>
+          <div class="node ghost">
+            <div class="node-name">spawn-runner.ts</div>
+            <div class="node-desc"><code>spawn(node, [piCli, child.js, config.json])</code> · <code>detached:true</code> · <code>unref()</code></div>
+            <div class="node-file">⚠ 不存在</div>
+          </div>
+          <div class="arrow-down">↓</div>
+          <div class="node ghost">
+            <div class="node-name">spawn-tracker.ts</div>
+            <div class="node-desc">pid 持久化 · <code>process.kill(pid,0)</code> 探活 · 重启后扫描恢复</div>
+            <div class="node-file">⚠ 不存在 · L3 核心</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 通信 -->
+      <div style="display:flex;flex-direction:column;justify-content:center;align-items:center;padding:0 8px;min-width:90px;">
+        <div style="font-family:var(--mono);font-size:10px;color:var(--text-muted);text-align:center;line-height:1.6;">
+          config.json<br>
+          <span style="color:var(--accent);">───▶</span><br>
+          <span style="color:var(--purple);">◀───</span><br>
+          result.jsonl
+        </div>
+      </div>
+
+      <!-- 子进程 -->
+      <div class="split-col">
+        <div class="process-box spawn-proc">
+          <div class="process-box-label">子进程（detached）</div>
+
+          <div class="node ghost">
+            <div class="node-name">spawn-child.ts</div>
+            <div class="node-desc">读 config.json → 复用 <code>createAndConfigureSession()</code> → 写 result.jsonl</div>
+            <div class="node-file">⚠ 不存在</div>
+          </div>
+          <div class="arrow-down">↓ 复用</div>
+          <div class="node exec" style="opacity:0.6;">
+            <div class="node-name">session-factory.ts</div>
+            <div class="node-desc">与 in-process <strong>共用</strong>（模型解析、工具过滤、L2 落盘）</div>
+            <div class="node-file">✅ 已有，子进程内调用</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:18px;padding-top:14px;border-top:1px dashed var(--border);">
+      <div style="font-family:var(--mono);font-size:11px;color:var(--text-muted);margin-bottom:8px;">代码复用率 ≈ 70%（Evolution 005 估算）</div>
+      <div class="layer-content" style="gap:6px;">
+        <div class="node" style="flex:0 1 calc(33% - 4px);padding:8px 10px;">
+          <div class="node-name" style="font-size:11px;color:var(--green);">✅ 完全复用</div>
+          <div class="node-desc" style="font-size:11px;">模型解析 · agent 发现 · 工具过滤 · session 创建 · L1/L2</div>
+        </div>
+        <div class="node" style="flex:0 1 calc(33% - 4px);padding:8px 10px;">
+          <div class="node-name" style="font-size:11px;color:var(--yellow);">◐ 部分复用</div>
+          <div class="node-desc" style="font-size:11px;">widget 实时状态（pid 轮询模拟）</div>
+        </div>
+        <div class="node" style="flex:0 1 calc(33% - 4px);padding:8px 10px;">
+          <div class="node-name" style="font-size:11px;color:var(--red);">✖ 不复用</div>
+          <div class="node-desc" style="font-size:11px;">event-bridge（→ jsonl）· 并发池（进程隔离替代）</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <hr class="sep">
+  <h2><span class="num">3</span>两种模式能力对照</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:22%;">维度</th>
+          <th style="width:39%;">In-Process <span class="tag tag-impl" style="margin-left:4px;">当前</span></th>
+          <th style="width:39%;">Spawn <span class="tag tag-draft" style="margin-left:4px;">draft</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>启动延迟</strong></td><td class="yes">毫秒级</td><td class="no">1-3s（重新加载 SDK）</td></tr>
+        <tr><td><strong>工具集</strong></td><td class="yes">复用主进程全部工具</td><td class="partial">仅子进程 resourceLoader 加载的</td></tr>
+        <tr><td><strong>上下文</strong></td><td class="yes">可 fork 主 session、共享运行时</td><td class="no">仅 task prompt 字符串</td></tr>
+        <tr><td><strong>嵌套 subagent</strong></td><td class="yes">可行</td><td class="no">不可靠</td></tr>
+        <tr><td><strong>进程隔离</strong></td><td class="no">弱（崩溃传染主进程）</td><td class="yes">强（崩溃不传染）</td></tr>
+        <tr><td><strong>跨重启恢复（L3）</strong></td><td class="no">不可</td><td class="yes">可（pid + jsonl + 探活）</td></tr>
+        <tr><td><strong>steer / abort</strong></td><td class="yes">进程内直接调用</td><td class="partial">需 IPC 通道</td></tr>
+        <tr><td><strong>并发控制</strong></td><td>Promise 队列池</td><td>OS 进程级</td></tr>
+        <tr><td><strong>通信</strong></td><td>直接回调（event-bridge）</td><td>jsonl 文件握手</td></tr>
+        <tr><td><strong>增量代码</strong></td><td class="na">—（已实现）</td><td>~300-500 行 + 持续维护</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============================================================ -->
+  <hr class="sep">
+  <h2><span class="num">4</span>适用场景</h2>
+
+  <h3>当前 In-Process 模式</h3>
+  <div class="scene-grid">
+    <div class="scene-card good">
+      <div class="scene-head"><span class="scene-icon">✅</span><span class="scene-title">Coding 主力任务</span></div>
+      <div class="scene-body">代码生成、重构、修 bug —— 高频、短生命周期、需完整工具集与快速响应。</div>
+      <div class="scene-verdict">→ 完美匹配 · 默认模式</div>
+    </div>
+    <div class="scene-card good">
+      <div class="scene-head"><span class="scene-icon">✅</span><span class="scene-title">工具密集型编排</span></div>
+      <div class="scene-body">需要 fork 主 session 上下文、访问全部 extension tools、嵌套调用其他 subagent。</div>
+      <div class="scene-verdict">→ 完美匹配 · 进程内天然支持</div>
+    </div>
+    <div class="scene-card good">
+      <div class="scene-head"><span class="scene-icon">✅</span><span class="scene-title">需 steer / abort</span></div>
+      <div class="scene-body">运行中动态注入消息（<code>session.steer()</code>）或优雅终止（<code>session.abort()</code>）。</div>
+      <div class="scene-verdict">→ 完美匹配 · 进程内直调</div>
+    </div>
+    <div class="scene-card good">
+      <div class="scene-head"><span class="scene-icon">✅</span><span class="scene-title">短时后台（等几分钟拿结果）</span></div>
+      <div class="scene-body"><code>wait:false</code> + <code>backgroundId</code> 轮询 —— 当前 background 模式的典型用法。</div>
+      <div class="scene-verdict">→ 匹配 · L1/L2 持久化已覆盖</div>
+    </div>
+    <div class="scene-card warn">
+      <div class="scene-head"><span class="scene-icon">⚠️</span><span class="scene-title">git worktree 隔离执行</span></div>
+      <div class="scene-body">需文件系统级隔离（并行 branch 实验）—— <code>isolation:"worktree"</code> 已支持。</div>
+      <div class="scene-verdict">→ 匹配 · 但仍是同进程，OOM 会传染</div>
+    </div>
+    <div class="scene-card bad">
+      <div class="scene-head"><span class="scene-icon">❌</span><span class="scene-title">跨重启的长跑任务（L3）</span></div>
+      <div class="scene-body">启动 background agent → 关 Pi → 重启 → 期望它还在跑。<strong>当前架构做不到</strong>。</div>
+      <div class="scene-verdict">→ 不支持 · 是 spawn 的唯一不可替代价值</div>
+    </div>
+    <div class="scene-card bad">
+      <div class="scene-head"><span class="scene-icon">❌</span><span class="scene-title">不可信代码沙箱</span></div>
+      <div class="scene-body">执行来源不明的代码，需 OS 级进程隔离防止崩溃/OOM 拖垮主进程。</div>
+      <div class="scene-verdict">→ 不支持 · in-process 下 OOM 会杀主进程</div>
+    </div>
+    <div class="scene-card warn">
+      <div class="scene-head"><span class="scene-icon">⚠️</span><span class="scene-title">超长索引 / 批量处理</span></div>
+      <div class="scene-body">索引整个 monorepo、批量重构 —— 可能跑数十分钟。<strong>建议用 <code>schedule_prompt</code></strong>（已有工具）而非 subagent。</div>
+      <div class="scene-verdict">→ 存疑 · 是否该由 subagent 承担？</div>
+    </div>
+  </div>
+
+  <h3>Spawn 模式（若实现）能补的缺口</h3>
+  <div class="scene-grid">
+    <div class="scene-card future">
+      <div class="scene-head"><span class="scene-icon">🔮</span><span class="scene-title">跨重启持久任务（L3）</span></div>
+      <div class="scene-body">detached 子进程独立于主 Pi 存活，重启后通过 pid 探活 + result.jsonl 恢复状态。</div>
+      <div class="scene-verdict">→ spawn 的核心价值 · 需先确认是否真实高频</div>
+    </div>
+    <div class="scene-card future">
+      <div class="scene-head"><span class="scene-icon">🔮</span><span class="scene-title">进程级崩溃隔离</span></div>
+      <div class="scene-body">不可信代码在独立进程跑，OOM/crash 不传染主 Pi。</div>
+      <div class="scene-verdict">→ 可用 worktree + maxTurns 替代实现"防失控"</div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <hr class="sep">
+  <h2><span class="num">5</span>抉择的核心：一个问题</h2>
+
+  <div class="callout warn">
+    <strong>技术对比已无悬念 —— 两者都可行，混合架构也设计好了。</strong>
+    真正的抉择点不是技术问题，是<strong>需求频率问题</strong>：
+  </div>
+
+  <div class="decision-tree">
+    <div class="dt-q">"跨进程恢复运行中的 subagent（L3）"是不是真实的高频痛点？</div>
+    <div class="dt-arrows">↓</div>
+    <div class="dt-branches">
+      <div class="dt-branch a">
+        <div class="dt-branch-label">A · 不是</div>
+        <div class="dt-branch-text">
+          coding 场景 in-process 足够，background 大多几分钟内完成。<br><br>
+          <strong>动作：</strong>关闭 Evolution 005（superseded），ADR-024"不做 L3"保持有效。
+        </div>
+      </div>
+      <div class="dt-branch b">
+        <div class="dt-branch-label">B · 需要进程隔离</div>
+        <div class="dt-branch-text">
+         跑不可信代码需 OS 级隔离，但不需要跨重启恢复。<br><br>
+          <strong>动作：</strong>只做阶段 1（spawn 骨架），约 300 行。
+        </div>
+      </div>
+      <div class="dt-branch c">
+        <div class="dt-branch-label">C · 是核心需求</div>
+        <div class="dt-branch-text">
+         确认跨重启恢复是核心场景。<br><br>
+          <strong>动作：</strong>按 Evolution 005 全做（3 阶段 ~500 行 + 维护）。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <strong>抉择前必须验证的事实（避免基于假设决策）</strong>
+    <ol style="margin:8px 0 0; padding-left:20px;">
+      <li><strong>实际使用数据</strong>：<code>~/.pi/agent/subagents/*/history.jsonl</code> 中 background 记录比例与时长分布 —— 若大多几分钟内完成，L3 需求弱。</li>
+      <li><strong>是否该用 schedule_prompt</strong>：跨重启的持久任务是否本就该用已有的 <code>schedule_prompt</code> 工具，而非 subagent 承担？</li>
+      <li><strong>ADR-022 约束是否仍成立</strong>：当时的迁移理由（性能、工具完整性）现在是否还成立？Pi SDK 是否有新变化？</li>
+      <li><strong>第三方包状态</strong>：tintinweb 版 <code>pi-subagents</code> 的 <code>async-execution.ts</code> 是否已卸载 —— 若还在，可参考其 spawn 模块而非从零实现。</li>
+    </ol>
+  </div>
+
+  <div class="footer">
+    generated from feat-subagent-enhance @ 9082a5a8 · docs/evolution/subagent-architecture.html
+  </div>
+
+</div>
+</body>
+</html>
