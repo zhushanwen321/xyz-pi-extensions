@@ -1,9 +1,7 @@
 ---
 name: xyz-harness-brainstorming
 description: >-
-  [DEPRECATED] Phase 1 入口已迁移至 xyz-harness-spec-clarify。本 skill 保留作为
-  历史参考和回退选项，不再被 coding-workflow 路由加载。Use when explicitly
-  asked for the legacy brainstorming flow. Not the default Phase 1 entry.
+  Phase 1 (spec) of the xyz-harness workflow. Explores user intent, requirements and design before implementation, produces spec.md with independent review. Use when the user says "start Phase 1", "spec phase", "write spec", "brainstorm", or at the beginning of a harness workflow.
 ---
 
 ## Dev-flow 上下文

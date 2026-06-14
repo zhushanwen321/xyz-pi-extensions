@@ -51,7 +51,7 @@ import {
 
 const PHASES: PhaseConfig[] = [
 	{
-		phase: 1, name: "Spec", skillName: "xyz-harness-spec-clarify",
+		phase: 1, name: "Spec", skillName: "xyz-harness-brainstorming",
 		reviewPrefix: "spec_review", retrospectPrefix: "spec_retrospect",
 		deliverables: ["spec.md"],
 		reviewMode: "Mode 1: Plan review (verify spec completeness)",

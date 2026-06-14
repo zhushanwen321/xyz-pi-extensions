@@ -11,7 +11,7 @@
 - **Goal 自动注入**：Phase 2 硬编码 L1 任务，Phase 3 从 plan.md 动态构建
 - **Retrospect 上下文注入**：gate 通过后 steer 包含关键交付物摘要
 - **Compact**：阶段切换时自动压缩上下文
-- **配套 skills**：内置 xyz-harness 技能（writing-plans、phase-dev、phase-test 等）。Phase 1 澄清 skill（xyz-harness-spec-clarify）由独立的 `@zhushanwen/pi-spec-clarify` 包提供，需一并安装
+- **配套 skills**：内置 xyz-harness 全套技能（brainstorming、writing-plans、phase-dev、phase-test 等）
 - **配套 agents**：11 个专用 agent（reviewer / fix-worker / coordinator）
 
 ## 安装

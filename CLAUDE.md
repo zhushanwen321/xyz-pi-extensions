@@ -12,8 +12,7 @@ xyz-pi-extensions/
 │   ├── goal/                → @zhushanwen/pi-goal
 │   ├── todo/                → @zhushanwen/pi-todo
 │   ├── vision/             → @zhushanwen/pi-vision
-│   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~19 个 harness skills)
-│   ├── spec-clarify/       → @zhushanwen/pi-spec-clarify (Phase 1 澄清 skill 载体，无运行时代码)
+│   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills)
 │   ├── claude-rules-loader/ → @zhushanwen/pi-claude-rules-loader
 │   ├── context-engineering/ → @zhushanwen/pi-context-engineering
 │   ├── evolve-daily/        → @zhushanwen/pi-evolve-daily (含 evolve skills + tracker 框架)
@@ -743,8 +742,7 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `extensions/goal/` | `@zhushanwen/pi-goal` | 持久化目标驱动循环，7 态状态机 | — |
 | `extensions/todo/` | `@zhushanwen/pi-todo` | 轻量三态任务清单 | — |
 | `extensions/vision/` | `@zhushanwen/pi-vision` | 图片分析（vision model + memory session） | — |
-| `extensions/coding-workflow/` | `@zhushanwen/pi-coding-workflow` | 5-Phase 编码工作流 | ~19 个 xyz-harness-* skills |
-| `extensions/spec-clarify/` | `@zhushanwen/pi-spec-clarify` | Phase 1 需求澄清（交互 + 隔离 subagent 追踪） | xyz-harness-spec-clarify |
+| `extensions/coding-workflow/` | `@zhushanwen/pi-coding-workflow` | 5-Phase 编码工作流 | ~20 个 xyz-harness-* skills |
 | `extensions/claude-rules-loader/` | `@zhushanwen/pi-claude-rules-loader` | 加载 CLAUDE.md 规则 | — |
 | `extensions/context-engineering/` | `@zhushanwen/pi-context-engineering` | 渐进式上下文压缩 | — |
 | `extensions/evolve-daily/` | `@zhushanwen/pi-evolve-daily` | 每日数据收集 + Tracker 框架 | evolve, evolve-apply, evolve-report |

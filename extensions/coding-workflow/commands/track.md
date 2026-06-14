@@ -18,9 +18,9 @@ allowed-tools: ["read", "edit", "write", "bash", "subagent", "todolist"]
 ### Stage 1：需求讨论
 
 **类型：交互（主 agent 直接执行）**
-**加载 Skill：xyz-harness-spec-clarify**
+**加载 Skill：xyz-harness-brainstorming**
 
-与用户讨论需求，澄清目标、范围、约束。逐一提问确认。执行 spec-clarify skill 的交互澄清流程（主 agent 交互提问 + 独立 subagent 隔离追踪）。
+与用户讨论需求，澄清目标、范围、约束。逐一提问确认。执行 brainstorming skill 的讨论流程。
 
 **完成标志**：用户需求已澄清，没有未解决的疑问。
 
@@ -36,7 +36,7 @@ Stage 1 需求讨论完成。接下来进入 Stage 2：Spec 编写。
 ### Stage 2：Spec 编写 + 六要素检查 + 引用扫描
 
 **类型：交互（主 agent 直接执行）**
-**加载 Skill：xyz-harness-spec-clarify（收敛检查部分）**
+**加载 Skill：xyz-harness-brainstorming（spec completeness check 部分）**
 
 编写 spec.md，执行以下子步骤（使用 `todolist expand_step` 管理）：
 
