@@ -87,6 +87,9 @@ export class SubagentRuntime {
   /** FR-3.0: 已完成 sync agent 归档记录 */
   private readonly _completedAgents = new Map<string, CompletedAgentRecord>();
 
+  /** FR-3.1 G-017: 活跃 overlay 句柄（防叠加） */
+  private _activeView: { close: () => void } | null = null;
+
   /** Live widget 管理器（实时显示 agent 状态） */
   readonly widget = new AgentWidgetManager();
 
@@ -160,6 +163,21 @@ export class SubagentRuntime {
     r.eventLog = data.eventLog;
     r.agent = data.agent;
     this.notifyChange();
+  }
+
+  /** FR-3.1 G-017: 获取当前 active overlay 句柄 */
+  getActiveView(): { close: () => void } | null {
+    return this._activeView;
+  }
+
+  /** FR-3.1 G-017: 设置当前 active overlay 句柄 */
+  setActiveView(view: { close: () => void }): void {
+    this._activeView = view;
+  }
+
+  /** FR-3.1 G-026: 清除 active overlay 句柄（dispose 时调用） */
+  clearActiveView(): void {
+    this._activeView = null;
   }
 
   /**
