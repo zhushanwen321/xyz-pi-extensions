@@ -17,6 +17,37 @@ export const EXCLUDED_TOOL_NAMES: readonly string[] = [
   "subagent",
 ];
 
+/** FR-1.2: eventLog ring buffer 上限（每 agent） */
+export const MAX_EVENT_LOG_ENTRIES = 20;
+
+/** FR-1.1b: turn 摘要最大字符数 */
+export const TURN_SUMMARY_MAX = 80;
+
+/** FR-3.0: _completedAgents Map 上限 */
+export const COMPLETED_AGENTS_MAX = 50;
+
+/** FR-3.5 G-008: widget stalled 兜底阈值（5min 无新事件） */
+export const STALLED_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** FR-2.2: inline widget eventLog 最大行数（12 - 1 行 status summary） */
+export const WIDGET_EVENT_LINES = 11;
+
+// ============================================================
+// FR-1.1: AgentEventLogEntry（事件日志条目）
+// ============================================================
+
+/**
+ * 记录每条事件的可展示信息。与 AgentEvent 不同：
+ * - ts 由 updateWidgetFromEvent 内 Date.now() 生成（AgentEvent 无此字段）
+ * - label 已折叠为可展示字符串（toolName + args 摘要 / turn 文本摘要）
+ */
+export interface AgentEventLogEntry {
+  readonly type: "tool_start" | "tool_end" | "turn_end";
+  readonly label: string;
+  readonly ts: number;
+  readonly status?: "running" | "done" | "failed";
+}
+
 // ============================================================
 // ThinkingLevel 枚举（FR-4.3）— 自定义，与 SDK 类型一致
 // ============================================================
@@ -139,6 +170,27 @@ export interface BackgroundOptions extends RunAgentOptions {
 }
 
 // ============================================================
+// FR-3.0: CompletedAgentRecord（sync agent 归档记录）
+// ============================================================
+
+/**
+ * 已完成的 sync agent 归档记录。widget linger 淡出前从 WidgetAgentState 转移。
+ * 留存上限 COMPLETED_AGENTS_MAX（FIFO 淘汰最旧）。
+ */
+export interface CompletedAgentRecord {
+  readonly id: string;
+  readonly agent: string;
+  status: "done" | "failed" | "cancelled";
+  eventLog: AgentEventLogEntry[];
+  turns?: number;
+  totalTokens?: number;
+  result?: AgentResult;
+  error?: string;
+  startedAt: number;
+  endedAt?: number;
+}
+
+// ============================================================
 // FR-8.2: AgentEvent（subagents 对外统一事件 union）
 // ============================================================
 export type AgentEventType =
@@ -151,7 +203,7 @@ export type AgentEventType =
   | "error";
 
 export type AgentEvent =
-  | { type: "tool_start"; toolName: string }
+  | { type: "tool_start"; toolName: string; args?: unknown }
   | { type: "tool_end"; toolName: string; result?: ToolCallEntry["result"]; isError: boolean }
   | { type: "text_delta"; delta: string }
   | { type: "turn_end" }
