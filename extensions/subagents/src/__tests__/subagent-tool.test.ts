@@ -15,14 +15,20 @@ import type { AgentResult, BackgroundHandle, BackgroundStatus } from "../types.t
 // 路径 `../runtime.ts` 相对测试文件解析为 src/runtime.ts，
 // 与 subagent-tool.ts 内 `import { getRuntime } from "../runtime.ts"`
 // （相对 src/tools/ 也是 src/runtime.ts）解析到同一绝对路径，故能命中。
-vi.mock("../runtime.ts", () => ({
-  getRuntime: vi.fn(),
-  setRuntime: vi.fn(),
-}));
+// 仅 mock getRuntime/setRuntime（隔离 runtime 单例）；updateWidgetFromEvent 透传真实实现
+// （它是纯函数，操作传入的 state，不需隔离）。
+vi.mock("../runtime.ts", async (importActual) => {
+  const actual = await importActual<typeof import("../runtime.ts")>();
+  return {
+    ...actual,
+    getRuntime: vi.fn(),
+    setRuntime: vi.fn(),
+  };
+});
 
 // 必须在 vi.mock 之后 import 被测模块（此时 runtime.ts 已被替换）
 import { getRuntime } from "../runtime.ts";
-import { registerSubagentTool } from "../tools/subagent-tool.ts";
+import { initialToolState, registerSubagentTool, renderSubagentResult } from "../tools/subagent-tool.ts";
 
 const mockedGetRuntime = vi.mocked(getRuntime);
 
@@ -147,6 +153,28 @@ describe("subagent tool execute()", () => {
     expect(details.eventLog).toHaveLength(1); // turn_end push 一条
   });
 
+  // ── 场景 1b: C1 回归 — sync 模式产生 text_output（与 background 一致）────
+  it("sync mode: emits text_output entries via updateWidgetFromEvent (FR-2.1 consistency)", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async (opts: { onEvent?: (e: unknown) => void }) => {
+        // 发超 100 字符的 text_delta → 应触发 text_output 切片
+        opts.onEvent?.({ type: "text_delta", delta: "x".repeat(120) });
+        opts.onEvent?.({ type: "turn_end" });
+        return successResult();
+      }),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    const result = await tool.execute("call-text", { task: "produce text", agent: "worker" });
+    const details = result.details;
+    // text_output 切片应产生（120 字符 ≥ TEXT_OUTPUT_CHUNK=100）
+    const textOutputs = (details.eventLog as unknown[]).filter(
+      (e) => (e as { type: string }).type === "text_output",
+    );
+    expect(textOutputs.length).toBeGreaterThanOrEqual(1);
+  });
+
   // ── 场景 2: 同步失败 ────────────────────────────────────
   it("sync mode: throws Error(result.error) when runAgent returns success=false", async () => {
     const mockRt = makeMockRuntime({
@@ -192,6 +220,34 @@ describe("subagent tool execute()", () => {
     expect(details.status).toBe("running");
     expect(details.backgroundId).toBe("bg-1");
     expect(details.agent).toBe("default"); // 未传 agent → 默认
+  });
+
+  // ── 场景 3b: C4 回归 — onUpdate 闭包读到正确 bgId（TDZ-safe）────
+  it("background mode: onUpdate closure receives correct backgroundId after startBackground returns", async () => {
+    const handle: BackgroundHandle = { id: "bg-tdz-1", status: "running" };
+    let capturedOnUpdate: ((d: { turns: number; totalTokens: number; elapsedSeconds: number; status: string; eventLog: unknown[] }) => void) | undefined;
+    const mockRt = makeMockRuntime({
+      startBackground: vi.fn((opts: { onUpdate?: typeof capturedOnUpdate }) => {
+        // 捕获 onUpdate（模拟 runtime 持有引用，稍后异步触发）
+        capturedOnUpdate = opts.onUpdate;
+        return handle;
+      }),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    const executeOnUpdates: ExecuteResult[] = [];
+    await tool.execute("call-tdz", { task: "bg task", wait: false }, undefined, (partial) => executeOnUpdates.push(partial));
+
+    // startBackground 已返回，bgId 已赋值。现在模拟 runtime 异步触发 onUpdate
+    expect(capturedOnUpdate).toBeDefined();
+    capturedOnUpdate!({ turns: 1, totalTokens: 50, elapsedSeconds: 3, status: "running", eventLog: [] });
+
+    // execute 的 onUpdate 应被调，且 details.backgroundId 是正确的（非空串 → TDZ 修复生效）
+    expect(executeOnUpdates.length).toBeGreaterThanOrEqual(1);
+    const lastUpdate = executeOnUpdates[executeOnUpdates.length - 1];
+    expect(lastUpdate.details.backgroundId).toBe("bg-tdz-1");
+    expect(lastUpdate.details.status).toBe("running");
   });
 
   // ── 场景 4: 轮询 running ────────────────────────────────
@@ -345,5 +401,132 @@ describe("subagent tool execute()", () => {
     expect(runAgentMock).toHaveBeenCalledTimes(1);
     const passedOpts = runAgentMock.mock.calls[0]![0] as { priority?: number };
     expect(passedOpts.priority).toBe(0);
+  });
+});
+
+describe("renderSubagentResult — spinner timer lifecycle (FR-2.3)", () => {
+  const fakeTheme = {
+    bg(_c: string, t: string): string { return t; },
+    fg(_c: string, t: string): string { return t; },
+    bold(t: string): string { return t; },
+  };
+
+  it("starts timer when status=running", () => {
+    const state = initialToolState();
+    const invalidate = vi.fn();
+    const context = { state, invalidate };
+    renderSubagentResult(
+      { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "running", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
+      { expanded: false, isPartial: false },
+      fakeTheme,
+      context,
+    );
+    expect(state.timer).toBeDefined();
+    // frame 应被初始化（Pi runtime 初始传 {}，renderSubagentResult 负责初始化 frame=0）
+    expect(state.frame).toBe(0);
+    if (state.timer) clearInterval(state.timer);
+  });
+
+  it("clears timer when status=done", () => {
+    const state = initialToolState();
+    state.timer = setInterval(() => {}, 99999);
+    const invalidate = vi.fn();
+    const context = { state, invalidate };
+    renderSubagentResult(
+      { content: [{ type: "text", text: "ok" }], details: { eventLog: [], status: "done", agent: "w", turns: 1, totalTokens: 100, elapsedSeconds: 5 } },
+      { expanded: false, isPartial: false },
+      fakeTheme,
+      context,
+    );
+    expect(state.timer).toBeUndefined();
+  });
+
+  it("clears timer when status=failed", () => {
+    const state = initialToolState();
+    state.timer = setInterval(() => {}, 99999);
+    const invalidate = vi.fn();
+    const context = { state, invalidate };
+    renderSubagentResult(
+      { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "failed", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
+      { expanded: false, isPartial: false },
+      fakeTheme,
+      context,
+    );
+    expect(state.timer).toBeUndefined();
+  });
+
+  it("does not crash with malformed details (fallback)", () => {
+    const state = initialToolState();
+    const invalidate = vi.fn();
+    const context = { state, invalidate };
+    // 模拟 Pi 运行时传入残缺 details（缺 status 字段）→ fallback 到默认 details
+    const comp = renderSubagentResult(
+      { content: [{ type: "text", text: "plain" }], details: {} } as never,
+      { expanded: false, isPartial: false },
+      fakeTheme,
+      context,
+    );
+    expect(comp).toBeDefined();
+    expect(state.timer).toBeUndefined();
+  });
+
+  it("timer advances frame + calls invalidate on each tick (FR-2.3)", () => {
+    vi.useFakeTimers();
+    try {
+      const state = initialToolState();
+      const invalidate = vi.fn();
+      const context = { state, invalidate };
+      const comp = renderSubagentResult(
+        { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "running", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
+        { expanded: false, isPartial: false },
+        fakeTheme,
+        context,
+      );
+      expect(state.timer).toBeDefined();
+      expect(state.frame).toBe(0);
+      // 推进 250ms（一个 tick）→ frame +1 + invalidate 被调 + comp 帧更新
+      vi.advanceTimersByTime(250);
+      expect(state.frame).toBe(1);
+      expect(invalidate).toHaveBeenCalledTimes(1);
+      // 再推进一个 tick → frame=2
+      vi.advanceTimersByTime(250);
+      expect(state.frame).toBe(2);
+      expect(invalidate).toHaveBeenCalledTimes(2);
+      void comp;
+      if (state.timer) clearInterval(state.timer);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("running→done transition clears timer (integration)", () => {
+    vi.useFakeTimers();
+    try {
+      const state = initialToolState();
+      const invalidate = vi.fn();
+      const context = { state, invalidate };
+      // 先以 running 渲染 → 启动定时器
+      renderSubagentResult(
+        { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "running", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
+        { expanded: false, isPartial: false },
+        fakeTheme,
+        context,
+      );
+      expect(state.timer).toBeDefined();
+      // 同一 state 再以 done 渲染 → 应清理定时器
+      renderSubagentResult(
+        { content: [{ type: "text", text: "ok" }], details: { eventLog: [], status: "done", agent: "w", turns: 1, totalTokens: 0, elapsedSeconds: 0 } },
+        { expanded: false, isPartial: false },
+        fakeTheme,
+        context,
+      );
+      expect(state.timer).toBeUndefined();
+      // 推进时间，确认不再 invalidate（定时器已清）
+      const callsBefore = invalidate.mock.calls.length;
+      vi.advanceTimersByTime(500);
+      expect(invalidate.mock.calls.length).toBe(callsBefore);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

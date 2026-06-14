@@ -1,12 +1,12 @@
 // src/tui/subagent-render.ts
 //
-// Subagent tool result 的对话流渲染。
-// 返回 Component（pi-tui），由 Pi runtime 在对话流中渲染为背景色 block。
-//
-// 不依赖 AgentWidgetManager（widget 已移除），直接从 details 构建渲染内容。
+// Subagent tool result 对话流渲染（FR-2.1 ~ FR-2.4）。
+// 6 行压缩布局：status + 滚动区(4) + stats。
+// spinner 定时器由 subagent-tool.ts 的 renderSubagentResult 管理（存 ToolRenderContext.state）。
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
+import { formatEventLogLine, formatTokens } from "./format.ts";
 import type { AgentEventLogEntry } from "../types.ts";
 
 // ============================================================
@@ -23,194 +23,158 @@ export interface SubagentToolDetails {
   result?: string;
   error?: string;
   backgroundId?: string;
+  /** FR-1.2: "provider/modelId"（来自 ResolvedModel） */
+  model?: string;
+  /** FR-1.2: thinking level */
+  thinkingLevel?: string;
+}
+
+export interface ThemeLike {
+  bg(color: string, text: string): string;
+  fg(color: string, text: string): string;
+  bold(text: string): string;
+}
+
+export interface RenderOptions {
+  expanded?: boolean;
+  spinnerFrame?: number;
 }
 
 // ============================================================
-// Format helpers（与 format.ts 解耦，避免循环依赖）
+// Spinner
 // ============================================================
 
-const SPINNER = "\u2839"; // ⠹
+const RUNNING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-function statusIcon(status: SubagentToolDetails["status"]): string {
+function statusGlyph(status: SubagentToolDetails["status"], frame: number, theme: ThemeLike): string {
   switch (status) {
-    case "running": return SPINNER;
-    case "done": return "\u2713"; // ✓
-    case "failed": return "\u2717"; // ✗
-    case "cancelled": return "\u25A0"; // ■
+    case "running": return theme.fg("accent", RUNNING_FRAMES[frame % RUNNING_FRAMES.length]);
+    case "done": return theme.fg("success", "✓");
+    case "failed": return theme.fg("error", "✗");
+    case "cancelled": return theme.fg("muted", "■");
   }
 }
 
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return `${n}`;
+// ============================================================
+// buildRenderLines
+// ============================================================
+
+export function buildRenderLines(
+  details: SubagentToolDetails,
+  width: number,
+  theme: ThemeLike,
+  options: RenderOptions = {},
+): string[] {
+  if (options.expanded) return buildExpandedLines(details, theme, options.spinnerFrame ?? 0);
+  return buildCompactLines(details, width, theme, options.spinnerFrame ?? 0);
 }
 
-/**
- * 构建 SubagentResultComponent 的渲染行。
- * 返回字符串数组，每行不带背景色（由调用方用 theme.bg() 包裹）。
- */
-export function buildRenderLines(details: SubagentToolDetails): string[] {
+function buildCompactLines(details: SubagentToolDetails, width: number, theme: ThemeLike, frame: number): string[] {
   const lines: string[] = [];
 
-  // Status line
-  const icon = statusIcon(details.status);
-  const turns = details.turns;
-  const tokens = formatTokens(details.totalTokens);
-  const elapsed = `${details.elapsedSeconds}s`;
-  lines.push(`${icon} ${details.agent} \u2502 ${turns} turns \u2502 ${tokens} \u2502 ${elapsed}`);
-  //                   │                │                │
+  // 第 1 行：spinner + agent + model + thinking
+  const glyph = statusGlyph(details.status, frame, theme);
+  const modelPart = details.model ? ` │ ${details.model}` : "";
+  const thinkingPart = details.thinkingLevel ? ` │ thinking: ${details.thinkingLevel}` : "";
+  lines.push(`${glyph} ${details.agent}${modelPart}${thinkingPart}`);
 
-  // EventLog lines
-  let turnNumber = 0;
-  for (const entry of details.eventLog ?? []) {
-    if (entry.type === "turn_end") turnNumber++;
-    const label = entry.label;
-    if (entry.type === "tool_start") {
-      lines.push(`${label} \u23F3`); // ⏳
-    } else if (entry.type === "tool_end") {
-      const icon = entry.status === "failed" ? "\u2717" : "\u2713"; // ✗ or ✓
-      lines.push(`${label} ${icon}`);
-    } else if (entry.type === "turn_end") {
-      lines.push(`turn ${turnNumber}: "${label}"`);
-    }
+  // 第 2-5 行：滚动区（最近 4 条，过滤掉 turn_end——压缩视图不显示 turn 分隔）
+  const recent = (details.eventLog ?? [])
+    .filter((e) => e.type !== "turn_end")
+    .slice(-4);
+  for (const entry of recent) {
+    lines.push(formatEventLogLine(entry, theme));
   }
+  while (lines.length < 5) lines.push(""); // 空行填充
 
-  // Result (after completion)
-  if (details.status === "done" && details.result) {
-    lines.push("");
-    lines.push(details.result);
-  }
-  if (details.status === "failed" && details.error) {
-    lines.push("");
-    lines.push(`Error: ${details.error}`);
-  }
+  // 第 6 行：stats 右对齐
+  const stats = `${details.turns} turns │ ${formatTokens(details.totalTokens)} │ ${details.elapsedSeconds}s`;
+  const padNeeded = Math.max(0, width - visibleWidth(stats) - 2);
+  lines.push(" ".repeat(padNeeded) + theme.fg("dim", stats));
 
   return lines;
 }
 
+function buildExpandedLines(details: SubagentToolDetails, theme: ThemeLike, frame: number): string[] {
+  const lines: string[] = [];
+  const glyph = statusGlyph(details.status, frame, theme);
+  const modelPart = details.model ? ` │ ${details.model}` : "";
+  const thinkingPart = details.thinkingLevel ? ` │ thinking: ${details.thinkingLevel}` : "";
+  lines.push(`${glyph} ${details.agent}${modelPart}${thinkingPart}`);
+
+  let turnNumber = 0;
+  for (const entry of details.eventLog ?? []) {
+    if (entry.type === "turn_end") {
+      turnNumber++;
+      lines.push(theme.fg("dim", `── turn ${turnNumber} ──`));
+      continue;
+    }
+    lines.push(formatEventLogLine(entry, theme, turnNumber));
+  }
+
+  if (details.status === "done" && details.result) {
+    lines.push("");
+    for (const l of details.result.split("\n")) lines.push(l);
+  }
+  if (details.status === "failed" && details.error) {
+    lines.push("");
+    lines.push(theme.fg("error", `Error: ${details.error}`));
+  }
+  return lines;
+}
+
 // ============================================================
-// Component（pi-tui compatible）
+// Component
 // ============================================================
 
-/**
- * Pi-tui Component 实现：渲染 subagent tool result 为背景色 block。
- *
- * render(width) 返回 string[]，每行已应用背景色（padding + bg）。
- * Pi runtime 将这些行显示在对话流中。
- */
 export class SubagentResultComponent {
   private _details: SubagentToolDetails;
-  private _theme: { bg(color: string, text: string): string };
+  private _theme: ThemeLike;
+  private _spinnerFrame = 0;
+  private _expanded = false;
 
-  constructor(
-    details: SubagentToolDetails,
-    theme: { bg(color: string, text: string): string },
-  ) {
+  constructor(details: SubagentToolDetails, theme: ThemeLike) {
     this._details = details;
     this._theme = theme;
   }
 
-  /** 更新 details（onUpdate 时调用） */
   update(details: SubagentToolDetails): void {
     this._details = details;
-    this.invalidate();
   }
 
-  invalidate(): void {
-    // 无缓存，无需清理
+  setSpinnerFrame(frame: number): void {
+    this._spinnerFrame = frame;
   }
+
+  setExpanded(expanded: boolean): void {
+    this._expanded = expanded;
+  }
+
+  invalidate(): void {}
 
   render(width: number): string[] {
-    const lines = buildRenderLines(this._details);
+    const lines = buildRenderLines(this._details, width, this._theme, {
+      expanded: this._expanded,
+      spinnerFrame: this._spinnerFrame,
+    });
+    return lines.map((line) => this.applyBg(line, width));
+  }
+
+  private applyBg(text: string, width: number): string {
     const bgFn = this.getBgFn();
-
-    // 应用背景色 + padding + 全宽填充；超长内容必须截断，否则 Pi TUI
-    // 会抛出 "Rendered line exceeds terminal width" 异常。
-    const result: string[] = [];
-    const paddingX = 1;
-    const leftPad = " ".repeat(paddingX);
-    const padSides = 2;
-    const contentWidth = Math.max(1, width - paddingX * padSides);
-
-    for (const rawLine of lines) {
-      // buildRenderLines 可能把 result/error 直接 push 为一整行，
-      // 其中可能包含换行符；按换行符拆分，每行分别处理。
-      for (const line of rawLine.split("\n")) {
-        const truncated =
-          visibleWidth(line) > contentWidth
-            ? truncateToWidth(line, contentWidth)
-            : line;
-        const visibleLen = visibleWidth(truncated);
-        const padNeeded = Math.max(0, contentWidth - visibleLen);
-        const padded = leftPad + truncated + " ".repeat(padNeeded) + " ";
-
-        // Apply background
-        if (bgFn) {
-          result.push(bgFn(padded));
-        } else {
-          result.push(padded);
-        }
-      }
-    }
-
-    return result;
+    const contentWidth = Math.max(1, width - 2);
+    const truncated = visibleWidth(text) > contentWidth ? truncateToWidth(text, contentWidth) : text;
+    const padNeeded = Math.max(0, contentWidth - visibleWidth(truncated));
+    const padded = ` ${truncated}${" ".repeat(padNeeded)} `;
+    return bgFn ? bgFn(padded) : padded;
   }
 
   private getBgFn(): ((text: string) => string) | undefined {
     switch (this._details.status) {
-      case "running": return (text: string) => this._theme.bg("toolPendingBg", text);
-      case "done": return (text: string) => this._theme.bg("toolSuccessBg", text);
+      case "running": return (t: string) => this._theme.bg("toolPendingBg", t);
+      case "done": return (t: string) => this._theme.bg("toolSuccessBg", t);
       case "failed":
-      case "cancelled": return (text: string) => this._theme.bg("toolErrorBg", text);
+      case "cancelled": return (t: string) => this._theme.bg("toolErrorBg", t);
     }
   }
-}
-
-
-
-// ============================================================
-// Factory（供 subagent-tool.ts 调用）
-// ============================================================
-
-/**
- * 创建 renderResult 回调。
- * 返回值：Pi ToolDefinition 的 renderResult 字段。
- */
-export function createRenderResult(
-  theme: { bg(color: string, text: string): string },
-) {
-  // 用闭包持有最新 Component 实例
-  let component: SubagentResultComponent | null = null;
-
-  return {
-    /** 获取或创建 Component */
-    getComponent(details: SubagentToolDetails): SubagentResultComponent {
-      if (!component) {
-        component = new SubagentResultComponent(details, theme);
-      } else {
-        component.update(details);
-      }
-      return component;
-    },
-    /** 渲染函数（Pi runtime 调用） */
-    render(
-      result: { content: Array<{ type: string; text?: string }>; details?: unknown },
-      _options: { expanded: boolean; isPartial: boolean },
-      theme: { bg(color: string, text: string): string },
-    ) {
-      const details = result.details as SubagentToolDetails | undefined;
-      if (!details) {
-        const text = result.content[0];
-        // Fallback: 返回 Text-like 对象（有 render 方法）
-        return { render: (_w: number) => [text?.type === "text" ? (text.text ?? "") : ""], invalidate() {} };
-      }
-      if (!component) {
-        component = new SubagentResultComponent(details, theme);
-      } else {
-        component.update(details);
-      }
-      return component;
-    },
-  };
 }

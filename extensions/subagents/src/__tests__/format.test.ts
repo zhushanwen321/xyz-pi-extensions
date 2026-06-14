@@ -2,12 +2,10 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_CATEGORIES } from "../category.ts";
-import type { WidgetAgentState } from "../tui/agent-widget.ts";
 import {
   extractLabelFromArgs,
   formatConfigSummary,
   formatEventLogLine,
-  formatStatusSummary,
   formatThinkingLevelOption,
 } from "../tui/format.ts";
 import type { AgentEventLogEntry, SubagentsGlobalConfig } from "../types.ts";
@@ -79,11 +77,11 @@ describe("extractLabelFromArgs", () => {
 });
 
 describe("formatEventLogLine", () => {
-  it("formats tool_start with ⟳ running", () => {
+  it("formats tool_start with label only (no running marker)", () => {
     const entry: AgentEventLogEntry = { type: "tool_start", label: "read foo.ts", ts: 0, status: "running" };
     const line = formatEventLogLine(entry, fakeTheme);
     expect(line).toContain("read foo.ts");
-    expect(line).toContain("running");
+    expect(line).not.toContain("running"); // FR-2.1: tool_start 无标记
   });
 
   it("formats tool_end done with ✓", () => {
@@ -104,18 +102,5 @@ describe("formatEventLogLine", () => {
     const line = formatEventLogLine(entry, fakeTheme, 3);
     expect(line).toContain("turn 3");
     expect(line).toContain("Fixed the handler");
-  });
-});
-
-describe("formatStatusSummary", () => {
-  it("includes spinner, agent, turns, tokens, elapsed", () => {
-    const state: WidgetAgentState = {
-      id: "1", agent: "worker", status: "running", turns: 3, totalTokens: 12000, elapsedSeconds: 45,
-    };
-    const result = formatStatusSummary(state, 0, fakeTheme);
-    expect(result).toContain("worker");
-    expect(result).toContain("3 turns");
-    expect(result).toContain("12.0k");
-    expect(result).toContain("45s");
   });
 });

@@ -139,7 +139,17 @@ export const THINKING_CHUNK = 100;
 
 - [ ] **步骤 6：修改 event-bridge.ts — 提取 thinking_delta**
 
-在 `extensions/subagents/src/core/event-bridge.ts` 找到 `message_update` case（约 59 行）。替换为：
+在 `extensions/subagents/src/core/event-bridge.ts` 找到 `message_update` case（约 59 行）。
+
+**先扩展 SdkEvent 类型**：找到 `assistantMessageEvent` 字段定义（约 19 行，当前为 `{ delta?: string; textDelta?: string }`），替换为：
+
+```typescript
+  assistantMessageEvent?: { type?: string; delta?: string; textDelta?: string };
+```
+
+> 必须先加 `type?` 字段，否则下方 `ame?.type === "thinking_delta"` 会因属性不存在而 tsc 报错。
+
+**再替换 `message_update` case** 为：
 
 ```typescript
       case "message_update": {
@@ -272,7 +282,10 @@ describe("updateWidgetFromEvent — text_output + thinking slicing", () => {
 
 ```typescript
     case "turn_end": {
-      // FR-1.1b: flush 残留的 text/thinking 缓冲
+      // FR-1.1b: flush 残留的 text/thinking 缓冲。
+      // 注意：先取 summary 再 flush——turn_end 的 label 用本 turn 的完整文本，
+      // 同时 text_output entry 切片独立产出（与 summary 不互斥）。
+      const turnSummary = (s._currentTurnText ?? "").slice(0, TURN_SUMMARY_MAX);
       if (s._currentTurnText) {
         s.eventLog.push({ type: "text_output", label: s._currentTurnText.slice(0, 100), ts: Date.now() });
         s._currentTurnText = "";
@@ -281,13 +294,31 @@ describe("updateWidgetFromEvent — text_output + thinking slicing", () => {
         s.eventLog.push({ type: "thinking", label: s._currentThinking.slice(0, 100), ts: Date.now() });
         s._currentThinking = "";
       }
-      const summary = (s._currentTurnText ?? "").slice(0, TURN_SUMMARY_MAX);
-      s.eventLog.push({ type: "turn_end", label: summary, ts: Date.now() });
-      s._currentTurnText = "";
+      s.eventLog.push({ type: "turn_end", label: turnSummary, ts: Date.now() });
       s.turns = (s.turns ?? 0) + 1;
       break;
     }
 ```
+
+> **⚠️ 现有测试更新（偏差修正）**：`runtime-eventlog.test.ts` 现有测试 `turn_end slices _currentTurnText and resets it`（约 42-51 行）断言 `s.eventLog.toHaveLength(1)`。改造后该场景会产出 **2 条**（1 条 text_output flush + 1 条 turn_end）。需将该测试的断言改为：
+>
+> ```typescript
+>   it("turn_end flushes text_output + emits turn_end entry, resets buffer", () => {
+>     const s = makeWidgetState();
+>     updateWidgetFromEvent(s, { type: "text_delta", delta: "Hello " }, Date.now());
+>     updateWidgetFromEvent(s, { type: "text_delta", delta: "world" }, Date.now());
+>     updateWidgetFromEvent(s, { type: "turn_end" }, Date.now());
+>     const entries = s.eventLog ?? [];
+>     expect(entries).toHaveLength(2);
+>     expect(entries[0].type).toBe("text_output");
+>     expect(entries[0].label).toBe("Hello world");
+>     expect(entries[1].type).toBe("turn_end");
+>     expect(entries[1].label).toBe("Hello world");
+>     expect(s._currentTurnText).toBe("");
+>   });
+> ```
+>
+> 同理 `turn_end truncates label to TURN_SUMMARY_MAX (80)`（约 53-59 行）：200 字符 text → flush 1 条 text_output(label 100 字符) + turn_end(label 80 字符)，共 2 条，`entries[1].label` 长 80。
 
 - [ ] **步骤 5：运行测试确认通过**
 
@@ -832,7 +863,13 @@ export function initialToolState(): SubagentToolState {
  * FR-2.3: renderResult 逻辑——管理 spinner 定时器生命周期。
  * running 时启动 setInterval(250ms) → context.invalidate()；done/failed 时 clearInterval。
  * 定时器存 context.state（pi-tui Component 无 destroy 钩子，state 是唯一销毁点）。
+ *
+ * ⚠️ context.state 由 Pi runtime 初始化为 `{}`（tool-execution.js:12 rendererState = {}），
+ * 首次渲染时 frame/timer 均为 undefined。必须在 running 分支入口确保 frame 初始化为 0，
+ * 否则 `(undefined + 1) % 10 = NaN`，spinner 帧序列取 [NaN] 得到 undefined。
  */
+const SPINNER_FRAMES_COUNT = 10;
+
 export function renderSubagentResult(
   result: { content: Array<{ type: string; text?: string }>; details?: unknown },
   options: { expanded: boolean },
@@ -847,13 +884,16 @@ export function renderSubagentResult(
     );
   }
 
+  // 确保 state 字段初始化（Pi runtime 初始传 {}，frame/timer 为 undefined）
+  if (context.state.frame === undefined) context.state.frame = 0;
+
   const comp = new SubagentResultComponent(details, theme);
   comp.setExpanded(options.expanded);
 
   if (details.status === "running") {
     if (!context.state.timer) {
       context.state.timer = setInterval(() => {
-        context.state.frame = (context.state.frame + 1) % 10;
+        context.state.frame = (context.state.frame + 1) % SPINNER_FRAMES_COUNT;
         comp.setSpinnerFrame(context.state.frame);
         context.invalidate();
       }, 250);
@@ -887,6 +927,8 @@ export function renderSubagentResult(
 ```
 
 删除对旧 `createRenderResult` 的 import（文件顶部，约 24 行 —— 若有 `import { createRenderResult }` 则删除该行）。
+
+> **⚠️ 偏差修正**：实际 `subagent-tool.ts` 当前已不 import `createRenderResult`（直接用 `new SubagentResultComponent`，见 line 24/103），**此步无操作**。步骤 4 替换 `renderResult` 字段时注意：现有签名是 3 参数 `(result, _options, theme)`，需改为 4 参数（加 `context`）——与 SDK 真实签名 `renderResult?(result, options, theme, context: ToolRenderContext)` 对齐（已核对 `pi-coding-agent/dist/core/extensions/types.d.ts:365`）。
 
 - [ ] **步骤 5：buildDetails 加 model/thinkingLevel**
 
@@ -942,23 +984,47 @@ git commit -m "feat(subagents): spinner timer lifecycle in renderResult (FR-2.3,
 
 运行：`cd extensions/subagents && head -30 src/__tests__/background.test.ts`
 
-在文件末尾追加（`createTestRuntime` 替换为实际函数名）：
+> **⚠️ 偏差修正**：实际工厂函数名是 `makeRuntime`（不是 `createTestRuntime`），且 `makeRuntime` 默认 mock 了 `rt.runAgent`（background.test.ts:36-47）——mock 的 runAgent **不会调用 opts.onEvent**。因此测试必须传入一个会发事件的 `runAgentImpl`，否则 `onUpdate` 永不被触发、`updates.length` 永远为 0。
+
+在文件末尾追加（用真实工厂 `makeRuntime` + 会发事件的 runAgentImpl）：
 
 ```typescript
 describe("startBackground onUpdate callback (FR-2.5)", () => {
-  it("invokes onUpdate with running details during execution", async () => {
-    const rt = createTestRuntime();
-    const updates: Array<{ status: string; turns: number }> = [];
+  it("invokes onUpdate with running details when runAgent emits events", async () => {
+    // makeRuntime 默认 mock 的 runAgent 不发事件，必须传一个会调 opts.onEvent 的实现
+    const rt = makeRuntime({
+      runAgentImpl: async (opts: { onEvent?: (e: unknown) => void }) => {
+        opts.onEvent?.({ type: "tool_start", toolName: "read", args: { path: "x.ts" } });
+        opts.onEvent?.({ type: "turn_end" });
+        return {
+          text: "done", turns: 1, durationMs: 5, success: true, sessionId: "s1", toolCalls: [],
+        };
+      },
+    });
+    const updates: Array<{ status: string; eventLogLen: number }> = [];
     const handle = rt.startBackground({
       task: "test task",
       agent: "worker",
-      onUpdate: (d) => updates.push({ status: d.status, turns: d.turns }),
+      onUpdate: (d) => updates.push({ status: d.status, eventLogLen: d.eventLog.length }),
     });
     expect(handle.id).toMatch(/^bg-/);
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 50));
     expect(updates.length).toBeGreaterThan(0);
     expect(updates[0].status).toBe("running");
-    rt.cancelBackground(handle.id);
+    expect(updates[0].eventLogLen).toBeGreaterThan(0); // tool_start + turn_end 各 push 一条
+  });
+
+  it("does not invoke onUpdate when runAgent emits no events", async () => {
+    // runAgentImpl 不发事件 → onUpdate 不应被调
+    const rt = makeRuntime({
+      runAgentImpl: async () => ({
+        text: "silent", turns: 0, durationMs: 1, success: true, sessionId: "s2", toolCalls: [],
+      }),
+    });
+    const updates: unknown[] = [];
+    rt.startBackground({ task: "x", onUpdate: () => updates.push({}) });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(updates).toHaveLength(0);
   });
 });
 ```
@@ -1027,11 +1093,15 @@ export interface BackgroundOptions extends RunAgentOptions {
 
 在 `extensions/subagents/src/tools/subagent-tool.ts` 找到 background 分支（约 170 行），替换为：
 
+> **⚠️ TDZ 修正**：原 plan 在 `onUpdate` 闭包内引用 `handle.id`，但 `handle` 在 `startBackground` 返回后才赋值——若 `onUpdate` 在 `startBackground` 内部同步触发会 ReferenceError。改为先用局部变量 `bgId` 在 startBackground 返回后捕获 id，闭包内引用 `bgId`。
+
 ```typescript
       // ── Mode 2: background ──────────────────────────────
       if (params.wait === false) {
         const agentName = params.agent ?? "default";
         const resolved = rt.resolveModelForAgent?.(params.agent);
+        // bgId 在 startBackground 返回后赋值；onUpdate 闭包引用 bgId（异步触发时已赋值）
+        let bgId = "";
         const handle = rt.startBackground({
           task: params.task,
           agent: params.agent,
@@ -1046,13 +1116,14 @@ export interface BackgroundOptions extends RunAgentOptions {
                 turns: bgDetails.turns,
                 totalTokens: bgDetails.totalTokens,
                 elapsedSeconds: bgDetails.elapsedSeconds,
-                backgroundId: handle.id,
+                backgroundId: bgId,
                 model: resolved?.model.id,
                 thinkingLevel: resolved?.thinkingLevel,
               },
             });
           },
         });
+        bgId = handle.id;
         const details: SubagentToolDetails = {
           eventLog: [],
           status: "running",
@@ -1073,35 +1144,42 @@ export interface BackgroundOptions extends RunAgentOptions {
 
 - [ ] **步骤 6：添加 resolveModelForAgent 到 runtime**
 
-先确认 resolution 目录结构：
+> **⚠️ 偏差修正**：真实函数名是 `resolveModelForAgent`（不是 `resolveModel`），且 `runtime.ts:11` **已 import** 它（`import { type ModelRegistryLike, resolveModelForAgent } from "./resolution/model-resolver.ts"`）。真实签名是 `resolveModelForAgent(opts: { agentName, agentConfig, category, globalConfig, sessionState, modelRegistry, paramOverride? }): ResolvedModel`。AgentRegistry 用 `get(name)`（不是 `find`）。category 通过 `inferCategory(agentName, agentConfig, globalConfig.agentCategoryOverrides)` 推断（需补 import）。
 
-运行：`ls extensions/subagents/src/resolution/`
+确认 import 区有（runtime.ts:11 已有 resolveModelForAgent；需补 inferCategory）：
 
-在 `extensions/subagents/src/runtime.ts` 的 `SubagentRuntime` 类内（约 396 行 `createManagedSession` 前）追加。import 路径以实际 resolution 目录为准：
+```typescript
+import { inferCategory } from "./category.ts";
+```
+
+在 `extensions/subagents/src/runtime.ts` 的 `SubagentRuntime` 类内、`createManagedSession`（约 397 行）前追加：
 
 ```typescript
   /** FR-1.2: 解析 agent 的 model + thinkingLevel（供 tool 构建 details） */
   resolveModelForAgent(agentName?: string): ResolvedModel | undefined {
     if (!this.modelRegistry) return undefined;
-    const agent = agentName
-      ? (this.agentRegistry.find(agentName) ?? this.builtinRegistry.find(agentName))
-      : undefined;
-    return resolveModel({
-      agent,
-      sessionState: this.sessionState,
-      globalConfig: this.globalConfig,
-      modelRegistry: this.modelRegistry,
-    });
+    if (!agentName) return undefined;
+    // hot-reload：重新扫描 .md 文件，确保编辑后立即生效（与 buildContext.resolveAgent 一致）
+    this.agentRegistry.discoverAll(this.builtinRegistry);
+    const agentConfig = this.agentRegistry.get(agentName) ?? this.builtinRegistry.get(agentName);
+    const category = inferCategory(agentName, agentConfig, this.globalConfig.agentCategoryOverrides);
+    try {
+      return resolveModelForAgent({
+        agentName,
+        agentConfig,
+        category,
+        globalConfig: this.globalConfig,
+        sessionState: this.sessionState,
+        modelRegistry: this.modelRegistry,
+      });
+    } catch {
+      // 模型解析失败（如 fallback 链全部不可用）→ 返回 undefined，details 不带 model 字段
+      return undefined;
+    }
   }
 ```
 
-在 runtime.ts 顶部 import 区追加（路径以 `ls` 结果为准，通常是 `./resolution/model-resolver.ts`）：
-
-```typescript
-import { resolveModel } from "./resolution/model-resolver.ts";
-```
-
-若 `resolveModel` 的参数签名不同，读 `resolution/model-resolver.ts` 的导出函数签名并调整上述调用的参数对象。
+> 返回类型 `ResolvedModel` 已在 runtime.ts 现有 import 中（经 types.ts 间接可用，或从 model-resolver.ts re-export）。若 tsc 报 `ResolvedModel` 未导入，补 `import type { ResolvedModel } from "./types.ts"`。
 
 - [ ] **步骤 7：运行测试确认通过**
 
@@ -1307,9 +1385,22 @@ git commit -m "test(subagents): e2e verification pass for TUI block redesign" --
 
 ### 占位符扫描
 
-- 任务 5 步骤 6 的 `resolveModel` import 路径要求实施时 `ls resolution/` 确认——这是合理的实现时确认（路径未硬编码），**不算占位符**。
-- 任务 5 步骤 1 的 `createTestRuntime` 标注"替换为实际函数名"——同上，步骤 1 已给出 `head -30` 确认命令。
+- ~~任务 5 步骤 6 的 `resolveModel` import 路径要求实施时 `ls resolution/` 确认~~ —— **已落实**：真实函数 `resolveModelForAgent` 已 import 于 runtime.ts:11，签名与调用已对齐（见任务 5 步骤 6 偏差修正）。
+- ~~任务 5 步骤 1 的 `createTestRuntime` 标注"替换为实际函数名"~~ —— **已落实**：真实工厂 `makeRuntime`，测试已改为传入会发事件的 `runAgentImpl`（见任务 5 步骤 1 偏差修正）。
 - 所有代码步骤都含完整代码块，无 "TODO"/"类似任务 N"。
+
+### 实施时偏差修正（v1.1）
+
+本 plan 基于实际代码（feat-subagent-tui-block worktree, HEAD 7de961fa）核对后修正以下 6 处偏差，均已就地标注 `⚠️ 偏差修正`：
+
+| # | 位置 | 偏差 | 修正 |
+|---|------|------|------|
+| 1 | 任务 5 步骤 6 | `resolveModel({agent,...})` 函数名/签名错误 | 改用真实 `resolveModelForAgent({agentName, agentConfig, category, ...})` + `inferCategory` |
+| 2 | 任务 5 步骤 1 | `createTestRuntime` 工厂不存在；默认 mock runAgent 不发事件 | 改用真实 `makeRuntime` + 传入会调 `opts.onEvent` 的 `runAgentImpl` |
+| 3 | 任务 2 步骤 4 | turn_end 先 flush 再取 summary 导致 summary 永远空；且现有测试 `toHaveLength(1)` 会破坏 | 先取 `turnSummary` 再 flush；更新现有 runtime-eventlog 测试断言为 2 条 |
+| 4 | 任务 4 步骤 4 | "删除 createRenderResult import" 过时（已无此 import） | 标注此步无操作；补充现有 renderResult 是 3 参数需改 4 参数（对齐 SDK 真实签名） |
+| 5 | 任务 1 步骤 6 | `ame?.type` 访问的 `type` 字段在 SdkEvent 类型中不存在 | 先扩展 `assistantMessageEvent` 类型加 `type?: string` |
+| 6 | 任务 4 步骤 3 | `context.state.frame` 初始 undefined → `(undefined+1)%10=NaN`；`%10` 魔法数字 | running 分支入口确保 `frame` 初始化为 0；用 `SPINNER_FRAMES_COUNT` 常量 |
 
 ### 类型一致性
 

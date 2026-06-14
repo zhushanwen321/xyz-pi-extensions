@@ -5,14 +5,15 @@ import { loadGlobalConfig, saveGlobalConfig } from "./config/global-config.ts";
 import { buildCompletionKey, getGlobalSeenMap, markSeenWithTtl } from "./persistence/completion-dedupe.ts";
 import { runAgent, type RunAgentContext } from "./core/run-agent.ts";
 import { createManagedSession } from "./core/session.ts";
+import { inferCategory } from "./category.ts";
 import { HistoryStore, buildPersistedRecord } from "./persistence/history-store.ts";
 import { DefaultConcurrencyPool } from "./pool/concurrency-pool.ts";
 import { AgentRegistry } from "./registry/agent-registry.ts";
 import { BuiltinAgentRegistry } from "./registry/builtin-agents.ts";
 import { type ModelRegistryLike,resolveModelForAgent } from "./resolution/model-resolver.ts";
 import { createSessionModelState, restoreState, serializeState, setAgentModel, setCategoryModel } from "./state/session-model-state.ts";
-import { AgentWidgetManager, type WidgetAgentState, type WidgetUI } from "./tui/agent-widget.ts";
-import { extractLabelFromArgs } from "./tui/format.ts";
+import type { WidgetAgentState } from "./tui/agent-widget.ts";
+import { updateRecordEventLog, updateWidgetFromEvent } from "./event-log-builder.ts";
 import {
   type AgentConfig,
   type AgentEvent,
@@ -27,12 +28,11 @@ import {
   type ConcurrencyPool,
   type ManagedSession,
   type ManagedSessionOptions,
-  MAX_EVENT_LOG_ENTRIES,
   type RunAgentOptions,
   type SessionModelState,
   type SubagentHooks,
   type SubagentsGlobalConfig,
-  TURN_SUMMARY_MAX,
+  type ResolvedModel,
 } from "./types.ts";
 
 /** Pi ExtensionAPI 的最小接口（duck-typed，用于 appendEntry / events.emit / sendMessage） */
@@ -48,7 +48,11 @@ interface PiLike {
 
 /** background id 的时间戳进制（base36 紧凑表示） */
 const BG_ID_RADIX = 36;
-/** widget 摘要截断长度 */
+/**
+ * widget 摘要截断长度（完成时 result.text 的预览截断）。
+ * 注意：与 EVENT_LOG_LABEL_MAX（types.ts，eventLog label 截断）值相同但语义不同——
+ * 前者截断最终结果文本预览，后者截断流式 eventLog 条目。有意不复用。
+ */
 const WIDGET_SUMMARY_MAX = 100;
 /** widget 完成状态淡出延迟（ms） */
 const WIDGET_LINGER_MS = 5000;
@@ -124,8 +128,8 @@ export class SubagentRuntime {
   /** FR-3.1 G-017: 活跃 overlay 句柄（防叠加） */
   private _activeView: { close: () => void } | null = null;
 
-  /** Live widget 管理器（实时显示 agent 状态） */
-  readonly widget = new AgentWidgetManager();
+  /** FR-2.0: running agent 状态 map（替代已删除的 AgentWidgetManager 渲染层） */
+  private readonly _runningAgents = new Map<string, WidgetAgentState>();
 
   constructor(opts: { cwd: string; homeDir: string; agentDir: string }) {
     this.cwd = opts.cwd;
@@ -160,9 +164,9 @@ export class SubagentRuntime {
     this.pi = pi;
   }
 
-  /** session_start 时注入 UI（用于 live widget 渲染） */
-  attachWidgetUI(ui: WidgetUI): void {
-    this.widget.attachUI(ui);
+  /** FR-2.0: 暴露给 /subagents list 的 running agent 快照（替代 widget.listAgents） */
+  listRunningAgents(): WidgetAgentState[] {
+    return [...this._runningAgents.values()];
   }
 
   /** FR-3.4: 订阅 runtime 数据变更（overlay 视图用） */
@@ -308,7 +312,7 @@ export class SubagentRuntime {
       eventLog: [],
     };
     if (!skipWidget) {
-      this.widget.updateAgent(widgetState);
+      this._runningAgents.set(widgetState.id, widgetState);
       this.notifyChange();
     }
 
@@ -320,7 +324,7 @@ export class SubagentRuntime {
         userOnEvent?.(event);
         if (!skipWidget) {
           updateWidgetFromEvent(widgetState, event, startTime);
-          this.widget.updateAgent(widgetState);
+          this._runningAgents.set(widgetState.id, widgetState);
           this.notifyChange();
         }
       },
@@ -340,7 +344,7 @@ export class SubagentRuntime {
       widgetState.summary = result.text.slice(0, WIDGET_SUMMARY_MAX);
       widgetState.finishedAt = Date.now();
       if (!skipWidget) {
-        this.widget.updateAgent(widgetState);
+        this._runningAgents.set(widgetState.id, widgetState);
         this.notifyChange();
         // 5 秒后归档 + 清理
         setTimeout(() => {
@@ -356,7 +360,7 @@ export class SubagentRuntime {
             startedAt: Date.now() - (widgetState.elapsedSeconds ?? 0) * 1000,
             endedAt: widgetState.finishedAt,
           });
-          this.widget.removeAgent(widgetId);
+          this._runningAgents.delete(widgetId);
           this.notifyChange();
         }, WIDGET_LINGER_MS);
       }
@@ -390,7 +394,7 @@ export class SubagentRuntime {
       widgetState.summary = err instanceof Error ? err.message : String(err);
       widgetState.finishedAt = Date.now();
       if (!skipWidget) {
-        this.widget.updateAgent(widgetState);
+        this._runningAgents.set(widgetState.id, widgetState);
         this.notifyChange();
         setTimeout(() => {
           this.archiveSyncAgent({
@@ -405,7 +409,7 @@ export class SubagentRuntime {
             startedAt: Date.now() - (widgetState.elapsedSeconds ?? 0) * 1000,
             endedAt: widgetState.finishedAt,
           });
-          this.widget.removeAgent(widgetId);
+          this._runningAgents.delete(widgetId);
           this.notifyChange();
         }, WIDGET_LINGER_MS);
       }
@@ -482,6 +486,10 @@ export class SubagentRuntime {
     const userBgOnEvent = opts.onEvent;
     const bgStartTime = record.startedAt;
     const signal = opts.signal ?? controller.signal;
+    // FR-2.5: onUpdate 拦截器——把 runAgent 的事件回流给调用方（对话流 block 实时刷新）
+    const userOnUpdate = opts.onUpdate;
+    let bgTurns = 0;
+    let bgTokens = 0;
     this.runAgent({
       ...opts,
       signal,
@@ -492,8 +500,21 @@ export class SubagentRuntime {
       _skipWidget: true,
       onEvent: (event: AgentEvent) => {
         userBgOnEvent?.(event);
+        // FR-1.3: record 闭包捕获（race fix G-005）+ updateRecordEventLog 切片
         if (!record.eventLog) record.eventLog = [];
         updateRecordEventLog(record.eventLog, event, bgStartTime);
+        if (event.type === "turn_end") bgTurns += 1;
+        if (event.type === "message_end" && event.usage) {
+          bgTokens += event.usage.input + event.usage.output + event.usage.cacheRead + event.usage.cacheWrite;
+        }
+        // FR-2.5: 回流给调用方（对话流 block 实时刷新）
+        userOnUpdate?.({
+          eventLog: [...record.eventLog],
+          status: "running",
+          turns: bgTurns,
+          totalTokens: bgTokens,
+          elapsedSeconds: Math.floor((Date.now() - bgStartTime) / MS_PER_SECOND),
+        });
         this.notifyChange();
       },
     })
@@ -659,6 +680,33 @@ export class SubagentRuntime {
     return this.agentRegistry.get(name);
   }
 
+  /**
+   * FR-1.2: 解析 agent 的 model + thinkingLevel（供 tool 构建 details）。
+   * 与 resolveModelForScene 不同：这里走完整 agent 发现 + category 推断链，
+   * 返回完整 ResolvedModel（含 model.id 和 thinkingLevel）。
+   * 解析失败（如 fallback 链全部不可用）→ 返回 undefined，details 不带 model 字段。
+   */
+  resolveModelForAgent(agentName?: string): ResolvedModel | undefined {
+    if (!this.modelRegistry) return undefined;
+    if (!agentName) return undefined;
+    // hot-reload：重新扫描 .md 文件，确保编辑后立即生效（与 buildContext.resolveAgent 一致）
+    this.agentRegistry.discoverAll(this.builtinRegistry);
+    const agentConfig = this.agentRegistry.get(agentName) ?? this.builtinRegistry.get(agentName);
+    const category = inferCategory(agentName, agentConfig, this.globalConfig.agentCategoryOverrides);
+    try {
+      return resolveModelForAgent({
+        agentName,
+        agentConfig,
+        category,
+        globalConfig: this.globalConfig,
+        sessionState: this.sessionState,
+        modelRegistry: this.modelRegistry,
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
   /** 持久化全局配置（供 config-wizard 调用） */
   saveGlobalConfig(): Promise<void> {
     return saveGlobalConfig(this.homeDir, this.globalConfig);
@@ -799,109 +847,6 @@ export class SubagentRuntime {
   }
 }
 
-/**
- * 从 AgentEvent 更新 widget 状态（turns/tokens/activity + eventLog 追加）。
- * FR-1.1b: text_delta 累加，turn_end 切片生成摘要。
- * FR-1.3: tool_start/tool_end/turn_end push 到 eventLog（ring buffer）。
- */
-export function updateWidgetFromEvent(
-  state: WidgetAgentState,
-  event: {
-    type: string;
-    toolName?: string;
-    args?: unknown;
-    usage?: { input: number; output: number; cacheRead: number; cacheWrite: number };
-    delta?: string;
-    isError?: boolean;
-  },
-  startTime: number,
-): void {
-  const s = state;
-  if (!s.eventLog) s.eventLog = [];
-
-  // S5: eventLog + _currentTurnText 的追加逻辑抽到 appendEventLogEntries，
-  // 供 updateRecordEventLog 复用（无需构造完整 WidgetAgentState）。
-  appendEventLogEntries(s, event);
-  if (event.type === "tool_start") {
-    s.activity = event.toolName ?? "working";
-  } else if (event.type === "tool_end") {
-    s.activity = "thinking…";
-  } else if (event.type === "turn_end") {
-    s.turns = (s.turns ?? 0) + 1;
-  } else if (event.type === "message_end" && event.usage) {
-    s.totalTokens = (s.totalTokens ?? 0) + event.usage.input + event.usage.output + event.usage.cacheRead + event.usage.cacheWrite;
-  }
-
-  // Ring buffer 已在 appendEventLogEntries 内处理
-  s.elapsedSeconds = Math.floor((Date.now() - startTime) / MS_PER_SECOND);
-}
-
-/**
- * S5: eventLog 追加的最小契约——只需 eventLog 数组 + _currentTurnText 累积器。
- * WidgetAgentState 和 BgRecord.eventLog 都满足此形状，避免 as unknown as 断言。
- */
-interface EventLogSink {
-  eventLog?: AgentEventLogEntry[];
-  _currentTurnText?: string;
-}
-
-/**
- * S5: 从 updateWidgetFromEvent 抽取的纯 eventLog 追加逻辑（tool_start/tool_end/
- * text_delta/turn_end 四种事件类型）。直接 mutate sink.eventLog（push + ring buffer）。
- * 调用方（updateWidgetFromEvent / updateRecordEventLog）负责各自的附带字段更新。
- */
-function appendEventLogEntries(sink: EventLogSink, event: EventLogSinkEvent): void {
-  if (!sink.eventLog) sink.eventLog = [];
-  const log = sink.eventLog;
-  switch (event.type) {
-    case "tool_start": {
-      const label = extractLabelFromArgs(event.toolName ?? "working", event.args);
-      log.push({ type: "tool_start", label, ts: Date.now(), status: "running" });
-      break;
-    }
-    case "tool_end": {
-      const label = extractLabelFromArgs(event.toolName ?? "working", event.args);
-      log.push({ type: "tool_end", label, ts: Date.now(), status: event.isError ? "failed" : "done" });
-      break;
-    }
-    case "text_delta": {
-      sink._currentTurnText = (sink._currentTurnText ?? "") + (event.delta ?? "");
-      break;
-    }
-    case "turn_end": {
-      const summary = (sink._currentTurnText ?? "").slice(0, TURN_SUMMARY_MAX);
-      log.push({ type: "turn_end", label: summary, ts: Date.now() });
-      sink._currentTurnText = "";
-      break;
-    }
-    default:
-      break;
-  }
-  // Ring buffer: 超上限移除最旧
-  while (log.length > MAX_EVENT_LOG_ENTRIES) {
-    log.shift();
-  }
-}
-
-/** S5: appendEventLogEntries 接受的事件形状 */
-type EventLogSinkEvent = {
-  type: string;
-  toolName?: string;
-  args?: unknown;
-  delta?: string;
-  isError?: boolean;
-};
-
-/**
- * G-005 修复：直接更新 BgRecord.eventLog（S5 重构：复用 appendEventLogEntries，
- * 无需 as unknown as WidgetAgentState 断言）。传入的 eventLog 数组被直接 mutate，
- * 调用方持有同一引用即可读到结果。与 widget 反查（listAgents 找 startsWith("run-")）
- * 相比，本方式通过闭包捕获 record，每个 background 的 eventLog 互不串号。
- */
-function updateRecordEventLog(eventLog: AgentEventLogEntry[], event: AgentEvent, _startTime: number): void {
-  const sink: EventLogSink = { eventLog, _currentTurnText: "" };
-  appendEventLogEntries(sink, event as EventLogSinkEvent);
-}
 
 /** ms → s 换算 */
 const MS_PER_SECOND = 1000;

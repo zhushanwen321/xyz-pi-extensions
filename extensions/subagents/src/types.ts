@@ -35,11 +35,12 @@ export const SESSION_FILE_TTL_DAYS = 30;
 /** ADR-024: taskPreview / resultPreview 最大字符数 */
 export const PERSISTED_PREVIEW_MAX = 200;
 
-/** FR-3.5 G-008: widget stalled 兜底阈值（5min 无新事件） */
-export const STALLED_TIMEOUT_MS = 5 * 60 * 1000;
-
-/** FR-2.2: inline widget eventLog 最大行数（12 - 1 行 status summary） */
-export const WIDGET_EVENT_LINES = 11;
+/** FR-1.1b: text_output 切片阈值（累计字符数达此值产生一条 log entry） */
+export const TEXT_OUTPUT_CHUNK = 100;
+/** FR-1.1a: thinking 切片阈值（累计字符数达此值产生一条 log entry） */
+export const THINKING_CHUNK = 100;
+/** FR-1.1b: text_output / thinking label 最大字符数（切片后截断展示） */
+export const EVENT_LOG_LABEL_MAX = 100;
 
 // ============================================================
 // FR-1.1: AgentEventLogEntry（事件日志条目）
@@ -51,7 +52,7 @@ export const WIDGET_EVENT_LINES = 11;
  * - label 已折叠为可展示字符串（toolName + args 摘要 / turn 文本摘要）
  */
 export interface AgentEventLogEntry {
-  readonly type: "tool_start" | "tool_end" | "turn_end";
+  readonly type: "tool_start" | "tool_end" | "turn_end" | "text_output" | "thinking";
   readonly label: string;
   readonly ts: number;
   readonly status?: "running" | "done" | "failed";
@@ -187,6 +188,14 @@ export interface BackgroundStatus extends BackgroundHandle {
 export interface BackgroundOptions extends RunAgentOptions {
   /** 任务完成（成功/失败/取消）时回调。与 pi.events 'subagents:bg:done' 二选一或都有 */
   onComplete?: (status: BackgroundStatus) => void;
+  /** FR-2.5: 执行中事件回流（使对话流 block 实时刷新） */
+  onUpdate?: (details: {
+    eventLog: AgentEventLogEntry[];
+    status: "running" | "done" | "failed" | "cancelled";
+    turns: number;
+    totalTokens: number;
+    elapsedSeconds: number;
+  }) => void;
 }
 
 // ============================================================
@@ -246,6 +255,7 @@ export type AgentEventType =
   | "tool_start"
   | "tool_end"
   | "text_delta"
+  | "thinking_delta"
   | "turn_end"
   | "message_end"
   | "compaction"
@@ -255,6 +265,7 @@ export type AgentEvent =
   | { type: "tool_start"; toolName: string; args?: unknown }
   | { type: "tool_end"; toolName: string; result?: ToolCallEntry["result"]; isError: boolean }
   | { type: "text_delta"; delta: string }
+  | { type: "thinking_delta"; delta: string }
   | { type: "turn_end" }
   | { type: "message_end"; usage: AgentResult["usage"] }
   | { type: "compaction" }

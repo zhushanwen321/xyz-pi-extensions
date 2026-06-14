@@ -590,3 +590,88 @@ describe("BgRecord FIFO cleanup (FR-O5.9)", () => {
     expect(rt.listBackground().length).toBe(51);
   });
 });
+
+describe("startBackground onUpdate callback (FR-2.5)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("invokes onUpdate with running details when runAgent emits events", async () => {
+    const rt = makeRuntime();
+    // 直接 mock runAgent 发事件（makeRuntime 的 runAgentImpl 签名无 opts 参数，这里绕过）
+    (rt as unknown as { runAgent: ReturnType<typeof vi.fn> }).runAgent = vi.fn(
+      async (opts: { onEvent?: (e: { type: string; toolName?: string; args?: unknown }) => void }) => {
+        opts.onEvent?.({ type: "tool_start", toolName: "read", args: { path: "x.ts" } });
+        opts.onEvent?.({ type: "turn_end" });
+        return {
+          text: "done", turns: 1, durationMs: 5, success: true, sessionId: "s1", toolCalls: [],
+        } as AgentResult;
+      },
+    );
+    const updates: Array<{ status: string; eventLogLen: number }> = [];
+    const handle = rt.startBackground({
+      task: "test task",
+      agent: "worker",
+      onUpdate: (d: { status: string; eventLog: unknown[] }) => updates.push({ status: d.status, eventLogLen: d.eventLog.length }),
+    });
+    expect(handle.id).toMatch(/^bg-/);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(updates.length).toBeGreaterThan(0);
+    expect(updates[0].status).toBe("running");
+    expect(updates[0].eventLogLen).toBeGreaterThan(0);
+  });
+
+  it("does not invoke onUpdate when runAgent emits no events", async () => {
+    const rt = makeRuntime();
+    const updates: unknown[] = [];
+    rt.startBackground({ task: "x", onUpdate: () => updates.push({}) });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(updates).toHaveLength(0);
+  });
+});
+
+describe("resolveModelForAgent runtime method (FR-1.2, C2)", () => {
+  function makeRegistryWithModel(): unknown {
+    const model = {
+      id: "anthropic/claude-sonnet-4.5", name: "claude-sonnet-4.5",
+      provider: "anthropic", reasoning: true,
+      thinkingLevelMap: { off: null, minimal: null, low: null, medium: "m", high: "h" },
+    };
+    return {
+      find: (_provider: string, modelId: string) => (modelId === "claude-sonnet-4.5" ? model : undefined),
+      hasConfiguredAuth: () => true,
+      getAvailable: () => [model],
+    };
+  }
+
+  it("returns undefined when modelRegistry not injected", () => {
+    const rt = new SubagentRuntime({
+      cwd: "/tmp/x", homeDir: "/tmp/x-none", agentDir: "/tmp/x-agent",
+    });
+    expect(rt.resolveModelForAgent("worker")).toBeUndefined();
+  });
+
+  it("returns undefined when agentName is undefined/empty", () => {
+    const rt = makeRuntime();
+    expect(rt.resolveModelForAgent(undefined)).toBeUndefined();
+    expect(rt.resolveModelForAgent("")).toBeUndefined();
+  });
+
+  it("returns undefined when resolver throws (no available model for unknown agent)", () => {
+    const rt = makeRuntime();
+    expect(rt.resolveModelForAgent("nonexistent-agent")).toBeUndefined();
+  });
+
+  it("returns ResolvedModel when fallback chain resolves the model", () => {
+    const rt = new SubagentRuntime({
+      cwd: "/tmp/x", homeDir: "/tmp/x-none", agentDir: "/tmp/x-agent",
+    });
+    rt.injectModelRegistry(makeRegistryWithModel() as never);
+    rt.injectPi({ appendEntry: vi.fn(), events: { emit: vi.fn() } } as never);
+    rt.globalConfig.fallback.model = "anthropic/claude-sonnet-4.5";
+    const result = rt.resolveModelForAgent("worker");
+    expect(result).toBeDefined();
+    expect(result!.model.id).toBe("anthropic/claude-sonnet-4.5");
+    expect(result!.source).toBe("global-fallback");
+  });
+});

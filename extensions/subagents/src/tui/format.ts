@@ -1,6 +1,5 @@
 // src/tui/format.ts
 import type { AgentEventLogEntry, SubagentsGlobalConfig } from "../types.ts";
-import type { WidgetAgentState } from "./agent-widget.ts";
 
 const THINKING_DESCRIPTIONS: Record<string, string> = {
   off: "不使用推理",
@@ -37,8 +36,6 @@ export function formatConfigSummary(config: SubagentsGlobalConfig, yoloMode: boo
 // FR-1.1a / FR-2.1: eventLog 格式化纯函数
 // ============================================================
 
-/** SPINNER 帧序列（与 agent-widget.ts 一致） */
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const TOKEN_THOUSAND = 1000;
 const TOKEN_MILLION = 1000000;
 const BASH_CMD_MAX = 60;
@@ -84,42 +81,42 @@ function basename(p: string): string {
 
 /**
  * FR-2.1: 格式化事件日志条目为单行展示。
- * turnNumber 是当前 turn 数（可选，turn_end 时传）。
+ * 统一入口：对话流 block（subagent-render）和 widget 视图共用。
+ * tool_start 无标记（不再显示 ⟳ running，与对话流 block 一致）。
+ * 前缀 `├─ ` 用 theme.fg("dim") 着色（spec: 连接线 dim 色）。
  */
 export function formatEventLogLine(
   entry: AgentEventLogEntry,
   theme: ThemeLike,
   turnNumber?: number,
 ): string {
+  const prefix = theme.fg("dim", "├─ ");
   if (entry.type === "turn_end") {
-    return `├─ turn ${turnNumber ?? "?"}: "${entry.label}"`;
+    return `${prefix}turn ${turnNumber ?? "?"}: "${entry.label}"`;
   }
   if (entry.type === "tool_start") {
-    return `├─ ${entry.label}  ${theme.fg("warning", "⟳ running")}`;
+    return `${prefix}${entry.label}`;
   }
-  // tool_end
-  const icon = entry.status === "failed" ? theme.fg("error", "✗") : theme.fg("success", "✓");
-  return `├─ ${entry.label}  ${icon}`;
+  if (entry.type === "tool_end") {
+    const icon = entry.status === "failed" ? theme.fg("error", "✗") : theme.fg("success", "✓");
+    return `${prefix}${entry.label} ${icon}`;
+  }
+  if (entry.type === "thinking") {
+    return `${prefix}${theme.fg("dim", entry.label)}`;
+  }
+  // text_output
+  return `${prefix}${entry.label}`;
 }
 
 /**
- * FR-2.1: inline widget 第 1 行 status summary。
+ * 格式化 token 数。统一实现（subagent-render / subagent-tool / widget 共用）。
+ * @param n token 数
+ * @param withSuffix true → "12.3k token"（widget 视图用）；false → "12.3k"（对话流 block 用）
  */
-export function formatStatusSummary(
-  state: WidgetAgentState,
-  spinnerFrame: number,
-  _theme: ThemeLike,
-): string {
-  const spinner = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length];
-  const turns = state.turns ?? 0;
-  const tokens = formatTokens(state.totalTokens ?? 0);
-  const elapsed = state.elapsedSeconds ?? 0;
-  return `${spinner} ${state.agent} │ ${turns} turns │ ${tokens} │ ${elapsed}s`;
+export function formatTokens(n: number, withSuffix = false): string {
+  const suffix = withSuffix ? " token" : "";
+  if (n >= TOKEN_MILLION) return `${(n / TOKEN_MILLION).toFixed(1)}M${suffix}`;
+  if (n >= TOKEN_THOUSAND) return `${(n / TOKEN_THOUSAND).toFixed(1)}k${suffix}`;
+  return `${n}${suffix}`;
 }
 
-/** 格式化 token 数（12345 → "12.3k"） */
-export function formatTokens(n: number): string {
-  if (n >= TOKEN_MILLION) return `${(n / TOKEN_MILLION).toFixed(1)}M token`;
-  if (n >= TOKEN_THOUSAND) return `${(n / TOKEN_THOUSAND).toFixed(1)}k token`;
-  return `${n} token`;
-}

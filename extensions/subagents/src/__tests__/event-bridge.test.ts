@@ -126,4 +126,20 @@ describe("createEventBridge", () => {
     expect(bridge.toolCalls[0].toolName).toBe("bash");
     expect(bridge.toolCalls[0].args).toBe(args);
   });
+
+  it("maps message_update with thinking_delta assistantMessageEvent → thinking_delta (FR-1.1a)", () => {
+    const events: AgentEvent[] = [];
+    const bridge = createEventBridge((e) => events.push(e));
+    bridge.handle({
+      type: "message_update",
+      message: {} as never,
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        contentIndex: 0,
+        delta: "analyzing the problem",
+        partial: {},
+      },
+    } as never);
+    expect(events).toContainEqual({ type: "thinking_delta", delta: "analyzing the problem" });
+  });
 });
