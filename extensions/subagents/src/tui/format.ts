@@ -83,8 +83,9 @@ function basename(p: string): string {
 }
 
 /**
- * FR-2.1: 格式化事件日志条目为单行展示。
+ * FR-2.1: 格式化事件日志条目为单行展示（widget 滚动区用）。
  * turnNumber 是当前 turn 数（可选，turn_end 时传）。
+ * tool_start 无标记（不再显示 ⟳ running，与对话流 block 一致）。
  */
 export function formatEventLogLine(
   entry: AgentEventLogEntry,
@@ -95,11 +96,17 @@ export function formatEventLogLine(
     return `├─ turn ${turnNumber ?? "?"}: "${entry.label}"`;
   }
   if (entry.type === "tool_start") {
-    return `├─ ${entry.label}  ${theme.fg("warning", "⟳ running")}`;
+    return `├─ ${entry.label}`;
   }
-  // tool_end
-  const icon = entry.status === "failed" ? theme.fg("error", "✗") : theme.fg("success", "✓");
-  return `├─ ${entry.label}  ${icon}`;
+  if (entry.type === "tool_end") {
+    const icon = entry.status === "failed" ? theme.fg("error", "✗") : theme.fg("success", "✓");
+    return `├─ ${entry.label}  ${icon}`;
+  }
+  if (entry.type === "thinking") {
+    return `├─ ${theme.fg("dim", entry.label)}`;
+  }
+  // text_output
+  return `├─ ${entry.label}`;
 }
 
 /**

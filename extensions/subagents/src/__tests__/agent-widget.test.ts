@@ -104,7 +104,8 @@ describe("renderWidget — eventLog scrolling", () => {
     expect(lines[0]).toContain("worker");
     expect(lines[0]).toContain("2 turns");
     expect(lines[1]).toContain("read foo.ts");
-    expect(lines[1]).toContain("running");
+    // FR-2.1: tool_start 无 running 标记（formatEventLogLine 不再追加 ⟳ running）
+    expect(lines[1]).not.toContain("running");
     expect(lines.some((l) => l.includes("edit bar.ts") && l.includes("✓"))).toBe(true);
     expect(lines.some((l) => l.includes("turn") && l.includes("Fixed X"))).toBe(true);
   });

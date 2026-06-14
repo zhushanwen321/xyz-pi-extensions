@@ -79,11 +79,11 @@ describe("extractLabelFromArgs", () => {
 });
 
 describe("formatEventLogLine", () => {
-  it("formats tool_start with ⟳ running", () => {
+  it("formats tool_start with label only (no running marker)", () => {
     const entry: AgentEventLogEntry = { type: "tool_start", label: "read foo.ts", ts: 0, status: "running" };
     const line = formatEventLogLine(entry, fakeTheme);
     expect(line).toContain("read foo.ts");
-    expect(line).toContain("running");
+    expect(line).not.toContain("running"); // FR-2.1: tool_start 无标记
   });
 
   it("formats tool_end done with ✓", () => {

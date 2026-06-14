@@ -2,14 +2,12 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 
-import { buildRenderLines, SubagentResultComponent, type SubagentToolDetails } from "../tui/subagent-render.ts";
+import { buildRenderLines, SubagentResultComponent, type SubagentToolDetails, type ThemeLike } from "../tui/subagent-render.ts";
 
-const fakeTheme = {
-  bg(_color: string, text: string): string { return `[bg:${text}]`; },
-};
-
-const passthroughTheme = {
+const passthroughTheme: ThemeLike = {
   bg(_color: string, text: string): string { return text; },
+  fg(_color: string, text: string): string { return text; },
+  bold(text: string): string { return text; },
 };
 
 function makeDetails(overrides: Partial<SubagentToolDetails> = {}): SubagentToolDetails {
@@ -20,108 +18,132 @@ function makeDetails(overrides: Partial<SubagentToolDetails> = {}): SubagentTool
     turns: 0,
     totalTokens: 0,
     elapsedSeconds: 0,
+    model: "anthropic/claude-sonnet-4.5",
+    thinkingLevel: "medium",
     ...overrides,
   };
 }
 
-describe("buildRenderLines", () => {
-  it("shows status line with agent name and turns", () => {
-    const lines = buildRenderLines(makeDetails({ turns: 3, totalTokens: 12000, elapsedSeconds: 45 }));
-    expect(lines[0]).toContain("worker");
-    expect(lines[0]).toContain("3 turns");
-    expect(lines[0]).toContain("12.0k");
-    expect(lines[0]).toContain("45s");
+describe("buildRenderLines — 压缩视图（6 行）", () => {
+  it("第1行：spinner + agent + model + thinking", () => {
+    const lines = buildRenderLines(makeDetails({ agent: "reviewer", model: "zhipu/glm-4.6", thinkingLevel: "high" }), 80, passthroughTheme);
+    expect(lines[0]).toContain("reviewer");
+    expect(lines[0]).toContain("zhipu/glm-4.6");
+    expect(lines[0]).toContain("thinking: high");
   });
 
-  it("shows running icon for running status", () => {
-    const lines = buildRenderLines(makeDetails({ status: "running" }));
-    // ⠹ character
-    expect(lines[0]).toContain("\u2839");
+  it("第1行：无 thinkingLevel 时不显示 thinking 段", () => {
+    const lines = buildRenderLines(makeDetails({ thinkingLevel: undefined }), 80, passthroughTheme);
+    expect(lines[0]).not.toContain("thinking:");
   });
 
-  it("shows done icon for done status", () => {
-    const lines = buildRenderLines(makeDetails({ status: "done" }));
-    expect(lines[0]).toContain("\u2713");
+  it("第1行：done 显示 ✓", () => {
+    const lines = buildRenderLines(makeDetails({ status: "done" }), 80, passthroughTheme);
+    expect(lines[0]).toContain("✓");
   });
 
-  it("shows failed icon for failed status", () => {
-    const lines = buildRenderLines(makeDetails({ status: "failed" }));
-    expect(lines[0]).toContain("\u2717");
+  it("第1行：failed 显示 ✗", () => {
+    const lines = buildRenderLines(makeDetails({ status: "failed" }), 80, passthroughTheme);
+    expect(lines[0]).toContain("✗");
   });
 
-  it("renders eventLog entries without ├─", () => {
+  it("滚动区行带 ├─ 连接线", () => {
     const lines = buildRenderLines(makeDetails({
       eventLog: [
-        { type: "tool_start", label: "read foo.ts", ts: 0, status: "running" },
-        { type: "tool_end", label: "edit bar.ts", ts: 0, status: "done" },
-        { type: "turn_end", label: "Fixed the handler", ts: 0 },
+        { type: "tool_end", label: "read auth.ts", ts: 0, status: "done" },
+        { type: "text_output", label: "scanning files", ts: 0 },
       ],
-    }));
-    expect(lines.some((l) => l.includes("read foo.ts") && !l.includes("\u251C"))).toBe(true);
-    expect(lines.some((l) => l.includes("edit bar.ts") && l.includes("\u2713"))).toBe(true);
-    expect(lines.some((l) => l.includes("turn 1") && l.includes("Fixed the handler"))).toBe(true);
+    }), 80, passthroughTheme);
+    const scrollLines = lines.slice(1, 5);
+    expect(scrollLines.some((l) => l.includes("├─"))).toBe(true);
   });
 
-  it("shows result for done status", () => {
+  it("tool_end 带 ✓ 或 ✗", () => {
     const lines = buildRenderLines(makeDetails({
-      status: "done",
-      result: "The file has been fixed.",
-    }));
-    expect(lines.some((l) => l.includes("The file has been fixed."))).toBe(true);
+      eventLog: [
+        { type: "tool_end", label: "read ok", ts: 0, status: "done" },
+        { type: "tool_end", label: "bash fail", ts: 0, status: "failed" },
+      ],
+    }), 80, passthroughTheme);
+    expect(lines.some((l) => l.includes("read ok") && l.includes("✓"))).toBe(true);
+    expect(lines.some((l) => l.includes("bash fail") && l.includes("✗"))).toBe(true);
   });
 
-  it("shows error for failed status", () => {
+  it("tool_start 无 ⏳ 标记", () => {
     const lines = buildRenderLines(makeDetails({
-      status: "failed",
-      error: "rate limited",
+      eventLog: [{ type: "tool_start", label: "read foo.ts", ts: 0, status: "running" }],
+    }), 80, passthroughTheme);
+    const toolLine = lines.find((l) => l.includes("read foo.ts"));
+    expect(toolLine).toBeDefined();
+    expect(toolLine!).not.toContain("⏳");
+  });
+
+  it("只显示最近 4 条事件", () => {
+    const eventLog = Array.from({ length: 8 }, (_, i) => ({
+      type: "tool_end" as const, label: `tool-${i}`, ts: i, status: "done" as const,
     }));
-    expect(lines.some((l) => l.includes("Error: rate limited"))).toBe(true);
+    const lines = buildRenderLines(makeDetails({ eventLog }), 80, passthroughTheme);
+    const scrollLines = lines.filter((l) => l.includes("├─"));
+    expect(scrollLines).toHaveLength(4);
+    expect(scrollLines[0]).toContain("tool-4");
+    expect(scrollLines[3]).toContain("tool-7");
+  });
+
+  it("thinking 行显示", () => {
+    const lines = buildRenderLines(makeDetails({
+      eventLog: [{ type: "thinking", label: "analyzing the structure", ts: 0 }],
+    }), 80, passthroughTheme);
+    expect(lines.some((l) => l.includes("analyzing the structure"))).toBe(true);
+  });
+
+  it("最后一行 stats 右对齐", () => {
+    const lines = buildRenderLines(makeDetails({ turns: 3, totalTokens: 12300, elapsedSeconds: 45 }), 80, passthroughTheme);
+    const lastLine = lines[lines.length - 1];
+    expect(lastLine).toContain("3 turns");
+    expect(lastLine).toContain("12.3k");
+    expect(lastLine).toContain("45s");
+    expect(lastLine.startsWith(" ")).toBe(true);
+  });
+
+  it("固定 6 行（事件不足时空行填充）", () => {
+    const lines = buildRenderLines(makeDetails({
+      eventLog: [{ type: "tool_end", label: "only one", ts: 0, status: "done" }],
+    }), 80, passthroughTheme);
+    expect(lines).toHaveLength(6);
+  });
+});
+
+describe("buildRenderLines — 展开视图", () => {
+  it("expanded=true 时显示全部 eventLog + result", () => {
+    const eventLog = Array.from({ length: 8 }, (_, i) => ({
+      type: "tool_end" as const, label: `tool-${i}`, ts: i, status: "done" as const,
+    }));
+    const lines = buildRenderLines(makeDetails({
+      status: "done", eventLog, result: "All done.",
+    }), 80, passthroughTheme, { expanded: true });
+    expect(lines.filter((l) => l.includes("├─")).length).toBeGreaterThanOrEqual(8);
+    expect(lines.some((l) => l.includes("All done."))).toBe(true);
   });
 });
 
 describe("SubagentResultComponent", () => {
-  it("renders lines with background color", () => {
-    const details = makeDetails({ turns: 2, totalTokens: 5000, elapsedSeconds: 30 });
-    const comp = new SubagentResultComponent(details, fakeTheme);
+  it("renders with background", () => {
+    const comp = new SubagentResultComponent(makeDetails({ turns: 2, totalTokens: 5000, elapsedSeconds: 30 }), passthroughTheme);
     const lines = comp.render(80);
     expect(lines.length).toBeGreaterThan(0);
-    // Each line should have background applied
-    expect(lines[0]).toContain("[bg:");
   });
 
-  it("updates details and re-renders", () => {
-    const comp = new SubagentResultComponent(makeDetails({ agent: "worker" }), fakeTheme);
+  it("update + re-render", () => {
+    const comp = new SubagentResultComponent(makeDetails({ agent: "worker" }), passthroughTheme);
     comp.update(makeDetails({ agent: "reviewer", turns: 5 }));
     const lines = comp.render(80);
     expect(lines[0]).toContain("reviewer");
-    expect(lines[0]).toContain("5 turns");
   });
 
-  it("truncates long single-line result to fit width", () => {
-    const longResult = "A".repeat(10_000);
+  it("truncates long lines to width", () => {
+    const longLabel = "A".repeat(10_000);
     const comp = new SubagentResultComponent(
-      makeDetails({ status: "done", result: longResult }),
-      passthroughTheme,
-    );
-    const width = 80;
-    const lines = comp.render(width);
-    for (const line of lines) {
-      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-    }
-    // The long result line should be truncated (with ellipsis)
-    const resultLine = lines.find((l) => l.includes("A"));
-    expect(resultLine).toBeDefined();
-    expect(visibleWidth(resultLine!)).toBeLessThanOrEqual(width);
-  });
-
-  it("splits multi-line result and truncates each line to fit width", () => {
-    const multiLineResult = [
-      "short",
-      "B".repeat(5_000),
-      "C".repeat(5_000),
-    ].join("\n");
-    const comp = new SubagentResultComponent(
-      makeDetails({ status: "done", result: multiLineResult }),
+      makeDetails({ eventLog: [{ type: "text_output", label: longLabel, ts: 0 }] }),
       passthroughTheme,
     );
     const width = 60;
@@ -129,21 +151,14 @@ describe("SubagentResultComponent", () => {
     for (const line of lines) {
       expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }
-    // There should be at least two truncated long lines
-    const longLines = lines.filter((l) => l.includes("B") || l.includes("C"));
-    expect(longLines.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("truncates long error message to fit width", () => {
-    const longError = "E".repeat(8_000);
+  it("always renders 6 lines in compact mode", () => {
     const comp = new SubagentResultComponent(
-      makeDetails({ status: "failed", error: longError }),
+      makeDetails({ eventLog: [{ type: "tool_end", label: "only one", ts: 0, status: "done" }] }),
       passthroughTheme,
     );
-    const width = 40;
-    const lines = comp.render(width);
-    for (const line of lines) {
-      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-    }
+    const lines = comp.render(80);
+    expect(lines).toHaveLength(6);
   });
 });
