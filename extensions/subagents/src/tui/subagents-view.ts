@@ -255,7 +255,6 @@ export function processKey(
       return false;
     }
     if (data === "q" || data === "\x1b") {
-      state.disposed = true;
       done();
       return false;
     }
