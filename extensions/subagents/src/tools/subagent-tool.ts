@@ -181,6 +181,8 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
     ],
     executionMode: "sequential",
     parameters: SubagentParams,
+    // FR-2.4: 自己控制背景色（running/done/failed 不同 theme token），不使用 Pi 默认 Box。
+    renderShell: "self",
 
     // ── renderResult：对话流背景色 block ──────────────────────
     renderResult(

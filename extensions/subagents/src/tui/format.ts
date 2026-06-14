@@ -84,28 +84,37 @@ function basename(p: string): string {
  * 统一入口：对话流 block（subagent-render）和 widget 视图共用。
  * tool_start 无标记（不再显示 ⟳ running，与对话流 block 一致）。
  * 前缀 `├─ ` 用 theme.fg("dim") 着色（spec: 连接线 dim 色）。
+ *
+ * 注意：entry.label 可能来自 LLM 的 text_delta/thinking_delta，会包含换行符。
+ * 必须先把 \r\n\t 压成空格，否则 Pi TUI 会把一条 eventLog 展开成多行，破坏 6 行布局。
  */
 export function formatEventLogLine(
   entry: AgentEventLogEntry,
   theme: ThemeLike,
   turnNumber?: number,
 ): string {
+  const label = sanitizeLogLabel(entry.label);
   const prefix = theme.fg("dim", "├─ ");
   if (entry.type === "turn_end") {
-    return `${prefix}turn ${turnNumber ?? "?"}: "${entry.label}"`;
+    return `${prefix}turn ${turnNumber ?? "?"}: "${label}"`;
   }
   if (entry.type === "tool_start") {
-    return `${prefix}${entry.label}`;
+    return `${prefix}${label}`;
   }
   if (entry.type === "tool_end") {
     const icon = entry.status === "failed" ? theme.fg("error", "✗") : theme.fg("success", "✓");
-    return `${prefix}${entry.label} ${icon}`;
+    return `${prefix}${label} ${icon}`;
   }
   if (entry.type === "thinking") {
-    return `${prefix}${theme.fg("dim", entry.label)}`;
+    return `${prefix}${theme.fg("dim", label)}`;
   }
   // text_output
-  return `${prefix}${entry.label}`;
+  return `${prefix}${label}`;
+}
+
+/** 把 eventLog label 中的换行/回车/制表符替换为空格，避免 TUI 单行变多行。 */
+function sanitizeLogLabel(label: string): string {
+  return label.replace(/[\r\n]+/g, " ").replace(/\t/g, "  ");
 }
 
 /**

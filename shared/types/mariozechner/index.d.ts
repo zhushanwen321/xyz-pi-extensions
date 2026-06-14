@@ -159,7 +159,21 @@ declare module "@mariozechner/pi-coding-agent" {
 
 declare module "@mariozechner/pi-tui" {
 	export class Text {
-		constructor(text: string, x?: number, y?: number, width?: number);
+		constructor(text?: string, paddingX?: number, paddingY?: number, customBgFn?: (text: string) => string);
+		setText(text: string): void;
+		setCustomBgFn(customBgFn?: (text: string) => string): void;
+		invalidate(): void;
+		render(width: number): string[];
+	}
+	export class Box {
+		constructor(paddingX?: number, paddingY?: number, bgFn?: (text: string) => string);
+		children: any[];
+		addChild(component: any): void;
+		removeChild(component: any): void;
+		clear(): void;
+		setBgFn(bgFn?: (text: string) => string): void;
+		invalidate(): void;
+		render(width: number): string[];
 	}
 	export class Container {
 		children: any[];
@@ -172,7 +186,12 @@ declare module "@mariozechner/pi-tui" {
 	export class Markdown {
 		constructor(text: string, x?: number, y?: number, theme?: any);
 	}
-	export class Component {}
+	export interface Component {
+		render(width: number): string[];
+		invalidate(): void;
+		handleInput?(data: string): void;
+		wantsKeyRelease?: boolean;
+	}
 	export function matchesKey(key: any, binding: any): boolean;
 	export function truncateToWidth(text: string, width: number): string;
 	export function visibleWidth(str: string): number;

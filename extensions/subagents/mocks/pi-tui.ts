@@ -70,3 +70,130 @@ export function truncateToWidth(text: string, maxWidth: number): string {
 
   return result + ELLIPSIS;
 }
+
+/** 把含换行/制表符的文本压成单行（测试侧与生产侧行为一致）。 */
+function sanitizeLine(text: string): string {
+  return text.replace(/[\r\n]+/g, " ").replace(/\t/g, "  ");
+}
+
+/** 模拟 pi-tui Text 组件：将内容按 width 截断后返回单行。 */
+export class Text {
+  constructor(
+    private text: string = "",
+    private paddingX = 1,
+    private paddingY = 1,
+    private customBgFn?: (text: string) => string,
+  ) {}
+
+  setText(text: string): void {
+    this.text = text;
+  }
+
+  setCustomBgFn(fn?: (text: string) => string): void {
+    this.customBgFn = fn;
+  }
+
+  invalidate(): void {}
+
+  render(width: number): string[] {
+    const innerW = Math.max(1, width - this.paddingX * 2);
+    const line = sanitizeLine(this.text);
+    const truncated = truncateToWidth(line, innerW);
+    const pad = " ".repeat(Math.max(0, innerW - visibleWidth(truncated)));
+    const padded = " ".repeat(this.paddingX) + truncated + pad + " ".repeat(this.paddingX);
+    const out = this.customBgFn ? this.customBgFn(padded) : padded;
+    const lines: string[] = [];
+    for (let i = 0; i < this.paddingY; i++) lines.push("");
+    lines.push(out);
+    for (let i = 0; i < this.paddingY; i++) lines.push("");
+    return lines;
+  }
+}
+
+/** 模拟 pi-tui Box 组件：给所有子组件加左右 padding 和背景色。 */
+export class Box {
+  children: unknown[] = [];
+
+  constructor(
+    private paddingX = 1,
+    private paddingY = 1,
+    private bgFn?: (text: string) => string,
+  ) {}
+
+  addChild(component: { render(width: number): string[] }): void {
+    this.children.push(component);
+  }
+
+  removeChild(component: unknown): void {
+    this.children = this.children.filter((c) => c !== component);
+  }
+
+  clear(): void {
+    this.children = [];
+  }
+
+  setBgFn(fn?: (text: string) => string): void {
+    this.bgFn = fn;
+  }
+
+  invalidate(): void {}
+
+  render(width: number): string[] {
+    const innerW = Math.max(1, width - this.paddingX * 2);
+    const lines: string[] = [];
+    for (let i = 0; i < this.paddingY; i++) {
+      lines.push(this.bgFn ? this.bgFn(" ".repeat(width)) : " ".repeat(width));
+    }
+    for (const child of this.children) {
+      const childLines = (child as { render(width: number): string[] }).render(innerW);
+      for (const line of childLines) {
+        const truncated = truncateToWidth(line, innerW);
+        const pad = " ".repeat(Math.max(0, innerW - visibleWidth(truncated)));
+        const padded = " ".repeat(this.paddingX) + truncated + pad + " ".repeat(this.paddingX);
+        lines.push(this.bgFn ? this.bgFn(padded) : padded);
+      }
+    }
+    for (let i = 0; i < this.paddingY; i++) {
+      lines.push(this.bgFn ? this.bgFn(" ".repeat(width)) : " ".repeat(width));
+    }
+    return lines;
+  }
+}
+
+/** 模拟 pi-tui Container 组件：垂直拼接子组件。 */
+export class Container {
+  children: unknown[] = [];
+
+  constructor(children: unknown[] = []) {
+    this.children = children;
+  }
+
+  addChild(child: unknown): void {
+    this.children.push(child);
+  }
+
+  render(width: number): string[] {
+    const lines: string[] = [];
+    for (const child of this.children) {
+      lines.push(...(child as { render(width: number): string[] }).render(width));
+    }
+    return lines;
+  }
+}
+
+export class Spacer {
+  constructor(private size = 1) {}
+  render(_width: number): string[] {
+    return Array.from({ length: this.size }, () => "");
+  }
+}
+
+export class Markdown {
+  constructor(private text: string) {}
+  setText(text: string): void {
+    this.text = text;
+  }
+  render(width: number): string[] {
+    return this.text.split("\n").map((line) => truncateToWidth(line, width));
+  }
+}

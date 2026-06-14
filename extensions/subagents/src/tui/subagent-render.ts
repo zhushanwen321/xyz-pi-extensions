@@ -2,9 +2,10 @@
 //
 // Subagent tool result 对话流渲染（FR-2.1 ~ FR-2.4）。
 // 6 行压缩布局：status + 滚动区(4) + stats。
-// spinner 定时器由 subagent-tool.ts 的 renderSubagentResult 管理（存 ToolRenderContext.state）。
+// 使用 pi-tui Box + Text 组件包装，让 Box 统一处理背景色与左右内边距，
+// 避免手写的背景/截断/padding 逻辑与 Pi 默认 Box 叠加产生渲染残留。
 
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Box, Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 
 import { formatEventLogLine, formatTokens } from "./format.ts";
 import type { AgentEventLogEntry } from "../types.ts";
@@ -48,16 +49,25 @@ const RUNNING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", 
 
 function statusGlyph(status: SubagentToolDetails["status"], frame: number, theme: ThemeLike): string {
   switch (status) {
-    case "running": return theme.fg("accent", RUNNING_FRAMES[frame % RUNNING_FRAMES.length]);
-    case "done": return theme.fg("success", "✓");
-    case "failed": return theme.fg("error", "✗");
-    case "cancelled": return theme.fg("muted", "■");
+    case "running":
+      return theme.fg("accent", RUNNING_FRAMES[frame % RUNNING_FRAMES.length]);
+    case "done":
+      return theme.fg("success", "✓");
+    case "failed":
+      return theme.fg("error", "✗");
+    case "cancelled":
+      return theme.fg("muted", "■");
   }
 }
 
 // ============================================================
 // buildRenderLines
 // ============================================================
+
+/** 把含换行/制表符的原始 label 压成单行，避免 Pi TUI 把一条 eventLog 展开成多行。 */
+function sanitizeLine(text: string): string {
+  return text.replace(/[\r\n]+/g, " ").replace(/\t/g, "  ");
+}
 
 export function buildRenderLines(
   details: SubagentToolDetails,
@@ -76,23 +86,24 @@ function buildCompactLines(details: SubagentToolDetails, width: number, theme: T
   const glyph = statusGlyph(details.status, frame, theme);
   const modelPart = details.model ? ` │ ${details.model}` : "";
   const thinkingPart = details.thinkingLevel ? ` │ thinking: ${details.thinkingLevel}` : "";
-  lines.push(`${glyph} ${details.agent}${modelPart}${thinkingPart}`);
+  lines.push(sanitizeLine(`${glyph} ${details.agent}${modelPart}${thinkingPart}`));
 
   // 第 2-5 行：滚动区（最近 4 条，过滤掉 turn_end——压缩视图不显示 turn 分隔）
   const recent = (details.eventLog ?? [])
     .filter((e) => e.type !== "turn_end")
     .slice(-4);
   for (const entry of recent) {
-    lines.push(formatEventLogLine(entry, theme));
+    lines.push(sanitizeLine(formatEventLogLine(entry, theme)));
   }
   while (lines.length < 5) lines.push(""); // 空行填充
 
   // 第 6 行：stats 右对齐
   const stats = `${details.turns} turns │ ${formatTokens(details.totalTokens)} │ ${details.elapsedSeconds}s`;
-  const padNeeded = Math.max(0, width - visibleWidth(stats) - 2);
+  const padNeeded = Math.max(0, width - visibleWidth(stats));
   lines.push(" ".repeat(padNeeded) + theme.fg("dim", stats));
 
-  return lines;
+  // 统一截断到可用宽度（避免任何单行超长触发 Pi 渲染异常）
+  return lines.map((line) => (visibleWidth(line) > width ? truncateToWidth(line, width) : line));
 }
 
 function buildExpandedLines(details: SubagentToolDetails, theme: ThemeLike, frame: number): string[] {
@@ -100,7 +111,7 @@ function buildExpandedLines(details: SubagentToolDetails, theme: ThemeLike, fram
   const glyph = statusGlyph(details.status, frame, theme);
   const modelPart = details.model ? ` │ ${details.model}` : "";
   const thinkingPart = details.thinkingLevel ? ` │ thinking: ${details.thinkingLevel}` : "";
-  lines.push(`${glyph} ${details.agent}${modelPart}${thinkingPart}`);
+  lines.push(sanitizeLine(`${glyph} ${details.agent}${modelPart}${thinkingPart}`));
 
   let turnNumber = 0;
   for (const entry of details.eventLog ?? []) {
@@ -109,12 +120,12 @@ function buildExpandedLines(details: SubagentToolDetails, theme: ThemeLike, fram
       lines.push(theme.fg("dim", `── turn ${turnNumber} ──`));
       continue;
     }
-    lines.push(formatEventLogLine(entry, theme, turnNumber));
+    lines.push(sanitizeLine(formatEventLogLine(entry, theme, turnNumber)));
   }
 
   if (details.status === "done" && details.result) {
     lines.push("");
-    for (const l of details.result.split("\n")) lines.push(l);
+    for (const l of details.result.split("\n")) lines.push(sanitizeLine(l));
   }
   if (details.status === "failed" && details.error) {
     lines.push("");
@@ -124,10 +135,15 @@ function buildExpandedLines(details: SubagentToolDetails, theme: ThemeLike, fram
 }
 
 // ============================================================
-// Component
+// Component (pi-tui Box + Text)
 // ============================================================
 
-export class SubagentResultComponent {
+/**
+ * FR-2.1 ~ FR-2.4：subagent 对话流 block 组件。
+ * 用 pi-tui Box 统一处理背景色和左右内边距，内部每行用一个 Text(0,0)。
+ * Box paddingX=1 与之前手写的 applyBg 左右各 1 空格效果一致。
+ */
+export class SubagentResultComponent implements Component {
   private _details: SubagentToolDetails;
   private _theme: ThemeLike;
   private _spinnerFrame = 0;
@@ -150,31 +166,33 @@ export class SubagentResultComponent {
     this._expanded = expanded;
   }
 
-  invalidate(): void {}
+  invalidate(): void {
+    // Box 在 render 时重建，无需额外清理缓存。
+  }
 
   render(width: number): string[] {
-    const lines = buildRenderLines(this._details, width, this._theme, {
+    // Box 左右各 1 列内边距，内容可用宽度为 width - 2。
+    const contentWidth = Math.max(1, width - 2);
+    const lines = buildRenderLines(this._details, contentWidth, this._theme, {
       expanded: this._expanded,
       spinnerFrame: this._spinnerFrame,
     });
-    return lines.map((line) => this.applyBg(line, width));
+    const box = new Box(1, 0, this._getBgFn());
+    for (const line of lines) {
+      box.addChild(new Text(line, 0, 0));
+    }
+    return box.render(width);
   }
 
-  private applyBg(text: string, width: number): string {
-    const bgFn = this.getBgFn();
-    const contentWidth = Math.max(1, width - 2);
-    const truncated = visibleWidth(text) > contentWidth ? truncateToWidth(text, contentWidth) : text;
-    const padNeeded = Math.max(0, contentWidth - visibleWidth(truncated));
-    const padded = ` ${truncated}${" ".repeat(padNeeded)} `;
-    return bgFn ? bgFn(padded) : padded;
-  }
-
-  private getBgFn(): ((text: string) => string) | undefined {
+  private _getBgFn(): (text: string) => string {
     switch (this._details.status) {
-      case "running": return (t: string) => this._theme.bg("toolPendingBg", t);
-      case "done": return (t: string) => this._theme.bg("toolSuccessBg", t);
+      case "running":
+        return (t: string) => this._theme.bg("toolPendingBg", t);
+      case "done":
+        return (t: string) => this._theme.bg("toolSuccessBg", t);
       case "failed":
-      case "cancelled": return (t: string) => this._theme.bg("toolErrorBg", t);
+      case "cancelled":
+        return (t: string) => this._theme.bg("toolErrorBg", t);
     }
   }
 }
