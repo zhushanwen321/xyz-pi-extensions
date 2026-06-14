@@ -1,13 +1,14 @@
 ---
-name: xyz-harness-spec-clarify
+name: spec-clarify
 description: >-
-  Phase 1 (spec) of the xyz-harness workflow. Interactive clarification to
-  build spec draft, then delegates systematic gap-finding to an isolated
+  Standalone requirement-clarification skill. Interactive questioning to
+  build a spec draft, then delegates systematic gap-finding to an isolated
   subagent that traces 5 perspectives independently. Solves the core problem
-  of clarification omissions. Use when the user says "start Phase 1",
-  "spec phase", "write spec", "brainstorm", "clarify requirements",
-  "澄清需求", "收敛需求". Not for: implementation (Phase 3+), debugging,
-  code review, or tasks with an already-approved spec.
+  of clarification omissions. Use when the user says "clarify requirements",
+  "澄清需求", "收敛需求", "write spec", "start Phase 1", or when starting
+  feature work that needs a clear spec before implementation. Not for:
+  implementation itself, debugging, code review, or tasks with an
+  already-approved spec.
 ---
 
 ## 核心原则
