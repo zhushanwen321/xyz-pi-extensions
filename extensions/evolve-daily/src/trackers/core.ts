@@ -73,6 +73,7 @@ export interface TrackerConfig<TMeta = Record<string, unknown>> {
   triggerEvent: string;
   triggerMatch: (
     event: unknown,
+    ctx: ExtensionContext,
   ) => { name: string; metadata: TMeta; summary: string } | null;
   steering: {
     onCreate: (item: TrackedItem<TMeta>) => string;
@@ -309,7 +310,7 @@ export function createTracker<TMeta>(
     config.triggerEvent,
     async (event, nextCtx) => {
       const ctx = nextCtx as ExtensionContext;
-      const match = config.triggerMatch(event);
+      const match = config.triggerMatch(event, ctx);
       if (!match) return;
 
       // 去重：非终态同名 item 存在时不重复创建
