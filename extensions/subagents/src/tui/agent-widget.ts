@@ -6,19 +6,17 @@
 // 渲染通过 ui.setWidget("subagents", lines) + ui.setStatus("subagents", summary) 更新。
 // 数据源：SubagentRuntime 的 background 记录 + 正在执行的 runAgent（通过 onWidgetUpdate 回调）。
 
-/** Braille spinner 动画帧 */
-const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+import { type AgentEventLogEntry,STALLED_TIMEOUT_MS, WIDGET_EVENT_LINES } from "../types.ts";
+import { formatEventLogLine, formatStatusSummary, type ThemeLike } from "./format.ts";
 
 /** widget 最多显示行数 */
 const MAX_WIDGET_LINES = 12;
+/** 超过此数量时只显示 status，不展开 eventLog（FR-2.2） */
+const MAX_RUNNING_AGENTS_FOR_EVENT_LOG = 3;
 /** 完成状态淡出延迟（ms） */
 const FINISHED_LINGER_MS = 5000;
 /** summary 截断长度 */
 const SUMMARY_MAX = 60;
-/** million threshold */
-const TOKEN_MILLION = 1000000;
-/** thousand threshold */
-const TOKEN_THOUSAND = 1000;
 /** truncate ellipsis length */
 const TRUNCATE_TAIL = 3;
 /** widget 渲染轮询间隔（ms） */
@@ -54,17 +52,44 @@ export function renderWidget(
   if (running.length === 0 && finished.length === 0) return [];
 
   const lines: string[] = [];
-  const spinner = SPINNER[spinnerFrame % SPINNER.length];
+  // ThemeLike stub（实际由 ui 提供 ANSI，但本函数纯文本输出不依赖 ANSI）
+  const fakeTheme: ThemeLike = {
+    fg: (_t, s) => s,
+    bold: (s) => s,
+  };
 
-  // Running agents（每 agent 2 行）
-  for (const a of running.slice(0, MAX_WIDGET_LINES)) {
-    const turnStr = a.turns ? ` ↻${a.turns}` : "";
-    const tokenStr = a.totalTokens ? ` ${formatTokens(a.totalTokens)}` : "";
-    const timeStr = a.elapsedSeconds != null ? ` ${a.elapsedSeconds}s` : "";
-    lines.push(`${spinner} ${a.agent}${turnStr}${tokenStr}${timeStr}`);
-    if (a.activity) {
-      lines.push(`  ⎿ ${a.activity}`);
+  // FR-2.1: 第 1 行 status summary + 后续行 eventLog
+  if (running.length <= MAX_RUNNING_AGENTS_FOR_EVENT_LOG) {
+    const perAgentSummary = running.length;
+    const perAgentEvent = Math.max(1, Math.floor((MAX_WIDGET_LINES - perAgentSummary) / running.length));
+    let remainingLines = MAX_WIDGET_LINES - perAgentSummary;
+
+    for (const a of running) {
+      lines.push(formatStatusSummary(a, spinnerFrame, fakeTheme));
+      const eventLog = (a as WidgetAgentState & { eventLog?: AgentEventLogEntry[] }).eventLog ?? [];
+      const eventLines = Math.min(perAgentEvent, Math.floor(remainingLines / running.length), WIDGET_EVENT_LINES);
+      const recent = eventLog.slice(-eventLines);
+      const turnEndsTotal = eventLog.filter((e) => e.type === "turn_end").length;
+      const turnEndsAfter = eventLog.slice(eventLog.length - recent.length).filter((e) => e.type === "turn_end").length;
+      let turnCountBefore = Math.max(0, (a.turns ?? 0) - (turnEndsTotal - turnEndsAfter));
+      for (const entry of recent) {
+        lines.push(formatEventLogLine(entry, fakeTheme, entry.type === "turn_end" ? turnCountBefore : undefined));
+        if (entry.type === "turn_end") turnCountBefore++;
+      }
+      remainingLines -= recent.length;
+
+      // FR-3.5 G-008: stalled fallback
+      const lastEntry = eventLog[eventLog.length - 1];
+      if (lastEntry && Date.now() - lastEntry.ts > STALLED_TIMEOUT_MS) {
+        lines.push(`  ⚠ ${a.agent} possibly stalled (no events for 5min)`);
+      }
     }
+    lines.length = Math.min(lines.length, MAX_WIDGET_LINES);
+  } else {
+    for (const a of running) {
+      lines.push(formatStatusSummary(a, spinnerFrame, fakeTheme));
+    }
+    lines.length = Math.min(lines.length, MAX_WIDGET_LINES);
   }
 
   // Finished agents（每 agent 1 行，短暂停留后淡出）
@@ -154,13 +179,6 @@ export class AgentWidgetManager {
     this.ui?.setStatus("subagents", undefined);
     this.ui = null;
   }
-}
-
-/** 格式化 token 数（12345 → "12.3k"） */
-function formatTokens(n: number): string {
-  if (n >= TOKEN_MILLION) return `${(n / TOKEN_MILLION).toFixed(1)}M token`;
-  if (n >= TOKEN_THOUSAND) return `${(n / TOKEN_THOUSAND).toFixed(1)}k token`;
-  return `${n} token`;
 }
 
 /** 截断字符串 */

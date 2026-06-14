@@ -10,13 +10,14 @@ describe("renderWidget", () => {
 
   it("shows spinner + agent name for running agents", () => {
     const agents: WidgetAgentState[] = [
-      { id: "1", agent: "reviewer", status: "running", turns: 3, totalTokens: 12000, elapsedSeconds: 15, activity: "reading" },
+      { id: "1", agent: "reviewer", status: "running", turns: 3, totalTokens: 12000, elapsedSeconds: 15,
+        eventLog: [{ type: "tool_start", label: "read foo.ts", ts: 0, status: "running" }] },
     ];
     const lines = renderWidget(agents, 0);
     expect(lines[0]).toContain("reviewer");
-    expect(lines[0]).toContain("↻3");
+    expect(lines[0]).toContain("3 turns");
     expect(lines[0]).toContain("12.0k token");
-    expect(lines[1]).toContain("⎿ reading");
+    expect(lines[1]).toContain("read foo.ts");
   });
 
   it("shows ✓ for done agents", () => {
@@ -80,5 +81,60 @@ describe("AgentWidgetManager", () => {
     mgr.updateAgent({ id: "1", agent: "a", status: "running" });
     mgr.updateAgent({ id: "2", agent: "b", status: "done", finishedAt: Date.now() });
     expect(mgr.listAgents()).toHaveLength(2);
+  });
+});
+
+// ============================================================
+// FR-2: 增强 inline widget 渲染（eventLog 滚动）
+// ============================================================
+
+import { STALLED_TIMEOUT_MS } from "../types.ts";
+
+describe("renderWidget — eventLog scrolling", () => {
+  it("shows status summary + recent eventLog entries", () => {
+    const state: WidgetAgentState = {
+      id: "1", agent: "worker", status: "running", turns: 2, totalTokens: 5000, elapsedSeconds: 30,
+      eventLog: [
+        { type: "tool_start", label: "read foo.ts", ts: 0, status: "running" },
+        { type: "tool_end", label: "edit bar.ts", ts: 0, status: "done" },
+        { type: "turn_end", label: "Fixed X", ts: 0 },
+      ],
+    };
+    const lines = renderWidget([state], 0);
+    expect(lines[0]).toContain("worker");
+    expect(lines[0]).toContain("2 turns");
+    expect(lines[1]).toContain("read foo.ts");
+    expect(lines[1]).toContain("running");
+    expect(lines.some((l) => l.includes("edit bar.ts") && l.includes("✓"))).toBe(true);
+    expect(lines.some((l) => l.includes("turn") && l.includes("Fixed X"))).toBe(true);
+  });
+
+  it("limits total lines to MAX_WIDGET_LINES (12)", () => {
+    const state: WidgetAgentState = {
+      id: "1", agent: "worker", status: "running", turns: 0, totalTokens: 0, elapsedSeconds: 0,
+      eventLog: Array.from({ length: 50 }, (_, i) => ({
+        type: "tool_start" as const, label: `tool-${i}`, ts: 0, status: "running" as const,
+      })),
+    };
+    const lines = renderWidget([state], 0);
+    expect(lines.length).toBeLessThanOrEqual(12);
+  });
+
+  it("shows possibly stalled when last event older than STALLED_TIMEOUT_MS", () => {
+    const state: WidgetAgentState = {
+      id: "1", agent: "worker", status: "running", turns: 1, totalTokens: 100, elapsedSeconds: 600,
+      eventLog: [{ type: "tool_start", label: "old tool", ts: Date.now() - STALLED_TIMEOUT_MS - 1000, status: "running" }],
+    };
+    const lines = renderWidget([state], 0);
+    expect(lines.some((l) => l.includes("stalled"))).toBe(true);
+  });
+
+  it("distributes lines across multiple running agents", () => {
+    const states: WidgetAgentState[] = [
+      { id: "1", agent: "a", status: "running", turns: 0, eventLog: Array.from({ length: 5 }, (_, i) => ({ type: "tool_start" as const, label: `t${i}`, ts: 0, status: "running" as const })) },
+      { id: "2", agent: "b", status: "running", turns: 0, eventLog: Array.from({ length: 5 }, (_, i) => ({ type: "tool_start" as const, label: `u${i}`, ts: 0, status: "running" as const })) },
+    ];
+    const lines = renderWidget(states, 0);
+    expect(lines.length).toBeLessThanOrEqual(12);
   });
 });
