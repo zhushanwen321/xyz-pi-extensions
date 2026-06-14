@@ -523,9 +523,18 @@ GUI 组件（`TaskListWidget` 等）是 xyz-agent 的工作，扩展侧不需要
 
 ### TypeScript
 
-- 禁止 `any`，用 `unknown` 或具体类型
+- 禁止 `any`，用 `unknown` 或具体类型（`no-explicit-any: error`，与 `docs/quality-gates.md` 一致）
 - `(entry as any).customType` 这种模式改为类型守卫函数
+- `as never` / `as any` / `as unknown as T` 会绕过类型检查，`taste/no-unsafe-cast` 规则会 warn 标记。不可替代的断言必须有运行时 guard 或 SDK 契约测试兜底
 - import 顺序：Node 内置 → npm 包 → 项目内部
+
+### SDK 接口契约
+
+凡调用 `pi.on(...)`、`pi.registerTool(...)`、`pi.registerCommand(...)`、读 `ctx.*` 的代码：
+
+- **ExtensionHandler 签名是 `(event, ctx) => ...`（两个参数）**。`modelRegistry`/`cwd`/`ui`/`sessionManager` 在第二个参数 `ExtensionContext` 上，不在 event 上。核对时打开真实 SDK 的 `types.d.ts`，不能只看 `shared/types/mariozechner/index.d.ts` 的 stub
+- 新增/修改 SDK 调用必须有契约测试覆盖（模板：`extensions/subagents/src/__tests__/sdk-contract.test.ts`）
+- `registerTool` 的 schema 必填字段在所有执行模式下都必须真的必填；条件必填用 Optional + 运行时校验，避免 schema 与描述矛盾
 
 ### 行数
 

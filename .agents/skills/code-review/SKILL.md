@@ -43,6 +43,41 @@ description: >-
 
 ---
 
+## 审查 Checklist（接口契约层）
+
+以下 checklist 来源于实际 bug 复盘（session_start handler 读错参数、subagent 工具 schema 与描述矛盾）。
+审查「扩展接口」维度时 `[MANDATORY]` 逐条核对，「类型安全」维度配合 `taste/no-unsafe-cast` 规则。
+
+### 1. SDK 接口契约核对 `[MANDATORY]`
+
+凡调用 `pi.on(...)`、`pi.registerTool(...)`、`pi.registerCommand(...)`、读 `ctx.*` 的代码：
+
+- [ ] **handler 参数签名**：`pi.on(event, handler)` 的 handler 必须对照真实 SDK 的 `ExtensionHandler<E> = (event: E, ctx: ExtensionContext) => ...` 签名。**两个参数**——`modelRegistry`/`cwd`/`ui`/`sessionManager` 在第二个参数 `ctx` 上，不在 event 上。
+- [ ] **真实 SDK 类型核对**：打开 `node_modules/.../pi-coding-agent/dist/core/extensions/types.d.ts`（或全局安装路径）对照，不能只看 `shared/types/mariozechner/index.d.ts` 的 stub（stub 可能滞后）。
+- [ ] **契约测试覆盖**：新增/修改的 SDK 调用必须有 `sdk-contract.test.ts` 覆盖——验证从 mock SDK event/ctx 到内部状态注入的完整链路。模板见 `extensions/subagents/src/__tests__/sdk-contract.test.ts`。
+
+### 2. spec 偏差记录 `[MANDATORY]`
+
+- [ ] 新增/修改的功能需求（FR）是否有对应的 spec 条目？无 spec 的功能不应直接实现。
+- [ ] 实现与 spec 描述如有偏差，**必须**在 `spec.md` 末尾「实现偏差说明」补 D 编号记录（决策 + 原因）。偏差记录不是自愿的——未记录的偏差等于违反 spec。
+
+### 3. schema / 描述一致性 `[MANDATORY]`
+
+`registerTool` 的 `parameters` schema 与 `description`/`promptGuidelines` 必须一致：
+
+- [ ] schema 必填字段（无 `Optional` 包裹）是否在所有执行模式下都真的必填？若某模式（如 `backgroundId` 轮询）会忽略其他参数，被忽略的参数不应是 schema 层必填——否则 LLM 被迫传占位值。
+- [ ] 条件必填场景：schema 设为 Optional，在 `execute()` 内根据模式做运行时校验（抛清晰错误）。
+- [ ] `description` 中 "Ignores X/Y/Z" 之类的描述，必须与 schema 实际行为一致。
+
+### 4. 类型断言（配合 taste/no-unsafe-cast） `[MANDATORY]`
+
+`no-unsafe-cast` 规则会 warn 标记 `as never`/`as any`/`as unknown as`/全可选结构断言。审查时：
+
+- [ ] 每处 warn 的断言，确认是否有**不可替代的理由**（如跨 tsconfig 泛型冲突、SDK 类型 stub 缺失）。
+- [ ] 不可替代的断言，必须有配套的**运行时 guard**（参数判空抛错）或**契约测试**兜底——不能让类型断言成为唯一防线。
+
+---
+
 ## 标记说明
 
 | 标记 | 含义 | 修改约束 |

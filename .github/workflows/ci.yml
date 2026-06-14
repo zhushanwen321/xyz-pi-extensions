@@ -33,3 +33,33 @@ jobs:
 
       - name: Test
         run: pnpm -r test
+
+  # SDK 契约对账：在有真实 SDK 的环境验证 stub 类型（shared/types/mariozechner/index.d.ts）
+  # 与真实 Pi SDK 的一致性。本地 tsconfig paths 优先用真实 SDK，CI 此 job 确保二者不 drift。
+  sdk-contract-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install real Pi SDK (for type comparison)
+        run: npm install -g @earendil-works/pi-coding-agent
+
+      - name: TypeCheck against real SDK
+        env:
+          # tsconfig paths 已配置真实 SDK 路径优先；CI 通过全局安装让该路径存在
+          PI_SDK_RESOLVED: "true"
+        run: |
+          # 用真实 SDK 解析类型，确保 stub 没有遗漏关键接口
+          pnpm exec tsc --noEmit
+
+      - name: Run SDK contract tests
+        run: pnpm --filter @zhushanwen/pi-subagents test -- src/__tests__/sdk-contract.test.ts

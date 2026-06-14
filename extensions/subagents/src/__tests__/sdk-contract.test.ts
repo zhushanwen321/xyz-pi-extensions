@@ -103,3 +103,136 @@ describe("SDK contract: session_start handler reads ctx (2nd param), not event (
     expect(event).not.toHaveProperty("ui");
   });
 });
+
+describe("SDK contract: registerTool shape matches ToolDefinition", () => {
+  beforeEach(() => {
+    setRuntime(undefined as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    setRuntime(undefined as never);
+  });
+
+  it("subagent tool registration passes required ToolDefinition fields", () => {
+    const { pi } = makeMockPi();
+    subagentsExtension(pi);
+
+    // registerTool 应被调用一次（注册 "subagent" 工具）
+    expect(pi.registerTool).toHaveBeenCalledOnce();
+    const tool = pi.registerTool.mock.calls[0][0] as Record<string, unknown>;
+
+    // ToolDefinition 必填字段（来自真实 SDK types.d.ts）
+    expect(tool).toMatchObject({
+      name: "subagent",
+      label: expect.any(String),
+      description: expect.any(String),
+      parameters: expect.any(Object), // TypeBox schema
+    });
+
+    // execute 必须是 async function
+    expect(typeof tool.execute).toBe("function");
+  });
+
+  it("subagent tool parameters schema: required fields match description", () => {
+    // 防御 schema/描述矛盾（如 task 必填但描述说 backgroundId 模式忽略它）
+    const { pi } = makeMockPi();
+    subagentsExtension(pi);
+    const tool = pi.registerTool.mock.calls[0][0] as {
+      parameters: { properties: Record<string, unknown>; required?: string[] };
+    };
+
+    // task 现在是 Optional（backgroundId 轮询模式不需要它）
+    // 如果未来有人改回必填，这个测试会失败，提醒检查与描述的一致性
+    const required = tool.parameters.required ?? [];
+    expect(required).not.toContain("task");
+
+    // backgroundId/agent/wait 都应是 optional
+    for (const field of ["agent", "wait", "backgroundId"]) {
+      expect(required).not.toContain(field);
+    }
+  });
+});
+
+describe("SDK contract: registerCommand shape matches RegisteredCommand", () => {
+  beforeEach(() => {
+    setRuntime(undefined as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    setRuntime(undefined as never);
+  });
+
+  it("/subagents command registration passes required fields", () => {
+    const { pi } = makeMockPi();
+    subagentsExtension(pi);
+
+    expect(pi.registerCommand).toHaveBeenCalledWith("subagents", expect.objectContaining({
+      description: expect.any(String),
+      handler: expect.any(Function),
+    }));
+  });
+
+  it("/subagents command handler signature is (argsStr, ctx)", async () => {
+    // RegisteredCommand.handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>
+    const { pi } = makeMockPi();
+    subagentsExtension(pi);
+    const cmd = pi.registerCommand.mock.calls[0][1] as {
+      handler: (args: string, ctx: unknown) => Promise<void>;
+    };
+
+    // handler 应接收 2 个参数（argsStr + ctx），不能只收 1 个
+    // 验证：传入 ctx 后 handler 能正常访问 ctx.ui.notify（不抛 undefined）
+    const ctx = {
+      ui: { notify: vi.fn() },
+      cwd: "/tmp",
+      modelRegistry: { find: () => undefined, hasConfiguredAuth: () => true, getAvailable: () => [] },
+      hasUI: false,
+      sessionManager: { getEntries: () => [] },
+    };
+    // 注入 modelRegistry，否则 runtime 未初始化会提前 return
+    pi.on.mock.calls.forEach(([event, handler]) => {
+      if (event === "session_start") handler({ type: "session_start", reason: "startup" }, ctx);
+    });
+
+    await expect(cmd.handler("", ctx)).resolves.toBeUndefined();
+    // 无参数时应调用 ctx.ui.notify 显示配置摘要
+    expect(ctx.ui.notify).toHaveBeenCalled();
+  });
+});
+
+describe("SDK contract: appendEntry signature (customType, data)", () => {
+  beforeEach(() => {
+    setRuntime(undefined as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    setRuntime(undefined as never);
+  });
+
+  it("persistState calls pi.appendEntry(customType, data) with correct arg count", () => {
+    // appendEntry<T>(customType: string, data?: T): void
+    // 验证：toggleYolo → persistState → appendEntry 被调用，第1参数是 customType 字符串
+    const { pi, fireSessionStart } = makeMockPi();
+    subagentsExtension(pi);
+    fireSessionStart({
+      cwd: "/tmp/sdk-contract-test",
+      modelRegistry: { find: () => undefined, hasConfiguredAuth: () => true, getAvailable: () => [] },
+      hasUI: false,
+      sessionManager: { getEntries: () => [] },
+    });
+
+    const rt = getRuntime()!;
+    rt.toggleYolo(); // 触发 persistState → appendEntry
+
+    expect(pi.appendEntry).toHaveBeenCalledTimes(1);
+    const [customType, data] = pi.appendEntry.mock.calls[0];
+    expect(customType).toBe("subagent-model-state");
+    // serializeState 返回 JSON 字符串（appendEntry 接受可序列化值）
+    expect(data).toBeTypeOf("string");
+    const parsed = JSON.parse(data as string);
+    expect(parsed).toHaveProperty("yoloMode", true);
+  });
+});
