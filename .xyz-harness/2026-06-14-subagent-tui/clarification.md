@@ -1,5 +1,6 @@
 # Clarification — Subagent TUI 增强
 
+> ✅ 实施完成（2026-06-14）：所有 9 个 task + 1 个 style fix 已 commit。详见 plan.md。
 > 本文件记录 spec 澄清过程中的决策和已知信息。
 
 ## 已确认的用户决策
