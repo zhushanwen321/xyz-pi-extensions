@@ -1,5 +1,6 @@
 // src/__tests__/turn-limiter.test.ts
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
 import { createTurnLimiter } from "../core/turn-limiter.ts";
 
 describe("createTurnLimiter", () => {
@@ -18,7 +19,7 @@ describe("createTurnLimiter", () => {
     const abort = vi.fn();
     const limiter = createTurnLimiter({ maxTurns: 3, graceTurns: 2, steer, abort });
     limiter.onTurnEnd(3); // 达到 maxTurns → steer
-    expect(steer).toHaveBeenCalledWith("Wrap up your work now. Provide a final summary.");
+    expect(steer).toHaveBeenCalledWith(expect.stringContaining("You have reached your turn limit"));
     expect(abort).not.toHaveBeenCalled();
     limiter.onTurnEnd(4); // grace turn 1
     expect(abort).not.toHaveBeenCalled();

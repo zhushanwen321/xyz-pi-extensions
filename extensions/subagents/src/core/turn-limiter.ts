@@ -1,5 +1,11 @@
 // src/core/turn-limiter.ts
-const WRAP_UP_MESSAGE = "Wrap up your work now. Provide a final summary.";
+const WRAP_UP_MESSAGE = [
+  "You have reached your turn limit. Wrap up now:",
+  "1. Summarize what you have completed (with evidence: file paths, command output).",
+  "2. List what remains undone and why.",
+  "3. State the single most important next step for whoever continues.",
+  "Do NOT claim the task is complete if any part remains unfinished.",
+].join(" ");
 
 /**
  * FR-1.4: Soft turn limit + hard abort 状态机。

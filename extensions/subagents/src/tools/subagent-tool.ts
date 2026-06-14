@@ -57,10 +57,19 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       "Delegate a task to a specialized subagent running in an isolated in-process session with its own context. Supports synchronous (await result), background (fire-and-forget), and result polling.",
     promptSnippet: "Delegate a task to a subagent (sync/background)",
     promptGuidelines: [
-      "Use for focused subtasks: code review, research, codebase scouting, planning.",
-      "The subagent runs in its own session — it does NOT inherit your conversation context.",
+      // --- When to use ---
+      "Use for focused subtasks that benefit from a specialized agent and isolated context: multi-file code review, web research, codebase scouting, implementation planning.",
       "Pass wait:false for long-running tasks you don't need immediately; poll with backgroundId later.",
-      "The tool returns text by default; for structured results (issues list, findings), the structured details are in the response.",
+      // --- When NOT to use (F4 tool-misuse defense) ---
+      "Do NOT delegate simple one-line fixes or questions you can answer yourself — delegation has overhead (new session, no inherited context).",
+      "Do NOT delegate tasks that require your current conversation context — the subagent starts fresh and cannot see your chat history.",
+      "Do NOT delegate tasks the user asked YOU to do directly — if the user says 'you do X', they expect you, not a subagent.",
+      "Do NOT use this tool to avoid work you find tedious — if you have the tools and context, do it yourself.",
+      // --- Capability boundary (F5 scope-creep defense) ---
+      "The subagent CANNOT modify your conversation context. Its text output and structured artifacts are the ONLY things returned to you. It cannot set your variables, call your tools, or continue your workflow.",
+      // --- Examples (P5 example-driven) ---
+      "Example: delegate 'review the error handling in src/auth/' to reviewer, or 'research best practices for X' to researcher with wait:false.",
+      "Counter-example: do NOT delegate 'fix the typo on line 42 of foo.ts' — do it directly.",
     ],
     executionMode: "sequential",
     parameters: SubagentParams,

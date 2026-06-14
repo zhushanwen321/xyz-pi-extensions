@@ -209,6 +209,7 @@ export function formatSchemaInstruction(schema: Record<string, unknown>): string
   return [
     "MANDATORY: Structured Output Requirement",
     "You MUST call the `structured-output` tool with your final answer.",
+    "Do NOT output the JSON directly in your text response — you MUST use the structured-output tool.",
     "The schema for the structured output is:",
     "```json",
     JSON.stringify(schema, null, JSON_INDENT),
