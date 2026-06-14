@@ -9,9 +9,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SubagentRuntime } from "../runtime.ts";
 import type { AgentResult, BackgroundStatus } from "../types.ts";
 
+/** FR-O1: mock pi 的形状（含 sendMessage） */
+interface MockPi {
+  appendEntry: ReturnType<typeof vi.fn>;
+  events: { emit: ReturnType<typeof vi.fn> };
+  sendMessage: ReturnType<typeof vi.fn>;
+}
+
 /** 构造一个隔离的 SubagentRuntime（注入 mock pi + modelRegistry） */
 function makeRuntime(overrides: { runAgentImpl?: () => Promise<AgentResult> } = {}): SubagentRuntime & {
-  pi: { appendEntry: ReturnType<typeof vi.fn>; events: { emit: ReturnType<typeof vi.fn> } };
+  pi: MockPi;
 } {
   // SubagentRuntime 构造会调 loadGlobalConfig（读 ~/.pi/.../config.json）；
   // 用一个不存在的 homeDir 避免读到真实配置
@@ -20,10 +27,11 @@ function makeRuntime(overrides: { runAgentImpl?: () => Promise<AgentResult> } = 
     homeDir: "/tmp/subagent-test-home-nonexistent",
     agentDir: "/tmp/subagent-test-agent",
   });
-  // 注入 mock pi
-  const pi = {
+  // 注入 mock pi（FR-O1: 加 sendMessage）
+  const pi: MockPi = {
     appendEntry: vi.fn(),
     events: { emit: vi.fn() },
+    sendMessage: vi.fn(),
   };
   rt.injectPi(pi as never);
   // 注入 mock modelRegistry（startBackground 入口预检 buildContext() 需要）
@@ -161,5 +169,75 @@ describe("startBackground / getBackground / cancelBackground", () => {
     await new Promise((r) => setTimeout(r, 20));
     const status = rt.getBackground(handle.id);
     expect(status).not.toHaveProperty("controller");
+  });
+});
+
+describe("PiLike sendMessage (FR-O1)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("notifyBgCompletion passes sendMessage through to pi with triggerTurn", () => {
+    const rt = makeRuntime();
+    rt.notifyBgCompletion({
+      id: "bg-1-test",
+      status: "done",
+      agent: "worker",
+      result: { text: "done output" } as AgentResult,
+      startedAt: Date.now(),
+    });
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1);
+    const call = rt.pi.sendMessage.mock.calls[0]!;
+    expect(call[0]).toMatchObject({ customType: "subagent-bg-notify", display: true });
+    expect(call[1]).toMatchObject({ triggerTurn: true });
+  });
+
+  it("formatBgCompletionMessage includes status, agent, body and backgroundId", () => {
+    const rt = makeRuntime();
+    const msg = rt.formatBgCompletionMessage({
+      id: "bg-9-xyz",
+      status: "done",
+      agent: "reviewer",
+      result: { text: "all good" } as AgentResult,
+      startedAt: Date.now(),
+    });
+    expect(msg).toContain("completed");
+    expect(msg).toContain("reviewer");
+    expect(msg).toContain("all good");
+    expect(msg).toContain("bg-9-xyz");
+  });
+
+  it("notifyBgCompletion dedupes same id within TTL", () => {
+    const rt = makeRuntime();
+    const record = {
+      id: "bg-dedupe-1",
+      status: "done" as const,
+      agent: "worker",
+      result: { text: "ok" } as AgentResult,
+      startedAt: Date.now(),
+    };
+    rt.notifyBgCompletion(record);
+    rt.notifyBgCompletion(record); // 同 id → 去重
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifyBgCompletion falls back to appendEntry when sendMessage throws (stale runtime)", () => {
+    const rt = makeRuntime();
+    rt.pi.sendMessage.mockImplementation(() => {
+      throw new Error("stale runtime");
+    });
+    rt.notifyBgCompletion({
+      id: "bg-stale-1",
+      status: "done",
+      agent: "worker",
+      result: { text: "ok" } as AgentResult,
+      startedAt: Date.now(),
+    });
+    // sendMessage 抛错 → fallback appendEntry
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(rt.pi.appendEntry).toHaveBeenCalledWith(
+      "subagent-bg-record",
+      expect.objectContaining({ id: "bg-stale-1", status: "done" }),
+    );
   });
 });

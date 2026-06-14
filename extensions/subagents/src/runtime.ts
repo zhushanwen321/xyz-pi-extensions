@@ -2,6 +2,7 @@
 import * as path from "node:path";
 
 import { loadGlobalConfig, saveGlobalConfig } from "./config/global-config.ts";
+import { buildCompletionKey, getGlobalSeenMap, markSeenWithTtl } from "./persistence/completion-dedupe.ts";
 import { runAgent, type RunAgentContext } from "./core/run-agent.ts";
 import { createManagedSession } from "./core/session.ts";
 import { HistoryStore, buildPersistedRecord } from "./persistence/history-store.ts";
@@ -32,10 +33,15 @@ import {
   TURN_SUMMARY_MAX,
 } from "./types.ts";
 
-/** Pi ExtensionAPI 的最小接口（duck-typed，用于 appendEntry / events.emit） */
+/** Pi ExtensionAPI 的最小接口（duck-typed，用于 appendEntry / events.emit / sendMessage） */
 interface PiLike {
   appendEntry(customType: string, data?: unknown): void;
   events: { emit(channel: string, data: unknown): void };
+  /** FR-O1.1: 注入消息到主对话并可选触发新 turn */
+  sendMessage(
+    message: { customType: string; content: string; display: boolean },
+    options?: { triggerTurn?: boolean },
+  ): void;
 }
 
 /** background id 的时间戳进制（base36 紧凑表示） */
@@ -44,6 +50,8 @@ const BG_ID_RADIX = 36;
 const WIDGET_SUMMARY_MAX = 100;
 /** widget 完成状态淡出延迟（ms） */
 const WIDGET_LINGER_MS = 5000;
+/** FR-O1.3: background 完成通知去重 TTL（10 分钟，移植自 notify.ts:56） */
+const BG_NOTIFY_TTL_MS = 10 * 60 * 1000;
 
 /** 进程内单例持有的 background 记录（含 AbortController 供 cancel）。
  * status 此处可写（BackgroundStatus.status 是 readonly，但内部记录需变异） */
@@ -558,6 +566,87 @@ export class SubagentRuntime {
   /** 持久化全局配置（供 config-wizard 调用） */
   saveGlobalConfig(): Promise<void> {
     return saveGlobalConfig(this.homeDir, this.globalConfig);
+  }
+
+  /**
+   * FR-O1.2: 格式化 background 完成通知文本。
+   * 主 agent 能基于此文本续接工作。
+   */
+  formatBgCompletionMessage(record: {
+    id: string;
+    status: "done" | "failed" | "cancelled";
+    agent?: string;
+    result?: AgentResult;
+    error?: string;
+    endedAt?: number;
+    startedAt: number;
+  }): string {
+    const statusWord = record.status === "done" ? "completed" : record.status;
+    const agent = record.agent ?? "default";
+    const lines = [`Background task ${statusWord}: **${agent}**`];
+    const body = record.result?.text ?? record.error ?? "(no output)";
+    // 截断正文到 ~500 字符
+    const truncated = body.length > 500 ? body.slice(0, 500) + "..." : body;
+    lines.push("", truncated);
+    lines.push("", `backgroundId: ${record.id}`);
+    if (record.result?.sessionFile) {
+      lines.push(`Session file: ${record.result.sessionFile}`);
+    }
+    return lines.join("\n");
+  }
+
+  /**
+   * FR-O1.1 + FR-O1.3 + FR-O1.7: 发送 background 完成通知到主对话。
+   * 含 TTL 去重 + try/catch 兜底（stale runtime 不误标 failed）。
+   *
+   * 注意：本任务实现单条直发；任务 4 在此基础上加合并窗口（首个立即发，
+   * 窗口内后续入队合并）。
+   */
+  notifyBgCompletion(record: {
+    id: string;
+    status: "done" | "failed" | "cancelled";
+    agent?: string;
+    result?: AgentResult;
+    error?: string;
+    endedAt?: number;
+    startedAt: number;
+  }): void {
+    const seen = getGlobalSeenMap("__subagents_bg_notify_seen__");
+    const key = buildCompletionKey(
+      { id: record.id, agent: record.agent, success: record.status === "done" },
+      "bg-notify",
+    );
+    if (markSeenWithTtl(seen, key, Date.now(), BG_NOTIFY_TTL_MS)) return; // 重复，跳过
+
+    const content = this.formatBgCompletionMessage(record);
+    try {
+      this.pi?.sendMessage(
+        { customType: "subagent-bg-notify", content, display: true },
+        { triggerTurn: true },
+      );
+    } catch {
+      // G-025: stale runtime 同步抛错——不标记 background failed（agent 已完成）
+      // fallback: appendEntry 持久化（best-effort）
+      try {
+        this.pi?.appendEntry("subagent-bg-record", { id: record.id, status: record.status });
+      } catch {
+        // 两层都 stale，放弃（结果仍可通过 getBackground 查询）
+      }
+    }
+  }
+
+  /** FR-O1.5: flush 合并窗口中 pending 的通知（任务 4 实现完整逻辑） */
+  flushPendingNotifications(): void {
+    // placeholder——任务 4 填充合并窗口逻辑
+  }
+
+  /**
+   * FR-O1.5 G-029: 清理 runtime 资源。
+   * session 结束时调用，清理合并窗口定时器并 flush 残留通知。
+   */
+  dispose(): void {
+    this.flushPendingNotifications();
+    this.clearActiveView();
   }
 }
 
