@@ -1,0 +1,217 @@
+// src/core/session-factory.ts
+//
+// 共享的 Pi session 创建 + 配置 helper。被 runAgent()（一次性执行）和
+// createManagedSession()（长生命周期，复用 session）共同调用。
+//
+// SDK 约束（spec FR-1.7 偏差，见 spec.md「实现偏差说明」）：
+//   createAgentSession({ tools }) 构造时传入 allowlist 需要预先知道工具全集，
+//   但扩展工具要等 createAgentSession 内部加载 resourceLoader 后才注册。
+//   SDK 无 resourceLoader.getTools() 预加载 API。因此工具过滤必须在 session
+//   创建后通过 setActiveToolsByName 执行。本 helper 封装该流程，消除调用方重复。
+
+import type { ModelRegistryLike } from "../resolution/model-resolver.ts";
+import { filterTools } from "../resolution/tool-filter.ts";
+import type {
+  AgentConfig,
+  AgentEvent,
+  AgentResult,
+  ModelInfo,
+} from "../types.ts";
+import { createEventBridge } from "./event-bridge.ts";
+
+/** event-bridge 实例的类型（从 createEventBridge 返回值推断） */
+export type EventBridge = ReturnType<typeof createEventBridge>;
+
+/** AgentSession 的最小可用接口（duck-typed，与 SDK AgentSession 结构兼容） */
+export interface AgentSessionLike {
+  prompt(task: string, options?: unknown): Promise<void>;
+  steer(message: string): Promise<void>;
+  abort(): Promise<void>;
+  dispose(): void;
+  subscribe(fn: (event: unknown) => void): () => void;
+  sessionId: string;
+  messages: ReadonlyArray<{
+    role: string;
+    usage?: Record<string, unknown>;
+    content?: ReadonlyArray<{ type: string; text?: string }>;
+  }>;
+  getAllTools(): Array<{ name: string }>;
+  setActiveToolsByName(names: string[]): void;
+}
+
+/** 动态 import Pi SDK（集中在此处，便于测试 mock） */
+export async function getSdk(): Promise<SdkLike> {
+  const mod = await import("@mariozechner/pi-coding-agent");
+  return mod as unknown as SdkLike;
+}
+
+/** Pi SDK 动态 import 的形状（runAgent/ManagedSession 通过 getSdk() 获取） */
+export interface SdkLike {
+  DefaultResourceLoader: new (opts: Record<string, unknown>) => {
+    reload(): Promise<void>;
+  };
+  SessionManager: { inMemory(cwd?: string): unknown };
+  createAgentSession: (opts: Record<string, unknown>) => Promise<{
+    session: AgentSessionLike;
+  }>;
+}
+
+/** 创建 session 所需的依赖（由 SubagentRuntime.buildContext() 提供） */
+export interface SessionFactoryContext {
+  modelRegistry: ModelRegistryLike;
+  resolveAgent: (name: string) => AgentConfig | undefined;
+  cwd: string;
+  agentDir: string;
+}
+
+/** createAndConfigureSession 的输入选项 */
+export interface CreateSessionInput {
+  /** 已解析的模型（由 resolveModelForAgent 产出） */
+  resolved: { model: ModelInfo; thinkingLevel?: string };
+  /** systemPrompt 追加内容 */
+  appendSystemPrompt?: string[];
+  /** skill 路径 */
+  skillPath?: string;
+  /** agent 配置（提取 tool 过滤策略） */
+  agentConfig?: AgentConfig;
+  /** 事件回调 */
+  onEvent?: (event: AgentEvent) => void;
+}
+
+/** createAndConfigureSession 的输出 */
+export interface BuiltSession {
+  session: AgentSessionLike;
+  bridge: EventBridge;
+  unsubscribe: () => void;
+}
+
+/** JSON pretty-print 缩进（ESLint no-magic-numbers） */
+const JSON_INDENT = 2;
+
+/**
+ * 创建并配置一个 Pi AgentSession：
+ * 1. 构建 DefaultResourceLoader + reload
+ * 2. createAgentSession（含 model/thinkingLevel/resourceLoader/sessionManager）
+ * 3. 创建后过滤工具（setActiveToolsByName）—— SDK 约束，见文件头注释
+ * 4. 创建 event-bridge + subscribe
+ *
+ * 不绑定 turn-limiter / AbortSignal —— 那些是执行期关注点，由调用方
+ * （runAgent 的 runPromptLoop / ManagedSession.prompt）处理。
+ */
+export async function createAndConfigureSession(
+  input: CreateSessionInput,
+  ctx: SessionFactoryContext,
+  sdk: SdkLike,
+): Promise<BuiltSession> {
+  const { resolved, appendSystemPrompt, skillPath, agentConfig, onEvent } = input;
+
+  // 步骤 1: 构建 ResourceLoader（不含 tool 配置——SDK 在 ResourceLoader 无此字段）
+  const resourceLoader = new sdk.DefaultResourceLoader({
+    cwd: ctx.cwd,
+    agentDir: ctx.agentDir,
+    appendSystemPrompt,
+    additionalSkillPaths: skillPath ? [skillPath] : undefined,
+  });
+  await resourceLoader.reload();
+
+  // 步骤 2: 创建 session
+  const sessionOpts: Record<string, unknown> = {
+    model: resolved.model,
+    thinkingLevel: resolved.thinkingLevel,
+    resourceLoader,
+    sessionManager: sdk.SessionManager.inMemory(ctx.cwd),
+  };
+  const { session } = await sdk.createAgentSession(sessionOpts);
+
+  // 步骤 3: 创建后过滤工具（FR-6 三层过滤 → allowlist → setActiveToolsByName）
+  const toolFilterConfig = {
+    builtinTools: agentConfig?.builtinTools,
+    extensions: agentConfig?.extensions,
+    excludeTools: agentConfig?.excludeTools ?? [],
+  };
+  const allTools = session.getAllTools().map((t) => ({ name: t.name }));
+  const filterResult = filterTools({ allTools, config: toolFilterConfig });
+  if (
+    filterResult.allowedTools &&
+    filterResult.allowedTools.length < allTools.length
+  ) {
+    session.setActiveToolsByName(filterResult.allowedTools);
+  }
+
+  // 步骤 4: event-bridge + subscribe
+  const bridge = createEventBridge(onEvent ?? (() => {}));
+  const unsubscribe = session.subscribe((event: unknown) => {
+    bridge.handle(event as never);
+  });
+
+  return { session, bridge, unsubscribe };
+}
+
+/**
+ * 从已完成的 session + bridge 提取 AgentResult。
+ * runAgent（一次性）和 ManagedSession.prompt（复用 session）共用。
+ */
+export function collectResult(
+  session: AgentSessionLike,
+  bridge: EventBridge,
+  startTime: number,
+  success: boolean,
+  error: string | undefined,
+): AgentResult {
+  const text = collectResponseTextLocal(session.messages);
+
+  // 提取 parsedOutput（artifacts）：从 toolCalls 找 structured-output
+  let parsedOutput: unknown;
+  for (const tc of bridge.toolCalls) {
+    if (tc.toolName === "structured-output" && tc.result?.details) {
+      parsedOutput = tc.result.details;
+      break;
+    }
+  }
+
+  const accumulated = bridge.usage;
+  const hasUsage = accumulated.input > 0 || accumulated.output > 0;
+
+  return {
+    text,
+    parsedOutput,
+    usage: hasUsage ? accumulated : undefined,
+    turns: bridge.turnCount,
+    durationMs: Date.now() - startTime,
+    success,
+    error,
+    sessionId: session.sessionId,
+    toolCalls: bridge.toolCalls,
+  };
+}
+
+/** 从 session.messages 最后一条 assistant message 提取文本 */
+function collectResponseTextLocal(
+  messages: ReadonlyArray<{
+    role: string;
+    content?: ReadonlyArray<{ type: string; text?: string }>;
+  }>,
+): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== "assistant") continue;
+    if (!msg.content) return "";
+    return msg.content
+      .filter((part) => part.type === "text" && typeof part.text === "string")
+      .map((part) => part.text!)
+      .join("");
+  }
+  return "";
+}
+
+/** FR-9.6: schema 指令模板（拼入 task 末尾） */
+export function formatSchemaInstruction(schema: Record<string, unknown>): string {
+  return [
+    "MANDATORY: Structured Output Requirement",
+    "You MUST call the `structured-output` tool with your final answer.",
+    "The schema for the structured output is:",
+    "```json",
+    JSON.stringify(schema, null, JSON_INDENT),
+    "```",
+  ].join("\n");
+}
