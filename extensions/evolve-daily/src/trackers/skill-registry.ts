@@ -5,8 +5,8 @@
  * 已知 skills 目录 + system prompt fallback 实现。
  */
 
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { readdirSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const NPM_SKILLS_GLOB_ROOT = join(
@@ -55,8 +55,12 @@ function scanNpmBundledSkills(): string[] {
         }
       }
     }
-  } catch {
-    // 扫描失败，静默返回空（system prompt fallback 会兜底）
+  } catch (e) {
+    // 目录扫描是 best-effort：记录警告后重新抛出让调用方决定是否兑底
+    console.warn(
+      `[skill-registry] npm bundled skills scan failed: ${(e as Error).message}`,
+    );
+    throw e;
   }
   return names;
 }

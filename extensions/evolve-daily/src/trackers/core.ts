@@ -15,6 +15,7 @@ import type {
 import { Text } from "@mariozechner/pi-tui";
 import type { Static } from "typebox";
 
+import { isValidSkillName } from "./skill-registry";
 import {
   canTransition,
   createInitialState,
@@ -27,8 +28,6 @@ import {
   TrackerParams,
   type TrackerRuntimeState,
 } from "./types";
-
-import { isValidSkillName } from "./skill-registry";
 
 // ── Pi SDK custom event API type ──────────────────────
 
@@ -204,6 +203,132 @@ function renderTrackerResult<TMeta>(
     0,
     0,
   );
+}
+
+// ── execute 分发（提取为顶层函数避免 createTracker 超 300 行）──
+
+type CreateItemFn<TMeta> = (
+  match: { name: string; metadata: TMeta; summary: string },
+  ctx: ExtensionContext,
+) => TrackedItem<TMeta>;
+type PersistFn = (ctx: ExtensionContext) => void;
+
+async function executeTrackerAction<TMeta>(
+  params: Static<typeof TrackerParams>,
+  ctx: ExtensionContext,
+  state: TrackerRuntimeState<TMeta>,
+  config: TrackerConfig<TMeta>,
+  pi: ExtensionAPI,
+  createItem: CreateItemFn<TMeta>,
+  persistState: PersistFn,
+): Promise<ToolResult> {
+  // ── start ──
+  if (params.action === "start") {
+    if (!config.triggerTool) {
+      return {
+        content: [{ type: "text" as const, text: "start action not supported by this tracker" }],
+        details: undefined,
+        isError: true,
+      };
+    }
+    const skillName = params.name as string | undefined;
+    if (!skillName) {
+      return { content: [{ type: "text" as const, text: "start requires name parameter" }], details: undefined, isError: true };
+    }
+
+    // name 校验（含 system prompt fallback）
+    const getPrompt = (ctx as { getSystemPrompt?: () => string }).getSystemPrompt;
+    const systemPrompt = typeof getPrompt === "function" ? getPrompt() : undefined;
+    if (!isValidSkillName(skillName, systemPrompt)) {
+      return { content: [{ type: "text" as const, text: `skill "${skillName}" not found` }], details: undefined, isError: true };
+    }
+
+    const match = config.triggerTool.extractMeta(params);
+    const newItem = createItem(match, ctx);
+    await pi.sendUserMessage(config.steering.onCreate(newItem), {
+      deliverAs: "steer",
+    });
+
+    return {
+      content: [{ type: "text" as const, text: `Tracking started: #${newItem.id} "${newItem.name}". Call ${config.toolName}(action=update, id=${newItem.id}, status=completed) when done.` }],
+      details: {
+        action: "start",
+        items: [...state.items],
+        trackerName: config.name,
+        createdId: newItem.id,
+      } satisfies TrackerDetails<TMeta>,
+    };
+  }
+
+  // ── list ──
+  if (params.action === "list") {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: formatItemList(state.items, config.name),
+        },
+      ],
+      details: {
+        action: "list",
+        items: [...state.items],
+        trackerName: config.name,
+      } satisfies TrackerDetails<TMeta>,
+    };
+  }
+
+  // ── update ──
+  const updateId = params.id as number | undefined;
+  const updateStatus = params.status as string | undefined;
+  if (updateId === undefined) {
+    return { content: [{ type: "text", text: "update action requires id parameter" }], details: undefined, isError: true };
+  }
+  if (updateStatus === undefined) {
+    return { content: [{ type: "text", text: "update action requires status parameter" }], details: undefined, isError: true };
+  }
+
+  const itemIndex = state.items.findIndex(
+    (item) => item.id === updateId,
+  );
+  if (itemIndex === -1) {
+    return { content: [{ type: "text", text: `TrackedItem id=${updateId} not found` }], details: undefined, isError: true };
+  }
+
+  const item = state.items[itemIndex];
+  if (!canTransition(item.status, updateStatus as TrackedItemStatus)) {
+    return { content: [{ type: "text", text: `Invalid transition: ${item.status} → ${updateStatus} (current: ${item.status}, terminal states are immutable or path not allowed)` }], details: undefined, isError: true };
+  }
+
+  // 执行转换
+  item.status = updateStatus as TrackedItemStatus;
+  item.detail = (params.detail as string | undefined | null) ?? item.detail;
+
+  if (updateStatus === "error") {
+    item.errorCount += 1;
+    if (item.errorCount >= config.errorThreshold) {
+      await pi.sendUserMessage(config.steering.onError(item), {
+        deliverAs: "steer",
+      });
+    }
+  }
+
+  persistState(ctx);
+
+  const statusText = isTerminalStatus(item.status) ? " (terminal)" : "";
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `TrackedItem #${item.id} "${item.name}" → ${item.status}${statusText}`,
+      },
+    ],
+    details: {
+      action: "update",
+      items: [...state.items],
+      trackerName: config.name,
+      updatedId: item.id,
+    } satisfies TrackerDetails<TMeta>,
+  };
 }
 
 // ── 工厂函数 ────────────────────────────────────────
@@ -482,121 +607,22 @@ export function createTracker<TMeta>(
     promptGuidelines: config.promptGuidelines,
     parameters: TrackerParams,
 
-    async execute(
+    execute: (
       _toolCallId: string,
       params: Static<typeof TrackerParams>,
       _signal: AbortSignal | undefined,
       _onUpdate: unknown,
       ctx: ExtensionContext,
-    ): Promise<ToolResult> {
-      // ── start ──
-      if (params.action === "start") {
-        if (!config.triggerTool) {
-          return {
-            content: [{ type: "text" as const, text: "start action not supported by this tracker" }],
-            details: undefined,
-            isError: true,
-          };
-        }
-        const skillName = params.name as string | undefined;
-        if (!skillName) {
-          return { content: [{ type: "text" as const, text: "start requires name parameter" }], details: undefined, isError: true };
-        }
-
-        // name 校验（含 system prompt fallback）
-        const getPrompt = (ctx as { getSystemPrompt?: () => string }).getSystemPrompt;
-        const systemPrompt = typeof getPrompt === "function" ? getPrompt() : undefined;
-        if (!isValidSkillName(skillName, systemPrompt)) {
-          return { content: [{ type: "text" as const, text: `skill "${skillName}" not found` }], details: undefined, isError: true };
-        }
-
-        const match = config.triggerTool.extractMeta(params);
-        const newItem = createItem(match, ctx);
-        await pi.sendUserMessage(config.steering.onCreate(newItem), {
-          deliverAs: "steer",
-        });
-
-        return {
-          content: [{ type: "text" as const, text: `Tracking started: #${newItem.id} "${newItem.name}". Call ${config.toolName}(action=update, id=${newItem.id}, status=completed) when done.` }],
-          details: {
-            action: "start",
-            items: [...state.items],
-            trackerName: config.name,
-            createdId: newItem.id,
-          } satisfies TrackerDetails<TMeta>,
-        };
-      }
-
-      // ── list ──
-      if (params.action === "list") {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: formatItemList(state.items, config.name),
-            },
-          ],
-          details: {
-            action: "list",
-            items: [...state.items],
-            trackerName: config.name,
-          } satisfies TrackerDetails<TMeta>,
-        };
-      }
-
-      // ── update ──
-      const updateId = params.id as number | undefined;
-      const updateStatus = params.status as string | undefined;
-      if (updateId === undefined) {
-        return { content: [{ type: "text", text: "update action requires id parameter" }], details: undefined, isError: true };
-      }
-      if (updateStatus === undefined) {
-        return { content: [{ type: "text", text: "update action requires status parameter" }], details: undefined, isError: true };
-      }
-
-      const itemIndex = state.items.findIndex(
-        (item) => item.id === updateId,
-      );
-      if (itemIndex === -1) {
-        return { content: [{ type: "text", text: `TrackedItem id=${updateId} not found` }], details: undefined, isError: true };
-      }
-
-      const item = state.items[itemIndex];
-      if (!canTransition(item.status, updateStatus as TrackedItemStatus)) {
-        return { content: [{ type: "text", text: `Invalid transition: ${item.status} → ${updateStatus} (current: ${item.status}, terminal states are immutable or path not allowed)` }], details: undefined, isError: true };
-      }
-
-      // 执行转换
-      item.status = updateStatus as TrackedItemStatus;
-      item.detail = (params.detail as string | undefined | null) ?? item.detail;
-
-      if (updateStatus === "error") {
-        item.errorCount += 1;
-        if (item.errorCount >= config.errorThreshold) {
-          await pi.sendUserMessage(config.steering.onError(item), {
-            deliverAs: "steer",
-          });
-        }
-      }
-
-      persistState(ctx);
-
-      const statusText = isTerminalStatus(item.status) ? " (terminal)" : "";
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `TrackedItem #${item.id} "${item.name}" → ${item.status}${statusText}`,
-          },
-        ],
-        details: {
-          action: "update",
-          items: [...state.items],
-          trackerName: config.name,
-          updatedId: item.id,
-        } satisfies TrackerDetails<TMeta>,
-      };
-    },
+    ) =>
+      executeTrackerAction(
+        params,
+        ctx,
+        state,
+        config,
+        pi,
+        createItem,
+        persistState,
+      ),
 
     renderCall(
       args: Record<string, unknown>,

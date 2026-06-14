@@ -5,9 +5,8 @@
  * 追踪 skill 的加载、执行、异常、记录全生命周期。
  */
 
-import type { TrackedItem } from "./types";
-
 import type { TrackerConfig } from "./core";
+import type { TrackedItem } from "./types";
 
 // ── Metadata 类型 ───────────────────────────────────
 
