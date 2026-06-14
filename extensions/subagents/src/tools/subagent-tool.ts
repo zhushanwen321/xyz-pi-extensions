@@ -29,6 +29,75 @@ import { MAX_EVENT_LOG_ENTRIES, TURN_SUMMARY_MAX } from "../types.ts";
 const MS_PER_SECOND = 1000;
 
 // ============================================================
+// FR-2.3: spinner 定时器 state + renderSubagentResult
+// ============================================================
+
+/** FR-2.3: spinner 定时器 state（ToolDefinition 的 TState） */
+export interface SubagentToolState {
+  timer?: ReturnType<typeof setInterval>;
+  frame: number;
+}
+
+/** 初始化 tool state（frame=0, 无 timer） */
+export function initialToolState(): SubagentToolState {
+  return { frame: 0 };
+}
+
+/** spinner 帧数（RUNNING_FRAMES.length，与 subagent-render.ts 一致） */
+const SPINNER_FRAMES_COUNT = 10;
+/** spinner 定时器间隔（ms） */
+const SPINNER_INTERVAL_MS = 250;
+
+/**
+ * FR-2.3: renderResult 逻辑——管理 spinner 定时器生命周期。
+ * running 时启动 setInterval(250ms) → context.invalidate()；done/failed 时 clearInterval。
+ * 定时器存 context.state（pi-tui Component 无 destroy 钩子，state 是唯一销毁点）。
+ *
+ * ⚠️ context.state 由 Pi runtime 初始化为 `{}`（tool-execution.js rendererState = {}），
+ * 首次渲染时 frame/timer 均为 undefined。必须在 running 分支入口确保 frame 初始化为 0，
+ * 否则 `(undefined + 1) % 10 = NaN`，spinner 帧序列取 [NaN] 得到 undefined。
+ */
+export function renderSubagentResult(
+  result: { content: Array<{ type: string; text?: string }>; details?: unknown },
+  options: { expanded: boolean },
+  theme: { bg(color: string, text: string): string; fg(color: string, text: string): string; bold(text: string): string },
+  context: { state: SubagentToolState; invalidate(): void },
+): SubagentResultComponent {
+  const details = result.details as SubagentToolDetails | undefined;
+  if (!details) {
+    return new SubagentResultComponent(
+      { eventLog: [], status: "done", agent: "default", turns: 0, totalTokens: 0, elapsedSeconds: 0 },
+      theme,
+    );
+  }
+
+  // 确保 state 字段初始化（Pi runtime 初始传 {}，frame/timer 为 undefined）
+  if (context.state.frame === undefined) context.state.frame = 0;
+
+  const comp = new SubagentResultComponent(details, theme);
+  comp.setExpanded(options.expanded);
+
+  if (details.status === "running") {
+    if (!context.state.timer) {
+      context.state.timer = setInterval(() => {
+        context.state.frame = (context.state.frame + 1) % SPINNER_FRAMES_COUNT;
+        comp.setSpinnerFrame(context.state.frame);
+        context.invalidate();
+      }, SPINNER_INTERVAL_MS);
+      context.state.timer.unref?.();
+    }
+    comp.setSpinnerFrame(context.state.frame);
+  } else {
+    if (context.state.timer) {
+      clearInterval(context.state.timer);
+      context.state.timer = undefined;
+    }
+  }
+
+  return comp;
+}
+
+// ============================================================
 // Params schema
 // ============================================================
 
@@ -91,16 +160,11 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
     // ── renderResult：对话流背景色 block ──────────────────────
     renderResult(
       result: AgentToolResult<SubagentToolDetails>,
-      _options: { expanded: boolean; isPartial: boolean },
+      options: { expanded: boolean; isPartial: boolean },
       theme: Theme,
+      context: { state: SubagentToolState; invalidate(): void },
     ) {
-      const details = result.details as SubagentToolDetails | undefined;
-      if (!details) {
-        // Fallback：无 details 时显示原始 content 文本
-        const text = result.content[0];
-        return { render: (_w: number) => [text?.type === "text" ? (text.text ?? "") : ""], invalidate() {} };
-      }
-      return new SubagentResultComponent(details, theme);
+      return renderSubagentResult(result, options, theme, context);
     },
 
     async execute(
@@ -196,6 +260,10 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       // ── Mode 1: sync ────────────────────────────────────
       const startTime = Date.now();
       const agentName = params.agent ?? "default";
+      // FR-1.2: 解析 model/thinkingLevel（resolveModelForAgent 在任务 5 实现）
+      const resolved = rt.resolveModelForAgent?.(params.agent);
+      const resolvedModelId = resolved?.model.id;
+      const resolvedThinkingLevel = resolved?.thinkingLevel;
 
       // 维护 eventLog（ring buffer），onEachEvent 时推送给 onUpdate
       const eventLog: AgentEventLogEntry[] = [];
@@ -210,6 +278,8 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         turns,
         totalTokens,
         elapsedSeconds: Math.floor((Date.now() - startTime) / MS_PER_SECOND),
+        model: resolvedModelId,
+        thinkingLevel: resolvedThinkingLevel,
       });
 
       const pushUpdate = (status: SubagentToolDetails["status"]) => {

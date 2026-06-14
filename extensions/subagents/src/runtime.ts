@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { loadGlobalConfig, saveGlobalConfig } from "./config/global-config.ts";
 import { runAgent, type RunAgentContext } from "./core/run-agent.ts";
 import { createManagedSession } from "./core/session.ts";
+import { inferCategory } from "./category.ts";
 import { HistoryStore, buildPersistedRecord } from "./persistence/history-store.ts";
 import { DefaultConcurrencyPool } from "./pool/concurrency-pool.ts";
 import { AgentRegistry } from "./registry/agent-registry.ts";
@@ -29,6 +30,7 @@ import {
   type SessionModelState,
   type SubagentHooks,
   type SubagentsGlobalConfig,
+  type ResolvedModel,
   THINKING_CHUNK,
   TEXT_OUTPUT_CHUNK,
   TURN_SUMMARY_MAX,
@@ -552,6 +554,33 @@ export class SubagentRuntime {
         modelRegistry: this.modelRegistry,
       });
       return `${result.model.provider}/${result.model.name}`;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * FR-1.2: 解析 agent 的 model + thinkingLevel（供 tool 构建 details）。
+   * 与 resolveModelForScene 不同：这里走完整 agent 发现 + category 推断链，
+   * 返回完整 ResolvedModel（含 model.id 和 thinkingLevel）。
+   * 解析失败（如 fallback 链全部不可用）→ 返回 undefined，details 不带 model 字段。
+   */
+  resolveModelForAgent(agentName?: string): ResolvedModel | undefined {
+    if (!this.modelRegistry) return undefined;
+    if (!agentName) return undefined;
+    // hot-reload：重新扫描 .md 文件，确保编辑后立即生效（与 buildContext.resolveAgent 一致）
+    this.agentRegistry.discoverAll(this.builtinRegistry);
+    const agentConfig = this.agentRegistry.get(agentName) ?? this.builtinRegistry.get(agentName);
+    const category = inferCategory(agentName, agentConfig, this.globalConfig.agentCategoryOverrides);
+    try {
+      return resolveModelForAgent({
+        agentName,
+        agentConfig,
+        category,
+        globalConfig: this.globalConfig,
+        sessionState: this.sessionState,
+        modelRegistry: this.modelRegistry,
+      });
     } catch {
       return undefined;
     }

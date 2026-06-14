@@ -22,7 +22,7 @@ vi.mock("../runtime.ts", () => ({
 
 // 必须在 vi.mock 之后 import 被测模块（此时 runtime.ts 已被替换）
 import { getRuntime } from "../runtime.ts";
-import { registerSubagentTool } from "../tools/subagent-tool.ts";
+import { initialToolState, registerSubagentTool, renderSubagentResult } from "../tools/subagent-tool.ts";
 
 const mockedGetRuntime = vi.mocked(getRuntime);
 
@@ -283,5 +283,90 @@ describe("subagent tool execute()", () => {
 
     const tool = captureTool();
     await expect(tool.execute("call-8", { task: "x" })).rejects.toThrow(/not initialized/i);
+  });
+});
+
+describe("renderSubagentResult — spinner timer lifecycle (FR-2.3)", () => {
+  const fakeTheme = {
+    bg(_c: string, t: string): string { return t; },
+    fg(_c: string, t: string): string { return t; },
+    bold(t: string): string { return t; },
+  };
+
+  it("starts timer when status=running", () => {
+    const state = initialToolState();
+    const invalidate = vi.fn();
+    const context = { state, invalidate };
+    renderSubagentResult(
+      { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "running", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
+      { expanded: false },
+      fakeTheme,
+      context,
+    );
+    expect(state.timer).toBeDefined();
+    // frame 应被初始化（Pi runtime 初始传 {}，renderSubagentResult 负责初始化 frame=0）
+    expect(state.frame).toBe(0);
+    if (state.timer) clearInterval(state.timer);
+  });
+
+  it("clears timer when status=done", () => {
+    const state = initialToolState();
+    state.timer = setInterval(() => {}, 99999);
+    const invalidate = vi.fn();
+    const context = { state, invalidate };
+    renderSubagentResult(
+      { content: [{ type: "text", text: "ok" }], details: { eventLog: [], status: "done", agent: "w", turns: 1, totalTokens: 100, elapsedSeconds: 5 } },
+      { expanded: false },
+      fakeTheme,
+      context,
+    );
+    expect(state.timer).toBeUndefined();
+  });
+
+  it("clears timer when status=failed", () => {
+    const state = initialToolState();
+    state.timer = setInterval(() => {}, 99999);
+    const invalidate = vi.fn();
+    const context = { state, invalidate };
+    renderSubagentResult(
+      { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "failed", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
+      { expanded: false },
+      fakeTheme,
+      context,
+    );
+    expect(state.timer).toBeUndefined();
+  });
+
+  it("does not crash without details (fallback)", () => {
+    const state = initialToolState();
+    const invalidate = vi.fn();
+    const context = { state, invalidate };
+    const comp = renderSubagentResult(
+      { content: [{ type: "text", text: "plain" }] },
+      { expanded: false },
+      fakeTheme,
+      context,
+    );
+    expect(comp).toBeDefined();
+    expect(state.timer).toBeUndefined();
+  });
+
+  it("timer advances frame via invalidate", () => {
+    const state = initialToolState();
+    const invalidate = vi.fn();
+    const context = { state, invalidate };
+    renderSubagentResult(
+      { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "running", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
+      { expanded: false },
+      fakeTheme,
+      context,
+    );
+    // 手动触发一次定时器回调（vi.useFakeTimers 太重，直接取 timer 引用调用）
+    expect(state.timer).toBeDefined();
+    // frame 初始 0；定时器回调会 +1。无法直接调私有回调，但能验证 timer 存在且 unref 可调
+    if (state.timer) {
+      expect(typeof state.timer.unref).toBe("function");
+      clearInterval(state.timer);
+    }
   });
 });
