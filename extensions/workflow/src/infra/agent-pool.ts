@@ -34,6 +34,12 @@ export interface AgentCallOpts {
   agent?: string;
   /** systemPrompt 内容数组（agent-opts-resolver 设置，替代 systemPromptFiles） */
   appendSystemPrompt?: string[];
+  /**
+   * Wall-clock 超时（ms）。超时后合并的 AbortController 触发，
+   * 通过 session.abort() 终止 agent。默认 0=不限。
+   * 与外部 signal（来自 runController）合并：任一触发都终止。
+   */
+  timeoutMs?: number;
 }
 
 export interface AgentResult {
@@ -109,7 +115,29 @@ export class AgentPool {
     const callId = `agent-${randomUUID().slice(0, 8)}`;
     const startedAt = Date.now();
 
-    if (signal?.aborted) {
+    // FR: 合并外部 signal（runController）和 wall-clock 超时到统一 AbortController。
+    // 任一触发都通过 controller.abort() → session.abort() 终止 agent。
+    // 之前 timeoutMs 字段存在但从未被消费——agent 无超时保护，卡死时永久挂起。
+    const controller = new AbortController();
+    const timeoutMs = opts.timeoutMs ?? 0;
+    const timeoutHandle = timeoutMs > 0
+      ? setTimeout(() => controller.abort(), timeoutMs)
+      : undefined;
+    const onExternalAbort = (): void => controller.abort();
+    if (signal) {
+      if (signal.aborted) {
+        controller.abort();
+      } else {
+        signal.addEventListener("abort", onExternalAbort, { once: true });
+      }
+    }
+    const cleanup = (): void => {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      if (signal) signal.removeEventListener("abort", onExternalAbort);
+    };
+
+    if (controller.signal.aborted) {
+      cleanup();
       return {
         callId, output: "", durationMs: Date.now() - startedAt,
         success: false, error: "Operation aborted before start", toolCalls: [],
@@ -136,12 +164,20 @@ export class AgentPool {
         schema: opts.schema,
         skillPath: opts.skillPath,
         appendSystemPrompt: opts.appendSystemPrompt,
-        signal,
+        signal: controller.signal,
       };
 
       const subResult = await runtime.runAgent(runOpts);
+      const result = mapResult(subResult, callId, startedAt);
 
-      return mapResult(subResult, callId, startedAt);
+      // 超时优先：若 controller 因超时 abort，覆盖错误信息为清晰的 timeout 描述。
+      // runAgent 返回的 error 可能只是 "aborted"，调用方看不出是超时。
+      if (timeoutMs > 0 && controller.signal.aborted && !result.success) {
+        result.success = false;
+        result.error = `Agent timed out after ${timeoutMs}ms`;
+      }
+
+      return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return {
@@ -149,6 +185,7 @@ export class AgentPool {
         success: false, error: message, toolCalls: [],
       };
     } finally {
+      cleanup();
       this.active--;
     }
   }
