@@ -8,19 +8,23 @@ import { BuiltinAgentRegistry } from "./registry/builtin-agents.ts";
 import { type ModelRegistryLike,resolveModelForAgent } from "./resolution/model-resolver.ts";
 import { createSessionModelState, restoreState, serializeState, setAgentModel, setCategoryModel } from "./state/session-model-state.ts";
 import { AgentWidgetManager, type WidgetAgentState, type WidgetUI } from "./tui/agent-widget.ts";
-import type {
-  AgentResult,
-  BackgroundHandle,
-  BackgroundOptions,
-  BackgroundStatus,
-  CategoryDefinition,
-  ConcurrencyPool,
-  ManagedSession,
-  ManagedSessionOptions,
-  RunAgentOptions,
-  SessionModelState,
-  SubagentHooks,
-  SubagentsGlobalConfig,
+import { extractLabelFromArgs } from "./tui/format.ts";
+import {
+  type AgentEventLogEntry,
+  type AgentResult,
+  type BackgroundHandle,
+  type BackgroundOptions,
+  type BackgroundStatus,
+  type CategoryDefinition,
+  type ConcurrencyPool,
+  type ManagedSession,
+  type ManagedSessionOptions,
+  MAX_EVENT_LOG_ENTRIES,
+  type RunAgentOptions,
+  type SessionModelState,
+  type SubagentHooks,
+  type SubagentsGlobalConfig,
+  TURN_SUMMARY_MAX,
 } from "./types.ts";
 
 /** Pi ExtensionAPI 的最小接口（duck-typed，用于 appendEntry / events.emit） */
@@ -188,11 +192,12 @@ export class SubagentRuntime {
     // Live widget: 注册 running 状态
     const widgetId = `run-${++this._widgetSeq}`;
     const startTime = Date.now();
-    const widgetState: WidgetAgentState = {
+    const widgetState: WidgetAgentState & { eventLog: AgentEventLogEntry[] } = {
       id: widgetId,
       agent: opts.agent ?? "default",
       status: "running",
       elapsedSeconds: 0,
+      eventLog: [],
     };
     this.widget.updateAgent(widgetState);
 
@@ -351,30 +356,69 @@ export class SubagentRuntime {
   }
 }
 
-/** 从 AgentEvent 更新 widget 状态（turns/tokens/activity） */
-function updateWidgetFromEvent(
+/**
+ * 从 AgentEvent 更新 widget 状态（turns/tokens/activity + eventLog 追加）。
+ * FR-1.1b: text_delta 累加，turn_end 切片生成摘要。
+ * FR-1.3: tool_start/tool_end/turn_end push 到 eventLog（ring buffer）。
+ */
+export function updateWidgetFromEvent(
   state: WidgetAgentState,
-  event: { type: string; toolName?: string; usage?: { input: number; output: number; cacheRead: number; cacheWrite: number } },
+  event: {
+    type: string;
+    toolName?: string;
+    args?: unknown;
+    usage?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+    delta?: string;
+    isError?: boolean;
+  },
   startTime: number,
 ): void {
-  const s = state as WidgetAgentState & { turns: number; totalTokens: number; elapsedSeconds: number };
+  const s = state as WidgetAgentState & {
+    eventLog: AgentEventLogEntry[];
+    _currentTurnText?: string;
+    turns: number;
+    totalTokens: number;
+    elapsedSeconds: number;
+  };
+  if (!s.eventLog) s.eventLog = [];
+
   switch (event.type) {
-    case "turn_end":
+    case "tool_start": {
+      const label = extractLabelFromArgs(event.toolName ?? "working", event.args);
+      s.activity = event.toolName ?? "working";
+      s.eventLog.push({ type: "tool_start", label, ts: Date.now(), status: "running" });
+      break;
+    }
+    case "tool_end": {
+      const label = extractLabelFromArgs(event.toolName ?? "working", event.args);
+      s.activity = "thinking…";
+      s.eventLog.push({ type: "tool_end", label, ts: Date.now(), status: event.isError ? "failed" : "done" });
+      break;
+    }
+    case "text_delta": {
+      s._currentTurnText = (s._currentTurnText ?? "") + (event.delta ?? "");
+      break;
+    }
+    case "turn_end": {
+      const summary = (s._currentTurnText ?? "").slice(0, TURN_SUMMARY_MAX);
+      s.eventLog.push({ type: "turn_end", label: summary, ts: Date.now() });
+      s._currentTurnText = "";
       s.turns = (s.turns ?? 0) + 1;
       break;
-    case "message_end":
+    }
+    case "message_end": {
       if (event.usage) {
         s.totalTokens = (s.totalTokens ?? 0) + event.usage.input + event.usage.output + event.usage.cacheRead + event.usage.cacheWrite;
       }
       break;
-    case "tool_start":
-      s.activity = event.toolName ?? "working";
-      break;
-    case "tool_end":
-      s.activity = "thinking…";
-      break;
+    }
     default:
       break;
+  }
+
+  // Ring buffer: 超上限移除最旧
+  while (s.eventLog.length > MAX_EVENT_LOG_ENTRIES) {
+    s.eventLog.shift();
   }
   s.elapsedSeconds = Math.floor((Date.now() - startTime) / MS_PER_SECOND);
 }
