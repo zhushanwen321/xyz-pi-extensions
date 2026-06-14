@@ -1,618 +1,705 @@
+# Subagent TUI 对话流 block 重设计 — 实现计划
+
+> **给 agentic worker：** 必备子技能：使用 subagent-driven-development（推荐）或 executing-plans 来逐任务执行此计划。步骤使用复选框（`- [ ]`）语法进行跟踪。
+
+**目标：** 重新设计 sync + background 模式的对话流执行 block 展示（6 行压缩布局 + 定时器 spinner + 树形连接线 + alt+o 展开），删除已停用的 inline widget 渲染层。
+
+**架构：** event-bridge 增强（新增 thinking_delta 采集）→ 共享 eventLog builder 加 text_output/thinking 切片 → SubagentResultComponent 重写（6 行布局，spinner 定时器存 ToolRenderContext.state）→ background 模式 onUpdate 回流 → widget 渲染层删除。
+
+**技术栈：** TypeScript、@mariozechner/pi-coding-agent（ToolRenderContext）、@mariozechner/pi-tui（Component 契约）、vitest。
+
+**规格说明：** `.xyz-harness/2026-06-14-subagent-tui/spec.md`（v2.2）
+
+**关键参考：** `~/GitApp/pi-ecosystem/pi-subagents/src/tui/render.ts`（`clearLegacyResultAnimationTimer` 定时器模式）
+
+**SDK 关键事实（已验证）：**
+- `AssistantMessageEvent`（`@mariozechner/pi-ai/dist/types.d.ts:205-217`）有独立的 `thinking_delta` variant（`{ type: "thinking_delta", contentIndex, delta, partial }`）
+- 它嵌在 `AgentEvent.message_update.assistantMessageEvent` 里（`pi-agent-core/dist/types.d.ts:345-347`）
+- pi-tui `Component` 接口**没有 destroy 钩子**（仅 render/handleInput/invalidate）—— 定时器必须存 `ToolRenderContext.state`
+
 ---
-verdict: pass
-complexity: L2
+
+## 文件结构
+
+### 修改的文件
+
+| 文件 | 职责 | 涉及 FR |
+|------|------|---------|
+| `extensions/subagents/src/types.ts` | `AgentEvent` 加 `thinking_delta` variant；`AgentEventLogEntry.type` 加 `text_output`/`thinking`；常量 | FR-1.1, 1.1a |
+| `extensions/subagents/src/core/event-bridge.ts` | `message_update` 提取 thinking_delta | FR-1.1a |
+| `extensions/subagents/src/runtime.ts` | `updateWidgetFromEvent` 加 text_output/thinking 切片；`startBackground` 接受 onUpdate；删除 widget 实例化；新增 `resolveModelForAgent` + `_runningAgents` map | FR-1.1b, 1.3, 2.0, 2.5 |
+| `extensions/subagents/src/tui/subagent-render.ts` | `SubagentToolDetails` 加 model/thinkingLevel；`buildRenderLines` 重写 6 行布局；Component 加 spinner 帧 | FR-1.2, 2.1, 2.3, 2.4 |
+| `extensions/subagents/src/tui/agent-widget.ts` | 删除渲染层，保留 WidgetAgentState 最小字段 | FR-2.0 |
+| `extensions/subagents/src/tools/subagent-tool.ts` | `renderResult` 提取为独立函数 + 定时器；background 分支传 onUpdate；details 加 model/thinkingLevel | FR-1.2, 2.1, 2.2, 2.3, 2.5 |
+| `extensions/subagents/src/tui/format.ts` | `formatEventLogLine` 支持 text_output/thinking 类型 + ├─ 前缀 | FR-2.1 |
+| `extensions/subagents/src/tui/subagents-view.ts` | `getAllRecords` 数据源从 widget 改为 `listRunningAgents()` | FR-2.0 连带 |
+| `extensions/subagents/src/index.ts` | 删除 widget 注释 | FR-2.0 |
+
+### 修改的测试
+
+| 测试文件 | 改动 |
+|----------|------|
+| `src/__tests__/event-bridge.test.ts` | 新增 thinking_delta 映射测试 |
+| `src/__tests__/subagent-render.test.ts` | 重写：6 行布局、├─ 连接线、model 行、stats 右对齐、expanded |
+| `src/__tests__/agent-widget.test.ts` | **删除**（widget 渲染层删除后整个文件废弃） |
+| `src/__tests__/runtime-eventlog.test.ts` | 新增 text_output/thinking 切片测试 |
+| `src/__tests__/background.test.ts` | 新增 onUpdate 回流测试 |
+| `src/__tests__/subagent-tool.test.ts` | 新增 renderSubagentResult 定时器生命周期测试 |
+| `src/__tests__/subagents-view.test.ts` | mock 从 `runtime.widget` 改为 `runtime.listRunningAgents()` |
+
 ---
 
-# Subagent TUI 增强 — 实施计划
+## 任务分解
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use xyz-harness-subagent-driven-development (recommended) or executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+### 任务 1: types.ts — AgentEvent 扩展 thinking_delta + AgentEventLogEntry 扩展
 
-**Goal:** 增强 subagents 扩展的 TUI：runtime inline widget 展示工具调用流水 + turn 摘要滚动消息；新增 `/subagents list` 全屏两级视图（列表 + 详情）展示所有子 agent 执行情况。
+**文件：**
+- 修改：`extensions/subagents/src/types.ts:237-253`（AgentEventType + AgentEvent union）、`:53-58`（AgentEventLogEntry）、`:42` 后（常量）
 
-**Architecture:** 事件采集从「覆盖式」（`updateWidgetFromEvent` 折叠为单 `activity` 字段）改为「追加式」——ring buffer 累积 AgentEventLogEntry，renderWidget 投影最近 N 条。/subagents list 通过 `ctx.ui.custom()` overlay 全屏渲染，订阅 runtime 事件总线实现实时刷新。已完成 agent 通过双层留存（BgRecord 扩展 eventLog + 新增 _completedAgents Map）保证详情视图数据源。
+- [ ] **步骤 1：编写失败的测试**
 
-**Tech Stack:** TypeScript, Pi Extension API (`@mariozechner/pi-coding-agent`), typebox, pi-tui (`matchesKey`, `Key`, `truncateToWidth`), vitest
-
----
-
-## File Structure
-
-| File | Type | Group | Description |
-|------|------|-------|-------------|
-| `extensions/subagents/src/types.ts` | modify | types | 新增 AgentEventLogEntry / CompletedAgentRecord；扩展 AgentEvent.tool_start 加 args |
-| `extensions/subagents/src/core/event-bridge.ts` | modify | events | tool_execution_start 透传 args 到 AgentEvent |
-| `extensions/subagents/src/runtime.ts` | modify | runtime | updateWidgetFromEvent 追加式 + 事件总线 + 留存机制 + sync cancelled 路径 |
-| `extensions/subagents/src/tui/format.ts` | modify | format | 新增 extractLabelFromArgs / formatEventLogLine 纯函数 |
-| `extensions/subagents/src/tui/agent-widget.ts` | modify | widget | renderWidget 增强：status summary + eventLog 行布局 |
-| `extensions/subagents/src/tui/subagents-view.ts` | create | view | 全屏 overlay 组件（renderView + processKey + createSubagentsView） |
-| `extensions/subagents/src/commands/config.ts` | modify | commands | /subagents list 子命令解析 + 守卫 |
-| `extensions/subagents/src/__tests__/format.test.ts` | modify | test | 新增 extractLabelFromArgs / formatEventLogLine 测试 |
-| `extensions/subagents/src/__tests__/event-bridge.test.ts` | modify | test | args 透传测试 |
-| `extensions/subagents/src/__tests__/agent-widget.test.ts` | modify | test | renderWidget eventLog 渲染测试 |
-| `extensions/subagents/src/__tests__/subagents-view.test.ts` | create | test | renderView + processKey + collectRecords 纯函数测试 |
-
-## Interface Contracts
-
-### Module: types
-
-#### Type: AgentEventLogEntry
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | `"tool_start" \| "tool_end" \| "turn_end"` | 事件类型 |
-| `label` | `string` | 可展示的摘要文本（toolName + args 摘要 / turn 文本摘要） |
-| `ts` | `number` | 时间戳（ms epoch，由 updateWidgetFromEvent 内 Date.now() 生成） |
-| `status?` | `"running" \| "done" \| "failed"` | tool_end 带状态 |
-
-#### Type: CompletedAgentRecord
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | `string` | widget id（run-1 / bg-1-xyz） |
-| `agent` | `string` | agent 名 |
-| `status` | `"done" \| "failed" \| "cancelled"` | 终态 |
-| `eventLog` | `AgentEventLogEntry[]` | 完整事件日志 |
-| `turns?` | `number` | 总 turn 数 |
-| `totalTokens?` | `number` | 总 token |
-| `result?` | `AgentResult` | done 时存在 |
-| `error?` | `string` | failed/cancelled 时存在 |
-| `startedAt` | `number` | 启动时间 |
-| `endedAt?` | `number` | 结束时间 |
-
-#### Interface: BgRecord（扩展）
-
-新增字段：
-- `eventLog: AgentEventLogEntry[]`（widget 淡出前转移）
-- `agent: string`（opts.agent ?? "default"）
-
-#### Interface: AgentEvent.tool_start（扩展）
-
-新增 `args?: unknown` 字段。
-
-#### Interface: WidgetAgentState（扩展）
-
-新增字段：
-- `eventLog: AgentEventLogEntry[]`（ring buffer，MAX_EVENT_LOG_ENTRIES=20）
-- `_currentTurnText?: string`（text_delta 累加缓冲，turn_end 时切片后重置）
-
-#### Constants
-
-| Name | Value | Description |
-|------|-------|-------------|
-| `MAX_EVENT_LOG_ENTRIES` | `20` | eventLog ring buffer 上限 |
-| `TURN_SUMMARY_MAX` | `80` | turn 摘要截断长度 |
-| `COMPLETED_AGENTS_MAX` | `50` | _completedAgents Map 上限 |
-| `STALLED_TIMEOUT_MS` | `5 * 60 * 1000` | widget 超时兜底阈值（5min） |
-| `WIDGET_EVENT_LINES` | `11` | inline widget eventLog 最大行数（12 行总量 - 1 行 status summary） |
-
-### Module: tui/format
-
-#### Function: extractLabelFromArgs
-
-| Method | Signature | Returns | Edge Cases | Spec Ref |
-|--------|-----------|---------|------------|----------|
-| extractLabelFromArgs | `(toolName: string, args: unknown) => string` | `string` | args=null → toolName；非 read/edit/write/bash → toolName | FR-1.1a |
-
-提取策略（白名单 keys）：
-- `read`/`write`/`edit`: `args.path` → 取 basename
-- `bash`: `args.command` → 取前 60 字符
-- `web_search`/`web_fetch`: `args.query` / `args.url`
-- 其他：返回 `toolName`
-
-#### Function: formatEventLogLine
-
-| Method | Signature | Returns | Edge Cases | Spec Ref |
-|--------|-----------|---------|------------|----------|
-| formatEventLogLine | `(entry: AgentEventLogEntry, theme: ThemeLike) => string` | `string` | — | FR-2.1 |
-
-格式：
-- `tool_start`: `├─ {label}  {theme.fg("warning", "⟳ running")}`
-- `tool_end` done: `├─ {label}  {theme.fg("success", "✓")}`
-- `tool_end` failed: `├─ {label}  {theme.fg("error", "✗")}`
-- `turn_end`: `├─ turn {N}: "{摘要}"`（N 由调用方传，因为 ring buffer 不带 turn 编号）
-
-#### Function: formatStatusSummary
-
-| Method | Signature | Returns | Edge Cases | Spec Ref |
-|--------|-----------|---------|------------|----------|
-| formatStatusSummary | `(state: WidgetAgentState, spinnerFrame: number, theme: ThemeLike) => string` | `string` | — | FR-2.1 |
-
-格式：`{spinner} {agent} │ {turns} turns │ {tokens} │ {elapsed}s`
-
-### Module: tui/subagents-view
-
-#### Function: collectRecords
-
-| Method | Signature | Returns | Edge Cases | Spec Ref |
-|--------|-----------|---------|------------|----------|
-| collectRecords | `(runtime: SubagentRuntime) => SubagentRecord[]` | `SubagentRecord[]` | cancelled 优先 | FR-3.2 |
-
-合并三个数据源（_bgRecords + widget.agents + _completedAgents）按 id 去重，cancelled 状态优先覆盖其他状态。
-
-#### Type: SubagentRecord（view 内部）
+在 `extensions/subagents/src/__tests__/event-bridge.test.ts` 末尾的 `describe` 块内追加：
 
 ```typescript
-interface SubagentRecord {
-  id: string;
-  agent: string;
-  status: BackgroundStatus["status"];  // running | done | failed | cancelled
-  eventLog: AgentEventLogEntry[];
-  turns?: number;
-  totalTokens?: number;
-  startedAt: number;
-  endedAt?: number;
-  result?: AgentResult;
-  error?: string;
-}
+  it("maps message_update with thinking_delta assistantMessageEvent → thinking_delta", () => {
+    const events: AgentEvent[] = [];
+    const bridge = createEventBridge((e) => events.push(e));
+    bridge.handle({
+      type: "message_update",
+      message: {} as never,
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        contentIndex: 0,
+        delta: "analyzing the problem",
+        partial: {},
+      },
+    } as never);
+    expect(events).toContainEqual({ type: "thinking_delta", delta: "analyzing the problem" });
+  });
 ```
 
-#### Type: ViewState
+- [ ] **步骤 2：运行测试确认失败**
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `level` | `0 \| 1` | 0=列表，1=详情 |
-| `selectedIdx` | `number` | 列表选中索引 |
-| `scrollOffset` | `number` | 详情滚动偏移 |
-| `disposed` | `boolean` | 视图已关闭 |
-| `directId?` | `string` | /subagents list <id> 直接进详情 |
+运行：`cd extensions/subagents && npx vitest run src/__tests__/event-bridge.test.ts -t "thinking_delta"`
+预期：FAIL —— `thinking_delta` 不在 AgentEvent union 中。
 
-#### Function: renderView
+- [ ] **步骤 3：修改 types.ts — 扩展 AgentEventType + AgentEvent union**
 
-| Method | Signature | Returns | Edge Cases | Spec Ref |
-|--------|-----------|---------|------------|----------|
-| renderView | `(records: SubagentRecord[], theme: ThemeLike, width: number, state: ViewState, terminalRows: number) => string[]` | `string[]` | terminalRows<8 → "Terminal too small (need ≥8 rows)" | FR-3.2/3.3/4.1 |
-
-#### Function: processKey
-
-| Method | Signature | Returns | Edge Cases | Spec Ref |
-|--------|-----------|---------|------------|----------|
-| processKey | `(data: string, records: SubagentRecord[], state: ViewState, runtime: SubagentRuntime, theme: ThemeLike, done: () => void) => boolean` | `boolean`（是否需要重渲染） | disposed=true → 全部忽略 | FR-3.5 |
-
-按键：
-- `j`/↓: 选中下移 / 详情下滚
-- `k`/↑: 选中上移 / 详情上滚
-- `Enter`: Level 0 → Level 1
-- `x`: 取消 running agent（仅 background 有效；非 background 调 notify）
-- `q`/`Esc`: Level 1 → Level 0 / Level 0 → 关闭
-
-#### Function: createSubagentsView
-
-| Method | Signature | Returns | Edge Cases | Spec Ref |
-|--------|-----------|---------|------------|----------|
-| createSubagentsView | `(runtime: SubagentRuntime, theme: ThemeLike, ctx: ExtensionContext, directId?: string) => Promise<void>` | `Promise<void>` | directId 不存在 → notify + 回退 Level 0 | FR-3.1/3.2/4.1 |
-
-内部实现：
-- 检测 `ctx.hasUI`：false → 抛 Error（被 commands/config.ts 捕获并 notify）
-- 调 `runtime.getActiveView()`：非空 → close 现有（防叠加，FR-3.1 G-017）
-- 调 `runtime.setActiveView({ close: wrappedDone })`
-- 调 `ctx.ui.custom()` overlay；返回组件契约（invalidate / render / handleInput / dispose）
-- subscribe `runtime.onChange` → `requestRender`
-- dispose 时 unsubscribe + `runtime.clearActiveView()`（FR-3.1 G-026）
-
-### Module: runtime
-
-#### Function: updateWidgetFromEvent（修改）
-
-| Method | Signature | Returns | Edge Cases | Spec Ref |
-|--------|-----------|---------|------------|----------|
-| updateWidgetFromEvent | `(state, event, startTime) => void` | `void` | event.type=message_end → 只更新 totalTokens | FR-1.1/1.1b/1.3 |
-
-行为变更：
-- `tool_start`: push `{ type, label: extractLabelFromArgs(toolName, args), ts, status: "running" }` 到 eventLog（仍更新 activity）
-- `tool_end`: push `{ type, label, ts, status: isError ? "failed" : "done" }`（仍更新 activity）
-- `turn_end`: push `{ type: "turn_end", label: _currentTurnText.slice(0, 80), ts }`；turns+1；重置 _currentTurnText
-- `text_delta`: `_currentTurnText += delta`
-- `message_end`: 仅更新 totalTokens（不 push）
-- push 后超 MAX_EVENT_LOG_ENTRIES → shift 移除最旧
-
-#### Function: SubagentRuntime.onChange
-
-| Method | Signature | Returns | Edge Cases | Spec Ref |
-|--------|-----------|---------|------------|----------|
-| onChange | `(fn: () => void) => () => void` | unsubscribe 函数 | — | FR-3.4 |
-
-#### Function: SubagentRuntime.notifyChange
-
-| Method | Signature | Returns | Edge Cases | Spec Ref |
-|--------|-----------|---------|------------|----------|
-| notifyChange | `() => void` | `void` | — | FR-3.4 |
-
-调用点：
-- `updateWidgetFromEvent` 末尾
-- `startBackground` 的 `.then`/`.catch`
-- `cancelBackground`
-- （可选）`toggleYolo` / `setSessionAgentModel`（影响配置摘要刷新）
-
-#### SubagentRuntime 新增私有字段
-
-- `_completedAgents = new Map<string, CompletedAgentRecord>()`
-- `_changeListeners = new Set<() => void>()`
-- `_activeView: { close: () => void } | null = null`
-
-#### SubagentRuntime 新增公共方法
-
-| Method | Signature | Returns | Description | Spec Ref |
-|--------|-----------|---------|-------------|----------|
-| setActiveView | `(view: { close: () => void }) => void` | `void` | 设置当前 active overlay 句柄 | FR-3.1 G-017 |
-| getActiveView | `() => { close: () => void } \| null` | `当前 active view 或 null` | — | FR-3.1 G-017 |
-| clearActiveView | `() => void` | `void` | 清除 active overlay 句柄（dispose 时调用） | FR-3.1 G-026 |
-| listCompleted | `() => CompletedAgentRecord[]` | `CompletedAgentRecord[]` | 列出已归档的 sync agent | FR-3.0 |
-| archiveSyncAgent | `(record: CompletedAgentRecord) => void` | `void` | 归档 sync agent（FIFO 上限 COMPLETED_AGENTS_MAX） | FR-3.0 |
-| archiveBackgroundAgent | `(id: string, data: { eventLog: AgentEventLogEntry[]; agent: string }) => void` | `void` | 归档 background agent 到 BgRecord | FR-3.0 |
-
-#### 留存时机（FR-3.0）
-
-`runAgent` 内 `setTimeout(() => this.widget.removeAgent(widgetId), WIDGET_LINGER_MS)` 替换为 `setTimeout(() => this.archiveAndRemove(widgetId, widgetState), WIDGET_LINGER_MS)`：
-
-- sync agent（widgetId.startsWith("run-")）：归档到 `_completedAgents`（FIFO 上限 COMPLETED_AGENTS_MAX）
-- background agent（widgetId.startsWith("bg-")）：归档到对应 `_bgRecords.get(widgetId)`
-
-#### sync cancelled 路径（G-025）
-
-`runAgent` 的 catch 块检查 `finalOpts.signal?.aborted`：
-- `true` → `widgetState.status = "cancelled"`
-- `false` → `widgetState.status = "failed"`
-
-### Module: commands/config
-
-#### 函数: registerSubagentsCommand（修改）
-
-解析优先级调整：
-```
-args[0] === "list"  → createSubagentsView(args[1])
-args[0] === "config" → runConfigWizard
-其他 → notify formatConfigSummary
-```
-
-- hasUI 守卫：`!ctx.hasUI` → notify "/subagents list requires interactive mode"
-- directId 不存在 → notify warning + 回退 Level 0（view 内部处理）
-
-## Spec Coverage Matrix
-
-| Spec AC | 验证手段 | Task |
-|---------|---------|------|
-| AC-1.1 流水行随事件实时追加 | runtime eventlog test + widget render test | Task 3, 4 |
-| AC-1.2 spinner 不中断 | agent-widget render test | Task 4 |
-| AC-1.3 widget ≤ 12 行 | agent-widget render test | Task 4 |
-| AC-1.4 5s 淡出 | 复用现有 FINISHED_LINGER_MS 逻辑 | 不变 |
-| AC-2.1 /subagents list 打开 overlay | createSubagentsView 调用 ctx.ui.custom | Task 8 |
-| AC-2.2 合并 sync + background 记录 | collectRecords test | Task 7 |
-| AC-2.3 running 优先排序 | collectRecords test | Task 7 |
-| AC-2.4 空状态提示 | renderView test | Task 7 |
-| AC-2.5 j/k 导航高亮 | renderView test | Task 7 |
-| AC-3.1 Enter 进详情 | processKey test | Task 7 |
-| AC-3.2 完整 eventLog + result | renderView test | Task 7 |
-| AC-3.3 running 实时刷新 | onChange subscribe test | Task 6, 7 |
-| AC-3.4 q/Esc 返回 | processKey test | Task 7 |
-| AC-4.1 print/RPC 报错 | command handler test | Task 8 |
-
-| Spec FR | Task |
-|---------|------|
-| FR-1.1 AgentEventLogEntry | Task 1 |
-| FR-1.1a event-bridge args 透传 | Task 2 |
-| FR-1.1b text_delta 累加 | Task 3 |
-| FR-1.2 WidgetAgentState 扩展 | Task 1, 3 |
-| FR-1.3 updateWidgetFromEvent 追加式 | Task 3 |
-| FR-2.1 widget 布局 | Task 4 |
-| FR-2.2 行数限制 | Task 4 |
-| FR-3.0 留存机制 | Task 5 |
-| FR-3.0a agent 字段 | Task 1, 5 |
-| FR-3.1 命令入口 | Task 8 |
-| FR-3.2 列表视图 | Task 7 |
-| FR-3.3 详情视图 | Task 7 |
-| FR-3.4 事件总线 | Task 6 |
-| FR-3.5 键盘交互 | Task 7 |
-| FR-3.5 G-025 sync cancelled | Task 5 |
-| FR-3.5 G-008 stalled 兜底 | Task 4 |
-| FR-3.6 hasUI 守卫 | Task 8 |
-| FR-4.1 subagents-view.ts | Task 7 |
-
-## 实施任务
-
-### Task 1: 数据模型扩展（types.ts）
-
-**Type:** backend
-**Files:**
-- Modify: `extensions/subagents/src/types.ts`
-- Modify: `extensions/subagents/src/runtime.ts`（添加常量引用）
-
-**Depends on:** —
-
-- [ ] **Step 1: 在 types.ts 顶部添加常量（位于 EXCLUDED_TOOL_NAMES 之后）**
+在 `extensions/subagents/src/types.ts` 找到 `AgentEventType`（约 237 行），替换为：
 
 ```typescript
-// src/types.ts（在 EXCLUDED_TOOL_NAMES 之后添加）
-
-/** FR-1.2: eventLog ring buffer 上限（每 agent） */
-export const MAX_EVENT_LOG_ENTRIES = 20;
-
-/** FR-1.1b: turn 摘要最大字符数 */
-export const TURN_SUMMARY_MAX = 80;
-
-/** FR-3.0: _completedAgents Map 上限 */
-export const COMPLETED_AGENTS_MAX = 50;
-
-/** FR-3.5 G-008: widget stalled 兜底阈值（5min 无新事件） */
-export const STALLED_TIMEOUT_MS = 5 * 60 * 1000;
-
-/** FR-2.2: inline widget eventLog 最大行数（12 - 1 行 status summary） */
-export const WIDGET_EVENT_LINES = 11;
+export type AgentEventType =
+  | "tool_start"
+  | "tool_end"
+  | "text_delta"
+  | "thinking_delta"
+  | "turn_end"
+  | "message_end"
+  | "compaction"
+  | "error";
 ```
 
-- [ ] **Step 2: 添加 AgentEventLogEntry 类型（位于 AgentEvent union 之前）**
+找到 `AgentEvent` union（约 246 行），替换为：
 
 ```typescript
-// src/types.ts（在 AgentEventType 之前添加）
-
-/**
- * FR-1.1: 事件日志条目。记录每条事件的可展示信息。
- * 与 AgentEvent 不同：ts 由 updateWidgetFromEvent 内 Date.now() 生成；
- * label 已折叠为可展示字符串（toolName + args 摘要 / turn 文本摘要）。
- */
-export interface AgentEventLogEntry {
-  readonly type: "tool_start" | "tool_end" | "turn_end";
-  readonly label: string;
-  readonly ts: number;
-  readonly status?: "running" | "done" | "failed";
-}
-```
-
-- [ ] **Step 3: 修改 AgentEvent 的 tool_start variant（添加 args）**
-
-```typescript
-// src/types.ts（修改 AgentEvent union 中的 tool_start）
-
 export type AgentEvent =
-  | { type: "tool_start"; toolName: string; args?: unknown }  // 新增 args
+  | { type: "tool_start"; toolName: string; args?: unknown }
   | { type: "tool_end"; toolName: string; result?: ToolCallEntry["result"]; isError: boolean }
   | { type: "text_delta"; delta: string }
+  | { type: "thinking_delta"; delta: string }
   | { type: "turn_end" }
   | { type: "message_end"; usage: AgentResult["usage"] }
   | { type: "compaction" }
   | { type: "error"; error: string };
 ```
 
-- [ ] **Step 4: 添加 CompletedAgentRecord 接口（位于 BackgroundStatus 之后）**
+- [ ] **步骤 4：修改 types.ts — 扩展 AgentEventLogEntry.type**
+
+找到 `AgentEventLogEntry`（约 53 行），替换为：
 
 ```typescript
-// src/types.ts（在 BackgroundStatus 之后添加）
-
-/**
- * FR-3.0: 已完成的 sync agent 归档记录。
- * 留存上限 COMPLETED_AGENTS_MAX，FIFO。
- */
-export interface CompletedAgentRecord {
-  readonly id: string;
-  readonly agent: string;
-  status: "done" | "failed" | "cancelled";
-  eventLog: AgentEventLogEntry[];
-  turns?: number;
-  totalTokens?: number;
-  result?: AgentResult;
-  error?: string;
-  startedAt: number;
-  endedAt?: number;
+export interface AgentEventLogEntry {
+  readonly type: "tool_start" | "tool_end" | "turn_end" | "text_output" | "thinking";
+  readonly label: string;
+  readonly ts: number;
+  readonly status?: "running" | "done" | "failed";
 }
 ```
 
-- [ ] **Step 5: 运行类型检查**
+- [ ] **步骤 5：修改 types.ts — 追加切片常量**
 
-Run: `cd extensions/subagents && npx tsc --noEmit`
-Expected: PASS（无新增错误）
+在 `WIDGET_EVENT_LINES` 常量（约 42 行）后追加：
 
-- [ ] **Step 6: Commit**
+```typescript
+/** FR-1.1b: text_output 切片阈值（累计字符数达此值产生一条 log entry） */
+export const TEXT_OUTPUT_CHUNK = 100;
+/** FR-1.1a: thinking 切片阈值 */
+export const THINKING_CHUNK = 100;
+```
+
+- [ ] **步骤 6：修改 event-bridge.ts — 提取 thinking_delta**
+
+在 `extensions/subagents/src/core/event-bridge.ts` 找到 `message_update` case（约 59 行）。替换为：
+
+```typescript
+      case "message_update": {
+        const ame = raw.assistantMessageEvent;
+        // text_delta：从 AssistantMessageEvent.delta 提取
+        const textDelta = ame?.delta;
+        if (textDelta) onEvent({ type: "text_delta", delta: textDelta });
+        // FR-1.1a: thinking_delta —— SDK 独立事件类型（pi-ai types.d.ts:209）
+        if (ame?.type === "thinking_delta" && typeof ame.delta === "string") {
+          onEvent({ type: "thinking_delta", delta: ame.delta });
+        }
+        break;
+      }
+```
+
+- [ ] **步骤 7：运行测试确认通过**
+
+运行：`cd extensions/subagents && npx vitest run src/__tests__/event-bridge.test.ts`
+预期：PASS（全部）
+
+- [ ] **步骤 8：运行 tsc**
+
+运行：`cd extensions/subagents && npx tsc --noEmit`
+预期：无错误
+
+- [ ] **步骤 9：提交**
 
 ```bash
-git add extensions/subagents/src/types.ts
-git commit -m "feat(subagents): add event log + retention type definitions"
+git add extensions/subagents/src/types.ts extensions/subagents/src/core/event-bridge.ts extensions/subagents/src/__tests__/event-bridge.test.ts
+git commit -m "feat(subagents): extract thinking_delta + extend event log types (FR-1.1, FR-1.1a)"
 ```
 
 ---
 
-### Task 2: event-bridge 透传 args
+### 任务 2: runtime.ts — updateWidgetFromEvent 加 text_output + thinking 切片
 
-**Type:** backend
-**Files:**
-- Modify: `extensions/subagents/src/core/event-bridge.ts`
-- Modify: `extensions/subagents/src/__tests__/event-bridge.test.ts`
+**文件：**
+- 修改：`extensions/subagents/src/runtime.ts:569-625`（updateWidgetFromEvent）
+- 修改：`extensions/subagents/src/tui/agent-widget.ts:26-46`（WidgetAgentState 加 _currentThinking）
+- 测试：`extensions/subagents/src/__tests__/runtime-eventlog.test.ts`
 
-**Depends on:** Task 1
+- [ ] **步骤 1：编写失败的测试**
 
-- [ ] **Step 1: 修改 event-bridge.ts 透传 args**
+在 `extensions/subagents/src/__tests__/runtime-eventlog.test.ts` 末尾追加。先确认文件顶部的 import（若缺少则补）：
 
 ```typescript
-// src/core/event-bridge.ts（修改 tool_execution_start case）
-
-case "tool_execution_start": {
-  const toolName = raw.toolName ?? "unknown";
-  if (raw.toolCallId) pendingTools.set(raw.toolCallId, toolName);
-  // FR-1.1a: 透传 args（SDK 原始事件携带 raw.args）
-  onEvent({ type: "tool_start", toolName, args: (raw as { args?: unknown }).args });
-  break;
-}
+import { updateWidgetFromEvent } from "../runtime.ts";
+import type { WidgetAgentState } from "../tui/agent-widget.ts";
+import { TEXT_OUTPUT_CHUNK, THINKING_CHUNK } from "../types.ts";
 ```
 
-- [ ] **Step 2: 添加 args 透传测试**
-
-在 `extensions/subagents/src/__tests__/event-bridge.test.ts` 末尾添加：
+追加 describe 块：
 
 ```typescript
-it("passes args through to tool_start event", () => {
-  const events: AgentEvent[] = [];
-  const bridge = createEventBridge((e) => events.push(e));
-  const args = { path: "extensions/subagents/src/runtime.ts" };
-  bridge.handle({ type: "tool_execution_start", toolCallId: "1", toolName: "read", args } as never);
-  expect(events).toEqual([{ type: "tool_start", toolName: "read", args }]);
+describe("updateWidgetFromEvent — text_output + thinking slicing", () => {
+  it("emits text_output entry when accumulated text reaches TEXT_OUTPUT_CHUNK", () => {
+    const state: WidgetAgentState = { id: "t1", agent: "worker", status: "running", eventLog: [] };
+    updateWidgetFromEvent(state, { type: "text_delta", delta: "x".repeat(TEXT_OUTPUT_CHUNK) }, Date.now());
+    const entries = state.eventLog!.filter((e) => e.type === "text_output");
+    expect(entries).toHaveLength(1);
+    expect(entries[0].label.length).toBeLessThanOrEqual(100);
+  });
+
+  it("emits thinking entry when accumulated thinking reaches THINKING_CHUNK", () => {
+    const state: WidgetAgentState = { id: "t2", agent: "worker", status: "running", eventLog: [] };
+    updateWidgetFromEvent(state, { type: "thinking_delta", delta: "y".repeat(THINKING_CHUNK) }, Date.now());
+    const entries = state.eventLog!.filter((e) => e.type === "thinking");
+    expect(entries).toHaveLength(1);
+  });
+
+  it("flushes residual text_output on turn_end", () => {
+    const state: WidgetAgentState = { id: "t3", agent: "worker", status: "running", eventLog: [] };
+    updateWidgetFromEvent(state, { type: "text_delta", delta: "short partial" }, Date.now());
+    updateWidgetFromEvent(state, { type: "turn_end" }, Date.now());
+    const entries = state.eventLog!.filter((e) => e.type === "text_output");
+    expect(entries.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("flushes residual thinking on turn_end", () => {
+    const state: WidgetAgentState = { id: "t4", agent: "worker", status: "running", eventLog: [] };
+    updateWidgetFromEvent(state, { type: "thinking_delta", delta: "partial thought" }, Date.now());
+    updateWidgetFromEvent(state, { type: "turn_end" }, Date.now());
+    const entries = state.eventLog!.filter((e) => e.type === "thinking");
+    expect(entries.length).toBeGreaterThanOrEqual(1);
+  });
 });
 ```
 
-- [ ] **Step 3: 运行测试**
+- [ ] **步骤 2：运行测试确认失败**
 
-Run: `cd extensions/subagents && npx vitest run src/__tests__/event-bridge.test.ts`
-Expected: PASS（原有 7 个 + 新增 1 个 = 8 个）
+运行：`cd extensions/subagents && npx vitest run src/__tests__/runtime-eventlog.test.ts -t "text_output"`
+预期：FAIL —— 当前 updateWidgetFromEvent 不产生 text_output/thinking entry。
 
-- [ ] **Step 4: Commit**
+- [ ] **步骤 3：WidgetAgentState 加 _currentThinking 字段**
+
+在 `extensions/subagents/src/tui/agent-widget.ts` 找到 `WidgetAgentState` 接口（约 26 行），在 `_currentTurnText?: string;` 后追加：
+
+```typescript
+  /** FR-1.1a: thinking delta 累加缓冲（切片后重置） */
+  _currentThinking?: string;
+```
+
+- [ ] **步骤 4：修改 updateWidgetFromEvent — 加 text_output/thinking 切片**
+
+在 `extensions/subagents/src/runtime.ts` 顶部 import 区，确认从 types.ts import 了 `TEXT_OUTPUT_CHUNK, THINKING_CHUNK`（若无则补到现有 import 语句中）。
+
+找到 `updateWidgetFromEvent` 的 `text_delta` case（约 597 行），替换为：
+
+```typescript
+    case "text_delta": {
+      s._currentTurnText = (s._currentTurnText ?? "") + (event.delta ?? "");
+      // FR-1.1b: 节流切片——累计达 TEXT_OUTPUT_CHUNK 产生一条 text_output log entry
+      if ((s._currentTurnText ?? "").length >= TEXT_OUTPUT_CHUNK) {
+        s.eventLog.push({ type: "text_output", label: s._currentTurnText!.slice(0, 100), ts: Date.now() });
+        s._currentTurnText = "";
+      }
+      break;
+    }
+    case "thinking_delta": {
+      s._currentThinking = (s._currentThinking ?? "") + (event.delta ?? "");
+      if ((s._currentThinking ?? "").length >= THINKING_CHUNK) {
+        s.eventLog.push({ type: "thinking", label: s._currentThinking!.slice(0, 100), ts: Date.now() });
+        s._currentThinking = "";
+      }
+      break;
+    }
+```
+
+找到 `turn_end` case（约 601 行），替换为：
+
+```typescript
+    case "turn_end": {
+      // FR-1.1b: flush 残留的 text/thinking 缓冲
+      if (s._currentTurnText) {
+        s.eventLog.push({ type: "text_output", label: s._currentTurnText.slice(0, 100), ts: Date.now() });
+        s._currentTurnText = "";
+      }
+      if (s._currentThinking) {
+        s.eventLog.push({ type: "thinking", label: s._currentThinking.slice(0, 100), ts: Date.now() });
+        s._currentThinking = "";
+      }
+      const summary = (s._currentTurnText ?? "").slice(0, TURN_SUMMARY_MAX);
+      s.eventLog.push({ type: "turn_end", label: summary, ts: Date.now() });
+      s._currentTurnText = "";
+      s.turns = (s.turns ?? 0) + 1;
+      break;
+    }
+```
+
+- [ ] **步骤 5：运行测试确认通过**
+
+运行：`cd extensions/subagents && npx vitest run src/__tests__/runtime-eventlog.test.ts`
+预期：PASS
+
+- [ ] **步骤 6：提交**
 
 ```bash
-git add extensions/subagents/src/core/event-bridge.ts extensions/subagents/src/__tests__/event-bridge.test.ts
-git commit -m "feat(subagents): pass tool args through event-bridge"
+git add extensions/subagents/src/runtime.ts extensions/subagents/src/tui/agent-widget.ts extensions/subagents/src/__tests__/runtime-eventlog.test.ts
+git commit -m "feat(subagents): add text_output + thinking event log slicing (FR-1.1b)"
 ```
 
 ---
 
-### Task 3: format.ts 纯函数（extractLabelFromArgs + formatEventLogLine + formatStatusSummary）
+### 任务 3: subagent-render.ts — SubagentToolDetails 扩展 + buildRenderLines 重写
 
-**Type:** backend
-**Files:**
-- Modify: `extensions/subagents/src/tui/format.ts`
-- Modify: `extensions/subagents/src/__tests__/format.test.ts`
+**文件：**
+- 修改：`extensions/subagents/src/tui/subagent-render.ts`（全文重写核心部分）
+- 修改：`extensions/subagents/src/tui/format.ts:89-103`（formatEventLogLine）
+- 测试：`extensions/subagents/src/__tests__/subagent-render.test.ts`（全文重写）
 
-**Depends on:** Task 1
+- [ ] **步骤 1：编写失败的测试（全文替换测试文件）**
 
-- [ ] **Step 1: 添加 TDD 测试到 format.test.ts**
-
-在 `extensions/subagents/src/__tests__/format.test.ts` 末尾添加（先看现有 import 风格）：
+将 `extensions/subagents/src/__tests__/subagent-render.test.ts` 全文替换为：
 
 ```typescript
-// src/__tests__/format.test.ts（在末尾添加）
+// src/__tests__/subagent-render.test.ts
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { describe, expect, it } from "vitest";
 
-import { extractLabelFromArgs, formatEventLogLine, formatStatusSummary } from "../tui/format.ts";
-import type { AgentEventLogEntry } from "../types.ts";
+import { buildRenderLines, SubagentResultComponent, type SubagentToolDetails, type ThemeLike } from "../tui/subagent-render.ts";
 
-const fakeTheme = {
-  fg(_token: string, text: string): string { return text; },
-  bold(text: string): string { return `**${text}**`; },
+const passthroughTheme: ThemeLike = {
+  bg(_color: string, text: string): string { return text; },
+  fg(_color: string, text: string): string { return text; },
+  bold(text: string): string { return text; },
 };
 
-describe("extractLabelFromArgs", () => {
-  it("returns toolName when args is null/undefined", () => {
-    expect(extractLabelFromArgs("read", null)).toBe("read");
-    expect(extractLabelFromArgs("read", undefined)).toBe("read");
+function makeDetails(overrides: Partial<SubagentToolDetails> = {}): SubagentToolDetails {
+  return {
+    eventLog: [],
+    status: "running",
+    agent: "worker",
+    turns: 0,
+    totalTokens: 0,
+    elapsedSeconds: 0,
+    model: "anthropic/claude-sonnet-4.5",
+    thinkingLevel: "medium",
+    ...overrides,
+  };
+}
+
+describe("buildRenderLines — 压缩视图（6 行）", () => {
+  it("第1行：spinner + agent + model + thinking", () => {
+    const lines = buildRenderLines(makeDetails({ agent: "reviewer", model: "zhipu/glm-4.6", thinkingLevel: "high" }), 80, passthroughTheme);
+    expect(lines[0]).toContain("reviewer");
+    expect(lines[0]).toContain("zhipu/glm-4.6");
+    expect(lines[0]).toContain("thinking: high");
   });
 
-  it("extracts path for read/write/edit", () => {
-    expect(extractLabelFromArgs("read", { path: "extensions/foo/bar.ts" })).toBe("read bar.ts");
-    expect(extractLabelFromArgs("write", { path: "/abs/path/file.md" })).toBe("write file.md");
+  it("第1行：无 thinkingLevel 时不显示 thinking 段", () => {
+    const lines = buildRenderLines(makeDetails({ thinkingLevel: undefined }), 80, passthroughTheme);
+    expect(lines[0]).not.toContain("thinking:");
   });
 
-  it("extracts command for bash (truncated to 60)", () => {
-    const long = "x".repeat(80);
-    const result = extractLabelFromArgs("bash", { command: long });
-    expect(result).toBe(`bash ${"x".repeat(60)}`);
+  it("第1行：done 显示 ✓", () => {
+    const lines = buildRenderLines(makeDetails({ status: "done" }), 80, passthroughTheme);
+    expect(lines[0]).toContain("✓");
   });
 
-  it("extracts query/url for web_*", () => {
-    expect(extractLabelFromArgs("web_search", { query: "monorepo" })).toBe("web_search monorepo");
-    expect(extractLabelFromArgs("web_fetch", { url: "https://example.com" })).toBe("web_fetch https://example.com");
+  it("第1行：failed 显示 ✗", () => {
+    const lines = buildRenderLines(makeDetails({ status: "failed" }), 80, passthroughTheme);
+    expect(lines[0]).toContain("✗");
   });
 
-  it("returns toolName for unknown tool", () => {
-    expect(extractLabelFromArgs("custom_tool", { foo: "bar" })).toBe("custom_tool");
+  it("滚动区行带 ├─ 连接线", () => {
+    const lines = buildRenderLines(makeDetails({
+      eventLog: [
+        { type: "tool_end", label: "read auth.ts", ts: 0, status: "done" },
+        { type: "text_output", label: "scanning files", ts: 0 },
+      ],
+    }), 80, passthroughTheme);
+    const scrollLines = lines.slice(1, 5);
+    expect(scrollLines.some((l) => l.includes("├─"))).toBe(true);
+  });
+
+  it("tool_end 带 ✓ 或 ✗", () => {
+    const lines = buildRenderLines(makeDetails({
+      eventLog: [
+        { type: "tool_end", label: "read ok", ts: 0, status: "done" },
+        { type: "tool_end", label: "bash fail", ts: 0, status: "failed" },
+      ],
+    }), 80, passthroughTheme);
+    expect(lines.some((l) => l.includes("read ok") && l.includes("✓"))).toBe(true);
+    expect(lines.some((l) => l.includes("bash fail") && l.includes("✗"))).toBe(true);
+  });
+
+  it("tool_start 无 ⏳ 标记", () => {
+    const lines = buildRenderLines(makeDetails({
+      eventLog: [{ type: "tool_start", label: "read foo.ts", ts: 0, status: "running" }],
+    }), 80, passthroughTheme);
+    const toolLine = lines.find((l) => l.includes("read foo.ts"));
+    expect(toolLine).toBeDefined();
+    expect(toolLine!).not.toContain("⏳");
+  });
+
+  it("只显示最近 4 条事件", () => {
+    const eventLog = Array.from({ length: 8 }, (_, i) => ({
+      type: "tool_end" as const, label: `tool-${i}`, ts: i, status: "done" as const,
+    }));
+    const lines = buildRenderLines(makeDetails({ eventLog }), 80, passthroughTheme);
+    const scrollLines = lines.filter((l) => l.includes("├─"));
+    expect(scrollLines).toHaveLength(4);
+    expect(scrollLines[0]).toContain("tool-4");
+    expect(scrollLines[3]).toContain("tool-7");
+  });
+
+  it("thinking 行显示", () => {
+    const lines = buildRenderLines(makeDetails({
+      eventLog: [{ type: "thinking", label: "analyzing the structure", ts: 0 }],
+    }), 80, passthroughTheme);
+    expect(lines.some((l) => l.includes("analyzing the structure"))).toBe(true);
+  });
+
+  it("最后一行 stats 右对齐", () => {
+    const lines = buildRenderLines(makeDetails({ turns: 3, totalTokens: 12300, elapsedSeconds: 45 }), 80, passthroughTheme);
+    const lastLine = lines[lines.length - 1];
+    expect(lastLine).toContain("3 turns");
+    expect(lastLine).toContain("12.3k");
+    expect(lastLine).toContain("45s");
+    expect(lastLine.startsWith(" ")).toBe(true);
+  });
+
+  it("固定 6 行（事件不足时空行填充）", () => {
+    const lines = buildRenderLines(makeDetails({
+      eventLog: [{ type: "tool_end", label: "only one", ts: 0, status: "done" }],
+    }), 80, passthroughTheme);
+    expect(lines).toHaveLength(6);
   });
 });
 
-describe("formatEventLogLine", () => {
-  it("formats tool_start with ⟳ running", () => {
-    const entry: AgentEventLogEntry = { type: "tool_start", label: "read foo.ts", ts: 0, status: "running" };
-    expect(formatEventLogLine(entry, fakeTheme)).toContain("read foo.ts");
-    expect(formatEventLogLine(entry, fakeTheme)).toContain("running");
-  });
-
-  it("formats tool_end done with ✓", () => {
-    const entry: AgentEventLogEntry = { type: "tool_end", label: "edit bar.ts", ts: 0, status: "done" };
-    expect(formatEventLogLine(entry, fakeTheme)).toContain("edit bar.ts");
-    expect(formatEventLogLine(entry, fakeTheme)).toContain("✓");
-  });
-
-  it("formats tool_end failed with ✗", () => {
-    const entry: AgentEventLogEntry = { type: "tool_end", label: "bash npm test", ts: 0, status: "failed" };
-    expect(formatEventLogLine(entry, fakeTheme)).toContain("✗");
-  });
-
-  it("formats turn_end with turn number and summary", () => {
-    const entry: AgentEventLogEntry = { type: "turn_end", label: "Fixed the handler", ts: 0 };
-    const result = formatEventLogLine(entry, fakeTheme, 3);
-    expect(result).toContain("turn 3");
-    expect(result).toContain("Fixed the handler");
+describe("buildRenderLines — 展开视图", () => {
+  it("expanded=true 时显示全部 eventLog + result", () => {
+    const eventLog = Array.from({ length: 8 }, (_, i) => ({
+      type: "tool_end" as const, label: `tool-${i}`, ts: i, status: "done" as const,
+    }));
+    const lines = buildRenderLines(makeDetails({
+      status: "done", eventLog, result: "All done.",
+    }), 80, passthroughTheme, { expanded: true });
+    expect(lines.filter((l) => l.includes("├─")).length).toBeGreaterThanOrEqual(8);
+    expect(lines.some((l) => l.includes("All done."))).toBe(true);
   });
 });
 
-describe("formatStatusSummary", () => {
-  it("includes spinner, agent, turns, tokens, elapsed", () => {
-    const state = { id: "1", agent: "worker", status: "running" as const, turns: 3, totalTokens: 12000, elapsedSeconds: 45 };
-    const result = formatStatusSummary(state, 0, fakeTheme);
-    expect(result).toContain("worker");
-    expect(result).toContain("3 turns");
-    expect(result).toContain("12.0k");
-    expect(result).toContain("45s");
+describe("SubagentResultComponent", () => {
+  it("renders with background", () => {
+    const comp = new SubagentResultComponent(makeDetails({ turns: 2, totalTokens: 5000, elapsedSeconds: 30 }), passthroughTheme);
+    const lines = comp.render(80);
+    expect(lines.length).toBeGreaterThan(0);
+  });
+
+  it("update + re-render", () => {
+    const comp = new SubagentResultComponent(makeDetails({ agent: "worker" }), passthroughTheme);
+    comp.update(makeDetails({ agent: "reviewer", turns: 5 }));
+    const lines = comp.render(80);
+    expect(lines[0]).toContain("reviewer");
+  });
+
+  it("truncates long lines to width", () => {
+    const longLabel = "A".repeat(10_000);
+    const comp = new SubagentResultComponent(
+      makeDetails({ eventLog: [{ type: "text_output", label: longLabel, ts: 0 }] }),
+      passthroughTheme,
+    );
+    const width = 60;
+    const lines = comp.render(width);
+    for (const line of lines) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+  });
+
+  it("always renders 6 lines in compact mode", () => {
+    const comp = new SubagentResultComponent(
+      makeDetails({ eventLog: [{ type: "tool_end", label: "only one", ts: 0, status: "done" }] }),
+      passthroughTheme,
+    );
+    const lines = comp.render(80);
+    expect(lines).toHaveLength(6);
   });
 });
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [ ] **步骤 2：运行测试确认失败**
 
-Run: `cd extensions/subagents && npx vitest run src/__tests__/format.test.ts`
-Expected: FAIL（"format.extractLabelFromArgs is not a function" 等）
+运行：`cd extensions/subagents && npx vitest run src/__tests__/subagent-render.test.ts`
+预期：FAIL —— buildRenderLines 签名不匹配、布局未实现。
 
-- [ ] **Step 3: 在 format.ts 添加实现**
+- [ ] **步骤 3：重写 subagent-render.ts 核心**
+
+将 `extensions/subagents/src/tui/subagent-render.ts` 全文替换为：
 
 ```typescript
-// src/tui/format.ts（顶部 import 改为）
+// src/tui/subagent-render.ts
+//
+// Subagent tool result 对话流渲染（FR-2.1 ~ FR-2.4）。
+// 6 行压缩布局：status + 滚动区(4) + stats。
+// spinner 定时器由 subagent-tool.ts 的 renderSubagentResult 管理（存 ToolRenderContext.state）。
 
-// 在现有 import 之后添加
-import type { AgentEventLogEntry, WidgetAgentState } from "../types.ts";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-// 现有内容（formatConfigSummary 等）保留在下方
+import type { AgentEventLogEntry } from "../types.ts";
 
-/** SPINNER 帧序列（与 agent-widget.ts 一致） */
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const TOKEN_THOUSAND = 1000;
-const TOKEN_MILLION = 1000000;
-const BASH_CMD_MAX = 60;
+// ============================================================
+// Types
+// ============================================================
 
-/** Theme 接口（duck-typed，避免依赖 Pi 运行时） */
+export interface SubagentToolDetails {
+  eventLog: AgentEventLogEntry[];
+  status: "running" | "done" | "failed" | "cancelled";
+  agent: string;
+  turns: number;
+  totalTokens: number;
+  elapsedSeconds: number;
+  result?: string;
+  error?: string;
+  backgroundId?: string;
+  /** FR-1.2: "provider/modelId"（来自 ResolvedModel） */
+  model?: string;
+  /** FR-1.2: thinking level */
+  thinkingLevel?: string;
+}
+
 export interface ThemeLike {
-  fg(token: string, text: string): string;
+  bg(color: string, text: string): string;
+  fg(color: string, text: string): string;
   bold(text: string): string;
 }
 
-/**
- * FR-1.1a: 从 tool args 提取可展示 label。
- * 白名单 keys: read/write/edit → path (basename); bash → command; web_* → query/url。
- */
-export function extractLabelFromArgs(toolName: string, args: unknown): string {
-  if (!args || typeof args !== "object") return toolName;
-  const a = args as Record<string, unknown>;
-
-  if (toolName === "read" || toolName === "write" || toolName === "edit") {
-    if (typeof a.path === "string") {
-      return `${toolName} ${basename(a.path)}`;
-    }
-  }
-  if (toolName === "bash") {
-    if (typeof a.command === "string") {
-      const cmd = a.command.length > BASH_CMD_MAX ? a.command.slice(0, BASH_CMD_MAX) : a.command;
-      return `${toolName} ${cmd}`;
-    }
-  }
-  if (toolName === "web_search") {
-    if (typeof a.query === "string") return `${toolName} ${a.query}`;
-  }
-  if (toolName === "web_fetch") {
-    if (typeof a.url === "string") return `${toolName} ${a.url}`;
-  }
-  return toolName;
+export interface RenderOptions {
+  expanded?: boolean;
+  spinnerFrame?: number;
 }
 
-function basename(p: string): string {
-  const m = p.match(/[^/\\]+$/);
-  return m ? m[0] : p;
+// ============================================================
+// Spinner
+// ============================================================
+
+const RUNNING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+function statusGlyph(status: SubagentToolDetails["status"], frame: number, theme: ThemeLike): string {
+  switch (status) {
+    case "running": return theme.fg("accent", RUNNING_FRAMES[frame % RUNNING_FRAMES.length]);
+    case "done": return theme.fg("success", "✓");
+    case "failed": return theme.fg("error", "✗");
+    case "cancelled": return theme.fg("muted", "■");
+  }
 }
 
-/**
- * FR-2.1: 格式化事件日志条目为单行展示。
- * turnNumber 是当前 turn 数（可选，turn_end 时传）。
- */
+// ============================================================
+// Format helpers
+// ============================================================
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return `${n}`;
+}
+
+function formatScrollLine(entry: AgentEventLogEntry, theme: ThemeLike): string {
+  const prefix = theme.fg("dim", "├─ ");
+  switch (entry.type) {
+    case "tool_start": return `${prefix}${entry.label}`;
+    case "tool_end": {
+      const icon = entry.status === "failed" ? theme.fg("error", "✗") : theme.fg("success", "✓");
+      return `${prefix}${entry.label} ${icon}`;
+    }
+    case "text_output": return `${prefix}${entry.label}`;
+    case "thinking": return `${prefix}${theme.fg("dim", entry.label)}`;
+    case "turn_end": return `${prefix}${theme.fg("dim", "turn end")}`;
+    default: return `${prefix}${entry.label}`;
+  }
+}
+
+// ============================================================
+// buildRenderLines
+// ============================================================
+
+export function buildRenderLines(
+  details: SubagentToolDetails,
+  width: number,
+  theme: ThemeLike,
+  options: RenderOptions = {},
+): string[] {
+  if (options.expanded) return buildExpandedLines(details, theme, options.spinnerFrame ?? 0);
+  return buildCompactLines(details, width, theme, options.spinnerFrame ?? 0);
+}
+
+function buildCompactLines(details: SubagentToolDetails, width: number, theme: ThemeLike, frame: number): string[] {
+  const lines: string[] = [];
+
+  // 第 1 行：spinner + agent + model + thinking
+  const glyph = statusGlyph(details.status, frame, theme);
+  const modelPart = details.model ? ` │ ${details.model}` : "";
+  const thinkingPart = details.thinkingLevel ? ` │ thinking: ${details.thinkingLevel}` : "";
+  lines.push(`${glyph} ${details.agent}${modelPart}${thinkingPart}`);
+
+  // 第 2-5 行：滚动区（最近 4 条）
+  const recent = (details.eventLog ?? []).slice(-4);
+  for (const entry of recent) {
+    lines.push(formatScrollLine(entry, theme));
+  }
+  while (lines.length < 5) lines.push(""); // 空行填充
+
+  // 第 6 行：stats 右对齐
+  const stats = `${details.turns} turns │ ${formatTokens(details.totalTokens)} │ ${details.elapsedSeconds}s`;
+  const padNeeded = Math.max(0, width - visibleWidth(stats) - 2);
+  lines.push(" ".repeat(padNeeded) + theme.fg("dim", stats));
+
+  return lines;
+}
+
+function buildExpandedLines(details: SubagentToolDetails, theme: ThemeLike, frame: number): string[] {
+  const lines: string[] = [];
+  const glyph = statusGlyph(details.status, frame, theme);
+  const modelPart = details.model ? ` │ ${details.model}` : "";
+  const thinkingPart = details.thinkingLevel ? ` │ thinking: ${details.thinkingLevel}` : "";
+  lines.push(`${glyph} ${details.agent}${modelPart}${thinkingPart}`);
+
+  let turnNumber = 0;
+  for (const entry of details.eventLog ?? []) {
+    if (entry.type === "turn_end") {
+      turnNumber++;
+      lines.push(theme.fg("dim", `── turn ${turnNumber} ──`));
+      continue;
+    }
+    lines.push(formatScrollLine(entry, theme));
+  }
+
+  if (details.status === "done" && details.result) {
+    lines.push("");
+    for (const l of details.result.split("\n")) lines.push(l);
+  }
+  if (details.status === "failed" && details.error) {
+    lines.push("");
+    lines.push(theme.fg("error", `Error: ${details.error}`));
+  }
+  return lines;
+}
+
+// ============================================================
+// Component
+// ============================================================
+
+export class SubagentResultComponent {
+  private _details: SubagentToolDetails;
+  private _theme: ThemeLike;
+  private _spinnerFrame = 0;
+  private _expanded = false;
+
+  constructor(details: SubagentToolDetails, theme: ThemeLike) {
+    this._details = details;
+    this._theme = theme;
+  }
+
+  update(details: SubagentToolDetails): void {
+    this._details = details;
+  }
+
+  setSpinnerFrame(frame: number): void {
+    this._spinnerFrame = frame;
+  }
+
+  setExpanded(expanded: boolean): void {
+    this._expanded = expanded;
+  }
+
+  invalidate(): void {}
+
+  render(width: number): string[] {
+    const lines = buildRenderLines(this._details, width, this._theme, {
+      expanded: this._expanded,
+      spinnerFrame: this._spinnerFrame,
+    });
+    return lines.map((line) => this.applyBg(line, width));
+  }
+
+  private applyBg(text: string, width: number): string {
+    const bgFn = this.getBgFn();
+    const contentWidth = Math.max(1, width - 2);
+    const truncated = visibleWidth(text) > contentWidth ? truncateToWidth(text, contentWidth) : text;
+    const padNeeded = Math.max(0, contentWidth - visibleWidth(truncated));
+    const padded = ` ${truncated}${" ".repeat(padNeeded)} `;
+    return bgFn ? bgFn(padded) : padded;
+  }
+
+  private getBgFn(): ((text: string) => string) | undefined {
+    switch (this._details.status) {
+      case "running": return (t: string) => this._theme.bg("toolPendingBg", t);
+      case "done": return (t: string) => this._theme.bg("toolSuccessBg", t);
+      case "failed":
+      case "cancelled": return (t: string) => this._theme.bg("toolErrorBg", t);
+    }
+  }
+}
+```
+
+- [ ] **步骤 4：更新 format.ts 的 formatEventLogLine**
+
+在 `extensions/subagents/src/tui/format.ts` 找到 `formatEventLogLine`（约 89 行），替换为：
+
+```typescript
 export function formatEventLogLine(
   entry: AgentEventLogEntry,
   theme: ThemeLike,
@@ -622,1653 +709,615 @@ export function formatEventLogLine(
     return `├─ turn ${turnNumber ?? "?"}: "${entry.label}"`;
   }
   if (entry.type === "tool_start") {
-    return `├─ ${entry.label}  ${theme.fg("warning", "⟳ running")}`;
+    return `├─ ${entry.label}`;
   }
-  // tool_end
-  const icon = entry.status === "failed" ? theme.fg("error", "✗") : theme.fg("success", "✓");
-  return `├─ ${entry.label}  ${icon}`;
-}
-
-/**
- * FR-2.1: inline widget 第 1 行 status summary。
- */
-export function formatStatusSummary(
-  state: WidgetAgentState,
-  spinnerFrame: number,
-  _theme: ThemeLike,
-): string {
-  const spinner = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length];
-  const turns = state.turns ?? 0;
-  const tokens = formatTokens(state.totalTokens ?? 0);
-  const elapsed = state.elapsedSeconds ?? 0;
-  return `${spinner} ${state.agent} │ ${turns} turns │ ${tokens} │ ${elapsed}s`;
-}
-
-/** 格式化 token 数（12345 → "12.3k"） */
-function formatTokens(n: number): string {
-  if (n >= TOKEN_MILLION) return `${(n / TOKEN_MILLION).toFixed(1)}M token`;
-  if (n >= TOKEN_THOUSAND) return `${(n / TOKEN_THOUSAND).toFixed(1)}k token`;
-  return `${n} token`;
+  if (entry.type === "tool_end") {
+    const icon = entry.status === "failed" ? theme.fg("error", "✗") : theme.fg("success", "✓");
+    return `├─ ${entry.label} ${icon}`;
+  }
+  if (entry.type === "thinking") {
+    return `├─ ${theme.fg("dim", entry.label)}`;
+  }
+  // text_output
+  return `├─ ${entry.label}`;
 }
 ```
 
-（注意：`format.ts` 当前 33 行，只有 `formatConfigSummary`。需要添加 import 在顶部）
+- [ ] **步骤 5：运行测试确认通过**
 
-- [ ] **Step 4: 运行测试确认通过**
+运行：`cd extensions/subagents && npx vitest run src/__tests__/subagent-render.test.ts`
+预期：PASS
 
-Run: `cd extensions/subagents && npx vitest run src/__tests__/format.test.ts`
-Expected: PASS
+- [ ] **步骤 6：运行 tsc（subagent-tool.ts 可能报错，记下留给任务 4）**
 
-- [ ] **Step 5: 运行 typecheck**
+运行：`cd extensions/subagents && npx tsc --noEmit 2>&1 | head -20`
+预期：subagent-tool.ts 引用旧的 `createRenderResult` 会报错 —— 正常，任务 4 修复。
 
-Run: `cd extensions/subagents && npx tsc --noEmit`
-Expected: PASS
-
-- [ ] **Step 6: Commit**
+- [ ] **步骤 7：提交**
 
 ```bash
-git add extensions/subagents/src/tui/format.ts extensions/subagents/src/__tests__/format.test.ts
-git commit -m "feat(subagents): add event log formatting helpers"
+git add extensions/subagents/src/tui/subagent-render.ts extensions/subagents/src/tui/format.ts extensions/subagents/src/__tests__/subagent-render.test.ts
+git commit -m "feat(subagents): rewrite buildRenderLines to 6-line compact + expanded layout (FR-2.1, FR-2.4)"
 ```
 
 ---
 
-### Task 4: updateWidgetFromEvent 改为追加式
+### 任务 4: subagent-tool.ts — renderResult 定时器 + context 参数 + details 加 model
 
-**Type:** backend
-**Files:**
-- Modify: `extensions/subagents/src/runtime.ts`
-- Create: `extensions/subagents/src/__tests__/runtime-eventlog.test.ts`
+**文件：**
+- 修改：`extensions/subagents/src/tools/subagent-tool.ts`（renderResult 提取为 renderSubagentResult 函数、background 分支传 onUpdate、buildDetails 加 model）
 
-**Depends on:** Task 1, 2, 3
+- [ ] **步骤 1：编写失败的测试**
 
-- [ ] **Step 1: 创建测试文件 runtime-eventlog.test.ts**
+在 `extensions/subagents/src/__tests__/subagent-tool.test.ts` 顶部 import 区追加：
 
 ```typescript
-// src/__tests__/runtime-eventlog.test.ts
-import { describe, expect, it } from "vitest";
+import { renderSubagentResult, initialToolState } from "../tools/subagent-tool.ts";
+```
 
-import { updateWidgetFromEvent } from "../runtime.ts";  // 需 export
-import type { WidgetAgentState } from "../tui/agent-widget.ts";
-import { MAX_EVENT_LOG_ENTRIES } from "../types.ts";
+在文件末尾追加：
 
-function makeWidgetState(overrides: Partial<WidgetAgentState> = {}): WidgetAgentState {
-  return {
-    id: "run-1",
-    agent: "worker",
-    status: "running",
-    ...overrides,
-  } as WidgetAgentState;
-}
+```typescript
+describe("renderSubagentResult — spinner timer lifecycle", () => {
+  const fakeTheme = { bg: (_c: string, t: string) => t, fg: (_c: string, t: string) => t, bold: (t: string) => t };
 
-describe("updateWidgetFromEvent — append mode", () => {
-  it("tool_start pushes eventLog entry with label and running status", () => {
-    const s = makeWidgetState();
-    updateWidgetFromEvent(s, { type: "tool_start", toolName: "read", args: { path: "foo/bar.ts" } }, Date.now());
-    expect(s.eventLog).toHaveLength(1);
-    expect(s.eventLog![0].type).toBe("tool_start");
-    expect(s.eventLog![0].label).toBe("read bar.ts");
-    expect(s.eventLog![0].status).toBe("running");
-  });
-
-  it("tool_end pushes entry with done status", () => {
-    const s = makeWidgetState();
-    updateWidgetFromEvent(s, { type: "tool_start", toolName: "read" }, Date.now());
-    updateWidgetFromEvent(s, { type: "tool_end", toolName: "read", isError: false }, Date.now());
-    expect(s.eventLog).toHaveLength(2);
-    expect(s.eventLog![1].type).toBe("tool_end");
-    expect(s.eventLog![1].status).toBe("done");
-  });
-
-  it("tool_end failed pushes entry with failed status", () => {
-    const s = makeWidgetState();
-    updateWidgetFromEvent(s, { type: "tool_end", toolName: "bash", isError: true }, Date.now());
-    expect(s.eventLog![0].status).toBe("failed");
-  });
-
-  it("turn_end slices _currentTurnText and resets it", () => {
-    const s = makeWidgetState();
-    updateWidgetFromEvent(s, { type: "text_delta", delta: "Hello " }, Date.now());
-    updateWidgetFromEvent(s, { type: "text_delta", delta: "world" }, Date.now());
-    updateWidgetFromEvent(s, { type: "turn_end" }, Date.now());
-    expect(s.eventLog).toHaveLength(1);
-    expect(s.eventLog![0].type).toBe("turn_end");
-    expect(s.eventLog![0].label).toBe("Hello world");
-    expect(s._currentTurnText).toBe("");
-  });
-
-  it("turn_end truncates label to TURN_SUMMARY_MAX", () => {
-    const s = makeWidgetState();
-    const longText = "x".repeat(200);
-    updateWidgetFromEvent(s, { type: "text_delta", delta: longText }, Date.now());
-    updateWidgetFromEvent(s, { type: "turn_end" }, Date.now());
-    expect(s.eventLog![0].label).toHaveLength(80);
-  });
-
-  it("message_end does NOT push eventLog entry (only updates totalTokens)", () => {
-    const s = makeWidgetState();
-    updateWidgetFromEvent(
-      s,
-      { type: "message_end", usage: { input: 100, output: 200, cacheRead: 0, cacheWrite: 0, cost: 0 } },
-      Date.now(),
+  it("starts timer when status=running", () => {
+    const state = initialToolState();
+    const context = { state, invalidate() {} };
+    renderSubagentResult(
+      { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "running", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
+      { expanded: false },
+      fakeTheme,
+      context,
     );
-    expect(s.eventLog ?? []).toHaveLength(0);
-    expect(s.totalTokens).toBe(300);
+    expect(state.timer).toBeDefined();
+    if (state.timer) clearInterval(state.timer);
   });
 
-  it("ring buffer evicts oldest entry when exceeding MAX_EVENT_LOG_ENTRIES", () => {
-    const s = makeWidgetState();
-    for (let i = 0; i < MAX_EVENT_LOG_ENTRIES + 5; i++) {
-      updateWidgetFromEvent(s, { type: "tool_start", toolName: "read" }, Date.now());
-    }
-    expect(s.eventLog).toHaveLength(MAX_EVENT_LOG_ENTRIES);
+  it("clears timer when status=done", () => {
+    const state = initialToolState();
+    state.timer = setInterval(() => {}, 99999);
+    const context = { state, invalidate() {} };
+    renderSubagentResult(
+      { content: [{ type: "text", text: "ok" }], details: { eventLog: [], status: "done", agent: "w", turns: 1, totalTokens: 100, elapsedSeconds: 5 } },
+      { expanded: false },
+      fakeTheme,
+      context,
+    );
+    expect(state.timer).toBeUndefined();
   });
 
-  it("preserves activity field for backward compat", () => {
-    const s = makeWidgetState();
-    updateWidgetFromEvent(s, { type: "tool_start", toolName: "read" }, Date.now());
-    expect(s.activity).toBe("read");
+  it("does not crash without details (fallback)", () => {
+    const state = initialToolState();
+    const context = { state, invalidate() {} };
+    const comp = renderSubagentResult(
+      { content: [{ type: "text", text: "plain" }] },
+      { expanded: false },
+      fakeTheme,
+      context,
+    );
+    expect(comp).toBeDefined();
+    expect(state.timer).toBeUndefined();
   });
 });
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [ ] **步骤 2：运行测试确认失败**
 
-Run: `cd extensions/subagents && npx vitest run src/__tests__/runtime-eventlog.test.ts`
-Expected: FAIL（`updateWidgetFromEvent` 未 export + 行为未实现）
+运行：`cd extensions/subagents && npx vitest run src/__tests__/subagent-tool.test.ts -t "renderSubagentResult"`
+预期：FAIL —— `renderSubagentResult` / `initialToolState` 未导出。
 
-- [ ] **Step 3: 修改 runtime.ts**
+- [ ] **步骤 3：在 subagent-tool.ts 提取 renderSubagentResult + 定时器逻辑**
+
+在 `extensions/subagents/src/tools/subagent-tool.ts` 的 import 区确认有：
 
 ```typescript
-// src/runtime.ts（修改 import + function）
+import { SubagentResultComponent, type SubagentToolDetails } from "../tui/subagent-render.ts";
+```
 
-// 顶部 import 区域添加
-import {
-  type AgentEventLogEntry,
-  COMPLETED_AGENTS_MAX,
-  type CompletedAgentRecord,
-  MAX_EVENT_LOG_ENTRIES,
-  STALLED_TIMEOUT_MS,
-  TURN_SUMMARY_MAX,
-  WIDGET_EVENT_LINES,
-} from "./types.ts";
-import { extractLabelFromArgs } from "./tui/format.ts";
+在 `registerSubagentTool` 函数**之前**新增：
 
-// export updateWidgetFromEvent（从 module-level 改为 exported）
-export function updateWidgetFromEvent(
-  state: WidgetAgentState,
-  event: { type: string; toolName?: string; args?: unknown; usage?: { input: number; output: number; cacheRead: number; cacheWrite: number }; delta?: string; isError?: boolean },
-  startTime: number,
-): void {
-  // 类型扩展：eventLog 和 _currentTurnText 初始为 []
-  const s = state as WidgetAgentState & {
+```typescript
+/** FR-2.3: spinner 定时器 state（ToolDefinition 的 TState） */
+export interface SubagentToolState {
+  timer?: ReturnType<typeof setInterval>;
+  frame: number;
+}
+
+export function initialToolState(): SubagentToolState {
+  return { frame: 0 };
+}
+
+/**
+ * FR-2.3: renderResult 逻辑——管理 spinner 定时器生命周期。
+ * running 时启动 setInterval(250ms) → context.invalidate()；done/failed 时 clearInterval。
+ * 定时器存 context.state（pi-tui Component 无 destroy 钩子，state 是唯一销毁点）。
+ */
+export function renderSubagentResult(
+  result: { content: Array<{ type: string; text?: string }>; details?: unknown },
+  options: { expanded: boolean },
+  theme: { bg(color: string, text: string): string; fg(color: string, text: string): string; bold(text: string): string },
+  context: { state: SubagentToolState; invalidate(): void },
+): SubagentResultComponent {
+  const details = result.details as SubagentToolDetails | undefined;
+  if (!details) {
+    return new SubagentResultComponent(
+      { eventLog: [], status: "done", agent: "default", turns: 0, totalTokens: 0, elapsedSeconds: 0 },
+      theme,
+    );
+  }
+
+  const comp = new SubagentResultComponent(details, theme);
+  comp.setExpanded(options.expanded);
+
+  if (details.status === "running") {
+    if (!context.state.timer) {
+      context.state.timer = setInterval(() => {
+        context.state.frame = (context.state.frame + 1) % 10;
+        comp.setSpinnerFrame(context.state.frame);
+        context.invalidate();
+      }, 250);
+      context.state.timer.unref?.();
+    }
+    comp.setSpinnerFrame(context.state.frame);
+  } else {
+    if (context.state.timer) {
+      clearInterval(context.state.timer);
+      context.state.timer = undefined;
+    }
+  }
+
+  return comp;
+}
+```
+
+- [ ] **步骤 4：替换 registerSubagentTool 内的 renderResult 字段**
+
+在 `extensions/subagents/src/tools/subagent-tool.ts` 找到 `renderResult` 字段（约 92 行），替换为：
+
+```typescript
+    renderResult(
+      result: AgentToolResult<SubagentToolDetails>,
+      options: { expanded: boolean; isPartial: boolean },
+      theme: Theme,
+      context: { state: SubagentToolState; invalidate(): void },
+    ) {
+      return renderSubagentResult(result, options, theme, context);
+    },
+```
+
+删除对旧 `createRenderResult` 的 import（文件顶部，约 24 行 —— 若有 `import { createRenderResult }` 则删除该行）。
+
+- [ ] **步骤 5：buildDetails 加 model/thinkingLevel**
+
+在 sync 分支找到 `const startTime = Date.now();`（约 197 行）后追加 model 解析：
+
+```typescript
+      // FR-1.2: 解析 model/thinkingLevel（resolveModelForAgent 在任务 5 实现）
+      const resolved = rt.resolveModelForAgent?.(params.agent);
+      const resolvedModelId = resolved?.model.id;
+      const resolvedThinkingLevel = resolved?.thinkingLevel;
+```
+
+找到 `buildDetails`（约 206 行），替换为：
+
+```typescript
+      const buildDetails = (status: SubagentToolDetails["status"]): SubagentToolDetails => ({
+        eventLog: [...eventLog],
+        status,
+        agent: agentName,
+        turns,
+        totalTokens,
+        elapsedSeconds: Math.floor((Date.now() - startTime) / MS_PER_SECOND),
+        model: resolvedModelId,
+        thinkingLevel: resolvedThinkingLevel,
+      });
+```
+
+- [ ] **步骤 6：运行测试确认通过**
+
+运行：`cd extensions/subagents && npx vitest run src/__tests__/subagent-tool.test.ts -t "renderSubagentResult"`
+预期：PASS
+
+- [ ] **步骤 7：提交**
+
+```bash
+git add extensions/subagents/src/tools/subagent-tool.ts extensions/subagents/src/__tests__/subagent-tool.test.ts
+git commit -m "feat(subagents): spinner timer lifecycle in renderResult (FR-2.3, FR-1.2)"
+```
+
+---
+
+### 任务 5: runtime.ts — startBackground onUpdate + resolveModelForAgent
+
+**文件：**
+- 修改：`extensions/subagents/src/types.ts:179-182`（BackgroundOptions）
+- 修改：`extensions/subagents/src/runtime.ts:408-490`（startBackground）、新增 resolveModelForAgent
+- 修改：`extensions/subagents/src/tools/subagent-tool.ts:170-194`（background 分支）
+- 测试：`extensions/subagents/src/__tests__/background.test.ts`
+
+- [ ] **步骤 1：编写失败的测试**
+
+先查看 `extensions/subagents/src/__tests__/background.test.ts` 顶部的 runtime 工厂函数名（通常是 `createTestRuntime` 或类似）。
+
+运行：`cd extensions/subagents && head -30 src/__tests__/background.test.ts`
+
+在文件末尾追加（`createTestRuntime` 替换为实际函数名）：
+
+```typescript
+describe("startBackground onUpdate callback (FR-2.5)", () => {
+  it("invokes onUpdate with running details during execution", async () => {
+    const rt = createTestRuntime();
+    const updates: Array<{ status: string; turns: number }> = [];
+    const handle = rt.startBackground({
+      task: "test task",
+      agent: "worker",
+      onUpdate: (d) => updates.push({ status: d.status, turns: d.turns }),
+    });
+    expect(handle.id).toMatch(/^bg-/);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(updates.length).toBeGreaterThan(0);
+    expect(updates[0].status).toBe("running");
+    rt.cancelBackground(handle.id);
+  });
+});
+```
+
+- [ ] **步骤 2：运行测试确认失败**
+
+运行：`cd extensions/subagents && npx vitest run src/__tests__/background.test.ts -t "onUpdate"`
+预期：FAIL —— BackgroundOptions 不接受 onUpdate。
+
+- [ ] **步骤 3：修改 BackgroundOptions 类型**
+
+在 `extensions/subagents/src/types.ts` 找到 `BackgroundOptions`（约 179 行），替换为：
+
+```typescript
+export interface BackgroundOptions extends RunAgentOptions {
+  /** 任务完成（成功/失败/取消）时回调 */
+  onComplete?: (status: BackgroundStatus) => void;
+  /** FR-2.5: 执行中事件回流（使对话流 block 实时刷新） */
+  onUpdate?: (details: {
     eventLog: AgentEventLogEntry[];
-    _currentTurnText?: string;
+    status: "running" | "done" | "failed" | "cancelled";
     turns: number;
     totalTokens: number;
     elapsedSeconds: number;
-  };
-  if (!s.eventLog) s.eventLog = [];
+  }) => void;
+}
+```
 
-  switch (event.type) {
-    case "tool_start": {
-      const label = extractLabelFromArgs(event.toolName ?? "working", event.args);
-      s.activity = event.toolName ?? "working";
-      s.eventLog.push({ type: "tool_start", label, ts: Date.now(), status: "running" });
-      break;
-    }
-    case "tool_end": {
-      const label = extractLabelFromArgs(event.toolName ?? "working", event.args);
-      s.activity = "thinking…";
-      s.eventLog.push({ type: "tool_end", label, ts: Date.now(), status: event.isError ? "failed" : "done" });
-      break;
-    }
-    case "text_delta": {
-      // FR-1.1b: 累加 delta 供 turn_end 切片
-      s._currentTurnText = (s._currentTurnText ?? "") + (event.delta ?? "");
-      break;
-    }
-    case "turn_end": {
-      // FR-1.1b: 切片生成摘要，重置缓冲
-      const summary = (s._currentTurnText ?? "").slice(0, TURN_SUMMARY_MAX);
-      s.eventLog.push({ type: "turn_end", label: summary, ts: Date.now() });
-      s._currentTurnText = "";
-      s.turns = (s.turns ?? 0) + 1;
-      break;
-    }
-    case "message_end": {
-      if (event.usage) {
-        s.totalTokens = (s.totalTokens ?? 0) + event.usage.input + event.usage.output + event.usage.cacheRead + event.usage.cacheWrite;
+- [ ] **步骤 4：修改 startBackground — 注入 onUpdate 拦截器**
+
+在 `extensions/subagents/src/runtime.ts` 顶部 import 区确认有 `AgentEventLogEntry`（从 types.ts，若无则补）。
+
+找到 `startBackground` 内的 `this.runAgent({ ...opts, signal })`（约 426 行），替换为：
+
+```typescript
+    const signal = opts.signal ?? controller.signal;
+    const userOnUpdate = opts.onUpdate;
+    const userOnEvent = opts.onEvent;
+    const bgStartTime = Date.now();
+    const bgState: WidgetAgentState = { id, agent: opts.agent ?? "default", status: "running", eventLog: [] };
+    let bgTurns = 0;
+    let bgTokens = 0;
+    this.runAgent({
+      ...opts,
+      signal,
+      onEvent: (event) => {
+        userOnEvent?.(event);
+        // FR-1.3/2.5: 共享 eventLog 构建 + 推送 onUpdate
+        updateWidgetFromEvent(bgState, event, bgStartTime);
+        if (event.type === "turn_end") bgTurns = bgState.turns ?? bgTurns;
+        if (event.type === "message_end" && event.usage) {
+          bgTokens += event.usage.input + event.usage.output + event.usage.cacheRead + event.usage.cacheWrite;
+        }
+        userOnUpdate?.({
+          eventLog: [...(bgState.eventLog ?? [])],
+          status: "running",
+          turns: bgTurns,
+          totalTokens: bgTokens,
+          elapsedSeconds: Math.floor((Date.now() - bgStartTime) / 1000),
+        });
+      },
+    })
+```
+
+- [ ] **步骤 5：修改 subagent-tool.ts background 分支传 onUpdate**
+
+在 `extensions/subagents/src/tools/subagent-tool.ts` 找到 background 分支（约 170 行），替换为：
+
+```typescript
+      // ── Mode 2: background ──────────────────────────────
+      if (params.wait === false) {
+        const agentName = params.agent ?? "default";
+        const resolved = rt.resolveModelForAgent?.(params.agent);
+        const handle = rt.startBackground({
+          task: params.task,
+          agent: params.agent,
+          signal,
+          onUpdate: (bgDetails) => {
+            onUpdate?.({
+              content: [{ type: "text" as const, text: `[subagent] ${bgDetails.turns} turns | ${bgDetails.totalTokens} tokens | ${bgDetails.elapsedSeconds}s` }],
+              details: {
+                eventLog: bgDetails.eventLog,
+                status: bgDetails.status,
+                agent: agentName,
+                turns: bgDetails.turns,
+                totalTokens: bgDetails.totalTokens,
+                elapsedSeconds: bgDetails.elapsedSeconds,
+                backgroundId: handle.id,
+                model: resolved?.model.id,
+                thinkingLevel: resolved?.thinkingLevel,
+              },
+            });
+          },
+        });
+        const details: SubagentToolDetails = {
+          eventLog: [],
+          status: "running",
+          agent: agentName,
+          turns: 0,
+          totalTokens: 0,
+          elapsedSeconds: 0,
+          backgroundId: handle.id,
+          model: resolved?.model.id,
+          thinkingLevel: resolved?.thinkingLevel,
+        };
+        return {
+          content: [{ type: "text" as const, text: `Started background subagent ${handle.id}. Call this tool again with backgroundId="${handle.id}" to check its result.` }],
+          details,
+        };
       }
-      break;
-    }
-    default:
-      break;
-  }
-
-  // Ring buffer: 超上限移除最旧
-  while (s.eventLog.length > MAX_EVENT_LOG_ENTRIES) {
-    s.eventLog.shift();
-  }
-  s.elapsedSeconds = Math.floor((Date.now() - startTime) / MS_PER_SECOND);
-}
 ```
 
-同时修改 `WidgetAgentState` import 类型断言（runtime.ts 顶部）：
+- [ ] **步骤 6：添加 resolveModelForAgent 到 runtime**
+
+先确认 resolution 目录结构：
+
+运行：`ls extensions/subagents/src/resolution/`
+
+在 `extensions/subagents/src/runtime.ts` 的 `SubagentRuntime` 类内（约 396 行 `createManagedSession` 前）追加。import 路径以实际 resolution 目录为准：
 
 ```typescript
-// src/runtime.ts（修改 WidgetAgentState import 处的类型断言）
-// 原来：const widgetState: WidgetAgentState = { id, agent, status: "running", elapsedSeconds: 0 };
-// 改为：
-const widgetState = {
-  id: widgetId,
-  agent: opts.agent ?? "default",
-  status: "running" as const,
-  elapsedSeconds: 0,
-  eventLog: [] as AgentEventLogEntry[],
-};
+  /** FR-1.2: 解析 agent 的 model + thinkingLevel（供 tool 构建 details） */
+  resolveModelForAgent(agentName?: string): ResolvedModel | undefined {
+    if (!this.modelRegistry) return undefined;
+    const agent = agentName
+      ? (this.agentRegistry.find(agentName) ?? this.builtinRegistry.find(agentName))
+      : undefined;
+    return resolveModel({
+      agent,
+      sessionState: this.sessionState,
+      globalConfig: this.globalConfig,
+      modelRegistry: this.modelRegistry,
+    });
+  }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+在 runtime.ts 顶部 import 区追加（路径以 `ls` 结果为准，通常是 `./resolution/model-resolver.ts`）：
 
-Run: `cd extensions/subagents && npx vitest run src/__tests__/runtime-eventlog.test.ts`
-Expected: PASS（8 个测试）
+```typescript
+import { resolveModel } from "./resolution/model-resolver.ts";
+```
 
-- [ ] **Step 5: 运行 typecheck**
+若 `resolveModel` 的参数签名不同，读 `resolution/model-resolver.ts` 的导出函数签名并调整上述调用的参数对象。
 
-Run: `cd extensions/subagents && npx tsc --noEmit`
-Expected: PASS
+- [ ] **步骤 7：运行测试确认通过**
 
-- [ ] **Step 6: Commit**
+运行：`cd extensions/subagents && npx vitest run src/__tests__/background.test.ts`
+预期：PASS
+
+- [ ] **步骤 8：运行 tsc**
+
+运行：`cd extensions/subagents && npx tsc --noEmit`
+预期：无错误
+
+- [ ] **步骤 9：提交**
 
 ```bash
-git add extensions/subagents/src/runtime.ts extensions/subagents/src/__tests__/runtime-eventlog.test.ts
-git commit -m "feat(subagents): append event log entries in updateWidgetFromEvent"
+git add extensions/subagents/src/types.ts extensions/subagents/src/runtime.ts extensions/subagents/src/tools/subagent-tool.ts extensions/subagents/src/__tests__/background.test.ts
+git commit -m "feat(subagents): background onUpdate回流 + resolveModelForAgent (FR-2.5, FR-1.2)"
 ```
 
 ---
 
-### Task 5: 增强 inline widget 渲染
+### 任务 6: 删除 inline widget 渲染层 + 修复 getAllRecords 数据源
 
-**Type:** backend
-**Files:**
-- Modify: `extensions/subagents/src/tui/agent-widget.ts`
-- Modify: `extensions/subagents/src/__tests__/agent-widget.test.ts`
+**文件：**
+- 修改：`extensions/subagents/src/tui/agent-widget.ts`（精简为只剩 WidgetAgentState）
+- 修改：`extensions/subagents/src/runtime.ts`（删 widget 字段/方法，加 _runningAgents map）
+- 修改：`extensions/subagents/src/index.ts`（删注释）
+- 修改：`extensions/subagents/src/tui/subagents-view.ts`（getAllRecords 数据源）
+- 删除：`extensions/subagents/src/__tests__/agent-widget.test.ts`
 
-**Depends on:** Task 3, 4
+- [ ] **步骤 1：精简 agent-widget.ts**
 
-- [ ] **Step 1: 添加 widget 渲染测试到 agent-widget.test.ts**
-
-在 `extensions/subagents/src/__tests__/agent-widget.test.ts` 末尾添加：
-
-```typescript
-// src/__tests__/agent-widget.test.ts（在末尾添加）
-
-import { STALLED_TIMEOUT_MS, type AgentEventLogEntry } from "../types.ts";
-
-describe("renderWidget — eventLog scrolling", () => {
-  it("shows status summary + recent eventLog entries", () => {
-    const state: WidgetAgentState = {
-      id: "1", agent: "worker", status: "running", turns: 2, totalTokens: 5000, elapsedSeconds: 30,
-      eventLog: [
-        { type: "tool_start", label: "read foo.ts", ts: 0, status: "running" },
-        { type: "tool_end", label: "edit bar.ts", ts: 0, status: "done" },
-        { type: "turn_end", label: "Fixed X", ts: 0 },
-      ],
-    };
-    const lines = renderWidget([state], 0);
-    expect(lines[0]).toContain("worker");
-    expect(lines[0]).toContain("2 turns");
-    expect(lines[1]).toContain("read foo.ts");
-    expect(lines[1]).toContain("running");
-    expect(lines.some((l) => l.includes("edit bar.ts") && l.includes("✓"))).toBe(true);
-    expect(lines.some((l) => l.includes("turn") && l.includes("Fixed X"))).toBe(true);
-  });
-
-  it("limits total lines to MAX_WIDGET_LINES (12)", () => {
-    const state: WidgetAgentState = {
-      id: "1", agent: "worker", status: "running", turns: 0, totalTokens: 0, elapsedSeconds: 0,
-      eventLog: Array.from({ length: 50 }, (_, i) => ({
-        type: "tool_start" as const, label: `tool-${i}`, ts: 0, status: "running" as const,
-      })),
-    };
-    const lines = renderWidget([state], 0);
-    expect(lines.length).toBeLessThanOrEqual(12);
-  });
-
-  it("shows ⚠ possibly stalled when last event older than STALLED_TIMEOUT_MS", () => {
-    const state: WidgetAgentState = {
-      id: "1", agent: "worker", status: "running", turns: 1, totalTokens: 100, elapsedSeconds: 600,
-      eventLog: [{ type: "tool_start", label: "old tool", ts: Date.now() - STALLED_TIMEOUT_MS - 1000, status: "running" }],
-    };
-    const lines = renderWidget([state], 0);
-    expect(lines.some((l) => l.includes("stalled"))).toBe(true);
-  });
-
-  it("distributes lines across multiple running agents", () => {
-    const states: WidgetAgentState[] = [
-      { id: "1", agent: "a", status: "running", turns: 0, eventLog: Array.from({ length: 5 }, (_, i) => ({ type: "tool_start" as const, label: `t${i}`, ts: 0, status: "running" as const })) },
-      { id: "2", agent: "b", status: "running", turns: 0, eventLog: Array.from({ length: 5 }, (_, i) => ({ type: "tool_start" as const, label: `u${i}`, ts: 0, status: "running" as const })) },
-    ];
-    const lines = renderWidget(states, 0);
-    // 每 agent 至少 1 行 eventLog
-    expect(lines.length).toBeLessThanOrEqual(12);
-  });
-});
-```
-
-- [ ] **Step 2: 运行测试确认失败**
-
-Run: `cd extensions/subagents && npx vitest run src/__tests__/agent-widget.test.ts`
-Expected: FAIL（新测试失败，原有 7 个仍 PASS）
-
-- [ ] **Step 3: 修改 renderWidget 实现**
+将 `extensions/subagents/src/tui/agent-widget.ts` 全文替换为：
 
 ```typescript
-// src/tui/agent-widget.ts（修改 renderWidget）
+// src/tui/agent-widget.ts
+//
+// FR-2.0: inline widget 渲染层已删除。
+// 仅保留 WidgetAgentState 作为 running agent 状态载体（/subagents list 数据源）。
 
-// 顶部 import 添加
-import { formatEventLogLine, formatStatusSummary } from "./format.ts";
-import type { ThemeLike } from "./format.ts";
-import { STALLED_TIMEOUT_MS } from "../types.ts";
+import type { AgentEventLogEntry } from "../types.ts";
 
-const fakeTheme: ThemeLike = {
-  fg: (_t, s) => s,  // 测试用 stub
-  bold: (s) => s,
-};
-
-export function renderWidget(
-  agents: WidgetAgentState[],
-  spinnerFrame: number,
-): string[] {
-  const running = agents.filter((a) => a.status === "running");
-  const finished = agents.filter((a) => a.status !== "running");
-
-  if (running.length === 0 && finished.length === 0) return [];
-
-  const lines: string[] = [];
-
-  // Running agents: 第 1 行 status summary + 后续行 eventLog
-  // 多 agent 分配策略（FR-2.2）：
-  // - 每个 running agent 至少占 2 行（status + 至少 1 行 eventLog）
-  // - 剩余行数按 agent 顺序轮流分配
-  // - 超过 3 个 running 时只显示 status summary
-  if (running.length <= 3) {
-    const summaryLines = 12;  // 总量
-    const perAgentSummary = running.length;  // 每 agent 1 行
-    const perAgentEvent = Math.max(1, Math.floor((summaryLines - perAgentSummary) / running.length));
-    let remainingLines = summaryLines - perAgentSummary;
-
-    for (const a of running) {
-      lines.push(formatStatusSummary(a, spinnerFrame, fakeTheme));
-      const eventLines = Math.min(perAgentEvent, Math.floor(remainingLines / running.length), WIDGET_EVENT_LINES);
-      const eventLog = a.eventLog ?? [];
-      // 取最近 N 条（按时间正序）
-      const recent = eventLog.slice(-eventLines);
-      // turn_end 编号 = entry 之前发生的 turn_end 数 + 1（1-indexed）
-      let turnCountBefore = Math.max(0, (a.turns ?? 0) - (eventLog.filter((e) => e.type === "turn_end").length - (eventLog.length - recent.length)));
-      for (const entry of recent) {
-        lines.push(formatEventLogLine(entry, fakeTheme, entry.type === "turn_end" ? turnCountBefore : turnCountBefore));
-        if (entry.type === "turn_end") turnCountBefore++;
-      }
-      remainingLines -= recent.length;
-
-      // FR-3.5 G-008: stalled 兜底
-      const lastEntry = eventLog[eventLog.length - 1];
-      if (lastEntry && Date.now() - lastEntry.ts > STALLED_TIMEOUT_MS) {
-        lines.push(`  ⚠ ${a.agent} possibly stalled (no events for 5min)`);
-      }
-    }
-
-    lines.splice(MAX_WIDGET_LINES);  // 硬截断
-  } else {
-    // > 3 个 running agent：只显示 status
-    for (const a of running) {
-      lines.push(formatStatusSummary(a, spinnerFrame, fakeTheme));
-    }
-    lines.splice(MAX_WIDGET_LINES);
-  }
-
-  // Finished agents（保持现有逻辑）
-  const now = Date.now();
-  for (const a of finished) {
-    if (a.finishedAt && now - a.finishedAt > FINISHED_LINGER_MS) continue;
-    const icon = a.status === "done" ? "✓" : a.status === "cancelled" ? "■" : "✗";
-    const summary = a.summary ? `: ${truncate(a.summary, SUMMARY_MAX)}` : "";
-    lines.push(`${icon} ${a.agent}${summary}`);
-  }
-
-  return lines.slice(0, MAX_WIDGET_LINES);
-}
-```
-
-注意：renderWidget 在测试中以纯函数调用，theme 是 stub（`fakeTheme` fg 返回原文本）。但 `formatStatusSummary` 接收 theme 但当前实现不用 theme（只 fg 文本，不调 theme）——检查后若不调 theme，stub 也能 work。`formatEventLogLine` 调 `theme.fg("warning"|"success"|"error", text)`，fakeTheme stub 返回 text。
-
-- [ ] **Step 4: 运行测试确认通过**
-
-Run: `cd extensions/subagents && npx vitest run src/__tests__/agent-widget.test.ts`
-Expected: PASS
-
-- [ ] **Step 5: 运行 typecheck**
-
-Run: `cd extensions/subagents && npx tsc --noEmit`
-Expected: PASS
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add extensions/subagents/src/tui/agent-widget.ts extensions/subagents/src/__tests__/agent-widget.test.ts
-git commit -m "feat(subagents): render event log in inline widget"
-```
-
----
-
-### Task 6: 事件总线 onChange/notifyChange
-
-**Type:** backend
-**Files:**
-- Modify: `extensions/subagents/src/runtime.ts`
-- Create: `extensions/subagents/src/__tests__/runtime-eventbus.test.ts`
-
-**Depends on:** Task 1
-
-- [ ] **Step 1: 创建测试文件 runtime-eventbus.test.ts**
-
-```typescript
-// src/__tests__/runtime-eventbus.test.ts
-import { describe, expect, it, vi } from "vitest";
-
-import { SubagentRuntime } from "../runtime.ts";
-import type { ModelRegistryLike } from "../resolution/model-resolver.ts";
-
-const fakeRegistry: ModelRegistryLike = {
-  find: vi.fn(),
-  getAll: vi.fn(() => []),
-} as never;
-
-function makeRuntime(): SubagentRuntime {
-  return new SubagentRuntime({ cwd: "/tmp", homeDir: "/tmp", agentDir: "/tmp/.pi/agent" });
-}
-
-describe("SubagentRuntime — event bus", () => {
-  it("onChange subscribes and returns unsubscribe", () => {
-    const rt = makeRuntime();
-    const fn = vi.fn();
-    const unsub = rt.onChange(fn);
-    expect(typeof unsub).toBe("function");
-    unsub();
-  });
-
-  it("notifyChange invokes all subscribers", () => {
-    const rt = makeRuntime();
-    const fn1 = vi.fn();
-    const fn2 = vi.fn();
-    rt.onChange(fn1);
-    rt.onChange(fn2);
-    rt.notifyChange();
-    expect(fn1).toHaveBeenCalledTimes(1);
-    expect(fn2).toHaveBeenCalledTimes(1);
-  });
-
-  it("unsubscribe stops invocation", () => {
-    const rt = makeRuntime();
-    const fn = vi.fn();
-    const unsub = rt.onChange(fn);
-    rt.notifyChange();
-    unsub();
-    rt.notifyChange();
-    expect(fn).toHaveBeenCalledTimes(1);
-  });
-});
-```
-
-- [ ] **Step 2: 运行测试确认失败**
-
-Run: `cd extensions/subagents && npx vitest run src/__tests__/runtime-eventbus.test.ts`
-Expected: FAIL（`rt.onChange` is not a function）
-
-- [ ] **Step 3: 在 SubagentRuntime 添加事件总线**
-
-```typescript
-// src/runtime.ts（在 SubagentRuntime 类内添加）
-
-private readonly _changeListeners = new Set<() => void>();
-private _activeView: { close: () => void } | null = null;
-
-/** FR-3.4: 订阅 runtime 数据变更 */
-onChange(fn: () => void): () => void {
-  this._changeListeners.add(fn);
-  return () => this._changeListeners.delete(fn);
-}
-
-/** FR-3.4: 通知所有订阅者 */
-notifyChange(): void {
-  for (const fn of this._changeListeners) fn();
-}
-```
-
-并在以下位置调用 `notifyChange()`：
-- `updateAgent` 被调用的地方（`runAgent` 内 widget.updateAgent 后、`startBackground` 的 .then/.catch 内）
-- `cancelBackground` 内
-- `toggleYolo` / `setSessionAgentModel` / `setSessionCategoryModel` 内（可选，配置摘要刷新）
-
-```typescript
-// src/runtime.ts（runAgent 内 updateAgent 后追加 notifyChange）
-
-// sync runAgent
-this.widget.updateAgent(widgetState);
-this.notifyChange();
-```
-
-```typescript
-// src/runtime.ts（startBackground 的 .then/.catch）
-
-.then((result) => {
-  // ... 现有逻辑 ...
-  this.notifyChange();
-})
-.catch((err) => {
-  // ... 现有逻辑 ...
-  this.notifyChange();
-});
-```
-
-```typescript
-// src/runtime.ts（cancelBackground）
-
-cancelBackground(id: string): boolean {
-  const r = this._bgRecords.get(id);
-  if (!r || r.status !== "running") return false;
-  r.controller?.abort();
-  r.status = "cancelled";
-  r.endedAt = Date.now();
-  this.notifyChange();
-  return true;
-}
-```
-
-- [ ] **Step 4: 运行测试确认通过**
-
-Run: `cd extensions/subagents && npx vitest run src/__tests__/runtime-eventbus.test.ts`
-Expected: PASS
-
-- [ ] **Step 5: 运行 typecheck + 现有测试**
-
-```bash
-cd extensions/subagents && npx tsc --noEmit
-cd extensions/subagents && npx vitest run
-```
-Expected: PASS（全部 2198+ 行测试通过）
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add extensions/subagents/src/runtime.ts extensions/subagents/src/__tests__/runtime-eventbus.test.ts
-git commit -m "feat(subagents): add runtime event bus for overlay subscription"
-```
-
----
-
-### Task 7: 留存机制（BgRecord + _completedAgents + sync cancelled 路径）
-
-**Type:** backend
-**Files:**
-- Modify: `extensions/subagents/src/runtime.ts`
-- Create: `extensions/subagents/src/__tests__/runtime-records.test.ts`
-
-**Depends on:** Task 1, 4
-
-- [ ] **Step 1: 创建测试文件 runtime-records.test.ts**
-
-```typescript
-// src/__tests__/runtime-records.test.ts
-import { describe, expect, it, vi } from "vitest";
-
-import { SubagentRuntime } from "../runtime.ts";
-import { COMPLETED_AGENTS_MAX } from "../types.ts";
-
-function makeRuntime(): SubagentRuntime {
-  return new SubagentRuntime({ cwd: "/tmp", homeDir: "/tmp", agentDir: "/tmp/.pi/agent" });
-}
-
-describe("SubagentRuntime — record retention", () => {
-  it("_completedAgents initially empty", () => {
-    const rt = makeRuntime();
-    expect(rt.listCompleted().length).toBe(0);
-  });
-
-  it("archives sync agent after widget linger", async () => {
-    vi.useFakeTimers();
-    const rt = makeRuntime();
-    // 模拟 widget linger 完成
-    rt.archiveSyncAgent({
-      id: "run-1", agent: "worker", status: "done", startedAt: Date.now(), endedAt: Date.now(),
-      eventLog: [],
-      turns: 3,
-    });
-    expect(rt.listCompleted()).toHaveLength(1);
-    expect(rt.listCompleted()[0].id).toBe("run-1");
-    vi.useRealTimers();
-  });
-
-  it("archives background agent to BgRecord.eventLog + agent", () => {
-    const rt = makeRuntime();
-    rt.archiveBackgroundAgent("bg-1", {
-      eventLog: [{ type: "tool_start", label: "read foo.ts", ts: 0, status: "running" }],
-      agent: "reviewer",
-    });
-    const record = rt.getBackground("bg-1");
-    expect(record?.eventLog).toHaveLength(1);
-    expect(record?.agent).toBe("reviewer");
-  });
-
-  it("FIFO eviction when _completedAgents exceeds COMPLETED_AGENTS_MAX", () => {
-    const rt = makeRuntime();
-    for (let i = 0; i < COMPLETED_AGENTS_MAX + 5; i++) {
-      rt.archiveSyncAgent({
-        id: `run-${i}`, agent: "x", status: "done", startedAt: i, endedAt: i, eventLog: [],
-      });
-    }
-    expect(rt.listCompleted().length).toBe(COMPLETED_AGENTS_MAX);
-    expect(rt.listCompleted()[0].id).toBe(`run-5`);  // 5 个被驱逐
-  });
-});
-```
-
-- [ ] **Step 2: 运行测试确认失败**
-
-Run: `cd extensions/subagents && npx vitest run src/__tests__/runtime-records.test.ts`
-Expected: FAIL
-
-- [ ] **Step 3: 在 runtime.ts 实现留存逻辑**
-
-```typescript
-// src/runtime.ts（添加方法到 SubagentRuntime 类）
-
-import type { AgentEventLogEntry, CompletedAgentRecord } from "./types.ts";
-
-// 内部 BgRecord 扩展（在文件顶部 interface 处）
-interface BgRecord {
-  readonly id: string;
-  status: BackgroundStatus["status"];
-  result?: AgentResult;
-  error?: string;
-  startedAt: number;
-  endedAt?: number;
-  controller?: AbortController;
-  // FR-3.0: 留存 eventLog + agent
-  eventLog?: AgentEventLogEntry[];
-  agent?: string;
-}
-
-// 类内字段
-private readonly _completedAgents = new Map<string, CompletedAgentRecord>();
-
-/** FR-3.0: 列出已完成的 sync agent */
-listCompleted(): CompletedAgentRecord[] {
-  return [...this._completedAgents.values()];
-}
-
-/** FR-3.0: 归档 sync agent（widget linger 到期时调用） */
-archiveSyncAgent(record: CompletedAgentRecord): void {
-  if (this._completedAgents.size >= COMPLETED_AGENTS_MAX) {
-    const firstKey = this._completedAgents.keys().next().value;
-    if (firstKey !== undefined) this._completedAgents.delete(firstKey);
-  }
-  this._completedAgents.set(record.id, record);
-  this.notifyChange();
-}
-
-/** FR-3.0: 归档 background agent（widget linger 到期时调用） */
-archiveBackgroundAgent(id: string, data: { eventLog: AgentEventLogEntry[]; agent: string }): void {
-  const r = this._bgRecords.get(id);
-  if (!r) return;
-  r.eventLog = data.eventLog;
-  r.agent = data.agent;
-  this.notifyChange();
-}
-```
-
-修改 `runAgent` 内 setTimeout 回调为归档版本：
-
-```typescript
-// src/runtime.ts（runAgent 内 setTimeout 调用替换）
-
-// 替换前：
-setTimeout(() => this.widget.removeAgent(widgetId), WIDGET_LINGER_MS);
-
-// 替换后（FR-3.0 + FR-3.5 G-025 cancelled 路径）：
-setTimeout(() => {
-  if (widgetId.startsWith("bg-")) {
-    // background agent：归档到 BgRecord
-    this.archiveBackgroundAgent(widgetId, {
-      eventLog: widgetState.eventLog ?? [],
-      agent: widgetState.agent,
-    });
-  } else {
-    // sync agent：归档到 _completedAgents
-    this.archiveSyncAgent({
-      id: widgetId,
-      agent: widgetState.agent,
-      status: widgetState.status,
-      eventLog: widgetState.eventLog ?? [],
-      turns: widgetState.turns,
-      totalTokens: widgetState.totalTokens,
-      result: widgetState.result,
-      error: widgetState.summary,
-      startedAt: widgetState.startedAt ?? Date.now() - (widgetState.elapsedSeconds ?? 0) * 1000,
-      endedAt: widgetState.finishedAt,
-    });
-  }
-  this.widget.removeAgent(widgetId);
-}, WIDGET_LINGER_MS);
-```
-
-修改 catch 块（FR-3.5 G-025）：
-
-```typescript
-// src/runtime.ts（runAgent 的 catch 块）
-
-} catch (err) {
-  // FR-3.5 G-025: 用户主动 abort → cancelled；其他 → failed
-  widgetState.status = finalOpts.signal?.aborted ? "cancelled" : "failed";
-  widgetState.summary = err instanceof Error ? err.message : String(err);
-  widgetState.finishedAt = Date.now();
-  this.widget.updateAgent(widgetState);
-  this.notifyChange();
-  setTimeout(() => {
-    if (widgetId.startsWith("bg-")) {
-      this.archiveBackgroundAgent(widgetId, {
-        eventLog: widgetState.eventLog ?? [],
-        agent: widgetState.agent,
-      });
-    } else {
-      this.archiveSyncAgent({
-        id: widgetId,
-        agent: widgetState.agent,
-        status: widgetState.status,
-        eventLog: widgetState.eventLog ?? [],
-        turns: widgetState.turns,
-        totalTokens: widgetState.totalTokens,
-        result: undefined,
-        error: widgetState.summary,
-        startedAt: Date.now() - (widgetState.elapsedSeconds ?? 0) * 1000,
-        endedAt: widgetState.finishedAt,
-      });
-    }
-    this.widget.removeAgent(widgetId);
-  }, WIDGET_LINGER_MS);
-
-  for (const h of this.hooks) {
-    if (h.onError) h.onError(err instanceof Error ? err : new Error(String(err)), finalOpts);
-  }
-  throw err;
-}
-```
-
-修改 startBackground（添加 `agent` 字段持久化 FR-3.0a + notifyChange）：
-
-```typescript
-// src/runtime.ts（startBackground 内）
-
-const record: BgRecord = {
-  id, status: "running", startedAt: Date.now(), controller,
-  agent: opts.agent ?? "default",  // FR-3.0a
-};
-this._bgRecords.set(id, record);
-this.notifyChange();
-```
-
-- [ ] **Step 4: 运行测试确认通过**
-
-Run: `cd extensions/subagents && npx vitest run src/__tests__/runtime-records.test.ts`
-Expected: PASS
-
-- [ ] **Step 5: 运行全量测试 + typecheck**
-
-```bash
-cd extensions/subagents && npx tsc --noEmit
-cd extensions/subagents && npx vitest run
-```
-Expected: PASS
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add extensions/subagents/src/runtime.ts extensions/subagents/src/__tests__/runtime-records.test.ts
-git commit -m "feat(subagents): add completed agent record retention"
-```
-
----
-
-### Task 8: SubagentsView 全屏视图组件
-
-**Type:** backend
-**Files:**
-- Create: `extensions/subagents/src/tui/subagents-view.ts`
-- Create: `extensions/subagents/src/__tests__/subagents-view.test.ts`
-
-**Depends on:** Task 3, 6, 7
-
-- [ ] **Step 1: 创建测试文件 subagents-view.test.ts**
-
-```typescript
-// src/__tests__/subagents-view.test.ts
-import { describe, expect, it, vi } from "vitest";
-
-import {
-  collectRecords,
-  formatDetailView,
-  formatListView,
-  processKey,
-  sortRecords,
-  type SubagentRecord,
-  type ViewState,
-} from "../tui/subagents-view.ts";
-
-const fakeTheme = {
-  fg(_t: string, text: string): string { return text; },
-  bold(text: string): string { return `**${text}**`; },
-};
-
-function makeRecord(overrides: Partial<SubagentRecord> = {}): SubagentRecord {
-  return {
-    id: "run-1", agent: "worker", status: "running", startedAt: Date.now() - 30000,
-    eventLog: [], turns: 2, totalTokens: 5000, ...overrides,
-  };
-}
-
-describe("collectRecords", () => {
-  it("merges widget + bg + completed by id with cancelled priority", () => {
-    // 测试去重逻辑（不直接调 runtime，用 mock）
-    const records: SubagentRecord[] = [
-      { id: "run-1", agent: "worker", status: "running", eventLog: [], startedAt: 1 },
-      { id: "bg-1", agent: "scout", status: "cancelled", eventLog: [], startedAt: 2 },
-    ];
-    const merged = collectRecords(records, [], []);  // 接受 (widget, bg, completed) 三个输入
-    expect(merged).toHaveLength(2);
-    expect(merged.find((r) => r.id === "bg-1")?.status).toBe("cancelled");
-  });
-
-  it("cancelled overrides running when same id", () => {
-    const widget = [makeRecord({ id: "x", status: "running" })];
-    const completed = [makeRecord({ id: "x", status: "cancelled" })];
-    const merged = collectRecords(widget, [], completed);
-    expect(merged.find((r) => r.id === "x")?.status).toBe("cancelled");
-  });
-});
-
-describe("sortRecords", () => {
-  it("sorts running first, then failed, cancelled, done; within group by startedAt desc", () => {
-    const records: SubagentRecord[] = [
-      makeRecord({ id: "1", status: "done", startedAt: 100 }),
-      makeRecord({ id: "2", status: "running", startedAt: 50 }),
-      makeRecord({ id: "3", status: "failed", startedAt: 200 }),
-      makeRecord({ id: "4", status: "cancelled", startedAt: 150 }),
-    ];
-    const sorted = sortRecords(records);
-    expect(sorted.map((r) => r.id)).toEqual(["2", "3", "4", "1"]);
-  });
-});
-
-describe("formatListView", () => {
-  it("shows empty state when no records", () => {
-    const lines = formatListView([], fakeTheme, 80, 0);
-    expect(lines.some((l) => l.includes("No subagent"))).toBe(true);
-  });
-
-  it("shows header + rows", () => {
-    const records = [
-      makeRecord({ id: "run-3", agent: "worker", status: "done", turns: 5, totalTokens: 23000 }),
-      makeRecord({ id: "bg-1", agent: "researcher", status: "running", turns: 2, totalTokens: 8000 }),
-    ];
-    const lines = formatListView(records, fakeTheme, 80, 0);
-    expect(lines.some((l) => l.includes("Subagents"))).toBe(true);
-    expect(lines.some((l) => l.includes("run-3"))).toBe(true);
-    expect(lines.some((l) => l.includes("bg-1"))).toBe(true);
-  });
-
-  it("highlights selected row", () => {
-    const records = [makeRecord({ id: "1" }), makeRecord({ id: "2" })];
-    const lines = formatListView(records, fakeTheme, 80, 1);
-    expect(lines.some((l) => l.includes("**2**"))).toBe(true);  // fakeTheme.bold wraps
-  });
-});
-
-describe("formatDetailView", () => {
-  it("shows header with id + agent + status", () => {
-    const record = makeRecord({ id: "bg-1", agent: "scout", status: "running" });
-    const lines = formatDetailView(record, fakeTheme, 80, 0);
-    expect(lines.some((l) => l.includes("bg-1"))).toBe(true);
-    expect(lines.some((l) => l.includes("scout"))).toBe(true);
-  });
-
-  it("shows event log", () => {
-    const record = makeRecord({
-      eventLog: [
-        { type: "tool_start", label: "read foo", ts: 0, status: "running" },
-        { type: "turn_end", label: "summary", ts: 0 },
-      ],
-    });
-    const lines = formatDetailView(record, fakeTheme, 80, 0);
-    expect(lines.some((l) => l.includes("read foo"))).toBe(true);
-    expect(lines.some((l) => l.includes("summary"))).toBe(true);
-  });
-
-  it("shows 'Terminal too small' when terminalRows < 8", () => {
-    const record = makeRecord();
-    const lines = formatDetailView(record, fakeTheme, 80, 0, 5);
-    expect(lines.some((l) => l.includes("Terminal too small"))).toBe(true);
-  });
-});
-
-describe("processKey", () => {
-  function makeState(): ViewState {
-    return { level: 0, selectedIdx: 0, scrollOffset: 0, disposed: false };
-  }
-  const records = [makeRecord({ id: "1" }), makeRecord({ id: "2" })];
-
-  it("j moves selectedIdx down", () => {
-    const state = makeState();
-    processKey("j", records, state, fakeTheme, null, () => {}, null);
-    expect(state.selectedIdx).toBe(1);
-  });
-
-  it("k moves selectedIdx up", () => {
-    const state = { ...makeState(), selectedIdx: 1 };
-    processKey("k", records, state, fakeTheme, null, () => {}, null);
-    expect(state.selectedIdx).toBe(0);
-  });
-
-  it("Enter at level 0 goes to level 1", () => {
-    const state = makeState();
-    const result = processKey("\r", records, state, fakeTheme, null, () => {}, null);
-    expect(state.level).toBe(1);
-    expect(result).toBe(true);
-  });
-
-  it("q at level 0 calls done", () => {
-    const state = makeState();
-    const done = vi.fn();
-    processKey("q", records, state, fakeTheme, null, done, null);
-    expect(done).toHaveBeenCalled();
-  });
-
-  it("q at level 1 returns to level 0", () => {
-    const state = { ...makeState(), level: 1 };
-    processKey("q", records, state, fakeTheme, null, () => {}, null);
-    expect(state.level).toBe(0);
-  });
-
-  it("Esc at level 1 returns to level 0", () => {
-    const state = { ...makeState(), level: 1 };
-    processKey("\x1b", records, state, fakeTheme, null, () => {}, null);
-    expect(state.level).toBe(0);
-  });
-
-  it("x on running background agent calls cancelBackground", () => {
-    const state = makeState();
-    const records2 = [makeRecord({ id: "bg-1", status: "running" })];
-    const cancel = vi.fn();
-    processKey("x", records2, state, fakeTheme, { id: "bg-1" } as never, () => {}, { cancelBackground: cancel } as never);
-    expect(cancel).toHaveBeenCalledWith("bg-1");
-  });
-});
-```
-
-- [ ] **Step 2: 运行测试确认失败**
-
-Run: `cd extensions/subagents && npx vitest run src/__tests__/subagents-view.test.ts`
-Expected: FAIL
-
-- [ ] **Step 3: 创建 subagents-view.ts**
-
-```typescript
-// src/tui/subagents-view.ts
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-
-import type { AgentEventLogEntry, AgentResult, BackgroundStatus, CompletedAgentRecord } from "../types.ts";
-import type { SubagentRuntime } from "../runtime.ts";
-import { formatEventLogLine, formatTokens, type ThemeLike } from "./format.ts";
-import { type WidgetAgentState } from "./agent-widget.ts";
-
-// ── Types ─────────────────────────────────────────────────────
-
-export interface SubagentRecord {
+export interface WidgetAgentState {
   readonly id: string;
   readonly agent: string;
-  status: BackgroundStatus["status"];
-  eventLog: AgentEventLogEntry[];
+  status: "running" | "done" | "failed" | "cancelled";
   turns?: number;
   totalTokens?: number;
-  startedAt: number;
-  endedAt?: number;
-  result?: AgentResult;
-  error?: string;
-}
-
-export interface ViewState {
-  level: 0 | 1;
-  selectedIdx: number;
-  scrollOffset: number;
-  disposed: boolean;
-}
-
-const STATUS_PRIORITY: Record<BackgroundStatus["status"], number> = {
-  running: 0,
-  failed: 1,
-  cancelled: 2,
-  done: 3,
-};
-
-const HEADER_LINES = 3;
-const FOOTER_LINES = 2;
-const MIN_TERMINAL_ROWS = 8;
-
-// ── Data merge ────────────────────────────────────────────────
-
-/**
- * FR-3.2: 合并 widget + bg + completed 数据源。
- * - widget 来自 widget.agents（实时运行中 + 5s 内完成）
- * - bg 来自 runtime.listBackground()（含已完成 bg）
- * - completed 来自 runtime.listCompleted()（sync 归档）
- * cancelled 状态优先（cancelled 是用户主动行为，widget 可能误报 running/failed）。
- */
-export function collectRecords(
-  widget: SubagentRecord[],
-  bg: SubagentRecord[],
-  completed: SubagentRecord[],
-): SubagentRecord[] {
-  const byId = new Map<string, SubagentRecord>();
-  // 合并顺序：bg/completed 先（终态权威），widget 后（实时可能更新 running 状态）
-  for (const r of [...bg, ...completed]) {
-    byId.set(r.id, r);
-  }
-  for (const r of widget) {
-    const existing = byId.get(r.id);
-    if (!existing) {
-      byId.set(r.id, r);
-    } else if (existing.status === "cancelled" && r.status !== "cancelled") {
-      // cancelled 优先：保留 existing
-      continue;
-    } else {
-      // widget 优先：覆盖
-      byId.set(r.id, r);
-    }
-  }
-  return sortRecords([...byId.values()]);
-}
-
-export function sortRecords(records: SubagentRecord[]): SubagentRecord[] {
-  return [...records].sort((a, b) => {
-    const pa = STATUS_PRIORITY[a.status] ?? 99;
-    const pb = STATUS_PRIORITY[b.status] ?? 99;
-    if (pa !== pb) return pa - pb;
-    return b.startedAt - a.startedAt;  // 同状态按 startedAt 降序
-  });
-}
-
-// ── Format helpers ────────────────────────────────────────────
-
-function statusIcon(status: BackgroundStatus["status"], theme: ThemeLike): string {
-  switch (status) {
-    case "done": return theme.fg("success", "✓");
-    case "running": return theme.fg("warning", "⟳");
-    case "failed": return theme.fg("error", "✗");
-    case "cancelled": return theme.fg("muted", "■");
-  }
-}
-
-function formatRecordRow(record: SubagentRecord, theme: ThemeLike, width: number, selected: boolean): string {
-  const icon = statusIcon(record.status, theme);
-  const turns = record.turns ?? 0;
-  const tokens = record.totalTokens ? formatTokens(record.totalTokens) : "-";
-  const line = `${icon} ${record.id.padEnd(12)} ${record.agent.padEnd(12)} ${record.status.padEnd(10)} ${turns} turns ${tokens}`;
-  return selected ? theme.bold(line) : line;
-}
-
-function formatTime(ts: number): string {
-  const d = new Date(ts);
-  return d.toTimeString().slice(0, 5);  // HH:MM
-}
-
-function formatDuration(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}m${s % 60}s`;
-}
-
-// ── List view (Level 0) ───────────────────────────────────────
-
-export function formatListView(
-  records: SubagentRecord[],
-  theme: ThemeLike,
-  _width: number,
-  selectedIdx: number,
-): string[] {
-  if (records.length === 0) {
-    return [
-      "┌─ Subagents ─────────────────────────────┐",
-      "│  No subagent executions in this session. │",
-      "│                                          │",
-      "│  q 退出                                  │",
-      "└──────────────────────────────────────────┘",
-    ];
-  }
-
-  const lines: string[] = [];
-  lines.push("┌─ Subagents ───────────────────────────────────────────────┐");
-  lines.push("│  ID            Agent        Status       Turns  Tokens    │");
-  records.forEach((r, i) => {
-    lines.push("│  " + formatRecordRow(r, theme, 60, i === selectedIdx));
-  });
-  lines.push("│                                                              │");
-  lines.push("│  j/k 导航 · Enter 详情 · x 取消 · q 退出                    │");
-  lines.push("└──────────────────────────────────────────────────────────────┘");
-  return lines;
-}
-
-// ── Detail view (Level 1) ─────────────────────────────────────
-
-export function formatDetailView(
-  record: SubagentRecord,
-  theme: ThemeLike,
-  width: number,
-  scrollOffset: number,
-  terminalRows: number = 30,
-): string[] {
-  if (terminalRows < MIN_TERMINAL_ROWS) {
-    return [`Terminal too small (need ≥${MIN_TERMINAL_ROWS} rows)`];
-  }
-
-  const lines: string[] = [];
-  const header = `┌─ ${record.id} ${record.agent} (${record.status})`;
-  lines.push(header);
-  const turns = record.turns ?? 0;
-  const tokens = record.totalTokens ? formatTokens(record.totalTokens) : "0";
-  const elapsed = record.endedAt
-    ? formatDuration(record.endedAt - record.startedAt)
-    : formatDuration(Date.now() - record.startedAt);
-  lines.push(`│  ${turns} turns │ ${tokens} │ ${elapsed} │ started ${formatTime(record.startedAt)}`);
-  lines.push("│");
-
-  // Event log
-  lines.push("│  Event log:");
-  const eventLogLines: string[] = [];
-  let turnNumber = 0;
-  for (const entry of record.eventLog) {
-    if (entry.type === "turn_end") turnNumber++;
-    eventLogLines.push("│  " + formatEventLogLine(entry, theme, turnNumber));
-  }
-  if (eventLogLines.length === 0) eventLogLines.push("│  (no events recorded)");
-
-  // Apply scroll
-  const visibleFrom = scrollOffset;
-  const visibleTo = Math.min(eventLogLines.length, visibleFrom + (terminalRows - HEADER_LINES - FOOTER_LINES - 5));
-  for (let i = visibleFrom; i < visibleTo; i++) {
-    lines.push(eventLogLines[i]);
-  }
-
-  // Result section
-  if (record.result || record.error) {
-    lines.push("│");
-    lines.push("│  Result:");
-    const resultText = record.error ?? record.result?.text ?? "";
-    const resultLines = resultText.split("\n").slice(0, 10);
-    for (const l of resultLines) lines.push("│  " + l);
-  }
-
-  lines.push("│");
-  lines.push("│  j/k 滚动 · q 返回");
-  lines.push("└" + "─".repeat(width - 2));
-  return lines;
-}
-
-// ── Keyboard handling ─────────────────────────────────────────
-
-export function processKey(
-  data: string,
-  records: SubagentRecord[],
-  state: ViewState,
-  _theme: ThemeLike,
-  selectedRecord: SubagentRecord | null,
-  done: () => void,
-  runtime: SubagentRuntime | null,
-): boolean {
-  if (state.disposed) return false;
-
-  if (state.level === 0) {
-    if (data === "j" || data === "\x1b[B") {  // down arrow
-      if (state.selectedIdx < records.length - 1) { state.selectedIdx++; return true; }
-      return false;
-    }
-    if (data === "k" || data === "\x1b[A") {  // up arrow
-      if (state.selectedIdx > 0) { state.selectedIdx--; return true; }
-      return false;
-    }
-    if (data === "\r" || data === "\n") {  // Enter
-      if (records.length > 0) { state.level = 1; state.scrollOffset = 0; return true; }
-      return false;
-    }
-    if (data === "x") {
-      if (selectedRecord && selectedRecord.id.startsWith("bg-") && runtime) {
-        runtime.cancelBackground(selectedRecord.id);
-        return true;
-      }
-      return false;
-    }
-    if (data === "q" || data === "\x1b") {  // q or Esc
-      state.disposed = true;
-      done();
-      return false;
-    }
-  } else {
-    // Level 1 (detail)
-    const record = selectedRecord;
-    if (!record) return false;
-    if (data === "j" || data === "\x1b[B") {
-      state.scrollOffset++;
-      return true;
-    }
-    if (data === "k" || data === "\x1b[A") {
-      if (state.scrollOffset > 0) { state.scrollOffset--; return true; }
-      return false;
-    }
-    if (data === "x") {
-      if (record.id.startsWith("bg-") && runtime) {
-        runtime.cancelBackground(record.id);
-        return true;
-      }
-      return false;
-    }
-    if (data === "q" || data === "\x1b") {
-      state.level = 0;
-      state.scrollOffset = 0;
-      return true;
-    }
-  }
-  return false;
-}
-
-// ── Overlay factory ───────────────────────────────────────────
-
-/**
- * FR-3.1/3.2/3.3/3.4/3.5/4.1: 全屏两级视图。
- * 仿 WorkflowsView.ts:118-139 的 overlay 契约。
- */
-export function createSubagentsView(
-  runtime: SubagentRuntime,
-  theme: ThemeLike,
-  ctx: ExtensionContext,
-  directId?: string,
-): Promise<void> {
-  if (!ctx.hasUI) {
-    return Promise.reject(new Error("/subagents list requires interactive mode"));
-  }
-
-  // FR-3.1 G-017: 防 overlay 叠加
-  const active = runtime.getActiveView();
-  if (active) active.close();
-
-  return ctx.ui.custom<void>((_tui: unknown, _theme: unknown, _kb: unknown, done: () => void) => {
-    // FR-3.1 G-002: directId 不存在 → 通知 + 回退 Level 0
-    const allRecords = getAllRecords(runtime);
-    if (directId && !allRecords.find((r) => r.id === directId)) {
-      ctx.ui.notify(`Subagent '${directId}' not found`, "warning");
-      directId = undefined;
-    }
-
-    const state: ViewState = {
-      level: directId ? 1 : 0,
-      selectedIdx: 0,
-      scrollOffset: 0,
-      disposed: false,
-    };
-    if (directId) {
-      const idx = allRecords.findIndex((r) => r.id === directId);
-      if (idx >= 0) state.selectedIdx = idx;
-    }
-
-    const cache = { width: undefined as number | undefined, lines: undefined as string[] | undefined };
-    const tui = _tui as { requestRender(): void; terminal: { rows: number } };
-    const requestRender = () => tui.requestRender();
-
-    const unsubscribe = runtime.onChange(() => {
-      if (!state.disposed) requestRender();
-    });
-
-    const wrappedDone = () => {
-      if (state.disposed) return;
-      state.disposed = true;
-      unsubscribe();
-      // FR-3.1 G-026: 清理 _activeView
-      runtime.clearActiveView();
-      done();
-    };
-
-    runtime.setActiveView({ close: wrappedDone });
-
-    return {
-      invalidate(): void {
-        cache.width = undefined;
-        cache.lines = undefined;
-      },
-      render(width: number): string[] {
-        if (cache.lines && cache.width === width) return cache.lines;
-        const records = getAllRecords(runtime);
-        const selected = records[state.selectedIdx] ?? null;
-        const raw = state.level === 0
-          ? formatListView(records, theme, width, state.selectedIdx)
-          : selected
-            ? formatDetailView(selected, theme, width, state.scrollOffset, tui.terminal.rows)
-            : ["(no record selected)"];
-        const termHeight = tui.terminal.rows;
-        const lines = raw.length < termHeight
-          ? [...raw, ...Array.from({ length: termHeight - raw.length }, () => "")]
-          : raw;
-        cache.width = width;
-        cache.lines = lines;
-        return lines;
-      },
-      handleInput(data: string): void {
-        if (state.disposed) return;
-        const records = getAllRecords(runtime);
-        const selected = records[state.selectedIdx] ?? null;
-        const changed = processKey(data, records, state, theme, selected, wrappedDone, runtime);
-        if (changed) {
-          cache.width = undefined;
-          cache.lines = undefined;
-          requestRender();
-        }
-      },
-    };
-  }, {
-    overlay: true,
-    overlayOptions: { anchor: "center" as const, width: "100%", maxHeight: "100%", margin: 0 },
-  });
-}
-
-/** 从 runtime 提取所有 records（合并三数据源） */
-function getAllRecords(runtime: SubagentRuntime): SubagentRecord[] {
-  const widgetRecords: SubagentRecord[] = runtime.widget.listAgents().map((a) => ({
-    id: a.id,
-    agent: a.agent,
-    status: a.status,
-    eventLog: a.eventLog ?? [],
-    turns: a.turns,
-    totalTokens: a.totalTokens,
-    startedAt: a.finishedAt ? a.finishedAt - (a.elapsedSeconds ?? 0) * 1000 : Date.now() - (a.elapsedSeconds ?? 0) * 1000,
-    endedAt: a.finishedAt,
-  }));
-  const bgRecords: SubagentRecord[] = runtime.listBackground().map((b) => ({
-    id: b.id,
-    agent: b.agent ?? "default",
-    status: b.status,
-    eventLog: b.eventLog ?? [],
-    turns: undefined,
-    totalTokens: undefined,
-    startedAt: b.startedAt,
-    endedAt: b.endedAt,
-    result: b.result,
-    error: b.error,
-  }));
-  const completedRecords: SubagentRecord[] = runtime.listCompleted();
-  return collectRecords(widgetRecords, bgRecords, completedRecords);
+  elapsedSeconds?: number;
+  activity?: string;
+  summary?: string;
+  finishedAt?: number;
+  eventLog?: AgentEventLogEntry[];
+  _currentTurnText?: string;
+  _currentThinking?: string;
 }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [ ] **步骤 2：runtime.ts — 删除 AgentWidgetManager，加 _runningAgents map**
 
-Run: `cd extensions/subagents && npx vitest run src/__tests__/subagents-view.test.ts`
-Expected: PASS
+在 `extensions/subagents/src/runtime.ts`：
 
-- [ ] **Step 5: 运行 typecheck**
-
-Run: `cd extensions/subagents && npx tsc --noEmit`
-Expected: PASS
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add extensions/subagents/src/tui/subagents-view.ts extensions/subagents/src/__tests__/subagents-view.test.ts
-git commit -m "feat(subagents): add full-screen subagents view with two-level navigation"
+a) 修改 import（约 13 行）—— 将：
+```typescript
+import { AgentWidgetManager, type WidgetAgentState, type WidgetUI } from "./tui/agent-widget.ts";
+```
+替换为：
+```typescript
+import type { WidgetAgentState } from "./tui/agent-widget.ts";
 ```
 
----
-
-### Task 9: /subagents list 命令入口
-
-**Type:** backend
-**Files:**
-- Modify: `extensions/subagents/src/commands/config.ts`
-- Modify: `extensions/subagents/src/commands/list.ts`（可选拆分）
-
-**Depends on:** Task 8
-
-- [ ] **Step 1: 修改 commands/config.ts 添加 list 子命令**
+b) 删除 widget 字段（约 100 行 `readonly widget = new AgentWidgetManager();`），替换为：
 
 ```typescript
-// src/commands/config.ts（修改 handler）
+  /** FR-2.0: running agent 状态 map（替代 AgentWidgetManager） */
+  private readonly _runningAgents = new Map<string, WidgetAgentState>();
 
-import { createSubagentsView } from "../tui/subagents-view.ts";
-
-export function registerSubagentsCommand(pi: ExtensionAPI): void {
-  pi.registerCommand("subagents", {
-    description: "Subagents 配置: /subagents [config [category] | list [<id>]]",
-    handler: async (argsStr: string, ctx: ExtensionCommandContext) => {
-      const rt = getRuntime();
-      if (!rt) {
-        ctx.ui.notify("Subagents runtime 未初始化", "error");
-        return;
-      }
-
-      const args = argsStr.trim().split(/\s+/).filter(Boolean);
-
-      // FR-3.1: list 子命令（解析优先级最高）
-      if (args[0] === "list") {
-        if (!ctx.hasUI) {
-          ctx.ui.notify("/subagents list requires interactive mode", "error");
-          return;
-        }
-        const directId = args[1];
-        try {
-          await createSubagentsView(rt, ctx.ui.theme as never, ctx as never, directId);
-        } catch (err) {
-          ctx.ui.notify(err instanceof Error ? err.message : String(err), "error");
-        }
-        return;
-      }
-
-      // /subagents（无参数）→ 显示摘要
-      if (args.length === 0 || (args.length === 1 && args[0] !== "config")) {
-        ctx.ui.notify(formatConfigSummary(rt.globalConfig, rt.sessionState.yoloMode));
-        return;
-      }
-
-      // /subagents config [category]
-      const wizardArgs = args.slice(1);
-      await runConfigWizard(
-        {
-          select: (title, options) => ctx.ui.select(title, options),
-          input: (title, placeholder) => ctx.ui.input(title, placeholder),
-          notify: (msg) => ctx.ui.notify(msg),
-        },
-        wizardArgs,
-        rt.globalConfig,
-        process.env.HOME || process.env.USERPROFILE || ctx.cwd,
-        ctx.modelRegistry as never,
-        { onToggleYolo: () => rt.toggleYolo() },
-      );
-    },
-  });
-}
+  /** 暴露给 /subagents list 的 running agent 快照 */
+  listRunningAgents(): WidgetAgentState[] {
+    return [...this._runningAgents.values()];
+  }
 ```
 
-- [ ] **Step 2: 手动验证命令解析**
+c) 删除 `attachWidgetUI` 方法（约 136-138 行）。
 
-启动 Pi 测试：
-```bash
-pi install npm:@zhushanwen/pi-subagents  # 或 local symlink
+d) 全局替换（在 runAgent 内，约 280/290/308/324/354/369 行）：
+- `this.widget.updateAgent(widgetState)` → `this._runningAgents.set(widgetState.id, widgetState)`
+- `this.widget.removeAgent(widgetId)` → `this._runningAgents.delete(widgetId)`
+
+e) startBackground 的 `.then`/`.catch`（约 431/467 行）：
+- `this.widget.listAgents().find((a) => a.id.startsWith("run-"))?.eventLog ?? []` → `bgState.eventLog ?? []`（任务 5 步骤 4 新增的 bgState）
+
+- [ ] **步骤 3：subagents-view.ts getAllRecords 数据源切换**
+
+在 `extensions/subagents/src/tui/subagents-view.ts` 找到 `getAllRecords`（约 404 行），找到：
+
+```typescript
+  const widgetRecords: SubagentRecord[] = runtime.widget.listAgents().map((a) => ({
 ```
 
-验证：
-- `/subagents` → 显示配置摘要（不变）
-- `/subagents config` → 启动配置向导（不变）
-- `/subagents list` → 全屏视图
-- `/subagents list bad-id` → notify warning + 回退 Level 0
-- print 模式（`pi -p`）下 `/subagents list` → notify "requires interactive mode"
+替换为：
 
-- [ ] **Step 3: 运行全量测试 + typecheck**
-
-```bash
-cd extensions/subagents && npx tsc --noEmit
-cd extensions/subagents && npx vitest run
+```typescript
+  const widgetRecords: SubagentRecord[] = runtime.listRunningAgents().map((a) => ({
 ```
-Expected: 全部 PASS
 
-- [ ] **Step 4: Commit**
+- [ ] **步骤 4：index.ts 删除 widget 注释**
+
+在 `extensions/subagents/src/index.ts` 删除约 35-37 行的三行注释：
+
+```typescript
+    // widget UI 不再附加：subagent 进度通过 renderResult 渲染在对话流中。
+    // widget tracker 仍保留（供 /subagents list 获取 running agents 数据）。
+    // 不调用 attachWidgetUI() → render() 始终 no-op → 无 spinner/淡出动画。
+```
+
+- [ ] **步骤 5：删除 agent-widget.test.ts**
 
 ```bash
-git add extensions/subagents/src/commands/config.ts
-git commit -m "feat(subagents): wire /subagents list command"
+rm extensions/subagents/src/__tests__/agent-widget.test.ts
+```
+
+- [ ] **步骤 6：修复 subagents-view.test.ts 的 mock**
+
+运行：`cd extensions/subagents && npx vitest run src/__tests__/subagents-view.test.ts 2>&1 | head -30`
+
+若有 `runtime.widget` 的 mock 引用，替换为 `runtime.listRunningAgents` 的 mock。例如：
+
+```typescript
+// 旧：
+mockRuntime.widget = { listAgents: () => [] };
+// 新：
+mockRuntime.listRunningAgents = () => [];
+```
+
+- [ ] **步骤 7：运行全部测试**
+
+运行：`cd extensions/subagents && npx vitest run`
+预期：全 PASS
+
+- [ ] **步骤 8：运行 tsc**
+
+运行：`cd extensions/subagents && npx tsc --noEmit`
+预期：无错误
+
+- [ ] **步骤 9：提交**
+
+```bash
+git add -A extensions/subagents/
+git commit -m "refactor(subagents): delete inline widget render layer, replace with _runningAgents map (FR-2.0)"
 ```
 
 ---
 
-### Task 10: 文档同步 + 集成验证
+### 任务 7: 端到端验证
 
-**Type:** docs
-**Files:**
-- Modify: `CLAUDE.md`（包清单添加 list 命令说明）
-- Modify: `.xyz-harness/2026-06-14-subagent-tui/clarification.md`（标注 spec 已实施）
+**文件：** 无代码改动，纯验证
 
-**Depends on:** Task 1-9
+- [ ] **步骤 1：全部测试**
 
-- [ ] **Step 1: 更新 CLAUDE.md 中 subagents 包说明**
+运行：`cd extensions/subagents && npx vitest run`
+预期：全 PASS
 
-在 `CLAUDE.md` 的「extensions/subagents/」行（如有）后追加说明：
+- [ ] **步骤 2：tsc**
 
-```markdown
-| `extensions/subagents/` | `@zhushanwen/pi-subagents` | 进程内 agent 执行运行时（agent 发现、模型解析、并发控制） | `/subagents list` 全屏视图 |
-```
+运行：`cd extensions/subagents && npx tsc --noEmit`
+预期：无错误
 
-- [ ] **Step 2: 跑全量项目 typecheck + lint + test**
+- [ ] **步骤 3：AC 对照**
 
-```bash
-cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace/feat-subagent-enhance
-npx tsc --noEmit
-pnpm -r lint
-pnpm -r test
-```
-Expected: 全部通过
+逐项确认 spec AC-1 ~ AC-4：
 
-- [ ] **Step 3: 更新 .xyz-harness spec 状态**
+- AC-1（sync 压缩视图）：buildRenderLines 产出固定 6 行 ✓
+- AC-2（background 压缩视图）：startBackground 接受 onUpdate，block 实时刷新 ✓
+- AC-3（alt+o 展开）：renderSubagentResult 读 options.expanded ✓
+- AC-4（widget 删除）：agent-widget.ts 仅剩 WidgetAgentState，agent-widget.test.ts 已删 ✓
 
-在 `.xyz-harness/2026-06-14-subagent-tui/clarification.md` 顶部添加：
-
-```markdown
-> ✅ 实施完成（YYYY-MM-DD）：所有 9 个 task 已 commit。详见 plan.md。
-```
-
-- [ ] **Step 4: 提交 + 推送**
+- [ ] **步骤 4：最终提交（若有遗漏修复）**
 
 ```bash
 git add -A
-git commit -m "docs(subagents): update CLAUDE.md for /subagents list command"
+git commit -m "test(subagents): e2e verification pass for TUI block redesign" --allow-empty
 ```
-
----
-
-## 风险与权衡
-
-### 已知风险
-
-1. **WidgetAgentState 字段扩展破坏向后兼容**：serializeState / deserializeState 不在本次范围，但若未来需要持久化 widgetState，旧 session 反序列化可能丢 eventLog。当前不持久化 widget 状态，所以无影响。
-
-2. **sync cancelled 路径依赖 SDK 的 error/stopReason 区分**：当前 event-bridge.ts 在 stopReason=aborted 时产生 error 事件，runAgent catch 块据此设 status=cancelled。但 SDK 内部对 aborted vs error 的处理可能不一致——若 SDK 在 abort 时不发 stopReason=aborted，路径会失效。验证方法：本地跑 `subagent` 调用 + 外部 AbortController.abort()，观察 status。
-
-3. **ctx.ui.custom() 契约**：spec FR-4.1 假设 Pi SDK 真实支持 `{ invalidate, render, handleInput, dispose? }` 契约（参考 WorkflowsView.ts）。如果未来 SDK 改变契约，需同步更新。如 spec clarification.md A3 已确认此契约成立。
-
-### 长期方案 vs 短期方案
-
-- **长期方案（采用）**：eventLog ring buffer + 事件总线 + 双层留存，是正确的架构——事件流是 subagent 的核心数据通道，扩展 eventLog 自然
-- **短期方案（拒绝）**：直接在 updateWidgetFromEvent 内部用 console.log 输出——掩盖问题且无法回溯
-
-### YAGNI 检查
-
-- 没有实现"事件导出到 JSON 文件"功能（spec Q3 明确不持久化）
-- 没有实现"按 agent 名过滤"（spec 未要求）
-- 没有修改 WIDGET_LINGER_MS 时机（保持 5s 不变）
 
 ---
 
 ## 自我审查
 
-### 1. 规格覆盖
+### 规格覆盖
 
-| 章节 | Task 覆盖 |
-|------|----------|
-| FR-1.1 AgentEventLogEntry | Task 1 ✅ |
-| FR-1.1a event-bridge args | Task 2 ✅ |
-| FR-1.1b text_delta | Task 3 ✅ |
-| FR-1.2 WidgetAgentState 扩展 | Task 1, 3 ✅ |
-| FR-1.3 updateWidgetFromEvent 追加 | Task 3 ✅ |
-| FR-2.1 widget 布局 | Task 4 ✅ |
-| FR-2.2 行数限制 | Task 4 ✅ |
-| FR-3.0 留存机制 | Task 7 ✅ |
-| FR-3.0a agent 字段 | Task 7 ✅ |
-| FR-3.1 命令入口 | Task 9 ✅ |
-| FR-3.2 列表视图 | Task 8 ✅ |
-| FR-3.3 详情视图 | Task 8 ✅ |
-| FR-3.4 事件总线 | Task 6 ✅ |
-| FR-3.5 键盘交互 | Task 8 ✅ |
-| FR-3.5 G-025 sync cancelled | Task 7 ✅ |
-| FR-3.5 G-008 stalled 兜底 | Task 4 ✅ |
-| FR-3.6 hasUI 守卫 | Task 9 ✅ |
-| FR-4.1 subagents-view.ts | Task 8 ✅ |
-| AC-1 运行时滚动消息 | Task 3, 4 ✅ |
-| AC-2 全屏列表视图 | Task 8 ✅ |
-| AC-3 全屏详情视图 | Task 8 ✅ |
-| AC-4 hasUI 守卫 | Task 9 ✅ |
+| Spec FR | 对应任务 | 状态 |
+|---------|---------|------|
+| FR-1.1 AgentEventLogEntry type 扩展 | 任务 1 步骤 4 | ✅ |
+| FR-1.1a event-bridge thinking_delta | 任务 1 步骤 6 | ✅ |
+| FR-1.1b text_output/thinking 切片 | 任务 2 步骤 4 | ✅ |
+| FR-1.2 SubagentToolDetails model/thinkingLevel | 任务 3 步骤 3 + 任务 4 步骤 5 + 任务 5 步骤 5 | ✅ |
+| FR-1.3 事件采集统一（bg onUpdate） | 任务 5 步骤 4 | ✅ |
+| FR-2.0 删除 widget 渲染层 | 任务 6 | ✅ |
+| FR-2.1 6 行压缩布局 | 任务 3 步骤 3 | ✅ |
+| FR-2.2 alt+o 展开 | 任务 3 步骤 3（buildExpandedLines）+ 任务 4 步骤 3（options.expanded） | ✅ |
+| FR-2.3 spinner 定时器 | 任务 4 步骤 3 | ✅ |
+| FR-2.4 背景色 theme token | 任务 3 步骤 3（getBgFn） | ✅ |
+| FR-2.5 background 实时刷新 | 任务 5 步骤 4-5 | ✅ |
 
-### 2. 占位符扫描
+### 占位符扫描
 
-无 TBD/TODO/类似任务 N。命令、文件路径、代码块均具体。
+- 任务 5 步骤 6 的 `resolveModel` import 路径要求实施时 `ls resolution/` 确认——这是合理的实现时确认（路径未硬编码），**不算占位符**。
+- 任务 5 步骤 1 的 `createTestRuntime` 标注"替换为实际函数名"——同上，步骤 1 已给出 `head -30` 确认命令。
+- 所有代码步骤都含完整代码块，无 "TODO"/"类似任务 N"。
 
-### 3. 类型一致性
+### 类型一致性
 
-- `AgentEventLogEntry` 在 types.ts 定义 → format.ts/runtime.ts/agent-widget.ts/subagents-view.ts 引用
-- `CompletedAgentRecord` 在 types.ts 定义 → runtime.ts 持有 Map
-- `SubagentRecord` 在 subagents-view.ts 定义（view 内部，简化 BgRecord/WidgetAgentState/CompletedAgentRecord 共有字段）
-- `ViewState` 在 subagents-view.ts 定义
-- `BgRecord` 内部接口（在 runtime.ts 私有，扩展 eventLog + agent）— 不导出，对外通过 `listBackground` 返回的 `BackgroundStatus` 接口（已有）保持兼容
-- `WidgetAgentState` 扩展 eventLog/_currentTurnText（运行时私有字段，不在 serialize 路径上）
+- `SubagentToolState`（任务 4 定义）→ renderSubagentResult context 参数 ✓
+- `WidgetAgentState._currentThinking`（任务 2 步骤 3 定义）→ updateWidgetFromEvent 使用 ✓
+- `buildRenderLines(details, width, theme, options)` 签名（任务 3 定义）→ SubagentResultComponent.render ✓
+- `renderSubagentResult`（任务 4 导出）→ renderResult 字段 + 测试 ✓
+- `BackgroundOptions.onUpdate`（任务 5 步骤 3 定义）→ startBackground + subagent-tool 调用 ✓
+- `ThemeLike`（任务 3 导出）→ 测试 import ✓
 
-### 4. 跨 Task 引用
-
-Task 1 输出 → Task 2/3/4/6/7/8 输入
-Task 3 输出 → Task 4/5 输入
-Task 6 输出 → Task 7 输入
-Task 7 输出 → Task 8 输入
-
-依赖关系图：
-```
-Task 1 → Task 2 → Task 3 → Task 4
-                  ↘
-                    Task 6 → Task 7 → Task 8 → Task 9 → Task 10
-                  Task 7 ↗
-```
-
-Task 5 依赖 Task 1, 4（独立流，但与 Task 3 共享 updateWidgetFromEvent 的修改）
-
----
-
-## 执行交接
-
-**计划已完成并保存到 `.xyz-harness/2026-06-14-subagent-tui/plan.md`。两种执行方式：**
-
-**1. Subagent 驱动（推荐）** — 派遣独立 subagent 逐任务执行（每个 task 一个 fresh subagent + 两阶段审查：spec compliance + code quality）。上下文隔离，适合 9 个 task 的中型规模。
-
-**2. 内联执行** — 当前会话内逐 task 执行，typecheck + vitest 作为检查点。
-
-**选择哪种方式？**
+无类型不一致。
