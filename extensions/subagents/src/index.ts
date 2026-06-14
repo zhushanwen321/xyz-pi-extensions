@@ -31,13 +31,9 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     rt.injectPi(pi as never);
     rt.injectModelRegistry(ctx.modelRegistry as never);
 
-    // Live widget: 仅在 UI 可用时附加（print/RPC 模式 hasUI=false）
-    if (ctx.hasUI) {
-      rt.attachWidgetUI({
-        setWidget: (key, content) => ctx.ui.setWidget(key, content),
-        setStatus: (key, text) => ctx.ui.setStatus(key, text),
-      });
-    }
+    // widget UI 不再附加：subagent 进度通过 renderResult 渲染在对话流中。
+    // widget tracker 仍保留（供 /subagents list 获取 running agents 数据）。
+    // 不调用 attachWidgetUI() → render() 始终 no-op → 无 spinner/淡出动画。
 
     const entries = ctx.sessionManager.getEntries() ?? [];
     rt.restoreFromEntries(entries);

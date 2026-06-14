@@ -8,20 +8,30 @@
 //
 // 工具名 `subagent` 已在 EXCLUDED_TOOL_NAMES 预留（FR-6.2），子 agent 不会递归调用。
 // 参考 tintinweb/pi-subagents 的 subagent tool 设计。
+//
+// 对话流渲染（FR-2/FR-3）：
+//   renderResult 返回 SubagentResultComponent，以背景色 block 形式在对话流中展示：
+//   - running 时：toolPendingBg（进度 + eventLog）
+//   - done 时：toolSuccessBg（eventLog + result）
+//   - failed 时：toolErrorBg（eventLog + error）
+//   eventLog 不带 ├─ 前缀，直接显示 label + icon。
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, Theme } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 import { getRuntime } from "../runtime.ts";
+import { extractLabelFromArgs } from "../tui/format.ts";
+import { SubagentResultComponent,type SubagentToolDetails } from "../tui/subagent-render.ts";
+import type { AgentEvent, AgentEventLogEntry } from "../types.ts";
+import { MAX_EVENT_LOG_ENTRIES, TURN_SUMMARY_MAX } from "../types.ts";
 
 /** ms to seconds conversion */
 const MS_PER_SECOND = 1000;
 
-/** 工具参数 schema（TypeBox）
- *
- * task 是 Optional 而非 Required：backgroundId（轮询）模式不需要 task，
- * 强制必填会让 LLM 在轮询时被迫传占位值（与 backgroundId 描述"Ignores task/agent/wait"矛盾）。
- * 同步/background 模式对 task 的必填约束改在 execute() 内运行时校验。 */
+// ============================================================
+// Params schema
+// ============================================================
+
 const SubagentParams = Type.Object({
   task: Type.Optional(
     Type.String({
@@ -49,14 +59,15 @@ const SubagentParams = Type.Object({
   ),
 });
 
+// ============================================================
+// Tool registration
+// ============================================================
+
 /**
  * 注册 `subagent` LLM 工具。
  * 由扩展工厂（src/index.ts）调用。
  */
 export function registerSubagentTool(pi: ExtensionAPI): void {
-  // Cast: the tool shape is correct, but the subagents SDK type stub differs from
-  // the real SDK types resolved when workflow compiles this source. Casting avoids
-  // cross-tsconfig ToolDefinition generic inference mismatch.
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
@@ -64,65 +75,90 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       "Delegate a task to a specialized subagent running in an isolated in-process session with its own context. Supports synchronous (await result), background (fire-and-forget), and result polling.",
     promptSnippet: "Delegate a task to a subagent (sync/background)",
     promptGuidelines: [
-      // --- When to use ---
       "Use for focused subtasks that benefit from a specialized agent and isolated context: multi-file code review, web research, codebase scouting, implementation planning.",
       "Pass wait:false for long-running tasks you don't need immediately; poll with backgroundId later.",
-      // --- When NOT to use (F4 tool-misuse defense) ---
       "Do NOT delegate simple one-line fixes or questions you can answer yourself — delegation has overhead (new session, no inherited context).",
       "Do NOT delegate tasks that require your current conversation context — the subagent starts fresh and cannot see your chat history.",
       "Do NOT delegate tasks the user asked YOU to do directly — if the user says 'you do X', they expect you, not a subagent.",
       "Do NOT use this tool to avoid work you find tedious — if you have the tools and context, do it yourself.",
-      // --- Capability boundary (F5 scope-creep defense) ---
       "The subagent CANNOT modify your conversation context. Its text output and structured artifacts are the ONLY things returned to you. It cannot set your variables, call your tools, or continue your workflow.",
-      // --- Examples (P5 example-driven) ---
       "Example: delegate 'review the error handling in src/auth/' to reviewer, or 'research best practices for X' to researcher with wait:false.",
       "Counter-example: do NOT delegate 'fix the typo on line 42 of foo.ts' — do it directly.",
     ],
     executionMode: "sequential",
     parameters: SubagentParams,
 
+    // ── renderResult：对话流背景色 block ──────────────────────
+    renderResult(
+      result: { content: Array<{ type: string; text?: string }>; details?: unknown },
+      _options: { expanded: boolean; isPartial: boolean },
+      theme: Theme,
+    ) {
+      const details = result.details as SubagentToolDetails | undefined;
+      if (!details) {
+        // Fallback：无 details 时显示原始 content 文本
+        const text = result.content[0];
+        return { render: (_w: number) => [text?.type === "text" ? (text.text ?? "") : ""], invalidate() {} };
+      }
+      return new SubagentResultComponent(details, theme);
+    },
+
     async execute(
       _toolCallId: string,
       params: { task?: string; agent?: string; wait?: boolean; backgroundId?: string },
       signal: AbortSignal | undefined,
-      _onUpdate: unknown,
-      _ctx: unknown,
+      onUpdate?: (partialResult: { content: Array<{ type: string; text?: string }>; details: SubagentToolDetails }) => void,
     ) {
       const rt = getRuntime();
       if (!rt) {
         throw new Error("SubagentRuntime not initialized (session_start not fired).");
       }
 
-      // 模式 3: 查询 background 结果（不需要 task）
+      // ── Mode 3: query background result ──────────────────
       if (params.backgroundId) {
         const status = rt.getBackground(params.backgroundId);
         if (!status) {
           throw new Error(`Background subagent "${params.backgroundId}" not found.`);
         }
         if (status.status === "running") {
+          const details: SubagentToolDetails = {
+            eventLog: status.eventLog ?? [],
+            status: "running",
+            agent: status.agent ?? "default",
+            turns: 0,
+            totalTokens: 0,
+            elapsedSeconds: Math.round((Date.now() - status.startedAt) / MS_PER_SECOND),
+          };
           return {
             content: [
               {
                 type: "text" as const,
-                text: `Background subagent ${status.id} is still running (started ${Math.round((Date.now() - status.startedAt) / MS_PER_SECOND)}s ago). Poll again later.`,
+                text: `Background subagent ${status.id} is still running (started ${details.elapsedSeconds}s ago). Poll again later.`,
               },
             ],
-            details: { backgroundId: status.id, status: status.status },
+            details,
           };
         }
+        const details: SubagentToolDetails = {
+          eventLog: status.eventLog ?? [],
+          status: status.status === "done" ? "done" : "failed",
+          agent: status.agent ?? "default",
+          turns: status.result?.turns ?? 0,
+          totalTokens: status.result?.usage
+            ? status.result.usage.input + status.result.usage.output + status.result.usage.cacheRead + status.result.usage.cacheWrite
+            : 0,
+          elapsedSeconds: status.endedAt ? Math.round((status.endedAt - status.startedAt) / MS_PER_SECOND) : 0,
+          result: status.result?.text,
+          error: status.error,
+        };
         const text = status.result?.text ?? status.error ?? "(no output)";
         return {
           content: [{ type: "text" as const, text }],
-          details: {
-            backgroundId: status.id,
-            status: status.status,
-            artifacts: status.result?.parsedOutput,
-            sessionId: status.result?.sessionId,
-          },
+          details,
         };
       }
 
-      // task 在同步/background 模式下必填（schema 设为 Optional 是为了 backgroundId 模式不需要它）
+      // task required for sync/background modes
       if (!params.task) {
         throw new Error(
           'Parameter "task" is required unless polling with backgroundId. ' +
@@ -130,13 +166,22 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         );
       }
 
-      // 模式 2: background（wait:false）
+      // ── Mode 2: background ──────────────────────────────
       if (params.wait === false) {
         const handle = rt.startBackground({
           task: params.task,
           agent: params.agent,
           signal,
         });
+        const details: SubagentToolDetails = {
+          eventLog: [],
+          status: "running",
+          agent: params.agent ?? "default",
+          turns: 0,
+          totalTokens: 0,
+          elapsedSeconds: 0,
+          backgroundId: handle.id,
+        };
         return {
           content: [
             {
@@ -144,28 +189,110 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
               text: `Started background subagent ${handle.id}. Call this tool again with backgroundId="${handle.id}" to check its result.`,
             },
           ],
-          details: { backgroundId: handle.id, status: handle.status },
+          details,
         };
       }
 
-      // 模式 1: 同步（默认）
+      // ── Mode 1: sync ────────────────────────────────────
+      const startTime = Date.now();
+      const agentName = params.agent ?? "default";
+
+      // 维护 eventLog（ring buffer），onEachEvent 时推送给 onUpdate
+      const eventLog: AgentEventLogEntry[] = [];
+      let turns = 0;
+      let totalTokens = 0;
+      let currentTurnText = "";
+
+      const buildDetails = (status: SubagentToolDetails["status"]): SubagentToolDetails => ({
+        eventLog: [...eventLog],
+        status,
+        agent: agentName,
+        turns,
+        totalTokens,
+        elapsedSeconds: Math.floor((Date.now() - startTime) / MS_PER_SECOND),
+      });
+
+      const pushUpdate = (status: SubagentToolDetails["status"]) => {
+        onUpdate?.({
+          content: [{ type: "text", text: formatProgressText(eventLog, turns, totalTokens, startTime) }],
+          details: buildDetails(status),
+        });
+      };
+
       const result = await rt.runAgent({
         task: params.task,
         agent: params.agent,
         signal,
+        onEvent: (event: AgentEvent) => {
+          switch (event.type) {
+            case "tool_start": {
+              const label = extractLabelFromArgs(event.toolName, (event as { args?: unknown }).args);
+              eventLog.push({ type: "tool_start", label, ts: Date.now(), status: "running" });
+              break;
+            }
+            case "tool_end": {
+              const label = extractLabelFromArgs(event.toolName, (event as { args?: unknown }).args);
+              eventLog.push({ type: "tool_end", label, ts: Date.now(), status: event.isError ? "failed" : "done" });
+              break;
+            }
+            case "text_delta": {
+              currentTurnText += event.delta;
+              break;
+            }
+            case "turn_end": {
+              const summary = currentTurnText.slice(0, TURN_SUMMARY_MAX);
+              eventLog.push({ type: "turn_end", label: summary, ts: Date.now() });
+              currentTurnText = "";
+              turns++;
+              break;
+            }
+            case "message_end": {
+              if (event.usage) {
+                totalTokens += event.usage.input + event.usage.output + event.usage.cacheRead + event.usage.cacheWrite;
+              }
+              break;
+            }
+          }
+          // Ring buffer
+          while (eventLog.length > MAX_EVENT_LOG_ENTRIES) eventLog.shift();
+          // Push live update
+          pushUpdate("running");
+        },
       });
+
       if (!result.success) {
+        pushUpdate("failed");
         throw new Error(result.error ?? "subagent failed (no error detail)");
       }
+
+      const finalDetails = buildDetails("done");
+      finalDetails.result = result.text;
       return {
         content: [{ type: "text" as const, text: result.text }],
-        details: {
-          artifacts: result.parsedOutput,
-          usage: result.usage,
-          turns: result.turns,
-          sessionId: result.sessionId,
-        },
+        details: finalDetails,
       };
     },
   } as never);
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+
+/** Build progress text for the model (content field) */
+function formatProgressText(
+  eventLog: AgentEventLogEntry[],
+  turns: number,
+  totalTokens: number,
+  startTime: number,
+): string {
+  const elapsed = Math.floor((Date.now() - startTime) / MS_PER_SECOND);
+  const tokenStr = totalTokens >= 1000 ? `${(totalTokens / 1000).toFixed(1)}k` : `${totalTokens}`;
+  const lines = [`[subagent] ${turns} turns | ${tokenStr} tokens | ${elapsed}s`];
+  // Show last 3 events for context
+  const recent = eventLog.slice(-3);
+  for (const entry of recent) {
+    lines.push(`  ${entry.label}`);
+  }
+  return lines.join("\n");
 }
