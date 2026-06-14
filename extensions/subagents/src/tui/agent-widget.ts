@@ -43,6 +43,8 @@ export interface WidgetAgentState {
   eventLog?: AgentEventLogEntry[];
   /** FR-1.1b: 当前 turn 文本累加缓冲（turn_end 时切片后重置） */
   _currentTurnText?: string;
+  /** FR-1.1a: thinking delta 累加缓冲（切片后重置） */
+  _currentThinking?: string;
 }
 
 /** 渲染 widget 内容（string[] 行） */

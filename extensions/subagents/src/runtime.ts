@@ -29,6 +29,8 @@ import {
   type SessionModelState,
   type SubagentHooks,
   type SubagentsGlobalConfig,
+  THINKING_CHUNK,
+  TEXT_OUTPUT_CHUNK,
   TURN_SUMMARY_MAX,
 } from "./types.ts";
 
@@ -596,12 +598,36 @@ export function updateWidgetFromEvent(
     }
     case "text_delta": {
       s._currentTurnText = (s._currentTurnText ?? "") + (event.delta ?? "");
+      // FR-1.1b: 节流切片——累计达 TEXT_OUTPUT_CHUNK 产生一条 text_output log entry
+      if ((s._currentTurnText ?? "").length >= TEXT_OUTPUT_CHUNK) {
+        s.eventLog.push({ type: "text_output", label: s._currentTurnText!.slice(0, 100), ts: Date.now() });
+        s._currentTurnText = "";
+      }
+      break;
+    }
+    case "thinking_delta": {
+      s._currentThinking = (s._currentThinking ?? "") + (event.delta ?? "");
+      // FR-1.1a: 节流切片——累计达 THINKING_CHUNK 产生一条 thinking log entry
+      if ((s._currentThinking ?? "").length >= THINKING_CHUNK) {
+        s.eventLog.push({ type: "thinking", label: s._currentThinking!.slice(0, 100), ts: Date.now() });
+        s._currentThinking = "";
+      }
       break;
     }
     case "turn_end": {
-      const summary = (s._currentTurnText ?? "").slice(0, TURN_SUMMARY_MAX);
-      s.eventLog.push({ type: "turn_end", label: summary, ts: Date.now() });
-      s._currentTurnText = "";
+      // FR-1.1b: flush 残留的 text/thinking 缓冲。
+      // 注意：先取 summary 再 flush——turn_end 的 label 用本 turn 的完整文本，
+      // 同时 text_output entry 切片独立产出（与 summary 不互斥）。
+      const turnSummary = (s._currentTurnText ?? "").slice(0, TURN_SUMMARY_MAX);
+      if (s._currentTurnText) {
+        s.eventLog.push({ type: "text_output", label: s._currentTurnText.slice(0, 100), ts: Date.now() });
+        s._currentTurnText = "";
+      }
+      if (s._currentThinking) {
+        s.eventLog.push({ type: "thinking", label: s._currentThinking.slice(0, 100), ts: Date.now() });
+        s._currentThinking = "";
+      }
+      s.eventLog.push({ type: "turn_end", label: turnSummary, ts: Date.now() });
       s.turns = (s.turns ?? 0) + 1;
       break;
     }
