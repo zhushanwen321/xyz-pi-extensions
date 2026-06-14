@@ -408,9 +408,7 @@ describe("runAgent", () => {
       try { fs.rmSync(v3Repo, { recursive: true, force: true }); } catch { /* best effort */ }
     });
 
-    // retry(3): 该测试创建真实 git worktree，在全量测试文件并行时偶发
-    // .git/worktrees 锁竞态（瞬时失败）。重试消除 flakiness，不改断言语义。
-    it.retry(3)("factory 抛错 + isolation:worktree → worktree 被清理（不泄漏到 tmpdir）", async () => {
+    it("factory 抛错 + isolation:worktree → worktree 被清理（不泄漏到 tmpdir）", async () => {
       // 让 factory 抛错（session 创建失败的高频路径）
       sessionFactoryMocks.createAndConfigureSession.mockRejectedValue(
         new Error("model unavailable"),
