@@ -77,6 +77,25 @@ export interface ToolCallEntry {
 
 export interface AgentResult {
   text: string;
+  /**
+   * 结构化产物（artifacts）。
+   *
+   * 当调用方传入 `schema`（RunAgentOptions.schema / ManagedSession 不支持）且
+   * agent 调用了 `structured-output` tool 时，此处是该 tool 返回的解析后 JSON
+   * 对象（取自 tool 结果的 `details` 字段）；否则为 undefined。
+   *
+   * 给 AI / 调用方的使用指南：
+   * - 传 `schema` 参数可约束子 agent 返回结构化 JSON（而非自由文本）。
+   *   runAgent() 会把 schema 拼成 `MANDATORY: Structured Output Requirement`
+   *   指令附在 task 末尾，并追踪 `structured-output` tool 调用。
+   * - `parsedOutput` 就是子 agent 回传的 artifacts（如 `{issues:[...], summary}`、
+   *   `{findings, recommendation}`、`{filesChanged, diffSummary}`）。
+   * - 适合需要可编程消费结果的场景：代码审查报告、调研结论、diff 摘要、
+   *   结构化决策记录。
+   * - 不传 schema 时，使用 `text` 字段拿自由文本输出。
+   * - 如果 agent 未调用 structured-output tool（忘记/不可用），parsedOutput
+   *   为 undefined，应回退到 text。
+   */
   parsedOutput?: unknown;
   usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
   turns: number;
@@ -85,6 +104,38 @@ export interface AgentResult {
   error?: string;
   sessionId: string;
   toolCalls: ToolCallEntry[];
+}
+
+// ============================================================
+// Background fire-and-forget（参考 tintinweb/pi-subagents 的 wait:false）
+// ============================================================
+export type BackgroundStatusKind = "running" | "done" | "failed" | "cancelled";
+
+/** startBackground() 立即返回的句柄（调用方可后续查询） */
+export interface BackgroundHandle {
+  readonly id: string;
+  readonly status: BackgroundStatusKind;
+}
+
+/** getBackground() 返回的完整状态（含结果） */
+export interface BackgroundStatus extends BackgroundHandle {
+  /** 完成时的 AgentResult（status=done/failed 时存在） */
+  result?: AgentResult;
+  /** 失败原因（status=failed/cancelled 时存在） */
+  error?: string;
+  /** 启动时间（ms epoch） */
+  startedAt: number;
+  /** 结束时间（ms epoch，未结束时 undefined） */
+  endedAt?: number;
+}
+
+/**
+ * Background 选项。继承 RunAgentOptions（task/agent/model 等），
+ * 额外支持完成回调。后台任务用独立的 AbortController（可用 signal 覆盖）。
+ */
+export interface BackgroundOptions extends RunAgentOptions {
+  /** 任务完成（成功/失败/取消）时回调。与 pi.events 'subagents:bg:done' 二选一或都有 */
+  onComplete?: (status: BackgroundStatus) => void;
 }
 
 // ============================================================
