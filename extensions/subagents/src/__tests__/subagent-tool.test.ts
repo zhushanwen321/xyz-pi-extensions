@@ -47,11 +47,12 @@ interface CapturedTool {
   ) => Promise<ExecuteResult>;
 }
 
-/** mock runtime 的鸭子类型（execute 只用到这三个方法） */
+/** mock runtime 的鸭子类型（execute 用到的方法） */
 interface MockRuntime {
   runAgent: ReturnType<typeof vi.fn>;
   startBackground: ReturnType<typeof vi.fn>;
   getBackground: ReturnType<typeof vi.fn>;
+  getAgentConfig: ReturnType<typeof vi.fn>;
 }
 
 // ============================================================
@@ -77,6 +78,8 @@ function makeMockRuntime(overrides: Partial<MockRuntime> = {}): MockRuntime {
     runAgent: overrides.runAgent ?? vi.fn(),
     startBackground: overrides.startBackground ?? vi.fn(),
     getBackground: overrides.getBackground ?? vi.fn(),
+    // FR-O2.2: 默认返回 undefined（无 defaultBackground 配置 → 走 sync）
+    getAgentConfig: overrides.getAgentConfig ?? vi.fn(() => undefined),
   };
 }
 

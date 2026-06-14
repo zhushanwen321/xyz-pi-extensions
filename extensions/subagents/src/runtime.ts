@@ -14,6 +14,7 @@ import { createSessionModelState, restoreState, serializeState, setAgentModel, s
 import { AgentWidgetManager, type WidgetAgentState, type WidgetUI } from "./tui/agent-widget.ts";
 import { extractLabelFromArgs } from "./tui/format.ts";
 import {
+  type AgentConfig,
   type AgentEvent,
   type AgentEventLogEntry,
   type AgentResult,
@@ -605,6 +606,16 @@ export class SubagentRuntime {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * FR-O2.2 G-026: 查询 agent 配置（供工具层判定 defaultBackground）。
+   * 内部调用 agentRegistry.get（含 discover）。找不到返回 undefined。
+   */
+  getAgentConfig(name?: string): AgentConfig | undefined {
+    if (!name) return undefined;
+    this.agentRegistry.discoverAll(this.builtinRegistry);
+    return this.agentRegistry.get(name);
   }
 
   /** 持久化全局配置（供 config-wizard 调用） */

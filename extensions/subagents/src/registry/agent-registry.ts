@@ -112,6 +112,7 @@ export class AgentRegistry {
           category: parsed.category,
           extSelectors: parsed.extSelectors,
           isolation: parsed.isolation,
+          defaultBackground: parsed.defaultBackground,
           source,
           filePath,
         });

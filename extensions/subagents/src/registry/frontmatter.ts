@@ -19,6 +19,8 @@ export interface ParsedFrontmatter {
   extSelectors?: ExtSelectors;
   /** 隔离模式 */
   isolation?: "worktree";
+  /** FR-O2.1: 该 agent 默认用 background 执行（LLM 未显式传 wait 时生效） */
+  defaultBackground?: boolean;
 }
 
 const FM_DELIM = "---";
@@ -99,6 +101,10 @@ export function parseAgentFrontmatter(content: string, fileName: string): Parsed
   const isolationRaw = extractYamlField(yamlBlock, "isolation");
   const isolation = isolationRaw === "worktree" ? "worktree" : undefined;
 
+  // FR-O2.1: defaultBackground（布尔，frontmatter 中写 defaultBackground: true）
+  const defaultBackgroundRaw = extractYamlField(yamlBlock, "defaultBackground");
+  const defaultBackground = defaultBackgroundRaw === "true";
+
   return {
     name,
     systemPrompt: body,
@@ -110,6 +116,7 @@ export function parseAgentFrontmatter(content: string, fileName: string): Parsed
     skills,
     extSelectors,
     isolation,
+    defaultBackground: defaultBackgroundRaw ? defaultBackground : undefined,
   };
 }
 

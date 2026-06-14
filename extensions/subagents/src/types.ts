@@ -306,6 +306,8 @@ export interface AgentConfig {
   extSelectors?: ExtSelectors;
   /** 隔离模式：undefined=原地运行，"worktree"=git worktree 副本 */
   isolation?: "worktree";
+  /** FR-O2.1: 该 agent 默认用 background 执行（LLM 未显式传 wait 时生效）。默认 false */
+  defaultBackground?: boolean;
   source: AgentSource;
   filePath?: string;
 }

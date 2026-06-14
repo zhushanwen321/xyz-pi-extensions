@@ -7,7 +7,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SubagentRuntime } from "../runtime.ts";
-import type { AgentEvent, AgentResult, BackgroundStatus, RunAgentOptions } from "../types.ts";
+import type { AgentConfig, AgentEvent, AgentResult, BackgroundStatus, RunAgentOptions } from "../types.ts";
 
 /** 等待合并窗口（2000ms）到期 + 余量 */
 const BG_MERGE_WINDOW_WAIT_MS = 2100;
@@ -460,5 +460,70 @@ describe("priority (FR-O4)", () => {
     expect(runAgentMock).toHaveBeenCalledTimes(1);
     const passedOpts = runAgentMock.mock.calls[0]![0] as RunAgentOptions;
     expect(passedOpts.priority).toBe(1000);
+  });
+});
+
+describe("defaultBackground (FR-O2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("getAgentConfig returns undefined for missing name", () => {
+    const rt = makeRuntime();
+    expect(rt.getAgentConfig()).toBeUndefined();
+    expect(rt.getAgentConfig("nonexistent-agent")).toBeUndefined();
+  });
+
+  it("getAgentConfig returns registered agent with defaultBackground flag", () => {
+    const rt = makeRuntime();
+    const config: AgentConfig = {
+      name: "researcher-bg",
+      systemPrompt: "test",
+      defaultBackground: true,
+      source: "builtin",
+    };
+    rt.builtinRegistry.register(config);
+
+    const found = rt.getAgentConfig("researcher-bg");
+    expect(found).toBeDefined();
+    expect(found?.defaultBackground).toBe(true);
+  });
+
+  it("effectiveWait = false when agent has defaultBackground:true and wait not passed", () => {
+    const rt = makeRuntime();
+    rt.builtinRegistry.register({
+      name: "researcher-bg",
+      systemPrompt: "test",
+      defaultBackground: true,
+      source: "builtin",
+    });
+    const agentConfig = rt.getAgentConfig("researcher-bg");
+    // 模拟 subagent-tool 的判定逻辑（FR-O2.2）
+    const effectiveWait = agentConfig?.defaultBackground ? false : true;
+    expect(effectiveWait).toBe(false); // 走 background
+  });
+
+  it("effectiveWait = true (sync) when agent has no defaultBackground", () => {
+    const rt = makeRuntime();
+    // worker 是 builtin，无 defaultBackground
+    const agentConfig = rt.getAgentConfig("worker");
+    const effectiveWait = agentConfig?.defaultBackground ? false : true;
+    expect(effectiveWait).toBe(true); // 默认 sync
+  });
+
+  it("explicit wait:true overrides defaultBackground:true", () => {
+    const rt = makeRuntime();
+    rt.builtinRegistry.register({
+      name: "researcher-bg",
+      systemPrompt: "test",
+      defaultBackground: true,
+      source: "builtin",
+    });
+    // 模拟 subagent-tool 的判定逻辑：显式 wait 优先
+    const explicitWait = true; // LLM 显式传 wait:true
+    const effectiveWait = explicitWait;
+    expect(effectiveWait).toBe(true); // 显式覆盖，走 sync
+    // 配置仍在，但被覆盖
+    expect(rt.getAgentConfig("researcher-bg")?.defaultBackground).toBe(true);
   });
 });

@@ -166,8 +166,17 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         );
       }
 
+      // FR-O2.2: 判定 effective wait（显式 params.wait > agent.defaultBackground > 默认 sync）
+      let effectiveWait: boolean;
+      if (params.wait !== undefined) {
+        effectiveWait = params.wait; // 显式优先
+      } else {
+        const agentConfig = rt.getAgentConfig(params.agent);
+        effectiveWait = agentConfig?.defaultBackground ? false : true; // 配置其次，默认 sync
+      }
+
       // ── Mode 2: background ──────────────────────────────
-      if (params.wait === false) {
+      if (effectiveWait === false) {
         const handle = rt.startBackground({
           task: params.task,
           agent: params.agent,
