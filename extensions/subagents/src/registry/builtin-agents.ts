@@ -32,12 +32,15 @@ const BUILTIN_DEFAULT_CATEGORY: Record<string, string> = {
   "context-builder": "planning",
 };
 
+/** 防递归约束（所有子 agent 共有，注入到每个 fallback systemPrompt） */
+const NO_RECURSION = " You are a sub-agent — do not call the subagent tool.";
+
 /** 硬编码 fallback（当 agents/*.md 不可读时使用，如测试环境无 fs 访问） */
 const FALLBACK_AGENTS: readonly AgentConfig[] = [
   {
     name: "worker",
     source: "builtin",
-    systemPrompt: "You are a coding agent. Complete the task precisely.",
+    systemPrompt: "You are a coding agent. Complete the task precisely." + NO_RECURSION,
     description: "通用执行 agent（编码、修复、文件操作）",
     extensions: true,
     builtinTools: undefined,
@@ -46,7 +49,7 @@ const FALLBACK_AGENTS: readonly AgentConfig[] = [
   {
     name: "reviewer",
     source: "builtin",
-    systemPrompt: "You are a code reviewer. Find bugs, logic errors, and security issues.",
+    systemPrompt: "You are a code reviewer. Find bugs, logic errors, and security issues." + NO_RECURSION,
     description: "代码审查 agent",
     extensions: false,
     builtinTools: ["read"],
@@ -55,7 +58,7 @@ const FALLBACK_AGENTS: readonly AgentConfig[] = [
   {
     name: "researcher",
     source: "builtin",
-    systemPrompt: "You are a web researcher. Search, evaluate, and synthesize findings.",
+    systemPrompt: "You are a web researcher. Search, evaluate, and synthesize findings." + NO_RECURSION,
     description: "网络调研 agent",
     extensions: false,
     builtinTools: ["read", "web_search"],
@@ -64,7 +67,7 @@ const FALLBACK_AGENTS: readonly AgentConfig[] = [
   {
     name: "scout",
     source: "builtin",
-    systemPrompt: "You are a codebase recon agent. Explore structure and return compressed context.",
+    systemPrompt: "You are a codebase recon agent. Explore structure and return compressed context." + NO_RECURSION,
     description: "快速代码库侦查",
     extensions: false,
     builtinTools: ["read", "bash", "grep"],
@@ -73,7 +76,7 @@ const FALLBACK_AGENTS: readonly AgentConfig[] = [
   {
     name: "planner",
     source: "builtin",
-    systemPrompt: "You are a planning agent. Break down tasks and create implementation plans.",
+    systemPrompt: "You are a planning agent. Break down tasks and create implementation plans." + NO_RECURSION,
     description: "实施计划 agent",
     extensions: false,
     builtinTools: ["read"],
@@ -82,7 +85,7 @@ const FALLBACK_AGENTS: readonly AgentConfig[] = [
   {
     name: "oracle",
     source: "builtin",
-    systemPrompt: "You are a decision oracle. Protect inherited state and prevent drift.",
+    systemPrompt: "You are a decision oracle. Protect inherited state and prevent drift." + NO_RECURSION,
     description: "高上下文决策一致性守护",
     extensions: false,
     builtinTools: ["read"],
@@ -91,7 +94,7 @@ const FALLBACK_AGENTS: readonly AgentConfig[] = [
   {
     name: "context-builder",
     source: "builtin",
-    systemPrompt: "You are a context builder. Analyze requirements and generate meta-prompts.",
+    systemPrompt: "You are a context builder. Analyze requirements and generate meta-prompts." + NO_RECURSION,
     description: "需求分析与元提示生成",
     extensions: false,
     builtinTools: ["read"],
