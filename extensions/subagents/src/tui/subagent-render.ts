@@ -6,6 +6,7 @@
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
+import { formatEventLogLine, formatTokens } from "./format.ts";
 import type { AgentEventLogEntry } from "../types.ts";
 
 // ============================================================
@@ -55,31 +56,6 @@ function statusGlyph(status: SubagentToolDetails["status"], frame: number, theme
 }
 
 // ============================================================
-// Format helpers
-// ============================================================
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return `${n}`;
-}
-
-function formatScrollLine(entry: AgentEventLogEntry, theme: ThemeLike): string {
-  const prefix = theme.fg("dim", "├─ ");
-  switch (entry.type) {
-    case "tool_start": return `${prefix}${entry.label}`;
-    case "tool_end": {
-      const icon = entry.status === "failed" ? theme.fg("error", "✗") : theme.fg("success", "✓");
-      return `${prefix}${entry.label} ${icon}`;
-    }
-    case "text_output": return `${prefix}${entry.label}`;
-    case "thinking": return `${prefix}${theme.fg("dim", entry.label)}`;
-    case "turn_end": return `${prefix}${theme.fg("dim", "turn end")}`;
-    default: return `${prefix}${entry.label}`;
-  }
-}
-
-// ============================================================
 // buildRenderLines
 // ============================================================
 
@@ -107,7 +83,7 @@ function buildCompactLines(details: SubagentToolDetails, width: number, theme: T
     .filter((e) => e.type !== "turn_end")
     .slice(-4);
   for (const entry of recent) {
-    lines.push(formatScrollLine(entry, theme));
+    lines.push(formatEventLogLine(entry, theme));
   }
   while (lines.length < 5) lines.push(""); // 空行填充
 
@@ -133,7 +109,7 @@ function buildExpandedLines(details: SubagentToolDetails, theme: ThemeLike, fram
       lines.push(theme.fg("dim", `── turn ${turnNumber} ──`));
       continue;
     }
-    lines.push(formatScrollLine(entry, theme));
+    lines.push(formatEventLogLine(entry, theme, turnNumber));
   }
 
   if (details.status === "done" && details.result) {

@@ -31,6 +31,7 @@ import {
   type SubagentHooks,
   type SubagentsGlobalConfig,
   type ResolvedModel,
+  EVENT_LOG_LABEL_MAX,
   THINKING_CHUNK,
   TEXT_OUTPUT_CHUNK,
   TURN_SUMMARY_MAX,
@@ -655,7 +656,7 @@ export function updateWidgetFromEvent(
       s._currentTurnText = (s._currentTurnText ?? "") + (event.delta ?? "");
       // FR-1.1b: 节流切片——累计达 TEXT_OUTPUT_CHUNK 产生一条 text_output log entry
       if ((s._currentTurnText ?? "").length >= TEXT_OUTPUT_CHUNK) {
-        s.eventLog.push({ type: "text_output", label: s._currentTurnText!.slice(0, 100), ts: Date.now() });
+        s.eventLog.push({ type: "text_output", label: s._currentTurnText!.slice(0, EVENT_LOG_LABEL_MAX), ts: Date.now() });
         s._currentTurnText = "";
       }
       break;
@@ -664,7 +665,7 @@ export function updateWidgetFromEvent(
       s._currentThinking = (s._currentThinking ?? "") + (event.delta ?? "");
       // FR-1.1a: 节流切片——累计达 THINKING_CHUNK 产生一条 thinking log entry
       if ((s._currentThinking ?? "").length >= THINKING_CHUNK) {
-        s.eventLog.push({ type: "thinking", label: s._currentThinking!.slice(0, 100), ts: Date.now() });
+        s.eventLog.push({ type: "thinking", label: s._currentThinking!.slice(0, EVENT_LOG_LABEL_MAX), ts: Date.now() });
         s._currentThinking = "";
       }
       break;
@@ -675,11 +676,11 @@ export function updateWidgetFromEvent(
       // 同时 text_output entry 切片独立产出（与 summary 不互斥）。
       const turnSummary = (s._currentTurnText ?? "").slice(0, TURN_SUMMARY_MAX);
       if (s._currentTurnText) {
-        s.eventLog.push({ type: "text_output", label: s._currentTurnText.slice(0, 100), ts: Date.now() });
+        s.eventLog.push({ type: "text_output", label: s._currentTurnText.slice(0, EVENT_LOG_LABEL_MAX), ts: Date.now() });
         s._currentTurnText = "";
       }
       if (s._currentThinking) {
-        s.eventLog.push({ type: "thinking", label: s._currentThinking.slice(0, 100), ts: Date.now() });
+        s.eventLog.push({ type: "thinking", label: s._currentThinking.slice(0, EVENT_LOG_LABEL_MAX), ts: Date.now() });
         s._currentThinking = "";
       }
       s.eventLog.push({ type: "turn_end", label: turnSummary, ts: Date.now() });

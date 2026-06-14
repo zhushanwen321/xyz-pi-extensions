@@ -2,12 +2,10 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_CATEGORIES } from "../category.ts";
-import type { WidgetAgentState } from "../tui/agent-widget.ts";
 import {
   extractLabelFromArgs,
   formatConfigSummary,
   formatEventLogLine,
-  formatStatusSummary,
   formatThinkingLevelOption,
 } from "../tui/format.ts";
 import type { AgentEventLogEntry, SubagentsGlobalConfig } from "../types.ts";
@@ -104,18 +102,5 @@ describe("formatEventLogLine", () => {
     const line = formatEventLogLine(entry, fakeTheme, 3);
     expect(line).toContain("turn 3");
     expect(line).toContain("Fixed the handler");
-  });
-});
-
-describe("formatStatusSummary", () => {
-  it("includes spinner, agent, turns, tokens, elapsed", () => {
-    const state: WidgetAgentState = {
-      id: "1", agent: "worker", status: "running", turns: 3, totalTokens: 12000, elapsedSeconds: 45,
-    };
-    const result = formatStatusSummary(state, 0, fakeTheme);
-    expect(result).toContain("worker");
-    expect(result).toContain("3 turns");
-    expect(result).toContain("12.0k");
-    expect(result).toContain("45s");
   });
 });

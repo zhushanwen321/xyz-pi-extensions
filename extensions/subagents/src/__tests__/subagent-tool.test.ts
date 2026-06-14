@@ -15,10 +15,16 @@ import type { AgentResult, BackgroundHandle, BackgroundStatus } from "../types.t
 // 路径 `../runtime.ts` 相对测试文件解析为 src/runtime.ts，
 // 与 subagent-tool.ts 内 `import { getRuntime } from "../runtime.ts"`
 // （相对 src/tools/ 也是 src/runtime.ts）解析到同一绝对路径，故能命中。
-vi.mock("../runtime.ts", () => ({
-  getRuntime: vi.fn(),
-  setRuntime: vi.fn(),
-}));
+// 仅 mock getRuntime/setRuntime（隔离 runtime 单例）；updateWidgetFromEvent 透传真实实现
+// （它是纯函数，操作传入的 state，不需隔离）。
+vi.mock("../runtime.ts", async (importActual) => {
+  const actual = await importActual<typeof import("../runtime.ts")>();
+  return {
+    ...actual,
+    getRuntime: vi.fn(),
+    setRuntime: vi.fn(),
+  };
+});
 
 // 必须在 vi.mock 之后 import 被测模块（此时 runtime.ts 已被替换）
 import { getRuntime } from "../runtime.ts";
