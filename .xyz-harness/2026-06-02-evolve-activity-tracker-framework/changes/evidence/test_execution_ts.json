@@ -96,13 +96,11 @@
       "round": 1,
       "passed": true,
       "execute_steps": [
-        "Call isTerminalStatus('abandoned')",
-        "Assert true",
-        "Call canTransition('abandoned', 'completed')",
-        "Assert false",
-        "Assert 'abandoned' not in ALLOWED_TRANSITIONS"
+        "Assert isTerminalStatus('abandoned') === false",
+        "Assert canTransition('abandoned', X) === true for completed/error/cancelled/recorded",
+        "Assert isResumableStatus('abandoned') === true"
       ],
-      "evidence": "isTerminal=true, cannotTransition=true, notInTransitions=true"
+      "evidence": "isTerminal=true, recoverCompleted=true, recoverError=true, recoverCancelled=true, recoverRecorded=true, isResumable=true"
     },
     {
       "caseId": "TC-4-01",
@@ -157,9 +155,11 @@
         "Read core.ts source",
         "Assert abandonThreshold exists",
         "Assert 'abandoned' status exists",
+        "Assert isResumableStatus used",
+        "Assert abandoned items retained",
         "Assert abandoned check before remind"
       ],
-      "evidence": "threshold=true, status=true, order=true"
+      "evidence": "threshold=true, status=true, resumable=true, retained=true, order=true"
     },
     {
       "caseId": "TC-7-02",

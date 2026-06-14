@@ -20,6 +20,7 @@ import {
   canTransition,
   createInitialState,
   deserializeState,
+  isResumableStatus,
   isTerminalStatus,
   serializeState,
   type TrackedItem,
@@ -299,9 +300,15 @@ async function executeTrackerAction<TMeta>(
     return { content: [{ type: "text", text: `Invalid transition: ${item.status} → ${updateStatus} (current: ${item.status}, terminal states are immutable or path not allowed)` }], details: undefined, isError: true };
   }
 
+  const fromAbandoned = item.status === "abandoned";
   // 执行转换
   item.status = updateStatus as TrackedItemStatus;
   item.detail = (params.detail as string | undefined | null) ?? item.detail;
+
+  // 从 abandoned 恢复时重置 lastRemindAtTurn，避免立即再次 remind
+  if (fromAbandoned) {
+    item.lastRemindAtTurn = state.currentTurnIndex;
+  }
 
   if (updateStatus === "error") {
     item.errorCount += 1;
@@ -448,16 +455,16 @@ export function createTracker<TMeta>(
 
     // 检查超时 item（compact/reload 后立即清理，不等下一个 turn_end）
     for (const item of state.items) {
-      if (isTerminalStatus(item.status)) continue;
+      if (!isResumableStatus(item.status)) continue;
       const turnsSinceLoad = state.currentTurnIndex - item.loadedAtTurn;
       if (turnsSinceLoad >= config.abandonThreshold) {
         item.status = "abandoned";
       }
     }
 
-    // 过滤终态 item（abandoned 也是终态，会被过滤）
+    // 过滤终态 item。abandoned 允许被恢复，不视为终态，因此保留
     state.items = state.items.filter(
-      (item) => !isTerminalStatus(item.status),
+      (item) => !isTerminalStatus(item.status) || item.status === "abandoned",
     );
   }
 
@@ -469,7 +476,7 @@ export function createTracker<TMeta>(
   ): Promise<void> => {
     reconstructState(ctx);
     const activeItems = state.items.filter(
-      (item) => !isTerminalStatus(item.status),
+      (item) => !isTerminalStatus(item.status) || item.status === "abandoned",
     );
     if (activeItems.length > 0) {
       await pi.sendUserMessage(
@@ -491,7 +498,7 @@ export function createTracker<TMeta>(
         const match = config.triggerMatch!(event, ctx);
         if (!match) return;
 
-        // 被动模式下去重：非终态同名 item 存在时不重复创建
+        // 被动模式下去重：可恢复/非终态同名 item 存在时不重复创建
         const existing = state.items.find(
           (item) =>
             item.name === match.name && !isTerminalStatus(item.status),
@@ -523,7 +530,7 @@ export function createTracker<TMeta>(
       let needsPersist = false;
       // abandoned 检查（先于 remind——即将 abandon 的 item 不再发 remind）
       for (const item of state.items) {
-        if (isTerminalStatus(item.status)) continue;
+        if (!isResumableStatus(item.status)) continue;
         const turnsSinceLoad = state.currentTurnIndex - item.loadedAtTurn;
         if (turnsSinceLoad >= config.abandonThreshold) {
           item.status = "abandoned";
@@ -531,7 +538,7 @@ export function createTracker<TMeta>(
         }
       }
       for (const item of state.items) {
-        if (isTerminalStatus(item.status)) continue;
+        if (!isResumableStatus(item.status)) continue;
 
         const turnsSinceLoad =
           state.currentTurnIndex - item.loadedAtTurn;
@@ -561,7 +568,7 @@ export function createTracker<TMeta>(
 
   pi.on("before_agent_start", async () => {
     const activeItems = state.items.filter(
-      (item) => !isTerminalStatus(item.status),
+      (item) => !isTerminalStatus(item.status) || item.status === "abandoned",
     );
     if (activeItems.length === 0) return undefined;
 

@@ -1,7 +1,10 @@
 /**
  * Activity Tracker Framework — 类型定义与状态机
  *
- * 通用 TrackedItem 状态机：loaded → completed | error → recorded
+ * 通用 TrackedItem 状态机：
+ *   loaded  → completed | error | cancelled | abandoned(system)
+ *   error   → completed | recorded | cancelled | abandoned(system)
+ *   abandoned(system) → completed | error | cancelled | recorded
  * 纯数据层，无 Pi API 依赖。
  */
 
@@ -17,18 +20,25 @@ const TERMINAL_STATUSES: ReadonlySet<TrackedItemStatus> = new Set([
   "completed",
   "recorded",
   "cancelled",
+]);
+
+/** 需要被提醒/继续追踪的非终态集合（含可被恢复的 abandoned） */
+export const RESUMABLE_STATUSES: ReadonlySet<TrackedItemStatus> = new Set([
+  "loaded",
+  "error",
   "abandoned",
 ]);
 
 /**
  * FR-3 转换矩阵：
- *   loaded  → completed ✅, error ✅, cancelled ✅
- *   error   → completed ✅, error ✅, recorded ✅, cancelled ✅
- *   abandoned 是纯系统状态（turn_end/reconstructState 自动触发），不在 ALLOWED_TRANSITIONS 的 from 中
- *   终态不可变更
+ *   loaded    → completed ✅, error ✅, cancelled ✅
+ *   error     → completed ✅, error ✅, recorded ✅, cancelled ✅
+ *   abandoned → completed ✅, error ✅, cancelled ✅, recorded ✅
+ *   终态不可变更：completed / recorded / cancelled
  *
  * cancelled 用于标记 agent 主动放弃（如 start 后发现不适用）。
- * abandoned 用于标记超时未终结（系统自动，agent 不能手动设）。
+ * abandoned 主要是系统状态（turn_end/reconstructState 自动触发），但允许 agent 手动恢复，
+ * 避免"用户回来收尾时无法关闭"的僵局。
  */
 const ALLOWED_TRANSITIONS: ReadonlyMap<
   string,
@@ -36,6 +46,7 @@ const ALLOWED_TRANSITIONS: ReadonlyMap<
 > = new Map([
   ["loaded", new Set(["completed", "error", "cancelled"])],
   ["error", new Set(["completed", "error", "recorded", "cancelled"])],
+  ["abandoned", new Set(["completed", "error", "recorded", "cancelled"])],
 ]);
 
 // ── 类型 ────────────────────────────────────────────
@@ -113,8 +124,14 @@ export const TrackerParams = Type.Object({
 
 // ── 状态机函数 ──────────────────────────────────────
 
+/** 终态：agent 无法再手动变更（但 abandoned 可被恢复，不算严格终态） */
 export function isTerminalStatus(status: TrackedItemStatus): boolean {
   return TERMINAL_STATUSES.has(status);
+}
+
+/** 是否仍应被追踪/提醒（loaded/error/abandoned） */
+export function isResumableStatus(status: TrackedItemStatus): boolean {
+  return RESUMABLE_STATUSES.has(status);
 }
 
 export function canTransition(

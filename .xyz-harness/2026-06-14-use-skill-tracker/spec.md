@@ -48,9 +48,10 @@ evolve-daily 的 skill-execution tracker 当前通过被动监听 `tool_call` + 
 合法转换：
 - loaded → completed | error | cancelled | abandoned（系统）
 - error → completed | error | recorded | cancelled | abandoned（系统）
-- 终态不可变更：completed / recorded / cancelled / abandoned
+- abandoned → completed | error | cancelled | recorded（agent 手动恢复）
+- 终态不可变更：completed / recorded / cancelled
 
-注：abandoned 是系统路径（turn_end/reconstructState 自动触发，见 FR-4），不经过 tool status 枚举校验。
+注：abandoned 主要是系统路径（turn_end/reconstructState 自动触发，见 FR-4），不经过 tool status 枚举校验。但允许 agent 在后续 turn 中显式 update 到 completed/error/cancelled/recorded，以避免"用户回来收尾时无法关闭"的僵局。
 
 废弃 dismissed。deserialize 遇到旧 dismissed 字符串的 item 直接丢弃（过滤掉），不迁移、不映射。用户确认"历史数据不用管"。
 
@@ -67,7 +68,7 @@ tool status 枚举（agent 可手动设）：`completed` / `error` / `cancelled`
 1. `turn_end` 检查所有非终态 item（loaded 和 error），`turnsSinceLoad >= abandonThreshold`（默认 20，=remindInterval×2）→ 转 abandoned
 2. `turn_end` 中 abandoned 检查**先于** remind——即将 abandon 的 item 不再发 remind（避免无意义提示）
 3. `reconstructState`（session restore）也检查 abandoned——compact/reload 后立即清理超时 item，不等下一个 turn_end
-4. abandoned 是终态，不可恢复
+4. abandoned 可恢复：agent 可以手动 update 到 completed/error/cancelled/recorded。若 agent 未恢复，item 仍会被过滤（不进入 before_agent_start context），直到被显式更新。
 
 `TrackerConfig` 新增 `abandonThreshold: number` 字段。
 
@@ -84,7 +85,7 @@ tool status 枚举（agent 可手动设）：`completed` / `error` / `cancelled`
 ## Acceptance Criteria
 
 - AC-1: `use_skill(start, name="X")` 返回 createdId；连续两次 start 同名 skill 产生两个独立 item
-- AC-2: `use_skill(update, id, status)` 按 FR-3 矩阵转换，非法转换报错（如 completed → error）
+- AC-2: `use_skill(update, id, status)` 按 FR-3 矩阵转换，非法转换报错（如 completed → error）；abandoned 允许更新为 completed/error/cancelled/recorded
 - AC-3: `use_skill(list)` 返回所有 item（含终态）
 - AC-4: agent read SKILL.md（无论调研还是执行）**不**触发 tracking 创建——无任何对 read 的被动监听
 - AC-5: loaded 或 error 状态超 20 turn，turn_end 后自动转 abandoned；abandoned 检查先于 remind

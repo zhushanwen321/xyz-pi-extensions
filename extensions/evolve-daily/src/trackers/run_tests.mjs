@@ -15,14 +15,20 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ── Inline: types.ts 核心逻辑 ──────────────────────
 
-const TERMINAL_STATUSES = new Set(["completed", "recorded", "cancelled", "abandoned"]);
+const TERMINAL_STATUSES = new Set(["completed", "recorded", "cancelled"]);
+const RESUMABLE_STATUSES = new Set(["loaded", "error", "abandoned"]);
 const ALLOWED_TRANSITIONS = {
   loaded: ["completed", "error", "cancelled"],
   error: ["completed", "error", "recorded", "cancelled"],
+  abandoned: ["completed", "error", "recorded", "cancelled"],
 };
 
 function isTerminalStatus(status) {
   return TERMINAL_STATUSES.has(status);
+}
+
+function isResumableStatus(status) {
+  return RESUMABLE_STATUSES.has(status);
 }
 
 function canTransition(from, to) {
@@ -167,15 +173,18 @@ console.log("Activity Tracker Framework Tests (pure JS)\n");
     `isTerminal=${isTerminalStatus("cancelled")}, cancelled→completed=${canTransition("cancelled", "completed")}`);
 }
 
-// TC-3-05: abandoned is terminal and system-only (not in ALLOWED_TRANSITIONS as source)
+// TC-3-05: abandoned is resumable, not terminal; agent can recover it
 {
-  const isTerminal = isTerminalStatus("abandoned") === true;
-  const cannotTransition = canTransition("abandoned", "completed") === false;
-  const notInTransitions = !("abandoned" in ALLOWED_TRANSITIONS);
-  const passed = isTerminal && cannotTransition && notInTransitions;
+  const isTerminal = isTerminalStatus("abandoned") === false;
+  const canRecover = canTransition("abandoned", "completed") === true;
+  const canRecoverError = canTransition("abandoned", "error") === true;
+  const canRecoverCancelled = canTransition("abandoned", "cancelled") === true;
+  const canRecoverRecorded = canTransition("abandoned", "recorded") === true;
+  const isResumable = isResumableStatus("abandoned") === true;
+  const passed = isTerminal && canRecover && canRecoverError && canRecoverCancelled && canRecoverRecorded && isResumable;
   record("TC-3-05", passed,
-    ["Call isTerminalStatus('abandoned')", "Assert true", "Call canTransition('abandoned', 'completed')", "Assert false", "Assert 'abandoned' not in ALLOWED_TRANSITIONS"],
-    `isTerminal=${isTerminal}, cannotTransition=${cannotTransition}, notInTransitions=${notInTransitions}`);
+    ["Assert isTerminalStatus('abandoned') === false", "Assert canTransition('abandoned', X) === true for completed/error/cancelled/recorded", "Assert isResumableStatus('abandoned') === true"],
+    `isTerminal=${isTerminal}, recoverCompleted=${canRecover}, recoverError=${canRecoverError}, recoverCancelled=${canRecoverCancelled}, recoverRecorded=${canRecoverRecorded}, isResumable=${isResumable}`);
 }
 
 // TC-4-01: Error accumulation (verify threshold logic in source)
@@ -232,20 +241,22 @@ console.log("Activity Tracker Framework Tests (pure JS)\n");
     `interval=${hasRemindInterval}, onRemind=${hasRemindSteering}, turnEnd=${hasTurnEnd}`);
 }
 
-// TC-7-01: turn_end checks abandonThreshold before remind
+// TC-7-01: turn_end checks abandonThreshold before remind; abandoned retained in state
 {
   const fs = await import("node:fs");
   const coreSrc = fs.readFileSync(join(__dirname, "core.ts"), "utf-8");
   const hasAbandonThreshold = coreSrc.includes('abandonThreshold');
   const hasAbandonedStatus = coreSrc.includes('"abandoned"');
+  const usesResumable = coreSrc.includes('isResumableStatus');
+  const retainsAbandoned = coreSrc.includes('item.status === "abandoned"');
   // abandoned 检查出现在 remind 检查之前（通过 indexOf 验证顺序）
   const abandonPos = coreSrc.indexOf('abandonThreshold');
   const remindPos = coreSrc.indexOf('steering.onRemind');
   const correctOrder = abandonPos > 0 && abandonPos < remindPos;
-  const passed = hasAbandonThreshold && hasAbandonedStatus && correctOrder;
+  const passed = hasAbandonThreshold && hasAbandonedStatus && usesResumable && retainsAbandoned && correctOrder;
   record("TC-7-01", passed,
-    ["Read core.ts source", "Assert abandonThreshold exists", "Assert 'abandoned' status exists", "Assert abandoned check before remind"],
-    `threshold=${hasAbandonThreshold}, status=${hasAbandonedStatus}, order=${correctOrder}`);
+    ["Read core.ts source", "Assert abandonThreshold exists", "Assert 'abandoned' status exists", "Assert isResumableStatus used", "Assert abandoned items retained", "Assert abandoned check before remind"],
+    `threshold=${hasAbandonThreshold}, status=${hasAbandonedStatus}, resumable=${usesResumable}, retained=${retainsAbandoned}, order=${correctOrder}`);
 }
 
 // TC-7-02: reconstructState checks abandoned
