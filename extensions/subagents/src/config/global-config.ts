@@ -1,7 +1,8 @@
 // src/config/global-config.ts
 import * as fs from "node:fs";
-import type { SubagentsGlobalConfig } from "../types.ts";
+
 import { DEFAULT_CATEGORIES } from "../category.ts";
+import type { SubagentsGlobalConfig } from "../types.ts";
 import { getConfigDir, getConfigPath } from "./config-path.ts";
 
 const DEFAULT_CONFIG: SubagentsGlobalConfig = {
@@ -40,6 +41,9 @@ export function loadGlobalConfig(homeDir: string): SubagentsGlobalConfig {
 
 // FR-4.6.4: 串行化写队列，防止并发写入覆盖。
 // 使用 const 对象持有（避免模块级 let 触发 check-structure 规则 5）
+/** JSON 缩进 */
+const JSON_INDENT = 2;
+
 const _writeSlot: { chain: Promise<void> } = { chain: Promise.resolve() };
 
 /** FR-4.6.4: 原子写入（temp + rename）+ 进程内串行化 */
@@ -52,7 +56,7 @@ export function saveGlobalConfig(homeDir: string, config: SubagentsGlobalConfig)
       try {
         fs.mkdirSync(configDir, { recursive: true });
         const tempPath = configPath + ".tmp." + process.pid;
-        fs.writeFileSync(tempPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+        fs.writeFileSync(tempPath, JSON.stringify(config, null, JSON_INDENT) + "\n", "utf-8");
         fs.renameSync(tempPath, configPath);
         resolve();
       } catch (err) {

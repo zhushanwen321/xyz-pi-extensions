@@ -1,5 +1,6 @@
 // src/__tests__/category.test.ts
-import { describe, it, expect } from "vitest";
+import { describe, expect,it } from "vitest";
+
 import { DEFAULT_CATEGORIES, inferCategory } from "../category.ts";
 
 describe("DEFAULT_CATEGORIES", () => {

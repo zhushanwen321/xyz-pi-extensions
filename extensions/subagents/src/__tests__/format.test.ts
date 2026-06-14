@@ -1,7 +1,8 @@
 // src/__tests__/format.test.ts
-import { describe, it, expect } from "vitest";
-import { formatConfigSummary, formatThinkingLevelOption } from "../tui/format.ts";
+import { describe, expect,it } from "vitest";
+
 import { DEFAULT_CATEGORIES } from "../category.ts";
+import { formatConfigSummary, formatThinkingLevelOption } from "../tui/format.ts";
 import type { SubagentsGlobalConfig } from "../types.ts";
 
 const cfg: SubagentsGlobalConfig = {

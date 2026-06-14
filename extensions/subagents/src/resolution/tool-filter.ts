@@ -1,6 +1,37 @@
 // src/resolution/tool-filter.ts
-import type { ToolFilterConfig, ToolFilterResult, ToolInfo } from "../types.ts";
+import type { ExtSelectors, ToolFilterConfig, ToolFilterResult, ToolInfo } from "../types.ts";
 import { EXCLUDED_TOOL_NAMES } from "../types.ts";
+
+/**
+ * 检查 @scope/tool-name 是否匹配 ext: 选择器。
+ * - ext:foo → 允许 scope=foo 的全部工具
+ * - ext:foo/bar → 只允许 scope=foo 的 bar 工具
+ * 不匹配的扩展工具被排除。
+ */
+function matchesExtSelector(toolName: string, selectors: ExtSelectors, excluded: string[]): boolean {
+  // 解析 @scope/tool-name 格式
+  const slashIdx = toolName.indexOf("/");
+  if (slashIdx <= 0) {
+    excluded.push(toolName);
+    return false;
+  }
+  const scope = toolName.slice(1, slashIdx).toLowerCase(); // 去掉 @
+  const tool = toolName.slice(slashIdx + 1);
+
+  if (!selectors.extNames.has(scope)) {
+    excluded.push(toolName);
+    return false;
+  }
+
+  // 有 narrowing → 只允许指定的 tool
+  const allowedTools = selectors.narrowing.get(scope);
+  if (allowedTools && !allowedTools.has(tool)) {
+    excluded.push(toolName);
+    return false;
+  }
+
+  return true;
+}
 
 /**
  * FR-6.2: 检查 toolName 是否以 EXCLUDED_TOOL_NAMES 中任一名字结尾（支持 @scope/name 格式）。
@@ -47,6 +78,11 @@ export function filterTools(opts: {
       if (isExcluded(name)) { excluded.push(name); return false; }
 
       const isExtension = name.startsWith("@");
+
+      // ext: 选择器：有值时扩展工具变为 opt-in allowlist（参考 tintinweb opt-in flip）
+      if (config.extSelectors && isExtension) {
+        return matchesExtSelector(name, config.extSelectors, excluded);
+      }
 
       // builtinTools 白名单（仅作用于 builtin tool）
       if (!isExtension && config.builtinTools !== undefined) {

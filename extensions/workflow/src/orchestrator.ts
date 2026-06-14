@@ -130,9 +130,10 @@ export class WorkflowOrchestrator {
       this.sessionDir = sessionScopedDir;
     }
     // Use subagents runtime's AgentRegistry if available, else a local fallback
+    // Hot-reload: resolve 时重新扫描 .md 文件
     const runtime = getRuntime();
     this.agentRegistry = runtime
-      ? { resolve: (name) => runtime.agentRegistry.get(name) }
+      ? { resolve: (name) => { runtime.agentRegistry.discoverAll(runtime.builtinRegistry); return runtime.agentRegistry.get(name); } }
       : { resolve: () => undefined };
   }
 

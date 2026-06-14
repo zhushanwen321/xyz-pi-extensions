@@ -1,10 +1,12 @@
 // src/__tests__/agent-registry.test.ts
-import { describe, it, expect, beforeEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { BUILTIN_AGENTS, BuiltinAgentRegistry } from "../registry/builtin-agents.ts";
+
+import { beforeEach,describe, expect, it } from "vitest";
+
 import { AgentRegistry } from "../registry/agent-registry.ts";
+import { BUILTIN_AGENTS, BuiltinAgentRegistry } from "../registry/builtin-agents.ts";
 
 let tempDir: string;
 let tempHome: string;

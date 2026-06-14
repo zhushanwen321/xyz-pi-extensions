@@ -1,8 +1,9 @@
 // src/__tests__/config-merger.test.ts
-import { describe, it, expect } from "vitest";
-import { mergeConfig } from "../resolution/config-merger.ts";
+import { describe, expect,it } from "vitest";
+
 import { DEFAULT_CATEGORIES } from "../category.ts";
-import type { SubagentsGlobalConfig, SessionModelState } from "../types.ts";
+import { mergeConfig } from "../resolution/config-merger.ts";
+import type { SessionModelState,SubagentsGlobalConfig } from "../types.ts";
 
 const baseConfig: SubagentsGlobalConfig = {
   version: 1, yoloByDefault: false, maxConcurrent: 4,

@@ -1,5 +1,6 @@
 // src/__tests__/fork-context.test.ts
-import { describe, it, expect } from "vitest";
+import { describe, expect,it } from "vitest";
+
 import { forkContext } from "../resolution/fork-context.ts";
 
 function makeEntry(role: string, text: string) {

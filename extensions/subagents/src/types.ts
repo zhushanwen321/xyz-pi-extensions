@@ -203,8 +203,22 @@ export interface AgentConfig {
   skills?: string[];
   /** category（推断用） */
   category?: string;
+  /** ext: 选择器：精细控制扩展工具暴露（ext:foo 或 ext:foo/bar） */
+  extSelectors?: ExtSelectors;
+  /** 隔离模式：undefined=原地运行，"worktree"=git worktree 副本 */
+  isolation?: "worktree";
   source: AgentSource;
   filePath?: string;
+}
+
+/**
+ * ext: 工具选择器（参考 tintinweb agent-runner parseExtSelectors）。
+ * extNames = 允许的扩展名集合；narrowing = 扩展名 → 只暴露的 tool 名集合。
+ * 例：ext:foo → extNames={foo}; ext:foo/bar → extNames={foo}, narrowing={foo:{bar}}
+ */
+export interface ExtSelectors {
+  extNames: Set<string>;
+  narrowing: Map<string, Set<string>>;
 }
 
 // ============================================================
@@ -277,6 +291,8 @@ export interface ToolFilterConfig {
   builtinTools?: string[];
   extensions?: boolean | string[];
   excludeTools?: string[];
+  /** ext: 选择器（精细控制扩展工具暴露）。有值时扩展工具变为 opt-in allowlist */
+  extSelectors?: ExtSelectors;
 }
 
 export interface ToolFilterResult {

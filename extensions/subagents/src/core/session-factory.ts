@@ -128,6 +128,7 @@ export async function createAndConfigureSession(
     builtinTools: agentConfig?.builtinTools,
     extensions: agentConfig?.extensions,
     excludeTools: agentConfig?.excludeTools ?? [],
+    extSelectors: agentConfig?.extSelectors,
   };
   const allTools = session.getAllTools().map((t) => ({ name: t.name }));
   const filterResult = filterTools({ allTools, config: toolFilterConfig });

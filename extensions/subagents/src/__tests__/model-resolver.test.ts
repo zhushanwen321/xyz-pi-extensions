@@ -1,8 +1,9 @@
 // src/__tests__/model-resolver.test.ts
-import { describe, it, expect, vi } from "vitest";
-import { resolveModelForAgent } from "../resolution/model-resolver.ts";
+import { describe, expect, it, vi } from "vitest";
+
 import { DEFAULT_CATEGORIES } from "../category.ts";
-import type { SubagentsGlobalConfig, SessionModelState } from "../types.ts";
+import { resolveModelForAgent } from "../resolution/model-resolver.ts";
+import type { SessionModelState,SubagentsGlobalConfig } from "../types.ts";
 
 // Mock ModelRegistry（duck-typed）
 function makeRegistry(available: Record<string, { reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> }>) {

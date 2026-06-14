@@ -1,5 +1,6 @@
 // src/__tests__/tool-filter.test.ts
-import { describe, it, expect } from "vitest";
+import { describe, expect,it } from "vitest";
+
 import { filterTools, isExcludedBySuffix } from "../resolution/tool-filter.ts";
 
 describe("isExcludedBySuffix", () => {

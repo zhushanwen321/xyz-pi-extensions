@@ -7,6 +7,7 @@ import { AgentRegistry } from "./registry/agent-registry.ts";
 import { BuiltinAgentRegistry } from "./registry/builtin-agents.ts";
 import { type ModelRegistryLike,resolveModelForAgent } from "./resolution/model-resolver.ts";
 import { createSessionModelState, restoreState, serializeState, setAgentModel, setCategoryModel } from "./state/session-model-state.ts";
+import { AgentWidgetManager, type WidgetAgentState, type WidgetUI } from "./tui/agent-widget.ts";
 import type {
   AgentResult,
   BackgroundHandle,
@@ -30,6 +31,10 @@ interface PiLike {
 
 /** background id 的时间戳进制（base36 紧凑表示） */
 const BG_ID_RADIX = 36;
+/** widget 摘要截断长度 */
+const WIDGET_SUMMARY_MAX = 100;
+/** widget 完成状态淡出延迟（ms） */
+const WIDGET_LINGER_MS = 5000;
 
 /** 进程内单例持有的 background 记录（含 AbortController 供 cancel）。
  * status 此处可写（BackgroundStatus.status 是 readonly，但内部记录需变异） */
@@ -64,6 +69,10 @@ export class SubagentRuntime {
   /** Background 任务记录表（const 持有，避免模块级 let 触发 check-structure） */
   private readonly _bgRecords = new Map<string, BgRecord>();
   private _bgSeq = 0;
+  private _widgetSeq = 0;
+
+  /** Live widget 管理器（实时显示 agent 状态） */
+  readonly widget = new AgentWidgetManager();
 
   constructor(opts: { cwd: string; homeDir: string; agentDir: string }) {
     this.cwd = opts.cwd;
@@ -85,6 +94,11 @@ export class SubagentRuntime {
   /** session_start 时注入 pi（用于 appendEntry 持久化 + events.emit 跨扩展通知） */
   injectPi(pi: PiLike): void {
     this.pi = pi;
+  }
+
+  /** session_start 时注入 UI（用于 live widget 渲染） */
+  attachWidgetUI(ui: WidgetUI): void {
+    this.widget.attachUI(ui);
   }
 
   /**
@@ -143,7 +157,11 @@ export class SubagentRuntime {
     }
     return {
       modelRegistry: this.modelRegistry,
-      resolveAgent: (name) => this.agentRegistry.get(name),
+      // Hot-reload: 每次 runAgent 重新扫描 .md 文件，用户编辑 agent 后立即生效
+      resolveAgent: (name) => {
+        this.agentRegistry.discoverAll(this.builtinRegistry);
+        return this.agentRegistry.get(name);
+      },
       globalConfig: this.globalConfig,
       sessionState: this.sessionState,
       globalPool: this.globalPool,
@@ -156,16 +174,57 @@ export class SubagentRuntime {
   async runAgent(opts: RunAgentOptions): Promise<AgentResult> {
     const ctx = this.buildContext();
     let finalOpts = opts;
+
+    // Live widget: 注册 running 状态
+    const widgetId = `run-${++this._widgetSeq}`;
+    const startTime = Date.now();
+    const widgetState: WidgetAgentState = {
+      id: widgetId,
+      agent: opts.agent ?? "default",
+      status: "running",
+      elapsedSeconds: 0,
+    };
+    this.widget.updateAgent(widgetState);
+
+    // 拦截 onEvent 更新 widget（turns/tokens/activity）
+    const userOnEvent = opts.onEvent;
+    finalOpts = {
+      ...opts,
+      onEvent: (event) => {
+        userOnEvent?.(event);
+        updateWidgetFromEvent(widgetState, event, startTime);
+        this.widget.updateAgent(widgetState);
+      },
+    };
+
     for (const h of this.hooks) {
       if (h.beforeRun) finalOpts = await h.beforeRun(finalOpts);
     }
     try {
       const result = await runAgent(finalOpts, ctx);
+      // widget: 更新为完成状态
+      widgetState.status = result.success ? "done" : "failed";
+      widgetState.turns = result.turns;
+      widgetState.totalTokens = result.usage
+        ? result.usage.input + result.usage.output + result.usage.cacheRead + result.usage.cacheWrite
+        : undefined;
+      widgetState.summary = result.text.slice(0, WIDGET_SUMMARY_MAX);
+      widgetState.finishedAt = Date.now();
+      this.widget.updateAgent(widgetState);
+      // 5 秒后清理
+      setTimeout(() => this.widget.removeAgent(widgetId), WIDGET_LINGER_MS);
+
       for (const h of this.hooks) {
         if (h.afterRun) h.afterRun(result, finalOpts);
       }
       return result;
     } catch (err) {
+      widgetState.status = "failed";
+      widgetState.summary = err instanceof Error ? err.message : String(err);
+      widgetState.finishedAt = Date.now();
+      this.widget.updateAgent(widgetState);
+      setTimeout(() => this.widget.removeAgent(widgetId), WIDGET_LINGER_MS);
+
       for (const h of this.hooks) {
         if (h.onError) h.onError(err instanceof Error ? err : new Error(String(err)), finalOpts);
       }
@@ -275,6 +334,37 @@ export class SubagentRuntime {
     return saveGlobalConfig(this.homeDir, this.globalConfig);
   }
 }
+
+/** 从 AgentEvent 更新 widget 状态（turns/tokens/activity） */
+function updateWidgetFromEvent(
+  state: WidgetAgentState,
+  event: { type: string; toolName?: string; usage?: { input: number; output: number; cacheRead: number; cacheWrite: number } },
+  startTime: number,
+): void {
+  const s = state as WidgetAgentState & { turns: number; totalTokens: number; elapsedSeconds: number };
+  switch (event.type) {
+    case "turn_end":
+      s.turns = (s.turns ?? 0) + 1;
+      break;
+    case "message_end":
+      if (event.usage) {
+        s.totalTokens = (s.totalTokens ?? 0) + event.usage.input + event.usage.output + event.usage.cacheRead + event.usage.cacheWrite;
+      }
+      break;
+    case "tool_start":
+      s.activity = event.toolName ?? "working";
+      break;
+    case "tool_end":
+      s.activity = "thinking…";
+      break;
+    default:
+      break;
+  }
+  s.elapsedSeconds = Math.floor((Date.now() - startTime) / MS_PER_SECOND);
+}
+
+/** ms → s 换算 */
+const MS_PER_SECOND = 1000;
 
 // 进程内单例（用 const 对象持有，避免模块级 let 触发 check-structure）
 const _runtimeSlot: { current?: SubagentRuntime } = {};

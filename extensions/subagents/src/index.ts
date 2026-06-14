@@ -21,6 +21,7 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
       cwd?: string;
       modelRegistry?: unknown;
       sessionManager?: { getEntries?: () => unknown[] };
+      ui?: { setWidget?: (k: string, c: unknown) => void; setStatus?: (k: string, t: unknown) => void };
     };
     const existing = getRuntime();
     const cwd = (c.cwd ?? process.cwd()) as string;
@@ -30,6 +31,14 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     const rt = existing ?? new SubagentRuntime({ cwd, homeDir, agentDir });
     rt.injectPi(pi as never);
     rt.injectModelRegistry(c.modelRegistry as never);
+
+    // Live widget: 注入 UI（setWidget/setStatus）
+    if (c.ui?.setWidget && c.ui?.setStatus) {
+      rt.attachWidgetUI({
+        setWidget: (key, content) => c.ui!.setWidget!(key, content),
+        setStatus: (key, text) => c.ui!.setStatus!(key, text),
+      });
+    }
 
     const entries = (c.sessionManager?.getEntries?.() ?? []) as unknown[];
     rt.restoreFromEntries(entries);

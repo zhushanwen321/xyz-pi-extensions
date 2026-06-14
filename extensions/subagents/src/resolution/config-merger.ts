@@ -1,5 +1,5 @@
 // src/resolution/config-merger.ts
-import type { AgentConfig, SubagentsGlobalConfig, SessionModelState } from "../types.ts";
+import type { AgentConfig, SessionModelState,SubagentsGlobalConfig } from "../types.ts";
 
 export interface MergedConfig {
   /** "provider/modelId" 格式（未验证可用性，model-resolver 会验证） */

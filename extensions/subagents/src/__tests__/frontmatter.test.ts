@@ -1,5 +1,6 @@
 // src/__tests__/frontmatter.test.ts
-import { describe, it, expect } from "vitest";
+import { describe, expect,it } from "vitest";
+
 import { parseAgentFrontmatter } from "../registry/frontmatter.ts";
 
 describe("parseAgentFrontmatter", () => {

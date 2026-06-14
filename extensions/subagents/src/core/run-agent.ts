@@ -17,6 +17,12 @@ import {
   type SessionFactoryContext,
 } from "./session-factory.ts";
 import { createTurnLimiter } from "./turn-limiter.ts";
+import { cleanupWorktree, createWorktree, type WorktreeResult } from "./worktree.ts";
+
+/** background id 时间戳进制 */
+const BG_ID_RADIX = 36;
+/** commit message 最大长度 */
+const COMMIT_MSG_MAX = 200;
 
 /** 默认 grace turns（soft turn limit 后的宽限轮数） */
 const DEFAULT_GRACE_TURNS = 2;
@@ -65,10 +71,19 @@ export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Pro
     });
 
     const sdk = await getSdk();
+
+    // Worktree 隔离：agent 要求 isolation:worktree 时在临时副本中执行
+    let worktree: WorktreeResult | undefined;
+    let effectiveCwd = ctx.cwd;
+    if (agentConfig?.isolation === "worktree") {
+      worktree = createWorktree(ctx.cwd, `${agentName}-${Date.now().toString(BG_ID_RADIX)}`);
+      if (worktree) effectiveCwd = worktree.workPath;
+    }
+
     const factoryCtx: SessionFactoryContext = {
       modelRegistry: ctx.modelRegistry,
       resolveAgent: ctx.resolveAgent,
-      cwd: ctx.cwd,
+      cwd: effectiveCwd,
       agentDir: ctx.agentDir,
     };
 
@@ -141,6 +156,10 @@ export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Pro
     } finally {
       unsubscribe();
       session.dispose();
+      // Worktree 清理：有变更则提交到分支
+      if (worktree) {
+        cleanupWorktree(ctx.cwd, worktree, opts.task.slice(0, COMMIT_MSG_MAX));
+      }
     }
   } catch (err) {
     // createAgentSession 本身失败（如模型不可用）

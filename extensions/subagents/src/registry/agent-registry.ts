@@ -2,9 +2,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+
 import type { AgentConfig, AgentSource } from "../types.ts";
-import { parseAgentFrontmatter } from "./frontmatter.ts";
 import type { BuiltinAgentRegistry } from "./builtin-agents.ts";
+import { parseAgentFrontmatter } from "./frontmatter.ts";
 
 /**
  * FR-2.1 / FR-2.3: 扫描文件系统发现 agent + builtin，按优先级合并。
@@ -109,9 +110,12 @@ export class AgentRegistry {
           extensions: parsed.extensions,
           skills: parsed.skills,
           category: parsed.category,
+          extSelectors: parsed.extSelectors,
+          isolation: parsed.isolation,
           source,
           filePath,
         });
+      // eslint-disable-next-line taste/no-silent-catch
       } catch { /* 文件不可读，跳过 */ }
     }
   }

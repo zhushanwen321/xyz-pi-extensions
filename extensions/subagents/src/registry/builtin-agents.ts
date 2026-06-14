@@ -14,9 +14,8 @@ import { parseAgentFrontmatter } from "./frontmatter.ts";
  * 设计参考 tintinweb/pi-subagents 的 default-agents.ts + agents/*.md 双层模式。
  */
 const BUILTIN_AGENTS_DIR = path.resolve(
-  // 从 src/registry/ 向上三级到包根，再进 agents/
+  // 从 src/registry/ 向上两级到包根（extensions/subagents/），再进 agents/
   import.meta.dirname ?? __dirname ?? "",
-  "..",
   "..",
   "..",
   "agents",

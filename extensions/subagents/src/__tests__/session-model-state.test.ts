@@ -1,6 +1,7 @@
 // src/__tests__/session-model-state.test.ts
-import { describe, it, expect } from "vitest";
-import { createSessionModelState, setAgentModel, setCategoryModel, serializeState, restoreState } from "../state/session-model-state.ts";
+import { describe, expect,it } from "vitest";
+
+import { createSessionModelState, restoreState,serializeState, setAgentModel, setCategoryModel } from "../state/session-model-state.ts";
 
 describe("SessionModelState", () => {
   it("creates with defaults", () => {

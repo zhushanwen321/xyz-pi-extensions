@@ -1,5 +1,6 @@
 // src/__tests__/concurrency-pool.test.ts
-import { describe, it, expect } from "vitest";
+import { describe, expect,it } from "vitest";
+
 import { DefaultConcurrencyPool } from "../pool/concurrency-pool.ts";
 
 describe("DefaultConcurrencyPool", () => {
@@ -7,7 +8,7 @@ describe("DefaultConcurrencyPool", () => {
     const pool = new DefaultConcurrencyPool(2);
     let active = 0;
     let peak = 0;
-    const task = async () => {
+    const _task = async () => {
       active++;
       peak = Math.max(peak, active);
       await new Promise((r) => setTimeout(r, 10));

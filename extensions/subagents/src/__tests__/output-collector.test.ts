@@ -1,5 +1,6 @@
 // src/__tests__/output-collector.test.ts
-import { describe, it, expect } from "vitest";
+import { describe, expect,it } from "vitest";
+
 import { collectResponseText } from "../core/output-collector.ts";
 
 describe("collectResponseText", () => {
