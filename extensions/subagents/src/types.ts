@@ -41,6 +41,11 @@ export const STALLED_TIMEOUT_MS = 5 * 60 * 1000;
 /** FR-2.2: inline widget eventLog 最大行数（12 - 1 行 status summary） */
 export const WIDGET_EVENT_LINES = 11;
 
+/** FR-1.1b: text_output 切片阈值（累计字符数达此值产生一条 log entry） */
+export const TEXT_OUTPUT_CHUNK = 100;
+/** FR-1.1a: thinking 切片阈值（累计字符数达此值产生一条 log entry） */
+export const THINKING_CHUNK = 100;
+
 // ============================================================
 // FR-1.1: AgentEventLogEntry（事件日志条目）
 // ============================================================
@@ -51,7 +56,7 @@ export const WIDGET_EVENT_LINES = 11;
  * - label 已折叠为可展示字符串（toolName + args 摘要 / turn 文本摘要）
  */
 export interface AgentEventLogEntry {
-  readonly type: "tool_start" | "tool_end" | "turn_end";
+  readonly type: "tool_start" | "tool_end" | "turn_end" | "text_output" | "thinking";
   readonly label: string;
   readonly ts: number;
   readonly status?: "running" | "done" | "failed";
@@ -244,6 +249,7 @@ export type AgentEventType =
   | "tool_start"
   | "tool_end"
   | "text_delta"
+  | "thinking_delta"
   | "turn_end"
   | "message_end"
   | "compaction"
@@ -253,6 +259,7 @@ export type AgentEvent =
   | { type: "tool_start"; toolName: string; args?: unknown }
   | { type: "tool_end"; toolName: string; result?: ToolCallEntry["result"]; isError: boolean }
   | { type: "text_delta"; delta: string }
+  | { type: "thinking_delta"; delta: string }
   | { type: "turn_end" }
   | { type: "message_end"; usage: AgentResult["usage"] }
   | { type: "compaction" }

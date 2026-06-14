@@ -16,7 +16,7 @@ type SdkEvent = {
     stopReason?: string;
     errorMessage?: string;
   };
-  assistantMessageEvent?: { delta?: string; textDelta?: string };
+  assistantMessageEvent?: { type?: string; delta?: string; textDelta?: string };
   reason?: string;
 };
 
@@ -57,8 +57,16 @@ export function createEventBridge(onEvent: (event: AgentEvent) => void) {
         break;
       }
       case "message_update": {
-        // SDK 无独立 text_delta 事件，从 assistantMessageEvent.delta 提取增量文本
-        const delta = raw.assistantMessageEvent?.delta;
+        const ame = raw.assistantMessageEvent;
+        // FR-1.1a: thinking_delta —— SDK 独立事件类型（pi-ai types.d.ts:209），
+        // 必须在提取 text_delta 之前判断：thinking_delta 的 delta 字段也带内容，
+        // 若先无条件提取 ame.delta 会把 thinking 内容误当成 text。
+        if (ame?.type === "thinking_delta" && typeof ame.delta === "string") {
+          onEvent({ type: "thinking_delta", delta: ame.delta });
+          break;
+        }
+        // text_delta：从 AssistantMessageEvent.delta 提取
+        const delta = ame?.delta;
         if (delta) onEvent({ type: "text_delta", delta });
         break;
       }
