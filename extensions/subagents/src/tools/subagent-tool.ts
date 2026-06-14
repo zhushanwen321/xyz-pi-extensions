@@ -17,11 +17,18 @@ import { getRuntime } from "../runtime.ts";
 /** ms to seconds conversion */
 const MS_PER_SECOND = 1000;
 
-/** 工具参数 schema（TypeBox） */
+/** 工具参数 schema（TypeBox）
+ *
+ * task 是 Optional 而非 Required：backgroundId（轮询）模式不需要 task，
+ * 强制必填会让 LLM 在轮询时被迫传占位值（与 backgroundId 描述"Ignores task/agent/wait"矛盾）。
+ * 同步/background 模式对 task 的必填约束改在 execute() 内运行时校验。 */
 const SubagentParams = Type.Object({
-  task: Type.String({
-    description: "The task for the subagent to complete. Be specific and self-contained.",
-  }),
+  task: Type.Optional(
+    Type.String({
+      description:
+        "The task for the subagent to complete. Be specific and self-contained. Required unless polling with backgroundId.",
+    }),
+  ),
   agent: Type.Optional(
     Type.String({
       description:
@@ -76,7 +83,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 
     async execute(
       _toolCallId: string,
-      params: { task: string; agent?: string; wait?: boolean; backgroundId?: string },
+      params: { task?: string; agent?: string; wait?: boolean; backgroundId?: string },
       signal: AbortSignal | undefined,
       _onUpdate: unknown,
       _ctx: unknown,
@@ -86,7 +93,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         throw new Error("SubagentRuntime not initialized (session_start not fired).");
       }
 
-      // 模式 3: 查询 background 结果
+      // 模式 3: 查询 background 结果（不需要 task）
       if (params.backgroundId) {
         const status = rt.getBackground(params.backgroundId);
         if (!status) {
@@ -113,6 +120,14 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
             sessionId: status.result?.sessionId,
           },
         };
+      }
+
+      // task 在同步/background 模式下必填（schema 设为 Optional 是为了 backgroundId 模式不需要它）
+      if (!params.task) {
+        throw new Error(
+          'Parameter "task" is required unless polling with backgroundId. ' +
+            'Provide a task description for the subagent to execute.',
+        );
       }
 
       // 模式 2: background（wait:false）

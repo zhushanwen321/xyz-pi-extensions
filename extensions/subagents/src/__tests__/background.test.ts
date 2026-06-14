@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SubagentRuntime } from "../runtime.ts";
 import type { AgentResult, BackgroundStatus } from "../types.ts";
 
-/** 构造一个隔离的 SubagentRuntime（绕过 session_start / modelRegistry 注入） */
+/** 构造一个隔离的 SubagentRuntime（注入 mock pi + modelRegistry） */
 function makeRuntime(overrides: { runAgentImpl?: () => Promise<AgentResult> } = {}): SubagentRuntime & {
   pi: { appendEntry: ReturnType<typeof vi.fn>; events: { emit: ReturnType<typeof vi.fn> } };
 } {
@@ -26,7 +26,13 @@ function makeRuntime(overrides: { runAgentImpl?: () => Promise<AgentResult> } = 
     events: { emit: vi.fn() },
   };
   rt.injectPi(pi as never);
-  // mock runAgent（绕过 modelRegistry 校验）
+  // 注入 mock modelRegistry（startBackground 入口预检 buildContext() 需要）
+  rt.injectModelRegistry({
+    find: () => undefined,
+    hasConfiguredAuth: () => true,
+    getAvailable: () => [],
+  } as never);
+  // mock runAgent（绕过真实 session 创建）
   (rt as unknown as { runAgent: ReturnType<typeof vi.fn> }).runAgent = vi.fn(
     overrides.runAgentImpl ??
       (async () => ({

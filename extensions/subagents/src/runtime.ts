@@ -85,14 +85,24 @@ export class SubagentRuntime {
     this.builtinRegistry = new BuiltinAgentRegistry();
   }
 
-  /** FR-11.5: session_start 时注入 modelRegistry，触发 agent 发现 */
+  /** FR-11.5: session_start 时注入 modelRegistry，触发 agent 发现。
+   * fail-fast：若注入 null/undefined，立即抛错而非延迟到首次 runAgent。 */
   injectModelRegistry(registry: ModelRegistryLike): void {
+    if (!registry) {
+      throw new Error(
+        "SubagentRuntime.injectModelRegistry: registry is null/undefined — " +
+        "check that session_start handler reads ctx.modelRegistry (not event.modelRegistry).",
+      );
+    }
     this.modelRegistry = registry;
     this.agentRegistry.discoverAll(this.builtinRegistry);
   }
 
   /** session_start 时注入 pi（用于 appendEntry 持久化 + events.emit 跨扩展通知） */
   injectPi(pi: PiLike): void {
+    if (!pi) {
+      throw new Error("SubagentRuntime.injectPi: pi is null/undefined.");
+    }
     this.pi = pi;
   }
 
@@ -245,6 +255,12 @@ export class SubagentRuntime {
    * 用 getBackground(id) 查询结果，cancelBackground(id) 取消。
    */
   startBackground(opts: BackgroundOptions): BackgroundHandle {
+    // 入口预检：立即验证 runtime 已初始化（modelRegistry 已注入）。
+    // 若不预检，detached runAgent() 的异步错误会被下方 .catch 吞掉，
+    // 导致 startBackground 返回"假成功"的 handle（status: "running"），
+    // 而真实失败只在后续 getBackground(id) 查询时才暴露。
+    this.buildContext();
+
     const id = `bg-${++this._bgSeq}-${Date.now().toString(BG_ID_RADIX)}`;
     const controller = new AbortController();
     const record: BgRecord = { id, status: "running", startedAt: Date.now(), controller };

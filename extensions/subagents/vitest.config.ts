@@ -21,6 +21,7 @@ export default defineConfig({
       "@earendil-works/pi-ai": path.resolve(__dirname, "mocks/pi-ai.ts"),
       "@earendil-works/pi-coding-agent": path.resolve(__dirname, "../../shared/types/mariozechner/index.ts"),
       "typebox": path.resolve(__dirname, "mocks/typebox.ts"),
+      "@sinclair/typebox": path.resolve(__dirname, "mocks/typebox.ts"),
     },
   },
 });

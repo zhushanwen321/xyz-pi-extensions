@@ -1,12 +1,15 @@
 /**
  * CI type stubs for Pi runtime modules.
  *
- * Ambient module declarations that make all named imports resolve to `any`.
- * Locally, tsconfig.json paths take priority and resolve to real Pi types.
+ * Ambient module declarations. Locally, tsconfig.json paths take priority and
+ * resolve to real Pi types. These stubs approximate the real SDK shapes so that
+ * CI (which lacks node_modules) can still catch type-level bugs — most notably
+ * the ExtensionHandler two-parameter signature `(event, ctx)`.
  */
 declare module "@mariozechner/pi-coding-agent" {
 	// Re-export everything as `any` — CI only verifies syntax/structure
-	export type ExtensionAPI = any;
+	// NOTE: ExtensionAPI / SessionStartEvent / ExtensionHandler are precise below
+	//       so CI catches the ExtensionHandler `(event, ctx)` two-param signature.
 	export type ExtensionFactory = (pi: ExtensionAPI) => void | Promise<void>;
 
 	export interface ExtensionContext {
@@ -85,8 +88,15 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type SessionBeforeTreeEvent = any;
 	export type SessionBeforeTreeResult = any;
 	export type SessionShutdownEvent = any;
-	export type SessionStartEvent = any;
-	export type ExtensionHandler = any;
+	export type SessionStartEvent = {
+		type: "session_start";
+		reason: "startup" | "reload" | "new" | "resume" | "fork";
+		previousSessionFile?: string;
+		// ⚠️ Note: modelRegistry / cwd / ui are NOT on this event.
+		// They live on ExtensionContext (the 2nd handler parameter).
+	};
+	/** ExtensionHandler signature: (event, ctx) — TWO parameters. */
+	export type ExtensionHandler<E, R = undefined> = (event: E, ctx: ExtensionContext) => Promise<R | void> | R | void;
 	export type RegisteredTool = any;
 	export type RegisteredCommand = any;
 	export type CustomMessageEntry = any;
@@ -95,9 +105,43 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type FileEntry = any;
 	export type ReadonlyFooterDataProvider = any;
 	export type ExtensionContextActions = any;
-	export type ExtensionCommandContextActions = any;
+	export type ExtensionCommandContext = ExtensionContext;
 	export type BeforeAgentStartEvent = any;
 	export type BeforeAgentStartEventResult = any;
+
+	/** Pi ExtensionAPI — the `pi` object passed to extension factories.
+	 * Precise subset of the real SDK interface covering all methods used by this
+	 * monorepo's extensions. NOT `any` — so the compiler enforces:
+	 *   1. `on("session_start", handler)` → handler is `(event, ctx) => ...` (two params),
+	 *      reading modelRegistry/cwd/ui from the 2nd param (ExtensionContext).
+	 *   2. method names actually exist (catches typos like `senduserMessage`).
+	 * Methods are required (not optional) since the real SDK always provides them. */
+	export interface ExtensionAPI {
+		on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>): void;
+		on(event: string, handler: (...args: any[]) => unknown): void;
+		registerTool(tool: unknown): void;
+		registerCommand(name: string, command: unknown): void;
+		registerShortcut(shortcut: unknown, options: unknown): void;
+		registerFlag(name: string, options: unknown): void;
+		getFlag(name: string): boolean | string | undefined;
+		registerMessageRenderer(customType: string, renderer: unknown): void;
+		sendMessage(message: unknown, options?: unknown): void;
+		sendUserMessage(content: string | unknown[], options?: unknown): void;
+		appendEntry(customType: string, data?: unknown): void;
+		setSessionName(name: string): void;
+		getSessionName(): string | undefined;
+		setLabel(entryId: string, label: string | undefined): void;
+		exec(command: string, args: string[], options?: unknown): Promise<unknown>;
+		getActiveTools(): string[];
+		getAllTools(): Array<{ name: string }>;
+		setActiveTools(toolNames: string[]): void;
+		getCommands(): Array<{ name: string }>;
+		getThinkingLevel(): string;
+		setThinkingLevel(level: string): void;
+		events: { emit(channel: string, data: unknown): void; on?(channel: string, handler: (...args: any[]) => void): void };
+		// 扩展间私有协议（goal/workflow 用 __ 前缀注入字段）
+		[key: `__${string}`]: unknown;
+	}
 
 	export function setActiveTools(tools: string[]): void;
 	export function sendUserMessage(message: string, options?: Record<string, unknown>): void;
