@@ -14,9 +14,15 @@ export function setCategoryModel(state: SessionModelState, category: string, mod
   state.perCategory[category] = { model, thinkingLevel };
 }
 
-/** FR-4.7.1: 序列化为 JSON 字符串（用于 pi.appendEntry 持久化） */
-export function serializeState(state: SessionModelState): string {
-  return JSON.stringify(state);
+/** FR-4.7.1: 序列化为可持久化的 snapshot 对象（供 pi.appendEntry 存储）。
+ * 返回深拷贝快照，避免后续 sessionState 变异影响已写入的 entry 引用。
+ * 与 restoreState 对称（均操作 object），与 extensions/plan 的 appendEntry 约定一致。 */
+export function serializeState(state: SessionModelState): SessionModelState {
+  return {
+    yoloMode: state.yoloMode,
+    perAgent: { ...state.perAgent },
+    perCategory: { ...state.perCategory },
+  };
 }
 
 /**

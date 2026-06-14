@@ -61,7 +61,7 @@ export interface AgentUsage {
 
 // ── Pool ──────────────────────────────────────────────────────
 
-export const SOFT_MAX_AGENTS_WARNING = 500;
+const SOFT_MAX_AGENTS_WARNING = 500;
 
 export interface AgentPoolOptions {
   maxConcurrency?: number;
@@ -99,14 +99,6 @@ export class AgentPool {
 
   setBudget(budget: WorkflowBudget): void {
     this.budgetRef = budget;
-  }
-
-  get activeCount(): number {
-    return this.active;
-  }
-
-  get queueLength(): number {
-    return 0;
   }
 
   /**
@@ -182,7 +174,7 @@ function mapResult(sub: {
   success: boolean;
   error?: string;
   sessionId: string;
-  toolCalls: Array<{ toolName: string; result?: { details?: unknown }; isError: boolean }>;
+  toolCalls: Array<{ toolName: string; args?: unknown; result?: { details?: unknown }; isError: boolean }>;
 }, callId: string, _startedAt: number): AgentResult {
   return {
     callId,
@@ -194,7 +186,9 @@ function mapResult(sub: {
       cacheRead: sub.usage.cacheRead,
       cacheWrite: sub.usage.cacheWrite,
       cost: sub.usage.cost,
-      contextTokens: 0,
+      // contextTokens = 本次 prompt 的 token 总消耗（输入+输出+缓存读+缓存写）。
+      // 原先硬编码为 0，导致预算控制失效；改为四项之和。
+      contextTokens: sub.usage.input + sub.usage.output + sub.usage.cacheRead + sub.usage.cacheWrite,
       turns: sub.turns,
     } : undefined,
     durationMs: sub.durationMs,
@@ -203,7 +197,11 @@ function mapResult(sub: {
     sessionId: sub.sessionId || undefined,
     toolCalls: sub.toolCalls.map((tc) => ({
       name: tc.toolName,
-      input: tc.result?.details ? JSON.stringify(tc.result.details).slice(0, 200) : "",
+      // 优先展示调用参数预览（UI 原本意图）；args 缺失时回退到 result.details，
+      // 保持向后兼容（老版本 subagents 未填充 args 的场景）。
+      input: tc.args
+        ? JSON.stringify(tc.args).slice(0, 200)
+        : (tc.result?.details ? JSON.stringify(tc.result.details).slice(0, 200) : ""),
     })),
   };
 }

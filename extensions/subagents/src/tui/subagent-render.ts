@@ -61,7 +61,7 @@ export function buildRenderLines(details: SubagentToolDetails): string[] {
 
   // EventLog lines
   let turnNumber = 0;
-  for (const entry of details.eventLog) {
+  for (const entry of details.eventLog ?? []) {
     if (entry.type === "turn_end") turnNumber++;
     const label = entry.label;
     if (entry.type === "tool_start") {

@@ -21,8 +21,10 @@ const RANDOM_BYTES_COUNT = 4;
 const BRANCH_NAME_PARTS = 3;
 
 export interface WorktreeResult {
-  /** worktree 绝对路径（agent 的 cwd） */
+  /** worktree 绝对路径（agent 的 cwd）。monorepo 子目录场景下指向子目录。 */
   workPath: string;
+  /** worktree 顶层目录（`git worktree add` 的目标路径）。cleanup 时用它移除 worktree。 */
+  wtRoot: string;
   /** 创建的分支名（有变更时） */
   branch?: string;
   /** 是否有变更提交 */
@@ -70,6 +72,7 @@ export function createWorktree(cwd: string, agentId: string): WorktreeResult | u
   const workPath = relPath ? path.join(wtPath, relPath) : wtPath;
   return {
     workPath: fs.existsSync(workPath) ? workPath : wtPath,
+    wtRoot: wtPath,
     hasChanges: false,
     baseSha: headSha,
   };
@@ -118,9 +121,11 @@ export function cleanupWorktree(
     }
   }
 
-  // 删除 worktree（分支保留）
+  // 删除 worktree（分支保留）。用 wtRoot（worktree 顶层目录）而非 workPath 推导：
+  // workPath 可能是 monorepo 子目录，无法用字符串回退还原 worktree 根。
+  const removeTarget = wt.wtRoot ?? wt.workPath.replace(/\/[^/]+$/, "");
   try {
-    git(originalCwd, ["worktree", "remove", "--force", wt.workPath.replace(/\/[^/]+$/, "")]);
+    git(originalCwd, ["worktree", "remove", "--force", removeTarget]);
   } catch {
     try {
       git(originalCwd, ["worktree", "prune"]);
@@ -141,12 +146,22 @@ export function pruneWorktrees(cwd: string): void {
   }
 }
 
-/** 执行 git 命令 */
+/** 执行 git 命令。
+ *
+ * 清除 GIT_* 环境变量（GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE 等）：
+ * subagent 可能在 git 钩子上下文（如 pre-commit）中被调用，此时父进程设置了
+ * 这些变量指向当前仓库。worktree 隔离创建的是全新独立仓库，若继承这些变量，
+ * 子 git 命令会误操作父仓库（如 commit 失败、worktree add 到错误位置）。 */
 function git(cwd: string, args: string[]): string {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!key.startsWith("GIT_")) env[key] = value;
+  }
   return execFileSync("git", args, {
     cwd,
     timeout: GIT_TIMEOUT_MS,
     encoding: "utf-8",
     stdio: ["pipe", "pipe", "pipe"],
+    env,
   });
 }

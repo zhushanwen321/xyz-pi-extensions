@@ -257,7 +257,7 @@ export class SubagentRuntime {
     // Live widget: 注册 running 状态
     const widgetId = `run-${++this._widgetSeq}`;
     const startTime = Date.now();
-    const widgetState: WidgetAgentState & { eventLog: AgentEventLogEntry[] } = {
+    const widgetState: WidgetAgentState = {
       id: widgetId,
       agent: opts.agent ?? "default",
       status: "running",
@@ -294,8 +294,20 @@ export class SubagentRuntime {
       widgetState.finishedAt = Date.now();
       this.widget.updateAgent(widgetState);
       this.notifyChange();
-      // 5 秒后清理
+      // 5 秒后归档 + 清理
       setTimeout(() => {
+        this.archiveSyncAgent({
+          id: widgetId,
+          agent: widgetState.agent,
+          status: widgetState.status as CompletedAgentRecord["status"],
+          eventLog: widgetState.eventLog ?? [],
+          turns: widgetState.turns,
+          totalTokens: widgetState.totalTokens,
+          result: undefined,
+          error: widgetState.summary,
+          startedAt: Date.now() - (widgetState.elapsedSeconds ?? 0) * 1000,
+          endedAt: widgetState.finishedAt,
+        });
         this.widget.removeAgent(widgetId);
         this.notifyChange();
       }, WIDGET_LINGER_MS);
@@ -312,6 +324,18 @@ export class SubagentRuntime {
       this.widget.updateAgent(widgetState);
       this.notifyChange();
       setTimeout(() => {
+        this.archiveSyncAgent({
+          id: widgetId,
+          agent: widgetState.agent,
+          status: widgetState.status as CompletedAgentRecord["status"],
+          eventLog: widgetState.eventLog ?? [],
+          turns: widgetState.turns,
+          totalTokens: widgetState.totalTokens,
+          result: undefined,
+          error: widgetState.summary,
+          startedAt: Date.now() - (widgetState.elapsedSeconds ?? 0) * 1000,
+          endedAt: widgetState.finishedAt,
+        });
         this.widget.removeAgent(widgetId);
         this.notifyChange();
       }, WIDGET_LINGER_MS);
@@ -349,12 +373,17 @@ export class SubagentRuntime {
     this.notifyChange();
 
     // detached：不 await，完成后回填
+    // runAgent 内部创建 widgetState（widgetId="run-N"），5s 后归档到 _completedAgents。
+    // 但 background agent 的权威数据源是 _bgRecords（id="bg-N-..."）。
+    // 因此 runAgent 完成时，同时把 eventLog 写入 BgRecord。
     const signal = opts.signal ?? controller.signal;
     this.runAgent({ ...opts, signal })
       .then((result) => {
         record.result = result;
         record.status = result.success ? "done" : "failed";
         record.endedAt = Date.now();
+        record.eventLog = this.widget.listAgents().find((a) => a.id.startsWith("run-"))?.eventLog ?? [];
+        record.agent = opts.agent ?? "default";
         delete record.controller;
         opts.onComplete?.(record);
         this.pi?.events.emit("subagents:bg:done", record);
@@ -370,6 +399,8 @@ export class SubagentRuntime {
         record.status = "failed";
         record.error = err instanceof Error ? err.message : String(err);
         record.endedAt = Date.now();
+        record.eventLog = this.widget.listAgents().find((a) => a.id.startsWith("run-"))?.eventLog ?? [];
+        record.agent = opts.agent ?? "default";
         delete record.controller;
         opts.onComplete?.(record);
         this.pi?.events.emit("subagents:bg:done", record);
@@ -453,13 +484,7 @@ export function updateWidgetFromEvent(
   },
   startTime: number,
 ): void {
-  const s = state as WidgetAgentState & {
-    eventLog: AgentEventLogEntry[];
-    _currentTurnText?: string;
-    turns: number;
-    totalTokens: number;
-    elapsedSeconds: number;
-  };
+  const s = state;
   if (!s.eventLog) s.eventLog = [];
 
   switch (event.type) {

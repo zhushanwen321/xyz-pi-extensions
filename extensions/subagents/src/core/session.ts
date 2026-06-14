@@ -138,6 +138,9 @@ export function createManagedSession(
         let success = true;
         let error: string | undefined;
         try {
+          // 重置 bridge 状态：避免跨 prompt 累计的 turnCount/lastError/usage/toolCalls
+          // 污染本次 prompt 的 turn limit 计算和 success 判定
+          bridge.resetForPrompt();
           await sess.prompt(task);
         } catch (err) {
           success = false;

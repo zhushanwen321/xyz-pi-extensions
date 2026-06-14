@@ -40,7 +40,15 @@ export interface AgentSessionLike {
   setActiveToolsByName(names: string[]): void;
 }
 
-/** 动态 import Pi SDK（集中在此处，便于测试 mock） */
+/** 动态 import Pi SDK（集中在此处，便于测试 mock）。
+ *
+ * 双重 cast（`as unknown as SdkLike`）：动态 `import()` 的返回类型是
+ * `typeof import("...")`，包含模块的所有导出（远多于 SdkLike 声明的 4 个）。
+ * 由于 SdkLike 是我们定义的最小 duck-typed 接口，模块对象结构上满足它，
+ * 但 TypeScript 无法静态验证 "模块导出形状" 与 SdkLike 的结构兼容性
+ * （ESM 动态 import 的类型推断不深入到具体导出符号的子集关系）。
+ * 因此用 `as unknown as SdkLike` 显式声明：运行时该模块对象确实暴露了
+ * DefaultResourceLoader / SessionManager / createAgentSession。 */
 export async function getSdk(): Promise<SdkLike> {
   const mod = await import("@mariozechner/pi-coding-agent");
   return mod as unknown as SdkLike;

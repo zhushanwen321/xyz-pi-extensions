@@ -1,6 +1,6 @@
 // src/types.ts
 //
-// 注意：不从 @mariozechner/pi-coding-agent re-export Model/Usage/ThinkingLevel。
+// 注意：不从 @mariozechner/pi-coding-agent re-export Model/Usage。
 // vitest mock stub（shared/types/mariozechner/index.d.ts）未导出这些类型，
 // re-export 会导致 "Module has no exported member" 编译错误。
 // 改为自定义最小结构（duck-typed），与 SDK 运行时对象兼容。
@@ -47,11 +47,6 @@ export interface AgentEventLogEntry {
   readonly ts: number;
   readonly status?: "running" | "done" | "failed";
 }
-
-// ============================================================
-// ThinkingLevel 枚举（FR-4.3）— 自定义，与 SDK 类型一致
-// ============================================================
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 // ============================================================
 // Model 最小接口（duck-typed，与 SDK Model<any> 运行时兼容）
@@ -102,6 +97,8 @@ export interface RunAgentOptions {
 // ============================================================
 export interface ToolCallEntry {
   toolName: string;
+  /** 工具调用时的原始参数（来自 tool_execution_start.args），用于 UI 展示调用预览 */
+  args?: unknown;
   result?: { content: Array<{ type: string; text?: string }>; details?: unknown };
   isError: boolean;
 }

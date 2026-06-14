@@ -39,6 +39,10 @@ export interface WidgetAgentState {
   summary?: string;
   /** 完成时间戳（用于 linger 淡出） */
   finishedAt?: number;
+  /** FR-1.1: 事件日志（ring buffer），由 updateWidgetFromEvent 追加 */
+  eventLog?: AgentEventLogEntry[];
+  /** FR-1.1b: 当前 turn 文本累加缓冲（turn_end 时切片后重置） */
+  _currentTurnText?: string;
 }
 
 /** 渲染 widget 内容（string[] 行） */
@@ -66,7 +70,7 @@ export function renderWidget(
 
     for (const a of running) {
       lines.push(formatStatusSummary(a, spinnerFrame, fakeTheme));
-      const eventLog = (a as WidgetAgentState & { eventLog?: AgentEventLogEntry[] }).eventLog ?? [];
+      const eventLog = a.eventLog ?? [];
       const eventLines = Math.min(perAgentEvent, Math.floor(remainingLines / running.length), WIDGET_EVENT_LINES);
       const recent = eventLog.slice(-eventLines);
       const turnEndsTotal = eventLog.filter((e) => e.type === "turn_end").length;
