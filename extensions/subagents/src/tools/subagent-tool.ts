@@ -232,19 +232,42 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 
       // ── Mode 2: background ──────────────────────────────
       if (params.wait === false) {
+        const agentName = params.agent ?? "default";
+        const resolved = rt.resolveModelForAgent?.(params.agent);
+        // bgId 在 startBackground 返回后赋值；onUpdate 闭包引用 bgId（异步触发时已赋值，避免 TDZ）
+        let bgId = "";
         const handle = rt.startBackground({
           task: params.task,
           agent: params.agent,
           signal,
+          onUpdate: (bgDetails) => {
+            onUpdate?.({
+              content: [{ type: "text" as const, text: `[subagent] ${bgDetails.turns} turns | ${bgDetails.totalTokens} tokens | ${bgDetails.elapsedSeconds}s` }],
+              details: {
+                eventLog: bgDetails.eventLog,
+                status: bgDetails.status,
+                agent: agentName,
+                turns: bgDetails.turns,
+                totalTokens: bgDetails.totalTokens,
+                elapsedSeconds: bgDetails.elapsedSeconds,
+                backgroundId: bgId,
+                model: resolved?.model.id,
+                thinkingLevel: resolved?.thinkingLevel,
+              },
+            });
+          },
         });
+        bgId = handle.id;
         const details: SubagentToolDetails = {
           eventLog: [],
           status: "running",
-          agent: params.agent ?? "default",
+          agent: agentName,
           turns: 0,
           totalTokens: 0,
           elapsedSeconds: 0,
           backgroundId: handle.id,
+          model: resolved?.model.id,
+          thinkingLevel: resolved?.thinkingLevel,
         };
         return {
           content: [

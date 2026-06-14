@@ -163,3 +163,45 @@ describe("startBackground / getBackground / cancelBackground", () => {
     expect(status).not.toHaveProperty("controller");
   });
 });
+
+describe("startBackground onUpdate callback (FR-2.5)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("invokes onUpdate with running details when runAgent emits events", async () => {
+    // makeRuntime 默认 mock 的 runAgent 不发事件，必须传一个会调 opts.onEvent 的实现
+    const rt = makeRuntime({
+      runAgentImpl: async (opts: { onEvent?: (e: unknown) => void }) => {
+        opts.onEvent?.({ type: "tool_start", toolName: "read", args: { path: "x.ts" } });
+        opts.onEvent?.({ type: "turn_end" });
+        return {
+          text: "done", turns: 1, durationMs: 5, success: true, sessionId: "s1", toolCalls: [],
+        };
+      },
+    });
+    const updates: Array<{ status: string; eventLogLen: number }> = [];
+    const handle = rt.startBackground({
+      task: "test task",
+      agent: "worker",
+      onUpdate: (d) => updates.push({ status: d.status, eventLogLen: d.eventLog.length }),
+    });
+    expect(handle.id).toMatch(/^bg-/);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(updates.length).toBeGreaterThan(0);
+    expect(updates[0].status).toBe("running");
+    expect(updates[0].eventLogLen).toBeGreaterThan(0);
+  });
+
+  it("does not invoke onUpdate when runAgent emits no events", async () => {
+    const rt = makeRuntime({
+      runAgentImpl: async () => ({
+        text: "silent", turns: 0, durationMs: 1, success: true, sessionId: "s2", toolCalls: [],
+      }),
+    });
+    const updates: unknown[] = [];
+    rt.startBackground({ task: "x", onUpdate: () => updates.push({}) });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(updates).toHaveLength(0);
+  });
+});

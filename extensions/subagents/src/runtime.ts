@@ -427,7 +427,33 @@ export class SubagentRuntime {
     // 但 background agent 的权威数据源是 _bgRecords（id="bg-N-..."）。
     // 因此 runAgent 完成时，同时把 eventLog 写入 BgRecord。
     const signal = opts.signal ?? controller.signal;
-    this.runAgent({ ...opts, signal })
+    // FR-2.5: onUpdate 拦截器——把 runAgent 的事件回流给调用方（对话流 block 实时刷新）
+    const userOnUpdate = opts.onUpdate;
+    const userOnEvent = opts.onEvent;
+    const bgStartTime = record.startedAt;
+    const bgState: WidgetAgentState = { id, agent: opts.agent ?? "default", status: "running", eventLog: [] };
+    let bgTurns = 0;
+    let bgTokens = 0;
+    this.runAgent({
+      ...opts,
+      signal,
+      onEvent: (event) => {
+        userOnEvent?.(event);
+        // FR-1.3/2.5: 共享 eventLog 构建（updateWidgetFromEvent 与 sync 模式同一套切片逻辑）
+        updateWidgetFromEvent(bgState, event, bgStartTime);
+        if (event.type === "turn_end") bgTurns = bgState.turns ?? bgTurns;
+        if (event.type === "message_end" && event.usage) {
+          bgTokens += event.usage.input + event.usage.output + event.usage.cacheRead + event.usage.cacheWrite;
+        }
+        userOnUpdate?.({
+          eventLog: [...(bgState.eventLog ?? [])],
+          status: "running",
+          turns: bgTurns,
+          totalTokens: bgTokens,
+          elapsedSeconds: Math.floor((Date.now() - bgStartTime) / MS_PER_SECOND),
+        });
+      },
+    })
       .then((result) => {
         record.result = result;
         record.status = result.success ? "done" : "failed";

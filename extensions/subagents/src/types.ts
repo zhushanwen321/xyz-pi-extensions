@@ -190,6 +190,14 @@ export interface BackgroundStatus extends BackgroundHandle {
 export interface BackgroundOptions extends RunAgentOptions {
   /** 任务完成（成功/失败/取消）时回调。与 pi.events 'subagents:bg:done' 二选一或都有 */
   onComplete?: (status: BackgroundStatus) => void;
+  /** FR-2.5: 执行中事件回流（使对话流 block 实时刷新） */
+  onUpdate?: (details: {
+    eventLog: AgentEventLogEntry[];
+    status: "running" | "done" | "failed" | "cancelled";
+    turns: number;
+    totalTokens: number;
+    elapsedSeconds: number;
+  }) => void;
 }
 
 // ============================================================
