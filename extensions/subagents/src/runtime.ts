@@ -11,7 +11,7 @@ import { AgentRegistry } from "./registry/agent-registry.ts";
 import { BuiltinAgentRegistry } from "./registry/builtin-agents.ts";
 import { type ModelRegistryLike,resolveModelForAgent } from "./resolution/model-resolver.ts";
 import { createSessionModelState, restoreState, serializeState, setAgentModel, setCategoryModel } from "./state/session-model-state.ts";
-import { AgentWidgetManager, type WidgetAgentState, type WidgetUI } from "./tui/agent-widget.ts";
+import type { WidgetAgentState } from "./tui/agent-widget.ts";
 import { extractLabelFromArgs } from "./tui/format.ts";
 import {
   type AgentEventLogEntry,
@@ -100,8 +100,8 @@ export class SubagentRuntime {
   /** FR-3.1 G-017: 活跃 overlay 句柄（防叠加） */
   private _activeView: { close: () => void } | null = null;
 
-  /** Live widget 管理器（实时显示 agent 状态） */
-  readonly widget = new AgentWidgetManager();
+  /** FR-2.0: running agent 状态 map（替代已删除的 AgentWidgetManager 渲染层） */
+  private readonly _runningAgents = new Map<string, WidgetAgentState>();
 
   constructor(opts: { cwd: string; homeDir: string; agentDir: string }) {
     this.cwd = opts.cwd;
@@ -136,9 +136,9 @@ export class SubagentRuntime {
     this.pi = pi;
   }
 
-  /** session_start 时注入 UI（用于 live widget 渲染） */
-  attachWidgetUI(ui: WidgetUI): void {
-    this.widget.attachUI(ui);
+  /** FR-2.0: 暴露给 /subagents list 的 running agent 快照（替代 widget.listAgents） */
+  listRunningAgents(): WidgetAgentState[] {
+    return [...this._runningAgents.values()];
   }
 
   /** FR-3.4: 订阅 runtime 数据变更（overlay 视图用） */
@@ -281,7 +281,7 @@ export class SubagentRuntime {
       elapsedSeconds: 0,
       eventLog: [],
     };
-    this.widget.updateAgent(widgetState);
+    this._runningAgents.set(widgetState.id, widgetState);
     this.notifyChange();
 
     // 拦截 onEvent 更新 widget（turns/tokens/activity + eventLog）
@@ -291,7 +291,7 @@ export class SubagentRuntime {
       onEvent: (event) => {
         userOnEvent?.(event);
         updateWidgetFromEvent(widgetState, event, startTime);
-        this.widget.updateAgent(widgetState);
+        this._runningAgents.set(widgetState.id, widgetState);
         this.notifyChange();
       },
     };
@@ -309,7 +309,7 @@ export class SubagentRuntime {
         : undefined;
       widgetState.summary = result.text.slice(0, WIDGET_SUMMARY_MAX);
       widgetState.finishedAt = Date.now();
-      this.widget.updateAgent(widgetState);
+      this._runningAgents.set(widgetState.id, widgetState);
       this.notifyChange();
       // 5 秒后归档 + 清理
       setTimeout(() => {
@@ -325,7 +325,7 @@ export class SubagentRuntime {
           startedAt: Date.now() - (widgetState.elapsedSeconds ?? 0) * 1000,
           endedAt: widgetState.finishedAt,
         });
-        this.widget.removeAgent(widgetId);
+        this._runningAgents.delete(widgetId);
         this.notifyChange();
       }, WIDGET_LINGER_MS);
 
@@ -355,7 +355,7 @@ export class SubagentRuntime {
       widgetState.status = finalOpts.signal?.aborted ? "cancelled" : "failed";
       widgetState.summary = err instanceof Error ? err.message : String(err);
       widgetState.finishedAt = Date.now();
-      this.widget.updateAgent(widgetState);
+      this._runningAgents.set(widgetState.id, widgetState);
       this.notifyChange();
       setTimeout(() => {
         this.archiveSyncAgent({
@@ -370,7 +370,7 @@ export class SubagentRuntime {
           startedAt: Date.now() - (widgetState.elapsedSeconds ?? 0) * 1000,
           endedAt: widgetState.finishedAt,
         });
-        this.widget.removeAgent(widgetId);
+        this._runningAgents.delete(widgetId);
         this.notifyChange();
       }, WIDGET_LINGER_MS);
 
@@ -458,7 +458,7 @@ export class SubagentRuntime {
         record.result = result;
         record.status = result.success ? "done" : "failed";
         record.endedAt = Date.now();
-        record.eventLog = this.widget.listAgents().find((a) => a.id.startsWith("run-"))?.eventLog ?? [];
+        record.eventLog = bgState.eventLog ?? [];
         record.agent = opts.agent ?? "default";
         delete record.controller;
         opts.onComplete?.(record);
@@ -494,7 +494,7 @@ export class SubagentRuntime {
         record.status = "failed";
         record.error = err instanceof Error ? err.message : String(err);
         record.endedAt = Date.now();
-        record.eventLog = this.widget.listAgents().find((a) => a.id.startsWith("run-"))?.eventLog ?? [];
+        record.eventLog = bgState.eventLog ?? [];
         record.agent = opts.agent ?? "default";
         delete record.controller;
         opts.onComplete?.(record);

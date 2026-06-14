@@ -402,7 +402,7 @@ export function createSubagentsView(
 
 /** 从 runtime 提取所有 records（合并三数据源） */
 function getAllRecords(runtime: SubagentRuntime): SubagentRecord[] {
-  const widgetRecords: SubagentRecord[] = runtime.widget.listAgents().map((a) => ({
+  const widgetRecords: SubagentRecord[] = runtime.listRunningAgents().map((a) => ({
     id: a.id,
     agent: a.agent,
     status: a.status,
