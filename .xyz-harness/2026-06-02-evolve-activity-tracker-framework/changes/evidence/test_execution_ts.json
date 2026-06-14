@@ -20,7 +20,7 @@
       "round": 1,
       "passed": true,
       "execute_steps": [
-        "Call triggerMatch({toolName:'read', path:'/path/to/my-skill/SKILL.md'})",
+        "Call triggerMatch with global skill path outside cwd",
         "Assert match.name === 'my-skill'",
         "Assert match.metadata.skillMdPath is set"
       ],
@@ -31,10 +31,30 @@
       "round": 1,
       "passed": true,
       "execute_steps": [
-        "Call triggerMatch({toolName:'read', path:'/path/to/config.json'})",
+        "Call triggerMatch with non-SKILL.md path",
         "Assert match === null"
       ],
       "evidence": "match=null"
+    },
+    {
+      "caseId": "TC-2-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Call triggerMatch with SKILL.md inside cwd (absolute)",
+        "Assert match === null (cwd-excluded)"
+      ],
+      "evidence": "match=null (cwd-excluded)"
+    },
+    {
+      "caseId": "TC-2-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Call triggerMatch with SKILL.md inside cwd (relative)",
+        "Assert match === null (cwd-excluded)"
+      ],
+      "evidence": "match=null (cwd-excluded)"
     },
     {
       "caseId": "TC-3-01",
@@ -57,6 +77,30 @@
         "Assert returns false"
       ],
       "evidence": "completed→error=false, recorded→loaded=false"
+    },
+    {
+      "caseId": "TC-3-03",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Call canTransition('loaded', 'dismissed')",
+        "Assert returns true",
+        "Call canTransition('error', 'dismissed')",
+        "Assert returns true"
+      ],
+      "evidence": "loaded→dismissed=true, error→dismissed=true"
+    },
+    {
+      "caseId": "TC-3-04",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Call isTerminalStatus('dismissed')",
+        "Assert returns true",
+        "Call canTransition('dismissed', 'completed')",
+        "Assert returns false"
+      ],
+      "evidence": "isTerminal=true, dismissed→completed=false"
     },
     {
       "caseId": "TC-4-01",
