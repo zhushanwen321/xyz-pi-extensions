@@ -4,11 +4,12 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-cod
 import { getRuntime } from "../runtime.ts";
 import { runConfigWizard } from "../tui/config-wizard.ts";
 import { formatConfigSummary } from "../tui/format.ts";
+import { createSubagentsView } from "../tui/subagents-view.ts";
 
 /** FR-4.8.1: 注册 /subagents 命令 */
 export function registerSubagentsCommand(pi: ExtensionAPI): void {
   pi.registerCommand("subagents", {
-    description: "Subagents 配置: /subagents [config [category]]",
+    description: "Subagents 配置: /subagents [config [category] | list [<id>]]",
     handler: async (argsStr: string, ctx: ExtensionCommandContext) => {
       const rt = getRuntime();
       if (!rt) {
@@ -17,6 +18,21 @@ export function registerSubagentsCommand(pi: ExtensionAPI): void {
       }
 
       const args = argsStr.trim().split(/\s+/).filter(Boolean);
+
+      // FR-3.1: list 子命令（解析优先级最高）
+      if (args[0] === "list") {
+        if (!ctx.hasUI) {
+          ctx.ui.notify("/subagents list requires interactive mode", "error");
+          return;
+        }
+        const directId = args[1];
+        try {
+          await createSubagentsView(rt, ctx.ui.theme as never, ctx as never, directId);
+        } catch (err) {
+          ctx.ui.notify(err instanceof Error ? err.message : String(err), "error");
+        }
+        return;
+      }
 
       // /subagents（无参数）→ 显示摘要
       if (args.length === 0 || (args.length === 1 && args[0] !== "config")) {
