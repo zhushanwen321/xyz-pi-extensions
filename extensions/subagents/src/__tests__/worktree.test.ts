@@ -212,11 +212,93 @@ describe("cleanupWorktree", () => {
     expect(list).not.toContain(wt!.workPath);
     expect(fs.existsSync(wt!.workPath)).toBe(false);
   });
+
+  // ── V2：agent 自提交后 status 干净但 HEAD 前进，不应销毁 commit ──────
+  it("V2: preserves agent's self-commit when working tree is clean but HEAD advanced", () => {
+    const repo = initRepo(tmpDir);
+    const baseShaBefore = headSha(repo);
+
+    const wt = createWorktree(repo, "v2-selfcommit");
+    expect(wt).toBeDefined();
+    expect(wt!.baseSha).toBe(baseShaBefore);
+    createdWorkPaths.push(wt!.workPath);
+
+    // 模拟 agent 在 worktree 内自己跑了 git commit（coding agent 常见行为，尤其带 zcommit skill）
+    fs.writeFileSync(path.join(wt!.workPath, "agent-work.txt"), "done by agent\n");
+    gitQuiet(wt!.workPath, ["add", "-A"]);
+    gitQuiet(wt!.workPath, ["commit", "-q", "-m", "agent checkpoint: implemented feature X"]);
+    // 此时 working tree 干净（agent 已全部 commit），但 HEAD 已前进
+    const agentCommitSha = headSha(wt!.workPath);
+    expect(agentCommitSha).not.toBe(baseShaBefore);
+
+    const result = cleanupWorktree(repo, wt!, "v2 task");
+
+    // V2 修复后：应检测到 HEAD 前进，保留 agent 的 commit 到分支
+    expect(result.hasChanges).toBe(true);
+    expect(result.branch).toBeTruthy();
+    expect(branchExists(tmpDir, result.branch!)).toBe(true);
+    // 分支应指向 agent 的 commit，而非 baseSha（尊重 agent 的 commit，不 reset）
+    const branchSha = git(tmpDir, ["rev-parse", result.branch!]).trim();
+    expect(branchSha).toBe(agentCommitSha);
+    // worktree 已删
+    expect(fs.existsSync(wt!.workPath)).toBe(false);
+  });
+
+  // ── V6：monorepo 子目录场景，分支名应含完整 agentId（不从 workPath.basename 反推） ──
+  it("V6: branch name preserves full agentId in monorepo subdir scenario", () => {
+    const subDir = initRepoWithSubdir(tmpDir, "deep-pkg");
+
+    const wt = createWorktree(subDir, "myagent123");
+    expect(wt).toBeDefined();
+    createdWorkPaths.push(wt!.workPath);
+
+    // branchName 候选应在创建时固定，含完整 agentId
+    expect(wt!.branchName).toBe("pi-agent-myagent123");
+
+    // 制造变更触发分支创建
+    fs.writeFileSync(path.join(wt!.workPath, "change.txt"), "x\n");
+    const result = cleanupWorktree(subDir, wt!, "v6 task");
+
+    expect(result.hasChanges).toBe(true);
+    // 分支名应以 pi-agent-myagent123 开头（V6：不因 monorepo basename 丢失 agentId）
+    expect(result.branch).toMatch(/^pi-agent-myagent123/);
+  });
 });
 
 describe("pruneWorktrees", () => {
   it("does not throw in a non-git directory", () => {
     expect(() => pruneWorktrees(tmpDir)).not.toThrow();
+  });
+
+  // ── V5：崩溃恢复 —— tmpdir 残留的 pi-agent-* 物理目录应被清理 ──────
+  it("V5: removes orphaned pi-agent-* physical dirs from tmpdir (crash recovery)", () => {
+    // 模拟崩溃残留：进程被 kill -9 时 worktree 物理目录留在 tmpdir
+    const orphanDir = path.join(os.tmpdir(), "pi-agent-crashed-abc123");
+    fs.mkdirSync(orphanDir, { recursive: true });
+    fs.writeFileSync(path.join(orphanDir, "leftover.txt"), "crash\n");
+    expect(fs.existsSync(orphanDir)).toBe(true);
+
+    pruneWorktrees(tmpDir);
+
+    // V5 修复后：物理目录应被删除
+    expect(fs.existsSync(orphanDir)).toBe(false);
+  });
+
+  it("V5: does not remove unrelated tmpdir entries", () => {
+    const unrelatedDir = path.join(os.tmpdir(), "other-tool-tmp");
+    fs.mkdirSync(unrelatedDir, { recursive: true });
+    const piAgentDir = path.join(os.tmpdir(), "pi-agent-keep-me");
+    fs.mkdirSync(piAgentDir, { recursive: true });
+
+    try {
+      pruneWorktrees(tmpDir);
+
+      expect(fs.existsSync(unrelatedDir)).toBe(true); // 不受影响
+      expect(fs.existsSync(piAgentDir)).toBe(false); // pi-agent-* 被清
+    } finally {
+      // 清理 unrelated dir，避免污染全局 tmpdir
+      try { fs.rmSync(unrelatedDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
   });
 });
 

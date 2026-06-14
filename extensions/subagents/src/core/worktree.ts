@@ -3,7 +3,7 @@
 //
 // Git worktree 隔离：让子 agent 在一次性 worktree 副本中工作，不碰用户工作区。
 // 完成后变更提交到独立分支，用户可 git merge 合入。
-// 参考 tintinweb/pi-subagents 的 worktree.ts。
+// 参考 tintinweb/pi-subagents 的 worktree.ts（V2 双臂防御模式来自 PR #68）。
 
 import { execFileSync } from "node:child_process";
 import * as crypto from "node:crypto";
@@ -17,26 +17,28 @@ const GIT_TIMEOUT_MS = 15000;
 const COMMIT_MSG_MAX = 200;
 /** random UUID 字节数 */
 const RANDOM_BYTES_COUNT = 4;
-/** branch name 从 worktree 路径取的分段数 */
-const BRANCH_NAME_PARTS = 3;
+/** tmpdir 下 pi-agent-* 前缀，用于扫描残留 worktree 物理目录（V5） */
+export const PI_AGENT_TMP_PREFIX = "pi-agent-";
 
 export interface WorktreeResult {
   /** worktree 绝对路径（agent 的 cwd）。monorepo 子目录场景下指向子目录。 */
   workPath: string;
   /** worktree 顶层目录（`git worktree add` 的目标路径）。cleanup 时用它移除 worktree。 */
   wtRoot: string;
-  /** 创建的分支名（有变更时） */
+  /** 分支名候选（V6：createWorktree 时固定，cleanup 直接用，不从路径反推） */
+  branchName: string;
+  /** 创建的分支名（有变更时，cleanupWorktree 写入） */
   branch?: string;
   /** 是否有变更提交 */
   hasChanges: boolean;
-  /** 基准 SHA */
+  /** 基准 SHA（V2：cleanup 时对比 currentSha 判断 agent 是否自提交） */
   baseSha: string;
 }
 
 /**
  * 创建一个 detached git worktree 副本。
  * @param cwd 当前工作区
- * @param agentId agent 标识（用于分支命名）
+ * @param agentId agent 标识（用于分支命名 + tmpdir 目录名；应由调用方随机化 — V7）
  * @returns WorktreeResult 或 undefined（非 git 仓库或失败时）
  */
 export function createWorktree(cwd: string, agentId: string): WorktreeResult | undefined {
@@ -60,9 +62,9 @@ export function createWorktree(cwd: string, agentId: string): WorktreeResult | u
     relPath = "";
   }
 
-  // 创建 worktree
+  // 创建 worktree（agentId 用于目录名，已由调用方随机化 — V7）
   const uuid = crypto.randomBytes(RANDOM_BYTES_COUNT).toString("hex");
-  const wtPath = path.join(os.tmpdir(), `pi-agent-${agentId}-${uuid}`);
+  const wtPath = path.join(os.tmpdir(), `${PI_AGENT_TMP_PREFIX}${agentId}-${uuid}`);
   try {
     git(cwd, ["worktree", "add", "--detach", wtPath, "HEAD"]);
   } catch {
@@ -73,13 +75,21 @@ export function createWorktree(cwd: string, agentId: string): WorktreeResult | u
   return {
     workPath: fs.existsSync(workPath) ? workPath : wtPath,
     wtRoot: wtPath,
+    // V6：分支名候选在创建时固定（pi-agent-${agentId}），cleanup 直接用，不从路径反推
+    branchName: `${PI_AGENT_TMP_PREFIX}${agentId}`,
     hasChanges: false,
     baseSha: headSha,
   };
 }
 
 /**
- * 清理 worktree：有变更则提交到分支，然后删除 worktree。
+ * 清理 worktree：检测变更 → 提交到分支 → 删除 worktree。
+ *
+ * V2 双臂逻辑（参考 tintinweb PR #68）：
+ *   - working tree 脏 → add + commit + branch（既有逻辑）
+ *   - working tree 干净但 HEAD 前进（agent 自提交）→ 直接在当前 HEAD 创建分支（尊重 agent 的 commit）
+ *   - working tree 干净且 HEAD 未动 → 确实无变更，直接删
+ *
  * @param originalCwd 原始工作区（git 命令在此执行）
  * @param wt worktree 结果（含路径）
  * @param description agent 任务描述（用于 commit message）
@@ -89,43 +99,49 @@ export function cleanupWorktree(
   wt: WorktreeResult,
   description: string,
 ): WorktreeResult {
-  const branchName = `pi-agent-${path.basename(wt.workPath).split("-").slice(0, BRANCH_NAME_PARTS).join("-")}`;
-
-  // 检查 worktree 中是否有变更
-  let hasChanges = false;
+  // 检测变更：先看 working tree 状态
+  let workingTreeDirty = false;
   try {
     const status = git(wt.workPath, ["status", "--porcelain"]);
-    hasChanges = status.trim().length > 0;
+    workingTreeDirty = status.trim().length > 0;
   } catch {
-    hasChanges = false;
+    workingTreeDirty = false;
   }
 
-  if (hasChanges) {
+  if (workingTreeDirty) {
+    // 分支 A：working tree 有未提交变更 → add + commit + branch
     try {
       git(wt.workPath, ["add", "-A"]);
       const msg = `pi-agent: ${description.slice(0, COMMIT_MSG_MAX)}`;
       git(wt.workPath, ["commit", "--no-verify", "-m", msg]);
-      // 创建分支指向当前 HEAD
-      let branch = branchName;
-      try {
-        git(wt.workPath, ["branch", branch]);
-      } catch {
-        // 分支名冲突 → 追加时间戳
-        branch = `${branchName}-${Date.now()}`;
-        git(wt.workPath, ["branch", branch]);
-      }
-      wt.branch = branch;
+      wt.branch = createBranchAtHead(wt.workPath, wt.branchName);
       wt.hasChanges = true;
     } catch {
       // commit 失败 → best effort
     }
+  } else {
+    // working tree 干净：需区分"确实无变更" vs "agent 已自提交"（V2）
+    let currentSha = "";
+    try {
+      currentSha = git(wt.workPath, ["rev-parse", "HEAD"]).trim();
+    } catch {
+      currentSha = wt.baseSha; // 探测失败时保守处理（当作无变更）
+    }
+
+    if (currentSha !== wt.baseSha) {
+      // 分支 B：agent 自提交了（HEAD 前进），尊重其 commit → 在当前 HEAD 创建分支
+      wt.branch = createBranchAtHead(wt.workPath, wt.branchName);
+      wt.hasChanges = true;
+    } else {
+      // 分支 C：确实无变更
+      wt.hasChanges = false;
+    }
   }
 
-  // 删除 worktree（分支保留）。用 wtRoot（worktree 顶层目录）而非 workPath 推导：
-  // workPath 可能是 monorepo 子目录，无法用字符串回退还原 worktree 根。
-  const removeTarget = wt.wtRoot ?? wt.workPath.replace(/\/[^/]+$/, "");
+  // 删除 worktree（分支保留）。V8：wtRoot 在 createWorktree 总是设置，
+  // 删除死代码 `?? wt.workPath.replace(/\/[^/]+$/, "")`（那正是旧 bug 逻辑）。
   try {
-    git(originalCwd, ["worktree", "remove", "--force", removeTarget]);
+    git(originalCwd, ["worktree", "remove", "--force", wt.wtRoot]);
   } catch {
     try {
       git(originalCwd, ["worktree", "prune"]);
@@ -137,12 +153,56 @@ export function cleanupWorktree(
   return wt;
 }
 
-/** 清理孤立的 worktree（崩溃恢复） */
+/**
+ * 在 worktree 当前 HEAD 创建分支。分支名冲突时追加时间戳避免覆盖既有工作。
+ * V6：branchName 由 createWorktree 固定（含完整 agentId），不丢失。
+ */
+function createBranchAtHead(workPath: string, branchName: string): string {
+  try {
+    git(workPath, ["branch", branchName]);
+    return branchName;
+  } catch {
+    // 分支名冲突 → 追加时间戳
+    const unique = `${branchName}-${Date.now()}`;
+    git(workPath, ["branch", unique]);
+    return unique;
+  }
+}
+
+/**
+ * 清理孤立的 worktree（崩溃恢复）。
+ * V5：除了 `git worktree prune`（清理注册表无效条目），还扫描 tmpdir 下
+ * pi-agent-* 物理目录并删除（崩溃后残留的物理目录）。
+ */
 export function pruneWorktrees(cwd: string): void {
   try {
     git(cwd, ["worktree", "prune"]);
   } catch {
     // best effort
+  }
+  cleanupOrphanedWorktreeDirs();
+}
+
+/**
+ * 扫描 tmpdir 下 pi-agent-* 物理目录并删除（V5 崩溃恢复）。
+ * 只删与 PI_AGENT_TMP_PREFIX 匹配的目录，不影响其他临时文件。
+ * cwd 无关 —— session_shutdown（无 cwd 上下文）可直接调用。
+ */
+export function cleanupOrphanedWorktreeDirs(): void {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(os.tmpdir());
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith(PI_AGENT_TMP_PREFIX)) continue;
+    const fullPath = path.join(os.tmpdir(), entry);
+    try {
+      fs.rmSync(fullPath, { recursive: true, force: true });
+    } catch {
+      // best effort
+    }
   }
 }
 

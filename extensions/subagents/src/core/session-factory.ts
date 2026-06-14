@@ -13,6 +13,7 @@
 //   创建后通过 setActiveToolsByName 执行。本 helper 封装该流程，消除调用方重复。
 
 import { execSync } from "node:child_process";
+
 import { getSessionsDir } from "../config/config-path.ts";
 import type { ModelRegistryLike } from "../resolution/model-resolver.ts";
 import { filterTools } from "../resolution/tool-filter.ts";
@@ -214,6 +215,8 @@ export function collectResult(
   error: string | undefined,
   /** ADR-024 L2: subagent session 文件路径（供 history 关联） */
   sessionFile?: string,
+  /** V4: worktree 隔离执行的结果信息（有变更时含 branch，供调用方展示 merge 指令） */
+  worktree?: { branch?: string; hasChanges: boolean },
 ): AgentResult {
   const text = collectResponseTextLocal(session.messages);
 
@@ -239,6 +242,7 @@ export function collectResult(
     error,
     sessionId: session.sessionId,
     sessionFile,
+    worktree,
     toolCalls: bridge.toolCalls,
   };
 }

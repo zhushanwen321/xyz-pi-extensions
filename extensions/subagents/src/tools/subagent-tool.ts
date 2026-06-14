@@ -267,8 +267,16 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 
       const finalDetails = buildDetails("done");
       finalDetails.result = result.text;
+      // V4：worktree 隔离执行有变更时，向 LLM 追加 merge 指令（分支名 + 合并命令）
+      let resultText = result.text;
+      if (result.worktree?.hasChanges && result.worktree.branch) {
+        const branch = result.worktree.branch;
+        resultText =
+          resultText +
+          `\n\n---\nChanges saved to branch \`${branch}\`. Merge with: \`git merge ${branch}\``;
+      }
       return {
-        content: [{ type: "text" as const, text: result.text }],
+        content: [{ type: "text" as const, text: resultText }],
         details: finalDetails,
       };
     },

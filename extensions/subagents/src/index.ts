@@ -1,9 +1,10 @@
 // src/index.ts
 import * as path from "node:path";
 
-import type { ExtensionAPI, ExtensionContext, SessionStartEvent } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionShutdownEvent, SessionStartEvent } from "@mariozechner/pi-coding-agent";
 
 import { registerSubagentsCommand } from "./commands/config.ts";
+import { cleanupOrphanedWorktreeDirs, pruneWorktrees } from "./core/worktree.ts";
 import { maybeCleanupExpiredSessionFiles } from "./persistence/session-file-gc.ts";
 import { getRuntime, setRuntime,SubagentRuntime } from "./runtime.ts";
 import { registerSubagentTool } from "./tools/subagent-tool.ts";
@@ -42,6 +43,19 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     // ADR-024 L2: 概率性清理过期 subagent session 文件（TTL 30 天）
     maybeCleanupExpiredSessionFiles(homeDir, cwd);
 
+    // V5: 崩溃恢复 —— 上次进程被 kill -9 / 断电时 session_shutdown 未触发，
+    // tmpdir 下可能残留 pi-agent-* worktree 物理目录。每次 session_start 扫描清理。
+    pruneWorktrees(cwd);
+
     if (!existing) setRuntime(rt);
+  });
+
+  // V5: 正常退出清理 —— Pi quit / reload / session 切换时清理 tmpdir 残留的
+  // pi-agent-* worktree 物理目录。覆盖 Ctrl+C 退出、扩展热重载、session new/resume/fork。
+  // 注：SessionShutdownEvent 不携带 cwd，且 git worktree prune（仓库级）会在下次
+  // session_start 补跑，此处只做 cwd 无关的 tmpdir 扫描。
+  // kill -9 / 断电不走此路径，靠下次 session_start 的 pruneWorktrees(cwd) 兜底。
+  pi.on("session_shutdown", (_event: SessionShutdownEvent) => {
+    cleanupOrphanedWorktreeDirs();
   });
 }

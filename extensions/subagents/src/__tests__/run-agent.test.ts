@@ -12,7 +12,12 @@
 // session/bridge 结构，与 mock 对象兼容）。其余依赖（model-resolver、turn-limiter、
 // category、worktree）走真实实现，使编排逻辑得到端到端验证。
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_CATEGORIES } from "../category.ts";
 import { runAgent, type RunAgentContext } from "../core/run-agent.ts";
@@ -345,6 +350,105 @@ describe("runAgent", () => {
       // prompt 自身没抛异常，但 bridge 报告错误 → runAgent 视为失败
       expect(result.success).toBe(false);
       expect(result.error).toBe("rate limited");
+    });
+  });
+
+  // ── V1：createWorktree 失败必须 throw，不能静默回退到 ctx.cwd ──────
+  describe("V1: isolation:worktree 失败应 fail-loud", () => {
+    it("非 git cwd + isolation:worktree → success=false + error 提及 worktree（不静默回退）", async () => {
+      const agentConfig = { name: "worker", systemPrompt: "", source: "builtin" as const, isolation: "worktree" as const };
+      const ctx = makeCtx({
+        resolveAgent: vi.fn(() => agentConfig) as never,
+        cwd: "/tmp", // 非 git 仓库 → createWorktree 返回 undefined
+      });
+
+      const result = await runAgent({ task: "do work", agent: "worker" }, ctx);
+
+      // V1：不应静默回退到原地执行（那会污染用户工作区）
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/worktree/i);
+      expect(result.error).toMatch(/polluting/i);
+      // session factory 不应被调用（worktree 创建失败应在此之前中止）
+      expect(sessionFactoryMocks.createAndConfigureSession).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── V3：createAndConfigureSession 抛错时 worktree 不应泄漏 ──────
+  // 用真实 git 仓库（createWorktree 成功）+ mock factory 抛错，验证 worktree 被清理。
+  describe("V3: worktree 不泄漏（createAndConfigureSession 抛错路径）", () => {
+    let v3Repo: string;
+
+    beforeEach(() => {
+      v3Repo = fs.mkdtempSync(path.join(os.tmpdir(), "pi-v3-test-"));
+      // 初始化 git 仓库 + 一次提交（createWorktree 需要 HEAD）
+      const CLEAN_ENV: NodeJS.ProcessEnv = (() => {
+        const env: NodeJS.ProcessEnv = {};
+        for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_")) env[k] = v;
+        return env;
+      })();
+      const g = (args: string[]) => execFileSync("git", args, { cwd: v3Repo, stdio: "ignore", env: CLEAN_ENV });
+      g(["init", "-q"]);
+      g(["config", "user.email", "test@pi.test"]);
+      g(["config", "user.name", "test"]);
+      fs.writeFileSync(path.join(v3Repo, "init.txt"), "init\n");
+      g(["add", "-A"]);
+      g(["commit", "-q", "-m", "init"]);
+    });
+
+    afterEach(() => {
+      // 兜底：清理可能的 worktree 残留 + 临时仓库
+      try {
+        const CLEAN_ENV: NodeJS.ProcessEnv = (() => {
+          const env: NodeJS.ProcessEnv = {};
+          for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_")) env[k] = v;
+          return env;
+        })();
+        execFileSync("git", ["-C", v3Repo, "worktree", "prune"], { stdio: "ignore", env: CLEAN_ENV });
+      } catch { /* best effort */ }
+      try { fs.rmSync(v3Repo, { recursive: true, force: true }); } catch { /* best effort */ }
+    });
+
+    it("factory 抛错 + isolation:worktree → worktree 被清理（不泄漏到 tmpdir）", async () => {
+      // 让 factory 抛错（session 创建失败的高频路径）
+      sessionFactoryMocks.createAndConfigureSession.mockRejectedValue(
+        new Error("model unavailable"),
+      );
+      sessionFactoryMocks.getSdk.mockResolvedValue({} as never);
+
+      const agentConfig = { name: "worker", systemPrompt: "", source: "builtin" as const, isolation: "worktree" as const };
+      const ctx = makeCtx({
+        resolveAgent: vi.fn(() => agentConfig) as never,
+        cwd: v3Repo, // 真实 git 仓库 → createWorktree 成功
+        homeDir: os.tmpdir(),
+      });
+
+      // 记录测试前的 pi-agent-* 基线（避免其他测试的残留干扰）
+      const baseline = new Set(
+        fs.readdirSync(os.tmpdir()).filter((e) => e.startsWith("pi-agent-")),
+      );
+
+      const result = await runAgent({ task: "do work", agent: "worker" }, ctx);
+
+      // factory 抛错 → 失败结果
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("model unavailable");
+
+      // V3 核心：本次测试新建的 worktree 不应泄漏。
+      // 对比基线：只看本次新增的 pi-agent-* 目录
+      const after = fs.readdirSync(os.tmpdir()).filter((e) => e.startsWith("pi-agent-"));
+      const leaked = after.filter((e) => !baseline.has(e));
+      expect(leaked, `泄漏的 worktree 目录: ${leaked.join(", ")}`).toEqual([]);
+
+      // git worktree 注册表也不应有残留
+      const CLEAN_ENV: NodeJS.ProcessEnv = (() => {
+        const env: NodeJS.ProcessEnv = {};
+        for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_")) env[k] = v;
+        return env;
+      })();
+      const wtList = execFileSync("git", ["-C", v3Repo, "worktree", "list"], {
+        encoding: "utf-8", env: CLEAN_ENV,
+      });
+      expect(wtList).not.toMatch(/pi-agent-/);
     });
   });
 });

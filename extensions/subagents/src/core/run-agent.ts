@@ -1,4 +1,6 @@
 // src/core/run-agent.ts
+import * as crypto from "node:crypto";
+
 import { inferCategory } from "../category.ts";
 import { type ModelRegistryLike, resolveModelForAgent } from "../resolution/model-resolver.ts";
 import type {
@@ -19,8 +21,8 @@ import {
 import { createTurnLimiter } from "./turn-limiter.ts";
 import { cleanupWorktree, createWorktree, type WorktreeResult } from "./worktree.ts";
 
-/** background id 时间戳进制 */
-const BG_ID_RADIX = 36;
+/** V7: agentId 随机字节数（纯 hex，不嵌用户可控的 agentName） */
+const AGENT_ID_RANDOM_BYTES = 4;
 /** commit message 最大长度 */
 const COMMIT_MSG_MAX = 200;
 
@@ -49,6 +51,9 @@ export interface RunAgentContext {
  * 流程：参数解析 → 并发 acquire → createAndConfigureSession（共享 helper）
  *      → 绑定 turn-limiter + AbortSignal → session.prompt → collectResult
  *      → dispose session → pool.release。
+ *
+ * V3：worktree 清理在 outer finally，保证 createAndConfigureSession 抛错时 worktree
+ * 不泄漏（既有实现的 inner finally 不覆盖 session 创建前的异常路径）。
  */
 export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Promise<AgentResult> {
   const startTime = Date.now();
@@ -56,6 +61,9 @@ export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Pro
   // 步骤 2: 并发控制（提前 acquire，保持原有行为）
   const pool = opts.pool ?? ctx.globalPool;
   await pool.acquire(opts.priority);
+
+  // V3：worktree 提到 outer scope，outer finally 统一清理（覆盖 session 创建失败路径）
+  let worktree: WorktreeResult | undefined;
 
   try {
     // 步骤 1: 解析 agent 配置 + category + 模型（在 try 内，确保异常被捕获）
@@ -75,11 +83,20 @@ export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Pro
     const sdk = await getSdk();
 
     // Worktree 隔离：agent 要求 isolation:worktree 时在临时副本中执行
-    let worktree: WorktreeResult | undefined;
     let effectiveCwd = ctx.cwd;
     if (agentConfig?.isolation === "worktree") {
-      worktree = createWorktree(ctx.cwd, `${agentName}-${Date.now().toString(BG_ID_RADIX)}`);
-      if (worktree) effectiveCwd = worktree.workPath;
+      // V7：agentId 用随机 hex，不嵌用户可控的 agentName（路径注入防御）
+      const agentId = crypto.randomBytes(AGENT_ID_RANDOM_BYTES).toString("hex");
+      worktree = createWorktree(ctx.cwd, agentId);
+      // V1：createWorktree 失败（非 git / worktree add 失败）必须 throw，
+      // 不能静默回退到 ctx.cwd（那会让 agent 污染用户工作区，违背隔离意图）
+      if (!worktree) {
+        throw new Error(
+          `Failed to create isolated worktree for agent "${agentName}". ` +
+            "Aborting to avoid polluting the user workspace (isolation:worktree was requested).",
+        );
+      }
+      effectiveCwd = worktree.workPath;
     }
 
     const factoryCtx: SessionFactoryContext = {
@@ -90,7 +107,7 @@ export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Pro
       homeDir: ctx.homeDir,
     };
 
-    // 创建 + 配置 session（共享 helper）
+    // 创建 + 配置session（共享 helper）
     const { session, bridge, unsubscribe, sessionFile } = await createAndConfigureSession(
       {
         resolved,
@@ -103,6 +120,8 @@ export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Pro
       sdk,
     );
 
+    // V4：worktree cleanup 结果（含 branch），传给 collectResult 写入 AgentResult.worktree
+    let worktreeResult: WorktreeResult | undefined;
     try {
       // turn 限制器
       const limiter = createTurnLimiter({
@@ -155,17 +174,27 @@ export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Pro
         error = bridge.lastError;
       }
 
-      return collectResult(session, bridge, startTime, success, error, sessionFile);
+      // V4：worktree cleanup 在 inner finally 提前执行，捕获结果传给 collectResult
+      if (worktree) {
+        worktreeResult = cleanupWorktree(ctx.cwd, worktree, opts.task.slice(0, COMMIT_MSG_MAX));
+        worktree = undefined; // 标记已清理，outer finally 不再重复清理
+      }
+
+      return collectResult(
+        session,
+        bridge,
+        startTime,
+        success,
+        error,
+        sessionFile,
+        worktreeResult ? { branch: worktreeResult.branch, hasChanges: worktreeResult.hasChanges } : undefined,
+      );
     } finally {
       unsubscribe();
       session.dispose();
-      // Worktree 清理：有变更则提交到分支
-      if (worktree) {
-        cleanupWorktree(ctx.cwd, worktree, opts.task.slice(0, COMMIT_MSG_MAX));
-      }
     }
   } catch (err) {
-    // createAgentSession 本身失败（如模型不可用）
+    // createAgentSession 本身失败（如模型不可用）。V1 的 throw 也走这里。
     return {
       text: "",
       turns: 0,
@@ -176,6 +205,11 @@ export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Pro
       toolCalls: [],
     };
   } finally {
+    // V3：outer finally 兜底清理 —— 覆盖 createAndConfigureSession 抛错（worktree 尚未
+    // 在 inner 路径清理）以及 V1 throw 的场景。worktree 在 inner 正常清理后置 undefined。
+    if (worktree) {
+      cleanupWorktree(ctx.cwd, worktree, opts.task.slice(0, COMMIT_MSG_MAX));
+    }
     pool.release();
   }
 }

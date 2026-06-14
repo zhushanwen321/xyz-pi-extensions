@@ -142,6 +142,12 @@ export interface AgentResult {
   sessionId: string;
   /** ADR-024 L2: subagent session 文件绝对路径（持久化时存在） */
   sessionFile?: string;
+  /**
+   * V4: worktree 隔离执行的结果信息。
+   * 当 agent 配置 isolation:"worktree" 且 worktree 中有变更（含 agent 自提交）时存在。
+   * branch 为保留的分支名，用户可 `git merge <branch>` 合入。hasChanges=false 时 branch 为 undefined。
+   */
+  worktree?: { branch?: string; hasChanges: boolean };
   toolCalls: ToolCallEntry[];
 }
 
