@@ -56,6 +56,8 @@ const WIDGET_LINGER_MS = 5000;
 const BG_NOTIFY_TTL_MS = 10 * 60 * 1000;
 /** FR-O1.5: 合并窗口大小（首个立即发送，窗口内的后续合并） */
 const BG_MERGE_WINDOW_MS = 2000;
+/** FR-O5.9: BgRecord 容量上限（FIFO 淘汰） */
+const BG_RECORDS_MAX = 50;
 
 /** 进程内单例持有的 background 记录（含 AbortController 供 cancel）。
  * status 此处可写（BackgroundStatus.status 是 readonly，但内部记录需变异） */
@@ -440,6 +442,12 @@ export class SubagentRuntime {
     const controller = new AbortController();
     const record: BgRecord = { id, status: "running", startedAt: Date.now(), controller };
     this._bgRecords.set(id, record);
+    // FR-O5.9: FIFO 清理，上限 BG_RECORDS_MAX（已完成 record 保留供查询，超上限移除最旧）
+    while (this._bgRecords.size > BG_RECORDS_MAX) {
+      const oldestKey = this._bgRecords.keys().next().value;
+      if (oldestKey === undefined) break;
+      this._bgRecords.delete(oldestKey);
+    }
     this.notifyChange();
 
     // detached：不 await，完成后回填

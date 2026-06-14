@@ -76,7 +76,9 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
     promptSnippet: "Delegate a task to a subagent (sync/background)",
     promptGuidelines: [
       "Use for focused subtasks that benefit from a specialized agent and isolated context: multi-file code review, web research, codebase scouting, implementation planning.",
-      "Pass wait:false for long-running tasks you don't need immediately; poll with backgroundId later.",
+      "Pass wait:false for long-running tasks. After starting a background subagent, end your turn—the result will arrive automatically as a notification when it completes.",
+      "Do NOT run sleep loops or repeated polling calls just to wait for a background subagent.",
+      "Use backgroundId to check status/result of a specific prior background subagent when needed.",
       "Do NOT delegate simple one-line fixes or questions you can answer yourself — delegation has overhead (new session, no inherited context).",
       "Do NOT delegate tasks that require your current conversation context — the subagent starts fresh and cannot see your chat history.",
       "Do NOT delegate tasks the user asked YOU to do directly — if the user says 'you do X', they expect you, not a subagent.",

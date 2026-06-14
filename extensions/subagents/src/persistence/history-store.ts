@@ -85,12 +85,38 @@ export class HistoryStore {
   }
 
   /**
-   * 返回最近 N 条记录（新→旧）。
-   * /subagents list 默认只展示最近一部分。
+   * 返回最近 N 条记录（新→旧），按 id 去重。
+   *
+   * FR-O1.6: cancelBackground 写一条 "cancelled"，runAgent 的 abort catch 会再写一条
+   * "failed"（同 id）。去重规则：同 id 取最新 endedAt 的记录；endedAt 相同时 cancelled
+   * 优先于 failed（cancelBackground 先设 status，保留用户意图）。
    */
   recent(limit: number): PersistedAgentRecord[] {
     const all = this.read();
-    return all.slice(-limit).reverse();
+    // 同 id 去重：从旧→新遍历，last-writer-wins（新记录覆盖旧记录）。
+    // endedAt 相同时 cancelled 优先（用 status 权重辅助排序）。
+    const statusWeight: Record<string, number> = { cancelled: 2, failed: 1 };
+    const deduped = new Map<string, PersistedAgentRecord>();
+    for (const r of all) {
+      const existing = deduped.get(r.id);
+      if (!existing) {
+        deduped.set(r.id, r);
+        continue;
+      }
+      const rEnd = r.endedAt ?? 0;
+      const exEnd = existing.endedAt ?? 0;
+      if (rEnd > exEnd || (rEnd === exEnd && (statusWeight[r.status] ?? 0) > (statusWeight[existing.status] ?? 0))) {
+        deduped.set(r.id, r);
+      }
+    }
+    const list = [...deduped.values()];
+    // 按 endedAt 降序（新→旧）；endedAt 相同时按 startedAt 降序（更晚开始 = 更新）
+    list.sort((a, b) => {
+      const endDiff = (b.endedAt ?? 0) - (a.endedAt ?? 0);
+      if (endDiff !== 0) return endDiff;
+      return (b.startedAt ?? 0) - (a.startedAt ?? 0);
+    });
+    return limit ? list.slice(0, limit) : list;
   }
 
   /**

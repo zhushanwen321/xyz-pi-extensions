@@ -169,4 +169,41 @@ describe("HistoryStore — ADR-024 L1", () => {
     const records = store.read();
     expect(records[0].sessionFile).toBe("2026-06-14T10-00-00-000Z_abc.jsonl");
   });
+
+  // ── FR-O1.6: 双写去重（cancelBackground 写 cancelled + runAgent catch 写 failed）──
+  it("recent() dedupes by id, keeping latest endedAt (cancelled wins on tie)", async () => {
+    const store = makeStore();
+    // 模拟 cancel + abort catch 双写：同 id，先 cancelled（endedAt=2000）后 failed（endedAt=2000）
+    await store.append(makeRecord({ id: "bg-1", status: "cancelled", startedAt: 1000, endedAt: 2000 }));
+    await store.append(makeRecord({ id: "bg-1", status: "failed", startedAt: 1000, endedAt: 2000 }));
+    const recent = store.recent(10);
+    // 去重后只剩 1 条
+    expect(recent).toHaveLength(1);
+    // endedAt 相同时 cancelled 优先（保留用户意图）
+    expect(recent[0].id).toBe("bg-1");
+    expect(recent[0].status).toBe("cancelled");
+  });
+
+  it("recent() dedupes by id, keeping latest endedAt when timestamps differ", async () => {
+    const store = makeStore();
+    // failed 先写（endedAt=1500），cancelled 后写（endedAt=2000）
+    await store.append(makeRecord({ id: "bg-2", status: "failed", startedAt: 1000, endedAt: 1500 }));
+    await store.append(makeRecord({ id: "bg-2", status: "cancelled", startedAt: 1000, endedAt: 2000 }));
+    const recent = store.recent(10);
+    expect(recent).toHaveLength(1);
+    // endedAt 更大的 cancelled 胜出
+    expect(recent[0].status).toBe("cancelled");
+  });
+
+  it("recent() keeps distinct ids intact", async () => {
+    const store = makeStore();
+    await store.append(makeRecord({ id: "run-a", startedAt: 1000, endedAt: 2000 }));
+    await store.append(makeRecord({ id: "run-b", startedAt: 1000, endedAt: 3000 }));
+    await store.append(makeRecord({ id: "run-a", startedAt: 1000, endedAt: 4000 })); // run-a 更新
+    const recent = store.recent(10);
+    expect(recent).toHaveLength(2); // run-a + run-b
+    // 新→旧：run-a(4000) 在前，run-b(3000) 在后
+    expect(recent[0].id).toBe("run-a");
+    expect(recent[1].id).toBe("run-b");
+  });
 });

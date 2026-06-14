@@ -527,3 +527,37 @@ describe("defaultBackground (FR-O2)", () => {
     expect(rt.getAgentConfig("researcher-bg")?.defaultBackground).toBe(true);
   });
 });
+
+describe("BgRecord FIFO cleanup (FR-O5.9)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("evicts oldest records when exceeding BG_RECORDS_MAX (50)", async () => {
+    const rt = makeRuntime();
+    (rt as unknown as { runAgent: ReturnType<typeof vi.fn> }).runAgent = vi.fn(() =>
+      Promise.resolve({
+        text: "ok",
+        turns: 0,
+        durationMs: 0,
+        success: true,
+        sessionId: "s",
+        toolCalls: [],
+      }),
+    );
+
+    // 启动 51 个 background（超过上限 50）
+    const handles = [];
+    for (let i = 0; i < 51; i++) {
+      handles.push(rt.startBackground({ task: `task-${i}`, agent: "worker" }));
+    }
+    await new Promise((r) => setTimeout(r, 50)); // 等全部完成
+
+    // 第一个应被淘汰（FIFO）
+    expect(rt.getBackground(handles[0]!.id)).toBeUndefined();
+    // 最后一个应仍在
+    expect(rt.getBackground(handles[50]!.id)).toBeDefined();
+    // 总数不超过上限
+    expect(rt.listBackground().length).toBeLessThanOrEqual(50);
+  });
+});
