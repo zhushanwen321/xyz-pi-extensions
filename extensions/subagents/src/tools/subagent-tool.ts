@@ -137,6 +137,18 @@ const SubagentParams = Type.Object({
         'If set, fetch the result of a prior background subagent by its id (returned from wait:false). Ignores task/agent/wait.',
     }),
   ),
+  model: Type.Optional(
+    Type.String({
+      description:
+        'Explicit model override in "provider/modelId" format (e.g. "anthropic/claude-sonnet-4.5"). Takes precedence over the agent\'s configured default model.',
+    }),
+  ),
+  thinkingLevel: Type.Optional(
+    Type.String({
+      description:
+        'Thinking level override (e.g. "off", "minimal", "low", "medium", "high", "xhigh"). Only valid when the selected model supports reasoning.',
+    }),
+  ),
 });
 
 // ============================================================
@@ -182,7 +194,14 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 
     async execute(
       _toolCallId: string,
-      params: { task?: string; agent?: string; wait?: boolean; backgroundId?: string },
+      params: {
+        task?: string;
+        agent?: string;
+        wait?: boolean;
+        backgroundId?: string;
+        model?: string;
+        thinkingLevel?: string;
+      },
       signal: AbortSignal | undefined,
       onUpdate?: (partialResult: AgentToolResult<SubagentToolDetails>) => void,
     ) {
@@ -252,15 +271,36 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         effectiveWait = agentConfig?.defaultBackground ? false : true; // 配置其次，默认 sync
       }
 
+      // FR-O3.1a: 执行前校验显式 model/thinkingLevel 是否可解析，避免 token 浪费到一半才报错。
+      if (params.model || params.thinkingLevel) {
+        const resolved = rt.resolveModelForAgent?.(params.agent, {
+          model: params.model,
+          thinkingLevel: params.thinkingLevel,
+        });
+        if (!resolved) {
+          throw new Error(
+            `Failed to resolve model "${params.model ?? "<agent-default>"}"` +
+              (params.thinkingLevel ? ` with thinkingLevel "${params.thinkingLevel}"` : "") +
+              ` for agent "${params.agent ?? "default"}". ` +
+              'Check the model string is in "provider/modelId" format and is available in your configured providers.',
+          );
+        }
+      }
+
       // ── Mode 2: background ──────────────────────────────
       if (effectiveWait === false) {
         const agentName = params.agent ?? "default";
-        const resolved = rt.resolveModelForAgent?.(params.agent);
+        const resolved = rt.resolveModelForAgent?.(params.agent, {
+          model: params.model,
+          thinkingLevel: params.thinkingLevel,
+        });
         // bgId 在 startBackground 返回后赋值；onUpdate 闭包引用 bgId（异步触发时已赋值，避免 TDZ）
         let bgId = "";
         const handle = rt.startBackground({
           task: params.task,
           agent: params.agent,
+          model: params.model,
+          thinkingLevel: params.thinkingLevel,
           signal,
           onUpdate: (bgDetails) => {
             onUpdate?.({
@@ -306,7 +346,10 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       const startTime = Date.now();
       const agentName = params.agent ?? "default";
       // FR-1.2: 解析 model/thinkingLevel（resolveModelForAgent 在任务 5 实现）
-      const resolved = rt.resolveModelForAgent?.(params.agent);
+      const resolved = rt.resolveModelForAgent?.(params.agent, {
+        model: params.model,
+        thinkingLevel: params.thinkingLevel,
+      });
       const resolvedModelId = resolved?.model.id;
       const resolvedThinkingLevel = resolved?.thinkingLevel;
 
@@ -340,6 +383,8 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       const result = await rt.runAgent({
         task: params.task,
         agent: params.agent,
+        model: params.model,
+        thinkingLevel: params.thinkingLevel,
         signal,
         // FR-O4.1: sync 高优先级（0），保证响应；background 传 1000（低），不抢占 sync
         priority: 0,

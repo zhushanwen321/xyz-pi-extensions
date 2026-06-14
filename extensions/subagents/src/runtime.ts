@@ -686,7 +686,10 @@ export class SubagentRuntime {
    * 返回完整 ResolvedModel（含 model.id 和 thinkingLevel）。
    * 解析失败（如 fallback 链全部不可用）→ 返回 undefined，details 不带 model 字段。
    */
-  resolveModelForAgent(agentName?: string): ResolvedModel | undefined {
+  resolveModelForAgent(
+    agentName?: string,
+    paramOverride?: { model?: string; thinkingLevel?: string },
+  ): ResolvedModel | undefined {
     if (!this.modelRegistry) return undefined;
     if (!agentName) return undefined;
     // hot-reload：重新扫描 .md 文件，确保编辑后立即生效（与 buildContext.resolveAgent 一致）
@@ -701,6 +704,7 @@ export class SubagentRuntime {
         globalConfig: this.globalConfig,
         sessionState: this.sessionState,
         modelRegistry: this.modelRegistry,
+        paramOverride,
       });
     } catch {
       return undefined;

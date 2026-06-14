@@ -59,6 +59,7 @@ interface MockRuntime {
   startBackground: ReturnType<typeof vi.fn>;
   getBackground: ReturnType<typeof vi.fn>;
   getAgentConfig: ReturnType<typeof vi.fn>;
+  resolveModelForAgent: ReturnType<typeof vi.fn>;
 }
 
 // ============================================================
@@ -86,6 +87,8 @@ function makeMockRuntime(overrides: Partial<MockRuntime> = {}): MockRuntime {
     getBackground: overrides.getBackground ?? vi.fn(),
     // FR-O2.2: 默认返回 undefined（无 defaultBackground 配置 → 走 sync）
     getAgentConfig: overrides.getAgentConfig ?? vi.fn(() => undefined),
+    // FR-O3.1a: 默认返回 mock ResolvedModel（显式 model 校验通过）
+    resolveModelForAgent: overrides.resolveModelForAgent ?? vi.fn(() => ({ model: { id: "anthropic/claude-sonnet-4.5" }, thinkingLevel: "medium" })),
   };
 }
 
@@ -401,6 +404,52 @@ describe("subagent tool execute()", () => {
     expect(runAgentMock).toHaveBeenCalledTimes(1);
     const passedOpts = runAgentMock.mock.calls[0]![0] as { priority?: number };
     expect(passedOpts.priority).toBe(0);
+  });
+
+  // ── FR-O3.1a: 显式 model/thinkingLevel 校验与透传 ───────
+  it("sync mode: passes explicit model/thinkingLevel to runAgent and resolveModelForAgent", async () => {
+    const runAgentMock = vi.fn(async () => successResult());
+    const resolveMock = vi.fn(() => ({ model: { id: "openai/gpt-5" }, thinkingLevel: "high" }));
+    const mockRt = makeMockRuntime({ runAgent: runAgentMock, resolveModelForAgent: resolveMock });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    await tool.execute("call-model", { task: "do work", agent: "worker", model: "openai/gpt-5", thinkingLevel: "high" });
+
+    expect(resolveMock).toHaveBeenCalledWith("worker", { model: "openai/gpt-5", thinkingLevel: "high" });
+    expect(runAgentMock).toHaveBeenCalledTimes(1);
+    const passedOpts = runAgentMock.mock.calls[0]![0] as { model?: string; thinkingLevel?: string };
+    expect(passedOpts.model).toBe("openai/gpt-5");
+    expect(passedOpts.thinkingLevel).toBe("high");
+  });
+
+  it("background mode: passes explicit model/thinkingLevel to startBackground and resolveModelForAgent", async () => {
+    const startBgMock = vi.fn(() => ({ id: "bg-model", status: "running" as const }));
+    const resolveMock = vi.fn(() => ({ model: { id: "anthropic/claude-opus-4.5" }, thinkingLevel: "low" }));
+    const mockRt = makeMockRuntime({ startBackground: startBgMock, resolveModelForAgent: resolveMock });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    await tool.execute("call-bg-model", { task: "do work", agent: "worker", wait: false, model: "anthropic/claude-opus-4.5", thinkingLevel: "low" });
+
+    expect(resolveMock).toHaveBeenCalledWith("worker", { model: "anthropic/claude-opus-4.5", thinkingLevel: "low" });
+    expect(startBgMock).toHaveBeenCalledTimes(1);
+    const passedOpts = startBgMock.mock.calls[0]![0] as { model?: string; thinkingLevel?: string };
+    expect(passedOpts.model).toBe("anthropic/claude-opus-4.5");
+    expect(passedOpts.thinkingLevel).toBe("low");
+  });
+
+  it("rejects explicit model when resolveModelForAgent returns undefined", async () => {
+    const runAgentMock = vi.fn(async () => successResult());
+    const resolveMock = vi.fn(() => undefined);
+    const mockRt = makeMockRuntime({ runAgent: runAgentMock, resolveModelForAgent: resolveMock });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    await expect(
+      tool.execute("call-bad-model", { task: "do work", agent: "worker", model: "bad/bad" }),
+    ).rejects.toThrow(/Failed to resolve model/);
+    expect(runAgentMock).not.toHaveBeenCalled();
   });
 });
 
