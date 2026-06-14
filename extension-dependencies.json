@@ -67,8 +67,18 @@
           "package": "@zhushanwen/pi-goal",
           "type": "optional",
           "reason": "Phase 2/3 通过 __goalInit 启动 goal，缺失时降级跳过"
+        },
+        {
+          "package": "@zhushanwen/pi-spec-clarify",
+          "type": "runtime",
+          "reason": "Phase 1 路由通过 skillName 引用 xyz-harness-spec-clarify skill，需该 extension 安装后 skill 才进全局 skills list"
         }
       ]
+    },
+    {
+      "name": "@zhushanwen/pi-spec-clarify",
+      "directory": "extensions/spec-clarify",
+      "dependsOn": []
     },
     {
       "name": "@zhushanwen/pi-claude-rules-loader",
