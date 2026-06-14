@@ -451,6 +451,8 @@ export class SubagentRuntime {
     this.runAgent({
       ...opts,
       signal,
+      // FR-O4.1: background 低优先级（1000），不抢占 sync（sync 传 0）
+      priority: 1000,
       onEvent: (event: AgentEvent) => {
         userBgOnEvent?.(event);
         if (!record.eventLog) record.eventLog = [];

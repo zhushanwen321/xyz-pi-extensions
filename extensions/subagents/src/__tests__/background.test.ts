@@ -433,3 +433,32 @@ describe("merge window (FR-O1.5)", () => {
     expect(String(mergedCall[0].content)).toContain("2 background tasks");
   });
 });
+
+describe("priority (FR-O4)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("startBackground passes priority 1000 to runAgent (low priority,不抢占 sync)", async () => {
+    const rt = makeRuntime();
+    const runAgentMock = rt.runAgent as unknown as ReturnType<typeof vi.fn>;
+    runAgentMock.mockImplementation(() =>
+      Promise.resolve({
+        text: "ok",
+        turns: 1,
+        durationMs: 10,
+        success: true,
+        sessionId: "s",
+        toolCalls: [],
+      }),
+    );
+
+    rt.startBackground({ task: "bg task", agent: "worker" });
+    await new Promise((r) => setTimeout(r, 20));
+
+    // 验证 background 传了 priority:1000（低优先级）
+    expect(runAgentMock).toHaveBeenCalledTimes(1);
+    const passedOpts = runAgentMock.mock.calls[0]![0] as RunAgentOptions;
+    expect(passedOpts.priority).toBe(1000);
+  });
+});

@@ -223,6 +223,8 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         task: params.task,
         agent: params.agent,
         signal,
+        // FR-O4.1: sync 高优先级（0），保证响应；background 传 1000（低），不抢占 sync
+        priority: 0,
         onEvent: (event: AgentEvent) => {
           switch (event.type) {
             case "tool_start": {
