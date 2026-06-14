@@ -39,7 +39,9 @@ export function createEventBridge(onEvent: (event: AgentEvent) => void) {
       case "tool_execution_start": {
         const toolName = raw.toolName ?? "unknown";
         if (raw.toolCallId) pendingTools.set(raw.toolCallId, toolName);
-        onEvent({ type: "tool_start", toolName });
+        // FR-1.1a: 透传 args（SDK 原始事件携带 raw.args）
+        const args = (raw as { args?: unknown }).args;
+        onEvent({ type: "tool_start", toolName, args });
         break;
       }
       case "tool_execution_end": {

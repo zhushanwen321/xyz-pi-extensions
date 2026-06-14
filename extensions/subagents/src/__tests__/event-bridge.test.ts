@@ -9,7 +9,7 @@ describe("createEventBridge", () => {
     const events: AgentEvent[] = [];
     const bridge = createEventBridge((e) => events.push(e));
     bridge.handle({ type: "tool_execution_start", toolCallId: "1", toolName: "read", args: {} } as never);
-    expect(events).toEqual([{ type: "tool_start", toolName: "read" }]);
+    expect(events).toEqual([{ type: "tool_start", toolName: "read", args: {} }]);
   });
 
   it("maps tool_execution_end → tool_end with result and isError", () => {
@@ -85,5 +85,13 @@ describe("createEventBridge", () => {
       result: { content: [{ type: "text", text: "file" }] },
       isError: false,
     }]);
+  });
+
+  it("passes args through to tool_start event (FR-1.1a)", () => {
+    const events: AgentEvent[] = [];
+    const bridge = createEventBridge((e) => events.push(e));
+    const args = { path: "extensions/subagents/src/runtime.ts" };
+    bridge.handle({ type: "tool_execution_start", toolCallId: "1", toolName: "read", args } as never);
+    expect(events).toEqual([{ type: "tool_start", toolName: "read", args }]);
   });
 });
