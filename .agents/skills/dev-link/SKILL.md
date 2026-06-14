@@ -21,8 +21,9 @@ description: >-
 
 ```bash
 # 脚本位置（resolve against skill directory）
-./link-local.sh <package>   # npm → 本地 symlink（卸载 npm + 创建 symlink + 注册 settings.json）
-./link-npm.sh <package>     # 本地 symlink → npm（删除 symlink + 安装 npm 包）
+./link-local.sh <package>    # npm → 本地 symlink（卸载 npm + 创建 symlink + 注册 settings.json）
+./link-npm.sh <package>      # 本地 symlink → npm（删除 symlink + 安装 npm 包）
+./link-npm.sh <package> --uninstall  # 纯卸载（只删 symlink + 清 settings.json，不安装 npm）
 ```
 
 `<package>` 支持三种格式：
@@ -44,8 +45,17 @@ description: >-
 
 1. 清理 `~/.pi/agent/extensions/<short>` symlink（只删 symlink，不删普通目录）
 2. 清理 `settings.json` 中残留的 `extensions/<short>` 条目
-3. 用 `pi install npm:@zhushanwen/pi-<short>` 安装 npm 包
-4. **幂等**：npm 包已安装且无 symlink 且无残留条目时直接跳过
+3. **预检**：`npm view` 检查包是否已发布——未发布时自动降级为纯卸载（清理已完成，跳过安装，以 0 退出并提示）
+4. 用 `pi install npm:@zhushanwen/pi-<short>` 安装 npm 包（显式捕获退出码，失败时报错而非被管道掩盖）
+5. **幂等**：npm 包已安装且无 symlink 且无残留条目时直接跳过
+
+### link-npm.sh --uninstall — 纯卸载
+
+适用于**未发布到 npm 的扩展**（如刚开发完的新包），或临时开发结束想完全移除：
+
+1. 清理 symlink
+2. 清理 `settings.json` 中的 local 条目
+3. **不安装 npm 版本**
 
 **两种模式都需要重启 Pi 生效。**
 
