@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_CATEGORIES } from "../category.ts";
+import type { WidgetAgentState } from "../tui/agent-widget.ts";
 import {
   extractLabelFromArgs,
   formatConfigSummary,
@@ -10,7 +11,6 @@ import {
   formatThinkingLevelOption,
 } from "../tui/format.ts";
 import type { AgentEventLogEntry, SubagentsGlobalConfig } from "../types.ts";
-import type { WidgetAgentState } from "../tui/agent-widget.ts";
 
 const cfg: SubagentsGlobalConfig = {
   version: 1, yoloByDefault: false, maxConcurrent: 4,

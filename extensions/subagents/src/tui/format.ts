@@ -1,6 +1,6 @@
 // src/tui/format.ts
-import type { WidgetAgentState } from "./agent-widget.ts";
 import type { AgentEventLogEntry, SubagentsGlobalConfig } from "../types.ts";
+import type { WidgetAgentState } from "./agent-widget.ts";
 
 const THINKING_DESCRIPTIONS: Record<string, string> = {
   off: "不使用推理",
