@@ -47,7 +47,6 @@ export async function checkBudget(
   if (exceeded) {
     callbacks.postMessage(runId, { type: "budget-warning", budget: b, reason });
     callbacks.terminateWorker(runId);
-    // Cleanup in-flight agent temp files that were killed mid-flight.
     callbacks.cleanupAllTempFiles?.();
 
     instance.error = reason;
@@ -81,7 +80,6 @@ export function scheduleTimeBudgetCheck(
         reason: `Time budget exceeded: ${elapsed}ms >= ${maxTimeMs}ms`,
       });
       callbacks.terminateWorker(runId);
-      // Cleanup in-flight agent temp files that were killed mid-flight.
       callbacks.cleanupAllTempFiles?.();
 
       instance.error = `Time budget exceeded: ${elapsed}ms >= ${maxTimeMs}ms`;

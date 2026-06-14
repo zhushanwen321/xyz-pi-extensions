@@ -153,7 +153,6 @@ export async function handleScriptError(
     ctx.events.emit(runId, { type: "status", status: "failed" });
     ctx.terminateWorker(runId);
     ctx.deleteRunPool(runId);
-    // Cleanup in-flight agent temp files that were killed mid-flight.
     ctx.cleanupAllTempFiles?.();
     await ctx.persistState();
     ctx.onCompletion?.(runId);
