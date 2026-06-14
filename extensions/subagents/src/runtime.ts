@@ -16,6 +16,8 @@ import {
   type BackgroundOptions,
   type BackgroundStatus,
   type CategoryDefinition,
+  COMPLETED_AGENTS_MAX,
+  type CompletedAgentRecord,
   type ConcurrencyPool,
   type ManagedSession,
   type ManagedSessionOptions,
@@ -50,6 +52,10 @@ interface BgRecord {
   startedAt: number;
   endedAt?: number;
   controller?: AbortController;
+  /** FR-3.0: 留存 eventLog（widget 淺出前转移） */
+  eventLog?: AgentEventLogEntry[];
+  /** FR-3.0a: agent 名持久化 */
+  agent?: string;
 }
 
 /**
@@ -77,6 +83,9 @@ export class SubagentRuntime {
 
   /** FR-3.4: 事件总线，供 overlay 视图订阅实时刷新 */
   private readonly _changeListeners = new Set<() => void>();
+
+  /** FR-3.0: 已完成 sync agent 归档记录 */
+  private readonly _completedAgents = new Map<string, CompletedAgentRecord>();
 
   /** Live widget 管理器（实时显示 agent 状态） */
   readonly widget = new AgentWidgetManager();
@@ -127,6 +136,30 @@ export class SubagentRuntime {
   /** FR-3.4: 通知所有订阅者 */
   notifyChange(): void {
     for (const fn of this._changeListeners) fn();
+  }
+
+  /** FR-3.0: 列出已归档的 sync agent */
+  listCompleted(): CompletedAgentRecord[] {
+    return [...this._completedAgents.values()];
+  }
+
+  /** FR-3.0: 归档 sync agent（widget linger 到期时调用） */
+  archiveSyncAgent(record: CompletedAgentRecord): void {
+    if (this._completedAgents.size >= COMPLETED_AGENTS_MAX) {
+      const firstKey = this._completedAgents.keys().next().value;
+      if (firstKey !== undefined) this._completedAgents.delete(firstKey);
+    }
+    this._completedAgents.set(record.id, record);
+    this.notifyChange();
+  }
+
+  /** FR-3.0: 归档 background agent 到 BgRecord（widget linger 到期时调用） */
+  archiveBackgroundAgent(id: string, data: { eventLog: AgentEventLogEntry[]; agent: string }): void {
+    const r = this._bgRecords.get(id);
+    if (!r) return;
+    r.eventLog = data.eventLog;
+    r.agent = data.agent;
+    this.notifyChange();
   }
 
   /**

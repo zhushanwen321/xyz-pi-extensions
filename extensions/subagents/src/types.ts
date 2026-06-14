@@ -158,6 +158,10 @@ export interface BackgroundStatus extends BackgroundHandle {
   startedAt: number;
   /** 结束时间（ms epoch，未结束时 undefined） */
   endedAt?: number;
+  /** FR-3.0: 事件日志（widget 淺出后留存，供 /subagents list 详情使用） */
+  eventLog?: AgentEventLogEntry[];
+  /** FR-3.0a: agent 名（列表 "Agent" 列数据源） */
+  agent?: string;
 }
 
 /**
