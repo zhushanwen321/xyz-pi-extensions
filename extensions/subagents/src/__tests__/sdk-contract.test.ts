@@ -230,9 +230,8 @@ describe("SDK contract: appendEntry signature (customType, data)", () => {
     expect(pi.appendEntry).toHaveBeenCalledTimes(1);
     const [customType, data] = pi.appendEntry.mock.calls[0];
     expect(customType).toBe("subagent-model-state");
-    // serializeState 返回 JSON 字符串（appendEntry 接受可序列化值）
-    expect(data).toBeTypeOf("string");
-    const parsed = JSON.parse(data as string);
-    expect(parsed).toHaveProperty("yoloMode", true);
+    // serializeState 返回 object snapshot（appendEntry data?: unknown）
+    expect(data).toBeTypeOf("object");
+    expect(data).toHaveProperty("yoloMode", true);
   });
 });

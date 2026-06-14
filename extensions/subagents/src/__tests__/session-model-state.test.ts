@@ -28,8 +28,10 @@ describe("SessionModelState", () => {
     setAgentModel(state, "worker", "m/m");
     setCategoryModel(state, "coding", "c/c", "low");
     const serialized = serializeState(state);
-    expect(typeof serialized).toBe("string");
-    const restored = restoreState(JSON.parse(serialized), false);
+    // serializeState 返回 object snapshot（与 restoreState 对称，供 appendEntry 直接存储）
+    expect(typeof serialized).toBe("object");
+    expect(serialized).not.toBe(state); // 必须是快照，不能是原引用
+    const restored = restoreState(serialized, false);
     expect(restored.yoloMode).toBe(true);
     expect(restored.perAgent.worker.model).toBe("m/m");
     expect(restored.perCategory.coding.model).toBe("c/c");

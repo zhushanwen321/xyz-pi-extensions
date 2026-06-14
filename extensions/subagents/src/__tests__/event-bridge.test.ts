@@ -82,6 +82,7 @@ describe("createEventBridge", () => {
     } as never);
     expect(bridge.toolCalls).toEqual([{
       toolName: "read",
+      args: {},
       result: { content: [{ type: "text", text: "file" }] },
       isError: false,
     }]);
@@ -93,5 +94,36 @@ describe("createEventBridge", () => {
     const args = { path: "extensions/subagents/src/runtime.ts" };
     bridge.handle({ type: "tool_execution_start", toolCallId: "1", toolName: "read", args } as never);
     expect(events).toEqual([{ type: "tool_start", toolName: "read", args }]);
+  });
+
+  it("propagates args from tool_execution_start into toolCalls record (FR-1.1a)", () => {
+    // 验证：start 时缓存的 args 会在 end 时写入 ToolCallEntry.args，
+    // 供下游（如 workflow agent-pool）作为调用参数预览使用。
+    const args = { path: "/some/file.ts", limit: 50 };
+    const bridge = createEventBridge(() => {});
+    bridge.handle({ type: "tool_execution_start", toolCallId: "1", toolName: "read", args } as never);
+    bridge.handle({
+      type: "tool_execution_end", toolCallId: "1", toolName: "read",
+      result: { content: [{ type: "text", text: "file" }] }, isError: false,
+    } as never);
+    expect(bridge.toolCalls).toEqual([{
+      toolName: "read",
+      args,
+      result: { content: [{ type: "text", text: "file" }] },
+      isError: false,
+    }]);
+  });
+
+  it("falls back to pending toolName when end event omits it", () => {
+    // 验证：end 事件未携带 toolName 时，从 pendingTools 补全（args 也应随之带回）。
+    const args = { query: "SELECT 1" };
+    const bridge = createEventBridge(() => {});
+    bridge.handle({ type: "tool_execution_start", toolCallId: "9", toolName: "bash", args } as never);
+    bridge.handle({
+      type: "tool_execution_end", toolCallId: "9",
+      result: { content: [{ type: "text", text: "ok" }] }, isError: false,
+    } as never);
+    expect(bridge.toolCalls[0].toolName).toBe("bash");
+    expect(bridge.toolCalls[0].args).toBe(args);
   });
 });

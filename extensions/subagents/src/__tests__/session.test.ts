@@ -5,6 +5,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createEventBridge } from "../core/event-bridge.ts";
 import { createManagedSession } from "../core/session.ts";
 import type { AgentSessionLike, BuiltSession } from "../core/session-factory.ts";
 // ── Mock session-factory.createAndConfigureSession ────────────────
@@ -12,7 +13,14 @@ import type { AgentSessionLike, BuiltSession } from "../core/session-factory.ts"
 import * as sessionFactory from "../core/session-factory.ts";
 import type { ManagedSessionOptions, SessionModelState, SubagentsGlobalConfig } from "../types.ts";
 
-function makeMockSession(): AgentSessionLike & {
+type EmitFn = (event: unknown) => void;
+
+interface MockSessionOpts {
+  /** 自定义 prompt 事件序列。callCount 从 1 递增；emit 将事件扇出给所有 subscribe 监听器。 */
+  onPrompt?: (callCount: number, emit: EmitFn) => void | Promise<void>;
+}
+
+function makeMockSession(opts?: MockSessionOpts): AgentSessionLike & {
   prompt: ReturnType<typeof vi.fn>;
   steer: ReturnType<typeof vi.fn>;
   abort: ReturnType<typeof vi.fn>;
@@ -20,12 +28,22 @@ function makeMockSession(): AgentSessionLike & {
   subscribe: ReturnType<typeof vi.fn>;
 } {
   const listeners: Array<(e: unknown) => void> = [];
+  const emit: EmitFn = (event) => {
+    for (const l of [...listeners]) l(event);
+  };
+  let promptCount = 0;
   return {
     sessionId: "managed-sess-1",
     messages: [{ role: "assistant", content: [{ type: "text", text: "result" }] }],
     prompt: vi.fn(async () => {
-      for (const l of [...listeners]) l({ type: "turn_end" });
-      for (const l of [...listeners]) l({ type: "message_end", message: { usage: { input: 5, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.1 } } } });
+      promptCount += 1;
+      if (opts?.onPrompt) {
+        await opts.onPrompt(promptCount, emit);
+      } else {
+        // 默认行为：1 turn_end + 1 message_end（usage）
+        emit({ type: "turn_end" });
+        emit({ type: "message_end", message: { usage: { input: 5, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.1 } } } });
+      }
     }),
     steer: vi.fn(async () => {}),
     abort: vi.fn(async () => {}),
@@ -42,20 +60,17 @@ function makeMockSession(): AgentSessionLike & {
   } as never;
 }
 
+/**
+ * 用真实的 createEventBridge 构建 BuiltSession，让 mock session 在 prompt 中 emit 的事件
+ * 真实扇出到 bridge.handle（累计 turnCount/usage/toolCalls/lastError）。
+ * 这样测试可以验证 session.ts 是否正确驱动 bridge（含 resetForPrompt）。
+ */
 function makeBuiltSession(session: AgentSessionLike): BuiltSession {
-  return {
-    session,
-    bridge: {
-      turnCount: 0,
-      toolCalls: [],
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
-      lastError: undefined,
-      // handle 由 subscribe 调用——session.subscribe 不会真的触发 bridge.handle，
-      // 测试里 bridge 是独立的桩。collectResult 读取 bridge 字段。
-      handle: () => {},
-    } as never,
-    unsubscribe: () => {},
-  };
+  const bridge = createEventBridge(() => {});
+  const unsubscribe = session.subscribe((event: unknown) => {
+    bridge.handle(event as never);
+  });
+  return { session, bridge, unsubscribe };
 }
 
 const baseConfig: SubagentsGlobalConfig = {
@@ -191,13 +206,71 @@ describe("createManagedSession — session caching & steer", () => {
   it("returns AgentResult with usage from bridge", async () => {
     const mockSession = makeMockSession();
     const built = makeBuiltSession(mockSession);
-    // 预设 bridge.usage 非零（模拟 message_end 累计）
-    (built.bridge as { usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number } }).usage = { input: 5, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0.1 };
+    // makeMockSession 默认 prompt emit message_end usage(input=5,output=5,cost.total=0.1)
+    // 真实 bridge 累计 usageAccum → collectResult 读取
     createSpy.mockResolvedValue(built);
 
     const ms = createManagedSession(options, ctx);
     const result = await ms.prompt("task");
     expect(result.usage?.cost).toBe(0.1);
     expect(result.text).toBe("result");
+  });
+});
+
+describe("createManagedSession — bridge state isolation across prompts", () => {
+  it("resets lastError from failed prompt before next successful prompt", async () => {
+    const mockSession = makeMockSession({
+      onPrompt: (n, emit) => {
+        if (n === 1) {
+          // 第一次 prompt：以错误 stopReason 结束（bridge 记录 lastError）
+          emit({ type: "message_end", message: { stopReason: "error", errorMessage: "boom", usage: null } });
+        } else {
+          // 第二次 prompt：正常结束（无 stopReason error）
+          emit({ type: "turn_end" });
+          emit({ type: "message_end", message: { usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } } });
+        }
+      },
+    });
+    createSpy.mockResolvedValue(makeBuiltSession(mockSession));
+
+    const ms = createManagedSession(options, ctx);
+    const r1 = await ms.prompt("first");
+    expect(r1.success).toBe(false);
+    expect(r1.error).toContain("boom");
+
+    // 关键断言：第二次 prompt 不应被上次的 lastError 污染
+    const r2 = await ms.prompt("second");
+    expect(r2.success).toBe(true);
+    expect(r2.error).toBeUndefined();
+  });
+
+  it("resets turnCount before each prompt so turn limit applies per-prompt", async () => {
+    const mockSession = makeMockSession({
+      onPrompt: (n, emit) => {
+        if (n === 1) {
+          // 第一次 prompt：3 个 turn_end（maxTurns=10 不触发 abort）
+          emit({ type: "turn_end" });
+          emit({ type: "turn_end" });
+          emit({ type: "turn_end" });
+          emit({ type: "message_end", message: { usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } } });
+        } else {
+          // 第二次 prompt：1 个 turn_end
+          emit({ type: "turn_end" });
+          emit({ type: "message_end", message: { usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } } });
+        }
+      },
+    });
+    createSpy.mockResolvedValue(makeBuiltSession(mockSession));
+
+    const ms = createManagedSession(options, ctx);
+    const r1 = await ms.prompt("first", { maxTurns: 10 });
+    expect(r1.turns).toBe(3);
+
+    // 第二次 maxTurns=2，仅 1 个 turn（reset 后 bridge.turnCount=1，1 < 2 不触发 soft limit）
+    // 不 reset 的话 turnCount 会从 4 开始 → 立即 4 >= 2（steer）且 4 >= 2+2（abort）
+    const r2 = await ms.prompt("second", { maxTurns: 2 });
+    expect(r2.turns).toBe(1);
+    expect(r2.success).toBe(true);
+    expect(mockSession.abort).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,5 @@
 // src/__tests__/runtime-records.test.ts
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { SubagentRuntime } from "../runtime.ts";
 import { COMPLETED_AGENTS_MAX } from "../types.ts";
@@ -59,5 +59,86 @@ describe("SubagentRuntime — record retention (FR-3.0)", () => {
     });
     expect(spy.calls.length).toBe(1);
     unsub();
+  });
+});
+
+// ============================================================
+// FR-4.7.1: restoreFromEntries round-trip（状态持久化往返一致性）
+// 验证 toggleYolo / setSessionAgentModel / setSessionCategoryModel 写入的
+// appendEntry data 能被新 runtime 的 restoreFromEntries 正确读回。
+// ============================================================
+
+function makeMockPi() {
+  return {
+    appendEntry: vi.fn<(customType: string, data?: unknown) => void>(),
+    events: { emit: vi.fn<(channel: string, data: unknown) => void>() },
+  };
+}
+
+describe("SubagentRuntime — restoreFromEntries round-trip (FR-4.7.1)", () => {
+  it("persisted state restores into a fresh runtime (yolo + per-agent + per-category)", () => {
+    const pi = makeMockPi();
+    const rt = makeRuntime();
+    rt.injectPi(pi);
+
+    // 1. 执行三类状态变更，每次都会 appendEntry
+    rt.toggleYolo(); // yoloByDefault=false → true
+    rt.setSessionAgentModel("worker", "p/m", "high");
+    rt.setSessionCategoryModel("coding", "p/m2", "low");
+
+    // 2. 从 appendEntry.mock.calls 提取最后一次 subagent-model-state 的 data
+    const stateCalls = pi.appendEntry.mock.calls.filter(
+      ([customType]) => customType === "subagent-model-state",
+    );
+    expect(stateCalls.length).toBe(3);
+    const lastData = stateCalls[stateCalls.length - 1][1];
+    expect(lastData).toBeDefined();
+
+    // 3. 构造 Pi custom entry 形状，喂给新 runtime
+    const entries: unknown[] = [
+      { type: "custom", customType: "subagent-model-state", data: lastData },
+    ];
+    const rt2 = makeRuntime();
+    (rt2 as unknown as { restoreFromEntries(entries: unknown[]): void }).restoreFromEntries(entries);
+
+    // 4. 断言新 runtime 状态与原 runtime 一致
+    expect(rt2.sessionState.yoloMode).toBe(rt.sessionState.yoloMode);
+    expect(rt2.sessionState.yoloMode).toBe(true);
+    expect(rt2.sessionState.perAgent).toEqual(rt.sessionState.perAgent);
+    expect(rt2.sessionState.perAgent.worker).toEqual({ model: "p/m", thinkingLevel: "high" });
+    expect(rt2.sessionState.perCategory).toEqual(rt.sessionState.perCategory);
+    expect(rt2.sessionState.perCategory.coding).toEqual({ model: "p/m2", thinkingLevel: "low" });
+  });
+
+  it("keeps default sessionState when no subagent-model-state entry present", () => {
+    const rt = makeRuntime();
+    const defaultYolo = rt.globalConfig.yoloByDefault; // false
+
+    // 初始状态即默认
+    expect(rt.sessionState.yoloMode).toBe(defaultYolo);
+
+    (rt as unknown as { restoreFromEntries(entries: unknown[]): void }).restoreFromEntries([
+      { type: "custom", customType: "unrelated-type", data: { foo: 1 } },
+      { type: "message", role: "user" }, // 非 custom entry
+      { type: "custom", customType: "subagent-bg-record", data: { id: "bg-1" } },
+    ]);
+
+    // 无 subagent-model-state → 保持默认
+    expect(rt.sessionState.yoloMode).toBe(defaultYolo);
+    expect(rt.sessionState.perAgent).toEqual({});
+    expect(rt.sessionState.perCategory).toEqual({});
+  });
+
+  it("restoreState data is an object snapshot (not a JSON string)", () => {
+    // 直接验证 appendEntry 收到的是 object —— 防止 serializeState 退化为
+    // JSON.stringify（会与 restoreState 的 typeof data !== "object" 判断冲突）
+    const pi = makeMockPi();
+    const rt = makeRuntime();
+    rt.injectPi(pi);
+    rt.toggleYolo();
+
+    const [, data] = pi.appendEntry.mock.calls[0];
+    expect(data).toBeTypeOf("object");
+    expect(data).toHaveProperty("yoloMode", true);
   });
 });
