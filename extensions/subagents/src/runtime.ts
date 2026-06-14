@@ -75,6 +75,9 @@ export class SubagentRuntime {
   private _bgSeq = 0;
   private _widgetSeq = 0;
 
+  /** FR-3.4: 事件总线，供 overlay 视图订阅实时刷新 */
+  private readonly _changeListeners = new Set<() => void>();
+
   /** Live widget 管理器（实时显示 agent 状态） */
   readonly widget = new AgentWidgetManager();
 
@@ -113,6 +116,17 @@ export class SubagentRuntime {
   /** session_start 时注入 UI（用于 live widget 渲染） */
   attachWidgetUI(ui: WidgetUI): void {
     this.widget.attachUI(ui);
+  }
+
+  /** FR-3.4: 订阅 runtime 数据变更（overlay 视图用） */
+  onChange(fn: () => void): () => void {
+    this._changeListeners.add(fn);
+    return () => this._changeListeners.delete(fn);
+  }
+
+  /** FR-3.4: 通知所有订阅者 */
+  notifyChange(): void {
+    for (const fn of this._changeListeners) fn();
   }
 
   /**
@@ -200,8 +214,9 @@ export class SubagentRuntime {
       eventLog: [],
     };
     this.widget.updateAgent(widgetState);
+    this.notifyChange();
 
-    // 拦截 onEvent 更新 widget（turns/tokens/activity）
+    // 拦截 onEvent 更新 widget（turns/tokens/activity + eventLog）
     const userOnEvent = opts.onEvent;
     finalOpts = {
       ...opts,
@@ -209,6 +224,7 @@ export class SubagentRuntime {
         userOnEvent?.(event);
         updateWidgetFromEvent(widgetState, event, startTime);
         this.widget.updateAgent(widgetState);
+        this.notifyChange();
       },
     };
 
@@ -226,19 +242,28 @@ export class SubagentRuntime {
       widgetState.summary = result.text.slice(0, WIDGET_SUMMARY_MAX);
       widgetState.finishedAt = Date.now();
       this.widget.updateAgent(widgetState);
+      this.notifyChange();
       // 5 秒后清理
-      setTimeout(() => this.widget.removeAgent(widgetId), WIDGET_LINGER_MS);
+      setTimeout(() => {
+        this.widget.removeAgent(widgetId);
+        this.notifyChange();
+      }, WIDGET_LINGER_MS);
 
       for (const h of this.hooks) {
         if (h.afterRun) h.afterRun(result, finalOpts);
       }
       return result;
     } catch (err) {
-      widgetState.status = "failed";
+      // FR-3.5 G-025: 用户主动 abort → cancelled；其他 → failed
+      widgetState.status = finalOpts.signal?.aborted ? "cancelled" : "failed";
       widgetState.summary = err instanceof Error ? err.message : String(err);
       widgetState.finishedAt = Date.now();
       this.widget.updateAgent(widgetState);
-      setTimeout(() => this.widget.removeAgent(widgetId), WIDGET_LINGER_MS);
+      this.notifyChange();
+      setTimeout(() => {
+        this.widget.removeAgent(widgetId);
+        this.notifyChange();
+      }, WIDGET_LINGER_MS);
 
       for (const h of this.hooks) {
         if (h.onError) h.onError(err instanceof Error ? err : new Error(String(err)), finalOpts);
@@ -270,6 +295,7 @@ export class SubagentRuntime {
     const controller = new AbortController();
     const record: BgRecord = { id, status: "running", startedAt: Date.now(), controller };
     this._bgRecords.set(id, record);
+    this.notifyChange();
 
     // detached：不 await，完成后回填
     const signal = opts.signal ?? controller.signal;
@@ -287,6 +313,7 @@ export class SubagentRuntime {
           status: record.status,
           sessionId: result.sessionId,
         });
+        this.notifyChange();
       })
       .catch((err: unknown) => {
         record.status = "failed";
@@ -295,6 +322,7 @@ export class SubagentRuntime {
         delete record.controller;
         opts.onComplete?.(record);
         this.pi?.events.emit("subagents:bg:done", record);
+        this.notifyChange();
       });
 
     return { id, status: "running" };
@@ -317,6 +345,7 @@ export class SubagentRuntime {
     r.controller?.abort();
     r.status = "cancelled";
     r.endedAt = Date.now();
+    this.notifyChange();
     return true;
   }
 
