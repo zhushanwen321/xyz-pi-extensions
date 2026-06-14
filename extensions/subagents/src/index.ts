@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionStartEvent } from "@mariozechner/pi-coding-agent";
 
 import { registerSubagentsCommand } from "./commands/config.ts";
+import { maybeCleanupExpiredSessionFiles } from "./persistence/session-file-gc.ts";
 import { getRuntime, setRuntime,SubagentRuntime } from "./runtime.ts";
 import { registerSubagentTool } from "./tools/subagent-tool.ts";
 
@@ -37,6 +38,9 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
 
     const entries = ctx.sessionManager.getEntries() ?? [];
     rt.restoreFromEntries(entries);
+
+    // ADR-024 L2: 概率性清理过期 subagent session 文件（TTL 30 天）
+    maybeCleanupExpiredSessionFiles(homeDir, cwd);
 
     if (!existing) setRuntime(rt);
   });

@@ -1,7 +1,10 @@
 // src/runtime.ts
+import * as path from "node:path";
+
 import { loadGlobalConfig, saveGlobalConfig } from "./config/global-config.ts";
 import { runAgent, type RunAgentContext } from "./core/run-agent.ts";
 import { createManagedSession } from "./core/session.ts";
+import { HistoryStore, buildPersistedRecord } from "./persistence/history-store.ts";
 import { DefaultConcurrencyPool } from "./pool/concurrency-pool.ts";
 import { AgentRegistry } from "./registry/agent-registry.ts";
 import { BuiltinAgentRegistry } from "./registry/builtin-agents.ts";
@@ -87,6 +90,9 @@ export class SubagentRuntime {
   /** FR-3.0: 已完成 sync agent 归档记录 */
   private readonly _completedAgents = new Map<string, CompletedAgentRecord>();
 
+  /** ADR-024 L1: 执行记录持久化（跨进程历史） */
+  private readonly _history: HistoryStore;
+
   /** FR-3.1 G-017: 活跃 overlay 句柄（防叠加） */
   private _activeView: { close: () => void } | null = null;
 
@@ -102,6 +108,7 @@ export class SubagentRuntime {
     this.globalPool = new DefaultConcurrencyPool(this.globalConfig.maxConcurrent);
     this.agentRegistry = new AgentRegistry(opts.cwd, opts.homeDir);
     this.builtinRegistry = new BuiltinAgentRegistry();
+    this._history = new HistoryStore(opts.homeDir, opts.cwd);
   }
 
   /** FR-11.5: session_start 时注入 modelRegistry，触发 agent 发现。
@@ -144,6 +151,11 @@ export class SubagentRuntime {
   /** FR-3.0: 列出已归档的 sync agent */
   listCompleted(): CompletedAgentRecord[] {
     return [...this._completedAgents.values()];
+  }
+
+  /** ADR-024 L1: 读取跨进程执行记录（新→旧） */
+  listHistory(limit?: number): import("./types.ts").PersistedAgentRecord[] {
+    return limit ? this._history.recent(limit) : this._history.read().reverse();
   }
 
   /** FR-3.0: 归档 sync agent（widget linger 到期时调用） */
@@ -246,6 +258,7 @@ export class SubagentRuntime {
       globalPool: this.globalPool,
       cwd: this.cwd,
       agentDir: this.agentDir,
+      homeDir: this.homeDir,
     };
   }
 
@@ -315,6 +328,23 @@ export class SubagentRuntime {
       for (const h of this.hooks) {
         if (h.afterRun) h.afterRun(result, finalOpts);
       }
+      // ADR-024 L1: 持久化执行记录（best-effort，不阻塞 return）
+      void this._history.append(
+        buildPersistedRecord({
+          id: widgetId,
+          agent: widgetState.agent,
+          status: widgetState.status as "done" | "failed",
+          mode: "sync",
+          task: finalOpts.task,
+          startedAt: startTime,
+          endedAt: widgetState.finishedAt,
+          turns: widgetState.turns,
+          totalTokens: widgetState.totalTokens,
+          resultText: result.text,
+          sessionFile: result.sessionFile ? path.basename(result.sessionFile) : undefined,
+          cwd: this.cwd,
+        }),
+      );
       return result;
     } catch (err) {
       // FR-3.5 G-025: 用户主动 abort → cancelled；其他 → failed
@@ -343,6 +373,22 @@ export class SubagentRuntime {
       for (const h of this.hooks) {
         if (h.onError) h.onError(err instanceof Error ? err : new Error(String(err)), finalOpts);
       }
+      // ADR-024 L1: 失败/取消也持久化记录
+      void this._history.append(
+        buildPersistedRecord({
+          id: widgetId,
+          agent: widgetState.agent,
+          status: widgetState.status as "failed" | "cancelled",
+          mode: "sync",
+          task: finalOpts.task,
+          startedAt: startTime,
+          endedAt: widgetState.finishedAt,
+          turns: widgetState.turns,
+          totalTokens: widgetState.totalTokens,
+          error: widgetState.summary,
+          cwd: this.cwd,
+        }),
+      );
       throw err;
     }
   }
@@ -393,6 +439,25 @@ export class SubagentRuntime {
           status: record.status,
           sessionId: result.sessionId,
         });
+        // ADR-024 L1: background 完成持久化（与 sync 统一）
+        void this._history.append(
+          buildPersistedRecord({
+            id,
+            agent: record.agent,
+            status: record.status,
+            mode: "background",
+            task: opts.task,
+            startedAt: record.startedAt,
+            endedAt: record.endedAt,
+            turns: result.turns,
+            totalTokens: result.usage
+              ? result.usage.input + result.usage.output + result.usage.cacheRead + result.usage.cacheWrite
+              : undefined,
+            resultText: result.text,
+            sessionFile: result.sessionFile ? path.basename(result.sessionFile) : undefined,
+            cwd: this.cwd,
+          }),
+        );
         this.notifyChange();
       })
       .catch((err: unknown) => {
@@ -404,6 +469,20 @@ export class SubagentRuntime {
         delete record.controller;
         opts.onComplete?.(record);
         this.pi?.events.emit("subagents:bg:done", record);
+        // ADR-024 L1: background 失败持久化
+        void this._history.append(
+          buildPersistedRecord({
+            id,
+            agent: record.agent,
+            status: "failed",
+            mode: "background",
+            task: opts.task,
+            startedAt: record.startedAt,
+            endedAt: record.endedAt,
+            error: record.error,
+            cwd: this.cwd,
+          }),
+        );
         this.notifyChange();
       });
 
@@ -428,6 +507,21 @@ export class SubagentRuntime {
     r.status = "cancelled";
     r.endedAt = Date.now();
     this.notifyChange();
+    // ADR-024 L1: 用户主动取消也记录历史
+    // 注意：runAgent 的 catch 路径会再写一条 "failed"（因为 abort 抛错）。
+    // 这里写 cancelled 以保留用户意图。去重由 list 视图的 id + 最新时间戳处理。
+    void this._history.append(
+      buildPersistedRecord({
+        id,
+        agent: r.agent ?? "default",
+        status: "cancelled",
+        mode: "background",
+        task: "(cancelled by user)",
+        startedAt: r.startedAt,
+        endedAt: r.endedAt,
+        cwd: this.cwd,
+      }),
+    );
     return true;
   }
 

@@ -36,6 +36,10 @@ export interface SubagentRecord {
   endedAt?: number;
   result?: AgentResult;
   error?: string;
+  /** ADR-024 L2: subagent session 文件名（存在时可回看完整对话） */
+  sessionFile?: string;
+  /** ADR-024 L1: 执行模式（列表显示用） */
+  mode?: "sync" | "background";
 }
 
 export interface ViewState {
@@ -61,16 +65,22 @@ const FOOTER_LINES = 2;
 // ============================================================
 
 /**
- * 合并 widget + bg + completed 数据源。
+ * 合并 widget + bg + completed + history 数据源。
  * cancelled 状态优先（用户主动行为，widget 可能误报 running/failed）。
+ * 内存源（widget/bg/completed）优先于 history（含实时状态 + 完整 eventLog）。
  */
 export function collectRecords(
   widget: SubagentRecord[],
   bg: SubagentRecord[],
   completed: SubagentRecord[],
+  history: SubagentRecord[] = [],
 ): SubagentRecord[] {
   const byId = new Map<string, SubagentRecord>();
-  // bg/completed 先（终态权威），widget 后（实时可能更新 running 状态）
+  // history 先（最低优先级）
+  for (const r of history) {
+    byId.set(r.id, r);
+  }
+  // bg/completed 覆盖 history（含实时状态）
   for (const r of [...bg, ...completed]) {
     byId.set(r.id, r);
   }
@@ -125,7 +135,9 @@ function formatRecordRow(record: SubagentRecord, theme: ThemeLike, selected: boo
   const icon = statusIcon(record.status, theme);
   const turns = record.turns ?? 0;
   const tokens = record.totalTokens ? formatTokens(record.totalTokens) : "-";
-  const baseLine = `${icon} ${record.id.padEnd(13)} ${record.agent.padEnd(13)} ${record.status.padEnd(10)} ${turns}t ${tokens}`;
+  // ADR-024: background 记录加 bg 标记区分 sync
+  const modeTag = record.mode === "background" ? "[bg]" : "    ";
+  const baseLine = `${icon} ${modeTag} ${record.id.padEnd(13)} ${record.agent.padEnd(13)} ${record.status.padEnd(10)} ${turns}t ${tokens}`;
   return selected ? theme.bold(baseLine) : baseLine;
 }
 
@@ -426,5 +438,20 @@ function getAllRecords(runtime: SubagentRuntime): SubagentRecord[] {
     result: c.result,
     error: c.error,
   }));
-  return collectRecords(widgetRecords, bgRecords, completedRecords);
+  // ADR-024 L1: 跨进程历史记录（无实时状态，eventLog 为空，预览作 task/error/result）
+  const HISTORY_LIST_LIMIT = 100;
+  const historyRecords: SubagentRecord[] = runtime.listHistory(HISTORY_LIST_LIMIT).map((h) => ({
+    id: h.id,
+    agent: h.agent,
+    status: h.status,
+    eventLog: [],
+    turns: h.turns,
+    totalTokens: h.totalTokens,
+    startedAt: h.startedAt,
+    endedAt: h.endedAt,
+    error: h.error ?? h.resultPreview,
+    sessionFile: h.sessionFile,
+    mode: h.mode,
+  }));
+  return collectRecords(widgetRecords, bgRecords, completedRecords, historyRecords);
 }

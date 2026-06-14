@@ -38,6 +38,8 @@ export interface RunAgentContext {
   cwd: string;
   /** agentDir（传给 createAgentSession） */
   agentDir: string;
+  /** ADR-024 L2: homeDir，传给 SessionFactoryContext 用于计算 session 持久化目录 */
+  homeDir: string;
 }
 
 /**
@@ -85,10 +87,11 @@ export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Pro
       resolveAgent: ctx.resolveAgent,
       cwd: effectiveCwd,
       agentDir: ctx.agentDir,
+      homeDir: ctx.homeDir,
     };
 
     // 创建 + 配置 session（共享 helper）
-    const { session, bridge, unsubscribe } = await createAndConfigureSession(
+    const { session, bridge, unsubscribe, sessionFile } = await createAndConfigureSession(
       {
         resolved,
         appendSystemPrompt: opts.appendSystemPrompt,
@@ -152,7 +155,7 @@ export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Pro
         error = bridge.lastError;
       }
 
-      return collectResult(session, bridge, startTime, success, error);
+      return collectResult(session, bridge, startTime, success, error, sessionFile);
     } finally {
       unsubscribe();
       session.dispose();

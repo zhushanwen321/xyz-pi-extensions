@@ -68,6 +68,7 @@ export function createManagedSession(
       resolveAgent: ctx.resolveAgent,
       cwd: ctx.cwd,
       agentDir: ctx.agentDir,
+      homeDir: ctx.homeDir,
     };
 
     held = await sessionFactory.createAndConfigureSession(
@@ -108,7 +109,9 @@ export function createManagedSession(
       if (activePrompt) return activePrompt;
 
       activePrompt = (async () => {
-        const { session: sess, bridge } = await ensureSession();
+        const built = await ensureSession();
+        const sess = built.session;
+        const bridge = built.bridge;
         const startTime = Date.now();
 
         // turn 限制器
@@ -159,7 +162,7 @@ export function createManagedSession(
         }
 
         // 注意：不 dispose、不 unsubscribe —— ManagedSession 复用 session
-        return collectResult(sess, bridge, startTime, success, error);
+        return collectResult(sess, bridge, startTime, success, error, built.sessionFile);
       })();
 
       try {

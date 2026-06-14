@@ -3,6 +3,9 @@
 // 共享的 Pi session 创建 + 配置 helper。被 runAgent()（一次性执行）和
 // createManagedSession()（长生命周期，复用 session）共同调用。
 //
+// ADR-024 L2: session 落盘到 ~/.pi/agent/subagents/<encoded-cwd>/sessions/，
+// 与主 session 物理隔离。SDK 在每次 message_end 自动 append，dispose 不删除。
+//
 // SDK 约束（spec FR-1.7 偏差，见 spec.md「实现偏差说明」）：
 //   createAgentSession({ tools }) 构造时传入 allowlist 需要预先知道工具全集，
 //   但扩展工具要等 createAgentSession 内部加载 resourceLoader 后才注册。
@@ -10,6 +13,7 @@
 //   创建后通过 setActiveToolsByName 执行。本 helper 封装该流程，消除调用方重复。
 
 import { execSync } from "node:child_process";
+import { getSessionsDir } from "../config/config-path.ts";
 import type { ModelRegistryLike } from "../resolution/model-resolver.ts";
 import { filterTools } from "../resolution/tool-filter.ts";
 import type {
@@ -31,6 +35,11 @@ export interface AgentSessionLike {
   dispose(): void;
   subscribe(fn: (event: unknown) => void): () => void;
   sessionId: string;
+  /** ADR-024 L2: 暴露 sessionManager 以读取 sessionFile 路径 */
+  readonly sessionManager: {
+    getSessionFile(): string | undefined;
+    getSessionId(): string;
+  };
   messages: ReadonlyArray<{
     role: string;
     usage?: Record<string, unknown>;
@@ -59,7 +68,11 @@ export interface SdkLike {
   DefaultResourceLoader: new (opts: Record<string, unknown>) => {
     reload(): Promise<void>;
   };
-  SessionManager: { inMemory(cwd?: string): unknown };
+  /** ADR-024 L2: SessionManager 支持 inMemory（测试/临时）和 create（持久化）两种工厂 */
+  SessionManager: {
+    inMemory(cwd?: string): unknown;
+    create(cwd: string, sessionDir?: string): unknown;
+  };
   createAgentSession: (opts: Record<string, unknown>) => Promise<{
     session: AgentSessionLike;
   }>;
@@ -71,6 +84,8 @@ export interface SessionFactoryContext {
   resolveAgent: (name: string) => AgentConfig | undefined;
   cwd: string;
   agentDir: string;
+  /** ADR-024 L2: homeDir，用于计算 subagent session 持久化目录 */
+  homeDir: string;
 }
 
 /** createAndConfigureSession 的输入选项 */
@@ -109,6 +124,8 @@ export interface BuiltSession {
   session: AgentSessionLike;
   bridge: EventBridge;
   unsubscribe: () => void;
+  /** ADR-024 L2: subagent session 文件绝对路径（未持久化时为 undefined） */
+  sessionFile?: string;
 }
 
 /** JSON pretty-print 缩进（ESLint no-magic-numbers） */
@@ -145,14 +162,20 @@ export async function createAndConfigureSession(
   });
   await resourceLoader.reload();
 
-  // 步骤 2: 创建 session
+  // 步骤 2: 创建 session（ADR-024 L2: session 落盘到独立 subagent sessionDir，
+  // 与主 session 物理隔离，不污染 /sessions 列表）
+  const subagentSessionDir = getSessionsDir(ctx.homeDir, ctx.cwd);
+  const sessionManager = sdk.SessionManager.create(ctx.cwd, subagentSessionDir);
   const sessionOpts: Record<string, unknown> = {
     model: resolved.model,
     thinkingLevel: resolved.thinkingLevel,
     resourceLoader,
-    sessionManager: sdk.SessionManager.inMemory(ctx.cwd),
+    sessionManager,
   };
   const { session } = await sdk.createAgentSession(sessionOpts);
+
+  // ADR-024 L2: 提取 session 文件路径（供 history 关联 + 详情视图回看）
+  const sessionFile = session.sessionManager.getSessionFile();
 
   // 步骤 3: 创建后过滤工具（FR-6 三层过滤 → allowlist → setActiveToolsByName）
   const toolFilterConfig = {
@@ -176,7 +199,7 @@ export async function createAndConfigureSession(
     bridge.handle(event as never);
   });
 
-  return { session, bridge, unsubscribe };
+  return { session, bridge, unsubscribe, sessionFile };
 }
 
 /**
@@ -189,6 +212,8 @@ export function collectResult(
   startTime: number,
   success: boolean,
   error: string | undefined,
+  /** ADR-024 L2: subagent session 文件路径（供 history 关联） */
+  sessionFile?: string,
 ): AgentResult {
   const text = collectResponseTextLocal(session.messages);
 
@@ -213,6 +238,7 @@ export function collectResult(
     success,
     error,
     sessionId: session.sessionId,
+    sessionFile,
     toolCalls: bridge.toolCalls,
   };
 }

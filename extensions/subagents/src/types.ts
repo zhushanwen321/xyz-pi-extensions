@@ -26,6 +26,15 @@ export const TURN_SUMMARY_MAX = 80;
 /** FR-3.0: _completedAgents Map 上限 */
 export const COMPLETED_AGENTS_MAX = 50;
 
+/** ADR-024 L1: history.jsonl 记录上限（FIFO 淘汰） */
+export const HISTORY_MAX_RECORDS = 500;
+
+/** ADR-024 L2: subagent session 文件 TTL（天数） */
+export const SESSION_FILE_TTL_DAYS = 30;
+
+/** ADR-024: taskPreview / resultPreview 最大字符数 */
+export const PERSISTED_PREVIEW_MAX = 200;
+
 /** FR-3.5 G-008: widget stalled 兜底阈值（5min 无新事件） */
 export const STALLED_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -131,6 +140,8 @@ export interface AgentResult {
   success: boolean;
   error?: string;
   sessionId: string;
+  /** ADR-024 L2: subagent session 文件绝对路径（持久化时存在） */
+  sessionFile?: string;
   toolCalls: ToolCallEntry[];
 }
 
@@ -168,6 +179,35 @@ export interface BackgroundStatus extends BackgroundHandle {
 export interface BackgroundOptions extends RunAgentOptions {
   /** 任务完成（成功/失败/取消）时回调。与 pi.events 'subagents:bg:done' 二选一或都有 */
   onComplete?: (status: BackgroundStatus) => void;
+}
+
+// ============================================================
+// ADR-024: PersistedAgentRecord（L1 history.jsonl 行格式）
+// ============================================================
+
+/**
+ * history.jsonl 单行记录。统一 sync + background 两路写入。
+ * 不含完整 messages（那在 L2 session 文件中），只存索引 + 预览。
+ */
+export interface PersistedAgentRecord {
+  readonly id: string;
+  readonly agent: string;
+  status: "done" | "failed" | "cancelled";
+  /** 执行模式 */
+  mode: "sync" | "background";
+  /** 任务短预览（截断至 PERSISTED_PREVIEW_MAX） */
+  taskPreview: string;
+  startedAt: number;
+  endedAt?: number;
+  turns?: number;
+  totalTokens?: number;
+  error?: string;
+  /** 结果文本预览（截断） */
+  resultPreview?: string;
+  /** L2 关联：subagent session 文件名（basename，不含目录） */
+  sessionFile?: string;
+  /** 执行时 cwd（跨项目历史区分） */
+  cwd: string;
 }
 
 // ============================================================

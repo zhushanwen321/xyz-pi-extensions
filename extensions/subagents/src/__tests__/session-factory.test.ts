@@ -22,6 +22,10 @@ function makeMockSession(overrides: Partial<AgentSessionLike> = {}): AgentSessio
   const listeners: Array<(e: unknown) => void> = [];
   return {
     sessionId: "sess-123",
+    sessionManager: {
+      getSessionFile: () => "/tmp/sessions/sess-123.jsonl",
+      getSessionId: () => "sess-123",
+    },
     messages: [{ role: "assistant", content: [{ type: "text", text: "hello" }] }],
     prompt: vi.fn(async () => {
       // 模拟一轮 turn_end + message_end 事件
@@ -53,7 +57,10 @@ function makeMockSdk(session: AgentSessionLike): SdkLike {
     DefaultResourceLoader: function (this: { reload: () => Promise<void> }, _opts: Record<string, unknown>) {
       this.reload = async () => {};
     } as never,
-    SessionManager: { inMemory: (_cwd?: string) => ({}) } as never,
+    SessionManager: {
+      inMemory: vi.fn((_cwd?: string) => ({})),
+      create: vi.fn((_cwd: string, _sessionDir?: string) => ({})),
+    } as never,
     createAgentSession: vi.fn(async (_opts: Record<string, unknown>) => ({ session })),
   } as never;
 }
@@ -76,7 +83,7 @@ describe("createAndConfigureSession", () => {
         },
         onEvent: (e) => events.push(e),
       },
-      { modelRegistry: {} as never, resolveAgent: () => undefined, cwd: "/tmp", agentDir: "/tmp/.pi" },
+      { modelRegistry: {} as never, resolveAgent: () => undefined, cwd: "/tmp", agentDir: "/tmp/.pi", homeDir: "/tmp" },
       sdk,
     );
 
@@ -86,6 +93,27 @@ describe("createAndConfigureSession", () => {
     expect(sdk.createAgentSession).toHaveBeenCalledOnce();
     // setActiveToolsByName 被调用，且 workflow_run（EXCLUDED）被排除，bash 被白名单排除
     expect(session.setActiveToolsByName).toHaveBeenCalledWith(["read"]);
+  });
+
+  it("ADR-024 L2: uses SessionManager.create (persisted) instead of inMemory, exposes sessionFile", async () => {
+    const session = makeMockSession();
+    const sdk = makeMockSdk(session);
+    const built = await createAndConfigureSession(
+      { resolved: { model: { id: "m", name: "m", provider: "p", reasoning: true } } },
+      { modelRegistry: {} as never, resolveAgent: () => undefined, cwd: "/proj", agentDir: "/tmp/.pi", homeDir: "/home" },
+      sdk,
+    );
+    const sm = sdk.SessionManager as { inMemory: { mock: { calls: unknown[][] } }; create: { mock: { calls: unknown[][] } } };
+    // create 被调用（持久化路径），inMemory 未被调用
+    expect(sm.create.mock.calls).toHaveLength(1);
+    expect(sm.inMemory.mock.calls).toHaveLength(0);
+    // create 参数：(cwd, subagentSessionDir)
+    expect(sm.create.mock.calls[0][0]).toBe("/proj");
+    const sessionDir = sm.create.mock.calls[0][1] as string;
+    expect(sessionDir).toContain("subagents");
+    expect(sessionDir).toContain("sessions");
+    // sessionFile 从 session.sessionManager.getSessionFile() 提取
+    expect(built.sessionFile).toBe("/tmp/sessions/sess-123.jsonl");
   });
 
   it("does not call setActiveToolsByName when no filtering needed (all allowed)", async () => {
@@ -98,7 +126,7 @@ describe("createAndConfigureSession", () => {
         resolved: { model: { id: "m", name: "m", provider: "p", reasoning: true } },
         // 无 agentConfig → 不过滤
       },
-      { modelRegistry: {} as never, resolveAgent: () => undefined, cwd: "/tmp", agentDir: "/tmp/.pi" },
+      { modelRegistry: {} as never, resolveAgent: () => undefined, cwd: "/tmp", agentDir: "/tmp/.pi", homeDir: "/tmp" },
       sdk,
     );
     // 全部工具通过（无 EXCLUDED 命中、无白名单）→ allowedTools 长度 == allTools → 不调用 setActiveToolsByName
@@ -110,7 +138,7 @@ describe("createAndConfigureSession", () => {
     const sdk = makeMockSdk(session);
     const built = await createAndConfigureSession(
       { resolved: { model: { id: "m", name: "m", provider: "p", reasoning: true } } },
-      { modelRegistry: {} as never, resolveAgent: () => undefined, cwd: "/tmp", agentDir: "/tmp/.pi" },
+      { modelRegistry: {} as never, resolveAgent: () => undefined, cwd: "/tmp", agentDir: "/tmp/.pi", homeDir: "/tmp" },
       sdk,
     );
     // 取 subscribe 的第一个 listener，模拟事件
