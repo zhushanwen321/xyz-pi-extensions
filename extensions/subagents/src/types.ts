@@ -99,6 +99,8 @@ export interface RunAgentOptions {
   pool?: ConcurrencyPool;
   /** 优先级（0=最高，默认 Infinity=无优先级） */
   priority?: number;
+  /** P1: 内部标志——跳过 widget 注册（background 调 runAgent 时用，避免双重记录） */
+  _skipWidget?: boolean;
 }
 
 // ============================================================

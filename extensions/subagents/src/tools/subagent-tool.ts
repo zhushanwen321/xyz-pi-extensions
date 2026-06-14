@@ -48,7 +48,7 @@ const SubagentParams = Type.Object({
   wait: Type.Optional(
     Type.Boolean({
       description:
-        "true (default) = await the result synchronously. false = run in background and return a backgroundId immediately (use backgroundId to check later).",
+        "true = await the result synchronously (the default unless the agent is configured with defaultBackground). false = run in background and return a backgroundId immediately; a completion notification arrives automatically when done.",
     }),
   ),
   backgroundId: Type.Optional(
@@ -76,7 +76,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
     promptSnippet: "Delegate a task to a subagent (sync/background)",
     promptGuidelines: [
       "Use for focused subtasks that benefit from a specialized agent and isolated context: multi-file code review, web research, codebase scouting, implementation planning.",
-      "Pass wait:false for long-running tasks. After starting a background subagent, end your turn—the result will arrive automatically as a notification when it completes.",
+      "Pass wait:false for long-running tasks. After starting a background subagent, end your turn—a completion notification is injected into your next turn when it finishes (no need to poll).",
       "Do NOT run sleep loops or repeated polling calls just to wait for a background subagent.",
       "Use backgroundId to check status/result of a specific prior background subagent when needed.",
       "Do NOT delegate simple one-line fixes or questions you can answer yourself — delegation has overhead (new session, no inherited context).",

@@ -87,7 +87,9 @@ export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Pro
     if (agentConfig?.isolation === "worktree") {
       // V7：agentId 用随机 hex，不嵌用户可控的 agentName（路径注入防御）
       const agentId = crypto.randomBytes(AGENT_ID_RANDOM_BYTES).toString("hex");
-      worktree = createWorktree(ctx.cwd, agentId);
+      // P5: 用 ctx.homeDir 作为 worktree baseDir，生产环境 = os.tmpdir()（homeDir 默认），
+      // 测试可用独立子目录隔离，避免并行测试的 pi-agent-* 残留互相干扰。
+      worktree = createWorktree(ctx.cwd, agentId, ctx.homeDir);
       // V1：createWorktree 失败（非 git / worktree add 失败）必须 throw，
       // 不能静默回退到 ctx.cwd（那会让 agent 污染用户工作区，违背隔离意图）
       if (!worktree) {

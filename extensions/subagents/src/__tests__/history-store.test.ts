@@ -206,4 +206,10 @@ describe("HistoryStore — ADR-024 L1", () => {
     expect(recent[0].id).toBe("run-a");
     expect(recent[1].id).toBe("run-b");
   });
+
+  it("recent(0) returns empty array (P3 boundary fix)", async () => {
+    const store = makeStore();
+    await store.append(makeRecord({ id: "run-x" }));
+    expect(store.recent(0)).toEqual([]);
+  });
 });

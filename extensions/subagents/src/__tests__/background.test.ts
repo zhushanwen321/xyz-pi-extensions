@@ -4,13 +4,10 @@
 // 验证：startBackground 立即返回 handle、getBackground 查询、cancelBackground
 // 触发 abort、完成时触发 onComplete + emit + appendEntry。
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SubagentRuntime } from "../runtime.ts";
 import type { AgentConfig, AgentEvent, AgentResult, BackgroundStatus, RunAgentOptions } from "../types.ts";
-
-/** 等待合并窗口（2000ms）到期 + 余量 */
-const BG_MERGE_WINDOW_WAIT_MS = 2100;
 
 /** FR-O1: mock pi 的形状（含 sendMessage） */
 interface MockPi {
@@ -290,12 +287,9 @@ describe("startBackground eventLog race fix (G-005) + 回注", () => {
     expect(bg2?.eventLog?.some((e) => e.label.includes("tool-bg-1"))).toBe(false);
 
     // 回注：首个完成立即发 sendMessage（合并窗口语义，FR-O1.5）。
-    // 第二个进合并窗口，窗口到期后合并发送（由 merge window 测试单独验证）。
+    // 合并窗口的精确时序由 merge window describe 块用 fake timers 验证。
     await new Promise((r) => setTimeout(r, 10));
     expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1);
-    // 等合并窗口到期，第二条（合并）通知发出
-    await new Promise((r) => setTimeout(r, BG_MERGE_WINDOW_WAIT_MS));
-    expect(rt.pi.sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("cancel does not double-send notification (runAgent never resolves)", async () => {
@@ -347,82 +341,68 @@ describe("startBackground eventLog race fix (G-005) + 回注", () => {
 describe("merge window (FR-O1.5)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it("first notification sends immediately, subsequent within window are merged", async () => {
+  it("first notification sends immediately, subsequent within window are merged into 1", () => {
     const rt = makeRuntime();
-
-    // 模拟 3 个快速完成的 background
-    let n = 0;
-    (rt as unknown as { runAgent: ReturnType<typeof vi.fn> }).runAgent = vi.fn(() => {
-      n++;
-      const idx = n;
-      return new Promise<AgentResult>((resolve) => {
-        setTimeout(
-          () =>
-            resolve({
-              text: `out-${idx}`,
-              turns: 1,
-              durationMs: 10,
-              success: true,
-              sessionId: `s-${idx}`,
-              toolCalls: [],
-            }),
-          5,
-        );
-      });
+    // 直接调 notifyBgCompletion（绕过 runAgent 的异步），精确控制时序
+    // 首个 → 立即发 + 启动 2000ms 合并窗口
+    rt.notifyBgCompletion({
+      id: "bg-mw-1", status: "done", agent: "worker",
+      result: { text: "first" } as AgentResult, startedAt: 1000,
     });
-
-    rt.startBackground({ task: "a", agent: "worker" });
-    rt.startBackground({ task: "b", agent: "worker" });
-    rt.startBackground({ task: "c", agent: "worker" });
-
-    await new Promise((r) => setTimeout(r, 30)); // 等全部完成
-
-    // 首个立即发送（1 次），后续 2 个进合并窗口
-    const immediateCount = rt.pi.sendMessage.mock.calls.length;
-    expect(immediateCount).toBeGreaterThanOrEqual(1); // 至少首个已发
-
-    // 窗口到期后合并发送 1 条 → 总共 2 次
-    await new Promise((r) => setTimeout(r, 2100)); // 等合并窗口（2000ms）
-    expect(rt.pi.sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(rt.pi.sendMessage.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1); // 首个立即发
+    // 窗口内 2 个后续 → 入队（不发）
+    rt.notifyBgCompletion({
+      id: "bg-mw-2", status: "done", agent: "reviewer",
+      result: { text: "second" } as AgentResult, startedAt: 1000,
+    });
+    rt.notifyBgCompletion({
+      id: "bg-mw-3", status: "failed", agent: "worker",
+      error: "boom", startedAt: 1000,
+    });
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1); // 仍在窗口内
+    // 窗口到期 → flush 合并发 1 条
+    vi.advanceTimersByTime(2000);
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(2); // 首个 + 合并 1 条 = 精确 2
+    const mergedCall = rt.pi.sendMessage.mock.calls[1]!;
+    expect(mergedCall[0].customType).toBe("subagent-bg-notify");
+    expect(String(mergedCall[0].content)).toContain("2 background tasks");
   });
 
-  it("single background sends exactly one notification (no merge overhead)", async () => {
+  it("single background sends exactly one notification (no merge overhead)", () => {
     const rt = makeRuntime();
-    rt.startBackground({ task: "solo", agent: "worker" });
-    await new Promise((r) => setTimeout(r, 20));
-    // 单个 background → 立即发 1 条，窗口内无后续 → 不多发
+    rt.notifyBgCompletion({
+      id: "bg-solo-1", status: "done", agent: "worker",
+      result: { text: "solo" } as AgentResult, startedAt: 1000,
+    });
+    // 单个 → 立即发 1 条，窗口内无后续 → 不多发
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1);
+    // 窗口到期后无 pending，flush 不发
+    vi.advanceTimersByTime(2000);
     expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("flushPendingNotifications clears timer and sends merged batch", () => {
     const rt = makeRuntime();
-    // 直接调 notifyBgCompletion 模拟入队（首个会立即发，需先触发一次"首个"再入队）
-    // 触发首个 → 立即发 + 启动窗口
+    // 首个 → 立即发 + 启动窗口
     rt.notifyBgCompletion({
-      id: "bg-merge-1",
-      status: "done",
-      agent: "worker",
-      result: { text: "first" } as AgentResult,
-      startedAt: Date.now(),
+      id: "bg-merge-1", status: "done", agent: "worker",
+      result: { text: "first" } as AgentResult, startedAt: 1000,
     });
-    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1); // 首个立即发
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1);
     // 后续入队（窗口内）
     rt.notifyBgCompletion({
-      id: "bg-merge-2",
-      status: "done",
-      agent: "reviewer",
-      result: { text: "second" } as AgentResult,
-      startedAt: Date.now(),
+      id: "bg-merge-2", status: "done", agent: "reviewer",
+      result: { text: "second" } as AgentResult, startedAt: 1000,
     });
     rt.notifyBgCompletion({
-      id: "bg-merge-3",
-      status: "failed",
-      agent: "worker",
-      error: "boom",
-      startedAt: Date.now(),
+      id: "bg-merge-3", status: "failed", agent: "worker",
+      error: "boom", startedAt: 1000,
     });
     expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1); // 仍在窗口内，未 flush
     // dispose → flushPendingNotifications → 合并发 1 条
@@ -431,6 +411,31 @@ describe("merge window (FR-O1.5)", () => {
     const mergedCall = rt.pi.sendMessage.mock.calls[1]!;
     expect(mergedCall[0].customType).toBe("subagent-bg-notify");
     expect(String(mergedCall[0].content)).toContain("2 background tasks");
+  });
+
+  it("flushPendingNotifications with empty pending is a no-op", () => {
+    const rt = makeRuntime();
+    // 空 pending → flush 不发
+    rt.flushPendingNotifications();
+    expect(rt.pi.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("dispose is idempotent (P2 _disposed flag)", () => {
+    const rt = makeRuntime();
+    rt.notifyBgCompletion({
+      id: "bg-disp-1", status: "done", agent: "worker",
+      result: { text: "x" } as AgentResult, startedAt: 1000,
+    });
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1);
+    rt.dispose();
+    // dispose 后再 notifyBgCompletion → 短路（_disposed）
+    rt.notifyBgCompletion({
+      id: "bg-disp-2", status: "done", agent: "worker",
+      result: { text: "y" } as AgentResult, startedAt: 1000,
+    });
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1); // 不增
+    // 二次 dispose 不抛错
+    expect(() => rt.dispose()).not.toThrow();
   });
 });
 
@@ -533,7 +538,7 @@ describe("BgRecord FIFO cleanup (FR-O5.9)", () => {
     vi.clearAllMocks();
   });
 
-  it("evicts oldest records when exceeding BG_RECORDS_MAX (50)", async () => {
+  it("evicts oldest DONE records when exceeding BG_RECORDS_MAX (50), keeps running", async () => {
     const rt = makeRuntime();
     (rt as unknown as { runAgent: ReturnType<typeof vi.fn> }).runAgent = vi.fn(() =>
       Promise.resolve({
@@ -546,18 +551,42 @@ describe("BgRecord FIFO cleanup (FR-O5.9)", () => {
       }),
     );
 
-    // 启动 51 个 background（超过上限 50）
+    // S4: 先启动 50 个并等它们全部 done，再启动第 51 个触发淘汰。
+    // 不能一次性循环 51 个——同步循环期间前序 record 都是 running，S4 修复后
+    // running record 不被淘汰，需等它们 done 后才能淘汰。
+    const handles = [];
+    for (let i = 0; i < 50; i++) {
+      handles.push(rt.startBackground({ task: `task-${i}`, agent: "worker" }));
+    }
+    await new Promise((r) => setTimeout(r, 30)); // 等前 50 个 done
+
+    // 第 51 个触发淘汰（此时前 50 个已 done，最旧的 done record 被淘汰）
+    handles.push(rt.startBackground({ task: "task-50", agent: "worker" }));
+
+    // 第一个（最旧的 done）应被淘汰
+    expect(rt.getBackground(handles[0]!.id)).toBeUndefined();
+    // 最后一个应仍在（新入队的）
+    expect(rt.getBackground(handles[50]!.id)).toBeDefined();
+    // 总数不超过上限
+    expect(rt.listBackground().length).toBeLessThanOrEqual(50);
+  });
+
+  it("does NOT evict running records (cancel must still work)", async () => {
+    const rt = makeRuntime();
+    // 永不 resolve 的 runAgent —— 保持 running
+    (rt as unknown as { runAgent: ReturnType<typeof vi.fn> }).runAgent = vi.fn(
+      () => new Promise<AgentResult>(() => {}),
+    );
+
+    // 启动 51 个 running background（同步循环期间全是 running）
     const handles = [];
     for (let i = 0; i < 51; i++) {
       handles.push(rt.startBackground({ task: `task-${i}`, agent: "worker" }));
     }
-    await new Promise((r) => setTimeout(r, 50)); // 等全部完成
 
-    // 第一个应被淘汰（FIFO）
-    expect(rt.getBackground(handles[0]!.id)).toBeUndefined();
-    // 最后一个应仍在
-    expect(rt.getBackground(handles[50]!.id)).toBeDefined();
-    // 总数不超过上限
-    expect(rt.listBackground().length).toBeLessThanOrEqual(50);
+    // S4: 全是 running 时不应淘汰——cancelBackground 仍必须能找到 record
+    expect(rt.cancelBackground(handles[0]!.id)).toBe(true);
+    // 总数超过 50（running 不淘汰，宁可暂时超限也不丢失 cancel 能力）
+    expect(rt.listBackground().length).toBe(51);
   });
 });

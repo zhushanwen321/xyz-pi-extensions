@@ -39,9 +39,11 @@ export interface WorktreeResult {
  * 创建一个 detached git worktree 副本。
  * @param cwd 当前工作区
  * @param agentId agent 标识（用于分支命名 + tmpdir 目录名；应由调用方随机化 — V7）
+ * @param baseDir worktree 物理目录的父目录（默认 os.tmpdir()）。
+ *   P5: 测试传独立子目录避免与其它并行测试的 pi-agent-* 残留互相干扰。
  * @returns WorktreeResult 或 undefined（非 git 仓库或失败时）
  */
-export function createWorktree(cwd: string, agentId: string): WorktreeResult | undefined {
+export function createWorktree(cwd: string, agentId: string, baseDir: string = os.tmpdir()): WorktreeResult | undefined {
   // 验证是 git 仓库且有 HEAD
   let headSha: string;
   let repoRoot: string;
@@ -64,7 +66,7 @@ export function createWorktree(cwd: string, agentId: string): WorktreeResult | u
 
   // 创建 worktree（agentId 用于目录名，已由调用方随机化 — V7）
   const uuid = crypto.randomBytes(RANDOM_BYTES_COUNT).toString("hex");
-  const wtPath = path.join(os.tmpdir(), `${PI_AGENT_TMP_PREFIX}${agentId}-${uuid}`);
+  const wtPath = path.join(baseDir, `${PI_AGENT_TMP_PREFIX}${agentId}-${uuid}`);
   try {
     git(cwd, ["worktree", "add", "--detach", wtPath, "HEAD"]);
   } catch {

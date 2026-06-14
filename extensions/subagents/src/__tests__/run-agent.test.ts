@@ -377,9 +377,12 @@ describe("runAgent", () => {
   // 用真实 git 仓库（createWorktree 成功）+ mock factory 抛错，验证 worktree 被清理。
   describe("V3: worktree 不泄漏（createAndConfigureSession 抛错路径）", () => {
     let v3Repo: string;
+    // P5: 独立的 worktree baseDir，避免与其它并行测试的 pi-agent-* 残留互相干扰。
+    let v3Home: string;
 
     beforeEach(() => {
       v3Repo = fs.mkdtempSync(path.join(os.tmpdir(), "pi-v3-test-"));
+      v3Home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-v3-home-"));
       // 初始化 git 仓库 + 一次提交（createWorktree 需要 HEAD）
       const CLEAN_ENV: NodeJS.ProcessEnv = (() => {
         const env: NodeJS.ProcessEnv = {};
@@ -396,7 +399,7 @@ describe("runAgent", () => {
     });
 
     afterEach(() => {
-      // 兜底：清理可能的 worktree 残留 + 临时仓库
+      // 兜底：清理可能的 worktree 残留 + 临时仓库 + 独立 home
       try {
         const CLEAN_ENV: NodeJS.ProcessEnv = (() => {
           const env: NodeJS.ProcessEnv = {};
@@ -406,6 +409,7 @@ describe("runAgent", () => {
         execFileSync("git", ["-C", v3Repo, "worktree", "prune"], { stdio: "ignore", env: CLEAN_ENV });
       } catch { /* best effort */ }
       try { fs.rmSync(v3Repo, { recursive: true, force: true }); } catch { /* best effort */ }
+      try { fs.rmSync(v3Home, { recursive: true, force: true }); } catch { /* best effort */ }
     });
 
     it("factory 抛错 + isolation:worktree → worktree 被清理（不泄漏到 tmpdir）", async () => {
@@ -419,24 +423,19 @@ describe("runAgent", () => {
       const ctx = makeCtx({
         resolveAgent: vi.fn(() => agentConfig) as never,
         cwd: v3Repo, // 真实 git 仓库 → createWorktree 成功
-        homeDir: os.tmpdir(),
+        homeDir: v3Home, // P5: 独立 home，worktree 创建在此目录下
       });
 
-      // 记录测试前的 pi-agent-* 基线（避免其他测试的残留干扰）
-      const baseline = new Set(
-        fs.readdirSync(os.tmpdir()).filter((e) => e.startsWith("pi-agent-")),
-      );
-
+      // P5: v3Home 在测试开始时为空（刚 mkdtemp），baseline 必然为空集——
+      // 无需对比前后快照，直接断言 runAgent 后 v3Home 无 pi-agent-* 残留。
       const result = await runAgent({ task: "do work", agent: "worker" }, ctx);
 
       // factory 抛错 → 失败结果
       expect(result.success).toBe(false);
       expect(result.error).toBe("model unavailable");
 
-      // V3 核心：本次测试新建的 worktree 不应泄漏。
-      // 对比基线：只看本次新增的 pi-agent-* 目录
-      const after = fs.readdirSync(os.tmpdir()).filter((e) => e.startsWith("pi-agent-"));
-      const leaked = after.filter((e) => !baseline.has(e));
+      // V3 核心：本次测试新建的 worktree 不应泄漏（v3Home 独立隔离，无并发干扰）。
+      const leaked = fs.readdirSync(v3Home).filter((e) => e.startsWith("pi-agent-"));
       expect(leaked, `泄漏的 worktree 目录: ${leaked.join(", ")}`).toEqual([]);
 
       // git worktree 注册表也不应有残留

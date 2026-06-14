@@ -116,7 +116,9 @@ export class HistoryStore {
       if (endDiff !== 0) return endDiff;
       return (b.startedAt ?? 0) - (a.startedAt ?? 0);
     });
-    return limit ? list.slice(0, limit) : list;
+    // P3: limit<=0 返回空数组（直觉语义），limit 为正数才切片
+    if (limit <= 0) return [];
+    return list.slice(0, limit);
   }
 
   /**

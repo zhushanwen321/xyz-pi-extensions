@@ -101,9 +101,11 @@ export function parseAgentFrontmatter(content: string, fileName: string): Parsed
   const isolationRaw = extractYamlField(yamlBlock, "isolation");
   const isolation = isolationRaw === "worktree" ? "worktree" : undefined;
 
-  // FR-O2.1: defaultBackground（布尔，frontmatter 中写 defaultBackground: true）
+  // FR-O2.1: defaultBackground（布尔，frontmatter 中写 defaultBackground: true）。
+  // P4: 仅 "true" 视为显式启用；"false"/缺失/非法值均归一化为 undefined（与默认 sync 同义），
+  // 避免下游 falsy 判断时 false 与 undefined 的语义歧义。
   const defaultBackgroundRaw = extractYamlField(yamlBlock, "defaultBackground");
-  const defaultBackground = defaultBackgroundRaw === "true";
+  const defaultBackground = defaultBackgroundRaw === "true" ? true : undefined;
 
   return {
     name,
@@ -116,7 +118,7 @@ export function parseAgentFrontmatter(content: string, fileName: string): Parsed
     skills,
     extSelectors,
     isolation,
-    defaultBackground: defaultBackgroundRaw ? defaultBackground : undefined,
+    defaultBackground,
   };
 }
 

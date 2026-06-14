@@ -109,6 +109,8 @@ export class SubagentRuntime {
     endedAt?: number;
   }> = [];
   private _mergeWindowTimer?: ReturnType<typeof setTimeout>;
+  /** P2: dispose 后拒绝新的通知（防止 stale pi 调用） */
+  private _disposed = false;
 
   /** FR-3.4: 事件总线，供 overlay 视图订阅实时刷新 */
   private readonly _changeListeners = new Set<() => void>();
@@ -293,8 +295,10 @@ export class SubagentRuntime {
     const ctx = this.buildContext();
     let finalOpts = opts;
 
-    // Live widget: 注册 running 状态
-    const widgetId = `run-${++this._widgetSeq}`;
+    // P1: _skipWidget 时跳过 widget 注册 + sync history 持久化（background 调用时用，
+    // 避免双重记录：background 有自己的 _bgRecords + history mode:"background"）
+    const skipWidget = opts._skipWidget === true;
+    const widgetId = skipWidget ? `run-skip-${++this._widgetSeq}` : `run-${++this._widgetSeq}`;
     const startTime = Date.now();
     const widgetState: WidgetAgentState = {
       id: widgetId,
@@ -303,8 +307,10 @@ export class SubagentRuntime {
       elapsedSeconds: 0,
       eventLog: [],
     };
-    this.widget.updateAgent(widgetState);
-    this.notifyChange();
+    if (!skipWidget) {
+      this.widget.updateAgent(widgetState);
+      this.notifyChange();
+    }
 
     // 拦截 onEvent 更新 widget（turns/tokens/activity + eventLog）
     const userOnEvent = opts.onEvent;
@@ -312,9 +318,11 @@ export class SubagentRuntime {
       ...opts,
       onEvent: (event) => {
         userOnEvent?.(event);
-        updateWidgetFromEvent(widgetState, event, startTime);
-        this.widget.updateAgent(widgetState);
-        this.notifyChange();
+        if (!skipWidget) {
+          updateWidgetFromEvent(widgetState, event, startTime);
+          this.widget.updateAgent(widgetState);
+          this.notifyChange();
+        }
       },
     };
 
@@ -323,7 +331,7 @@ export class SubagentRuntime {
     }
     try {
       const result = await runAgent(finalOpts, ctx);
-      // widget: 更新为完成状态
+      // widget: 更新为完成状态（P1: skipWidget 时跳过）
       widgetState.status = result.success ? "done" : "failed";
       widgetState.turns = result.turns;
       widgetState.totalTokens = result.usage
@@ -331,90 +339,98 @@ export class SubagentRuntime {
         : undefined;
       widgetState.summary = result.text.slice(0, WIDGET_SUMMARY_MAX);
       widgetState.finishedAt = Date.now();
-      this.widget.updateAgent(widgetState);
-      this.notifyChange();
-      // 5 秒后归档 + 清理
-      setTimeout(() => {
-        this.archiveSyncAgent({
-          id: widgetId,
-          agent: widgetState.agent,
-          status: widgetState.status as CompletedAgentRecord["status"],
-          eventLog: widgetState.eventLog ?? [],
-          turns: widgetState.turns,
-          totalTokens: widgetState.totalTokens,
-          result: undefined,
-          error: widgetState.summary,
-          startedAt: Date.now() - (widgetState.elapsedSeconds ?? 0) * 1000,
-          endedAt: widgetState.finishedAt,
-        });
-        this.widget.removeAgent(widgetId);
+      if (!skipWidget) {
+        this.widget.updateAgent(widgetState);
         this.notifyChange();
-      }, WIDGET_LINGER_MS);
+        // 5 秒后归档 + 清理
+        setTimeout(() => {
+          this.archiveSyncAgent({
+            id: widgetId,
+            agent: widgetState.agent,
+            status: widgetState.status as CompletedAgentRecord["status"],
+            eventLog: widgetState.eventLog ?? [],
+            turns: widgetState.turns,
+            totalTokens: widgetState.totalTokens,
+            result: undefined,
+            error: widgetState.summary,
+            startedAt: Date.now() - (widgetState.elapsedSeconds ?? 0) * 1000,
+            endedAt: widgetState.finishedAt,
+          });
+          this.widget.removeAgent(widgetId);
+          this.notifyChange();
+        }, WIDGET_LINGER_MS);
+      }
 
       for (const h of this.hooks) {
         if (h.afterRun) h.afterRun(result, finalOpts);
       }
-      // ADR-024 L1: 持久化执行记录（best-effort，不阻塞 return）
-      void this._history.append(
-        buildPersistedRecord({
-          id: widgetId,
-          agent: widgetState.agent,
-          status: widgetState.status as "done" | "failed",
-          mode: "sync",
-          task: finalOpts.task,
-          startedAt: startTime,
-          endedAt: widgetState.finishedAt,
-          turns: widgetState.turns,
-          totalTokens: widgetState.totalTokens,
-          resultText: result.text,
-          sessionFile: result.sessionFile ? path.basename(result.sessionFile) : undefined,
-          cwd: this.cwd,
-        }),
-      );
+      // ADR-024 L1: 持久化执行记录（P1: skipWidget 时跳过——background 有自己的 mode:"background" 持久化）
+      if (!skipWidget) {
+        void this._history.append(
+          buildPersistedRecord({
+            id: widgetId,
+            agent: widgetState.agent,
+            status: widgetState.status as "done" | "failed",
+            mode: "sync",
+            task: finalOpts.task,
+            startedAt: startTime,
+            endedAt: widgetState.finishedAt,
+            turns: widgetState.turns,
+            totalTokens: widgetState.totalTokens,
+            resultText: result.text,
+            sessionFile: result.sessionFile ? path.basename(result.sessionFile) : undefined,
+            cwd: this.cwd,
+          }),
+        );
+      }
       return result;
     } catch (err) {
       // FR-3.5 G-025: 用户主动 abort → cancelled；其他 → failed
       widgetState.status = finalOpts.signal?.aborted ? "cancelled" : "failed";
       widgetState.summary = err instanceof Error ? err.message : String(err);
       widgetState.finishedAt = Date.now();
-      this.widget.updateAgent(widgetState);
-      this.notifyChange();
-      setTimeout(() => {
-        this.archiveSyncAgent({
-          id: widgetId,
-          agent: widgetState.agent,
-          status: widgetState.status as CompletedAgentRecord["status"],
-          eventLog: widgetState.eventLog ?? [],
-          turns: widgetState.turns,
-          totalTokens: widgetState.totalTokens,
-          result: undefined,
-          error: widgetState.summary,
-          startedAt: Date.now() - (widgetState.elapsedSeconds ?? 0) * 1000,
-          endedAt: widgetState.finishedAt,
-        });
-        this.widget.removeAgent(widgetId);
+      if (!skipWidget) {
+        this.widget.updateAgent(widgetState);
         this.notifyChange();
-      }, WIDGET_LINGER_MS);
+        setTimeout(() => {
+          this.archiveSyncAgent({
+            id: widgetId,
+            agent: widgetState.agent,
+            status: widgetState.status as CompletedAgentRecord["status"],
+            eventLog: widgetState.eventLog ?? [],
+            turns: widgetState.turns,
+            totalTokens: widgetState.totalTokens,
+            result: undefined,
+            error: widgetState.summary,
+            startedAt: Date.now() - (widgetState.elapsedSeconds ?? 0) * 1000,
+            endedAt: widgetState.finishedAt,
+          });
+          this.widget.removeAgent(widgetId);
+          this.notifyChange();
+        }, WIDGET_LINGER_MS);
+      }
 
       for (const h of this.hooks) {
         if (h.onError) h.onError(err instanceof Error ? err : new Error(String(err)), finalOpts);
       }
-      // ADR-024 L1: 失败/取消也持久化记录
-      void this._history.append(
-        buildPersistedRecord({
-          id: widgetId,
-          agent: widgetState.agent,
-          status: widgetState.status as "failed" | "cancelled",
-          mode: "sync",
-          task: finalOpts.task,
-          startedAt: startTime,
-          endedAt: widgetState.finishedAt,
-          turns: widgetState.turns,
-          totalTokens: widgetState.totalTokens,
-          error: widgetState.summary,
-          cwd: this.cwd,
-        }),
-      );
+      // ADR-024 L1: 失败/取消也持久化记录（P1: skipWidget 时跳过——background 有自己的持久化）
+      if (!skipWidget) {
+        void this._history.append(
+          buildPersistedRecord({
+            id: widgetId,
+            agent: widgetState.agent,
+            status: widgetState.status as "failed" | "cancelled",
+            mode: "sync",
+            task: finalOpts.task,
+            startedAt: startTime,
+            endedAt: widgetState.finishedAt,
+            turns: widgetState.turns,
+            totalTokens: widgetState.totalTokens,
+            error: widgetState.summary,
+            cwd: this.cwd,
+          }),
+        );
+      }
       throw err;
     }
   }
@@ -442,11 +458,20 @@ export class SubagentRuntime {
     const controller = new AbortController();
     const record: BgRecord = { id, status: "running", startedAt: Date.now(), controller };
     this._bgRecords.set(id, record);
-    // FR-O5.9: FIFO 清理，上限 BG_RECORDS_MAX（已完成 record 保留供查询，超上限移除最旧）
+    // FR-O5.9: FIFO 清理，上限 BG_RECORDS_MAX。
+    // S4 修复：只淘汰非 running 的最旧 record——淘汰 running record 会导致
+    // cancelBackground(id) 找不到 record 而返回 false，正在执行的 agent 无法取消。
+    // 若全是 running（极端并发），不淘汰（宁可暂时超限也不丢失 cancel 能力）。
     while (this._bgRecords.size > BG_RECORDS_MAX) {
-      const oldestKey = this._bgRecords.keys().next().value;
-      if (oldestKey === undefined) break;
-      this._bgRecords.delete(oldestKey);
+      let evicted = false;
+      for (const [key, rec] of this._bgRecords) {
+        if (rec.status !== "running") {
+          this._bgRecords.delete(key);
+          evicted = true;
+          break;
+        }
+      }
+      if (!evicted) break; // 全是 running，停止淘汰
     }
     this.notifyChange();
 
@@ -462,6 +487,9 @@ export class SubagentRuntime {
       signal,
       // FR-O4.1: background 低优先级（1000），不抢占 sync（sync 传 0）
       priority: 1000,
+      // P1: background 跳过 runAgent 的 widget 注册 + sync history 持久化，
+      // 避免双重记录（background 有自己的 _bgRecords + mode:"background" history）。
+      _skipWidget: true,
       onEvent: (event: AgentEvent) => {
         userBgOnEvent?.(event);
         if (!record.eventLog) record.eventLog = [];
@@ -514,19 +542,24 @@ export class SubagentRuntime {
         this.notifyChange();
       })
       .catch((err: unknown) => {
-        record.status = "failed";
-        record.error = err instanceof Error ? err.message : String(err);
+        // S1 修复：区分 abort（用户 cancel）vs 真实错误。
+        // cancelBackground 先设 record.status="cancelled" 并 controller.abort()，
+        // runAgent catch 会 re-throw → 进入此处。若 signal.aborted 则保留 cancelled，
+        // 不覆盖为 failed（与 cancelBackground 的用户意图一致）。
+        const aborted = signal.aborted;
+        record.status = aborted ? "cancelled" : "failed";
+        record.error = aborted ? undefined : err instanceof Error ? err.message : String(err);
         record.endedAt = Date.now();
         record.agent = opts.agent ?? "default";
         delete record.controller;
         opts.onComplete?.(record);
         this.pi?.events.emit("subagents:bg:done", record);
-        // ADR-024 L1: background 失败持久化
+        // ADR-024 L1: background 失败/取消持久化
         void this._history.append(
           buildPersistedRecord({
             id,
             agent: record.agent,
-            status: "failed",
+            status: record.status as "failed" | "cancelled",
             mode: "background",
             task: opts.task,
             startedAt: record.startedAt,
@@ -535,10 +568,10 @@ export class SubagentRuntime {
             cwd: this.cwd,
           }),
         );
-        // FR-O1.1: 失败也回注（去重 + 合并窗口在 notifyBgCompletion 内处理）
+        // FR-O1.1: 失败/取消也回注（去重 + 合并窗口在 notifyBgCompletion 内处理）
         this.notifyBgCompletion({
           id: record.id,
-          status: "failed",
+          status: record.status as "failed" | "cancelled",
           agent: record.agent,
           error: record.error,
           startedAt: record.startedAt,
@@ -677,6 +710,8 @@ export class SubagentRuntime {
     endedAt?: number;
     startedAt: number;
   }): void {
+    // P2: dispose 后不再发通知（session 已结束，pi 会 stale）
+    if (this._disposed) return;
     const seen = getGlobalSeenMap("__subagents_bg_notify_seen__");
     const key = buildCompletionKey(
       { id: record.id, agent: record.agent, success: record.status === "done" },
@@ -754,8 +789,11 @@ export class SubagentRuntime {
   /**
    * FR-O1.5 G-029: 清理 runtime 资源。
    * session 结束时调用，清理合并窗口定时器并 flush 残留通知。
+   * P2: 设置 _disposed 标志，dispose 后 notifyBgCompletion 短路（stale pi 不调用）。
    */
   dispose(): void {
+    if (this._disposed) return; // 幂等
+    this._disposed = true;
     this.flushPendingNotifications();
     this.clearActiveView();
   }
@@ -781,61 +819,88 @@ export function updateWidgetFromEvent(
   const s = state;
   if (!s.eventLog) s.eventLog = [];
 
+  // S5: eventLog + _currentTurnText 的追加逻辑抽到 appendEventLogEntries，
+  // 供 updateRecordEventLog 复用（无需构造完整 WidgetAgentState）。
+  appendEventLogEntries(s, event);
+  if (event.type === "tool_start") {
+    s.activity = event.toolName ?? "working";
+  } else if (event.type === "tool_end") {
+    s.activity = "thinking…";
+  } else if (event.type === "turn_end") {
+    s.turns = (s.turns ?? 0) + 1;
+  } else if (event.type === "message_end" && event.usage) {
+    s.totalTokens = (s.totalTokens ?? 0) + event.usage.input + event.usage.output + event.usage.cacheRead + event.usage.cacheWrite;
+  }
+
+  // Ring buffer 已在 appendEventLogEntries 内处理
+  s.elapsedSeconds = Math.floor((Date.now() - startTime) / MS_PER_SECOND);
+}
+
+/**
+ * S5: eventLog 追加的最小契约——只需 eventLog 数组 + _currentTurnText 累积器。
+ * WidgetAgentState 和 BgRecord.eventLog 都满足此形状，避免 as unknown as 断言。
+ */
+interface EventLogSink {
+  eventLog?: AgentEventLogEntry[];
+  _currentTurnText?: string;
+}
+
+/**
+ * S5: 从 updateWidgetFromEvent 抽取的纯 eventLog 追加逻辑（tool_start/tool_end/
+ * text_delta/turn_end 四种事件类型）。直接 mutate sink.eventLog（push + ring buffer）。
+ * 调用方（updateWidgetFromEvent / updateRecordEventLog）负责各自的附带字段更新。
+ */
+function appendEventLogEntries(sink: EventLogSink, event: EventLogSinkEvent): void {
+  if (!sink.eventLog) sink.eventLog = [];
+  const log = sink.eventLog;
   switch (event.type) {
     case "tool_start": {
       const label = extractLabelFromArgs(event.toolName ?? "working", event.args);
-      s.activity = event.toolName ?? "working";
-      s.eventLog.push({ type: "tool_start", label, ts: Date.now(), status: "running" });
+      log.push({ type: "tool_start", label, ts: Date.now(), status: "running" });
       break;
     }
     case "tool_end": {
       const label = extractLabelFromArgs(event.toolName ?? "working", event.args);
-      s.activity = "thinking…";
-      s.eventLog.push({ type: "tool_end", label, ts: Date.now(), status: event.isError ? "failed" : "done" });
+      log.push({ type: "tool_end", label, ts: Date.now(), status: event.isError ? "failed" : "done" });
       break;
     }
     case "text_delta": {
-      s._currentTurnText = (s._currentTurnText ?? "") + (event.delta ?? "");
+      sink._currentTurnText = (sink._currentTurnText ?? "") + (event.delta ?? "");
       break;
     }
     case "turn_end": {
-      const summary = (s._currentTurnText ?? "").slice(0, TURN_SUMMARY_MAX);
-      s.eventLog.push({ type: "turn_end", label: summary, ts: Date.now() });
-      s._currentTurnText = "";
-      s.turns = (s.turns ?? 0) + 1;
-      break;
-    }
-    case "message_end": {
-      if (event.usage) {
-        s.totalTokens = (s.totalTokens ?? 0) + event.usage.input + event.usage.output + event.usage.cacheRead + event.usage.cacheWrite;
-      }
+      const summary = (sink._currentTurnText ?? "").slice(0, TURN_SUMMARY_MAX);
+      log.push({ type: "turn_end", label: summary, ts: Date.now() });
+      sink._currentTurnText = "";
       break;
     }
     default:
       break;
   }
-
   // Ring buffer: 超上限移除最旧
-  while (s.eventLog.length > MAX_EVENT_LOG_ENTRIES) {
-    s.eventLog.shift();
+  while (log.length > MAX_EVENT_LOG_ENTRIES) {
+    log.shift();
   }
-  s.elapsedSeconds = Math.floor((Date.now() - startTime) / MS_PER_SECOND);
 }
 
+/** S5: appendEventLogEntries 接受的事件形状 */
+type EventLogSinkEvent = {
+  type: string;
+  toolName?: string;
+  args?: unknown;
+  delta?: string;
+  isError?: boolean;
+};
+
 /**
- * G-005 修复：直接更新 BgRecord.eventLog（复用 updateWidgetFromEvent 的 eventLog 追加逻辑）。
- *
- * 从 updateWidgetFromEvent 抽取的纯 eventLog 操作：传入的 eventLog 数组被直接 mutate
- * （push + ring buffer），调用方持有同一引用即可读到结果。与 widget 反查（listAgents
- * 找 startsWith("run-")）相比，本方式通过闭包捕获 record，每个 background 的 eventLog
- * 互不串号。
+ * G-005 修复：直接更新 BgRecord.eventLog（S5 重构：复用 appendEventLogEntries，
+ * 无需 as unknown as WidgetAgentState 断言）。传入的 eventLog 数组被直接 mutate，
+ * 调用方持有同一引用即可读到结果。与 widget 反查（listAgents 找 startsWith("run-")）
+ * 相比，本方式通过闭包捕获 record，每个 background 的 eventLog 互不串号。
  */
-function updateRecordEventLog(eventLog: AgentEventLogEntry[], event: AgentEvent, startTime: number): void {
-  // 构造最小 state：只需 eventLog（直接引用）+ _currentTurnText（text_delta 累积用）。
-  // 其余字段（turns/tokens/activity/elapsedSeconds）会被 updateWidgetFromEvent 写入，
-  // 但 BgRecord 不需要它们，写完即弃。
-  const state = { eventLog, _currentTurnText: "" } as unknown as WidgetAgentState;
-  updateWidgetFromEvent(state, event, startTime);
+function updateRecordEventLog(eventLog: AgentEventLogEntry[], event: AgentEvent, _startTime: number): void {
+  const sink: EventLogSink = { eventLog, _currentTurnText: "" };
+  appendEventLogEntries(sink, event as EventLogSinkEvent);
 }
 
 /** ms → s 换算 */

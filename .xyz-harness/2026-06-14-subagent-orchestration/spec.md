@@ -1041,3 +1041,18 @@ FR-O6（编排 TUI）经独立追踪发现 4 个结构性问题 + 8 个细节 ga
 - G-016 triggerTurn 时序 → 仍开放（Q-A）
 - G-017 runId 模型 → **单 BgRecord 聚合**（FR-O5.4）
 - G-018 BgRecord 清理 → FIFO 上限 50（FR-O5.9）
+
+---
+
+## 实现偏差说明（P0 实施后补充）
+
+P0 实施过程中产生的、与 spec 原文描述的偏差，统一记录于此。每条含决策 + 原因。
+
+| 编号 | 偏差 | 决策 | 原因 |
+|------|------|------|------|
+| D-P0-01 | FR-O5.9 BgRecord FIFO 淘汰改为**跳过 running record**（spec 原文只说"FIFO 淘汰最旧"） | running record 不淘汰；全是 running 时宁可暂时超限也不淘汰 | 淘汰 running record 会导致 `cancelBackground(id)` 找不到 record 返回 false，正在执行的 agent 无法取消（资源泄漏 + 不可控）。代码审查 S4 发现。 |
+| D-P0-02 | FR-O2.1 `defaultBackground: false` frontmatter 值**归一化为 undefined**（与缺失同义） | 解析器仅 `"true"` → `true`，其余（`"false"`/缺失/非法值）→ `undefined` | 避免下游 falsy 判断时 `false` 与 `undefined` 的语义歧义。下游 `agentConfig?.defaultBackground ? false : true` 用 falsy 判断，两者行为一致，归一化消除字段存在性的歧义。代码审查 P4。 |
+| D-P0-03 | FR-O1.5 G-029 `dispose()` 实现了**幂等 + `_disposed` 标志**（spec 只说"清理定时器并 flush"） | dispose 设 `_disposed = true`，后续 `notifyBgCompletion` 短路；多次 dispose 幂等 | 防止 dispose 后 detached background 完成时仍调 `sendMessage`（对 stale pi）。代码审查 P2。 |
+| D-P0-04 | startBackground 调 runAgent 时传 `_skipWidget: true`（spec 未描述 runAgent 的内部标志） | runAgent 新增可选 `_skipWidget` 字段，background 调用时跳过 widget 注册 + sync history 持久化 | 避免双重记录：background 有自己的 `_bgRecords` + `mode:"background"` history 持久化；runAgent 的 widget（run-N）+ `mode:"sync"` history 会导致同一任务双处显示 + history 双写（id 不同）。代码审查 P1。 |
+| D-P0-05 | startBackground 的 `.catch` 区分 abort vs 真实错误（spec FR-O1 未明确要求） | `.catch` 判断 `signal.aborted` → status="cancelled"，否则 "failed" | 修复既存 bug：cancelBackground 先设 cancelled，abort 触发 runAgent 抛错进 `.catch` 会覆盖为 failed，与用户意图矛盾。代码审查 S1。 |
+| D-P0-06 | V3 worktree 测试改用**独立 homeDir 子目录**（spec 未涉及测试实现） | `createWorktree` 新增可选 `baseDir` 参数（默认 os.tmpdir()）；run-agent.ts 传 `ctx.homeDir`；V3 测试用独立 `pi-v3-home-*` 目录 | 根治 V3 worktree 测试在全量并行时的 flaky（共享 tmpdir baseline 污染 + git worktree 锁竞争）。移除 vitest 全局 retry。代码审查 P5。 |

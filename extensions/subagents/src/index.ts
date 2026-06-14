@@ -56,6 +56,9 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
   // session_start 补跑，此处只做 cwd 无关的 tmpdir 扫描。
   // kill -9 / 断电不走此路径，靠下次 session_start 的 pruneWorktrees(cwd) 兜底。
   pi.on("session_shutdown", (_event: SessionShutdownEvent) => {
+    // FR-O1.5 G-029: flush 合并窗口中 pending 的 background 完成通知，
+    // 清理定时器。否则 session quit/reload 时已入队但未 flush 的通知会静默丢失。
+    getRuntime()?.dispose();
     cleanupOrphanedWorktreeDirs();
   });
 }

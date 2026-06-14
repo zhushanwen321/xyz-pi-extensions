@@ -287,4 +287,63 @@ describe("subagent tool execute()", () => {
     const tool = captureTool();
     await expect(tool.execute("call-8", { task: "x" })).rejects.toThrow(/not initialized/i);
   });
+
+  // ── FR-O2.2: effectiveWait 三档判定（端到端，B1）──────────
+  it("FR-O2: agent with defaultBackground:true + no wait → startBackground called, runAgent not", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async () => successResult()),
+      startBackground: vi.fn(() => ({ id: "bg-1", status: "running" as const })),
+      getAgentConfig: vi.fn(() => ({ name: "researcher", systemPrompt: "", defaultBackground: true, source: "builtin" })),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    await tool.execute("call-bg-1", { task: "research X", agent: "researcher" });
+
+    expect(mockRt.startBackground).toHaveBeenCalledTimes(1);
+    expect(mockRt.runAgent).not.toHaveBeenCalled();
+  });
+
+  it("FR-O2: agent with defaultBackground:true + explicit wait:true → runAgent called (sync)", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async () => successResult()),
+      startBackground: vi.fn(() => ({ id: "bg-2", status: "running" as const })),
+      getAgentConfig: vi.fn(() => ({ name: "researcher", systemPrompt: "", defaultBackground: true, source: "builtin" })),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    await tool.execute("call-sync-1", { task: "research X", agent: "researcher", wait: true });
+
+    expect(mockRt.runAgent).toHaveBeenCalledTimes(1);
+    expect(mockRt.startBackground).not.toHaveBeenCalled();
+  });
+
+  it("FR-O2: agent without defaultBackground + no wait → defaults to sync (runAgent)", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async () => successResult()),
+      startBackground: vi.fn(() => ({ id: "bg-3", status: "running" as const })),
+      getAgentConfig: vi.fn(() => ({ name: "worker", systemPrompt: "", source: "builtin" })),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    await tool.execute("call-sync-2", { task: "do work", agent: "worker" });
+
+    expect(mockRt.runAgent).toHaveBeenCalledTimes(1);
+    expect(mockRt.startBackground).not.toHaveBeenCalled();
+  });
+
+  it("FR-O4: sync mode passes priority:0 to runAgent", async () => {
+    const runAgentMock = vi.fn(async () => successResult());
+    const mockRt = makeMockRuntime({ runAgent: runAgentMock });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    await tool.execute("call-prio", { task: "do work" });
+
+    expect(runAgentMock).toHaveBeenCalledTimes(1);
+    const passedOpts = runAgentMock.mock.calls[0]![0] as { priority?: number };
+    expect(passedOpts.priority).toBe(0);
+  });
 });

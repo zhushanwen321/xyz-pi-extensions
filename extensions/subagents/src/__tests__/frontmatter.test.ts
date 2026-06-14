@@ -79,4 +79,44 @@ this has no closing delim`;
     const result = parseAgentFrontmatter(md, "broken.md");
     expect(result.name).toBe("broken");
   });
+
+  // ── FR-O2.1 / P4: defaultBackground 解析 ──
+  it("parses defaultBackground: true", () => {
+    const md = `---
+name: researcher
+defaultBackground: true
+---
+prompt body`;
+    const result = parseAgentFrontmatter(md, "researcher.md");
+    expect(result.defaultBackground).toBe(true);
+  });
+
+  it("normalizes defaultBackground: false to undefined (P4)", () => {
+    const md = `---
+name: worker
+defaultBackground: false
+---
+prompt body`;
+    const result = parseAgentFrontmatter(md, "worker.md");
+    expect(result.defaultBackground).toBeUndefined();
+  });
+
+  it("normalizes missing defaultBackground to undefined", () => {
+    const md = `---
+name: worker
+---
+prompt body`;
+    const result = parseAgentFrontmatter(md, "worker.md");
+    expect(result.defaultBackground).toBeUndefined();
+  });
+
+  it("normalizes illegal defaultBackground value to undefined", () => {
+    const md = `---
+name: worker
+defaultBackground: yes
+---
+prompt body`;
+    const result = parseAgentFrontmatter(md, "worker.md");
+    expect(result.defaultBackground).toBeUndefined();
+  });
 });
