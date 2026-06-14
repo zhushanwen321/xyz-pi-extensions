@@ -23,7 +23,7 @@ import { getRuntime } from "../runtime.ts";
 import { updateWidgetFromEvent } from "../event-log-builder.ts";
 import { formatTokens } from "../tui/format.ts";
 import type { WidgetAgentState } from "../tui/agent-widget.ts";
-import { SubagentResultComponent, type SubagentToolDetails } from "../tui/subagent-render.ts";
+import { renderSubagentCall, SubagentResultComponent, type SubagentToolDetails } from "../tui/subagent-render.ts";
 import type { AgentEvent, AgentEventLogEntry } from "../types.ts";
 
 /** ms to seconds conversion */
@@ -183,6 +183,15 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
     parameters: SubagentParams,
     // FR-2.4: 自己控制背景色（running/done/failed 不同 theme token），不使用 Pi 默认 Box。
     renderShell: "self",
+
+    // ── renderCall：隐藏 Pi 默认标题行，标题由 renderResult 统一渲染进背景 block ──
+    renderCall(
+      _args: unknown,
+      theme: Theme,
+      context: { state: SubagentToolState; invalidate(): void },
+    ) {
+      return renderSubagentCall(_args, theme, context);
+    },
 
     // ── renderResult：对话流背景色 block ──────────────────────
     renderResult(

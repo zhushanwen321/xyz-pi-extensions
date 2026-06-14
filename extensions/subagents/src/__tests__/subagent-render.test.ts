@@ -25,8 +25,9 @@ function makeDetails(overrides: Partial<SubagentToolDetails> = {}): SubagentTool
 }
 
 describe("buildRenderLines — 压缩视图（6 行）", () => {
-  it("第1行：spinner + agent + model + thinking", () => {
+  it("第1行：spinner + subagent + agent + model + thinking", () => {
     const lines = buildRenderLines(makeDetails({ agent: "reviewer", model: "zhipu/glm-4.6", thinkingLevel: "high" }), 80, passthroughTheme);
+    expect(lines[0]).toContain("subagent");
     expect(lines[0]).toContain("reviewer");
     expect(lines[0]).toContain("zhipu/glm-4.6");
     expect(lines[0]).toContain("thinking: high");
@@ -45,6 +46,18 @@ describe("buildRenderLines — 压缩视图（6 行）", () => {
   it("第1行：failed 显示 ✗", () => {
     const lines = buildRenderLines(makeDetails({ status: "failed" }), 80, passthroughTheme);
     expect(lines[0]).toContain("✗");
+  });
+
+  it("滚动区长 label 截断到约 50 字符", () => {
+    const longLabel = "a".repeat(80);
+    const lines = buildRenderLines(makeDetails({
+      eventLog: [{ type: "text_output", label: longLabel, ts: 0 }],
+    }), 80, passthroughTheme);
+    const scrollLine = lines.find((l) => l.includes("a".repeat(10)));
+    expect(scrollLine).toBeDefined();
+    // prefix "├─ " 占 4 列，截断后 label 部分应 <= 50
+    const labelPart = scrollLine!.replace("├─ ", "").replace("...", "");
+    expect(labelPart.length).toBeLessThanOrEqual(50);
   });
 
   it("滚动区行带 ├─ 连接线", () => {
