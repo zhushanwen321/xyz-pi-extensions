@@ -9,7 +9,7 @@
 // 工具名 `subagent` 已在 EXCLUDED_TOOL_NAMES 预留（FR-6.2），子 agent 不会递归调用。
 // 参考 tintinweb/pi-subagents 的 subagent tool 设计。
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 import { getRuntime } from "../runtime.ts";
@@ -47,6 +47,9 @@ const SubagentParams = Type.Object({
  * 由扩展工厂（src/index.ts）调用。
  */
 export function registerSubagentTool(pi: ExtensionAPI): void {
+  // Cast: the tool shape is correct, but the subagents SDK type stub differs from
+  // the real SDK types resolved when workflow compiles this source. Casting avoids
+  // cross-tsconfig ToolDefinition generic inference mismatch.
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
@@ -67,7 +70,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       params: { task: string; agent?: string; wait?: boolean; backgroundId?: string },
       signal: AbortSignal | undefined,
       _onUpdate: unknown,
-      _ctx: ExtensionContext,
+      _ctx: unknown,
     ) {
       const rt = getRuntime();
       if (!rt) {
@@ -140,5 +143,5 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         },
       };
     },
-  });
+  } as never);
 }
