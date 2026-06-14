@@ -16,8 +16,9 @@ declare module "@mariozechner/pi-coding-agent" {
 		cwd: string;
 		sessionManager: ReadonlySessionManager;
 		modelRegistry: {
-			getAvailable(): any[];
-			find(provider: string, modelId: string): any | undefined;
+			getAvailable(): Array<{ id: string; provider: string; name: string; reasoning: boolean; thinkingLevelMap?: Record<string, string | null>; contextWindow?: number }>;
+			find(provider: string, modelId: string): { id: string; provider: string; name: string; reasoning: boolean; thinkingLevelMap?: Record<string, string | null>; contextWindow?: number } | undefined;
+			hasConfiguredAuth(model: unknown): boolean;
 		};
 		getContextUsage(): ContextUsage | undefined;
 		hasUI: boolean;

@@ -28,8 +28,8 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     const agentDir = path.join(homeDir, ".pi", "agent");
 
     const rt = existing ?? new SubagentRuntime({ cwd, homeDir, agentDir });
-    rt.injectPi(pi as never);
-    rt.injectModelRegistry(ctx.modelRegistry as never);
+    rt.injectPi(pi);
+    rt.injectModelRegistry(ctx.modelRegistry);
 
     // widget UI 不再附加：subagent 进度通过 renderResult 渲染在对话流中。
     // widget tracker 仍保留（供 /subagents list 获取 running agents 数据）。

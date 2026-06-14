@@ -1,13 +1,18 @@
 // src/resolution/model-resolver.ts
-import type { AgentConfig, ResolvedModel, SessionModelState,SubagentsGlobalConfig } from "../types.ts";
+import type { AgentConfig, ModelInfo, ResolvedModel, SessionModelState, SubagentsGlobalConfig } from "../types.ts";
 import { mergeConfig } from "./config-merger.ts";
 
-/** ModelRegistry 的最小接口（duck-typed，避免强耦合 SDK 类型） */
+/** ModelRegistry 的最小接口（duck-typed，避免强耦合 SDK 类型）。
+ *
+ * 返回类型与 `ModelInfo` 对齐（含 `id` 字段）——真实 SDK 的 `ModelRegistry`
+ * 返回 `Model<Api>`（结构超集，可结构子类型赋值给 `ModelInfo`）。
+ * 此前 find/getAvailable 的返回类型遗漏了 `id`，导致下游 ResolvedModel.model
+ * 赋值需要 `as never` 绕过类型检查。 */
 export interface ModelRegistryLike {
-  find(provider: string, modelId: string): { provider: string; name: string; reasoning: boolean; thinkingLevelMap?: Record<string, string | null>; contextWindow?: number } | undefined;
+  find(provider: string, modelId: string): ModelInfo | undefined;
   hasConfiguredAuth(model: unknown): boolean;
   /** 返回所有已配置 auth 的可用模型（config-wizard 用） */
-  getAvailable(): Array<{ provider: string; name: string; reasoning: boolean; thinkingLevelMap?: Record<string, string | null>; contextWindow?: number }>;
+  getAvailable(): ModelInfo[];
 }
 
 /** Fuzzy 匹配打分常量 */
@@ -84,7 +89,7 @@ export function resolveModelForAgent(opts: {
 
   for (const candidate of candidates) {
     const [provider, modelId] = parseModelString(candidate.modelStr);
-    let model: ReturnType<ModelRegistryLike["getAvailable"]>[number] | undefined;
+    let model: ModelInfo | undefined;
 
     if (provider && modelId) {
       model = modelRegistry.find(provider, modelId);
@@ -100,7 +105,7 @@ export function resolveModelForAgent(opts: {
       continue;
     }
     return {
-      model: model as never,
+      model,
       thinkingLevel: resolveThinkingLevel(model, candidate.thinkingLevel),
       source: candidate.source,
     };
@@ -122,7 +127,7 @@ export function resolveModelForAgent(opts: {
 export function fuzzyMatchModel(
   query: string,
   modelRegistry: ModelRegistryLike,
-): { provider: string; name: string; reasoning: boolean; thinkingLevelMap?: Record<string, string | null>; contextWindow?: number } | undefined {
+): ModelInfo | undefined {
   const q = query.toLowerCase().trim();
   if (!q) return undefined;
   const available = modelRegistry.getAvailable();

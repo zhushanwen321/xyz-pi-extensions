@@ -16,7 +16,7 @@
 //   - failed 时：toolErrorBg（eventLog + error）
 //   eventLog 不带 ├─ 前缀，直接显示 label + icon。
 
-import type { ExtensionAPI, Theme } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI, Theme } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 import { getRuntime } from "../runtime.ts";
@@ -90,7 +90,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 
     // ── renderResult：对话流背景色 block ──────────────────────
     renderResult(
-      result: { content: Array<{ type: string; text?: string }>; details?: unknown },
+      result: AgentToolResult<SubagentToolDetails>,
       _options: { expanded: boolean; isPartial: boolean },
       theme: Theme,
     ) {
@@ -107,7 +107,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       _toolCallId: string,
       params: { task?: string; agent?: string; wait?: boolean; backgroundId?: string },
       signal: AbortSignal | undefined,
-      onUpdate?: (partialResult: { content: Array<{ type: string; text?: string }>; details: SubagentToolDetails }) => void,
+      onUpdate?: (partialResult: AgentToolResult<SubagentToolDetails>) => void,
     ) {
       const rt = getRuntime();
       if (!rt) {
@@ -214,7 +214,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 
       const pushUpdate = (status: SubagentToolDetails["status"]) => {
         onUpdate?.({
-          content: [{ type: "text", text: formatProgressText(eventLog, turns, totalTokens, startTime) }],
+          content: [{ type: "text" as const, text: formatProgressText(eventLog, turns, totalTokens, startTime) }],
           details: buildDetails(status),
         });
       };
@@ -272,7 +272,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         details: finalDetails,
       };
     },
-  } as never);
+  });
 }
 
 // ============================================================

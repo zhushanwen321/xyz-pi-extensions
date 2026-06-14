@@ -27,7 +27,7 @@ export function registerSubagentsCommand(pi: ExtensionAPI): void {
         }
         const directId = args[1];
         try {
-          await createSubagentsView(rt, ctx.ui.theme as never, ctx as never, directId);
+          await createSubagentsView(rt, ctx.ui.theme, ctx, directId);
         } catch (err) {
           ctx.ui.notify(err instanceof Error ? err.message : String(err), "error");
         }
@@ -51,7 +51,7 @@ export function registerSubagentsCommand(pi: ExtensionAPI): void {
         wizardArgs,
         rt.globalConfig,
         process.env.HOME || process.env.USERPROFILE || ctx.cwd,
-        ctx.modelRegistry as never,
+        ctx.modelRegistry,
         {
           // 真实 YOLO 切换：调 runtime.toggleYolo()（mutate sessionState + persist via appendEntry）
           onToggleYolo: () => rt.toggleYolo(),
