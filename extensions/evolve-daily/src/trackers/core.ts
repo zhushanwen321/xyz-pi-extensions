@@ -28,6 +28,8 @@ import {
   type TrackerRuntimeState,
 } from "./types";
 
+import { isValidSkillName } from "./skill-registry";
+
 // ── Pi SDK custom event API type ──────────────────────
 
 type PiOnAny = {
@@ -70,11 +72,22 @@ export interface TrackerConfig<TMeta = Record<string, unknown>> {
   description: string;
   promptSnippet: string;
   promptGuidelines: string[];
-  triggerEvent: string;
-  triggerMatch: (
+
+  /** 被动触发事件（可选）。不配则不注册被动监听，创建由 triggerTool 驱动 */
+  triggerEvent?: string;
+  triggerMatch?: (
     event: unknown,
     ctx: ExtensionContext,
   ) => { name: string; metadata: TMeta; summary: string } | null;
+
+  /** 主动声明 tool 配置（可选）。配了则在 tool execute 中支持 start action */
+  triggerTool?: {
+    /** 从 tool params 提取 match 信息（name/metadata/summary） */
+    extractMeta: (
+      params: Record<string, unknown>,
+    ) => { name: string; metadata: TMeta; summary: string };
+  };
+
   steering: {
     onCreate: (item: TrackedItem<TMeta>) => string;
     onRemind: (item: TrackedItem<TMeta>, turnsSinceLoad: number) => string;
@@ -87,6 +100,8 @@ export interface TrackerConfig<TMeta = Record<string, unknown>> {
   messageTypes: string[];
   remindInterval: number;
   errorThreshold: number;
+  /** 超时 turn 数，非终态 item 超过此值自动转 abandoned */
+  abandonThreshold: number;
   renderResult?: (
     details: TrackerDetails<TMeta>,
     options: { expanded?: boolean },
@@ -233,6 +248,34 @@ export function createTracker<TMeta>(
 
   // ── 状态恢复 ──────────────────────────────────────
 
+  // ── 创建 item（triggerEvent handler 和 tool start action 共用）──
+
+  function createItem(
+    match: { name: string; metadata: TMeta; summary: string },
+    ctx: ExtensionContext,
+  ): TrackedItem<TMeta> {
+    const turnIndex = state.currentTurnIndex;
+    const newItem: TrackedItem<TMeta> = {
+      id: state.nextId,
+      name: match.name,
+      status: "loaded",
+      errorCount: 0,
+      loadedAtTurn: turnIndex,
+      lastRemindAtTurn: -1,
+      detail: null,
+      metadata: match.metadata,
+      anchor: {
+        triggerType: config.triggerEvent ?? "tool-start",
+        triggerTurn: turnIndex,
+        triggerSummary: match.summary,
+      },
+    };
+    state.items.push(newItem);
+    state.nextId++;
+    persistState(ctx);
+    return newItem;
+  }
+
   function reconstructState(ctx: ExtensionContext): void {
     let entries: SessionEntry[];
     try {
@@ -269,10 +312,6 @@ export function createTracker<TMeta>(
     }
 
     state = deserializeState<TMeta>(latestData);
-    // 过滤终态 item
-    state.items = state.items.filter(
-      (item) => !isTerminalStatus(item.status),
-    );
     // 恢复 currentTurnIndex
     let turnCount = 0;
     for (const entry of entries) {
@@ -281,6 +320,20 @@ export function createTracker<TMeta>(
       }
     }
     state.currentTurnIndex = turnCount;
+
+    // 检查超时 item（compact/reload 后立即清理，不等下一个 turn_end）
+    for (const item of state.items) {
+      if (isTerminalStatus(item.status)) continue;
+      const turnsSinceLoad = state.currentTurnIndex - item.loadedAtTurn;
+      if (turnsSinceLoad >= config.abandonThreshold) {
+        item.status = "abandoned";
+      }
+    }
+
+    // 过滤终态 item（abandoned 也是终态，会被过滤）
+    state.items = state.items.filter(
+      (item) => !isTerminalStatus(item.status),
+    );
   }
 
   // ── Event: session_start / session_tree ────────────
@@ -303,48 +356,30 @@ export function createTracker<TMeta>(
   pi.on("session_start", handleSessionRestore);
   pi.on("session_tree", handleSessionRestore);
 
-  // ── Event: triggerEvent (e.g. tool_call) ───────────
+  // ── Event: triggerEvent（仅当配置了被动触发时才注册）──
 
-  // Pi 事件系统支持任意字符串事件名，但类型定义不完整（与 session_compact 同）
-  (pi as unknown as PiOnAny).on(
-    config.triggerEvent,
-    async (event, nextCtx) => {
-      const ctx = nextCtx as ExtensionContext;
-      const match = config.triggerMatch(event, ctx);
-      if (!match) return;
+  if (config.triggerEvent && config.triggerMatch) {
+    (pi as unknown as PiOnAny).on(
+      config.triggerEvent,
+      async (event, nextCtx) => {
+        const ctx = nextCtx as ExtensionContext;
+        const match = config.triggerMatch!(event, ctx);
+        if (!match) return;
 
-      // 去重：非终态同名 item 存在时不重复创建
-      const existing = state.items.find(
-        (item) =>
-          item.name === match.name && !isTerminalStatus(item.status),
-      );
-      if (existing) return;
+        // 被动模式下去重：非终态同名 item 存在时不重复创建
+        const existing = state.items.find(
+          (item) =>
+            item.name === match.name && !isTerminalStatus(item.status),
+        );
+        if (existing) return;
 
-      const turnIndex = state.currentTurnIndex;
-      const newItem: TrackedItem<TMeta> = {
-        id: state.nextId,
-        name: match.name,
-        status: "loaded",
-        errorCount: 0,
-        loadedAtTurn: turnIndex,
-        lastRemindAtTurn: -1,
-        detail: null,
-        metadata: match.metadata,
-        anchor: {
-          triggerType: config.triggerEvent,
-          triggerTurn: turnIndex,
-          triggerSummary: match.summary,
-        },
-      };
-      state.items.push(newItem);
-      state.nextId++;
-
-      persistState(ctx);
-      await pi.sendUserMessage(config.steering.onCreate(newItem), {
-        deliverAs: "steer",
-      });
-    },
-  );
+        const newItem = createItem(match, ctx);
+        await pi.sendUserMessage(config.steering.onCreate(newItem), {
+          deliverAs: "steer",
+        });
+      },
+    );
+  }
 
   // ── Event: turn_end（remind 检查）─────────────────
 
@@ -361,6 +396,15 @@ export function createTracker<TMeta>(
       }
 
       let needsPersist = false;
+      // abandoned 检查（先于 remind——即将 abandon 的 item 不再发 remind）
+      for (const item of state.items) {
+        if (isTerminalStatus(item.status)) continue;
+        const turnsSinceLoad = state.currentTurnIndex - item.loadedAtTurn;
+        if (turnsSinceLoad >= config.abandonThreshold) {
+          item.status = "abandoned";
+          needsPersist = true;
+        }
+      }
       for (const item of state.items) {
         if (isTerminalStatus(item.status)) continue;
 
@@ -445,6 +489,44 @@ export function createTracker<TMeta>(
       _onUpdate: unknown,
       ctx: ExtensionContext,
     ): Promise<ToolResult> {
+      // ── start ──
+      if (params.action === "start") {
+        if (!config.triggerTool) {
+          return {
+            content: [{ type: "text" as const, text: "start action not supported by this tracker" }],
+            details: undefined,
+            isError: true,
+          };
+        }
+        const skillName = params.name as string | undefined;
+        if (!skillName) {
+          return { content: [{ type: "text" as const, text: "start requires name parameter" }], details: undefined, isError: true };
+        }
+
+        // name 校验（含 system prompt fallback）
+        const getPrompt = (ctx as { getSystemPrompt?: () => string }).getSystemPrompt;
+        const systemPrompt = typeof getPrompt === "function" ? getPrompt() : undefined;
+        if (!isValidSkillName(skillName, systemPrompt)) {
+          return { content: [{ type: "text" as const, text: `skill "${skillName}" not found` }], details: undefined, isError: true };
+        }
+
+        const match = config.triggerTool.extractMeta(params);
+        const newItem = createItem(match, ctx);
+        await pi.sendUserMessage(config.steering.onCreate(newItem), {
+          deliverAs: "steer",
+        });
+
+        return {
+          content: [{ type: "text" as const, text: `Tracking started: #${newItem.id} "${newItem.name}". Call ${config.toolName}(action=update, id=${newItem.id}, status=completed) when done.` }],
+          details: {
+            action: "start",
+            items: [...state.items],
+            trackerName: config.name,
+            createdId: newItem.id,
+          } satisfies TrackerDetails<TMeta>,
+        };
+      }
+
       // ── list ──
       if (params.action === "list") {
         return {

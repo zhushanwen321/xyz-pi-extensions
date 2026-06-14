@@ -1,0 +1,175 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "integration",
+      "title": "createTracker 有条件注册事件 + tool + createItem",
+      "description": "验证 core.ts 有条件注册 triggerEvent、注册 turn_end/session_start/session_tree/before_agent_start handler、registerTool、createItem 内部函数存在",
+      "steps": [
+        "Read core.ts source",
+        "Assert 'if (config.triggerEvent' exists (conditional registration)",
+        "Assert turn_end/session_start/session_tree/before_agent_start handlers exist",
+        "Assert pi.registerTool + TrackerParams + createItem exist"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "integration",
+      "title": "use_skill(start) 的 name 校验逻辑存在",
+      "description": "验证 core.ts 在 start action 中调用 isValidSkillName 并返回 'not found' 错误",
+      "steps": [
+        "Read core.ts source",
+        "Assert isValidSkillName call exists in start handler",
+        "Assert 'not found' error message exists"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "integration",
+      "title": "skill-execution.ts 不含被动监听代码",
+      "description": "验证 triggerEvent/triggerMatch/extractSkillName/isPathInCwd 已删除，triggerTool 已配置",
+      "steps": [
+        "Read skill-execution.ts source",
+        "Assert triggerEvent/triggerMatch/extractSkillName/isPathInCwd removed",
+        "Assert triggerTool configured"
+      ]
+    },
+    {
+      "id": "TC-2-03",
+      "type": "integration",
+      "title": "skill-registry.ts 能扫描 scoped npm packages",
+      "description": "验证 scanNpmBundledSkills 处理了 @scope/pkg/skills 两级目录结构，并在开发机上验证可发现 scoped skills",
+      "steps": [
+        "Read skill-registry.ts source",
+        "Assert scoped package handling exists (startsWith('@') + scoped comment)",
+        "Verify scoped skills discoverable on dev machine"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "integration",
+      "title": "loaded→completed 转换成功",
+      "steps": [
+        "Call canTransition('loaded', 'completed')",
+        "Assert returns true"
+      ]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "integration",
+      "title": "终态不可转换",
+      "description": "completed/recorded/cancelled/abandoned 都不可转出",
+      "steps": [
+        "Call canTransition('completed', 'error')",
+        "Assert false",
+        "Call canTransition('recorded', 'loaded')",
+        "Assert false",
+        "Call canTransition('cancelled', 'completed')",
+        "Assert false",
+        "Call canTransition('abandoned', 'completed')",
+        "Assert false"
+      ]
+    },
+    {
+      "id": "TC-3-03",
+      "type": "integration",
+      "title": "cancelled 可从 loaded 和 error 转入",
+      "steps": [
+        "Call canTransition('loaded', 'cancelled')",
+        "Assert true",
+        "Call canTransition('error', 'cancelled')",
+        "Assert true"
+      ]
+    },
+    {
+      "id": "TC-3-04",
+      "type": "integration",
+      "title": "cancelled 是终态",
+      "steps": [
+        "Call isTerminalStatus('cancelled')",
+        "Assert true",
+        "Call canTransition('cancelled', 'completed')",
+        "Assert false"
+      ]
+    },
+    {
+      "id": "TC-3-05",
+      "type": "integration",
+      "title": "abandoned 是纯系统终态",
+      "description": "abandoned 是终态、不可转出、不在 ALLOWED_TRANSITIONS 的 from 中",
+      "steps": [
+        "Call isTerminalStatus('abandoned')",
+        "Assert true",
+        "Call canTransition('abandoned', 'completed')",
+        "Assert false",
+        "Assert 'abandoned' not in ALLOWED_TRANSITIONS keys"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "integration",
+      "title": "error threshold 逻辑存在",
+      "description": "验证 core.ts 含 errorThreshold 比较、errorCount 递增、steering.onError 调用",
+      "steps": [
+        "Read core.ts source",
+        "Assert errorThreshold + errorCount comparison exists",
+        "Assert errorCount increment exists",
+        "Assert steering.onError injection exists"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "integration",
+      "title": "session restore 过滤终态 item",
+      "description": "验证 reconstructState + isTerminalStatus filter 存在",
+      "steps": [
+        "Read core.ts source",
+        "Assert reconstructState function exists",
+        "Assert filter with isTerminalStatus exists"
+      ]
+    },
+    {
+      "id": "TC-5-02",
+      "type": "integration",
+      "title": "旧 skill-state-tracker 格式向后兼容",
+      "description": "验证 legacyEntryTypes 含 skill-state-tracker、deserializeState 处理 skillMdPath 映射",
+      "steps": [
+        "Read skill-execution.ts: assert legacyEntryTypes contains 'skill-state-tracker'",
+        "Read types.ts: assert deserializeState handles skillMdPath mapping"
+      ]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "integration",
+      "title": "remind 在 remindInterval turn 后触发",
+      "steps": [
+        "Read core.ts source",
+        "Assert remindInterval + turnsSinceLoad check exists",
+        "Assert steering.onRemind injection exists",
+        "Assert turn_end handler exists"
+      ]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "integration",
+      "title": "turn_end 中 abandoned 检查先于 remind",
+      "description": "验证 abandonThreshold 存在、abandoned 状态存在、检查顺序正确",
+      "steps": [
+        "Read core.ts source",
+        "Assert abandonThreshold exists",
+        "Assert 'abandoned' status exists",
+        "Assert abandoned check position < remind check position"
+      ]
+    },
+    {
+      "id": "TC-7-02",
+      "type": "integration",
+      "title": "reconstructState 中 abandoned 检查存在",
+      "description": "验证 reconstructState 函数内含 abandonThreshold + abandoned 检查",
+      "steps": [
+        "Read core.ts reconstructState section",
+        "Assert abandonThreshold check exists in reconstructState"
+      ]
+    }
+  ]
+}

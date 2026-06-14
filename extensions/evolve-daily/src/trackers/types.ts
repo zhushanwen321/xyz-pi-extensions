@@ -16,24 +16,26 @@ export const TRACKER_ENTRY_PREFIX = "evolve-tracker-";
 const TERMINAL_STATUSES: ReadonlySet<TrackedItemStatus> = new Set([
   "completed",
   "recorded",
-  "dismissed",
+  "cancelled",
+  "abandoned",
 ]);
 
 /**
  * FR-3 转换矩阵：
- *   loaded  → completed ✅, error ✅, recorded ❌, dismissed ✅
- *   error   → completed ✅, error ✅, recorded ✅, dismissed ✅
+ *   loaded  → completed ✅, error ✅, cancelled ✅
+ *   error   → completed ✅, error ✅, recorded ✅, cancelled ✅
+ *   abandoned 是纯系统状态（turn_end/reconstructState 自动触发），不在 ALLOWED_TRANSITIONS 的 from 中
  *   终态不可变更
  *
- * dismissed 用于标记误报（如调研性 read 触发的 tracking），
- * 与 error 区分：error 是执行失败，dismissed 是触发本身不应发生。
+ * cancelled 用于标记 agent 主动放弃（如 start 后发现不适用）。
+ * abandoned 用于标记超时未终结（系统自动，agent 不能手动设）。
  */
 const ALLOWED_TRANSITIONS: ReadonlyMap<
   string,
   ReadonlySet<TrackedItemStatus>
 > = new Map([
-  ["loaded", new Set(["completed", "error", "dismissed"])],
-  ["error", new Set(["completed", "error", "recorded", "dismissed"])],
+  ["loaded", new Set(["completed", "error", "cancelled"])],
+  ["error", new Set(["completed", "error", "recorded", "cancelled"])],
 ]);
 
 // ── 类型 ────────────────────────────────────────────
@@ -43,7 +45,8 @@ export type TrackedItemStatus =
   | "error"
   | "completed"
   | "recorded"
-  | "dismissed";
+  | "cancelled"
+  | "abandoned";
 
 /** L3 anchor：让 extractor 能定位 JSONL 原始上下文 */
 export interface Anchor {
@@ -77,27 +80,34 @@ export interface TrackerRuntimeState<
 export interface TrackerDetails<
   TMeta = Record<string, unknown>,
 > {
-  action: "update" | "list";
+  action: "start" | "update" | "list";
   items: TrackedItem<TMeta>[];
   trackerName: string;
+  createdId?: number;
   updatedId?: number;
   error?: string;
 }
 
-/** 所有 tracker 共享的参数 schema（同一状态机） */
+/** use_skill tool 参数 schema（start/update/list 三种 action） */
 export const TrackerParams = Type.Object({
-  action: StringEnum(["update", "list"] as const),
+  action: StringEnum(["start", "update", "list"] as const),
+  name: Type.Optional(
+    Type.String({ description: "Skill name (required for start). Get from available_skills list." }),
+  ),
+  path: Type.Optional(
+    Type.String({ description: "SKILL.md absolute path (optional for start, from available_skills location field)" }),
+  ),
   id: Type.Optional(
     Type.Number({ description: "TrackedItem ID (required for update)" }),
   ),
   status: Type.Optional(
-    StringEnum(["completed", "error", "recorded", "dismissed"] as const, {
+    StringEnum(["completed", "error", "cancelled", "recorded"] as const, {
       description:
-        "Target status (required for update). Use 'dismissed' for false-positive triggers (e.g. research reads).",
+        "Target status (required for update). cancelled = agent actively abandons. Note: abandoned is system-only, cannot be set manually.",
     }),
   ),
   detail: Type.Optional(
-    Type.String({ description: "Additional notes (e.g. error reason)" }),
+    Type.String({ description: "Additional notes (e.g. error reason, cancel reason)" }),
   ),
 });
 
@@ -171,8 +181,14 @@ export function deserializeState<TMeta>(
     } satisfies TrackedItem<TMeta>;
   });
 
+  // 过滤旧 dismissed item（不迁移、不映射，直接丢弃）
+  // raw.status 来自旧 entry，理论值含 dismissed；TrackedItemStatus 不再含它，需强转
+  const filteredItems = items.filter(
+    (item) => (item.status as string) !== "dismissed",
+  );
+
   return {
-    items,
+    items: filteredItems,
     nextId: typeof data.nextId === "number" ? data.nextId : 1,
     currentTurnIndex:
       typeof data.currentTurnIndex === "number" ? data.currentTurnIndex : 0,
