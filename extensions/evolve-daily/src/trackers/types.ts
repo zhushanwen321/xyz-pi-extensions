@@ -16,25 +16,34 @@ export const TRACKER_ENTRY_PREFIX = "evolve-tracker-";
 const TERMINAL_STATUSES: ReadonlySet<TrackedItemStatus> = new Set([
   "completed",
   "recorded",
+  "dismissed",
 ]);
 
 /**
  * FR-3 转换矩阵：
- *   loaded  → completed ✅, error ✅, recorded ❌
- *   error   → completed ✅, error ✅, recorded ✅
+ *   loaded  → completed ✅, error ✅, recorded ❌, dismissed ✅
+ *   error   → completed ✅, error ✅, recorded ✅, dismissed ✅
  *   终态不可变更
+ *
+ * dismissed 用于标记误报（如调研性 read 触发的 tracking），
+ * 与 error 区分：error 是执行失败，dismissed 是触发本身不应发生。
  */
 const ALLOWED_TRANSITIONS: ReadonlyMap<
   string,
   ReadonlySet<TrackedItemStatus>
 > = new Map([
-  ["loaded", new Set(["completed", "error"])],
-  ["error", new Set(["completed", "error", "recorded"])],
+  ["loaded", new Set(["completed", "error", "dismissed"])],
+  ["error", new Set(["completed", "error", "recorded", "dismissed"])],
 ]);
 
 // ── 类型 ────────────────────────────────────────────
 
-export type TrackedItemStatus = "loaded" | "error" | "completed" | "recorded";
+export type TrackedItemStatus =
+  | "loaded"
+  | "error"
+  | "completed"
+  | "recorded"
+  | "dismissed";
 
 /** L3 anchor：让 extractor 能定位 JSONL 原始上下文 */
 export interface Anchor {
@@ -82,8 +91,9 @@ export const TrackerParams = Type.Object({
     Type.Number({ description: "TrackedItem ID (required for update)" }),
   ),
   status: Type.Optional(
-    StringEnum(["completed", "error", "recorded"] as const, {
-      description: "Target status (required for update)",
+    StringEnum(["completed", "error", "recorded", "dismissed"] as const, {
+      description:
+        "Target status (required for update). Use 'dismissed' for false-positive triggers (e.g. research reads).",
     }),
   ),
   detail: Type.Optional(
