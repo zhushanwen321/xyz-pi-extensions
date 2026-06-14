@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-spec-clarify",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "Phase 1 requirement clarification skill — interactive questioning + isolated-subagent gap tracing. Bundles xyz-harness-spec-clarify skill.",
   "type": "module",
   "license": "MIT",
