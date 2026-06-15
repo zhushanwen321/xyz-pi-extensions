@@ -373,14 +373,12 @@ export async function applyUpdate<TMeta>(
   item.detail = detail ?? item.detail;
 
   // 从 abandoned 恢复：重置 remind 计时 + errorCount（超时放弃≠新错误，恢复视为新周期）
+  // 注：ALLOWED_TRANSITIONS["abandoned"] 仅允许 → completed/error/recorded/cancelled（全为终态），
+  // 即 abandoned 只能被关闭到终态，不存在 abandoned→loaded 的复活路径。
+  // agent 重新 start 一个新 item 比复活旧 item 语义更清晰。
   if (fromAbandoned) {
     item.lastRemindAtTurn = state.currentTurnIndex;
     item.errorCount = 0;
-    // 恢复到非终态时还需重置 loadedAtTurn，否则 markStaleItemsAbandoned 会因
-    // turnsSinceLoad 仍超阈值在下一个 turn_end 立即再次转 abandoned，使恢复路径失效
-    if (!isTerminalStatus(updateStatus)) {
-      item.loadedAtTurn = state.currentTurnIndex;
-    }
   }
 
   await handleOnErrorThreshold(item, updateStatus, dep);
