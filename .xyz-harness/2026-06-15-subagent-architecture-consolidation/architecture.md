@@ -177,18 +177,20 @@ bridge.turnCount → state.turns（唯一累积）→ toDetails().turns → Comp
 |---|------|---------|------|--------|
 | 1 | **AgentExecutionState** | runAgent 期间 → 完成后冻结 | **执行期唯一状态源** | 不持久化（完成后投影为 #3） |
 | 2 | **AgentResult** | 完成时由 collectResult 构建 | **完成后权威结果** | 内嵌于 state.agentResult |
-| 3 | **PersistedAgentRecord** | 完成后写入 history.jsonl | **跨 session 查询源** | history.jsonl（L1）+ session file（L2） |
+| 3 | **PersistedAgentRecord** | 完成后写入 history.jsonl | **当前 session 查询源**（按 sessionId 过滤） | history.jsonl（L1）+ session file（L2） |
+
+PersistedAgentRecord 新增字段：`sessionId?`（过滤用）、`model?`、`thinkingLevel?`（详情区展示用）。
 
 ### 辅助容器（不是独立状态形状，是 state 的持有者）
 
 | 容器 | 持有什么 | 用于 |
 |------|---------|------|
-| `runtime._runningAgents` | `Map<id, AgentExecutionState>` | sync 执行期间 + /subagents list Level 1 数据 |
-| `runtime._bgRecords` | `Map<id, BgRecord>` | background 任务（BgRecord 内嵌 state） |
-| `runtime._completedAgents` | `Map<id, CompletedAgentRecord>` | sync 完成后归档（cap 50 FIFO） |
-| `history.jsonl` | `PersistedAgentRecord[]` | 跨 session 历史 |
+| `runtime._runningAgents` | `Map<id, AgentExecutionState>` | sync 执行期间 + /subagents list 右列详情 |
+| `runtime._bgRecords` | `Map<id, BgRecord>` | background 任务（BgRecord 内嵌 state，getBackground 展平 model/thinkingLevel） |
+| `runtime._completedAgents` | `Map<id, CompletedAgentRecord>` | sync 完成后归档（flat 结构含 model/thinkingLevel，cap 50 FIFO） |
+| `history.jsonl` | `PersistedAgentRecord[]` | 跨 session 历史（`/subagents list` 按 `sessionId` 过滤只显示当前 session） |
 
-`BgRecord` 和 `CompletedAgentRecord` 不再定义自己的 turns/tokens/eventLog 字段——它们持有 `AgentExecutionState` 的引用（或快照）。
+`BgRecord` 持有 `AgentExecutionState` 的引用（实时状态）。`CompletedAgentRecord` 是 **flat 结构**（归档时从 state 展平，不再持有 state 引用）——两者都带 `model?`/`thinkingLevel?` 供 /subagents list 详情区展示。
 
 ---
 
@@ -203,6 +205,8 @@ bridge.turnCount → state.turns（唯一累积）→ toDetails().turns → Comp
 | 唯一投影 | `executionStateToDetails(state)` 是唯一投影入口。禁止在 tool execute() 里手工构造 details |
 | 时间戳 | 存 startedAt/endedAt，不存 elapsedSeconds。投影时算 |
 | model 即时填 | AgentExecutionState 创建时 model 字段必填（从 resolveModelForAgent 获取） |
+| model 传播 | model/thinkingLevel 从 AgentExecutionState 传播到 BgRecord（getBackground 展平）、CompletedAgentRecord（scheduleSyncArchive 展平）、PersistedAgentRecord（buildPersistedRecord 写入），供 /subagents list 详情区展示 |
+| sessionId 过滤 | runtime 在 session_start 时 `setSessionId(ctx.sessionManager.getSessionId())`。`listHistory()` 按 sessionId 过滤，`buildPersistedRecord` 写入 sessionId |
 
 ### 展示层的义务
 

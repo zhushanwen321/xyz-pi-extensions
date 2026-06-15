@@ -72,8 +72,13 @@ private readonly _runningAgents = new Map<string, AgentExecutionState>();
 ```typescript
 interface BgRecord {
   readonly id: string;
-  /** 内嵌统一状态对象（不再有独立的 turns/tokens/eventLog 字段） */
+  /** 内嵌统一状态对象（唯一状态源） */
   state: AgentExecutionState;
+  result?: AgentResult;
+  error?: string;
+  startedAt: number;
+  endedAt?: number;
+  status: BackgroundStatus["status"];
   controller?: AbortController;
   _settled?: boolean;
 }
@@ -81,22 +86,35 @@ interface BgRecord {
 private readonly _bgRecords = new Map<string, BgRecord>();
 ```
 
-- `BgRecord` **不再定义自己的 eventLog/turns/totalTokens/model/thinkingLevel 字段**——全部委托给 `state`
+- `BgRecord` 的状态字段（eventLog/turns/totalTokens/model/thinkingLevel）委托给内嵌 `state`
+- `getBackground(id)` 返回 `BackgroundStatus`——从 `state` **展平** model/thinkingLevel（不再是 hardcoded undefined）
+- `BackgroundStatus` 类型新增 `model?` / `thinkingLevel?` 字段，供 /subagents list 详情区展示
 - FIFO cap 50，淘汰时**跳过 running**（D-P0-01）
-- `getBackground(id)` 返回 `{ id, status, ...state }`（展平 state 字段）
 
 ### `_completedAgents`（sync 归档）
 
 ```typescript
 interface CompletedAgentRecord {
-  id: string;
-  state: AgentExecutionState;  // 快照引用
+  readonly id: string;
+  readonly agent: string;
+  status: "done" | "failed" | "cancelled";
+  eventLog: AgentEventLogEntry[];
+  turns?: number;
+  totalTokens?: number;
+  result?: AgentResult;
+  error?: string;
+  startedAt: number;
+  endedAt?: number;
+  /** 详情区展示用 */
+  model?: string;
+  thinkingLevel?: string;
 }
 
 private readonly _completedAgents = new Map<string, CompletedAgentRecord>();
 ```
 
-- sync 完成后，从 `_runningAgents` 移到 `_completedAgents`
+- sync 完成后，从 `_runningAgents` 移到 `_completedAgents`（`scheduleSyncArchive` 从 `AgentExecutionState` 展平 model/thinkingLevel）
+- `CompletedAgentRecord` 是**flat 结构**（非 `{state}` 引用）——因为归档时 state 已冻结，不再需要实时引用
 - cap 50 FIFO
 
 ---
@@ -135,30 +153,42 @@ interface AgentExecutionState {
 
 ```typescript
 interface PersistedAgentRecord {
-  id: string;
-  agent: string;
-  model: string;            // 持久化 model（不再丢失）
+  readonly id: string;
+  readonly agent: string;
   status: "done" | "failed" | "cancelled";
-  mode: "single" | "orchestration";
+  mode: "sync" | "background";
   taskPreview: string;      // task 前 ~100 字符
   startedAt: number;
-  endedAt: number;
+  endedAt?: number;
   turns?: number;
   totalTokens?: number;
   error?: string;
   resultPreview?: string;   // result 前 ~200 字符
-  sessionFile?: string;     // AgentResult.sessionFile
+  sessionFile?: string;     // AgentResult.sessionFile basename
   cwd: string;
+  /** 当前 session id（/subagents list 按此过滤） */
+  sessionId?: string;
+  /** 详情区展示用 */
+  model?: string;
+  thinkingLevel?: string;
 }
 ```
 
-**不持久化**：完整 eventLog（太大）、完整 result（读 session file）、thinkingLevel（非必要）。
+**持久化 model + thinkingLevel**：供 /subagents list 右列详情区展示。`buildPersistedRecord` 接受并输出这两个字段。
+
+**不持久化**：完整 eventLog（太大）、完整 result（读 session file）。
+
+### sessionId 过滤
+
+`/subagents list` 只显示当前 session 的记录。`history-store.read(sessionId?)` 和 `recent(limit, sessionId?)` 按 sessionId 过滤。`runtime.listHistory()` 内部透传 `this._sessionId`（session_start 时由 `setSessionId()` 注入）。
+
+旧记录（无 sessionId 字段）在过滤时被排除——不迁移旧数据。
 
 ### GC
 
-- history.jsonl：append-only，无自动 GC（用户手动清理）
+- history.jsonl：append-only，确定性 GC（每 10 次写检查，超 `HISTORY_MAX_RECORDS` 重写保留最近 N 条）
 - session file：跟随主 session 生命周期（Pi SDK 原生 GC）
-- `/subagents list` 读 history 时按 endedAt desc 排序，cap 显示 100 条
+- `/subagents list` 读 history 时按 sessionId 过滤 + endedAt desc 排序，cap 显示 100 条
 
 ---
 
@@ -169,27 +199,29 @@ function getAllRecords(runtime): SubagentRecord[] {
   // 4 源合并 + 去重（by id）
   const map = new Map<string, SubagentRecord>();
 
-  // 1. running sync agents
-  for (const [id, state] of runtime._runningAgents)
-    map.set(id, toRecord(id, state));
+  // 1. running sync agents（内存源，天然当前 session）
+  for (const state of runtime.listRunningAgents())
+    map.set(state.id, { ...state, model: state.model, thinkingLevel: state.thinkingLevel });
 
-  // 2. background records
-  for (const [id, rec] of runtime._bgRecords)
-    map.set(id, toRecord(id, rec.state));  // 读 state，不再 hardcoded undefined
+  // 2. background records（内存源，getBackground 从 state 展平 model/thinkingLevel）
+  for (const b of runtime.listBackground())
+    map.set(b.id, { ...b, model: b.model, thinkingLevel: b.thinkingLevel });
 
-  // 3. completed sync agents
-  for (const [id, rec] of runtime._completedAgents)
-    map.set(id, toRecord(id, rec.state));
+  // 3. completed sync agents（内存源，flat 结构含 model/thinkingLevel）
+  for (const c of runtime.listCompleted())
+    map.set(c.id, { ...c, model: c.model, thinkingLevel: c.thinkingLevel });
 
-  // 4. history (跨 session)
-  for (const rec of runtime.history.list())
-    if (!map.has(rec.id)) map.set(rec.id, fromPersisted(rec));
+  // 4. history（跨进程持久化，runtime.listHistory 内部已按 this._sessionId 过滤）
+  for (const h of runtime.listHistory(100))
+    if (!map.has(h.id)) map.set(h.id, { ...h, model: h.model, thinkingLevel: h.thinkingLevel });
 
   return Array.from(map.values());
 }
 ```
 
 **修复**：background records 的 turns/tokens 从 `rec.state` 读取，不再 hardcoded `undefined`（历史 bug #3）。
+
+**sessionId 过滤**：源 4（history）由 `runtime.listHistory()` 内部按 `this._sessionId` 过滤。源 1-3 是内存数据源，天然属于当前 session。`/resume /fork /new` 时 `setSessionId(newId)` 切换过滤范围。
 
 ### 去重优先级
 

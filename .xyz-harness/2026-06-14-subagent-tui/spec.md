@@ -596,3 +596,27 @@ createSubagentsView(runtime, theme, ctx, directId?): Promise<void>
 - `extensions/subagents/src/runtime.ts`：`startBackground` 接受 onUpdate；删除 `AgentWidgetManager` 实例化
 - `extensions/subagents/src/types.ts`：`AgentEvent` 新增 `thinking_delta` variant；`SubagentToolDetails` 新增 model/thinkingLevel 字段
 - 参考：`~/GitApp/pi-ecosystem/pi-subagents/src/tui/render.ts`（种子帧 spinner、compact/expanded 双视图）
+
+---
+
+## 实现偏差说明
+
+> 以下偏差在 2026-06-15 架构整合（`.xyz-harness/2026-06-15-subagent-architecture-consolidation/`）中引入。
+
+### D-01: `/subagents list` 全屏视图重写（line 29 假设失效）
+
+line 29 声称"`/subagents list` 全屏视图不在本期讨论范围（已有 FR-3 实现，保持不变）"。**此假设已失效**。`/subagents list` 已在 2026-06-15 完全重写：
+
+- FR-3.2/3.3/3.5 描述的**单列 Level 0 → Level 1 drill-down** 设计已被**左右分屏**取代（仿 workflow WorkflowsView.ts）
+- `j/k` 导航改为 `↑↓` 导航；`q` 退出改为 `Esc` 退出
+- filter 不再需要 `/` 前缀进入模式，默认可直接输入
+- 右列详情新增 model + thinkingLevel 展示（括号分组）
+- 数据源新增 sessionId 过滤——只显示当前 session 的记录
+
+**权威文档**：`2026-06-15-subagent-architecture-consolidation/tui-list.md`
+
+### D-02: 对话流 block 动态高度（FR-2.4 偏差）
+
+FR-2.4 描述压缩视图"固定 6 行"。实际已改为**动态高度**：状态行 + 最近 ≤4 条事件，随事件增长，不预填空行。`Press Ctrl+O` 提示行已移除。
+
+**权威文档**：`2026-06-15-subagent-architecture-consolidation/tui-conversation.md`

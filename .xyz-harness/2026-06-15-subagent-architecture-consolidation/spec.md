@@ -89,7 +89,7 @@
 | **DAG** | 有向无环图。orchestration 模式的执行结构（chain=线性，parallel=单层扇出，fanout=动态展开）。 | 核心 |
 | **ChainOutputMap** | chain 模式的步骤间输出传递表 `Record<name, {text, structured?}>`。执行期中间数据，完成后清理。 | 核心 |
 | **对话流 block** | Pi 对话流中以背景色渲染的 tool 输出区域（renderResult 返回的 Component）。 | 展示 |
-| **全屏 overlay** | /subagents list 打开的全屏视图（ctx.ui.custom()），支持 j/k 导航。 | 展示 |
+| **全屏 overlay** | /subagents list 打开的全屏视图（ctx.ui.custom()），左右分屏 + ↑↓ 导航 + 直接 filter 输入。 | 展示 |
 
 ---
 
@@ -154,13 +154,14 @@
 
 ### 展示（AC-TUI）
 
-1. single sync/background：对话流 block 6 行（status inline + 4 scroll + hint）
+1. single sync/background：对话流 block 动态高度（状态行 + 最近 ≤4 条事件，随事件增长，不预填空行）
 2. 全零 stats 隐藏（不显示 `0 turns · 0 · 0s`）
-3. running 时底部 accent 色 `Press Ctrl+O` 提示
-4. Ctrl+O 展开显示完整 eventLog + result
-5. 截断保留 ANSI 背景色（`…` 前无裸 `\x1b[0m`）
-6. 用户可自由滚动（spinner 不抢占 viewport）
-7. /subagents list 三级视图（list → DAG/agent detail → step detail），j/k 导航
+3. 截断保留 ANSI 背景色（`…` 前无裸 `\x1b[0m`）
+4. 用户可自由滚动（spinner 不抢占 viewport）
+5. /subagents list 左右分屏视图（左列 agent 列表 + 右列详情），↑↓ 导航 · Enter 详情 · x stop · Esc 退出 · 直接输入 filter
+6. /subagents list 右列详情显示 model + thinkingLevel（括号分组：`(provider/model · thinking high)`）
+7. /subagents list 列对齐用 padVisible（ANSI-safe），不同 agent 名长度列宽一致
+8. /subagents list 只显示当前 session 的记录（history 按 sessionId 过滤）
 
 ### 编排（AC-ORCH）
 
