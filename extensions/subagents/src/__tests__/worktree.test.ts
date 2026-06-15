@@ -263,6 +263,27 @@ describe("cleanupWorktree", () => {
     // 分支名应以 pi-agent-myagent123 开头（V6：不因 monorepo basename 丢失 agentId）
     expect(result.branch).toMatch(/^pi-agent-myagent123/);
   });
+
+  // ── Round 6 MF#10: commit/branch 失败时 hasChanges 必须 true（否则主 agent 误判无变更） ──────
+  it("MF#10: commit fails → hasChanges=true so caller knows to surface merge instructions", () => {
+    const subDir = initRepoWithSubdir(tmpDir, "pkg");
+
+    const wt = createWorktree(subDir, "commit-fail");
+    expect(wt).toBeDefined();
+    createdWorkPaths.push(wt!.workPath);
+
+    // 制造变更使 working tree dirty
+    fs.writeFileSync(path.join(wt!.workPath, "newfile.txt"), "change\n");
+
+    // 设置 commit.gpgsign=true 强制 GPG 签名；没有 GPG key 时 git commit 会失败。
+    // 源码用 --no-verify 但 --no-verify 不绕过 GPG 签名（它只绕过 pre-commit/commit-msg hooks）。
+    execFileSync("git", ["-C", wt!.workPath, "config", "commit.gpgsign", "true"], { env: CLEAN_ENV });
+
+    const result = cleanupWorktree(subDir, wt!, "commit-fail task");
+
+    // MF#10: 即使 commit 失败，hasChanges 必须为 true（变更已 add/待 commit）
+    expect(result.hasChanges).toBe(true);
+  });
 });
 
 describe("pruneWorktrees", () => {
@@ -270,33 +291,36 @@ describe("pruneWorktrees", () => {
     expect(() => pruneWorktrees(tmpDir)).not.toThrow();
   });
 
-  // ── V5：崩溃恢复 —— tmpdir 残留的 pi-agent-* 物理目录应被清理 ──────
-  it("V5: removes orphaned pi-agent-* physical dirs from tmpdir (crash recovery)", () => {
-    // 模拟崩溃残留：进程被 kill -9 时 worktree 物理目录留在 tmpdir
-    const orphanDir = path.join(os.tmpdir(), "pi-agent-crashed-abc123");
+  // ── V5：崩溃恢复 —— 残留的 pi-agent-* 物理目录应被清理 ──────
+  // Round 6 MF#7: 用 test-local baseDir（tmpDir）替代 os.tmpdir()，避免与其它并行测试
+  // 的 pi-agent-* 残留互相干扰——这是 flaky 根因。
+  it("V5: removes orphaned pi-agent-* physical dirs from baseDir (crash recovery)", () => {
+    // 模拟崩溃残留：进程被 kill -9 时 worktree 物理目录留在 baseDir
+    const orphanDir = path.join(tmpDir, "pi-agent-crashed-abc123");
     fs.mkdirSync(orphanDir, { recursive: true });
     fs.writeFileSync(path.join(orphanDir, "leftover.txt"), "crash\n");
     expect(fs.existsSync(orphanDir)).toBe(true);
 
-    pruneWorktrees(tmpDir);
+    // 传 baseDir=tmpDir 让扫描范围限定在此 test-local 目录
+    pruneWorktrees(tmpDir, tmpDir);
 
     // V5 修复后：物理目录应被删除
     expect(fs.existsSync(orphanDir)).toBe(false);
   });
 
-  it("V5: does not remove unrelated tmpdir entries", () => {
-    const unrelatedDir = path.join(os.tmpdir(), "other-tool-tmp");
+  it("V5: does not remove unrelated baseDir entries", () => {
+    const unrelatedDir = path.join(tmpDir, "other-tool-tmp");
     fs.mkdirSync(unrelatedDir, { recursive: true });
-    const piAgentDir = path.join(os.tmpdir(), "pi-agent-keep-me");
+    const piAgentDir = path.join(tmpDir, "pi-agent-keep-me");
     fs.mkdirSync(piAgentDir, { recursive: true });
 
     try {
-      pruneWorktrees(tmpDir);
+      pruneWorktrees(tmpDir, tmpDir);
 
       expect(fs.existsSync(unrelatedDir)).toBe(true); // 不受影响
       expect(fs.existsSync(piAgentDir)).toBe(false); // pi-agent-* 被清
     } finally {
-      // 清理 unrelated dir，避免污染全局 tmpdir
+      // 清理 unrelated dir
       try { fs.rmSync(unrelatedDir, { recursive: true, force: true }); } catch { /* best effort */ }
     }
   });

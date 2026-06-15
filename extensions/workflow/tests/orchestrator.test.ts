@@ -737,4 +737,42 @@ describe("WorkflowOrchestrator", () => {
       expect(msg).toContain("Consider aborting");
     });
   });
+
+  // ── Round 6 MF#9: run() / restart() / runAndWait() basic coverage ───────────
+  // These three public methods were previously zero-tested. Mock the early-fail
+  // paths (signal pre-aborted, workflow not found) to lock in the contracts.
+  describe("run() — pre-abort and missing workflow", () => {
+    it("throws when signal is pre-aborted", async () => {
+      const ctrl = new AbortController();
+      ctrl.abort();
+      await expect(orch.run("any", {}, undefined, undefined, ctrl.signal)).rejects.toThrow(
+        /aborted before start/,
+      );
+    });
+
+    it("throws when workflow does not exist", async () => {
+      await expect(orch.run("nonexistent-workflow", {})).rejects.toThrow(/not found or unavailable/);
+    });
+  });
+
+  describe("restart() — missing meta and missing runId", () => {
+    it("throws when runId has no runMeta (cannot restart from scratch)", async () => {
+      const inst = makeInstance("wf-restart-no-meta", "running");
+      orch.restoreInstances(makeInstanceMap(inst));
+
+      await expect(orch.restart("wf-restart-no-meta")).rejects.toThrow(/No metadata for restart/);
+    });
+
+    it("throws when runId does not exist at all", async () => {
+      await expect(orch.restart("ghost")).rejects.toThrow(/not found/);
+    });
+  });
+
+  describe("runAndWait() — early-fail paths", () => {
+    it("rethrows when workflow does not exist (run() throws → runAndWait propagates)", async () => {
+      // getWorkflow returns undefined → run() throws → runAndWait has no runId to poll.
+      // runAndWait awaits run() directly so the error propagates. Lock in the contract.
+      await expect(orch.runAndWait("nonexistent-wf", {})).rejects.toThrow(/not found or unavailable/);
+    });
+  });
 });

@@ -28,7 +28,13 @@ vi.mock("../runtime.ts", async (importActual) => {
 
 // 必须在 vi.mock 之后 import 被测模块（此时 runtime.ts 已被替换）
 import { getRuntime } from "../runtime.ts";
-import { initialToolState, registerSubagentTool, renderSubagentResult } from "../tools/subagent-tool.ts";
+import {
+  buildSubagentRender,
+  initialToolState,
+  mapRenderStatus,
+  registerSubagentTool,
+  renderSubagentResult,
+} from "../tools/subagent-tool.ts";
 
 const mockedGetRuntime = vi.mocked(getRuntime);
 
@@ -519,6 +525,103 @@ describe("subagent tool execute()", () => {
     const text = result.content[0].text ?? "";
     expect(text).toBe("task done"); // successResult 默认 text
     expect(text).not.toContain("Changes saved to branch");
+  });
+
+  // ── Round 6 MF#8: _render 描述符在 sync/background/poll 三路径都应构造 ─────
+  it("sync mode: details._render is a task-list with status=completed", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async () => successResult()),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    const result = await tool.execute("call-render-sync", { task: "do work", agent: "reviewer" });
+    const render = (result.details as { _render?: unknown })._render;
+    expect(render).toBeDefined();
+    const r = render as { type: string; data: { title: string; items: Array<{ label: string; status: string; detail?: string }> } };
+    expect(r.type).toBe("task-list");
+    expect(r.data.title).toBe("Subagent: reviewer");
+    expect(r.data.items).toHaveLength(1);
+    expect(r.data.items[0]?.label).toBe("reviewer");
+    expect(r.data.items[0]?.status).toBe("completed"); // done → completed
+  });
+
+  it("background mode: details._render is a task-list with status=in_progress", async () => {
+    const handle: BackgroundHandle = { id: "bg-render", status: "running" };
+    const mockRt = makeMockRuntime({
+      startBackground: vi.fn(() => handle),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    const result = await tool.execute("call-render-bg", { task: "do work", wait: false, agent: "scout" });
+    const render = (result.details as { _render?: unknown })._render;
+    expect(render).toBeDefined();
+    const r = render as { type: string; data: { title: string; items: Array<{ label: string; status: string }> } };
+    expect(r.type).toBe("task-list");
+    expect(r.data.title).toBe("Subagent: scout");
+    expect(r.data.items[0]?.status).toBe("in_progress"); // running → in_progress
+  });
+
+  it("poll mode: details._render maps status done→completed, failed→failed", async () => {
+    const mockRt = makeMockRuntime({
+      getBackground: vi.fn((id: string) => {
+        if (id === "bg-done") {
+          return {
+            id, status: "done", startedAt: Date.now() - 1000, endedAt: Date.now(),
+            agent: "worker", result: successResult({ text: "ok" }), eventLog: [],
+          } as BackgroundStatus;
+        }
+        if (id === "bg-failed") {
+          return {
+            id, status: "failed", startedAt: Date.now() - 1000, endedAt: Date.now(),
+            agent: "reviewer", error: "model down", eventLog: [],
+          } as BackgroundStatus;
+        }
+        return undefined;
+      }),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    const doneResult = await tool.execute("call-poll-done", { backgroundId: "bg-done" });
+    const doneRender = (doneResult.details as { _render?: { data: { items: Array<{ status: string; detail?: string }> } } })._render;
+    expect(doneRender?.data.items[0]?.status).toBe("completed");
+    expect(doneRender?.data.items[0]?.detail).toBe("ok");
+
+    const failedResult = await tool.execute("call-poll-failed", { backgroundId: "bg-failed" });
+    const failedRender = (failedResult.details as { _render?: { data: { items: Array<{ status: string; detail?: string }> } } })._render;
+    expect(failedRender?.data.items[0]?.status).toBe("failed");
+    expect(failedRender?.data.items[0]?.detail).toContain("model down");
+  });
+});
+
+// ── Round 6 MF#8: buildSubagentRender / mapRenderStatus 单元测试 ───────────
+describe("buildSubagentRender + mapRenderStatus", () => {
+  it("mapRenderStatus: running → in_progress", () => {
+    expect(mapRenderStatus("running")).toBe("in_progress");
+  });
+  it("mapRenderStatus: done → completed", () => {
+    expect(mapRenderStatus("done")).toBe("completed");
+  });
+  it("mapRenderStatus: failed → failed", () => {
+    expect(mapRenderStatus("failed")).toBe("failed");
+  });
+  it("mapRenderStatus: cancelled → cancelled", () => {
+    expect(mapRenderStatus("cancelled")).toBe("cancelled");
+  });
+
+  it("buildSubagentRender: returns task-list with title and one item", () => {
+    const r = buildSubagentRender("worker", "running");
+    expect(r.type).toBe("task-list");
+    expect(r.data.title).toBe("Subagent: worker");
+    expect(r.data.items).toHaveLength(1);
+    expect(r.data.items[0]).toEqual({ label: "worker", status: "in_progress", detail: undefined });
+  });
+
+  it("buildSubagentRender: passes detail through unchanged (truncation is caller's job)", () => {
+    const r = buildSubagentRender("worker", "done", "short detail");
+    expect(r.data.items[0]?.detail).toBe("short detail");
   });
 });
 

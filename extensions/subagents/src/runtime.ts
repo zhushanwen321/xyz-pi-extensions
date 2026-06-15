@@ -42,7 +42,7 @@ interface PiLike {
   /** FR-O1.1: 注入消息到主对话并可选触发新 turn */
   sendMessage(
     message: { customType: string; content: string; display: boolean },
-    options?: { triggerTurn?: boolean },
+    options?: { triggerTurn?: boolean; deliverAs?: "followUp" | "steer" | "nextTurn" },
   ): void;
 }
 
@@ -77,6 +77,10 @@ interface BgRecord {
   eventLog?: AgentEventLogEntry[];
   /** FR-3.0a: agent 名持久化 */
   agent?: string;
+  /** Must-fix #2: set by cancelBackground to signal user-initiated cancellation.
+   *  .then/.catch check this to skip completion side effects (onComplete/events/
+   *  history) for an already-settled cancellation, preventing double-trigger. */
+  _settled?: boolean;
 }
 
 /**
@@ -118,6 +122,12 @@ export class SubagentRuntime {
 
   /** FR-3.4: 事件总线，供 overlay 视图订阅实时刷新 */
   private readonly _changeListeners = new Set<() => void>();
+
+  /** Must-fix #1: pending sync-agent linger timers. Cleared on dispose() to
+   *  prevent stale-pi notifyChange/archiveSyncAgent calls after session_shutdown
+   *  (overlay listeners may hold invalidated Pi handles). Timers are unref'd so
+   *  they don't keep the event loop alive. */
+  private readonly _lingerTimers = new Set<ReturnType<typeof setTimeout>>();
 
   /** FR-3.0: 已完成 sync agent 归档记录 */
   private readonly _completedAgents = new Map<string, CompletedAgentRecord>();
@@ -201,6 +211,39 @@ export class SubagentRuntime {
     this._completedAgents.delete(record.id);
     this._completedAgents.set(record.id, record);
     this.notifyChange();
+  }
+
+  /** FR-3.0 + Must-fix #1: schedule sync agent archival after WIDGET_LINGER_MS.
+   *  The timer is tracked in _lingerTimers (cleared on dispose) and unref'd so
+   *  it neither keeps the event loop alive nor fires into a stale session. */
+  private scheduleSyncArchive(
+    widgetId: string,
+    widgetState: WidgetAgentState,
+    startedAt: number,
+  ): void {
+    const timer = setTimeout(() => {
+      // Must-fix #1: dispose() may have run during the linger window (session
+      // shutdown / resume). Skip archival + notifyChange to avoid invoking
+      // overlay listeners that hold invalidated Pi handles.
+      if (this._disposed) return;
+      this.archiveSyncAgent({
+        id: widgetId,
+        agent: widgetState.agent,
+        status: widgetState.status as CompletedAgentRecord["status"],
+        eventLog: widgetState.eventLog ?? [],
+        turns: widgetState.turns,
+        totalTokens: widgetState.totalTokens,
+        result: undefined,
+        error: widgetState.summary,
+        startedAt,
+        endedAt: widgetState.finishedAt,
+      });
+      this._runningAgents.delete(widgetId);
+      this.notifyChange();
+      this._lingerTimers.delete(timer);
+    }, WIDGET_LINGER_MS);
+    this._lingerTimers.add(timer);
+    timer.unref?.();
   }
 
   /** FR-3.0: 归档 background agent 到 BgRecord（widget linger 到期时调用） */
@@ -352,23 +395,8 @@ export class SubagentRuntime {
       if (!skipWidget) {
         this._runningAgents.set(widgetState.id, widgetState);
         this.notifyChange();
-        // 5 秒后归档 + 清理
-        setTimeout(() => {
-          this.archiveSyncAgent({
-            id: widgetId,
-            agent: widgetState.agent,
-            status: widgetState.status as CompletedAgentRecord["status"],
-            eventLog: widgetState.eventLog ?? [],
-            turns: widgetState.turns,
-            totalTokens: widgetState.totalTokens,
-            result: undefined,
-            error: widgetState.summary,
-            startedAt: archiveStartTime,
-            endedAt: widgetState.finishedAt,
-          });
-          this._runningAgents.delete(widgetId);
-          this.notifyChange();
-        }, WIDGET_LINGER_MS);
+        // 5 秒后归档 + 清理（Must-fix #1: 经 scheduleSyncArchive 跟踪 + unref）
+        this.scheduleSyncArchive(widgetId, widgetState, archiveStartTime);
       }
 
       for (const h of this.hooks) {
@@ -402,22 +430,7 @@ export class SubagentRuntime {
       if (!skipWidget) {
         this._runningAgents.set(widgetState.id, widgetState);
         this.notifyChange();
-        setTimeout(() => {
-          this.archiveSyncAgent({
-            id: widgetId,
-            agent: widgetState.agent,
-            status: widgetState.status as CompletedAgentRecord["status"],
-            eventLog: widgetState.eventLog ?? [],
-            turns: widgetState.turns,
-            totalTokens: widgetState.totalTokens,
-            result: undefined,
-            error: widgetState.summary,
-            startedAt: archiveStartTime,
-            endedAt: widgetState.finishedAt,
-          });
-          this._runningAgents.delete(widgetId);
-          this.notifyChange();
-        }, WIDGET_LINGER_MS);
+        this.scheduleSyncArchive(widgetId, widgetState, archiveStartTime);
       }
 
       for (const h of this.hooks) {
@@ -547,6 +560,8 @@ export class SubagentRuntime {
         // message_end stopReason="aborted" 结束且 session.prompt() 未抛错，
         // 此时走 .then 而非 .catch；不补判断会把用户 cancel 覆盖为 failed。
         // 与 .catch 路径（runtime.ts:580）的 aborted 判断保持一致。
+        // Round 6 SUG#9: read controller BEFORE delete so the check actually
+        // observes the runtime-owned controller (was reading undefined post-delete).
         const aborted = record.controller?.signal.aborted ?? signal.aborted;
         if (aborted) {
           record.status = "cancelled";
@@ -556,6 +571,10 @@ export class SubagentRuntime {
         record.endedAt = Date.now();
         record.agent = opts.agent ?? "default";
         delete record.controller;
+        // Must-fix #2: cancelBackground already settled this as a user-initiated
+        // cancel. Backfill result/endedAt only — skip onComplete/events/history
+        // to prevent re-triggering caller side effects for an already-cancelled task.
+        if (record._settled) return;
         opts.onComplete?.(record);
         this.pi?.events.emit("subagents:bg:done", record);
         this.pi?.appendEntry("subagent-bg-record", {
@@ -607,6 +626,9 @@ export class SubagentRuntime {
         record.endedAt = Date.now();
         record.agent = opts.agent ?? "default";
         delete record.controller;
+        // Must-fix #2: cancelBackground already settled this as a user-initiated
+        // cancel. Backfill endedAt only — skip onComplete/events/history.
+        if (record._settled) return;
         opts.onComplete?.(record);
         this.pi?.events.emit("subagents:bg:done", record);
         // ADR-024 L1: background 失败/取消持久化
@@ -655,12 +677,14 @@ export class SubagentRuntime {
     r.controller?.abort();
     r.status = "cancelled";
     r.endedAt = Date.now();
+    // Must-fix #2: mark settled so .then/.catch skip completion side effects
+    // (onComplete/events.emit/history) — cancel is user-initiated and already
+    // settled here. Queryable via getBackground(id).
+    r._settled = true;
     this.notifyChange();
-    // Round 5 SUG#1: 不再同步写 history——runAgent 的 catch 路径会写一条
-    // status="cancelled" 的记录（其 task 字段从 opts.task 读取，保留原 task 文本）。
-    // 同步写会造成 race：cancelBackground 先写 "(cancelled by user)"，runAgent catch 后
-    // 写 "failed"/"cancelled"，依赖 endedAt 排序可能导致错误的 task 预览被采用。
-    // 去重仍由 list 视图的 id + 最新时间戳处理。
+    // Round 5 SUG#1 + Must-fix #2: cancel 不写 history——.then/.catch 检测到
+    // _settled 后同样跳过 onComplete/events/history。用户主动取消的 task 不计入
+    // 执行记录（避免 cancel + runAgent 完成路径双写 history 的 race）。
     return true;
   }
 
@@ -824,9 +848,12 @@ export class SubagentRuntime {
   }): void {
     const content = this.formatBgCompletionMessage(record);
     try {
+      // Round 6 SUG#8: prefer deliverAs:"followUp" (preferred API per Pi SDK migration)
+      // over the older triggerTurn: true flag. Both work today; deliverAs is the
+      // forward-compatible option. Keep triggerTurn for SDKs that still only honor it.
       this.pi?.sendMessage(
         { customType: "subagent-bg-notify", content, display: true },
-        { triggerTurn: true },
+        { deliverAs: "followUp", triggerTurn: true },
       );
     } catch {
       // G-025: stale runtime 同步抛错——不标记 background failed（agent 已完成）
@@ -840,6 +867,12 @@ export class SubagentRuntime {
 
   /** FR-O1.5 G-029: flush 合并窗口中 pending 的通知，合并为一条消息发送 */
   flushPendingNotifications(): void {
+    // Round 6 SUG#11: skip flush after dispose — sending notifications into
+    // a stale pi session is a semantic error (the session is over). The
+    // disposed flag was already checked at notifyBgCompletion entry, but
+    // setTimeout-based flush can still fire between dispose() and the
+    // timer's natural expiry. Return early to avoid the contradiction.
+    if (this._disposed) return;
     if (this._mergeWindowTimer) {
       clearTimeout(this._mergeWindowTimer);
       this._mergeWindowTimer = undefined;
@@ -859,9 +892,10 @@ export class SubagentRuntime {
     });
     const content = `${pending.length} background tasks completed:\n\n${lines.join("\n\n")}`;
     try {
+      // Round 6 SUG#8: prefer deliverAs:"followUp" (preferred API per Pi SDK migration)
       this.pi?.sendMessage(
         { customType: "subagent-bg-notify", content, display: true },
-        { triggerTurn: true },
+        { deliverAs: "followUp", triggerTurn: true },
       );
     } catch {
       // stale runtime，放弃合并发送（结果仍可通过 getBackground 查询）
@@ -870,13 +904,23 @@ export class SubagentRuntime {
 
   /**
    * FR-O1.5 G-029: 清理 runtime 资源。
-   * session 结束时调用，清理合并窗口定时器并 flush 残留通知。
+   * session 结束时调用，清理合并窗口定时器。
    * P2: 设置 _disposed 标志，dispose 后 notifyBgCompletion 短路（stale pi 不调用）。
+   * Round 6 SUG#11: 不再 flush——flush 会尝试向已结束的 session 注入消息，与 dispose
+   * 语义矛盾。只 clear timer 让 pending 通知随 process 退出自然丢弃。
    */
   dispose(): void {
     if (this._disposed) return; // 幂等
     this._disposed = true;
-    this.flushPendingNotifications();
+    if (this._mergeWindowTimer) {
+      clearTimeout(this._mergeWindowTimer);
+      this._mergeWindowTimer = undefined;
+    }
+    this._pendingNotifications.length = 0;
+    // Must-fix #1: clear pending sync-agent linger timers so their callbacks
+    // don't fire into the stale session (notifyChange → overlay listeners).
+    for (const t of this._lingerTimers) clearTimeout(t);
+    this._lingerTimers.clear();
     this.clearActiveView();
   }
 

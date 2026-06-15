@@ -84,4 +84,15 @@ describe("resolveModel", () => {
     expect(result).toBeUndefined();
     expect(mockState.runtime.resolveModelForScene).not.toHaveBeenCalled();
   });
+
+  // Round 6 SUG#19: empty-string model falls through to scene resolution
+  // (falsy contract — same as undefined). Lock the boundary in.
+  it("opts.model=\"\" (空串) 时走 scene 解析，与 undefined 行为一致", async () => {
+    mockState.runtime = {
+      resolveModelForScene: vi.fn(() => "anthropic/claude-sonnet-4.5"),
+    };
+    const result = await resolveModel({ prompt: "x", model: "", scene: "coding" });
+    expect(result).toBe("anthropic/claude-sonnet-4.5");
+    expect(mockState.runtime.resolveModelForScene).toHaveBeenCalledWith("coding");
+  });
 });

@@ -153,6 +153,38 @@ const SubagentParams = Type.Object({
       },
     ),
   ),
+  // Round 6 MF#2: expose skillPath/appendSystemPrompt/schema/maxTurns/graceTurns in schema
+  // and pass them through to runAgent (silent loss if not exposed).
+  skillPath: Type.Optional(
+    Type.String({
+      description:
+        'Path to a skill directory or file. Injected via session resourceLoader.additionalSkillPaths.',
+    }),
+  ),
+  appendSystemPrompt: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "Additional system prompt fragments appended to the agent's system prompt. Use for project-specific context.",
+    }),
+  ),
+  schema: Type.Optional(
+    Type.Record(Type.String(), Type.Unknown(), {
+      description:
+        'JSON Schema for structured output. The agent is steered to call the "structured-output" tool and the parsed result is exposed as details.parsedOutput.',
+    }),
+  ),
+  maxTurns: Type.Optional(
+    Type.Number({
+      description:
+        "Hard turn limit. When exceeded, the agent is steered to wrap up; after graceTurns more turns, the session is aborted.",
+    }),
+  ),
+  graceTurns: Type.Optional(
+    Type.Number({
+      description:
+        "Additional turns allowed after maxTurns before forced abort. Default 2.",
+    }),
+  ),
 });
 
 // ============================================================
@@ -216,6 +248,11 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         backgroundId?: string;
         model?: string;
         thinkingLevel?: string;
+        skillPath?: string;
+        appendSystemPrompt?: string[];
+        schema?: Record<string, unknown>;
+        maxTurns?: number;
+        graceTurns?: number;
       },
       signal: AbortSignal | undefined,
       onUpdate?: (partialResult: AgentToolResult<SubagentToolDetails>) => void,
@@ -316,11 +353,20 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         const agentName = params.agent ?? "default";
         // bgId 在 startBackground 返回后赋值；onUpdate 闭包引用 bgId（异步触发时已赋值，避免 TDZ）
         let bgId = "";
+        // Round 6 MF#1: pass through all fields to startBackground so the agent
+        // runtime uses the same model/thinkingLevel/skill/schema as the pre-resolved
+        // values reflected in details.model. Without this, runAgent re-resolves
+        // the model and may pick a different one (details.model becomes "fake").
         const handle = rt.startBackground({
           task: params.task,
           agent: params.agent,
           model: params.model,
           thinkingLevel: params.thinkingLevel,
+          skillPath: params.skillPath,
+          appendSystemPrompt: params.appendSystemPrompt,
+          schema: params.schema,
+          maxTurns: params.maxTurns,
+          graceTurns: params.graceTurns,
           signal,
           onUpdate: (bgDetails) => {
             onUpdate?.({
@@ -404,6 +450,12 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         agent: params.agent,
         model: params.model,
         thinkingLevel: params.thinkingLevel,
+        // Round 6 MF#2: pass through newly-exposed fields to runAgent
+        skillPath: params.skillPath,
+        appendSystemPrompt: params.appendSystemPrompt,
+        schema: params.schema,
+        maxTurns: params.maxTurns,
+        graceTurns: params.graceTurns,
         signal,
         // FR-O4.1: sync 高优先级（0），保证响应；background 传 1000（低），不抢占 sync
         priority: 0,
@@ -445,8 +497,10 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 
 /** Round 5 SUG#9: 构造 GUI task-list 描述符。subagent 结果天然适配
  *  task-list：一条主项（agent 名称 + 状态），detail 含 result/error 预览。
- *  与 _render 协议（CLAUDE.md GUI 渲染描述符）一致——xyz-agent 缺失时 fallback 到 content。 */
-function buildSubagentRender(agent: string, status: SubagentToolDetails["status"], detail?: string): NonNullable<SubagentToolDetails["_render"]> {
+ *  与 _render 协议（CLAUDE.md GUI 渲染描述符）一致——xyz-agent 缺失时 fallback 到 content。
+ *
+ *  Round 6 MF#8: exported for testability. */
+export function buildSubagentRender(agent: string, status: SubagentToolDetails["status"], detail?: string): NonNullable<SubagentToolDetails["_render"]> {
   return {
     type: "task-list",
     data: {
@@ -457,8 +511,10 @@ function buildSubagentRender(agent: string, status: SubagentToolDetails["status"
 }
 
 /** 把 SubagentToolDetails status 映射到 _render 协议的状态联合。
- *  两者表达相似但枚举不同（_render 用 pending/in_progress/completed/cancelled/failed）。 */
-function mapRenderStatus(status: SubagentToolDetails["status"]): "pending" | "in_progress" | "completed" | "failed" | "cancelled" {
+ *  两者表达相似但枚举不同（_render 用 pending/in_progress/completed/cancelled/failed）。
+ *
+ *  Round 6 MF#8: exported for testability. */
+export function mapRenderStatus(status: SubagentToolDetails["status"]): "pending" | "in_progress" | "completed" | "failed" | "cancelled" {
   switch (status) {
     case "running": return "in_progress";
     case "done": return "completed";

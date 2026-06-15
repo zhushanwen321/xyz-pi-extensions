@@ -123,8 +123,11 @@ export function cleanupWorktree(
       wt.branch = createBranchAtHead(wt.workPath, wt.branchName);
       wt.hasChanges = true;
     } catch {
-      // commit/branch 失败：标记保留，worktree 目录不能被物理删除
-      // （agent 变更可能已 add 但 commit 失败，worktree 内文件仍是用户的成果）。
+      // Round 6 MF#10: commit/branch 失败时若 git add 已执行（变更已 add 未 commit），
+      // 必须设 hasChanges=true——调用方依赖 result.worktree.hasChanges 判断是否追加
+      // merge 指令；若保持 false，主 agent 会误以为无变更、不提示 merge，agent 成果丢失。
+      // 分支创建可能也未完成，但变更已在 worktree 内待用户手动 `git checkout` 恢复。
+      wt.hasChanges = true;
       preserveOnFailure = true;
     }
   } else {
@@ -183,33 +186,36 @@ function createBranchAtHead(workPath: string, branchName: string): string {
 
 /**
  * 清理孤立的 worktree（崩溃恢复）。
- * V5：除了 `git worktree prune`（清理注册表无效条目），还扫描 tmpdir 下
+ * V5：除了 `git worktree prune`（清理注册表无效条目），还扫描 baseDir 下
  * pi-agent-* 物理目录并删除（崩溃后残留的物理目录）。
+ *
+ * Round 6 MF#7: 增加 baseDir 参数限制扫描范围，避免与其它并行测试的
+ * pi-agent-* 残留互相干扰（默认 os.tmpdir() 在 CI 共享，全局扫描副作用大）。
  */
-export function pruneWorktrees(cwd: string): void {
+export function pruneWorktrees(cwd: string, baseDir: string = os.tmpdir()): void {
   try {
     git(cwd, ["worktree", "prune"]);
   } catch {
     // best effort
   }
-  cleanupOrphanedWorktreeDirs();
+  cleanupOrphanedWorktreeDirs(baseDir);
 }
 
 /**
- * 扫描 tmpdir 下 pi-agent-* 物理目录并删除（V5 崩溃恢复）。
+ * 扫描 baseDir 下 pi-agent-* 物理目录并删除（V5 崩溃恢复）。
  * 只删与 PI_AGENT_TMP_PREFIX 匹配的目录，不影响其他临时文件。
- * cwd 无关 —— session_shutdown（无 cwd 上下文）可直接调用。
+ * Round 6 MF#7: 接受 baseDir 参数，生产 = os.tmpdir()，测试可传独立子目录避免干扰。
  */
-export function cleanupOrphanedWorktreeDirs(): void {
+export function cleanupOrphanedWorktreeDirs(baseDir: string = os.tmpdir()): void {
   let entries: string[];
   try {
-    entries = fs.readdirSync(os.tmpdir());
+    entries = fs.readdirSync(baseDir);
   } catch {
     return;
   }
   for (const entry of entries) {
     if (!entry.startsWith(PI_AGENT_TMP_PREFIX)) continue;
-    const fullPath = path.join(os.tmpdir(), entry);
+    const fullPath = path.join(baseDir, entry);
     try {
       fs.rmSync(fullPath, { recursive: true, force: true });
     } catch {

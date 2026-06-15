@@ -109,7 +109,13 @@
     {
       "name": "@zhushanwen/pi-subagents",
       "directory": "extensions/subagents",
-      "dependsOn": []
+      "dependsOn": [
+        {
+          "package": "@zhushanwen/pi-structured-output",
+          "type": "runtime",
+          "reason": "schema 契约 enforcement 引用 tool 名（structured-output），运行时需要 extension 已加载，代码层不 import"
+        }
+      ]
     }
   ]
 }

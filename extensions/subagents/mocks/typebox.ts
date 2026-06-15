@@ -9,5 +9,6 @@ export const Type = {
   Record: (_key: unknown, _value: unknown) => ({ type: "object" }),
   Unknown: () => ({ type: "unknown" }),
   Boolean: (_options?: Record<string, unknown>) => ({ type: "boolean" }),
+  Array: (_item: unknown, _options?: Record<string, unknown>) => ({ type: "array" }),
 };
 export type Static<_T> = unknown;

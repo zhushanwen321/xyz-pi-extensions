@@ -154,15 +154,15 @@ export class AgentPool {
     // 之前 active++ 仅做计数，无 release 机制，实际并发完全依赖 globalPool。
     // Round 4 MF1: 必须始终 resolve 等待的 Promise——若仅跳过 aborted waiter 而不 resolve，
     // 它的 Promise 永远挂起，caller 永久不返回（线程卡死 + 闭包泄漏）。
-    if (this.active >= this.maxConcurrency) {
+    // Round 6 SUG#13: check abort BEFORE push to avoid the previous race where
+    // shift() removed the wrong waiter (the previous one in the queue, not the
+    // caller that was just aborted). When aborted at enqueue time, do not
+    // enqueue at all — return immediately after the abort gate below.
+    // Must-fix #3: acquiredSlot defaults false; only set true after active++.
+    let acquiredSlot = false;
+    if (this.active >= this.maxConcurrency && !controller.signal.aborted) {
       await new Promise<void>((resolve) => {
         this.waiters.push({ resolve, signal: controller.signal });
-        // 边界：enqueue 时若 caller 已被 abort（controller.signal.aborted），
-        // 当前轮 shift 可能不会唤醒它——立即自我 resolve 避免永久挂起。
-        if (controller.signal.aborted) {
-          this.waiters.shift();
-          resolve();
-        }
       });
     }
     // 抢占后再次检查 abort：可能排队期间被 abort
@@ -177,6 +177,11 @@ export class AgentPool {
     this.active++;
     this.totalCallCount++;
     if (this.budgetRef) this.maybeEmitSoftWarning(this.budgetRef);
+    // Must-fix #3: track whether THIS caller actually acquired a slot. Aborted
+    // waiters resolve and return BEFORE this.active++, but their finally block
+    // still runs — without this guard, active gets over-decremented (drift /
+    // negative), starving future concurrency.
+    acquiredSlot = true;
 
     try {
       const runtime = getRuntime();
@@ -227,7 +232,8 @@ export class AgentPool {
       };
     } finally {
       cleanup();
-      this.active--;
+      // Must-fix #3: only decrement if this caller actually acquired a slot.
+      if (acquiredSlot) this.active--;
       // 释放一个 slot，唤醒最先 wait 的 caller。
       // Round 3 MF1: 跳过已 abort 的 waiter——它们的 caller 已返回，再唤醒只会浪费一个 slot，
       // 累积下来会让 active 计数与实际并发漂移（超限或永久卡死）。

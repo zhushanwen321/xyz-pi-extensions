@@ -69,6 +69,14 @@ export function resolveModelForAgent(opts: {
   const merged = mergeConfig(opts);
   candidates.push({ modelStr: merged.model, thinkingLevel: merged.thinkingLevel, source: merged.source });
 
+  // Round 6 MF#4: 当 mergeConfig 因 session 覆盖（per-agent/per-category/category-default）
+  // 返回非 "agent-default" 的 model 且该 model 不可用时，应回退到 agent 自身 frontmatter 的
+  // model（agentConfig.model），再走 modelCandidates/global-fallback。否则 session 覆盖失败
+  // 时直接跳过 agent 自有配置，跳到全局 fallback 链。
+  if (agentConfig?.model && merged.source !== "agent-default") {
+    candidates.push({ modelStr: agentConfig.model, source: "agent-default" });
+  }
+
   // agent.modelCandidates（FR-4.2 fallback 链）
   if (agentConfig?.modelCandidates) {
     for (const c of agentConfig.modelCandidates) {

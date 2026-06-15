@@ -42,7 +42,12 @@
     "@sinclair/typebox": "*",
     "@earendil-works/pi-tui": "*"
   },
-  "peerDependenciesMeta": {},
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-coding-agent": { "optional": true },
+    "@mariozechner/pi-ai": { "optional": true },
+    "@sinclair/typebox": { "optional": true },
+    "@earendil-works/pi-tui": { "optional": true }
+  },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "vitest": "^4.1.8"

@@ -405,12 +405,35 @@ describe("merge window (FR-O1.5)", () => {
       error: "boom", startedAt: 1000,
     });
     expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1); // 仍在窗口内，未 flush
-    // dispose → flushPendingNotifications → 合并发 1 条
-    rt.dispose();
+    // Round 6 SUG#11: dispose 不再 flush——直接调 flushPendingNotifications 才会合并
+    rt.flushPendingNotifications();
     expect(rt.pi.sendMessage).toHaveBeenCalledTimes(2); // 首个 + 合并 1 条
     const mergedCall = rt.pi.sendMessage.mock.calls[1]!;
     expect(mergedCall[0].customType).toBe("subagent-bg-notify");
     expect(String(mergedCall[0].content)).toContain("2 background tasks");
+  });
+
+  it("dispose drops pending notifications (no sendMessage after dispose)", () => {
+    const rt = makeRuntime();
+    // 首个 → 立即发
+    rt.notifyBgCompletion({
+      id: "bg-disp-pending-1", status: "done", agent: "worker",
+      result: { text: "first" } as AgentResult, startedAt: 1000,
+    });
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1);
+    // 后续入队
+    rt.notifyBgCompletion({
+      id: "bg-disp-pending-2", status: "done", agent: "reviewer",
+      result: { text: "second" } as AgentResult, startedAt: 1000,
+    });
+    rt.notifyBgCompletion({
+      id: "bg-disp-pending-3", status: "failed", agent: "worker",
+      error: "boom", startedAt: 1000,
+    });
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1); // 仍 1，pending 未 flush
+    // dispose → 清掉 pending，不发
+    rt.dispose();
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1); // 仍 1，pending 被丢
   });
 
   it("flushPendingNotifications with empty pending is a no-op", () => {

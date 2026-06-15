@@ -10,7 +10,9 @@
     ]
   },
   "scripts": {
-    "typecheck": "npx tsc --noEmit"
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": [
     "pi-package",
@@ -21,6 +23,9 @@
   "peerDependencies": {
     "typebox": "*",
     "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.8"
   },
   "files": [
     "src/",

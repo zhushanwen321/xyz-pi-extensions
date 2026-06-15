@@ -658,14 +658,10 @@ export class WorkflowOrchestrator {
     }
   }
 
-  /**
-   * Post a message to the worker thread.
-   */
+  /** Post a message to the worker thread. */
   private postMessage(runId: string, msg: unknown): void {
     const worker = this.workers.get(runId);
-    if (worker) {
-      worker.postMessage(msg);
-    }
+    if (worker) worker.postMessage(msg);
   }
 
   /** Build the context object for error handler functions. */
@@ -683,6 +679,13 @@ export class WorkflowOrchestrator {
       onCompletion: (id) => this.onCompletion?.(id),
       deleteRunPool: (id) => this.runPools.delete(id),
     };
+  }
+
+  /** Check if a workflow instance has exhausted its token or cost budget. */
+  private isBudgetExceeded(instance: WorkflowInstance): boolean {
+    const b = instance.budget;
+    return (b.maxTokens !== undefined && b.maxTokens > 0 && b.usedTokens >= b.maxTokens)
+        || (b.maxCost !== undefined && b.maxCost > 0 && b.usedCost >= b.maxCost);
   }
 
   /** Shared BudgetCallbacks 实例——executeWithRetry / handleAgentCall /
@@ -762,13 +765,12 @@ export class WorkflowOrchestrator {
       return;
     }
 
-    // Round 5 SUG#4: handleAgentCall 入口先 checkBudget，避免后置造成的
-    // “budget 超限后仍多跑 1 个 agent”窗口。短路返回 budget_limited。
-    const b = instance.budget;
-    const budgetExceeded =
-      (b.maxTokens !== undefined && b.maxTokens > 0 && b.usedTokens >= b.maxTokens) ||
-      (b.maxCost !== undefined && b.maxCost > 0 && b.usedCost >= b.maxCost);
-    if (budgetExceeded) {
+    // Round 5 SUG#4 + Must-fix #4: 入口先 checkBudget。budget 是软限制——若 worker
+    // 在检查生效前连续 enqueue N 个调用，这 N 个仍会执行并累加 token，budget 可被
+    // 突破 maxTokens 的 N 倍。入口检查只能终止后续调用；硬限制需在 pool.enqueue
+    // 内加 budget gate（未实现，引入 pool↔budget 耦合且仍有并发竞态窗口）。
+    if (this.isBudgetExceeded(instance)) {
+      const b = instance.budget;
       const errorResult: StateAgentResult = {
         content: "",
         error: `Budget exceeded before dispatch: ${b.usedTokens}/${b.maxTokens ?? "?"} tokens`,
@@ -836,13 +838,12 @@ export class WorkflowOrchestrator {
       // P0-2: Stale state check — instance may have been paused/aborted during agent call
       if (instance.status !== "running") return;
 
-      // Round 5 MF#4: 累加 token 必须在 retry 判断之前——中间失败的 retry 仍消耗
-      // input token，budget 必须如实记录（语义为“实际计费 token”），否则 budget 限制
-      // 可被 retry 放大 5-10 倍。budget.usedTokens 累加语义与 cache hit 无关，
-      // 仅当 poolResult.usage 存在时累加。
+      // Round 5 MF#4 + Round 6 MF#5: 累加四项 token（对齐 agent-pool contextTokens），
+      // retry 间的真实计费如实记录，否则 budget 限制被 retry/cache 双重放大/低估。
       if (poolResult.usage) {
-        instance.budget.usedTokens += poolResult.usage.input + poolResult.usage.output;
-        instance.budget.usedCost += poolResult.usage.cost;
+        const u = poolResult.usage;
+        instance.budget.usedTokens += u.input + u.output + u.cacheRead + u.cacheWrite;
+        instance.budget.usedCost += u.cost;
       }
 
       // P1-5: Stale context detection — do not retry when pi's session context
@@ -896,10 +897,9 @@ export class WorkflowOrchestrator {
       if (!poolResult.success && attempt < MAX_AGENT_RETRIES) {
         const delay = RETRY_BACKOFF_MS * Math.pow(EXPONENTIAL_BACKOFF_BASE, attempt - 1);
         setTimeout(() => {
-          // P0-2: Stale state check before retry
-          if (instance.status !== "running") return;
-          // Skip retry if run was aborted (controller removed by terminateWorker)
-          if (!this.runAbortControllers.has(runId)) return;
+          // P0-2 + Round 6 MF#6: stale state, abort, AND budget recheck before retry
+          if (instance.status !== "running" || !this.runAbortControllers.has(runId)) return;
+          if (this.isBudgetExceeded(instance)) { void checkBudget(instance, runId, this.budgetCallbacks()); return; }
           this.executeWithRetry(runId, callId, opts, instance, node, attempt + 1);
         }, delay);
         return;
