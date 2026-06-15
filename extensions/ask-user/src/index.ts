@@ -3,6 +3,7 @@ import { Box, Text, TruncatedText } from "@earendil-works/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import { AskUserComponent } from "./component";
+import { type Static } from "typebox";
 import { InputSchema, type Question, type Result, type ThemeLike } from "./types";
 import { validateInput } from "./validate";
 
@@ -23,7 +24,7 @@ export default function (pi: ExtensionAPI): void {
 
 		async execute(
 			_toolCallId: string,
-			params: Record<string, unknown>,
+			params: Static<typeof InputSchema>,
 			signal: AbortSignal | undefined,
 			_onUpdate: unknown,
 			ctx: {
@@ -37,7 +38,7 @@ export default function (pi: ExtensionAPI): void {
 				};
 			},
 		) {
-			const questions = (params as { questions: Question[] }).questions;
+			const questions = params.questions;
 
 			// 1. 参数校验（spec FR-2）→ isError
 			const validationError = validateInput(questions);

@@ -316,13 +316,14 @@ export class AskUserComponent implements Component {
 		if (hasAnswer) state.confirmed = true;
 	}
 
-	/** 选中确认后的处理：若 allowComment 且未输入评论，进入评论模式；否则前进。 */
+	/** 选中确认后的处理：若 allowComment，进入评论模式（可重入编辑/清除已有评论）；否则前进。 */
 	private afterConfirm(state: QuestionState, q: Question): void {
 		state.confirmed = true;
-		if (q.allowComment && state.commentValue === null && state.mode !== "comment") {
-			// 进入评论输入行
+		if (q.allowComment && state.mode !== "comment") {
+			// 进入评论输入行。预填已有评论，空 Enter=清除、新文本=覆盖（FR-4 item6）。
+			// 允许回改时重新编辑/清除已输入评论，避免评论被错误附着到后改的答案。
 			state.mode = "comment";
-			this.editorText = "";
+			this.editorText = state.commentValue ?? "";
 			this.invalidate();
 			this.tui.requestRender();
 			return;
