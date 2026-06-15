@@ -169,6 +169,40 @@ describe("AskUserComponent — multi question tab nav", () => {
 		expect(result.val!.answers["Q1"]).toBe("A");
 		expect(result.val!.answers["Q2"]).toBe("X");
 	});
+
+	it("C-REG-R6: Other 录入→重进清空→Submit 应回到未答（confirmed 不变式）", () => {
+		// 回归 MUST_FIX: freeform 空 Enter 清空 freeTextValue 后须重置 confirmed=false
+		const { c, result } = make(multiQ);
+		// Q1 (A/B + Other): 导航到 Other，录入 "custom"
+		c.handleInput(DOWN);
+		c.handleInput(DOWN); // → Other
+		c.handleInput(" ");   // 打开 freeform
+		c.handleInput("c");
+		c.handleInput("u");
+		c.handleInput("s");
+		c.handleInput("t");
+		c.handleInput("o");
+		c.handleInput("m");
+		c.handleInput(ENTER); // 保存 freeText → confirmed=true → advance to Q2
+		// 切回 Q1，重进 Other 编辑器，清空后空 Enter
+		c.handleInput(LEFT);  // → Q1
+		c.handleInput(DOWN);  // idempotent: cursor stays on Other
+		c.handleInput(DOWN);
+		c.handleInput(" ");   // 重开 freeform，editorText 预填 "custom"
+		c.handleInput(BKSP);  // 清空 editorText
+		c.handleInput(BKSP);
+		c.handleInput(BKSP);
+		c.handleInput(BKSP);
+		c.handleInput(BKSP);
+		c.handleInput(BKSP);
+		c.handleInput(ENTER); // 空 Enter → freeTextValue 清空，confirmed 应重置 false
+		// 导航到 Submit 并尝试提交 → 应被阻塞（Q1 回到未答）
+		c.handleInput(RIGHT); // → Q2
+		c.handleInput(RIGHT); // → Q3
+		c.handleInput(RIGHT); // → Submit
+		c.handleInput(ENTER); // 应被阻塞
+		expect(result.val).toBeUndefined();
+	});
 });
 
 // ── 5c. 单选选择（FR-6）────────────────────────────────

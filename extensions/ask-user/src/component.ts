@@ -274,6 +274,10 @@ export class AskUserComponent implements Component {
 					state.freeTextValue = null;
 					state.mode = "options";
 					this.editorText = "";
+					// 对齐 toggleIndex 守卫：清空后若全无答案，重置 confirmed，维持 confirmed ⟹ 有答案 不变式
+					if ((q.multiSelect ? state.selectedIndices.size === 0 : state.selectedIndex === null) && state.freeTextValue === null) {
+						state.confirmed = false;
+					}
 					this.invalidate();
 					this.tui.requestRender();
 				}
