@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { SubagentRuntime } from "../runtime.ts";
 import { COMPLETED_AGENTS_MAX } from "../types.ts";
+import { createExecutionState } from "../state/execution-state.ts";
 
 function makeRuntime(): SubagentRuntime {
   return new SubagentRuntime({ cwd: "/tmp", homeDir: "/tmp", agentDir: "/tmp/.pi/agent" });
@@ -24,14 +25,12 @@ describe("SubagentRuntime — record retention (FR-3.0)", () => {
     expect(rt.listCompleted()[0].id).toBe("run-1");
   });
 
-  it("archiveBackgroundAgent persists eventLog + agent to BgRecord", () => {
+  it("getBackground returns eventLog + agent from state (Wave 1: state is single source)", () => {
     const rt = makeRuntime();
-    // 模拟 BgRecord 已存在（实际由 startBackground 创建）
-    rt["_bgRecords"].set("bg-1", { id: "bg-1", status: "running", startedAt: Date.now() });
-    rt.archiveBackgroundAgent("bg-1", {
-      eventLog: [{ type: "tool_start", label: "read foo.ts", ts: 0, status: "running" }],
-      agent: "reviewer",
-    });
+    // Wave 1: BgRecord 内嵌 AgentExecutionState，不再有独立 eventLog/agent 字段
+    const state = createExecutionState("bg-1", { agent: "reviewer", model: "test/model", startedAt: Date.now() });
+    state.eventLog.push({ type: "tool_start", label: "read foo.ts", ts: 0, status: "running" });
+    rt["_bgRecords"].set("bg-1", { id: "bg-1", state, status: "running", startedAt: state.startedAt });
     const record = rt.getBackground("bg-1");
     expect(record?.eventLog).toHaveLength(1);
     expect(record?.agent).toBe("reviewer");

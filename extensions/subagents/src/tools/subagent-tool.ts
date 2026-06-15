@@ -21,57 +21,44 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 
 import { getRuntime } from "../runtime.ts";
-import { updateWidgetFromEvent } from "../event-log-builder.ts";
 import { formatTokens } from "../tui/format.ts";
-import type { WidgetAgentState } from "../tui/agent-widget.ts";
+import { completeState, createExecutionState, executionStateToDetails, updateStateFromEvent } from "../state/execution-state.ts";
 import { renderSubagentCall, SubagentResultComponent, type SubagentToolDetails } from "../tui/subagent-render.ts";
-import type { AgentEvent, AgentEventLogEntry } from "../types.ts";
+import type { AgentEvent } from "../types.ts";
 
 /** ms to seconds conversion */
 const MS_PER_SECOND = 1000;
 
 // ============================================================
-// FR-2.3: spinner 定时器 state + renderSubagentResult
+// FR-2.3: renderSubagentResult（事件驱动 seed-frame，无 setInterval）
 // ============================================================
 
-/** FR-2.3: spinner 定时器 state（ToolDefinition 的 TState） */
-export interface SubagentToolState {
-  timer?: ReturnType<typeof setInterval>;
-  frame: number;
-}
+/**
+ * FR-2.3: spinner 现由 seed-frame 驱动（subagent-render.ts 的 detailsSeed），
+ * 不再需要定时器。context.state 保留为 Pi runtime 契约要求的占位。
+ *
+ * 之前用 setInterval(250ms) → context.invalidate() 驱动 spinner 换帧，导致：
+ *  - Bug #4：250ms 重绘把 pi-tui viewport 强制拉回底部，用户无法滚动历史；
+ *  - Bug #1：background 模式 timer 清理依赖 Pi 回调，组件滚出视区后仍空转。
+ *  现在每次 onUpdate（真实事件）触发重绘时 seed 变化 → spinner 自然换帧，
+ *  静默期冻结换取滚动体验。与 pi-subagents render.ts 的 runningGlyph 一致。
+ */
+export type SubagentToolState = Record<string, never>;
 
-/** 初始化 tool state（frame=0, 无 timer） */
+/** 占位 state（spinner 已改为 seed-frame，无需 frame/timer 字段）。 */
 export function initialToolState(): SubagentToolState {
-  return { frame: 0 };
+  return {};
 }
-
-/** spinner 帧数（RUNNING_FRAMES.length，与 subagent-render.ts 一致） */
-const SPINNER_FRAMES_COUNT = 10;
-/** spinner 定时器间隔（ms） */
-const SPINNER_INTERVAL_MS = 250;
 
 /**
- * FR-2.3: renderResult 逻辑——管理 spinner 定时器生命周期。
- * running 时启动 setInterval(250ms) → context.invalidate()；done/failed 时 clearInterval。
- * 定时器存 context.state（pi-tui Component 无 destroy 钩子，state 是唯一销毁点）。
- *
- * ⚠️ context.state 由 Pi runtime 初始化为 `{}`（tool-execution.js rendererState = {}），
- * 首次渲染时 frame/timer 均为 undefined。必须在 running 分支入口确保 frame 初始化为 0，
- * 否则 `(undefined + 1) % 10 = NaN`，spinner 帧序列取 [NaN] 得到 undefined。
- *
- * ⚠️ 定时器清理前置条件：Pi runtime（tool-execution.js）不对 renderResult 返回的 Component
- * 调 dispose/destroy。定时器的清理**完全依赖** Pi 在 agent 状态变为 done/failed 后**再次调用**
- * renderResult（此时进入 else 分支 clearInterval）。sync 模式的 pushUpdate("done"/"failed")
- * 会触发 onUpdate → Pi 重渲染 → renderResult 再入；background 模式同理。
- * timer.unref() 保证不阻止进程退出，但运行期若 Pi 因组件隐藏/滚动/session 切换不再调
- * renderResult，250ms interval 会持续 invalidate 不可见组件（CPU 轻微浪费，非泄漏——
- * 进程退出时随 unref 清理）。
+ * FR-2.3: renderResult——构造 SubagentResultComponent。
+ * 不再管理任何定时器：spinner 由 detailsSeed(details) 在 render 时计算。
  */
 export function renderSubagentResult(
   result: AgentToolResult<SubagentToolDetails>,
   options: { expanded: boolean; isPartial: boolean },
   theme: { bg(color: string, text: string): string; fg(color: string, text: string): string; bold(text: string): string },
-  context: { state: SubagentToolState; invalidate(): void },
+  _context: { state: SubagentToolState; invalidate(): void },
 ): SubagentResultComponent {
   const details = result.details;
   if (!details || typeof details.status !== "string") {
@@ -83,29 +70,8 @@ export function renderSubagentResult(
     );
   }
 
-  // 确保 state 字段初始化（Pi runtime 初始传 {}，frame/timer 为 undefined）
-  if (context.state.frame === undefined) context.state.frame = 0;
-
   const comp = new SubagentResultComponent(details, theme);
   comp.setExpanded(options.expanded);
-
-  if (details.status === "running") {
-    if (!context.state.timer) {
-      context.state.timer = setInterval(() => {
-        context.state.frame = (context.state.frame + 1) % SPINNER_FRAMES_COUNT;
-        comp.setSpinnerFrame(context.state.frame);
-        context.invalidate();
-      }, SPINNER_INTERVAL_MS);
-      context.state.timer.unref?.();
-    }
-    comp.setSpinnerFrame(context.state.frame);
-  } else {
-    if (context.state.timer) {
-      clearInterval(context.state.timer);
-      context.state.timer = undefined;
-    }
-  }
-
   return comp;
 }
 
@@ -273,10 +239,9 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
             eventLog: status.eventLog ?? [],
             status: "running",
             agent: status.agent ?? "default",
-            turns: 0,
-            totalTokens: 0,
+            turns: status.turns ?? 0,
+            totalTokens: status.totalTokens ?? 0,
             elapsedSeconds: Math.round((Date.now() - status.startedAt) / MS_PER_SECOND),
-            _render: buildSubagentRender(status.agent ?? "default", "running"),
           };
           return {
             content: [
@@ -299,11 +264,6 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
           elapsedSeconds: status.endedAt ? Math.round((status.endedAt - status.startedAt) / MS_PER_SECOND) : 0,
           result: status.result?.text,
           error: status.error,
-          _render: buildSubagentRender(
-            status.agent ?? "default",
-            status.status === "done" ? "done" : "failed",
-            (status.result?.text ?? status.error ?? "(no output)").slice(0, 200),
-          ),
         };
         const text = status.result?.text ?? status.error ?? "(no output)";
         return {
@@ -329,23 +289,24 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         effectiveWait = agentConfig?.defaultBackground ? false : true; // 配置其次，默认 sync
       }
 
-      // FR-O3.1a: 执行前校验显式 model/thinkingLevel 是否可解析，避免 token 浪费到一半才报错。
-      // 复用单次解析结果给 sync/background 两条分支（之前双调用会触发两次 agentRegistry.discoverAll，
-      // 期间 hot-reload 可能让第二次结果与第一次不一致，details.model 字段在两分支间漂移）。
-      let resolved: ReturnType<NonNullable<typeof rt.resolveModelForAgent>> | undefined;
-      if (params.model || params.thinkingLevel) {
-        resolved = rt.resolveModelForAgent?.(params.agent, {
-          model: params.model,
-          thinkingLevel: params.thinkingLevel,
-        });
-        if (!resolved) {
-          throw new Error(
-            `Failed to resolve model "${params.model ?? "<agent-default>"}"` +
-              (params.thinkingLevel ? ` with thinkingLevel "${params.thinkingLevel}"` : "") +
-              ` for agent "${params.agent ?? "default"}". ` +
-              'Check the model string is in "provider/modelId" format and is available in your configured providers.',
-          );
-        }
+      // Bug #2 fix: 始终解析 model（即使无显式 override），让 TUI 第 1 行能展示 provider/model。
+      // resolveModelForAgent 在无 override 时走完整 fallback chain 解析 agent 默认 model
+      // （见 runtime.ts:748-771 → model-resolver.ts:55-130）。
+      // 仅在用户显式指定 model/thinkingLevel 且解析失败时抛错（避免浪费 token）；
+      // 无 override 时解析失败则静默（resolved=undefined），runAgent 内部会用全局 fallback。
+      // 复用单次解析结果给 sync/background 两条分支（避免双调用触发两次 discoverAll 漂移）。
+      const hasExplicitOverride = !!(params.model || params.thinkingLevel);
+      const resolved = rt.resolveModelForAgent?.(params.agent, {
+        model: params.model,
+        thinkingLevel: params.thinkingLevel,
+      });
+      if (hasExplicitOverride && !resolved) {
+        throw new Error(
+          `Failed to resolve model "${params.model ?? "<agent-default>"}"` +
+            (params.thinkingLevel ? ` with thinkingLevel "${params.thinkingLevel}"` : "") +
+            ` for agent "${params.agent ?? "default"}". ` +
+            'Check the model string is in "provider/modelId" format and is available in your configured providers.',
+        );
       }
 
       // ── Mode 2: background ──────────────────────────────
@@ -369,19 +330,13 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
           graceTurns: params.graceTurns,
           signal,
           onUpdate: (bgDetails) => {
+            // Wave 1: runtime 已通过 executionStateToDetails 投影出完整 SubagentToolDetails。
+            // tool 层只需补充 backgroundId（runtime 不知道），直接透传其余字段。
             onUpdate?.({
-              content: [{ type: "text" as const, text: `[subagent] ${bgDetails.turns} turns | ${bgDetails.totalTokens} tokens | ${bgDetails.elapsedSeconds}s` }],
+              content: [{ type: "text" as const, text: `[subagent] ${bgDetails.turns} turns | ${formatTokens(bgDetails.totalTokens)} | ${bgDetails.elapsedSeconds}s` }],
               details: {
-                eventLog: bgDetails.eventLog,
-                status: bgDetails.status,
-                agent: agentName,
-                turns: bgDetails.turns,
-                totalTokens: bgDetails.totalTokens,
-                elapsedSeconds: bgDetails.elapsedSeconds,
+                ...bgDetails,
                 backgroundId: bgId,
-                model: resolved?.model.id,
-                thinkingLevel: resolved?.thinkingLevel,
-                _render: buildSubagentRender(agentName, bgDetails.status),
               },
             });
           },
@@ -397,7 +352,6 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
           backgroundId: handle.id,
           model: resolved?.model.id,
           thinkingLevel: resolved?.thinkingLevel,
-          _render: buildSubagentRender(agentName, "running"),
         };
         return {
           content: [
@@ -417,31 +371,21 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       const resolvedModelId = resolved?.model.id;
       const resolvedThinkingLevel = resolved?.thinkingLevel;
 
-      // FR-1.3: 复用 updateWidgetFromEvent 统一 eventLog 构建（含 text_output/thinking 切片），
-      // 与 background 模式共享同一套逻辑，保证 sync/background 对话流 block 视觉一致（spec FR-2.1）。
-      const toolState: WidgetAgentState = {
-        id: "sync",
+      // Wave 2: 创建 AgentExecutionState（model 创建时必填），传给 runAgent。
+      // runAgent 的 onEvent 拦截器更新 state（唯一 eventLog 构建点），
+      // tool 层直接读 state 投影——消灭 toolState 双构建。
+      const state = createExecutionState(`sync-${Date.now()}`, {
         agent: agentName,
-        status: "running",
-        eventLog: [],
-      };
-
-      const buildDetails = (status: SubagentToolDetails["status"]): SubagentToolDetails => ({
-        eventLog: [...(toolState.eventLog ?? [])],
-        status,
-        agent: agentName,
-        turns: toolState.turns ?? 0,
-        totalTokens: toolState.totalTokens ?? 0,
-        elapsedSeconds: Math.floor((Date.now() - startTime) / MS_PER_SECOND),
-        model: resolvedModelId,
+        model: resolvedModelId ?? "unknown",
         thinkingLevel: resolvedThinkingLevel,
-        _render: buildSubagentRender(agentName, status, (toolState.summary ?? "").slice(0, 200)),
+        startedAt: startTime,
       });
 
-      const pushUpdate = (status: SubagentToolDetails["status"]) => {
+      const pushUpdate = () => {
+        const details = executionStateToDetails(state);
         onUpdate?.({
-          content: [{ type: "text" as const, text: formatProgressText(toolState.eventLog ?? [], toolState.turns ?? 0, toolState.totalTokens ?? 0, startTime) }],
-          details: buildDetails(status),
+          content: [{ type: "text" as const, text: `[subagent] ${details.turns} turns | ${formatTokens(details.totalTokens)} | ${details.elapsedSeconds}s` }],
+          details: { ...details },
         });
       };
 
@@ -459,21 +403,24 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         signal,
         // FR-O4.1: sync 高优先级（0），保证响应；background 传 1000（低），不抢占 sync
         priority: 0,
+        // Wave 2: 传入 state——tool 的 onEvent 是唯一状态更新点（runtime 不再重复更新）
+        state,
         onEvent: (event: AgentEvent) => {
-          // FR-1.3: 统一委托 updateWidgetFromEvent（处理 tool_start/end、text_output/thinking 切片、
-          // turn_end summary、message_end token 累加、ring buffer 淘汰）
-          updateWidgetFromEvent(toolState, event, startTime);
-          // Push live update
-          pushUpdate("running");
+          updateStateFromEvent(state, event);
+          pushUpdate();
         },
       });
 
       if (!result.success) {
-        pushUpdate("failed");
+        completeState(state, result, "failed");
+        pushUpdate();
         throw new Error(result.error ?? "subagent failed (no error detail)");
       }
 
-      const finalDetails = buildDetails("done");
+      // Wave 2: 确保 state 反映最终状态（runAgent 的真实实现已调 completeState，
+      // 但 mock runAgent 不会——tool 层自包含，保证投影正确）
+      if (state.status === "running") completeState(state, result, "done");
+      const finalDetails = executionStateToDetails(state);
       finalDetails.result = result.text;
       // V4：worktree 隔离执行有变更时，向 LLM 追加 merge 指令（分支名 + 合并命令）
       let resultText = result.text;
@@ -495,48 +442,6 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 // Helpers
 // ============================================================
 
-/** Round 5 SUG#9: 构造 GUI task-list 描述符。subagent 结果天然适配
- *  task-list：一条主项（agent 名称 + 状态），detail 含 result/error 预览。
- *  与 _render 协议（CLAUDE.md GUI 渲染描述符）一致——xyz-agent 缺失时 fallback 到 content。
- *
- *  Round 6 MF#8: exported for testability. */
-export function buildSubagentRender(agent: string, status: SubagentToolDetails["status"], detail?: string): NonNullable<SubagentToolDetails["_render"]> {
-  return {
-    type: "task-list",
-    data: {
-      title: `Subagent: ${agent}`,
-      items: [{ label: agent, status: mapRenderStatus(status), detail }],
-    },
-  };
-}
-
-/** 把 SubagentToolDetails status 映射到 _render 协议的状态联合。
- *  两者表达相似但枚举不同（_render 用 pending/in_progress/completed/cancelled/failed）。
- *
- *  Round 6 MF#8: exported for testability. */
-export function mapRenderStatus(status: SubagentToolDetails["status"]): "pending" | "in_progress" | "completed" | "failed" | "cancelled" {
-  switch (status) {
-    case "running": return "in_progress";
-    case "done": return "completed";
-    case "failed": return "failed";
-    case "cancelled": return "cancelled";
-  }
-}
-
-/** Build progress text for the model (content field) */
-function formatProgressText(
-  eventLog: AgentEventLogEntry[],
-  turns: number,
-  totalTokens: number,
-  startTime: number,
-): string {
-  const elapsed = Math.floor((Date.now() - startTime) / MS_PER_SECOND);
-  const tokenStr = formatTokens(totalTokens);
-  const lines = [`[subagent] ${turns} turns | ${tokenStr} tokens | ${elapsed}s`];
-  // Show last 3 events for context
-  const recent = eventLog.slice(-3);
-  for (const entry of recent) {
-    lines.push(`  ${entry.label}`);
-  }
-  return lines.join("\n");
-}
+// Wave 5: buildSubagentRender / mapRenderStatus / formatProgressText 已删除。
+// _render GUI 描述符被 TUI 渲染层从不读取（死代码），双状态枚举维护负担已消除。
+// progress text 现在由 pushUpdate 内联生成（用 executionStateToDetails 投影）。

@@ -29,9 +29,7 @@ vi.mock("../runtime.ts", async (importActual) => {
 // 必须在 vi.mock 之后 import 被测模块（此时 runtime.ts 已被替换）
 import { getRuntime } from "../runtime.ts";
 import {
-  buildSubagentRender,
   initialToolState,
-  mapRenderStatus,
   registerSubagentTool,
   renderSubagentResult,
 } from "../tools/subagent-tool.ts";
@@ -458,6 +456,36 @@ describe("subagent tool execute()", () => {
     expect(runAgentMock).not.toHaveBeenCalled();
   });
 
+  // ── Bug #2: 无显式 model 时仍解析默认 model，让 TUI 能展示 ──
+  it("sync mode: 无显式 model 时 details.model 仍填充为 agent 默认 model", async () => {
+    const runAgentMock = vi.fn(async () => successResult());
+    const resolveMock = vi.fn(() => ({ model: { id: "anthropic/claude-sonnet-4.5" }, thinkingLevel: "medium" }));
+    const mockRt = makeMockRuntime({ runAgent: runAgentMock, resolveModelForAgent: resolveMock });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    // 不传 model/thinkingLevel → 之前 resolved=undefined，details.model 丢失
+    const result = await tool.execute("call-no-model", { task: "do work", agent: "worker" }) as ExecuteResult;
+    // Bug #2 fix: 现在 resolveModelForAgent 总是被调用
+    expect(resolveMock).toHaveBeenCalledWith("worker", { model: undefined, thinkingLevel: undefined });
+    // details.model 应填充为默认 model
+    expect(result.details.model).toBe("anthropic/claude-sonnet-4.5");
+  });
+
+  it("sync mode: 无显式 model 且 resolveModelForAgent 返回 undefined 时不抛错（静默 fallback）", async () => {
+    const runAgentMock = vi.fn(async () => successResult());
+    const resolveMock = vi.fn(() => undefined);
+    const mockRt = makeMockRuntime({ runAgent: runAgentMock, resolveModelForAgent: resolveMock });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    // 无显式 override + resolve 失败 → 不抛错（runAgent 内部会用全局 fallback）
+    const result = await tool.execute("call-no-model-unresolved", { task: "do work", agent: "worker" }) as ExecuteResult;
+    expect(runAgentMock).toHaveBeenCalledTimes(1);
+    // Wave 2: state.model 创建时必填，resolve 失败时用占位 "unknown"
+    expect(result.details.model).toBe("unknown");
+  });
+
   // ── Round 5 SUG#12: throw fallback 路径测试 ──────────────────
   it("sync mode: throws 'subagent failed (no error detail)' when result.success=false and error is undefined", async () => {
     const mockRt = makeMockRuntime({
@@ -527,130 +555,38 @@ describe("subagent tool execute()", () => {
     expect(text).not.toContain("Changes saved to branch");
   });
 
-  // ── Round 6 MF#8: _render 描述符在 sync/background/poll 三路径都应构造 ─────
-  it("sync mode: details._render is a task-list with status=completed", async () => {
-    const mockRt = makeMockRuntime({
-      runAgent: vi.fn(async () => successResult()),
-    });
-    mockedGetRuntime.mockReturnValue(mockRt as never);
-
-    const tool = captureTool();
-    const result = await tool.execute("call-render-sync", { task: "do work", agent: "reviewer" });
-    const render = (result.details as { _render?: unknown })._render;
-    expect(render).toBeDefined();
-    const r = render as { type: string; data: { title: string; items: Array<{ label: string; status: string; detail?: string }> } };
-    expect(r.type).toBe("task-list");
-    expect(r.data.title).toBe("Subagent: reviewer");
-    expect(r.data.items).toHaveLength(1);
-    expect(r.data.items[0]?.label).toBe("reviewer");
-    expect(r.data.items[0]?.status).toBe("completed"); // done → completed
-  });
-
-  it("background mode: details._render is a task-list with status=in_progress", async () => {
-    const handle: BackgroundHandle = { id: "bg-render", status: "running" };
-    const mockRt = makeMockRuntime({
-      startBackground: vi.fn(() => handle),
-    });
-    mockedGetRuntime.mockReturnValue(mockRt as never);
-
-    const tool = captureTool();
-    const result = await tool.execute("call-render-bg", { task: "do work", wait: false, agent: "scout" });
-    const render = (result.details as { _render?: unknown })._render;
-    expect(render).toBeDefined();
-    const r = render as { type: string; data: { title: string; items: Array<{ label: string; status: string }> } };
-    expect(r.type).toBe("task-list");
-    expect(r.data.title).toBe("Subagent: scout");
-    expect(r.data.items[0]?.status).toBe("in_progress"); // running → in_progress
-  });
-
-  it("poll mode: details._render maps status done→completed, failed→failed", async () => {
-    const mockRt = makeMockRuntime({
-      getBackground: vi.fn((id: string) => {
-        if (id === "bg-done") {
-          return {
-            id, status: "done", startedAt: Date.now() - 1000, endedAt: Date.now(),
-            agent: "worker", result: successResult({ text: "ok" }), eventLog: [],
-          } as BackgroundStatus;
-        }
-        if (id === "bg-failed") {
-          return {
-            id, status: "failed", startedAt: Date.now() - 1000, endedAt: Date.now(),
-            agent: "reviewer", error: "model down", eventLog: [],
-          } as BackgroundStatus;
-        }
-        return undefined;
-      }),
-    });
-    mockedGetRuntime.mockReturnValue(mockRt as never);
-
-    const tool = captureTool();
-    const doneResult = await tool.execute("call-poll-done", { backgroundId: "bg-done" });
-    const doneRender = (doneResult.details as { _render?: { data: { items: Array<{ status: string; detail?: string }> } } })._render;
-    expect(doneRender?.data.items[0]?.status).toBe("completed");
-    expect(doneRender?.data.items[0]?.detail).toBe("ok");
-
-    const failedResult = await tool.execute("call-poll-failed", { backgroundId: "bg-failed" });
-    const failedRender = (failedResult.details as { _render?: { data: { items: Array<{ status: string; detail?: string }> } } })._render;
-    expect(failedRender?.data.items[0]?.status).toBe("failed");
-    expect(failedRender?.data.items[0]?.detail).toContain("model down");
-  });
+  // Wave 5: _render / buildSubagentRender / mapRenderStatus tests deleted (dead code removed).
 });
 
-// ── Round 6 MF#8: buildSubagentRender / mapRenderStatus 单元测试 ───────────
-describe("buildSubagentRender + mapRenderStatus", () => {
-  it("mapRenderStatus: running → in_progress", () => {
-    expect(mapRenderStatus("running")).toBe("in_progress");
-  });
-  it("mapRenderStatus: done → completed", () => {
-    expect(mapRenderStatus("done")).toBe("completed");
-  });
-  it("mapRenderStatus: failed → failed", () => {
-    expect(mapRenderStatus("failed")).toBe("failed");
-  });
-  it("mapRenderStatus: cancelled → cancelled", () => {
-    expect(mapRenderStatus("cancelled")).toBe("cancelled");
-  });
+// Wave 5: buildSubagentRender + mapRenderStatus describe block deleted (functions removed).
 
-  it("buildSubagentRender: returns task-list with title and one item", () => {
-    const r = buildSubagentRender("worker", "running");
-    expect(r.type).toBe("task-list");
-    expect(r.data.title).toBe("Subagent: worker");
-    expect(r.data.items).toHaveLength(1);
-    expect(r.data.items[0]).toEqual({ label: "worker", status: "in_progress", detail: undefined });
-  });
-
-  it("buildSubagentRender: passes detail through unchanged (truncation is caller's job)", () => {
-    const r = buildSubagentRender("worker", "done", "short detail");
-    expect(r.data.items[0]?.detail).toBe("short detail");
-  });
-});
-
-describe("renderSubagentResult — spinner timer lifecycle (FR-2.3)", () => {
+describe("renderSubagentResult — seed-frame spinner（无 setInterval，Bug #1/#4）", () => {
   const fakeTheme = {
     bg(_c: string, t: string): string { return t; },
     fg(_c: string, t: string): string { return t; },
     bold(t: string): string { return t; },
   };
 
-  it("starts timer when status=running", () => {
+  it("running 渲染成功且不创建 timer（state 保持空）", () => {
     const state = initialToolState();
     const invalidate = vi.fn();
     const context = { state, invalidate };
-    renderSubagentResult(
+    const comp = renderSubagentResult(
       { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "running", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
       { expanded: false, isPartial: false },
       fakeTheme,
       context,
     );
-    expect(state.timer).toBeDefined();
-    // frame 应被初始化（Pi runtime 初始传 {}，renderSubagentResult 负责初始化 frame=0）
-    expect(state.frame).toBe(0);
-    if (state.timer) clearInterval(state.timer);
+    expect(comp).toBeDefined();
+    // Bug #1/#4: 不再有 timer 字段
+    expect((state as Record<string, unknown>).timer).toBeUndefined();
+    expect((state as Record<string, unknown>).frame).toBeUndefined();
+    // Bug #4: running 期间不调用 invalidate（无 setInterval 抢占滚动）
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
-  it("clears timer when status=done", () => {
+  it("done 渲染成功（无 timer 需清理）", () => {
     const state = initialToolState();
-    state.timer = setInterval(() => {}, 99999);
     const invalidate = vi.fn();
     const context = { state, invalidate };
     renderSubagentResult(
@@ -659,21 +595,7 @@ describe("renderSubagentResult — spinner timer lifecycle (FR-2.3)", () => {
       fakeTheme,
       context,
     );
-    expect(state.timer).toBeUndefined();
-  });
-
-  it("clears timer when status=failed", () => {
-    const state = initialToolState();
-    state.timer = setInterval(() => {}, 99999);
-    const invalidate = vi.fn();
-    const context = { state, invalidate };
-    renderSubagentResult(
-      { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "failed", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
-      { expanded: false, isPartial: false },
-      fakeTheme,
-      context,
-    );
-    expect(state.timer).toBeUndefined();
+    expect((state as Record<string, unknown>).timer).toBeUndefined();
   });
 
   it("does not crash with malformed details (fallback)", () => {
@@ -688,64 +610,24 @@ describe("renderSubagentResult — spinner timer lifecycle (FR-2.3)", () => {
       context,
     );
     expect(comp).toBeDefined();
-    expect(state.timer).toBeUndefined();
   });
 
-  it("timer advances frame + calls invalidate on each tick (FR-2.3)", () => {
+  it("Bug #4: 推进真实时间不触发 invalidate（无定时器抢占滚动）", () => {
     vi.useFakeTimers();
     try {
       const state = initialToolState();
       const invalidate = vi.fn();
       const context = { state, invalidate };
-      const comp = renderSubagentResult(
-        { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "running", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
-        { expanded: false, isPartial: false },
-        fakeTheme,
-        context,
-      );
-      expect(state.timer).toBeDefined();
-      expect(state.frame).toBe(0);
-      // 推进 250ms（一个 tick）→ frame +1 + invalidate 被调 + comp 帧更新
-      vi.advanceTimersByTime(250);
-      expect(state.frame).toBe(1);
-      expect(invalidate).toHaveBeenCalledTimes(1);
-      // 再推进一个 tick → frame=2
-      vi.advanceTimersByTime(250);
-      expect(state.frame).toBe(2);
-      expect(invalidate).toHaveBeenCalledTimes(2);
-      void comp;
-      if (state.timer) clearInterval(state.timer);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("running→done transition clears timer (integration)", () => {
-    vi.useFakeTimers();
-    try {
-      const state = initialToolState();
-      const invalidate = vi.fn();
-      const context = { state, invalidate };
-      // 先以 running 渲染 → 启动定时器
       renderSubagentResult(
         { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "running", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
         { expanded: false, isPartial: false },
         fakeTheme,
         context,
       );
-      expect(state.timer).toBeDefined();
-      // 同一 state 再以 done 渲染 → 应清理定时器
-      renderSubagentResult(
-        { content: [{ type: "text", text: "ok" }], details: { eventLog: [], status: "done", agent: "w", turns: 1, totalTokens: 0, elapsedSeconds: 0 } },
-        { expanded: false, isPartial: false },
-        fakeTheme,
-        context,
-      );
-      expect(state.timer).toBeUndefined();
-      // 推进时间，确认不再 invalidate（定时器已清）
       const callsBefore = invalidate.mock.calls.length;
-      vi.advanceTimersByTime(500);
-      expect(invalidate.mock.calls.length).toBe(callsBefore);
+      // 推进 1 秒（旧的 setInterval 在此期间会 fire 4 次）
+      vi.advanceTimersByTime(1000);
+      expect(invalidate.mock.calls.length).toBe(callsBefore); // 不再被定时器调用
     } finally {
       vi.useRealTimers();
     }

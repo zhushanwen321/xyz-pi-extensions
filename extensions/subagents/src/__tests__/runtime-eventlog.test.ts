@@ -3,15 +3,13 @@ import { describe, expect, it } from "vitest";
 
 import { updateWidgetFromEvent } from "../event-log-builder.ts";
 import type { WidgetAgentState } from "../tui/agent-widget.ts";
+import { createExecutionState } from "../state/execution-state.ts";
 import { MAX_EVENT_LOG_ENTRIES, THINKING_CHUNK, TEXT_OUTPUT_CHUNK } from "../types.ts";
 
 function makeWidgetState(overrides: Partial<WidgetAgentState> = {}): WidgetAgentState {
-  return {
-    id: "run-1",
-    agent: "worker",
-    status: "running",
-    ...overrides,
-  } as WidgetAgentState;
+  // Wave 4: WidgetAgentState 是 AgentExecutionState 的 alias，需要完整字段
+  const base = createExecutionState("run-1", { agent: "worker", model: "test/model", startedAt: Date.now() });
+  return Object.assign(base, overrides);
 }
 
 describe("updateWidgetFromEvent — append mode", () => {
@@ -106,10 +104,12 @@ describe("updateWidgetFromEvent — append mode", () => {
     expect(s.eventLog).toHaveLength(MAX_EVENT_LOG_ENTRIES);
   });
 
-  it("preserves activity field for backward compat", () => {
+  it("tool_start produces a tool_start eventLog entry", () => {
     const s = makeWidgetState();
     updateWidgetFromEvent(s, { type: "tool_start", toolName: "read" }, Date.now());
-    expect(s.activity).toBe("read");
+    expect(s.eventLog).toHaveLength(1);
+    expect(s.eventLog![0].type).toBe("tool_start");
+    expect(s.eventLog![0].label).toContain("read");
   });
 });
 

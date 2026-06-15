@@ -19,7 +19,6 @@ import type {
   CompletedAgentRecord,
 } from "../types.ts";
 import { formatEventLogLine, formatTokens, type ThemeLike } from "./format.ts";
-import type { WidgetAgentState } from "./agent-widget.ts";
 
 // ============================================================
 // Types
@@ -406,21 +405,21 @@ function getAllRecords(runtime: SubagentRuntime): SubagentRecord[] {
     id: a.id,
     agent: a.agent,
     status: a.status,
-    eventLog: (a as WidgetAgentState & { eventLog?: AgentEventLogEntry[] }).eventLog ?? [],
+    eventLog: a.eventLog ?? [],
     turns: a.turns,
     totalTokens: a.totalTokens,
-    startedAt: a.finishedAt
-      ? a.finishedAt - (a.elapsedSeconds ?? 0) * 1000
-      : Date.now() - (a.elapsedSeconds ?? 0) * 1000,
-    endedAt: a.finishedAt,
+    // Wave 4: AgentExecutionState 存 startedAt（不存 elapsedSeconds/finishedAt）
+    startedAt: a.startedAt,
+    endedAt: a.endedAt,
   }));
   const bgRecords: SubagentRecord[] = runtime.listBackground().map((b) => ({
     id: b.id,
     agent: b.agent ?? "default",
     status: b.status,
     eventLog: b.eventLog ?? [],
-    turns: undefined,
-    totalTokens: undefined,
+    // Wave 4: 从 BackgroundStatus 读 turns/totalTokens（不再 hardcoded undefined）
+    turns: b.turns,
+    totalTokens: b.totalTokens,
     startedAt: b.startedAt,
     endedAt: b.endedAt,
     result: b.result,

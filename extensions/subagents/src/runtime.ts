@@ -2,7 +2,7 @@
 import * as path from "node:path";
 
 import { loadGlobalConfig, saveGlobalConfig } from "./config/global-config.ts";
-import { buildCompletionKey, getGlobalSeenMap, markSeenWithTtl } from "./persistence/completion-dedupe.ts";
+import { BgNotifier, type BgNotifyRecord } from "./persistence/bg-notifier.ts";
 import { runAgent, type RunAgentContext } from "./core/run-agent.ts";
 import { createManagedSession } from "./core/session.ts";
 import { inferCategory } from "./category.ts";
@@ -12,8 +12,13 @@ import { AgentRegistry } from "./registry/agent-registry.ts";
 import { BuiltinAgentRegistry } from "./registry/builtin-agents.ts";
 import { type ModelRegistryLike,resolveModelForAgent } from "./resolution/model-resolver.ts";
 import { createSessionModelState, restoreState, serializeState, setAgentModel, setCategoryModel } from "./state/session-model-state.ts";
-import type { WidgetAgentState } from "./tui/agent-widget.ts";
-import { updateRecordEventLog, updateWidgetFromEvent } from "./event-log-builder.ts";
+import {
+  type AgentExecutionState,
+  completeState,
+  createExecutionState,
+  executionStateToDetails,
+  updateStateFromEvent,
+} from "./state/execution-state.ts";
 import {
   type AgentConfig,
   type AgentEvent,
@@ -53,30 +58,38 @@ const BG_ID_RADIX = 36;
  * 注意：与 EVENT_LOG_LABEL_MAX（types.ts，eventLog label 截断）值相同但语义不同——
  * 前者截断最终结果文本预览，后者截断流式 eventLog 条目。有意不复用。
  */
-const WIDGET_SUMMARY_MAX = 100;
+// Wave 5: WIDGET_SUMMARY_MAX 删除（widgetState.summary 不再使用）
 /** widget 完成状态淡出延迟（ms） */
 const WIDGET_LINGER_MS = 5000;
-/** FR-O1.3: background 完成通知去重 TTL（10 分钟，移植自 notify.ts:56） */
-const BG_NOTIFY_TTL_MS = 10 * 60 * 1000;
-/** FR-O1.5: 合并窗口大小（首个立即发送，窗口内的后续合并） */
-const BG_MERGE_WINDOW_MS = 2000;
+/** FR-O1.3: background 完成通知去重 TTL 已移至 BgNotifier */
 /** FR-O5.9: BgRecord 容量上限（FIFO 淘汰） */
 const BG_RECORDS_MAX = 50;
 
 /** 进程内单例持有的 background 记录（含 AbortController 供 cancel）。
- * status 此处可写（BackgroundStatus.status 是 readonly，但内部记录需变异） */
+ *
+ * Wave 1 重构：BgRecord 不再有独立的 eventLog/agent/turns/totalTokens 字段——
+ * 全部委托给内嵌的 AgentExecutionState（唯一状态源）。
+ * status/startedAt/endedAt/result/error 仍保留在 BgRecord 上，因为
+ * .then/.catch/notifyBgCompletion/buildPersistedRecord 直接读这些字段；
+ * 它们与 state 的同名字段保持同步（completeState 写 state，BgRecord 镜像）。
+ *
+ * getBackground() 返回时从 state 展平 turns/totalTokens/model/thinkingLevel/eventLog。
+ */
 interface BgRecord {
   readonly id: string;
-  status: BackgroundStatus["status"];
+  /** 内嵌统一状态对象（唯一状态源） */
+  state: AgentExecutionState;
+  /** 完成时的 AgentResult（也存于 state.agentResult，这里保留供 getBackground 展平） */
   result?: AgentResult;
+  /** 失败原因（也存于 state.error） */
   error?: string;
+  /** 启动时间（也存于 state.startedAt，这里保留供 getBackground 展平） */
   startedAt: number;
+  /** 结束时间（也存于 state.endedAt） */
   endedAt?: number;
+  /** BgRecord 级状态（与 state.status 同步，供 getBackground/cancelBackground 读） */
+  status: BackgroundStatus["status"];
   controller?: AbortController;
-  /** FR-3.0: 留存 eventLog（widget 淺出前转移） */
-  eventLog?: AgentEventLogEntry[];
-  /** FR-3.0a: agent 名持久化 */
-  agent?: string;
   /** Must-fix #2: set by cancelBackground to signal user-initiated cancellation.
    *  .then/.catch check this to skip completion side effects (onComplete/events/
    *  history) for an already-settled cancellation, preventing double-trigger. */
@@ -106,17 +119,8 @@ export class SubagentRuntime {
   private _bgSeq = 0;
   private _widgetSeq = 0;
 
-  /** FR-O1.5: 合并窗口 pending 通知队列 + 定时器 */
-  private readonly _pendingNotifications: Array<{
-    id: string;
-    status: "done" | "failed" | "cancelled";
-    agent?: string;
-    result?: AgentResult;
-    error?: string;
-    startedAt: number;
-    endedAt?: number;
-  }> = [];
-  private _mergeWindowTimer?: ReturnType<typeof setTimeout>;
+  /** FR-O1.5: background 完成通知器（合并窗口 + 去重 + 发送） */
+  private _bgNotifier: BgNotifier = new BgNotifier(null);
   /** P2: dispose 后拒绝新的通知（防止 stale pi 调用） */
   private _disposed = false;
 
@@ -138,8 +142,8 @@ export class SubagentRuntime {
   /** FR-3.1 G-017: 活跃 overlay 句柄（防叠加） */
   private _activeView: { close: () => void } | null = null;
 
-  /** FR-2.0: running agent 状态 map（替代已删除的 AgentWidgetManager 渲染层） */
-  private readonly _runningAgents = new Map<string, WidgetAgentState>();
+  /** FR-2.0: running agent 状态 map（Wave 4: 统一为 AgentExecutionState） */
+  private readonly _runningAgents = new Map<string, AgentExecutionState>();
 
   constructor(opts: { cwd: string; homeDir: string; agentDir: string }) {
     this.cwd = opts.cwd;
@@ -172,10 +176,13 @@ export class SubagentRuntime {
       throw new Error("SubagentRuntime.injectPi: pi is null/undefined.");
     }
     this.pi = pi;
+    // Wave 5: 重建 BgNotifier（持有 pi 引用）
+    this._bgNotifier.dispose();
+    this._bgNotifier = new BgNotifier(pi);
   }
 
   /** FR-2.0: 暴露给 /subagents list 的 running agent 快照（替代 widget.listAgents） */
-  listRunningAgents(): WidgetAgentState[] {
+  listRunningAgents(): AgentExecutionState[] {
     return [...this._runningAgents.values()];
   }
 
@@ -214,29 +221,25 @@ export class SubagentRuntime {
   }
 
   /** FR-3.0 + Must-fix #1: schedule sync agent archival after WIDGET_LINGER_MS.
-   *  The timer is tracked in _lingerTimers (cleared on dispose) and unref'd so
-   *  it neither keeps the event loop alive nor fires into a stale session. */
+   *  Wave 4: 统一接收 AgentExecutionState。 */
   private scheduleSyncArchive(
     widgetId: string,
-    widgetState: WidgetAgentState,
+    source: AgentExecutionState,
     startedAt: number,
   ): void {
     const timer = setTimeout(() => {
-      // Must-fix #1: dispose() may have run during the linger window (session
-      // shutdown / resume). Skip archival + notifyChange to avoid invoking
-      // overlay listeners that hold invalidated Pi handles.
       if (this._disposed) return;
       this.archiveSyncAgent({
         id: widgetId,
-        agent: widgetState.agent,
-        status: widgetState.status as CompletedAgentRecord["status"],
-        eventLog: widgetState.eventLog ?? [],
-        turns: widgetState.turns,
-        totalTokens: widgetState.totalTokens,
+        agent: source.agent,
+        status: source.status as CompletedAgentRecord["status"],
+        eventLog: source.eventLog,
+        turns: source.turns,
+        totalTokens: source.totalTokens,
         result: undefined,
-        error: widgetState.summary,
+        error: source.error,
         startedAt,
-        endedAt: widgetState.finishedAt,
+        endedAt: source.endedAt,
       });
       this._runningAgents.delete(widgetId);
       this.notifyChange();
@@ -246,12 +249,13 @@ export class SubagentRuntime {
     timer.unref?.();
   }
 
-  /** FR-3.0: 归档 background agent 到 BgRecord（widget linger 到期时调用） */
-  archiveBackgroundAgent(id: string, data: { eventLog: AgentEventLogEntry[]; agent: string }): void {
+  /** FR-3.0: 归档 background agent 到 BgRecord（widget linger 到期时调用）。
+   * Wave 1: eventLog/agent 现在始终在 state 上（不再需要从 widget 转移），此方法变为 no-op。
+   * 保留签名向后兼容（archiveSyncAgent 等可能调用）。 */
+  archiveBackgroundAgent(id: string, _data: { eventLog: AgentEventLogEntry[]; agent: string }): void {
     const r = this._bgRecords.get(id);
     if (!r) return;
-    r.eventLog = data.eventLog;
-    r.agent = data.agent;
+    // eventLog/agent 已在 createExecutionState 时写入 state，无需再转移
     this.notifyChange();
   }
 
@@ -354,31 +358,36 @@ export class SubagentRuntime {
     // 避免双重记录：background 有自己的 _bgRecords + history mode:"background"）
     const skipWidget = opts._skipWidget === true;
     const widgetId = skipWidget ? `run-skip-${++this._widgetSeq}` : `run-${++this._widgetSeq}`;
+    // Wave 2/4: 如果调用方传入了 opts.state（AgentExecutionState），优先用它——
+    // 消灭 sync 路径的 eventLog 双构建（tool 不再自己创建 toolState）。
+    // 否则内部创建 state（向后兼容：未传 state 的调用方如 workflow）。
+    const userState = opts.state;
     const startTime = Date.now();
-    const widgetState: WidgetAgentState = {
-      id: widgetId,
+    const state: AgentExecutionState = userState ?? createExecutionState(widgetId, {
       agent: opts.agent ?? "default",
-      status: "running",
-      elapsedSeconds: 0,
-      eventLog: [],
-    };
-    // Round 4 S4: 闭包捕获 startTime 供 linger 回调使用——直接用 Date.now() - elapsedSeconds*1000
-    // 会混入 WIDGET_LINGER_MS(5s) 偏差。sync agent 的 startedAt 写历史应等于实际 startTime。
+      model: "unknown", // 向后兼容路径无法解析 model（真实调用方应传 state）
+      startedAt: startTime,
+    });
+    // Round 4 S4: 闭包捕获 startTime 供 linger 回调使用
     const archiveStartTime = startTime;
     if (!skipWidget) {
-      this._runningAgents.set(widgetState.id, widgetState);
+      this._runningAgents.set(widgetId, state);
       this.notifyChange();
     }
 
-    // 拦截 onEvent 更新 widget（turns/tokens/activity + eventLog）
+    // 拦截 onEvent：当调用方未传 state 时，runtime 负责更新；
+    // 当调用方传了 state，tool 的 onEvent 负责更新（避免双更新）。
     const userOnEvent = opts.onEvent;
+    const runtimeOwnsState = !userState; // runtime 创建的 state → runtime 更新
     finalOpts = {
       ...opts,
       onEvent: (event) => {
         userOnEvent?.(event);
         if (!skipWidget) {
-          updateWidgetFromEvent(widgetState, event, startTime);
-          this._runningAgents.set(widgetState.id, widgetState);
+          if (runtimeOwnsState) {
+            updateStateFromEvent(state, event);
+          }
+          this._runningAgents.set(widgetId, state);
           this.notifyChange();
         }
       },
@@ -394,18 +403,17 @@ export class SubagentRuntime {
       // 所以本 try 路径必须检查 finalOpts.signal.aborted 才能把用户取消（Esc）
       // 记为 cancelled 而非 failed。与 catch 路径（下方）及 background .then 路径保持一致。
       const aborted = finalOpts.signal?.aborted ?? false;
-      widgetState.status = result.success ? "done" : (aborted ? "cancelled" : "failed");
-      widgetState.turns = result.turns;
-      widgetState.totalTokens = result.usage
-        ? result.usage.input + result.usage.output + result.usage.cacheRead + result.usage.cacheWrite
-        : undefined;
-      widgetState.summary = result.text.slice(0, WIDGET_SUMMARY_MAX);
-      widgetState.finishedAt = Date.now();
+      const finalStatus: "done" | "failed" | "cancelled" = result.success ? "done" : (aborted ? "cancelled" : "failed");
+      const endTime = Date.now();
+      // Wave 4: state 总是存在（统一模型），用 completeState 写
+      // runtimeOwnsState 时 runtime 负责完成；否则 tool 负责（但这里也调一次确保一致）
+      if (runtimeOwnsState || state.status === "running") {
+        completeState(state, result, finalStatus);
+      }
       if (!skipWidget) {
-        this._runningAgents.set(widgetState.id, widgetState);
+        this._runningAgents.set(widgetId, state);
         this.notifyChange();
-        // 5 秒后归档 + 清理（Must-fix #1: 经 scheduleSyncArchive 跟踪 + unref）
-        this.scheduleSyncArchive(widgetId, widgetState, archiveStartTime);
+        this.scheduleSyncArchive(widgetId, state, archiveStartTime);
       }
 
       for (const h of this.hooks) {
@@ -416,14 +424,16 @@ export class SubagentRuntime {
         void this._history.append(
           buildPersistedRecord({
             id: widgetId,
-            agent: widgetState.agent,
-            status: widgetState.status as "done" | "failed" | "cancelled",
+            agent: state.agent,
+            status: finalStatus,
             mode: "sync",
             task: finalOpts.task,
             startedAt: startTime,
-            endedAt: widgetState.finishedAt,
-            turns: widgetState.turns,
-            totalTokens: widgetState.totalTokens,
+            endedAt: endTime,
+            turns: result.turns,
+            totalTokens: result.usage
+              ? result.usage.input + result.usage.output + result.usage.cacheRead + result.usage.cacheWrite
+              : undefined,
             resultText: result.text,
             sessionFile: result.sessionFile ? path.basename(result.sessionFile) : undefined,
             cwd: this.cwd,
@@ -433,13 +443,18 @@ export class SubagentRuntime {
       return result;
     } catch (err) {
       // FR-3.5 G-025: 用户主动 abort → cancelled；其他 → failed
-      widgetState.status = finalOpts.signal?.aborted ? "cancelled" : "failed";
-      widgetState.summary = err instanceof Error ? err.message : String(err);
-      widgetState.finishedAt = Date.now();
+      const catchStatus: "failed" | "cancelled" = finalOpts.signal?.aborted ? "cancelled" : "failed";
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const endTime = Date.now();
+      const failResult: AgentResult = {
+        text: "", turns: state.turns, durationMs: endTime - startTime,
+        success: false, error: errMsg, sessionId: "", toolCalls: [],
+      };
+      completeState(state, failResult, catchStatus);
       if (!skipWidget) {
-        this._runningAgents.set(widgetState.id, widgetState);
+        this._runningAgents.set(widgetId, state);
         this.notifyChange();
-        this.scheduleSyncArchive(widgetId, widgetState, archiveStartTime);
+        this.scheduleSyncArchive(widgetId, state, archiveStartTime);
       }
 
       for (const h of this.hooks) {
@@ -450,15 +465,15 @@ export class SubagentRuntime {
         void this._history.append(
           buildPersistedRecord({
             id: widgetId,
-            agent: widgetState.agent,
-            status: widgetState.status as "failed" | "cancelled",
+            agent: state.agent,
+            status: catchStatus,
             mode: "sync",
             task: finalOpts.task,
             startedAt: startTime,
-            endedAt: widgetState.finishedAt,
-            turns: widgetState.turns,
-            totalTokens: widgetState.totalTokens,
-            error: widgetState.summary,
+            endedAt: endTime,
+            turns: state.turns,
+            totalTokens: state.totalTokens,
+            error: errMsg,
             cwd: this.cwd,
           }),
         );
@@ -488,7 +503,26 @@ export class SubagentRuntime {
 
     const id = `bg-${++this._bgSeq}-${Date.now().toString(BG_ID_RADIX)}`;
     const controller = new AbortController();
-    const record: BgRecord = { id, status: "running", startedAt: Date.now(), controller };
+    const startedAt = Date.now();
+    // Wave 1: 创建 AgentExecutionState（model 创建时必填——消灭 poll model 丢失）
+    // model 从 opts 或 agent 默认解析；startBackground 的 opts 不含 resolved model，
+    // 所以这里用一个最小 fallback（"unknown"），真正的 model 由 subagent-tool.ts
+    // 在 onUpdate 回流时通过 executionStateToDetails 投影。
+    // 注意：startBackground 的 opts 没有 model 字段（model 解析在 tool 层），
+    // 所以这里用 opts.agent 的配置链解析。如果 modelRegistry 不可用则用占位。
+    const agentName = opts.agent ?? "default";
+    let resolvedModel = "unknown";
+    try {
+      const resolved = this.resolveModelForAgent(agentName);
+      if (resolved) resolvedModel = resolved.model.id;
+    } catch { /* modelRegistry 未注入，用占位 */ }
+    const state = createExecutionState(id, {
+      agent: agentName,
+      model: resolvedModel,
+      thinkingLevel: undefined,
+      startedAt,
+    });
+    const record: BgRecord = { id, state, status: "running", startedAt, controller };
     this._bgRecords.set(id, record);
     // FR-O5.9: FIFO 清理，上限 BG_RECORDS_MAX。
     // S4 修复：只淘汰非 running 的最旧 record——淘汰 running record 会导致
@@ -508,11 +542,10 @@ export class SubagentRuntime {
     this.notifyChange();
 
     // detached：不 await，完成后回填
-    // G-005 修复：通过 onEvent 闭包直接把事件写入 record.eventLog，
+    // G-005 修复：通过 onEvent 闭包直接把事件写入 state.eventLog，
     // 不再用 widget.listAgents().find(id.startsWith("run-")) 反查（并发时会串号）。
     // record 是本闭包独占的引用，与其它并发 background 隔离。
     const userBgOnEvent = opts.onEvent;
-    const bgStartTime = record.startedAt;
     // Round 4 MF2: 始终用 controller.signal 喂给 runAgent——runAgent 监听的是这个 signal。
     // opts.signal 是调用方传入的（Pi tool 执行的 signal），cancelBackground 只能 abort controller
     // 不能 abort opts.signal。若把 opts.signal 喂给 runAgent，cancelBackground(controller.abort())
@@ -533,8 +566,6 @@ export class SubagentRuntime {
     }
     // FR-2.5: onUpdate 拦截器——把 runAgent 的事件回流给调用方（对话流 block 实时刷新）
     const userOnUpdate = opts.onUpdate;
-    let bgTurns = 0;
-    let bgTokens = 0;
     this.runAgent({
       ...opts,
       signal,
@@ -545,21 +576,11 @@ export class SubagentRuntime {
       _skipWidget: true,
       onEvent: (event: AgentEvent) => {
         userBgOnEvent?.(event);
-        // FR-1.3: record 闭包捕获（race fix G-005）+ updateRecordEventLog 切片
-        if (!record.eventLog) record.eventLog = [];
-        updateRecordEventLog(record.eventLog, event, bgStartTime);
-        if (event.type === "turn_end") bgTurns += 1;
-        if (event.type === "message_end" && event.usage) {
-          bgTokens += event.usage.input + event.usage.output + event.usage.cacheRead + event.usage.cacheWrite;
-        }
-        // FR-2.5: 回流给调用方（对话流 block 实时刷新）
-        userOnUpdate?.({
-          eventLog: [...record.eventLog],
-          status: "running",
-          turns: bgTurns,
-          totalTokens: bgTokens,
-          elapsedSeconds: Math.floor((Date.now() - bgStartTime) / MS_PER_SECOND),
-        });
+        // Wave 1: 统一用 updateStateFromEvent 更新 state（eventLog/turns/tokens）
+        // 持久缓冲在 state 上（_currentTurnText/_currentThinking），修复 sink reset bug
+        updateStateFromEvent(state, event);
+        // FR-2.5: 回流给调用方（对话流 block 实时刷新）——用 executionStateToDetails 投影
+        userOnUpdate?.(executionStateToDetails(state));
         this.notifyChange();
       },
     })
@@ -568,17 +589,17 @@ export class SubagentRuntime {
         // Round 5 MF#2: .then 路径需补 abort 判断——SDK 偶发以
         // message_end stopReason="aborted" 结束且 session.prompt() 未抛错，
         // 此时走 .then 而非 .catch；不补判断会把用户 cancel 覆盖为 failed。
-        // 与 .catch 路径（runtime.ts:580）的 aborted 判断保持一致。
         // Round 6 SUG#9: read controller BEFORE delete so the check actually
         // observes the runtime-owned controller (was reading undefined post-delete).
         const aborted = record.controller?.signal.aborted ?? signal.aborted;
-        if (aborted) {
-          record.status = "cancelled";
-        } else {
-          record.status = result.success ? "done" : "failed";
-        }
-        record.endedAt = Date.now();
-        record.agent = opts.agent ?? "default";
+        const finalStatus: "done" | "failed" | "cancelled" = aborted
+          ? "cancelled"
+          : result.success ? "done" : "failed";
+        // Wave 1: 用 completeState 统一写 state（status/endedAt/agentResult/result/error）
+        completeState(state, result, finalStatus);
+        // BgRecord 镜像字段同步（供 getBackground/notifyBgCompletion 直接读）
+        record.status = finalStatus;
+        record.endedAt = state.endedAt;
         delete record.controller;
         // Must-fix #2: cancelBackground already settled this as a user-initiated
         // cancel. Backfill result/endedAt only — skip onComplete/events/history
@@ -588,7 +609,7 @@ export class SubagentRuntime {
         this.pi?.events.emit("subagents:bg:done", record);
         this.pi?.appendEntry("subagent-bg-record", {
           id,
-          agent: opts.agent,
+          agent: state.agent,
           status: record.status,
           sessionId: result.sessionId,
         });
@@ -596,7 +617,7 @@ export class SubagentRuntime {
         void this._history.append(
           buildPersistedRecord({
             id,
-            agent: record.agent,
+            agent: state.agent,
             status: record.status,
             mode: "background",
             task: opts.task,
@@ -615,7 +636,7 @@ export class SubagentRuntime {
         this.notifyBgCompletion({
           id: record.id,
           status: record.status as "done" | "failed" | "cancelled",
-          agent: record.agent,
+          agent: state.agent,
           result: record.result,
           startedAt: record.startedAt,
           endedAt: record.endedAt,
@@ -630,10 +651,23 @@ export class SubagentRuntime {
         // 回退到 signal.aborted（opts.signal）——调用方传入的 signal 与 cancelBackground
         // 无关，混用会误判 status=cancelled，与用户意图不符。
         const aborted = record.controller?.signal.aborted ?? signal.aborted;
-        record.status = aborted ? "cancelled" : "failed";
-        record.error = aborted ? undefined : err instanceof Error ? err.message : String(err);
-        record.endedAt = Date.now();
-        record.agent = opts.agent ?? "default";
+        const finalStatus: "failed" | "cancelled" = aborted ? "cancelled" : "failed";
+        const errMsg = aborted ? undefined : err instanceof Error ? err.message : String(err);
+        // Wave 1: 用 completeState 统一写 state（构造一个失败 AgentResult）
+        const failResult: AgentResult = {
+          text: "",
+          turns: state.turns,
+          durationMs: Date.now() - record.startedAt,
+          success: false,
+          error: errMsg,
+          sessionId: "",
+          toolCalls: [],
+        };
+        completeState(state, failResult, finalStatus);
+        // BgRecord 镜像字段同步
+        record.status = finalStatus;
+        record.error = errMsg;
+        record.endedAt = state.endedAt;
         delete record.controller;
         // Must-fix #2: cancelBackground already settled this as a user-initiated
         // cancel. Backfill endedAt only — skip onComplete/events/history.
@@ -644,7 +678,7 @@ export class SubagentRuntime {
         void this._history.append(
           buildPersistedRecord({
             id,
-            agent: record.agent,
+            agent: state.agent,
             status: record.status as "failed" | "cancelled",
             mode: "background",
             task: opts.task,
@@ -658,7 +692,7 @@ export class SubagentRuntime {
         this.notifyBgCompletion({
           id: record.id,
           status: record.status as "failed" | "cancelled",
-          agent: record.agent,
+          agent: state.agent,
           error: record.error,
           startedAt: record.startedAt,
           endedAt: record.endedAt,
@@ -669,14 +703,24 @@ export class SubagentRuntime {
     return { id, status: "running" };
   }
 
-  /** 查询 background 任务状态（含结果） */
+  /** 查询 background 任务状态（含结果）。
+   * Wave 1: 从 record.state 展平所有字段到 BackgroundStatus。 */
   getBackground(id: string): BackgroundStatus | undefined {
     const r = this._bgRecords.get(id);
     if (!r) return undefined;
-    // 不暴露 controller
-    const { controller: _controller, ...public_ } = r;
-    void _controller;
-    return public_;
+    return {
+      id: r.id,
+      status: r.status,
+      result: r.result,
+      error: r.error,
+      startedAt: r.startedAt,
+      endedAt: r.endedAt,
+      // 从 state 展平（消灭 hardcoded undefined）
+      eventLog: r.state.eventLog,
+      agent: r.state.agent,
+      turns: r.state.turns,
+      totalTokens: r.state.totalTokens,
+    };
   }
 
   /** 取消 background 任务（触发 AbortController → runAgent 内 session.abort） */
@@ -775,140 +819,20 @@ export class SubagentRuntime {
     return saveGlobalConfig(this.homeDir, this.globalConfig);
   }
 
-  /**
-   * FR-O1.2: 格式化 background 完成通知文本。
-   * 主 agent 能基于此文本续接工作。
-   */
-  formatBgCompletionMessage(record: {
-    id: string;
-    status: "done" | "failed" | "cancelled";
-    agent?: string;
-    result?: AgentResult;
-    error?: string;
-    endedAt?: number;
-    startedAt: number;
-  }): string {
-    const statusWord = record.status === "done" ? "completed" : record.status;
-    const agent = record.agent ?? "default";
-    const lines = [`Background task ${statusWord}: **${agent}**`];
-    const body = record.result?.text ?? record.error ?? "(no output)";
-    // 截断正文到 ~500 字符
-    const truncated = body.length > 500 ? body.slice(0, 500) + "..." : body;
-    lines.push("", truncated);
-    lines.push("", `backgroundId: ${record.id}`);
-    if (record.result?.sessionFile) {
-      lines.push(`Session file: ${record.result.sessionFile}`);
-    }
-    return lines.join("\n");
+  // Wave 5: background 通知逻辑已移至 BgNotifier（persistence/bg-notifier.ts）。
+  // 以下为薄委托方法，保持 runtime 的公共 API 不变。
+
+  formatBgCompletionMessage(record: BgNotifyRecord): string {
+    return this._bgNotifier.formatBgCompletionMessage(record);
   }
 
-  /**
-   * FR-O1.1 + FR-O1.3 + FR-O1.5 + FR-O1.7: 发送 background 完成通知到主对话。
-   *
-   * 合并窗口策略（G-028 决策）：
-   * - 首个完成事件**立即发送**，同时启动 BG_MERGE_WINDOW_MS 合并窗口
-   * - 窗口内的后续完成事件入队，窗口到期时合并成一条消息发送
-   * - 这样单个 background 零延迟，多个几乎同时完成的 background 被合并防刷屏
-   *
-   * 含 TTL 去重（防 cancel + abort catch 双发）+ try/catch 兜底（G-025 stale runtime）。
-   */
-  notifyBgCompletion(record: {
-    id: string;
-    status: "done" | "failed" | "cancelled";
-    agent?: string;
-    result?: AgentResult;
-    error?: string;
-    endedAt?: number;
-    startedAt: number;
-  }): void {
-    // P2: dispose 后不再发通知（session 已结束，pi 会 stale）
+  notifyBgCompletion(record: BgNotifyRecord): void {
     if (this._disposed) return;
-    const seen = getGlobalSeenMap("__subagents_bg_notify_seen__");
-    const key = buildCompletionKey(
-      { id: record.id, agent: record.agent, success: record.status === "done" },
-      "bg-notify",
-    );
-    if (markSeenWithTtl(seen, key, Date.now(), BG_NOTIFY_TTL_MS)) return; // 重复，跳过
-
-    // G-028: 首个事件立即发送，后续入合并窗口
-    if (this._pendingNotifications.length === 0 && !this._mergeWindowTimer) {
-      // 队列空 + 无定时器 → 立即发送这个，并启动合并窗口收集后续
-      this.sendSingleNotification(record);
-      this._mergeWindowTimer = setTimeout(() => {
-        this._mergeWindowTimer = undefined;
-        this.flushPendingNotifications();
-      }, BG_MERGE_WINDOW_MS);
-      this._mergeWindowTimer.unref?.();
-    } else {
-      // 窗口内 → 入队
-      this._pendingNotifications.push(record);
-    }
+    this._bgNotifier.notifyBgCompletion(record);
   }
 
-  /** FR-O1.7: 发送单条通知（含 try/catch 兜底，G-025 stale runtime） */
-  private sendSingleNotification(record: {
-    id: string;
-    status: "done" | "failed" | "cancelled";
-    agent?: string;
-    result?: AgentResult;
-    error?: string;
-    startedAt: number;
-    endedAt?: number;
-  }): void {
-    const content = this.formatBgCompletionMessage(record);
-    try {
-      // Round 6 SUG#8: prefer deliverAs:"followUp" (preferred API per Pi SDK migration)
-      // over the older triggerTurn: true flag. Both work today; deliverAs is the
-      // forward-compatible option. Keep triggerTurn for SDKs that still only honor it.
-      this.pi?.sendMessage(
-        { customType: "subagent-bg-notify", content, display: true },
-        { deliverAs: "followUp", triggerTurn: true },
-      );
-    } catch {
-      // G-025: stale runtime 同步抛错——不标记 background failed（agent 已完成）
-      try {
-        this.pi?.appendEntry("subagent-bg-record", { id: record.id, status: record.status });
-      } catch {
-        // 两层都 stale，放弃（结果仍可通过 getBackground 查询）
-      }
-    }
-  }
-
-  /** FR-O1.5 G-029: flush 合并窗口中 pending 的通知，合并为一条消息发送 */
   flushPendingNotifications(): void {
-    // Round 6 SUG#11: skip flush after dispose — sending notifications into
-    // a stale pi session is a semantic error (the session is over). The
-    // disposed flag was already checked at notifyBgCompletion entry, but
-    // setTimeout-based flush can still fire between dispose() and the
-    // timer's natural expiry. Return early to avoid the contradiction.
-    if (this._disposed) return;
-    if (this._mergeWindowTimer) {
-      clearTimeout(this._mergeWindowTimer);
-      this._mergeWindowTimer = undefined;
-    }
-    const pending = this._pendingNotifications.splice(0);
-    if (pending.length === 0) return;
-    // 合并为一条消息
-    // Round 5 SUG#5: 每条追加 `Session file: {r.result?.sessionFile}`（存在时）——
-    // 合并窗口内的 background 完成事件不应丢失 sessionFile 引用，否则主 agent
-    // 无法续接完整 session 上下文。与单条通知（formatBgCompletionMessage）格式对齐。
-    const lines = pending.map((r) => {
-      const status = r.status === "done" ? "completed" : r.status;
-      const agent = r.agent ?? "default";
-      const body = (r.result?.text ?? r.error ?? "(no output)").slice(0, 200);
-      const sessionLine = r.result?.sessionFile ? `\n  Session file: ${r.result.sessionFile}` : "";
-      return `Background task ${status}: **${agent}** (${r.id})\n  ${body}${sessionLine}`;
-    });
-    const content = `${pending.length} background tasks completed:\n\n${lines.join("\n\n")}`;
-    try {
-      // Round 6 SUG#8: prefer deliverAs:"followUp" (preferred API per Pi SDK migration)
-      this.pi?.sendMessage(
-        { customType: "subagent-bg-notify", content, display: true },
-        { deliverAs: "followUp", triggerTurn: true },
-      );
-    } catch {
-      // stale runtime，放弃合并发送（结果仍可通过 getBackground 查询）
-    }
+    this._bgNotifier.flushPendingNotifications();
   }
 
   /**
@@ -921,11 +845,8 @@ export class SubagentRuntime {
   dispose(): void {
     if (this._disposed) return; // 幂等
     this._disposed = true;
-    if (this._mergeWindowTimer) {
-      clearTimeout(this._mergeWindowTimer);
-      this._mergeWindowTimer = undefined;
-    }
-    this._pendingNotifications.length = 0;
+    // Wave 5: 通知定时器清理委托给 BgNotifier
+    this._bgNotifier.dispose();
     // Must-fix #1: clear pending sync-agent linger timers so their callbacks
     // don't fire into the stale session (notifyChange → overlay listeners).
     for (const t of this._lingerTimers) clearTimeout(t);
@@ -942,12 +863,10 @@ export class SubagentRuntime {
    */
   revive(): void {
     this._disposed = false;
+    this._bgNotifier.revive();
   }
 }
 
-
-/** ms → s 换算 */
-const MS_PER_SECOND = 1000;
 
 // 进程内单例：用 globalThis 持有，避免 jiti 因路径字符串不同加载多份模块导致单例分裂。
 // 场景：workflow 扩展 import "@zhushanwen/pi-subagents" 与 subagents 扩展被 pi 直接加载，

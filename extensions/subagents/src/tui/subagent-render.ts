@@ -7,7 +7,7 @@
 //   - 压缩视图固定 6 行，空行用 Spacer 填充以保证真实 Box 高度稳定
 //   - 滚动区每条 eventLog 截断到 ~50 可见字符，避免单行过长
 
-import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { Box, Container, Spacer, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
 
 import { formatEventLogLine, formatTokens } from "./format.ts";
 import type { AgentEventLogEntry } from "../types.ts";
@@ -30,14 +30,6 @@ export interface SubagentToolDetails {
   model?: string;
   /** FR-1.2: thinking level */
   thinkingLevel?: string;
-  /** Round 5 SUG#9: GUI 渲染描述符。xyz-agent 识别后渲染 task-list；缺失时 fallback 到 content。 */
-  _render?: {
-    type: "task-list";
-    data: {
-      title: string;
-      items: Array<{ label: string; status: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; detail?: string }>;
-    };
-  };
 }
 
 export interface ThemeLike {
@@ -48,7 +40,6 @@ export interface ThemeLike {
 
 export interface RenderOptions {
   expanded?: boolean;
-  spinnerFrame?: number;
 }
 
 // ============================================================
@@ -60,15 +51,98 @@ const COMPACT_LINES_TOTAL = 6;
 const COMPACT_LABEL_MAX_WIDTH = 50; // 滚动区单条 label 最大可见字符数
 
 // ============================================================
-// Spinner
+// Truncation (Bug #3: ANSI-style-preserving truncation)
+// ============================================================
+
+/**
+ * 截断单行到 maxWidth，省略号前重应用 ANSI 样式，避免背景色断裂。
+ *
+ * pi-tui 的 truncateToWidth 在省略号前插 `\x1b[0m`（全局 reset），导致 Box 背景色
+ * 在省略号处断裂——`├─ bash find /Users/...…` 后半段失去背景色。本实现追踪
+ * active SGR styles 并在写省略号前重应用，保证整行背景色一致。
+ *
+ * 移植自 pi-subagents render.ts:44-89（Intl.Segmenter 处理 Unicode/emoji）。
+ */
+const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+function truncLine(text: string, maxWidth: number): string {
+  if (visibleWidth(text) <= maxWidth) return text;
+
+  const targetWidth = Math.max(0, maxWidth - 1);
+  let result = "";
+  let currentWidth = 0;
+  let activeStyles: string[] = [];
+  let i = 0;
+
+  while (i < text.length) {
+    const ansiMatch = text.slice(i).match(/^\x1b\[[0-9;]*m/);
+    if (ansiMatch) {
+      const code = ansiMatch[0];
+      result += code;
+      if (code === "\x1b[0m" || code === "\x1b[m") {
+        activeStyles = [];
+      } else {
+        activeStyles.push(code);
+      }
+      i += code.length;
+      continue;
+    }
+
+    let end = i;
+    while (end < text.length && !text.slice(end).match(/^\x1b\[[0-9;]*m/)) {
+      end++;
+    }
+
+    const textPortion = text.slice(i, end);
+    for (const seg of segmenter.segment(textPortion)) {
+      const grapheme = seg.segment;
+      const graphemeWidth = visibleWidth(grapheme);
+
+      if (currentWidth + graphemeWidth > targetWidth) {
+        return result + activeStyles.join("") + "…";
+      }
+
+      result += grapheme;
+      currentWidth += graphemeWidth;
+    }
+    i = end;
+  }
+
+  return result + activeStyles.join("") + "…";
+}
+
+// ============================================================
+// Spinner (Bug #1 + #4: seed-frame, 事件驱动，无 setInterval)
 // ============================================================
 
 const RUNNING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/** 无 seed 可用时的静态回退 glyph */
+const STATIC_RUNNING_GLYPH = "●";
 
-function statusGlyph(status: SubagentToolDetails["status"], frame: number, theme: ThemeLike): string {
-  switch (status) {
-    case "running":
-      return theme.fg("accent", RUNNING_FRAMES[frame % RUNNING_FRAMES.length]);
+/** 累加多个事件数据为单一 seed（移植自 pi-subagents render.ts:96-103）。 */
+function runningSeed(...values: Array<number | undefined>): number | undefined {
+  let seed: number | undefined;
+  for (const value of values) {
+    if (value === undefined || !Number.isFinite(value)) continue;
+    seed = (seed ?? 0) + Math.trunc(value);
+  }
+  return seed;
+}
+
+/** 从 details 计算 spinner seed（turns + tokens + elapsedSeconds + eventLog 长度）。
+ *  这些值随事件推进单调增长，每次 onUpdate 触发重绘时 seed 变化 → spinner 自然换帧。
+ *  静默期（无事件）seed 不变 → spinner 冻结，换取滚动体验（不再有 setInterval 抢占 viewport）。 */
+function detailsSeed(d: SubagentToolDetails): number | undefined {
+  return runningSeed(d.turns, d.totalTokens, d.elapsedSeconds, d.eventLog?.length);
+}
+
+function statusGlyph(d: SubagentToolDetails, theme: ThemeLike): string {
+  switch (d.status) {
+    case "running": {
+      const seed = detailsSeed(d);
+      const frame = seed === undefined ? STATIC_RUNNING_GLYPH : RUNNING_FRAMES[Math.abs(seed) % RUNNING_FRAMES.length]!;
+      return theme.fg("accent", frame);
+    }
     case "done":
       return theme.fg("success", "✓");
     case "failed":
@@ -87,9 +161,9 @@ function sanitizeLine(text: string): string {
   return text.replace(/[\r\n]+/g, " ").replace(/\t/g, "  ");
 }
 
-/** 截断单行到最大可见宽度，超出部分显示 "..."（与 pi-tui truncateToWidth 一致）。 */
+/** 截断单行到最大可见宽度，超出部分显示 "…"（保留 ANSI 样式/背景色）。 */
 function clampLine(line: string, maxWidth: number): string {
-  return visibleWidth(line) > maxWidth ? truncateToWidth(line, maxWidth) : line;
+  return visibleWidth(line) > maxWidth ? truncLine(line, maxWidth) : line;
 }
 
 export function buildRenderLines(
@@ -98,18 +172,17 @@ export function buildRenderLines(
   theme: ThemeLike,
   options: RenderOptions = {},
 ): string[] {
-  if (options.expanded) return buildExpandedLines(details, theme, options.spinnerFrame ?? 0);
-  return buildCompactLines(details, width, theme, options.spinnerFrame ?? 0);
+  if (options.expanded) return buildExpandedLines(details, theme);
+  return buildCompactLines(details, width, theme);
 }
 
-function buildCompactLines(details: SubagentToolDetails, width: number, theme: ThemeLike, frame: number): string[] {
+function buildCompactLines(details: SubagentToolDetails, width: number, theme: ThemeLike): string[] {
   const lines: string[] = [];
 
-  // 第 1 行：spinner + "subagent" 标题 + agent + model + thinking
-  const glyph = statusGlyph(details.status, frame, theme);
-  const modelPart = details.model ? ` │ ${details.model}` : "";
-  const thinkingPart = details.thinkingLevel ? ` │ thinking: ${details.thinkingLevel}` : "";
-  lines.push(sanitizeLine(`${glyph} subagent │ ${details.agent}${modelPart}${thinkingPart}`));
+  // 第 1 行：glyph + bold(agent) + dim(model·thinking 括号) + dim(· stats 内联)
+  // 设计借鉴 pi-subagents render.ts:1024——身份+元数据+进度内聚在同一视觉锚点，
+  // 避免「记忆桥」（用户不必跨行拼凑 agent 身份与进度）。
+  lines.push(sanitizeLine(buildStatusLine(details, theme)));
 
   // 第 2-5 行：滚动区（最近 4 条，过滤掉 turn_end——压缩视图不显示 turn 分隔）
   const prefixWidth = visibleWidth(theme.fg("dim", "├─ ")); // 实际占 4 列
@@ -119,29 +192,58 @@ function buildCompactLines(details: SubagentToolDetails, width: number, theme: T
     .slice(-COMPACT_SCROLL_LINES);
   for (const entry of recent) {
     const raw = sanitizeLine(formatEventLogLine(entry, theme));
-    // 先按 label 上限截断，再按行宽兜底，防止长 label 撑爆 block
+    // 先按 label 上限截断（保留 ANSI 背景色），再按行宽兜底，防止长 label 撑爆 block
     const clampedToLabel = visibleWidth(raw) > labelMaxWidth + prefixWidth
-      ? truncateToWidth(raw, labelMaxWidth + prefixWidth)
+      ? truncLine(raw, labelMaxWidth + prefixWidth)
       : raw;
     lines.push(clampLine(clampedToLabel, width));
   }
-  while (lines.length < COMPACT_LINES_TOTAL - 1) lines.push(""); // 空行填充到 stats 前
 
-  // 第 6 行：stats 右对齐
-  const stats = `${details.turns} turns │ ${formatTokens(details.totalTokens)} │ ${details.elapsedSeconds}s`;
-  const padNeeded = Math.max(0, width - visibleWidth(stats));
-  lines.push(" ".repeat(padNeeded) + theme.fg("dim", stats));
+  // 填充到固定行数（COMPACT_LINES_TOTAL - 1，留最后一行给提示/stats）
+  while (lines.length < COMPACT_LINES_TOTAL - 1) lines.push("");
+
+  // 最后一行：running 时显示 Ctrl+O 提示（accent 色）；其他状态留空保持 6 行高度稳定
+  if (details.status === "running") {
+    lines.push(theme.fg("accent", "Press Ctrl+O for live detail"));
+  } else {
+    lines.push("");
+  }
 
   // 统一截断到可用宽度（避免任何单行超长触发 Pi 渲染异常）
   return lines.map((line) => clampLine(line, width));
 }
 
-function buildExpandedLines(details: SubagentToolDetails, theme: ThemeLike, frame: number): string[] {
+/**
+ * 构造第 1 行状态文本：glyph + bold(agent) + dim(model·thinking) + dim(· stats)。
+ * stats 各字段仅在 > 0 时出现（全零隐藏，避免 `0 turns · 0 · 0s` 噪音）。
+ * 借鉴 pi-subagents 的 statJoin（dim · 分隔）+ 括号分组元数据。
+ */
+function buildStatusLine(d: SubagentToolDetails, theme: ThemeLike): string {
+  const glyph = statusGlyph(d, theme);
+  const agent = theme.bold(d.agent);
+
+  // model + thinking 括号分组（dim），借鉴 pi-subagents modelThinkingBadge
+  const metaParts: string[] = [];
+  if (d.model) metaParts.push(d.model);
+  if (d.thinkingLevel) metaParts.push(`thinking ${d.thinkingLevel}`);
+  const meta = metaParts.length > 0 ? ` ${theme.fg("dim", `(${metaParts.join(" · ")})`)}` : "";
+
+  // stats 各字段 > 0 才出现（借鉴 pi-subagents formatProgressStats）
+  const statParts: string[] = [];
+  if (d.turns > 0) statParts.push(`${d.turns} turns`);
+  if (d.totalTokens > 0) statParts.push(formatTokens(d.totalTokens));
+  if (d.elapsedSeconds > 0) statParts.push(`${d.elapsedSeconds}s`);
+  const stats = statParts.length > 0
+    ? ` ${theme.fg("dim", "·")} ${theme.fg("dim", statParts.join(` ${theme.fg("dim", "·")} `))}`
+    : "";
+
+  return `${glyph} ${agent}${meta}${stats}`;
+}
+
+function buildExpandedLines(details: SubagentToolDetails, theme: ThemeLike): string[] {
   const lines: string[] = [];
-  const glyph = statusGlyph(details.status, frame, theme);
-  const modelPart = details.model ? ` │ ${details.model}` : "";
-  const thinkingPart = details.thinkingLevel ? ` │ thinking: ${details.thinkingLevel}` : "";
-  lines.push(sanitizeLine(`${glyph} subagent │ ${details.agent}${modelPart}${thinkingPart}`));
+  // 复用 buildStatusLine 保持压缩/展开视图第 1 行一致
+  lines.push(sanitizeLine(buildStatusLine(details, theme)));
 
   let turnNumber = 0;
   for (const entry of details.eventLog ?? []) {
@@ -184,7 +286,6 @@ export function renderSubagentCall(_args: unknown, _theme: ThemeLike, _context: 
 export class SubagentResultComponent implements Component {
   private _details: SubagentToolDetails;
   private _theme: ThemeLike;
-  private _spinnerFrame = 0;
   private _expanded = false;
 
   constructor(details: SubagentToolDetails, theme: ThemeLike) {
@@ -194,10 +295,6 @@ export class SubagentResultComponent implements Component {
 
   update(details: SubagentToolDetails): void {
     this._details = details;
-  }
-
-  setSpinnerFrame(frame: number): void {
-    this._spinnerFrame = frame;
   }
 
   setExpanded(expanded: boolean): void {
@@ -213,7 +310,6 @@ export class SubagentResultComponent implements Component {
     const contentWidth = Math.max(1, width - 2);
     const lines = buildRenderLines(this._details, contentWidth, this._theme, {
       expanded: this._expanded,
-      spinnerFrame: this._spinnerFrame,
     });
     const box = new Box(1, 0, this._getBgFn());
     for (const line of lines) {

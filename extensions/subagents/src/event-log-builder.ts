@@ -10,7 +10,6 @@
 import { extractLabelFromArgs } from "./tui/format.ts";
 import type { WidgetAgentState } from "./tui/agent-widget.ts";
 import {
-  type AgentEvent,
   type AgentEventLogEntry,
   EVENT_LOG_LABEL_MAX,
   MAX_EVENT_LOG_ENTRIES,
@@ -18,9 +17,6 @@ import {
   THINKING_CHUNK,
   TURN_SUMMARY_MAX,
 } from "./types.ts";
-
-/** ms → s 换算 */
-const MS_PER_SECOND = 1000;
 
 /**
  * S5: eventLog 追加的最小契约——只需 eventLog 数组 + _currentTurnText/_currentThinking 累积器。
@@ -48,6 +44,10 @@ type EventLogSinkEvent = {
  * FR-1.1a: thinking_delta 切片生成 thinking entry。
  * FR-1.3: tool_start/tool_end/turn_end push 到 eventLog（ring buffer）。
  */
+/**
+ * @deprecated Wave 4: 被 state/execution-state.ts 的 updateStateFromEvent 替代。
+ * 保留仅为 runtime-eventlog.test.ts 兼容。新代码用 updateStateFromEvent。
+ */
 export function updateWidgetFromEvent(
   state: WidgetAgentState,
   event: {
@@ -58,26 +58,16 @@ export function updateWidgetFromEvent(
     delta?: string;
     isError?: boolean;
   },
-  startTime: number,
+  _startTime: number,
 ): void {
-  const s = state;
-  if (!s.eventLog) s.eventLog = [];
-
-  // S5: eventLog + _currentTurnText 的追加逻辑抽到 appendEventLogEntries，
-  // 供 updateRecordEventLog 复用（无需构造完整 WidgetAgentState）。
-  appendEventLogEntries(s, event);
-  if (event.type === "tool_start") {
-    s.activity = event.toolName ?? "working";
-  } else if (event.type === "tool_end") {
-    s.activity = "thinking…";
-  } else if (event.type === "turn_end") {
-    s.turns = (s.turns ?? 0) + 1;
+  // Wave 4: 委托给 appendEventLogEntries（与 updateStateFromEvent 共享核心逻辑）
+  // activity/elapsedSeconds 字段已从 AgentExecutionState 移除（不再需要）
+  appendEventLogEntries(state, event);
+  if (event.type === "turn_end") {
+    state.turns = (state.turns ?? 0) + 1;
   } else if (event.type === "message_end" && event.usage) {
-    s.totalTokens = (s.totalTokens ?? 0) + event.usage.input + event.usage.output + event.usage.cacheRead + event.usage.cacheWrite;
+    state.totalTokens = (state.totalTokens ?? 0) + event.usage.input + event.usage.output + event.usage.cacheRead + event.usage.cacheWrite;
   }
-
-  // Ring buffer 已在 appendEventLogEntries 内处理
-  s.elapsedSeconds = Math.floor((Date.now() - startTime) / MS_PER_SECOND);
 }
 
 /**
@@ -146,13 +136,7 @@ function appendEventLogEntries(sink: EventLogSink, event: EventLogSinkEvent): vo
   }
 }
 
-/**
- * G-005 修复：直接更新 BgRecord.eventLog（S5 重构：复用 appendEventLogEntries，
- * 无需 as unknown as WidgetAgentState 断言）。传入的 eventLog 数组被直接 mutate，
- * 调用方持有同一引用即可读到结果。与 widget 反查（listAgents 找 startsWith("run-")）
- * 相比，本方式通过闭包捕获 record，每个 background 的 eventLog 互不串号。
- */
-export function updateRecordEventLog(eventLog: AgentEventLogEntry[], event: AgentEvent, _startTime: number): void {
-  const sink: EventLogSink = { eventLog, _currentTurnText: "" };
-  appendEventLogEntries(sink, event as EventLogSinkEvent);
-}
+// Wave 3: updateRecordEventLog 已删除（被 state/execution-state.ts 的 updateStateFromEvent 替代）。
+// 历史问题：updateRecordEventLog 每次事件创建新 EventLogSink（_currentTurnText=""），
+// 导致 text/thinking 缓冲永不累积——background 路径 eventLog chunking 坏。
+// updateStateFromEvent 使用 state 上的持久缓冲（_currentTurnText/_currentThinking），修复此 bug。

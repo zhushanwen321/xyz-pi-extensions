@@ -102,6 +102,10 @@ export interface RunAgentOptions {
   priority?: number;
   /** P1: 内部标志——跳过 widget 注册（background 调 runAgent 时用，避免双重记录） */
   _skipWidget?: boolean;
+  /** Wave 2: 调用方预创建的 AgentExecutionState。传入时 runAgent 用它累积事件
+   * （替代内部创建 widgetState），消灭 sync 路径 eventLog 双构建。
+   * 调用方持有同一引用即可在 onUpdate 回调中读取最新状态。 */
+  state?: import("./state/execution-state.ts").AgentExecutionState;
 }
 
 // ============================================================
@@ -183,6 +187,10 @@ export interface BackgroundStatus extends BackgroundHandle {
   eventLog?: AgentEventLogEntry[];
   /** FR-3.0a: agent 名（列表 "Agent" 列数据源） */
   agent?: string;
+  /** live turn count（running 时累积，供 poll 路径展示） */
+  turns?: number;
+  /** live token count（running 时累积，供 poll 路径展示） */
+  totalTokens?: number;
 }
 
 /**
@@ -192,14 +200,10 @@ export interface BackgroundStatus extends BackgroundHandle {
 export interface BackgroundOptions extends RunAgentOptions {
   /** 任务完成（成功/失败/取消）时回调。与 pi.events 'subagents:bg:done' 二选一或都有 */
   onComplete?: (status: BackgroundStatus) => void;
-  /** FR-2.5: 执行中事件回流（使对话流 block 实时刷新） */
-  onUpdate?: (details: {
-    eventLog: AgentEventLogEntry[];
-    status: "running" | "done" | "failed" | "cancelled";
-    turns: number;
-    totalTokens: number;
-    elapsedSeconds: number;
-  }) => void;
+  /** FR-2.5: 执行中事件回流（使对话流 block 实时刷新）。
+   * Wave 1: 回流完整的 SubagentToolDetails（由 executionStateToDetails 投影），
+   * 消灭 tool 层手工构造 details 的 6 个构造点之一。 */
+  onUpdate?: (details: import("./tui/subagent-render.ts").SubagentToolDetails) => void;
 }
 
 // ============================================================
