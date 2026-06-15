@@ -201,7 +201,12 @@ export class AskUserComponent implements Component {
 				this.toggleIndex(state, state.cursorIndex);
 				return;
 			}
-			if (matchesKey(data, "enter") && (state.selectedIndices.size > 0 || state.freeTextValue !== null)) {
+			if (matchesKey(data, "enter")) {
+				// Enter 先把光标所在的普通选项加入选中再确认，与单选分支（Enter 时
+				// selectedIndex = cursorIndex）保持一致。即使 freeTextValue 已存在
+				// （Other 录入），也尊重「在此选项上按 Enter 想选中它」的意图，避免
+				// 静默用旧 Other 文本确认。add 幂等，不会误取消已选项。
+				state.selectedIndices.add(state.cursorIndex);
 				this.afterConfirm(state, q);
 				return;
 			}

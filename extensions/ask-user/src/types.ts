@@ -4,6 +4,8 @@ import { type Static, Type } from "@sinclair/typebox";
 // ── 常量 ─────────────────────────────────────────────
 export const OTHER_LABEL = "Other";
 export const HEADER_MAX_CHARS = 12;
+/** question 文本长度上限：保证 details.answers 的 key 有界、可预测（spec FR-2） */
+export const QUESTION_MAX_CHARS = 1000;
 export const SPLIT_PANE_MIN_WIDTH = 84;
 export const SPLIT_PANE_SEPARATOR = " │ ";
 export const SPLIT_PANE_LEFT_MIN = 32;
