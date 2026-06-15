@@ -14,6 +14,24 @@ const DEFAULT_CONFIG: SubagentsGlobalConfig = {
   fallback: { model: "mimo-router/mimo-v2.5", thinkingLevel: "low" },
 };
 
+/** Round 5 SUG#7: 校验单个 category 值的最小结构（必须有 label + model 字符串）。
+ *  非法值丢弃回退默认，避免 config-wizard 展示/下游消费时崩溃。低优先级。 */
+function sanitizeCategories(input: unknown): SubagentsGlobalConfig["categories"] {
+  if (!input || typeof input !== "object") return { ...DEFAULT_CONFIG.categories };
+  const result: SubagentsGlobalConfig["categories"] = { ...DEFAULT_CONFIG.categories };
+  for (const [name, def] of Object.entries(input as Record<string, unknown>)) {
+    if (!def || typeof def !== "object") continue;
+    const d = def as Record<string, unknown>;
+    if (typeof d.label !== "string" || typeof d.model !== "string") continue;
+    result[name] = {
+      label: d.label,
+      model: d.model,
+      thinkingLevel: typeof d.thinkingLevel === "string" ? d.thinkingLevel : undefined,
+    };
+  }
+  return result;
+}
+
 /** FR-4.6.3: 加载配置，缺失字段用默认值填充。文件不存在返回全默认。 */
 export function loadGlobalConfig(homeDir: string): SubagentsGlobalConfig {
   const configPath = getConfigPath(homeDir);
@@ -24,7 +42,7 @@ export function loadGlobalConfig(homeDir: string): SubagentsGlobalConfig {
       version: parsed.version ?? DEFAULT_CONFIG.version,
       yoloByDefault: parsed.yoloByDefault ?? DEFAULT_CONFIG.yoloByDefault,
       maxConcurrent: parsed.maxConcurrent ?? DEFAULT_CONFIG.maxConcurrent,
-      categories: { ...DEFAULT_CONFIG.categories, ...parsed.categories },
+      categories: sanitizeCategories(parsed.categories),
       agentCategoryOverrides: { ...DEFAULT_CONFIG.agentCategoryOverrides, ...parsed.agentCategoryOverrides },
       fallback: { ...DEFAULT_CONFIG.fallback, ...parsed.fallback },
     };

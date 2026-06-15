@@ -451,6 +451,75 @@ describe("subagent tool execute()", () => {
     ).rejects.toThrow(/Failed to resolve model/);
     expect(runAgentMock).not.toHaveBeenCalled();
   });
+
+  // ── Round 5 SUG#12: throw fallback 路径测试 ──────────────────
+  it("sync mode: throws 'subagent failed (no error detail)' when result.success=false and error is undefined", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async () => ({
+        text: "",
+        turns: 0,
+        durationMs: 0,
+        success: false,
+        // error 字段不存在 → 走 ?? "subagent failed (no error detail)" 分支
+        sessionId: "",
+        toolCalls: [],
+      })),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    await expect(tool.execute("call-no-err", { task: "fail silently" })).rejects.toThrow(
+      "subagent failed (no error detail)",
+    );
+  });
+
+  // ── Round 5 MF#5: V4 worktree 合并指令路径测试 ─────────────────
+  it("sync mode: appends merge instruction to result text when worktree.hasChanges=true and branch is set", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async () => successResult({
+        worktree: { hasChanges: true, branch: "pi-agent-test-1" },
+      })),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    const result = await tool.execute("call-wt", { task: "do work" });
+
+    // content[0].text 末尾追加 git merge 指令
+    const text = result.content[0].text ?? "";
+    expect(text).toContain("Changes saved to branch `pi-agent-test-1`");
+    expect(text).toContain("Merge with: `git merge pi-agent-test-1`");
+  });
+
+  it("sync mode: does NOT append merge instruction when worktree.hasChanges=false", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async () => successResult({
+        worktree: { hasChanges: false },
+      })),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    const result = await tool.execute("call-wt-empty", { task: "do work" });
+
+    const text = result.content[0].text ?? "";
+    expect(text).not.toContain("Changes saved to branch");
+    expect(text).not.toContain("git merge");
+  });
+
+  it("sync mode: does NOT append merge instruction when worktree is undefined", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async () => successResult()),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    const result = await tool.execute("call-wt-undef", { task: "do work" });
+
+    const text = result.content[0].text ?? "";
+    expect(text).toBe("task done"); // successResult 默认 text
+    expect(text).not.toContain("Changes saved to branch");
+  });
 });
 
 describe("renderSubagentResult — spinner timer lifecycle (FR-2.3)", () => {

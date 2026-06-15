@@ -75,7 +75,12 @@ export class HistoryStore {
         const trimmed = line.trim();
         if (!trimmed) continue;
         try {
-          records.push(JSON.parse(trimmed) as PersistedAgentRecord);
+          // Round 5 SUG#6: lightweight runtime guard——避免「JSON 合法但结构错误」
+          // 的行（旧版本字段缺失/类型漂移）以错误形状进入下游 recent() 去重逻辑，
+          // r.id 可能 undefined 导致 dedup Map key 异常。
+          const parsed: unknown = JSON.parse(trimmed);
+          if (!isValidPersistedRecord(parsed)) continue;
+          records.push(parsed);
         } catch {
           // 单行损坏跳过，保留可用行
         }
@@ -200,4 +205,17 @@ function truncatePreview(s: string): string {
   if (s.length <= PERSISTED_PREVIEW_MAX) return s;
   const ELLIPSIS_LEN = 3;
   return s.slice(0, PERSISTED_PREVIEW_MAX - ELLIPSIS_LEN) + "...";
+}
+
+/** Round 5 SUG#6: 校验 PersistedAgentRecord 最小结构。返回 false 时调用方跳过该行。 */
+function isValidPersistedRecord(value: unknown): value is PersistedAgentRecord {
+  if (!value || typeof value !== "object") return false;
+  const r = value as Record<string, unknown>;
+  if (typeof r.id !== "string" || !r.id) return false;
+  if (typeof r.agent !== "string") return false;
+  if (r.status !== "done" && r.status !== "failed" && r.status !== "cancelled") return false;
+  if (r.mode !== "sync" && r.mode !== "background") return false;
+  if (typeof r.startedAt !== "number") return false;
+  if (typeof r.cwd !== "string") return false;
+  return true;
 }

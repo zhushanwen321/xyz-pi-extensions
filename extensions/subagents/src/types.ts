@@ -107,7 +107,11 @@ export interface RunAgentOptions {
 // ============================================================
 // FR-1.1.2: AgentResult
 // ============================================================
-export interface ToolCallEntry {
+/** Round 5 SUG#11: 重命名为 AgentToolCallEntry——subagents 内部 tool call 记录类型。
+ *  与 workflow domain/state.ts 的 ToolCallEntry { name; input } 结构完全不同，
+ *  同名易让维护者误以为可互换。保持内部 type alias 兼容已有调用方。 */
+export type ToolCallEntry = AgentToolCallEntry;
+export interface AgentToolCallEntry {
   toolName: string;
   /** 工具调用时的原始参数（来自 tool_execution_start.args），用于 UI 展示调用预览 */
   args?: unknown;
@@ -151,7 +155,7 @@ export interface AgentResult {
    * branch 为保留的分支名，用户可 `git merge <branch>` 合入。hasChanges=false 时 branch 为 undefined。
    */
   worktree?: { branch?: string; hasChanges: boolean };
-  toolCalls: ToolCallEntry[];
+  toolCalls: AgentToolCallEntry[];
 }
 
 // ============================================================
@@ -263,7 +267,7 @@ export type AgentEventType =
 
 export type AgentEvent =
   | { type: "tool_start"; toolName: string; args?: unknown }
-  | { type: "tool_end"; toolName: string; result?: ToolCallEntry["result"]; isError: boolean }
+  | { type: "tool_end"; toolName: string; result?: AgentToolCallEntry["result"]; isError: boolean }
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
   | { type: "turn_end" }

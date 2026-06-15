@@ -32,7 +32,6 @@ export interface ErrorHandlerContext {
   terminateWorker(runId: string): void;
   recreateRunAbortController(runId: string): void;
   startWorker(runId: string, instance: WorkflowInstance, scriptSource: string, args: Record<string, unknown>): void;
-  cleanupAllTempFiles?(): void;
   persistState(): Promise<void>;
   onCompletion?(runId: string): void;
   /** Remove the AgentPool for a run to prevent memory leaks. */
@@ -57,7 +56,6 @@ export async function handleWorkerError(
   transitionStatus(instance, "failed");
   ctx.events.emit(runId, { type: "status", status: "failed" });
   ctx.deleteRunPool(runId);
-  ctx.cleanupAllTempFiles?.();
   await ctx.persistState();
   ctx.onCompletion?.(runId);
 }
@@ -153,7 +151,6 @@ export async function handleScriptError(
     ctx.events.emit(runId, { type: "status", status: "failed" });
     ctx.terminateWorker(runId);
     ctx.deleteRunPool(runId);
-    ctx.cleanupAllTempFiles?.();
     await ctx.persistState();
     ctx.onCompletion?.(runId);
   }

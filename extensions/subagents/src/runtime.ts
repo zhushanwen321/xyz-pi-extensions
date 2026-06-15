@@ -196,6 +196,9 @@ export class SubagentRuntime {
       const firstKey = this._completedAgents.keys().next().value;
       if (firstKey !== undefined) this._completedAgents.delete(firstKey);
     }
+    // Round 5 SUG#2: 同 id 重复 archive 时先 delete 再 set，让 Map 把它移到队尾——
+    // 否则原插入位置保留，下次淘汰会把它删掉，新数据反而被踢。
+    this._completedAgents.delete(record.id);
     this._completedAgents.set(record.id, record);
     this.notifyChange();
   }
@@ -540,7 +543,16 @@ export class SubagentRuntime {
     })
       .then((result) => {
         record.result = result;
-        record.status = result.success ? "done" : "failed";
+        // Round 5 MF#2: .then 路径需补 abort 判断——SDK 偶发以
+        // message_end stopReason="aborted" 结束且 session.prompt() 未抛错，
+        // 此时走 .then 而非 .catch；不补判断会把用户 cancel 覆盖为 failed。
+        // 与 .catch 路径（runtime.ts:580）的 aborted 判断保持一致。
+        const aborted = record.controller?.signal.aborted ?? signal.aborted;
+        if (aborted) {
+          record.status = "cancelled";
+        } else {
+          record.status = result.success ? "done" : "failed";
+        }
         record.endedAt = Date.now();
         record.agent = opts.agent ?? "default";
         delete record.controller;
@@ -574,7 +586,7 @@ export class SubagentRuntime {
         // FR-O1.1: 回注完成通知到主对话（去重 + 合并窗口在 notifyBgCompletion 内处理）
         this.notifyBgCompletion({
           id: record.id,
-          status: record.status as "done" | "failed",
+          status: record.status as "done" | "failed" | "cancelled",
           agent: record.agent,
           result: record.result,
           startedAt: record.startedAt,
@@ -644,21 +656,11 @@ export class SubagentRuntime {
     r.status = "cancelled";
     r.endedAt = Date.now();
     this.notifyChange();
-    // ADR-024 L1: 用户主动取消也记录历史
-    // 注意：runAgent 的 catch 路径会再写一条 "failed"（因为 abort 抛错）。
-    // 这里写 cancelled 以保留用户意图。去重由 list 视图的 id + 最新时间戳处理。
-    void this._history.append(
-      buildPersistedRecord({
-        id,
-        agent: r.agent ?? "default",
-        status: "cancelled",
-        mode: "background",
-        task: "(cancelled by user)",
-        startedAt: r.startedAt,
-        endedAt: r.endedAt,
-        cwd: this.cwd,
-      }),
-    );
+    // Round 5 SUG#1: 不再同步写 history——runAgent 的 catch 路径会写一条
+    // status="cancelled" 的记录（其 task 字段从 opts.task 读取，保留原 task 文本）。
+    // 同步写会造成 race：cancelBackground 先写 "(cancelled by user)"，runAgent catch 后
+    // 写 "failed"/"cancelled"，依赖 endedAt 排序可能导致错误的 task 预览被采用。
+    // 去重仍由 list 视图的 id + 最新时间戳处理。
     return true;
   }
 
@@ -845,11 +847,15 @@ export class SubagentRuntime {
     const pending = this._pendingNotifications.splice(0);
     if (pending.length === 0) return;
     // 合并为一条消息
+    // Round 5 SUG#5: 每条追加 `Session file: {r.result?.sessionFile}`（存在时）——
+    // 合并窗口内的 background 完成事件不应丢失 sessionFile 引用，否则主 agent
+    // 无法续接完整 session 上下文。与单条通知（formatBgCompletionMessage）格式对齐。
     const lines = pending.map((r) => {
       const status = r.status === "done" ? "completed" : r.status;
       const agent = r.agent ?? "default";
       const body = (r.result?.text ?? r.error ?? "(no output)").slice(0, 200);
-      return `Background task ${status}: **${agent}** (${r.id})\n  ${body}`;
+      const sessionLine = r.result?.sessionFile ? `\n  Session file: ${r.result.sessionFile}` : "";
+      return `Background task ${status}: **${agent}** (${r.id})\n  ${body}${sessionLine}`;
     });
     const content = `${pending.length} background tasks completed:\n\n${lines.join("\n\n")}`;
     try {

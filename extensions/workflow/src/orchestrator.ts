@@ -231,34 +231,12 @@ export class WorkflowOrchestrator {
     pool.setBudget(instance.budget);
     this.runPools.set(runId, pool);
 
-    // P1-2: Also abort agent subprocesses when the tool-level signal fires
+    // P1-2: Tool-signal forwarders: (1) kill agent subprocess; (2) pause workflow
     if (signal) {
-      const onToolAbort = () => runAbortController.abort();
-      signal.addEventListener("abort", onToolAbort, { once: true });
+      signal.addEventListener("abort", () => runAbortController.abort(), { once: true });
+      signal.addEventListener("abort", () => this.pauseOnSignal(runId), { once: true });
     }
     await this.persistState();
-
-    // P1-2: Listen for abort — pause the workflow so it can be resumed
-    // NOTE: This listener handles pause logic; the tool-signal → runAbortController
-    // forwarding above handles killing the active agent subprocess.
-    if (signal) {
-      const onAbort = () => {
-        const inst = this.instances.get(runId);
-        if (inst && inst.status === "running") {
-          inst.pausedAt = new Date().toISOString();
-          try {
-            transitionStatus(inst, "paused");
-          // eslint-disable-next-line taste/no-silent-catch
-          } catch {
-            // State machine refused — leave as-is
-          }
-          // Round 3 MF2: pause 保留 controller，避免 retry 误判后丢失 callCache/worker 通知
-          this.terminateWorker(runId, true);
-          void this.persistState();
-        }
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
 
     this.startWorker(runId, instance, scriptSource, args);
 
@@ -267,12 +245,7 @@ export class WorkflowOrchestrator {
         (id) => this.instances.get(id),
         runId,
         budgetTimeMs,
-        {
-          postMessage: (id, msg) => this.postMessage(id, msg),
-          terminateWorker: (id) => this.terminateWorker(id),
-          persistState: () => this.persistState(),
-          onCompletion: (id) => this.onCompletion?.(id),
-        },
+        this.budgetCallbacks(),
       );
     }
 
@@ -340,12 +313,7 @@ export class WorkflowOrchestrator {
           (id) => this.instances.get(id),
           runId,
           meta.budgetTimeMs,
-          {
-            postMessage: (id, msg) => this.postMessage(id, msg),
-            terminateWorker: (id) => this.terminateWorker(id),
-              persistState: () => this.persistState(),
-            onCompletion: (id) => this.onCompletion?.(id),
-          },
+          this.budgetCallbacks(),
         );
       }
     }
@@ -517,12 +485,7 @@ export class WorkflowOrchestrator {
         (id) => this.instances.get(id),
         newRunId,
         budgetTimeMs,
-        {
-          postMessage: (id, msg) => this.postMessage(id, msg),
-          terminateWorker: (id) => this.terminateWorker(id),
-          persistState: () => this.persistState(),
-          onCompletion: (id) => this.onCompletion?.(id),
-        },
+        this.budgetCallbacks(),
       );
     }
 
@@ -630,16 +593,37 @@ export class WorkflowOrchestrator {
   }
 
   /**
+   * P1-2 + Round 5 MF#3: pause workflow on tool-signal abort. 提取为 helper——
+   * run() 和 recreateRunAbortController() 都需注册此 listener（resume 后必须重注册）。
+   * Round 3 MF2: pause 保留 controller，避免 retry 误判后丢失 callCache/worker 通知。
+   */
+  private pauseOnSignal(runId: string): void {
+    const inst = this.instances.get(runId);
+    if (!inst || inst.status !== "running") return;
+    inst.pausedAt = new Date().toISOString();
+    try {
+      transitionStatus(inst, "paused");
+    // eslint-disable-next-line taste/no-silent-catch
+    } catch {
+      // State machine refused — leave as-is
+    }
+    this.terminateWorker(runId, true);
+    void this.persistState();
+  }
+
+  /**
    * Recreate AbortController for a run after terminateWorker aborted the old one.
-   * Also re-wires the tool-level signal to the new controller.
+   * Re-wires the tool-level signal: (1) kill agent subprocess; (2) pause workflow.
+   * Round 5 MF#3: resume 后必须重注册 pause-on-abort listener，否则 tool signal 再次
+   * abort 只杀 agent 子进程、workflow 状态不变 paused，worker 死了但实例仍 running。
    */
   private recreateRunAbortController(runId: string): void {
     const newController = new AbortController();
     this.runAbortControllers.set(runId, newController);
     const meta = this.runMetaMap.get(runId);
     if (meta?.signal && !meta.signal.aborted) {
-      const onToolAbort = () => newController.abort();
-      meta.signal.addEventListener("abort", onToolAbort, { once: true });
+      meta.signal.addEventListener("abort", () => newController.abort(), { once: true });
+      meta.signal.addEventListener("abort", () => this.pauseOnSignal(runId), { once: true });
     }
   }
 
@@ -698,6 +682,18 @@ export class WorkflowOrchestrator {
       persistState: () => this.persistState(),
       onCompletion: (id) => this.onCompletion?.(id),
       deleteRunPool: (id) => this.runPools.delete(id),
+    };
+  }
+
+  /** Shared BudgetCallbacks 实例——executeWithRetry / handleAgentCall /
+   *  scheduleTimeBudgetCheck 都需要同样的 4 个回调。集中创建避免在调用点
+   *  重复 6 行内联（orchestrator.ts 文件行数 1000+ 紧贴上限）。 */
+  private budgetCallbacks() {
+    return {
+      postMessage: (id: string, msg: unknown) => this.postMessage(id, msg),
+      terminateWorker: (id: string) => this.terminateWorker(id),
+      persistState: () => this.persistState(),
+      onCompletion: (id: string) => this.onCompletion?.(id),
     };
   }
 
@@ -766,6 +762,23 @@ export class WorkflowOrchestrator {
       return;
     }
 
+    // Round 5 SUG#4: handleAgentCall 入口先 checkBudget，避免后置造成的
+    // “budget 超限后仍多跑 1 个 agent”窗口。短路返回 budget_limited。
+    const b = instance.budget;
+    const budgetExceeded =
+      (b.maxTokens !== undefined && b.maxTokens > 0 && b.usedTokens >= b.maxTokens) ||
+      (b.maxCost !== undefined && b.maxCost > 0 && b.usedCost >= b.maxCost);
+    if (budgetExceeded) {
+      const errorResult: StateAgentResult = {
+        content: "",
+        error: `Budget exceeded before dispatch: ${b.usedTokens}/${b.maxTokens ?? "?"} tokens`,
+      };
+      instance.callCache.set(callId, errorResult);
+      this.postMessage(runId, { type: "agent-result", callId, result: errorResult, cached: false });
+      await checkBudget(instance, runId, this.budgetCallbacks());
+      return;
+    }
+
     // Agent resolution
     const resolved = this.resolveAgentOpts(opts);
     if (resolved.error) {
@@ -822,6 +835,15 @@ export class WorkflowOrchestrator {
     pool.enqueue(opts, runController?.signal).then(async (poolResult) => {
       // P0-2: Stale state check — instance may have been paused/aborted during agent call
       if (instance.status !== "running") return;
+
+      // Round 5 MF#4: 累加 token 必须在 retry 判断之前——中间失败的 retry 仍消耗
+      // input token，budget 必须如实记录（语义为“实际计费 token”），否则 budget 限制
+      // 可被 retry 放大 5-10 倍。budget.usedTokens 累加语义与 cache hit 无关，
+      // 仅当 poolResult.usage 存在时累加。
+      if (poolResult.usage) {
+        instance.budget.usedTokens += poolResult.usage.input + poolResult.usage.output;
+        instance.budget.usedCost += poolResult.usage.cost;
+      }
 
       // P1-5: Stale context detection — do not retry when pi's session context
       // is stale (e.g. after compact). Retrying the same call would just fail again.
@@ -899,14 +921,6 @@ export class WorkflowOrchestrator {
         appendTraceNode(this.pi, runId, traceNode);
         this.events.emit(runId, { type: "node-update", stepIndex: callId, node: { stepIndex: traceNode.stepIndex, agent: traceNode.agent, status: traceNode.status, phase: traceNode.phase } });
       }
-      if (poolResult.usage) {
-        // Round 4 S3: 语义为“实际计费 token”（input + output），忽略 cacheRead/cacheWrite。
-        // contextTokens（mapResult 计）含缓存项是供 UI/对账用，不计入 budget 限制。
-        // 若未来需“总 token 消耗”语义，改为四字段之和。
-        instance.budget.usedTokens += poolResult.usage.input + poolResult.usage.output;
-        instance.budget.usedCost += poolResult.usage.cost;
-      }
-
       // Push budget update to worker for dynamic budget functions
       this.postMessage(runId, {
         type: "budget-update",
@@ -914,12 +928,7 @@ export class WorkflowOrchestrator {
       });
 
       // Enforce budget limits
-      await checkBudget(this.instances.get(runId), runId, {
-        postMessage: (id, msg) => this.postMessage(id, msg),
-        terminateWorker: (id) => this.terminateWorker(id),
-          persistState: () => this.persistState(),
-        onCompletion: (id) => this.onCompletion?.(id),
-      });
+      await checkBudget(this.instances.get(runId), runId, this.budgetCallbacks());
 
       await this.persistState();
       this.onTraceUpdate?.(runId);

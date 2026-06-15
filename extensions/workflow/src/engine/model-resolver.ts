@@ -1,10 +1,10 @@
 /**
  * Model resolver — resolves target model for workflow agent calls.
  *
- * 改造前：异步 dynamic import @zhushanwen/pi-model-switch 的 resolveModelForScene。
- * 改造后：调用 @zhushanwen/pi-subagents 的 resolveModelForScene()（通过 getRuntime()）。
- *
+ * 调用 @zhushanwen/pi-subagents 的 resolveModelForScene()（通过 getRuntime()）。
  * scene 名直接作为 agent 名传入 subagents 5 级配置链解析。
+ *
+ * Round 5 SUG#10: 删除对已移除依赖的引用（@zhushanwen/pi-model-switch 不再被使用）。
  */
 
 import type { AgentCallOpts } from "../infra/agent-pool.js";

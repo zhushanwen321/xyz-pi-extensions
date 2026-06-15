@@ -110,6 +110,10 @@ export function cleanupWorktree(
     workingTreeDirty = false;
   }
 
+  // Round 5 MF#1: commit/branch 失败标志——true 时跳过 worktree remove（见下方），
+  // 保留物理目录让用户可手动 `git checkout` 恢复 agent 隔离执行的成果。
+  let preserveOnFailure = false;
+
   if (workingTreeDirty) {
     // 分支 A：working tree 有未提交变更 → add + commit + branch
     try {
@@ -119,7 +123,9 @@ export function cleanupWorktree(
       wt.branch = createBranchAtHead(wt.workPath, wt.branchName);
       wt.hasChanges = true;
     } catch {
-      // commit 失败 → best effort
+      // commit/branch 失败：标记保留，worktree 目录不能被物理删除
+      // （agent 变更可能已 add 但 commit 失败，worktree 内文件仍是用户的成果）。
+      preserveOnFailure = true;
     }
   } else {
     // working tree 干净：需区分"确实无变更" vs "agent 已自提交"（V2）
@@ -142,13 +148,17 @@ export function cleanupWorktree(
 
   // 删除 worktree（分支保留）。V8：wtRoot 在 createWorktree 总是设置，
   // 删除死代码 `?? wt.workPath.replace(/\/[^/]+$/, "")`（那正是旧 bug 逻辑）。
-  try {
-    git(originalCwd, ["worktree", "remove", "--force", wt.wtRoot]);
-  } catch {
+  // Round 5 MF#1: commit/branch 失败的脏 worktree 不应被 remove（会物理删除 agent 变更）。
+  // preserveOnFailure=true 时跳过——用户可在 os.tmpdir() 下 pi-agent-* 找回目录。
+  if (!preserveOnFailure) {
     try {
-      git(originalCwd, ["worktree", "prune"]);
+      git(originalCwd, ["worktree", "remove", "--force", wt.wtRoot]);
     } catch {
-      // best effort
+      try {
+        git(originalCwd, ["worktree", "prune"]);
+      } catch {
+        // best effort
+      }
     }
   }
 

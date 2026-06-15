@@ -32,6 +32,38 @@ describe("buildCompletionKey", () => {
     const data = { agent: "a", sessionId: "s", timestamp: 5, success: false };
     expect(buildCompletionKey(data, "f")).toBe(buildCompletionKey(data, "f"));
   });
+
+  // ── Round 5 SUG#13: 边界 case 覆盖 ──────────────────
+  it("id 为空串时 fallback 到 meta key", () => {
+    expect(buildCompletionKey({ id: "" }, "f")).not.toMatch(/^id:/);
+    expect(buildCompletionKey({ id: "" }, "f")).toContain("f");
+  });
+
+  it("id 为纯空白时 fallback 到 meta key", () => {
+    const key = buildCompletionKey({ id: "   " }, "f");
+    expect(key).not.toMatch(/^id:/);
+    expect(key).toContain("f");
+  });
+
+  it("id 为非字符串时 fallback 到 meta key", () => {
+    const key = buildCompletionKey({ id: 123 }, "f");
+    expect(key).not.toMatch(/^id:/);
+    expect(key).toContain("f");
+  });
+
+  it("meta 字段全缺失时使用默认值（no-session:unknown:no-ts）", () => {
+    const key = buildCompletionKey({}, "f");
+    expect(key).toContain("no-session");
+    expect(key).toContain("unknown");
+    expect(key).toContain("no-ts");
+    expect(key).toContain("f");
+    // success 未知 → "?" 标记
+    expect(key).toContain("?");
+  });
+
+  it("id 为非空字符串时优先用 id（忽略 meta 缺失）", () => {
+    expect(buildCompletionKey({ id: "bg-1" }, "f")).toBe("id:bg-1");
+  });
 });
 
 describe("markSeenWithTtl", () => {

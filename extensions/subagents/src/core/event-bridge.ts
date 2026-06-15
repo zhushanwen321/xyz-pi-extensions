@@ -1,5 +1,5 @@
 // src/core/event-bridge.ts
-import type { AgentEvent, ToolCallEntry } from "../types.ts";
+import type { AgentEvent, AgentToolCallEntry } from "../types.ts";
 
 /** SDK AgentSessionEvent 的最小可用子集（结构 duck-typed，避免强耦合 SDK 类型） */
 type SdkEvent = {
@@ -26,7 +26,7 @@ type SdkEvent = {
  */
 export function createEventBridge(onEvent: (event: AgentEvent) => void) {
   let turnCount = 0;
-  const toolCalls: ToolCallEntry[] = [];
+  const toolCalls: AgentToolCallEntry[] = [];
   // FR-8.3: usage 累加器——累加所有 message_end 事件的 usage
   let usageAccum = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
   // I2: 记录 message_end 中 stopReason=error/aborted 的错误信息（供 runAgent 读取）
@@ -48,7 +48,7 @@ export function createEventBridge(onEvent: (event: AgentEvent) => void) {
         const pending = raw.toolCallId ? pendingTools.get(raw.toolCallId) : undefined;
         const toolName = raw.toolName ?? pending?.toolName ?? "unknown";
         const args = pending?.args;
-        const result = raw.result as ToolCallEntry["result"] | undefined;
+        const result = raw.result as AgentToolCallEntry["result"] | undefined;
         const isError = raw.isError ?? false;
         toolCalls.push({ toolName, args, result, isError });
         onEvent({ type: "tool_end", toolName, result, isError });

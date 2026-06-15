@@ -30,6 +30,14 @@ export interface SubagentToolDetails {
   model?: string;
   /** FR-1.2: thinking level */
   thinkingLevel?: string;
+  /** Round 5 SUG#9: GUI 渲染描述符。xyz-agent 识别后渲染 task-list；缺失时 fallback 到 content。 */
+  _render?: {
+    type: "task-list";
+    data: {
+      title: string;
+      items: Array<{ label: string; status: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; detail?: string }>;
+    };
+  };
 }
 
 export interface ThemeLike {

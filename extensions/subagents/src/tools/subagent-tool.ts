@@ -239,6 +239,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
             turns: 0,
             totalTokens: 0,
             elapsedSeconds: Math.round((Date.now() - status.startedAt) / MS_PER_SECOND),
+            _render: buildSubagentRender(status.agent ?? "default", "running"),
           };
           return {
             content: [
@@ -261,6 +262,11 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
           elapsedSeconds: status.endedAt ? Math.round((status.endedAt - status.startedAt) / MS_PER_SECOND) : 0,
           result: status.result?.text,
           error: status.error,
+          _render: buildSubagentRender(
+            status.agent ?? "default",
+            status.status === "done" ? "done" : "failed",
+            (status.result?.text ?? status.error ?? "(no output)").slice(0, 200),
+          ),
         };
         const text = status.result?.text ?? status.error ?? "(no output)";
         return {
@@ -329,6 +335,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
                 backgroundId: bgId,
                 model: resolved?.model.id,
                 thinkingLevel: resolved?.thinkingLevel,
+                _render: buildSubagentRender(agentName, bgDetails.status),
               },
             });
           },
@@ -344,6 +351,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
           backgroundId: handle.id,
           model: resolved?.model.id,
           thinkingLevel: resolved?.thinkingLevel,
+          _render: buildSubagentRender(agentName, "running"),
         };
         return {
           content: [
@@ -381,6 +389,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         elapsedSeconds: Math.floor((Date.now() - startTime) / MS_PER_SECOND),
         model: resolvedModelId,
         thinkingLevel: resolvedThinkingLevel,
+        _render: buildSubagentRender(agentName, status, (toolState.summary ?? "").slice(0, 200)),
       });
 
       const pushUpdate = (status: SubagentToolDetails["status"]) => {
@@ -433,6 +442,30 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 // ============================================================
 // Helpers
 // ============================================================
+
+/** Round 5 SUG#9: 构造 GUI task-list 描述符。subagent 结果天然适配
+ *  task-list：一条主项（agent 名称 + 状态），detail 含 result/error 预览。
+ *  与 _render 协议（CLAUDE.md GUI 渲染描述符）一致——xyz-agent 缺失时 fallback 到 content。 */
+function buildSubagentRender(agent: string, status: SubagentToolDetails["status"], detail?: string): NonNullable<SubagentToolDetails["_render"]> {
+  return {
+    type: "task-list",
+    data: {
+      title: `Subagent: ${agent}`,
+      items: [{ label: agent, status: mapRenderStatus(status), detail }],
+    },
+  };
+}
+
+/** 把 SubagentToolDetails status 映射到 _render 协议的状态联合。
+ *  两者表达相似但枚举不同（_render 用 pending/in_progress/completed/cancelled/failed）。 */
+function mapRenderStatus(status: SubagentToolDetails["status"]): "pending" | "in_progress" | "completed" | "failed" | "cancelled" {
+  switch (status) {
+    case "running": return "in_progress";
+    case "done": return "completed";
+    case "failed": return "failed";
+    case "cancelled": return "cancelled";
+  }
+}
 
 /** Build progress text for the model (content field) */
 function formatProgressText(

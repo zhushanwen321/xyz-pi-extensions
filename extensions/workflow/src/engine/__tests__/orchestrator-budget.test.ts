@@ -43,14 +43,12 @@ function makeCallbacks(): BudgetCallbacks & {
   terminateWorker: ReturnType<typeof vi.fn>;
   persistState: ReturnType<typeof vi.fn>;
   onCompletion: ReturnType<typeof vi.fn>;
-  cleanupAllTempFiles: ReturnType<typeof vi.fn>;
 } {
   return {
     postMessage: vi.fn(),
     terminateWorker: vi.fn(),
     persistState: vi.fn().mockResolvedValue(undefined),
     onCompletion: vi.fn(),
-    cleanupAllTempFiles: vi.fn(),
   };
 }
 
