@@ -855,13 +855,25 @@ export class SubagentRuntime {
 /** ms → s 换算 */
 const MS_PER_SECOND = 1000;
 
-// 进程内单例（用 const 对象持有，避免模块级 let 触发 check-structure）
-const _runtimeSlot: { current?: SubagentRuntime } = {};
+// 进程内单例：用 globalThis 持有，避免 jiti 因路径字符串不同加载多份模块导致单例分裂。
+// 场景：workflow 扩展 import "@zhushanwen/pi-subagents" 与 subagents 扩展被 pi 直接加载，
+// 若 jiti 缓存 key 用路径字符串（非 realpath），两份 runtime.ts 各持一个 _runtimeSlot，
+// setRuntime 写 A、getRuntime 读 B(null)。globalThis 跨所有模块实例共享，彻底消除该问题。
+const RUNTIME_SLOT_KEY = Symbol.for("@zhushanwen/pi-subagents.runtime");
+
+type RuntimeSlot = { current?: SubagentRuntime };
+
+function getSlot(): RuntimeSlot {
+  if (!(globalThis as Record<symbol, unknown>)[RUNTIME_SLOT_KEY]) {
+    (globalThis as Record<symbol, unknown>)[RUNTIME_SLOT_KEY] = { current: undefined };
+  }
+  return (globalThis as Record<symbol, RuntimeSlot>)[RUNTIME_SLOT_KEY];
+}
 
 export function setRuntime(rt: SubagentRuntime): void {
-  _runtimeSlot.current = rt;
+  getSlot().current = rt;
 }
 
 export function getRuntime(): SubagentRuntime | undefined {
-  return _runtimeSlot.current;
+  return getSlot().current;
 }
