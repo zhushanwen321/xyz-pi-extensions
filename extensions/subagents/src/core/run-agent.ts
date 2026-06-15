@@ -29,6 +29,13 @@ const COMMIT_MSG_MAX = 200;
 /** 默认 grace turns（soft turn limit 后的宽限轮数） */
 const DEFAULT_GRACE_TURNS = 2;
 
+/** schema 契约 enforcement：agent 漏调 structured-output 时最多 steer 重试次数。
+ *  对齐 structured-output 扩展原 setupWorkflowHook 的 MAX_HOOK_RETRIES=2。 */
+const MAX_SCHEMA_STEERS = 2;
+
+/** structured-output 工具名（与 structured-output 扩展 TOOL_NAME 一致） */
+const STRUCTURED_OUTPUT_TOOL = "structured-output";
+
 /** runAgent 的依赖注入容器（由 SubagentRuntime 提供） */
 export interface RunAgentContext {
   modelRegistry: ModelRegistryLike;
@@ -135,10 +142,30 @@ export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Pro
 
       // bridge.turnCount 由 createAndConfigureSession 内 subscribe 累计；
       // 此处额外监听 turn_end 触发 limiter（需在 unsubscribe 前追加监听）
+      // 同时执行 schema 契约 enforcement：opts.schema 存在时，若 agent 本 turn
+      // 未成功调 structured-output，注入 steer 提醒（最多 MAX_SCHEMA_STEERS 次）。
+      // 这取代了原 structured-output 扩展 setupWorkflowHook（该 hook 依赖
+      // PI_WORKFLOW_SCHEMA env + 主 pi 的 turn_end，但进程内 runAgent 路径
+      // 既不设 env 也不冒泡 turn_end 到主 pi，导致 hook 从未生效）。
+      let schemaSteerCount = 0;
       const limiterUnsub = session.subscribe((event: unknown) => {
-        if ((event as { type: string }).type === "turn_end") {
-          limiter.onTurnEnd(bridge.turnCount);
-        }
+        const ev = event as { type: string };
+        if (ev.type !== "turn_end") return;
+        limiter.onTurnEnd(bridge.turnCount);
+        // schema 契约 enforcement
+        if (!opts.schema) return;
+        const soSucceeded = bridge.toolCalls.some(
+          (tc) => tc.toolName === STRUCTURED_OUTPUT_TOOL && !tc.isError,
+        );
+        if (soSucceeded) return;
+        if (schemaSteerCount >= MAX_SCHEMA_STEERS) return;
+        schemaSteerCount++;
+        const reminder =
+          "[MANDATORY] You MUST call the `structured-output` tool now.\n" +
+          "Your task requires structured output — do NOT respond with plain text.\n" +
+          "Call structured-output with the schema below and your result as data.\n\n" +
+          formatSchemaInstruction(opts.schema);
+        void session.steer(reminder);
       });
 
       // AbortSignal

@@ -450,4 +450,104 @@ describe("runAgent", () => {
       expect(wtList).not.toMatch(/pi-agent-/);
     });
   });
+
+  // ============================================================
+  // schema 契约 enforcement：opts.schema 存在时，turn_end 检查 agent 是否
+  // 调用了 structured-output，未调用则 session.steer 提醒，最多 MAX_SCHEMA_STEERS=2 次。
+  // 取代失效的 structured-output 扩展 setupWorkflowHook（进程内 runAgent 路径
+  // 既不设 PI_WORKFLOW_SCHEMA env，subagent session 的 turn_end 也不冒泡到主 pi）。
+  // ============================================================
+  describe("schema 契约 enforcement (steer on missing structured-output)", () => {
+    /**
+     * 构造能捕获 subscribe 回调的 session，并在 prompt 执行时触发 turn_end。
+     *
+     * @param turnEvents - prompt 执行期间依次注入给 subscribe 回调的事件序列
+     * @param promptInvokeCount - 触发多少轮 prompt（默认1，steer 会让 Pi 再跑一轮 turn）
+     */
+    function makeCapturingSession(turnEvents: unknown[] = [{ type: "turn_end" }]): MockSession {
+      let subscriber: ((event: unknown) => void) | undefined;
+      return {
+        ...makeMockSession(),
+        subscribe: vi.fn((fn: (event: unknown) => void) => {
+          subscriber = fn;
+          return () => { subscriber = undefined; };
+        }),
+        prompt: vi.fn(async () => {
+          // 模拟 Pi 在 prompt 执行期间向订阅者 emit turn_end（及可能的其他事件）
+          if (subscriber) for (const ev of turnEvents) subscriber(ev);
+        }),
+      } as never;
+    }
+
+    /** toolCall: 成功的 structured-output 调用 */
+    const SO_SUCCESS = {
+      toolName: "structured-output",
+      args: { data: { must_fix: 1 } },
+      result: { details: { must_fix: 1 } },
+      isError: false,
+    };
+
+    it("schema 存在 && agent 未调 structured-output → steer 被调用一次（注入 reminder）", async () => {
+      const session = makeCapturingSession();
+      configureFactory(session, makeMockBridge({ toolCalls: [] }));
+
+      await runAgent(
+        { task: "review", schema: { type: "object", properties: { must_fix: { type: "number" } } } },
+        makeCtx(),
+      );
+
+      expect(session.steer).toHaveBeenCalledTimes(1);
+      const reminder = session.steer.mock.calls[0][0] as string;
+      expect(reminder).toContain("MANDATORY");
+      expect(reminder).toContain("structured-output");
+    });
+
+    it("schema 存在 && agent 已成功调 structured-output → steer 不被调用", async () => {
+      const session = makeCapturingSession();
+      // bridge.toolCalls 含成功 structured-output 调用
+      configureFactory(session, makeMockBridge({ toolCalls: [SO_SUCCESS] }));
+
+      await runAgent(
+        { task: "review", schema: { type: "object" } },
+        makeCtx(),
+      );
+
+      expect(session.steer).not.toHaveBeenCalled();
+    });
+
+    it("schema 存在 && agent 调 structured-output 但失败 (isError=true) → 仍 steer", async () => {
+      const session = makeCapturingSession();
+      configureFactory(
+        session,
+        makeMockBridge({
+          toolCalls: [{ ...SO_SUCCESS, isError: true, result: { details: undefined } }],
+        }),
+      );
+
+      await runAgent({ task: "review", schema: { type: "object" } }, makeCtx());
+
+      // 失败调用不计入成功 → 触发 steer
+      expect(session.steer).toHaveBeenCalledTimes(1);
+    });
+
+    it("多个 turn_end 均未调 structured-output → steer 最多 MAX_SCHEMA_STEERS(=2) 次，不无限循环", async () => {
+      // 模拟 Pi 跑了 5 轮 turn（steer 后 Pi 继续，但始终不调 structured-output）
+      const turnEvents = Array.from({ length: 5 }, () => ({ type: "turn_end" }));
+      const session = makeCapturingSession(turnEvents);
+      configureFactory(session, makeMockBridge({ toolCalls: [] }));
+
+      await runAgent({ task: "review", schema: { type: "object" } }, makeCtx());
+
+      expect(session.steer).toHaveBeenCalledTimes(2);
+    });
+
+    it("无 schema → 不 steer（不影响不需要结构化输出的 agent）", async () => {
+      const session = makeCapturingSession();
+      configureFactory(session, makeMockBridge({ toolCalls: [] }));
+
+      await runAgent({ task: "just chat" }, makeCtx());
+
+      expect(session.steer).not.toHaveBeenCalled();
+    });
+  });
 });
