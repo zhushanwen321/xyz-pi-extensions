@@ -240,7 +240,14 @@ export class AskUserComponent implements Component {
 
 	private handleEditorInput(data: string, state: QuestionState, q: Question): void {
 		if (matchesKey(data, "escape")) {
-			// Esc in editor = back to options (skip, don't submit)
+			if (state.mode === "comment") {
+				// AC-17: Esc in comment = skip comment, advance (keep existing commentValue)
+				state.mode = "options";
+				this.editorText = "";
+				this.advance();
+				return;
+			}
+			// Esc in freeform editor = back to options (discard input)
 			state.mode = "options";
 			this.editorText = "";
 			this.invalidate();
@@ -256,13 +263,17 @@ export class AskUserComponent implements Component {
 				} else {
 					state.freeTextValue = null;
 				}
-			} else {
-				// comment mode
-				state.commentValue = text || null;
+				state.mode = "options";
+				this.editorText = "";
+				// freeform 保存后走 afterConfirm（可能进 comment 模式）
+				this.afterConfirm(state, q);
+				return;
 			}
+			// comment mode：保存评论后直接前进（不再回头进 comment）
+			state.commentValue = text || null;
 			state.mode = "options";
 			this.editorText = "";
-			this.afterConfirm(state, q);
+			this.advance();
 			return;
 		}
 		if (matchesKey(data, "backspace")) {

@@ -68,4 +68,37 @@ describe("validateInput", () => {
 		]);
 		expect(result).toContain("header");
 	});
+
+	// V-9: 4 个问题上限
+	it("accepts 4 questions (maxItems boundary)", () => {
+		const result = validateInput([
+			q({ question: "Q1", header: "H1" }),
+			q({ question: "Q2", header: "H2" }),
+			q({ question: "Q3", header: "H3" }),
+			q({ question: "Q4", header: "H4" }),
+		]);
+		expect(result).toBeNull();
+	});
+
+	// V-10: 不同 question 可以有相同 header（header 不要求唯一）
+	it("allows duplicate headers across different questions", () => {
+		const result = validateInput([
+			q({ question: "Q1", header: "Same" }),
+			q({ question: "Q2", header: "Same" }),
+		]);
+		expect(result).toBeNull();
+	});
+
+	// V-11: option description 不参与唯一性校验
+	it("allows duplicate descriptions across options", () => {
+		const result = validateInput([
+			q({
+				options: [
+					{ label: "A", description: "same desc" },
+					{ label: "B", description: "same desc" },
+				],
+			}),
+		]);
+		expect(result).toBeNull();
+	});
 });

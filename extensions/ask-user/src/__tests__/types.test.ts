@@ -1,7 +1,13 @@
 // src/__tests__/types.test.ts
 import { describe, expect, it } from "vitest";
 
-import { createQuestionState, InputSchema, OTHER_LABEL, SPLIT_PANE_MIN_WIDTH } from "../types";
+import {
+	createQuestionState,
+	InputSchema,
+	OTHER_LABEL,
+	QuestionSchema,
+	SPLIT_PANE_MIN_WIDTH,
+} from "../types";
 
 describe("types", () => {
 	it("InputSchema accepts valid single question", () => {
@@ -36,5 +42,30 @@ describe("types", () => {
 		expect(s.freeTextValue).toBeNull();
 		expect(s.commentValue).toBeNull();
 		expect(s.mode).toBe("options");
+	});
+
+	// T-5: 每次调用返回独立的 Set 实例
+	it("createQuestionState returns independent Set each call", () => {
+		const s1 = createQuestionState();
+		const s2 = createQuestionState();
+		s1.selectedIndices.add(0);
+		expect(s2.selectedIndices.has(0)).toBe(false);
+		expect(s1.selectedIndices).not.toBe(s2.selectedIndices);
+	});
+
+	// T-6: QuestionSchema options 数量约束
+	it("QuestionSchema enforces options minItems=2, maxItems=4", () => {
+		const opts = (QuestionSchema as { properties: { options: { minItems: number; maxItems: number } } })
+			.properties.options;
+		expect(opts.minItems).toBe(2);
+		expect(opts.maxItems).toBe(4);
+	});
+
+	// T-7: InputSchema questions 数量约束
+	it("InputSchema enforces questions minItems=1, maxItems=4", () => {
+		const qs = (InputSchema as { properties: { questions: { minItems: number; maxItems: number } } })
+			.properties.questions;
+		expect(qs.minItems).toBe(1);
+		expect(qs.maxItems).toBe(4);
 	});
 });
