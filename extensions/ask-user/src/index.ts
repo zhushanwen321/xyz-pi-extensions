@@ -130,7 +130,7 @@ export default function (pi: ExtensionAPI): void {
 				theme.fg("toolTitle", theme.bold("ask_user ")) + theme.fg("muted", topics),
 				0,
 				0,
-			) as unknown as Text;
+			);
 		},
 
 		renderResult(
@@ -159,7 +159,7 @@ export default function (pi: ExtensionAPI): void {
 					),
 				);
 			}
-			return box as unknown as Text;
+			return box;
 		},
 	});
 }
