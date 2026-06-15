@@ -521,22 +521,28 @@ export class SubagentRuntime {
     const id = `bg-${++this._bgSeq}-${Date.now().toString(BG_ID_RADIX)}`;
     const controller = new AbortController();
     const startedAt = Date.now();
-    // Wave 1: 创建 AgentExecutionState（model 创建时必填——消灭 poll model 丢失）
-    // model 从 opts 或 agent 默认解析；startBackground 的 opts 不含 resolved model，
-    // 所以这里用一个最小 fallback（"unknown"），真正的 model 由 subagent-tool.ts
-    // 在 onUpdate 回流时通过 executionStateToDetails 投影。
-    // 注意：startBackground 的 opts 没有 model 字段（model 解析在 tool 层），
-    // 所以这里用 opts.agent 的配置链解析。如果 modelRegistry 不可用则用占位。
+    // Wave 1: 创建 AgentExecutionState（model 创建时必填——消灭 poll model 丢失）。
+    // Round 1 MF#2: resolveModelForAgent 传 paramOverride（opts.model/thinkingLevel），
+    // 让用户显式指定的 model/thinkingLevel 生效到 state，与 runAgent 实际执行一致
+    // （影响 getBackground 轮询 + history 持久化的成本追踪/审计）。此前未传 paramOverride
+    // 导致 state.model 记 agent 默认模型，与执行模型不符。modelRegistry 不可用时用占位。
     const agentName = opts.agent ?? "default";
     let resolvedModel = "unknown";
+    let resolvedThinking: string | undefined;
     try {
-      const resolved = this.resolveModelForAgent(agentName);
-      if (resolved) resolvedModel = resolved.model.id;
+      const resolved = this.resolveModelForAgent(agentName, {
+        model: opts.model,
+        thinkingLevel: opts.thinkingLevel,
+      });
+      if (resolved) {
+        resolvedModel = resolved.model.id;
+        resolvedThinking = resolved.thinkingLevel;
+      }
     } catch { /* modelRegistry 未注入，用占位 */ }
     const state = createExecutionState(id, {
       agent: agentName,
       model: resolvedModel,
-      thinkingLevel: undefined,
+      thinkingLevel: resolvedThinking,
       startedAt,
     });
     const record: BgRecord = { id, state, status: "running", startedAt, controller };

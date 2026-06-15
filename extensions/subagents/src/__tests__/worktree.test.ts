@@ -295,8 +295,8 @@ describe("pruneWorktrees", () => {
   // Round 6 MF#7: 用 test-local baseDir（tmpDir）替代 os.tmpdir()，避免与其它并行测试
   // 的 pi-agent-* 残留互相干扰——这是 flaky 根因。
   it("V5: removes orphaned pi-agent-* physical dirs from baseDir (crash recovery)", () => {
-    // 模拟崩溃残留：进程被 kill -9 时 worktree 物理目录留在 baseDir
-    const orphanDir = path.join(tmpDir, "pi-agent-crashed-abc123");
+    // 模拟本进程残留（session_shutdown 兜底清理）：ownerPid === currentPid → 删除
+    const orphanDir = path.join(tmpDir, `pi-agent-${process.pid}-crashed-abc123`);
     fs.mkdirSync(orphanDir, { recursive: true });
     fs.writeFileSync(path.join(orphanDir, "leftover.txt"), "crash\n");
     expect(fs.existsSync(orphanDir)).toBe(true);
@@ -311,7 +311,7 @@ describe("pruneWorktrees", () => {
   it("V5: does not remove unrelated baseDir entries", () => {
     const unrelatedDir = path.join(tmpDir, "other-tool-tmp");
     fs.mkdirSync(unrelatedDir, { recursive: true });
-    const piAgentDir = path.join(tmpDir, "pi-agent-keep-me");
+    const piAgentDir = path.join(tmpDir, `pi-agent-${process.pid}-keep-me`);
     fs.mkdirSync(piAgentDir, { recursive: true });
 
     try {
@@ -322,6 +322,46 @@ describe("pruneWorktrees", () => {
     } finally {
       // 清理 unrelated dir
       try { fs.rmSync(unrelatedDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+  });
+
+  // ── Round 1 MF#1: 并发 session 安全 + 崩溃恢复归属校验 ──────
+  it("MF#1: removes crash-recovery dirs from a dead process", () => {
+    // 模拟其他进程崩溃后退出（pid 已不存在）：归属进程已死 → 安全删除
+    const deadPid = 99999999; // 超出 Linux pid_max（4194304），不可能存在
+    const crashDir = path.join(tmpDir, `pi-agent-${deadPid}-crashed`);
+    fs.mkdirSync(crashDir, { recursive: true });
+    expect(fs.existsSync(crashDir)).toBe(true);
+
+    pruneWorktrees(tmpDir, tmpDir);
+
+    expect(fs.existsSync(crashDir)).toBe(false); // 归属进程已死 → 清
+  });
+
+  it("MF#1: preserves dirs owned by another live process (concurrent session safety)", () => {
+    // 用父进程 pid 模拟另一个存活的并发 session（测试运行时父进程必然存活，ppid !== pid）
+    const liveOtherPid = process.ppid;
+    const otherDir = path.join(tmpDir, `pi-agent-${liveOtherPid}-concurrent`);
+    fs.mkdirSync(otherDir, { recursive: true });
+
+    try {
+      pruneWorktrees(tmpDir, tmpDir);
+      expect(fs.existsSync(otherDir)).toBe(true); // 其他存活 session → 保留
+    } finally {
+      try { fs.rmSync(otherDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+  });
+
+  it("MF#1: skips legacy dirs without pid prefix (unknown ownership)", () => {
+    // 旧格式（createWorktree 未嵌入 pid 时的残留）→ 归属不明，保守跳过不删
+    const legacyDir = path.join(tmpDir, "pi-agent-legacy-no-pid");
+    fs.mkdirSync(legacyDir, { recursive: true });
+
+    try {
+      pruneWorktrees(tmpDir, tmpDir);
+      expect(fs.existsSync(legacyDir)).toBe(true); // 旧格式 → 保留
+    } finally {
+      try { fs.rmSync(legacyDir, { recursive: true, force: true }); } catch { /* best effort */ }
     }
   });
 });

@@ -65,8 +65,10 @@ export function createWorktree(cwd: string, agentId: string, baseDir: string = o
   }
 
   // 创建 worktree（agentId 用于目录名，已由调用方随机化 — V7）
+  // Round 1 MF#1: 目录名嵌入 process.pid，cleanupOrphanedWorktreeDirs 据此校验归属，
+  // 避免删除并发 session（多窗口 Pi / CI 并行 job 共享 os.tmpdir()）正在使用的 worktree。
   const uuid = crypto.randomBytes(RANDOM_BYTES_COUNT).toString("hex");
-  const wtPath = path.join(baseDir, `${PI_AGENT_TMP_PREFIX}${agentId}-${uuid}`);
+  const wtPath = path.join(baseDir, `${PI_AGENT_TMP_PREFIX}${process.pid}-${agentId}-${uuid}`);
   try {
     git(cwd, ["worktree", "add", "--detach", wtPath, "HEAD"]);
   } catch {
@@ -205,6 +207,13 @@ export function pruneWorktrees(cwd: string, baseDir: string = os.tmpdir()): void
  * 扫描 baseDir 下 pi-agent-* 物理目录并删除（V5 崩溃恢复）。
  * 只删与 PI_AGENT_TMP_PREFIX 匹配的目录，不影响其他临时文件。
  * Round 6 MF#7: 接受 baseDir 参数，生产 = os.tmpdir()，测试可传独立子目录避免干扰。
+ *
+ * Round 1 MF#1: 删除前校验目录归属，防止并发 session（多窗口 Pi / CI 并行 job 共享
+ * os.tmpdir()）误删对方正在使用的 worktree。目录名由 createWorktree 嵌入创建进程 pid：
+ *   - pid === 当前进程 → 本进程残留，安全删除（正常 session_shutdown 兜底）
+ *   - pid 属于其他进程且该进程仍存活 → 并发 session 在用，跳过
+ *   - pid 属于其他进程且已退出 → 崩溃残留，安全删除
+ *   - 无法解析 pid（旧格式 pi-agent-${agentId}-${uuid}）→ 归属不明，保守跳过
  */
 export function cleanupOrphanedWorktreeDirs(baseDir: string = os.tmpdir()): void {
   let entries: string[];
@@ -213,14 +222,40 @@ export function cleanupOrphanedWorktreeDirs(baseDir: string = os.tmpdir()): void
   } catch {
     return;
   }
+  const currentPid = process.pid;
   for (const entry of entries) {
     if (!entry.startsWith(PI_AGENT_TMP_PREFIX)) continue;
     const fullPath = path.join(baseDir, entry);
     try {
+      const ownerPid = parseOwnerPid(entry);
+      if (ownerPid === undefined) continue; // 旧格式/无法解析 → 归属不明，保守跳过
+      if (ownerPid !== currentPid && isPidAlive(ownerPid)) continue; // 其他存活 session 在用
       fs.rmSync(fullPath, { recursive: true, force: true });
     } catch {
       // best effort
     }
+  }
+}
+
+/** 从 pi-agent-* 目录名解析创建进程 pid。格式：pi-agent-${pid}-${agentId}-${uuid}。
+ *  旧格式（pi-agent-${agentId}-${uuid}，无 pid 前缀）返回 undefined。 */
+function parseOwnerPid(entry: string): number | undefined {
+  const rest = entry.slice(PI_AGENT_TMP_PREFIX.length);
+  const dash = rest.indexOf("-");
+  if (dash <= 0) return undefined;
+  const pidStr = rest.slice(0, dash);
+  if (!/^\d+$/.test(pidStr)) return undefined;
+  return Number(pidStr);
+}
+
+/** 检查 pid 进程是否存活（signal 0 仅探测不发信号）。
+ *  ESRCH=进程不存在，EPERM=进程存在但无权限（视为存活，保守不删）。 */
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
   }
 }
 

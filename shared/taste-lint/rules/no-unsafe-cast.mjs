@@ -42,9 +42,12 @@ export default {
       // 其中的类型是 TSTypeLiteral，包含 members
       const literal = typeAnnotation?.type === 'TSTypeLiteral' ? typeAnnotation : null;
       if (!literal?.members?.length) return false;
-      // 所有成员必须是可选属性（questionToken 存在）且是 PropertySignature
+      // 所有成员必须是可选属性且是 PropertySignature。
+      // Round 1 MF#3: typescript-eslint ESTree 用 `optional: boolean` 标记可选属性
+      // （非 ts 原生 questionToken token）；此前用 m.questionToken 永远 undefined，
+      // 导致 structuralCast 从不触发——测试覆盖暴露此 bug。
       return literal.members.every(
-        (m) => m.type === 'TSPropertySignature' && m.questionToken,
+        (m) => m.type === 'TSPropertySignature' && (m.optional || m.questionToken),
       );
     }
 
