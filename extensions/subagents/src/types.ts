@@ -157,8 +157,12 @@ export interface AgentResult {
    * V4: worktree 隔离执行的结果信息。
    * 当 agent 配置 isolation:"worktree" 且 worktree 中有变更（含 agent 自提交）时存在。
    * branch 为保留的分支名，用户可 `git merge <branch>` 合入。hasChanges=false 时 branch 为 undefined。
+   *
+   * Round 4 MF#1: branch 缺失但 hasChanges=true 时（commit/branch 失败、worktree 被
+   * preserveOnFailure 保留），workPath/baseSha 透传物理目录指针，供调用方输出恢复指引，
+   * 避免主 agent 收不到变更提示、agent 成果静默丢失。
    */
-  worktree?: { branch?: string; hasChanges: boolean };
+  worktree?: { branch?: string; hasChanges: boolean; workPath?: string; baseSha?: string };
   toolCalls: AgentToolCallEntry[];
 }
 

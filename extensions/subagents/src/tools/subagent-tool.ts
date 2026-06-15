@@ -435,12 +435,25 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       const finalDetails = executionStateToDetails(state);
       finalDetails.result = result.text;
       // V4：worktree 隔离执行有变更时，向 LLM 追加 merge 指令（分支名 + 合并命令）
+      // Round 4 MF#1: branch 缺失但 hasChanges=true（commit/branch 失败，worktree 被 preserveOnFailure
+      // 保留）时，输出恢复指引——变更已保留于 workPath，用户可手动进入目录恢复成果。
+      // 不再静默丢弃（原守卫 hasChanges && branch 不成立时无任何提示）。
       let resultText = result.text;
       if (result.worktree?.hasChanges && result.worktree.branch) {
         const branch = result.worktree.branch;
         resultText =
           resultText +
           `\n\n---\nChanges saved to branch \`${branch}\`. Merge with: \`git merge ${branch}\``;
+      } else if (result.worktree?.hasChanges && result.worktree.workPath) {
+        const workPath = result.worktree.workPath;
+        const baseSha = result.worktree.baseSha;
+        resultText =
+          resultText +
+          `\n\n---\nChanges were made but could not be committed to a branch (commit/branch failed). ` +
+          `The worktree has been preserved at \`${workPath}\`. ` +
+          `Recover manually: \`cd ${workPath}\`` +
+          (baseSha ? ` && git diff ${baseSha}..HEAD` : "") +
+          ` to inspect changes.`;
       }
       return {
         content: [{ type: "text" as const, text: resultText }],

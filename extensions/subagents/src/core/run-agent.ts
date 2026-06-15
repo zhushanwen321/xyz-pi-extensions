@@ -219,7 +219,17 @@ export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Pro
         success,
         error,
         sessionFile,
-        worktreeResult ? { branch: worktreeResult.branch, hasChanges: worktreeResult.hasChanges } : undefined,
+        worktreeResult
+          ? {
+              branch: worktreeResult.branch,
+              hasChanges: worktreeResult.hasChanges,
+              // Round 4 MF#1: branch 缺失但 hasChanges=true（preserveOnFailure 保留物理目录）时
+              // 透传 workPath/baseSha，供 subagent-tool 输出恢复指引，避免静默数据丢失。
+              ...(worktreeResult.hasChanges && !worktreeResult.branch
+                ? { workPath: worktreeResult.workPath, baseSha: worktreeResult.baseSha }
+                : {}),
+            }
+          : undefined,
       );
     } finally {
       unsubscribe();

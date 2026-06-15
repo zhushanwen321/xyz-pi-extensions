@@ -563,6 +563,26 @@ describe("subagent tool execute()", () => {
     expect(text).not.toContain("git merge");
   });
 
+  // Round 4 MF#1: commit/branch 失败、worktree 被 preserveOnFailure 保留时，
+  // 输出恢复指引（workPath）而非静默丢弃 agent 成果。
+  it("sync mode: appends recovery guidance when worktree.hasChanges=true but branch is missing", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async () => successResult({
+        worktree: { hasChanges: true, workPath: "/tmp/pi-agent-xyz", baseSha: "abc123" },
+      })),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    const result = await tool.execute("call-wt-preserved", { task: "do work" });
+
+    const text = result.content[0].text ?? "";
+    expect(text).toContain("could not be committed to a branch");
+    expect(text).toContain("/tmp/pi-agent-xyz");
+    expect(text).toContain("git diff abc123..HEAD");
+    expect(text).not.toContain("Changes saved to branch");
+  });
+
   it("sync mode: does NOT append merge instruction when worktree is undefined", async () => {
     const mockRt = makeMockRuntime({
       runAgent: vi.fn(async () => successResult()),

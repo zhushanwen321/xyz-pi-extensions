@@ -228,8 +228,10 @@ export function collectResult(
   error: string | undefined,
   /** ADR-024 L2: subagent session 文件路径（供 history 关联） */
   sessionFile?: string,
-  /** V4: worktree 隔离执行的结果信息（有变更时含 branch，供调用方展示 merge 指令） */
-  worktree?: { branch?: string; hasChanges: boolean },
+  /** V4: worktree 隔离执行的结果信息。
+   *  Round 4 MF#1: branch 缺失但 hasChanges=true 时（commit/branch 失败，worktree 被保留）
+   *  透传 workPath/baseSha，供调用方输出恢复指引，避免静默丢失 agent 成果。 */
+  worktree?: { branch?: string; hasChanges: boolean; workPath?: string; baseSha?: string },
 ): AgentResult {
   const text = collectResponseTextLocal(session.messages);
 
