@@ -298,11 +298,12 @@ describe("AskUserComponent — Other free-text editor", () => {
 		c.handleInput(DOWN);
 		c.handleInput(DOWN);
 		c.handleInput(" "); // open editor
-		c.handleInput(ENTER); // empty Enter → clears → afterConfirm → submit
-		// Single question submits; answer may be null (no selectedIndex, no freeText)
-		expect(result.val).not.toBeUndefined();
-		// No answer recorded
-		expect(result.val!.answers["Which DB?"]).toBeUndefined();
+		c.handleInput(ENTER); // FR-6: empty Enter → clear freeText, close editor (NO confirm/submit)
+		// Not submitted; still in options list
+		expect(result.val).toBeUndefined();
+		// Back in options mode — no "Your answer" editor prompt
+		const lines = c.render(60);
+		expect(lines.some((l) => l.includes("Your answer"))).toBe(false);
 	});
 });
 

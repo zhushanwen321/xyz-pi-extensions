@@ -265,13 +265,18 @@ export class AskUserComponent implements Component {
 				if (text) {
 					state.freeTextValue = text;
 					state.selectedIndex = null;
+					state.mode = "options";
+					this.editorText = "";
+					// freeform 保存后走 afterConfirm（可能进 comment 模式）
+					this.afterConfirm(state, q);
 				} else {
+					// FR-6: 空 Enter 仅清除 freeTextValue、关闭编辑器回选项列表，不含确认语义（不置 confirmed）
 					state.freeTextValue = null;
+					state.mode = "options";
+					this.editorText = "";
+					this.invalidate();
+					this.tui.requestRender();
 				}
-				state.mode = "options";
-				this.editorText = "";
-				// freeform 保存后走 afterConfirm（可能进 comment 模式）
-				this.afterConfirm(state, q);
 				return;
 			}
 			// comment mode：保存评论后直接前进（不再回头进 comment）
