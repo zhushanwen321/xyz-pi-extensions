@@ -47,10 +47,10 @@ const STALE_CONTEXT_PATTERNS = [
 ];
 
 /** Detect errors that indicate the Pi session has been torn down (compact/reload/exit). */
-function isStaleContextError(error: unknown): boolean {
+export function isStaleContextError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const msg = error.message.toLowerCase();
-  return STALE_CONTEXT_PATTERNS.some((p) => msg.includes(p));
+  return STALE_CONTEXT_PATTERNS.some((p) => msg.includes(p.toLowerCase()));
 }
 
 /** 是否仍需在上下文中保留（非终态，含 abandoned 因为它可被恢复） */
@@ -59,13 +59,16 @@ function isActive<TMeta>(item: TrackedItem<TMeta>): boolean {
 }
 
 /** 将超过 abandonThreshold 的非终态 item 标记为 abandoned，返回是否有变更 */
-function markStaleItemsAbandoned<TMeta>(
+export function markStaleItemsAbandoned<TMeta>(
   state: TrackerRuntimeState<TMeta>,
   abandonThreshold: number,
 ): boolean {
   let changed = false;
   for (const item of state.items) {
     if (!isResumableStatus(item.status)) continue;
+    // 已 abandoned 的 item 跳过：isResumableStatus("abandoned") 为 true，
+    // 但重复赋值无意义，且会持续返回 changed=true 触发无谓持久化与状态增长。
+    if (item.status === "abandoned") continue;
     const turnsSinceLoad = state.currentTurnIndex - item.loadedAtTurn;
     if (turnsSinceLoad >= abandonThreshold) {
       item.status = "abandoned";
@@ -79,7 +82,7 @@ function markStaleItemsAbandoned<TMeta>(
 
 type RenderOptions = { expanded?: boolean };
 
-type ToolResult = {
+export type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
   details: Record<string, unknown> | undefined;
   isError?: boolean;
@@ -237,7 +240,7 @@ type CreateItemFn<TMeta> = (
 type PersistFn = (ctx: ExtensionContext) => void;
 
 /** executeTrackerAction 的运行时依赖打包（减少参数个数） */
-interface TrackerActionContext<TMeta> {
+export interface TrackerActionContext<TMeta> {
   state: TrackerRuntimeState<TMeta>;
   config: TrackerConfig<TMeta>;
   pi: ExtensionAPI;
@@ -263,7 +266,7 @@ function errorResult<TMeta>(
   };
 }
 
-async function handleStart<TMeta>(
+export async function handleStart<TMeta>(
   params: Static<typeof TrackerParams>,
   ctx: ExtensionContext,
   dep: TrackerActionContext<TMeta>,
@@ -315,12 +318,12 @@ function handleList<TMeta>(
   };
 }
 
-type UpdateValidation<TMeta> =
+export type UpdateValidation<TMeta> =
   | { ok: true; item: TrackedItem<TMeta>; updateStatus: TrackedItemStatus }
   | { ok: false; result: ToolResult };
 
 /** 校验 update 参数 + 状态转换合法性。失败返回 errorResult，成功返回目标 item */
-function validateUpdateParams<TMeta>(
+export function validateUpdateParams<TMeta>(
   params: Static<typeof TrackerParams>,
   dep: TrackerActionContext<TMeta>,
 ): UpdateValidation<TMeta> {
@@ -344,7 +347,7 @@ function validateUpdateParams<TMeta>(
 }
 
 /** 处理 error 状态的 errorCount 递增 + onError steering（达到阈值时触发） */
-async function handleOnErrorThreshold<TMeta>(
+export async function handleOnErrorThreshold<TMeta>(
   item: TrackedItem<TMeta>,
   updateStatus: TrackedItemStatus,
   dep: TrackerActionContext<TMeta>,
@@ -357,7 +360,7 @@ async function handleOnErrorThreshold<TMeta>(
 }
 
 /** 应用状态转换 + side effects（remind/errorCount 重置、onError steering、持久化） */
-async function applyUpdate<TMeta>(
+export async function applyUpdate<TMeta>(
   item: TrackedItem<TMeta>,
   updateStatus: TrackedItemStatus,
   detail: string | undefined,
@@ -383,6 +386,39 @@ async function applyUpdate<TMeta>(
     content: [{ type: "text" as const, text: `TrackedItem #${item.id} "${item.name}" → ${item.status}${statusText}` }],
     details: { action: "update", items: [...state.items], trackerName: config.name, updatedId: item.id } satisfies TrackerDetails<TMeta>,
   };
+}
+
+/** 创建新 TrackedItem 并推入 state、递增 nextId、持久化（createTracker 内闭包与测试共用） */
+export function createTrackedItem<TMeta>(
+  match: { name: string; metadata: TMeta; summary: string },
+  ctx: ExtensionContext,
+  dep: {
+    state: TrackerRuntimeState<TMeta>;
+    config: TrackerConfig<TMeta>;
+    persistState: PersistFn;
+  },
+): TrackedItem<TMeta> {
+  const { state, config, persistState } = dep;
+  const turnIndex = state.currentTurnIndex;
+  const newItem: TrackedItem<TMeta> = {
+    id: state.nextId,
+    name: match.name,
+    status: "loaded",
+    errorCount: 0,
+    loadedAtTurn: turnIndex,
+    lastRemindAtTurn: -1,
+    detail: null,
+    metadata: match.metadata,
+    anchor: {
+      triggerType: config.triggerEvent ?? "tool-start",
+      triggerTurn: turnIndex,
+      triggerSummary: match.summary,
+    },
+  };
+  state.items.push(newItem);
+  state.nextId++;
+  persistState(ctx);
+  return newItem;
 }
 
 async function handleUpdate<TMeta>(
@@ -459,31 +495,8 @@ export function createTracker<TMeta>(
 
   // ── 创建 item（triggerEvent handler 和 tool start action 共用）──
 
-  function createItem(
-    match: { name: string; metadata: TMeta; summary: string },
-    ctx: ExtensionContext,
-  ): TrackedItem<TMeta> {
-    const turnIndex = state.currentTurnIndex;
-    const newItem: TrackedItem<TMeta> = {
-      id: state.nextId,
-      name: match.name,
-      status: "loaded",
-      errorCount: 0,
-      loadedAtTurn: turnIndex,
-      lastRemindAtTurn: -1,
-      detail: null,
-      metadata: match.metadata,
-      anchor: {
-        triggerType: config.triggerEvent ?? "tool-start",
-        triggerTurn: turnIndex,
-        triggerSummary: match.summary,
-      },
-    };
-    state.items.push(newItem);
-    state.nextId++;
-    persistState(ctx);
-    return newItem;
-  }
+  const createItem: CreateItemFn<TMeta> = (match, ctx) =>
+    createTrackedItem(match, ctx, { state, config, persistState });
 
   function reconstructState(ctx: ExtensionContext): void {
     let entries: SessionEntry[];

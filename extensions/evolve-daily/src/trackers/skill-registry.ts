@@ -53,5 +53,15 @@ export function isValidSkillName(
   if (!name) return false;
   // fail-open：拿不到 system prompt 时放行，交由后续行为（steering/超时）兜底
   if (!systemPrompt) return true;
-  return extractSkillNames(systemPrompt).has(name);
+  const names = extractSkillNames(systemPrompt);
+  // fail-open：prompt 非空但解析出 0 个 skill（Pi 升级改 prompt 格式 / execute 时机
+  // prompt 不含 skills 块）时放行——「宁可放过，不可误杀」，否则所有合法 skill 的
+  // start 调用都会被误杀。打点提示格式漂移，便于 evolve 数据层发现。
+  if (names.size === 0) {
+    console.warn(
+      "[skill-registry] systemPrompt non-empty but 0 skills parsed — prompt format drift? fail-open.",
+    );
+    return true;
+  }
+  return names.has(name);
 }

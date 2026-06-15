@@ -16,6 +16,10 @@ export default defineConfig({
         __dirname,
         "src/__tests__/stubs/pi-ai.ts",
       ),
+      "@mariozechner/pi-tui": path.resolve(
+        __dirname,
+        "src/__tests__/stubs/pi-tui.ts",
+      ),
       typebox: path.resolve(__dirname, "src/__tests__/stubs/typebox.ts"),
     },
   },

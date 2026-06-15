@@ -4,7 +4,8 @@
  * 覆盖：<available_skills> 解析、<skill> 父元素限定（不误抓 tool/agent）、
  *       XML 反转义、fail-open 语义。
  */
-import { describe, it, expect } from "vitest";
+import { describe, expect,it } from "vitest";
+
 import { extractSkillNames, isValidSkillName } from "../trackers/skill-registry.js";
 
 const SAMPLE_PROMPT = `
@@ -93,6 +94,13 @@ describe("isValidSkillName", () => {
   it("fail-open：systemPrompt 为空时返回 true（交由后续行为兜底）", () => {
     expect(isValidSkillName("anything", undefined)).toBe(true);
     expect(isValidSkillName("anything", "")).toBe(true);
+  });
+
+  it("fail-open：非空 prompt 但解析出 0 个 skill 时返回 true（格式漂移兑底）", () => {
+    // Pi 升级改 prompt 格式 / execute 时机 prompt 不含 skills 块时，解析为空集。
+    // 此时应 fail-open 放行，避免所有合法 skill 的 start 被误杀。
+    expect(isValidSkillName("anything", "some prompt without skill blocks")).toBe(true);
+    expect(isValidSkillName("anything", "<available_tools><tool><name>read</name></tool></available_tools>")).toBe(true);
   });
 
   it("空 name 返回 false", () => {
