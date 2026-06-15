@@ -4,7 +4,7 @@
 // 使用 pi-tui Box + Text/Spacer/Container 组件包装：
 //   - renderCall 返回空 Container，隐藏 Pi 默认 "subagent" 标题行
 //   - renderResult 的 Box 自己渲染包含 "subagent" 的统一背景 block
-//   - 压缩视图固定 6 行，空行用 Spacer 填充以保证真实 Box 高度稳定
+//   - 压缩视图动态高度：状态行 + 最近 ≤4 条 eventLog，随事件增长，不预填空行
 //   - 滚动区每条 eventLog 截断到 ~50 可见字符，避免单行过长
 
 import { Box, Container, Spacer, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
@@ -47,7 +47,6 @@ export interface RenderOptions {
 // ============================================================
 
 const COMPACT_SCROLL_LINES = 4;
-const COMPACT_LINES_TOTAL = 6;
 const COMPACT_LABEL_MAX_WIDTH = 50; // 滚动区单条 label 最大可见字符数
 
 // ============================================================
@@ -184,7 +183,7 @@ function buildCompactLines(details: SubagentToolDetails, width: number, theme: T
   // 避免「记忆桥」（用户不必跨行拼凑 agent 身份与进度）。
   lines.push(sanitizeLine(buildStatusLine(details, theme)));
 
-  // 第 2-5 行：滚动区（最近 4 条，过滤掉 turn_end——压缩视图不显示 turn 分隔）
+  // 滚动区：最近 ≤4 条（过滤 turn_end——压缩视图不显示 turn 分隔），动态增长，不预填空行
   const prefixWidth = visibleWidth(theme.fg("dim", "⎿  ")); // 实际占 3 列
   const labelMaxWidth = Math.max(1, COMPACT_LABEL_MAX_WIDTH);
   const recent = (details.eventLog ?? [])
@@ -197,16 +196,6 @@ function buildCompactLines(details: SubagentToolDetails, width: number, theme: T
       ? truncLine(raw, labelMaxWidth + prefixWidth)
       : raw;
     lines.push(clampLine(clampedToLabel, width));
-  }
-
-  // 填充到固定行数（COMPACT_LINES_TOTAL - 1，留最后一行给提示/stats）
-  while (lines.length < COMPACT_LINES_TOTAL - 1) lines.push("");
-
-  // 最后一行：running 时显示 Ctrl+O 提示（accent 色）；其他状态留空保持 6 行高度稳定
-  if (details.status === "running") {
-    lines.push(theme.fg("accent", "Press Ctrl+O for live detail"));
-  } else {
-    lines.push("");
   }
 
   // 统一截断到可用宽度（避免任何单行超长触发 Pi 渲染异常）

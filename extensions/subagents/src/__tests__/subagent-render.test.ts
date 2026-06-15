@@ -71,8 +71,10 @@ describe("buildRenderLines — 压缩视图（6 行）", () => {
         { type: "text_output", label: "scanning files", ts: 0 },
       ],
     }), 80, passthroughTheme);
-    const scrollLines = lines.slice(1, 5);
-    expect(scrollLines.some((l) => l.includes("⎿"))).toBe(true);
+    // 滚动区行通过 ⎿ 前缀识别（状态行无 ⎿），不依赖固定行号
+    const scrollLines = lines.filter((l) => l.includes("⎿"));
+    expect(scrollLines.some((l) => l.includes("read auth.ts"))).toBe(true);
+    expect(scrollLines.some((l) => l.includes("scanning files"))).toBe(true);
   });
 
   it("tool_end 带 ✓ 或 ✗", () => {
@@ -129,23 +131,28 @@ describe("buildRenderLines — 压缩视图（6 行）", () => {
     expect(lines[0]).not.toContain("0s");
   });
 
-  it("running 时最后一行显示 Ctrl+O 提示", () => {
-    const lines = buildRenderLines(makeDetails({ status: "running" }), 80, passthroughTheme);
-    const lastLine = lines[lines.length - 1]!;
-    expect(lastLine).toContain("Ctrl+O");
+  it("动态高度：无 Ctrl+O 提示行（已移除 footer）", () => {
+    const running = buildRenderLines(makeDetails({ status: "running" }), 80, passthroughTheme);
+    const done = buildRenderLines(makeDetails({ status: "done" }), 80, passthroughTheme);
+    expect(running.some((l) => l.includes("Ctrl+O"))).toBe(false);
+    expect(done.some((l) => l.includes("Ctrl+O"))).toBe(false);
   });
 
-  it("done 时最后一行无 Ctrl+O 提示（空行保持高度）", () => {
-    const lines = buildRenderLines(makeDetails({ status: "done" }), 80, passthroughTheme);
-    const lastLine = lines[lines.length - 1]!;
-    expect(lastLine).not.toContain("Ctrl+O");
-  });
-
-  it("固定 6 行（事件不足时空行填充）", () => {
-    const lines = buildRenderLines(makeDetails({
+  it("动态高度：无事件 = 1 行（仅状态行）；1 事件 = 2 行；4 事件 = 5 行；>4 截断到 5 行", () => {
+    // 无事件：只有状态行
+    expect(buildRenderLines(makeDetails({ eventLog: [] }), 80, passthroughTheme)).toHaveLength(1);
+    // 1 事件：状态行 + 1
+    expect(buildRenderLines(makeDetails({
       eventLog: [{ type: "tool_end", label: "only one", ts: 0, status: "done" }],
-    }), 80, passthroughTheme);
-    expect(lines).toHaveLength(6);
+    }), 80, passthroughTheme)).toHaveLength(2);
+    // 4 事件：状态行 + 4（恰好上限）
+    const four = Array.from({ length: 4 }, (_, i) => ({ type: "tool_end" as const, label: `t${i}`, ts: i, status: "done" as const }));
+    expect(buildRenderLines(makeDetails({ eventLog: four }), 80, passthroughTheme)).toHaveLength(5);
+    // 8 事件：截断到最近 4 条 → 状态行 + 4 = 5
+    const eight = Array.from({ length: 8 }, (_, i) => ({ type: "tool_end" as const, label: `t${i}`, ts: i, status: "done" as const }));
+    const lines = buildRenderLines(makeDetails({ eventLog: eight }), 80, passthroughTheme);
+    expect(lines).toHaveLength(5);
+    expect(lines.filter((l) => l.includes("⎿"))).toHaveLength(4);
   });
 
   it("Bug #4: running spinner 由 seed 驱动，不同 turns → 不同帧", () => {
@@ -207,14 +214,14 @@ describe("SubagentResultComponent", () => {
     }
   });
 
-  it("always renders 6 content lines + padding in compact mode", () => {
+  it("动态高度 + Box padding：无事件时 3 行（1 pad + 1 status + 1 pad）", () => {
     const comp = new SubagentResultComponent(
-      makeDetails({ eventLog: [{ type: "tool_end", label: "only one", ts: 0, status: "done" }] }),
+      makeDetails({ eventLog: [], status: "running" }),
       passthroughTheme,
     );
     const lines = comp.render(80);
-    // Box paddingY=1：顶部 1 行背景填充 + 6 行内容 + 底部 1 行背景填充 = 8 行
-    expect(lines).toHaveLength(8);
+    // buildCompactLines 无事件 = 1 行（状态行）；Box paddingY=1 顶/底各 1 行 → 3 行
+    expect(lines).toHaveLength(3);
   });
 });
 
