@@ -221,7 +221,7 @@ export class WorkflowOrchestrator {
       maxConcurrency: 4,
       runName: instance.name,
       onSoftLimitReached: ({ runName, totalCalls, budget }) => {
-        (this.pi as unknown as { sendUserMessage: (msg: string) => void }).sendUserMessage(
+        this.pi.sendUserMessage(
           `[workflow:${runName}] Reached ${totalCalls} agent calls. ` +
           `Budget: ${budget.usedTokens}/${budget.maxTokens ?? "unlimited"} tokens. ` +
           `Consider aborting if this is unintended.`,
@@ -252,7 +252,8 @@ export class WorkflowOrchestrator {
           } catch {
             // State machine refused — leave as-is
           }
-          this.terminateWorker(runId);
+          // Round 3 MF2: pause 保留 controller，避免 retry 误判后丢失 callCache/worker 通知
+          this.terminateWorker(runId, true);
           void this.persistState();
         }
       };
@@ -297,7 +298,9 @@ export class WorkflowOrchestrator {
     instance.pausedAt = new Date().toISOString();
     transitionStatus(instance, "paused");
     this.events.emit(runId, { type: "status", status: "paused" });
-    this.terminateWorker(runId);
+    // Round 3 MF2: pause 保留 controller——失败的 retry 仍能写 callCache，
+    // resume 后新 worker 不会因为 retry 跳过而丢失结果。
+    this.terminateWorker(runId, true);
     // Cleanup in-flight temp files from agent calls that were killed mid-flight.
     // Without this, files written for --append-system-prompt leak to disk.
     await this.persistState();
@@ -643,12 +646,20 @@ export class WorkflowOrchestrator {
   /**
    * Terminate and clean up a worker thread. Also aborts all in-flight
    * agent subprocesses via the per-run AbortController.
+   *
+   * @param runId           Workflow run ID
+   * @param keepController  Round 3 MF2: pause 调用时传 true——保留 controller 在 map 中，
+   *                        让 pause→resume 期间失败的 retry 仍能写 callCache 并通知 worker，
+   *                        避免 resume 后新 worker 重复执行有 side-effect 的 agent。
+   *                        abort/retry/delete/budget 仍传 false，完整清理。
    */
-  private terminateWorker(runId: string): void {
+  private terminateWorker(runId: string, keepController: boolean = false): void {
     // Abort all agent subprocesses for this run
     const controller = this.runAbortControllers.get(runId);
     if (controller) {
-      this.runAbortControllers.delete(runId);
+      if (!keepController) {
+        this.runAbortControllers.delete(runId);
+      }
       controller.abort();
     }
 

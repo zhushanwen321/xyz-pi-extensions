@@ -565,9 +565,11 @@ export class SubagentRuntime {
       .catch((err: unknown) => {
         // S1 修复：区分 abort（用户 cancel）vs 真实错误。
         // cancelBackground 先设 record.status="cancelled" 并 controller.abort()，
-        // runAgent catch 会 re-throw → 进入此处。若 signal.aborted 则保留 cancelled，
-        // 不覆盖为 failed（与 cancelBackground 的用户意图一致）。
-        const aborted = signal.aborted;
+        // runAgent catch 会 re-throw → 进入此处。
+        // Round 3 MF4: 优先读 record.controller?.signal.aborted（runtime 自有 controller），
+        // 回退到 signal.aborted（opts.signal）——调用方传入的 signal 与 cancelBackground
+        // 无关，混用会误判 status=cancelled，与用户意图不符。
+        const aborted = record.controller?.signal.aborted ?? signal.aborted;
         record.status = aborted ? "cancelled" : "failed";
         record.error = aborted ? undefined : err instanceof Error ? err.message : String(err);
         record.endedAt = Date.now();

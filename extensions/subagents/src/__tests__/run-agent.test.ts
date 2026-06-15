@@ -515,7 +515,7 @@ describe("runAgent", () => {
       expect(session.steer).not.toHaveBeenCalled();
     });
 
-    it("schema 存在 && agent 调 structured-output 但失败 (isError=true) → 仍 steer", async () => {
+    it("schema 存在 && agent 调 structured-output 但失败 (isError=true) → 不 steer（agent 自己会重试修正 schema）", async () => {
       const session = makeCapturingSession();
       configureFactory(
         session,
@@ -526,8 +526,9 @@ describe("runAgent", () => {
 
       await runAgent({ task: "review", schema: { type: "object" } }, makeCtx());
 
-      // 失败调用不计入成功 → 触发 steer
-      expect(session.steer).toHaveBeenCalledTimes(1);
+      // Round 3 MF5: agent 调过 structured-output（不论成败）都视为“调用了”，
+      // 失败由 agent 自己重试修正 schema，不反复 steer 达上限后放任结束。
+      expect(session.steer).not.toHaveBeenCalled();
     });
 
     it("多个 turn_end 均未调 structured-output → steer 最多 MAX_SCHEMA_STEERS(=2) 次，不无限循环", async () => {

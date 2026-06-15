@@ -90,8 +90,11 @@ export class AgentPool {
   private totalCallCount = 0;
   private softWarningSent = false;
   private budgetRef?: WorkflowBudget;
-  /** AC-4.5: per-run 隔离的并发队列。waiters FIFO 排队，maxConcurrency 释放。 */
-  private waiters: Array<() => void> = [];
+  /** AC-4.5: per-run 隔离的并发队列。waiters FIFO 排队，maxConcurrency 释放。
+   *  Round 3 MF1: waiter 存 resolve + signal，shift 时跳过已 abort 的条目——
+   *  否则 abort 后 caller 返回但 resolver 仍留在队列，release() 唤醒一个空跑 waiter，
+   *  active 计数与实际并发会逐渐漂移。 */
+  private waiters: Array<{ resolve: () => void; signal: AbortSignal }> = [];
 
   constructor(opts: AgentPoolOptions | number = {}) {
     if (typeof opts === "number") {
@@ -150,7 +153,9 @@ export class AgentPool {
     // subagents globalPool（maxConcurrent=4）只是兜底，per-run 限制优先。
     // 之前 active++ 仅做计数，无 release 机制，实际并发完全依赖 globalPool。
     if (this.active >= this.maxConcurrency) {
-      await new Promise<void>((resolve) => this.waiters.push(resolve));
+      await new Promise<void>((resolve) => {
+        this.waiters.push({ resolve, signal: controller.signal });
+      });
     }
     // 抢占后再次检查 abort：可能排队期间被 abort
     if (controller.signal.aborted) {
@@ -211,9 +216,15 @@ export class AgentPool {
     } finally {
       cleanup();
       this.active--;
-      // 释放一个 slot，唤醒最先 wait 的 caller
-      const next = this.waiters.shift();
-      if (next) next();
+      // 释放一个 slot，唤醒最先 wait 的 caller。
+      // Round 3 MF1: 跳过已 abort 的 waiter——它们的 caller 已返回，再唤醒只会浪费一个 slot，
+      // 累积下来会让 active 计数与实际并发漂移（超限或永久卡死）。
+      while (this.waiters.length > 0) {
+        const next = this.waiters.shift()!;
+        if (next.signal.aborted) continue;
+        next.resolve();
+        break;
+      }
     }
   }
 
@@ -224,13 +235,6 @@ export class AgentPool {
       catch { /* callback errors must not affect dispatch */ }
     }
   }
-}
-
-/** 截断字符串到 maxLen，超出追加 "..." 标记 */
-function truncatePreview(s: string, maxLen: number): string {
-  if (s.length <= maxLen) return s;
-  const ELLIPSIS_LEN = 3;
-  return s.slice(0, maxLen - ELLIPSIS_LEN) + "...";
 }
 
 /**

@@ -154,10 +154,13 @@ export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Pro
         limiter.onTurnEnd(bridge.turnCount);
         // schema 契约 enforcement
         if (!opts.schema) return;
-        const soSucceeded = bridge.toolCalls.some(
-          (tc) => tc.toolName === STRUCTURED_OUTPUT_TOOL && !tc.isError,
+        // Round 3 MF5: 仅看 toolName——isError 视为“调用了但失败”，agent 自己会重试修正 schema。
+        // 原来要求“未出错”才算“调用了”，导致 agent 调用但失败时反复 steer 达上限后放任结束，
+        // collectResult 中 parsedOutput 为 undefined，workflow 回退空 text。
+        const soCalled = bridge.toolCalls.some(
+          (tc) => tc.toolName === STRUCTURED_OUTPUT_TOOL,
         );
-        if (soSucceeded) return;
+        if (soCalled) return;
         if (schemaSteerCount >= MAX_SCHEMA_STEERS) return;
         schemaSteerCount++;
         const reminder =
