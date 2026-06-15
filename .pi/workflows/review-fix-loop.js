@@ -1,16 +1,18 @@
 const meta = {
   name: "review-fix-loop",
-  description: "Review-fix loop: parallel review (5 agents, 3+2 batched) → aggregate → fix → re-review until clean or max rounds",
+  description: "Review-fix loop: parallel review (5 agents, 3+2 batched) → aggregate → fix → re-review until clean or max rounds. Per-run isolation via runId, state.json tracking, S1 conservative per-agent disable (2 consecutive clean → skip; any fix reactivates all).",
   phases: [
     { title: "Scan", detail: "Optional fallow static analysis pre-scan" },
-    { title: "Review", detail: "Run 5 review agents in 2 batches + aggregate into unified report" },
+    { title: "Review", detail: "Run review agents (skipping disabled ones) in 2 batches + aggregate" },
     { title: "Fix", detail: "Fix all must-fix issues from aggregated review report" },
   ],
 };
 
-// ── Shared schemas ─────────────────────────────────────────────────
+// ── Constants & schemas ────────────────────────────────────────────
 
 const DEFAULT_AGENT_TIMEOUT_MS = 600_000;
+const MODEL = "zhipu-coding-plan-router/glm-5.2";
+const CLEAN_THRESHOLD = 2; // S1: consecutive clean rounds to disable an agent
 
 const reviewerSchema = {
   type: "object",
@@ -32,6 +34,92 @@ const aggregatorSchema = {
   required: ["report_file", "must_fix", "suggestion"],
 };
 
+const AGENT_DEFS = [
+  { name: "review-business-logic", title: "BUSINESS LOGIC REVIEW", report: "business-logic",
+    focus: "business logic correctness, boundary conditions, regression risk." },
+  { name: "review-monorepo-impact", title: "MONOREPO IMPACT REVIEW", report: "monorepo-impact",
+    focus: "workspace deps, circular deps, public API changes, extension-dependencies.json." },
+  { name: "review-type-safety", title: "TYPE SAFETY REVIEW", report: "type-safety",
+    focus: "complete type annotations, no `any`, use `unknown` or concrete types, run tsc." },
+  { name: "review-extension-api", title: "EXTENSION API REVIEW", report: "extension-api",
+    focus: "tool/command schema completeness, Pi manifest, backward compat, resource containment." },
+  { name: "review-test-coverage", title: "TEST COVERAGE REVIEW", report: "test-coverage",
+    focus: "tests for new logic, edge case coverage, vitest framework compliance." },
+];
+
+// ── Per-run isolation: runId-scoped directories ────────────────────
+
+const fs = require("fs");
+const path = require("path");
+
+const RUN_ID = ($ARGS._runId && typeof $ARGS._runId === "string")
+  ? $ARGS._runId
+  : "run-" + Date.now();
+const RUN_ROOT = `/tmp/review-fix-loop/${RUN_ID}`;
+const STATE_FILE = `${RUN_ROOT}/state.json`;
+
+fs.mkdirSync(RUN_ROOT, { recursive: true });
+log(`Run directory: ${RUN_ROOT}`);
+
+// ── State management (persistent, atomic writes) ───────────────────
+
+/**
+ * state.json shape:
+ * {
+ *   meta: { runId, workspace, model, startedAt },
+ *   agentStatus: { [agentName]: { consecutiveClean, disabled, lastActiveRound, lastMustFix } },
+ *   rounds: [ { round, mustFix, suggestion, modifiedFiles?, agents: [ {name, must_fix, suggestion, clean} ] } ]
+ * }
+ */
+function loadState() {
+  try {
+    return JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
+  } catch {
+    return {
+      meta: { runId: RUN_ID, workspace: $WORKSPACE || "", model: MODEL, startedAt: new Date().toISOString() },
+      agentStatus: {},
+      rounds: [],
+    };
+  }
+}
+
+function saveState(state) {
+  // Atomic write: tmp + rename to avoid partial reads mid-write.
+  const tmp = STATE_FILE + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+  fs.renameSync(tmp, STATE_FILE);
+}
+
+function recordAgentRound(state, agentName, mustFix, suggestion, round) {
+  const clean = mustFix === 0;
+  const status = state.agentStatus[agentName] || { consecutiveClean: 0, disabled: false, lastActiveRound: 0, lastMustFix: undefined };
+  status.consecutiveClean = clean ? status.consecutiveClean + 1 : 0;
+  status.disabled = status.consecutiveClean >= CLEAN_THRESHOLD;
+  status.lastActiveRound = round;
+  status.lastMustFix = mustFix;
+  state.agentStatus[agentName] = status;
+  return { ...status, cleanThisRound: clean };
+}
+
+function reactivateAll(state) {
+  // S1 conservative: any fix reactivates all disabled agents.
+  for (const name of Object.keys(state.agentStatus)) {
+    const s = state.agentStatus[name];
+    s.disabled = false;
+    // Note: consecutiveClean is NOT reset — only re-disabled on next 2 consecutive cleans.
+    // But since fix happened, the next review round's result will reset it naturally.
+  }
+}
+
+function saveRoundSnapshot(state, round, mustFix, suggestion, agentResults, modifiedFiles) {
+  state.rounds.push({
+    round, mustFix, suggestion,
+    agents: agentResults.map((a) => ({ name: a.name, must_fix: a.must_fix, suggestion: a.suggestion, clean: a.clean })),
+    modifiedFiles: modifiedFiles || [],
+  });
+  saveState(state);
+}
+
 // ── Helpers ────────────────────────────────────────────────────────
 
 function parseResult(raw) {
@@ -45,54 +133,39 @@ function parseResult(raw) {
 function normalizeAggregatorResult(raw) {
   const parsed = parseResult(raw);
   if (!parsed) return null;
-  // Agent may use its own internal field names; map them to the workflow schema.
   const mustFix =
     typeof parsed.must_fix === "number" ? parsed.must_fix :
     typeof parsed.totalMustFix === "number" ? parsed.totalMustFix :
-    typeof parsed.mustFix === "number" ? parsed.mustFix :
-    undefined;
+    typeof parsed.mustFix === "number" ? parsed.mustFix : undefined;
   const suggestion =
     typeof parsed.suggestion === "number" ? parsed.suggestion :
     typeof parsed.totalSuggestions === "number" ? parsed.totalSuggestions :
-    typeof parsed.suggestions === "number" ? parsed.suggestions :
-    0;
+    typeof parsed.suggestions === "number" ? parsed.suggestions : 0;
   if (typeof mustFix !== "number") return null;
-  return {
-    report_file: parsed.report_file || parsed.reportFile,
-    must_fix: mustFix,
-    suggestion,
-  };
+  return { report_file: parsed.report_file || parsed.reportFile, must_fix: mustFix, suggestion };
 }
 
-// ── Build review agent calls for a round ───────────────────────────
+// ── Build review agent calls (respecting disabled agents) ─────────
 
-function buildReviewCalls(round, max, roundDir, fallowSummary) {
+function buildReviewCalls(round, max, roundDir, fallowSummary, disabledSet) {
   const header = `Round ${round}/${max}`;
   const diffCmd = "Review \`git diff main...HEAD\` for all changes against main.";
   const fallowCtx = fallowSummary ? "\nFallow pre-scan context: " + fallowSummary : "";
 
-  const baseCall = (agent, description, reportName, focus) => ({
-    prompt: [header + " — " + description, "", diffCmd,
-      "Focus: " + focus,
-      "Write report to: " + roundDir + "/" + reportName + ".md" + fallowCtx].join("\n"),
-    agent,
+  const baseCall = (def) => ({
+    prompt: [header + " — " + def.title, "", diffCmd,
+      "Focus: " + def.focus,
+      "Write report to: " + roundDir + "/" + def.report + ".md" + fallowCtx].join("\n"),
+    agent: def.name,
+    model: MODEL,
     schema: reviewerSchema,
-    description: agent.replace(/-/g, "") + "-round-" + round,
+    description: def.name + "-round-" + round,
     timeoutMs: DEFAULT_AGENT_TIMEOUT_MS,
   });
 
-  return [
-    baseCall("review-business-logic", "BUSINESS LOGIC REVIEW", "business-logic",
-      "business logic correctness, boundary conditions, regression risk."),
-    baseCall("review-monorepo-impact", "MONOREPO IMPACT REVIEW", "monorepo-impact",
-      "workspace deps, circular deps, public API changes, extension-dependencies.json."),
-    baseCall("review-type-safety", "TYPE SAFETY REVIEW", "type-safety",
-      "complete type annotations, no `any`, use `unknown` or concrete types, run tsc."),
-    baseCall("review-extension-api", "EXTENSION API REVIEW", "extension-api",
-      "tool/command schema completeness, Pi manifest, backward compat, resource containment."),
-    baseCall("review-test-coverage", "TEST COVERAGE REVIEW", "test-coverage",
-      "tests for new logic, edge case coverage, vitest framework compliance."),
-  ];
+  return AGENT_DEFS
+    .filter((def) => !disabledSet.has(def.name))
+    .map(baseCall);
 }
 
 // ── Main Loop ──────────────────────────────────────────────────────
@@ -100,11 +173,10 @@ function buildReviewCalls(round, max, roundDir, fallowSummary) {
 const MAX = $ARGS.maxRounds ?? 10;
 const STUCK_THRESHOLD = 3;
 const SKIP_FALLOW = $ARGS.skipFallow ?? false;
+const state = loadState();
 let totalFixed = 0;
 let round = 0;
 let clean = false;
-
-// Stuck detection state
 let stuckCount = 0;
 let prevTotal = -1;
 
@@ -121,10 +193,11 @@ if (!SKIP_FALLOW) {
         "1. Check if fallow is installed: `which fallow`",
         "2. If installed, run: `fallow audit --base main --format json --quiet`",
         "3. Extract: complexity hotspots, dead code, unused exports, circular deps",
-        "4. Write summary to /tmp/review-fix-loop/fallow-scan.md",
+        "4. Write summary to " + RUN_ROOT + "/fallow-scan.md",
         "5. If fallow not installed, write a one-line note and skip",
       ].join("\n"),
       description: "fallow-prescan",
+      model: MODEL,
     });
     const fr = parseResult(fallowRaw);
     if (fr) fallowSummary = fr.summary || fr.output || "";
@@ -138,35 +211,56 @@ while (round < MAX) {
   round++;
   log(`--- Round ${round}/${MAX} ---`);
 
-  // ── Phase: Review (batched 3+2) ──────────────────────────
-  phase("Review");
-  const roundDir = `/tmp/review-fix-loop/round-${round}`;
-  require("fs").mkdirSync(roundDir, { recursive: true });
-  const allCalls = buildReviewCalls(round, MAX, roundDir, fallowSummary);
+  // ── Determine disabled agents (S1 conservative) ──────────
+  const disabledSet = new Set(
+    Object.entries(state.agentStatus)
+      .filter(([, s]) => s.disabled)
+      .map(([name]) => name)
+  );
+  if (disabledSet.size > 0) {
+    log("Disabled agents (clean ≥ " + CLEAN_THRESHOLD + " consecutive): " + [...disabledSet].join(", "));
+  }
 
-  // Batch 1: first 3 agents
+  // ── Phase: Review (batched 3+2, only active agents) ──────
+  phase("Review");
+  const roundDir = `${RUN_ROOT}/round-${round}`;
+  fs.mkdirSync(roundDir, { recursive: true });
+  const allCalls = buildReviewCalls(round, MAX, roundDir, fallowSummary, disabledSet);
+
+  if (allCalls.length === 0) {
+    log("All agents disabled but code not clean — reactivating all for safety.");
+    reactivateAll(state);
+    saveState(state);
+    continue; // restart this round with all agents active
+  }
+
+  // Batch 1: first 3 agents of active set
   log("Review batch 1/2 (3 agents)...");
   const batch1 = await parallel(allCalls.slice(0, 3));
-
-  // Batch 2: remaining 2 agents
+  // Batch 2: remaining agents
   log("Review batch 2/2 (2 agents)...");
   const batch2 = await parallel(allCalls.slice(3));
 
-  // Parse all results, tolerate individual failures
+  // Parse results, tolerate individual failures
   const allRaw = [...batch1, ...batch2];
   const reviewResults = [];
+  const agentRoundResults = [];
   for (let i = 0; i < allRaw.length; i++) {
     const parsed = parseResult(allRaw[i]);
     if (parsed && typeof parsed.must_fix === "number") {
       reviewResults.push(parsed);
+      const def = allCalls[i]; // allCalls[i] corresponds to allRaw[i] via baseCall mapping
+      const recorded = recordAgentRound(state, def.agent, parsed.must_fix, parsed.suggestion ?? 0, round);
+      agentRoundResults.push({ name: def.agent, must_fix: parsed.must_fix, suggestion: parsed.suggestion ?? 0, clean: recorded.cleanThisRound });
     } else {
       log("  ⚠ " + allCalls[i].description + " failed, skipping.");
     }
   }
-  log(`Reviews: ${reviewResults.length}/5 succeeded.`);
+  log(`Reviews: ${reviewResults.length}/${allCalls.length} succeeded.`);
 
   if (reviewResults.length === 0) {
     log("All review agents failed, stopping.");
+    saveState(state);
     break;
   }
 
@@ -193,6 +287,7 @@ while (round < MAX) {
       '- "suggestion": total number of SUGGESTION issues after dedup',
     ].join("\n"),
     agent: "review-aggregator",
+    model: MODEL,
     schema: aggregatorSchema,
     description: `aggregate-round-${round}`,
     timeoutMs: DEFAULT_AGENT_TIMEOUT_MS,
@@ -202,6 +297,7 @@ while (round < MAX) {
   if (!agg || typeof agg.must_fix !== "number") {
     log("Aggregator returned invalid result: " + JSON.stringify(aggRaw));
     log("Aggregator failed, stopping.");
+    saveState(state);
     break;
   }
 
@@ -209,10 +305,15 @@ while (round < MAX) {
   const suggestion = agg.suggestion ?? 0;
   log(`Aggregated: ${mustFix} must-fix + ${suggestion} suggestion(s).`);
 
+  // Save snapshot (before fix; modifiedFiles filled after fix)
+  const currentRoundSnapshot = { round, mustFix, suggestion, agents: agentRoundResults, modifiedFiles: [] };
+
   // ── Gate: clean? ─────────────────────────────────────────
   if (mustFix === 0) {
     clean = true;
     log("Code is clean!");
+    state.rounds.push(currentRoundSnapshot);
+    saveState(state);
     break;
   }
 
@@ -222,6 +323,8 @@ while (round < MAX) {
     stuckCount++;
     if (stuckCount >= STUCK_THRESHOLD) {
       log(`Stuck: total issues not decreasing for ${STUCK_THRESHOLD} rounds. Stopping.`);
+      state.rounds.push(currentRoundSnapshot);
+      saveState(state);
       break;
     }
   } else {
@@ -234,10 +337,21 @@ while (round < MAX) {
 
   let reportContent;
   try {
-    reportContent = require("fs").readFileSync(agg.report_file, "utf-8");
+    reportContent = fs.readFileSync(agg.report_file, "utf-8");
   } catch {
     reportContent = "(could not read aggregated report)";
   }
+
+  // Capture files changed by fix for snapshot
+  function getChangedFiles() {
+    try {
+      const out = require("child_process").execSync(
+        "git diff --name-only HEAD", { encoding: "utf-8", timeout: 10_000 }
+      ).trim();
+      return out ? out.split("\n") : [];
+    } catch { return []; }
+  }
+  const filesBefore = new Set(getChangedFiles());
 
   const fxRaw = await agent({
     prompt: [
@@ -262,27 +376,42 @@ while (round < MAX) {
       },
       required: ["fixed_count"],
     },
+    model: MODEL,
     description: `fix-round-${round}`,
   });
 
   const fx = parseResult(fxRaw);
   if (!fx) {
     log("Fix agent failed, stopping.");
+    state.rounds.push(currentRoundSnapshot);
+    saveState(state);
     break;
   }
 
-  totalFixed += fx.fixed_count ?? mustFix;
-  log(`Fixed ${fx.fixed_count ?? mustFix} issue(s). Total: ${totalFixed}. Continuing...`);
+  const fixedCount = fx.fixed_count ?? mustFix;
+  totalFixed += fixedCount;
+
+  // S1: any fix reactivates all agents (conservative — fix may have introduced regressions)
+  const filesAfter = getChangedFiles();
+  const modifiedFiles = filesAfter.filter((f) => !filesBefore.has(f));
+  currentRoundSnapshot.modifiedFiles = modifiedFiles;
+  state.rounds.push(currentRoundSnapshot);
+  reactivateAll(state);
+  saveState(state);
+
+  log(`Fixed ${fixedCount} issue(s). Total: ${totalFixed}. Modified ${modifiedFiles.length} file(s). Continuing...`);
 }
 
 log("\n=== Loop Complete ===");
+saveState(state);
 
 return {
   rounds: round,
   maxRounds: MAX,
   totalFixed,
   clean,
+  runDir: RUN_ROOT,
   message: clean
-    ? `Code clean after ${round} round(s). ${totalFixed} issue(s) fixed total.`
-    : `Stopped after ${round} round(s). ${totalFixed} issue(s) fixed. May have remaining issues.`,
+    ? `Code clean after ${round} round(s). ${totalFixed} issue(s) fixed total. State: ${STATE_FILE}`
+    : `Stopped after ${round} round(s). ${totalFixed} issue(s) fixed. State: ${STATE_FILE}`,
 };

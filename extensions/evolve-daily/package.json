@@ -24,23 +24,26 @@
     "analyzer/"
   ],
   "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "@earendil-works/pi-ai": "*",
-    "@sinclair/typebox": "*"
+    "@mariozechner/pi-tui": "*",
+    "typebox": "*"
   },
   "peerDependenciesMeta": {
-    "@earendil-works/pi-tui": {
+    "@mariozechner/pi-tui": {
       "optional": true
     },
-    "@earendil-works/pi-ai": {
+    "@mariozechner/pi-ai": {
       "optional": true
     }
   },
   "scripts": {
-    "typecheck": "npx tsc --noEmit"
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0"
+    "@types/node": "^24.0.0",
+    "vitest": "^4.1.8"
   }
 }
