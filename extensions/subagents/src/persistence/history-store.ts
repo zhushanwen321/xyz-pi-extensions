@@ -66,8 +66,11 @@ export class HistoryStore {
   /**
    * 读取所有记录（按写入顺序，旧→新）。
    * 文件不存在或损坏返回空数组。损坏的行跳过（不抛出）。
+   *
+   * @param sessionId 可选 session 过滤——仅返回匹配 sessionId 的记录。
+   *                  undefined 时不过滤（兼容场景：GC 等需要全量读取）。
    */
-  read(): PersistedAgentRecord[] {
+  read(sessionId?: string): PersistedAgentRecord[] {
     try {
       const raw = fs.readFileSync(this.filePath, "utf-8");
       const records: PersistedAgentRecord[] = [];
@@ -80,6 +83,7 @@ export class HistoryStore {
           // r.id 可能 undefined 导致 dedup Map key 异常。
           const parsed: unknown = JSON.parse(trimmed);
           if (!isValidPersistedRecord(parsed)) continue;
+          if (sessionId !== undefined && (parsed as PersistedAgentRecord).sessionId !== sessionId) continue;
           records.push(parsed);
         } catch {
           // 单行损坏跳过，保留可用行
@@ -97,9 +101,11 @@ export class HistoryStore {
    * FR-O1.6: cancelBackground 写一条 "cancelled"，runAgent 的 abort catch 会再写一条
    * "failed"（同 id）。去重规则：同 id 取最新 endedAt 的记录；endedAt 相同时 cancelled
    * 优先于 failed（cancelBackground 先设 status，保留用户意图）。
+   *
+   * @param sessionId 可选 session 过滤——仅返回匹配 sessionId 的记录。
    */
-  recent(limit: number): PersistedAgentRecord[] {
-    const all = this.read();
+  recent(limit: number, sessionId?: string): PersistedAgentRecord[] {
+    const all = this.read(sessionId);
     // 同 id 去重：从旧→新遍历，last-writer-wins（新记录覆盖旧记录）。
     // endedAt 相同时 cancelled 优先（用 status 权重辅助排序）。
     const statusWeight: Record<string, number> = { cancelled: 2, failed: 1 };
@@ -182,6 +188,7 @@ export function buildPersistedRecord(args: {
   resultText?: string;
   sessionFile?: string;
   cwd: string;
+  sessionId?: string;
 }): PersistedAgentRecord {
   return {
     id: args.id,
@@ -197,6 +204,7 @@ export function buildPersistedRecord(args: {
     resultPreview: args.resultText ? truncatePreview(args.resultText) : undefined,
     sessionFile: args.sessionFile,
     cwd: args.cwd,
+    sessionId: args.sessionId,
   };
 }
 

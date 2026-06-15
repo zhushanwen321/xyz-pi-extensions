@@ -69,7 +69,7 @@ describe("SDK contract: session_start handler reads ctx (2nd param), not event (
       cwd: "/tmp/sdk-contract-test",
       modelRegistry: mockModelRegistry,
       hasUI: false,
-      sessionManager: { getEntries: () => [] },
+      sessionManager: { getEntries: () => [], getSessionId: () => "test-session" },
     });
 
     const rt = getRuntime();
@@ -90,7 +90,7 @@ describe("SDK contract: session_start handler reads ctx (2nd param), not event (
       fireSessionStart({
         cwd: "/tmp/sdk-contract-test",
         hasUI: false,
-        sessionManager: { getEntries: () => [] },
+        sessionManager: { getEntries: () => [], getSessionId: () => "test-session" },
       });
     }).toThrow(/registry is null\/undefined/);
   });
@@ -190,7 +190,7 @@ describe("SDK contract: registerCommand shape matches RegisteredCommand", () => 
       cwd: "/tmp",
       modelRegistry: { find: () => undefined, hasConfiguredAuth: () => true, getAvailable: () => [] },
       hasUI: false,
-      sessionManager: { getEntries: () => [] },
+      sessionManager: { getEntries: () => [], getSessionId: () => "test-session" },
     };
     // 注入 modelRegistry，否则 runtime 未初始化会提前 return
     pi.on.mock.calls.forEach(([event, handler]) => {
@@ -222,7 +222,7 @@ describe("SDK contract: appendEntry signature (customType, data)", () => {
       cwd: "/tmp/sdk-contract-test",
       modelRegistry: { find: () => undefined, hasConfiguredAuth: () => true, getAvailable: () => [] },
       hasUI: false,
-      sessionManager: { getEntries: () => [] },
+      sessionManager: { getEntries: () => [], getSessionId: () => "test-session" },
     });
 
     const rt = getRuntime()!;

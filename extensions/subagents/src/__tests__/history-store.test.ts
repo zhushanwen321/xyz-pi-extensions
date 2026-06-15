@@ -212,4 +212,47 @@ describe("HistoryStore — ADR-024 L1", () => {
     await store.append(makeRecord({ id: "run-x" }));
     expect(store.recent(0)).toEqual([]);
   });
+
+  // ── sessionId 过滤（/subagents list 只显示当前 session）──
+  it("read(sessionId) filters by session", async () => {
+    const store = makeStore();
+    await store.append(makeRecord({ id: "run-a", sessionId: "sess-1" }));
+    await store.append(makeRecord({ id: "run-b", sessionId: "sess-2" }));
+    await store.append(makeRecord({ id: "run-c", sessionId: "sess-1" }));
+
+    expect(store.read("sess-1")).toHaveLength(2);
+    expect(store.read("sess-1").map((r) => r.id)).toEqual(["run-a", "run-c"]);
+    expect(store.read("sess-2")).toHaveLength(1);
+    expect(store.read("sess-2")[0].id).toBe("run-b");
+  });
+
+  it("read(undefined) returns all records (no filter, e.g. for GC)", async () => {
+    const store = makeStore();
+    await store.append(makeRecord({ id: "run-a", sessionId: "sess-1" }));
+    await store.append(makeRecord({ id: "run-b", sessionId: "sess-2" }));
+    expect(store.read()).toHaveLength(2);
+  });
+
+  it("recent(limit, sessionId) filters by session", async () => {
+    const store = makeStore();
+    await store.append(makeRecord({ id: "run-a", sessionId: "sess-1", startedAt: 1000 }));
+    await store.append(makeRecord({ id: "run-b", sessionId: "sess-2", startedAt: 2000 }));
+    await store.append(makeRecord({ id: "run-c", sessionId: "sess-1", startedAt: 3000 }));
+
+    const recent = store.recent(10, "sess-1");
+    expect(recent).toHaveLength(2);
+    // 新→旧
+    expect(recent[0].id).toBe("run-c");
+    expect(recent[1].id).toBe("run-a");
+  });
+
+  it("records without sessionId are excluded when filtering", async () => {
+    const store = makeStore();
+    // 旧记录无 sessionId 字段（模拟迁移前数据）
+    await store.append(makeRecord({ id: "old-1", sessionId: undefined }));
+    await store.append(makeRecord({ id: "new-1", sessionId: "sess-1" }));
+    // 过滤 sess-1 时，old-1（sessionId=undefined）被排除
+    expect(store.read("sess-1")).toHaveLength(1);
+    expect(store.read("sess-1")[0].id).toBe("new-1");
+  });
 });

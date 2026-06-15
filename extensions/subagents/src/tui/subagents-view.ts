@@ -1,14 +1,16 @@
 // src/tui/subagents-view.ts
 //
-// /subagents list 全屏两级视图（列表 + 详情）。
-// 参考 extensions/workflow/src/interface/views/WorkflowsView.ts 的 overlay 契约。
+// /subagents list 全屏左右分屏视图（仿 workflow WorkflowsView.ts）。
+// 左列 = agent 列表（❯ 选中 + 状态图标 + 对齐列），右列 = 选中 record 的详情。
+// 默认可直接输入 filter · ↑↓ 导航 · Enter 进入详情 · x stop · Esc 退出。
 //
-// 内部组件契约：
+// 内部组件契约（ctx.ui.custom overlay）：
 // - invalidate(): 清除渲染缓存
 // - render(width): 返回 string[]
 // - handleInput(data): 处理按键
-// 销毁由 ctx.ui.custom 的 done() 回调触发。
+// 销毁由 done() 回调触发。
 
+import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import type { SubagentRuntime } from "../runtime.ts";
@@ -39,12 +41,15 @@ export interface SubagentRecord {
   sessionFile?: string;
   /** ADR-024 L1: 执行模式（列表显示用） */
   mode?: "sync" | "background";
+  /** model 信息（详情区显示） */
+  model?: string;
 }
 
 export interface ViewState {
-  level: 0 | 1;
   selectedIdx: number;
-  scrollOffset: number;
+  scrollOffset: number;      // 右列 eventLog 滚动
+  filterText: string;        // filter 输入内容（默认可直接输入，无需进入 filter 模式）
+  detailMode: boolean;       // Enter 进入详情全屏（右列占满），Esc 返回分屏
   disposed: boolean;
 }
 
@@ -55,12 +60,58 @@ const STATUS_PRIORITY: Record<BackgroundStatus["status"], number> = {
   done: 3,
 };
 
+const SIDEBAR_WIDTH = 38;   // 左列宽（含 ❯ 指针 + 状态图标 + agent + turns + tokens）
 const MIN_TERMINAL_ROWS = 8;
-const HEADER_LINES = 3;
-const FOOTER_LINES = 2;
 
 // ============================================================
-// Data merge (FR-3.2)
+// ANSI-aware visible-width helpers
+// ============================================================
+
+/** Pad string to target visible width (right-pad with spaces). ANSI-safe. */
+function padVisible(s: string, width: number): string {
+  const vw = visibleWidth(s);
+  if (vw >= width) return s;
+  return s + " ".repeat(width - vw);
+}
+
+/** Truncate string to visible width, appending ellipsis if truncated. ANSI-safe. */
+function truncVisible(s: string, maxWidth: number): string {
+  if (visibleWidth(s) <= maxWidth) return s;
+  if (maxWidth <= 1) return visibleWidth(s) > 0 ? "…" : s;
+  return truncateToWidth(s, maxWidth - 1) + "…";
+}
+
+/** 把文本按可见宽度自动换行。用 visibleWidth 测量（ANSI-safe），按 grapheme 切分。
+ *  超长单词（单个 word > maxWidth）强制截断。返回多行字符串数组。 */
+function wrapVisible(text: string, maxWidth: number): string[] {
+  if (maxWidth <= 0) return [text];
+  const vw = visibleWidth(text);
+  if (vw <= maxWidth) return [text];
+
+  // 简单贪心换行：按 visibleWidth 逐字符累积，超 maxWidth 断行。
+  // ANSI 转义序列不计宽度（visibleWidth 会剥离），但需要保留在输出中。
+  const lines: string[] = [];
+  let current = "";
+  let currentWidth = 0;
+  // 用 segmenter 按 grapheme 切，避免 emoji/宽字符被劈成两半
+  const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  for (const { segment } of segmenter.segment(text)) {
+    const segWidth = visibleWidth(segment);
+    if (currentWidth + segWidth > maxWidth && currentWidth > 0) {
+      lines.push(current);
+      current = segment;
+      currentWidth = segWidth;
+    } else {
+      current += segment;
+      currentWidth += segWidth;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.length > 0 ? lines : [text];
+}
+
+// ============================================================
+// Data merge (FR-3.2) — unchanged from original
 // ============================================================
 
 /**
@@ -75,11 +126,9 @@ export function collectRecords(
   history: SubagentRecord[] = [],
 ): SubagentRecord[] {
   const byId = new Map<string, SubagentRecord>();
-  // history 先（最低优先级）
   for (const r of history) {
     byId.set(r.id, r);
   }
-  // bg/completed 覆盖 history（含实时状态）
   for (const r of [...bg, ...completed]) {
     byId.set(r.id, r);
   }
@@ -88,7 +137,6 @@ export function collectRecords(
     if (!existing) {
       byId.set(r.id, r);
     } else if (existing.status === "cancelled" && r.status !== "cancelled") {
-      // cancelled 优先：保留 existing
       continue;
     } else {
       byId.set(r.id, r);
@@ -102,7 +150,7 @@ export function sortRecords(records: SubagentRecord[]): SubagentRecord[] {
     const pa = STATUS_PRIORITY[a.status] ?? 99;
     const pb = STATUS_PRIORITY[b.status] ?? 99;
     if (pa !== pb) return pa - pb;
-    return b.startedAt - a.startedAt; // 同状态按 startedAt 降序
+    return b.startedAt - a.startedAt;
   });
 }
 
@@ -119,6 +167,15 @@ function statusIcon(status: BackgroundStatus["status"], theme: ThemeLike): strin
   }
 }
 
+function statusLabel(status: BackgroundStatus["status"], theme: ThemeLike): string {
+  switch (status) {
+    case "done": return theme.fg("success", "done");
+    case "running": return theme.fg("warning", "running");
+    case "failed": return theme.fg("error", "failed");
+    case "cancelled": return theme.fg("muted", "cancelled");
+  }
+}
+
 function formatTime(ts: number): string {
   const d = new Date(ts);
   return d.toTimeString().slice(0, 5);
@@ -127,111 +184,219 @@ function formatTime(ts: number): string {
 function formatDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}m${s % 60}s`;
+  return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
 }
 
-function formatRecordRow(record: SubagentRecord, theme: ThemeLike, selected: boolean): string {
+/** 格式化单条 record 为左列行（固定列宽 + padVisible 对齐）。 */
+export function formatRecordRow(record: SubagentRecord, theme: ThemeLike, selected: boolean): string {
+  const pointer = selected ? "❯ " : "  ";
   const icon = statusIcon(record.status, theme);
-  const turns = record.turns ?? 0;
-  const tokens = record.totalTokens ? formatTokens(record.totalTokens) : "-";
-  // ADR-024: background 记录加 bg 标记区分 sync
-  const modeTag = record.mode === "background" ? "[bg]" : "    ";
-  const baseLine = `${icon} ${modeTag} ${record.id.padEnd(13)} ${record.agent.padEnd(13)} ${record.status.padEnd(10)} ${turns}t ${tokens}`;
-  return selected ? theme.bold(baseLine) : baseLine;
+  const mode = record.mode === "background" ? "bg" : "  ";
+  // 列宽：agent 14 + turns 5 + tokens 8 = 27，加 icon(1) + mode(2) + 分隔符
+  const agent = padVisible(truncVisible(record.agent, 14), 14);
+  const turns = padVisible(`${record.turns ?? 0}t`, 5);
+  const tokens = padVisible(record.totalTokens ? formatTokens(record.totalTokens) : "-", 8);
+  const line = `${pointer}${icon} ${mode} ${agent} ${turns} ${tokens}`;
+  return selected ? theme.bold(line) : line;
 }
 
 // ============================================================
-// List view (Level 0)
+// Split-pane render (仿 WorkflowsView mergeBody)
 // ============================================================
 
-export function formatListView(
+/** 把左列和右列按行拼接，左列 padVisible 到 SIDEBAR_WIDTH，中间用 │ 分隔。 */
+function mergeBody(leftLines: string[], rightLines: string[], mainWidth: number): string[] {
+  const bodyHeight = Math.max(leftLines.length, rightLines.length);
+  const result: string[] = [];
+  const emptyLeft = " ".repeat(SIDEBAR_WIDTH);
+  for (let i = 0; i < bodyHeight; i++) {
+    const left = padVisible(leftLines[i] ?? "", SIDEBAR_WIDTH);
+    const right = padVisible(rightLines[i] ?? "", mainWidth);
+    result.push(left + "│" + right);
+  }
+  return result.length > 0 ? result : [emptyLeft + "│" + " ".repeat(mainWidth)];
+}
+
+/** 渲染左列：agent 列表。 */
+function renderLeftColumn(
   records: SubagentRecord[],
   theme: ThemeLike,
-  _width: number,
-  selectedIdx: number,
+  state: ViewState,
+  bodyHeight: number,
 ): string[] {
-  if (records.length === 0) {
-    return [
-      "┌─ Subagents ───────────────────────────────────────────┐",
-      "│  No subagent executions in this session.              │",
-      "│                                                       │",
-      "│  q 退出                                               │",
-      "└───────────────────────────────────────────────────────┘",
-    ];
+  const lines: string[] = [];
+  const filtered = applyFilter(records, state.filterText);
+  lines.push(theme.fg("muted", `Agents (${filtered.length}/${records.length})`));
+  lines.push("─".repeat(SIDEBAR_WIDTH));
+
+  // 视口滚动：当选中行超出可见区时滚动
+  const headerLines = 2;
+  const visibleRows = Math.max(1, bodyHeight - headerLines);
+  let startIdx = 0;
+  if (state.selectedIdx >= visibleRows) {
+    startIdx = state.selectedIdx - visibleRows + 1;
+  }
+  const endIdx = Math.min(filtered.length, startIdx + visibleRows);
+
+  for (let i = startIdx; i < endIdx; i++) {
+    lines.push(formatRecordRow(filtered[i]!, theme, i === state.selectedIdx));
   }
 
-  const lines: string[] = [];
-  lines.push("┌─ Subagents ───────────────────────────────────────────────────┐");
-  lines.push("│  ID             Agent         Status       Turns  Tokens      │");
-  records.forEach((r, i) => {
-    lines.push("│  " + formatRecordRow(r, theme, i === selectedIdx));
-  });
-  lines.push("│                                                               │");
-  lines.push("│  j/k 导航 · Enter 详情 · x 取消 · q 退出                       │");
-  lines.push("└───────────────────────────────────────────────────────────────┘");
+  // 空状态
+  if (filtered.length === 0) {
+    lines.push(theme.fg("dim", "  (no matching agents)"));
+  }
+
   return lines;
 }
 
-// ============================================================
-// Detail view (Level 1)
-// ============================================================
-
-export function formatDetailView(
-  record: SubagentRecord,
+/** 渲染右列：选中 record 的详情。 */
+function renderRightColumn(
+  record: SubagentRecord | null,
   theme: ThemeLike,
-  width: number,
-  scrollOffset: number,
-  terminalRows: number = 30,
+  mainWidth: number,
+  state: ViewState,
+  bodyHeight: number,
 ): string[] {
-  if (terminalRows < MIN_TERMINAL_ROWS) {
-    return [`Terminal too small (need ≥${MIN_TERMINAL_ROWS} rows)`];
+  const lines: string[] = [];
+  if (!record) {
+    lines.push(theme.fg("dim", "Select an agent to view details"));
+    return lines;
   }
 
-  const lines: string[] = [];
-  const turns = record.turns ?? 0;
-  const tokens = record.totalTokens ? formatTokens(record.totalTokens) : "0";
+  lines.push(theme.fg("muted", "Detail"));
+  lines.push("─".repeat(mainWidth));
+
+  // 状态行
   const elapsed = record.endedAt
     ? formatDuration(record.endedAt - record.startedAt)
     : formatDuration(Date.now() - record.startedAt);
-
-  lines.push(`┌─ ${record.id} ${record.agent} (${record.status})`);
-  lines.push(`│  ${turns} turns │ ${tokens} │ ${elapsed} │ started ${formatTime(record.startedAt)}`);
-  lines.push("│");
-
-  // Event log
-  lines.push("│  Event log:");
-  const eventLogLines: string[] = [];
-  let turnNumber = 0;
-  for (const entry of record.eventLog) {
-    if (entry.type === "turn_end") turnNumber++;
-    eventLogLines.push("│  " + formatEventLogLine(entry, theme, turnNumber));
-  }
-  if (eventLogLines.length === 0) eventLogLines.push("│  (no events recorded)");
-
-  const visibleFrom = Math.max(0, scrollOffset);
-  const maxVisible = Math.max(1, terminalRows - HEADER_LINES - FOOTER_LINES - 5);
-  const visibleTo = Math.min(eventLogLines.length, visibleFrom + maxVisible);
-  for (let i = visibleFrom; i < visibleTo; i++) {
-    lines.push(eventLogLines[i]);
+  lines.push(`${statusIcon(record.status, theme)} ${statusLabel(record.status, theme)} · ${record.agent}`);
+  if (record.model) {
+    lines.push(theme.fg("dim", record.model));
   }
 
-  // Result section
-  if (record.result || record.error) {
-    lines.push("│");
-    lines.push("│  Result:");
-    const resultText = record.error ?? record.result?.text ?? "";
-    const resultLines = resultText.split("\n").slice(0, 10);
-    for (const l of resultLines) lines.push("│  " + l);
+  // stats 行
+  const turns = record.turns ?? 0;
+  const tokens = record.totalTokens ? formatTokens(record.totalTokens) : "0";
+  const mode = record.mode === "background" ? "background" : "sync";
+  lines.push(theme.fg("dim", `${turns} turns · ${tokens} · ${elapsed} · ${mode} · started ${formatTime(record.startedAt)}`));
+  lines.push("");
+
+  // Event log（带滚动，自动换行）
+  const filteredLog = (record.eventLog ?? []).filter((e) => e.type !== "turn_end");
+  lines.push(theme.fg("muted", "Event log:"));
+  if (filteredLog.length === 0) {
+    lines.push(theme.fg("dim", "  (no events)"));
+  } else {
+    // 计算可用高度：bodyHeight - 已占用行数
+    const usedLines = lines.length + 2; // +2 for result section spacing
+    const maxLogLines = Math.max(1, bodyHeight - usedLines - 4);
+    const logStart = Math.max(0, Math.min(state.scrollOffset, Math.max(0, filteredLog.length - maxLogLines)));
+    const logEnd = Math.min(filteredLog.length, logStart + maxLogLines);
+    for (let i = logStart; i < logEnd; i++) {
+      const entry = filteredLog[i]!;
+      const raw = formatEventLogLine(entry, theme);
+      // 自动换行（保留 ANSI 样式），每行缩进 2 空格
+      for (const wl of wrapVisible(raw, mainWidth - 2)) {
+        lines.push("  " + wl);
+      }
+    }
+    if (filteredLog.length > maxLogLines) {
+      lines.push(theme.fg("dim", `  (${logStart + 1}-${logEnd} of ${filteredLog.length})`));
+    }
   }
 
-  lines.push("│");
-  lines.push("│  j/k 滚动 · q 返回");
-  lines.push("└" + "─".repeat(Math.max(1, width - 2)));
+  // Result / Error（自动换行）
+  if (record.result?.text || record.error) {
+    lines.push("");
+    lines.push(theme.fg("muted", record.error ? "Error:" : "Result:"));
+    const text = record.error ?? record.result?.text ?? "";
+    const resultLines = text.split("\n").slice(0, 5);
+    for (const l of resultLines) {
+      for (const wl of wrapVisible(l, mainWidth - 2)) {
+        lines.push(theme.fg("dim", "  " + wl));
+      }
+    }
+  }
+
   return lines;
 }
 
 // ============================================================
-// Keyboard (FR-3.5)
+// Full view render
+// ============================================================
+
+export function renderView(
+  records: SubagentRecord[],
+  theme: ThemeLike,
+  width: number,
+  state: ViewState,
+  termRows: number,
+): string[] {
+  if (termRows < MIN_TERMINAL_ROWS) {
+    return [`Terminal too small (need ≥${MIN_TERMINAL_ROWS} rows)`];
+  }
+
+  const contentWidth = width - 2; // ╭...╮ 边框
+  const mainWidth = Math.max(10, contentWidth - SIDEBAR_WIDTH - 1); // -1 for │
+
+  const lines: string[] = [];
+
+  // ── Header ──
+  lines.push("╭" + "─".repeat(contentWidth) + "╮");
+  // filter 默认可直接输入：显示当前 filterText + 光标 _
+  const filterDisplay = theme.fg("dim", `filter: `) + theme.bold(`${state.filterText}_`);
+  lines.push("│" + padVisible(filterDisplay, contentWidth) + "│");
+  lines.push("├" + "─".repeat(SIDEBAR_WIDTH) + "┬" + "─".repeat(mainWidth) + "┤");
+
+  // ── Body (split pane) ──
+  const headerFooterLines = 5; // ╭ + filter + ├┬┤ + footer ├┴┤ + ╰ + footer text
+  const bodyHeight = Math.max(3, termRows - headerFooterLines);
+
+  const filtered = applyFilter(records, state.filterText);
+  const selectedRecord = filtered[state.selectedIdx] ?? filtered[0] ?? null;
+
+  const leftLines = renderLeftColumn(records, theme, state, bodyHeight);
+  const rightLines = renderRightColumn(selectedRecord, theme, mainWidth, state, bodyHeight);
+  const bodyLines = mergeBody(leftLines, rightLines, mainWidth);
+
+  // pad body to bodyHeight
+  const emptyBodyLine = " ".repeat(SIDEBAR_WIDTH) + "│" + " ".repeat(mainWidth);
+  while (bodyLines.length < bodyHeight) bodyLines.push(emptyBodyLine);
+
+  for (const bodyLine of bodyLines) {
+    lines.push("│" + padVisible(bodyLine, contentWidth) + "│");
+  }
+
+  // ── Footer ──
+  lines.push("├" + "─".repeat(SIDEBAR_WIDTH) + "┴" + "─".repeat(mainWidth) + "┤");
+  const navPart = state.detailMode ? "↑↓ 滚动" : "↑↓ 导航";
+  const enterPart = state.detailMode ? "Esc 返回" : "Enter 详情";
+  const stopPart = "x stop";
+  const quitPart = "Esc 退出";
+  const footer = `${navPart} · ${enterPart} · ${stopPart} · ${quitPart}`;
+  lines.push("│" + padVisible(theme.fg("muted", footer), contentWidth) + "│");
+  lines.push("╰" + "─".repeat(contentWidth) + "╯");
+
+  return lines;
+}
+
+// ============================================================
+// Filter
+// ============================================================
+
+/** 按 filterText 过滤 records（匹配 agent 名或 id，大小写不敏感）。 */
+export function applyFilter(records: SubagentRecord[], filterText: string): SubagentRecord[] {
+  const q = filterText.trim().toLowerCase();
+  if (!q) return records;
+  return records.filter((r) =>
+    r.agent.toLowerCase().includes(q) || r.id.toLowerCase().includes(q),
+  );
+}
+
+// ============================================================
+// Keyboard
 // ============================================================
 
 export function processKey(
@@ -245,61 +410,78 @@ export function processKey(
 ): boolean {
   if (state.disposed) return false;
 
-  if (state.level === 0) {
-    if (data === "j" || data === "\x1b[B") {
-      if (state.selectedIdx < records.length - 1) { state.selectedIdx++; return true; }
-      return false;
+  const filtered = applyFilter(records, state.filterText);
+
+  // ── 详情模式（Enter 进入的全屏详情）：↑↓ 滚动 eventLog，Esc 返回分屏 ──
+  if (state.detailMode) {
+    if (matchesKey(data, Key.escape)) {
+      state.detailMode = false;
+      return true;
     }
-    if (data === "k" || data === "\x1b[A") {
-      if (state.selectedIdx > 0) { state.selectedIdx--; return true; }
-      return false;
-    }
-    if (data === "\r" || data === "\n") {
-      if (records.length > 0) { state.level = 1; state.scrollOffset = 0; return true; }
-      return false;
-    }
-    if (data === "x") {
-      if (selectedRecord && selectedRecord.id.startsWith("bg-") && runtime) {
-        runtime.cancelBackground(selectedRecord.id);
-        return true;
-      }
-      return false;
-    }
-    if (data === "q" || data === "\x1b") {
-      done();
-      return false;
-    }
-  } else {
-    if (data === "j" || data === "\x1b[B") {
+    if (matchesKey(data, Key.down)) {
       state.scrollOffset++;
       return true;
     }
-    if (data === "k" || data === "\x1b[A") {
-      if (state.scrollOffset > 0) { state.scrollOffset--; return true; }
-      return false;
-    }
-    if (data === "x") {
-      if (selectedRecord && selectedRecord.id.startsWith("bg-") && runtime) {
-        runtime.cancelBackground(selectedRecord.id);
-        return true;
-      }
-      return false;
-    }
-    if (data === "q" || data === "\x1b") {
-      state.level = 0;
-      state.scrollOffset = 0;
+    if (matchesKey(data, Key.up)) {
+      if (state.scrollOffset > 0) state.scrollOffset--;
       return true;
     }
+    return false;
+  }
+
+  // ── 分屏模式 ──
+
+  // Esc 退出视图
+  if (matchesKey(data, Key.escape)) {
+    done();
+    return false;
+  }
+  // ↑↓ 导航（用 matchesKey 兼容 legacy/Kitty 协议所有终端模式）
+  if (matchesKey(data, Key.down)) {
+    if (state.selectedIdx < filtered.length - 1) { state.selectedIdx++; state.scrollOffset = 0; return true; }
+    return false;
+  }
+  if (matchesKey(data, Key.up)) {
+    if (state.selectedIdx > 0) { state.selectedIdx--; state.scrollOffset = 0; return true; }
+    return false;
+  }
+  // Enter 进入详情全屏
+  if (matchesKey(data, Key.enter)) {
+    if (filtered.length > 0) { state.detailMode = true; state.scrollOffset = 0; return true; }
+    return false;
+  }
+  // Backspace 删除 filter 字符（也匹配 Ctrl+H）
+  if (matchesKey(data, Key.backspace) || data === "\x7f") {
+    state.filterText = state.filterText.slice(0, -1);
+    state.selectedIdx = 0;
+    state.scrollOffset = 0;
+    return true;
+  }
+  // x stop
+  if (data === "x") {
+    if (selectedRecord && selectedRecord.status === "running" && runtime) {
+      runtime.cancelBackground(selectedRecord.id);
+      return true;
+    }
+    return false;
+  }
+  // 可打印字符 → filter 输入（默认可直接输入，无需进入 filter 模式）
+  // 排除单字符 ANSI 序列前缀 ESC（\x1b）—— 已被上面 escape 拦截
+  if (data.length === 1 && data >= " " && data <= "~") {
+    state.filterText += data;
+    state.selectedIdx = 0;
+    state.scrollOffset = 0;
+    return true;
   }
   return false;
 }
 
 // ============================================================
-// Overlay factory
+// View factory (ctx.ui.custom overlay)
 // ============================================================
 
 /**
- * 全屏两级视图工厂。
+ * 全屏左右分屏视图工厂。
  * 仿 WorkflowsView.ts 的 overlay 契约。
  */
 export function createSubagentsView(
@@ -326,14 +508,18 @@ export function createSubagentsView(
     }
 
     const state: ViewState = {
-      level: initialDirectId ? 1 : 0,
       selectedIdx: 0,
       scrollOffset: 0,
+      filterText: "",
+      detailMode: false,
       disposed: false,
     };
     if (initialDirectId) {
       const idx = allInitial.findIndex((r) => r.id === initialDirectId);
-      if (idx >= 0) state.selectedIdx = idx;
+      if (idx >= 0) {
+        state.selectedIdx = idx;
+        state.detailMode = true; // directId 直接进入详情
+      }
     }
 
     const cache = { width: undefined as number | undefined, lines: undefined as string[] | undefined };
@@ -348,7 +534,6 @@ export function createSubagentsView(
       if (state.disposed) return;
       state.disposed = true;
       unsubscribe();
-      // FR-3.1 G-026: 清理 _activeView
       runtime.clearActiveView();
       done();
     };
@@ -363,12 +548,12 @@ export function createSubagentsView(
       render(width: number): string[] {
         if (cache.lines && cache.width === width) return cache.lines;
         const records = getAllRecords(runtime);
-        const selected = records[state.selectedIdx] ?? null;
-        const raw = state.level === 0
-          ? formatListView(records, theme, width, state.selectedIdx)
-          : selected
-            ? formatDetailView(selected, theme, width, state.scrollOffset, tui.terminal.rows)
-            : ["(no record selected)"];
+        const filtered = applyFilter(records, state.filterText);
+        // clamp selectedIdx to filtered range
+        if (state.selectedIdx >= filtered.length) {
+          state.selectedIdx = Math.max(0, filtered.length - 1);
+        }
+        const raw = renderView(records, theme, width, state, tui.terminal.rows);
         const termHeight = tui.terminal.rows;
         const lines = raw.length < termHeight
           ? [...raw, ...Array.from({ length: termHeight - raw.length }, () => "")]
@@ -380,7 +565,8 @@ export function createSubagentsView(
       handleInput(data: string): void {
         if (state.disposed) return;
         const records = getAllRecords(runtime);
-        const selected = records[state.selectedIdx] ?? null;
+        const filtered = applyFilter(records, state.filterText);
+        const selected = filtered[state.selectedIdx] ?? null;
         const changed = processKey(data, records, state, theme, selected, wrappedDone, runtime);
         if (changed) {
           cache.width = undefined;
@@ -399,7 +585,7 @@ export function createSubagentsView(
 // Data source aggregation
 // ============================================================
 
-/** 从 runtime 提取所有 records（合并三数据源） */
+/** 从 runtime 提取所有 records（合并四数据源，已按当前 sessionId 过滤 history） */
 function getAllRecords(runtime: SubagentRuntime): SubagentRecord[] {
   const widgetRecords: SubagentRecord[] = runtime.listRunningAgents().map((a) => ({
     id: a.id,
@@ -408,22 +594,22 @@ function getAllRecords(runtime: SubagentRuntime): SubagentRecord[] {
     eventLog: a.eventLog ?? [],
     turns: a.turns,
     totalTokens: a.totalTokens,
-    // Wave 4: AgentExecutionState 存 startedAt（不存 elapsedSeconds/finishedAt）
     startedAt: a.startedAt,
     endedAt: a.endedAt,
+    model: a.model,
   }));
   const bgRecords: SubagentRecord[] = runtime.listBackground().map((b) => ({
     id: b.id,
     agent: b.agent ?? "default",
     status: b.status,
     eventLog: b.eventLog ?? [],
-    // Wave 4: 从 BackgroundStatus 读 turns/totalTokens（不再 hardcoded undefined）
     turns: b.turns,
     totalTokens: b.totalTokens,
     startedAt: b.startedAt,
     endedAt: b.endedAt,
     result: b.result,
     error: b.error,
+    mode: "background" as const,
   }));
   const completedRecords: SubagentRecord[] = runtime.listCompleted().map((c: CompletedAgentRecord) => ({
     id: c.id,
@@ -437,7 +623,7 @@ function getAllRecords(runtime: SubagentRuntime): SubagentRecord[] {
     result: c.result,
     error: c.error,
   }));
-  // ADR-024 L1: 跨进程历史记录（无实时状态，eventLog 为空，预览作 task/error/result）
+  // ADR-024 L1: 跨进程历史记录（listHistory 内部已按当前 sessionId 过滤）
   const HISTORY_LIST_LIMIT = 100;
   const historyRecords: SubagentRecord[] = runtime.listHistory(HISTORY_LIST_LIMIT).map((h) => ({
     id: h.id,

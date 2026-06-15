@@ -233,6 +233,8 @@ export interface PersistedAgentRecord {
   sessionFile?: string;
   /** 执行时 cwd（跨项目历史区分） */
   cwd: string;
+  /** 当前 session id（/subagents list 按此过滤，仅显示当前 session 的记录） */
+  sessionId?: string;
 }
 
 // ============================================================

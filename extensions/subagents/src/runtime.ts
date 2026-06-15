@@ -145,6 +145,9 @@ export class SubagentRuntime {
   /** FR-2.0: running agent 状态 map（Wave 4: 统一为 AgentExecutionState） */
   private readonly _runningAgents = new Map<string, AgentExecutionState>();
 
+  /** 当前 session id（/subagents list 按此过滤 history；session_start 时注入） */
+  private _sessionId?: string;
+
   constructor(opts: { cwd: string; homeDir: string; agentDir: string }) {
     this.cwd = opts.cwd;
     this.homeDir = opts.homeDir;
@@ -181,6 +184,12 @@ export class SubagentRuntime {
     this._bgNotifier = new BgNotifier(pi);
   }
 
+  /** session_start 时注入当前 session id（/resume /fork /new 时更新）。
+   *  用于 listHistory 过滤 + buildPersistedRecord 写入。 */
+  setSessionId(sessionId: string): void {
+    this._sessionId = sessionId;
+  }
+
   /** FR-2.0: 暴露给 /subagents list 的 running agent 快照（替代 widget.listAgents） */
   listRunningAgents(): AgentExecutionState[] {
     return [...this._runningAgents.values()];
@@ -202,9 +211,9 @@ export class SubagentRuntime {
     return [...this._completedAgents.values()];
   }
 
-  /** ADR-024 L1: 读取跨进程执行记录（新→旧） */
+  /** ADR-024 L1: 读取跨进程执行记录（新→旧），按当前 sessionId 过滤 */
   listHistory(limit?: number): import("./types.ts").PersistedAgentRecord[] {
-    return limit ? this._history.recent(limit) : this._history.read().reverse();
+    return limit ? this._history.recent(limit, this._sessionId) : this._history.read(this._sessionId).reverse();
   }
 
   /** FR-3.0: 归档 sync agent（widget linger 到期时调用） */
@@ -437,6 +446,7 @@ export class SubagentRuntime {
             resultText: result.text,
             sessionFile: result.sessionFile ? path.basename(result.sessionFile) : undefined,
             cwd: this.cwd,
+            sessionId: this._sessionId,
           }),
         );
       }
@@ -475,6 +485,7 @@ export class SubagentRuntime {
             totalTokens: state.totalTokens,
             error: errMsg,
             cwd: this.cwd,
+            sessionId: this._sessionId,
           }),
         );
       }
@@ -630,6 +641,7 @@ export class SubagentRuntime {
             resultText: result.text,
             sessionFile: result.sessionFile ? path.basename(result.sessionFile) : undefined,
             cwd: this.cwd,
+            sessionId: this._sessionId,
           }),
         );
         // FR-O1.1: 回注完成通知到主对话（去重 + 合并窗口在 notifyBgCompletion 内处理）
@@ -686,6 +698,7 @@ export class SubagentRuntime {
             endedAt: record.endedAt,
             error: record.error,
             cwd: this.cwd,
+            sessionId: this._sessionId,
           }),
         );
         // FR-O1.1: 失败/取消也回注（去重 + 合并窗口在 notifyBgCompletion 内处理）

@@ -197,3 +197,44 @@ export class Markdown {
     return this.text.split("\n").map((line) => truncateToWidth(line, width));
   }
 }
+
+// ── Key / matchesKey mock（最小实现，覆盖测试中的 arrow/enter/escape/backspace）──
+
+export const Key = {
+  escape: "escape",
+  esc: "esc",
+  enter: "enter",
+  return: "return",
+  up: "up",
+  down: "down",
+  left: "left",
+  right: "right",
+  backspace: "backspace",
+  space: "space",
+} as const;
+
+/** 简化版 matchesKey：把 raw terminal data 映射到 keyId，再与预期比较。
+ *  覆盖测试场景中的 legacy 序列（\x1b[A/B/OA/OB, \r, \x1b, \x7f）。 */
+const DATA_TO_KEY: Record<string, string> = {
+  "\x1b": "escape",
+  "\r": "enter",
+  "\n": "enter",
+  "\x7f": "backspace",
+  "\b": "backspace",
+  "\x1b[A": "up",
+  "\x1b[B": "down",
+  "\x1b[C": "right",
+  "\x1b[D": "left",
+  "\x1bOA": "up",
+  "\x1bOB": "down",
+  "\x1bOC": "right",
+  "\x1bOD": "left",
+};
+
+export function matchesKey(data: string, keyId: string): boolean {
+  const mapped = DATA_TO_KEY[data];
+  if (mapped !== undefined) return mapped === keyId;
+  // 单字符匹配（如 "x", " " 等）
+  if (data.length === 1 && data >= " " && data <= "~") return data === keyId;
+  return false;
+}

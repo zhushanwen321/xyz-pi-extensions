@@ -36,6 +36,8 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     // 新 session 必须复活——否则 notifyBgCompletion 顶部 if (this._disposed) return 短路，
     // 所有 background 完成回注（FR-O1）在第一次 /resume /fork /new 后整体失效。
     if (existing) rt.revive();
+    // 注入当前 session id——/subagents list 按此过滤 history，只显示当前 session 的记录。
+    rt.setSessionId(ctx.sessionManager.getSessionId());
 
     const entries = ctx.sessionManager.getEntries() ?? [];
     rt.restoreFromEntries(entries);

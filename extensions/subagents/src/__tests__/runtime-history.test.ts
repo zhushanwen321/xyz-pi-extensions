@@ -95,4 +95,39 @@ describe("SubagentRuntime — history persistence (ADR-024 L1)", () => {
     expect(rtA.listHistory()).toHaveLength(1);
     expect(rtA.listHistory()[0].id).toBe("run-a");
   });
+
+  it("listHistory filters by sessionId (setSessionId)", async () => {
+    const store = new HistoryStore(tmpHome, "/proj");
+    // sess-1 的 2 条记录
+    await store.append(buildPersistedRecord({
+      id: "run-a", agent: "x", status: "done", mode: "sync",
+      task: "t", startedAt: 1, cwd: "/proj", sessionId: "sess-1",
+    }));
+    await store.append(buildPersistedRecord({
+      id: "run-b", agent: "y", status: "done", mode: "sync",
+      task: "t", startedAt: 2, cwd: "/proj", sessionId: "sess-1",
+    }));
+    // sess-2 的 1 条记录
+    await store.append(buildPersistedRecord({
+      id: "run-c", agent: "z", status: "done", mode: "sync",
+      task: "t", startedAt: 3, cwd: "/proj", sessionId: "sess-2",
+    }));
+
+    const rt = new SubagentRuntime({ cwd: "/proj", homeDir: tmpHome, agentDir: "/tmp/.pi/agent" });
+    rt["_history"] = store;
+
+    // 未设置 sessionId → 不过滤（返回全部，含无 sessionId 的旧记录）
+    expect(rt.listHistory()).toHaveLength(3);
+
+    // 设置 sess-1 → 只返回 sess-1 的记录
+    rt.setSessionId("sess-1");
+    const sess1Records = rt.listHistory();
+    expect(sess1Records).toHaveLength(2);
+    expect(sess1Records.map((r) => r.id).sort()).toEqual(["run-a", "run-b"]);
+
+    // 切到 sess-2 → /resume /fork /new 场景
+    rt.setSessionId("sess-2");
+    expect(rt.listHistory()).toHaveLength(1);
+    expect(rt.listHistory()[0].id).toBe("run-c");
+  });
 });
