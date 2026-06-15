@@ -37,12 +37,13 @@
     {
       "id": "TC-2-03",
       "type": "integration",
-      "title": "skill-registry.ts 能扫描 scoped npm packages",
-      "description": "验证 scanNpmBundledSkills 处理了 @scope/pkg/skills 两级目录结构，并在开发机上验证可发现 scoped skills",
+      "title": "skill-registry 从 system prompt 解析 skill 名称",
+      "description": "验证 extractSkillNames 限定 <skill> 父元素内匹配 <name>，不误抓 tool/agent 的 <name>；isValidSkillName 在 systemPrompt 为空时 fail-open",
       "steps": [
-        "Read skill-registry.ts source",
-        "Assert scoped package handling exists (startsWith('@') + scoped comment)",
-        "Verify scoped skills discoverable on dev machine"
+        "import { extractSkillNames, isValidSkillName } from skill-registry",
+        "Assert extractSkillNames 解析 <available_skills> 块中的 <skill><name>",
+        "Assert tool/agent 的 <name> 不被误判为 skill",
+        "Assert isValidSkillName(name, undefined) === true (fail-open)"
       ]
     },
     {
@@ -57,16 +58,14 @@
     {
       "id": "TC-3-02",
       "type": "integration",
-      "title": "终态不可转换",
-      "description": "completed/recorded/cancelled/abandoned 都不可转出",
+      "title": "终态不可转换（completed/recorded/cancelled）",
+      "description": "completed/recorded/cancelled 是终态，不可转出。注：abandoned 非终态（可恢复），在 TC-3-05 验证",
       "steps": [
         "Call canTransition('completed', 'error')",
         "Assert false",
         "Call canTransition('recorded', 'loaded')",
         "Assert false",
         "Call canTransition('cancelled', 'completed')",
-        "Assert false",
-        "Call canTransition('abandoned', 'completed')",
         "Assert false"
       ]
     },
@@ -95,14 +94,21 @@
     {
       "id": "TC-3-05",
       "type": "integration",
-      "title": "abandoned 是纯系统终态",
-      "description": "abandoned 是终态、不可转出、不在 ALLOWED_TRANSITIONS 的 from 中",
+      "title": "abandoned 非终态，可被恢复",
+      "description": "abandoned 是系统自动标记的超时状态，但非终态——agent 可手动恢复到 completed/error/cancelled/recorded。恢复时重置 lastRemindAtTurn 和 errorCount（见 TC-7-03）",
       "steps": [
         "Call isTerminalStatus('abandoned')",
+        "Assert false",
+        "Call isResumableStatus('abandoned')",
         "Assert true",
         "Call canTransition('abandoned', 'completed')",
-        "Assert false",
-        "Assert 'abandoned' not in ALLOWED_TRANSITIONS keys"
+        "Assert true",
+        "Call canTransition('abandoned', 'error')",
+        "Assert true",
+        "Call canTransition('abandoned', 'cancelled')",
+        "Assert true",
+        "Call canTransition('abandoned', 'recorded')",
+        "Assert true"
       ]
     },
     {
@@ -169,6 +175,40 @@
       "steps": [
         "Read core.ts reconstructState section",
         "Assert abandonThreshold check exists in reconstructState"
+      ]
+    },
+    {
+      "id": "TC-7-03",
+      "type": "integration",
+      "title": "abandoned 恢复重置 lastRemindAtTurn + errorCount",
+      "description": "从 abandoned 转到其他状态时，lastRemindAtTurn 重置为 currentTurnIndex（避免立即再次 remind），errorCount 重置为 0（abandoned 是超时放弃，恢复视为新执行周期）",
+      "steps": [
+        "构造 status=abandoned, lastRemindAtTurn=5, errorCount=3 的 item",
+        "执行 update action: status → completed",
+        "Assert item.lastRemindAtTurn === currentTurnIndex",
+        "Assert item.errorCount === 0"
+      ]
+    },
+    {
+      "id": "TC-7-04",
+      "type": "integration",
+      "title": "deserializeState 过滤旧 dismissed item",
+      "description": "旧 session 数据中含已废弃的 dismissed 状态，反序列化时丢弃，不复活为 loaded",
+      "steps": [
+        "构造 items: [{status:'loaded'}, {status:'dismissed'}, {status:'completed'}]",
+        "Call deserializeState(data)",
+        "Assert 返回的 items 不含 dismissed 的条目"
+      ]
+    },
+    {
+      "id": "TC-7-05",
+      "type": "integration",
+      "title": "createItem nextId 递增不重不漏",
+      "description": "连续 createItem 产生递增 id，start 路径同名去重（主动模式已加 existing 检查）",
+      "steps": [
+        "连续两次 createItem",
+        "Assert id=1, id=2（递增）",
+        "Assert items.length === 2"
       ]
     }
   ]

@@ -1,117 +1,57 @@
 /**
  * Skill 名称注册表 — 用于 use_skill(start) 的 name 校验。
  *
- * Extension 拿不到 Pi 的 resourceLoader.getSkills()，通过独立扫描
- * 已知 skills 目录 + system prompt fallback 实现。
+ * 单一来源：Pi 在 system prompt 中注入的 `<available_skills>` 块。
+ * 这是 Pi 加载完所有 skill（user/project/npm/path + 冲突去重）后生成的
+ * 权威清单，等价于 Pi 内部 `formatSkillsForPrompt()` 的输出。
+ *
+ * 设计取舍：
+ *  - 不扫目录 —— Pi 的扫描源（~/.pi/agent/skills、~/.agents/skills、
+ *    cwd/.agents/skills、cwd 向上到 git root、npm node_modules...）
+ *    在不断演进，本地复刻必然滞后。
+ *  - 不读 frontmatter —— `<name>` 已由 Pi 校验过（小写/数字/连字符）。
+ *  - XML 反转义 —— Pi 的 escapeXml 会把 & < > " ' 转义，解析时需还原。
  */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-
-const NPM_SKILLS_GLOB_ROOT = join(
-  homedir(),
-  ".pi/agent/npm/node_modules",
-);
-
-/** 扫描用户级 skills 目录（直接子目录 = skill name） */
-function scanDirectChildren(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  try {
-    return readdirSync(dir).filter((name) => {
-      const fullPath = join(dir, name);
-      return statSync(fullPath).isDirectory();
-    });
-  } catch {
-    return [];
-  }
-}
-
-/** 扫描 npm bundled skills：处理两种 npm 目录结构
- *  - unscoped: node_modules/{pkg}/skills/*
- *  - scoped:   node_modules/@{scope}/{pkg}/skills/*
- */
-function scanNpmBundledSkills(): string[] {
-  if (!existsSync(NPM_SKILLS_GLOB_ROOT)) return [];
-  const names: string[] = [];
-  try {
-    for (const entry of readdirSync(NPM_SKILLS_GLOB_ROOT)) {
-      const entryPath = join(NPM_SKILLS_GLOB_ROOT, entry);
-      if (!statSync(entryPath).isDirectory()) continue;
-
-      if (entry.startsWith("@")) {
-        // scoped package：@scope 下每个子包可能有 skills
-        for (const subPkg of readdirSync(entryPath)) {
-          const scopedSkillsDir = join(entryPath, subPkg, "skills");
-          if (existsSync(scopedSkillsDir) && statSync(scopedSkillsDir).isDirectory()) {
-            names.push(...scanDirectChildren(scopedSkillsDir));
-          }
-        }
-      } else {
-        // unscoped package：直接在包下找 skills
-        const skillsDir = join(entryPath, "skills");
-        if (existsSync(skillsDir) && statSync(skillsDir).isDirectory()) {
-          names.push(...scanDirectChildren(skillsDir));
-        }
-      }
-    }
-  } catch (e) {
-    // 目录扫描是 best-effort：记录警告后重新抛出让调用方决定是否兑底
-    console.warn(
-      `[skill-registry] npm bundled skills scan failed: ${(e as Error).message}`,
-    );
-    throw e;
-  }
-  return names;
-}
-
-/** 从 system prompt 正则提取 skill 名称（fallback） */
-function extractFromSystemPrompt(systemPrompt: string): string[] {
-  const matches = systemPrompt.matchAll(/<name>([^<]+)<\/name>/g);
-  return Array.from(matches, (m) => m[1].trim());
+/** Pi 的 escapeXml 的逆操作（顺序与 escapeXml 相反，避免双重替换） */
+function decodeXml(str: string): string {
+  return str
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&gt;/g, ">")
+    .replace(/&lt;/g, "<")
+    .replace(/&amp;/g, "&");
 }
 
 /**
- * 扫描已知 skills 目录，返回合法 skill 名称集合。
- * system prompt 作为补充来源（不限于目录扫描零命中）——
- * 目录扫描可能因路径变化、新增 extension 格式等遗漏，system prompt 始终兜底。
+ * 从 system prompt 的 `<available_skills>` 块解析合法 skill 名称。
+ *
+ * 限定在 `<skill>...</skill>` 父元素内匹配 `<name>`，
+ * 避免误捕获 tool/agent 等其他资源中同名的 `<name>` 标签。
  */
-export function scanSkillNames(
-  systemPrompt?: string,
-): Set<string> {
-  const dirs = [
-    join(homedir(), ".pi/agent/skills"),
-    join(process.cwd(), ".agents/skills"),
-  ];
-
+export function extractSkillNames(systemPrompt: string): Set<string> {
   const names = new Set<string>();
-  for (const dir of dirs) {
-    for (const name of scanDirectChildren(dir)) {
-      names.add(name);
-    }
+  // 匹配每个 <skill>...</skill> 块内的 <name>...</name>
+  const skillBlockRe = /<skill>\s*<name>([^<]+)<\/name>/g;
+  for (const match of systemPrompt.matchAll(skillBlockRe)) {
+    const raw = match[1].trim();
+    if (raw) names.add(decodeXml(raw));
   }
-  for (const name of scanNpmBundledSkills()) {
-    names.add(name);
-  }
-
-  // 补充：从 system prompt 提取（始终执行，不限于目录扫描零命中）
-  if (systemPrompt) {
-    for (const name of extractFromSystemPrompt(systemPrompt)) {
-      names.add(name);
-    }
-  }
-
   return names;
 }
 
 /**
- * 校验 skill 名称是否合法。
- * 先查缓存的目录扫描结果；无缓存时实时扫描。
+ * 校验 skill 名称是否合法（即出现在 Pi 的 available_skills 清单中）。
+ *
+ * systemPrompt 为空（SDK 未注入 / 测试环境）时 fail-open 返回 true，
+ * 避免阻塞 tool execute —— 宁可放过，不可误杀。
  */
 export function isValidSkillName(
   name: string,
   systemPrompt?: string,
 ): boolean {
-  const knownNames = scanSkillNames(systemPrompt);
-  return knownNames.has(name);
+  if (!name) return false;
+  // fail-open：拿不到 system prompt 时放行，交由后续行为（steering/超时）兜底
+  if (!systemPrompt) return true;
+  return extractSkillNames(systemPrompt).has(name);
 }

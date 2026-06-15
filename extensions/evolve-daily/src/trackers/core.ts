@@ -53,6 +53,28 @@ function isStaleContextError(error: unknown): boolean {
   return STALE_CONTEXT_PATTERNS.some((p) => msg.includes(p));
 }
 
+/** 是否仍需在上下文中保留（非终态，含 abandoned 因为它可被恢复） */
+function isActive<TMeta>(item: TrackedItem<TMeta>): boolean {
+  return !isTerminalStatus(item.status);
+}
+
+/** 将超过 abandonThreshold 的非终态 item 标记为 abandoned，返回是否有变更 */
+function markStaleItemsAbandoned<TMeta>(
+  state: TrackerRuntimeState<TMeta>,
+  abandonThreshold: number,
+): boolean {
+  let changed = false;
+  for (const item of state.items) {
+    if (!isResumableStatus(item.status)) continue;
+    const turnsSinceLoad = state.currentTurnIndex - item.loadedAtTurn;
+    if (turnsSinceLoad >= abandonThreshold) {
+      item.status = "abandoned";
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 // ── Tool execute/render param types ──────────────────
 
 type RenderOptions = { expanded?: boolean };
@@ -214,128 +236,183 @@ type CreateItemFn<TMeta> = (
 ) => TrackedItem<TMeta>;
 type PersistFn = (ctx: ExtensionContext) => void;
 
-async function executeTrackerAction<TMeta>(
+/** executeTrackerAction 的运行时依赖打包（减少参数个数） */
+interface TrackerActionContext<TMeta> {
+  state: TrackerRuntimeState<TMeta>;
+  config: TrackerConfig<TMeta>;
+  pi: ExtensionAPI;
+  createItem: CreateItemFn<TMeta>;
+  persistState: PersistFn;
+}
+
+/** 构造错误返回值的 helper（统一 details.error 填充，避免重复） */
+function errorResult<TMeta>(
+  action: TrackerDetails<TMeta>["action"],
+  message: string,
+  dep: { state: TrackerRuntimeState<TMeta>; name: string },
+): ToolResult {
+  return {
+    content: [{ type: "text" as const, text: message }],
+    details: {
+      action,
+      items: [...dep.state.items],
+      trackerName: dep.name,
+      error: message,
+    } satisfies TrackerDetails<TMeta>,
+    isError: true,
+  };
+}
+
+async function handleStart<TMeta>(
   params: Static<typeof TrackerParams>,
   ctx: ExtensionContext,
-  state: TrackerRuntimeState<TMeta>,
-  config: TrackerConfig<TMeta>,
-  pi: ExtensionAPI,
-  createItem: CreateItemFn<TMeta>,
-  persistState: PersistFn,
+  dep: TrackerActionContext<TMeta>,
 ): Promise<ToolResult> {
-  // ── start ──
-  if (params.action === "start") {
-    if (!config.triggerTool) {
-      return {
-        content: [{ type: "text" as const, text: "start action not supported by this tracker" }],
-        details: undefined,
-        isError: true,
-      };
-    }
-    const skillName = params.name as string | undefined;
-    if (!skillName) {
-      return { content: [{ type: "text" as const, text: "start requires name parameter" }], details: undefined, isError: true };
-    }
+  const { state, config, pi, createItem } = dep;
+  if (!config.triggerTool) {
+    return errorResult("start", "start action not supported by this tracker", { state, name: config.name });
+  }
+  const skillName = params.name;
+  if (!skillName) {
+    return errorResult("start", "start requires name parameter", { state, name: config.name });
+  }
 
-    // name 校验（含 system prompt fallback）
-    const getPrompt = (ctx as { getSystemPrompt?: () => string }).getSystemPrompt;
-    const systemPrompt = typeof getPrompt === "function" ? getPrompt() : undefined;
-    if (!isValidSkillName(skillName, systemPrompt)) {
-      return { content: [{ type: "text" as const, text: `skill "${skillName}" not found` }], details: undefined, isError: true };
-    }
+  // name 校验：从 system prompt 的 <available_skills> 块查
+  const systemPrompt = ctx.getSystemPrompt();
+  if (!isValidSkillName(skillName, systemPrompt)) {
+    return errorResult("start", `skill "${skillName}" not found`, { state, name: config.name });
+  }
 
-    const match = config.triggerTool.extractMeta(params);
-    const newItem = createItem(match, ctx);
-    await pi.sendUserMessage(config.steering.onCreate(newItem), {
-      deliverAs: "steer",
-    });
+  const match = config.triggerTool.extractMeta(params);
 
+  // 去重：同名 skill 仍处于非终态时不重复创建，与被动 handler 行为一致
+  const existing = state.items.find(
+    (item) => item.name === match.name && isActive(item),
+  );
+  if (existing) {
     return {
-      content: [{ type: "text" as const, text: `Tracking started: #${newItem.id} "${newItem.name}". Call ${config.toolName}(action=update, id=${newItem.id}, status=completed) when done.` }],
-      details: {
-        action: "start",
-        items: [...state.items],
-        trackerName: config.name,
-        createdId: newItem.id,
-      } satisfies TrackerDetails<TMeta>,
+      content: [{ type: "text" as const, text: `Skill "${match.name}" is already tracked as #${existing.id} (status=${existing.status}). Use ${config.toolName}(action=update, id=${existing.id}, ...) to update it.` }],
+      details: { action: "start" as const, items: [...state.items], trackerName: config.name, createdId: existing.id } satisfies TrackerDetails<TMeta>,
     };
   }
 
-  // ── list ──
-  if (params.action === "list") {
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: formatItemList(state.items, config.name),
-        },
-      ],
-      details: {
-        action: "list",
-        items: [...state.items],
-        trackerName: config.name,
-      } satisfies TrackerDetails<TMeta>,
-    };
-  }
+  const newItem = createItem(match, ctx);
+  await pi.sendUserMessage(config.steering.onCreate(newItem), { deliverAs: "steer" });
 
-  // ── update ──
-  const updateId = params.id as number | undefined;
-  const updateStatus = params.status as string | undefined;
+  return {
+    content: [{ type: "text" as const, text: `Tracking started: #${newItem.id} "${newItem.name}". Call ${config.toolName}(action=update, id=${newItem.id}, status=completed) when done.` }],
+    details: { action: "start", items: [...state.items], trackerName: config.name, createdId: newItem.id } satisfies TrackerDetails<TMeta>,
+  };
+}
+
+function handleList<TMeta>(
+  dep: TrackerActionContext<TMeta>,
+): ToolResult {
+  const { state, config } = dep;
+  return {
+    content: [{ type: "text" as const, text: formatItemList(state.items, config.name) }],
+    details: { action: "list", items: [...state.items], trackerName: config.name } satisfies TrackerDetails<TMeta>,
+  };
+}
+
+type UpdateValidation<TMeta> =
+  | { ok: true; item: TrackedItem<TMeta>; updateStatus: TrackedItemStatus }
+  | { ok: false; result: ToolResult };
+
+/** 校验 update 参数 + 状态转换合法性。失败返回 errorResult，成功返回目标 item */
+function validateUpdateParams<TMeta>(
+  params: Static<typeof TrackerParams>,
+  dep: TrackerActionContext<TMeta>,
+): UpdateValidation<TMeta> {
+  const { state, config } = dep;
+  const updateId = params.id;
+  const updateStatus = params.status;
   if (updateId === undefined) {
-    return { content: [{ type: "text", text: "update action requires id parameter" }], details: undefined, isError: true };
+    return { ok: false, result: errorResult("update", "update action requires id parameter", { state, name: config.name }) };
   }
   if (updateStatus === undefined) {
-    return { content: [{ type: "text", text: "update action requires status parameter" }], details: undefined, isError: true };
+    return { ok: false, result: errorResult("update", "update action requires status parameter", { state, name: config.name }) };
   }
-
-  const itemIndex = state.items.findIndex(
-    (item) => item.id === updateId,
-  );
-  if (itemIndex === -1) {
-    return { content: [{ type: "text", text: `TrackedItem id=${updateId} not found` }], details: undefined, isError: true };
+  const item = state.items.find((it) => it.id === updateId);
+  if (!item) {
+    return { ok: false, result: errorResult("update", `TrackedItem id=${updateId} not found`, { state, name: config.name }) };
   }
-
-  const item = state.items[itemIndex];
-  if (!canTransition(item.status, updateStatus as TrackedItemStatus)) {
-    return { content: [{ type: "text", text: `Invalid transition: ${item.status} → ${updateStatus} (current: ${item.status}, terminal states are immutable or path not allowed)` }], details: undefined, isError: true };
+  if (!canTransition(item.status, updateStatus)) {
+    return { ok: false, result: errorResult("update", `Invalid transition: ${item.status} → ${updateStatus} (current: ${item.status}, terminal states are immutable or path not allowed)`, { state, name: config.name }) };
   }
+  return { ok: true, item, updateStatus };
+}
 
+/** 处理 error 状态的 errorCount 递增 + onError steering（达到阈值时触发） */
+async function handleOnErrorThreshold<TMeta>(
+  item: TrackedItem<TMeta>,
+  updateStatus: TrackedItemStatus,
+  dep: TrackerActionContext<TMeta>,
+): Promise<void> {
+  if (updateStatus !== "error") return;
+  item.errorCount += 1;
+  if (item.errorCount >= dep.config.errorThreshold) {
+    await dep.pi.sendUserMessage(dep.config.steering.onError(item), { deliverAs: "steer" });
+  }
+}
+
+/** 应用状态转换 + side effects（remind/errorCount 重置、onError steering、持久化） */
+async function applyUpdate<TMeta>(
+  item: TrackedItem<TMeta>,
+  updateStatus: TrackedItemStatus,
+  detail: string | undefined,
+  ctx: ExtensionContext,
+  dep: TrackerActionContext<TMeta>,
+): Promise<ToolResult> {
+  const { state, config, persistState } = dep;
   const fromAbandoned = item.status === "abandoned";
-  // 执行转换
-  item.status = updateStatus as TrackedItemStatus;
-  item.detail = (params.detail as string | undefined | null) ?? item.detail;
+  item.status = updateStatus;
+  item.detail = detail ?? item.detail;
 
-  // 从 abandoned 恢复时重置 lastRemindAtTurn，避免立即再次 remind
+  // 从 abandoned 恢复：重置 remind 计时 + errorCount（超时放弃≠新错误，恢复视为新周期）
   if (fromAbandoned) {
     item.lastRemindAtTurn = state.currentTurnIndex;
+    item.errorCount = 0;
   }
 
-  if (updateStatus === "error") {
-    item.errorCount += 1;
-    if (item.errorCount >= config.errorThreshold) {
-      await pi.sendUserMessage(config.steering.onError(item), {
-        deliverAs: "steer",
-      });
-    }
-  }
-
+  await handleOnErrorThreshold(item, updateStatus, dep);
   persistState(ctx);
 
   const statusText = isTerminalStatus(item.status) ? " (terminal)" : "";
   return {
-    content: [
-      {
-        type: "text" as const,
-        text: `TrackedItem #${item.id} "${item.name}" → ${item.status}${statusText}`,
-      },
-    ],
-    details: {
-      action: "update",
-      items: [...state.items],
-      trackerName: config.name,
-      updatedId: item.id,
-    } satisfies TrackerDetails<TMeta>,
+    content: [{ type: "text" as const, text: `TrackedItem #${item.id} "${item.name}" → ${item.status}${statusText}` }],
+    details: { action: "update", items: [...state.items], trackerName: config.name, updatedId: item.id } satisfies TrackerDetails<TMeta>,
   };
+}
+
+async function handleUpdate<TMeta>(
+  params: Static<typeof TrackerParams>,
+  ctx: ExtensionContext,
+  dep: TrackerActionContext<TMeta>,
+): Promise<ToolResult> {
+  const validation = validateUpdateParams(params, dep);
+  if (!validation.ok) return validation.result;
+  return applyUpdate(validation.item, validation.updateStatus, params.detail, ctx, dep);
+}
+
+async function executeTrackerAction<TMeta>(
+  params: Static<typeof TrackerParams>,
+  ctx: ExtensionContext,
+  dep: TrackerActionContext<TMeta>,
+): Promise<ToolResult> {
+  switch (params.action) {
+    case "start":
+      return handleStart(params, ctx, dep);
+    case "list":
+      return handleList(dep);
+    case "update":
+      return handleUpdate(params, ctx, dep);
+    default:
+      return errorResult("list", `Unknown action: ${params.action}`, {
+        state: dep.state,
+        name: dep.config.name,
+      });
+  }
 }
 
 // ── 工厂函数 ────────────────────────────────────────
@@ -454,18 +531,10 @@ export function createTracker<TMeta>(
     state.currentTurnIndex = turnCount;
 
     // 检查超时 item（compact/reload 后立即清理，不等下一个 turn_end）
-    for (const item of state.items) {
-      if (!isResumableStatus(item.status)) continue;
-      const turnsSinceLoad = state.currentTurnIndex - item.loadedAtTurn;
-      if (turnsSinceLoad >= config.abandonThreshold) {
-        item.status = "abandoned";
-      }
-    }
+    markStaleItemsAbandoned(state, config.abandonThreshold);
 
-    // 过滤终态 item。abandoned 允许被恢复，不视为终态，因此保留
-    state.items = state.items.filter(
-      (item) => !isTerminalStatus(item.status) || item.status === "abandoned",
-    );
+    // 过滤终态 item。abandoned 非终态（可被恢复），自动保留
+    state.items = state.items.filter((item) => isActive(item));
   }
 
   // ── Event: session_start / session_tree ────────────
@@ -475,9 +544,7 @@ export function createTracker<TMeta>(
     ctx: ExtensionContext,
   ): Promise<void> => {
     reconstructState(ctx);
-    const activeItems = state.items.filter(
-      (item) => !isTerminalStatus(item.status) || item.status === "abandoned",
-    );
+    const activeItems = state.items.filter((item) => isActive(item));
     if (activeItems.length > 0) {
       await pi.sendUserMessage(
         config.steering.onContextRestore(activeItems),
@@ -491,11 +558,12 @@ export function createTracker<TMeta>(
   // ── Event: triggerEvent（仅当配置了被动触发时才注册）──
 
   if (config.triggerEvent && config.triggerMatch) {
+    const { triggerMatch, triggerEvent } = config;
     (pi as unknown as PiOnAny).on(
-      config.triggerEvent,
+      triggerEvent,
       async (event, nextCtx) => {
         const ctx = nextCtx as ExtensionContext;
-        const match = config.triggerMatch!(event, ctx);
+        const match = triggerMatch(event, ctx);
         if (!match) return;
 
         // 被动模式下去重：可恢复/非终态同名 item 存在时不重复创建
@@ -529,15 +597,10 @@ export function createTracker<TMeta>(
 
       let needsPersist = false;
       // abandoned 检查（先于 remind——即将 abandon 的 item 不再发 remind）
+      needsPersist = markStaleItemsAbandoned(state, config.abandonThreshold);
       for (const item of state.items) {
-        if (!isResumableStatus(item.status)) continue;
-        const turnsSinceLoad = state.currentTurnIndex - item.loadedAtTurn;
-        if (turnsSinceLoad >= config.abandonThreshold) {
-          item.status = "abandoned";
-          needsPersist = true;
-        }
-      }
-      for (const item of state.items) {
+        // abandoned 已超时放弃，不再 remind（仅保留可恢复性供 agent 收尾）
+        if (item.status === "abandoned") continue;
         if (!isResumableStatus(item.status)) continue;
 
         const turnsSinceLoad =
@@ -567,9 +630,7 @@ export function createTracker<TMeta>(
   // ── Event: before_agent_start ──────────────────────
 
   pi.on("before_agent_start", async () => {
-    const activeItems = state.items.filter(
-      (item) => !isTerminalStatus(item.status) || item.status === "abandoned",
-    );
+    const activeItems = state.items.filter((item) => isActive(item));
     if (activeItems.length === 0) return undefined;
 
     return {
@@ -624,11 +685,7 @@ export function createTracker<TMeta>(
       executeTrackerAction(
         params,
         ctx,
-        state,
-        config,
-        pi,
-        createItem,
-        persistState,
+        { state, config, pi, createItem, persistState },
       ),
 
     renderCall(

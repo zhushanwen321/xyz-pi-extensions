@@ -88,8 +88,8 @@ export const skillExecutionConfig: TrackerConfig<SkillMeta> = {
   // 主动声明模式：不配 triggerEvent，配 triggerTool
   triggerTool: {
     extractMeta: (params) => {
-      const name = params.name as string;
-      const path = params.path as string | undefined;
+      const name = typeof params.name === "string" ? params.name : "";
+      const path = typeof params.path === "string" ? params.path : undefined;
       return {
         name,
         metadata: { skillMdPath: path ?? "" } satisfies SkillMeta,
