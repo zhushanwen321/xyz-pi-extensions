@@ -137,4 +137,24 @@ describe("resolveModelForAgent", () => {
     });
     expect(result.thinkingLevel).toBe("xhigh");
   });
+
+  // Round 6 MF#2: 当 session 覆盖（per-agent/per-category/category-default）的 model
+  // 不可用时，回退到 agent frontmatter model。mergeConfig 返回非 "agent-default"
+  // 的 source 且该 model 不可用 → resolveModelForAgent 应在 candidate 链中加入
+  // agentConfig.model（source="agent-default"）并命中。
+  it("falls back to agent frontmatter model when session override is unavailable", () => {
+    const registry = makeRegistry({
+      "avail/y": {},
+    });
+    const result = resolveModelForAgent({
+      agentName: "worker",
+      agentConfig: { name: "worker", systemPrompt: "", source: "builtin", model: "avail/y" },
+      category: "nonexistent",
+      globalConfig: baseConfig,
+      sessionState: { yoloMode: false, perAgent: { worker: { model: "unavail/x" } }, perCategory: {} },
+      modelRegistry: registry as never,
+    });
+    expect(result.model.id).toBe("y");
+    expect(result.source).toBe("agent-default");
+  });
 });

@@ -141,4 +141,20 @@ describe("SubagentRuntime — restoreFromEntries round-trip (FR-4.7.1)", () => {
     expect(data).toBeTypeOf("object");
     expect(data).toHaveProperty("yoloMode", true);
   });
+
+  // Round 6 MF#1: 一次 session 内多次状态变更 → persistState() 每次追加完整快照。
+  // restoreFromEntries 必须恢复最新快照（倒序遍历），而非最旧（正序 + break 命中首个）。
+  // 此前 bug：正序遍历命中第一个=最旧，后续变更全部丢失。
+  it("restores the LATEST snapshot when multiple model-state entries exist (Round 6 MF#1)", () => {
+    const rt = makeRuntime();
+    // 构造两个 entry：旧快照 yolo=false，新快照 yolo=true
+    const entries: unknown[] = [
+      { type: "custom", customType: "subagent-model-state", data: { yoloMode: false, perAgent: { worker: { model: "old/m" } }, perCategory: {} } },
+      { type: "custom", customType: "subagent-model-state", data: { yoloMode: true, perAgent: { worker: { model: "new/m" } }, perCategory: {} } },
+    ];
+    (rt as unknown as { restoreFromEntries(entries: unknown[]): void }).restoreFromEntries(entries);
+    // 必须恢复最新（第二个 entry）
+    expect(rt.sessionState.yoloMode).toBe(true);
+    expect(rt.sessionState.perAgent.worker.model).toBe("new/m");
+  });
 });

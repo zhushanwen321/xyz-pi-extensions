@@ -460,6 +460,34 @@ describe("merge window (FR-O1.5)", () => {
     // 二次 dispose 不抛错
     expect(() => rt.dispose()).not.toThrow();
   });
+
+  // Round 6 MF#3: revive() 是 dispose() 的反操作。/resume /fork /new 在同进程内
+  // 先 session_shutdown(A)→dispose() 再 session_start(B) 注入新 pi 后复活 runtime。
+  // 不复活则 notifyBgCompletion 顶部 `if (this._disposed) return;` 短路，所有
+  // background 完成通知在第一次 session 切换后整体失效。
+  it("revive() restores notifyBgCompletion after dispose (Round 4 MF3)", () => {
+    const rt = makeRuntime();
+    // 首个通知立即发送
+    rt.notifyBgCompletion({
+      id: "bg-revive-1", status: "done", agent: "worker",
+      result: { text: "first" } as AgentResult, startedAt: 1000,
+    });
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1);
+    // dispose → 后续通知短路
+    rt.dispose();
+    rt.notifyBgCompletion({
+      id: "bg-revive-2", status: "done", agent: "worker",
+      result: { text: "short-circuited" } as AgentResult, startedAt: 1000,
+    });
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1); // 仍 1，被短路
+    // revive → 通知恢复正常发送
+    rt.revive();
+    rt.notifyBgCompletion({
+      id: "bg-revive-3", status: "done", agent: "worker",
+      result: { text: "after revive" } as AgentResult, startedAt: 1000,
+    });
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(2); // 恢复后 +1，不再短路
+  });
 });
 
 describe("priority (FR-O4)", () => {

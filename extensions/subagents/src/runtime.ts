@@ -276,10 +276,15 @@ export class SubagentRuntime {
    * 注意：Pi 的 custom entry 形状是 { type: "custom", customType, data }。
    * 此前实现误读 e.type === "subagent-model-state"（永不匹配）。已修复为
    * 读取 customType 字段。
+   *
+   * Round 6 MF#1: 倒序遍历——persistState() 每次追加完整快照，正序 + break
+   * 命中第一个=最旧快照，导致一次 session 内多次改模型/YOLO 后，/resume /fork
+   * /new 或崩溃恢复恢复的是最初状态，后续变更全部丢失。倒序遍历取最新快照，
+   * 与仓库约定一致（goal/coding-workflow/model-switch 读最新 entry 均倒序）。
    */
   restoreFromEntries(entries: unknown[]): void {
-    for (const entry of entries) {
-      const e = entry as { type?: string; customType?: string; data?: unknown };
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i] as { type?: string; customType?: string; data?: unknown };
       if (e.type === "custom" && e.customType === "subagent-model-state" && e.data) {
         const restored = restoreState(e.data, this.globalConfig.yoloByDefault);
         Object.assign(this.sessionState, restored);
