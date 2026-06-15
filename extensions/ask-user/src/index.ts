@@ -21,7 +21,22 @@ export default function (pi: ExtensionAPI): void {
 		],
 		parameters: InputSchema,
 
-		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+		async execute(
+			_toolCallId: string,
+			params: Record<string, unknown>,
+			signal: AbortSignal | undefined,
+			_onUpdate: unknown,
+			ctx: {
+				hasUI: boolean;
+				signal?: AbortSignal;
+				ui: {
+					custom<T = void>(
+						factory: (tui: unknown, theme: unknown, kb: unknown, done: (result: T) => void) => unknown,
+						options?: { overlay?: boolean },
+					): Promise<T>;
+				};
+			},
+		) {
 			const questions = (params as { questions: Question[] }).questions;
 
 			// 1. 参数校验（spec FR-2）→ isError
@@ -40,7 +55,7 @@ export default function (pi: ExtensionAPI): void {
 					pi
 						.getAllTools()
 						.map((t: { name: string }) => t.name)
-						.filter((n) => n !== "ask_user"),
+						.filter((n: string) => n !== "ask_user"),
 				);
 				return {
 					content: [
@@ -66,12 +81,17 @@ export default function (pi: ExtensionAPI): void {
 			let result: Result | null;
 			try {
 				result = await ctx.ui.custom<Result | null>(
-					(tui, theme, _kb, done) => {
+					(tui: unknown, theme: unknown, _kb: unknown, done: (r: Result | null) => void) => {
 						// signal abort 监听（spec FR-10）
 						if (signal) {
 							signal.addEventListener("abort", () => done(null), { once: true });
 						}
-						return new AskUserComponent(questions, tui, theme as unknown as ThemeLike, done);
+						return new AskUserComponent(
+							questions,
+							tui as { requestRender(): void },
+							theme as unknown as ThemeLike,
+							done,
+						);
 					},
 					// 不传 options → inline 渲染（spec FR-3）
 				);
@@ -94,7 +114,7 @@ export default function (pi: ExtensionAPI): void {
 
 			// 6. 正常返回
 			const summary = result.questions.map(
-				(q) => `"${q.question}" = "${result!.answers[q.question] ?? "(no answer)"}"`,
+				(q: Question) => `"${q.question}" = "${result!.answers[q.question] ?? "(no answer)"}"`,
 			);
 			return {
 				content: [{ type: "text" as const, text: summary.join("\n") }],
@@ -102,8 +122,8 @@ export default function (pi: ExtensionAPI): void {
 			};
 		},
 
-		renderCall(args, theme) {
-			const questions = (args.questions ?? []) as Question[];
+		renderCall(args: Record<string, unknown>, theme: ThemeLike) {
+			const questions = ((args.questions as Question[] | undefined) ?? []) as Question[];
 			const topics = questions.map((q) => q.header ?? q.question.slice(0, 12)).join(", ");
 			return new TruncatedText(
 				theme.fg("toolTitle", theme.bold("ask_user ")) + theme.fg("muted", topics),
@@ -112,7 +132,11 @@ export default function (pi: ExtensionAPI): void {
 			) as unknown as Text;
 		},
 
-		renderResult(result, _options, theme) {
+		renderResult(
+			result: { details: unknown },
+			_options: unknown,
+			theme: ThemeLike,
+		) {
 			const details = result.details as Result | { error?: string } | undefined;
 			if (details && "error" in details && details.error) {
 				return new Text(theme.fg("error", `✗ ${details.error}`), 0, 0);
