@@ -116,6 +116,14 @@ declare module "@mariozechner/pi-tui" {
 	export class Text {
 		constructor(text: string, x?: number, y?: number, width?: number);
 	}
+	export class TruncatedText {
+		constructor(text: string, x?: number, y?: number);
+	}
+	export class Box {
+		children: any[];
+		constructor(x?: number, y?: number);
+		addChild(child: any): void;
+	}
 	export class Container {
 		children: any[];
 		constructor(children?: any[]);
@@ -129,7 +137,8 @@ declare module "@mariozechner/pi-tui" {
 	}
 	export class Component {}
 	export function matchesKey(key: any, binding: any): boolean;
-	export function truncateToWidth(text: string, width: number): string;
+	export function truncateToWidth(text: string, maxWidth: number, ellipsis?: string, pad?: boolean): string;
+	export function wrapTextWithAnsi(text: string, width: number): string[];
 	export function visibleWidth(str: string): number;
 	export const Key: {
 		escape: string; up: string; down: string; left: string; right: string;
@@ -154,10 +163,6 @@ declare module "@earendil-works/pi-coding-agent" {
 declare module "@earendil-works/pi-tui" {
 	export * from "@mariozechner/pi-tui";
 	export class MarkdownTheme {}
-	export function matchesKey(key: any, binding: any): boolean;
-	export function truncateToWidth(text: string, width: number): string;
-	export function visibleWidth(str: string): number;
-	export class Component {}
 }
 declare module "@earendil-works/pi-ai" {
 	export * from "@mariozechner/pi-ai";
