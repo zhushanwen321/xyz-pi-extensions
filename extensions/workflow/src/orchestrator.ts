@@ -464,8 +464,7 @@ export class WorkflowOrchestrator {
       this.terminateWorker(runId);
       }
 
-    // 2. Create new instance directly from cached scriptSource
-    //    Bypass getWorkflow() + fs.readFileSync() since we already have the script.
+    // 2. Create new instance directly from cached scriptSource (skip getWorkflow + readFile).
     const newRunId = `wf-${Date.now()}-${Math.random().toString(RUNID_RADIX).slice(RUNID_SLICE_START, RUNID_SLICE_LENGTH)}`;
     const newInstance = createStateInstance({
       runId: newRunId,
@@ -477,6 +476,8 @@ export class WorkflowOrchestrator {
 
     this.instances.set(newRunId, newInstance);
     this.runMetaMap.set(newRunId, { scriptSource, args, budgetTokens, budgetTimeMs });
+    // Round 4 MF#1: create per-run AbortController so executeWithRetry can abort in-flight runAgent on user abort.
+    this.runAbortControllers.set(newRunId, new AbortController());
     this.startWorker(newRunId, newInstance, scriptSource, args);
 
     // 3. Schedule time budget check if needed
