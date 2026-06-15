@@ -101,4 +101,24 @@ describe("validateInput", () => {
 		]);
 		expect(result).toBeNull();
 	});
+
+	// V-12: question 文本超过 QUESTION_MAX_CHARS(1000) 上限
+	it("rejects question text exceeding QUESTION_MAX_CHARS (1000)", () => {
+		const result = validateInput([q({ question: "x".repeat(1001) })]);
+		expect(result).not.toBeNull();
+		expect(result).toContain("1000");
+	});
+
+	// V-13: question 文本恰好 1000 字符（边界值，合法）
+	it("accepts question text at exactly QUESTION_MAX_CHARS (1000)", () => {
+		expect(validateInput([q({ question: "x".repeat(1000) })])).toBeNull();
+	});
+
+	// V-14: question 文本含控制字符（\n \t \r \x00）被拒绝
+	it("rejects question text containing control characters", () => {
+		for (const text of ["line1\nline2", "a\tb", "a\rb", "a\x00b"]) {
+			const result = validateInput([q({ question: text })]);
+			expect(result).toContain("control characters");
+		}
+	});
 });

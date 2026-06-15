@@ -174,6 +174,9 @@ const MAX = $ARGS.maxRounds ?? 10;
 const STUCK_THRESHOLD = 3;
 const SKIP_FALLOW = $ARGS.skipFallow ?? false;
 const state = loadState();
+// disabled 是 intra-run 优化状态，禁止跨 run 持久化：复用 _runId 的新 run 会基于陈旧
+// disabled 跳过 agent → 漏审。每次进程启动重置，skip 仅本次运行有效。
+for (const s of Object.values(state.agentStatus)) s.disabled = false;
 let totalFixed = 0;
 let round = 0;
 let clean = false;
@@ -396,7 +399,9 @@ while (round < MAX) {
   const modifiedFiles = filesAfter.filter((f) => !filesBefore.has(f));
   currentRoundSnapshot.modifiedFiles = modifiedFiles;
   state.rounds.push(currentRoundSnapshot);
-  reactivateAll(state);
+  // S1: 不再无条件 reactivateAll —— 否则每轮 fix 后所有 disabled 被重置，
+  // 单次运行内 disabledSet 永远为空、「连续 2 轮 clean → skip」沦为死逻辑。
+  // 让 disabled 跨 fix 存活，skip 才能真正生效（run 启动时已重置，无跨 run 残留）。
   saveState(state);
 
   log(`Fixed ${fixedCount} issue(s). Total: ${totalFixed}. Modified ${modifiedFiles.length} file(s). Continuing...`);

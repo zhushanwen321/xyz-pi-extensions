@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import factory from "../index";
-import { stubTheme } from "./fixtures";
+import { mockTui, stubTheme } from "./fixtures";
 
 // ── Types for the registered tool ───────────────────────
 interface RegisteredTool {
@@ -212,13 +212,24 @@ describe("execute — signal abort (FR-10 / AC-14)", () => {
 		expect(result.details.cancelled).toBe(true);
 	});
 
-	it("I-9: abort during custom → done(null) → cancelled", async () => {
+	it("I-9: abort during custom → factory registers listener → done(null) → cancelled", async () => {
 		const tool = getTool();
 		const controller = new AbortController();
-		const ctx = makeCtx({ customResult: null }); // simulate done(null) = cancelled
-		ctx.signal = controller.signal;
-		// Abort right after execute starts; custom resolves null
-		setTimeout(() => controller.abort(), 0);
+		// 真正调用 factory，使源码中的 signal.addEventListener("abort", () => done(null)) 被注册。
+		// 此前 mock 直接返回 customResult、从不调用 factory，该 abort 监听器是 dead path。
+		// 现在中断后监听器调用 done(null)，custom 解析为 null → cancelled。
+		const ctx = {
+			hasUI: true,
+			signal: controller.signal,
+			ui: {
+				custom: <T = void>(factory: (...args: unknown[]) => unknown): Promise<T> =>
+					new Promise((resolve) => {
+						const done = (r: T): void => resolve(r);
+						factory(mockTui, stubTheme, {}, done);
+						setTimeout(() => controller.abort(), 0);
+					}),
+			},
+		};
 		const result = await tool.execute("id", validSingle, controller.signal, undefined, ctx);
 		expect(result.details.cancelled).toBe(true);
 	});
