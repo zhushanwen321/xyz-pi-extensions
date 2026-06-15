@@ -280,6 +280,10 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         );
       }
 
+      // FR-9.9: 校验 agent 名存在——不存在则 fail-fast，避免 unknown agent 静默运行为
+      // 无 systemPrompt/toolFilter 的 generic agent（浪费 token + 无错误反馈）。
+      rt.assertAgentExists(params.agent);
+
       // FR-O2.2: 判定 effective wait（显式 params.wait > agent.defaultBackground > 默认 sync）
       let effectiveWait: boolean;
       if (params.wait !== undefined) {

@@ -292,7 +292,7 @@ describe("startBackground eventLog race fix (G-005) + 回注", () => {
     expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("cancel does not double-send notification (runAgent never resolves)", async () => {
+  it("cancel sends a cancelled notification (FR-O1.2)", async () => {
     const rt = makeRuntime();
 
     (rt as unknown as { runAgent: ReturnType<typeof vi.fn> }).runAgent = vi.fn(
@@ -305,9 +305,12 @@ describe("startBackground eventLog race fix (G-005) + 回注", () => {
 
     await new Promise((r) => setTimeout(r, 30));
 
-    // runAgent 永不完成 → 不会走 .then/.catch → notifyBgCompletion 不被调用
-    // cancelBackground 本身也不调 notifyBgCompletion
-    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(0);
+    // FR-O1.2: cancelBackground 通知对话流 cancelled 状态
+    expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1);
+    const sentMsg = (rt.pi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(sentMsg.content).toContain("cancelled");
+    expect(sentMsg.content).toContain("worker");
+    expect(sentMsg.content).toContain(handle.id);
   });
 
   it("failed background sends a failed notification", async () => {

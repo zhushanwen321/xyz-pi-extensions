@@ -760,6 +760,16 @@ export class SubagentRuntime {
     // settled here. Queryable via getBackground(id).
     r._settled = true;
     this.notifyChange();
+    // FR-O1.2: 通知对话流 cancelled 状态（用户主动取消，理应知道结果）。
+    // notifyBgCompletion 内部有 TTL dedup，会拦截后续 .catch 路径的重复通知。
+    // history 不写（_settled 守卫跳过 .catch 的 _history.append）——cancel 是用户意图，不计入执行记录。
+    this.notifyBgCompletion({
+      id: r.id,
+      status: "cancelled",
+      agent: r.state.agent,
+      startedAt: r.startedAt,
+      endedAt: r.endedAt,
+    });
     // Round 5 SUG#1 + Must-fix #2: cancel 不写 history——.then/.catch 检测到
     // _settled 后同样跳过 onComplete/events/history。用户主动取消的 task 不计入
     // 执行记录（避免 cancel + runAgent 完成路径双写 history 的 race）。
@@ -806,6 +816,14 @@ export class SubagentRuntime {
     if (!name) return undefined;
     this.agentRegistry.discoverAll(this.builtinRegistry);
     return this.agentRegistry.get(name);
+  }
+
+  /** 校验 agent 名是否存在。不存在则抛错（含已发现 agent 列表）。
+   *  用于 tool 层 fail-fast，避免 unknown agent 静默运行为无 systemPrompt 的 generic agent。 */
+  assertAgentExists(name?: string): void {
+    if (!name) return; // undefined agent = 用默认
+    this.agentRegistry.discoverAll(this.builtinRegistry);
+    this.agentRegistry.get(name, true);
   }
 
   /**

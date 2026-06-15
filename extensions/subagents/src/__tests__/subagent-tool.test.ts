@@ -64,6 +64,7 @@ interface MockRuntime {
   getBackground: ReturnType<typeof vi.fn>;
   getAgentConfig: ReturnType<typeof vi.fn>;
   resolveModelForAgent: ReturnType<typeof vi.fn>;
+  assertAgentExists: ReturnType<typeof vi.fn>;
 }
 
 // ============================================================
@@ -93,6 +94,8 @@ function makeMockRuntime(overrides: Partial<MockRuntime> = {}): MockRuntime {
     getAgentConfig: overrides.getAgentConfig ?? vi.fn(() => undefined),
     // FR-O3.1a: 默认返回 mock ResolvedModel（显式 model 校验通过）
     resolveModelForAgent: overrides.resolveModelForAgent ?? vi.fn(() => ({ model: { id: "anthropic/claude-sonnet-4.5" }, thinkingLevel: "medium" })),
+    // FR-9.9: 默认 no-op（agent 名校验通过）。测试可 override 为 throw。
+    assertAgentExists: overrides.assertAgentExists ?? vi.fn(),
   };
 }
 
@@ -340,6 +343,25 @@ describe("subagent tool execute()", () => {
 
     const tool = captureTool();
     await expect(tool.execute("call-7", {})).rejects.toThrow(/task.*required|required.*task/i);
+  });
+
+  // ── 场景 7b: unknown agent → fail-fast ─────────────────
+  it("unknown agent throws 'not found' before running", async () => {
+    const mockRt = makeMockRuntime({
+      assertAgentExists: vi.fn(() => {
+        throw new Error('Agent "ghost-agent-not-exist" not found. Discovered: worker, scout');
+      }),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    await expect(
+      tool.execute("call-7b", { task: "do something", agent: "ghost-agent-not-exist" }),
+    ).rejects.toThrow(/not found/i);
+
+    // runAgent 不应被调用（fail-fast 在 runAgent 之前）
+    expect(mockRt.runAgent).not.toHaveBeenCalled();
+    expect(mockRt.startBackground).not.toHaveBeenCalled();
   });
 
   // ── 场景 8: runtime 未初始化 ────────────────────────────
