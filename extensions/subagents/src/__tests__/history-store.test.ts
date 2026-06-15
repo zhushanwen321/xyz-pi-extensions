@@ -170,6 +170,17 @@ describe("HistoryStore — ADR-024 L1", () => {
     expect(records[0].sessionFile).toBe("2026-06-14T10-00-00-000Z_abc.jsonl");
   });
 
+  it("model + thinkingLevel round-trip", async () => {
+    const store = makeStore();
+    await store.append(makeRecord({
+      model: "anthropic/claude-sonnet-4.5",
+      thinkingLevel: "high",
+    }));
+    const records = store.read();
+    expect(records[0].model).toBe("anthropic/claude-sonnet-4.5");
+    expect(records[0].thinkingLevel).toBe("high");
+  });
+
   // ── FR-O1.6: 双写去重（cancelBackground 写 cancelled + runAgent catch 写 failed）──
   it("recent() dedupes by id, keeping latest endedAt (cancelled wins on tie)", async () => {
     const store = makeStore();

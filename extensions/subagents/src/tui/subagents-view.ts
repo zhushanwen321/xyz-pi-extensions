@@ -43,6 +43,8 @@ export interface SubagentRecord {
   mode?: "sync" | "background";
   /** model 信息（详情区显示） */
   model?: string;
+  /** thinking level（详情区显示） */
+  thinkingLevel?: string;
 }
 
 export interface ViewState {
@@ -272,8 +274,12 @@ function renderRightColumn(
     ? formatDuration(record.endedAt - record.startedAt)
     : formatDuration(Date.now() - record.startedAt);
   lines.push(`${statusIcon(record.status, theme)} ${statusLabel(record.status, theme)} · ${record.agent}`);
-  if (record.model) {
-    lines.push(theme.fg("dim", record.model));
+  // model + thinking level（借鉴 subagent-render 的 meta 括号分组）
+  const metaParts: string[] = [];
+  if (record.model) metaParts.push(record.model);
+  if (record.thinkingLevel) metaParts.push(`thinking ${record.thinkingLevel}`);
+  if (metaParts.length > 0) {
+    lines.push(theme.fg("dim", `(${metaParts.join(" · ")})`));
   }
 
   // stats 行
@@ -597,6 +603,7 @@ function getAllRecords(runtime: SubagentRuntime): SubagentRecord[] {
     startedAt: a.startedAt,
     endedAt: a.endedAt,
     model: a.model,
+    thinkingLevel: a.thinkingLevel,
   }));
   const bgRecords: SubagentRecord[] = runtime.listBackground().map((b) => ({
     id: b.id,
@@ -610,6 +617,8 @@ function getAllRecords(runtime: SubagentRuntime): SubagentRecord[] {
     result: b.result,
     error: b.error,
     mode: "background" as const,
+    model: b.model,
+    thinkingLevel: b.thinkingLevel,
   }));
   const completedRecords: SubagentRecord[] = runtime.listCompleted().map((c: CompletedAgentRecord) => ({
     id: c.id,
@@ -622,6 +631,8 @@ function getAllRecords(runtime: SubagentRuntime): SubagentRecord[] {
     endedAt: c.endedAt,
     result: c.result,
     error: c.error,
+    model: c.model,
+    thinkingLevel: c.thinkingLevel,
   }));
   // ADR-024 L1: 跨进程历史记录（listHistory 内部已按当前 sessionId 过滤）
   const HISTORY_LIST_LIMIT = 100;
@@ -637,6 +648,8 @@ function getAllRecords(runtime: SubagentRuntime): SubagentRecord[] {
     error: h.error ?? h.resultPreview,
     sessionFile: h.sessionFile,
     mode: h.mode,
+    model: h.model,
+    thinkingLevel: h.thinkingLevel,
   }));
   return collectRecords(widgetRecords, bgRecords, completedRecords, historyRecords);
 }

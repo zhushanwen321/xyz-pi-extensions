@@ -191,6 +191,10 @@ export interface BackgroundStatus extends BackgroundHandle {
   turns?: number;
   /** live token count（running 时累积，供 poll 路径展示） */
   totalTokens?: number;
+  /** "provider/modelId"（详情区展示） */
+  model?: string;
+  /** thinking level（详情区展示） */
+  thinkingLevel?: string;
 }
 
 /**
@@ -235,6 +239,10 @@ export interface PersistedAgentRecord {
   cwd: string;
   /** 当前 session id（/subagents list 按此过滤，仅显示当前 session 的记录） */
   sessionId?: string;
+  /** "provider/modelId"（详情区展示） */
+  model?: string;
+  /** thinking level（详情区展示） */
+  thinkingLevel?: string;
 }
 
 // ============================================================
@@ -256,6 +264,10 @@ export interface CompletedAgentRecord {
   error?: string;
   startedAt: number;
   endedAt?: number;
+  /** "provider/modelId"（详情区展示） */
+  model?: string;
+  /** thinking level（详情区展示） */
+  thinkingLevel?: string;
 }
 
 // ============================================================

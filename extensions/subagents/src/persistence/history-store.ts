@@ -189,6 +189,8 @@ export function buildPersistedRecord(args: {
   sessionFile?: string;
   cwd: string;
   sessionId?: string;
+  model?: string;
+  thinkingLevel?: string;
 }): PersistedAgentRecord {
   return {
     id: args.id,
@@ -205,6 +207,8 @@ export function buildPersistedRecord(args: {
     sessionFile: args.sessionFile,
     cwd: args.cwd,
     sessionId: args.sessionId,
+    model: args.model,
+    thinkingLevel: args.thinkingLevel,
   };
 }
 

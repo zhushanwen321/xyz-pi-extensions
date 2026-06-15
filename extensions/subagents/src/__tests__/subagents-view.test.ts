@@ -173,6 +173,25 @@ describe("renderView", () => {
     expect(lines.some((l) => l.includes("done"))).toBe(true);
   });
 
+  it("renders model + thinking level in right column detail", () => {
+    const records = [makeRecord({
+      agent: "worker",
+      model: "anthropic/claude-sonnet-4.5",
+      thinkingLevel: "high",
+    })];
+    const lines = renderView(records, fakeTheme, 100, makeState(), 30);
+    // model 和 thinking level 用括号分组显示
+    expect(lines.some((l) => l.includes("anthropic/claude-sonnet-4.5"))).toBe(true);
+    expect(lines.some((l) => l.includes("thinking high"))).toBe(true);
+  });
+
+  it("renders detail without model/thinking when absent", () => {
+    const records = [makeRecord({ agent: "worker", model: undefined, thinkingLevel: undefined })];
+    const lines = renderView(records, fakeTheme, 100, makeState(), 30);
+    // 不应出现 thinking 关键词
+    expect(lines.some((l) => l.includes("thinking"))).toBe(false);
+  });
+
   it("shows filter text in header", () => {
     const state = makeState({ filterText: "work" });
     const lines = renderView([], fakeTheme, 100, state, 30);

@@ -249,6 +249,8 @@ export class SubagentRuntime {
         error: source.error,
         startedAt,
         endedAt: source.endedAt,
+        model: source.model,
+        thinkingLevel: source.thinkingLevel,
       });
       this._runningAgents.delete(widgetId);
       this.notifyChange();
@@ -447,6 +449,8 @@ export class SubagentRuntime {
             sessionFile: result.sessionFile ? path.basename(result.sessionFile) : undefined,
             cwd: this.cwd,
             sessionId: this._sessionId,
+            model: state.model,
+            thinkingLevel: state.thinkingLevel,
           }),
         );
       }
@@ -486,6 +490,8 @@ export class SubagentRuntime {
             error: errMsg,
             cwd: this.cwd,
             sessionId: this._sessionId,
+            model: state.model,
+            thinkingLevel: state.thinkingLevel,
           }),
         );
       }
@@ -642,6 +648,8 @@ export class SubagentRuntime {
             sessionFile: result.sessionFile ? path.basename(result.sessionFile) : undefined,
             cwd: this.cwd,
             sessionId: this._sessionId,
+            model: state.model,
+            thinkingLevel: state.thinkingLevel,
           }),
         );
         // FR-O1.1: 回注完成通知到主对话（去重 + 合并窗口在 notifyBgCompletion 内处理）
@@ -699,6 +707,8 @@ export class SubagentRuntime {
             error: record.error,
             cwd: this.cwd,
             sessionId: this._sessionId,
+            model: state.model,
+            thinkingLevel: state.thinkingLevel,
           }),
         );
         // FR-O1.1: 失败/取消也回注（去重 + 合并窗口在 notifyBgCompletion 内处理）
@@ -733,6 +743,8 @@ export class SubagentRuntime {
       agent: r.state.agent,
       turns: r.state.turns,
       totalTokens: r.state.totalTokens,
+      model: r.state.model,
+      thinkingLevel: r.state.thinkingLevel,
     };
   }
 
