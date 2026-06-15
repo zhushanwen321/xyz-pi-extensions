@@ -23,6 +23,7 @@ export interface WizardCallbacks {
 
 interface AvailableModel {
   provider: string;
+  id: string;
   name: string;
   reasoning: boolean;
   thinkingLevelMap?: Record<string, string | null>;
@@ -122,7 +123,7 @@ async function editCategoryModel(
 
   const def: CategoryDefinition = {
     label: config.categories[category]?.label ?? category,
-    model: `${provider}/${selectedModel.name}`,
+    model: `${provider}/${selectedModel.id}`,
     thinkingLevel,
   };
   config.categories[category] = def;

@@ -239,9 +239,14 @@ export async function runAgent(opts: RunAgentOptions, ctx: RunAgentContext): Pro
   } finally {
     // V3：outer finally 兜底清理 —— 覆盖 createAndConfigureSession 抛错（worktree 尚未
     // 在 inner 路径清理）以及 V1 throw 的场景。worktree 在 inner 正常清理后置 undefined。
-    if (worktree) {
-      cleanupWorktree(ctx.cwd, worktree, opts.task.slice(0, COMMIT_MSG_MAX));
+    // Round 5 MF2：嵌套 try/finally 保证 pool.release() 无条件执行——即使 cleanupWorktree
+    // 再次抛错（git 锁/磁盘满），并发槽也不泄漏，避免 globalPool 死锁。
+    try {
+      if (worktree) {
+        cleanupWorktree(ctx.cwd, worktree, opts.task.slice(0, COMMIT_MSG_MAX));
+      }
+    } finally {
+      pool.release();
     }
-    pool.release();
   }
 }
