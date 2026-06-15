@@ -23,7 +23,8 @@ import type {
   AgentResult,
   ModelInfo,
 } from "../types.ts";
-import { createEventBridge } from "./event-bridge.ts";
+import { createEventBridge, isSdkEvent } from "./event-bridge.ts";
+import type { SdkEvent } from "./event-bridge.ts";
 
 /** event-bridge 实例的类型（从 createEventBridge 返回值推断） */
 export type EventBridge = ReturnType<typeof createEventBridge>;
@@ -205,7 +206,11 @@ export async function createAndConfigureSession(
   // 步骤 4: event-bridge + subscribe
   const bridge = createEventBridge(onEvent ?? (() => {}));
   const unsubscribe = session.subscribe((event: unknown) => {
-    bridge.handle(event as never);
+    // Round 3 MF#4: subscribe 回调收到的是 unknown。先用 isSdkEvent 校验 type 字段，
+    // 再断言为 SdkEvent（替代原先 `as never`——后者抹除全部类型信息且无运行时保护）。
+    // 非法形状（SDK 事件结构变化）直接丢弃，避免 switch(raw.type) 静默失配。
+    if (!isSdkEvent(event)) return;
+    bridge.handle(event as SdkEvent);
   });
 
   return { session, bridge, unsubscribe, sessionFile };

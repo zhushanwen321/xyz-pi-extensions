@@ -385,7 +385,11 @@ export class SubagentRuntime {
     try {
       const result = await runAgent(finalOpts, ctx);
       // widget: 更新为完成状态（P1: skipWidget 时跳过）
-      widgetState.status = result.success ? "done" : "failed";
+      // Round 3 MF#1: core runAgent 捕获 AbortError 后返回 {success:false} 不抛错，
+      // 所以本 try 路径必须检查 finalOpts.signal.aborted 才能把用户取消（Esc）
+      // 记为 cancelled 而非 failed。与 catch 路径（下方）及 background .then 路径保持一致。
+      const aborted = finalOpts.signal?.aborted ?? false;
+      widgetState.status = result.success ? "done" : (aborted ? "cancelled" : "failed");
       widgetState.turns = result.turns;
       widgetState.totalTokens = result.usage
         ? result.usage.input + result.usage.output + result.usage.cacheRead + result.usage.cacheWrite
@@ -408,7 +412,7 @@ export class SubagentRuntime {
           buildPersistedRecord({
             id: widgetId,
             agent: widgetState.agent,
-            status: widgetState.status as "done" | "failed",
+            status: widgetState.status as "done" | "failed" | "cancelled",
             mode: "sync",
             task: finalOpts.task,
             startedAt: startTime,

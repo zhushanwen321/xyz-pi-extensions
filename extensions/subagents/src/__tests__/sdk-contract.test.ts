@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import subagentsExtension from "../index.ts";
 import { getRuntime, setRuntime } from "../runtime.ts";
+import { createEventBridge, isSdkEvent } from "../core/event-bridge.ts";
 
 /**
  * 构造一个符合真实 SDK ExtensionHandler 调用约定的 mock pi。
@@ -233,5 +234,37 @@ describe("SDK contract: appendEntry signature (customType, data)", () => {
     // serializeState 返回 object snapshot（appendEntry data?: unknown）
     expect(data).toBeTypeOf("object");
     expect(data).toHaveProperty("yoloMode", true);
+  });
+});
+
+// Round 3 MF#4: subscribe 回调收到的 SDK 事件形状契约。
+// 此前 session-factory 用 `event as never` 喂给 bridge.handle，无运行时 guard，
+// SDK 事件结构变化时 switch(raw.type) 静默失配。本组锁定 isSdkEvent guard +
+// bridge.handle 对合法/非法事件的处理行为。
+describe("SDK contract: session.subscribe event shape", () => {
+  it("isSdkEvent accepts well-formed SDK events (has string type)", () => {
+    expect(isSdkEvent({ type: "turn_end" })).toBe(true);
+    expect(isSdkEvent({ type: "message_end", message: {} })).toBe(true);
+    expect(isSdkEvent({ type: "tool_execution_start", toolName: "read" })).toBe(true);
+  });
+
+  it("isSdkEvent rejects malformed payloads (no/garbage type)", () => {
+    expect(isSdkEvent(null)).toBe(false);
+    expect(isSdkEvent(undefined)).toBe(false);
+    expect(isSdkEvent({})).toBe(false);
+    expect(isSdkEvent({ type: 123 })).toBe(false);
+    expect(isSdkEvent("turn_end")).toBe(false);
+  });
+
+  it("bridge.handle dispatches a well-formed SDK event to onEvent", () => {
+    const events: unknown[] = [];
+    const bridge = createEventBridge((e) => events.push(e));
+    // 以 SdkEvent 形状调用（模拟 subscribe 回调经 guard 后的合法路径）
+    bridge.handle({ type: "turn_end" } as never);
+    bridge.handle({ type: "message_end", message: { usage: {
+      input: 10, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 30,
+    } } } as never);
+    expect(events.some((e) => (e as { type: string }).type === "turn_end")).toBe(true);
+    expect(events.some((e) => (e as { type: string }).type === "message_end")).toBe(true);
   });
 });

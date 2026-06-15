@@ -1,8 +1,10 @@
 // src/core/event-bridge.ts
 import type { AgentEvent, AgentToolCallEntry } from "../types.ts";
 
-/** SDK AgentSessionEvent 的最小可用子集（结构 duck-typed，避免强耦合 SDK 类型） */
-type SdkEvent = {
+/** SDK AgentSessionEvent 的最小可用子集（结构 duck-typed，避免强耦合 SDK 类型）
+ *
+ * 导出供 session-factory.ts 的 subscribe 回调断言使用（替代 `as never`）。 */
+export type SdkEvent = {
   type: string;
   toolCallId?: string;
   toolName?: string;
@@ -19,6 +21,12 @@ type SdkEvent = {
   assistantMessageEvent?: { type?: string; delta?: string; textDelta?: string };
   reason?: string;
 };
+
+/** 运行时 guard：subscribe 回调收到的 event 形状未知，校验存在 type 字段后再交给 handle。
+ * 防止 SDK 事件结构变化时 switch(raw.type) 静默失配（全部走 default 分支不报错）。 */
+export function isSdkEvent(x: unknown): x is SdkEvent {
+  return typeof x === "object" && x !== null && typeof (x as { type?: unknown }).type === "string";
+}
 
 /**
  * FR-8: 把 SDK AgentSessionEvent 转换为 subagents AgentEvent，并累计 turn/toolCall。
