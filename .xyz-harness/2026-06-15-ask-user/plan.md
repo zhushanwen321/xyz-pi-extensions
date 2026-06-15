@@ -29,22 +29,34 @@ extensions/ask-user/
 ├── vitest.config.ts
 └── src/
     ├── index.ts                # 工厂：注册 ask_user tool（execute + renderCall + renderResult）
-    ├── types.ts                # TypeBox schema（InputSchema/ResultSchema）+ 类型 + 常量
+    ├── types.ts                # TypeBox schema + 常量 + 派生类型 + 共享状态类型（QuestionState/ThemeLike/createQuestionState）
     ├── validate.ts             # validateInput(): 重复 question/label、多问缺 header 校验
-    ├── component.ts            # AskUserComponent：Tab bar 渲染 + 输入路由 + buildResult
-    ├── question-view.ts        # renderQuestionView()：选项列表 + 分屏预览 + 内联编辑器 + 评论行
-    ├── submit-view.ts          # renderSubmitView()：Submit tab 汇总
+    ├── component.ts            # AskUserComponent：Tab bar 渲染 + 输入路由 + editorText 状态
+    ├── question-view.ts        # renderQuestionView()：选项列表 + 分屏预览 + 编辑器文本 + 评论行
+    ├── submit-view.ts          # renderSubmitView() + getAnswerText() + buildResult()
     └── __tests__/
-        ├── types.test.ts       # schema 校验测试
+        ├── types.test.ts       # schema + createQuestionState 测试
         ├── validate.test.ts    # 校验逻辑测试
+        ├── submit-view.test.ts # Submit 渲染测试
+        ├── question-view.test.ts # 问题渲染测试
         └── component.test.ts   # 组件渲染 + 输入 + 结果测试
 ```
 
+**依赖图（单向，无循环）：**
+```
+types.ts        ← 叶子节点（仅依赖 typebox）
+validate.ts        → types.ts
+question-view.ts   → types.ts（+ pi-tui 工具函数）
+submit-view.ts     → types.ts（+ pi-tui 工具函数）
+component.ts       → types.ts + question-view.ts + submit-view.ts（+ pi-tui matchesKey/Component）
+index.ts           → 全部（+ pi-coding-agent ExtensionAPI）
+```
+
 **职责边界：**
-- `types.ts`：纯类型 + schema，零依赖 pi（仅 typebox）
-- `validate.ts`：纯函数，依赖 types.ts
-- `question-view.ts` / `submit-view.ts`：纯渲染函数，接收 state 返回 string[]，依赖 types.ts + pi-tui（theme 函数）
-- `component.ts`：状态机 + 输入路由 + 调用渲染函数，依赖上述全部 + pi-tui（Editor/Key/matchesKey）
+- `types.ts`：所有 schema + 常量 + 跨模块共享类型（QuestionState/ThemeLike/QuestionMode）+ createQuestionState 工厂。**依赖图叶子**，只依赖 typebox。
+- `validate.ts`：纯校验函数，只依赖 types.ts
+- `question-view.ts` / `submit-view.ts`：纯渲染函数（接收 state/theme，返回 string[]），**只依赖 types.ts**（不反向依赖 component.ts，消除循环依赖）
+- `component.ts`：状态机 + 输入路由，持有 editorText（string），调用渲染函数。单向依赖 types.ts + 渲染模块
 - `index.ts`：工厂胶水，注册 tool，依赖全部
 
 ---
@@ -176,18 +188,20 @@ git commit -m "feat(ask-user): scaffold package structure"
 
 ---
 
-## 任务 2: types.ts — schema + 类型 + 常量
+## 任务 2: types.ts — schema + 类型 + 常量 + 共享状态类型
 
 **文件：**
 - 创建：`extensions/ask-user/src/types.ts`
 - 测试：`extensions/ask-user/src/__tests__/types.test.ts`
+
+**架构要点：** 此文件是依赖图的叶子节点（无项目内依赖）。除了 schema/常量外，**还集中定义跨模块共享的状态类型**（QuestionState/ThemeLike/QuestionMode）——这是消除循环依赖的关键：渲染函数（question-view/submit-view）只 import types.ts，不 import component.ts。
 
 - [ ] **步骤 1：编写失败的测试**
 
 ```typescript
 // src/__tests__/types.test.ts
 import { describe, it, expect } from "vitest";
-import { InputSchema, OTHER_LABEL, SPLIT_PANE_MIN_WIDTH } from "../types";
+import { InputSchema, OTHER_LABEL, SPLIT_PANE_MIN_WIDTH, createQuestionState } from "../types";
 
 describe("types", () => {
 	it("InputSchema accepts valid single question", () => {
@@ -214,6 +228,17 @@ describe("types", () => {
 
 	it("SPLIT_PANE_MIN_WIDTH is 84", () => {
 		expect(SPLIT_PANE_MIN_WIDTH).toBe(84);
+	});
+
+	it("createQuestionState returns initial state with mode 'options'", () => {
+		const s = createQuestionState();
+		expect(s.cursorIndex).toBe(0);
+		expect(s.selectedIndex).toBeNull();
+		expect(s.selectedIndices).toBeInstanceOf(Set);
+		expect(s.confirmed).toBe(false);
+		expect(s.freeTextValue).toBeNull();
+		expect(s.commentValue).toBeNull();
+		expect(s.mode).toBe("options");
 	});
 });
 ```
@@ -288,6 +313,51 @@ export const ResultSchema = Type.Object({
 });
 
 export type Result = Static<typeof ResultSchema>;
+
+// ── 跨模块共享的交互状态类型 ─────────────────────────
+// 放这里（而非 component.ts）是为了让 question-view.ts / submit-view.ts
+// 这两个纯渲染函数只依赖 types.ts，不反向依赖 component.ts（消除循环依赖）。
+
+/** TUI 颜色主题的最小接口（满足真实 Theme 和测试 stub） */
+export interface ThemeLike {
+	fg(token: string, text: string): string;
+	bg(token: string, text: string): string;
+	bold(text: string): string;
+}
+
+/** 单问题的交互模式 */
+export type QuestionMode = "options" | "freeform" | "comment";
+
+/** 单问题的交互状态（每问题一个实例） */
+export interface QuestionState {
+	/** 光标位置（高亮的选项，≠ 已选答案） */
+	cursorIndex: number;
+	/** 单选：显式选中的选项 index；null=未选 */
+	selectedIndex: number | null;
+	/** 多选：已 toggle 的选项 index 集合 */
+	selectedIndices: Set<number>;
+	/** 是否已确认（Submit 门的条件） */
+	confirmed: boolean;
+	/** Other 自由文本答案；null=未输入 */
+	freeTextValue: string | null;
+	/** 可选评论；null=未输入 */
+	commentValue: string | null;
+	/** 当前交互模式 */
+	mode: QuestionMode;
+}
+
+/** 创建初始 QuestionState */
+export function createQuestionState(): QuestionState {
+	return {
+		cursorIndex: 0,
+		selectedIndex: null,
+		selectedIndices: new Set<number>(),
+		confirmed: false,
+		freeTextValue: null,
+		commentValue: null,
+		mode: "options",
+	};
+}
 ```
 
 - [ ] **步骤 4：运行测试确认通过**
@@ -299,7 +369,7 @@ export type Result = Static<typeof ResultSchema>;
 
 ```bash
 git add src/types.ts src/__tests__/types.test.ts
-git commit -m "feat(ask-user): add types.ts — schema, constants, derived types"
+git commit -m "feat(ask-user): add types.ts — schema, constants, shared state types"
 ```
 
 ---
@@ -467,8 +537,7 @@ git commit -m "feat(ask-user): add validate.ts — uniqueness + header checks"
 // src/__tests__/submit-view.test.ts
 import { describe, it, expect } from "vitest";
 import { renderSubmitView } from "../submit-view";
-import type { Question } from "../types";
-import type { QuestionState } from "../component";
+import { createQuestionState, type Question, type QuestionState } from "../types";
 
 const stubTheme = {
 	fg: (_t: string, s: string) => s,
@@ -483,13 +552,7 @@ const q1: Question = {
 };
 
 const makeState = (over: Partial<QuestionState> = {}): QuestionState => ({
-	cursorIndex: 0,
-	selectedIndex: null,
-	selectedIndices: new Set<number>(),
-	confirmed: false,
-	freeTextValue: null,
-	commentValue: null,
-	mode: "options",
+	...createQuestionState(),
 	...over,
 });
 
@@ -532,9 +595,14 @@ describe("renderSubmitView", () => {
 ```typescript
 // src/submit-view.ts
 import { truncateToWidth } from "@mariozechner/pi-tui";
-import { HEADER_MAX_CHARS } from "./types";
-import type { Question, Result } from "./types";
-import type { QuestionState, ThemeLike } from "./component";
+import {
+	ANSWER_COMMENT_SEPARATOR,
+	HEADER_MAX_CHARS,
+	type Question,
+	type QuestionState,
+	type Result,
+	type ThemeLike,
+} from "./types";
 
 /**
  * 获取单问题的答案文本（供 Submit tab 显示）。
@@ -556,7 +624,7 @@ export function getAnswerText(q: Question, s: QuestionState): string | null {
 	if (s.freeTextValue !== null) parts.push(s.freeTextValue);
 	if (parts.length === 0) return null;
 	const base = parts.join(", ");
-	return s.commentValue ? `${base}${" — "}${s.commentValue}` : base;
+	return s.commentValue ? `${base}${ANSWER_COMMENT_SEPARATOR}${s.commentValue}` : base;
 }
 
 /**
@@ -651,8 +719,7 @@ git commit -m "feat(ask-user): add submit-view.ts — Submit tab render + buildR
 // src/__tests__/question-view.test.ts
 import { describe, it, expect } from "vitest";
 import { renderQuestionView, getSplitPaneWidths } from "../question-view";
-import type { Question } from "../types";
-import type { QuestionState } from "../component";
+import { createQuestionState, type Question, type QuestionState } from "../types";
 
 const stubTheme = {
 	fg: (_t: string, s: string) => s,
@@ -669,31 +736,25 @@ const singleQ: Question = {
 };
 
 const makeState = (over: Partial<QuestionState> = {}): QuestionState => ({
-	cursorIndex: 0,
-	selectedIndex: null,
-	selectedIndices: new Set<number>(),
-	confirmed: false,
-	freeTextValue: null,
-	commentValue: null,
-	mode: "options",
+	...createQuestionState(),
 	...over,
 });
 
 describe("renderQuestionView", () => {
 	it("renders question text", () => {
-		const lines = renderQuestionView(singleQ, makeState(), stubTheme as any, 60, true);
+		const lines = renderQuestionView(singleQ, makeState(), stubTheme as any, 60, true, "");
 		expect(lines.some((l) => l.includes("Which database?"))).toBe(true);
 	});
 
 	it("renders all options + Other", () => {
-		const lines = renderQuestionView(singleQ, makeState(), stubTheme as any, 60, true);
+		const lines = renderQuestionView(singleQ, makeState(), stubTheme as any, 60, true, "");
 		expect(lines.some((l) => l.includes("Postgres"))).toBe(true);
 		expect(lines.some((l) => l.includes("SQLite"))).toBe(true);
 		expect(lines.some((l) => l.includes("Other"))).toBe(true);
 	});
 
 	it("renders cursor > on first option", () => {
-		const lines = renderQuestionView(singleQ, makeState({ cursorIndex: 0 }), stubTheme as any, 60, true);
+		const lines = renderQuestionView(singleQ, makeState({ cursorIndex: 0 }), stubTheme as any, 60, true, "");
 		expect(lines.some((l) => l.includes(">") && l.includes("Postgres"))).toBe(true);
 	});
 
@@ -704,6 +765,7 @@ describe("renderQuestionView", () => {
 			stubTheme as any,
 			60,
 			true,
+			"",
 		);
 		expect(lines.some((l) => l.includes("✓") && l.includes("SQLite"))).toBe(true);
 	});
@@ -720,13 +782,14 @@ describe("renderQuestionView", () => {
 			stubTheme as any,
 			60,
 			true,
+			"",
 		);
 		expect(lines.some((l) => l.includes("[✓]") && l.includes("Auth"))).toBe(true);
 		expect(lines.some((l) => l.includes("[ ]") && l.includes("Search"))).toBe(true);
 	});
 
 	it("renders descriptions in muted", () => {
-		const lines = renderQuestionView(singleQ, makeState(), stubTheme as any, 60, true);
+		const lines = renderQuestionView(singleQ, makeState(), stubTheme as any, 60, true, "");
 		expect(lines.some((l) => l.includes("Battle-tested"))).toBe(true);
 	});
 
@@ -737,8 +800,11 @@ describe("renderQuestionView", () => {
 			stubTheme as any,
 			60,
 			true,
+			"some draft",
 		);
 		expect(lines.some((l) => l.toLowerCase().includes("comment"))).toBe(true);
+		// editor draft text rendered
+		expect(lines.some((l) => l.includes("some draft"))).toBe(true);
 	});
 });
 
@@ -773,9 +839,10 @@ import {
 	SPLIT_PANE_MIN_WIDTH,
 	SPLIT_PANE_RIGHT_MIN,
 	SPLIT_PANE_SEPARATOR,
+	type Question,
+	type QuestionState,
+	type ThemeLike,
 } from "./types";
-import type { Question } from "./types";
-import type { EditorState, QuestionState, ThemeLike } from "./component";
 
 export interface DisplayOption {
 	label: string;
@@ -889,6 +956,7 @@ function buildPreviewLines(
 /**
  * 渲染单个问题视图（spec FR-4）。
  * isSingle: 单问题模式（无 Tab 提示）。
+ * editorText: freeform/comment 模式下当前编辑器文本（纯 string，由 component 持有）。
  */
 export function renderQuestionView(
 	q: Question,
@@ -896,7 +964,7 @@ export function renderQuestionView(
 	theme: ThemeLike,
 	width: number,
 	isSingle: boolean,
-	editor?: EditorState,
+	editorText: string,
 ): string[] {
 	const t = theme;
 	const lines: string[] = [];
@@ -918,7 +986,7 @@ export function renderQuestionView(
 	const split = getSplitPaneWidths(width);
 
 	if (state.mode === "freeform" || state.mode === "comment") {
-		// 编辑器/评论模式：选项列表 + 下方就地展开 Editor
+		// 编辑器/评论模式：选项列表 + 下方就地展开编辑器文本
 		const optionLines = buildOptionLines(q, state, theme, split ? split.left : width, !!split);
 		for (const line of optionLines) add(line);
 
@@ -928,9 +996,10 @@ export function renderQuestionView(
 				? t.fg("muted", " Your comment (optional):")
 				: t.fg("muted", " Your answer:");
 		add(prompt);
-		if (editor?.lines) {
-			for (const line of editor.lines) add(` ${line}`);
-		}
+		// 渲染当前编辑器文本（单行；多行时按 \n 拆分）
+		for (const line of editorText.split("\n")) add(` ${line}`);
+		// 光标行
+		add(` ${t.fg("accent", "█")}`);
 		add("");
 		add(t.fg("dim", " Enter submit · Esc back"));
 		return lines;
@@ -993,7 +1062,7 @@ git commit -m "feat(ask-user): add question-view.ts — options + split-pane + e
 - 创建：`extensions/ask-user/src/component.ts`
 - 测试：`extensions/ask-user/src/__tests__/component.test.ts`
 
-主组件。定义 QuestionState、ThemeLike、EditorState 类型（被其他模块 import）。管理 Tab 导航、输入路由、Editor 实例、buildResult。
+主组件。从 types.ts import 共享类型（QuestionState/ThemeLike/createQuestionState）。管理 Tab 导航、输入路由、editorText 状态、调用渲染函数。单向依赖 types.ts + question-view.ts + submit-view.ts（无循环）。
 
 - [ ] **步骤 1：编写失败的测试（核心交互）**
 
@@ -1134,49 +1203,22 @@ describe("AskUserComponent — render cache", () => {
 ```typescript
 // src/component.ts
 import { matchesKey, type Component } from "@mariozechner/pi-tui";
-import { HEADER_MAX_CHARS, OTHER_LABEL } from "./types";
-import type { Question, Result } from "./types";
+import {
+	HEADER_MAX_CHARS,
+	createQuestionState,
+	type Question,
+	type QuestionState,
+	type Result,
+	type ThemeLike,
+} from "./types";
 import { allOptions, renderQuestionView } from "./question-view";
 import { renderSubmitView, buildResult } from "./submit-view";
 
-// ── 共享类型（被 question-view / submit-view import） ──
+// ── 组件私有类型（不跨模块共享，无需放 types.ts） ──
 
-export interface ThemeLike {
-	fg(token: string, text: string): string;
-	bg(token: string, text: string): string;
-	bold(text: string): string;
-}
-
+/** 最小 TUI 接口（满足真实 TUI 和测试 stub） */
 export interface TUILike {
 	requestRender(): void;
-}
-
-export type QuestionMode = "options" | "freeform" | "comment";
-
-export interface QuestionState {
-	cursorIndex: number;
-	selectedIndex: number | null;
-	selectedIndices: Set<number>;
-	confirmed: boolean;
-	freeTextValue: string | null;
-	commentValue: string | null;
-	mode: QuestionMode;
-}
-
-export interface EditorState {
-	lines: string[];
-}
-
-function makeInitialState(): QuestionState {
-	return {
-		cursorIndex: 0,
-		selectedIndex: null,
-		selectedIndices: new Set<number>(),
-		confirmed: false,
-		freeTextValue: null,
-		commentValue: null,
-		mode: "options",
-	};
 }
 
 // ── AskUserComponent ─────────────────────────────────
@@ -1205,7 +1247,7 @@ export class AskUserComponent implements Component {
 		this.tui = tui;
 		this.theme = theme;
 		this.done = done;
-		this.states = questions.map(() => makeInitialState());
+		this.states = questions.map(() => createQuestionState());
 		this.invalidate();
 	}
 
@@ -1247,10 +1289,7 @@ export class AskUserComponent implements Component {
 		} else {
 			const q = this.questions[this.activeTab]!;
 			const state = this.states[this.activeTab]!;
-			const editor: EditorState = {
-				lines: state.mode === "freeform" || state.mode === "comment" ? [this.editorText] : [],
-			};
-			for (const line of renderQuestionView(q, state, t, width, this.isSingle, editor)) add(line);
+			for (const line of renderQuestionView(q, state, t, width, this.isSingle, this.editorText)) add(line);
 		}
 
 		add(t.fg("accent", "─".repeat(width)));
@@ -1796,7 +1835,7 @@ git commit -m "test(ask-user): full suite passing, no any, within line limits"
 
 **2. 占位符扫描：** 无 TBD/TODO，所有步骤有完整代码 ✅
 
-**3. 类型一致性：** QuestionState/ThemeLike/EditorState 在 component.ts 定义，question-view.ts 和 submit-view.ts import 使用——命名一致 ✅
+**3. 类型一致性：** QuestionState/ThemeLike/QuestionMode/createQuestionState 集中在 types.ts 定义，component.ts / question-view.ts / submit-view.ts 统一从 types.ts import——命名一致，无循环依赖 ✅。renderQuestionView 接收纯 `editorText: string`（非 EditorState），component 持有 editorText 状态并传入 ✅
 
 **潜在风险点（执行时注意）：**
 - pi-tui `matchesKey` 的 key 字符串：测试中用 `\r`/`\x1b` 等，若 pi-tui 用不同编码，调整测试常量。建议先跑一个最小 render 测试确认 key 匹配行为。
