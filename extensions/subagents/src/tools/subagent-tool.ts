@@ -416,9 +416,17 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       });
 
       if (!result.success) {
-        completeState(state, result, "failed");
+        // Round 3 MF#1: sync 用户取消（signal.aborted）不应被误报为 "failed"。
+        // runtime runAgent 已正确把状态设为 "cancelled"，此处按 abort 信号选择
+        // 最终状态，避免覆盖为 "failed"，与 background 路径及 history 记录一致。
+        const failureStatus = signal?.aborted ? "cancelled" : "failed";
+        completeState(state, result, failureStatus);
         pushUpdate();
-        throw new Error(result.error ?? "subagent failed (no error detail)");
+        throw new Error(
+          failureStatus === "cancelled"
+            ? result.error ?? "subagent cancelled"
+            : result.error ?? "subagent failed (no error detail)",
+        );
       }
 
       // Wave 2: 确保 state 反映最终状态（runAgent 的真实实现已调 completeState，
