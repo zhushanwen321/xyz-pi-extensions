@@ -14,7 +14,7 @@
 //   - running 时：toolPendingBg（进度 + eventLog）
 //   - done 时：toolSuccessBg（eventLog + result）
 //   - failed 时：toolErrorBg（eventLog + error）
-//   eventLog 不带 ├─ 前缀，直接显示 label + icon。
+//   eventLog 不带 ⎿ 前缀，直接显示 label + icon。
 
 import type { AgentToolResult, ExtensionAPI, Theme } from "@mariozechner/pi-coding-agent";
 import { StringEnum } from "@mariozechner/pi-ai";

@@ -83,7 +83,8 @@ function basename(p: string): string {
  * FR-2.1: 格式化事件日志条目为单行展示。
  * 统一入口：对话流 block（subagent-render）和 widget 视图共用。
  * tool_start 无标记（不再显示 ⟳ running，与对话流 block 一致）。
- * 前缀 `├─ ` 用 theme.fg("dim") 着色（spec: 连接线 dim 色）。
+ * 前缀 `⎿  `（U+23BF + 2 空格）用 theme.fg("dim") 着色——pi-subagents 详情行惯例，
+ * 比树形 `├─` 更轻量、更适合单父单子关系（每条事件直属于 subagent，无兄弟分支）。
  *
  * 注意：entry.label 可能来自 LLM 的 text_delta/thinking_delta，会包含换行符。
  * 必须先把 \r\n\t 压成空格，否则 Pi TUI 会把一条 eventLog 展开成多行，破坏 6 行布局。
@@ -94,7 +95,7 @@ export function formatEventLogLine(
   turnNumber?: number,
 ): string {
   const label = sanitizeLogLabel(entry.label);
-  const prefix = theme.fg("dim", "├─ ");
+  const prefix = theme.fg("dim", "⎿  ");
   if (entry.type === "turn_end") {
     return `${prefix}turn ${turnNumber ?? "?"}: "${label}"`;
   }

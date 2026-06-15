@@ -59,12 +59,12 @@ describe("buildRenderLines — 压缩视图（6 行）", () => {
     }), 80, passthroughTheme);
     const scrollLine = lines.find((l) => l.includes("a".repeat(10)));
     expect(scrollLine).toBeDefined();
-    // prefix "├─ " 占 4 列，截断后 label 部分应 <= 50
-    const labelPart = scrollLine!.replace("├─ ", "").replace("…", "");
+    // prefix "⎿  " 占 3 列，截断后 label 部分应 <= 50
+    const labelPart = scrollLine!.replace("⎿  ", "").replace("…", "");
     expect(labelPart.length).toBeLessThanOrEqual(50);
   });
 
-  it("滚动区行带 ├─ 连接线", () => {
+  it("滚动区行带 ⎿ 连接线", () => {
     const lines = buildRenderLines(makeDetails({
       eventLog: [
         { type: "tool_end", label: "read auth.ts", ts: 0, status: "done" },
@@ -72,7 +72,7 @@ describe("buildRenderLines — 压缩视图（6 行）", () => {
       ],
     }), 80, passthroughTheme);
     const scrollLines = lines.slice(1, 5);
-    expect(scrollLines.some((l) => l.includes("├─"))).toBe(true);
+    expect(scrollLines.some((l) => l.includes("⎿"))).toBe(true);
   });
 
   it("tool_end 带 ✓ 或 ✗", () => {
@@ -100,7 +100,7 @@ describe("buildRenderLines — 压缩视图（6 行）", () => {
       type: "tool_end" as const, label: `tool-${i}`, ts: i, status: "done" as const,
     }));
     const lines = buildRenderLines(makeDetails({ eventLog }), 80, passthroughTheme);
-    const scrollLines = lines.filter((l) => l.includes("├─"));
+    const scrollLines = lines.filter((l) => l.includes("⎿"));
     expect(scrollLines).toHaveLength(4);
     expect(scrollLines[0]).toContain("tool-4");
     expect(scrollLines[3]).toContain("tool-7");
@@ -174,7 +174,7 @@ describe("buildRenderLines — 展开视图", () => {
     const lines = buildRenderLines(makeDetails({
       status: "done", eventLog, result: "All done.",
     }), 80, passthroughTheme, { expanded: true });
-    expect(lines.filter((l) => l.includes("├─")).length).toBeGreaterThanOrEqual(8);
+    expect(lines.filter((l) => l.includes("⎿")).length).toBeGreaterThanOrEqual(8);
     expect(lines.some((l) => l.includes("All done."))).toBe(true);
   });
 });
@@ -190,7 +190,8 @@ describe("SubagentResultComponent", () => {
     const comp = new SubagentResultComponent(makeDetails({ agent: "worker" }), passthroughTheme);
     comp.update(makeDetails({ agent: "reviewer", turns: 5 }));
     const lines = comp.render(80);
-    expect(lines[0]).toContain("reviewer");
+    // Box paddingY=1：第 0 行是顶部背景填充行，内容从第 1 行开始
+    expect(lines[1]).toContain("reviewer");
   });
 
   it("truncates long lines to width", () => {
@@ -206,13 +207,14 @@ describe("SubagentResultComponent", () => {
     }
   });
 
-  it("always renders 6 lines in compact mode", () => {
+  it("always renders 6 content lines + padding in compact mode", () => {
     const comp = new SubagentResultComponent(
       makeDetails({ eventLog: [{ type: "tool_end", label: "only one", ts: 0, status: "done" }] }),
       passthroughTheme,
     );
     const lines = comp.render(80);
-    expect(lines).toHaveLength(6);
+    // Box paddingY=1：顶部 1 行背景填充 + 6 行内容 + 底部 1 行背景填充 = 8 行
+    expect(lines).toHaveLength(8);
   });
 });
 
