@@ -376,6 +376,11 @@ export async function applyUpdate<TMeta>(
   if (fromAbandoned) {
     item.lastRemindAtTurn = state.currentTurnIndex;
     item.errorCount = 0;
+    // 恢复到非终态时还需重置 loadedAtTurn，否则 markStaleItemsAbandoned 会因
+    // turnsSinceLoad 仍超阈值在下一个 turn_end 立即再次转 abandoned，使恢复路径失效
+    if (!isTerminalStatus(updateStatus)) {
+      item.loadedAtTurn = state.currentTurnIndex;
+    }
   }
 
   await handleOnErrorThreshold(item, updateStatus, dep);

@@ -1,6 +1,7 @@
 """Signal 8: Skill 执行追踪状态分析。
 
-从 session 中的 skill-state-tracker custom entries 提取 skill 执行状态，
+从 session 中的 evolve-tracker-skill custom entries 提取 skill 执行状态，
+向后兼容旧 skill-state-tracker 格式。
 聚合异常率、完成耗时等维度，供 miner 规则和 skill_health 评分消费。
 """
 
@@ -18,7 +19,9 @@ if _PARENT not in sys.path:
 
 # ── 常量 ──────────────────────────────────────────────
 
-_ENTRY_TYPE = "skill-state-tracker"
+# 运行时 tracker 持久化为 evolve-tracker-skill（skill-execution.ts entryType）；
+# 旧版本曾使用 skill-state-tracker，两者都需识别以保证向后兼容
+_ENTRY_TYPES = ("evolve-tracker-skill", "skill-state-tracker")
 _SLOW_TURN_THRESHOLD = 10  # 超过此 turn 数视为"慢完成"
 
 
@@ -49,7 +52,7 @@ class _TrackedEvent:
 
 
 def _extract_events_from_session(session) -> list[_TrackedEvent]:
-    """从单个 session 的 entries 中提取 skill-state-tracker 追踪事件。
+    """从单个 session 的 entries 中提取 skill 执行追踪事件。
 
     每个 TrackedItem 以 (session, id) 为唯一键，取最终状态。
     """
@@ -60,7 +63,7 @@ def _extract_events_from_session(session) -> list[_TrackedEvent]:
         raw = entry.raw
         if raw.get("type") != "custom":
             continue
-        if raw.get("customType") != _ENTRY_TYPE:
+        if raw.get("customType") not in _ENTRY_TYPES:
             continue
 
         data = raw.get("data")
@@ -88,13 +91,16 @@ def _extract_events_from_session(session) -> list[_TrackedEvent]:
                 item_map[item_id] = _TrackedEvent(name)
 
             evt = item_map[item_id]
+            # 新格式将 skillMdPath 存于 metadata.skillMdPath（types.ts deserializeState），
+            # 旧格式在顶层 skillMdPath，两者都需读取
+            _metadata = item_data.get("metadata") or {}
             evt.update(
                 status=item_data.get("status", "loaded"),
                 error_count=item_data.get("errorCount", 0),
                 detail=item_data.get("detail"),
                 loaded_at_turn=item_data.get("loadedAtTurn", -1),
                 current_turn_index=current_turn,
-                path=item_data.get("skillMdPath", ""),
+                path=_metadata.get("skillMdPath") or item_data.get("skillMdPath", ""),
             )
 
     return list(item_map.values())
