@@ -82,3 +82,19 @@
 - Six-Element Check 全通过
 - Ambiguity scan：修正 AC-10（补具体测试覆盖点）、FR-3（allowComment 时单问题提交时机）
 - 无 TBD/TODO，内部一致
+
+## 定稿后用户修改：移除 timeout
+
+用户要求"超时模式需要用户开启，默认不开启"。澄清后用户选择**移除 timeout（YAGNI）**——当前无此需求，超时能力默认不存在。
+
+**变更**：
+- 移除 FR-9（原 Timeout）、AC-7（原 timeout 到期）、AC-16（原 clearTimeout）
+- 移除 questions schema 的 `timeout?: number` 参数
+- FR 重新编号（FR-9→自定义渲染，FR-10→signal abort，FR-11→comment 存储，FR-12→防重入，FR-13→错误兜底，FR-14→答案回改）
+- AC 重新编号（18 个 AC）
+- Decisions 表：移除"Timeout 语义""timeout 边界"两行，新增"Timeout | 移除（YAGNI）"
+- 移除 UC-3（goal 防卡死，依赖 timeout）
+- Background 文案移除 timeout 提及
+- FR-12 防重入守卫理由改为 signal abort 竞态（原 timeout 竞态）
+
+**理由记录**：超时需用户显式开启，默认不开启；当前无此需求。goal 卡死由 goal 自身的 stall 检测处理，非 ask_user 职责。

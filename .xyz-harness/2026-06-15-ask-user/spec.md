@@ -6,9 +6,9 @@ verdict: pass
 
 ## Background
 
-Pi coding agent 缺少一个"既支持单问题深度交互、又支持多问题批量澄清"的结构化问答工具。当前已安装的 `pi-ask-user`(edlsh, v0.11.1) 功能最全但实现臃肿（1795 行单体 index.ts、大量 `as any`、overlay/inline 双模式增加复杂度）；`pi-askuserquestion`(ghoseb) 多问题 Tab 体验好但功能精简（无分屏预览、无评论、无 timeout）。
+Pi coding agent 缺少一个"既支持单问题深度交互、又支持多问题批量澄清"的结构化问答工具。当前已安装的 `pi-ask-user`(edlsh, v0.11.1) 功能最全但实现臃肿（1795 行单体 index.ts、大量 `as any`、overlay/inline 双模式增加复杂度）；`pi-askuserquestion`(ghoseb) 多问题 Tab 体验好但功能精简（无分屏预览、无评论）。
 
-本扩展**替换 pi-ask-user**，以 pi-askuserquestion 的分层架构为基础，融合两者优点：自适应单/多问、纯 inline 渲染、分屏 Markdown 预览、内联编辑器、可选评论、timeout。工具名沿用 `ask_user` 保证项目内 4 个已硬编码引用该名的 skill 零修改兼容。
+本扩展**替换 pi-ask-user**，以 pi-askuserquestion 的分层架构为基础，融合两者优点：自适应单/多问、纯 inline 渲染、分屏 Markdown 预览、内联编辑器、可选评论。工具名沿用 `ask_user` 保证项目内 4 个已硬编码引用该名的 skill 零修改兼容。
 
 ### 包信息
 
@@ -41,7 +41,6 @@ Pi coding agent 缺少一个"既支持单问题深度交互、又支持多问题
     multiSelect?: boolean;   // 默认 false。true=多选 checkbox
     allowComment?: boolean;  // 默认 false。true=选中后追加自由文本评论
   }>;                        // 1-4 个问题（schema 强制 minItems:1, maxItems:4）
-  timeout?: number;          // 可选，毫秒。>0 时启用，0/负数/undefined 忽略
 }
 ```
 
@@ -131,12 +130,12 @@ Submit tab 渲染：
       [question]: "自由文本",         // 仅 Other 输入
       [question]: "label — 评论",     // 带评论时（allowComment），评论以 " — " 分隔追加
     },
-    cancelled: boolean,         // Esc 或 timeout
+    cancelled: boolean,         // Esc 取消
   }
 }
 ```
 
-- 取消（Esc/timeout）：`answers: {}`, `cancelled: true`, content = "User cancelled"
+- 取消（Esc）：`answers: {}`, `cancelled: true`, content = "User cancelled"
 - `details` 是 `renderResult` 唯一数据源
 - multiSelect + Other 组装顺序：先按 selectedIndices 数字序排常规选项，再把 Other 自由文本追加末尾
 
@@ -145,13 +144,7 @@ Submit tab 渲染：
 - `ctx.hasUI === false`：返回 `{ isError: true, content: "ask_user requires interactive session" }` + `pi.setActiveTools(pi.getAllTools().map(t => t.name).filter(n => n !== "ask_user"))` 禁用工具防 LLM 重试
 - **不做** dialog 降级（`ctx.ui.select/input`），不做 RPC 适配
 
-### FR-9: Timeout（总会话计时）
-
-- `timeout` 参数（毫秒）：仅当 `timeout > 0` 时启用（0/负数/undefined 忽略）
-- 语义：**整个问答会话的总时长**（非每问题独立）。超时返回 cancelled 结果（同 Esc 行为，丢失所有已答数据）
-- 实现：custom factory 内 `const timer = setTimeout(() => done(null), timeout)`，组件 done() 时 `clearTimeout(timer)` 释放（用户提前提交后 timer 不残留 event loop）
-
-### FR-10: 自定义渲染
+### FR-9: 自定义渲染
 
 - `renderCall(args, theme)`：显示 `ask_user <headers>` + 问题数 + 选项数摘要。返回 `TruncatedText`（防长 header 溢出）
 - `renderResult(result, options, theme)`：
@@ -159,30 +152,30 @@ Submit tab 渲染：
   - 正常：用 `Box` + 多个 `TruncatedText`，每问题一行 `✓ <header>: <answer>`（success + accent + text）
   - `options.expanded`：展开显示所有选项 + `●/○` 选中标记 + 评论
 
-### FR-11: Signal abort 处理
+### FR-10: Signal abort 处理
 
 - execute 入口检查 `signal?.aborted`，已 abort 直接返回 cancelled
 - custom factory 内 `signal?.addEventListener("abort", () => done(null), { once: true })`
 - agent 被 abort（goal 取消/compact/session 切换）时 TUI 立即关闭，不挂死
 
-### FR-12: Comment 状态存储
+### FR-11: Comment 状态存储
 
 - QuestionState 新增字段 `commentValue: string | null`（null=未输入/已清除）
 - commentValue 随 confirm 持久；切 tab 再回来保留
 - buildResult() 时若 commentValue 非空，以 ` — <comment>` 分隔追加到该问题 answer 末尾
 
-### FR-13: 防重入守卫
+### FR-12: 防重入守卫
 
 - 组件 `_resolved: boolean` 标志，初始 false
 - submit() / cancel() 调 done() 前置 `_resolved = true`
-- handleInput(data) 入口 `if (this._resolved) return`——防止 timeout 触发 done 后用户按键再次触发 done（竞态）
+- handleInput(data) 入口 `if (this._resolved) return`——防止 signal abort 触发 done 后用户按键再次触发 done（竞态）
 
-### FR-14: execute 顶层错误兜底
+### FR-13: execute 顶层错误兜底
 
 - execute 内 `try { ... ctx.ui.custom(...) ... } catch (err) { return { isError: true, content: "ask_user failed: <msg>" } }`
 - custom factory 内异常（Editor 构造、theme 读取等）不带崩 Pi
 
-### FR-15: 答案回改（多问题）
+### FR-14: 答案回改（多问题）
 
 - 已确认 tab（`■` 标记）可被用户重新进入并修改答案
 - 重新选择/toggle 后 confirmed 标志保持 true（仍算已答），但 Tab bar 视觉标记更新为新选择
@@ -196,29 +189,26 @@ Submit tab 渲染：
 - **AC-4**：宽终端（≥84 列）单选显示左右分屏（选项 + Markdown 预览）；窄终端单列
 - **AC-5**：Other 选项的内联编辑器就地展开，Enter 保存/Esc 返回
 - **AC-6**：`allowComment: true` 的问题选中后可输入评论，评论出现在返回结果
-- **AC-7**：`timeout` 到期返回 cancelled 结果
-- **AC-8**：无 UI 会话返回 isError + 禁用工具，LLM 不重试
-- **AC-9**：参数校验（重复 question/label）返回 isError
-- **AC-10**：单测覆盖以下场景并通过；`tsc --noEmit` + ESLint（无 any）通过：
+- **AC-7**：无 UI 会话返回 isError + 禁用工具，LLM 不重试
+- **AC-8**：参数校验（重复 question/label）返回 isError
+- **AC-9**：单测覆盖以下场景并通过；`tsc --noEmit` + ESLint（无 any）通过：
   - 单问题单选/多选确认 + 结果结构
   - 多问题 Tab 导航 + Submit 提交
   - Other 自由文本输入/清除
   - allowComment 评论输入/跳过/清除
-  - timeout 到期返回 cancelled
   - 无 UI 返回 isError
   - 参数校验（重复 question/label、多问缺 header）返回 isError
   - signal abort 返回 cancelled
   - render(width) 缓存 + invalidate
-- **AC-11**：单文件 ≤500 行，单函数 ≤80 行
-- **AC-12**：spec-clarify/coding-workflow-brainstorming/plan 等 skill 调用 `ask_user` 零修改可用
-- **AC-13**：`allowComment: true` 的单问题，选中选项后显示评论输入行，Enter 可跳过或输入评论
-- **AC-14**：重复 question/label 或多问题缺 header 返回 `isError: true`，LLM 可修正重试
-- **AC-15**：agent abort（signal）时 TUI 立即关闭返回 cancelled，不挂死
-- **AC-16**：timeout 到期返回 cancelled；用户提前提交后 timer 被清理（无残留）
-- **AC-17**：execute 内任何异常被捕获返回 isError，不带崩 Pi
-- **AC-18**：多问题已确认 tab 可回改答案，Tab bar 标记更新
-- **AC-19**：`allowComment: true` 时选中选项后进入评论输入行；Enter（空）跳过、Enter（有文本）附上评论、Esc 跳过；复用 Other 的 Editor 实例
-- **AC-20**：多选+allowComment 时需 Enter 确认选择后才进入评论行（非 toggle 即时触发）
+- **AC-10**：单文件 ≤500 行，单函数 ≤80 行
+- **AC-11**：spec-clarify/coding-workflow-brainstorming/plan 等 skill 调用 `ask_user` 零修改可用
+- **AC-12**：`allowComment: true` 的单问题，选中选项后显示评论输入行，Enter 可跳过或输入评论
+- **AC-13**：重复 question/label 或多问题缺 header 返回 `isError: true`，LLM 可修正重试
+- **AC-14**：agent abort（signal）时 TUI 立即关闭返回 cancelled，不挂死
+- **AC-15**：execute 内任何异常被捕获返回 isError，不带崩 Pi
+- **AC-16**：多问题已确认 tab 可回改答案，Tab bar 标记更新
+- **AC-17**：`allowComment: true` 时选中选项后进入评论输入行；Enter（空）跳过、Enter（有文本）附上评论、Esc 跳过；复用 Other 的 Editor 实例
+- **AC-18**：多选+allowComment 时需 Enter 确认选择后才进入评论行（非 toggle 即时触发）
 
 ## Constraints
 
@@ -247,11 +237,10 @@ Submit tab 渲染：
 | Headless 最简 | 无视用户需求 | 无 UI → isError + 禁用工具 |
 | Comment 触发 | 选中后停顿输评论 | 统一单/多问题流程，解决单问题路径断裂（G-013） |
 | 校验失败返回 | isError:true | LLM 可修正重试（G-008） |
-| Timeout 语义 | 总会话计时 | 整个问答总时长，简单（G-003） |
 | 答案回改 | 允许回改 | confirmed 标记更新，容错好（G-012） |
 | header 必填性 | schema Optional + 运行时校验 | typebox 无法表达条件必填（G-009） |
-| timeout 边界 | >0 启用，0/负数忽略 | 防 LLM 传 0 误触（G-010） |
 | signal abort | 必须处理 | Pi 规范 4.2/14.2 强制，防挂死（G-001） |
+| Timeout | **移除（YAGNI）** | 超时需用户显式开启，默认不开启；当前无此需求，移除 timeout 参数。goal 卡死由 goal 自身的 stall 检测处理，非 ask_user 职责 |
 
 ## 业务用例
 
@@ -266,8 +255,3 @@ Submit tab 渲染：
 - **Actor**: LLM
 - **场景**: 启动新功能前需确认 3 个独立偏好（框架/样式/测试策略）
 - **预期结果**: 调用 `ask_user`（questions 数组 3 项），用户 Tab 逐个回答，Submit tab 汇总提交
-
-### UC-3: goal 自动循环防卡死
-- **Actor**: goal 自主循环
-- **场景**: goal 执行中遇歧义调用 `ask_user`，但用户离开
-- **预期结果**: `timeout` 到期返回 cancelled，goal 标记 blocked 而非永久挂起
