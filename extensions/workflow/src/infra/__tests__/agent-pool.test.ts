@@ -7,7 +7,7 @@
 //   3. usage.contextTokens = input + output + cacheRead + cacheWrite（不再硬编码 0）
 //   4. runtime 未初始化时返回 error 结果
 
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 // vi.hoisted：在 vi.mock 工厂执行前已就绪的可变状态。
 // vi.mock 被 hoist 到文件顶部，工厂内只能引用 hoisted 变量。
@@ -188,5 +188,152 @@ describe("AgentPool.enqueue — mapResult", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBe("Operation aborted before start");
+  });
+});
+
+// ============================================================
+// MF#8: 新增测试覆盖
+//   - timeoutMs wall-clock 超时
+//   - maxConcurrency 并发上限
+//   - soft-limit 警告回调
+//   - setBudget 行为
+// ============================================================
+
+describe("AgentPool — timeoutMs wall-clock 超时", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  // 每个 it 后恢复真实定时器，避免影响后续 describe
+  // （vi.useFakeTimers 影响全局 setTimeout，setTimeout(r, 10) 永不 fire）
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("timeoutMs 超时后 controller.abort() 触发，runAgent 抛 aborted → 错误信息被覆盖为 timeout", async () => {
+    let agentSignal: AbortSignal | undefined;
+    mockState.runtime = {
+      runAgent: vi.fn((opts: { signal?: AbortSignal }) => {
+        agentSignal = opts.signal;
+        return new Promise((_, reject) => {
+          // 模拟 agent 监听 abort 信号：超时触发时抛 AbortError
+          opts.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        });
+      }),
+    };
+
+    const pool = new AgentPool({ maxConcurrency: 1 });
+    const promise = pool.enqueue({ prompt: "x", timeoutMs: 1000 });
+    // 推进 1s 触发 setTimeout
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await promise;
+
+    expect(agentSignal).toBeDefined();
+    expect(agentSignal!.aborted).toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Agent timed out after 1000ms");
+  });
+
+  it("timeoutMs=0 时不设超时（agent 自然完成不被中断）", async () => {
+    mockState.runtime = {
+      runAgent: vi.fn().mockResolvedValue(makeResult({ text: "ok" })),
+    };
+
+    const pool = new AgentPool({ maxConcurrency: 1 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await pool.enqueue({ prompt: "x", timeoutMs: 0 });
+
+    expect(result.success).toBe(true);
+    expect(result.output).toBe("ok");
+  });
+
+  it("agent 在 timeoutMs 内完成时，结果正常返回", async () => {
+    mockState.runtime = {
+      runAgent: vi.fn().mockResolvedValue(makeResult({ text: "ok" })),
+    };
+
+    const pool = new AgentPool({ maxConcurrency: 1 });
+    const result = await pool.enqueue({ prompt: "x", timeoutMs: 5000 });
+    expect(result.success).toBe(true);
+    expect(result.output).toBe("ok");
+  });
+});
+
+describe("AgentPool — maxConcurrency 并发上限", () => {
+  it("maxConcurrency=1 时多个 enqueue 串行执行", async () => {
+    const startOrder: number[] = [];
+    const endOrder: number[] = [];
+    let n = 0;
+    mockState.runtime = {
+      runAgent: vi.fn().mockImplementation(async () => {
+        const myId = ++n;
+        startOrder.push(myId);
+        await new Promise((r) => setTimeout(r, 10));
+        endOrder.push(myId);
+        return makeResult({ text: `r${myId}` });
+      }),
+    };
+
+    const pool = new AgentPool({ maxConcurrency: 1 });
+    const promises = [
+      pool.enqueue({ prompt: "a" }),
+      pool.enqueue({ prompt: "b" }),
+      pool.enqueue({ prompt: "c" }),
+    ];
+    const results = await Promise.all(promises);
+
+    // 串行：start 和 end 都按 1→2→3 顺序
+    expect(startOrder).toEqual([1, 2, 3]);
+    expect(endOrder).toEqual([1, 2, 3]);
+    expect(results.map((r) => r.output)).toEqual(["r1", "r2", "r3"]);
+  });
+
+  it("maxConcurrency=2 时最多 2 个 enqueue 并发执行", async () => {
+    let active = 0;
+    let maxActive = 0;
+    mockState.runtime = {
+      runAgent: vi.fn().mockImplementation(async () => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((r) => setTimeout(r, 10));
+        active--;
+        return makeResult();
+      }),
+    };
+
+    const pool = new AgentPool({ maxConcurrency: 2 });
+    await Promise.all([
+      pool.enqueue({ prompt: "a" }),
+      pool.enqueue({ prompt: "b" }),
+      pool.enqueue({ prompt: "c" }),
+      pool.enqueue({ prompt: "d" }),
+    ]);
+
+    expect(maxActive).toBeLessThanOrEqual(2);
+    // 4 个任务 maxConcurrency=2 必然并发
+    expect(maxActive).toBe(2);
+  });
+});
+
+describe("AgentPool — soft limit 警告回调", () => {
+  it("达到 soft limit（500 次）时 onSoftLimitReached 被调用一次", async () => {
+    mockState.runtime = {
+      runAgent: vi.fn().mockResolvedValue(makeResult()),
+    };
+
+    const onSoft = vi.fn();
+    const pool = new AgentPool({ maxConcurrency: 1, runName: "test-run", onSoftLimitReached: onSoft });
+    pool.setBudget({ maxTokens: 100_000, maxTimeMs: 60_000, usedTokens: 0, usedCost: 0 });
+
+    // 触发 501 次（超过 500）
+    const promises: Promise<unknown>[] = [];
+    for (let i = 0; i < 501; i++) {
+      promises.push(pool.enqueue({ prompt: `call-${i}` }));
+    }
+    await Promise.all(promises);
+
+    expect(onSoft).toHaveBeenCalledTimes(1);
+    const call = onSoft.mock.calls[0]![0] as { runName: string; totalCalls: number };
+    expect(call.runName).toBe("test-run");
+    expect(call.totalCalls).toBeGreaterThan(500);
   });
 });

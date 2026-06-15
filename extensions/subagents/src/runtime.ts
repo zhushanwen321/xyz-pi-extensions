@@ -664,7 +664,9 @@ export class SubagentRuntime {
         sessionState: this.sessionState,
         modelRegistry: this.modelRegistry,
       });
-      return `${result.model.provider}/${result.model.name}`;
+      // FR-9.9: 返回 provider/modelId（SDK ModelRegistry.find 用 modelId 解析）。
+      // 之前用 model.name（展示名）会与 fuzzy matcher 行为不稳定。
+      return `${result.model.provider}/${result.model.id}`;
     } catch {
       return undefined;
     }

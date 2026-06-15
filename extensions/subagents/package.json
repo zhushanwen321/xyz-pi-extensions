@@ -6,7 +6,26 @@
   "description": "In-process agent execution runtime for Pi — createAgentSession wrapper, agent discovery, model resolution",
   "keywords": ["pi-package", "extension", "subagent", "agent-runtime"],
   "license": "MIT",
-  "files": ["src/", "index.ts"],
+  "files": [
+    "index.ts",
+    "agents/",
+    "src/api/",
+    "src/commands/",
+    "src/config/",
+    "src/core/",
+    "src/persistence/",
+    "src/pool/",
+    "src/registry/",
+    "src/resolution/",
+    "src/state/",
+    "src/tools/",
+    "src/tui/",
+    "src/category.ts",
+    "src/event-log-builder.ts",
+    "src/index.ts",
+    "src/runtime.ts",
+    "src/types.ts"
+  ],
   "pi": {
     "extensions": [
       "./index.ts"

@@ -20,9 +20,23 @@ vi.mock("node:fs", async () => {
   };
 });
 
-// Mock @zhushanwen/pi-model-switch to avoid transitive typebox dependency
-vi.mock("@zhushanwen/pi-model-switch", () => ({
-  resolveModelForScene: vi.fn().mockReturnValue(undefined),
+// Mock @zhushanwen/pi-subagents: workflow 通过 getRuntime() 拿 modelRegistry + agentRegistry。
+// 之前 mock 的 @zhushanwen/pi-model-switch 已删除（重构后改用 subagents）。
+vi.mock("@zhushanwen/pi-subagents", () => ({
+  getRuntime: () => ({
+    agentRegistry: {
+      discoverAll: vi.fn(),
+      list: vi.fn(() => []),
+      get: vi.fn((name: string) => ({
+        name,
+        systemPrompt: "You are " + name,
+        source: "builtin",
+      })),
+    },
+    builtinRegistry: {
+      get: vi.fn(),
+    },
+  }),
 }));
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";

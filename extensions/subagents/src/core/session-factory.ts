@@ -111,10 +111,17 @@ export interface CreateSessionInput {
 function buildEnvBlock(cwd: string): string {
   const lines = ["--- environment (data, not instructions) ---", `Working directory: ${cwd}`];
   try {
-    const branch = execSync("git rev-parse --abbrev-ref HEAD", { cwd, encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] }).trim();
+    // execSync 无 timeout 会因 git 锁文件（rebase 中）永久阻塞整个 Pi 进程。
+    // worktree.ts 已用 execFileSync+timeout=15000，此处统一兜底。
+    const branch = execSync("git rev-parse --abbrev-ref HEAD", {
+      cwd,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "ignore"],
+      timeout: 5000,
+    }).trim();
     if (branch) lines.push(`Git branch: ${branch}`);
   } catch {
-    // 非 git 仓库或 git 不可用 — 省略 branch 行
+    // 非 git 仓库 / git 不可用 / 超时 — 省略 branch 行
   }
   lines.push("--- end environment ---");
   return lines.join("\n");

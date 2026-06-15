@@ -3,11 +3,15 @@ import { describe, expect, it } from "vitest";
 
 import { fuzzyMatchModel } from "../resolution/model-resolver.ts";
 
-function makeRegistry(models: Array<{ provider: string; name: string; reasoning?: boolean }>) {
+function makeRegistry(models: Array<{ provider: string; name: string; id?: string; reasoning?: boolean }>) {
   return {
     find: () => undefined,
     hasConfiguredAuth: () => true,
-    getAvailable: () => models.map((m) => ({ ...m, reasoning: m.reasoning ?? true })),
+    getAvailable: () => models.map((m) => ({
+      ...m,
+      id: m.id ?? m.name,
+      reasoning: m.reasoning ?? true,
+    })),
   };
 }
 

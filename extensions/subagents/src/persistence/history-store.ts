@@ -32,6 +32,8 @@ export class HistoryStore {
   private readonly dir: string;
   /** 写串行化，防止并发 append 导致行交错 */
   private writeChain: Promise<void> = Promise.resolve();
+  /** 写计数器：每 N 次写检查一次 GC（确定性触发，替代原 Math.random 概率） */
+  private writesSinceLastGc = 0;
 
   constructor(homeDir: string, cwd: string) {
     this.filePath = getHistoryFilePath(homeDir, cwd);
@@ -147,10 +149,12 @@ export class HistoryStore {
 
   /** 惰性 GC：超 HISTORY_MAX_RECORDS 时重写保留最近 N 条 */
   private maybeGc(): void {
-    // 概率性检查：每 10 次写检查一次，避免每次写都读全文件
-    // （read 本身 O(n)，但只在 1/10 写时触发）
+    // 确定性触发：每 N 次写检查一次。原 Math.random 概率方案在低频长 session
+    // 场景下会积累超限记录很久才 GC，测试也难以断言。
     const GC_CHECK_INTERVAL = 10;
-    if (Math.floor(Math.random() * GC_CHECK_INTERVAL) !== 0) return;
+    this.writesSinceLastGc++;
+    if (this.writesSinceLastGc < GC_CHECK_INTERVAL) return;
+    this.writesSinceLastGc = 0;
     this.forceGc();
   }
 }

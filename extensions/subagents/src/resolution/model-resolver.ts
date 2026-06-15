@@ -112,7 +112,9 @@ export function resolveModelForAgent(opts: {
   }
 
   // 所有候选失败 → 列出可用模型辅助调试
-  const available = modelRegistry.getAvailable().map((m) => `${m.provider}/${m.name}`);
+  // FR-9.9: 错误信息列出 provider/modelId（与 SDK ModelRegistry.find 一致），
+  // 便于用户复制粘贴直接 retry。name 是展示名，id 是稳定标识符。
+  const available = modelRegistry.getAvailable().map((m) => `${m.provider}/${m.id}`);
   throw new Error(
     `No available model for agent "${opts.agentName}". Tried: ${tried.join(", ") || "(none)"}.` +
     (available.length > 0 ? `\nAvailable models:\n  ${available.slice(0, MODEL_LIST_LIMIT).join("\n  ")}` : ""),
@@ -136,11 +138,13 @@ export function fuzzyMatchModel(
   let best: { model: typeof available[number]; score: number } | undefined;
 
   for (const m of available) {
-    const id = `${m.provider}/${m.name}`.toLowerCase();
+    // FR-9.9: 统一用 provider/id 作为匹配键（与 modelRegistry.find 一致）。
+    // 之前用 name（展示名）会导致 id 和 name 不同的模型匹配行为漂移。
+    const id = `${m.provider}/${m.id}`.toLowerCase();
     const name = m.name.toLowerCase();
     let score = 0;
 
-    if (m.name.toLowerCase() === q || id === q) {
+    if (m.id.toLowerCase() === q || m.name.toLowerCase() === q || id === q) {
       score = SCORE_EXACT;
     } else if (id.includes(q)) {
       score = SCORE_ID_SUBSTR_BASE + Math.round((q.length / id.length) * SCORE_ID_SUBSTR_BONUS);

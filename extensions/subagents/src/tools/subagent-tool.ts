@@ -17,6 +17,7 @@
 //   eventLog 不带 ├─ 前缀，直接显示 label + icon。
 
 import type { AgentToolResult, ExtensionAPI, Theme } from "@mariozechner/pi-coding-agent";
+import { StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 
 import { getRuntime } from "../runtime.ts";
@@ -144,10 +145,13 @@ const SubagentParams = Type.Object({
     }),
   ),
   thinkingLevel: Type.Optional(
-    Type.String({
-      description:
-        'Thinking level override (e.g. "off", "minimal", "low", "medium", "high", "xhigh"). Only valid when the selected model supports reasoning.',
-    }),
+    StringEnum(
+      ["off", "minimal", "low", "medium", "high", "xhigh"] as const,
+      {
+        description:
+          'Thinking level override. Only valid when the selected model supports reasoning. Must be one of: "off", "minimal", "low", "medium", "high", "xhigh".',
+      },
+    ),
   ),
 });
 
@@ -283,8 +287,11 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       }
 
       // FR-O3.1a: 执行前校验显式 model/thinkingLevel 是否可解析，避免 token 浪费到一半才报错。
+      // 复用单次解析结果给 sync/background 两条分支（之前双调用会触发两次 agentRegistry.discoverAll，
+      // 期间 hot-reload 可能让第二次结果与第一次不一致，details.model 字段在两分支间漂移）。
+      let resolved: ReturnType<NonNullable<typeof rt.resolveModelForAgent>> | undefined;
       if (params.model || params.thinkingLevel) {
-        const resolved = rt.resolveModelForAgent?.(params.agent, {
+        resolved = rt.resolveModelForAgent?.(params.agent, {
           model: params.model,
           thinkingLevel: params.thinkingLevel,
         });
@@ -301,10 +308,6 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       // ── Mode 2: background ──────────────────────────────
       if (effectiveWait === false) {
         const agentName = params.agent ?? "default";
-        const resolved = rt.resolveModelForAgent?.(params.agent, {
-          model: params.model,
-          thinkingLevel: params.thinkingLevel,
-        });
         // bgId 在 startBackground 返回后赋值；onUpdate 闭包引用 bgId（异步触发时已赋值，避免 TDZ）
         let bgId = "";
         const handle = rt.startBackground({
@@ -356,11 +359,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       // ── Mode 1: sync ────────────────────────────────────
       const startTime = Date.now();
       const agentName = params.agent ?? "default";
-      // FR-1.2: 解析 model/thinkingLevel（resolveModelForAgent 在任务 5 实现）
-      const resolved = rt.resolveModelForAgent?.(params.agent, {
-        model: params.model,
-        thinkingLevel: params.thinkingLevel,
-      });
+      // resolved 已在分支前提取并复用（见上方 model/thinkingLevel 预解析块）
       const resolvedModelId = resolved?.model.id;
       const resolvedThinkingLevel = resolved?.thinkingLevel;
 

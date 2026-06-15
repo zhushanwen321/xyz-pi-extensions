@@ -90,6 +90,8 @@ export class AgentPool {
   private totalCallCount = 0;
   private softWarningSent = false;
   private budgetRef?: WorkflowBudget;
+  /** AC-4.5: per-run 隔离的并发队列。waiters FIFO 排队，maxConcurrency 释放。 */
+  private waiters: Array<() => void> = [];
 
   constructor(opts: AgentPoolOptions | number = {}) {
     if (typeof opts === "number") {
@@ -144,6 +146,21 @@ export class AgentPool {
       };
     }
 
+    // AC-4.5: 真正的 per-run maxConcurrency 隔离。所有 workflow run 共享
+    // subagents globalPool（maxConcurrent=4）只是兜底，per-run 限制优先。
+    // 之前 active++ 仅做计数，无 release 机制，实际并发完全依赖 globalPool。
+    if (this.active >= this.maxConcurrency) {
+      await new Promise<void>((resolve) => this.waiters.push(resolve));
+    }
+    // 抢占后再次检查 abort：可能排队期间被 abort
+    if (controller.signal.aborted) {
+      cleanup();
+      return {
+        callId, output: "", durationMs: Date.now() - startedAt,
+        success: false, error: "Operation aborted before start", toolCalls: [],
+      };
+    }
+
     this.active++;
     this.totalCallCount++;
     if (this.budgetRef) this.maybeEmitSoftWarning(this.budgetRef);
@@ -180,13 +197,23 @@ export class AgentPool {
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // 超时优先：若 catch 来自 abort（agent 主动响应 abort signal 抛错），
+      // 且 timeoutMs 配置了，覆盖为清晰的 timeout 描述。
+      // 正常情况下 runAgent 返回 result.error = "aborted"，由上方 override 块处理；
+      // 此处兜底 agent 抛 AbortError（实现层行为）的场景。
+      const errorMsg = timeoutMs > 0 && controller.signal.aborted
+        ? `Agent timed out after ${timeoutMs}ms`
+        : message;
       return {
         callId, output: "", durationMs: Date.now() - startedAt,
-        success: false, error: message, toolCalls: [],
+        success: false, error: errorMsg, toolCalls: [],
       };
     } finally {
       cleanup();
       this.active--;
+      // 释放一个 slot，唤醒最先 wait 的 caller
+      const next = this.waiters.shift();
+      if (next) next();
     }
   }
 
@@ -197,6 +224,13 @@ export class AgentPool {
       catch { /* callback errors must not affect dispatch */ }
     }
   }
+}
+
+/** 截断字符串到 maxLen，超出追加 "..." 标记 */
+function truncatePreview(s: string, maxLen: number): string {
+  if (s.length <= maxLen) return s;
+  const ELLIPSIS_LEN = 3;
+  return s.slice(0, maxLen - ELLIPSIS_LEN) + "...";
 }
 
 /**
