@@ -1,5 +1,5 @@
 // src/index.ts
-import { Box, Text, TruncatedText } from "@earendil-works/pi-tui";
+import { Box, Text, TruncatedText } from "@mariozechner/pi-tui";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import { AskUserComponent } from "./component";

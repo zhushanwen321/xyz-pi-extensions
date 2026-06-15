@@ -360,6 +360,43 @@ describe("AskUserComponent — comment flow", () => {
 		expect(result.val!.answers["Which DB? (with comment)"]).toBe("custom");
 	});
 
+	it("C-36 (AC-17): comment Esc skips comment and advances (single)", () => {
+		const { c, result } = make([singleQWithComment]);
+		c.handleInput(ENTER); // select Postgres → comment mode
+		c.handleInput(ESC); // Esc in comment = skip comment → advance → submit
+		expect(result.val).not.toBeUndefined();
+		// commentValue stays null (no prior comment), answer is the selected option
+		expect(result.val!.answers["Which DB? (with comment)"]).toBe("Postgres");
+	});
+
+	it("C-36b (AC-17): comment Esc advances to next tab (multi-question)", () => {
+		const { c, result } = make(multiQWithComment);
+		// Q1 (allowComment): select A → comment mode
+		c.handleInput(ENTER); // select A → comment mode
+		c.handleInput(ESC); // Esc in comment = skip → advance to Q2
+		// Q2: select X → Submit
+		c.handleInput(ENTER); // select X → Submit
+		c.handleInput(ENTER); // Submit
+		expect(result.val).not.toBeUndefined();
+		expect(result.val!.answers["Q1"]).toBe("A");
+		expect(result.val!.answers["Q2"]).toBe("X");
+	});
+
+	it("C-36c (AC-17): Esc-in-comment discards typed text (vs Enter which saves)", () => {
+		// Contrast: typing then Enter would save commentValue and append " — keep".
+		// Esc should discard the typed editor text and advance without attaching it.
+		const { c, result } = make([singleQWithComment]);
+		c.handleInput(ENTER); // select Postgres → comment mode
+		c.handleInput("k");
+		c.handleInput("e");
+		c.handleInput("e");
+		c.handleInput("p");
+		c.handleInput(ESC); // Esc in comment = discard typed text → advance → submit
+		expect(result.val).not.toBeUndefined();
+		// No " — keep" suffix: Esc did not commit the typed text
+		expect(result.val!.answers["Which DB? (with comment)"]).toBe("Postgres");
+	});
+
 	it("C-37: answer + comment combined format 'label — note'", () => {
 		const { c, result } = make([singleQWithComment]);
 		c.handleInput(ENTER); // select Postgres → comment mode
