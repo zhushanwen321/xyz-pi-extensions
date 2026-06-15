@@ -152,9 +152,17 @@ export class AgentPool {
     // AC-4.5: 真正的 per-run maxConcurrency 隔离。所有 workflow run 共享
     // subagents globalPool（maxConcurrent=4）只是兜底，per-run 限制优先。
     // 之前 active++ 仅做计数，无 release 机制，实际并发完全依赖 globalPool。
+    // Round 4 MF1: 必须始终 resolve 等待的 Promise——若仅跳过 aborted waiter 而不 resolve，
+    // 它的 Promise 永远挂起，caller 永久不返回（线程卡死 + 闭包泄漏）。
     if (this.active >= this.maxConcurrency) {
       await new Promise<void>((resolve) => {
         this.waiters.push({ resolve, signal: controller.signal });
+        // 边界：enqueue 时若 caller 已被 abort（controller.signal.aborted），
+        // 当前轮 shift 可能不会唤醒它——立即自我 resolve 避免永久挂起。
+        if (controller.signal.aborted) {
+          this.waiters.shift();
+          resolve();
+        }
       });
     }
     // 抢占后再次检查 abort：可能排队期间被 abort
@@ -187,6 +195,10 @@ export class AgentPool {
         skillPath: opts.skillPath,
         appendSystemPrompt: opts.appendSystemPrompt,
         signal: controller.signal,
+        // Round 4 S1: spec FR-O4.1 要求 workflow 的 sync step 传 priority: 0，
+        // 确保 workflow agent 调用不被 background subagent（priority: 1000）插队。
+        // 否则 globalPool 满时 background 会插队到 workflow 前面，sync step 延迟。
+        priority: 0,
       };
 
       const subResult = await runtime.runAgent(runOpts);
@@ -219,9 +231,17 @@ export class AgentPool {
       // 释放一个 slot，唤醒最先 wait 的 caller。
       // Round 3 MF1: 跳过已 abort 的 waiter——它们的 caller 已返回，再唤醒只会浪费一个 slot，
       // 累积下来会让 active 计数与实际并发漂移（超限或永久卡死）。
+      // Round 4 MF1: 即使跳过占 slot 的机会，也必须 resolve() aborted waiter——它们的 Promise
+      // 必须有出口，否则永久挂起（线程卡死 + 闭包泄漏）。语义改为：
+      //   - 找到第一个未 aborted 的 waiter → 它占 slot，break
+      //   - 沿途跳过的 aborted waiter 也要 resolve()，让 caller 跳出 await 走 abort 分支
       while (this.waiters.length > 0) {
         const next = this.waiters.shift()!;
-        if (next.signal.aborted) continue;
+        if (next.signal.aborted) {
+          // 唤醒 caller 走出 await（会走 abort 分支返回 error 结果）
+          next.resolve();
+          continue;
+        }
         next.resolve();
         break;
       }

@@ -311,6 +311,9 @@ export class SubagentRuntime {
       elapsedSeconds: 0,
       eventLog: [],
     };
+    // Round 4 S4: 闭包捕获 startTime 供 linger 回调使用——直接用 Date.now() - elapsedSeconds*1000
+    // 会混入 WIDGET_LINGER_MS(5s) 偏差。sync agent 的 startedAt 写历史应等于实际 startTime。
+    const archiveStartTime = startTime;
     if (!skipWidget) {
       this._runningAgents.set(widgetState.id, widgetState);
       this.notifyChange();
@@ -357,7 +360,7 @@ export class SubagentRuntime {
             totalTokens: widgetState.totalTokens,
             result: undefined,
             error: widgetState.summary,
-            startedAt: Date.now() - (widgetState.elapsedSeconds ?? 0) * 1000,
+            startedAt: archiveStartTime,
             endedAt: widgetState.finishedAt,
           });
           this._runningAgents.delete(widgetId);
@@ -406,7 +409,7 @@ export class SubagentRuntime {
             totalTokens: widgetState.totalTokens,
             result: undefined,
             error: widgetState.summary,
-            startedAt: Date.now() - (widgetState.elapsedSeconds ?? 0) * 1000,
+            startedAt: archiveStartTime,
             endedAt: widgetState.finishedAt,
           });
           this._runningAgents.delete(widgetId);
@@ -485,7 +488,24 @@ export class SubagentRuntime {
     // record 是本闭包独占的引用，与其它并发 background 隔离。
     const userBgOnEvent = opts.onEvent;
     const bgStartTime = record.startedAt;
-    const signal = opts.signal ?? controller.signal;
+    // Round 4 MF2: 始终用 controller.signal 喂给 runAgent——runAgent 监听的是这个 signal。
+    // opts.signal 是调用方传入的（Pi tool 执行的 signal），cancelBackground 只能 abort controller
+    // 不能 abort opts.signal。若把 opts.signal 喂给 runAgent，cancelBackground(controller.abort())
+    // 不会传到 agent；完成后 .then 还会把 status 从 cancelled 覆盖回 done/failed。
+    // 修复：内部用 controller.signal；同时把 opts.signal 的 abort 转发到 controller（一次性监听），
+    // 让外部 Esc 也能终止 background。
+    const signal = controller.signal;
+    if (opts.signal) {
+      if (opts.signal.aborted) {
+        controller.abort();
+      } else {
+        opts.signal.addEventListener(
+          "abort",
+          () => controller.abort(),
+          { once: true },
+        );
+      }
+    }
     // FR-2.5: onUpdate 拦截器——把 runAgent 的事件回流给调用方（对话流 block 实时刷新）
     const userOnUpdate = opts.onUpdate;
     let bgTurns = 0;
@@ -852,6 +872,17 @@ export class SubagentRuntime {
     this._disposed = true;
     this.flushPendingNotifications();
     this.clearActiveView();
+  }
+
+  /**
+   * Round 4 MF3: 重置 dispose 状态。
+   * Pi 的 /resume /fork /new 会在同进程内先 session_shutdown(A) 再 session_start(B)，
+   * 进程内单例不变。session_shutdown → dispose() 设 _disposed=true；新 session
+   * session_start 注入新 pi 后必须复活，否则所有 background 完成通知被
+   * notifyBgCompletion 顶部 `if (this._disposed) return;` 短路。
+   */
+  revive(): void {
+    this._disposed = false;
   }
 }
 

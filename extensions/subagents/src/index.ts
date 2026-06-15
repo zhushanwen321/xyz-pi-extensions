@@ -32,6 +32,10 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     const rt = existing ?? new SubagentRuntime({ cwd, homeDir, agentDir });
     rt.injectPi(pi);
     rt.injectModelRegistry(ctx.modelRegistry);
+    // Round 4 MF3: 若上一 session session_shutdown 时 dispose() 设了 _disposed=true，
+    // 新 session 必须复活——否则 notifyBgCompletion 顶部 if (this._disposed) return 短路，
+    // 所有 background 完成回注（FR-O1）在第一次 /resume /fork /new 后整体失效。
+    if (existing) rt.revive();
 
     const entries = ctx.sessionManager.getEntries() ?? [];
     rt.restoreFromEntries(entries);

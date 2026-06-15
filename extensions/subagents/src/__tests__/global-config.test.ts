@@ -37,6 +37,18 @@ describe("loadGlobalConfig", () => {
     expect(cfg.yoloByDefault).toBe(false);   // 默认保留
     expect(cfg.categories.research.model).toBe("mimo-router/mimo-v2.5"); // 默认 category 保留
   });
+
+  it("Round 4 S14: corrupted JSON returns defaults without throwing", () => {
+    const dir = path.join(tempDir, ".pi", "agent", "extensions", "subagents");
+    fs.mkdirSync(dir, { recursive: true });
+    // 故意写损坏的 JSON
+    fs.writeFileSync(path.join(dir, "config.json"), "{ invalid json ::");
+    // 不应抛错，应返回默认配置
+    const cfg = loadGlobalConfig(tempDir);
+    expect(cfg.version).toBe(1);
+    expect(cfg.maxConcurrent).toBe(4);
+    expect(cfg.yoloByDefault).toBe(false);
+  });
 });
 
 describe("saveGlobalConfig", () => {

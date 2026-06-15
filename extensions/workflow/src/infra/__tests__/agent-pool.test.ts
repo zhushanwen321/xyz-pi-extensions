@@ -337,3 +337,72 @@ describe("AgentPool — soft limit 警告回调", () => {
     expect(call.totalCalls).toBeGreaterThan(500);
   });
 });
+
+// ============================================================
+// Round 4 MF7: waiter abort 行为
+// 场景：maxConcurrency=1，A 运行中；B/C 排队；abort B 的 signal；A 完成后 C 应直接执行
+// （跳过 B 占用 slot 的机会），且 B 的 caller 必须 resolve（不能永久挂起）。
+// ============================================================
+
+describe("AgentPool — waiter abort (Round 4 MF1/MF7)", () => {
+  it("maxConcurrency=1：被 abort 的 waiter 不再占 slot，下一个 waiter 立即执行", async () => {
+    // A 正在跑（卡住），B/C 排队；B 被 abort，A 完成后 C 应直接执行。
+    // round 4 MF1 修复后：aborted waiter 也会被 resolve（caller 跳出 await），但
+    // 不占 slot——下一个 waiter (C) 立即执行。
+    const releaseFns: Array<() => void> = [];
+    mockState.runtime = {
+      runAgent: vi.fn().mockImplementation((opts: { signal?: AbortSignal }) => {
+        if (opts.signal?.aborted) {
+          return Promise.resolve(makeResult({ success: false, error: "aborted" }));
+        }
+        return new Promise<SubAgentResult>((resolve) => {
+          releaseFns.push(() => resolve(makeResult({ text: "ok" })));
+        });
+      }),
+    };
+
+    const pool = new AgentPool({ maxConcurrency: 1 });
+    const controllerB = new AbortController();
+    const promiseA = pool.enqueue({ prompt: "A" });
+    const promiseB = pool.enqueue({ prompt: "B" }, controllerB.signal);
+    const promiseC = pool.enqueue({ prompt: "C" });
+
+    // 立即 abort B（B 还在 waiters 队列里）
+    controllerB.abort();
+
+    // 释放 A：A 完成 → finally 应 resolve B（让 caller 跳出 await）但跳过 B 占 slot 的机会，
+    // 然后 resolve C → C 立即执行
+    releaseFns[0]!();
+    // 多次让出 microtask，让 A 的 finally 跑完、B/C 同步 await 恢复、C 进入 runAgent
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    // 此时 C 应已发起 runAgent，释放它
+    releaseFns[1]!();
+    // 让 promise 全部 settle
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    const [resultA, resultB, resultC] = await Promise.all([promiseA, promiseB, promiseC]);
+
+    // A 正常完成
+    expect(resultA.success).toBe(true);
+    expect(resultA.output).toBe("ok");
+    // B 被 abort → caller 跳出 await 后走到 abort 检查，返回 error 结果（不永久挂起）
+    expect(resultB.success).toBe(false);
+    expect(resultB.error).toBe("Operation aborted before start");
+    // C 应直接执行（A 完成后没人占 slot）
+    expect(resultC.success).toBe(true);
+    expect(resultC.output).toBe("ok");
+  });
+
+  it("maxConcurrency=1：abort 在 enqueue 之前已 aborted 立即返回 error", async () => {
+    mockState.runtime = {
+      runAgent: vi.fn().mockResolvedValue(makeResult()),
+    };
+    const controller = new AbortController();
+    controller.abort();
+
+    const pool = new AgentPool({ maxConcurrency: 1 });
+    const result = await pool.enqueue({ prompt: "x" }, controller.signal);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Operation aborted before start");
+  });
+});

@@ -79,10 +79,10 @@ const EXPONENTIAL_BACKOFF_BASE = 2;
 
 // P1-5: Stale context detection — matches patterns reported when
 // pi's session context was compacted or canceled between agent calls.
-const STALE_CONTEXT_PATTERNS = ["stale context", "stalecontext", "context canceled", "aborted"];
+export const STALE_CONTEXT_PATTERNS = ["stale context", "stalecontext", "context canceled", "aborted"];
 
 /** Check if an error message indicates a stale/canceled pi session context. */
-function isStaleContextErrorMsg(msg: string | undefined): boolean {
+export function isStaleContextErrorMsg(msg: string | undefined): boolean {
   if (!msg) return false;
   const lower = msg.toLowerCase();
   return STALE_CONTEXT_PATTERNS.some((p) => lower.includes(p));
@@ -900,6 +900,9 @@ export class WorkflowOrchestrator {
         this.events.emit(runId, { type: "node-update", stepIndex: callId, node: { stepIndex: traceNode.stepIndex, agent: traceNode.agent, status: traceNode.status, phase: traceNode.phase } });
       }
       if (poolResult.usage) {
+        // Round 4 S3: 语义为“实际计费 token”（input + output），忽略 cacheRead/cacheWrite。
+        // contextTokens（mapResult 计）含缓存项是供 UI/对账用，不计入 budget 限制。
+        // 若未来需“总 token 消耗”语义，改为四字段之和。
         instance.budget.usedTokens += poolResult.usage.input + poolResult.usage.output;
         instance.budget.usedCost += poolResult.usage.cost;
       }
@@ -922,6 +925,13 @@ export class WorkflowOrchestrator {
       this.onTraceUpdate?.(runId);
 
       // Cleanup temp file if it was created for agent system prompt
+    })
+    // Round 4 S2: 挂 catch 避免 unhandled rejection——worker.postMessage / persistState
+    // 在 worker 已 terminate 的竞态下可能抛错，Node 默认 --unhandled-rejections=throw
+    // 会使进程崩溃。错误已无关业务结果（state 同步失败由下次 persistState 修正）。
+    .catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[workflow] executeWithRetry unhandled error for ${runId}/${callId}: ${message}`);
     });
   }
 
