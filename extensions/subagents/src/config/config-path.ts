@@ -18,7 +18,7 @@ export function getConfigPath(homeDir: string): string {
  * subagents 数据根目录：`~/.pi/agent/subagents/`。
  * 与主 session（`~/.pi/agent/sessions/`）物理隔离。
  */
-export function getSubagentsDataRoot(homeDir: string): string {
+function getSubagentsDataRoot(homeDir: string): string {
   return path.join(homeDir, ".pi", "agent", "subagents");
 }
 
@@ -27,7 +27,7 @@ export function getSubagentsDataRoot(homeDir: string): string {
  * encoded-cwd 复用主 session 的编码约定（路径分隔符 → `-`），
  * 保证同一项目的主 session 与 subagent 数据在同一编码下可对应。
  */
-export function getCwdScopedDir(homeDir: string, cwd: string): string {
+function getCwdScopedDir(homeDir: string, cwd: string): string {
   const encoded = encodeCwd(cwd);
   return path.join(getSubagentsDataRoot(homeDir), encoded);
 }

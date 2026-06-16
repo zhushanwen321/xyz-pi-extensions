@@ -35,7 +35,7 @@ export type ValidStatus = (typeof VALID_STATUSES)[number];
 const STALE_CONTEXT_PATTERNS = ["aborted", "context canceled", "stale context", "stalecontext", "extension context no longer active"];
 
 /** 检查错误是否表示 stale / canceled context */
-export function isStaleContextError(error: Error | unknown): boolean {
+function isStaleContextError(error: Error | unknown): boolean {
 	const msg = error instanceof Error ? error.message : String(error);
 	const lower = msg.toLowerCase();
 	return STALE_CONTEXT_PATTERNS.some((p) => lower.includes(p));

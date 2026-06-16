@@ -18,7 +18,7 @@ const COMMIT_MSG_MAX = 200;
 /** random UUID 字节数 */
 const RANDOM_BYTES_COUNT = 4;
 /** tmpdir 下 pi-agent-* 前缀，用于扫描残留 worktree 物理目录（V5） */
-export const PI_AGENT_TMP_PREFIX = "pi-agent-";
+const PI_AGENT_TMP_PREFIX = "pi-agent-";
 
 export interface WorktreeResult {
   /** worktree 绝对路径（agent 的 cwd）。monorepo 子目录场景下指向子目录。 */

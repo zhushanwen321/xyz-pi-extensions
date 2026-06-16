@@ -18,7 +18,7 @@ const SEC_PER_DAY = SEC_PER_HOUR * HOURS_PER_DAY;
 
 // ── token 数字单位阈值 ─────────────────────────────────
 
-export const KILO = 1_000;
+const KILO = 1_000;
 const MILLION = 1_000_000;
 
 // ── 百分比阈值 ─────────────────────────────────────────
@@ -31,15 +31,15 @@ export const PERCENT_SCALE = 100;
 // ── 渲染常量 ───────────────────────────────────────────
 
 /** 标题列宽（按最长 "minimax-token-plan"=18，+1 空格余量） */
-export const TITLE_COL_W = 19;
+const TITLE_COL_W = 19;
 /** reset 时间列宽（fmtResetSec 最长 "12d23h"=6 + 1 空格余量） */
-export const RESET_COL_W = 7;
+const RESET_COL_W = 7;
 /** pct 列宽（"100%"=4，但 padStart(3) 给 " 23%"=4） */
-export const PCT_COL_W = 3;
+const PCT_COL_W = 3;
 
 // ── 列定义 ─────────────────────────────────────────────
 
-export const COLS = [
+const COLS = [
 	{ key: "5h", label: "5h" },
 	{ key: "week", label: "wk" },
 	{ key: "month", label: "mh" },

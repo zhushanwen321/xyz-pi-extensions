@@ -495,7 +495,7 @@ const SAVED_DIR = resolve(".pi/workflows");
  * Save a temporary workflow to the saved directory.
  * Moves .pi/workflows/.tmp/{name}.js → .pi/workflows/{newName||name}.js
  */
-export async function saveWorkflow(tmpName: string, newName?: string): Promise<string> {
+async function saveWorkflow(tmpName: string, newName?: string): Promise<string> {
   const workflows = await loadWorkflows();
   const target = workflows.find(
     (wf) => wf.source === "tmp" && wf.name === tmpName,

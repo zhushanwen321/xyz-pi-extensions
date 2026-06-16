@@ -8,10 +8,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 // Re-export hook modules for easy access
-export { setupNetworkTimeoutGuard } from "./hooks/network-timeout-guard";
-export { setupSubagentListInjector } from "./hooks/subagent-list-injector";
-export { setupTestTimeoutGuard } from "./hooks/test-timeout-guard";
-export { setupToolErrorHandler } from "./hooks/tool-error-handler";
 
 import { setupNetworkTimeoutGuard } from "./hooks/network-timeout-guard";
 import { setupSubagentListInjector } from "./hooks/subagent-list-injector";

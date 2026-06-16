@@ -14,7 +14,7 @@ import { PROVIDERS } from "@zhushanwen/pi-quota-providers";
 
 export type Locale = "zh" | "en";
 
-export function detectLocale(): Locale {
+function detectLocale(): Locale {
 	try {
 		const locale = Intl.DateTimeFormat().resolvedOptions().locale;
 		return /^zh/i.test(locale) ? "zh" : "en";

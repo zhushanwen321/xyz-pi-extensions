@@ -24,7 +24,7 @@ export interface SkillMeta {
  * 从路径中提取 skill 名称。
  * 路径必须以 SKILL.md 结尾，名称取倒数第二级目录。
  */
-export function extractSkillName(path: string): string | null {
+function extractSkillName(path: string): string | null {
   if (!path.endsWith("SKILL.md")) return null;
   const MIN_PATH_SEGMENTS = 2;
   const segments = path.replace(/\/$/, "").split("/");
@@ -36,7 +36,7 @@ export function extractSkillName(path: string): string | null {
  * 判断 target 路径是否位于 cwd 之下（用于排除开发/调研场景的 SKILL.md read）。
  * target 可以是相对或绝对路径，统一 resolve 后比较前缀。
  */
-export function isPathInCwd(target: string, cwd: string): boolean {
+function isPathInCwd(target: string, cwd: string): boolean {
   const abs = resolve(cwd, target);
   const prefix = cwd.endsWith(sep) ? cwd : cwd + sep;
   return abs === cwd || abs.startsWith(prefix);

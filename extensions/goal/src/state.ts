@@ -271,4 +271,3 @@ export function getElapsedTimeSeconds(state: GoalRuntimeState): number {
 
 // getTokenUsagePercent 和 getTimeUsagePercent 已移至 budget.ts
 // 保留 re-export 以便渐进迁移
-export { getTimeUsagePercent,getTokenUsagePercent } from "./budget.js";

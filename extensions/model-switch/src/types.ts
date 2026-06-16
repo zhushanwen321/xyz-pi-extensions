@@ -132,7 +132,7 @@ export interface ModelCapability {
 /**
  * 从 config 中提取所有模型的能力表。
  */
-export function extractModelCapabilities(config: ModelPolicy): ModelCapability[] {
+function extractModelCapabilities(config: ModelPolicy): ModelCapability[] {
 	const result: ModelCapability[] = [];
 	for (const [provider, pcfg] of Object.entries(config.models)) {
 		for (const [alias, entry] of Object.entries(pcfg.models)) {
