@@ -16,15 +16,15 @@
 //   - failed 时：toolErrorBg（eventLog + error）
 //   eventLog 不带 ⎿ 前缀，直接显示 label + icon。
 
-import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { StringEnum } from "@mariozechner/pi-ai";
+import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 import { getRuntime } from "../runtime.ts";
+import { completeState, createExecutionState, executionStateToDetails, updateStateFromEvent } from "../state/execution-state.ts";
 import { resolveAllCategoryModels } from "../tui/batch-model-resolver.ts";
 import { runCategoryConfirm } from "../tui/category-confirm.ts";
 import { formatTokens } from "../tui/format.ts";
-import { completeState, createExecutionState, executionStateToDetails, updateStateFromEvent } from "../state/execution-state.ts";
 import { renderSubagentCall, SubagentResultComponent, type SubagentToolDetails } from "../tui/subagent-render.ts";
 import type { AgentEvent, ModelInfo } from "../types.ts";
 

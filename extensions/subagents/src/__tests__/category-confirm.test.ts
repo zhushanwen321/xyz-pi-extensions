@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { runCategoryConfirm, type ConfirmUI } from "../tui/category-confirm.ts";
+import { type ConfirmUI,runCategoryConfirm } from "../tui/category-confirm.ts";
 import type { ModelInfo, SessionModelState, SubagentsGlobalConfig } from "../types.ts";
 
 const sessionState: SessionModelState = {
