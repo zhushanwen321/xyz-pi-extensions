@@ -56,7 +56,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { AgentPool } from "../src/infra/agent-pool.js";
 import { WorkflowOrchestrator } from "../src/orchestrator";
 import { isStaleContextErrorMsg, STALE_CONTEXT_PATTERNS } from "../src/orchestrator";
-import { createInstance } from "../src/domain/state";
+import { createInstance, type WorkflowStatus } from "../src/domain/state";
 
 // ── isStaleContextErrorMsg 纯函数测试 ────────────────────────
 
@@ -101,6 +101,52 @@ describe("isStaleContextErrorMsg", () => {
     expect(STALE_CONTEXT_PATTERNS).toContain("stalecontext");
     expect(STALE_CONTEXT_PATTERNS).toContain("context canceled");
     expect(STALE_CONTEXT_PATTERNS).toContain("aborted");
+  });
+});
+
+// ── pauseOnSignal signal→pause 转换路径测试 ──────────────────────────────
+
+describe("signal-triggered pause", () => {
+  it("abort signal triggers pauseOnSignal which transitions to paused", () => {
+    const mockPi = makeMockPi();
+    const mockCtx = makeMockCtx();
+    const orch = new WorkflowOrchestrator(mockPi, mockCtx);
+    const inst = makeRunningInstance("wf-signal-1");
+    orch.restoreInstances(new Map([[inst.runId, inst]]));
+
+    // Access private pauseOnSignal via type cast
+    const pauseOnSignal = (orch as unknown as {
+      pauseOnSignal: (runId: string) => void;
+    }).pauseOnSignal;
+
+    // Verify pre-condition
+    expect(inst.status).toBe("running");
+    expect(inst.pausedAt).toBeUndefined();
+
+    // Trigger pauseOnSignal
+    pauseOnSignal.call(orch, inst.runId);
+
+    // Verify: status transitioned to paused
+    expect(inst.status).toBe("paused");
+    expect(inst.pausedAt).toBeDefined();
+  });
+
+  it("pauseOnSignal is a no-op for non-running instances", () => {
+    const mockPi = makeMockPi();
+    const mockCtx = makeMockCtx();
+    const orch = new WorkflowOrchestrator(mockPi, mockCtx);
+    const inst = makeRunningInstance("wf-signal-2");
+    inst.status = "paused" as WorkflowStatus;
+    orch.restoreInstances(new Map([[inst.runId, inst]]));
+
+    const pauseOnSignal = (orch as unknown as {
+      pauseOnSignal: (runId: string) => void;
+    }).pauseOnSignal;
+
+    pauseOnSignal.call(orch, inst.runId);
+
+    // Should remain paused, not throw or crash
+    expect(inst.status).toBe("paused");
   });
 });
 

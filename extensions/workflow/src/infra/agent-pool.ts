@@ -204,6 +204,9 @@ export class AgentPool {
         // 确保 workflow agent 调用不被 background subagent（priority: 1000）插队。
         // 否则 globalPool 满时 background 会插队到 workflow 前面，sync step 延迟。
         priority: 0,
+        // Skip widget registration and sync-history persistence for internal
+        // workflow agent steps — otherwise they pollute /subagents list output.
+        _skipWidget: true,
       };
 
       const subResult = await runtime.runAgent(runOpts);

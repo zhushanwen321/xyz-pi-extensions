@@ -43,7 +43,9 @@ export class DefaultConcurrencyPool implements ConcurrencyPool {
       next.resolve();
       // active 不变（一个离开队列，立即进入活跃）
     } else {
-      this.active--;
+      // Defensive lower-bound: prevent negative active count if release()
+      // is called more times than acquire().
+      if (this.active > 0) this.active--;
     }
   }
 
