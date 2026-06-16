@@ -188,7 +188,7 @@ describe("PiLike sendMessage (FR-O1)", () => {
     });
     expect(rt.pi.sendMessage).toHaveBeenCalledTimes(1);
     const call = rt.pi.sendMessage.mock.calls[0]!;
-    expect(call[0]).toMatchObject({ customType: "subagent-bg-notify", display: true });
+    expect(call[0]).toMatchObject({ customType: "subagent-bg-notify", display: false });
     expect(call[1]).toMatchObject({ triggerTurn: true });
   });
 

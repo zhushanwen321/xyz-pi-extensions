@@ -102,7 +102,7 @@ export class BgNotifier {
     const content = this.formatBgCompletionMessage(record);
     try {
       this._pi?.sendMessage(
-        { customType: "subagent-bg-notify", content, display: true },
+        { customType: "subagent-bg-notify", content, display: false },
         { deliverAs: "followUp", triggerTurn: true },
       );
     } catch {
@@ -133,7 +133,7 @@ export class BgNotifier {
     const content = `${pending.length} background tasks completed:\n\n${lines.join("\n\n")}`;
     try {
       this._pi?.sendMessage(
-        { customType: "subagent-bg-notify", content, display: true },
+        { customType: "subagent-bg-notify", content, display: false },
         { deliverAs: "followUp", triggerTurn: true },
       );
     } catch {

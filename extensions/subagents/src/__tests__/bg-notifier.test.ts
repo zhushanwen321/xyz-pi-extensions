@@ -67,6 +67,10 @@ describe("BgNotifier", () => {
     const notifier = new BgNotifier(pi);
     notifier.notifyBgCompletion(makeRecord());
     expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    // display:false — 静默投递：不渲染紫色块（避免双 block），但仍唤醒主 agent 处理结果。
+    const [message, options] = pi.sendMessage.mock.calls[0];
+    expect(message).toMatchObject({ customType: "subagent-bg-notify", display: false });
+    expect(options).toMatchObject({ deliverAs: "followUp", triggerTurn: true });
   });
 
   it("notifyBgCompletion: subsequent events within merge window are batched", () => {
@@ -103,6 +107,8 @@ describe("BgNotifier", () => {
     expect(pi.sendMessage).toHaveBeenCalledTimes(2); // 1 immediate + 1 flush
     const batchCall = pi.sendMessage.mock.calls[1][0];
     expect(batchCall.content).toContain("1 background tasks completed");
+    // 合并发送也是静默投递（display:false）
+    expect(batchCall).toMatchObject({ customType: "subagent-bg-notify", display: false });
   });
 
   it("flushPendingNotifications: no-op when no pending", () => {
