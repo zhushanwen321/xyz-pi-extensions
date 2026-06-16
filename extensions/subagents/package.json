@@ -20,6 +20,7 @@
     "src/state/",
     "src/tools/",
     "src/tui/",
+    "src/utils/",
     "src/category.ts",
     "src/event-log-builder.ts",
     "src/index.ts",
