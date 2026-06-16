@@ -21,12 +21,13 @@ import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@ma
 import { Type } from "@sinclair/typebox";
 
 import { getRuntime } from "../runtime.ts";
-import { completeState, createExecutionState, executionStateToDetails, updateStateFromEvent } from "../state/execution-state.ts";
+import { completeState, createExecutionState, executionStateToDetails, shouldTriggerUpdate, updateStateFromEvent } from "../state/execution-state.ts";
 import { resolveAllCategoryModels } from "../tui/batch-model-resolver.ts";
 import { CategoryConfirmComponent, type CategoryConfirmResult } from "../tui/category-confirm.ts";
 import { formatTokens } from "../tui/format.ts";
 import { renderSubagentCall, SubagentResultComponent, type SubagentToolDetails } from "../tui/subagent-render.ts";
 import type { AgentEvent, ModelInfo } from "../types.ts";
+import { createThrottle } from "../utils/throttle.ts";
 
 /** ms to seconds conversion */
 const MS_PER_SECOND = 1000;
@@ -414,13 +415,16 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         startedAt: startTime,
       });
 
-      const pushUpdate = () => {
+      const pushUpdateNow = () => {
         const details = executionStateToDetails(state);
         onUpdate?.({
           content: [{ type: "text" as const, text: `[subagent] ${details.turns} turns | ${formatTokens(details.totalTokens)} | ${details.elapsedSeconds}s` }],
           details: { ...details },
         });
       };
+      // Bug-fix: 节流 onUpdate -> requestRender，降低 pi-tui doRender 的底部锚定频率，
+      // 缓解 streaming 期间用户无法滚动（leading+trailing，最终态由 flush 兜底）。
+      const throttledPushUpdate = createThrottle(pushUpdateNow, 150);
 
       const result = await rt.runAgent({
         task: params.task,
@@ -440,7 +444,10 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         state,
         onEvent: (event: AgentEvent) => {
           updateStateFromEvent(state, event);
-          pushUpdate();
+          // Bug #2 修复：streaming delta（text/thinking）只累积 eventLog，不触发 onUpdate。
+          // 仅离散边界事件（tool/turn/message）触发 tool block 重绘，避免 streaming 期间
+          // pi-tui doRender 把 viewport 锚定到底部（~6/s 拉回导致无法滚动）。
+          if (shouldTriggerUpdate(event)) throttledPushUpdate();
         },
       });
 
@@ -450,7 +457,9 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         // 最终状态，避免覆盖为 "failed"，与 background 路径及 history 记录一致。
         const failureStatus = signal?.aborted ? "cancelled" : "failed";
         completeState(state, result, failureStatus);
-        pushUpdate();
+        // 终态必须立即渲染——先 flush 节流 pending，再用 pushUpdateNow 保证最终 block 状态。
+        throttledPushUpdate.flush();
+        pushUpdateNow();
         throw new Error(
           failureStatus === "cancelled"
             ? result.error ?? "subagent cancelled"
@@ -461,6 +470,8 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       // Wave 2: 确保 state 反映最终状态（runAgent 的真实实现已调 completeState，
       // 但 mock runAgent 不会——tool 层自包含，保证投影正确）
       if (state.status === "running") completeState(state, result, "done");
+      // 终态：flush 节流 pending，保证最终 block（done）状态一定渲染。
+      throttledPushUpdate.flush();
       const finalDetails = executionStateToDetails(state);
       finalDetails.result = result.text;
       // V4：worktree 隔离执行有变更时，向 LLM 追加 merge 指令（分支名 + 合并命令）

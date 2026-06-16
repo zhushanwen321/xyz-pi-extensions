@@ -24,6 +24,37 @@ import {
   TURN_SUMMARY_MAX,
 } from "../types.ts";
 
+/**
+ * Bug #2 根因修复：判断事件是否应触发 onUpdate（→ tool block 重绘 → requestRender）。
+ *
+ * 背景：pi-tui 的 doRender 在 chatContainer 末尾内容变化时，通过
+ * previousViewportTop = Math.max(prevViewportTop, finalCursorRow - height + 1)
+ * 无条件把 viewport 锚定到底部。subagent tool block 位于 chatContainer 末尾，
+ * 每次 onUpdate 都会触发这个锚定。
+ *
+ * 对比 pi-subagents（execution.ts）：onUpdate 只在 tool 边界
+ * (tool_execution_start/end) 和 message 边界 (message_end) 触发，
+ * streaming delta（text/thinking）不触发。我们在 text_delta/thinking_delta
+ * 上也触发了 onUpdate（每 token 一次），导致 streaming 期间 ~6/s 拉回底部。
+ *
+ * 此函数让 text_delta/thinking_delta 只累积 eventLog 文本（updateStateFromEvent
+ * 仍处理它们），但不触发 onUpdate。离散边界事件才触发 UI 刷新。
+ */
+export function shouldTriggerUpdate(event: AgentEvent): boolean {
+  switch (event.type) {
+    case "tool_start":
+    case "tool_end":
+    case "turn_end":
+    case "message_end":
+    case "error":
+      return true;
+    case "text_delta":
+    case "thinking_delta":
+    case "compaction":
+      return false;
+  }
+}
+
 /** ms → s 换算 */
 const MS_PER_SECOND = 1000;
 

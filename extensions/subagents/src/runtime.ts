@@ -17,6 +17,7 @@ import {
   completeState,
   createExecutionState,
   executionStateToDetails,
+  shouldTriggerUpdate,
   updateStateFromEvent,
 } from "./state/execution-state.ts";
 import {
@@ -39,6 +40,8 @@ import {
   type SubagentsGlobalConfig,
   type ResolvedModel,
 } from "./types.ts";
+import { createThrottle } from "./utils/throttle.ts";
+import type { SubagentToolDetails } from "./tui/subagent-render.ts";
 
 /** Pi ExtensionAPI 的最小接口（duck-typed，用于 appendEntry / events.emit / sendMessage） */
 interface PiLike {
@@ -607,6 +610,12 @@ export class SubagentRuntime {
     }
     // FR-2.5: onUpdate 拦截器——把 runAgent 的事件回流给调用方（对话流 block 实时刷新）
     const userOnUpdate = opts.onUpdate;
+    // Bug-fix: 节流 userOnUpdate -> requestRender，降低 pi-tui doRender 的底部锚定
+    // 频率，缓解 streaming 期间用户无法滚动（leading+trailing，最终态由 flush 兜底）。
+    const throttledUserUpdate = createThrottle(
+      (details: SubagentToolDetails) => userOnUpdate?.(details),
+      150,
+    );
     // Round 5 MF#1: wrap in try/catch to prevent ghost entries when runAgent()
     // throws synchronously (e.g. buildContext() failure) — without this, the
     // record added to _bgRecords above would remain status:"running" forever
@@ -625,8 +634,13 @@ export class SubagentRuntime {
         // Wave 1: 统一用 updateStateFromEvent 更新 state（eventLog/turns/tokens）
         // 持久缓冲在 state 上（_currentTurnText/_currentThinking），修复 sink reset bug
         updateStateFromEvent(state, event);
-        // FR-2.5: 回流给调用方（对话流 block 实时刷新）——用 executionStateToDetails 投影
-        userOnUpdate?.(executionStateToDetails(state));
+        // Bug #2 修复：streaming delta（text/thinking）只累积 eventLog，不触发 onUpdate。
+        // 仅离散边界事件（tool/turn/message）触发 tool block 重绘，避免 streaming 期间
+        // pi-tui doRender 把 viewport 锚定到底部。
+        if (shouldTriggerUpdate(event)) {
+          // FR-2.5: 回流给调用方（对话流 block 实时刷新）——用 executionStateToDetails 投影
+          throttledUserUpdate(executionStateToDetails(state));
+        }
         this.notifyChange();
       },
     })
@@ -643,6 +657,7 @@ export class SubagentRuntime {
           : result.success ? "done" : "failed";
         // Wave 1: 用 completeState 统一写 state（status/endedAt/agentResult/result/error）
         completeState(state, result, finalStatus);
+        throttledUserUpdate.flush();
         // BgRecord 镜像字段同步（供 getBackground/notifyBgCompletion 直接读）
         record.status = finalStatus;
         record.endedAt = state.endedAt;
