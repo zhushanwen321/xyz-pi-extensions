@@ -78,7 +78,11 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type Theme = any;
 	export type ThemeColor = string;
 	export type ExtensionCommandContext = any;
-	export type AgentToolResult<T = any> = { content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; details: T };
+	export type AgentToolResult<T = any> = { content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; details: T; isError?: boolean };
+	/** Options passed to renderResult. `expanded` requests a detailed view (all options + ●/○ marks). */
+	export interface ToolRenderResultOptions {
+		expanded: boolean;
+	}
 	export type TurnEndEvent = any;
 	export type SessionBeforeCompactEvent = any;
 	export type SessionBeforeCompactResult = any;

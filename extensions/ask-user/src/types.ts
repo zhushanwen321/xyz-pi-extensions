@@ -13,31 +13,32 @@ export const SPLIT_PANE_RIGHT_MIN = 28;
 export const ANSWER_COMMENT_SEPARATOR = " — ";
 
 // ── Input schema（LLM 调用参数） ─────────────────────
+// description 用英文：这些字符串会进 LLM 的 tool schema，英文更利于模型理解。
 export const OptionSchema = Type.Object({
-	label: Type.String({ description: "选项标签，同时也是返回给 LLM 的答案值" }),
+	label: Type.String({ description: "Option label; also the answer value returned to the LLM" }),
 	description: Type.Optional(
-		Type.String({ description: "选项说明，显示在 label 下方及分屏预览中" }),
+		Type.String({ description: "Explanation shown under the label and in the split-pane preview" }),
 	),
 });
 
 export const QuestionSchema = Type.Object({
-	question: Type.String({ description: "完整问题文本" }),
+	question: Type.String({ description: "Full question text" }),
 	header: Type.Optional(
 		Type.String({
-			description: "Tab 标签，≤12 字符。多问题（questions.length>1）时必填，单问题可省略",
+			description: "Tab label, <=12 chars. Required for multi-question (questions.length>1); optional for single question",
 		}),
 	),
-	context: Type.Optional(Type.String({ description: "问题前的上下文摘要" })),
+	context: Type.Optional(Type.String({ description: "Context summary shown above the question" })),
 	options: Type.Array(OptionSchema, {
 		minItems: 2,
 		maxItems: 4,
-		description: "2-4 个选项",
+		description: "2-4 options",
 	}),
 	multiSelect: Type.Optional(
-		Type.Boolean({ description: "默认 false。true=多选 checkbox" }),
+		Type.Boolean({ description: "Default false. true = multi-select checkbox" }),
 	),
 	allowComment: Type.Optional(
-		Type.Boolean({ description: "默认 false。true=选中后追加自由文本评论" }),
+		Type.Boolean({ description: "Default false. true = append a free-text comment after selecting" }),
 	),
 });
 
@@ -45,7 +46,7 @@ export const InputSchema = Type.Object({
 	questions: Type.Array(QuestionSchema, {
 		minItems: 1,
 		maxItems: 4,
-		description: "1-4 个问题",
+		description: "1-4 questions",
 	}),
 });
 

@@ -106,6 +106,19 @@ describe("getAnswerText", () => {
 		expect(getAnswerText(multiQ, s)).toBe("A, B, C");
 	});
 
+	it("S-7b: multi-select out-of-range indices are filtered out (defensive branch)", () => {
+		// 锁定 getAnswerText 的防御性 .filter：selectedIndices 含越界 index（超出 options 范围）
+		// 时，q.options[idx]?.label 为 undefined，被过滤掉，不污染答案。
+		const multiQ: Question = {
+			question: "Features",
+			multiSelect: true,
+			options: [{ label: "A" }, { label: "B" }],
+		};
+		// index 5 越界（只有 2 个选项），应被过滤；只保留 A
+		const s = makeState({ confirmed: true, selectedIndices: new Set([0, 5]) });
+		expect(getAnswerText(multiQ, s)).toBe("A");
+	});
+
 	it("S-8: Other free-text appended", () => {
 		const s = makeState({ confirmed: true, selectedIndex: null, freeTextValue: "custom" });
 		expect(getAnswerText(q1, s)).toBe("custom");

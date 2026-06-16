@@ -34,11 +34,11 @@
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
+    "@mariozechner/pi-tui": "*",
     "@sinclair/typebox": "*"
   },
   "peerDependenciesMeta": {
-    "@earendil-works/pi-tui": {
+    "@mariozechner/pi-tui": {
       "optional": true
     }
   }

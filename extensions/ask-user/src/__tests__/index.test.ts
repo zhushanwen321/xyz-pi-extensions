@@ -27,7 +27,7 @@ interface RegisteredTool {
 		},
 	) => Promise<Record<string, unknown>>;
 	renderCall: (args: Record<string, unknown>, theme: unknown) => unknown;
-	renderResult: (result: { details: unknown }, options: unknown, theme: unknown) => unknown;
+	renderResult: (result: { details: unknown }, options: { expanded: boolean }, theme: unknown) => unknown;
 }
 
 interface MockPi {
@@ -335,18 +335,46 @@ describe("execute — result handling (FR-7)", () => {
 });
 
 // ── I-16 ~ I-19: renderCall / renderResult（FR-9）──────
+
+/** 渲染一个 Component 节点到连接后的纯文本（剥除 stubTheme passthrough 后即原始字符串）。 */
+const renderText = (node: { render(width: number): string[] }, width = 80): string =>
+	node.render(width).join("\n");
+
 describe("renderCall / renderResult (FR-9)", () => {
-	it("I-16: renderCall shows tool name + topics", () => {
+	it("I-16: renderCall shows tool name + header topics", () => {
 		const tool = getTool();
 		const node = tool.renderCall(
 			{ questions: [{ question: "Q", header: "MyHeader", options: [] }] },
 			stubTheme,
-		) as { text?: string };
-		// TruncatedText stores text internally; we just verify no crash + it's truthy
-		expect(node).toBeTruthy();
+		) as unknown as { render(width: number): string[] };
+		const text = renderText(node);
+		expect(text).toContain("ask_user");
+		expect(text).toContain("MyHeader");
 	});
 
-	it("I-17: renderResult with answers lists ✓ entries", () => {
+	it("I-16b: renderCall falls back to truncated question when no header", () => {
+		const tool = getTool();
+		const node = tool.renderCall(
+			{ questions: [{ question: "This is a very long question text", options: [] }] },
+			stubTheme,
+		) as unknown as { render(width: number): string[] };
+		// 无 header → 用 truncateToWidth(question, 12)：按显示宽度截断（带省略号），
+		// 不再按 UTF-16 slice，emoji 代理对安全。
+		const text = renderText(node);
+		expect(text).toContain("ask_user");
+		expect(text).not.toContain("This is a very long question text");
+	});
+
+	it("I-16c: renderCall tolerates missing questions (?? [] defensive branch)", () => {
+		// S-10: args.questions 缺失时 ?? [] 兜底，不崩溃、渲染工具名（topics 为空）
+		const tool = getTool();
+		const node = tool.renderCall({} as never, stubTheme) as unknown as {
+			render(width: number): string[];
+		};
+		expect(renderText(node)).toContain("ask_user");
+	});
+
+	it("I-17: renderResult with answers lists ✓ <header>: <answer>", () => {
 		const tool = getTool();
 		const node = tool.renderResult(
 			{
@@ -356,31 +384,80 @@ describe("renderCall / renderResult (FR-9)", () => {
 					cancelled: false,
 				},
 			},
-			undefined,
+			{ expanded: false },
 			stubTheme,
-		);
-		expect(node).toBeTruthy();
+		) as unknown as { render(width: number): string[] };
+		const text = renderText(node);
+		expect(text).toContain("✓");
+		expect(text).toContain("H:");
+		expect(text).toContain("A");
+	});
+
+	it("I-17b: renderResult shows (no answer) when question unanswered in details", () => {
+		const tool = getTool();
+		const node = tool.renderResult(
+			{
+				details: {
+					questions: [{ question: "Q", header: "H", options: [{ label: "A" }] }],
+					answers: {},
+					cancelled: false,
+				},
+			},
+			{ expanded: false },
+			stubTheme,
+		) as unknown as { render(width: number): string[] };
+		expect(renderText(node)).toContain("(no answer)");
 	});
 
 	it("I-18: renderResult cancelled shows Cancelled", () => {
 		const tool = getTool();
 		const node = tool.renderResult(
 			{ details: { questions: [], answers: {}, cancelled: true } },
-			undefined,
+			{ expanded: false },
 			stubTheme,
-		) as { text?: string };
-		// Text node — we can't easily read its rendered text, but it should not crash
-		expect(node).toBeTruthy();
+		) as unknown as { render(width: number): string[] };
+		expect(renderText(node)).toContain("Cancelled");
 	});
 
-	it("I-19: renderResult error shows ✗", () => {
+	it("I-19: renderResult error shows ✗ <error>", () => {
 		const tool = getTool();
 		const node = tool.renderResult(
 			{ details: { error: "something broke" } },
-			undefined,
+			{ expanded: false },
 			stubTheme,
-		);
-		expect(node).toBeTruthy();
+		) as unknown as { render(width: number): string[] };
+		const text = renderText(node);
+		expect(text).toContain("✗");
+		expect(text).toContain("something broke");
+	});
+
+	// S-3: options.expanded 展开 —— 显示全部选项 + ●/○ 选中标记（spec FR-9）
+	it("I-20: renderResult expanded shows all options with ●/○ marks", () => {
+		const tool = getTool();
+		const node = tool.renderResult(
+			{
+				details: {
+					questions: [
+						{
+							question: "Which DB?",
+							header: "DB",
+							options: [{ label: "Postgres" }, { label: "SQLite" }],
+						},
+					],
+					answers: { "Which DB?": "Postgres" },
+					cancelled: false,
+				},
+			},
+			{ expanded: true },
+			stubTheme,
+		) as unknown as { render(width: number): string[] };
+		const text = renderText(node);
+		// 两个选项都展开显示
+		expect(text).toContain("Postgres");
+		expect(text).toContain("SQLite");
+		// 选中的 Postgres 用 ●，未选的 SQLite 用 ○
+		expect(text).toContain("●");
+		expect(text).toContain("○");
 	});
 });
 
