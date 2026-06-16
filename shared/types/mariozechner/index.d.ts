@@ -33,7 +33,6 @@ declare module "@mariozechner/pi-coding-agent" {
 			theme: Theme;
 			custom<T = void>(factory: (tui: any, theme: any, kb: any, done: (result: T) => void) => any, options?: { overlay?: boolean; overlayOptions?: Record<string, unknown> }): Promise<T>;
 		};
-		theme: Theme;
 		model: any;
 		signal: AbortSignal | undefined;
 		isIdle(): boolean;
@@ -209,6 +208,10 @@ declare module "@mariozechner/pi-tui" {
 		label: string;
 		description?: string;
 	}
+	export interface SelectListLayoutOptions {
+		minPrimaryColumnWidth?: number;
+		maxPrimaryColumnWidth?: number;
+	}
 	export interface SelectListTheme {
 		selectedPrefix: (text: string) => string;
 		selectedText: (text: string) => string;
@@ -217,9 +220,10 @@ declare module "@mariozechner/pi-tui" {
 		noMatch: (text: string) => string;
 	}
 	export class SelectList {
-		constructor(items: SelectItem[], maxVisible: number, theme: SelectListTheme, layout?: unknown);
+		constructor(items: SelectItem[], maxVisible: number, theme: SelectListTheme, layout?: SelectListLayoutOptions);
 		onSelect?: (item: SelectItem) => void;
 		onCancel?: () => void;
+		onSelectionChange?: (item: SelectItem) => void;
 		setSelectedIndex(index: number): void;
 		setFilter(filter: string): void;
 		getSelectedItem(): SelectItem | null;

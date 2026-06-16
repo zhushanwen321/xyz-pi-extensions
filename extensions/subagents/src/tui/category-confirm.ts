@@ -166,7 +166,7 @@ export class CategoryConfirmComponent extends Container {
     const t = this.theme;
     this.clear();
     const cat = this.editingCategory ?? "";
-    const cur = this.currentModels[cat] ?? "";
+    const cur = this.overrides.get(cat)?.model ?? this.currentModels[cat] ?? "";
     this.addChild(new Text(t.fg("accent", `[${cat}] 选择 model`) + t.fg("dim", `  当前: ${cur}`), 0, 0));
     this.addChild(new Text(t.fg("dim", "filter: ") + t.fg("text", this.filterText), 0, 0));
     this.addChild(new Spacer(1));
@@ -205,7 +205,7 @@ export class CategoryConfirmComponent extends Container {
     } else {
       this.filteredModels = fuzzyFilter(this.available, q, (m) => `${m.name} ${m.provider}/${m.id}`);
     }
-    this.modelSelectedIndex = Math.min(this.modelSelectedIndex, Math.max(0, this.filteredModels.length - 1));
+    this.modelSelectedIndex = 0;
     this.renderModelMenu();
   }
 
@@ -213,7 +213,7 @@ export class CategoryConfirmComponent extends Container {
     const model = this.filteredModels[this.modelSelectedIndex];
     if (!model) return;
     const cat = this.editingCategory!;
-    const current = this.currentModels[cat] ?? "";
+    const current = this.overrides.get(cat)?.model ?? this.currentModels[cat] ?? "";
     const newModelStr = `${model.provider}/${model.id}`;
     // 若选的就是当前模型，视为不改
     if (newModelStr === current) {
@@ -222,7 +222,8 @@ export class CategoryConfirmComponent extends Container {
     }
     // reasoning 模型 → 进 thinking 子菜单
     if (model.reasoning && model.thinkingLevelMap) {
-      const levels = THINKING_ORDER.filter((lvl) => model.thinkingLevelMap![lvl] != null);
+      const tlm = model.thinkingLevelMap;
+      const levels = THINKING_ORDER.filter((lvl) => tlm[lvl] != null);
       if (levels.length > 0) {
         this.pendingModel = model;
         this.thinkingLevels = levels;
@@ -243,9 +244,10 @@ export class CategoryConfirmComponent extends Container {
   }
 
   private renderThinkingMenu() {
+    if (!this.pendingModel || !this.editingCategory) return;
     const t = this.theme;
     this.clear();
-    const model = this.pendingModel!;
+    const model = this.pendingModel;
     this.addChild(new Text(t.fg("accent", `[${model.name}] thinking level`), 0, 0));
     this.addChild(new Spacer(1));
     const items: SelectItem[] = this.thinkingLevels.map((lvl) => ({ value: lvl, label: lvl }));
@@ -266,9 +268,10 @@ export class CategoryConfirmComponent extends Container {
   }
 
   private confirmThinkingSelection() {
+    if (!this.pendingModel || !this.editingCategory) return;
     const level = this.thinkingLevels[this.thinkingSelectedIndex];
-    const cat = this.editingCategory!;
-    const model = this.pendingModel!;
+    const cat = this.editingCategory;
+    const model = this.pendingModel;
     this.overrides.set(cat, { model: `${model.provider}/${model.id}`, thinkingLevel: level });
     this.pendingModel = null;
     this.renderCategories();
@@ -326,7 +329,13 @@ export class CategoryConfirmComponent extends Container {
     } else if (action === "confirm") {
       this.confirmModelSelection();
     } else if (action === "cancel") {
-      this.renderCategories();
+      // S2: 有 filter 文本时先清空，无 filter 才返回主视图
+      if (this.filterText !== "") {
+        this.filterText = "";
+        this.applyFilter();
+      } else {
+        this.renderCategories();
+      }
     } else if (action === "backspace") {
       this.filterText = this.filterText.slice(0, -1);
       this.applyFilter();
@@ -347,10 +356,18 @@ export class CategoryConfirmComponent extends Container {
     } else if (action === "confirm") {
       this.confirmThinkingSelection();
     } else if (action === "cancel") {
-      // Esc：跳过 thinking，仍写入 model（无 thinkingLevel）
-      const cat = this.editingCategory!;
-      const model = this.pendingModel!;
-      this.overrides.set(cat, { model: `${model.provider}/${model.id}` });
+      // S4: Esc 跳过 thinking；写入 model 前检查 keep-current（与 confirmModelSelection 对称）
+      if (!this.pendingModel || !this.editingCategory) {
+        this.renderCategories();
+        return;
+      }
+      const cat = this.editingCategory;
+      const model = this.pendingModel;
+      const newModelStr = `${model.provider}/${model.id}`;
+      const current = this.overrides.get(cat)?.model ?? this.currentModels[cat] ?? "";
+      if (newModelStr !== current) {
+        this.overrides.set(cat, { model: newModelStr });
+      }
       this.pendingModel = null;
       this.renderCategories();
     }

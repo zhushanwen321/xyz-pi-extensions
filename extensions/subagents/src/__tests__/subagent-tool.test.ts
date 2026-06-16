@@ -641,7 +641,7 @@ describe("subagent tool execute()", () => {
     mockedGetRuntime.mockReturnValue(mockRt as never);
     const tool = captureTool();
     const custom = vi.fn(async () => ({ action: "cancelled", overrides: {} }));
-    const ctx = { hasUI: true, modelRegistry: { getAvailable: () => [] }, ui: { custom } } as unknown as Partial<ExtensionContext>;
+    const ctx = { hasUI: true, modelRegistry: { getAvailable: () => [{ id: "x", provider: "p", name: "n", reasoning: false }] }, ui: { custom } } as unknown as Partial<ExtensionContext>;
     await expect(tool.execute("call-1", { task: "do X", agent: "worker" }, undefined, undefined, ctx)).rejects.toThrow(/取消/);
     expect(mockRt.runAgent).not.toHaveBeenCalled();
     expect(mockRt.applyCategoryConfirm).not.toHaveBeenCalled();
@@ -654,9 +654,38 @@ describe("subagent tool execute()", () => {
     mockedGetRuntime.mockReturnValue(mockRt as never);
     const tool = captureTool();
     const custom = vi.fn(async () => ({ action: "confirmed", overrides: {} }));
-    const ctx = { hasUI: true, modelRegistry: { getAvailable: () => [] }, ui: { custom } } as unknown as Partial<ExtensionContext>;
+    const ctx = { hasUI: true, modelRegistry: { getAvailable: () => [{ id: "x", provider: "p", name: "n", reasoning: false }] }, ui: { custom } } as unknown as Partial<ExtensionContext>;
     await tool.execute("call-1", { task: "do X", agent: "worker" }, undefined, undefined, ctx);
     expect(mockRt.applyCategoryConfirm).toHaveBeenCalledWith({ action: "confirmed", overrides: {} });
+    expect(mockRt.runAgent).toHaveBeenCalled();
+  });
+
+  it("custom 返回非空 overrides → applyCategoryConfirm 透传具体 overrides", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async () => successResult()),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+    const tool = captureTool();
+    const overrides = { coding: { model: "anthropic/claude-sonnet-4.5", thinkingLevel: "high" } };
+    const custom = vi.fn(async () => ({ action: "confirmed" as const, overrides }));
+    const ctx = { hasUI: true, modelRegistry: { getAvailable: () => [{ id: "x", provider: "p", name: "n", reasoning: false }] }, ui: { custom } } as unknown as Partial<ExtensionContext>;
+    await tool.execute("call-1", { task: "do X", agent: "worker" }, undefined, undefined, ctx);
+    expect(mockRt.applyCategoryConfirm).toHaveBeenCalledWith({ action: "confirmed", overrides });
+  });
+
+  it("available 为空 → S1 fail-fast：notify 提示，不调 custom/applyCategoryConfirm，继续执行", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async () => successResult()),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+    const tool = captureTool();
+    const notify = vi.fn();
+    const custom = vi.fn();
+    const ctx = { hasUI: true, modelRegistry: { getAvailable: () => [] }, ui: { custom, notify } } as unknown as Partial<ExtensionContext>;
+    await tool.execute("call-1", { task: "do X", agent: "worker" }, undefined, undefined, ctx);
+    expect(notify).toHaveBeenCalled();
+    expect(custom).not.toHaveBeenCalled();
+    expect(mockRt.applyCategoryConfirm).not.toHaveBeenCalled();
     expect(mockRt.runAgent).toHaveBeenCalled();
   });
 });

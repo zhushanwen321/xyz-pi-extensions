@@ -16,7 +16,6 @@
 //   - failed 时：toolErrorBg（eventLog + error）
 //   eventLog 不带 ⎿ 前缀，直接显示 label + icon。
 
-import { getKeybindings } from "@earendil-works/pi-tui";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
@@ -27,7 +26,7 @@ import { resolveAllCategoryModels } from "../tui/batch-model-resolver.ts";
 import { CategoryConfirmComponent, type CategoryConfirmResult } from "../tui/category-confirm.ts";
 import { formatTokens } from "../tui/format.ts";
 import { renderSubagentCall, SubagentResultComponent, type SubagentToolDetails } from "../tui/subagent-render.ts";
-import type { AgentEvent } from "../types.ts";
+import type { AgentEvent, ModelInfo } from "../types.ts";
 
 /** ms to seconds conversion */
 const MS_PER_SECOND = 1000;
@@ -225,6 +224,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       },
       signal: AbortSignal | undefined,
       onUpdate?: (partialResult: AgentToolResult<SubagentToolDetails>) => void,
+      // SDK 必填第 5 参数；标可选仅为兼容旧测试/非工具调用路径（FR-6.2）。
       ctx?: ExtensionContext,
     ) {
       const rt = getRuntime();
@@ -295,20 +295,22 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       if (ctx?.hasUI && !rt.sessionState.categoryConfirmed) {
         const categories = Object.entries(rt.globalConfig.categories).map(([name, def]) => ({ name, model: def.model }));
         const currentModels = resolveAllCategoryModels(rt.globalConfig, rt.sessionState);
-        const available = ctx.modelRegistry.getAvailable();
-        let kb;
-        try { kb = getKeybindings(); } catch { kb = undefined; }
-        const theme: Theme = ctx.theme;
-        const confirmResult = await ctx.ui.custom<CategoryConfirmResult>((tui, _theme, _kb, done) => {
-          void tui; void _theme; void _kb;
-          return new CategoryConfirmComponent(categories, currentModels, available, theme, kb, done);
-        });
-        if (confirmResult.action === "cancelled") {
-          throw new Error(
-            "用户主动取消了模型确认，不要重试本次 subagent 调用。请向用户说明情况并等待用户指示。",
-          );
+        const available: ModelInfo[] = ctx.modelRegistry.getAvailable();
+        // S1: 无可用模型时 fail-fast 提示，跳过确认（不置 categoryConfirmed），让运行时自然报错。
+        if (available.length === 0) {
+          ctx.ui.notify("未配置可用模型，跳过 category 模型确认。请在 /models 配置 provider 后重试。", "warning");
+        } else {
+          const confirmResult = await ctx.ui.custom<CategoryConfirmResult>((tui, theme, keybindings, done) => {
+            void tui;
+            return new CategoryConfirmComponent(categories, currentModels, available, theme, keybindings, done);
+          });
+          if (confirmResult.action === "cancelled") {
+            throw new Error(
+              "用户主动取消了模型确认，不要重试本次 subagent 调用。请向用户说明情况并等待用户指示。",
+            );
+          }
+          rt.applyCategoryConfirm({ action: "confirmed", overrides: confirmResult.overrides });
         }
-        rt.applyCategoryConfirm({ action: "confirmed", overrides: confirmResult.overrides });
       }
 
       // FR-O2.2: 判定 effective wait（显式 params.wait > agent.defaultBackground > 默认 sync）

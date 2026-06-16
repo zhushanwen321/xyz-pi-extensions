@@ -95,14 +95,51 @@ describe("CategoryConfirmComponent", () => {
     expect(holder.value?.overrides.research).toEqual({ model: "deepseek-router/ds-flash", thinkingLevel: "high" });
   });
 
-  it("filter: 二级菜单打字过滤模型", () => {
+  it("filter: 二级菜单打字过滤模型（唯一匹配 'haiku'）", () => {
     const { comp, holder } = makeComponent();
     comp.handleInput(ENTER); // coding model-menu
-    comp.handleInput("h"); // filter "h" → 匹配 "Haiku"
+    comp.handleInput("h"); comp.handleInput("a"); comp.handleInput("i"); comp.handleInput("k"); comp.handleInput("u"); // filter "haiku" → 唯一匹配 Haiku
     comp.handleInput(ENTER); // 选 Haiku → 回主视图
     comp.handleInput(DOWN); comp.handleInput(DOWN); // ✓完成
     comp.handleInput(ENTER);
     expect(holder.value?.overrides.coding).toEqual({ model: "anthropic/claude-haiku-4-5" });
+  });
+
+  it("filter-resets-index: 下移后 filter 缩短列表 → 光标重置到第一项（M2）", () => {
+    const { comp, holder } = makeComponent();
+    comp.handleInput(ENTER); // coding model-menu
+    comp.handleInput(DOWN); // 下移到 Haiku（index 1）
+    comp.handleInput("h"); comp.handleInput("a"); comp.handleInput("i"); comp.handleInput("k"); comp.handleInput("u"); // filter "haiku" → 仅 Haiku
+    // M2: applyFilter 重置 index=0，仍指向 Haiku
+    comp.handleInput(ENTER); // 选 Haiku → 回主视图
+    comp.handleInput(DOWN); comp.handleInput(DOWN); // ✓完成
+    comp.handleInput(ENTER);
+    expect(holder.value?.overrides.coding).toEqual({ model: "anthropic/claude-haiku-4-5" });
+  });
+
+  it("filter-empty-result: filter 无匹配 + Enter → 无 override，不崩溃", () => {
+    const { comp, holder } = makeComponent();
+    comp.handleInput(ENTER); // coding model-menu
+    comp.handleInput("z"); comp.handleInput("z"); comp.handleInput("z"); // filter "zzz" → 无匹配
+    comp.handleInput(ENTER); // filteredModels[0] undefined → 静默 no-op
+    comp.handleInput(ESC); // S2: 有 filter "zzz" → 清空
+    comp.handleInput(ESC); // 无 filter → 回主视图
+    comp.handleInput(DOWN); comp.handleInput(DOWN); // ✓完成
+    comp.handleInput(ENTER);
+    expect(holder.value?.action).toBe("confirmed");
+    expect(holder.value?.overrides).toEqual({});
+  });
+
+  it("filter-esc-clears-filter: 有 filter 时 ESC 先清空 filter，再 ESC 才回主视图（S2）", () => {
+    const { comp, holder } = makeComponent();
+    comp.handleInput(ENTER); // coding model-menu
+    comp.handleInput("h"); comp.handleInput("a"); comp.handleInput("i"); comp.handleInput("k"); comp.handleInput("u"); // filter "haiku"
+    comp.handleInput(ESC); // S2: 有 filter → 清空 filter，不回主视图
+    expect(holder.value).toBeNull(); // 仍在二级菜单
+    comp.handleInput(ESC); // 无 filter → 回主视图
+    comp.handleInput(DOWN); comp.handleInput(DOWN); // ✓完成
+    comp.handleInput(ENTER);
+    expect(holder.value?.action).toBe("confirmed");
   });
 
   it("keep-current: 二级菜单选当前模型（ds-flash）→ 不产生 override", () => {
@@ -113,6 +150,49 @@ describe("CategoryConfirmComponent", () => {
     comp.handleInput(ENTER);
     expect(holder.value?.action).toBe("confirmed");
     expect(holder.value?.overrides).toEqual({});
+  });
+
+  it("thinking-esc-skip: 选 reasoning 模型 → thinking 菜单 ESC 跳过（写 model 无 thinkingLevel）", () => {
+    // research 当前 claude-haiku-4-5；改 ds-flash(reasoning) → thinking 菜单 → ESC 跳过
+    const { comp, holder } = makeComponent();
+    comp.handleInput(DOWN); // research(1)
+    comp.handleInput(ENTER); // research model-menu，第一项 ds-flash
+    comp.handleInput(ENTER); // 选 ds-flash(reasoning) → thinking 菜单
+    comp.handleInput(ESC); // ESC 跳过 thinking → 写 {model} 无 thinkingLevel
+    comp.handleInput(DOWN); // ✓完成
+    comp.handleInput(ENTER);
+    expect(holder.value?.action).toBe("confirmed");
+    expect(holder.value?.overrides.research).toEqual({ model: "deepseek-router/ds-flash" });
+  });
+
+  it("re-edit-same-category: 二次编辑覆盖前次 override（S3 一致性）", () => {
+    const { comp, holder } = makeComponent();
+    // 第一次：coding(idx0) → Haiku
+    comp.handleInput(ENTER); comp.handleInput(DOWN); comp.handleInput(ENTER); // 选 Haiku → 回主视图(idx0)
+    // 第二次：再进 coding(idx0)（现在 current=Haiku per S3），选回 ds-flash
+    comp.handleInput(ENTER); // 进 coding model-menu；列表第一项 ds-flash
+    comp.handleInput(ENTER); // 选 ds-flash（≠ Haiku）→ reasoning → thinking 菜单
+    comp.handleInput(ENTER); // 选 high → 回主视图(idx0)
+    comp.handleInput(DOWN); comp.handleInput(DOWN); // idx0→1(research)→2(✓完成)
+    comp.handleInput(ENTER);
+    expect(holder.value?.action).toBe("confirmed");
+    expect(holder.value?.overrides.coding).toEqual({ model: "deepseek-router/ds-flash", thinkingLevel: "high" });
+  });
+
+  it("kb-defined-path: 传入 mock KeybindingsManager 覆盖 detectKeyAction 的 kb 分支", () => {
+    // kb 只识别 down + confirm；其它键走 fallback
+    const kb = {
+      matches: (data: string, k: string) => (k === "tui.select.down" && data === "D") || (k === "tui.select.confirm" && data === "X"),
+      getKeys: (_k: string) => [] as string[],
+    };
+    const holder = { value: null as CategoryConfirmResult | null };
+    const comp = new CategoryConfirmComponent(categories, currentModels, available, theme, kb as never, (r) => {
+      holder.value = r;
+    });
+    comp.handleInput("D"); // kb down: idx0→1(research)
+    comp.handleInput("D"); // idx1→2(✓完成)
+    comp.handleInput("X"); // kb confirm → submit
+    expect(holder.value?.action).toBe("confirmed");
   });
 
   it("render: 主视图渲染包含所有 category + 虚拟项", () => {

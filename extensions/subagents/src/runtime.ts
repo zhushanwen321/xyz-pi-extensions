@@ -337,7 +337,7 @@ export class SubagentRuntime {
    * 在同一次 persistState 中完成。避免分多次 persistState 产生多条 entry
    * 导致 restoreFromEntries 取最新条时字段不一致（tracing G-010）。
    */
-  applyCategoryConfirm(result: { action: "confirmed" | "use-default"; overrides: Record<string, { model: string; thinkingLevel?: string }> }): void {
+  applyCategoryConfirm(result: { action: "confirmed"; overrides: Record<string, { model: string; thinkingLevel?: string }> }): void {
     for (const [category, val] of Object.entries(result.overrides)) {
       setCategoryModel(this.sessionState, category, val.model, val.thinkingLevel);
     }

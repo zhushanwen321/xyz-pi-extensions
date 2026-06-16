@@ -27,10 +27,4 @@ describe("SubagentRuntime.applyCategoryConfirm", () => {
     expect(stateEntries.length).toBe(1);
   });
 
-  it("use-default: sets categoryConfirmed but writes no perCategory", () => {
-    const { rt } = makeRuntime();
-    rt.applyCategoryConfirm({ action: "use-default", overrides: {} });
-    expect(rt.sessionState.categoryConfirmed).toBe(true);
-    expect(rt.sessionState.perCategory).toEqual({});
-  });
 });
