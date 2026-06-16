@@ -167,7 +167,7 @@ describe("renderQuestionView — Other editor mode", () => {
 		expect(t).toContain("saved text");
 	});
 
-	it("Q-17: Other row focused shows Space/Tab hint", () => {
+	it("Q-17: Other row focused shows Space hint (Tab now navigates tabs)", () => {
 		const lines = renderQuestionView(
 			singleQ,
 			makeState({ cursorIndex: 2 }),
@@ -176,7 +176,7 @@ describe("renderQuestionView — Other editor mode", () => {
 			true,
 			"",
 		);
-		expect(text(lines)).toContain("Space/Tab");
+		expect(text(lines)).toContain("Space");
 	});
 });
 

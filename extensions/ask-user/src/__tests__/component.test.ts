@@ -54,8 +54,13 @@ describe("AskUserComponent — single question", () => {
 		expect(result.val!.answers["Which DB?"]).toBe("SQLite");
 	});
 
-	it("C-4: resolves cancelled on Esc", () => {
+	it("C-4: Esc shows confirm overlay; second Esc cancels (single)", () => {
 		const { c, result } = make([singleQ]);
+		// 首个问题按 Esc → 进入确认取消覆盖层（不立即取消）
+		c.handleInput(ESC);
+		expect(result.val).toBeUndefined();
+		expect(c.render(60).some((l) => l.includes("Cancel all"))).toBe(true);
+		// 覆盖层内再按 Esc → 确认取消
 		c.handleInput(ESC);
 		expect(result.val).toBeNull();
 	});
@@ -302,13 +307,14 @@ describe("AskUserComponent — Other free-text editor", () => {
 		expect(lines.some((l) => l.includes("Your answer"))).toBe(true);
 	});
 
-	it("C-26: Tab on Other row opens freeform editor", () => {
+	it("C-26: Tab no longer opens freeform editor (Space-only; Tab is tab-nav now)", () => {
 		const { c } = make([singleQ]);
 		c.handleInput(DOWN);
 		c.handleInput(DOWN);
 		c.handleInput(TAB);
 		const lines = c.render(60);
-		expect(lines.some((l) => l.includes("Your answer"))).toBe(true);
+		// Tab 不再打开 Other 编辑器（仅 Space）；单问题下 Tab 是 no-op
+		expect(lines.some((l) => l.includes("Your answer"))).toBe(false);
 	});
 
 	it("C-27: editor accepts printable characters", () => {
@@ -484,7 +490,8 @@ describe("AskUserComponent — re-entry guard", () => {
 
 	it("C-41: ignores input after cancel", () => {
 		const { c, result } = make([singleQ]);
-		c.handleInput(ESC); // cancel
+		c.handleInput(ESC); // → 确认取消覆盖层
+		c.handleInput(ESC); // → 确认取消
 		expect(result.val).toBeNull();
 		c.handleInput(ENTER); // ignored
 		expect(result.val).toBeNull();
@@ -518,13 +525,17 @@ describe("AskUserComponent — render cache", () => {
 
 // ── 5i. Submit tab 交互（FR-5）──────────────────────────
 describe("AskUserComponent — Submit tab", () => {
-	it("C-47: Submit Esc cancels", () => {
+	it("C-47: Submit Esc backs to last question (no longer cancels)", () => {
 		const { c, result } = make(multiQ);
 		c.handleInput(RIGHT); // Q2
 		c.handleInput(RIGHT); // Q3
 		c.handleInput(RIGHT); // Submit
-		c.handleInput(ESC); // cancel
-		expect(result.val).toBeNull();
+		c.handleInput(ESC); // 回退到最后一个问题 Q3（不取消）
+		expect(result.val).toBeUndefined();
+		const lines = c.render(80);
+		// 回到 Q3：渲染 Q3 选项 M（非 Submit 视图）
+		expect(lines.some((l) => l.includes("Ready") || l.includes("Unanswered"))).toBe(false);
+		expect(lines.some((l) => l.includes("M"))).toBe(true);
 	});
 
 	it("C-46: Submit Enter when all confirmed submits", () => {
@@ -604,3 +615,70 @@ describe("AskUserComponent — visual chrome", () => {
 		expect(lines.some((l) => l.includes("─"))).toBe(true);
 	});
 });
+
+// ── 5k. 已完成绿勾 / Esc 回退 / Tab 浏览（行为增强）─────
+describe("AskUserComponent — confirm-checkmark, Esc-back, Tab browsing", () => {
+	it("C-E1: confirmed tab shows green ✓ marker", () => {
+		const { c } = make(multiQ);
+		c.handleInput(ENTER); // Q1 确认 → Q2
+		// 回到 Q1 看 tab 栏：Q1 已确认应有 ✓ 标识
+		c.handleInput(LEFT); // Q2 → Q1
+		const lines = c.render(80);
+		expect(lines.some((l) => l.includes("✓") && l.includes("First"))).toBe(true);
+	});
+
+	it("C-E2: Esc backs to previous question (multi)", () => {
+		const { c, result } = make(multiQ);
+		c.handleInput(ENTER); // Q1 → Q2
+		c.handleInput(ESC); // Q2 → 回退到 Q1（不取消）
+		expect(result.val).toBeUndefined();
+		const lines = c.render(80);
+		expect(lines.some((l) => l.includes("Q1") || l.includes("First"))).toBe(true);
+	});
+
+	it("C-E3: Esc on first question shows confirm overlay; Esc again cancels", () => {
+		const { c, result } = make(multiQ);
+		// 首个问题按 Esc → 确认取消覆盖层
+		c.handleInput(ESC);
+		expect(result.val).toBeUndefined();
+		expect(c.render(80).some((l) => l.includes("Cancel all"))).toBe(true);
+		// 覆盖层内再按 Esc → 确认取消
+		c.handleInput(ESC);
+		expect(result.val).toBeNull();
+	});
+
+	it("C-E4: confirm overlay dismissed by any non-Esc key (stays in form)", () => {
+		const { c, result } = make(multiQ);
+		c.handleInput(ESC); // 进入确认覆盖层
+		c.handleInput(ENTER); // 非 Esc → 退出覆盖层，留在表单
+		expect(result.val).toBeUndefined();
+		// 覆盖层已关闭：渲染回到正常 tab 视图
+		expect(c.render(80).some((l) => l.includes("Cancel all"))).toBe(false);
+	});
+
+	it("C-E5: Tab navigates to next tab; Shift+Tab to previous", () => {
+		const { c } = make(multiQ);
+		c.handleInput(TAB); // Q1 → Q2
+		// 确认在 Q2：渲染含 Q2 的选项 X
+		expect(c.render(80).some((l) => l.includes("X"))).toBe(true);
+		// Shift+Tab（xterm 序列 ESC[Z）回退到 Q1
+		c.handleInput("\x1b[Z");
+		expect(c.render(80).some((l) => l.includes("Q1") || l.includes("First"))).toBe(true);
+	});
+
+	it("C-E6: Tab wraps Submit → Q1, Shift+Tab wraps Q1 → Submit", () => {
+		const { c } = make(multiQ);
+		// 到 Submit：Q1→Q2→Q3→Submit
+		c.handleInput(ENTER); // Q1→Q2
+		c.handleInput(TAB); // Q2→Q3
+		c.handleInput(TAB); // Q3→Submit
+		expect(c.render(80).some((l) => l.includes("Ready") || l.includes("Unanswered"))).toBe(true);
+		// Submit 上 Tab → 环绕到 Q1
+		c.handleInput(TAB);
+		expect(c.render(80).some((l) => l.includes("Q1") || l.includes("First"))).toBe(true);
+		// Q1 上 Shift+Tab → 环绕回 Submit
+		c.handleInput("\x1b[Z");
+		expect(c.render(80).some((l) => l.includes("Ready") || l.includes("Unanswered"))).toBe(true);
+	});
+});
+

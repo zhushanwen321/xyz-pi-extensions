@@ -237,13 +237,13 @@ export function renderQuestionView(
 	// 帮助行（上下文相关）
 	const opts = allOptions(q);
 	const onOther = state.cursorIndex === opts.length - 1;
-	const tabHint = isSingle ? "" : " · ←→ switch tabs";
+	const tabHint = isSingle ? "" : " · Tab switch tabs";
 	const actionHint = onOther
-		? "Space/Tab open editor"
+		? "Space open editor"
 		: q.multiSelect
 			? "Space toggle · Enter confirm"
 			: "Enter select";
-	add(t.fg("dim", ` ↑↓ navigate · ${actionHint}${tabHint} · Esc cancel`));
+	add(t.fg("dim", ` ↑↓ navigate · ${actionHint}${tabHint} · Esc back`));
 
 	return lines;
 }

@@ -34,6 +34,9 @@ export class AskUserComponent implements Component {
 	private activeTab: number = 0;
 	private editorText: string = "";
 
+	/** Esc 在首个问题时进入「确认取消」覆盖层；Esc 再次确认取消，任意键退出覆盖层。 */
+	private pendingCancel: boolean = false;
+
 	private cachedWidth?: number;
 	private cachedLines?: string[];
 	private _resolved: boolean = false;
@@ -87,7 +90,14 @@ export class AskUserComponent implements Component {
 			inner.push("");
 		}
 
-		if (this.activeTab >= this.questions.length) {
+		if (this.pendingCancel) {
+			// 确认取消覆盖层：替代当前 tab 内容
+			add(t.fg("warning", t.bold(" Cancel all questions?")));
+			inner.push("");
+			add(t.fg("text", " Your answers will be discarded."));
+			inner.push("");
+			add(t.fg("dim", " Esc confirm cancel · any other key to stay"));
+		} else if (this.activeTab >= this.questions.length) {
 			// Submit tab
 			for (const line of renderSubmitView(this.questions, this.states, t, innerWidth)) add(line);
 		} else {
@@ -129,7 +139,7 @@ export class AskUserComponent implements Component {
 			if (isActive) {
 				parts.push(t.bg("selectedBg", t.fg("text", ` ${header} `)));
 			} else if (s.confirmed) {
-				parts.push(t.fg("success", ` ■${header} `));
+				parts.push(t.fg("success", ` ✓${header} `));
 			} else {
 				parts.push(t.fg("muted", ` □${header} `));
 			}
@@ -163,6 +173,18 @@ export class AskUserComponent implements Component {
 	handleInput(data: string): void {
 		if (this._resolved) return;
 
+		// 确认取消覆盖层：Esc 确认取消，任意其他键退出覆盖层（留在表单）
+		if (this.pendingCancel) {
+			if (matchesKey(data, "escape")) {
+				this.cancel();
+			} else {
+				this.pendingCancel = false;
+				this.invalidate();
+				this.tui.requestRender();
+			}
+			return;
+		}
+
 		// Submit tab
 		if (!this.isSingle && this.activeTab === this.questions.length) {
 			this.handleSubmitTabInput(data);
@@ -178,25 +200,19 @@ export class AskUserComponent implements Component {
 			return;
 		}
 
-		// Esc → cancel
+		// Esc → 回退到上一个问题；在首个问题时进入确认取消覆盖层
 		if (matchesKey(data, "escape")) {
-			this.cancel();
+			this.escBackOrConfirm();
 			return;
 		}
 
-		// Tab navigation (multi-question)
-		if (!this.isSingle && matchesKey(data, "right")) {
-			this.autoConfirmIfAnswered();
-			this.activeTab = (this.activeTab + 1) % this.totalTabs;
-			this.invalidate();
-			this.tui.requestRender();
+		// Tab / Shift+Tab / ←→ 切换 tab（多问题，options 模式）
+		if (!this.isSingle && (matchesKey(data, "right") || matchesKey(data, "tab"))) {
+			this.gotoTab((this.activeTab + 1) % this.totalTabs);
 			return;
 		}
-		if (!this.isSingle && matchesKey(data, "left")) {
-			this.autoConfirmIfAnswered();
-			this.activeTab = (this.activeTab - 1 + this.totalTabs) % this.totalTabs;
-			this.invalidate();
-			this.tui.requestRender();
+		if (!this.isSingle && (matchesKey(data, "left") || matchesKey(data, "shift+tab"))) {
+			this.gotoTab((this.activeTab - 1 + this.totalTabs) % this.totalTabs);
 			return;
 		}
 
@@ -217,8 +233,8 @@ export class AskUserComponent implements Component {
 		const opts = allOptions(q);
 		const onOther = state.cursorIndex === opts.length - 1;
 
-		// Other row → Space/Tab opens freeform editor
-		if (onOther && (matchesKey(data, "space") || matchesKey(data, "tab"))) {
+		// Other row → Space opens freeform editor（Tab 留给 tab 间导航）
+		if (onOther && matchesKey(data, "space")) {
 			state.mode = "freeform";
 			this.editorText = state.freeTextValue ?? "";
 			this.invalidate();
@@ -255,18 +271,16 @@ export class AskUserComponent implements Component {
 			this.submit();
 			return;
 		}
-		if (matchesKey(data, "escape")) {
-			this.cancel();
-			return;
-		}
-		if (matchesKey(data, "right")) {
-			this.activeTab = 0;
+		// Esc / ← / Shift+Tab → 回退到最后一个问题（不再直接取消）
+		if (matchesKey(data, "escape") || matchesKey(data, "left") || matchesKey(data, "shift+tab")) {
+			this.activeTab = this.questions.length - 1;
 			this.invalidate();
 			this.tui.requestRender();
 			return;
 		}
-		if (matchesKey(data, "left")) {
-			this.activeTab = this.questions.length - 1;
+		// → / Tab → 环绕到首个问题
+		if (matchesKey(data, "right") || matchesKey(data, "tab")) {
+			this.activeTab = 0;
 			this.invalidate();
 			this.tui.requestRender();
 			return;
@@ -353,6 +367,27 @@ export class AskUserComponent implements Component {
 			? state.selectedIndices.size > 0 || state.freeTextValue !== null
 			: state.freeTextValue !== null || state.selectedIndex !== null;
 		if (hasAnswer) state.confirmed = true;
+	}
+
+	/** 切到目标 tab：离开当前 tab 时 auto-confirm 已答问题，刷新视图。 */
+	private gotoTab(target: number): void {
+		this.autoConfirmIfAnswered();
+		this.activeTab = target;
+		this.invalidate();
+		this.tui.requestRender();
+	}
+
+	/** Esc 语义：有上一个 tab 则回退；已在首个（或单问题）则进入确认取消覆盖层。 */
+	private escBackOrConfirm(): void {
+		if (this.activeTab > 0) {
+			this.activeTab--;
+			this.invalidate();
+			this.tui.requestRender();
+			return;
+		}
+		this.pendingCancel = true;
+		this.invalidate();
+		this.tui.requestRender();
 	}
 
 	/** 选中确认后的处理：若 allowComment，进入评论模式（可重入编辑/清除已有评论）；否则前进。 */
