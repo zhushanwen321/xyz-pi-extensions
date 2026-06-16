@@ -5,20 +5,17 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import { setupToolErrorHandler, type HookContext } from "../hooks/tool-error-handler.ts";
 
-/**
- * Minimal Pi stub: captures the handler registered via `on` and spies on
- * `appendEntry`. Tests invoke the captured handler directly with a mock event
- * + HookContext to verify behaviour on both isError paths.
- */
-interface CapturedPi {
+// --- helper types ---
+interface MockPi {
 	on: ReturnType<typeof vi.fn>;
 	appendEntry: ReturnType<typeof vi.fn>;
 }
 
-function createMockPi(): CapturedPi {
+function createMockPi(overrides?: Partial<MockPi>): MockPi {
 	return {
 		on: vi.fn(),
 		appendEntry: vi.fn(),
+		...overrides,
 	};
 }
 
@@ -91,5 +88,73 @@ describe("setupToolErrorHandler", () => {
 
 		// Second arg of notify is the type — must be "warn" (not info/error).
 		expect(notify.mock.calls[0]![1]).toBe("warn");
+	});
+
+	// --- edge cases ---
+
+	it("propagates if pi.on throws during registration", () => {
+		const pi = createMockPi({
+		on: vi.fn(() => { throw new Error("registration failed"); }),
+		});
+
+		expect(() => setupToolErrorHandler(pi as unknown as ExtensionAPI)).toThrow("registration failed");
+	});
+
+	it("does not crash if handler callback throws (notify throws)", async () => {
+		const pi = createMockPi();
+		const { ctx, notify } = createMockCtx();
+		notify.mockImplementation(() => { throw new Error("notify broke"); });
+
+		setupToolErrorHandler(pi as unknown as ExtensionAPI);
+		const handler = pi.on.mock.calls[0]![1] as (event: unknown, ctx: HookContext) => Promise<void>;
+
+		await expect(
+			handler({ isError: true, toolName: "bash", toolCallId: "c2" }, ctx),
+		).rejects.toThrow("notify broke");
+
+		// appendEntry should NOT have been called since notify threw first
+		expect(pi.appendEntry).not.toHaveBeenCalled();
+	});
+
+	it("does not crash if handler callback throws (appendEntry throws)", async () => {
+		const pi = createMockPi();
+		const { ctx, notify } = createMockCtx();
+		pi.appendEntry.mockImplementation(() => { throw new Error("append broke"); });
+
+		setupToolErrorHandler(pi as unknown as ExtensionAPI);
+		const handler = pi.on.mock.calls[0]![1] as (event: unknown, ctx: HookContext) => Promise<void>;
+
+		await expect(
+			handler({ isError: true, toolName: "grep", toolCallId: "c3" }, ctx),
+		).rejects.toThrow("append broke");
+
+		// notify was called before appendEntry threw
+		expect(notify).toHaveBeenCalledTimes(1);
+	});
+
+	it("handles concurrent error events independently", async () => {
+		const pi = createMockPi();
+		const { ctx, notify } = createMockCtx();
+
+		setupToolErrorHandler(pi as unknown as ExtensionAPI);
+		const handler = pi.on.mock.calls[0]![1] as (event: unknown, ctx: HookContext) => Promise<void>;
+
+		await Promise.all([
+			handler({ isError: true, toolName: "read", toolCallId: "e1" }, ctx),
+			handler({ isError: true, toolName: "bash", toolCallId: "e2" }, ctx),
+			handler({ isError: false, toolName: "edit", toolCallId: "e3" }, ctx),
+		]);
+
+		expect(notify).toHaveBeenCalledTimes(2);
+		expect(pi.appendEntry).toHaveBeenCalledTimes(2);
+
+		// verify both calls persisted independently
+		const calls = pi.appendEntry.mock.calls.map((c) => c[1]);
+		expect(calls).toEqual(
+			expect.arrayContaining([
+				{ toolName: "read", toolCallId: "e1" },
+				{ toolName: "bash", toolCallId: "e2" },
+			]),
+		);
 	});
 });
