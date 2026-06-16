@@ -30,6 +30,9 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     const agentDir = path.join(homeDir, ".pi", "agent");
 
     const rt = existing ?? new SubagentRuntime({ cwd, homeDir, agentDir });
+    // Bug 修复：复用 existing runtime 时重读 config.json。跨进程/手动编辑配置后，
+    // 内存不再停留旧值（否则首次 category 确认界面显示的是过时默认模型）。
+    if (existing) rt.reloadGlobalConfig();
     rt.injectPi(pi);
     rt.injectModelRegistry(ctx.modelRegistry);
     // Round 4 MF3: 若上一 session session_shutdown 时 dispose() 设了 _disposed=true，

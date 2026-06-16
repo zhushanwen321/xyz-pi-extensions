@@ -32,24 +32,23 @@ const SELECT_THEME: SelectListTheme = {
 };
 
 /**
- * 终端按键检测（kb 不可用时的 fallback，用于测试/无 keybindings 环境）。
- * 覆盖方向键（↑↓ 的 ANSI 序列 + vim j/k）、确认（CR/LF）、取消（ESC）。
+ * 终端按键检测。导航只认方向键 ANSI 序列（↑↓），禁用 vim j/k——
+ * 自定义 TUI 组件若用 j/k 导航，会与 filter 文本输入冲突（输入不了 j/k 字母）。
+ * 确认/取消多键位合理，保留 kb.matches。
  */
 type KeyAction = "up" | "down" | "confirm" | "cancel" | "printable" | "backspace" | null;
 function detectKeyAction(kb: KeybindingsManager | undefined, keyData: string): KeyAction {
   if (kb) {
-    if (kb.matches(keyData, "tui.select.up")) return "up";
-    if (kb.matches(keyData, "tui.select.down")) return "down";
     if (kb.matches(keyData, "tui.select.confirm")) return "confirm";
     if (kb.matches(keyData, "tui.select.cancel")) return "cancel";
   }
-  // fallback：原始终端序列
-  if (keyData === "k") return "up";
-  if (keyData === "j") return "down";
-  if (keyData === "\r" || keyData === "\n") return "confirm";
-  if (keyData === "\x1b" || keyData === "\x1b\x1b") return "cancel";
+  // 导航：仅方向键 ANSI 序列。不查 kb.matches(up/down)——Pi keybinding 默认把
+  // j/k 绑给 select.up/down，查它会把 filter 里的 j/k 字母误判为导航。
   if (keyData === "\x1b[A") return "up"; // ↑
   if (keyData === "\x1b[B") return "down"; // ↓
+  // fallback：原始终端序列
+  if (keyData === "\r" || keyData === "\n") return "confirm";
+  if (keyData === "\x1b" || keyData === "\x1b\x1b") return "cancel";
   if (keyData === "\x7f" || keyData === "\b") return "backspace";
   if (keyData.length === 1 && keyData >= " " && keyData <= "~") return "printable";
   return null;

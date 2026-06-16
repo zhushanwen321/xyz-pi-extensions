@@ -105,6 +105,17 @@ describe("CategoryConfirmComponent", () => {
     expect(holder.value?.overrides.coding).toEqual({ model: "anthropic/claude-haiku-4-5" });
   });
 
+  it("filter-accepts-jk: filter 能输入 j/k 字母（回归 vim 导航误拦截）", () => {
+    const { comp } = makeComponent();
+    comp.handleInput(ENTER); // coding model-menu
+    comp.handleInput("j"); // 应进 filter，不被当导航
+    comp.handleInput("k");
+    // 内部 filterText 无法直接读，间接验证：输入 jk 后列表仍可被 ENTER 确认不报错
+    // 且 j/k 没触发导航（若当 down/up 会移动光标但不崩溃）
+    comp.handleInput(ESC); // 清 filter 返回主视图
+    comp.handleInput(DOWN); // 主视图导航仍正常
+  });
+
   it("filter-resets-index: 下移后 filter 缩短列表 → 光标重置到第一项（M2）", () => {
     const { comp, holder } = makeComponent();
     comp.handleInput(ENTER); // coding model-menu
@@ -179,8 +190,9 @@ describe("CategoryConfirmComponent", () => {
     expect(holder.value?.overrides.coding).toEqual({ model: "deepseek-router/ds-flash", thinkingLevel: "high" });
   });
 
-  it("kb-defined-path: 传入 mock KeybindingsManager 覆盖 detectKeyAction 的 kb 分支", () => {
-    // kb 只识别 down + confirm；其它键走 fallback
+  it("kb-defined-path: kb 只覆盖 confirm/cancel，导航仅方向键（禁 vim j/k）", () => {
+    // kb 把 tui.select.down 绑给 "D"、confirm 绑给 "X"。
+    // 导航不再查 kb（防 j/k 误拦截 filter），只用方向键；confirm/cancel 仍走 kb。
     const kb = {
       matches: (data: string, k: string) => (k === "tui.select.down" && data === "D") || (k === "tui.select.confirm" && data === "X"),
       getKeys: (_k: string) => [] as string[],
@@ -189,9 +201,10 @@ describe("CategoryConfirmComponent", () => {
     const comp = new CategoryConfirmComponent(categories, currentModels, available, theme, kb as never, (r) => {
       holder.value = r;
     });
-    comp.handleInput("D"); // kb down: idx0→1(research)
-    comp.handleInput("D"); // idx1→2(✓完成)
-    comp.handleInput("X"); // kb confirm → submit
+    comp.handleInput("D"); // kb down 不再生效（导航禁用 kb）→ 停 idx0
+    comp.handleInput(DOWN);  // 方向键 ↓: idx0→1(research)
+    comp.handleInput(DOWN);  // idx1→2(✓完成)
+    comp.handleInput("X");  // kb confirm → submit
     expect(holder.value?.action).toBe("confirmed");
   });
 

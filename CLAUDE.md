@@ -275,6 +275,7 @@ bash .githooks/check-structure
 - `renderCall` 和 `renderResult` 返回 `new Text(string, 0, 0)`
 - 颜色通过 `theme.fg("token", text)` 使用语义 token，不硬编码 ANSI
 - 展开/折叠：`options.expanded` 控制显示详细程度
+- **导航键规范**：自定义 TUI 组件（如 `CategoryConfirmComponent`）的列表导航只支持方向键（↑↓ ANSI 序列 `\x1b[A`/`\x1b[B`），禁止用 vim j/k 导航。原因：自定义组件若用 j/k 导航，会与同一组件内的 filter 文本输入冲突——用户输入字母 j/k 时被误判为导航，字母进不了 filter。确认/取消多键位（Enter/Esc）不受此限。Pi 内置 `SelectList` 的 j/k 行为是平台能力，不在此规范范围内。
 
 ### GUI 渲染描述符（`_render` 协议）
 

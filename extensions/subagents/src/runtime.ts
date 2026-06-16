@@ -101,7 +101,7 @@ interface BgRecord {
  * 创建时不含 modelRegistry / pi（骨架），session_start 时注入。
  */
 export class SubagentRuntime {
-  readonly globalConfig: SubagentsGlobalConfig;
+  globalConfig: SubagentsGlobalConfig;
   readonly sessionState: SessionModelState;
   readonly globalPool: ConcurrencyPool;
   readonly agentRegistry: AgentRegistry;
@@ -158,6 +158,11 @@ export class SubagentRuntime {
     this.agentRegistry = new AgentRegistry(opts.cwd, opts.homeDir);
     this.builtinRegistry = new BuiltinAgentRegistry();
     this._history = new HistoryStore(opts.homeDir, opts.cwd);
+  }
+
+  /** session_start 复用 existing runtime 时重读磁盘 config.json，避免内存停留旧值。 */
+  reloadGlobalConfig(): void {
+    this.globalConfig = loadGlobalConfig(this.homeDir);
   }
 
   /** FR-11.5: session_start 时注入 modelRegistry，触发 agent 发现。
