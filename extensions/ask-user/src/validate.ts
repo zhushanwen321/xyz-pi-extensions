@@ -33,9 +33,12 @@ export function validateInput(questions: Question[]): string | null {
 		}
 		seenQuestions.add(qt);
 
-		// 2. option label 唯一
+		// 2. option label 唯一且非空（空 label 会污染 details.answers 的值）
 		const seenLabels = new Set<string>();
 		for (const opt of q.options) {
+			if (opt.label.trim() === "") {
+				return `Option label must not be empty in question "${q.question}"`;
+			}
 			if (seenLabels.has(opt.label)) {
 				return `Duplicate option label "${opt.label}" in question "${q.question}"`;
 			}

@@ -101,7 +101,7 @@ Submit tab 渲染：
 | `↑/↓` | 选项列表 | 移动光标（不记录答案） |
 | `Enter` | 单选选项 | 确认选择。allowComment=true 时进入评论输入行；否则（单问题）submit 或（多问题）advance |
 | `Space` | 多选选项 | toggle checkbox |
-| `Enter` | 多选（已有选择） | 确认选择。allowComment=true 时进入评论输入行；否则 advance |
+| `Enter` | 多选（已有选择） | 确认选择；同时把光标所在普通选项加入选中（与单选 Enter = 选中光标项对称）。allowComment=true 时进入评论输入行；否则 advance |
 | `Space/Tab` | Other 行 | 打开内联编辑器（自由文本模式） |
 | `Enter` | 自由文本编辑器（有文本） | 保存 freeTextValue，关闭编辑器。allowComment=true 时进入评论输入行 |
 | `Enter` | 自由文本编辑器（空） | 清除已存 freeTextValue，关闭编辑器 |
@@ -109,7 +109,7 @@ Submit tab 渲染：
 | `Enter` | 评论输入行（空） | 跳过评论（commentValue 保持 null/原值），前进 |
 | `Esc` | 评论输入行 | 跳过评论，前进（不丢弃已存 commentValue——Esc 在此=跳过而非清除；清除用 Enter 空） |
 | `Esc` | 自由文本编辑器 | 丢弃输入并返回选项列表 |
-| `←/→` | 多问题 Tab bar | 切 tab（离开多选 tab 自动确认已有选择） |
+| `←/→` | 多问题 Tab bar | 切 tab（离开 tab 时若有答案则 auto-confirm；auto-confirm 跳过评论输入行，仅 Enter 确认路径才进评论。允许的权衡：←/→ 是导航意图，弹编辑器会打断流） |
 | `Enter` | Submit tab（全答完） | 提交所有答案 |
 | `Esc` | 选项列表 / Submit tab | 取消整个问答 |
 

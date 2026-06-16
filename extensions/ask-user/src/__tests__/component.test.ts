@@ -170,6 +170,35 @@ describe("AskUserComponent — multi question tab nav", () => {
 		expect(result.val!.answers["Q2"]).toBe("X");
 	});
 
+	it("C-S1: multi-select Enter 同时选中光标项再确认（与单选 Enter 对称）", () => {
+		// S-1 锁定：多选模式下光标停在未选项上按 Enter，应把光标项加入选中再确认
+		const { c, result } = make([singleQMulti]);
+		// singleQMulti: [Auth, Search]，光标初始在 Auth(0)
+		c.handleInput(DOWN); // 光标移到 Search(1)，未 toggle
+		c.handleInput(ENTER); // Enter 应同时选中 Search + confirm + allowComment → comment
+		// 断言进入了评论模式（说明 Enter 确认了，而非 no-op）
+		const lines = c.render(60);
+		expect(lines.some((l) => l.toLowerCase().includes("comment"))).toBe(true);
+		c.handleInput(ENTER); // 跳过评论 → submit（单问题）
+		expect(result.val!.answers["Which features?"]).toBe("Search");
+	});
+
+	it("C-S3: auto-confirm（←/→ 切 tab）跳过评论输入行，仅 Enter 路径才进评论", () => {
+		// S-3 锁定：allowComment 的问题，←/→ 切走只 auto-confirm，不进评论模式
+		const twoQMulti: Question[] = [
+			{ question: "Q1", header: "First", options: [{ label: "A" }, { label: "B" }], multiSelect: true, allowComment: true },
+			{ question: "Q2", header: "Second", options: [{ label: "X" }, { label: "Y" }] },
+		];
+		const { c, result } = make(twoQMulti);
+		c.handleInput(" "); // Q1 toggle A
+		c.handleInput(RIGHT); // → Q2，auto-confirm Q1，不进评论
+		// 验证：当前在 Q2（非 Q1 的评论模式）。Q2 选 X → Submit
+		c.handleInput(ENTER); // Q2 select X → Submit
+		c.handleInput(ENTER); // Submit
+		expect(result.val!.answers["Q1"]).toBe("A"); // auto-confirm 生效
+		expect(result.val!.answers["Q2"]).toBe("X");
+	});
+
 	it("C-REG-R6: Other 录入→重进清空→Submit 应回到未答（confirmed 不变式）", () => {
 		// 回归 MUST_FIX: freeform 空 Enter 清空 freeTextValue 后须重置 confirmed=false
 		const { c, result } = make(multiQ);
@@ -509,5 +538,23 @@ describe("AskUserComponent — Submit tab", () => {
 		expect(result.val).not.toBeUndefined();
 		expect(result.val!.answers["Q1"]).toBe("A");
 		expect(result.val!.answers["Q2"]).toBe("X");
+	});
+
+	it("C-S12: Submit tab Left navigates to last question tab", () => {
+		// S-12 锁定：Submit tab 上按 Left → activeTab = questions.length - 1（最后一个问题）
+		const { c } = make(multiQ); // 3 questions → tabs 0,1,2,3=Submit
+		// 导航到 Submit
+		c.handleInput(RIGHT); // Q1 → Q2
+		c.handleInput(RIGHT); // Q2 → Q3
+		c.handleInput(RIGHT); // Q3 → Submit
+		// 确认当前在 Submit（渲染 Submit 视图）
+		let lines = c.render(80);
+		expect(lines.some((l) => l.includes("Ready") || l.includes("Unanswered"))).toBe(true);
+		// 在 Submit 上按 Left → 应回到最后一个问题 Q3
+		c.handleInput(LEFT);
+		lines = c.render(80);
+		// Q3 不再是 Submit 视图（无 Ready/Unanswered），且渲染了 Q3 的选项 M
+		expect(lines.some((l) => l.includes("Ready") || l.includes("Unanswered"))).toBe(false);
+		expect(lines.some((l) => l.includes("M"))).toBe(true); // Q3 选项 M
 	});
 });

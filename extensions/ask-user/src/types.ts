@@ -63,6 +63,14 @@ export const ResultSchema = Type.Object({
 
 export type Result = Static<typeof ResultSchema>;
 
+/** execute 意外异常时返回的错误 details（区别于 Result.cancelled 的业务取消） */
+export interface ErrorDetails {
+	error: string;
+}
+
+/** execute 返回的 details 联合：正常/取消/校验失败走 Result，意外异常走 ErrorDetails */
+export type AskUserDetails = Result | ErrorDetails;
+
 // ── 跨模块共享的交互状态类型 ─────────────────────────
 // 放这里（而非 component.ts）是为了让 question-view.ts / submit-view.ts
 // 这两个纯渲染函数只依赖 types.ts，不反向依赖 component.ts（消除循环依赖）。

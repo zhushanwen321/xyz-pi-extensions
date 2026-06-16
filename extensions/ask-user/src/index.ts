@@ -1,11 +1,18 @@
 // src/index.ts
 import { Box, Text, TruncatedText } from "@mariozechner/pi-tui";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import { AskUserComponent } from "./component";
-import { type Static } from "typebox";
-import { InputSchema, type Question, type Result, type ThemeLike } from "./types";
+import { type Static } from "@sinclair/typebox";
+import { type AskUserDetails, type ErrorDetails, InputSchema, type Question, type Result, type ThemeLike } from "./types";
 import { validateInput } from "./validate";
+
+/** execute 的返回形状：content 固定单条 text，details 为 Result 或 ErrorDetails */
+type ExecuteResult = {
+	content: Array<{ type: "text"; text: string }>;
+	isError?: boolean;
+	details: AskUserDetails;
+};
 
 export default function (pi: ExtensionAPI): void {
 	pi.registerTool({
@@ -27,17 +34,8 @@ export default function (pi: ExtensionAPI): void {
 			params: Static<typeof InputSchema>,
 			signal: AbortSignal | undefined,
 			_onUpdate: unknown,
-			ctx: {
-				hasUI: boolean;
-				signal?: AbortSignal;
-				ui: {
-					custom<T = void>(
-						factory: (tui: unknown, theme: unknown, kb: unknown, done: (result: T) => void) => unknown,
-						options?: { overlay?: boolean },
-					): Promise<T>;
-				};
-			},
-		) {
+			ctx: ExtensionContext,
+		): Promise<ExecuteResult> {
 			const questions = params.questions;
 
 			// 1. 参数校验（spec FR-2）→ isError
@@ -83,16 +81,18 @@ export default function (pi: ExtensionAPI): void {
 			try {
 				result = await ctx.ui.custom<Result | null>(
 					(tui: unknown, theme: unknown, _kb: unknown, done: (r: Result | null) => void) => {
-						// signal abort 监听（spec FR-10）
-						if (signal) {
-							signal.addEventListener("abort", () => done(null), { once: true });
-						}
-						return new AskUserComponent(
+						const comp = new AskUserComponent(
 							questions,
 							tui as { requestRender(): void },
-							theme as unknown as ThemeLike,
+							theme as ThemeLike,
 							done,
 						);
+						// signal abort 监听（spec FR-10）：走组件 cancel() 复用 _resolved 守卫，
+						// 避免用户已 submit/cancel 后 signal 才 abort 二次调 done（FR-12 竞态）
+						if (signal) {
+							signal.addEventListener("abort", () => comp.cancel(), { once: true });
+						}
+						return comp;
 					},
 					// 不传 options → inline 渲染（spec FR-3）
 				);
@@ -101,7 +101,7 @@ export default function (pi: ExtensionAPI): void {
 				return {
 					content: [{ type: "text" as const, text: `ask_user failed: ${message}` }],
 					isError: true,
-					details: { error: message },
+					details: { error: message } satisfies ErrorDetails,
 				};
 			}
 
@@ -138,7 +138,7 @@ export default function (pi: ExtensionAPI): void {
 			_options: unknown,
 			theme: ThemeLike,
 		) {
-			const details = result.details as Result | { error?: string } | undefined;
+			const details = result.details as AskUserDetails | undefined;
 			if (details && "error" in details && details.error) {
 				return new Text(theme.fg("error", `✗ ${details.error}`), 0, 0);
 			}

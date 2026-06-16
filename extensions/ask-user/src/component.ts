@@ -359,7 +359,8 @@ export class AskUserComponent implements Component {
 		this.done(buildResult(this.questions, this.states));
 	}
 
-	private cancel(): void {
+	/** 取消。public 供 signal abort 监听器复用 _resolved 守卫（FR-12 竞态） */
+	cancel(): void {
 		this._resolved = true;
 		this.done(null);
 	}
