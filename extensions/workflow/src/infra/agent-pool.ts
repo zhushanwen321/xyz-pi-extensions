@@ -1,57 +1,94 @@
 /**
- * Workflow Extension — Agent Pool (进程内执行版)
+ * Workflow Extension — Agent Pool
  *
- * 改造前：spawn pi --mode json 子进程，解析 JSONL。
- * 改造后：调用 @zhushanwen/pi-subagents 的 runtime.runAgent()（进程内 createAgentSession）。
+ * Concurrent agent call orchestrator. Manages a pool of pi --mode json
+ * subprocesses with bounded concurrency. Each call spawns an isolated pi
+ * process, reads structured JSONL responses from stdout, and returns the
+ * aggregated result.
  *
- * 保留类名 AgentPool、AgentCallOpts、AgentResult 以减少 orchestrator 改动面。
+ * Pool lifecycle:
+ *   1. enqueue() adds a call to the FIFO queue
+ *   2. drain() pulls from queue when active < concurrency limit
+ *   3. run() spawns pi, collects JSONL, settles promise
+ *   4. On completion, drain() fires again for any waiting calls
+ *
+ * Session isolation: each AgentPool instance is scoped to its creator.
+ * Create one instance per session to avoid cross-session state leakage.
  */
 
 import { randomUUID } from "node:crypto";
-import { getRuntime } from "@zhushanwen/pi-subagents";
-import type { RunAgentOptions } from "@zhushanwen/pi-subagents";
+
+import { buildArgs, resolveInvocation, runPiProcess } from "./pi-runner.js";
+import { makeEmptyPipeline } from "./jsonl-parser.js";
 
 import type { WorkflowBudget, ToolCallEntry } from "../domain/state.js";
 
-// ── Public types（保留原接口，减少 orchestrator 改动）──────────
+// ── Public types ──────────────────────────────────────────────
 
 export interface AgentCallOpts {
-  /** Task prompt */
+  /** The task prompt to send to the agent. */
   prompt: string;
-  /** Structured-output schema（传给 runAgent.schema） */
-  schema?: Record<string, unknown>;
-  /** 显式模型 "provider/modelId"（覆盖配置链） */
-  model?: string;
-  /** Scene name（传给 model-resolver 解析） */
-  scene?: string;
-  /** Skill name → 解析为 skillPath */
-  skill?: string;
-  /** Resolved skill path（agent-opts-resolver 设置） */
-  skillPath?: string;
-  /** 日志用描述 */
-  description?: string;
-  /** Agent name（传给 runAgent.agent） */
-  agent?: string;
-  /** systemPrompt 内容数组（agent-opts-resolver 设置，替代 systemPromptFiles） */
-  appendSystemPrompt?: string[];
   /**
-   * Wall-clock 超时（ms）。超时后合并的 AbortController 触发，
-   * 通过 session.abort() 终止 agent。默认 0=不限。
-   * 与外部 signal（来自 runController）合并：任一触发都终止。
+   * Optional JSON schema for structured output.
+   * When provided, the schema is passed via PI_WORKFLOW_SCHEMA env to the subprocess,
+   * which activates the structured-output tool + turn_end hook.
+   * The tool's execute() validates model output against the schema.
+   * On success, `parsedOutput` on the result is set to `tool_execution_end.result.details`
+   * (the validated, parsed data object — not the raw tool call args).
    */
-  timeoutMs?: number;
+  schema?: Record<string, unknown>;
+  /** Model to use (e.g. "router-openai/glm-5.1").
+   *   When omitted, pi's default model is used.
+   */
+  model?: string;
+  /** Scene name for model-switch advisor recommendation. */
+  scene?: string;
+  /** Skill name to load (e.g. "code-review"). Resolved to SKILL.md path
+   *  and injected via --skill flag in the subprocess. */
+  skill?: string;
+  /** Resolved absolute path to the skill directory or SKILL.md file.
+   *  Set by agent-opts-resolver when opts.skill is present. */
+  skillPath?: string;
+  /** Human-readable description for logging and debugging. */
+  description?: string;
+  /** Agent name to resolve from AgentRegistry. When set, the resolved
+   *  agent's systemPrompt is injected via --append-system-prompt. */
+  agent?: string;
+  /** Absolute paths to temp files containing system prompt injections.
+   *  Set by the orchestrator: agent systemPrompt + schema injection files.
+   *  buildArgs() injects each via --append-system-prompt. */
+  systemPromptFiles?: string[];
+  /** Schema JSON for PI_WORKFLOW_SCHEMA env var.
+   *  Set by agent-opts-resolver when opts.schema is present.
+   *  agent-pool passes it as env var to activate structured-output tool + hook. */
+  schemaEnv?: string;
 }
 
 export interface AgentResult {
+  /** Unique identifier for this call. */
   callId: string;
-  /** Agent 文本输出（映射自 subagents AgentResult.text） */
+  /** Raw text output from the agent. */
   output: string;
+  /**
+   * Parsed structured output.
+   * Present when `schema` was provided and the output was valid JSON.
+   */
   parsedOutput?: unknown;
+  /** Token and cost usage accumulated across all assistant turns. */
   usage?: AgentUsage;
+  /** Wall-clock duration in milliseconds. */
   durationMs: number;
+  /** True when the pi process exited with code 0. */
   success: boolean;
+  /** Error description on failure. Undefined on success. */
   error?: string;
+  /**
+   * Pi session ID for the subagent process (uuidv7).
+   * Present when pi emits a session header (default in --mode json).
+   * Can be used to locate the session JSONL file for post-run inspection.
+   */
   sessionId?: string;
+  /** All tool calls collected from JSONL stream (FR-7). */
   toolCalls: ToolCallEntry[];
 }
 
@@ -65,13 +102,28 @@ export interface AgentUsage {
   turns: number;
 }
 
-// ── Pool ──────────────────────────────────────────────────────
+// ── Private types ─────────────────────────────────────────────
 
-const SOFT_MAX_AGENTS_WARNING = 500;
+interface QueueEntry {
+  opts: AgentCallOpts;
+  resolve: (result: AgentResult) => void;
+  callId: string;
+  startedAt: number;
+  /** P1-2: Abort signal — propagates to the pi subprocess so it can be killed. */
+  signal?: AbortSignal;
+}
+
+// ── Constants ─────────────────────────────────────────────────
+
+export const SOFT_MAX_AGENTS_WARNING = 500;
+const DEFAULT_CONCURRENCY = 4;
+const UUID_SLICE_LENGTH = 8;
 
 export interface AgentPoolOptions {
   maxConcurrency?: number;
+  /** Workflow name for soft-limit warning context */
   runName?: string;
+  /** Called once when totalCallCount first exceeds SOFT_MAX_AGENTS_WARNING */
   onSoftLimitReached?: (info: {
     runName: string;
     totalCalls: number;
@@ -79,22 +131,19 @@ export interface AgentPoolOptions {
   }) => void;
 }
 
-/**
- * 轻量级 AgentPool — 包装 subagents runtime.runAgent()，保留并发控制和 soft limit。
- */
+// ── AgentPool ─────────────────────────────────────────────────
+
 export class AgentPool {
   private readonly maxConcurrency: number;
-  private readonly onSoftLimitReached?: AgentPoolOptions["onSoftLimitReached"];
+  private readonly queue: QueueEntry[] = [];
+  private readonly onSoftLimitReached?: (
+    info: { runName: string; totalCalls: number; budget: WorkflowBudget },
+  ) => void;
   private readonly runName: string;
   private active = 0;
   private totalCallCount = 0;
   private softWarningSent = false;
   private budgetRef?: WorkflowBudget;
-  /** AC-4.5: per-run 隔离的并发队列。waiters FIFO 排队，maxConcurrency 释放。
-   *  Round 3 MF1: waiter 存 resolve + signal，shift 时跳过已 abort 的条目——
-   *  否则 abort 后 caller 返回但 resolver 仍留在队列，release() 唤醒一个空跑 waiter，
-   *  active 计数与实际并发会逐渐漂移。 */
-  private waiters: Array<{ resolve: () => void; signal: AbortSignal }> = [];
 
   constructor(opts: AgentPoolOptions | number = {}) {
     if (typeof opts === "number") {
@@ -102,210 +151,200 @@ export class AgentPool {
       this.onSoftLimitReached = undefined;
       this.runName = "unknown";
     } else {
-      this.maxConcurrency = opts.maxConcurrency ?? 4;
+      this.maxConcurrency = opts.maxConcurrency ?? DEFAULT_CONCURRENCY;
       this.onSoftLimitReached = opts.onSoftLimitReached;
       this.runName = opts.runName ?? "unknown";
     }
   }
 
+  /** Bind a budget object for soft-limit warning reporting. */
   setBudget(budget: WorkflowBudget): void {
     this.budgetRef = budget;
   }
 
+  /** Number of currently in-flight agent calls. */
+  get activeCount(): number {
+    return this.active;
+  }
+
+  /** Number of pending calls waiting to be dispatched. */
+  get queueLength(): number {
+    return this.queue.length;
+  }
+
   /**
-   * 入队 agent 调用。调用 subagents runtime.runAgent()，映射结果。
-   * 从不 reject——错误封装在 AgentResult.error 中。
+   * Enqueue an agent call. The call is dispatched when a pool slot
+   * becomes available (active < concurrency limit).
+   *
+   * The returned promise resolves with the AgentResult on both success
+   * and failure — never rejects. Error details are carried in the
+   * `error` and `success` fields of the result.
    */
-  async enqueue(opts: AgentCallOpts, signal?: AbortSignal): Promise<AgentResult> {
-    const callId = `agent-${randomUUID().slice(0, 8)}`;
-    const startedAt = Date.now();
+  enqueue(opts: AgentCallOpts, signal?: AbortSignal): Promise<AgentResult> {
+    return new Promise<AgentResult>((resolve) => {
+      const callId = `agent-${randomUUID().slice(0, UUID_SLICE_LENGTH)}`;
+      const entry: QueueEntry = { opts, resolve, callId, startedAt: Date.now(), signal };
+      this.queue.push(entry);
 
-    // FR: 合并外部 signal（runController）和 wall-clock 超时到统一 AbortController。
-    // 任一触发都通过 controller.abort() → session.abort() 终止 agent。
-    // 之前 timeoutMs 字段存在但从未被消费——agent 无超时保护，卡死时永久挂起。
-    const controller = new AbortController();
-    const timeoutMs = opts.timeoutMs ?? 0;
-    const timeoutHandle = timeoutMs > 0
-      ? setTimeout(() => controller.abort(), timeoutMs)
-      : undefined;
-    const onExternalAbort = (): void => controller.abort();
-    if (signal) {
-      if (signal.aborted) {
-        controller.abort();
-      } else {
-        signal.addEventListener("abort", onExternalAbort, { once: true });
+      if (signal) {
+        if (signal.aborted) {
+          const idx = this.queue.indexOf(entry);
+          if (idx !== -1) this.queue.splice(idx, 1);
+          resolve({
+            callId,
+            output: "",
+            durationMs: Date.now() - entry.startedAt,
+            success: false,
+            error: "Operation aborted before start",
+            toolCalls: [],
+          });
+          return;
+        }
+        const onAbort = () => {
+          const idx = this.queue.indexOf(entry);
+          if (idx !== -1) {
+            this.queue.splice(idx, 1);
+            resolve({
+              callId,
+              output: "",
+              durationMs: Date.now() - entry.startedAt,
+              success: false,
+              error: "Operation aborted while queued",
+              toolCalls: [],
+            });
+          }
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
       }
-    }
-    const cleanup = (): void => {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-      if (signal) signal.removeEventListener("abort", onExternalAbort);
-    };
 
-    if (controller.signal.aborted) {
-      cleanup();
-      return {
-        callId, output: "", durationMs: Date.now() - startedAt,
-        success: false, error: "Operation aborted before start", toolCalls: [],
-      };
-    }
+      this.drain();
+    });
+  }
 
-    // AC-4.5: 真正的 per-run maxConcurrency 隔离。所有 workflow run 共享
-    // subagents globalPool（maxConcurrent=4）只是兜底，per-run 限制优先。
-    // 之前 active++ 仅做计数，无 release 机制，实际并发完全依赖 globalPool。
-    // Round 4 MF1: 必须始终 resolve 等待的 Promise——若仅跳过 aborted waiter 而不 resolve，
-    // 它的 Promise 永远挂起，caller 永久不返回（线程卡死 + 闭包泄漏）。
-    // Round 6 SUG#13: check abort BEFORE push to avoid the previous race where
-    // shift() removed the wrong waiter (the previous one in the queue, not the
-    // caller that was just aborted). When aborted at enqueue time, do not
-    // enqueue at all — return immediately after the abort gate below.
-    // Must-fix #3: acquiredSlot defaults false; only set true after active++.
-    let acquiredSlot = false;
-    if (this.active >= this.maxConcurrency && !controller.signal.aborted) {
-      await new Promise<void>((resolve) => {
-        this.waiters.push({ resolve, signal: controller.signal });
+  /** Dispatch pending calls up to the concurrency limit. */
+  private drain(): void {
+    while (this.active < this.maxConcurrency && this.queue.length > 0) {
+      const entry = this.queue.shift()!;
+      this.active++;
+      this.run(entry).finally(() => {
+        this.active--;
+        this.drain();
       });
     }
-    // 抢占后再次检查 abort：可能排队期间被 abort
-    if (controller.signal.aborted) {
-      cleanup();
-      return {
-        callId, output: "", durationMs: Date.now() - startedAt,
-        success: false, error: "Operation aborted before start", toolCalls: [],
-      };
-    }
+  }
 
-    this.active++;
-    this.totalCallCount++;
-    if (this.budgetRef) this.maybeEmitSoftWarning(this.budgetRef);
-    // Must-fix #3: track whether THIS caller actually acquired a slot. Aborted
-    // waiters resolve and return BEFORE this.active++, but their finally block
-    // still runs — without this guard, active gets over-decremented (drift /
-    // negative), starving future concurrency.
-    acquiredSlot = true;
+  /** Run a single agent call and settle the promise with the result. */
+  private async run(entry: QueueEntry): Promise<void> {
+    const { opts, resolve, callId, startedAt, signal } = entry;
 
     try {
-      const runtime = getRuntime();
-      if (!runtime) {
-        return {
-          callId, output: "", durationMs: Date.now() - startedAt,
-          success: false, error: "SubagentRuntime not initialized", toolCalls: [],
-        };
+      this.totalCallCount++;
+      if (this.budgetRef) this.maybeEmitSoftWarning(this.budgetRef);
+
+      const args = buildArgs(opts);
+      const { command, args: cmdArgs } = resolveInvocation(args);
+
+      const rawEnv: Record<string, string | undefined> = { ...process.env };
+      if (opts.schemaEnv) {
+        rawEnv.PI_WORKFLOW_SCHEMA = opts.schemaEnv;
+      }
+      const env: Record<string, string> = {};
+      for (const [k, v] of Object.entries(rawEnv)) {
+        if (v !== undefined) env[k] = v;
       }
 
-      const runOpts: RunAgentOptions = {
-        task: opts.prompt,
-        agent: opts.agent,
-        model: opts.model,
-        schema: opts.schema,
-        skillPath: opts.skillPath,
-        appendSystemPrompt: opts.appendSystemPrompt,
-        signal: controller.signal,
-        // Round 4 S1: spec FR-O4.1 要求 workflow 的 sync step 传 priority: 0，
-        // 确保 workflow agent 调用不被 background subagent（priority: 1000）插队。
-        // 否则 globalPool 满时 background 会插队到 workflow 前面，sync step 延迟。
-        priority: 0,
-        // Skip widget registration and sync-history persistence for internal
-        // workflow agent steps — otherwise they pollute /subagents list output.
-        _skipWidget: true,
-      };
+      const pipeline = makeEmptyPipeline();
+      let stderr = "";
+      let exitCode: number;
 
-      const subResult = await runtime.runAgent(runOpts);
-      const result = mapResult(subResult, callId, startedAt);
-
-      // 超时优先：若 controller 因超时 abort，覆盖错误信息为清晰的 timeout 描述。
-      // runAgent 返回的 error 可能只是 "aborted"，调用方看不出是超时。
-      if (timeoutMs > 0 && controller.signal.aborted && !result.success) {
-        result.success = false;
-        result.error = `Agent timed out after ${timeoutMs}ms`;
+      try {
+        const result = await runPiProcess(command, cmdArgs, pipeline, signal, env);
+        exitCode = result.exitCode;
+        stderr = result.stderr;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        resolve({
+          callId,
+          output: "",
+          durationMs: Date.now() - startedAt,
+          success: false,
+          error: message,
+          toolCalls: [],
+        });
+        return;
       }
 
-      return result;
+      const durationMs = Date.now() - startedAt;
+
+      if (opts.schema && pipeline.parsedOutput === undefined) {
+        if (!pipeline.hasToolCall) {
+          resolve({
+            callId,
+            output: pipeline.output,
+            durationMs: Date.now() - startedAt,
+            success: false,
+            error: "Agent did not call structured-output tool",
+            toolCalls: pipeline.toolCalls,
+          });
+          return;
+        }
+        if (exitCode === 0) {
+          resolve({
+            callId,
+            output: pipeline.output,
+            durationMs,
+            success: false,
+            error: "Agent completed without calling structured-output tool",
+            toolCalls: pipeline.toolCalls,
+          });
+          return;
+        }
+      }
+
+      resolve({
+        callId,
+        output: pipeline.output,
+        parsedOutput: pipeline.parsedOutput,
+        usage: pipeline.usage.turns > 0 ? pipeline.usage : undefined,
+        durationMs,
+        success: exitCode === 0,
+        error: exitCode === 0 ? undefined : (stderr || `Exit code ${exitCode}`),
+        sessionId: pipeline.sessionId,
+        toolCalls: pipeline.toolCalls,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // 超时优先：若 catch 来自 abort（agent 主动响应 abort signal 抛错），
-      // 且 timeoutMs 配置了，覆盖为清晰的 timeout 描述。
-      // 正常情况下 runAgent 返回 result.error = "aborted"，由上方 override 块处理；
-      // 此处兜底 agent 抛 AbortError（实现层行为）的场景。
-      const errorMsg = timeoutMs > 0 && controller.signal.aborted
-        ? `Agent timed out after ${timeoutMs}ms`
-        : message;
-      return {
-        callId, output: "", durationMs: Date.now() - startedAt,
-        success: false, error: errorMsg, toolCalls: [],
-      };
-    } finally {
-      cleanup();
-      // Must-fix #3: only decrement if this caller actually acquired a slot.
-      if (acquiredSlot) this.active--;
-      // 释放一个 slot，唤醒最先 wait 的 caller。
-      // Round 3 MF1: 跳过已 abort 的 waiter——它们的 caller 已返回，再唤醒只会浪费一个 slot，
-      // 累积下来会让 active 计数与实际并发漂移（超限或永久卡死）。
-      // Round 4 MF1: 即使跳过占 slot 的机会，也必须 resolve() aborted waiter——它们的 Promise
-      // 必须有出口，否则永久挂起（线程卡死 + 闭包泄漏）。语义改为：
-      //   - 找到第一个未 aborted 的 waiter → 它占 slot，break
-      //   - 沿途跳过的 aborted waiter 也要 resolve()，让 caller 跳出 await 走 abort 分支
-      while (this.waiters.length > 0) {
-        const next = this.waiters.shift()!;
-        if (next.signal.aborted) {
-          // 唤醒 caller 走出 await（会走 abort 分支返回 error 结果）
-          next.resolve();
-          continue;
-        }
-        next.resolve();
-        break;
+      resolve({
+        callId,
+        output: "",
+        durationMs: Date.now() - startedAt,
+        success: false,
+        error: message,
+        toolCalls: [],
+      });
+    }
+  }
+
+  /**
+   * Emit the soft-limit warning once when totalCallCount exceeds
+   * SOFT_MAX_AGENTS_WARNING. Errors in the callback are swallowed.
+   */
+  private maybeEmitSoftWarning(budget: WorkflowBudget): void {
+    if (
+      this.totalCallCount > SOFT_MAX_AGENTS_WARNING &&
+      !this.softWarningSent
+    ) {
+      this.softWarningSent = true;
+      try {
+        this.onSoftLimitReached?.({
+          runName: this.runName,
+          totalCalls: this.totalCallCount,
+          budget,
+        });
+      // eslint-disable-next-line taste/no-silent-catch
+      } catch {
+        // callback errors must not affect dispatch
       }
     }
   }
-
-  private maybeEmitSoftWarning(budget: WorkflowBudget): void {
-    if (this.totalCallCount > SOFT_MAX_AGENTS_WARNING && !this.softWarningSent) {
-      this.softWarningSent = true;
-      try { this.onSoftLimitReached?.({ runName: this.runName, totalCalls: this.totalCallCount, budget }); }
-      catch { /* callback errors must not affect dispatch */ }
-    }
-  }
-}
-
-/**
- * FR-9.5: subagents AgentResult → workflow AgentResult 映射。
- */
-function mapResult(sub: {
-  text: string;
-  parsedOutput?: unknown;
-  usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
-  turns: number;
-  durationMs: number;
-  success: boolean;
-  error?: string;
-  sessionId: string;
-  toolCalls: Array<{ toolName: string; args?: unknown; result?: { details?: unknown }; isError: boolean }>;
-}, callId: string, _startedAt: number): AgentResult {
-  return {
-    callId,
-    output: sub.text,
-    parsedOutput: sub.parsedOutput,
-    usage: sub.usage ? {
-      input: sub.usage.input,
-      output: sub.usage.output,
-      cacheRead: sub.usage.cacheRead,
-      cacheWrite: sub.usage.cacheWrite,
-      cost: sub.usage.cost,
-      // contextTokens = 本次 prompt 的 token 总消耗（输入+输出+缓存读+缓存写）。
-      // 原先硬编码为 0，导致预算控制失效；改为四项之和。
-      contextTokens: sub.usage.input + sub.usage.output + sub.usage.cacheRead + sub.usage.cacheWrite,
-      turns: sub.turns,
-    } : undefined,
-    durationMs: sub.durationMs,
-    success: sub.success,
-    error: sub.success ? undefined : sub.error,
-    sessionId: sub.sessionId || undefined,
-    toolCalls: sub.toolCalls.map((tc) => ({
-      name: tc.toolName,
-      // 优先展示调用参数预览（UI 原本意图）；args 缺失时回退到 result.details，
-      // 保持向后兼容（老版本 subagents 未填充 args 的场景）。
-      input: tc.args
-        ? JSON.stringify(tc.args).slice(0, 200)
-        : (tc.result?.details ? JSON.stringify(tc.result.details).slice(0, 200) : ""),
-    })),
-  };
 }

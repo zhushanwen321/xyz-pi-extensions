@@ -12,12 +12,12 @@ import { Worker } from "node:worker_threads";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { resolveAgentOpts as resolveOpts, type AgentRegistryLike } from "./infra/agent-opts-resolver.js";
+import { cleanupAllTempFiles as cleanupAllFiles, cleanupTempFile as cleanupFile, resolveAgentOpts as resolveOpts } from "./infra/agent-opts-resolver.js";
+import { AgentRegistry } from "./infra/agent-discovery.js";
 import { type AgentCallOpts,AgentPool } from "./infra/agent-pool.js";
 import { getWorkflow } from "./infra/config-loader.js";
 import { appendTraceNode } from "./infra/execution-trace.js";
 import { resolveModel } from "./engine/model-resolver.js";
-import { getRuntime } from "@zhushanwen/pi-subagents";
 import { lintScript } from "./infra/script-lint.js";
 import {
   type AgentResult as StateAgentResult,
@@ -83,7 +83,13 @@ export class WorkflowOrchestrator {
   private readonly runMetaMap = new Map<string, RunMeta>();
   private readonly retryCounts = new Map<string, number>();
   private readonly runPools = new Map<string, AgentPool>();
-  private readonly agentRegistry: AgentRegistryLike;
+  private readonly agentRegistry: AgentRegistry;
+  /** Active temp files created for agent system prompts — cleaned up on completion or abort. */
+  private readonly activeTempFiles = new Set<string>();
+  // Bound helpers that carry activeTempFiles closure
+  private cleanupTempFile = (fp: string): void => cleanupFile(fp, this.activeTempFiles);
+  /** Bound helper for agent-opts-resolver temp file cleanup. */
+  cleanupAllTempFiles = (): void => cleanupAllFiles(this.activeTempFiles);
   /** Per-run AbortController for killing agent subprocesses on terminate/pause/abort. */
   private readonly runAbortControllers = new Map<string, AbortController>();
   private readonly pi: ExtensionAPI;
@@ -116,27 +122,21 @@ export class WorkflowOrchestrator {
     if (fs.existsSync(sessionScopedDir)) {
       this.sessionDir = sessionScopedDir;
     }
-    // Use subagents runtime's AgentRegistry if available, else a local fallback
-    // Hot-reload: resolve 时重新扫描 .md 文件
-    const runtime = getRuntime();
-    this.agentRegistry = runtime
-      ? { resolve: (name) => { runtime.agentRegistry.discoverAll(runtime.builtinRegistry); return runtime.agentRegistry.get(name); } }
-      : { resolve: () => undefined };
+    // AgentPool is created per-workflow-run in `run()`, not in constructor
+    this.agentRegistry = new AgentRegistry(process.cwd());
+    this.agentRegistry.discoverAll();
   }
 
   // ── Public API ──────────────────────────────────────────────
 
   /** Return the number of discovered agents. */
   getAgentCount(): number {
-    const rt = getRuntime();
-    return rt ? rt.agentRegistry.list().length : 0;
+    return this.agentRegistry.list().length;
   }
 
   /** Return a summary of all discovered agents. */
   getAgents(): Array<{ name: string; source: string; model?: string }> {
-    const rt = getRuntime();
-    const list = rt ? rt.agentRegistry.list() : [];
-    return list.map((a) => ({
+    return this.agentRegistry.list().map((a) => ({
       name: a.name,
       source: a.source,
       model: a.model,
@@ -262,6 +262,7 @@ export class WorkflowOrchestrator {
     this.terminateWorker(runId, true);
     // Cleanup in-flight temp files from agent calls that were killed mid-flight.
     // Without this, files written for --append-system-prompt leak to disk.
+    this.cleanupAllTempFiles();
     await this.persistState();
   }
 
@@ -330,6 +331,7 @@ export class WorkflowOrchestrator {
     transitionStatus(instance, "aborted");
     this.events.emit(runId, { type: "status", status: "aborted" });
     this.terminateWorker(runId);
+    this.cleanupAllTempFiles();
     this.runPools.delete(runId);
     await this.persistState();
     this.onCompletion?.(runId);
@@ -448,7 +450,8 @@ export class WorkflowOrchestrator {
       transitionStatus(instance, "aborted");
       this.events.emit(runId, { type: "status", status: "aborted" });
       this.terminateWorker(runId);
-      }
+      this.cleanupAllTempFiles();
+    }
 
     // 2. Create new instance directly from cached scriptSource (skip getWorkflow + readFile).
     const newRunId = `wf-${Date.now()}-${Math.random().toString(RUNID_RADIX).slice(RUNID_SLICE_START, RUNID_SLICE_LENGTH)}`;
@@ -462,7 +465,7 @@ export class WorkflowOrchestrator {
 
     this.instances.set(newRunId, newInstance);
     this.runMetaMap.set(newRunId, { scriptSource, args, budgetTokens, budgetTimeMs });
-    // Round 4 MF#1: create per-run AbortController so executeWithRetry can abort in-flight runAgent on user abort.
+    // Round 4 MF#1: create per-run AbortController so executeWithRetry can abort in-flight pi subprocess on user abort.
     this.runAbortControllers.set(newRunId, new AbortController());
     this.startWorker(newRunId, newInstance, scriptSource, args);
 
@@ -660,6 +663,7 @@ export class WorkflowOrchestrator {
       getRunMeta: (id) => this.runMetaMap.get(id),
       events: this.events,
       terminateWorker: (id) => this.terminateWorker(id),
+      cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
       recreateRunAbortController: (id) => this.recreateRunAbortController(id),
       startWorker: (id, inst, src, args) => this.startWorker(id, inst, src, args),
       persistState: () => this.persistState(),
@@ -679,17 +683,19 @@ export class WorkflowOrchestrator {
       postMessage: (id, msg) => this.postMessage(id, msg),
       persistState: () => this.persistState(),
       budgetCallbacks: () => this.budgetCallbacks(),
+      cleanupTempFile: (fp) => this.cleanupTempFile(fp),
       onTraceUpdate: (id) => this.onTraceUpdate?.(id),
     };
   }
 
   /** Shared BudgetCallbacks 实例——executeWithRetry / handleAgentCall /
-   *  scheduleTimeBudgetCheck 都需要同样的 4 个回调。集中创建避免在调用点
+   *  scheduleTimeBudgetCheck 都需要同样的 5 个回调。集中创建避免在调用点
    *  重复 6 行内联（orchestrator.ts 文件行数 1000+ 紧贴上限）。 */
   private budgetCallbacks() {
     return {
       postMessage: (id: string, msg: unknown) => this.postMessage(id, msg),
       terminateWorker: (id: string) => this.terminateWorker(id),
+      cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
       persistState: () => this.persistState(),
       onCompletion: (id: string) => this.onCompletion?.(id),
     };
@@ -738,9 +744,9 @@ export class WorkflowOrchestrator {
     }
   }
 
-  /** Resolve agent name, skill, and schema to RunAgentOptions (delegates to agent-opts-resolver). */
+  /** Resolve agent name and schema to systemPromptFiles (delegates to agent-opts-resolver). */
   private resolveAgentOpts(opts: AgentCallOpts): { opts: AgentCallOpts; error?: string } {
-    return resolveOpts(opts, this.agentRegistry);
+    return resolveOpts(opts, this.agentRegistry, this.sessionDir, this.activeTempFiles);
   }
 
   /**

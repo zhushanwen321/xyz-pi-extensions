@@ -54,6 +54,8 @@ export interface AgentCallContext {
 	postMessage: (runId: string, msg: unknown) => void;
 	persistState: () => Promise<void>;
 	budgetCallbacks: () => BudgetCallbacks;
+	/** Remove a single temp file (agent systemPrompt / schema instruction). Spawn 路径必需。 */
+	cleanupTempFile: (filePath: string) => void;
 	onTraceUpdate?: (runId: string) => void;
 }
 
@@ -124,6 +126,10 @@ export async function executeWithRetry(
 			});
 			await ctx.persistState();
 			ctx.onTraceUpdate?.(runId);
+			// Cleanup temp file on stale context early return
+			if (opts.systemPromptFiles) {
+				for (const fp of opts.systemPromptFiles) ctx.cleanupTempFile(fp);
+			}
 			return;
 		}
 
@@ -182,6 +188,11 @@ export async function executeWithRetry(
 
 		await ctx.persistState();
 		ctx.onTraceUpdate?.(runId);
+
+		// Cleanup temp file if it was created for agent system prompt
+		if (opts.systemPromptFiles) {
+			for (const fp of opts.systemPromptFiles) ctx.cleanupTempFile(fp);
+		}
 	})
 		// Round 4 S2: 挂 catch 避免 unhandled rejection——worker.postMessage / persistState
 		// 在 worker 已 terminate 的竞态下可能抛错，Node 默认 --unhandled-rejections=throw

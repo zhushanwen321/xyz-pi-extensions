@@ -24,18 +24,14 @@ vi.mock("node:fs", async () => {
   };
 });
 
-// 避免加载 @zhushanwen/pi-subagents 真实包（其 node_modules 没有 @mariozechner/pi-ai）
-vi.mock("@zhushanwen/pi-subagents", () => ({
-  getRuntime: () => ({
-    agentRegistry: {
-      discoverAll: vi.fn(),
-      list: vi.fn(() => []),
-      get: vi.fn((name: string) => ({ name, systemPrompt: "You are " + name, source: "builtin" })),
-    },
-    builtinRegistry: {
-      get: vi.fn(),
-    },
-  }),
+// Mock agent-discovery: 避免构造 AgentRegistry 时扫描真实文件系统。
+vi.mock("../src/infra/agent-discovery", () => ({
+  AgentRegistry: class MockAgentRegistry {
+    discoverAll = vi.fn();
+    list = vi.fn(() => []);
+    get = vi.fn((name: string) => ({ name, systemPrompt: "You are " + name, source: "builtin" }));
+    resolve = vi.fn((name: string) => ({ name, systemPrompt: "You are " + name, source: "builtin" }));
+  },
 }));
 
 // Mock AgentPool：让 executeWithRetry 的 pool.enqueue 行为可控

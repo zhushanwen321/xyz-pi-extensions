@@ -108,4 +108,4 @@ workflow/
             └── format.ts                 # 纯格式化函数
 ```
 
-> **依赖说明**：workflow 现在依赖 `@zhushanwen/pi-subagents` 包进行进程内 agent 执行，替换了旧的 `spawn pi` 子进程模式。`infra/` 不再包含子进程管理和 JSONL 流式解析代码。
+> **依赖说明**：workflow 采用自包含的 `spawn pi --mode json` 子进程架构执行 agent，不依赖任何外部 agent 运行时。`infra/` 内含子进程管理（`pi-runner.ts`）和 JSONL 流式解析（`jsonl-parser.ts`）。

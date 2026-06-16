@@ -42,6 +42,7 @@ function makeCtx(overrides?: Partial<ErrorHandlerContext>): ErrorHandlerContext 
   getRunMeta: ReturnType<typeof vi.fn>;
   events: { emit: ReturnType<typeof vi.fn> };
   terminateWorker: ReturnType<typeof vi.fn>;
+  cleanupAllTempFiles: ReturnType<typeof vi.fn>;
   recreateRunAbortController: ReturnType<typeof vi.fn>;
   startWorker: ReturnType<typeof vi.fn>;
   persistState: ReturnType<typeof vi.fn>;
@@ -55,6 +56,7 @@ function makeCtx(overrides?: Partial<ErrorHandlerContext>): ErrorHandlerContext 
     getRunMeta: vi.fn(),
     events: { emit: vi.fn() } as unknown as ErrorHandlerContext["events"],
     terminateWorker: vi.fn(),
+    cleanupAllTempFiles: vi.fn(),
     recreateRunAbortController: vi.fn(),
     startWorker: vi.fn(),
     persistState: vi.fn().mockResolvedValue(undefined),

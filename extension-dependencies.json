@@ -9,11 +9,6 @@
           "package": "@zhushanwen/pi-structured-output",
           "type": "optional",
           "reason": "schema 结构化输出，缺失时降级为纯文本"
-        },
-        {
-          "package": "@zhushanwen/pi-subagents",
-          "type": "package",
-          "reason": "进程内 agent 执行运行时（runAgent 替代 spawn 子进程）"
         }
       ]
     },

@@ -20,30 +20,27 @@ vi.mock("node:fs", async () => {
   };
 });
 
-// Mock @zhushanwen/pi-subagents: workflow 通过 getRuntime() 拿 modelRegistry + agentRegistry。
-// 之前 mock 的 @zhushanwen/pi-model-switch 已删除（重构后改用 subagents）。
-// Round 5 MF#3: use vi.fn() so getAgentCount()/getAgents() tests can control return value.
+// Mock agent-discovery: workflow 现在自带 AgentRegistry（spawn 架构，不再依赖 subagents）。
+// getAgentCount()/getAgents() 测试通过 mockAgentList 控制 AgentRegistry.list() 返回值。
 const mockAgentList: Array<{ name: string; source: string; model?: string }> = [];
-vi.mock("@zhushanwen/pi-subagents", () => ({
-  getRuntime: vi.fn(() => ({
-    agentRegistry: {
-      discoverAll: vi.fn(),
-      list: vi.fn(() => mockAgentList),
-      get: vi.fn((name: string) => ({
-        name,
-        systemPrompt: "You are " + name,
-        source: "builtin",
-      })),
-    },
-    builtinRegistry: {
-      get: vi.fn(),
-    },
-  })),
+vi.mock("../src/infra/agent-discovery", () => ({
+  AgentRegistry: class MockAgentRegistry {
+    discoverAll = vi.fn();
+    list = vi.fn(() => mockAgentList);
+    get = vi.fn((name: string) => ({
+      name,
+      systemPrompt: "You are " + name,
+      source: "builtin",
+    }));
+    resolve = vi.fn((name: string) => ({
+      name,
+      systemPrompt: "You are " + name,
+      source: "builtin",
+    }));
+  },
 }));
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-
-import { getRuntime } from "@zhushanwen/pi-subagents";
 
 import { WorkflowOrchestrator } from "../src/orchestrator";
 import {
@@ -796,11 +793,6 @@ describe("WorkflowOrchestrator", () => {
       );
       expect(orch.getAgentCount()).toBe(3);
     });
-
-    it("returns 0 when runtime is not registered (getRuntime returns undefined)", () => {
-      vi.mocked(getRuntime).mockReturnValueOnce(undefined as never);
-      expect(orch.getAgentCount()).toBe(0);
-    });
   });
 
   describe("getAgents()", () => {
@@ -819,11 +811,6 @@ describe("WorkflowOrchestrator", () => {
       expect(agents).toHaveLength(2);
       expect(agents[0]).toEqual({ name: "worker", source: "builtin", model: "anthropic/claude-sonnet-4.5" });
       expect(agents[1]).toEqual({ name: "researcher", source: "user", model: undefined });
-    });
-
-    it("returns empty array when runtime is not registered", () => {
-      vi.mocked(getRuntime).mockReturnValueOnce(undefined as never);
-      expect(orch.getAgents()).toEqual([]);
     });
   });
 });

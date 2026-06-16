@@ -41,12 +41,14 @@ function makeInstance(
 function makeCallbacks(): BudgetCallbacks & {
   postMessage: ReturnType<typeof vi.fn>;
   terminateWorker: ReturnType<typeof vi.fn>;
+  cleanupAllTempFiles: ReturnType<typeof vi.fn>;
   persistState: ReturnType<typeof vi.fn>;
   onCompletion: ReturnType<typeof vi.fn>;
 } {
   return {
     postMessage: vi.fn(),
     terminateWorker: vi.fn(),
+    cleanupAllTempFiles: vi.fn(),
     persistState: vi.fn().mockResolvedValue(undefined),
     onCompletion: vi.fn(),
   };

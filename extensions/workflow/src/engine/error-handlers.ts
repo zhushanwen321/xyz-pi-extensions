@@ -30,6 +30,7 @@ export interface ErrorHandlerContext {
   getRunMeta(runId: string): { scriptSource: string; args: Record<string, unknown> } | undefined;
   events: WorkflowEventEmitter;
   terminateWorker(runId: string): void;
+  cleanupAllTempFiles(): void;
   recreateRunAbortController(runId: string): void;
   startWorker(runId: string, instance: WorkflowInstance, scriptSource: string, args: Record<string, unknown>): void;
   persistState(): Promise<void>;
@@ -132,6 +133,7 @@ export async function handleScriptError(
 
   if (attempt <= MAX_WORKER_RETRIES) {
     ctx.terminateWorker(runId);
+    ctx.cleanupAllTempFiles();
 
     const delay = RETRY_BACKOFF_MS * Math.pow(EXPONENTIAL_BACKOFF_BASE, attempt - 1);
     setTimeout(() => {
@@ -150,6 +152,7 @@ export async function handleScriptError(
     transitionStatus(instance, "failed");
     ctx.events.emit(runId, { type: "status", status: "failed" });
     ctx.terminateWorker(runId);
+    ctx.cleanupAllTempFiles();
     ctx.deleteRunPool(runId);
     await ctx.persistState();
     ctx.onCompletion?.(runId);
