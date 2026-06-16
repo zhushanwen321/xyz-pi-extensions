@@ -5,6 +5,7 @@ import {
   Container,
   fuzzyFilter,
   type KeybindingsManager,
+  matchesKey,
   type SelectItem,
   SelectList,
   type SelectListTheme,
@@ -32,9 +33,20 @@ const SELECT_THEME: SelectListTheme = {
 };
 
 /**
- * 终端按键检测。导航只认方向键 ANSI 序列（↑↓），禁用 vim j/k——
- * 自定义 TUI 组件若用 j/k 导航，会与 filter 文本输入冲突（输入不了 j/k 字母）。
- * 确认/取消多键位合理，保留 kb.matches。
+ * 终端按键检测。
+ *
+ * 导航用 pi-tui 的 matchesKey(data,"up"|"down")：它识别全部方向键编码——
+ * legacy CUU/CUD（\x1b[A/\x1b[B）、application mode（\x1bOA/\x1bOB）、
+ * Kitty keyboard protocol（CSI u）以及 modifyOtherKeys 序列。
+ * 硬编码 \x1b[A/\x1b[B 只覆盖其中一种，在 application-mode 或 Kitty 终端上
+ * 方向键直接失效（用户报告“不能上下选择”）。
+ *
+ * matchesKey 只匹配功能键码，对可打印字母 j/k 返回 false——所以 filter 仍能
+ * 输入 j/k（保留 commit b41db2933 的 j/k 修复）。此处刻意不再查
+ * kb.matches(up/down)：那会连带命中用户把 j/k 绑给 select.up/down 的自定义键位，
+ * 重新引入 j/k 误拦截 filter 的 bug（见 kb-defined-path 回归测试）。
+ * 想换导航键，请用支持方向键的终端；自定义 TUI 一律方向键导航（见 CLAUDE.md）。
+ * confirm/cancel 合理地走 kb.matches 以尊重用户键位。
  */
 type KeyAction = "up" | "down" | "confirm" | "cancel" | "printable" | "backspace" | null;
 function detectKeyAction(kb: KeybindingsManager | undefined, keyData: string): KeyAction {
@@ -42,14 +54,13 @@ function detectKeyAction(kb: KeybindingsManager | undefined, keyData: string): K
     if (kb.matches(keyData, "tui.select.confirm")) return "confirm";
     if (kb.matches(keyData, "tui.select.cancel")) return "cancel";
   }
-  // 导航：仅方向键 ANSI 序列。不查 kb.matches(up/down)——Pi keybinding 默认把
-  // j/k 绑给 select.up/down，查它会把 filter 里的 j/k 字母误判为导航。
-  if (keyData === "\x1b[A") return "up"; // ↑
-  if (keyData === "\x1b[B") return "down"; // ↓
-  // fallback：原始终端序列
+  // 导航：matchesKey 识别全部方向键编码，且不命中 j/k 等可打印字母。
+  if (matchesKey(keyData, "up")) return "up";
+  if (matchesKey(keyData, "down")) return "down";
+  // fallback：原始终端序列（matchesKey 覆盖绝大多数编码；补 \x1b\x1b 双击 Esc 兜底）
   if (keyData === "\r" || keyData === "\n") return "confirm";
-  if (keyData === "\x1b" || keyData === "\x1b\x1b") return "cancel";
-  if (keyData === "\x7f" || keyData === "\b") return "backspace";
+  if (matchesKey(keyData, "escape") || keyData === "\x1b\x1b") return "cancel";
+  if (matchesKey(keyData, "backspace")) return "backspace";
   if (keyData.length === 1 && keyData >= " " && keyData <= "~") return "printable";
   return null;
 }

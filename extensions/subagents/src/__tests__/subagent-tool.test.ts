@@ -195,8 +195,8 @@ describe("subagent tool execute()", () => {
     expect(textOutputs.length).toBeGreaterThanOrEqual(1);
   });
 
-  // ── 场景 2: 同步失败 ────────────────────────────────────
-  it("sync mode: throws Error(result.error) when runAgent returns success=false", async () => {
+  // ── 场景 2: 同步失败（不再 throw，返回 failure 结果保留 details）──
+  it("sync mode: returns failure result with result.error when runAgent returns success=false", async () => {
     const mockRt = makeMockRuntime({
       runAgent: vi.fn(async () => ({
         text: "",
@@ -211,7 +211,9 @@ describe("subagent tool execute()", () => {
     mockedGetRuntime.mockReturnValue(mockRt as never);
 
     const tool = captureTool();
-    await expect(tool.execute("call-2", { task: "fail me" })).rejects.toThrow("model unavailable");
+    const result = await tool.execute("call-2", { task: "fail me" }) as ExecuteResult;
+    expect(result.content[0]?.text).toBe("model unavailable");
+    expect(result.details.status).toBe("failed");
   });
 
   // ── 场景 3: background 模式 ──────────────────────────────
@@ -518,8 +520,11 @@ describe("subagent tool execute()", () => {
     expect(result.details.model).toBe("unknown");
   });
 
-  // ── Round 5 SUG#12: throw fallback 路径测试 ──────────────────
-  it("sync mode: throws 'subagent failed (no error detail)' when result.success=false and error is undefined", async () => {
+  // ── Round 5 SUG#12: 失败路径测试（不再 throw，改为返回 failure 结果）──
+  // 之前 throw → SDK 用 details:{} 重建结果 → 渲染 fallback 成 "✓ default"，
+  // 已 streaming 的 eventLog 丢失。改为返回携带 cancelled/failed details 的结果，
+  // SDK 在非 throw 路径保留 details，渲染层据此显示 ■/✗ 块并保留内容。
+  it("sync mode: returns failure result with 'subagent failed (no error detail)' when result.success=false and error is undefined", async () => {
     const mockRt = makeMockRuntime({
       runAgent: vi.fn(async () => ({
         text: "",
@@ -534,9 +539,11 @@ describe("subagent tool execute()", () => {
     mockedGetRuntime.mockReturnValue(mockRt as never);
 
     const tool = captureTool();
-    await expect(tool.execute("call-no-err", { task: "fail silently" })).rejects.toThrow(
-      "subagent failed (no error detail)",
-    );
+    const result = await tool.execute("call-no-err", { task: "fail silently" }) as ExecuteResult;
+    // content 携带失败原因（LLM 可见），不再 throw
+    expect(result.content[0]?.text).toBe("subagent failed (no error detail)");
+    // details 携带 failed 终态（非空 details，渲染层不会走 "✓ default" fallback）
+    expect(result.details.status).toBe("failed");
   });
 
   // Round 5 MF#4 (suggestion #14): empty string error passes through ?? unchanged
@@ -555,9 +562,46 @@ describe("subagent tool execute()", () => {
     mockedGetRuntime.mockReturnValue(mockRt as never);
 
     const tool = captureTool();
+    const result = await tool.execute("call-empty-err", { task: "fail empty" }) as ExecuteResult;
     // ?? does not catch empty string — error="" passes through as-is
-    await expect(tool.execute("call-empty-err", { task: "fail empty" })).rejects.toThrow("");
+    expect(result.content[0]?.text).toBe("");
+    expect(result.details.status).toBe("failed");
   });
+
+  // ── 回归：用户取消（signal.aborted）保留已 streaming 的 eventLog ──
+  // 这是 "取消后内容变 ✓ default" bug 的核心回归测试：
+  // runAgent 失败 + signal.aborted → status="cancelled"，details.eventLog 必须保留。
+  it("sync mode: user cancel (signal.aborted) returns cancelled details preserving streamed eventLog", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async () => ({
+        text: "partial output before cancel",
+        turns: 2,
+        durationMs: 5000,
+        success: false,
+        error: "aborted by user",
+        sessionId: "sess-cancel-1",
+        toolCalls: [],
+      })),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    const controller = new AbortController();
+    controller.abort(); // 模拟用户取消
+    const result = await tool.execute(
+      "call-cancel",
+      { task: "long task" },
+      controller.signal,
+    ) as ExecuteResult;
+
+    // 取消：content 是失败原因
+    expect(result.content[0]?.text).toBe("aborted by user");
+    // 关键：details.status="cancelled"（非 "done"）+ eventLog 保留 → 渲染成 ■ cancelled 块
+    expect(result.details.status).toBe("cancelled");
+    // eventLog 是数组（具体内容由 updateStateFromEvent 填充；此处至少验证非空 details 被保留）
+    expect(Array.isArray(result.details.eventLog)).toBe(true);
+  });
+
 
   // ── Round 5 MF#5: V4 worktree 合并指令路径测试 ─────────────────
   it("sync mode: appends merge instruction to result text when worktree.hasChanges=true and branch is set", async () => {

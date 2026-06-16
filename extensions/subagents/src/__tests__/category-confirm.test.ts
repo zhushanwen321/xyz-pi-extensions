@@ -32,8 +32,10 @@ function makeComponent(): { comp: CategoryConfirmComponent; holder: { value: Cat
   return { comp, holder };
 }
 
-// 原始终端按键序列（组件 fallback 用这些）
-const DOWN = "\x1b[B"; // ↓
+// 原始终端按键序列（组件经 matchesKey 识别这些）
+const DOWN = "\x1b[B"; // ↓ CUU/CUD（最常见，旧行为唯一覆盖的）
+const DOWN_APP = "\x1bOB"; // ↓ application-cursor-mode（Pi TUI 常启用——旧行为漏掉）
+const UP_APP = "\x1bOA"; // ↑ application-cursor-mode（旧行为漏掉）
 const ENTER = "\r";
 const ESC = "\x1b";
 
@@ -206,6 +208,30 @@ describe("CategoryConfirmComponent", () => {
     comp.handleInput(DOWN);  // idx1→2(✓完成)
     comp.handleInput("X");  // kb confirm → submit
     expect(holder.value?.action).toBe("confirmed");
+  });
+
+  // 回归：方向键导航必须覆盖全部终端编码，不能只认 \x1b[A/\x1b[B。
+  // 旧实现硬编码这两个字节，application-mode 终端（Pi TUI 常启用）上方向键直接失效
+  // （用户报告“不能上下选择”）。改用 pi-tui matchesKey 后 \x1bOA/\x1bOB 也能命中。
+  // 生产 matchesKey 还覆盖 Kitty CSI u / modifyOtherKeys 等（此处 mock 只含 legacy/app，
+  // 故仅断言 application-mode；其余编码由 pi-tui 自身的测试覆盖）。
+  it("arrow-app-mode: \\x1bOA/\\x1bOB application-cursor-mode 方向键可导航", () => {
+    const { comp, holder } = makeComponent();
+    comp.handleInput(DOWN_APP); // idx0→1(research)
+    comp.handleInput(DOWN_APP); // idx1→2(✓完成)
+    comp.handleInput(UP_APP);   // 回退 idx2→1(research)——验证 up 也工作
+    comp.handleInput(DOWN_APP); // 再 idx1→2(✓完成)
+    comp.handleInput(ENTER);
+    expect(holder.value?.action).toBe("confirmed");
+  });
+
+  it("arrow-cuu-and-app-mixed: 同一会话混合 \\x1b[B(CUU) 与 \\x1bOB(app) 编码仍连续导航", () => {
+    const { comp, holder } = makeComponent();
+    comp.handleInput(DOWN);       // CUU: idx0→1(research)
+    comp.handleInput(DOWN_APP);   // app: idx1→2(✓完成)
+    comp.handleInput(DOWN_APP);   // app: idx2→3(✗取消)
+    comp.handleInput(ENTER);
+    expect(holder.value).toEqual({ action: "cancelled", overrides: {} });
   });
 
   it("render: 主视图渲染包含所有 category + 虚拟项", () => {

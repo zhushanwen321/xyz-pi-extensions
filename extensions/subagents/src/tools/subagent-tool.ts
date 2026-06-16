@@ -460,11 +460,22 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         // 终态必须立即渲染——先 flush 节流 pending，再用 pushUpdateNow 保证最终 block 状态。
         throttledPushUpdate.flush();
         pushUpdateNow();
-        throw new Error(
+        // 终态改为【返回】而非 throw。之前 throw 会让 SDK 的 executePreparedToolCall
+        // catch 后用 createErrorToolResult 重建一个 details:{} 的空结果，tool_execution_end
+        // 带空 details → renderResult 走 fallback 渲染成 "✓ default"，已 streaming 的
+        // eventLog 全部丢失（用户报告取消后内容变 "✓ default"）。
+        // 返回正常 AgentToolResult：content 仍是失败原因（LLM 可见），details 携带
+        // cancelled/failed 终态 + 完整 eventLog，SDK 在非 throw 路径保留 details 原样，
+        // 渲染层据此显示 ■ cancelled / ✗ failed 块并保留已展示内容。
+        const failureDetails = executionStateToDetails(state);
+        const failureMessage =
           failureStatus === "cancelled"
             ? result.error ?? "subagent cancelled"
-            : result.error ?? "subagent failed (no error detail)",
-        );
+            : result.error ?? "subagent failed (no error detail)";
+        return {
+          content: [{ type: "text" as const, text: failureMessage }],
+          details: failureDetails,
+        };
       }
 
       // Wave 2: 确保 state 反映最终状态（runAgent 的真实实现已调 completeState，
