@@ -294,6 +294,7 @@ export class SubagentResultComponent implements Component {
     this._expanded = expanded;
   }
 
+  // fallow-ignore-next-line unused-class-member — pi-tui Component 接口契约（theme 切换/重渲时框架调用）
   invalidate(): void {
     // Box 在 render 时重建，无需额外清理缓存。
   }
