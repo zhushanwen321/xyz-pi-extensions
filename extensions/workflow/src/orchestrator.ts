@@ -34,6 +34,9 @@ import { WorkflowEventEmitter } from "./engine/orchestrator-events.js";
 import { type WorkerInMsg as ImportedWorkerInMsg, buildWorkerScript } from "./engine/worker-script.js";
 import { checkBudget, scheduleTimeBudgetCheck } from "./engine/orchestrator-budget.js";
 import { handleWorkerError, handleWorkerExit, handleScriptError, type ErrorHandlerContext } from "./engine/error-handlers.js";
+import { executeWithRetry, isBudgetExceeded, type AgentCallContext } from "./engine/agent-call-handler.js";
+// Re-export for backward compat (tests import isStaleContextErrorMsg from src/orchestrator).
+export { isStaleContextErrorMsg, STALE_CONTEXT_PATTERNS } from "./engine/agent-call-handler.js";
 // ── Public types ──────────────────────────────────────────────
 
 export interface WorkflowInstanceSummary {
@@ -68,23 +71,9 @@ type WorkerInMsg = ImportedWorkerInMsg;
 
 // ── Constants ─────────────────────────────────────────────────
 
-const RETRY_BACKOFF_MS = 1000;
-const MAX_AGENT_RETRIES = 3;
 const RUNID_RADIX = 36;
 const RUNID_SLICE_START = 2;
 const RUNID_SLICE_LENGTH = 8;
-const EXPONENTIAL_BACKOFF_BASE = 2;
-
-// P1-5: Stale context detection — matches patterns reported when
-// pi's session context was compacted or canceled between agent calls.
-export const STALE_CONTEXT_PATTERNS = ["stale context", "stalecontext", "context canceled", "aborted"];
-
-/** Check if an error message indicates a stale/canceled pi session context. */
-export function isStaleContextErrorMsg(msg: string | undefined): boolean {
-  if (!msg) return false;
-  const lower = msg.toLowerCase();
-  return STALE_CONTEXT_PATTERNS.some((p) => lower.includes(p));
-}
 
 // ── Orchestrator ──────────────────────────────────────────────
 
@@ -679,11 +668,19 @@ export class WorkflowOrchestrator {
     };
   }
 
-  /** Check if a workflow instance has exhausted its token or cost budget. */
-  private isBudgetExceeded(instance: WorkflowInstance): boolean {
-    const b = instance.budget;
-    return (b.maxTokens !== undefined && b.maxTokens > 0 && b.usedTokens >= b.maxTokens)
-        || (b.maxCost !== undefined && b.maxCost > 0 && b.usedCost >= b.maxCost);
+  /** Build the context object for agent-call-handler.executeWithRetry.
+   *  Mirrors errorHandlerContext() — stateless handler + injected orchestrator deps. */
+  private agentCallContext(): AgentCallContext {
+    return {
+      pi: this.pi,
+      events: this.events,
+      runPools: this.runPools,
+      runAbortControllers: this.runAbortControllers,
+      postMessage: (id, msg) => this.postMessage(id, msg),
+      persistState: () => this.persistState(),
+      budgetCallbacks: () => this.budgetCallbacks(),
+      onTraceUpdate: (id) => this.onTraceUpdate?.(id),
+    };
   }
 
   /** Shared BudgetCallbacks 实例——executeWithRetry / handleAgentCall /
@@ -767,7 +764,7 @@ export class WorkflowOrchestrator {
     // 在检查生效前连续 enqueue N 个调用，这 N 个仍会执行并累加 token，budget 可被
     // 突破 maxTokens 的 N 倍。入口检查只能终止后续调用；硬限制需在 pool.enqueue
     // 内加 budget gate（未实现，引入 pool↔budget 耦合且仍有并发竞态窗口）。
-    if (this.isBudgetExceeded(instance)) {
+    if (isBudgetExceeded(instance)) {
       const b = instance.budget;
       const errorResult: StateAgentResult = {
         content: "",
@@ -810,139 +807,7 @@ export class WorkflowOrchestrator {
     appendTraceNode(this.pi, runId, node);
     this.events.emit(runId, { type: "trace", node: { stepIndex: node.stepIndex, agent: node.agent, status: node.status, phase: node.phase } });
     this.onTraceUpdate?.(runId);
-    this.executeWithRetry(runId, callId, enrichedOpts, instance, node);
-  }
-
-  /**
-   * Execute an agent call with retry logic. Retries up to MAX_AGENT_RETRIES
-   * on failure with exponential backoff (1s, 2s, 4s).
-   */
-  private async executeWithRetry(
-    runId: string,
-    callId: number,
-    opts: AgentCallOpts,
-    instance: WorkflowInstance,
-    node: ExecutionTraceNode,
-    attempt = 1,
-  ): Promise<void> {
-    const pool = this.runPools.get(runId);
-    if (!pool) {
-      // Pool already cleaned up (workflow terminated) — skip
-      return;
-    }
-    // P1-2: Use per-run AbortController signal so terminateWorker can kill subprocesses
-    const runController = this.runAbortControllers.get(runId);
-    pool.enqueue(opts, runController?.signal).then(async (poolResult) => {
-      // P0-2: Stale state check — instance may have been paused/aborted during agent call
-      if (instance.status !== "running") return;
-
-      // Round 5 MF#4 + Round 6 MF#5: 累加四项 token（对齐 agent-pool contextTokens），
-      // retry 间的真实计费如实记录，否则 budget 限制被 retry/cache 双重放大/低估。
-      if (poolResult.usage) {
-        const u = poolResult.usage;
-        instance.budget.usedTokens += u.input + u.output + u.cacheRead + u.cacheWrite;
-        instance.budget.usedCost += u.cost;
-      }
-
-      // P1-5: Stale context detection — do not retry when pi's session context
-      // is stale (e.g. after compact). Retrying the same call would just fail again.
-      if (!poolResult.success && isStaleContextErrorMsg(poolResult.error)) {
-        // Mark trace node as failed and surface to worker
-        const traceNode = instance.trace.find((n) => n.stepIndex === callId);
-        if (traceNode) {
-          traceNode.status = "failed";
-          traceNode.sessionId = poolResult.sessionId;
-          traceNode.result = {
-            content: poolResult.output,
-            parsedOutput: poolResult.parsedOutput,
-            usage: poolResult.usage,
-            durationMs: poolResult.durationMs,
-            error: poolResult.error,
-            toolCalls: poolResult.toolCalls,
-          };
-          traceNode.completedAt = new Date().toISOString();
-          appendTraceNode(this.pi, runId, traceNode);
-          this.events.emit(runId, { type: "node-update", stepIndex: callId, node: { stepIndex: traceNode.stepIndex, agent: traceNode.agent, status: traceNode.status, phase: traceNode.phase } });
-        }
-        this.postMessage(runId, {
-          type: "agent-result",
-          callId,
-          result: {
-            content: poolResult.output,
-            usage: poolResult.usage,
-            error: poolResult.error,
-            toolCalls: poolResult.toolCalls,
-          },
-          cached: false,
-        });
-        await this.persistState();
-        this.onTraceUpdate?.(runId);
-
-        // Cleanup temp file on stale context early return
-        return;
-      }
-
-      const result: StateAgentResult = {
-        content: poolResult.output,
-        parsedOutput: poolResult.parsedOutput,
-        usage: poolResult.usage,
-        durationMs: poolResult.durationMs,
-        error: poolResult.success ? undefined : poolResult.error,
-        toolCalls: poolResult.toolCalls,
-      };
-
-      // Retry on failure with exponential backoff
-      if (!poolResult.success && attempt < MAX_AGENT_RETRIES) {
-        const delay = RETRY_BACKOFF_MS * Math.pow(EXPONENTIAL_BACKOFF_BASE, attempt - 1);
-        setTimeout(() => {
-          try { // P0-2 + Round 6 MF#6: stale state, abort, AND budget recheck before retry
-            if (instance.status !== "running" || !this.runAbortControllers.has(runId)) return;
-            if (this.isBudgetExceeded(instance)) { checkBudget(instance, runId, this.budgetCallbacks()).then(() => { this.executeWithRetry(runId, callId, opts, instance, node, attempt + 1); }).catch((err: unknown) => { console.error(`[workflow] budget check failed in retry path: ${err instanceof Error ? err.message : String(err)}`); }); return; }
-            void this.executeWithRetry(runId, callId, opts, instance, node, attempt + 1).catch((err: unknown) => { console.error(`[workflow] retry failed: ${err instanceof Error ? err.message : String(err)}`); });
-          } catch (err: unknown) {
-            console.error(`[workflow] retry path error: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }, delay);
-        return;
-      }
-
-      // Cache the result for potential pause/resume
-      instance.callCache.set(callId, result);
-
-      // Send result back to worker
-      this.postMessage(runId, { type: "agent-result", callId, result, cached: false });
-
-      // Update trace node
-      const traceNode = instance.trace.find((n) => n.stepIndex === callId);
-      if (traceNode) {
-        traceNode.status = poolResult.success ? "completed" : "failed";
-        traceNode.sessionId = poolResult.sessionId;
-        traceNode.result = result;
-        traceNode.completedAt = new Date().toISOString();
-        appendTraceNode(this.pi, runId, traceNode);
-        this.events.emit(runId, { type: "node-update", stepIndex: callId, node: { stepIndex: traceNode.stepIndex, agent: traceNode.agent, status: traceNode.status, phase: traceNode.phase } });
-      }
-      // Push budget update to worker for dynamic budget functions
-      this.postMessage(runId, {
-        type: "budget-update",
-        budget: { usedTokens: instance.budget.usedTokens, usedCost: instance.budget.usedCost },
-      });
-
-      // Enforce budget limits
-      await checkBudget(this.instances.get(runId), runId, this.budgetCallbacks());
-
-      await this.persistState();
-      this.onTraceUpdate?.(runId);
-
-      // Cleanup temp file if it was created for agent system prompt
-    })
-    // Round 4 S2: 挂 catch 避免 unhandled rejection——worker.postMessage / persistState
-    // 在 worker 已 terminate 的竞态下可能抛错，Node 默认 --unhandled-rejections=throw
-    // 会使进程崩溃。错误已无关业务结果（state 同步失败由下次 persistState 修正）。
-    .catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[workflow] executeWithRetry unhandled error for ${runId}/${callId}: ${message}`);
-    });
+    executeWithRetry(this.agentCallContext(), runId, callId, enrichedOpts, instance, node);
   }
 
   // ── Synchronous run (for programmatic callers) ────────────

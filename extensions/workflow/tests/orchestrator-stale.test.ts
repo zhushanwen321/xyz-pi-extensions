@@ -56,6 +56,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { AgentPool } from "../src/infra/agent-pool.js";
 import { WorkflowOrchestrator } from "../src/orchestrator";
 import { isStaleContextErrorMsg, STALE_CONTEXT_PATTERNS } from "../src/orchestrator";
+import { executeWithRetry, type AgentCallContext } from "../src/engine/agent-call-handler";
 import { createInstance, type WorkflowStatus } from "../src/domain/state";
 
 // ── isStaleContextErrorMsg 纯函数测试 ────────────────────────
@@ -213,17 +214,8 @@ describe("executeWithRetry", () => {
     });
     orch2.restoreInstances(new Map([[inst.runId, inst]]));
 
-    // 调用 private executeWithRetry（用 as any 访问）
-    const executeWithRetry = (orch2 as unknown as {
-      executeWithRetry: (
-        runId: string,
-        callId: number,
-        opts: unknown,
-        instance: typeof inst,
-        node: { stepIndex: number; agent: string; task: string; model: string; status: string; startedAt: string },
-      ) => Promise<void>;
-    }).executeWithRetry;
-
+    // executeWithRetry 已抽为模块函数，通过 agentCallContext() 注入 orchestrator 依赖
+    const ctx = (orch2 as unknown as { agentCallContext: () => AgentCallContext }).agentCallContext();
     const node = {
       stepIndex: 0,
       agent: "test-agent",
@@ -232,7 +224,7 @@ describe("executeWithRetry", () => {
       status: "running",
       startedAt: new Date().toISOString(),
     };
-    await executeWithRetry.call(orch2, inst.runId, 0, { prompt: "x", agent: "test-agent" }, inst, node);
+    await executeWithRetry(ctx, inst.runId, 0, { prompt: "x", agent: "test-agent" }, inst, node);
 
     // enqueue 只调一次（stale context 不重试）
     expect(poolInstance.enqueue).toHaveBeenCalledTimes(1);
@@ -261,16 +253,7 @@ describe("executeWithRetry", () => {
     });
     orch2.restoreInstances(new Map([[inst.runId, inst]]));
 
-    const executeWithRetry = (orch2 as unknown as {
-      executeWithRetry: (
-        runId: string,
-        callId: number,
-        opts: unknown,
-        instance: typeof inst,
-        node: { stepIndex: number; agent: string; task: string; model: string; status: string; startedAt: string },
-      ) => Promise<void>;
-    }).executeWithRetry;
-
+    const ctx = (orch2 as unknown as { agentCallContext: () => AgentCallContext }).agentCallContext();
     const node = {
       stepIndex: 0,
       agent: "test-agent",
@@ -285,7 +268,7 @@ describe("executeWithRetry", () => {
     // 使用 fake timers + runAllTimersAsync 推进 setTimeout 链路（retry 用 1s/2s 指数退避）。
     vi.useFakeTimers();
     try {
-      const promise = executeWithRetry.call(orch2, inst.runId, 0, { prompt: "x", agent: "test-agent" }, inst, node);
+      const promise = executeWithRetry(ctx, inst.runId, 0, { prompt: "x", agent: "test-agent" }, inst, node);
       // 推进所有 pending timers 多次（每次 runAllTimersAsync 推进一轮微任务）
       for (let i = 0; i < 5; i++) {
         await vi.runAllTimersAsync();
