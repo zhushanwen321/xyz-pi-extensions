@@ -14,6 +14,7 @@
  */
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+
 import { MS_PER_SECOND } from "./constants";
 
 // ── Cross-extension API type ─────────────────────────────
@@ -227,11 +228,14 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 					}))
 			: undefined;
 		return {
-			...t,
+			id: t.id as number,
+			description: t.description as string,
+			status: t.status as TaskStatus,
+			evidence: t.evidence as string | undefined,
 			verification: t.verification as TaskVerification | undefined,
 			subtasks,
 			lastUpdatedTurn: (t.lastUpdatedTurn as number) ?? 0,
-		} as unknown as GoalTask;
+		};
 	}),
 		stallCount: (data.stallCount as number) ?? 0,
 		tokensUsed: (data.tokensUsed as number) ?? 0,

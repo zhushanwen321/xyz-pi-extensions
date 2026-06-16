@@ -1,5 +1,5 @@
 // src/__tests__/concurrency-pool.test.ts
-import { describe, expect,it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { DefaultConcurrencyPool } from "../pool/concurrency-pool.ts";
 
@@ -57,5 +57,29 @@ describe("DefaultConcurrencyPool", () => {
   it("reports maxConcurrent", () => {
     const pool = new DefaultConcurrencyPool(4);
     expect(pool.maxConcurrent).toBe(4);
+  });
+
+  it("same-priority tasks wake in FIFO (seq) order", async () => {
+    const pool = new DefaultConcurrencyPool(1);
+    await pool.acquire(); // fill slot
+
+    const order: number[] = [];
+    // Enqueue 3 tasks with same priority — they should resolve in enqueue order
+    const p1 = pool.acquire(0).then(() => { order.push(1); pool.release(); });
+    const p2 = pool.acquire(0).then(() => { order.push(2); pool.release(); });
+    const p3 = pool.acquire(0).then(() => { order.push(3); pool.release(); });
+
+    pool.release(); // kick off the chain
+    await Promise.allSettled([p1, p2, p3]);
+
+    expect(order).toEqual([1, 2, 3]);
+  });
+
+  it("extra release() does not make activeCount negative", () => {
+    const pool = new DefaultConcurrencyPool(2);
+    pool.release(); // no acquires yet
+    pool.release();
+    pool.release();
+    expect(pool.activeCount).toBe(0);
   });
 });
