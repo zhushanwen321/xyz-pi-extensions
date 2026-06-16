@@ -34,7 +34,6 @@ import { WorkflowEventEmitter } from "./engine/orchestrator-events.js";
 import { type WorkerInMsg as ImportedWorkerInMsg, buildWorkerScript } from "./engine/worker-script.js";
 import { checkBudget, scheduleTimeBudgetCheck } from "./engine/orchestrator-budget.js";
 import { handleWorkerError, handleWorkerExit, handleScriptError, type ErrorHandlerContext } from "./engine/error-handlers.js";
-
 // ── Public types ──────────────────────────────────────────────
 
 export interface WorkflowInstanceSummary {
@@ -51,7 +50,6 @@ export interface WorkflowInstanceSummary {
   /** Full trace nodes for live progress rendering */
   traceNodes: ExecutionTraceNode[];
 }
-
 // ── Internal types ────────────────────────────────────────────
 
 /** Per-run metadata needed for resume/retry/re-run operations. */
@@ -155,7 +153,6 @@ export class WorkflowOrchestrator {
       model: a.model,
     }));
   }
-
 
 
   /** Start a workflow. Returns runId for lifecycle operations. Signal propagated to AgentPool. */
@@ -898,10 +895,13 @@ export class WorkflowOrchestrator {
       if (!poolResult.success && attempt < MAX_AGENT_RETRIES) {
         const delay = RETRY_BACKOFF_MS * Math.pow(EXPONENTIAL_BACKOFF_BASE, attempt - 1);
         setTimeout(() => {
-          // P0-2 + Round 6 MF#6: stale state, abort, AND budget recheck before retry
-          if (instance.status !== "running" || !this.runAbortControllers.has(runId)) return;
-          if (this.isBudgetExceeded(instance)) { checkBudget(instance, runId, this.budgetCallbacks()).then(() => { this.executeWithRetry(runId, callId, opts, instance, node, attempt + 1); }).catch((err: unknown) => { console.error(`[workflow] budget check failed in retry path: ${err instanceof Error ? err.message : String(err)}`); }); return; }
-          this.executeWithRetry(runId, callId, opts, instance, node, attempt + 1);
+          try { // P0-2 + Round 6 MF#6: stale state, abort, AND budget recheck before retry
+            if (instance.status !== "running" || !this.runAbortControllers.has(runId)) return;
+            if (this.isBudgetExceeded(instance)) { checkBudget(instance, runId, this.budgetCallbacks()).then(() => { this.executeWithRetry(runId, callId, opts, instance, node, attempt + 1); }).catch((err: unknown) => { console.error(`[workflow] budget check failed in retry path: ${err instanceof Error ? err.message : String(err)}`); }); return; }
+            void this.executeWithRetry(runId, callId, opts, instance, node, attempt + 1).catch((err: unknown) => { console.error(`[workflow] retry failed: ${err instanceof Error ? err.message : String(err)}`); });
+          } catch (err: unknown) {
+            console.error(`[workflow] retry path error: ${err instanceof Error ? err.message : String(err)}`);
+          }
         }, delay);
         return;
       }

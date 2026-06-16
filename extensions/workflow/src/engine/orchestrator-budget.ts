@@ -7,6 +7,8 @@ export interface BudgetCallbacks {
   terminateWorker(runId: string): void;
   persistState(): Promise<void>;
   onCompletion?(runId: string): void;
+  // cleanupAllTempFiles / activeTempFiles removed: agent-opts-resolver no longer writes
+  // temp files — temp file lifecycle is fully managed by the subagents extension.
 }
 
 /**
