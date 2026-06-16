@@ -401,6 +401,8 @@ export interface SessionModelState {
   yoloMode: boolean;
   perAgent: Record<string, { model: string; thinkingLevel?: string }>;
   perCategory: Record<string, { model: string; thinkingLevel?: string }>;
+  /** 本 session 是否已完成首次 category 模型确认（确认后不再弹窗） */
+  categoryConfirmed: boolean;
 }
 
 // ============================================================

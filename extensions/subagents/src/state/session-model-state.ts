@@ -3,7 +3,7 @@ import type { SessionModelState } from "../types.ts";
 
 /** FR-4.7.1: 创建默认状态 */
 export function createSessionModelState(yoloByDefault: boolean): SessionModelState {
-  return { yoloMode: yoloByDefault, perAgent: {}, perCategory: {} };
+  return { yoloMode: yoloByDefault, perAgent: {}, perCategory: {}, categoryConfirmed: false };
 }
 
 export function setAgentModel(state: SessionModelState, agent: string, model: string, thinkingLevel?: string): void {
@@ -22,6 +22,7 @@ export function serializeState(state: SessionModelState): SessionModelState {
     yoloMode: state.yoloMode,
     perAgent: { ...state.perAgent },
     perCategory: { ...state.perCategory },
+    categoryConfirmed: state.categoryConfirmed,
   };
 }
 
@@ -38,5 +39,6 @@ export function restoreState(data: unknown, yoloByDefault: boolean): SessionMode
     yoloMode: typeof d.yoloMode === "boolean" ? d.yoloMode : yoloByDefault,
     perAgent: d.perAgent && typeof d.perAgent === "object" ? { ...d.perAgent } : {},
     perCategory: d.perCategory && typeof d.perCategory === "object" ? { ...d.perCategory } : {},
+    categoryConfirmed: typeof d.categoryConfirmed === "boolean" ? d.categoryConfirmed : false,
   };
 }

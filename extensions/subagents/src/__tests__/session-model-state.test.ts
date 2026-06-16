@@ -42,4 +42,21 @@ describe("SessionModelState", () => {
     expect(restored.yoloMode).toBe(false);
     expect(restored.perAgent).toEqual({});
   });
+
+  it("createSessionModelState defaults categoryConfirmed to false", () => {
+    const state = createSessionModelState(false);
+    expect(state.categoryConfirmed).toBe(false);
+  });
+
+  it("serialize/restore round-trips categoryConfirmed", () => {
+    const state = createSessionModelState(false);
+    state.categoryConfirmed = true;
+    const restored = restoreState(serializeState(state), false);
+    expect(restored.categoryConfirmed).toBe(true);
+  });
+
+  it("restore defaults categoryConfirmed to false when missing", () => {
+    const restored = restoreState({}, false);
+    expect(restored.categoryConfirmed).toBe(false);
+  });
 });
