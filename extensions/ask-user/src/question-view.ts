@@ -191,6 +191,7 @@ export function renderQuestionView(
 	const add = (s: string): void => {
 		lines.push(truncateToWidth(s, width));
 	};
+	const divider = (): void => add(t.fg("dim", "─".repeat(Math.max(0, width))));
 
 	// 问题文本（word-wrap）
 	const wrapped = wrapTextWithAnsi(t.fg("text", ` ${q.question}`), width - 2);
@@ -198,17 +199,23 @@ export function renderQuestionView(
 
 	// 上下文（如有）
 	if (q.context?.trim()) {
-		add("");
+		divider();
 		const ctxWrapped = wrapTextWithAnsi(t.fg("muted", q.context), width - 2);
 		for (const line of ctxWrapped) add(line);
 	}
-	add("");
 
 	// 分屏判断
 	const split = getSplitPaneWidths(width);
 
+	// 选项模式下：question/context 与 options 之间加分割线（三段式）
+	// 编辑器模式不加（编辑器块自带视觉边界）
+	if (state.mode !== "freeform" && state.mode !== "comment") {
+		divider();
+	}
+
 	// 编辑器/评论模式：选项列表 + 下方就地展开编辑器文本
 	if (state.mode === "freeform" || state.mode === "comment") {
+		add("");
 		const optionLines = buildOptionLines(q, state, theme, split ? split.left : width, !!split);
 		for (const line of optionLines) add(line);
 		const editorBlock = buildEditorBlock(theme, width, state.mode, editorText);

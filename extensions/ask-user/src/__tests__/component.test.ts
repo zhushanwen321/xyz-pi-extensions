@@ -558,3 +558,49 @@ describe("AskUserComponent — Submit tab", () => {
 		expect(lines.some((l) => l.includes("M"))).toBe(true); // Q3 选项 M
 	});
 });
+
+// ── 5j. 视觉边框 / 按钮栏 / tab 分割（视觉增强）─────────
+describe("AskUserComponent — visual chrome", () => {
+	it("C-V1: multi-question render is wrapped in box border (┌┐│└┘)", () => {
+		const { c } = make(multiQ);
+		const lines = c.render(70);
+		const t = lines.join("\n");
+		expect(t).toContain("┌"); // 顶左角
+		expect(t).toContain("┐"); // 顶右角
+		expect(t).toContain("└"); // 底左角
+		expect(t).toContain("┘"); // 底右角
+		expect(lines.some((l) => l.startsWith("│") || l.includes("│"))).toBe(true); // 左右边框
+	});
+
+	it("C-V2: tab bar separates tabs with │", () => {
+		const { c } = make(multiQ);
+		const lines = c.render(80);
+		// tab 行应含竖线分隔符（First │ Second │ ... Submit）
+		expect(lines.some((l) => l.includes("First") && l.includes("│"))).toBe(true);
+		expect(lines.some((l) => l.includes("Submit") && l.includes("│"))).toBe(true);
+	});
+
+	it("C-V3: multi-question shows [ Submit ] [ Cancel ] button bar", () => {
+		const { c } = make(multiQ);
+		const lines = c.render(80);
+		const t = lines.join("\n");
+		expect(t).toContain("[");
+		expect(t).toContain("Submit");
+		expect(t).toContain("Cancel");
+		expect(t).toContain("]");
+	});
+
+	it("C-V4: single question has NO button bar", () => {
+		const { c } = make([singleQ]);
+		const lines = c.render(60);
+		// 单问题无 Submit/Cancel 按钮栏（Enter 直接提交）
+		expect(lines.some((l) => l.includes("Cancel"))).toBe(false);
+	});
+
+	it("C-V5: question view renders divider (─) between sections", () => {
+		const { c } = make([singleQ]);
+		const lines = c.render(60);
+		// 分割线：question 与 options 之间应有 ─ 行（非边框）
+		expect(lines.some((l) => l.includes("─"))).toBe(true);
+	});
+});

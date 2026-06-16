@@ -27,7 +27,7 @@ describe("renderSubmitView", () => {
 		const states = [makeState({ confirmed: true, selectedIndex: 0 })];
 		const lines = renderSubmitView([q1], states, stubTheme, 60);
 		expect(lines.some((l) => l.includes("Ready to submit"))).toBe(true);
-		expect(lines.some((l) => l.includes("Press Enter"))).toBe(true);
+		expect(lines.some((l) => l.includes("All questions answered"))).toBe(true);
 	});
 
 	it("S-2: shows 'Unanswered' when not all confirmed", () => {
@@ -67,12 +67,14 @@ describe("renderSubmitView", () => {
 		expect(lines.some((l) => l.includes("Database") && l.includes("—"))).toBe(true);
 	});
 
-	// S-13: 帮助行
-	it("S-13: shows tab-switch and cancel hint", () => {
+	// S-13: 提示行已上移至组件级按钮栏（renderButtonBar）
+	it("S-13: submit view does not render its own submit/cancel hints (moved to button bar)", () => {
 		const states = [makeState({ confirmed: true, selectedIndex: 0 })];
 		const lines = renderSubmitView([q1], states, stubTheme, 60);
-		expect(lines.some((l) => l.includes("switch tabs"))).toBe(true);
-		expect(lines.some((l) => l.includes("Esc"))).toBe(true);
+		const t = lines.join("\n");
+		// 旧的内联提示不再由 submit-view 渲染（由 component.renderButtonBar 负责）
+		expect(t).not.toContain("switch tabs");
+		expect(t).not.toContain("Press Enter to submit");
 	});
 });
 

@@ -1,5 +1,5 @@
 // src/component.ts
-import { type Component, matchesKey } from "@mariozechner/pi-tui";
+import { type Component, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
 
 import { allOptions, renderQuestionView } from "./question-view";
 import { buildResult, renderSubmitView } from "./submit-view";
@@ -18,6 +18,9 @@ import {
 export interface TUILike {
 	requestRender(): void;
 }
+
+/** box 边框左右各占用 1 列（`│` × 2） */
+const BORDER_OVERHEAD = 2;
 
 // ── AskUserComponent ─────────────────────────────────
 
@@ -71,37 +74,51 @@ export class AskUserComponent implements Component {
 			return this.cachedLines;
 		}
 		const t = this.theme;
-		const lines: string[] = [];
+		// box 边框占用左右各 1 列；子视图在 innerWidth 下渲染
+		const innerWidth = Math.max(0, width - BORDER_OVERHEAD);
+
+		const inner: string[] = [];
 		const add = (s: string): void => {
-			lines.push(s);
+			inner.push(s);
 		};
 
-		add(t.fg("accent", "─".repeat(width)));
-
 		if (!this.isSingle) {
-			this.renderTabBar(width, add);
-			lines.push("");
+			this.renderTabBar(innerWidth, add);
+			inner.push("");
 		}
 
 		if (this.activeTab >= this.questions.length) {
 			// Submit tab
-			for (const line of renderSubmitView(this.questions, this.states, t, width)) add(line);
+			for (const line of renderSubmitView(this.questions, this.states, t, innerWidth)) add(line);
 		} else {
 			const q = this.questions[this.activeTab]!;
 			const state = this.states[this.activeTab]!;
-			for (const line of renderQuestionView(q, state, t, width, this.isSingle, this.editorText)) {
+			for (const line of renderQuestionView(q, state, t, innerWidth, this.isSingle, this.editorText)) {
 				add(line);
 			}
 		}
 
-		add(t.fg("accent", "─".repeat(width)));
+		// 多问题：底部按钮栏（Submit / Cancel）
+		if (!this.isSingle) {
+			inner.push("");
+			this.renderButtonBar(innerWidth, add);
+		}
+
+		// 用 box 边框包裹：每行 pad 到 innerWidth 后加 │ 左右边框
+		const lines: string[] = [];
+		lines.push(t.fg("dim", `┌${"─".repeat(innerWidth)}┐`));
+		for (const line of inner) {
+			const padded = truncateToWidth(line, innerWidth, "", true);
+			lines.push(`${t.fg("dim", "│")}${padded}${t.fg("dim", "│")}`);
+		}
+		lines.push(t.fg("dim", `└${"─".repeat(innerWidth)}┘`));
 
 		this.cachedWidth = width;
 		this.cachedLines = lines;
 		return lines;
 	}
 
-	private renderTabBar(_width: number, add: (s: string) => void): void {
+	private renderTabBar(innerWidth: number, add: (s: string) => void): void {
 		const t = this.theme;
 		const parts: string[] = [" "];
 		for (let i = 0; i < this.questions.length; i++) {
@@ -116,6 +133,8 @@ export class AskUserComponent implements Component {
 			} else {
 				parts.push(t.fg("muted", ` □${header} `));
 			}
+			// tab 之间竖线分割（最后一个 question tab 后由 Submit 分支补）
+			parts.push(t.fg("dim", "│"));
 		}
 		const isSubmit = this.activeTab === this.questions.length;
 		const submitLabel = " ✓ Submit ";
@@ -126,7 +145,18 @@ export class AskUserComponent implements Component {
 		} else {
 			parts.push(t.fg("dim", submitLabel));
 		}
-		add(parts.join(""));
+		add(truncateToWidth(parts.join(""), innerWidth));
+	}
+
+	/** 底部按钮栏：[ Submit ]   [ Cancel ]。多问题时始终可见。 */
+	private renderButtonBar(innerWidth: number, add: (s: string) => void): void {
+		const t = this.theme;
+		const allDone = this.allConfirmed();
+		const submit = allDone
+			? t.fg("success", t.bold(" Submit "))
+			: t.fg("dim", " Submit ");
+		const cancel = t.fg("muted", " Cancel ");
+		add(`${t.fg("dim", "[")}${submit}${t.fg("dim", "]")}   ${t.fg("dim", "[")}${cancel}${t.fg("dim", "]")}`);
 	}
 
 	// ── 输入路由 ──

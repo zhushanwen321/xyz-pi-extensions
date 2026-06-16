@@ -70,7 +70,7 @@ export function renderSubmitView(
 
 	add("");
 	if (allDone) {
-		add(t.fg("success", " Press Enter to submit"));
+		add(t.fg("success", " All questions answered"));
 	} else {
 		const missing = questions
 			.filter((_, i) => !states[i]!.confirmed)
@@ -78,8 +78,6 @@ export function renderSubmitView(
 			.join(", ");
 		add(t.fg("warning", ` Still needed: ${missing}`));
 	}
-	add("");
-	add(t.fg("dim", " ←→ switch tabs · Esc cancel"));
 
 	return lines;
 }
