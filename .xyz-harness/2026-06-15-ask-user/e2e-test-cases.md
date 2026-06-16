@@ -1,321 +1,435 @@
-# ask-user E2E 测试用例
+# ask-user 验收用例（手动 E2E）
 
-> 目标：从 `execute()` 入口驱动完整链路，验证「LLM 调一次 ask_user → 用户交互 → 拿到 answers」的端到端契约。
-> 与现有单元测试的差异：单元测试 mock `ctx.ui.custom` 返回假 result；E2E 注入**真实** `AskUserComponent`、模拟用户按键、断言最终 `execute()` 的 content + details。
-> 覆盖：FR-1/3/5/6/7/8/10/11/12/14 与 AC-2/3/5/6/7/12/14/16/17/18。
+> 目标：在真实 Pi session 中调用 `ask_user`，通过用户实际操作验收 spec 功能。
+> 用法：先 `pi install npm:@zhushanwen/pi-ask-user` 重启 Pi，把对应 prompt 贴给 LLM 触发调用，按"操作"列点选/输入，最后对照"期望"列逐项勾选。
 
-## 测试 harness（建议提取到 `__tests__/e2e-harness.ts`）
+## 启动准备
 
-```typescript
-import factory from "../index";
-import { AskUserComponent } from "../component";
-import type { AskUserDetails, Question, Result } from "../types";
-import { stubTheme, mockTui } from "./fixtures";
+```bash
+# 1. 安装/刷新扩展
+pi install npm:@zhushanwen/pi-ask-user
 
-interface E2EApi {
-  result: { val: Awaited<ReturnType<ReturnType<typeof factory>["execute"]>> | null };
-  keys: (seq: string[]) => void;          // 模拟按键序列
-  abort: () => void;                      // 触发 signal abort
-  getExecuted(): Promise<AskUserDetails>; // 等待 execute 解析
-  pi: { activeTools: string[] | null };
-}
+# 2. 启 Pi
+pi
 
-function makeE2E(questions: Question[], opts: { hasUI?: boolean; preAborted?: boolean } = {}): E2EApi {
-  const { hasUI = true, preAborted = false } = opts;
-  const controller = new AbortController();
-  if (preAborted) controller.abort();
-
-  let compRef: AskUserComponent | null = null;
-  const result: E2EApi["result"] = { val: null };
-  const pi = { activeTools: null as string[] | null };
-
-  // mock pi（注册时存 tool，setActiveTools 记到 activeTools）
-  const ext = {
-    registerTool(t: any) { ext.tool = t; },
-    getAllTools: () => [{ name: "ask_user" }, { name: "read" }, { name: "bash" }],
-    setActiveTools: (names: string[]) => { pi.activeTools = names; },
-    tool: null as any,
-  };
-  factory(ext as never);
-  const tool = ext.tool;
-
-  // 启动 execute（不 await，让 keys 在执行中触发）
-  const execPromise = tool.execute("id", { questions }, controller.signal, undefined, {
-    hasUI,
-    signal: controller.signal,
-    ui: {
-      custom: (factoryFn: any) => new Promise<Result | null>((resolve) => {
-        const done = (r: Result | null) => resolve(r);
-        compRef = factoryFn(mockTui, stubTheme, {}, done);
-        return compRef;
-      }),
-    },
-  });
-
-  return {
-    result,
-    keys: (seq) => seq.forEach((k) => compRef?.handleInput(k)),
-    abort: () => controller.abort(),
-    getExecuted: () => execPromise as Promise<AskUserDetails>,
-    pi,
-  };
-}
+# 3. 验证扩展已加载
+/help-tools 2>/dev/null | grep ask_user   # 看到 ask_user 即 OK
 ```
 
-**复用键码**：`ENTER="\r"` `ESC="\x1b"` `DOWN="\x1b[B"` `UP="\x1b[A"` `RIGHT="\x1b[C"` `LEFT="\x1b[D"` `SPACE=" "` `TAB="\t"`
+每个用例的 prompt 是**直接发给 LLM 的请求**，LLM 会自行决定是否调用 `ask_user`、如何构造参数。验收时如发现 LLM 调用的参数与"期望参数"不一致，说明 prompt 不够精确，把"期望参数"用更直白的措辞加到 prompt 里重试。
 
 ---
 
-## E2E-1: 单问题无评论 — 选第二项提交
+## 用例清单
 
-**覆盖**: FR-1/3/6/7、AC-2
+### A-1: 单问题单选 — 默认 Enter 提交
 
-**Setup**: `[{ question: "Which DB?", options: [{label:"Postgres"},{label:"SQLite"}] }]`
+**Prompt**:
+```
+Use ask_user to ask me which database to use, with two options: Postgres (battle-tested) and SQLite (embedded).
+```
 
-**Keys**: `["\x1b[B", "\r"]`（↓ + Enter 选 SQLite）
+**期望参数**（LLM 应构造出）:
+```json
+{ "questions": [{ "question": "Which database?",
+  "options": [{"label":"Postgres","description":"Battle-tested"},
+              {"label":"SQLite","description":"Embedded"}] }] }
+```
 
-**断言**:
-- `result.content[0].text` 含 `"Which DB?" = "SQLite"`
-- `result.details.cancelled === false`
-- `result.details.answers["Which DB?"] === "SQLite"`
-- `result.details.questions.length === 1`
+**操作**: 直接按 Enter（不移动光标）
+
+**期望**:
+- [ ] 渲染无 Tab bar
+- [ ] 光标在 Postgres 行（`>`）
+- [ ] Enter 后立即返回，content 含 `"Postgres"`
+- [ ] 不显示评论输入行（无 allowComment）
+
+**覆盖**: AC-2, FR-1/3/6/7
 
 ---
 
-## E2E-2: 单问题 + allowComment — 选项 + 评论拼接
+### A-2: 单问题 + allowComment — 评论拼接
 
-**覆盖**: FR-1/3/4.6/6/7/11、AC-2/6/12/17
-
-**Setup**:
-```ts
-[{ question: "Which DB?", allowComment: true,
-   options: [{label:"Postgres"},{label:"SQLite"}] }]
+**Prompt**:
+```
+Use ask_user to ask my framework preference. Set allowComment: true so I can add a note.
+Two options: Vue 3 (Composition API) and Svelte 5 (runes).
 ```
 
-**Keys**: `["\r", "f", "a", "s", "t", "\r"]`（Enter 选 Postgres → 进评论模式 → 输 "fast" → Enter 保存）
+**期望参数**: `allowComment: true`
 
-**断言**:
-- `result.details.answers["Which DB?"] === "Postgres — fast"`
-- `result.content[0].text` 含 `"Postgres — fast"`
+**操作**: ↓ 移到 Svelte → Enter → 输入 "考虑迁移成本" → Enter
+
+**期望**:
+- [ ] 选 Svelte 后不立即提交，弹出评论输入行
+- [ ] 评论行提示 "Your comment (optional)"
+- [ ] 输入 "考虑迁移成本" → Enter 后返回
+- [ ] content 含 `"Svelte 5 (runes) — 考虑迁移成本"`
+
+**覆盖**: AC-6, AC-12, AC-17, FR-4.6/11
 
 ---
 
-## E2E-3: 单问题 + allowComment — Enter 空评论跳过
+### A-3: 单问题 + allowComment — Enter 空评论跳过
 
-**覆盖**: AC-12/17
+**Prompt**: 同 A-2
 
-**Setup**: 同 E2E-2
+**操作**: Enter 选 Vue → Enter（评论行不输任何字符）
 
-**Keys**: `["\r", "\r"]`（Enter 选 Postgres → 直接 Enter 评论模式跳过）
+**期望**:
+- [ ] 返回 content 含 `"Vue 3 (Composition API)"`（**不含** " — "）
+- [ ] 不阻塞、不报错
 
-**断言**:
-- `result.details.answers["Which DB?"] === "Postgres"`（**不含** " — "）
-- `cancelled === false`
-
----
-
-## E2E-4: 多问题 4 项全答 + Submit 提交
-
-**覆盖**: FR-1/3/5/6/7、AC-3（上限 4 问题）
-
-**Setup**: 4 个问题（验证 schema maxItems 边界）
-```ts
-[
-  { question:"Q1", header:"DB",   options:[{label:"Pg"},{label:"SQLite"}] },
-  { question:"Q2", header:"Lang", options:[{label:"TS"},{label:"Py"}] },
-  { question:"Q3", header:"Test", options:[{label:"Vitest"},{label:"Jest"}] },
-  { question:"Q4", header:"Lint", options:[{label:"ESLint"},{label:"Biome"}] },
-]
-```
-
-**Keys**:
-```
-["\r",                                // Q1: 选 Pg
- "\x1b[C", "\r",                      // → Q2, 选 TS
- "\x1b[C", "\r",                      // → Q3, 选 Vitest
- "\x1b[C", "\r",                      // → Q4, 选 ESLint
- "\x1b[C", "\r"]                      // → Submit, Enter 提交
-```
-
-**断言**:
-- `result.details.answers` 含 4 项（Q1..Q4 各自答案）
-- `cancelled === false`
-- 验证 schema 接受 4 个问题（maxItems）
+**覆盖**: AC-12
 
 ---
 
-## E2E-5: 多问题回改已答答案（AC-16 / FR-14）
+### A-4: 多问题 Tab 导航 + Submit
 
-**覆盖**: AC-16、FR-14
-
-**Setup**: `multiQ`（Q1/Q2/Q3 三个问题）
-
-**Keys**:
+**Prompt**:
 ```
-["\r",                                // Q1: 选 A
- "\x1b[C", "\r",                      // → Q2, 选 X
- "\x1b[C", "\r",                      // → Q3, 选 M
- "\x1b[C",                            // → Submit tab（不提交，回改）
- "\x1b[D", "\x1b[D", "\x1b[D",        // ← Q3 ← Q2 ← Q1
- "\x1b[B", "\r",                      // Q1 移到 B, Enter 选 B
- "\x1b[C", "\x1b[C", "\x1b[C", "\r"]  // → Q2 → Q3 → Submit, Enter
+Use ask_user to confirm three decisions in one call:
+1. Database: Postgres vs SQLite
+2. Language: TypeScript vs Python
+3. Test framework: Vitest vs Jest
+Use header "DB" / "Lang" / "Test" (≤12 chars each).
 ```
 
-**断言**:
-- `result.details.answers["Q1"] === "B"`（不是初始的 "A"）
-- Q2/Q3 答案保持原值
+**操作**:
+1. Enter 选 Postgres（Q1）
+2. → 切到 Lang, Enter 选 TypeScript
+3. → 切到 Test, Enter 选 Vitest
+4. → 切到 Submit tab, Enter 提交
+
+**期望**:
+- [ ] 顶部 Tab bar 显示 "DB" "Lang" "Test" "Submit"（激活 tab 高亮）
+- [ ] 已答 tab 显示 ■，未答 □
+- [ ] Submit tab 标题 "Ready to submit"，列出三行 `header: answer`
+- [ ] 返回 content 含三个 answer
+
+**覆盖**: AC-3, FR-5/7
 
 ---
 
-## E2E-6: 多选 + allowComment — toggle + Enter + 评论
+### A-5: 多问题 — Submit 未答完 Enter 阻塞
 
-**覆盖**: FR-1/3/4.6/6/7/11、AC-12/17/18
+**Prompt**: 同 A-4
 
-**Setup**:
-```ts
-[{ question: "Features?", multiSelect: true, allowComment: true,
-   options: [{label:"Auth"},{label:"Search"},{label:"Cache"}] }]
-```
+**操作**:
+1. Enter 选 Postgres
+2. → Lang, Enter 选 TypeScript（跳过 Test）
+3. → Submit tab, Enter
 
-**Keys**:
-```
-[" ",                                // toggle Auth
- " ",                                // toggle Search
- "\r",                               // Enter 确认
- "m", "i", "x", "\r"]                // 评论 "mix" + Enter
-```
+**期望**:
+- [ ] Submit tab 标题 "Unanswered"，显示 "Still needed: Test"
+- [ ] Enter 不提交（仍停留在 Submit tab）
+- [ ] ← 回 Test, Enter 选 Vitest, → 切回 Submit, Enter 提交成功
 
-**断言**:
-- `result.details.answers["Features?"] === "Auth, Search — mix"`
-- 顺序按 index（Auth=0, Search=1）
-
-**反向断言（AC-18）**: 若把 `[" "]` 替换为多次 toggle 不 Enter（仅 `[" ", " "]`），**不应**进入评论模式、**不应**解析 result——可作为 E2E-6b 子用例。
+**覆盖**: FR-5, AC-3
 
 ---
 
-## E2E-7: Other 自由文本 — 输入 + 回编辑器续编
+### A-6: 多问题回改已答答案（AC-16）
 
-**覆盖**: FR-4.5/6/7、AC-5
+**Prompt**: 同 A-4
 
-**Setup**:
-```ts
-[{ question: "Explain:", options: [{label:"Standard"},{label:"Custom"}] }]
-// 单选无 allowComment；Other 在末项（index 2）
-```
+**操作**:
+1. Enter 选 Postgres
+2. → Lang, Enter 选 TypeScript
+3. → Test, Enter 选 Vitest
+4. → Submit tab（不按 Enter）
+5. ← ← ← 回到 DB tab
+6. ↓ 移到 SQLite, Enter
+7. → → → Submit, Enter
 
-**Keys**:
-```
-["\x1b[B", "\x1b[B",                 // ↓↓ 到 Other
- " ",                                 // 打开编辑器
- "h", "e", "l", "l", "o", "\r",      // 输 "hello" + Enter 保存
- "\x1b[B", "\x1b[B", " ",            // 再到 Other
- "w", "o", "r", "l", "d", "\r"]      // 编辑器预填 "hello" → 追加 "world" → Enter
-```
+**期望**:
+- [ ] DB tab 重新可选（■ 标记保留）
+- [ ] 最终 content 的 DB 答案 = "SQLite"（**不是** Postgres）
+- [ ] Lang / Test 答案保持 TypeScript / Vitest
 
-**断言**:
-- 第一次保存后 `answers["Explain:"] === "hello"`
-- 第二次续编保存后 `answers["Explain:"] === "helloworld"`（验证 FR-4.5 编辑器预填 freeTextValue）
-
-> 注：此用例需要验证 `editorText` 在 `mode === "options"` 退出时是否清空、再打开时是否从 `freeTextValue` 预填——若实现细节有偏差，断言可改为 `=== "world"`（仅追加）或拆为两个独立用例。
+**覆盖**: AC-16, FR-14
 
 ---
 
-## E2E-8: Esc 取消 + 防重入（FR-12）
+### A-7: 多选 + allowComment — toggle 多项 + 评论
 
-**覆盖**: FR-12、AC-14
-
-**Setup**: `singleQ`
-
-**Keys**: `["\x1b", "\r"]`（Esc 取消 → 再次 Enter）
-
-**断言**:
-- `result.content[0].text === "User cancelled"`
-- `result.details.cancelled === true`
-- `result.details.answers === {}`
-- **二次按键不报错**（FR-12 `_resolved` 守卫）：`compRef?.handleInput("\r")` 不抛
-
----
-
-## E2E-9: Signal abort 在组件运行中触发（AC-14 / FR-10）
-
-**覆盖**: FR-10/12、AC-14
-
-**Setup**: `singleQ`，进入 custom 渲染后立刻 abort
-
-**Keys**: 不按键（验证仅靠 abort 也能 resolve）
-
-**执行**:
-```ts
-const e = makeE2E(singleQ);
-e.abort();  // signal 触发组件 cancel() → done(null) → cancelled
-const result = await e.getExecuted();
+**Prompt**:
+```
+Use ask_user to ask which features I want. multiSelect: true, allowComment: true.
+Options: Auth, Search, Cache, Realtime.
 ```
 
-**断言**:
-- `result.content[0].text === "User cancelled"`
-- `result.details.cancelled === true`
-- `result.details.answers === {}`
+**操作**:
+1. Space 选 Auth
+2. Space 选 Realtime（跳过中间）
+3. Enter 确认
+4. 输入 "MVP 阶段" 评论
+5. Enter
 
-**反向用例 E2E-9b**: `preAborted: true`（E2E harness 参数）—— 验证 execute 入口短路：
-- 不进入 custom
-- 同样返回 cancelled
-- `pi.activeTools === null`（setActiveTools 未被调用，区别于 E2E-10）
+**期望**:
+- [ ] Space 后该行变成 `[✓]`
+- [ ] Enter 后**不**立即返回，弹出评论行
+- [ ] 返回 content 含 `"Auth, Realtime — MVP 阶段"`（按 index 顺序）
+
+**覆盖**: AC-18, FR-6, FR-11
 
 ---
 
-## E2E-10: Headless — setActiveTools 副作用 + isError
+### A-8: 多选 + allowComment — 仅 toggle 不 Enter 不会触发评论
 
-**覆盖**: FR-8、AC-7
+**Prompt**: 同 A-7
 
-**Setup**: `hasUI: false`，单问题
+**操作**:
+1. Space 选 Auth
+2. Space 选 Realtime
+3. （**不**按 Enter，再 Space 取消 Auth）
 
-**执行**:
-```ts
-const e = makeE2E(singleQ, { hasUI: false });
-const result = await e.getExecuted();
+**期望**:
+- [ ] 仍在多选问题 tab 内
+- [ ] 评论输入行**未**出现（toggle 不触发评论）
+
+**覆盖**: AC-18
+
+---
+
+### A-9: Other 自由文本 — 输入 + 保存
+
+**Prompt**:
+```
+Use ask_user to ask my custom note. Two options: "Standard plan" and "Custom plan".
 ```
 
-**断言**:
-- `result.isError === true`
-- `result.content[0].text` 含 `"interactive"`
-- `result.details.cancelled === true`
-- `e.pi.activeTools` 不含 `"ask_user"`，含 `"read"` 和 `"bash"`
+**操作**:
+1. ↓ 移到 Other（最末项）
+2. Space 打开内联编辑器
+3. 输入 "需要私有部署"
+4. Enter 保存
+
+**期望**:
+- [ ] Other 行提示 "Space/Tab open editor"
+- [ ] 编辑器就地展开在选项列表下方
+- [ ] Enter 后返回 content 含 `"需要私有部署"`
+
+**覆盖**: AC-5, FR-4.5
 
 ---
 
-## 覆盖矩阵（AC × E2E）
+### A-10: Other 自由文本 — 空 Enter 清除
 
-| AC | E2E |
-|----|-----|
-| AC-1 安装加载 | —（手动） |
-| AC-2 单问题无 Tab | E2E-1, E2E-2, E2E-3 |
-| AC-3 多问题 Tab+Submit | E2E-4 |
-| AC-5 Other 编辑器 | E2E-7 |
-| AC-6 评论出现在结果 | E2E-2, E2E-6 |
-| AC-7 Headless 禁用工具 | E2E-10 |
-| AC-12 评论 Enter 跳过 | E2E-3 |
-| AC-14 abort 不挂死 | E2E-8, E2E-9, E2E-9b |
-| AC-16 回改 | E2E-5 |
-| AC-17 评论 Enter/Esc 跳过 | E2E-2, E2E-3 |
-| AC-18 多选+评论 Enter 时机 | E2E-6（含 6b 反向） |
+**Prompt**: 同 A-9
+
+**操作**:
+1. ↓ 到 Other, Space 打开编辑器
+2. 不输入任何字符, Enter
+
+**期望**:
+- [ ] 编辑器关闭, 回到选项列表
+- [ ] **不**调用 done（仍停在问题 tab）
+- [ ] 此时按 Esc 才取消整个问答
+
+**覆盖**: FR-4.5, FR-6
 
 ---
 
-## 不在 E2E 范围（单元测试已覆盖）
+### A-11: Other 自由文本 — Esc 丢弃编辑
 
-- Schema 形状、minItems/maxItems 边界（V-* T-1~T-7）
-- 渲染字符串细节（Q-* S-*）—— E2E 不重复断言视觉
-- 组件内部状态转换（C-* 大部分）—— E2E 只测最终 result 契约
-- renderCall/renderResult（I-16~I-19）—— 纯函数，独立覆盖
+**Prompt**: 同 A-9
 
-## 与单元测试的协作
+**操作**:
+1. ↓ 到 Other, Space 打开编辑器
+2. 输入 "abc"
+3. Esc
 
-| 维度 | 单元测试（C-/S-/Q-/V-/I-12..15） | E2E（本文档） |
-|------|--------------------------------|---------------|
-| 驱动 | 直接 `new AskUserComponent` 或 mock custom | 走 `tool.execute()` 完整路径 |
-| 按键 | 直接调 `handleInput` | 同左，但通过 harness 间接 |
-| 断言 | 内部 state + 渲染字符串 | 最终 `execute()` 返回的 content + details |
-| 副作用 | 不验 | 验 setActiveTools / signal abort |
-| 数量 | 50+ 用例 | 10 用例（覆盖关键 user journey） |
+**期望**:
+- [ ] 回到选项列表
+- [ ] freeTextValue 未保存（重新打开编辑器应为空）
 
-E2E 失败时定位：先看 `content[0].text`（用户视角输出）→ 再看 `details.answers`（数据契约）→ 最后回退到对应的单元测试定位内部状态。
+**覆盖**: FR-6
+
+---
+
+### A-12: 宽终端分屏（≥84 列）
+
+**Prompt**:
+```
+Use ask_user to pick a frontend approach with detailed descriptions.
+Options:
+- Vue 3: "Composition API + Pinia + Vue Router"
+- Svelte 5: "Runes + built-in stores"
+- Solid: "Fine-grained reactivity"
+```
+
+**操作**: 在宽终端（≥84 列）观察渲染
+
+**期望**:
+- [ ] 左列显示选项列表（无 description）
+- [ ] 右列显示当前光标项的 description（Markdown 预览）
+- [ ] 移动光标时右列实时更新
+
+**覆盖**: AC-4, FR-4.4
+
+---
+
+### A-13: 窄终端降级单列
+
+**Prompt**: 同 A-12
+
+**操作**: 把终端窗口拖到 < 84 列宽，再触发同 prompt
+
+**期望**:
+- [ ] 降级为单列，description 缩进显示在 option 下方
+- [ ] 无右侧预览
+
+**覆盖**: AC-4, FR-4.4
+
+---
+
+### A-14: Esc 取消
+
+**Prompt**: A-1 任何一种
+
+**操作**: 渲染后立即按 Esc
+
+**期望**:
+- [ ] TUI 立即关闭
+- [ ] content = "User cancelled"
+- [ ] LLM 收到 cancelled 反馈，可继续对话
+
+**覆盖**: FR-7, FR-12
+
+---
+
+### A-15: 校验 — 重复 question 文案
+
+**Prompt**:
+```
+Use ask_user to ask two questions but make both questions the same text "Pick one" with different options.
+```
+
+**期望**:
+- [ ] LLM 应在 spec 引导下避免，但若 LLM 真的调出重复 question：
+- [ ] 收到 isError，content 含 "Duplicate question"
+- [ ] LLM 可自动修正重试
+
+**覆盖**: AC-8, AC-13, FR-2
+
+> **注意**: 此用例可能因 LLM 自身约束而无法触达错误路径。如需强制复现，可手动构造 payload 喂给扩展（见文末"补充：直接调用工具"）。
+
+---
+
+### A-16: 校验 — 重复 option label
+
+**Prompt**:
+```
+Use ask_user with one question that has options ["Yes", "Yes", "No"].
+```
+
+**期望**: 同 A-15，content 含 "Duplicate option label"
+
+**覆盖**: AC-8, AC-13
+
+---
+
+### A-17: 校验 — 多问题缺 header
+
+**Prompt**:
+```
+Use ask_user to ask two questions. Don't set header on the second one.
+```
+
+**期望**: content 含 "header" 错误
+
+**覆盖**: AC-8, AC-13, FR-2
+
+---
+
+### A-18: 4 个问题上限（maxItems）
+
+**Prompt**:
+```
+Use ask_user to ask 4 questions in one call. All under header labels: "A", "B", "C", "D".
+```
+
+**期望**:
+- [ ] 4 个 Tab + Submit tab 共 5 个
+- [ ] 全部答完后 Submit 可提交
+
+**覆盖**: FR-2 (maxItems:4), AC-3
+
+---
+
+### A-19: signal abort（手动难复现，作为加分项）
+
+**触发方式**: 在 `ask_user` 渲染中（任意用例），按 `Ctrl+C` 中断 Pi
+
+**期望**:
+- [ ] TUI 立即关闭
+- [ ] 不挂死
+- [ ] 重新 `pi` 进入新 session 时状态干净
+
+**覆盖**: AC-14, FR-10
+
+---
+
+## 验收记录模板
+
+```markdown
+# ask-user 验收 — YYYY-MM-DD
+
+| 用例 | 通过 | 失败原因 |
+|------|------|----------|
+| A-1  |      |          |
+| A-2  |      |          |
+| A-3  |      |          |
+| A-4  |      |          |
+| A-5  |      |          |
+| A-6  |      |          |
+| A-7  |      |          |
+| A-8  |      |          |
+| A-9  |      |          |
+| A-10 |      |          |
+| A-11 |      |          |
+| A-12 |      |          |
+| A-13 |      |          |
+| A-14 |      |          |
+| A-15 |      |          |
+| A-16 |      |          |
+| A-17 |      |          |
+| A-18 |      |          |
+| A-19 |      |          |
+```
+
+---
+
+## 补充：直接调用工具（绕过 LLM 决策）
+
+如需绕过 LLM 决策直接验证错误路径，创建一个测试 skill 或临时 prompt 模板，强制 LLM 透传参数：
+
+```
+Use ask_user with EXACTLY this payload (do not modify):
+{"questions": [{"question": "Q", "options": [{"label":"A"},{"label":"A"}]}]}
+```
+
+或更可靠的方式：在 spec-clarify / 任意调用 `ask_user` 的 skill 入口处粘贴 JSON 模板。
+
+---
+
+## 覆盖矩阵
+
+| AC | 用例 |
+|----|------|
+| AC-1 安装加载 | 启动准备 |
+| AC-2 单问题无 Tab | A-1 |
+| AC-3 多问题 Tab+Submit | A-4, A-5, A-18 |
+| AC-4 分屏 | A-12, A-13 |
+| AC-5 Other 编辑器 | A-9 |
+| AC-6 评论 | A-2, A-7 |
+| AC-7 Headless | （手动难验，单元测试覆盖） |
+| AC-8 校验 isError | A-15, A-16, A-17 |
+| AC-12 评论跳过 | A-3 |
+| AC-14 abort | A-19 |
+| AC-16 回改 | A-6 |
+| AC-17 评论 Enter/Esc | A-2, A-3 |
+| AC-18 多选+评论时机 | A-7, A-8 |
+
+**AC-7 / AC-9 / AC-10 / AC-11**: 安装、单元测试、行数、skill 兼容——非交互验收，不在本表。
