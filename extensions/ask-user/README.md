@@ -16,7 +16,7 @@ pi install npm:@zhushanwen/pi-ask-user
 
 - **Adaptive layout**: single question → no tab bar; 1-4 questions → tabbed view + Submit tab
 - **Split-pane preview** (≥84 cols): option list left, selected option details right
-- **Inline free-text editor**: select "Other" → Space/Tab → type custom answer
+- **Inline free-text editor**: select "Other" → Enter → type custom answer
 - **Optional comments**: `allowComment: true` → after selection, prompt for a comment
 - **Multi-select**: `multiSelect: true` → toggle checkboxes, Enter to confirm
 - **Headless-safe**: disables the tool and returns `isError` when no UI available
