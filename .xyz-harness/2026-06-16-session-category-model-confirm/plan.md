@@ -18,15 +18,15 @@
 |------|------|------|
 | `extensions/subagents/src/types.ts` | `SessionModelState` 新增 `categoryConfirmed` 字段 | 修改（IC-3）|
 | `extensions/subagents/src/state/session-model-state.ts` | `createSessionModelState`/`serializeState`/`restoreState` 同步处理新字段 | 修改（IC-4）|
-| `extensions/subagents/src/tui/category-confirm.ts` | 批量逐 category 确认组件（(current) 置顶伪预选 + 中途 Esc 跳过 + 批量跳过） | 创建（IC-2 + IC-7）|
-| `extensions/subagents/src/tui/batch-model-resolver.ts` | 批量解析所有 category 当前模型的 helper | 创建（IC-7）|
-| `extensions/subagents/src/runtime.ts` | 新增 `applyCategoryConfirm()`（原子批量写 perCategory + 标记 confirmed） | 修改（IC-5）|
-| `extensions/subagents/src/tools/subagent-tool.ts` | execute 补第 5 参数 ctx + 插入确认拦截 | 修改（IC-1 + IC-6）|
-| `extensions/subagents/src/__tests__/session-model-state.test.ts` | 新字段 round-trip 测试 | 修改 |
-| `extensions/subagents/src/__tests__/batch-model-resolver.test.ts` | 批量解析测试 | 创建 |
-| `extensions/subagents/src/__tests__/category-confirm.test.ts` | 确认组件交互测试（mock UI） | 创建 |
-| `extensions/subagents/src/__tests__/runtime-confirm.test.ts` | applyCategoryConfirm 原子写测试 | 创建 |
-| `extensions/subagents/src/__tests__/subagent-tool.test.ts` | 拦截逻辑测试（mock ctx + ctx.ui + categoryConfirmed） | 修改 |
+| `extensions/subagents/src/tui/category-confirm.ts` | 自定义组件（extends Container）：category 平铺主视图 + model 二级菜单 + 自定义 fuzzy filter + thinking 子菜单。通过 `ctx.ui.custom()` 渲染 | 重写（IC-2）|
+| `extensions/subagents/src/tui/batch-model-resolver.ts` | 批量解析所有 category 当前模型的 helper | 已实现（IC-7，复用）|
+| `extensions/subagents/src/runtime.ts` | 新增 `applyCategoryConfirm()`（原子批量写 perCategory + 标记 confirmed） | 已实现（IC-5）|
+| `extensions/subagents/src/tools/subagent-tool.ts` | execute 补第 5 参数 ctx + 插入确认拦截（调 `ctx.ui.custom`） | 修改（IC-1 + IC-6）|
+| `extensions/subagents/src/__tests__/session-model-state.test.ts` | 新字段 round-trip 测试 | 已实现 |
+| `extensions/subagents/src/__tests__/batch-model-resolver.test.ts` | 批量解析测试 | 已实现 |
+| `extensions/subagents/src/__tests__/category-confirm.test.ts` | 组件交互测试（构造组件 + handleInput 模拟按键 + 断言 done 回调） | 重写 |
+| `extensions/subagents/src/__tests__/runtime-confirm.test.ts` | applyCategoryConfirm 原子写测试 | 已实现 |
+| `extensions/subagents/src/__tests__/subagent-tool.test.ts` | 拦截逻辑测试（mock ctx.ui.custom + categoryConfirmed） | 修改 |
 
 **任务依赖顺序：** 1(types) → 2(state) → 3(batch-resolver) → 4(category-confirm) → 5(runtime) → 6(tool) → 7(集成 typecheck)。
 
@@ -243,103 +243,93 @@ git commit -m "feat(subagents): add resolveAllCategoryModels helper"
 
 ---
 
-## 任务 3: 批量逐 category 确认组件（category-confirm）
+## 任务 3: category-confirm 自定义组件（重写为 custom 组件）
+
+> 本任务重写已实现的串行 select 版本，改为 `ctx.ui.custom()` 状态机组件（FR-2 平铺 + 二级菜单）。
+> 任务 1/2/4 已实现并提交；本任务只动 `category-confirm.ts` + 其测试。
 
 **文件：**
-- 创建：`extensions/subagents/src/tui/category-confirm.ts`
-- 测试：`extensions/subagents/src/__tests__/category-confirm.test.ts`
+- 重写：`extensions/subagents/src/tui/category-confirm.ts`
+- 重写：`extensions/subagents/src/__tests__/category-confirm.test.ts`
 
-**交互流程（FR-2）：**
-1. 首屏 select：`逐个确认` / `全部用默认并记住` / `取消`
-2. 选 `逐个确认` → 遍历每个 category：provider select（`(current)` 置顶）→ model select（`(current)` 置顶）→ thinking select（若 reasoning）。任一步 Esc → 跳过该 category 继续下一个。
-3. 遍历每步的 provider select 提供 `剩余全部保留默认` 快捷项（FR-2.7）。
-4. 返回 `{ action: "confirmed" | "use-default" | "cancelled", overrides: Record<category, {model, thinkingLevel}> }`。
+**组件设计**：`CategoryConfirmComponent extends Container`，构造参数 `(categories, currentModels, available, theme, kb, done)`。
+- 内部状态机：`view = "categories" | "model-menu" | "thinking-menu"`。
+- 主视图（categories）：平铺所有 category 行 + `✓ 完成确认`/`✗ 取消` 虚拟项，↑↓ 导航，Enter 进入二级菜单 / 提交 / 取消，Esc 取消。
+- 二级菜单（model-menu）：顶部 Input filter + 模型列表（自定义 fuzzy filter）。Enter 选定回主视图，Esc 回主视图。
+- `done({ action, overrides })` 通过 custom 的 done 回调返回。
 
-**UI 接口**（复用 config-wizard 的 `WizardUI` 形状，避免新依赖）：
-
-```typescript
-export interface ConfirmUI {
-  select(title: string, options: string[]): Promise<string | undefined>;
-  notify(message: string): void;
-}
-```
+**测试策略**：组件可单测——构造组件，调 `component.handleInput(keyData)` 模拟按键序列，断言 `done` 回调收到的结果。不依赖 ctx.ui.custom。
 
 - [ ] **步骤 1：编写失败的测试**
 
-创建 `extensions/subagents/src/__tests__/category-confirm.test.ts`：
+重写 `extensions/subagents/src/__tests__/category-confirm.test.ts`：
 
 ```typescript
 import { describe, expect, it, vi } from "vitest";
 
-import { runCategoryConfirm, type ConfirmUI } from "../tui/category-confirm.ts";
-import type { ModelInfo, SessionModelState, SubagentsGlobalConfig } from "../types.ts";
+import { CategoryConfirmComponent, type CategoryConfirmResult } from "../tui/category-confirm.ts";
+import { getKeybindings, setKeybindings, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
+import type { ModelInfo } from "../types.ts";
 
-const sessionState: SessionModelState = {
-  yoloMode: false, perAgent: {}, perCategory: {}, categoryConfirmed: false,
-};
-const globalConfig: SubagentsGlobalConfig = {
-  version: 1, yoloByDefault: false, maxConcurrent: 4,
-  categories: { coding: { label: "编码", model: "deepseek-router/ds-flash", thinkingLevel: "high" } },
-  agentCategoryOverrides: {}, fallback: { model: "f/m", thinkingLevel: "low" },
-};
+setKeybindings(TUI_KEYBINDINGS);
+const kb = getKeybindings();
+
+const categories = [
+  { name: "coding", model: "deepseek-router/ds-flash" },
+  { name: "research", model: "anthropic/claude-haiku-4-5" },
+];
 const available: ModelInfo[] = [
   { id: "ds-flash", name: "DS Flash", provider: "deepseek-router", reasoning: true, thinkingLevelMap: { high: "h" } },
   { id: "claude-haiku-4-5", name: "Haiku", provider: "anthropic", reasoning: false },
 ];
 
-/** 预编排 select 序列的 mock UI */
-function makeUI(selects: string[]): ConfirmUI & { selects: string[] } {
-  let i = 0;
-  return { select: vi.fn(async () => selects[i++]), notify: vi.fn(), selects };
+/** 捕获 done 回调结果 */
+function makeComponent(): { comp: CategoryConfirmComponent; result: { value: CategoryConfirmResult | null } } {
+  const holder = { value: null as CategoryConfirmResult | null };
+  const comp = new CategoryConfirmComponent(
+    categories, { coding: "deepseek-router/ds-flash", research: "anthropic/claude-haiku-4-5" },
+    available, kb, (r: CategoryConfirmResult) => { holder.value = r; },
+  );
+  return { comp, result: holder };
 }
 
-describe("runCategoryConfirm", () => {
-  it("cancelled: 首屏选取消 → action=cancelled, 无 overrides", async () => {
-    const ui = makeUI(["取消"]);
-    const result = await runCategoryConfirm(ui, globalConfig, sessionState, available, { coding: "deepseek-router/ds-flash" });
-    expect(result.action).toBe("cancelled");
-    expect(result.overrides).toEqual({});
+const UP = () => kb.getKeys("tui.select.up")[0] ?? "↑";
+const DOWN = () => kb.getKeys("tui.select.down")[0] ?? "↓";
+const ENTER = "\r";
+
+describe("CategoryConfirmComponent", () => {
+  it("cancel: 移到 ✗取消 + Enter → action=cancelled", () => {
+    const { comp, result } = makeComponent();
+    // items: coding(0), research(1), ✓完成(2), ✗取消(3)。光标初始 0，下移 3 次到取消
+    comp.handleInput(DOWN()); comp.handleInput(DOWN()); comp.handleInput(DOWN());
+    comp.handleInput(ENTER);
+    expect(result.value).toEqual({ action: "cancelled", overrides: {} });
   });
 
-  it("use-default: 首屏选全部用默认 → action=use-default, 无 overrides", async () => {
-    const ui = makeUI(["全部用默认并记住"]);
-    const result = await runCategoryConfirm(ui, globalConfig, sessionState, available, { coding: "deepseek-router/ds-flash" });
-    expect(result.action).toBe("use-default");
-    expect(result.overrides).toEqual({});
+  it("confirm-without-changes: 移到 ✓完成 + Enter → action=confirmed, 无 overrides", () => {
+    const { comp, result } = makeComponent();
+    comp.handleInput(DOWN()); comp.handleInput(DOWN()); // 到 ✓完成
+    comp.handleInput(ENTER);
+    expect(result.value?.action).toBe("confirmed");
+    expect(result.value?.overrides).toEqual({});
   });
 
-  it("confirmed-keep-current: 逐个确认中首屏选逐个，provider 回车(current) → 保留，无 override", async () => {
-    // provider select 第一项是 "(current) deepseek-router"，选中它 = 保留
-    const ui = makeUI(["逐个确认", "(current) deepseek-router"]);
-    const result = await runCategoryConfirm(ui, globalConfig, sessionState, available, { coding: "deepseek-router/ds-flash" });
-    expect(result.action).toBe("confirmed");
-    expect(result.overrides).toEqual({});
+  it("enter-then-back-esc: 进入 coding 二级菜单后 Esc 回主视图", () => {
+    const { comp, result } = makeComponent();
+    comp.handleInput(ENTER); // 进入 coding 二级菜单
+    comp.handleInput("\x1b"); // Esc 回主视图
+    expect(result.value).toBeNull(); // 未提交
   });
 
-  it("confirmed-change: 逐个确认中换 provider+model → override 写入", async () => {
-    // coding 当前 deepseek-router/ds-flash，用户选 anthropic → haiku（无 reasoning，不问 thinking）
-    const ui = makeUI([
-      "逐个确认",
-      "anthropic",            // provider
-      "Haiku ( ctx)",         // model（anthropic 下唯一）
-    ]);
-    const result = await runCategoryConfirm(ui, globalConfig, sessionState, available, { coding: "deepseek-router/ds-flash" });
-    expect(result.action).toBe("confirmed");
-    expect(result.overrides.coding).toEqual({ model: "anthropic/claude-haiku-4-5" });
-  });
-
-  it("confirmed-skip-via-esc: provider 步 Esc(undefined) → 跳过该 category 继续，无 override", async () => {
-    const ui = makeUI(["逐个确认", undefined as unknown as string]);
-    const result = await runCategoryConfirm(ui, globalConfig, sessionState, available, { coding: "deepseek-router/ds-flash" });
-    expect(result.action).toBe("confirmed");
-    expect(result.overrides).toEqual({});
-  });
-
-  it("confirmed-batch-skip: provider 步选剩余全部保留默认 → 跳过剩余", async () => {
-    const ui = makeUI(["逐个确认", "剩余全部保留默认"]);
-    const result = await runCategoryConfirm(ui, globalConfig, sessionState, available, { coding: "deepseek-router/ds-flash" });
-    expect(result.action).toBe("confirmed");
-    expect(result.overrides).toEqual({});
+  it("change-model: 进入 coding → Enter 选第一个 → 回主视图 → ✓完成", () => {
+    const { comp, result } = makeComponent();
+    comp.handleInput(ENTER); // 进入 coding 二级菜单，列表第一项即 ds-flash（当前）
+    comp.handleInput(DOWN()); // 移到第二项（claude-haiku，非 reasoning）
+    comp.handleInput(ENTER); // 选定，回主视图
+    comp.handleInput(DOWN()); comp.handleInput(DOWN()); // 到 ✓完成
+    comp.handleInput(ENTER);
+    expect(result.value?.action).toBe("confirmed");
+    expect(result.value?.overrides.coding).toEqual({ model: "anthropic/claude-haiku-4-5" });
   });
 });
 ```
@@ -347,161 +337,101 @@ describe("runCategoryConfirm", () => {
 - [ ] **步骤 2：运行测试确认失败**
 
 运行：`cd extensions/subagents && npx vitest run src/__tests__/category-confirm.test.ts`
-预期：FAIL，`runCategoryConfirm` 未定义
+预期：FAIL（`CategoryConfirmComponent` 未导出，旧文件是 `runCategoryConfirm`）
 
-- [ ] **步骤 3：创建 category-confirm.ts**
+- [ ] **步骤 3：重写 category-confirm.ts**
 
-创建 `extensions/subagents/src/tui/category-confirm.ts`：
+重写 `extensions/subagents/src/tui/category-confirm.ts`（核心结构，完整代码见实现）：
 
 ```typescript
 // src/tui/category-confirm.ts
-import type { ModelInfo, SessionModelState, SubagentsGlobalConfig } from "../types.ts";
-import { formatThinkingLevelOption } from "./format.ts";
+import {
+  Container, fuzzyFilter, getKeybindings, Input, type KeybindingsManager,
+  type SelectItem, SelectList, type SelectListTheme, Spacer, Text,
+} from "@earendil-works/pi-tui";
+import type { ModelInfo, Theme } from "@earendil-works/pi-coding-agent";
 
+export type CategoryConfirmResult =
+  | { action: "confirmed"; overrides: Record<string, { model: string; thinkingLevel?: string }> }
+  | { action: "cancelled"; overrides: Record<string, never> };
+
+const DONE_ITEM = "✓ 完成确认";
+const CANCEL_ITEM = "✗ 取消";
 const THINKING_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
-/** 确认弹窗 UI 接口（复用 config-wizard 的 WizardUI 形状） */
-export interface ConfirmUI {
-  select(title: string, options: string[]): Promise<string | undefined>;
-  notify(message: string): void;
-}
+type View = "categories" | "model-menu" | "thinking-menu";
 
-/** 确认结果 */
-export interface CategoryConfirmResult {
-  action: "confirmed" | "use-default" | "cancelled";
-  /** 用户修改过的 category → 新模型（仅 action=confirmed 时有值） */
-  overrides: Record<string, { model: string; thinkingLevel?: string }>;
-}
+export class CategoryConfirmComponent extends Container {
+  private categories: { name: string; model: string }[];
+  private currentModels: Record<string, string>;
+  private available: ModelInfo[];
+  private theme: Theme;
+  private kb: KeybindingsManager;
+  private done: (r: CategoryConfirmResult) => void;
 
-const SKIP_REST = "剩余全部保留默认";
+  private overrides = new Map<string, { model: string; thinkingLevel?: string }>();
+  private view: View = "categories";
+  private selectedCategoryIndex = 0;
+  private editingCategory: string | null = null;
+  private editingModelId: ModelInfo | null = null;
+  private filterText = "";
+  private filteredModels: ModelInfo[] = [];
+  private modelSelectedIndex = 0;
+  private thinkingSelectedIndex = 0;
+  private finished = false;
 
-/**
- * FR-2: 批量逐 category 确认组件。
- * currentModels: 每个 category 当前模型字符串（由 resolveAllCategoryModels 提供）。
- * available: modelRegistry.getAvailable() 的结果。
- */
-export async function runCategoryConfirm(
-  ui: ConfirmUI,
-  globalConfig: SubagentsGlobalConfig,
-  _sessionState: SessionModelState,
-  available: ModelInfo[],
-  currentModels: Record<string, string>,
-): Promise<CategoryConfirmResult> {
-  // FR-2.1 首屏入口
-  const entry = await ui.select("首次使用 subagent — 确认各 category 模型", [
-    "逐个确认",
-    "全部用默认并记住",
-    "取消",
-  ]);
-  if (entry === undefined || entry === "取消") {
-    return { action: "cancelled", overrides: {} };
-  }
-  if (entry === "全部用默认并记住") {
-    return { action: "use-default", overrides: {} };
+  // items = category 行 + 两个虚拟项
+  private get items(): string[] {
+    return [...this.categories.map((c) => c.name), DONE_ITEM, CANCEL_ITEM];
   }
 
-  // FR-2.2 逐 category 级联
-  const overrides: Record<string, { model: string; thinkingLevel?: string }> = {};
-  const categories = Object.keys(globalConfig.categories);
-  const providers = [...new Set(available.map((m) => m.provider))];
-
-  for (const category of categories) {
-    const currentStr = currentModels[category]; // "provider/modelId" 或 undefined
-    const currentProvider = currentStr?.split("/")[0];
-
-    // ── provider select（(current) 置顶）──
-    const providerOptions = [
-      ...(currentProvider ? [`(current) ${currentProvider}`] : []),
-      ...providers.filter((p) => p !== currentProvider),
-      SKIP_REST,
-    ];
-    const providerPick = await ui.select(`[${category}] 选择 provider`, providerOptions);
-
-    if (providerPick === undefined) {
-      // FR-2.6 Esc = 跳过当前 category，继续下一个
-      continue;
-    }
-    if (providerPick === SKIP_REST) {
-      // FR-2.7 批量跳过剩余
-      break;
-    }
-
-    // 判断是否选了 (current)
-    const isCurrentProvider = providerPick.startsWith("(current)");
-    const provider = isCurrentProvider ? currentProvider! : providerPick;
-
-    const models = available.filter((m) => m.provider === provider);
-    const currentModelId = currentStr?.startsWith(`${provider}/`) ? currentStr.slice(provider.length + 1) : undefined;
-    const modelOptions = [
-      ...(currentModelId && models.some((m) => m.id === currentModelId)
-        ? [`(current) ${currentModelId}`]
-        : []),
-      ...models
-        .filter((m) => m.id !== currentModelId)
-        .map((m) => `${m.name} (${m.contextWindow ?? "?"} ctx${m.reasoning ? " · reasoning ✓" : ""})`),
-    ];
-    const modelPick = await ui.select(`[${category}] 选择 model`, modelOptions);
-
-    if (modelPick === undefined) {
-      continue; // Esc 跳过当前 category
-    }
-
-    let selectedModel: ModelInfo;
-    let thinkingLevel: string | undefined;
-    if (modelPick.startsWith("(current)")) {
-      selectedModel = models.find((m) => m.id === currentModelId)!;
-      // 保留当前 thinking（从 currentModels 无法拿到 thinking，用 category 默认）
-      thinkingLevel = globalConfig.categories[category]?.thinkingLevel;
-    } else {
-      const idx = models.findIndex(
-        (m) => `${m.name} (${m.contextWindow ?? "?"} ctx${m.reasoning ? " · reasoning ✓" : ""})` === modelPick,
-      );
-      selectedModel = models[idx];
-
-      // thinking level（仅 reasoning 模型）
-      if (selectedModel.reasoning && selectedModel.thinkingLevelMap) {
-        const levels = THINKING_ORDER.filter((lvl) => selectedModel.thinkingLevelMap![lvl] != null);
-        if (levels.length > 0) {
-          const levelOptions = levels.map(formatThinkingLevelOption);
-          const currentLevel = globalConfig.categories[category]?.thinkingLevel;
-          const levelPick = await ui.select(`[${category}] 选择 thinking level`, [
-            ...(currentLevel && levels.includes(currentLevel) ? [`(current) ${currentLevel}`] : []),
-            ...levelOptions.filter((o) => !o.startsWith("(current)")),
-          ]);
-          if (levelPick === undefined) {
-            // thinking 步 Esc：用 model 但不设 thinking（跳过 thinking 配置）
-            thinkingLevel = undefined;
-          } else if (levelPick.startsWith("(current)")) {
-            thinkingLevel = currentLevel;
-          } else {
-            thinkingLevel = levels[levelOptions.indexOf(levelPick)];
-          }
-        }
-      }
-    }
-
-    // 写入 override（仅当与当前不同时）
-    const newModelStr = `${selectedModel.provider}/${selectedModel.id}`;
-    if (newModelStr !== currentStr || (thinkingLevel && thinkingLevel !== globalConfig.categories[category]?.thinkingLevel)) {
-      overrides[category] = { model: newModelStr, thinkingLevel };
-    }
+  constructor(
+    categories: { name: string; model: string }[],
+    currentModels: Record<string, string>,
+    available: ModelInfo[],
+    theme: Theme,
+    kb: KeybindingsManager,
+    done: (r: CategoryConfirmResult) => void,
+  ) {
+    super();
+    this.categories = categories;
+    this.currentModels = currentModels;
+    this.available = available;
+    this.theme = theme;
+    this.kb = kb;
+    this.done = done;
+    this.renderView();
   }
 
-  ui.notify("category 模型确认完成");
-  return { action: "confirmed", overrides };
+  // renderView / renderCategories / renderModelMenu / renderThinkingMenu
+  // handleInput 分发到 handleCategoryInput / handleModelMenuInput / handleThinkingInput
+  // 完整实现见实现步骤。
 }
 ```
 
-- [ ] **步骤 4：运行测试确认通过**
+- [ ] **步骤 4：实现组件完整逻辑（render + handleInput 状态机）**
+
+补全 `CategoryConfirmComponent` 的 `renderCategories()`、`openModelMenu(category)`、`openThinkingMenu(model)`、`renderModelMenu()`、`renderThinkingMenu()`、`handleCategoryInput(keyData)`、`handleModelMenuInput(keyData)`、`handleThinkingInput(keyData)`、`submit()`、`cancel()`。
+
+关键点：
+- `renderCategories()`：用 `theme.fg/underline/bold` 着色，clear+addChild 重建。
+- `openModelMenu(category)`：重置 filterText=""，filteredModels=全部，modelSelectedIndex=0。
+- filter 变化（普通字符输入）→ `filteredModels = available.filter(m => fuzzyFilter(filterText, m.name).score > 0)`，重建列表显示。
+- `handleModelMenuInput`：↑↓ 改 modelSelectedIndex；Enter 写 overrides（`provider/id`，仅当与当前不同）→ 若 reasoning 且有 thinkingLevelMap 进 thinking-menu，否则回主视图；Esc 回主视图。
+- `handleThinkingInput`：↑↓ 选 thinking level；Enter 写 overrides.thinkingLevel 回主视图；Esc 跳过 thinking 回主视图。
+- `submit()`：`done({ action:"confirmed", overrides: Object.fromEntries(this.overrides) })`，finished=true。
+- `cancel()`：`done({ action:"cancelled", overrides: {} })`，finished=true。
+
+- [ ] **步骤 5：运行测试确认通过**
 
 运行：`cd extensions/subagents && npx vitest run src/__tests__/category-confirm.test.ts`
-预期：PASS（全部 6 个 it 通过）
+预期：PASS（4 个 it 通过）
 
-- [ ] **步骤 5：提交**
+- [ ] **步骤 6：提交**
 
 ```bash
 git add extensions/subagents/src/tui/category-confirm.ts extensions/subagents/src/__tests__/category-confirm.test.ts
-git commit -m "feat(subagents): add category-confirm batch confirm component"
+git commit -m "refactor(subagents): rewrite category-confirm as custom TUI component (flat list + submenu)"
 ```
 
 ---
@@ -595,75 +525,26 @@ git commit -m "feat(subagents): add applyCategoryConfirm atomic batch write"
 
 ---
 
-## 任务 5: subagent 工具 execute 补 ctx + 插入确认拦截
+## 任务 5: subagent-tool 拦截层改用 ctx.ui.custom
+
+> IC-1（execute 补 ctx 参数）已实现。本任务把拦截块从「调旧 runCategoryConfirm（select 版）」改为「调 ctx.ui.custom(CategoryConfirmComponent factory)」，并更新测试。
 
 **文件：**
-- 修改：`extensions/subagents/src/tools/subagent-tool.ts`（IC-1 + IC-6）
-- 测试：`extensions/subagents/src/__tests__/subagent-tool.test.ts`
+- 修改：`extensions/subagents/src/tools/subagent-tool.ts`（IC-6 重写拦截块）
+- 修改：`extensions/subagents/src/__tests__/subagent-tool.test.ts`
 
-**说明：** execute 补第 5 参数 `ctx: ExtensionContext`。在 `assertAgentExists` 后、`effectiveWait` 前插入拦截：若 `ctx.hasUI && !rt.sessionState.categoryConfirmed`，调 `runCategoryConfirm`。按结果分流：cancelled → 抛错；confirmed/use-default → `rt.applyCategoryConfirm`。
+**说明：** 拦截块改为 `await ctx.ui.custom((tui, theme, kb, done) => new CategoryConfirmComponent(...))`。custom 返回 `CategoryConfirmResult`。cancelled → 抛错；confirmed → `rt.applyCategoryConfirm(result)`。use-default 语义合并进 confirmed（不改任何 category 直接提交）。
 
-- [ ] **步骤 1：编写失败的测试**
+- [ ] **步骤 1：更新测试（mock ctx.ui.custom 替代 select）**
 
-在 `extensions/subagents/src/__tests__/subagent-tool.test.ts` 顶部 import 区追加：
+在 `extensions/subagents/src/__tests__/subagent-tool.test.ts`：
 
-```typescript
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-```
+(a) MockRuntime/sessionState 等已在上一轮加好（任务 5 旧版已实现），保持不变。
 
-更新 `CapturedTool` 接口（约 50-58 行），execute 加第 5 参数 ctx：
+(b) 把 4 个确认拦截测试的 mock ctx 从 `ui.select` 改为 `ui.custom`：
 
 ```typescript
-interface CapturedTool {
-  name: string;
-  execute: (
-    toolCallId: string,
-    params: Record<string, unknown>,
-    signal?: AbortSignal,
-    onUpdate?: (partial: ExecuteResult) => void,
-    ctx?: Partial<ExtensionContext>,
-  ) => Promise<ExecuteResult>;
-}
-```
-
-更新 `MockRuntime` 接口（约 61-68 行），加 `sessionState`、`applyCategoryConfirm`、`globalConfig`：
-
-```typescript
-interface MockRuntime {
-  runAgent: ReturnType<typeof vi.fn>;
-  startBackground: ReturnType<typeof vi.fn>;
-  getBackground: ReturnType<typeof vi.fn>;
-  getAgentConfig: ReturnType<typeof vi.fn>;
-  resolveModelForAgent: ReturnType<typeof vi.fn>;
-  assertAgentExists: ReturnType<typeof vi.fn>;
-  sessionState: { categoryConfirmed: boolean; perCategory: Record<string, { model: string; thinkingLevel?: string }>; yoloMode: boolean; perAgent: Record<string, { model: string; thinkingLevel?: string }> };
-  applyCategoryConfirm: ReturnType<typeof vi.fn>;
-  globalConfig: { categories: Record<string, unknown> };
-}
-```
-
-更新 `makeMockRuntime`（约 88-100 行）加默认值：
-
-```typescript
-function makeMockRuntime(overrides: Partial<MockRuntime> = {}): MockRuntime {
-  return {
-    runAgent: overrides.runAgent ?? vi.fn(),
-    startBackground: overrides.startBackground ?? vi.fn(),
-    getBackground: overrides.getBackground ?? vi.fn(),
-    getAgentConfig: overrides.getAgentConfig ?? vi.fn(() => undefined),
-    resolveModelForAgent: overrides.resolveModelForAgent ?? vi.fn(() => ({ model: { id: "anthropic/claude-sonnet-4.5" }, thinkingLevel: "medium" })),
-    assertAgentExists: overrides.assertAgentExists ?? vi.fn(),
-    sessionState: overrides.sessionState ?? { categoryConfirmed: false, perCategory: {}, yoloMode: false, perAgent: {} },
-    applyCategoryConfirm: overrides.applyCategoryConfirm ?? vi.fn(),
-    globalConfig: overrides.globalConfig ?? { categories: { coding: { label: "编码", model: "p/m" } } },
-  };
-}
-```
-
-在 `describe("subagent tool execute()", ...)` 块末尾新增测试（在最后一个 `it` 之后、`});` 之前）：
-
-```typescript
-  // ── 首次 category 确认拦截 ──────────────────────────────
+  // categoryConfirmed=true → 跳过确认直接执行（不变，custom 不被调用）
   it("categoryConfirmed=true → 跳过确认直接执行", async () => {
     const mockRt = makeMockRuntime({
       sessionState: { categoryConfirmed: true, perCategory: {}, yoloMode: false, perAgent: {} },
@@ -671,15 +552,15 @@ function makeMockRuntime(overrides: Partial<MockRuntime> = {}): MockRuntime {
     });
     mockedGetRuntime.mockReturnValue(mockRt as never);
     const tool = captureTool();
-    const ctx = { hasUI: true, ui: { select: vi.fn() } } as unknown as Partial<ExtensionContext>;
+    const custom = vi.fn();
+    const ctx = { hasUI: true, ui: { custom } } as unknown as Partial<ExtensionContext>;
     await tool.execute("call-1", { task: "do X", agent: "worker" }, undefined, undefined, ctx);
-    expect((ctx.ui as { select: ReturnType<typeof vi.fn> }).select).not.toHaveBeenCalled();
+    expect(custom).not.toHaveBeenCalled();
   });
 
+  // hasUI=false → 跳过确认直接执行（不变）
   it("hasUI=false → 跳过确认直接执行", async () => {
-    const mockRt = makeMockRuntime({
-      runAgent: vi.fn(async () => successResult()),
-    });
+    const mockRt = makeMockRuntime({ runAgent: vi.fn(async () => successResult()) });
     mockedGetRuntime.mockReturnValue(mockRt as never);
     const tool = captureTool();
     const ctx = { hasUI: false } as unknown as Partial<ExtensionContext>;
@@ -687,43 +568,26 @@ function makeMockRuntime(overrides: Partial<MockRuntime> = {}): MockRuntime {
     expect(mockRt.applyCategoryConfirm).not.toHaveBeenCalled();
   });
 
-  it("首次确认 cancel → execute 抛错含'取消'，不调 runAgent", async () => {
-    const mockRt = makeMockRuntime({
-      runAgent: vi.fn(async () => successResult()),
-    });
+  // custom 返回 cancelled → 抛错
+  it("custom 返回 cancelled → execute 抛错含'取消'，不调 runAgent", async () => {
+    const mockRt = makeMockRuntime({ runAgent: vi.fn(async () => successResult()) });
     mockedGetRuntime.mockReturnValue(mockRt as never);
     const tool = captureTool();
-    const ctx = {
-      hasUI: true,
-      modelRegistry: { getAvailable: () => [] },
-      ui: {
-        select: vi.fn(async () => "取消"),
-        notify: vi.fn(),
-      },
-    } as unknown as Partial<ExtensionContext>;
-    await expect(
-      tool.execute("call-1", { task: "do X", agent: "worker" }, undefined, undefined, ctx),
-    ).rejects.toThrow(/取消/);
+    const custom = vi.fn(async (_f: unknown) => ({ action: "cancelled", overrides: {} }));
+    const ctx = { hasUI: true, modelRegistry: { getAvailable: () => [] }, ui: { custom } } as unknown as Partial<ExtensionContext>;
+    await expect(tool.execute("call-1", { task: "do X", agent: "worker" }, undefined, undefined, ctx)).rejects.toThrow(/取消/);
     expect(mockRt.runAgent).not.toHaveBeenCalled();
-    expect(mockRt.applyCategoryConfirm).not.toHaveBeenCalled();
   });
 
-  it("首次确认 use-default → applyCategoryConfirm 后继续执行", async () => {
-    const mockRt = makeMockRuntime({
-      runAgent: vi.fn(async () => successResult()),
-    });
+  // custom 返回 confirmed（无改动）→ applyCategoryConfirm 后执行
+  it("custom 返回 confirmed → applyCategoryConfirm 后继续执行", async () => {
+    const mockRt = makeMockRuntime({ runAgent: vi.fn(async () => successResult()) });
     mockedGetRuntime.mockReturnValue(mockRt as never);
     const tool = captureTool();
-    const ctx = {
-      hasUI: true,
-      modelRegistry: { getAvailable: () => [] },
-      ui: {
-        select: vi.fn(async () => "全部用默认并记住"),
-        notify: vi.fn(),
-      },
-    } as unknown as Partial<ExtensionContext>;
+    const custom = vi.fn(async (_f: unknown) => ({ action: "confirmed", overrides: {} }));
+    const ctx = { hasUI: true, modelRegistry: { getAvailable: () => [] }, ui: { custom } } as unknown as Partial<ExtensionContext>;
     await tool.execute("call-1", { task: "do X", agent: "worker" }, undefined, undefined, ctx);
-    expect(mockRt.applyCategoryConfirm).toHaveBeenCalledWith({ action: "use-default", overrides: {} });
+    expect(mockRt.applyCategoryConfirm).toHaveBeenCalledWith({ action: "confirmed", overrides: {} });
     expect(mockRt.runAgent).toHaveBeenCalled();
   });
 ```
@@ -731,78 +595,54 @@ function makeMockRuntime(overrides: Partial<MockRuntime> = {}): MockRuntime {
 - [ ] **步骤 2：运行测试确认失败**
 
 运行：`cd extensions/subagents && npx vitest run src/__tests__/subagent-tool.test.ts`
-预期：FAIL，新测试因 execute 未读 ctx / 未做拦截而失败
+预期：FAIL（拦截块仍调 runCategoryConfirm，custom 未被调用）
 
-- [ ] **步骤 3：修改 subagent-tool.ts execute**
+- [ ] **步骤 3：改 subagent-tool.ts 拦截块用 ctx.ui.custom**
 
 `extensions/subagents/src/tools/subagent-tool.ts`：
 
-顶部 import 区追加（在现有 import 之后）：
+更新 import（替换旧的 runCategoryConfirm import）：
 ```typescript
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
+import { getKeybindings } from "@earendil-works/pi-tui";
 
-import { runCategoryConfirm } from "../tui/category-confirm.ts";
+import { CategoryConfirmComponent } from "../tui/category-confirm.ts";
 import { resolveAllCategoryModels } from "../tui/batch-model-resolver.ts";
-import type { ModelInfo } from "../types.ts";
 ```
 
-修改 `execute` 签名（约 208 行），补第 5 参数 `ctx: ExtensionContext`：
-
-```typescript
-    async execute(
-      _toolCallId: string,
-      params: {
-        task?: string;
-        agent?: string;
-        wait?: boolean;
-        backgroundId?: string;
-        model?: string;
-        thinkingLevel?: string;
-        skillPath?: string;
-        appendSystemPrompt?: string[];
-        schema?: Record<string, unknown>;
-        maxTurns?: number;
-        graceTurns?: number;
-      },
-      signal: AbortSignal | undefined,
-      onUpdate?: (partialResult: AgentToolResult<SubagentToolDetails>) => void,
-      ctx: ExtensionContext,
-    ) {
-```
-
-在 `rt.assertAgentExists(params.agent);`（约 285 行）之后、`// FR-O2.2: 判定 effective wait`（约 287 行）之前，插入拦截块：
+替换拦截块（assertAgentExists 之后、effectiveWait 之前）：
 
 ```typescript
       // ── 首次 category 模型确认拦截（FR-1 / FR-2）──
-      if (ctx.hasUI && !rt.sessionState.categoryConfirmed) {
+      // ctx 缺失（旧测试/非工具路径）或 hasUI=false（RPC/print）时跳过，直接执行。
+      if (ctx?.hasUI && !rt.sessionState.categoryConfirmed) {
+        const categories = Object.entries(rt.globalConfig.categories).map(([name, def]) => ({ name, model: def.model }));
         const currentModels = resolveAllCategoryModels(rt.globalConfig, rt.sessionState);
-        const available: ModelInfo[] = ctx.modelRegistry.getAvailable();
-        const confirmResult = await runCategoryConfirm(
-          { select: (t, o) => ctx.ui.select(t, o), notify: (m) => ctx.ui.notify(m) },
-          rt.globalConfig,
-          rt.sessionState,
-          available,
-          currentModels,
-        );
+        const available = ctx.modelRegistry.getAvailable();
+        const kb = getKeybindings();
+        const theme: Theme = ctx.theme;
+        const confirmResult = await ctx.ui.custom<CategoryConfirmResult>((tui, _t, _kb, done) => {
+          return new CategoryConfirmComponent(categories, currentModels, available, theme, kb, done);
+        });
         if (confirmResult.action === "cancelled") {
           throw new Error(
             "用户主动取消了模型确认，不要重试本次 subagent 调用。请向用户说明情况并等待用户指示。",
           );
         }
-        rt.applyCategoryConfirm(confirmResult);
+        rt.applyCategoryConfirm({ action: "confirmed", overrides: confirmResult.overrides });
       }
 ```
 
 - [ ] **步骤 4：运行测试确认通过**
 
 运行：`cd extensions/subagents && npx vitest run src/__tests__/subagent-tool.test.ts`
-预期：PASS（新测试 + 原有测试全通过）
+预期：PASS（4 个拦截测试 + 原有测试全通过）
 
 - [ ] **步骤 5：提交**
 
 ```bash
 git add extensions/subagents/src/tools/subagent-tool.ts extensions/subagents/src/__tests__/subagent-tool.test.ts
-git commit -m "feat(subagents): first-use category model confirm in subagent tool execute"
+git commit -m "refactor(subagents): interception uses ctx.ui.custom(CategoryConfirmComponent)"
 ```
 
 ---

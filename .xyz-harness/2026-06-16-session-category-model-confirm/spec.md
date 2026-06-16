@@ -32,31 +32,42 @@ verdict: pass
 - 此拦截点位于 sync/background 分支之前，故两种执行模式都覆盖。
 - **注意**：拦截点处尚未调用 `resolveModelForAgent`（它在 effectiveWait 之后，约第 303 行）。因此弹窗内的「每个 category 当前模型」需由弹窗逻辑自行批量解析（见 FR-2.4），而非复用 tool 层的单次解析结果。
 
-### FR-2: 确认弹窗交互
+### FR-2: 确认交互（平铺组件 + 二级菜单）
 
-**FR-2.1 入口选择**：弹出首屏让用户选择操作（`ctx.ui.select`）：
-- `逐个确认`：进入逐 category 级联选择（FR-2.2）。
-- `全部用默认并记住`：跳过逐个选择，所有 category 保留当前配置模型，标记本 session 已确认（FR-3），后续不再弹。
-- `取消`：取消本次 subagent 调用（FR-4）。
+**FR-2.0 交互形态**：通过 `ctx.ui.custom(factory)`（`overlay:false`）在 **TUI input 区**渲染一个常驻自定义组件（替换 editor，接管键盘焦点）。组件内部状态机管理两个视图：category 平铺列表（主视图，常驻）和 model 二级菜单。这是对「串行 `ctx.ui.select`」的升级——一次性平铺所有 category，方向键导航，下钻二级菜单改模型。
 
-**FR-2.2 逐 category 级联**：遍历 `globalConfig.categories` 中的所有 category（FR-2.5），对每个 category：
-- 展示当前模型（批量解析结果，FR-2.4），用户可走 provider→model→thinking 三步级联重新选择（**新写组件，不直接复用 `editCategoryModel`**——后者无「保留当前/跳过」能力，见实现变更点 IC-2）。
-- 每个 category 的选择遵循「(current) 置顶伪预选」模式（FR-2.3）。
-- 用户可中途 Esc 跳过当前 category（FR-2.6），继续下一个。
-- 走完所有 category 后，将用户修改过的 category 批量写入 perCategory（FR-3.1，原子批量写）。
+**FR-2.1 主视图（category 平铺列表，常驻）**：
+- 一屏平铺所有 category（FR-2.5），每行显示 category 名 + 当前模型。
+- 当前模型用**下划线**标注（`theme.underline`）；已被用户修改的行额外标绿色 ✱ 和「(已修改)」。
+- 选中行（光标）青色高亮 + `→` 前缀。
+- 列表底部含两个**虚拟项**：`✓ 完成确认`（绿色）、`✗ 取消`（红色）。
+- 底部快捷键提示行。
+- 方向键 ↑↓ 在所有行（含虚拟项）间移动；j/k 也支持。
+- Enter：若光标在 category 行 → 进入该 category 的二级菜单（FR-2.2）；若在 `✓ 完成确认` → 提交（FR-2.3）；若在 `✗ 取消` → 取消（FR-4）。
+- Esc → 取消整个确认（FR-4）。
 
-**FR-2.3 (current) 置顶伪预选**：因 `ctx.ui.select` 无预选/默认光标能力（`ExtensionUIDialogOptions` 仅含 `signal`/`timeout`），采用伪预选——在每个 category 的 provider 列表和 model 列表中，将「当前已配置的 provider/model」作为 options 的**第一项**并标注 `(current)`。光标默认在第 0 项，用户直接回车 = 保留当前。
+**FR-2.2 二级菜单（model 选择，带 filter）**：选中某 category + Enter 后，组件切换到该 category 的二级菜单（替换主视图内容）：
+- 标题显示 `[category] 选择 model`。
+- 顶部一个 `Input` 组件作为 **filter 输入框**，用户打字实时 fuzzy 过滤模型列表。
+- 下方模型列表（用 `SelectList` 渲染）。
+- 方向键 ↑↓ 在过滤结果里选；Enter 选定 → 写入该 category 的新模型，返回主视图；Esc 返回主视图（不写）。
+- 模型列表来源：`ctx.modelRegistry.getAvailable()`。
 
-**FR-2.4 批量解析当前模型**：弹窗内对 `globalConfig.categories` 的每个 category 调用解析逻辑（复用 `mergeConfig` + `resolveModelForAgent` 的核心，但参数 category 来自遍历而非 `params.agent`），得到每个 category 的 `(provider, modelId, thinkingLevel)` 当前值，用于 FR-2.3 的 `(current)` 置顶和展示。
+**FR-2.3 完成确认（提交）**：主视图中光标移到 `✓ 完成确认` + Enter → 提交。仅写入用户**实际改动过**的 category（未改的不写 perCategory 覆盖），然后标记 `categoryConfirmed=true`（FR-3）。
+
+**FR-2.4 批量解析当前模型**：组件构造时（拦截点）对 `globalConfig.categories` 的每个 category 调用解析逻辑（复用 `mergeConfig`，参数 category 来自遍历），得到每个 category 的当前模型字符串，用于主视图的展示。
 
 **FR-2.5 category 列表来源**：`globalConfig.categories` 的全部 key（6 个默认 + 用户自定义且未被删除的）。`agentCategoryOverrides` 不影响列表（它只是 agent→category 映射，不增加 category 数量）。
 
-**FR-2.6 中途 Esc 语义**：
-- 逐 category 流程中，某个 category 的 provider 或 model 选择步按 Esc → **仅跳过当前 category（保留其当前模型），继续下一个 category**。
-- **首屏入口**（FR-2.1）按 Esc 或选「取消」→ 取消整个确认（FR-4）。
-- 逐 category 流程中**任何阶段都不因 Esc 而取消整个流程**——只有走完所有 category 或用户在首屏主动取消才算结束。
+**FR-2.6 filter 实现（自定义 fuzzy，非 SelectList.setFilter）**：`SelectList.setFilter()` 用的是 `item.value.startsWith(filter)`（已验证源码 select-list.js），既非 fuzzy 也只匹配 value。这不满足需求（如 filter "sonnet" 应匹配 label "Claude Sonnet 4.5"）。因此二级菜单的 filter **自行实现**：用 `fuzzyFilter(filter, label)` 对 `ctx.modelRegistry.getAvailable()` 过滤，把过滤后的 SelectItem 传入。实现方式：每次 filter 文本变化时用过滤结果重建 SelectList 实例（setFilter 不可用）。
 
-**FR-2.7 批量跳过**：逐 category 流程开始前/进行中提供快捷项「剩余全部保留默认」，避免强制为每个 category 做选择。
+**FR-2.7 thinking level**：选中 model 后，若该 model 是 reasoning 模型且有 thinkingLevelMap，弹出 thinking level 子菜单（SelectList，含该模型支持的级别 off/minimal/low/medium/high/xhigh）。选完返回主视图；Esc 跳过 thinking（用 model 默认）。非 reasoning 模型跳过此步。
+
+**FR-2.8 组件技术约束**：
+- 组件 extends `Container`，实现 `handleInput(keyData)` + `render(width)` + `dispose()`。
+- 用 `getKeybindings().matches(keyData, "tui.select.up/down/confirm/cancel")` 识别方向键/确认/取消。
+- 着色用 `ctx.theme`（真实环境）。
+- `done(result)` 通过 `custom()` 的 `done` 回调返回 `{ action, overrides }`。
 
 ### FR-3: 会话级持久化
 
@@ -78,17 +89,17 @@ verdict: pass
 
 ### FR-4: 取消行为
 
-**FR-4.1** 用户在**首屏入口**（FR-2.1）选择 `取消` 时：
+**FR-4.1** 用户在**主视图**（FR-2.1）选 `✗ 取消` 虚拟项或按 Esc 时：
 - **取消本次 subagent 调用**：`execute` 抛错，错误信息明确写「用户主动取消了模型确认，不要重试，请向用户说明情况」。
 - **不标记已确认**：`categoryConfirmed` 保持 `false`，下次 subagent 调用会再次弹窗。
-- **不写入任何 perCategory**（首屏取消发生在逐 category 选择之前，无部分写入）。
+- **不写入任何 perCategory**（取消发生在提交之前，组件内的修改未持久化）。
 - 不影响其它工具调用或主对话。
 
 **FR-4.2 LLM 重试闭环**：取消错误信息中明确提示「不要重试」，依靠 LLM 遵守指令。不做退避机制（YAGNI）。若反复出现弹窗-取消，用户可通过 `/subagents config` 现有入口调整，或选「全部用默认并记住」跳过。
 
 ### FR-5: 交互入口（UI 能力）
 
-**FR-5.1** 通过 `subagent` 工具 `execute` 的第 5 参数 `ctx: ExtensionContext` 获取 `ctx.ui`（`ExtensionUIContext`），使用其 `select`/`input`/`notify` 方法在 TUI input 区域交互（与 `/subagents config` config-wizard 同一套 UI 能力）。
+**FR-5.1** 通过 `subagent` 工具 `execute` 的第 5 参数 `ctx: ExtensionContext` 获取 `ctx.ui`（`ExtensionUIContext`），调用 `ctx.ui.custom(factory, {overlay:false})` 在 TUI input 区域渲染自定义确认组件（FR-2）。组件 factory 接收 `(tui, theme, keybindings, done)`。
 
 **FR-5.2** `ctx.hasUI === false`（RPC/print 模式）时**完全避免调用 ctx.ui.\***，跳过整个确认流程，直接执行 subagent。不能假设 RPC 模式的 ui 实现会优雅返回（见 tracing G-018）。
 
@@ -106,19 +117,19 @@ verdict: pass
 | ID | 变更 | 文件 |
 |----|------|------|
 | IC-1 | `subagent-tool.ts` 的 `execute` 补第 5 参数 `ctx: ExtensionContext` | `src/tools/subagent-tool.ts` |
-| IC-2 | 新写「批量逐 category 确认」组件（provider→model→thinking 级联 + `(current)` 置顶伪预选 + 中途 Esc 跳过 + 批量跳过），**不直接复用** `editCategoryModel`（后者无保留/跳过能力） | `src/tui/`（新文件） |
+| IC-2 | 新写「category-confirm 自定义组件」（extends Container，handleInput 状态机：category 平铺主视图 + model 二级菜单 + 自定义 fuzzy filter + thinking 子菜单）。通过 `ctx.ui.custom(factory)` 渲染。**不直接复用** `editCategoryModel` | `src/tui/category-confirm.ts`（重写） |
 | IC-3 | `SessionModelState` 新增 `categoryConfirmed: boolean` 字段 | `src/types.ts` |
 | IC-4 | `serializeState` / `restoreState` / `createSessionModelState` 同步处理 `categoryConfirmed` | `src/state/session-model-state.ts` |
 | IC-5 | `SubagentRuntime` 新增「批量写 perCategory + 标记已确认（同一次 persistState）」方法 | `src/runtime.ts` |
-| IC-6 | `subagent-tool.ts` 在 assertAgentExists 之后、effectiveWait 之前插入确认拦截（调 IC-2 组件，读 `sessionState.categoryConfirmed`） | `src/tools/subagent-tool.ts` |
-| IC-7 | 批量解析所有 category 当前模型的 helper（遍历 `globalConfig.categories` 跑 mergeConfig/resolve） | `src/tui/`（新文件或 resolution/） |
+| IC-6 | `subagent-tool.ts` 在 assertAgentExists 之后、effectiveWait 之前插入确认拦截：调 `ctx.ui.custom(CategoryConfirmComponent factory)`，读 `sessionState.categoryConfirmed` | `src/tools/subagent-tool.ts` |
+| IC-7 | 批量解析所有 category 当前模型的 helper（遍历 `globalConfig.categories` 跑 mergeConfig） | `src/tui/batch-model-resolver.ts`（已实现，复用） |
 
 ## Acceptance Criteria
 
 ### AC-1: 首次确认触发（sync 模式）
 **Given** 全新 session，`ctx.hasUI=true`，`categoryConfirmed=false`
 **When** LLM 调用 `subagent` 工具（sync 模式）
-**Then** 在 subagent 实际执行前弹出确认弹窗（input 区）；用户完成确认前 subagent 不执行。
+**Then** 在 subagent 实际执行前于 input 区渲染确认组件（`ctx.ui.custom`）；用户完成确认前 subagent 不执行。
 
 ### AC-2: 首次确认触发（background 模式）
 **Given** 同 AC-1
@@ -131,23 +142,23 @@ verdict: pass
 **Then** 不再弹窗，直接用确认结果（或配置默认）执行。
 
 ### AC-4: 取消则取消本次调用
-**Given** 首屏确认弹窗已弹出
-**When** 用户在首屏选择 `取消` 或 Esc
-**Then** 本次 subagent 调用被取消（execute 抛错，错误信息含「用户主动取消，不要重试」）；`categoryConfirmed` 仍为 `false`；下次 subagent 调用重新弹窗；不写入任何 perCategory。
+**Given** 确认组件已渲染（主视图）
+**When** 用户移到 `✗ 取消` 虚拟项 + Enter，或按 Esc
+**Then** 本次 subagent 调用被取消（execute 抛错，错误信息含「用户主动取消，不要重试」）；`categoryConfirmed` 仍为 `false`；下次 subagent 调用重新渲染组件；不写入任何 perCategory。
 
 ### AC-5: RPC 模式跳过
 **Given** `ctx.hasUI=false`
 **When** `subagent` 工具调用
 **Then** 不弹窗，不调用 ctx.ui.\*，直接执行。
 
-### AC-6: 全部用默认并记住
-**Given** 首屏确认弹窗已弹出
-**When** 用户选择 `全部用默认并记住`
+### AC-6: 不改任何 category 直接完成
+**Given** 确认组件主视图已渲染
+**When** 用户不改任何 category，直接移到 `✓ 完成确认` + Enter
 **Then** 所有 category 保留当前配置模型（不写 perCategory 覆盖）；`categoryConfirmed=true`；后续不弹窗。
 
 ### AC-7: 模型选择写入会话级
-**Given** 用户在逐个确认中为某 category 选择了新模型
-**When** 确认走完
+**Given** 用户在某 category 的二级菜单中选了新模型
+**When** 返回主视图后移到 `✓ 完成确认` + Enter 提交
 **Then** 新模型写入 `sessionState.perCategory[category]`（与 `categoryConfirmed=true` 在同一次 persistState）；后续该 category 的 subagent 调用使用新模型；**不修改全局 config.json**。
 
 ### AC-8: 持久化与恢复（resume）
@@ -165,15 +176,15 @@ verdict: pass
 **When** 通过 `workflow-run` 工具触发 workflow（其内部调 runtime.runAgent）
 **Then** 不触发本功能的确认弹窗（workflow 有自己的机制）。
 
-### AC-11: (current) 置顶伪预选
-**Given** 逐个确认流程，某 category 的 provider 选择步
-**When** 弹出 provider 列表
-**Then** 当前 provider 作为 options 第一项并标注 `(current)`；用户直接回车 = 保留当前；上下移动可选其它。
+### AC-11: 主视图平铺 + 下划线
+**Given** 确认组件主视图已渲染
+**When** 渲染 category 行
+**Then** 每个 category 的当前模型用下划线标注；选中行青色高亮 + `→`；已改行绿色 ✱ + 「(已修改)」；底部有 `✓ 完成确认`/`✗ 取消` 虚拟项。
 
-### AC-12: 中途 Esc 跳过当前 category
-**Given** 逐个确认流程中，某 category 的 provider/model 选择步
+### AC-12: 二级菜单 Esc 返回主视图
+**Given** 在某 category 的二级菜单（model 选择）中
 **When** 用户按 Esc
-**Then** 仅跳过该 category（保留其当前模型），继续下一个 category；不取消整个流程；已处理的 category 选择保留。
+**Then** 返回主视图，不写入该 category 的修改（保留其之前状态）；不取消整个流程。
 
 ### AC-13: fork 继承状态
 **Given** 原 session `categoryConfirmed=true`
@@ -188,7 +199,7 @@ verdict: pass
 ## Constraints
 
 - **语言/运行时**：TypeScript（`type: module`），Node.js，jiti 运行时加载。
-- **UI 能力**：仅用 `ExtensionUIContext` 的 `select`/`input`/`notify`（与 config-wizard 同源），不引入新的 TUI 组件库依赖。预选通过 `(current)` 置顶伪预选实现，不用 `ctx.ui.custom()` 自建组件。
+- **UI 能力**：用 `ctx.ui.custom(factory)` 渲染自定义组件（pi-tui 的 Container/Text/SelectList/Input）。不引入 config-wizard 外的新 TUI 库依赖（pi-tui 已是项目依赖）。
 - **不修改全局配置**：确认结果只写会话级（`sessionState.perCategory`），绝不写 `~/.pi/agent/subagents/config.json`。
 - **不破坏现有 5 级配置链**：确认结果作为 per-category 覆盖插入链中（优先级第 3 级），不改变 mergeConfig/resolveModelForAgent 的既有逻辑。
 - **mock 兼容**：新增的 UI 交互需在 `mocks/pi-tui.ts` 桩下可测试。
