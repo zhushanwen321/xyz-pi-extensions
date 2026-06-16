@@ -283,8 +283,11 @@ export class SubagentResultComponent implements Component {
     this._theme = theme;
   }
 
-  update(details: SubagentToolDetails): void {
+  update(details: SubagentToolDetails, theme?: ThemeLike): void {
     this._details = details;
+    // theme 可选刷新：用户 /theme 切换后，复用实例拿到新 theme 引用。
+    // 不传时保留旧 theme（向后兼容 renderSubagentResult 仅传 details 的场景）。
+    if (theme) this._theme = theme;
   }
 
   setExpanded(expanded: boolean): void {

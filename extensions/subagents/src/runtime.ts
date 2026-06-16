@@ -250,7 +250,7 @@ export class SubagentRuntime {
         id: widgetId,
         agent: source.agent,
         status: source.status as CompletedAgentRecord["status"],
-        eventLog: source.eventLog,
+        eventLog: source.eventLog.slice(),
         turns: source.turns,
         totalTokens: source.totalTokens,
         result: undefined,
@@ -420,7 +420,7 @@ export class SubagentRuntime {
             updateStateFromEvent(state, event);
           }
           this._runningAgents.set(widgetId, state);
-          this.notifyChange();
+          if (shouldTriggerUpdate(event)) this.notifyChange();
         }
       },
     };
@@ -640,8 +640,8 @@ export class SubagentRuntime {
         if (shouldTriggerUpdate(event)) {
           // FR-2.5: 回流给调用方（对话流 block 实时刷新）——用 executionStateToDetails 投影
           throttledUserUpdate(executionStateToDetails(state));
+          this.notifyChange();
         }
-        this.notifyChange();
       },
     })
       .then((result) => {

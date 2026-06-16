@@ -832,4 +832,42 @@ describe("renderSubagentResult — seed-frame spinner（无 setInterval，Bug #1
       vi.useRealTimers();
     }
   });
+
+  // P1a: renderResult 复用 SubagentResultComponent（SDK 通过 context.lastComponent 传回上次实例）
+  it("P1a: context.lastComponent 为 SubagentResultComponent 时复用同一实例", () => {
+    const state = initialToolState();
+    const invalidate = vi.fn();
+    const details1 = { eventLog: [], status: "running" as const, agent: "w", turns: 1, totalTokens: 100, elapsedSeconds: 5 };
+    // 第一次调用：无 lastComponent → new 一个
+    const comp1 = renderSubagentResult(
+      { content: [{ type: "text", text: "" }], details: details1 },
+      { expanded: false, isPartial: true },
+      fakeTheme,
+      { state, invalidate },
+    );
+    // 第二次调用：传入上次返回的实例作为 lastComponent → 应复用
+    const details2 = { eventLog: [], status: "running" as const, agent: "w", turns: 2, totalTokens: 200, elapsedSeconds: 10 };
+    const comp2 = renderSubagentResult(
+      { content: [{ type: "text", text: "" }], details: details2 },
+      { expanded: false, isPartial: true },
+      fakeTheme,
+      { state, invalidate, lastComponent: comp1 },
+    );
+    expect(comp2).toBe(comp1); // 同一实例引用
+  });
+
+  it("P1a: context.lastComponent 为其他类型时降级 new（不强行复用）", () => {
+    const state = initialToolState();
+    const invalidate = vi.fn();
+    // 模拟 SDK 传入一个非 SubagentResultComponent 的 lastComponent（理论上不会发生，但防御）
+    const fakeLast = { render: () => [""] } as never;
+    const comp = renderSubagentResult(
+      { content: [{ type: "text", text: "" }], details: { eventLog: [], status: "running", agent: "w", turns: 0, totalTokens: 0, elapsedSeconds: 0 } },
+      { expanded: false, isPartial: false },
+      fakeTheme,
+      { state, invalidate, lastComponent: fakeLast },
+    );
+    // 不是 fakeLast，而是 new 出来的 SubagentResultComponent
+    expect(comp).not.toBe(fakeLast);
+  });
 });

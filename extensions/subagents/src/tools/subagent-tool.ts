@@ -16,6 +16,7 @@
 //   - failed 时：toolErrorBg（eventLog + error）
 //   eventLog 不带 ⎿ 前缀，直接显示 label + icon。
 
+import type { Component } from "@earendil-works/pi-tui";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
@@ -53,24 +54,46 @@ export function initialToolState(): SubagentToolState {
   return {};
 }
 
+/** renderResult 的 context 类型。SDK 实际传入 12 个字段（tool-execution.js getRenderContext），
+ *  这里声明我们用到的子集 + P1a 新增的 lastComponent。结构类型允许窄类型接收宽对象。 */
+export interface SubagentRenderContext {
+  state: SubagentToolState;
+  invalidate(): void;
+  /** P1a: SDK 在每次 renderResult 调用前传入上一次返回的组件实例，供复用。 */
+  lastComponent?: Component;
+}
+
 /**
- * FR-2.3: renderResult——构造 SubagentResultComponent。
+ * FR-2.3: renderResult——构造或复用 SubagentResultComponent。
+ * P1a 优化：SDK 通过 context.lastComponent 传回上一次返回的组件实例。
+ * 若类型匹配则调 update() 复用（省掉 new + details 引用切换的 GC 压力），
+ * 与 SDK 内置工具 ls/grep/edit 的复用模式一致（ls.js:160、edit.js:65）。
  * 不再管理任何定时器：spinner 由 detailsSeed(details) 在 render 时计算。
  */
 export function renderSubagentResult(
   result: AgentToolResult<SubagentToolDetails>,
   options: { expanded: boolean; isPartial: boolean },
   theme: { bg(color: string, text: string): string; fg(color: string, text: string): string; bold(text: string): string },
-  _context: { state: SubagentToolState; invalidate(): void },
+  context: SubagentRenderContext,
 ): SubagentResultComponent {
   const details = result.details;
   if (!details || typeof details.status !== "string") {
     // 防御：Pi 运行时理论上必传 details（SDK 契约 details: T 必选），
     // 但历史上有空对象传入的场景。结构检查 + fallback 避免崩溃。
+    // fallback 不复用 lastComponent（details 缺失时上一帧也可能是异常状态）。
     return new SubagentResultComponent(
       { eventLog: [], status: "done", agent: "default", turns: 0, totalTokens: 0, elapsedSeconds: 0 },
       theme,
     );
+  }
+
+  // P1a: 复用上次返回的 SubagentResultComponent 实例（SDK 已传回 context.lastComponent）。
+  // update() 刷新 details + theme 引用，setExpanded 同步展开状态。
+  if (context.lastComponent instanceof SubagentResultComponent) {
+    const comp = context.lastComponent;
+    comp.update(details, theme);
+    comp.setExpanded(options.expanded);
+    return comp;
   }
 
   const comp = new SubagentResultComponent(details, theme);
@@ -193,7 +216,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
     renderCall(
       _args: unknown,
       theme: Theme,
-      context: { state: SubagentToolState; invalidate(): void },
+      context: SubagentRenderContext,
     ) {
       return renderSubagentCall(_args, theme, context);
     },
@@ -203,7 +226,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       result: AgentToolResult<SubagentToolDetails>,
       options: { expanded: boolean; isPartial: boolean },
       theme: Theme,
-      context: { state: SubagentToolState; invalidate(): void },
+      context: SubagentRenderContext,
     ) {
       return renderSubagentResult(result, options, theme, context);
     },

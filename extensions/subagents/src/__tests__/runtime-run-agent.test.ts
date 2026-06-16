@@ -301,4 +301,39 @@ describe("SubagentRuntime.runAgent", () => {
     expect(running).toHaveLength(1);
     expect(running[0].status).toBe("failed");
   });
+
+  // ── P1b: onEvent 中 notifyChange 按 shouldTriggerUpdate 过滤 ──────
+  // 验证 streaming delta（text_delta/thinking_delta）不触发 notifyChange，
+  // 离散边界事件（tool_start/turn_end/message_end）触发。
+  // 用 mockImplementation 捕获 finalOpts.onEvent 并手动驱动事件流。
+  it("P1b: streaming delta 不触发 notifyChange，边界事件触发", async () => {
+    const listener = vi.fn();
+    runtime.onChange(listener);
+
+    let capturedOnEvent: ((event: { type: string }) => void) | undefined;
+    coreRunAgentMock.mockImplementation(async (opts) => {
+      capturedOnEvent = opts.onEvent as typeof capturedOnEvent;
+      return successResult();
+    });
+
+    const runPromise = runtime.runAgent(baseOpts);
+    // 等 mockImplementation 执行，捕获 onEvent
+    await vi.waitFor(() => expect(capturedOnEvent).toBeDefined());
+
+    const callsBefore = listener.mock.calls.length;
+    // streaming delta：不应触发 notifyChange
+    capturedOnEvent!({ type: "text_delta" });
+    capturedOnEvent!({ type: "thinking_delta" });
+    capturedOnEvent!({ type: "text_delta" });
+    expect(listener.mock.calls.length).toBe(callsBefore);
+
+    // 边界事件：应触发 notifyChange
+    capturedOnEvent!({ type: "tool_start" });
+    expect(listener.mock.calls.length).toBe(callsBefore + 1);
+
+    capturedOnEvent!({ type: "turn_end" });
+    expect(listener.mock.calls.length).toBe(callsBefore + 2);
+
+    await runPromise;
+  });
 });

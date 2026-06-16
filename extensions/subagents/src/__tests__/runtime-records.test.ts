@@ -59,6 +59,47 @@ describe("SubagentRuntime — record retention (FR-3.0)", () => {
     expect(spy.calls.length).toBe(1);
     unsub();
   });
+
+  // P2: scheduleSyncArchive 归档时浅拷贝 eventLog，断开与 state.eventLog 的数组引用。
+  // 防御未来对 state.eventLog 的后续 mutation 意外改到归档记录。
+  it("P2: scheduleSyncArchive 浅拷贝 eventLog，归档副本独立于 state.eventLog", () => {
+    vi.useFakeTimers();
+    try {
+      const rt = makeRuntime();
+      const state = createExecutionState("run-p2", {
+        agent: "worker", model: "test/model", startedAt: 100,
+      });
+      state.eventLog.push(
+        { type: "tool_start", label: "read a.ts", ts: 1, status: "running" },
+        { type: "tool_end", label: "read a.ts", ts: 2, status: "done" },
+      );
+      rt["_runningAgents"].set("run-p2", state);
+
+      // 触发归档调度（scheduleSyncArchive 是 private，直接调）
+      (rt as never as { scheduleSyncArchive: (id: string, s: typeof state, t: number) => void })
+        .scheduleSyncArchive("run-p2", state, 100);
+
+      // 推进 linger timer（WIDGET_LINGER_MS=5000）
+      vi.advanceTimersByTime(5000);
+
+      const completed = rt.listCompleted();
+      expect(completed).toHaveLength(1);
+      expect(completed[0].id).toBe("run-p2");
+
+      // P2 核心断言：归档的 eventLog 不是 state.eventLog 的同一数组引用
+      expect(completed[0].eventLog).not.toBe(state.eventLog);
+      // 内容相等（浅拷贝保留了 entry 对象）
+      expect(completed[0].eventLog).toEqual(state.eventLog);
+
+      // 验证断开：向 state.eventLog push 新条目不影响归档副本
+      const archivedLenBefore = completed[0].eventLog.length;
+      state.eventLog.push({ type: "thinking", label: "later mutation", ts: 99 });
+      expect(completed[0].eventLog.length).toBe(archivedLenBefore); // 归档副本不变
+      expect(state.eventLog.length).toBe(archivedLenBefore + 1);    // state 变了
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ============================================================
