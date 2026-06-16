@@ -332,6 +332,19 @@ export class SubagentRuntime {
     this.persistState();
   }
 
+  /**
+   * FR-3.1: 原子批量写 — 将确认结果（多个 perCategory 覆盖）+ 标记 categoryConfirmed
+   * 在同一次 persistState 中完成。避免分多次 persistState 产生多条 entry
+   * 导致 restoreFromEntries 取最新条时字段不一致（tracing G-010）。
+   */
+  applyCategoryConfirm(result: { action: "confirmed" | "use-default"; overrides: Record<string, { model: string; thinkingLevel?: string }> }): void {
+    for (const [category, val] of Object.entries(result.overrides)) {
+      setCategoryModel(this.sessionState, category, val.model, val.thinkingLevel);
+    }
+    this.sessionState.categoryConfirmed = true;
+    this.persistState();
+  }
+
   registerCategory(name: string, defaults: CategoryDefinition): void {
     this.globalConfig.categories[name] = defaults;
   }
