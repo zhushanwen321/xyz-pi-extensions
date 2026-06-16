@@ -9,6 +9,8 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+
 import type { AgentResult, BackgroundHandle, BackgroundStatus } from "../types.ts";
 
 // vi.mock 被 vitest 自动 hoist 到所有 import 之前。
@@ -54,6 +56,7 @@ interface CapturedTool {
     params: Record<string, unknown>,
     signal?: AbortSignal,
     onUpdate?: (partial: ExecuteResult) => void,
+    ctx?: Partial<ExtensionContext>,
   ) => Promise<ExecuteResult>;
 }
 
@@ -65,6 +68,9 @@ interface MockRuntime {
   getAgentConfig: ReturnType<typeof vi.fn>;
   resolveModelForAgent: ReturnType<typeof vi.fn>;
   assertAgentExists: ReturnType<typeof vi.fn>;
+  sessionState: { categoryConfirmed: boolean; perCategory: Record<string, { model: string; thinkingLevel?: string }>; yoloMode: boolean; perAgent: Record<string, { model: string; thinkingLevel?: string }> };
+  applyCategoryConfirm: ReturnType<typeof vi.fn>;
+  globalConfig: { categories: Record<string, { label: string; model: string; thinkingLevel?: string }> };
 }
 
 // ============================================================
@@ -96,6 +102,10 @@ function makeMockRuntime(overrides: Partial<MockRuntime> = {}): MockRuntime {
     resolveModelForAgent: overrides.resolveModelForAgent ?? vi.fn(() => ({ model: { id: "anthropic/claude-sonnet-4.5" }, thinkingLevel: "medium" })),
     // FR-9.9: 默认 no-op（agent 名校验通过）。测试可 override 为 throw。
     assertAgentExists: overrides.assertAgentExists ?? vi.fn(),
+    // 首次 category 确认拦截相关默认值
+    sessionState: overrides.sessionState ?? { categoryConfirmed: false, perCategory: {}, yoloMode: false, perAgent: {} },
+    applyCategoryConfirm: overrides.applyCategoryConfirm ?? vi.fn(),
+    globalConfig: overrides.globalConfig ?? { categories: { coding: { label: "编码", model: "p/m" } } },
   };
 }
 
@@ -598,6 +608,70 @@ describe("subagent tool execute()", () => {
   });
 
   // Wave 5: _render / buildSubagentRender / mapRenderStatus tests deleted (dead code removed).
+
+  // ── 首次 category 模型确认拦截 ──────────────────────────────
+  it("categoryConfirmed=true → 跳过确认直接执行", async () => {
+    const mockRt = makeMockRuntime({
+      sessionState: { categoryConfirmed: true, perCategory: {}, yoloMode: false, perAgent: {} },
+      runAgent: vi.fn(async () => successResult()),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+    const tool = captureTool();
+    const ctx = { hasUI: true, ui: { select: vi.fn() } } as unknown as Partial<ExtensionContext>;
+    await tool.execute("call-1", { task: "do X", agent: "worker" }, undefined, undefined, ctx);
+    expect((ctx.ui as { select: ReturnType<typeof vi.fn> }).select).not.toHaveBeenCalled();
+  });
+
+  it("hasUI=false → 跳过确认直接执行", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async () => successResult()),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+    const tool = captureTool();
+    const ctx = { hasUI: false } as unknown as Partial<ExtensionContext>;
+    await tool.execute("call-1", { task: "do X", agent: "worker" }, undefined, undefined, ctx);
+    expect(mockRt.applyCategoryConfirm).not.toHaveBeenCalled();
+  });
+
+  it("首次确认 cancel → execute 抛错含'取消'，不调 runAgent", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async () => successResult()),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+    const tool = captureTool();
+    const ctx = {
+      hasUI: true,
+      modelRegistry: { getAvailable: () => [] },
+      ui: {
+        select: vi.fn(async () => "取消"),
+        notify: vi.fn(),
+      },
+    } as unknown as Partial<ExtensionContext>;
+    await expect(
+      tool.execute("call-1", { task: "do X", agent: "worker" }, undefined, undefined, ctx),
+    ).rejects.toThrow(/取消/);
+    expect(mockRt.runAgent).not.toHaveBeenCalled();
+    expect(mockRt.applyCategoryConfirm).not.toHaveBeenCalled();
+  });
+
+  it("首次确认 use-default → applyCategoryConfirm 后继续执行", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async () => successResult()),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+    const tool = captureTool();
+    const ctx = {
+      hasUI: true,
+      modelRegistry: { getAvailable: () => [] },
+      ui: {
+        select: vi.fn(async () => "全部用默认并记住"),
+        notify: vi.fn(),
+      },
+    } as unknown as Partial<ExtensionContext>;
+    await tool.execute("call-1", { task: "do X", agent: "worker" }, undefined, undefined, ctx);
+    expect(mockRt.applyCategoryConfirm).toHaveBeenCalledWith({ action: "use-default", overrides: {} });
+    expect(mockRt.runAgent).toHaveBeenCalled();
+  });
 });
 
 // Wave 5: buildSubagentRender + mapRenderStatus describe block deleted (functions removed).

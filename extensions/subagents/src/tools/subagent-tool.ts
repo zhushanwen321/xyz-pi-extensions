@@ -16,15 +16,17 @@
 //   - failed 时：toolErrorBg（eventLog + error）
 //   eventLog 不带 ⎿ 前缀，直接显示 label + icon。
 
-import type { AgentToolResult, ExtensionAPI, Theme } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 
 import { getRuntime } from "../runtime.ts";
+import { resolveAllCategoryModels } from "../tui/batch-model-resolver.ts";
+import { runCategoryConfirm } from "../tui/category-confirm.ts";
 import { formatTokens } from "../tui/format.ts";
 import { completeState, createExecutionState, executionStateToDetails, updateStateFromEvent } from "../state/execution-state.ts";
 import { renderSubagentCall, SubagentResultComponent, type SubagentToolDetails } from "../tui/subagent-render.ts";
-import type { AgentEvent } from "../types.ts";
+import type { AgentEvent, ModelInfo } from "../types.ts";
 
 /** ms to seconds conversion */
 const MS_PER_SECOND = 1000;
@@ -222,6 +224,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       },
       signal: AbortSignal | undefined,
       onUpdate?: (partialResult: AgentToolResult<SubagentToolDetails>) => void,
+      ctx?: ExtensionContext,
     ) {
       const rt = getRuntime();
       if (!rt) {
@@ -283,6 +286,29 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       // FR-9.9: 校验 agent 名存在——不存在则 fail-fast，避免 unknown agent 静默运行为
       // 无 systemPrompt/toolFilter 的 generic agent（浪费 token + 无错误反馈）。
       rt.assertAgentExists(params.agent);
+
+      // ── 首次 category 模型确认拦截（FR-1 / FR-2）──
+      // 在 assertAgentExists 之后、effectiveWait 判定之前，使 sync/background 两模式都覆盖，
+      // 且位于 backgroundId 查询分支（已 return）之后，查询模式不触发。
+      // ctx 缺失（旧测试/非工具调用路径）或 hasUI=false（RPC/print）时跳过，直接执行。
+      if (ctx?.hasUI && !rt.sessionState.categoryConfirmed) {
+        const currentModels = resolveAllCategoryModels(rt.globalConfig, rt.sessionState);
+        const available: ModelInfo[] = ctx.modelRegistry.getAvailable();
+        const confirmResult = await runCategoryConfirm(
+          { select: (t, o) => ctx.ui.select(t, o), notify: (m) => ctx.ui.notify(m) },
+          rt.globalConfig,
+          rt.sessionState,
+          available,
+          currentModels,
+        );
+        if (confirmResult.action === "cancelled") {
+          throw new Error(
+            "用户主动取消了模型确认，不要重试本次 subagent 调用。请向用户说明情况并等待用户指示。",
+          );
+        }
+        // confirmResult.action 已排除 "cancelled"（上方 throw），TS 需显式收窄类型。
+        rt.applyCategoryConfirm({ action: confirmResult.action, overrides: confirmResult.overrides });
+      }
 
       // FR-O2.2: 判定 effective wait（显式 params.wait > agent.defaultBackground > 默认 sync）
       let effectiveWait: boolean;
