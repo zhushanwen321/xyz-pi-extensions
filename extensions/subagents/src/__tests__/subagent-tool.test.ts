@@ -609,7 +609,7 @@ describe("subagent tool execute()", () => {
 
   // Wave 5: _render / buildSubagentRender / mapRenderStatus tests deleted (dead code removed).
 
-  // ── 首次 category 模型确认拦截 ──────────────────────────────
+  // ── 首次 category 模型确认拦截（ctx.ui.custom）──────────────
   it("categoryConfirmed=true → 跳过确认直接执行", async () => {
     const mockRt = makeMockRuntime({
       sessionState: { categoryConfirmed: true, perCategory: {}, yoloMode: false, perAgent: {} },
@@ -617,9 +617,10 @@ describe("subagent tool execute()", () => {
     });
     mockedGetRuntime.mockReturnValue(mockRt as never);
     const tool = captureTool();
-    const ctx = { hasUI: true, ui: { select: vi.fn() } } as unknown as Partial<ExtensionContext>;
+    const custom = vi.fn();
+    const ctx = { hasUI: true, ui: { custom } } as unknown as Partial<ExtensionContext>;
     await tool.execute("call-1", { task: "do X", agent: "worker" }, undefined, undefined, ctx);
-    expect((ctx.ui as { select: ReturnType<typeof vi.fn> }).select).not.toHaveBeenCalled();
+    expect(custom).not.toHaveBeenCalled();
   });
 
   it("hasUI=false → 跳过确认直接执行", async () => {
@@ -633,43 +634,29 @@ describe("subagent tool execute()", () => {
     expect(mockRt.applyCategoryConfirm).not.toHaveBeenCalled();
   });
 
-  it("首次确认 cancel → execute 抛错含'取消'，不调 runAgent", async () => {
+  it("custom 返回 cancelled → execute 抛错含'取消'，不调 runAgent", async () => {
     const mockRt = makeMockRuntime({
       runAgent: vi.fn(async () => successResult()),
     });
     mockedGetRuntime.mockReturnValue(mockRt as never);
     const tool = captureTool();
-    const ctx = {
-      hasUI: true,
-      modelRegistry: { getAvailable: () => [] },
-      ui: {
-        select: vi.fn(async () => "取消"),
-        notify: vi.fn(),
-      },
-    } as unknown as Partial<ExtensionContext>;
-    await expect(
-      tool.execute("call-1", { task: "do X", agent: "worker" }, undefined, undefined, ctx),
-    ).rejects.toThrow(/取消/);
+    const custom = vi.fn(async () => ({ action: "cancelled", overrides: {} }));
+    const ctx = { hasUI: true, modelRegistry: { getAvailable: () => [] }, ui: { custom } } as unknown as Partial<ExtensionContext>;
+    await expect(tool.execute("call-1", { task: "do X", agent: "worker" }, undefined, undefined, ctx)).rejects.toThrow(/取消/);
     expect(mockRt.runAgent).not.toHaveBeenCalled();
     expect(mockRt.applyCategoryConfirm).not.toHaveBeenCalled();
   });
 
-  it("首次确认 use-default → applyCategoryConfirm 后继续执行", async () => {
+  it("custom 返回 confirmed（无改动）→ applyCategoryConfirm 后继续执行", async () => {
     const mockRt = makeMockRuntime({
       runAgent: vi.fn(async () => successResult()),
     });
     mockedGetRuntime.mockReturnValue(mockRt as never);
     const tool = captureTool();
-    const ctx = {
-      hasUI: true,
-      modelRegistry: { getAvailable: () => [] },
-      ui: {
-        select: vi.fn(async () => "全部用默认并记住"),
-        notify: vi.fn(),
-      },
-    } as unknown as Partial<ExtensionContext>;
+    const custom = vi.fn(async () => ({ action: "confirmed", overrides: {} }));
+    const ctx = { hasUI: true, modelRegistry: { getAvailable: () => [] }, ui: { custom } } as unknown as Partial<ExtensionContext>;
     await tool.execute("call-1", { task: "do X", agent: "worker" }, undefined, undefined, ctx);
-    expect(mockRt.applyCategoryConfirm).toHaveBeenCalledWith({ action: "use-default", overrides: {} });
+    expect(mockRt.applyCategoryConfirm).toHaveBeenCalledWith({ action: "confirmed", overrides: {} });
     expect(mockRt.runAgent).toHaveBeenCalled();
   });
 });

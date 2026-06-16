@@ -33,6 +33,7 @@ declare module "@mariozechner/pi-coding-agent" {
 			theme: Theme;
 			custom<T = void>(factory: (tui: any, theme: any, kb: any, done: (result: T) => void) => any, options?: { overlay?: boolean; overlayOptions?: Record<string, unknown> }): Promise<T>;
 		};
+		theme: Theme;
 		model: any;
 		signal: AbortSignal | undefined;
 		isIdle(): boolean;
@@ -179,6 +180,9 @@ declare module "@mariozechner/pi-tui" {
 		children: any[];
 		constructor(children?: any[]);
 		addChild(child: any): void;
+		removeChild(child: any): void;
+		clear(): void;
+		invalidate(): void;
 	}
 	export class Spacer {
 		constructor(size?: number);
@@ -200,6 +204,45 @@ declare module "@mariozechner/pi-tui" {
 		enter: string; space: string; tab: string; backspace: string; delete: string;
 		ctrl(k: string): string; shift(k: string): string; alt(k: string): string;
 	};
+	export interface SelectItem {
+		value: string;
+		label: string;
+		description?: string;
+	}
+	export interface SelectListTheme {
+		selectedPrefix: (text: string) => string;
+		selectedText: (text: string) => string;
+		description: (text: string) => string;
+		scrollInfo: (text: string) => string;
+		noMatch: (text: string) => string;
+	}
+	export class SelectList {
+		constructor(items: SelectItem[], maxVisible: number, theme: SelectListTheme, layout?: unknown);
+		onSelect?: (item: SelectItem) => void;
+		onCancel?: () => void;
+		setSelectedIndex(index: number): void;
+		setFilter(filter: string): void;
+		getSelectedItem(): SelectItem | null;
+		handleInput(data: string): void;
+		invalidate(): void;
+		render(width: number): string[];
+	}
+	export class Input {
+		onSubmit?: (value: string) => void;
+		onEscape?: () => void;
+		getValue(): string;
+		setValue(value: string): void;
+		handleInput(data: string): void;
+		invalidate(): void;
+		render(width: number): string[];
+	}
+	export interface KeybindingsManager {
+		matches(data: string, keybinding: string): boolean;
+		getKeys(keybinding: string): string[];
+	}
+	export function getKeybindings(): KeybindingsManager;
+	export function setKeybindings(kb: KeybindingsManager): void;
+	export function fuzzyFilter<T>(items: T[], query: string, getText: (item: T) => string): T[];
 }
 
 declare module "@mariozechner/pi-ai" {

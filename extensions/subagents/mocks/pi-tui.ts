@@ -172,6 +172,16 @@ export class Container {
     this.children.push(child);
   }
 
+  removeChild(child: unknown): void {
+    this.children = this.children.filter((c) => c !== child);
+  }
+
+  clear(): void {
+    this.children = [];
+  }
+
+  invalidate(): void {}
+
   render(width: number): string[] {
     const lines: string[] = [];
     for (const child of this.children) {
@@ -179,6 +189,116 @@ export class Container {
     }
     return lines;
   }
+}
+
+/** Mock SelectList：渲染可见项，handleInput 改 selectedIndex（↑↓），Enter 触发 onSelect */
+export interface SelectItem {
+  value: string;
+  label: string;
+  description?: string;
+}
+export interface SelectListTheme {
+  selectedPrefix: (text: string) => string;
+  selectedText: (text: string) => string;
+  description: (text: string) => string;
+  scrollInfo: (text: string) => string;
+  noMatch: (text: string) => string;
+}
+export class SelectList {
+  items: SelectItem[];
+  private selectedIndex = 0;
+  private filter = "";
+  onSelect?: (item: SelectItem) => void;
+  onCancel?: () => void;
+  constructor(items: SelectItem[], _maxVisible: number, _theme: SelectListTheme) {
+    this.items = items;
+  }
+  setSelectedIndex(i: number): void {
+    this.selectedIndex = Math.max(0, Math.min(Math.max(0, this.items.length - 1), i));
+  }
+  setFilter(f: string): void {
+    this.filter = f;
+  }
+  getSelectedItem(): SelectItem | null {
+    return this.items[this.selectedIndex] ?? null;
+  }
+  handleInput(data: string): void {
+    if (data === "k" || data === "\x1b[A") this.setSelectedIndex(this.selectedIndex - 1);
+    else if (data === "j" || data === "\x1b[B") this.setSelectedIndex(this.selectedIndex + 1);
+    else if (data === "\r" || data === "\n") {
+      const item = this.getSelectedItem();
+      if (item) this.onSelect?.(item);
+    }
+  }
+  invalidate(): void {}
+  render(_width: number): string[] {
+    return this.items.map((it, i) => (i === this.selectedIndex ? `→ ${it.label}` : `  ${it.label}`));
+  }
+}
+
+/** Mock Input：单行文本，handleInput 处理可打印字符/backspace/enter/esc */
+export class Input {
+  private value = "";
+  onSubmit?: (value: string) => void;
+  onEscape?: () => void;
+  getValue(): string {
+    return this.value;
+  }
+  setValue(v: string): void {
+    this.value = v;
+  }
+  handleInput(data: string): void {
+    if (data === "\r" || data === "\n") {
+      this.onSubmit?.(this.value);
+    } else if (data === "\x1b") {
+      this.onEscape?.();
+    } else if (data === "\x7f" || data === "\b") {
+      this.value = this.value.slice(0, -1);
+    } else if (data.length === 1 && data >= " " && data <= "~") {
+      this.value += data;
+    }
+  }
+  invalidate(): void {}
+  render(_width: number): string[] {
+    return [this.value];
+  }
+}
+
+/** Mock KeybindingsManager + getKeybindings：用原始终端序列匹配 */
+export interface KeybindingsManager {
+  matches(data: string, keybinding: string): boolean;
+  getKeys(keybinding: string): string[];
+}
+function makeKb(): KeybindingsManager {
+  const MAP: Record<string, string[]> = {
+    "tui.select.up": ["\x1b[A", "k"],
+    "tui.select.down": ["\x1b[B", "j"],
+    "tui.select.confirm": ["\r", "\n"],
+    "tui.select.cancel": ["\x1b"],
+  };
+  return {
+    matches(data, keybinding) {
+      return (MAP[keybinding] ?? []).includes(data);
+    },
+    getKeys(keybinding) {
+      return MAP[keybinding] ?? [];
+    },
+  };
+}
+let globalKb: KeybindingsManager | null = null;
+export function getKeybindings(): KeybindingsManager {
+  if (!globalKb) globalKb = makeKb();
+  return globalKb;
+}
+export function setKeybindings(kb: KeybindingsManager): void {
+  globalKb = kb;
+}
+
+/** Mock fuzzyFilter：子串匹配（测试足够） */
+export function fuzzyFilter<T>(items: T[], query: string, getText: (item: T) => string): T[] {
+  const q = query.toLowerCase();
+  if (!q) return items;
+  return items.filter((it) => getText(it).toLowerCase().includes(q));
 }
 
 export class Spacer {
