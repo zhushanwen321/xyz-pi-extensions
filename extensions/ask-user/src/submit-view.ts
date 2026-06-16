@@ -35,12 +35,15 @@ export function getAnswerText(q: Question, s: QuestionState): string | null {
 
 /**
  * 渲染 Submit tab 视图。
+ * focus: 当前在 [Submit]/[Cancel] 上的焦点（←/→ 切换）。
+ *   渲染内嵌按钮栏高亮 focus；help 行更新为 "←/→ toggle · Enter confirm"。
  */
 export function renderSubmitView(
 	questions: Question[],
 	states: QuestionState[],
 	theme: ThemeLike,
 	width: number,
+	focus: "submit" | "cancel" = "submit",
 ): string[] {
 	const t = theme;
 	const lines: string[] = [];
@@ -78,6 +81,20 @@ export function renderSubmitView(
 			.join(", ");
 		add(t.fg("warning", ` Still needed: ${missing}`));
 	}
+
+	// 内嵌按钮栏：[ Submit ]   [ Cancel ]，根据 focus 高亮
+	add("");
+	const isSubmit = focus === "submit";
+	const isCancel = focus === "cancel";
+	const submitBtn = isSubmit
+		? (allDone ? t.fg("success", t.bold(" Submit ")) : t.fg("accent", t.bold(" Submit ")))
+		: (allDone ? t.fg("success", " Submit ") : t.fg("dim", " Submit "));
+	const cancelBtn = isCancel ? t.fg("accent", t.bold(" Cancel ")) : t.fg("muted", " Cancel ");
+	add(`${t.fg("dim", "[")}${submitBtn}${t.fg("dim", "]")}   ${t.fg("dim", "[")}${cancelBtn}${t.fg("dim", "]")}`);
+
+	// Submit tab 帮助行
+	add("");
+	add(t.fg("dim", " ←/→ toggle · Enter confirm · Tab back to first question"));
 
 	return lines;
 }

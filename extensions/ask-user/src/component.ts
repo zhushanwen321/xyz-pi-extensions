@@ -34,6 +34,10 @@ export class AskUserComponent implements Component {
 	private activeTab: number = 0;
 	private editorText: string = "";
 
+	/** Submit tab 上的左右焦点：默认 Submit；← / → 切换；Enter 触发当前项。
+	 *  问题 tab 上无意义（仅视觉占位），不参与输入路由。 */
+	private submitTabFocus: "submit" | "cancel" = "submit";
+
 	/** Esc 在首个问题时进入「确认取消」覆盖层；Esc 再次确认取消，任意键退出覆盖层。 */
 	private pendingCancel: boolean = false;
 
@@ -99,7 +103,7 @@ export class AskUserComponent implements Component {
 			add(t.fg("dim", " Esc confirm cancel · any other key to stay"));
 		} else if (this.activeTab >= this.questions.length) {
 			// Submit tab
-			for (const line of renderSubmitView(this.questions, this.states, t, innerWidth)) add(line);
+			for (const line of renderSubmitView(this.questions, this.states, t, innerWidth, this.submitTabFocus)) add(line);
 		} else {
 			const q = this.questions[this.activeTab]!;
 			const state = this.states[this.activeTab]!;
@@ -108,10 +112,10 @@ export class AskUserComponent implements Component {
 			}
 		}
 
-		// 多问题：底部按钮栏（Submit / Cancel）
-		if (!this.isSingle) {
+		// 多问题：底部按钮栏（Submit / Cancel）。Submit tab 上不重复渲染（renderSubmitView 内嵌 focus 高亮）
+		if (!this.isSingle && this.activeTab < this.questions.length) {
 			inner.push("");
-			this.renderButtonBar(innerWidth, add);
+			this.renderButtonBar(innerWidth, add, null);
 		}
 
 		// 用 box 边框包裹：每行 pad 到 innerWidth 后加 │ 左右边框
@@ -158,14 +162,25 @@ export class AskUserComponent implements Component {
 		add(truncateToWidth(parts.join(""), innerWidth));
 	}
 
-	/** 底部按钮栏：[ Submit ]   [ Cancel ]。多问题时始终可见。 */
-	private renderButtonBar(innerWidth: number, add: (s: string) => void): void {
+	/**
+	 * 底部按钮栏：[ Submit ]   [ Cancel ]。
+	 * focus: null=纯展示（问题 tab），"submit"/"cancel"=高亮对应按钮（Submit tab）。
+	 */
+	private renderButtonBar(
+		innerWidth: number,
+		add: (s: string) => void,
+		focus: "submit" | "cancel" | null,
+	): void {
 		const t = this.theme;
 		const allDone = this.allConfirmed();
-		const submit = allDone
-			? t.fg("success", t.bold(" Submit "))
-			: t.fg("dim", " Submit ");
-		const cancel = t.fg("muted", " Cancel ");
+		const isSubmit = focus === "submit";
+		const isCancel = focus === "cancel";
+		const submit = isSubmit
+			? (allDone ? t.fg("success", t.bold(" Submit ")) : t.fg("accent", t.bold(" Submit ")))
+			: (allDone ? t.fg("success", " Submit ") : t.fg("dim", " Submit "));
+		const cancel = isCancel
+			? t.fg("accent", t.bold(" Cancel "))
+			: t.fg("muted", " Cancel ");
 		add(`${t.fg("dim", "[")}${submit}${t.fg("dim", "]")}   ${t.fg("dim", "[")}${cancel}${t.fg("dim", "]")}`);
 	}
 
@@ -206,12 +221,13 @@ export class AskUserComponent implements Component {
 			return;
 		}
 
-		// Tab / Shift+Tab / ←→ 切换 tab（多问题，options 模式）
-		if (!this.isSingle && (matchesKey(data, "right") || matchesKey(data, "tab"))) {
+		// Tab / Shift+Tab 切换 tab（多问题，options 模式）。←/→ 故意不切 tab——
+		// 把左右键留给 Submit tab 上的 Submit/Cancel 焦点切换，避免在问题列表上意外跳走。
+		if (!this.isSingle && matchesKey(data, "tab")) {
 			this.gotoTab((this.activeTab + 1) % this.totalTabs);
 			return;
 		}
-		if (!this.isSingle && (matchesKey(data, "left") || matchesKey(data, "shift+tab"))) {
+		if (!this.isSingle && matchesKey(data, "shift+tab")) {
 			this.gotoTab((this.activeTab - 1 + this.totalTabs) % this.totalTabs);
 			return;
 		}
@@ -233,8 +249,10 @@ export class AskUserComponent implements Component {
 		const opts = allOptions(q);
 		const onOther = state.cursorIndex === opts.length - 1;
 
-		// Other row → Space opens freeform editor（Tab 留给 tab 间导航）
-		if (onOther && matchesKey(data, "space")) {
+		// Other row → Enter opens freeform editor（单选/多选统一入口）。
+		//   单选/多选普通选项的 Enter 各自有不同语义（确认/加入选中），与 Other 互斥：
+		//   onOther 时本分支先消费 Enter，下面多选/单选分支不再处理。
+		if (onOther && matchesKey(data, "enter")) {
 			state.mode = "freeform";
 			this.editorText = state.freeTextValue ?? "";
 			this.invalidate();
@@ -266,23 +284,46 @@ export class AskUserComponent implements Component {
 		}
 	}
 
+	/**
+	 * Submit tab 输入路由：
+	 * - ← / → → 切换 submitTabFocus（Submit ↔ Cancel 视觉高亮）
+	 * - Enter → 触发当前 focus 项：Submit=allConfirmed 才提交；Cancel=直接取消
+	 * - Tab / → → 环绕到首个问题
+	 * - Esc / Shift+Tab → 回退到最后一个问题
+	 *
+	 * 注意：Submit tab 上 ←/→ 不再切回问题区（与问题 tab 上的"←/→ 不切 tab"对称，
+	 * 避免在 Submit 视图内意外跳走）。
+	 */
 	private handleSubmitTabInput(data: string): void {
-		if (matchesKey(data, "enter") && this.allConfirmed()) {
-			this.submit();
+		// ← / → 切换 focus（Submit ↔ Cancel）。Tab 单独处理（→ 行为）
+		if (matchesKey(data, "left") || matchesKey(data, "right")) {
+			this.submitTabFocus = this.submitTabFocus === "submit" ? "cancel" : "submit";
+			this.invalidate();
+			this.tui.requestRender();
 			return;
 		}
-		// Esc / ← / Shift+Tab → 回退到最后一个问题（不再直接取消）
-		if (matchesKey(data, "escape") || matchesKey(data, "left") || matchesKey(data, "shift+tab")) {
+		// Esc / Shift+Tab → 回退到最后一个问题
+		if (matchesKey(data, "escape") || matchesKey(data, "shift+tab")) {
 			this.activeTab = this.questions.length - 1;
 			this.invalidate();
 			this.tui.requestRender();
 			return;
 		}
-		// → / Tab → 环绕到首个问题
-		if (matchesKey(data, "right") || matchesKey(data, "tab")) {
+		// Tab → 环绕到首个问题
+		if (matchesKey(data, "tab")) {
 			this.activeTab = 0;
 			this.invalidate();
 			this.tui.requestRender();
+			return;
+		}
+		// Enter → 触发当前 focus
+		if (matchesKey(data, "enter")) {
+			if (this.submitTabFocus === "submit") {
+				if (this.allConfirmed()) this.submit();
+			} else {
+				// Cancel on Submit tab：无需二次确认（已经在最"终点"），直接 cancel()
+				this.cancel();
+			}
 			return;
 		}
 	}

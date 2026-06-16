@@ -40,13 +40,16 @@ export function getSplitPaneWidths(width: number): { left: number; right: number
 	return { left, right };
 }
 
-/** 构建选项列表行（不含分屏预览）。hideDescriptions 用于分屏模式左列。 */
+/** 构建选项列表行（不含分屏预览）。hideDescriptions 用于分屏模式左列。
+ *  freeform 模式下，Other 行**原地**变 [ ] <input>█（多选）/ <input>█（单选），
+ *  不再依赖 buildEditorBlock 的下方独立编辑块。 */
 function buildOptionLines(
 	q: Question,
 	state: QuestionState,
 	theme: ThemeLike,
 	width: number,
 	hideDescriptions: boolean,
+	editorText: string = "",
 ): string[] {
 	const t = theme;
 	const opts = allOptions(q);
@@ -62,14 +65,22 @@ function buildOptionLines(
 		const prefix = isSelected ? t.fg("accent", ">") : " ";
 
 		if (isOther) {
-			const hasFreeText = state.freeTextValue !== null && state.mode !== "freeform";
-			const check = hasFreeText ? t.fg("success", "✓") : " ";
-			const labelColor = isSelected ? "accent" : "muted";
-			const num = i + 1;
-			add(`${prefix} ${check} ${t.fg(labelColor, `${num}. ${opt.label}`)}`);
-			if (hasFreeText) {
-				const preview = truncateToWidth(state.freeTextValue ?? "", width - 5);
-				add(`     ${t.fg("dim", `"${preview}"`)}`);
+			if (state.mode === "freeform") {
+				// 原地编辑：与多选普通选项的 [ ] 框视觉对齐（单选无勾选语义则留空）
+				const box = q.multiSelect ? t.fg("dim", "[ ]") : "  ";
+				const inputText = editorText.length > 0 ? editorText : "";
+				const inputLine = `${inputText}${t.fg("accent", "█")}`;
+				add(`${prefix} ${box} ${t.fg("text", inputLine)}`);
+			} else {
+				const hasFreeText = state.freeTextValue !== null;
+				const check = hasFreeText ? t.fg("success", "✓") : " ";
+				const labelColor = isSelected ? "accent" : "muted";
+				const num = i + 1;
+				add(`${prefix} ${check} ${t.fg(labelColor, `${num}. ${opt.label}`)}`);
+				if (hasFreeText) {
+					const preview = truncateToWidth(state.freeTextValue ?? "", width - 5);
+					add(`     ${t.fg("dim", `"${preview}"`)}`);
+				}
 			}
 		} else if (q.multiSelect) {
 			const checked = state.selectedIndices.has(i);
@@ -128,21 +139,27 @@ function buildPreviewLines(
  * isSingle: 单问题模式（无 Tab 提示）。
  * editorText: freeform/comment 模式下当前编辑器文本（纯 string，由 component 持有）。
  */
-/** 渲染编辑器/评论模式下的就地编辑器文本区域。 */
+/**
+ * freeform 模式：editor 已在 buildOptionLines 中原地渲染（[ ] <input>█ 行），
+ * buildEditorBlock 在此模式下不重复输出，**仅留出与正常 help 行同位置的视觉空隙**。
+ * comment 模式：保留独立编辑块（与 normal help 行解耦：comment 行有更长的 prompt）。
+ */
 function buildEditorBlock(
 	theme: ThemeLike,
 	width: number,
 	mode: "freeform" | "comment",
 	editorText: string,
 ): string[] {
+	if (mode === "freeform") {
+		return [""];
+	}
 	const t = theme;
 	const lines: string[] = [];
 	const add = (s: string): void => {
 		lines.push(truncateToWidth(s, width));
 	};
 	add("");
-	const prompt =
-		mode === "comment" ? t.fg("muted", " Your comment (optional):") : t.fg("muted", " Your answer:");
+	const prompt = t.fg("muted", " Your comment (optional):");
 	add(prompt);
 	// 渲染当前编辑器文本（单行；多行时按 \n 拆分）
 	for (const line of editorText.split("\n")) add(` ${line}`);
@@ -160,13 +177,14 @@ function buildSplitPane(
 	theme: ThemeLike,
 	split: { left: number; right: number },
 	width: number,
+	editorText: string = "",
 ): string[] {
 	const t = theme;
 	const lines: string[] = [];
 	const add = (s: string): void => {
 		lines.push(truncateToWidth(s, width));
 	};
-	const leftLines = buildOptionLines(q, state, theme, split.left, true);
+	const leftLines = buildOptionLines(q, state, theme, split.left, true, editorText);
 	const rightLines = buildPreviewLines(q, state, theme, split.right, Math.max(leftLines.length, 8));
 	const rowCount = Math.max(leftLines.length, rightLines.length);
 	const sep = t.fg("dim", SPLIT_PANE_SEPARATOR);
@@ -213,23 +231,27 @@ export function renderQuestionView(
 		divider();
 	}
 
-	// 编辑器/评论模式：选项列表 + 下方就地展开编辑器文本
+	// 编辑器/评论模式：选项列表 + 编辑器块（freeform 模式下编辑器块为空，由 buildOptionLines 原地渲染）
 	if (state.mode === "freeform" || state.mode === "comment") {
 		add("");
-		const optionLines = buildOptionLines(q, state, theme, split ? split.left : width, !!split);
+		const optionLines = buildOptionLines(q, state, theme, split ? split.left : width, !!split, editorText);
 		for (const line of optionLines) add(line);
 		const editorBlock = buildEditorBlock(theme, width, state.mode, editorText);
 		lines.push(...editorBlock);
+		if (state.mode === "freeform") {
+			// freeform 模式 help 行：光标锁在 Other 上，正在输入
+			add(t.fg("dim", " Enter submit · Esc back"));
+		}
 		return lines;
 	}
 
 	if (!split) {
 		// 单列模式
-		const optionLines = buildOptionLines(q, state, theme, width, false);
+		const optionLines = buildOptionLines(q, state, theme, width, false, editorText);
 		for (const line of optionLines) add(line);
 	} else {
 		// 分屏模式
-		lines.push(...buildSplitPane(q, state, theme, split, width));
+		lines.push(...buildSplitPane(q, state, theme, split, width, editorText));
 	}
 
 	add("");
@@ -239,7 +261,7 @@ export function renderQuestionView(
 	const onOther = state.cursorIndex === opts.length - 1;
 	const tabHint = isSingle ? "" : " · Tab switch tabs";
 	const actionHint = onOther
-		? "Space open editor"
+		? "Enter open editor"
 		: q.multiSelect
 			? "Space toggle · Enter confirm"
 			: "Enter select";

@@ -1,18 +1,55 @@
 // src/index.ts
-import { Box, Text, TruncatedText } from "@mariozechner/pi-tui";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { Box, Text, TruncatedText, truncateToWidth } from "@mariozechner/pi-tui";
+import type { AgentToolResult, ExtensionAPI, ExtensionContext, ToolRenderResultOptions } from "@mariozechner/pi-coding-agent";
 
 import { AskUserComponent } from "./component";
 import { type Static } from "@sinclair/typebox";
-import { type AskUserDetails, type ErrorDetails, InputSchema, type Question, type Result, type ThemeLike } from "./types";
+import {
+	type AskUserDetails,
+	type ErrorDetails,
+	HEADER_MAX_CHARS,
+	InputSchema,
+	type Option,
+	type Question,
+	type Result,
+	type ThemeLike,
+} from "./types";
 import { validateInput } from "./validate";
 
-/** execute 的返回形状：content 固定单条 text，details 为 Result 或 ErrorDetails */
-type ExecuteResult = {
-	content: Array<{ type: "text"; text: string }>;
-	isError?: boolean;
-	details: AskUserDetails;
-};
+/**
+ * execute 的返回形状：复用 SDK AgentToolResult<AskUserDetails>，叠加运行时使用的 isError 标记。
+ * SDK 的 AgentToolResult 类型未声明 isError（运行时通过它标记错误），这里显式补齐。
+ */
+type ExecuteResult = AgentToolResult<AskUserDetails> & { isError?: boolean };
+
+/**
+ * expanded 渲染辅助：展开某问题的全部选项，用 ●/○ 标记是否被选中（spec FR-9）。
+ * 选中判定：answer 含该 option label（answer 形如 "Postgres" / "A, B" / "X — comment"）。
+ * 返回 TruncatedText 数组供 box.addChild 展开。
+ */
+function renderExpandedOptions(
+	q: Question,
+	answer: string,
+	theme: ThemeLike,
+): TruncatedText[] {
+	const answerTokens = new Set(answer.split(/\s*[,—]\s*|\s*,\s*/).filter(Boolean));
+	const mark = (opt: Option): string =>
+		answerTokens.has(opt.label) || answer.includes(opt.label)
+			? theme.fg("success", "●")
+			: theme.fg("dim", "○");
+	// 只展开真实选项（不含自动追加的 Other）；Other 文本单独显示
+	const out: TruncatedText[] = q.options.map(
+		(opt: Option) =>
+			new TruncatedText(
+				theme.fg("dim", "   ") +
+					mark(opt) +
+					theme.fg("text", ` ${opt.label}`),
+				0,
+				0,
+			),
+	);
+	return out;
+}
 
 export default function (pi: ExtensionAPI): void {
 	pi.registerTool({
@@ -123,9 +160,9 @@ export default function (pi: ExtensionAPI): void {
 			};
 		},
 
-		renderCall(args: Record<string, unknown>, theme: ThemeLike) {
-			const questions = ((args.questions as Question[] | undefined) ?? []) as Question[];
-			const topics = questions.map((q) => q.header ?? q.question.slice(0, 12)).join(", ");
+		renderCall(args: Static<typeof InputSchema>, theme: ThemeLike) {
+			const questions: Question[] = args.questions ?? [];
+			const topics = questions.map((q) => q.header ?? truncateToWidth(q.question, HEADER_MAX_CHARS)).join(", ");
 			return new TruncatedText(
 				theme.fg("toolTitle", theme.bold("ask_user ")) + theme.fg("muted", topics),
 				0,
@@ -134,30 +171,36 @@ export default function (pi: ExtensionAPI): void {
 		},
 
 		renderResult(
-			result: { details: unknown },
-			_options: unknown,
+			result: AgentToolResult<AskUserDetails>,
+			options: ToolRenderResultOptions,
 			theme: ThemeLike,
 		) {
-			const details = result.details as AskUserDetails | undefined;
+			const details = result.details;
 			if (details && "error" in details && details.error) {
 				return new Text(theme.fg("error", `✗ ${details.error}`), 0, 0);
 			}
+			// details 现已排除 ErrorDetails 分支，收窄为 Result | undefined
 			const d = details as Result | undefined;
 			if (!d || d.cancelled) {
 				return new Text(theme.fg("warning", "Cancelled"), 0, 0);
 			}
 			const box = new Box(0, 0);
 			for (const q of d.questions) {
+				const header = q.header ?? truncateToWidth(q.question, HEADER_MAX_CHARS);
 				const answer = d.answers[q.question] ?? "(no answer)";
 				box.addChild(
 					new TruncatedText(
 						theme.fg("success", "✓ ") +
-							theme.fg("accent", `${q.header ?? q.question.slice(0, 12)}: `) +
+							theme.fg("accent", `${header}: `) +
 							theme.fg("text", answer),
 						0,
 						0,
 					),
 				);
+				// options.expanded：展开显示该问题全部选项 + ●/○ 选中标记 + 评论（spec FR-9）
+				if (options?.expanded) {
+					for (const child of renderExpandedOptions(q, answer, theme)) box.addChild(child);
+				}
 			}
 			return box;
 		},

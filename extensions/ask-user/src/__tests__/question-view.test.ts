@@ -138,19 +138,21 @@ describe("renderQuestionView — split pane", () => {
 
 // ── Q-15 ~ Q-17: Other 编辑器模式 ───────────────────────
 describe("renderQuestionView — Other editor mode", () => {
-	it("Q-15: freeform mode renders editor with draft text and cursor", () => {
+	it("Q-15: freeform mode renders Other row in-place with draft + cursor", () => {
 		const lines = renderQuestionView(
 			singleQ,
-			makeState({ mode: "freeform" }),
+			makeState({ mode: "freeform", cursorIndex: 2 }),
 			stubTheme,
 			60,
 			true,
 			"my draft",
 		);
 		const t = text(lines);
-		expect(t).toContain("Your answer");
+		// Other 行原地变 [ ] <input>█（freeform 模式不依赖 buildEditorBlock 独立编辑块）
 		expect(t).toContain("my draft");
 		expect(t).toContain("█");
+		// 不再独立 "Your answer" 提示行
+		expect(t).not.toContain("Your answer");
 	});
 
 	it("Q-16: Other with saved free-text shows checkmark + preview", () => {
@@ -167,7 +169,7 @@ describe("renderQuestionView — Other editor mode", () => {
 		expect(t).toContain("saved text");
 	});
 
-	it("Q-17: Other row focused shows Space hint (Tab now navigates tabs)", () => {
+	it("Q-17: Other row focused shows Enter hint (Tab now navigates tabs)", () => {
 		const lines = renderQuestionView(
 			singleQ,
 			makeState({ cursorIndex: 2 }),
@@ -176,7 +178,8 @@ describe("renderQuestionView — Other editor mode", () => {
 			true,
 			"",
 		);
-		expect(text(lines)).toContain("Space");
+		// help 行：Other 焦点时显示 "Enter open editor"
+		expect(text(lines)).toContain("Enter open editor");
 	});
 });
 

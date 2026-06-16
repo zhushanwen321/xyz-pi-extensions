@@ -117,38 +117,21 @@ describe("AskUserComponent — multi question tab nav", () => {
 
 	it("C-9: Submit tab blocks when not all confirmed", () => {
 		const { c, result } = make(multiQ);
-		c.handleInput(RIGHT); // -> Q2
-		c.handleInput(RIGHT); // -> Q3
-		c.handleInput(RIGHT); // -> Submit
+		c.handleInput(TAB); // -> Q2
+		c.handleInput(TAB); // -> Q3
+		c.handleInput(TAB); // -> Submit
 		c.handleInput(ENTER); // should NOT submit
 		expect(result.val).toBeUndefined();
 	});
 
-	it("C-10: Right wraps Submit → Q1", () => {
-		const { c } = make(multiQ);
-		// Navigate to Submit (3 questions → tabs 0,1,2,3=Submit)
-		c.handleInput(RIGHT); // Q2
-		c.handleInput(RIGHT); // Q3
-		c.handleInput(RIGHT); // Submit
-		c.handleInput(RIGHT); // should wrap to Q1
-		const lines = c.render(80);
-		expect(lines.some((l) => l.includes("Q1") || l.includes("First"))).toBe(true);
-	});
-
-	it("C-11: Left wraps Q1 → last question (Submit's left target)", () => {
-		const { c } = make(multiQ);
-		c.handleInput(LEFT); // Q1 left → wraps to Submit
-		const lines = c.render(80);
-		// On Submit tab
-		expect(lines.some((l) => l.includes("Ready") || l.includes("Unanswered"))).toBe(true);
-	});
+	// C-10 / C-11 已废弃：←/→ 不再切 tab（C-E5/C-E6 覆盖 Tab/Shift+Tab 行为）
 
 	it("C-16 (AC-16): can re-edit confirmed answer", () => {
 		const { c, result } = make(multiQ);
 		// Q1: select A
 		c.handleInput(ENTER); // → Q2
 		// Go back to Q1
-		c.handleInput(LEFT); // Q1
+		c.handleInput("\x1b[Z"); // Q1
 		// Select B instead
 		c.handleInput(DOWN);
 		c.handleInput(ENTER); // → Q2
@@ -169,7 +152,7 @@ describe("AskUserComponent — multi question tab nav", () => {
 		const { c, result } = make(twoQ);
 		c.handleInput(ENTER); // Q1 select A → Q2
 		c.handleInput(" ");   // Q2 toggle X (no Enter-confirm)
-		c.handleInput(RIGHT); // → Submit, should auto-confirm Q2
+		c.handleInput(TAB); // → Submit, should auto-confirm Q2
 		c.handleInput(ENTER); // Submit (all confirmed)
 		expect(result.val!.answers["Q1"]).toBe("A");
 		expect(result.val!.answers["Q2"]).toBe("X");
@@ -196,7 +179,7 @@ describe("AskUserComponent — multi question tab nav", () => {
 		];
 		const { c, result } = make(twoQMulti);
 		c.handleInput(" "); // Q1 toggle A
-		c.handleInput(RIGHT); // → Q2，auto-confirm Q1，不进评论
+		c.handleInput(TAB); // → Q2，auto-confirm Q1，不进评论
 		// 验证：当前在 Q2（非 Q1 的评论模式）。Q2 选 X → Submit
 		c.handleInput(ENTER); // Q2 select X → Submit
 		c.handleInput(ENTER); // Submit
@@ -210,7 +193,7 @@ describe("AskUserComponent — multi question tab nav", () => {
 		// Q1 (A/B + Other): 导航到 Other，录入 "custom"
 		c.handleInput(DOWN);
 		c.handleInput(DOWN); // → Other
-		c.handleInput(" ");   // 打开 freeform
+		c.handleInput(ENTER); // 打开 freeform
 		c.handleInput("c");
 		c.handleInput("u");
 		c.handleInput("s");
@@ -219,10 +202,10 @@ describe("AskUserComponent — multi question tab nav", () => {
 		c.handleInput("m");
 		c.handleInput(ENTER); // 保存 freeText → confirmed=true → advance to Q2
 		// 切回 Q1，重进 Other 编辑器，清空后空 Enter
-		c.handleInput(LEFT);  // → Q1
+		c.handleInput("\x1b[Z");  // Shift+Tab → Q1
 		c.handleInput(DOWN);  // idempotent: cursor stays on Other
 		c.handleInput(DOWN);
-		c.handleInput(" ");   // 重开 freeform，editorText 预填 "custom"
+		c.handleInput(ENTER);   // 重开 freeform，editorText 预填 "custom"
 		c.handleInput(BKSP);  // 清空 editorText
 		c.handleInput(BKSP);
 		c.handleInput(BKSP);
@@ -231,9 +214,9 @@ describe("AskUserComponent — multi question tab nav", () => {
 		c.handleInput(BKSP);
 		c.handleInput(ENTER); // 空 Enter → freeTextValue 清空，confirmed 应重置 false
 		// 导航到 Submit 并尝试提交 → 应被阻塞（Q1 回到未答）
-		c.handleInput(RIGHT); // → Q2
-		c.handleInput(RIGHT); // → Q3
-		c.handleInput(RIGHT); // → Submit
+		c.handleInput(TAB); // → Q2
+		c.handleInput(TAB); // → Q3
+		c.handleInput(TAB); // → Submit
 		c.handleInput(ENTER); // 应被阻塞
 		expect(result.val).toBeUndefined();
 	});
@@ -256,7 +239,7 @@ describe("AskUserComponent — single-select", () => {
 		// Go to Other (index 2), open editor, type text
 		c.handleInput(DOWN);
 		c.handleInput(DOWN); // Other
-		c.handleInput(" "); // open freeform
+		c.handleInput(ENTER); // open freeform
 		c.handleInput("c");
 		c.handleInput("u");
 		c.handleInput("s");
@@ -297,31 +280,34 @@ describe("AskUserComponent — multi-select toggle", () => {
 
 // ── 5e. Other 自由文本（FR-4.5 / AC-5）─────────────────
 describe("AskUserComponent — Other free-text editor", () => {
-	it("C-25: Space on Other row opens freeform editor", () => {
+	it("C-25: Enter on Other row opens freeform editor (in-place)", () => {
 		const { c } = make([singleQ]);
 		// Navigate to Other (index 2)
 		c.handleInput(DOWN);
 		c.handleInput(DOWN);
-		c.handleInput(" ");
+		c.handleInput(ENTER);
 		const lines = c.render(60);
-		expect(lines.some((l) => l.includes("Your answer"))).toBe(true);
+		// freeform 模式：光标行（█）出现，editor 已在 Other 行原地渲染
+		expect(lines.some((l) => l.includes("█"))).toBe(true);
+		// 不再独立 "Your answer" 提示块
+		expect(lines.some((l) => l.includes("Your answer"))).toBe(false);
 	});
 
-	it("C-26: Tab no longer opens freeform editor (Space-only; Tab is tab-nav now)", () => {
+	it("C-26: Tab no longer opens freeform editor (Enter-only; Tab is tab-nav now)", () => {
 		const { c } = make([singleQ]);
 		c.handleInput(DOWN);
 		c.handleInput(DOWN);
 		c.handleInput(TAB);
 		const lines = c.render(60);
-		// Tab 不再打开 Other 编辑器（仅 Space）；单问题下 Tab 是 no-op
-		expect(lines.some((l) => l.includes("Your answer"))).toBe(false);
+		// Tab 不再打开 Other 编辑器（仅 Enter）；单问题下 Tab 是 no-op
+		expect(lines.some((l) => l.includes("█"))).toBe(false);
 	});
 
 	it("C-27: editor accepts printable characters", () => {
 		const { c } = make([singleQ]);
 		c.handleInput(DOWN);
 		c.handleInput(DOWN);
-		c.handleInput(" "); // open
+		c.handleInput(ENTER); // open
 		c.handleInput("h");
 		c.handleInput("i");
 		const lines = c.render(60);
@@ -332,7 +318,7 @@ describe("AskUserComponent — Other free-text editor", () => {
 		const { c } = make([singleQ]);
 		c.handleInput(DOWN);
 		c.handleInput(DOWN);
-		c.handleInput(" ");
+		c.handleInput(ENTER);
 		c.handleInput("a");
 		c.handleInput("b");
 		c.handleInput(BKSP); // delete "b"
@@ -344,35 +330,35 @@ describe("AskUserComponent — Other free-text editor", () => {
 		const { c } = make([singleQ]);
 		c.handleInput(DOWN);
 		c.handleInput(DOWN);
-		c.handleInput(" ");
+		c.handleInput(ENTER);
 		c.handleInput(ESC);
 		const lines = c.render(60);
-		// Back in options mode — no "Your answer" editor prompt
-		expect(lines.some((l) => l.includes("Your answer"))).toBe(false);
+		// Back in options mode — no cursor block (freeform inactive)
+		expect(lines.some((l) => l.includes("█"))).toBe(false);
 	});
 
 	it("C-29: editor Enter with text saves and submits (single)", () => {
 		const { c, result } = make([singleQ]);
 		c.handleInput(DOWN);
 		c.handleInput(DOWN);
-		c.handleInput(" ");
+		c.handleInput(ENTER);
 		c.handleInput("x");
 		c.handleInput(ENTER);
 		expect(result.val).not.toBeUndefined();
 		expect(result.val!.answers["Which DB?"]).toBe("x");
 	});
 
-	it("C-30: editor Enter empty clears freeText (single → submit with null)", () => {
+	it("C-30: editor Enter empty clears freeText (single → stays in form)", () => {
 		const { c, result } = make([singleQ]);
 		c.handleInput(DOWN);
 		c.handleInput(DOWN);
-		c.handleInput(" "); // open editor
+		c.handleInput(ENTER); // open editor
 		c.handleInput(ENTER); // FR-6: empty Enter → clear freeText, close editor (NO confirm/submit)
 		// Not submitted; still in options list
 		expect(result.val).toBeUndefined();
-		// Back in options mode — no "Your answer" editor prompt
+		// Back in options mode — no cursor block (freeform inactive)
 		const lines = c.render(60);
-		expect(lines.some((l) => l.includes("Your answer"))).toBe(false);
+		expect(lines.some((l) => l.includes("█"))).toBe(false);
 	});
 });
 
@@ -417,7 +403,7 @@ describe("AskUserComponent — comment flow", () => {
 		// Navigate to Other
 		c.handleInput(DOWN);
 		c.handleInput(DOWN);
-		c.handleInput(" "); // open freeform
+		c.handleInput(ENTER); // open freeform
 		c.handleInput("c");
 		c.handleInput("u");
 		c.handleInput("s");
@@ -527,9 +513,9 @@ describe("AskUserComponent — render cache", () => {
 describe("AskUserComponent — Submit tab", () => {
 	it("C-47: Submit Esc backs to last question (no longer cancels)", () => {
 		const { c, result } = make(multiQ);
-		c.handleInput(RIGHT); // Q2
-		c.handleInput(RIGHT); // Q3
-		c.handleInput(RIGHT); // Submit
+		c.handleInput(TAB); // Q2
+		c.handleInput(TAB); // Q3
+		c.handleInput(TAB); // Submit
 		c.handleInput(ESC); // 回退到最后一个问题 Q3（不取消）
 		expect(result.val).toBeUndefined();
 		const lines = c.render(80);
@@ -555,14 +541,14 @@ describe("AskUserComponent — Submit tab", () => {
 		// S-12 锁定：Submit tab 上按 Left → activeTab = questions.length - 1（最后一个问题）
 		const { c } = make(multiQ); // 3 questions → tabs 0,1,2,3=Submit
 		// 导航到 Submit
-		c.handleInput(RIGHT); // Q1 → Q2
-		c.handleInput(RIGHT); // Q2 → Q3
-		c.handleInput(RIGHT); // Q3 → Submit
+		c.handleInput(TAB); // Q1 → Q2
+		c.handleInput(TAB); // Q2 → Q3
+		c.handleInput(TAB); // Q3 → Submit
 		// 确认当前在 Submit（渲染 Submit 视图）
 		let lines = c.render(80);
 		expect(lines.some((l) => l.includes("Ready") || l.includes("Unanswered"))).toBe(true);
 		// 在 Submit 上按 Left → 应回到最后一个问题 Q3
-		c.handleInput(LEFT);
+		c.handleInput("\x1b[Z");
 		lines = c.render(80);
 		// Q3 不再是 Submit 视图（无 Ready/Unanswered），且渲染了 Q3 的选项 M
 		expect(lines.some((l) => l.includes("Ready") || l.includes("Unanswered"))).toBe(false);
@@ -622,7 +608,7 @@ describe("AskUserComponent — confirm-checkmark, Esc-back, Tab browsing", () =>
 		const { c } = make(multiQ);
 		c.handleInput(ENTER); // Q1 确认 → Q2
 		// 回到 Q1 看 tab 栏：Q1 已确认应有 ✓ 标识
-		c.handleInput(LEFT); // Q2 → Q1
+		c.handleInput("\x1b[Z"); // Q2 → Q1
 		const lines = c.render(80);
 		expect(lines.some((l) => l.includes("✓") && l.includes("First"))).toBe(true);
 	});
@@ -682,3 +668,117 @@ describe("AskUserComponent — confirm-checkmark, Esc-back, Tab browsing", () =>
 	});
 });
 
+// ── 5l. 新行为：←/→ 不切 tab、Other Enter 切 freeform 原生、Submit tab focus ──
+describe("AskUserComponent — new behavior (post-refactor)", () => {
+	it("C-NEW-1: multi-select Other + Enter opens freeform; Other row turns into [ ] <input>█ in-place", () => {
+		// singleQMulti: [Auth, Search]，多选 + allowComment
+		const { c, result } = make([singleQMulti]);
+		// 1) Space toggle Auth
+		c.handleInput(" ");
+		// 2) ↓ 到 Other (cursor=2)
+		c.handleInput(DOWN);
+		c.handleInput(DOWN);
+		// 3) Enter 切 freeform（不再依赖 Space）
+		c.handleInput(ENTER);
+		// 验证：freeform 模式下，选项列表中应出现 [ ] █ 行（光标 block + 多选 box）
+		//   选中的 Auth 仍是 [✓]（多选 toggle 未变），Other 行原地变 [ ] <cursor>
+		const lines = c.render(60);
+		// 独立 "Your answer" 提示行已消失
+		expect(lines.some((l) => l.includes("Your answer"))).toBe(false);
+		// freeform cursor 出现
+		expect(lines.some((l) => l.includes("█"))).toBe(true);
+		// 依然能看见 "Auth" "Search"（普通选项不变）
+		expect(lines.some((l) => l.includes("Auth"))).toBe(true);
+		expect(lines.some((l) => l.includes("Search"))).toBe(true);
+		// [✓] 标记的 Auth 仍存在（toggle 状态保留）
+		expect(lines.some((l) => l.includes("[✓]") && l.includes("Auth"))).toBe(true);
+		// 4) 输 "redis" → Enter 保存 → allowComment → comment mode
+		c.handleInput("r");
+		c.handleInput("e");
+		c.handleInput("d");
+		c.handleInput("i");
+		c.handleInput("s");
+		c.handleInput(ENTER); // 保存 freeText → comment mode
+		c.handleInput(ENTER); // 跳过评论 → submit（单问题）
+		// 答案含多选 toggle 项 + Other 自定义
+		expect(result.val!.answers["Which features?"]).toBe("Auth, redis");
+	});
+
+	it("C-NEW-2: Left/Right on question tab do NOT switch tabs (only Tab/Shift+Tab do)", () => {
+		// multiQ: 3 questions → tabs 0,1,2,3=Submit
+		const { c } = make(multiQ);
+		c.render(80);
+		// 1) Q1 上按 Right → 应仍在 Q1（不切 tab）
+		c.handleInput(RIGHT);
+		expect(c.render(80).some((l) => l.includes("Q1") || l.includes("First"))).toBe(true);
+		// 2) Left 也不切
+		c.handleInput(LEFT);
+		expect(c.render(80).some((l) => l.includes("Q1") || l.includes("First"))).toBe(true);
+		// 3) Tab 仍然可以切到 Q2
+		c.handleInput(TAB);
+		expect(c.render(80).some((l) => l.includes("Q2") || l.includes("Second"))).toBe(true);
+	});
+
+	it("C-NEW-3: Submit tab Left/Right toggles submitTabFocus (Submit ↔ Cancel)", () => {
+		// multiQ: 3 questions → tabs 0,1,2,3=Submit
+		const { c } = make(multiQ);
+		// 导航到 Submit
+		c.handleInput(TAB); // Q1→Q2
+		c.handleInput(TAB); // Q2→Q3
+		c.handleInput(TAB); // Q3→Submit
+		// Submit tab 默认 focus=Submit。验证渲染中 Submit 高亮（accent）
+		let lines = c.render(80);
+		const focusedLineInitial = lines.find((l) => l.match(/[\[\(]\s*Submit\s*[\]\)]/));
+		expect(focusedLineInitial).toBeDefined();
+		// 按 Right → focus 切到 Cancel
+		c.handleInput(RIGHT);
+		lines = c.render(80);
+		const focusedLineAfter = lines.find((l) => l.match(/[\[\(]\s*Cancel\s*[\]\)]/));
+		expect(focusedLineAfter).toBeDefined();
+		// 再按 Left → focus 回 Submit
+		c.handleInput(LEFT);
+		lines = c.render(80);
+		expect(lines.find((l) => l.match(/[\[\(]\s*Submit\s*[\]\)]/))).toBeDefined();
+	});
+
+	it("C-NEW-4: Submit tab Enter on Submit focus (all confirmed) submits", () => {
+		// multiQWithComment: Q1 allowComment, Q2 plain
+		const { c, result } = make(multiQWithComment);
+		// 答完 Q1 + Q2
+		c.handleInput(ENTER); // Q1 select A → comment mode
+		c.handleInput(ENTER); // skip comment → Q2
+		c.handleInput(ENTER); // Q2 select X → Submit tab（Q2 是最后一个问题，advance 到 Submit）
+		// 已经在 Submit tab，focus=Submit，按 Enter 提交
+		c.handleInput(ENTER);
+		expect(result.val).not.toBeUndefined();
+		expect(result.val!.answers["Q1"]).toBe("A");
+		expect(result.val!.answers["Q2"]).toBe("X");
+	});
+
+	it("C-NEW-5: Submit tab Enter on Cancel focus cancels (no confirm overlay)", () => {
+		// multiQ: 3 questions
+		const { c, result } = make(multiQ);
+		// 答完所有问题
+		c.handleInput(ENTER); // Q1 → Q2
+		c.handleInput(ENTER); // Q2 → Q3
+		c.handleInput(ENTER); // Q3 → Submit tab
+		// 切到 Submit 后，按 Right 把 focus 切到 Cancel
+		c.handleInput(RIGHT);
+		// Enter → 直接 cancel()（Submit tab 上无二次确认）
+		c.handleInput(ENTER);
+		expect(result.val).toBeNull();
+	});
+
+	it("C-NEW-6: Submit tab Enter on Submit when not all confirmed is a no-op (blocks submit)", () => {
+		const { c, result } = make(multiQ);
+		// 只答 Q1
+		c.handleInput(ENTER); // Q1 → Q2
+		// 切到 Submit（Q2 还未答）
+		c.handleInput(TAB); // Q2
+		c.handleInput(TAB); // Q3
+		c.handleInput(TAB); // Submit
+		// focus=Submit（默认），按 Enter → 不提交（Q2/Q3 未答）
+		c.handleInput(ENTER);
+		expect(result.val).toBeUndefined();
+	});
+});
