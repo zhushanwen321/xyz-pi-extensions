@@ -539,6 +539,26 @@ describe("subagent tool execute()", () => {
     );
   });
 
+  // Round 5 MF#4 (suggestion #14): empty string error passes through ?? unchanged
+  it("sync mode: error='' (empty string) passes through ?? as empty message", async () => {
+    const mockRt = makeMockRuntime({
+      runAgent: vi.fn(async () => ({
+        text: "",
+        turns: 0,
+        durationMs: 0,
+        success: false,
+        error: "",
+        sessionId: "",
+        toolCalls: [],
+      })),
+    });
+    mockedGetRuntime.mockReturnValue(mockRt as never);
+
+    const tool = captureTool();
+    // ?? does not catch empty string — error="" passes through as-is
+    await expect(tool.execute("call-empty-err", { task: "fail empty" })).rejects.toThrow("");
+  });
+
   // ── Round 5 MF#5: V4 worktree 合并指令路径测试 ─────────────────
   it("sync mode: appends merge instruction to result text when worktree.hasChanges=true and branch is set", async () => {
     const mockRt = makeMockRuntime({
@@ -691,6 +711,10 @@ describe("subagent tool execute()", () => {
 });
 
 // Wave 5: buildSubagentRender + mapRenderStatus describe block deleted (functions removed).
+
+// NOTE: timeoutMs is an internal field managed by the agent-pool layer (used by workflow scripts).
+// It is NOT exposed in the subagent tool schema and cannot be controlled by the LLM.
+// Tests for timeoutMs belong in agent-pool tests, not here.
 
 describe("renderSubagentResult — seed-frame spinner（无 setInterval，Bug #1/#4）", () => {
   const fakeTheme = {

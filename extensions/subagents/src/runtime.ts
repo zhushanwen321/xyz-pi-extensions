@@ -602,6 +602,11 @@ export class SubagentRuntime {
     }
     // FR-2.5: onUpdate 拦截器——把 runAgent 的事件回流给调用方（对话流 block 实时刷新）
     const userOnUpdate = opts.onUpdate;
+    // Round 5 MF#1: wrap in try/catch to prevent ghost entries when runAgent()
+    // throws synchronously (e.g. buildContext() failure) — without this, the
+    // record added to _bgRecords above would remain status:"running" forever
+    // because the promise chain never gets created.
+    try {
     this.runAgent({
       ...opts,
       signal,
@@ -741,6 +746,26 @@ export class SubagentRuntime {
         });
         this.notifyChange();
       });
+    } catch (err: unknown) {
+      // Round 5 MF#1: synchronous exception (e.g. buildContext() failure).
+      // Mark record failed immediately so it does not linger as a ghost entry.
+      const errMsg = err instanceof Error ? err.message : String(err);
+      record.status = "failed";
+      record.error = errMsg;
+      record._settled = true;
+      record.endedAt = Date.now();
+      completeState(state, {
+        text: "",
+        turns: 0,
+        durationMs: record.endedAt - record.startedAt,
+        success: false,
+        error: errMsg,
+        sessionId: "",
+        toolCalls: [],
+      }, "failed");
+      delete record.controller;
+      this.notifyChange();
+    }
 
     return { id, status: "running" };
   }

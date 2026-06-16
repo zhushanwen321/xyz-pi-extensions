@@ -22,11 +22,13 @@ vi.mock("node:fs", async () => {
 
 // Mock @zhushanwen/pi-subagents: workflow 通过 getRuntime() 拿 modelRegistry + agentRegistry。
 // 之前 mock 的 @zhushanwen/pi-model-switch 已删除（重构后改用 subagents）。
+// Round 5 MF#3: use vi.fn() so getAgentCount()/getAgents() tests can control return value.
+const mockAgentList: Array<{ name: string; source: string; model?: string }> = [];
 vi.mock("@zhushanwen/pi-subagents", () => ({
-  getRuntime: () => ({
+  getRuntime: vi.fn(() => ({
     agentRegistry: {
       discoverAll: vi.fn(),
-      list: vi.fn(() => []),
+      list: vi.fn(() => mockAgentList),
       get: vi.fn((name: string) => ({
         name,
         systemPrompt: "You are " + name,
@@ -36,10 +38,12 @@ vi.mock("@zhushanwen/pi-subagents", () => ({
     builtinRegistry: {
       get: vi.fn(),
     },
-  }),
+  })),
 }));
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+
+import { getRuntime } from "@zhushanwen/pi-subagents";
 
 import { WorkflowOrchestrator } from "../src/orchestrator";
 import {
@@ -773,6 +777,53 @@ describe("WorkflowOrchestrator", () => {
       // getWorkflow returns undefined → run() throws → runAndWait has no runId to poll.
       // runAndWait awaits run() directly so the error propagates. Lock in the contract.
       await expect(orch.runAndWait("nonexistent-wf", {})).rejects.toThrow(/not found or unavailable/);
+    });
+  });
+
+  // Round 5 MF#3: getAgentCount/getAgents unit tests
+  describe("getAgentCount()", () => {
+    it("returns 0 when no agents are discovered", () => {
+      mockAgentList.length = 0;
+      expect(orch.getAgentCount()).toBe(0);
+    });
+
+    it("returns correct count when agents are registered", () => {
+      mockAgentList.length = 0;
+      mockAgentList.push(
+        { name: "worker", source: "builtin" },
+        { name: "scout", source: "builtin" },
+        { name: "planner", source: "user" },
+      );
+      expect(orch.getAgentCount()).toBe(3);
+    });
+
+    it("returns 0 when runtime is not registered (getRuntime returns undefined)", () => {
+      vi.mocked(getRuntime).mockReturnValueOnce(undefined as never);
+      expect(orch.getAgentCount()).toBe(0);
+    });
+  });
+
+  describe("getAgents()", () => {
+    it("returns empty array when no agents are discovered", () => {
+      mockAgentList.length = 0;
+      expect(orch.getAgents()).toEqual([]);
+    });
+
+    it("returns agent summaries with name, source, and model", () => {
+      mockAgentList.length = 0;
+      mockAgentList.push(
+        { name: "worker", source: "builtin", model: "anthropic/claude-sonnet-4.5" },
+        { name: "researcher", source: "user" },
+      );
+      const agents = orch.getAgents();
+      expect(agents).toHaveLength(2);
+      expect(agents[0]).toEqual({ name: "worker", source: "builtin", model: "anthropic/claude-sonnet-4.5" });
+      expect(agents[1]).toEqual({ name: "researcher", source: "user", model: undefined });
+    });
+
+    it("returns empty array when runtime is not registered", () => {
+      vi.mocked(getRuntime).mockReturnValueOnce(undefined as never);
+      expect(orch.getAgents()).toEqual([]);
     });
   });
 });

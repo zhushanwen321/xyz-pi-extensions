@@ -900,7 +900,7 @@ export class WorkflowOrchestrator {
         setTimeout(() => {
           // P0-2 + Round 6 MF#6: stale state, abort, AND budget recheck before retry
           if (instance.status !== "running" || !this.runAbortControllers.has(runId)) return;
-          if (this.isBudgetExceeded(instance)) { checkBudget(instance, runId, this.budgetCallbacks()).catch((err: unknown) => { console.error(`[workflow] budget check failed in retry path: ${err instanceof Error ? err.message : String(err)}`); }); return; }
+          if (this.isBudgetExceeded(instance)) { checkBudget(instance, runId, this.budgetCallbacks()).then(() => { this.executeWithRetry(runId, callId, opts, instance, node, attempt + 1); }).catch((err: unknown) => { console.error(`[workflow] budget check failed in retry path: ${err instanceof Error ? err.message : String(err)}`); }); return; }
           this.executeWithRetry(runId, callId, opts, instance, node, attempt + 1);
         }, delay);
         return;
