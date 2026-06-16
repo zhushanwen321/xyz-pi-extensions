@@ -181,6 +181,88 @@ describe("renderQuestionView — Other editor mode", () => {
 		// help 行：Other 焦点时显示 "Enter open editor"
 		expect(text(lines)).toContain("Enter open editor");
 	});
+
+	// ── Q-28 ~ Q-31: Other 多行换行（输入态 + 已保存预览） ──
+	it("Q-28: freeform 长输入超过屏宽时软换行，完整内容不丢失", () => {
+		const width = 30;
+		// lead = "> [ ] " (单选 box="  ") = 6 列 → avail = 24
+		const long = "x".repeat(60);
+		const lines = renderQuestionView(
+			singleQ,
+			makeState({ mode: "freeform", cursorIndex: 2 }),
+			stubTheme,
+			width,
+			true,
+			long,
+		);
+		const t = text(lines);
+		// 60 字符按 avail=24 换行 → 至少 3 行，且全部 60 个 x 都在输出里（不截断）
+		const xCount = t.split("").filter((c) => c === "x").length;
+		expect(xCount).toBe(60);
+		expect(lines.some((l) => l.includes("x"))).toBe(true);
+		// 光标仍在末尾出现
+		expect(t).toContain("█");
+		// 每个含 x 的行都不超过总宽 width（stubTheme 无 ANSI，长度=可见宽）
+		for (const l of lines) {
+			if (l.includes("x")) expect(l.length).toBeLessThanOrEqual(width);
+		}
+	});
+
+	it("Q-29: freeform 输入超 5 行时截断到 5 行并加省略号", () => {
+		const width = 30;
+		// avail=24，200 字符 → 9 行，超过 5 行上限
+		const huge = "y".repeat(200);
+		const lines = renderQuestionView(
+			singleQ,
+			makeState({ mode: "freeform", cursorIndex: 2 }),
+			stubTheme,
+			width,
+			true,
+			huge,
+		);
+		// 统计含 'y' 的行数 = input 渲染行数（应被截到 5 行）
+		const yLines = lines.filter((l) => l.includes("y"));
+		expect(yLines.length).toBe(5);
+		// 最后一行带省略号（表示还有更多，光标已被省略号取代）
+		expect(yLines[yLines.length - 1]).toContain("…");
+	});
+
+	it("Q-30: 已保存 freeText 预览超屏宽时多行换行展示", () => {
+		const width = 40;
+		// 预览 lead="     "(5 列) → avail=35；预览文本带引号
+		const long = "z".repeat(80);
+		const lines = renderQuestionView(
+			singleQ,
+			makeState({ cursorIndex: 2, freeTextValue: long }),
+			stubTheme,
+			width,
+			true,
+			"",
+		);
+		const t = text(lines);
+		// 80 个 z 全部展示（不再单行截断丢失）
+		const zCount = t.split("").filter((c) => c === "z").length;
+		expect(zCount).toBe(80);
+		// 预览首行带引号开头
+		expect(lines.some((l) => l.includes('"'))).toBe(true);
+	});
+
+	it("Q-31: 已保存 freeText 预览超 5 行时截断并加省略号", () => {
+		const width = 30;
+		// 预览 avail = 30-5 = 25，300 字符 → >5 行
+		const huge = "w".repeat(300);
+		const lines = renderQuestionView(
+			singleQ,
+			makeState({ cursorIndex: 2, freeTextValue: huge }),
+			stubTheme,
+			width,
+			true,
+			"",
+		);
+		const wLines = lines.filter((l) => l.includes("w"));
+		expect(wLines.length).toBe(5);
+		expect(wLines[wLines.length - 1]).toContain("…");
+	});
 });
 
 // ── Q-18 ~ Q-19: 评论模式 ───────────────────────────────

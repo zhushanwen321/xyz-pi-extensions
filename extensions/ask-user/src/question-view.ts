@@ -1,5 +1,5 @@
 // src/question-view.ts
-import { truncateToWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 
 import {
 	OTHER_LABEL,
@@ -16,6 +16,47 @@ export interface DisplayOption {
 	label: string;
 	description?: string;
 	isOther?: boolean;
+}
+
+/** Other 自由输入 / 已保存预览的软换行行数上限。超出则截断并加省略号。 */
+const MAX_EDITOR_LINES = 5;
+
+/**
+ * 把一段带样式的文本按 availWidth 软换行输出为多行，最多 maxLines 行。
+ * - 首行前缀 lead（如 "> [ ] "），后续行用等宽空格缩进到 input 起始列对齐。
+ * - 超过 maxLines：截断到 maxLines 行，并在最后一行末尾用 ellipsis 提示。
+ *   此时末行可能已不含末尾光标字符，用 ellipsis 占位表达「还有更多」。
+ *
+ * @param push      输出回调（通常为带 truncateToWidth 的 add，提供安全兜底）
+ * @param lead      首行前缀（含选中标记 / 勾选框）
+ * @param content   待换行展示的已样式化文本（可含 ANSI + 末尾光标 █），为空则只输出 lead
+ * @param availWidth 单行可用宽度
+ * @param maxLines  最多行数
+ */
+function addWrappedInput(
+	push: (s: string) => void,
+	lead: string,
+	content: string,
+	availWidth: number,
+	maxLines: number,
+): void {
+	const avail = Math.max(1, availWidth);
+	const indent = " ".repeat(visibleWidth(lead));
+	if (content === "") {
+		push(lead);
+		return;
+	}
+	let wrapped = wrapTextWithAnsi(content, avail);
+	if (wrapped.length > maxLines) {
+		wrapped = wrapped.slice(0, maxLines);
+		// 最后一行去掉超出，用省略号占位（光标已被省略号取代）
+		const lastIdx = wrapped.length - 1;
+		wrapped[lastIdx] = truncateToWidth(wrapped[lastIdx]!, Math.max(1, avail - 1), "…");
+	}
+	for (let i = 0; i < wrapped.length; i++) {
+		const seg = wrapped[i]!;
+		push(i === 0 ? `${lead}${seg}` : `${indent}${seg}`);
+	}
 }
 
 /** 在选项数组末尾追加 Other 自由输入项。 */
@@ -68,9 +109,11 @@ function buildOptionLines(
 			if (state.mode === "freeform") {
 				// 原地编辑：与多选普通选项的 [ ] 框视觉对齐（单选无勾选语义则留空）
 				const box = q.multiSelect ? t.fg("dim", "[ ]") : "  ";
-				const inputText = editorText.length > 0 ? editorText : "";
-				const inputLine = `${inputText}${t.fg("accent", "█")}`;
-				add(`${prefix} ${box} ${t.fg("text", inputLine)}`);
+				const lead = `${prefix} ${box} `;
+				const avail = Math.max(1, width - visibleWidth(lead));
+				// 文本 + 末尾光标 █ 整体软换行（空 input 时仅光标，wrapTextWithAnsi("█") 单行）
+				const styled = `${t.fg("text", editorText)}${t.fg("accent", "█")}`;
+				addWrappedInput(add, lead, styled, avail, MAX_EDITOR_LINES);
 			} else {
 				const hasFreeText = state.freeTextValue !== null;
 				const check = hasFreeText ? t.fg("success", "✓") : " ";
@@ -78,8 +121,11 @@ function buildOptionLines(
 				const num = i + 1;
 				add(`${prefix} ${check} ${t.fg(labelColor, `${num}. ${opt.label}`)}`);
 				if (hasFreeText) {
-					const preview = truncateToWidth(state.freeTextValue ?? "", width - 5);
-					add(`     ${t.fg("dim", `"${preview}"`)}`);
+					// 已保存 freeText 预览：软换行展示，最多 MAX_EDITOR_LINES 行（不再单行截断）
+					const lead = "     "; // 5 列缩进，与上方 label 行对齐
+					const avail = Math.max(1, width - visibleWidth(lead));
+					const styled = t.fg("dim", `"${state.freeTextValue ?? ""}"`);
+					addWrappedInput(add, lead, styled, avail, MAX_EDITOR_LINES);
 				}
 			}
 		} else if (q.multiSelect) {
