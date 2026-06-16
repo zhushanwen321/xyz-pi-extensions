@@ -54,4 +54,59 @@ describe("forkContext", () => {
     expect(result.context).toContain("hello");
     expect(result.context).toContain("hi there");
   });
+
+  // ── extractText edge cases ─────────────────────────────────────────────────
+
+  it("extractText: content=undefined → empty string, entry skipped in output", () => {
+    const branch = [{ type: "userMessage", content: undefined }];
+    const result = forkContext(branch, {});
+    expect(result.exchangeCount).toBe(1);
+    // empty string is falsy, so forkContext skips the line
+    expect(result.context).not.toContain("**User:**");
+  });
+
+  it("extractText: content=null → empty string, entry skipped in output", () => {
+    const branch = [{ type: "userMessage", content: null }];
+    const result = forkContext(branch, {});
+    expect(result.exchangeCount).toBe(1);
+    expect(result.context).not.toContain("**User:**");
+  });
+
+  it("extractText: content=[] → empty string, entry skipped in output", () => {
+    const branch = [{ type: "userMessage", content: [] }];
+    const result = forkContext(branch, {});
+    expect(result.exchangeCount).toBe(1);
+    expect(result.context).not.toContain("**User:**");
+  });
+
+  it("extractText: content array with non-string elements uses .text", () => {
+    const branch = [{ type: "userMessage", content: [{ text: "hello" }, { text: " world" }] }];
+    const result = forkContext(branch, {});
+    expect(result.context).toContain("hello world");
+  });
+
+  it("extractText: content array with mixed types", () => {
+    const branch = [{ type: "assistantMessage", content: ["plain", { text: "structured" }, 42] }];
+    const result = forkContext(branch, {});
+    expect(result.context).toContain("plainstructured");
+  });
+
+  it("extractText: content array with elements missing .text → empty", () => {
+    const branch = [{ type: "userMessage", content: [{}] }];
+    const result = forkContext(branch, {});
+    expect(result.exchangeCount).toBe(1);
+  });
+
+  it("toolResult entries are skipped", () => {
+    const branch = [
+      { type: "userMessage", content: "q1" },
+      { type: "toolResult", content: "tool output" },
+      { type: "assistantMessage", content: "a1" },
+    ];
+    const result = forkContext(branch, {});
+    expect(result.exchangeCount).toBe(1);
+    expect(result.context).toContain("q1");
+    expect(result.context).toContain("a1");
+    expect(result.context).not.toContain("tool output");
+  });
 });

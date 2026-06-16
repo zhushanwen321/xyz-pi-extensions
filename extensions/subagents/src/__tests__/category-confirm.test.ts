@@ -95,10 +95,10 @@ describe("CategoryConfirmComponent", () => {
     expect(holder.value?.overrides.research).toEqual({ model: "deepseek-router/ds-flash", thinkingLevel: "high" });
   });
 
-  it("filter: 二级菜单打字过滤模型（唯一匹配 'haiku'）", () => {
+  it("filter: 二级菜单打字过滤模型（唯一匹配 'claude'）", () => {
     const { comp, holder } = makeComponent();
     comp.handleInput(ENTER); // coding model-menu
-    comp.handleInput("h"); comp.handleInput("a"); comp.handleInput("i"); comp.handleInput("k"); comp.handleInput("u"); // filter "haiku" → 唯一匹配 Haiku
+    comp.handleInput("c"); comp.handleInput("l"); comp.handleInput("a"); comp.handleInput("u"); comp.handleInput("d"); comp.handleInput("e"); // filter "claude" → 唯一匹配 Haiku (id=claude-haiku-4-5)
     comp.handleInput(ENTER); // 选 Haiku → 回主视图
     comp.handleInput(DOWN); comp.handleInput(DOWN); // ✓完成
     comp.handleInput(ENTER);
@@ -109,7 +109,7 @@ describe("CategoryConfirmComponent", () => {
     const { comp, holder } = makeComponent();
     comp.handleInput(ENTER); // coding model-menu
     comp.handleInput(DOWN); // 下移到 Haiku（index 1）
-    comp.handleInput("h"); comp.handleInput("a"); comp.handleInput("i"); comp.handleInput("k"); comp.handleInput("u"); // filter "haiku" → 仅 Haiku
+    comp.handleInput("c"); comp.handleInput("l"); comp.handleInput("a"); comp.handleInput("u"); comp.handleInput("d"); comp.handleInput("e"); // filter "claude" → 仅 Haiku (id=claude-haiku-4-5)
     // M2: applyFilter 重置 index=0，仍指向 Haiku
     comp.handleInput(ENTER); // 选 Haiku → 回主视图
     comp.handleInput(DOWN); comp.handleInput(DOWN); // ✓完成
@@ -133,7 +133,7 @@ describe("CategoryConfirmComponent", () => {
   it("filter-esc-clears-filter: 有 filter 时 ESC 先清空 filter，再 ESC 才回主视图（S2）", () => {
     const { comp, holder } = makeComponent();
     comp.handleInput(ENTER); // coding model-menu
-    comp.handleInput("h"); comp.handleInput("a"); comp.handleInput("i"); comp.handleInput("k"); comp.handleInput("u"); // filter "haiku"
+    comp.handleInput("c"); comp.handleInput("l"); comp.handleInput("a"); comp.handleInput("u"); comp.handleInput("d"); comp.handleInput("e"); // filter "claude"
     comp.handleInput(ESC); // S2: 有 filter → 清空 filter，不回主视图
     expect(holder.value).toBeNull(); // 仍在二级菜单
     comp.handleInput(ESC); // 无 filter → 回主视图
