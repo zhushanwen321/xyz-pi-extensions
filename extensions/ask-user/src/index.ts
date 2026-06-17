@@ -1,9 +1,9 @@
 // src/index.ts
-import { Box, Text, TruncatedText, truncateToWidth } from "@mariozechner/pi-tui";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, ToolRenderResultOptions } from "@mariozechner/pi-coding-agent";
+import { Box, Text, TruncatedText, truncateToWidth } from "@mariozechner/pi-tui";
+import { type Static } from "@sinclair/typebox";
 
 import { AskUserComponent } from "./component";
-import { type Static } from "@sinclair/typebox";
 import {
 	type AskUserDetails,
 	type ErrorDetails,
@@ -55,13 +55,19 @@ export default function (pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "ask_user",
 		label: "Ask User",
-		description: `Ask the user 1-4 clarifying questions before proceeding. Use this tool to clarify ambiguous instructions, get preference between approaches, or make implementation decisions. Each question has 2-4 options; users can always choose "Other" to type a free-text answer. Set multiSelect: true when multiple choices valid. The header field (≤12 chars) labels each question's tab when asking multiple. If you recommend an option, list it first with "(Recommended)". Always use this tool instead of asking in plain text — it provides a structured interactive UI.`,
-		promptSnippet: "Ask the user structured clarifying questions with options before proceeding",
+		description: `Ask the user to resolve ambiguity you cannot resolve yourself. Use ONLY when ALL hold: (1) the request has ≥2 reasonable approaches, (2) you have already gathered context (read/grep) and the answer is still genuinely ambiguous, and (3) picking wrong means redoing real work. One question = one decision with mutually exclusive options.
+
+Do NOT use this tool to outsource judgment you should make — if you can form a defensible recommendation from the codebase, proceed and state your choice. Do NOT use for trivia answerable by reading code/docs, or for simple confirmations ("I'll delete X") where plain text suffices. You cannot use this tool to collect free-form requirements, long-form feedback, or multi-paragraph input — it returns short selections only.
+
+If you recommend an option, prefix its label with "(Recommended)" and list it first. For structured multi-option decisions, prefer this tool over plain-text questions; for everything else, reply in plain text.`,
+		promptSnippet:
+			"Ask the user structured clarifying questions with options — only when you cannot resolve the ambiguity yourself",
 		promptGuidelines: [
-			"Use ask_user when the user's intent is ambiguous, a decision requires explicit input, or multiple valid options exist.",
-			"Gather context first (read/grep) and pass a short summary via the context field — don't ask blind.",
-			"Ask focused questions; each question = one decision. Batch related decisions into one call (1-4 questions).",
-			"Do NOT use ask_user for trivial choices or questions answerable by reading code/docs.",
+			"Use ask_user only when the request has ≥2 reasonable approaches you cannot resolve from context. Models over-ask because asking feels safer than deciding — resist this: if context makes the answer clear, proceed without asking.",
+			"Gather context first (read/grep) and pass a short summary via the context field — don't ask blind. If the answer becomes clear after gathering context, proceed and state your choice.",
+			"Ask focused questions; each question = one decision with mutually exclusive options. Batch related decisions into one call (1-4 questions).",
+			"Do NOT use ask_user for trivia answerable by reading code/docs, or to confirm simple actions ('I'll delete X') — plain text suffices there.",
+			"Do NOT outsource judgment you can make yourself: if you can form a defensible recommendation from the codebase, proceed and state it instead of asking.",
 			"Do NOT include an 'Other' option yourself — it is always available automatically.",
 		],
 		parameters: InputSchema,
@@ -97,7 +103,7 @@ export default function (pi: ExtensionAPI): void {
 					content: [
 						{
 							type: "text" as const,
-							text: "Error: ask_user requires an interactive session. The tool has been disabled for this session.",
+							text: "Error: ask_user requires an interactive session. The tool has been disabled for this session. Do not retry — proceed without user input (make a defensible decision and state it) or wait for the user to reconnect.",
 						},
 					],
 					isError: true,
@@ -108,7 +114,12 @@ export default function (pi: ExtensionAPI): void {
 			// 3. Signal abort 入口检查（spec FR-10）
 			if (signal?.aborted) {
 				return {
-					content: [{ type: "text" as const, text: "User cancelled" }],
+					content: [
+						{
+							type: "text" as const,
+							text: "User cancelled. Do not assume an answer or continue the task — wait for new instructions or re-ask with refined options if the decision is still required.",
+						},
+					],
 					details: { questions, answers: {}, cancelled: true } satisfies Result,
 				};
 			}
@@ -136,7 +147,12 @@ export default function (pi: ExtensionAPI): void {
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				return {
-					content: [{ type: "text" as const, text: `ask_user failed: ${message}` }],
+					content: [
+						{
+							type: "text" as const,
+							text: `ask_user failed: ${message}. Treat as cancelled — do not assume an answer; retry the call with corrected parameters, or proceed with a defensible decision if the user cannot be reached.`,
+						},
+					],
 					isError: true,
 					details: { error: message } satisfies ErrorDetails,
 				};
@@ -145,7 +161,12 @@ export default function (pi: ExtensionAPI): void {
 			// 5. 取消（null / cancelled）
 			if (result === null || result.cancelled) {
 				return {
-					content: [{ type: "text" as const, text: "User cancelled" }],
+					content: [
+						{
+							type: "text" as const,
+							text: "User cancelled. Do not assume an answer or continue the task — wait for new instructions or re-ask with refined options if the decision is still required.",
+						},
+					],
 					details: { questions, answers: {}, cancelled: true } satisfies Result,
 				};
 			}

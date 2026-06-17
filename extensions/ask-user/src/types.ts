@@ -15,30 +15,40 @@ export const ANSWER_COMMENT_SEPARATOR = " — ";
 // ── Input schema（LLM 调用参数） ─────────────────────
 // description 用英文：这些字符串会进 LLM 的 tool schema，英文更利于模型理解。
 export const OptionSchema = Type.Object({
-	label: Type.String({ description: "Option label; also the answer value returned to the LLM" }),
+	label: Type.String({
+		description:
+			"Short, mutually exclusive option label (also the answer value returned to the LLM — keep it concise, ≤ ~40 chars). To recommend an option, prefix its label with '(Recommended)' and list it first.",
+	}),
 	description: Type.Optional(
-		Type.String({ description: "Explanation shown under the label and in the split-pane preview" }),
+		Type.String({
+			description:
+				"Short rationale shown under the label and in the split-pane preview. Helps the user decide — explain the tradeoff, don't restate the label.",
+		}),
 	),
 });
 
 export const QuestionSchema = Type.Object({
-	question: Type.String({ description: "Full question text" }),
+	question: Type.String({
+		description:
+			"Full question text. Must be one self-contained decision; avoid multi-part questions. Plain text only (no newlines or control characters).",
+	}),
 	header: Type.Optional(
 		Type.String({
-			description: "Tab label, <=12 chars. Required for multi-question (questions.length>1); optional for single question",
+			description:
+				"Tab label, <=12 chars, required when questions.length > 1. Omit for a single question.",
 		}),
 	),
-	context: Type.Optional(Type.String({ description: "Context summary shown above the question" })),
+	context: Type.Optional(Type.String({ description: "Short context summary shown above the question. Pass what you learned from read/grep so the user can answer without re-explaining." })),
 	options: Type.Array(OptionSchema, {
 		minItems: 2,
 		maxItems: 4,
-		description: "2-4 options",
+		description: "2-4 mutually exclusive options. Each must be a defensible standalone answer; do NOT include an 'Other' option — it is added automatically.",
 	}),
 	multiSelect: Type.Optional(
-		Type.Boolean({ description: "Default false. true = multi-select checkbox" }),
+		Type.Boolean({ description: "Default false. Set true only when more than one option can validly apply simultaneously; otherwise leave false for a single best answer." }),
 	),
 	allowComment: Type.Optional(
-		Type.Boolean({ description: "Default false. true = append a free-text comment after selecting" }),
+		Type.Boolean({ description: "Default false. Set true to let the user append a short free-text comment after selecting (e.g. to note a constraint)." }),
 	),
 });
 
@@ -46,7 +56,7 @@ export const InputSchema = Type.Object({
 	questions: Type.Array(QuestionSchema, {
 		minItems: 1,
 		maxItems: 4,
-		description: "1-4 questions",
+		description: "1-4 questions, each a single decision. Batch only related decisions that the user should resolve together; otherwise ask the most important one alone.",
 	}),
 });
 

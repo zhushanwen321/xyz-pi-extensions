@@ -1,5 +1,5 @@
 // src/validate.ts
-import { QUESTION_MAX_CHARS, type Question } from "./types";
+import { type Question,QUESTION_MAX_CHARS } from "./types";
 
 /** 控制字符（含 \n \r \t 等）：question 文本禁止包含，避免 answers key 含不可见字符（spec FR-2） */
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
@@ -11,6 +11,8 @@ const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
  * - question 文本在数组内唯一
  * - 同问题内 option label 唯一
  * - 多问题（questions.length > 1）时每个 question 必须有非空 header
+ *
+ * 错误消息面向 LLM：除描述违规外，附带一句修复指引（如何改）。
  */
 export function validateInput(questions: Question[]): string | null {
 	const seenQuestions = new Set<string>();
@@ -20,16 +22,16 @@ export function validateInput(questions: Question[]): string | null {
 
 		// 1a. question 文本长度上限（key 有界）
 		if (qt.length > QUESTION_MAX_CHARS) {
-			return `Question text exceeds ${QUESTION_MAX_CHARS} chars: "${qt.slice(0, 20)}..."`;
+			return `Question text exceeds ${QUESTION_MAX_CHARS} chars: "${qt.slice(0, 20)}...". Shorten it to a single concise decision; move extra context into the context field.`;
 		}
 		// 1b. question 文本无控制字符（key 可预测，不影响下游渲染/解析）
 		if (CONTROL_CHAR_RE.test(qt)) {
-			return `Question text must not contain control characters (incl. newlines): "${qt.slice(0, 20)}..."`;
+			return `Question text must not contain control characters (incl. newlines): "${qt.slice(0, 20)}...". Use plain single-line text; split multi-part questions into separate entries.`;
 		}
 
 		// 1c. question 文本唯一
 		if (seenQuestions.has(qt)) {
-			return `Duplicate question: "${qt}"`;
+			return `Duplicate question: "${qt}". Each question text must be unique; merge duplicates or rephrase one to differ.`;
 		}
 		seenQuestions.add(qt);
 
@@ -37,10 +39,10 @@ export function validateInput(questions: Question[]): string | null {
 		const seenLabels = new Set<string>();
 		for (const opt of q.options) {
 			if (opt.label.trim() === "") {
-				return `Option label must not be empty in question "${q.question}"`;
+				return `Option label must not be empty in question "${q.question}". Give every option a distinct, descriptive label.`;
 			}
 			if (seenLabels.has(opt.label)) {
-				return `Duplicate option label "${opt.label}" in question "${q.question}"`;
+				return `Duplicate option label "${opt.label}" in question "${q.question}". Options must be mutually exclusive — reword one so each label maps to a distinct choice.`;
 			}
 			seenLabels.add(opt.label);
 		}
@@ -50,7 +52,7 @@ export function validateInput(questions: Question[]): string | null {
 	if (questions.length > 1) {
 		for (const q of questions) {
 			if (!q.header || q.header.trim() === "") {
-				return `Question "${q.question}" requires a non-empty header in multi-question mode`;
+				return `Question "${q.question}" requires a non-empty header in multi-question mode (it labels the tab). Provide a header of <=12 chars.`;
 			}
 		}
 	}

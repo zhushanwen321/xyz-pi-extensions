@@ -311,7 +311,9 @@ describe("execute — result handling (FR-7)", () => {
 			undefined,
 			makeCtx({ customResult: null }),
 		);
-		expect(result.content[0].text).toBe("User cancelled");
+		expect(result.content[0].text).toContain("User cancelled");
+		// P1-2: cancel message must guide the LLM not to assume an answer
+		expect(result.content[0].text).toContain("Do not assume");
 		expect(result.details.cancelled).toBe(true);
 	});
 
@@ -329,7 +331,8 @@ describe("execute — result handling (FR-7)", () => {
 			undefined,
 			makeCtx({ customResult: fakeResult }),
 		);
-		expect(result.content[0].text).toBe("User cancelled");
+		expect(result.content[0].text).toContain("User cancelled");
+		expect(result.content[0].text).toContain("Do not assume");
 		expect(result.details.cancelled).toBe(true);
 	});
 });
