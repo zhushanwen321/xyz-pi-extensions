@@ -1,40 +1,35 @@
 // src/core/turn-limiter.ts
-const WRAP_UP_MESSAGE = [
-  "You have reached your turn limit. Wrap up now:",
-  "1. Summarize what you have completed (with evidence: file paths, command output).",
-  "2. List what remains undone and why.",
-  "3. State the single most important next step for whoever continues.",
-  "Do NOT claim the task is complete if any part remains unfinished.",
-].join(" ");
+//
+// soft/hard turn 限制器。maxTurns 到达 → steer 提醒收尾；
+// graceTurns 后仍不结束 → abort。
 
-/**
- * FR-1.4: Soft turn limit + hard abort 状态机。
- * - turn 达到 maxTurns 时调用 steer(WRAP_UP_MESSAGE)
- * - 再经过 graceTurns 后调用 abort()
- * - maxTurns <= 0 时禁用
- */
-export function createTurnLimiter(opts: {
+/** turn limiter 配置。 */
+export interface TurnLimiterOptions {
   maxTurns: number;
   graceTurns: number;
-  steer: (message: string) => void;
+  steer: (msg: string) => void;
   abort: () => void;
-}) {
-  let steered = false;
-  let aborted = false;
-  const limit = opts.maxTurns > 0 ? opts.maxTurns : Infinity;
-  const grace = opts.graceTurns > 0 ? opts.graceTurns : 0;
+}
 
-  function onTurnEnd(turn: number): void {
-    if (aborted || !isFinite(limit)) return;
-    if (!steered && turn >= limit) {
-      steered = true;
-      opts.steer(WRAP_UP_MESSAGE);
-    }
-    if (steered && turn >= limit + grace) {
-      aborted = true;
-      opts.abort();
-    }
-  }
+/**
+ * soft/hard turn 限制。
+ *
+//   ╔══════════════════════════════════════════════════════════╗
+//   ║  onTurnEnd(currentTurns):                                 ║
+//   ║    if (currentTurns === maxTurns)       → steer("wrap up") ║
+//   ║    if (currentTurns >= maxTurns + graceTurns) → abort()   ║
+//   ╚══════════════════════════════════════════════════════════╝
+ *
+ * maxTurns=0 表示不限（直接 return）。
+ */
+export interface TurnLimiter {
+  /** 每次 turn_end 调用。 */
+  onTurnEnd(currentTurns: number): void;
+}
 
-  return { onTurnEnd, get didSteer() { return steered; }, get didAbort() { return aborted; } };
+/** 工厂函数。 */
+export function createTurnLimiter(opts: TurnLimiterOptions): TurnLimiter {
+  //  内部计数已 steer/abort 过的次数（避免重复 steer）
+  void opts;
+  throw new Error("not implemented");
 }

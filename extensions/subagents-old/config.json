@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "yoloByDefault": false,
+  "maxConcurrent": 4,
+  "categories": {
+    "coding": {
+      "label": "编码",
+      "model": "zhipu-coding-plan-router/glm-5.2",
+      "thinkingLevel": "xhigh"
+    },
+    "research": {
+      "label": "调研",
+      "model": "zhipu-coding-plan-router/glm-5.2",
+      "thinkingLevel": "xhigh"
+    },
+    "testing": {
+      "label": "测试",
+      "model": "zhipu-coding-plan-router/glm-5.2",
+      "thinkingLevel": "xhigh"
+    },
+    "vision": {
+      "label": "视觉",
+      "model": "kimi-coding-plan-router/kimi-for-coding",
+      "thinkingLevel": "xhigh"
+    },
+    "planning": {
+      "label": "规划",
+      "model": "zhipu-coding-plan-router/glm-5.2",
+      "thinkingLevel": "xhigh"
+    },
+    "general": {
+      "label": "通用",
+      "model": "zhipu-coding-plan-router/glm-5.2",
+      "thinkingLevel": "high"
+    }
+  },
+  "agentCategoryOverrides": {
+    "worker": "coding",
+    "reviewer": "coding",
+    "scout": "research"
+  },
+  "fallback": {
+    "model": "mimo-router/mimo-v2.5",
+    "thinkingLevel": "low"
+  }
+}
