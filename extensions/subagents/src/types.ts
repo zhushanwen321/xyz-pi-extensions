@@ -59,9 +59,16 @@ export interface AgentEventLogEntry {
 // Agent 结果（一次执行的 outcome）
 // ============================================================
 
+/** tool 调用结果（tool_execution_end 时 bridge 累积，含 structured-output 的 details）。 */
+export interface ToolCallResult {
+  content?: unknown[];
+  details?: unknown;
+}
+
 export interface ToolCall {
   toolName: string;
   args?: unknown;
+  result?: ToolCallResult;
   isError?: boolean;
 }
 
@@ -253,6 +260,51 @@ export interface PersistedAgentRecord {
   sessionId?: string;
   model?: string;
   thinkingLevel?: string;
+}
+
+// ============================================================
+// ManagedSession（长生命周期变体，支持多次 prompt/steer/abort）
+// ============================================================
+
+/** createManagedSession 的入参（身份字段，session 创建时确定）。 */
+export interface ManagedSessionOptions {
+  agent?: string;
+  model?: string;
+  thinkingLevel?: string;
+  skillPath?: string;
+  appendSystemPrompt?: string[];
+  onEvent?: (event: AgentEvent) => void;
+}
+
+/** ManagedSession.prompt 的单轮入参。每轮 turn 计数独立（bridge.resetForPrompt 清零）。 */
+export interface ManagedPromptOptions {
+  /** 本轮 hard turn limit。 */
+  maxTurns?: number;
+  /** soft limit 后宽限轮数（默认 2）。 */
+  graceTurns?: number;
+  /** 本轮中断信号。 */
+  signal?: AbortSignal;
+}
+
+/**
+ * 长生命周期 session。首次 prompt() 懒创建 Pi session，之后复用。
+ *   - prompt() 串行化（Pi session 不支持并发 prompt）
+ *   - steer() 在 session 就绪前缓存到 pendingSteers，ensureSession 时 flush
+ *   - abort() / dispose() 委托 Pi session
+ */
+export interface ManagedSession {
+  /** Pi session 的稳定 ID（session 创建前为 ""）。 */
+  readonly sessionId: string;
+  /** 是否未 dispose。 */
+  readonly alive: boolean;
+  /** 执行一轮（串行化，复用 session）。bridge 在每轮前 resetForPrompt。 */
+  prompt(task: string, opts?: ManagedPromptOptions): Promise<AgentResult>;
+  /** 注入消息（运行中=中途 steer；session 未就绪=入队下次 prompt）。 */
+  steer(message: string): void;
+  /** 中断当前 prompt（若在运行）。 */
+  abort(): void;
+  /** 显式销毁（unsubscribe + session.dispose）。幂等。 */
+  dispose(): void;
 }
 
 // ============================================================
