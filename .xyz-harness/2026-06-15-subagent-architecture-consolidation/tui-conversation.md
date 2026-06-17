@@ -26,7 +26,23 @@ accent bold  dim 括号(model · thinking)                     dim · 分隔 sta
 
 **窄终端截断**：保留 `{glyph} {agent}`，从右截断 meta/stats。
 
-### 第 2-5 行 — 滚动区（最近 4 条事件）
+### 第 2 行 — 实时活动行（P1#3，仅 running 且 currentActivity 存在时）
+
+```
+⎿ read auth.ts                    ← dim 实时活动（tool 执行中）
+```
+
+- **仅 running 时显示**，terminal 态（done/failed/cancelled）无此行，回归原布局
+- dim 整行，图标按 `currentActivity.type` 选（与 eventLog 图标体系统一）：
+  - `tool`（eventLog 最后一条 tool_start，未配对 tool_end）→ `› {tool label}`
+  - `thinking`（_currentThinking streaming 缓冲非空）→ `· {reasoning 片段}`
+  - `text`（_currentTurnText streaming 缓冲非空）→ `> {text 片段}`
+- 优先级：tool > thinking > text（tool 执行中时不显示 streaming）
+- **不计入滚动区配额**（COMPACT_SCROLL_LINES=4），是独立的「正在做什么」锚点
+- 让 streaming 期间用户始终看到「当前活动」，弥补 tool_start 边界事件之间的视觉空白
+- 数据来自 `executionStateToDetails` 投影的 `currentActivity` 字段（HANDOFF 架构分析 #3）
+
+### 第 3-6 行 — 滚动区（最近 4 条事件）
 
 ```
 › read auth.ts ✓

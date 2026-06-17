@@ -188,6 +188,53 @@ describe("buildRenderLines — 展开视图", () => {
   });
 });
 
+describe("P1#3: 实时活动行（compact 视图第 2 行）", () => {
+  it("running + currentActivity → 第 2 行是活动行（状态行后、滚动区前）", () => {
+    const lines = buildRenderLines(makeDetails({
+      status: "running",
+      currentActivity: { type: "tool", label: "read auth.ts" },
+      eventLog: [{ type: "tool_end", label: "prev tool", ts: 0, status: "done" }],
+    }), 80, passthroughTheme);
+    // 第 1 行状态行，第 2 行活动行（tool → `›`），第 3 行起 eventLog
+    expect(lines[0]).toContain("worker");
+    expect(lines[1]).toContain("read auth.ts");
+    expect(lines[1]).toMatch(/^›/); // tool 图标
+  });
+
+  it("活动行图标按 type 选（tool→›、text→>、thinking→·）", () => {
+    const tool = buildRenderLines(makeDetails({ currentActivity: { type: "tool", label: "x" } }), 80, passthroughTheme);
+    expect(tool[1]).toMatch(/^›/);
+    const text = buildRenderLines(makeDetails({ currentActivity: { type: "text", label: "x" } }), 80, passthroughTheme);
+    expect(text[1]).toMatch(/^>/);
+    const thinking = buildRenderLines(makeDetails({ currentActivity: { type: "thinking", label: "x" } }), 80, passthroughTheme);
+    expect(thinking[1]).toMatch(/^·/);
+  });
+
+  it("terminal 态无 currentActivity → 无活动行，回归原布局", () => {
+    // makeDetails 默认 currentActivity: undefined
+    const done = buildRenderLines(makeDetails({ status: "done", eventLog: [{ type: "tool_end", label: "t", ts: 0, status: "done" }] }), 80, passthroughTheme);
+    // 第 1 行状态行，第 2 行直接是 eventLog（无活动行）
+    expect(done[0]).toContain("✓");
+    expect(done[1]).toContain("t");
+    // 显式传 undefined 也应无活动行
+    const explicit = buildRenderLines(makeDetails({ status: "running", currentActivity: undefined }), 80, passthroughTheme);
+    expect(explicit).toHaveLength(1); // 仅状态行
+  });
+
+  it("活动行不计入滚动区配额（独立锚点，4 条 eventLog + 1 活动行 = 6 行）", () => {
+    const four = Array.from({ length: 4 }, (_, i) => ({ type: "tool_end" as const, label: `t${i}`, ts: i, status: "done" as const }));
+    const lines = buildRenderLines(makeDetails({
+      currentActivity: { type: "tool", label: "active" },
+      eventLog: four,
+    }), 80, passthroughTheme);
+    // 状态行(1) + 活动行(1) + 滚动区(4) = 6 行
+    expect(lines).toHaveLength(6);
+    expect(lines[1]).toContain("active");
+    // 滚动区 4 条 t0..t3 仍在（活动行没挤占配额）。精确匹配 tN 避免误中 "active"
+    expect(four.every((e) => lines.some((l) => l.includes(`› ${e.label} ✓`)))).toBe(true);
+  });
+});
+
 describe("SubagentResultComponent", () => {
   it("renders with background", () => {
     const comp = new SubagentResultComponent(makeDetails({ turns: 2, totalTokens: 5000, elapsedSeconds: 30 }), passthroughTheme);

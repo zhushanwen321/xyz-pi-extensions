@@ -10,7 +10,7 @@
 import { type Component, Text, visibleWidth } from "@earendil-works/pi-tui";
 
 import type { AgentEventLogEntry } from "../types.ts";
-import { formatEventLogLine, formatTokens } from "./format.ts";
+import { formatEventLogLine, formatTokens, OUTPUT_ICON, THINKING_ICON, TOOL_ICON } from "./format.ts";
 
 // ============================================================
 // Types
@@ -30,6 +30,13 @@ export interface SubagentToolDetails {
   model?: string;
   /** FR-1.2: thinking level */
   thinkingLevel?: string;
+  /**
+   * P1#3: 当前实时活动（仅 running 时填，terminal 时 undefined）。
+   * 渲染层在 compact 视图状态行下展示一行 dim 活动行，让 streaming 期间用户看到「正在做什么」。
+   * type 决定图标（tool→`›`、text→`>`、thinking→`·`），与 formatEventLogLine 图标体系统一。
+   * 来自 eventLog 最后一条 tool_start 或 streaming 缓冲（_currentTurnText/_currentThinking）。
+   */
+  currentActivity?: { type: "tool" | "text" | "thinking"; label: string };
 }
 
 export interface ThemeLike {
@@ -183,6 +190,14 @@ function buildCompactLines(details: SubagentToolDetails, width: number, theme: T
   // 避免「记忆桥」（用户不必跨行拼凑 agent 身份与进度）。
   lines.push(sanitizeLine(buildStatusLine(details, theme)));
 
+  // P1#3: 第 2 行——实时活动行（仅 running 且 currentActivity 存在时）。
+  // dim 呈现，图标按 type 选（tool→›、text→>、thinking→·），与 eventLog 图标体系统一。
+  // 该行独立于滚动区配额（COMPACT_SCROLL_LINES），是 streaming 期间的「正在做什么」锚点。
+  // terminal 态 currentActivity 为 undefined → 无此行，回归原布局。
+  if (details.currentActivity) {
+    lines.push(clampLine(formatActivityLine(details.currentActivity, theme), width));
+  }
+
   // 滚动区：最近 ≤4 条（过滤 turn_end——压缩视图不显示 turn 分隔），动态增长，不预填空行
   // 图标 `› `/`> `/`· `（图标 + 1 空格）由 formatEventLogLine 嵌入行首，占 2 可见列。
   const prefixWidth = 2;
@@ -201,6 +216,25 @@ function buildCompactLines(details: SubagentToolDetails, width: number, theme: T
 
   // 统一截断到可用宽度（避免任何单行超长触发 Pi 渲染异常）
   return lines.map((line) => clampLine(line, width));
+}
+
+/**
+ * P1#3: 格式化实时活动行。dim 整行，图标按 type 选（与 formatEventLogLine 一致）。
+ * - tool → `› {label}`（正在进行中的工具调用）
+ * - text → `> {label}`（streaming 文本输出片段）
+ * - thinking → `· {label}`（streaming 推理片段，整行 dim）
+ * label 经 sanitize 压成单行。活动行始终 dim（区别于 eventLog 历史的 normal/dim 混合）。
+ */
+function formatActivityLine(activity: { type: "tool" | "text" | "thinking"; label: string }, theme: ThemeLike): string {
+  const label = sanitizeLine(activity.label);
+  switch (activity.type) {
+    case "tool":
+      return theme.fg("dim", `${TOOL_ICON} ${label}`);
+    case "text":
+      return theme.fg("dim", `${OUTPUT_ICON} ${label}`);
+    case "thinking":
+      return theme.fg("dim", `${THINKING_ICON} ${label}`);
+  }
 }
 
 /**

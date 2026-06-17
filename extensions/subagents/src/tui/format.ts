@@ -117,10 +117,11 @@ export function formatEventLogLine(
   return `${OUTPUT_ICON} ${label}`;
 }
 
-/** eventLog 行首类型图标常量（见 tui-format.md §4 图标语义表）。 */
-const TOOL_ICON = "›";
-const OUTPUT_ICON = ">";
-const THINKING_ICON = "·";
+/** eventLog 行首类型图标常量（见 tui-format.md §4 图标语义表）。
+ *  P1#3: export 供 subagent-render.ts 的 formatActivityLine 复用，保证活动行与 eventLog 图标一致。 */
+export const TOOL_ICON = "›";
+export const OUTPUT_ICON = ">";
+export const THINKING_ICON = "·";
 
 /** 把 eventLog label 中的换行/回车/制表符替换为空格，避免 TUI 单行变多行。 */
 function sanitizeLogLabel(label: string): string {

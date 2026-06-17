@@ -395,4 +395,74 @@ describe("executionStateToDetails", () => {
     expect(details.eventLog).toHaveLength(20);
     expect(details.eventLog[0]).toEqual(firstEntryAtProjection);
   });
+
+  // ── P1#3: currentActivity 实时活动行投影 ──────────────────────────
+
+  it("P1#3: terminal 态 currentActivity 为 undefined", () => {
+    const state = createExecutionState("ca-term", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state, { type: "tool_start", toolName: "read" });
+    completeState(state, { text: "done", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }, "done");
+    const details = executionStateToDetails(state);
+    expect(details.currentActivity).toBeUndefined();
+  });
+
+  it("P1#3: running + tool_start 在最后 → currentActivity.type === 'tool'", () => {
+    const state = createExecutionState("ca-tool", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state, { type: "tool_start", toolName: "read", args: { path: "/a.ts" } });
+    const details = executionStateToDetails(state);
+    expect(details.currentActivity?.type).toBe("tool");
+    expect(details.currentActivity?.label).toContain("read");
+  });
+
+  it("P1#3: running + tool_end 在最后（无 running tool）→ 落到 thinking/text", () => {
+    // tool_end 后无 tool_start，应看 streaming 缓冲
+    const state = createExecutionState("ca-after-tool", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state, { type: "tool_start", toolName: "read" });
+    updateStateFromEvent(state, { type: "tool_end", toolName: "read", isError: false });
+    // 无 streaming 缓冲 → undefined
+    expect(executionStateToDetails(state).currentActivity).toBeUndefined();
+    // 有 thinking 缓冲 → thinking
+    updateStateFromEvent(state, { type: "thinking_delta", delta: "reasoning about results" });
+    expect(executionStateToDetails(state).currentActivity?.type).toBe("thinking");
+  });
+
+  it("P1#3: running + thinking streaming → currentActivity.type === 'thinking'", () => {
+    const state = createExecutionState("ca-think", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state, { type: "thinking_delta", delta: "analyzing the structure" });
+    const details = executionStateToDetails(state);
+    expect(details.currentActivity?.type).toBe("thinking");
+    expect(details.currentActivity?.label).toContain("analyzing");
+  });
+
+  it("P1#3: running + text streaming（无 thinking）→ currentActivity.type === 'text'", () => {
+    const state = createExecutionState("ca-text", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state, { type: "text_delta", delta: "generating response" });
+    const details = executionStateToDetails(state);
+    expect(details.currentActivity?.type).toBe("text");
+    expect(details.currentActivity?.label).toContain("generating");
+  });
+
+  it("P1#3: tool 优先级高于 thinking/text（tool 执行中时不显示 streaming）", () => {
+    const state = createExecutionState("ca-prio", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state, { type: "thinking_delta", delta: "thinking..." });
+    updateStateFromEvent(state, { type: "tool_start", toolName: "bash", args: { command: "ls" } });
+    const details = executionStateToDetails(state);
+    // tool_start 在最后 → 优先 tool，即使有 thinking 缓冲
+    expect(details.currentActivity?.type).toBe("tool");
+  });
+
+  it("P1#3: currentActivity 反映 streaming 缓冲的剩余（chunk 后）", () => {
+    // text 250 字符：TEXT_OUTPUT_CHUNK=100 → while 循环推 2 chunk（200），剩 50 在 _currentTurnText。
+    // currentActivity 应反映剩余缓冲（type=text, label=50 个 x），证明活动行是实时的、非历史 chunk。
+    const state = createExecutionState("ca-trunc", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state, { type: "text_delta", delta: "x".repeat(250) });
+    const details = executionStateToDetails(state);
+    expect(details.currentActivity?.type).toBe("text");
+    expect(details.currentActivity?.label).toBe("x".repeat(50));
+
+    // thinking 150 字符同理：THINKING_CHUNK=100 → 推 1 chunk，剩 50
+    const state2 = createExecutionState("ca-trunc2", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state2, { type: "thinking_delta", delta: "y".repeat(150) });
+    expect(executionStateToDetails(state2).currentActivity?.label).toBe("y".repeat(50));
+  });
 });

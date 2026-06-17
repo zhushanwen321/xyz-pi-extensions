@@ -273,5 +273,32 @@ export function executionStateToDetails(state: AgentExecutionState): SubagentToo
     elapsedSeconds,
     result: state.result,
     error: state.error,
+    // P1#3: 实时活动行（仅 running 时填）。computeCurrentActivity 优先级：
+    // running tool > thinking streaming > text streaming。
+    currentActivity: state.status === "running" ? computeCurrentActivity(state) : undefined,
   };
+}
+
+/**
+ * P1#3: 计算 running 时的当前活动（供 compact 视图第 2 行 dim 活动行）。
+ * 优先级：eventLog 最后一条 tool_start（未配对 tool_end）= tool 执行中；
+ * 否则 _currentThinking 非空 = thinking streaming；否则 _currentTurnText 非空 = text 输出。
+ * label 截断到 EVENT_LOG_LABEL_MAX，与 eventLog 条目一致。
+ * 返回 undefined 表示无明确活动（如刚启动、turn 间隙）。
+ */
+function computeCurrentActivity(state: AgentExecutionState): { type: "tool" | "text" | "thinking"; label: string } | undefined {
+  // 1. tool 执行中：eventLog 最后一条是 tool_start（status:"running"，无配对 tool_end）
+  const last = state.eventLog.at(-1);
+  if (last && last.type === "tool_start") {
+    return { type: "tool", label: last.label };
+  }
+  // 2. thinking streaming（_currentThinking 跨事件累积，非空即正在思考）
+  if (state._currentThinking) {
+    return { type: "thinking", label: state._currentThinking.slice(0, EVENT_LOG_LABEL_MAX) };
+  }
+  // 3. text 输出 streaming
+  if (state._currentTurnText) {
+    return { type: "text", label: state._currentTurnText.slice(0, EVENT_LOG_LABEL_MAX) };
+  }
+  return undefined;
 }
