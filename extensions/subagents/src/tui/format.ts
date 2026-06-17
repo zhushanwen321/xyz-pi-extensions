@@ -1,8 +1,8 @@
 // src/tui/format.ts
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-import { EVENT_LOG_LABEL_MAX } from "../types.ts";
 import type { AgentEventLogEntry, SubagentsGlobalConfig } from "../types.ts";
+import { EVENT_LOG_LABEL_MAX } from "../types.ts";
 
 const THINKING_DESCRIPTIONS: Record<string, string> = {
   off: "不使用推理",
