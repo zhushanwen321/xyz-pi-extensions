@@ -20,7 +20,7 @@ import type {
   BackgroundStatus,
   CompletedAgentRecord,
 } from "../types.ts";
-import { formatEventLogLine, formatTokens, type ThemeLike } from "./format.ts";
+import { formatEventLogLine, formatTokens, padVisible, truncVisible, type ThemeLike } from "./format.ts";
 
 // ============================================================
 // Types
@@ -53,6 +53,9 @@ export interface ViewState {
   filterText: string;        // filter 输入内容（默认可直接输入，无需进入 filter 模式）
   detailMode: boolean;       // Enter 进入详情全屏（右列占满），Esc 返回分屏
   disposed: boolean;
+  /** P3#5: sync agent 无法在详情页真正取消时，置 true 显示「请在对话流按 Esc」提示。
+   *  进入/切换详情时重置为 false。background agent 按 x 真正取消，不设此标记。 */
+  syncCancelHint: boolean;
 }
 
 const STATUS_PRIORITY: Record<BackgroundStatus["status"], number> = {
@@ -68,34 +71,8 @@ const MIN_TERMINAL_ROWS = 8;
 // ============================================================
 // ANSI-aware visible-width helpers
 // ============================================================
-
-/** Pad string to target visible width (right-pad with spaces). ANSI-safe. */
-function padVisible(s: string, width: number): string {
-  const vw = visibleWidth(s);
-  if (vw >= width) return s;
-  return s + " ".repeat(width - vw);
-}
-
-/** Truncate string to visible width, appending `…`. ANSI-safe。
- *  list 视图截断的输入（agent 名 / eventLog label）一般无样式；剥掉游离 ANSI 后
- *  按 grapheme 切到 maxWidth-1 + `…`，保证 indexOf（字面位置）== visibleWidth（可见位置），
- *  padVisible 列对齐不错位。 */
-const _segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-function truncVisible(s: string, maxWidth: number): string {
-  if (visibleWidth(s) <= maxWidth) return s;
-  if (maxWidth <= 1) return visibleWidth(s) > 0 ? "…" : s;
-  // 取可见宽度 <= maxWidth-1 的前缀 grapheme，再加 `…`
-  const target = maxWidth - 1;
-  let out = "";
-  let w = 0;
-  for (const { segment } of _segmenter.segment(s)) {
-    const sw = visibleWidth(segment);
-    if (w + sw > target) break;
-    out += segment;
-    w += sw;
-  }
-  return out + "…";
-}
+// P1#2: padVisible / truncVisible 已提升到 format.ts 作为宽度工具唯一真源。
+// 此处保留 wrapVisible（换行逻辑，截断工具之外的独立职责）。
 
 /** 把文本按可见宽度自动换行。用 visibleWidth 测量（ANSI-safe），按 grapheme 切分。
  *  超长单词（单个 word > maxWidth）强制截断。返回多行字符串数组。 */
@@ -423,6 +400,13 @@ function renderDetailView(
   // ── 内容行（全部生成后整体滚动）──
   const content: string[] = [];
 
+  // P3#5: sync agent 无法在详情页真正取消时，顶部显示提示（用户按 x 后 state.syncCancelHint=true）。
+  // background agent 按 x 真正取消，不设此标记，无提示行。
+  if (state.syncCancelHint) {
+    content.push(theme.fg("warning", "sync agent 无法在此取消，请在对话流按 Esc 中止"));
+    content.push("");
+  }
+
   // 状态 + stats 行
   const elapsed = record.endedAt
     ? formatDuration(record.endedAt - record.startedAt)
@@ -487,7 +471,9 @@ function renderDetailView(
   // ── Footer ──
   lines.push("├" + "─".repeat(contentWidth) + "┤");
   const scrollInfo = content.length > viewportHeight ? ` · ${startIdx + 1}-${Math.min(startIdx + viewportHeight, content.length)}/${content.length}` : "";
-  const footer = `↑↓ / PgUp PgDn / Home End 滚动${scrollInfo} · Esc 返回`;
+  // P3#5: running 时 footer 显示 x stop（仅 detailMode 可用）；非 running 隐藏避免误导。
+  const stopHint = record.status === "running" ? " · x stop" : "";
+  const footer = `↑↓ / PgUp PgDn / Home End 滚动${scrollInfo}${stopHint} · Esc 返回`;
   lines.push("│" + padVisible(theme.fg("muted", footer), contentWidth) + "│");
   lines.push("╰" + "─".repeat(contentWidth) + "╯");
 
@@ -526,18 +512,37 @@ export function processKey(
   _theme: ThemeLike,
   selectedRecord: SubagentRecord | null,
   done: () => void,
-  runtime: { cancelBackground: (id: string) => boolean } | null,
+  runtime: { cancelBackground: (id: string) => boolean; cancelRunningAgent: (id: string) => boolean } | null,
   detailCtx?: DetailKeyContext,
 ): boolean {
   if (state.disposed) return false;
 
   const filtered = applyFilter(records, state.filterText);
 
-  // ── 详情模式（Enter 进入的全屏详情）：↑↓ 行级 / PgUp PgDn 大跨度 / Home End 跳顶底 / Esc 返回 ──
+  // ── 详情模式（Enter 进入的全屏详情）：↑↓ 行级 / PgUp PgDn 大跨度 / Home End 跳顶底 / x stop / Esc 返回 ──
   if (state.detailMode) {
     if (matchesKey(data, Key.escape)) {
       state.detailMode = false;
+      state.syncCancelHint = false; // 退出详情清提示
       return true;
+    }
+    // P3#5: x 停止键——仅详情模式可用（分屏模式 x 作为 filter 字符）。
+    // background agent → runtime.cancelBackground 真正取消；
+    // sync agent → runtime.cancelRunningAgent 标记状态 + 设 syncCancelHint 提示用户走对话流 Esc。
+    if (data === "x") {
+      if (selectedRecord && selectedRecord.status === "running" && runtime) {
+        if (selectedRecord.mode === "background") {
+          runtime.cancelBackground(selectedRecord.id);
+          state.syncCancelHint = false;
+        } else {
+          // sync agent：runtime 无法主动 abort（AbortController 在 tool 闭包），
+          // 标记 cancelled + 提示用户在对话流按 Esc 真正中断。
+          runtime.cancelRunningAgent(selectedRecord.id);
+          state.syncCancelHint = true;
+        }
+        return true;
+      }
+      return false;
     }
     // 计算翻屏步长（视口高度）和最大滚动偏移
     const vh = detailCtx?.viewportHeight ?? 10;
@@ -592,7 +597,12 @@ export function processKey(
   }
   // Enter 进入详情全屏
   if (matchesKey(data, Key.enter)) {
-    if (filtered.length > 0) { state.detailMode = true; state.scrollOffset = 0; return true; }
+    if (filtered.length > 0) {
+      state.detailMode = true;
+      state.scrollOffset = 0;
+      state.syncCancelHint = false; // 进入新详情清提示
+      return true;
+    }
     return false;
   }
   // Backspace 删除 filter 字符（也匹配 Ctrl+H）
@@ -602,14 +612,8 @@ export function processKey(
     state.scrollOffset = 0;
     return true;
   }
-  // x stop
-  if (data === "x") {
-    if (selectedRecord && selectedRecord.status === "running" && runtime) {
-      runtime.cancelBackground(selectedRecord.id);
-      return true;
-    }
-    return false;
-  }
+  // P3#5: 分屏模式不再拦截 x——它现在作为 filter 字符（原 x 停止键移到 detailMode，
+  // 避免「想 filter 含 x 的 agent 名却误触发停止」的冲突，见 TUI 指南 §第三部分.3）。
   // 可打印字符 → filter 输入（默认可直接输入，无需进入 filter 模式）
   // 排除单字符 ANSI 序列前缀 ESC（\x1b）—— 已被上面 escape 拦截
   if (data.length === 1 && data >= " " && data <= "~") {
@@ -658,6 +662,7 @@ export function createSubagentsView(
       filterText: "",
       detailMode: false,
       disposed: false,
+      syncCancelHint: false,
     };
     if (initialDirectId) {
       const idx = allInitial.findIndex((r) => r.id === initialDirectId);

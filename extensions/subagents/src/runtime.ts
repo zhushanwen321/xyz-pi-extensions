@@ -42,6 +42,7 @@ import {
 } from "./types.ts";
 import { createThrottle } from "./utils/throttle.ts";
 import type { SubagentToolDetails } from "./tui/subagent-render.ts";
+export { setRuntime, getRuntime } from "./runtime-slot.ts"; // 单例访问器拆至 runtime-slot.ts（避免本文件超 1000 行上限）
 
 /** Pi ExtensionAPI 的最小接口（duck-typed，用于 appendEntry / events.emit / sendMessage） */
 interface PiLike {
@@ -840,6 +841,29 @@ export class SubagentRuntime {
     return true;
   }
 
+  /**
+   * P3#5: 取消正在运行的 sync agent（通过 listRunningAgents 暴露的 id 查找）。
+   *
+   * ⚠️ 能力局限：sync agent 的 AbortController 在 tool execute 闭包里（subagent-tool.ts），
+   * runtime 不持有它，无法主动 abort 正在执行的 session.prompt()。与 background 不同——
+   * background 的 controller 由 runtime 创建并持有（startBackground），可调 controller.abort()。
+   *
+   * 因此本方法只标记 state.status="cancelled" + endedAt，让 /subagents list 视觉上反映
+   * 用户意图，但**不会真正中断正在跑的 LLM 调用**。真正的中断仍需用户在对话流按 Esc
+   * （Pi 的 tool 取消机制走 signal.aborted 路径）。
+   *
+   * 返回 true=找到并标记 / false=无此 id 或非 running；调用方（detailMode x 键）据返回值决定是否显示「请在对话流按 Esc」提示。
+   */
+  cancelRunningAgent(id: string): boolean {
+    const state = this._runningAgents.get(id);
+    if (!state || state.status !== "running") return false;
+    state.status = "cancelled";
+    state.endedAt = Date.now();
+    this._runningAgents.set(id, state);
+    this.notifyChange();
+    return true;
+  }
+
   /** 列出所有 background 任务状态 */
   listBackground(): BackgroundStatus[] {
     return [...this._bgRecords.values()].map((r) => {
@@ -972,28 +996,4 @@ export class SubagentRuntime {
     this._disposed = false;
     this._bgNotifier.revive();
   }
-}
-
-
-// 进程内单例：用 globalThis 持有，避免 jiti 因路径字符串不同加载多份模块导致单例分裂。
-// 场景：workflow 扩展 import "@zhushanwen/pi-subagents" 与 subagents 扩展被 pi 直接加载，
-// 若 jiti 缓存 key 用路径字符串（非 realpath），两份 runtime.ts 各持一个 _runtimeSlot，
-// setRuntime 写 A、getRuntime 读 B(null)。globalThis 跨所有模块实例共享，彻底消除该问题。
-const RUNTIME_SLOT_KEY = Symbol.for("@zhushanwen/pi-subagents.runtime");
-
-type RuntimeSlot = { current?: SubagentRuntime };
-
-function getSlot(): RuntimeSlot {
-  if (!(globalThis as Record<symbol, unknown>)[RUNTIME_SLOT_KEY]) {
-    (globalThis as Record<symbol, unknown>)[RUNTIME_SLOT_KEY] = { current: undefined };
-  }
-  return (globalThis as Record<symbol, RuntimeSlot>)[RUNTIME_SLOT_KEY];
-}
-
-export function setRuntime(rt: SubagentRuntime): void {
-  getSlot().current = rt;
-}
-
-export function getRuntime(): SubagentRuntime | undefined {
-  return getSlot().current;
 }

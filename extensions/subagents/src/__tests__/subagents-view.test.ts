@@ -26,7 +26,7 @@ function makeRecord(overrides: Partial<SubagentRecord> = {}): SubagentRecord {
 }
 
 function makeState(overrides: Partial<ViewState> = {}): ViewState {
-  return { selectedIdx: 0, scrollOffset: 0, filterText: "", detailMode: false, disposed: false, ...overrides };
+  return { selectedIdx: 0, scrollOffset: 0, filterText: "", detailMode: false, disposed: false, syncCancelHint: false, ...overrides };
 }
 
 // ── collectRecords / sortRecords ──
@@ -354,21 +354,62 @@ describe("processKey", () => {
     expect(state.filterText).toBe("ab");
   });
 
-  it("x on running background agent calls cancelBackground", () => {
+  // ── P3#5: x 键停止方案重设计 ──
+  // 分屏模式：x 作为 filter 字符（不再停止）；detailMode：x 停止 running agent。
+
+  it("P3#5: 分屏模式 x 作为 filter 字符（不停止 agent）", () => {
     const state = makeState();
     const records2 = [makeRecord({ id: "bg-1", status: "running" })];
     const cancel = vi.fn(() => true);
-    processKey("x", records2, state, fakeTheme, records2[0], () => {}, { cancelBackground: cancel });
-    expect(cancel).toHaveBeenCalledWith("bg-1");
+    const result = processKey("x", records2, state, fakeTheme, records2[0], () => {}, { cancelBackground: cancel, cancelRunningAgent: vi.fn() });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(state.filterText).toBe("x");
+    expect(result).toBe(true);
   });
 
-  it("x does nothing on non-running agent", () => {
-    const state = makeState();
+  it("P3#5: detailMode x 停止 running background agent", () => {
+    const state = makeState({ detailMode: true });
+    const records2 = [makeRecord({ id: "bg-1", status: "running", mode: "background" })];
+    const cancel = vi.fn(() => true);
+    const result = processKey("x", records2, state, fakeTheme, records2[0], () => {}, { cancelBackground: cancel, cancelRunningAgent: vi.fn() });
+    expect(cancel).toHaveBeenCalledWith("bg-1");
+    expect(state.syncCancelHint).toBe(false); // background 真正取消，无提示
+    expect(result).toBe(true);
+  });
+
+  it("P3#5: detailMode x 对 sync agent 设 syncCancelHint 提示", () => {
+    const state = makeState({ detailMode: true });
+    const records2 = [makeRecord({ id: "run-1", status: "running", mode: "sync" })];
+    const cancelRunning = vi.fn(() => true);
+    const cancelBg = vi.fn(() => true);
+    const result = processKey("x", records2, state, fakeTheme, records2[0], () => {}, { cancelBackground: cancelBg, cancelRunningAgent: cancelRunning });
+    expect(cancelRunning).toHaveBeenCalledWith("run-1");
+    expect(cancelBg).not.toHaveBeenCalled(); // sync 不走 background cancel
+    expect(state.syncCancelHint).toBe(true); // 设提示，渲染层据此显示「请在对话流按 Esc」
+    expect(result).toBe(true);
+  });
+
+  it("P3#5: detailMode x 对非 running agent 无操作", () => {
+    const state = makeState({ detailMode: true });
     const records2 = [makeRecord({ id: "run-1", status: "done" })];
     const cancel = vi.fn(() => true);
-    const result = processKey("x", records2, state, fakeTheme, records2[0], () => {}, { cancelBackground: cancel });
+    const result = processKey("x", records2, state, fakeTheme, records2[0], () => {}, { cancelBackground: cancel, cancelRunningAgent: vi.fn() });
     expect(cancel).not.toHaveBeenCalled();
     expect(result).toBe(false);
+  });
+
+  it("P3#5: Esc 退出详情时清 syncCancelHint", () => {
+    const state = makeState({ detailMode: true, syncCancelHint: true });
+    processKey("\x1b", records, state, fakeTheme, null, () => {}, null);
+    expect(state.detailMode).toBe(false);
+    expect(state.syncCancelHint).toBe(false);
+  });
+
+  it("P3#5: Enter 进入详情时清 syncCancelHint", () => {
+    const state = makeState({ syncCancelHint: true });
+    processKey(ENTER, records, state, fakeTheme, null, () => {}, null);
+    expect(state.detailMode).toBe(true);
+    expect(state.syncCancelHint).toBe(false);
   });
 
   it("ignored when disposed", () => {

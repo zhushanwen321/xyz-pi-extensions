@@ -325,6 +325,11 @@ export class SubagentResultComponent implements Component {
   private _details: SubagentToolDetails;
   private _theme: ThemeLike;
   private _expanded = false;
+  /** P3#7: render 缓存——streaming 期间 SDK 每次 onUpdate 重建组件再 render，
+   * eventLog 到 20 条时 rebuild string[] 有开销。缓存同 width 结果，update/setExpanded/invalidate 时清。
+   * 参照 pi-extension-standards.md §15.2 范式。 */
+  private _cachedWidth: number | undefined;
+  private _cachedLines: string[] | undefined;
 
   constructor(details: SubagentToolDetails, theme: ThemeLike) {
     this._details = details;
@@ -336,22 +341,36 @@ export class SubagentResultComponent implements Component {
     // theme 可选刷新：用户 /theme 切换后，复用实例拿到新 theme 引用。
     // 不传时保留旧 theme（向后兼容 renderSubagentResult 仅传 details 的场景）。
     if (theme) this._theme = theme;
+    this.invalidate(); // details/theme 变化 → 清缓存
   }
 
   setExpanded(expanded: boolean): void {
-    this._expanded = expanded;
+    // P3#7: 仅当值真正变化时才 invalidate——SDK 每次 renderResult 都调 setExpanded
+    // （subagent-tool.ts:95/100），值未变若也清缓存会导致缓存形同虚设。
+    if (this._expanded !== expanded) {
+      this._expanded = expanded;
+      this.invalidate();
+    }
   }
 
   // fallow-ignore-next-line unused-class-member — pi-tui Component 接口契约（theme 切换/重渲时框架调用）
   invalidate(): void {
-    // 无缓存（render 每次 buildRenderLines 重新构建 string[]），无需额外清理。
+    this._cachedWidth = undefined;
+    this._cachedLines = undefined;
   }
 
   render(width: number): string[] {
+    // P3#7: 命中缓存直接返回（同 width + 未 invalidate）。
+    if (this._cachedLines && this._cachedWidth === width) {
+      return this._cachedLines;
+    }
     // 背景色与 padding 由 Pi default shell 的 contentBox 施加；本组件只负责内容行。
     // 直接构建 string[]，让 Pi 的 contentBox 把每个非空行包成 Text 行、空行用背景填充。
-    return buildRenderLines(this._details, width, this._theme, {
+    const lines = buildRenderLines(this._details, width, this._theme, {
       expanded: this._expanded,
     });
+    this._cachedWidth = width;
+    this._cachedLines = lines;
+    return lines;
   }
 }

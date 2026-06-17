@@ -59,7 +59,9 @@ export function createEventBridge(onEvent: (event: AgentEvent) => void) {
         const result = raw.result as AgentToolCallEntry["result"] | undefined;
         const isError = raw.isError ?? false;
         toolCalls.push({ toolName, args, result, isError });
-        onEvent({ type: "tool_end", toolName, result, isError });
+        // P1#1: 透传 args 给 AgentEvent.tool_end——execution-state 据此复用 extractLabelFromArgs
+        // 提取 label（如 "bash find /Users/..."），不再退化成裸 toolName（"bash"）。
+        onEvent({ type: "tool_end", toolName, args, result, isError });
         // 清理 pendingTools：tool 完成后从进行中集合移除，防止跨 prompt 累积脏数据
         if (raw.toolCallId) pendingTools.delete(raw.toolCallId);
         break;

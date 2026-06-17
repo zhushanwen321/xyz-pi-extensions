@@ -11,7 +11,13 @@ import {
   executionStateToDetails,
   updateStateFromEvent,
 } from "../state/execution-state.ts";
-import type { AgentResult } from "../types.ts";
+import {
+  type AgentResult,
+  EVENT_LOG_LABEL_MAX,
+  TEXT_OUTPUT_CHUNK,
+  THINKING_CHUNK,
+  TURN_SUMMARY_MAX,
+} from "../types.ts";
 
 // ============================================================
 // createExecutionState
@@ -127,6 +133,42 @@ describe("updateStateFromEvent", () => {
     expect(state.eventLog[0].status).toBe("failed");
   });
 
+  // ── P1#1: tool_end 复用 args 提取 label ──────────────────────────
+  // tool_end 必须用 event.args 提取 label（与 tool_start 对称），不再退化成裸 toolName。
+  it("P1#1: tool_end 复用 args 提取 label（不再退化成裸 toolName）", () => {
+    const state = createExecutionState("t-toolend-label", {
+      agent: "default",
+      model: "m",
+      startedAt: 0,
+    });
+    updateStateFromEvent(state, {
+      type: "tool_end", toolName: "bash", args: { command: "ls -la" }, isError: false,
+    });
+    expect(state.eventLog[0].label).toBe("bash ls -la");
+  });
+
+  it("P1#1: tool_end 无 args 时回退到裸 toolName（向后兼容）", () => {
+    const state = createExecutionState("t-toolend-fallback", {
+      agent: "default",
+      model: "m",
+      startedAt: 0,
+    });
+    updateStateFromEvent(state, { type: "tool_end", toolName: "read", isError: false });
+    expect(state.eventLog[0].label).toBe("read");
+  });
+
+  it("P1#1: tool_end 带 path args 提取 basename label", () => {
+    const state = createExecutionState("t-toolend-path", {
+      agent: "default",
+      model: "m",
+      startedAt: 0,
+    });
+    updateStateFromEvent(state, {
+      type: "tool_end", toolName: "read", args: { path: "src/foo/bar.ts" }, isError: false,
+    });
+    expect(state.eventLog[0].label).toBe("read bar.ts");
+  });
+
   it("accumulates text_delta into _currentTurnText", () => {
     const state = createExecutionState("t-6", {
       agent: "default",
@@ -196,6 +238,120 @@ describe("updateStateFromEvent", () => {
     expect(state.eventLog).toHaveLength(0);
     expect(state.turns).toBe(0);
     expect(state.totalTokens).toBe(0);
+  });
+
+  // ── P2#3: 从 event-log-builder.test.ts + runtime-eventlog.test.ts 迁移 ──
+  // 这些用例覆盖 eventLog chunking 的细节（多片切片、余数 carry-over、
+  // turn_end summary 长度、label_max 截断），原测试文件已随 event-log-builder.ts 删除。
+
+  it("P2#3: text_delta 达 TEXT_OUTPUT_CHUNK 产生 text_output entry（throttled）", () => {
+    const state = createExecutionState("t-chunk-1", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state, { type: "text_delta", delta: "x".repeat(TEXT_OUTPUT_CHUNK) });
+    const entries = state.eventLog.filter((e) => e.type === "text_output");
+    expect(entries).toHaveLength(1);
+    expect(entries[0].label.length).toBeLessThanOrEqual(EVENT_LOG_LABEL_MAX);
+  });
+
+  it("P2#3: text_delta 未达 TEXT_OUTPUT_CHUNK 不产生 entry", () => {
+    const state = createExecutionState("t-chunk-2", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state, { type: "text_delta", delta: "x".repeat(TEXT_OUTPUT_CHUNK - 1) });
+    expect(state.eventLog.filter((e) => e.type === "text_output")).toHaveLength(0);
+  });
+
+  it("P2#3: 长文本产生多个 text_output chunk，余数保留（FR-1.1b）", () => {
+    const state = createExecutionState("t-chunk-3", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state, { type: "text_delta", delta: "x".repeat(200) });
+    updateStateFromEvent(state, { type: "turn_end" });
+    // 200 字符 → while 切 2 次（各 100），余 0；turn_end 时缓冲已空 → summary 为空。
+    // 共 3 条：2 text_output + 1 turn_end。
+    expect(state.eventLog).toHaveLength(3);
+    expect(state.eventLog[0].type).toBe("text_output");
+    expect(state.eventLog[0].label).toHaveLength(100);
+    expect(state.eventLog[1].type).toBe("text_output");
+    expect(state.eventLog[1].label).toHaveLength(100);
+    expect(state.eventLog[2].type).toBe("turn_end");
+    expect(state.eventLog[2].label).toHaveLength(0);
+  });
+
+  it("P2#3: text 余数 carry-over 到下一次 delta（FR-1.1b）", () => {
+    const state = createExecutionState("t-chunk-4", { agent: "default", model: "m", startedAt: 0 });
+    // 150 字符：切 100（label）+ 余 50。50 < 100 不再切。
+    updateStateFromEvent(state, { type: "text_delta", delta: "x".repeat(150) });
+    // 再 60 字符：50+60=110 ≥ 100 → 切 100，余 10
+    updateStateFromEvent(state, { type: "text_delta", delta: "y".repeat(60) });
+    updateStateFromEvent(state, { type: "turn_end" });
+    // 2 条 text_output（150 切 1 条；余 50+60=110 切 1 条）+ turn_end flush 余 10 + turn_end summary
+    const textOutputs = state.eventLog.filter((e) => e.type === "text_output");
+    expect(textOutputs.length).toBe(3);
+    expect(textOutputs[0].label).toHaveLength(100);
+    expect(textOutputs[1].label).toHaveLength(100);
+    expect(textOutputs[2].label).toHaveLength(10);
+  });
+
+  it("P2#3: thinking_delta 达 THINKING_CHUNK 产生 thinking entry", () => {
+    const state = createExecutionState("t-chunk-5", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state, { type: "thinking_delta", delta: "y".repeat(THINKING_CHUNK) });
+    expect(state.eventLog.filter((e) => e.type === "thinking")).toHaveLength(1);
+  });
+
+  it("P2#3: 大段 thinking 产生多个 thinking chunk", () => {
+    const state = createExecutionState("t-chunk-6", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state, { type: "thinking_delta", delta: "t".repeat(THINKING_CHUNK * 3) });
+    const thinkingEntries = state.eventLog.filter((e) => e.type === "thinking");
+    expect(thinkingEntries.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("P2#3: turn_end flush 残留 thinking 并重置 _currentThinking", () => {
+    const state = createExecutionState("t-chunk-7", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state, { type: "thinking_delta", delta: "partial thought" });
+    updateStateFromEvent(state, { type: "turn_end" });
+    expect(state.eventLog.filter((e) => e.type === "thinking").length).toBeGreaterThanOrEqual(1);
+    expect(state._currentThinking).toBe("");
+  });
+
+  it("P2#3: text/thinking delta 交错累积互不干扰", () => {
+    const state = createExecutionState("t-chunk-8", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state, { type: "text_delta", delta: "hello " });
+    updateStateFromEvent(state, { type: "thinking_delta", delta: "reasoning " });
+    updateStateFromEvent(state, { type: "text_delta", delta: "world" });
+    updateStateFromEvent(state, { type: "thinking_delta", delta: "done" });
+    // 均未达阈值 → 无 entry
+    expect(state.eventLog).toHaveLength(0);
+    updateStateFromEvent(state, { type: "turn_end" });
+    const textEntries = state.eventLog.filter((e) => e.type === "text_output");
+    const thinkingEntries = state.eventLog.filter((e) => e.type === "thinking");
+    expect(textEntries).toHaveLength(1);
+    expect(textEntries[0].label).toBe("hello world");
+    expect(thinkingEntries).toHaveLength(1);
+    expect(thinkingEntries[0].label).toBe("reasoning done");
+  });
+
+  it("P2#3: turn_end summary 截断到 TURN_SUMMARY_MAX", () => {
+    const state = createExecutionState("t-chunk-9", { agent: "default", model: "m", startedAt: 0 });
+    const text = "a".repeat(TURN_SUMMARY_MAX + 10);
+    updateStateFromEvent(state, { type: "text_delta", delta: text });
+    updateStateFromEvent(state, { type: "turn_end" });
+    const turnEnd = state.eventLog.find((e) => e.type === "turn_end");
+    expect(turnEnd).toBeDefined();
+    expect(turnEnd!.label.length).toBe(TURN_SUMMARY_MAX);
+  });
+
+  it("P2#3: text_output label 截断到 EVENT_LOG_LABEL_MAX", () => {
+    const state = createExecutionState("t-chunk-10", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state, { type: "text_delta", delta: "b".repeat(TEXT_OUTPUT_CHUNK) });
+    const textEntry = state.eventLog.find((e) => e.type === "text_output");
+    expect(textEntry).toBeDefined();
+    expect(textEntry!.label.length).toBeLessThanOrEqual(EVENT_LOG_LABEL_MAX);
+  });
+
+  it("P2#3: message_end 只累加 totalTokens，不写 eventLog", () => {
+    const state = createExecutionState("t-chunk-11", { agent: "default", model: "m", startedAt: 0 });
+    updateStateFromEvent(state, {
+      type: "message_end",
+      usage: { input: 100, output: 200, cacheRead: 0, cacheWrite: 0, cost: 0 },
+    });
+    expect(state.eventLog).toHaveLength(0);
+    expect(state.totalTokens).toBe(300);
   });
 });
 

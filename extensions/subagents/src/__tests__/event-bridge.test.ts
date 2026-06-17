@@ -22,10 +22,26 @@ describe("createEventBridge", () => {
       isError: false,
     } as never);
     expect(events).toEqual([{
-      type: "tool_end", toolName: "structured-output",
+      type: "tool_end", toolName: "structured-output", args: undefined,
       result: { content: [{ type: "text", text: "done" }], details: { output: 42 } },
       isError: false,
     }]);
+  });
+
+  it("P1#1: propagates args from tool_execution_start into tool_end event", () => {
+    // tool_end 必须携带 tool_start 暂存的 args，让 execution-state 能复用 extractLabelFromArgs
+    // 提取 label（如 "bash find /Users/..."），不再退化成裸 toolName。
+    const events: AgentEvent[] = [];
+    const bridge = createEventBridge((e) => events.push(e));
+    const args = { command: "find /Users -name '*.ts'" };
+    bridge.handle({ type: "tool_execution_start", toolCallId: "1", toolName: "bash", args } as never);
+    bridge.handle({
+      type: "tool_execution_end", toolCallId: "1", toolName: "bash",
+      result: { content: [{ type: "text", text: "ok" }] }, isError: false,
+    } as never);
+    const toolEnd = events.find((e) => e.type === "tool_end");
+    expect(toolEnd).toBeDefined();
+    expect((toolEnd as { args?: unknown }).args).toEqual(args);
   });
 
   it("maps turn_end and increments turn counter", () => {

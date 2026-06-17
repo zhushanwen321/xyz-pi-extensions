@@ -19,6 +19,7 @@
 import { type Component,Container, Text } from "@earendil-works/pi-tui";
 
 import type { BgNotifyDetails, BgNotifyRecord } from "../persistence/bg-notifier.ts";
+import { truncVisible } from "./format.ts";
 import { SubagentResultComponent, type SubagentToolDetails, type ThemeLike } from "./subagent-render.ts";
 
 /** ms → seconds */
@@ -61,7 +62,9 @@ function statusGlyph(status: BgNotifyRecord["status"], theme: ThemeLike): string
 function previewOneLine(rec: BgNotifyRecord): string {
   const body = rec.result?.text ?? rec.error ?? "(no output)";
   const flat = body.replace(/\s+/g, " ").trim();
-  return flat.length > BATCH_PREVIEW_MAX ? flat.slice(0, BATCH_PREVIEW_MAX) + "…" : flat;
+  // P1#2: 用 truncVisible（grapheme-safe）替代 .slice——结果文本可能含 CJK/emoji，
+  // .slice 会劈半代理对/grapheme cluster 产生乱码。
+  return truncVisible(flat, BATCH_PREVIEW_MAX);
 }
 
 /** 渲染合并通知：标题行 + 每条一行摘要。 */

@@ -17,7 +17,7 @@ import type { AgentResult, BackgroundHandle, BackgroundStatus } from "../types.t
 // 路径 `../runtime.ts` 相对测试文件解析为 src/runtime.ts，
 // 与 subagent-tool.ts 内 `import { getRuntime } from "../runtime.ts"`
 // （相对 src/tools/ 也是 src/runtime.ts）解析到同一绝对路径，故能命中。
-// 仅 mock getRuntime/setRuntime（隔离 runtime 单例）；updateWidgetFromEvent 透传真实实现
+// 仅 mock getRuntime/setRuntime（隔离 runtime 单例）；updateStateFromEvent 透传真实实现
 // （它是纯函数，操作传入的 state，不需隔离）。
 vi.mock("../runtime.ts", async (importActual) => {
   const actual = await importActual<typeof import("../runtime.ts")>();
@@ -174,7 +174,7 @@ describe("subagent tool execute()", () => {
   });
 
   // ── 场景 1b: C1 回归 — sync 模式产生 text_output（与 background 一致）────
-  it("sync mode: emits text_output entries via updateWidgetFromEvent (FR-2.1 consistency)", async () => {
+  it("sync mode: emits text_output entries via updateStateFromEvent (FR-2.1 consistency)", async () => {
     const mockRt = makeMockRuntime({
       runAgent: vi.fn(async (opts: { onEvent?: (e: unknown) => void }) => {
         // 发超 100 字符的 text_delta → 应触发 text_output 切片

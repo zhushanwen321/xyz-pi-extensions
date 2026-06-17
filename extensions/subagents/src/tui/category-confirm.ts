@@ -15,6 +15,7 @@ import {
 import type { Theme } from "@mariozechner/pi-coding-agent";
 
 import type { ModelInfo } from "../types.ts";
+import { padVisible } from "./format.ts";
 
 export type CategoryConfirmResult =
   | { action: "confirmed"; overrides: Record<string, { model: string; thinkingLevel?: string }> }
@@ -144,7 +145,10 @@ export class CategoryConfirmComponent extends Container {
       const currentModel = this.overrides.get(item)?.model ?? this.currentModels[item] ?? "";
       const changed = this.overrides.has(item);
       const prefix = selected ? t.fg("accent", "→ ") : changed ? t.fg("success", "✱ ") : "  ";
-      const name = selected ? t.fg("accent", t.bold(item.padEnd(12))) : t.fg("text", item.padEnd(12));
+      // P2#4: 用 padVisible（ANSI-safe，按可见宽度 pad）替代 padEnd（UTF-16 code unit）。
+      // 当前 item 是纯 ASCII category 名，padEnd 也安全；但与项目其他位置统一用 padVisible，
+      // 避免未来 item 含样式/CJK 时错位（padEnd 会把 ANSI 转义码算进宽度）。
+      const name = selected ? t.fg("accent", t.bold(padVisible(item, 12))) : t.fg("text", padVisible(item, 12));
       const model = t.underline(currentModel) + (changed ? t.fg("dim", " (已修改)") : "");
       this.addChild(new Text(prefix + name + " " + model, 0, 0));
     }

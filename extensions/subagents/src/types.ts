@@ -48,7 +48,7 @@ export const EVENT_LOG_LABEL_MAX = 100;
 
 /**
  * 记录每条事件的可展示信息。与 AgentEvent 不同：
- * - ts 由 updateWidgetFromEvent 内 Date.now() 生成（AgentEvent 无此字段）
+ * - ts 由 updateStateFromEvent 内 Date.now() 生成（AgentEvent 无此字段）
  * - label 已折叠为可展示字符串（toolName + args 摘要 / turn 文本摘要）
  */
 export interface AgentEventLogEntry {
@@ -254,7 +254,7 @@ export interface PersistedAgentRecord {
 // ============================================================
 
 /**
- * 已完成的 sync agent 归档记录。widget linger 淡出前从 WidgetAgentState 转移。
+ * 已完成的 sync agent 归档记录。widget linger 淡出前从 AgentExecutionState 转移。
  * 留存上限 COMPLETED_AGENTS_MAX（FIFO 淘汰最旧）。
  */
 export interface CompletedAgentRecord {
@@ -289,7 +289,7 @@ export type AgentEventType =
 
 export type AgentEvent =
   | { type: "tool_start"; toolName: string; args?: unknown }
-  | { type: "tool_end"; toolName: string; result?: AgentToolCallEntry["result"]; isError: boolean }
+  | { type: "tool_end"; toolName: string; args?: unknown; result?: AgentToolCallEntry["result"]; isError: boolean }
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
   | { type: "turn_end" }

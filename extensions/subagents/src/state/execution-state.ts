@@ -140,7 +140,7 @@ export function createExecutionState(
 }
 
 // ============================================================
-// 事件更新（唯一更新点——替代 updateWidgetFromEvent + updateRecordEventLog）
+// 事件更新（唯一更新点）
 // ============================================================
 
 /**
@@ -167,7 +167,7 @@ export function updateStateFromEvent(state: AgentExecutionState, event: AgentEve
 }
 
 /**
- * eventLog 追加的核心逻辑（从 event-log-builder.ts 的 appendEventLogEntries 移植）。
+ * eventLog 追加的核心逻辑（tool_start/tool_end/text_delta/thinking_delta/turn_end）。
  * 直接 mutate state.eventLog + state._currentTurnText/_currentThinking。
  */
 function appendEventLogEntries(state: AgentExecutionState, event: AgentEvent): void {
@@ -179,7 +179,10 @@ function appendEventLogEntries(state: AgentExecutionState, event: AgentEvent): v
       break;
     }
     case "tool_end": {
-      const label = extractLabelFromArgs(event.toolName, undefined);
+      // P1#1: 复用 event.args 提取 label（与 tool_start 对称），不再退化成裸 toolName。
+      // event-bridge.ts 在 tool_execution_end 时从 pendingTools 取出 tool_start 暂存的 args 透传。
+      // 无 args（SDK 未透传或老路径）时 extractLabelFromArgs 回退到裸 toolName，保持向后兼容。
+      const label = extractLabelFromArgs(event.toolName, event.args);
       log.push({ type: "tool_end", label, ts: Date.now(), status: event.isError ? "failed" : "done" });
       break;
     }

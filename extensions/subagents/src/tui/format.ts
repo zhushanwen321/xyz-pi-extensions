@@ -1,4 +1,6 @@
 // src/tui/format.ts
+import { visibleWidth } from "@earendil-works/pi-tui";
+
 import type { AgentEventLogEntry, SubagentsGlobalConfig } from "../types.ts";
 
 const THINKING_DESCRIPTIONS: Record<string, string> = {
@@ -61,7 +63,9 @@ export function extractLabelFromArgs(toolName: string, args: unknown): string {
   }
   if (toolName === "bash") {
     if (typeof a.command === "string") {
-      const cmd = a.command.length > BASH_CMD_MAX ? a.command.slice(0, BASH_CMD_MAX) : a.command;
+      // P1#2: 用 truncVisible（grapheme-safe）替代 .slice（UTF-16 切分会劈半 emoji/CJK）。
+      // bash 命令含 emoji/CJK 时，.slice(0, n) 可能在代理对或 grapheme cluster 中间断开产生乱码。
+      const cmd = visibleWidth(a.command) > BASH_CMD_MAX ? truncVisible(a.command, BASH_CMD_MAX) : a.command;
       return `${toolName} ${cmd}`;
     }
   }
@@ -138,5 +142,56 @@ export function formatTokens(n: number, withSuffix = false): string {
   if (n >= TOKEN_MILLION) return `${(n / TOKEN_MILLION).toFixed(1)}M${suffix}`;
   if (n >= TOKEN_THOUSAND) return `${(n / TOKEN_THOUSAND).toFixed(1)}k${suffix}`;
   return `${n}${suffix}`;
+}
+
+// ============================================================
+// 宽度工具（grapheme-safe，ANSI-safe）—— TUI 宽度计算唯一真源
+// ============================================================
+//
+// P1#2: 从 subagents-view.ts 提升到此处统一导出。
+// 所有「按可见宽度截断/padding」的调用点（format / subagents-view / bg-notify-render /
+// category-confirm）都应复用这两个函数，避免散落多份实现导致行为漂移。
+//
+// 为什么不用 pi-tui 的 truncateToWidth：
+//   它在省略号前后插游离 \x1b[0m（全局 reset），对自己管理背景色 + 需要 indexOf 列对齐
+//   的调用方是灾难（见 TUI 避坑指南 §第二部分.2）。truncVisible 用 Intl.Segmenter
+//   grapheme 切分，无游离 ANSI，字面位置 == 可见位置，列对齐不错位。
+
+/** 共享的 grapheme segmenter（模块级复用，不在热路径每次 new）。 */
+const _segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/**
+ * 按可见宽度截断纯文本，超出部分显示 `…`（grapheme-safe，无游离 ANSI）。
+ *
+ * 适用场景：agent 名 / eventLog label / bash 命令 / 结果预览——这些输入一般无样式
+ * 或仅需后续 padVisible 列对齐。按 grapheme cluster 切到 maxWidth-1 + `…`，
+ * 保证 indexOf（字面位置）== visibleWidth（可见位置）。
+ *
+ * 带样式（fg/bg）的行截断请用 subagent-render.ts 的 truncLine（追踪 activeStyles）。
+ */
+export function truncVisible(s: string, maxWidth: number): string {
+  if (visibleWidth(s) <= maxWidth) return s;
+  if (maxWidth <= 1) return visibleWidth(s) > 0 ? "…" : s;
+  // 取可见宽度 <= maxWidth-1 的前缀 grapheme，再加 `…`
+  const target = maxWidth - 1;
+  let out = "";
+  let w = 0;
+  for (const { segment } of _segmenter.segment(s)) {
+    const sw = visibleWidth(segment);
+    if (w + sw > target) break;
+    out += segment;
+    w += sw;
+  }
+  return out + "…";
+}
+
+/**
+ * 把字符串 pad 到目标可见宽度（右侧补空格）。ANSI-safe：按 visibleWidth 测量，
+ * 不会把 ANSI 转义码算进宽度。用于列表/表格的列对齐。
+ */
+export function padVisible(s: string, width: number): string {
+  const vw = visibleWidth(s);
+  if (vw >= width) return s;
+  return s + " ".repeat(width - vw);
 }
 

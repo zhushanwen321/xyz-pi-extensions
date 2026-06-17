@@ -274,6 +274,48 @@ describe("SubagentResultComponent", () => {
     // 顶/底背景填充行由 Pi default shell 的 contentBox(paddingY=1) 施加，不在本组件输出中。
     expect(lines).toHaveLength(1);
   });
+
+  // ── P3#7: render 缓存（同 width 二次 render 返回同引用；变化时失效）──
+
+  it("P3#7: 同 width 二次 render 返回同引用（命中缓存）", () => {
+    const comp = new SubagentResultComponent(makeDetails({ turns: 2 }), passthroughTheme);
+    const r1 = comp.render(80);
+    const r2 = comp.render(80);
+    expect(r2).toBe(r1); // 同引用（命中缓存，未重建）
+  });
+
+  it("P3#7: 不同 width 重建（缓存失效）", () => {
+    const comp = new SubagentResultComponent(makeDetails(), passthroughTheme);
+    const r1 = comp.render(80);
+    const r2 = comp.render(60);
+    expect(r2).not.toBe(r1); // width 变了 → 重建
+  });
+
+  it("P3#7: update 后缓存失效（重建）", () => {
+    const comp = new SubagentResultComponent(makeDetails({ agent: "worker" }), passthroughTheme);
+    comp.render(80);
+    comp.update(makeDetails({ agent: "reviewer" }), passthroughTheme);
+    const r2 = comp.render(80);
+    expect(r2[0]).toContain("reviewer"); // 内容已更新
+  });
+
+  it("P3#7: setExpanded 值变化时缓存失效；值未变保留缓存", () => {
+    const comp = new SubagentResultComponent(makeDetails(), passthroughTheme);
+    const r1 = comp.render(80);
+    // 值未变（false → false）→ 不失效
+    comp.setExpanded(false);
+    expect(comp.render(80)).toBe(r1);
+    // 值变化（false → true）→ 失效重建
+    comp.setExpanded(true);
+    expect(comp.render(80)).not.toBe(r1);
+  });
+
+  it("P3#7: invalidate 后缓存失效", () => {
+    const comp = new SubagentResultComponent(makeDetails(), passthroughTheme);
+    const r1 = comp.render(80);
+    comp.invalidate();
+    expect(comp.render(80)).not.toBe(r1);
+  });
 });
 
 describe("Bug #3: truncLine 保留 ANSI 背景色", () => {

@@ -7,6 +7,8 @@ import {
   formatConfigSummary,
   formatEventLogLine,
   formatThinkingLevelOption,
+  padVisible,
+  truncVisible,
 } from "../tui/format.ts";
 import type { AgentEventLogEntry, SubagentsGlobalConfig } from "../types.ts";
 
@@ -60,10 +62,12 @@ describe("extractLabelFromArgs", () => {
     expect(extractLabelFromArgs("write", { path: "/abs/path/file.md" })).toBe("write file.md");
   });
 
-  it("extracts command for bash (truncated to 60)", () => {
+  it("extracts command for bash (truncated to 60 with …)", () => {
+    // P1#2: 改用 truncVisible（grapheme-safe）替代 .slice——截断结果带 … 标记，
+    // 让用户知道命令被截断（原 .slice 静默丢弃尾部，无视觉提示）。
     const long = "x".repeat(80);
     const result = extractLabelFromArgs("bash", { command: long });
-    expect(result).toBe(`bash ${"x".repeat(60)}`);
+    expect(result).toBe(`bash ${"x".repeat(59)}…`);
   });
 
   it("extracts query/url for web_*", () => {
@@ -124,5 +128,86 @@ describe("formatEventLogLine", () => {
     const line = formatEventLogLine(entry, fakeTheme);
     expect(line).toContain("· analyzing");
     expect(line).not.toContain("⎿");
+  });
+});
+
+// ============================================================
+// P1#2: truncVisible / padVisible（grapheme-safe 宽度工具）
+// ============================================================
+
+describe("truncVisible (P1#2)", () => {
+  it("不截断短于 maxWidth 的字符串", () => {
+    expect(truncVisible("abc", 5)).toBe("abc");
+    expect(truncVisible("", 5)).toBe("");
+  });
+
+  it("ASCII 截断加 …", () => {
+    expect(truncVisible("abcdef", 4)).toBe("abc…");
+  });
+
+  it("maxWidth <= 1 边界", () => {
+    expect(truncVisible("ab", 1)).toBe("…");
+    // maxWidth=0：visibleWidth("ab")=2 > 0 触发截断，但 target=max(0,-1) 分支
+    // maxWidth <= 1 → 返回 …（与真实 pi-tui 的 grapheme 边界一致：无法容纳内容只留省略号）
+    expect(truncVisible("ab", 0)).toBe("…");
+  });
+
+  it("grapheme-safe：emoji 不被劈半（核心契约）", () => {
+    // 核心断言：截断结果不含半截代理对/半截 ZWJ 序列。
+    // 无论 mock 的宽度模型如何，truncVisible 按 Intl.Segmenter grapheme 切分，
+    // 不会在 grapheme cluster 内部断开。用「不含孤立代理项」验证而非精确字符串。
+    const result = truncVisible("👨‍👩‍👧abcdefgh", 5);
+    // 不应出现孤立高代理项（高代理项后必须跟低代理项）
+    expect(result).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    // 不应出现孤立低代理项
+    expect(result).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    // 不应出现孤立的 ZWJ（\u200d 前后应有 emoji code point）
+    // 如果 grapheme 被劈半，会留下 …\u200d 或 \u200d… 这类残片
+    expect(result.endsWith("…")).toBe(true);
+  });
+
+  it("grapheme-safe：CJK 字符在 grapheme 边界切", () => {
+    // CJK 每字符 2 列（mock 与真实 pi-tui 一致），… = 1 列。
+    // "中文测试" (8 列) 截断到 maxWidth=5：target=4 → 2 字符(4 列) + …(1) = 5
+    expect(truncVisible("中文测试", 5)).toBe("中文…");
+    // maxWidth=3：target=2 → 1 字符(2 列) + …(1) = 3
+    expect(truncVisible("中文测试", 3)).toBe("中…");
+  });
+
+  it("无游离 ANSI（字面位置 == 可见位置）", () => {
+    // truncVisible 的核心契约：输出不含 ANSI 转义码，
+    // 这样后续 indexOf / padVisible 列对齐不会错位（见 TUI 指南 §第二部分.2）。
+    const result = truncVisible("abcdefgh", 4);
+    expect(result).not.toMatch(/\x1b\[/); // 无 CSI 转义
+  });
+});
+
+describe("padVisible (P1#2)", () => {
+  it("右侧补空格到目标宽度", () => {
+    expect(padVisible("ab", 5)).toBe("ab   ");
+  });
+
+  it("已达/超目标宽度时不补", () => {
+    expect(padVisible("abcde", 5)).toBe("abcde");
+    expect(padVisible("abcdef", 5)).toBe("abcdef");
+  });
+
+  it("ANSI-safe：不把转义码算进宽度", () => {
+    // 假设 visibleWidth 正确剥离 ANSI（mock + 真实 pi-tui 都这么做）
+    // 这里只验证纯文本场景的行为稳定
+    expect(padVisible("中", 4)).toBe("中  "); // 中=2 列，补 2 空格到 4
+  });
+});
+
+describe("extractLabelFromArgs — bash emoji 安全截断 (P1#2)", () => {
+  it("bash 命令含 emoji 在 grapheme 边界截断（无半截代理对）", () => {
+    // 构造超长含 emoji 的 bash 命令，验证截断结果不含半截代理对（\uD83D 是 emoji 高代理项前缀）
+    const emojiCmd = "echo 😂".repeat(30); // 远超 BASH_CMD_MAX=60
+    const label = extractLabelFromArgs("bash", { command: emojiCmd });
+    expect(label.startsWith("bash ")).toBe(true);
+    expect(label.endsWith("…")).toBe(true);
+    // 不应出现孤立的高代理项（\uD83D）或低代理项——说明没有劈半代理对
+    expect(label).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/); // 高代理项后非低代理项
+    expect(label).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/); // 低代理项前非高代理项
   });
 });
