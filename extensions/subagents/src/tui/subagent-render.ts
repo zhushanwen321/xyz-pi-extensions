@@ -10,7 +10,14 @@
 import { type Component, Text, visibleWidth } from "@earendil-works/pi-tui";
 
 import type { AgentEventLogEntry } from "../types.ts";
-import { formatEventLogLine, formatTokens, OUTPUT_ICON, THINKING_ICON, TOOL_ICON } from "./format.ts";
+import {
+  foldEventLog,
+  formatEventLogLine,
+  formatTokens,
+  OUTPUT_ICON,
+  THINKING_ICON,
+  TOOL_ICON,
+} from "./format.ts";
 
 // ============================================================
 // Types
@@ -200,12 +207,24 @@ function buildCompactLines(details: SubagentToolDetails, width: number, theme: T
 
   // 滚动区：最近 ≤4 条（过滤 turn_end——压缩视图不显示 turn 分隔），动态增长，不预填空行
   // 图标 `› `/`> `/`· `（图标 + 1 空格）由 formatEventLogLine 嵌入行首，占 2 可见列。
+  // 折叠：连续同类 text_output/thinking 分片 → 1 条首行代表行（foldEventLog），
+  // 否则一段长输出会被切成 N 个半句碎片，压缩视图里全是重复前缀，可读性极差。
   const prefixWidth = 2;
   const labelMaxWidth = Math.max(1, COMPACT_LABEL_MAX_WIDTH);
-  const recent = (details.eventLog ?? [])
-    .filter((e) => e.type !== "turn_end")
-    .slice(-COMPACT_SCROLL_LINES);
-  for (const entry of recent) {
+  const folded = foldEventLog((details.eventLog ?? []).filter((e) => e.type !== "turn_end"));
+  // Plan A（running 去重）：滚动区末条若与 currentActivity 同类型（text/thinking），
+  // 说明它和活动行展示的是同一段正在 streaming 的流——活动行已实时独占「正在输出」锚点，
+  // 滚动区不再重复铺该代表行。done/failed/cancelled 无 currentActivity，不做去重。
+  const scrollEntries = folded.slice(-COMPACT_SCROLL_LINES).filter((e) => {
+    if (!details.currentActivity) return true;
+    if (details.status !== "running") return true;
+    // activity.type 为 thinking/text，eventLog 类型为 thinking/text_output
+    const actType = details.currentActivity.type;
+    if (actType === "thinking" && e.type === "thinking") return false;
+    if (actType === "text" && e.type === "text_output") return false;
+    return true;
+  });
+  for (const entry of scrollEntries) {
     const raw = sanitizeLine(formatEventLogLine(entry, theme));
     // 先按 label 上限截断（保留 ANSI 背景色），再按行宽兜底，防止长 label 撑爆 block
     const clampedToLabel = visibleWidth(raw) > labelMaxWidth + prefixWidth

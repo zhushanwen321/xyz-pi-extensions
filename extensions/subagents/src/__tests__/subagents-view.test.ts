@@ -245,6 +245,55 @@ describe("renderView", () => {
     expect(lines.some((l) => l.includes("·") && l.includes("analyzing"))).toBe(true);
     expect(lines.some((l) => l.includes(">") && l.includes("done"))).toBe(true);
   });
+
+  it("分屏右列折叠连续 text_output 分片为 1 行（与对话流一致）", () => {
+    // 模拟一段被切成多个分片的长输出（如 streaming delta 按 100 字符切分）
+    const records = [makeRecord({
+      eventLog: [
+        { type: "text_output", label: "第一段开头", ts: 0 },
+        { type: "text_output", label: "第一段续", ts: 1 },
+        { type: "text_output", label: "第一段尾", ts: 2 },
+        { type: "text_output", label: "更多", ts: 3 },
+      ],
+    })];
+    const lines = renderView(records, fakeTheme, 100, makeState(), 30);
+    // 只有 1 条 text_output 代表行（图标 `>`），而非 4 条碎片
+    const textLines = lines.filter((l) => l.includes(">") && l.includes("第一段开头"));
+    expect(textLines).toHaveLength(1);
+    // 后续分片 label 不应出现
+    expect(lines.some((l) => l.includes("第一段尾"))).toBe(false);
+    expect(lines.some((l) => l.includes("更多"))).toBe(false);
+  });
+
+  it("分屏右列折叠连续 thinking 分片为 1 行", () => {
+    const records = [makeRecord({
+      eventLog: [
+        { type: "thinking", label: "推理A", ts: 0 },
+        { type: "thinking", label: "推理B", ts: 1 },
+      ],
+    })];
+    const lines = renderView(records, fakeTheme, 100, makeState(), 30);
+    const thinkingLines = lines.filter((l) => l.includes("·") && l.includes("推理A"));
+    expect(thinkingLines).toHaveLength(1);
+    expect(lines.some((l) => l.includes("推理B"))).toBe(false);
+  });
+
+  it("分屏右列：tool 隔开的同类各自成组", () => {
+    const records = [makeRecord({
+      eventLog: [
+        { type: "text_output", label: "turn1A", ts: 0 },
+        { type: "text_output", label: "turn1B", ts: 1 },
+        { type: "tool_end", label: "bash", ts: 2, status: "done" },
+        { type: "text_output", label: "turn2A", ts: 3 },
+      ],
+    })];
+    const lines = renderView(records, fakeTheme, 100, makeState(), 30);
+    expect(lines.some((l) => l.includes("turn1A"))).toBe(true);
+    expect(lines.some((l) => l.includes("bash"))).toBe(true);
+    expect(lines.some((l) => l.includes("turn2A"))).toBe(true);
+    // 被折叠掉的分片不出现
+    expect(lines.some((l) => l.includes("turn1B"))).toBe(false);
+  });
 });
 
 // ── renderView 详情全屏模式（detailMode）──
@@ -269,6 +318,22 @@ describe("renderView — 详情全屏（detailMode）", () => {
     // 展开视图：150 个 x 会换行成多行（含续行缩进）
     const xLines = lines.filter((l) => l.includes("xxxx"));
     expect(xLines.length).toBeGreaterThan(1);
+  });
+
+  it("detailMode 不折叠——连续分片各自展示（与压缩视图区分）", () => {
+    // 全屏视图按需求 1：允许展开多行、自动换行，不做首行折叠
+    const records = [makeRecord({
+      eventLog: [
+        { type: "text_output", label: "片段一", ts: 0 },
+        { type: "text_output", label: "片段二", ts: 1 },
+        { type: "text_output", label: "片段三", ts: 2 },
+      ],
+    })];
+    const lines = renderView(records, fakeTheme, 100, makeState({ detailMode: true }), 30);
+    // 三个分片都应出现（未折叠）
+    expect(lines.some((l) => l.includes("片段一"))).toBe(true);
+    expect(lines.some((l) => l.includes("片段二"))).toBe(true);
+    expect(lines.some((l) => l.includes("片段三"))).toBe(true);
   });
 
   it("detailMode scrollOffset 控制可见内容窗口", () => {

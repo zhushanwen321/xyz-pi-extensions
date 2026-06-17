@@ -1,6 +1,7 @@
 // src/tui/format.ts
 import { visibleWidth } from "@earendil-works/pi-tui";
 
+import { EVENT_LOG_LABEL_MAX } from "../types.ts";
 import type { AgentEventLogEntry, SubagentsGlobalConfig } from "../types.ts";
 
 const THINKING_DESCRIPTIONS: Record<string, string> = {
@@ -119,6 +120,57 @@ export function formatEventLogLine(
   }
   // text_output
   return `${OUTPUT_ICON} ${label}`;
+}
+
+/**
+ * 把 eventLog 中**相邻且同类型**的 streaming 分片（text_output / thinking）折叠成一条。
+ *
+ * 背景：execution-state.ts 把 streaming delta 按 TEXT_OUTPUT_CHUNK/THINKING_CHUNK（100 字符）
+ * 切成多个 eventLog 条目。一段连续输出会被切成 N 条，压缩视图若逐条展示会看到 N 个
+ * 半句碎片（同一句话的前 50 字符重复 N 次），可读性极差。
+ *
+ * 折叠规则：
+ *   - 相邻且 type 相同的 text_output（或 thinking）合并为 1 条代表行
+ *   - 一旦遇到不同类型（tool/turn_end）即断开当前组，后续同类重新开组
+ *   - 代表行的 label = 组首条 label 按首个换行切出的首段，再 slice 到 EVENT_LOG_LABEL_MAX
+ *     （流的第一行几乎总落在组首 100 字符分片内，无需跨分片拼接还原）
+ *   - 其余字段沿用组首条（ts / status）；type 不变
+ *   - tool_start/tool_end/turn_end 原样透传
+ *
+ * 应用范围：对话流压缩视图（subagent-render）+ list 压缩视图（subagents-view renderRightColumn）。
+ * list 全屏详情（renderDetailView）不折叠——那里用户想看完整内容。
+ *
+ * 不影响 state.eventLog 与 history 持久化（仍是细粒度），折叠纯在渲染层。
+ */
+export function foldEventLog(entries: readonly AgentEventLogEntry[]): AgentEventLogEntry[] {
+  const out: AgentEventLogEntry[] = [];
+  for (const entry of entries) {
+    const last = out[out.length - 1];
+    if (
+      last !== undefined &&
+      last.type === entry.type &&
+      (entry.type === "text_output" || entry.type === "thinking")
+    ) {
+      // 同类相邻：保留首条代表行，跳过后续分片
+      continue;
+    }
+    if (entry.type === "text_output" || entry.type === "thinking") {
+      // 新组开首：首行截断后压入代表行
+      out.push({
+        ...entry,
+        label: firstLine(entry.label, EVENT_LOG_LABEL_MAX),
+      });
+    } else {
+      out.push(entry);
+    }
+  }
+  return out;
+}
+
+/** 取 label 首个换行前的首段，再 slice 到 maxLen。用于折叠代表行 + activity label 规范化。 */
+export function firstLine(label: string, maxLen: number): string {
+  const head = label.split(/\r?\n/, 1)[0] ?? "";
+  return head.length > maxLen ? head.slice(0, maxLen) : head;
 }
 
 /** eventLog 行首类型图标常量（见 tui-format.md §4 图标语义表）。

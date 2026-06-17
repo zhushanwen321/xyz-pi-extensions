@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_CATEGORIES } from "../category.ts";
 import {
   extractLabelFromArgs,
+  firstLine,
+  foldEventLog,
   formatConfigSummary,
   formatEventLogLine,
   formatThinkingLevelOption,
@@ -209,5 +211,108 @@ describe("extractLabelFromArgs — bash emoji 安全截断 (P1#2)", () => {
     // 不应出现孤立的高代理项（\uD83D）或低代理项——说明没有劈半代理对
     expect(label).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/); // 高代理项后非低代理项
     expect(label).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/); // 低代理项前非高代理项
+  });
+});
+
+// ============================================================
+// foldEventLog / firstLine（连续 streaming 分片折叠）
+// ============================================================
+
+/** 构造 eventLog 条目的简写。 */
+function entry(type: AgentEventLogEntry["type"], label: string, ts = 0): AgentEventLogEntry {
+  return { type, label, ts } as AgentEventLogEntry;
+}
+
+describe("firstLine", () => {
+  it("取首个换行前的内容", () => {
+    expect(firstLine("第一行\n第二行\n第三行", 100)).toBe("第一行");
+  });
+
+  it("无换行时原样返回（超 maxLen 截断）", () => {
+    expect(firstLine("abcdef", 100)).toBe("abcdef");
+    expect(firstLine("abcdef", 3)).toBe("abc");
+  });
+
+  it("处理 \\r\\n 换行", () => {
+    expect(firstLine("head\r\ntail", 100)).toBe("head");
+  });
+
+  it("首行就超 maxLen 时截断到 maxLen", () => {
+    expect(firstLine("x".repeat(150), 100)).toBe("x".repeat(100));
+  });
+});
+
+describe("foldEventLog — 连续同类分片折叠", () => {
+  it("连续 text_output 合并为 1 条（取首条 label）", () => {
+    const out = foldEventLog([
+      entry("text_output", "第一段"),
+      entry("text_output", "第二段"),
+      entry("text_output", "第三段"),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.type).toBe("text_output");
+    expect(out[0]!.label).toBe("第一段");
+  });
+
+  it("连续 thinking 合并为 1 条", () => {
+    const out = foldEventLog([
+      entry("thinking", "想A"),
+      entry("thinking", "想B"),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.type).toBe("thinking");
+    expect(out[0]!.label).toBe("想A");
+  });
+
+  it("被 tool 隔开的同类各自成组（text, tool, text → 3 条）", () => {
+    const out = foldEventLog([
+      entry("text_output", "turn1 输出"),
+      entry("text_output", "turn1 续"),
+      entry("tool_start", "bash ls"),
+      entry("text_output", "turn2 输出"),
+    ]);
+    expect(out.map((e) => e.label)).toEqual(["turn1 输出", "bash ls", "turn2 输出"]);
+  });
+
+  it("tool_start/tool_end/turn_end 原样透传", () => {
+    const log = [
+      entry("tool_start", "read a"),
+      entry("tool_end", "read a"),
+      entry("turn_end", ""),
+      entry("tool_start", "bash x"),
+    ];
+    expect(foldEventLog(log)).toEqual(log);
+  });
+
+  it("折叠代表行的 label 取首条按换行切首段", () => {
+    const out = foldEventLog([
+      entry("text_output", "第一行\n第二行"),
+      entry("text_output", "续"),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.label).toBe("第一行");
+  });
+
+  it("空数组返回空数组", () => {
+    expect(foldEventLog([])).toEqual([]);
+  });
+
+  it("不修改输入数组（纯函数）", () => {
+    const input = [entry("text_output", "a"), entry("text_output", "b")];
+    const snapshot = input.map((e) => ({ ...e }));
+    foldEventLog(input);
+    expect(input).toEqual(snapshot);
+    expect(input).toHaveLength(2);
+  });
+
+  it("交替类型不误合并（text, thinking, text, thinking → 4 条）", () => {
+    const out = foldEventLog([
+      entry("text_output", "t1"),
+      entry("thinking", "k1"),
+      entry("text_output", "t2"),
+      entry("thinking", "k2"),
+    ]);
+    expect(out).toHaveLength(4);
+    expect(out.map((e) => e.label)).toEqual(["t1", "k1", "t2", "k2"]);
   });
 });

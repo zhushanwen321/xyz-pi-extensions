@@ -20,7 +20,7 @@ import type {
   BackgroundStatus,
   CompletedAgentRecord,
 } from "../types.ts";
-import { formatEventLogLine, formatTokens, padVisible, truncVisible, type ThemeLike } from "./format.ts";
+import { foldEventLog, formatEventLogLine, formatTokens, padVisible, truncVisible, type ThemeLike } from "./format.ts";
 
 // ============================================================
 // Types
@@ -281,7 +281,9 @@ function renderRightColumn(
   lines.push("");
 
   // Event log（折叠：每条单行截断到列宽，不换行）
-  const filteredLog = (record.eventLog ?? []).filter((e) => e.type !== "turn_end");
+  // foldEventLog：连续同类 text_output/thinking 分片 → 1 条首行代表行，
+  // 与对话流压缩视图保持一致（否则一段长输出切成 N 个半句碎片，详情列全是重复前缀）。
+  const filteredLog = foldEventLog((record.eventLog ?? []).filter((e) => e.type !== "turn_end"));
   if (filteredLog.length === 0) {
     lines.push(theme.fg("dim", "  (no events)"));
   } else {

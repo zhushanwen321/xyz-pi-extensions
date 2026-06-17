@@ -363,3 +363,119 @@ describe("Bug #3: truncLine 保留 ANSI 背景色", () => {
     }
   });
 });
+
+// ============================================================
+// P1#4: 连续 streaming 分片折叠 + running 去重（方案 A）
+// ============================================================
+//
+// 背景：execution-state.ts 把一段连续 text/thinking 输出按 100 字符切成多个 eventLog 分片。
+// 压缩视图若逐条展示，会看到 N 个半句碎片（同一句话的前缀重复 N 次），可读性极差。
+// 折叠策略：相邻同类分片 → 1 条首行代表行；running 时活动行已独占「正在输出」，
+// 滚动区末条与活动行同类型则去重（方案 A）。
+
+describe("buildRenderLines — 连续分片折叠（压缩视图）", () => {
+  it("done 态：连续 text_output 分片折叠为 1 行（不展示重复碎片）", () => {
+    // 模拟一段被切成 8 个分片的长输出
+    const chunks = Array.from({ length: 8 }, (_, i) => ({
+      type: "text_output" as const, label: `分片${i}内容`, ts: i,
+    }));
+    const lines = buildRenderLines(makeDetails({ status: "done", eventLog: chunks }), 80, passthroughTheme);
+    // 只有 1 条 text_output 代表行（图标 `>`），而非 4 条碎片
+    const textLines = lines.filter((l) => l.startsWith(">"));
+    expect(textLines).toHaveLength(1);
+    expect(textLines[0]).toContain("分片0内容");
+  });
+
+  it("连续 thinking 分片折叠为 1 行", () => {
+    const chunks = Array.from({ length: 5 }, (_, i) => ({
+      type: "thinking" as const, label: `推理${i}`, ts: i,
+    }));
+    const lines = buildRenderLines(makeDetails({ status: "done", eventLog: chunks }), 80, passthroughTheme);
+    const thinkingLines = lines.filter((l) => l.startsWith("·"));
+    expect(thinkingLines).toHaveLength(1);
+    expect(thinkingLines[0]).toContain("推理0");
+  });
+
+  it("done 态：text, tool, text 折叠为 3 行（tool 隔开=不同组）", () => {
+    const lines = buildRenderLines(makeDetails({
+      status: "done",
+      eventLog: [
+        { type: "text_output", label: "turn1A", ts: 0 },
+        { type: "text_output", label: "turn1B", ts: 1 },
+        { type: "tool_end", label: "bash", ts: 2, status: "done" },
+        { type: "text_output", label: "turn2A", ts: 3 },
+        { type: "text_output", label: "turn2B", ts: 4 },
+      ],
+    }), 80, passthroughTheme);
+    const scrollLines = lines.filter((l) => /^[›>·]/.test(l));
+    expect(scrollLines.map((l) => l.trim())).toEqual([
+      "> turn1A", "› bash ✓", "> turn2A",
+    ]);
+  });
+});
+
+describe("buildRenderLines — running 去重（方案 A）", () => {
+  it("running + text 活动行：滚动区不再重复展示末条 text_output 代表行", () => {
+    // 末段是连续 text_output（streaming 中），currentActivity 也是 text
+    const lines = buildRenderLines(makeDetails({
+      status: "running",
+      currentActivity: { type: "text", label: "正在输出" },
+      eventLog: [
+        { type: "tool_end", label: "read", ts: 0, status: "done" },
+        { type: "text_output", label: "流A", ts: 1 },
+        { type: "text_output", label: "流B", ts: 2 },
+      ],
+    }), 80, passthroughTheme);
+    // 活动行（dim 的 `>`）存在
+    expect(lines.some((l) => l.includes("正在输出"))).toBe(true);
+    // tool_end 行保留
+    expect(lines.some((l) => l.startsWith("›") && l.includes("read"))).toBe(true);
+    // 滚动区不应再有 text_output 代表行（末条被去重）——用流内容而非 `>` 前缀判断
+    // （活动行也用 `>` 图标，故前缀计数会把活动行算进去）
+    expect(lines.some((l) => l.includes("流A"))).toBe(false);
+    expect(lines.some((l) => l.includes("流B"))).toBe(false);
+  });
+
+  it("running + thinking 活动行：滚动区末条 thinking 代表行去重", () => {
+    const lines = buildRenderLines(makeDetails({
+      status: "running",
+      currentActivity: { type: "thinking", label: "推理中" },
+      eventLog: [
+        { type: "tool_end", label: "grep", ts: 0, status: "done" },
+        { type: "thinking", label: "想A", ts: 1 },
+        { type: "thinking", label: "想B", ts: 2 },
+      ],
+    }), 80, passthroughTheme);
+    expect(lines.some((l) => l.includes("推理中"))).toBe(true);
+    // 用流内容判断（活动行也用 `·` 图标，前缀计数会误算活动行）
+    expect(lines.some((l) => l.includes("想A"))).toBe(false);
+    expect(lines.some((l) => l.includes("想B"))).toBe(false);
+    expect(lines.some((l) => l.startsWith("›") && l.includes("grep"))).toBe(true);
+  });
+
+  it("running + tool 活动行：text/thinking 历史代表行不去重（类型不同）", () => {
+    // 活动行是 tool（tool_start），末段 text 历史代表行应保留
+    const lines = buildRenderLines(makeDetails({
+      status: "running",
+      currentActivity: { type: "tool", label: "bash running" },
+      eventLog: [
+        { type: "text_output", label: "历史输出", ts: 0 },
+        { type: "tool_start", label: "bash running", ts: 1, status: "running" },
+      ],
+    }), 80, passthroughTheme);
+    // text 历史代表行保留
+    expect(lines.some((l) => l.startsWith(">") && l.includes("历史输出"))).toBe(true);
+  });
+
+  it("done 态不做去重（无 currentActivity）", () => {
+    const lines = buildRenderLines(makeDetails({
+      status: "done",
+      eventLog: [
+        { type: "text_output", label: "输出A", ts: 0 },
+        { type: "text_output", label: "输出B", ts: 1 },
+      ],
+    }), 80, passthroughTheme);
+    // 折叠后 1 条 text_output 代表行保留
+    expect(lines.filter((l) => l.startsWith(">"))).toHaveLength(1);
+  });
+});
