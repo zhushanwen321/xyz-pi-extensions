@@ -199,8 +199,9 @@ describe("SubagentResultComponent", () => {
     const comp = new SubagentResultComponent(makeDetails({ agent: "worker" }), passthroughTheme);
     comp.update(makeDetails({ agent: "reviewer", turns: 5 }));
     const lines = comp.render(80);
-    // Box paddingY=1：第 0 行是顶部背景填充行，内容从第 1 行开始
-    expect(lines[1]).toContain("reviewer");
+    // P0: render 直接返回内容行（背景 + padding 由 Pi default shell 的 contentBox 施加），
+    // 无 Box paddingY，状态行就在第 0 行。
+    expect(lines[0]).toContain("reviewer");
   });
 
   it("truncates long lines to width", () => {
@@ -216,14 +217,15 @@ describe("SubagentResultComponent", () => {
     }
   });
 
-  it("动态高度 + Box padding：无事件时 3 行（1 pad + 1 status + 1 pad）", () => {
+  it("动态高度：无事件时仅 1 行状态行（背景 + padding 由 Pi default shell 施加，不在本组件）", () => {
     const comp = new SubagentResultComponent(
       makeDetails({ eventLog: [], status: "running" }),
       passthroughTheme,
     );
     const lines = comp.render(80);
-    // buildCompactLines 无事件 = 1 行（状态行）；Box paddingY=1 顶/底各 1 行 → 3 行
-    expect(lines).toHaveLength(3);
+    // P0: buildCompactLines 无事件 = 1 行（状态行）；render 直接返回内容行，
+    // 顶/底背景填充行由 Pi default shell 的 contentBox(paddingY=1) 施加，不在本组件输出中。
+    expect(lines).toHaveLength(1);
   });
 });
 

@@ -209,16 +209,20 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
     ],
     executionMode: "sequential",
     parameters: SubagentParams,
-    // FR-2.4: 自己控制背景色（running/done/failed 不同 theme token），不使用 Pi 默认 Box。
-    renderShell: "self",
+    // P0: 不再用 renderShell: "self"。self shell 走 Pi tool-execution.ts 的 selfRenderContainer
+    // 路径，该路径 prepend 一行空字符串后拼裸 string[]，diff-redraw 引擎对「高度从 1 行跳到 N 行」
+    // 的对齐处理有缺陷，导致旧快照残留在新快照上方（残影 bug）。
+    // 改回默认 shell：Pi 的 contentBox(Box) 组件树路径对高度增长有成熟的 invalidate/clear，
+    // 且背景色（toolPendingBg/toolSuccessBg/toolErrorBg）由 Pi 按 isPartial/isError 统一施加，
+    // 与 pi-subagents 的实现一致（pi-subagents 不设 renderShell，默认 default）。
 
-    // ── renderCall：隐藏 Pi 默认标题行，标题由 renderResult 统一渲染进背景 block ──
+    // ── renderCall：标题行（Pi default shell 将其放进 contentBox，与 renderResult 同一背景块）──
     renderCall(
-      _args: unknown,
+      args: unknown,
       theme: Theme,
       context: SubagentRenderContext,
     ) {
-      return renderSubagentCall(_args, theme, context);
+      return renderSubagentCall(args, theme, context);
     },
 
     // ── renderResult：对话流背景色 block ──────────────────────

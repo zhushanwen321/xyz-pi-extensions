@@ -1,16 +1,16 @@
 // src/tui/subagent-render.ts
 //
 // Subagent tool result 对话流渲染（FR-2.1 ~ FR-2.4）。
-// 使用 pi-tui Box + Text/Spacer/Container 组件包装：
-//   - renderCall 返回空 Container，隐藏 Pi 默认 "subagent" 标题行
-//   - renderResult 的 Box 自己渲染包含 "subagent" 的统一背景 block
-//   - 压缩视图动态高度：状态行 + 最近 ≤4 条 eventLog，随事件增长，不预填空行
+// P0（残影修复）：背景色 + padding 交给 Pi default shell 的 contentBox（Box(1,1,bgFn)）统一施加，
+// 这里 render() 直接返回 string[] 内容行，Pi 的 contentBox 把每行包进 Box（leftPad + applyBg）。
+//   - renderCall 返回带标题的 Text（subagent {agent}），Pi 放进 contentBox
+//   - renderResult 返回内容行：状态行 + 最近 ≤4 条 eventLog，随事件增长，不预填空行
 //   - 滚动区每条 eventLog 截断到 ~50 可见字符，避免单行过长
 
-import { Box, Container, Spacer, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { type Component, Text, visibleWidth } from "@earendil-works/pi-tui";
 
-import { formatEventLogLine, formatTokens } from "./format.ts";
 import type { AgentEventLogEntry } from "../types.ts";
+import { formatEventLogLine, formatTokens } from "./format.ts";
 
 // ============================================================
 // Types
@@ -257,22 +257,35 @@ function buildExpandedLines(details: SubagentToolDetails, theme: ThemeLike): str
 }
 
 // ============================================================
-// Component (pi-tui Box + Text/Spacer)
+// Component（render 返回 string[]；背景色由 Pi default shell 的 contentBox 施加）
 // ============================================================
 
 /**
- * FR-2.4：renderCall 返回空 Container，让 Pi 不要渲染默认的 "subagent" 标题行。
- * 标题被纳入 renderResult 的 Box 内部，从而整个 tool 输出都在同一背景 block 中。
+ * P0：renderCall 返回带标题的 Text，让 Pi default shell 把它放进 contentBox。
+ * 标题格式参考 pi-subagents index.ts:450-454——「subagent {agent}」，
+ * agent 名以 accent 高亮（无 agent 参数时显示 "default"）。
+ * Pi 的 contentBox 统一施加背景色与 padding，无需这里再包 Box。
  */
-export function renderSubagentCall(_args: unknown, _theme: ThemeLike, _context: unknown): Component {
-  return new Container();
+export function renderSubagentCall(args: unknown, theme: ThemeLike, _context: unknown): Component {
+  // args 来自 LLM 工具调用（动态 JSON），用类型守卫安全取 agent 字段，避免 unsafe cast。
+  const rec = (args ?? {}) as Record<string, unknown>;
+  const agent = typeof rec.agent === "string" ? rec.agent : "default";
+  return new Text(
+    `${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", agent)}`,
+    0,
+    0,
+  );
 }
 
 /**
  * FR-2.1 ~ FR-2.4：subagent 对话流 block 组件。
- * 用 pi-tui Box 统一处理背景色和内边距，内部每行用一个 Text(0,0) 或 Spacer。
- * Box paddingX=1 左右各 1 空格；paddingY=1 顶/底各 1 行背景填充，避免文字紧贴 block 边界
- * （pi-tui 的 paddingY 行会通过 applyBg("", width) 填充背景色，与内容行同色）。
+ * P0：不再自己包 Box 管背景色——Pi default shell 的 contentBox 已是 Box(1,1,bgFn)，
+ * bgFn 按 isPartial/isError 切换（toolPendingBg/toolSuccessBg/toolErrorBg），统一施加
+ * paddingX/paddingY + 背景。本组件 render() 直接返回 string[]（内容行），Pi 的 contentBox
+ * 把每行包进 Box（leftPad + applyBg）——等价于 pi-subagents renderSingleCompact
+ * (render.ts:1012-1046) 的 new Container()+new Text(…,0,0)，但更直接：跳过中间组件层，
+ * 由 contentBox 统一负责背景。背景色归属组件树后，diff-redraw 走成熟的 Container 高度
+ * 增长路径，消除残影。
  */
 export class SubagentResultComponent implements Component {
   private _details: SubagentToolDetails;
@@ -297,36 +310,14 @@ export class SubagentResultComponent implements Component {
 
   // fallow-ignore-next-line unused-class-member — pi-tui Component 接口契约（theme 切换/重渲时框架调用）
   invalidate(): void {
-    // Box 在 render 时重建，无需额外清理缓存。
+    // 无缓存（render 每次 buildRenderLines 重新构建 string[]），无需额外清理。
   }
 
   render(width: number): string[] {
-    // Box 左右各 1 列内边距，内容可用宽度为 width - 2。
-    const contentWidth = Math.max(1, width - 2);
-    const lines = buildRenderLines(this._details, contentWidth, this._theme, {
+    // 背景色与 padding 由 Pi default shell 的 contentBox 施加；本组件只负责内容行。
+    // 直接构建 string[]，让 Pi 的 contentBox 把每个非空行包成 Text 行、空行用背景填充。
+    return buildRenderLines(this._details, width, this._theme, {
       expanded: this._expanded,
     });
-    const box = new Box(1, 1, this._getBgFn());
-    for (const line of lines) {
-      // 空字符串传给 Text 会返回空数组，导致 block 高度不稳定；用 Spacer 产生一行背景空格。
-      if (line === "") {
-        box.addChild(new Spacer(1));
-      } else {
-        box.addChild(new Text(line, 0, 0));
-      }
-    }
-    return box.render(width);
-  }
-
-  private _getBgFn(): (text: string) => string {
-    switch (this._details.status) {
-      case "running":
-        return (t: string) => this._theme.bg("toolPendingBg", t);
-      case "done":
-        return (t: string) => this._theme.bg("toolSuccessBg", t);
-      case "failed":
-      case "cancelled":
-        return (t: string) => this._theme.bg("toolErrorBg", t);
-    }
   }
 }

@@ -185,14 +185,24 @@ renderResult(result)
 class SubagentResultComponent {
   constructor(details: AnyToolDetails, theme: ThemeLike)
   setExpanded(expanded: boolean): void
-  render(width: number): string[]   // 调用 buildRenderLines，包进 Box
-  invalidate(): void                // no-op（Box 每次 render 重建）
+  render(width: number): string[]   // 直接返回 buildRenderLines 的内容行 string[]
+  invalidate(): void                // no-op（render 每次重建，无缓存）
 }
 ```
 
-- 用 pi-tui `Box(paddingX=1, paddingY=0, bgFn)` 统一背景色和左右内边距
-- 空行用 `Spacer(1)` 保持背景色高度稳定
-- 所有行经 `truncLine`（ANSI 样式保留）截断到 contentWidth = width - 2
+**P0（残影修复）：背景色与 padding 归属 Pi default shell，不在此组件。**
+
+- 工具注册**不设** `renderShell`（默认 `default`）。Pi 的 `tool-execution.ts` 用 `contentBox = Box(1,1,bgFn)`
+  包裹 `renderCall` + `renderResult` 两个子组件，bgFn 按 `isPartial`/`isError` 自动切换：
+  running→`toolPendingBg`、done→`toolSuccessBg`、failed/cancelled→`toolErrorBg`。
+- `SubagentResultComponent.render()` 直接返回内容行 `string[]`（状态行 + 滚动区），
+  Pi 的 `contentBox` 给每行加 `leftPad + applyBg(line, width)`——等价于 pi-subagents
+  `renderSingleCompact`（render.ts:1012-1046）的 `new Container()+new Text(…,0,0)`，但更直接。
+- 顶/底背景填充行由 `contentBox` 的 `paddingY=1` 产生，不在本组件输出中。
+- 不用 `self` shell：self 路径 prepend 空字符串后拼裸 `string[]`，diff-redraw 引擎对高度跳变
+  对齐有缺陷，会导致旧快照残留在新快照上方（残影 bug）。default shell 走组件树高度增长路径，
+  有成熟的 invalidate/clear，与 pi-subagents 一致。
+- 内容行经 `truncLine`（ANSI 样式保留）截断到 `width`（Pi 传入的已是 contentWidth）。
 
 ---
 
