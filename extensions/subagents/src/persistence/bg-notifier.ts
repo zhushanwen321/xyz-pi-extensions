@@ -28,10 +28,17 @@ export interface BgNotifyRecord {
   startedAt: number;
 }
 
-/** Pi sendMessage 最小接口 */
+/** 传递给 message renderer 的结构化 payload（经 sendMessage.details 透传）。
+ *  - single: 首条零延迟通知，复用 SubagentResultComponent 渲染完整完成块
+ *  - batch: 合并窗口内的多条，渲染汇总行列表 */
+export type BgNotifyDetails =
+  | { kind: "single"; record: BgNotifyRecord }
+  | { kind: "batch"; records: BgNotifyRecord[] };
+
+/** Pi sendMessage 最小接口（details 用于喂 message renderer） */
 interface PiSendLike {
   sendMessage(
-    message: { customType: string; content: string; display: boolean },
+    message: { customType: string; content: string; display: boolean; details?: unknown },
     options?: { triggerTurn?: boolean; deliverAs?: "followUp" | "steer" | "nextTurn" },
   ): void;
   appendEntry(customType: string, data?: unknown): void;
@@ -97,12 +104,14 @@ export class BgNotifier {
     }
   }
 
-  /** FR-O1.7: 发送单条通知（含 try/catch 兜底，G-025 stale runtime） */
+  /** FR-O1.7: 发送单条通知（含 try/catch 兜底，G-025 stale runtime）。
+   *  display:true 让完成通知在对话流可见（renderer 渲染成完成块）；
+   *  details 透传结构化 record 供 bg-notify-render 使用。 */
   private sendSingleNotification(record: BgNotifyRecord): void {
     const content = this.formatBgCompletionMessage(record);
     try {
       this._pi?.sendMessage(
-        { customType: "subagent-bg-notify", content, display: false },
+        { customType: "subagent-bg-notify", content, display: true, details: { kind: "single", record } satisfies BgNotifyDetails },
         { deliverAs: "followUp", triggerTurn: true },
       );
     } catch {
@@ -133,7 +142,7 @@ export class BgNotifier {
     const content = `${pending.length} background tasks completed:\n\n${lines.join("\n\n")}`;
     try {
       this._pi?.sendMessage(
-        { customType: "subagent-bg-notify", content, display: false },
+        { customType: "subagent-bg-notify", content, display: true, details: { kind: "batch", records: pending } satisfies BgNotifyDetails },
         { deliverAs: "followUp", triggerTurn: true },
       );
     } catch {

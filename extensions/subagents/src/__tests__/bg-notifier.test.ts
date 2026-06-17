@@ -67,9 +67,10 @@ describe("BgNotifier", () => {
     const notifier = new BgNotifier(pi);
     notifier.notifyBgCompletion(makeRecord());
     expect(pi.sendMessage).toHaveBeenCalledTimes(1);
-    // display:false — 静默投递：不渲染紫色块（避免双 block），但仍唤醒主 agent 处理结果。
+    // display:true — 完成通知在对话流可见（renderer 渲染成完成块）；details 供 renderer 使用。
     const [message, options] = pi.sendMessage.mock.calls[0];
-    expect(message).toMatchObject({ customType: "subagent-bg-notify", display: false });
+    expect(message).toMatchObject({ customType: "subagent-bg-notify", display: true });
+    expect(message.details).toMatchObject({ kind: "single" });
     expect(options).toMatchObject({ deliverAs: "followUp", triggerTurn: true });
   });
 
@@ -107,8 +108,9 @@ describe("BgNotifier", () => {
     expect(pi.sendMessage).toHaveBeenCalledTimes(2); // 1 immediate + 1 flush
     const batchCall = pi.sendMessage.mock.calls[1][0];
     expect(batchCall.content).toContain("1 background tasks completed");
-    // 合并发送也是静默投递（display:false）
-    expect(batchCall).toMatchObject({ customType: "subagent-bg-notify", display: false });
+    // 合并发送也是可见投递（display:true）+ batch details 供 renderer 汇总渲染
+    expect(batchCall).toMatchObject({ customType: "subagent-bg-notify", display: true });
+    expect(batchCall.details).toMatchObject({ kind: "batch" });
   });
 
   it("flushPendingNotifications: no-op when no pending", () => {

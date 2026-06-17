@@ -28,6 +28,7 @@ function makeMockPi() {
     }),
     registerTool: vi.fn(),
     registerCommand: vi.fn(),
+    registerMessageRenderer: vi.fn(),
     appendEntry: vi.fn(),
     events: { emit: vi.fn() },
   };

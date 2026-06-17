@@ -143,8 +143,16 @@ export function cleanupWorktree(
 
     if (currentSha !== wt.baseSha) {
       // 分支 B：agent 自提交了（HEAD 前进），尊重其 commit → 在当前 HEAD 创建分支
-      wt.branch = createBranchAtHead(wt.workPath, wt.branchName);
-      wt.hasChanges = true;
+      try {
+        wt.branch = createBranchAtHead(wt.workPath, wt.branchName);
+        wt.hasChanges = true;
+      } catch {
+        // 对称守卫（参考分支 A Round 6 MF#10）：建分支失败时 agent 确有变更
+        // （HEAD 已前进的自提交），必须 hasChanges=true + preserveOnFailure=true，
+        // 跳过 worktree remove 以保留物理目录，供用户手动 git checkout 恢复。
+        wt.hasChanges = true;
+        preserveOnFailure = true;
+      }
     } else {
       // 分支 C：确实无变更
       wt.hasChanges = false;

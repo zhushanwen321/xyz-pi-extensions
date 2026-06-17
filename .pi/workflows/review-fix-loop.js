@@ -11,7 +11,7 @@ const meta = {
 // ── Constants & schemas ────────────────────────────────────────────
 
 const DEFAULT_AGENT_TIMEOUT_MS = 1_800_000; // 30 min — current diff is 174 files / +29817 LOC; 10 min insufficient (wf-1781571544461 timed out twice)
-const MODEL = "mimo-router/mimo-v2.5";
+const MODEL = "zhipu-coding-plan-router/glm-5.2";
 const CLEAN_THRESHOLD = 2; // S1: consecutive clean rounds to disable an agent
 
 const reviewerSchema = {
