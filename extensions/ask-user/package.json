@@ -1,0 +1,45 @@
+{
+  "name": "@zhushanwen/pi-ask-user",
+  "version": "0.1.0",
+  "description": "Inline adaptive ask_user tool for Pi — single/multi-question structured input with split-pane preview, inline editor, and optional comments.",
+  "type": "module",
+  "main": "index.ts",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "extension",
+    "ask",
+    "ask_user",
+    "interactive"
+  ],
+  "license": "MIT",
+  "files": [
+    "index.ts",
+    "src/",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "vitest": "^4.1.8"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-tui": {
+      "optional": true
+    }
+  }
+}

@@ -10,7 +10,7 @@ const meta = {
 
 // ── Constants & schemas ────────────────────────────────────────────
 
-const DEFAULT_AGENT_TIMEOUT_MS = 600_000;
+const DEFAULT_AGENT_TIMEOUT_MS = 1_800_000; // 30 min — current diff is 174 files / +29817 LOC; 10 min insufficient (wf-1781571544461 timed out twice)
 const MODEL = "zhipu-coding-plan-router/glm-5.2";
 const CLEAN_THRESHOLD = 2; // S1: consecutive clean rounds to disable an agent
 
@@ -125,7 +125,17 @@ function saveRoundSnapshot(state, round, mustFix, suggestion, agentResults, modi
 function parseResult(raw) {
   if (typeof raw === "object" && raw !== null) return raw;
   if (typeof raw === "string") {
-    try { return JSON.parse(raw); } catch { /* fall through */ }
+    // Strip markdown code fences (```json ... ```) — common LLM failure mode.
+    let s = raw.trim();
+    const fence = s.match(/^```(?:json)?\s*\n([\s\S]*?)\n?```\s*$/i);
+    if (fence) s = fence[1].trim();
+    // If surrounded by prose, extract the outermost JSON object.
+    if (!s.startsWith("{") && !s.startsWith("[")) {
+      const first = s.indexOf("{");
+      const last = s.lastIndexOf("}");
+      if (first !== -1 && last > first) s = s.slice(first, last + 1);
+    }
+    try { return JSON.parse(s); } catch { /* fall through */ }
   }
   return null;
 }
@@ -143,6 +153,20 @@ function normalizeAggregatorResult(raw) {
     typeof parsed.suggestions === "number" ? parsed.suggestions : 0;
   if (typeof mustFix !== "number") return null;
   return { report_file: parsed.report_file || parsed.reportFile, must_fix: mustFix, suggestion };
+}
+
+// Fallback: aggregator agent sometimes writes aggregated.md correctly but
+// returns malformed JSON. Recover must_fix/suggestion counts from the file
+// so the loop can still reach the clean gate. Format produced by aggregator:
+//   "## Summary\n- Must-fix: 0\n- Suggestions: 12\n- Infos: 17"
+function parseAggregatedMd(content) {
+  const mustFixMatch = content.match(/[-*]\s*Must[-_]fix\s*[:：]\s*(\d+)/i);
+  if (!mustFixMatch) return null;
+  const suggestionMatch = content.match(/[-*]\s*Suggestions?\s*[:：]\s*(\d+)/i);
+  return {
+    must_fix: parseInt(mustFixMatch[1], 10),
+    suggestion: suggestionMatch ? parseInt(suggestionMatch[1], 10) : 0,
+  };
 }
 
 // ── Build review agent calls (respecting disabled agents) ─────────
@@ -269,22 +293,53 @@ while (round < MAX) {
     prompt: [
       `Round ${round}/${MAX} — AGGREGATE REVIEWS`,
       "",
-      "Merge sub-review reports into a unified report.",
+      "You have TWO outputs to produce: (1) a markdown report file and (2) a JSON return value.",
       "",
-      "Sub-review results: " + JSON.stringify(reviewResults),
+      "Sub-review results: " + JSON.stringify(reviewResults, null, 2),
       "outputDir: " + roundDir,
       "",
-      "Steps:",
-      "1. Read each report_file from sub-review results",
-      "2. Deduplicate overlapping findings by (file, line, description)",
-      "3. Merge statistics: sum must_fix and suggestion after dedup",
-      "4. Write " + roundDir + "/aggregated.md (human-readable report for fix agent)",
-      "5. If a report file is missing, note in summary but don't fail",
+      "─── PART 1: WRITE FILE ────────────────────────────────────",
+      "Write the human-readable aggregated report to:",
+      roundDir + "/aggregated.md",
       "",
-      "IMPORTANT: After writing the reports, you MUST return a JSON object with exactly these fields:",
-      '- "report_file": absolute path to ' + roundDir + "/aggregated.md",
-      '- "must_fix": total number of MUST_FIX issues after dedup',
-      '- "suggestion": total number of SUGGESTION issues after dedup',
+      "Top section MUST be:",
+      "```",
+      "## Summary",
+      "- Must-fix: <N>",
+      "- Suggestions: <N>",
+      "- Infos: <N>",
+      "- Dimensions reviewed: <comma-separated>",
+      "- Dedup: <N> duplicates removed",
+      "```",
+      "",
+      "Followed by tables of Suggestions, Infos, and a Conclusion section.",
+      "The format `- Must-fix: N` and `- Suggestions: N` is critical: a fallback parser depends on it.",
+      "",
+      "─── PART 2: RETURN JSON (CRITICAL — loop reads THIS) ─────",
+      "Your FINAL response MUST be a single JSON object and NOTHING ELSE.",
+      "",
+      "Required shape (exact field names, no aliases, no extras):",
+      "{",
+      `  "report_file": "${roundDir}/aggregated.md",`,
+      '  "must_fix": <integer>,',
+      '  "suggestion": <integer>',
+      "}",
+      "",
+      "STRICT RULES:",
+      "- Field names MUST be exactly: report_file, must_fix, suggestion",
+      "  (NOT mustFix, totalMustFix, count, totalMustFixCount, etc.)",
+      "- must_fix and suggestion MUST be integers (0, 3, 12) — NOT strings, NOT null, NOT undefined",
+      "- The JSON object MUST be the ONLY thing in your final response",
+      "- DO NOT wrap in markdown code fences (no ```json blocks)",
+      "- DO NOT add prose before/after the JSON (no 'Here is the report:', no explanation)",
+      "- DO NOT add fields beyond the three listed",
+      "",
+      "─── SELF-CHECK before returning ──────────────────────────",
+      "1. Did you write " + roundDir + "/aggregated.md? If not, do it first.",
+      "2. Is must_fix in your JSON equal to the 'Must-fix: N' in your markdown?",
+      "3. Is suggestion in your JSON equal to the 'Suggestions: N' in your markdown?",
+      "4. Is your final response the bare JSON object, no fences, no prose?",
+      "If any check fails, fix and re-output. The loop breaks on malformed JSON.",
     ].join("\n"),
     agent: "review-aggregator",
     model: MODEL,
@@ -293,12 +348,34 @@ while (round < MAX) {
     timeoutMs: DEFAULT_AGENT_TIMEOUT_MS,
   });
 
-  const agg = normalizeAggregatorResult(aggRaw);
+  let agg = normalizeAggregatorResult(aggRaw);
+
+  // Defense-in-depth: aggregator prompt now enforces JSON shape strictly
+  // and parseResult strips code fences, so this fallback should rarely fire.
+  // Kept as belt-and-suspenders against LLM regression.
   if (!agg || typeof agg.must_fix !== "number") {
-    log("Aggregator returned invalid result: " + JSON.stringify(aggRaw));
-    log("Aggregator failed, stopping.");
-    saveState(state);
-    break;
+    const rawPreview = (typeof aggRaw === "string" ? aggRaw : JSON.stringify(aggRaw)).slice(0, 200);
+    log("Aggregator JSON invalid (len=" + (aggRaw?.length ?? 0) + "): " + rawPreview);
+
+    const fallbackPath = (agg && agg.report_file) || (roundDir + "/aggregated.md");
+    try {
+      const content = fs.readFileSync(fallbackPath, "utf-8");
+      const parsed = parseAggregatedMd(content);
+      if (parsed && typeof parsed.must_fix === "number") {
+        agg = { report_file: fallbackPath, must_fix: parsed.must_fix, suggestion: parsed.suggestion ?? 0 };
+        log("Fallback parsed from " + fallbackPath + ": must_fix=" + agg.must_fix + ", suggestion=" + agg.suggestion);
+      } else {
+        log("Fallback parse: no Must-fix line in " + fallbackPath);
+      }
+    } catch (e) {
+      log("Fallback read failed: " + e.message);
+    }
+
+    if (!agg || typeof agg.must_fix !== "number") {
+      log("Aggregator failed and fallback failed, stopping.");
+      saveState(state);
+      break;
+    }
   }
 
   const mustFix = agg.must_fix;

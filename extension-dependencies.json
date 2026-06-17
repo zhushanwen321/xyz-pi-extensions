@@ -105,6 +105,11 @@
           "reason": "complete action 通过 __goalInit 启动 goal，缺失时降级通知用户"
         }
       ]
+    },
+    {
+      "name": "@zhushanwen/pi-ask-user",
+      "directory": "extensions/ask-user",
+      "dependsOn": []
     }
   ]
 }

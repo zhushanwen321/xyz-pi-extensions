@@ -24,7 +24,7 @@
 |--------|------|------:|---------|------|------|
 | pi-hashline-edit | [RimuruW/pi-hashline-edit](https://github.com/RimuruW/pi-hashline-edit) | 76 | 2025-06-01 | active | 内容锚定编辑，消除行号偏移 |
 | pi-interactive-shell | [nicobailon/pi-interactive-shell](https://github.com/nicobailon/pi-interactive-shell) | 513 | 2026-06-01 | active | 交互式 Shell，PTY 仿真 + 四种模式 |
-| pi-ask-user | [edlsh/pi-ask-user](https://github.com/edlsh/pi-ask-user) | — | 2026-06-01 | active | 结构化用户问答 |
+| pi-ask-user | [edlsh/pi-ask-user](https://github.com/edlsh/pi-ask-user) | — | 2026-06-01 | replaced | 结构化用户问答（已被自研 ask-user 替换） |
 | pi-subagents | [nicobailon/pi-subagents](https://github.com/nicobailon/pi-subagents) | — | 2026-06-01 | active | 完整 subagent 系统，替代自研 |
 
 ### fork-modified
@@ -40,6 +40,7 @@ _暂无_
 | goal | — | active | 持久化目标驱动，7 态状态机 |
 | todo | — | active | 轻量三态任务清单 |
 | skill-state | — | active | Skill 执行追踪 |
+| ask-user | pi-ask-user | active | inline adaptive 结构化用户问答（融合 pi-ask-user + 自研思路） |
 | ~~subagent~~ | — | replaced | 已被 pi-subagents 替代 |
 
 ## 决策原则
