@@ -778,6 +778,8 @@ export function expandTilde(p: string): string {
 
 ## 15. TUI 渲染 **[指南]**
 
+> 📖 **深度展开**：完整的 TUI 渲染避坑指南（渲染管线/shell 策略、ANSI/宽度/截断、键盘交互/overlay、流式更新/性能）见 [Pi TUI 扩展开发避坑指南](./pi-tui-development-guide.md)。该指南基于 `@zhushanwen/pi-subagents` 20+ 个 TUI 修复 commit 的实战总结，对照无 bug 的参考实现 `pi-subagents` 及 Pi 渲染引擎源码交叉验证，专注「场景 → 怎么做」的可操作经验。本节仅列基础要点。
+
 ### 15.1 颜色使用
 
 使用语义 token 着色，不硬编码 ANSI：

@@ -89,6 +89,7 @@ Schema：`docs/third-party-extensions/extensions.schema.json`
 
 - [CONTEXT.md](./CONTEXT.md) — 领域术语表（Pi 平台概念 + 本项目概念 + 歧义标记）
 - [docs/pi-extension-standards.md](./docs/pi-extension-standards.md) — **Pi Extension 开发规范**（所有新增/修改 extension 前必须阅读）
+- [docs/pi-tui-development-guide.md](./docs/pi-tui-development-guide.md) — **Pi TUI 扩展开发避坑指南**（渲染管线/shell 策略、ANSI/宽度/截断、键盘交互/overlay、流式更新/性能；开发带 TUI 的 extension 前必读）
 - [docs/adr/](./docs/adr/) — 架构决策记录（已做出的决策，不可逆）
   - [001-subagent-architecture.md](./docs/adr/001-subagent-architecture.md) — Subagent 进程隔离、上下文传递、background 模式、能力边界、模型选择
   - [002-goal-7-state-machine.md](./docs/adr/002-goal-7-state-machine.md) — Goal 为什么有 7 种状态（time_limited + cancelled），以及为什么没有 usage_limited
