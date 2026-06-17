@@ -47,9 +47,9 @@ import type { SubagentToolDetails } from "./tui/subagent-render.ts";
 interface PiLike {
   appendEntry(customType: string, data?: unknown): void;
   events: { emit(channel: string, data: unknown): void };
-  /** FR-O1.1: 注入消息到主对话并可选触发新 turn */
+  /** FR-O1.1: 注入消息到主对话并可选触发新 turn（details 透传给 renderer）。 */
   sendMessage(
-    message: { customType: string; content: string; display: boolean },
+    message: { customType: string; content: string; display: boolean; details?: unknown },
     options?: { triggerTurn?: boolean; deliverAs?: "followUp" | "steer" | "nextTurn" },
   ): void;
 }
