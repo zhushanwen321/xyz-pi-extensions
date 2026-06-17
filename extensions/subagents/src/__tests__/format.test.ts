@@ -103,4 +103,26 @@ describe("formatEventLogLine", () => {
     expect(line).toContain("turn 3");
     expect(line).toContain("Fixed the handler");
   });
+
+  // ── 类型图标语义（2026-06-17：› 工具 / > 输出 / · thinking，替代 ⎿ 前缀）──
+
+  it("tool_start / tool_end 用 › 图标（不再用 ⎿ 前缀）", () => {
+    const start: AgentEventLogEntry = { type: "tool_start", label: "read foo.ts", ts: 0, status: "running" };
+    const end: AgentEventLogEntry = { type: "tool_end", label: "read foo.ts", ts: 0, status: "done" };
+    expect(formatEventLogLine(start, fakeTheme)).toContain("› read foo.ts");
+    expect(formatEventLogLine(end, fakeTheme)).toContain("› read foo.ts");
+    expect(formatEventLogLine(start, fakeTheme)).not.toContain("⎿");
+  });
+
+  it("text_output 用 > 图标", () => {
+    const entry: AgentEventLogEntry = { type: "text_output", label: "All done", ts: 0 };
+    expect(formatEventLogLine(entry, fakeTheme)).toContain("> All done");
+  });
+
+  it("thinking 用 · 图标（整行 dim）", () => {
+    const entry: AgentEventLogEntry = { type: "thinking", label: "analyzing", ts: 0 };
+    const line = formatEventLogLine(entry, fakeTheme);
+    expect(line).toContain("· analyzing");
+    expect(line).not.toContain("⎿");
+  });
 });

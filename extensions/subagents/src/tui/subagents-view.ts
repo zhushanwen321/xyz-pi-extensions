@@ -10,7 +10,7 @@
 // - handleInput(data): 处理按键
 // 销毁由 done() 回调触发。
 
-import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Key, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import type { SubagentRuntime } from "../runtime.ts";
@@ -76,11 +76,25 @@ function padVisible(s: string, width: number): string {
   return s + " ".repeat(width - vw);
 }
 
-/** Truncate string to visible width, appending ellipsis if truncated. ANSI-safe. */
+/** Truncate string to visible width, appending `…`. ANSI-safe。
+ *  list 视图截断的输入（agent 名 / eventLog label）一般无样式；剥掉游离 ANSI 后
+ *  按 grapheme 切到 maxWidth-1 + `…`，保证 indexOf（字面位置）== visibleWidth（可见位置），
+ *  padVisible 列对齐不错位。 */
+const _segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 function truncVisible(s: string, maxWidth: number): string {
   if (visibleWidth(s) <= maxWidth) return s;
   if (maxWidth <= 1) return visibleWidth(s) > 0 ? "…" : s;
-  return truncateToWidth(s, maxWidth - 1) + "…";
+  // 取可见宽度 <= maxWidth-1 的前缀 grapheme，再加 `…`
+  const target = maxWidth - 1;
+  let out = "";
+  let w = 0;
+  for (const { segment } of _segmenter.segment(s)) {
+    const sw = visibleWidth(segment);
+    if (w + sw > target) break;
+    out += segment;
+    w += sw;
+  }
+  return out + "…";
 }
 
 /** 把文本按可见宽度自动换行。用 visibleWidth 测量（ANSI-safe），按 grapheme 切分。
@@ -252,13 +266,13 @@ function renderLeftColumn(
   return lines;
 }
 
-/** 渲染右列：选中 record 的详情。 */
+/** 渲染右列：选中 record 的详情（分屏折叠视图——每条 eventLog 单行截断）。 */
 function renderRightColumn(
   record: SubagentRecord | null,
   theme: ThemeLike,
   mainWidth: number,
-  state: ViewState,
-  bodyHeight: number,
+  _state: ViewState,
+  _bodyHeight: number,
 ): string[] {
   const lines: string[] = [];
   if (!record) {
@@ -289,41 +303,25 @@ function renderRightColumn(
   lines.push(theme.fg("dim", `${turns} turns · ${tokens} · ${elapsed} · ${mode} · started ${formatTime(record.startedAt)}`));
   lines.push("");
 
-  // Event log（带滚动，自动换行）
+  // Event log（折叠：每条单行截断到列宽，不换行）
   const filteredLog = (record.eventLog ?? []).filter((e) => e.type !== "turn_end");
-  lines.push(theme.fg("muted", "Event log:"));
   if (filteredLog.length === 0) {
     lines.push(theme.fg("dim", "  (no events)"));
   } else {
-    // 计算可用高度：bodyHeight - 已占用行数
-    const usedLines = lines.length + 2; // +2 for result section spacing
-    const maxLogLines = Math.max(1, bodyHeight - usedLines - 4);
-    const logStart = Math.max(0, Math.min(state.scrollOffset, Math.max(0, filteredLog.length - maxLogLines)));
-    const logEnd = Math.min(filteredLog.length, logStart + maxLogLines);
-    for (let i = logStart; i < logEnd; i++) {
-      const entry = filteredLog[i]!;
+    // 缩进 1 空格 + 图标行，截断到 mainWidth（图标由 formatEventLogLine 嵌入）
+    for (const entry of filteredLog) {
       const raw = formatEventLogLine(entry, theme);
-      // 自动换行（保留 ANSI 样式），每行缩进 2 空格
-      for (const wl of wrapVisible(raw, mainWidth - 2)) {
-        lines.push("  " + wl);
-      }
-    }
-    if (filteredLog.length > maxLogLines) {
-      lines.push(theme.fg("dim", `  (${logStart + 1}-${logEnd} of ${filteredLog.length})`));
+      lines.push(" " + truncVisible(raw, mainWidth - 1));
     }
   }
 
-  // Result / Error（自动换行）
+  // Result / Error（单行截断）
   if (record.result?.text || record.error) {
     lines.push("");
     lines.push(theme.fg("muted", record.error ? "Error:" : "Result:"));
     const text = record.error ?? record.result?.text ?? "";
-    const resultLines = text.split("\n").slice(0, 5);
-    for (const l of resultLines) {
-      for (const wl of wrapVisible(l, mainWidth - 2)) {
-        lines.push(theme.fg("dim", "  " + wl));
-      }
-    }
+    const firstLine = text.split("\n")[0] ?? "";
+    lines.push(theme.fg("dim", "  " + truncVisible(firstLine, mainWidth - 2)));
   }
 
   return lines;
@@ -342,6 +340,13 @@ export function renderView(
 ): string[] {
   if (termRows < MIN_TERMINAL_ROWS) {
     return [`Terminal too small (need ≥${MIN_TERMINAL_ROWS} rows)`];
+  }
+
+  // detailMode：渲染全屏详情视图（右列占满，展开换行 + 完整翻屏）
+  if (state.detailMode) {
+    const filtered = applyFilter(records, state.filterText);
+    const selectedRecord = filtered[state.selectedIdx] ?? filtered[0] ?? null;
+    return renderDetailView(selectedRecord, theme, width, state, termRows);
   }
 
   const contentWidth = width - 2; // ╭...╮ 边框
@@ -377,11 +382,112 @@ export function renderView(
 
   // ── Footer ──
   lines.push("├" + "─".repeat(SIDEBAR_WIDTH) + "┴" + "─".repeat(mainWidth) + "┤");
-  const navPart = state.detailMode ? "↑↓ 滚动" : "↑↓ 导航";
-  const enterPart = state.detailMode ? "Esc 返回" : "Enter 详情";
-  const stopPart = "x stop";
-  const quitPart = "Esc 退出";
-  const footer = `${navPart} · ${enterPart} · ${stopPart} · ${quitPart}`;
+  const footer = "↑↓ 导航 · Enter 详情 · x stop · Esc 退出";
+  lines.push("│" + padVisible(theme.fg("muted", footer), contentWidth) + "│");
+  lines.push("╰" + "─".repeat(contentWidth) + "╯");
+
+  return lines;
+}
+
+/**
+ * 详情全屏视图（detailMode）：右列占满 overlay，展开所有 eventLog。
+ * 长内容换行 + 续行缩进对齐到图标后；事件间空行分隔。
+ * 支持 ↑↓ 行级 / PgUp PgDn 大跨度 / Home End 跳顶底（见 processKey）。
+ */
+function renderDetailView(
+  record: SubagentRecord | null,
+  theme: ThemeLike,
+  width: number,
+  state: ViewState,
+  termRows: number,
+): string[] {
+  const contentWidth = width - 2; // ╭...╮ 边框
+  const indentWidth = 3; // 续行缩进：图标(1) + 空格(1) + 对齐空格(1)
+  const wrapWidth = Math.max(10, contentWidth - indentWidth);
+
+  const lines: string[] = [];
+
+  if (!record) {
+    lines.push("╭" + "─".repeat(contentWidth) + "╮");
+    lines.push("│" + padVisible(theme.fg("dim", "No agent selected"), contentWidth) + "│");
+    lines.push("╰" + "─".repeat(contentWidth) + "╯");
+    return lines;
+  }
+
+  // ── Header（agent 名）──
+  const title = record.agent;
+  const titleLine = `─ ${title} `;
+  const titleFill = "─".repeat(Math.max(0, contentWidth - visibleWidth(titleLine)));
+  lines.push("╭" + titleLine + titleFill + "╮");
+
+  // ── 内容行（全部生成后整体滚动）──
+  const content: string[] = [];
+
+  // 状态 + stats 行
+  const elapsed = record.endedAt
+    ? formatDuration(record.endedAt - record.startedAt)
+    : formatDuration(Date.now() - record.startedAt);
+  const turns = record.turns ?? 0;
+  const tokens = record.totalTokens ? formatTokens(record.totalTokens) : "0";
+  const mode = record.mode === "background" ? "background" : "sync";
+  content.push(`${statusIcon(record.status, theme)} ${statusLabel(record.status, theme)} · ${turns} turns · ${tokens} · ${elapsed} · ${mode} · started ${formatTime(record.startedAt)}`);
+  // model + thinking level 括号分组
+  const metaParts: string[] = [];
+  if (record.model) metaParts.push(record.model);
+  if (record.thinkingLevel) metaParts.push(`thinking ${record.thinkingLevel}`);
+  if (metaParts.length > 0) {
+    content.push(theme.fg("dim", `(${metaParts.join(" · ")})`));
+  }
+  content.push("");
+
+  // Event log（展开：换行 + 续行缩进，事件间空行）
+  for (const entry of record.eventLog ?? []) {
+    if (entry.type === "turn_end") {
+      content.push(theme.fg("dim", `── turn ──`));
+      continue;
+    }
+    const raw = formatEventLogLine(entry, theme);
+    const wrapped = wrapVisible(raw, wrapWidth);
+    content.push(wrapped[0]!);
+    for (let i = 1; i < wrapped.length; i++) {
+      content.push(" ".repeat(indentWidth) + wrapped[i]);
+    }
+    content.push(""); // 事件间空行
+  }
+
+  // Result / Error（展开换行 + 缩进）
+  if (record.result?.text || record.error) {
+    content.push(theme.fg("muted", record.error ? "Error:" : "Result:"));
+    const text = record.error ?? record.result?.text ?? "";
+    for (const l of text.split("\n")) {
+      for (const wl of wrapVisible(l, wrapWidth - 2)) {
+        content.push(theme.fg("dim", "  " + wl));
+      }
+    }
+  }
+
+  // ── 视口滚动（scrollOffset）──
+  // 可用高度 = termRows - header(1) - footer(2: ├ + footer text + ╰)
+  const footerLines = 2;
+  const viewportHeight = Math.max(1, termRows - 1 - footerLines);
+  const maxOffset = Math.max(0, content.length - viewportHeight);
+  const startIdx = Math.max(0, Math.min(state.scrollOffset, maxOffset));
+  // 回写收敛后的 offset：End 设 MAX_SAFE_INTEGER、PgDn 越界时，下次渲染状态即归位。
+  state.scrollOffset = startIdx;
+  const visible = content.slice(startIdx, startIdx + viewportHeight);
+
+  for (const line of visible) {
+    lines.push("│" + padVisible(line, contentWidth) + "│");
+  }
+  // pad to viewportHeight
+  while (lines.length < 1 + viewportHeight) {
+    lines.push("│" + " ".repeat(contentWidth) + "│");
+  }
+
+  // ── Footer ──
+  lines.push("├" + "─".repeat(contentWidth) + "┤");
+  const scrollInfo = content.length > viewportHeight ? ` · ${startIdx + 1}-${Math.min(startIdx + viewportHeight, content.length)}/${content.length}` : "";
+  const footer = `↑↓ / PgUp PgDn / Home End 滚动${scrollInfo} · Esc 返回`;
   lines.push("│" + padVisible(theme.fg("muted", footer), contentWidth) + "│");
   lines.push("╰" + "─".repeat(contentWidth) + "╯");
 
@@ -405,6 +511,14 @@ export function applyFilter(records: SubagentRecord[], filterText: string): Suba
 // Keyboard
 // ============================================================
 
+/** 详情全屏按键的可选上下文：视口高度，用于精确翻屏/跳底。 */
+export interface DetailKeyContext {
+  /** 详情视口可显示的行数（= 详情内容区高度）。用于 PgUp/PgDn 步长 + End 跳底。 */
+  viewportHeight?: number;
+  /** 详情内容总行数（= 展开后的 eventLog + result 行数）。用于 End 精确跳底。 */
+  contentLines?: number;
+}
+
 export function processKey(
   data: string,
   records: SubagentRecord[],
@@ -413,23 +527,48 @@ export function processKey(
   selectedRecord: SubagentRecord | null,
   done: () => void,
   runtime: { cancelBackground: (id: string) => boolean } | null,
+  detailCtx?: DetailKeyContext,
 ): boolean {
   if (state.disposed) return false;
 
   const filtered = applyFilter(records, state.filterText);
 
-  // ── 详情模式（Enter 进入的全屏详情）：↑↓ 滚动 eventLog，Esc 返回分屏 ──
+  // ── 详情模式（Enter 进入的全屏详情）：↑↓ 行级 / PgUp PgDn 大跨度 / Home End 跳顶底 / Esc 返回 ──
   if (state.detailMode) {
     if (matchesKey(data, Key.escape)) {
       state.detailMode = false;
       return true;
     }
+    // 计算翻屏步长（视口高度）和最大滚动偏移
+    const vh = detailCtx?.viewportHeight ?? 10;
+    const pageStep = Math.max(1, vh);
+    const maxOffset = detailCtx?.contentLines !== undefined && detailCtx.contentLines > 0
+      ? Math.max(0, detailCtx.contentLines - vh)
+      : Number.MAX_SAFE_INTEGER;
+    const clamp = (v: number): number => Math.max(0, Math.min(v, maxOffset));
+
+    if (matchesKey(data, "home")) {
+      state.scrollOffset = 0;
+      return true;
+    }
+    if (matchesKey(data, "end")) {
+      state.scrollOffset = clamp(maxOffset);
+      return true;
+    }
+    if (matchesKey(data, "pageDown")) {
+      state.scrollOffset = clamp(state.scrollOffset + pageStep);
+      return true;
+    }
+    if (matchesKey(data, "pageUp")) {
+      state.scrollOffset = clamp(state.scrollOffset - pageStep);
+      return true;
+    }
     if (matchesKey(data, Key.down)) {
-      state.scrollOffset++;
+      state.scrollOffset = clamp(state.scrollOffset + 1);
       return true;
     }
     if (matchesKey(data, Key.up)) {
-      if (state.scrollOffset > 0) state.scrollOffset--;
+      state.scrollOffset = clamp(state.scrollOffset - 1);
       return true;
     }
     return false;
@@ -573,7 +712,12 @@ export function createSubagentsView(
         const records = getAllRecords(runtime);
         const filtered = applyFilter(records, state.filterText);
         const selected = filtered[state.selectedIdx] ?? null;
-        const changed = processKey(data, records, state, theme, selected, wrappedDone, runtime);
+        // 详情全屏翻屏上下文：视口高度（与 renderDetailView 计算一致）。
+        // contentLines 不传——End/PgDn 越界由 renderDetailView 的 clamp + 回写收敛。
+        const detailCtx: DetailKeyContext | undefined = state.detailMode
+          ? { viewportHeight: Math.max(1, tui.terminal.rows - 3) }
+          : undefined;
+        const changed = processKey(data, records, state, theme, selected, wrappedDone, runtime, detailCtx);
         if (changed) {
           cache.width = undefined;
           cache.lines = undefined;
@@ -583,7 +727,7 @@ export function createSubagentsView(
     };
   }, {
     overlay: true,
-    overlayOptions: { anchor: "center" as const, width: "100%", maxHeight: "100%", margin: 0 },
+    overlayOptions: { anchor: "center" as const, width: "100%", maxHeight: "100%", margin: 1 },
   });
 }
 

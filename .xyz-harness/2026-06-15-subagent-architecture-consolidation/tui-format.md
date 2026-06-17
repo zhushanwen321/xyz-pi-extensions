@@ -9,9 +9,10 @@
 
 | 字符 | 语义 | 何时用 | dim? |
 |------|------|--------|------|
-| `·` | 同级并列字段 | `model · thinking`、`2 turns · 8.2k · 12s` | 是 |
+| `·` | 同级并列字段 / thinking 图标 | `model · thinking`、`2 turns · 8.2k · 12s`；thinking eventLog 行首图标 | 是 |
 | `()` | 元数据分组 | `(anthropic/claude-sonnet-4.5 · thinking medium)` | 是 |
-| `├─` | 层级子内容前缀 | eventLog 滚动区每行 | 是 |
+| `›` | 工具调用图标 | eventLog tool_start/tool_end 行首 | 否 |
+| `>` | 输出文本图标 | eventLog text_output 行首 | 否 |
 | `│` | 大区块分隔 | orchestration header 仅此一处 `orchestrate │ parallel` | 否 |
 | `→` | 时序/因果链 | chain DAG `scout → planner → worker` | 是 |
 | `▶`/`▼` | 折叠标记 | orchestration expanded step 标题 | 否 |
@@ -20,8 +21,15 @@
 ### 禁止
 
 - `│` 做 stats 字段分隔（历史 bug：`2 turns │ 8.2k │ 12s` → 改 `·`）
-- `└─` 做最后一行（redraw 时 `├─`/`└─` 切换抖动）
+- `├─`/`└─` 做 eventLog 行前缀（已废弃，2026-06-17 改用类型图标 `›`/`>`/`·`）
 - 多种分隔符混用无语义区分
+
+### 设计变更说明（2026-06-17）
+
+原方案所有 eventLog 行统一用 `├─ ` 前缀（dim 连接符），理由是"单父单子关系 + 避免 redraw 抖动"。
+实测压缩视图（对话流 block 最近 4 条 + `/subagents list` 详情）发现：thinking / tool / output
+全部长一个样，杂乱难辨。**改为按类型加图标**（`›` 工具 / `>` 输出 / `·` thinking），
+牺牲一点"层级感"换"类型一眼可辨"。redraw 抖动问题不适用（图标固定不变，不存在切换）。
 
 ---
 
@@ -81,14 +89,23 @@ function formatEventLogLine(entry: AgentEventLogEntry, theme: ThemeLike, turnNum
 
 | 类型 | 格式 | 颜色 |
 |------|------|------|
-| tool_start | `├─ {toolName} {args摘要}` | normal |
-| tool_end (done) | `├─ {toolName} {args摘要} ✓` | ✓=success |
-| tool_end (failed) | `├─ {toolName} {args摘要} ✗` | ✗=error |
-| text_output | `├─ {文本片段}` | normal |
-| thinking | `├─ {reasoning 片段}` | dim |
+| tool_start | `› {toolName} {args摘要}` | normal |
+| tool_end (done) | `› {toolName} {args摘要} ✓` | ✓=success |
+| tool_end (failed) | `› {toolName} {args摘要} ✗` | ✗=error |
+| text_output | `> {文本片段}` | normal |
+| thinking | `· {reasoning 片段}` | dim（含 `·` 图标整行 dim） |
 | turn_end | `── turn {N} ──` | dim（expanded only） |
 
-前缀 `├─ ` 始终 dim。
+**类型图标语义**（2026-06-17 变更，替代原 `├─ ` 统一前缀）：
+
+| 图标 | 类型 | 说明 |
+|------|------|------|
+| `›` | tool_start / tool_end | 工具调用。tool_end 尾部追加 `✓`（success）/`✗`（error） |
+| `>` | text_output | agent 输出文本片段 |
+| `·` | thinking | 推理片段。图标 + 文本**整行 dim** |
+| `──` | turn_end | turn 分隔线（仅 expanded view） |
+
+图标后接 1 个空格再接内容。图标本身**不上色**（thinking 的 `·` 随整行 dim 一起着色，属例外）。
 
 ### args 摘取（extractLabelFromArgs）
 

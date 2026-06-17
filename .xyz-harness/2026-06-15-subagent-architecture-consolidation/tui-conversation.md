@@ -29,19 +29,19 @@ accent bold  dim 括号(model · thinking)                     dim · 分隔 sta
 ### 第 2-5 行 — 滚动区（最近 4 条事件）
 
 ```
-├─ read auth.ts ✓
-├─ bash grep -r catch src/auth/ ✗
-├─ I'll scan the error handling patterns...
-├─ analyzing session.ts:42 for uncaught...
+› read auth.ts ✓
+› bash grep -r catch src/auth/ ✗
+· I'll scan the error handling patterns...
+· analyzing session.ts:42 for uncaught...
 ```
 
-- 每条 prefixed `├─ `（dim），**永远 `├─` 不用 `└─`**（避免 redraw 抖动）
-- 按事件类型格式化（见 tui-format.md）：
-  - `tool_start` → `├─ {toolName} {args摘要}`（无标记）
-  - `tool_end` → `├─ {toolName} {args摘要} {✓|✗}`
-  - `text_output` → `├─ {文本片段}`（normal 色）
-  - `thinking` → `├─ {reasoning 片段}`（dim，SDK 支持时）
+- **每条以类型图标开头**（替换原 `├─ ` 前缀），图标后接 1 个空格再接内容。用类型图标代替统一连接符，让 thinking / tool / output 在压缩视图里一眼可辨：
+  - `tool_start` → `› {toolName} {args摘要}`（无标记）
+  - `tool_end` → `› {toolName} {args摘要} {✓|✗}`
+  - `text_output` → `> {文本片段}`（normal 色）
+  - `thinking` → `· {reasoning 片段}`（整行 dim，含 `·` 图标，SDK 支持时）
   - `turn_end` → **不显示**在滚动区
+- **单行，不换行**：每条始终压成一行，超出截断加 `…`
 - 截断：每条 ≤ ~50 可见字符 + `…`（用 truncLine，保留 ANSI 背景色）
 
 ### 第 6 行 — 提示
@@ -79,15 +79,16 @@ const RUNNING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", 
 ⠹ worker (anthropic/claude-sonnet-4.5 · thinking medium) · 2 turns · 8.2k · 12s
 
 ── turn 1 ──
-├─ read auth.ts ✓
-├─ I'll scan the error handling patterns...
+› read auth.ts ✓
+· I'll scan the error handling patterns...
 ── turn 2 ──
-├─ bash grep -r catch src/auth/ ✗
-├─ analyzing session.ts:42...
+› bash grep -r catch src/auth/ ✗
+· analyzing session.ts:42...
 
 Authentication module complete with proper error handling.
 ```
 
+- 图标与压缩视图一致：`›` 工具 / `·` thinking（dim）/ `>` text_output。turn 分隔 `── turn N ──` 保持 dim
 - Ctrl+O 是 Pi 内置全局 toggle（`ToolRenderContext.expanded`，keybindings.ts:85）。**不是 alt+o**（G-047 已验证 Pi 源码）
 - expanded：完整 eventLog（无 4 行限制）+ turn 分隔 + 完整 result/error
 - 超终端高度 → 进原生 scrollback。**对话流 block 不支持 in-block j/k scroll**（G-047：ToolExecutionComponent 未实现 handleInput）
@@ -101,10 +102,10 @@ Authentication module complete with proper error handling.
 ```
 ⠹ orchestrate │ parallel · 2/4 done · 1 running · 8.2k · 23s     ← 第1行（黄背景）
 phase: Implement [████░░░░] 2/4                                   ← 第2行（进度）
-├─ ✓ worker-A: implement auth (done, 5 turns)                    ← 第3-8行（step 概要）
-├─ ✓ worker-B: implement API (done, 3 turns)
-├─ ⟳ reviewer: review auth+API (running, 2 turns)
-├─ ○ planner: plan integration (pending)
+› ✓ worker-A: implement auth (done, 5 turns)                     ← 第3-8行（step 概要）
+› ✓ worker-B: implement API (done, 3 turns)
+› ⟳ reviewer: review auth+API (running, 2 turns)
+› ○ planner: plan integration (pending)
 ```
 
 ### 第 1 行 — orchestration status
@@ -121,7 +122,7 @@ phase: Implement [████░░░░] 2/4                                 
 
 ### 第 3-8 行 — step 概要（6 步）
 
-`├─ {status_glyph} {agent}: {label} ({status_detail})`
+`› {status_glyph} {agent}: {label} ({status_detail})`
 
 | status | glyph | color |
 |--------|-------|-------|
@@ -145,18 +146,18 @@ phase: Implement [████░░░░] 2/4                                 
 ⠹ orchestrate · parallel · 2/4 done · 8.2k · 23s
 ══════════════════════════════════════════════════════
 ▶ worker-A: implement auth (done, 5 turns)
-  ├─ read auth.ts ✓
-  ├─ edit auth.ts ✓
+  › read auth.ts ✓
+  › edit auth.ts ✓
 ▼ reviewer: review auth+API (running, 2 turns)        ← active 默认展开
-  ├─ read auth.ts ✓
-  ├─ bash npm test ✗
+  › read auth.ts ✓
+  › bash npm test ✗
 ○ planner: plan integration (pending)
 ══════════════════════════════════════════════════════
 Result: {聚合结果摘要}
 ```
 
 - 每个 step 标题 `▶`/`▼`（折叠/展开）。**active step 默认展开**（▼），其余折叠（▶）
-- 展开 step 显示完整 eventLog（复用 single 滚动区格式 + `├─` 连接符）
+- 展开 step 显示完整 eventLog（复用 single 滚动区格式 + `›`/`·`/`>` 图标）
 - 折叠状态存 `OrchestrateToolState.expandedSteps: Set<string>`
 - 超终端高度：截断为 header + 最近 N 步（每步 3-5 行），完整详情引导 /subagents list
 
@@ -199,14 +200,23 @@ class SubagentResultComponent {
 
 | 事件类型 | 格式 | 颜色 |
 |---------|------|------|
-| tool_start | `├─ {toolName} {args摘要}` | normal |
-| tool_end (done) | `├─ {toolName} {args摘要} ✓` | ✓ = success 绿 |
-| tool_end (failed) | `├─ {toolName} {args摘要} ✗` | ✗ = error 红 |
-| text_output | `├─ {文本片段}` | normal |
-| thinking | `├─ {reasoning 片段}` | dim |
+| tool_start | `› {toolName} {args摘要}` | normal |
+| tool_end (done) | `› {toolName} {args摘要} ✓` | ✓ = success 绿 |
+| tool_end (failed) | `› {toolName} {args摘要} ✗` | ✗ = error 红 |
+| text_output | `> {文本片段}` | normal |
+| thinking | `· {reasoning 片段}` | dim（含 `·` 图标整行 dim） |
 | turn_end（expanded only） | `── turn {N} ──` | dim |
 
-前缀 `├─ ` 始终 dim。args 摘取：read/write/edit → basename；bash → command（≤60 char）；web → query/url。
+**类型图标语义**（替代原统一 `├─ ` 连接符，提升压缩视图可读性）：
+
+| 图标 | 类型 | 说明 |
+|------|------|------|
+| `›` | tool_start / tool_end | 工具调用，尾部追加 `✓`/`✗` |
+| `>` | text_output | agent 输出文本 |
+| `·` | thinking | 推理片段，整行 dim |
+| `──` | turn_end | turn 分隔（expanded only） |
+
+args 摘取：read/write/edit → basename；bash → command（≤60 char）；web → query/url。
 
 ---
 
@@ -214,12 +224,13 @@ class SubagentResultComponent {
 
 | 字符 | 语义 | 何时用 |
 |------|------|--------|
-| `·` | 同级并列字段 | `{model} · {thinking}`、`2 turns · 8.2k · 12s` |
+| `·` | 同级并列字段 / thinking 图标 | `{model} · {thinking}`、`2 turns · 8.2k · 12s`；thinking eventLog 行首图标 |
 | `()` | 元数据分组 | `(model · thinking)` 包裹降级信息 |
-| `├─` | 层级子内容 | 滚动区 eventLog 行 |
+| `›` | 工具调用图标 | eventLog tool_start/tool_end 行首 |
+| `>` | 输出文本图标 | eventLog text_output 行首 |
 | `│` | 大区块分隔 | orchestration header `orchestrate │ parallel`（仅 header） |
 | `→` | 时序/因果 | chain DAG 可视化 `scout → planner → worker` |
 | `▶`/`▼` | 折叠标记 | orchestration expanded step 标题 |
 | `━━` | 分节线 | expanded view 的 turn 分隔 / orchestration 上下边界 |
 
-**禁止**：用 `│` 做 stats 字段分隔（历史 bug 来源）；用 `└─` 做最后一行（redraw 抖动）。
+**禁止**：用 `│` 做 stats 字段分隔（历史 bug 来源）；用 `├─`/`└─` 做 eventLog 行前缀（已废弃，改用类型图标 `›`/`>`/`·`，理由：压缩视图里 thinking/tool/output 难以区分）。

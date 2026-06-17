@@ -82,12 +82,16 @@ function basename(p: string): string {
 /**
  * FR-2.1: 格式化事件日志条目为单行展示。
  * 统一入口：对话流 block（subagent-render）和 widget 视图共用。
- * tool_start 无标记（不再显示 ⟳ running，与对话流 block 一致）。
- * 前缀 `⎿  `（U+23BF + 2 空格）用 theme.fg("dim") 着色——pi-subagents 详情行惯例，
- * 比树形 `├─` 更轻量、更适合单父单子关系（每条事件直属于 subagent，无兄弟分支）。
+ *
+ * 图标语义（2026-06-17 变更，替代原统一 `⎿  ` 前缀）：
+ *   - `›` tool_start / tool_end（tool_end 尾部追加 ✓/✗）
+ *   - `>` text_output
+ *   - `·` thinking（图标 + 文本整行 dim）
+ *   - `── turn N ──` turn_end（仅 expanded view）
+ * 用类型图标代替统一连接符，让 thinking / tool / output 在压缩视图里一眼可辨。
  *
  * 注意：entry.label 可能来自 LLM 的 text_delta/thinking_delta，会包含换行符。
- * 必须先把 \r\n\t 压成空格，否则 Pi TUI 会把一条 eventLog 展开成多行，破坏 6 行布局。
+ * 必须先把 \r\n\t 压成空格，否则 Pi TUI 会把一条 eventLog 展开成多行，破坏布局。
  */
 export function formatEventLogLine(
   entry: AgentEventLogEntry,
@@ -95,23 +99,28 @@ export function formatEventLogLine(
   turnNumber?: number,
 ): string {
   const label = sanitizeLogLabel(entry.label);
-  const prefix = theme.fg("dim", "⎿  ");
   if (entry.type === "turn_end") {
-    return `${prefix}turn ${turnNumber ?? "?"}: "${label}"`;
+    return theme.fg("dim", `── turn ${turnNumber ?? "?"}: "${label}" ──`);
   }
   if (entry.type === "tool_start") {
-    return `${prefix}${label}`;
+    return `${TOOL_ICON} ${label}`;
   }
   if (entry.type === "tool_end") {
     const icon = entry.status === "failed" ? theme.fg("error", "✗") : theme.fg("success", "✓");
-    return `${prefix}${label} ${icon}`;
+    return `${TOOL_ICON} ${label} ${icon}`;
   }
   if (entry.type === "thinking") {
-    return `${prefix}${theme.fg("dim", label)}`;
+    // thinking 整行 dim（含 `·` 图标）
+    return theme.fg("dim", `${THINKING_ICON} ${label}`);
   }
   // text_output
-  return `${prefix}${label}`;
+  return `${OUTPUT_ICON} ${label}`;
 }
+
+/** eventLog 行首类型图标常量（见 tui-format.md §4 图标语义表）。 */
+const TOOL_ICON = "›";
+const OUTPUT_ICON = ">";
+const THINKING_ICON = "·";
 
 /** 把 eventLog label 中的换行/回车/制表符替换为空格，避免 TUI 单行变多行。 */
 function sanitizeLogLabel(label: string): string {

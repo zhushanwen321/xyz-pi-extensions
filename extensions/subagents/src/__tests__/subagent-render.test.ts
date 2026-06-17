@@ -59,22 +59,22 @@ describe("buildRenderLines — 压缩视图（6 行）", () => {
     }), 80, passthroughTheme);
     const scrollLine = lines.find((l) => l.includes("a".repeat(10)));
     expect(scrollLine).toBeDefined();
-    // prefix "⎿  " 占 3 列，截断后 label 部分应 <= 50
-    const labelPart = scrollLine!.replace("⎿  ", "").replace("…", "");
+    // 图标 `> ` 占 2 列，截断后 label 部分（去掉 `> ` 图标 + 省略号）应 <= 50
+    const labelPart = scrollLine!.replace(/^> /, "").replace("…", "");
     expect(labelPart.length).toBeLessThanOrEqual(50);
   });
 
-  it("滚动区行带 ⎿ 连接线", () => {
+  it("滚动区行带类型图标（› 工具 / > 输出）", () => {
     const lines = buildRenderLines(makeDetails({
       eventLog: [
         { type: "tool_end", label: "read auth.ts", ts: 0, status: "done" },
         { type: "text_output", label: "scanning files", ts: 0 },
       ],
     }), 80, passthroughTheme);
-    // 滚动区行通过 ⎿ 前缀识别（状态行无 ⎿），不依赖固定行号
-    const scrollLines = lines.filter((l) => l.includes("⎿"));
-    expect(scrollLines.some((l) => l.includes("read auth.ts"))).toBe(true);
-    expect(scrollLines.some((l) => l.includes("scanning files"))).toBe(true);
+    // 滚动区行通过类型图标识别：tool_end → `›`，text_output → `>`
+    const scrollLines = lines.filter((l) => /^[›>·]/.test(l));
+    expect(scrollLines.some((l) => l.startsWith("›") && l.includes("read auth.ts"))).toBe(true);
+    expect(scrollLines.some((l) => l.startsWith(">") && l.includes("scanning files"))).toBe(true);
   });
 
   it("tool_end 带 ✓ 或 ✗", () => {
@@ -102,7 +102,8 @@ describe("buildRenderLines — 压缩视图（6 行）", () => {
       type: "tool_end" as const, label: `tool-${i}`, ts: i, status: "done" as const,
     }));
     const lines = buildRenderLines(makeDetails({ eventLog }), 80, passthroughTheme);
-    const scrollLines = lines.filter((l) => l.includes("⎿"));
+    // 滚动区行以类型图标开头（tool_end → `›`）
+    const scrollLines = lines.filter((l) => l.startsWith("›"));
     expect(scrollLines).toHaveLength(4);
     expect(scrollLines[0]).toContain("tool-4");
     expect(scrollLines[3]).toContain("tool-7");
@@ -152,7 +153,8 @@ describe("buildRenderLines — 压缩视图（6 行）", () => {
     const eight = Array.from({ length: 8 }, (_, i) => ({ type: "tool_end" as const, label: `t${i}`, ts: i, status: "done" as const }));
     const lines = buildRenderLines(makeDetails({ eventLog: eight }), 80, passthroughTheme);
     expect(lines).toHaveLength(5);
-    expect(lines.filter((l) => l.includes("⎿"))).toHaveLength(4);
+    // 滚动区 4 行以 `›` 工具图标开头
+    expect(lines.filter((l) => l.startsWith("›"))).toHaveLength(4);
   });
 
   it("Bug #4: running spinner 由 seed 驱动，不同 turns → 不同帧", () => {
@@ -181,7 +183,7 @@ describe("buildRenderLines — 展开视图", () => {
     const lines = buildRenderLines(makeDetails({
       status: "done", eventLog, result: "All done.",
     }), 80, passthroughTheme, { expanded: true });
-    expect(lines.filter((l) => l.includes("⎿")).length).toBeGreaterThanOrEqual(8);
+    expect(lines.filter((l) => l.startsWith("›")).length).toBeGreaterThanOrEqual(8);
     expect(lines.some((l) => l.includes("All done."))).toBe(true);
   });
 });

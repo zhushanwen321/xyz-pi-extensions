@@ -215,6 +215,76 @@ describe("renderView", () => {
     const lines = renderView(records, fakeTheme, 100, makeState(), 30);
     expect(lines.some((l) => l.includes("read foo.ts"))).toBe(true);
   });
+
+  it("分屏右列折叠：长 label 单行截断（不换行成多行）", () => {
+    const longLabel = "x".repeat(200);
+    const records = [makeRecord({
+      eventLog: [{ type: "text_output", label: longLabel, ts: 0 }],
+    })];
+    const lines = renderView(records, fakeTheme, 60, makeState(), 30);
+    // 折叠视图：长 label 只占一行（截断 + …），不应出现 200 个 x
+    const longLines = lines.filter((l) => l.includes("xxxx"));
+    // 截断后单行可见宽度受限；含 x 的行数应 == 1（不换行）
+    expect(longLines.length).toBe(1);
+    expect(longLines[0]).toContain("…");
+  });
+
+  it("分屏右列用类型图标（›/·/>），不用 ⎿ 前缀", () => {
+    const records = [makeRecord({
+      eventLog: [
+        { type: "tool_end", label: "read auth.ts", ts: 0, status: "done" },
+        { type: "thinking", label: "analyzing", ts: 0 },
+        { type: "text_output", label: "done", ts: 0 },
+      ],
+    })];
+    const lines = renderView(records, fakeTheme, 100, makeState(), 30);
+    // 不应出现废弃的 ⎿ 前缀
+    expect(lines.some((l) => l.includes("⎿"))).toBe(false);
+    // 应出现类型图标
+    expect(lines.some((l) => l.includes("›") && l.includes("read auth.ts"))).toBe(true);
+    expect(lines.some((l) => l.includes("·") && l.includes("analyzing"))).toBe(true);
+    expect(lines.some((l) => l.includes(">") && l.includes("done"))).toBe(true);
+  });
+});
+
+// ── renderView 详情全屏模式（detailMode）──
+
+describe("renderView — 详情全屏（detailMode）", () => {
+  it("detailMode 渲染全屏（标题为 agent 名，非 Subagents）", () => {
+    const records = [makeRecord({ id: "1", agent: "worker", status: "done" })];
+    const lines = renderView(records, fakeTheme, 100, makeState({ detailMode: true }), 30);
+    // 标题行含 agent 名
+    expect(lines.some((l) => l.includes("worker"))).toBe(true);
+    // footer 含翻屏提示
+    expect(lines.some((l) => l.includes("PgUp PgDn"))).toBe(true);
+    expect(lines.some((l) => l.includes("Esc 返回"))).toBe(true);
+  });
+
+  it("detailMode 展开长 label（换行 + 续行缩进）", () => {
+    const longLabel = "x".repeat(150);
+    const records = [makeRecord({
+      eventLog: [{ type: "text_output", label: longLabel, ts: 0 }],
+    })];
+    const lines = renderView(records, fakeTheme, 50, makeState({ detailMode: true }), 30);
+    // 展开视图：150 个 x 会换行成多行（含续行缩进）
+    const xLines = lines.filter((l) => l.includes("xxxx"));
+    expect(xLines.length).toBeGreaterThan(1);
+  });
+
+  it("detailMode scrollOffset 控制可见内容窗口", () => {
+    const eventLog = Array.from({ length: 50 }, (_, i) => ({
+      type: "tool_end" as const, label: `event-${i}`, ts: i, status: "done" as const,
+    }));
+    const records = [makeRecord({ eventLog })];
+    // 顶部（scrollOffset=0）：应看到 event-0
+    const linesAtTop = renderView(records, fakeTheme, 100, makeState({ detailMode: true, scrollOffset: 0 }), 15);
+    expect(linesAtTop.some((l) => l.includes("event-0"))).toBe(true);
+    // 滚到中段（scrollOffset=60）：event-0 应滚出视口
+    const linesAtMid = renderView(records, fakeTheme, 100, makeState({ detailMode: true, scrollOffset: 60 }), 15);
+    expect(linesAtMid.some((l) => l.includes("event-0"))).toBe(false);
+    // 中段应看到较高编号的 event（event-3x 附近）
+    expect(linesAtMid.some((l) => /event-3\d/.test(l))).toBe(true);
+  });
 });
 
 // ── processKey ──
@@ -328,6 +398,46 @@ describe("processKey", () => {
     expect(state.scrollOffset).toBe(4);
     processKey(DOWN, records, state, fakeTheme, null, () => {}, null);
     expect(state.scrollOffset).toBe(5);
+  });
+
+  // ── 详情全屏翻屏：PgUp/PgDn/Home/End（legacy 序列）──
+  const PGUP = "\x1b[5~";
+  const PGDN = "\x1b[6~";
+  const HOME = "\x1b[H";
+  const END = "\x1b[F";
+  // 详情上下文：视口 10 行，内容 30 行 → maxOffset = 20
+  const detailCtx = { viewportHeight: 10, contentLines: 30 };
+
+  it("detail mode Home 跳顶（scrollOffset=0）", () => {
+    const state = makeState({ detailMode: true, scrollOffset: 15 });
+    processKey(HOME, records, state, fakeTheme, null, () => {}, null, detailCtx);
+    expect(state.scrollOffset).toBe(0);
+  });
+
+  it("detail mode End 跳底（clamp 到 maxOffset=20）", () => {
+    const state = makeState({ detailMode: true, scrollOffset: 5 });
+    processKey(END, records, state, fakeTheme, null, () => {}, null, detailCtx);
+    // maxOffset = contentLines(30) - viewportHeight(10) = 20
+    expect(state.scrollOffset).toBe(20);
+  });
+
+  it("detail mode PgDn 大跨度翻屏（+viewportHeight）", () => {
+    const state = makeState({ detailMode: true, scrollOffset: 3 });
+    processKey(PGDN, records, state, fakeTheme, null, () => {}, null, detailCtx);
+    expect(state.scrollOffset).toBe(13); // 3 + 10
+  });
+
+  it("detail mode PgUp 大跨度翻屏（-viewportHeight），不低于 0", () => {
+    const state = makeState({ detailMode: true, scrollOffset: 7 });
+    processKey(PGUP, records, state, fakeTheme, null, () => {}, null, detailCtx);
+    expect(state.scrollOffset).toBe(0); // 7 - 10 → clamp 0
+  });
+
+  it("detail mode PgDn 越界时 clamp 到 maxOffset", () => {
+    const state = makeState({ detailMode: true, scrollOffset: 18 });
+    processKey(PGDN, records, state, fakeTheme, null, () => {}, null, detailCtx);
+    // 18 + 10 = 28，但 maxOffset = 20
+    expect(state.scrollOffset).toBe(20);
   });
 
   it("matchesKey compatibility: \\x1bOA (alt arrow seq) also matches Key.up", () => {

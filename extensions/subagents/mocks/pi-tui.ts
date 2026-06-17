@@ -318,7 +318,7 @@ export class Markdown {
   }
 }
 
-// ── Key / matchesKey mock（最小实现，覆盖测试中的 arrow/enter/escape/backspace）──
+// ── Key / matchesKey mock（最小实现，覆盖测试中的 arrow/enter/escape/backspace/home/end/page）──
 
 export const Key = {
   escape: "escape",
@@ -331,10 +331,14 @@ export const Key = {
   right: "right",
   backspace: "backspace",
   space: "space",
+  home: "home",
+  end: "end",
+  pageUp: "pageUp",
+  pageDown: "pageDown",
 } as const;
 
 /** 简化版 matchesKey：把 raw terminal data 映射到 keyId，再与预期比较。
- *  覆盖测试场景中的 legacy 序列（\x1b[A/B/OA/OB, \r, \x1b, \x7f）。 */
+ *  覆盖测试场景中的 legacy 序列（\x1b[A/B/OA/OB, \r, \x1b, \x7f, \x1b[H/F/[5~/[6~）。 */
 const DATA_TO_KEY: Record<string, string> = {
   "\x1b": "escape",
   "\r": "enter",
@@ -349,6 +353,12 @@ const DATA_TO_KEY: Record<string, string> = {
   "\x1bOB": "down",
   "\x1bOC": "right",
   "\x1bOD": "left",
+  "\x1b[H": "home",
+  "\x1b[F": "end",
+  "\x1bOH": "home",
+  "\x1bOF": "end",
+  "\x1b[5~": "pageUp",
+  "\x1b[6~": "pageDown",
 };
 
 export function matchesKey(data: string, keyId: string): boolean {

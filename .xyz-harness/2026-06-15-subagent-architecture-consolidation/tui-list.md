@@ -51,10 +51,11 @@ Pi 进程内单例 runtime 在 session 切换时 `revive()` 后重新 `setSessio
 │   ⟳ planner   2t  68.8k     —   │  · thinking high)             │
 │   ✓ scout     1t  26.8k   3s    │ 3 turns · 89.4k · 45s · sync  │
 │                                 │                               │
-│                                 │ Event log:                    │
-│                                 │ ⎿  read auth.ts ✓             │
-│                                 │ ⎿  edit config.ts ✓           │
-│                                 │ ⎿  bash npm test ✓            │
+│                                 │ › read auth.ts ✓              │
+│                                 │ › edit config.ts ✓            │
+│                                 │ · I'll verify the config...…  │
+│                                 │ › bash npm test ✓             │
+│                                 │ > All tests passed, 3 files…  │
 │                                 │                               │
 │                                 │ Result:                       │
 │                                 │ All tests passed.             │
@@ -72,14 +73,14 @@ Pi 进程内单例 runtime 在 session 切换时 `revive()` 后重新 `setSessio
 - header：`Agents (filtered/total)`，显示 filter 后/前的数量
 - 列表超出视口时自动滚动（跟随 `selectedIdx`）
 
-### 右列（mainWidth = contentWidth - SIDEBAR_WIDTH - 1）
+### 右列（mainWidth = contentWidth - SIDEBAR_WIDTH - 1）— 分屏模式（折叠视图）
 
 - `Detail` 标题 + 分隔线
-- 状态行：`icon statusLabel · agent`
-- model/thinkingLevel 行（括号分组）：`(provider/model · thinking high)`，借鉴对话流 block 的 meta 分组
-- stats 行：`turns · tokens · elapsed · mode · started time`
-- Event log：复用 `formatEventLogLine`，`wrapVisible` 自动换行，带滚动
-- Result/Error：`wrapVisible` 自动换行，截断到 5 行
+- 状态行：`icon statusLabel · agent`，括号 `(provider/model · thinking high)`，stats 行
+- Event log：复用 `formatEventLogLine`（`›`/`>`/`·` 图标，见 tui-format.md §4）
+- **折叠显示**：每条 eventLog 单行，超出列宽截断加 `…`（用 truncVisible，**不换行**）
+- 不再使用 `⎿ ` 前缀（已废弃）；不再用 `wrapVisible` 硬换行（折叠视图保持单行密度）
+- Result/Error：单行截断 + `…`（不再换行成多行）
 
 ### 分隔
 
@@ -95,16 +96,43 @@ running → failed（triage）→ cancelled → done。同状态按 startedAt de
 
 ## 5. 键盘交互
 
-无 drill-down level——始终左右分屏，选中变化时右列实时刷新。
+无 drill-down level——始终左右分屏，选中变化时右列实时刷新。`Enter` 进入详情全屏（见 §6）。
 
-| 键 | 行为 |
-|----|------|
-| `↑` / `↓` | 上下导航选中（自动滚动左列） |
-| `Enter` | 进入详情全屏模式（右列占满，↑↓ 滚动 eventLog） |
-| `Esc` | 详情模式返回分屏 / 分屏模式退出 overlay |
-| `x` | stop/cancel 选中的 running agent（`cancelBackground(id)`） |
-| 可打印字符 | 直接输入 filter（实时过滤左列，匹配 agent 名/id） |
-| `Backspace` | 删除 filter 最后一个字符 |
+| 键 | 分屏模式 | 详情全屏模式 |
+|----|---------|-------------|
+| `↑` / `↓` | 上下导航选中（自动滚动左列） | 行级上/下滚动 1 行 |
+| `PgUp` / `PgDn` | —（filter 输入） | 大跨度翻屏（一次翻一屏可见行数） |
+| `Home` | —（filter 输入） | 跳到顶部 |
+| `End` | —（filter 输入） | 跳到底部 |
+| `Enter` | 进入详情全屏（`detailMode = true`，`scrollOffset = 0`） | — |
+| `Esc` | 退出 overlay | 返回分屏（`detailMode = false`） |
+| `x` | stop/cancel 选中的 running agent（`cancelBackground(id)`） | — |
+| 可打印字符 | 直接输入 filter（实时过滤左列，匹配 agent 名/id） | — |
+| `Backspace` | 删除 filter 最后一个字符 | — |
+
+### 按键实现
+
+全部用 pi-tui `matchesKey(data, Key.xxx)`，**无需 fallback**（已验证 keys.ts 覆盖 legacy + Kitty 协议）：
+
+```typescript
+matchesKey(data, Key.up);        // 行级上
+matchesKey(data, Key.down);      // 行级下
+matchesKey(data, Key.pageUp);    // 大跨度上（legacy \x1b[5~ + Kitty cp -12）
+matchesKey(data, Key.pageDown);  // 大跨度下（legacy \x1b[6~ + Kitty cp -13）
+matchesKey(data, Key.home);      // 顶部（legacy \x1b[H + Kitty cp -14）
+matchesKey(data, Key.end);       // 底部（legacy \x1b[F + Kitty cp -15）
+matchesKey(data, Key.enter);     // 进入详情
+matchesKey(data, Key.escape);    // 返回/退出
+```
+
+### 翻屏步长
+
+`scrollOffset` 上限 = `max(0, totalContentLines - viewportHeight)`。翻屏步长：
+- 行级（↑/↓）：±1
+- PgUp/PgDn：±`viewportHeight`（整屏，重叠 0 行；若体感不流畅可改为 `viewportHeight - 1` 保留 1 行上下文）
+- Home/End：`0` / `maxOffset`
+
+`viewportHeight` = overlay 高度 - header(2) - footer(1) - status/meta/stats 行数。
 
 ### filter
 
@@ -112,7 +140,55 @@ running → failed（triage）→ cancelled → done。同状态按 startedAt de
 
 ---
 
-## 6. ANSI-aware 对齐工具
+## 6. 详情全屏模式（detailMode，Enter 进入）
+
+`Enter` 从分屏进入，`Esc` 返回。右列占满 overlay，**展开**所有 eventLog（不再单行截断）。
+
+```
+╭─ worker ─────────────────────────────────────────────────────────╮
+│ ✓ done · 3 turns · 89.4k · 45s · sync · started 14:32            │
+│ (anthropic/claude-sonnet-4.5 · thinking high)                    │
+│                                                                  │
+│  › read auth.ts  ✓                                               │
+│  › edit config.ts  ✓                                             │
+│                                                                  │
+│  · I'll verify the config loads correctly under the new schema.  │
+│    The previous failure was at line 42, which referenced a field │
+│    that was renamed in v2. Let me check the migration notes...   │
+│                                                                  │
+│  › bash npm test  ✓                                              │
+│                                                                  │
+│  > All tests passed, 3 files (12 total). The auth module now     │
+│    handles the renamed config field via the migration shim.      │
+│                                                                  │
+│  Result:                                                         │
+│    All tests passed. Auth module complete with proper error      │
+│    handling and config migration support.                        │
+│                                                                  │
+├ ↑↓ / PgUp PgDn / Home End 滚动 · Esc 返回 ────────────────────── ┤
+╰──────────────────────────────────────────────────────────────────╯
+```
+
+- **图标**与分屏/对话流一致（`›` 工具 / `·` thinking dim / `>` 输出），无 `⎿` 前缀
+- **长内容换行**：每条 eventLog 用 `wrapVisible(label, mainWidth - indentWidth)` 换行；续行缩进对齐到图标后（`indentWidth = 3`，即 `图标 + 空格` 的宽度）
+- 事件间空行分隔，提升可读性
+- Result/Error 同样换行 + 缩进
+- footer hint 切换为 `↑↓ / PgUp PgDn / Home End 滚动 · Esc 返回`
+- 标题行：`╭─ {agent} ──...─╮`（agent 名替换原 `Subagents`）
+
+### overlay 边距（2026-06-17 变更）
+
+`overlayOptions.margin` 从 `0` 改为 `1`——上下各留 1 行边距，避免 overlay 顶满终端：
+
+```typescript
+overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%", margin: 1 }
+```
+
+`margin: number` 应用到四边（tui.ts OverlayOptions 定义），顶部和底部各空 1 行。
+
+---
+
+## 7. ANSI-aware 对齐工具
 
 | 函数 | 用途 |
 |------|------|
@@ -124,13 +200,13 @@ running → failed（triage）→ cancelled → done。同状态按 startedAt de
 
 ---
 
-## 7. orchestration record（未实现）
+## 8. orchestration record（未实现）
 
 orchestration（DAG）record 的 split-pane 渲染（Phase 列表 + step 详情）尚未实现。当前 `getAllRecords` 只处理 single records。未来扩展时，左列选中 orchestration record 后右列渲染 DAG summary + step 列表（参考 workflow WorkflowsView 的 `renderLevel1/2` + `mergeBody`）。
 
 ---
 
-## 8. 实时刷新
+## 9. 实时刷新
 
 runtime 事件总线（FR-3.4）：
 
@@ -145,6 +221,6 @@ runtime 在 `updateStateFromEvent` / `startBackground .then/.catch` / `cancelBac
 
 ---
 
-## 9. hasUI guard
+## 10. hasUI guard
 
 `!ctx.hasUI`（print/RPC 模式）→ error `"/subagents list requires interactive mode"`，不 crash。
