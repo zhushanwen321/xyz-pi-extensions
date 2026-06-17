@@ -170,6 +170,37 @@ describe("startBackground / getBackground / cancelBackground", () => {
     const status = rt.getBackground(handle.id);
     expect(status).not.toHaveProperty("controller");
   });
+
+  it("P1#2: getBackground snapshots eventLog (not a live ref to state.eventLog)", async () => {
+    // getBackground 返回的 eventLog 必须是 .slice() 快照，不能是 BgRecord.state.eventLog
+    // 的裸引用——否则调用方（poll 路径）持有期间会被并发 streaming 事件 mutate。
+    // 这里通过注入 onEvent 的 runAgentImpl 触发事件增长，验证 status.eventLog 独立。
+    const rt = makeRuntime({
+      runAgentImpl: (opts: RunAgentOptions) => {
+        // 触发若干 tool_start 事件让 state.eventLog 增长，然后永不 resolve（保持 running）
+        opts.onEvent?.({ type: "tool_start", toolName: "read", args: { path: "/a.ts" } });
+        opts.onEvent?.({ type: "tool_end", toolName: "read", isError: false });
+        return new Promise<AgentResult>(() => {});
+      },
+    });
+    const handle = rt.startBackground({ task: "snapshot test" });
+    await new Promise((r) => setTimeout(r, 20)); // 等事件处理
+
+    const status1 = rt.getBackground(handle.id);
+    expect(status1?.status).toBe("running");
+    expect(status1?.eventLog.length).toBeGreaterThanOrEqual(2);
+    const lenAtFirstQuery = status1!.eventLog.length;
+
+    // 再次查询——两次返回的 eventLog 应是各自独立的快照（不同引用）
+    const status2 = rt.getBackground(handle.id);
+    expect(status2?.eventLog).not.toBe(status1?.eventLog);
+    expect(status2?.eventLog).toEqual(status1?.eventLog);
+
+    // status1 快照不被后续（模拟的）state 变化影响：直接验证引用隔离
+    // （state.eventLog 此时还在 BgRecord 上，但我们无法直接 mutate 它；
+    //  引用不等即证明快照，与 executionStateToDetails 的 .slice() 契约一致）
+    expect(status1?.eventLog.length).toBe(lenAtFirstQuery);
+  });
 });
 
 describe("PiLike sendMessage (FR-O1)", () => {

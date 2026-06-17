@@ -257,7 +257,13 @@ export function executionStateToDetails(state: AgentExecutionState): SubagentToo
     : Math.floor((Date.now() - state.startedAt) / MS_PER_SECOND);
 
   return {
-    eventLog: state.eventLog,
+    // P1#2: eventLog 必须快照（.slice），不能传裸引用。
+    // state.eventLog 是被 appendEventLogEntries 通过 push/shift 原地 mutate 的可变数组；
+    // 若传引用，渲染层（SubagentResultComponent）持有的数组会在并发 updateStateFromEvent
+    // 时被改动（streaming 期间每事件 push/shift），导致渲染读到中途态/错位。
+    // AgentEventLogEntry 字段全是 readonly（不可变），所以浅拷贝数组即足够，无需深拷贝。
+    // 与 scheduleSyncArchive（runtime.ts）的 source.eventLog.slice() 既定惯用法一致。
+    eventLog: state.eventLog.slice(),
     status: state.status,
     agent: state.agent,
     model: state.model,

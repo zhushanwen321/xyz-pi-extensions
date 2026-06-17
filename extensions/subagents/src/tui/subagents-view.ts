@@ -741,7 +741,9 @@ function getAllRecords(runtime: SubagentRuntime): SubagentRecord[] {
     id: a.id,
     agent: a.agent,
     status: a.status,
-    eventLog: a.eventLog ?? [],
+    // P1#2: 快照 eventLog——a 是运行中的 AgentExecutionState，其 eventLog 被 streaming
+    // 事件 push/shift 原地 mutate。overlay 打开期间若传裸引用，右列详情渲染会读到中途态。
+    eventLog: a.eventLog?.slice() ?? [],
     turns: a.turns,
     totalTokens: a.totalTokens,
     startedAt: a.startedAt,
@@ -753,7 +755,9 @@ function getAllRecords(runtime: SubagentRuntime): SubagentRecord[] {
     id: b.id,
     agent: b.agent ?? "default",
     status: b.status,
-    eventLog: b.eventLog ?? [],
+    // b.eventLog 当前为 undefined（listBackground 不展平 eventLog），走 [] fallback；
+    // .slice() 防御性处理——若将来 listBackground 重新展平，此处自动快照。
+    eventLog: b.eventLog?.slice() ?? [],
     turns: b.turns,
     totalTokens: b.totalTokens,
     startedAt: b.startedAt,

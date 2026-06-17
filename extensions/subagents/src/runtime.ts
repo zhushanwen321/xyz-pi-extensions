@@ -802,8 +802,8 @@ export class SubagentRuntime {
       error: r.error,
       startedAt: r.startedAt,
       endedAt: r.endedAt,
-      // 从 state 展平（消灭 hardcoded undefined）
-      eventLog: r.state.eventLog,
+      // P1#2: 从 state 展平；eventLog .slice() 快照（poll 返回值被调用方持有，避免并发 streaming mutate）
+      eventLog: r.state.eventLog.slice(),
       agent: r.state.agent,
       turns: r.state.turns,
       totalTokens: r.state.totalTokens,

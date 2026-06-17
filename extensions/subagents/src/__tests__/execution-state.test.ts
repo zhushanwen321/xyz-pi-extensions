@@ -325,4 +325,74 @@ describe("executionStateToDetails", () => {
     const details = executionStateToDetails(state);
     expect(details.eventLog.length).toBeGreaterThanOrEqual(1);
   });
+
+  // ── P1#2: 别名（aliasing）隔离回归测试 ──────────────────────────
+  // 投影产出的 eventLog 必须是快照（.slice），不能是 state.eventLog 的裸引用。
+  // 否则渲染层持有的数组会被并发 updateStateFromEvent（push/shift）原地 mutate，
+  // 导致渲染读到中途态/错位。这是 HANDOFF「架构分析结论 #2」的核心修复。
+
+  it("P1#2: details.eventLog 是快照，与 state.eventLog 不同引用", () => {
+    const state = createExecutionState("p-alias-1", {
+      agent: "default",
+      model: "m",
+      startedAt: 0,
+    });
+    updateStateFromEvent(state, { type: "tool_start", toolName: "read" });
+
+    const details = executionStateToDetails(state);
+    // 内容相同
+    expect(details.eventLog).toEqual(state.eventLog);
+    // 但引用不同（快照）
+    expect(details.eventLog).not.toBe(state.eventLog);
+  });
+
+  it("P1#2: 投影后 mutate state.eventLog 不影响已返回的 details", () => {
+    const state = createExecutionState("p-alias-2", {
+      agent: "default",
+      model: "m",
+      startedAt: 0,
+    });
+    updateStateFromEvent(state, { type: "tool_start", toolName: "read" });
+
+    const details = executionStateToDetails(state);
+    const detailsLengthAtProjection = details.eventLog.length;
+
+    // 模拟并发 streaming：投影后继续 updateStateFromEvent（push 新条目）
+    updateStateFromEvent(state, { type: "tool_end", toolName: "read", isError: false });
+    updateStateFromEvent(state, { type: "tool_start", toolName: "bash" });
+
+    // 已返回的 details.eventLog 不应被影响——长度仍是投影时的快照
+    expect(details.eventLog.length).toBe(detailsLengthAtProjection);
+    // state.eventLog 已增长
+    expect(state.eventLog.length).toBeGreaterThan(detailsLengthAtProjection);
+  });
+
+  it("P1#2: ring buffer shift 不影响已返回的 details（streaming 期间高活跃场景）", () => {
+    // 模拟高活跃 sync subagent：eventLog 已满（20 条），投影后再来事件触发 shift。
+    // 渲染层持有的快照不应丢失最旧条目（shift 只作用于 state.eventLog）。
+    const state = createExecutionState("p-alias-3", {
+      agent: "default",
+      model: "m",
+      startedAt: 0,
+    });
+    // 填满 ring buffer（MAX_EVENT_LOG_ENTRIES=20）
+    for (let i = 0; i < 20; i++) {
+      updateStateFromEvent(state, { type: "tool_start", toolName: `tool-${i}` });
+    }
+    expect(state.eventLog).toHaveLength(20);
+
+    const details = executionStateToDetails(state);
+    const firstEntryAtProjection = details.eventLog[0];
+
+    // 投影后再来 5 个事件 → state.eventLog shift 掉最旧 5 条
+    for (let i = 20; i < 25; i++) {
+      updateStateFromEvent(state, { type: "tool_start", toolName: `tool-${i}` });
+    }
+    expect(state.eventLog).toHaveLength(20);
+    expect(state.eventLog[0].label).not.toBe(firstEntryAtProjection!.label); // state 已 shift
+
+    // details 快照保持完整（仍 20 条，首条目不变）
+    expect(details.eventLog).toHaveLength(20);
+    expect(details.eventLog[0]).toEqual(firstEntryAtProjection);
+  });
 });
