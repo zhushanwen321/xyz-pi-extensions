@@ -1,7 +1,10 @@
 /**
  * Activity Tracker Framework — 类型定义与状态机
  *
- * 通用 TrackedItem 状态机：loaded → completed | error → recorded
+ * 通用 TrackedItem 状态机：
+ *   loaded  → completed | error | cancelled | abandoned(system)
+ *   error   → completed | recorded | cancelled | abandoned(system)
+ *   abandoned(system) → completed | error | cancelled | recorded
  * 纯数据层，无 Pi API 依赖。
  */
 
@@ -16,24 +19,36 @@ export const TRACKER_ENTRY_PREFIX = "evolve-tracker-";
 const TERMINAL_STATUSES: ReadonlySet<TrackedItemStatus> = new Set([
   "completed",
   "recorded",
-  "dismissed",
+  "cancelled",
+]);
+
+/** 需要被提醒/继续追踪的非终态集合（含可被恢复的 abandoned） */
+const RESUMABLE_STATUSES: ReadonlySet<TrackedItemStatus> = new Set([
+  "loaded",
+  "error",
+  "abandoned",
 ]);
 
 /**
  * FR-3 转换矩阵：
- *   loaded  → completed ✅, error ✅, recorded ❌, dismissed ✅
- *   error   → completed ✅, error ✅, recorded ✅, dismissed ✅
- *   终态不可变更
+ *   loaded    → completed ✅, error ✅, cancelled ✅
+ *   error     → completed ✅, error ✅, recorded ✅, cancelled ✅
+ *   abandoned → completed ✅, error ✅, cancelled ✅, recorded ✅
+ *   终态不可变更：completed / recorded / cancelled
  *
- * dismissed 用于标记误报（如调研性 read 触发的 tracking），
- * 与 error 区分：error 是执行失败，dismissed 是触发本身不应发生。
+ * cancelled 用于标记 agent 主动放弃（如 start 后发现不适用）。
+ * abandoned 主要是系统状态（turn_end/reconstructState 自动触发），但允许 agent 手动恢复，
+ * 避免"用户回来收尾时无法关闭"的僵局。
+ *
+ * key 类型为 TrackedItemStatus，编译期防止拼写错误。
  */
 const ALLOWED_TRANSITIONS: ReadonlyMap<
-  string,
+  TrackedItemStatus,
   ReadonlySet<TrackedItemStatus>
-> = new Map([
-  ["loaded", new Set(["completed", "error", "dismissed"])],
-  ["error", new Set(["completed", "error", "recorded", "dismissed"])],
+> = new Map<TrackedItemStatus, ReadonlySet<TrackedItemStatus>>([
+  ["loaded", new Set<TrackedItemStatus>(["completed", "error", "cancelled"])],
+  ["error", new Set<TrackedItemStatus>(["completed", "error", "recorded", "cancelled"])],
+  ["abandoned", new Set<TrackedItemStatus>(["completed", "error", "recorded", "cancelled"])],
 ]);
 
 // ── 类型 ────────────────────────────────────────────
@@ -43,7 +58,8 @@ export type TrackedItemStatus =
   | "error"
   | "completed"
   | "recorded"
-  | "dismissed";
+  | "cancelled"
+  | "abandoned";
 
 /** L3 anchor：让 extractor 能定位 JSONL 原始上下文 */
 export interface Anchor {
@@ -77,34 +93,47 @@ export interface TrackerRuntimeState<
 export interface TrackerDetails<
   TMeta = Record<string, unknown>,
 > {
-  action: "update" | "list";
+  action: "start" | "update" | "list";
   items: TrackedItem<TMeta>[];
   trackerName: string;
+  createdId?: number;
   updatedId?: number;
   error?: string;
 }
 
-/** 所有 tracker 共享的参数 schema（同一状态机） */
+/** use_skill tool 参数 schema（start/update/list 三种 action） */
 export const TrackerParams = Type.Object({
-  action: StringEnum(["update", "list"] as const),
+  action: StringEnum(["start", "update", "list"] as const),
+  name: Type.Optional(
+    Type.String({ description: "Skill name (required for start). Get from available_skills list." }),
+  ),
+  path: Type.Optional(
+    Type.String({ description: "SKILL.md absolute path (optional for start, from available_skills location field)" }),
+  ),
   id: Type.Optional(
     Type.Number({ description: "TrackedItem ID (required for update)" }),
   ),
   status: Type.Optional(
-    StringEnum(["completed", "error", "recorded", "dismissed"] as const, {
+    StringEnum(["completed", "error", "cancelled", "recorded"] as const, {
       description:
-        "Target status (required for update). Use 'dismissed' for false-positive triggers (e.g. research reads).",
+        "Target status (required for update). cancelled = agent actively abandons. Note: abandoned is system-only, cannot be set manually.",
     }),
   ),
   detail: Type.Optional(
-    Type.String({ description: "Additional notes (e.g. error reason)" }),
+    Type.String({ description: "Additional notes (e.g. error reason, cancel reason)" }),
   ),
 });
 
 // ── 状态机函数 ──────────────────────────────────────
 
+/** 终态：agent 无法再手动变更（但 abandoned 可被恢复，不算严格终态） */
 export function isTerminalStatus(status: TrackedItemStatus): boolean {
   return TERMINAL_STATUSES.has(status);
+}
+
+/** 是否仍应被追踪/提醒（loaded/error/abandoned） */
+export function isResumableStatus(status: TrackedItemStatus): boolean {
+  return RESUMABLE_STATUSES.has(status);
 }
 
 export function canTransition(
@@ -113,6 +142,33 @@ export function canTransition(
 ): boolean {
   if (isTerminalStatus(from)) return false;
   return ALLOWED_TRANSITIONS.get(from)?.has(to) ?? false;
+}
+
+// ── 类型守卫 ────────────────────────────────────────
+
+const TRACKED_ITEM_STATUSES: ReadonlySet<TrackedItemStatus> = new Set<TrackedItemStatus>([
+  "loaded",
+  "error",
+  "completed",
+  "recorded",
+  "cancelled",
+  "abandoned",
+]);
+
+/** 运行时校验 status 是否为合法的 TrackedItemStatus（用于反序列化外部数据） */
+function isTrackedItemStatus(x: unknown): x is TrackedItemStatus {
+  return typeof x === "string" && TRACKED_ITEM_STATUSES.has(x as TrackedItemStatus);
+}
+
+/** 校验 anchor 结构（旧数据可能缺字段或格式漂移） */
+function isAnchor(x: unknown): x is Anchor {
+  if (typeof x !== "object" || x === null) return false;
+  const a = x as Record<string, unknown>;
+  return (
+    typeof a.triggerType === "string" &&
+    typeof a.triggerTurn === "number" &&
+    typeof a.triggerSummary === "string"
+  );
 }
 
 // ── 序列化 ──────────────────────────────────────────
@@ -149,18 +205,26 @@ export function deserializeState<TMeta>(
     const loadedAtTurn =
       typeof raw.loadedAtTurn === "number" ? raw.loadedAtTurn : 0;
 
-    const anchor: Anchor = raw.anchor
-      ? (raw.anchor as Anchor)
+    // 过滤旧 dismissed item（不迁移、不映射，直接丢弃）
+    // 在 map 内提前过滤：raw.status 含已废弃的 dismissed，需在强转前拦截
+    const status: TrackedItemStatus = isTrackedItemStatus(raw.status)
+      ? raw.status
+      : "loaded";
+
+    const anchor: Anchor = isAnchor(raw.anchor)
+      ? raw.anchor
       : {
           triggerType: "unknown",
           triggerTurn: loadedAtTurn,
-          triggerSummary: `legacy: ${raw.name ?? ""}`,
+          triggerSummary: `legacy: ${typeof raw.name === "string" ? raw.name : ""}`,
         };
 
     return {
       id: typeof raw.id === "number" ? raw.id : 0,
       name: typeof raw.name === "string" ? raw.name : "",
-      status: (raw.status as TrackedItemStatus) ?? "loaded",
+      // dismissed 在 isTrackedItemStatus 中已返回 false → fallback "loaded"，
+      // 但语义上 dismissed 是已废弃的终态，不应复活为 loaded，下面 filter 会丢弃
+      status,
       errorCount: typeof raw.errorCount === "number" ? raw.errorCount : 0,
       loadedAtTurn,
       lastRemindAtTurn:
@@ -171,8 +235,15 @@ export function deserializeState<TMeta>(
     } satisfies TrackedItem<TMeta>;
   });
 
+  // 过滤旧 dismissed item（isTrackedItemStatus 不含 dismissed，已 fallback 为 loaded；
+  // 这里用原始 raw.status 再判一次，确保 dismissed 不被误当作 loaded 复活）
+  const filteredItems = items.filter((_, i) => {
+    const rawStatus = rawItems[i]?.status;
+    return rawStatus !== "dismissed";
+  });
+
   return {
-    items,
+    items: filteredItems,
     nextId: typeof data.nextId === "number" ? data.nextId : 1,
     currentTurnIndex:
       typeof data.currentTurnIndex === "number" ? data.currentTurnIndex : 0,

@@ -6,19 +6,18 @@
 
 | 包名 | 说明 | 详情 |
 |------|------|------|
-| **coding-workflow** | 5 阶段编码工作流（spec → plan → dev → test → pr），门控 + review + retrospect | [→ README](./packages/coding-workflow/README.md) |
-| **goal** | `/goal` 目标驱动自主循环，任务追踪 + 证据验证 + 预算控制 | [→ README](./packages/goal/README.md) |
-| **workflow** | 多 Agent 编排引擎，JS 脚本驱动，agent / parallel / pipeline API | [→ README](./packages/workflow/README.md) |
-| **context-engineering** | 渐进式上下文压缩（L0/L1/L2）+ recall 召回 | [→ README](./packages/context-engineering/README.md) |
-| **todo** | 轻量级三态任务清单，session 持久化 | [→ README](./packages/todo/README.md) |
-| **vision** | 多模态图片分析工具，会话隔离 | [→ README](./packages/vision/README.md) |
-| **statusline** | 自定义状态栏（上下文用量、Token 速度、套餐额度） | [→ README](./packages/statusline/README.md) |
-| **evolve-daily** | 每日进化数据采集 + `/evolve` 分析建议 | [→ README](./packages/evolve-daily/README.md) |
-| **skill-state** | 自动 skill 执行追踪，状态机生命周期管理 | [→ README](./packages/skill-state/README.md) |
-| **unified-hooks** | 统一 hooks 管理器（edit 空白自动修复等） | [→ README](./packages/unified-hooks/README.md) |
-| **claude-rules-loader** | 加载 `.claude/rules/` 到 Pi system prompt | [→ README](./packages/claude-rules-loader/README.md) |
-| **taste-lint** | 代码品味 ESLint 规则集（5 条自定义规则） | [→ README](./packages/taste-lint/README.md) |
-| **types** | 共享类型定义（私有，不发布） | [→ README](./packages/types/README.md) |
+| **coding-workflow** | 5 阶段编码工作流（spec → plan → dev → test → pr），门控 + review + retrospect | [→ README](./extensions/coding-workflow/README.md) |
+| **goal** | `/goal` 目标驱动自主循环，任务追踪 + 证据验证 + 预算控制 | [→ README](./extensions/goal/README.md) |
+| **workflow** | 多 Agent 编排引擎，JS 脚本驱动，agent / parallel / pipeline API | [→ README](./extensions/workflow/README.md) |
+| **context-engineering** | 渐进式上下文压缩（L0/L1/L2）+ recall 召回 | [→ README](./extensions/context-engineering/README.md) |
+| **todo** | 轻量级三态任务清单，session 持久化 | [→ README](./extensions/todo/README.md) |
+| **vision** | 多模态图片分析工具，会话隔离 | [→ README](./extensions/vision/README.md) |
+| **statusline** | 自定义状态栏（上下文用量、Token 速度、套餐额度） | [→ README](./extensions/statusline/README.md) |
+| **evolve-daily** | 每日进化数据采集 + `/evolve` 分析建议 | [→ README](./extensions/evolve-daily/README.md) |
+| **unified-hooks** | 统一 hooks 管理器（edit 空白自动修复等） | [→ README](./extensions/unified-hooks/README.md) |
+| **claude-rules-loader** | 加载 `.claude/rules/` 到 Pi system prompt | [→ README](./extensions/claude-rules-loader/README.md) |
+| **taste-lint** | 代码品味 ESLint 规则集（5 条自定义规则） | [→ README](./shared/taste-lint/README.md) |
+| **types** | 共享类型定义（私有，不发布） | [→ README](./shared/types/README.md) |
 
 ## 第三方推荐插件
 
@@ -43,7 +42,7 @@ pi install npm:@zhushanwen/pi-<name>
 ### 本地开发测试（symlink）
 
 ```bash
-ln -s $(pwd)/packages/<name> ~/.pi/agent/extensions/<name>
+ln -s $(pwd)/extensions/<name> ~/.pi/agent/extensions/<name>
 ```
 
 修改代码后 `/reload` 即可生效。
@@ -51,8 +50,10 @@ ln -s $(pwd)/packages/<name> ~/.pi/agent/extensions/<name>
 ### 临时测试（不修改配置）
 
 ```bash
-pi -e ./packages/<name>
+pi -e ./extensions/<name>
 ```
+
+> 注：`shared/` 下的包（taste-lint、types）为内部共享库，不作为扩展单独安装，由扩展在构建时引用。
 
 ## License
 
