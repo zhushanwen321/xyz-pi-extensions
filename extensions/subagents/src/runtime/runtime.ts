@@ -148,7 +148,7 @@ export class SubagentRuntime {
     throw new Error("not implemented");
   }
 
-  /** 取消 background record（_settled 守卫防重复副作用）。sync 无法主动 abort。 */
+  /** 取消 background record（tryTransition CAS 抢锁防重复副作用）。sync 无法主动 abort。 */
   cancel(id: string): boolean {
     //  store.getMutable(id) → executor.cancelBackground(record, this)
     void id;
@@ -222,6 +222,12 @@ export class SubagentRuntime {
   /** notifier 访问器（executor 调用）。 */
   getNotifier(): BgNotifier {
     //  return this.notifier
+    throw new Error("not implemented");
+  }
+
+  /** history 访问器（executor 写入执行记录用）。 */
+  getHistory(): HistoryStore {
+    //  return this.history
     throw new Error("not implemented");
   }
 }

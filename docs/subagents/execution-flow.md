@@ -99,7 +99,7 @@ sequenceDiagram
 
 ### 与 cancelBackground 的竞态
 
-用户可能在 background 执行中通过 `/subagents list` 按 x 取消。`cancelBackground` 与 detached promise 的 `.then`/`.catch` 存在竞态，需 `_settled` 守卫：
+用户可能在 background 执行中通过 `/subagents list` 按 x 取消。`cancelBackground` 与 detached promise 的 `.then`/`.catch` 存在竞态，**用 status 状态机本身做 CAS 互斥**——`running` 是唯一可转出的状态，且只能转一次（终态不可逆）。先抢到 `tryTransition` 的一方赢收尾权，后来者闭嘴。
 
 ```mermaid
 sequenceDiagram
@@ -108,21 +108,25 @@ sequenceDiagram
     participant Then as detached .then/.catch
 
     Cancel->>Record: controller.abort()
-    Cancel->>Record: status="cancelled" + _settled=true
-    Cancel->>Notifier: notify(cancelled)
+    Cancel->>Record: tryTransition("cancelled")
+    Record-->>Cancel: CAS 成功（status was "running"）
+    Cancel->>Record: completeRecord + archive + notify(cancelled)
     Note over Cancel: 不写 history（用户意图）
 
     Then->>Record: .then/.catch 触发
-    Record-->>Then: 检查 _settled=true
-    Note over Then: 跳过 onComplete/events/history<br/>只回填 endedAt
+    Then->>Record: tryTransition(...)
+    Record-->>Then: CAS 失败（status 已是 "cancelled"，非 running）
+    Note over Then: 什么都不做——status 状态机已锁
 ```
 
-`_settled` 守卫防止 cancelBackground 已 settle 后，`.then`/`.catch` 重复触发副作用（onComplete/events.emit/history 双写）。这是旧实现 Must-fix #2 的结构性保留——cancel 是用户意图，detached 完成回调必须让步。
+`tryTransition(record, target)` 是唯一的 CAS 入口：仅当 `record.status === "running"` 时改为 target 并返回 true，否则返回 false。**status 状态机本身就是互斥锁**——不需要额外的 `_settled` 字段。谁先把 status 从 running 转走，谁负责完整收尾（completeRecord + archive + history + notify）；后来的 `tryTransition` 必然失败，自然跳过所有副作用。
+
+**为何不用 `_settled` 字段**：`_settled` 是早期防御性设计，把"收尾互斥"和"业务 status"拆成两个字段，增加理解成本。但两者本质是同一个锁——status 终态本就不可逆（done/failed/cancelled 都是终态），用它当锁更简单自洽：被锁的字段（status）自身不可逆，check-then-set 在 JS 单线程事件循环里天然原子。
 
 ### notifier 合并窗口与去重
 
 - **合并窗口**：2000ms 内多个 background 完成，合并为一条通知注入主对话
-- **去重 TTL**：同 id 短时间内不重复通知（cancel 已 notify，detached 的 notify 被拦截）
+- **去重 TTL**：同 id 短时间内不重复通知（cancel 已 notify 并抢到 CAS，detached 的 tryTransition 失败不 notify）
 
 ## 5. cancelled 路径一致性
 
@@ -130,19 +134,19 @@ sequenceDiagram
 
 | 触发点 | 旧实现 | 新设计 |
 |---|---|---|
-| `execute` finalize | `signal.aborted ? cancelled : failed` | 同（唯一判定点） |
+| `execute` finalize | `signal.aborted ? cancelled : failed` | 同（经 `tryTransition` 抢锁） |
 | bg `.then` | `controller.signal.aborted ? cancelled : ...` | 删除——交由 execute finalize |
 | bg `.catch` | `record.controller?.signal.aborted ?? signal.aborted` | 删除——交由 execute finalize |
-| `cancelBackground` | 设 status + notify | 设 `_settled`，不重复判定 |
+| `cancelBackground` | 设 status + notify | `tryTransition("cancelled")` 抢锁 + notify |
 
-`completeRecord` 由 execute finalize 唯一调用，status 参数已确定。`project()` 读取 record 的 turns/totalTokens（updateFromEvent 累积值，completeRecord 不清零），三路径（sync 返回 / bg poll / list 显示）字段完全一致。
+`completeRecord` 由抢到 CAS 的一方唯一调用，status 参数已确定。`project()` 读取 record 的 turns/totalTokens（updateFromEvent 累积值，completeRecord 不清零），三路径（sync 返回 / bg poll / list 显示）字段完全一致。
 
 ## 6. history 单点写入
 
 旧实现 sync 路径在 `runAgent` 写一条、background 在 `.then`/`.catch` 各写一条，且 cancel 会产生同 id 双写（cancelled + failed）。新设计：
 
-- **唯一写入点**：`execute` 的 finalize 阶段，mode 字段区分 sync/background
-- **cancel 不写 history**：`_settled` 守卫让 `.then`/`.catch` 跳过，cancel 是用户意图不计入执行记录
+- **唯一写入点**：`execute` 的 finalize 阶段（抢到 CAS 的一方），mode 字段区分 sync/background
+- **cancel 不写 history**：cancel 是用户意图不计入执行记录（cancel 抢到 CAS 后只 notify，不 append history）
 - **去重**：`history-store.recent()` 仍保留同 id merge 逻辑（endedAt 最新 + cancelled 优先），作为历史数据的防御性处理
 
 ## 相关文档
