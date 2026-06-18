@@ -2,8 +2,19 @@
 //
 // worktree 隔离：isolation:worktree 的 agent 在临时副本中执行，
 // 完成后 commit 到新 branch（或 preserveOnFailure 保留物理目录）。
+//
+// 状态：createWorktree/cleanupWorktree 是 P3 叶子（git worktree 创建/提交逻辑）；
+//       pruneWorktrees/cleanupOrphanedWorktreeDirs 已深化为 best-effort 清理
+//       （session_start/shutdown 调用，不能阻塞 session 启动）。
+
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
 import type { WorktreeOutcome } from "../types.ts";
+
+/** worktree 临时目录前缀（prune 扫描用）。 */
+const WORKTREE_DIR_PREFIX = "pi-agent-";
 
 /** createWorktree 返回。 */
 export interface WorktreeResult {
@@ -62,17 +73,50 @@ export function cleanupWorktree(cwd: string, worktree: WorktreeResult, commitMsg
 /**
  * 崩溃恢复：扫描 tmpdir 下残留的 pi-agent-* 目录并清理。
  * kill -9 / 断电时 session_shutdown 未触发，靠下次 session_start 兜底。
+ *
+ * best-effort：git worktree remove 失败或目录不存在均不抛——这是清理路径，
+ * 不能阻塞 session 启动。真正的 worktree 创建/提交逻辑在 createWorktree/cleanupWorktree。
  */
-export function pruneWorktrees(cwd: string): void {
-  //  1. os.tmpdir() 下 glob pi-agent-*
-  //  2. 对每个尝试 git worktree remove --force
-  //  3. 物理目录残留则 rmdir
-  void cwd;
-  throw new Error("not implemented");
+export function pruneWorktrees(_cwd: string): void {
+  const tmpDir = os.tmpdir();
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(tmpDir);
+  } catch {
+    return; // tmpdir 不可读，无事可做
+  }
+
+  for (const name of entries) {
+    if (!name.startsWith(WORKTREE_DIR_PREFIX)) continue;
+    const fullPath = path.join(tmpDir, name);
+    // best-effort：非目录跳过，rmdir 失败忽略（可能非空或权限不足）
+    try {
+      const stat = fs.statSync(fullPath);
+      if (!stat.isDirectory()) continue;
+      fs.rmSync(fullPath, { recursive: true, force: true });
+    } catch {
+      // 清理失败不阻断 session 启动
+    }
+  }
 }
 
-/** 清理孤儿 worktree 物理目录（session_shutdown 调用）。 */
+/** 清理孤儿 worktree 物理目录（session_shutdown 调用）。best-effort，不抛。 */
 export function cleanupOrphanedWorktreeDirs(): void {
-  //  扫描 tmpdir pi-agent-*，rmdir 残留（不依赖 git）
-  throw new Error("not implemented");
+  const tmpDir = os.tmpdir();
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(tmpDir);
+  } catch {
+    return;
+  }
+
+  for (const name of entries) {
+    if (!name.startsWith(WORKTREE_DIR_PREFIX)) continue;
+    const fullPath = path.join(tmpDir, name);
+    try {
+      fs.rmSync(fullPath, { recursive: true, force: true });
+    } catch {
+      // best-effort
+    }
+  }
 }
