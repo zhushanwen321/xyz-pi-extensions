@@ -14,10 +14,9 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
-import { getRuntime } from "../runtime/runtime.ts";
-import { CategoryConfirmComponent } from "../tui/category-confirm.ts";
+import { getHub } from "../runtime/subagent-hub.ts";
 import { type RenderContext,renderSubagentCall, renderSubagentResult } from "../tui/tool-render.ts";
-import type { CategoryConfirmResult, ExecutionMode, SubagentToolDetails } from "../types.ts";
+import type { CategoryConfirmResult, ExecuteOptions, ExecutionMode, SubagentToolDetails } from "../types.ts";
 
 // ============================================================
 // 回调类型（抽 alias 绕 registerTool(unknown) 的 TS2307 误报）
@@ -149,13 +148,69 @@ const subagentRenderResult: SubagentRenderResultCb = (result, options, theme, ct
  *   ║    return { content: resultText, details }                        ║
  *   ╚══════════════════════════════════════════════════════════════════╝
  */
-const executeSubagent: SubagentExecuteCb = async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-  void _toolCallId;
-  void _signal;
-  void _onUpdate;
-  void _ctx;
-  void getRuntime; void CategoryConfirmComponent;
-  throw new Error("not implemented");
+const executeSubagent: SubagentExecuteCb = async (
+  _toolCallId,
+  params,
+  signal,
+  onUpdate,
+  _ctx,
+) => {
+  const hub = getHub();
+  if (!hub) throw new Error("subagents runtime not initialized");
+
+  // ── poll 路径 ──
+  if (params.backgroundId) {
+    const result = hub.query(params.backgroundId);
+    if (!result) throw new Error(`No subagent record with id "${params.backgroundId}"`);
+    const content = result.status === "running"
+      ? [{ type: "text" as const, text: `Subagent ${result.id} is still running (${result.turns} turns).` }]
+      : [{ type: "text" as const, text: result.result ?? `Subagent ${result.id} finished.` }];
+    return { content, details: result } as unknown as void;
+  }
+
+  // ── task 必填 ──
+  if (!params.task) throw new Error("task is required");
+
+  // ── agent 存在性校验（fail-fast）──
+  const agentName = params.agent ?? "default";
+  hub.assertAgentExists(agentName);
+
+  // ── mode 判定 ──
+  const agentConfig = hub.getAgentConfig(agentName);
+  const mode: ExecutionMode = params.wait === false
+    ? "background"
+    : agentConfig?.defaultBackground === true && params.wait === undefined
+      ? "background"
+      : "sync";
+
+  // ── 调 hub.execute（统一入口）──
+  const handle = await hub.execute({
+    task: params.task,
+    agent: agentName,
+    mode,
+    model: params.model,
+    thinkingLevel: params.thinkingLevel as ExecuteOptions["thinkingLevel"],
+    skillPath: params.skillPath,
+    appendSystemPrompt: params.appendSystemPrompt,
+    schema: params.schema,
+    maxTurns: params.maxTurns,
+    graceTurns: params.graceTurns,
+    signal,
+    onUpdate: onUpdate
+      ? (details) => {
+          onUpdate({ content: [{ type: "text", text: details.result ?? "" }], details });
+        }
+      : undefined,
+  });
+
+  // ── 返回 ──
+  if (handle.mode === "background") {
+    return { content: [{ type: "text", text: `Background subagent started: ${handle.backgroundId}` }],
+      details: { backgroundId: handle.backgroundId } } as unknown as void;
+  }
+
+  return { content: [{ type: "text", text: handle.record.result ?? "" }],
+    details: handle.record } as unknown as void;
 };
 
 // 保留未使用的类型别名（CategoryConfirmResult/ExecutionMode 在 execute 实现中使用）

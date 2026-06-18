@@ -17,19 +17,20 @@
 
 ## 2. 统一执行流
 
-`executor.execute(opts, runtime, ctx)` 是 sync/bg 共用的唯一入口。分七步，mode 分叉集中在第 3 步。
+`executor.execute(opts, hub, modelHub, ctx)` 是 sync/bg 共用的唯一入口。分七步，mode 分叉集中在第 3 步。executor 经 SubagentHub 的行为方法（acquireSlot/finalizeRecord/notifyComplete 等）操作组件，不越级访问 pool/store/notifier/history。
 
 ```mermaid
 flowchart TD
-    S1[1. IDENTITY 解析<br/>resolveAgent + inferCategory<br/>+ resolveModelForAgent]
-    S2[2. RECORD 创建+注册<br/>createRecord + store.register]
+    S0[0. 确认<br/>modelHub.ensureConfirmed<br/>经 onConfirmCategory 回调]
+    S1[1. IDENTITY 解析<br/>modelHub.resolveModel<br/>5级 fallback]
+    S2[2. RECORD 创建+注册<br/>createRecord + hub.registerRecord]
     S3{3. MODE 分叉<br/>仅 4 处差异}
-    S4[4. 执行 SessionRunner.run<br/>pool.acquire → run → pool.release]
-    S5[5. FINALIZE<br/>status 判定 + completeRecord<br/>+ store.archive + history.append]
+    S4[4. 执行 SessionRunner.run<br/>hub.acquireSlot → run → hub.releaseSlot]
+    S5[5. FINALIZE<br/>status 判定 + tryTransition CAS<br/>hub.finalizeRecord]
     S6{6. background 回注?}
     S7[7. 返回 handle]
 
-    S1 --> S2 --> S3
+    S0 --> S1 --> S2 --> S3
     S3 -->|sync| S4a[signal = opts.signal<br/>priority = 0<br/>await]
     S3 -->|background| S4b[signal = ctrl.signal<br/>priority = 1000<br/>detached]
     S4a --> S4
@@ -145,12 +146,12 @@ sequenceDiagram
 
 旧实现 sync 路径在 `runAgent` 写一条、background 在 `.then`/`.catch` 各写一条，且 cancel 会产生同 id 双写（cancelled + failed）。新设计：
 
-- **唯一写入点**：`execute` 的 finalize 阶段（抢到 CAS 的一方），mode 字段区分 sync/background
-- **cancel 不写 history**：cancel 是用户意图不计入执行记录（cancel 抢到 CAS 后只 notify，不 append history）
+- **唯一写入点**：`hub.finalizeRecord`（抢到 CAS 的一方调用），内部完成 completeRecord + store.archive + history.append 三步。mode 字段区分 sync/background
+- **cancel 不写 history**：cancel 是用户意图不计入执行记录（cancel 抢到 CAS 后直接 completeRecord + notify，不走 finalizeRecord）
 - **去重**：`history-store.recent()` 仍保留同 id merge 逻辑（endedAt 最新 + cancelled 优先），作为历史数据的防御性处理
 
 ## 相关文档
 
-- [architecture.md](./architecture.md) — executor 在 Runtime 层的位置
+- [architecture.md](./architecture.md) — 双 Hub 在 Runtime 层的位置
 - [data-model.md](./data-model.md) — ExecutionRecord 的状态机与 completeRecord
 - [session-runner.md](./session-runner.md) — SessionRunner.run 的 EventBridge 契约与 collectResult 细节

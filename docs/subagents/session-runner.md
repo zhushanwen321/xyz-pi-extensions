@@ -9,7 +9,11 @@
 ## 1. SessionRunner 在架构中的位置
 
 ```
-executor.execute（mode 分叉点）
+SubagentHub.execute（统一入口）
+      │  ├─ modelHub.ensureConfirmed（首次确认，经 onConfirmCategory 回调）
+      │  └─ modelHub.resolveModel（5 级 fallback）
+      ▼
+executor.execute（mode 分叉点，经 hub 行为方法操作组件）
       │
       ▼
 SessionRunner.run(record, task, opts, ctx)   ◄── 本文

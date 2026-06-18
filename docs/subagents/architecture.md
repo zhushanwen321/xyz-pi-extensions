@@ -26,8 +26,12 @@
                             │
    ┌────────────────────────┴────────────────────────────────┐
    │                   Runtime 层（编排）                     │
-   │  runtime · executor · record-store · notifier           │
-   │  history-store · config · session-file-gc               │
+   │  ── 双 Hub（按领域划分）──                               │
+   │  ModelConfigHub（配置/模型域）                           │
+   │  SubagentHub（执行/记录/通知域）                         │
+   │  ── 编排与基础设施 ──                                    │
+   │  executor · record-store · notifier · history-store      │
+   │  config · session-file-gc                                │
    │  职责：编排 Core，管理 record 生命周期，持久化，回注通知  │
    └────────────────────────▲────────────────────────────────┘
                             │ 委托
@@ -110,16 +114,21 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 | `turn-limiter.ts` | soft/hard turn 限制器（steer + abort） | ⬜ |
 | `worktree.ts` | isolation:worktree 隔离执行 + commit/preserve | ⬜ |
 
-### Runtime 层（7）
+### Runtime 层（8）
+
+> 按**领域**拆为双 Hub：ModelConfigHub（配置/模型解析域）+ SubagentHub（执行/记录/通知域）。
+> 两个 Hub 平级——SubagentHub 持有 ModelConfigHub 引用（execute 内部调 resolveModel），
+> 但 command/wizard 直接用 ModelConfigHub（不经 SubagentHub，配置操作不碰执行）。
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
-| `runtime.ts` | 进程单例，组合 Core，注入/复活/dispose 生命周期 | ⬜ |
-| `executor.ts` | 统一执行入口，sync/bg 唯一分叉点 | ⬜ |
+| `model-config-hub.ts` | 配置/模型域 Hub：globalConfig + sessionState + agentRegistry + modelRegistry + resolveModel（含确认回调） | ⬜ |
+| `subagent-hub.ts` | 执行/记录/通知域 Hub：execute 委托 + query/cancel + 组件持有（pool/store/history/notifier） | ⬜ |
+| `executor.ts` | 统一执行入口，sync/bg 唯一分叉点；经 Hub 行为方法操作组件（不越级访问） | ⬜ |
 | `record-store.ts` | Record 三 map 容器（live/completed/bg）+ 四源合并 | ⬜ |
 | `notifier.ts` | background 完成回注主对话（合并窗口 + 去重） | ⬜ |
 | `history-store.ts` | 跨 session 执行记录持久化（jsonl + GC） | ⬜ |
-| `config.ts` | 全局配置 + session 级状态 | ⬜ |
+| `config.ts` | 全局配置 + session 级状态（纯函数，被 ModelConfigHub 调用） | ⬜ |
 | `session-file-gc.ts` | 过期 subagent session 文件清理 | ⬜ |
 
 ### TUI 层（8）

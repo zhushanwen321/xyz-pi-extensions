@@ -9,8 +9,17 @@ import type { ExtensionAPI, ExtensionContext, SessionShutdownEvent, SessionStart
 
 import { registerSubagentsCommand } from "./commands/subagents.ts";
 import { cleanupOrphanedWorktreeDirs, pruneWorktrees } from "./core/worktree.ts";
-import { getRuntime, setRuntime, SubagentRuntime } from "./runtime/runtime.ts";
+import {
+  getModelConfigHub,
+  ModelConfigHub,
+  setModelConfigHub,
+} from "./runtime/model-config-hub.ts";
 import { maybeCleanupExpiredSessionFiles } from "./runtime/session-file-gc.ts";
+import {
+  getHub,
+  setHub,
+  SubagentHub,
+} from "./runtime/subagent-hub.ts";
 import { registerSubagentTool } from "./tools/subagent-tool.ts";
 import { renderBgNotifyMessage } from "./tui/bg-notify-render.ts";
 import type { ThemeLike } from "./tui/format.ts";
@@ -26,9 +35,10 @@ import { SubagentsProgressWidget } from "./tui/progress-widget.ts";
 //   ║    pi.registerMessageRenderer("subagent-bg-notify", renderBgNotify)║
 //   ║                                                                    ║
 //   ║  session_start(event, ctx):                                        ║
-//   ║    1. existing = getRuntime() ?? new SubagentRuntime({cwd,homeDir,agentDir})║
-//   ║    2. rt.initSession({ modelRegistry, pi, sessionId, entries })     ║
-//   ║       ← reloadConfig + inject + revive + restore 封装于此           ║
+//   ║    1. modelHub = getModelConfigHub() ?? new ModelConfigHub(...)    ║
+//   ║    2. hub = getHub() ?? new SubagentHub({cwd, modelHub})           ║
+//   ║    3. modelHub.initModel({modelRegistry, sessionId, entries})     ║
+//   ║    4. hub.initSession({pi, sessionId})                            ║
 //   ║    3. ctx.hasUI → ctx.ui.setWidget("subagents-progress", factory,  ║
 //   ║                                          { placement:"belowEditor"})║
 //   ║    4. maybeCleanupExpiredSessionFiles(homeDir, cwd)                ║
@@ -48,20 +58,28 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     const homeDir = process.env.HOME || process.env.USERPROFILE || cwd;
     const agentDir = path.join(homeDir, ".pi", "agent");
 
-    const existing = getRuntime();
-    const rt = existing ?? new SubagentRuntime({ cwd, homeDir, agentDir });
-    rt.initSession({
+    // 双 Hub 装配：ModelConfigHub（配置/模型域）+ SubagentHub（执行/记录/通知域）
+    const existingHub = getHub();
+    const existingModelHub = getModelConfigHub();
+    const modelHub = existingModelHub ?? new ModelConfigHub({ homeDir, agentDir });
+    const hub = existingHub ?? new SubagentHub({ cwd, modelHub });
+
+    // 分别 init（两个域的生命周期独立）
+    modelHub.initModel({
       modelRegistry: ctx.modelRegistry,
-      pi,
       sessionId: ctx.sessionManager.getSessionId(),
       entries: ctx.sessionManager.getEntries() ?? [],
+    });
+    hub.initSession({
+      pi,
+      sessionId: ctx.sessionManager.getSessionId(),
     });
 
     if (ctx.hasUI) {
       ctx.ui.setWidget(
         "subagents-progress",
         (tui: { requestRender(): void }, theme: ThemeLike) =>
-          new SubagentsProgressWidget(rt, theme, tui),
+          new SubagentsProgressWidget(hub, theme, tui),
         { placement: "belowEditor" },
       );
     }
@@ -69,11 +87,14 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     maybeCleanupExpiredSessionFiles(homeDir, cwd);
     pruneWorktrees(cwd);
 
-    if (!existing) setRuntime(rt);
+    if (!existingHub) {
+      setModelConfigHub(modelHub);
+      setHub(hub);
+    }
   });
 
   pi.on("session_shutdown", (_event: SessionShutdownEvent) => {
-    getRuntime()?.dispose();
+    getHub()?.dispose();
     cleanupOrphanedWorktreeDirs();
   });
 }

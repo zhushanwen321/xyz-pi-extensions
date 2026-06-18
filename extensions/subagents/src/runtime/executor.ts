@@ -14,7 +14,6 @@ import {
   createRecord,
   project,
   snapshot,
-  toPersisted,
   tryTransition,
 } from "../core/execution-record.ts";
 import type { AgentConfig } from "../core/model-resolver.ts";
@@ -28,8 +27,8 @@ import type {
   ResolvedModel,
   SubagentToolDetails,
 } from "../types.ts";
-import type { BgNotifyRecord } from "./notifier.ts";
-import type { SubagentRuntime } from "./runtime.ts";
+import type { ConfirmCategoryCallback, ModelConfigHub } from "./model-config-hub.ts";
+import type { SubagentHub } from "./subagent-hub.ts";
 
 /** sync linger 时间（completed map 保留时长）。 */
 const SYNC_LINGER_MS = 5000;
@@ -46,7 +45,7 @@ const PRIORITY_SYNC = 0;
 // ============================================================
 
 /**
- * 统一执行入口。被 SubagentRuntime.execute 委托调用。
+ * 统一执行入口。被 SubagentHub.execute 委托调用。
  *
  *   ╔════════════════════════════════════════════════════════════════════╗
 //   ║  EXECUTE(opts, ctx):                                                ║
@@ -89,14 +88,16 @@ const PRIORITY_SYNC = 0;
  */
 export async function execute(
   opts: ExecuteOptions,
-  runtime: SubagentRuntime,
+  hub: SubagentHub,
+  modelHub: ModelConfigHub,
   ctx: SessionRunnerContext,
 ): Promise<ExecutionHandle> {
   // ── 1. IDENTITY 解析（一次确定，写入 record 不再变）──
-  const identity = resolveIdentity(opts, runtime);
+  // 确认（经 opts.onConfirmCategory 回调）在 resolveIdentity 内部编排
+  const identity = await resolveIdentity(opts, modelHub);
 
   // ── 2. RECORD 创建 + 注册（id 生成 + controller + createRecord + register）──
-  const record = createRecordForMode(identity, opts, runtime);
+  const record = createRecordForMode(identity, opts, hub);
 
   // ── 3. MODE 分叉：signal/priority（仅此 2 处即时差异，返回/通知差异在 6/7）──
   const signal = opts.mode === "background"
@@ -106,13 +107,13 @@ export async function execute(
 
   // ── 4-7. 分叉：sync 直接 await；background 包 detached 立即返回 id ──
   if (opts.mode === "sync") {
-    await runAndFinalize(record, opts, runtime, ctx, identity, signal, priority);
+    await runAndFinalize(record, opts, hub, ctx, identity, signal, priority);
     // 7. sync 返回完整 record（调用方一直在 await）
     return { mode: "sync", record: snapshot(record) };
   }
 
   // background：立即返回 backgroundId，步骤 4-6 在 detached promise 里跑
-  kickOffBackground(record, opts, runtime, ctx, identity, signal, priority);
+  kickOffBackground(record, opts, hub, ctx, identity, signal, priority);
   return { mode: "background", backgroundId: record.id };
 }
 
@@ -128,19 +129,34 @@ export interface ResolvedIdentity {
 }
 
 /**
- * 步骤 1：身份解析四步。
- *   resolveAgent（agent 名 → agentConfig）+ inferCategory（猜工种）
- *   + resolveModelForAgent（category/override → 模型实例）。
- * resolved 为空（前 4 级全不可用）→ throw（让调用方决定）。
+ * 步骤 1：身份解析。确认（经回调）→ agentConfig → resolveModel。
+ *   1. await modelHub.ensureConfirmed(opts.onConfirmCategory)（首次确认拦截）
+ *   2. agent = opts.agent ?? "default"
+ *   3. agentConfig = modelHub.getAgentConfig(agent)
+ *   4. resolved = modelHub.resolveModel(agent, { model, thinkingLevel })
+ *   5. !resolved → throw（让调用方决定）
+ *
+ * 注意：第 4 轮实现。当前为骨架——保留签名供 execute 调用链编译。
  */
-function resolveIdentity(opts: ExecuteOptions, runtime: SubagentRuntime): ResolvedIdentity {
-  //  1. agent = opts.agent ?? "default"
-  //  2. agentConfig = runtime.getAgentConfig(agent)
-  //  3. resolved = runtime.resolveModelForAgent(agent, { model, thinkingLevel })
-  //  4. !resolved → throw new Error(`no model resolved for agent "${agent}"`)
-  //  5. return { agent, agentConfig, resolved }
-  void opts; void runtime;
-  throw new Error("not implemented");
+async function resolveIdentity(opts: ExecuteOptions, modelHub: ModelConfigHub): Promise<ResolvedIdentity> {
+  // 1. 首次 category 确认（已确认则跳过；无回调则 headless 跳过）
+  await modelHub.ensureConfirmed(
+    opts.onConfirmCategory
+      ? ((input) => opts.onConfirmCategory!(input)) as ConfirmCategoryCallback
+      : undefined,
+  );
+
+  // 2. agent 名 + 配置
+  const agent = opts.agent ?? "default";
+  const agentConfig = modelHub.getAgentConfig(agent);
+
+  // 3. 模型解析（5 级 fallback，含确认后的 sessionState）
+  const resolved = modelHub.resolveModel(agent, {
+    model: opts.model,
+    thinkingLevel: opts.thinkingLevel,
+  });
+
+  return { agent, agentConfig, resolved };
 }
 
 // ============================================================
@@ -153,21 +169,31 @@ function resolveIdentity(opts: ExecuteOptions, runtime: SubagentRuntime): Resolv
  *   - controller: background → new AbortController()；sync → undefined
  *   - createRecord(identity + mode + controller) + store.register
  */
+let _seq = 0;
+
 function createRecordForMode(
   identity: ResolvedIdentity,
   opts: ExecuteOptions,
-  runtime: SubagentRuntime,
+  hub: SubagentHub,
 ): ExecutionRecord {
-  //  1. seq = runtime.store.nextSeq()（或等价的序号生成）
-  //  2. id = opts.mode === "background" ? `bg-${seq}-${Date.now()}` : `run-${seq}`
-  //  3. controller = opts.mode === "background" ? new AbortController() : undefined
-  //  4. record = createRecord(id, { agent, model: identity.resolved.model.id,
-  //       thinkingLevel: identity.resolved.thinkingLevel, mode, task: opts.task,
-  //       startedAt: Date.now(), controller })
-  //  5. runtime.store.register(record)
-  //  6. return record
-  void identity; void opts; void runtime; void createRecord;
-  throw new Error("not implemented");
+  const seq = ++_seq;
+  const id = opts.mode === "background"
+    ? `bg-${seq}-${Date.now()}`
+    : `run-${seq}`;
+  const controller = opts.mode === "background" ? new AbortController() : undefined;
+
+  const record = createRecord(id, {
+    agent: identity.agent,
+    model: identity.resolved.model.id,
+    thinkingLevel: identity.resolved.thinkingLevel,
+    mode: opts.mode,
+    task: opts.task,
+    startedAt: Date.now(),
+    controller,
+  });
+
+  hub.registerRecord(record);
+  return record;
 }
 
 // ============================================================
@@ -195,13 +221,13 @@ function createRecordForMode(
 async function runAndFinalize(
   record: ExecutionRecord,
   opts: ExecuteOptions,
-  runtime: SubagentRuntime,
+  hub: SubagentHub,
   ctx: SessionRunnerContext,
   identity: ResolvedIdentity,
   signal: AbortSignal | undefined,
   priority: number,
 ): Promise<AgentResult> {
-  await runtime.pool.acquire(priority);
+  await hub.acquireSlot(priority);
   // onEvent 包装：把 AgentEvent 转成 onUpdate(project(record)) 回流调用方（节流在叶子）。
   // run() 内部已调 updateFromEvent(record, event)，这里投影后回调 widget/render。
   const onEvent = opts.onUpdate
@@ -222,7 +248,7 @@ async function runAndFinalize(
       onEvent,
     }, ctx);
   } finally {
-    runtime.pool.release();
+    hub.releaseSlot();
   }
 
   // status 唯一判定点：success ? done : (aborted ? cancelled : failed)
@@ -230,11 +256,10 @@ async function runAndFinalize(
     ? "done"
     : signal?.aborted ? "cancelled" : "failed";
 
-  // CAS 抢锁：抢到则完整收尾；没抢到（cancel 已先设 cancelled）则跳过
+  // CAS 抢锁：抢到则经 hub.finalizeRecord 收尾（completeRecord + archive + history）；
+  // 没抢到（cancel 已先设 cancelled）则跳过
   if (tryTransition(record, status)) {
-    completeRecord(record, result, status);
-    runtime.store.archive(record);
-    await runtime.getHistory().append(toPersisted(record, ctx.cwd));
+    await hub.finalizeRecord(record, result, status);
   }
   return result;
 }
@@ -251,7 +276,7 @@ async function runAndFinalize(
 function kickOffBackground(
   record: ExecutionRecord,
   opts: ExecuteOptions,
-  runtime: SubagentRuntime,
+  hub: SubagentHub,
   ctx: SessionRunnerContext,
   identity: ResolvedIdentity,
   signal: AbortSignal | undefined,
@@ -259,12 +284,12 @@ function kickOffBackground(
 ): void {
   //  detached（不 await）：runAndFinalize → 若抢到 CAS 则 notify
   //  .catch 吞错（runAndFinalize 内部已 finalize，这里只防 detached rejection 外溢）
-  void runAndFinalize(record, opts, runtime, ctx, identity, signal, priority)
+  void runAndFinalize(record, opts, hub, ctx, identity, signal, priority)
     .then(() => {
       // 6. background 回注：仅当本路径抢到 CAS（status 已转 done/failed）才 notify。
       // cancel 抢先时 status=cancelled，cancelBackground 自己 notify，此处跳过。
       if (record.status !== "cancelled") {
-        runtime.notifier.notify(toNotifyRecord(record));
+        hub.notifyComplete(record);
       }
     })
     .catch(() => {
@@ -278,18 +303,20 @@ function kickOffBackground(
 // ============================================================
 
 /**
- * 取消 background record。runtime 持有 controller，可真正 abort。
+ * 取消 background record。hub 持有 controller（经 record），可真正 abort。
  * 经 tryTransition CAS 抢锁——抢到则 notify（用户意图），不写 history。
  * 抢不到（detached 已先 finalize 为 done/failed）则什么都不做。
  */
-export function cancelBackground(record: ExecutionRecord, runtime: SubagentRuntime): boolean {
+export function cancelBackground(record: ExecutionRecord, hub: SubagentHub): boolean {
   // 1. controller.abort()——发取消信号，run() 内部 session 会停下
   record.controller?.abort();
   // 2. CAS 抢锁：只有 running 能转 cancelled
   if (!tryTransition(record, "cancelled")) {
     return false; // detached 已 finalize，cancel 来晚了，不重复副作用
   }
-  // 3. 抢到锁：completeRecord（用空 result 填 cancelled）+ notify。不写 history（用户意图）。
+  // 3. 抢到锁：completeRecord（用空 result 填 cancelled）+ notify。
+  //    cancel 直接调 completeRecord（不走 hub.finalizeRecord——cancel 不写 history，finalizeRecord 会写）。
+  //    notify 经 hub.notifyComplete（record→BgNotifyRecord 映射内化在 hub）。
   const cancelledResult: AgentResult = {
     text: "",
     turns: record.turns,
@@ -300,7 +327,7 @@ export function cancelBackground(record: ExecutionRecord, runtime: SubagentRunti
     toolCalls: [],
   };
   completeRecord(record, cancelledResult, "cancelled");
-  runtime.notifier.notify(toNotifyRecord(record));
+  hub.notifyComplete(record);
   return true;
 }
 
@@ -314,24 +341,22 @@ export function cancelBackground(record: ExecutionRecord, runtime: SubagentRunti
  *   - tool_start/tool_end/turn_end/message_end/error：触发 project(record) → onUpdate
  * 节流逻辑参考旧实现 shouldTriggerUpdate（execution-state.ts）。
  */
+const TRIGGERING_EVENT_TYPES = new Set<AgentEvent["type"]>([
+  "tool_start",
+  "tool_end",
+  "turn_end",
+  "message_end",
+  "error",
+  "compaction",
+]);
+
 function onEventThrottled(
   record: ExecutionRecord,
   event: AgentEvent,
   onUpdate: (details: SubagentToolDetails) => void,
 ): void {
-  //  if (shouldTriggerUpdate(event)) onUpdate(project(record))
-  void record; void event; void onUpdate; void project;
-  throw new Error("not implemented");
-}
-
-/**
- * record → BgNotifyRecord（notifier.notify 入参）。
- * status 此时必为终态（done/failed/cancelled）——调用方已抢到 CAS。
- */
-function toNotifyRecord(record: ExecutionRecord): BgNotifyRecord {
-  //  return { id, status, agent, result, error, startedAt, endedAt }
-  //  status 断言为 "done"|"failed"|"cancelled"（running 不应到这里）
-  void snapshot;
-  void record;
-  throw new Error("not implemented");
+  // text_delta/thinking_delta 只累积不触发（streaming 每 token 不拉回）
+  if (TRIGGERING_EVENT_TYPES.has(event.type)) {
+    onUpdate(project(record));
+  }
 }

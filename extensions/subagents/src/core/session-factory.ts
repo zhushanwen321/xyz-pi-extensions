@@ -120,7 +120,7 @@ export interface SdkLike {
 // 依赖容器 + 输入/输出
 // ============================================================
 
-/** 创建 session 所需的依赖（由 SubagentRuntime 提供）。 */
+/** 创建 session 所需的依赖（由 SubagentHub 提供）。 */
 export interface SessionFactoryContext {
   modelRegistry: ModelRegistryLike;
   resolveAgent: (name: string) => AgentConfig | undefined;

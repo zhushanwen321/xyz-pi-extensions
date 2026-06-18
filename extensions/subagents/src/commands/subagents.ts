@@ -9,7 +9,8 @@
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 
-import { getRuntime } from "../runtime/runtime.ts";
+import { getModelConfigHub } from "../runtime/model-config-hub.ts";
+import { getHub } from "../runtime/subagent-hub.ts";
 import { runConfigWizard } from "../tui/config-wizard.ts";
 import { formatConfigSummary } from "../tui/format-helpers.ts";
 import { createSubagentsView } from "../tui/list-view.ts";
@@ -36,7 +37,7 @@ export function registerSubagentsCommand(pi: ExtensionAPI): void {
       //   ║                                                                ║
       //   ║  /subagents config [...] → runConfigWizard(...)                ║
       //   ╚══════════════════════════════════════════════════════════════╝
-      void getRuntime; void runConfigWizard; void formatConfigSummary; void createSubagentsView; void argsStr; void ctx;
+      void getHub; void getModelConfigHub; void runConfigWizard; void formatConfigSummary; void createSubagentsView; void argsStr; void ctx;
       throw new Error("not implemented");
     },
   });

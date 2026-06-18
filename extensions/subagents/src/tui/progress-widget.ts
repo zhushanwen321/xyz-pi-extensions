@@ -6,7 +6,7 @@
 // background 执行进度无法回流到对话流 tool block（SDK onUpdate 生命周期限制），
 // 此 widget 作为可观测性补偿。
 
-import type { SubagentRuntime } from "../runtime/runtime.ts";
+import type { SubagentHub } from "../runtime/subagent-hub.ts";
 import type { ThemeLike } from "./format.ts";
 
 /**
@@ -24,9 +24,9 @@ import type { ThemeLike } from "./format.ts";
 //   ╚═══════════════════════════════════════════════════════════════╝
  */
 export class SubagentsProgressWidget {
-  constructor(runtime: SubagentRuntime, theme: ThemeLike, tui: { requestRender(): void }) {
-    //  runtime.onChange(() => tui.requestRender())
-    void runtime; void theme; void tui;
+  constructor(hub: SubagentHub, theme: ThemeLike, tui: { requestRender(): void }) {
+    //  hub.onChange(() => tui.requestRender())
+    void hub; void theme; void tui;
     throw new Error("not implemented");
   }
 

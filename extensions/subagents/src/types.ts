@@ -182,12 +182,22 @@ export interface ExecuteOptions {
   schema?: Record<string, unknown>;
   maxTurns?: number;
   graceTurns?: number;
-  /** sync 模式来自 Pi tool 框架；background 模式 runtime 忽略，自建 controller。 */
+  /** sync 模式来自 Pi tool 框架；background 模式 hub 忽略，自建 controller。 */
   signal?: AbortSignal;
   /** live 状态回流（对话流 block 实时刷新）。 */
   onUpdate?: (details: SubagentToolDetails) => void;
   /** background 完成回调（sync 不调）。 */
   onComplete?: (record: RecordSnapshot) => void;
+  /**
+   * 首次 category 确认回调。hub.execute 内部首次调用且未确认时触发。
+   * 无 UI 场景（headless/测试）省略——hub 跳过确认直接用 fallback 解析。
+   * 类型与 ModelConfigHub.ConfirmCategoryCallback 结构兼容（duck-typed）。
+   */
+  onConfirmCategory?: (input: {
+    categories: { name: string; model: string }[];
+    currentModels: Record<string, { model: string; thinkingLevel?: string }>;
+    available: unknown[];
+  }) => Promise<CategoryConfirmResult>;
 }
 
 /**

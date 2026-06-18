@@ -12,7 +12,7 @@
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import type { SubagentRuntime } from "../runtime/runtime.ts";
+import type { SubagentHub } from "../runtime/subagent-hub.ts";
 import type { SubagentRecord } from "../types.ts";
 import type { ThemeLike } from "./format.ts";
 
@@ -57,13 +57,13 @@ export interface DetailKeyContext {
 //   ╚══════════════════════════════════════════════════════════════════╝
  */
 export function createSubagentsView(
-  runtime: SubagentRuntime,
+  hub: SubagentHub,
   theme: ThemeLike,
   ctx: ExtensionContext,
   directId?: string,
 ): Promise<void> {
   //  见上方框图
-  void runtime; void theme; void ctx; void directId;
+  void hub; void theme; void ctx; void directId;
   throw new Error("not implemented");
 }
 
@@ -87,12 +87,12 @@ export function processKey(
   records: SubagentRecord[],
   state: ViewState,
   selected: SubagentRecord | null,
-  runtime: SubagentRuntime | null,
+  hub: SubagentHub | null,
   detailCtx: DetailKeyContext | undefined,
   done: () => void,
 ): boolean {
   //  见上方框图（matchesKey 兼容 legacy/Kitty 协议）
-  void data; void records; void state; void selected; void runtime; void detailCtx; void done;
+  void data; void records; void state; void selected; void hub; void detailCtx; void done;
   throw new Error("not implemented");
 }
 
