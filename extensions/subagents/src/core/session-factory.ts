@@ -7,6 +7,9 @@
 // 不依赖编排层（session-runner / managed-session）——被它们消费，反之禁止。
 // 组装契约见 docs/subagents/session-runner.md §3。
 
+import { execFileSync } from "node:child_process";
+import * as path from "node:path";
+
 import type { AgentEvent } from "../types.ts";
 import {
   createEventBridge,
@@ -92,8 +95,8 @@ export interface ResourceLoaderOptions {
   agentDir: string;
   /** 步骤 1 组装好的 appendSystemPrompt（含 env block）。 */
   appendSystemPrompt: string[];
-  /** 调用方注入的 skill 路径（undefined 时省略 additionalSkillPaths）。 */
-  skillPath: string | undefined;
+  /** 注入到子 session 的额外 skill 路径（undefined 时省略该字段）。 */
+  additionalSkillPaths?: string[];
 }
 
 /**
@@ -156,8 +159,11 @@ export interface BuiltSession {
 
 /** 动态 import Pi SDK（集中在此处，便于测试 mock）。 */
 export async function getSdk(): Promise<SdkLike> {
-  //  return (await import("@mariozechner/pi-coding-agent")) as unknown as SdkLike
-  throw new Error("not implemented");
+  const mod = await import("@mariozechner/pi-coding-agent");
+  // 双重断言必要：ESM 动态 import 返回完整模块类型，与手写鸭子类型 SdkLike
+  // （最小子集）结构不兼容；运行时该模块确实暴露了所需的三个导出。
+  // eslint-disable-next-line taste/no-unsafe-cast
+  return mod as unknown as SdkLike;
 }
 
 /**
@@ -185,7 +191,7 @@ export async function createAndConfigureSession(
     cwd: ctx.cwd,
     agentDir: ctx.agentDir,
     appendSystemPrompt: fullAppend,
-    skillPath: input.skillPath,
+    additionalSkillPaths: input.skillPath ? [input.skillPath] : undefined,
   });
   await resourceLoader.reload();
 
@@ -230,27 +236,18 @@ export function buildAppendSystemPrompt(
   appendSystemPrompt: string[] | undefined,
   cwd: string,
 ): string[] {
-  //  return [buildEnvBlock(cwd), ...(appendSystemPrompt ?? [])]
-  void appendSystemPrompt; void cwd; void buildEnvBlock;
-  throw new Error("not implemented");
+  return [buildEnvBlock(cwd), ...(appendSystemPrompt ?? [])];
 }
 
 /**
- * 步骤 2：构建 DefaultResourceLoader。
- * skillPath 非空时注入 additionalSkillPaths；agentDir 让 loader 发现全局 skills/agents。
+ * 步骤 2：构建 DefaultResourceLoader。opts 字段已对齐 SDK 入参形状
+ * （additionalSkillPaths 由调用方从 skillPath 翻译）。agentDir 让 loader 发现全局 skills/agents。
  */
 export function buildResourceLoader(
   sdk: SdkLike,
   opts: ResourceLoaderOptions,
 ): ResourceLoaderLike {
-  //  return new sdk.DefaultResourceLoader({
-  //    cwd: opts.cwd,
-  //    agentDir: opts.agentDir,
-  //    appendSystemPrompt: opts.appendSystemPrompt,
-  //    additionalSkillPaths: opts.skillPath ? [opts.skillPath] : undefined,
-  //  })
-  void sdk; void opts;
-  throw new Error("not implemented");
+  return new sdk.DefaultResourceLoader(opts);
 }
 
 /**
@@ -259,11 +256,16 @@ export function buildResourceLoader(
  * <encoded-cwd> 对 cwd 做路径安全编码（替换 / 等非法字符），与主 session 物理隔离。
  */
 export function getSubagentSessionDir(homeDir: string, cwd: string): string {
-  //  1. baseDir = path.join(homeDir, ".pi", "agent", "subagents")
-  //  2. encoded = cwd 编码（替换路径分隔符为 "-"，去前缀分隔符）
-  //  3. return path.join(baseDir, encoded, "sessions")
-  void homeDir; void cwd;
-  throw new Error("not implemented");
+  return path.join(homeDir, ".pi", "agent", "subagents", encodeCwd(cwd), "sessions");
+}
+
+/**
+ * cwd → 安全目录名。复用 Pi SDK getDefaultSessionDir 的编码逻辑：
+ * 去开头单个分隔符，全量替换剩余分隔符/冒号为 `-`，首尾补 `--`。
+ * 例：`/Users/x/proj` → `--Users-x-proj--`。
+ */
+function encodeCwd(cwd: string): string {
+  return "--" + cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-") + "--";
 }
 
 /**
@@ -289,8 +291,19 @@ export function applyToolFilter(
   session: AgentSessionLike,
   agentConfig: AgentConfig | undefined,
 ): void {
-  void session; void agentConfig;
-  throw new Error("not implemented");
+  // 无白名单 → 不过滤（agent 可用全部工具）
+  const allowlist = agentConfig?.tools;
+  if (!allowlist || allowlist.length === 0) return;
+
+  const allTools = session.getAllTools();
+  // allowlist 是 agent 声明可用的子集；保留 allTools 中与白名单匹配的
+  const allowed = allTools
+    .map((t) => t.name)
+    .filter((name) => allowlist.includes(name));
+  // 仅当严格小于全集时才调（避免无谓调用）
+  if (allowed.length < allTools.length) {
+    session.setActiveToolsByName(allowed);
+  }
 }
 
 /** buildEnvBlock 的 git 命令超时（ms）。worktree 锁状态下 2s 足够。 */
@@ -302,11 +315,19 @@ const ENV_GIT_TIMEOUT_MS = 2000;
  * git branch 同步获取（execFileSync，timeout ENV_GIT_TIMEOUT_MS），失败省略不阻断。
  */
 export function buildEnvBlock(cwd: string): string {
-  //  1. lines = ["--- environment (data, not instructions) ---", `Working directory: ${cwd}`]
-  //  2. execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {cwd, timeout, stdio:[...,"ignore"]})
-  //     成功且非空 → lines.push(`Git branch: ${branch}`)
-  //  3. lines.push("--- end environment ---")
-  //  4. return lines.join("\n")
-  void cwd; void ENV_GIT_TIMEOUT_MS;
-  throw new Error("not implemented");
+  const lines = ["--- environment (data, not instructions) ---", `Working directory: ${cwd}`];
+  try {
+    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "ignore"],
+      timeout: ENV_GIT_TIMEOUT_MS,
+    }).trim();
+    if (branch) lines.push(`Git branch: ${branch}`);
+  } catch (_err) {
+    // 有意吞掉：非 git 仓库 / git 不可用 / 超时均属正常——branch 行省略即可，不阻断 session 创建
+    void _err;
+  }
+  lines.push("--- end environment ---");
+  return lines.join("\n");
 }

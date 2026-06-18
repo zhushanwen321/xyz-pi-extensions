@@ -10,6 +10,9 @@
 // 长生命周期变体见 managed-session.ts（平级编排器，互不 import）。
 // 设计信息见 docs/subagents/session-runner.md。
 
+import { randomBytes } from "node:crypto";
+import * as os from "node:os";
+
 import type {
   AgentEvent,
   AgentResult,
@@ -26,7 +29,29 @@ import type {
   SessionFactoryContext,
 } from "./session-factory.ts";
 import { createAndConfigureSession } from "./session-factory.ts";
+import { createTurnLimiter } from "./turn-limiter.ts";
 import type { WorktreeResult } from "./worktree.ts";
+import { cleanupWorktree, createWorktree } from "./worktree.ts";
+
+// ============================================================
+// 常量
+// ============================================================
+
+/** 默认 grace turns（soft limit 后宽限轮数，对齐旧实现 DEFAULT_GRACE_TURNS）。 */
+const DEFAULT_GRACE_TURNS = 2;
+
+/** schema 契约 enforcement：agent 漏调 structured-output 时最多 steer 重试次数。
+ *  对齐 structured-output 扩展原 setupWorkflowHook 的 MAX_HOOK_RETRIES=2。 */
+const MAX_SCHEMA_STEERS = 2;
+
+/** structured-output 工具名（与 structured-output 扩展 TOOL_NAME 一致）。 */
+const STRUCTURED_OUTPUT_TOOL = "structured-output";
+
+/** worktree agentId 的随机字节数（8 hex 字符，路径注入防御）。 */
+const WORKTREE_AGENT_ID_BYTES = 4;
+
+/** worktree commit message 的 task 截断长度（防超长 task 撑爆 commit msg）。 */
+const WORKTREE_COMMIT_MSG_MAX = 200;
 
 // ============================================================
 // 依赖注入容器 + 入参
@@ -83,17 +108,15 @@ const SCHEMA_JSON_INDENT = 2;
  * 指令明确要求 agent 调用 structured-output tool，而非直接输出 JSON 文本。
  */
 export function formatSchemaInstruction(schema: Record<string, unknown>): string {
-  //  return [
-  //    "MANDATORY: Structured Output Requirement",
-  //    "You MUST call the `structured-output` tool with your final answer.",
-  //    "Do NOT output the JSON directly in your text response ...",
-  //    "The schema for the structured output is:",
-  //    "```json",
-  //    JSON.stringify(schema, null, SCHEMA_JSON_INDENT),
-  //    "```",
-  //  ].join("\n")
-  void schema; void SCHEMA_JSON_INDENT;
-  throw new Error("not implemented");
+  return [
+    "MANDATORY: Structured Output Requirement",
+    "You MUST call the `structured-output` tool with your final answer.",
+    "Do NOT output the JSON directly in your text response — you MUST use the structured-output tool.",
+    "The schema for the structured output is:",
+    "```json",
+    JSON.stringify(schema, null, SCHEMA_JSON_INDENT),
+    "```",
+  ].join("\n");
 }
 
 // ============================================================
@@ -113,13 +136,16 @@ function createWorktreeForIsolation(
   opts: RunOptions,
   ctx: SessionRunnerContext,
 ): WorktreeResult | undefined {
-  //  1. opts.agentConfig?.isolation !== "worktree" → return undefined
-  //  2. agentId = crypto.randomBytes(4).toString("hex")
-  //  3. wt = createWorktree(ctx.cwd, agentId, os.tmpdir())
-  //  4. wt === undefined → throw new Error("worktree isolation requested but creation failed")
-  //  5. return wt
-  void opts; void ctx;
-  throw new Error("not implemented");
+  // 普通路径：未声明 isolation → 在 cwd 内执行，返回 undefined
+  if (opts.agentConfig?.isolation !== "worktree") return undefined;
+
+  // 隔离路径：创建临时 worktree 副本（createWorktree 当前为叶子，throw = fail-fast）
+  const agentId = randomBytes(WORKTREE_AGENT_ID_BYTES).toString("hex");
+  const wt = createWorktree(ctx.cwd, agentId, os.tmpdir());
+  if (wt === undefined) {
+    throw new Error("worktree isolation requested but creation failed");
+  }
+  return wt;
 }
 
 /**
@@ -160,8 +186,52 @@ export interface RunHooks {
 //   ╚══════════════════════════════════════════════════════════════╝
  */
 export function attachRunHooks(built: BuiltSession, opts: RunOptions): RunHooks {
-  void built; void opts;
-  throw new Error("not implemented");
+  // 1. turnLimiter：steer/abort 绑到 session
+  const limiter = createTurnLimiter({
+    maxTurns: opts.maxTurns ?? 0,
+    graceTurns: opts.graceTurns ?? DEFAULT_GRACE_TURNS,
+    steer: (msg) => {
+      void built.session.steer(msg);
+    },
+    abort: () => {
+      void built.session.abort();
+    },
+  });
+
+  // 2. signal→abort 监听（一次性）：sync 来自 Pi tool 框架，bg 来自 controller
+  const onAbort = (): void => {
+    void built.session.abort();
+  };
+  opts.signal?.addEventListener("abort", onAbort, { once: true });
+
+  // 3. schema enforcement 计数器（opts.schema 存在时启用）
+  let schemaSteerCount = 0;
+
+  const onTurnEnd = (currentTurns: number): void => {
+    limiter.onTurnEnd(currentTurns);
+
+    // schema enforcement：漏调 structured-output 则 steer 提醒（≤ MAX_SCHEMA_STEERS）
+    if (!opts.schema) return;
+    // 仅看 toolName——isError 视为"调用了但失败"，agent 自己会重试修正 schema
+    const calledStructuredOutput = built.bridge.toolCalls.some(
+      (tc) => tc.toolName === STRUCTURED_OUTPUT_TOOL,
+    );
+    if (calledStructuredOutput) return;
+    if (schemaSteerCount >= MAX_SCHEMA_STEERS) return;
+    schemaSteerCount += 1;
+    const reminder =
+      "[MANDATORY] You MUST call the `structured-output` tool now.\n" +
+      "Your task requires structured output — do NOT respond with plain text.\n" +
+      "Call structured-output with the schema below and your result as data.\n\n" +
+      formatSchemaInstruction(opts.schema);
+    void built.session.steer(reminder);
+  };
+
+  const unsubscribe = (): void => {
+    opts.signal?.removeEventListener("abort", onAbort);
+  };
+
+  return { onTurnEnd, unsubscribe };
 }
 
 /**
@@ -175,10 +245,8 @@ function cleanupWorktreeForOutcome(
   task: string,
   _success: boolean,
 ): WorktreeOutcome {
-  //  return cleanupWorktree(cwd, worktree, task.slice(0, 200))
-  //  （_success 不改变清理策略——cleanupWorktree 自身按 hasChanges 决定 commit/preserve）
-  void worktree; void cwd; void task; void _success;
-  throw new Error("not implemented");
+  // _success 不改变清理策略——cleanupWorktree 自身按 hasChanges 决定 commit/preserve
+  return cleanupWorktree(cwd, worktree, task.slice(0, WORKTREE_COMMIT_MSG_MAX));
 }
 
 // ============================================================
