@@ -143,11 +143,11 @@ export function sanitizeLabel(label: string): string {
 /**
  * 格式化单条 eventLog 条目（带类型图标 + 着色，不含 `⎿` 前缀——前缀由调用方加）。
  *
- * 图标语义（tui-conversation.md §7，替代原统一 `├─` 前缀）：
- *   `›` tool_start/tool_end（尾部追加 ✓/✗）
- *   `>`  text_output
- *   `·`  thinking（整行 dim，含图标）
- *   `──` turn_end（仅 expanded）
+ * 标签语义（tui-conversation.md §7，比单字符图标更明确）：
+ *   tool:    tool_start/tool_end（尾部追加 ✓/✗）
+ *   text:    text_output
+ *   thinking: thinking（整行 dim，含标签）
+ *   ── turn ──  turn_end（仅 expanded）
  *
  * label 经 sanitizeLabel 压成单行，再 truncLine 截到 EVENT_LINE_MAX_WIDTH。
  */
@@ -156,32 +156,29 @@ export function formatEventLine(entry: AgentEventLogEntry, theme: ThemeLike): st
 
   switch (entry.type) {
     case "tool_start":
-      // 工具开始：图标 + label，无尾部标记
-      return `› ${label}`;
+      return `tool: ${label}`;
 
     case "tool_end": {
-      // 工具结束：尾部 ✓（success）/ ✗（error）
       const mark = entry.status === "failed"
         ? ` ${theme.fg("error", "✗")}`
         : ` ${theme.fg("success", "✓")}`;
-      return `› ${label}${mark}`;
+      return `tool: ${label}${mark}`;
     }
 
     case "text_output":
-      // agent 输出文本片段
-      return `> ${label}`;
+      return `text: ${label}`;
 
     case "thinking":
-      // 推理片段：整行 dim（含 `·` 图标）
-      return theme.fg("dim", `· ${label}`);
+      // 推理片段：整行 dim（含标签）
+      return theme.fg("dim", `thinking: ${label}`);
 
     case "turn_end":
       // turn 分隔（仅 expanded view 显示）
       return theme.fg("dim", "── turn ──");
 
     case "error":
-      // 错误条目：图标 + label + ✗
-      return `› ${label} ${theme.fg("error", "✗")}`;
+      // 错误条目：标签 + label + ✗
+      return `tool: ${label} ${theme.fg("error", "✗")}`;
 
     default:
       return label;

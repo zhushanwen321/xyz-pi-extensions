@@ -17,7 +17,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import { Text } from "@earendil-works/pi-tui";
 import type { AgentToolResult, Theme } from "@mariozechner/pi-coding-agent";
 
-import type { SubagentToolDetails } from "../types.ts";
+import type { AgentEventLogEntry, SubagentToolDetails } from "../types.ts";
 import {
   formatElapsedSeconds,
   formatEventLine,
@@ -196,8 +196,9 @@ export class SubagentResultComponent implements Component {
     lines.push(truncLine(buildStatusLine(d, theme), width));
 
     // 滚动区：最近 N 条 eventLog（不含 turn_end），running 和 terminal 态统一展示。
-    // 新事件进来 → 滚动区尾部追加、旧的上滚（渲染层每次只取最近 N 条）。
-    const scrollEntries = d.eventLog.filter((e) => e.type !== "turn_end");
+    // 先折叠连续同类分片（text/thinking 的 100 字符 chunk 合并为 1 条代表行），
+    // 再取最近 N 条——避免同一句话被拆成 N 个半句碎片。
+    const scrollEntries = foldEntries(d.eventLog.filter((e) => e.type !== "turn_end"));
 
     // running 态：currentActivity 作为滚动区首行（实时"正在做什么"锚点），
     // 并与 eventLog 末条去重（避免两行近乎相同）。
@@ -336,12 +337,12 @@ function buildActivityLine(
   activity: { type: "tool" | "text" | "thinking"; label: string },
   theme: ThemeLike,
 ): string {
-  const icon = activity.type === "tool" ? "›" : activity.type === "thinking" ? "·" : ">";
+  const tag = activity.type === "tool" ? "tool:" : activity.type === "thinking" ? "thinking:" : "text:";
   const label = sanitizeLabel(activity.label);
-  // thinking 整行 dim（含图标）；其他图标 normal，前缀 dim
+  // thinking 整行 dim（含标签）；其他标签 normal，前缀 dim
   const content = activity.type === "thinking"
-    ? theme.fg("dim",`${icon} ${label}`)
-    : `${icon} ${label}`;
+    ? theme.fg("dim",`${tag} ${label}`)
+    : `${tag} ${label}`;
   return `${theme.fg("dim",STREAM_PREFIX)}${content}`;
 }
 
@@ -391,4 +392,37 @@ function activityMatchesEntry(
   if (entry.type !== "tool_start") return false;
   if (entry.status !== "running") return false;
   return sanitizeLabel(activity.label) === sanitizeLabel(entry.label);
+}
+
+/**
+ * 折叠连续同类分片（text_output / thinking）为单条代表行。
+ *
+ * 问题：core 层把流式输出按 100 字符切成多个 chunk push 进 eventLog。
+ * 压缩视图逐条显示这些 chunk，结果同一句话被拆成 N 个半句碎片（前 100 字符重复 N 次），可读性差。
+ *
+ * 解法：相邻且同类（text_output 或 thinking）的分片折叠为 1 条，
+ * label 取组内**最后一条**（最新内容，反映流式进展）。被 tool 隔开的同类各自成组。
+ *
+ *   [text, text, text, tool, text] → [text(末), tool, text(末)]
+ *
+ * 纯渲染层折叠，不改 eventLog 本身（持久化仍是细粒度）。
+ * expanded view 不折叠（那里用户想看完整内容）。
+ */
+function foldEntries(entries: AgentEventLogEntry[]): AgentEventLogEntry[] {
+  const result: AgentEventLogEntry[] = [];
+  for (const entry of entries) {
+    const last = result[result.length - 1];
+    // 相邻同类（text_output 或 thinking）→ 合并，取最新 label + ts
+    if (
+      last !== undefined &&
+      last.type === entry.type &&
+      (entry.type === "text_output" || entry.type === "thinking")
+    ) {
+      // readonly 字段不能 mutate，替换整个元素
+      result[result.length - 1] = { ...last, label: entry.label, ts: entry.ts };
+    } else {
+      result.push({ ...entry });
+    }
+  }
+  return result;
 }
