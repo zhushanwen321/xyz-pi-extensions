@@ -36,14 +36,6 @@ export function statusGlyph(status: ExecutionStatus): { icon: string; color: str
   throw new Error("not implemented");
 }
 
-/** 从 toolName + args 提取 eventLog label（read/edit 取路径，否则裸 toolName）。 */
-export function extractLabelFromArgs(toolName: string, args: unknown): string {
-  //  read/bash/edit → 取 file_path/command 等关键参数
-  //  其他 → toolName
-  void toolName; void args;
-  throw new Error("not implemented");
-}
-
 /** 格式化单条 eventLog 条目（带图标 + 着色）。 */
 export function formatEventLine(entry: AgentEventLogEntry, theme: ThemeLike): string {
   //  tool_start/tool_end → 图标 + label

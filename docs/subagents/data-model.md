@@ -5,6 +5,33 @@
 
 ---
 
+## 0. 为什么是贫血模型 + 函数式（不是 Java DDD 充血）
+
+`ExecutionRecord` 是**纯数据 interface**（无方法），行为集中在 `core/execution-record.ts` 的 4 个函数上。这不是"没设计好的贫血反模式"，而是**函数式 DDD**——record 是 aggregate 的数据载体，`execution-record.ts` 是 module 形式的 aggregate root（唯一 mutate 入口）。
+
+### 与 Java 充血模型的差异
+
+| 维度 | Java 充血（DDD）| 本项目（贫血+函数式）|
+|---|---|---|
+| 状态封装 | `private` 字段 + 方法 | 模块边界（架构铁律：record 只经 4 函数 mutate）|
+| 行为就近 | 方法绑在对象上 | 4 函数集中在 module（等价 aggregate root）|
+| 序列化 | class 实例转 json 麻烦 | plain object 直接写 jsonl |
+| 跨层共享 | class 带运行时依赖 | interface 编译期消失，三层共用一份类型 |
+| 快照/并发 | 共享可变对象需 deep clone | `.slice()` eventLog 即可 |
+
+### 选函数式的三个硬约束
+
+1. **TS interface 运行时消失**——不能有方法，"行为绑类型"在语言层不自然
+2. **三路径共享 + 快照隔离**——sync/bg/poll 同时读同一份 record，TUI/history/widget 各取快照，纯数据 + `.slice()` 比 deep clone 简单一个数量级
+3. **jsonl 持久化**——`toPersisted(record)` 直接产 plain object，无 class 反序列化
+
+### 保留的"充血内核"
+
+- `_currentTurnText` / `_currentThinking` 是 record 的**字段**而非函数局部变量——chunking 缓冲跨事件存活，只有 `updateFromEvent` 读写。这是状态封装，等价 `private`
+- 不变量守护集中在 module 内：`completeRecord` 不重置 turns（updateFromEvent 已累积）、`project` 唯一算 elapsedSeconds——等价 aggregate root 守护不变量
+
+---
+
 ## 1. 为什么是唯一状态源
 
 旧实现的状态散落在 11 种形状里（EventBridge、AgentResult、BgRecord、CompletedAgentRecord、闭包局部、PersistedAgentRecord、SubagentToolDetails、SubagentRecord、BackgroundStatus、两套 WidgetState），三路径各自投影，导致：
