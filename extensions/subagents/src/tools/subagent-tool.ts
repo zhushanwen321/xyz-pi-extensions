@@ -281,18 +281,14 @@ function buildConfirmCallback(
 
     const result = await ctx.ui.custom<CategoryConfirmResult>(
       (_tui, theme, keybindings, done) =>
-        // Pi Theme 与 ThemeLike duck-type 兼容（均有 fg/bg/bold），
+        // Pi Theme 与 ThemeLike duck-type 兼容（均有 fg/bg/bold/underline），
         // 但 ctx.ui.custom 的 factory theme 参数是 Pi Theme 类型，
         // CategoryConfirmComponent 要 ThemeLike——结构兼容但 tsc 需显式标注
         new CategoryConfirmComponent(confirmInput, theme as unknown as ThemeLike, keybindings, done),
-      {
-        overlay: true,
-        overlayOptions: {
-          anchor: "center",
-          maxHeight: "80%",
-          width: 84,
-        },
-      },
+      // overlay:false —— 组件渲染在 TUI input 区（替换 editor），常驻接管键盘焦点。
+      // 非 overlay：不开浮层，背景由 editorContainer 管，退出时 Pi 自动恢复 editor。
+      // （对照 spec FR-2.0：input 区常驻组件，而非浮层 overlay）
+      { overlay: false },
     );
     // ctx.ui.custom 在用户取消（Esc）时由组件调 done({action:"cancelled",...}) resolve，
     // 不会 reject。返回结果即为 CategoryConfirmResult。

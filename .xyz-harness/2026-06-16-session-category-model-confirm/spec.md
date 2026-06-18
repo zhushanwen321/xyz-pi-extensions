@@ -34,23 +34,24 @@ verdict: pass
 
 ### FR-2: 确认交互（平铺组件 + 二级菜单）
 
-**FR-2.0 交互形态**：通过 `ctx.ui.custom(factory)`（`overlay:false`）在 **TUI input 区**渲染一个常驻自定义组件（替换 editor，接管键盘焦点）。组件内部状态机管理两个视图：category 平铺列表（主视图，常驻）和 model 二级菜单。这是对「串行 `ctx.ui.select`」的升级——一次性平铺所有 category，方向键导航，下钻二级菜单改模型。
+**FR-2.0 交互形态**：通过 `ctx.ui.custom(factory, { overlay: false })` 在 **TUI input 区**渲染一个常驻自定义组件（替换 editorContainer，接管键盘焦点）。组件内部状态机管理三个视图：category 平铺列表（主视图，常驻）、model 二级菜单、thinking level 子菜单。这是对「串行 `ctx.ui.select`」的升级——一次性平铺所有 category，方向键导航，下钻二级菜单改模型。组件实现为裸 `Component` 类（实现 `render`/`invalidate`/`handleInput`），不 extends Container。
 
 **FR-2.1 主视图（category 平铺列表，常驻）**：
 - 一屏平铺所有 category（FR-2.5），每行显示 category 名 + 当前模型。
 - 当前模型用**下划线**标注（`theme.underline`）；已被用户修改的行额外标绿色 ✱ 和「(已修改)」。
-- 选中行（光标）青色高亮 + `→` 前缀。
-- 列表底部含两个**虚拟项**：`✓ 完成确认`（绿色）、`✗ 取消`（红色）。
+- 选中行（光标）accent 高亮 + `→` 前缀。
+- 列表底部含两个**虚拟项**：`✓ 完成确认`（success 色）、`✗ 取消`（error 色）。
 - 底部快捷键提示行。
-- 方向键 ↑↓ 在所有行（含虚拟项）间移动；j/k 也支持。
+- **默认光标位置**：组件进入时默认在 `✓ 完成确认`（满足「进来即可一键确认」预期），用户无需任何操作直接 Enter 即可全部用默认完成。
+- 方向键 ↑↓ 在所有行（含虚拟项）间移动；main 视图额外支持 j/k（此视图无 filter 输入，j/k 安全）。
 - Enter：若光标在 category 行 → 进入该 category 的二级菜单（FR-2.2）；若在 `✓ 完成确认` → 提交（FR-2.3）；若在 `✗ 取消` → 取消（FR-4）。
 - Esc → 取消整个确认（FR-4）。
 
 **FR-2.2 二级菜单（model 选择，带 filter）**：选中某 category + Enter 后，组件切换到该 category 的二级菜单（替换主视图内容）：
-- 标题显示 `[category] 选择 model`。
-- 顶部一个 `Input` 组件作为 **filter 输入框**，用户打字实时 fuzzy 过滤模型列表。
-- 下方模型列表（用 `SelectList` 渲染）。
-- 方向键 ↑↓ 在过滤结果里选；Enter 选定 → 写入该 category 的新模型，返回主视图；Esc 返回主视图（不写）。
+- 标题显示 `[category] 选择 model`，附 filter 文本（若非空）。
+- filter 输入：用户打字实时过滤模型列表（可打印字符追加、Backspace 删除）。
+- 下方模型列表。reasoning 模型标 `[reasoning]`。
+- 方向键 ↑↓ 在过滤结果里选（二级菜单**不支持 j/k**，避与 filter 文本输入冲突）；Enter 选定 → 进入 thinking 子菜单（FR-2.7，仅 reasoning 模型有可用级别时）或直接写 override（非 reasoning）；Esc 返回主视图（不写）。
 - 模型列表来源：`ctx.modelRegistry.getAvailable()`。
 
 **FR-2.3 完成确认（提交）**：主视图中光标移到 `✓ 完成确认` + Enter → 提交。仅写入用户**实际改动过**的 category（未改的不写 perCategory 覆盖），然后标记 `categoryConfirmed=true`（FR-3）。
@@ -59,15 +60,21 @@ verdict: pass
 
 **FR-2.5 category 列表来源**：`globalConfig.categories` 的全部 key（6 个默认 + 用户自定义且未被删除的）。`agentCategoryOverrides` 不影响列表（它只是 agent→category 映射，不增加 category 数量）。
 
-**FR-2.6 filter 实现（自定义 fuzzy，非 SelectList.setFilter）**：`SelectList.setFilter()` 用的是 `item.value.startsWith(filter)`（已验证源码 select-list.js），既非 fuzzy 也只匹配 value。这不满足需求（如 filter "sonnet" 应匹配 label "Claude Sonnet 4.5"）。因此二级菜单的 filter **自行实现**：用 `fuzzyFilter(filter, label)` 对 `ctx.modelRegistry.getAvailable()` 过滤，把过滤后的 SelectItem 传入。实现方式：每次 filter 文本变化时用过滤结果重建 SelectList 实例（setFilter 不可用）。
+**FR-2.6 filter 实现（子串匹配，case-insensitive）**：二级菜单的 filter **自行实现**子串匹配（非 fuzzy，非 SelectList.setFilter）：对 `${provider}/${id} ${name}` 做小写子串包含判断。filter 文本变化时重新计算过滤列表，重置光标到 0。理由：SelectList.setFilter 用 `value.startsWith` 既非模糊也只匹配 value；本实现用子串匹配覆盖 id/name，足够实用且实现简单（YAGNI，不引入 fuzzy 库）。
 
-**FR-2.7 thinking level**：选中 model 后，若该 model 是 reasoning 模型且有 thinkingLevelMap，弹出 thinking level 子菜单（SelectList，含该模型支持的级别 off/minimal/low/medium/high/xhigh）。选完返回主视图；Esc 跳过 thinking（用 model 默认）。非 reasoning 模型跳过此步。
+**FR-2.7 thinking level（默认最高 + 可调）**：选中 model 后，若该 model 有可用 thinking level（通过 `availableThinkingLevels(model)` 从 `thinkingLevelMap` 提取，按 `THINKING_ORDER` 升序），弹出 thinking 子菜单：
+- 子菜单标题 `[category · provider/model] thinking level（默认最高）`。
+- 列出该模型实际支持的级别（不同模型支持的级别不同，由 `thinkingLevelMap` 决定）。
+- **默认光标在最高级别**（THINKING_ORDER 末位），符合「进来即最优」预期。
+- 方向键 ↑↓ 选；Enter 写入选定级别 + 返回主视图；Esc 用默认最高写入 + 返回主视图（即「跳过」= 用最高，不丢弃 override）。
+- 非 reasoning 模型或无可用级别（`availableThinkingLevels` 返回空）→ 跳过此步，直接写 override（thinkingLevel = undefined）。
 
 **FR-2.8 组件技术约束**：
-- 组件 extends `Container`，实现 `handleInput(keyData)` + `render(width)` + `dispose()`。
-- 用 `getKeybindings().matches(keyData, "tui.select.up/down/confirm/cancel")` 识别方向键/确认/取消。
-- 着色用 `ctx.theme`（真实环境）。
-- `done(result)` 通过 `custom()` 的 `done` 回调返回 `{ action, overrides }`。
+- 组件实现裸 `Component` 接口（`render(width): string[]` + `invalidate()` + `handleInput?(data)`），不 extends Container。
+- 用 `matchesKey(data, "up"/"down"/"enter"/"return"/"escape")`（pi-tui）+ `keybindings.matches(data, "tui.select.up/down/confirm/cancel")` 识别方向键/确认/取消（兼容 legacy/Kitty/modifyOtherKeys 全编码族）。
+- 着色用 factory 第 2 参 `theme`（duck-type 为 `ThemeLike`，有 `fg`/`bg`/`bold`/`underline`）。Pi Theme 无 `dim()` 方法——dim 文本一律 `fg("dim", ...)`。不调 `bg()`（input 区背景由 editorContainer 管）。
+- `done(result)` 通过 `custom()` 的 factory 第 4 参 `done` 回调返回 `{ action, overrides }`，Promise resolve 该结果。
+- 三视图状态机：`main` / `modelSelect` / `thinkingSelect`，`handleInput` 按 `view` 分派。
 
 ### FR-3: 会话级持久化
 
@@ -117,7 +124,7 @@ verdict: pass
 | ID | 变更 | 文件 |
 |----|------|------|
 | IC-1 | `subagent-tool.ts` 的 `execute` 补第 5 参数 `ctx: ExtensionContext` | `src/tools/subagent-tool.ts` |
-| IC-2 | 新写「category-confirm 自定义组件」（extends Container，handleInput 状态机：category 平铺主视图 + model 二级菜单 + 自定义 fuzzy filter + thinking 子菜单）。通过 `ctx.ui.custom(factory)` 渲染。**不直接复用** `editCategoryModel` | `src/tui/category-confirm.ts`（重写） |
+| IC-2 | 新写「category-confirm 自定义组件」（裸 Component 类，handleInput 三视图状态机：main 平铺 + modelSelect 二级菜单 + thinkingSelect 子菜单；filter 子串匹配；thinking 默认最高）。通过 `ctx.ui.custom(factory, {overlay:false})` 在 input 区渲染。**不直接复用** `editCategoryModel` | `src/tui/category-confirm.ts`（重写） |
 | IC-3 | `SessionModelState` 新增 `categoryConfirmed: boolean` 字段 | `src/types.ts` |
 | IC-4 | `serializeState` / `restoreState` / `createSessionModelState` 同步处理 `categoryConfirmed` | `src/state/session-model-state.ts` |
 | IC-5 | `SubagentRuntime` 新增「批量写 perCategory + 标记已确认（同一次 persistState）」方法 | `src/runtime.ts` |

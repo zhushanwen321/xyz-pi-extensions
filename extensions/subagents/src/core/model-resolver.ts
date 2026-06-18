@@ -163,16 +163,30 @@ function resolveThinkingLevel(
   model: { reasoning: boolean; thinkingLevelMap?: Record<string, unknown> },
   requested?: string,
 ): string | undefined {
-  if (!model.reasoning) return undefined;
-  const map = model.thinkingLevelMap;
-  if (!map) return requested; // 无 map 信息，透传请求值
-
-  const available = THINKING_ORDER.filter((lvl) => map[lvl] != null);
-  if (available.length === 0) return undefined;
-
-  if (requested && map[requested] != null) return requested;
+  const levels = availableThinkingLevels(model);
+  if (levels.length === 0) return model.reasoning ? requested : undefined;
+  if (requested && levels.includes(requested)) return requested;
   // requested 不可用 → 降级到最高可用
-  return available[available.length - 1];
+  return levels[levels.length - 1];
+}
+
+/**
+ * 列出 model 实际支持的 thinking level（升序）。
+ *
+ *   - model.reasoning === false → [] （不支持 thinking）
+ *   - 无 thinkingLevelMap → [] （无级别信息，调用方按需透传）
+ *   - 有 map → THINKING_ORDER 中 map[lvl] != null 的子集（保留升序）
+ *
+ * confirm 组件 / config-wizard 用它渲染「该模型可选的 thinking 级别」菜单，
+ * 取代写死的全集 THINKING_LEVELS（不同 model 支持的级别不同）。
+ */
+export function availableThinkingLevels(
+  model: { reasoning: boolean; thinkingLevelMap?: Record<string, unknown> },
+): readonly string[] {
+  if (!model.reasoning) return [];
+  const map = model.thinkingLevelMap;
+  if (!map) return [];
+  return THINKING_ORDER.filter((lvl) => map[lvl] != null);
 }
 
 /** 从 agentName + config 推断 category（agentCategoryOverrides 优先）。 */

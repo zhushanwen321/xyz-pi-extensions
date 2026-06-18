@@ -18,12 +18,13 @@ import type { AgentEventLogEntry, ExecutionStatus } from "../types.ts";
  * ThemeLike：TUI 语义 token 着色接口（duck-typed，兼容 Pi Theme）。
  *
  * 注意：Pi Theme **没有 `dim` 方法**——"dim" 是颜色 token，走 `fg("dim", text)`。
- * 故本接口只声明 fg/bg/bold，dim 文本一律 `fg("dim", ...)`。
+ * 故本接口只声明 fg/bg/bold/underline，dim 文本一律 `fg("dim", ...)`。
  */
 export interface ThemeLike {
   bg(color: string, text: string): string;
   fg(color: string, text: string): string;
   bold(text: string): string;
+  underline(text: string): string;
 }
 
 // ============================================================

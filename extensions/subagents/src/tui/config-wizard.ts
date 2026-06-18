@@ -9,7 +9,7 @@
 //
 // UI 接口（WizardUi）与 Pi ExtensionUIContext 的 select/input/notify 子集 duck-type 对齐（测试可 mock）。
 
-import type { ModelInfo, ModelRegistryLike } from "../core/model-resolver.ts";
+import { availableThinkingLevels, type ModelInfo, type ModelRegistryLike } from "../core/model-resolver.ts";
 import type { ModelConfigHub } from "../runtime/model-config-hub.ts";
 import type { CategoryDefinition, SubagentsGlobalConfig } from "../types.ts";
 
@@ -19,9 +19,6 @@ export interface WizardUi {
   input(title: string, placeholder?: string, opts?: { signal?: AbortSignal; timeout?: number }): Promise<string | undefined>;
   notify(message: string, type?: "info" | "warning" | "error"): void;
 }
-
-/** thinking level 全集（按 model.reasoning 过滤后供选择）。 */
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 
 /**
  * 运行配置向导。
@@ -123,8 +120,14 @@ async function editCategoryModel(
   const model = available[modelIdx]!;
   const modelStr = `${model.provider}/${model.id}`;
 
-  // thinkingLevel（按 model.reasoning 过滤）
-  const thinkingLevels = model.reasoning ? [...THINKING_LEVELS] : ["off"];
+  // thinkingLevel（按 model.thinkingLevelMap 过滤——不同 model 支持的级别不同）
+  const thinkingLevels = [...availableThinkingLevels(model)];
+  if (thinkingLevels.length === 0) {
+    // 非 reasoning 或无 map 信息：写 undefined，跳过选择
+    config.categories[catName] = { ...config.categories[catName]!, model: modelStr, thinkingLevel: undefined };
+    await saveAndNotify(ui, config, modelHub, `${catName} → ${modelStr} · thinking off`);
+    return;
+  }
   const current = config.categories[catName]!.thinkingLevel ?? "off";
   const thinkingChoice = await ui.select(
     `选择 thinking level（当前: ${current}）`,
@@ -186,12 +189,18 @@ async function editFallbackModel(
   const model = available[modelIdx]!;
   const modelStr = `${model.provider}/${model.id}`;
 
-  const thinkingLevels = model.reasoning ? [...THINKING_LEVELS] : ["off"];
-  const thinkingChoice = await ui.select("选择 fallback thinking level", thinkingLevels);
-  if (thinkingChoice === undefined) return;
+  // thinkingLevel（按 model.thinkingLevelMap 过滤）
+  const thinkingLevels = [...availableThinkingLevels(model)];
+  let thinkingLevel: string | undefined;
+  if (thinkingLevels.length > 0) {
+    const choice = await ui.select("选择 fallback thinking level", thinkingLevels);
+    if (choice === undefined) return;
+    thinkingLevel = choice;
+  }
+  // 无可用级别（非 reasoning / 无 map）→ thinkingLevel = undefined
 
-  config.fallback = { model: modelStr, thinkingLevel: thinkingChoice };
-  await saveAndNotify(ui, config, modelHub, `fallback → ${modelStr} · thinking ${thinkingChoice}`);
+  config.fallback = { model: modelStr, thinkingLevel };
+  await saveAndNotify(ui, config, modelHub, `fallback → ${modelStr} · thinking ${thinkingLevel ?? "off"}`);
 }
 
 // ============================================================
