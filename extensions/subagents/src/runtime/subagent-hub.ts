@@ -172,7 +172,7 @@ export class SubagentHub {
     // ── 4-7. sync 直接 await；background 包 detached 立即返回 id ──
     if (mode === "sync") {
       await this.runAndFinalize(record, opts, ctx, identity, signal, priority);
-      return { mode: "sync", record: snapshot(record) };
+      return { mode: "sync", record: snapshot(record), details: project(record) };
     }
 
     // background：立即返回 backgroundId，步骤 4-6 在 detached promise 里跑

@@ -254,7 +254,12 @@ export class SubagentResultComponent implements Component {
  * 静默期 seed 不变 → spinner 冻结 → 换取滚动体验。
  */
 export function detailsSeed(details: SubagentToolDetails): number {
-  return details.turns + details.totalTokens + details.elapsedSeconds + details.eventLog.length;
+  // 防御：details 可能是 RecordSnapshot（缺 elapsedSeconds），undefined 参与加法得 NaN
+  const turns = details.turns ?? 0;
+  const tokens = details.totalTokens ?? 0;
+  const elapsed = details.elapsedSeconds ?? 0;
+  const logLen = details.eventLog?.length ?? 0;
+  return turns + tokens + elapsed + logLen;
 }
 
 // ============================================================

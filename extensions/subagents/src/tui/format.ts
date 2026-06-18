@@ -110,6 +110,9 @@ export function statusGlyph(status: ExecutionStatus): { icon: string | undefined
       return { icon: "✗", color: "error" };
     case "cancelled":
       return { icon: "■", color: "muted" };
+    default:
+      // 防御：运行时 status 可能是意外值（SDK 投影异常/未来新增状态），兜底为 running 语义
+      return { icon: undefined, color: "accent" };
   }
 }
 
@@ -120,6 +123,8 @@ export function statusGlyph(status: ExecutionStatus): { icon: string | undefined
  * 静默期 seed 不变 → 冻结 → 换取滚动体验（修复 viewport 锚定 bug）。
  */
 export function spinnerGlyph(seed: number): string {
+  // 防御：seed 可能是 NaN（details 字段缺失时），回退首帧
+  if (!Number.isFinite(seed)) return RUNNING_FRAMES[0]!;
   return RUNNING_FRAMES[Math.abs(seed) % RUNNING_FRAMES.length]!;
 }
 

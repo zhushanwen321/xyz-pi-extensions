@@ -197,8 +197,10 @@ const executeSubagent: SubagentExecuteCb = async (
       details: { backgroundId: handle.backgroundId } } as unknown as void;
   }
 
+  // sync: details 用 project 投影的 SubagentToolDetails（含 elapsedSeconds/currentActivity），
+  //       而非 record snapshot（后者缺 TUI 渲染字段）。
   return { content: [{ type: "text", text: handle.record.result ?? "" }],
-    details: handle.record } as unknown as void;
+    details: handle.details } as unknown as void;
 };
 
 // 保留未使用的类型别名（CategoryConfirmResult 在 execute 实现中使用）

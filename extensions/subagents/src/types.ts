@@ -209,11 +209,12 @@ export interface ExecuteOptions {
 
 /**
  * execute 返回值。
- *   sync:    { mode:"sync", record } —— 调用方 await，record 已 settled。
+ *   sync:    { mode:"sync", record, details } —— 调用方 await，record 已 settled。
+ *            record 是只读快照（持久化/poll 用），details 是 TUI 渲染投影（含 elapsedSeconds/currentActivity）。
  *   background: { mode:"background", backgroundId } —— 立即返回。
  */
 export type ExecutionHandle =
-  | { mode: "sync"; record: RecordSnapshot }
+  | { mode: "sync"; record: RecordSnapshot; details: SubagentToolDetails }
   | { mode: "background"; backgroundId: string };
 
 /** poll(backgroundId) 返回。record 的只读视图。 */
