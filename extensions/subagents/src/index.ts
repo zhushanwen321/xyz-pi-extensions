@@ -27,15 +27,12 @@ import { SubagentsProgressWidget } from "./tui/progress-widget.ts";
 //   ║                                                                    ║
 //   ║  session_start(event, ctx):                                        ║
 //   ║    1. existing = getRuntime() ?? new SubagentRuntime({cwd,homeDir,agentDir})║
-//   ║    2. existing ? rt.reloadGlobalConfig() : setRuntime(rt)          ║
-//   ║    3. rt.injectModelRegistry(ctx.modelRegistry)                    ║
-//   ║    4. rt.injectPi(pi) + rt.setSessionId(ctx.sessionManager.getSessionId())║
-//   ║    5. rt.revive()  （/resume /fork 后复活 dispose 状态）           ║
-//   ║    6. ctx.hasUI → ctx.ui.setWidget("subagents-progress", factory,  ║
+//   ║    2. rt.initSession({ modelRegistry, pi, sessionId, entries })     ║
+//   ║       ← reloadConfig + inject + revive + restore 封装于此           ║
+//   ║    3. ctx.hasUI → ctx.ui.setWidget("subagents-progress", factory,  ║
 //   ║                                          { placement:"belowEditor"})║
-//   ║    7. rt.restoreFromEntries(ctx.sessionManager.getEntries())       ║
-//   ║    8. maybeCleanupExpiredSessionFiles(homeDir, cwd)                ║
-//   ║    9. pruneWorktrees(cwd)  ◄── 崩溃恢复兜底                        ║
+//   ║    4. maybeCleanupExpiredSessionFiles(homeDir, cwd)                ║
+//   ║    5. pruneWorktrees(cwd)  ◄── 崩溃恢复兜底                        ║
 //   ║                                                                    ║
 //   ║  session_shutdown(event):                                          ║
 //   ║    rt.dispose() + cleanupOrphanedWorktreeDirs()                    ║
@@ -53,12 +50,12 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
 
     const existing = getRuntime();
     const rt = existing ?? new SubagentRuntime({ cwd, homeDir, agentDir });
-    if (existing) rt.reloadGlobalConfig();
-    rt.injectModelRegistry(ctx.modelRegistry);
-    rt.injectPi(pi);
-    rt.setSessionId(ctx.sessionManager.getSessionId());
-    rt.revive();
-    rt.restoreFromEntries(ctx.sessionManager.getEntries() ?? []);
+    rt.initSession({
+      modelRegistry: ctx.modelRegistry,
+      pi,
+      sessionId: ctx.sessionManager.getSessionId(),
+      entries: ctx.sessionManager.getEntries() ?? [],
+    });
 
     if (ctx.hasUI) {
       ctx.ui.setWidget(
