@@ -76,6 +76,29 @@ export const SubagentParams = Type.Object({
 });
 
 // ============================================================
+// renderCall 预解析 helper
+// ============================================================
+
+/** 从 unknown args 安全提取 agent 名。 */
+function extractAgentNameFromArgs(args: unknown): string {
+  if (typeof args === "object" && args !== null && "agent" in args) {
+    const v = (args as { agent: unknown }).agent;
+    if (typeof v === "string" && v.length > 0) return v;
+  }
+  return "worker";
+}
+
+/** 从 unknown args 安全提取 model/thinkingLevel override（传给 resolveModel）。 */
+function extractModelOverride(args: unknown): { model?: string; thinkingLevel?: string } | undefined {
+  if (typeof args !== "object" || args === null) return undefined;
+  const a = args as { model?: unknown; thinkingLevel?: unknown };
+  const override: { model?: string; thinkingLevel?: string } = {};
+  if (typeof a.model === "string" && a.model.length > 0) override.model = a.model;
+  if (typeof a.thinkingLevel === "string" && a.thinkingLevel.length > 0) override.thinkingLevel = a.thinkingLevel;
+  return Object.keys(override).length > 0 ? override : undefined;
+}
+
+// ============================================================
 // 注册
 // ============================================================
 
@@ -97,8 +120,22 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 // 回调实现（模块级 const）
 // ============================================================
 
-const subagentRenderCall: SubagentRenderCallCb = (args, theme, ctx) =>
-  renderSubagentCall(args, theme, ctx);
+const subagentRenderCall: SubagentRenderCallCb = (args, theme, ctx) => {
+  // 预解析 model（同步）：renderCall 在 execute 前调用，但 model 解析是同步的
+  // （只读配置 + sessionState）。让标题行能显示 model/thinking，不必等 execute。
+  // hub 未就绪（session 未 init）或解析失败时降级——只显示 agent 名。
+  const agent = extractAgentNameFromArgs(args);
+  const override = extractModelOverride(args);
+  let resolved: { model: string; thinkingLevel?: string } | undefined;
+  try {
+    const hub = getHub();
+    const r = hub?.resolveModel(agent, override);
+    if (r) resolved = { model: r.model.id, thinkingLevel: r.thinkingLevel };
+  } catch {
+    // hub 未注册或 modelRegistry 未注入，降级
+  }
+  return renderSubagentCall(args, theme, ctx, resolved);
+};
 
 const subagentRenderResult: SubagentRenderResultCb = (result, options, theme, ctx) =>
   renderSubagentResult(result, options, theme, ctx);

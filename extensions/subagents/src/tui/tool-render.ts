@@ -36,6 +36,9 @@ import {
 /** message stream 每行的缩进前缀（2 空格 + ⎿ + 空格），dim 色。 */
 const STREAM_PREFIX = "  ⎿ ";
 
+/** footer 用的纯空格缩进（与 STREAM_PREFIX 等宽 4 列，但不带 ⎿）。 */
+const FOOTER_PREFIX = "    ";
+
 /** 压缩视图滚动区最多展示的 eventLog 条数（不含 currentActivity 行）。 */
 const COMPACT_SCROLL_LINES = 3;
 
@@ -62,20 +65,38 @@ export interface SubagentResultProps {
 // ============================================================
 
 /**
- * renderCall：tool 标题行（agent 名）。无状态。
+ * renderCall：tool 标题行（agent + model + thinking，不变信息）。
  *
- *   "subagent worker"（toolTitle 色 + accent 色 agent）
+ *   "subagent worker · glm-5.2 · thinking high"
+ *
+ * model/thinkingLevel 由调用方（subagent-tool.ts 的闭包）预解析后传入，
+ * 因为 renderCall 在 execute 前调用，但 model 解析是同步的（只读配置）。
+ * resolved 缺失时（hub 未就绪）降级为只显示 agent 名。
  *
  * 返回 `new Text(line, 0, 0)`——paddingX=0 paddingY=0，背景交给 contentBox。
- * 参考 pi-subagents extension/index.ts:450-454 single 分支。
  */
-export function renderSubagentCall(args: unknown, theme: Theme, _context: RenderContext): Component {
+export function renderSubagentCall(
+  args: unknown,
+  theme: Theme,
+  _context: RenderContext,
+  resolved?: { model: string; thinkingLevel?: string },
+): Component {
   const t = theme as ThemeLike;
   const agent = extractAgentName(args);
-  return new Text(
-    `${t.fg("toolTitle", t.bold("subagent "))}${t.fg("accent", agent)}`,
-    0, 0,
-  );
+  const parts = [`${t.fg("toolTitle", t.bold("subagent "))}${t.fg("accent", agent)}`];
+
+  // model + thinking（dim 色），预解析有值才显示
+  if (resolved) {
+    const modelBase = resolved.model.lastIndexOf("/") !== -1
+      ? resolved.model.slice(resolved.model.lastIndexOf("/") + 1)
+      : resolved.model;
+    const meta = resolved.thinkingLevel
+      ? `${modelBase} · thinking ${resolved.thinkingLevel}`
+      : modelBase;
+    parts.push(t.fg("dim", ` (${meta})`));
+  }
+
+  return new Text(parts.join(""), 0, 0);
 }
 
 // ============================================================
@@ -171,43 +192,38 @@ export class SubagentResultComponent implements Component {
     const d = this.details;
     const theme = this.theme;
 
-    // 第 1 行：状态行（glyph + agent + meta + stats）
+    // 第 1 行：状态行（glyph + stats，agent/model 已上移标题行）
     lines.push(truncLine(buildStatusLine(d, theme), width));
 
+    // 滚动区：最近 N 条 eventLog（不含 turn_end），running 和 terminal 态统一展示。
+    // 新事件进来 → 滚动区尾部追加、旧的上滚（渲染层每次只取最近 N 条）。
+    const scrollEntries = d.eventLog.filter((e) => e.type !== "turn_end");
+
+    // running 态：currentActivity 作为滚动区首行（实时"正在做什么"锚点），
+    // 并与 eventLog 末条去重（避免两行近乎相同）。
+    if (d.status === "running" && d.currentActivity) {
+      const lastEntry = scrollEntries[scrollEntries.length - 1];
+      const sameAsLast = lastEntry !== undefined && activityMatchesEntry(d.currentActivity, lastEntry);
+      if (!sameAsLast) {
+        lines.push(truncLine(buildActivityLine(d.currentActivity, theme), width));
+      }
+    }
+
+    // 最近 COMPACT_SCROLL_LINES 条 eventLog
+    for (const entry of scrollEntries.slice(-COMPACT_SCROLL_LINES)) {
+      lines.push(truncLine(`${theme.fg("dim", STREAM_PREFIX)}${formatEventLine(entry, theme)}`, width));
+    }
+
+    // running 态 footer：Ctrl+O 提示（纯空格缩进，不带 ⎿）
     if (d.status === "running") {
-      // message stream：currentActivity（若有）+ 最近 ≤3 条 eventLog + footer
-      const scrollEntries = d.eventLog.filter((e) => e.type !== "turn_end");
+      lines.push(truncLine(`${theme.fg("dim", FOOTER_PREFIX)}${theme.fg("accent", "Press Ctrl+O for live detail")}`, width));
+    }
 
-      // currentActivity 与 eventLog 末条去重（避免两行近乎相同）
-      let activityShown = false;
-      if (d.currentActivity) {
-        const lastEntry = scrollEntries[scrollEntries.length - 1];
-        const sameAsLast =
-          lastEntry !== undefined &&
-          activityMatchesEntry(d.currentActivity, lastEntry);
-        if (!sameAsLast) {
-          lines.push(truncLine(buildActivityLine(d.currentActivity, theme), width));
-          activityShown = true;
-        }
-      }
-
-      // 最近 COMPACT_SCROLL_LINES 条（若 activity 已占首行，取最后 N 条；末条若与 activity 重复则跳过）
-      const tail = scrollEntries.slice(-COMPACT_SCROLL_LINES);
-      for (const entry of tail) {
-        // activity 是末条的重复时，跳过末条
-        if (activityShown && entry === scrollEntries[scrollEntries.length - 1] && d.currentActivity) {
-          if (activityMatchesEntry(d.currentActivity, entry)) continue;
-        }
-        lines.push(truncLine(`${theme.fg("dim",STREAM_PREFIX)}${formatEventLine(entry, theme)}`, width));
-      }
-
-      // footer：Ctrl+O 提示（accent 色）
-      lines.push(truncLine(`${theme.fg("dim",STREAM_PREFIX)}${theme.fg("accent", "Press Ctrl+O for live detail")}`, width));
-    } else {
-      // terminal 态（done/failed/cancelled）：1 行交付物
+    // terminal 态：交付物行（done=result首行 / failed=Error:... / cancelled=Cancelled）
+    if (d.status !== "running") {
       const delivery = buildDeliveryLine(d, theme);
       if (delivery) {
-        lines.push(truncLine(`${theme.fg("dim",STREAM_PREFIX)}${delivery}`, width));
+        lines.push(truncLine(`${theme.fg("dim", STREAM_PREFIX)}${delivery}`, width));
       }
     }
 
@@ -281,10 +297,9 @@ function extractAgentName(args: unknown): string {
 }
 
 /**
- * 构建状态行：`{glyph} {bold(agent)}{meta}{stats}`（tui-conversation.md §1）。
+ * 构建状态行：`{glyph} {stats}`（agent/model 已上移标题行，由 renderCall 预解析）。
  *
  *   glyph: running → seed-frame spinner（accent）；done → ✓（success）；failed → ✗（error）；cancelled → ■（muted）
- *   meta:  dim `(model · thinking level)`，无 thinking 则 `(model)`，无 model 省略
  *   stats: dim `· N turns · Nk · Ns`，各字段 > 0 才显示（全零省略）
  */
 function buildStatusLine(d: SubagentToolDetails, theme: ThemeLike): string {
@@ -292,32 +307,11 @@ function buildStatusLine(d: SubagentToolDetails, theme: ThemeLike): string {
   const icon = glyph.icon ?? spinnerGlyph(detailsSeed(d));
   const glyphStr = theme.fg(glyph.color, icon);
 
-  const agentStr = theme.bold(d.agent);
-
-  // meta：(model · thinking level)，dim
-  const metaStr = buildMetaBadge(d, theme);
-
   // stats：· N turns · Nk · Ns，零值隐藏
   const statsStr = buildStats(d, theme);
   const statsPrefix = statsStr ? ` ${theme.fg("dim", "·")} ${statsStr}` : "";
 
-  return `${glyphStr} ${agentStr}${metaStr}${statsPrefix}`;
-}
-
-/**
- * 构建 meta 徽章：dim `(model · thinking level)`。
- * model 取 basename（lastIndexOf("/") 后），更简洁。
- * 无 thinking → `(model)`；无 model → 省略括号。
- */
-function buildMetaBadge(d: SubagentToolDetails, theme: ThemeLike): string {
-  if (!d.model) return "";
-  const modelBase = d.model.lastIndexOf("/") !== -1
-    ? d.model.slice(d.model.lastIndexOf("/") + 1)
-    : d.model;
-  const inner = d.thinkingLevel
-    ? `${modelBase} · thinking ${d.thinkingLevel}`
-    : modelBase;
-  return theme.fg("dim", ` (${inner})`);
+  return `${glyphStr}${statsPrefix}`;
 }
 
 /**

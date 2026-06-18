@@ -141,6 +141,19 @@ export class SubagentHub {
   // ── 执行（subagent-tool 调）────────────────────────────
 
   /**
+   * 预解析 model（renderCall 标题行用，同步）。
+   * 代理 modelHub.resolveModel——renderCall 在 execute 前调用，但 model 解析是同步的，
+   * 让标题行能提前显示 model/thinking，不必等 execute。
+   * hub 未就绪时抛（调用方 catch 降级）。
+   */
+  resolveModel(
+    agent: string,
+    override?: { model?: string; thinkingLevel?: string },
+  ): ResolvedModel {
+    return this.modelHub.resolveModel(agent, override);
+  }
+
+  /**
    * 统一执行入口。sync/background 共用，mode 由 opts.wait + agentConfig.defaultBackground 判定。
    * 内部完成：mode 判定 → 确认（经回调）→ 模型解析 → 执行 → 收尾。
    *
