@@ -16,7 +16,7 @@ import { Type } from "@sinclair/typebox";
 
 import { getHub } from "../runtime/subagent-hub.ts";
 import { type RenderContext,renderSubagentCall, renderSubagentResult } from "../tui/tool-render.ts";
-import type { CategoryConfirmResult, ExecuteOptions, ExecutionMode, SubagentToolDetails } from "../types.ts";
+import type { CategoryConfirmResult, ExecuteOptions, SubagentToolDetails } from "../types.ts";
 
 // ============================================================
 // 回调类型（抽 alias 绕 registerTool(unknown) 的 TS2307 误报）
@@ -171,23 +171,11 @@ const executeSubagent: SubagentExecuteCb = async (
   // ── task 必填 ──
   if (!params.task) throw new Error("task is required");
 
-  // ── agent 存在性校验（fail-fast）──
-  const agentName = params.agent ?? "default";
-  hub.assertAgentExists(agentName);
-
-  // ── mode 判定 ──
-  const agentConfig = hub.getAgentConfig(agentName);
-  const mode: ExecutionMode = params.wait === false
-    ? "background"
-    : agentConfig?.defaultBackground === true && params.wait === undefined
-      ? "background"
-      : "sync";
-
-  // ── 调 hub.execute（统一入口）──
+  // ── 调 hub.execute（mode 判定 + agent 校验 + 确认 + 执行全在 hub 内部）──
   const handle = await hub.execute({
     task: params.task,
-    agent: agentName,
-    mode,
+    agent: params.agent,
+    wait: params.wait,
     model: params.model,
     thinkingLevel: params.thinkingLevel as ExecuteOptions["thinkingLevel"],
     skillPath: params.skillPath,
@@ -213,5 +201,5 @@ const executeSubagent: SubagentExecuteCb = async (
     details: handle.record } as unknown as void;
 };
 
-// 保留未使用的类型别名（CategoryConfirmResult/ExecutionMode 在 execute 实现中使用）
-export type { CategoryConfirmResult, ExecutionMode };
+// 保留未使用的类型别名（CategoryConfirmResult 在 execute 实现中使用）
+export type { CategoryConfirmResult };

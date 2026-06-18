@@ -114,17 +114,17 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 | `turn-limiter.ts` | soft/hard turn 限制器（steer + abort） | ⬜ |
 | `worktree.ts` | isolation:worktree 隔离执行 + commit/preserve | ⬜ |
 
-### Runtime 层（8）
+### Runtime 层（7）
 
 > 按**领域**拆为双 Hub：ModelConfigHub（配置/模型解析域）+ SubagentHub（执行/记录/通知域）。
 > 两个 Hub 平级——SubagentHub 持有 ModelConfigHub 引用（execute 内部调 resolveModel），
 > 但 command/wizard 直接用 ModelConfigHub（不经 SubagentHub，配置操作不碰执行）。
+> executor 逻辑已合并进 subagent-hub.ts（不独立文件——无独立状态/生命周期）。
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
 | `model-config-hub.ts` | 配置/模型域 Hub：globalConfig + sessionState + agentRegistry + modelRegistry + resolveModel（含确认回调） | ⬜ |
-| `subagent-hub.ts` | 执行/记录/通知域 Hub：execute 委托 + query/cancel + 组件持有（pool/store/history/notifier） | ⬜ |
-| `executor.ts` | 统一执行入口，sync/bg 唯一分叉点；经 Hub 行为方法操作组件（不越级访问） | ⬜ |
+| `subagent-hub.ts` | 执行/记录/通知域 Hub：execute 编排（含原 executor 逻辑）+ query/cancel + 组件持有（pool/store/history/notifier，全 private） | ⬜ |
 | `record-store.ts` | Record 三 map 容器（live/completed/bg）+ 四源合并 | ⬜ |
 | `notifier.ts` | background 完成回注主对话（合并窗口 + 去重） | ⬜ |
 | `history-store.ts` | 跨 session 执行记录持久化（jsonl + GC） | ⬜ |
@@ -170,6 +170,93 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 支持多次 prompt/steer/abort 的长生命周期 session，作为 `session-runner` 的变体实现：复用 `createAndConfigureSession`，仅生命周期管理不同（懒创建 + pendingSteers 缓存 + activePrompt 互斥）。
 → 详见 [session-runner.md](./session-runner.md) §7 ManagedSession 变体
+
+## 6. 架构决策记录
+
+记录骨架深化过程中讨论并落地的关键架构决策。每条包含"问题 → 推理 → 决策 → 代价"。
+
+### 6.1 为什么拆双 Hub（ModelConfigHub + SubagentHub）
+
+**问题**：runtime.ts（361 行）同时承担配置管理、模型解析、执行编排、状态容器、生命周期五种职责，是典型的"上帝类"。
+
+**推理**：用"变化轴"分析——哪些东西会**一起变**？
+- globalConfig/sessionState/agentRegistry/modelRegistry → 配置变化（用户改 config.json、注入新 modelRegistry）
+- pool/store/history/notifier → 执行状态变化（并发槽分配、record 生命周期、历史落盘）
+
+这两组东西**从不一起变**。command/wizard 只碰配置，不碰执行；executor 只碰执行组件，不碰配置。是**正交的关注点**。
+
+进一步验证：`/subagents config` wizard 接收 `globalConfig` 作为函数参数，修改后调 `saveGlobalConfig()`——它**根本不 import runtime.ts**，只碰 config 函数。这证明配置域和执行域已经是解耦的，runtime.ts 只是强行把它们塞进同一个类。
+
+**决策**：按领域拆为两个平级 Hub：
+- ModelConfigHub（配置/模型域）：globalConfig + sessionState + agentRegistry + modelRegistry + resolveModel
+- SubagentHub（执行/记录/通知域）：pool + store + history + notifier + execute/query/cancel
+
+**代价**：index.ts 从一个 `rt.initSession(...)` 变成两个 init 调用（modelHub.initModel + hub.initSession）。但这两个调用的时序是确定的（先配置后执行），index.ts 作为装配层承担这个协调是合理的。
+
+### 6.2 为什么 executor 合并进 SubagentHub（不独立文件）
+
+**问题**：executor 原本是独立文件 `executor.ts`，访问 SubagentHub 的 pool/store/notifier 需要这些组件可跨文件访问。TS 的 `private` 只在类内有效——跨文件的模块级函数访问不到 private 成员。这逼出了 5 个 public 行为方法（acquireSlot/releaseSlot/registerRecord/finalizeRecord/notifyComplete），名义上是"契约抽象"，实际是实现约束倒逼的妥协。
+
+**推理**：executor 不是一个独立概念域——它是 `SubagentHub.execute()` 的编排逻辑，没有独立状态、没有独立生命周期、没有独立调用方（只有 SubagentHub.execute 调它）。独立文件带来的不是模块化，而是封装漏洞：为了让 executor 能操作组件，不得不把本该 private 的行为方法升为 public。
+
+合并进 SubagentHub.ts 后，行为方法自然降为 private——TS 的 `private` 在同类内生效，executor 逻辑作为 SubagentHub 的 private 方法访问组件，无需任何妥协。
+
+**决策**：executor 逻辑合并进 `subagent-hub.ts`，作为 SubagentHub 的 private 方法（resolveIdentity/createRecordForMode/runAndFinalize/kickOffBackground/cancelBackground/finalizeRecord/notifyComplete/onEventThrottled）。删除 `executor.ts` 文件。组件（pool/store/history/notifier）全 private，编排方法全 private，SubagentHub 对外只有业务方法。
+
+**代价**：subagent-hub.ts 从 ~240 行增到 ~400 行。但 SubagentHub 本来就是这个文件的主角，400 行可接受——它现在完整表达了"执行编排"这个领域。
+
+### 6.3 为什么用 ensureConfirmed + ConfirmCancelledError
+
+**问题**：category 确认是 async（UI 交互），但 `resolveModel` 是 sync（纯 5 级 fallback）。async 函数内调 sync 函数没问题，但 sync 函数内**触发 async 确认**再继续——怎么表达？
+
+**三个方案对比**：
+- A. `resolveModel` 自己 await 确认回调 → 但它变成 async，调用链全部跟着 async
+- B. 返回 `{needsConfirm: true, input}` 信号 → 调用方要先判 `needsConfirm`，再 await 确认，再重新调 resolveModel → 两次调用，重复解析
+- C. 确认逻辑提到 execute 编排层 → resolveModel 保持纯 sync，execute 是 async 天然能 await
+
+**决策**：方案 C + 信号类。`ensureConfirmed(onConfirm)` 是 async（可 await），`resolveModel` 保持 sync（纯解析）。execute 内部：
+```
+await modelHub.ensureConfirmed(opts.onConfirmCategory)  // 首次确认
+const resolved = modelHub.resolveModel(agent, override)  // 纯解析
+```
+
+**代价**：`ConfirmCancelledError` 用异常做控制流——但这是"用户意图中断"（非程序错误），在 TS 生态里用 Error class 表达是常见模式。catch 后不执行子代理，语义清晰。
+
+### 6.4 双 Hub 依赖方向 + mode 判定归属
+
+```
+SubagentHub ──引用──→ ModelConfigHub（单向）
+                         ↑
+SubagentHub 内部调：      │
+  resolveMode()          │  → modelHub.getAgentConfig()（判 defaultBackground）
+  resolveIdentity()      │  → modelHub.ensureConfirmed() + resolveModel()
+  buildSessionRunnerContext() │ → modelHub.getModelRegistry()/getAgentDir()/getGlobalConfigHomeDir()
+  collectRecords()       │  → modelHub.sessionId（history 过滤）
+```
+
+**铁律**：SubagentHub → ModelConfigHub 单向引用，**禁止反向**。ModelConfigHub 不知道 SubagentHub 的存在。tool/command 层不穿透 SubagentHub 调 ModelConfigHub——tool 只传 `wait` 意图，mode 判定（wait + defaultBackground → ExecutionMode）完全内化在 SubagentHub.resolveMode()。
+
+**mode 判定归属**（从 tool 层移入 Hub）：tool 层不再预判 mode（不调 getAgentConfig/assertAgentExists），只传 `wait?: boolean`。SubagentHub.resolveMode 按 `wait > agentConfig.defaultBackground > sync` 判定。这是业务规则，归 Hub，不归 tool。
+
+**初始化时序**：index.ts session_start 时先 `modelHub.initModel(...)` 再 `hub.initSession(...)`——因为 SubagentHub 构造时需要 `modelHub.getGlobalConfig().maxConcurrent`（初始化 pool）。如果反序，pool 拿不到 maxConcurrent。
+
+### 6.5 深拷贝访问器的 trade-off
+
+**问题**：globalConfig / sessionState 是配置数据对象，wizard 需要读改。暴露 public 字段（哪怕 readonly）等于宣布外部可依赖其结构——改内部形状时所有调用方跟着改。
+
+**决策**：`getGlobalConfig()` / `getSessionState()` 返回 `structuredClone()` 深拷贝。调用方拿到的是**副本**，改不影响 Hub 内部。改完后调 `hub.saveGlobalConfig(config)` 写回。
+
+**代价**：每次读配置多一次结构化克隆。但配置对象很小（几十个字段），且只在 wizard / command 调用时读——非热路径。性能影响可忽略。
+
+**替代方案**（未采用）：行为方法（`toggleYolo()` / `setCategoryModel()` 等）替代直接改字段——更安全但更啰嗦。wizard 的配置修改是开放集（用户可能改 categories/maxConcurrent/fallback 等任意字段），行为方法无法穷举。深拷贝 + saveGlobalConfig 是更灵活的方案。
+
+### 6.6 getGlobalConfigHomeDir / getAgentDir 是否该暴露
+
+**问题**：SubagentHub 构造 SessionRunnerContext 需要 `homeDir` 和 `agentDir`，这两个值存在 ModelConfigHub 里。暴露这两个 getter 是否破坏封装？
+
+**推理**：这两个值是**构造参数的只读透传**（init 时传入，永不改变），不是内部状态。暴露它们不比把它们存到 SubagentHub 自己的字段里更好或更差——但存在 ModelConfigHub 里避免了重复存储。如果 SubagentHub 也存一份 homeDir/agentDir，两个 Hub 就有**同一数据的两份拷贝**，改 init 参数时要同步两处——这是更差的设计。
+
+**决策**：暴露只读 getter（`getGlobalConfigHomeDir()` / `getAgentDir()`）。它们是**数据归属**的表达——homeDir/agentDir 归配置域（agent 的 .md 在 agentDir 下扫描），执行域只是借用。
 
 ## 相关文档
 

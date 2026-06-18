@@ -3,28 +3,39 @@
 // 执行编排 + 记录 + 通知领域 Hub。"跑一次子代理 + 管理执行状态"。
 //
 // 与 ModelConfigHub（配置/模型解析域）正交——本 Hub 持有其引用但不暴露给外部。
-// executor 经 Hub 的行为方法（acquireSlot/finalizeRecord 等）操作内部组件，
-// 不越级访问 pool/store/notifier/history。
+// executor 逻辑已合并进本文件——它是 SubagentHub.execute 的编排逻辑，
+// 没有独立状态/生命周期，不需要独立文件。合并后行为方法自然 private。
 //
 // 上游：subagent-tool（execute/query/cancel）、TUI（onChange/listRunning/collectRecords）。
 // session_start 时经 initSession 注入 pi；modelRegistry/entries 归 ModelConfigHub.initModel。
 
 import { type ConcurrencyPool,DefaultConcurrencyPool } from "../core/concurrency-pool.ts";
-import { completeRecord, project, snapshot, toPersisted } from "../core/execution-record.ts";
+import {
+  completeRecord,
+  createRecord,
+  project,
+  snapshot,
+  toPersisted,
+  tryTransition,
+} from "../core/execution-record.ts";
+import type { AgentConfig } from "../core/model-resolver.ts";
 import type { SdkLike } from "../core/session-factory.ts";
-import type { SessionRunnerContext } from "../core/session-runner.ts";
+import { run, type SessionRunnerContext } from "../core/session-runner.ts";
 import type {
+  AgentEvent,
   AgentResult,
+  ExecuteOptions,
   ExecutionHandle,
+  ExecutionMode,
   ExecutionRecord,
   QueryResult,
   RecordSnapshot,
+  ResolvedModel,
   SubagentRecord,
+  SubagentToolDetails,
 } from "../types.ts";
-import type { ExecuteOptions } from "../types.ts";
-import { cancelBackground,execute } from "./executor.ts";
 import { HistoryStore } from "./history-store.ts";
-import type { ModelConfigHub } from "./model-config-hub.ts";
+import type { ConfirmCategoryCallback, ModelConfigHub } from "./model-config-hub.ts";
 import type { BgNotifyRecord } from "./notifier.ts";
 import { BgNotifier } from "./notifier.ts";
 import { RecordStore } from "./record-store.ts";
@@ -52,6 +63,27 @@ export interface HubSessionInit {
   sessionId: string;
 }
 
+/** background 优先级（低，让步）；sync 优先级（高，抢占）。 */
+const PRIORITY_BACKGROUND = 1000;
+const PRIORITY_SYNC = 0;
+
+/** 触发 onUpdate 的事件类型（streaming delta 不触发，避免每 token 刷新）。 */
+const TRIGGERING_EVENT_TYPES = new Set<AgentEvent["type"]>([
+  "tool_start",
+  "tool_end",
+  "turn_end",
+  "message_end",
+  "error",
+  "compaction",
+]);
+
+/** resolveIdentity 的产物——一次确定、写入 record 后不再变。 */
+interface ResolvedIdentity {
+  agent: string;
+  agentConfig: AgentConfig | undefined;
+  resolved: ResolvedModel;
+}
+
 /**
  * 执行编排 Hub。进程级单例。
  *
@@ -75,6 +107,7 @@ export class SubagentHub {
   private pi: PiLike | null = null;
   private sdk: SdkLike | null = null;
   private _disposed = false;
+  private _seq = 0;
 
   constructor(init: SubagentHubInit) {
     this.cwd = init.cwd;
@@ -108,13 +141,43 @@ export class SubagentHub {
   // ── 执行（subagent-tool 调）────────────────────────────
 
   /**
-   * 统一执行入口。sync/background 共用，mode 在 ExecuteOptions 决定。
-   * 内部完成：确认（经 opts.onConfirmCategory）→ 模型解析 → executor 执行 → 收尾。
+   * 统一执行入口。sync/background 共用，mode 由 opts.wait + agentConfig.defaultBackground 判定。
+   * 内部完成：mode 判定 → 确认（经回调）→ 模型解析 → 执行 → 收尾。
+   *
+   * mode 判定规则（内化在 Hub，不暴露给 tool 层）：
+   *   wait === false → background（用户显式要求异步）
+   *   wait === true → sync（用户显式要求同步）
+   *   wait === undefined + agentConfig.defaultBackground === true → background
+   *   否则 → sync
    */
   async execute(opts: ExecuteOptions): Promise<ExecutionHandle> {
     this.assertReady();
+
+    // mode 判定（业务规则归 Hub，tool 层只传 wait 意图）
+    const mode = this.resolveMode(opts);
     const ctx = await this.buildSessionRunnerContext();
-    return execute(opts, this, this.modelHub, ctx);
+
+    // ── 1. IDENTITY 解析（确认 → agentConfig → resolveModel）──
+    const identity = await this.resolveIdentity(opts);
+
+    // ── 2. RECORD 创建 + 注册 ──
+    const record = this.createRecordForMode(identity, opts, mode);
+
+    // ── 3. MODE 分叉：signal/priority（仅此 2 处即时差异）──
+    const signal = mode === "background"
+      ? record.controller!.signal
+      : opts.signal;
+    const priority = mode === "background" ? PRIORITY_BACKGROUND : PRIORITY_SYNC;
+
+    // ── 4-7. sync 直接 await；background 包 detached 立即返回 id ──
+    if (mode === "sync") {
+      await this.runAndFinalize(record, opts, ctx, identity, signal, priority);
+      return { mode: "sync", record: snapshot(record) };
+    }
+
+    // background：立即返回 backgroundId，步骤 4-6 在 detached promise 里跑
+    this.kickOffBackground(record, opts, ctx, identity, signal, priority);
+    return { mode: "background", backgroundId: record.id };
   }
 
   /** poll(backgroundId)：查 record 并投影为 QueryResult。不存在 throw。 */
@@ -130,7 +193,7 @@ export class SubagentHub {
     this.assertReady();
     const record = this.store.getMutable(id);
     if (!record) return false;
-    return cancelBackground(record, this);
+    return this.cancelBackground(record);
   }
 
   // ── 状态查询（TUI 调）──────────────────────────────────
@@ -150,40 +213,157 @@ export class SubagentHub {
     return this.store.collectRecords(limit, this.modelHub.sessionId);
   }
 
-  // ── modelHub 委托（tool/command 层调）──────────────────────
+  // ── 执行内部：mode 判定 + 身份解析 + record 创建 ──────────
 
-  /** 查询 agent 配置（tool 层判 defaultBackground）。 */
-  getAgentConfig(name?: string) {
-    return this.modelHub.getAgentConfig(name);
+  /** mode 业务规则：wait 显式 > agentConfig.defaultBackground > sync 兜底。 */
+  private resolveMode(opts: ExecuteOptions): ExecutionMode {
+    if (opts.wait === false) return "background";
+    if (opts.wait === true) return "sync";
+    // wait === undefined：看 agent 的 defaultBackground
+    const agentConfig = this.modelHub.getAgentConfig(opts.agent);
+    if (agentConfig?.defaultBackground === true) return "background";
+    return "sync";
   }
 
-  /** 校验 agent 名存在（tool 层 fail-fast）。 */
-  assertAgentExists(name?: string): void {
-    this.modelHub.assertAgentExists(name);
+  /** 步骤 1：身份解析。确认（经回调）→ agentConfig → resolveModel。 */
+  private async resolveIdentity(opts: ExecuteOptions): Promise<ResolvedIdentity> {
+    // 首次 category 确认（已确认则跳过；无回调则 headless 跳过）
+    await this.modelHub.ensureConfirmed(
+      opts.onConfirmCategory
+        ? (opts.onConfirmCategory as ConfirmCategoryCallback)
+        : undefined,
+    );
+
+    // agent 名 + 配置
+    const agent = opts.agent ?? "default";
+    const agentConfig = this.modelHub.getAgentConfig(agent);
+
+    // 模型解析（5 级 fallback，含确认后的 sessionState）
+    const resolved = this.modelHub.resolveModel(agent, {
+      model: opts.model,
+      thinkingLevel: opts.thinkingLevel,
+    });
+
+    return { agent, agentConfig, resolved };
   }
 
-  // ── executor 行为方法（executor 经这些操作组件，不越级访问）──
+  /** 步骤 2：按 mode 生成 id + controller，创建 record 并注册。 */
+  private createRecordForMode(
+    identity: ResolvedIdentity,
+    opts: ExecuteOptions,
+    mode: ExecutionMode,
+  ): ExecutionRecord {
+    const seq = ++this._seq;
+    const id = mode === "background"
+      ? `bg-${seq}-${Date.now()}`
+      : `run-${seq}`;
+    const controller = mode === "background" ? new AbortController() : undefined;
 
-  /** 抢并发槽（executor.runAndFinalize 调）。 */
-  acquireSlot(priority: number): Promise<void> {
-    return this.pool.acquire(priority);
-  }
+    const record = createRecord(id, {
+      agent: identity.agent,
+      model: identity.resolved.model.id,
+      thinkingLevel: identity.resolved.thinkingLevel,
+      mode,
+      task: opts.task,
+      startedAt: Date.now(),
+      controller,
+    });
 
-  /** 释放并发槽（executor.runAndFinalize finally 调）。 */
-  releaseSlot(): void {
-    this.pool.release();
-  }
-
-  /** 注册新 record（executor.createRecordForMode 调）。 */
-  registerRecord(record: ExecutionRecord): void {
     this.store.register(record);
+    return record;
   }
 
-  /**
-   * 收尾三件套：completeRecord + store.archive + history.append。
-   * executor.runAndFinalize 抢到 CAS 后调。
-   */
-  async finalizeRecord(
+  // ── 执行内部：run + finalize（sync/bg 共用）──────────────
+
+  /** 共享的"干活 + 收尾"——sync 直接 await，background 在 detached 里调。 */
+  private async runAndFinalize(
+    record: ExecutionRecord,
+    opts: ExecuteOptions,
+    ctx: SessionRunnerContext,
+    identity: ResolvedIdentity,
+    signal: AbortSignal | undefined,
+    priority: number,
+  ): Promise<AgentResult> {
+    await this.pool.acquire(priority);
+    // onEvent 包装：AgentEvent → onUpdate(project(record)) 回流调用方
+    const onEvent = opts.onUpdate
+      ? (event: AgentEvent): void => this.onEventThrottled(record, event, opts.onUpdate!)
+      : undefined;
+
+    let result: AgentResult;
+    try {
+      result = await run(record, opts.task, {
+        resolved: identity.resolved,
+        agentConfig: identity.agentConfig,
+        appendSystemPrompt: opts.appendSystemPrompt,
+        skillPath: opts.skillPath,
+        schema: opts.schema,
+        maxTurns: opts.maxTurns,
+        graceTurns: opts.graceTurns,
+        signal,
+        onEvent,
+      }, ctx);
+    } finally {
+      this.pool.release();
+    }
+
+    // status 唯一判定点：success ? done : (aborted ? cancelled : failed)
+    const status: "done" | "failed" | "cancelled" = result.success
+      ? "done"
+      : signal?.aborted ? "cancelled" : "failed";
+
+    // CAS 抢锁：抢到则完整收尾；没抢到（cancel 已先设 cancelled）则跳过
+    if (tryTransition(record, status)) {
+      await this.finalizeRecord(record, result, status);
+    }
+    return result;
+  }
+
+  /** background 的步骤 4-6：包进 detached promise（不 await），execute 立即返回。 */
+  private kickOffBackground(
+    record: ExecutionRecord,
+    opts: ExecuteOptions,
+    ctx: SessionRunnerContext,
+    identity: ResolvedIdentity,
+    signal: AbortSignal | undefined,
+    priority: number,
+  ): void {
+    void this.runAndFinalize(record, opts, ctx, identity, signal, priority)
+      .then(() => {
+        // background 回注：仅当本路径抢到 CAS（status 已转 done/failed）才 notify。
+        // cancel 抢先时 status=cancelled，cancelBackground 自己 notify，此处跳过。
+        if (record.status !== "cancelled") {
+          this.notifyComplete(record);
+        }
+      })
+      .catch(() => {
+        // detached 吞错：runAndFinalize 内部已 finalize record，不外抛
+      });
+  }
+
+  /** 取消 background record。CAS 抢锁——抢到则 notify，不写 history。 */
+  private cancelBackground(record: ExecutionRecord): boolean {
+    record.controller?.abort();
+    if (!tryTransition(record, "cancelled")) {
+      return false; // detached 已 finalize，cancel 来晚了
+    }
+    // 抢到锁：completeRecord（用空 result 填 cancelled）+ notify。不走 finalizeRecord（cancel 不写 history）。
+    const cancelledResult: AgentResult = {
+      text: "",
+      turns: record.turns,
+      durationMs: 0,
+      success: false,
+      error: "cancelled by user",
+      sessionId: record.id,
+      toolCalls: [],
+    };
+    completeRecord(record, cancelledResult, "cancelled");
+    this.notifyComplete(record);
+    return true;
+  }
+
+  /** 收尾三件套：completeRecord + store.archive + history.append。 */
+  private async finalizeRecord(
     record: ExecutionRecord,
     result: AgentResult,
     status: "done" | "failed" | "cancelled",
@@ -193,12 +373,20 @@ export class SubagentHub {
     await this.history.append(toPersisted(record, this.cwd));
   }
 
-  /**
-   * background 完成回注（executor.kickOffBackground / cancelBackground 调）。
-   * 内部做 record → BgNotifyRecord 映射，executor 不接触映射细节。
-   */
-  notifyComplete(record: ExecutionRecord): void {
+  /** background 完成回注（record → BgNotifyRecord 映射 + notifier.notify）。 */
+  private notifyComplete(record: ExecutionRecord): void {
     this.notifier.notify(this.toNotifyRecord(record));
+  }
+
+  /** AgentEvent 节流回流到 onUpdate（streaming delta 不触发）。 */
+  private onEventThrottled(
+    record: ExecutionRecord,
+    event: AgentEvent,
+    onUpdate: (details: SubagentToolDetails) => void,
+  ): void {
+    if (TRIGGERING_EVENT_TYPES.has(event.type)) {
+      onUpdate(project(record));
+    }
   }
 
   // ── 内部 ────────────────────────────────────────────────
@@ -213,10 +401,7 @@ export class SubagentHub {
     }
   }
 
-  /**
-   * 构造 SessionRunnerContext。sdk lazy 获取 + 缓存。
-   * factoryCtx 从 modelHub 取 modelRegistry/resolveAgent。
-   */
+  /** 构造 SessionRunnerContext。sdk lazy 获取 + 缓存。 */
   private async buildSessionRunnerContext(): Promise<SessionRunnerContext> {
     if (this.sdk === null) {
       const { getSdk } = await import("../core/session-factory.ts");

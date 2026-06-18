@@ -170,11 +170,18 @@ export interface SubagentToolDetails {
 // Runtime 公共 API 的入参/出参
 // ============================================================
 
-/** Runtime.execute 的入参（sync/bg 共用，mode 决定分叉点）。 */
+/** Hub.execute 的入参（sync/bg 共用）。mode 由 Hub 内部判定，不暴露给调用方。 */
 export interface ExecuteOptions {
   task: string;
   agent?: string;
-  mode: ExecutionMode;
+  /**
+   * 执行模式意图（不直接指定 mode）：
+   *   false → background（用户显式要求异步）
+   *   true → sync（用户显式要求同步）
+   *   undefined → Hub 按 agentConfig.defaultBackground 判定
+   * Hub 内部据此 + agent 配置解析出最终 ExecutionMode。
+   */
+  wait?: boolean;
   model?: string;
   thinkingLevel?: string;
   skillPath?: string;

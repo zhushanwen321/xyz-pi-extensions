@@ -17,16 +17,16 @@
 
 ## 2. 统一执行流
 
-`executor.execute(opts, hub, modelHub, ctx)` 是 sync/bg 共用的唯一入口。分七步，mode 分叉集中在第 3 步。executor 经 SubagentHub 的行为方法（acquireSlot/finalizeRecord/notifyComplete 等）操作组件，不越级访问 pool/store/notifier/history。
+`SubagentHub.execute(opts)` 是 sync/bg 共用的唯一入口。分七步，mode 分叉集中在第 3 步。执行编排逻辑（原 executor）已合并进 SubagentHub——组件（pool/store/history/notifier）全 private，编排方法（runAndFinalize/finalizeRecord/notifyComplete 等）全 private，作为同类方法直接访问组件。
 
 ```mermaid
 flowchart TD
     S0[0. 确认<br/>modelHub.ensureConfirmed<br/>经 onConfirmCategory 回调]
     S1[1. IDENTITY 解析<br/>modelHub.resolveModel<br/>5级 fallback]
-    S2[2. RECORD 创建+注册<br/>createRecord + hub.registerRecord]
+    S2[2. RECORD 创建+注册<br/>createRecord + store.register]
     S3{3. MODE 分叉<br/>仅 4 处差异}
-    S4[4. 执行 SessionRunner.run<br/>hub.acquireSlot → run → hub.releaseSlot]
-    S5[5. FINALIZE<br/>status 判定 + tryTransition CAS<br/>hub.finalizeRecord]
+    S4[4. 执行 SessionRunner.run<br/>pool.acquire → run → pool.release]
+    S5[5. FINALIZE<br/>status 判定 + tryTransition CAS<br/>finalizeRecord]
     S6{6. background 回注?}
     S7[7. 返回 handle]
 
@@ -39,6 +39,16 @@ flowchart TD
     S6 -->|sync| S7a[返回 sync handle<br/>含 record]
     S6 -->|background| S7b[立即返回<br/>backgroundId]
 ```
+
+### 为什么 executor 合并进 SubagentHub（不独立文件）
+
+executor 原是独立文件 `executor.ts`，访问 SubagentHub 的组件需要它们可跨文件访问。TS 的 `private` 只在类内有效——跨文件的模块级函数访问不到 private，逼出 5 个 public 行为方法（acquireSlot/finalizeRecord 等），名义上是"契约抽象"，实际是实现约束倒逼的妥协。
+
+executor 没有独立状态、独立生命周期、独立调用方（只有 SubagentHub.execute 调它）——它不是一个独立概念域。合并进 SubagentHub 后，编排方法自然降为 private，组件也全 private，无需任何封装妥协。
+
+→ 详见 [architecture.md §6.2](./architecture.md#62-为什么-executor-合并进-subagenthub不独立文件)
+
+→ 详见 [architecture.md §6.2](./architecture.md#62-为什么-executor-不直接访问组件)
 
 ### 4 处 mode 差异（仅此 4 处，其余完全共用）
 
@@ -146,7 +156,7 @@ sequenceDiagram
 
 旧实现 sync 路径在 `runAgent` 写一条、background 在 `.then`/`.catch` 各写一条，且 cancel 会产生同 id 双写（cancelled + failed）。新设计：
 
-- **唯一写入点**：`hub.finalizeRecord`（抢到 CAS 的一方调用），内部完成 completeRecord + store.archive + history.append 三步。mode 字段区分 sync/background
+- **唯一写入点**：`finalizeRecord`（抢到 CAS 的一方调用），内部完成 completeRecord + store.archive + history.append 三步。mode 字段区分 sync/background
 - **cancel 不写 history**：cancel 是用户意图不计入执行记录（cancel 抢到 CAS 后直接 completeRecord + notify，不走 finalizeRecord）
 - **去重**：`history-store.recent()` 仍保留同 id merge 逻辑（endedAt 最新 + cancelled 优先），作为历史数据的防御性处理
 

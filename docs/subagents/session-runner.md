@@ -9,11 +9,11 @@
 ## 1. SessionRunner 在架构中的位置
 
 ```
-SubagentHub.execute（统一入口）
+SubagentHub.execute（统一入口，含原 executor 编排逻辑）
       │  ├─ modelHub.ensureConfirmed（首次确认，经 onConfirmCategory 回调）
       │  └─ modelHub.resolveModel（5 级 fallback）
       ▼
-executor.execute（mode 分叉点，经 hub 行为方法操作组件）
+SubagentHub 内部编排（mode 分叉点，组件全 private 直接访问）
       │
       ▼
 SessionRunner.run(record, task, opts, ctx)   ◄── 本文
@@ -32,6 +32,18 @@ SessionRunner.run(record, task, opts, ctx)   ◄── 本文
 ```
 
 **职责边界**：record 在 `run` 内被 `updateFromEvent` 实时更新，但**不被 `completeRecord`**——完成态由 executor finalize 写，保证 status 判定单点。
+
+### 为什么用 ensureConfirmed + ConfirmCancelledError
+
+category 确认是 async（UI 交互），但 `resolveModel` 是纯 sync（5 级 fallback 不涉及 IO）。两个问题需要解：
+
+1. **async 和 sync 怎么协调？** — `ensureConfirmed(onConfirm?)` 是 async（可以 await），`resolveModel` 保持 sync。execute 先 `await hub.ensureConfirmed(...)`，再调 `hub.resolveModel(...)`。确认逻辑在 execute 编排层完成，不在 resolveModel 内部。
+
+2. **用户取消确认怎么表达？** — 用异常 `ConfirmCancelledError` 做控制流信号。catch 后终止执行（"用户不想执行子代理"是用户意图，不是程序错误）。比返回值更显式：调用方不需要先判 `needsConfirm` 再做分支。
+
+**为什么不用返回值方案**（`{needsConfirm: true, input}`）？因为调用方要先判类型，再 await 确认，再重新调 resolveModel——两次调用，重复解析。异常方案一步到位：ensureConfirmed 抛异常 = 终止，不抛 = 已确认，resolveModel 直接用结果。
+
+→ 详见 [architecture.md §6.3](./architecture.md#63-为什么用-ensureconfirmed--confirmcancellederror)
 
 ## 2. EventBridge 契约（SDK 事件 → AgentEvent）
 

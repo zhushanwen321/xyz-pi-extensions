@@ -168,14 +168,9 @@ export class ModelConfigHub {
     return this.doResolve(agentName, agentConfig, category, override);
   }
 
-  /** 查询 agent 配置（executor 判定 defaultBackground 用）。 */
+  /** 查询 agent 配置（SubagentHub 内部判定 defaultBackground + resolveIdentity 用）。 */
   getAgentConfig(name?: string): AgentConfig | undefined {
     return name ? this.agentRegistry.get(name) : undefined;
-  }
-
-  /** 校验 agent 名存在（fail-fast）。 */
-  assertAgentExists(name?: string): void {
-    if (name) this.agentRegistry.get(name, true);
   }
 
   // ── 配置读写（command/wizard 调）────────────────────────
