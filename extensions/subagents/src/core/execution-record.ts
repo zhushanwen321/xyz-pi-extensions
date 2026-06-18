@@ -12,6 +12,7 @@
 
 import type {
   AgentEvent,
+  AgentEventLogEntry,
   AgentResult,
   ExecutionMode,
   ExecutionRecord,
@@ -36,6 +37,10 @@ const EVENT_LOG_LABEL_MAX = 100;
 const TURN_SUMMARY_MAX = 80;
 /** ms → s 换算。elapsedSeconds 唯一计算点用。 */
 const MS_PER_SECOND = 1000;
+/** 持久化预览（taskPreview/resultPreview）截断长度。与旧 PERSISTED_PREVIEW_MAX 对齐。 */
+const PREVIEW_MAX = 200;
+/** computeCurrentActivity 中 thinking/text label 的前缀截断长度。 */
+const ACTIVITY_LABEL_MAX = 60;
 
 // ============================================================
 // Label 提取（eventLog 构建的伴生逻辑，co-locate 于 Core）
@@ -54,9 +59,42 @@ const MS_PER_SECOND = 1000;
  * 历史上错放在 tui/format.ts，本层（Core）是唯一运行时调用方，已下沉归位。
  */
 export function extractLabelFromArgs(toolName: string, args: unknown): string {
-  //  见上方 docstring 的分派规则。args 形状未知需 duck-type guard。
-  void toolName; void args;
-  throw new Error("not implemented");
+  if (typeof args !== "object" || args === null) return toolName;
+  const a = args as Record<string, unknown>;
+
+  // 读/写/编辑类：取路径 basename（~/.pi/.../foo.ts → foo.ts）
+  //   兼容 Pi tool 的多种路径参数名：path / file_path / filePath
+  const pathLike = (a.path ?? a.file_path ?? a.filePath) as unknown;
+  if (typeof pathLike === "string" && pathLike.length > 0) {
+    const base = pathLike.split(/[\\/]/).pop() ?? pathLike;
+    return `${toolName} ${base}`;
+  }
+
+  // bash：command 首行（截断 + emoji 安全——首个 emoji cluster 边界前截）
+  const cmd = a.command as unknown;
+  if (typeof cmd === "string" && cmd.length > 0) {
+    const firstLine = cmd.split("\n", 1)[0].trim();
+    return `${toolName} ${truncateLabel(firstLine)}`;
+  }
+
+  // web_search：query
+  const query = a.query as unknown;
+  if (typeof query === "string" && query.length > 0) {
+    return `${toolName} ${truncateLabel(query)}`;
+  }
+
+  // web_fetch：url
+  const url = a.url as unknown;
+  if (typeof url === "string" && url.length > 0) {
+    return `${toolName} ${truncateLabel(url)}`;
+  }
+
+  return toolName;
+}
+
+/** label 截断到 EVENT_LOG_LABEL_MAX（slice，非省略号——保持列宽稳定）。 */
+function truncateLabel(s: string): string {
+  return s.length > EVENT_LOG_LABEL_MAX ? s.slice(0, EVENT_LOG_LABEL_MAX) : s;
 }
 
 // ============================================================
@@ -172,10 +210,122 @@ export function updateFromEvent(record: ExecutionRecord, event: AgentEvent): voi
  * 这是映射表（event.type → push 动作）+ 缓冲操作，按深化矩阵留叶子。
  */
 function appendEventLogEntry(record: ExecutionRecord, event: AgentEvent): void {
-  void record; void event; void extractLabelFromArgs;
-  void MAX_EVENT_LOG_ENTRIES; void TEXT_OUTPUT_CHUNK; void THINKING_CHUNK;
-  void EVENT_LOG_LABEL_MAX; void TURN_SUMMARY_MAX;
-  throw new Error("not implemented");
+  const log = record.eventLog;
+  const now = Date.now();
+
+  switch (event.type) {
+    // ── text / thinking：累积型 streaming，达阈值分块 flush ──
+    case "text_delta":
+      record._currentTurnText += event.delta;
+      flushChunked(log, now, record, "_currentTurnText", TEXT_OUTPUT_CHUNK, "text_output");
+      return;
+
+    case "thinking_delta":
+      record._currentThinking += event.delta;
+      flushChunked(log, now, record, "_currentThinking", THINKING_CHUNK, "thinking");
+      return;
+
+    // ── tool_start：status:running ──
+    case "tool_start": {
+      log.push({
+        type: "tool_start",
+        label: truncateLabel(extractLabelFromArgs(event.toolName, event.args)),
+        ts: now,
+        status: "running",
+      });
+      trimRingBuffer(log);
+      return;
+    }
+
+    // ── tool_end：status 按 isError 定 done/failed ──
+    case "tool_end": {
+      log.push({
+        type: "tool_end",
+        label: truncateLabel(extractLabelFromArgs(event.toolName, event.args)),
+        ts: now,
+        status: event.isError ? "failed" : "done",
+      });
+      trimRingBuffer(log);
+      return;
+    }
+
+    // ── turn_end：flush 残留 text/thinking 缓冲（收尾全吐）+ 本 turn 摘要 ──
+    case "turn_end": {
+      flushRemaining(log, now, record, "_currentThinking", "thinking");
+      flushRemaining(log, now, record, "_currentTurnText", "text_output");
+      const summary = event.summary ?? "";
+      const turnLabel = summary
+        ? (summary.length > TURN_SUMMARY_MAX ? summary.slice(0, TURN_SUMMARY_MAX) : summary)
+        : "turn";
+      log.push({ type: "turn_end", label: turnLabel, ts: now });
+      trimRingBuffer(log);
+      return;
+    }
+
+    // ── error：直接推一条 error 条目 ──
+    case "error": {
+      log.push({ type: "error", label: truncateLabel(event.message), ts: now });
+      trimRingBuffer(log);
+      return;
+    }
+
+    default:
+      // message_end / compaction 不产生 eventLog 条目（usage/turns 累积在 updateFromEvent）
+      return;
+  }
+}
+
+/**
+ * chunking 缓冲字段名（text/thinking 两块跨事件持久缓冲）。
+ * 用字面量联合而非 keyof，避免泄露 _currentTurnText/_currentThinking 私有意图。
+ */
+type ChunkBufferKey = "_currentTurnText" | "_currentThinking";
+
+/**
+ * 累积型 streaming（text_delta / thinking_delta）的分块 flush。
+ * 缓冲达 chunkSize 就 push 一条等宽条目，while 处理超长 delta，余数留在缓冲。
+ * 每块独立 truncateLabel 截断——保持 eventLog 列宽稳定。
+ */
+function flushChunked(
+  log: AgentEventLogEntry[],
+  ts: number,
+  record: ExecutionRecord,
+  bufKey: ChunkBufferKey,
+  chunkSize: number,
+  type: "text_output" | "thinking",
+): void {
+  while (record[bufKey].length >= chunkSize) {
+    const chunk = record[bufKey].slice(0, chunkSize);
+    record[bufKey] = record[bufKey].slice(chunkSize);
+    log.push({ type, label: truncateLabel(chunk), ts });
+  }
+  trimRingBuffer(log);
+}
+
+/**
+ * turn_end 残留缓冲的收尾 flush：缓冲非空则整段 push 一条（不分块）。
+ * 与 flushChunked 的区别：不按阈值切片——残留是本 turn 最后的尾巴，
+ * 整段 push 后由 truncateLabel 兜底截断，缓冲清零。
+ */
+function flushRemaining(
+  log: AgentEventLogEntry[],
+  ts: number,
+  record: ExecutionRecord,
+  bufKey: ChunkBufferKey,
+  type: "text_output" | "thinking",
+): void {
+  const remaining = record[bufKey];
+  if (remaining) {
+    log.push({ type, label: truncateLabel(remaining), ts });
+    record[bufKey] = "";
+  }
+}
+
+/** ring buffer 裁剪：超上限移除最旧（while + shift）。 */
+function trimRingBuffer(log: AgentEventLogEntry[]): void {
+  while (log.length > MAX_EVENT_LOG_ENTRIES) {
+    log.shift();
+  }
 }
 
 // ============================================================
@@ -320,17 +470,27 @@ function computeElapsedSeconds(record: ExecutionRecord): number {
 function computeCurrentActivity(
   record: ExecutionRecord,
 ): { type: "tool" | "text" | "thinking"; label: string } | undefined {
-  //  1. 倒序找 status==="running" 的 tool_start → {type:"tool", label}
-  //  2. _currentThinking 非空 → {type:"thinking", label: 前 N 字}
-  //  3. _currentTurnText 非空 → {type:"text", label: 前 N 字}
-  //  4. 全无 → undefined
-  void record;
-  throw new Error("not implemented");
+  // 1. 倒序找最近的 tool_start 且 status==="running"（配对 tool_end 尚未到）
+  for (let i = record.eventLog.length - 1; i >= 0; i--) {
+    const entry = record.eventLog[i];
+    if (entry.type === "tool_start" && entry.status === "running") {
+      return { type: "tool", label: entry.label };
+    }
+    // 遇到 tool_end 说明最近一个 tool 已结束，停止回溯（其后没有"正在跑"的 tool）
+    if (entry.type === "tool_end") break;
+  }
+  // 2. 正在 thinking
+  if (record._currentThinking) {
+    return { type: "thinking", label: record._currentThinking.slice(0, ACTIVITY_LABEL_MAX) };
+  }
+  // 3. 正在输出 text
+  if (record._currentTurnText) {
+    return { type: "text", label: record._currentTurnText.slice(0, ACTIVITY_LABEL_MAX) };
+  }
+  return undefined;
 }
 
 /** 持久化预览截断（task/result 长文本截到单行可读长度）。 */
 function truncatePreview(text: string): string {
-  //  text.length > PREVIEW_MAX ? text.slice(0, PREVIEW_MAX) : text
-  void text;
-  throw new Error("not implemented");
+  return text.length > PREVIEW_MAX ? text.slice(0, PREVIEW_MAX) : text;
 }

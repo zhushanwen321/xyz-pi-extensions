@@ -44,11 +44,19 @@ export function collectResult(
   bridge: EventBridge,
   args: CollectResultArgs,
 ): AgentResult {
-  //  1. text = collectResponseText(session.messages)
-  //  2. parsedOutput = toolCalls 找 structured-output 的 result.details
-  //  3. 组装 AgentResult（durationMs = Date.now() - args.startTime）
-  void session; void bridge; void args;
-  throw new Error("not implemented");
+  void bridge; // bridge 累积器已在调用方（run）经 toUsageTotal/slice 提取后传入 args
+  return {
+    text: collectResponseText(session.messages),
+    turns: args.turns,
+    durationMs: Date.now() - args.startTime,
+    success: args.success,
+    error: args.error,
+    sessionId: args.sessionId,
+    toolCalls: args.toolCalls,
+    usage: args.usage,
+    sessionFile: args.sessionFile,
+    worktree: args.worktree,
+  };
 }
 
 /** 从 session.messages 最后一条 assistant message 提取文本。 */
@@ -58,9 +66,19 @@ export function collectResponseText(
     content?: ReadonlyArray<{ type: string; text?: string }>;
   }>,
 ): string {
-  //  倒序找 role==="assistant" 的 message，拼接 content 中 type==="text" 的 text
-  void messages;
-  throw new Error("not implemented");
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== "assistant") continue;
+    const parts = msg.content ?? [];
+    let text = "";
+    for (const part of parts) {
+      if (part.type === "text" && typeof part.text === "string") {
+        text += part.text;
+      }
+    }
+    return text;
+  }
+  return "";
 }
 
 // ============================================================
@@ -74,8 +92,7 @@ export function collectResponseText(
 export function toUsageTotal(
   usage: AgentUsage & { cost: number },
 ): AgentUsageTotal | undefined {
-  //  total = usage.input + usage.output + usage.cacheRead + usage.cacheWrite
-  //  total === 0 → undefined : { ...usage, total }
-  void usage;
-  throw new Error("not implemented");
+  const total = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  if (total === 0 && usage.cost === 0) return undefined;
+  return { ...usage, total };
 }
