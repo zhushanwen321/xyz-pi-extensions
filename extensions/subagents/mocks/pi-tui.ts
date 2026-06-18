@@ -4,6 +4,17 @@
  * 最小 UI 桩。如 config-wizard 测试需要 ctx.ui.select 等，在此扩展。
  */
 
+/**
+ * Component 接口（与 @earendil-works/pi-tui 对齐）。
+ * SubagentResultComponent / SubagentsProgressWidget implements Component 需此类型。
+ * render 必填；invalidate/handleInput 可选。
+ */
+export interface Component {
+	render(width: number): string[];
+	invalidate?(): void;
+	handleInput?(data: string): void;
+}
+
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
 // Unicode 宽字符区间常量（East Asian Width = Wide / Fullwidth 等近似）。
