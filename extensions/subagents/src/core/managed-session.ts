@@ -12,12 +12,12 @@
 
 import type { ManagedSession, ManagedSessionOptions } from "../types.ts";
 import type { AgentConfig, ResolvedModel } from "./model-resolver.ts";
+import { collectResult } from "./output-collector.ts";
 import {
   type BuiltSession,
-  collectResult,
   type CreateSessionInput,
   type SessionFactoryContext,
-} from "./session-runner.ts";
+} from "./session-factory.ts";
 
 /** 默认 grace turns（soft turn limit 后的宽限轮数）。 */
 const DEFAULT_GRACE_TURNS = 2;

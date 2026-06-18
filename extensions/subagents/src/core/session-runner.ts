@@ -1,27 +1,35 @@
 // src/core/session-runner.ts
 //
-// 唯一的 session 执行入口。零 mode 感知——只负责"跑一次 session + 更新 record"。
+// 唯一的一次性 session 执行编排器。零 mode 感知——只负责"跑一次 session + 更新 record"。
 //
 // 这是 sync/background 两路径完全共用的核心。mode 分叉在 Runtime.execute 顶部，
 // 不渗透到此处。Core 不知道谁调用它、是否 await、是否回注通知。
 //
-// 本文件合并了旧实现的 4 个文件：
-//   run-agent.ts (262) + session-factory.ts (295) + event-bridge.ts (148)
-//   + output-collector.ts (18) = 723 行核心执行逻辑。
+// 编排层（Orchestration）：站在基础层三件套（session-factory / output-collector /
+// event-bridge）之上，负责执行时序与清理。不持有 Pi SDK 实例，只通过 factory 间接用。
+// 长生命周期变体见 managed-session.ts（平级编排器，互不 import）。
 // 设计信息见 docs/subagents/session-runner.md。
 
 import type {
   AgentEvent,
   AgentResult,
-  AgentUsage,
   ExecutionRecord,
-  ToolCall,
-  ToolCallResult,
+  WorktreeOutcome,
 } from "../types.ts";
-import type { AgentConfig, ModelRegistryLike, ResolvedModel } from "./model-resolver.ts";
+import { updateFromEvent } from "./execution-record.ts";
+import type { AgentConfig, ResolvedModel } from "./model-resolver.ts";
+import { collectResult, toUsageTotal } from "./output-collector.ts";
+import type {
+  BuiltSession,
+  CreateSessionInput,
+  SdkLike,
+  SessionFactoryContext,
+} from "./session-factory.ts";
+import { createAndConfigureSession } from "./session-factory.ts";
+import type { WorktreeResult } from "./worktree.ts";
 
 // ============================================================
-// 依赖注入容器
+// 依赖注入容器 + 入参
 // ============================================================
 
 /** SessionRunner 的依赖注入容器（由 Runtime 提供，解耦 Core 与 Pi SDK 实例）。 */
@@ -32,6 +40,13 @@ export interface SessionRunnerContext {
   agentDir: string;
   /** home 目录（worktree baseDir / session 持久化目录）。 */
   homeDir: string;
+  /** session 工厂上下文（modelRegistry/resolveAgent/cwd/agentDir/homeDir）。
+   *  由 Runtime 装配后注入——run() 必须把它传给 createAndConfigureSession，
+   *  因此提升到 context，避免在 run() 内部重新构造。 */
+  factoryCtx: SessionFactoryContext;
+  /** Pi SDK 实例（由 Runtime 在 session_start 时 dynamic import 一次后注入）。
+   *  注入而非 run() 内 import——Core 层保持副作用自由（无顶层 dynamic import）。 */
+  sdk: SdkLike;
 }
 
 /** SessionRunner.run 的入参。 */
@@ -54,218 +69,6 @@ export interface RunOptions {
   signal: AbortSignal | undefined;
   /** event 回流——SessionRunner 内部 updateFromEvent 后，再回调调用方（widget/notify）。 */
   onEvent: ((event: AgentEvent) => void) | undefined;
-}
-
-// ============================================================
-// SDK 类型（duck-typed 最小子集，测试可 mock）
-// ============================================================
-
-/** SDK AgentSessionEvent 的最小可用子集（duck-typed，避免强耦合 SDK 类型）。 */
-export type SdkEvent = {
-  type: string;
-  toolCallId?: string;
-  toolName?: string;
-  args?: unknown;
-  result?: ToolCallResult;
-  isError?: boolean;
-  message?: {
-    usage?: AgentUsage & { cost?: { total: number } };
-    stopReason?: string;
-    errorMessage?: string;
-  };
-  assistantMessageEvent?: { type?: string; delta?: string };
-  reason?: string;
-};
-
-/** 运行时 guard：subscribe 回调收到的 event 形状未知，校验 type 字段后再交给 handle。
- *  防止 SDK 事件结构变化时 switch(raw.type) 静默失配（全走 default 不报错）。 */
-export function isSdkEvent(x: unknown): x is SdkEvent {
-  //  typeof x === "object" && x !== null && typeof (x as { type?: unknown }).type === "string"
-  void x;
-  throw new Error("not implemented");
-}
-
-/** AgentSession 的最小可用接口（duck-typed，与 SDK AgentSession 结构兼容）。 */
-export interface AgentSessionLike {
-  prompt(task: string, options?: unknown): Promise<void>;
-  steer(message: string): Promise<void>;
-  abort(): Promise<void>;
-  dispose(): void;
-  subscribe(fn: (event: unknown) => void): () => void;
-  sessionId: string;
-  /** 暴露 sessionManager 以读取 sessionFile 路径。 */
-  readonly sessionManager: {
-    getSessionFile(): string | undefined;
-    getSessionId(): string;
-  };
-  messages: ReadonlyArray<{
-    role: string;
-    content?: ReadonlyArray<{ type: string; text?: string }>;
-  }>;
-  getAllTools(): Array<{ name: string }>;
-  setActiveToolsByName(names: string[]): void;
-}
-
-/** Pi SDK 动态 import 的形状（runAgent/ManagedSession 通过 getSdk() 获取）。 */
-export interface SdkLike {
-  DefaultResourceLoader: new (opts: Record<string, unknown>) => { reload(): Promise<void> };
-  /** SessionManager 支持 inMemory（测试）和 create（持久化）两种工厂。 */
-  SessionManager: {
-    inMemory(cwd?: string): unknown;
-    create(cwd: string, sessionDir?: string): unknown;
-  };
-  createAgentSession: (opts: Record<string, unknown>) => Promise<{ session: AgentSessionLike }>;
-}
-
-// ============================================================
-// EventBridge（SDK 事件 → AgentEvent + 累积器）
-// ============================================================
-
-/**
- * 把 SDK AgentSessionEvent 转换为 subagents AgentEvent，并累计 turn/toolCall/usage。
- *
- *   ╔════════════════════════════════════════════════════════════════════╗
-//   ║  事件映射（详见 docs/subagents/session-runner.md §2）：              ║
-//   ║    tool_execution_start  → {tool_start, toolName, args}            ║
-//   ║      └─ pendingTools.set(id, {toolName, args})                     ║
-//   ║    tool_execution_end    → {tool_end, toolName, args, result, isError} ║
-//   ║      └─ toolCalls.push + pendingTools.delete                       ║
-//   ║    message_update(thinking_delta) → {thinking_delta, delta}        ║
-//   ║      ⚠ 必须在 text_delta 之前判断（两者都带 delta 字段）           ║
-//   ║    message_update(text)  → {text_delta, delta}                     ║
-//   ║    turn_end              → {turn_end}  + turnCount++               ║
-//   ║    message_end(usage)    → {message_end, usage} + usageAccum +=    ║
-//   ║    message_end(error)    → {error, error} + lastError = msg        ║
-//   ║    compaction_start      → {compaction}                            ║
-//   ║    其他                  → 丢弃                                    ║
-//   ╚════════════════════════════════════════════════════════════════════╝
- *
- * bridge 累积器（turnCount/toolCalls/usage/lastError）供 collectResult 构造 AgentResult；
- * 转发的 AgentEvent 供 updateFromEvent 更新 record——两套数据同源（handle 驱动）。
- */
-export interface EventBridge {
-  /** 传给 session.subscribe 的处理器。 */
-  handle(raw: SdkEvent): void;
-  /** 重置所有跨 prompt 累积状态（ManagedSession 每轮 prompt 前调）。 */
-  resetForPrompt(): void;
-  /** 已完成 turn 数（turn_end 累积）。 */
-  readonly turnCount: number;
-  /** 累积的 tool 调用（tool_execution_end 累积）。 */
-  readonly toolCalls: ToolCall[];
-  /** 累积的 usage（所有 message_end 求和）。 */
-  readonly usage: AgentUsage & { cost: number };
-  /** 最后一次 message_end 的 stopReason=error/aborted 错误信息。 */
-  readonly lastError: string | undefined;
-}
-
-/** 创建 EventBridge 实例。onEvent 是调用方的 updateFromEvent wrapper。 */
-export function createEventBridge(onEvent: (event: AgentEvent) => void): EventBridge {
-  //  1. 初始化累积器：turnCount=0, toolCalls=[], usageAccum={0...}, lastError=undefined
-  //  2. pendingTools = new Map<toolCallId, {toolName, args}>()
-  //  3. handle(raw): switch(raw.type) 按映射表转换（thinking_delta 在 text_delta 之前）
-  //  4. resetForPrompt(): 清零所有累积器（ManagedSession 跨轮复用 bridge 时调）
-  void onEvent;
-  throw new Error("not implemented");
-}
-
-// ============================================================
-// Session 工厂（createAndConfigureSession）
-// ============================================================
-
-/** 创建 session 所需的依赖（由 SubagentRuntime 提供）。 */
-export interface SessionFactoryContext {
-  modelRegistry: ModelRegistryLike;
-  resolveAgent: (name: string) => AgentConfig | undefined;
-  cwd: string;
-  agentDir: string;
-  /** home 目录（用于计算 subagent session 持久化目录）。 */
-  homeDir: string;
-}
-
-/** createAndConfigureSession 的输入选项。 */
-export interface CreateSessionInput {
-  /** 已解析的模型（由 resolveModelForAgent 产出）。 */
-  resolved: ResolvedModel;
-  /** systemPrompt 追加内容（调用方可传 agent body 等）。 */
-  appendSystemPrompt?: string[];
-  /** skill 路径。 */
-  skillPath?: string;
-  /** agent 配置（提取 tool 过滤策略）。 */
-  agentConfig?: AgentConfig;
-  /** 事件回调。 */
-  onEvent?: (event: AgentEvent) => void;
-}
-
-/** createAndConfigureSession 的输出。 */
-export interface BuiltSession {
-  session: AgentSessionLike;
-  bridge: EventBridge;
-  unsubscribe: () => void;
-  /** subagent session 文件绝对路径（未持久化时为 undefined）。 */
-  sessionFile?: string;
-}
-
-/** 动态 import Pi SDK（集中在此处，便于测试 mock）。 */
-export async function getSdk(): Promise<SdkLike> {
-  //  return (await import("@mariozechner/pi-coding-agent")) as unknown as SdkLike
-  throw new Error("not implemented");
-}
-
-/**
- * 创建并配置一个 Pi AgentSession（四步，顺序不可换）：
- *
-//   ╔══════════════════════════════════════════════════════════════════╗
-//   ║  步骤 1：appendSystemPrompt 组装                                  ║
-//   ║    fullAppend = [buildEnvBlock(cwd)] + (appendSystemPrompt ?? []) ║
-//   ║    环境块用 "--- environment (data) ---" 标记，防注入             ║
-//   ║                                                                    ║
-//   ║  步骤 2：ResourceLoader 构建 + reload                              ║
-//   ║    new DefaultResourceLoader({ cwd, agentDir, appendSystemPrompt, ║
-//   ║                                 additionalSkillPaths })            ║
-//   ║    await resourceLoader.reload()                                   ║
-//   ║                                                                    ║
-//   ║  步骤 3：createAgentSession + 工具过滤                             ║
-//   ║    SessionManager.create(cwd, subagentSessionDir)                  ║
-//   ║    createAgentSession({ model, thinkingLevel, resourceLoader,      ║
-//   ║                        sessionManager })                           ║
-//   ║    filterTools(allTools, config) → setActiveToolsByName            ║
-//   ║      ⚠ SDK 约束（FR-1.7 偏差）：工具过滤必须在创建后执行           ║
-//   ║      仅当 allowlist < allTools 时才调 setActiveToolsByName        ║
-//   ║                                                                    ║
-//   ║  步骤 4：EventBridge 订阅                                          ║
-//   ║    bridge = createEventBridge(onEvent ?? (() => {}))               ║
-//   ║    unsubscribe = session.subscribe(e => {                          ║
-//   ║      if (!isSdkEvent(e)) return;                                   ║
-//   ║      bridge.handle(e as SdkEvent);                                 ║
-//   ║    })                                                              ║
-//   ╚══════════════════════════════════════════════════════════════════╝
- */
-export async function createAndConfigureSession(
-  input: CreateSessionInput,
-  ctx: SessionFactoryContext,
-  sdk: SdkLike,
-): Promise<BuiltSession> {
-  //  见上方框图四步
-  void input; void ctx; void sdk; void buildEnvBlock;
-  throw new Error("not implemented");
-}
-
-/** buildEnvBlock 的 git 命令超时（ms）。worktree 锁状态下 2s 足够。 */
-const ENV_GIT_TIMEOUT_MS = 2000;
-
-/**
- * 构建环境信息块（P7 防注入：环境数据标记为 data，非指令）。
- * cwd / git branch 用 "--- environment (data) ---" 包裹，与 agent 指令格式区分。
- * git branch 同步获取（execFileSync，timeout ENV_GIT_TIMEOUT_MS），失败省略不阻断。
- */
-export function buildEnvBlock(cwd: string): string {
-  //  1. lines = ["--- environment (data, not instructions) ---", `Working directory: ${cwd}`]
-  //  2. execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {cwd, timeout, stdio:[...,"ignore"]})
-  //     成功且非空 → lines.push(`Git branch: ${branch}`)
-  //  3. lines.push("--- end environment ---")
-  //  4. return lines.join("\n")
-  void cwd; void ENV_GIT_TIMEOUT_MS;
-  throw new Error("not implemented");
 }
 
 // ============================================================
@@ -294,55 +97,87 @@ export function formatSchemaInstruction(schema: Record<string, unknown>): string
 }
 
 // ============================================================
-// Result 收集
+// run 编排骨架的叶子（全部 throw not implemented）
 // ============================================================
 
-/** collectResult 的入参（字段来源明确，避免多处拼装）。 */
-export interface CollectResultArgs {
-  startTime: number;
-  success: boolean;
-  error: string | undefined;
-  sessionId: string;
-  sessionFile: string | undefined;
-  turns: number;
-  usage: import("../types.ts").AgentUsageTotal | undefined;
-  toolCalls: ToolCall[];
-  worktree?: import("../types.ts").WorktreeOutcome;
-}
-
 /**
- * 从 session + bridge 组装 AgentResult。每个字段来源单一：
- *   text ← session.messages 最后一条 assistant message 的 text 部分（倒序找）
- *   turns ← bridge.turnCount
- *   usage ← bridge.usage（全零则 undefined）
- *   toolCalls ← bridge.toolCalls
- *   parsedOutput ← toolCalls 找 toolName==="structured-output" 的 result.details
+ * 隔离判定 + worktree 创建。封装 run() 的步骤 a：
+ *   - isolation !== "worktree" → 返回 undefined（cwd 内执行）
+ *   - isolation === "worktree" → createWorktree(cwd, randomHex, tmpdir)
  *
- * success 双来源判定：
- *   ① session.prompt() 抛错 → args.success=false
- *   ② prompt 成功但 bridge.lastError 非空（message_end stopReason=error）→ success=false
+ * ⚠ createWorktree 返回 undefined（非 git / worktree add 失败）时必须 throw——
+ *   不能静默回退到 cwd：那会让 agent 污染用户工作区，违背 isolation:worktree 的意图。
+ *   （设计意图说明，留注释不翻译成代码）
  */
-export function collectResult(
-  session: AgentSessionLike,
-  bridge: EventBridge,
-  args: CollectResultArgs,
-): AgentResult {
-  //  1. text = collectResponseTextLocal(session.messages)
-  //  2. parsedOutput = toolCalls 找 structured-output 的 result.details
-  //  3. 组装 AgentResult（durationMs = Date.now() - args.startTime）
-  void session; void bridge; void args;
+function createWorktreeForIsolation(
+  opts: RunOptions,
+  ctx: SessionRunnerContext,
+): WorktreeResult | undefined {
+  //  1. opts.agentConfig?.isolation !== "worktree" → return undefined
+  //  2. agentId = crypto.randomBytes(4).toString("hex")
+  //  3. wt = createWorktree(ctx.cwd, agentId, os.tmpdir())
+  //  4. wt === undefined → throw new Error("worktree isolation requested but creation failed")
+  //  5. return wt
+  void opts; void ctx;
   throw new Error("not implemented");
 }
 
-/** 从 session.messages 最后一条 assistant message 提取文本。 */
-export function collectResponseText(
-  messages: ReadonlyArray<{
-    role: string;
-    content?: ReadonlyArray<{ type: string; text?: string }>;
-  }>,
-): string {
-  //  倒序找 role==="assistant" 的 message，拼接 content 中 type==="text" 的 text
-  void messages;
+/**
+ * turn_end 旁路钩子（turnLimiter + schema enforcement）的统一挂载句柄。
+ *
+ *   ╔══════════════════════════════════════════════════════════════╗
+ *   ║  run() 通过包装 built 的 onEvent 链把 turn_end 喂给本句柄：    ║
+//   ║    onTurnEnd(currentTurns):                                    ║
+//   ║      ① turnLimiter.onTurnEnd(currentTurns)   ← soft/hard 限制 ║
+//   ║      ② schema enforcement: bridge.toolCalls 无 structured-output ║
+//   ║         且 schemaSteerCount < MAX_SCHEMA_STEERS → session.steer ║
+//   ║  unsubscribe(): 移除 signal→abort 监听（一次性 listener）       ║
+//   ╚══════════════════════════════════════════════════════════════╝
+ *
+ * prompt 生命周期钩子集中在此，避免三个独立 subscribe 的时序碎片。
+ */
+export interface RunHooks {
+  /** 收到 turn_end 时调用（currentTurns 已递增）。 */
+  onTurnEnd(currentTurns: number): void;
+  /** 卸载 signal→session.abort 监听。 */
+  unsubscribe(): void;
+}
+
+/**
+ * 把 turnLimiter + schema enforcement + signal-abort 绑定到已就绪的 session。
+ *
+ *   ╔══════════════════════════════════════════════════════════════╗
+//   ║  1. turnLimiter = createTurnLimiter({                          ║
+//   ║       maxTurns: opts.maxTurns ?? 0,                            ║
+//   ║       graceTurns: opts.graceTurns ?? DEFAULT_GRACE_TURNS,      ║
+//   ║       steer: msg => built.session.steer(msg),                  ║
+//   ║       abort: () => built.session.abort(),                      ║
+//   ║     })                                                          ║
+//   ║  2. signal→abort：opts.signal?.addEventListener("abort",       ║
+//   ║       () => built.session.abort(), { once: true })             ║
+//   ║  3. onTurnEnd(n): turnLimiter.onTurnEnd(n) + schemaSteer(...)  ║
+//   ║  4. unsubscribe(): signal?.removeEventListener("abort", ...)   ║
+//   ╚══════════════════════════════════════════════════════════════╝
+ */
+export function attachRunHooks(built: BuiltSession, opts: RunOptions): RunHooks {
+  void built; void opts;
+  throw new Error("not implemented");
+}
+
+/**
+ * 执行结果失败/正常收尾的 worktree 清理。封装 run() 的步骤 i。
+ * 成功或失败都调 cleanupWorktree——失败时 cleanupWorktree 内部走 preserveOnFailure
+ * 保留变更（不静默丢弃）。
+ */
+function cleanupWorktreeForOutcome(
+  worktree: WorktreeResult,
+  cwd: string,
+  task: string,
+  _success: boolean,
+): WorktreeOutcome {
+  //  return cleanupWorktree(cwd, worktree, task.slice(0, 200))
+  //  （_success 不改变清理策略——cleanupWorktree 自身按 hasChanges 决定 commit/preserve）
+  void worktree; void cwd; void task; void _success;
   throw new Error("not implemented");
 }
 
@@ -353,7 +188,7 @@ export function collectResponseText(
 /**
  * 唯一执行入口。返回 AgentResult（成功/失败统一形状，不抛错）。
  *
-//   ╔══════════════════════════════════════════════════════════════════╗
+ *   ╔══════════════════════════════════════════════════════════════════╗
 //   ║  pool.acquire(priority)                          ◄── 外层调用方负责   ║
 //   ║       │                                                            ║
 //   ║       ▼                                                            ║
@@ -386,16 +221,73 @@ export async function run(
   opts: RunOptions,
   ctx: SessionRunnerContext,
 ): Promise<AgentResult> {
-  //  a. isolation:worktree? → createWorktree(ctx.cwd, randomHex, ctx.homeDir)
-  //  b. createAndConfigureSession({ resolved, appendSystemPrompt, skillPath, agentConfig,
-  //       onEvent: e => { updateFromEvent(record, e); opts.onEvent?.(e); } }, factoryCtx, sdk)
-  //  c. turnLimiter + signal 监听（已在 createAndConfigureSession 内 subscribe bridge）
-  //  d. schema enforcement: subscribe turn_end，漏调 structured-output 则 steer
-  //  e. task + formatSchemaInstruction(opts.schema) → session.prompt()
-  //  f. catch → success=false, error
-  //  g. collectResult(session, bridge, { startTime, success, error, ...worktree })
-  //  h. inner finally: unsubscribe + session.dispose()
-  //  i. outer finally: cleanupWorktree（兜底）+ pool.release（外层）
-  void record; void task; void opts; void ctx;
-  throw new Error("not implemented");
+  const startTime = Date.now();
+
+  // a. isolation:worktree? → createWorktree（失败 throw 不回退）
+  const worktree = createWorktreeForIsolation(opts, ctx);
+
+  // b/c. createAnd configure session + EventBridge 订阅。
+  // onEvent wrapper 把两条流挂上：① updateFromEvent(record)（唯一 record 更新点）
+  // ② opts.onEvent（回流调用方 widget/notify）。turn_end 还需喂给 hooks，
+  // 但 hooks 依赖 built（鸡生蛋）—— 先用闭包变量在 prompt 前接上线。
+  let hooks: RunHooks | undefined;
+  const onEvent: CreateSessionInput["onEvent"] = (event: AgentEvent): void => {
+    updateFromEvent(record, event);
+    if (event.type === "turn_end") hooks?.onTurnEnd(record.turns);
+    opts.onEvent?.(event);
+  };
+
+  let built: BuiltSession | undefined;
+  try {
+    built = await createAndConfigureSession(
+      {
+        resolved: opts.resolved,
+        appendSystemPrompt: opts.appendSystemPrompt,
+        skillPath: opts.skillPath,
+        agentConfig: opts.agentConfig,
+        onEvent,
+      },
+      ctx.factoryCtx,
+      ctx.sdk,
+    );
+
+    // d/e/f. turnLimiter + signal-abort + schema enforcement 统一挂载
+    hooks = attachRunHooks(built, opts);
+
+    // g. session.prompt（schema 指令拼到 task 末尾）
+    let success = true;
+    let error: string | undefined;
+    try {
+      const instruction = opts.schema ? formatSchemaInstruction(opts.schema) : "";
+      await built.session.prompt(task + instruction);
+      // h. 双来源 success 判定：prompt 成功但 bridge.lastError 非空也算失败
+      if (built.bridge.lastError) {
+        success = false;
+        error = built.bridge.lastError;
+      }
+    } catch (err) {
+      success = false;
+      error = err instanceof Error ? err.message : String(err);
+    }
+
+    // h. collectResult 组装 AgentResult（i. worktree 清理在 collectResult 前完成）
+    return collectResult(built.session, built.bridge, {
+      startTime,
+      success,
+      error,
+      sessionId: built.session.sessionId,
+      sessionFile: built.session.sessionManager.getSessionFile() ?? undefined,
+      turns: built.bridge.turnCount,
+      usage: toUsageTotal(built.bridge.usage),
+      toolCalls: built.bridge.toolCalls.slice(),
+      worktree: worktree
+        ? cleanupWorktreeForOutcome(worktree, ctx.cwd, task, success)
+        : undefined,
+    });
+  } finally {
+    // j. 清理：hooks（signal listener）→ unsubscribe（session.subscribe）→ dispose
+    hooks?.unsubscribe();
+    built?.unsubscribe();
+    built?.session.dispose();
+  }
 }
