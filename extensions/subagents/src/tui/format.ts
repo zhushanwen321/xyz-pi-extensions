@@ -86,6 +86,23 @@ export function formatElapsedSeconds(seconds: number): string {
   return `${h}h${m}m`;
 }
 
+/**
+ * 把文本 pad 到指定**可见**宽度（grapheme/emoji/CJK 安全）。
+ *
+ * 用 visibleWidth 而非 `.length`——避免 ANSI 转义、emoji、宽字符（CJK 占 2 列）
+ * 把列对齐算错（dev guide §2.4 警告的坑）。
+ *
+ *   - 已 ≥ width → 原样返回（调用方负责先 truncLine 截断）
+ *   - < width → 末尾补空格到可见宽度对齐
+ *
+ * 与 truncLine 配对：左/右列对齐时先 `truncLine(s, colWidth)` 再 `padToVisible(s, colWidth)`。
+ */
+export function padToVisible(text: string, width: number): string {
+  const w = visibleWidth(text);
+  if (w >= width) return text;
+  return text + " ".repeat(width - w);
+}
+
 // ============================================================
 // 状态图标
 // ============================================================

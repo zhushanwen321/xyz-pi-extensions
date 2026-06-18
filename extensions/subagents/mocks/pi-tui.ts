@@ -6,13 +6,15 @@
 
 /**
  * Component 接口（与 @earendil-works/pi-tui 对齐）。
- * SubagentResultComponent / SubagentsProgressWidget implements Component 需此类型。
- * render 必填；invalidate/handleInput 可选。
+ * SubagentResultComponent / SubagentsProgressWidget / CategoryConfirmComponent /
+ * SubagentsListComponent implements Component 需此类型。
+ * render 必填；invalidate 必填；handleInput / dispose 可选。
  */
 export interface Component {
 	render(width: number): string[];
-	invalidate?(): void;
+	invalidate(): void;
 	handleInput?(data: string): void;
+	dispose?(): void;
 }
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;

@@ -4,8 +4,8 @@
 //
 // 解析优先级：
 //   /subagents list [<id>]?  → list overlay（hasUI 必填）
-//   /subagents               → 配置摘要通知
 //   /subagents config [...]  → config wizard
+//   /subagents               → 配置摘要通知
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 
@@ -20,25 +20,59 @@ export function registerSubagentsCommand(pi: ExtensionAPI): void {
   pi.registerCommand("subagents", {
     description: "Subagents: /subagents [config [category] | list [<id>]]",
     handler: async (argsStr: string, ctx: ExtensionCommandContext) => {
-      //  ── 流程（薄壳）──────────────────────────────────────────────
-      //
       //   ╔══════════════════════════════════════════════════════════════╗
-      //   ║  rt = getRuntime() —— 未初始化 notify + return                ║
+      //   ║  modelHub = getModelConfigHub() —— 未初始化 notify + return      ║
       //   ║  args = argsStr.trim().split(/\s+/)                           ║
       //   ║                                                                ║
       //   ║  args[0] === "list":                                          ║
       //   ║    !ctx.hasUI → notify error + return                         ║
-      //   ║    createSubagentsView(rt, ctx.ui.theme, ctx, args[1])         ║
+      //   ║    hub = getHub() —— 未初始化 notify + return                  ║
+      //   ║    createSubagentsView(hub, ctx.ui.theme, ctx, args[1])        ║
       //   ║    return                                                      ║
       //   ║                                                                ║
-      //   ║  args.length === 0 || args[0] !== "config":                    ║
-      //   ║    notify(formatConfigSummary(rt.globalConfig, rt.sessionState))║
+      //   ║  args[0] === "config":                                        ║
+      //   ║    !ctx.hasUI → notify error + return                         ║
+      //   ║    runConfigWizard(ctx.ui, args.slice(1), modelHub)            ║
       //   ║    return                                                      ║
       //   ║                                                                ║
-      //   ║  /subagents config [...] → runConfigWizard(...)                ║
+      //   ║  其他（无参数或未知）→ 配置摘要通知                            ║
       //   ╚══════════════════════════════════════════════════════════════╝
-      void getHub; void getModelConfigHub; void runConfigWizard; void formatConfigSummary; void createSubagentsView; void argsStr; void ctx;
-      throw new Error("not implemented");
+      const args = argsStr.trim().split(/\s+/).filter(Boolean);
+
+      const modelHub = getModelConfigHub();
+      if (!modelHub) {
+        ctx.ui.notify("subagents 未初始化（session 未启动）", "error");
+        return;
+      }
+
+      // ── /subagents list [<id>] ──
+      if (args[0] === "list") {
+        if (!ctx.hasUI) {
+          ctx.ui.notify("/subagents list 需要交互式 UI", "error");
+          return;
+        }
+        const hub = getHub();
+        if (!hub) {
+          ctx.ui.notify("subagents 执行运行时未就绪", "error");
+          return;
+        }
+        await createSubagentsView(hub, ctx.ui.theme, ctx, args[1]);
+        return;
+      }
+
+      // ── /subagents config [...] ──
+      if (args[0] === "config") {
+        if (!ctx.hasUI) {
+          ctx.ui.notify("/subagents config 需要交互式 UI", "error");
+          return;
+        }
+        await runConfigWizard(ctx.ui, args.slice(1), modelHub);
+        return;
+      }
+
+      // ── /subagents（无参数或未知）→ 摘要 ──
+      const summary = formatConfigSummary(modelHub.getGlobalConfig(), modelHub.getSessionState());
+      ctx.ui.notify(summary, "info");
     },
   });
 }

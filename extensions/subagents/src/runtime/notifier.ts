@@ -110,10 +110,14 @@ export class BgNotifier {
       ? this.formatBgCompletionMessage(records[0])
       : records.map((r) => `- ${this.formatBgCompletionMessage(r)}`).join("\n");
 
+    // display:false —— 不渲染视觉 block（避与 tool result block 重复，commit 4ecc9f5a1）。
+    // triggerTurn:true 与 display 正交，仍唤醒父 agent 下一 turn。
+    // （对照 Pi 引擎 interactive-mode.ts:3069-3076：display:false 时连
+    //   CustomMessageComponent 都不创建，bg-notify-render 永不执行。）
     this.host.sendMessage({
       customType: NOTIFY_CUSTOM_TYPE,
       content,
-      display: true,
+      display: false,
     }, { triggerTurn: true });
   }
 
