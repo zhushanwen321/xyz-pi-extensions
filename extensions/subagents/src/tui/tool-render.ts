@@ -39,6 +39,9 @@ const STREAM_PREFIX = "  ⎿ ";
 /** footer 用的纯空格缩进（与 STREAM_PREFIX 等宽 4 列，但不带 ⎿）。 */
 const FOOTER_PREFIX = "    ";
 
+/** spinner 帧间隔（ms）。低频丝滑转动，只触发单行重绘不锁滚动。 */
+const SPINNER_INTERVAL_MS = 200;
+
 /** 压缩视图滚动区最多展示的 eventLog 条数（不含 currentActivity 行）。 */
 const COMPACT_SCROLL_LINES = 3;
 
@@ -136,11 +139,13 @@ export function renderSubagentResult(
     const comp = context.lastComponent;
     comp.update(details, themeLike);
     comp.setExpanded(options.expanded);
+    comp.setInvalidate(context.invalidate);
     return comp;
   }
 
   const comp = new SubagentResultComponent(details, themeLike);
   comp.setExpanded(options.expanded);
+  comp.setInvalidate(context.invalidate);
   return comp;
 }
 
@@ -152,7 +157,16 @@ export function renderSubagentResult(
  * SubagentResultComponent —— 持久 TUI 组件。
  *
  * update() 复用实例（省 GC），setExpanded 同步展开状态。
- * seed 由 detailsSeed(details) 在 render 时算（spinner 自然换帧，无定时器）。
+ *
+ * spinner 驱动：running 态用低频 setInterval（SPINNER_INTERVAL_MS）调 context.invalidate()
+ * 触发重绘，每次 render 用 Date.now() 选帧——丝滑转动。
+ * terminal 态（done/failed/cancelled）clearInterval，spinner 停在终态图标。
+ *
+ * 安全性（对照 pi-tui 引擎源码确认）：
+ *   - setInterval 只触发 invalidate（→ requestRender），不改行数/不加 eventLog
+ *   - Pi diff 引擎只重绘变化的行（tui.ts:1346「spinner animation」场景）
+ *   - 行数不变 → finalCursorRow 不变 → viewportTop 不变（tui.ts:1445）→ 不 snap-back
+ *   - 旧 Bug #4 根因是 setInterval 同时推了 eventLog（行数变化），不是定时器本身
  *
  * render 返回的 string[] 是**裸内容行**（状态行 + message stream 行），
  * 不含背景色/padding——那些由 Pi 的 contentBox 施加。
@@ -161,6 +175,10 @@ export class SubagentResultComponent implements Component {
   private details: SubagentToolDetails;
   private theme: ThemeLike;
   private expanded = false;
+  /** invalidate 回调（来自 SDK context，内部已含 requestRender）。running 态定时器调它驱动重绘。 */
+  private invalidateFn?: () => void;
+  /** spinner 定时器（running 态启动，terminal 态清除）。 */
+  private spinnerTimer?: ReturnType<typeof setInterval>;
 
   constructor(details: SubagentToolDetails, theme: ThemeLike) {
     this.details = details;
@@ -173,6 +191,11 @@ export class SubagentResultComponent implements Component {
     this.theme = theme;
   }
 
+  /** 注入 invalidate 回调（renderSubagentResult 从 context 传入）。 */
+  setInvalidate(fn: () => void): void {
+    this.invalidateFn = fn;
+  }
+
   setExpanded(expanded: boolean): void {
     this.expanded = expanded;
   }
@@ -182,7 +205,26 @@ export class SubagentResultComponent implements Component {
   }
 
   render(width: number): string[] {
+    this.maybeToggleSpinner();
     return this.expanded ? this.renderExpanded(width) : this.renderCompact(width);
+  }
+
+  /**
+   * 按状态启停 spinner 定时器。
+   *   running → 启动（若未启动）：setInterval 调 invalidate 触发重绘
+   *   terminal → 清除：spinner 停在终态图标
+   */
+  private maybeToggleSpinner(): void {
+    if (this.details.status === "running") {
+      if (this.spinnerTimer === undefined && this.invalidateFn) {
+        this.spinnerTimer = setInterval(() => {
+          this.invalidateFn!();
+        }, SPINNER_INTERVAL_MS);
+      }
+    } else if (this.spinnerTimer !== undefined) {
+      clearInterval(this.spinnerTimer);
+      this.spinnerTimer = undefined;
+    }
   }
 
   // ── 压缩视图 ──────────────────────────────────────────────
@@ -305,7 +347,8 @@ function extractAgentName(args: unknown): string {
  */
 function buildStatusLine(d: SubagentToolDetails, theme: ThemeLike): string {
   const glyph = statusGlyph(d.status);
-  const icon = glyph.icon ?? spinnerGlyph(detailsSeed(d));
+  // running 用 Date.now() 选帧（setInterval 驱动丝滑转动）；terminal 态 glyph.icon 有值
+  const icon = glyph.icon ?? spinnerGlyph(Math.floor(Date.now() / SPINNER_INTERVAL_MS));
   const glyphStr = theme.fg(glyph.color, icon);
 
   // stats：· N turns · Nk · Ns，零值隐藏
