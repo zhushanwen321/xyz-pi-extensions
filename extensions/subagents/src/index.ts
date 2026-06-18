@@ -75,6 +75,13 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
       sessionId: ctx.sessionManager.getSessionId(),
     });
 
+    // 先注册 Hub（让 execute 可用），再做 best-effort 清理。
+    // 顺序很重要：清理若 throw 不能阻塞 hub 注册，否则 getHub() 永远返回 undefined。
+    if (!existingHub) {
+      setModelConfigHub(modelHub);
+      setHub(hub);
+    }
+
     if (ctx.hasUI) {
       ctx.ui.setWidget(
         "subagents-progress",
@@ -84,12 +91,13 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
       );
     }
 
-    maybeCleanupExpiredSessionFiles(homeDir, cwd);
-    pruneWorktrees(cwd);
-
-    if (!existingHub) {
-      setModelConfigHub(modelHub);
-      setHub(hub);
+    // best-effort 清理（崩溃恢复 / GC），失败不应阻断 session——但额外兜底：
+    // 万一仍抛错，catch 住防止 session_start 整体崩。
+    try {
+      maybeCleanupExpiredSessionFiles(homeDir, cwd);
+      pruneWorktrees(cwd);
+    } catch {
+      // best-effort 清理失败，忽略——hub 已注册，session 可用
     }
   });
 

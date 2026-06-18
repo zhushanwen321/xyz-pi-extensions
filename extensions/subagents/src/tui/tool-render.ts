@@ -103,9 +103,11 @@ export function renderSubagentResult(
   const themeLike = theme as ThemeLike;
   const details = result.details;
 
-  // 防御性 fallback：details 缺失时显示占位（SDK 终态 throw 会重建空 details，丢 eventLog）
-  if (!details) {
-    return new Text(themeLike.fg("dim", "(no subagent details)"), 0, 0);
+  // 防御性 fallback：details 缺失或结构不完整时显示占位。
+  // execute throw 后 SDK 会重建空 details（{} 或 undefined），此时 status/agent 缺失——
+  // 不能当 SubagentToolDetails 渲染，否则显示 "⠋ undefined" 误导用户。
+  if (!details || typeof details.status !== "string" || typeof details.agent !== "string") {
+    return new Text(themeLike.fg("dim", "(subagent did not produce details)"), 0, 0);
   }
 
   // 复用 lastComponent（P1a 优化，省 GC + 防 theme 闪烁）
