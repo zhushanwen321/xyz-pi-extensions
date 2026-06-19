@@ -36,7 +36,7 @@ import type {
 } from "../types.ts";
 import { HistoryStore } from "./history-store.ts";
 import type { ModelConfigHub } from "./model-config-hub.ts";
-import type { BgNotifyRecord } from "./notifier.ts";
+import type { BgNotifyRecord, NotifierHost } from "./notifier.ts";
 import { BgNotifier } from "./notifier.ts";
 import { RecordStore } from "./record-store.ts";
 
@@ -432,11 +432,15 @@ export class SubagentHub {
     };
   }
 
-  /** notifier 的 NotifierHost 适配器（绑定到 pi.sendMessage）。 */
-  private piAdapter(): { sendMessage: PiLike["sendMessage"] } {
+  /** notifier 的 NotifierHost 适配器（绑定到 pi.sendMessage + store 查询）。 */
+  private piAdapter(): NotifierHost {
     return {
       sendMessage: (message, options) => {
         this.pi?.sendMessage(message, options);
+      },
+      hasRunningBackground: () => {
+        // 有 running 的 background record → 滑动窗口继续等；否则立即 flush
+        return this.store.listRunning().some((r) => r.mode === "background");
       },
     };
   }

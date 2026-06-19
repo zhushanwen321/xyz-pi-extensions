@@ -30,6 +30,8 @@ export interface NotifierHost {
     message: { customType: string; content: string; display: boolean; details?: unknown },
     options?: { triggerTurn?: boolean },
   ): void;
+  /** 是否还有 running 的 background 任务（用于滑动窗口立即 flush 判断）。 */
+  hasRunningBackground(): boolean;
 }
 
 // ============================================================
@@ -53,21 +55,26 @@ const PREVIEW_MAX = 200;
 // ============================================================
 
 /**
- * Background 完成通知器。
+ * Background 完成通知器（滑动窗口合并）。
  *
  *   ╔══════════════════════════════════════════════════════════════════╗
 //   ║  notify(record):                                                   ║
 //   ║    1. dedup TTL 检查：同 id 在 TTL 内 → 跳过                        ║
 //   ║    2. 入 pending 队列                                              ║
-//   ║    3. 若无 pending timer → 启动 MERGE_WINDOW_MS 定时器              ║
+//   ║    3. 清除旧 timer（滑动窗口重置）                                  ║
+//   ║    4. 已无 running background → 立即 flush（最后一批）              ║
+//   ║    5. 否则重启 MERGE_WINDOW_MS timer（等后续完成合并）              ║
 //   ║                                                                    ║
-//   ║  flushPending():  timer 到期触发                                   ║
+//   ║  flushPending():  timer 到期 / 无 running / shutdown 触发           ║
 //   ║    1. 取出 pending 全部 record                                      ║
 //   ║    2. 合并为一条消息（多条时列 bullet list）                        ║
 //   ║    3. sendMessage({ customType:"subagent-bg-notify",               ║
 //   ║                     content, display:true, triggerTurn:false })    ║
 //   ║    4. 清空 pending + timer                                         ║
 //   ╚══════════════════════════════════════════════════════════════════╝
+ *
+ * 滑动窗口：每次有新完成都重置 20s 计时器，密集完成的任务尽量合并到一条通知。
+ * 无 running 时立即 flush——避免最后一条等满 20s。
  *
  * triggerTurn:false 不唤醒父 agent——完成通知只渲染 display block 给用户看，
  * 不触发 streaming（避免终端 scrollback 锁底，用户可自由滚动）。主 agent 后续
@@ -82,7 +89,15 @@ export class BgNotifier {
 
   constructor(private readonly host: NotifierHost) {}
 
-  /** 入队一条完成通知（去重 + 合并窗口）。dispose 后短路。 */
+  /**
+   * 入队一条完成通知（去重 + 滑动窗口合并）。dispose 后短路。
+   *
+   * 滑动窗口策略（每次有新完成就重置 20s 计时器，等待后续 background 批量合并）：
+   *   1. push 到 pending
+   *   2. 清除旧 timer
+   *   3. 若已无 running background → 立即 flush（最后一条，不必等窗口）
+   *   4. 否则重启 20s timer（滑动：每次新完成都重置，让密集完成的任务尽量合并）
+   */
   notify(record: BgNotifyRecord): void {
     if (this._disposed) return;
 
@@ -93,10 +108,21 @@ export class BgNotifier {
     this.dedup.set(record.id, now);
 
     this.pending.push(record);
-    // 若无 pending timer → 启动合并窗口定时器
-    if (this.timer === undefined) {
-      this.timer = setTimeout(() => this.flushPendingNotifications(), MERGE_WINDOW_MS);
+
+    // 清除旧 timer（滑动窗口：重置计时）
+    if (this.timer !== undefined) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
     }
+
+    // 已无 running background → 立即 flush（最后一批，不必等窗口）
+    if (!this.host.hasRunningBackground()) {
+      this.flushPendingNotifications();
+      return;
+    }
+
+    // 重启 20s 滑动窗口
+    this.timer = setTimeout(() => this.flushPendingNotifications(), MERGE_WINDOW_MS);
   }
 
   /** 立即 flush（session_shutdown 调用，防丢失）。 */
