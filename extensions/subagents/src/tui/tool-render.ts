@@ -359,8 +359,11 @@ function extractAgentName(args: unknown): string {
  */
 function buildStatusLine(d: SubagentToolDetails, theme: ThemeLike): string {
   const glyph = statusGlyph(d.status);
-  // running 用 Date.now() 选帧（setInterval 驱动丝滑转动）；terminal 态 glyph.icon 有值
-  const icon = glyph.icon ?? spinnerGlyph(Math.floor(Date.now() / SPINNER_INTERVAL_MS));
+  // running 用 Date.now() 选帧（setInterval 驱动丝滑转动）；terminal 态 glyph.icon 有值。
+  // background 占位 block（有 backgroundId）用静态 ● 而非 spinner——execute 已 return，
+  // 不会有 onUpdate 更新，spinner 转了内容也不变，静态图标更准确表达「已派发后台运行」。
+  const icon = glyph.icon
+    ?? (d.backgroundId !== undefined ? "●" : spinnerGlyph(Math.floor(Date.now() / SPINNER_INTERVAL_MS)));
   const glyphStr = theme.fg(glyph.color, icon);
 
   // stats：· N turns · Nk · Ns，零值隐藏
