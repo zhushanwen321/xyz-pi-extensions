@@ -40,7 +40,7 @@ import { SubagentsProgressWidget } from "./tui/progress-widget.ts";
 //   ║    3. modelHub.initModel({modelRegistry, sessionId, entries})     ║
 //   ║    4. hub.initSession({pi, sessionId})                            ║
 //   ║    3. ctx.hasUI → ctx.ui.setWidget("subagents-progress", factory,  ║
-//   ║                                          { placement:"belowEditor"})║
+//   ║                                          { placement:"aboveEditor"})║
 //   ║    4. maybeCleanupExpiredSessionFiles(homeDir, cwd)                ║
 //   ║    5. pruneWorktrees(cwd)  ◄── 崩溃恢复兜底                        ║
 //   ║                                                                    ║
@@ -87,7 +87,7 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
         "subagents-progress",
         (tui: { requestRender(): void }, theme: ThemeLike) =>
           new SubagentsProgressWidget(hub, theme, tui),
-        { placement: "belowEditor" },
+        { placement: "aboveEditor" },
       );
     }
 

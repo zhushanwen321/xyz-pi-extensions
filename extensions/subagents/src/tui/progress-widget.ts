@@ -1,7 +1,7 @@
 // src/tui/progress-widget.ts
 //
-// belowEditor 常驻进度 widget。有 background subagent 运行时显示每行进度，
-// 无运行时不占位（render 返回 []）。
+// aboveEditor 常驻进度 widget。有 background subagent 运行时显示每行进度，
+// 无运行时占位 1 行（不缩到 0 行——避免高度波动触发拖影）。
 //
 // background 执行进度无法回流到对话流 tool block（execute return 后 Pi 必然
 // finalize tool block，onUpdate 被丢弃——见 pi 源码 agent-loop.ts:636-654）。
@@ -12,7 +12,7 @@
 //   - 不设 renderShell，背景色归 Pi shell（widget 路径下不施加背景色）
 //   - 所有输出行经 truncLine（ANSI 安全）
 //   - **固定 ≥1 行高度**：无 running 时返回 1 行占位提示（不返回 []）。
-//     belowEditor widget 高度波动（0↔N）会触发 Pi clearOnShrink=off 下的拖影——
+//     aboveEditor widget 高度波动（0↔N）会触发 Pi clearOnShrink=off 下的拖影——
 //     多行 input + widget 高度变化 + 差分渲染导致物理终端行与逻辑行错位。
 //     固定 ≥1 行消除 0→N 的跳变（N→N±1 的小波动 Pi 差分渲染能正确处理）。
 //   - spinner 用 Date.now() 选帧，靠 hub.onChange 触发 requestRender 换帧
@@ -65,7 +65,7 @@ export class SubagentsProgressWidget implements Component {
     const t = this.theme;
 
     if (records.length === 0) {
-      // 固定 1 行占位——避免 belowEditor widget 高度波动（0↔N）触发 Pi
+      // 固定 1 行占位——避免 aboveEditor widget 高度波动（0↔N）触发 Pi
       // clearOnShrink=off 下的拖影。有 background 时多行，无时始终 1 行。
       return [truncLine(t.fg("dim", "/subagents list · background tasks show here when running"), width)];
     }
