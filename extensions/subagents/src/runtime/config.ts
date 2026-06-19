@@ -6,7 +6,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type {
-  CategoryConfirmResult,
   SessionModelState,
   SubagentsGlobalConfig,
 } from "../types.ts";
@@ -124,22 +123,13 @@ export function saveGlobalConfig(homeDir: string, config: SubagentsGlobalConfig)
 
 /**
  * 创建初始 session 状态（session_start 时调用）。
- * categoryConfirmed=false 触发首次确认拦截。
+ *
+ * categoryConfirmed 默认 true——不拦截执行（D-1：取消首次确认）。
+ * 用户改 category 模型走 /subagents config（写 globalConfig）；感知模型靠 tool block
+ * 醒目显示。categoryModels/agentModels 保留为 inert 字段（resolveModel 有兜底不崩）。
  */
 export function createSessionState(): SessionModelState {
-  return { yoloMode: false, categoryConfirmed: false, categoryModels: {}, agentModels: {} };
-}
-
-/**
- * 应用首次 category 确认结果。
- * 写入 sessionState.categoryModels + categoryConfirmed=true。
- */
-export function applyCategoryConfirm(
-  state: SessionModelState,
-  result: CategoryConfirmResult,
-): void {
-  Object.assign(state.categoryModels, result.overrides);
-  state.categoryConfirmed = true;
+  return { yoloMode: false, categoryConfirmed: true, categoryModels: {}, agentModels: {} };
 }
 
 /**

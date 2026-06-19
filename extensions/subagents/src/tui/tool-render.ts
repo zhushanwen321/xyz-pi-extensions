@@ -88,15 +88,19 @@ export function renderSubagentCall(
   const agent = extractAgentName(args);
   const parts = [`${t.fg("toolTitle", t.bold("subagent "))}${t.fg("accent", agent)}`];
 
-  // model + thinking（dim 色），预解析有值才显示
+  // model + thinking——model 用 accent 色（感知主战场，D-1 取消确认后靠此显示），
+  // thinking 保持 dim（次要信息）。预解析有值才显示。
   if (resolved) {
     const modelBase = resolved.model.lastIndexOf("/") !== -1
       ? resolved.model.slice(resolved.model.lastIndexOf("/") + 1)
       : resolved.model;
-    const meta = resolved.thinkingLevel
-      ? `${modelBase} · thinking ${resolved.thinkingLevel}`
-      : modelBase;
-    parts.push(t.fg("dim", ` (${meta})`));
+    parts.push(t.fg("dim", " ("));
+    parts.push(t.fg("accent", modelBase));
+    if (resolved.thinkingLevel) {
+      parts.push(t.fg("dim", ` · thinking ${resolved.thinkingLevel})`));
+    } else {
+      parts.push(t.fg("dim", ")"));
+    }
   }
 
   return new Text(parts.join(""), 0, 0);

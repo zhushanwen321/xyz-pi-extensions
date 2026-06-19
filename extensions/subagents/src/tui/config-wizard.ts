@@ -97,9 +97,15 @@ async function editCategoryModel(
     ui.notify("没有可配置的 category", "warning");
     return;
   }
+  const available = registry.getAvailable();
+  const availableIds = new Set(available.map((m) => `${m.provider}/${m.id}`));
+  // label 显示真实模型——若 config 配的 model 在 registry 无效，标降级提示
+  // （resolveModel 会 fallback 到 fallback.model 或 ctx.model，用户应感知）
   const catLabels = catNames.map((n) => {
     const def = config.categories[n]!;
-    return `${def.label} (${n}) = ${def.model}`;
+    const valid = availableIds.has(def.model);
+    const suffix = valid ? "" : ` ⚠ 无效（将降级到 ${config.fallback.model}）`;
+    return `${def.label} (${n}) = ${def.model}${suffix}`;
   });
   const catChoice = await ui.select("选择 category", catLabels);
   if (catChoice === undefined) return;
@@ -107,7 +113,6 @@ async function editCategoryModel(
   if (catIdx < 0) return;
   const catName = catNames[catIdx]!;
 
-  const available = registry.getAvailable();
   if (available.length === 0) {
     ui.notify("没有可用的模型（检查 modelRegistry 鉴权）", "warning");
     return;

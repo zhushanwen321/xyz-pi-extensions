@@ -10,18 +10,15 @@ import { AgentRegistry } from "../core/agent-registry.ts";
 import {
   type AgentConfig,
   inferCategory,
-  type ModelInfo,
   type ModelRegistryLike,
   type ResolvedModel,
   resolveModelForAgent,
 } from "../core/model-resolver.ts";
 import type {
-  CategoryConfirmResult,
   SessionModelState,
   SubagentsGlobalConfig,
 } from "../types.ts";
 import {
-  applyCategoryConfirm,
   createSessionState,
   loadGlobalConfig,
   restoreSessionState,
@@ -47,26 +44,6 @@ export interface ModelSessionInit {
   /** session 历史条目（/resume /fork 时恢复 sessionState）。 */
   entries: ReadonlyArray<{ type: string; data?: unknown }>;
 }
-
-/**
- * 首次 category 确认回调的入参。
- * 与 tui/category-confirm.ts 的 CategoryConfirmInput 结构兼容（duck-typed），
- * 但在此独立声明——避免 Runtime 层依赖 TUI 层。
- */
-export interface ConfirmCategoryInput {
-  categories: { name: string; model: string }[];
-  currentModels: Record<string, { model: string; thinkingLevel?: string }>;
-  available: ModelInfo[];
-}
-
-/**
- * 首次 category 确认回调。
- * SubagentHub.execute 经 ExecuteOptions.onConfirmCategory 透传到 resolveModel。
- * 无 UI 场景（测试/headless）省略——resolveModel 跳过确认直接用 fallback 解析。
- */
-export type ConfirmCategoryCallback = (
-  input: ConfirmCategoryInput,
-) => Promise<CategoryConfirmResult>;
 
 // ============================================================
 // ModelConfigHub
@@ -130,28 +107,10 @@ export class ModelConfigHub {
   // ── 模型解析（SubagentHub.execute 内部调）──────────────
 
   /**
-   * 首次 category 确认（如果需要）。execute 在 resolveModel 前调。
+   * 解析 agent 的模型（纯解析）。
    *
-   *   已确认（categoryConfirmed=true）→ 跳过
-   *   未确认 && onConfirmCategory 存在 → 调回调 → confirmed 则 applyCategoryConfirm
-   *   未确认 && 无回调（无 UI）→ 跳过（headless/测试场景，用 fallback）
-   *   回调 cancelled → 抛 ConfirmCancelledError（调用方决定不执行）
-   */
-  async ensureConfirmed(onConfirmCategory?: ConfirmCategoryCallback): Promise<void> {
-    if (this.sessionState.categoryConfirmed) return;
-    if (!onConfirmCategory) return; // 无 UI，跳过
-
-    const input = this.buildConfirmInput();
-    const result = await onConfirmCategory(input);
-    if (result.action === "cancelled") {
-      throw new ConfirmCancelledError();
-    }
-    applyCategoryConfirm(this.sessionState, result);
-  }
-
-  /**
-   * 解析 agent 的模型（纯解析，不含确认）。
-   * 调用方应先 await ensureConfirmed() 再调本方法。
+   * D-1：取消首次确认拦截——categoryConfirmed 默认 true，本方法直接解析不再阻塞。
+   * 用户改 category 模型走 /subagents config（写 globalConfig）。
    */
   resolveModel(
     agentName: string,
@@ -240,39 +199,11 @@ export class ModelConfigHub {
     });
   }
 
-  /** 构造确认组件的入参（categories + currentModels + available）。 */
-  private buildConfirmInput(): ConfirmCategoryInput {
-    const categories = Object.entries(this.globalConfig.categories).map(([name, def]) => ({
-      name,
-      model: def.model,
-    }));
-    return {
-      categories,
-      currentModels: { ...this.sessionState.categoryModels },
-      available: this.modelRegistry!.getAvailable(),
-    };
-  }
-
   /** 校验 modelRegistry 已注入。 */
   private assertReady(): void {
     if (this.modelRegistry === null) {
       throw new Error("modelRegistry not injected (initModel not called?)");
     }
-  }
-}
-
-// ============================================================
-// 确认信号
-// ============================================================
-
-/**
- * ensureConfirmed 在用户取消确认时抛出。调用方（SubagentHub.execute）catch 后
- * 不执行子代理（用户意图），向上抛出让 tool 层终止本次调用。
- */
-export class ConfirmCancelledError extends Error {
-  constructor() {
-    super("category confirmation cancelled by user");
-    this.name = "ConfirmCancelledError";
   }
 }
 

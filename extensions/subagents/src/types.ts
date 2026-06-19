@@ -195,16 +195,6 @@ export interface ExecuteOptions {
   onUpdate?: (details: SubagentToolDetails) => void;
   /** background 完成回调（sync 不调）。 */
   onComplete?: (record: RecordSnapshot) => void;
-  /**
-   * 首次 category 确认回调。hub.execute 内部首次调用且未确认时触发。
-   * 无 UI 场景（headless/测试）省略——hub 跳过确认直接用 fallback 解析。
-   * 类型与 ModelConfigHub.ConfirmCategoryCallback 结构兼容（duck-typed）。
-   */
-  onConfirmCategory?: (input: {
-    categories: { name: string; model: string }[];
-    currentModels: Record<string, { model: string; thinkingLevel?: string }>;
-    available: unknown[];
-  }) => Promise<CategoryConfirmResult>;
 }
 
 /**
@@ -350,11 +340,6 @@ export interface SessionModelState {
   categoryConfirmed: boolean;
   categoryModels: Record<string, { model: string; thinkingLevel?: string }>;
   agentModels: Record<string, { model: string; thinkingLevel?: string }>;
-}
-
-export interface CategoryConfirmResult {
-  action: "confirmed" | "cancelled";
-  overrides: Record<string, { model: string; thinkingLevel?: string }>;
 }
 
 // ============================================================

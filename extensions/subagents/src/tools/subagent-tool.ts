@@ -1,6 +1,6 @@
 // src/tools/subagent-tool.ts
 //
-// `subagent` LLM 工具。薄壳——参数解析 + 首次 category 确认 + 调 runtime.execute。
+// `subagent` LLM 工具。薄壳——参数解析 + 调 runtime.execute。
 // 不创建 state、不节流 onUpdate、不写 history（全部在 runtime 层统一）。
 //
 // 设计说明：renderCall/renderResult/execute 三个回调均抽成模块级 const +
@@ -15,10 +15,8 @@ import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@ma
 import { Type } from "@sinclair/typebox";
 
 import { getHub } from "../runtime/subagent-hub.ts";
-import { CategoryConfirmComponent, type CategoryConfirmInput } from "../tui/category-confirm.ts";
-import type { ThemeLike } from "../tui/format.ts";
 import { type RenderContext,renderSubagentCall, renderSubagentResult } from "../tui/tool-render.ts";
-import type { CategoryConfirmResult, ExecuteOptions, SubagentToolDetails } from "../types.ts";
+import type { ExecuteOptions, SubagentToolDetails } from "../types.ts";
 
 // ============================================================
 // 回调类型（抽 alias 绕 registerTool(unknown) 的 TS2307 误报）
@@ -158,11 +156,6 @@ const subagentRenderResult: SubagentRenderResultCb = (result, options, theme, ct
  *   ║  ── task 必填校验 ───────────────────────────────────────────  ║
  *   ║  rt.assertAgentExists(params.agent)   ◄── fail-fast 未知 agent  ║
  *   ║                                                                    ║
- *   ║  ── 首次 category 确认拦截（仅 hasUI && !confirmed）─────────  ║
- *   ║  ctx.ui.custom(CategoryConfirmComponent)                          ║
- *   ║  cancelled → throw（不重试）                                      ║
- *   ║  rt.applyCategoryConfirm(result)                                  ║
- *   ║                                                                    ║
  *   ║  ── mode 判定 ─────────────────────────────────────────────  ║
  *   ║  params.wait > agent.defaultBackground > "sync"                   ║
  *   ║                                                                    ║
@@ -192,7 +185,7 @@ const executeSubagent: SubagentExecuteCb = async (
   params,
   signal,
   onUpdate,
-  ctx,
+  _ctx,
 ) => {
   const hub = getHub();
   if (!hub) throw new Error("subagents runtime not initialized");
@@ -210,10 +203,8 @@ const executeSubagent: SubagentExecuteCb = async (
   // ── task 必填 ──
   if (!params.task) throw new Error("task is required");
 
-  // ── 首次 category 确认回调（仅 hasUI 时注入；headless 跳过，hub 内 ensureConfirmed 走 fallback）──
-  const onConfirmCategory = buildConfirmCallback(ctx);
-
-  // ── 调 hub.execute（mode 判定 + agent 校验 + 确认 + 执行全在 hub 内部）──
+  // ── 调 hub.execute（mode 判定 + agent 校验 + 执行全在 hub 内部）──
+  // D-1：取消首次确认拦截——不再注入 onConfirmCategory。
   const handle = await hub.execute({
     task: params.task,
     agent: params.agent,
@@ -226,7 +217,6 @@ const executeSubagent: SubagentExecuteCb = async (
     maxTurns: params.maxTurns,
     graceTurns: params.graceTurns,
     signal,
-    onConfirmCategory,
     onUpdate: onUpdate
       ? (details) => {
           onUpdate({ content: [{ type: "text", text: details.result ?? "" }], details });
@@ -245,56 +235,3 @@ const executeSubagent: SubagentExecuteCb = async (
   return { content: [{ type: "text", text: handle.record.result ?? "" }],
     details: handle.details } as unknown as void;
 };
-
-// ============================================================
-// 首次 category 确认回调工厂
-// ============================================================
-
-/**
- * 构造 onConfirmCategory 回调。
- *
- * 仅当 ctx.hasUI 时返回可触发 overlay 的回调；否则返回 undefined（headless 跳过确认，
- * hub 内 ensureConfirmed 走 fallback 解析）。
- *
- * 回调内调 ctx.ui.custom<CategoryConfirmResult>(...)，弹出 CategoryConfirmComponent
- * 全屏 overlay。用户确认 → resolve CategoryConfirmResult；取消 → resolve cancelled。
- *
- * ctx.ui.custom 的 factory 第 4 参 done 由 Pi 框架提供，调它 resolve Promise。
- * 对照 pi-tui-development-guide.md §3.2 overlay 契约。
- */
-function buildConfirmCallback(
-  ctx: ExtensionContext | undefined,
-): ((input: {
-  categories: { name: string; model: string }[];
-  currentModels: Record<string, { model: string; thinkingLevel?: string }>;
-  available: unknown[];
-}) => Promise<CategoryConfirmResult>) | undefined {
-  if (!ctx || !ctx.hasUI) return undefined;
-
-  return async (input) => {
-    // available 是 unknown[]（ExecuteOptions 的宽松声明），转 ModelInfo[] 供组件消费
-    const confirmInput: CategoryConfirmInput = {
-      categories: input.categories,
-      currentModels: input.currentModels,
-      available: input.available as CategoryConfirmInput["available"],
-    };
-
-    const result = await ctx.ui.custom<CategoryConfirmResult>(
-      (_tui, theme, keybindings, done) =>
-        // Pi Theme 与 ThemeLike duck-type 兼容（均有 fg/bg/bold/underline），
-        // 但 ctx.ui.custom 的 factory theme 参数是 Pi Theme 类型，
-        // CategoryConfirmComponent 要 ThemeLike——结构兼容但 tsc 需显式标注
-        new CategoryConfirmComponent(confirmInput, theme as unknown as ThemeLike, keybindings, done),
-      // overlay:false —— 组件渲染在 TUI input 区（替换 editor），常驻接管键盘焦点。
-      // 非 overlay：不开浮层，背景由 editorContainer 管，退出时 Pi 自动恢复 editor。
-      // （对照 spec FR-2.0：input 区常驻组件，而非浮层 overlay）
-      { overlay: false },
-    );
-    // ctx.ui.custom 在用户取消（Esc）时由组件调 done({action:"cancelled",...}) resolve，
-    // 不会 reject。返回结果即为 CategoryConfirmResult。
-    return result ?? { action: "cancelled", overrides: {} };
-  };
-}
-
-// 保留未使用的类型别名（CategoryConfirmResult 在 execute 实现中使用）
-export type { CategoryConfirmResult };

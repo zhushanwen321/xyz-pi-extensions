@@ -35,7 +35,7 @@ import type {
   SubagentToolDetails,
 } from "../types.ts";
 import { HistoryStore } from "./history-store.ts";
-import type { ConfirmCategoryCallback, ModelConfigHub } from "./model-config-hub.ts";
+import type { ModelConfigHub } from "./model-config-hub.ts";
 import type { BgNotifyRecord } from "./notifier.ts";
 import { BgNotifier } from "./notifier.ts";
 import { RecordStore } from "./record-store.ts";
@@ -238,20 +238,14 @@ export class SubagentHub {
     return "sync";
   }
 
-  /** 步骤 1：身份解析。确认（经回调）→ agentConfig → resolveModel。 */
+  /** 步骤 1：身份解析。agentConfig → resolveModel。 */
   private async resolveIdentity(opts: ExecuteOptions): Promise<ResolvedIdentity> {
-    // 首次 category 确认（已确认则跳过；无回调则 headless 跳过）
-    await this.modelHub.ensureConfirmed(
-      opts.onConfirmCategory
-        ? (opts.onConfirmCategory as ConfirmCategoryCallback)
-        : undefined,
-    );
-
+    // D-1：取消首次确认拦截——categoryConfirmed 默认 true，直接解析。
     // agent 名 + 配置
     const agent = opts.agent ?? "default";
     const agentConfig = this.modelHub.getAgentConfig(agent);
 
-    // 模型解析（5 级 fallback，含确认后的 sessionState）
+    // 模型解析（5 级 fallback）
     const resolved = this.modelHub.resolveModel(agent, {
       model: opts.model,
       thinkingLevel: opts.thinkingLevel,

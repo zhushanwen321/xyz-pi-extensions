@@ -32,7 +32,23 @@ verdict: pass
 - 此拦截点位于 sync/background 分支之前，故两种执行模式都覆盖。
 - **注意**：拦截点处尚未调用 `resolveModelForAgent`（它在 effectiveWait 之后，约第 303 行）。因此弹窗内的「每个 category 当前模型」需由弹窗逻辑自行批量解析（见 FR-2.4），而非复用 tool 层的单次解析结果。
 
-### FR-2: 确认交互（平铺组件 + 二级菜单）
+> **D-1 偏差（2026-06-19）：FR-1（首次确认拦截）+ FR-2（确认交互）已废弃。**
+>
+> 原设计在每次新 session 首次 subagent 调用时弹确认组件拦截执行，让用户感知/调整每个 category 的模型。实测发现过度设计：
+> - 「感知」不需要「拦截」——大多数情况 config 是对的，强制确认只是多一次 Enter
+> - 改 category 模型是配置层的事，不该塞进执行路径（职责混淆）
+> - 三栏/二级菜单选模型的复杂度与「防止用错模型」的目的不匹配
+>
+> **替代方案**：
+> 1. `categoryConfirmed` 默认 `true`（`config.ts:createSessionState`）——不拦截执行
+> 2. 感知靠 tool block 醒目显示 model（`tool-render.ts:renderSubagentCall` 标题行 model 用 accent 色，一眼可见）
+> 3. 改 category 模型走 `/subagents config` wizard（`config-wizard.ts:editCategoryModel`），wizard label 校验模型有效性并标降级提示
+>
+> **代码清理**：删除 `category-confirm.ts` 整文件、`ensureConfirmed`/`buildConfirmInput`/`ConfirmCancelledError`/`ConfirmCategoryInput`/`ConfirmCategoryCallback`/`CategoryConfirmResult`/`applyCategoryConfirm`/`buildConfirmCallback`/`ExecuteOptions.onConfirmCategory`。`categoryModels`/`agentModels` 字段保留为 inert（resolveModel 有 `?? globalConfig.categories` 兜底不崩）。
+>
+> 下方 FR-2 原文保留作为历史记录，**不再有效**。
+
+### FR-2: 确认交互（平铺组件 + 二级菜单） `[已废弃 D-1，见上文]`
 
 **FR-2.0 交互形态**：通过 `ctx.ui.custom(factory, { overlay: false })` 在 **TUI input 区**渲染一个常驻自定义组件（替换 editorContainer，接管键盘焦点）。组件内部状态机管理三个视图：category 平铺列表（主视图，常驻）、model 二级菜单、thinking level 子菜单。这是对「串行 `ctx.ui.select`」的升级——一次性平铺所有 category，方向键导航，下钻二级菜单改模型。组件实现为裸 `Component` 类（实现 `render`/`invalidate`/`handleInput`），不 extends Container。
 
