@@ -218,9 +218,16 @@ export class SubagentResultComponent implements Component {
    * 按状态启停 spinner 定时器。
    *   running → 启动（若未启动）：setInterval 调 invalidate 触发重绘
    *   terminal → 清除：spinner 停在终态图标
+   *
+   *   background 模式（details.backgroundId 存在）**不启动定时器**：
+   *   background 的 tool block 在 execute return 后被 Pi finalize，之后无 onUpdate
+   *   更新。spinner 转了 eventLog 也不变，反而每次 invalidate→renderResult 会导致
+   *   Pi 把 spinner 行当新内容追加（行数持续增长堆积）。background 进度靠 progress
+   *   widget 展示，不靠 tool block。
    */
   private maybeToggleSpinner(): void {
-    if (this.details.status === "running") {
+    const isBackgroundPlaceholder = this.details.backgroundId !== undefined;
+    if (this.details.status === "running" && !isBackgroundPlaceholder) {
       if (this.spinnerTimer === undefined && this.invalidateFn) {
         this.spinnerTimer = setInterval(() => {
           this.invalidateFn!();
