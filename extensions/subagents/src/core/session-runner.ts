@@ -7,17 +7,12 @@
 //
 // 编排层（Orchestration）：站在基础层三件套（session-factory / output-collector /
 // event-bridge）之上，负责执行时序与清理。不持有 Pi SDK 实例，只通过 factory 间接用。
-// 长生命周期变体见 managed-session.ts（平级编排器，互不 import）。
 // 设计信息见 docs/subagents/session-runner.md。
-
-import { randomBytes } from "node:crypto";
-import * as os from "node:os";
 
 import type {
   AgentEvent,
   AgentResult,
   ExecutionRecord,
-  WorktreeOutcome,
 } from "../types.ts";
 import { updateFromEvent } from "./execution-record.ts";
 import type { AgentConfig, ResolvedModel } from "./model-resolver.ts";
@@ -30,8 +25,6 @@ import type {
 } from "./session-factory.ts";
 import { createAndConfigureSession } from "./session-factory.ts";
 import { createTurnLimiter } from "./turn-limiter.ts";
-import type { WorktreeResult } from "./worktree.ts";
-import { cleanupWorktree, createWorktree } from "./worktree.ts";
 
 // ============================================================
 // 常量
@@ -47,12 +40,6 @@ const MAX_SCHEMA_STEERS = 2;
 /** structured-output 工具名（与 structured-output 扩展 TOOL_NAME 一致）。 */
 const STRUCTURED_OUTPUT_TOOL = "structured-output";
 
-/** worktree agentId 的随机字节数（8 hex 字符，路径注入防御）。 */
-const WORKTREE_AGENT_ID_BYTES = 4;
-
-/** worktree commit message 的 task 截断长度（防超长 task 撑爆 commit msg）。 */
-const WORKTREE_COMMIT_MSG_MAX = 200;
-
 // ============================================================
 // 依赖注入容器 + 入参
 // ============================================================
@@ -61,11 +48,9 @@ const WORKTREE_COMMIT_MSG_MAX = 200;
 export interface SessionRunnerContext {
   /** 进程当前工作目录（传给 createAgentSession）。 */
   cwd: string;
-  /** agent 配置目录（~/.pi/agent）。 */
+  /** agent 配置目录（由 Pi 核心 getAgentDir() 决定，默认 ~/.pi/agent）。 */
   agentDir: string;
-  /** home 目录（worktree baseDir / session 持久化目录）。 */
-  homeDir: string;
-  /** session 工厂上下文（modelRegistry/resolveAgent/cwd/agentDir/homeDir）。
+  /** session 工厂上下文（modelRegistry/resolveAgent/cwd/agentDir）。
    *  由 Runtime 装配后注入——run() 必须把它传给 createAndConfigureSession，
    *  因此提升到 context，避免在 run() 内部重新构造。 */
   factoryCtx: SessionFactoryContext;
@@ -78,7 +63,7 @@ export interface SessionRunnerContext {
 export interface RunOptions {
   /** 已 resolve 的模型（Runtime 在调用前解析，Core 不重复解析）。 */
   resolved: ResolvedModel;
-  /** agent 配置（含 systemPrompt/tools/isolation）。 */
+  /** agent 配置（含 systemPrompt/tools）。 */
   agentConfig: AgentConfig | undefined;
   /** 注入到子 session 的额外 system prompt 片段。 */
   appendSystemPrompt: string[] | undefined;
@@ -120,33 +105,8 @@ export function formatSchemaInstruction(schema: Record<string, unknown>): string
 }
 
 // ============================================================
-// run 编排骨架的叶子（全部 throw not implemented）
+// run 编排骨架
 // ============================================================
-
-/**
- * 隔离判定 + worktree 创建。封装 run() 的步骤 a：
- *   - isolation !== "worktree" → 返回 undefined（cwd 内执行）
- *   - isolation === "worktree" → createWorktree(cwd, randomHex, tmpdir)
- *
- * ⚠ createWorktree 返回 undefined（非 git / worktree add 失败）时必须 throw——
- *   不能静默回退到 cwd：那会让 agent 污染用户工作区，违背 isolation:worktree 的意图。
- *   （设计意图说明，留注释不翻译成代码）
- */
-function createWorktreeForIsolation(
-  opts: RunOptions,
-  ctx: SessionRunnerContext,
-): WorktreeResult | undefined {
-  // 普通路径：未声明 isolation → 在 cwd 内执行，返回 undefined
-  if (opts.agentConfig?.isolation !== "worktree") return undefined;
-
-  // 隔离路径：创建临时 worktree 副本（createWorktree 当前为叶子，throw = fail-fast）
-  const agentId = randomBytes(WORKTREE_AGENT_ID_BYTES).toString("hex");
-  const wt = createWorktree(ctx.cwd, agentId, os.tmpdir());
-  if (wt === undefined) {
-    throw new Error("worktree isolation requested but creation failed");
-  }
-  return wt;
-}
 
 /**
  * turn_end 旁路钩子（turnLimiter + schema enforcement）的统一挂载句柄。
@@ -234,21 +194,6 @@ export function attachRunHooks(built: BuiltSession, opts: RunOptions): RunHooks 
   return { onTurnEnd, unsubscribe };
 }
 
-/**
- * 执行结果失败/正常收尾的 worktree 清理。封装 run() 的步骤 i。
- * 成功或失败都调 cleanupWorktree——失败时 cleanupWorktree 内部走 preserveOnFailure
- * 保留变更（不静默丢弃）。
- */
-function cleanupWorktreeForOutcome(
-  worktree: WorktreeResult,
-  cwd: string,
-  task: string,
-  _success: boolean,
-): WorktreeOutcome {
-  // _success 不改变清理策略——cleanupWorktree 自身按 hasChanges 决定 commit/preserve
-  return cleanupWorktree(cwd, worktree, task.slice(0, WORKTREE_COMMIT_MSG_MAX));
-}
-
 // ============================================================
 // run —— 唯一执行入口
 // ============================================================
@@ -262,20 +207,17 @@ function cleanupWorktreeForOutcome(
 //   ║       ▼                                                            ║
 //   ║  run(record, task, opts, ctx)                                     ║
 //   ║       │                                                            ║
-//   ║       ├─ a. isolation:worktree? → createWorktree(tmpdir)           ║
-//   ║       │      └─ 失败 throw（不静默回退到 cwd）                      ║
-//   ║       ├─ b. createAndConfigureSession(model, tools, skills, cwd)   ║
-//   ║       ├─ c. EventBridge.subscribe(session)                        ║
+//   ║       ├─ a. createAndConfigureSession(model, tools, skills, cwd)   ║
+//   ║       ├─ b. EventBridge.subscribe(session)                        ║
 //   ║       │      └─ event → updateFromEvent(record)  ◄── 唯一更新点    ║
 //   ║       │      └─ event → opts.onEvent(event)     ◄── 回流调用方     ║
-//   ║       ├─ d. turnLimiter.attach(session)                           ║
-//   ║       ├─ e. signal → session.abort 监听（一次性）                   ║
-//   ║       ├─ f. schema enforcement: turn_end 时漏调 structured-output   ║
+//   ║       ├─ c. turnLimiter.attach(session)                           ║
+//   ║       ├─ d. signal → session.abort 监听（一次性）                   ║
+//   ║       ├─ e. schema enforcement: turn_end 时漏调 structured-output   ║
 //   ║       │      则 session.steer(reminder)（≤ MAX_SCHEMA_STEERS）     ║
-//   ║       ├─ g. session.prompt(task + schemaInstruction)               ║
-//   ║       ├─ h. collectResult(bridge) → AgentResult                    ║
-//   ║       ├─ i. cleanupWorktree → commit/branch（或 preserveOnFailure） ║
-//   ║       └─ j. session.dispose()                                     ║
+//   ║       ├─ f. session.prompt(task + schemaInstruction)               ║
+//   ║       ├─ g. collectResult(bridge) → AgentResult                    ║
+//   ║       └─ h. session.dispose()                                     ║
 //   ║                                                                    ║
 //   ║  finally: pool.release()   ◄── 外层调用方负责                       ║
 //   ╚══════════════════════════════════════════════════════════════════╝
@@ -291,10 +233,7 @@ export async function run(
 ): Promise<AgentResult> {
   const startTime = Date.now();
 
-  // a. isolation:worktree? → createWorktree（失败 throw 不回退）
-  const worktree = createWorktreeForIsolation(opts, ctx);
-
-  // b/c. createAnd configure session + EventBridge 订阅。
+  // a/b. createAnd configure session + EventBridge 订阅。
   // onEvent wrapper 把两条流挂上：① updateFromEvent(record)（唯一 record 更新点）
   // ② opts.onEvent（回流调用方 widget/notify）。turn_end 还需喂给 hooks，
   // 但 hooks 依赖 built（鸡生蛋）—— 先用闭包变量在 prompt 前接上线。
@@ -319,16 +258,16 @@ export async function run(
       ctx.sdk,
     );
 
-    // d/e/f. turnLimiter + signal-abort + schema enforcement 统一挂载
+    // c/d/e. turnLimiter + signal-abort + schema enforcement 统一挂载
     hooks = attachRunHooks(built, opts);
 
-    // g. session.prompt（schema 指令拼到 task 末尾）
+    // f. session.prompt（schema 指令拼到 task 末尾）
     let success = true;
     let error: string | undefined;
     try {
       const instruction = opts.schema ? formatSchemaInstruction(opts.schema) : "";
       await built.session.prompt(task + instruction);
-      // h. 双来源 success 判定：prompt 成功但 bridge.lastError 非空也算失败
+      // g. 双来源 success 判定：prompt 成功但 bridge.lastError 非空也算失败
       if (built.bridge.lastError) {
         success = false;
         error = built.bridge.lastError;
@@ -338,7 +277,7 @@ export async function run(
       error = err instanceof Error ? err.message : String(err);
     }
 
-    // h. collectResult 组装 AgentResult（i. worktree 清理在 collectResult 前完成）
+    // g. collectResult 组装 AgentResult
     return collectResult(built.session, built.bridge, {
       startTime,
       success,
@@ -348,12 +287,9 @@ export async function run(
       turns: built.bridge.turnCount,
       usage: toUsageTotal(built.bridge.usage),
       toolCalls: built.bridge.toolCalls.slice(),
-      worktree: worktree
-        ? cleanupWorktreeForOutcome(worktree, ctx.cwd, task, success)
-        : undefined,
     });
   } finally {
-    // j. 清理：hooks（signal listener）→ unsubscribe（session.subscribe）→ dispose
+    // h. 清理：hooks（signal listener）→ unsubscribe（session.subscribe）→ dispose
     hooks?.unsubscribe();
     built?.unsubscribe();
     built?.session.dispose();

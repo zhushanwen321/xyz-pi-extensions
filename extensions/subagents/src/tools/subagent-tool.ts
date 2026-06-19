@@ -186,7 +186,6 @@ const subagentRenderResult: SubagentRenderResultCb = (result, options, theme, ct
  *   ║    返回 backgroundId（LLM 后续 poll）                             ║
  *   ║  handle.mode==="sync":                                            ║
  *   ║    details = project(handle.record)                               ║
- *   ║    resultText += worktree 变更 → merge 指令                       ║
  *   ║    return { content: resultText, details }                        ║
  *   ╚══════════════════════════════════════════════════════════════════╝
  */

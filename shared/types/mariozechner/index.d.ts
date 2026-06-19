@@ -96,6 +96,17 @@ declare module "@mariozechner/pi-coding-agent" {
 		// ⚠️ Note: modelRegistry / cwd / ui are NOT on this event.
 		// They live on ExtensionContext (the 2nd handler parameter).
 	};
+	/** resources_discover 事件：extension 返回额外 skill/prompt/theme 路径注入主 session。 */
+	export interface ResourcesDiscoverEvent {
+		type: "resources_discover";
+		cwd: string;
+		reason: "startup" | "reload";
+	}
+	export interface ResourcesDiscoverResult {
+		skillPaths?: string[];
+		promptPaths?: string[];
+		themePaths?: string[];
+	}
 	/** ExtensionHandler signature: (event, ctx) — TWO parameters. */
 	export type ExtensionHandler<E, R = undefined> = (event: E, ctx: ExtensionContext) => Promise<R | void> | R | void;
 	export type RegisteredTool = any;
@@ -119,6 +130,7 @@ declare module "@mariozechner/pi-coding-agent" {
 	 * Methods are required (not optional) since the real SDK always provides them. */
 	export interface ExtensionAPI {
 		on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>): void;
+		on(event: "resources_discover", handler: ExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>): void;
 		on(event: string, handler: (...args: any[]) => unknown): void;
 		registerTool(tool: unknown): void;
 		registerCommand(name: string, command: unknown): void;

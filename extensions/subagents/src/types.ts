@@ -84,16 +84,6 @@ export interface AgentResult {
   usage?: AgentUsageTotal;
   /** /resume /fork 可恢复的 session 文件名（不含目录）。 */
   sessionFile?: string;
-  /** worktree 隔离执行时的变更信息。 */
-  worktree?: WorktreeOutcome;
-}
-
-export interface WorktreeOutcome {
-  branch?: string;
-  hasChanges: boolean;
-  /** preserveOnFailure 保留的物理目录（branch 缺失但 hasChanges 时透传）。 */
-  workPath?: string;
-  baseSha?: string;
 }
 
 // ============================================================
@@ -271,51 +261,6 @@ export interface PersistedAgentRecord {
 }
 
 // ============================================================
-// ManagedSession（长生命周期变体，支持多次 prompt/steer/abort）
-// ============================================================
-
-/** createManagedSession 的入参（身份字段，session 创建时确定）。 */
-export interface ManagedSessionOptions {
-  agent?: string;
-  model?: string;
-  thinkingLevel?: string;
-  skillPath?: string;
-  appendSystemPrompt?: string[];
-  onEvent?: (event: AgentEvent) => void;
-}
-
-/** ManagedSession.prompt 的单轮入参。每轮 turn 计数独立（bridge.resetForPrompt 清零）。 */
-export interface ManagedPromptOptions {
-  /** 本轮 hard turn limit。 */
-  maxTurns?: number;
-  /** soft limit 后宽限轮数（默认 2）。 */
-  graceTurns?: number;
-  /** 本轮中断信号。 */
-  signal?: AbortSignal;
-}
-
-/**
- * 长生命周期 session。首次 prompt() 懒创建 Pi session，之后复用。
- *   - prompt() 串行化（Pi session 不支持并发 prompt）
- *   - steer() 在 session 就绪前缓存到 pendingSteers，ensureSession 时 flush
- *   - abort() / dispose() 委托 Pi session
- */
-export interface ManagedSession {
-  /** Pi session 的稳定 ID（session 创建前为 ""）。 */
-  readonly sessionId: string;
-  /** 是否未 dispose。 */
-  readonly alive: boolean;
-  /** 执行一轮（串行化，复用 session）。bridge 在每轮前 resetForPrompt。 */
-  prompt(task: string, opts?: ManagedPromptOptions): Promise<AgentResult>;
-  /** 注入消息（运行中=中途 steer；session 未就绪=入队下次 prompt）。 */
-  steer(message: string): void;
-  /** 中断当前 prompt（若在运行）。 */
-  abort(): void;
-  /** 显式销毁（unsubscribe + session.dispose）。幂等。 */
-  dispose(): void;
-}
-
-// ============================================================
 // 配置（global + session）
 // ============================================================
 
@@ -332,6 +277,19 @@ export interface CategoryDefinition {
   label: string;
   model: string;
   thinkingLevel?: string;
+}
+
+/**
+ * 资源发现契约（<agentDir>/subagents/discovery.json）。
+ * 宿主（如 xyz-agent GUI）启动 pi 前写入，subagents 在 session_start 与 resources_discover 时读取。
+ * 文件缺失/字段缺失时各数组视为空，走默认行为（零破坏）。详见 ADR-025。
+ */
+export interface DiscoveryConfig {
+  version: number;
+  /** skill 目录列表（靠前覆盖靠后）。空数组 = 不额外注入，走默认。 */
+  skillDirs: string[];
+  /** agent .md 目录列表（靠前覆盖靠后）。空数组 = 走默认 getAgentDir()。 */
+  agentDirs: string[];
 }
 
 /** 首次 category 模型确认后的 per-session 覆盖。 */

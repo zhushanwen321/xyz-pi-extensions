@@ -11,8 +11,6 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["src/__tests__/**/*.test.ts"],
-    // P5: 移除全局 retry——V3 worktree 测试已用独立 homeDir 隔离，根治 flaky 根因
-    // （共享 tmpdir baseline 污染）。无需重试掩盖。
   },
   resolve: {
     alias: {

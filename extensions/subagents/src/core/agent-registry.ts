@@ -27,7 +27,7 @@ interface FileCacheEntry {
 const FM_DELIM = "---";
 
 /**
- * 解析 .md frontmatter（name/tools/model/thinkingLevel/defaultBackground/isolation）+ body（systemPrompt）。
+ * 解析 .md frontmatter（name/tools/model/thinkingLevel/defaultBackground）+ body（systemPrompt）。
  * 兼容简单 YAML（key: value 单行格式）。body 作为 systemPrompt。
  */
 export function parseAgentFrontmatter(filePath: string, content: string): AgentConfig {
@@ -56,7 +56,6 @@ export function parseAgentFrontmatter(filePath: string, content: string): AgentC
     ? toolsRaw.split(",").map((s) => s.trim()).filter(Boolean)
     : undefined;
 
-  const isolationRaw = extractYamlField(yamlBlock, "isolation");
   const defaultBackgroundRaw = extractYamlField(yamlBlock, "defaultBackground");
 
   return {
@@ -66,7 +65,6 @@ export function parseAgentFrontmatter(filePath: string, content: string): AgentC
     thinkingLevel: extractYamlField(yamlBlock, "thinkingLevel") ?? undefined,
     tools: tools && tools.length > 0 ? tools : undefined,
     defaultBackground: defaultBackgroundRaw === "true" ? true : undefined,
-    isolation: isolationRaw === "worktree" ? "worktree" : undefined,
   };
 }
 
@@ -87,8 +85,12 @@ function extractYamlField(yaml: string, key: string): string | undefined {
 // ============================================================
 
 /**
- * agent 注册表。发现 agentDir 下 *.md + 内置 agent。
+ * agent 注册表。发现多个 agentDirs 下 *.md + 内置 agent。
  * hot-reload：每次 discoverAll 重扫，mtime 未变的文件跳过 read+parse。
+ *
+ * 多目录优先级：agentDirs 数组顺序即优先级，靠前覆盖靠后。
+ * 实现上逆序扫描（先扫低优先级目录，后扫高优先级目录覆盖同名）。
+ * 详见 ADR-025。
  */
 export class AgentRegistry {
   private readonly cache = new Map<string, AgentConfig>();
@@ -97,14 +99,17 @@ export class AgentRegistry {
   /** 本轮扫描到的路径集（清理已删除文件的缓存）。 */
   private currentScanPaths = new Set<string>();
 
-  constructor(private readonly agentDir: string) {}
+  constructor(private readonly agentDirs: string[]) {}
 
-  /** 扫描 agentDir 下所有 *.md + 合并 builtin（hot-reload，每次重扫）。 */
+  /** 扫描所有 agentDirs 下 *.md + 合并 builtin（hot-reload，每次重扫）。 */
   discoverAll(builtin: BuiltinAgentRegistry): void {
     this.cache.clear();
     this.currentScanPaths = new Set();
 
-    this.scanDir(this.agentDir);
+    // 逆序扫描：靠前目录（高优先级）后写，覆盖靠后目录（低优先级）的同名 agent
+    for (let i = this.agentDirs.length - 1; i >= 0; i--) {
+      this.scanDir(this.agentDirs[i]!);
+    }
 
     // builtin 优先级最低（先写入，被文件 agent 覆盖）
     for (const agentName of builtin.list()) {

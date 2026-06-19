@@ -41,8 +41,6 @@ export interface AgentConfig {
   thinkingLevel?: string;
   /** 默认 background 模式（true 时无显式 wait 走 background）。 */
   defaultBackground?: boolean;
-  /** 工作区隔离策略。 */
-  isolation?: "worktree";
 }
 
 /** 解析结果（model 实例 + 生效的 thinkingLevel）。复用 ModelInfo 消除重复。 */

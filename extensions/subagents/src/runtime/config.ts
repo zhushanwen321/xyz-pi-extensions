@@ -1,9 +1,13 @@
 // src/runtime/config.ts
 //
 // 全局配置（~/.pi/agent/subagents/config.json）+ session 级状态（内存）。
+//
+// 默认配置的单一真相源是扩展自带的 config.json（与 src/ 同级）。代码不硬编码
+// category models——避免代码默认值与磁盘 config.json 分叉。
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type {
   SessionModelState,
@@ -20,30 +24,61 @@ const JSON_INDENT = 2;
 /** appendEntry 的 customType（restoreSessionState 据此匹配）。 */
 const CONFIG_ENTRY_TYPE = "subagent-config-entry";
 
-/** 默认配置。文件缺失/损坏时返回此值的深拷贝。 */
-const DEFAULT_CONFIG: SubagentsGlobalConfig = {
-  version: 1,
-  yoloByDefault: false,
-  maxConcurrent: 4,
-  categories: {
-    coding: { label: "编码", model: "deepseek-router/ds-flash", thinkingLevel: "high" },
-    research: { label: "调研", model: "mimo-router/mimo-v2.5", thinkingLevel: "medium" },
-    testing: { label: "测试", model: "mimo-router/mimo-v2.5", thinkingLevel: "low" },
-    vision: { label: "视觉", model: "zhipu-coding-plan-router/glm-5.1", thinkingLevel: "xhigh" },
-    planning: { label: "规划", model: "deepseek-router/ds-pro", thinkingLevel: "xhigh" },
-    general: { label: "通用", model: "mimo-router/mimo-v2.5", thinkingLevel: "low" },
-  },
-  agentCategoryOverrides: { worker: "coding", reviewer: "coding", scout: "research" },
-  fallback: { model: "mimo-router/mimo-v2.5", thinkingLevel: "low" },
-};
+/**
+ * 扩展自带的默认配置（config.json，与 src/ 同级）。
+ * 单一真相源：代码默认值与磁盘 config.json 永远一致。
+ * 懒加载（首次访问时读一次），读失败回退到硬编码最小默认（保证永不崩溃）。
+ */
+const BUILTIN_CONFIG_PATH = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "config.json",
+);
+
+let _builtinConfigCache: SubagentsGlobalConfig | undefined;
+
+function loadBuiltinConfig(): SubagentsGlobalConfig {
+  if (_builtinConfigCache) return _builtinConfigCache;
+  try {
+    const raw = fs.readFileSync(BUILTIN_CONFIG_PATH, "utf-8");
+    const parsed = JSON.parse(raw) as Partial<SubagentsGlobalConfig>;
+    _builtinConfigCache = {
+      version: parsed.version ?? 1,
+      yoloByDefault: parsed.yoloByDefault ?? false,
+      maxConcurrent: parsed.maxConcurrent ?? 4,
+      categories: (parsed.categories as SubagentsGlobalConfig["categories"]) ?? {},
+      agentCategoryOverrides: (parsed.agentCategoryOverrides as SubagentsGlobalConfig["agentCategoryOverrides"]) ?? {},
+      fallback: (parsed.fallback as SubagentsGlobalConfig["fallback"]) ?? { model: "", thinkingLevel: undefined },
+    };
+  } catch {
+    // config.json 读失败（打包遗漏 / 损坏）→ 最小硬编码默认，保证不崩
+    _builtinConfigCache = {
+      version: 1,
+      yoloByDefault: false,
+      maxConcurrent: 4,
+      categories: {},
+      agentCategoryOverrides: {},
+      fallback: { model: "", thinkingLevel: undefined },
+    };
+  }
+  return _builtinConfigCache;
+}
+
+/** 默认配置（读自扩展自带 config.json）。 */
+const DEFAULT_CONFIG: SubagentsGlobalConfig = loadBuiltinConfig();
 
 // ============================================================
 // 路径
 // ============================================================
 
-/** 配置文件路径（~/.pi/agent/subagents/config.json）。 */
-export function getGlobalConfigPath(homeDir: string): string {
-  return path.join(homeDir, ".pi", "agent", "subagents", "config.json");
+/**
+ * 配置文件路径（<agentDir>/subagents/config.json）。
+ * agentDir 由 Pi 核心 getAgentDir() 决定（读 PI_CODING_AGENT_DIR，默认 ~/.pi/agent），
+ * 与 Pi 主进程的目录约定完全一致——支持宿主经环境变量整体重定向。
+ */
+export function getGlobalConfigPath(agentDir: string): string {
+  return path.join(agentDir, "subagents", "config.json");
 }
 
 // ============================================================
@@ -81,8 +116,8 @@ function sanitizeCategories(input: unknown): SubagentsGlobalConfig["categories"]
  * 加载全局配置。文件不存在时返回默认配置（保证 categories/fallback 完整）。
  * 与默认配置 deep-merge——新增字段有默认值，旧 config 缺字段不崩溃。
  */
-export function loadGlobalConfig(homeDir: string): SubagentsGlobalConfig {
-  const configPath = getGlobalConfigPath(homeDir);
+export function loadGlobalConfig(agentDir: string): SubagentsGlobalConfig {
+  const configPath = getGlobalConfigPath(agentDir);
   try {
     const raw = fs.readFileSync(configPath, "utf-8");
     const parsed = JSON.parse(raw) as Partial<SubagentsGlobalConfig>;
@@ -101,8 +136,8 @@ export function loadGlobalConfig(homeDir: string): SubagentsGlobalConfig {
 }
 
 /** 保存全局配置（config-wizard 调用）。原子写入（temp + rename）。 */
-export function saveGlobalConfig(homeDir: string, config: SubagentsGlobalConfig): Promise<void> {
-  const configPath = getGlobalConfigPath(homeDir);
+export function saveGlobalConfig(agentDir: string, config: SubagentsGlobalConfig): Promise<void> {
+  const configPath = getGlobalConfigPath(agentDir);
   const configDir = path.dirname(configPath);
   return new Promise((resolve, reject) => {
     try {

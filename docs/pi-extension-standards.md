@@ -422,6 +422,45 @@ if (entries.length >= MAX_ENTRIES) {
 }
 ```
 
+### 7.5 进程级单例必须用 `globalThis[Symbol.for]` 持有
+
+> 与 §2.3「闭包状态隔离」的区别：§2.3 管的是**会话级状态**（每个 session 独立、随 session 结束而消亡），用工厂闭包持有；本节管的是**进程级单例**（跨 session 存活、在 `session_start` 时懒创建/重建，如 Hub / Runtime / Registry），这种对象的生命周期长于单个 session，不能放进工厂闭包（闭包随工厂调用结束就丢了），也不能用模块级 `let`（jiti 双路径加载会让单例分裂）。
+
+**[规范]** 跨 session 存活、需在 `session_start` 重建的进程级单例，**必须**用 `globalThis[Symbol.for("包名.角色")]` 持有，**禁止**用模块级 `let` 变量。
+
+**机制**：Pi 的 extension loader 使用 [jiti](https://github.com/unjs/jiti) 加载 TypeScript 扩展。jiti 用**模块路径字符串**（非 `realpath`）做缓存 key。当同一模块被两个不同的路径字符串引用时，jiti 会把它加载成两个独立的 module instance，各自的模块级 `let` 变量互不可见 → `setX` 写 A instance、`getX` 读 B instance 返回 `null`。
+
+**触发场景**：
+- 跨扩展 import：扩展 A 写 `import "@scope/pi-ext"`（走 node_modules 软链），同时 Pi host 自己按 `pi.extensions: ["./index.ts"]` 直接加载 `.../extensions/pi-ext/index.ts`——两条路径字符串不同，jiti 缓存 key 不同
+- 符号链接 / 相对路径 vs 绝对路径：哪怕同一文件，`./src/hub.ts` 和 `/abs/path/src/hub.ts` 在 jiti 眼里也是两个 key
+
+**正确模式**：
+
+```typescript
+// hub.ts
+const HUB_SLOT_KEY = Symbol.for("@scope/pi-ext.hub");
+
+type HubSlot = { current: Hub | null };
+
+function getSlot(): HubSlot {
+  const record = globalThis as unknown as Record<symbol, unknown>;
+  if (!record[HUB_SLOT_KEY]) record[HUB_SLOT_KEY] = { current: null };
+  return record[HUB_SLOT_KEY] as HubSlot;
+}
+
+export function getHub(): Hub | null {
+  return getSlot().current;
+}
+
+export function setHub(hub: Hub): void {
+  getSlot().current = hub;
+}
+```
+
+**为什么有效**：`Symbol.for(key)` 跨所有 module instance 返回同一个 symbol（全局 symbol registry），且 `globalThis` 是进程级唯一的。无论 jiti 加载几份 `hub.ts`，它们读写的是同一个 `globalThis[HUB_SLOT_KEY]` 对象。
+
+**[规范]** `Symbol.for` 的 key 必须用**包名 + 角色**的全限定形式（如 `"@zhushanwen/pi-subagents.hub"`），避免与其它扩展的 symbol 冲突。
+
 ---
 
 ## 8. 配置管理 **[规范]**
@@ -947,7 +986,7 @@ describe("state", () => {
 
 | 反模式 | 问题 | 正确做法 |
 |--------|------|---------|
-| 模块级全局变量 | 多 session 共享状态，数据错乱 | 工厂闭包变量 |
+| 模块级全局变量 | 多 session 共享状态，数据错乱 | 工厂闭包变量（会话级）/ `globalThis[Symbol.for]`（进程级单例，见 §7.5） |
 | 未保护的 ctx 访问 | session 关闭后崩溃 | `isStaleContextError()` 检查 |
 | Tool execute 抛异常 | 未处理异常带崩 Pi | 返回 `{ isError: true }` |
 | 异步操作无信号 | 无法取消，残留资源 | 透传 `signal` |
@@ -1002,6 +1041,7 @@ describe("state", () => {
 - [ ] `files` 包含入口 `.ts`，含 `index.ts` + `src/**/*.ts`
 - [ ] 入口 `export default function(pi: ExtensionAPI)`
 - [ ] 状态在工厂闭包内，非模块级
+- [ ] 进程级单例用 `globalThis[Symbol.for]` 持有，非模块级 `let`（见 §7.5）
 
 ### 健壮性阶段（必须通过）
 

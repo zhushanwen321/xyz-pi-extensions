@@ -6,7 +6,7 @@
 // 基础层模块：依赖 event-bridge（读累积器）+ session-factory（AgentSessionLike）+ types。
 // 字段来源契约见 docs/subagents/session-runner.md §4。
 
-import type { AgentResult, AgentUsage, AgentUsageTotal, ToolCall, WorktreeOutcome } from "../types.ts";
+import type { AgentResult, AgentUsage, AgentUsageTotal, ToolCall } from "../types.ts";
 import type { EventBridge } from "./event-bridge.ts";
 import type { AgentSessionLike } from "./session-factory.ts";
 
@@ -24,7 +24,6 @@ export interface CollectResultArgs {
   turns: number;
   usage: AgentUsageTotal | undefined;
   toolCalls: ToolCall[];
-  worktree?: WorktreeOutcome;
 }
 
 /**
@@ -55,7 +54,6 @@ export function collectResult(
     toolCalls: args.toolCalls,
     usage: args.usage,
     sessionFile: args.sessionFile,
-    worktree: args.worktree,
   };
 }
 
@@ -87,7 +85,7 @@ export function collectResponseText(
 
 /**
  * AgentUsage & {cost} → AgentUsageTotal（全零则 undefined）。
- * 纯函数：run/managed-session 在 collectResult 前用它规整 bridge.usage。
+ * 纯函数：run 在 collectResult 前用它规整 bridge.usage。
  */
 export function toUsageTotal(
   usage: AgentUsage & { cost: number },

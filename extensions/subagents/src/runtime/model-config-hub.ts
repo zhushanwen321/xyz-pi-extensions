@@ -14,6 +14,7 @@ import {
   type ResolvedModel,
   resolveModelForAgent,
 } from "../core/model-resolver.ts";
+import { DiscoveryConfigLoader } from "./discovery-config.ts";
 import type {
   SessionModelState,
   SubagentsGlobalConfig,
@@ -31,8 +32,13 @@ import {
 
 /** Hub 构造参数（进程级，跨 session 不变）。 */
 export interface ModelConfigHubInit {
-  homeDir: string;
   agentDir: string;
+  /**
+   * 资源发现契约加载器（宿主声明的多 skill/agent 目录）。
+   * undefined 时仅用 agentDir 单目录（默认行为，零破坏）。
+   * 详见 ADR-025。
+   */
+  discoveryLoader?: DiscoveryConfigLoader;
 }
 
 /** session_start 注入参数（session 级，每次重建）。 */
@@ -66,16 +72,31 @@ export class ModelConfigHub {
   private sessionState: SessionModelState;
   private readonly agentRegistry: AgentRegistry;
   private readonly agentRegistryDir: string;
+  /** discovery 加载器（resources_discover 时重新读，喂主 agent skill）。 */
+  private readonly discoveryLoader: DiscoveryConfigLoader | undefined;
   private modelRegistry: ModelRegistryLike | null = null;
-  private readonly homeDir: string;
   private _sessionId: string | undefined;
 
   constructor(init: ModelConfigHubInit) {
-    this.homeDir = init.homeDir;
     this.agentRegistryDir = init.agentDir;
-    this.globalConfig = loadGlobalConfig(init.homeDir);
+    this.discoveryLoader = init.discoveryLoader;
+    this.globalConfig = loadGlobalConfig(init.agentDir);
     this.sessionState = createSessionState();
-    this.agentRegistry = new AgentRegistry(init.agentDir);
+    // agentDirs：discovery 声明的目录（靠前覆盖靠后），空则回退默认 agentDir 单目录
+    const agentDirs = this.resolveAgentDirs();
+    this.agentRegistry = new AgentRegistry(agentDirs);
+  }
+
+  /**
+   * 解析 agent 发现目录列表。
+   * discovery.json 的 agentDirs 非空时用之（靠前覆盖靠后），否则回退 [agentDir] 默认。
+   */
+  private resolveAgentDirs(): string[] {
+    const discovery = this.discoveryLoader?.load();
+    if (discovery && discovery.agentDirs.length > 0) {
+      return [...discovery.agentDirs];
+    }
+    return [this.agentRegistryDir];
   }
 
   // ── 生命周期（index.ts 调）──────────────────────────────
@@ -89,7 +110,7 @@ export class ModelConfigHub {
    */
   initModel(init: ModelSessionInit): void {
     // 1. 重载配置
-    this.globalConfig = loadGlobalConfig(this.homeDir);
+    this.globalConfig = loadGlobalConfig(this.agentRegistryDir);
 
     // 2. modelRegistry（fail-fast）
     if (init.modelRegistry === null) {
@@ -147,7 +168,7 @@ export class ModelConfigHub {
   /** 更新全局配置 + 落盘（config-wizard 改完调）。 */
   async saveGlobalConfig(config: SubagentsGlobalConfig): Promise<void> {
     this.globalConfig = config;
-    await saveConfig(this.homeDir, config);
+    await saveConfig(this.agentRegistryDir, config);
   }
 
   /** 翻转 YOLO 模式。返回翻转后的新值。 */
@@ -161,14 +182,18 @@ export class ModelConfigHub {
     return this._sessionId;
   }
 
-  /** home 目录（SubagentHub 构造 history/store 时读）。 */
-  getGlobalConfigHomeDir(): string {
-    return this.homeDir;
-  }
-
-  /** agent 配置目录（SubagentHub 构造 SessionRunnerContext 时读）。 */
+  /** agent 配置目录（SubagentHub 构造 history/store/SessionRunnerContext 时读）。 */
   getAgentDir(): string {
     return this.agentRegistryDir;
+  }
+
+  /**
+   * discovery.json 声明的 skill 目录（供 SubagentHub 注入子 session）。
+   * 每次调用重新读 loader（mtime 缓存），支持宿主运行时修改 discovery.json 后下次生效。
+   */
+  getDiscoverySkillDirs(): string[] {
+    const discovery = this.discoveryLoader?.load();
+    return discovery ? [...discovery.skillDirs] : [];
   }
 
   /** modelRegistry（SubagentHub 构造 factoryCtx 时读）。已注入保证非 null。 */
@@ -211,14 +236,24 @@ export class ModelConfigHub {
 // 进程单例访问器
 // ============================================================
 
-let _modelHub: ModelConfigHub | null = null;
+// 用 globalThis[Symbol.for] 持有进程单例，避免 jiti 因路径字符串不同加载多份模块
+// 导致单例分裂（详见 docs/pi-extension-standards.md §7.5）。
+const MODEL_HUB_SLOT_KEY = Symbol.for("@zhushanwen/pi-subagents.model-hub");
+
+type ModelHubSlot = { current: ModelConfigHub | null };
+
+function getModelHubSlot(): ModelHubSlot {
+  const record = globalThis as unknown as Record<symbol, unknown>;
+  if (!record[MODEL_HUB_SLOT_KEY]) record[MODEL_HUB_SLOT_KEY] = { current: null };
+  return record[MODEL_HUB_SLOT_KEY] as ModelHubSlot;
+}
 
 /** 获取进程单例。session_start 前为 null。 */
 export function getModelConfigHub(): ModelConfigHub | null {
-  return _modelHub;
+  return getModelHubSlot().current;
 }
 
 /** 设置进程单例（session_start 首次创建时）。 */
 export function setModelConfigHub(hub: ModelConfigHub): void {
-  _modelHub = hub;
+  getModelHubSlot().current = hub;
 }

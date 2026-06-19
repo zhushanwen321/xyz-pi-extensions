@@ -3,12 +3,11 @@
 // Pi extension 工厂。只做注册胶水——不含业务逻辑。
 // 注册项：tool / command / messageRenderer / widget / session 事件。
 
-import * as path from "node:path";
-
-import type { ExtensionAPI, ExtensionContext, SessionShutdownEvent, SessionStartEvent } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ResourcesDiscoverEvent, ResourcesDiscoverResult, SessionShutdownEvent, SessionStartEvent } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
 
 import { registerSubagentsCommand } from "./commands/subagents.ts";
-import { cleanupOrphanedWorktreeDirs, pruneWorktrees } from "./core/worktree.ts";
+import { DiscoveryConfigLoader } from "./runtime/discovery-config.ts";
 import {
   getModelConfigHub,
   ModelConfigHub,
@@ -42,10 +41,9 @@ import { SubagentsProgressWidget } from "./tui/progress-widget.ts";
 //   ║    3. ctx.hasUI → ctx.ui.setWidget("subagents-progress", factory,  ║
 //   ║                                          { placement:"aboveEditor"})║
 //   ║    4. maybeCleanupExpiredSessionFiles(homeDir, cwd)                ║
-//   ║    5. pruneWorktrees(cwd)  ◄── 崩溃恢复兜底                        ║
 //   ║                                                                    ║
 //   ║  session_shutdown(event):                                          ║
-//   ║    rt.dispose() + cleanupOrphanedWorktreeDirs()                    ║
+//   ║    rt.dispose()                                                    ║
 //   ╚══════════════════════════════════════════════════════════════════╝
  */
 export default function subagentsExtension(pi: ExtensionAPI): void {
@@ -53,15 +51,28 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
   registerSubagentTool(pi);
   pi.registerMessageRenderer("subagent-bg-notify", renderBgNotifyMessage);
 
+  // discovery.json 契约加载器（进程级单例，跨 session 复用 mtime 缓存）。
+  // 宿主启动 pi 前写入 <agentDir>/subagents/discovery.json 声明多 skill/agent 目录。
+  // 详见 ADR-025。
+  const discoveryLoader = new DiscoveryConfigLoader(getAgentDir());
+
+  // resources_discover：把 discovery 的 skillDirs 注入主 session 的 resourceLoader。
+  // 主 agent 的 skill 走此通道（pi 原生官方机制），子 session 的 skill 由 session-factory 另读。
+  pi.on("resources_discover", (_event: ResourcesDiscoverEvent, _ctx: ExtensionContext): ResourcesDiscoverResult => {
+    const discovery = discoveryLoader.load();
+    return { skillPaths: discovery.skillDirs.length > 0 ? [...discovery.skillDirs] : undefined };
+  });
+
   pi.on("session_start", (_event: SessionStartEvent, ctx: ExtensionContext) => {
     const cwd = ctx.cwd;
-    const homeDir = process.env.HOME || process.env.USERPROFILE || cwd;
-    const agentDir = path.join(homeDir, ".pi", "agent");
+    // agentDir 由 Pi 核心 getAgentDir() 决定（读 PI_CODING_AGENT_DIR，默认 ~/.pi/agent），
+    // 与 Pi 主进程目录约定完全一致——宿主可经环境变量整体重定向配置/agent/skill 目录。
+    const agentDir = getAgentDir();
 
     // 双 Hub 装配：ModelConfigHub（配置/模型域）+ SubagentHub（执行/记录/通知域）
     const existingHub = getHub();
     const existingModelHub = getModelConfigHub();
-    const modelHub = existingModelHub ?? new ModelConfigHub({ homeDir, agentDir });
+    const modelHub = existingModelHub ?? new ModelConfigHub({ agentDir, discoveryLoader });
     const hub = existingHub ?? new SubagentHub({ cwd, modelHub });
 
     // 分别 init（两个域的生命周期独立）
@@ -91,11 +102,10 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
       );
     }
 
-    // best-effort 清理（崩溃恢复 / GC），失败不应阻断 session——但额外兜底：
+    // best-effort 清理（GC），失败不应阻断 session——但额外兜底：
     // 万一仍抛错，catch 住防止 session_start 整体崩。
     try {
-      maybeCleanupExpiredSessionFiles(homeDir, cwd);
-      pruneWorktrees(cwd);
+      maybeCleanupExpiredSessionFiles(agentDir, cwd);
     } catch {
       // best-effort 清理失败，忽略——hub 已注册，session 可用
     }
@@ -103,6 +113,5 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", (_event: SessionShutdownEvent) => {
     getHub()?.dispose();
-    cleanupOrphanedWorktreeDirs();
   });
 }

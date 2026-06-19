@@ -76,7 +76,7 @@ const PREVIEW_RECENT_LINES = 3;
 /** 秒→毫秒换算。 */
 const MS_PER_SECOND = 1000;
 
-// ── 边框常量（与 subagents-old/subagents-view-render.ts 对齐）──
+// ── 边框常量 ──
 /** 左右边框字符宽度（│ x 2）。 */
 const BORDER_WIDTH = 2;
 /** 分屏模式下，框内**不滚动**的固定行数（顶框 1 + filter 1 + 分区线 1 + 底分区线 1 + footer 1 + 底框 1）。 */

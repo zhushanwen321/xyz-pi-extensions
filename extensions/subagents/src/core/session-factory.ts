@@ -1,10 +1,10 @@
 // src/core/session-factory.ts
 //
 // Pi session 组装器（正向：input → BuiltSession）。四步组装一个就绪的 session +
-// 已订阅的 EventBridge，供 session-runner / managed-session 共享。
+// 已订阅的 EventBridge，供 session-runner 使用。
 //
 // 基础层模块：依赖 event-bridge（内核数据通路）+ types + model-resolver。
-// 不依赖编排层（session-runner / managed-session）——被它们消费，反之禁止。
+// 不依赖编排层（session-runner）——被它消费，反之禁止。
 // 组装契约见 docs/subagents/session-runner.md §3。
 
 import { execFileSync } from "node:child_process";
@@ -126,8 +126,12 @@ export interface SessionFactoryContext {
   resolveAgent: (name: string) => AgentConfig | undefined;
   cwd: string;
   agentDir: string;
-  /** home 目录（用于计算 subagent session 持久化目录）。 */
-  homeDir: string;
+  /**
+   * 额外 skill 目录（从 discovery.json 读，靠前覆盖靠后）。
+   * 注入子 session 的 additionalSkillPaths，补齐 createAgentSession 不继承
+   * 主 session 动态 skill 的缺陷（见 ADR-025）。
+   */
+  skillDirs: string[];
 }
 
 /** createAndConfigureSession 的输入选项。 */
@@ -187,17 +191,21 @@ export async function createAndConfigureSession(
   const fullAppend = buildAppendSystemPrompt(input.appendSystemPrompt, ctx.cwd);
 
   // 步骤 2：ResourceLoader 构建 + reload（让 loader 发现全局 skills/agents）
+  // additionalSkillPaths = discovery 目录（主 session 动态 skill）+ 调用方传入的 skillPath
+  const additionalSkillPaths = [...ctx.skillDirs, input.skillPath].filter(
+    (p): p is string => typeof p === "string" && p.length > 0,
+  );
   const resourceLoader = buildResourceLoader(sdk, {
     cwd: ctx.cwd,
     agentDir: ctx.agentDir,
     appendSystemPrompt: fullAppend,
-    additionalSkillPaths: input.skillPath ? [input.skillPath] : undefined,
+    additionalSkillPaths: additionalSkillPaths.length > 0 ? additionalSkillPaths : undefined,
   });
   await resourceLoader.reload();
 
   // 步骤 3：createAgentSession + 工具过滤
-  // session 持久化目录与主 session 物理隔离（~/.pi/agent/subagents/<encoded-cwd>/sessions/）
-  const subagentSessionDir = getSubagentSessionDir(ctx.homeDir, ctx.cwd);
+  // session 持久化目录与主 session 物理隔离（<agentDir>/subagents/<encoded-cwd>/sessions/）
+  const subagentSessionDir = getSubagentSessionDir(ctx.agentDir, ctx.cwd);
   const { session } = await sdk.createAgentSession({
     model: input.resolved.model,
     thinkingLevel: input.resolved.thinkingLevel,
@@ -252,11 +260,12 @@ export function buildResourceLoader(
 
 /**
  * 步骤 3：计算 subagent session 持久化目录。
- *   ~/.pi/agent/subagents/<encoded-cwd>/sessions/
+ *   <agentDir>/subagents/<encoded-cwd>/sessions/
  * <encoded-cwd> 对 cwd 做路径安全编码（替换 / 等非法字符），与主 session 物理隔离。
+ * agentDir 由 Pi 核心 getAgentDir() 决定，支持宿主经 PI_CODING_AGENT_DIR 重定向。
  */
-export function getSubagentSessionDir(homeDir: string, cwd: string): string {
-  return path.join(homeDir, ".pi", "agent", "subagents", encodeCwd(cwd), "sessions");
+export function getSubagentSessionDir(agentDir: string, cwd: string): string {
+  return path.join(agentDir, "subagents", encodeCwd(cwd), "sessions");
 }
 
 /**
@@ -306,7 +315,7 @@ export function applyToolFilter(
   }
 }
 
-/** buildEnvBlock 的 git 命令超时（ms）。worktree 锁状态下 2s 足够。 */
+/** buildEnvBlock 的 git 命令超时（ms）。2s 足够。 */
 const ENV_GIT_TIMEOUT_MS = 2000;
 
 /**

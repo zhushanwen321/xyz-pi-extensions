@@ -18,21 +18,21 @@ const TTL_MS = TTL_DAYS * HOURS_PER_DAY * MINUTES_PER_HOUR * SECONDS_PER_MINUTE 
 const CLEANUP_PROBABILITY_DIVISOR = 20;
 const CLEANUP_PROBABILITY = 1 / CLEANUP_PROBABILITY_DIVISOR;
 
-/** subagent session 文件目录。 */
-const SUBAGENTS_DIR = ".pi/agent/subagents";
+/** subagent session 文件目录（相对 agentDir）。 */
+const SUBAGENTS_DIR = "subagents";
 
 /**
  * 概率性清理过期 session 文件。best-effort——任何异常不外抛。
  *
  *   1. 概率性触发（CLEANUP_PROBABILITY）
- *   2. 递归扫描 homeDir/.pi/agent/subagents 下所有 .jsonl 文件
+ *   2. 递归扫描 <agentDir>/subagents 下所有 .jsonl 文件
  *   3. mtime 超 TTL → unlink
  */
-export function maybeCleanupExpiredSessionFiles(homeDir: string, cwd: string): void {
+export function maybeCleanupExpiredSessionFiles(agentDir: string, cwd: string): void {
   void cwd;
   try {
     if (Math.random() >= CLEANUP_PROBABILITY) return;
-    const dir = path.join(homeDir, SUBAGENTS_DIR);
+    const dir = path.join(agentDir, SUBAGENTS_DIR);
     if (!fs.existsSync(dir)) return;
     const now = Date.now();
     walkAndClean(dir, now);

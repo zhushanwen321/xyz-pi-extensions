@@ -3,7 +3,7 @@
 // 事件翻译层 + 累积器。把 Pi SDK 的 SdkEvent 流转换成 subagents 内部的
 // AgentEvent 流，并累计 turn/toolCall/usage/lastError。
 //
-// 这是 session-factory / output-collector / managed-session 共享的数据通路内核。
+// 这是 session-factory / output-collector 共享的数据通路内核。
 // 唯一依赖 types.ts（leaf）——可独立单测，无需 Pi SDK。
 // 事件映射契约见 docs/subagents/session-runner.md §2。
 
@@ -59,8 +59,6 @@ export function isSdkEvent(x: unknown): x is SdkEvent {
 export interface EventBridge {
   /** 传给 session.subscribe 的处理器。 */
   handle(raw: SdkEvent): void;
-  /** 重置所有跨 prompt 累积状态（ManagedSession 每轮 prompt 前调）。 */
-  resetForPrompt(): void;
   /** 已完成 turn 数（turn_end 累积）。 */
   readonly turnCount: number;
   /** 累积的 tool 调用（tool_execution_end 累积）。 */
@@ -71,7 +69,7 @@ export interface EventBridge {
   readonly lastError: string | undefined;
 }
 
-/** 空累积器的统一初值（resetForPrompt 复用）。 */
+/** 空累积器的统一初值。 */
 function zeroUsage(): AgentUsage & { cost: number } {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 }
@@ -79,11 +77,11 @@ function zeroUsage(): AgentUsage & { cost: number } {
 /** 创建 EventBridge 实例。onEvent 是调用方的 updateFromEvent wrapper。 */
 export function createEventBridge(onEvent: (event: AgentEvent) => void): EventBridge {
   let turnCount = 0;
-  let toolCalls: ToolCall[] = [];
+  const toolCalls: ToolCall[] = [];
   let usage = zeroUsage();
   let lastError: string | undefined;
   // toolCallId → {toolName, args}：tool_end 取回 args（SDK end 不一定带）
-  let pendingTools = new Map<string, { toolName: string; args?: unknown }>();
+  const pendingTools = new Map<string, { toolName: string; args?: unknown }>();
 
   const handle = (raw: SdkEvent): void => {
     switch (raw.type) {
@@ -177,17 +175,8 @@ export function createEventBridge(onEvent: (event: AgentEvent) => void): EventBr
     }
   };
 
-  const resetForPrompt = (): void => {
-    turnCount = 0;
-    toolCalls = [];
-    usage = zeroUsage();
-    lastError = undefined;
-    pendingTools = new Map();
-  };
-
   return {
     handle,
-    resetForPrompt,
     get turnCount(): number {
       return turnCount;
     },

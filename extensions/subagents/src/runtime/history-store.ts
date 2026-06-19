@@ -2,7 +2,8 @@
 //
 // 跨 session 执行记录持久化。
 //   存储格式：history.jsonl，append-only，每行一个 PersistedAgentRecord。
-//   目录布局：~/.pi/agent/subagents/<encoded-cwd>/history.jsonl
+//   目录布局：<agentDir>/subagents/<encoded-cwd>/history.jsonl
+//   （agentDir 默认 ~/.pi/agent，可被 PI_CODING_AGENT_DIR 重定向）
 //   GC：超 HISTORY_MAX 时重写保留最近 N 条（每 GC_CHECK_INTERVAL 次写检查）。
 
 import * as fs from "node:fs";
@@ -25,12 +26,12 @@ const GC_CHECK_INTERVAL = 10;
 // ============================================================
 
 /**
- * 计算 history 文件路径（~/.pi/agent/subagents/<encoded-cwd>/history.jsonl）。
+ * 计算 history 文件路径（<agentDir>/subagents/<encoded-cwd>/history.jsonl）。
  * encoded-cwd 与 session-factory 的 encodeCwd 逻辑一致（复用 Pi SDK 编码约定）。
  */
-export function getHistoryFilePath(homeDir: string, cwd: string): string {
+export function getHistoryFilePath(agentDir: string, cwd: string): string {
   const encoded = encodeCwd(cwd);
-  return path.join(homeDir, ".pi", "agent", "subagents", encoded, "history.jsonl");
+  return path.join(agentDir, "subagents", encoded, "history.jsonl");
 }
 
 /**
@@ -68,7 +69,7 @@ export function isValidPersistedRecord(value: unknown): value is PersistedAgentR
 // ============================================================
 
 /**
- * 按 (homeDir, cwd) 隔离的执行记录存储。
+ * 按 (agentDir, cwd) 隔离的执行记录存储。
  *
  *   ╔════════════════════════════════════════════════════════════════╗
 //   ║  append(record):                                                 ║
@@ -91,10 +92,10 @@ export class HistoryStore {
   private readonly filePath: string;
 
   constructor(
-    private readonly homeDir: string,
+    private readonly agentDir: string,
     private readonly cwd: string,
   ) {
-    this.filePath = getHistoryFilePath(homeDir, cwd);
+    this.filePath = getHistoryFilePath(agentDir, cwd);
   }
 
   /** 追加一条记录（串行化防并发交错，best-effort 失败静默）。 */

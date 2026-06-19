@@ -113,7 +113,7 @@ export class SubagentHub {
     this.cwd = init.cwd;
     this.modelHub = init.modelHub;
     this.pool = new DefaultConcurrencyPool(this.modelHub.getGlobalConfig().maxConcurrent);
-    this.history = new HistoryStore(this.modelHub.getGlobalConfigHomeDir(), init.cwd);
+    this.history = new HistoryStore(this.modelHub.getAgentDir(), init.cwd);
     this.store = new RecordStore(this.history);
     this.notifier = new BgNotifier(this.piAdapter());
   }
@@ -420,13 +420,12 @@ export class SubagentHub {
     return {
       cwd: this.cwd,
       agentDir: this.modelHub.getAgentDir(),
-      homeDir: this.modelHub.getGlobalConfigHomeDir(),
       factoryCtx: {
         modelRegistry: this.modelHub.getModelRegistry(),
         resolveAgent: (name: string) => this.modelHub.getAgentConfig(name),
         cwd: this.cwd,
         agentDir: this.modelHub.getAgentDir(),
-        homeDir: this.modelHub.getGlobalConfigHomeDir(),
+        skillDirs: this.modelHub.getDiscoverySkillDirs(),
       },
       sdk: this.sdk,
     };
@@ -488,14 +487,27 @@ export class SubagentHub {
 // 进程单例访问器（session_start 重建）
 // ============================================================
 
-let _hub: SubagentHub | null = null;
+// 用 globalThis[Symbol.for] 持有进程单例，避免 jiti 因路径字符串不同加载多份模块
+// 导致单例分裂。场景：其它扩展 import "@zhushanwen/pi-subagents" 与本扩展被 Pi host
+// 直接加载，若 jiti 缓存 key 用路径字符串（非 realpath），两份 subagent-hub.ts 各持
+// 一个 _hub，setHub 写 A、getHub 读 B(null)。globalThis 跨所有模块实例共享，彻底消除。
+// 详见 docs/pi-extension-standards.md §7.5。
+const HUB_SLOT_KEY = Symbol.for("@zhushanwen/pi-subagents.hub");
+
+type HubSlot = { current: SubagentHub | null };
+
+function getHubSlot(): HubSlot {
+  const record = globalThis as unknown as Record<symbol, unknown>;
+  if (!record[HUB_SLOT_KEY]) record[HUB_SLOT_KEY] = { current: null };
+  return record[HUB_SLOT_KEY] as HubSlot;
+}
 
 /** 获取进程单例。session_start 前为 null。 */
 export function getHub(): SubagentHub | null {
-  return _hub;
+  return getHubSlot().current;
 }
 
 /** 设置进程单例（session_start 首次创建时）。 */
 export function setHub(hub: SubagentHub): void {
-  _hub = hub;
+  getHubSlot().current = hub;
 }
