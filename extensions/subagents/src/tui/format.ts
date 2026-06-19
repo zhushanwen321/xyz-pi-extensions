@@ -104,6 +104,26 @@ export function padToVisible(text: string, width: number): string {
   return text + " ".repeat(width - w);
 }
 
+/**
+ * 生成一条边框/分隔线，中间可选嵌入标题（如 `─ Subagents ─`）。
+ *
+ *   `╭` + segFill("─ Subagents ", "─", 20) + `╮`
+ *   → `╭─ Subagents ────────╮`
+ *
+ *   - title 为 undefined → 纯填充线 `fill × width`
+ *   - title 可见宽 ≥ width → 截断到 width（truncLine 安全）
+ *   - title < width → 末尾补 fill 填满（visibleWidth 安全，CJK/emoji 不偏）
+ *
+ * title 由调用方先着色再传入（本函数不接 theme），框线 fill 同理。
+ */
+export function segFill(title: string | undefined, fill: string, width: number): string {
+  if (width <= 0) return "";
+  if (!title) return fill.repeat(width);
+  const tw = visibleWidth(title);
+  if (tw >= width) return truncLine(title, width);
+  return title + fill.repeat(width - tw);
+}
+
 // ============================================================
 // 状态图标
 // ============================================================

@@ -1,8 +1,17 @@
 // src/tui/list-view.ts
 //
-// /subagents list 全屏左右分屏 overlay。
-//   左列：record 列表（状态图标 + agent + mode + 相对时间）
+// /subagents list 全屏带框左右分屏 overlay。
+//   左列：record 列表（状态图标 + agent + mode + 绝对时长）
 //   右列：选中 record 详情（eventLog + result/error，可翻屏）
+//
+// 布局（margin:1 → 四边距终端 1 行；框贴满 render width）：
+//   ╭─ Subagents ───────╮
+//   │ filter: _          │
+//   ├─ Records ──┬─ Detail ┤
+//   │ body ...    │ body ...│  ← pad 到满屏高
+//   ├─────────────┴─────────┤
+//   │ ↑↓ 导航 ...           │
+//   ╰──────────────────────╯
 //
 // 契约（ctx.ui.custom overlay，对照 pi-tui-development-guide.md §3.2）：
 //   custom<void>((tui, theme, kb, done) => Component, {overlay:true, overlayOptions})
@@ -15,6 +24,7 @@
 //   4. sync record 不调 hub.cancel（会污染状态），UI 层 syncCancelHint 提示
 //   5. 不调 theme.bg（背景由 Pi overlay 容器施加），只 fg/bold
 //   6. 所有行经 truncLine（ANSI 安全）
+//   7. 边框不调 renderShell:"self"（守 default-shell / 无残影契约）
 
 import type { Component } from "@earendil-works/pi-tui";
 import { matchesKey } from "@earendil-works/pi-tui";
@@ -28,6 +38,7 @@ import {
   formatTokens,
   padToVisible,
   sanitizeLabel,
+  segFill,
   statusGlyph,
   type ThemeLike,
   truncLine,
@@ -48,8 +59,6 @@ const COL_MIN_WIDTH = 20;
 const COL_INNER_MIN = 4;
 /** 列内缩进（"→ " 或 "  " 前缀宽度）。 */
 const COL_INDENT = 2;
-/** 左列/右列分隔符。 */
-const COL_SEP = "│";
 /** 详情区 eventLog 翻屏步长（方向键单步）。 */
 const DETAIL_SCROLL_STEP = 1;
 /** 详情区 PgUp/PgDn 默认步长（无 viewport 信息时）。 */
@@ -58,6 +67,28 @@ const PAGE_SCROLL_DEFAULT = 10;
 const PREVIEW_RECENT_LINES = 3;
 /** 秒→毫秒换算。 */
 const MS_PER_SECOND = 1000;
+
+// ── 边框常量（与 subagents-old/subagents-view-render.ts 对齐）──
+/** 左右边框字符宽度（│ x 2）。 */
+const BORDER_WIDTH = 2;
+/** 分屏模式下，框内**不滚动**的固定行数（顶框 1 + filter 1 + 分区线 1 + 底分区线 1 + footer 1 + 底框 1）。 */
+const SPLIT_FIXED_LINES = 6;
+/** 详情模式下，框内**不滚动**的固定行数（顶框 1 + 底分区线 1 + footer 1 + 底框 1）。
+ *  元数据/段头/eventLog 都在 content[] 里一起翻屏，故不计固定行。 */
+const DETAIL_FIXED_LINES = 4;
+/** 详情区可用最小高度。 */
+const DETAIL_MIN_VIEWPORT = 3;
+/** 终端最小行数（低于此回退紧凑空列表框）。 */
+const MIN_TERM_ROWS = 8;
+/** overlayOptions.margin:1 上下各占 1 行 → 可用高度需扣 2 行。 */
+const OVERLAY_MARGIN_LINES = 2;
+/** terminal.rows 读不到时的兜底行数（防 duck-type 失败）。 */
+const TERM_ROWS_FALLBACK = 24;
+/** 顶框嵌入标题（分屏模式）。 */
+const TITLE_SPLIT = "Subagents";
+/** 分屏分区线左/右嵌入标题。 */
+const TITLE_LEFT = "Records";
+const TITLE_RIGHT = "Detail";
 
 /** list 视图内部状态。 */
 export interface ViewState {
@@ -76,9 +107,11 @@ export interface DetailKeyContext {
   contentLines?: number;
 }
 
-/** TUI 最小接口（duck-type，只需 requestRender）。 */
+/** TUI 接口（duck-type：requestRender + terminal.rows）。
+ *  terminal.rows 用于全屏框填满 + 详情翻屏步长（同 WorkflowsView.ts:104 cast）。 */
 interface TuiLike {
   requestRender(): void;
+  terminal: { rows: number };
 }
 
 /** 触发外部 notify 的回调（避免 list-view 直接依赖 ctx.ui）。 */
@@ -133,6 +166,8 @@ export async function createSubagentsView(
 
   await ctx.ui.custom<void>(
     (tui, _theme, _kb, done) => {
+      // duck-type cast：读 terminal.rows 做满屏填高 + 详情翻屏步长
+      const tuiLike = tui as TuiLike;
       const state: ViewState = {
         selectedIdx: 0,
         scrollOffset: 0,
@@ -144,7 +179,7 @@ export async function createSubagentsView(
 
       // 订阅 store 变化 → requestRender（store 驱动重渲）
       const unsubscribe = hub.onChange(() => {
-        if (!state.disposed) tui.requestRender();
+        if (!state.disposed) tuiLike.requestRender();
       });
 
       // directId 命中 → 进详情模式
@@ -157,7 +192,7 @@ export async function createSubagentsView(
         }
       }
 
-      const component = new SubagentsListComponent(hub, theme, tui, state, unsubscribe, notify);
+      const component = new SubagentsListComponent(hub, theme, tuiLike, state, unsubscribe, notify);
 
       // wrappedDone（dev guide §4 顺序：幂等→标记→unsubscribe→clearActiveView→done）
       const wrappedDone = () => {
@@ -175,9 +210,11 @@ export async function createSubagentsView(
     {
       overlay: true,
       overlayOptions: {
-        margin: 0,
+        anchor: "center" as const,
         width: "100%",
         maxHeight: "100%",
+        // margin:1 → 四边各留 1 行，框贴满 render width（与终端边缘有 1 行间距）
+        margin: 1,
       },
     },
   );
@@ -327,13 +364,13 @@ export function applyFilter(records: SubagentRecord[], filterText: string): Suba
 // ============================================================
 
 /**
- * 全屏左右分屏 list 组件。
+ * 全屏带框左右分屏 list 组件。
  *
  * 不缓存行（records 每次 render 都从 hub.collectRecords 拉最新——保证 store 变化后刷新）。
- * 缓存的是「上次 render 的 width」（用于 invalidate 后强制重建）。
+ * 缓存的是「上次 render 的 width×rows」（用于 invalidate 后强制重建）。
  */
 class SubagentsListComponent implements Component {
-  private cachedWidth: number | undefined;
+  private cachedKey: string | undefined;
   private cachedLines: string[] | undefined;
   private closeFn: () => void = () => {};
 
@@ -351,14 +388,16 @@ class SubagentsListComponent implements Component {
   }
 
   invalidate(): void {
-    this.cachedWidth = undefined;
+    this.cachedKey = undefined;
     this.cachedLines = undefined;
   }
 
   render(width: number): string[] {
-    if (width === this.cachedWidth && this.cachedLines) return this.cachedLines;
-    const lines = this.buildLines(width);
-    this.cachedWidth = width;
+    const rows = this.termRows();
+    const key = `${width}x${rows}`;
+    if (key === this.cachedKey && this.cachedLines) return this.cachedLines;
+    const lines = this.buildLines(width, rows);
+    this.cachedKey = key;
     this.cachedLines = lines;
     return lines;
   }
@@ -368,7 +407,12 @@ class SubagentsListComponent implements Component {
 
     const records = applyFilter(this.hub.collectRecords(LIST_LIMIT), this.state.filterText);
     const selected = records[this.state.selectedIdx] ?? null;
-    const detailCtx: DetailKeyContext = { viewportHeight: 20, contentLines: selected?.eventLog.length };
+    // 详情翻屏步长：可用视口高（terminal 高 - margin 行 - 框内固定行）。
+    // 与 renderDetailBox 的 viewH 计算保持一致（元数据/段头在 content 里一起翻屏，不算固定）。
+    const detailCtx: DetailKeyContext = {
+      viewportHeight: Math.max(DETAIL_MIN_VIEWPORT, this.termRows() - OVERLAY_MARGIN_LINES - DETAIL_FIXED_LINES),
+      contentLines: selected?.eventLog.length,
+    };
 
     const result = processKey(data, records, this.state, selected, this.hub, detailCtx, this.notify);
 
@@ -382,63 +426,131 @@ class SubagentsListComponent implements Component {
     }
   }
 
+  /** 安全读 terminal.rows（兜底防 duck-type 失败）。 */
+  private termRows(): number {
+    const rows = this.tui.terminal?.rows;
+    return typeof rows === "number" && rows > 0 ? rows : TERM_ROWS_FALLBACK;
+  }
+
   // ── 内部：渲染 ──────────────────────────────────────────
 
-  /** 构建行数组。 */
-  private buildLines(width: number): string[] {
-    const t = this.theme;
-    const lines: string[] = [];
-
-    // 标题行 + filter 提示
-    const filterPart = this.state.filterText
-      ? t.fg("dim", ` · filter: `) + t.fg("accent", this.state.filterText)
-      : "";
-    lines.push(truncLine(`${t.bold("/subagents list")}${filterPart}`, width));
-
+  /**
+   * 构建行数组（全屏带框）。
+   *
+   *   width  = render 收到的可用宽（margin:1 → termCols - 2，框正好填满）
+   *   rows   = terminal.rows（用于把 body pad 到满屏，让框像真正的全屏面板）
+   *
+   * 分四个分支：
+   *   1. 终端太矮（< MIN_TERM_ROWS）→ 紧凑提示，不画框
+   *   2. detailMode → 详情全屏框
+   *   3. 空列表 → 紧凑小框（不填满全屏）
+   *   4. 有 records → 分屏满屏框
+   */
+  private buildLines(width: number, rows: number): string[] {
     const records = applyFilter(this.hub.collectRecords(LIST_LIMIT), this.state.filterText);
+
+    // 终端太矮：回退紧凑（不强求满屏，避免框被压缩成一团）
+    if (rows < MIN_TERM_ROWS) {
+      return this.renderTooSmall(width);
+    }
 
     if (this.state.detailMode) {
       const selected = records[this.state.selectedIdx] ?? null;
-      lines.push(...this.renderDetail(selected, width));
-      return lines;
+      return this.renderDetailBox(selected, width, rows);
     }
 
-    // 空列表
     if (records.length === 0) {
-      lines.push("");
-      lines.push(truncLine(t.fg("dim", "(暂无 subagent 记录)"), width));
-      lines.push("");
-      lines.push(truncLine(t.fg("dim", "Esc 退出"), width));
-      return lines;
+      return this.renderEmptyBox(width);
     }
 
     // clamp selectedIdx（filter 后可能越界）
     this.state.selectedIdx = Math.min(this.state.selectedIdx, records.length - 1);
+    return this.renderSplitBox(records, width, rows);
+  }
 
-    // 左右分屏
-    const leftWidth = Math.max(COL_MIN_WIDTH, Math.floor(width * LEFT_COL_RATIO));
-    const rightWidth = Math.max(COL_MIN_WIDTH, width - leftWidth - 1);
-    const sep = t.fg("borderMuted", COL_SEP);
+  // ── 分支 1：终端太小 ──────────────────────────────────
 
-    // 表头
-    lines.push(truncLine(
-      `${padToVisible(t.fg("accent", t.bold("Record")), leftWidth)}${sep}${padToVisible(t.fg("accent", t.bold("详情")), rightWidth)}`,
-      width,
-    ));
+  private renderTooSmall(width: number): string[] {
+    const t = this.theme;
+    const contentWidth = Math.max(1, width - BORDER_WIDTH);
+    const inner = `${t.fg("warning", `终端太矮（需 ≥${MIN_TERM_ROWS} 行）`)}`;
+    return [
+      t.fg("borderMuted", `╭${segFill(undefined, "─", contentWidth)}╮`),
+      `│${padToVisible(inner, contentWidth)}│`,
+      t.fg("borderMuted", `╰${segFill(undefined, "─", contentWidth)}╯`),
+    ];
+  }
 
-    // 主体：左列每条 record + 右列选中 record 的预览
+  // ── 分支 3：空列表紧凑框 ──────────────────────────────
+
+  private renderEmptyBox(width: number): string[] {
+    const t = this.theme;
+    const contentWidth = Math.max(1, width - BORDER_WIDTH);
+    const inner = (s: string) => `│${padToVisible(s, contentWidth)}│`;
+    return [
+      t.fg("borderMuted", `╭${segFill(t.fg("accent", t.bold(` ${TITLE_SPLIT} `)), "─", contentWidth)}╮`),
+      inner(""),
+      inner(truncLine(t.fg("dim", "(暂无 subagent 记录)"), contentWidth)),
+      inner(""),
+      inner(truncLine(t.fg("dim", "Esc 退出"), contentWidth)),
+      t.fg("borderMuted", `╰${segFill(undefined, "─", contentWidth)}╯`),
+    ];
+  }
+
+  // ── 分支 4：分屏满屏框 ────────────────────────────────
+
+  private renderSplitBox(records: SubagentRecord[], width: number, rows: number): string[] {
+    const t = this.theme;
+    const contentWidth = Math.max(1, width - BORDER_WIDTH);
+    // 左右列宽：左按比例，右占余下（减去分隔符 1 列）
+    const leftWidth = Math.max(COL_MIN_WIDTH, Math.floor(contentWidth * LEFT_COL_RATIO));
+    const rightWidth = Math.max(COL_MIN_WIDTH, contentWidth - leftWidth - 1);
+
+    // 框线着色（borderMuted）+ 左右列分隔符
+    const line = (s: string) => t.fg("borderMuted", s);
+    const sep = line("│");
+
+    // 满屏可用 body 高 = 终端高 - margin 行 - 固定行（顶框/filter/分区线/底分区线/footer/底框 = 6）
+    const bodyH = Math.max(1, rows - OVERLAY_MARGIN_LINES - SPLIT_FIXED_LINES);
+
+    const lines: string[] = [];
+
+    // 顶框（嵌入标题）
+    lines.push(line(`╭${segFill(t.fg("accent", t.bold(` ${TITLE_SPLIT} `)), "─", contentWidth)}╮`));
+
+    // filter 行（默认可直接输入：filter: _）
+    const filterDisplay = this.state.filterText
+      ? `${t.fg("dim", "filter: ")}${t.bold(this.state.filterText)}${t.fg("accent", "_")}`
+      : `${t.fg("dim", "filter: ")}${t.fg("accent", "_")}`;
+    lines.push(`│${padToVisible(truncLine(filterDisplay, contentWidth), contentWidth)}│`);
+
+    // 分区线（嵌入左/右标题）
+    const leftTitle = t.fg("accent", t.bold(` ${TITLE_LEFT} `));
+    const rightTitle = t.fg("accent", t.bold(` ${TITLE_RIGHT} `));
+    const divLeft = segFill(leftTitle, "─", leftWidth);
+    const divRight = segFill(rightTitle, "─", rightWidth);
+    lines.push(line(`├${divLeft}┬${divRight}┤`));
+
+    // body：左列 record 列表 + 右列选中预览
     const leftLines = this.renderLeftColumn(records, leftWidth);
     const rightLines = this.renderRightPreview(records[this.state.selectedIdx] ?? null, rightWidth);
-    const bodyRows = Math.max(leftLines.length, rightLines.length);
+    const bodyRows = Math.max(leftLines.length, rightLines.length, bodyH);
     for (let i = 0; i < bodyRows; i++) {
       const l = leftLines[i] ?? "";
       const r = rightLines[i] ?? "";
-      lines.push(truncLine(`${padToVisible(l, leftWidth)}${sep}${padToVisible(r, rightWidth)}`, width));
+      const row = `${padToVisible(truncLine(l, leftWidth), leftWidth)}${sep}${padToVisible(truncLine(r, rightWidth), rightWidth)}`;
+      lines.push(`│${padToVisible(row, contentWidth)}│`);
     }
 
-    // 底部提示
-    lines.push("");
-    lines.push(truncLine(t.fg("dim", "↑↓ 导航 · Enter 详情 · 字符过滤 · Esc 退出"), width));
+    // 底分区线
+    lines.push(line(`├${"─".repeat(leftWidth)}┴${"─".repeat(rightWidth)}┤`));
+
+    // footer
+    const footer = t.fg("dim", "↑↓ 导航 · Enter 详情 · 字符过滤 · Esc 退出");
+    lines.push(`│${padToVisible(truncLine(footer, contentWidth), contentWidth)}│`);
+
+    // 底框
+    lines.push(line(`╰${segFill(undefined, "─", contentWidth)}╯`));
 
     return lines;
   }
@@ -491,82 +603,127 @@ class SubagentsListComponent implements Component {
     return lines;
   }
 
-  /** 详情视图：完整 eventLog（不折叠）+ result/error + sessionFile。 */
-  private renderDetail(record: SubagentRecord | null, width: number): string[] {
+  // ── 分支 2：详情全屏框 ────────────────────────────────
+
+  /**
+   * 详情视图：完整 eventLog（不折叠）+ result/error + sessionFile。
+   *
+   *   ╭─ {agent} ──╮
+   *   │ 元数据 2 行 │
+   *   │ [hint 2 行] │  ← syncCancelHint 时
+   *   │             │
+   *   │ ── 执行轨迹 ──│
+   *   │ logLines ... │  ← scrollOffset 翻屏，pad 到满屏
+   *   ├──────────────┤
+   *   │ footer       │
+   *   ╰──────────────╯
+   */
+  private renderDetailBox(record: SubagentRecord | null, width: number, rows: number): string[] {
     const t = this.theme;
-    const lines: string[] = [];
+    const contentWidth = Math.max(1, width - BORDER_WIDTH);
+    const line = (s: string) => t.fg("borderMuted", s);
 
     if (!record) {
-      lines.push(truncLine(t.fg("dim", "(无选中 record)"), width));
-      lines.push("");
-      lines.push(truncLine(t.fg("dim", "Esc 返回"), width));
-      return lines;
+      const inner = (s: string) => `│${padToVisible(s, contentWidth)}│`;
+      return [
+        line(`╭${segFill(t.fg("accent", t.bold(" 详情 ")), "─", contentWidth)}╮`),
+        inner(""),
+        inner(truncLine(t.fg("dim", "(无选中 record)"), contentWidth)),
+        inner(""),
+        inner(truncLine(t.fg("dim", "Esc 返回"), contentWidth)),
+        line(`╰${segFill(undefined, "─", contentWidth)}╯`),
+      ];
     }
 
-    // 标题
-    lines.push(truncLine(
-      `${t.bold(record.agent)} ${t.fg("dim", `· ${record.model}${record.thinkingLevel ? ` · thinking ${record.thinkingLevel}` : ""}`)}`,
-      width,
-    ));
-    lines.push(truncLine(
+    // ── 内容行（先生成全部，再翻屏）──
+    const content: string[] = [];
+
+    // 元数据：第 1 行 id + 状态 + turns + tokens
+    content.push(truncLine(
       t.fg("dim", `${record.id} · ${record.mode} · ${record.status} · ${record.turns} turns · ${formatTokens(record.totalTokens)}`),
-      width,
+      contentWidth,
     ));
-
-    // syncCancelHint
-    if (this.state.syncCancelHint) {
-      lines.push("");
-      lines.push(truncLine(t.fg("warning", "sync subagent 无法在此终止——请按对话流 Esc 终止"), width));
+    // 元数据：第 2 行 model + thinking（括号分组）
+    const metaParts: string[] = [];
+    if (record.model) metaParts.push(record.model);
+    if (record.thinkingLevel) metaParts.push(`thinking ${record.thinkingLevel}`);
+    if (metaParts.length > 0) {
+      content.push(truncLine(t.fg("dim", `(${metaParts.join(" · ")})`), contentWidth));
+    } else {
+      content.push("");
     }
 
-    lines.push("");
-    lines.push(truncLine(t.fg("accent", t.bold("执行轨迹")), width));
+    // syncCancelHint（占 2 行：空行 + 提示）
+    if (this.state.syncCancelHint) {
+      content.push("");
+      content.push(truncLine(t.fg("warning", "sync subagent 无法在此终止——请按对话流 Esc 终止"), contentWidth));
+    }
 
-    // eventLog 翻屏窗口
-    const logLines: string[] = [];
+    content.push("");
+    content.push(truncLine(t.fg("accent", t.bold("── 执行轨迹 ──")), contentWidth));
+
+    // eventLog（不折叠）
     if (record.eventLog.length === 0) {
-      logLines.push(t.fg("dim", "(无执行轨迹——来自历史记录)"));
+      content.push(truncLine(t.fg("dim", "(无执行轨迹——来自历史记录)"), contentWidth));
     } else {
       for (const entry of record.eventLog) {
-        logLines.push(formatEventLine(entry, t));
+        content.push(truncLine(formatEventLine(entry, t), contentWidth));
       }
     }
 
     // 结果/错误
     if (record.result) {
-      logLines.push("");
-      logLines.push(t.fg("accent", "结果:"));
+      content.push("");
+      content.push(truncLine(t.fg("accent", "结果:"), contentWidth));
       for (const l of record.result.split("\n")) {
-        logLines.push(sanitizeLabel(l));
+        content.push(truncLine(sanitizeLabel(l), contentWidth));
       }
     }
     if (record.error) {
-      logLines.push("");
-      logLines.push(t.fg("error", `Error: ${firstLine(record.error)}`));
+      content.push("");
+      content.push(truncLine(t.fg("error", `Error: ${firstLine(record.error)}`), contentWidth));
     }
     if (record.sessionFile) {
-      logLines.push("");
-      logLines.push(t.fg("dim", `session: ${record.sessionFile}`));
+      content.push("");
+      content.push(truncLine(t.fg("dim", `session: ${record.sessionFile}`), contentWidth));
     }
 
-    // 应用 scrollOffset 翻屏
-    const visible = logLines.slice(this.state.scrollOffset);
-    const max = Math.max(0, logLines.length - 1);
+    // ── 翻屏 ──
+    // 可用视口高 = 终端高 - margin 行 - 框内固定行（顶框/底分区线/footer/底框 = 4）。
+    // 元数据/段头/eventLog 都在 content 里一起翻屏，不计固定行。
+    const viewH = Math.max(DETAIL_MIN_VIEWPORT, rows - OVERLAY_MARGIN_LINES - DETAIL_FIXED_LINES);
+    const max = Math.max(0, content.length - viewH);
     if (this.state.scrollOffset > max) this.state.scrollOffset = max;
+    const startIdx = Math.max(0, Math.min(this.state.scrollOffset, max));
+    this.state.scrollOffset = startIdx; // 回写收敛（End 越界后下次渲染归位）
+    const visible = content.slice(startIdx, startIdx + viewH);
+
+    // ── 组装 ──
+    const lines: string[] = [];
+
+    // 顶框（嵌入 agent 名）
+    lines.push(line(`╭${segFill(t.fg("accent", t.bold(` ${record.agent} `)), "─", contentWidth)}╮`));
+
     for (const l of visible) {
-      lines.push(truncLine(l, width));
+      lines.push(`│${padToVisible(l, contentWidth)}│`);
+    }
+    // pad 到 viewH（框内视口填满）
+    while (lines.length < 1 + viewH) {
+      lines.push(`│${" ".repeat(contentWidth)}│`);
     }
 
-    // 底部提示
-    lines.push("");
+    // 底分区线 + footer + 底框
+    lines.push(line(`├${segFill(undefined, "─", contentWidth)}┤`));
     const canCancel = record.status === "running";
     const cancelHint = canCancel
       ? (record.mode === "background" ? " · x 停止" : " · x 提示停止")
       : "";
-    lines.push(truncLine(
-      t.fg("dim", `Esc 返回 · ↑↓/PgUp/PgDn/Home/End 翻屏${cancelHint}`),
-      width,
-    ));
+    const scrollInfo = content.length > viewH
+      ? ` · ${startIdx + 1}-${Math.min(startIdx + viewH, content.length)}/${content.length}`
+      : "";
+    const footer = t.fg("dim", `Esc 返回 · ↑↓/PgUp/PgDn/Home/End 翻屏${cancelHint}${scrollInfo}`);
+    lines.push(`│${padToVisible(truncLine(footer, contentWidth), contentWidth)}│`);
+    lines.push(line(`╰${segFill(undefined, "─", contentWidth)}╯`));
 
     return lines;
   }
@@ -587,10 +744,12 @@ function elapsedSec(r: SubagentRecord): number {
   return Math.max(0, Math.floor((end - r.startedAt) / MS_PER_SECOND));
 }
 
-/** 详情翻屏最大 offset（contentLines - 1，兜底 0）。 */
+/** 详情翻屏最大 offset（contentLines - viewportHeight，兜底 0）。
+ *  与 renderDetailBox 的 max 计算保持一致（content.length - viewH）。 */
 function detailScrollMax(detailCtx: DetailKeyContext | undefined): number {
   const content = detailCtx?.contentLines ?? 0;
-  return Math.max(0, content - 1);
+  const viewH = detailCtx?.viewportHeight ?? DETAIL_MIN_VIEWPORT;
+  return Math.max(0, content - viewH);
 }
 
 /** 处理取消按键（x）。background 真正 abort；sync 仅提示。返回是否变化。 */
