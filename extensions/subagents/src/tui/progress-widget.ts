@@ -11,7 +11,10 @@
 // 设计（pi-tui-development-guide.md）：
 //   - 不设 renderShell，背景色归 Pi shell（widget 路径下不施加背景色）
 //   - 所有输出行经 truncLine（ANSI 安全）
-//   - count=0 必须返回 []（空数组），否则会在 belowEditor 留空行
+//   - **固定 ≥1 行高度**：无 running 时返回 1 行占位提示（不返回 []）。
+//     belowEditor widget 高度波动（0↔N）会触发 Pi clearOnShrink=off 下的拖影——
+//     多行 input + widget 高度变化 + 差分渲染导致物理终端行与逻辑行错位。
+//     固定 ≥1 行消除 0→N 的跳变（N→N±1 的小波动 Pi 差分渲染能正确处理）。
 //   - spinner 用 Date.now() 选帧，靠 hub.onChange 触发 requestRender 换帧
 
 import type { Component } from "@earendil-works/pi-tui";
@@ -59,9 +62,14 @@ export class SubagentsProgressWidget implements Component {
 
   render(width: number): string[] {
     const records = this.collectRunningBackground();
-    if (records.length === 0) return [];
-
     const t = this.theme;
+
+    if (records.length === 0) {
+      // 固定 1 行占位——避免 belowEditor widget 高度波动（0↔N）触发 Pi
+      // clearOnShrink=off 下的拖影。有 background 时多行，无时始终 1 行。
+      return [truncLine(t.fg("dim", "/subagents list · background tasks show here when running"), width)];
+    }
+
     const lines: string[] = [];
 
     // 标题行
@@ -77,9 +85,9 @@ export class SubagentsProgressWidget implements Component {
     // 溢出提示
     const remaining = records.length - WIDGET_MAX_ROWS;
     if (remaining > 0) {
-      lines.push(truncLine(t.fg("dim", `  … 及其余 ${remaining} 个 · /subagents list`), width));
+      lines.push(truncLine(t.fg("dim", `  … +${remaining} more · /subagents list`), width));
     } else {
-      lines.push(truncLine(t.fg("dim", "  /subagents list 查看详情"), width));
+      lines.push(truncLine(t.fg("dim", "  /subagents list for details"), width));
     }
 
     return lines;
