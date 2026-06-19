@@ -105,23 +105,29 @@ export function padToVisible(text: string, width: number): string {
 }
 
 /**
- * 生成一条边框/分隔线，中间可选嵌入标题（如 `─ Subagents ─`）。
+ * 分段着色版 segFill：title 和 fill 都已着色（含 ANSI），拼接时各自 ANSI 延续。
  *
- *   `╭` + segFill("─ Subagents ", "─", 20) + `╮`
- *   → `╭─ Subagents ────────╮`
+ * 解决 ANSI 嵌套失色问题：若用 `t.fg("c1", fill(title, "─", n))`，
+ * title 内的 `\x1b[0m` 会重置外层 c1，导致 title 之后的 `─` 失去 c1。
+ * 本函数改成 `title + fill.repeat(后)`，fill 整段保持着自己的 ANSI，不依赖外层包裹 → 全线着色一致。
  *
- *   - title 为 undefined → 纯填充线 `fill × width`
- *   - title 可见宽 ≥ width → 截断到 width（truncLine 安全）
- *   - title < width → 末尾补 fill 填满（visibleWidth 安全，CJK/emoji 不偏）
+ *   segFillColored(t.fg("accent"," Subagents "), t.fg("borderMuted","─"), 20)
+ *   → accent(" Subagents ") + borderMuted(─×N)，无嵌套
  *
- * title 由调用方先着色再传入（本函数不接 theme），框线 fill 同理。
+ * 注意：fill 必须是「单字符着色」（如 `t.fg("borderMuted","─")`），visibleWidth=1。
+ * 调用方负责 title/fill 着色；本函数不接 theme。标题在前、填充在后。
  */
-export function segFill(title: string | undefined, fill: string, width: number): string {
+export function segFillColored(titleStyled: string | undefined, fillStyled: string, width: number): string {
   if (width <= 0) return "";
-  if (!title) return fill.repeat(width);
-  const tw = visibleWidth(title);
-  if (tw >= width) return truncLine(title, width);
-  return title + fill.repeat(width - tw);
+  const fillW = visibleWidth(fillStyled);
+  if (!titleStyled || fillW === 0) {
+    // 纯填充线：fillStyled.visibleWidth 应为 1，按 width 次重复
+    return fillStyled.repeat(width);
+  }
+  const tw = visibleWidth(titleStyled);
+  if (tw >= width) return truncLine(titleStyled, width);
+  const fillCount = width - tw;
+  return titleStyled + fillStyled.repeat(fillCount);
 }
 
 // ============================================================
