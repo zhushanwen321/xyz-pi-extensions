@@ -88,14 +88,11 @@ export function renderSubagentCall(
   const agent = extractAgentName(args);
   const parts = [`${t.fg("toolTitle", t.bold("subagent "))}${t.fg("accent", agent)}`];
 
-  // model + thinking——model 用 accent 色（感知主战场，D-1 取消确认后靠此显示），
-  // thinking 保持 dim（次要信息）。预解析有值才显示。
+  // model + thinking——完整 provider/model（accent 色），thinking 保持 dim。
+  // 不去 provider 前缀——provider 是模型来源的关键信息，感知「用错模型」需要完整路径。
   if (resolved) {
-    const modelBase = resolved.model.lastIndexOf("/") !== -1
-      ? resolved.model.slice(resolved.model.lastIndexOf("/") + 1)
-      : resolved.model;
     parts.push(t.fg("dim", " ("));
-    parts.push(t.fg("accent", modelBase));
+    parts.push(t.fg("accent", resolved.model));
     if (resolved.thinkingLevel) {
       parts.push(t.fg("dim", ` · thinking ${resolved.thinkingLevel})`));
     } else {
@@ -242,9 +239,22 @@ export class SubagentResultComponent implements Component {
   // ── 压缩视图 ──────────────────────────────────────────────
 
   private renderCompact(width: number): string[] {
-    const lines: string[] = [];
     const d = this.details;
     const theme = this.theme;
+
+    // background 占位 block（有 backgroundId）：execute 已 return，tool block 不会再更新。
+    // 只显示 backgroundId + poll 指引，不显示 spinner/eventLog/footer（那些对 background 无意义）。
+    if (d.backgroundId !== undefined) {
+      return [
+        truncLine(
+          `${theme.fg("dim", "background: ")}${theme.fg("accent", d.backgroundId)}`
+          + ` ${theme.fg("dim", "· running detached · poll to check")}`,
+          width,
+        ),
+      ];
+    }
+
+    const lines: string[] = [];
 
     // 第 1 行：状态行（glyph + stats，agent/model 已上移标题行）
     lines.push(truncLine(buildStatusLine(d, theme), width));

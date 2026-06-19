@@ -140,7 +140,7 @@ const subagentRenderCall: SubagentRenderCallCb = (args, theme, ctx) => {
   try {
     const hub = getHub();
     const r = hub?.resolveModel(agent, override);
-    if (r) resolved = { model: r.model.id, thinkingLevel: r.thinkingLevel };
+    if (r) resolved = { model: `${r.model.provider}/${r.model.id}`, thinkingLevel: r.thinkingLevel };
   } catch {
     // hub 未注册或 modelRegistry 未注入，降级
   }

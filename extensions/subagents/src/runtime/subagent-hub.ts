@@ -271,7 +271,7 @@ export class SubagentHub {
 
     const record = createRecord(id, {
       agent: identity.agent,
-      model: identity.resolved.model.id,
+      model: `${identity.resolved.model.provider}/${identity.resolved.model.id}`,
       thinkingLevel: identity.resolved.thinkingLevel,
       mode,
       task: opts.task,
