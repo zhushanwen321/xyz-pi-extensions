@@ -620,3 +620,18 @@ line 29 声称"`/subagents list` 全屏视图不在本期讨论范围（已有 F
 FR-2.4 描述压缩视图"固定 6 行"。实际已改为**动态高度**：状态行 + 最近 ≤4 条事件，随事件增长，不预填空行。`Press Ctrl+O` 提示行已移除。
 
 **权威文档**：`2026-06-15-subagent-architecture-consolidation/tui-conversation.md`
+
+### D-03: background 可观测性强化（FR-2 widget + 完成通知）
+
+原 FR 未覆盖 background 模式的可观测性。实测发现 background 启动后 tool block 显示 "(subagent did not produce details)"（因 execute 只返回 `{ backgroundId }`），且完成通知 `display:false` 导致用户/主 agent 完全感知不到完成。
+
+**Pi 硬约束**（调研结论）：execute return 后 tool block 必然 finalize（`agent-loop.ts:636-654`），onUpdate 被丢弃。background「原地展示进度」无法在 tool block 内实现。
+
+**本次改动**：
+1. **execute 返回完整 details**：background 模式返回 `{ status:"running", agent, model, ..., backgroundId }`（而非只有 `{ backgroundId }`），让启动时 tool block 正常渲染 running 态
+2. **progress widget 强化**：从「只显示计数」升级为「每行一个 running bg task」（spinner + agent + model 简写 + eventLog 最新 label + 耗时）。编辑器下方常驻，空时不占位。这是 background 进度的主要展示位（tool block 无法持续更新）
+3. **完成通知 display:true**：notifier 从 `display:false`（不显示）改为 `display:true`，触发 bg-notify-render 渲染一个 `customMessageBg` 色完成 block（与 tool block 的 toolSuccessBg 视觉区分）。内容含 agent + status 图标 + 摘要首行 + backgroundId。triggerTurn:true 唤醒父 agent 下一 turn
+4. **fallback 提示优化**：details 缺失时从 dim `(subagent did not produce details)` 改为 warning 色 `(subagent execution failed — no details available)`，明确标示异常
+5. **提示词优化**：SubagentParams 各字段 description 重写，明确 sync/background/poll 三模式 + backgroundId 是轮询用非启动用
+
+**设计理由**：执行层（background detached 立即返回）与展示层（widget 实时进度 + 完成通知 block）解耦。主 agent 不阻塞，用户在 TUI 持续可见进度与完成。

@@ -188,9 +188,12 @@ export class SubagentHub {
       return { mode: "sync", record: snapshot(record), details: project(record) };
     }
 
-    // background：立即返回 backgroundId，步骤 4-6 在 detached promise 里跑
+    // background：立即返回 backgroundId + 启动时的 details（status=running），
+    // 步骤 4-6 在 detached promise 里跑。
+    const bgDetails = project(record);
+    bgDetails.backgroundId = record.id;
     this.kickOffBackground(record, opts, ctx, identity, signal, priority);
-    return { mode: "background", backgroundId: record.id };
+    return { mode: "background", backgroundId: record.id, details: bgDetails };
   }
 
   /** poll(backgroundId)：查 record 并投影为 QueryResult。不存在 throw。 */

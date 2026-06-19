@@ -205,7 +205,7 @@ export interface ExecuteOptions {
  */
 export type ExecutionHandle =
   | { mode: "sync"; record: RecordSnapshot; details: SubagentToolDetails }
-  | { mode: "background"; backgroundId: string };
+  | { mode: "background"; backgroundId: string; details: SubagentToolDetails };
 
 /** poll(backgroundId) 返回。record 的只读视图。 */
 export interface QueryResult {

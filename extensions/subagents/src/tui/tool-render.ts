@@ -132,10 +132,11 @@ export function renderSubagentResult(
   const details = result.details;
 
   // 防御性 fallback：details 缺失或结构不完整时显示占位。
-  // execute throw 后 SDK 会重建空 details（{} 或 undefined），此时 status/agent 缺失——
-  // 不能当 SubagentToolDetails 渲染，否则显示 "⠋ undefined" 误导用户。
+  // execute throw 后 SDK 会重建空 details（{} 或 undefined），此时 status/agent 缺失。
+  // 用 warning 色明确标示「执行出错」，而非 dim 的「正常但无内容」——
+  // 让用户知道是异常而非预期行为。
   if (!details || typeof details.status !== "string" || typeof details.agent !== "string") {
-    return new Text(themeLike.fg("dim", "(subagent did not produce details)"), 0, 0);
+    return new Text(themeLike.fg("warning", "(subagent execution failed — no details available)"), 0, 0);
   }
 
   // 复用 lastComponent（P1a 优化，省 GC + 防 theme 闪烁）

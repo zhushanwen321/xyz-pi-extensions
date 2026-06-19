@@ -110,29 +110,30 @@ export class BgNotifier {
       ? this.formatBgCompletionMessage(records[0])
       : records.map((r) => `- ${this.formatBgCompletionMessage(r)}`).join("\n");
 
-    // display:false —— 不渲染视觉 block（避与 tool result block 重复，commit 4ecc9f5a1）。
-    // triggerTurn:true 与 display 正交，仍唤醒父 agent 下一 turn。
-    // （对照 Pi 引擎 interactive-mode.ts:3069-3076：display:false 时连
-    //   CustomMessageComponent 都不创建，bg-notify-render 永不执行。）
+    // display:true —— 渲染一个 customMessageBg 色完成 block（与 tool block 区分），
+    // 让用户/主 agent 在对话流看到「X 完成」。triggerTurn:true 唤醒父 agent 下一 turn。
+    // （对照 Pi 引擎 interactive-mode.ts:3069-3076：display:true 时调
+    //   bg-notify-render 渲染完成摘要 block。）
     this.host.sendMessage({
       customType: NOTIFY_CUSTOM_TYPE,
       content,
-      display: false,
+      display: true,
     }, { triggerTurn: true });
   }
 
   /** 格式化单条完成消息（供 sendMessage 的 content）。 */
   formatBgCompletionMessage(record: BgNotifyRecord): string {
     const agent = record.agent;
+    const id = record.id;
     const preview = (text?: string): string =>
       text ? (text.length > PREVIEW_MAX ? text.slice(0, PREVIEW_MAX) : text) : "";
     switch (record.status) {
       case "done":
-        return `Subagent "${agent}" completed. Result: ${preview(record.result) || "(empty)"}`;
+        return `Subagent "${agent}" (${id}) completed. Result: ${preview(record.result) || "(empty)"}`;
       case "failed":
-        return `Subagent "${agent}" failed: ${preview(record.error) || "(unknown error)"}`;
+        return `Subagent "${agent}" (${id}) failed: ${preview(record.error) || "(unknown error)"}`;
       case "cancelled":
-        return `Subagent "${agent}" cancelled.`;
+        return `Subagent "${agent}" (${id}) cancelled.`;
     }
   }
 

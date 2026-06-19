@@ -3,17 +3,18 @@
 // background 完成通知的对话流渲染器。
 // pi.registerMessageRenderer("subagent-bg-notify", ...) 注册。
 //
-// 关键设计（对照 Pi 引擎源码 interactive-mode.ts:3069-3076 + custom-message.ts）：
-//   - Pi 的 `display` 字段是「渲染门控」。notifier.ts 已设 display:false，
-//     通知只 triggerTurn（唤醒父 agent 下一轮），**不渲染视觉 block**——避免与
-//     tool result block 重复（commit 4ecc9f5a1 修复的双 block bug）。
-//   - display:false 时 Pi **完全不调用** renderer（连 CustomMessageComponent 都不创建），
-//     所以本 renderer 在正常路径下永不执行。
-//   - 但 messageRenderer 注册表的类型契约要求 renderer 存在，且签名正确
-//     （返回 Component | undefined）。这里做防御性实现：
-//       1. 若被显式 display:true 调用，从 details 提取 BgNotifyRecord
-//       2. 按 status 选图标 + 颜色，渲染一个紧凑完成块（与 sync tool block 同风格）
-//       3. details 缺失/结构异常 → 返回 undefined（走 Pi 默认 customMessageBg 渲染）
+// notifier.ts 设 display:true + triggerTurn:true：
+//   - display:true → Pi 创建 CustomMessageComponent（customMessageBg 背景色块，
+//     与 tool block 的 toolSuccessBg 视觉区分），调本 renderer 渲染内容
+//   - triggerTurn:true → 唤醒父 agent 下一 turn，让 LLM 看到「X 完成」
+//
+// 渲染内容（紧凑单行/双行）：
+//   ✓ agent — 摘要首行 (id)
+//   ✗ agent — Error: 错误首行 (id)
+//   ■ agent — cancelled (id)
+//
+// 注意：不调 theme.bg()——背景色由 Pi 的 CustomMessageComponent 容器施加
+// （customMessageBg）。组件只负责前景内容。
 
 import type { Component } from "@earendil-works/pi-tui";
 import { Text } from "@earendil-works/pi-tui";
@@ -32,8 +33,8 @@ const BODY_MAX_WIDTH = 80;
  * 契约（Pi MessageRenderer，core/extensions/types.ts:1060）：
  *   (message: CustomMessage, options: { expanded }, theme: Theme) => Component | undefined
  *
- *   display:false（默认路径）→ 永不调用，return undefined 兜底
- *   display:true（显式调用）→ 渲染紧凑完成块；details 异常 → undefined 走 Pi 默认渲染
+ *   display:true 时 Pi 调本方法，返回 Component 渲染到 customMessageBg 块。
+ *   details 异常 → 返回 undefined 走 Pi 默认渲染（兜底）。
  */
 export function renderBgNotifyMessage(
   message: { details?: unknown },
@@ -49,7 +50,7 @@ export function renderBgNotifyMessage(
   const agent = truncLine(record.agent, AGENT_MAX_WIDTH);
   const head = `${t.fg(glyph.color, icon)} ${t.bold(agent)}`;
 
-  // 完成块正文：done → result 首行；failed → error 首行；cancelled → 固定文案
+  // 完成块正文 + backgroundId
   let body: string;
   switch (record.status) {
     case "done":
@@ -65,8 +66,8 @@ export function renderBgNotifyMessage(
       return undefined;
   }
 
-  // 裸 Text(paddingX=0 paddingY=0)——背景色由 Pi 的 CustomMessageComponent 容器施加
-  return new Text(`${head} — ${t.fg("dim", truncLine(body, BODY_MAX_WIDTH))}`, 0, 0);
+  const idStr = t.fg("dim", ` (${record.id})`);
+  return new Text(`${head} — ${t.fg("dim", truncLine(body, BODY_MAX_WIDTH))}${idStr}`, 0, 0);
 }
 
 /**

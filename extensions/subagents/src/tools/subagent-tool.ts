@@ -62,11 +62,21 @@ type SubagentRenderResultCb = (
 // ============================================================
 
 export const SubagentParams = Type.Object({
-  task: Type.Optional(Type.String({ description: "The task for the subagent. Required unless polling with backgroundId." })),
-  agent: Type.Optional(Type.String({ description: 'Agent name. Defaults to "worker".' })),
-  wait: Type.Optional(Type.Boolean({ description: "true=sync (default), false=background." })),
-  backgroundId: Type.Optional(Type.String({ description: "Poll a prior background subagent." })),
-  model: Type.Optional(Type.String({ description: '"provider/modelId" override.' })),
+  task: Type.Optional(Type.String({
+    description: "The task for the subagent to execute. Required to start a new subagent. Omit only when polling an existing background subagent (use backgroundId instead).",
+  })),
+  agent: Type.Optional(Type.String({
+    description: 'Agent name (defines system prompt + tools). Defaults to "worker". Available agents: worker (general), researcher (read-only exploration), tester (test writing). Custom agents can be defined in config.',
+  })),
+  wait: Type.Optional(Type.Boolean({
+    description: "Execution mode. true (default) = sync: blocks until the subagent finishes, returns its result directly. false = background: returns a backgroundId immediately while the subagent runs detached; poll its status later with backgroundId. Background tasks run concurrently without blocking the main conversation.",
+  })),
+  backgroundId: Type.Optional(Type.String({
+    description: "Poll an existing background subagent by its id. The id is returned when you start a subagent with wait:false. Returns current status (running/done/failed) and result if finished. Do NOT pass this when starting a new task — it is for checking progress of a previously started background subagent only.",
+  })),
+  model: Type.Optional(Type.String({
+    description: 'Model override in "provider/modelId" format (e.g. "anthropic/claude-sonnet-4.5"). If omitted, uses the agent\'s configured default model.',
+  })),
   thinkingLevel: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const)),
   skillPath: Type.Optional(Type.String()),
   appendSystemPrompt: Type.Optional(Type.Array(Type.String())),
@@ -107,7 +117,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: "Delegate a task to a specialized subagent (sync/background/poll).",
+    description: "Delegate a task to a specialized subagent. Two modes: (1) sync (wait:true, default) — blocks until done, returns result. (2) background (wait:false) — returns a backgroundId immediately, runs concurrently; poll with backgroundId to check status/result. Use background for long-running or parallel tasks that shouldn't block the conversation.",
     executionMode: "sequential",
     parameters: SubagentParams,
     renderCall: subagentRenderCall,
@@ -226,8 +236,11 @@ const executeSubagent: SubagentExecuteCb = async (
 
   // ── 返回 ──
   if (handle.mode === "background") {
+    // background：立即返回 backgroundId + 完整 details（status=running），
+    // 让 tool block 能正常渲染 running 态（而非 "did not produce details"）。
+    // 后台进度靠 progress widget（execute return 后 tool block 无法继续更新）。
     return { content: [{ type: "text", text: `Background subagent started: ${handle.backgroundId}` }],
-      details: { backgroundId: handle.backgroundId } } as unknown as void;
+      details: handle.details } as unknown as void;
   }
 
   // sync: details 用 project 投影的 SubagentToolDetails（含 elapsedSeconds/currentActivity），
