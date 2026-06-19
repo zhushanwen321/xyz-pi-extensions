@@ -182,9 +182,11 @@ export function updateFromEvent(record: ExecutionRecord, event: AgentEvent): voi
   }
 
   // 3. totalTokens 累积（input+output+cacheRead+cacheWrite 求和）
+  // 每个字段 ?? 0 防 NaN——SDK duck-typed，字段可能 undefined（M1 修复，镜像 event-bridge guard）。
   if (event.type === "message_end" && event.usage) {
     record.totalTokens +=
-      event.usage.input + event.usage.output + event.usage.cacheRead + event.usage.cacheWrite;
+      (event.usage.input ?? 0) + (event.usage.output ?? 0) +
+      (event.usage.cacheRead ?? 0) + (event.usage.cacheWrite ?? 0);
   }
 }
 

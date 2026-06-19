@@ -110,7 +110,11 @@ export class RecordStore {
 
   /** 列出所有 running record 的只读快照（widget 计数、诊断用）。 */
   listRunning(): RecordSnapshot[] {
-    return [...this.live.values()].map((r) => toSnapshot(r));
+    // 只返回 status==="running"——terminal（done/failed/cancelled）record 不应计入
+    // running（否则 hasRunningBackground 对已 cancel 但未 archive 的 record 永真，C2 修复）。
+    return [...this.live.values()]
+      .filter((r) => r.status === "running")
+      .map((r) => toSnapshot(r));
   }
 
   /**
@@ -183,8 +187,11 @@ export class RecordStore {
 
   /** sync completed record 的 linger 定时器：到期后从 completed 移除。 */
   private scheduleSyncExpire(id: string): void {
+    // 防御：dispose 后不再 re-arm（/resume→revive→dispose 序列可能让 stale timer 改 completed，M3 修复）
+    if (this._disposed) return;
     const timer = setTimeout(() => {
       this.lingerTimers.delete(id);
+      if (this._disposed) return; // timer 触发时 store 已 dispose → 不改 completed
       // 仅当仍为非 running 终态时移除（避免竞态）
       const record = this.completed.get(id);
       if (record && record.status !== "running") {

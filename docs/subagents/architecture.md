@@ -40,7 +40,7 @@
    │                    Core 层（核心）                       │
    │                                                          │
    │  ── 编排子层（Orchestration）──                          │
-   │  session-runner（一次性）· managed-session（长生命周期） │
+   │  session-runner（一次性）                                │
    │                                                          │
    │  ── 基础子层（Foundation / Engine）──                    │
    │  session-factory（造 bundle）· output-collector（拆）    │
@@ -48,7 +48,7 @@
    │                                                          │
    │  ── 叶子原语 ──                                          │
    │  execution-record · model-resolver · agent-registry      │
-   │  concurrency-pool · turn-limiter · worktree              │
+   │  concurrency-pool · turn-limiter                         │
    │  职责：零 Pi 依赖的执行与状态原语，可独立单测            │
    └──────────────────────────────────────────────────────────┘
 ```
@@ -72,47 +72,44 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 | 子层 | 文件 | 可 import | 禁止 import |
 |---|---|---|---|
-| **编排（Orchestration）** | session-runner · managed-session | 基础子层 + 叶子原语 + types | 互相 import（两模式独立，平级） |
+| **编排（Orchestration）** | session-runner | 基础子层 + 叶子原语 + types | 基础子层禁止反向引用 |
 | **基础（Foundation）** | session-factory · output-collector · event-bridge | 自身 + types + 叶子原语 | 编排子层 |
-| **叶子原语** | execution-record · model-resolver · agent-registry · concurrency-pool · turn-limiter · worktree | 自身 + types | 编排/基础子层 |
+| **叶子原语** | execution-record · model-resolver · agent-registry · concurrency-pool · turn-limiter | 自身 + types | 编排/基础子层 |
 
 - `event-bridge` 是基础子层的 leaf（只依赖 types.ts），是 session-factory / output-collector 共享的数据通路内核。
-- `session-factory`（造 bundle：input → BuiltSession）与 `output-collector`（拆 bundle：BuiltSession → AgentResult）方向对称，都被两个编排器复用。
-- `session-runner` 与 `managed-session` 互不 import——它们是同一套基础引擎的两种用法（一次性 / 长生命周期），各自独立。
+- `session-factory`（造 bundle：input → BuiltSession）与 `output-collector`（拆 bundle：BuiltSession → AgentResult）方向对称，都被 session-runner 复用。
 
 ## 3. 文件归属
 
-30 个文件，按层 + 状态标注。状态：✅ 已实现 ｜ ⬜ 骨架（签名+流程图，待填）。
+29 个文件，按层 + 状态标注。状态：✅ 已实现 ｜ ⬜ 骨架（签名+流程图，待填）。
 
-### Core 层（11）
+### Core 层（9）
 
 > 分编排 / 基础 / 叶子三个子层（依赖方向见 §2 Core 子层依赖铁律）。
 
-#### 编排子层（Orchestration）— 2
+#### 编排子层（Orchestration）— 1
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
-| `session-runner.ts` | 一次性 session 执行编排，sync/bg 共用，零 mode 感知 | ⬜ |
-| `managed-session.ts` | 长生命周期 session 变体（多次 prompt/steer/abort） | ⬜ |
+| `session-runner.ts` | 一次性 session 执行编排，sync/bg 共用，零 mode 感知 | ✅ |
 
 #### 基础子层（Foundation）— 3
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
-| `event-bridge.ts` | SDK 事件 → AgentEvent 翻译 + turn/toolCall/usage 累积（内核数据通路，leaf） | ⬜ |
-| `session-factory.ts` | Pi session 组装（四步 → BuiltSession）：env block + resourceLoader + createAgentSession + bridge 订阅 | ⬜ |
-| `output-collector.ts` | BuiltSession → AgentResult 收集（text/usage/toolCalls/parsedOutput 字段单源） | ⬜ |
+| `event-bridge.ts` | SDK 事件 → AgentEvent 翻译 + turn/toolCall/usage 累积（内核数据通路，leaf） | ✅ |
+| `session-factory.ts` | Pi session 组装（四步 → BuiltSession）：env block + resourceLoader + createAgentSession + bridge 订阅 | ✅ |
+| `output-collector.ts` | BuiltSession → AgentResult 收集（text/usage/toolCalls/parsedOutput 字段单源） | ✅ |
 
-#### 叶子原语（Primitives）— 6
+#### 叶子原语（Primitives）— 5
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
-| `execution-record.ts` | 唯一状态对象 + 创建/更新/完成/投影入口 | ⬜ |
-| `model-resolver.ts` | 5 级 fallback 模型解析链 + category 推断 | ⬜ |
-| `agent-registry.ts` | agent `.md` 文件发现与解析（hot-reload） | ⬜ |
-| `concurrency-pool.ts` | 并发控制 + 优先级排队（sync=0，bg=1000） | ⬜ |
-| `turn-limiter.ts` | soft/hard turn 限制器（steer + abort） | ⬜ |
-| `worktree.ts` | isolation:worktree 隔离执行 + commit/preserve | ⬜ |
+| `execution-record.ts` | 唯一状态对象 + 创建/更新/完成/投影入口 | ✅ |
+| `model-resolver.ts` | 5 级 fallback 模型解析链 + category 推断 | ✅ |
+| `agent-registry.ts` | agent `.md` 文件发现与解析（hot-reload） | ✅ |
+| `concurrency-pool.ts` | 并发控制 + 优先级排队（sync=0，bg=1000），maxConcurrent 下限 1 | ✅ |
+| `turn-limiter.ts` | soft/hard turn 限制器（steer + abort） | ✅ |
 
 ### Runtime 层（7）
 
@@ -123,26 +120,40 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
-| `model-config-hub.ts` | 配置/模型域 Hub：globalConfig + sessionState + agentRegistry + modelRegistry + resolveModel（含确认回调） | ⬜ |
-| `subagent-hub.ts` | 执行/记录/通知域 Hub：execute 编排（含原 executor 逻辑）+ query/cancel + 组件持有（pool/store/history/notifier，全 private） | ⬜ |
-| `record-store.ts` | Record 三 map 容器（live/completed/bg）+ 四源合并 | ⬜ |
-| `notifier.ts` | background 完成回注主对话（合并窗口 + 去重） | ⬜ |
-| `history-store.ts` | 跨 session 执行记录持久化（jsonl + GC） | ⬜ |
-| `config.ts` | 全局配置 + session 级状态（纯函数，被 ModelConfigHub 调用） | ⬜ |
-| `session-file-gc.ts` | 过期 subagent session 文件清理 | ⬜ |
+| `model-config-hub.ts` | 配置/模型域 Hub：globalConfig + sessionState + agentRegistry + modelRegistry + resolveModel（含确认回调） | ✅ |
+| `subagent-hub.ts` | 执行/记录/通知域 Hub：execute 编排（含原 executor 逻辑）+ query/cancel + 组件持有（pool/store/history/notifier，全 private） | ✅ |
+| `record-store.ts` | Record 三 map 容器（live/completed/bg）+ 四源合并 | ✅ |
+| `notifier.ts` | background 完成回注主对话（合并窗口 + 去重 + dedup TTL sweep） | ✅ |
+| `history-store.ts` | 跨 session 执行记录持久化（jsonl + GC） | ✅ |
+| `config.ts` | 全局配置（单一真相源读 config.json）+ session 级状态（纯函数，被 ModelConfigHub 调用） | ✅ |
+| `session-file-gc.ts` | 过期 subagent session 文件清理 | ✅ |
 
 ### TUI 层（8）
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
-| `tool-render.ts` | 对话流 tool block 渲染（renderCall + renderResult） | ⬜ |
-| `list-view.ts` | `/subagents list` 全屏左右分屏 overlay | ⬜ |
-| `progress-widget.ts` | belowEditor 常驻进度 widget | ⬜ |
-| `category-confirm.ts` | 首次 category 模型确认组件 | ⬜ |
-| `config-wizard.ts` | `/subagents config` 交互向导 | ⬜ |
-| `bg-notify-render.ts` | background 完成通知的对话流渲染 | ⬜ |
-| `format.ts` | 纯格式化函数（tokens/duration） | ⬜ |
-| `format-helpers.ts` | 配置摘要格式化（拆出避免循环依赖） | ⬜ |
+| `tool-render.ts` | 对话流 tool block 渲染（renderCall + renderResult） | ✅ |
+| `list-view.ts` | `/subagents list` 全屏左右分屏 overlay | ✅ |
+| `progress-widget.ts` | aboveEditor 常驻进度 widget（静态内容，防 TUI ghosting） | ✅ |
+| `category-confirm.ts` | 首次 category 模型确认组件 | ✅ |
+| `config-wizard.ts` | `/subagents config` 交互向导 | ✅ |
+| `bg-notify-render.ts` | background 完成通知的对话流渲染 | ✅ |
+| `format.ts` | 纯格式化函数（tokens/duration） | ✅ |
+| `format-helpers.ts` | 配置摘要格式化（拆出避免循环依赖） | ✅ |
+
+### 测试（7 文件，130 tests）
+
+`src/__tests__/` 下 7 个测试文件覆盖 Core + Runtime 关键模块。详见 [pi-extension-standards.md](../../pi-extension-standards.md) §7 测试要求。
+
+| 文件 | 覆盖 |
+|---|---|
+| `turn-limiter.test.ts` | steer/abort 时序 + didSteer/didAbort getter |
+| `concurrency-pool.test.ts` | 满载阻塞/优先级抢占/FIFO/maxConcurrent=0 clamp/防负 |
+| `throttle.test.ts` | leading/trailing edge/flush/默认 150ms |
+| `execution-record.test.ts` | turns/tokens 累积/chunking/ring buffer/tryTransition CAS/project/snapshot/toPersisted |
+| `notifier.test.ts` | 即时 flush/滑窗合并/dedup TTL/dispose 清 dedup/format |
+| `format.test.ts` | formatTokens/formatElapsedSeconds/truncLine(ANSI SGR)/segFillColored |
+| `sdk-contract.test.ts` | 命令/工具注册契约/notifier sendMessage followUp/session_start 编译期契约 |
 
 ### 外壳（4）
 
@@ -166,16 +177,11 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 **3. 投影单点** — `ExecutionRecord` 到展示层（Details/Snapshot/Persisted）的转换各只有一个入口，三路径字段一致。消灭旧实现 6 处手工构造 Details 导致的字段丢失（Mode 3 cancelled 丢 turns/tokens、poll 无 model 等）。
 → 详见 [data-model.md](./data-model.md) §6 投影入口
 
-## 5. ManagedSession（长生命周期变体）
-
-支持多次 prompt/steer/abort 的长生命周期 session，作为 `session-runner` 的变体实现：复用 `createAndConfigureSession`，仅生命周期管理不同（懒创建 + pendingSteers 缓存 + activePrompt 互斥）。
-→ 详见 [session-runner.md](./session-runner.md) §7 ManagedSession 变体
-
-## 6. 架构决策记录
+## 5. 架构决策记录
 
 记录骨架深化过程中讨论并落地的关键架构决策。每条包含"问题 → 推理 → 决策 → 代价"。
 
-### 6.1 为什么拆双 Hub（ModelConfigHub + SubagentHub）
+### 5.1 为什么拆双 Hub（ModelConfigHub + SubagentHub）
 
 **问题**：runtime.ts（361 行）同时承担配置管理、模型解析、执行编排、状态容器、生命周期五种职责，是典型的"上帝类"。
 
@@ -193,7 +199,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 **代价**：index.ts 从一个 `rt.initSession(...)` 变成两个 init 调用（modelHub.initModel + hub.initSession）。但这两个调用的时序是确定的（先配置后执行），index.ts 作为装配层承担这个协调是合理的。
 
-### 6.2 为什么 executor 合并进 SubagentHub（不独立文件）
+### 5.2 为什么 executor 合并进 SubagentHub（不独立文件）
 
 **问题**：executor 原本是独立文件 `executor.ts`，访问 SubagentHub 的 pool/store/notifier 需要这些组件可跨文件访问。TS 的 `private` 只在类内有效——跨文件的模块级函数访问不到 private 成员。这逼出了 5 个 public 行为方法（acquireSlot/releaseSlot/registerRecord/finalizeRecord/notifyComplete），名义上是"契约抽象"，实际是实现约束倒逼的妥协。
 
@@ -205,7 +211,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 **代价**：subagent-hub.ts 从 ~240 行增到 ~400 行。但 SubagentHub 本来就是这个文件的主角，400 行可接受——它现在完整表达了"执行编排"这个领域。
 
-### 6.3 为什么用 ensureConfirmed + ConfirmCancelledError
+### 5.3 为什么用 ensureConfirmed + ConfirmCancelledError
 
 **问题**：category 确认是 async（UI 交互），但 `resolveModel` 是 sync（纯 5 级 fallback）。async 函数内调 sync 函数没问题，但 sync 函数内**触发 async 确认**再继续——怎么表达？
 
@@ -222,7 +228,7 @@ const resolved = modelHub.resolveModel(agent, override)  // 纯解析
 
 **代价**：`ConfirmCancelledError` 用异常做控制流——但这是"用户意图中断"（非程序错误），在 TS 生态里用 Error class 表达是常见模式。catch 后不执行子代理，语义清晰。
 
-### 6.4 双 Hub 依赖方向 + mode 判定归属
+### 5.4 双 Hub 依赖方向 + mode 判定归属
 
 ```
 SubagentHub ──引用──→ ModelConfigHub（单向）
@@ -240,7 +246,7 @@ SubagentHub 内部调：      │
 
 **初始化时序**：index.ts session_start 时先 `modelHub.initModel(...)` 再 `hub.initSession(...)`——因为 SubagentHub 构造时需要 `modelHub.getGlobalConfig().maxConcurrent`（初始化 pool）。如果反序，pool 拿不到 maxConcurrent。
 
-### 6.5 深拷贝访问器的 trade-off
+### 5.5 深拷贝访问器的 trade-off
 
 **问题**：globalConfig / sessionState 是配置数据对象，wizard 需要读改。暴露 public 字段（哪怕 readonly）等于宣布外部可依赖其结构——改内部形状时所有调用方跟着改。
 
@@ -250,7 +256,7 @@ SubagentHub 内部调：      │
 
 **替代方案**（未采用）：行为方法（`toggleYolo()` / `setCategoryModel()` 等）替代直接改字段——更安全但更啰嗦。wizard 的配置修改是开放集（用户可能改 categories/maxConcurrent/fallback 等任意字段），行为方法无法穷举。深拷贝 + saveGlobalConfig 是更灵活的方案。
 
-### 6.6 getGlobalConfigHomeDir / getAgentDir 是否该暴露
+### 5.6 getGlobalConfigHomeDir / getAgentDir 是否该暴露
 
 **问题**：SubagentHub 构造 SessionRunnerContext 需要 `homeDir` 和 `agentDir`，这两个值存在 ModelConfigHub 里。暴露这两个 getter 是否破坏封装？
 
@@ -262,5 +268,5 @@ SubagentHub 内部调：      │
 
 - [data-model.md](./data-model.md) — ExecutionRecord 唯一状态源与投影契约
 - [execution-flow.md](./execution-flow.md) — 统一执行流与 sync/bg 分叉
-- [session-runner.md](./session-runner.md) — SessionRunner 深化与 ManagedSession 变体
+- [session-runner.md](./session-runner.md) — SessionRunner 深化（run 编排骨架 + H1/H2 资源清理修复）
 - [.xyz-harness 重构 spec](../../../.xyz-harness/2026-06-15-subagent-architecture-consolidation/spec.md) — 设计动机与缺陷诊断（只读溯源）

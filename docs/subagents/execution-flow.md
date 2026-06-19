@@ -68,15 +68,14 @@ SessionRunner 是 sync/bg 共用的执行核心。流程细化见 [session-runne
 ```
 SessionRunner.run(record, task, opts, ctx)
   ├─ pool.acquire(priority)          ← 外层（executor）已传入 priority
-  ├─ isolation:worktree? → createWorktree
-  ├─ createAndConfigureSession(model, tools, skills)
+  ├─ createAndConfigureSession(model, tools, skills)   ← H2: post-create try/catch + dispose
   ├─ EventBridge.subscribe → updateFromEvent(record)   ← record 唯一更新点
   ├─ turnLimiter + signal 监听
   ├─ schema enforcement（漏调 structured-output 则 steer）
   ├─ session.prompt(task)
   ├─ collectResult → AgentResult
   └─ session.dispose()
-  finally: pool.release()
+finally: pool.release()              ← H1: runAndFinalize catch + finalizeFailed（swallow）
 ```
 
 关键：record 在此函数内被 `updateFromEvent` 实时更新，但**不被 `completeRecord`**——完成态由 executor 统一写，保证 status 判定逻辑单点。

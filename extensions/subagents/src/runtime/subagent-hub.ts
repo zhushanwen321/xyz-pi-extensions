@@ -46,7 +46,7 @@ interface PiLike {
   events: { emit(channel: string, data: unknown): void };
   sendMessage(
     message: { customType: string; content: string; display: boolean; details?: unknown },
-    options?: { triggerTurn?: boolean },
+    options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
   ): void;
 }
 
@@ -363,7 +363,8 @@ export class SubagentHub {
     if (!tryTransition(record, "cancelled")) {
       return false; // detached 已 finalize，cancel 来晚了
     }
-    // 抢到锁：completeRecord（用空 result 填 cancelled）+ notify。不走 finalizeRecord（cancel 不写 history）。
+    // 抢到锁：completeRecord（用空 result 填 cancelled）+ archive（移出 live map，否则
+    // hasRunningBackground 永真）+ notify。不走 finalizeRecord（cancel 不写 history）。
     const cancelledResult: AgentResult = {
       text: "",
       turns: record.turns,
@@ -374,6 +375,7 @@ export class SubagentHub {
       toolCalls: [],
     };
     completeRecord(record, cancelledResult, "cancelled");
+    this.store.archive(record);
     this.notifyComplete(record);
     return true;
   }

@@ -170,6 +170,18 @@ describe("BgNotifier", () => {
       expect(host.sendMessage).toHaveBeenCalledTimes(1);
     });
 
+    it("dispose clears dedup map (M2 fix — no stale entries across /resume)", () => {
+      const host = makeHost({ hasRunningBackground: () => false });
+      const notifier = new BgNotifier(host);
+      notifier.notify(makeRecord({ id: "bg-1" })); // populates dedup
+      expect(host.sendMessage).toHaveBeenCalledTimes(1);
+      notifier.dispose();
+      // revive 后同 id 应能再次通知（dedup 已清）
+      notifier.revive();
+      notifier.notify(makeRecord({ id: "bg-1" }));
+      expect(host.sendMessage).toHaveBeenCalledTimes(2);
+    });
+
     it("flushPendingNotifications is a no-op when empty", () => {
       const host = makeHost();
       const notifier = new BgNotifier(host);

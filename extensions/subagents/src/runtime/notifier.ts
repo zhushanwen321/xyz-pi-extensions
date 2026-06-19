@@ -105,6 +105,12 @@ export class BgNotifier {
 
     // dedup TTL：同 id 短时间内不重复通知
     const now = Date.now();
+    // sweep 过期 dedup 条目（防 Map 无限增长，M2 修复）
+    if (this.dedup.size > 0) {
+      for (const [id, ts] of this.dedup) {
+        if (now - ts >= DEDUP_TTL_MS) this.dedup.delete(id);
+      }
+    }
     const lastSeen = this.dedup.get(record.id);
     if (lastSeen !== undefined && now - lastSeen < DEDUP_TTL_MS) return;
     this.dedup.set(record.id, now);
@@ -178,6 +184,7 @@ export class BgNotifier {
       this.timer = undefined;
     }
     this.pending.length = 0;
+    this.dedup.clear(); // 防 stale dedup 跨 /resume 残留（M2 修复）
   }
 
   /** /resume /fork /new 后复活。 */

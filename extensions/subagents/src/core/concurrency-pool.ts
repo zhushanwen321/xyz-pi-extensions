@@ -35,7 +35,12 @@ export class DefaultConcurrencyPool implements ConcurrencyPool {
   private readonly queue: QueueEntry[] = [];
   private seqCounter = 0;
 
-  constructor(private readonly maxConcurrent: number) {}
+  /** 下限 1——maxConcurrent=0 会让 acquire 永久排队死锁（C3 修复）。 */
+  private readonly maxConcurrent: number;
+
+  constructor(maxConcurrent: number) {
+    this.maxConcurrent = Math.max(1, maxConcurrent);
+  }
 
   acquire(priority: number): Promise<void> {
     if (this._active < this.maxConcurrent) {

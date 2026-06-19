@@ -86,6 +86,21 @@ describe("DefaultConcurrencyPool", () => {
     expect(peak).toBeLessThanOrEqual(2);
   });
 
+  it("clamps maxConcurrent=0 to 1 (no deadlock, C3 fix)", async () => {
+    const pool = new DefaultConcurrencyPool(0);
+    // 不会死锁——clamp 到 1，acquire 立即返回
+    await pool.acquire(0);
+    expect(pool.active).toBe(1);
+    pool.release();
+    expect(pool.active).toBe(0);
+  });
+
+  it("clamps negative maxConcurrent to 1", async () => {
+    const pool = new DefaultConcurrencyPool(-5);
+    await pool.acquire(0);
+    expect(pool.active).toBe(1);
+  });
+
   it("priority 0 (sync) preempts priority 1000 (background)", async () => {
     const pool = new DefaultConcurrencyPool(1);
     await pool.acquire(1000); // background 占满

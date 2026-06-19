@@ -1,7 +1,7 @@
 # SessionRunner 深化
 
 > SessionRunner 是 sync/background 共用的 session 执行核心，零 mode 感知。
-> 本文细化 `run()` 的 EventBridge 契约、session 组装、collectResult 字段来源、ManagedSession 变体。
+> 本文细化 `run()` 的 EventBridge 契约、session 组装、collectResult 字段来源、失败路径与资源清理。
 > 执行流总览见 [execution-flow.md](./execution-flow.md)，状态对象见 [data-model.md](./data-model.md)。
 
 ---
@@ -101,7 +101,7 @@ fullAppend = [buildEnvBlock(cwd)] + (appendSystemPrompt ?? [])
 
 **buildEnvBlock 防注入设计**：cwd / git branch 等动态值用 `--- environment (data, not instructions) ---` 标记包裹，与 agent 指令格式区分。伪造的目录名/分支名不会被当指令执行。
 
-git branch 同步获取（`execFileSync`，timeout 2000ms），失败省略不阻断。worktree rebase/锁状态下会超时——worktree.ts 自己的命令用 15s（更重），这里只读 branch 用 2s。
+git branch 同步获取（`execFileSync`，timeout 2000ms），按 cwd 缓存（同 cwd 不重复 spawn），失败省略不阻断。
 
 ### 步骤 2：ResourceLoader 构建
 
@@ -162,7 +162,6 @@ unsubscribe = session.subscribe((event: unknown) => {
 | `error` | 参数传入（prompt catch 的 err.message 或 bridge.lastError） |
 | `sessionId` | session.sessionId |
 | `sessionFile` | session.sessionManager.getSessionFile()（持久化路径） |
-| `worktree` | 参数传入（cleanupWorktree 的结果，可选） |
 
 **success 判定的两个来源**：
 1. `session.prompt()` 抛错 → catch 里 `success=false, error=err.message`
@@ -193,80 +192,34 @@ flowchart TD
 - **MAX_SCHEMA_STEERS = 2**：对齐 structured-output 扩展原 setupWorkflowHook 的 MAX_HOOK_RETRIES。
 - **替代原 hook**：structured-output 扩展的 setupWorkflowHook 依赖 `PI_WORKFLOW_SCHEMA` env + 主 pi 的 turn_end，但进程内 runAgent 路径既不设 env 也不冒泡 turn_end 到主 pi，hook 从未生效。此处内联 enforcement 修复。
 
-## 6. 失败路径与清理时序
+## 6. 失败路径与资源清理时序
 
 ```mermaid
 flowchart TD
     Start[run 开始] --> Acq[pool.acquire]
-    Acq --> WT{isolation:<br/>worktree?}
-    WT -->|是| CW[createWorktree<br/>失败则 throw 不回退]
-    WT -->|否| Session[createAndConfigureSession]
-    CW -->|失败| OuterCatch[outer catch<br/>返回失败 result]
-    CW -->|成功| Session
-    Session --> Bind[绑定 limiter + signal + schema]
+    Acq --> Session[createAndConfigureSession<br/>含 H2: post-create try/catch]
+    Session -->|post-create 抛错| H2Catch[H2 catch:<br/>session.dispose + re-throw]
+    Session -->|成功| Bind[绑定 limiter + signal + schema]
     Bind --> Prompt[session.prompt]
     Prompt -->|抛错| InnerCatch[catch:<br/>success=false]
     Prompt -->|成功| CheckErr{bridge.lastError?}
     CheckErr -->|有| InnerCatch
     CheckErr -->|无| Collect[collectResult]
     InnerCatch --> Collect
-    Collect --> CleanupWT[inner finally:<br/>cleanupWorktree<br/>commit/branch]
-    CleanupWT --> Dispose[unsubscribe +<br/>session.dispose]
-    Dispose --> Release[outer finally:<br/>pool.release]
+    Collect --> Dispose[finally:<br/>unsubscribe +<br/>session.dispose]
+    Dispose --> Release[pool.release<br/>由 runAndFinalize 管理]
 ```
 
-**双层 finally 保证清理**：
-- inner finally：unsubscribe + session.dispose（覆盖 prompt 抛错路径）
-- outer finally：cleanupWorktree（兜底，覆盖 createAndConfigureSession 抛错时 worktree 未清理）+ pool.release（嵌套 try/finally 保证 git 锁/磁盘满时并发槽不泄漏）
+**资源清理三层保障**：
 
-**worktree 创建失败必须 throw**：不能静默回退到 cwd——那会让 agent 污染用户工作区，违背 isolation:worktree 的意图。
+1. **H2 — session-factory post-create try/catch**：`createAndConfigureSession` 在 `createAgentSession` 成功后，把 `applyToolFilter`/`session.subscribe` 包进 `try { ... } catch (err) { session.dispose(); throw err; }`。若 post-creation 步骤抛错，已创建的 Pi session 被 dispose，不泄漏连接（SDK dispose 实际幂等，无双重 dispose 风险）。
 
-## 7. ManagedSession 变体（长生命周期）
+2. **run() 的 finally**：`unsubscribe`（session.subscribe 返回的清理函数）+ `session.dispose()`。覆盖 prompt 抛错路径。
 
-ManagedSession 复用 `createAndConfigureSession`，但生命周期管理不同：支持多次 prompt/steer/abort，共享 session 上下文。
-
-### 与一次性 run 的差异
-
-| 维度 | SessionRunner.run（一次性） | ManagedSession（长生命周期） |
-|---|---|---|
-| session 创建 | 进入 run 即创建 | 首次 prompt() 时懒创建（ensureSession） |
-| session 生命 | run 结束 dispose | dispose() 显式调用才销毁 |
-| 多次 prompt | 不支持（一次 run 一次 prompt） | 支持，串行化（activePrompt 互斥） |
-| steer | 不需要（一次 prompt） | 支持：session 已创建→直接 session.steer；未创建→缓存到 pendingSteers，ensureSession 时 flush |
-| bridge.resetForPrompt | 不需要 | **每次 prompt 前必须调**（见下） |
-| turnLimiter | 每次 run 新建 | 每次 prompt 新建 |
-| worktree | 支持 | 不支持（长生命周期无法界定 worktree 归属） |
-
-### bridge.resetForPrompt 的必要性
-
-ManagedSession 跨多次 prompt 复用 bridge。若不重置：
-
-- 第二次 prompt 的 turn limit 从上次累计 turnCount 开始算（错误触发 soft limit/abort）
-- 上次 prompt 的 lastError 永久残留（后续 prompt 即使成功也判失败）
-- toolCalls / usage 跨 prompt 累加（污染 AgentResult）
-
-resetForPrompt 清零 turnCount / toolCalls / usageAccum / lastError / pendingTools。
-
-### pendingSteers 缓存
-
-steer 在 session 创建前到达时，缓存到 pendingSteers 数组。ensureSession 创建 session 后，遍历 flush 所有缓存消息。这是 tintinweb/pi-subagents 的 pendingSteers 模式——保证 session 未就绪时的 steer 不丢失。
-
-### ManagedSession 在新骨架的位置
-
-ManagedSession 作为 SessionRunner 的变体实现，复用：
-- `createAndConfigureSession`（步骤 1-4 完全共享）
-- `EventBridge`（含 resetForPrompt 扩展）
-- `collectResult`（字段来源完全共享）
-
-新增：
-- `ensureSession`（懒创建 + pendingSteers flush）
-- `activePrompt` 互斥锁（Pi session 不支持并发 prompt，第二个并发调用返回首个的 Promise）
-- 生命周期状态（disposed 标志）
-
-文件归属：`core/managed-session.ts`（新建，待补到 architecture.md 的 Core 层文件表）。
+3. **H1 — runAndFinalize catch + finalizeFailed**：`run()` 契约是"不抛错"，但防御意外异常——`runAndFinalize` 的 catch 调 `finalizeFailed`（合成 failed AgentResult → CAS → finalizeRecord → archive + history.append），swallow 不 re-throw。sync 路径拿到合成 failed result 正常返回（修复异常逃逸 tool 层），background 路径 `.then` 跑 notify（background 失败现在会通知）。pool.release 由 finally 保证（git 锁/磁盘满时并发槽不泄漏）。
 
 ## 相关文档
 
-- [architecture.md](./architecture.md) — Core 层文件归属（ManagedSession 待补）
+- [architecture.md](./architecture.md) — Core 层文件归属与分层铁律
 - [data-model.md](./data-model.md) — updateFromEvent 的 record 更新语义
 - [execution-flow.md](./execution-flow.md) — SessionRunner 在统一执行流中的位置

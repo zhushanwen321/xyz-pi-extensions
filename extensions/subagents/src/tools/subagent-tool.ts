@@ -66,7 +66,7 @@ export const SubagentParams = Type.Object({
     description: "The task for the subagent to execute. Required to start a new subagent. Omit only when polling an existing background subagent (use backgroundId instead).",
   })),
   agent: Type.Optional(Type.String({
-    description: 'Agent name (defines system prompt + tools). Defaults to "worker". Available agents: worker (general), researcher (read-only exploration), tester (test writing). Custom agents can be defined in config.',
+    description: 'Agent name (defines system prompt + tools). Defaults to "worker". Available agents: worker (general), researcher (read-only exploration), scout, planner, reviewer, oracle, context-builder. Custom agents can be defined in config.',
   })),
   wait: Type.Optional(Type.Boolean({
     description: "Execution mode. true (default) = sync: blocks until the subagent finishes, returns its result directly. false = background: returns a backgroundId immediately while the subagent runs detached; poll its status later with backgroundId. Background tasks run concurrently without blocking the main conversation.",
@@ -203,9 +203,13 @@ const executeSubagent: SubagentExecuteCb = async (
   if (params.backgroundId) {
     const result = hub.query(params.backgroundId);
     if (!result) throw new Error(`No subagent record with id "${params.backgroundId}"`);
-    const content = result.status === "running"
-      ? [{ type: "text" as const, text: `Subagent ${result.id} is still running (${result.turns} turns).` }]
-      : [{ type: "text" as const, text: result.result ?? `Subagent ${result.id} finished.` }];
+    // 按 status 分支：done→result；failed/cancelled→暴露 error（不掩盖失败，M5 修复）
+    const text = result.status === "running"
+      ? `Subagent ${result.id} is still running (${result.turns} turns).`
+      : result.status === "done"
+        ? (result.result ?? `Subagent ${result.id} finished.`)
+        : `Subagent ${result.id} ${result.status}${result.error ? `: ${result.error}` : ""}.`;
+    const content = [{ type: "text" as const, text }];
     return { content, details: result } as unknown as void;
   }
 
