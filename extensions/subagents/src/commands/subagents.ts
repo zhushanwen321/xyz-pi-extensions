@@ -41,19 +41,19 @@ export function registerSubagentsCommand(pi: ExtensionAPI): void {
 
       const modelHub = getModelConfigHub();
       if (!modelHub) {
-        ctx.ui.notify("subagents 未初始化（session 未启动）", "error");
+        ctx.ui.notify("subagents not initialized (session not started)", "error");
         return;
       }
 
       // ── /subagents list [<id>] ──
       if (args[0] === "list") {
         if (!ctx.hasUI) {
-          ctx.ui.notify("/subagents list 需要交互式 UI", "error");
+          ctx.ui.notify("/subagents list requires an interactive UI", "error");
           return;
         }
         const hub = getHub();
         if (!hub) {
-          ctx.ui.notify("subagents 执行运行时未就绪", "error");
+          ctx.ui.notify("subagents execution runtime not ready", "error");
           return;
         }
         await createSubagentsView(hub, ctx.ui.theme, ctx, args[1]);
@@ -63,7 +63,7 @@ export function registerSubagentsCommand(pi: ExtensionAPI): void {
       // ── /subagents config [...] ──
       if (args[0] === "config") {
         if (!ctx.hasUI) {
-          ctx.ui.notify("/subagents config 需要交互式 UI", "error");
+          ctx.ui.notify("/subagents config requires an interactive UI", "error");
           return;
         }
         await runConfigWizard(ctx.ui, args.slice(1), modelHub);
