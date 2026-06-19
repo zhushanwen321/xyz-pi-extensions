@@ -313,6 +313,12 @@ export class SubagentHub {
         signal,
         onEvent,
       }, ctx);
+    } catch (err) {
+      // H1 修复：run() 契约是"不抛错"，但防御意外异常——合成 failed result + 收尾。
+      // swallow（不 re-throw）：sync 调用方拿到合成 failed result，background 的
+      // .then 正常跑 notify。避免异常逃逸到 tool 层 + record 卡 running。
+      result = await this.finalizeFailed(record, err);
+      return result;
     } finally {
       this.pool.release();
     }
@@ -381,6 +387,30 @@ export class SubagentHub {
     completeRecord(record, result, status);
     this.store.archive(record);
     await this.history.append(toPersisted(record, this.cwd));
+  }
+
+  /**
+   * run() 异常路径的收尾（H1 修复）。
+   * run() 契约是"不抛错"，但防御性处理意外异常：合成 failed AgentResult →
+   * CAS 抢锁 → finalizeRecord（与正常路径同形，写 history + archive）。
+   * 返回合成 result 供 runAndFinalize 继续返回（不 re-throw，swallow 策略）。
+   */
+  private async finalizeFailed(record: ExecutionRecord, err: unknown): Promise<AgentResult> {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const failedResult: AgentResult = {
+      text: "",
+      turns: record.turns,
+      durationMs: 0,
+      success: false,
+      error: errMsg,
+      sessionId: record.id,
+      toolCalls: [],
+    };
+    // CAS 抢锁：抢到（status 仍 running）则完整收尾；没抢到（cancel 已先设 cancelled）跳过。
+    if (tryTransition(record, "failed")) {
+      await this.finalizeRecord(record, failedResult, "failed");
+    }
+    return failedResult;
   }
 
   /** background 完成回注（record → BgNotifyRecord 映射 + notifier.notify）。 */

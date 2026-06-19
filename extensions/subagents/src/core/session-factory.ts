@@ -214,21 +214,37 @@ export async function createAndConfigureSession(
     modelRegistry: ctx.modelRegistry,
     sessionManager: sdk.SessionManager.create(ctx.cwd, subagentSessionDir),
   });
-  applyToolFilter(session, input.agentConfig);
 
-  // 步骤 4：EventBridge 订阅——SDK event 经 isSdkEvent guard 后喂给 bridge
-  const bridge = createEventBridge(input.onEvent ?? (() => {}));
-  const unsubscribe = session.subscribe((event: unknown) => {
-    if (!isSdkEvent(event)) return;
-    bridge.handle(event as SdkEvent);
-  });
+  // 步骤 4：工具过滤 + EventBridge 订阅。
+  // 包 try/catch——createAgentSession 已成功（Pi session 已建），若 applyToolFilter /
+  // subscribe 抛错必须 dispose 已创建的 session，否则泄漏（H2 修复）。
+  try {
+    applyToolFilter(session, input.agentConfig);
 
-  return {
-    session,
-    bridge,
-    unsubscribe,
-    sessionFile: session.sessionManager.getSessionFile() ?? undefined,
-  };
+    // EventBridge 订阅——SDK event 经 isSdkEvent guard 后喂给 bridge
+    const bridge = createEventBridge(input.onEvent ?? (() => {}));
+    const unsubscribe = session.subscribe((event: unknown) => {
+      if (!isSdkEvent(event)) return;
+      bridge.handle(event as SdkEvent);
+    });
+
+    return {
+      session,
+      bridge,
+      unsubscribe,
+      sessionFile: session.sessionManager.getSessionFile() ?? undefined,
+    };
+  } catch (err) {
+    // 防御：post-creation 步骤抛错时拆掉已创建的 Pi session，避免连接泄漏。
+    // SDK dispose() 实际幂等（agent-session.js try/catch 包裹 + idempotent 清理）。
+    try {
+      session.dispose();
+    } catch (disposeErr) {
+      // dispose 本身抛错不应掩盖原始错误（SDK impl 已内部 catch，此处仅兜底）
+      console.error("[subagents] session.dispose() threw during cleanup:", disposeErr);
+    }
+    throw err;
+  }
 }
 
 // ============================================================
