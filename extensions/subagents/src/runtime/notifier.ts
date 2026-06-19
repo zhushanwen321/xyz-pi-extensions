@@ -5,7 +5,8 @@
 // 职责：
 //   - 合并窗口：MERGE_WINDOW_MS 内多个完成合并为一条通知
 //   - 去重 TTL：同 id 在 TTL 内不重复通知
-//   - 通过 pi.sendMessage({ triggerTurn:true }) 注入，唤醒父 agent 下一 turn
+//   - 通过 pi.sendMessage({ triggerTurn:false }) 注入，渲染完成 block 给用户看
+//     但不唤醒父 agent（避免 streaming 锁底，用户可自由滚动查看）
 
 // ============================================================
 // 类型
@@ -64,12 +65,13 @@ const PREVIEW_MAX = 200;
 //   ║    1. 取出 pending 全部 record                                      ║
 //   ║    2. 合并为一条消息（多条时列 bullet list）                        ║
 //   ║    3. sendMessage({ customType:"subagent-bg-notify",               ║
-//   ║                     content, display:true, triggerTurn:true })     ║
+//   ║                     content, display:true, triggerTurn:false })    ║
 //   ║    4. 清空 pending + timer                                         ║
 //   ╚══════════════════════════════════════════════════════════════════╝
  *
- * triggerTurn:true 让父 agent 在下一 turn 看到「subagent X 完成」，
- * 无需 LLM 主动 poll。
+ * triggerTurn:false 不唤醒父 agent——完成通知只渲染 display block 给用户看，
+ * 不触发 streaming（避免终端 scrollback 锁底，用户可自由滚动）。主 agent 后续
+ * poll 或用户手动提示时再处理结果。
  */
 export class BgNotifier {
   private readonly pending: BgNotifyRecord[] = [];
@@ -110,15 +112,18 @@ export class BgNotifier {
       ? this.formatBgCompletionMessage(records[0])
       : records.map((r) => `- ${this.formatBgCompletionMessage(r)}`).join("\n");
 
-    // display:true —— 渲染一个 customMessageBg 色完成 block（与 tool block 区分），
-    // 让用户/主 agent 在对话流看到「X 完成」。triggerTurn:true 唤醒父 agent 下一 turn。
-    // （对照 Pi 引擎 interactive-mode.ts:3069-3076：display:true 时调
-    //   bg-notify-render 渲染完成摘要 block。）
+    // display:true + triggerTurn:false —— 渲染一个 customMessageBg 色完成 block
+    // 让用户在对话流看到「X 完成」，但不唤醒父 agent（避免 streaming 锁底）。
+    //
+    // triggerTurn:false 的理由：triggerTurn:true 会触发父 agent 新 turn，streaming
+    // 期间 Pi 持续写 \r\n（tui.ts:1330），终端 scrollback 把视图钉在底部——用户无法
+    // 滚动查看历史。background 的本意是「不主动打扰」，完成通知给用户看即可，主 agent
+    // 后续 poll 或用户手动提示时再处理结果。
     this.host.sendMessage({
       customType: NOTIFY_CUSTOM_TYPE,
       content,
       display: true,
-    }, { triggerTurn: true });
+    }, { triggerTurn: false });
   }
 
   /** 格式化单条完成消息（供 sendMessage 的 content）。 */
