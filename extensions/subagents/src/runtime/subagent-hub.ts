@@ -436,6 +436,8 @@ export class SubagentHub {
   private piAdapter(): NotifierHost {
     return {
       sendMessage: (message, options) => {
+        // deliverAs:"followUp" 让完成通知在当前 streaming turn 结束后唤醒父 agent
+        // （不打断正在的工具调用）；triggerTurn:true 空闲时直接 prompt 新 turn。
         this.pi?.sendMessage(message, options);
       },
       hasRunningBackground: () => {

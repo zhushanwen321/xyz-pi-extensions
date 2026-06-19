@@ -5,8 +5,8 @@
 // 职责：
 //   - 合并窗口：MERGE_WINDOW_MS 内多个完成合并为一条通知
 //   - 去重 TTL：同 id 在 TTL 内不重复通知
-//   - 通过 pi.sendMessage({ triggerTurn:false }) 注入，渲染完成 block 给用户看
-//     但不唤醒父 agent（避免 streaming 锁底，用户可自由滚动查看）
+//   - 通过 pi.sendMessage({ deliverAs:"followUp", triggerTurn:true }) 注入——
+//     当前 turn 结束后唤醒父 agent 处理结果（followUp 不打断 streaming、不锁滚动）
 
 // ============================================================
 // 类型
@@ -25,10 +25,12 @@ export interface BgNotifyRecord {
 
 /** notifier 依赖的 pi 最小接口（解耦，便于测试）。 */
 export interface NotifierHost {
-  /** 注入消息到主对话，可选触发新 turn。 */
+  /** 注入消息到主对话。
+   *  triggerTurn:true + deliverAs:"followUp" → 当前 streaming 结束后唤醒父 agent
+   *  处理结果（不打断、不锁滚动）；空闲时立即 prompt 新 turn。 */
   sendMessage(
     message: { customType: string; content: string; display: boolean; details?: unknown },
-    options?: { triggerTurn?: boolean },
+    options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
   ): void;
   /** 是否还有 running 的 background 任务（用于滑动窗口立即 flush 判断）。 */
   hasRunningBackground(): boolean;
@@ -40,7 +42,6 @@ export interface NotifierHost {
 
 /** 合并窗口（ms）。窗口内多个完成合并为一条消息。 */
 const MERGE_WINDOW_MS = 2000;
-
 /** 去重 TTL（ms）。同 id 在此窗口内不重复通知。 */
 const DEDUP_TTL_MS = 5000;
 
@@ -69,16 +70,17 @@ const PREVIEW_MAX = 200;
 //   ║    1. 取出 pending 全部 record                                      ║
 //   ║    2. 合并为一条消息（多条时列 bullet list）                        ║
 //   ║    3. sendMessage({ customType:"subagent-bg-notify",               ║
-//   ║                     content, display:true, triggerTurn:false })    ║
+//   ║                     content, display:true,                         ║
+//   ║                     triggerTurn:true, deliverAs:"followUp" })      ║
 //   ║    4. 清空 pending + timer                                         ║
 //   ╚══════════════════════════════════════════════════════════════════╝
  *
- * 滑动窗口：每次有新完成都重置 20s 计时器，密集完成的任务尽量合并到一条通知。
- * 无 running 时立即 flush——避免最后一条等满 20s。
+ * 滑动窗口：每次有新完成都重置 2s 计时器，密集完成的任务尽量合并到一条通知。
+ * 无 running 时立即 flush——避免最后一条等满窗口。
  *
- * triggerTurn:false 不唤醒父 agent——完成通知只渲染 display block 给用户看，
- * 不触发 streaming（避免终端 scrollback 锁底，用户可自由滚动）。主 agent 后续
- * poll 或用户手动提示时再处理结果。
+ * deliverAs:"followUp" + triggerTurn:true：完成通知在当前 streaming turn 结束后
+ * 唤醒父 agent 处理结果（followUp 不打断 streaming、不锁滚动）。父 agent 收到后
+ * 可继续后续逻辑；多条合并的消息在同一个 followUp turn 里处理。
  */
 export class BgNotifier {
   private readonly pending: BgNotifyRecord[] = [];
@@ -92,11 +94,11 @@ export class BgNotifier {
   /**
    * 入队一条完成通知（去重 + 滑动窗口合并）。dispose 后短路。
    *
-   * 滑动窗口策略（每次有新完成就重置 20s 计时器，等待后续 background 批量合并）：
+   * 滑动窗口策略（每次有新完成就重置 2s 计时器，等待后续 background 批量合并）：
    *   1. push 到 pending
    *   2. 清除旧 timer
    *   3. 若已无 running background → 立即 flush（最后一条，不必等窗口）
-   *   4. 否则重启 20s timer（滑动：每次新完成都重置，让密集完成的任务尽量合并）
+   *   4. 否则重启 2s timer（滑动：每次新完成都重置，让密集完成的任务尽量合并）
    */
   notify(record: BgNotifyRecord): void {
     if (this._disposed) return;
@@ -121,7 +123,7 @@ export class BgNotifier {
       return;
     }
 
-    // 重启 20s 滑动窗口
+    // 重启 2s 滑动窗口
     this.timer = setTimeout(() => this.flushPendingNotifications(), MERGE_WINDOW_MS);
   }
 
@@ -138,18 +140,18 @@ export class BgNotifier {
       ? this.formatBgCompletionMessage(records[0])
       : records.map((r) => `- ${this.formatBgCompletionMessage(r)}`).join("\n");
 
-    // display:true + triggerTurn:false —— 渲染一个 customMessageBg 色完成 block
-    // 让用户在对话流看到「X 完成」，但不唤醒父 agent（避免 streaming 锁底）。
+    // display:true + triggerTurn:true + deliverAs:"followUp" —— 渲染一个完成 block
+    // 让用户在对话流看到「X 完成」，并在当前 streaming turn 结束后唤醒父 agent 处理结果。
     //
-    // triggerTurn:false 的理由：triggerTurn:true 会触发父 agent 新 turn，streaming
-    // 期间 Pi 持续写 \r\n（tui.ts:1330），终端 scrollback 把视图钉在底部——用户无法
-    // 滚动查看历史。background 的本意是「不主动打扰」，完成通知给用户看即可，主 agent
-    // 后续 poll 或用户手动提示时再处理结果。
+    // deliverAs:"followUp" 的理由：不打断正在 streaming 的 turn（避免 steer 中断正在
+    // 的工具调用）；streaming 结束后父 agent 自然收到这条消息继续处理。空闲时（非
+    // streaming）triggerTurn:true 直接 prompt 一个新 turn。多条合并的消息在同一个
+    // followUp turn 里一起处理。
     this.host.sendMessage({
       customType: NOTIFY_CUSTOM_TYPE,
       content,
       display: true,
-    }, { triggerTurn: false });
+    }, { triggerTurn: true, deliverAs: "followUp" });
   }
 
   /** 格式化单条完成消息（供 sendMessage 的 content）。 */
