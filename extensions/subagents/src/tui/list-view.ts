@@ -4,27 +4,34 @@
 //   左列：record 列表（状态图标 + agent + mode + 绝对时长）
 //   右列：选中 record 详情（eventLog + result/error，可翻屏）
 //
-// 布局（margin:1 → 四边距终端 1 行；框贴满 render width）：
-//   ╭─ Subagents ───────╮
-//   │ filter: _          │
-//   ├─ Records ──┬─ Detail ┤
-//   │ body ...    │ body ...│  ← pad 到满屏高
-//   ├─────────────┴─────────┤
-//   │ ↑↓ 导航 ...           │
-//   ╰──────────────────────╯
+// 布局（margin:0 全屏覆盖，自画视觉边距盖住底下对话流）：
+//   overlay 覆盖整个终端；框外留 1 行/1 列空白（applyPadding 画），框在内侧。
+//     ┌────────────────────────────┐  ← overlay 顶空白行（盖底下）
+//     │  ╭─ Subagents ───────────╮  │  ← 左 1 空格 + 框 + 右 1 空格
+//     │  │ filter: _              │  │
+//     │  ├─ Records ─┬─ Detail ───┤  │
+//     │  │ body ...   │ body ...   │  │
+//     │  ├────────────┴────────────┤  │
+//     │  │ ↑↓ 导航 ...             │  │
+//     │  ╰─────────────────────────╯  │
+//     └────────────────────────────┘  ← overlay 底空白行
+//   （外层框线仅为示意，实际是空白行/空格列）
 //
 // 契约（ctx.ui.custom overlay，对照 pi-tui-development-guide.md §3.2）：
 //   custom<void>((tui, theme, kb, done) => Component, {overlay:true, overlayOptions})
 //   Component: render(width):string[] + invalidate() + handleInput?(data)
 //
-// 关键避坑（全部来自 dev guide）：
+// 关键避坑：
 //   1. G-017 防叠加：模块级 activeView 单例，进入前 close()，factory 内 setActiveView
 //   2. 导航只用方向键 matchesKey("up"|"down")，禁 j/k（避 filter 冲突）
-//   3. overlay 退出 wrappedDone：幂等→标记→unsubscribe→clearActiveView→done()
+//   3. overlay 退出 wrappedDone：幂等→标记→unsubscribe→clearAnimTimer→clearActiveView→done
 //   4. sync record 不调 hub.cancel（会污染状态），UI 层 syncCancelHint 提示
 //   5. 不调 theme.bg（背景由 Pi overlay 容器施加），只 fg/bold
 //   6. 所有行经 truncLine（ANSI 安全）
 //   7. 边框不调 renderShell:"self"（守 default-shell / 无残影契约）
+//   8. 不用 Pi 的 overlay margin（那是物理留白会透出底内容）——改 margin:0 全屏覆盖
+//      + applyPadding 自画视觉边距（顶底空白行 + 左右空格列），盖住底下对话流
+//   9. 动画 setInterval(250ms) 安全：行数恒定（pad 到满屏），diff 只重画 spinner/elapsed
 
 import type { Component } from "@earendil-works/pi-tui";
 import { matchesKey } from "@earendil-works/pi-tui";
@@ -39,6 +46,7 @@ import {
   padToVisible,
   sanitizeLabel,
   segFill,
+  spinnerGlyph,
   statusGlyph,
   type ThemeLike,
   truncLine,
@@ -80,10 +88,22 @@ const DETAIL_FIXED_LINES = 4;
 const DETAIL_MIN_VIEWPORT = 3;
 /** 终端最小行数（低于此回退紧凑空列表框）。 */
 const MIN_TERM_ROWS = 8;
-/** overlayOptions.margin:1 上下各占 1 行 → 可用高度需扣 2 行。 */
-const OVERLAY_MARGIN_LINES = 2;
 /** terminal.rows 读不到时的兜底行数（防 duck-type 失败）。 */
 const TERM_ROWS_FALLBACK = 24;
+/** 自画视觉边距：框外左右各 1 列空白（盖住底下对话流）。 */
+const PAD_COLS = 2;
+/** 自画视觉边距：框外顶底各 1 行空白。 */
+const PAD_ROWS = 2;
+/** 内框最小宽（兜底防极窄终端）。 */
+const MIN_INNER_WIDTH = 4;
+/** 内框最小高（兜底防极矮终端）。 */
+const MIN_INNER_ROWS = 4;
+/** 垂直居中除数（floor(剩余/2)）。 */
+const VERT_CENTER_DIVISOR = 2;
+/** overlay 动画刷新间隔（spinner 换帧 + elapsed 跳动）。同 tool-render.ts SPINNER_INTERVAL_MS。 */
+const OVERLAY_REFRESH_MS = 250;
+/** spinner 帧切换粒度（与 Date.now() 配合选帧）。 */
+const SPINNER_FRAME_MS = 250;
 /** 顶框嵌入标题（分屏模式）。 */
 const TITLE_SPLIT = "Subagents";
 /** 分屏分区线左/右嵌入标题。 */
@@ -194,13 +214,25 @@ export async function createSubagentsView(
 
       const component = new SubagentsListComponent(hub, theme, tuiLike, state, unsubscribe, notify);
 
-      // wrappedDone（dev guide §4 顺序：幂等→标记→unsubscribe→clearActiveView→done）
+      // 动画 timer：有 running record 时定期 invalidate + requestRender，
+      // 让 spinner 丝滑换帧、elapsed 实时跳动（行数恒定，安全——对照
+      // tool-render.ts 的 setInterval 模式 + dev guide §8160a5d13 安全分析）。
+      const animTimer = setInterval(() => {
+        if (state.disposed) return;
+        if (!component.hasRunning()) return; // 无 running 不浪费刷新
+        component.invalidate();
+        tuiLike.requestRender();
+      }, OVERLAY_REFRESH_MS);
+      component.setAnimTimer(animTimer);
+
+      // wrappedDone（dev guide §4 顺序：幂等→标记→unsubscribe→clearAnimTimer→clearActiveView→done）
       const wrappedDone = () => {
         if (state.disposed) return; // 幂等
         state.disposed = true; // ① 标记
         unsubscribe(); // ② 解订 store 事件
-        activeView = null; // ③ 清 G-017 句柄
-        done(undefined); // ④ 框架 done（触发 overlay 销毁）
+        clearInterval(animTimer); // ③ 清动画 timer
+        activeView = null; // ④ 清 G-017 句柄
+        done(undefined); // ⑤ 框架 done（触发 overlay 销毁）
       };
       component.setCloseFn(wrappedDone);
       activeView = { close: wrappedDone };
@@ -213,8 +245,10 @@ export async function createSubagentsView(
         anchor: "center" as const,
         width: "100%",
         maxHeight: "100%",
-        // margin:1 → 四边各留 1 行，框贴满 render width（与终端边缘有 1 行间距）
-        margin: 1,
+        // margin:0 → overlay 覆盖整个终端（不留物理空白）。
+        // 视觉边距由 buildLines 自画（顶底空白行 + 左右空格列），盖住底下对话流。
+        // Pi 的 margin 是「物理留白透出底内容」，这里不能用。
+        margin: 0,
       },
     },
   );
@@ -373,6 +407,8 @@ class SubagentsListComponent implements Component {
   private cachedKey: string | undefined;
   private cachedLines: string[] | undefined;
   private closeFn: () => void = () => {};
+  /** 动画 timer 句柄（dispose 兜底清理）。 */
+  private animTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(
     private readonly hub: SubagentHub,
@@ -385,6 +421,16 @@ class SubagentsListComponent implements Component {
 
   setCloseFn(fn: () => void): void {
     this.closeFn = fn;
+  }
+
+  /** 注入动画 timer 句柄（dispose 兜底清理用）。 */
+  setAnimTimer(timer: ReturnType<typeof setInterval>): void {
+    this.animTimer = timer;
+  }
+
+  /** 是否有 running record（动画 timer 据此决定是否刷新）。 */
+  hasRunning(): boolean {
+    return this.hub.collectRecords(LIST_LIMIT).some((r) => r.status === "running");
   }
 
   invalidate(): void {
@@ -407,10 +453,11 @@ class SubagentsListComponent implements Component {
 
     const records = applyFilter(this.hub.collectRecords(LIST_LIMIT), this.state.filterText);
     const selected = records[this.state.selectedIdx] ?? null;
-    // 详情翻屏步长：可用视口高（terminal 高 - margin 行 - 框内固定行）。
+    // 详情翻屏步长：可用视口高（内框高 - 框内固定行）。
+    // 内框高 = terminal 高 - PAD_ROWS（顶底空白边距）。
     // 与 renderDetailBox 的 viewH 计算保持一致（元数据/段头在 content 里一起翻屏，不算固定）。
     const detailCtx: DetailKeyContext = {
-      viewportHeight: Math.max(DETAIL_MIN_VIEWPORT, this.termRows() - OVERLAY_MARGIN_LINES - DETAIL_FIXED_LINES),
+      viewportHeight: Math.max(DETAIL_MIN_VIEWPORT, this.termRows() - PAD_ROWS - DETAIL_FIXED_LINES),
       contentLines: selected?.eventLog.length,
     };
 
@@ -435,37 +482,65 @@ class SubagentsListComponent implements Component {
   // ── 内部：渲染 ──────────────────────────────────────────
 
   /**
-   * 构建行数组（全屏带框）。
+   * 构建行数组（全屏覆盖 + 自画视觉边距）。
    *
-   *   width  = render 收到的可用宽（margin:1 → termCols - 2，框正好填满）
-   *   rows   = terminal.rows（用于把 body pad 到满屏，让框像真正的全屏面板）
+   *   width  = render 收到的全屏宽（margin:0 → termCols，overlay 覆盖整个终端）
+   *   rows   = terminal.rows（满屏高）
    *
-   * 分四个分支：
+   * overlay 不用 Pi 的 margin（那是物理留白会透出底下内容），改 margin:0 全屏覆盖，
+   * 自己在框外加 1 行/1 列空白（盖住底下的对话流）：
+   *   - 每行：` ` + 框行 + ` `（左右各 1 空格视觉边距）
+   *   - 顶/底：各 1 行全宽空白
+   *   - 内框宽 = width - 2（左右边距），内框高 = rows - 2（顶底边距）
+   *
+   * 分四个分支（基于内框尺寸）：
    *   1. 终端太矮（< MIN_TERM_ROWS）→ 紧凑提示，不画框
    *   2. detailMode → 详情全屏框
    *   3. 空列表 → 紧凑小框（不填满全屏）
    *   4. 有 records → 分屏满屏框
    */
   private buildLines(width: number, rows: number): string[] {
+    // 内框尺寸（减去左右 1 列 + 顶底 1 行的视觉边距）
+    const innerWidth = Math.max(MIN_INNER_WIDTH, width - PAD_COLS);
+    const innerRows = Math.max(MIN_INNER_ROWS, rows - PAD_ROWS);
+
+    // 先在内框尺寸下生成框行
+    let innerLines: string[];
     const records = applyFilter(this.hub.collectRecords(LIST_LIMIT), this.state.filterText);
 
-    // 终端太矮：回退紧凑（不强求满屏，避免框被压缩成一团）
     if (rows < MIN_TERM_ROWS) {
-      return this.renderTooSmall(width);
-    }
-
-    if (this.state.detailMode) {
+      innerLines = this.renderTooSmall(innerWidth);
+    } else if (this.state.detailMode) {
       const selected = records[this.state.selectedIdx] ?? null;
-      return this.renderDetailBox(selected, width, rows);
+      innerLines = this.renderDetailBox(selected, innerWidth, innerRows);
+    } else if (records.length === 0) {
+      innerLines = this.renderEmptyBox(innerWidth);
+    } else {
+      // clamp selectedIdx（filter 后可能越界）
+      this.state.selectedIdx = Math.min(this.state.selectedIdx, records.length - 1);
+      innerLines = this.renderSplitBox(records, innerWidth, innerRows);
     }
 
-    if (records.length === 0) {
-      return this.renderEmptyBox(width);
-    }
+    return this.applyPadding(innerLines, width, rows);
+  }
 
-    // clamp selectedIdx（filter 后可能越界）
-    this.state.selectedIdx = Math.min(this.state.selectedIdx, records.length - 1);
-    return this.renderSplitBox(records, width, rows);
+  /**
+   * 给内框行套视觉边距并填满全屏：顶/底各加空白行直到满屏高，每行加左右 1 空格。
+   * 这些空白是 overlay 自己画的（盖住底下对话流），区别于 Pi 的物理 margin（透出底内容）。
+   * 紧凑框（空列表/太矮）也会被空白填满全屏——保证整个终端被 overlay 覆盖。
+   */
+  private applyPadding(innerLines: string[], width: number, rows: number): string[] {
+    const blank = " ".repeat(width);
+    // 左右各加 1 空格的边距行（内框行 visibleWidth 已 = width - 2）
+    const padLine = (line: string) => ` ${line} `;
+    const result: string[] = [];
+    // 顶部空白填满（紧凑框时把框垂直居中）
+    const topPad = Math.max(1, Math.floor((rows - innerLines.length) / VERT_CENTER_DIVISOR));
+    for (let i = 0; i < topPad; i++) result.push(blank);
+    for (const line of innerLines) result.push(padLine(line));
+    // 底部空白填满到 rows
+    while (result.length < rows) result.push(blank);
+    return result;
   }
 
   // ── 分支 1：终端太小 ──────────────────────────────────
@@ -510,8 +585,9 @@ class SubagentsListComponent implements Component {
     const line = (s: string) => t.fg("borderMuted", s);
     const sep = line("│");
 
-    // 满屏可用 body 高 = 终端高 - margin 行 - 固定行（顶框/filter/分区线/底分区线/footer/底框 = 6）
-    const bodyH = Math.max(1, rows - OVERLAY_MARGIN_LINES - SPLIT_FIXED_LINES);
+    // 满屏可用 body 高 = 内框高 - 固定行（顶框/filter/分区线/底分区线/footer/底框 = 6）
+    // rows 参数已是内框高（顶底空白边距已在 buildLines 扣除）。
+    const bodyH = Math.max(1, rows - SPLIT_FIXED_LINES);
 
     const lines: string[] = [];
 
@@ -559,14 +635,16 @@ class SubagentsListComponent implements Component {
   private renderLeftColumn(records: SubagentRecord[], width: number): string[] {
     const t = this.theme;
     const innerWidth = Math.max(COL_INNER_MIN, width - COL_INDENT);
+    // spinner 当前帧（Date.now() 驱动；animTimer 定期 invalidate → render 重选帧）
+    const spinFrame = spinnerGlyph(Math.floor(Date.now() / SPINNER_FRAME_MS));
     return records.map((r, i) => {
       const selected = i === this.state.selectedIdx;
       const glyph = statusGlyph(r.status);
-      // running 用首帧（overlay 无 setInterval，靠 onChange 触发换帧）
-      const icon = glyph.icon ?? "·";
+      // running 用动画 spinner（animTimer 250ms invalidate 驱动换帧）；终态用 glyph.icon
+      const icon = glyph.icon ?? spinFrame;
       const iconStr = t.fg(glyph.color, icon);
       const modeTag = r.mode === "background" ? "bg" : "sync";
-      // 绝对时长（非相对时间）——避免 overlay 无定时器刷新导致相对时间 stale
+      // 绝对时长——animTimer 定期刷新，elapsed 实时跳动
       const dur = formatElapsedSeconds(elapsedSec(r));
       const label = `${iconStr} ${r.agent} ${t.fg("dim", modeTag)} ${t.fg("dim", dur)}`;
       const content = selected ? t.fg("accent", label) : label;
@@ -689,9 +767,10 @@ class SubagentsListComponent implements Component {
     }
 
     // ── 翻屏 ──
-    // 可用视口高 = 终端高 - margin 行 - 框内固定行（顶框/底分区线/footer/底框 = 4）。
+    // 可用视口高 = 内框高 - 框内固定行（顶框/底分区线/footer/底框 = 4）。
+    // rows 参数已是内框高（顶底空白边距已在 buildLines 扣除）。
     // 元数据/段头/eventLog 都在 content 里一起翻屏，不计固定行。
-    const viewH = Math.max(DETAIL_MIN_VIEWPORT, rows - OVERLAY_MARGIN_LINES - DETAIL_FIXED_LINES);
+    const viewH = Math.max(DETAIL_MIN_VIEWPORT, rows - DETAIL_FIXED_LINES);
     const max = Math.max(0, content.length - viewH);
     if (this.state.scrollOffset > max) this.state.scrollOffset = max;
     const startIdx = Math.max(0, Math.min(this.state.scrollOffset, max));
@@ -728,9 +807,13 @@ class SubagentsListComponent implements Component {
     return lines;
   }
 
-  /** dispose 时清理（Pi overlay 销毁时调用）。 */
+  /** dispose 时清理（Pi overlay 销毁时调用；wrappedDone 已清过，此处兜底防漏）。 */
   dispose(): void {
     this.unsubscribe();
+    if (this.animTimer !== undefined) {
+      clearInterval(this.animTimer);
+      this.animTimer = undefined;
+    }
   }
 }
 
