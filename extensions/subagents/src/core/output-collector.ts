@@ -33,8 +33,11 @@ const STRUCTURED_OUTPUT_TOOL = "structured-output";
  * 从 toolCalls 提取 structured-output 的 result.details（schema 模式产出）。
  * schema enforcement 保证 agent 调过该 tool（漏调会 steer 重试）；这里只做逆向提取。
  * 未调或无 details 返回 undefined。
+ *
+ * 导出以便直接单测（与 toUsageTotal/collectResponseText 一致，三者同属决定
+ * AgentResult 字段来源的纯函数契约）。
  */
-function extractParsedOutput(toolCalls: ToolCall[]): unknown {
+export function extractParsedOutput(toolCalls: ToolCall[]): unknown {
   for (let i = toolCalls.length - 1; i >= 0; i--) {
     const tc = toolCalls[i]!;
     if (tc.toolName === STRUCTURED_OUTPUT_TOOL && tc.result?.details !== undefined) {
