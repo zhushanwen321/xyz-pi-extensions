@@ -60,7 +60,7 @@ const TOKEN_K_PRECISION_THRESHOLD = 10000;
 const TOKEN_M_THRESHOLD = 1000000;
 const COST_DECIMAL_PLACES = 4;
 
-export function formatTokens(count: number): string {
+function formatTokens(count: number): string {
 	if (count < TOKEN_K_THRESHOLD) return count.toString();
 	if (count < TOKEN_K_PRECISION_THRESHOLD) return `${(count / TOKEN_K_THRESHOLD).toFixed(1)}k`;
 	if (count < TOKEN_M_THRESHOLD) return `${Math.round(count / TOKEN_K_THRESHOLD)}k`;

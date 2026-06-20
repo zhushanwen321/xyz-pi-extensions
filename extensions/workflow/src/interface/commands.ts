@@ -91,6 +91,9 @@ export function sendCompletionNotification(
 
   const content = parts.join("\n");
 
+  // deliverAs:"steer" + triggerTurn:true —— workflow 完成时作为 steering 消息注入
+  // 并立即唤醒 parent agent 处理结果（默认开启，无 opt-in 参数）。
+  // 与 subagent 的 followUp+triggerTurn 对称，仅注入方式按需求用 steer。
   api.sendMessage({
     customType: "workflow-result",
     content,
@@ -113,7 +116,7 @@ export function sendCompletionNotification(
         },
       },
     },
-  });
+  }, { triggerTurn: true, deliverAs: "steer" });
 }
 
 // ── Argument parsing ───────────────────────────────────────────
@@ -495,7 +498,7 @@ const SAVED_DIR = resolve(".pi/workflows");
  * Save a temporary workflow to the saved directory.
  * Moves .pi/workflows/.tmp/{name}.js → .pi/workflows/{newName||name}.js
  */
-export async function saveWorkflow(tmpName: string, newName?: string): Promise<string> {
+async function saveWorkflow(tmpName: string, newName?: string): Promise<string> {
   const workflows = await loadWorkflows();
   const target = workflows.find(
     (wf) => wf.source === "tmp" && wf.name === tmpName,

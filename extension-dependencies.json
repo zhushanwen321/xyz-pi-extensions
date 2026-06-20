@@ -9,11 +9,6 @@
           "package": "@zhushanwen/pi-structured-output",
           "type": "optional",
           "reason": "schema 结构化输出，缺失时降级为纯文本"
-        },
-        {
-          "package": "@zhushanwen/pi-model-switch",
-          "type": "optional",
-          "reason": "有则按复杂度选模型，无则用默认模型"
         }
       ]
     },
@@ -103,6 +98,17 @@
           "package": "@zhushanwen/pi-goal",
           "type": "optional",
           "reason": "complete action 通过 __goalInit 启动 goal，缺失时降级通知用户"
+        }
+      ]
+    },
+    {
+      "name": "@zhushanwen/pi-subagents",
+      "directory": "extensions/subagents",
+      "dependsOn": [
+        {
+          "package": "@zhushanwen/pi-structured-output",
+          "type": "runtime",
+          "reason": "schema 契约 enforcement 引用 tool 名（structured-output），运行时需要 extension 已加载，代码层不 import"
         }
       ]
     },

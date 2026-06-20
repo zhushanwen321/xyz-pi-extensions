@@ -62,7 +62,7 @@ export function appendTraceNode(
  * @param runId - Workflow run identifier
  * @returns Trace nodes for the run, in step order
  */
-export function loadTrace(
+function loadTrace(
   ctx: ExtensionContext,
   runId: string,
 ): ExecutionTraceNode[] {
@@ -93,7 +93,7 @@ export function loadTrace(
  * @param status    - New status
  * @throws If no node with the given stepIndex is found in the trace
  */
-export function updateNodeStatus(
+function updateNodeStatus(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   runId: string,
@@ -145,7 +145,7 @@ export interface TraceSummary {
  * @param ctx   - ExtensionContext
  * @param runId - Workflow run identifier
  */
-export function getTraceSummary(
+function getTraceSummary(
   ctx: ExtensionContext,
   runId: string,
 ): TraceSummary {

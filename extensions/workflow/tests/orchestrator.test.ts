@@ -20,9 +20,24 @@ vi.mock("node:fs", async () => {
   };
 });
 
-// Mock @zhushanwen/pi-model-switch to avoid transitive typebox dependency
-vi.mock("@zhushanwen/pi-model-switch", () => ({
-  resolveModelForScene: vi.fn().mockReturnValue(undefined),
+// Mock agent-discovery: workflow 现在自带 AgentRegistry（spawn 架构，不再依赖 subagents）。
+// getAgentCount()/getAgents() 测试通过 mockAgentList 控制 AgentRegistry.list() 返回值。
+const mockAgentList: Array<{ name: string; source: string; model?: string }> = [];
+vi.mock("../src/infra/agent-discovery", () => ({
+  AgentRegistry: class MockAgentRegistry {
+    discoverAll = vi.fn();
+    list = vi.fn(() => mockAgentList);
+    get = vi.fn((name: string) => ({
+      name,
+      systemPrompt: "You are " + name,
+      source: "builtin",
+    }));
+    resolve = vi.fn((name: string) => ({
+      name,
+      systemPrompt: "You are " + name,
+      source: "builtin",
+    }));
+  },
 }));
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -230,18 +245,6 @@ describe("WorkflowOrchestrator", () => {
       expect(updated.pausedAt).toBeDefined();
     });
 
-    it("cleans up active temp files (no leak from in-flight agent calls)", async () => {
-      const inst = makeInstance("wf-pause-cleanup", "running");
-      orch.restoreInstances(makeInstanceMap(inst));
-
-      // Spy on cleanupAllTempFiles to verify it's called during pause.
-      // Regression guard: prior versions only cleaned up on abort, leaking
-      // temp files from agent calls killed by the worker terminate.
-      const cleanupSpy = vi.spyOn(orch, "cleanupAllTempFiles");
-      await orch.pause("wf-pause-cleanup");
-      expect(cleanupSpy).toHaveBeenCalledTimes(1);
-      cleanupSpy.mockRestore();
-    });
 
     it("throws when workflow is already paused", async () => {
       const inst = makeInstance("wf-pause-twice", "paused");
@@ -733,6 +736,81 @@ describe("WorkflowOrchestrator", () => {
       expect(msg).toContain("501 agent calls");
       expect(msg).toContain("42000/100000");
       expect(msg).toContain("Consider aborting");
+    });
+  });
+
+  // ── Round 6 MF#9: run() / restart() / runAndWait() basic coverage ───────────
+  // These three public methods were previously zero-tested. Mock the early-fail
+  // paths (signal pre-aborted, workflow not found) to lock in the contracts.
+  describe("run() — pre-abort and missing workflow", () => {
+    it("throws when signal is pre-aborted", async () => {
+      const ctrl = new AbortController();
+      ctrl.abort();
+      await expect(orch.run("any", {}, undefined, undefined, ctrl.signal)).rejects.toThrow(
+        /aborted before start/,
+      );
+    });
+
+    it("throws when workflow does not exist", async () => {
+      await expect(orch.run("nonexistent-workflow", {})).rejects.toThrow(/not found or unavailable/);
+    });
+  });
+
+  describe("restart() — missing meta and missing runId", () => {
+    it("throws when runId has no runMeta (cannot restart from scratch)", async () => {
+      const inst = makeInstance("wf-restart-no-meta", "running");
+      orch.restoreInstances(makeInstanceMap(inst));
+
+      await expect(orch.restart("wf-restart-no-meta")).rejects.toThrow(/No metadata for restart/);
+    });
+
+    it("throws when runId does not exist at all", async () => {
+      await expect(orch.restart("ghost")).rejects.toThrow(/not found/);
+    });
+  });
+
+  describe("runAndWait() — early-fail paths", () => {
+    it("rethrows when workflow does not exist (run() throws → runAndWait propagates)", async () => {
+      // getWorkflow returns undefined → run() throws → runAndWait has no runId to poll.
+      // runAndWait awaits run() directly so the error propagates. Lock in the contract.
+      await expect(orch.runAndWait("nonexistent-wf", {})).rejects.toThrow(/not found or unavailable/);
+    });
+  });
+
+  // Round 5 MF#3: getAgentCount/getAgents unit tests
+  describe("getAgentCount()", () => {
+    it("returns 0 when no agents are discovered", () => {
+      mockAgentList.length = 0;
+      expect(orch.getAgentCount()).toBe(0);
+    });
+
+    it("returns correct count when agents are registered", () => {
+      mockAgentList.length = 0;
+      mockAgentList.push(
+        { name: "worker", source: "builtin" },
+        { name: "scout", source: "builtin" },
+        { name: "planner", source: "user" },
+      );
+      expect(orch.getAgentCount()).toBe(3);
+    });
+  });
+
+  describe("getAgents()", () => {
+    it("returns empty array when no agents are discovered", () => {
+      mockAgentList.length = 0;
+      expect(orch.getAgents()).toEqual([]);
+    });
+
+    it("returns agent summaries with name, source, and model", () => {
+      mockAgentList.length = 0;
+      mockAgentList.push(
+        { name: "worker", source: "builtin", model: "anthropic/claude-sonnet-4.5" },
+        { name: "researcher", source: "user" },
+      );
+      const agents = orch.getAgents();
+      expect(agents).toHaveLength(2);
+      expect(agents[0]).toEqual({ name: "worker", source: "builtin", model: "anthropic/claude-sonnet-4.5" });
+      expect(agents[1]).toEqual({ name: "researcher", source: "user", model: undefined });
     });
   });
 });

@@ -272,7 +272,7 @@ export function getConfigPath(): string {
 	return CONFIG_PATH;
 }
 
-export function writePolicyConfig(json: string, overwrite = false): { ok: true; path: string } | { ok: false; error: string } {
+function writePolicyConfig(json: string, overwrite = false): { ok: true; path: string } | { ok: false; error: string } {
 	if (!overwrite && existsSync(CONFIG_PATH)) {
 		return { ok: false, error: `Config already exists at ${CONFIG_PATH}. Delete it first to regenerate.` };
 	}
