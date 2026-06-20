@@ -32,15 +32,6 @@ export type ValidStatus = (typeof VALID_STATUSES)[number];
 
 // ── 迁移/兼容 ───────────────────────────────────────
 
-const STALE_CONTEXT_PATTERNS = ["aborted", "context canceled", "stale context", "stalecontext", "extension context no longer active"];
-
-/** 检查错误是否表示 stale / canceled context */
-function isStaleContextError(error: Error | unknown): boolean {
-	const msg = error instanceof Error ? error.message : String(error);
-	const lower = msg.toLowerCase();
-	return STALE_CONTEXT_PATTERNS.some((p) => lower.includes(p));
-}
-
 /** 旧格式迁移：verifying → in_progress，failed → pending，done:boolean → status */
 export function migrateTodo(raw: Todo): Todo {
 	const record = raw as unknown as Record<string, unknown>;

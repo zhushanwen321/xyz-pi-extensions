@@ -6,7 +6,6 @@ import type { Theme } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
 import {
-	buildRender,
 	getDisplayStatus,
 	type Todo,
 	type TodoDetails,

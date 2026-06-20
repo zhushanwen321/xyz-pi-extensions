@@ -95,10 +95,6 @@ function isInProtectedTurn(
 
 // ── Message field accessors ──
 
-function getMessageTimestamp(msg: AgentMessage): number {
-  return msg.timestamp;
-}
-
 export function getToolResultText(msg: ToolResultMessage): string {
   return msg.content
     .filter((c): c is TextContent => c.type === "text")
