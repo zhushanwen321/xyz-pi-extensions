@@ -1,8 +1,8 @@
 // src/__tests__/notifier.test.ts
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BgNotifyRecord, NotifierHost } from "../runtime/notifier.ts";
-import { BgNotifier } from "../runtime/notifier.ts";
+import type { BgNotifyRecord, NotifierHost } from "../runtime/execution/notifier.ts";
+import { BgNotifier } from "../runtime/execution/notifier.ts";
 
 // ── 常量（与源码对齐）──
 const MERGE_WINDOW_MS = 2000;

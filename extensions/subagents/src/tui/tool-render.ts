@@ -9,7 +9,7 @@
 //   2. 所有输出行经 truncLine（ANSI 安全，省略号前重应用 SGR，背景不断裂——坑2）。
 //   3. 上下留白（Spacer(1) + Box paddingY=1）由 ToolExecutionComponent 负责，
 //      组件不自己加 Spacer 做间隔（坑3）。
-//   4. spinner 由 seed-frame 驱动（detailsSeed(details)），不用 setInterval（坑1 残影根因之一）。
+//   4. spinner 由 Date.now() 选帧 + 低频 setInterval 驱动 invalidate，不用 seed-frame（坑1 残影根因之一）。
 //   5. streaming delta（text/thinking）不触发 onUpdate，仅离散边界事件触发重绘（避 viewport snap-back）。
 //   6. 复用 lastComponent（P1a 优化，省 GC + 防 theme 闪烁）。
 
@@ -19,6 +19,8 @@ import type { AgentToolResult, Theme } from "@mariozechner/pi-coding-agent";
 
 import type { AgentEventLogEntry, SubagentToolDetails } from "../types.ts";
 import {
+  extractAgentName,
+  firstLine,
   formatElapsedSeconds,
   formatEventLine,
   formatTokens,
@@ -325,41 +327,11 @@ export class SubagentResultComponent implements Component {
 }
 
 // ============================================================
-// detailsSeed —— spinner seed
-// ============================================================
-
-/**
- * 从 details 计算 spinner seed（每次 render 变化，驱动换帧）。
- *
- *   seed = turns + totalTokens + elapsedSeconds + eventLog.length（单调增长）
- *
- * 每次 onUpdate（真实事件）→ seed 变化 → spinner 换帧；
- * 静默期 seed 不变 → spinner 冻结 → 换取滚动体验。
- */
-export function detailsSeed(details: SubagentToolDetails): number {
-  // 防御：details 可能是 RecordSnapshot（缺 elapsedSeconds），undefined 参与加法得 NaN
-  const turns = details.turns ?? 0;
-  const tokens = details.totalTokens ?? 0;
-  const elapsed = details.elapsedSeconds ?? 0;
-  const logLen = details.eventLog?.length ?? 0;
-  return turns + tokens + elapsed + logLen;
-}
-
-// ============================================================
 // 私有 helper（模块内）
 // ============================================================
 
-/**
- * 从 renderCall 的 unknown args 安全提取 agent 名。
- * 类型守卫窄化（替代 `as { agent?: string }` 全可选断言，避免 taste warning）。
- */
-function extractAgentName(args: unknown): string {
-  if (typeof args === "object" && args !== null && "agent" in args) {
-    const v = (args as { agent: unknown }).agent;
-    if (typeof v === "string" && v.length > 0) return v;
-  }
-  return "worker";
-}
+// extractAgentName / firstLine 已上移到 ./format.ts 共享（tool-render / list-view /
+// bg-notify-render / subagent-tool 复用）。
 
 /**
  * 构建状态行：`{glyph} {stats}`（agent/model 已上移标题行，由 renderCall 预解析）。
@@ -423,9 +395,9 @@ function buildActivityLine(
 function buildDeliveryLine(d: SubagentToolDetails, theme: ThemeLike): string | undefined {
   switch (d.status) {
     case "done":
-      return firstLine(d.result) || undefined;
+      return firstLineSanitized(d.result) || undefined;
     case "failed":
-      return `${theme.fg("error", "Error:")}: ${firstLine(d.error)}`;
+      return `${theme.fg("error", "Error:")}: ${firstLineSanitized(d.error)}`;
     case "cancelled":
       return theme.fg("dim","Cancelled");
     default:
@@ -436,11 +408,10 @@ function buildDeliveryLine(d: SubagentToolDetails, theme: ThemeLike): string | u
 /**
  * 取文本首个非空行（多行压成首行展示），并 sanitize。
  * 用于 done/failed 的交付物预览。
+ * 共享 firstLine（./format.ts）取首行，本 wrapper 叠加 sanitizeLabel。
  */
-function firstLine(text?: string): string {
-  if (!text) return "";
-  const line = text.split("\n").find((l) => l.trim())?.trim() ?? "";
-  return sanitizeLabel(line);
+function firstLineSanitized(text?: string): string {
+  return sanitizeLabel(firstLine(text));
 }
 
 /**

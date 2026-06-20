@@ -20,7 +20,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import { Text } from "@earendil-works/pi-tui";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 
-import { statusGlyph, type ThemeLike,truncLine } from "./format.ts";
+import { firstLine, statusGlyph, type ThemeLike,truncLine } from "./format.ts";
 
 /** agent 名最大显示宽度。 */
 const AGENT_MAX_WIDTH = 40;
@@ -54,10 +54,10 @@ export function renderBgNotifyMessage(
   let body: string;
   switch (record.status) {
     case "done":
-      body = record.result ? firstLine(record.result) : "(completed)";
+      body = record.result ? firstLineSanitized(record.result) : "(completed)";
       break;
     case "failed":
-      body = `Error: ${record.error ? firstLine(record.error) : "(unknown)"}`;
+      body = `Error: ${record.error ? firstLineSanitized(record.error) : "(unknown)"}`;
       break;
     case "cancelled":
       body = "cancelled";
@@ -96,8 +96,7 @@ function extractBgNotifyRecord(
   };
 }
 
-/** 取文本首个非空行（多行压成首行）。 */
-function firstLine(text: string): string {
-  const line = text.split("\n").find((l) => l.trim())?.trim() ?? "";
-  return line.replace(/[\r\t]+/g, " ");
+// firstLine 取首非空行（共享自 ./format.ts）；本文件额外压 \r\t 防多行展开。
+function firstLineSanitized(text: string): string {
+  return firstLine(text).replace(/[\r\t]+/g, " ");
 }

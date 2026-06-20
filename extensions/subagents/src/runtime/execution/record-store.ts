@@ -1,4 +1,4 @@
-// src/runtime/record-store.ts
+// src/runtime/execution/record-store.ts
 //
 // Record 的统一容器。替代旧实现中散落在 runtime 的 _runningAgents /
 // _completedAgents / _bgRecords 三个独立 Map。
@@ -9,14 +9,14 @@
 //   - 与 history-store 协作：completed 后写入持久化，list 时 merge 四源
 //   - 提供 snapshot() 只读视图给 TUI（永不返回可变引用）
 
-import { snapshot as toSnapshot } from "../core/execution-record.ts";
+import { snapshot as toSnapshot } from "../../core/execution-record.ts";
 import type {
   ExecutionMode,
   ExecutionRecord,
   ExecutionStatus,
   RecordSnapshot,
   SubagentRecord,
-} from "../types.ts";
+} from "../../types.ts";
 import type { HistoryStore } from "./history-store.ts";
 
 // ============================================================
@@ -45,7 +45,7 @@ export type ChangeListener = () => void;
 // ============================================================
 
 /**
- * Record 容器。进程单例（随 SubagentHub 重建）。
+ * Record 容器。进程单例（随 SubagentService 重建）。
  *
  *   ╔══════════════════════════════════════════════════════════════════╗
 //   ║  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐             ║
@@ -100,12 +100,6 @@ export class RecordStore {
   /** 按 id 查找（live/completed/bg 三内存源）。返回可变 record（仅 runtime 内部用）。 */
   getMutable(id: string): ExecutionRecord | undefined {
     return this.live.get(id) ?? this.completed.get(id) ?? this.bg.get(id);
-  }
-
-  /** 按 id 查找并返回只读快照（poll/TUI 用）。 */
-  snapshot(id: string): RecordSnapshot | undefined {
-    const record = this.getMutable(id);
-    return record ? toSnapshot(record) : undefined;
   }
 
   /** 列出所有 running record 的只读快照（widget 计数、诊断用）。 */

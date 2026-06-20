@@ -184,6 +184,39 @@ export function sanitizeLabel(label: string): string {
   return label.replace(/[\r\n]+/g, " ").replace(/\t/g, "  ");
 }
 
+// ============================================================
+// 共享文本/参数提取 helper（tool-render / list-view / bg-notify-render / subagent-tool 复用）
+// ============================================================
+
+/**
+ * 取文本首个非空行（多行压成首行）。
+ *
+ * 仅做"取首行"——不 sanitize。三处调用方的 sanitize 末步不同
+ * （tool-render 调 sanitizeLabel、bg-notify-render 压 \r\t、list-view 不处理），
+ * 故共享此基础函数，各自按需 wrap。
+ *
+ *   firstLine("a\nb\nc") → "a"
+ *   firstLine("\n\nb") → "b"
+ *   firstLine("") → ""
+ */
+export function firstLine(text?: string): string {
+  if (!text) return "";
+  return text.split("\n").find((l) => l.trim())?.trim() ?? "";
+}
+
+/**
+ * 从 renderCall/execute 的 unknown args 安全提取 agent 名。
+ * 类型守卫窄化（替代 `as { agent?: string }` 全可选断言）。
+ * 无 agent 字段或非空字符串时默认 "worker"。
+ */
+export function extractAgentName(args: unknown): string {
+  if (typeof args === "object" && args !== null && "agent" in args) {
+    const v = (args as { agent: unknown }).agent;
+    if (typeof v === "string" && v.length > 0) return v;
+  }
+  return "worker";
+}
+
 /**
  * 格式化单条 eventLog 条目（带类型图标 + 着色，不含 `⎿` 前缀——前缀由调用方加）。
  *

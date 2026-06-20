@@ -1,4 +1,4 @@
-// src/runtime/config.ts
+// src/runtime/config/config.ts
 //
 // 全局配置（~/.pi/agent/subagents/config.json）+ session 级状态（内存）。
 //
@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import type {
   SessionModelState,
   SubagentsGlobalConfig,
-} from "../types.ts";
+} from "../../types.ts";
 
 // ============================================================
 // 常量
@@ -31,6 +31,7 @@ const CONFIG_ENTRY_TYPE = "subagent-config-entry";
  */
 const BUILTIN_CONFIG_PATH = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
+  "..",
   "..",
   "..",
   "config.json",

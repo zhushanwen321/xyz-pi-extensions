@@ -295,6 +295,7 @@ export interface DiscoveryConfig {
 /** 首次 category 模型确认后的 per-session 覆盖。 */
 export interface SessionModelState {
   yoloMode: boolean;
+  /** @deprecated D-1：取消首次确认后此字段恒为 true，仅 restoreSessionState 保留读写以向后兼容。 */
   categoryConfirmed: boolean;
   categoryModels: Record<string, { model: string; thinkingLevel?: string }>;
   agentModels: Record<string, { model: string; thinkingLevel?: string }>;

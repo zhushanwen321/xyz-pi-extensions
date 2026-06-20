@@ -17,12 +17,12 @@
 
 ## 2. 统一执行流
 
-`SubagentHub.execute(opts)` 是 sync/bg 共用的唯一入口。分七步，mode 分叉集中在第 3 步。执行编排逻辑（原 executor）已合并进 SubagentHub——组件（pool/store/history/notifier）全 private，编排方法（runAndFinalize/finalizeRecord/notifyComplete 等）全 private，作为同类方法直接访问组件。
+`SubagentService.execute(opts)` 是 sync/bg 共用的唯一入口。分七步，mode 分叉集中在第 3 步。执行编排逻辑（原 executor）已合并进 SubagentService——组件（pool/store/history/notifier）全 private，编排方法（runAndFinalize/finalizeRecord/notifyComplete 等）全 private，作为同类方法直接访问组件。
 
 ```mermaid
 flowchart TD
-    S0[0. 确认<br/>modelHub.ensureConfirmed<br/>经 onConfirmCategory 回调]
-    S1[1. IDENTITY 解析<br/>modelHub.resolveModel<br/>5级 fallback]
+    S0[0. 确认（已废弃 D-1）<br/>原 modelHub.ensureConfirmed<br/>经 onConfirmCategory 回调]
+    S1[1. IDENTITY 解析<br/>resolveModel<br/>5级 fallback]
     S2[2. RECORD 创建+注册<br/>createRecord + store.register]
     S3{3. MODE 分叉<br/>仅 4 处差异}
     S4[4. 执行 SessionRunner.run<br/>pool.acquire → run → pool.release]
@@ -40,11 +40,11 @@ flowchart TD
     S6 -->|background| S7b[立即返回<br/>backgroundId]
 ```
 
-### 为什么 executor 合并进 SubagentHub（不独立文件）
+### 为什么 executor 合并进 SubagentService（不独立文件）
 
-executor 原是独立文件 `executor.ts`，访问 SubagentHub 的组件需要它们可跨文件访问。TS 的 `private` 只在类内有效——跨文件的模块级函数访问不到 private，逼出 5 个 public 行为方法（acquireSlot/finalizeRecord 等），名义上是"契约抽象"，实际是实现约束倒逼的妥协。
+executor 原是独立文件 `executor.ts`，访问 SubagentService 的组件需要它们可跨文件访问。TS 的 `private` 只在类内有效——跨文件的模块级函数访问不到 private，逼出 5 个 public 行为方法（acquireSlot/finalizeRecord 等），名义上是"契约抽象"，实际是实现约束倒逼的妥协。
 
-executor 没有独立状态、独立生命周期、独立调用方（只有 SubagentHub.execute 调它）——它不是一个独立概念域。合并进 SubagentHub 后，编排方法自然降为 private，组件也全 private，无需任何封装妥协。
+executor 没有独立状态、独立生命周期、独立调用方（只有 SubagentService.execute 调它）——它不是一个独立概念域。合并进 SubagentService 后，编排方法自然降为 private，组件也全 private，无需任何封装妥协。
 
 → 详见 [architecture.md §6.2](./architecture.md#62-为什么-executor-合并进-subagenthub不独立文件)
 
@@ -161,6 +161,6 @@ sequenceDiagram
 
 ## 相关文档
 
-- [architecture.md](./architecture.md) — 双 Hub 在 Runtime 层的位置
+- [architecture.md](./architecture.md) — 双 Service 在 Runtime 层的位置
 - [data-model.md](./data-model.md) — ExecutionRecord 的状态机与 completeRecord
 - [session-runner.md](./session-runner.md) — SessionRunner.run 的 EventBridge 契约与 collectResult 细节

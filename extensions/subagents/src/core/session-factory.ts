@@ -18,6 +18,7 @@ import {
   type SdkEvent,
 } from "./event-bridge.ts";
 import type { AgentConfig, ModelRegistryLike, ResolvedModel } from "./model-resolver.ts";
+import { encodeCwd } from "./path-encoding.ts";
 
 // ============================================================
 // SDK 类型（duck-typed 最小子集，测试可 mock）
@@ -120,7 +121,7 @@ export interface SdkLike {
 // 依赖容器 + 输入/输出
 // ============================================================
 
-/** 创建 session 所需的依赖（由 SubagentHub 提供）。 */
+/** 创建 session 所需的依赖（由 SubagentService 提供）。 */
 export interface SessionFactoryContext {
   modelRegistry: ModelRegistryLike;
   resolveAgent: (name: string) => AgentConfig | undefined;
@@ -282,15 +283,6 @@ export function buildResourceLoader(
  */
 export function getSubagentSessionDir(agentDir: string, cwd: string): string {
   return path.join(agentDir, "subagents", encodeCwd(cwd), "sessions");
-}
-
-/**
- * cwd → 安全目录名。复用 Pi SDK getDefaultSessionDir 的编码逻辑：
- * 去开头单个分隔符，全量替换剩余分隔符/冒号为 `-`，首尾补 `--`。
- * 例：`/Users/x/proj` → `--Users-x-proj--`。
- */
-function encodeCwd(cwd: string): string {
-  return "--" + cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-") + "--";
 }
 
 /**

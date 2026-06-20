@@ -1,9 +1,9 @@
-// src/runtime/model-config-hub.ts
+// src/runtime/model-config-service.ts
 //
-// 配置 + 模型解析领域 Hub。"给定 agent 名 + 用户参数，用哪个模型？"
+// 配置 + 模型解析领域 Service。"给定 agent 名 + 用户参数，用哪个模型？"
 //
-// 与 SubagentHub（执行/记录/通知域）正交——本 Hub 不碰 pool/store/notifier。
-// 上游：SubagentHub.execute 内部调 resolveModel；command/wizard 直接用（不经 SubagentHub）。
+// 与 SubagentService（执行/记录/通知域）正交——本 Service 不碰 pool/store/notifier。
+// 上游：SubagentService.execute 内部调 resolveModel；command/wizard 直接用（不经 SubagentService）。
 // session_start 时经 initModel 注入 modelRegistry + 恢复 sessionState。
 
 import { AgentRegistry } from "../core/agent-registry.ts";
@@ -14,7 +14,6 @@ import {
   type ResolvedModel,
   resolveModelForAgent,
 } from "../core/model-resolver.ts";
-import { DiscoveryConfigLoader } from "./discovery-config.ts";
 import type {
   SessionModelState,
   SubagentsGlobalConfig,
@@ -24,14 +23,15 @@ import {
   loadGlobalConfig,
   restoreSessionState,
   saveGlobalConfig as saveConfig,
-} from "./config.ts";
+} from "./config/config.ts";
+import { DiscoveryConfigLoader } from "./discovery-config.ts";
 
 // ============================================================
 // 类型
 // ============================================================
 
-/** Hub 构造参数（进程级，跨 session 不变）。 */
-export interface ModelConfigHubInit {
+/** Service 构造参数（进程级，跨 session 不变）。 */
+export interface ModelConfigServiceInit {
   agentDir: string;
   /**
    * 资源发现契约加载器（宿主声明的多 skill/agent 目录）。
@@ -42,7 +42,7 @@ export interface ModelConfigHubInit {
 }
 
 /** session_start 注入参数（session 级，每次重建）。 */
-export interface ModelSessionInit {
+export interface ModelServiceSessionInit {
   /** 模型注册表（鉴权 + 发现）。null 立即抛错（fail-fast）。 */
   modelRegistry: ModelRegistryLike | null;
   /** 当前 session ID。 */
@@ -52,11 +52,11 @@ export interface ModelSessionInit {
 }
 
 // ============================================================
-// ModelConfigHub
+// ModelConfigService
 // ============================================================
 
 /**
- * 配置 + 模型解析 Hub。进程级单例。
+ * 配置 + 模型解析 Service。进程级单例。
  *
  *   ┌──────────────────────────────────────────────────────┐
  *   │  globalConfig（~/.pi/.../config.json）                │
@@ -67,7 +67,7 @@ export interface ModelSessionInit {
  *   │  resolveModel: agent → category → 5级fallback → 确认  │
  *   └──────────────────────────────────────────────────────┘
  */
-export class ModelConfigHub {
+export class ModelConfigService {
   private globalConfig: SubagentsGlobalConfig;
   private sessionState: SessionModelState;
   private readonly agentRegistry: AgentRegistry;
@@ -77,7 +77,7 @@ export class ModelConfigHub {
   private modelRegistry: ModelRegistryLike | null = null;
   private _sessionId: string | undefined;
 
-  constructor(init: ModelConfigHubInit) {
+  constructor(init: ModelConfigServiceInit) {
     this.agentRegistryDir = init.agentDir;
     this.discoveryLoader = init.discoveryLoader;
     this.globalConfig = loadGlobalConfig(init.agentDir);
@@ -108,7 +108,7 @@ export class ModelConfigHub {
    *   3. setSessionId
    *   4. restoreFromEntries（恢复 sessionState）
    */
-  initModel(init: ModelSessionInit): void {
+  initModel(init: ModelServiceSessionInit): void {
     // 1. 重载配置
     this.globalConfig = loadGlobalConfig(this.agentRegistryDir);
 
@@ -125,7 +125,7 @@ export class ModelConfigHub {
     Object.assign(this.sessionState, restoreSessionState(init.entries));
   }
 
-  // ── 模型解析（SubagentHub.execute 内部调）──────────────
+  // ── 模型解析（SubagentService.execute 内部调）──────────────
 
   /**
    * 解析 agent 的模型（纯解析）。
@@ -148,14 +148,14 @@ export class ModelConfigHub {
     return this.doResolve(agentName, agentConfig, category, override);
   }
 
-  /** 查询 agent 配置（SubagentHub 内部判定 defaultBackground + resolveIdentity 用）。 */
+  /** 查询 agent 配置（SubagentService 内部判定 defaultBackground + resolveIdentity 用）。 */
   getAgentConfig(name?: string): AgentConfig | undefined {
     return name ? this.agentRegistry.get(name) : undefined;
   }
 
   // ── 配置读写（command/wizard 调）────────────────────────
 
-  /** 全局配置深拷贝（调用方拿到副本，改不影响 Hub 内部）。 */
+  /** 全局配置深拷贝（调用方拿到副本，改不影响 Service 内部）。 */
   getGlobalConfig(): SubagentsGlobalConfig {
     return structuredClone(this.globalConfig);
   }
@@ -177,18 +177,18 @@ export class ModelConfigHub {
     return this.sessionState.yoloMode;
   }
 
-  /** 内部：用于 SubagentHub 经 session id 过滤 history（只读访问 sessionId）。 */
+  /** 内部：用于 SubagentService 经 session id 过滤 history（只读访问 sessionId）。 */
   get sessionId(): string | undefined {
     return this._sessionId;
   }
 
-  /** agent 配置目录（SubagentHub 构造 history/store/SessionRunnerContext 时读）。 */
+  /** agent 配置目录（SubagentService 构造 history/store/SessionRunnerContext 时读）。 */
   getAgentDir(): string {
     return this.agentRegistryDir;
   }
 
   /**
-   * discovery.json 声明的 skill 目录（供 SubagentHub 注入子 session）。
+   * discovery.json 声明的 skill 目录（供 SubagentService 注入子 session）。
    * 每次调用重新读 loader（mtime 缓存），支持宿主运行时修改 discovery.json 后下次生效。
    */
   getDiscoverySkillDirs(): string[] {
@@ -196,7 +196,7 @@ export class ModelConfigHub {
     return discovery ? [...discovery.skillDirs] : [];
   }
 
-  /** modelRegistry（SubagentHub 构造 factoryCtx 时读）。已注入保证非 null。 */
+  /** modelRegistry（SubagentService 构造 factoryCtx 时读）。已注入保证非 null。 */
   getModelRegistry(): ModelRegistryLike {
     if (this.modelRegistry === null) {
       throw new Error("modelRegistry not injected (initModel not called?)");
@@ -238,22 +238,22 @@ export class ModelConfigHub {
 
 // 用 globalThis[Symbol.for] 持有进程单例，避免 jiti 因路径字符串不同加载多份模块
 // 导致单例分裂（详见 docs/pi-extension-standards.md §7.5）。
-const MODEL_HUB_SLOT_KEY = Symbol.for("@zhushanwen/pi-subagents.model-hub");
+const MODEL_SERVICE_SLOT_KEY = Symbol.for("@zhushanwen/pi-subagents.model-service");
 
-type ModelHubSlot = { current: ModelConfigHub | null };
+type ModelServiceSlot = { current: ModelConfigService | null };
 
-function getModelHubSlot(): ModelHubSlot {
+function getModelServiceSlot(): ModelServiceSlot {
   const record = globalThis as unknown as Record<symbol, unknown>;
-  if (!record[MODEL_HUB_SLOT_KEY]) record[MODEL_HUB_SLOT_KEY] = { current: null };
-  return record[MODEL_HUB_SLOT_KEY] as ModelHubSlot;
+  if (!record[MODEL_SERVICE_SLOT_KEY]) record[MODEL_SERVICE_SLOT_KEY] = { current: null };
+  return record[MODEL_SERVICE_SLOT_KEY] as ModelServiceSlot;
 }
 
 /** 获取进程单例。session_start 前为 null。 */
-export function getModelConfigHub(): ModelConfigHub | null {
-  return getModelHubSlot().current;
+export function getModelConfigService(): ModelConfigService | null {
+  return getModelServiceSlot().current;
 }
 
 /** 设置进程单例（session_start 首次创建时）。 */
-export function setModelConfigHub(hub: ModelConfigHub): void {
-  getModelHubSlot().current = hub;
+export function setModelConfigService(service: ModelConfigService): void {
+  getModelServiceSlot().current = service;
 }

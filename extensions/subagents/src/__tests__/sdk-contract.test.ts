@@ -42,7 +42,7 @@ vi.mock("@sinclair/typebox", () => ({
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import { registerSubagentsCommand } from "../commands/subagents.ts";
-import { BgNotifier } from "../runtime/notifier.ts";
+import { BgNotifier } from "../runtime/execution/notifier.ts";
 import { registerSubagentTool } from "../tools/subagent-tool.ts";
 
 // ============================================================

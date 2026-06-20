@@ -14,7 +14,8 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
-import { getHub } from "../runtime/subagent-hub.ts";
+import { getSubagentService } from "../runtime/subagent-service.ts";
+import { extractAgentName } from "../tui/format.ts";
 import { type RenderContext,renderSubagentCall, renderSubagentResult } from "../tui/tool-render.ts";
 import type { ExecuteOptions, SubagentToolDetails } from "../types.ts";
 
@@ -89,14 +90,7 @@ export const SubagentParams = Type.Object({
 // renderCall 预解析 helper
 // ============================================================
 
-/** 从 unknown args 安全提取 agent 名。 */
-function extractAgentNameFromArgs(args: unknown): string {
-  if (typeof args === "object" && args !== null && "agent" in args) {
-    const v = (args as { agent: unknown }).agent;
-    if (typeof v === "string" && v.length > 0) return v;
-  }
-  return "worker";
-}
+// extractAgentName 已上移到 ../tui/format.ts 共享（tool-render / subagent-tool 复用）。
 
 /** 从 unknown args 安全提取 model/thinkingLevel override（传给 resolveModel）。 */
 function extractModelOverride(args: unknown): { model?: string; thinkingLevel?: string } | undefined {
@@ -133,16 +127,16 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 const subagentRenderCall: SubagentRenderCallCb = (args, theme, ctx) => {
   // 预解析 model（同步）：renderCall 在 execute 前调用，但 model 解析是同步的
   // （只读配置 + sessionState）。让标题行能显示 model/thinking，不必等 execute。
-  // hub 未就绪（session 未 init）或解析失败时降级——只显示 agent 名。
-  const agent = extractAgentNameFromArgs(args);
+  // service 未就绪（session 未 init）或解析失败时降级——只显示 agent 名。
+  const agent = extractAgentName(args);
   const override = extractModelOverride(args);
   let resolved: { model: string; thinkingLevel?: string } | undefined;
   try {
-    const hub = getHub();
-    const r = hub?.resolveModel(agent, override);
+    const service = getSubagentService();
+    const r = service?.resolveModel(agent, override);
     if (r) resolved = { model: `${r.model.provider}/${r.model.id}`, thinkingLevel: r.thinkingLevel };
   } catch {
-    // hub 未注册或 modelRegistry 未注入，降级
+    // service 未注册或 modelRegistry 未注入，降级
   }
   return renderSubagentCall(args, theme, ctx, resolved);
 };
@@ -196,12 +190,12 @@ const executeSubagent: SubagentExecuteCb = async (
   onUpdate,
   _ctx,
 ) => {
-  const hub = getHub();
-  if (!hub) throw new Error("subagents runtime not initialized");
+  const service = getSubagentService();
+  if (!service) throw new Error("subagents runtime not initialized");
 
   // ── poll 路径 ──
   if (params.backgroundId) {
-    const result = hub.query(params.backgroundId);
+    const result = service.query(params.backgroundId);
     if (!result) throw new Error(`No subagent record with id "${params.backgroundId}"`);
     // 按 status 分支：done→result；failed/cancelled→暴露 error（不掩盖失败，M5 修复）
     const text = result.status === "running"
@@ -216,9 +210,9 @@ const executeSubagent: SubagentExecuteCb = async (
   // ── task 必填 ──
   if (!params.task) throw new Error("task is required");
 
-  // ── 调 hub.execute（mode 判定 + agent 校验 + 执行全在 hub 内部）──
+  // ── 调 service.execute（mode 判定 + agent 校验 + 执行全在 service 内部）──
   // D-1：取消首次确认拦截——不再注入 onConfirmCategory。
-  const handle = await hub.execute({
+  const handle = await service.execute({
     task: params.task,
     agent: params.agent,
     wait: params.wait,

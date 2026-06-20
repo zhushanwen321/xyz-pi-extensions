@@ -9,16 +9,16 @@ import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { registerSubagentsCommand } from "./commands/subagents.ts";
 import { DiscoveryConfigLoader } from "./runtime/discovery-config.ts";
 import {
-  getModelConfigHub,
-  ModelConfigHub,
-  setModelConfigHub,
-} from "./runtime/model-config-hub.ts";
+  getModelConfigService,
+  ModelConfigService,
+  setModelConfigService,
+} from "./runtime/model-config-service.ts";
 import { maybeCleanupExpiredSessionFiles } from "./runtime/session-file-gc.ts";
 import {
-  getHub,
-  setHub,
-  SubagentHub,
-} from "./runtime/subagent-hub.ts";
+  getSubagentService,
+  setSubagentService,
+  SubagentService,
+} from "./runtime/subagent-service.ts";
 import { registerSubagentTool } from "./tools/subagent-tool.ts";
 import { renderBgNotifyMessage } from "./tui/bg-notify-render.ts";
 import type { ThemeLike } from "./tui/format.ts";
@@ -34,10 +34,10 @@ import { SubagentsProgressWidget } from "./tui/progress-widget.ts";
 //   ║    pi.registerMessageRenderer("subagent-bg-notify", renderBgNotify)║
 //   ║                                                                    ║
 //   ║  session_start(event, ctx):                                        ║
-//   ║    1. modelHub = getModelConfigHub() ?? new ModelConfigHub(...)    ║
-//   ║    2. hub = getHub() ?? new SubagentHub({cwd, modelHub})           ║
-//   ║    3. modelHub.initModel({modelRegistry, sessionId, entries})     ║
-//   ║    4. hub.initSession({pi, sessionId})                            ║
+//   ║    1. modelService = getModelConfigService() ?? new ModelConfigService(...)║
+//   ║    2. service = getSubagentService() ?? new SubagentService({cwd, modelService})║
+//   ║    3. modelService.initModel({modelRegistry, sessionId, entries}) ║
+//   ║    4. service.initSession({pi, sessionId})                        ║
 //   ║    3. ctx.hasUI → ctx.ui.setWidget("subagents-progress", factory,  ║
 //   ║                                          { placement:"aboveEditor"})║
 //   ║    4. maybeCleanupExpiredSessionFiles(homeDir, cwd)                ║
@@ -69,35 +69,35 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     // 与 Pi 主进程目录约定完全一致——宿主可经环境变量整体重定向配置/agent/skill 目录。
     const agentDir = getAgentDir();
 
-    // 双 Hub 装配：ModelConfigHub（配置/模型域）+ SubagentHub（执行/记录/通知域）
-    const existingHub = getHub();
-    const existingModelHub = getModelConfigHub();
-    const modelHub = existingModelHub ?? new ModelConfigHub({ agentDir, discoveryLoader });
-    const hub = existingHub ?? new SubagentHub({ cwd, modelHub });
+    // 双 Service 装配：ModelConfigService（配置/模型域）+ SubagentService（执行/记录/通知域）
+    const existingService = getSubagentService();
+    const existingModelService = getModelConfigService();
+    const modelService = existingModelService ?? new ModelConfigService({ agentDir, discoveryLoader });
+    const service = existingService ?? new SubagentService({ cwd, modelService });
 
     // 分别 init（两个域的生命周期独立）
-    modelHub.initModel({
+    modelService.initModel({
       modelRegistry: ctx.modelRegistry,
       sessionId: ctx.sessionManager.getSessionId(),
       entries: ctx.sessionManager.getEntries() ?? [],
     });
-    hub.initSession({
+    service.initSession({
       pi,
       sessionId: ctx.sessionManager.getSessionId(),
     });
 
-    // 先注册 Hub（让 execute 可用），再做 best-effort 清理。
-    // 顺序很重要：清理若 throw 不能阻塞 hub 注册，否则 getHub() 永远返回 undefined。
-    if (!existingHub) {
-      setModelConfigHub(modelHub);
-      setHub(hub);
+    // 先注册 Service（让 execute 可用），再做 best-effort 清理。
+    // 顺序很重要：清理若 throw 不能阻塞 service 注册，否则 getSubagentService() 永远返回 undefined。
+    if (!existingService) {
+      setModelConfigService(modelService);
+      setSubagentService(service);
     }
 
     if (ctx.hasUI) {
       ctx.ui.setWidget(
         "subagents-progress",
         (tui: { requestRender(): void }, theme: ThemeLike) =>
-          new SubagentsProgressWidget(hub, theme, tui),
+          new SubagentsProgressWidget(service, theme, tui),
         { placement: "aboveEditor" },
       );
     }
@@ -107,11 +107,11 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     try {
       maybeCleanupExpiredSessionFiles(agentDir, cwd);
     } catch {
-      // best-effort 清理失败，忽略——hub 已注册，session 可用
+      // best-effort 清理失败，忽略——service 已注册，session 可用
     }
   });
 
   pi.on("session_shutdown", (_event: SessionShutdownEvent) => {
-    getHub()?.dispose();
+    getSubagentService()?.dispose();
   });
 }

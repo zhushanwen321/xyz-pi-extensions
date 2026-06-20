@@ -1,4 +1,4 @@
-// src/runtime/notifier.ts
+// src/runtime/execution/notifier.ts
 //
 // Background 完成回注主对话。sync 不用（调用方还在 await，结果直接返回）。
 //

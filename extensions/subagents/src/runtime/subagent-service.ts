@@ -1,13 +1,13 @@
-// src/runtime/subagent-hub.ts
+// src/runtime/subagent-service.ts
 //
-// 执行编排 + 记录 + 通知领域 Hub。"跑一次子代理 + 管理执行状态"。
+// 执行编排 + 记录 + 通知领域 Service。"跑一次子代理 + 管理执行状态"。
 //
-// 与 ModelConfigHub（配置/模型解析域）正交——本 Hub 持有其引用但不暴露给外部。
-// executor 逻辑已合并进本文件——它是 SubagentHub.execute 的编排逻辑，
+// 与 ModelConfigService（配置/模型解析域）正交——本 Service 持有其引用但不暴露给外部。
+// executor 逻辑已合并进本文件——它是 SubagentService.execute 的编排逻辑，
 // 没有独立状态/生命周期，不需要独立文件。合并后行为方法自然 private。
 //
 // 上游：subagent-tool（execute/query/cancel）、TUI（onChange/listRunning/collectRecords）。
-// session_start 时经 initSession 注入 pi；modelRegistry/entries 归 ModelConfigHub.initModel。
+// session_start 时经 initSession 注入 pi；modelRegistry/entries 归 ModelConfigService.initModel。
 
 import { type ConcurrencyPool,DefaultConcurrencyPool } from "../core/concurrency-pool.ts";
 import {
@@ -34,11 +34,11 @@ import type {
   SubagentRecord,
   SubagentToolDetails,
 } from "../types.ts";
-import { HistoryStore } from "./history-store.ts";
-import type { ModelConfigHub } from "./model-config-hub.ts";
-import type { BgNotifyRecord, NotifierHost } from "./notifier.ts";
-import { BgNotifier } from "./notifier.ts";
-import { RecordStore } from "./record-store.ts";
+import { HistoryStore } from "./execution/history-store.ts";
+import type { BgNotifyRecord, NotifierHost } from "./execution/notifier.ts";
+import { BgNotifier } from "./execution/notifier.ts";
+import { RecordStore } from "./execution/record-store.ts";
+import type { ModelConfigService } from "./model-config-service.ts";
 
 /** Pi ExtensionAPI 的最小接口（duck-typed）。 */
 interface PiLike {
@@ -50,15 +50,15 @@ interface PiLike {
   ): void;
 }
 
-/** Hub 构造参数（进程级）。 */
-export interface SubagentHubInit {
+/** Service 构造参数（进程级）。 */
+export interface SubagentServiceInit {
   cwd: string;
-  /** 配置/模型域 Hub（execute 内部调其 resolveModel）。 */
-  modelHub: ModelConfigHub;
+  /** 配置/模型域 Service（execute 内部调其 resolveModel）。 */
+  modelService: ModelConfigService;
 }
 
 /** session_start 注入参数（session 级）。 */
-export interface HubSessionInit {
+export interface SubagentServiceSessionInit {
   pi: PiLike;
   sessionId: string;
 }
@@ -85,23 +85,23 @@ interface ResolvedIdentity {
 }
 
 /**
- * 执行编排 Hub。进程级单例。
+ * 执行编排 Service。进程级单例。
  *
  *   session_start:
- *     1. modelHub = getModelConfigHub() ?? new ModelConfigHub({homeDir, agentDir})
- *     2. hub = getHub() ?? new SubagentHub({cwd, modelHub})
- *     3. modelHub.initModel({modelRegistry, sessionId, entries})
- *     4. hub.initSession({pi, sessionId})
+ *     1. modelService = getModelConfigService() ?? new ModelConfigService({homeDir, agentDir})
+ *     2. service = getSubagentService() ?? new SubagentService({cwd, modelService})
+ *     3. modelService.initModel({modelRegistry, sessionId, entries})
+ *     4. service.initSession({pi, sessionId})
  *
  *   session_shutdown:
- *     hub.dispose()
+ *     service.dispose()
  */
-export class SubagentHub {
+export class SubagentService {
   private readonly pool: ConcurrencyPool;
   private readonly store: RecordStore;
   private readonly history: HistoryStore;
   private readonly notifier: BgNotifier;
-  private readonly modelHub: ModelConfigHub;
+  private readonly modelService: ModelConfigService;
   private readonly cwd: string;
 
   private pi: PiLike | null = null;
@@ -109,19 +109,19 @@ export class SubagentHub {
   private _disposed = false;
   private _seq = 0;
 
-  constructor(init: SubagentHubInit) {
+  constructor(init: SubagentServiceInit) {
     this.cwd = init.cwd;
-    this.modelHub = init.modelHub;
-    this.pool = new DefaultConcurrencyPool(this.modelHub.getGlobalConfig().maxConcurrent);
-    this.history = new HistoryStore(this.modelHub.getAgentDir(), init.cwd);
+    this.modelService = init.modelService;
+    this.pool = new DefaultConcurrencyPool(this.modelService.getGlobalConfig().maxConcurrent);
+    this.history = new HistoryStore(this.modelService.getAgentDir(), init.cwd);
     this.store = new RecordStore(this.history);
     this.notifier = new BgNotifier(this.piAdapter());
   }
 
   // ── 生命周期（index.ts 调）──────────────────────────────
 
-  /** session_start 注入 pi + revive（modelRegistry/entries 归 ModelConfigHub.initModel）。 */
-  initSession(init: HubSessionInit): void {
+  /** session_start 注入 pi + revive（modelRegistry/entries 归 ModelConfigService.initModel）。 */
+  initSession(init: SubagentServiceSessionInit): void {
     this.pi = init.pi;
     // revive（dispose 的逆操作：/resume /fork /new 后复活）
     this._disposed = false;
@@ -142,7 +142,7 @@ export class SubagentHub {
 
   /**
    * 预解析 model（renderCall 标题行用，同步）。
-   * 代理 modelHub.resolveModel——renderCall 在 execute 前调用，但 model 解析是同步的，
+   * 代理 modelService.resolveModel——renderCall 在 execute 前调用，但 model 解析是同步的，
    * 让标题行能提前显示 model/thinking，不必等 execute。
    * hub 未就绪时抛（调用方 catch 降级）。
    */
@@ -150,14 +150,14 @@ export class SubagentHub {
     agent: string,
     override?: { model?: string; thinkingLevel?: string },
   ): ResolvedModel {
-    return this.modelHub.resolveModel(agent, override);
+    return this.modelService.resolveModel(agent, override);
   }
 
   /**
    * 统一执行入口。sync/background 共用，mode 由 opts.wait + agentConfig.defaultBackground 判定。
    * 内部完成：mode 判定 → 确认（经回调）→ 模型解析 → 执行 → 收尾。
    *
-   * mode 判定规则（内化在 Hub，不暴露给 tool 层）：
+   * mode 判定规则（内化在 Service，不暴露给 tool 层）：
    *   wait === false → background（用户显式要求异步）
    *   wait === true → sync（用户显式要求同步）
    *   wait === undefined + agentConfig.defaultBackground === true → background
@@ -166,7 +166,7 @@ export class SubagentHub {
   async execute(opts: ExecuteOptions): Promise<ExecutionHandle> {
     this.assertReady();
 
-    // mode 判定（业务规则归 Hub，tool 层只传 wait 意图）
+    // mode 判定（业务规则归 Service，tool 层只传 wait 意图）
     const mode = this.resolveMode(opts);
     const ctx = await this.buildSessionRunnerContext();
 
@@ -226,7 +226,7 @@ export class SubagentHub {
 
   /** 合并四源 record（/subagents list 消费）。 */
   collectRecords(limit: number): SubagentRecord[] {
-    return this.store.collectRecords(limit, this.modelHub.sessionId);
+    return this.store.collectRecords(limit, this.modelService.sessionId);
   }
 
   // ── 执行内部：mode 判定 + 身份解析 + record 创建 ──────────
@@ -236,7 +236,7 @@ export class SubagentHub {
     if (opts.wait === false) return "background";
     if (opts.wait === true) return "sync";
     // wait === undefined：看 agent 的 defaultBackground
-    const agentConfig = this.modelHub.getAgentConfig(opts.agent);
+    const agentConfig = this.modelService.getAgentConfig(opts.agent);
     if (agentConfig?.defaultBackground === true) return "background";
     return "sync";
   }
@@ -246,10 +246,10 @@ export class SubagentHub {
     // D-1：取消首次确认拦截——categoryConfirmed 默认 true，直接解析。
     // agent 名 + 配置
     const agent = opts.agent ?? "default";
-    const agentConfig = this.modelHub.getAgentConfig(agent);
+    const agentConfig = this.modelService.getAgentConfig(agent);
 
     // 模型解析（5 级 fallback）
-    const resolved = this.modelHub.resolveModel(agent, {
+    const resolved = this.modelService.resolveModel(agent, {
       model: opts.model,
       thinkingLevel: opts.thinkingLevel,
     });
@@ -433,7 +433,7 @@ export class SubagentHub {
 
   // ── 内部 ────────────────────────────────────────────────
 
-  /** 校验 Hub 就绪（pi 已注入 + 未 dispose）。 */
+  /** 校验 Service 就绪（pi 已注入 + 未 dispose）。 */
   private assertReady(): void {
     if (this.pi === null) {
       throw new Error("pi not injected (initSession not called?)");
@@ -451,13 +451,13 @@ export class SubagentHub {
     }
     return {
       cwd: this.cwd,
-      agentDir: this.modelHub.getAgentDir(),
+      agentDir: this.modelService.getAgentDir(),
       factoryCtx: {
-        modelRegistry: this.modelHub.getModelRegistry(),
-        resolveAgent: (name: string) => this.modelHub.getAgentConfig(name),
+        modelRegistry: this.modelService.getModelRegistry(),
+        resolveAgent: (name: string) => this.modelService.getAgentConfig(name),
         cwd: this.cwd,
-        agentDir: this.modelHub.getAgentDir(),
-        skillDirs: this.modelHub.getDiscoverySkillDirs(),
+        agentDir: this.modelService.getAgentDir(),
+        skillDirs: this.modelService.getDiscoverySkillDirs(),
       },
       sdk: this.sdk,
     };
@@ -521,25 +521,25 @@ export class SubagentHub {
 
 // 用 globalThis[Symbol.for] 持有进程单例，避免 jiti 因路径字符串不同加载多份模块
 // 导致单例分裂。场景：其它扩展 import "@zhushanwen/pi-subagents" 与本扩展被 Pi host
-// 直接加载，若 jiti 缓存 key 用路径字符串（非 realpath），两份 subagent-hub.ts 各持
-// 一个 _hub，setHub 写 A、getHub 读 B(null)。globalThis 跨所有模块实例共享，彻底消除。
+// 直接加载，若 jiti 缓存 key 用路径字符串（非 realpath），两份 subagent-service.ts 各持
+// 一个 _service，setSubagentService 写 A、getSubagentService 读 B(null)。globalThis 跨所有模块实例共享，彻底消除。
 // 详见 docs/pi-extension-standards.md §7.5。
-const HUB_SLOT_KEY = Symbol.for("@zhushanwen/pi-subagents.hub");
+const SERVICE_SLOT_KEY = Symbol.for("@zhushanwen/pi-subagents.service");
 
-type HubSlot = { current: SubagentHub | null };
+type ServiceSlot = { current: SubagentService | null };
 
-function getHubSlot(): HubSlot {
+function getServiceSlot(): ServiceSlot {
   const record = globalThis as unknown as Record<symbol, unknown>;
-  if (!record[HUB_SLOT_KEY]) record[HUB_SLOT_KEY] = { current: null };
-  return record[HUB_SLOT_KEY] as HubSlot;
+  if (!record[SERVICE_SLOT_KEY]) record[SERVICE_SLOT_KEY] = { current: null };
+  return record[SERVICE_SLOT_KEY] as ServiceSlot;
 }
 
 /** 获取进程单例。session_start 前为 null。 */
-export function getHub(): SubagentHub | null {
-  return getHubSlot().current;
+export function getSubagentService(): SubagentService | null {
+  return getServiceSlot().current;
 }
 
 /** 设置进程单例（session_start 首次创建时）。 */
-export function setHub(hub: SubagentHub): void {
-  getHubSlot().current = hub;
+export function setSubagentService(service: SubagentService): void {
+  getServiceSlot().current = service;
 }

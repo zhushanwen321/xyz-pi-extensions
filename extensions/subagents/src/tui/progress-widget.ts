@@ -22,7 +22,7 @@
 
 import type { Component } from "@earendil-works/pi-tui";
 
-import type { SubagentHub } from "../runtime/subagent-hub.ts";
+import type { SubagentService } from "../runtime/subagent-service.ts";
 import type { SubagentRecord } from "../types.ts";
 import { createThrottle } from "../utils/throttle.ts";
 import { statusGlyph, type ThemeLike, truncLine } from "./format.ts";
@@ -39,13 +39,13 @@ const WIDGET_RENDER_INTERVAL_MS = 250;
 
 /**
  * 进度 widget。factory 只在 setWidget 时执行一次，
- * 返回的持久组件订阅 hub.onChange 驱动重渲（节流 250ms）。
+ * 返回的持久组件订阅 service.onChange 驱动重渲（节流 250ms）。
  *
- *   constructor(hub, theme, tui):
- *     hub.onChange(() => throttledRender())  ◄── 节流后订阅 store 变化
+ *   constructor(service, theme, tui):
+ *     service.onChange(() => throttledRender())  ◄── 节流后订阅 store 变化
  *
  *   render(width):
- *     records = hub.collectRecords().filter(running + background)
+ *     records = service.collectRecords().filter(running + background)
  *     空时 → return [占位提示]（固定 1 行，不缩到 0）
  *     非空 → 每行一个 task（全静态，不随帧变化）：
  *       状态点 · agent · model简写
@@ -54,21 +54,21 @@ const WIDGET_RENDER_INTERVAL_MS = 250;
  *     unsubscribe + flush（保证最终态渲染）
  */
 export class SubagentsProgressWidget implements Component {
-  private hub: SubagentHub;
+  private service: SubagentService;
   private theme: ThemeLike;
   private unsubscribe?: () => void;
   /** 节流后的 requestRender（leading+trailing，dispose 时 flush 保证最终态）。 */
   private throttledRender: ReturnType<typeof createThrottle>;
 
-  constructor(hub: SubagentHub, theme: ThemeLike, tui: { requestRender(): void }) {
-    this.hub = hub;
+  constructor(service: SubagentService, theme: ThemeLike, tui: { requestRender(): void }) {
+    this.service = service;
     this.theme = theme;
     // throttle：把高频 onChange 压到 WIDGET_RENDER_INTERVAL_MS 刷新率。
-    // background streaming 期间 hub.onChange 每 token 触发，直连 requestRender 会让
+    // background streaming 期间 service.onChange 每 token 触发，直连 requestRender 会让
     // Pi 差分引擎行号漂移 → 拖影（dev guide §ba1c80327 P1b / §8160a5d13）。
     this.throttledRender = createThrottle(() => tui.requestRender(), WIDGET_RENDER_INTERVAL_MS);
     // 订阅 store 变化 → 节流后触发 Pi 重渲（widget render 重新读 records）
-    this.unsubscribe = hub.onChange(() => this.throttledRender());
+    this.unsubscribe = service.onChange(() => this.throttledRender());
   }
 
   /** widget 销毁时调用（Pi setExtensionWidget 路径 + clearExtensionWidgets）。
@@ -80,7 +80,7 @@ export class SubagentsProgressWidget implements Component {
   }
 
   invalidate(): void {
-    // no-op：render 每次从 hub 实时读，无缓存。
+    // no-op：render 每次从 service 实时读，无缓存。
   }
 
   render(width: number): string[] {
@@ -118,7 +118,7 @@ export class SubagentsProgressWidget implements Component {
 
   /** 收集 running + background 的 records（实时快照）。 */
   private collectRunningBackground(): SubagentRecord[] {
-    return this.hub.collectRecords(WIDGET_MAX_ROWS + WIDGET_COLLECT_MARGIN).filter(
+    return this.service.collectRecords(WIDGET_MAX_ROWS + WIDGET_COLLECT_MARGIN).filter(
       (r) => r.status === "running" && r.mode === "background",
     );
   }

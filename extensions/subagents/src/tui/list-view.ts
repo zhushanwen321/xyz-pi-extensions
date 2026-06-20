@@ -25,7 +25,7 @@
 //   1. G-017 防叠加：模块级 activeView 单例，进入前 close()，factory 内 setActiveView
 //   2. 导航只用方向键 matchesKey("up"|"down")，禁 j/k（避 filter 冲突）
 //   3. overlay 退出 wrappedDone：幂等→标记→unsubscribe→clearAnimTimer→clearActiveView→done
-//   4. sync record 不调 hub.cancel（会污染状态），UI 层 syncCancelHint 提示
+//   4. sync record 不调 service.cancel（会污染状态），UI 层 syncCancelHint 提示
 //   5. 不调 theme.bg（背景由 Pi overlay 容器施加），只 fg/bold
 //   6. 所有行经 truncLine（ANSI 安全）
 //   7. 边框不调 renderShell:"self"（守 default-shell / 无残影契约）
@@ -37,9 +37,10 @@ import type { Component } from "@earendil-works/pi-tui";
 import { matchesKey } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import type { SubagentHub } from "../runtime/subagent-hub.ts";
+import type { SubagentService } from "../runtime/subagent-service.ts";
 import type { SubagentRecord } from "../types.ts";
 import {
+  firstLine,
   formatElapsedSeconds,
   formatEventLine,
   formatTokens,
@@ -151,7 +152,7 @@ let activeView: { close: () => void } | null = null;
  *   ╔══════════════════════════════════════════════════════════════════╗
  *   ║  1. G-017 防叠加：activeView?.close()                              ║
  *   ║  2. ctx.ui.custom((tui, theme, kb, done) => {                      ║
- *   ║       unsubscribe = hub.onChange(() => tui.requestRender())        ║
+ *   ║       unsubscribe = service.onChange(() => tui.requestRender())  ║
  *   ║       activeView = { close: wrappedDone }                          ║
  *   ║       return new SubagentsListComponent(...)                       ║
  *   ║     }, { overlay:true, overlayOptions:{margin:0, width:"100%"}})   ║
@@ -160,7 +161,7 @@ let activeView: { close: () => void } | null = null;
  *   ╚══════════════════════════════════════════════════════════════════╝
  */
 export async function createSubagentsView(
-  hub: SubagentHub,
+  service: SubagentService,
   theme: ThemeLike,
   ctx: ExtensionContext,
   directId?: string,
@@ -175,7 +176,7 @@ export async function createSubagentsView(
 
   // directId 提示
   if (directId) {
-    const all = hub.collectRecords(LIST_LIMIT);
+    const all = service.collectRecords(LIST_LIMIT);
     if (!all.some((r) => r.id === directId)) {
       notify(`No record found for id "${directId}", showing all`, "warning");
     }
@@ -195,13 +196,13 @@ export async function createSubagentsView(
       };
 
       // 订阅 store 变化 → requestRender（store 驱动重渲）
-      const unsubscribe = hub.onChange(() => {
+      const unsubscribe = service.onChange(() => {
         if (!state.disposed) tuiLike.requestRender();
       });
 
       // directId 命中 → 进详情模式（右侧就地展开，底部对齐）
       if (directId) {
-        const records = hub.collectRecords(LIST_LIMIT);
+        const records = service.collectRecords(LIST_LIMIT);
         const idx = records.findIndex((r) => r.id === directId);
         if (idx >= 0) {
           state.selectedIdx = idx;
@@ -210,7 +211,7 @@ export async function createSubagentsView(
         }
       }
 
-      const component = new SubagentsListComponent(hub, theme, tuiLike, state, unsubscribe, notify);
+      const component = new SubagentsListComponent(service, theme, tuiLike, state, unsubscribe, notify);
 
       // 动画 timer：有 running record 时定期 invalidate + requestRender，
       // 让 spinner 丝滑换帧、elapsed 实时跳动（行数恒定，安全——对照
@@ -266,7 +267,7 @@ export async function createSubagentsView(
 //   ║                                                                    ║
 //   ║  阶段 2（detail 焦点，detailMode=true）：左侧锚定，滚右侧详情       ║
 //   ║    Esc 返回阶段 1 / ↑↓ PgUp/PgDn Home End 滚右侧 eventLog          ║
-//   ║    x 停止：background → hub.cancel(id)（真正 abort）               ║
+//   ║    x 停止：background → service.cancel(id)（真正 abort）         ║
 //   ║             sync → 仅 syncCancelHint（runtime 无法主动 abort sync） ║
 //   ╚══════════════════════════════════════════════════════════════════╝
  *
@@ -285,7 +286,7 @@ export function processKey(
   records: SubagentRecord[],
   state: ViewState,
   selected: SubagentRecord | null,
-  hub: SubagentHub | null,
+  service: SubagentService | null,
   detailCtx: DetailKeyContext | undefined,
   notify: NotifyFn | undefined,
 ): KeyResult {
@@ -327,7 +328,7 @@ export function processKey(
     }
     // x：停止当前 record
     if (data === "x" && selected) {
-      const changed = handleCancel(selected, hub, state, notify);
+      const changed = handleCancel(selected, service, state, notify);
       return { changed, exit: false };
     }
     return { changed: false, exit: false };
@@ -399,7 +400,7 @@ export function applyFilter(records: SubagentRecord[], filterText: string): Suba
 /**
  * 全屏带框左右分屏 list 组件。
  *
- * 不缓存行（records 每次 render 都从 hub.collectRecords 拉最新——保证 store 变化后刷新）。
+ * 不缓存行（records 每次 render 都从 service.collectRecords 拉最新——保证 store 变化后刷新）。
  * 缓存的是「上次 render 的 width×rows」（用于 invalidate 后强制重建）。
  */
 class SubagentsListComponent implements Component {
@@ -410,7 +411,7 @@ class SubagentsListComponent implements Component {
   private animTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(
-    private readonly hub: SubagentHub,
+    private readonly service: SubagentService,
     private readonly theme: ThemeLike,
     private readonly tui: TuiLike,
     private readonly state: ViewState,
@@ -429,7 +430,7 @@ class SubagentsListComponent implements Component {
 
   /** 是否有 running record（动画 timer 据此决定是否刷新）。 */
   hasRunning(): boolean {
-    return this.hub.collectRecords(LIST_LIMIT).some((r) => r.status === "running");
+    return this.service.collectRecords(LIST_LIMIT).some((r) => r.status === "running");
   }
 
   invalidate(): void {
@@ -450,7 +451,7 @@ class SubagentsListComponent implements Component {
   handleInput(data: string): void {
     if (this.state.disposed) return;
 
-    const records = applyFilter(this.hub.collectRecords(LIST_LIMIT), this.state.filterText);
+    const records = applyFilter(this.service.collectRecords(LIST_LIMIT), this.state.filterText);
     const selected = records[this.state.selectedIdx] ?? null;
     // 详情翻屏上下文：视口高 = 右侧 body 高（内框高 - SPLIT_FIXED_LINES），
     // contentLines = 详情内容总行数（含元数据/段头/eventLog/result/error，单一数据源）。
@@ -462,7 +463,7 @@ class SubagentsListComponent implements Component {
       contentLines: selected ? this.detailContentLength(selected) : 0,
     };
 
-    const result = processKey(data, records, this.state, selected, this.hub, detailCtx, this.notify);
+    const result = processKey(data, records, this.state, selected, this.service, detailCtx, this.notify);
 
     if (result.exit) {
       this.closeFn();
@@ -504,7 +505,7 @@ class SubagentsListComponent implements Component {
     const innerWidth = Math.max(MIN_INNER_WIDTH, width - PAD_COLS);
     const innerRows = Math.max(MIN_INNER_ROWS, rows - PAD_ROWS);
 
-    const allRecords = this.hub.collectRecords(LIST_LIMIT);
+    const allRecords = this.service.collectRecords(LIST_LIMIT);
     const records = applyFilter(allRecords, this.state.filterText);
 
     // 先在内框尺寸下生成框行
@@ -856,7 +857,7 @@ function detailScrollMax(detailCtx: DetailKeyContext | undefined): number {
 /** 处理取消按键（x）。background 真正 abort；sync 仅提示。返回是否变化。 */
 function handleCancel(
   record: SubagentRecord,
-  hub: SubagentHub | null,
+  service: SubagentService | null,
   state: ViewState,
   notify: NotifyFn | undefined,
 ): boolean {
@@ -865,11 +866,11 @@ function handleCancel(
     return false;
   }
   if (record.mode === "background") {
-    if (!hub) {
+    if (!service) {
       notify?.("Runtime not ready, cannot stop", "error");
       return false;
     }
-    const ok = hub.cancel(record.id);
+    const ok = service.cancel(record.id);
     notify?.(ok ? `Requested stop for ${record.id}` : `Stop failed (record may have ended)`, ok ? "info" : "warning");
     return true;
   }
@@ -879,7 +880,4 @@ function handleCancel(
   return true;
 }
 
-/** 取文本首个非空行。 */
-function firstLine(text: string): string {
-  return text.split("\n").find((l) => l.trim())?.trim() ?? "";
-}
+// firstLine 已上移到 ./format.ts 共享。

@@ -4,13 +4,13 @@
 // 用 Pi 内置的 ctx.ui.select / input / notify（都是 awaitable Promise）串成多级菜单。
 //
 // 数据闭环：
-//   modelHub.getGlobalConfig()（副本）→ mutate → modelHub.saveGlobalConfig（内存 + 落盘）
-//   YOLO 是 session 级（sessionState），用 modelHub.toggleYolo（不落盘 config.json）。
+//   modelService.getGlobalConfig()（副本）→ mutate → modelService.saveGlobalConfig（内存 + 落盘）
+//   YOLO 是 session 级（sessionState），用 modelService.toggleYolo（不落盘 config.json）。
 //
 // UI 接口（WizardUi）与 Pi ExtensionUIContext 的 select/input/notify 子集 duck-type 对齐（测试可 mock）。
 
 import { availableThinkingLevels, type ModelInfo, type ModelRegistryLike } from "../core/model-resolver.ts";
-import type { ModelConfigHub } from "../runtime/model-config-hub.ts";
+import type { ModelConfigService } from "../runtime/model-config-service.ts";
 import type { CategoryDefinition, SubagentsGlobalConfig } from "../types.ts";
 
 /** wizard 依赖的 UI 接口（与 ExtensionUIContext 的 select/input/notify 对齐）。 */
@@ -32,18 +32,18 @@ export interface WizardUi {
 //   ║    - 退出                                                        ║
 //   ║                                                                    ║
 //   ║  修改 globalConfig 的项 mutate 副本后调 saveGlobalConfig 持久化  ║
-//   ║  modelHub 未初始化或 registry 未注入 → notify + return          ║
+//   ║  modelService 未初始化或 registry 未注入 → notify + return          ║
 //   ╚══════════════════════════════════════════════════════════════╝
  */
 export async function runConfigWizard(
   ui: WizardUi,
   args: string[],
-  modelHub: ModelConfigHub,
+  modelService: ModelConfigService,
 ): Promise<void> {
   void args; // 预留：未来支持 /subagents config <category> 直跳
 
-  const config = modelHub.getGlobalConfig();
-  const registry = safeGetRegistry(modelHub);
+  const config = modelService.getGlobalConfig();
+  const registry = safeGetRegistry(modelService);
   if (!registry) {
     ui.notify("subagents 模型注册表未就绪（session 未初始化）", "error");
     return;
@@ -51,7 +51,7 @@ export async function runConfigWizard(
 
   // 主循环
   for (;;) {
-    const yoloState = modelHub.getSessionState().yoloMode ? "on" : "off";
+    const yoloState = modelService.getSessionState().yoloMode ? "on" : "off";
     const mainChoice = await ui.select("Subagents config", [
       `切换 YOLO 模式（当前: ${yoloState}）`,
       "修改 category 模型",
@@ -62,20 +62,20 @@ export async function runConfigWizard(
     if (mainChoice === undefined || mainChoice === "退出") return;
 
     if (mainChoice.startsWith("切换 YOLO")) {
-      const newVal = modelHub.toggleYolo();
+      const newVal = modelService.toggleYolo();
       ui.notify(`YOLO 模式: ${newVal ? "on" : "off"}`, "info");
       continue;
     }
     if (mainChoice.startsWith("修改 category")) {
-      await editCategoryModel(ui, config, registry, modelHub);
+      await editCategoryModel(ui, config, registry, modelService);
       continue;
     }
     if (mainChoice.startsWith("修改 maxConcurrent")) {
-      await editMaxConcurrent(ui, config, modelHub);
+      await editMaxConcurrent(ui, config, modelService);
       continue;
     }
     if (mainChoice.startsWith("修改 fallback")) {
-      await editFallbackModel(ui, config, registry, modelHub);
+      await editFallbackModel(ui, config, registry, modelService);
       continue;
     }
   }
@@ -90,7 +90,7 @@ async function editCategoryModel(
   ui: WizardUi,
   config: SubagentsGlobalConfig,
   registry: ModelRegistryLike,
-  modelHub: ModelConfigHub,
+  modelService: ModelConfigService,
 ): Promise<void> {
   const catNames = Object.keys(config.categories);
   if (catNames.length === 0) {
@@ -130,7 +130,7 @@ async function editCategoryModel(
   if (thinkingLevels.length === 0) {
     // 非 reasoning 或无 map 信息：写 undefined，跳过选择
     config.categories[catName] = { ...config.categories[catName]!, model: modelStr, thinkingLevel: undefined };
-    await saveAndNotify(ui, config, modelHub, `${catName} → ${modelStr} · thinking off`);
+    await saveAndNotify(ui, config, modelService, `${catName} → ${modelStr} · thinking off`);
     return;
   }
   const current = config.categories[catName]!.thinkingLevel ?? "off";
@@ -146,7 +146,7 @@ async function editCategoryModel(
     thinkingLevel: thinkingChoice,
   };
   config.categories[catName] = newDef;
-  await saveAndNotify(ui, config, modelHub, `${catName} → ${modelStr} · thinking ${thinkingChoice}`);
+  await saveAndNotify(ui, config, modelService, `${catName} → ${modelStr} · thinking ${thinkingChoice}`);
 }
 
 // ============================================================
@@ -157,7 +157,7 @@ async function editCategoryModel(
 async function editMaxConcurrent(
   ui: WizardUi,
   config: SubagentsGlobalConfig,
-  modelHub: ModelConfigHub,
+  modelService: ModelConfigService,
 ): Promise<void> {
   const input = await ui.input(`maxConcurrent（当前 ${config.maxConcurrent}，输入正整数）`);
   if (input === undefined) return;
@@ -167,7 +167,7 @@ async function editMaxConcurrent(
     return;
   }
   config.maxConcurrent = n;
-  await saveAndNotify(ui, config, modelHub, `maxConcurrent = ${n}`);
+  await saveAndNotify(ui, config, modelService, `maxConcurrent = ${n}`);
 }
 
 // ============================================================
@@ -179,7 +179,7 @@ async function editFallbackModel(
   ui: WizardUi,
   config: SubagentsGlobalConfig,
   registry: ModelRegistryLike,
-  modelHub: ModelConfigHub,
+  modelService: ModelConfigService,
 ): Promise<void> {
   const available = registry.getAvailable();
   if (available.length === 0) {
@@ -205,7 +205,7 @@ async function editFallbackModel(
   // 无可用级别（非 reasoning / 无 map）→ thinkingLevel = undefined
 
   config.fallback = { model: modelStr, thinkingLevel };
-  await saveAndNotify(ui, config, modelHub, `fallback → ${modelStr} · thinking ${thinkingLevel ?? "off"}`);
+  await saveAndNotify(ui, config, modelService, `fallback → ${modelStr} · thinking ${thinkingLevel ?? "off"}`);
 }
 
 // ============================================================
@@ -221,7 +221,7 @@ function modelLabel(m: ModelInfo): string {
  * 保存全局配置并通知用户。
  *
  * 做两件事（单一职责拆分会割裂调用方 try/catch，合并在此更内聚）：
- *   1. modelHub.saveGlobalConfig —— 更新 Hub 内存副本 + 原子写 config.json
+ *   1. modelService.saveGlobalConfig —— 更新 Service 内存副本 + 原子写 config.json
  *   2. ui.notify —— 向用户反馈结果（成功显示摘要，失败显示错误）
  *
  * 失败不抛（向导继续可用），由 notify error 兜底。
@@ -229,11 +229,11 @@ function modelLabel(m: ModelInfo): string {
 async function saveAndNotify(
   ui: WizardUi,
   config: SubagentsGlobalConfig,
-  modelHub: ModelConfigHub,
+  modelService: ModelConfigService,
   summary: string,
 ): Promise<void> {
   try {
-    await modelHub.saveGlobalConfig(config);
+    await modelService.saveGlobalConfig(config);
     ui.notify(`已保存：${summary}`, "info");
   } catch (err) {
     ui.notify(`保存失败：${String(err)}`, "error");
@@ -244,9 +244,9 @@ async function saveAndNotify(
  * 安全获取 modelRegistry（initModel 未调用时返回 undefined 而非 throw）。
  * wizard 用它做 guard，避免 hub 未就绪时抛错中断向导。
  */
-function safeGetRegistry(modelHub: ModelConfigHub): ModelRegistryLike | undefined {
+function safeGetRegistry(modelService: ModelConfigService): ModelRegistryLike | undefined {
   try {
-    return modelHub.getModelRegistry();
+    return modelService.getModelRegistry();
   } catch {
     return undefined;
   }

@@ -1,4 +1,4 @@
-// src/runtime/history-store.ts
+// src/runtime/execution/history-store.ts
 //
 // 跨 session 执行记录持久化。
 //   存储格式：history.jsonl，append-only，每行一个 PersistedAgentRecord。
@@ -9,7 +9,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import type { PersistedAgentRecord } from "../types.ts";
+import { encodeCwd } from "../../core/path-encoding.ts";
+import type { PersistedAgentRecord } from "../../types.ts";
 
 // ============================================================
 // 常量
@@ -27,20 +28,12 @@ const GC_CHECK_INTERVAL = 10;
 
 /**
  * 计算 history 文件路径（<agentDir>/subagents/<encoded-cwd>/history.jsonl）。
- * encoded-cwd 与 session-factory 的 encodeCwd 逻辑一致（复用 Pi SDK 编码约定）。
+ * encoded-cwd 与 session-factory 的 encodeCwd 逻辑一致（复用 Pi SDK 编码约定，
+ * 共享 core/path-encoding.ts 的唯一定义）。
  */
 export function getHistoryFilePath(agentDir: string, cwd: string): string {
   const encoded = encodeCwd(cwd);
   return path.join(agentDir, "subagents", encoded, "history.jsonl");
-}
-
-/**
- * cwd → 安全目录名。复用 Pi SDK getDefaultSessionDir 的编码逻辑：
- * 去开头单个分隔符，全量替换剩余分隔符/冒号为 `-`，首尾补 `--`。
- * 例：`/Users/x/proj` → `--Users-x-proj--`。
- */
-function encodeCwd(cwd: string): string {
-  return "--" + cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-") + "--";
 }
 
 // ============================================================

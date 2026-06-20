@@ -26,9 +26,9 @@
                             │
    ┌────────────────────────┴────────────────────────────────┐
    │                   Runtime 层（编排）                     │
-   │  ── 双 Hub（按领域划分）──                               │
-   │  ModelConfigHub（配置/模型域）                           │
-   │  SubagentHub（执行/记录/通知域）                         │
+   │  ── 双 Service（按领域划分）──                           │
+   │  ModelConfigService（配置/模型域）                       │
+   │  SubagentService（执行/记录/通知域）                     │
    │  ── 编排与基础设施 ──                                    │
    │  executor · record-store · notifier · history-store      │
    │  config · session-file-gc                                │
@@ -101,7 +101,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 | `session-factory.ts` | Pi session 组装（四步 → BuiltSession）：env block + resourceLoader + createAgentSession + bridge 订阅 | ✅ |
 | `output-collector.ts` | BuiltSession → AgentResult 收集（text/usage/toolCalls/parsedOutput 字段单源） | ✅ |
 
-#### 叶子原语（Primitives）— 5
+#### 叶子原语（Primitives）— 6
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
@@ -110,35 +110,39 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 | `agent-registry.ts` | agent `.md` 文件发现与解析（hot-reload） | ✅ |
 | `concurrency-pool.ts` | 并发控制 + 优先级排队（sync=0，bg=1000），maxConcurrent 下限 1 | ✅ |
 | `turn-limiter.ts` | soft/hard turn 限制器（steer + abort） | ✅ |
+| `path-encoding.ts` | cwd → 安全目录名编码（session-factory + history-store 共享，消除旧重复） | ✅ |
 
 ### Runtime 层（7）
 
-> 按**领域**拆为双 Hub：ModelConfigHub（配置/模型解析域）+ SubagentHub（执行/记录/通知域）。
-> 两个 Hub 平级——SubagentHub 持有 ModelConfigHub 引用（execute 内部调 resolveModel），
-> 但 command/wizard 直接用 ModelConfigHub（不经 SubagentHub，配置操作不碰执行）。
-> executor 逻辑已合并进 subagent-hub.ts（不独立文件——无独立状态/生命周期）。
+> 按**领域**拆为双 Service：ModelConfigService（配置/模型解析域）+ SubagentService（执行/记录/通知域）。
+> 两个 Service 平级——SubagentService 持有 ModelConfigService 引用（execute 内部调 resolveModel），
+> 但 command/wizard 直接用 ModelConfigService（不经 SubagentService，配置操作不碰执行）。
+> executor 逻辑已合并进 subagent-service.ts（不独立文件——无独立状态/生命周期）。
+> 主入口（两个 Service）+ discovery-config/session-file-gc 留在 `runtime/` 根；
+> 执行域组件下沉 `runtime/execution/`，配置域下沉 `runtime/config/`。
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
-| `model-config-hub.ts` | 配置/模型域 Hub：globalConfig + sessionState + agentRegistry + modelRegistry + resolveModel（含确认回调） | ✅ |
-| `subagent-hub.ts` | 执行/记录/通知域 Hub：execute 编排（含原 executor 逻辑）+ query/cancel + 组件持有（pool/store/history/notifier，全 private） | ✅ |
-| `record-store.ts` | Record 三 map 容器（live/completed/bg）+ 四源合并 | ✅ |
-| `notifier.ts` | background 完成回注主对话（合并窗口 + 去重 + dedup TTL sweep） | ✅ |
-| `history-store.ts` | 跨 session 执行记录持久化（jsonl + GC） | ✅ |
-| `config.ts` | 全局配置（单一真相源读 config.json）+ session 级状态（纯函数，被 ModelConfigHub 调用） | ✅ |
+| `model-config-service.ts` | 配置/模型域 Service：globalConfig + sessionState + agentRegistry + modelRegistry + resolveModel（含确认回调） | ✅ |
+| `subagent-service.ts` | 执行/记录/通知域 Service：execute 编排（含原 executor 逻辑）+ query/cancel + 组件持有（pool/store/history/notifier，全 private） | ✅ |
+| `execution/record-store.ts` | Record 三 map 容器（live/completed/bg）+ 四源合并 | ✅ |
+| `execution/notifier.ts` | background 完成回注主对话（合并窗口 + 去重 + dedup TTL sweep） | ✅ |
+| `execution/history-store.ts` | 跨 session 执行记录持久化（jsonl + GC） | ✅ |
+| `config/config.ts` | 全局配置（单一真相源读 config.json）+ session 级状态（纯函数，被 ModelConfigService 调用） | ✅ |
 | `session-file-gc.ts` | 过期 subagent session 文件清理 | ✅ |
 
-### TUI 层（8）
+> 另：`discovery-config.ts`（ADR-025 资源发现契约）留在 `runtime/` 根——被 index.ts（resources_discover）与 ModelConfigService 双消费，不归任一 Service 子目录。
+
+### TUI 层（7）
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
 | `tool-render.ts` | 对话流 tool block 渲染（renderCall + renderResult） | ✅ |
 | `list-view.ts` | `/subagents list` 全屏左右分屏 overlay | ✅ |
 | `progress-widget.ts` | aboveEditor 常驻进度 widget（静态内容，防 TUI ghosting） | ✅ |
-| `category-confirm.ts` | 首次 category 模型确认组件 | ✅ |
 | `config-wizard.ts` | `/subagents config` 交互向导 | ✅ |
 | `bg-notify-render.ts` | background 完成通知的对话流渲染 | ✅ |
-| `format.ts` | 纯格式化函数（tokens/duration） | ✅ |
+| `format.ts` | 纯格式化函数（tokens/duration/firstLine/extractAgentName 共享 helper） | ✅ |
 | `format-helpers.ts` | 配置摘要格式化（拆出避免循环依赖） | ✅ |
 
 ### 测试（7 文件，130 tests）
@@ -181,7 +185,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 记录骨架深化过程中讨论并落地的关键架构决策。每条包含"问题 → 推理 → 决策 → 代价"。
 
-### 5.1 为什么拆双 Hub（ModelConfigHub + SubagentHub）
+### 5.1 为什么拆双 Service（ModelConfigService + SubagentService）
 
 **问题**：runtime.ts（361 行）同时承担配置管理、模型解析、执行编排、状态容器、生命周期五种职责，是典型的"上帝类"。
 
@@ -193,76 +197,69 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 进一步验证：`/subagents config` wizard 接收 `globalConfig` 作为函数参数，修改后调 `saveGlobalConfig()`——它**根本不 import runtime.ts**，只碰 config 函数。这证明配置域和执行域已经是解耦的，runtime.ts 只是强行把它们塞进同一个类。
 
-**决策**：按领域拆为两个平级 Hub：
-- ModelConfigHub（配置/模型域）：globalConfig + sessionState + agentRegistry + modelRegistry + resolveModel
-- SubagentHub（执行/记录/通知域）：pool + store + history + notifier + execute/query/cancel
+**决策**：按领域拆为两个平级 Service：
+- ModelConfigService（配置/模型域）：globalConfig + sessionState + agentRegistry + modelRegistry + resolveModel
+- SubagentService（执行/记录/通知域）：pool + store + history + notifier + execute/query/cancel
 
-**代价**：index.ts 从一个 `rt.initSession(...)` 变成两个 init 调用（modelHub.initModel + hub.initSession）。但这两个调用的时序是确定的（先配置后执行），index.ts 作为装配层承担这个协调是合理的。
+**代价**：index.ts 从一个 `rt.initSession(...)` 变成两个 init 调用（modelService.initModel + service.initSession）。但这两个调用的时序是确定的（先配置后执行），index.ts 作为装配层承担这个协调是合理的。
 
-### 5.2 为什么 executor 合并进 SubagentHub（不独立文件）
+### 5.2 为什么 executor 合并进 SubagentService（不独立文件）
 
-**问题**：executor 原本是独立文件 `executor.ts`，访问 SubagentHub 的 pool/store/notifier 需要这些组件可跨文件访问。TS 的 `private` 只在类内有效——跨文件的模块级函数访问不到 private 成员。这逼出了 5 个 public 行为方法（acquireSlot/releaseSlot/registerRecord/finalizeRecord/notifyComplete），名义上是"契约抽象"，实际是实现约束倒逼的妥协。
+**问题**：executor 原本是独立文件 `executor.ts`，访问 SubagentService 的 pool/store/notifier 需要这些组件可跨文件访问。TS 的 `private` 只在类内有效——跨文件的模块级函数访问不到 private 成员。这逼出了 5 个 public 行为方法（acquireSlot/releaseSlot/registerRecord/finalizeRecord/notifyComplete），名义上是"契约抽象"，实际是实现约束倒逼的妥协。
 
-**推理**：executor 不是一个独立概念域——它是 `SubagentHub.execute()` 的编排逻辑，没有独立状态、没有独立生命周期、没有独立调用方（只有 SubagentHub.execute 调它）。独立文件带来的不是模块化，而是封装漏洞：为了让 executor 能操作组件，不得不把本该 private 的行为方法升为 public。
+**推理**：executor 不是一个独立概念域——它是 `SubagentService.execute()` 的编排逻辑，没有独立状态、没有独立生命周期、没有独立调用方（只有 SubagentService.execute 调它）。独立文件带来的不是模块化，而是封装漏洞：为了让 executor 能操作组件，不得不把本该 private 的行为方法升为 public。
 
-合并进 SubagentHub.ts 后，行为方法自然降为 private——TS 的 `private` 在同类内生效，executor 逻辑作为 SubagentHub 的 private 方法访问组件，无需任何妥协。
+合并进 SubagentService.ts 后，行为方法自然降为 private——TS 的 `private` 在同类内生效，executor 逻辑作为 SubagentService 的 private 方法访问组件，无需任何妥协。
 
-**决策**：executor 逻辑合并进 `subagent-hub.ts`，作为 SubagentHub 的 private 方法（resolveIdentity/createRecordForMode/runAndFinalize/kickOffBackground/cancelBackground/finalizeRecord/notifyComplete/onEventThrottled）。删除 `executor.ts` 文件。组件（pool/store/history/notifier）全 private，编排方法全 private，SubagentHub 对外只有业务方法。
+**决策**：executor 逻辑合并进 `subagent-service.ts`，作为 SubagentService 的 private 方法（resolveIdentity/createRecordForMode/runAndFinalize/kickOffBackground/cancelBackground/finalizeRecord/notifyComplete/onEventThrottled）。删除 `executor.ts` 文件。组件（pool/store/history/notifier）全 private，编排方法全 private，SubagentService 对外只有业务方法。
 
-**代价**：subagent-hub.ts 从 ~240 行增到 ~400 行。但 SubagentHub 本来就是这个文件的主角，400 行可接受——它现在完整表达了"执行编排"这个领域。
+**代价**：subagent-service.ts 从 ~240 行增到 ~400 行。但 SubagentService 本来就是这个文件的主角，400 行可接受——它现在完整表达了"执行编排"这个领域。
 
-### 5.3 为什么用 ensureConfirmed + ConfirmCancelledError
+### 5.3 为什么用 ensureConfirmed + ConfirmCancelledError（已废弃，D-1）
 
-**问题**：category 确认是 async（UI 交互），但 `resolveModel` 是 sync（纯 5 级 fallback）。async 函数内调 sync 函数没问题，但 sync 函数内**触发 async 确认**再继续——怎么表达？
+> **状态：已废弃（D-1 决策）**。首次 category 确认拦截已取消——`categoryConfirmed` 恒为 true，`ensureConfirmed`/`ConfirmCancelledError` 不再使用。本节保留作历史决策记录；用户改 category 模型走 `/subagents config`（写 globalConfig）。
 
-**三个方案对比**：
-- A. `resolveModel` 自己 await 确认回调 → 但它变成 async，调用链全部跟着 async
-- B. 返回 `{needsConfirm: true, input}` 信号 → 调用方要先判 `needsConfirm`，再 await 确认，再重新调 resolveModel → 两次调用，重复解析
-- C. 确认逻辑提到 execute 编排层 → resolveModel 保持纯 sync，execute 是 async 天然能 await
+**原问题**：category 确认是 async（UI 交互），但 `resolveModel` 是 sync（纯 5 级 fallback）。async 函数内调 sync 函数没问题，但 sync 函数内**触发 async 确认**再继续——怎么表达？
 
-**决策**：方案 C + 信号类。`ensureConfirmed(onConfirm)` 是 async（可 await），`resolveModel` 保持 sync（纯解析）。execute 内部：
-```
-await modelHub.ensureConfirmed(opts.onConfirmCategory)  // 首次确认
-const resolved = modelHub.resolveModel(agent, override)  // 纯解析
-```
+**原方案**（已移除）：方案 C + 信号类。`ensureConfirmed(onConfirm)` 是 async（可 await），`resolveModel` 保持 sync（纯解析）。
 
-**代价**：`ConfirmCancelledError` 用异常做控制流——但这是"用户意图中断"（非程序错误），在 TS 生态里用 Error class 表达是常见模式。catch 后不执行子代理，语义清晰。
+**为什么废弃**：首次确认增加交互摩擦且无实际收益——用户改 category 模型走 `/subagents config` wizard 即可，执行路径直接解析（5 级 fallback 兜底，解析失败抛错让用户感知）。
 
-### 5.4 双 Hub 依赖方向 + mode 判定归属
+### 5.4 双 Service 依赖方向 + mode 判定归属
 
 ```
-SubagentHub ──引用──→ ModelConfigHub（单向）
-                         ↑
-SubagentHub 内部调：      │
-  resolveMode()          │  → modelHub.getAgentConfig()（判 defaultBackground）
-  resolveIdentity()      │  → modelHub.ensureConfirmed() + resolveModel()
-  buildSessionRunnerContext() │ → modelHub.getModelRegistry()/getAgentDir()/getGlobalConfigHomeDir()
-  collectRecords()       │  → modelHub.sessionId（history 过滤）
+SubagentService ──引用──→ ModelConfigService（单向）
+                              ↑
+SubagentService 内部调：       │
+  resolveMode()               │  → modelService.getAgentConfig()（判 defaultBackground）
+  resolveIdentity()           │  → resolveModel()
+  buildSessionRunnerContext() │ → modelService.getModelRegistry()/getAgentDir()
+  collectRecords()            │  → modelService.sessionId（history 过滤）
 ```
 
-**铁律**：SubagentHub → ModelConfigHub 单向引用，**禁止反向**。ModelConfigHub 不知道 SubagentHub 的存在。tool/command 层不穿透 SubagentHub 调 ModelConfigHub——tool 只传 `wait` 意图，mode 判定（wait + defaultBackground → ExecutionMode）完全内化在 SubagentHub.resolveMode()。
+**铁律**：SubagentService → ModelConfigService 单向引用，**禁止反向**。ModelConfigService 不知道 SubagentService 的存在。tool/command 层不穿透 SubagentService 调 ModelConfigService——tool 只传 `wait` 意图，mode 判定（wait + defaultBackground → ExecutionMode）完全内化在 SubagentService.resolveMode()。
 
-**mode 判定归属**（从 tool 层移入 Hub）：tool 层不再预判 mode（不调 getAgentConfig/assertAgentExists），只传 `wait?: boolean`。SubagentHub.resolveMode 按 `wait > agentConfig.defaultBackground > sync` 判定。这是业务规则，归 Hub，不归 tool。
+**mode 判定归属**（从 tool 层移入 Service）：tool 层不再预判 mode（不调 getAgentConfig/assertAgentExists），只传 `wait?: boolean`。SubagentService.resolveMode 按 `wait > agentConfig.defaultBackground > sync` 判定。这是业务规则，归 Service，不归 tool。
 
-**初始化时序**：index.ts session_start 时先 `modelHub.initModel(...)` 再 `hub.initSession(...)`——因为 SubagentHub 构造时需要 `modelHub.getGlobalConfig().maxConcurrent`（初始化 pool）。如果反序，pool 拿不到 maxConcurrent。
+**初始化时序**：index.ts session_start 时先 `modelService.initModel(...)` 再 `service.initSession(...)`——因为 SubagentService 构造时需要 `modelService.getGlobalConfig().maxConcurrent`（初始化 pool）。如果反序，pool 拿不到 maxConcurrent。
 
 ### 5.5 深拷贝访问器的 trade-off
 
 **问题**：globalConfig / sessionState 是配置数据对象，wizard 需要读改。暴露 public 字段（哪怕 readonly）等于宣布外部可依赖其结构——改内部形状时所有调用方跟着改。
 
-**决策**：`getGlobalConfig()` / `getSessionState()` 返回 `structuredClone()` 深拷贝。调用方拿到的是**副本**，改不影响 Hub 内部。改完后调 `hub.saveGlobalConfig(config)` 写回。
+**决策**：`getGlobalConfig()` / `getSessionState()` 返回 `structuredClone()` 深拷贝。调用方拿到的是**副本**，改不影响 Service 内部。改完后调 `modelService.saveGlobalConfig(config)` 写回。
 
 **代价**：每次读配置多一次结构化克隆。但配置对象很小（几十个字段），且只在 wizard / command 调用时读——非热路径。性能影响可忽略。
 
 **替代方案**（未采用）：行为方法（`toggleYolo()` / `setCategoryModel()` 等）替代直接改字段——更安全但更啰嗦。wizard 的配置修改是开放集（用户可能改 categories/maxConcurrent/fallback 等任意字段），行为方法无法穷举。深拷贝 + saveGlobalConfig 是更灵活的方案。
 
-### 5.6 getGlobalConfigHomeDir / getAgentDir 是否该暴露
+### 5.6 getAgentDir 是否该暴露
 
-**问题**：SubagentHub 构造 SessionRunnerContext 需要 `homeDir` 和 `agentDir`，这两个值存在 ModelConfigHub 里。暴露这两个 getter 是否破坏封装？
+**问题**：SubagentService 构造 SessionRunnerContext 需要 `agentDir`，这个值存在 ModelConfigService 里。暴露这个 getter 是否破坏封装？
 
-**推理**：这两个值是**构造参数的只读透传**（init 时传入，永不改变），不是内部状态。暴露它们不比把它们存到 SubagentHub 自己的字段里更好或更差——但存在 ModelConfigHub 里避免了重复存储。如果 SubagentHub 也存一份 homeDir/agentDir，两个 Hub 就有**同一数据的两份拷贝**，改 init 参数时要同步两处——这是更差的设计。
+**推理**：这个值是**构造参数的只读透传**（init 时传入，永不改变），不是内部状态。暴露它不比把它存到 SubagentService 自己的字段里更好或更差——但存在 ModelConfigService 里避免了重复存储。如果 SubagentService 也存一份 agentDir，两个 Service 就有**同一数据的两份拷贝**，改 init 参数时要同步两处——这是更差的设计。
 
-**决策**：暴露只读 getter（`getGlobalConfigHomeDir()` / `getAgentDir()`）。它们是**数据归属**的表达——homeDir/agentDir 归配置域（agent 的 .md 在 agentDir 下扫描），执行域只是借用。
+**决策**：暴露只读 getter（`getAgentDir()`）。它是**数据归属**的表达——agentDir 归配置域（agent 的 .md 在 agentDir 下扫描），执行域只是借用。
 
 ## 相关文档
 
