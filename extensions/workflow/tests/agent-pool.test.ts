@@ -393,6 +393,63 @@ describe("AgentPool", () => {
     });
   });
 
+  // ── timeoutMs + abort listener cleanup ────────────────────
+  describe("timeoutMs + external signal abort", () => {
+    it("schedules and clears timeoutMs timer without leaking", async () => {
+      // 验证 timeoutMs 定时器在正常完成后被 clear（不泄漏），不依赖 abort 内部机制。
+      const pool = new AgentPool(1);
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+
+      vi.useFakeTimers();
+      try {
+        const resultPromise = pool.enqueue({ prompt: "fast", timeoutMs: 1000 });
+        completeSuccess(proc, "done fast");
+        const result = await resultPromise;
+        expect(result.success).toBe(true);
+        // 快进超过 timeoutMs，确认无未清理的定时器报出
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(result.output).toBe("done fast");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("removes external signal abort listener on normal completion (no leak)", async () => {
+      // [HISTORICAL] S2: 外部 signal 的 abort listener 在正常完成时不摘除会泄漏
+      // （signal 生命周期长于单次 run，持久的 listener 引用阻止 controller GC）。
+      const pool = new AgentPool(1);
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+
+      const controller = new AbortController();
+      const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
+
+      const resultPromise = pool.enqueue({ prompt: "ok" }, controller.signal);
+      completeSuccess(proc, "done");
+      await resultPromise;
+
+      // 正常完成路径必须摘除 listener
+      expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+    });
+
+    it("does not call removeEventListener when external signal already aborted", async () => {
+      // abort 路径由 { once: true } 自动移除，不走 removeEventListener。
+      // pre-aborted 走 enqueue 的 early-resolve（"Operation aborted before start"），
+      // 不进入 run()，不添加 listener。
+      const pool = new AgentPool(1);
+      const controller = new AbortController();
+      controller.abort();
+      const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
+
+      const result = await pool.enqueue({ prompt: "pre-aborted" }, controller.signal);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("aborted before start");
+      expect(removeSpy).not.toHaveBeenCalled();
+    });
+  });
+
   // ── Concurrency control ────────────────────────────────────
 
   describe("concurrency control", () => {

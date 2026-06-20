@@ -317,6 +317,13 @@ export function applyToolFilter(
   const allowed = allTools
     .map((t) => t.name)
     .filter((name) => allowlist.includes(name));
+  // 白名单全失配（agent 配置了 tools 但无一个在已注册工具中）→ 抛错而非静默剥夺全部工具。
+  // 静默 setActiveToolsByName([]) 会让 subagent 无工具可用、行为难诊断。
+  if (allowed.length === 0) {
+    throw new Error(
+      `Agent tool allowlist [${allowlist.join(", ")}] matched none of the ${allTools.length} registered tools. Check agent config or install the missing tool extension.`,
+    );
+  }
   // 仅当严格小于全集时才调（避免无谓调用）
   if (allowed.length < allTools.length) {
     session.setActiveToolsByName(allowed);

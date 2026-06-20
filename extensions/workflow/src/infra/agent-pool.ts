@@ -265,15 +265,12 @@ export class AgentPool {
       // honored. Without this, agent({timeoutMs:5000}) silently does
       // nothing — see review round 1 must-fix #2.
       const controller = new AbortController();
+      const onExternalAbort = () => controller.abort();
       if (signal) {
         if (signal.aborted) {
           controller.abort();
         } else {
-          signal.addEventListener(
-            "abort",
-            () => controller.abort(),
-            { once: true },
-          );
+          signal.addEventListener("abort", onExternalAbort, { once: true });
         }
       }
       const timeoutTimer =
@@ -305,6 +302,12 @@ export class AgentPool {
         return;
       } finally {
         if (timeoutTimer) clearTimeout(timeoutTimer);
+        // 正常完成时必须摘除外部 signal 的 abort listener，否则随 agent 调用数线性泄漏
+        // （signal 生命周期长于单次 run，持久的 listener 引用会阻止 controller GC）。
+        // abort 路径因 { once: true } 已自动移除，这里覆盖正常完成路径。
+        if (signal && !signal.aborted) {
+          signal.removeEventListener("abort", onExternalAbort);
+        }
       }
 
       const durationMs = Date.now() - startedAt;

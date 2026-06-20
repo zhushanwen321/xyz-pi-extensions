@@ -47,7 +47,7 @@ type SubagentExecuteCb = (
   signal: AbortSignal | undefined,
   onUpdate?: (partialResult: AgentToolResult<SubagentToolDetails>) => void,
   ctx?: ExtensionContext,
-) => Promise<void>;
+) => Promise<AgentToolResult<SubagentToolDetails>>;
 
 type SubagentRenderCallCb = (args: unknown, theme: Theme, ctx: RenderContext) => Component;
 
@@ -70,7 +70,7 @@ export const SubagentParams = Type.Object({
     description: 'Agent name (defines system prompt + tools). Defaults to "worker". Available agents: worker (general), researcher (read-only exploration), scout, planner, reviewer, oracle, context-builder. Custom agents can be defined in config.',
   })),
   wait: Type.Optional(Type.Boolean({
-    description: "Execution mode. true (default) = sync: blocks until the subagent finishes, returns its result directly. false = background: returns a backgroundId immediately while the subagent runs detached; poll its status later with backgroundId. Background tasks run concurrently without blocking the main conversation.",
+    description: "Execution mode. true (default) = sync: blocks until the subagent finishes, returns its result directly. false = background: returns a backgroundId immediately while the subagent runs detached; on completion a message is auto-injected that triggers a new turn so you can process the result — no need to sleep/poll. Use false for parallel fan-out (multiple wait:false calls in one message run concurrently in the pool, default maxConcurrent=4) or for long tasks you don't want to block on.",
   })),
   backgroundId: Type.Optional(Type.String({
     description: "Poll an existing background subagent by its id. The id is returned when you start a subagent with wait:false. Returns current status (running/done/failed) and result if finished. Do NOT pass this when starting a new task — it is for checking progress of a previously started background subagent only.",
@@ -111,7 +111,38 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: "Delegate a task to a specialized subagent. Two modes: (1) sync (wait:true, default) — blocks until done, returns result. (2) background (wait:false) — returns a backgroundId immediately, runs concurrently; poll with backgroundId to check status/result. Use background for long-running or parallel tasks that shouldn't block the conversation.",
+    description: `Delegate a task to a specialized subagent.
+
+CRITICAL — this tool is registered with executionMode "sequential": multiple \`subagent\` calls in the SAME message run one-after-another, NOT in parallel. The first must finish before the next starts. To get real concurrency, use background mode (wait:false) — background calls return immediately and the underlying tasks run concurrently in the pool (default maxConcurrent=4; extras queue).
+
+## Modes
+
+- sync (wait:true, default): blocks until the subagent finishes, returns its result. Use when the next step needs the result.
+- background (wait:false): returns a backgroundId immediately; the subagent runs detached and keeps running even if you stop. On completion a message is auto-injected into the conversation that triggers a new turn so you can process the result.
+
+## Calling patterns
+
+- single — one sync subagent for one task (the common case).
+- chain — dependent steps where B needs A's output: sync calls across turns (A's result informs B's prompt). Sequential by nature.
+- parallel / fan-out — N independent tasks running concurrently: send N \`subagent\` calls with wait:false in the SAME message. Each returns a backgroundId at once; tasks run concurrently. Then do other work, or just stop.
+- background — one long-running task you don't want to block on: wait:false, then move on.
+
+## After launching background — do NOT wait
+
+Completion auto-notifies you (a message is injected that wakes your next turn). So:
+- DO NOT sleep, busy-wait, or poll in a loop after launching.
+- DO useful non-overlapping work if you have any.
+- Otherwise STOP. Stopping is correct — the completion notification will wake you. It is not giving up.
+
+## Polling (backgroundId)
+
+Poll only for a concrete reason (e.g. user asks "is it done yet?"). Reflexive polling right after launch is an anti-pattern — the completion notification already covers it.
+
+## Anti-patterns
+
+- Multiple sync (wait:true) calls in one message expecting parallelism → they serialize; a slow first call delays the rest and long chains may get interrupted.
+- Launching background, then sleeping/polling instead of working or stopping.
+- Using background for a result you need right now → use sync.`,
     executionMode: "sequential",
     parameters: SubagentParams,
     renderCall: subagentRenderCall,
@@ -204,7 +235,7 @@ const executeSubagent: SubagentExecuteCb = async (
         ? (result.result ?? `Subagent ${result.id} finished.`)
         : `Subagent ${result.id} ${result.status}${result.error ? `: ${result.error}` : ""}.`;
     const content = [{ type: "text" as const, text }];
-    return { content, details: result } as unknown as void;
+    return { content, details: result };
   }
 
   // ── task 必填 ──
@@ -237,11 +268,11 @@ const executeSubagent: SubagentExecuteCb = async (
     // 让 tool block 能正常渲染 running 态（而非 "did not produce details"）。
     // 后台进度靠 progress widget（execute return 后 tool block 无法继续更新）。
     return { content: [{ type: "text", text: `Background subagent started: ${handle.backgroundId}` }],
-      details: handle.details } as unknown as void;
+      details: handle.details };
   }
 
   // sync: details 用 project 投影的 SubagentToolDetails（含 elapsedSeconds/currentActivity），
   //       而非 record snapshot（后者缺 TUI 渲染字段）。
   return { content: [{ type: "text", text: handle.record.result ?? "" }],
-    details: handle.details } as unknown as void;
+    details: handle.details };
 };

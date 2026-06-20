@@ -2,12 +2,11 @@
 //
 // 全局配置（~/.pi/agent/subagents/config.json）+ session 级状态（内存）。
 //
-// 默认配置的单一真相源是扩展自带的 config.json（与 src/ 同级）。代码不硬编码
-// category models——避免代码默认值与磁盘 config.json 分叉。
+// 开箱默认值内联在代码里（见 DEFAULT_CONFIG），不依赖任何包内文件。
+// 用户私有 category models 走 ~/.pi/agent/subagents/config.json（loadGlobalConfig）。
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import type {
   SessionModelState,
@@ -25,49 +24,27 @@ const JSON_INDENT = 2;
 const CONFIG_ENTRY_TYPE = "subagent-config-entry";
 
 /**
- * 扩展自带的默认配置（config.json，与 src/ 同级）。
- * 单一真相源：代码默认值与磁盘 config.json 永远一致。
- * 懒加载（首次访问时读一次），读失败回退到硬编码最小默认（保证永不崩溃）。
+ * 开箱默认配置（单一真相源，内联在代码里）。
+ *
+ * 历史教训 [HISTORICAL]：曾用包内 config.json（与 src/ 同级）作为默认值源，
+ * 但 config.json 被 .gitignore 排除且不应随 npm 包分发用户私有配置——导致
+ * npm pack 后 BUILTIN_CONFIG_PATH 读不到文件，catch 兜底用 fallback.model=""，
+ * 进而 resolveModelForAgent 第 5 级 lookupModel("") 必失败，pi install 后首次
+ * 执行 subagent tool 抛 "No available model"。修复：默认值内联在代码里，不依赖
+ * 任何包内文件。用户私有配置仍走 ~/.pi/agent/subagents/config.json（loadGlobalConfig）。
+ *
+ * fallback.model 选 Anthropic claude-sonnet-4-5 作为公开可用默认——Pi 默认环境通常
+ * 已配置 Anthropic 凭证。即便用户未配置，resolveModelForAgent 会 fall through 到
+ * tried 列表并抛清晰错误（列出可用 model），不会静默崩溃。
  */
-const BUILTIN_CONFIG_PATH = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-  "..",
-  "config.json",
-);
-
-let _builtinConfigCache: SubagentsGlobalConfig | undefined;
-
-function loadBuiltinConfig(): SubagentsGlobalConfig {
-  if (_builtinConfigCache) return _builtinConfigCache;
-  try {
-    const raw = fs.readFileSync(BUILTIN_CONFIG_PATH, "utf-8");
-    const parsed = JSON.parse(raw) as Partial<SubagentsGlobalConfig>;
-    _builtinConfigCache = {
-      version: parsed.version ?? 1,
-      yoloByDefault: parsed.yoloByDefault ?? false,
-      maxConcurrent: parsed.maxConcurrent ?? 4,
-      categories: (parsed.categories as SubagentsGlobalConfig["categories"]) ?? {},
-      agentCategoryOverrides: (parsed.agentCategoryOverrides as SubagentsGlobalConfig["agentCategoryOverrides"]) ?? {},
-      fallback: (parsed.fallback as SubagentsGlobalConfig["fallback"]) ?? { model: "", thinkingLevel: undefined },
-    };
-  } catch {
-    // config.json 读失败（打包遗漏 / 损坏）→ 最小硬编码默认，保证不崩
-    _builtinConfigCache = {
-      version: 1,
-      yoloByDefault: false,
-      maxConcurrent: 4,
-      categories: {},
-      agentCategoryOverrides: {},
-      fallback: { model: "", thinkingLevel: undefined },
-    };
-  }
-  return _builtinConfigCache;
-}
-
-/** 默认配置（读自扩展自带 config.json）。 */
-const DEFAULT_CONFIG: SubagentsGlobalConfig = loadBuiltinConfig();
+const DEFAULT_CONFIG: SubagentsGlobalConfig = {
+  version: 1,
+  yoloByDefault: false,
+  maxConcurrent: 4,
+  categories: {},
+  agentCategoryOverrides: {},
+  fallback: { model: "anthropic/claude-sonnet-4-5", thinkingLevel: undefined },
+};
 
 // ============================================================
 // 路径

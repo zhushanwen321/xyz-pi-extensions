@@ -49,7 +49,7 @@ export default function unifiedHooksExtension(pi: ExtensionAPI): void {
     const msg = `[unified-hooks] Loaded: ${enabled.join(", ") || "(none)"}${
       disabled.length ? ` | Failed: ${disabled.join(", ")}` : ""
     }`;
-    ctx.ui.notify(msg, disabled.length ? "warn" : "info");
+    ctx.ui?.notify(msg, disabled.length ? "warn" : "info");
     pi.appendEntry("unified-hooks:loaded", { enabled, disabled });
   });
 }

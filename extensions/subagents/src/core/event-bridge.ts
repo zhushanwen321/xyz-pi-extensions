@@ -139,7 +139,10 @@ export function createEventBridge(onEvent: (event: AgentEvent) => void): EventBr
       }
       case "message_end": {
         const msg = raw.message;
-        // usage 累积（cost 同源求和）
+        // usage 累积（cost 同源求和）。注意：usage 与 stopReason/error 不互斥——
+        // LLM provider 常在错误响应里也携带 usage（计费需如此）。必须先累积 usage，
+        // 再独立判断 error/aborted，否则携带 usage 的错误响应会跳过 lastError 设置，
+        // 导致 session-runner 把 errored session 误判为 success=true。[HISTORICAL]
         if (msg?.usage) {
           const u = msg.usage;
           usage = {
@@ -150,15 +153,13 @@ export function createEventBridge(onEvent: (event: AgentEvent) => void): EventBr
             cost: usage.cost + (u.cost?.total ?? 0),
           };
           onEvent({ type: "message_end", usage: u });
-          return;
         }
-        // error/aborted：lastError 记录，转发 error 事件
+        // error/aborted：lastError 记录，转发 error 事件（与上面的 usage 累积独立）
         const stopReason = msg?.stopReason;
         if (stopReason === "error" || stopReason === "aborted") {
           const errMsg = msg?.errorMessage ?? raw.reason ?? stopReason;
           lastError = errMsg;
           onEvent({ type: "error", message: errMsg });
-          return;
         }
         return;
       }

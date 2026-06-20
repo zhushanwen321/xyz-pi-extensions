@@ -139,4 +139,17 @@ describe("session_start handler", () => {
 			disabled: ["tool-error-handler", "network-timeout-guard", "test-timeout-guard", "subagent-list-injector"],
 		});
 	});
+
+	it("does not throw when ctx.ui is undefined (headless / RPC session)", () => {
+		// [HISTORICAL] headless 会话 ctx.ui 为 undefined，旧实现直接 ctx.ui.notify 会 NPE。
+		const pi = createMockPi();
+		const ctx = { ui: undefined } as unknown as HookContext;
+
+		unifiedHooksExtension(pi as unknown as ExtensionAPI);
+
+		const handler = getSessionStartHandler(pi);
+		expect(() => handler({}, ctx)).not.toThrow();
+		// appendEntry 仍应记录（无 UI 也不丢日志）
+		expect(pi.appendEntry).toHaveBeenCalledWith("unified-hooks:loaded", expect.any(Object));
+	});
 });

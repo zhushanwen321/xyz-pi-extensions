@@ -157,4 +157,25 @@ describe("setupToolErrorHandler", () => {
 			]),
 		);
 	});
+
+	it("falls back to console.warn when ctx.ui is undefined (headless session)", async () => {
+		// [HISTORICAL] headless / RPC 会话 ctx.ui 为 undefined，旧实现直接 ctx.ui.notify 会 NPE。
+		const pi = createMockPi();
+		const ctx = { ui: undefined } as unknown as HookContext;
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		setupToolErrorHandler(pi as unknown as ExtensionAPI);
+		const handler = pi.on.mock.calls[0]![1] as (event: unknown, ctx: HookContext) => Promise<void>;
+
+		await handler({ isError: true, toolName: "bash", toolCallId: "h1" }, ctx);
+
+		expect(warnSpy).toHaveBeenCalledTimes(1);
+		expect(warnSpy.mock.calls[0]![0]).toContain("bash error");
+		// appendEntry 仍持久化
+		expect(pi.appendEntry).toHaveBeenCalledWith("unified-hooks:tool-error", {
+			toolName: "bash",
+			toolCallId: "h1",
+		});
+		warnSpy.mockRestore();
+	});
 });

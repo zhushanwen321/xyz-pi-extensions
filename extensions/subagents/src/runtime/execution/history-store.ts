@@ -151,14 +151,12 @@ export class HistoryStore {
         byId.set(r.id, r);
         continue;
       }
-      // last-writer-wins，但 endedAt 相同时 cancelled 优先
-      const sameEndedAt =
-        (existing.endedAt ?? 0) === (r.endedAt ?? 0);
-      if (sameEndedAt && existing.status !== "cancelled" && r.status === "cancelled") {
-        byId.set(r.id, r);
-      } else {
-        byId.set(r.id, r); // 后写覆盖
+      // cancelled 优先保留（用户意图，即使被后写覆盖）——与 record-store.merge 一致
+      if (existing.status === "cancelled" && r.status !== "cancelled") {
+        continue;
       }
+      // 否则 last-writer-wins
+      byId.set(r.id, r);
     }
     // 排序：endedAt desc（running 用 startedAt 兜底）+ startedAt desc
     return [...byId.values()]

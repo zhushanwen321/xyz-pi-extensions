@@ -6,7 +6,7 @@
 // 上游：SubagentService.execute 内部调 resolveModel；command/wizard 直接用（不经 SubagentService）。
 // session_start 时经 initModel 注入 modelRegistry + 恢复 sessionState。
 
-import { AgentRegistry } from "../core/agent-registry.ts";
+import { AgentRegistry, createPackageBuiltinRegistry } from "../core/agent-registry.ts";
 import {
   type AgentConfig,
   inferCategory,
@@ -77,6 +77,9 @@ export class ModelConfigService {
   private modelRegistry: ModelRegistryLike | null = null;
   private _sessionId: string | undefined;
 
+  /** 包内 builtin agent（agents/*.md，优先级最低，被用户覆盖）。 */
+  private readonly builtinRegistry = createPackageBuiltinRegistry();
+
   constructor(init: ModelConfigServiceInit) {
     this.agentRegistryDir = init.agentDir;
     this.discoveryLoader = init.discoveryLoader;
@@ -85,6 +88,8 @@ export class ModelConfigService {
     // agentDirs：discovery 声明的目录（靠前覆盖靠后），空则回退默认 agentDir 单目录
     const agentDirs = this.resolveAgentDirs();
     this.agentRegistry = new AgentRegistry(agentDirs);
+    // 接通发现机制：扫描 agentDirs + 合并 builtin（此前从未调用，registry 永远为空）
+    this.agentRegistry.discoverAll(this.builtinRegistry);
   }
 
   /**
@@ -109,8 +114,9 @@ export class ModelConfigService {
    *   4. restoreFromEntries（恢复 sessionState）
    */
   initModel(init: ModelServiceSessionInit): void {
-    // 1. 重载配置
+    // 1. 重载配置 + 重扫 agent（hot-reload：用户可能新增/修改 agent .md）
     this.globalConfig = loadGlobalConfig(this.agentRegistryDir);
+    this.agentRegistry.discoverAll(this.builtinRegistry);
 
     // 2. modelRegistry（fail-fast）
     if (init.modelRegistry === null) {

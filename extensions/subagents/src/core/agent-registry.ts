@@ -4,6 +4,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { AgentConfig } from "./model-resolver.ts";
 
@@ -11,6 +12,44 @@ import type { AgentConfig } from "./model-resolver.ts";
 export interface BuiltinAgentRegistry {
   get(name: string): AgentConfig | undefined;
   list(): string[];
+}
+
+/**
+ * 包内自带 agents（与 src/ 同级的 agents/ 目录）。
+ *
+ * [HISTORICAL] 此前 discoverAll 从未被调用，agentRegistry 永远为空——包内
+ * agents/*.md（worker/reviewer/scout 等）pi install 后开箱不可用，所有 agent
+ * 调用都拿不到 agentConfig（无 systemPrompt）。修复：构造时扫描包内 agents/
+ * 作为 builtin（优先级最低，被用户 agentDir 同名文件覆盖）。
+ */
+export function createPackageBuiltinRegistry(): BuiltinAgentRegistry {
+  const agentsDir = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "agents",
+  );
+  const cache = new Map<string, AgentConfig>();
+  try {
+    const entries = fs.readdirSync(agentsDir);
+    for (const entry of entries) {
+      if (!entry.endsWith(".md") || entry.startsWith("_")) continue;
+      const filePath = path.join(agentsDir, entry);
+      try {
+        const raw = fs.readFileSync(filePath, "utf-8");
+        const config = parseAgentFrontmatter(filePath, raw);
+        if (config) cache.set(config.name, config);
+      } catch {
+        // 单个文件损坏不影响其他
+      }
+    }
+  } catch {
+    // agents/ 目录不存在（打包遗漏）→ 空 builtin，不崩
+  }
+  return {
+    get: (name) => cache.get(name),
+    list: () => [...cache.keys()],
+  };
 }
 
 /** mtime 缓存条目（跨 discoverAll 保留，靠 mtime 判失效）。 */

@@ -5,15 +5,14 @@
 "@zhushanwen/pi-taste-lint": minor
 ---
 
-新增 `@zhushanwen/pi-subagents` 包（首次发布）：进程内 subagent 执行运行时（agent 发现、模型解析、并发控制、background 任务）。
+新增 `@zhushanwen/pi-subagents` 包（首次发布）：进程内 subagent 执行运行时——agent 发现、5 级 fallback 模型解析、并发池（concurrency-pool）、background 任务、execution-record 状态机、turn-limiter、event-bridge（SDK 事件翻译）。提供 `subagent` tool + `/subagents` command。注意：`@zhushanwen/pi-workflow` 当前**不依赖**此包（workflow 仍用 spawn 子进程架构），两者独立——subagents 是独立可用的 subagent 执行运行时。
 
-### `@zhushanwen/pi-workflow` 2.0（BREAKING）
+### `@zhushanwen/pi-workflow` 2.0（BREAKING — 局部行为变更，非架构级）
 
-- 改用 subagents 进程内执行，移除 spawn 子进程模型；新增 `@zhushanwen/pi-subagents` 硬依赖。
-- 移除 peerDependency `@zhushanwen/pi-model-switch`。
-- 删除 3 个此前随 `files:["src/"]` 发布的内部模块（`agent-discovery.ts` / `jsonl-parser.ts` / `pi-runner.ts`）；移除 `cleanupAllTempFiles` / `cleanupTempFile` 导出；`resolveAgentOpts` 签名变更。package.json 无 `exports` map，深路径导入将断链。
-- ⚠️ **行为变更（scene→model 解析迁移）**：`resolveModel` 不再经 `@zhushanwen/pi-model-switch`，改由 subagents 的 `resolveModelForScene()` 读取 `~/.pi/agent/subagents/config.json` 的 categories 解析。原 model-switch scene 配置升级后**静默失效**；未检测到 subagents 运行时时会输出一次性 dev 警告。迁移：`pi install @zhushanwen/pi-subagents`，将原 scene→model 配置迁至 subagents config。
-- **行为变更（完成通知）**：workflow 完成时，`sendCompletionNotification` 现以 `{ triggerTurn: true, deliverAs: "steer" }` 注入消息流，唤醒 parent agent 处理结果（默认开启，无 opt-in）。此前仅 `display:true` 只渲染不唤醒。
+major bump 因含 2 项真实 BREAKING（semver 要求）。workflow 仍为 spawn 子进程架构（`AgentPool` / `resolveAgentOpts` 不变），orchestrator.ts 做了内部重构（精简 ~200 行，行为等价，已由 orchestrator-stale 等测试覆盖）。真实 breaking 仅以下两项局部行为：
+
+- **BREAKING（scene→model 解析移除）**：`resolveModel` 不再经 `@zhushanwen/pi-model-switch` 的 `resolveModelForScene()` 解析 scene，改为直传调用方显式 `opts.model`。配套移除 peerDependency `@zhushanwen/pi-model-switch`。原依赖 model-switch scene 配置的用户升级后该解析静默失效——如需 scene→model 映射，请直接在 workflow 脚本的 `agent()` 调用中显式传 `model`，或在调用方自行解析。
+- **BREAKING（完成通知唤醒 parent）**：workflow 完成时，`sendCompletionNotification` 现以 `{ triggerTurn: true, deliverAs: "steer" }` 注入消息流，唤醒 parent agent 处理结果（默认开启）。此前仅 `display:true` 只渲染不唤醒。无需安装 subagents。
 
 ### `@zhushanwen/pi-unified-hooks`
 
