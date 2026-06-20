@@ -1,6 +1,7 @@
 ---
 "@zhushanwen/pi-subagents": minor
 "@zhushanwen/pi-workflow": major
+"@zhushanwen/pi-model-switch": major
 "@zhushanwen/pi-unified-hooks": minor
 "@zhushanwen/pi-taste-lint": minor
 ---
@@ -13,6 +14,10 @@ major bump 因含 2 项真实 BREAKING（semver 要求）。workflow 仍为 spaw
 
 - **BREAKING（scene→model 解析移除）**：`resolveModel` 不再经 `@zhushanwen/pi-model-switch` 的 `resolveModelForScene()` 解析 scene，改为直传调用方显式 `opts.model`。配套移除 peerDependency `@zhushanwen/pi-model-switch`。原依赖 model-switch scene 配置的用户升级后该解析静默失效——如需 scene→model 映射，请直接在 workflow 脚本的 `agent()` 调用中显式传 `model`，或在调用方自行解析。
 - **BREAKING（完成通知唤醒 parent）**：workflow 完成时，`sendCompletionNotification` 现以 `{ triggerTurn: true, deliverAs: "steer" }` 注入消息流，唤醒 parent agent 处理结果（默认开启）。此前仅 `display:true` 只渲染不唤醒。无需安装 subagents。
+
+### `@zhushanwen/pi-model-switch`（BREAKING）
+
+- **BREAKING（移除公开 re-export）**：包入口 `src/index.ts` 不再 re-export `resolveModelForScene`（原 `export { resolveModelForScene } from "./advisor"`）。该函数的实现仍保留在 `advisor.ts`（deep-import 仍可用，但不属公开 API）。下游若 `import { resolveModelForScene } from "@zhushanwen/pi-model-switch"` 升级后会静默断裂——与 workflow 解耦 scene 解析的 BREAKING 配套。
 
 ### `@zhushanwen/pi-unified-hooks`
 
