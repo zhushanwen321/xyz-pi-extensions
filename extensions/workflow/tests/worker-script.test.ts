@@ -82,6 +82,17 @@ describe("buildWorkerScript", () => {
     expect(result).toMatch(/agent:\s*firstArg\.agent/);
   });
 
+  it("agent() opts 包含 timeoutMs 字段（透传 firstArg.timeoutMs，wall-clock 超时透传）", () => {
+    // FR: 生成的脚本必须把 firstArg.timeoutMs 写到 opts.timeoutMs，
+    // 主线程 AgentPool 才能消费该字段触发 AbortController。
+    expect(result).toMatch(/timeoutMs:\s*firstArg\.timeoutMs/);
+  });
+
+  it("agent() 已知字段白名单含 timeoutMs（防止误判 unknown field 警告）", () => {
+    // 生成的脚本应在 _knownFields Set 中包含 timeoutMs。
+    expect(result).toMatch(/"timeoutMs"/);
+  });
+
   it("生成的脚本是可解析的合法 JavaScript（防 missing-comma 回归）", () => {
     // Regression guard: a missing comma in the object literal would cause
     // a SyntaxError at worker thread start. Validate with new Function().

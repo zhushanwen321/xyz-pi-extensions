@@ -40,7 +40,7 @@ must_fix: <数字>
 
 ```markdown
 ## Summary
-<must-fix 数量> must-fix, <suggestion 数量> suggestions.
+<must-fix 数量> must-fix, <suggestion 数量> suggestions, <info 数量> infos.
 
 ## Findings
 
@@ -61,7 +61,8 @@ agent 必须通过 `structured-output` tool 返回 JSON：
 {
   "report_file": "<output 路径>",
   "must_fix": <数字>,
-  "suggestion": <数字>
+  "suggestion": <数字>,
+  "info": <数字>
 }
 ```
 

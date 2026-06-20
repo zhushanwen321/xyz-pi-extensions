@@ -55,7 +55,7 @@ export function renderStatusText(todoList: Todo[], th: Theme): string {
 // ── Widget 双列渲染 ──────────────────────────────────
 
 /** 渲染单条 todo 的 widget 行（不含缩进），供 component.ts 复用 */
-export function renderWidgetItem(t: Todo, th: Theme): string {
+function renderWidgetItem(t: Todo, th: Theme): string {
 	const mark =
 		t.status === "completed"
 			? th.fg("success", "\u2713")
@@ -70,7 +70,7 @@ export function renderWidgetItem(t: Todo, th: Theme): string {
 /** 单列布局渲染（widget 少量任务时使用） */
 const PI_TEXT_PADDING = 2;
 
-export function renderSingleColumn(
+function renderSingleColumn(
 	todos: Todo[],
 	th: Theme,
 	termWidth: number,
@@ -136,7 +136,7 @@ export function renderWidgetLines(
 
 // ── 列表渲染辅助函数 ─────────────────────────────────
 
-export function buildTodoListText(todoList: Todo[], options: { expanded: boolean }, theme: Theme): string {
+function buildTodoListText(todoList: Todo[], options: { expanded: boolean }, theme: Theme): string {
 	if (todoList.length === 0) {
 		return theme.fg("dim", "No todos");
 	}
@@ -205,4 +205,3 @@ export function renderTodoResult(result: unknown, options: { expanded: boolean }
 	}
 }
 
-export { buildRender };

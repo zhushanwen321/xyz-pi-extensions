@@ -26,16 +26,18 @@ export async function checkBudget(
   let exceeded = false;
   let reason = "";
 
-  if (b.maxTokens !== undefined && b.usedTokens >= b.maxTokens) {
+  // Round 3 MF3: maxTokens>0 守卫——maxTokens===0 时 usedTokens>=0 恒真，
+  // 首个 agent 完成即误判 budget_limited。maxTokens 缺省或为 0 视为不限制。
+  if (b.maxTokens !== undefined && b.maxTokens > 0 && b.usedTokens >= b.maxTokens) {
     exceeded = true;
     reason = `Token budget exceeded: ${b.usedTokens} >= ${b.maxTokens}`;
-  } else if (b.maxCost !== undefined && b.usedCost >= b.maxCost) {
+  } else if (b.maxCost !== undefined && b.maxCost > 0 && b.usedCost >= b.maxCost) {
     exceeded = true;
     reason = `Cost budget exceeded: ${b.usedCost} >= ${b.maxCost}`;
   }
 
   // Send warning at 90% threshold (only once)
-  if (!exceeded && !b._budgetWarningSent && b.maxTokens !== undefined && b.usedTokens >= b.maxTokens * BUDGET_WARNING_THRESHOLD) {
+  if (!exceeded && !b._budgetWarningSent && b.maxTokens !== undefined && b.maxTokens > 0 && b.usedTokens >= b.maxTokens * BUDGET_WARNING_THRESHOLD) {
     b._budgetWarningSent = true;
     callbacks.postMessage(runId, {
       type: "budget-warning",
@@ -47,7 +49,6 @@ export async function checkBudget(
   if (exceeded) {
     callbacks.postMessage(runId, { type: "budget-warning", budget: b, reason });
     callbacks.terminateWorker(runId);
-    // Cleanup in-flight agent temp files that were killed mid-flight.
     callbacks.cleanupAllTempFiles();
 
     instance.error = reason;
@@ -81,7 +82,6 @@ export function scheduleTimeBudgetCheck(
         reason: `Time budget exceeded: ${elapsed}ms >= ${maxTimeMs}ms`,
       });
       callbacks.terminateWorker(runId);
-      // Cleanup in-flight agent temp files that were killed mid-flight.
       callbacks.cleanupAllTempFiles();
 
       instance.error = `Time budget exceeded: ${elapsed}ms >= ${maxTimeMs}ms`;

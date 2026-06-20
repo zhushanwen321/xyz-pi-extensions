@@ -134,14 +134,21 @@ _Avoid_: 待办
 ### Subagent
 
 **Subagent**
-通过 `spawn("pi", ["--mode", "json"])` 启动独立操作系统进程执行委派任务。与主 agent 进程隔离，拥有独立对话历史。主 agent 与 Subagent 之间通过 task prompt（下行）和 stdout JSON 事件流（上行）通信。
+通过 Pi SDK `createAgentSession()` 在进程内创建独立 session 执行委派任务。与主 agent 共享进程，拥有独立对话历史（`SessionManager.inMemory`）。主 agent 与 Subagent 之间通过 task prompt（下行）和 `session.subscribe()` 事件回调（上行）通信。
+_Avoid_: 子 agent（口语可，正式文档用 Subagent）
+
+**AgentRuntime**
+`@zhushanwen/pi-agent-runtime` 包，Subagent 执行的底层运行时（L1+L2）。提供 agent session 管理、agent 发现、配置合并、模型解析、tool 过滤、并发控制、事件桥接等能力。编排层（workflow）通过 `runAgent()` 或 `createSession()` 调用。
+_Avoid_: 运行时（口语可，正式文档用 AgentRuntime）
+
+**ManagedSession**
+AgentRuntime 提供的可控 agent session。创建后可多次 `prompt()`、`steer()`、`abort()`，不自动销毁。供编排层的多步执行（chain）使用。与 Pi SDK `AgentSession` 的关系：ManagedSession 封装了 AgentSession + turn tracking + soft limit + event bridging。
 
 **Execution Mode**
-Subagent 的四种执行模式：
+Workflow 脚本中 Subagent 的执行模式（由编排层定义，AgentRuntime 不感知编排模式）：
 - **Single** — 一个 agent 执行一个 task，阻塞等待
 - **Parallel** — 多个 agent 并发执行多个独立 task
-- **Chain** — 多个 agent 串行执行，前一步输出通过 `{previous}` 占位符传递给下一步
-- **Background** — 异步运行的 Single 模式，完成后自动注入结果到主对话
+- **Pipeline** — 多个 agent 串行执行，前一步输出作为参数传递给下一步
 
 **AgentScope**
 Agent 定义文件的发现范围：`user`（`~/.pi/agent/agents/`）、`project`（`.pi/agents/`）、`both`。

@@ -21,7 +21,8 @@ task prompt 中必须包含：
 {
   "report_file": "<outputDir>/aggregated.md",
   "must_fix": 23,
-  "suggestion": 7
+  "suggestion": 7,
+  "info": 3
 }
 ```
 
@@ -29,6 +30,7 @@ task prompt 中必须包含：
 - `report_file`：你写入的 aggregated.md 的绝对路径
 - `must_fix`：去重后的 MUST_FIX 总数
 - `suggestion`：去重后的 SUGGESTION 总数
+- `info`：去重后的 INFO 总数
 
 **不调用 structured-output 直接返回文本 = 任务失败。**
 
@@ -36,8 +38,8 @@ task prompt 中必须包含：
 
 1. **读取所有子报告**：逐一 `read` 每个 `report_file`，获取完整审查内容。
 2. **去重**：不同维度可能报告同一文件的同一问题，按 (file, line, description) 三元组去重。
-3. **合并统计**：去重后的 MUST_FIX 总数和 SUGGESTION 总数。
-4. **按优先级排序**：MUST_FIX 优先，然后按文件路径排序。
+3. **合并统计**：去重后的 MUST_FIX 总数、SUGGESTION 总数和 INFO 总数。
+4. **按优先级排序**：MUST_FIX 优先，然后 SUGGESTION，然后 INFO，最后按文件路径排序。
 5. **写入报告**：`{outputDir}/aggregated.md`（人类可读报告，fix agent 消费此文件）。
 6. **调用 structured-output** 返回上述 JSON。
 
@@ -49,6 +51,7 @@ task prompt 中必须包含：
 ## Summary
 - Must-fix: {N}
 - Suggestions: {M}
+- Infos: {I}
 - Dimensions reviewed: {list}
 
 ## Must-Fix Issues

@@ -2,3 +2,5 @@ node_modules/
 .superpowers/
 __pycache__/
 .pi/
+# Subagents runtime global config（应在 ~/.pi/agent/extensions/subagents/）
+extensions/subagents/config.json

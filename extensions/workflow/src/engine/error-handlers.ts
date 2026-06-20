@@ -30,9 +30,9 @@ export interface ErrorHandlerContext {
   getRunMeta(runId: string): { scriptSource: string; args: Record<string, unknown> } | undefined;
   events: WorkflowEventEmitter;
   terminateWorker(runId: string): void;
+  cleanupAllTempFiles(): void;
   recreateRunAbortController(runId: string): void;
   startWorker(runId: string, instance: WorkflowInstance, scriptSource: string, args: Record<string, unknown>): void;
-  cleanupAllTempFiles(): void;
   persistState(): Promise<void>;
   onCompletion?(runId: string): void;
   /** Remove the AgentPool for a run to prevent memory leaks. */
@@ -57,7 +57,6 @@ export async function handleWorkerError(
   transitionStatus(instance, "failed");
   ctx.events.emit(runId, { type: "status", status: "failed" });
   ctx.deleteRunPool(runId);
-  ctx.cleanupAllTempFiles();
   await ctx.persistState();
   ctx.onCompletion?.(runId);
 }
@@ -134,6 +133,7 @@ export async function handleScriptError(
 
   if (attempt <= MAX_WORKER_RETRIES) {
     ctx.terminateWorker(runId);
+    ctx.cleanupAllTempFiles();
 
     const delay = RETRY_BACKOFF_MS * Math.pow(EXPONENTIAL_BACKOFF_BASE, attempt - 1);
     setTimeout(() => {
@@ -152,9 +152,8 @@ export async function handleScriptError(
     transitionStatus(instance, "failed");
     ctx.events.emit(runId, { type: "status", status: "failed" });
     ctx.terminateWorker(runId);
-    ctx.deleteRunPool(runId);
-    // Cleanup in-flight agent temp files that were killed mid-flight.
     ctx.cleanupAllTempFiles();
+    ctx.deleteRunPool(runId);
     await ctx.persistState();
     ctx.onCompletion?.(runId);
   }

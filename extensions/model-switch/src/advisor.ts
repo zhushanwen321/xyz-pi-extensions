@@ -316,7 +316,7 @@ function findPeakPlan(config: ModelPolicy): [string, PlanConfig] | null {
 }
 
 /** 解析 Z.ai 的 resetTime（"3h48m" → 秒） */
-export function parseZaiResetTime(label: string): number {
+function parseZaiResetTime(label: string): number {
 	if (!label) return 0;
 	const dM = label.match(/(\d+)d/);
 	const hM = label.match(/(\d+)h/);

@@ -54,7 +54,7 @@ type ActionHandler = (ctx: ActionContext) => ActionResult;
 
 // ── create_tasks ──────────────────────────────────────
 
-export const handleCreateTasks: ActionHandler = ({ state, params, pi, session, ctx }) => {
+const handleCreateTasks: ActionHandler = ({ state, params, pi, session, ctx }) => {
 	if (!params.tasks || params.tasks.length === 0) {
 		return errorResult("create_tasks requires a non-empty tasks array");
 	}
@@ -80,7 +80,7 @@ export const handleCreateTasks: ActionHandler = ({ state, params, pi, session, c
 
 // ── add_tasks ─────────────────────────────────────────
 
-export const handleAddTasks: ActionHandler = ({ state, params, pi, session, ctx }) => {
+const handleAddTasks: ActionHandler = ({ state, params, pi, session, ctx }) => {
 	if (!params.tasks || params.tasks.length === 0) {
 		return errorResult("add_tasks requires a non-empty tasks array");
 	}
@@ -102,7 +102,7 @@ export const handleAddTasks: ActionHandler = ({ state, params, pi, session, ctx 
 
 // ── update_tasks ──────────────────────────────────────
 
-export const handleUpdateTasks: ActionHandler = ({ state, params, pi, session, ctx }) => {
+const handleUpdateTasks: ActionHandler = ({ state, params, pi, session, ctx }) => {
 	if (!params.updates || params.updates.length === 0) {
 		return errorResult("update_tasks requires a non-empty updates array");
 	}
@@ -207,13 +207,13 @@ export function validateUpdateTasks(state: GoalRuntimeState, updates: NonNullabl
 
 // ── list_tasks ────────────────────────────────────────
 
-export const handleListTasks: ActionHandler = ({ state, session }) => {
+const handleListTasks: ActionHandler = ({ state, session }) => {
 	return makeGoalResult(session, formatTaskList(state.tasks));
 };
 
 // ── complete_goal ─────────────────────────────────────
 
-export const handleCompleteGoal: ActionHandler = ({ state, params, pi, session, ctx }) => {
+const handleCompleteGoal: ActionHandler = ({ state, params, pi, session, ctx }) => {
 	if (!params.evidence || params.evidence.trim() === "") {
 		return errorResult("complete_goal requires evidence — provide concrete proof that the objective has been achieved");
 	}
@@ -259,7 +259,7 @@ function buildBudgetReport(state: GoalRuntimeState): string[] {
 
 // ── report_blocked ────────────────────────────────────
 
-export const handleReportBlocked: ActionHandler = ({ state, params, pi, session, ctx }) => {
+const handleReportBlocked: ActionHandler = ({ state, params, pi, session, ctx }) => {
 	if (!params.reason || params.reason.trim() === "") {
 		return errorResult("report_blocked requires reason — describe what is blocking you");
 	}
@@ -271,7 +271,7 @@ export const handleReportBlocked: ActionHandler = ({ state, params, pi, session,
 
 // ── cancel_goal ───────────────────────────────────────
 
-export const handleCancelGoal: ActionHandler = ({ state, params, pi, session, ctx }) => {
+const handleCancelGoal: ActionHandler = ({ state, params, pi, session, ctx }) => {
 	if (isTerminalStatus(state.status)) {
 		return errorResult(`Goal is already in terminal state (${state.status}).`);
 	}
@@ -301,7 +301,7 @@ export const handleCancelGoal: ActionHandler = ({ state, params, pi, session, ct
 
 // ── add_subtasks ──────────────────────────────────────
 
-export const handleAddSubtasks: ActionHandler = ({ state, params, pi, session, ctx }) => {
+const handleAddSubtasks: ActionHandler = ({ state, params, pi, session, ctx }) => {
 	if (params.taskId === undefined) return errorResult("add_subtasks requires taskId");
 	if (!params.texts || params.texts.length === 0) {
 		return errorResult("add_subtasks requires a non-empty texts array");
@@ -333,7 +333,7 @@ export const handleAddSubtasks: ActionHandler = ({ state, params, pi, session, c
 
 // ── update_subtasks ───────────────────────────────────
 
-export const handleUpdateSubtasks: ActionHandler = ({ state, params, pi, session, ctx }) => {
+const handleUpdateSubtasks: ActionHandler = ({ state, params, pi, session, ctx }) => {
 	if (params.taskId === undefined) return errorResult("update_subtasks requires taskId");
 	if (!params.subUpdates || params.subUpdates.length === 0) {
 		return errorResult("update_subtasks requires a non-empty subUpdates array");
@@ -361,7 +361,7 @@ export const handleUpdateSubtasks: ActionHandler = ({ state, params, pi, session
 
 // ── delete_subtasks ───────────────────────────────────
 
-export const handleDeleteSubtasks: ActionHandler = ({ state, params, pi, session, ctx }) => {
+const handleDeleteSubtasks: ActionHandler = ({ state, params, pi, session, ctx }) => {
 	if (params.taskId === undefined) return errorResult("delete_subtasks requires taskId");
 	if (!params.subIds || params.subIds.length === 0) {
 		return errorResult("delete_subtasks requires a non-empty subIds array");

@@ -84,12 +84,9 @@ workflow/
     │   └── state.ts                      # WorkflowInstance / 状态机（8 态） / 序列化
     ├── infra/
     │   ├── agent-pool.ts                 # 并发调度（enqueue / drain）
-    │   ├── pi-runner.ts                  # pi --mode json 子进程管理
-    │   ├── jsonl-parser.ts               # 流式 JSONL 解析
     │   ├── state-store.ts                # 状态持久化（rewrite 模式）
     │   ├── config-loader.ts              # workflow 脚本发现 + meta 提取
-    │   ├── agent-discovery.ts            # .md agent 文件扫描
-    │   ├── agent-opts-resolver.ts        # agent/skill/schema → 临时文件
+    │   ├── agent-opts-resolver.ts        # agent/skill/schema → runAgent opts
     │   ├── execution-trace.ts            # 执行追踪节点
     │   └── script-lint.ts                # 脚本静态 lint
     ├── engine/
@@ -110,3 +107,5 @@ workflow/
             ├── WorkflowsView.ts          # 全屏三级导航 TUI
             └── format.ts                 # 纯格式化函数
 ```
+
+> **依赖说明**：workflow 采用自包含的 `spawn pi --mode json` 子进程架构执行 agent，不依赖任何外部 agent 运行时。`infra/` 内含子进程管理（`pi-runner.ts`）和 JSONL 流式解析（`jsonl-parser.ts`）。

@@ -337,4 +337,3 @@ async function switchToModel(
 }
 
 // Re-export for programmatic usage (e.g., workflow extension)
-export { resolveModelForScene } from "./advisor";

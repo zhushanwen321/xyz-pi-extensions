@@ -95,6 +95,8 @@ describe("sendCompletionNotification", () => {
     expect(call.customType).toBe("workflow-result");
     expect(call.display).toBe(true);
     expect(call.details.runId).toBe("unique-run-001");
+    // FR-NOTIFY: 完成通知作为 steering 消息注入并唤醒 parent agent
+    expect(sendMessageMock.mock.calls[0][1]).toEqual({ triggerTurn: true, deliverAs: "steer" });
   });
 
   it("重复调用同一 runId -> sendMessage 不被调用(去重)", () => {

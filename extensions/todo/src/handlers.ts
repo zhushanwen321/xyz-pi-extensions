@@ -55,7 +55,7 @@ function buildBeforeAgentStartMessage(state: TodoSessionState): { message: { cus
 
 // ── 状态重建 ────────────────────────────────────────
 
-export function reconstructState(state: TodoSessionState, ctx: ExtensionContext): void {
+function reconstructState(state: TodoSessionState, ctx: ExtensionContext): void {
 	state.todos = [];
 	state.nextId = 1;
 	state.userMessageCount = 0;

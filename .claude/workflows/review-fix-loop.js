@@ -75,7 +75,17 @@ for (let round = 0; round < MAX; round++) {
       `2. Apply the MINIMAL correct fix (no refactoring, no style changes)`,
       `3. Ensure the fix does not break surrounding code`,
       ``,
-      `After fixing all issues, list every change you made (file:line -> what was fixed).`,
+      `After fixing all issues, commit and push them:`,
+      `1. git add -A`,
+      `2. git commit -m "fix(review-loop): iteration ${done} - <one-line summary of what was fixed>"`,
+      `   Write a clear English message summarizing the fixes.`,
+      `3. If the pre-commit hook fails (tsc/eslint/vitest errors), FIX those errors and re-commit.`,
+      `   NEVER use SKIP_LINT=1 or --no-verify to bypass the hook.`,
+      `4. git push`,
+      `   If push fails on auth, retry with the gh token:`,
+      `   git push https://oauth2:$(gh auth token)@github.com/zhushanwen321/xyz-pi-extensions.git HEAD:$(git rev-parse --abbrev-ref HEAD)`,
+      ``,
+      `Finally, list every change you made (file:line -> what was fixed) and report the final commit hash and push status (pushed / failed).`,
     ].join('\n'),
     { label: `fix-${done}`, phase: 'Fix' }
   )

@@ -240,10 +240,10 @@ export const PROBLEM_REGISTRY: ProblemDefinition[] = [
   },
 ];
 
-export function getProblemById(id: string): ProblemDefinition | undefined {
+function getProblemById(id: string): ProblemDefinition | undefined {
   return PROBLEM_REGISTRY.find((p) => p.id === id);
 }
 
-export function getProblemsByCategory(category: string): ProblemDefinition[] {
+function getProblemsByCategory(category: string): ProblemDefinition[] {
   return PROBLEM_REGISTRY.filter((p) => p.category === category);
 }
