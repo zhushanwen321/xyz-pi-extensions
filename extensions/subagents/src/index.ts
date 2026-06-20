@@ -1,7 +1,7 @@
 // src/index.ts
 //
 // Pi extension 工厂。只做注册胶水——不含业务逻辑。
-// 注册项：tool / command / messageRenderer / widget / session 事件。
+// 注册项：tool / command / messageRenderer / session 事件。
 
 import type { ExtensionAPI, ExtensionContext, ResourcesDiscoverEvent, ResourcesDiscoverResult, SessionShutdownEvent, SessionStartEvent } from "@mariozechner/pi-coding-agent";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
@@ -21,8 +21,6 @@ import {
 } from "./runtime/subagent-service.ts";
 import { registerSubagentTool } from "./tools/subagent-tool.ts";
 import { renderBgNotifyMessage } from "./tui/bg-notify-render.ts";
-import type { ThemeLike } from "./tui/format.ts";
-import { SubagentsProgressWidget } from "./tui/progress-widget.ts";
 
 /**
  * FR-10.2: Pi extension 工厂。
@@ -38,9 +36,7 @@ import { SubagentsProgressWidget } from "./tui/progress-widget.ts";
 //   ║    2. service = getSubagentService() ?? new SubagentService({cwd, modelService})║
 //   ║    3. modelService.initModel({modelRegistry, sessionId, entries}) ║
 //   ║    4. service.initSession({pi, sessionId})                        ║
-//   ║    3. ctx.hasUI → ctx.ui.setWidget("subagents-progress", factory,  ║
-//   ║                                          { placement:"aboveEditor"})║
-//   ║    4. maybeCleanupExpiredSessionFiles(homeDir, cwd)                ║
+//   ║    5. maybeCleanupExpiredSessionFiles(homeDir, cwd)                ║
 //   ║                                                                    ║
 //   ║  session_shutdown(event):                                          ║
 //   ║    rt.dispose()                                                    ║
@@ -91,15 +87,6 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     if (!existingService) {
       setModelConfigService(modelService);
       setSubagentService(service);
-    }
-
-    if (ctx.hasUI) {
-      ctx.ui.setWidget(
-        "subagents-progress",
-        (tui: { requestRender(): void }, theme: ThemeLike) =>
-          new SubagentsProgressWidget(service, theme, tui),
-        { placement: "aboveEditor" },
-      );
     }
 
     // best-effort 清理（GC），失败不应阻断 session——但额外兜底：
