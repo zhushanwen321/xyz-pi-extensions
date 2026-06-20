@@ -111,6 +111,11 @@
           "reason": "schema 契约 enforcement 引用 tool 名（structured-output），运行时需要 extension 已加载，代码层不 import"
         }
       ]
+    },
+    {
+      "name": "@zhushanwen/pi-ask-user",
+      "directory": "extensions/ask-user",
+      "dependsOn": []
     }
   ]
 }

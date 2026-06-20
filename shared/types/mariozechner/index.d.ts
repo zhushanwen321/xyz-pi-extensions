@@ -82,7 +82,11 @@ declare module "@mariozechner/pi-coding-agent" {
 	export type Theme = any;
 	export type ThemeColor = string;
 	export type ExtensionCommandContext = any;
-	export type AgentToolResult<T = any> = { content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; details: T };
+	export type AgentToolResult<T = any> = { content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; details: T; isError?: boolean };
+	/** Options passed to renderResult. `expanded` requests a detailed view (all options + ●/○ marks). */
+	export interface ToolRenderResultOptions {
+		expanded: boolean;
+	}
 	export type TurnEndEvent = any;
 	export type SessionBeforeCompactEvent = any;
 	export type SessionBeforeCompactResult = any;
@@ -187,6 +191,14 @@ declare module "@mariozechner/pi-tui" {
 		invalidate(): void;
 		render(width: number): string[];
 	}
+	export class TruncatedText {
+		constructor(text: string, x?: number, y?: number);
+	}
+	export class Box {
+		children: any[];
+		constructor(x?: number, y?: number);
+		addChild(child: any): void;
+	}
 	export class Container {
 		children: any[];
 		constructor(children?: any[]);
@@ -208,7 +220,8 @@ declare module "@mariozechner/pi-tui" {
 		wantsKeyRelease?: boolean;
 	}
 	export function matchesKey(key: any, binding: any): boolean;
-	export function truncateToWidth(text: string, width: number): string;
+	export function truncateToWidth(text: string, maxWidth: number, ellipsis?: string, pad?: boolean): string; // signature mirrored from @mariozechner/pi-tui@>=0.78
+	export function wrapTextWithAnsi(text: string, width: number): string[];
 	export function visibleWidth(str: string): number;
 	export const Key: {
 		escape: string; up: string; down: string; left: string; right: string;
@@ -277,10 +290,6 @@ declare module "@earendil-works/pi-coding-agent" {
 declare module "@earendil-works/pi-tui" {
 	export * from "@mariozechner/pi-tui";
 	export class MarkdownTheme {}
-	export function matchesKey(key: any, binding: any): boolean;
-	export function truncateToWidth(text: string, width: number): string;
-	export function visibleWidth(str: string): number;
-	export class Component {}
 }
 declare module "@earendil-works/pi-ai" {
 	export * from "@mariozechner/pi-ai";

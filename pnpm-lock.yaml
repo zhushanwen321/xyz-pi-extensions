@@ -27,6 +27,28 @@ importers:
         specifier: ^4.1.8
         version: 4.1.8(@types/node@24.12.4)(vite@8.0.16(@types/node@24.12.4)(jiti@2.7.0)(yaml@2.9.0))
 
+  extensions/ask-user:
+    dependencies:
+      '@mariozechner/pi-coding-agent':
+        specifier: '*'
+        version: 0.73.1(ws@8.21.0)(zod@4.4.3)
+      '@mariozechner/pi-tui':
+        specifier: '*'
+        version: 0.73.1
+    devDependencies:
+      '@earendil-works/pi-tui':
+        specifier: '*'
+        version: 0.78.0
+      '@sinclair/typebox':
+        specifier: '*'
+        version: 0.34.49
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.12.4
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(@types/node@24.12.4)(vite@8.0.16(@types/node@24.12.4)(jiti@2.7.0)(yaml@2.9.0))
+
   extensions/claude-rules-loader:
     dependencies:
       '@mariozechner/pi-coding-agent':
@@ -77,22 +99,25 @@ importers:
 
   extensions/evolve-daily:
     dependencies:
-      '@earendil-works/pi-ai':
+      '@mariozechner/pi-ai':
         specifier: '*'
-        version: 0.78.0(ws@8.21.0)(zod@4.4.3)
-      '@earendil-works/pi-tui':
-        specifier: '*'
-        version: 0.78.0
+        version: 0.73.1(ws@8.21.0)(zod@4.4.3)
       '@mariozechner/pi-coding-agent':
         specifier: '*'
         version: 0.73.1(ws@8.21.0)(zod@4.4.3)
-      '@sinclair/typebox':
+      '@mariozechner/pi-tui':
         specifier: '*'
-        version: 0.34.49
+        version: 0.73.1
+      typebox:
+        specifier: '*'
+        version: 1.1.39
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
         version: 24.12.4
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(@types/node@24.12.4)(vite@8.0.16(@types/node@24.12.4)(jiti@2.7.0)(yaml@2.9.0))
 
   extensions/goal:
     dependencies:
@@ -284,9 +309,6 @@ importers:
       '@zhushanwen/pi-structured-output':
         specifier: '*'
         version: 0.2.1(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))(@sinclair/typebox@0.34.49)
-      '@zhushanwen/pi-subagents':
-        specifier: workspace:*
-        version: link:../subagents
     devDependencies:
       '@types/node':
         specifier: ^24.0.0

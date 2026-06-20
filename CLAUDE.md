@@ -22,7 +22,9 @@ xyz-pi-extensions/
 │   ├── workflow/            → @zhushanwen/pi-workflow
 │   ├── model-switch/        → @zhushanwen/pi-model-switch
 │   ├── turn-timing/         → @zhushanwen/pi-turn-timing
-│   └── plan/                → @zhushanwen/pi-plan
+│   ├── plan/                → @zhushanwen/pi-plan
+│   ├── ask-user/            → @zhushanwen/pi-ask-user
+│   └── subagents/           → @zhushanwen/pi-subagents
 ├── shared/                      # 内部共享包（private，不独立发布）
 │   ├── quota-providers/     → @zhushanwen/pi-quota-providers
 │   ├── taste-lint/          → @zhushanwen/pi-taste-lint
@@ -764,6 +766,7 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `extensions/model-switch/` | `@zhushanwen/pi-model-switch` | 模型切换 | — |
 | `extensions/turn-timing/` | `@zhushanwen/pi-turn-timing` | Turn 各阶段耗时记录 | — |
 | `extensions/plan/` | `@zhushanwen/pi-plan` | 轻量级 Plan Mode（brainstorming + writing-plans） | — |
+| `extensions/ask-user/` | `@zhushanwen/pi-ask-user` | 内联自适应 ask_user 工具（单/多问题、分屏预览、内联编辑器） | — |
 | `extensions/subagents/` | `@zhushanwen/pi-subagents` | 进程内 subagent 执行运行时（agent 发现、模型解析、并发控制） | — |
 
 **`shared/`** — 内部共享包（private）

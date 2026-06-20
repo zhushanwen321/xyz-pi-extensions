@@ -46,15 +46,15 @@ extensions:
     installed: "2026-06-01"
     version: "0.11.1"
     license: MIT
-    status: active
+    status: replaced
     npm_package: pi-ask-user
     replaces: null
-    replaced_by: null
+    replaced_by: ask-user
     inspired_by: []
     conflicts: []
     analysis: direct-pi-ask-user/analysis.md
     tags: [ask-user, structured-input, tui]
-    notes: 结构化用户问答，LLM 主动向用户提问确认
+    notes: 已被自研 ask-user 替换（inline adaptive，融合两者优点）
 
   - name: pi-subagents
     source: direct-install
@@ -78,6 +78,26 @@ extensions:
   # (暂无)
 
   # ── self-written ────────────────────────────────────────────────
+
+  - name: ask-user
+    source: self-written
+    repo: null
+    stars: null
+    installed: null
+    version: null
+    license: null
+    status: active
+    npm_package: "@zhushanwen/pi-ask-user"
+    replaces: pi-ask-user
+    replaced_by: null
+    inspired_by:
+      - pi-ask-user
+      - pi-askuserquestion
+    conflicts:
+      - pi-ask-user
+    analysis: null
+    tags: [ask-user, structured-input, tui, inline]
+    notes: 内联自适应 ask_user 工具，融合 pi-ask-user 与 pi-askuserquestion 优点（纯 inline、单/多问题自适应、分屏预览、内联编辑器、可选评论）
 
   - name: context-engineering
     source: self-written

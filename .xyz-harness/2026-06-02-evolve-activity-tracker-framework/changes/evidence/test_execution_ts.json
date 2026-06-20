@@ -6,55 +6,44 @@
       "passed": true,
       "execute_steps": [
         "Read core.ts source",
-        "Assert pi.on(config.triggerEvent) exists",
-        "Assert pi.on('turn_end') exists",
-        "Assert pi.on('session_start') exists",
-        "Assert pi.on('session_tree') exists",
-        "Assert pi.on('before_agent_start') exists",
-        "Assert pi.registerTool exists"
+        "Assert conditional triggerEvent registration",
+        "Assert turn_end/session_start/session_tree/before_agent_start handlers",
+        "Assert registerTool + TrackerParams + createItem"
       ],
-      "evidence": "toolCall=true, turnEnd=true, sessStart=true, sessTree=true, before=true, tool=true"
+      "evidence": "condTrigger=true, createItem=true, tool=true"
     },
     {
       "caseId": "TC-2-01",
       "round": 1,
       "passed": true,
       "execute_steps": [
-        "Call triggerMatch with global skill path outside cwd",
-        "Assert match.name === 'my-skill'",
-        "Assert match.metadata.skillMdPath is set"
+        "Read core.ts source",
+        "Assert isValidSkillName call exists",
+        "Assert 'not found' error message exists"
       ],
-      "evidence": "match={\"name\":\"my-skill\",\"metadata\":{\"skillMdPath\":\"/path/to/my-skill/SKILL.md\"},\"summary\":\"read /path/to/my-skill/SKILL.md\"}"
+      "evidence": "validation=true, notFound=true"
     },
     {
       "caseId": "TC-2-02",
       "round": 1,
       "passed": true,
       "execute_steps": [
-        "Call triggerMatch with non-SKILL.md path",
-        "Assert match === null"
+        "Read skill-execution.ts source",
+        "Assert triggerEvent/triggerMatch/extractSkillName/isPathInCwd removed",
+        "Assert triggerTool configured"
       ],
-      "evidence": "match=null"
+      "evidence": "noEvent=true, noMatch=true, noExtract=true, noCwd=true, hasTool=true"
     },
     {
       "caseId": "TC-2-03",
       "round": 1,
       "passed": true,
       "execute_steps": [
-        "Call triggerMatch with SKILL.md inside cwd (absolute)",
-        "Assert match === null (cwd-excluded)"
+        "Read skill-registry.ts source",
+        "Assert scoped package handling exists (startsWith('@') + scoped comment)",
+        "Verify scoped skills discoverable on dev machine"
       ],
-      "evidence": "match=null (cwd-excluded)"
-    },
-    {
-      "caseId": "TC-2-04",
-      "round": 1,
-      "passed": true,
-      "execute_steps": [
-        "Call triggerMatch with SKILL.md inside cwd (relative)",
-        "Assert match === null (cwd-excluded)"
-      ],
-      "evidence": "match=null (cwd-excluded)"
+      "evidence": "handlesScoped=true, foundScopedSkill=true"
     },
     {
       "caseId": "TC-3-01",
@@ -83,24 +72,35 @@
       "round": 1,
       "passed": true,
       "execute_steps": [
-        "Call canTransition('loaded', 'dismissed')",
-        "Assert returns true",
-        "Call canTransition('error', 'dismissed')",
-        "Assert returns true"
+        "Call canTransition('loaded', 'cancelled')",
+        "Assert true",
+        "Call canTransition('error', 'cancelled')",
+        "Assert true"
       ],
-      "evidence": "loaded→dismissed=true, error→dismissed=true"
+      "evidence": "loaded→cancelled=true, error→cancelled=true"
     },
     {
       "caseId": "TC-3-04",
       "round": 1,
       "passed": true,
       "execute_steps": [
-        "Call isTerminalStatus('dismissed')",
-        "Assert returns true",
-        "Call canTransition('dismissed', 'completed')",
-        "Assert returns false"
+        "Call isTerminalStatus('cancelled')",
+        "Assert true",
+        "Call canTransition('cancelled', 'completed')",
+        "Assert false"
       ],
-      "evidence": "isTerminal=true, dismissed→completed=false"
+      "evidence": "isTerminal=true, cancelled→completed=false"
+    },
+    {
+      "caseId": "TC-3-05",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Assert isTerminalStatus('abandoned') === false",
+        "Assert canTransition('abandoned', X) === true for completed/error/cancelled/recorded",
+        "Assert isResumableStatus('abandoned') === true"
+      ],
+      "evidence": "isTerminal=true, recoverCompleted=true, recoverError=true, recoverCancelled=true, recoverRecorded=true, isResumable=true"
     },
     {
       "caseId": "TC-4-01",
@@ -146,6 +146,30 @@
         "Assert turn_end handler exists"
       ],
       "evidence": "interval=true, onRemind=true, turnEnd=true"
+    },
+    {
+      "caseId": "TC-7-01",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read core.ts source",
+        "Assert abandonThreshold exists",
+        "Assert 'abandoned' status exists",
+        "Assert isResumableStatus used",
+        "Assert abandoned items retained",
+        "Assert abandoned check before remind"
+      ],
+      "evidence": "threshold=true, status=true, resumable=true, retained=true, order=true"
+    },
+    {
+      "caseId": "TC-7-02",
+      "round": 1,
+      "passed": true,
+      "execute_steps": [
+        "Read core.ts reconstructState section",
+        "Assert abandonThreshold check exists in reconstructState"
+      ],
+      "evidence": "hasAbandonedCheck=true"
     }
   ]
 }
