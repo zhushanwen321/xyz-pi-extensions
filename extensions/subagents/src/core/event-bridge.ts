@@ -83,6 +83,33 @@ export function createEventBridge(onEvent: (event: AgentEvent) => void): EventBr
   // toolCallId → {toolName, args}：tool_end 取回 args（SDK end 不一定带）
   const pendingTools = new Map<string, { toolName: string; args?: unknown }>();
 
+  // ── message_end 的 usage 累积 + error 判定 ──
+  // 独立函数：降低 handle 的圈复杂度，并集中保护「usage 与 error 不互斥」契约。
+  // LLM provider 常在错误响应里也携带 usage（计费需如此）。必须先累积 usage，
+  // 再独立判断 error/aborted，否则携带 usage 的错误响应会跳过 lastError 设置，
+  // 导致 session-runner 把 errored session 误判为 success=true。[HISTORICAL]
+  const accumulateMessageEnd = (raw: SdkEvent): void => {
+    const msg = raw.message;
+    if (msg?.usage) {
+      const u = msg.usage;
+      usage = {
+        input: usage.input + (u.input ?? 0),
+        output: usage.output + (u.output ?? 0),
+        cacheRead: usage.cacheRead + (u.cacheRead ?? 0),
+        cacheWrite: usage.cacheWrite + (u.cacheWrite ?? 0),
+        cost: usage.cost + (u.cost?.total ?? 0),
+      };
+      onEvent({ type: "message_end", usage: u });
+    }
+    // error/aborted：lastError 记录，转发 error 事件（与上面的 usage 累积独立）
+    const stopReason = msg?.stopReason;
+    if (stopReason === "error" || stopReason === "aborted") {
+      const errMsg = msg?.errorMessage ?? raw.reason ?? stopReason;
+      lastError = errMsg;
+      onEvent({ type: "error", message: errMsg });
+    }
+  };
+
   const handle = (raw: SdkEvent): void => {
     switch (raw.type) {
       // ── tool ──────────────────────────────────────────
@@ -138,29 +165,7 @@ export function createEventBridge(onEvent: (event: AgentEvent) => void): EventBr
         return;
       }
       case "message_end": {
-        const msg = raw.message;
-        // usage 累积（cost 同源求和）。注意：usage 与 stopReason/error 不互斥——
-        // LLM provider 常在错误响应里也携带 usage（计费需如此）。必须先累积 usage，
-        // 再独立判断 error/aborted，否则携带 usage 的错误响应会跳过 lastError 设置，
-        // 导致 session-runner 把 errored session 误判为 success=true。[HISTORICAL]
-        if (msg?.usage) {
-          const u = msg.usage;
-          usage = {
-            input: usage.input + (u.input ?? 0),
-            output: usage.output + (u.output ?? 0),
-            cacheRead: usage.cacheRead + (u.cacheRead ?? 0),
-            cacheWrite: usage.cacheWrite + (u.cacheWrite ?? 0),
-            cost: usage.cost + (u.cost?.total ?? 0),
-          };
-          onEvent({ type: "message_end", usage: u });
-        }
-        // error/aborted：lastError 记录，转发 error 事件（与上面的 usage 累积独立）
-        const stopReason = msg?.stopReason;
-        if (stopReason === "error" || stopReason === "aborted") {
-          const errMsg = msg?.errorMessage ?? raw.reason ?? stopReason;
-          lastError = errMsg;
-          onEvent({ type: "error", message: errMsg });
-        }
+        accumulateMessageEnd(raw);
         return;
       }
 

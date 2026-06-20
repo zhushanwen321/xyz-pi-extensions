@@ -401,6 +401,8 @@ export function project(record: ExecutionRecord): SubagentToolDetails {
     error: record.error,
     // running 时的当前活动行（tool > thinking > text 优先级）——下沉叶子
     currentActivity: record.status === "running" ? computeCurrentActivity(record) : undefined,
+    // schema 产出仅在 record 完成后可用（agentResult 冻结时填）。
+    parsedOutput: record.agentResult?.parsedOutput,
   };
 }
 

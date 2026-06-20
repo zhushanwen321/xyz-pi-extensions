@@ -120,12 +120,3 @@ export function asSessionEntries(entries: unknown): SessionEntries {
 	return entries as SessionEntries;
 }
 
-// ── 模型能力表（用于 session_start 注入）────────────────
-
-export interface ModelCapability {
-	alias: string;
-	provider: string;
-	modelId: string;
-	capabilities: string[];
-}
-

@@ -200,36 +200,53 @@ describe("BgNotifier", () => {
   });
 
   // ============================================================
-  // formatBgCompletionMessage
+  // content / details（取代旧 formatBgCompletionMessage）
   // ============================================================
-  describe("formatBgCompletionMessage", () => {
-    it("includes agent name and id for done", () => {
-      const notifier = new BgNotifier(makeHost());
-      const msg = notifier.formatBgCompletionMessage(
-        makeRecord({ id: "bg-7", agent: "worker", status: "done", result: "all good" }),
-      );
-      expect(msg).toContain("worker");
-      expect(msg).toContain("bg-7");
-      expect(msg).toContain("all good");
-    });
-
-    it("includes error for failed", () => {
-      const notifier = new BgNotifier(makeHost());
-      const msg = notifier.formatBgCompletionMessage(
-        makeRecord({ id: "bg-8", agent: "scout", status: "failed", error: "exploded" }),
-      );
-      expect(msg).toContain("exploded");
-    });
-
-    it("truncates long result to PREVIEW_MAX", () => {
-      const notifier = new BgNotifier(makeHost());
+  // content 进 LLM context，必须含完整 result——旧实现截断到 200 字符，导致
+  // AI 看不到完整结果被迫 poll。现在 content 不截断，renderer 靠 details 自己压。
+  describe("content / details", () => {
+    it("content includes FULL result (no truncation) for done", () => {
+      const host = makeHost();
+      const notifier = new BgNotifier(host);
       const longResult = "x".repeat(500);
-      const msg = notifier.formatBgCompletionMessage(
-        makeRecord({ id: "bg-9", agent: "w", status: "done", result: longResult }),
-      );
-      // PREVIEW_MAX = 200; message contains at most 200 chars of the result
-      expect(msg).not.toContain("x".repeat(201));
-      expect(msg).toContain("x".repeat(200));
+      notifier.notify(makeRecord({ id: "bg-7", agent: "worker", result: longResult }));
+      const call = host.sendMessage.mock.calls[0][0] as { content: string; details: unknown };
+      expect(call.content).toContain("worker");
+      expect(call.content).toContain("bg-7");
+      // content 必须含完整 500 字符，不截断
+      expect(call.content).toContain("x".repeat(500));
+    });
+
+    it("content includes error for failed", () => {
+      const host = makeHost();
+      const notifier = new BgNotifier(host);
+      notifier.notify(makeRecord({ id: "bg-8", agent: "scout", status: "failed", error: "exploded" }));
+      const call = host.sendMessage.mock.calls[0][0] as { content: string };
+      expect(call.content).toContain("exploded");
+    });
+
+    it("details carries full BgNotifyRecord for renderer", () => {
+      const host = makeHost();
+      const notifier = new BgNotifier(host);
+      const longResult = "x".repeat(500);
+      const rec = makeRecord({ id: "bg-9", agent: "w", result: longResult });
+      notifier.notify(rec);
+      const call = host.sendMessage.mock.calls[0][0] as { details: unknown };
+      // details 是完整 record，renderer 自己 firstLine + truncLine 压缩
+      expect(call.details).toEqual(rec);
+    });
+
+    it("batch flush: content merges all full results, details carries items", () => {
+      const host = makeHost({ hasRunningBackground: () => true });
+      const notifier = new BgNotifier(host);
+      notifier.notify(makeRecord({ id: "bg-a", agent: "w1", result: "result-A-full" }));
+      notifier.notify(makeRecord({ id: "bg-b", agent: "w2", result: "result-B-full" }));
+      notifier.flushPendingNotifications();
+      const call = host.sendMessage.mock.calls[0][0] as { content: string; details: unknown };
+      expect(call.content).toContain("result-A-full");
+      expect(call.content).toContain("result-B-full");
+      expect((call.details as { batch: boolean }).batch).toBe(true);
+      expect((call.details as { items: unknown[] }).items.length).toBe(2);
     });
   });
 });

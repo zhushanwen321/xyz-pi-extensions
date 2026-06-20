@@ -78,7 +78,7 @@ describe("session_start handler", () => {
 		});
 	});
 
-	it("notifies 'warn' and lists disabled hooks when some hooks fail", () => {
+	it("notifies 'warning' and lists disabled hooks when some hooks fail", () => {
 		const pi = createMockPi();
 		const { ctx, notify } = createMockCtx();
 
@@ -99,7 +99,7 @@ describe("session_start handler", () => {
 
 		expect(notify).toHaveBeenCalledTimes(1);
 		const [msg, level] = notify.mock.calls[0]!;
-		expect(level).toBe("warn");
+		expect(level).toBe("warning");
 		expect(msg).toContain("Failed: network-timeout-guard, test-timeout-guard");
 		expect(msg).toContain("Loaded: tool-error-handler, subagent-list-injector");
 		expect(pi.appendEntry).toHaveBeenCalledWith("unified-hooks:loaded", {
@@ -108,7 +108,7 @@ describe("session_start handler", () => {
 		});
 	});
 
-	it("notifies 'warn' when all hooks are disabled", () => {
+	it("notifies 'warning' when all hooks are disabled", () => {
 		const pi = createMockPi();
 		const { ctx, notify } = createMockCtx();
 
@@ -131,7 +131,7 @@ describe("session_start handler", () => {
 		const handler = getSessionStartHandler(pi);
 		handler({}, ctx);
 
-		expect(notify.mock.calls[0]![1]).toBe("warn");
+		expect(notify.mock.calls[0]![1]).toBe("warning");
 		const msg = notify.mock.calls[0]![0] as string;
 		expect(msg).toContain("(none)");
 		expect(pi.appendEntry).toHaveBeenCalledWith("unified-hooks:loaded", {

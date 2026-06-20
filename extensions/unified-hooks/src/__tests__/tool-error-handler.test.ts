@@ -49,7 +49,7 @@ describe("setupToolErrorHandler", () => {
 		expect(notify).toHaveBeenCalledTimes(1);
 		expect(notify).toHaveBeenCalledWith(
 			"[unified-hooks] read error (callId=call-42)",
-			"warn",
+			"warning",
 		);
 		expect(pi.appendEntry).toHaveBeenCalledTimes(1);
 		expect(pi.appendEntry).toHaveBeenCalledWith("unified-hooks:tool-error", {
@@ -86,8 +86,8 @@ describe("setupToolErrorHandler", () => {
 			ctx,
 		);
 
-		// Second arg of notify is the type — must be "warn" (not info/error).
-		expect(notify.mock.calls[0]![1]).toBe("warn");
+		// Second arg of notify is the type — must be "warning" (matches SDK literal union, not info/error).
+		expect(notify.mock.calls[0]![1]).toBe("warning");
 	});
 
 	// --- edge cases ---

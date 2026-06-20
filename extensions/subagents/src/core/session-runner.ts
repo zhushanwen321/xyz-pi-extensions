@@ -199,7 +199,13 @@ export function attachRunHooks(built: BuiltSession, opts: RunOptions): RunHooks 
 // ============================================================
 
 /**
- * 唯一执行入口。返回 AgentResult（成功/失败统一形状，不抛错）。
+ * 唯一执行入口。返回 AgentResult（成功/失败统一形状）。
+ *
+ * **契约：正常执行路径不抛错**（prompt 失败、bridge.lastError、turn-limit abort
+ * 等均被捕获并合成 failed AgentResult 返回）。**但创建期异常会抛**
+ * （createAndConfigureSession / attachRunHooks 失败）——finally 只负责清理
+ * 已创建的资源，不吞创建异常。调用方（runAndFinalize）须 catch 后
+ * 调 finalizeFailed 合成 failed result，避免异常逃逸到 tool 层。
  *
  *   ╔══════════════════════════════════════════════════════════════════╗
 //   ║  pool.acquire(priority)                          ◄── 外层调用方负责   ║

@@ -84,6 +84,8 @@ export interface AgentResult {
   usage?: AgentUsageTotal;
   /** /resume /fork 可恢复的 session 文件名（不含目录）。 */
   sessionFile?: string;
+  /** schema 模式下，structured-output tool 的 result.details（已通过 schema 校验）。 */
+  parsedOutput?: unknown;
 }
 
 // ============================================================
@@ -154,6 +156,8 @@ export interface SubagentToolDetails {
   currentActivity?: { type: "tool" | "text" | "thinking"; label: string };
   /** 仅 background 模式返回，供 LLM 后续 poll。 */
   backgroundId?: string;
+  /** schema 模式下，structured-output tool 的 result.details（对齐 workflow agent-pool）。 */
+  parsedOutput?: unknown;
 }
 
 // ============================================================

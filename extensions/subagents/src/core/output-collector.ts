@@ -26,6 +26,24 @@ export interface CollectResultArgs {
   toolCalls: ToolCall[];
 }
 
+/** structured-output tool 名（与 structured-output 扩展 TOOL_NAME 一致，见 session-runner.ts）。 */
+const STRUCTURED_OUTPUT_TOOL = "structured-output";
+
+/**
+ * 从 toolCalls 提取 structured-output 的 result.details（schema 模式产出）。
+ * schema enforcement 保证 agent 调过该 tool（漏调会 steer 重试）；这里只做逆向提取。
+ * 未调或无 details 返回 undefined。
+ */
+function extractParsedOutput(toolCalls: ToolCall[]): unknown {
+  for (let i = toolCalls.length - 1; i >= 0; i--) {
+    const tc = toolCalls[i]!;
+    if (tc.toolName === STRUCTURED_OUTPUT_TOOL && tc.result?.details !== undefined) {
+      return tc.result.details;
+    }
+  }
+  return undefined;
+}
+
 /**
  * 从 session + bridge 组装 AgentResult。每个字段来源单一：
  *   text ← session.messages 最后一条 assistant message 的 text 部分（倒序找）
@@ -54,6 +72,7 @@ export function collectResult(
     toolCalls: args.toolCalls,
     usage: args.usage,
     sessionFile: args.sessionFile,
+    parsedOutput: extractParsedOutput(args.toolCalls),
   };
 }
 

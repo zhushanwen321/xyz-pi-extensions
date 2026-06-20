@@ -48,8 +48,8 @@ const DEDUP_TTL_MS = 5000;
 /** 发送给主对话的 customType（bg-notify-render 消费）。 */
 const NOTIFY_CUSTOM_TYPE = "subagent-bg-notify";
 
-/** result/error 预览截断长度（防超长结果撑爆通知消息）。 */
-const PREVIEW_MAX = 200;
+// content 不再截断——它进 LLM context，截断会让 AI 看不到完整结果而被迫 poll。
+// block 展示靠 details（renderer 自己 firstLine + truncLine 截断），与 content 解耦。
 
 // ============================================================
 // BgNotifier
@@ -142,9 +142,15 @@ export class BgNotifier {
     if (this.pending.length === 0) return;
 
     const records = this.pending.splice(0);
+    // content（进 LLM context）= 完整 result，不截断——截断会让 AI 被迫 poll 拉全量。
+    // details（给 TUI renderer）= 完整 record，renderer 自己 firstLine + truncLine 压缩显示。
+    // 多条合并时 content 含所有 record 的完整 result（LLM 需要全部）。
     const content = records.length === 1
-      ? this.formatBgCompletionMessage(records[0])
-      : records.map((r) => `- ${this.formatBgCompletionMessage(r)}`).join("\n");
+      ? this.buildLlmContent(records[0])
+      : records.map((r) => this.buildLlmContent(r)).join("\n\n---\n\n");
+    const details = records.length === 1
+      ? records[0]
+      : { batch: true, items: records };
 
     // display:true + triggerTurn:true + deliverAs:"followUp" —— 渲染一个完成 block
     // 让用户在对话流看到「X 完成」，并在当前 streaming turn 结束后唤醒父 agent 处理结果。
@@ -157,24 +163,33 @@ export class BgNotifier {
       customType: NOTIFY_CUSTOM_TYPE,
       content,
       display: true,
+      details,
     }, { triggerTurn: true, deliverAs: "followUp" });
   }
 
-  /** 格式化单条完成消息（供 sendMessage 的 content）。 */
-  formatBgCompletionMessage(record: BgNotifyRecord): string {
+  /**
+   * 构建 content（进 LLM context）——完整 result，不截断。
+   *
+   * content 是 custom message 的正文，经 convertToLlm 转成 user message 进 LLM context。
+   * 旧实现用 PREVIEW_MAX=200 截断，导致 LLM 看到截断结果后被迫发 subagent poll 拉全量——
+   * 与 background 模式「不轮询」的设计目标矛盾。修复：content 含完整 result。
+   *
+   * block 的视觉展示与 content 解耦：renderer 读 details，自己 firstLine + truncLine 压成
+   * 单行预览。content 长不影响 block 显示。
+   */
+  private buildLlmContent(record: BgNotifyRecord): string {
     const agent = record.agent;
     const id = record.id;
-    const preview = (text?: string): string =>
-      text ? (text.length > PREVIEW_MAX ? text.slice(0, PREVIEW_MAX) : text) : "";
     switch (record.status) {
       case "done":
-        return `Subagent "${agent}" (${id}) completed. Result: ${preview(record.result) || "(empty)"}`;
+        return `Subagent "${agent}" (${id}) completed. Result:\n${record.result ?? "(empty)"}`;
       case "failed":
-        return `Subagent "${agent}" (${id}) failed: ${preview(record.error) || "(unknown error)"}`;
+        return `Subagent "${agent}" (${id}) failed: ${record.error ?? "(unknown error)"}`;
       case "cancelled":
         return `Subagent "${agent}" (${id}) cancelled.`;
     }
   }
+
 
   /** session 结束：清 timer，丢弃 pending。 */
   dispose(): void {

@@ -17,7 +17,7 @@ import { Type } from "@sinclair/typebox";
 import { getSubagentService } from "../runtime/subagent-service.ts";
 import { extractAgentName } from "../tui/format.ts";
 import { type RenderContext,renderSubagentCall, renderSubagentResult } from "../tui/tool-render.ts";
-import type { ExecuteOptions, SubagentToolDetails } from "../types.ts";
+import type { SubagentToolDetails } from "../types.ts";
 
 // ============================================================
 // 回调类型（抽 alias 绕 registerTool(unknown) 的 TS2307 误报）
@@ -248,7 +248,7 @@ const executeSubagent: SubagentExecuteCb = async (
     agent: params.agent,
     wait: params.wait,
     model: params.model,
-    thinkingLevel: params.thinkingLevel as ExecuteOptions["thinkingLevel"],
+    thinkingLevel: params.thinkingLevel,
     skillPath: params.skillPath,
     appendSystemPrompt: params.appendSystemPrompt,
     schema: params.schema,
@@ -273,6 +273,14 @@ const executeSubagent: SubagentExecuteCb = async (
 
   // sync: details 用 project 投影的 SubagentToolDetails（含 elapsedSeconds/currentActivity），
   //       而非 record snapshot（后者缺 TUI 渲染字段）。
-  return { content: [{ type: "text", text: handle.record.result ?? "" }],
+  // schema 模式：优先输出 parsedOutput 的 JSON（调用方期望结构化数据，非 agent 文本）。
+  // 失败/取消时 record.result 为空字符串，但 error 只进 details.error ——
+  // 父 agent 只读 content 会误判「成功但无返回值」。这里与 poll 路径对齐：
+  // 把 error 拼进 content，保证失败「出声」（项目「错误要出声」约定）。
+  const syncText = handle.details.parsedOutput !== undefined
+    ? JSON.stringify(handle.details.parsedOutput)
+    : (handle.record.result
+      || (handle.details.error ? `Subagent failed: ${handle.details.error}` : "Subagent failed."));
+  return { content: [{ type: "text", text: syncText }],
     details: handle.details };
 };

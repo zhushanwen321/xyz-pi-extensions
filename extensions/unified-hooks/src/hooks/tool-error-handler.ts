@@ -22,7 +22,8 @@ interface ToolExecutionEndLikeEvent {
 export interface HookContext {
   // headless / RPC 会话 ctx.ui 可能为 undefined（TUI 未初始化）。
   ui?: {
-    notify(msg: string, type?: string): void;
+    // type 必须用 SDK 字面量联合，否则非法值（如 "warn"）会被 Pi 降级为 info 静默丢失。
+    notify(msg: string, type?: "info" | "warning" | "error"): void;
   };
 }
 
@@ -35,7 +36,7 @@ export function setupToolErrorHandler(pi: ExtensionAPI): void {
     // console.warn 会写 raw stderr，在 TUI 下泄漏到 input 区。
     // headless / RPC 会话 ctx.ui 可能为 undefined——降级到 console.warn 保证不 NPE。
     if (ctx.ui?.notify) {
-      ctx.ui.notify(msg, "warn");
+      ctx.ui.notify(msg, "warning");
     } else {
       console.warn(msg);
     }

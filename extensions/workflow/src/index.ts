@@ -202,6 +202,12 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
   pi.on("session_tree", async (_event: Record<string, unknown>, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     lsRef.lastSessionId = sessionId;
+    // 切分支前清理旧 orchestrator 的在途 temp 文件（--append-system-prompt / schema 注入文件）。
+    // 不清则 mid-run 切分支会泄漏到磁盘（旧 run 被抛弃不会再走 pause/abort 的清理路径）。
+    const previousOrch = orchestrators.get(sessionId);
+    if (previousOrch) {
+      previousOrch.cleanupAllTempFiles();
+    }
     const orch = new WorkflowOrchestrator(pi, ctx);
     orchestrators.set(sessionId, orch);
     await orch.reconstructAndRestore();

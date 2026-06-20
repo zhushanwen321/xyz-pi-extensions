@@ -35,6 +35,10 @@ const BODY_MAX_WIDTH = 80;
  *
  *   display:true 时 Pi 调本方法，返回 Component 渲染到 customMessageBg 块。
  *   details 异常 → 返回 undefined 走 Pi 默认渲染（兜底）。
+ *
+ *   details 两种形态：
+ *     - 单条：BgNotifyRecord（status/agent/id/result/error）
+ *     - 批量：{ batch: true, items: BgNotifyRecord[] }（notifier 合并窗口内多条完成）
  */
 export function renderBgNotifyMessage(
   message: { details?: unknown },
@@ -42,15 +46,30 @@ export function renderBgNotifyMessage(
   theme: Theme,
 ): Component | undefined {
   const t = theme as ThemeLike;
+
+  // 批量分支：多条合并，各自渲染一行
+  const batch = extractBatch(message.details);
+  if (batch) {
+    const lines = batch.map((r) => renderRecordLine(r, t));
+    return new Text(lines.join("\n"), 0, 0);
+  }
+
+  // 单条分支
   const record = extractBgNotifyRecord(message.details);
   if (!record) return undefined;
+  return new Text(renderRecordLine(record, t), 0, 0);
+}
 
+/** 渲染单条 record 为一行文本（头 + 首行预览 + id）。 */
+function renderRecordLine(
+  record: { id: string; status: "done" | "failed" | "cancelled"; agent: string; result?: string; error?: string },
+  t: ThemeLike,
+): string {
   const glyph = statusGlyph(record.status);
   const icon = glyph.icon ?? "•";
   const agent = truncLine(record.agent, AGENT_MAX_WIDTH);
   const head = `${t.fg(glyph.color, icon)} ${t.bold(agent)}`;
 
-  // 完成块正文 + backgroundId
   let body: string;
   switch (record.status) {
     case "done":
@@ -63,11 +82,29 @@ export function renderBgNotifyMessage(
       body = "cancelled";
       break;
     default:
-      return undefined;
+      body = "";
   }
 
   const idStr = t.fg("dim", ` (${record.id})`);
-  return new Text(`${head} — ${t.fg("dim", truncLine(body, BODY_MAX_WIDTH))}${idStr}`, 0, 0);
+  return `${head} — ${t.fg("dim", truncLine(body, BODY_MAX_WIDTH))}${idStr}`;
+}
+
+/**
+ * 从 message.details 防御性提取批量 record。
+ * 形态：{ batch: true, items: BgNotifyRecord[] }。结构不全返回 undefined。
+ */
+function extractBatch(
+  details: unknown,
+): { id: string; status: "done" | "failed" | "cancelled"; agent: string; result?: string; error?: string }[] | undefined {
+  if (typeof details !== "object" || details === null) return undefined;
+  const d = details as Record<string, unknown>;
+  if (d.batch !== true || !Array.isArray(d.items)) return undefined;
+  const records: { id: string; status: "done" | "failed" | "cancelled"; agent: string; result?: string; error?: string }[] = [];
+  for (const item of d.items) {
+    const r = extractBgNotifyRecord(item);
+    if (r) records.push(r);
+  }
+  return records.length > 0 ? records : undefined;
 }
 
 /**
