@@ -137,7 +137,7 @@ export interface SessionFactoryContext {
 
 /** createAndConfigureSession 的输入选项。 */
 export interface CreateSessionInput {
-  /** 已解析的模型（由 resolveModelForAgent 产出）。 */
+  /** 已解析的模型（由 resolveModel 产出）。 */
   resolved: ResolvedModel;
   /** systemPrompt 追加内容（调用方可传 agent body 等）。 */
   appendSystemPrompt?: string[];

@@ -7,7 +7,7 @@
 //   - Runtime 编排 Core，产出 Details/Record 给 TUI
 //   - TUI 只读 Record/Details 快照，永不持有可变引用
 
-import type { AgentConfig, ResolvedModel } from "./core/model-resolver.ts";
+import type { AgentConfig, ModelInfo, ResolvedModel } from "./core/model-resolver.ts";
 
 // ============================================================
 // 执行状态机
@@ -193,6 +193,8 @@ export interface ExecuteOptions {
   graceTurns?: number;
   /** sync 模式来自 Pi tool 框架；background 模式 hub 忽略，自建 controller。 */
   signal?: AbortSignal;
+  /** 主 agent 当前模型（模型解析第三层兼底）。execute 调用方从 ctx.model 传入。 */
+  ctxModel?: ModelInfo;
   /** live 状态回流（对话流 block 实时刷新）。 */
   onUpdate?: (details: SubagentToolDetails) => void;
   /** background 完成回调（sync 不调）。 */
@@ -334,19 +336,16 @@ export interface PersistedAgentRecord {
 // 配置（global + session）
 // ============================================================
 
+/**
+ * 全局配置（~/.pi/agent/subagents/config.json）。
+ *
+ * 模型解析已退化为「主 agent model 优先，仅 override 时查 registry」——
+ * 不再有 category/fallback/yolo 字段。config.json 只保留 maxConcurrent
+ * （pool 大小）。旧 config.json 中的 categories/fallback 等字段读取时忽略。
+ */
 export interface SubagentsGlobalConfig {
   version: number;
-  yoloByDefault: boolean;
   maxConcurrent: number;
-  categories: Record<string, CategoryDefinition>;
-  agentCategoryOverrides: Record<string, string>;
-  fallback: { model: string; thinkingLevel?: string };
-}
-
-export interface CategoryDefinition {
-  label: string;
-  model: string;
-  thinkingLevel?: string;
 }
 
 /**
@@ -360,15 +359,6 @@ export interface DiscoveryConfig {
   skillDirs: string[];
   /** agent .md 目录列表（靠前覆盖靠后）。空数组 = 走默认 getAgentDir()。 */
   agentDirs: string[];
-}
-
-/** 首次 category 模型确认后的 per-session 覆盖。 */
-export interface SessionModelState {
-  yoloMode: boolean;
-  /** @deprecated D-1：取消首次确认后此字段恒为 true，仅 restoreSessionState 保留读写以向后兼容。 */
-  categoryConfirmed: boolean;
-  categoryModels: Record<string, { model: string; thinkingLevel?: string }>;
-  agentModels: Record<string, { model: string; thinkingLevel?: string }>;
 }
 
 // ============================================================

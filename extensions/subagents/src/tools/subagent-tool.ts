@@ -97,7 +97,7 @@ const SubagentParams = Type.Object({
       description: "Execution mode. true (default) = sync: blocks until done, returns result. false = background: returns a subagentId immediately; on completion a message auto-injects that triggers a new turn (no need to poll). Use false for parallel fan-out (multiple start actions with wait:false in one message run concurrently, default maxConcurrent=4) or long tasks.",
     })),
     model: Type.Optional(Type.String({
-      description: 'Model override in "provider/modelId" format. If omitted, uses the agent\'s configured default.',
+      description: 'Model override in "provider/modelId" format. If omitted, the subagent inherits the main agent\'s current model.',
     })),
     thinkingLevel: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const)),
     skillPath: Type.Optional(Type.String()),
@@ -204,10 +204,9 @@ Completion auto-notifies you (a message is injected that wakes your next turn). 
 // ============================================================
 
 const subagentRenderCall: SubagentRenderCallCb = (args, theme, ctx) => {
-  // 预解析 model（同步）：renderCall 在 execute 前调用，但 model 解析是同步的
-  // （只读配置 + sessionState）。让标题行能显示 model/thinking，不必等 execute。
-  // service 未就绪（session 未 init）或解析失败时降级——只显示 agent 名。
-  // action 化后 agent/model 在 args.startParam 内层，先 unwrap。
+  // 预解析 model（同步）：仅当用户显式 override 或 agent.md 声明了 model 时才能解析成功，
+  // 否则 resolveModel 会因 ctxModel 缺失（renderCall 拿不到主 agent model）走第三层→ 拋错→
+  // 降级不显示 model（execute 后的 renderResult 会显示真实 model）。
   const startParam = hasStartParam(args) ? args.startParam : undefined;
   const agent = extractAgentName(startParam);
   const override = extractModelOverride(startParam);
@@ -217,7 +216,7 @@ const subagentRenderCall: SubagentRenderCallCb = (args, theme, ctx) => {
     const r = service?.resolveModel(agent, override);
     if (r) resolved = { model: `${r.model.provider}/${r.model.id}`, thinkingLevel: r.thinkingLevel };
   } catch {
-    // service 未注册或 modelRegistry 未注入，降级
+    // service 未注册 / 未显式指定 model / modelRegistry 未注入 → 降级不显示 model
   }
   return renderSubagentCall(args, theme, ctx, resolved);
 };
@@ -260,7 +259,7 @@ const executeSubagent: SubagentExecuteCb = async (
 
   switch (params.action) {
     case "start":
-      return adapter({ action: "start", domain: await startHandler(service, params.startParam, signal, onUpdate) });
+      return adapter({ action: "start", domain: await startHandler(service, params.startParam, signal, onUpdate, _ctx?.model) });
     case "list":
       return adapter({ action: "list", domain: listHandler(service, params.listParam) });
     case "cancel":

@@ -159,20 +159,11 @@ describe("SubagentService", () => {
   // ============================================================
 
   describe("resolveModel 代理", () => {
-    it("代理到 modelService.resolveModel（agent 不存在也走 fallback）", () => {
+    it("代理到 modelService.resolveModel（未 init 时抛错）", () => {
       const service = new SubagentService({ cwd: agentDir, modelService });
       service.initSession({ pi: makePi(), sessionId: "s1" });
-      // resolveModel 对任意 agent 都有 fallback（不会因 agent 不存在而抛）
-      // 但 modelRegistry 未 init 时可能抛——这里只验证代理关系不崩
-      try {
-        const result = service.resolveModel("worker");
-        // 成功则验证结构
-        expect(result).toHaveProperty("model");
-        expect(result).toHaveProperty("thinkingLevel");
-      } catch (e) {
-        // modelRegistry 未注入时 modelService 会抛——验证错误来自 modelService 而非 service
-        expect((e as Error).message).toBeTruthy();
-      }
+      // 未 init modelRegistry → resolveModel 拋错（fail-fast）
+      expect(() => service.resolveModel("worker")).toThrow(/modelRegistry not injected/);
     });
   });
 

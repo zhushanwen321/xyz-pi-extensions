@@ -1,27 +1,22 @@
 // src/runtime/model-config-service.ts
 //
-// 配置 + 模型解析领域 Service。"给定 agent 名 + 用户参数，用哪个模型？"
+// 配置 + 模型解析领域 Service。"给定 agent 名 + 用户参数 + 主 agent 模型，用哪个模型？"
 //
 // 与 SubagentService（执行/记录/通知域）正交——本 Service 不碰 pool/store/notifier。
-// 上游：SubagentService.execute 内部调 resolveModel；command/wizard 直接用（不经 SubagentService）。
-// session_start 时经 initModel 注入 modelRegistry + 恢复 sessionState。
+// 上游：SubagentService.execute 内部调 resolveModel。
+// session_start 时经 initModel 注入 modelRegistry。
 
 import { AgentRegistry, createPackageBuiltinRegistry } from "../core/agent-registry.ts";
 import {
   type AgentConfig,
-  inferCategory,
+  type ModelInfo,
   type ModelRegistryLike,
   type ResolvedModel,
-  resolveModelForAgent,
+  resolveModel,
 } from "../core/model-resolver.ts";
-import type {
-  SessionModelState,
-  SubagentsGlobalConfig,
-} from "../types.ts";
+import type { SubagentsGlobalConfig } from "../types.ts";
 import {
-  createSessionState,
   loadGlobalConfig,
-  restoreSessionState,
 } from "./config/config.ts";
 import { DiscoveryConfigLoader } from "./discovery-config.ts";
 
@@ -46,8 +41,6 @@ export interface ModelServiceSessionInit {
   modelRegistry: ModelRegistryLike | null;
   /** 当前 session ID。 */
   sessionId: string;
-  /** session 历史条目（/resume /fork 时恢复 sessionState）。 */
-  entries: ReadonlyArray<{ type: string; data?: unknown }>;
 }
 
 // ============================================================
@@ -58,17 +51,15 @@ export interface ModelServiceSessionInit {
  * 配置 + 模型解析 Service。进程级单例。
  *
  *   ┌──────────────────────────────────────────────────────┐
- *   │  globalConfig（~/.pi/.../config.json）                │
- *   │  sessionState（内存，经 entries 持久化/恢复）          │
+ *   │  globalConfig（~/.pi/.../config.json，仅 maxConcurrent）│
  *   │  agentRegistry（agent .md 发现 + frontmatter）         │
  *   │  modelRegistry（SDK 注入的可用模型）                    │
  *   │                                                      │
- *   │  resolveModel: agent → category → 5级fallback → 确认  │
+ *   │  resolveModel: override → agentConfig → 主 agent model │
  *   └──────────────────────────────────────────────────────┘
  */
 export class ModelConfigService {
   private globalConfig: SubagentsGlobalConfig;
-  private sessionState: SessionModelState;
   private readonly agentRegistry: AgentRegistry;
   private readonly agentRegistryDir: string;
   /** discovery 加载器（resources_discover 时重新读，喂主 agent skill）。 */
@@ -83,11 +74,9 @@ export class ModelConfigService {
     this.agentRegistryDir = init.agentDir;
     this.discoveryLoader = init.discoveryLoader;
     this.globalConfig = loadGlobalConfig(init.agentDir);
-    this.sessionState = createSessionState();
     // agentDirs：discovery 声明的目录（靠前覆盖靠后），空则回退默认 agentDir 单目录
     const agentDirs = this.resolveAgentDirs();
     this.agentRegistry = new AgentRegistry(agentDirs);
-    // 接通发现机制：扫描 agentDirs + 合并 builtin（此前从未调用，registry 永远为空）
     this.agentRegistry.discoverAll(this.builtinRegistry);
   }
 
@@ -106,11 +95,10 @@ export class ModelConfigService {
   // ── 生命周期（index.ts 调）──────────────────────────────
 
   /**
-   * session_start 注入。封装 4 步固定时序：
+   * session_start 注入。封装 3 步固定时序：
    *   1. reloadGlobalConfig（复用时拿最新 config）
    *   2. injectModelRegistry（fail-fast：null 抛错）
    *   3. setSessionId
-   *   4. restoreFromEntries（恢复 sessionState）
    */
   initModel(init: ModelServiceSessionInit): void {
     // 1. 重载配置 + 重扫 agent（hot-reload：用户可能新增/修改 agent .md）
@@ -125,35 +113,28 @@ export class ModelConfigService {
 
     // 3. sessionId
     this._sessionId = init.sessionId;
-
-    // 4. 恢复 sessionState
-    Object.assign(this.sessionState, restoreSessionState(init.entries));
   }
 
   // ── 模型解析（SubagentService.execute 内部调）──────────────
 
   /**
-   * 解析 agent 的模型（纯解析）。
+   * 解析 agent 的模型（三层：override → agentConfig → 主 agent model）。
    *
-   * D-1：取消首次确认拦截——categoryConfirmed 默认 true，本方法直接解析不再阻塞。
-   * 用户改 category 模型走 /subagents config（写 globalConfig）。
+   * @param agentName     agent 名（查 agentConfig.model override）
+   * @param override      调用方显式 override（最高优先级）
+   * @param ctxModel      主 agent 当前模型（兜底，直接透传）
    */
   resolveModel(
     agentName: string,
     override?: { model?: string; thinkingLevel?: string },
+    ctxModel?: ModelInfo,
   ): ResolvedModel {
     this.assertReady();
     const agentConfig = this.agentRegistry.get(agentName);
-    const category = inferCategory(
-      agentName,
-      agentConfig,
-      this.globalConfig.agentCategoryOverrides,
-      "general",
-    );
-    return this.doResolve(agentName, agentConfig, category, override);
+    return resolveModel(agentConfig, this.modelRegistry!, override, ctxModel);
   }
 
-  /** 查询 agent 配置（SubagentService 内部判定 defaultBackground + resolveIdentity 用）。 */
+  /** 查询 agent 配置（SubagentService 内部判定 defaultBackground 用）。 */
   getAgentConfig(name?: string): AgentConfig | undefined {
     return name ? this.agentRegistry.get(name) : undefined;
   }
@@ -193,24 +174,6 @@ export class ModelConfigService {
   }
 
   // ── 内部 ────────────────────────────────────────────────
-
-  /** 实际的 5 级 fallback 解析（不含确认逻辑）。 */
-  private doResolve(
-    agentName: string,
-    agentConfig: AgentConfig | undefined,
-    category: string,
-    override?: { model?: string; thinkingLevel?: string },
-  ): ResolvedModel {
-    return resolveModelForAgent({
-      agentName,
-      agentConfig,
-      category,
-      globalConfig: this.globalConfig,
-      sessionState: this.sessionState,
-      modelRegistry: this.modelRegistry!,
-      paramOverride: override,
-    });
-  }
 
   /** 校验 modelRegistry 已注入。 */
   private assertReady(): void {

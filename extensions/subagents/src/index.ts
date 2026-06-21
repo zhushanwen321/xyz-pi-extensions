@@ -75,7 +75,6 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     modelService.initModel({
       modelRegistry: ctx.modelRegistry,
       sessionId: ctx.sessionManager.getSessionId(),
-      entries: ctx.sessionManager.getEntries() ?? [],
     });
     service.initSession({
       pi,

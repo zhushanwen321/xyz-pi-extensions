@@ -18,7 +18,7 @@ import {
   toPersisted,
   tryTransition,
 } from "../core/execution-record.ts";
-import type { AgentConfig } from "../core/model-resolver.ts";
+import type { AgentConfig, ModelInfo } from "../core/model-resolver.ts";
 import type { SdkLike } from "../core/session-factory.ts";
 import { run, type SessionRunnerContext } from "../core/session-runner.ts";
 import type {
@@ -144,12 +144,17 @@ export class SubagentService {
    * 代理 modelService.resolveModel——renderCall 在 execute 前调用，但 model 解析是同步的，
    * 让标题行能提前显示 model/thinking，不必等 execute。
    * hub 未就绪时抛（调用方 catch 降级）。
+   *
+   * 注意：renderCall 无 ctx，拿不到主 agent model。这里仅解析 override/agentConfig 路径，
+   * 主 agent model 路径交给 execute（传 ctxModel）。renderCall 时如果用户未显式 override，
+   * 本方法会因 ctxModel 缺失走第三层→ 拋错→ 调用方 catch 降级（不显示 model）。
    */
   resolveModel(
     agent: string,
     override?: { model?: string; thinkingLevel?: string },
+    ctxModel?: ModelInfo,
   ): ResolvedModel {
-    return this.modelService.resolveModel(agent, override);
+    return this.modelService.resolveModel(agent, override, ctxModel);
   }
 
   /**
@@ -161,6 +166,8 @@ export class SubagentService {
    *   wait === true → sync（用户显式要求同步）
    *   wait === undefined + agentConfig.defaultBackground === true → background
    *   否则 → sync
+   *
+   * @param opts.ctxModel  主 agent 当前模型（模型解析第三层兼底）。undefined 时仅依赖 override/agentConfig。
    */
   async execute(opts: ExecuteOptions): Promise<ExecutionHandle> {
     this.assertReady();
@@ -245,18 +252,16 @@ export class SubagentService {
     return "sync";
   }
 
-  /** 步骤 1：身份解析。agentConfig → resolveModel。 */
+  /** 步骤 1：身份解析。agentConfig → resolveModel（三层：override → agentConfig → 主 agent model）。 */
   private async resolveIdentity(opts: ExecuteOptions): Promise<ResolvedIdentity> {
-    // D-1：取消首次确认拦截——categoryConfirmed 默认 true，直接解析。
-    // agent 名 + 配置
     const agent = opts.agent ?? "default";
     const agentConfig = this.modelService.getAgentConfig(agent);
 
-    // 模型解析（5 级 fallback）
-    const resolved = this.modelService.resolveModel(agent, {
-      model: opts.model,
-      thinkingLevel: opts.thinkingLevel,
-    });
+    const resolved = this.modelService.resolveModel(
+      agent,
+      { model: opts.model, thinkingLevel: opts.thinkingLevel },
+      opts.ctxModel,
+    );
 
     return { agent, agentConfig, resolved };
   }

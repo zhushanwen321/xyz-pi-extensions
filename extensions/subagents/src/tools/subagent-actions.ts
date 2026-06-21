@@ -10,6 +10,7 @@
 
 import type { AgentToolResult } from "@mariozechner/pi-coding-agent";
 
+import type { ModelInfo } from "../core/model-resolver.ts";
 import type { SubagentService } from "../runtime/subagent-service.ts";
 import type {
   BgResponse,
@@ -149,6 +150,7 @@ export async function startHandler(
   input: StartHandlerInput | undefined,
   signal: AbortSignal | undefined,
   onUpdate?: (partialResult: AgentToolResult<SubagentToolResult>) => void,
+  ctxModel?: ModelInfo,
 ): Promise<StartHandlerResult> {
   if (!input) throw new Error("startParam is required for action:'start'");
   // task 必填 + 空白校验（G-008）
@@ -166,6 +168,7 @@ export async function startHandler(
     schema: input.schema,
     maxTurns: input.maxTurns,
     graceTurns: input.graceTurns,
+    ctxModel,
     signal,
     onUpdate: onUpdate
       // sync streaming 回流：把 project 产出的内层 SubagentToolDetails 包成 SubagentToolResult
