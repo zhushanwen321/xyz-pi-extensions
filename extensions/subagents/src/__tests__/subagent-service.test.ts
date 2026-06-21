@@ -203,7 +203,8 @@ describe("SubagentService", () => {
 // session.dispose）。当前单测环境无法提供，建议：
 //   1. 在 mocks/ 下建 session-factory mock（vi.mock "../core/session-factory.ts"）
 //   2. 覆盖三条主路径：
-//      - sync happy path: execute({wait:true}) → record status=done
-//      - background: execute({wait:false}) → 立即返回 backgroundId + status=running
+//      - sync happy path: execute({wait:true}) → handle.mode="sync", record.status=done
+//      - background: execute({wait:false}) → handle.mode="background", subagentId 非空, status=running
 //      - dispose flush: background 运行中 dispose → notifier.flushPendingNotifications 被调
 //   3. 验证 cancel CAS：background running 时 cancel → status=cancelled + durationMs>0
+//   4. findRecord: register 后可见 / archive 后仍可见（内存三源）
