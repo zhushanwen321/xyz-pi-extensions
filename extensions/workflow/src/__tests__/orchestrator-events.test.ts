@@ -5,7 +5,8 @@
  * tick interval lifecycle, subscription counting.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach,beforeEach, describe, expect, it, vi } from "vitest";
+
 import { WorkflowEventEmitter } from "../engine/orchestrator-events.js";
 
 describe("WorkflowEventEmitter", () => {

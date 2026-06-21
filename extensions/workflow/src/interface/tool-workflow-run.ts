@@ -14,7 +14,8 @@ import { type Static, Type } from "typebox";
 import { RUNID_INDEX_SHORT } from "../infra/constants.js";
 import { type WorkflowOrchestrator } from "../orchestrator.js";
 import type { WorkflowCommandsState } from "./commands.js";
-import { renderTextFallback } from "./views/format.js";
+import { acquireReentryGuard, REENTRY_BUSY_MESSAGE, type ReentryGuardRef,releaseReentryGuard } from "./reentry-guard.js";
+import { renderTextFallback, statusColorToken } from "./views/format.js";
 
 // ── Parameter schema ──────────────────────────────────────────
 
@@ -39,7 +40,6 @@ interface WorkflowRunDetails {
 // ── Shared refs (re-exported types so callers see named shapes) ──
 
 export interface LastSessionRef { lastSessionId: string }
-export interface ReentryGuardRef { isProcessing: boolean }
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -77,14 +77,13 @@ export function registerWorkflowRunTool(
 
     async execute(_toolCallId: string, params: Static<typeof WorkflowRunParams>, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
       // P1-6: Reentry guard for the run tool (lifecycle operations share state)
-      if (reentryRef.isProcessing) {
+      if (!acquireReentryGuard(reentryRef)) {
         return {
-          content: [{ type: "text" as const, text: "Another workflow operation is in progress; please wait for it to complete before issuing another command." }],
+          content: [{ type: "text" as const, text: REENTRY_BUSY_MESSAGE }],
           details: undefined,
           isError: true,
         };
       }
-      reentryRef.isProcessing = true;
       try {
       const sessionId = ctx.sessionManager.getSessionId();
       lsRef.lastSessionId = sessionId;
@@ -158,7 +157,7 @@ export function registerWorkflowRunTool(
       return { content: [{ type: "text" as const, text: `No match for '${name}'. Suggestions sent to conversation.` }], details: { action: "run", runId: "", status: "pending", name } satisfies WorkflowRunDetails };
       } finally {
         // P1-6: Always release the reentry guard
-        reentryRef.isProcessing = false;
+        releaseReentryGuard(reentryRef);
       }
     },
 
@@ -172,12 +171,9 @@ export function registerWorkflowRunTool(
       if (!details) {
         return new Text(renderTextFallback(result), 0, 0);
       }
-      const statusColor =
-        details.status === "completed" ? "success"
-        : details.status === "running" ? "warning"
-        : details.status === "failed" || details.status === "aborted" ? "error" : "muted";
+      const statusColor = statusColorToken(details.status);
       const text =
-        `${theme.fg(statusColor as "success" | "warning" | "error" | "muted", `[${details.status}]`)}` +
+        `${theme.fg(statusColor, `[${details.status}]`)}` +
         ` ${theme.fg("accent", details.name)}` +
         ` ${theme.fg("dim", details.runId.slice(0, RUNID_INDEX_SHORT))}`;
       return new Text(text, 0, 0);

@@ -42,13 +42,13 @@ vi.mock("../infra/agent-discovery", () => ({
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { WorkflowOrchestrator } from "../orchestrator";
 import {
   type AgentResult,
   createInstance,
   serializeInstance,
   type WorkflowInstance,
 } from "../domain/state";
+import { WorkflowOrchestrator } from "../orchestrator";
 
 // ── Helpers ──────────────────────────────────────────────────
 

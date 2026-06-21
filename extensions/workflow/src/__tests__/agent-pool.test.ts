@@ -1,6 +1,6 @@
 // 测试框架：vitest（从 vitest 导入 describe/it/expect/vi/beforeEach）
 // 运行命令：npx vitest run src/__tests__/agent-pool.test.ts
-/* eslint-disable @typescript-eslint/no-explicit-any, taste/prefer-allsettled */
+/* eslint-disable taste/prefer-allsettled */
 
 import { type ChildProcess,spawn } from "node:child_process";
 import { EventEmitter } from "node:events";

@@ -5,18 +5,18 @@
 // 重点：MF3 回归（maxTokens>0 守卫）、token/cost 超限、90% 警告只发一次、
 // terminal 守卫、time budget 时间比较。
 
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { afterEach,beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createInstance,
+  type WorkflowBudget,
+  type WorkflowInstance,
+} from "../../domain/state.js";
+import {
+  type BudgetCallbacks,
   checkBudget,
   scheduleTimeBudgetCheck,
-  type BudgetCallbacks,
 } from "../orchestrator-budget.js";
-import {
-  type WorkflowInstance,
-  type WorkflowBudget,
-  createInstance,
-} from "../../domain/state.js";
 
 // ── Helpers ─────────────────────────────────────────────────
 
@@ -38,7 +38,7 @@ function makeInstance(
   return inst;
 }
 
-function makeCallbacks(): BudgetCallbacks & {
+function makeCallbacks(instance?: WorkflowInstance): BudgetCallbacks & {
   postMessage: ReturnType<typeof vi.fn>;
   terminateWorker: ReturnType<typeof vi.fn>;
   cleanupAllTempFiles: ReturnType<typeof vi.fn>;
@@ -51,6 +51,11 @@ function makeCallbacks(): BudgetCallbacks & {
     cleanupAllTempFiles: vi.fn(),
     persistState: vi.fn().mockResolvedValue(undefined),
     onCompletion: vi.fn(),
+    // 传 instance → 返回真实 RunResources，走 terminateInstance 路径；
+    // 不传 → 返回 undefined，走早返回（模拟 run 已被 deleteRun 清理）。
+    getRun: () => (instance ? { instance, retryCount: 0 } : undefined),
+    deletePool: vi.fn(),
+    emit: vi.fn(),
   };
 }
 
@@ -85,12 +90,13 @@ describe("checkBudget — token budget", () => {
 
   it("usedTokens >= maxTokens 触发 budget_limited", async () => {
     const inst = makeInstance({ maxTokens: 1000, usedTokens: 1000 });
-    const cb = makeCallbacks();
+    const cb = makeCallbacks(inst);
     await checkBudget(inst, inst.runId, cb);
 
     expect(inst.status).toBe("budget_limited");
     expect(inst.error).toMatch(/Token budget exceeded/);
-    expect(cb.terminateWorker).toHaveBeenCalledWith(inst.runId);
+    // terminateInstance 传 keepController=false（terminal 转换的缺省值）。
+    expect(cb.terminateWorker).toHaveBeenCalledWith(inst.runId, false);
     expect(cb.persistState).toHaveBeenCalled();
     expect(cb.onCompletion).toHaveBeenCalledWith(inst.runId);
     expect(cb.postMessage).toHaveBeenCalledWith(
@@ -101,7 +107,7 @@ describe("checkBudget — token budget", () => {
 
   it("usedTokens 超过 maxTokens 也触发（>= 比较）", async () => {
     const inst = makeInstance({ maxTokens: 100, usedTokens: 101 });
-    const cb = makeCallbacks();
+    const cb = makeCallbacks(inst);
     await checkBudget(inst, inst.runId, cb);
 
     expect(inst.status).toBe("budget_limited");
@@ -111,7 +117,7 @@ describe("checkBudget — token budget", () => {
 describe("checkBudget — cost budget", () => {
   it("maxCost 超限触发 budget_limited", async () => {
     const inst = makeInstance({ maxCost: 1.0, usedCost: 1.5, maxTokens: 0 });
-    const cb = makeCallbacks();
+    const cb = makeCallbacks(inst);
     await checkBudget(inst, inst.runId, cb);
 
     expect(inst.status).toBe("budget_limited");
@@ -189,7 +195,7 @@ describe("scheduleTimeBudgetCheck", () => {
     inst.startedAt = startedAt.toISOString();
 
     const getInstance = vi.fn(() => inst);
-    const cb = makeCallbacks();
+    const cb = makeCallbacks(inst);
     scheduleTimeBudgetCheck(getInstance, inst.runId, 1000, cb);
 
     // 推进 setTimeout
@@ -199,7 +205,8 @@ describe("scheduleTimeBudgetCheck", () => {
 
     expect(inst.status).toBe("time_limited");
     expect(inst.error).toMatch(/Time budget exceeded/);
-    expect(cb.terminateWorker).toHaveBeenCalledWith(inst.runId);
+    // terminateInstance 传 keepController=false。
+    expect(cb.terminateWorker).toHaveBeenCalledWith(inst.runId, false);
     expect(cb.postMessage).toHaveBeenCalled();
     expect(cb.persistState).toHaveBeenCalled();
     expect(cb.onCompletion).toHaveBeenCalledWith(inst.runId);

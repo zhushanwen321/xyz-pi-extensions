@@ -5,10 +5,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { afterEach,beforeEach, describe, expect, it, vi } from "vitest";
 
-import { persistState, reconstructState } from "../infra/state-store.js";
 import { createInstance, serializeInstance, type WorkflowInstance } from "../domain/state.js";
+import { persistState, reconstructState } from "../infra/state-store.js";
 
 // ── Mock helpers ──────────────────────────────────────────────
 

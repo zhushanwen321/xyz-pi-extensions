@@ -96,7 +96,7 @@ export async function reconstructState(
           const instance = deserializeInstance(parsed);
           instances.set(instance.runId, instance);
         }
-      // eslint-disable-next-line taste/no-silent-catch
+       
       } catch {
         instances.set(runId, createInstance({
           runId,

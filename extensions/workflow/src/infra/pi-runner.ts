@@ -13,8 +13,8 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 
 import type { AgentCallOpts } from "./agent-pool.js";
-import { processJsonlEvent } from "./jsonl-parser.js";
 import type { ParsedPipelineEvent } from "./jsonl-parser.js";
+import { processJsonlEvent } from "./jsonl-parser.js";
 
 // ── Constants ─────────────────────────────────────────────────
 

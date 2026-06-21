@@ -52,9 +52,9 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import type { RunResources } from "../domain/run-resources";
 import { createInstance, type WorkflowStatus } from "../domain/state";
 import { type AgentCallContext,executeWithRetry } from "../engine/agent-call-handler";
+import { isStaleContextErrorMsg, STALE_CONTEXT_PATTERNS } from "../engine/agent-call-handler";
 import { AgentPool } from "../infra/agent-pool.js";
 import { WorkflowOrchestrator } from "../orchestrator";
-import { isStaleContextErrorMsg, STALE_CONTEXT_PATTERNS } from "../orchestrator";
 
 // ── isStaleContextErrorMsg 纯函数测试 ────────────────────────
 

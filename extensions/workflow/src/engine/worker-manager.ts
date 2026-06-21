@@ -11,101 +11,25 @@
 
 import { Worker } from "node:worker_threads";
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-
-import type { RunResources } from "../domain/run-resources.js";
-import type { WorkflowStatus } from "../domain/state.js";
 import {
   type AgentResult as StateAgentResult,
   type ExecutionTraceNode,
   isTerminal,
-  transitionStatus,
   type WorkflowInstance,
 } from "../domain/state.js";
-import type { AgentRegistry } from "../infra/agent-discovery.js";
 import { resolveAgentOpts as resolveOpts } from "../infra/agent-opts-resolver.js";
 import type { AgentCallOpts } from "../infra/agent-pool.js";
 import { appendTraceNode } from "../infra/execution-trace.js";
 import { type AgentCallContext, executeWithRetry, isBudgetExceeded } from "./agent-call-handler.js";
-import {
-  isStaleContextErrorMsg,
-  STALE_CONTEXT_PATTERNS,
-} from "./agent-call-handler.js";
+import type { OrchestratorCore } from "./core.js";
 import { type ErrorHandlerContext, handleScriptError, handleWorkerError, handleWorkerExit } from "./error-handlers.js";
-import { checkBudget } from "./orchestrator-budget.js";
-import type { WorkflowEventEmitter } from "./orchestrator-events.js";
-import { type TerminateDeps,terminateInstance } from "./terminate-instance.js";
+import { type BudgetCallbacks,checkBudget } from "./orchestrator-budget.js";
+import { type TerminateDeps, terminateInstance } from "./terminate-instance.js";
 import { buildWorkerScript, type WorkerInMsg } from "./worker-script.js";
 
-// Re-export for backward compat (tests import isStaleContextErrorMsg from src/orchestrator).
-export { isStaleContextErrorMsg, STALE_CONTEXT_PATTERNS };
 
 /** Worker→Main message type — re-exported so lifecycle.ts can share it. */
 export type { WorkerInMsg };
-
-// ── OrchestratorCore: the access contract ────────────────────
-
-/**
- * The slice of WorkflowOrchestrator that worker-manager / lifecycle functions
- * may touch. The orchestrator class `implements OrchestratorCore`; extracted
- * modules receive `this` and stay decoupled from the concrete class.
- *
- * Fields are `readonly` (the orchestrator owns mutation); methods are the
- * delegated entry points the modules call into.
- */
-export interface OrchestratorCore {
-  // ── State ──
-  readonly pi: ExtensionAPI;
-  readonly events: WorkflowEventEmitter;
-  readonly sessionDir: string;
-  readonly agentRegistry: AgentRegistry;
-  readonly activeTempFiles: Set<string>;
-  readonly runs: ReadonlyMap<string, RunResources>;
-  onTraceUpdate?: (runId: string) => void;
-  onCompletion?: (runId: string) => void;
-
-  // ── Run map accessors ──
-  getRun(runId: string): RunResources | undefined;
-  setRun(runId: string, run: RunResources): void;
-  deleteRun(runId: string): void;
-
-  // ── Persistence / cleanup ──
-  persistState(): Promise<void>;
-  cleanupTempFile(fp: string): void;
-  cleanupAllTempFiles(): void;
-
-  // ── Worker-manager delegated methods (implemented in this module) ──
-  startWorker(runId: string, instance: WorkflowInstance, scriptSource: string, args: Record<string, unknown>): void;
-  terminateWorker(runId: string, keepController?: boolean): void;
-  postMessage(runId: string, msg: unknown): void;
-  handleWorkerMessage(runId: string, raw: unknown): Promise<void>;
-  handleAgentCall(runId: string, instance: WorkflowInstance, callId: number, opts: AgentCallOpts, phase?: string): Promise<void>;
-  pauseOnSignal(runId: string): void;
-  recreateRunAbortController(runId: string): void;
-  resolveAgentOpts(opts: AgentCallOpts): { opts: AgentCallOpts; error?: string };
-
-  // ── Context factories (implemented in this module) ──
-  errorHandlerContext(): ErrorHandlerContext;
-  agentCallContext(): AgentCallContext;
-  budgetCallbacks(): BudgetCallbacksShape;
-  terminateDeps(): TerminateDeps;
-}
-
-/**
- * Shape of the BudgetCallbacks returned by `budgetCallbacks()`. Mirrors the
- * object literal the orchestrator currently builds; kept here so lifecycle.ts
- * can name the type without importing the engine internals.
- */
-export interface BudgetCallbacksShape {
-  postMessage(id: string, msg: unknown): void;
-  terminateWorker(id: string, keepController?: boolean): void;
-  cleanupAllTempFiles(): void;
-  persistState(): Promise<void>;
-  onCompletion(id: string): void;
-  getRun(id: string): RunResources | undefined;
-  emit(id: string, event: { type: "status"; status: WorkflowStatus }): void;
-  deletePool(id: string): void;
-}
 
 // ── startWorker ──────────────────────────────────────────────
 
@@ -158,17 +82,24 @@ export function startWorker(
  * doesn't lose callCache/worker notifications.
  */
 export function pauseOnSignal(core: OrchestratorCore, runId: string): void {
-  const inst = core.getRun(runId)?.instance;
-  if (!inst || inst.status !== "running") return;
+  const run = core.getRun(runId);
+  const inst = run?.instance;
+  if (!inst || !run || inst.status !== "running") return;
+  // pausedAt is pause-specific bookkeeping; terminateInstance doesn't touch it.
   inst.pausedAt = new Date().toISOString();
-  try {
-    transitionStatus(inst, "paused");
-  // eslint-disable-next-line taste/no-silent-catch
-  } catch {
-    // State machine refused — leave as-is
-  }
-  core.terminateWorker(runId, true);
-  void core.persistState();
+  // Share terminateInstance with pauseRun — A4 order (cleanup→mutate→persist→notify),
+  // same config (keepController for retry, deletePool:false keeps pool for resume).
+  // Signal callback can't await → void it; catch swallows rejects so the abort
+  // listener never throws into the caller (transitionStatus can't reject here
+  // since status was just verified running, but cleanup is best-effort).
+  void terminateInstance(
+    run,
+    { status: "paused", cleanupWorker: true, keepController: true, cleanupTempFiles: true, deletePool: false },
+    core.terminateDeps(),
+   
+  ).catch(() => {
+    // Signal callback must stay silent
+  });
 }
 
 // ── recreateRunAbortController ───────────────────────────────
@@ -276,7 +207,7 @@ export function agentCallContext(core: OrchestratorCore): AgentCallContext {
  * Wave 5: added getRun / emit / deletePool so checkBudget / time budget can
  * route to terminateInstance (unified termination ordering).
  */
-export function budgetCallbacks(core: OrchestratorCore): BudgetCallbacksShape {
+export function budgetCallbacks(core: OrchestratorCore): BudgetCallbacks {
   return {
     postMessage: (id, msg) => core.postMessage(id, msg),
     terminateWorker: (id, keepController = false) => core.terminateWorker(id, keepController),

@@ -5,8 +5,9 @@
  * All functions are pure: no Pi runtime, no side effects.
  */
 
-import type { ExecutionTraceNode, ToolCallEntry, WorkflowStatus } from "../../domain/state.js";
 import { truncateToWidth } from "@mariozechner/pi-tui";
+
+import type { ExecutionTraceNode, ToolCallEntry, WorkflowStatus } from "../../domain/state.js";
 import { MS_PER_SEC } from "../../infra/constants.js";
 
 // ── Constants ─────────────────────────────────────────────────
@@ -25,13 +26,18 @@ export interface ThemeLike {
 
 // ── Status helpers ────────────────────────────────────────────
 
-export function statusDotStr(status: string, theme: ThemeLike): string {
+/** status → 语义颜色 token（用于给任意文本染色，不含符号）。 */
+export function statusColorToken(status: string): "success" | "warning" | "error" | "muted" {
   switch (status) {
-    case "completed": return theme.fg("success", "●");
-    case "running": return theme.fg("warning", "●");
-    case "failed": return theme.fg("error", "●");
-    default: return theme.fg("muted", "●");
+    case "completed": return "success";
+    case "running": return "warning";
+    case "failed": case "aborted": return "error";
+    default: return "muted";
   }
+}
+
+export function statusDotStr(status: string, theme: ThemeLike): string {
+  return theme.fg(statusColorToken(status), "●");
 }
 
 /** Format a status badge with color for the header area. */
@@ -120,7 +126,7 @@ export function formatActivityLine(entry: ToolCallEntry, maxWidth: number): stri
 
 /** Measure visible width of a string (strips ANSI escapes). */
 export function visibleLen(s: string): number {
-  // eslint-disable-next-line no-control-regex
+   
   return s.replace(/\x1b\[[0-9;]*m/g, "").replace(/\x1b\][^\x07]*\x07/g, "").length;
 }
 

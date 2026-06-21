@@ -14,11 +14,11 @@
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 
-import { loadWorkflows } from "../infra/config-loader.js";
-import { saveWorkflow, deleteWorkflow } from "../infra/workflow-files.js";
-import { RUNID_CMD_SHORT, RUNID_CMD_LONG } from "../infra/constants.js";
-import { type WorkflowOrchestrator } from "../orchestrator.js";
 import { type WorkflowInstance } from "../domain/state.js";
+import { loadWorkflows } from "../infra/config-loader.js";
+import { RUNID_CMD_LONG,RUNID_CMD_SHORT } from "../infra/constants.js";
+import { deleteWorkflow,saveWorkflow } from "../infra/workflow-files.js";
+import { type WorkflowOrchestrator } from "../orchestrator.js";
 import { createWorkflowsView } from "./views/WorkflowsView.js";
 
 // ── Constants ─────────────────────────────────────────────────
@@ -272,7 +272,7 @@ export function registerWorkflowCommands(
                   .map((wf) => `  [${wf.source}] ${wf.name} — ${wf.description || "(no description)"}`)
                   .join("\n");
             }
-          // eslint-disable-next-line taste/no-silent-catch
+           
           } catch {
             // Loading the workflow list is best-effort; the script section
             // is omitted and the instance list still renders. Surfacing to
@@ -384,7 +384,7 @@ export function registerWorkflowCommands(
                 .map((wf) => `  [${wf.source}] ${wf.name} — ${wf.description || "(no description)"}`)
                 .join("\n");
             }
-          // eslint-disable-next-line taste/no-silent-catch
+           
           } catch {
             // Loading the workflow list is best-effort; the AI routing
             // message is sent without a list. Surfacing to the terminal

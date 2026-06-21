@@ -18,10 +18,9 @@
 
 import { randomUUID } from "node:crypto";
 
-import { buildArgs, resolveInvocation, runPiProcess } from "./pi-runner.js";
+import type { ToolCallEntry,WorkflowBudget } from "../domain/state.js";
 import { makeEmptyPipeline } from "./jsonl-parser.js";
-
-import type { WorkflowBudget, ToolCallEntry } from "../domain/state.js";
+import { buildArgs, resolveInvocation, runPiProcess } from "./pi-runner.js";
 
 // ── Public types ──────────────────────────────────────────────
 

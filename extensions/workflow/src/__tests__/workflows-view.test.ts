@@ -7,23 +7,24 @@
  * Pure functions imported from views/format.ts — no Pi runtime dependency.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
+
+import type { ExecutionTraceNode, WorkflowInstance } from "../domain/state.js";
 import {
-  groupByPhase,
-  formatActivityLine,
-  formatElapsed,
-  formatTokenStat,
-  formatStatusBadge,
-  statusDotStr,
-  padVisible,
-  visibleLen,
   buildPhaseGroups,
+  formatActivityLine,
   formatAgentOneLiner,
+  formatElapsed,
+  formatStatusBadge,
+  formatTokenStat,
+  groupByPhase,
+  padVisible,
+  statusDotStr,
+  visibleLen,
 } from "../interface/views/format.js";
 import { createWorkflowsView } from "../interface/views/WorkflowsView.js";
-import type { ExecutionTraceNode, WorkflowInstance } from "../domain/state.js";
 import type { WorkflowOrchestrator } from "../orchestrator.js";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 // ── Test fixtures ─────────────────────────────────────────────
 

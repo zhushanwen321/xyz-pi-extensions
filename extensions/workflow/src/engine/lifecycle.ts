@@ -23,9 +23,9 @@ import { AgentPool } from "../infra/agent-pool.js";
 import { getWorkflow } from "../infra/config-loader.js";
 import { RUNID_RADIX, RUNID_SLICE_END, RUNID_SLICE_START } from "../infra/constants.js";
 import { lintScript } from "../infra/script-lint.js";
+import type { OrchestratorCore } from "./core.js";
 import { scheduleTimeBudgetCheck } from "./orchestrator-budget.js";
 import { terminateInstance } from "./terminate-instance.js";
-import type { OrchestratorCore } from "./worker-manager.js";
 
 // ── Constants ────────────────────────────────────────────────
 

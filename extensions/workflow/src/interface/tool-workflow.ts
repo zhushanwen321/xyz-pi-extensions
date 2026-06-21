@@ -12,10 +12,11 @@ import { Text } from "@mariozechner/pi-tui";
 import { type Static, Type } from "typebox";
 
 import { isTerminal, type WorkflowStatus } from "../domain/state.js";
-import { MS_PER_SEC,RUNID_INDEX_LONG, RUNID_INDEX_SHORT } from "../infra/constants.js";
+import { RUNID_INDEX_LONG, RUNID_INDEX_SHORT } from "../infra/constants.js";
 import { type WorkflowInstanceSummary, type WorkflowOrchestrator } from "../orchestrator.js";
-import type { LastSessionRef, ReentryGuardRef } from "./tool-workflow-run.js";
-import { renderTextFallback } from "./views/format.js";
+import { acquireReentryGuard, REENTRY_BUSY_MESSAGE, type ReentryGuardRef,releaseReentryGuard } from "./reentry-guard.js";
+import type { LastSessionRef } from "./tool-workflow-run.js";
+import { formatElapsed, renderTextFallback, statusColorToken } from "./views/format.js";
 
 // ── Parameter schema ──────────────────────────────────────────
 
@@ -80,9 +81,9 @@ function buildRender(
       rows: items.map((inst) => {
         const duration =
           inst.startedAt && inst.completedAt
-            ? `${((new Date(inst.completedAt).getTime() - new Date(inst.startedAt).getTime()) / MS_PER_SEC).toFixed(0)}s`
+            ? formatElapsed(inst.startedAt, new Date(inst.completedAt).getTime())
             : inst.startedAt
-              ? `${((Date.now() - new Date(inst.startedAt).getTime()) / MS_PER_SEC).toFixed(0)}s (running)`
+              ? `${formatElapsed(inst.startedAt)} (running)`
               : "-";
         return { name: inst.name, status: inst.status, worker: inst.worker, duration };
       }),
@@ -143,14 +144,13 @@ export function registerWorkflowTool(
         };
       }
       // P1-6: Reentry guard — prevent concurrent tool calls from clobbering orchestrator state
-      if (guard.isProcessing) {
+      if (!acquireReentryGuard(guard)) {
         return {
-          content: [{ type: "text" as const, text: "Another workflow operation is in progress; please wait for it to complete before issuing another command." }],
+          content: [{ type: "text" as const, text: REENTRY_BUSY_MESSAGE }],
           details: undefined,
           isError: true,
         };
       }
-      guard.isProcessing = true;
       try {
       const sessionId = ctx.sessionManager.getSessionId();
       lsRef.lastSessionId = sessionId;
@@ -258,7 +258,7 @@ export function registerWorkflowTool(
             .map((s) => {
               const duration =
                 s.startedAt
-                  ? ` (${((Date.now() - new Date(s.startedAt).getTime()) / MS_PER_SEC).toFixed(0)}s)`
+                  ? ` (${formatElapsed(s.startedAt)})`
                   : "";
               return `[${s.status}] ${s.name} (${s.runId.slice(0, RUNID_INDEX_LONG)})${duration}` +
                 (s.error ? ` error: ${s.error}` : "");
@@ -286,7 +286,7 @@ export function registerWorkflowTool(
       }
       } finally {
         // P1-6: Always release the reentry guard
-        guard.isProcessing = false;
+        releaseReentryGuard(guard);
       }
     },
 
@@ -310,11 +310,7 @@ export function registerWorkflowTool(
       if (details.action === "status" && details.instances.length > 0) {
         const lines = details.instances
           .map((inst) => {
-            const color: "success" | "warning" | "error" | "muted" =
-              inst.status === "completed" ? "success"
-              : inst.status === "running" ? "warning"
-              : inst.status === "failed" || inst.status === "aborted" ? "error"
-              : "muted";
+            const color = statusColorToken(inst.status);
             return `${theme.fg(color, `[${inst.status}]`)} ${theme.fg("accent", inst.name)} ${theme.fg("dim", inst.runId.slice(0, RUNID_INDEX_SHORT))}${inst.error ? ` ${theme.fg("error", inst.error)}` : ""}`;
           })
           .join("\n");

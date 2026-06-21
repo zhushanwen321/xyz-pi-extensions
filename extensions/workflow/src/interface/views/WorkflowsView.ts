@@ -19,16 +19,13 @@ import { homedir } from "node:os";
 import { join as pathJoin } from "node:path";
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { matchesKey, Key, truncateToWidth } from "@mariozechner/pi-tui";
+import { Key, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
 
-import type { WorkflowOrchestrator } from "../../orchestrator.js";
 import { type WorkflowInstance } from "../../domain/state.js";
 import { isTerminal } from "../../domain/state.js";
 import { saveWorkflow } from "../../infra/workflow-files.js";
-
+import type { WorkflowOrchestrator } from "../../orchestrator.js";
 import {
-  type PhaseGroup,
-  type ThemeLike,
   buildPhaseGroups,
   ELLIPSIS,
   formatActivityLine,
@@ -39,9 +36,11 @@ import {
   formatTokenStat,
   OUTPUT_TRUNCATE_BYTES,
   padVisible,
+  type PhaseGroup,
   PROMPT_FOLD_LINES,
   SIDEBAR_WIDTH,
   statusDotStr,
+  type ThemeLike,
   visibleLen,
 } from "./format.js";
 

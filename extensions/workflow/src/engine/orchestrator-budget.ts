@@ -1,6 +1,10 @@
-import { isTerminal, transitionStatus, type WorkflowInstance } from "../domain/state.js";
 import type { RunResources } from "../domain/run-resources.js";
-import { terminateInstance } from "./terminate-instance.js";
+import {
+  isTerminal,
+  type WorkflowInstance,
+  type WorkflowStatus,
+} from "../domain/state.js";
+import { type TerminateDeps,terminateInstance } from "./terminate-instance.js";
 
 const BUDGET_WARNING_THRESHOLD = 0.9;
 
@@ -11,11 +15,26 @@ export interface BudgetCallbacks {
   persistState(): Promise<void>;
   onCompletion?(runId: string): void;
   /** Wave 5: lookup per-run resources so terminateInstance can run the unified pipeline. */
-  getRun?(runId: string): RunResources | undefined;
+  getRun(runId: string): RunResources | undefined;
   /** Wave 5: nullify the pool on terminal transitions. */
-  deletePool?(runId: string): void;
+  deletePool(runId: string): void;
   /** Wave 5: emit status event (passed through to terminateInstance). */
-  emit?(runId: string, event: { type: "status"; status: import("../domain/state.js").WorkflowStatus }): void;
+  emit(runId: string, event: { type: "status"; status: WorkflowStatus }): void;
+}
+
+/**
+ * Build TerminateDeps from BudgetCallbacks (shared by checkBudget /
+ * scheduleTimeBudgetCheck). Eliminates the duplicated 6-line literal.
+ */
+function terminateDepsFromBudget(callbacks: BudgetCallbacks): TerminateDeps {
+  return {
+    terminateWorker: (id, keepController) => callbacks.terminateWorker(id, keepController),
+    cleanupAllTempFiles: () => callbacks.cleanupAllTempFiles(),
+    emit: callbacks.emit,
+    persistState: () => callbacks.persistState(),
+    deletePool: callbacks.deletePool,
+    onCompletion: callbacks.onCompletion,
+  };
 }
 
 /**
@@ -56,42 +75,23 @@ export async function checkBudget(
 
   if (exceeded) {
     callbacks.postMessage(runId, { type: "budget-warning", budget: b, reason });
-    // Wave 5: route through terminateInstance when the run is available.
-    // postMessage above still fires BEFORE termination so the worker receives
-    // the budget-warning before being killed (preserves prior observable
+    // postMessage fires BEFORE termination so the worker receives the
+    // budget-warning before being killed (preserves prior observable
     // behavior: worker logs the reason before exit).
-    const run = callbacks.getRun?.(runId);
-    if (run && callbacks.emit && callbacks.deletePool) {
-      await terminateInstance(
-        run,
-        {
-          status: "budget_limited",
-          error: reason,
-          cleanupWorker: true,
-          cleanupTempFiles: true,
-          deletePool: true,
-        },
-        {
-          terminateWorker: (id, keepController) => callbacks.terminateWorker(id, keepController),
-          cleanupAllTempFiles: () => callbacks.cleanupAllTempFiles(),
-          emit: callbacks.emit,
-          persistState: () => callbacks.persistState(),
-          deletePool: callbacks.deletePool,
-          onCompletion: callbacks.onCompletion,
-        },
-      );
-    } else {
-      // Fallback (legacy callers without terminateDeps): inline the old flow.
-      // Kept so checkBudget stays usable from contexts that don't have getRun
-      // (none in-tree today — the fallback is defensive).
-      callbacks.terminateWorker(runId);
-      callbacks.cleanupAllTempFiles();
-      instance.error = reason;
-      instance.completedAt = new Date().toISOString();
-      transitionStatus(instance, "budget_limited");
-      await callbacks.persistState();
-      callbacks.onCompletion?.(runId);
-    }
+    const run = callbacks.getRun(runId);
+    // run 不存在 = 已被 deleteRun 清理，无需也无从终止。
+    if (!run) return;
+    await terminateInstance(
+      run,
+      {
+        status: "budget_limited",
+        error: reason,
+        cleanupWorker: true,
+        cleanupTempFiles: true,
+        deletePool: true,
+      },
+      terminateDepsFromBudget(callbacks),
+    );
   }
 }
 
@@ -118,38 +118,20 @@ export function scheduleTimeBudgetCheck(
         budget: instance.budget,
         reason,
       });
-      // Wave 5: route through terminateInstance when the run is available;
-      // otherwise inline the legacy flow (defensive — no in-tree caller
-      // lacks the new callbacks).
-      const run = callbacks.getRun?.(runId);
-      if (run && callbacks.emit && callbacks.deletePool) {
-        await terminateInstance(
-          run,
-          {
-            status: "time_limited",
-            error: reason,
-            cleanupWorker: true,
-            cleanupTempFiles: true,
-            deletePool: true,
-          },
-          {
-            terminateWorker: (id, keepController) => callbacks.terminateWorker(id, keepController),
-            cleanupAllTempFiles: () => callbacks.cleanupAllTempFiles(),
-            emit: callbacks.emit,
-            persistState: () => callbacks.persistState(),
-            deletePool: callbacks.deletePool,
-            onCompletion: callbacks.onCompletion,
-          },
-        );
-      } else {
-        callbacks.terminateWorker(runId);
-        callbacks.cleanupAllTempFiles();
-        instance.error = reason;
-        instance.completedAt = new Date().toISOString();
-        transitionStatus(instance, "time_limited");
-        await callbacks.persistState();
-        callbacks.onCompletion?.(runId);
-      }
+      const run = callbacks.getRun(runId);
+      // run 不存在 = 已被 deleteRun 清理，无需也无从终止。
+      if (!run) return;
+      await terminateInstance(
+        run,
+        {
+          status: "time_limited",
+          error: reason,
+          cleanupWorker: true,
+          cleanupTempFiles: true,
+          deletePool: true,
+        },
+        terminateDepsFromBudget(callbacks),
+      );
     }
   }, maxTimeMs);
   timer.unref();

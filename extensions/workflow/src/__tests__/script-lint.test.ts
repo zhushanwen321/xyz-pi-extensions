@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+
 import { lintScript } from "../infra/script-lint";
 
 describe("lintScript", () => {

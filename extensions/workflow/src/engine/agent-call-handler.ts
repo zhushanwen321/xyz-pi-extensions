@@ -18,9 +18,9 @@ import {
   type WorkflowInstance,
 } from "../domain/state.js";
 import { type AgentCallOpts } from "../infra/agent-pool.js";
-import { appendTraceNode } from "../infra/execution-trace.js";
 import { type BudgetCallbacks, checkBudget } from "./orchestrator-budget.js";
 import { WorkflowEventEmitter } from "./orchestrator-events.js";
+import { commitTraceNode } from "./trace-commit.js";
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -99,22 +99,18 @@ export async function executeWithRetry(
 		// P1-5: Stale context detection — do not retry when pi's session context
 		// is stale (e.g. after compact). Retrying the same call would just fail again.
 		if (!poolResult.success && isStaleContextErrorMsg(poolResult.error)) {
-			const traceNode = instance.trace.find((n) => n.stepIndex === callId);
-			if (traceNode) {
-				traceNode.status = "failed";
-				traceNode.sessionId = poolResult.sessionId;
-				traceNode.result = {
+			commitTraceNode(ctx.pi, ctx.events, instance, runId, callId, {
+				status: "failed",
+				result: {
 					content: poolResult.output,
 					parsedOutput: poolResult.parsedOutput,
 					usage: poolResult.usage,
 					durationMs: poolResult.durationMs,
 					error: poolResult.error,
 					toolCalls: poolResult.toolCalls,
-				};
-				traceNode.completedAt = new Date().toISOString();
-				appendTraceNode(ctx.pi, runId, traceNode);
-				ctx.events.emit(runId, { type: "node-update", stepIndex: callId, node: { stepIndex: traceNode.stepIndex, agent: traceNode.agent, status: traceNode.status, phase: traceNode.phase } });
-			}
+				},
+				sessionId: poolResult.sessionId,
+			});
 			ctx.postMessage(runId, {
 				type: "agent-result",
 				callId,
@@ -170,15 +166,11 @@ export async function executeWithRetry(
 		ctx.postMessage(runId, { type: "agent-result", callId, result, cached: false });
 
 		// Update trace node
-		const traceNode = instance.trace.find((n) => n.stepIndex === callId);
-		if (traceNode) {
-			traceNode.status = poolResult.success ? "completed" : "failed";
-			traceNode.sessionId = poolResult.sessionId;
-			traceNode.result = result;
-			traceNode.completedAt = new Date().toISOString();
-			appendTraceNode(ctx.pi, runId, traceNode);
-			ctx.events.emit(runId, { type: "node-update", stepIndex: callId, node: { stepIndex: traceNode.stepIndex, agent: traceNode.agent, status: traceNode.status, phase: traceNode.phase } });
-		}
+		commitTraceNode(ctx.pi, ctx.events, instance, runId, callId, {
+			status: poolResult.success ? "completed" : "failed",
+			result,
+			sessionId: poolResult.sessionId,
+		});
 		// Push budget update to worker for dynamic budget functions
 		ctx.postMessage(runId, {
 			type: "budget-update",

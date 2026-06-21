@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 import {
   makeEmptyPipeline,
   processJsonlEvent,
-
 } from "../infra/jsonl-parser.js";
 
 describe("jsonl-parser.ts", () => {

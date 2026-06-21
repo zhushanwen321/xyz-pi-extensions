@@ -24,6 +24,7 @@ import {
   type WorkflowInstance,
   type WorkflowStatus,
 } from "./domain/state.js";
+import type { OrchestratorCore } from "./engine/core.js";
 import {
   abortRun,
   pauseRun,
@@ -41,7 +42,6 @@ import {
   errorHandlerContext,
   handleAgentCall,
   handleWorkerMessage,
-  type OrchestratorCore,
   pauseOnSignal,
   postMessage,
   recreateRunAbortController,
@@ -50,8 +50,6 @@ import {
   terminateDeps,
   terminateWorker,
 } from "./engine/worker-manager.js";
-// Re-export for backward compat (tests import isStaleContextErrorMsg from src/orchestrator).
-export { isStaleContextErrorMsg, STALE_CONTEXT_PATTERNS } from "./engine/agent-call-handler.js";
 import { AgentRegistry } from "./infra/agent-discovery.js";
 import { cleanupAllTempFiles as cleanupAllFiles, cleanupTempFile as cleanupFile } from "./infra/agent-opts-resolver.js";
 import type { AgentCallOpts } from "./infra/agent-pool.js";

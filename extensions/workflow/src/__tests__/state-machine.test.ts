@@ -9,6 +9,7 @@ import {
   createInstance,
   deserializeInstance,
   deserializeState,
+  ENTRY_TYPE,
   isTerminal,
   serializeInstance,
   serializeState,
@@ -17,7 +18,6 @@ import {
   VALID_TRANSITIONS,
   type WorkflowInstance,
   type WorkflowStatus,
-  ENTRY_TYPE,
 } from "../domain/state";
 
 // ── isTerminal ──────────────────────────────────────────────
