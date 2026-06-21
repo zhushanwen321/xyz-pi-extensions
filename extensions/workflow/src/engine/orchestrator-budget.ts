@@ -1,13 +1,21 @@
 import { isTerminal, transitionStatus, type WorkflowInstance } from "../domain/state.js";
+import type { RunResources } from "../domain/run-resources.js";
+import { terminateInstance } from "./terminate-instance.js";
 
 const BUDGET_WARNING_THRESHOLD = 0.9;
 
 export interface BudgetCallbacks {
   postMessage(runId: string, msg: unknown): void;
-  terminateWorker(runId: string): void;
+  terminateWorker(runId: string, keepController?: boolean): void;
   cleanupAllTempFiles(): void;
   persistState(): Promise<void>;
   onCompletion?(runId: string): void;
+  /** Wave 5: lookup per-run resources so terminateInstance can run the unified pipeline. */
+  getRun?(runId: string): RunResources | undefined;
+  /** Wave 5: nullify the pool on terminal transitions. */
+  deletePool?(runId: string): void;
+  /** Wave 5: emit status event (passed through to terminateInstance). */
+  emit?(runId: string, event: { type: "status"; status: import("../domain/state.js").WorkflowStatus }): void;
 }
 
 /**
@@ -48,14 +56,42 @@ export async function checkBudget(
 
   if (exceeded) {
     callbacks.postMessage(runId, { type: "budget-warning", budget: b, reason });
-    callbacks.terminateWorker(runId);
-    callbacks.cleanupAllTempFiles();
-
-    instance.error = reason;
-    instance.completedAt = new Date().toISOString();
-    transitionStatus(instance, "budget_limited");
-    await callbacks.persistState();
-    callbacks.onCompletion?.(runId);
+    // Wave 5: route through terminateInstance when the run is available.
+    // postMessage above still fires BEFORE termination so the worker receives
+    // the budget-warning before being killed (preserves prior observable
+    // behavior: worker logs the reason before exit).
+    const run = callbacks.getRun?.(runId);
+    if (run && callbacks.emit && callbacks.deletePool) {
+      await terminateInstance(
+        run,
+        {
+          status: "budget_limited",
+          error: reason,
+          cleanupWorker: true,
+          cleanupTempFiles: true,
+          deletePool: true,
+        },
+        {
+          terminateWorker: (id, keepController) => callbacks.terminateWorker(id, keepController),
+          cleanupAllTempFiles: () => callbacks.cleanupAllTempFiles(),
+          emit: callbacks.emit,
+          persistState: () => callbacks.persistState(),
+          deletePool: callbacks.deletePool,
+          onCompletion: callbacks.onCompletion,
+        },
+      );
+    } else {
+      // Fallback (legacy callers without terminateDeps): inline the old flow.
+      // Kept so checkBudget stays usable from contexts that don't have getRun
+      // (none in-tree today — the fallback is defensive).
+      callbacks.terminateWorker(runId);
+      callbacks.cleanupAllTempFiles();
+      instance.error = reason;
+      instance.completedAt = new Date().toISOString();
+      transitionStatus(instance, "budget_limited");
+      await callbacks.persistState();
+      callbacks.onCompletion?.(runId);
+    }
   }
 }
 
@@ -76,19 +112,44 @@ export function scheduleTimeBudgetCheck(
 
     const elapsed = Date.now() - new Date(instance.startedAt).getTime();
     if (elapsed >= maxTimeMs) {
+      const reason = `Time budget exceeded: ${elapsed}ms >= ${maxTimeMs}ms`;
       callbacks.postMessage(runId, {
         type: "budget-warning",
         budget: instance.budget,
-        reason: `Time budget exceeded: ${elapsed}ms >= ${maxTimeMs}ms`,
+        reason,
       });
-      callbacks.terminateWorker(runId);
-      callbacks.cleanupAllTempFiles();
-
-      instance.error = `Time budget exceeded: ${elapsed}ms >= ${maxTimeMs}ms`;
-      instance.completedAt = new Date().toISOString();
-      transitionStatus(instance, "time_limited");
-      await callbacks.persistState();
-      callbacks.onCompletion?.(runId);
+      // Wave 5: route through terminateInstance when the run is available;
+      // otherwise inline the legacy flow (defensive — no in-tree caller
+      // lacks the new callbacks).
+      const run = callbacks.getRun?.(runId);
+      if (run && callbacks.emit && callbacks.deletePool) {
+        await terminateInstance(
+          run,
+          {
+            status: "time_limited",
+            error: reason,
+            cleanupWorker: true,
+            cleanupTempFiles: true,
+            deletePool: true,
+          },
+          {
+            terminateWorker: (id, keepController) => callbacks.terminateWorker(id, keepController),
+            cleanupAllTempFiles: () => callbacks.cleanupAllTempFiles(),
+            emit: callbacks.emit,
+            persistState: () => callbacks.persistState(),
+            deletePool: callbacks.deletePool,
+            onCompletion: callbacks.onCompletion,
+          },
+        );
+      } else {
+        callbacks.terminateWorker(runId);
+        callbacks.cleanupAllTempFiles();
+        instance.error = reason;
+        instance.completedAt = new Date().toISOString();
+        transitionStatus(instance, "time_limited");
+        await callbacks.persistState();
+        callbacks.onCompletion?.(runId);
+      }
     }
   }, maxTimeMs);
   timer.unref();

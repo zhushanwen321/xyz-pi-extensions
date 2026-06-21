@@ -10,10 +10,11 @@ import type { Worker } from "node:worker_threads";
 import type { RunResources } from "../domain/run-resources.js";
 import {
   isTerminal,
-  transitionStatus,
   type WorkflowInstance,
+  type WorkflowStatus,
 } from "../domain/state.js";
 import { WorkflowEventEmitter } from "./orchestrator-events.js";
+import { terminateInstance } from "./terminate-instance.js";
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -28,7 +29,7 @@ export interface ErrorHandlerContext {
   /** Look up the aggregated per-run resources. */
   getRun(runId: string): RunResources | undefined;
   events: WorkflowEventEmitter;
-  terminateWorker(runId: string): void;
+  terminateWorker(runId: string, keepController?: boolean): void;
   cleanupAllTempFiles(): void;
   recreateRunAbortController(runId: string): void;
   startWorker(runId: string, instance: WorkflowInstance, scriptSource: string, args: Record<string, unknown>): void;
@@ -36,6 +37,18 @@ export interface ErrorHandlerContext {
   onCompletion?(runId: string): void;
   /** Remove the AgentPool for a run to prevent memory leaks. */
   deleteRunPool(runId: string): void;
+}
+
+/** Adapt ErrorHandlerContext into the TerminateDeps shape expected by terminateInstance. */
+function terminateDepsFromCtx(ctx: ErrorHandlerContext) {
+  return {
+    terminateWorker: (id: string, keepController: boolean) => ctx.terminateWorker(id, keepController),
+    cleanupAllTempFiles: () => ctx.cleanupAllTempFiles(),
+    emit: (id: string, event: { type: "status"; status: WorkflowStatus }) => ctx.events.emit(id, event),
+    persistState: () => ctx.persistState(),
+    deletePool: (id: string) => ctx.deleteRunPool(id),
+    onCompletion: (id: string) => ctx.onCompletion?.(id),
+  };
 }
 
 // ── Error handlers ────────────────────────────────────────────
@@ -50,15 +63,16 @@ export async function handleWorkerError(
   const instance = run?.instance;
   if (!instance || isTerminal(instance.status)) return;
 
-  if (run) run.worker = undefined;
-  instance.error = err.message;
-  // P1-5: Mark failed — error event may not be followed by exit event
-  instance.completedAt = new Date().toISOString();
-  transitionStatus(instance, "failed");
-  ctx.events.emit(runId, { type: "status", status: "failed" });
-  ctx.deleteRunPool(runId);
-  await ctx.persistState();
-  ctx.onCompletion?.(runId);
+  // Wave 5: route through terminateInstance so the A4 ordering (cleanup
+  // before status) holds. Worker is already gone (error event fired) —
+  // terminateWorker still runs to clear the in-memory handle + abort
+  // subprocesses. error message is set on the instance.
+  if (!run) return;
+  await terminateInstance(
+    run,
+    { status: "failed", error: err.message, cleanupWorker: true, cleanupTempFiles: true, deletePool: true },
+    terminateDepsFromCtx(ctx),
+  );
 }
 
 /** Handle Worker thread exit. */
@@ -82,15 +96,22 @@ export async function handleWorkerExit(
   // Paused/terminal exits are intentional — skip failure marking
   if (instance.status === "paused" || isTerminal(instance.status)) return;
 
-  // Non-zero exit without explicit error message → mark as failed
+  // Non-zero exit without explicit error message → mark as failed.
+  // Wave 5: route through terminateInstance so persist/emit/onCompletion
+  // share the unified ordering. Worker is already gone — terminateWorker
+  // just clears the AbortController (no live worker to kill).
   if (code !== 0 && !instance.error) {
-    instance.error = `Worker exited with code ${code}`;
-    instance.completedAt = new Date().toISOString();
-    transitionStatus(instance, "failed");
-    ctx.events.emit(runId, { type: "status", status: "failed" });
-    ctx.deleteRunPool(runId);
-    await ctx.persistState();
-    ctx.onCompletion?.(runId);
+    await terminateInstance(
+      run!,
+      {
+        status: "failed",
+        error: `Worker exited with code ${code}`,
+        cleanupWorker: true,
+        cleanupTempFiles: true,
+        deletePool: true,
+      },
+      terminateDepsFromCtx(ctx),
+    );
   }
 }
 
@@ -149,14 +170,22 @@ export async function handleScriptError(
       }
     }, delay);
   } else {
-    instance.error = `Workflow failed after ${MAX_WORKER_RETRIES} retries: ${errorMsg}`;
-    instance.completedAt = new Date().toISOString();
-    transitionStatus(instance, "failed");
-    ctx.events.emit(runId, { type: "status", status: "failed" });
-    ctx.terminateWorker(runId);
-    ctx.cleanupAllTempFiles();
-    ctx.deleteRunPool(runId);
-    await ctx.persistState();
-    ctx.onCompletion?.(runId);
+    // Wave 5: route the terminal transition through terminateInstance so the
+    // A4 ordering holds. terminateWorker + cleanupAllTempFiles already ran
+    // above on the retry path, but the final failure path hasn't cleaned up
+    // — terminateInstance does both, plus deletePool + persist + notify.
+    if (run) {
+      await terminateInstance(
+        run,
+        {
+          status: "failed",
+          error: `Workflow failed after ${MAX_WORKER_RETRIES} retries: ${errorMsg}`,
+          cleanupWorker: true,
+          cleanupTempFiles: true,
+          deletePool: true,
+        },
+        terminateDepsFromCtx(ctx),
+      );
+    }
   }
 }

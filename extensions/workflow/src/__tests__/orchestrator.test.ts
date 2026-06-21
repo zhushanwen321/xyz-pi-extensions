@@ -777,6 +777,61 @@ describe("WorkflowOrchestrator", () => {
     });
   });
 
+  // ── Wave 5 (A4): atomicity — cleanup throws → status unchanged ──
+  describe("A4 atomicity: pause/abort leave status unchanged when cleanup throws", () => {
+    it("abort: cleanupAllTempFiles 抛错时 status 保持 running", async () => {
+      const inst = makeInstance("wf-a4-abort", "running");
+      orch.restoreInstances(makeInstanceMap(inst));
+
+      // Patch cleanupAllTempFiles to throw — simulates fs failure mid-cleanup.
+      // terminateWorker itself swallows worker.terminate() errors, so the
+      // observable failure point is cleanupAllTempFiles.
+      (orch as unknown as { cleanupAllTempFiles: () => void }).cleanupAllTempFiles = () => {
+        throw new Error("fs cleanup failed");
+      };
+
+      await expect(orch.abort("wf-a4-abort")).rejects.toThrow(/fs cleanup failed/);
+
+      // Core A4 invariant: status unchanged, caller can retry.
+      expect(orch.getInstance("wf-a4-abort")!.status).toBe("running");
+      expect(orch.getInstance("wf-a4-abort")!.completedAt).toBeUndefined();
+    });
+
+    it("pause: cleanupAllTempFiles 抛错时 status 保持 running", async () => {
+      const inst = makeInstance("wf-a4-pause", "running");
+      orch.restoreInstances(makeInstanceMap(inst));
+
+      (orch as unknown as { cleanupAllTempFiles: () => void }).cleanupAllTempFiles = () => {
+        throw new Error("fs cleanup failed");
+      };
+
+      await expect(orch.pause("wf-a4-pause")).rejects.toThrow(/fs cleanup failed/);
+
+      expect(orch.getInstance("wf-a4-pause")!.status).toBe("running");
+    });
+
+    it("abort: 正常路径下 transition completed (回归)", async () => {
+      const inst = makeInstance("wf-a4-ok", "running");
+      orch.restoreInstances(makeInstanceMap(inst));
+
+      await orch.abort("wf-a4-ok", "test reason");
+
+      const updated = orch.getInstance("wf-a4-ok")!;
+      expect(updated.status).toBe("aborted");
+      expect(updated.completedAt).toBeDefined();
+      expect(updated.error).toBe("test reason");
+    });
+
+    it("abort 透传 reason 参数到 instance.error", async () => {
+      const inst = makeInstance("wf-a4-reason", "running");
+      orch.restoreInstances(makeInstanceMap(inst));
+
+      await orch.abort("wf-a4-reason", "user cancelled");
+
+      expect(orch.getInstance("wf-a4-reason")!.error).toBe("user cancelled");
+    });
+  });
+
   // Round 5 MF#3: getAgentCount/getAgents unit tests
   describe("getAgentCount()", () => {
     it("returns 0 when no agents are discovered", () => {

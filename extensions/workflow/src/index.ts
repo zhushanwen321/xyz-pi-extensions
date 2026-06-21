@@ -320,14 +320,7 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
             };
           }
 
-          const actionToTarget: Record<string, WorkflowStatus> = {
-            pause: "paused",
-            resume: "running",
-            abort: "aborted",
-          };
-          const targetStatus = actionToTarget[action];
-
-          // Pre-flight: reject invalid transitions before touching the orchestrator
+          // Pre-flight: reject invalid transitions before touching the orchestrator.
           if (
             (action === "pause" && instance.status !== "running") ||
             (action === "resume" && instance.status !== "paused")
@@ -346,15 +339,17 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
             };
           }
 
-          // Delegate to orchestrator (handles Worker lifecycle)
-          if (action === "abort" && (params.error as string | undefined)) {
-            instance.error = params.error as string;
-          }
+          // Delegate to orchestrator (handles Worker lifecycle).
+          // Wave 5 (5-D): orchestrator.pause/resume/abort now route through
+          // terminateInstance with A4 ordering (cleanup before status mutation),
+          // so the previous 3-layer fallback (orchestrator → idempotent check →
+          // direct transitionStatus) is no longer needed. A throw from the
+          // orchestrator now genuinely means the transition failed — surface it.
           const oldStatus = instance.status;
           try {
             if (action === "pause") await orch.pause(runId);
             else if (action === "resume") await orch.resume(runId);
-            else await orch.abort(runId);
+            else await orch.abort(runId, params.error as string | undefined);
 
             const summaries = orch.list();
             return {
@@ -368,70 +363,15 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
                 _render: buildRender(summaries),
               } satisfies WorkflowDetails,
             };
-          // eslint-disable-next-line taste/no-silent-catch
-          } catch {
-            // Orchestrator method failed — fall through to idempotent check or direct state machine
-          }
-
-          // Idempotent: if the workflow is already in the target state (or a terminal state for abort),
-          // return success instead of attempting an invalid state transition.
-          // Re-persist to recover from partial orchestrator success (status mutated but persistState threw).
-          if (
-            instance.status === targetStatus ||
-            (action === "abort" && isTerminal(instance.status))
-          ) {
-            try { await orch.persistState(); } catch { /* best effort */ }
-            const summaries = orch.list();
-            return {
-              content: [{
-                type: "text" as const,
-                text: `Workflow '${instance.name}' (${runId}): already ${instance.status}`,
-              }],
-              details: {
-                action,
-                instances: summaries.map(toInstanceSummary),
-                _render: buildRender(summaries),
-              } satisfies WorkflowDetails,
-            };
-          }
-
-          // Last resort: direct state machine transition (e.g. orchestrator in inconsistent state)
-          try {
-            const oldStatus = instance.status;
-            transitionStatus(instance, targetStatus);
-
-            if (targetStatus === "running" && oldStatus === "paused") {
-              instance.pausedAt = undefined;
-            } else if (targetStatus === "paused") {
-              instance.pausedAt = new Date().toISOString();
-            } else if (isTerminal(targetStatus)) {
-              instance.completedAt = new Date().toISOString();
-              if (action === "abort") {
-                instance.error = (params.error as string | undefined) ?? instance.error;
-              }
-            }
-
-            await orch.persistState();
-
-            const summaries = orch.list();
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: `Workflow '${instance.name}' (${runId}): ${oldStatus} → ${targetStatus}`,
-                },
-              ],
-              details: {
-                action,
-                instances: summaries.map(toInstanceSummary),
-                _render: buildRender(summaries),
-              } satisfies WorkflowDetails,
-            };
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             return {
               content: [{ type: "text" as const, text: `Error: ${msg}` }],
-              details: { action, instances: orch.list().map(toInstanceSummary) } satisfies WorkflowDetails,
+              details: {
+                action,
+                instances: orch.list().map(toInstanceSummary),
+                _render: buildRender(orch.list()),
+              } satisfies WorkflowDetails,
               isError: true,
             };
           }

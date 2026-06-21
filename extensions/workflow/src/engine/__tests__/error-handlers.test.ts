@@ -68,7 +68,14 @@ function makeCtx(overrides?: Partial<ErrorHandlerContext>): ErrorHandlerContext 
   const ctx: ErrorHandlerContext = {
     getRun: vi.fn((id: string) => runs.get(id)),
     events: { emit: vi.fn() } as unknown as ErrorHandlerContext["events"],
-    terminateWorker: vi.fn(),
+    // Wave 5: terminateWorker mock mirrors the real one's side effect —
+    // clears run.worker so tests asserting on it stay meaningful now that
+    // handleWorkerError routes through terminateInstance (which delegates
+    // worker cleanup to terminateWorker instead of inlining it).
+    terminateWorker: vi.fn((id: string) => {
+      const r = runs.get(id);
+      if (r) r.worker = undefined;
+    }),
     cleanupAllTempFiles: vi.fn(),
     recreateRunAbortController: vi.fn(),
     startWorker: vi.fn(),
