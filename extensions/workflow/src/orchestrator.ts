@@ -34,7 +34,9 @@ import { WorkflowEventEmitter } from "./engine/orchestrator-events.js";
 import { type WorkerInMsg as ImportedWorkerInMsg, buildWorkerScript } from "./engine/worker-script.js";
 import { checkBudget, scheduleTimeBudgetCheck } from "./engine/orchestrator-budget.js";
 import { handleWorkerError, handleWorkerExit, handleScriptError, type ErrorHandlerContext } from "./engine/error-handlers.js";
-
+import { executeWithRetry, isBudgetExceeded, type AgentCallContext } from "./engine/agent-call-handler.js";
+// Re-export for backward compat (tests import isStaleContextErrorMsg from src/orchestrator).
+export { isStaleContextErrorMsg, STALE_CONTEXT_PATTERNS } from "./engine/agent-call-handler.js";
 // ── Public types ──────────────────────────────────────────────
 
 export interface WorkflowInstanceSummary {
@@ -51,7 +53,6 @@ export interface WorkflowInstanceSummary {
   /** Full trace nodes for live progress rendering */
   traceNodes: ExecutionTraceNode[];
 }
-
 // ── Internal types ────────────────────────────────────────────
 
 /** Per-run metadata needed for resume/retry/re-run operations. */
@@ -70,23 +71,9 @@ type WorkerInMsg = ImportedWorkerInMsg;
 
 // ── Constants ─────────────────────────────────────────────────
 
-const RETRY_BACKOFF_MS = 1000;
-const MAX_AGENT_RETRIES = 3;
 const RUNID_RADIX = 36;
 const RUNID_SLICE_START = 2;
 const RUNID_SLICE_LENGTH = 8;
-const EXPONENTIAL_BACKOFF_BASE = 2;
-
-// P1-5: Stale context detection — matches patterns reported when
-// pi's session context was compacted or canceled between agent calls.
-const STALE_CONTEXT_PATTERNS = ["stale context", "stalecontext", "context canceled", "aborted"];
-
-/** Check if an error message indicates a stale/canceled pi session context. */
-function isStaleContextErrorMsg(msg: string | undefined): boolean {
-  if (!msg) return false;
-  const lower = msg.toLowerCase();
-  return STALE_CONTEXT_PATTERNS.some((p) => lower.includes(p));
-}
 
 // ── Orchestrator ──────────────────────────────────────────────
 
@@ -100,9 +87,9 @@ export class WorkflowOrchestrator {
   /** Active temp files created for agent system prompts — cleaned up on completion or abort. */
   private readonly activeTempFiles = new Set<string>();
   // Bound helpers that carry activeTempFiles closure
-  private cleanupTempFile = (fp: string) => cleanupFile(fp, this.activeTempFiles);
+  private cleanupTempFile = (fp: string): void => cleanupFile(fp, this.activeTempFiles);
   /** Bound helper for agent-opts-resolver temp file cleanup. */
-  cleanupAllTempFiles = () => cleanupAllFiles(this.activeTempFiles);
+  cleanupAllTempFiles = (): void => cleanupAllFiles(this.activeTempFiles);
   /** Per-run AbortController for killing agent subprocesses on terminate/pause/abort. */
   private readonly runAbortControllers = new Map<string, AbortController>();
   private readonly pi: ExtensionAPI;
@@ -155,7 +142,6 @@ export class WorkflowOrchestrator {
       model: a.model,
     }));
   }
-
 
 
   /** Start a workflow. Returns runId for lifecycle operations. Signal propagated to AgentPool. */
@@ -221,7 +207,7 @@ export class WorkflowOrchestrator {
       maxConcurrency: 4,
       runName: instance.name,
       onSoftLimitReached: ({ runName, totalCalls, budget }) => {
-        (this.pi as unknown as { sendUserMessage: (msg: string) => void }).sendUserMessage(
+        this.pi.sendUserMessage(
           `[workflow:${runName}] Reached ${totalCalls} agent calls. ` +
           `Budget: ${budget.usedTokens}/${budget.maxTokens ?? "unlimited"} tokens. ` +
           `Consider aborting if this is unintended.`,
@@ -231,33 +217,12 @@ export class WorkflowOrchestrator {
     pool.setBudget(instance.budget);
     this.runPools.set(runId, pool);
 
-    // P1-2: Also abort agent subprocesses when the tool-level signal fires
+    // P1-2: Tool-signal forwarders: (1) kill agent subprocess; (2) pause workflow
     if (signal) {
-      const onToolAbort = () => runAbortController.abort();
-      signal.addEventListener("abort", onToolAbort, { once: true });
+      signal.addEventListener("abort", () => runAbortController.abort(), { once: true });
+      signal.addEventListener("abort", () => this.pauseOnSignal(runId), { once: true });
     }
     await this.persistState();
-
-    // P1-2: Listen for abort — pause the workflow so it can be resumed
-    // NOTE: This listener handles pause logic; the tool-signal → runAbortController
-    // forwarding above handles killing the active agent subprocess.
-    if (signal) {
-      const onAbort = () => {
-        const inst = this.instances.get(runId);
-        if (inst && inst.status === "running") {
-          inst.pausedAt = new Date().toISOString();
-          try {
-            transitionStatus(inst, "paused");
-          // eslint-disable-next-line taste/no-silent-catch
-          } catch {
-            // State machine refused — leave as-is
-          }
-          this.terminateWorker(runId);
-          void this.persistState();
-        }
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
 
     this.startWorker(runId, instance, scriptSource, args);
 
@@ -266,13 +231,7 @@ export class WorkflowOrchestrator {
         (id) => this.instances.get(id),
         runId,
         budgetTimeMs,
-        {
-          postMessage: (id, msg) => this.postMessage(id, msg),
-          terminateWorker: (id) => this.terminateWorker(id),
-          cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
-          persistState: () => this.persistState(),
-          onCompletion: (id) => this.onCompletion?.(id),
-        },
+        this.budgetCallbacks(),
       );
     }
 
@@ -298,7 +257,9 @@ export class WorkflowOrchestrator {
     instance.pausedAt = new Date().toISOString();
     transitionStatus(instance, "paused");
     this.events.emit(runId, { type: "status", status: "paused" });
-    this.terminateWorker(runId);
+    // Round 3 MF2: pause 保留 controller——失败的 retry 仍能写 callCache，
+    // resume 后新 worker 不会因为 retry 跳过而丢失结果。
+    this.terminateWorker(runId, true);
     // Cleanup in-flight temp files from agent calls that were killed mid-flight.
     // Without this, files written for --append-system-prompt leak to disk.
     this.cleanupAllTempFiles();
@@ -339,13 +300,7 @@ export class WorkflowOrchestrator {
           (id) => this.instances.get(id),
           runId,
           meta.budgetTimeMs,
-          {
-            postMessage: (id, msg) => this.postMessage(id, msg),
-            terminateWorker: (id) => this.terminateWorker(id),
-            cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
-            persistState: () => this.persistState(),
-            onCompletion: (id) => this.onCompletion?.(id),
-          },
+          this.budgetCallbacks(),
         );
       }
     }
@@ -498,8 +453,7 @@ export class WorkflowOrchestrator {
       this.cleanupAllTempFiles();
     }
 
-    // 2. Create new instance directly from cached scriptSource
-    //    Bypass getWorkflow() + fs.readFileSync() since we already have the script.
+    // 2. Create new instance directly from cached scriptSource (skip getWorkflow + readFile).
     const newRunId = `wf-${Date.now()}-${Math.random().toString(RUNID_RADIX).slice(RUNID_SLICE_START, RUNID_SLICE_LENGTH)}`;
     const newInstance = createStateInstance({
       runId: newRunId,
@@ -511,6 +465,8 @@ export class WorkflowOrchestrator {
 
     this.instances.set(newRunId, newInstance);
     this.runMetaMap.set(newRunId, { scriptSource, args, budgetTokens, budgetTimeMs });
+    // Round 4 MF#1: create per-run AbortController so executeWithRetry can abort in-flight pi subprocess on user abort.
+    this.runAbortControllers.set(newRunId, new AbortController());
     this.startWorker(newRunId, newInstance, scriptSource, args);
 
     // 3. Schedule time budget check if needed
@@ -519,13 +475,7 @@ export class WorkflowOrchestrator {
         (id) => this.instances.get(id),
         newRunId,
         budgetTimeMs,
-        {
-          postMessage: (id, msg) => this.postMessage(id, msg),
-          terminateWorker: (id) => this.terminateWorker(id),
-          cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
-          persistState: () => this.persistState(),
-          onCompletion: (id) => this.onCompletion?.(id),
-        },
+        this.budgetCallbacks(),
       );
     }
 
@@ -633,28 +583,57 @@ export class WorkflowOrchestrator {
   }
 
   /**
+   * P1-2 + Round 5 MF#3: pause workflow on tool-signal abort. 提取为 helper——
+   * run() 和 recreateRunAbortController() 都需注册此 listener（resume 后必须重注册）。
+   * Round 3 MF2: pause 保留 controller，避免 retry 误判后丢失 callCache/worker 通知。
+   */
+  private pauseOnSignal(runId: string): void {
+    const inst = this.instances.get(runId);
+    if (!inst || inst.status !== "running") return;
+    inst.pausedAt = new Date().toISOString();
+    try {
+      transitionStatus(inst, "paused");
+    // eslint-disable-next-line taste/no-silent-catch
+    } catch {
+      // State machine refused — leave as-is
+    }
+    this.terminateWorker(runId, true);
+    void this.persistState();
+  }
+
+  /**
    * Recreate AbortController for a run after terminateWorker aborted the old one.
-   * Also re-wires the tool-level signal to the new controller.
+   * Re-wires the tool-level signal: (1) kill agent subprocess; (2) pause workflow.
+   * Round 5 MF#3: resume 后必须重注册 pause-on-abort listener，否则 tool signal 再次
+   * abort 只杀 agent 子进程、workflow 状态不变 paused，worker 死了但实例仍 running。
    */
   private recreateRunAbortController(runId: string): void {
     const newController = new AbortController();
     this.runAbortControllers.set(runId, newController);
     const meta = this.runMetaMap.get(runId);
     if (meta?.signal && !meta.signal.aborted) {
-      const onToolAbort = () => newController.abort();
-      meta.signal.addEventListener("abort", onToolAbort, { once: true });
+      meta.signal.addEventListener("abort", () => newController.abort(), { once: true });
+      meta.signal.addEventListener("abort", () => this.pauseOnSignal(runId), { once: true });
     }
   }
 
   /**
    * Terminate and clean up a worker thread. Also aborts all in-flight
    * agent subprocesses via the per-run AbortController.
+   *
+   * @param runId           Workflow run ID
+   * @param keepController  Round 3 MF2: pause 调用时传 true——保留 controller 在 map 中，
+   *                        让 pause→resume 期间失败的 retry 仍能写 callCache 并通知 worker，
+   *                        避免 resume 后新 worker 重复执行有 side-effect 的 agent。
+   *                        abort/retry/delete/budget 仍传 false，完整清理。
    */
-  private terminateWorker(runId: string): void {
+  private terminateWorker(runId: string, keepController: boolean = false): void {
     // Abort all agent subprocesses for this run
     const controller = this.runAbortControllers.get(runId);
     if (controller) {
-      this.runAbortControllers.delete(runId);
+      if (!keepController) {
+        this.runAbortControllers.delete(runId);
+      }
       controller.abort();
     }
 
@@ -669,14 +648,10 @@ export class WorkflowOrchestrator {
     }
   }
 
-  /**
-   * Post a message to the worker thread.
-   */
+  /** Post a message to the worker thread. */
   private postMessage(runId: string, msg: unknown): void {
     const worker = this.workers.get(runId);
-    if (worker) {
-      worker.postMessage(msg);
-    }
+    if (worker) worker.postMessage(msg);
   }
 
   /** Build the context object for error handler functions. */
@@ -688,12 +663,41 @@ export class WorkflowOrchestrator {
       getRunMeta: (id) => this.runMetaMap.get(id),
       events: this.events,
       terminateWorker: (id) => this.terminateWorker(id),
+      cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
       recreateRunAbortController: (id) => this.recreateRunAbortController(id),
       startWorker: (id, inst, src, args) => this.startWorker(id, inst, src, args),
-      cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
       persistState: () => this.persistState(),
       onCompletion: (id) => this.onCompletion?.(id),
       deleteRunPool: (id) => this.runPools.delete(id),
+    };
+  }
+
+  /** Build the context object for agent-call-handler.executeWithRetry.
+   *  Mirrors errorHandlerContext() — stateless handler + injected orchestrator deps. */
+  private agentCallContext(): AgentCallContext {
+    return {
+      pi: this.pi,
+      events: this.events,
+      runPools: this.runPools,
+      runAbortControllers: this.runAbortControllers,
+      postMessage: (id, msg) => this.postMessage(id, msg),
+      persistState: () => this.persistState(),
+      budgetCallbacks: () => this.budgetCallbacks(),
+      cleanupTempFile: (fp) => this.cleanupTempFile(fp),
+      onTraceUpdate: (id) => this.onTraceUpdate?.(id),
+    };
+  }
+
+  /** Shared BudgetCallbacks 实例——executeWithRetry / handleAgentCall /
+   *  scheduleTimeBudgetCheck 都需要同样的 5 个回调。集中创建避免在调用点
+   *  重复 6 行内联（orchestrator.ts 文件行数 1000+ 紧贴上限）。 */
+  private budgetCallbacks() {
+    return {
+      postMessage: (id: string, msg: unknown) => this.postMessage(id, msg),
+      terminateWorker: (id: string) => this.terminateWorker(id),
+      cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
+      persistState: () => this.persistState(),
+      onCompletion: (id: string) => this.onCompletion?.(id),
     };
   }
 
@@ -762,6 +766,22 @@ export class WorkflowOrchestrator {
       return;
     }
 
+    // Round 5 SUG#4 + Must-fix #4: 入口先 checkBudget。budget 是软限制——若 worker
+    // 在检查生效前连续 enqueue N 个调用，这 N 个仍会执行并累加 token，budget 可被
+    // 突破 maxTokens 的 N 倍。入口检查只能终止后续调用；硬限制需在 pool.enqueue
+    // 内加 budget gate（未实现，引入 pool↔budget 耦合且仍有并发竞态窗口）。
+    if (isBudgetExceeded(instance)) {
+      const b = instance.budget;
+      const errorResult: StateAgentResult = {
+        content: "",
+        error: `Budget exceeded before dispatch: ${b.usedTokens}/${b.maxTokens ?? "?"} tokens`,
+      };
+      instance.callCache.set(callId, errorResult);
+      this.postMessage(runId, { type: "agent-result", callId, result: errorResult, cached: false });
+      await checkBudget(instance, runId, this.budgetCallbacks());
+      return;
+    }
+
     // Agent resolution
     const resolved = this.resolveAgentOpts(opts);
     if (resolved.error) {
@@ -793,143 +813,7 @@ export class WorkflowOrchestrator {
     appendTraceNode(this.pi, runId, node);
     this.events.emit(runId, { type: "trace", node: { stepIndex: node.stepIndex, agent: node.agent, status: node.status, phase: node.phase } });
     this.onTraceUpdate?.(runId);
-    this.executeWithRetry(runId, callId, enrichedOpts, instance, node);
-  }
-
-  /**
-   * Execute an agent call with retry logic. Retries up to MAX_AGENT_RETRIES
-   * on failure with exponential backoff (1s, 2s, 4s).
-   */
-  private async executeWithRetry(
-    runId: string,
-    callId: number,
-    opts: AgentCallOpts,
-    instance: WorkflowInstance,
-    node: ExecutionTraceNode,
-    attempt = 1,
-  ): Promise<void> {
-    const pool = this.runPools.get(runId);
-    if (!pool) {
-      // Pool already cleaned up (workflow terminated) — skip
-      return;
-    }
-    // P1-2: Use per-run AbortController signal so terminateWorker can kill subprocesses
-    const runController = this.runAbortControllers.get(runId);
-    pool.enqueue(opts, runController?.signal).then(async (poolResult) => {
-      // P0-2: Stale state check — instance may have been paused/aborted during agent call
-      if (instance.status !== "running") return;
-
-      // P1-5: Stale context detection — do not retry when pi's session context
-      // is stale (e.g. after compact). Retrying the same call would just fail again.
-      if (!poolResult.success && isStaleContextErrorMsg(poolResult.error)) {
-        // Mark trace node as failed and surface to worker
-        const traceNode = instance.trace.find((n) => n.stepIndex === callId);
-        if (traceNode) {
-          traceNode.status = "failed";
-          traceNode.sessionId = poolResult.sessionId;
-          traceNode.result = {
-            content: poolResult.output,
-            parsedOutput: poolResult.parsedOutput,
-            usage: poolResult.usage,
-            durationMs: poolResult.durationMs,
-            error: poolResult.error,
-            toolCalls: poolResult.toolCalls,
-          };
-          traceNode.completedAt = new Date().toISOString();
-          appendTraceNode(this.pi, runId, traceNode);
-          this.events.emit(runId, { type: "node-update", stepIndex: callId, node: { stepIndex: traceNode.stepIndex, agent: traceNode.agent, status: traceNode.status, phase: traceNode.phase } });
-        }
-        this.postMessage(runId, {
-          type: "agent-result",
-          callId,
-          result: {
-            content: poolResult.output,
-            usage: poolResult.usage,
-            error: poolResult.error,
-            toolCalls: poolResult.toolCalls,
-          },
-          cached: false,
-        });
-        await this.persistState();
-        this.onTraceUpdate?.(runId);
-
-        // Cleanup temp file on stale context early return
-        if (opts.systemPromptFiles) {
-          for (const fp of opts.systemPromptFiles) {
-            this.cleanupTempFile(fp);
-          }
-        }
-        return;
-      }
-
-      const result: StateAgentResult = {
-        content: poolResult.output,
-        parsedOutput: poolResult.parsedOutput,
-        usage: poolResult.usage,
-        durationMs: poolResult.durationMs,
-        error: poolResult.success ? undefined : poolResult.error,
-        toolCalls: poolResult.toolCalls,
-      };
-
-      // Retry on failure with exponential backoff
-      if (!poolResult.success && attempt < MAX_AGENT_RETRIES) {
-        const delay = RETRY_BACKOFF_MS * Math.pow(EXPONENTIAL_BACKOFF_BASE, attempt - 1);
-        setTimeout(() => {
-          // P0-2: Stale state check before retry
-          if (instance.status !== "running") return;
-          // Skip retry if run was aborted (controller removed by terminateWorker)
-          if (!this.runAbortControllers.has(runId)) return;
-          this.executeWithRetry(runId, callId, opts, instance, node, attempt + 1);
-        }, delay);
-        return;
-      }
-
-      // Cache the result for potential pause/resume
-      instance.callCache.set(callId, result);
-
-      // Send result back to worker
-      this.postMessage(runId, { type: "agent-result", callId, result, cached: false });
-
-      // Update trace node
-      const traceNode = instance.trace.find((n) => n.stepIndex === callId);
-      if (traceNode) {
-        traceNode.status = poolResult.success ? "completed" : "failed";
-        traceNode.sessionId = poolResult.sessionId;
-        traceNode.result = result;
-        traceNode.completedAt = new Date().toISOString();
-        appendTraceNode(this.pi, runId, traceNode);
-        this.events.emit(runId, { type: "node-update", stepIndex: callId, node: { stepIndex: traceNode.stepIndex, agent: traceNode.agent, status: traceNode.status, phase: traceNode.phase } });
-      }
-      if (poolResult.usage) {
-        instance.budget.usedTokens += poolResult.usage.input + poolResult.usage.output;
-        instance.budget.usedCost += poolResult.usage.cost;
-      }
-
-      // Push budget update to worker for dynamic budget functions
-      this.postMessage(runId, {
-        type: "budget-update",
-        budget: { usedTokens: instance.budget.usedTokens, usedCost: instance.budget.usedCost },
-      });
-
-      // Enforce budget limits
-      await checkBudget(this.instances.get(runId), runId, {
-        postMessage: (id, msg) => this.postMessage(id, msg),
-        terminateWorker: (id) => this.terminateWorker(id),
-        cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
-        persistState: () => this.persistState(),
-        onCompletion: (id) => this.onCompletion?.(id),
-      });
-
-      await this.persistState();
-      this.onTraceUpdate?.(runId);
-
-      // Cleanup temp file if it was created for agent system prompt
-      if (opts.systemPromptFiles) {
-        for (const fp of opts.systemPromptFiles) {
-          this.cleanupTempFile(fp);
-        }
-      }
-    });
+    executeWithRetry(this.agentCallContext(), runId, callId, enrichedOpts, instance, node);
   }
 
   // ── Synchronous run (for programmatic callers) ────────────

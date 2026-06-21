@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# link-npm.sh — 卸载 symlink 版本，安装 npm 版本
-# 用法: ./link-npm.sh <package>
+# link-npm.sh — 卸载 symlink 版本，安装 npm 版本（或纯卸载）
+# 用法:
+#   ./link-npm.sh <package>              # 切换到 npm 版本（包未发布时自动降级为纯卸载）
+#   ./link-npm.sh <package> --uninstall   # 纯卸载：只删 symlink + 清 settings.json，不安装 npm
+#
 #   <package> = 短名 (model-switch) / pi-前缀 (pi-model-switch) / npm全名 (@zhushanwen/pi-model-switch)
 #
 # 幂等安全：重复执行不会产生副作用，已是最新状态时直接跳过。
@@ -75,48 +78,97 @@ remove_local_entry() {
 	"
 }
 
+# ── 检查 npm 包是否已发布 ────────────────────────────────
+# npm view 在包不存在时返回非零；2>/dev/null + || true 容错
+is_npm_published() {
+	local npm="$1"
+	npm view "$npm" version >/dev/null 2>&1
+}
+
+# ── 执行清理（删 symlink + 清 settings.json）────────────
+do_cleanup() {
+	local short="$1"
+
+	# 步骤 1: 清理 symlink（只删 symlink 类型，不动普通目录）
+	if [ -L "$EXTENSIONS_DIR/$short" ]; then
+		rm -f "$EXTENSIONS_DIR/$short"
+		echo "  删除 symlink: $EXTENSIONS_DIR/$short"
+	else
+		echo "  无 symlink 需删除"
+	fi
+
+	# 步骤 2: 清理 settings.json 中残留的 local 条目
+	if is_local_registered "$short"; then
+		remove_local_entry "$short"
+		echo "  清理 settings.json 中的 local 条目: extensions/$short"
+	else
+		echo "  无 local 条目需清理"
+	fi
+}
+
 # ── 主逻辑 ──────────────────────────────────────────────
 main() {
-	if [ $# -ne 1 ]; then
-		echo "用法: $0 <package>"
-		echo "  <package> = 短名 (model-switch) / pi-前缀 (pi-model-switch) / npm全名 (@zhushanwen/pi-model-switch)"
+	local mode="install" # 默认模式：卸载后安装 npm 版本
+
+	# 解析参数：<package> [+ 可选 --uninstall]
+	if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+		echo "用法: $0 <package> [--uninstall]"
+		echo "  <package>  = 短名 (model-switch) / pi-前缀 (pi-model-switch) / npm全名 (@zhushanwen/pi-model-switch)"
+		echo "  --uninstall = 纯卸载：只清理不安装 npm（适用于未发布的包）"
 		exit 1
+	fi
+
+	if [ $# -eq 2 ] && [ "$2" == "--uninstall" ]; then
+		mode="uninstall"
 	fi
 
 	resolve_name "$1"
 	EXT_PATH="$EXTENSIONS_DIR/$SHORT_NAME"
 	NPM_ENTRY="npm:$NPM_NAME"
 
+	# ── 纯卸载模式 ──
+	if [ "$mode" == "uninstall" ]; then
+		echo "==> 纯卸载 $SHORT_NAME (不安装 npm 版本)"
+		do_cleanup "$SHORT_NAME"
+		echo ""
+		green "✓ 完成: $SHORT_NAME 已卸载"
+		echo "  重启 Pi 生效。"
+		exit 0
+	fi
+
+	# ── 切换到 npm 模式 ──
 	echo "==> 切换 $SHORT_NAME → npm 版本"
 
-	# ── 幂等检查：已是目标状态 ──
+	# 幂等检查：已是目标状态
 	if is_npm_ready "$NPM_NAME" && ! has_symlink "$SHORT_NAME"; then
 		green "✓ 已完成，无需操作 (npm: $NPM_NAME)"
 		exit 0
 	fi
 
-	# ── 步骤 1: 清理 symlink ──
-	if [ -L "$EXT_PATH" ]; then
-		rm -f "$EXT_PATH"
-		echo "  删除 symlink: $EXT_PATH"
-	else
-		echo "  无 symlink 需删除"
+	# 步骤 1+2: 清理 symlink + settings.json
+	do_cleanup "$SHORT_NAME"
+
+	# 步骤 3 前预检：npm 包是否已发布
+	if ! is_npm_published "$NPM_NAME"; then
+		echo ""
+		yellow "⚠ npm 包 $NPM_NAME 未发布 (404)。"
+		echo "  清理已完成 (symlink 已删、settings.json 已清), 跳过 npm 安装。"
+		echo "  如需安装, 请先 npm publish, 再运行: $0 $1"
+		echo ""
+		green "✓ 完成: $SHORT_NAME 已卸载 (npm 版本不可用)"
+		echo "  重启 Pi 生效。"
+		exit 0
 	fi
 
-	# 如果 ext_path 是普通目录（非 symlink），不删除——可能是用户手工放置的
-	# 只删除 symlink 类型的路径
-
-	# ── 步骤 2: 清理 settings.json 中残留的 local 条目 ──
-	if is_local_registered "$SHORT_NAME"; then
-		remove_local_entry "$SHORT_NAME"
-		echo "  清理 settings.json 中的 local 条目: extensions/$SHORT_NAME"
-	else
-		echo "  无 local 条目需清理"
-	fi
-
-	# ── 步骤 3: 安装 npm 版本 ──
+	# 步骤 3: 安装 npm 版本（显式捕获退出码，不用管道掩盖失败）
 	echo "  安装 npm 包: $NPM_ENTRY ..."
-	pi install "$NPM_ENTRY" 2>&1 | sed 's/^/    /'
+	if ! pi install "$NPM_ENTRY"; then
+		echo ""
+		red "✗ pi install 失败: $NPM_ENTRY"
+		echo "  清理已完成，但 npm 安装失败。请检查网络或 npm registry。"
+		echo "  重试安装: pi install $NPM_ENTRY"
+		exit 1
+	fi
 
 	echo ""
 	green "✓ 完成: $SHORT_NAME → npm ($NPM_NAME)"

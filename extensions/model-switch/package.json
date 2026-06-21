@@ -39,7 +39,11 @@
       "optional": true
     }
   },
+  "devDependencies": {
+    "vitest": "^4.1.8"
+  },
   "scripts": {
-    "typecheck": "npx tsc --noEmit"
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run"
   }
 }

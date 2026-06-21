@@ -12,7 +12,7 @@
  *   plans: 以计划名为 key（对应 quota-provider cache key）
  */
 
-import { existsSync, mkdirSync, readFileSync, unlinkSync,writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { CONFIG_DIR, CONFIG_PATH } from "./config";
@@ -270,26 +270,6 @@ function inferAlias(m: ModelInfo): string {
 
 export function getConfigPath(): string {
 	return CONFIG_PATH;
-}
-
-export function writePolicyConfig(json: string, overwrite = false): { ok: true; path: string } | { ok: false; error: string } {
-	if (!overwrite && existsSync(CONFIG_PATH)) {
-		return { ok: false, error: `Config already exists at ${CONFIG_PATH}. Delete it first to regenerate.` };
-	}
-
-	try {
-		JSON.parse(json);
-	} catch {
-		return { ok: false, error: "Invalid JSON." };
-	}
-
-	try {
-		mkdirSync(CONFIG_DIR, { recursive: true });
-		writeFileSync(CONFIG_PATH, json, "utf-8");
-		return { ok: true, path: CONFIG_PATH };
-	} catch (err) {
-		return { ok: false, error: `Failed to write: ${(err as Error).message}` };
-	}
 }
 
 export function deletePolicyConfig(): { ok: true; path: string } | { ok: false; error: string } {

@@ -13,9 +13,6 @@ import { Type } from "typebox";
 
 // ── 常量 ────────────────────────────────────────────
 
-/** appendEntry 的 customType 前缀 */
-export const TRACKER_ENTRY_PREFIX = "evolve-tracker-";
-
 const TERMINAL_STATUSES: ReadonlySet<TrackedItemStatus> = new Set([
   "completed",
   "recorded",

@@ -23,7 +23,8 @@ xyz-pi-extensions/
 │   ├── model-switch/        → @zhushanwen/pi-model-switch
 │   ├── turn-timing/         → @zhushanwen/pi-turn-timing
 │   ├── plan/                → @zhushanwen/pi-plan
-│   └── ask-user/            → @zhushanwen/pi-ask-user
+│   ├── ask-user/            → @zhushanwen/pi-ask-user
+│   └── subagents/           → @zhushanwen/pi-subagents
 ├── shared/                      # 内部共享包（private，不独立发布）
 │   ├── quota-providers/     → @zhushanwen/pi-quota-providers
 │   ├── taste-lint/          → @zhushanwen/pi-taste-lint
@@ -90,6 +91,7 @@ Schema：`docs/third-party-extensions/extensions.schema.json`
 
 - [CONTEXT.md](./CONTEXT.md) — 领域术语表（Pi 平台概念 + 本项目概念 + 歧义标记）
 - [docs/pi-extension-standards.md](./docs/pi-extension-standards.md) — **Pi Extension 开发规范**（所有新增/修改 extension 前必须阅读）
+- [docs/pi-tui-development-guide.md](./docs/pi-tui-development-guide.md) — **Pi TUI 扩展开发避坑指南**（渲染管线/shell 策略、ANSI/宽度/截断、键盘交互/overlay、流式更新/性能；开发带 TUI 的 extension 前必读）
 - [docs/adr/](./docs/adr/) — 架构决策记录（已做出的决策，不可逆）
   - [001-subagent-architecture.md](./docs/adr/001-subagent-architecture.md) — Subagent 进程隔离、上下文传递、background 模式、能力边界、模型选择
   - [002-goal-7-state-machine.md](./docs/adr/002-goal-7-state-machine.md) — Goal 为什么有 7 种状态（time_limited + cancelled），以及为什么没有 usage_limited
@@ -276,6 +278,7 @@ bash .githooks/check-structure
 - `renderCall` 和 `renderResult` 返回 `new Text(string, 0, 0)`
 - 颜色通过 `theme.fg("token", text)` 使用语义 token，不硬编码 ANSI
 - 展开/折叠：`options.expanded` 控制显示详细程度
+- **导航键规范**：自定义 TUI 组件（如 `CategoryConfirmComponent`）的列表导航用方向键，经 pi-tui 的 `matchesKey(data,"up"|"down")` 识别——它覆盖全部方向键编码（legacy `\x1b[A`/`\x1b[B`、application-mode `\x1bOA`/`\x1bOB`、Kitty CSI u、modifyOtherKeys），不要硬编码单一字节序列（会漏掉 application-mode/Kitty 终端，方向键直接失效）。禁止用 vim j/k 导航：自定义组件若用 j/k 导航，会与同一组件内的 filter 文本输入冲突——用户输入字母 j/k 时被误判为导航，字母进不了 filter。`matchesKey` 只匹配功能键码、对可打印字母返回 false，故天然避开此冲突。确认/取消多键位（Enter/Esc）走 `kb.matches` 以尊重用户键位，不受此限。Pi 内置 `SelectList` 的 j/k 行为是平台能力，不在此规范范围内。
 
 ### GUI 渲染描述符（`_render` 协议）
 
@@ -524,9 +527,18 @@ GUI 组件（`TaskListWidget` 等）是 xyz-agent 的工作，扩展侧不需要
 
 ### TypeScript
 
-- 禁止 `any`，用 `unknown` 或具体类型
+- 禁止 `any`，用 `unknown` 或具体类型（`no-explicit-any: error`，与 `docs/quality-gates.md` 一致）
 - `(entry as any).customType` 这种模式改为类型守卫函数
+- `as never` / `as any` / `as unknown as T` 会绕过类型检查，`taste/no-unsafe-cast` 规则会 warn 标记。不可替代的断言必须有运行时 guard 或 SDK 契约测试兜底
 - import 顺序：Node 内置 → npm 包 → 项目内部
+
+### SDK 接口契约
+
+凡调用 `pi.on(...)`、`pi.registerTool(...)`、`pi.registerCommand(...)`、读 `ctx.*` 的代码：
+
+- **ExtensionHandler 签名是 `(event, ctx) => ...`（两个参数）**。`modelRegistry`/`cwd`/`ui`/`sessionManager` 在第二个参数 `ExtensionContext` 上，不在 event 上。核对时打开真实 SDK 的 `types.d.ts`，不能只看 `shared/types/mariozechner/index.d.ts` 的 stub
+- 新增/修改 SDK 调用必须有契约测试覆盖（模板：`extensions/subagents/src/__tests__/sdk-contract.test.ts`）
+- `registerTool` 的 schema 必填字段在所有执行模式下都必须真的必填；条件必填用 Optional + 运行时校验，避免 schema 与描述矛盾
 
 ### 行数
 
@@ -755,6 +767,7 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `extensions/turn-timing/` | `@zhushanwen/pi-turn-timing` | Turn 各阶段耗时记录 | — |
 | `extensions/plan/` | `@zhushanwen/pi-plan` | 轻量级 Plan Mode（brainstorming + writing-plans） | — |
 | `extensions/ask-user/` | `@zhushanwen/pi-ask-user` | 内联自适应 ask_user 工具（单/多问题、分屏预览、内联编辑器） | — |
+| `extensions/subagents/` | `@zhushanwen/pi-subagents` | 进程内 subagent 执行运行时（agent 发现、模型解析、并发控制） | — |
 
 **`shared/`** — 内部共享包（private）
 

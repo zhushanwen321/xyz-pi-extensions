@@ -43,6 +43,9 @@ export interface AgentCallOpts {
   model?: string;
   /** Scene name for model-switch advisor recommendation. */
   scene?: string;
+  /** Wall-clock timeout in milliseconds. When > 0, aborts the subprocess
+   *   if it runs longer than this, regardless of external signal. */
+  timeoutMs?: number;
   /** Skill name to load (e.g. "code-review"). Resolved to SKILL.md path
    *  and injected via --skill flag in the subprocess. */
   skill?: string;
@@ -257,8 +260,33 @@ export class AgentPool {
       let stderr = "";
       let exitCode: number;
 
+      // Rebuild a combined AbortController so wall-clock timeoutMs
+      // (per-call) and the external pool/orchestrator signal are both
+      // honored. Without this, agent({timeoutMs:5000}) silently does
+      // nothing — see review round 1 must-fix #2.
+      const controller = new AbortController();
+      const onExternalAbort = () => controller.abort();
+      if (signal) {
+        if (signal.aborted) {
+          controller.abort();
+        } else {
+          signal.addEventListener("abort", onExternalAbort, { once: true });
+        }
+      }
+      const timeoutTimer =
+        opts.timeoutMs && opts.timeoutMs > 0
+          ? setTimeout(() => controller.abort(), opts.timeoutMs)
+          : undefined;
+      if (timeoutTimer) timeoutTimer.unref();
+
       try {
-        const result = await runPiProcess(command, cmdArgs, pipeline, signal, env);
+        const result = await runPiProcess(
+          command,
+          cmdArgs,
+          pipeline,
+          controller.signal,
+          env,
+        );
         exitCode = result.exitCode;
         stderr = result.stderr;
       } catch (err) {
@@ -272,6 +300,14 @@ export class AgentPool {
           toolCalls: [],
         });
         return;
+      } finally {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        // 正常完成时必须摘除外部 signal 的 abort listener，否则随 agent 调用数线性泄漏
+        // （signal 生命周期长于单次 run，持久的 listener 引用会阻止 controller GC）。
+        // abort 路径因 { once: true } 已自动移除，这里覆盖正常完成路径。
+        if (signal && !signal.aborted) {
+          signal.removeEventListener("abort", onExternalAbort);
+        }
       }
 
       const durationMs = Date.now() - startedAt;

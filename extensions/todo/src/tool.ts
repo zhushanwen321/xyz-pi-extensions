@@ -33,7 +33,7 @@ export interface TodoActionParams {
 
 // ── TodoParams schema ────────────────────────────────
 
-export const TodoParams = Type.Object({
+const TodoParams = Type.Object({
 	action: StringEnum(["list", "add", "update", "delete", "clear"] as const),
 	text: Type.Optional(Type.String({ description: "Todo text (for update action)" })),
 	id: Type.Optional(Type.Number({ description: "Todo ID (for update action)" })),
@@ -219,7 +219,7 @@ function handleClear(state: TodoSessionState): string {
 
 // ── Dispatcher ───────────────────────────────────────
 
-export function executeTodoAction(
+function executeTodoAction(
 	params: TodoActionParams,
 	state: TodoSessionState,
 	ctx: ExtensionContext,

@@ -71,11 +71,12 @@ Hook 文件：`.githooks/pre-commit`
 
 | 规则 | 级别 |
 |------|------|
-| `no-explicit-any: error` | **P0** — 类型即契约 |
+| `no-explicit-any: error` | **P0** — 类型即契约（测试文件 override 关闭） |
 | `prefer-allsettled` | P1 — 独立数据源用 allSettled |
 | `no-silent-catch` | P1 — catch 不能为空 |
 | `no-unbounded-while-true` | P0 — while(true) 必须有迭代上限 |
 | `no-inline-import-type` | P1 — 禁止内联 import 类型 |
+| `no-unsafe-cast` | P1 — 检测 `as never`/`as any`/`as unknown as`/全可选结构断言，warn 级在 review 可见 |
 | `max-lines: 1000` | P1 — 单文件行数上限 |
 | `max-lines-per-function: 300` | P1 — 函数行数上限 |
 | `no-magic-numbers` | P2 — 语义化命名（0/1/-1 豁免） |

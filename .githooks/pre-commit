@@ -57,6 +57,20 @@ if [[ -n "$STAGED_EXT_DIRS" && -z "$STAGED_CLAUDE" ]]; then
   echo ""
 fi
 
+# ── -1b. spec 偏差记录提醒 ────────────────────────────────
+# 当 staged 文件涉及有 spec 的扩展（subagents/workflow 等）时，提醒记录实现偏差
+STAGED_SPEC_RELEVANT=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^extensions/(subagents|workflow)/' | grep -v '__tests__' | grep -v '\.test\.' || true)
+
+if [[ -n "$STAGED_SPEC_RELEVANT" ]]; then
+  echo "--- spec 偏差记录提醒 ---"
+  echo -e "${C_YELLOW}[WARN]${C_RESET} 本次提交涉及有 spec 的扩展（subagents/workflow）"
+  echo "        如果实现与 spec.md 描述有偏差（API 形状、必填参数、执行模式等），"
+  echo "        必须在对应 spec.md 末尾「实现偏差说明」补 D 编号记录。"
+  echo "        spec 路径：.xyz-harness/2026-06-13-agent-runtime-workflow/spec.md"
+  echo "        如果本次变更完全符合 spec，可忽略此警告"
+  echo ""
+fi
+
 # ── 0. pi manifest 检查 ──────────────────────────────────
 echo "--- pi manifest 检查 ---"
 HAS_ERROR=0
@@ -296,7 +310,13 @@ if [[ ${#TEST_PKGS[@]:-} -gt 0 ]]; then
   for pkg in "${TEST_PKGS[@]}"; do
     pkg_name=$(python3 -c "import json; print(json.load(open('$pkg/package.json')).get('name', '$pkg'))" 2>/dev/null || echo "$pkg")
     echo "  测试 $pkg_name ..."
-    if ! (cd "$pkg" && npx vitest run) 2>&1; then
+    # 清除 GIT_* 环境变量：git commit 会注入 GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE
+    # 给 hook 进程，这些变量会劫持测试中的 git 操作（如 worktree 测试在 tmpdir
+    # 创建仓库时，commit 会误打到项目仓库）。hook 本身需要这些变量完成 commit，
+    # 但它 spawn 的 vitest 子进程不需要。env -u 永久切断这类污染。
+    # 注意：这是纵深防御的兜底层。涉及 git 操作的测试仍需自己清理环境（worktree.test.ts
+    # 的 CLEAN_ENV），因为测试也可能被手动运行而非经由 hook 触发。
+    if ! (cd "$pkg" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_QUARANTINE_PATH -u GIT_PREFIX npx vitest run) 2>&1; then
       echo -e "${C_RED}[FAIL]${C_RESET} $pkg_name 测试失败"
       echo -e "${C_YELLOW}无论是否本次修改导致，都需要修复，不得跳过${C_RESET}"
       exit 1

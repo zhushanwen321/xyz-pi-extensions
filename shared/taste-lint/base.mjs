@@ -17,6 +17,7 @@ import noSilentCatch from './rules/no-silent-catch.mjs';
 import noUnboundedWhileTrue from './rules/no-unbounded-while-true.mjs';
 import noInlineImportType from './rules/no-inline-import-type.mjs';
 import noEslintDisable from './rules/no-eslint-disable.mjs';
+import noUnsafeCast from './rules/no-unsafe-cast.mjs';
 
 export const tastePlugin = {
   meta: { name: 'eslint-plugin-taste' },
@@ -26,15 +27,17 @@ export const tastePlugin = {
     'no-unbounded-while-true': noUnboundedWhileTrue,
     'no-inline-import-type': noInlineImportType,
     'no-eslint-disable': noEslintDisable,
+    'no-unsafe-cast': noUnsafeCast,
   },
 };
 
 /** 品味规则配置 */
 export const tasteRules = {
   // 类型即契约
-  // Pi Extension API 回调参数通过 types stub 解析为 any，不可避免
-  // 业务逻辑中的 any 滥用通过 code review 控制
-  '@typescript-eslint/no-explicit-any': 'warn',
+  // no-explicit-any 设为 error（与 CLAUDE.md / quality-gates.md 文档一致）。
+  // 生产代码目前 0 个显式 any；如需不可避免场景，用 unknown + 类型守卫。
+  // 注：SDK 类型桩（.d.ts）被 eslint ignore，不受此规则约束。
+  '@typescript-eslint/no-explicit-any': 'error',
 
   // 允许 _ 前缀的未使用变量和参数（惯用模式）
   '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
@@ -66,6 +69,8 @@ export const tasteRules = {
   'taste/no-unbounded-while-true': 'warn',
   'taste/no-inline-import-type': 'warn',
   // taste/no-eslint-disable 通过 githook pre-commit 在变更文件中强制执行，不在 ESLint 配置中启用
+  // 检测 as never / as any / as unknown as / 全可选结构断言（本次 session_start bug 的根因）
+  'taste/no-unsafe-cast': 'warn',
 };
 
 export default [

@@ -35,10 +35,13 @@ importers:
       '@mariozechner/pi-tui':
         specifier: '*'
         version: 0.73.1
+    devDependencies:
+      '@earendil-works/pi-tui':
+        specifier: '*'
+        version: 0.78.0
       '@sinclair/typebox':
         specifier: '*'
         version: 0.34.49
-    devDependencies:
       '@types/node':
         specifier: ^24.0.0
         version: 24.12.4
@@ -155,6 +158,10 @@ importers:
       typebox:
         specifier: '*'
         version: 1.1.39
+    devDependencies:
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(@types/node@24.12.4)(vite@8.0.16(@types/node@24.12.4)(jiti@2.7.0)(yaml@2.9.0))
 
   extensions/plan:
     dependencies:
@@ -210,6 +217,28 @@ importers:
         specifier: ^4.1.8
         version: 4.1.8(@types/node@24.12.4)(vite@8.0.16(@types/node@24.12.4)(jiti@2.7.0)(yaml@2.9.0))
 
+  extensions/subagents:
+    dependencies:
+      '@earendil-works/pi-tui':
+        specifier: '*'
+        version: 0.78.0
+      '@mariozechner/pi-ai':
+        specifier: '*'
+        version: 0.73.1(ws@8.21.0)(zod@4.4.3)
+      '@mariozechner/pi-coding-agent':
+        specifier: '*'
+        version: 0.73.1(ws@8.21.0)(zod@4.4.3)
+      '@sinclair/typebox':
+        specifier: '*'
+        version: 0.34.49
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.12.4
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(@types/node@24.12.4)(vite@8.0.16(@types/node@24.12.4)(jiti@2.7.0)(yaml@2.9.0))
+
   extensions/todo:
     dependencies:
       '@earendil-works/pi-ai':
@@ -247,6 +276,10 @@ importers:
       typebox:
         specifier: '*'
         version: 1.1.39
+    devDependencies:
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(@types/node@24.12.4)(vite@8.0.16(@types/node@24.12.4)(jiti@2.7.0)(yaml@2.9.0))
 
   extensions/vision:
     dependencies:
@@ -277,9 +310,6 @@ importers:
       '@sinclair/typebox':
         specifier: '*'
         version: 0.34.49
-      '@zhushanwen/pi-model-switch':
-        specifier: '*'
-        version: 0.2.6(@mariozechner/pi-ai@0.73.1(ws@8.21.0)(zod@4.4.3))(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))(@sinclair/typebox@0.34.49)
       '@zhushanwen/pi-structured-output':
         specifier: '*'
         version: 0.2.1(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))(@sinclair/typebox@0.34.49)
@@ -306,6 +336,10 @@ importers:
       eslint:
         specifier: '>=9'
         version: 9.39.4(jiti@2.7.0)
+    devDependencies:
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(@types/node@24.12.4)(vite@8.0.16(@types/node@24.12.4)(jiti@2.7.0)(yaml@2.9.0))
 
   shared/types: {}
 
@@ -1010,18 +1044,6 @@ packages:
 
   '@vitest/utils@4.1.8':
     resolution: {integrity: sha512-uOJamYALNhfJ6iolExyQM40yIQwDqYnkKtQ5VCiSe17E33H0aQ/u+1GlRuz4LZBk6Mm3sg90G9hEbmEt37C1Zg==}
-
-  '@zhushanwen/pi-model-switch@0.2.6':
-    resolution: {integrity: sha512-HAulLKpNi8F28DSuUWPsLHfxwCyRSAyDKUH4udt0KimbQepWawlixW+DzYrWN02doFbCNC8iPlxhLiWx8b/rEQ==}
-    peerDependencies:
-      '@mariozechner/pi-ai': '*'
-      '@mariozechner/pi-coding-agent': '*'
-      '@sinclair/typebox': '*'
-
-  '@zhushanwen/pi-quota-providers@0.4.1':
-    resolution: {integrity: sha512-mNEVm+sKjD59cqDI3StoczWQpn8i7SpWGDkP8jXIDA6YhmGKV5DE+mOdzKymz9pROCHDAaPfQ+CAqPFkhEcNHw==}
-    peerDependencies:
-      '@mariozechner/pi-coding-agent': '*'
 
   '@zhushanwen/pi-structured-output@0.2.1':
     resolution: {integrity: sha512-SYDHmZzIxS8X72dFbFnw3ApLpRnY6FFDgIbrCkdqS5lgABKqX503l7NOOhfjwPYJ0aAIlegJW76bAczvbs59wA==}
@@ -3307,17 +3329,6 @@ snapshots:
       '@vitest/pretty-format': 4.1.8
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.0
-
-  '@zhushanwen/pi-model-switch@0.2.6(@mariozechner/pi-ai@0.73.1(ws@8.21.0)(zod@4.4.3))(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))(@sinclair/typebox@0.34.49)':
-    dependencies:
-      '@mariozechner/pi-ai': 0.73.1(ws@8.21.0)(zod@4.4.3)
-      '@mariozechner/pi-coding-agent': 0.73.1(ws@8.21.0)(zod@4.4.3)
-      '@sinclair/typebox': 0.34.49
-      '@zhushanwen/pi-quota-providers': 0.4.1(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))
-
-  '@zhushanwen/pi-quota-providers@0.4.1(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))':
-    dependencies:
-      '@mariozechner/pi-coding-agent': 0.73.1(ws@8.21.0)(zod@4.4.3)
 
   '@zhushanwen/pi-structured-output@0.2.1(@mariozechner/pi-coding-agent@0.73.1(ws@8.21.0)(zod@4.4.3))(@sinclair/typebox@0.34.49)':
     dependencies:

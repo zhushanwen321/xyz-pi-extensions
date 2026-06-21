@@ -11,7 +11,7 @@ import { truncateToWidth } from "@mariozechner/pi-tui";
 // ── Constants ─────────────────────────────────────────────────
 
 export const SIDEBAR_WIDTH = 24;
-export const MS_PER_SEC = 1000;
+const MS_PER_SEC = 1000;
 export const PROMPT_FOLD_LINES = 3;
 export const OUTPUT_TRUNCATE_BYTES = 100_000;
 export const ELLIPSIS = "\u2026"; // U+2026

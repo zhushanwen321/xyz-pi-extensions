@@ -16,6 +16,10 @@ export default defineConfig({
 				__dirname,
 				"./node_modules/@earendil-works/pi-tui/dist/index.js",
 			),
+			"@mariozechner/pi-coding-agent": path.resolve(
+				__dirname,
+				"../../shared/types/mariozechner/index.ts",
+			),
 		},
 	},
 });

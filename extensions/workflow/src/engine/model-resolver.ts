@@ -1,48 +1,21 @@
 /**
- * Model resolver — pure function for workflow model resolution.
+ * Model resolver — resolves target model for workflow agent calls.
  *
- * Priority: explicit model param > scene advisor > undefined (Pi default).
- * Extracted from Orchestrator for testability.
+ * Spawn 架构回归后，model 解析退化为直传：仅当调用方显式传入 opts.model
+ * 时返回该值，否则返回 undefined（由 pi 子进程使用默认模型）。
  *
- * @zhushanwen/pi-model-switch is an optional peer dependency.
- * When unavailable, scene-based resolution is silently skipped.
+ * 旧的 scene→model 解析（依赖 model-switch / subagents）已删除——workflow
+ * 不再承担按 scene 选模型的职责。
  */
 
-import type { AgentCallOpts } from "../infra/agent-pool";
-
-/** Lazy-loaded reference to resolveModelForScene from pi-model-switch (optional). */
-let _resolveModelForScene: ((scene: string) => string | undefined) | null | undefined = undefined;
-
-async function loadSceneResolver(): Promise<typeof _resolveModelForScene> {
-	if (_resolveModelForScene !== undefined) return _resolveModelForScene;
-	try {
-		const mod = await import("@zhushanwen/pi-model-switch");
-		_resolveModelForScene = typeof mod.resolveModelForScene === "function" ? mod.resolveModelForScene : null;
-	} catch {
-		// @zhushanwen/pi-model-switch is an optional peer — silent fallback
-		_resolveModelForScene = null;
-	}
-	return _resolveModelForScene;
-}
+import type { AgentCallOpts } from "../infra/agent-pool.js";
 
 /**
- * 根据调用选项解析目标模型。
- * 优先级：显式 model > scene advisor > undefined（Pi 默认）
- *
- * 注意：scene 解析是异步的（dynamic import），首次调用可能有微秒延迟。
+ * 解析目标模型。
+ * 仅返回显式传入的 opts.model（空串视为未指定，归一为 undefined）；
+ * 其余情况返回 undefined。
+ * 保留 async 签名以减少调用点改动。
  */
 export async function resolveModel(opts: AgentCallOpts): Promise<string | undefined> {
-	if (opts.model) return opts.model;
-	if (opts.scene) {
-		const resolver = await loadSceneResolver();
-		if (!resolver) return undefined;
-		try {
-			const resolved = resolver(opts.scene);
-			return resolved ?? undefined;
-		} catch {
-			// Scene resolution failed — return undefined and let the caller fall back
-			return undefined;
-		}
-	}
-	return undefined;
+  return opts.model || undefined;
 }

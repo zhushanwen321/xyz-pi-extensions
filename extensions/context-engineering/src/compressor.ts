@@ -43,14 +43,14 @@ const CHARS_PER_TOKEN = 4;
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 
 // MC: 可被 Microcompact 清理的工具集
-export const COMPACTABLE_TOOLS = new Set([
+const COMPACTABLE_TOOLS = new Set([
   "read", "bash", "bash_background", "grep", "glob",
   "web_search", "web_fetch", "edit", "write",
 ]);
 
 // ── Turn boundary detection ──
 
-export function findTurnBoundaries(messages: AgentMessage[]): TurnBoundary[] {
+function findTurnBoundaries(messages: AgentMessage[]): TurnBoundary[] {
   if (messages.length === 0) return [];
 
   const boundaries: TurnBoundary[] = [];
@@ -78,7 +78,7 @@ export function findTurnBoundaries(messages: AgentMessage[]): TurnBoundary[] {
   return boundaries;
 }
 
-export function isInProtectedTurn(
+function isInProtectedTurn(
   msgIndex: number,
   boundaries: TurnBoundary[],
   protectCount: number,
@@ -95,10 +95,6 @@ export function isInProtectedTurn(
 
 // ── Message field accessors ──
 
-export function getMessageTimestamp(msg: AgentMessage): number {
-  return msg.timestamp;
-}
-
 export function getToolResultText(msg: ToolResultMessage): string {
   return msg.content
     .filter((c): c is TextContent => c.type === "text")
@@ -108,11 +104,11 @@ export function getToolResultText(msg: ToolResultMessage): string {
 
 // ── L0 replacement formatters ──
 
-export function expireToolResult(_originalText: string, id: string): string {
+function expireToolResult(_originalText: string, id: string): string {
   return `[Tool result expired. ID: ${id}. Use recall_context(${id}) to retrieve the original content.]`;
 }
 
-export function truncateBashOutput(
+function truncateBashOutput(
   output: string,
   maxChars: number,
   id: string,
@@ -127,7 +123,7 @@ export function truncateBashOutput(
   );
 }
 
-export function expireThinking(): string {
+function expireThinking(): string {
   return "[thinking expired]";
 }
 
@@ -151,7 +147,7 @@ function fallbackTruncate(content: string): string {
   );
 }
 
-export function condenseToolResult(
+function condenseToolResult(
   content: string,
   keepHeadLines: number,
   keepTailLines: number,
@@ -418,7 +414,7 @@ function isAlreadyProcessed(msg: ToolResultMessage): boolean {
 
 // ── L0: 基础过期/截断/思考清理 ──
 
-export function processL0(
+function processL0(
   messages: AgentMessage[],
   config: L0Config,
   store: RecallStore,
@@ -509,7 +505,7 @@ export function processL0(
 
 // ── L1: 结构化摘要 ──
 
-export function processL1(
+function processL1(
   messages: AgentMessage[],
   config: L1Config,
   store: RecallStore,
@@ -563,7 +559,7 @@ export function processL1(
 
 // ── L2: 紧急压缩 ──
 
-export function processL2(
+function processL2(
   messages: AgentMessage[],
   config: L2Config,
   store: RecallStore,

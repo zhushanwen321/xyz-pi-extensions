@@ -46,6 +46,13 @@ const WorkflowParams = Type.Object({
   error: Type.Optional(Type.String({ description: "Error/reason message (optional, used with abort)" })),
 });
 
+// Round 3 MF8: workflow-lint 独立 schema——只接收 workflow name，
+// 与 WorkflowParams {action, runId?, error?} 不同。共用一个 schema 会在 params.name 处
+// 报类型错位（name 不在 WorkflowParams 上）。
+const WorkflowLintParams = Type.Object({
+  name: Type.String({ description: "Workflow script name to lint" }),
+});
+
 // ── Details type for TUI / _render ────────────────────────────
 
 interface InstanceSummary {
@@ -195,8 +202,8 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
   pi.on("session_tree", async (_event: Record<string, unknown>, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     lsRef.lastSessionId = sessionId;
-    // Dispose the previous branch's orchestrator (cleanup in-flight agent temp files).
-    // Without this, switching branches mid-run leaks temp files.
+    // 切分支前清理旧 orchestrator 的在途 temp 文件（--append-system-prompt / schema 注入文件）。
+    // 不清则 mid-run 切分支会泄漏到磁盘（旧 run 被抛弃不会再走 pause/abort 的清理路径）。
     const previousOrch = orchestrators.get(sessionId);
     if (previousOrch) {
       previousOrch.cleanupAllTempFiles();
@@ -732,11 +739,12 @@ function registerWorkflowLintTool(
       "Use when user asks to check/validate a workflow script before execution.",
       "Not for linting TypeScript source files — only for workflow .js scripts.",
     ],
-    parameters: Type.Object({
-      name: Type.String({ description: "Workflow script name to lint" }),
-    }),
+    // Round 3 MF8: workflow-lint 的参数只有 name，与 WorkflowParams {action, runId?, error?} 不同。
+    // 原代码 params: Static<typeof WorkflowParams> + params.name 是类型错误（name 不在 WorkflowParams 上）。
+    // 定义独立 schema 避免类型与 schema 错位。
+    parameters: WorkflowLintParams,
 
-    async execute(_toolCallId: string, params: Static<typeof WorkflowParams>, _signal: AbortSignal | undefined, _onUpdate: unknown, _ctx: ExtensionContext) {
+    async execute(_toolCallId: string, params: Static<typeof WorkflowLintParams>, _signal: AbortSignal | undefined, _onUpdate: unknown, _ctx: ExtensionContext) {
       const { lintScript } = await import("./infra/script-lint.js");
       const { loadWorkflows } = await import("./infra/config-loader.js");
 

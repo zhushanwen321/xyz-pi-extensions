@@ -120,24 +120,3 @@ export function asSessionEntries(entries: unknown): SessionEntries {
 	return entries as SessionEntries;
 }
 
-// ── 模型能力表（用于 session_start 注入）────────────────
-
-export interface ModelCapability {
-	alias: string;
-	provider: string;
-	modelId: string;
-	capabilities: string[];
-}
-
-/**
- * 从 config 中提取所有模型的能力表。
- */
-export function extractModelCapabilities(config: ModelPolicy): ModelCapability[] {
-	const result: ModelCapability[] = [];
-	for (const [provider, pcfg] of Object.entries(config.models)) {
-		for (const [alias, entry] of Object.entries(pcfg.models)) {
-			result.push({ alias, provider, modelId: entry.modelId, capabilities: entry.capabilities });
-		}
-	}
-	return result;
-}
