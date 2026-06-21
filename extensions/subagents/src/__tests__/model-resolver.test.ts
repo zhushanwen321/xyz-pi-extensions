@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest";
 import {
   availableThinkingLevels,
   inferCategory,
-  resolveModelForAgent,
   type ModelInfo,
   type ModelRegistryLike,
+  resolveModelForAgent,
 } from "../core/model-resolver.ts";
 
 // ============================================================

@@ -158,22 +158,11 @@ export class ModelConfigService {
     return name ? this.agentRegistry.get(name) : undefined;
   }
 
-  // ── 配置读写（command/wizard 调）────────────────────────
+  // ── 配置读取（subagent-service 调）────────────────────────
 
   /** 全局配置深拷贝（调用方拿到副本，改不影响 Service 内部）。 */
   getGlobalConfig(): SubagentsGlobalConfig {
     return structuredClone(this.globalConfig);
-  }
-
-  /** session 状态深拷贝。 */
-  getSessionState(): SessionModelState {
-    return structuredClone(this.sessionState);
-  }
-
-  /** 翻转 YOLO 模式。返回翻转后的新值。 */
-  toggleYolo(): boolean {
-    this.sessionState.yoloMode = !this.sessionState.yoloMode;
-    return this.sessionState.yoloMode;
   }
 
   /** 内部：用于 SubagentService 经 session id 过滤 history（只读访问 sessionId）。 */

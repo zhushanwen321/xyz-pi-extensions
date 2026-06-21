@@ -189,8 +189,10 @@ export class SubagentService {
 
     // background：立即返回 subagentId + sessionFile（窗口期可能 undefined）+ details（status=running）。
     // 步骤 4-6 在 detached promise 里跑。
+    // B1：background 不回流 onUpdate——detached 运行对 tool 层不可见，完成由 notify 驱动新 turn。
+    // 若转发 onUpdate，liftSync 会把 bg 事件误标成 syncResponse(mode:"sync") → spinner setInterval 泄漏。
     const bgDetails = project(record);
-    this.kickOffBackground(record, opts, ctx, identity, signal, priority);
+    this.kickOffBackground(record, { ...opts, onUpdate: undefined }, ctx, identity, signal, priority);
     return { mode: "background", subagentId: record.id, sessionFile: record.sessionFile, details: bgDetails };
   }
 

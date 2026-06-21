@@ -473,6 +473,8 @@ describe("projections", () => {
       const longText = "r".repeat(300);
       const r = makeRecord({ task: longTask, turns: 1, status: "done" });
       r.status = "done";
+      // sessionFile 由 session-runner 写入 record.sessionFile（规范源，早于 agentResult 冠结）。
+      r.sessionFile = "sess.jsonl";
       completeRecord(r, { ...SAMPLE_RESULT, text: longText, sessionFile: "sess.jsonl" }, "done");
       const p = toPersisted(r, "/cwd", "session-xyz");
       expect(p.id).toBe("test-1");

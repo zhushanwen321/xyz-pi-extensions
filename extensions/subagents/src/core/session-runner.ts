@@ -122,7 +122,7 @@ export function formatSchemaInstruction(schema: Record<string, unknown>): string
  *
  * prompt 生命周期钩子集中在此，避免三个独立 subscribe 的时序碎片。
  */
-export interface RunHooks {
+interface RunHooks {
   /** 收到 turn_end 时调用（currentTurns 已递增）。 */
   onTurnEnd(currentTurns: number): void;
   /** 卸载 signal→session.abort 监听。 */
@@ -145,7 +145,8 @@ export interface RunHooks {
 //   ║  4. unsubscribe(): signal?.removeEventListener("abort", ...)   ║
 //   ╚══════════════════════════════════════════════════════════════╝
  */
-export function attachRunHooks(built: BuiltSession, opts: RunOptions): RunHooks {
+/** 为 session 安装 run hooks（turnLimiter + steer + abort + eventLog）。 */
+function attachRunHooks(built: BuiltSession, opts: RunOptions): RunHooks {
   // 1. turnLimiter：steer/abort 绑到 session
   const limiter = createTurnLimiter({
     maxTurns: opts.maxTurns ?? 0,

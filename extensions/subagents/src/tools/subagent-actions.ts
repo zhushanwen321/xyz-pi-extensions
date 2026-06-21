@@ -260,9 +260,13 @@ export async function cancelHandler(
   if (rec.mode !== "background") {
     throw new Error("Cannot cancel sync subagent (only background can be cancelled)");
   }
-  // step 3: service.cancel boolean（list-view 契约不变）；false = 已终态（CAS 抢锁失败）
+  // step 3: service.cancel boolean（list-view 契约不变）；false = 已终态（CAS 抢锁失败）。
+  // 注意：不嵌入 rec.status——findRecord 快照可能已过期（TOCTOU：cancel 期间 detached
+  // 路径 CAS 到 done/failed）。重新查当前状态，避免「status: running」与「already finished」矛盾。
   if (!service.cancel(id)) {
-    throw new Error(`Subagent ${id} already finished (status: ${rec.status})`);
+    const now = service.findRecord(id);
+    const currentStatus = now?.status ?? rec.status;
+    throw new Error(`Subagent ${id} could not be cancelled (it likely just finished; status: ${currentStatus})`);
   }
   return { subagentId: id, response: { cancelled: true } };
 }
@@ -271,22 +275,27 @@ export async function cancelHandler(
 // adapter（领域对象 → SubagentToolResult + {content, details}）
 // ============================================================
 
-export function adapter(
-  action: "start" | "list" | "cancel",
-  domain: StartHandlerResult | ListHandlerResult | CancelHandlerResult,
-): AgentToolResult<SubagentToolResult> {
+/**
+ * action ↔ domain 配对的承重类型（替代三处松散 `as`）。
+ * 调用方必须传匹配的 {action, domain}——TS 在调用点校验，错配编译报错。
+ */
+type AdapterInput =
+  | { action: "start"; domain: StartHandlerResult }
+  | { action: "list"; domain: ListHandlerResult }
+  | { action: "cancel"; domain: CancelHandlerResult };
+
+export function adapter(input: AdapterInput): AgentToolResult<SubagentToolResult> {
+  const { action } = input;
   let result: SubagentToolResult;
   if (action === "start") {
-    const d = domain as StartHandlerResult;
+    const d = input.domain;
     result = d.kind === "sync"
       ? { action, subagentId: d.subagentId, sessionFile: d.sessionFile ?? null, syncResponse: d.response }
       : { action, subagentId: d.subagentId, sessionFile: d.sessionFile ?? null, bgResponse: d.response };
   } else if (action === "list") {
-    const d = domain as ListHandlerResult;
-    result = { action, subagentId: null, sessionFile: null, listResponse: d.response };
+    result = { action, subagentId: null, sessionFile: null, listResponse: input.domain.response };
   } else {
-    const d = domain as CancelHandlerResult;
-    result = { action, subagentId: d.subagentId, sessionFile: null, cancelResponse: d.response };
+    result = { action, subagentId: input.domain.subagentId, sessionFile: null, cancelResponse: input.domain.response };
   }
 
   // content JSON：LLM 看的结构化结果（schema 模式 parsedOutput 作为嵌套 JSON 值可接受）。

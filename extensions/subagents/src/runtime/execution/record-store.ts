@@ -240,7 +240,8 @@ export class RecordStore {
       eventLog: r.eventLog.slice(),
       result: r.result,
       error: r.error,
-      sessionFile: r.sessionFile ?? r.agentResult?.sessionFile,
+      // sessionFile 由 record.sessionFile 提供（规范源，见 session-runner）。
+      sessionFile: r.sessionFile,
     };
   }
 

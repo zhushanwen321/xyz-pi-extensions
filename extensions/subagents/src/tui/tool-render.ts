@@ -57,18 +57,15 @@ const COMPACT_SCROLL_LINES = 3;
 // 类型（已存在的契约）
 // ============================================================
 
-/** renderResult 的 context（SDK 注入，含 lastComponent 供复用）。 */
+/**
+ * renderResult 的 context（SDK ToolRenderContext 的有意子集——只读 state/invalidate/lastComponent）。
+ * SDK 实际传入更完整的 { args, toolCallId, cwd, executionStarted, argsComplete, isPartial,
+ * expanded, showImages, isError, ... }，本组件结构兼容只取需要的字段。
+ */
 export interface RenderContext {
   state: Record<string, never>;
   invalidate(): void;
   lastComponent?: Component;
-}
-
-/** SubagentResultComponent 的 props 形状（TUI 组件内部状态）。 */
-export interface SubagentResultProps {
-  details: SubagentToolResult;
-  expanded: boolean;
-  theme: ThemeLike;
 }
 
 // ============================================================
@@ -179,7 +176,7 @@ export function renderSubagentResult(
  * render 返回的 string[] 是**裸内容行**（状态行 + message stream 行），
  * 不含背景色/padding——那些由 Pi 的 contentBox 施加。
  */
-export class SubagentResultComponent implements Component {
+class SubagentResultComponent implements Component {
   private details: SubagentToolResult;
   private theme: ThemeLike;
   private expanded = false;

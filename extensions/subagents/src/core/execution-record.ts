@@ -452,7 +452,9 @@ export function toPersisted(
     totalTokens: record.totalTokens,
     error: record.error,
     resultPreview: record.result ? truncatePreview(record.result) : undefined,
-    sessionFile: record.sessionFile ?? record.agentResult?.sessionFile,
+    // sessionFile 由 session-runner 在 createAndConfigureSession 后写入 record.sessionFile，
+    // 是唯一规范源（早于 agentResult 冠结）——与 project/snapshot 一致，不需 agentResult 回退。
+    sessionFile: record.sessionFile,
     cwd,
     sessionId,
     model: record.model,

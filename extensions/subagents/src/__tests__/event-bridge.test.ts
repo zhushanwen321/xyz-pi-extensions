@@ -1,8 +1,8 @@
 // src/__tests__/event-bridge.test.ts
 import { describe, expect, it } from "vitest";
 
-import { createEventBridge, isSdkEvent } from "../core/event-bridge.ts";
 import type { SdkEvent } from "../core/event-bridge.ts";
+import { createEventBridge, isSdkEvent } from "../core/event-bridge.ts";
 
 /** 收集 onEvent 回调的 AgentEvent 序列。 */
 function collect() {

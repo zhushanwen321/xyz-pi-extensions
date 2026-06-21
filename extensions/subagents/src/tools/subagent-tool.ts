@@ -63,6 +63,8 @@ type SubagentExecuteCb = (
   params: SubagentExecuteParams,
   signal: AbortSignal | undefined,
   onUpdate?: (partialResult: AgentToolResult<SubagentToolResult>) => void,
+  // ctx 在 SDK 契约里必填；此处保持 optional 以兼容 onUpdate? 在前（TS 参数顺序约束），
+  // 结构兼容——registerTool(unknown) 不校验，运行时 SDK 必传入。
   ctx?: ExtensionContext,
 ) => Promise<AgentToolResult<SubagentToolResult>>;
 
@@ -79,7 +81,8 @@ type SubagentRenderResultCb = (
 // Params schema
 // ============================================================
 
-export const SubagentParams = Type.Object({
+/** Params schema（模块内消费，未导出）。 */
+const SubagentParams = Type.Object({
   action: StringEnum(["start", "list", "cancel"], {
     description: "Operation: 'start' runs a subagent, 'list' shows running subagents (optional includeFinished), 'cancel' stops a background subagent by id.",
   }),
@@ -112,9 +115,9 @@ export const SubagentParams = Type.Object({
     })),
   })),
   cancelParam: Type.Optional(Type.Object({
-    subagentId: Type.Optional(Type.String({
+    subagentId: Type.String({
       description: "The subagentId to cancel (required for action:'cancel'). Only background subagents can be cancelled.",
-    })),
+    }),
   })),
 });
 
@@ -124,13 +127,27 @@ export const SubagentParams = Type.Object({
 
 // extractAgentName 已上移到 ../tui/format.ts 共享（tool-render / subagent-tool 复用）。
 
+/** exhaustiveness 承重 helper：default 分支把 action 收敛为 never，新增 action 时 tsc 报错。 */
+function assertNever(value: never): string {
+  return String(value);
+}
+
+/** unknown 是否为含 model/thinkingLevel 的对象（类型守卫，替代全可选结构 `as`）。 */
+function isModelOverrideObj(a: unknown): a is { model?: unknown; thinkingLevel?: unknown } {
+  return typeof a === "object" && a !== null;
+}
+
+/** unknown args 是否含 startParam（类型守卫，替代 `in` 后的 `as`）。 */
+function hasStartParam(a: unknown): a is { startParam?: unknown } {
+  return typeof a === "object" && a !== null && "startParam" in a;
+}
+
 /** 从 unknown args 安全提取 model/thinkingLevel override（传给 resolveModel）。 */
 function extractModelOverride(args: unknown): { model?: string; thinkingLevel?: string } | undefined {
-  if (typeof args !== "object" || args === null) return undefined;
-  const a = args as { model?: unknown; thinkingLevel?: unknown };
+  if (!isModelOverrideObj(args)) return undefined;
   const override: { model?: string; thinkingLevel?: string } = {};
-  if (typeof a.model === "string" && a.model.length > 0) override.model = a.model;
-  if (typeof a.thinkingLevel === "string" && a.thinkingLevel.length > 0) override.thinkingLevel = a.thinkingLevel;
+  if (typeof args.model === "string" && args.model.length > 0) override.model = args.model;
+  if (typeof args.thinkingLevel === "string" && args.thinkingLevel.length > 0) override.thinkingLevel = args.thinkingLevel;
   return Object.keys(override).length > 0 ? override : undefined;
 }
 
@@ -149,11 +166,11 @@ CRITICAL — this tool is registered with executionMode "sequential": multiple \
 
 ## Actions
 
-- action:"start" — run a subagent. Pass startParam: { task, agent?, wait?, ... }.
+- action:"start" — run a subagent. Pass startParam: { task, agent?, wait?, ... }. Ignores listParam/cancelParam.
   - sync (wait:true, default): blocks until the subagent finishes, returns its result. Use when the next step needs the result.
   - background (wait:false): returns a subagentId immediately; the subagent runs detached and keeps running even if you stop. On completion a message is auto-injected that triggers a new turn so you can process the result.
-- action:"list" — list subagents. Pass listParam: { includeFinished?: boolean, limit?: number }. Default: running only, limit 20. Each item includes a sessionFile path — read it with the \`read\` tool for full detail (the jsonl is append-only, flushed in real time).
-- action:"cancel" — cancel a background subagent. Pass cancelParam: { subagentId }. Only background subagents can be cancelled; sync subagents are cancelled via Esc in the chat.
+- action:"list" — list subagents. Pass listParam: { includeFinished?: boolean, limit?: number }. Default: running only, limit 20. Each item includes a sessionFile path — read it with the \`read\` tool for full detail (the jsonl is append-only, flushed in real time). Ignores startParam/cancelParam.
+- action:"cancel" — cancel a background subagent. Pass cancelParam: { subagentId }. Only background subagents can be cancelled; sync subagents are cancelled via Esc in the chat. Ignores startParam/listParam.
 
 ## After launching background — do NOT wait
 
@@ -191,9 +208,7 @@ const subagentRenderCall: SubagentRenderCallCb = (args, theme, ctx) => {
   // （只读配置 + sessionState）。让标题行能显示 model/thinking，不必等 execute。
   // service 未就绪（session 未 init）或解析失败时降级——只显示 agent 名。
   // action 化后 agent/model 在 args.startParam 内层，先 unwrap。
-  const startParam = (typeof args === "object" && args !== null && "startParam" in args
-    ? (args as { startParam?: unknown }).startParam
-    : undefined);
+  const startParam = hasStartParam(args) ? args.startParam : undefined;
   const agent = extractAgentName(startParam);
   const override = extractModelOverride(startParam);
   let resolved: { model: string; thinkingLevel?: string } | undefined;
@@ -236,17 +251,23 @@ const executeSubagent: SubagentExecuteCb = async (
   onUpdate,
   _ctx,
 ) => {
+  // B1：onUpdate 仅在 sync 模式有意义。background execute 立即返回，
+  // detached 运行不向 tool 层回流（完成由 notify 驱动新 turn）。
+  // service.execute 内部对 background 路径同样不安装 onEvent（见 subagent-service），
+  // 双保险防 liftSync 把 bg 误标成 syncResponse → spinner 泄漏。
   const service = getSubagentService();
   if (!service) throw new Error("subagents runtime not initialized");
 
   switch (params.action) {
     case "start":
-      return adapter("start", await startHandler(service, params.startParam, signal, onUpdate));
+      return adapter({ action: "start", domain: await startHandler(service, params.startParam, signal, onUpdate) });
     case "list":
-      return adapter("list", listHandler(service, params.listParam));
+      return adapter({ action: "list", domain: listHandler(service, params.listParam) });
     case "cancel":
-      return adapter("cancel", await cancelHandler(service, params.cancelParam));
+      return adapter({ action: "cancel", domain: await cancelHandler(service, params.cancelParam) });
     default:
-      throw new Error(`Unknown subagent action: ${String((params as { action?: unknown }).action)}`);
+      // assertNever：让 exhaustiveness 成为承重约束——新增 action 时 tsc 报错，
+      // 而非悄悄落入此分支。
+      throw new Error(`Unknown subagent action: ${assertNever(params.action)}`);
   }
 };

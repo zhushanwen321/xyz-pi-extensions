@@ -17,9 +17,9 @@ import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SubagentService, getSubagentService, setSubagentService } from "../runtime/subagent-service.ts";
 import { ModelConfigService } from "../runtime/model-config-service.ts";
 import type { PiLike } from "../runtime/subagent-service.ts";
+import { getSubagentService, setSubagentService,SubagentService } from "../runtime/subagent-service.ts";
 
 // ── 工具：建临时 agentDir + 真实 ModelConfigService ──
 

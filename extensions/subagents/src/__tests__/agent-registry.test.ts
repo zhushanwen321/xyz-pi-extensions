@@ -5,8 +5,8 @@ import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { AgentRegistry, createPackageBuiltinRegistry, parseAgentFrontmatter } from "../core/agent-registry.ts";
 import type { BuiltinAgentRegistry } from "../core/agent-registry.ts";
+import { AgentRegistry, createPackageBuiltinRegistry, parseAgentFrontmatter } from "../core/agent-registry.ts";
 
 // ============================================================
 // helpers
