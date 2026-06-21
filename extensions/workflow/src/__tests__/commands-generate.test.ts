@@ -10,6 +10,12 @@ import { afterEach,beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { WorkflowInstance } from "../domain/state";
 
+/** Mock ExtensionAPI——只实现 sendMessage 供 sendCompletionNotification 测试。 */
+function mockApi(sendMessage: ReturnType<typeof vi.fn>): ExtensionAPI {
+  // eslint-disable-next-line taste/no-unsafe-cast
+  return { sendMessage } as unknown as ExtensionAPI;
+}
+
 // ── Mock 外部依赖（必须在 import 被测模块之前） ──────────────
 
 const { mockLoadWorkflows, mockInvalidateCache } = vi.hoisted(() => ({
@@ -85,7 +91,7 @@ describe("sendCompletionNotification", () => {
   });
 
   it("首次调用 -> api.sendMessage 被调用", () => {
-    const api = { sendMessage: sendMessageMock } as unknown as ExtensionAPI;
+    const api = mockApi(sendMessageMock);
     const instance = makeInstance({ runId: "unique-run-001" });
 
     sendCompletionNotification(api, "unique-run-001", instance);
@@ -100,7 +106,7 @@ describe("sendCompletionNotification", () => {
   });
 
   it("重复调用同一 runId -> sendMessage 不被调用(去重)", () => {
-    const api = { sendMessage: sendMessageMock } as unknown as ExtensionAPI;
+    const api = mockApi(sendMessageMock);
     const instance = makeInstance({ runId: "dedup-run-002" });
 
     sendCompletionNotification(api, "dedup-run-002", instance);
@@ -110,7 +116,7 @@ describe("sendCompletionNotification", () => {
   });
 
   it("不同 runId -> sendMessage 各调用一次", () => {
-    const api = { sendMessage: sendMessageMock } as unknown as ExtensionAPI;
+    const api = mockApi(sendMessageMock);
     const inst1 = makeInstance({ runId: "multi-run-003" });
     const inst2 = makeInstance({ runId: "multi-run-004" });
 
@@ -121,7 +127,7 @@ describe("sendCompletionNotification", () => {
   });
 
   it("sendMessage payload 包含 _render descriptor", () => {
-    const api = { sendMessage: sendMessageMock } as unknown as ExtensionAPI;
+    const api = mockApi(sendMessageMock);
     const instance = makeInstance({
       runId: "render-run-005",
       trace: [
@@ -190,6 +196,8 @@ describe("tool-generate execute", () => {
 
     // 注册工具并捕获 execute
     let captured: ((...args: unknown[]) => Promise<unknown>) | undefined;
+    // Mock ExtensionAPI——mockPi 只实现 registerTool 捕获 execute，类型不完整。
+    // eslint-disable-next-line taste/no-unsafe-cast
     const mockPi = {
       registerTool: vi.fn((def: Record<string, unknown>) => {
         captured = def.execute as ((...args: unknown[]) => Promise<unknown>);

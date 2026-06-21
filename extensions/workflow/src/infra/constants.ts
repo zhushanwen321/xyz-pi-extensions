@@ -21,3 +21,8 @@ export const RUNID_INDEX_LONG = 20;  // 原 index RUNID_SLICE_LENGTH
 
 // ── 时间 ────────────────────────────────────────────────────────
 export const MS_PER_SEC = 1000;
+export const SECS_PER_MIN = 60;
+
+// ── runAndWait 时序（lifecycle.ts 默认超时 + orchestrator.ts 委托签名共享同一值）
+export const DEFAULT_RUNANDWAIT_TIMEOUT_MS = 600_000; // 10 minutes
+export const STATUS_POLL_INTERVAL_MS = 500;

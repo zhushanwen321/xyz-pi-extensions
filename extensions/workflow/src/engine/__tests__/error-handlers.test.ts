@@ -67,6 +67,8 @@ function makeCtx(overrides?: Partial<ErrorHandlerContext>): ErrorHandlerContext 
   const runs = new Map<string, RunResources>();
   const ctx: ErrorHandlerContext = {
     getRun: vi.fn((id: string) => runs.get(id)),
+    // Mock events: 只实现 emit。
+    // eslint-disable-next-line taste/no-unsafe-cast
     events: { emit: vi.fn() } as unknown as ErrorHandlerContext["events"],
     // Wave 5: terminateWorker mock mirrors the real one's side effect —
     // clears run.worker so tests asserting on it stay meaningful now that
@@ -227,6 +229,8 @@ describe("handleScriptError", () => {
     const inst = makeInstance("running");
     const ctx = makeCtx();
     const startWorker = vi.fn();
+    // Mock startWorker: vi.fn stands in for the typed method.
+    // eslint-disable-next-line taste/no-unsafe-cast
     ctx.startWorker = startWorker as unknown as ErrorHandlerContext["startWorker"];
     seedRun(ctx, inst, { meta: { scriptSource: "x", args: {} } });
 
@@ -248,6 +252,8 @@ describe("handleScriptError", () => {
     const inst = makeInstance("running");
     const ctx = makeCtx();
     const startWorker = vi.fn();
+    // Mock startWorker: vi.fn stands in for the typed method.
+    // eslint-disable-next-line taste/no-unsafe-cast
     ctx.startWorker = startWorker as unknown as ErrorHandlerContext["startWorker"];
     seedRun(ctx, inst, { meta: { scriptSource: "x", args: {} } });
 

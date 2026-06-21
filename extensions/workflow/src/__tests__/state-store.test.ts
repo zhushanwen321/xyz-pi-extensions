@@ -28,6 +28,18 @@ function makeMockCtx(entries: unknown[] = []) {
   };
 }
 
+/** Mock persistState 的 pi 参数——makeMockPi 只实现 appendEntry，类型不完整。 */
+function asPersistStateArg(pi: unknown): Parameters<typeof persistState>[0] {
+  // eslint-disable-next-line taste/no-unsafe-cast
+  return pi as unknown as Parameters<typeof persistState>[0];
+}
+
+/** Mock reconstructState 的 ctx 参数——makeMockCtx 只实现 sessionManager/ui，类型不完整。 */
+function asReconstructStateArg(ctx: unknown): Parameters<typeof reconstructState>[0] {
+  // eslint-disable-next-line taste/no-unsafe-cast
+  return ctx as unknown as Parameters<typeof reconstructState>[0];
+}
+
 function makeInstance(overrides: Partial<WorkflowInstance> = {}): WorkflowInstance {
   const base = createInstance({
     runId: "run-test-1",
@@ -56,7 +68,7 @@ describe("state-store.ts", () => {
       const inst = makeInstance();
       const instances = new Map([["run-test-1", inst]]);
 
-      await persistState(pi as unknown as Parameters<typeof persistState>[0], tmpDir, instances);
+      await persistState(asPersistStateArg(pi), tmpDir, instances);
 
       const filePath = path.join(tmpDir, "workflow-state", "run-test-1.jsonl");
       expect(fs.existsSync(filePath)).toBe(true);
@@ -72,12 +84,12 @@ describe("state-store.ts", () => {
       const inst = makeInstance();
       const instances = new Map([["run-test-1", inst]]);
 
-      await persistState(pi as unknown as Parameters<typeof persistState>[0], tmpDir, instances);
+      await persistState(asPersistStateArg(pi), tmpDir, instances);
 
       // Modify and persist again
       inst.status = "completed";
       inst.completedAt = "2026-01-01T00:00:00Z";
-      await persistState(pi as unknown as Parameters<typeof persistState>[0], tmpDir, instances);
+      await persistState(asPersistStateArg(pi), tmpDir, instances);
 
       const filePath = path.join(tmpDir, "workflow-state", "run-test-1.jsonl");
       const lines = fs.readFileSync(filePath, "utf8").trim().split("\n");
@@ -90,7 +102,7 @@ describe("state-store.ts", () => {
     it("calls pi.appendEntry with workflow-state-link", async () => {
       const pi = makeMockPi();
       const inst = makeInstance();
-      await persistState(pi as unknown as Parameters<typeof persistState>[0], tmpDir, new Map([["run-test-1", inst]]));
+      await persistState(asPersistStateArg(pi), tmpDir, new Map([["run-test-1", inst]]));
 
       expect(pi.appendEntry).toHaveBeenCalledWith("workflow-state-link", expect.objectContaining({
         runId: "run-test-1",
@@ -103,7 +115,7 @@ describe("state-store.ts", () => {
       const inst2 = makeInstance({ runId: "run-2" });
       const instances = new Map([["run-1", inst1], ["run-2", inst2]]);
 
-      await persistState(pi as unknown as Parameters<typeof persistState>[0], tmpDir, instances);
+      await persistState(asPersistStateArg(pi), tmpDir, instances);
 
       expect(fs.existsSync(path.join(tmpDir, "workflow-state", "run-1.jsonl"))).toBe(true);
       expect(fs.existsSync(path.join(tmpDir, "workflow-state", "run-2.jsonl"))).toBe(true);
@@ -124,7 +136,7 @@ describe("state-store.ts", () => {
       ];
       const ctx = makeMockCtx(entries);
 
-      const result = await reconstructState(ctx as unknown as Parameters<typeof reconstructState>[0]);
+      const result = await reconstructState(asReconstructStateArg(ctx));
 
       expect(result.size).toBe(1);
       expect(result.get("run-test-1")?.runId).toBe("run-test-1");
@@ -144,7 +156,7 @@ describe("state-store.ts", () => {
       ];
       const ctx = makeMockCtx(entries);
 
-      const result = await reconstructState(ctx as unknown as Parameters<typeof reconstructState>[0]);
+      const result = await reconstructState(asReconstructStateArg(ctx));
       expect(result.get("run-old")?.status).toBe("completed");
     });
 
@@ -154,13 +166,13 @@ describe("state-store.ts", () => {
       ];
       const ctx = makeMockCtx(entries);
 
-      const result = await reconstructState(ctx as unknown as Parameters<typeof reconstructState>[0]);
+      const result = await reconstructState(asReconstructStateArg(ctx));
       expect(result.get("run-missing")?.status).toBe("state_lost");
     });
 
     it("returns empty map when no pointer entries exist", async () => {
       const ctx = makeMockCtx([]);
-      const result = await reconstructState(ctx as unknown as Parameters<typeof reconstructState>[0]);
+      const result = await reconstructState(asReconstructStateArg(ctx));
       expect(result.size).toBe(0);
     });
 
@@ -169,7 +181,7 @@ describe("state-store.ts", () => {
         sessionManager: { getEntries: vi.fn().mockImplementation(() => { throw new Error("fail"); }) },
         ui: { notify: vi.fn() },
       };
-      const result = await reconstructState(ctx as unknown as Parameters<typeof reconstructState>[0]);
+      const result = await reconstructState(asReconstructStateArg(ctx));
       expect(result.size).toBe(0);
     });
 
@@ -185,7 +197,7 @@ describe("state-store.ts", () => {
       ];
       const ctx = makeMockCtx(entries);
 
-      const result = await reconstructState(ctx as unknown as Parameters<typeof reconstructState>[0]);
+      const result = await reconstructState(asReconstructStateArg(ctx));
       expect(result.size).toBe(1);
       expect(result.get("run-dup")?.status).toBe("completed");
     });

@@ -53,6 +53,7 @@ import {
 import { AgentRegistry } from "./infra/agent-discovery.js";
 import { cleanupAllTempFiles as cleanupAllFiles, cleanupTempFile as cleanupFile } from "./infra/agent-opts-resolver.js";
 import type { AgentCallOpts } from "./infra/agent-pool.js";
+import { DEFAULT_RUNANDWAIT_TIMEOUT_MS } from "./infra/constants.js";
 import { persistState as persistInstances } from "./infra/state-store.js";
 
 // ── Public types ──────────────────────────────────────────────
@@ -207,7 +208,7 @@ export class WorkflowOrchestrator implements OrchestratorCore {
     name: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
-    timeoutMs: number = 600_000, // 10 minutes
+    timeoutMs: number = DEFAULT_RUNANDWAIT_TIMEOUT_MS,
   ): Promise<{ status: string; scriptResult?: unknown; error?: string; runId: string }> {
     return runWorkflowAndWait(this, name, args, signal, timeoutMs);
   }

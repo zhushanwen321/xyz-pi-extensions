@@ -20,6 +20,12 @@ import {
   type WorkflowStatus,
 } from "../domain/state";
 
+/** 测试向后兼容：serialized 故意省略字段，验证 deserializeInstance 补默认值。 */
+function deserializePartial(s: object): WorkflowInstance {
+  // eslint-disable-next-line taste/no-unsafe-cast
+  return deserializeInstance(s as unknown as Parameters<typeof deserializeInstance>[0]);
+}
+
 // ── isTerminal ──────────────────────────────────────────────
 
 describe("isTerminal", () => {
@@ -256,12 +262,14 @@ describe("backward compatibility", () => {
     const serialized = {
       runId: "old-1",
       name: "old-wf",
+      // 测旧版 "created" 状态迁移到 "running"（WorkflowStatus 联合不含 created）。
+      // eslint-disable-next-line taste/no-unsafe-cast
       status: "created" as unknown as WorkflowStatus,
       callCache: [],
       trace: [],
       worker: "w1",
     };
-    const restored = deserializeInstance(serialized as any);
+    const restored = deserializePartial(serialized);
     expect(restored.status).toBe("running");
   });
 
@@ -274,7 +282,7 @@ describe("backward compatibility", () => {
       trace: [],
       worker: "w1",
     };
-    const restored = deserializeInstance(serialized as any);
+    const restored = deserializePartial(serialized);
     expect(restored.budget).toEqual({ usedTokens: 0, usedCost: 0 });
   });
 
@@ -286,7 +294,7 @@ describe("backward compatibility", () => {
       callCache: [],
       worker: "w1",
     };
-    const restored = deserializeInstance(serialized as any);
+    const restored = deserializePartial(serialized);
     expect(restored.trace).toEqual([]);
   });
 
@@ -298,7 +306,7 @@ describe("backward compatibility", () => {
       trace: [],
       worker: "w1",
     };
-    const restored = deserializeInstance(serialized as any);
+    const restored = deserializePartial(serialized);
     expect(restored.callCache.size).toBe(0);
   });
 

@@ -24,6 +24,23 @@ function createMockProcess() {
 
 type MockProc = ReturnType<typeof createMockProcess>;
 
+/**
+ * Mock ChildProcess——createMockProcess 故意只实现 stdout/stderr/EventEmitter，
+ * 不完整实现 ChildProcess 接口（pid/stdin/kill 等缺省）。集中此处双重断言。
+ */
+function asChildProcess(proc: MockProc): ChildProcess {
+  // eslint-disable-next-line taste/no-unsafe-cast
+  return proc as unknown as ChildProcess;
+}
+
+/**
+ * 白盒读取 AgentPool 内部 totalCallCount（无 public getter）。必填字段结构断言，
+ * 非「全可选」模式，不触发 no-unsafe-cast。
+ */
+function totalCount(pool: AgentPool): number {
+  return (pool as { totalCallCount: number }).totalCallCount;
+}
+
 /** Build a JSONL message_end event line. */
 function messageEndJsonl(
   text: string,
@@ -91,7 +108,7 @@ describe("AgentPool", () => {
     it("resolves with output and usage on happy path", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const jsonl = messageEndJsonl("hello world", {
         input: 100, output: 50, cost: 0.05, totalTokens: 150,
@@ -116,7 +133,7 @@ describe("AgentPool", () => {
     it("accumulates output and usage across multiple message_end events", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const line1 = messageEndJsonl("hello", { input: 10, output: 5, cost: 0.01, totalTokens: 15 });
       const line2 = messageEndJsonl(" world", { input: 20, output: 8, cost: 0.02, totalTokens: 28 });
@@ -136,7 +153,7 @@ describe("AgentPool", () => {
     it("parses structured output when schema is provided and tool call succeeds", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const schema = { type: "object", properties: { name: { type: "string" } } };
       const toolStartJsonl = JSON.stringify({
@@ -165,7 +182,7 @@ describe("AgentPool", () => {
     it("fails immediately when schema present but no structured-output tool call", async () => {
       const pool = new AgentPool(2);
       const proc1 = createMockProcess();
-      mockSpawn.mockReturnValueOnce(proc1 as unknown as ChildProcess);
+      mockSpawn.mockReturnValueOnce(asChildProcess(proc1));
 
       const schema = { type: "object" };
       const jsonl = messageEndJsonl("not valid json {", { input: 10, output: 5 });
@@ -184,7 +201,7 @@ describe("AgentPool", () => {
     it("extracts parsedOutput after successful tool_execution_end", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const schema = { type: "object", properties: { mustFix: { type: "boolean" } } };
       const toolStartJsonl = JSON.stringify({
@@ -213,7 +230,7 @@ describe("AgentPool", () => {
     it("does not capture parsedOutput when tool_execution_end has error", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const schema = { type: "object", properties: { mustFix: { type: "boolean" } } };
       const toolStartJsonl = JSON.stringify({
@@ -242,7 +259,7 @@ describe("AgentPool", () => {
     it("returns failure when other tools called but no structured-output on exit", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const schema = { type: "object" };
       const toolStartJsonl = JSON.stringify({
@@ -266,7 +283,7 @@ describe("AgentPool", () => {
     it("injects --append-system-prompt when systemPromptFiles is set", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const jsonl = messageEndJsonl("ok", { input: 1, output: 1 });
       const resultPromise = pool.enqueue({
@@ -289,7 +306,7 @@ describe("AgentPool", () => {
     it("omits --append-system-prompt when systemPromptFiles is not set", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const jsonl = messageEndJsonl("ok", { input: 1, output: 1 });
       const resultPromise = pool.enqueue({ prompt: "no system prompt" });
@@ -306,7 +323,7 @@ describe("AgentPool", () => {
     it("passes --model before --append-system-prompt when both are set", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const jsonl = messageEndJsonl("ok", { input: 1, output: 1 });
       const resultPromise = pool.enqueue({
@@ -331,7 +348,7 @@ describe("AgentPool", () => {
     it("fails immediately when schema present but no structured-output tool call", async () => {
       const pool = new AgentPool(2);
       const proc1 = createMockProcess();
-      mockSpawn.mockReturnValueOnce(proc1 as unknown as ChildProcess);
+      mockSpawn.mockReturnValueOnce(asChildProcess(proc1));
 
       const schema = { type: "object", properties: { answer: { type: "string" } } };
       const msgEndJsonl = messageEndJsonl("I think the answer is 42", { input: 10, output: 5 });
@@ -353,7 +370,7 @@ describe("AgentPool", () => {
     it("resolves with success=false on spawn error", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const resultPromise = pool.enqueue({ prompt: "fail" });
       proc.emit("error", new Error("spawn ENOENT"));
@@ -367,7 +384,7 @@ describe("AgentPool", () => {
     it("resolves with success=false and stderr on non-zero exit code", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const resultPromise = pool.enqueue({ prompt: "fail" });
       proc.stderr.emit("data", Buffer.from("something went wrong"));
@@ -381,7 +398,7 @@ describe("AgentPool", () => {
     it("never rejects — even spawn errors resolve with a result", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const resultPromise = pool.enqueue({ prompt: "never reject" });
       proc.emit("error", new Error("catastrophic"));
@@ -399,7 +416,7 @@ describe("AgentPool", () => {
       // 验证 timeoutMs 定时器在正常完成后被 clear（不泄漏），不依赖 abort 内部机制。
       const pool = new AgentPool(1);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       vi.useFakeTimers();
       try {
@@ -420,7 +437,7 @@ describe("AgentPool", () => {
       // （signal 生命周期长于单次 run，持久的 listener 引用阻止 controller GC）。
       const pool = new AgentPool(1);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const controller = new AbortController();
       const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
@@ -460,7 +477,7 @@ describe("AgentPool", () => {
       mockSpawn.mockImplementation(() => {
         const proc = createMockProcess();
         processes.push(proc);
-        return proc as unknown as ChildProcess;
+        return asChildProcess(proc);
       });
 
       // Enqueue 6 tasks — only 4 should spawn immediately
@@ -506,7 +523,7 @@ describe("AgentPool", () => {
       mockSpawn.mockImplementation(() => {
         const proc = createMockProcess();
         processes.push(proc);
-        return proc as unknown as ChildProcess;
+        return asChildProcess(proc);
       });
 
       const p1 = pool.enqueue({ prompt: "first" });
@@ -542,7 +559,7 @@ describe("AgentPool", () => {
     it("ignores non-message_end events", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const ignoredLine = JSON.stringify({ type: "tool_call", tool: "read", args: {} });
       const goodLine = messageEndJsonl("final", { input: 5, output: 3 });
@@ -559,7 +576,7 @@ describe("AgentPool", () => {
     it("parses data flushed from buffer on close (no trailing newline)", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const line = messageEndJsonl("flushed", { input: 5, output: 3 });
 
@@ -575,7 +592,7 @@ describe("AgentPool", () => {
     it("skips malformed JSON lines without failing", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const resultPromise = pool.enqueue({ prompt: "test" });
       proc.stdout.emit("data", Buffer.from("not json at all\n" + messageEndJsonl("ok", { input: 5, output: 3 }) + "\n"));
@@ -589,7 +606,7 @@ describe("AgentPool", () => {
     it("returns undefined usage when no message_end events arrive", async () => {
       const pool = new AgentPool(2);
       const proc = createMockProcess();
-      mockSpawn.mockReturnValue(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const resultPromise = pool.enqueue({ prompt: "empty" });
       proc.emit("close", 0);
@@ -613,7 +630,7 @@ describe("AgentPool — soft warning infrastructure", () => {
 
   it("initial totalCallCount is zero", () => {
     const pool = new AgentPool();
-    expect((pool as any).totalCallCount).toBe(0);
+    expect(totalCount(pool)).toBe(0);
   });
 
   it("soft_warning_fires_once_at_501", () => {
@@ -624,19 +641,18 @@ describe("AgentPool — soft warning infrastructure", () => {
       onSoftLimitReached: callback,
     });
     pool.setBudget({ usedTokens: 0, usedCost: 0, maxTokens: 100000 });
-    const anyPool = pool as any;
 
     // With concurrency >= 501, drain() starts all calls synchronously.
     // Each run() increments totalCallCount before its first await.
     for (let i = 0; i < count; i++) {
       const proc = createMockProcess();
-      mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValueOnce(asChildProcess(proc));
       pool.enqueue({ prompt: `call-${i}` });
       completeSuccess(proc, `result-${i}`);
     }
 
     // After 501 calls, totalCallCount should be 501
-    expect(anyPool.totalCallCount).toBe(count);
+    expect(totalCount(pool)).toBe(count);
     // Callback should have been called exactly once
     expect(callback).toHaveBeenCalledTimes(1);
     expect(callback).toHaveBeenCalledWith(
@@ -653,17 +669,16 @@ describe("AgentPool — soft warning infrastructure", () => {
       maxConcurrency: SOFT_MAX_AGENTS_WARNING,
       onSoftLimitReached: callback,
     });
-    const anyPool = pool as any;
 
     // Simulate exactly 500 real spawns — 500 is NOT > 500
     for (let i = 0; i < SOFT_MAX_AGENTS_WARNING; i++) {
       const proc = createMockProcess();
-      mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValueOnce(asChildProcess(proc));
       pool.enqueue({ prompt: `call-${i}` });
       completeSuccess(proc, `result-${i}`);
     }
 
-    expect(anyPool.totalCallCount).toBe(SOFT_MAX_AGENTS_WARNING);
+    expect(totalCount(pool)).toBe(SOFT_MAX_AGENTS_WARNING);
     expect(callback).not.toHaveBeenCalled();
   });
 
@@ -674,17 +689,16 @@ describe("AgentPool — soft warning infrastructure", () => {
       onSoftLimitReached: callback,
     });
     pool.setBudget({ usedTokens: 0, usedCost: 0 });
-    const anyPool = pool as any;
 
     // Simulate 600 real spawns — callback should fire exactly once
     for (let i = 0; i < 600; i++) {
       const proc = createMockProcess();
-      mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValueOnce(asChildProcess(proc));
       pool.enqueue({ prompt: `call-${i}` });
       completeSuccess(proc, `result-${i}`);
     }
 
-    expect(anyPool.totalCallCount).toBe(600);
+    expect(totalCount(pool)).toBe(600);
     expect(callback).toHaveBeenCalledTimes(1);
   });
 
@@ -692,23 +706,22 @@ describe("AgentPool — soft warning infrastructure", () => {
     // After _callCache removal, every call is a real spawn.
     // This test now verifies that each enqueue() increments totalCallCount.
     const pool = new AgentPool({ maxConcurrency: 2 });
-    const anyPool = pool as any;
 
-    expect(anyPool.totalCallCount).toBe(0);
+    expect(totalCount(pool)).toBe(0);
 
     // First call
     const proc1 = createMockProcess();
-    mockSpawn.mockReturnValueOnce(proc1 as unknown as ChildProcess);
+    mockSpawn.mockReturnValueOnce(asChildProcess(proc1));
     pool.enqueue({ prompt: "call-1" });
     completeSuccess(proc1, "result-1");
 
     // Second call
     const proc2 = createMockProcess();
-    mockSpawn.mockReturnValueOnce(proc2 as unknown as ChildProcess);
+    mockSpawn.mockReturnValueOnce(asChildProcess(proc2));
     pool.enqueue({ prompt: "call-2" });
     completeSuccess(proc2, "result-2");
 
-    expect(anyPool.totalCallCount).toBe(2);
+    expect(totalCount(pool)).toBe(2);
   });
 
   it("per_instance_counter_is_independent", () => {
@@ -729,7 +742,7 @@ describe("AgentPool — soft warning infrastructure", () => {
     // pool1: 501 calls -> should fire
     for (let i = 0; i < SOFT_MAX_AGENTS_WARNING + 1; i++) {
       const proc = createMockProcess();
-      mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValueOnce(asChildProcess(proc));
       pool1.enqueue({ prompt: `p1-${i}` });
       completeSuccess(proc, `done-${i}`);
     }
@@ -737,13 +750,13 @@ describe("AgentPool — soft warning infrastructure", () => {
     // pool2: 100 calls -> should NOT fire
     for (let i = 0; i < 100; i++) {
       const proc = createMockProcess();
-      mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValueOnce(asChildProcess(proc));
       pool2.enqueue({ prompt: `p2-${i}` });
       completeSuccess(proc, `done-${i}`);
     }
 
-    expect((pool1 as any).totalCallCount).toBe(SOFT_MAX_AGENTS_WARNING + 1);
-    expect((pool2 as any).totalCallCount).toBe(100);
+    expect(totalCount(pool1)).toBe(SOFT_MAX_AGENTS_WARNING + 1);
+    expect(totalCount(pool2)).toBe(100);
     expect(callback1).toHaveBeenCalledTimes(1);
     expect(callback2).not.toHaveBeenCalled();
   });
@@ -761,7 +774,7 @@ describe("AgentPool — soft warning infrastructure", () => {
     // Fire 501 calls
     for (let i = 0; i < count; i++) {
       const proc = createMockProcess();
-      mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValueOnce(asChildProcess(proc));
       pool.enqueue({ prompt: `call-${i}` });
       completeSuccess(proc, `result-${i}`);
     }
@@ -786,13 +799,12 @@ describe("AgentPool — soft warning infrastructure", () => {
       onSoftLimitReached: callback,
     });
     pool.setBudget({ usedTokens: 0, usedCost: 0 });
-    const _anyPool = pool as any;
 
     // Enqueue all 502 calls — with concurrency=502 all start immediately
     const promises: Promise<import("../agent-pool").AgentResult>[] = [];
     for (let i = 0; i < count; i++) {
       const proc = createMockProcess();
-      mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);
+      mockSpawn.mockReturnValueOnce(asChildProcess(proc));
       const p = pool.enqueue({ prompt: `call-${i}` });
       promises.push(p);
       completeSuccess(proc, `result-${i}`);

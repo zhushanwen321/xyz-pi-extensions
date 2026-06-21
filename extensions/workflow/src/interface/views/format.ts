@@ -8,7 +8,7 @@
 import { truncateToWidth } from "@mariozechner/pi-tui";
 
 import type { ExecutionTraceNode, ToolCallEntry, WorkflowStatus } from "../../domain/state.js";
-import { MS_PER_SEC } from "../../infra/constants.js";
+import { MS_PER_SEC, SECS_PER_MIN } from "../../infra/constants.js";
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -82,9 +82,9 @@ export function formatElapsed(startedAt?: string, now: number = Date.now()): str
   const ms = now - new Date(startedAt).getTime();
   if (ms < MS_PER_SEC) return "0s";
   const secs = Math.floor(ms / MS_PER_SEC);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  const remSecs = secs % 60;
+  if (secs < SECS_PER_MIN) return `${secs}s`;
+  const mins = Math.floor(secs / SECS_PER_MIN);
+  const remSecs = secs % SECS_PER_MIN;
   return `${mins}m${remSecs}s`;
 }
 
@@ -113,8 +113,11 @@ export function renderTextFallback(
 
 /** Format a single activity line: ToolName(argsPreview). */
 export function formatActivityLine(entry: ToolCallEntry, maxWidth: number): string {
-  if (maxWidth < 10) return entry.name;
-  const argsBudget = maxWidth - entry.name.length - 2; // name()
+  // 语义阈值与开销：低于此宽度只显名称；括号占 2 字符 (name())。
+  const MIN_ACTIVITY_WIDTH = 10;
+  const PARENS_OVERHEAD = 2;
+  if (maxWidth < MIN_ACTIVITY_WIDTH) return entry.name;
+  const argsBudget = maxWidth - entry.name.length - PARENS_OVERHEAD;
   if (argsBudget <= 0) return truncateToWidth(entry.name, maxWidth);
   const truncated = entry.input.length > argsBudget
     ? entry.input.slice(0, argsBudget - 1) + ELLIPSIS
@@ -177,7 +180,9 @@ export function formatPhaseLine(
   const dot = statusDotStr(pg.doneCount === pg.nodes.length ? "completed" : "running", theme);
   const name = pg.name || "(unnamed)";
   const label = `${idx + 1} ${name} ${pg.doneCount}/${pg.nodes.length}`;
-  const budget = maxWidth - 4; // pointer(2) + dot(1) + space(1)
+  // pointer(2) + dot(1) + space(1)
+  const PHASE_PREFIX_WIDTH = 4;
+  const budget = maxWidth - PHASE_PREFIX_WIDTH;
   const truncated = visibleLen(label) > budget
     ? truncateToWidth(label, budget - 1) + ELLIPSIS
     : label;

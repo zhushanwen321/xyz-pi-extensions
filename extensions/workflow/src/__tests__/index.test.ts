@@ -94,6 +94,8 @@ function createMockCtx(overrides: {
   existingEntries?: any[];
   sessionId?: string;
 } = {}) {
+  // Mock ExtensionContext——createMockCtx 只实现 ui/sessionManager 子集。
+  // eslint-disable-next-line taste/no-unsafe-cast
   return {
     hasUI: overrides.hasUI ?? true,
     ui: {
@@ -125,6 +127,8 @@ function bootstrap(overrides: {
   const sessionId = overrides.sessionId ?? "test-session-1";
 
   // Call the factory to register tools and events
+  // Mock ExtensionAPI——createMockPi 只实现测试所需子集。
+  // eslint-disable-next-line taste/no-unsafe-cast
   workflowExtension(pi as unknown as ExtensionAPI);
 
   // Trigger session_start to create and register the orchestrator
@@ -202,6 +206,8 @@ describe("workflow-run approval gate", () => {
     // First call: confirm = true → stores approval
     const ctx1 = createMockCtx({ hasUI: true, confirmResult: true, sessionId: "s-mem" });
     const result1 = await workflowRun.execute(
+      // toolCallId "tc3" 为测试占位，execute 不校验格式。
+      // eslint-disable-next-line taste/no-unsafe-cast
       "tc3" as any,
       { name: "deploy-app", mode: "auto" },
       undefined,

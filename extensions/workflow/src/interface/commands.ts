@@ -456,9 +456,11 @@ export function registerWorkflowCommands(
 
       // Sort: running/paused first, then by startedAt descending
       const statusOrder: Record<string, number> = { running: 0, paused: 1, completed: 2, failed: 3 };
+      // 未识别的状态（aborted/budget_limited 等）排在已知状态之后。
+      const UNKNOWN_STATUS_SORT_RANK = 9;
       all.sort((a, b) => {
-        const sa = statusOrder[a.status] ?? 9;
-        const sb = statusOrder[b.status] ?? 9;
+        const sa = statusOrder[a.status] ?? UNKNOWN_STATUS_SORT_RANK;
+        const sb = statusOrder[b.status] ?? UNKNOWN_STATUS_SORT_RANK;
         if (sa !== sb) return sa - sb;
         const ta = a.startedAt ? new Date(a.startedAt).getTime() : 0;
         const tb = b.startedAt ? new Date(b.startedAt).getTime() : 0;

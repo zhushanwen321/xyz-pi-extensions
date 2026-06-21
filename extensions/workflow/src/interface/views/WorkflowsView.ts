@@ -46,6 +46,41 @@ import {
 
 const MAX_TOOL_CALLS_DISPLAY = 3;
 
+// ── TUI layout constants ──────────────────────────────────────
+// │ left+right border chars subtracted from total terminal width
+const BOX_BORDER_CHARS = 2;
+// Right-edge clearance so body text doesn't touch the │ border
+const RIGHT_MARGIN = 2;
+// 2-space indent prefix on level-2 detail body lines (the "  " in templates)
+const DETAIL_INDENT = 2;
+// Selection pointer width ("❯ " / "  ") in the agent list
+const POINTER_WIDTH = 2;
+
+// Navigation drill-down levels: 0 = phase, 1 = agent, 2 = detail
+const NAV_LEVEL_DETAIL = 2;
+type NavLevel = 0 | 1 | typeof NAV_LEVEL_DETAIL;
+
+// Body height: minimum lines, and the 2/3-of-terminal fraction
+const MIN_BODY_LINES = 3;
+const BODY_HEIGHT_NUMERATOR = 2;
+const BODY_HEIGHT_DENOMINATOR = 3;
+
+// Halve available rows to vertically center the save overlay
+const OVERLAY_CENTER_DIVISOR = 2;
+
+// Worker diagnostics: cap how many log lines we render
+const MAX_WORKER_LOG_ENTRIES = 20;
+// Outcome preview: show only the last N content lines
+const OUTCOME_TAIL_LINES = 5;
+// ASCII < 32 is control; >= 32 is printable (save-mode input filter)
+const PRINTABLE_CHAR_MIN = 32;
+
+// ── Markdown trace export & notifications ─────────────────────
+const COST_DECIMAL_PLACES = 4;            // $ cost fixed precision
+const TRACE_ACTIVITY_MAX_WIDTH = 80;     // activity line wrap in trace file
+const TRACE_CONTENT_MAX_CHARS = 2000;    // outcome text truncate length
+const RUNID_SHORT_LEN = 12;              // runId prefix length in notices
+
 function statusLabel(status: string, theme: ThemeLike): string {
   switch (status) {
     case "completed": return theme.fg("success", status);
@@ -58,7 +93,7 @@ function statusLabel(status: string, theme: ThemeLike): string {
 // ── View state ────────────────────────────────────────────────
 
 interface ViewState {
-  level: 0 | 1 | 2;
+  level: NavLevel;
   phaseIdx: number;
   agentIdx: number;
   promptExpanded: boolean;
@@ -192,7 +227,7 @@ function processNavigation(
   if (phases.length === 0) return false;
 
   // Level 2 (Detail)
-  if (state.level === 2) {
+  if (state.level === NAV_LEVEL_DETAIL) {
     if (matchesKey(data, Key.up)) {
       if (state.agentIdx > 0) { state.agentIdx--; state.promptExpanded = false; return true; }
       return false;
@@ -272,7 +307,7 @@ function processKey(
   // 2. Escape: level back or exit
   if (matchesKey(data, Key.escape)) {
     if (state.level === 0) { done(); return false; }
-    state.level = (state.level - 1) as 0 | 1 | 2;
+    state.level = (state.level - 1) as NavLevel;
     return true;
   }
 
@@ -328,7 +363,7 @@ function processSaveModeInput(
     return false;
   }
   // Printable chars → clear message on edit
-  if (data.length === 1 && data.charCodeAt(0) >= 32) {
+  if (data.length === 1 && data.charCodeAt(0) >= PRINTABLE_CHAR_MIN) {
     state.saveMessage = "";
     state.saveInputValue += data;
     return true;
@@ -361,7 +396,7 @@ function saveTraceToFile(instance: WorkflowInstance, ctx: ExtensionContext): voi
   const lines: string[] = [];
   lines.push(`# Workflow Trace: ${instance.name} (${instance.runId})`, "");
   lines.push(`Status: ${instance.status} | Started: ${instance.startedAt ?? "-"} | Duration: ${formatElapsed(instance.startedAt)}`);
-  lines.push(`Budget: ${instance.budget.usedTokens}/${instance.budget.maxTokens ?? "unlimited"} tokens, $${instance.budget.usedCost.toFixed(4)}`, "");
+  lines.push(`Budget: ${instance.budget.usedTokens}/${instance.budget.maxTokens ?? "unlimited"} tokens, $${instance.budget.usedCost.toFixed(COST_DECIMAL_PLACES)}`, "");
   const phases = buildPhaseGroups(instance.trace);
   for (const pg of phases) {
     lines.push(`## Phase: ${pg.name || "(unnamed)"}`, "");
@@ -372,13 +407,13 @@ function saveTraceToFile(instance: WorkflowInstance, ctx: ExtensionContext): voi
       lines.push("**Prompt:**", node.task, "");
       if (node.result?.toolCalls && node.result.toolCalls.length > 0) {
         lines.push("**Activity:**");
-        for (const tc of node.result.toolCalls) lines.push(`- ${formatActivityLine(tc, 80)}`);
+        for (const tc of node.result.toolCalls) lines.push(`- ${formatActivityLine(tc, TRACE_ACTIVITY_MAX_WIDTH)}`);
         lines.push("");
       }
       lines.push("**Outcome:**");
       if (node.status === "running") lines.push("Still running...");
       else if (node.result?.error) lines.push(node.result.error);
-      else if (node.result?.content) lines.push(node.result.content.slice(0, 2000));
+      else if (node.result?.content) lines.push(node.result.content.slice(0, TRACE_CONTENT_MAX_CHARS));
       lines.push("");
     }
   }
@@ -415,7 +450,7 @@ function handleRestart(
   state.disposed = true;
   void orchestrator.restart(runId)
     .then((newRunId) => {
-      ctx.ui.notify(`Restarted '${instance.name}' (${newRunId.slice(0, 12)}...)`, "info");
+      ctx.ui.notify(`Restarted '${instance.name}' (${newRunId.slice(0, RUNID_SHORT_LEN)}...)`, "info");
       done();
     })
     .catch((err: Error) => {
@@ -525,7 +560,7 @@ function renderView(
   const phases = buildPhaseGroups(instance.trace);
   if (phases.length === 0) return ["(no agents)"];
 
-  const contentWidth = width - 2;
+  const contentWidth = width - BOX_BORDER_CHARS;
   renderHeader(lines, instance, theme, contentWidth);
 
   const phase = phases[state.phaseIdx] ?? phases[0];
@@ -543,7 +578,7 @@ function renderView(
   }
 
   const headerFooterLines = 6;
-  const minBodyHeight = Math.max(3, Math.floor(termRows * 2 / 3) - headerFooterLines);
+  const minBodyHeight = Math.max(MIN_BODY_LINES, Math.floor(termRows * BODY_HEIGHT_NUMERATOR / BODY_HEIGHT_DENOMINATOR) - headerFooterLines);
   const emptyBodyLine = padVisible("", SIDEBAR_WIDTH) + "│" + padVisible("", mainWidth);
   while (lines.length - bodyStart < minBodyHeight) {
     lines.push(emptyBodyLine);
@@ -557,7 +592,7 @@ function renderView(
 
   if (state.saveMode) {
     const overlayLines = renderSaveOverlay(instance, state, theme, width);
-    const overlayStart = Math.max(bodyStart, bodyStart + Math.floor((lines.length - bodyStart - overlayLines.length) / 2));
+    const overlayStart = Math.max(bodyStart, bodyStart + Math.floor((lines.length - bodyStart - overlayLines.length) / OVERLAY_CENTER_DIVISOR));
     for (let i = 0; i < overlayLines.length && overlayStart + i < lines.length; i++) {
       lines[overlayStart + i] = overlayLines[i];
     }
@@ -651,7 +686,7 @@ function renderWorkerLogSection(
   const logs = instance.errorLogs;
   if (!logs || logs.length === 0) return;
   const total = logs.length;
-  const showCount = Math.min(total, 20);
+  const showCount = Math.min(total, MAX_WORKER_LOG_ENTRIES);
   const label = total > showCount
     ? `Worker diagnostics · last ${showCount} of ${total}`
     : `Worker diagnostics · ${total} entr${total !== 1 ? "ies" : "y"}`;
@@ -661,7 +696,7 @@ function renderWorkerLogSection(
     const entry = logs[i];
     const levelToken = entry.level === "error" ? "error" : entry.level === "warn" ? "warning" : "muted";
     const prefix = `[${entry.level}]`;
-    const line = `  ${prefix} ${entry.message}`.slice(0, mainWidth - 2);
+    const line = `  ${prefix} ${entry.message}`.slice(0, mainWidth - RIGHT_MARGIN);
     rightLines.push(theme.fg(levelToken, line));
   }
   rightLines.push("");
@@ -703,7 +738,7 @@ function renderActivitySection(
     rightLines.push(theme.fg("muted", label));
     const start = totalCount - showCount;
     for (let i = start; i < totalCount; i++) {
-      rightLines.push(`  ${formatActivityLine(toolCalls[i], mainWidth - 2)}`);
+      rightLines.push(`  ${formatActivityLine(toolCalls[i], mainWidth - RIGHT_MARGIN)}`);
     }
   } else {
     rightLines.push(theme.fg("muted", "Activity"));
@@ -722,19 +757,19 @@ function renderOutcomeSection(
   if (node.status === "running") {
     rightLines.push(theme.fg("dim", "  Still running..."));
   } else if (node.result?.error) {
-    rightLines.push(theme.fg("error", `  ${node.result.error.slice(0, mainWidth - 4)}`));
+    rightLines.push(theme.fg("error", `  ${node.result.error.slice(0, mainWidth - RIGHT_MARGIN - DETAIL_INDENT)}`));
   } else if (node.result?.content) {
     const raw = node.result.content;
     if (Buffer.byteLength(raw, "utf8") > OUTPUT_TRUNCATE_BYTES) {
       const truncated = Buffer.from(raw, "utf8").slice(0, OUTPUT_TRUNCATE_BYTES).toString("utf8");
       const allLines = truncated.split("\n");
-      const tail = allLines.slice(-5);
-      rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - 4)}`));
+      const tail = allLines.slice(-OUTCOME_TAIL_LINES);
+      rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - RIGHT_MARGIN - DETAIL_INDENT)}`));
       rightLines.push(theme.fg("dim", "  (truncated)"));
     } else {
       const allLines = raw.split("\n");
-      const tail = allLines.slice(-5);
-      rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - 4)}`));
+      const tail = allLines.slice(-OUTCOME_TAIL_LINES);
+      rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - RIGHT_MARGIN - DETAIL_INDENT)}`));
     }
   }
 }
@@ -760,7 +795,7 @@ function renderLevel2(
     const a = agents[i];
     const isSelected = i === state.agentIdx;
     const pointer = isSelected ? "❯ " : "  ";
-    const maxNameWidth = SIDEBAR_WIDTH - 4;
+    const maxNameWidth = SIDEBAR_WIDTH - POINTER_WIDTH - RIGHT_MARGIN;
     const agentName = visibleLen(a.agent) > maxNameWidth
       ? truncateToWidth(a.agent, maxNameWidth - 1) + ELLIPSIS
       : a.agent;
@@ -810,7 +845,7 @@ function renderSaveOverlay(
   theme: ThemeLike,
   width: number,
 ): string[] {
-  const contentWidth = width - 2;
+  const contentWidth = width - BOX_BORDER_CHARS;
   const lines: string[] = [];
 
   lines.push("╭" + "─".repeat(contentWidth) + "╮");

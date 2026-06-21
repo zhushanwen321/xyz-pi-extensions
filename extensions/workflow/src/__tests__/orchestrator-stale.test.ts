@@ -113,9 +113,7 @@ describe("signal-triggered pause", () => {
     orch.restoreInstances(new Map([[inst.runId, inst]]));
 
     // Access private pauseOnSignal via type cast
-    const pauseOnSignal = (orch as unknown as {
-      pauseOnSignal: (runId: string) => void;
-    }).pauseOnSignal;
+    const pauseOnSignal = pauseOnSignalOf(orch);
 
     // Verify pre-condition
     expect(inst.status).toBe("running");
@@ -137,9 +135,7 @@ describe("signal-triggered pause", () => {
     inst.status = "paused" as WorkflowStatus;
     orch.restoreInstances(new Map([[inst.runId, inst]]));
 
-    const pauseOnSignal = (orch as unknown as {
-      pauseOnSignal: (runId: string) => void;
-    }).pauseOnSignal;
+    const pauseOnSignal = pauseOnSignalOf(orch);
 
     pauseOnSignal.call(orch, inst.runId);
 
@@ -150,7 +146,27 @@ describe("signal-triggered pause", () => {
 
 // ── executeWithRetry 集成测试 ───────────────────────────────────────────
 
+/** 白盒取 orchestrator 私有 pauseOnSignal（无 public API）。 */
+function pauseOnSignalOf(orch: WorkflowOrchestrator): (runId: string) => void {
+  // eslint-disable-next-line taste/no-unsafe-cast
+  return (orch as unknown as { pauseOnSignal: (runId: string) => void }).pauseOnSignal;
+}
+
+/** 白盒取 orchestrator 私有 runs map（注入 RunResources）。 */
+function orchRuns(orch: WorkflowOrchestrator): Map<string, RunResources> {
+  // eslint-disable-next-line taste/no-unsafe-cast
+  return (orch as unknown as { runs: Map<string, RunResources> }).runs;
+}
+
+/** 白盒取 orchestrator 私有 agentCallContext（注入 executeWithRetry 依赖）。 */
+function orchAgentCallContext(orch: WorkflowOrchestrator): AgentCallContext {
+  // eslint-disable-next-line taste/no-unsafe-cast
+  return (orch as unknown as { agentCallContext: () => AgentCallContext }).agentCallContext();
+}
+
 function makeMockPi(): ExtensionAPI {
+  // Mock ExtensionAPI——只实现 appendEntry/sendUserMessage。
+  // eslint-disable-next-line taste/no-unsafe-cast
   return {
     appendEntry: vi.fn(),
     sendUserMessage: vi.fn(),
@@ -158,6 +174,8 @@ function makeMockPi(): ExtensionAPI {
 }
 
 function makeMockCtx(): ExtensionContext {
+  // Mock ExtensionContext——只实现 sessionManager/ui。
+  // eslint-disable-next-line taste/no-unsafe-cast
   return {
     sessionManager: {
       getSessionId: vi.fn().mockReturnValue("test-session"),
@@ -196,7 +214,7 @@ describe("executeWithRetry", () => {
     const orch2 = new WorkflowOrchestrator(mockPi, mockCtx);
     const poolInstance = new AgentPool({ maxConcurrency: 1, runName: inst.name });
     // 把 pool + abortController 注入到 orchestrator 私有 runs map（单条 RunResources）
-    (orch2 as unknown as { runs: Map<string, RunResources> }).runs.set(inst.runId, {
+    orchRuns(orch2).set(inst.runId, {
       instance: inst,
       retryCount: 0,
       pool: poolInstance,
@@ -212,7 +230,7 @@ describe("executeWithRetry", () => {
     });
 
     // executeWithRetry 已抽为模块函数，通过 agentCallContext() 注入 orchestrator 依赖
-    const ctx = (orch2 as unknown as { agentCallContext: () => AgentCallContext }).agentCallContext();
+    const ctx = orchAgentCallContext(orch2);
     const node = {
       stepIndex: 0,
       agent: "test-agent",
@@ -234,7 +252,7 @@ describe("executeWithRetry", () => {
     const orch2 = new WorkflowOrchestrator(mockPi, mockCtx);
     const poolInstance = new AgentPool({ maxConcurrency: 1, runName: inst.name });
     // 注入 run（含 pool + abortController，executeWithRetry 的 setTimeout 回调会检查 abortController）
-    (orch2 as unknown as { runs: Map<string, RunResources> }).runs.set(inst.runId, {
+    orchRuns(orch2).set(inst.runId, {
       instance: inst,
       retryCount: 0,
       pool: poolInstance,
@@ -250,7 +268,7 @@ describe("executeWithRetry", () => {
       toolCalls: [],
     });
 
-    const ctx = (orch2 as unknown as { agentCallContext: () => AgentCallContext }).agentCallContext();
+    const ctx = orchAgentCallContext(orch2);
     const node = {
       stepIndex: 0,
       agent: "test-agent",

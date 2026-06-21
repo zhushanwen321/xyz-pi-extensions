@@ -78,9 +78,10 @@ export async function reconstructState(
 
     for (const entry of entries) {
       if (entry.type !== "custom") continue;
-      const custom = entry as unknown as { customType?: string; data?: unknown };
-      if (custom.customType !== "workflow-state-link") continue;
-      const data = custom.data as { runId?: string; path?: string } | undefined;
+      // After the discriminant narrowing above, entry is CustomEntry<unknown>,
+      // which already exposes customType: string and data?: unknown.
+      if (entry.customType !== "workflow-state-link") continue;
+      const data = entry.data as { runId?: string; path?: string } | undefined;
       if (data?.runId && data?.path) {
         pointers.set(data.runId, { path: data.path });
       }

@@ -89,6 +89,7 @@ export class WorkflowEventEmitter {
         // Listener errors are isolated: a faulty subscriber must not break
         // the event loop. Surfacing to the terminal would leak to the
         // input area and disrupt unrelated workflow views.
+        void undefined;
       }
     }
   }
@@ -119,6 +120,7 @@ export class WorkflowEventEmitter {
           } catch {
             // Tick listener errors are isolated: same rationale as emit().
             // Surfacing to the terminal would leak to the input area.
+            void undefined;
           }
         }
       }

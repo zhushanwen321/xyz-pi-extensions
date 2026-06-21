@@ -21,7 +21,13 @@ import {
 } from "../domain/state.js";
 import { AgentPool } from "../infra/agent-pool.js";
 import { getWorkflow } from "../infra/config-loader.js";
-import { RUNID_RADIX, RUNID_SLICE_END, RUNID_SLICE_START } from "../infra/constants.js";
+import {
+  DEFAULT_RUNANDWAIT_TIMEOUT_MS,
+  RUNID_RADIX,
+  RUNID_SLICE_END,
+  RUNID_SLICE_START,
+  STATUS_POLL_INTERVAL_MS,
+} from "../infra/constants.js";
 import { lintScript } from "../infra/script-lint.js";
 import type { OrchestratorCore } from "./core.js";
 import { scheduleTimeBudgetCheck } from "./orchestrator-budget.js";
@@ -441,7 +447,7 @@ export async function runWorkflowAndWait(
   name: string,
   args: Record<string, unknown>,
   signal?: AbortSignal,
-  timeoutMs: number = 600_000, // 10 minutes
+  timeoutMs: number = DEFAULT_RUNANDWAIT_TIMEOUT_MS,
 ): Promise<{ status: string; scriptResult?: unknown; error?: string; runId: string }> {
   const runId = await runWorkflow(core, name, args, undefined, undefined, signal);
 
@@ -463,7 +469,7 @@ export async function runWorkflowAndWait(
         runId,
       };
     }
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, STATUS_POLL_INTERVAL_MS));
   }
   // Timeout — abort the workflow
   try { await abortRun(core, runId); } catch { /* already terminal */ void undefined; }

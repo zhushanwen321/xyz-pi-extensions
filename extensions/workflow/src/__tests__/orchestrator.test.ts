@@ -52,7 +52,15 @@ import { WorkflowOrchestrator } from "../orchestrator";
 
 // ── Helpers ──────────────────────────────────────────────────
 
+type StateLinkEntry = { customType?: string; data?: { runId?: string; path?: string } };
+/** session entry 形状宽松（可能非 workflow-state-link），断言后逐字段判空。 */
+function asStateLinkEntry(entry: unknown): StateLinkEntry {
+  return entry as StateLinkEntry;
+}
+
 function makeMockPi(): ExtensionAPI & { sendUserMessage: ReturnType<typeof vi.fn> } {
+  // Mock ExtensionAPI——只实现 appendEntry/sendUserMessage。
+  // eslint-disable-next-line taste/no-unsafe-cast
   return {
     appendEntry: vi.fn(),
     sendUserMessage: vi.fn(),
@@ -67,6 +75,8 @@ function makeMockCtx(): ExtensionContext & {
     getBranch: ReturnType<typeof vi.fn>;
   };
 } {
+  // Mock ExtensionContext——只实现 sessionManager/ui。
+  // eslint-disable-next-line taste/no-unsafe-cast
   return {
     sessionManager: {
       getSessionId: vi.fn().mockReturnValue("test-session"),
@@ -525,7 +535,7 @@ describe("WorkflowOrchestrator", () => {
       const pointers = new Map<string, { path: string }>();
       for (const entry of entries) {
         if (entry.type !== "custom") continue;
-        const custom = entry as { customType?: string; data?: { runId?: string; path?: string } };
+        const custom = asStateLinkEntry(entry);
         if (custom.customType !== "workflow-state-link") continue;
         if (custom.data?.runId && custom.data?.path) {
           pointers.set(custom.data.runId, { path: custom.data.path });
@@ -565,7 +575,7 @@ describe("WorkflowOrchestrator", () => {
       const pointers = new Map<string, { path: string }>();
       for (const entry of entries) {
         if (entry.type !== "custom") continue;
-        const custom = entry as { customType?: string; data?: { runId?: string; path?: string } };
+        const custom = asStateLinkEntry(entry);
         if (custom.customType !== "workflow-state-link") continue;
         if (custom.data?.runId && custom.data?.path) {
           pointers.set(custom.data.runId, { path: custom.data.path });
@@ -595,7 +605,7 @@ describe("WorkflowOrchestrator", () => {
       const pointers = new Map<string, { path: string }>();
       for (const entry of entries) {
         if (entry.type !== "custom") continue;
-        const custom = entry as { customType?: string; data?: { runId?: string; path?: string } };
+        const custom = asStateLinkEntry(entry);
         if (custom.customType !== "workflow-state-link") continue;
         if (custom.data?.runId && custom.data?.path) {
           pointers.set(custom.data.runId, { path: custom.data.path });
@@ -643,7 +653,7 @@ describe("WorkflowOrchestrator", () => {
       const pointers = new Map<string, { path: string }>();
       for (const entry of entries) {
         if (entry.type !== "custom") continue;
-        const custom = entry as { customType?: string; data?: { runId?: string; path?: string } };
+        const custom = asStateLinkEntry(entry);
         if (custom.customType !== "workflow-state-link") continue;
         if (custom.data?.runId && custom.data?.path) {
           pointers.set(custom.data.runId, { path: custom.data.path });
@@ -721,6 +731,8 @@ describe("WorkflowOrchestrator", () => {
         totalCalls: number;
         budget: { usedTokens: number; maxTokens?: number; usedCost: number };
       }) => {
+        // 白盒调用 mockPi.sendUserMessage（onSoftLimitReached 回调内联实现）。
+        // eslint-disable-next-line taste/no-unsafe-cast
         (mockPi as unknown as { sendUserMessage: (msg: string) => void }).sendUserMessage(
           `[workflow:${runName}] Reached ${totalCalls} agent calls. ` +
           `Budget: ${budget.usedTokens}/${budget.maxTokens ?? "unlimited"} tokens. ` +
@@ -786,6 +798,8 @@ describe("WorkflowOrchestrator", () => {
       // Patch cleanupAllTempFiles to throw — simulates fs failure mid-cleanup.
       // terminateWorker itself swallows worker.terminate() errors, so the
       // observable failure point is cleanupAllTempFiles.
+      // Patch cleanupAllTempFiles to throw - white-box rewrite of orchestrator private method.
+      // eslint-disable-next-line taste/no-unsafe-cast
       (orch as unknown as { cleanupAllTempFiles: () => void }).cleanupAllTempFiles = () => {
         throw new Error("fs cleanup failed");
       };
@@ -801,6 +815,8 @@ describe("WorkflowOrchestrator", () => {
       const inst = makeInstance("wf-a4-pause", "running");
       orch.restoreInstances(makeInstanceMap(inst));
 
+      // Patch cleanupAllTempFiles to throw - white-box rewrite of orchestrator private method.
+      // eslint-disable-next-line taste/no-unsafe-cast
       (orch as unknown as { cleanupAllTempFiles: () => void }).cleanupAllTempFiles = () => {
         throw new Error("fs cleanup failed");
       };

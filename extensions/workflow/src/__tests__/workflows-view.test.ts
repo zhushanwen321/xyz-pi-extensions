@@ -367,6 +367,8 @@ function makeTestInstance(overrides: Partial<WorkflowInstance> = {}): WorkflowIn
 
 /** Create a mock orchestrator wired to the given instance. */
 function createMockOrchestrator(instance: WorkflowInstance) {
+  // Mock WorkflowOrchestrator——只实现被测的几个方法，类型不完整。
+  // eslint-disable-next-line taste/no-unsafe-cast
   return {
     getInstance: vi.fn().mockReturnValue(instance),
     abort: vi.fn().mockResolvedValue(undefined),
@@ -391,6 +393,8 @@ async function setupViewComponent(instance?: WorkflowInstance) {
   const done = vi.fn();
   let component: { invalidate(): void; render(w: number): string[]; handleInput(d: string): void };
 
+  // Mock ExtensionContext——ctx 只实现 ui.custom/ui.notify，类型不完整。
+  // eslint-disable-next-line taste/no-unsafe-cast
   const ctx = {
     ui: {
       custom: vi.fn().mockImplementation(
@@ -416,6 +420,8 @@ async function setupViewComponent(instance?: WorkflowInstance) {
     orchestrator,
     requestRender,
     done,
+    // 白盒取 mock ctx 的 notify（ctx 类型断言为 ExtensionContext 但实际是 mock）。
+    // eslint-disable-next-line taste/no-unsafe-cast
     notify: (ctx as unknown as { ui: { notify: ReturnType<typeof vi.fn> } }).ui.notify,
   };
 }

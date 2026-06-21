@@ -30,6 +30,19 @@ import { registerWorkflowLintTool } from "./interface/tool-workflow-lint.js";
 import { registerWorkflowRunTool } from "./interface/tool-workflow-run.js";
 import { WorkflowOrchestrator } from "./orchestrator.js";
 
+// Augment ExtensionAPI so cross-extension callers can invoke workflow runs
+// programmatically (pi.__workflowRun). Same surface as goal's pi.__goalInit.
+declare module "@mariozechner/pi-coding-agent" {
+  interface ExtensionAPI {
+    __workflowRun?: (
+      workflowName: string,
+      workflowArgs: Record<string, unknown>,
+      workflowSignal?: AbortSignal,
+      workflowTimeoutMs?: number,
+    ) => Promise<{ status: string; scriptResult?: unknown; error?: string; runId: string }>;
+  }
+}
+
 export default function workflowExtension(pi: ExtensionAPI) {  
   const lsRef = { lastSessionId: "" };
   const orchestrators = new Map<string, WorkflowOrchestrator>();
@@ -86,9 +99,8 @@ export default function workflowExtension(pi: ExtensionAPI) {
     };
 
     // Expose pi.__workflowRun for cross-extension programmatic access
-    // (same pattern as goal extension's pi.__goalInit)
-    const api = pi as unknown as Record<string, unknown>;
-    api.__workflowRun = async (
+    // (typed via the declare module augmentation above)
+    pi.__workflowRun = async (
       workflowName: string,
       workflowArgs: Record<string, unknown>,
       workflowSignal?: AbortSignal,
