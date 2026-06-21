@@ -12,12 +12,7 @@ import { Worker } from "node:worker_threads";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { cleanupAllTempFiles as cleanupAllFiles, cleanupTempFile as cleanupFile, resolveAgentOpts as resolveOpts } from "./infra/agent-opts-resolver.js";
-import { AgentRegistry } from "./infra/agent-discovery.js";
-import { type AgentCallOpts,AgentPool } from "./infra/agent-pool.js";
-import { getWorkflow } from "./infra/config-loader.js";
-import { appendTraceNode } from "./infra/execution-trace.js";
-import { lintScript } from "./infra/script-lint.js";
+import type { RunResources } from "./domain/run-resources.js";
 import {
   type AgentResult as StateAgentResult,
   createInstance as createStateInstance,
@@ -28,12 +23,18 @@ import {
   type WorkflowInstance,
   type WorkflowStatus,
 } from "./domain/state.js";
-import { persistState as persistInstances } from "./infra/state-store.js";
-import { WorkflowEventEmitter } from "./engine/orchestrator-events.js";
-import { type WorkerInMsg as ImportedWorkerInMsg, buildWorkerScript } from "./engine/worker-script.js";
+import { type AgentCallContext,executeWithRetry, isBudgetExceeded } from "./engine/agent-call-handler.js";
+import { type ErrorHandlerContext,handleScriptError, handleWorkerError, handleWorkerExit } from "./engine/error-handlers.js";
 import { checkBudget, scheduleTimeBudgetCheck } from "./engine/orchestrator-budget.js";
-import { handleWorkerError, handleWorkerExit, handleScriptError, type ErrorHandlerContext } from "./engine/error-handlers.js";
-import { executeWithRetry, isBudgetExceeded, type AgentCallContext } from "./engine/agent-call-handler.js";
+import { WorkflowEventEmitter } from "./engine/orchestrator-events.js";
+import { buildWorkerScript,type WorkerInMsg as ImportedWorkerInMsg } from "./engine/worker-script.js";
+import { AgentRegistry } from "./infra/agent-discovery.js";
+import { cleanupAllTempFiles as cleanupAllFiles, cleanupTempFile as cleanupFile, resolveAgentOpts as resolveOpts } from "./infra/agent-opts-resolver.js";
+import { type AgentCallOpts,AgentPool } from "./infra/agent-pool.js";
+import { getWorkflow } from "./infra/config-loader.js";
+import { appendTraceNode } from "./infra/execution-trace.js";
+import { lintScript } from "./infra/script-lint.js";
+import { persistState as persistInstances } from "./infra/state-store.js";
 // Re-export for backward compat (tests import isStaleContextErrorMsg from src/orchestrator).
 export { isStaleContextErrorMsg, STALE_CONTEXT_PATTERNS } from "./engine/agent-call-handler.js";
 // ── Public types ──────────────────────────────────────────────
@@ -54,21 +55,10 @@ export interface WorkflowInstanceSummary {
 }
 // ── Internal types ────────────────────────────────────────────
 
-/** Per-run metadata needed for resume/retry/re-run operations. */
-interface RunMeta {
-  scriptSource: string;
-  args: Record<string, unknown>;
-  budgetTokens?: number;
-  budgetTimeMs?: number;
-  /** P1-2: Abort signal from the tool execute caller — propagated to AgentPool
-   *  and used to pause the workflow if triggered. */
-  signal?: AbortSignal;
-}
-
 /** Worker→Main message type — unified with worker-script.ts definition. */
 type WorkerInMsg = ImportedWorkerInMsg;
 
-import { RUNID_RADIX, RUNID_SLICE_START, RUNID_SLICE_END } from "./infra/constants.js";
+import { RUNID_RADIX, RUNID_SLICE_END,RUNID_SLICE_START } from "./infra/constants.js";
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -80,11 +70,8 @@ function generateRunId(): string {
 // ── Orchestrator ──────────────────────────────────────────────
 
 export class WorkflowOrchestrator {
-  private readonly instances = new Map<string, WorkflowInstance>();
-  private readonly workers = new Map<string, Worker>();
-  private readonly runMetaMap = new Map<string, RunMeta>();
-  private readonly retryCounts = new Map<string, number>();
-  private readonly runPools = new Map<string, AgentPool>();
+  /** All per-run resources aggregated by runId — single source of truth. */
+  private readonly runs = new Map<string, RunResources>();
   private readonly agentRegistry: AgentRegistry;
   /** Active temp files created for agent system prompts — cleaned up on completion or abort. */
   private readonly activeTempFiles = new Set<string>();
@@ -92,8 +79,6 @@ export class WorkflowOrchestrator {
   private cleanupTempFile = (fp: string): void => cleanupFile(fp, this.activeTempFiles);
   /** Bound helper for agent-opts-resolver temp file cleanup. */
   cleanupAllTempFiles = (): void => cleanupAllFiles(this.activeTempFiles);
-  /** Per-run AbortController for killing agent subprocesses on terminate/pause/abort. */
-  private readonly runAbortControllers = new Map<string, AbortController>();
   private readonly pi: ExtensionAPI;
   private readonly ctx: ExtensionContext;
   private readonly sessionDir: string;
@@ -130,6 +115,11 @@ export class WorkflowOrchestrator {
   }
 
   // ── Public API ──────────────────────────────────────────────
+
+  /** Return the aggregated resources for a run. */
+  private getRun(runId: string): RunResources | undefined {
+    return this.runs.get(runId);
+  }
 
   /** Return the number of discovered agents. */
   getAgentCount(): number {
@@ -195,13 +185,16 @@ export class WorkflowOrchestrator {
     instance.startedAt = new Date().toISOString();
     instance.description = workflow.description;
 
-    this.runMetaMap.set(runId, { scriptSource, args, budgetTokens, budgetTimeMs, signal });
-    this.instances.set(runId, instance);
+    this.runs.set(runId, {
+      instance,
+      meta: { scriptSource, args, budgetTokens, budgetTimeMs, signal },
+      retryCount: 0,
+    });
 
     // Create per-run AbortController for agent subprocess cleanup.
     // Orchestrator owns this controller — abort() on terminate/pause/abort.
     const runAbortController = new AbortController();
-    this.runAbortControllers.set(runId, runAbortController);
+    this.runs.get(runId)!.abortController = runAbortController;
 
     // Create per-workflow AgentPool with soft-limit warning callback
     // Each workflow run gets its own pool so agent call counts are isolated per AC-4.5
@@ -217,7 +210,7 @@ export class WorkflowOrchestrator {
       },
     });
     pool.setBudget(instance.budget);
-    this.runPools.set(runId, pool);
+    this.runs.get(runId)!.pool = pool;
 
     // P1-2: Tool-signal forwarders: (1) kill agent subprocess; (2) pause workflow
     if (signal) {
@@ -230,7 +223,7 @@ export class WorkflowOrchestrator {
 
     if (budgetTimeMs) {
       scheduleTimeBudgetCheck(
-        (id) => this.instances.get(id),
+        (id) => this.getRun(id)?.instance,
         runId,
         budgetTimeMs,
         this.budgetCallbacks(),
@@ -245,7 +238,7 @@ export class WorkflowOrchestrator {
    * the callCache so it can be resumed later from the point of interruption.
    */
   async pause(runId: string): Promise<void> {
-    const instance = this.instances.get(runId);
+    const instance = this.getRun(runId)?.instance;
     if (!instance) {
       throw new Error(`Workflow '${runId}' not found`);
     }
@@ -274,7 +267,8 @@ export class WorkflowOrchestrator {
    * the cache; uncached calls dispatch fresh.
    */
   async resume(runId: string): Promise<void> {
-    const instance = this.instances.get(runId);
+    const run = this.getRun(runId);
+    const instance = run?.instance;
     if (!instance) {
       throw new Error(`Workflow '${runId}' not found`);
     }
@@ -288,7 +282,7 @@ export class WorkflowOrchestrator {
     transitionStatus(instance, "running");
     this.events.emit(runId, { type: "status", status: "running" });
 
-    const meta = this.runMetaMap.get(runId);
+    const meta = run?.meta;
     if (meta) {
       // Recreate AbortController for the resumed run (old one was aborted on pause)
       this.recreateRunAbortController(runId);
@@ -299,7 +293,7 @@ export class WorkflowOrchestrator {
       // P1-6: Re-schedule time budget check after resume
       if (meta.budgetTimeMs) {
         scheduleTimeBudgetCheck(
-          (id) => this.instances.get(id),
+          (id) => this.getRun(id)?.instance,
           runId,
           meta.budgetTimeMs,
           this.budgetCallbacks(),
@@ -316,7 +310,7 @@ export class WorkflowOrchestrator {
    * marks the instance as aborted (terminal state).
    */
   async abort(runId: string): Promise<void> {
-    const instance = this.instances.get(runId);
+    const instance = this.getRun(runId)?.instance;
     if (!instance) {
       throw new Error(`Workflow '${runId}' not found`);
     }
@@ -334,7 +328,8 @@ export class WorkflowOrchestrator {
     this.events.emit(runId, { type: "status", status: "aborted" });
     this.terminateWorker(runId);
     this.cleanupAllTempFiles();
-    this.runPools.delete(runId);
+    const run = this.getRun(runId);
+    if (run) run.pool = undefined;
     await this.persistState();
     this.onCompletion?.(runId);
   }
@@ -346,7 +341,8 @@ export class WorkflowOrchestrator {
    * cache, the retried call dispatches fresh.
    */
   async retryNode(runId: string, callId: number): Promise<void> {
-    const instance = this.instances.get(runId);
+    const run = this.getRun(runId);
+    const instance = run?.instance;
     if (!instance) {
       throw new Error(`Workflow '${runId}' not found`);
     }
@@ -371,9 +367,9 @@ export class WorkflowOrchestrator {
     this.terminateWorker(runId);
 
     // P1-7: Reset retry counts for fresh start
-    this.retryCounts.delete(runId);
+    if (run) run.retryCount = 0;
 
-    const meta = this.runMetaMap.get(runId);
+    const meta = run?.meta;
     if (meta) {
       // Recreate AbortController after terminate (old was aborted)
       this.recreateRunAbortController(runId);
@@ -385,7 +381,7 @@ export class WorkflowOrchestrator {
 
   /** Skip a specific agent call. Injects placeholder into callCache for immediate resolution. */
   async skipNode(runId: string, callId: number): Promise<void> {
-    const instance = this.instances.get(runId);
+    const instance = this.getRun(runId)?.instance;
     if (!instance) {
       throw new Error(`Workflow '${runId}' not found`);
     }
@@ -405,7 +401,7 @@ export class WorkflowOrchestrator {
     }
 
     // If worker is alive, send cached result immediately for any pending call
-    if (this.workers.has(runId)) {
+    if (this.getRun(runId)?.worker) {
       try {
         this.postMessage(runId, { type: "agent-result", callId, result: placeholder, cached: true });
       }
@@ -430,12 +426,13 @@ export class WorkflowOrchestrator {
    * signal (which may already be aborted).
    */
   async restart(runId: string): Promise<string> {
-    const instance = this.instances.get(runId);
+    const run = this.getRun(runId);
+    const instance = run?.instance;
     if (!instance) {
       throw new Error(`Workflow '${runId}' not found`);
     }
 
-    const meta = this.runMetaMap.get(runId);
+    const meta = run?.meta;
     if (!meta) {
       throw new Error("No metadata for restart — cannot re-run without original script");
     }
@@ -465,16 +462,19 @@ export class WorkflowOrchestrator {
     });
     newInstance.startedAt = new Date().toISOString();
 
-    this.instances.set(newRunId, newInstance);
-    this.runMetaMap.set(newRunId, { scriptSource, args, budgetTokens, budgetTimeMs });
-    // Round 4 MF#1: create per-run AbortController so executeWithRetry can abort in-flight pi subprocess on user abort.
-    this.runAbortControllers.set(newRunId, new AbortController());
+    this.runs.set(newRunId, {
+      instance: newInstance,
+      meta: { scriptSource, args, budgetTokens, budgetTimeMs },
+      retryCount: 0,
+      // Round 4 MF#1: create per-run AbortController so executeWithRetry can abort in-flight pi subprocess on user abort.
+      abortController: new AbortController(),
+    });
     this.startWorker(newRunId, newInstance, scriptSource, args);
 
     // 3. Schedule time budget check if needed
     if (budgetTimeMs) {
       scheduleTimeBudgetCheck(
-        (id) => this.instances.get(id),
+        (id) => this.getRun(id)?.instance,
         newRunId,
         budgetTimeMs,
         this.budgetCallbacks(),
@@ -484,12 +484,10 @@ export class WorkflowOrchestrator {
     // 4. Persist new instance before cleaning old one
     await this.persistState();
 
-    // 5. Clean up old instance
-    this.instances.delete(runId);
-    this.runMetaMap.delete(runId);
-    this.retryCounts.delete(runId);
-    this.runAbortControllers.delete(runId);
-    this.runPools.delete(runId);
+    // 5. Clean up old run entry (keeps memory tight — restart is the only
+    //    path that fully drops a non-terminal run; terminal runs are kept for
+    //    history until session end).
+    this.runs.delete(runId);
     await this.persistState();
 
     return newRunId;
@@ -499,7 +497,7 @@ export class WorkflowOrchestrator {
    * List all workflow instances in the current session as summaries.
    */
   list(): WorkflowInstanceSummary[] {
-    return Array.from(this.instances.values()).map((inst) => ({
+    return Array.from(this.runs.values()).map(({ instance: inst }) => ({
       runId: inst.runId,
       name: inst.name,
       status: inst.status,
@@ -518,16 +516,25 @@ export class WorkflowOrchestrator {
    * Get a workflow instance by runId.
    */
   getInstance(runId: string): WorkflowInstance | undefined {
-    return this.instances.get(runId);
+    return this.getRun(runId)?.instance;
   }
 
   /**
    * Restore previously serialized instances into the orchestrator.
    * Used during session_start/session_tree to rehydrate state.
+   *
+   * Rehydrated runs only carry the persisted WorkflowInstance — meta/pool/
+   * worker/abortController are recreated lazily on resume/run (see
+   * RunResources.lifecycle note).
    */
   restoreInstances(instances: Map<string, WorkflowInstance>): void {
     for (const [runId, instance] of instances) {
-      this.instances.set(runId, instance);
+      const existing = this.runs.get(runId);
+      if (existing) {
+        existing.instance = instance;
+      } else {
+        this.runs.set(runId, { instance, retryCount: 0 });
+      }
     }
   }
 
@@ -581,7 +588,8 @@ export class WorkflowOrchestrator {
       handleWorkerExit(this.errorHandlerContext(), runId, code, worker);
     });
 
-    this.workers.set(runId, worker);
+    const run = this.getRun(runId);
+    if (run) run.worker = worker;
   }
 
   /**
@@ -590,7 +598,7 @@ export class WorkflowOrchestrator {
    * Round 3 MF2: pause 保留 controller，避免 retry 误判后丢失 callCache/worker 通知。
    */
   private pauseOnSignal(runId: string): void {
-    const inst = this.instances.get(runId);
+    const inst = this.getRun(runId)?.instance;
     if (!inst || inst.status !== "running") return;
     inst.pausedAt = new Date().toISOString();
     try {
@@ -611,8 +619,9 @@ export class WorkflowOrchestrator {
    */
   private recreateRunAbortController(runId: string): void {
     const newController = new AbortController();
-    this.runAbortControllers.set(runId, newController);
-    const meta = this.runMetaMap.get(runId);
+    const run = this.getRun(runId);
+    if (run) run.abortController = newController;
+    const meta = run?.meta;
     if (meta?.signal && !meta.signal.aborted) {
       meta.signal.addEventListener("abort", () => newController.abort(), { once: true });
       meta.signal.addEventListener("abort", () => this.pauseOnSignal(runId), { once: true });
@@ -631,17 +640,18 @@ export class WorkflowOrchestrator {
    */
   private terminateWorker(runId: string, keepController: boolean = false): void {
     // Abort all agent subprocesses for this run
-    const controller = this.runAbortControllers.get(runId);
-    if (controller) {
+    const run = this.getRun(runId);
+    if (run?.abortController) {
+      const controller = run.abortController;
       if (!keepController) {
-        this.runAbortControllers.delete(runId);
+        run.abortController = undefined;
       }
       controller.abort();
     }
 
-    const worker = this.workers.get(runId);
+    const worker = run?.worker;
     if (worker) {
-      this.workers.delete(runId);
+      run!.worker = undefined;
       worker.terminate().catch(() => {
         // Best-effort termination; failures are expected when the worker
         // is already exiting. Surfacing to terminal would leak to the
@@ -652,17 +662,14 @@ export class WorkflowOrchestrator {
 
   /** Post a message to the worker thread. */
   private postMessage(runId: string, msg: unknown): void {
-    const worker = this.workers.get(runId);
+    const worker = this.getRun(runId)?.worker;
     if (worker) worker.postMessage(msg);
   }
 
   /** Build the context object for error handler functions. */
   private errorHandlerContext(): ErrorHandlerContext {
     return {
-      instances: this.instances,
-      workers: this.workers,
-      retryCounts: this.retryCounts,
-      getRunMeta: (id) => this.runMetaMap.get(id),
+      getRun: (id) => this.getRun(id),
       events: this.events,
       terminateWorker: (id) => this.terminateWorker(id),
       cleanupAllTempFiles: () => this.cleanupAllTempFiles(),
@@ -670,7 +677,10 @@ export class WorkflowOrchestrator {
       startWorker: (id, inst, src, args) => this.startWorker(id, inst, src, args),
       persistState: () => this.persistState(),
       onCompletion: (id) => this.onCompletion?.(id),
-      deleteRunPool: (id) => this.runPools.delete(id),
+      deleteRunPool: (id) => {
+        const run = this.getRun(id);
+        if (run) run.pool = undefined;
+      },
     };
   }
 
@@ -680,8 +690,7 @@ export class WorkflowOrchestrator {
     return {
       pi: this.pi,
       events: this.events,
-      runPools: this.runPools,
-      runAbortControllers: this.runAbortControllers,
+      getRun: (id) => this.getRun(id),
       postMessage: (id, msg) => this.postMessage(id, msg),
       persistState: () => this.persistState(),
       budgetCallbacks: () => this.budgetCallbacks(),
@@ -711,7 +720,8 @@ export class WorkflowOrchestrator {
   private async handleWorkerMessage(runId: string, raw: unknown): Promise<void> {
     const msg = raw as WorkerInMsg;
 
-    const instance = this.instances.get(runId);
+    const run = this.getRun(runId);
+    const instance = run?.instance;
     if (!instance) return;
 
     switch (msg.type) {
@@ -730,8 +740,10 @@ export class WorkflowOrchestrator {
         instance.completedAt = new Date().toISOString();
         transitionStatus(instance, "completed");
         this.events.emit(runId, { type: "status", status: "completed" });
-        this.workers.delete(runId);
-        this.runPools.delete(runId);
+        if (run) {
+          run.worker = undefined;
+          run.pool = undefined;
+        }
         await this.persistState();
         this.onTraceUpdate?.(runId);
         this.onCompletion?.(runId);
@@ -835,7 +847,7 @@ export class WorkflowOrchestrator {
         try { await this.abort(runId); } catch { /* already terminal */ void undefined; }
         return { status: "aborted", runId, error: "Aborted by signal" };
       }
-      const instance = this.instances.get(runId);
+      const instance = this.getRun(runId)?.instance;
       if (!instance) {
         return { status: "unknown", runId, error: "Instance not found" };
       }
@@ -859,8 +871,15 @@ export class WorkflowOrchestrator {
   /**
    * Flush the current state to external JSONL files (delegates to state-store).
    * Kept as instance method to preserve public API used by index.ts.
+   *
+   * Persistence layer only knows about WorkflowInstance (not the in-memory
+   * RunResources aggregate), so we project runs → instance map here.
    */
   async persistState(): Promise<void> {
-    await persistInstances(this.pi, this.sessionDir, this.instances);
+    const instances = new Map<string, WorkflowInstance>();
+    for (const [runId, run] of this.runs) {
+      instances.set(runId, run.instance);
+    }
+    await persistInstances(this.pi, this.sessionDir, instances);
   }
 }

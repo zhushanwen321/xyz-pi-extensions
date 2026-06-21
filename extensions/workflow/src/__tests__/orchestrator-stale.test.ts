@@ -49,11 +49,12 @@ vi.mock("../infra/agent-pool.js", () => ({
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
+import type { RunResources } from "../domain/run-resources";
+import { createInstance, type WorkflowStatus } from "../domain/state";
+import { type AgentCallContext,executeWithRetry } from "../engine/agent-call-handler";
 import { AgentPool } from "../infra/agent-pool.js";
 import { WorkflowOrchestrator } from "../orchestrator";
 import { isStaleContextErrorMsg, STALE_CONTEXT_PATTERNS } from "../orchestrator";
-import { executeWithRetry, type AgentCallContext } from "../engine/agent-call-handler";
-import { createInstance, type WorkflowStatus } from "../domain/state";
 
 // ── isStaleContextErrorMsg 纯函数测试 ────────────────────────
 
@@ -194,12 +195,13 @@ describe("executeWithRetry", () => {
     const inst = makeRunningInstance("wf-stale-1");
     const orch2 = new WorkflowOrchestrator(mockPi, mockCtx);
     const poolInstance = new AgentPool({ maxConcurrency: 1, runName: inst.name });
-    // 把 pool 注入到 orchestrator 私有 runPools map
-    (orch2 as unknown as { runPools: Map<string, AgentPool> }).runPools.set(inst.runId, poolInstance);
-    (orch2 as unknown as { runAbortControllers: Map<string, AbortController> }).runAbortControllers.set(
-      inst.runId,
-      new AbortController(),
-    );
+    // 把 pool + abortController 注入到 orchestrator 私有 runs map（单条 RunResources）
+    (orch2 as unknown as { runs: Map<string, RunResources> }).runs.set(inst.runId, {
+      instance: inst,
+      retryCount: 0,
+      pool: poolInstance,
+      abortController: new AbortController(),
+    });
     // mock enqueue 返回 stale context 错误
     (poolInstance.enqueue as ReturnType<typeof vi.fn>).mockResolvedValue({
       callId: "agent-1",
@@ -208,7 +210,6 @@ describe("executeWithRetry", () => {
       error: "stale context detected",
       toolCalls: [],
     });
-    orch2.restoreInstances(new Map([[inst.runId, inst]]));
 
     // executeWithRetry 已抽为模块函数，通过 agentCallContext() 注入 orchestrator 依赖
     const ctx = (orch2 as unknown as { agentCallContext: () => AgentCallContext }).agentCallContext();
@@ -232,12 +233,13 @@ describe("executeWithRetry", () => {
     const inst = makeRunningInstance("wf-budget-1");
     const orch2 = new WorkflowOrchestrator(mockPi, mockCtx);
     const poolInstance = new AgentPool({ maxConcurrency: 1, runName: inst.name });
-    (orch2 as unknown as { runPools: Map<string, AgentPool> }).runPools.set(inst.runId, poolInstance);
-    // 注入 runAbortController（executeWithRetry 的 setTimeout 回调会检查 has(runId)）
-    (orch2 as unknown as { runAbortControllers: Map<string, AbortController> }).runAbortControllers.set(
-      inst.runId,
-      new AbortController(),
-    );
+    // 注入 run（含 pool + abortController，executeWithRetry 的 setTimeout 回调会检查 abortController）
+    (orch2 as unknown as { runs: Map<string, RunResources> }).runs.set(inst.runId, {
+      instance: inst,
+      retryCount: 0,
+      pool: poolInstance,
+      abortController: new AbortController(),
+    });
     // mock enqueue 始终返回失败（达到 MAX_AGENT_RETRIES 上限）
     (poolInstance.enqueue as ReturnType<typeof vi.fn>).mockResolvedValue({
       callId: "agent-budget",
@@ -247,7 +249,6 @@ describe("executeWithRetry", () => {
       usage: { input: 100, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 100, turns: 0 },
       toolCalls: [],
     });
-    orch2.restoreInstances(new Map([[inst.runId, inst]]));
 
     const ctx = (orch2 as unknown as { agentCallContext: () => AgentCallContext }).agentCallContext();
     const node = {

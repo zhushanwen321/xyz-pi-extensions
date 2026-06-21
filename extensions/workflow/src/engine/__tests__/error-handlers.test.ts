@@ -7,19 +7,20 @@
 
 import type { Worker } from "node:worker_threads";
 
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { afterEach,beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { RunResources } from "../../domain/run-resources.js";
 import {
+  createInstance,
+  type WorkflowInstance,
+} from "../../domain/state.js";
+import {
+  type ErrorHandlerContext,
+  handleScriptError,
   handleWorkerError,
   handleWorkerExit,
-  handleScriptError,
-  type ErrorHandlerContext,
   type WorkerLogEntry,
 } from "../error-handlers.js";
-import {
-  type WorkflowInstance,
-  createInstance,
-} from "../../domain/state.js";
 
 // ── Helpers ─────────────────────────────────────────────────
 
@@ -35,11 +36,25 @@ function makeInstance(
   return inst;
 }
 
+/** Seed a RunResources into the ctx's internal runs map. */
+function seedRun(
+  ctx: ErrorHandlerContext & { runs: Map<string, RunResources> },
+  inst: WorkflowInstance,
+  opts: { worker?: Worker; retryCount?: number; meta?: RunResources["meta"] } = {},
+): RunResources {
+  const run: RunResources = {
+    instance: inst,
+    retryCount: opts.retryCount ?? 0,
+    meta: opts.meta,
+    worker: opts.worker,
+  };
+  ctx.runs.set(inst.runId, run);
+  return run;
+}
+
 function makeCtx(overrides?: Partial<ErrorHandlerContext>): ErrorHandlerContext & {
-  instances: Map<string, WorkflowInstance>;
-  workers: Map<string, Worker>;
-  retryCounts: Map<string, number>;
-  getRunMeta: ReturnType<typeof vi.fn>;
+  runs: Map<string, RunResources>;
+  getRun: ReturnType<typeof vi.fn>;
   events: { emit: ReturnType<typeof vi.fn> };
   terminateWorker: ReturnType<typeof vi.fn>;
   cleanupAllTempFiles: ReturnType<typeof vi.fn>;
@@ -49,11 +64,9 @@ function makeCtx(overrides?: Partial<ErrorHandlerContext>): ErrorHandlerContext 
   onCompletion: ReturnType<typeof vi.fn>;
   deleteRunPool: ReturnType<typeof vi.fn>;
 } {
+  const runs = new Map<string, RunResources>();
   const ctx: ErrorHandlerContext = {
-    instances: new Map(),
-    workers: new Map() as Map<string, Worker>,
-    retryCounts: new Map(),
-    getRunMeta: vi.fn(),
+    getRun: vi.fn((id: string) => runs.get(id)),
     events: { emit: vi.fn() } as unknown as ErrorHandlerContext["events"],
     terminateWorker: vi.fn(),
     cleanupAllTempFiles: vi.fn(),
@@ -64,7 +77,7 @@ function makeCtx(overrides?: Partial<ErrorHandlerContext>): ErrorHandlerContext 
     deleteRunPool: vi.fn(),
     ...overrides,
   };
-  return ctx as ErrorHandlerContext & typeof ctx;
+  return { ...ctx, runs } as ErrorHandlerContext & typeof ctx & { runs: Map<string, RunResources> };
 }
 
 beforeEach(() => {
@@ -86,9 +99,7 @@ describe("handleWorkerError", () => {
   it("terminal 状态短路：completed 不重新标记 failed", async () => {
     const inst = makeInstance("completed");
     const ctx = makeCtx();
-    ctx.instances.set(inst.runId, inst);
-    const w = {} as Worker;
-    ctx.workers.set(inst.runId, w);
+    seedRun(ctx, inst, { worker: {} as Worker });
 
     await handleWorkerError(ctx, inst.runId, new Error("late error"));
 
@@ -99,16 +110,14 @@ describe("handleWorkerError", () => {
   it("uncaught error：标记 failed + 清理 pool + persistState", async () => {
     const inst = makeInstance("running");
     const ctx = makeCtx();
-    ctx.instances.set(inst.runId, inst);
-    const w = {} as Worker;
-    ctx.workers.set(inst.runId, w);
+    const run = seedRun(ctx, inst, { worker: {} as Worker });
 
     await handleWorkerError(ctx, inst.runId, new Error("uncaught boom"));
 
     expect(inst.status).toBe("failed");
     expect(inst.error).toBe("uncaught boom");
     expect(inst.completedAt).toBeDefined();
-    expect(ctx.workers.has(inst.runId)).toBe(false);
+    expect(run.worker).toBeUndefined();
     expect(ctx.deleteRunPool).toHaveBeenCalledWith(inst.runId);
     expect(ctx.persistState).toHaveBeenCalled();
     expect(ctx.onCompletion).toHaveBeenCalledWith(inst.runId);
@@ -132,24 +141,23 @@ describe("handleWorkerExit", () => {
   it("worker race 保护：exited worker !== current worker 直接 return", async () => {
     const inst = makeInstance("running");
     const ctx = makeCtx();
-    ctx.instances.set(inst.runId, inst);
     const currentWorker = {} as Worker;
     const exitedWorker = {} as Worker;
-    ctx.workers.set(inst.runId, currentWorker);
+    seedRun(ctx, inst, { worker: currentWorker });
 
     await handleWorkerExit(ctx, inst.runId, 1, exitedWorker);
 
-    // current worker 未被删除（不是 exitedWorker 触发的清理）
-    expect(ctx.workers.has(inst.runId)).toBe(true);
+    // current worker 未被清除（不是 exitedWorker 触发的清理）
+    const run = ctx.runs.get(inst.runId)!;
+    expect(run.worker).toBe(currentWorker);
     expect(inst.status).toBe("running");
   });
 
   it("paused 状态退出：跳过失败标记", async () => {
     const inst = makeInstance("paused");
     const ctx = makeCtx();
-    ctx.instances.set(inst.runId, inst);
     const w = {} as Worker;
-    ctx.workers.set(inst.runId, w);
+    seedRun(ctx, inst, { worker: w });
 
     await handleWorkerExit(ctx, inst.runId, 1, w);
 
@@ -160,9 +168,8 @@ describe("handleWorkerExit", () => {
   it("code !== 0 且无 error：标记 failed", async () => {
     const inst = makeInstance("running");
     const ctx = makeCtx();
-    ctx.instances.set(inst.runId, inst);
     const w = {} as Worker;
-    ctx.workers.set(inst.runId, w);
+    seedRun(ctx, inst, { worker: w });
 
     await handleWorkerExit(ctx, inst.runId, 42, w);
 
@@ -174,9 +181,8 @@ describe("handleWorkerExit", () => {
   it("code === 0：不做任何处理（正常退出）", async () => {
     const inst = makeInstance("running");
     const ctx = makeCtx();
-    ctx.instances.set(inst.runId, inst);
     const w = {} as Worker;
-    ctx.workers.set(inst.runId, w);
+    seedRun(ctx, inst, { worker: w });
 
     await handleWorkerExit(ctx, inst.runId, 0, w);
 
@@ -190,8 +196,7 @@ describe("handleScriptError", () => {
   it("MAX_WORKER_RETRIES=3 后标记 failed", async () => {
     const inst = makeInstance("running");
     const ctx = makeCtx();
-    ctx.instances.set(inst.runId, inst);
-    ctx.getRunMeta = vi.fn(() => ({ scriptSource: "x", args: {} }));
+    seedRun(ctx, inst, { meta: { scriptSource: "x", args: {} } });
 
     await handleScriptError(ctx, inst.runId, "first error");
     // 触发第一次重试
@@ -214,10 +219,9 @@ describe("handleScriptError", () => {
   it("退避延迟：第 1 次重试 delay=1000ms，第 2 次=2000ms（指数退避 base=2）", async () => {
     const inst = makeInstance("running");
     const ctx = makeCtx();
-    ctx.instances.set(inst.runId, inst);
     const startWorker = vi.fn();
     ctx.startWorker = startWorker as unknown as ErrorHandlerContext["startWorker"];
-    ctx.getRunMeta = vi.fn(() => ({ scriptSource: "x", args: {} }));
+    seedRun(ctx, inst, { meta: { scriptSource: "x", args: {} } });
 
     // 第 1 次 error：attempt=1，schedule delay=1000*2^0=1000ms
     await handleScriptError(ctx, inst.runId, "e1");
@@ -236,10 +240,9 @@ describe("handleScriptError", () => {
   it("worker race 保护：retry 时若 instance.status !== running 跳过重启", async () => {
     const inst = makeInstance("running");
     const ctx = makeCtx();
-    ctx.instances.set(inst.runId, inst);
     const startWorker = vi.fn();
     ctx.startWorker = startWorker as unknown as ErrorHandlerContext["startWorker"];
-    ctx.getRunMeta = vi.fn(() => ({ scriptSource: "x", args: {} }));
+    seedRun(ctx, inst, { meta: { scriptSource: "x", args: {} } });
 
     await handleScriptError(ctx, inst.runId, "e1");
     // 推进 1000ms 之前先把状态改为 paused
@@ -252,7 +255,7 @@ describe("handleScriptError", () => {
   it("P2-2: workerLogs 挂载到 instance.errorLogs（最后一次覆盖）", async () => {
     const inst = makeInstance("running");
     const ctx = makeCtx();
-    ctx.instances.set(inst.runId, inst);
+    seedRun(ctx, inst);
 
     const logs1: WorkerLogEntry[] = [
       { level: "log", message: "first" },
@@ -272,7 +275,7 @@ describe("handleScriptError", () => {
   it("terminal 状态短路：completed 不重试", async () => {
     const inst = makeInstance("completed");
     const ctx = makeCtx();
-    ctx.instances.set(inst.runId, inst);
+    seedRun(ctx, inst);
 
     await handleScriptError(ctx, inst.runId, "late error");
 

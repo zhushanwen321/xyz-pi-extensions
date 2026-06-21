@@ -11,15 +11,16 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-import { type AgentCallOpts, AgentPool } from "../infra/agent-pool.js";
+import type { RunResources } from "../domain/run-resources.js";
+import {
+  type AgentResult as StateAgentResult,
+  type ExecutionTraceNode,
+  type WorkflowInstance,
+} from "../domain/state.js";
+import { type AgentCallOpts } from "../infra/agent-pool.js";
 import { appendTraceNode } from "../infra/execution-trace.js";
 import { type BudgetCallbacks, checkBudget } from "./orchestrator-budget.js";
 import { WorkflowEventEmitter } from "./orchestrator-events.js";
-import {
-	type AgentResult as StateAgentResult,
-	type ExecutionTraceNode,
-	type WorkflowInstance,
-} from "../domain/state.js";
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -49,8 +50,8 @@ export function isBudgetExceeded(instance: WorkflowInstance): boolean {
 export interface AgentCallContext {
 	pi: ExtensionAPI;
 	events: WorkflowEventEmitter;
-	runPools: Map<string, AgentPool>;
-	runAbortControllers: Map<string, AbortController>;
+	/** Look up the aggregated per-run resources. */
+	getRun(runId: string): RunResources | undefined;
 	postMessage: (runId: string, msg: unknown) => void;
 	persistState: () => Promise<void>;
 	budgetCallbacks: () => BudgetCallbacks;
@@ -75,13 +76,14 @@ export async function executeWithRetry(
 	node: ExecutionTraceNode,
 	attempt = 1,
 ): Promise<void> {
-	const pool = ctx.runPools.get(runId);
+	const run = ctx.getRun(runId);
+	const pool = run?.pool;
 	if (!pool) {
 		// Pool already cleaned up (workflow terminated) — skip
 		return;
 	}
 	// P1-2: Use per-run AbortController signal so terminateWorker can kill subprocesses
-	const runController = ctx.runAbortControllers.get(runId);
+	const runController = run?.abortController;
 	pool.enqueue(opts, runController?.signal).then(async (poolResult) => {
 		// P0-2: Stale state check — instance may have been paused/aborted during agent call
 		if (instance.status !== "running") return;
@@ -149,7 +151,7 @@ export async function executeWithRetry(
 				// P0-2 + Round 6 MF#6: stale state / abort / budget recheck before retry.
 				// Budget 超限 → checkBudget 终止流程，不重试（重试只会突破预算且无意义）。
 				// executeWithRetry 内部已 .catch pool.enqueue 的 rejection，无需外层兜底。
-				if (instance.status !== "running" || !ctx.runAbortControllers.has(runId)) return;
+				if (instance.status !== "running" || !ctx.getRun(runId)?.abortController) return;
 				if (isBudgetExceeded(instance)) {
 					void checkBudget(instance, runId, ctx.budgetCallbacks()).catch((err: unknown) => {
 						console.error(`[workflow] budget check failed in retry path: ${err instanceof Error ? err.message : String(err)}`);
