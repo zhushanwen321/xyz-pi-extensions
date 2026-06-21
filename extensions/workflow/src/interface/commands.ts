@@ -12,12 +12,10 @@
  * for GUI display.
  */
 
-import { existsSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
-import { resolve } from "node:path";
-
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 
 import { loadWorkflows } from "../infra/config-loader.js";
+import { saveWorkflow, deleteWorkflow } from "../infra/workflow-files.js";
 import { RUNID_CMD_SHORT, RUNID_CMD_LONG } from "../infra/constants.js";
 import { type WorkflowOrchestrator } from "../orchestrator.js";
 import { type WorkflowInstance } from "../domain/state.js";
@@ -488,61 +486,4 @@ export function registerWorkflowCommands(
   });
 }
 
-// ── Shared workflow file operations ──────────────────────────────
-
-const TMP_DIR = resolve(".pi/workflows/.tmp");
-const SAVED_DIR = resolve(".pi/workflows");
-
-/**
- * Save a temporary workflow to the saved directory.
- * Moves .pi/workflows/.tmp/{name}.js → .pi/workflows/{newName||name}.js
- */
-async function saveWorkflow(tmpName: string, newName?: string): Promise<string> {
-  const workflows = await loadWorkflows();
-  const target = workflows.find(
-    (wf) => wf.source === "tmp" && wf.name === tmpName,
-  );
-  if (!target) {
-    throw new Error(`Temporary workflow '${tmpName}' not found`);
-  }
-
-  const destName = newName ?? tmpName;
-  const destPath = resolve(SAVED_DIR, `${destName}.js`);
-
-  // Check destination exists (reject, not auto-rename)
-  if (existsSync(destPath)) {
-    throw new Error(`'${destName}' already exists in saved workflows. Use --as to save with a different name.`);
-  }
-
-  mkdirSync(SAVED_DIR, { recursive: true });
-
-  renameSync(target.path, destPath);
-  return `Saved '${tmpName}' → '${destName}' (${destPath})`;
-}
-
-/**
- * Delete a workflow script file.
- * Rejects if the workflow is currently running.
- */
-export function deleteWorkflow(
-  name: string,
-  isRunning: (name: string) => boolean,
-): string {
-  if (isRunning(name)) {
-    throw new Error(`Cannot delete '${name}': workflow is currently running. Abort it first.`);
-  }
-
-  const candidates = [
-    resolve(TMP_DIR, `${name}.js`),
-    resolve(SAVED_DIR, `${name}.js`),
-  ];
-
-  for (const filePath of candidates) {
-    if (existsSync(filePath)) {
-      unlinkSync(filePath);
-      return `Deleted workflow '${name}' (${filePath})`;
-    }
-  }
-
-  throw new Error(`Workflow file '${name}' not found`);
-}
+export { deleteWorkflow };

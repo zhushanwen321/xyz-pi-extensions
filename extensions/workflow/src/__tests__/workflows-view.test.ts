@@ -613,19 +613,6 @@ describe("processKey (via handleInput)", () => {
     expect(done).not.toHaveBeenCalled();
   });
 
-  it("save mode: tab toggles scope between project and user", async () => {
-    const { component, requestRender } = await setupViewComponent();
-    component.handleInput("s");
-    requestRender.mockClear();
-    // Tab → user scope
-    component.handleInput("\t");
-    expect(requestRender).toHaveBeenCalledTimes(1);
-    // Tab again → project scope
-    requestRender.mockClear();
-    component.handleInput("\t");
-    expect(requestRender).toHaveBeenCalledTimes(1);
-  });
-
   it("save mode: printable char appends to input value", async () => {
     const { component, requestRender } = await setupViewComponent();
     component.handleInput("s");

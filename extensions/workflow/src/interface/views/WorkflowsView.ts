@@ -14,16 +14,17 @@
  *   ⏎ expand/collapse prompt · esc back to agent list · s save trace
  */
 
-import { copyFileSync, existsSync, mkdirSync, promises as fsPromises } from "node:fs";
+import { promises as fsPromises } from "node:fs";
 import { homedir } from "node:os";
-import { join as pathJoin, resolve } from "node:path";
+import { join as pathJoin } from "node:path";
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { matchesKey, Key, truncateToWidth } from "@mariozechner/pi-tui";
 
 import type { WorkflowOrchestrator } from "../../orchestrator.js";
-import type { WorkflowInstance } from "../../domain/state.js";
+import { type WorkflowInstance } from "../../domain/state.js";
 import { isTerminal } from "../../domain/state.js";
+import { saveWorkflow } from "../../infra/workflow-files.js";
 
 import {
   type PhaseGroup,
@@ -65,7 +66,6 @@ interface ViewState {
   disposed: boolean;
   // Save mode
   saveMode: boolean;
-  saveScope: "project" | "user";
   saveInputValue: string;
   saveMessage: string;    // inline feedback in save overlay
   saveMsgOk: boolean;     // true = success style, false = error style
@@ -94,7 +94,6 @@ export function createWorkflowsView(
       promptExpanded: false,
       disposed: false,
       saveMode: false,
-      saveScope: "project",
       saveInputValue: "",
       saveMessage: "",
       saveMsgOk: false,
@@ -175,7 +174,6 @@ function processGlobalActions(
   if (data === "s") {
     state.saveMode = true;
     state.saveInputValue = instance.name;
-    state.saveScope = "project";
     state.saveMessage = "";
     state.saveMsgOk = false;
     return true;
@@ -300,11 +298,6 @@ function processSaveModeInput(
   // Escape → exit save mode
   if (matchesKey(data, Key.escape)) {
     state.saveMode = false;
-    return true;
-  }
-  // Tab → toggle scope
-  if (data === "\t") {
-    state.saveScope = state.saveScope === "project" ? "user" : "project";
     return true;
   }
   // Enter → save
@@ -440,25 +433,20 @@ async function doSaveWorkflow(
   _ctx: ExtensionContext,
 ): Promise<{ ok: boolean; msg: string }> {
   const isTmp = instance.worker.includes("/.tmp/") || instance.worker.includes("\\.tmp\\");
-
   if (!isTmp) {
     return { ok: false, msg: "Only temporary workflows can be saved." };
   }
 
   const name = state.saveInputValue.trim();
-  const savedDir = state.saveScope === "project"
-    ? resolve(process.cwd(), ".pi/workflows")
-    : resolve(homedir(), ".pi/agent/workflows");
-  const destPath = resolve(savedDir, `${name}.js`);
-
-  if (existsSync(destPath)) {
-    return { ok: false, msg: `'${name}' already exists. Use a different name.` };
+  if (!name) {
+    return { ok: false, msg: "Please enter a name" };
   }
 
   try {
-    mkdirSync(savedDir, { recursive: true });
-    copyFileSync(instance.worker, destPath);
-    return { ok: true, msg: `Saved '${name}' → ${destPath}` };
+    // 提取 tmp 名：worker path 形如 .../.pi/workflows/.tmp/{name}.js
+    const tmpName = instance.worker.replace(/.*\.tmp\//, "").replace(/.*\.tmp\\/, "").replace(/\.js$/, "");
+    const msg = await saveWorkflow(tmpName, name);
+    return { ok: true, msg };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, msg: `Save failed: ${msg}` };
@@ -832,11 +820,9 @@ function renderSaveOverlay(
   const title = " Save dynamic workflow";
   lines.push("│" + padVisible(theme.bold(title), contentWidth) + "│");
 
-  // Scope + destination
-  const scopeLabel = state.saveScope === "project" ? "Project" : "User";
-  const scopeDir = state.saveScope === "project" ? ".pi/workflows/" : "~/.pi/agent/workflows/";
+  // Destination (project scope only)
   const destName = state.saveInputValue || instance.name;
-  const destLine = `${scopeLabel} scope · ${scopeDir}${destName}.js`;
+  const destLine = `Project scope · .pi/workflows/${destName}.js`;
   lines.push("│" + padVisible(theme.fg("dim", destLine), contentWidth) + "│");
 
   // Empty line
@@ -862,7 +848,7 @@ function renderSaveOverlay(
   }
 
   // Hint
-  const hint = "Enter to save · Tab to toggle scope · Esc to cancel";
+  const hint = "Enter to save · Esc to cancel";
   lines.push("│" + padVisible(theme.fg("muted", hint), contentWidth) + "│");
 
   lines.push("╰" + "─".repeat(contentWidth) + "╯");
