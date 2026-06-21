@@ -389,6 +389,20 @@ describe("projections", () => {
       expect(d.currentActivity).toBeUndefined();
     });
 
+    it("outputs mode + sessionFile (T2: action refactor 投影)", () => {
+      const r = makeRecord({ mode: "background", turns: 2 });
+      r.sessionFile = "bg-1-abc.jsonl";
+      const d = project(r);
+      expect(d.mode).toBe("background");
+      expect(d.sessionFile).toBe("bg-1-abc.jsonl");
+    });
+
+    it("sessionFile is undefined when record.sessionFile unset (窗口期)", () => {
+      const r = makeRecord();
+      const d = project(r);
+      expect(d.sessionFile).toBeUndefined();
+    });
+
     it("currentActivity prefers tool over thinking over text", () => {
       const r = makeRecord();
       // tool_start (running) → tool wins
@@ -438,6 +452,18 @@ describe("projections", () => {
       const s = snapshot(r);
       s.eventLog.length = 0;
       expect(r.eventLog).toHaveLength(1);
+    });
+
+    it("outputs sessionFile (T2)", () => {
+      const r = makeRecord();
+      r.sessionFile = "s.jsonl";
+      const s = snapshot(r);
+      expect(s.sessionFile).toBe("s.jsonl");
+    });
+
+    it("sessionFile is undefined when unset (T2)", () => {
+      const r = makeRecord();
+      expect(snapshot(r).sessionFile).toBeUndefined();
     });
   });
 

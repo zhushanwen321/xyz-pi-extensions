@@ -390,6 +390,7 @@ export function completeRecord(
 export function project(record: ExecutionRecord): SubagentToolDetails {
   return {
     status: record.status,
+    mode: record.mode,
     agent: record.agent,
     model: record.model,
     thinkingLevel: record.thinkingLevel,
@@ -401,8 +402,9 @@ export function project(record: ExecutionRecord): SubagentToolDetails {
     error: record.error,
     // running 时的当前活动行（tool > thinking > text 优先级）——下沉叶子
     currentActivity: record.status === "running" ? computeCurrentActivity(record) : undefined,
-    // schema 产出仅在 record 完成后可用（agentResult 冻结时填）。
+    // schema 产出仅在 record 完成后可用（agentResult 冠结时填）。
     parsedOutput: record.agentResult?.parsedOutput,
+    sessionFile: record.sessionFile,
   };
 }
 
@@ -426,6 +428,7 @@ export function snapshot(record: ExecutionRecord): RecordSnapshot {
     endedAt: record.endedAt,
     result: record.result,
     error: record.error,
+    sessionFile: record.sessionFile,
   };
 }
 
@@ -449,7 +452,7 @@ export function toPersisted(
     totalTokens: record.totalTokens,
     error: record.error,
     resultPreview: record.result ? truncatePreview(record.result) : undefined,
-    sessionFile: record.agentResult?.sessionFile,
+    sessionFile: record.sessionFile ?? record.agentResult?.sessionFile,
     cwd,
     sessionId,
     model: record.model,

@@ -240,7 +240,7 @@ export class RecordStore {
       eventLog: r.eventLog.slice(),
       result: r.result,
       error: r.error,
-      sessionFile: r.agentResult?.sessionFile,
+      sessionFile: r.sessionFile ?? r.agentResult?.sessionFile,
     };
   }
 
