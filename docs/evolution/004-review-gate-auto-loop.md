@@ -1,16 +1,14 @@
 # 004: Review-Gate 自动循环审查机制
 
 > **⚠️ SUPERSeded — 本文档已被以下文档取代：**
-> - 各 Phase 详细规格：`docs/phase-specs/phase-{1-4}-*.md`
-> - 统一分析范式：`docs/review-gate-phase-analysis-playbook.md`
-> - 架构决策记录：`docs/adr/018-review-gate-auto-loop.md`
+> - 架构决策记录：`docs/adr/018-review-gate-auto-loop.md`（亦 superseded；最终实现见 coding-workflow extension 的 xyz-harness-* skills）
 >
 > 本文档的以下设计已变更：
 > - Phase 1/2/4 Review-Gate：从"单次检查无循环"改为"Workflow 循环"
 > - Phase 4：去掉 Review-Gate，改为 Test-Fix Loop Workflow
 > - Phase-Gate：从"统一 workflow 循环 doc-fix"改为"2 步（脚本检查 + AI Agent 防伪造）"
 >
-> 请以上述 phase-specs 和 playbook 为准。
+> 注：原引用的 phase-specs / playbook 为 harness 产出物，已移除。
 
 Status: ~~active~~ superseded
 

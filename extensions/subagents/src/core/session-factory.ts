@@ -5,7 +5,7 @@
 //
 // 基础层模块：依赖 event-bridge（内核数据通路）+ types + model-resolver。
 // 不依赖编排层（session-runner）——被它消费，反之禁止。
-// 组装契约见 docs/subagents/session-runner.md §3。
+// 组装契约见 docs/extensions/subagents/session-runner.md §3。
 
 import { execFileSync } from "node:child_process";
 import * as path from "node:path";
@@ -173,7 +173,7 @@ export async function getSdk(): Promise<SdkLike> {
 
 /**
  * 创建并配置一个 Pi AgentSession（四步，顺序不可换）。
- * 设计意图见 docs/subagents/session-runner.md §3；本函数只翻译控制流，
+ * 设计意图见 docs/extensions/subagents/session-runner.md §3；本函数只翻译控制流，
  * 每步的具体实现下沉到下方叶子（全部 throw not implemented）。
  *
  *   ╔══════════════════════════════════════════════════════════════════╗

@@ -75,39 +75,44 @@ Schema：`docs/third-party-extensions/extensions.schema.json`
 
 ## 文档索引
 
-### 长期文档（main 分支）
+> 完整的 docs 目录结构、归属判定规则、禁止放入 docs 的内容见 [docs/README.md](./docs/README.md)。
 
-- [docs/research/](./docs/research/) — 调研报告（跨分支共享，存 main 分支）
-  - `infinite-context-survey.md` — 通用方案调研（学术论文、开源项目、商业产品）
-  - `infinite-context-research-report.md` — 学术论文/产品详细分析
-  - `hermes-agent-research.md` — Hermes Agent 记忆/上下文管理调研
-  - `openclaw-research.md` — OpenClaw 记忆/上下文管理调研
-  - `coding-agents-context-research.md` — Claude Code/Aider/Qwen Code/OpenCode 对比调研
-  - `pi-extension-production-guide.md` — 生产级 Pi Extension 开发指南（基于 pi-subagents 等调研）
+### 核心文档
+
+- [docs/architecture.md](./docs/architecture.md) — **系统架构总览**（最新架构入口）
+- [docs/standards.md](./docs/standards.md) — **Pi Extension 开发规范**（所有新增/修改 extension 前必须阅读）
 - [docs/monorepo-conventions.md](./docs/monorepo-conventions.md) — **Monorepo 约定与结构规范**（目录结构、命名、依赖发布规则）
 - [docs/quality-gates.md](./docs/quality-gates.md) — **质量门控与 Git Hooks**（pre-commit 检查项、阻断级别、跳过条件）
-
-### 当前分支文档
-
+- [docs/pi-tui-development-guide.md](./docs/pi-tui-development-guide.md) — **Pi TUI 扩展开发避坑指南**（开发带 TUI 的 extension 前必读）
 - [CONTEXT.md](./CONTEXT.md) — 领域术语表（Pi 平台概念 + 本项目概念 + 歧义标记）
-- [docs/pi-extension-standards.md](./docs/pi-extension-standards.md) — **Pi Extension 开发规范**（所有新增/修改 extension 前必须阅读）
-- [docs/pi-tui-development-guide.md](./docs/pi-tui-development-guide.md) — **Pi TUI 扩展开发避坑指南**（渲染管线/shell 策略、ANSI/宽度/截断、键盘交互/overlay、流式更新/性能；开发带 TUI 的 extension 前必读）
+
+### 架构决策与演进
+
 - [docs/adr/](./docs/adr/) — 架构决策记录（已做出的决策，不可逆）
   - [001-subagent-architecture.md](./docs/adr/001-subagent-architecture.md) — Subagent 进程隔离、上下文传递、background 模式、能力边界、模型选择
   - [002-goal-7-state-machine.md](./docs/adr/002-goal-7-state-machine.md) — Goal 为什么有 7 种状态（time_limited + cancelled），以及为什么没有 usage_limited
   - [003-evidence-based-completion.md](./docs/adr/003-evidence-based-completion.md) — Goal 为什么强制任务分解 + evidence，以及代价
 - [docs/evolution/](./docs/evolution/) — 架构演进与 Brainstorming（决策前的思考过程，可迭代）
-  - `001-context-compression-redesign.md` — 上下文压缩方案重新设计（基于调研的压缩流水线设计）
-- `.xyz-harness/` — xyz-harness 工作流产出物（spec、plan、test cases），按 `<date>-<slug>/` 组织，应纳入版本控制
+
+### 其他
+
+- [docs/research/](./docs/research/) — 外部/竞品/技术调研（每个主题一个子目录）
+- [docs/third-party-extensions/](./docs/third-party-extensions/) — 社区扩展借鉴记录（source of truth: `extensions.yaml`）
+- [docs/extensions/](./docs/extensions/) — 单个 extension 的内部架构文档
+- [docs/todos/](./docs/todos/) — 跨 extension 待跟进项（完成即删）
+- `.xyz-harness/` — xyz-harness 工作流产出物（spec/plan/test/retrospect），按 `<date>-<slug>/` 组织
 
 ### 文档规范
 
 | 目录 | 性质 | 格式 | 生命周期 |
 |------|------|------|----------|
+| 根级 `*.md` | 全项目通用规范 | `<topic>.md` | 持续维护 |
 | `docs/adr/` | 已做出的决策 | `NNN-<topic>.md`，含 Status/Context/Decision/Consequences | 永久 |
 | `docs/evolution/` | 决策前的探索 | `NNN-<topic>.md`，标注 draft/active/superseded | 迭代到决策或废弃 |
-| `docs/research/` | 外部调研 | `<topic>-research.md` | 长期参考 |
-| `.xyz-harness/` | 工作流产出 | 按 `<date>-<slug>/` 组织 | 随分支
+| `docs/research/` | 外部调研 | 每个主题一个子目录 | 长期参考 |
+| `docs/extensions/<name>/` | 单 extension 内部文档 | `<topic>.md` | 随 extension 演进 |
+| `docs/todos/` | 待跟进项 | `<topic>-followups.md` | 完成即删 |
+| `.xyz-harness/` | 工作流产出 | 按 `<date>-<slug>/` 组织 | 随分支 |
 
 ## 技术栈
 
@@ -516,7 +521,7 @@ GUI 组件（`TaskListWidget` 等）是 xyz-agent 的工作，扩展侧不需要
 
 ### Pi Extension 开发规范
 
-所有扩展的开发必须遵循 [docs/pi-extension-standards.md](./docs/pi-extension-standards.md) 中定义的规范，包括但不限于：
+所有扩展的开发必须遵循 [docs/standards.md](./docs/standards.md) 中定义的规范，包括但不限于：
 - 包结构与入口模式
 - Tool/Command 注册与 execute 规范
 - 事件生命周期与状态管理
@@ -800,4 +805,4 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 
 **校验**：`npx ajv-cli validate -s extension-dependencies.schema.json -d extension-dependencies.json`
 
-详见：[ADR-018](./docs/adr/018-structured-output-extension.md)
+详见：[ADR-018](./docs/adr/026-structured-output-extension.md)

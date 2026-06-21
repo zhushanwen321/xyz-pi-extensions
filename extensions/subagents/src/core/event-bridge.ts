@@ -5,7 +5,7 @@
 //
 // 这是 session-factory / output-collector 共享的数据通路内核。
 // 唯一依赖 types.ts（leaf）——可独立单测，无需 Pi SDK。
-// 事件映射契约见 docs/subagents/session-runner.md §2。
+// 事件映射契约见 docs/extensions/subagents/session-runner.md §2。
 
 import type {
   AgentEvent,
@@ -54,7 +54,7 @@ export function isSdkEvent(x: unknown): x is SdkEvent {
  *
  * bridge 累积器（turnCount/toolCalls/usage/lastError）供 collectResult 构造 AgentResult；
  * 转发的 AgentEvent 供 updateFromEvent 更新 record——两套数据同源（handle 驱动）。
- * 事件映射表见 docs/subagents/session-runner.md §2。
+ * 事件映射表见 docs/extensions/subagents/session-runner.md §2。
  */
 export interface EventBridge {
   /** 传给 session.subscribe 的处理器。 */

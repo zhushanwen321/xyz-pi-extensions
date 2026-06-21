@@ -31,12 +31,13 @@ xyz-pi-extensions/           ← monorepo 根目录
 │   └── types/            → @zhushanwen/pi-types (private)
 ├── skills/                    ← 独立 skills（无所属 extension，GitHub 分发）
 ├── scripts/                   ← 共享脚本（不与特定包绑定）
-├── docs/                      ← 统一文档
+├── docs/                      ← 统一文档（见 docs/README.md）
+│   ├── *.md               → 全项目规范（architecture / standards / monorepo-conventions / ...）
 │   ├── adr/               → 架构决策记录（不可逆）
 │   ├── evolution/         → 架构演进与 brainstorming
-│   ├── research/          → 外部调研报告
-│   ├── analysis/          → 特定问题分析
-│   └── improvement/       → 改进方案
+│   ├── research/          → 外部调研报告（每个主题一个子目录）
+│   ├── extensions/        → 单个 extension 的内部文档
+│   └── todos/             → 跨 extension 待跟进项（完成即删）
 ├── .changeset/                ← 版本管理
 ├── .githooks/                 ← Git hooks
 ├── pnpm-workspace.yaml

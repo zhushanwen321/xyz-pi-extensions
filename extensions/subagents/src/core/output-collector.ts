@@ -4,7 +4,7 @@
 // 与 session-factory 对称：factory 造 bundle，collector 拆 bundle。
 //
 // 基础层模块：依赖 event-bridge（读累积器）+ session-factory（AgentSessionLike）+ types。
-// 字段来源契约见 docs/subagents/session-runner.md §4。
+// 字段来源契约见 docs/extensions/subagents/session-runner.md §4。
 
 import type { AgentResult, AgentUsage, AgentUsageTotal, ToolCall } from "../types.ts";
 import type { EventBridge } from "./event-bridge.ts";

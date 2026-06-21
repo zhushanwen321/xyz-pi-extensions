@@ -7,7 +7,7 @@
 //
 // 编排层（Orchestration）：站在基础层三件套（session-factory / output-collector /
 // event-bridge）之上，负责执行时序与清理。不持有 Pi SDK 实例，只通过 factory 间接用。
-// 设计信息见 docs/subagents/session-runner.md。
+// 设计信息见 docs/extensions/subagents/session-runner.md。
 
 import type {
   AgentEvent,
