@@ -1,5 +1,5 @@
 // 测试框架：vitest（从 vitest 导入 describe/it/expect/vi/beforeEach）
-// 运行命令：npx vitest run tests/agent-pool.test.ts
+// 运行命令：npx vitest run src/__tests__/agent-pool.test.ts
 /* eslint-disable @typescript-eslint/no-explicit-any, taste/prefer-allsettled */
 
 import { type ChildProcess,spawn } from "node:child_process";
@@ -7,7 +7,7 @@ import { EventEmitter } from "node:events";
 
 import { beforeEach,describe, expect, it, vi } from "vitest";
 
-import { AgentPool, SOFT_MAX_AGENTS_WARNING } from "../src/infra/agent-pool";
+import { AgentPool, SOFT_MAX_AGENTS_WARNING } from "../infra/agent-pool";
 
 vi.mock("node:child_process", () => ({
   spawn: vi.fn(),
@@ -789,7 +789,7 @@ describe("AgentPool — soft warning infrastructure", () => {
     const _anyPool = pool as any;
 
     // Enqueue all 502 calls — with concurrency=502 all start immediately
-    const promises: Promise<import("../src/agent-pool").AgentResult>[] = [];
+    const promises: Promise<import("../agent-pool").AgentResult>[] = [];
     for (let i = 0; i < count; i++) {
       const proc = createMockProcess();
       mockSpawn.mockReturnValueOnce(proc as unknown as ChildProcess);

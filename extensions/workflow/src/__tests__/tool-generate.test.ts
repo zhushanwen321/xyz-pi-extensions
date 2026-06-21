@@ -11,7 +11,7 @@ import { describe, expect,it } from "vitest";
  * Option B — avoids adding exports to the production module.
  */
 const toolGenerateSource = readFileSync(
-  resolve(import.meta.dirname, "../src/interface/tool-generate.ts"),
+  resolve(import.meta.dirname, "../interface/tool-generate.ts"),
   "utf-8",
 );
 

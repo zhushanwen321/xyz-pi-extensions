@@ -1,5 +1,5 @@
 // 测试框架：vitest（从 vitest 导入 describe/it/expect/vi/beforeEach）
-// 运行命令：npx vitest run tests/index.test.ts
+// 运行命令：npx vitest run src/__tests__/index.test.ts
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -28,13 +28,13 @@ const TEST_TMP_WORKFLOW = {
   source: "tmp",
 };
 
-vi.mock("../src/infra/config-loader.js", () => ({
+vi.mock("../infra/config-loader.js", () => ({
   loadWorkflows: vi.fn().mockResolvedValue([TEST_SAVED_WORKFLOW, TEST_TMP_WORKFLOW]),
   getWorkflow: vi.fn(),
   invalidateCache: vi.fn(),
 }));
 
-vi.mock("../src/orchestrator.js", () => ({
+vi.mock("../orchestrator.js", () => ({
   WorkflowOrchestrator: vi.fn().mockImplementation(function () {
     this.run = mockRun;
     this.list = mockList;
@@ -52,12 +52,12 @@ vi.mock("../src/orchestrator.js", () => ({
   }),
 }));
 
-vi.mock("../src/interface/commands.js", () => ({
+vi.mock("../interface/commands.js", () => ({
   registerWorkflowCommands: vi.fn(),
   sendCompletionNotification: vi.fn(),
 }));
 
-vi.mock("../src/interface/tool-generate.js", () => ({
+vi.mock("../interface/tool-generate.js", () => ({
   registerGenerateTool: vi.fn(),
 }));
 
@@ -73,7 +73,7 @@ vi.mock("node:fs", async (importOriginal) => {
 
 // ── Import AFTER mocks ────────────────────────────────────────
 
-import workflowExtension from "../src/index.js";
+import workflowExtension from "../index.js";
 
 // ── Helpers ───────────────────────────────────────────────────
 

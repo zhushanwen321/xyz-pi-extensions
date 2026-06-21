@@ -1,5 +1,5 @@
 // 测试框架：vitest（从 vitest 导入 describe/it/expect/vi/beforeEach）
-// 运行命令：npx vitest run tests/state.test.ts
+// 运行命令：npx vitest run src/__tests__/state.test.ts
 
 import { describe, expect, expectTypeOf,it } from "vitest";
 
@@ -11,7 +11,7 @@ import {
   serializeInstance,
   TERMINAL_STATUSES,
   VALID_TRANSITIONS,
-} from "../src/domain/state";
+} from "../domain/state";
 
 describe("state_lost + verifyStrategy", () => {
   it("state_lost_is_terminal", () => {

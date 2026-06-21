@@ -1,5 +1,5 @@
 // 测试框架：vitest（从 vitest 导入 describe/it/expect/vi/beforeEach）
-// 运行命令：npx vitest run tests/commands-generate.test.ts
+// 运行命令：npx vitest run src/__tests__/commands-generate.test.ts
 
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { afterEach,beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { WorkflowInstance } from "../src/domain/state";
+import type { WorkflowInstance } from "../domain/state";
 
 // ── Mock 外部依赖（必须在 import 被测模块之前） ──────────────
 
@@ -23,7 +23,7 @@ const { mockMkdirSync, mockWriteFileSync } = vi.hoisted(() => ({
 }));
 
 // commands.ts / tool-generate.ts 导入 config-loader
-vi.mock("../src/infra/config-loader.js", () => ({
+vi.mock("../infra/config-loader.js", () => ({
   loadWorkflows: mockLoadWorkflows,
   invalidateCache: mockInvalidateCache,
 }));
@@ -52,8 +52,8 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-import { deleteWorkflow,sendCompletionNotification } from "../src/interface/commands";
-import { registerGenerateTool } from "../src/interface/tool-generate";
+import { deleteWorkflow,sendCompletionNotification } from "../interface/commands";
+import { registerGenerateTool } from "../interface/tool-generate";
 
 // ── Helpers ──────────────────────────────────────────────────
 

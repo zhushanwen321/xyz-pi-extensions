@@ -1,5 +1,5 @@
 // 测试框架：vitest（从 vitest 导入 describe/it/expect/vi/beforeEach）
-// 运行命令：npx vitest run tests/orchestrator.test.ts
+// 运行命令：npx vitest run src/__tests__/orchestrator.test.ts
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -23,7 +23,7 @@ vi.mock("node:fs", async () => {
 // Mock agent-discovery: workflow 现在自带 AgentRegistry（spawn 架构，不再依赖 subagents）。
 // getAgentCount()/getAgents() 测试通过 mockAgentList 控制 AgentRegistry.list() 返回值。
 const mockAgentList: Array<{ name: string; source: string; model?: string }> = [];
-vi.mock("../src/infra/agent-discovery", () => ({
+vi.mock("../infra/agent-discovery", () => ({
   AgentRegistry: class MockAgentRegistry {
     discoverAll = vi.fn();
     list = vi.fn(() => mockAgentList);
@@ -42,13 +42,13 @@ vi.mock("../src/infra/agent-discovery", () => ({
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { WorkflowOrchestrator } from "../src/orchestrator";
+import { WorkflowOrchestrator } from "../orchestrator";
 import {
   type AgentResult,
   createInstance,
   serializeInstance,
   type WorkflowInstance,
-} from "../src/domain/state";
+} from "../domain/state";
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -520,7 +520,7 @@ describe("WorkflowOrchestrator", () => {
       // Access the internal reconstructState via the module
       // Since reconstructState is inside the factory, we test through the session_start flow.
       // For unit testing, we directly test the file reading and deserialization.
-      const instances = new Map<string, import("../src/domain/state").WorkflowInstance>();
+      const instances = new Map<string, import("../domain/state").WorkflowInstance>();
       const entries = mockCtx.sessionManager.getEntries();
       const pointers = new Map<string, { path: string }>();
       for (const entry of entries) {
@@ -535,8 +535,8 @@ describe("WorkflowOrchestrator", () => {
         const content = await fs.promises.readFile(pointer.path, "utf8");
         const lines = content.split("\n").filter((l) => l.trim());
         for (const line of lines) {
-          const parsed = JSON.parse(line) as Parameters<typeof import("../src/domain/state").deserializeInstance>[0];
-          const deserialized = import("../src/domain/state").then((m) => m.deserializeInstance(parsed));
+          const parsed = JSON.parse(line) as Parameters<typeof import("../domain/state").deserializeInstance>[0];
+          const deserialized = import("../domain/state").then((m) => m.deserializeInstance(parsed));
           const inst = await deserialized;
           instances.set(inst.runId, inst);
         }
@@ -602,14 +602,14 @@ describe("WorkflowOrchestrator", () => {
         }
       }
 
-      const instances = new Map<string, import("../src/domain/state").WorkflowInstance>();
+      const instances = new Map<string, import("../domain/state").WorkflowInstance>();
       for (const [runId, pointer] of pointers) {
         try {
           const content = await fs.promises.readFile(pointer.path, "utf8");
           const lines = content.split("\n").filter((l) => l.trim());
           for (const line of lines) {
-            const parsed = JSON.parse(line) as Parameters<typeof import("../src/domain/state").deserializeInstance>[0];
-            const inst = await import("../src/domain/state").then((m) => m.deserializeInstance(parsed));
+            const parsed = JSON.parse(line) as Parameters<typeof import("../domain/state").deserializeInstance>[0];
+            const inst = await import("../domain/state").then((m) => m.deserializeInstance(parsed));
             instances.set(inst.runId, inst);
           }
         } catch {
@@ -650,14 +650,14 @@ describe("WorkflowOrchestrator", () => {
         }
       }
 
-      const instances = new Map<string, import("../src/domain/state").WorkflowInstance>();
+      const instances = new Map<string, import("../domain/state").WorkflowInstance>();
       for (const [runId, pointer] of pointers) {
         try {
           const content = await fs.promises.readFile(pointer.path, "utf8");
           const lines = content.split("\n").filter((l) => l.trim());
           for (const line of lines) {
-            const parsed = JSON.parse(line) as Parameters<typeof import("../src/domain/state").deserializeInstance>[0];
-            const inst = await import("../src/domain/state").then((m) => m.deserializeInstance(parsed));
+            const parsed = JSON.parse(line) as Parameters<typeof import("../domain/state").deserializeInstance>[0];
+            const inst = await import("../domain/state").then((m) => m.deserializeInstance(parsed));
             instances.set(inst.runId, inst);
           }
         } catch {

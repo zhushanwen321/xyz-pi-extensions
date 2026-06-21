@@ -1,5 +1,5 @@
 // 测试框架：vitest（从 vitest 导入 describe/it/expect/vi/beforeEach/afterEach）
-// 运行命令：npx vitest run tests/config-loader.test.ts
+// 运行命令：npx vitest run src/__tests__/config-loader.test.ts
 
 import { mkdirSync, mkdtempSync, rmSync,writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,7 +11,7 @@ import {
   getWorkflow,
   invalidateCache,
   loadWorkflows,
-} from "../src/infra/config-loader";
+} from "../infra/config-loader";
 
 // ── Helpers ──────────────────────────────────────────────────
 

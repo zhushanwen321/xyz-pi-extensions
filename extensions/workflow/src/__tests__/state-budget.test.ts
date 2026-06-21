@@ -1,5 +1,5 @@
 // 测试框架：vitest（从 vitest 导入 describe/it/expect/vi/beforeEach）
-// 运行命令：npx vitest run tests/state-budget.test.ts
+// 运行命令：npx vitest run src/__tests__/state-budget.test.ts
 
 import { describe, expect,it } from "vitest";
 
@@ -17,7 +17,7 @@ import {
   VALID_TRANSITIONS,
   type WorkflowInstance,
   type WorkflowStatus,
-} from "../src/domain/state";
+} from "../domain/state";
 
 // ═══════════════════════════════════════════════════════════════
 // state.ts

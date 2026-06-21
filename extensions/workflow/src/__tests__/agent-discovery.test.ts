@@ -2,7 +2,7 @@
  * AgentRegistry 单元测试（TDD — 测试先行）
  *
  * 测试框架：vitest
- * 运行命令：npx vitest run tests/agent-discovery.test.ts
+ * 运行命令：npx vitest run src/__tests__/agent-discovery.test.ts
  *
  * 测试覆盖：
  * - TC-1-01: Project agent 从 .pi/agents/ 发现
@@ -26,7 +26,7 @@ import * as path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { AgentRegistry } from "../src/infra/agent-discovery";
+import { AgentRegistry } from "../infra/agent-discovery";
 
 // ── Test Fixtures ────────────────────────────────────────────
 

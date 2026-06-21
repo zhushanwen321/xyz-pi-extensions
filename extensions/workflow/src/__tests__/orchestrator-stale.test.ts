@@ -1,5 +1,5 @@
 // 测试框架：vitest
-// 运行命令：npx vitest run tests/orchestrator-stale.test.ts
+// 运行命令：npx vitest run src/__tests__/orchestrator-stale.test.ts
 //
 // Round 4 MF6: executeWithRetry / restart / runAndWait / isStaleContextErrorMsg 零测试。
 // 本文件覆盖：
@@ -25,7 +25,7 @@ vi.mock("node:fs", async () => {
 });
 
 // Mock agent-discovery: 避免构造 AgentRegistry 时扫描真实文件系统。
-vi.mock("../src/infra/agent-discovery", () => ({
+vi.mock("../infra/agent-discovery", () => ({
   AgentRegistry: class MockAgentRegistry {
     discoverAll = vi.fn();
     list = vi.fn(() => []);
@@ -36,7 +36,7 @@ vi.mock("../src/infra/agent-discovery", () => ({
 
 // Mock AgentPool：让 executeWithRetry 的 pool.enqueue 行为可控
 // 必须用 vi.fn() 才能跟踪调用计数（class 字段初始化器只在 new 之后才生效）。
-vi.mock("../src/infra/agent-pool.js", () => ({
+vi.mock("../infra/agent-pool.js", () => ({
   AgentPool: class MockAgentPool {
     enqueue: ReturnType<typeof vi.fn>;
     setBudget: ReturnType<typeof vi.fn>;
@@ -49,11 +49,11 @@ vi.mock("../src/infra/agent-pool.js", () => ({
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { AgentPool } from "../src/infra/agent-pool.js";
-import { WorkflowOrchestrator } from "../src/orchestrator";
-import { isStaleContextErrorMsg, STALE_CONTEXT_PATTERNS } from "../src/orchestrator";
-import { executeWithRetry, type AgentCallContext } from "../src/engine/agent-call-handler";
-import { createInstance, type WorkflowStatus } from "../src/domain/state";
+import { AgentPool } from "../infra/agent-pool.js";
+import { WorkflowOrchestrator } from "../orchestrator";
+import { isStaleContextErrorMsg, STALE_CONTEXT_PATTERNS } from "../orchestrator";
+import { executeWithRetry, type AgentCallContext } from "../engine/agent-call-handler";
+import { createInstance, type WorkflowStatus } from "../domain/state";
 
 // ── isStaleContextErrorMsg 纯函数测试 ────────────────────────
 

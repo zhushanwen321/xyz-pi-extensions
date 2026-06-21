@@ -1,5 +1,5 @@
 // 测试框架：vitest（从 vitest 导入 describe/it/expect/vi）
-// 运行命令：npx vitest run tests/worker-runtime.test.ts
+// 运行命令：npx vitest run src/__tests__/worker-runtime.test.ts
 //
 // 运行时验证 buildWorkerScript 生成的脚本在隔离上下文中的行为。
 // 使用 vm.runInNewContext 模拟 Worker 线程环境。
@@ -9,7 +9,7 @@ import * as vm from "node:vm";
 
 import { describe, expect, it } from "vitest";
 
-import { buildWorkerScript } from "../src/engine/worker-script";
+import { buildWorkerScript } from "../engine/worker-script";
 
 // ── Helpers ─────────────────────────────────────────────────
 
