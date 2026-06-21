@@ -125,6 +125,9 @@ export interface ExecutionRecord {
   /** 完整 AgentResult（含 usage/toolCalls，完成时填）。 */
   agentResult: AgentResult | undefined;
 
+  /** session jsonl 文件名。session 创建成功后由 session-runner.run() 回填（窗口期内 undefined）。 */
+  sessionFile?: string;
+
   // ── 控制（仅 background 持有）──
   controller: AbortController | undefined;
 
@@ -138,11 +141,16 @@ export interface ExecutionRecord {
 // ============================================================
 
 /**
- * Tool 返回的 details（renderResult 消费）。
- * 由 project(record) 唯一产出——sync/bg/poll 三路径字段一致。
+ * Tool 返回的 details（内层扁平结构）。
+ * 由 project(record) 唯一产出——sync/bg 两路径字段一致。
+ * 含 mode + sessionFile（供外层 SubagentToolResult 分组 + spinner 判断）。
+ *
+ * 分层（spec FR-3）：此为**内层**，不感知 action/外层分组。
+ * 外层 SubagentToolResult 由 adapter 包裹产出（加 action/subagentId/sessionFile + 分组）。
  */
 export interface SubagentToolDetails {
   status: ExecutionStatus;
+  mode: ExecutionMode;
   agent: string;
   model: string;
   thinkingLevel: string | undefined;
@@ -154,10 +162,10 @@ export interface SubagentToolDetails {
   error?: string;
   /** running 时的当前活动行（tool/thinking/text 优先级）。 */
   currentActivity?: { type: "tool" | "text" | "thinking"; label: string };
-  /** 仅 background 模式返回，供 LLM 后续 poll。 */
-  backgroundId?: string;
   /** schema 模式下，structured-output tool 的 result.details（对齐 workflow agent-pool）。 */
   parsedOutput?: unknown;
+  /** session jsonl 文件名（不含目录）。窗口期内可能 undefined（session 尚未创建成功）。 */
+  sessionFile?: string;
 }
 
 // ============================================================
@@ -194,29 +202,87 @@ export interface ExecuteOptions {
 /**
  * execute 返回值。
  *   sync:    { mode:"sync", record, details } —— 调用方 await，record 已 settled。
- *            record 是只读快照（持久化/poll 用），details 是 TUI 渲染投影（含 elapsedSeconds/currentActivity）。
- *   background: { mode:"background", backgroundId } —— 立即返回。
+ *            record 是只读快照（持久化用），details 是 TUI 渲染投影（含 elapsedSeconds/currentActivity/mode/sessionFile）。
+ *   background: { mode:"background", subagentId, sessionFile, details } —— 立即返回。
+ *            subagentId 供后续 cancel/list 用；sessionFile 窗口期可能 undefined。
  */
 export type ExecutionHandle =
   | { mode: "sync"; record: RecordSnapshot; details: SubagentToolDetails }
-  | { mode: "background"; backgroundId: string; details: SubagentToolDetails };
+  | { mode: "background"; subagentId: string; sessionFile: string | undefined; details: SubagentToolDetails };
 
-/** poll(backgroundId) 返回。record 的只读视图。 */
-export interface QueryResult {
-  id: string;
+// ============================================================
+// tool action 出参（外层分组，adapter 产出）
+// ============================================================
+
+/** list 的 item 结构（8 字段）。 */
+export interface SubagentListItem {
+  subagentId: string;
+  agent: string;
   status: ExecutionStatus;
+  mode: ExecutionMode;
+  /** 运行秒数（running 态实时计算，终态 endedAt-startedAt）。 */
+  duration: number;
+  model: string;
+  totalTokens: number;
+  /** session jsonl 文件名（窗口期内可能 undefined）。 */
+  sessionFile?: string;
+}
+
+/** sync 执行的内层响应（挂在 SubagentToolResult.syncResponse）。 */
+export interface SyncResponse {
+  status: ExecutionStatus;
+  mode: "sync";
   agent: string;
   model: string;
   thinkingLevel: string | undefined;
   turns: number;
   totalTokens: number;
-  startedAt: number;
-  endedAt: number | undefined;
   elapsedSeconds: number;
+  eventLog: AgentEventLogEntry[];
+  currentActivity?: { type: "tool" | "text" | "thinking"; label: string };
   result?: string;
   error?: string;
-  eventLog: AgentEventLogEntry[];
-  mode: ExecutionMode;
+  parsedOutput?: unknown;
+  sessionFile?: string;
+}
+
+/** background 启动的内层响应（挂在 SubagentToolResult.bgResponse）。 */
+export interface BgResponse {
+  status: "running";
+  mode: "background";
+  /** 启动提示文案（"detached, will notify on completion"）。 */
+  message: string;
+}
+
+/** list 的内层响应（挂在 SubagentToolResult.listResponse）。 */
+export interface ListResponse {
+  /** items 中 status==="running" 的计数（受 limit 截断如实反映，非全局总数）。 */
+  running: number;
+  items: SubagentListItem[];
+}
+
+/** cancel 的内层响应（挂在 SubagentToolResult.cancelResponse）。 */
+export interface CancelResponse {
+  cancelled: true;
+}
+
+/**
+ * Tool 外层出参（renderResult + LLM content JSON 同源）。
+ * adapter 唯一产出：领域对象（sync/bg/list/cancel 四选一）+ action/subagentId/sessionFile。
+ *
+ *   - sync 完成 → syncResponse（最外层 subagentId/sessionFile 有值）
+ *   - background 启动 → bgResponse（subagentId 有值；sessionFile 窗口期可能 undefined）
+ *   - list → listResponse（最外层 subagentId/sessionFile 为 null，sessionFile 在各 item 内）
+ *   - cancel → cancelResponse（subagentId 有值；sessionFile 无意义，可为 null）
+ */
+export interface SubagentToolResult {
+  action: "start" | "list" | "cancel";
+  subagentId: string | null;
+  sessionFile: string | null;
+  syncResponse?: SyncResponse;
+  bgResponse?: BgResponse;
+  listResponse?: ListResponse;
+  cancelResponse?: CancelResponse;
 }
 
 // ============================================================
@@ -328,6 +394,7 @@ export interface RecordSnapshot {
   readonly endedAt: number | undefined;
   readonly result: string | undefined;
   readonly error: string | undefined;
+  readonly sessionFile: string | undefined;
 }
 
 // Re-export 用于 ExecuteOptions 的 agent/model 契约
