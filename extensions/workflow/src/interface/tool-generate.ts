@@ -15,6 +15,7 @@ import { Text } from "@mariozechner/pi-tui";
 import { type Static,Type } from "typebox";
 
 import { invalidateCache,loadWorkflows } from "../infra/config-loader.js";
+import { renderTextFallback } from "./views/format.js";
 
 // ── Parameter schema ──────────────────────────────────────────
 
@@ -175,8 +176,7 @@ export function registerGenerateTool(pi: ExtensionAPI) {
     },
 
     renderResult(result: { content: Array<{ type: "text" | "image"; text?: string }> }, _options: unknown, _theme: Theme, _context?: unknown) {
-      const text = result.content[0];
-      return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
+      return new Text(renderTextFallback(result), 0, 0);
     },
   });
 }

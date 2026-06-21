@@ -17,7 +17,6 @@ import { AgentRegistry } from "./infra/agent-discovery.js";
 import { type AgentCallOpts,AgentPool } from "./infra/agent-pool.js";
 import { getWorkflow } from "./infra/config-loader.js";
 import { appendTraceNode } from "./infra/execution-trace.js";
-import { resolveModel } from "./engine/model-resolver.js";
 import { lintScript } from "./infra/script-lint.js";
 import {
   type AgentResult as StateAgentResult,
@@ -69,11 +68,14 @@ interface RunMeta {
 /** Worker→Main message type — unified with worker-script.ts definition. */
 type WorkerInMsg = ImportedWorkerInMsg;
 
+import { RUNID_RADIX, RUNID_SLICE_START, RUNID_SLICE_END } from "./infra/constants.js";
+
 // ── Constants ─────────────────────────────────────────────────
 
-const RUNID_RADIX = 36;
-const RUNID_SLICE_START = 2;
-const RUNID_SLICE_LENGTH = 8;
+/** 生成 workflow runId：wf-<timestamp>-<base36 random> */
+function generateRunId(): string {
+  return `wf-${Date.now()}-${Math.random().toString(RUNID_RADIX).slice(RUNID_SLICE_START, RUNID_SLICE_END)}`;
+}
 
 // ── Orchestrator ──────────────────────────────────────────────
 
@@ -181,7 +183,7 @@ export class WorkflowOrchestrator {
     for (const w of lintResult.findings.filter((f) => f.severity === "warning")) {
       console.warn(`[workflow] Script lint warning at L${w.line}: ${w.message}`);
     }
-    const runId = `wf-${Date.now()}-${Math.random().toString(RUNID_RADIX).slice(RUNID_SLICE_START, RUNID_SLICE_LENGTH)}`;
+    const runId = generateRunId();
 
     const instance = createStateInstance({
       runId,
@@ -454,7 +456,7 @@ export class WorkflowOrchestrator {
     }
 
     // 2. Create new instance directly from cached scriptSource (skip getWorkflow + readFile).
-    const newRunId = `wf-${Date.now()}-${Math.random().toString(RUNID_RADIX).slice(RUNID_SLICE_START, RUNID_SLICE_LENGTH)}`;
+    const newRunId = generateRunId();
     const newInstance = createStateInstance({
       runId: newRunId,
       name,
@@ -718,7 +720,7 @@ export class WorkflowOrchestrator {
         break;
       case "return": {
         // P0-1: Guard against stale return messages after terminate/pause/budget
-        if (isTerminal(instance.status) || instance.status === "budget_limited" || instance.status === "paused") return;
+        if (isTerminal(instance.status) || instance.status === "paused") return;
         // FR-1: Capture script return value
         instance.scriptResult = msg.result;
         // P2-2: Surface worker diagnostics via the TUI widget, never the input area.
@@ -737,7 +739,7 @@ export class WorkflowOrchestrator {
       }
       case "error": {
         // P0-1: Guard against stale error messages after terminate/pause/budget
-        if (isTerminal(instance.status) || instance.status === "budget_limited" || instance.status === "paused") return;
+        if (isTerminal(instance.status) || instance.status === "paused") return;
         handleScriptError(this.errorHandlerContext(), runId, msg.error, Array.isArray(msg.workerLogs) ? msg.workerLogs : undefined);
         break;
       }
@@ -790,13 +792,7 @@ export class WorkflowOrchestrator {
       this.postMessage(runId, { type: "agent-result", callId, result: errorResult, cached: false });
       return;
     }
-    let enrichedOpts = resolved.opts;
-
-    // Resolve model from scene if needed
-    const resolvedModel = await resolveModel(enrichedOpts);
-    if (resolvedModel) {
-      enrichedOpts = { ...enrichedOpts, model: resolvedModel };
-    }
+    const enrichedOpts = resolved.opts;
 
     // Record pending trace node
     const now = new Date().toISOString();

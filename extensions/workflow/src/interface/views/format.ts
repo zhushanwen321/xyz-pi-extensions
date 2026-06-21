@@ -7,11 +7,11 @@
 
 import type { ExecutionTraceNode, ToolCallEntry, WorkflowStatus } from "../../domain/state.js";
 import { truncateToWidth } from "@mariozechner/pi-tui";
+import { MS_PER_SEC } from "../../infra/constants.js";
 
 // ── Constants ─────────────────────────────────────────────────
 
 export const SIDEBAR_WIDTH = 24;
-const MS_PER_SEC = 1000;
 export const PROMPT_FOLD_LINES = 3;
 export const OUTPUT_TRUNCATE_BYTES = 100_000;
 export const ELLIPSIS = "\u2026"; // U+2026
@@ -32,10 +32,6 @@ export function statusDotStr(status: string, theme: ThemeLike): string {
     case "failed": return theme.fg("error", "●");
     default: return theme.fg("muted", "●");
   }
-}
-
-export function isTerminalStatus(status: WorkflowStatus): boolean {
-  return ["completed", "failed", "aborted", "budget_limited", "time_limited", "state_lost"].includes(status);
 }
 
 /** Format a status badge with color for the header area. */
@@ -96,6 +92,17 @@ export function formatTokenStat(
   const tools = toolCalls?.length ?? 0;
   const base = `${tokens} tok · ${tools} tool calls`;
   return elapsed ? `${base} · ${elapsed}` : base;
+}
+
+/**
+ * renderResult 的文本兜底：从 result.content[0] 提取纯文本。
+ * 多处 tool 的 renderResult 曾各自内联此逻辑，提取后统一调用。
+ */
+export function renderTextFallback(
+  result: { content?: Array<{ type: string; text?: string }> },
+): string {
+  const first = result.content?.[0];
+  return first?.type === "text" ? (first.text ?? "") : "";
 }
 
 /** Format a single activity line: ToolName(argsPreview). */

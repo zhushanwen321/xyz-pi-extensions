@@ -32,6 +32,8 @@ import {
   type WorkflowStatus,
 } from "./domain/state.js";
 import { registerGenerateTool } from "./interface/tool-generate.js";
+import { RUNID_INDEX_SHORT, RUNID_INDEX_LONG, MS_PER_SEC } from "./infra/constants.js";
+import { renderTextFallback } from "./interface/views/format.js";
 
 // ── Parameter schema ──────────────────────────────────────────
 
@@ -81,9 +83,6 @@ interface WorkflowDetails {
 
 // ── Constants ─────────────────────────────────────────────────
 
-const MS_PER_SEC = 1000;
-const RUNID_SLICE_LENGTH = 20;
-const RUNID_SHORT_LENGTH = 16;
 const INPUT_WORD_MIN_LENGTH = 2;
 
 // ── Helper: _render descriptor builder ────────────────────────
@@ -454,7 +453,7 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
                 s.startedAt
                   ? ` (${((Date.now() - new Date(s.startedAt).getTime()) / MS_PER_SEC).toFixed(0)}s)`
                   : "";
-              return `[${s.status}] ${s.name} (${s.runId.slice(0, RUNID_SLICE_LENGTH)})${duration}` +
+              return `[${s.status}] ${s.name} (${s.runId.slice(0, RUNID_INDEX_LONG)})${duration}` +
                 (s.error ? ` error: ${s.error}` : "");
             })
             .join("\n");
@@ -490,7 +489,7 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
         theme.fg("toolTitle", theme.bold("workflow ")) +
         theme.fg("muted", action);
       if (args.name) text += ` ${theme.fg("accent", args.name as string)}`;
-      if (args.runId) text += ` ${theme.fg("dim", (args.runId as string).slice(0, RUNID_SLICE_LENGTH))}`;
+      if (args.runId) text += ` ${theme.fg("dim", (args.runId as string).slice(0, RUNID_INDEX_LONG))}`;
       if (args.error) text += ` ${theme.fg("error", "error")}`;
       return new Text(text, 0, 0);
     },
@@ -498,9 +497,7 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
     renderResult(result: Record<string, unknown>, _options: unknown, theme: Theme, _context?: unknown) {
       const details = result.details as WorkflowDetails | undefined;
       if (!details) {
-        const content = result.content as Array<{ type: string; text: string }> | undefined;
-        const text = content?.[0];
-        return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
+        return new Text(renderTextFallback(result), 0, 0);
       }
 
       if (details.action === "status" && details.instances.length > 0) {
@@ -511,15 +508,13 @@ export default function workflowExtension(pi: ExtensionAPI) { // eslint-disable-
               : inst.status === "running" ? "warning"
               : inst.status === "failed" || inst.status === "aborted" ? "error"
               : "muted";
-            return `${theme.fg(color, `[${inst.status}]`)} ${theme.fg("accent", inst.name)} ${theme.fg("dim", inst.runId.slice(0, RUNID_SHORT_LENGTH))}${inst.error ? ` ${theme.fg("error", inst.error)}` : ""}`;
+            return `${theme.fg(color, `[${inst.status}]`)} ${theme.fg("accent", inst.name)} ${theme.fg("dim", inst.runId.slice(0, RUNID_INDEX_SHORT))}${inst.error ? ` ${theme.fg("error", inst.error)}` : ""}`;
           })
           .join("\n");
         return new Text(lines, 0, 0);
       }
 
-      const content = result.content as Array<{ type: string; text: string }> | undefined;
-      const text = content?.[0];
-      return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
+      return new Text(renderTextFallback(result), 0, 0);
     },
   });
 
@@ -706,9 +701,7 @@ function registerWorkflowRunTool(
     renderResult(result: Record<string, unknown>, _options: unknown, theme: Theme, _context?: unknown) {
       const details = result.details as _WorkflowRunDetails | undefined;
       if (!details) {
-        const content = result.content as Array<{ type: string; text: string }> | undefined;
-        const text = content?.[0];
-        return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
+        return new Text(renderTextFallback(result), 0, 0);
       }
       const statusColor =
         details.status === "completed" ? "success"
@@ -717,7 +710,7 @@ function registerWorkflowRunTool(
       const text =
         `${theme.fg(statusColor as "success" | "warning" | "error" | "muted", `[${details.status}]`)}` +
         ` ${theme.fg("accent", details.name)}` +
-        ` ${theme.fg("dim", details.runId.slice(0, RUNID_SHORT_LENGTH))}`;
+        ` ${theme.fg("dim", details.runId.slice(0, RUNID_INDEX_SHORT))}`;
       return new Text(text, 0, 0);
     },
   });
@@ -782,9 +775,7 @@ function registerWorkflowLintTool(
     },
 
     renderResult(result: Record<string, unknown>, _options: unknown, _theme: Theme, _context?: unknown) {
-      const content = result.content as Array<{ type: string; text: string }> | undefined;
-      const text = content?.[0];
-      return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
+      return new Text(renderTextFallback(result), 0, 0);
     },
   });
 }

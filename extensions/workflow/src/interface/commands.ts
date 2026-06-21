@@ -18,6 +18,7 @@ import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 
 import { loadWorkflows } from "../infra/config-loader.js";
+import { RUNID_CMD_SHORT, RUNID_CMD_LONG } from "../infra/constants.js";
 import { type WorkflowOrchestrator } from "../orchestrator.js";
 import { type WorkflowInstance } from "../domain/state.js";
 import { createWorkflowsView } from "./views/WorkflowsView.js";
@@ -26,8 +27,6 @@ import { createWorkflowsView } from "./views/WorkflowsView.js";
 
 const JSON_INDENT = 2;
 const MAX_RESULT_LENGTH = 8000;
-const RUNID_SHORT_LENGTH = 12;
-const RUNID_SLICE_LENGTH = 16;
 const TASK_SHORT_LENGTH = 150;
 const CONTENT_TRUNC_LENGTH = 500;
 const SPLIT_LIMIT = 2;
@@ -106,7 +105,7 @@ export function sendCompletionNotification(
       _render: {
         type: "task-list" as const,
         data: {
-          title: `Workflow: ${instance.name} (${runId.slice(0, RUNID_SHORT_LENGTH)}...)`,
+          title: `Workflow: ${instance.name} (${runId.slice(0, RUNID_CMD_SHORT)}...)`,
           items: instance.trace.map((node) => ({
             label: `[${node.stepIndex}] ${node.agent}: ${node.task.slice(0, TASK_SHORT_LENGTH)}`,
             status: statusToItemStatus(node.status),
@@ -227,7 +226,7 @@ export function registerWorkflowCommands(
             );
             cmdState.lastRunId = runId;
             ctx.ui.notify(
-              `Started '${parsed.name}' (${runId.slice(0, RUNID_SLICE_LENGTH)}...)`,
+              `Started '${parsed.name}' (${runId.slice(0, RUNID_CMD_LONG)}...)`,
               "info",
             );
           } catch (err) {
@@ -298,7 +297,7 @@ export function registerWorkflowCommands(
                 ? new Date(inst.startedAt).toLocaleTimeString()
                 : "-";
               return (
-                `  [${inst.status}] ${inst.name} (${inst.runId.slice(0, RUNID_SLICE_LENGTH)}...) ${ts}` +
+                `  [${inst.status}] ${inst.name} (${inst.runId.slice(0, RUNID_CMD_LONG)}...) ${ts}` +
                 (inst.error ? ` error: ${inst.error}` : "")
               );
             }));
@@ -321,7 +320,7 @@ export function registerWorkflowCommands(
           }
           try {
             await orch.abort(runId);
-            ctx.ui.notify(`Aborted ${runId.slice(0, RUNID_SLICE_LENGTH)}...`, "info");
+            ctx.ui.notify(`Aborted ${runId.slice(0, RUNID_CMD_LONG)}...`, "info");
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             ctx.ui.notify(`Abort failed: ${msg}`, "error");
@@ -476,7 +475,7 @@ export function registerWorkflowCommands(
 
       // Multiple — SelectList
       const entries = all.map(
-        (s) => `${s.name} [${s.status}] (${s.runId.slice(0, RUNID_SHORT_LENGTH)}...)`,
+        (s) => `${s.name} [${s.status}] (${s.runId.slice(0, RUNID_CMD_SHORT)}...)`,
       );
       const selected = await ctx.ui.select("Select workflow:", entries);
       if (!selected) return;

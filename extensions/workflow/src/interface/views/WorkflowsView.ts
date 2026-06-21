@@ -23,6 +23,7 @@ import { matchesKey, Key, truncateToWidth } from "@mariozechner/pi-tui";
 
 import type { WorkflowOrchestrator } from "../../orchestrator.js";
 import type { WorkflowInstance } from "../../domain/state.js";
+import { isTerminal } from "../../domain/state.js";
 
 import {
   type PhaseGroup,
@@ -30,11 +31,11 @@ import {
   buildPhaseGroups,
   ELLIPSIS,
   formatActivityLine,
+  formatAgentOneLiner,
   formatElapsed,
   formatPhaseLine,
   formatStatusBadge,
   formatTokenStat,
-  isTerminalStatus,
   OUTPUT_TRUNCATE_BYTES,
   padVisible,
   PROMPT_FOLD_LINES,
@@ -166,7 +167,7 @@ function processGlobalActions(
     return false;
   }
   if (data === "r") {
-    if (isTerminalStatus(instance.status) || instance.status === "paused") {
+    if (isTerminal(instance.status) || instance.status === "paused") {
       handleRestart(orchestrator, runId, instance, ctx, state, done);
     }
     return false;
@@ -352,7 +353,7 @@ function handlePauseResume(
   instance: WorkflowInstance,
   ctx: ExtensionContext,
 ): void {
-  if (isTerminalStatus(instance.status)) {
+  if (isTerminal(instance.status)) {
     ctx.ui.notify(`Workflow already ${instance.status}`, "warning");
     return;
   }
@@ -401,7 +402,7 @@ function handleAbort(
   instance: WorkflowInstance,
   ctx: ExtensionContext,
 ): void {
-  if (isTerminalStatus(instance.status)) {
+  if (isTerminal(instance.status)) {
     ctx.ui.notify(`Workflow already ${instance.status}`, "warning");
     return;
   }
@@ -509,7 +510,7 @@ function renderFooter(
       ? "↑↓ agent · ⏎ detail"
       : "↑↓ agent · ⏎ prompt";
   const actionParts: string[] = [];
-  const terminal = isTerminalStatus(instance.status);
+  const terminal = isTerminal(instance.status);
   if (!terminal) {
     actionParts.push("x stop");
     actionParts.push(instance.status === "paused" ? "p resume" : "p pause");
@@ -547,9 +548,9 @@ function renderView(
   const bodyStart = lines.length;
 
   if (state.level === 0) {
-    renderLevel0(lines, phases, state, theme, width, mainWidth, now);
+    renderLevel0(lines, phases, state, theme, width, mainWidth);
   } else if (state.level === 1) {
-    renderLevel1(lines, phases, agents, state, theme, width, mainWidth, now);
+    renderLevel1(lines, phases, agents, state, theme, width, mainWidth);
   } else {
     renderLevel2(lines, instance, phase, agents, state, theme, width, mainWidth, now);
   }
@@ -588,7 +589,6 @@ function renderLevel0(
   theme: ThemeLike,
   width: number,
   mainWidth: number,
-  now: number,
 ): void {
   const leftLines: string[] = [];
   const rightLines: string[] = [];
@@ -609,15 +609,7 @@ function renderLevel0(
     rightLines.push(theme.fg("muted", title));
     rightLines.push("─".repeat(mainWidth));
     for (const node of selectedPhase.nodes) {
-      const dot = statusDotStr(node.status, theme);
-      const elapsed = formatElapsed(
-        node.startedAt,
-        node.completedAt ? new Date(node.completedAt).getTime() : now,
-      );
-      const tok = node.result?.usage;
-      const tokStr = tok ? `${Math.round((tok.input + tok.output) / 1000)}k tok` : "";
-      const tcCount = node.result?.toolCalls?.length ?? 0;
-      rightLines.push(`  ${dot} ${node.agent}    ${node.model}    ${tokStr} · ${tcCount} tools · ${elapsed}`);
+      rightLines.push(`  ${formatAgentOneLiner(node, theme)}`);
     }
   }
 
@@ -634,7 +626,6 @@ function renderLevel1(
   theme: ThemeLike,
   width: number,
   mainWidth: number,
-  now: number,
 ): void {
   const leftLines: string[] = [];
   const rightLines: string[] = [];
@@ -656,15 +647,7 @@ function renderLevel1(
     const node = agents[i];
     const isSelected = i === state.agentIdx;
     const pointer = isSelected ? "❯ " : "  ";
-    const dot = statusDotStr(node.status, theme);
-    const elapsed = formatElapsed(
-      node.startedAt,
-      node.completedAt ? new Date(node.completedAt).getTime() : now,
-    );
-    const tok = node.result?.usage;
-    const tokStr = tok ? `${Math.round((tok.input + tok.output) / 1000)}k tok` : "";
-    const tcCount = node.result?.toolCalls?.length ?? 0;
-    rightLines.push(`${pointer}${dot} ${node.agent}    ${node.model}    ${tokStr} · ${tcCount} tools · ${elapsed}`);
+    rightLines.push(`${pointer}${formatAgentOneLiner(node, theme)}`);
   }
 
   mergeBody(lines, leftLines, rightLines);

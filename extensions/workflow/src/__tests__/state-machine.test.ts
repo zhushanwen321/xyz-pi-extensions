@@ -34,6 +34,12 @@ describe("isTerminal", () => {
   it("returns false for paused", () => {
     expect(isTerminal("paused")).toBe(false);
   });
+
+  // 回归 A5：budget_limited 必须被 isTerminal 覆盖，
+  // orchestrator.handleWorkerMessage 依赖此（已删除冗余的 || status === "budget_limited"）
+  it("returns true for budget_limited (regression for A5 redundant guard)", () => {
+    expect(isTerminal("budget_limited")).toBe(true);
+  });
 });
 
 // ── canTransition ───────────────────────────────────────────
