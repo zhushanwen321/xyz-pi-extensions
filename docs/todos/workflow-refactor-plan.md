@@ -1,7 +1,8 @@
 # Workflow Extension 重构计划
 
-- **状态**: active
+- **状态**: done
 - **日期**: 2026-06-21
+- **完成日期**: 2026-06-21（6 个 Wave 全部合并，typecheck/eslint/test 三绿，425 tests）
 - **范围**: `extensions/workflow/` — 消除重复代码、修复架构异味、拆分超限文件
 
 ## 背景
