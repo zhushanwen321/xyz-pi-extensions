@@ -1,6 +1,6 @@
-# @zhushanwen/pi-taste-lint
+# @zhushanwen/pi-subagents
 
-## 0.1.2
+## 0.0.1
 
 ### Patch Changes
 
@@ -26,9 +26,3 @@
 
   - 新增 `no-unsafe-cast` 规则（检测 `as any` / `as unknown as T` / `as never`）。
   - `@typescript-eslint/no-explicit-any` 由 `warn` 收紧为 `error`。
-
-## 0.1.1
-
-### Patch Changes
-
-- Audit and fix all 11 extensions against project specifications

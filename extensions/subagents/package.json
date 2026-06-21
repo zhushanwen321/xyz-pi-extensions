@@ -1,10 +1,15 @@
 {
   "name": "@zhushanwen/pi-subagents",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "type": "module",
   "main": "index.ts",
   "description": "In-process agent execution runtime for Pi — unified execute entry, isolated state, sync/background/poll",
-  "keywords": ["pi-package", "extension", "subagent", "agent-runtime"],
+  "keywords": [
+    "pi-package",
+    "extension",
+    "subagent",
+    "agent-runtime"
+  ],
   "license": "MIT",
   "files": [
     "index.ts",
@@ -34,10 +39,18 @@
     "@earendil-works/pi-tui": "*"
   },
   "peerDependenciesMeta": {
-    "@mariozechner/pi-coding-agent": { "optional": true },
-    "@mariozechner/pi-ai": { "optional": true },
-    "@sinclair/typebox": { "optional": true },
-    "@earendil-works/pi-tui": { "optional": true }
+    "@mariozechner/pi-coding-agent": {
+      "optional": true
+    },
+    "@mariozechner/pi-ai": {
+      "optional": true
+    },
+    "@sinclair/typebox": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
