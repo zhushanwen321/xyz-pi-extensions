@@ -67,24 +67,24 @@ describe("SubagentService", () => {
       expect(() => new SubagentService({ cwd: agentDir, modelService })).not.toThrow();
     });
 
-    it("未 initSession 时 query/cancel 抛 'pi not injected'", () => {
+    it("未 initSession 时 findRecord/cancel 抛 'pi not injected'", () => {
       const service = new SubagentService({ cwd: agentDir, modelService });
-      expect(() => service.query("any")).toThrow(/pi not injected/);
+      expect(() => service.findRecord("any")).toThrow(/pi not injected/);
       expect(() => service.cancel("any")).toThrow(/pi not injected/);
     });
 
-    it("initSession 后 assertReady 通过（query 不再抛 pi 错，改抛 no record）", () => {
+    it("initSession 后 assertReady 通过（findRecord 不再抛 pi 错，返回 undefined）", () => {
       const service = new SubagentService({ cwd: agentDir, modelService });
       service.initSession({ pi: makePi(), sessionId: "s1" });
-      // query 现在能过 assertReady，但 record 不存在 → 抛 no record
-      expect(() => service.query("missing")).toThrow(/No subagent record/);
+      // findRecord 现在能过 assertReady，但 record 不存在 → 返回 undefined
+      expect(service.findRecord("missing")).toBeUndefined();
     });
 
-    it("dispose 后 query 抛 'hub disposed'", () => {
+    it("dispose 后 findRecord 抛 'hub disposed'", () => {
       const service = new SubagentService({ cwd: agentDir, modelService });
       service.initSession({ pi: makePi(), sessionId: "s1" });
       service.dispose();
-      expect(() => service.query("any")).toThrow(/disposed/);
+      expect(() => service.findRecord("any")).toThrow(/disposed/);
     });
 
     it("dispose 幂等（多次调用不抛）", () => {
@@ -103,23 +103,23 @@ describe("SubagentService", () => {
       service.dispose();
       // revive
       service.initSession({ pi: makePi(), sessionId: "s2" });
-      // 现在 assertReady 又通过（query 抛 no record 而非 disposed）
-      expect(() => service.query("any")).toThrow(/No subagent record/);
+      // 现在 assertReady 又通过（findRecord 返回 undefined 而非 disposed）
+      expect(service.findRecord("any")).toBeUndefined();
     });
   });
 
   // ============================================================
-  // query / cancel 边界
+  // findRecord / cancel 边界
   // ============================================================
 
-  describe("query / cancel 边界", () => {
-    it("query 不存在的 id 抛错", () => {
+  describe("findRecord / cancel 边界 (T4)", () => {
+    it("findRecord 不存在的 id 返回 undefined", () => {
       const service = new SubagentService({ cwd: agentDir, modelService });
       service.initSession({ pi: makePi(), sessionId: "s1" });
-      expect(() => service.query("nonexistent-id")).toThrow(/No subagent record.*nonexistent-id/);
+      expect(service.findRecord("nonexistent-id")).toBeUndefined();
     });
 
-    it("cancel 不存在的 id 返回 false（不抛错）", () => {
+    it("cancel 不存在的 id 返回 false（不抛错，boolean 契约不变）", () => {
       const service = new SubagentService({ cwd: agentDir, modelService });
       service.initSession({ pi: makePi(), sessionId: "s1" });
       expect(service.cancel("nonexistent-id")).toBe(false);

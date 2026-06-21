@@ -28,7 +28,6 @@ import type {
   ExecutionHandle,
   ExecutionMode,
   ExecutionRecord,
-  QueryResult,
   RecordSnapshot,
   ResolvedModel,
   SubagentRecord,
@@ -188,20 +187,23 @@ export class SubagentService {
       return { mode: "sync", record: snapshot(record), details: project(record) };
     }
 
-    // background：立即返回 backgroundId + 启动时的 details（status=running），
+    // background：立即返回 subagentId + sessionFile（窗口期可能 undefined）+ details（status=running）。
     // 步骤 4-6 在 detached promise 里跑。
     const bgDetails = project(record);
-    bgDetails.backgroundId = record.id;
     this.kickOffBackground(record, opts, ctx, identity, signal, priority);
-    return { mode: "background", backgroundId: record.id, details: bgDetails };
+    return { mode: "background", subagentId: record.id, sessionFile: record.sessionFile, details: bgDetails };
   }
 
-  /** poll(backgroundId)：查 record 并投影为 QueryResult。不存在 throw。 */
-  query(id: string): QueryResult {
+  /**
+   * 按 id 查内存三源（live/completed/bg）record 的只读快照（G3-002 修复）。
+   * 不查 history（cancel/list 单点查询只关心内存 record）。
+   * 供 tool 层 cancelHandler 翻译 throw 用（id 不存在 / mode / 终态三种错误）。
+   * 不存在返回 undefined。
+   */
+  findRecord(id: string): RecordSnapshot | undefined {
     this.assertReady();
     const record = this.store.getMutable(id);
-    if (!record) throw new Error(`No subagent record with id "${id}"`);
-    return this.recordToQueryResult(record);
+    return record ? snapshot(record) : undefined;
   }
 
   /** 取消 background record（tryTransition CAS 抢锁防重复副作用）。 */
@@ -479,28 +481,6 @@ export class SubagentService {
         // 有 running 的 background record → 滑动窗口继续等；否则立即 flush
         return this.store.listRunning().some((r) => r.mode === "background");
       },
-    };
-  }
-
-  /** ExecutionRecord → QueryResult（poll 返回的只读视图）。 */
-  private recordToQueryResult(record: ExecutionRecord): QueryResult {
-    const snap = snapshot(record);
-    const details = project(record);
-    return {
-      id: snap.id,
-      status: snap.status,
-      agent: snap.agent,
-      model: snap.model,
-      thinkingLevel: snap.thinkingLevel,
-      turns: snap.turns,
-      totalTokens: snap.totalTokens,
-      startedAt: snap.startedAt,
-      endedAt: snap.endedAt,
-      elapsedSeconds: details.elapsedSeconds,
-      result: snap.result,
-      error: snap.error,
-      eventLog: [...snap.eventLog],
-      mode: snap.mode,
     };
   }
 
