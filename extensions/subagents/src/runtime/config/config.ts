@@ -17,9 +17,6 @@ import type {
 // 常量
 // ============================================================
 
-/** JSON 序列化缩进。 */
-const JSON_INDENT = 2;
-
 /** appendEntry 的 customType（restoreSessionState 据此匹配）。 */
 const CONFIG_ENTRY_TYPE = "subagent-config-entry";
 
@@ -111,23 +108,6 @@ export function loadGlobalConfig(agentDir: string): SubagentsGlobalConfig {
     // 文件不存在 / JSON 解析失败 → 返回默认配置的深拷贝
     return defaultConfig();
   }
-}
-
-/** 保存全局配置（config-wizard 调用）。原子写入（temp + rename）。 */
-export function saveGlobalConfig(agentDir: string, config: SubagentsGlobalConfig): Promise<void> {
-  const configPath = getGlobalConfigPath(agentDir);
-  const configDir = path.dirname(configPath);
-  return new Promise((resolve, reject) => {
-    try {
-      fs.mkdirSync(configDir, { recursive: true });
-      const tempPath = `${configPath}.tmp.${process.pid}`;
-      fs.writeFileSync(tempPath, `${JSON.stringify(config, null, JSON_INDENT)}\n`, "utf-8");
-      fs.renameSync(tempPath, configPath);
-      resolve();
-    } catch (err) {
-      reject(err);
-    }
-  });
 }
 
 // ============================================================

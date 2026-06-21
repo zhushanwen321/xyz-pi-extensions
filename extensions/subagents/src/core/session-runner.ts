@@ -264,6 +264,10 @@ export async function run(
       ctx.sdk,
     );
 
+    // session 创建成功：回填 sessionFile（FR-7 窗口期方案）。
+    // 失败（catch 到异常）则保持 undefined，list item 保留（status=failed）。
+    record.sessionFile = built.session.sessionManager.getSessionFile() ?? undefined;
+
     // c/d/e. turnLimiter + signal-abort + schema enforcement 统一挂载
     hooks = attachRunHooks(built, opts);
 

@@ -175,7 +175,7 @@ function resolveThinkingLevel(
  *   - 无 thinkingLevelMap → [] （无级别信息，调用方按需透传）
  *   - 有 map → THINKING_ORDER 中 map[lvl] != null 的子集（保留升序）
  *
- * confirm 组件 / config-wizard 用它渲染「该模型可选的 thinking 级别」菜单，
+ * confirm 组件用它渲染「该模型可选的 thinking 级别」菜单，
  * 取代写死的全集 THINKING_LEVELS（不同 model 支持的级别不同）。
  */
 export function availableThinkingLevels(

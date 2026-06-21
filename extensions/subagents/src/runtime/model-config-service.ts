@@ -22,7 +22,6 @@ import {
   createSessionState,
   loadGlobalConfig,
   restoreSessionState,
-  saveGlobalConfig as saveConfig,
 } from "./config/config.ts";
 import { DiscoveryConfigLoader } from "./discovery-config.ts";
 
@@ -169,12 +168,6 @@ export class ModelConfigService {
   /** session 状态深拷贝。 */
   getSessionState(): SessionModelState {
     return structuredClone(this.sessionState);
-  }
-
-  /** 更新全局配置 + 落盘（config-wizard 改完调）。 */
-  async saveGlobalConfig(config: SubagentsGlobalConfig): Promise<void> {
-    this.globalConfig = config;
-    await saveConfig(this.agentRegistryDir, config);
   }
 
   /** 翻转 YOLO 模式。返回翻转后的新值。 */
