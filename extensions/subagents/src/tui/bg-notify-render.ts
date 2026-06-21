@@ -9,9 +9,10 @@
 //   - triggerTurn:true → 唤醒父 agent 下一 turn，让 LLM 看到「X 完成」
 //
 // 渲染内容（紧凑单行/双行）：
-//   ✓ agent — 摘要首行 (id)
-//   ✗ agent — Error: 错误首行 (id)
-//   ■ agent — cancelled (id)
+//   ✓ agent · model — 摘要首行 (id)
+//   ✗ agent · model — Error: 错误首行 (id)
+//   ■ agent · model — cancelled (id)
+// （model 缺失时省略 · model 段，向后兼容旧 record）
 //
 // 注意：renderer 自己用 Box(customMessageBg) 施加紫色背景。Pi 的
 // CustomMessageComponent 对 customRenderer 返回的组件是「裸 addChild」——
@@ -95,14 +96,16 @@ function wrapInBgBox(content: string, t: ThemeLike): Box {
  * 专门展示内容，长内容不被 id 挤压。
  */
 function renderRecordLines(
-  record: { id: string; status: "done" | "failed" | "cancelled"; agent: string; result?: string; error?: string },
+  record: { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string },
   t: ThemeLike,
 ): string[] {
   const glyph = statusGlyph(record.status);
   const icon = glyph.icon ?? "•";
   const agent = truncLine(record.agent, AGENT_MAX_WIDTH);
+  // model 段：agent 后、状态描述前，accent 色。空则省略（向后兼容旧 record）。
+  const modelPart = record.model ? ` ${t.fg("dim", "·")} ${t.fg("accent", record.model)}` : "";
   const verb = record.status === "done" ? "finished" : record.status === "failed" ? "failed" : "cancelled";
-  const head = `${t.fg(glyph.color, icon)} ${t.bold(agent)}${t.fg("dim", ` — background subagent ${verb} - ${record.id}`)}`;
+  const head = `${t.fg(glyph.color, icon)} ${t.bold(agent)}${modelPart}${t.fg("dim", ` — background subagent ${verb} - ${record.id}`)}`;
 
   switch (record.status) {
     case "done":
@@ -122,11 +125,11 @@ function renderRecordLines(
  */
 function extractBatch(
   details: unknown,
-): { id: string; status: "done" | "failed" | "cancelled"; agent: string; result?: string; error?: string }[] | undefined {
+): { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string }[] | undefined {
   if (typeof details !== "object" || details === null) return undefined;
   const d = details as Record<string, unknown>;
   if (d.batch !== true || !Array.isArray(d.items)) return undefined;
-  const records: { id: string; status: "done" | "failed" | "cancelled"; agent: string; result?: string; error?: string }[] = [];
+  const records: { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string }[] = [];
   for (const item of d.items) {
     const r = extractBgNotifyRecord(item);
     if (r) records.push(r);
@@ -140,7 +143,7 @@ function extractBatch(
  */
 function extractBgNotifyRecord(
   details: unknown,
-): { id: string; status: "done" | "failed" | "cancelled"; agent: string; result?: string; error?: string } | undefined {
+): { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string } | undefined {
   if (typeof details !== "object" || details === null) return undefined;
   const d = details as Record<string, unknown>;
   const status = d.status;
@@ -155,6 +158,7 @@ function extractBgNotifyRecord(
     id: typeof d.id === "string" ? d.id : "",
     status,
     agent,
+    model: typeof d.model === "string" ? d.model : undefined,
     result: typeof d.result === "string" ? d.result : undefined,
     error: typeof d.error === "string" ? d.error : undefined,
   };

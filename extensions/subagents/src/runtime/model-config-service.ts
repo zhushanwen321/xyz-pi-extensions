@@ -41,6 +41,17 @@ export interface ModelServiceSessionInit {
   modelRegistry: ModelRegistryLike | null;
   /** 当前 session ID。 */
   sessionId: string;
+  /**
+   * 主 agent 当前 model（session_start 时注入，model_select 时刷新）。
+   *
+   * renderCall 阶段的 ToolRenderContext 不含 model 字段（SDK 限制），无法直接拿到
+   * 主 agent model。缓存后 renderCall 的 resolveModel 能命中第三层（ctxModel），
+   * 让标题行恢复显示 model——即使未显式传 model 也能展示默认 model。
+   *
+   * [HISTORICAL] 99f20da1e 引入三层 fallback 后，renderCall 因拿不到 ctxModel
+   * 而 resolveModel 拗错→降级不显示 model。此缓存修复该降级。
+   */
+  ctxModel?: ModelInfo;
 }
 
 // ============================================================
@@ -66,6 +77,8 @@ export class ModelConfigService {
   private readonly discoveryLoader: DiscoveryConfigLoader | undefined;
   private modelRegistry: ModelRegistryLike | null = null;
   private _sessionId: string | undefined;
+  /** 主 agent 当前 model 缓存（session_start 注入，model_select 刷新）。 */
+  private _ctxModel: ModelInfo | undefined;
 
   /** 包内 builtin agent（agents/*.md，优先级最低，被用户覆盖）。 */
   private readonly builtinRegistry = createPackageBuiltinRegistry();
@@ -111,8 +124,17 @@ export class ModelConfigService {
     }
     this.modelRegistry = init.modelRegistry;
 
-    // 3. sessionId
+    // 3. sessionId + ctxModel 缓存（model_select 后续调 setCtxModel 刷新）
     this._sessionId = init.sessionId;
+    this._ctxModel = init.ctxModel;
+  }
+
+  /**
+   * 刷新主 agent model 缓存。model_select 事件时调用。
+   * renderCall 的 resolveModel 读此缓存以显示标题行 model。
+   */
+  setCtxModel(model: ModelInfo | undefined): void {
+    this._ctxModel = model;
   }
 
   // ── 模型解析（SubagentService.execute 内部调）──────────────
@@ -131,7 +153,8 @@ export class ModelConfigService {
   ): ResolvedModel {
     this.assertReady();
     const agentConfig = this.agentRegistry.get(agentName);
-    return resolveModel(agentConfig, this.modelRegistry!, override, ctxModel);
+    // ctxModel 优先用显式传入（execute 路径），其次用 session 缓存（renderCall 路径）
+    return resolveModel(agentConfig, this.modelRegistry!, override, ctxModel ?? this._ctxModel);
   }
 
   /** 查询 agent 配置（SubagentService 内部判定 defaultBackground 用）。 */

@@ -204,9 +204,11 @@ Completion auto-notifies you (a message is injected that wakes your next turn). 
 // ============================================================
 
 const subagentRenderCall: SubagentRenderCallCb = (args, theme, ctx) => {
-  // 预解析 model（同步）：仅当用户显式 override 或 agent.md 声明了 model 时才能解析成功，
-  // 否则 resolveModel 会因 ctxModel 缺失（renderCall 拿不到主 agent model）走第三层→ 拋错→
-  // 降级不显示 model（execute 后的 renderResult 会显示真实 model）。
+  // 预解析 model（同步）：让标题行能显示 model/thinking，不必等 execute。
+  // resolveModel 三层：override → agentConfig.model → 主 agent model（session 缓存）。
+  // 主 agent model 由 ModelConfigService 缓存（session_start 注入，model_select 刷新），
+  // 补偿 renderCall 的 ToolRenderContext 不含 model 的 SDK 限制。
+  // service 未就绪 / 缓存为空 / 解析失败 → 降级不显示 model。
   const startParam = hasStartParam(args) ? args.startParam : undefined;
   const agent = extractAgentName(startParam);
   const override = extractModelOverride(startParam);
@@ -216,7 +218,7 @@ const subagentRenderCall: SubagentRenderCallCb = (args, theme, ctx) => {
     const r = service?.resolveModel(agent, override);
     if (r) resolved = { model: `${r.model.provider}/${r.model.id}`, thinkingLevel: r.thinkingLevel };
   } catch {
-    // service 未注册 / 未显式指定 model / modelRegistry 未注入 → 降级不显示 model
+    // service 未注册 / modelRegistry 未注入 / 无可用 model → 降级不显示 model
   }
   return renderSubagentCall(args, theme, ctx, resolved);
 };

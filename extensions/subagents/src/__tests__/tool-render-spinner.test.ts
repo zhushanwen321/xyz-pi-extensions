@@ -150,3 +150,72 @@ describe("maybeToggleSpinner (锁死 bug 回归)", () => {
     expect(invalidate.mock.calls.length).toBe(before);
   });
 });
+
+// ============================================================
+// status line 的 model 显示（task 4）
+// ============================================================
+//
+// [HISTORICAL] SyncResponse 一直带 model/thinkingLevel，但 buildStatusLineFromSync
+// 参数写窄未取，导致 result 区从不显示 model。修复后应渲染。
+// 用 done 状态测（terminal 不启 spinner，无需 fake timer）。
+
+describe("status line model 显示", () => {
+  function syncDoneResult(over: { model?: string; thinkingLevel?: string; turns?: number } = {}): AgentToolResult<SubagentToolResult> {
+    return {
+      content: [{ type: "text", text: "done" }],
+      details: {
+        action: "start",
+        subagentId: "run-1",
+        sessionFile: "s.jsonl",
+        syncResponse: {
+          status: "done",
+          mode: "sync",
+          agent: "general-purpose",
+          model: over.model ?? "anthropic/sonnet-4-5",
+          thinkingLevel: over.thinkingLevel,
+          turns: over.turns ?? 3,
+          totalTokens: 1000,
+          elapsedSeconds: 12,
+          eventLog: [],
+          result: "ok",
+        },
+      },
+    };
+  }
+
+  it("model 非空 → render 输出含 model 字符串", () => {
+    const comp = renderSubagentResult(
+      syncDoneResult({ model: "anthropic/sonnet-4-5" }),
+      { expanded: false, isPartial: false },
+      theme,
+      makeCtx(() => {}),
+    );
+    const lines = comp.render(100).join("\n");
+    expect(lines).toContain("anthropic/sonnet-4-5");
+    // stats 仍在（turns）
+    expect(lines).toContain("3 turns");
+  });
+
+  it("有 thinkingLevel → render 输出含 thinking 标识", () => {
+    const comp = renderSubagentResult(
+      syncDoneResult({ thinkingLevel: "high" }),
+      { expanded: false, isPartial: false },
+      theme,
+      makeCtx(() => {}),
+    );
+    const lines = comp.render(100).join("\n");
+    expect(lines).toContain("thinking high");
+  });
+
+  it("model 为空字符串 → 不渲染 model 段（降级为纯 stats）", () => {
+    const comp = renderSubagentResult(
+      syncDoneResult({ model: "" }),
+      { expanded: false, isPartial: false },
+      theme,
+      makeCtx(() => {}),
+    );
+    const lines = comp.render(100).join("\n");
+    // 仍有 stats（turns），但不该崩
+    expect(lines).toContain("3 turns");
+  });
+});

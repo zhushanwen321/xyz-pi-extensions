@@ -515,6 +515,7 @@ export class SubagentService {
       id: snap.id,
       status: snap.status as "done" | "failed" | "cancelled",
       agent: snap.agent,
+      model: snap.model,
       result: snap.result,
       error: snap.error,
       startedAt: snap.startedAt,

@@ -75,6 +75,9 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     modelService.initModel({
       modelRegistry: ctx.modelRegistry,
       sessionId: ctx.sessionManager.getSessionId(),
+      // 缓存主 agent model：renderCall 阶段 ToolRenderContext 不含 model（SDK 限制），
+      // 缓存后 resolveModel 第三层能命中，标题行恢复显示 model（详见 model-config-service.ts）。
+      ctxModel: ctx.model ?? undefined,
     });
     service.initSession({
       pi,
@@ -95,6 +98,12 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     } catch {
       // best-effort 清理失败，忽略——service 已注册，session 可用
     }
+  });
+
+  // model_select：用户切换 model 时刷新缓存，保证后续 renderCall 显示新 model。
+  // SDK 的 ModelSelectEvent 未从包入口 export，此处用最小结构类型（仅需 .model 字段）。
+  pi.on("model_select", (event: { model: NonNullable<ExtensionContext["model"]> }) => {
+    getModelConfigService()?.setCtxModel(event.model);
   });
 
   pi.on("session_shutdown", (_event: SessionShutdownEvent) => {

@@ -17,6 +17,8 @@ export interface BgNotifyRecord {
   id: string;
   status: "done" | "failed" | "cancelled";
   agent: string;
+  /** 执行所用 model（RecordSnapshot.model），用于完成通知显示。 */
+  model?: string;
   result?: string;
   error?: string;
   startedAt: number;

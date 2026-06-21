@@ -113,4 +113,32 @@ describe("renderBgNotifyMessage", () => {
     renderBgNotifyMessage({ details: undefined }, { expanded: false }, theme);
     expect(bgColors).not.toContain("customMessageBg");
   });
+
+  // ── model 显示（task 5）──
+
+  it("record 带 model → 内容含 model 字符串（agent 后、状态描述前）", () => {
+    const { theme } = makeTheme();
+    const comp = renderBgNotifyMessage(
+      { details: { status: "done", agent: "general-purpose", model: "anthropic/sonnet-4-5", id: "bg-1", result: "ok" } },
+      { expanded: false },
+      theme,
+    );
+    const joined = comp!.render(80).join("\n");
+    expect(joined).toContain("anthropic/sonnet-4-5");
+    // agent 和状态仍在
+    expect(joined).toContain("general-purpose");
+    expect(joined).toContain("finished");
+  });
+
+  it("record 无 model → 向后兼容，不渲染 model 段不崩", () => {
+    const { theme } = makeTheme();
+    const comp = renderBgNotifyMessage(
+      { details: { status: "done", agent: "worker", id: "bg-2", result: "r" } },
+      { expanded: false },
+      theme,
+    );
+    const joined = comp!.render(80).join("\n");
+    expect(joined).toContain("worker");
+    expect(joined).toContain("finished");
+  });
 });

@@ -396,17 +396,31 @@ function getStringText(item: unknown): string | undefined {
  *   stats: dim `· N turns · Nk · Ns`，各字段 > 0 才显示（全零省略）
  */
 function buildStatusLineFromSync(
-  s: { status: ExecutionStatus; turns: number; totalTokens: number; elapsedSeconds: number },
+  s: {
+    status: ExecutionStatus;
+    turns: number;
+    totalTokens: number;
+    elapsedSeconds: number;
+    model?: string;
+    thinkingLevel?: string;
+  },
   theme: ThemeLike,
 ): string {
   const glyph = statusGlyph(s.status);
   const icon = glyph.icon ?? spinnerGlyph(Math.floor(Date.now() / SPINNER_INTERVAL_MS));
   const glyphStr = theme.fg(glyph.color, icon);
 
+  // model 信息：紧跟 glyph 后，accent 色（与 renderCall 标题行一致），让用户
+  // 在运行中/结束时都能看到「用什么模型」。[HISTORICAL] 此前 SyncResponse
+  // 已带 model 但 buildStatusLineFromSync 参数写窄未取，导致 result 区从不显示 model。
+  const modelStr = s.model ? theme.fg("accent", s.model) : "";
+  const thinkingStr = s.thinkingLevel ? theme.fg("dim", `· thinking ${s.thinkingLevel}`) : "";
+  const modelPart = modelStr ? ` ${modelStr}${thinkingStr ? ` ${thinkingStr}` : ""}` : "";
+
   const statsStr = buildStats(s, theme);
   const statsPrefix = statsStr ? ` ${theme.fg("dim", "·")} ${statsStr}` : "";
 
-  return `${glyphStr}${statsPrefix}`;
+  return `${glyphStr}${modelPart}${statsPrefix}`;
 }
 
 /**
