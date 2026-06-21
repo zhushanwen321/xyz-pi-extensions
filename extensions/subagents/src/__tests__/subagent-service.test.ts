@@ -80,11 +80,14 @@ describe("SubagentService", () => {
       expect(service.findRecord("missing")).toBeUndefined();
     });
 
-    it("dispose 后 findRecord 抛 'hub disposed'", () => {
+    it("dispose 后 findRecord 抛含 'disposed' 且带恢复指引", () => {
+      // [HISTORICAL] 旧实现只抛 "hub disposed"——无信息，调用方和 AI 盲猜。
+      // 现错误信息必须含原因 + 恢复指引，让 AI/user 知道要重启会话而非重试。
       const service = new SubagentService({ cwd: agentDir, modelService });
       service.initSession({ pi: makePi(), sessionId: "s1" });
       service.dispose();
       expect(() => service.findRecord("any")).toThrow(/disposed/);
+      expect(() => service.findRecord("any")).toThrow(/session ended|session_start|new session/i);
     });
 
     it("dispose 幂等（多次调用不抛）", () => {

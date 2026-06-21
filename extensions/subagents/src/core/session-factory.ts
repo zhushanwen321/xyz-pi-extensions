@@ -188,8 +188,8 @@ export async function createAndConfigureSession(
   ctx: SessionFactoryContext,
   sdk: SdkLike,
 ): Promise<BuiltSession> {
-  // 步骤 1：appendSystemPrompt 组装（env block + 调用方片段）
-  const fullAppend = buildAppendSystemPrompt(input.appendSystemPrompt, ctx.cwd);
+  // 步骤 1：appendSystemPrompt 组装（env block + agent systemPrompt + 调用方片段）
+  const fullAppend = buildAppendSystemPrompt(input.appendSystemPrompt, ctx.cwd, input.agentConfig);
 
   // 步骤 2：ResourceLoader 构建 + reload（让 loader 发现全局 skills/agents）
   // additionalSkillPaths = discovery 目录（主 session 动态 skill）+ 调用方传入的 skillPath
@@ -253,15 +253,27 @@ export async function createAndConfigureSession(
 // ============================================================
 
 /**
- * 步骤 1：组装 appendSystemPrompt。env block 在前（防注入标记），调用方片段在后。
+ * 步骤 1：组装 appendSystemPrompt。
  *
- *   fullAppend = [buildEnvBlock(cwd)] + (appendSystemPrompt ?? [])
+ * 顺序：env block → agent systemPrompt → 调用方 appendSystemPrompt。
+ *   - env block 在最前（环境信息，防注入标记）
+ *   - agent systemPrompt 紧随（agent.md 正文，定义子进程人格/能力——核心指令应早确立）
+ *   - 调用方 appendSystemPrompt 最后（用户额外临时指令，可补充/覆盖 agent）
+ *
+ * [HISTORICAL] 此前 agentConfig.systemPrompt 从未被注入——agentConfig 仅用于
+ * applyToolFilter（工具过滤）。导致无论指定 worker/scout/general-purpose，子进程
+ * 都拿不到 agent.md 正文，行为与裸主 agent 无异。修复：在此处显式注入。
  */
 export function buildAppendSystemPrompt(
   appendSystemPrompt: string[] | undefined,
   cwd: string,
+  agentConfig?: { systemPrompt?: string },
 ): string[] {
-  return [buildEnvBlock(cwd), ...(appendSystemPrompt ?? [])];
+  const parts = [buildEnvBlock(cwd)];
+  const agentPrompt = agentConfig?.systemPrompt?.trim();
+  if (agentPrompt) parts.push(agentPrompt);
+  parts.push(...(appendSystemPrompt ?? []));
+  return parts;
 }
 
 /**

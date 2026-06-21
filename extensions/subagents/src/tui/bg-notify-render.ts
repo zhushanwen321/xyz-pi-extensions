@@ -52,14 +52,14 @@ export function renderBgNotifyMessage(
   // 批量分支：多条合并，各自渲染一行
   const batch = extractBatch(message.details);
   if (batch) {
-    const lines = batch.map((r) => renderRecordLine(r, t));
+    const lines = batch.map((r) => renderRecordLines(r, t).join("\n"));
     return wrapInBgBox(lines.join("\n"), t);
   }
 
   // 单条分支
   const record = extractBgNotifyRecord(message.details);
   if (!record) return undefined;
-  return wrapInBgBox(renderRecordLine(record, t), t);
+  return wrapInBgBox(renderRecordLines(record, t).join("\n"), t);
 }
 
 /**
@@ -80,33 +80,40 @@ function wrapInBgBox(content: string, t: ThemeLike): Box {
   return box;
 }
 
-/** 渲染单条 record 为一行文本（头 + 首行预览 + id）。 */
-function renderRecordLine(
+/**
+ * 渲染单条 record 为多行文本。
+ *
+ * 格式（两行）：
+ *   第 1 行（标题）：✓/✗/■ glyph + agent + 状态描述 + id
+ *     - done:      `✓ default — background subagent finished - bg-3-...`
+ *     - failed:    `✗ default — background subagent failed - bg-3-...`
+ *     - cancelled: `■ default — background subagent cancelled - bg-3-...`
+ *   第 2 行（正文）：结果首行 / Error 首行 / cancelled 无第二行
+ *
+ * 旧格式把结果和 id 挤在一行（`✓ default — 结果首行 (id)`），无法一眼看出
+ * 「这是个 background 完成通知」。拆两行后第 1 行明确标识状态 + id，第 2 行
+ * 专门展示内容，长内容不被 id 挤压。
+ */
+function renderRecordLines(
   record: { id: string; status: "done" | "failed" | "cancelled"; agent: string; result?: string; error?: string },
   t: ThemeLike,
-): string {
+): string[] {
   const glyph = statusGlyph(record.status);
   const icon = glyph.icon ?? "•";
   const agent = truncLine(record.agent, AGENT_MAX_WIDTH);
-  const head = `${t.fg(glyph.color, icon)} ${t.bold(agent)}`;
+  const verb = record.status === "done" ? "finished" : record.status === "failed" ? "failed" : "cancelled";
+  const head = `${t.fg(glyph.color, icon)} ${t.bold(agent)}${t.fg("dim", ` — background subagent ${verb} - ${record.id}`)}`;
 
-  let body: string;
   switch (record.status) {
     case "done":
-      body = record.result ? firstLineSanitized(record.result) : "(completed)";
-      break;
+      if (!record.result) return [head];
+      return [head, t.fg("dim", truncLine(firstLineSanitized(record.result), BODY_MAX_WIDTH))];
     case "failed":
-      body = `Error: ${record.error ? firstLineSanitized(record.error) : "(unknown)"}`;
-      break;
+      return [head, t.fg("dim", truncLine(`Error: ${record.error ? firstLineSanitized(record.error) : "(unknown)"}`, BODY_MAX_WIDTH))];
     case "cancelled":
-      body = "cancelled";
-      break;
     default:
-      body = "";
+      return [head];
   }
-
-  const idStr = t.fg("dim", ` (${record.id})`);
-  return `${head} — ${t.fg("dim", truncLine(body, BODY_MAX_WIDTH))}${idStr}`;
 }
 
 /**

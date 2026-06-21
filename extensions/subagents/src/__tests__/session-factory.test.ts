@@ -156,6 +156,34 @@ describe("buildAppendSystemPrompt", () => {
     expect(result.length).toBe(4); // env + 3 fragments
     expect(result.slice(1)).toEqual(["first", "second", "third"]);
   });
+
+  // ── agent systemPrompt 注入（核心修复）──
+
+  it("注入 agentConfig.systemPrompt 到 env block 之后、调用方片段之前", () => {
+    // [HISTORICAL] agent.md 正文此前从不注入，指定 worker/scout 子进程拿不到人格。
+    const result = buildAppendSystemPrompt(["caller-extra"], "/cwd", {
+      systemPrompt: "You are a worker agent. Be terse.",
+    });
+    expect(result.length).toBe(3); // env + agentPrompt + caller
+    expect(result[0]).toContain("Working directory: /cwd");
+    expect(result[1]).toBe("You are a worker agent. Be terse.");
+    expect(result[2]).toBe("caller-extra");
+  });
+
+  it("agentConfig.systemPrompt 为空白时不注入（不产生空片段）", () => {
+    for (const blank of [undefined, "", "   \n\t  "]) {
+      const result = buildAppendSystemPrompt(["x"], "/cwd", { systemPrompt: blank });
+      // 空白 systemPrompt 不产生额外片段，与未传 agentConfig 一致
+      expect(result.length).toBe(2); // env + caller
+      expect(result[1]).toBe("x");
+    }
+  });
+
+  it("agentConfig 为 undefined 时行为不变（向后兼容）", () => {
+    const result = buildAppendSystemPrompt(["frag"], "/cwd", undefined);
+    expect(result.length).toBe(2);
+    expect(result[1]).toBe("frag");
+  });
 });
 
 // ============================================================

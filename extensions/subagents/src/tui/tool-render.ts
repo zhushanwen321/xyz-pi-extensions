@@ -135,8 +135,13 @@ export function renderSubagentResult(
 
   // 防御性 fallback：按 action 判断 details 结构是否完整（G2-007）。
   // list/cancel 无顶层 status/agent，旧 guard（typeof details.status）会误判「execution failed」。
+  // details 缺失通常是因为 execute 抛错（如 hub disposed）——此时 Pi 把 error.message 塞进
+  // result.content[0].text。旧实现只显示 "no details available"，吞掉真实原因，导致 AI 盲猜。
+  // 现在从 result.content 提取错误文本显示，拿不到才退回通用文案。
   if (!details || typeof details.action !== "string" || !isDetailsStructurallyComplete(details)) {
-    return new Text(themeLike.fg("warning", "(subagent execution failed — no details available)"), 0, 0);
+    const errorText = extractResultError(result.content);
+    const fallback = errorText ?? "(subagent execution failed — no details available)";
+    return new Text(themeLike.fg("warning", fallback), 0, 0);
   }
 
   // 复用 lastComponent（P1a 优化，省 GC + 防 theme 闪烁）
@@ -358,6 +363,30 @@ function isDetailsStructurallyComplete(d: SubagentToolResult): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * 从 tool result 的 content 里提取错误文本。
+ *
+ * execute 抛错（如 hub disposed / task 缺失）时，subagents handler 不 catch，
+ * Pi 框架会把 error.message 塞进 result.content[0].text。renderResult 的 fallback
+ * 分支用它把真实原因显示出来，避免只显「no details available」让 AI 盲猜。
+ * content 可能多行，只取首行（用共享 firstLine 裁断 + sanitize）。
+ */
+function extractResultError(content: AgentToolResult<SubagentToolResult>["content"]): string | undefined {
+  if (!Array.isArray(content)) return undefined;
+  for (const item of content) {
+    const text = getStringText(item);
+    if (text) return firstLineSanitized(text);
+  }
+  return undefined;
+}
+
+/** 若 item 是带非空 .text 的对象则返回 text，否则 undefined。 */
+function getStringText(item: unknown): string | undefined {
+  if (typeof item !== "object" || item === null) return undefined;
+  const val = (item as Record<string, unknown>).text;
+  return typeof val === "string" && val.trim().length > 0 ? val : undefined;
 }
 
 /**

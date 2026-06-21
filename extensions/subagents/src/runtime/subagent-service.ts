@@ -33,6 +33,7 @@ import type {
   SubagentRecord,
   SubagentToolDetails,
 } from "../types.ts";
+import { DEFAULT_AGENT_NAME } from "../types.ts";
 import { HistoryStore } from "./execution/history-store.ts";
 import type { BgNotifyRecord, NotifierHost } from "./execution/notifier.ts";
 import { BgNotifier } from "./execution/notifier.ts";
@@ -254,7 +255,9 @@ export class SubagentService {
 
   /** 步骤 1：身份解析。agentConfig → resolveModel（三层：override → agentConfig → 主 agent model）。 */
   private async resolveIdentity(opts: ExecuteOptions): Promise<ResolvedIdentity> {
-    const agent = opts.agent ?? "default";
+    // 未显式指定 agent 时兜底为 DEFAULT_AGENT_NAME（与 TUI 层 extractAgentName 共用同一常量，
+    // 保证 block 标题显示的名与实际加载的 agent.md 一致）。见 types.ts 常量注释。
+    const agent = opts.agent ?? DEFAULT_AGENT_NAME;
     const agentConfig = this.modelService.getAgentConfig(agent);
 
     const resolved = this.modelService.resolveModel(
@@ -446,13 +449,27 @@ export class SubagentService {
 
   // ── 内部 ────────────────────────────────────────────────
 
-  /** 校验 Service 就绪（pi 已注入 + 未 dispose）。 */
+  /**
+   * 校验 Service 就绪（pi 已注入 + 未 dispose）。
+   *
+   * dispose 后调用是异常路径：session_shutdown 已清资源，正常情况下紧接着
+   * session_start 会 initSession 复活。若走到这里说明 session_start 没跟上
+   * （RPC 边界 / reload 异常等），service 卡在 disposed 状态。
+   *
+   * 旧实现只抛 "hub disposed"——无信息，调用方和 AI 都看不懂，导致反复盲试。
+   * 现在给出原因 + 恢复指引（重启会话或 /new）。真实错误文本会经 renderResult
+   * 兜底透传到 AI（见 tool-render.ts extractResultError）。
+   */
   private assertReady(): void {
     if (this.pi === null) {
       throw new Error("pi not injected (initSession not called?)");
     }
     if (this._disposed) {
-      throw new Error("hub disposed");
+      throw new Error(
+        "subagents service disposed (session ended). " +
+          "This happens after session shutdown when the follow-up session_start did not arrive. " +
+          "Recovery: start a new session or run /new to revive the subagents runtime.",
+      );
     }
   }
 

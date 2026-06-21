@@ -13,6 +13,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 import type { AgentEventLogEntry, ExecutionStatus } from "../types.ts";
+import { DEFAULT_AGENT_NAME } from "../types.ts";
 
 /**
  * ThemeLike：TUI 语义 token 着色接口（duck-typed，兼容 Pi Theme）。
@@ -207,14 +208,15 @@ export function firstLine(text?: string): string {
 /**
  * 从 renderCall/execute 的 unknown args 安全提取 agent 名。
  * 类型守卫窄化（替代 `as { agent?: string }` 全可选断言）。
- * 无 agent 字段或非空字符串时默认 "worker"。
+ * 无 agent 字段或非空字符串时兌底 DEFAULT_AGENT_NAME（与 service 层 resolveIdentity 一致，
+ * 保证 block 标题显示的名与实际加载的 agent.md 相符）。
  */
 export function extractAgentName(args: unknown): string {
   if (typeof args === "object" && args !== null && "agent" in args) {
     const v = (args as { agent: unknown }).agent;
     if (typeof v === "string" && v.length > 0) return v;
   }
-  return "worker";
+  return DEFAULT_AGENT_NAME;
 }
 
 /**
