@@ -99,11 +99,6 @@ export interface GoalManagerDetails {
 	tasks: GoalTask[];
 	goalId: string;
 	status: string;
-	_render?: {
-		type: "task-list" | "summary-table" | "progress" | "code-block";
-		summary?: string;
-		data: unknown;
-	};
 }
 
 // ── Module-level Helpers ─────────────────────────────
@@ -203,31 +198,6 @@ export function makeGoalResult(session: GoalSession, text: string) {
 			tasks: state.tasks.map((t) => ({ ...t })),
 			goalId: state.goalId,
 			status: state.status,
-			_render: {
-				type: "task-list" as const,
-				summary: `${getCompletedCount(state.tasks)}/${state.tasks.length} completed`,
-				data: {
-					items: state.tasks.map((t) => ({
-						id: t.id,
-						text: t.description,
-						status: t.status,
-						evidence: t.evidence,
-						verification: t.verification
-							? { method: t.verification.method, expected: t.verification.expected, actual: t.verification.actual }
-							: undefined,
-						subtasks: t.subtasks?.map((s) => ({
-							id: s.id,
-							text: s.text,
-							status: s.status,
-						})),
-					})),
-					meta: {
-						...(state.budget.tokenBudget ? { "Token": `${state.tokensUsed}/${state.budget.tokenBudget}` } : {}),
-						...(state.budget.timeBudgetMinutes ? { "Time": `${Math.floor(getElapsedTimeSeconds(state) / SECONDS_PER_MINUTE)}m/${state.budget.timeBudgetMinutes}m` } : {}),
-						"Turn": `${state.currentTurnIndex}/${state.budget.maxTurns}`,
-					},
-				},
-			},
 		} satisfies GoalManagerDetails,
 	};
 }

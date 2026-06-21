@@ -18,9 +18,9 @@ import {
 	getNextTaskId,
 	type GoalRuntimeState,
 	type GoalTask,
+	isTaskDone,
 	isTerminalStatus,
 	isTerminalTaskStatus,
-	isTaskDone,
 	type Subtask,
 	type TaskVerification,
 	transitionStatus,
@@ -287,11 +287,6 @@ const handleCancelGoal: ActionHandler = ({ state, params, pi, session, ctx }) =>
 		tasks: [] as GoalTask[],
 		goalId,
 		status: "cancelled",
-		_render: {
-			type: "task-list" as const,
-			summary: "Cancelled",
-			data: { items: [], meta: {} },
-		},
 	};
 	return {
 		content: [{ type: "text" as const, text: `Goal cancelled: ${reason}` }],
