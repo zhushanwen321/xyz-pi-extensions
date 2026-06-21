@@ -13,11 +13,13 @@
 //   ✗ agent — Error: 错误首行 (id)
 //   ■ agent — cancelled (id)
 //
-// 注意：不调 theme.bg()——背景色由 Pi 的 CustomMessageComponent 容器施加
-// （customMessageBg）。组件只负责前景内容。
+// 注意：renderer 自己用 Box(customMessageBg) 施加紫色背景。Pi 的
+// CustomMessageComponent 对 customRenderer 返回的组件是「裸 addChild」——
+// 只有 renderer 返回 undefined（走 default 渲染）时才套 customMessageBg box。
+// 故返回裸 Text 会丢失紫色背景，必须显式 Box 包裹。
 
 import type { Component } from "@earendil-works/pi-tui";
-import { Text } from "@earendil-works/pi-tui";
+import { Box, Text } from "@earendil-works/pi-tui";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 
 import { firstLine, statusGlyph, type ThemeLike,truncLine } from "./format.ts";
@@ -33,7 +35,7 @@ const BODY_MAX_WIDTH = 80;
  * 契约（Pi MessageRenderer，core/extensions/types.ts:1060）：
  *   (message: CustomMessage, options: { expanded }, theme: Theme) => Component | undefined
  *
- *   display:true 时 Pi 调本方法，返回 Component 渲染到 customMessageBg 块。
+ *   display:true 时 Pi 调本方法，返回 Box(customMessageBg) 渲染紫色块。
  *   details 异常 → 返回 undefined 走 Pi 默认渲染（兜底）。
  *
  *   details 两种形态：
@@ -51,13 +53,31 @@ export function renderBgNotifyMessage(
   const batch = extractBatch(message.details);
   if (batch) {
     const lines = batch.map((r) => renderRecordLine(r, t));
-    return new Text(lines.join("\n"), 0, 0);
+    return wrapInBgBox(lines.join("\n"), t);
   }
 
   // 单条分支
   const record = extractBgNotifyRecord(message.details);
   if (!record) return undefined;
-  return new Text(renderRecordLine(record, t), 0, 0);
+  return wrapInBgBox(renderRecordLine(record, t), t);
+}
+
+/**
+ * 包进紫色背景 Box（customMessageBg），与 Pi 原生 CustomMessage 视觉一致。
+ *
+ * 为何 renderer 要自己施加背景：Pi 的 CustomMessageComponent.rebuild() 对
+ * customRenderer 返回的组件是「裸 addChild」（component truthy → addChild + return，
+ * 跳过 box）。只有 renderer 返回 undefined（走 default 渲染）时才套 customMessageBg
+ * box。故返回裸 Text 会丢失紫色背景——这里显式 Box(customMessageBg) 补回。
+ *
+ * Box(1,1,bgFn)：paddingX/Y=1 留白，bgFn 对每行（含上下 padding 空行）施加背景。
+ * 安全性：theme.fg 用 \x1b[39m、bg 用 \x1b[49m、bold 用 chalk \x1b[22m——
+ * 均为精确 reset，不互相抹杀，前景着色不会破坏紫色背景。
+ */
+function wrapInBgBox(content: string, t: ThemeLike): Box {
+  const box = new Box(1, 1, (text: string) => t.bg("customMessageBg", text));
+  box.addChild(new Text(content, 0, 0));
+  return box;
 }
 
 /** 渲染单条 record 为一行文本（头 + 首行预览 + id）。 */
