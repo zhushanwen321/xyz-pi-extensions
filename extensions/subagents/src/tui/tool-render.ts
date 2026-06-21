@@ -17,7 +17,13 @@ import type { Component } from "@earendil-works/pi-tui";
 import { Text } from "@earendil-works/pi-tui";
 import type { AgentToolResult, Theme } from "@mariozechner/pi-coding-agent";
 
-import type { AgentEventLogEntry, SubagentToolDetails } from "../types.ts";
+import type {
+  AgentEventLogEntry,
+  ExecutionStatus,
+  ListResponse,
+  SubagentToolResult,
+  SyncResponse,
+} from "../types.ts";
 import {
   extractAgentName,
   firstLine,
@@ -60,7 +66,7 @@ export interface RenderContext {
 
 /** SubagentResultComponent 的 props 形状（TUI 组件内部状态）。 */
 export interface SubagentResultProps {
-  details: SubagentToolDetails;
+  details: SubagentToolResult;
   expanded: boolean;
   theme: ThemeLike;
 }
@@ -122,7 +128,7 @@ export function renderSubagentCall(
  * 组件本身不施加背景色。
  */
 export function renderSubagentResult(
-  result: AgentToolResult<SubagentToolDetails>,
+  result: AgentToolResult<SubagentToolResult>,
   options: { expanded: boolean; isPartial: boolean },
   theme: Theme,
   context: RenderContext,
@@ -130,11 +136,9 @@ export function renderSubagentResult(
   const themeLike = theme as ThemeLike;
   const details = result.details;
 
-  // 防御性 fallback：details 缺失或结构不完整时显示占位。
-  // execute throw 后 SDK 会重建空 details（{} 或 undefined），此时 status/agent 缺失。
-  // 用 warning 色明确标示「执行出错」，而非 dim 的「正常但无内容」——
-  // 让用户知道是异常而非预期行为。
-  if (!details || typeof details.status !== "string" || typeof details.agent !== "string") {
+  // 防御性 fallback：按 action 判断 details 结构是否完整（G2-007）。
+  // list/cancel 无顶层 status/agent，旧 guard（typeof details.status）会误判「execution failed」。
+  if (!details || typeof details.action !== "string" || !isDetailsStructurallyComplete(details)) {
     return new Text(themeLike.fg("warning", "(subagent execution failed — no details available)"), 0, 0);
   }
 
@@ -176,7 +180,7 @@ export function renderSubagentResult(
  * 不含背景色/padding——那些由 Pi 的 contentBox 施加。
  */
 export class SubagentResultComponent implements Component {
-  private details: SubagentToolDetails;
+  private details: SubagentToolResult;
   private theme: ThemeLike;
   private expanded = false;
   /** invalidate 回调（来自 SDK context，内部已含 requestRender）。running 态定时器调它驱动重绘。 */
@@ -184,13 +188,13 @@ export class SubagentResultComponent implements Component {
   /** spinner 定时器（running 态启动，terminal 态清除）。 */
   private spinnerTimer?: ReturnType<typeof setInterval>;
 
-  constructor(details: SubagentToolDetails, theme: ThemeLike) {
+  constructor(details: SubagentToolResult, theme: ThemeLike) {
     this.details = details;
     this.theme = theme;
   }
 
   /** 刷新 details + theme 引用（P1a 复用）。theme 必须随更新，否则 /theme 切换后显示错色。 */
-  update(details: SubagentToolDetails, theme: ThemeLike): void {
+  update(details: SubagentToolResult, theme: ThemeLike): void {
     this.details = details;
     this.theme = theme;
   }
@@ -214,19 +218,17 @@ export class SubagentResultComponent implements Component {
   }
 
   /**
-   * 按状态启停 spinner 定时器。
-   *   running → 启动（若未启动）：setInterval 调 invalidate 触发重绘
-   *   terminal → 清除：spinner 停在终态图标
+   * 按状态启停 spinner 定时器（FR-8 修复锁死 bug）。
+   *   sync running → 启动（持续 onUpdate，需要 spinner 丝滑转动）
+   *   其他（bg / list / cancel / terminal）→ 不启动（一次性 block，定时器泄漏会锁死页面）
    *
-   *   background 模式（details.backgroundId 存在）**不启动定时器**：
-   *   background 的 tool block 在 execute return 后被 Pi finalize，之后无 onUpdate
-   *   更新。spinner 转了 eventLog 也不变，反而每次 invalidate→renderResult 会导致
-   *   Pi 把 spinner 行当新内容追加（行数持续增长堆积）。background 进度靠 progress
-   *   widget 展示，不靠 tool block。
+   *   判断信号：内层 syncResponse.mode === "sync"（非旧 backgroundId）。
+   *   旧 bug：poll 返回的 QueryResult 无 backgroundId → spinner 误启动 → setInterval 永久泄漏 → 锁死。
    */
   private maybeToggleSpinner(): void {
-    const isBackgroundPlaceholder = this.details.backgroundId !== undefined;
-    if (this.details.status === "running" && !isBackgroundPlaceholder) {
+    const sync = this.details.syncResponse;
+    const isSyncRunning = sync !== undefined && sync.status === "running" && sync.mode === "sync";
+    if (isSyncRunning) {
       if (this.spinnerTimer === undefined && this.invalidateFn) {
         this.spinnerTimer = setInterval(() => {
           this.invalidateFn!();
@@ -244,84 +246,98 @@ export class SubagentResultComponent implements Component {
     const d = this.details;
     const theme = this.theme;
 
-    // background 占位 block（有 backgroundId）：execute 已 return，tool block 不会再更新。
-    // 只显示 backgroundId + poll 指引，不显示 spinner/eventLog/footer（那些对 background 无意义）。
-    if (d.backgroundId !== undefined) {
-      return [
-        truncLine(
-          `${theme.fg("dim", "background: ")}${theme.fg("accent", d.backgroundId)}`
-          + ` ${theme.fg("dim", "· running detached · poll to check")}`,
-          width,
-        ),
-      ];
+    // ── list 分支：表格（每行一个 item 摘要）──
+    if (d.action === "list" && d.listResponse) {
+      return renderListCompact(d.listResponse, theme, width);
     }
+    // ── cancel 分支：确认行 ──
+    if (d.action === "cancel" && d.cancelResponse) {
+      return [truncLine(
+        `${theme.fg("muted", "■")} ${theme.fg("dim", "cancelled ")}${theme.fg("accent", d.subagentId ?? "?")}`,
+        width,
+      )];
+    }
+    // ── start 分支：sync / bg ──
+    if (d.bgResponse) {
+      // bg 占位：一次性 block，不显示 spinner/eventLog。
+      return [truncLine(
+        `${theme.fg("accent", "●")} ${theme.fg("dim", "background: ")}${theme.fg("accent", d.subagentId ?? "?")}`
+        + ` ${theme.fg("dim", "· running detached · will notify on completion")}`,
+        width,
+      )];
+    }
+    // sync：从 syncResponse 取字段
+    const sync = d.syncResponse;
+    if (!sync) return [truncLine(theme.fg("warning", "(subagent: no sync response)"), width)];
 
     const lines: string[] = [];
-
-    // 第 1 行：状态行（glyph + stats，agent/model 已上移标题行）
-    lines.push(truncLine(buildStatusLine(d, theme), width));
+    lines.push(truncLine(buildStatusLineFromSync(sync, theme), width));
 
     // 滚动区：最近 N 条 eventLog（不含 turn_end），running 和 terminal 态统一展示。
-    // 先折叠连续同类分片（text/thinking 的 100 字符 chunk 合并为 1 条代表行），
-    // 再取最近 N 条——避免同一句话被拆成 N 个半句碎片。
-    const scrollEntries = foldEntries(d.eventLog.filter((e) => e.type !== "turn_end"));
+    const scrollEntries = foldEntries(sync.eventLog.filter((e) => e.type !== "turn_end"));
 
-    // running 态：currentActivity 作为滚动区首行（实时"正在做什么"锚点），
-    // 并与 eventLog 末条去重（避免两行近乎相同）。
-    if (d.status === "running" && d.currentActivity) {
+    if (sync.status === "running" && sync.currentActivity) {
       const lastEntry = scrollEntries[scrollEntries.length - 1];
-      const sameAsLast = lastEntry !== undefined && activityMatchesEntry(d.currentActivity, lastEntry);
+      const sameAsLast = lastEntry !== undefined && activityMatchesEntry(sync.currentActivity, lastEntry);
       if (!sameAsLast) {
-        lines.push(truncLine(buildActivityLine(d.currentActivity, theme), width));
+        lines.push(truncLine(buildActivityLine(sync.currentActivity, theme), width));
       }
     }
 
-    // 最近 COMPACT_SCROLL_LINES 条 eventLog
     for (const entry of scrollEntries.slice(-COMPACT_SCROLL_LINES)) {
       lines.push(truncLine(`${theme.fg("dim", STREAM_PREFIX)}${formatEventLine(entry, theme)}`, width));
     }
 
-    // running 态 footer：Ctrl+O 提示（纯空格缩进，不带 ⎿）
-    if (d.status === "running") {
+    if (sync.status === "running") {
       lines.push(truncLine(`${theme.fg("dim", FOOTER_PREFIX)}${theme.fg("accent", "Press Ctrl+O for live detail")}`, width));
-    }
-
-    // terminal 态：交付物行（done=result首行 / failed=Error:... / cancelled=Cancelled）
-    if (d.status !== "running") {
-      const delivery = buildDeliveryLine(d, theme);
+    } else {
+      const delivery = buildDeliveryLineFromSync(sync, theme);
       if (delivery) {
         lines.push(truncLine(`${theme.fg("dim", STREAM_PREFIX)}${delivery}`, width));
       }
     }
-
     return lines;
   }
 
   // ── 展开视图 ──────────────────────────────────────────────
 
   private renderExpanded(width: number): string[] {
-    const lines: string[] = [];
     const d = this.details;
     const theme = this.theme;
 
-    // 状态行
-    lines.push(truncLine(buildStatusLine(d, theme), width));
-
-    // 空行间隔
-    lines.push("");
-
-    // 完整 eventLog（含 turn_end 分隔）
-    for (const entry of d.eventLog) {
-      lines.push(truncLine(`${theme.fg("dim",STREAM_PREFIX)}${formatEventLine(entry, theme)}`, width));
+    if (d.action === "list" && d.listResponse) {
+      return renderListExpanded(d.listResponse, theme, width);
+    }
+    if (d.action === "cancel" && d.cancelResponse) {
+      return [truncLine(
+        `${theme.fg("muted", "■")} ${theme.fg("dim", "cancelled ")}${theme.fg("accent", d.subagentId ?? "?")}`,
+        width,
+      )];
     }
 
-    // 交付物（完整首行）
-    const delivery = buildDeliveryLine(d, theme);
+    const lines: string[] = [];
+    // bg 占位 expanded 与 compact 同（一次性 block 无细节可展开）
+    if (d.bgResponse) {
+      lines.push(truncLine(
+        `${theme.fg("accent", "●")} ${theme.fg("dim", "background: ")}${theme.fg("accent", d.subagentId ?? "?")}`,
+        width,
+      ));
+      return lines;
+    }
+    const sync = d.syncResponse;
+    if (!sync) return [truncLine(theme.fg("warning", "(subagent: no sync response)"), width)];
+
+    // sync expanded：完整 eventLog + 交付物
+    lines.push(truncLine(buildStatusLineFromSync(sync, theme), width));
+    lines.push("");
+    for (const entry of sync.eventLog) {
+      lines.push(truncLine(`${theme.fg("dim", STREAM_PREFIX)}${formatEventLine(entry, theme)}`, width));
+    }
+    const delivery = buildDeliveryLineFromSync(sync, theme);
     if (delivery) {
       lines.push("");
-      lines.push(truncLine(`${theme.fg("dim",STREAM_PREFIX)}${delivery}`, width));
+      lines.push(truncLine(`${theme.fg("dim", STREAM_PREFIX)}${delivery}`, width));
     }
-
     return lines;
   }
 }
@@ -333,23 +349,35 @@ export class SubagentResultComponent implements Component {
 // extractAgentName / firstLine 已上移到 ./format.ts 共享（tool-render / list-view /
 // bg-notify-render / subagent-tool 复用）。
 
+/** 按 action 检查 details 内层分组是否存在（G2-007 guard）。 */
+function isDetailsStructurallyComplete(d: SubagentToolResult): boolean {
+  switch (d.action) {
+    case "start":
+      return d.syncResponse !== undefined || d.bgResponse !== undefined;
+    case "list":
+      return d.listResponse !== undefined;
+    case "cancel":
+      return d.cancelResponse !== undefined;
+    default:
+      return false;
+  }
+}
+
 /**
- * 构建状态行：`{glyph} {stats}`（agent/model 已上移标题行，由 renderCall 预解析）。
+ * 构建 sync 状态行（从 SyncResponse 取字段，删 backgroundId 分支）。
  *
- *   glyph: running → seed-frame spinner（accent）；done → ✓（success）；failed → ✗（error）；cancelled → ■（muted）
+ *   glyph: running → spinner（accent）；done → ✓（success）；failed → ✗（error）；cancelled → ■（muted）
  *   stats: dim `· N turns · Nk · Ns`，各字段 > 0 才显示（全零省略）
  */
-function buildStatusLine(d: SubagentToolDetails, theme: ThemeLike): string {
-  const glyph = statusGlyph(d.status);
-  // running 用 Date.now() 选帧（setInterval 驱动丝滑转动）；terminal 态 glyph.icon 有值。
-  // background 占位 block（有 backgroundId）用静态 ● 而非 spinner——execute 已 return，
-  // 不会有 onUpdate 更新，spinner 转了内容也不变，静态图标更准确表达「已派发后台运行」。
-  const icon = glyph.icon
-    ?? (d.backgroundId !== undefined ? "●" : spinnerGlyph(Math.floor(Date.now() / SPINNER_INTERVAL_MS)));
+function buildStatusLineFromSync(
+  s: { status: ExecutionStatus; turns: number; totalTokens: number; elapsedSeconds: number },
+  theme: ThemeLike,
+): string {
+  const glyph = statusGlyph(s.status);
+  const icon = glyph.icon ?? spinnerGlyph(Math.floor(Date.now() / SPINNER_INTERVAL_MS));
   const glyphStr = theme.fg(glyph.color, icon);
 
-  // stats：· N turns · Nk · Ns，零值隐藏
-  const statsStr = buildStats(d, theme);
+  const statsStr = buildStats(s, theme);
   const statsPrefix = statsStr ? ` ${theme.fg("dim", "·")} ${statsStr}` : "";
 
   return `${glyphStr}${statsPrefix}`;
@@ -359,7 +387,7 @@ function buildStatusLine(d: SubagentToolDetails, theme: ThemeLike): string {
  * 构建 stats 字符串：`N turns · Nk · Ns`（零值隐藏，全零返回 ""）。
  * 各字段 dim 色，用 `·` 分隔（spec 分隔符语义：同级并列字段）。
  */
-function buildStats(d: SubagentToolDetails, theme: ThemeLike): string {
+function buildStats(d: { turns: number; totalTokens: number; elapsedSeconds: number }, theme: ThemeLike): string {
   const parts: string[] = [];
   if (d.turns > 0) parts.push(`${d.turns} turns`);
   if (d.totalTokens > 0) parts.push(formatTokens(d.totalTokens));
@@ -392,14 +420,14 @@ function buildActivityLine(
  *   failed    → `Error: {error 首行}`（error 色）
  *   cancelled → `Cancelled`（dim）
  */
-function buildDeliveryLine(d: SubagentToolDetails, theme: ThemeLike): string | undefined {
-  switch (d.status) {
+function buildDeliveryLineFromSync(s: SyncResponse, theme: ThemeLike): string | undefined {
+  switch (s.status) {
     case "done":
-      return firstLineSanitized(d.result) || undefined;
+      return firstLineSanitized(s.result) || undefined;
     case "failed":
-      return `${theme.fg("error", "Error:")}: ${firstLineSanitized(d.error)}`;
+      return `${theme.fg("error", "Error:")}: ${firstLineSanitized(s.error)}`;
     case "cancelled":
-      return theme.fg("dim","Cancelled");
+      return theme.fg("dim", "Cancelled");
     default:
       return undefined;
   }
@@ -464,4 +492,38 @@ function foldEntries(entries: AgentEventLogEntry[]): AgentEventLogEntry[] {
     }
   }
   return result;
+}
+
+// ============================================================
+// list 渲染 helper（action:"list" 分支）
+// ============================================================
+
+/** list compact：标题行 + 每行一个 item 摘要（glyph + agent + mode + status + duration）。 */
+function renderListCompact(resp: ListResponse, theme: ThemeLike, width: number): string[] {
+  if (resp.items.length === 0) {
+    return [truncLine(theme.fg("dim", `No subagents (running: ${resp.running})`), width)];
+  }
+  const lines: string[] = [
+    truncLine(theme.fg("dim", `Subagents (running: ${resp.running}/${resp.items.length})`), width),
+  ];
+  for (const it of resp.items) {
+    const glyph = statusGlyph(it.status);
+    const icon = glyph.icon ?? "●";
+    const mode = it.mode === "background" ? "bg" : "sync";
+    const line = `${theme.fg(glyph.color, icon)} ${theme.fg("accent", it.agent)}`
+      + ` ${theme.fg("dim", `· ${mode} · ${it.status} · ${formatElapsedSeconds(it.duration)}`)}`;
+    lines.push(truncLine(`${STREAM_PREFIX}${line}`, width));
+  }
+  return lines;
+}
+
+/** list expanded：compact 基础上每 item 追加 sessionFile 路径行。 */
+function renderListExpanded(resp: ListResponse, theme: ThemeLike, width: number): string[] {
+  const lines = renderListCompact(resp, theme, width);
+  for (const it of resp.items) {
+    if (it.sessionFile) {
+      lines.push(truncLine(`${theme.fg("dim", `${FOOTER_PREFIX}session: `)}${it.sessionFile}`, width));
+    }
+  }
+  return lines;
 }
