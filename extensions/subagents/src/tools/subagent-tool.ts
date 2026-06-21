@@ -15,10 +15,10 @@ import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@ma
 import { Type } from "@sinclair/typebox";
 
 import { getSubagentService } from "../runtime/subagent-service.ts";
-import { adapter, cancelHandler, listHandler, startHandler } from "./subagent-actions.ts";
 import { extractAgentName } from "../tui/format.ts";
 import { type RenderContext,renderSubagentCall, renderSubagentResult } from "../tui/tool-render.ts";
 import type { SubagentToolResult } from "../types.ts";
+import { adapter, cancelHandler, listHandler, startHandler } from "./subagent-actions.ts";
 
 // ============================================================
 // 回调类型（抽 alias 绕 registerTool(unknown) 的 TS2307 误报）

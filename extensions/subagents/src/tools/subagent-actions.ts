@@ -10,6 +10,7 @@
 
 import type { AgentToolResult } from "@mariozechner/pi-coding-agent";
 
+import type { SubagentService } from "../runtime/subagent-service.ts";
 import type {
   BgResponse,
   CancelResponse,
@@ -20,7 +21,6 @@ import type {
   SubagentToolResult,
   SyncResponse,
 } from "../types.ts";
-import type { SubagentService } from "../runtime/subagent-service.ts";
 
 // ============================================================
 // 常量
