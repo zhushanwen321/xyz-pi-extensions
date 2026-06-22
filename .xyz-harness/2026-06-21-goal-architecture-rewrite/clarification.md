@@ -53,11 +53,12 @@
 - 双维度语义集中，不再散落 isTaskDone/validateUpdateTasks/widget 三处
 - **推理**：对外契约稳定 + 双维度语义有归属 + 可测
 
-### D-09: GoalHistory 提为一等模型
-- `domain.ts` 声明 `GoalHistoryEntry` 类型
-- persistence 层 `appendHistory` / `queryHistory`
-- 消除当前 writeGoalHistoryEntry（写）与 handleHistory（读）两处手动对齐
-- **推理**：当前明确遗漏，散落在持久化和命令 handler
+### D-09: GoalHistory 降级为 persistence 层 DTO（修正原"提为一等模型"）
+- **原决策**（Round 1）：提为一等模型 / aggregate。**修正**（spec 分析轮）：降级
+- **修正理由**：GoalHistoryEntry 无领域行为、无状态机、无不变量——是终态 goal 的归档记录（DTO）。造 aggregate 是空壳，不会解锁任何能力，只把 `pi.appendEntry("goal-history", {...})` 换成 `persistence.appendHistory(...)`
+- **"domain"命名诱导过度建模**（D-22）：原 D-09 把它提为一等模型，部分是"既然是 domain，每个东西都该有 aggregate 吧"的诱导。改用 "engine" 命名后，自然问"这个 engine 计算什么"——GoalHistory 不计算任何东西
+- **最终方案**：类型定义放 persistence.ts，提供 `appendHistory(entry)` / `queryHistory()`。不进 engine/，不造 aggregate
+- 消除 writeGoalHistoryEntry（写）与 handleHistory（读）两处手动对齐的需求，仍由 persistence 层统一函数解决
 
 ### D-10: Budget 拆 Resource / Boundary
 - `Budget` 值对象内部分 `resource: { token, time }` 和 `boundary: { maxTurns, maxStallTurns }`
@@ -135,10 +136,10 @@
 - **实现**：移除 `pendingPause` 字段，agent_end 检测 `ctx.signal.aborted` 时直接 return
 - **修正原行为**：当前代码 ESC → pendingPause → paused，重写后改为纯打断（行为演进，用户认可）
 
-### D-19: create_tasks all-complete = 报错（用户决策，2026-06-22）
-- **用户明确**：所有 task 已完成时 create_tasks 报错，而非静默覆盖
-- **错误信息**："All tasks complete. Use complete_goal to finish, or /goal update to re-plan."
-- **目的**：强制完成流程，防止 AI 绕过 complete_goal 直接重规划
+### D-19: create_tasks all-complete → 拆为独立 ticket（修正原"报错"决策）
+- **原决策**（Round 3）：所有 task 完成时 create_tasks 报错而非静默覆盖。**修正**（spec 分析轮）：拆为独立 ticket，不纳入架构 PR
+- **修正理由**：这是**可选产品决策**，不是架构必须。"完成后重新拆解、继续扩展目标"是合理流程，强制报错可能砍掉有价值路径。架构 PR 须保持行为等价（原样保留静默覆盖），此行为变更独立评审
+- **架构 PR 期间**：handleCreateTasks 守卫逻辑不变（`existingIncomplete.length > 0` 才拒绝，all-complete 时覆盖）
 
 ### D-20: Round 4-5 行为保持补强（F 类，无需用户决策）
 Round 4 独立追踪发现 5 处"代码有 spec 没写"的保持行为，Round 5 收敛复核又确认 1 处（E-R5-001）。全部属 D-15 模式（重构不得遗漏），经主 agent 二次确认源码后保留，补入 spec：
@@ -154,6 +155,84 @@ Round 4 独立追踪发现 5 处"代码有 spec 没写"的保持行为，Round 5
 - **判定：CONVERGED**——独立 subagent 从零审视未发现重大新 gap
 - 5 处边缘观察（E-R5-002~005：resume/update 的 prompt 注入细节、lastProgressTurn 重置、message renderer 注册）属已建立模式的自然延伸，不构成 gap
 - 唯一有行为影响的 E-R5-001（resume 触发 AI）已并入 FR-8.12
+
+---
+
+## Spec 分析轮修订（D-21/D-22 + ESC 实测 + 链路分析）
+
+> 触发：用户要求重新审视 spec 是否过度设计。经架构讨论 + Pi 源码调研后修订。以下决策修正/补充 Round 1-5 的结论。
+
+### D-21: 更新入口 = 双入口，非统一 applyCommand（推翻原 FR-3.2）
+
+**原 FR-3.2**：`applyCommand(state, command)` 统一命令（用户/AI）和事件（Pi runtime）两类输入。
+
+**链路分析结论**：两类输入在所有维度都不同，强行合并是用 if 拼两套无关语义。
+
+| 维度 | 路径 A（命令/工具） | 路径 B（事件） |
+|------|-------------------|---------------|
+| 触发方 | 用户/AI 主动 | 框架异步 |
+| 返回值 | 有（ToolResult/notify） | 无（纯副作用） |
+| 并发模型 | 同步串行 | isProcessing 防重入 + goalId snapshot |
+| 错误处理 | 返回 errorResult | 静默/notify，无返回 |
+| signal.aborted | 不关心 | **核心分支**（ESC） |
+| stale-check | 无 | 每个副作用前 checkStale |
+| persist 方式 | `persist`（纯持久化） | `persistAndUpdate`（持久化+刷 widget+stale 短路） |
+
+**真正相同的只有最底层的 state mutation**（transitionStatus / 改 tasks / 改 budget flags）——这些是纯函数/纯赋值，不需要"统一入口"去重。
+
+**修正方案**：
+- engine 层纯函数（`transitionStatus` / `finalizeGoal` / `checkBudget` / `applyTaskUpdate`）是两条路径的**真正共享层**
+- service 层双入口：`applyToolAction(state, action) → { state, result }` / `applyEvent(state, event) → { state, effects[] }`
+- 并发保护（isProcessing / goalId snapshot / stale-check / signal.aborted）留 event-adapter，不进 service
+- **ESC 守卫只在 event-adapter**——这印证了分开的价值：合并成 applyCommand 会让 ESC 的 aborted 分支污染 tool 路径
+
+### D-22: 命名 engine/ 而非 domain/
+
+- "domain" 是 DDD 术语，暗示每个概念都该建 aggregate / repository / ubiquitous language
+- **实际危害**：GoalHistory 被提为一等 aggregate（D-09 原决策），部分就是"domain"命名诱导——"既然是 domain，每个东西都该有 aggregate 吧？"
+- "engine" 换框后，自然问"这个 engine 计算什么"——goal 计算 7 态转换，task 计算 5 态转换 + 双维度投影，budget 计算阈值决策。GoalHistory 不计算任何东西 → 不该在 engine 层
+- **命名是结构决策**，不是美化：它自带防膨胀抗体
+
+### ESC 实测时序（Pi 源码验证，`pi-mono-fix-workspace/main`）
+
+调研确认用户期望："ESC 真的停了整个 agent loop，要等用户下一条消息才重新 before_agent_start"。
+
+**完整时序**（关键源码位置）：
+```
+用户按 ESC
+  → AbortController.abort() (agent.ts:301)
+  → 底层流中断，LLM 返回 stopReason="aborted"
+  → emit message_end (aborted assistant msg)   ← goal handler 会跑
+  → emit turn_end (toolResults=[])              ← goal handler 会跑（currentTurnIndex++！）
+  → emit agent_end                              ← goal handler 会跑
+  → runLoop return (agent-loop.ts:196-200)
+  → _handlePostAgentRun 返回 false（aborted 不可重试，队列已被清空）
+  → 整个 run 结束，等用户下一条消息
+  → 用户下次输入 → AgentSession.prompt() → before_agent_start 重新触发 (agent-session.ts:1099)
+```
+
+**关键发现**：
+1. abort 后**不会自动进入下一轮**——runLoop 直接 return，等用户消息 → FR-6.7"用户输入后恢复"成立
+2. **before_agent_start 在 abort 后、用户发新消息前不会触发**——它只在 `AgentSession.prompt()` 路径触发，不在 `agent.continue()` 路径
+3. **turn_end 在 abort 时会触发**——当前代码无脑 `currentTurnIndex++`，ESC 会消耗一个 turn 预算（必须在 turn_end 加 aborted 守卫）
+4. **message_end 会触发**且 message.role 是 assistant——当前 `isActiveStatus` 守卫在，但 aborted 消息 usage 通常为空，显式跳过更安全
+5. **ESC 清空 steering/followUp 队列**（interactive-mode.ts:3751 `restoreQueuedMessagesToEditor`）——即使 agent_end 试图发 continuation，Pi 也会丢弃。但代码层应显式不发，避免依赖 Pi 的清空行为
+
+**对 FR-6.7 的影响**：原 spec 只写"agent_end 检测 signal.aborted 时 return"是**必要但不充分**。完整设计须在 message_end / turn_end / agent_end **三个** handler 都加 aborted 守卫（详见 spec FR-6.7 表格）。
+
+### 行为变更拆分原则（架构 PR 纯度）
+
+架构重写 PR 必须保持行为等价（FR-8 作为契约保护）。行为变更分两类：
+
+| 行为变更 | 类型 | 处理 |
+|---------|------|------|
+| FR-5 序列化清断 | **架构必须**（engine 层纯净性要求移除兼容逻辑） | 纳入架构 PR，但显式标注 |
+| FR-6.7 ESC 纯打断 | **架构必须**（pendingPause 字段删除是重构的一部分，且用户明确要一起做） | 纳入架构 PR |
+| FR-8.8 create_tasks 报错 | **可选产品决策** | 拆为独立 ticket |
+
+**原则**：多 AI agent 维护下，行为变更藏在架构 PR 里极难发现（AI reviewer 易被结构变动占用注意力漏掉 behavior 变化）。可选产品决策必须独立评审。
+
+---
 
 ---
 

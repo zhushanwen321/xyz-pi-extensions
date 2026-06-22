@@ -16,9 +16,11 @@ verdict: pass
 
 ## Functional Requirements
 
-### FR-1: 领域建模（domain 层，零 Pi 依赖）
+### FR-1: 引擎层（engine/，零 Pi 依赖，纯状态机 + 决策）
 
-#### FR-1.1 Goal Aggregate（`domain/goal.ts`）
+> 命名说明（D-22）：用 `engine/` 而非 `domain/`。"domain" 是 DDD 术语，暗示每个概念都该建 aggregate / repository，容易诱导过度建模（如 GoalHistory 被提为一等 aggregate）。"engine" 换框后自然问"这个 engine 计算什么"，不带 aggregate 包袱。
+
+#### FR-1.1 Goal Aggregate（`engine/goal.ts`）
 - 显式聚合根 `Goal`，持有：identity / objective / status / tasks / lifecycle meta
 - `GoalStatus` 保持 7 态枚举：`active | paused | blocked | complete | budget_limited | time_limited | cancelled`
 - 状态机不变量：
@@ -27,7 +29,7 @@ verdict: pass
   - `transitionStatus(current, next)` 守卫终态不可覆盖
 - 零 Pi import（只 import typebox）
 
-#### FR-1.2 Task Aggregate（`domain/task.ts`）
+#### FR-1.2 Task Aggregate（`engine/task.ts`）
 - `Task` 实体 + `Subtask` 轻量执行单元
 - `TaskStatus` 保持 5 态：`pending | in_progress | completed | verified | cancelled`
 - `SubtaskStatus` 保持 3 态：`pending | in_progress | completed`（无 verification，刻意设计）
@@ -41,7 +43,7 @@ verdict: pass
 - 任务状态机转换合法性校验（当前 `validateUpdateTasks` 的规则归位至此）
 - 零 Pi import
 
-#### FR-1.3 Budget 值对象（`domain/budget.ts`）
+#### FR-1.3 Budget 值对象（`engine/budget.ts`）
 - 内部分两类：
   - `resource: { tokenBudget?, timeBudgetMinutes? }` — 可消耗资源（连续递减，百分比检测）
   - `boundary: { maxTurns, maxStallTurns }` — 硬边界（离散递增，计数检测）
@@ -50,40 +52,50 @@ verdict: pass
 - 预警标志按维度独立：`tokenWarning70Sent` / `tokenWarning90Sent` / `timeWarning70Sent` / `timeWarning90Sent`（修复当前 token/time 共用一个 flag 的 bug）
 - 零 Pi import
 
-#### FR-1.4 GoalHistory 一等模型（归入 `domain/goal.ts`）
-- `GoalHistoryEntry` 类型：goalId / objective / finalStatus / completedTasks / totalTasks / elapsedSeconds / timestamp
+#### FR-1.4 GoalHistory 数据模型（归入 `persistence.ts`，非 aggregate）
+- `GoalHistoryEntry` 是终态 goal 的归档记录，**无领域行为、无状态机、无不变量**——是 DTO，不是 aggregate（D-09 修正）
+- 字段：goalId / objective / finalStatus / completedTasks / totalTasks / elapsedSeconds / timestamp
+- persistence 层提供 `appendHistory(entry)` / `queryHistory()` 两个简单函数
+- 类型定义放 persistence 层即可，不需要在 engine 层建模
 - 与 Goal 独立生命周期（Goal clear 后 session 清空，History 留存）
 
 ### FR-2: 分层架构（端口适配器 + 适度充血）
 
 #### FR-2.1 目标分层结构
 ```
-domain/      (零 Pi 依赖，纯逻辑，可单测)
+engine/      (零 Pi 依赖，纯状态机 + 决策，可单测)
   goal.ts    task.ts    budget.ts
 ports.ts     (Pi 接口契约抽象类型)
 session.ts   (运行时句柄 + 状态重建 + entry GC)
-persistence.ts (serialize/deserialize + history R/W)
-service.ts   (Command/Event → domain 变更 → 委托 adapter)
-api/
-  tool.ts    (goal_manager schema + Record<Action> 分发)
-  command.ts (/goal 解析 + handler)
-  actions.ts (10 个 action handler，调 service)
+persistence.ts (serialize/deserialize + history R/W + GoalHistoryEntry 类型)
+service.ts   (协调层：applyToolAction / applyEvent 两入口，调 engine 纯函数)
+adapters/
+  tool-adapter.ts    (路径 A：goal_manager tool 分发 + persist + 返回 ToolResult)
+  command-adapter.ts (路径 A：/goal 命令解析 + handler)
+  event-adapter.ts   (路径 B：Pi 事件 handler + 并发保护 + persistAndUpdate + sendMessage)
+  actions.ts         (10 个 action handler，调 service.applyToolAction)
 projection/
   widget.ts  prompts.ts   result.ts
 index.ts     (工厂：注册 tool/command/events)
 ```
 
-#### FR-2.2 ports.ts 契约
-- 定义 domain 需要的能力抽象：`PersistencePort` / `UiPort` / `MessagingPort` / `SessionPort`
-- ExtensionContext / Theme / SessionEntry 等用此抽象替代，domain 不直接 import Pi 类型
+#### FR-2.2 ports.ts 契约（边界载体，非可替换性）
+- 定义 engine 需要的能力抽象：`PersistencePort` / `UiPort` / `MessagingPort` / `SessionPort`
+- **ports 的核心价值是机器可检查的边界**，不是"可替换的 adapter"：`engine/` 目录禁止 import `@mariozechner` 这条 lint 规则比任何口头约定都硬，AI agent 拿不准能否 import Pi 时直接编译失败。多 AI agent 维护下，ports 是这条边界的载体
+- ExtensionContext / Theme / SessionEntry 等用此抽象替代，engine 不直接 import Pi 类型
 
-#### FR-2.3 service.ts（唯一更新入口）
-- 所有状态变更经 service：action handler / command handler / event handler 都调 `service.xxx()`
-- service 内部统一决定 persist 时机 + project（widget/result）时机
-- handler 不再直接 mutate state 或直接 persist
+#### FR-2.3 service.ts（双入口协调层，非唯一入口）
+- **两条路径各自有入口**（D-21，修正原 FR-3.2 的 applyCommand 统一）：
+  - `applyToolAction(state, action) → { state, result }`：路径 A（命令/工具）用，同步、返回值、无并发保护
+  - `applyEvent(state, event) → { state, effects[] }`：路径 B（事件）用，副作用驱动、返回 effects 列表
+- 两者都调 engine 层纯函数（`transitionStatus` / `finalizeGoal` / `checkBudget` / `applyTaskUpdate`），engine 层是真正的共享层
+- 并发保护（isProcessing / goalId snapshot / stale-check / signal.aborted 守卫）在 `event-adapter.ts`，不进 service——因为这些只对事件路径有意义
+- persist 时机由各 adapter 决定（路径 A 用 `persist`，路径 B 用 `persistAndUpdate` 含 widget）
 
-### FR-3: 四个唯一入口（规约式 API）
+### FR-3: 唯一收敛点（规约式 API）
 
+> **命名修正（D-21）**：原 FR-3.2 的 `applyCommand(state, command)` 统一命令和事件两类输入——经链路分析，两类输入的触发方、返回值、并发模型、错误处理、persist 方式全不同（见 clarification.md 链路对比表）。强行合并成一个函数等于用 if 拼两个无关逻辑，AI agent 维护负担反而加重。
+> 修正：engine 层纯函数是真正共享层；service 层分 `applyToolAction` / `applyEvent` 双入口；并发保护留在 event-adapter。
 > **注意**：FR-3 是概述，详细行为以 FR-8 为准。当 FR-3 与 FR-8 描述冲突时，FR-8 为权威。
 
 #### FR-3.1 唯一创建入口 `createGoal(objective, tasks?, budget?)`
@@ -93,9 +105,16 @@ index.ts     (工厂：注册 tool/command/events)
   - `__goalInit` 外部编程调用
 - task 构造逻辑唯一（normalizeDescription + id 分配），消除双轨
 
-#### FR-3.2 唯一更新入口 `applyCommand(state, command)`
-- 命令驱动（用户/AI）和事件驱动（Pi runtime）两类输入都经此
-- 内部调 domain 方法变更状态
+#### FR-3.2 双更新入口（D-21，取代原 applyCommand）
+- **`applyToolAction(state, action) → { state, result }`**：路径 A（用户命令 / AI tool call）用
+  - 同步，调用方等结果，返回 ToolResult
+  - 无并发保护（工具调用天然串行）
+  - 10 个 action handler + 8 个 /goal 子命令都调它
+- **`applyEvent(state, event) → { state, effects[] }`**：路径 B（Pi runtime 事件）用
+  - 异步，副作用驱动，返回 effects 列表（continuation/steer/notify 等）
+  - 并发保护在 event-adapter（isProcessing / goalId snapshot / stale-check / signal.aborted）
+  - 6 个事件 handler（before_agent_start / agent_start / turn_end / message_end / agent_end / session_start）都调它
+- **两者共享 engine 层纯函数**（transitionStatus / finalizeGoal / checkBudget / applyTaskUpdate）
 
 #### FR-3.3 唯一完成入口 `finalizeGoal(terminalStatus, reason)`
 - 收口当前散落的终态序列（cancel/clear/abort 三处重复 + complete/budget_limited/time_limited 序列）
@@ -123,7 +142,8 @@ index.ts     (工厂：注册 tool/command/events)
 - coding-workflow Phase 2/3、plan compact 的 3 个调用点都已传 ctx，零改造、零降级，照常预填 task
 - 不需要后续 ticket（D-04 原计划的宿主扩展改造取消）
 
-### FR-5: 序列化清断兼容
+### FR-5: 序列化清断兼容（架构必要的行为变更）
+> **标注**：这是架构重写**必须**的行为变更——engine 层要零 Pi 依赖、deserialize 要纯净，就必须移除向后兼容逻辑。旧格式迁移代码（`subTodos→subtasks` fallback、字段默认值兜底）正是 engine 层纯净性的障碍。用户已认可（历史对话不会再打开）。与 FR-8.8 等"可选产品决策"不同，此项不可拆分。
 - 移除 `deserializeState` 的旧格式迁移逻辑（`subTodos→subtasks` fallback、字段默认值兜底）
 - `deserializeState` 假设输入是新格式，字段缺失直接报错
 - 旧 entry 丢弃（用户认可：历史对话不会再打开）
@@ -158,30 +178,37 @@ index.ts     (工厂：注册 tool/command/events)
 #### FR-6.6 headless 守卫（G-022）
 - updateWidget 前检查 `ctx.hasUI`，无 UI 时跳过 setWidget/setStatus（适配 RPC mode）
 
-#### FR-6.7 ESC 纯打断设计（G-R3-001）
-- **ESC 是纯打断**，不注入任何 goal 提示词，不计算 turn，不消耗资源
-- **行为**：
-  - ESC 中断当前 AI 生成（signal.aborted）
-  - agent_end 检测到 ESC：不发 continuation，不注入 goal prompt，不转 paused
-  - goal 保持 active 状态
-  - 不递增 currentTurnIndex（ESC 不算 goal turn）
-  - 不触发 stall 检测（不重置 tasksCompletedAtAgentStart）
-- **恢复**：用户输入完成后，before_agent_start 恢复注入 goal prompt，goal 继续 autonomous loop
+#### FR-6.7 ESC 纯打断设计（基于 Pi abort 实测时序）
+
+**Pi abort 时序（已源码验证，`pi-mono-fix-workspace/main`）**：
+ESC → `AbortController.abort()`（`agent.ts:301`）→ 底层流中断，LLM 返回 `stopReason="aborted"` → 依次 emit `message_end`(aborted) → `turn_end`(toolResults=[]) → `agent_end` → `runLoop` return，整个 run 结束，等用户下一条消息。
+**abort 后、用户发新消息前，`before_agent_start` 不会触发**（它只在 `AgentSession.prompt()` 路径触发，`agent-session.ts:1099`）。
+ESC 还会清空 steering/followUp 队列（`interactive-mode.ts:3751`）——即使 agent_end 试图发 continuation，Pi 也会丢弃。
+
+**三个事件 handler 都要做 aborted 守卫**（不止 agent_end）：
+
+| 事件 | abort 时会触发？ | 当前行为 | ESC 要求的行为 |
+|------|---------------|---------|--------------|
+| message_end | ✅（aborted assistant msg） | 若 active 尝试累加 token | 跳过 token 累加（aborted 消息 usage 通常为空，显式跳过防边界） |
+| turn_end | ✅ | `currentTurnIndex++` | **跳过递增**（ESC 不算 goal turn，不消耗 turn 预算） |
+| agent_end | ✅ | 走 budget/stall/continuation 全套 | **完整守卫**：不发 continuation、不递增 stallCount、不做 budget 检查、不转 paused/blocked，goal 保持 active |
+
+- **恢复**：用户下次输入 → `before_agent_start` 正常触发 → goal 仍 active → 正常注入 context injection，goal 继续 autonomous loop。无需特殊处理。
 - **与 pause 的区分**：
   - ESC = 纯打断，无状态变化，用户可能只是想追加信息
   - `/goal pause` = 显式暂停（用户去做别的事），转 paused 状态
   - context > 85% = 资源保护，转 paused 状态
 - **实现**：
-  - 移除 `pendingPause` 字段
-  - agent_end 检测 `ctx.signal.aborted` 时：不发 continuation，直接 return
-  - before_agent_start 不需要特殊处理（正常注入）
+  - 三个事件 handler 入口检查 `ctx.signal?.aborted`，true 则各自跳过副作用
+  - 移除 `pendingPause` 字段（不再需要 ESC→paused 的间接路径）
+  - 不需要额外的"被打断状态"标记——abort 后 run 直接结束，before_agent_start 不会误触发，下次用户输入自然恢复
 
 ### FR-7: T3 测试覆盖
 
-#### FR-7.1 domain 层全枚举
-- `domain/goal.test.ts`：7 态全转换矩阵、终态守卫、stall→blocked、resume→terminal（预算重检）
-- `domain/task.test.ts`：5 态全转换、双维度投影函数全组合（completion × verification）、verified 要求 verification 配置、completed 无 verification 全锁
-- `domain/budget.test.ts`：70/90/100% 三阈值（token/time 各一套）、tight 检测、维度独立预警、tick() 时间累计、token 累加算法（max(input-cacheRead,0)+output 及 totalTokens fallback）
+#### FR-7.1 engine 层全枚举
+- `engine/goal.test.ts`：7 态全转换矩阵、终态守卫、stall→blocked、resume→terminal（预算重检）
+- `engine/task.test.ts`：5 态全转换、双维度投影函数全组合（completion × verification）、verified 要求 verification 配置、completed 无 verification 全锁
+- `engine/budget.test.ts`：70/90/100% 三阈值（token/time 各一套）、tight 检测、维度独立预警、tick() 时间累计、token 累加算法（max(input-cacheRead,0)+output 及 totalTokens fallback）
 
 #### FR-7.2 service 层
 - `service.test.ts` 用 fake adapter（实现 ports.ts 接口的内存实现）
@@ -226,7 +253,7 @@ index.ts     (工厂：注册 tool/command/events)
 - **session_start 非对称强制激活**（G-015）：reconstruct 时 `非终态 && status !== paused → status = active`（crashed 的 blocked 重启变 active）；paused 保持 paused
 
 #### FR-8.4 入口归口
-- **`/goal update` 走 applyCommand**（G-002）：重塑（重置 objective/tasks/budget flags/stallCount/currentTurnIndex，保留 goalId），属更新非新建
+- **`/goal update` 走 applyToolAction**（G-002）：重塑（重置 objective/tasks/budget flags/stallCount/currentTurnIndex，保留 goalId），属更新非新建
 - **`/goal set` 覆盖终态 goal 保留快速路径**（G-003）：终态旧 goal 不写 history、不 clearGoalSession，直接 createInitialState 覆盖（避免重复 history entry）
 - **createGoal 重置 stall 基线**（G-004）：createGoal 三个调用源都重置 tasksCompletedAtAgentStart=0，保证 stall 检测基线正确
 - **list_tasks 不触发 widget 刷新**（G-005）：只读 action 不 persist/project
@@ -301,11 +328,10 @@ index.ts     (工厂：注册 tool/command/events)
 - 旧 goal 为**终态**：不写 history（已写过）、不 clearGoalSession，直接 createInitialState 覆盖
 - 旧 goal 为**非终态**：设 status=cancelled + completedAtTurnIndex + writeGoalHistoryEntry + persist，然后 createInitialState 覆盖（写一条 cancelled history）
 
-#### FR-8.8 create_tasks all-complete 边界（G-R3-004）
-- 当所有 task 已完成时，`create_tasks` **报错而非静默覆盖**
-- 错误信息："All tasks complete. Use complete_goal to finish, or /goal update to re-plan."
-- 目的：强制完成流程，防止 AI 绕过 complete_goal 直接重规划
-- 实现：handleCreateTasks 守卫改为 `state.tasks.length > 0 && existingIncomplete.length === 0` 时报错
+#### FR-8.8 create_tasks all-complete 边界（**行为变更，拆为独立 ticket，不纳入本次架构 PR**）
+- 原 D-19 决策：所有 task 完成时 `create_tasks` 报错而非静默覆盖
+- **本 PR 不实现**：架构 PR 保持行为等价（即保持当前"静默覆盖"）。此行为变更拆为独立 ticket 评审——"完成后重新拆解、继续扩展目标"是合理流程，强制报错可能砍掉有价值路径，属产品决策需独立讨论
+- 重构期间 `handleCreateTasks` 的守卫逻辑原样保留（`existingIncomplete.length > 0` 才拒绝，all-complete 时覆盖）
 
 #### FR-8.9 update_tasks verification 即时 steering（G-R4-002）
 - `update_tasks` 把 task 标 `completed` 且该 task 有 `verification` 配置时，**立即调 `injectVerificationSteering`**（deliverAs="steer"）注入提示，引导 AI 跑验证命令并回填 `actual`
@@ -335,12 +361,12 @@ index.ts     (工厂：注册 tool/command/events)
 ## Acceptance Criteria
 
 ### AC-1 架构分层
-- [ ] `domain/` 目录下三个文件，均零 Pi import（`grep -rn "@mariozechner\|@earendil" extensions/goal/src/domain/` 无输出）
+- [ ] `engine/` 目录下三个文件，均零 Pi import（`grep -rn "@mariozechner\|@earendil" extensions/goal/src/engine/` 无输出）
 - [ ] `ports.ts` 定义 PersistencePort / UiPort / MessagingPort / SessionPort 抽象
 - [ ] `tool-handler.ts` 不再存在（职责拆分到 api/tool.ts + service.ts + persistence.ts 等）
 
 ### AC-2 模型完整性
-- [ ] GoalHistoryEntry 在 domain 层定义，persistence 层有 appendHistory/queryHistory
+- [ ] GoalHistoryEntry 在 persistence 层定义（DTO，非 aggregate），有 appendHistory/queryHistory
 - [ ] Task 双维度投影函数 `getCompletionState` / `getVerificationState` 存在且有单测
 - [ ] Budget 内部分 resource / boundary 两部分
 
@@ -360,12 +386,13 @@ index.ts     (工厂：注册 tool/command/events)
 - [ ] state 变更 action 执行后 widget 立即刷新（list_tasks 只读不刷，单测验证）
 - [ ] token/time 预警独立追踪（单测：token 到 70% 发后 time 到 70% 也发）
 - [ ] hasPendingInjection 字段已删除（grep 零结果）
+- [ ] pendingPause 字段已删除（grep 零结果，ESC 改用 aborted 守卫）
 - [ ] Budget.tick() 存在且有单测，persist 无副作用（不再 mutate state）
 - [ ] updateWidget 有 hasUI 守卫（headless 不崩）
 
 ### AC-6 测试
 - [ ] `pnpm --filter @zhushanwen/pi-goal test` 全绿
-- [ ] domain 层测试不 import Pi SDK（grep 验证）
+- [ ] engine 层测试不 import Pi SDK（grep 验证）
 - [ ] 端到端测试覆盖完整生命周期
 - [ ] 现有 3 个测试迁移完成
 
@@ -383,6 +410,12 @@ index.ts     (工厂：注册 tool/command/events)
 - [ ] `/goal resume` 有未完成任务时同样调 sendUserMessage 重启 AI loop（FR-8.12 并行模式，单测验证）
 - [ ] staleness reminder 注入后重置被提醒项 lastUpdatedTurn（FR-8.6，单测验证不重复触发）
 
+### AC-9 ESC 纯打断（FR-6.7，基于 Pi abort 实测时序）
+- [ ] message_end handler 在 `ctx.signal?.aborted` 时跳过 token 累加（单测）
+- [ ] turn_end handler 在 `ctx.signal?.aborted` 时跳过 currentTurnIndex++（单测）
+- [ ] agent_end handler 在 `ctx.signal?.aborted` 时不发 continuation、不递增 stallCount、不做 budget 检查、不转 paused/blocked，goal 保持 active（单测）
+- [ ] ESC 后用户下次输入 → before_agent_start 正常注入 context，goal 继续 loop（端到端验证）
+
 ## Constraints
 
 ### 技术栈
@@ -398,7 +431,7 @@ index.ts     (工厂：注册 tool/command/events)
 - `pi.__xxx` 是官方支持的扩展间私有协议（`ExtensionAPI` 有 `[key: \`__${string}\`]` 索引签名）
 
 ### 硬约束
-- domain 层零 Pi import（可 import typebox）
+- engine 层零 Pi import（可 import typebox）
 - 测试不 import Pi SDK（通过 ports 抽象）
 - 禁止 `any`（用 unknown 或具体类型）
 - 禁止 `eslint-disable` 绕过规则
@@ -418,11 +451,11 @@ index.ts     (工厂：注册 tool/command/events)
 | D-02 | `__goalInit` | D1（保留用途，收窄委托 createGoal） | 用途合理实现不合理；D2 超范围，D3 耦合 |
 | D-03 | 序列化 | 清断兼容 | 用户明确旧 entry 不用 |
 | D-04 | 宿主扩展 | out-of-scope | 降级不崩，后续 ticket |
-| D-05 | domain 隔离 | 零 Pi 依赖 | 可测 + 可演进 + 架构正确 |
-| D-06 | 分层深度 | domain 完整拆（goal/task/budget） | 三聚合各有独立状态机 |
+| D-05 | engine 隔离 | 零 Pi 依赖（边界由 ports.ts + lint 规则机器可检查） | 可测 + 可演进 + 多 AI agent 维护下防退化 |
+| D-06 | 分层深度 | engine 完整拆（goal/task/budget） | 三聚合各有独立状态机 |
 | D-07 | 测试 | T3 严格 | 重构质量硬保障 |
 | D-08 | Task 双维度 | B（拍扁 + 投影函数） | 契约稳定 + 语义集中 + 可测 |
-| D-09 | GoalHistory | 提为一等模型 | 消除散落 |
+| D-09 | GoalHistory | 降级为 persistence 层 DTO（修正原"一等模型"） | 无领域行为/状态机/不变量，造 aggregate 是空壳；engine 命名（D-22）进一步确认不该提为模型 |
 | D-10 | Budget | 拆 Resource/Boundary | 消除检查逻辑割裂 |
 | D-11 | 行为修复 | widget 刷新 + 预警独立 + clear/abort 保留 | 修架构性 bug |
 | D-12 | `__goalInit` tasks 参数 | 保持不变（内部走 createGoal） | 修正 G-001 矛盾，消除降级 |
@@ -431,9 +464,11 @@ index.ts     (工厂：注册 tool/command/events)
 | D-15 | 行为契约 | FR-8 显式化 | Round 1 追踪补强 |
 | D-16 | `__goalInit` ctx | 改必填（消 lastCtx） | 修正 G-R2-007，service 无可变状态 |
 | D-17 | 事件链路精确行为 | FR-8.6/8.7 补强 | Round 2 追踪补强 |
-| D-18 | ESC 行为 | 纯打断（无状态变化、不计 turn、不注入 prompt） | 用户明确：ESC 是追加信息，不是暂停 |
-| D-19 | create_tasks all-complete | 报错而非静默覆盖 | 强制完成流程，防止绕过 complete_goal |
+| D-18 | ESC 行为 | 纯打断（无状态变化、不计 turn、不注入 prompt） | 用户明确：ESC 是追加信息，不是暂停。基于 Pi abort 实测时序，三个事件 handler 都加 aborted 守卫 |
+| D-19 | create_tasks all-complete | **拆为独立 ticket**（不纳入架构 PR） | 原决策"报错"是可选产品决策，架构 PR 保持行为等价（静默覆盖），行为变更独立评审 |
 | D-20 | Round 4 行为保持补强 | FR-8.9/8.10/8.11/8.12 显式化（verification steering / 全 cancelled 守卫 / add_subtasks 限制 / set 后触发 AI） | Round 4 追踪发现 spec 遗漏的保持行为，全部属 D-15 模式 |
+| D-21 | 更新入口设计 | 双入口（`applyToolAction` / `applyEvent`），非统一 `applyCommand` | 链路分析：命令/事件路径的触发方/返回值/并发模型/persist 方式全不同；engine 层纯函数才是真共享层；合并=用 if 拼两套语义 |
+| D-22 | engine 命名 | `engine/` 而非 `domain/` | "domain"诱导 aggregate 过度建模（GoalHistory 被提为一等）；"engine"换框问"计算什么"，防膨胀 |
 
 ## 业务用例
 
