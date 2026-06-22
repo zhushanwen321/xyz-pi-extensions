@@ -30,6 +30,7 @@ import {
   handleWorkerMessage,
   rebuildRuntime,
 } from "../error-recovery.js";
+import { AgentCall } from "../models/agent-call.js";
 import { Budget } from "../models/budget.js";
 import type { AgentRunner, RunStore, WorkerHandlers, WorkerHost } from "../models/ports.js";
 import { RunRuntime } from "../models/run-runtime.js";
@@ -221,6 +222,46 @@ describe("handleWorkerMessage 路由", () => {
       makeHandlers(),
     );
     expect(run.state.status).toBe("paused");
+  });
+
+  it("W-15: 已缓存的 callId（calls.get(id).status==='done'）→ replay 不再调 runner.run", async () => {
+    // W-15 修复：覆盖 dispatchAgentCall 的 cached replay 真路径（error-recovery.ts:181-185）。
+    // 跨 pause/resume，已完成调用走 callCache replay，不重跑 runner。
+    const runner = { run: vi.fn().mockResolvedValue({ content: "fresh" } as AgentResult) };
+    const deps = makeDeps({ runner });
+    const run = runOf(deps);
+
+    // 预置一个已完成 call（模拟上一 running-segment 的结果）
+    const cachedResult: AgentResult = { content: "cached-42", toolCalls: [] };
+    const cachedCall = new AgentCall(
+      0,
+      { prompt: "hi" },
+      { stepIndex: 0, agent: "a", task: "t", model: "m", status: "completed", startedAt: "now" },
+    );
+    cachedCall.status = "done";
+    cachedCall.result = cachedResult;
+    run.state.calls.set(0, cachedCall);
+
+    // Worker 重新请求同一 callId（resume 后 worker 重跑脚本到 agent-call）
+    const postMessageSpy = vi.spyOn(run.runtime!.worker, "postMessage");
+    await handleWorkerMessage(
+      run,
+      { type: "agent-call", callId: 0, opts: { prompt: "hi" } },
+      deps,
+      makeHandlers(),
+    );
+
+    // 关键断言 1：runner.run 没被调（cached 路径不重跑）
+    expect(runner.run).not.toHaveBeenCalled();
+    // 关键断言 2：worker 收到 agent-result（cached:true）—— 回发缓存结果解锁 pending await
+    expect(postMessageSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agent-result",
+        callId: 0,
+        result: cachedResult,
+        cached: true,
+      }),
+    );
   });
 });
 

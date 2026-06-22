@@ -305,7 +305,9 @@ export async function handleWorkerError(
   deps: LifecycleDeps,
   handlers: WorkerHandlers,
 ): Promise<void> {
-  if (isTerminal(run)) return;
+  // W-4 修复：与 handleWorkerMessage 对称——paused/terminal 状态丢弃 stale error。
+  // 否则 paused 后到达的 worker error 仍会 workerErrorCount++（污染跨 runtime 计数）。
+  if (isTerminal(run) || run.state.status === "paused") return;
 
   const count = (run.meta.workerErrorCount ?? 0) + 1;
   run.meta.workerErrorCount = count;
@@ -374,7 +376,8 @@ export async function handleScriptError(
   deps: LifecycleDeps,
   handlers: WorkerHandlers,
 ): Promise<void> {
-  if (isTerminal(run)) return;
+  // W-4 修复：与 handleWorkerMessage/handleWorkerError 对称——paused/terminal 守卫前置。
+  if (isTerminal(run) || run.state.status === "paused") return;
 
   // P2-2: 捕获 worker 诊断日志
   if (workerLogs.length > 0) {

@@ -8,7 +8,7 @@
 import { truncateToWidth } from "@mariozechner/pi-tui";
 
 import type { ExecutionTraceNode, ToolCallEntry } from "../../engine/models/types.js";
-import { MS_PER_SEC, SECS_PER_MIN } from "../../infra/constants.js";
+import type { DoneReason, RunStatus } from "../../engine/models/types.js";
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -16,6 +16,25 @@ export const SIDEBAR_WIDTH = 24;
 export const PROMPT_FOLD_LINES = 3;
 export const OUTPUT_TRUNCATE_BYTES = 100_000;
 export const ELLIPSIS = "\u2026"; // U+2026
+
+// 时间换算（原 infra/constants.ts 内联——constants.ts 仅这两个常量真被使用，
+// 其余 RUNID_* 是死代码，各使用点保留本地副本。W-6 修复删 constants.ts）。
+const MS_PER_SEC = 1000;
+const SECS_PER_MIN = 60;
+
+/**
+ * 可显示的状态文本集合（W-7 修复）。
+ *
+ * 包含 RunStatus（"running"|"paused"|"done" 不直接显示，转 reason）+ DoneReason
+ * （completed/failed/aborted/budget_limited/time_limited）+ ExecutionTraceNode.status
+ * （含 "pending"——trace 节点的初始态）。
+ *
+ * 收窄自 string → 显式联合，编译器会在新增 status 时强制 switch 补齐分支。
+ */
+export type StatusText =
+  | RunStatus
+  | DoneReason
+  | "pending";
 
 // ── Theme interface (avoids importing Pi runtime) ─────────────
 
@@ -27,7 +46,9 @@ export interface ThemeLike {
 // ── Status helpers ────────────────────────────────────────────
 
 /** status → 语义颜色 token（用于给任意文本染色，不含符号）。 */
-export function statusColorToken(status: string): "success" | "warning" | "error" | "muted" {
+export function statusColorToken(
+  status: StatusText,
+): "success" | "warning" | "error" | "muted" {
   switch (status) {
     case "completed": return "success";
     case "running": return "warning";
@@ -36,12 +57,18 @@ export function statusColorToken(status: string): "success" | "warning" | "error
   }
 }
 
-export function statusDotStr(status: string, theme: ThemeLike): string {
+export function statusDotStr(
+  status: StatusText,
+  theme: ThemeLike,
+): string {
   return theme.fg(statusColorToken(status), "●");
 }
 
 /** Format a status badge with color for the header area. */
-export function formatStatusBadge(status: string, theme: ThemeLike): string {
+export function formatStatusBadge(
+  status: StatusText,
+  theme: ThemeLike,
+): string {
   switch (status) {
     case "running": return theme.fg("warning", "\u25CF running");
     case "paused": return theme.fg("warning", "\u23F8 PAUSED");
@@ -50,7 +77,6 @@ export function formatStatusBadge(status: string, theme: ThemeLike): string {
     case "aborted": return theme.fg("error", "\u2717 aborted");
     case "budget_limited": return theme.fg("error", "\u26A0 budget");
     case "time_limited": return theme.fg("error", "\u26A0 timeout");
-    case "state_lost": return theme.fg("muted", "? lost");
     default: return theme.fg("muted", status);
   }
 }

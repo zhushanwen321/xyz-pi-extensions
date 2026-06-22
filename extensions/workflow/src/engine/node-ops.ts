@@ -100,7 +100,9 @@ export async function retryNode(
   });
 
   // 主线程重跑（不重启 worker）——executeAgentCall 内部 markRunning + runner.run
-  const signal = run.runtime?.controller.signal ?? new AbortController().signal;
+  // W-5：G6-001 保证 status==="running" ⟺ runtime defined；retryNode 已守 status==="running"
+  // 前置，故 run.runtime 必存在。非空断言，不再用 fallback 掩盖不变式违反。
+  const signal = run.runtime!.controller.signal;
   await executeAgentCall(call, deps.runner, run.state.budget, signal, run.state.trace);
 
   // 回发结果给 worker（worker 可能在 pending await）

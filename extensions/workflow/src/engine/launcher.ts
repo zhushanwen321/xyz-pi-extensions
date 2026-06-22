@@ -168,6 +168,13 @@ export async function runAndWait(
   while (Date.now() < deadline) {
     // signal abort 检查
     if (signal?.aborted) {
+      // W-3 修复：runWorkflow 的 signal listener 可能已先触发 abortRun
+      // （reason="External signal aborted"）。检查 run 是否已 done —— 若已 done，
+      // 直接返回（避免二次 safeAbort 写不同的 error message 造成非确定性）。
+      const runBeforeAbort = deps.runs.get(runId);
+      if (runBeforeAbort?.state.status === "done") {
+        return toResult(runBeforeAbort);
+      }
       await safeAbort(runId, deps, "Aborted by signal", "aborted");
       const run = deps.runs.get(runId);
       return run
@@ -186,6 +193,11 @@ export async function runAndWait(
   }
 
   // 6. timeout → abortRun（C.7：转 done,time_limited）
+  // W-3 修复：超时前 run 可能已被 signal/其他路径 abort 到 done —— 检查避免覆盖。
+  const runBeforeTimeout = deps.runs.get(runId);
+  if (runBeforeTimeout?.state.status === "done") {
+    return toResult(runBeforeTimeout);
+  }
   await safeAbort(runId, deps, `Workflow timed out after ${timeoutMs}ms`, "time_limited");
   const finalRun = deps.runs.get(runId);
   return finalRun

@@ -23,7 +23,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve as pathResolve } from "node:path";
 
 import { StringEnum } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, Theme } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { type Static, Type } from "typebox";
 
@@ -95,7 +95,7 @@ export function registerWorkflowScriptTool(
       params: ScriptParams,
       signal: AbortSignal | undefined,
       _onUpdate: unknown,
-      _ctx: unknown,
+      _ctx: ExtensionContext,
     ): Promise<TextContent> {
       switch (params.action) {
         case "generate":

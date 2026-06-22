@@ -125,11 +125,13 @@ export default function workflowExtension(pi: ExtensionAPI): void {
     lsRef.lastSessionId = sessionId;
 
     // 重建 sessionApprovals（从持久化 entries）
+    // W-8：SDK stub 的 SessionEntry 类型缺 customType/data 字段（index.ts 被 tsconfig exclude
+    // 的根因）。运行时 guard 补：只读有 customType 的 entry，跳过其他类型。
     for (const entry of ctx.sessionManager.getEntries()) {
-      if (entry.customType === APPROVAL_MEMORY_TYPE) {
-        const data = entry.data as { workflowName: string } | undefined;
-        if (data?.workflowName) sessionApprovals.add(data.workflowName);
-      }
+       
+      const e = entry as { type?: string; customType?: string; data?: { workflowName?: string } };
+      if (e.customType !== APPROVAL_MEMORY_TYPE) continue;
+      if (e.data?.workflowName) sessionApprovals.add(e.data.workflowName);
     }
 
     // 构建 per-session store + runs

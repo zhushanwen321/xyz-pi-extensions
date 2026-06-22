@@ -79,6 +79,9 @@ vi.mock("node:fs", async (importOriginal) => {
 
 import { runAndWait } from "../engine/launcher.js";
 import { pauseRun,runWorkflow } from "../engine/lifecycle.js";
+import { Budget } from "../engine/models/budget.js";
+import { Trace } from "../engine/models/trace.js";
+import { WorkflowRun } from "../engine/models/workflow-run.js";
 import { WorkflowScript } from "../engine/models/workflow-script.js";
 import workflowExtension from "../index.js";
 import { JsonlRunStore } from "../infra/jsonl-run-store.js";
@@ -449,27 +452,31 @@ describe("session_start recovery (D-4 kill-9, D-5 empty)", () => {
   });
 
   /**
-   * Duck-typed run for D-4/session_shutdown tests. Real WorkflowRun invariant I1
-   * (status==="running" ⟺ runtime!==undefined) blocks constructing a running run
-   * without runtime; the factory's D-4 path only reads state.status/state.error
-   * and calls transition(), so a minimal stub suffices.
+   * Real WorkflowRun reconstructed from a persisted running snapshot (kill-9 crash).
+   *
+   * W-1 修复：原来用 duck-typed `{state, transition}` stub 绕过 WorkflowRun 不变式 I1，
+   * 测试通过但生产路径仍坏（见 C-1）。改用 WorkflowRun.reconstruct() —— 它跳过 I1 校验
+   * （持久化的 running run 没有 worker，违反 I1；D-4 在 session_start 时恢复 I1）。
+   * 这样测试覆盖的是真实的 transition() 方法，不是 stub。
    */
-  function makeRunningRunStub(runId: string, scriptName: string): {
-    runId: string;
-    spec: { scriptName: string };
-    state: { status: string; error?: string; reason?: string };
-    transition: (status: string, reason?: string) => void;
-  } {
-    const state: { status: string; error?: string; reason?: string } = { status: "running" };
-    return {
+  function makeRunningRun(runId: string, scriptName: string): WorkflowRun {
+    return WorkflowRun.reconstruct(
       runId,
-      spec: { scriptName },
-      state,
-      transition(status: string, reason?: string) {
-        state.status = status;
-        if (reason !== undefined) state.reason = reason;
+      {
+        scriptSource: 'return "ok";',
+        args: {},
+        scriptName,
+        scriptPath: `/tmp/${scriptName}.mjs`,
       },
-    };
+      {
+        status: "running",
+        budget: new Budget({ maxTokens: 1000 }),
+        calls: new Map(),
+        trace: new Trace(),
+        errorLogs: [],
+      },
+      { startedAt: "2026-01-01T00:00:00.000Z" },
+    );
   }
 
   it("D-5: store.loadAll returns empty → no runs in sessionState", async () => {
@@ -482,9 +489,9 @@ describe("session_start recovery (D-4 kill-9, D-5 empty)", () => {
   });
 
   it("D-4: store.loadAll returns running run → transitioned to failed", async () => {
-    const run = makeRunningRunStub("kill9-run", "killed");
+    const run = makeRunningRun("kill9-run", "killed");
 
-    // Override the store mock to return our running run stub
+    // Override the store mock to return our running run (real WorkflowRun)
     MockedJsonlRunStore.mockImplementation(function (this: any) {
       this.loadAll = vi.fn().mockResolvedValue([run]);
       this.save = vi.fn().mockResolvedValue(undefined);
@@ -493,9 +500,12 @@ describe("session_start recovery (D-4 kill-9, D-5 empty)", () => {
     await bootstrap({ sessionId: "s-kill9" });
 
     // After session_start, the run should be transitioned to done/failed
+    // via the REAL WorkflowRun.transition() method (not a stub).
     expect(run.state.status).toBe("done");
     expect(run.state.reason).toBe("failed");
     expect(run.state.error).toContain("kill-9");
+    // I1 恢复：done 状态 runtime 必为 undefined
+    expect(run.runtime).toBeUndefined();
   });
 });
 
@@ -515,12 +525,20 @@ describe("reentry guard (shared between 2 tools)", () => {
     expect(workflowScriptTool).toBeDefined();
   });
 
-  it("workflow tool returns busy when guard held", async () => {
+  it("workflow tool returns busy when guard held (deterministic, W-13)", async () => {
     const script = makeSavedScript("deploy-app");
     const { workflowTool } = await bootstrap({ loadAllResult: [script] });
 
-    // Manually acquire the guard by calling execute while simulating concurrent call:
-    // execute is async — start two in parallel, second should get busy.
+    // W-13 修复：让首个 execute 的 runWorkflow 处于 pending（controllable promise），
+    // 第二个 execute 必然命中 guard —— 不再依赖时序。
+    let releaseFirst!: () => void;
+    mockRunWorkflow.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseFirst = () => resolve("run-pending");
+        }),
+    );
+
     const ctx = createMockCtx({ hasUI: true, confirmResult: true });
     const p1 = workflowTool.execute(
       "tc-a",
@@ -529,6 +547,11 @@ describe("reentry guard (shared between 2 tools)", () => {
       undefined,
       ctx,
     );
+    // 让 p1 microtask 推进到 acquireReentryGuard 之后
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // 第二个 execute：guard 已被 p1 持有 → 必返回 busy
     const result2 = await workflowTool.execute(
       "tc-b",
       { action: "run", name: "deploy-app" },
@@ -536,10 +559,14 @@ describe("reentry guard (shared between 2 tools)", () => {
       undefined,
       ctx,
     );
+    // 关键断言（W-13）：result2 必是 busy 错误，不是 toBeDefined() 软断言
+    expect(result2).toMatchObject({ isError: true });
+    const content = (result2 as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "";
+    expect(content).toMatch(/in progress|busy|already running/i);
+
+    // 释放第一个，避免 hang / afterEach 泄漏
+    releaseFirst();
     await p1;
-    // At least one of them should have hit the guard or completed.
-    // (Depending on timing, the second may get REENTRY_BUSY_MESSAGE.)
-    expect(result2).toBeDefined();
   });
 });
 
@@ -552,21 +579,26 @@ describe("session_shutdown pauses running + cleans temp files", () => {
     const { cleanupAllTempFiles } = await import("../infra/agent-opts-resolver.js");
     const mockCleanup = vi.mocked(cleanupAllTempFiles);
 
-    // Load run as "paused" (not "running") so D-4 recovery does NOT transition it.
-    // The D-4 path only fires for status==="running" loaded runs (crash recovery).
-    // Active-session runs (started via runWorkflow after session_start) are "running"
-    // but never round-tripped through loadAll — simulating that here by flipping
-    // status after session_start completes.
-    const runState: { status: string; error?: string; reason?: string } = { status: "paused" };
-    const run = {
-      runId: "shutdown-run",
-      spec: { scriptName: "shutdown-wf" },
-      state: runState,
-      transition(status: string, reason?: string) {
-        runState.status = status;
-        if (reason !== undefined) runState.reason = reason;
+    // W-1 修复：用真 WorkflowRun.reconstruct（status="paused"，D-4 不触发）。
+    // 模拟 active-session run：session_start 后用 assignRuntime 翻转 paused → running
+    // （runWorkflow 的真实路径，不变式 I1 全程保持）。
+    const run = WorkflowRun.reconstruct(
+      "shutdown-run",
+      {
+        scriptSource: 'return "ok";',
+        args: {},
+        scriptName: "shutdown-wf",
+        scriptPath: "/tmp/shutdown.mjs",
       },
-    };
+      {
+        status: "paused", // loadAll 时是 paused → D-4 不触发
+        budget: new Budget({ maxTokens: 1000 }),
+        calls: new Map(),
+        trace: new Trace(),
+        errorLogs: [],
+      },
+      { startedAt: "2026-01-01T00:00:00.000Z" },
+    );
 
     MockedJsonlRunStore.mockImplementation(function (this: any) {
       this.loadAll = vi.fn().mockResolvedValue([run]);
@@ -575,8 +607,16 @@ describe("session_shutdown pauses running + cleans temp files", () => {
 
     const { pi } = await bootstrap({ sessionId: "s-shutdown" });
 
-    // Simulate active run: flip paused → running (as runWorkflow would)
-    runState.status = "running";
+    // Simulate active run: assignRuntime → running（真路径，I1 保持）
+     
+    run.assignRuntime({
+      worker: { postMessage() {}, terminate() {}, isCurrent: true, on() {} },
+      gate: { enqueue: vi.fn(), withSlot: vi.fn(), activeCount: 0, queueLength: 0 },
+      controller: new AbortController(),
+      release() {},
+      isReleased: false,
+    } as any);
+    expect(run.state.status).toBe("running");
 
     // Trigger session_shutdown
     const shutdownCall = pi.on.mock.calls.find((c: any[]) => c[0] === "session_shutdown");
@@ -585,5 +625,108 @@ describe("session_shutdown pauses running + cleans temp files", () => {
 
     expect(mockPauseRun).toHaveBeenCalled();
     expect(mockCleanup).toHaveBeenCalled();
+  });
+});
+
+describe("session_tree pauses all running runs on branch switch (W-14)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("session_tree handler pauses every running run in the session", async () => {
+    // W-14 修复：原测试只验证 handler 注册，未 invoke。补 invoke + assert pauseRun 调用。
+    const runA = WorkflowRun.reconstruct(
+      "run-a",
+      { scriptSource: "", args: {}, scriptName: "wf-a", scriptPath: "/tmp/a.mjs" },
+      {
+        status: "paused",
+        budget: new Budget({ maxTokens: 1000 }),
+        calls: new Map(),
+        trace: new Trace(),
+        errorLogs: [],
+      },
+      { startedAt: "2026-01-01T00:00:00.000Z" },
+    );
+    const runB = WorkflowRun.reconstruct(
+      "run-b",
+      { scriptSource: "", args: {}, scriptName: "wf-b", scriptPath: "/tmp/b.mjs" },
+      {
+        status: "paused",
+        budget: new Budget({ maxTokens: 1000 }),
+        calls: new Map(),
+        trace: new Trace(),
+        errorLogs: [],
+      },
+      { startedAt: "2026-01-01T00:00:00.000Z" },
+    );
+
+    MockedJsonlRunStore.mockImplementation(function (this: any) {
+      this.loadAll = vi.fn().mockResolvedValue([runA, runB]);
+      this.save = vi.fn().mockResolvedValue(undefined);
+    } as any);
+
+    const { pi } = await bootstrap({ sessionId: "s-tree" });
+
+    // Simulate both runs active via assignRuntime (real path, I1 preserved)
+     
+    const fakeRuntime = {
+      worker: { postMessage() {}, terminate() {}, isCurrent: true, on() {} },
+      gate: { enqueue: vi.fn(), withSlot: vi.fn(), activeCount: 0, queueLength: 0 },
+      controller: new AbortController(),
+      release() {},
+      isReleased: false,
+    } as any;
+    runA.assignRuntime(fakeRuntime);
+    runB.assignRuntime(fakeRuntime);
+    expect(runA.state.status).toBe("running");
+    expect(runB.state.status).toBe("running");
+
+    // Trigger session_tree
+    const treeCall = pi.on.mock.calls.find((c: any[]) => c[0] === "session_tree");
+    expect(treeCall).toBeDefined();
+    await treeCall![1]({}, createMockCtx({ sessionId: "s-tree" }));
+
+    // 关键断言：两个 running run 都被 pauseRun 调过（2 次）
+    expect(mockPauseRun).toHaveBeenCalledTimes(2);
+    const pausedIds = mockPauseRun.mock.calls.map((c: any[]) => c[0]);
+    expect(pausedIds.sort()).toEqual(["run-a", "run-b"]);
+  });
+
+  it("session_tree swallows per-run pause errors (doesn't abort branch switch)", async () => {
+    const run = WorkflowRun.reconstruct(
+      "run-err",
+      { scriptSource: "", args: {}, scriptName: "wf-err", scriptPath: "/tmp/e.mjs" },
+      {
+        status: "paused",
+        budget: new Budget({ maxTokens: 1000 }),
+        calls: new Map(),
+        trace: new Trace(),
+        errorLogs: [],
+      },
+      { startedAt: "2026-01-01T00:00:00.000Z" },
+    );
+
+    MockedJsonlRunStore.mockImplementation(function (this: any) {
+      this.loadAll = vi.fn().mockResolvedValue([run]);
+      this.save = vi.fn().mockResolvedValue(undefined);
+    } as any);
+
+    // pauseRun throws —— session_tree must swallow
+    mockPauseRun.mockRejectedValueOnce(new Error("pause failed"));
+
+    const { pi } = await bootstrap({ sessionId: "s-tree-err" });
+     
+    run.assignRuntime({
+      worker: { postMessage() {}, terminate() {}, isCurrent: true, on() {} },
+      gate: { enqueue: vi.fn(), withSlot: vi.fn(), activeCount: 0, queueLength: 0 },
+      controller: new AbortController(),
+      release() {},
+      isReleased: false,
+    } as any);
+
+    const treeCall = pi.on.mock.calls.find((c: any[]) => c[0] === "session_tree");
+    expect(treeCall).toBeDefined();
+    // Should not throw
+    await expect(treeCall![1]({}, createMockCtx({ sessionId: "s-tree-err" }))).resolves.toBeUndefined();
   });
 });
