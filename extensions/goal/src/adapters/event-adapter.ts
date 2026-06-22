@@ -23,11 +23,29 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { getCompletedCount } from "../engine/task";
-import { updateWidget } from "../projection/widget";
+import {
+	AUTO_CLEAR_TURNS,
+	CONTEXT_USAGE_RATIO_LIMIT,
+	MS_PER_SECOND,
+	PERCENT_FACTOR,
+	TASK_STALL_TURN_THRESHOLD,
+} from "../constants";
+import { checkBudgetOnTurnEnd, checkProgress } from "../engine/budget";
+import { isActiveStatus, isTerminalStatus, transitionStatus } from "../engine/goal";
+import type { GoalTask } from "../engine/task";
+import { getCompletedCount, getIncompleteTasks, isTaskDone } from "../engine/task";
+import { makeHistoryEntry, serializeState } from "../persistence";
+import {
+	budgetLimitPrompt,
+	contextInjectionPrompt,
+	continuationPrompt,
+	stalenessReminderPrompt,
+} from "../projection/prompts";
+import type { ThemeLike } from "../projection/widget";
+import { renderTerminalStatusLine, updateWidget } from "../projection/widget";
 import { applyEvent } from "../service";
 import type { GoalSession } from "../session";
-import { reconstructGoalState } from "../session";
+import { clearGoalSession, reconstructGoalState } from "../session";
 import { buildPorts } from "./tool-adapter";
 
 // ── 基础设施：stale-checker（FR-8.2 G-020）────────────
@@ -165,4 +183,555 @@ export async function handleSessionStart(
 		session.tasksCompletedAtAgentStart = getCompletedCount(session.state.tasks);
 		updateWidget(session, ports.ui);
 	}
+}
+
+// ── 持久化辅助（before_agent_start / agent_end 用）────
+
+/**
+ * persist + updateWidget 的统一入口（对应旧 tool-handler.persistAndUpdate）。
+ *
+ * 与 service.persistState 的差异：service 层 persistState 是私有的且只 appendState；
+ * adapter 层 event handler 需要在 persist 后再 updateWidget，并支持可选 stale check。
+ *
+ * 语义：返回 true 表示 state 已被新 goal 覆盖（checkStale 触发），调用方应中止后续副作用。
+ */
+function persistAndUpdate(
+	pi: ExtensionAPI,
+	session: GoalSession,
+	ctx: ExtensionContext,
+	checkStale?: (() => boolean) | undefined,
+): boolean {
+	if (!session.state) return false;
+	const state = session.state;
+	const now = Date.now();
+	// FR-6.5: 与旧 persistGoalState 一致——累计运行时间后再 serialize
+	if (state.timeStartedAt > 0 && isActiveStatus(state.status)) {
+		state.timeUsedSeconds += (now - state.timeStartedAt) / MS_PER_SECOND;
+		state.timeStartedAt = now;
+	}
+	pi.appendEntry("goal-state", serializeState(state));
+	if (checkStale?.()) return true;
+	updateWidget(session, buildPorts(pi, ctx).ui);
+	return false;
+}
+
+// ── 事件 5: before_agent_start（staleness + context pause + injection）───
+
+/**
+ * before_agent_start 事件 handler（FR-8.1 G-007 + FR-8.6）。
+ *
+ * 返回 message（注入到 LLM context）或 undefined（无注入）。
+ *
+ * 分支顺序：
+ * 1. 终态：currentTurnIndex - completedAtTurnIndex >= AUTO_CLEAR_TURNS(2) → clearGoalSession
+ * 2. 停滞检测（TASK_STALL_TURN_THRESHOLD=10）：重置被提醒项 lastUpdatedTurn 后注入提醒
+ * 3. Context 使用率 > 85% → 转 paused + 注入 wrap-up 指令
+ * 4. 正常：注入 contextInjectionPrompt
+ *
+ * 无 ESC 守卫（before_agent_start 是 agent 开始前的信号，此时无 aborted 可能）。
+ */
+interface BeforeAgentStartResult {
+	message: {
+		customType: string;
+		content: string;
+		display: boolean;
+	};
+}
+
+export async function handleBeforeAgentStart(
+	pi: ExtensionAPI,
+	session: GoalSession,
+	ctx: ExtensionContext,
+): Promise<BeforeAgentStartResult | undefined> {
+	if (!session.state) return;
+
+	// 终态处理
+	if (isTerminalStatus(session.state.status)) {
+		handleTerminalStateBeforeAgent(pi, session, ctx);
+		return;
+	}
+	if (!isActiveStatus(session.state.status)) return;
+
+	// 停滞检测
+	const staleResult = checkStaleness(session);
+	if (staleResult) return staleResult;
+
+	// Context 使用率检查
+	const ctxResult = checkContextUsage(pi, session, ctx);
+	if (ctxResult) return ctxResult;
+
+	// 正常 context injection
+	return {
+		message: {
+			customType: "goal-context",
+			content: contextInjectionPrompt(session.state, session.state.timeUsedSeconds),
+			display: false,
+		},
+	};
+}
+
+/**
+ * FR-8.1 G-007：终态 goal 在 AUTO_CLEAR_TURNS(2) 轮后自动清理。
+ * 未到清理阈值时：折叠 status bar（显示终态单行），清 widget。
+ */
+function handleTerminalStateBeforeAgent(
+	pi: ExtensionAPI,
+	session: GoalSession,
+	ctx: ExtensionContext,
+): void {
+	const state = session.state!;
+	const turnsInTerminal = state.currentTurnIndex - (state.completedAtTurnIndex ?? 0);
+	if (turnsInTerminal >= AUTO_CLEAR_TURNS) {
+		clearGoalSession(session, buildPorts(pi, ctx).ui);
+		return;
+	}
+	// 折叠 status bar（终态显示）
+	const theme = ctx.ui.theme as unknown as ThemeLike;
+	const statusText = renderTerminalStatusLine(state, theme);
+	if (statusText && ctx.hasUI) ctx.ui.setStatus("goal", statusText);
+	if (ctx.hasUI) ctx.ui.setWidget("goal", undefined);
+}
+
+/**
+ * FR-8.6 staleness reminder：扫描未完成 task/subtask，
+ * 若 currentTurnIndex - lastUpdatedTurn >= TASK_STALL_TURN_THRESHOLD(10) → 注入提醒。
+ *
+ * 特殊：所有 task 已终态但 goal 仍 active → 注入 allTerminal 提醒（提示 complete/cancel）。
+ *
+ * 副作用：重置被提醒项的 lastUpdatedTurn（避免下轮重复触发）。
+ */
+function checkStaleness(session: GoalSession): BeforeAgentStartResult | undefined {
+	const state = session.state!;
+	const staleTasks: Array<{
+		task: GoalTask;
+		staleTurns: number;
+		staleSubtasks: Array<{ text: string; staleTurns: number }>;
+	}> = [];
+	let allTerminal = true;
+
+	for (const task of state.tasks) {
+		if (!isTaskDone(task)) {
+			allTerminal = false;
+			const staleTurns = state.currentTurnIndex - task.lastUpdatedTurn;
+			if (staleTurns >= TASK_STALL_TURN_THRESHOLD) {
+				const staleSubtasks: Array<{ text: string; staleTurns: number }> = [];
+				if (task.subtasks) {
+					for (const s of task.subtasks) {
+						if (s.status !== "completed") {
+							const subStale = state.currentTurnIndex - s.lastUpdatedTurn;
+							if (subStale >= TASK_STALL_TURN_THRESHOLD) {
+								staleSubtasks.push({ text: s.text, staleTurns: subStale });
+							}
+						}
+					}
+				}
+				staleTasks.push({ task, staleTurns, staleSubtasks });
+			}
+		}
+	}
+
+	// 所有 task 已终态但 goal 仍 active
+	if (allTerminal && state.tasks.length > 0) {
+		return {
+			message: {
+				customType: "goal-staleness-reminder",
+				content: stalenessReminderPrompt(state, [], true),
+				display: false,
+			},
+		};
+	}
+
+	// 有停滞项 → 注入提醒 + 重置被提醒项 lastUpdatedTurn
+	if (staleTasks.length > 0) {
+		for (const item of staleTasks) {
+			item.task.lastUpdatedTurn = state.currentTurnIndex;
+			if (item.task.subtasks) {
+				for (const s of item.task.subtasks) {
+					if (s.status !== "completed") s.lastUpdatedTurn = state.currentTurnIndex;
+				}
+			}
+		}
+		return {
+			message: {
+				customType: "goal-staleness-reminder",
+				content: stalenessReminderPrompt(state, staleTasks, false),
+				display: false,
+			},
+		};
+	}
+
+	return undefined;
+}
+
+/**
+ * FR-8.6 context pause：getContextUsage 超过 CONTEXT_USAGE_RATIO_LIMIT(0.85) → 转 paused。
+ */
+function checkContextUsage(
+	pi: ExtensionAPI,
+	session: GoalSession,
+	ctx: ExtensionContext,
+): BeforeAgentStartResult | undefined {
+	const usage = ctx.getContextUsage();
+	if (
+		usage &&
+		usage.contextWindow > 0 &&
+		(usage.tokens ?? 0) / usage.contextWindow > CONTEXT_USAGE_RATIO_LIMIT
+	) {
+		const state = session.state!;
+		state.status = transitionStatus(state.status, "paused");
+		persistAndUpdate(pi, session, ctx);
+		return {
+			message: {
+				customType: "goal-context-exceeded",
+				content:
+					"[GOAL — context space low, must wrap up now]\n" +
+					"1. Use goal_manager's list_tasks to check remaining tasks\n" +
+					"2. Only mark tasks you genuinely completed with evidence\n" +
+					"3. Summarize current progress and remaining work\n" +
+					"Do not start new tasks.",
+				display: false,
+			},
+		};
+	}
+	return undefined;
+}
+
+// ── 事件 6: agent_end（FR-8.7 完整分支 + ESC 守卫 + 并发保护）──
+
+/**
+ * agent_end 事件 handler——整个重构最复杂的函数（FR-8.7 完整分支）。
+ *
+ * 关键约定：
+ * - FR-8.2 G-021 防重入：session.isProcessing 入口加锁，finally 释放
+ * - FR-8.2 G-020 stale 快照：入口 makeStaleChecker snapshot goalId，每个副作用前 checkStale
+ * - FR-6.7 ESC 守卫（最关键）：ctx.signal?.aborted → 不发 continuation、不递增 stall、
+ *   不做 budget 检查、不转 paused，goal 保持 active，等用户下次输入恢复
+ *
+ * FR-8.7 分支优先级（严格按序）：
+ * 1. allTasksDone → maxTurnsReached? complete : budgetTight? steer : followUp
+ * 2. noTasksCreated → maxTurnsReached? cancelled : followUp
+ * 3. maxTurnsReached（有未完成）→ cancelled
+ * 4. 否则 → stall 检测 + continuation（去抖：tokenDelta=0 不发）
+ *
+ * ESC 路径：aborted 时直接 return（goal 保持 active）。注意 ESC 守卫在终态/非 active
+ * 检查之后——终态 goal 仍走终态 notify（不被 ESC 影响），非 active 状态直接返回。
+ */
+export async function handleAgentEnd(
+	pi: ExtensionAPI,
+	session: GoalSession,
+	ctx: ExtensionContext,
+): Promise<void> {
+	if (!session.state || session.isProcessing) return;
+	session.isProcessing = true;
+	try {
+		const checkStale = makeStaleChecker(session);
+		if (checkStale()) return;
+
+		// 终态处理（complete / blocked）
+		if (session.state.status === "complete" || session.state.status === "blocked") {
+			await handleTerminalStateAgentEnd(pi, session, ctx, checkStale);
+			return;
+		}
+		if (!isActiveStatus(session.state.status)) return;
+
+		// FR-6.7 ESC 守卫（最关键）：aborted 时 goal 保持 active，不做任何副作用
+		if (ctx.signal?.aborted) {
+			// 不发 continuation、不递增 stall、不做 budget 检查、不转 paused
+			// goal 保持 active，等用户下次输入恢复
+			return;
+		}
+
+		// 预算检查（FR-6.2 维度独立）
+		const budgetResult = checkBudgetOnTurnEnd(session.state, session.state.timeUsedSeconds);
+		const budgetAction = await handleBudgetChecks(pi, session, ctx, budgetResult, checkStale);
+		if (budgetAction !== "continue") return;
+
+		// 进度 + 任务检查（FR-8.7 分支优先级）
+		const progress = checkProgress(
+			session.state,
+			session.tasksCompletedAtAgentStart,
+			isTaskDone,
+		);
+		const progressAction = handleProgressAndTasks(pi, session, ctx, progress, checkStale);
+		if (progressAction !== "continue") return;
+
+		// stall 检测 + continuation（去抖）
+		await handleStallAndContinuation(pi, session, ctx, progress, checkStale);
+	} finally {
+		session.isProcessing = false;
+	}
+}
+
+/** 终态 agent_end：persist + notify（complete/blocked 各一条消息）。 */
+async function handleTerminalStateAgentEnd(
+	pi: ExtensionAPI,
+	session: GoalSession,
+	ctx: ExtensionContext,
+	checkStale: () => boolean,
+): Promise<void> {
+	const state = session.state!;
+	if (persistAndUpdate(pi, session, ctx, checkStale)) return;
+	if (state.status === "complete") {
+		ctx.ui.notify(
+			`Objective completed ✓ (${getCompletedCount(state.tasks)}/${state.tasks.length} tasks, ${state.currentTurnIndex} turns)`,
+			"info",
+		);
+	} else {
+		ctx.ui.notify(
+			"Goal blocked. Use /goal resume to continue or /goal clear to reset.",
+			"warning",
+		);
+	}
+}
+
+type BudgetAction = "continue" | "stop";
+
+/**
+ * FR-6.2 维度独立预算检查：
+ * - 预警（warning70/warning90）：set flag + notify（不阻塞 continuation）
+ * - 耗尽（terminal）：转 budget_limited/time_limited + 写 history + notify
+ * - 90% steering（shouldSendSteering）：set flag + 发 budgetLimitPrompt（收尾）
+ */
+async function handleBudgetChecks(
+	pi: ExtensionAPI,
+	session: GoalSession,
+	ctx: ExtensionContext,
+	budgetResult: ReturnType<typeof checkBudgetOnTurnEnd>,
+	checkStale: () => boolean,
+): Promise<BudgetAction> {
+	const state = session.state!;
+
+	// 发送预警（FR-6.2 维度独立：token/time 各有 70/90 flag）
+	for (const w of budgetResult.warnings) {
+		if (w.type === "warning90") {
+			if (w.dimension === "token") state.tokenWarning90Sent = true;
+			else state.timeWarning90Sent = true;
+			ctx.ui.notify(
+				`${w.dimension === "token" ? "Token" : "Time"} budget 90% used — start wrapping up.`,
+				"warning",
+			);
+		} else if (w.type === "warning70") {
+			if (w.dimension === "token") state.tokenWarning70Sent = true;
+			else state.timeWarning70Sent = true;
+			ctx.ui.notify(
+				`${w.dimension === "token" ? "Token" : "Time"} budget 70% used — keep scope in check.`,
+				"info",
+			);
+		}
+	}
+
+	// 预算耗尽 → 终止
+	if (budgetResult.terminal) {
+		const dim = budgetResult.terminal.dimension;
+		state.status = transitionStatus(
+			state.status,
+			dim === "token" ? "budget_limited" : "time_limited",
+		);
+		state.completedAtTurnIndex = state.currentTurnIndex;
+		// FR-8.7: 写 history
+		pi.appendEntry("goal-history", makeHistoryEntry(state, getCompletedCount(state.tasks)));
+		if (persistAndUpdate(pi, session, ctx, checkStale)) return "stop";
+		ctx.ui.notify(
+			dim === "token"
+				? "Token budget exhausted, Goal terminated."
+				: "Time budget exhausted, Goal terminated.",
+			"warning",
+		);
+		return "stop";
+	}
+
+	// 90% steering → 收尾
+	if (budgetResult.shouldSendSteering) {
+		state.budgetLimitSteeringSent = true;
+		if (persistAndUpdate(pi, session, ctx, checkStale)) return "stop";
+		buildPorts(pi, ctx).messaging.sendContextMessage(
+			budgetLimitPrompt(state, "token", state.timeUsedSeconds),
+			"steer",
+		);
+		return "stop";
+	}
+
+	if (checkStale()) return "stop";
+	return "continue";
+}
+
+type ProgressAction = "continue" | "stop";
+
+/**
+ * FR-8.7 分支优先级 dispatcher：按 allTasksDone → noTasksCreated → maxTurnsReached 顺序。
+ */
+function handleProgressAndTasks(
+	pi: ExtensionAPI,
+	session: GoalSession,
+	ctx: ExtensionContext,
+	progress: ReturnType<typeof checkProgress>,
+	checkStale: () => boolean,
+): ProgressAction {
+	// FR-8.7 分支 1: 全部任务完成
+	if (progress.allTasksDone) {
+		return handleAllTasksDone(pi, session, ctx, progress, checkStale);
+	}
+	// FR-8.7 分支 2: 无任务创建
+	if (progress.noTasksCreated) {
+		return handleNoTasksOrMaxTurns(pi, session, ctx, progress, checkStale);
+	}
+	// FR-8.7 分支 3: 最大轮次（有未完成）
+	if (progress.maxTurnsReached) {
+		return handleMaxTurnsReached(pi, session, ctx, checkStale);
+	}
+	return "continue";
+}
+
+/**
+ * FR-8.7 分支 1: allTasksDone
+ * - maxTurnsReached → complete（优先 complete，不因 maxTurns 变 cancelled）
+ * - budgetTight → steer（立即收尾，提示 complete_goal）
+ * - 否则 → followUp（提示 complete_goal）
+ */
+function handleAllTasksDone(
+	pi: ExtensionAPI,
+	session: GoalSession,
+	ctx: ExtensionContext,
+	progress: ReturnType<typeof checkProgress>,
+	checkStale: () => boolean,
+): ProgressAction {
+	const state = session.state!;
+	// FR-8.7 1a: maxTurnsReached → complete（优先 complete，不因 maxTurns 变 cancelled）
+	if (progress.maxTurnsReached) {
+		state.status = transitionStatus(state.status, "complete");
+		state.completedAtTurnIndex = state.currentTurnIndex;
+		pi.appendEntry("goal-history", makeHistoryEntry(state, progress.completedCount));
+		if (persistAndUpdate(pi, session, ctx, checkStale)) return "stop";
+		ctx.ui.notify(
+			`All tasks completed, Goal auto-closed. (${progress.completedCount}/${progress.totalCount} tasks, ${state.currentTurnIndex} turns)`,
+			"info",
+		);
+		return "stop";
+	}
+	// FR-8.7 1b: budgetTight → steer（立即收尾）
+	// FR-8.7 1c: 正常 → followUp（提示 complete_goal）
+	const ports = buildPorts(pi, ctx);
+	if (progress.budgetTight) {
+		ports.messaging.sendContextMessage(
+			`All tasks completed, token budget ${Math.round((state.tokensUsed / state.budget.tokenBudget!) * PERCENT_FACTOR)}% used.` +
+				`Call goal_manager's complete_goal now with overall evidence.\n\nObjective: ${state.objective}`,
+			"steer",
+		);
+	} else {
+		ports.messaging.sendContextMessage(
+			`All ${progress.totalCount} tasks completed. Call goal_manager's complete_goal with overall evidence.\n\nObjective: ${state.objective}`,
+			"followUp",
+		);
+	}
+	persistAndUpdate(pi, session, ctx);
+	return "stop";
+}
+
+/**
+ * FR-8.7 分支 2: noTasksCreated
+ * - maxTurnsReached → cancelled（LLM 未建任务且超轮）
+ * - 否则 → followUp（提示 create_tasks 或 cancel_goal）
+ */
+function handleNoTasksOrMaxTurns(
+	pi: ExtensionAPI,
+	session: GoalSession,
+	ctx: ExtensionContext,
+	progress: ReturnType<typeof checkProgress>,
+	checkStale: () => boolean,
+): ProgressAction {
+	const state = session.state!;
+	// FR-8.7 2a: maxTurnsReached → cancelled
+	if (progress.maxTurnsReached) {
+		state.status = transitionStatus(state.status, "cancelled");
+		state.completedAtTurnIndex = state.currentTurnIndex;
+		pi.appendEntry("goal-history", makeHistoryEntry(state, 0));
+		if (persistAndUpdate(pi, session, ctx, checkStale)) return "stop";
+		ctx.ui.notify(
+			`Max turns reached (${state.budget.maxTurns}), LLM did not create task list.`,
+			"warning",
+		);
+		return "stop";
+	}
+	// FR-8.7 2b: followUp（提示 create_tasks 或 cancel）
+	buildPorts(pi, ctx).messaging.sendContextMessage(
+		`No task list created yet. First check if the objective is already satisfied — if yes, call goal_manager's cancel_goal with cancelReason. Otherwise call create_tasks immediately.\n\nObjective: ${state.objective}`,
+		"followUp",
+	);
+	persistAndUpdate(pi, session, ctx);
+	return "stop";
+}
+
+/**
+ * FR-8.7 分支 3: maxTurnsReached（有未完成任务）→ cancelled。
+ */
+function handleMaxTurnsReached(
+	pi: ExtensionAPI,
+	session: GoalSession,
+	ctx: ExtensionContext,
+	checkStale: () => boolean,
+): ProgressAction {
+	const state = session.state!;
+	const incomplete = getIncompleteTasks(state.tasks);
+	state.status = transitionStatus(state.status, "cancelled");
+	state.completedAtTurnIndex = state.currentTurnIndex;
+	pi.appendEntry("goal-history", makeHistoryEntry(state, getCompletedCount(state.tasks)));
+	if (persistAndUpdate(pi, session, ctx, checkStale)) return "stop";
+	ctx.ui.notify(
+		`Max turns reached (${state.budget.maxTurns}), ${incomplete.length} tasks still incomplete.`,
+		"warning",
+	);
+	return "stop";
+}
+
+/**
+ * stall 检测 + continuation（去抖）。
+ *
+ * - isStalled → stallCount++，否则重置 stallCount + 更新 lastProgressTurn
+ * - stallCount >= maxStallTurns → blocked（中间态，不写 history，不走 finalizeGoal）
+ * - continuation 去抖：tokenDelta=0（空 turn）不发，只 persist
+ * - 否则 persist + 发 continuationPrompt
+ */
+async function handleStallAndContinuation(
+	pi: ExtensionAPI,
+	session: GoalSession,
+	ctx: ExtensionContext,
+	progress: ReturnType<typeof checkProgress>,
+	checkStale: () => boolean,
+): Promise<void> {
+	const state = session.state!;
+	if (checkStale()) return;
+
+	// Stall 检测
+	if (progress.isStalled) {
+		state.stallCount++;
+	} else {
+		state.stallCount = 0;
+		state.lastProgressTurn = state.currentTurnIndex;
+	}
+	if (state.stallCount >= state.budget.maxStallTurns) {
+		// stall 超限 → blocked（中间态，不走 finalizeGoal，不写 history）
+		state.status = transitionStatus(state.status, "blocked");
+		if (persistAndUpdate(pi, session, ctx, checkStale)) return;
+		ctx.ui.notify(
+			`${state.stallCount} consecutive turns without progress, Goal auto-blocked. Use /goal resume to continue or /goal clear to reset.`,
+			"warning",
+		);
+		return;
+	}
+	if (checkStale()) return;
+
+	// FR-8.6: continuation 去抖（空 turn 不发）
+	const tokenDelta = state.tokensUsed - state.lastTurnTokensUsed;
+	state.lastTurnTokensUsed = state.tokensUsed;
+	if (tokenDelta <= 0) {
+		// 空 turn：只 persist，不发 continuation
+		persistAndUpdate(pi, session, ctx);
+		return;
+	}
+	persistAndUpdate(pi, session, ctx);
+	// 发 continuation（FR-8.7: 去 debounce 后才发）
+	buildPorts(pi, ctx).messaging.sendContextMessage(
+		continuationPrompt(state, state.timeUsedSeconds),
+		"followUp",
+	);
 }

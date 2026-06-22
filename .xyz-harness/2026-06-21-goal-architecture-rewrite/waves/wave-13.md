@@ -555,3 +555,66 @@ git commit -m "wave-13: add before_agent_start + agent_end — FR-8.7 full branc
 ### 5. 提交
 
 - [ ] commit message 以 `wave-13:` 开头，含「FR-8.7 full branch priority」+「ESC guard」+「stall detection」
+
+---
+
+## 实现修正（实施时发现的 plan 缺陷 + 修复）
+
+### 修正 1：`continuationPrompt` 需要 2 参数（不是 1）
+**plan bug**：plan 步骤 2 的 `continuationPrompt(state)` 只传 1 个参数。
+**实际签名**：`continuationPrompt(state: GoalRuntimeState, timeUsedSeconds: number): string`（projection/prompts.ts:141）。
+**修复**：改为 `continuationPrompt(state, state.timeUsedSeconds)`。
+
+### 修正 2：`budgetLimitPrompt` 需要 3 参数（不是 2）
+**plan bug**：plan 步骤 2 的 `budgetLimitPrompt(session.state!, "token")` 只传 2 个参数。
+**实际签名**：`budgetLimitPrompt(state, limitType, timeUsedSeconds): string`（projection/prompts.ts:186）。
+**修复**：改为 `budgetLimitPrompt(state, "token", state.timeUsedSeconds)`。
+
+### 修正 3：`contextInjectionPrompt` 需要 2 参数（不是 1）
+**plan bug**：plan 步骤 1 的 `contextInjectionPrompt(session.state)` 只传 1 个参数。
+**实际签名**：`contextInjectionPrompt(state, timeUsedSeconds): string`（projection/prompts.ts:248）。
+**修复**：改为 `contextInjectionPrompt(session.state, session.state.timeUsedSeconds)`。
+
+### 修正 4：`makePorts` 不存在 → 用 `buildPorts`
+**plan bug**：plan 多处引用 `makePorts(pi, ctx)`，但该函数在 Wave 11 已改名 `buildPorts` 并定义在 tool-adapter.ts。
+**修复**：全部改为 `buildPorts(pi, ctx)`（从 tool-adapter import，Wave 12 已建立该 import）。
+
+### 修正 5：`persistAndUpdate` 不存在 → 在 adapter 层新建本地版
+**plan bug**：plan 引用 `persistAndUpdate(pi, session, ctx, checkStale?)`，但 Wave 12 已删除该函数（旧的在 tool-handler.ts，新架构不 import 旧文件）；service.persistState 是私有的。
+**修复**：在 event-adapter.ts 末尾追加本地 `persistAndUpdate(pi, session, ctx, checkStale?)` helper（对应旧 tool-handler.persistAndUpdate）：FR-6.5 tick 时间累计 + `pi.appendEntry("goal-state", serializeState(state))` + 可选 checkStale + updateWidget。
+
+### 修正 6：`handleTerminalStateBeforeAgent` 用真实 pi（非 `{} as ExtensionAPI`）
+**plan bug**：plan 用 `makePorts({} as ExtensionAPI, ctx).ui` 是 hack——clearGoalSession 只需 uiPort，但该函数没有 pi 参数。
+**修复**：给 `handleTerminalStateBeforeAgent` 加 pi 参数，调 `buildPorts(pi, ctx).ui`（消除 `{} as ExtensionAPI` hack）。
+
+### 修正 7：theme 桥接用 ThemeLike 类型（非匿名 inline cast）
+**plan bug**：plan 用 `ctx.ui.theme as unknown as { fg: ...; bold: ... }`。
+**修复**：import `type { ThemeLike } from "../projection/widget"`，改为 `ctx.ui.theme as unknown as ThemeLike`（可读性更好，类型仍需双重断言因 Pi 的 Theme 类型是 `any`，与 ThemeLike 不结构兼容）。
+
+### 修正 8：magic number 1000 → 用 MS_PER_SECOND 常量
+**eslint**：`state.timeUsedSeconds += (now - state.timeStartedAt) / 1000` 触发 no-magic-numbers。
+**修复**：import `MS_PER_SECOND` from constants，改为 `/ MS_PER_SECOND`。
+
+### 修正 9：补 event-adapter.test.ts（25 tests，验收标准 1 的强烈建议）
+plan 说「强烈建议补测试」。**已补**：`src/__tests__/event-adapter.test.ts` 共 25 个 test，覆盖：
+- ESC 守卫（aborted=true 不副作用 + 终态仍 notify）
+- allTasksDone 3 子分支（complete/steer/followUp）
+- noTasksCreated 2 子分支（cancelled/followUp）
+- maxTurnsReached 有未完成 → cancelled
+- stall 检测（stallCount++）、有进展（stallCount 重置）、stall 超限（blocked）
+- continuation 去抖（tokenDelta=0 不发）、continuation 正常（tokenDelta>0 发）
+- 并发保护（isProcessing=true 直接返回）、finally 释放、state=null 返回
+- before_agent_start：正常注入、AUTO_CLEAR_TURNS=2、staleness reminder 重置 lastUpdatedTurn、allTerminal 提醒、context pause（>85% 转 paused）、非 active 返回 undefined
+
+### 修正 10：checkProgress 的 isStalled 语义说明（非 bug，记录供后续维护）
+`checkProgress` 的 `isStalled = completedCount - tasksCompletedAtStart === 0`。这意味着 baseline 必须等于「本 turn 开始时的已完成数」——若当前没有新完成，则 stalled。测试 fixture 构造时须确保 baseline == 当前 completedCount（无新进展）才触发 stalled 分支。
+
+### 验收结果（实施完成）
+- [x] typecheck 零错误
+- [x] 全量 test 278 passing（253 → 278，+25 event-adapter tests）
+- [x] eslint 0 errors（3 acceptable warnings：2×`as never` Wave 12 遗留 + 1×`as unknown as ThemeLike` theme 桥接）
+- [x] 补 event-adapter.test.ts（25 tests，覆盖验收标准 1 的 11 条路径 + 14 条额外边界）
+- [x] 架构边界：无 `../state` / `../budget` / `../agent-end-handler` / `../before-agent-start-handler` import
+- [x] 禁止 `any`（无）
+- [x] 6 个 handler 齐全（Wave 12 的 4 + Wave 13 的 2）
+- [x] FR-8.7 完整分支优先级、FR-6.7 ESC 守卫、FR-8.6 去抖、FR-8.1 AUTO_CLEAR 全部 test 覆盖
