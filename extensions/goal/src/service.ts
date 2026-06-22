@@ -13,8 +13,8 @@
 
 import { accumulateTokens, checkBudgetOnResume, tick } from "./engine/budget";
 import { createGoalState, isActiveStatus, isTerminalStatus, transitionStatus } from "./engine/goal";
-import type { GoalTask } from "./engine/task";
-import { isTaskDone, validateTaskTransition } from "./engine/task";
+import type { GoalTask, Subtask, TaskVerification } from "./engine/task";
+import { getNextTaskId, isTaskDone, isTerminalTaskStatus, validateTaskTransition } from "./engine/task";
 import type { BudgetConfig, GoalRuntimeState, GoalStatus } from "./engine/types";
 import { makeHistoryEntry, serializeState } from "./persistence";
 import type {
@@ -24,6 +24,7 @@ import type {
 	SessionPort,
 	UiPort,
 } from "./ports";
+import { formatTaskList } from "./projection/prompts";
 import type { GoalSession } from "./session";
 import { clearGoalSession } from "./session";
 
@@ -160,11 +161,13 @@ export function finalizeGoal(
 
 /**
  * 路径 A 入口。同步，返回 ToolActionResult。
- * 5 个核心 action 在此实现（create_tasks / update_tasks / complete_goal / cancel_goal / report_blocked）。
- * 其余 5 个 action（add_tasks / list_tasks / add_subtasks / update_subtasks / delete_subtasks）
- * 由 adapters/actions.ts 实现（薄封装，不需 service 的统一 persist）。
  *
- * service.applyToolAction 负责：校验 → engine 纯函数变更 state → persist。
+ * 实现 10 个 goal_manager action（全部 mutation + 只读的 list_tasks 集中此处）：
+ * - 核心状态变更（5）：create_tasks / update_tasks / complete_goal / cancel_goal / report_blocked
+ * - 任务追加（4）：add_tasks / add_subtasks / update_subtasks / delete_subtasks
+ * - 只读（1）：list_tasks（G-005：不 persist、不 updateWidget，仅格式化 tasks 到 result 文本）
+ *
+ * service.applyToolAction 负责：校验 → engine 纯函数变更 state → persist（FR-6.5）。
  */
 export function applyToolAction(
 	session: GoalSession,
@@ -187,10 +190,18 @@ export function applyToolAction(
 			return actionCancelGoal(session, params, ports);
 		case "report_blocked":
 			return actionReportBlocked(session, params, ports);
+		case "add_tasks":
+			return actionAddTasks(session, params, ports);
+		case "add_subtasks":
+			return actionAddSubtasks(session, params, ports);
+		case "update_subtasks":
+			return actionUpdateSubtasks(session, params, ports);
+		case "delete_subtasks":
+			return actionDeleteSubtasks(session, params, ports);
+		case "list_tasks":
+			return actionListTasks(session);
 		default:
-			// add_tasks / list_tasks / add_subtasks / update_subtasks / delete_subtasks
-			// 由 adapters/actions.ts 实现（薄封装），service 不重复实现
-			return errorResult(`Action ${action} not implemented in service core`);
+			return errorResult(`Action ${action} not supported by goal_manager tool`);
 	}
 }
 
@@ -382,6 +393,152 @@ function actionReportBlocked(
 	state.status = transitionStatus(state.status, "blocked");
 	persistState(session, ports);
 	return makeResult(session, `Blocked reported. Reason: ${reason}`);
+}
+
+// ── 追加 / 只读 action（FR-3 范围内）──────────────────
+
+function actionAddTasks(
+	session: GoalSession,
+	params: Record<string, unknown>,
+	ports: ServicePorts,
+): ToolActionResult {
+	const state = session.state!;
+	const tasks = params.tasks as string[] | undefined;
+	if (!tasks || tasks.length === 0) {
+		return errorResult("add_tasks requires a non-empty tasks array");
+	}
+	const startId = getNextTaskId(state.tasks);
+	const verifications = params.verifications as TaskVerification[] | undefined;
+	const newTasks: GoalTask[] = tasks.map((desc, i) => ({
+		id: startId + i,
+		description: normalizeDescription(desc, 80, 3),
+		status: "pending" as const,
+		verification: verifications?.[i],
+		lastUpdatedTurn: state.currentTurnIndex,
+	}));
+	state.tasks.push(...newTasks);
+	persistState(session, ports);
+	return makeResult(
+		session,
+		`Appended ${newTasks.length} tasks:\n${newTasks
+			.map((t) => `  #${t.id}: ${t.description}${t.verification ? ` [验证: ${t.verification.method}]` : ""}`)
+			.join("\n")}`,
+	);
+}
+
+function actionAddSubtasks(
+	session: GoalSession,
+	params: Record<string, unknown>,
+	ports: ServicePorts,
+): ToolActionResult {
+	const state = session.state!;
+	const taskId = params.taskId as number | undefined;
+	if (taskId === undefined) return errorResult("add_subtasks requires taskId");
+	const texts = params.texts as string[] | undefined;
+	if (!texts || texts.length === 0) {
+		return errorResult("add_subtasks requires a non-empty texts array");
+	}
+	const parentTask = state.tasks.find((t) => t.id === taskId);
+	if (!parentTask) return errorResult(`Task #${taskId} not found`);
+	// FR-8.11（G-R4-004）：isTerminalTaskStatus 不含 completed（completed 有 verification 时需转 verified），
+	// 这里的 || completed 是有意的业务决策：completed 任务不允许加 subtask（D-20）
+	if (isTerminalTaskStatus(parentTask.status) || parentTask.status === "completed") {
+		return errorResult(`Task #${parentTask.id} in terminal state (${parentTask.status}), cannot add subtask`);
+	}
+	const subtasks = parentTask.subtasks ?? [];
+	const startId = subtasks.length > 0 ? Math.max(...subtasks.map((s) => s.id)) + 1 : 1;
+	const trimmed = texts.map((t) => t.trim()).filter((t) => t.length > 0);
+	if (trimmed.length === 0) return errorResult("texts requires at least one non-empty string");
+	const newSubtasks: Subtask[] = trimmed.map((text, i) => ({
+		id: startId + i,
+		text,
+		status: "pending" as const,
+		lastUpdatedTurn: state.currentTurnIndex,
+	}));
+	parentTask.subtasks = [...subtasks, ...newSubtasks];
+	persistState(session, ports);
+	return makeResult(
+		session,
+		`Added ${newSubtasks.length} subtasks to Task #${parentTask.id}:\n` +
+			newSubtasks.map((s) => `  - #${parentTask.id}.${s.id}: ${s.text}`).join("\n"),
+	);
+}
+
+function actionUpdateSubtasks(
+	session: GoalSession,
+	params: Record<string, unknown>,
+	ports: ServicePorts,
+): ToolActionResult {
+	const state = session.state!;
+	const taskId = params.taskId as number | undefined;
+	if (taskId === undefined) return errorResult("update_subtasks requires taskId");
+	const subUpdates = params.subUpdates as Array<{ subId: number; status: Subtask["status"] }> | undefined;
+	if (!subUpdates || subUpdates.length === 0) {
+		return errorResult("update_subtasks requires a non-empty subUpdates array");
+	}
+	const targetTask = state.tasks.find((t) => t.id === taskId);
+	if (!targetTask) return errorResult(`Task #${taskId} not found`);
+	if (!targetTask.subtasks || targetTask.subtasks.length === 0) {
+		return errorResult(`Task #${taskId} has no subtasks`);
+	}
+	const results: string[] = [];
+	for (const u of subUpdates) {
+		const sub = targetTask.subtasks.find((s) => s.id === u.subId);
+		if (!sub) return errorResult(`Subtask #${taskId}.${u.subId} not found`);
+		// FR-8.3 G-018：subtask 宽松状态机——唯一守卫：completed 不可变更
+		if (sub.status === "completed") {
+			return errorResult(`Subtask #${taskId}.${sub.id} already completed, cannot be changed`);
+		}
+		const prev = sub.status;
+		sub.status = u.status;
+		sub.lastUpdatedTurn = state.currentTurnIndex;
+		results.push(`#${taskId}.${sub.id}: ${prev} → ${u.status}`);
+	}
+	persistState(session, ports);
+	return makeResult(session, `Updated ${results.length} subtasks:\n${results.join("\n")}`);
+}
+
+function actionDeleteSubtasks(
+	session: GoalSession,
+	params: Record<string, unknown>,
+	ports: ServicePorts,
+): ToolActionResult {
+	const state = session.state!;
+	const taskId = params.taskId as number | undefined;
+	if (taskId === undefined) return errorResult("delete_subtasks requires taskId");
+	const subIds = params.subIds as number[] | undefined;
+	if (!subIds || subIds.length === 0) {
+		return errorResult("delete_subtasks requires a non-empty subIds array");
+	}
+	const delTask = state.tasks.find((t) => t.id === taskId);
+	if (!delTask) return errorResult(`Task #${taskId} not found`);
+	if (!delTask.subtasks || delTask.subtasks.length === 0) {
+		return errorResult(`Task #${taskId} has no subtasks`);
+	}
+	const uniqueIds = [...new Set(subIds)];
+	const missing = uniqueIds.filter((id) => !delTask.subtasks!.some((s) => s.id === id));
+	if (missing.length > 0) {
+		return errorResult(`Subtask ${missing.map((id) => `#${taskId}.${id}`).join(", ")} not found`);
+	}
+	delTask.subtasks = delTask.subtasks.filter((s) => !uniqueIds.includes(s.id));
+	// 行为保持：删空后 subtasks 置 undefined
+	if (delTask.subtasks.length === 0) delTask.subtasks = undefined;
+	persistState(session, ports);
+	return makeResult(
+		session,
+		`Deleted ${uniqueIds.length} subtasks, Task #${taskId} has ${delTask.subtasks?.length ?? 0} remaining`,
+	);
+}
+
+/**
+ * list_tasks — 只读：格式化当前任务列表到 result 文本。
+ *
+ * G-005：只读 action 不 persist、不 updateWidget。仅调用 projection/formatTaskList
+ * 渲染（纯渲染函数，无副作用）。复用而非内联，保持渲染逻辑单一定义点。
+ */
+function actionListTasks(session: GoalSession): ToolActionResult {
+	const state = session.state!;
+	return makeResult(session, formatTaskList(state.tasks));
 }
 
 // ── 路径 B：applyEvent ────────────────────────────────

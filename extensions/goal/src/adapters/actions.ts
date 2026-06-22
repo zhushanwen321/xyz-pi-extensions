@@ -122,3 +122,67 @@ export const handleReportBlocked: ActionHandler = (actx): ToolActionResult => {
 export const handleCancelGoal: ActionHandler = (actx): ToolActionResult => {
 	return applyToolAction(actx.session, "cancel_goal", actx.params, actx.ports);
 };
+
+// ── subtask handlers ─────────────────────────────────
+// （接续上方 task handlers，类型 ActionHandler / ActionContext / GoalToolParams 已在文件顶部定义）
+
+/**
+ * add_subtasks — 给指定 task 添加 subtask。
+ *
+ * FR-8.11（G-R4-004）：拒绝给 completed 状态的 task 加 subtask。
+ * 守卫表达式：`isTerminalTaskStatus(parentTask.status) || parentTask.status === "completed"`
+ * （service.add_subtasks case 实现）。
+ *
+ * 设计意图：`isTerminalTaskStatus`（engine/task.ts）中 completed 不算终态
+ * （verified/cancelled 才是），但 add_subtasks 额外显式拒绝 completed——
+ * completed 任务已声明完成，不应再拆分（D-20 有意业务决策）。
+ * 错误信息："Task #N in terminal state (completed), cannot add subtask"
+ */
+export const handleAddSubtasks: ActionHandler = (actx): ToolActionResult => {
+	return applyToolAction(actx.session, "add_subtasks", actx.params, actx.ports);
+};
+
+/**
+ * update_subtasks — 更新 subtask 状态（宽松状态机，允许 pending→completed 跳过 in_progress）。
+ *
+ * FR-8.3（G-018）：subtask 保持宽松，无严格状态机校验。唯一守卫：completed subtask 不可变更。
+ * （service.update_subtasks case 实现）
+ */
+export const handleUpdateSubtasks: ActionHandler = (actx): ToolActionResult => {
+	return applyToolAction(actx.session, "update_subtasks", actx.params, actx.ports);
+};
+
+/**
+ * delete_subtasks — 删除指定 subtask（全部删完时 subtasks 字段置 undefined）。
+ *
+ * （service.delete_subtasks case 实现，行为保持：删除后若 subtasks 为空则置 undefined）
+ */
+export const handleDeleteSubtasks: ActionHandler = (actx): ToolActionResult => {
+	return applyToolAction(actx.session, "delete_subtasks", actx.params, actx.ports);
+};
+
+// ── 局部 Action Record（供 Wave 10 组装最终 ACTION_HANDLERS）──
+
+/**
+ * task action 路由表（7 条）。
+ * Wave 10 的 tool-adapter.ts 把它与 SUBTASK_ACTION_HANDLERS 合并为最终 ACTION_HANDLERS。
+ */
+export const TASK_ACTION_HANDLERS: Record<string, ActionHandler> = {
+	create_tasks: handleCreateTasks,
+	add_tasks: handleAddTasks,
+	update_tasks: handleUpdateTasks,
+	list_tasks: handleListTasks,
+	complete_goal: handleCompleteGoal,
+	report_blocked: handleReportBlocked,
+	cancel_goal: handleCancelGoal,
+};
+
+/**
+ * subtask action 路由表（3 条）。
+ * Wave 10 的 tool-adapter.ts 把它与 TASK_ACTION_HANDLERS 合并为最终 ACTION_HANDLERS。
+ */
+export const SUBTASK_ACTION_HANDLERS: Record<string, ActionHandler> = {
+	add_subtasks: handleAddSubtasks,
+	update_subtasks: handleUpdateSubtasks,
+	delete_subtasks: handleDeleteSubtasks,
+};

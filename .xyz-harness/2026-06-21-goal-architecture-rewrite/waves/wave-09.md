@@ -1,8 +1,16 @@
-# Wave 9: adapters/actions.ts（subtask 部分 3 个 handler）
+# Wave 9: adapters/actions.ts（subtask 部分 3 个 handler）+ service 5 个 action 补齐
 
-- **目标文件**：`extensions/goal/src/adapters/actions.ts`（接续 Wave 8，在文件末尾追加）
-- **前置 wave**：Wave 8（actions.ts task 部分）
-- **目标**：在 `adapters/actions.ts` 末尾追加 3 个 subtask handler，并 export 局部 `TASK_ACTION_HANDLERS` / `SUBTASK_ACTION_HANDLERS` 两个子 Record 供 Wave 10 组装完整 `ACTION_HANDLERS`。本 wave 不组装最终 Record（Wave 10 在 tool-adapter.ts 完成完整组装，避免本 wave 引用循环）。
+- **目标文件**：`extensions/goal/src/adapters/actions.ts`（接续 Wave 8，在文件末尾追加）、`extensions/goal/src/service.ts`（补齐 5 个 action case）
+- **前置 wave**：Wave 5（service.ts）、Wave 8（actions.ts task 部分）
+- **目标**：① 在 `service.applyToolAction` 补齐 5 个缺失 action case（add_tasks / list_tasks / add_subtasks / update_subtasks / delete_subtasks）——修复 Wave 5 的设计缺口（原 default 分支声明「service 不重复实现」，但 Wave 8 handler 已委托 service，导致运行时返回错误）；② 在 `adapters/actions.ts` 末尾追加 3 个 subtask handler + export 2 个子 Record（TASK_ACTION_HANDLERS 7 条 + SUBTASK_ACTION_HANDLERS 3 条）。
+
+## 实现修正 0（架构冲突，已采纳「全部下沉到 service」方案）
+
+**冲突**：Wave 5 提交的 `service.applyToolAction` 只实现 5 个核心 action，default 分支明确写「其余 5 个由 adapters 实现，service 不重复实现」。但 Wave 8/9 的 handler 全部 1 行委托 `service.applyToolAction(...)`，且 JSDoc 标注「(service.add_subtasks case 实现)」——两边自相矛盾。Wave 8 的 `handleAddTasks` / `handleListTasks`（已提交但 Wave 10 前未接线）运行时会命中 default 分支返回错误。
+
+**用户决策**：「全部下沉到 service」——在 `service.applyToolAction` 补齐这 5 个 case，覆盖 Wave 5 default 注释。Wave 8/9 handler 保持 1 行委托。优点：FR-6.5 persist 走单一路径、行为一致、handler 极薄。
+
+**list_tasks 渲染**：service 层 import `formatTaskList` 自 `projection/prompts`（不构成循环——`projection/prompts.ts` 只 import `constants`/`engine/*`，不 import service；循环仅存在于 `projection/result.ts → service`，不影响本路径）。复用而非内联，保持渲染逻辑单一定义点。
 
 ## 关键改动点
 
@@ -106,27 +114,41 @@ git commit -m "refactor(goal): add subtask handlers + sub-records to actions.ts 
 
 ### 1. 测试
 
-- [ ] **无独立单元测试**——与 Wave 8 一致，薄封装逻辑在 service
-- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
-- [ ] 全量 `test` 仍全绿
+- [x] **新增 22 个 service 层单元测试**——实现修正 0 把 5 个 action 下沉到 service（不再是薄封装），故需独立测试覆盖每个 action 的校验/变更/persist 路径（add_tasks 3 + add_subtasks 7 + update_subtasks 5 + delete_subtasks 4 + list_tasks 3 = 22）。service.test.ts 由 47 增至 69 个测试。
+- [x] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
+- [x] 全量 `test` 仍全绿（253 tests passed）
 
 ### 2. 架构边界
 
-- [ ] `grep -rn "\.\./state\|\.\./tool-handler\|\.\./action-handlers" extensions/goal/src/adapters/actions.ts` 无输出
-- [ ] 类型 `ActionHandler` / `ActionContext` 不重复定义（继承 Wave 8）
-- [ ] 禁止 `any`
+- [x] `grep -rn "\.\./state\|\.\./tool-handler\|\.\./action-handlers" extensions/goal/src/adapters/actions.ts` 无输出
+- [x] 类型 `ActionHandler` / `ActionContext` 不重复定义（继承 Wave 8）
+- [x] 禁止 `any`（service.ts 5 个 action 用 `Record<string, unknown>` + 内部断言；actions.ts 无 any）
 
 ### 3. 接口契约
 
-- [ ] 新增 3 个 subtask handler：`handleAddSubtasks` / `handleUpdateSubtasks` / `handleDeleteSubtasks`
-- [ ] 导出 `TASK_ACTION_HANDLERS`（7 条）+ `SUBTASK_ACTION_HANDLERS`（3 条）两个子 Record
+- [x] 新增 3 个 subtask handler：`handleAddSubtasks` / `handleUpdateSubtasks` / `handleDeleteSubtasks`
+- [x] 导出 `TASK_ACTION_HANDLERS`（7 条）+ `SUBTASK_ACTION_HANDLERS`（3 条）两个子 Record
+- [x] **实现修正 0**：service.applyToolAction 新增 5 个 case（add_tasks / list_tasks / add_subtasks / update_subtasks / delete_subtasks），default 分支改为「Action X not supported」
 
 ### 4. 行为契约
 
-- [ ] FR-8.11（G-R4-004）：add_subtasks 拒绝给 completed 状态的 task 加 subtask（`isTerminalTaskStatus(parentTask.status) || parentTask.status === "completed"`）
-- [ ] FR-8.3 G-018：subtask 宽松状态机（JSDoc 标注）
-- [ ] 10 个 handler + 2 个子 Record，与 plan 接口契约的 10 个 action 枚举值一一对应
+- [x] FR-8.11（G-R4-004）：add_subtasks 拒绝给 completed 状态的 task 加 subtask（`isTerminalTaskStatus(parentTask.status) || parentTask.status === "completed"`）
+- [x] FR-8.3 G-018：subtask 宽松状态机（JSDoc 标注 + 测试覆盖 completed 守卫）
+- [x] G-005：list_tasks 只读——不 persist、不写 history（测试覆盖）
+- [x] 10 个 handler + 2 个子 Record，与 plan 接口契约的 10 个 action 枚举值一一对应
+- [x] service 层 5 个 action 行为与旧 action-handlers.ts 等价（错误信息逐字迁移，含 "terminal state" / "already completed" / "no subtasks" / "non-empty" / "not found"）
 
 ### 5. 提交
 
-- [ ] commit message 以 `wave-9:` 开头，含「3 subtask handler」+「FR-8.11」
+- [x] commit message 以 `wave-9:` 开头，含「subtask handler」+「service 5 action」
+
+---
+
+## 实现修正记录
+
+0. **架构冲突修复——5 个 action 下沉到 service**：详见文件顶部「实现修正 0」段。用户决策「全部下沉到 service」，覆盖 Wave 5 default 分支注释。
+1. **service.ts 新增 import**：`import { formatTaskList } from "./projection/prompts"`（list_tasks 复用渲染器，不内联不重复）。新增 engine/task 导入：`getNextTaskId, isTerminalTaskStatus`（add_tasks 用前者分配 id，add_subtasks 用后者终态检查）+ 类型 `Subtask, TaskVerification`。
+2. **新增测试文件改动**：service.test.ts 由 47 → 69 测试。原有「未实现的 action → 报错」测试（断言 add_subtasks 返回 "not implemented"）改为「未知 action → default 分支报错」（断言 `totally_unknown_action` 返回 "not supported"），反映 5 个 action 现已实现。
+3. **list_tasks 渲染不内联**：service 层 `list_tasks` 复用 `projection/prompts.formatTaskList`（纯渲染函数）。确认无循环依赖——`projection/prompts.ts` 仅 import `constants`/`engine/*`，不 import service。
+4. **actions.ts 不需改 Wave 8 handler**：Wave 8 的 `handleAddTasks` / `handleListTasks` 已正确 1 行委托 service，service 补齐 case 后自动可用，无需回改。
+5. **import 顺序自动修正**：eslint `simple-import-sort/imports` 自动重排 service.ts 导入（`formatTaskList` 排到末尾），通过 `eslint --fix` 处理，无行为影响。

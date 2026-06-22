@@ -351,12 +351,12 @@ describe("applyToolAction — update_tasks", () => {
 		expect(result.content[0]!.text).toContain("Duplicate");
 	});
 
-	it("未实现的 action → 报错", () => {
+	it("未知 action → default 分支报错（不支持）", () => {
 		const session = createGoalSession();
 		session.state = makeState();
-		const result = applyToolAction(session, "add_subtasks", {}, makeFakePorts());
+		const result = applyToolAction(session, "totally_unknown_action", {}, makeFakePorts());
 		expect(result.isError).toBe(true);
-		expect(result.content[0]!.text).toContain("not implemented");
+		expect(result.content[0]!.text).toContain("not supported");
 	});
 });
 
@@ -475,6 +475,360 @@ describe("applyToolAction — report_blocked", () => {
 		session.state = makeState();
 		const result = applyToolAction(session, "report_blocked", {}, makeFakePorts());
 		expect(result.isError).toBe(true);
+	});
+});
+
+// ── applyToolAction — add_tasks ──────────────────────
+
+describe("applyToolAction — add_tasks", () => {
+	it("成功追加到现有列表（id 从 max+1 开始）", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [
+			{ id: 1, description: "first", status: "completed", lastUpdatedTurn: 0 },
+			{ id: 3, description: "third", status: "in_progress", lastUpdatedTurn: 0 },
+		];
+		const ports = makeFakePorts();
+		const result = applyToolAction(session, "add_tasks", { tasks: ["a", "b"] }, ports);
+		expect(result.isError).toBeUndefined();
+		expect(session.state!.tasks).toHaveLength(4);
+		// FR: 下一个 id = max(existing ids)+1 = 4
+		expect(session.state!.tasks[2]!.id).toBe(4);
+		expect(session.state!.tasks[3]!.id).toBe(5);
+		expect(session.state!.tasks[2]!.status).toBe("pending");
+		expect(ports.states).toHaveLength(1); // persist 被调用
+	});
+
+	it("空 tasks → 报错", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		const result = applyToolAction(session, "add_tasks", { tasks: [] }, makeFakePorts());
+		expect(result.isError).toBe(true);
+	});
+
+	it("支持 verifications 数组", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		const result = applyToolAction(
+			session,
+			"add_tasks",
+			{ tasks: ["t"], verifications: [{ method: "npm test", expected: "ok" }] },
+			makeFakePorts(),
+		);
+		expect(result.isError).toBeUndefined();
+		expect(session.state!.tasks[0]!.verification?.method).toBe("npm test");
+	});
+});
+
+// ── applyToolAction — add_subtasks ───────────────────
+
+describe("applyToolAction — add_subtasks", () => {
+	it("成功追加 subtasks（id 从 1 开始）", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [{ id: 1, description: "parent", status: "in_progress", lastUpdatedTurn: 0 }];
+		const result = applyToolAction(
+			session,
+			"add_subtasks",
+			{ taskId: 1, texts: ["sub-a", "sub-b"] },
+			makeFakePorts(),
+		);
+		expect(result.isError).toBeUndefined();
+		expect(session.state!.tasks[0]!.subtasks).toHaveLength(2);
+		expect(session.state!.tasks[0]!.subtasks![0]!.id).toBe(1);
+		expect(session.state!.tasks[0]!.subtasks![1]!.id).toBe(2);
+	});
+
+	it("已存在 subtasks → id 从 max+1 开始", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [
+			{
+				id: 1,
+				description: "parent",
+				status: "in_progress",
+				lastUpdatedTurn: 0,
+				subtasks: [
+					{ id: 1, text: "old", status: "completed", lastUpdatedTurn: 0 },
+					{ id: 3, text: "old3", status: "pending", lastUpdatedTurn: 0 },
+				],
+			},
+		];
+		const result = applyToolAction(
+			session,
+			"add_subtasks",
+			{ taskId: 1, texts: ["new"] },
+			makeFakePorts(),
+		);
+		expect(result.isError).toBeUndefined();
+		expect(session.state!.tasks[0]!.subtasks![2]!.id).toBe(4); // max(1,3)+1
+	});
+
+	it("FR-8.11: 给 completed task 加 subtask → 拒绝", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [{ id: 1, description: "done", status: "completed", lastUpdatedTurn: 0 }];
+		const result = applyToolAction(
+			session,
+			"add_subtasks",
+			{ taskId: 1, texts: ["x"] },
+			makeFakePorts(),
+		);
+		expect(result.isError).toBe(true);
+		expect(result.content[0]!.text).toContain("terminal state");
+	});
+
+	it("给 cancelled task 加 subtask → 拒绝", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [{ id: 1, description: "gone", status: "cancelled", lastUpdatedTurn: 0 }];
+		const result = applyToolAction(
+			session,
+			"add_subtasks",
+			{ taskId: 1, texts: ["x"] },
+			makeFakePorts(),
+		);
+		expect(result.isError).toBe(true);
+	});
+
+	it("缺 taskId → 报错", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		const result = applyToolAction(session, "add_subtasks", { texts: ["x"] }, makeFakePorts());
+		expect(result.isError).toBe(true);
+	});
+
+	it("task 不存在 → 报错", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		const result = applyToolAction(
+			session,
+			"add_subtasks",
+			{ taskId: 99, texts: ["x"] },
+			makeFakePorts(),
+		);
+		expect(result.isError).toBe(true);
+		expect(result.content[0]!.text).toContain("not found");
+	});
+
+	it("texts 全空白 → 报错", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [{ id: 1, description: "p", status: "in_progress", lastUpdatedTurn: 0 }];
+		const result = applyToolAction(
+			session,
+			"add_subtasks",
+			{ taskId: 1, texts: ["  ", ""] },
+			makeFakePorts(),
+		);
+		expect(result.isError).toBe(true);
+		expect(result.content[0]!.text).toContain("non-empty");
+	});
+});
+
+// ── applyToolAction — update_subtasks ────────────────
+
+describe("applyToolAction — update_subtasks", () => {
+	it("成功更新 subtask 状态（宽松：pending → completed 跳过 in_progress，G-018）", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [
+			{
+				id: 1,
+				description: "p",
+				status: "in_progress",
+				lastUpdatedTurn: 0,
+				subtasks: [{ id: 1, text: "s", status: "pending", lastUpdatedTurn: 0 }],
+			},
+		];
+		const result = applyToolAction(
+			session,
+			"update_subtasks",
+			{ taskId: 1, subUpdates: [{ subId: 1, status: "completed" }] },
+			makeFakePorts(),
+		);
+		expect(result.isError).toBeUndefined();
+		expect(session.state!.tasks[0]!.subtasks![0]!.status).toBe("completed");
+	});
+
+	it("G-018: completed subtask → 拒绝变更", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [
+			{
+				id: 1,
+				description: "p",
+				status: "in_progress",
+				lastUpdatedTurn: 0,
+				subtasks: [{ id: 1, text: "s", status: "completed", lastUpdatedTurn: 0 }],
+			},
+		];
+		const result = applyToolAction(
+			session,
+			"update_subtasks",
+			{ taskId: 1, subUpdates: [{ subId: 1, status: "in_progress" }] },
+			makeFakePorts(),
+		);
+		expect(result.isError).toBe(true);
+		expect(result.content[0]!.text).toContain("already completed");
+	});
+
+	it("subtask 不存在 → 报错", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [
+			{
+				id: 1,
+				description: "p",
+				status: "in_progress",
+				lastUpdatedTurn: 0,
+				subtasks: [{ id: 1, text: "s", status: "pending", lastUpdatedTurn: 0 }],
+			},
+		];
+		const result = applyToolAction(
+			session,
+			"update_subtasks",
+			{ taskId: 1, subUpdates: [{ subId: 99, status: "completed" }] },
+			makeFakePorts(),
+		);
+		expect(result.isError).toBe(true);
+		expect(result.content[0]!.text).toContain("not found");
+	});
+
+	it("task 无 subtasks → 报错", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [{ id: 1, description: "p", status: "in_progress", lastUpdatedTurn: 0 }];
+		const result = applyToolAction(
+			session,
+			"update_subtasks",
+			{ taskId: 1, subUpdates: [{ subId: 1, status: "completed" }] },
+			makeFakePorts(),
+		);
+		expect(result.isError).toBe(true);
+		expect(result.content[0]!.text).toContain("no subtasks");
+	});
+
+	it("缺 subUpdates → 报错", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [{ id: 1, description: "p", status: "in_progress", lastUpdatedTurn: 0 }];
+		const result = applyToolAction(session, "update_subtasks", { taskId: 1 }, makeFakePorts());
+		expect(result.isError).toBe(true);
+	});
+});
+
+// ── applyToolAction — delete_subtasks ────────────────
+
+describe("applyToolAction — delete_subtasks", () => {
+	it("成功删除 subtask", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [
+			{
+				id: 1,
+				description: "p",
+				status: "in_progress",
+				lastUpdatedTurn: 0,
+				subtasks: [
+					{ id: 1, text: "a", status: "pending", lastUpdatedTurn: 0 },
+					{ id: 2, text: "b", status: "pending", lastUpdatedTurn: 0 },
+				],
+			},
+		];
+		const result = applyToolAction(
+			session,
+			"delete_subtasks",
+			{ taskId: 1, subIds: [1] },
+			makeFakePorts(),
+		);
+		expect(result.isError).toBeUndefined();
+		expect(session.state!.tasks[0]!.subtasks).toHaveLength(1);
+		expect(session.state!.tasks[0]!.subtasks![0]!.id).toBe(2);
+	});
+
+	it("删空后 subtasks 置 undefined（行为保持）", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [
+			{
+				id: 1,
+				description: "p",
+				status: "in_progress",
+				lastUpdatedTurn: 0,
+				subtasks: [{ id: 1, text: "only", status: "pending", lastUpdatedTurn: 0 }],
+			},
+		];
+		const result = applyToolAction(
+			session,
+			"delete_subtasks",
+			{ taskId: 1, subIds: [1] },
+			makeFakePorts(),
+		);
+		expect(result.isError).toBeUndefined();
+		expect(session.state!.tasks[0]!.subtasks).toBeUndefined();
+	});
+
+	it("subtask 不存在 → 报错", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [
+			{
+				id: 1,
+				description: "p",
+				status: "in_progress",
+				lastUpdatedTurn: 0,
+				subtasks: [{ id: 1, text: "a", status: "pending", lastUpdatedTurn: 0 }],
+			},
+		];
+		const result = applyToolAction(
+			session,
+			"delete_subtasks",
+			{ taskId: 1, subIds: [99] },
+			makeFakePorts(),
+		);
+		expect(result.isError).toBe(true);
+		expect(result.content[0]!.text).toContain("not found");
+	});
+
+	it("缺 subIds → 报错", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [{ id: 1, description: "p", status: "in_progress", lastUpdatedTurn: 0 }];
+		const result = applyToolAction(session, "delete_subtasks", { taskId: 1 }, makeFakePorts());
+		expect(result.isError).toBe(true);
+	});
+});
+
+// ── applyToolAction — list_tasks ─────────────────────
+
+describe("applyToolAction — list_tasks", () => {
+	it("G-005: 只读——不 persist、不写 history", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [{ id: 1, description: "task one", status: "in_progress", lastUpdatedTurn: 0 }];
+		const ports = makeFakePorts();
+		const result = applyToolAction(session, "list_tasks", {}, ports);
+		expect(result.isError).toBeUndefined();
+		expect(ports.states).toHaveLength(0); // 不 persist
+		expect(ports.history).toHaveLength(0); // 不写 history
+	});
+
+	it("返回格式化文本（含 task 描述）", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [{ id: 1, description: "task one", status: "in_progress", lastUpdatedTurn: 0 }];
+		const result = applyToolAction(session, "list_tasks", {}, makeFakePorts());
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]!.text).toContain("task one");
+	});
+
+	it("空任务列表 → 显示提示", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		const result = applyToolAction(session, "list_tasks", {}, makeFakePorts());
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]!.text).toContain("No tasks");
 	});
 });
 
