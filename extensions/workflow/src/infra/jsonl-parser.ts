@@ -6,7 +6,7 @@
  * Mutates a ParsedPipelineEvent accumulator in place for O(1) memory per event.
  */
 
-import type { ToolCallEntry } from "../domain/state.js";
+import type { ToolCallEntry } from "../engine/models/types.js";
 
 // ── Pipeline accumulator ──────────────────────────────────────
 
