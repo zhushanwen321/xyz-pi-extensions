@@ -11,31 +11,24 @@
  * 层归属：Engine。零 infra 依赖（AC-1）。
  *
  * ───────────────────────────────────────────────────────────────
- * FORWARD REF 状态（T7 已完成）
+ * FORWARD REF 状态（T9 已完成 / T7 已完成）
  * ───────────────────────────────────────────────────────────────
  * RunSpec 已由 T7 创建（下方真实 import）。
- * WorkflowRun / WorkerHandle 仍由后续 task 创建：
+ * WorkerHandle 已由 T9 创建（下方真实 import，Infra 层技术类型，Engine 允许引用，D-12）。
+ * WorkflowRun 仍由 T16 创建，下方保留占位：
  *   - WorkflowRun  → T16 (engine/models/workflow-run.ts)
- *   - WorkerHandle → T9 (infra/worker-handle.ts)
  * 对应 task 完成后：删除占位块，改为
  *   import type { WorkflowRun } from "./workflow-run.js";
- *   import type { WorkerHandle } from "../../infra/worker-handle.js";
  */
+import type { WorkerHandle } from "../../infra/worker-handle.js";
 import type { RunSpec } from "./run-spec.js";
 import type { AgentCallOpts, AgentResult } from "./types.js";
 
-// ── FORWARD REF 占位（待 T16/T9 替换为真实 import） ────────────
+// ── FORWARD REF 占位（待 T16 替换为真实 import） ────────────
 // 真实 WorkflowRun 见 domain-models.md §1（聚合根）。
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface WorkflowRunPlaceholder {
   /** 占位——T16 后由真实 WorkflowRun 替换。 */
   readonly runId: string;
-}
-// 真实 WorkerHandle 见 domain-models.md §9（Infra 层具体类）。
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface WorkerHandlePlaceholder {
-  /** 占位——T9 后由真实 WorkerHandle 替换。 */
-  readonly isCurrent: boolean;
 }
 
 // ── Port 1: AgentRunner ───────────────────────────────────────
@@ -76,7 +69,7 @@ export interface WorkerHost {
     spec: RunSpec,
     args: Record<string, unknown>,
     handlers: WorkerHandlers,
-  ): WorkerHandlePlaceholder;
+  ): WorkerHandle;
 }
 
 // ── 编排层共享类型 1: WorkerHandlers ───────────────────────────
@@ -94,7 +87,7 @@ export interface WorkerHandlers {
   /** Worker 线程 uncaught error。 */
   onError(err: Error): Promise<void>;
   /** Worker 线程 exit（含 code，用于区分正常退出 vs 崩溃）。handle 用于竞态防护 G-025。 */
-  onExit(code: number, handle: WorkerHandlePlaceholder): Promise<void>;
+  onExit(code: number, handle: WorkerHandle): Promise<void>;
 }
 
 // ── 编排层共享类型 2: LifecycleDeps ────────────────────────────
