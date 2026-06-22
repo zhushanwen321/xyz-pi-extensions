@@ -182,3 +182,38 @@ export async function handleSessionStart(
 git add extensions/goal/src/adapters/event-adapter.ts
 git commit -m "wave-12: add event-adapter.ts infrastructure + 4 simple events (agent_start/turn_end/message_end/session_start) with ESC guards"
 ```
+
+---
+
+## 验收标准
+
+### 1. 测试
+
+- [ ] **无独立单元测试**——ESC guard / token 累加等行为由 Wave 13 补齐 agent_end 后，在 Wave 14 集成测试覆盖
+- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
+- [ ] 全量 `test` 仍全绿
+
+> ⚠️ **风险提示**：FR-6.7 ESC 守卫（turn_end + message_end）是本次重构核心修复之一。无独立测试意味着 aborted 路径的错误要到 Wave 14 才暴露。建议执行者在 Wave 13 完成后补 event-adapter.test.ts（用 fake ctx.signal 模拟 aborted）。
+
+### 2. 架构边界
+
+- [ ] `grep -rn "\.\./state\|\.\./agent-end-handler\|\.\./before-agent-start-handler" extensions/goal/src/adapters/event-adapter.ts` 无输出（不 import 旧文件）
+- [ ] adapters 层可 import Pi 类型
+- [ ] 禁止 `any`
+
+### 3. 接口契约
+
+- [ ] 导出基础设施：`makeStaleChecker(session)` / `makePorts(pi, ctx): ServicePorts`（若 Wave 11 已导出则 import 复用）/ `isProcessing` 防重入机制
+- [ ] 导出 4 个事件 handler：`handleAgentStart` / `handleTurnEnd` / `handleMessageEnd` / `handleSessionStart`
+
+### 4. 行为契约
+
+- [ ] FR-6.7 ESC 守卫：turn_end 和 message_end 入口检查 `ctx.signal?.aborted`，true 时跳过副作用（turn_end 不递增 currentTurnIndex；message_end 不累加 token）
+- [ ] FR-8.6：agent_start 设 `tasksCompletedAtAgentStart` 基线；message_end token 累加算法 `(max(input-cacheRead,0) + output)`；turn_end 正常路径 currentTurnIndex++
+- [ ] FR-8.2 G-020：makeStaleChecker 捕获 goalId snapshot，checkStale 对比当前 goalId
+- [ ] FR-8.2 G-021：isProcessing 防重入标志（agent_end 用，在此定义供 Wave 13 用）
+- [ ] session_start：调 reconstructGoalState + 设 tasksCompletedAtAgentStart + updateWidget
+
+### 5. 提交
+
+- [ ] commit message 以 `wave-12:` 开头，含「4 simple events」+「ESC guards」

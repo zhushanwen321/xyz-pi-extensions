@@ -769,3 +769,36 @@ describe("finalizeGoal — history 写入矩阵", () => {
 git add extensions/goal/src/service.ts extensions/goal/src/__tests__/service.test.ts
 git commit -m "wave-5: add service.ts — dual entry (applyToolAction/applyEvent) + createGoal + finalizeGoal with fake-ports tests"
 ```
+
+---
+
+## 验收标准
+
+### 1. 测试
+
+- [ ] `pnpm --filter @zhushanwen/pi-goal test src/__tests__/service.test.ts` PASS
+- [ ] service.test.ts 用 fake ports（不依赖 Pi runtime）
+- [ ] 全量 `test` 仍全绿
+- [ ] 测试覆盖：createGoal 初始化 / finalizeGoal 三终态（complete/cancelled/budget_limited）/ applyToolAction 至少一个 action case / applyEvent 至少一个 event case
+
+### 2. 架构边界
+
+- [ ] service.ts 不持有 ctx（D-16：通过 ports 参数接收能力）
+- [ ] import 自 `./engine/*` + `./ports` + `./session` + `./persistence`（不 import Pi / adapters / 旧文件）
+- [ ] 禁止 `any`
+
+### 3. 接口契约
+
+- [ ] `service.ts` 导出：`ServicePorts` 类型 / `ToolActionResult` 类型 / `EventEffect` 类型 / `createGoal(session, objective, tasks, budgetOverrides, ports, writeHistory)` / `finalizeGoal(state, status, ports, opts)` / `applyToolAction(session, action, params, ports): ToolActionResult` / `applyEvent(session, event, payload, ports): Promise<EventEffect>`
+
+### 4. 行为契约
+
+- [ ] D-21：双入口（applyToolAction 同步返回 result / applyEvent 异步返回 effects），不合并为单一 applyCommand
+- [ ] `completed && !verification` 全锁逻辑在此层（validateTaskTransition 只看 status，service 补 verification 维度）
+- [ ] FR-6.5：persist 前调 tick 累计时间
+- [ ] FR-8.7：finalizeGoal 按 history 写入矩阵（complete/cancelled 写 history；budget_limited/time_limited 看配置）决定 writeHistory + clearSession
+- [ ] FR-3.1：createGoal 是唯一创建入口
+
+### 5. 提交
+
+- [ ] commit message 以 `wave-5:` 开头，含「dual entry」+「createGoal」+「finalizeGoal」+「fake-ports tests」

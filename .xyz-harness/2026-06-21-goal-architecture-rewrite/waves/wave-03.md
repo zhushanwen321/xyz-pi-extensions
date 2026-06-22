@@ -332,3 +332,33 @@ describe("deserializeState — 新格式严格解析", () => {
 git add extensions/goal/src/ports.ts extensions/goal/src/persistence.ts extensions/goal/src/__tests__/deserialize-state.test.ts
 git commit -m "wave-3: add ports.ts (4 Port interfaces) + persistence.ts (strict deserialize FR-5, no legacy compat)"
 ```
+
+---
+
+## 验收标准
+
+### 1. 测试
+
+- [ ] `pnpm --filter @zhushanwen/pi-goal test src/__tests__/deserialize-state.test.ts` PASS
+- [ ] 全量 `test` 仍全绿（含 Wave 0-2 的 engine 测试）
+
+### 2. 架构边界
+
+- [ ] ports.ts 只含 `import type` from `./engine/types`（纯类型，零运行时依赖）
+- [ ] persistence.ts import 自 `./engine/types` + `./engine/task` + `./ports`（仅 GoalHistoryEntry 类型）
+- [ ] 禁止 `any`
+
+### 3. 接口契约
+
+- [ ] `ports.ts` 导出 4 个 Port 接口：`PersistencePort` / `UiPort` / `MessagingPort` / `SessionPort` + `GoalHistoryEntry` 类型
+- [ ] `persistence.ts` 导出：`serializeState(state)` / `deserializeState(data): GoalRuntimeState` / `makeHistoryEntry(state, status, completedTasks): GoalHistoryEntry`
+
+### 4. 行为契约
+
+- [ ] FR-5：`deserializeState` 缺字段直接 throw，**不兜底默认值、不迁移旧格式**
+- [ ] `deserializeState` 对 subtasks 缺失/可选字段（completedAtTurnIndex）正确处理
+- [ ] `makeHistoryEntry` 提取 status / tasks / budget / goalId 等快照字段
+
+### 5. 提交
+
+- [ ] commit message 以 `wave-3:` 开头，含「4 Port interfaces」+「FR-5」+「no legacy compat」

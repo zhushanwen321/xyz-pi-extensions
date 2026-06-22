@@ -529,12 +529,32 @@ git add extensions/goal/src/projection/prompts.ts extensions/goal/src/projection
 git commit -m "refactor(goal): add projection/prompts.ts + result.ts with formatBudget convergence (Wave 7)"
 ```
 
-## 验证清单
+## 验收标准
 
-- [ ] `projection/prompts.ts` 导出 `continuationPrompt` / `budgetLimitPrompt` / `objectiveUpdatedPrompt` / `contextInjectionPrompt` / `stalenessReminderPrompt` / `formatTaskList` / `formatBudget`（含 `BudgetFormatStyle`）
-- [ ] `projection/result.ts` 导出 `makeGoalResult` / `errorResult` / `buildBudgetReport` / `GoalManagerDetails`
-- [ ] FR-3.4：`formatBudget` 是唯一 budget 格式化出口（grep `formatBudgetInfo` / `formatBudgetLine` 在 projection/ 无独立存在）
-- [ ] 所有 prompt 函数接收 `timeUsedSeconds`（不调 `Date.now()`）
-- [ ] 不 import 旧文件，不 import Pi SDK（projection 层零 Pi 依赖）
+### 1. 测试
+
+- [ ] **无独立单元测试**——prompts/result 是字符串构建投影，由 Wave 14 集成测试间接覆盖
+- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
+- [ ] 全量 `test` 仍全绿
+
+### 2. 架构边界
+
+- [ ] `grep -rn "@mariozechner\|@earendil" extensions/goal/src/projection/` 无输出（projection 零 Pi 依赖）
+- [ ] `grep -rn "\.\./state\|\.\/templates\|\.\./tool-handler\|\.\./action-handlers" extensions/goal/src/projection/` 无输出（不 import 旧文件）
+- [ ] 所有 prompt 函数接收 `timeUsedSeconds` 参数，`grep -n "Date.now" extensions/goal/src/projection/` 无输出
 - [ ] 禁止 `any`
-- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 通过
+
+### 3. 接口契约
+
+- [ ] `projection/prompts.ts` 导出：`continuationPrompt` / `budgetLimitPrompt` / `objectiveUpdatedPrompt` / `contextInjectionPrompt` / `stalenessReminderPrompt` / `formatTaskList` / `formatBudget`（含 `BudgetFormatStyle`）
+- [ ] `projection/result.ts` 导出：`makeGoalResult` / `errorResult` / `buildBudgetReport` / `GoalManagerDetails`
+- [ ] `ToolActionResult` 从 service.ts import（result.ts 不重复定义）
+
+### 4. 行为契约
+
+- [ ] FR-3.4：`formatBudget` 是唯一 budget 格式化出口（4 种 style：remaining / report / percent / line）
+- [ ] `grep -rn "formatBudgetInfo\|formatBudgetLine" extensions/goal/src/projection/` 无独立存在（已收敛）
+
+### 5. 提交
+
+- [ ] commit message 以 `wave-7:` 开头，含「projection/prompts.ts」+「result.ts」+「FR-3.4 收敛」

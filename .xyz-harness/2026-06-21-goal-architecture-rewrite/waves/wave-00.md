@@ -389,3 +389,34 @@ grep -rn "@mariozechner\|@earendil" extensions/goal/src/engine/
 git add extensions/goal/vitest.config.ts extensions/goal/src/engine/task.ts extensions/goal/src/engine/__tests__/task.test.ts
 git commit -m "wave-0: add engine/task.ts — task state machine, dual-dimension projection, full tests"
 ```
+
+---
+
+## 验收标准
+
+### 1. 测试
+
+- [ ] `pnpm --filter @zhushanwen/pi-goal test src/engine/__tests__/task.test.ts` PASS
+- [ ] `pnpm --filter @zhushanwen/pi-goal test`（全量）现有 3 个旧测试仍全绿（vitest include 改动未破坏既有发现）
+
+### 2. 架构边界
+
+- [ ] `grep -rn "@mariozechner\|@earendil" extensions/goal/src/engine/` 无输出（engine 零 Pi import）
+- [ ] `grep -rn "any\b\|eslint-disable\|as Partial.*as" extensions/goal/src/engine/task.ts` 无输出
+- [ ] vitest.config.ts 的 `include` 已改为 `["src/**/*.test.ts"]`
+
+### 3. 接口契约
+
+- [ ] `engine/task.ts` 导出与 plan.md 契约一致：`TaskStatus` / `SubtaskStatus` / `GoalTask` / `Subtask` / `TaskVerification` / `CompletionState` / `VerificationState` / `GOAL_TASK_STATUSES` / `SUBTASK_STATUSES`
+- [ ] 导出函数签名一致：`isTerminalTaskStatus(status)` / `isTaskDone(task)` / `getCompletionState(task)` / `getVerificationState(task)` / `validateTaskTransition(from, to): string | null` / `getCompletedCount(tasks)` / `getIncompleteTasks(tasks)` / `getNextTaskId(tasks)`
+
+### 4. 行为契约
+
+- [ ] FR-2.x：5 态 TaskStatus（pending / in_progress / completed / verified / cancelled）全枚举覆盖
+- [ ] `validateTaskTransition` 只看 status，不看 verification（completed→verified 不在此守卫）
+- [ ] `isTaskDone`：cancelled / verified / (completed && !verification) 返回 true
+- [ ] 双维度投影：completed+verification → pending_verification；completed+无 verification → no_verification
+
+### 5. 提交
+
+- [ ] commit message 以 `wave-0:` 开头，描述含「task state machine」+「dual-dimension projection」

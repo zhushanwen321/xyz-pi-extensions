@@ -326,3 +326,37 @@ function handleSet(pi: ExtensionAPI, session: GoalSession, objective: string, bu
 git add extensions/goal/src/adapters/command-adapter.ts
 git commit -m "wave-11: add command-adapter.ts — 8 /goal subcommands, FR-8.12 set/resume AI trigger, FR-8.7 set override branches"
 ```
+
+---
+
+## 验收标准
+
+### 1. 测试
+
+- [ ] **无独立单元测试**——command handler 是 Pi ctx 桥接，由 Wave 14 集成测试覆盖
+- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
+- [ ] 全量 `test` 仍全绿
+
+> ⚠️ **风险提示**：handleSet 有 FR-8.7 双分支（非终态写 cancelled history vs 终态快速路径）+ FR-8.12 AI 触发，是命令路径最复杂处。建议执行者用 fake pi（mock sendUserMessage / appendEntry）补 command-adapter.test.ts 覆盖 set 的两分支。
+
+### 2. 架构边界
+
+- [ ] `grep -rn "\.\./state\|\.\./command-handler" extensions/goal/src/adapters/command-adapter.ts` 无输出（不 import 旧文件）
+- [ ] adapters 层可 import Pi 类型（`ExtensionAPI` / `ExtensionContext` / `CustomEntry`）
+- [ ] 禁止 `any`
+
+### 3. 接口契约
+
+- [ ] 导出 8 个子命令 handler：`handleSet` / `handleResume` / `handleClear` / `handleAbort` / `handleUpdate` / `handleStatus` / `handleHistory` / `handleHelp`（或统一的 `handleGoalCommand` 分发器 + 内部 8 个函数）
+- [ ] 导出 `makePorts(pi, ctx): ServicePorts`（command-adapter 与 event-adapter 共用的 Pi→ports 桥接）
+
+### 4. 行为契约
+
+- [ ] FR-8.12：handleSet 创建后调 `pi.sendUserMessage(objective, { deliverAs: "followUp" })`；handleResume 有未完成任务时同样调 sendUserMessage
+- [ ] FR-8.7 G-R2-008：handleSet 覆盖非终态旧 goal 写 cancelled history；覆盖终态旧 goal 快速路径（不写 history）
+- [ ] FR-8.4 G-002：handleUpdate 重塑（重置 objective/tasks/budget flags/stallCount/currentTurnIndex，保留 goalId）
+- [ ] FR-6.3：clear（强制清，不检查未完成）/ abort（检查未完成，有非 cancelled task 则拒绝）语义
+
+### 5. 提交
+
+- [ ] commit message 以 `wave-11:` 开头，含「8 /goal subcommands」+「FR-8.12」+「FR-8.7」

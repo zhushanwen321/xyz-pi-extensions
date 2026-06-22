@@ -353,11 +353,31 @@ git add extensions/goal/src/projection/widget.ts
 git commit -m "refactor(goal): add projection/widget.ts with hasUI guard (Wave 6)"
 ```
 
-## 验证清单
+## 验收标准
 
-- [ ] `projection/widget.ts` 不 import `@mariozechner` / `@earendil`（projection 层零 Pi 依赖）
-- [ ] `ThemeLike.fg` 接收 `string`，非 `ThemeColor`
-- [ ] `updateWidget(session, uiPort)` 在 `uiPort.hasUI === false` 时直接 return（FR-6.6）
-- [ ] 不 import 旧文件（`../state`、`../budget`、`../tool-handler`、`../widget`）
-- [ ] 导出签名与 plan.md 接口契约一致：`ThemeLike` / `toSingleLine` / `renderStatusLine` / `renderTerminalStatusLine` / `renderWidgetLines` / `updateWidget`
-- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 通过
+### 1. 测试
+
+- [ ] **无独立单元测试**——widget 是纯渲染投影，由 Wave 14 集成测试间接覆盖
+- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
+- [ ] 全量 `test` 仍全绿（不破坏 Wave 0-5）
+
+### 2. 架构边界
+
+- [ ] `grep -rn "@mariozechner\|@earendil" extensions/goal/src/projection/widget.ts` 无输出（projection 零 Pi 依赖）
+- [ ] `grep -rn "\.\./state\|\.\./budget\|\.\./tool-handler\|\.\./widget" extensions/goal/src/projection/widget.ts` 无输出（不 import 旧文件）
+- [ ] `ThemeLike.fg` 接收 `string`，非 Pi 的 `ThemeColor`
+- [ ] `grep -n "Date.now" extensions/goal/src/projection/widget.ts` 无输出（时间读 state.timeUsedSeconds）
+
+### 3. 接口契约
+
+- [ ] 导出与 plan.md 契约一致：`ThemeLike` / `toSingleLine(text)` / `renderStatusLine(state, th)` / `renderTerminalStatusLine(state, th)` / `renderWidgetLines(state, th)` / `updateWidget(session, uiPort)`
+
+### 4. 行为契约
+
+- [ ] FR-6.6：`updateWidget` 在 `uiPort.hasUI === false` 时直接 return（不调 setWidget / setStatus）
+- [ ] cancelled / 无 state 时清除 widget + status（setWidget/setStatus 传 undefined）
+- [ ] 终态折叠为单行 status bar（renderTerminalStatusLine），非终态用完整 widget lines
+
+### 5. 提交
+
+- [ ] commit message 以 `wave-6:` 开头，含「projection/widget.ts」+「hasUI guard」

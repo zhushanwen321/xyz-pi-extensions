@@ -354,14 +354,42 @@ pnpm --filter @zhushanwen/pi-goal test
 
 ---
 
-## 完成标志
+## 验收标准
 
-全部以下条件满足时，架构重写完成：
+> 本 wave 是大爆炸切换的收口，验收标准即整个重构的最终 gate。全部满足才算架构重写完成。
 
-- [ ] typecheck 零错误
-- [ ] lint 零错误
-- [ ] test 全绿
-- [ ] engine/ 零 Pi import（grep 无输出）
-- [ ] hasPendingInjection / pendingPause / lastCtx / any / eslint-disable 全部 grep 无输出
-- [ ] 9 个旧文件已删除
+### 1. 测试
+
+- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
+- [ ] `pnpm --filter @zhushanwen/pi-goal lint` 零错误
+- [ ] `pnpm --filter @zhushanwen/pi-goal test` 全绿（含迁移后的 deserialize-state.test.ts + service.test.ts + engine __tests__）
+- [ ] 2 个迁移测试文件的 import 已从旧模块改为新模块（deserialize-state ← persistence；其他按实际）
+
+### 2. 架构边界（全量 grep 守卫）
+
+- [ ] `grep -rn "@mariozechner\|@earendil" extensions/goal/src/engine/` 无输出（engine 零 Pi import）
+- [ ] `grep -rn "hasPendingInjection" extensions/goal/src/` 无输出（FR-6.4）
+- [ ] `grep -rn "pendingPause" extensions/goal/src/` 无输出（FR-6.7）
+- [ ] `grep -rn "lastCtx" extensions/goal/src/` 无输出（FR-4.2 / D-16）
+- [ ] `grep -rn "\bany\b" extensions/goal/src/` 无输出（或在 tsconfig 严格模式下无 any 类型注解）
+- [ ] `grep -rn "eslint-disable" extensions/goal/src/` 无输出
+- [ ] 9 个旧文件已删除（state.ts / tool-handler.ts / action-handlers.ts / agent-end-handler.ts / before-agent-start-handler.ts / command-handler.ts / budget.ts / templates.ts / widget.ts）
 - [ ] index.ts 只 import adapters/engine/projection/service/session/persistence/ports/constants/commands
+
+### 3. 接口契约
+
+- [ ] AC-4：goal_manager tool schema 不变（GoalManagerParams 与重构前逐字段一致）
+- [ ] AC-4：/goal 命令子命令不变（8 个：set/resume/clear/abort/update/status/history/help）
+- [ ] index.ts 导出工厂函数 + __goalInit（AC-4 契约稳定）
+
+### 4. 行为契约
+
+- [ ] FR-4.1：__goalInit 内部调 service.createGoal（双轨消除）
+- [ ] FR-4.2 / D-16：ctx 改必填，移除 lastCtx 模块级可变状态
+- [ ] FR-6.4：移除 hasPendingInjection
+- [ ] FR-6.7：移除 pendingPause（ESC 改用 aborted 守卫）
+- [ ] 整个 goal extension 功能与重构前等价（人工冒烟：/goal set → AI 执行 task → complete_goal → history）
+
+### 5. 提交
+
+- [ ] commit message 以 `wave-14:` 开头，含「index.ts rewrite」+「delete 9 legacy files」+「FR-4.1/4.2/6.4/6.7」

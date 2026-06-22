@@ -316,17 +316,36 @@ git add extensions/goal/src/adapters/tool-adapter.ts
 git commit -m "refactor(goal): add adapters/tool-adapter.ts with schema + dispatch + ports bridge (Wave 10)"
 ```
 
-## 验证清单
+## 验收标准
 
-- [ ] 导出 `GOAL_ENTRY_TYPE`（"goal-state"）/ `HISTORY_ENTRY_TYPE`（"goal-history"）
-- [ ] 导出 `GoalManagerParams` schema（AC-4：10 个 action 枚举 + 全部参数字段与现有一致）
+### 1. 测试
+
+- [ ] **无独立单元测试**——tool-adapter 是组装层，由 Wave 14 集成测试覆盖
+- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
+- [ ] 全量 `test` 仍全绿
+
+### 2. 架构边界
+
+- [ ] `grep -rn "\.\./state\|\.\./tool-handler" extensions/goal/src/adapters/tool-adapter.ts` 无输出（不 import 旧文件）
+- [ ] 禁止 `any`
+- [ ] `GOAL_TASK_STATUSES` / `SUBTASK_STATUSES` import 自 `../engine/task.js`（不在 adapter 重复定义）
+
+### 3. 接口契约
+
+- [ ] 导出常量：`GOAL_ENTRY_TYPE`（"goal-state"）/ `HISTORY_ENTRY_TYPE`（"goal-history"）
+- [ ] 导出 `GoalManagerParams` schema（AC-4：10 个 action 枚举 + 全部参数字段）
 - [ ] 导出 `executeGoalAction(pi, session, params, ctx, signal): Promise<ToolActionResult>`
 - [ ] 导出 `ACTION_HANDLERS: Record<string, ActionHandler>`（合并 10 条）
-- [ ] re-export `GoalManagerDetails`（从 result.ts，或在此定义——plan 接口契约允许两处）
-- [ ] FR-8.2 G-010：stale context 检测（isStaleContextError → stale 提示）
+- [ ] re-export `GoalManagerDetails`
+
+### 4. 行为契约
+
+- [ ] AC-3：`ACTION_HANDLERS` 覆盖全部 10 个 action 字符串（grep 验证枚举值一一对应）
+- [ ] AC-4：schema 与现有 tool-handler.ts 逐字段一致
+- [ ] FR-8.2 G-010：stale context 检测（isStaleContextError → stale 提示，其他错误 → msg + JSON.stringify(params)）
 - [ ] signal.aborted 守卫（返回 error，保持当前行为）
-- [ ] Ports 构造：PersistencePort / UiPort（含 fg/bold 满足 ThemeLike）/ MessagingPort / SessionPort
-- [ ] UiPort.hasUI getter 返回 `Boolean(ctx.hasUI)`（FR-6.6）
-- [ ] 不 import 旧文件，禁止 `any`
-- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 通过
-- [ ] grep 验证 ACTION_HANDLERS 覆盖全部 10 个 action 字符串
+- [ ] Ports 构造：UiPort.hasUI getter 返回 `Boolean(ctx.hasUI)`（FR-6.6）；UiPort 实现挂 fg/bold 满足 ThemeLike 形状
+
+### 5. 提交
+
+- [ ] commit message 以 `wave-10:` 开头，含「tool-adapter.ts」+「AC-3」+「AC-4」

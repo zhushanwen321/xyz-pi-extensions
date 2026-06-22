@@ -451,3 +451,34 @@ grep -n "Date.now\|\.status" extensions/goal/src/engine/budget.ts
 git add extensions/goal/src/engine/budget.ts extensions/goal/src/engine/__tests__/budget.test.ts
 git commit -m "wave-2: add engine/budget.ts — pure budget decisions, FR-6.2 independent warnings, FR-6.5 tick, FR-8.6 token accumulation"
 ```
+
+---
+
+## 验收标准
+
+### 1. 测试
+
+- [ ] `pnpm --filter @zhushanwen/pi-goal test src/engine/__tests__/budget.test.ts` PASS
+- [ ] 全量 `test` 仍全绿
+
+### 2. 架构边界
+
+- [ ] `grep -rn "@mariozechner\|@earendil" extensions/goal/src/engine/` 无输出
+- [ ] `grep -n "Date.now\|\.status" extensions/goal/src/engine/budget.ts` 无输出（tick 纯函数，不调 Date.now、不读 state.status）
+- [ ] 禁止 `any` / 双重断言
+
+### 3. 接口契约
+
+- [ ] `engine/budget.ts` 导出：`accumulateTokens(state, usage)` / `tick(timeStartedAt, timeUsedSeconds, now, isRunning)` / `checkBudgetOnTurnEnd(state, timeUsedSeconds)` / `checkBudgetOnResume(state, timeUsedSeconds)` / `checkProgress(state, tasksCompletedAtStart, isTaskDoneFn)` / `getTokenUsagePercent(state)` / `getTimeUsagePercent(state)` / `getBudgetColor(pct)`
+- [ ] `tick` 接收 `isRunning: boolean` 参数（不检查 state.status）
+
+### 4. 行为契约
+
+- [ ] FR-6.2：`checkBudgetOnTurnEnd` 用 4 个独立 flag，token steering 命中后**不再 return**（继续检查 time 维度，修复「time 预警被 token 吞」bug）
+- [ ] FR-6.5：tick 纯函数——isRunning=false 时返回原 timeUsedSeconds，不累计
+- [ ] FR-8.6：accumulateTokens 算法 `(max(input-cacheRead,0) + output)`，无 input/output 时回退 totalTokens
+- [ ] checkProgress 接收注入的 `isTaskDoneFn`（不直接 import engine/task，避免 budget 与 task 耦合）
+
+### 5. 提交
+
+- [ ] commit message 以 `wave-2:` 开头，含「FR-6.2」+「FR-6.5」+「FR-8.6」

@@ -178,3 +178,38 @@ export function clearGoalSession(session: GoalSession, uiPort: UiPort): void {
 git add extensions/goal/src/session.ts
 git commit -m "wave-4: add session.ts — GoalSession (no hasPendingInjection/pendingPause) + reconstructGoalState + entry GC + stale context detection"
 ```
+
+---
+
+## 验收标准
+
+### 1. 测试
+
+- [ ] **无独立单元测试**——session.ts 的行为（reconstructGoalState / entry GC / stale 检测）由 Wave 14 集成测试 + Wave 13 event-adapter 间接覆盖
+- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误（类型正确性是本 wave 主验收手段）
+- [ ] 全量 `test` 仍全绿（不破坏 Wave 0-3）
+
+> ⚠️ **风险提示**：session.ts 含 entry GC（splice 索引顺序）+ 非对称强制激活 + stale 检测三段非平凡逻辑，无独立测试意味着这些逻辑的错误要到 Wave 13/14 才暴露。执行者若时间允许，建议补 `session.test.ts`（用 fake SessionPort 验证 GC + 非对称激活）。
+
+### 2. 架构边界
+
+- [ ] `grep -rn "hasPendingInjection\|pendingPause" extensions/goal/src/session.ts` 无输出（FR-6.4 / FR-6.7 字段已删）
+- [ ] import 自 `./engine/types` + `./engine/goal` + `./persistence` + `./ports`（不 import Pi / 旧文件）
+- [ ] 禁止 `any`
+
+### 3. 接口契约
+
+- [ ] `session.ts` 导出：`GoalSession` 类型（state / tasksCompletedAtAgentStart / isProcessing，无 hasPendingInjection/pendingPause）/ `reconstructGoalState(session, sessionPort)` / `clearGoalSession(session, uiPort)` / `isStaleContextError(error): boolean`
+
+### 4. 行为契约
+
+- [ ] FR-6.4：GoalSession 无 hasPendingInjection
+- [ ] FR-6.7：GoalSession 无 pendingPause
+- [ ] FR-8.1 G-006：reconstructGoalState 后 goal-state entry 只保留最新 1 条（splice GC）
+- [ ] FR-8.3 G-015：非对称强制激活——非终态且非 paused → active；paused 保持 paused
+- [ ] FR-8.1 G-024：deserialize throw 时 session.state = null（不崩）
+- [ ] clearGoalSession 内有 FR-6.6 hasUI 守卫
+
+### 5. 提交
+
+- [ ] commit message 以 `wave-4:` 开头，含「no hasPendingInjection/pendingPause」+「reconstructGoalState」+「entry GC」

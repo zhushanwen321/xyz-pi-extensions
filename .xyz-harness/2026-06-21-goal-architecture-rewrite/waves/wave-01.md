@@ -287,3 +287,33 @@ grep -rn "budgetWarning70Sent\|budgetWarning90Sent" extensions/goal/src/engine/
 git add extensions/goal/src/engine/types.ts extensions/goal/src/engine/goal.ts extensions/goal/src/engine/__tests__/goal.test.ts
 git commit -m "wave-1: add engine/types.ts + engine/goal.ts — GoalRuntimeState with 4 independent warning flags (FR-6.2)"
 ```
+
+---
+
+## 验收标准
+
+### 1. 测试
+
+- [ ] `pnpm --filter @zhushanwen/pi-goal test src/engine/__tests__/goal.test.ts` PASS
+- [ ] 全量 `test` 仍全绿（不破坏 Wave 0 的 task.test.ts）
+
+### 2. 架构边界
+
+- [ ] `grep -rn "@mariozechner\|@earendil" extensions/goal/src/engine/` 无输出
+- [ ] `grep -rn "budgetWarning70Sent\|budgetWarning90Sent" extensions/goal/src/engine/` 无输出（旧版共享 flag 已消除）
+- [ ] types.ts 只 import `./task`；goal.ts 只 import `./types`（无跨层 import）
+
+### 3. 接口契约
+
+- [ ] `engine/types.ts` 导出：`GoalStatus` / `GoalRuntimeState`（含 4 个独立预警 flag + `completedAtTurnIndex?`）/ `BudgetConfig` / `DEFAULT_BUDGET`
+- [ ] `engine/goal.ts` 导出：`transitionStatus(current, target)` / `isTerminalStatus(status)` / `isActiveStatus(status)` / `createGoalState(objective, budgetOverrides?)`
+
+### 4. 行为契约
+
+- [ ] FR-6.2：4 个独立预警 flag（tokenWarning70Sent / tokenWarning90Sent / timeWarning70Sent / timeWarning90Sent），非旧版共享 budgetWarning70Sent/budgetWarning90Sent
+- [ ] G-016：`transitionStatus` 仅守卫终态不可覆盖（终态→任意 保持终态；非终态→任意 允许覆盖）
+- [ ] `createGoalState` 初始值：status=active, tasks=[], stallCount=0, tokensUsed=0, timeUsedSeconds=0, currentTurnIndex=0, 4 个 flag 全 false, goalId 唯一非空
+
+### 5. 提交
+
+- [ ] commit message 以 `wave-1:` 开头，含「4 independent warning flags」+「FR-6.2」

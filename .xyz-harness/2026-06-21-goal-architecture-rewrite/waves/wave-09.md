@@ -102,12 +102,31 @@ git add extensions/goal/src/adapters/actions.ts
 git commit -m "refactor(goal): add subtask handlers + sub-records to actions.ts (Wave 9)"
 ```
 
-## 验证清单
+## 验收标准
 
-- [ ] `adapters/actions.ts` 新增 3 个 subtask handler：`handleAddSubtasks` / `handleUpdateSubtasks` / `handleDeleteSubtasks`
-- [ ] 导出 `TASK_ACTION_HANDLERS`（7 条）+ `SUBTASK_ACTION_HANDLERS`（3 条）
-- [ ] JSDoc 标注 FR-8.11（add_subtasks 拒绝 completed）/ FR-8.3 G-018（subtask 宽松状态机）
+### 1. 测试
+
+- [ ] **无独立单元测试**——与 Wave 8 一致，薄封装逻辑在 service
+- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
+- [ ] 全量 `test` 仍全绿
+
+### 2. 架构边界
+
+- [ ] `grep -rn "\.\./state\|\.\./tool-handler\|\.\./action-handlers" extensions/goal/src/adapters/actions.ts` 无输出
 - [ ] 类型 `ActionHandler` / `ActionContext` 不重复定义（继承 Wave 8）
-- [ ] 不 import 旧文件，禁止 `any`
-- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 通过
-- [ ] 10 个 handler + 2 个子 Record，与 plan 接口契约的 10 个 action 枚举值一一对应（grep 验证 action 字符串）
+- [ ] 禁止 `any`
+
+### 3. 接口契约
+
+- [ ] 新增 3 个 subtask handler：`handleAddSubtasks` / `handleUpdateSubtasks` / `handleDeleteSubtasks`
+- [ ] 导出 `TASK_ACTION_HANDLERS`（7 条）+ `SUBTASK_ACTION_HANDLERS`（3 条）两个子 Record
+
+### 4. 行为契约
+
+- [ ] FR-8.11（G-R4-004）：add_subtasks 拒绝给 completed 状态的 task 加 subtask（`isTerminalTaskStatus(parentTask.status) || parentTask.status === "completed"`）
+- [ ] FR-8.3 G-018：subtask 宽松状态机（JSDoc 标注）
+- [ ] 10 个 handler + 2 个子 Record，与 plan 接口契约的 10 个 action 枚举值一一对应
+
+### 5. 提交
+
+- [ ] commit message 以 `wave-9:` 开头，含「3 subtask handler」+「FR-8.11」

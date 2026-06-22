@@ -198,12 +198,31 @@ git add extensions/goal/src/adapters/actions.ts
 git commit -m "refactor(goal): add adapters/actions.ts task handlers (Wave 8)"
 ```
 
-## 验证清单
+## 验收标准
 
-- [ ] `adapters/actions.ts` 导出 7 个 task handler：`handleCreateTasks` / `handleAddTasks` / `handleUpdateTasks` / `handleListTasks` / `handleCompleteGoal` / `handleReportBlocked` / `handleCancelGoal`
-- [ ] 导出类型：`ActionHandler` / `ActionContext` / `GoalToolParams`
-- [ ] 每个 handler 是薄封装，调 `applyToolAction(session, action, params, ports)`
-- [ ] JSDoc 标注 FR-8.8（create_tasks 覆盖）/ FR-8.9（verification steering）/ FR-8.10（全 cancelled 守卫）/ FR-3.3（blocked 不走 finalizeGoal）/ FR-8.7（cancel 立即 clear）/ FR-8.5（cancel tasks:[]）/ G-005（list_tasks 只读）
+### 1. 测试
+
+- [ ] **无独立单元测试**——actions 是薄封装，逻辑在 service.applyToolAction（Wave 5 已测）
+- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
+- [ ] 全量 `test` 仍全绿
+
+### 2. 架构边界
+
+- [ ] `grep -rn "\.\./state\|\.\./tool-handler\|\.\./action-handlers" extensions/goal/src/adapters/actions.ts` 无输出（不 import 旧文件）
 - [ ] adapters 层可 import Pi 类型（`ExtensionAPI` / `ExtensionContext`）
-- [ ] 不 import 旧文件，禁止 `any`（用 `Record<string, unknown>`）
-- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 通过
+- [ ] 禁止 `any`（用 `Record<string, unknown>` + 内部断言）
+
+### 3. 接口契约
+
+- [ ] 导出 7 个 task handler：`handleCreateTasks` / `handleAddTasks` / `handleUpdateTasks` / `handleListTasks` / `handleCompleteGoal` / `handleReportBlocked` / `handleCancelGoal`
+- [ ] 导出类型：`ActionHandler` / `ActionContext` / `GoalToolParams`
+- [ ] 每个 handler 签名 `(actx: ActionContext) => ToolActionResult`
+
+### 4. 行为契约
+
+- [ ] 每个 handler 是薄封装（1-3 行），委托 `service.applyToolAction(session, action, params, ports)`
+- [ ] JSDoc 标注 FR 交叉引用：FR-8.8（create_tasks 覆盖）/ FR-8.9（verification steering）/ FR-8.10（全 cancelled 守卫）/ FR-3.3（blocked 不走 finalizeGoal）/ FR-8.7（cancel 立即 clear）/ FR-8.5（cancel tasks:[]）/ G-005（list_tasks 只读）
+
+### 5. 提交
+
+- [ ] commit message 以 `wave-8:` 开头，含「adapters/actions.ts」+「7 task handler」

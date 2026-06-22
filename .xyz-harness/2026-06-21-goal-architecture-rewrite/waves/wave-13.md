@@ -495,3 +495,63 @@ import {
 git add extensions/goal/src/adapters/event-adapter.ts
 git commit -m "wave-13: add before_agent_start + agent_end — FR-8.7 full branch priority, ESC guard, staleness reminder, context pause, stall detection, continuation debounce"
 ```
+
+---
+
+## 验收标准
+
+### 1. 测试
+
+- [ ] **强烈建议补 event-adapter.test.ts**——agent_end 的 4 层分支优先级是整个重构最复杂、最不能靠 typecheck 兜底的逻辑
+- [ ] 若补测试，用 fake ctx（mock signal.aborted / sessionManager / ui）+ makeState/makeTask 构造场景，覆盖以下路径：
+  - [ ] ESC：ctx.signal.aborted=true → 不发 continuation、不递增 stall、不做 budget 检查、goal 保持 active
+  - [ ] allTasksDone + maxTurnsReached → complete
+  - [ ] allTasksDone + budgetTight → steer
+  - [ ] allTasksDone + 正常 → followUp
+  - [ ] noTasksCreated + maxTurnsReached → cancelled
+  - [ ] 有未完成 + maxTurnsReached → cancelled
+  - [ ] stall 检测：completedCount 未增 → stallCount++
+  - [ ] continuation 去抖：tokenDelta=0 不发
+  - [ ] before_agent_start：AUTO_CLEAR_TURNS=2 终态后 clearGoalSession
+  - [ ] before_agent_start：staleness reminder 重置 lastUpdatedTurn
+  - [ ] before_agent_start：context pause（CONTEXT_USAGE_RATIO_LIMIT=0.85）
+- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
+- [ ] 全量 `test` 仍全绿
+
+> 🚨 **最高风险 wave**：307 行 agent_end 完整分支逻辑，typecheck 验证不了任何行为正确性。如果不补测试，这个 wave 等于把最复杂的逻辑裸奔上线，Wave 14 的集成测试（旧架构迁移来的）根本不覆盖 ESC guard / 4 层分支优先级 / continuation 去抖等新行为。
+
+### 2. 架构边界
+
+- [ ] `grep -rn "\.\./state\|\.\./agent-end-handler\|\.\./before-agent-start-handler\|\.\./budget" extensions/goal/src/adapters/event-adapter.ts` 无输出（不 import 旧文件；budget 走 engine/budget）
+- [ ] 禁止 `any`
+- [ ] 已知 hack 需记录（不阻塞验收，但 Wave 14 需清理）：
+  - `handleTerminalStateBeforeAgent` 的 `makePorts({} as ExtensionAPI, ctx)`
+  - theme 桥接 `ctx.ui.theme as unknown as { fg: ...; bold: ... }`
+
+### 3. 接口契约
+
+- [ ] 新增 2 个事件 handler：`handleBeforeAgentStart` / `handleAgentEnd`
+- [ ] 与 Wave 12 的 4 个 handler 合并后，event-adapter.ts 共 6 个 handler（覆盖 Pi 的 6 个事件）
+
+### 4. 行为契约
+
+#### before_agent_start
+- [ ] FR-8.1 G-007：AUTO_CLEAR_TURNS=2，终态 goal 2 turn 后 clearGoalSession
+- [ ] FR-8.6 staleness reminder：TASK_STALL_TURN_THRESHOLD=10，**重置被提醒项 lastUpdatedTurn**（避免重复触发）
+- [ ] FR-8.6 context pause：CONTEXT_USAGE_RATIO_LIMIT=0.85，超限转 paused
+- [ ] 正常 context injection（contextInjectionPrompt）
+
+#### agent_end（FR-8.7 完整分支）
+- [ ] FR-8.2 G-021：isProcessing 防重入
+- [ ] FR-8.2 G-020：makeStaleChecker + 入口 checkStale + 每个副作用前 checkStale
+- [ ] **FR-6.7 ESC 守卫（最关键）**：ctx.signal?.aborted → 不发 continuation、不递增 stall、不做 budget 检查、goal 保持 active
+- [ ] FR-8.7 分支优先级（按序）：
+  1. allTasksDone → maxTurnsReached? complete : budgetTight? steer : followUp
+  2. noTasksCreated → maxTurnsReached? cancelled : followUp
+  3. maxTurnsReached（有未完成）→ cancelled
+  4. 否则 → stall 检测 + continuation
+- [ ] FR-8.6 continuation 去抖：tokenDelta=0 不发
+
+### 5. 提交
+
+- [ ] commit message 以 `wave-13:` 开头，含「FR-8.7 full branch priority」+「ESC guard」+「stall detection」
