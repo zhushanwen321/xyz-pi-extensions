@@ -12,7 +12,7 @@
 ## 关键改动点
 
 1. **schema 完全保持**（AC-4）：`GoalManagerParams` 与现有 `tool-handler.ts` 逐字段一致——action 枚举、tasks/updates/taskId/texts/subUpdates/subIds/verifications/evidence/reason/cancelReason 全部不变。`StringEnum` 自 `@mariozechner/pi-ai`，`Type`/`Static` 自 `typebox`。
-2. **status 枚举数组来源**：`GOAL_TASK_STATUSES` / `SUBTASK_STATUSES` 在 engine/task.ts（Wave 0）定义并 export（engine 层导出 readonly 数组供 schema 复用，类型规范源头）。本文件 import 自 `../engine/task.js`。
+2. **status 枚举数组来源**：`TASK_STATUSES` / `SUBTASK_STATUSES` 在 engine/task.ts（Wave 0）定义并 export（engine 层导出 readonly 数组供 schema 复用，类型规范源头）。本文件 import 自 `../engine/task`。（实现修正 1：plan 原写 `GOAL_TASK_STATUSES`，但 engine/task.ts 实际 export 名为 `TASK_STATUSES`——旧 state.ts 的 `GOAL_TASK_STATUSES` 是同名旧导出，engine 层重命名去掉了 `GOAL_` 前缀。）
 3. **ACTION_HANDLERS 组装**：`{ ...TASK_ACTION_HANDLERS, ...SUBTASK_ACTION_HANDLERS }` 合并 Wave 8/9 的两个子 Record，得到完整 10 条路由表。AC-3 编译期完整性由 typebox 的 `action` 枚举 + Record 查表共同保证（漏 handler → 运行时 `Unknown action`，但 typebox 已在 schema 层拒绝非法 action）。
 4. **Ports 构造（Pi → ServicePorts 桥接）**：`buildPorts(pi, ctx)` 把 Pi 的 `pi.appendEntry` / `ctx.ui` / `pi.sendMessage` / `ctx.sessionManager` 适配为 `PersistencePort` / `UiPort` / `MessagingPort` / `SessionPort`。UiPort 实现同时挂 `fg` / `bold`（透传 `ctx.ui.theme`），满足 projection/widget.ts 的 `ThemeLike` 形状（Wave 6 的 `asTheme` 断言依赖此）。
 5. **stale context 检测**（FR-8.2 G-010）：`executeGoalAction` 外层 try/catch，捕获 `isStaleContextError` → 返回 stale 提示；其他错误 → 返回 msg + JSON.stringify(params)。
@@ -320,32 +320,49 @@ git commit -m "refactor(goal): add adapters/tool-adapter.ts with schema + dispat
 
 ### 1. 测试
 
-- [ ] **无独立单元测试**——tool-adapter 是组装层，由 Wave 14 集成测试覆盖
-- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
-- [ ] 全量 `test` 仍全绿
+- [x] **无独立单元测试**——tool-adapter 是组装层，由 Wave 14 集成测试覆盖
+- [x] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
+- [x] 全量 `test` 仍全绿（253 tests passed）
 
 ### 2. 架构边界
 
-- [ ] `grep -rn "\.\./state\|\.\./tool-handler" extensions/goal/src/adapters/tool-adapter.ts` 无输出（不 import 旧文件）
-- [ ] 禁止 `any`
-- [ ] `GOAL_TASK_STATUSES` / `SUBTASK_STATUSES` import 自 `../engine/task.js`（不在 adapter 重复定义）
+- [x] `grep -rn "\.\./state\|\.\./tool-handler" extensions/goal/src/adapters/tool-adapter.ts` 无输出（不 import 旧文件）
+- [x] 禁止 `any`（theme 桥接用 `as never` 单步断言，非 `any`）
+- [x] `TASK_STATUSES` / `SUBTASK_STATUSES` import 自 `../engine/task`（实现修正 1：plan 原写 `GOAL_TASK_STATUSES` 不存在，engine 实际 export 名为 `TASK_STATUSES`）
 
 ### 3. 接口契约
 
-- [ ] 导出常量：`GOAL_ENTRY_TYPE`（"goal-state"）/ `HISTORY_ENTRY_TYPE`（"goal-history"）
-- [ ] 导出 `GoalManagerParams` schema（AC-4：10 个 action 枚举 + 全部参数字段）
-- [ ] 导出 `executeGoalAction(pi, session, params, ctx, signal): Promise<ToolActionResult>`
-- [ ] 导出 `ACTION_HANDLERS: Record<string, ActionHandler>`（合并 10 条）
-- [ ] re-export `GoalManagerDetails`
+- [x] 导出常量：`GOAL_ENTRY_TYPE`（"goal-state"）/ `HISTORY_ENTRY_TYPE`（"goal-history"）
+- [x] 导出 `GoalManagerParams` schema（AC-4：10 个 action 枚举 + 全部参数字段）
+- [x] 导出 `executeGoalAction(pi, session, params, ctx, signal): Promise<ToolActionResult>`
+- [x] 导出 `ACTION_HANDLERS: Record<string, ActionHandler>`（合并 10 条）
+- [~] re-export `GoalManagerDetails`：**实现修正 3**——不 re-export，已由 `projection/result.ts` 直接导出（service.ts 已导出 `ToolActionResult`；result.ts 导出 `GoalManagerDetails`，各层就近导出避免中转）。Wave 14 如需再补。
 
 ### 4. 行为契约
 
-- [ ] AC-3：`ACTION_HANDLERS` 覆盖全部 10 个 action 字符串（grep 验证枚举值一一对应）
-- [ ] AC-4：schema 与现有 tool-handler.ts 逐字段一致
-- [ ] FR-8.2 G-010：stale context 检测（isStaleContextError → stale 提示，其他错误 → msg + JSON.stringify(params)）
-- [ ] signal.aborted 守卫（返回 error，保持当前行为）
-- [ ] Ports 构造：UiPort.hasUI getter 返回 `Boolean(ctx.hasUI)`（FR-6.6）；UiPort 实现挂 fg/bold 满足 ThemeLike 形状
+- [x] AC-3：`ACTION_HANDLERS` 覆盖全部 10 个 action 字符串（grep 验证：schema 中 10 个枚举值，两个子 Record 合并 10 条）
+- [x] AC-4：schema 与现有 tool-handler.ts 逐字段一致（field-by-field 校验通过）
+- [x] FR-8.2 G-010：stale context 检测（isStaleContextError → stale 提示，其他错误 → msg + JSON.stringify(params)）
+- [x] signal.aborted 守卫（返回 error，保持当前行为；新 GoalSession 无 pendingPause 字段，故不再设置）
+- [x] Ports 构造：UiPort.hasUI getter 返回 `Boolean(ctx.hasUI)`（FR-6.6）；UiPort 实现挂 fg/bold 满足 ThemeLike 形状
 
 ### 5. 提交
 
-- [ ] commit message 以 `wave-10:` 开头，含「tool-adapter.ts」+「AC-3」+「AC-4」
+- [x] commit message 以 `wave-10:` 开头，含「tool-adapter.ts」+「AC-3」+「AC-4」
+
+---
+
+## 实现修正记录
+
+1. **`GOAL_TASK_STATUSES` → `TASK_STATUSES`**：plan 引用 `GOAL_TASK_STATUSES`，但 `engine/task.ts` 实际 export 名为 `TASK_STATUSES`（旧 `state.ts` 的 `GOAL_TASK_STATUSES` 是 engine 重命名前的旧名）。修正为 `TASK_STATUSES`，值不变（`readonly TaskStatus[]`）。
+2. **import 不带 `.js` 后缀**：plan 多处写 `from "../engine/task.js"` / `from "../session.js"` 等，实现改为无后缀，与新层（service.ts / projection/* / actions.ts）保持一致（`moduleResolution: "bundler"` 接受）。
+3. **不 re-export `GoalManagerDetails`**：plan 验收 3 要求 re-export，但 `GoalManagerDetails` 已由 `projection/result.ts` 直接导出，无需 tool-adapter 中转（避免无意义 re-export）。Wave 14 如有调用方需求再补。
+4. **UiPort 额外属性 fg/bold 的类型处理**：`UiPort` 接口（ports.ts）只声明 `setWidget/setStatus/notify/hasUI`，未声明 `fg/bold`（D-22 边界）。plan 用 `const uiPort: UiPort = { ..., fg, bold }` 会触发 TS excess property check（TS2353）。改为构造完整对象后 `as UiPort` 单步断言（fg/bold 运行时存在，供 projection/widget.ts 的 `asTheme(uiPort)` 用 `as unknown as ThemeLike` 取出）。
+5. **Pi API 实际签名核对**（plan 标注「方法名以 Pi SDK 实际为准」，实现核对 shared/types/mariozechner/index.d.ts）：
+   - `ctx.hasUI: boolean` ✅ 存在
+   - `ctx.getContextUsage()` 直接在 ctx 上（**非** `ctx.sessionManager.getContextUsage()`，plan 写错）→ 返回 `ContextUsage | undefined`
+   - `ctx.sessionManager` 是 `ReadonlySessionManager`，**无 `spliceEntries`**（plan 疑似写错）。spliceEntry 实现：对 `ctx.sessionManager.getEntries().splice(index, count)` best-effort（保留旧 index.ts:159 行为；reconstructGoalState 的 entry GC 在 session_start 路径才触发，tool 路径不触发）
+   - `ctx.signal: AbortSignal | undefined` ✅
+   - `pi.appendEntry(customType, data)` ✅ / `pi.sendMessage(message, options)` ✅ / `pi.sendUserMessage(content, options)` ✅
+6. **不设置 `session.pendingPause`**：旧 `executeGoalAction` 在 signal.aborted 时设 `session.pendingPause = true`，但新 `GoalSession`（session.ts）已删除该字段（FR-6.7：ESC 改用 aborted 守卫）。故 signal.aborted 分支仅返回 error，不再设标志。
+7. **`sendUserMessage` 用 `pi.sendUserMessage`**：plan 用 `pi.sendMessage`，但 `ExtensionAPI` 有专门的 `sendUserMessage(content, options)`，语义更精确（sendUserMessage 触发 AI 开始工作）。messaging adapter 的 `sendUserMessage` 改用它。
