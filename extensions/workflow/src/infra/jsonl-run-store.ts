@@ -184,8 +184,10 @@ function deserializeRun(snapshot: RunSnapshot): WorkflowRun | null {
     scriptErrorCount: snapshot.meta.scriptErrorCount,
   };
 
-  // WorkflowRun constructor sets runtime=undefined (worker must be re-started by lifecycle).
-  return new WorkflowRun(snapshot.runId, snapshot.spec, state, meta);
+  // WorkflowRun.reconstruct 跳过 I1 校验——持久化的 running 状态没有 worker
+  // （进程被杀后 worker 不可能还活着），违反 I1。D-4 kill-9 恢复在 session_start
+  // 时把残留 running 转 done,failed，恢复 I1（见 index.ts session_start handler）。
+  return WorkflowRun.reconstruct(snapshot.runId, snapshot.spec, state, meta);
 }
 
 // ── JsonlRunStore ────────────────────────────────────────────

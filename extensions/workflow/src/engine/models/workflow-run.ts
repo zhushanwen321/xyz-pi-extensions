@@ -75,17 +75,49 @@ export class WorkflowRun {
    * 创建聚合根。初始状态通常为 "paused"（runtime=undefined，符合不变式 I1），
    * 随后 assignRuntime 进入 "running"。也可传入 done 状态用于 reconstruct
    * 已完成的 run（loadAll 后的只读聚合）。
+   *
+   * 不变式 I1 由构造函数校验——**不可用于 reconstruct 持久化的 running 快照**
+   *（持久化的 running run 没有 worker，违反 I1；进程被杀后 worker 不可能还活着）。
+   * 重水合用 `WorkflowRun.reconstruct()`，它跳过 I1 校验（快照是可信状态）。
+   *
+   * @param reconstructMode 内部用——true 时跳过 I1 校验（仅校验 I2）。
+   *        调用方用 `WorkflowRun.reconstruct()` 静态工厂，不直接传此 flag。
    */
-  constructor(runId: string, spec: RunSpec, state: RunState, meta: WorkflowRunMeta) {
+  constructor(
+    runId: string,
+    spec: RunSpec,
+    state: RunState,
+    meta: WorkflowRunMeta,
+    reconstructMode = false,
+  ) {
     this.runId = runId;
     this.spec = spec;
     this.state = state;
     this.meta = meta;
     // runtime 在构造时始终为 undefined——run 创建时无活 worker，resume/loadAll
     // 时也不重水合 runtime（worker 必须由 lifecycle 重新 start）。
-    // 不变式 I1 由 assignRuntime/transition 维护。
     this.runtime = undefined;
-    this.validateInvariants();
+    if (reconstructMode) {
+      // 重水合：仅校验 I2（done ⟹ reason）。I1 跳过——持久化的 running 状态没有
+      // worker，违反 I1；调用方（D-4 kill-9 恢复）负责恢复 I1。
+      this.validateInvariantI2();
+    } else {
+      this.validateInvariants();
+    }
+  }
+
+  /**
+   * 从持久化快照重水合聚合根。跳过 I1 校验——持久化的 running 状态没有 worker
+   * （进程被杀后 worker 不可能还活着），违反 I1。调用方（D-4 kill-9 恢复）负责
+   * 在 session_start 时把残留 running 转 done,failed，恢复 I1。
+   *
+   * 与 `new WorkflowRun(...)` 的区别：constructor 校验 I1（适合 live 创建），
+   * reconstruct 跳过（适合可信快照重水合）。
+   *
+   * @throws I2 违反（done 快照缺 reason 仍是 bug，不可跳过）
+   */
+  static reconstruct(runId: string, spec: RunSpec, state: RunState, meta: WorkflowRunMeta): WorkflowRun {
+    return new WorkflowRun(runId, spec, state, meta, true);
   }
 
   // ── 不变式校验 ─────────────────────────────────────────────
@@ -95,6 +127,7 @@ export class WorkflowRun {
    * 在每个 mutation 方法末尾调用（防御式编程 + 测试可断言）。
    */
   private validateInvariants(): void {
+    this.validateInvariantI2();
     // I1: status==="running" ⟺ runtime!==undefined
     if (this.state.status === "running" && this.runtime === undefined) {
       throw new Error(
@@ -106,7 +139,13 @@ export class WorkflowRun {
         `WorkflowRun invariant I1 violated: status!=="running" but runtime is defined (runId=${this.runId})`,
       );
     }
-    // I2: status==="done" ⟹ reason!==undefined
+  }
+
+  /**
+   * 仅校验不变式 I2（done ⟹ reason）。reconstruct 时用——持久化的 running 快照
+   * 违反 I1（无 worker），但 I2 必须保证（done 快照缺 reason 是真 bug）。
+   */
+  private validateInvariantI2(): void {
     if (this.state.status === "done" && this.state.reason === undefined) {
       throw new Error(
         `WorkflowRun invariant I2 violated: status==="done" but reason is undefined (runId=${this.runId})`,

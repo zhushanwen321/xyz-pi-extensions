@@ -171,6 +171,15 @@ export async function handleWorkerMessage(
  *
  * 异步触发（不 await）——立即返回，让 worker 能继续发后续 agent-call（parallel 场景）。
  * executeAgentCall 内部完成 markDone + trace.update。
+ *
+ * **C-3 修复**：executeAgentCall 通过 `run.runtime.gate.withSlot()` 包装——gate 管并发
+ * 上限（maxConcurrency=4）+ FIFO 排队，runner 管 spawn。两层职责分离。
+ *
+ * **C-2 修复**：call 完成后检查 `budget.isExceeded()` → abortRun(budget_limited)，
+ * 终止整个 run（避免烧光预算后继续 spawn 新 call）。
+ *
+ * **W-12 修复**：.then() 内 recheck `run.state.status === "running"`，paused 后到达的
+ * call 完成不写 run.state.calls / 不 postAgentResult（pause 是干净快照）。
  */
 function dispatchAgentCall(
   run: WorkflowRun,
@@ -206,15 +215,43 @@ function dispatchAgentCall(
   const call = new AgentCall(msg.callId, opts, node);
   run.state.calls.set(msg.callId, call);
 
-  // 异步触发——不 await（允许 worker 并发发 agent-call）
-  const signal = run.runtime?.controller.signal ?? new AbortController().signal;
-  void executeAgentCall(call, deps.runner, run.state.budget, signal, run.state.trace)
+  // C-3：经 ConcurrencyGate.withSlot 获取并发槽位后执行。
+  // gate 管 maxConcurrency=4 + FIFO；executeAgentCall 管 retry/budget/stale-context；
+  // runner（runner.run）管 spawn pi 子进程。
+  // W-5：assignRuntime/replaceRuntime 保证 status==="running" ⟺ runtime defined，
+  // 故 run.runtime 在此必存在（dispatchAgentCall 仅从 handleWorkerMessage 调用，
+  // 后者已守 paused/terminal 早期 return）。fallback new AbortController 已移除。
+  const runtime = run.runtime!;
+  const signal = runtime.controller.signal;
+  void runtime.gate
+    .withSlot(() => executeAgentCall(call, deps.runner, run.state.budget, signal, run.state.trace), signal)
     .then(() => {
+      // W-12：pause/abort 后到达的 stale completion 不写 state（pause 是干净快照）
+      if (run.state.status !== "running") return;
       if (call.result) postAgentResult(run, msg.callId, call.result, false);
       void deps.store.save(run);
+
+      // C-2：budget 超限 → 终止整个 run（避免继续 spawn 烧预算）
+      // 内联 terminate（不调 lifecycle.abortRun 避免 engine 内循环依赖）：
+      // 若 run 仍非终态，transition done,budget_limited + 持久化。
+      // 上方 status !== "running" 已保证此处非 done（且 transition 内含 done no-op 守卫）。
+      if (run.state.budget.isExceeded()) {
+        run.state.error = run.state.error ?? "Budget exceeded";
+        try {
+          run.transition("done", "budget_limited");
+          void deps.store.save(run);
+          // C-4: budget 终止也触发完成通知
+          deps.onRunDone?.(run);
+        } catch (err) {
+          // run 可能在 budget 检查后、transition 前被并发 abort——忽略
+          void err;
+        }
+      }
     })
     .catch((err: unknown) => {
-      // executeAgentCall 不应 reject（runner.run 不 reject），但防御兜底
+      // withSlot 在 queued + signal-aborted 时 reject AbortError——预期，不记错。
+      // executeAgentCall 本身不 reject（runner.run 不 reject）。
+      if (err instanceof Error && err.name === "AbortError") return;
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[workflow] agent call ${msg.callId} failed: ${message}`);
     });
@@ -247,6 +284,8 @@ async function handleReturn(
   run.state.scriptResult = msg.result;
   run.transition("done", "completed");
   await deps.store.save(run);
+  // C-4: run 到达 done 终态 → 通知 Interface 层
+  deps.onRunDone?.(run);
 }
 
 // ── handleWorkerError ────────────────────────────────────────
@@ -280,6 +319,8 @@ export async function handleWorkerError(
   run.state.error = err.message;
   run.transition("done", "failed");
   await deps.store.save(run);
+  // C-4: run 到达 done 终态 → 通知 Interface 层
+  deps.onRunDone?.(run);
 }
 
 // ── handleWorkerExit ─────────────────────────────────────────
@@ -352,6 +393,8 @@ export async function handleScriptError(
   run.state.error = `Workflow failed after ${MAX_WORKER_RETRIES} retries: ${errorMsg}`;
   run.transition("done", "failed");
   await deps.store.save(run);
+  // C-4: run 到达 done 终态 → 通知 Interface 层
+  deps.onRunDone?.(run);
 }
 
 // ── scheduleRebuild（退避 + 重建） ──────────────────────────

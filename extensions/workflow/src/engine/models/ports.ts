@@ -93,10 +93,17 @@ export interface WorkerHandlers {
  * - workerHost: 启动 worker（WorkerHost port）
  * - runner: 执行 agent（AgentRunner port）
  * - runs: 内存中的活动 run 聚合根索引（runId → WorkflowRun），替代旧 6 张并行 map
+ * - onRunDone?: run 到达 done 终态时的回调（C-4 修复，可选）。由 Interface 层
+ *   factory 注入（notifyDone —— 唤醒 parent agent 消费结果）。Engine 层不依赖
+ *   Pi SDK，通过 callback 把完成信号外推到 Interface 层。所有 transition("done", ...)
+ *   路径（handleReturn / handleWorkerError / handleScriptError / abortRun /
+ *   dispatchAgentCall budget 终止）调完 transition + save 后触发本回调。
  */
 export interface LifecycleDeps {
   store: RunStore;
   workerHost: WorkerHost;
   runner: AgentRunner;
   runs: Map<string, WorkflowRun>;
+  /** run 到达 done 终态时的回调（C-4 修复，可选）。Interface 层注入 notifyDone。 */
+  onRunDone?: (run: WorkflowRun) => void;
 }

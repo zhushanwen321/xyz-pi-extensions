@@ -306,6 +306,57 @@ describe("JsonlRunStore", () => {
       const [loaded] = await store2.loadAll();
       expect(loaded!.runtime).toBeUndefined();
     });
+
+    // ── D-4: reconstruct 不崩溃于 running 快照（I1 跳过） ───
+
+    it("D-4: reconstructs a running run WITHOUT throwing I1 (kill-9 recovery path)", async () => {
+      // 模拟 kill-9 崩溃前持久化的 running run：
+      // 1. 构造 paused run（constructor 校验 I1 通过）
+      // 2. 用 assignRuntime 进入 running（I1 保持：runtime!==undefined && status==="running"）
+      // 3. 直接序列化（绕过 store.save，因为 save 会触发额外状态变化）——模拟崩溃前快照
+      // 4. loadAll 重水合——必须不抛 I1（reconstruct 跳过校验），D-4 循环才能 catch 到
+      const pi = mockPi();
+      const store = new JsonlRunStore({ sessionDir: tmpDir, pi });
+
+      // 构造 running run via assignRuntime
+      const pausedRun = makePausedRun("kill9-run");
+      const fakeRuntime = {
+        worker: { postMessage() {}, terminate() {}, isCurrent: true, on() {} },
+        gate: { enqueue: vi.fn(), activeCount: 0, queueLength: 0 },
+        controller: new AbortController(),
+        release() {},
+        isReleased: false,
+      };
+      // eslint-disable-next-line taste/no-unsafe-cast
+      pausedRun.assignRuntime(fakeRuntime as any);
+      expect(pausedRun.state.status).toBe("running");
+
+      // 持久化（snapshot 会含 status:"running"，runtime 不持久化）
+      await store.save(pausedRun);
+
+      // 重水合——D-4 路径的关键：reconstruct 不抛 I1
+      const store2 = new JsonlRunStore({
+        sessionDir: tmpDir,
+        ctx: mockCtx(pi._entries.map((e) => ({
+          type: "custom",
+          customType: e.type,
+          data: e.data,
+        }))),
+      });
+      const loaded = await store2.loadAll();
+      expect(loaded.length).toBe(1);
+      const [reconstructed] = loaded;
+      expect(reconstructed!.runId).toBe("kill9-run");
+      // 关键断言：重水合后的 run status 仍是 running（worker 缺失但 I1 跳过校验）
+      expect(reconstructed!.state.status).toBe("running");
+      expect(reconstructed!.runtime).toBeUndefined();
+
+      // D-4 kill-9 恢复：调用方把 running → done,failed（恢复 I1）
+      reconstructed!.state.error = "Process killed (kill-9 or crash recovery)";
+      reconstructed!.transition("done", "failed");
+      expect(reconstructed!.state.status).toBe("done");
+      expect(reconstructed!.state.reason).toBe("failed");
+    });
   });
 
   // ── D-5: old format returns empty ─────────────────────────

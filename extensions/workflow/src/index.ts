@@ -41,7 +41,7 @@ import { SubprocessAgentRunner } from "./infra/subprocess-agent-runner.js";
 import { WorkerHostImpl } from "./infra/worker-host.js";
 import { WorkflowScriptRegistryImpl } from "./infra/workflow-script-registry-impl.js";
 import { registerWorkflowsCommand } from "./interface/commands.js";
-import { APPROVAL_MEMORY_TYPE } from "./interface/helpers.js";
+import { APPROVAL_MEMORY_TYPE, notifyDone } from "./interface/helpers.js";
 import { registerWorkflowTool } from "./interface/tool-workflow.js";
 import { registerWorkflowScriptTool } from "./interface/tool-workflow-script.js";
 
@@ -63,8 +63,8 @@ declare module "@mariozechner/pi-coding-agent" {
 export default function workflowExtension(pi: ExtensionAPI): void {
   const lsRef = { lastSessionId: "" };
   const sessionApprovals = new Set<string>();
-  // notifyDone 去重 Set（W5 T31 view 订阅后启用）
-  // const notifiedRunIds = new Set<string>();
+  // C-4: notifyDone 去重 Set——同一 runId 只通知一次（跨 done 路径 / 边界防重复）。
+  const notifiedRunIds = new Set<string>();
   // P1-6: Reentry guard — shared between workflow + workflow-script tools
   const guard = { isProcessing: false };
 
@@ -95,7 +95,16 @@ export default function workflowExtension(pi: ExtensionAPI): void {
   // ── Helper: 构建 LauncherDeps ─────────────────────────────
 
   function makeDeps(store: JsonlRunStore, runs: Map<string, WorkflowRun>) {
-    return { store, workerHost, runner, runs, registry };
+    // C-4: onRunDone callback——run 到达 done 终态时触发 notifyDone，唤醒 parent agent
+    // 消费结果（UC-1 主路径）。所有 transition("done", ...) 路径调完 save 后触发。
+    return {
+      store,
+      workerHost,
+      runner,
+      runs,
+      registry,
+      onRunDone: (run: WorkflowRun) => notifyDone(pi, run.runId, run, notifiedRunIds),
+    };
   }
 
   // ── Helper: 检查脚本是否正在运行（delete guard 用） ────────
@@ -252,9 +261,4 @@ export default function workflowExtension(pi: ExtensionAPI): void {
     const state = sessionState.get(lsRef.lastSessionId);
     return state?.runs ?? new Map();
   });
-
-  // ── notifyDone hook（run done 时发完成通知） ──────────────
-  // 旧 orchestrator.onCompletion 的等价——这里用轮询（简化）：
-  // T28 不实现事件通知；notifyDone 由 tool execute 在 abort/done 后调用，
-  // 或由后续 T31 的 view 订阅。过渡期 run 完成通知暂缺（W5 T31 补）。
 }

@@ -58,11 +58,22 @@ interface QueueEntry {
   signal?: AbortSignal;
 }
 
+/** withSlot 排队等待项（C-3 修复）。fn/resolve 类型已擦除为 unknown，
+ * 调用方 withSlot<T> 内部包装为类型安全的 closure。 */
+interface SlotWaiter {
+  fn: () => Promise<unknown>;
+  resolve: (value: unknown) => void;
+  reject: (err: unknown) => void;
+  signal?: AbortSignal;
+}
+
 // ── ConcurrencyGate ───────────────────────────────────────────
 
 export class ConcurrencyGate {
   private readonly maxConcurrency: number;
   private readonly queue: QueueEntry[] = [];
+  /** withSlot FIFO 等待队列（C-3 修复）。 */
+  private readonly slotQueue: SlotWaiter[] = [];
   private active = 0;
 
   constructor(opts: ConcurrencyGateOptions | number = {}) {
@@ -85,6 +96,12 @@ export class ConcurrencyGate {
    *
    * 返回的 Promise 在成功与失败时都 resolve——不 reject。错误信息放在
    * result.error 字段（与旧 AgentPool.enqueue 契约一致，调用方据 error 判断失败）。
+   *
+   * **NOTE（C-3 修复）**：本方法自包含 spawn pi 子进程——与 SubprocessAgentRunner
+   * 是平行的 spawn 路径。Engine 层的 executeAgentCall 用 SubprocessAgentRunner +
+   * gate.withSlot() 协作（gate 管并发槽位，runner 管 spawn），**不走 enqueue**。
+   * enqueue 保留为：(1) 旧 ConcurrencyGate 测试的入口；(2) 未来若需统一 spawn 入口
+   * 可再行收口。当前生产路径见 `engine/execute-agent-call.ts` + `error-recovery.ts:dispatchAgentCall`。
    */
   enqueue(opts: AgentCallOpts, signal?: AbortSignal): Promise<AgentResult> {
     return new Promise<AgentResult>((resolve) => {
@@ -130,6 +147,85 @@ export class ConcurrencyGate {
       this.run(entry).finally(() => {
         this.active--;
         this.drain();
+      });
+    }
+  }
+
+  /**
+   * 获取一个并发槽位，执行 `fn`，释放槽位。
+   *
+   * **C-3 修复**：Engine 层（executeAgentCall via dispatchAgentCall）用此方法包装
+   * runner.run()——gate 管并发上限（maxConcurrency=4）+ FIFO 排队，runner 管 spawn
+   * pi 子进程。两者职责分离：本方法只做信号量 + FIFO，不 spawn。
+   *
+   * 若已达上限：fn 排队等待（FIFO），active < maxConcurrency 后才执行。
+   * signal abort 时：若 fn 尚未开始（仍在队列中），立即 reject AbortError；
+   * 若 fn 已在执行，signal 由 fn 内部消费（runner.run 传播到子进程）。
+   *
+   * @param fn     槽位获取后执行的异步函数（通常 () => runner.run(opts, signal)）
+   * @param signal 外部 abort signal（排队期间 abort 立即 reject）
+   * @returns fn 的返回值
+   * @throws AbortError（signal abort 时 fn 尚未开始）
+   */
+  async withSlot<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    // pre-aborted：立即拒绝（与 enqueue 的 pre-abort 语义一致）
+    if (signal?.aborted) {
+      const err = new Error("Operation aborted before start");
+      err.name = "AbortError";
+      throw err;
+    }
+
+    // 槽位可用 → 直接执行
+    if (this.active < this.maxConcurrency) {
+      this.active++;
+      try {
+        return await fn();
+      } finally {
+        this.active--;
+        this.drain();
+      }
+    }
+
+    // 槽位满 → 排队等待（FIFO）
+    return new Promise<T>((resolve, reject) => {
+      // 包装为类型擦除的 waiter：fn 返回 unknown，resolve 接 unknown；
+      // 外层 Promise<T> 的 resolve/reject 保持类型安全（T 传入即固定）。
+      const entry: SlotWaiter = {
+        fn: fn as () => Promise<unknown>,
+        resolve: resolve as (value: unknown) => void,
+        reject: reject as (err: unknown) => void,
+        signal,
+      };
+      this.slotQueue.push(entry);
+
+      if (signal) {
+        const onAbort = (): void => {
+          const idx = this.slotQueue.indexOf(entry);
+          if (idx !== -1) {
+            this.slotQueue.splice(idx, 1);
+            const err = new Error("Operation aborted while queued");
+            err.name = "AbortError";
+            reject(err);
+          }
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+
+      this.drainSlots();
+    });
+  }
+
+  /** 派发 slot 队列直到达并发上限。 */
+  private drainSlots(): void {
+    while (this.active < this.maxConcurrency && this.slotQueue.length > 0) {
+      const entry = this.slotQueue.shift()!;
+      this.active++;
+      entry.fn().then(
+        (v) => entry.resolve(v),
+        (err) => entry.reject(err),
+      ).finally(() => {
+        this.active--;
+        this.drainSlots();
       });
     }
   }

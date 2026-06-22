@@ -276,4 +276,6 @@ export async function abortRun(
   // A4: transition 内部 releaseRuntime（cleanup before mutate）
   run.transition("done", doneReason);
   await deps.store.save(run);
+  // C-4: run 到达 done 终态 → 通知 Interface 层（notifyDone 唤醒 parent agent）
+  deps.onRunDone?.(run);
 }
