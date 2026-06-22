@@ -267,9 +267,12 @@ export async function cancelHandler(
   // 注意：不嵌入 rec.status——findRecord 快照可能已过期（TOCTOU：cancel 期间 detached
   // 路径 CAS 到 done/failed）。重新查当前状态，避免「status: running」与「already finished」矛盾。
   if (!service.cancel(id)) {
+    // CAS 失败 = record 在 cancel 期间被 detached 路径 finalize（done/failed）。
+    // re-query 查当前真实状态。若 record 已被内存淘汰（bg FIFO 50 cap / sync 5s linger），
+    // 诚实报告 "unknown (evicted)" 而非回落到可能过期的 rec.status（BL-3）。
     const now = service.findRecord(id);
-    const currentStatus = now?.status ?? rec.status;
-    throw new Error(`Subagent ${id} could not be cancelled (it likely just finished; status: ${currentStatus})`);
+    const statusDesc = now ? now.status : "unknown (evicted from memory)";
+    throw new Error(`Subagent ${id} could not be cancelled (it likely just finished; status: ${statusDesc})`);
   }
   return { subagentId: id, response: { cancelled: true } };
 }

@@ -1,5 +1,5 @@
 // src/__tests__/model-resolver.test.ts
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   availableThinkingLevels,
@@ -212,5 +212,66 @@ describe("availableThinkingLevels", () => {
     expect(
       availableThinkingLevels({ reasoning: true, thinkingLevelMap: { off: 0, high: 2, low: 1, xhigh: 3 } }),
     ).toEqual(["off", "low", "high", "xhigh"]);
+  });
+});
+
+// ============================================================
+// ModelConfigService: initModel(ctxModel) → resolveModel L3 plumb-through
+// changeset 主打路径的 runtime 契约保护（EA-4）。
+// 链路：session_start initModel({ctxModel}) → _ctxModel 缓存 → resolveModel 第三层命中
+// ============================================================
+
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { ModelConfigService } from "../runtime/model-config-service.ts";
+
+describe("ModelConfigService: ctx.model plumb-through (EA-4)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-resolver-test-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  /** 构造已 initModel 的 ModelConfigService，ctxModel 注入缓存。 */
+  function makeService(ctxModel: ModelInfo | undefined, registry: ModelRegistryLike = makeRegistry([])): ModelConfigService {
+    const svc = new ModelConfigService({ agentDir: tmpDir });
+    svc.initModel({
+      modelRegistry: registry,
+      sessionId: "test-session",
+      ctxModel,
+    });
+    return svc;
+  }
+
+  it("initModel caches ctxModel; resolveModel L3 returns it (no override, no agentConfig.model)", () => {
+    const main = makeModel({ id: "main-model", provider: "main" });
+    const svc = makeService(main);
+
+    // 无 override、无 agentConfig.model → 第三层命中缓存的 ctxModel
+    const r = svc.resolveModel("general-purpose", undefined);
+    expect(r.model).toBe(main);
+  });
+
+  it("resolveModel L3 hits cached ctxModel even with agent that has no model in frontmatter", () => {
+    const main = makeModel({ id: "inherited", provider: "parent" });
+    const svc = makeService(main);
+
+    // worker.md 无 model frontmatter → 跳过 L2，命中 L3 ctxModel
+    const r = svc.resolveModel("worker", undefined);
+    expect(r.model).toBe(main);
+  });
+
+  it("resolveModel still prefers explicit paramOverride over cached ctxModel (L1 > L3)", () => {
+    const main = makeModel({ id: "main", provider: "main" });
+    const explicit = makeModel({ id: "explicit", provider: "p1" });
+    const svc = makeService(main, makeRegistry([explicit]));
+
+    const r = svc.resolveModel("worker", { model: "p1/explicit" });
+    expect(r.model.id).toBe("explicit");
   });
 });

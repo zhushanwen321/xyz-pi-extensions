@@ -226,9 +226,14 @@ class SubagentResultComponent implements Component {
    *
    *   判断信号：内层 syncResponse.mode === "sync"（非旧 backgroundId）。
    *   旧 bug：poll 返回的 QueryResult 无 backgroundId → spinner 误启动 → setInterval 永久泄漏 → 锁死。
+   *
+   *   Defense-in-depth（第二层守卫，BL-6/TS-2/TS-4）：第一层在 subagent-service.ts execute()
+   *   的 B1 守卫——background 路径 onUpdate 被置 undefined，bg 事件不会回流 tool 层。
+   *   此处 mode === "sync" 是冗余守卫——若未来 B1 被误删，这里仍能阻断 bg 事件启动 spinner。
+   *   不要删此 gate 除非 B1 守卫有强测试覆盖且不可变。
    */
   private maybeToggleSpinner(): void {
-    const sync = this.details.syncResponse;
+    const sync = "syncResponse" in this.details ? this.details.syncResponse : undefined;
     const isSyncRunning = sync !== undefined && sync.status === "running" && sync.mode === "sync";
     if (isSyncRunning) {
       if (this.spinnerTimer === undefined && this.invalidateFn) {
@@ -260,7 +265,7 @@ class SubagentResultComponent implements Component {
       )];
     }
     // ── start 分支：sync / bg ──
-    if (d.bgResponse) {
+    if ("bgResponse" in d) {
       // bg 占位：一次性 block，不显示 spinner/eventLog。
       return [truncLine(
         `${theme.fg("accent", "●")} ${theme.fg("dim", "background: ")}${theme.fg("accent", d.subagentId ?? "?")}`
@@ -269,8 +274,8 @@ class SubagentResultComponent implements Component {
       )];
     }
     // sync：从 syncResponse 取字段
+    if (!("syncResponse" in d)) return [truncLine(theme.fg("warning", "(subagent: no sync response)"), width)];
     const sync = d.syncResponse;
-    if (!sync) return [truncLine(theme.fg("warning", "(subagent: no sync response)"), width)];
 
     const lines: string[] = [];
     lines.push(truncLine(buildStatusLineFromSync(sync, theme), width));
@@ -319,15 +324,15 @@ class SubagentResultComponent implements Component {
 
     const lines: string[] = [];
     // bg 占位 expanded 与 compact 同（一次性 block 无细节可展开）
-    if (d.bgResponse) {
+    if ("bgResponse" in d) {
       lines.push(truncLine(
         `${theme.fg("accent", "●")} ${theme.fg("dim", "background: ")}${theme.fg("accent", d.subagentId ?? "?")}`,
         width,
       ));
       return lines;
     }
+    if (!("syncResponse" in d)) return [truncLine(theme.fg("warning", "(subagent: no sync response)"), width)];
     const sync = d.syncResponse;
-    if (!sync) return [truncLine(theme.fg("warning", "(subagent: no sync response)"), width)];
 
     // sync expanded：完整 eventLog + 交付物
     lines.push(truncLine(buildStatusLineFromSync(sync, theme), width));
@@ -355,11 +360,11 @@ class SubagentResultComponent implements Component {
 function isDetailsStructurallyComplete(d: SubagentToolResult): boolean {
   switch (d.action) {
     case "start":
-      return d.syncResponse !== undefined || d.bgResponse !== undefined;
+      return "syncResponse" in d || "bgResponse" in d;
     case "list":
-      return d.listResponse !== undefined;
+      return "listResponse" in d;
     case "cancel":
-      return d.cancelResponse !== undefined;
+      return "cancelResponse" in d;
     default:
       return false;
   }

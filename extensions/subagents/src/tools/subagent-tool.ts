@@ -91,13 +91,13 @@ const SubagentParams = Type.Object({
       description: "The task for the subagent to execute (required for action:'start'). Whitespace-only is rejected.",
     }),
     agent: Type.Optional(Type.String({
-      description: 'Agent name (system prompt + tools). Defaults to "worker". Available: worker, researcher, scout, planner, reviewer, oracle, context-builder. Custom agents configurable.',
+      description: 'Agent name (system prompt + tools). If omitted, defaults to "general-purpose" — a generic agent that inherits the main agent\'s model and project context. Available: general-purpose (default fallback), worker, researcher, scout, planner, reviewer, oracle, context-builder. Custom agents configurable.',
     })),
     wait: Type.Optional(Type.Boolean({
       description: "Execution mode. true (default) = sync: blocks until done, returns result. false = background: returns a subagentId immediately; on completion a message auto-injects that triggers a new turn (no need to poll). Use false for parallel fan-out (multiple start actions with wait:false in one message run concurrently, default maxConcurrent=4) or long tasks.",
     })),
     model: Type.Optional(Type.String({
-      description: 'Model override in "provider/modelId" format. If omitted, the subagent inherits the main agent\'s current model.',
+      description: 'Model override in "provider/modelId" format. Resolution order (top wins): (1) this param, (2) agent .md frontmatter model, (3) the main agent\'s current model (zero-config default). An explicit model (param or frontmatter) that is missing or unauthorized THROWS — there is no silent fallback to the main model. Omit this param to inherit the main model.',
     })),
     thinkingLevel: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const)),
     skillPath: Type.Optional(Type.String()),

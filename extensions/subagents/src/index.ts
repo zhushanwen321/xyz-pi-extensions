@@ -103,14 +103,14 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
   // model_select：用户切换 model 时刷新缓存，保证后续 renderCall 显示新 model。
   // SDK 的 ModelSelectEvent 未从包入口 export，此处用最小结构类型（仅需 .model 字段）。
   // ponytail: 防御性检查——全局 Symbol 单例可能缓存旧版本实例（无 setCtxModel）
-  pi.on("model_select", (event: { model: NonNullable<ExtensionContext["model"]> }) => {
+  pi.on("model_select", (event: { model: NonNullable<ExtensionContext["model"]> }, _ctx: ExtensionContext) => {
     const service = getModelConfigService();
     if (service && typeof service.setCtxModel === "function") {
       service.setCtxModel(event.model);
     }
   });
 
-  pi.on("session_shutdown", (_event: SessionShutdownEvent) => {
+  pi.on("session_shutdown", (_event: SessionShutdownEvent, _ctx: ExtensionContext) => {
     getSubagentService()?.dispose();
   });
 }

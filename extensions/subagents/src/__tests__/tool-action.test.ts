@@ -222,6 +222,38 @@ describe("listHandler", () => {
     const r = listHandler(svc, { includeFinished: true, limit: 2 });
     expect(r.response.items).toHaveLength(2);
   });
+
+  // TC-2: running 态实时 duration（Date.now()-startedAt）随时间增长，
+  // 区别于终态 endedAt-startedAt。喂给 live TUI，更易出 bug。
+  it("running 态 duration 实时计算：两次 list 间隔 2s，duration 差 = 2（TC-2）", () => {
+    vi.useFakeTimers({ now: 10_000 });
+    try {
+      const records: SubagentRecord[] = [
+        { id: "r1", agent: "w", status: "running", mode: "background", startedAt: 7_000, endedAt: undefined, turns: 0, totalTokens: 0, model: "m", thinkingLevel: undefined, eventLog: [] },
+      ];
+      const svc = makeService({ collectRecords: vi.fn(() => records) });
+      const r1 = listHandler(svc, { includeFinished: true });
+      expect(r1.response.items[0].duration).toBe(3); // (10-7)s
+      vi.advanceTimersByTime(2_000);
+      const r2 = listHandler(svc, { includeFinished: true });
+      expect(r2.response.items[0].duration).toBe(5); // (12-7)s
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // TC-3: listHandler 保持 collectRecords 返回的顺序（排序责任在 service 层，
+  // listHandler 是顺序透传）。故意传入反序 list 验证 listHandler 不自行排序。
+  it("保持 collectRecords 顺序，不自行重排（TC-3）", () => {
+    // 故意按 startedAt 升序（与 desc 相反）
+    const records: SubagentRecord[] = [
+      { id: "old", agent: "w", status: "running", mode: "background", startedAt: 1, endedAt: undefined, turns: 0, totalTokens: 0, model: "m", thinkingLevel: undefined, eventLog: [] },
+      { id: "new", agent: "w", status: "running", mode: "background", startedAt: 5, endedAt: undefined, turns: 0, totalTokens: 0, model: "m", thinkingLevel: undefined, eventLog: [] },
+    ];
+    const svc = makeService({ collectRecords: vi.fn(() => records) });
+    const r = listHandler(svc, { includeFinished: true });
+    expect(r.response.items.map((i) => i.subagentId)).toEqual(["old", "new"]);
+  });
 });
 
 // ============================================================
@@ -262,6 +294,57 @@ describe("cancelHandler", () => {
     const r = await cancelHandler(svc, { subagentId: "bg-1" });
     expect(r.subagentId).toBe("bg-1");
     expect(r.response.cancelled).toBe(true);
+  });
+
+  // TC-1: 并发 CAS 场景——同一 id 两次 cancel，第一次抢锁成功，第二次 CAS 失败后
+  // re-query 到终态。覆盖 cancelHandler 的 re-query 分支（subagent-actions.ts:267-272）。
+  it("并发 CAS：两次 cancel 同一 id，第二次 CAS 失败 re-query 到终态", async () => {
+    const running = makeSnapshot({ id: "bg-cas", mode: "background", status: "running" });
+    const done = makeSnapshot({ id: "bg-cas", mode: "background", status: "done" });
+
+    let cancelCalls = 0;
+    const svc = makeService({
+      // findRecord 调用序列：
+      //   call 1: 第一次 cancel 初始查询 → running
+      //   call 2: 第二次 cancel 初始查询 → running（快照尚未过期）
+      //   call 3: 第二次 cancel CAS 失败后 re-query → done（状态已变）
+      findRecord: vi.fn()
+        .mockReturnValueOnce(running)
+        .mockReturnValueOnce(running)
+        .mockReturnValueOnce(done),
+      cancel: vi.fn(() => {
+        cancelCalls++;
+        return cancelCalls === 1; // 第一次 true，第二次 false（CAS 失败）
+      }),
+    });
+
+    // 第一次 cancel：抢锁成功
+    const r1 = await cancelHandler(svc, { subagentId: "bg-cas" });
+    expect(r1.response.cancelled).toBe(true);
+
+    // 第二次 cancel：CAS 失败，re-query 返回 done（不是初始的 running）
+    await expect(cancelHandler(svc, { subagentId: "bg-cas" }))
+      .rejects.toThrow(/could not be cancelled.*status: done/);
+
+    // 验证 re-query 确实发生（3 次 findRecord：1 初始 + 1 初始 + 1 re-query）
+    expect(svc.findRecord).toHaveBeenCalledTimes(3);
+    expect(svc.cancel).toHaveBeenCalledTimes(2);
+  });
+
+  // BL-3 回归：CAS 失败后 re-query 时 record 已被内存淘汰（bg FIFO 50 cap / sync 5s linger），
+  // 文案诚实报告 "evicted" 而非回落到可能过期的 stale status。
+  it("CAS 失败 + record 被内存淘汰 → 文案诚实报告 evicted（BL-3）", async () => {
+    const svc = makeService({
+      // 第一次 findRecord：初始查询 → running
+      // 第二次 findRecord：CAS 失败后 re-query → undefined（已被淘汰）
+      findRecord: vi.fn()
+        .mockReturnValueOnce(makeSnapshot({ id: "bg-evict", mode: "background", status: "running" }))
+        .mockReturnValueOnce(undefined),
+      cancel: vi.fn(() => false),
+    });
+    await expect(cancelHandler(svc, { subagentId: "bg-evict" }))
+      .rejects.toThrow(/could not be cancelled.*status: unknown \(evicted from memory\)/);
+    expect(svc.findRecord).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -39,6 +39,14 @@ vi.mock("@sinclair/typebox", () => ({
   },
 }));
 
+// Mock getSubagentService：execute plumb-through 契约测试需要拦截 service.execute 调用。
+const { mockServiceExecute } = vi.hoisted(() => ({
+  mockServiceExecute: vi.fn(),
+}));
+vi.mock("../runtime/subagent-service.ts", () => ({
+  getSubagentService: () => ({ execute: mockServiceExecute }),
+}));
+
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import { registerSubagentsCommand } from "../commands/subagents.ts";
@@ -93,6 +101,43 @@ describe("subagent tool contract [MANDATORY]", () => {
     } as unknown as ExtensionAPI;
     registerSubagentTool(pi);
     expect(typeof registeredTool?.execute).toBe("function");
+  });
+
+  // SDK 契约：ToolDefinition.execute 是 5 参数 (toolCallId, params, signal, onUpdate, ctx)。
+  // ctx 是第 5 个参数，runtime 通过 wrapToolDefinition(ctxFactory) 注入。
+  // 此测试验证 ctx.model 被 plumb 到 service.execute 的 ctxModel 参数。
+  // 回归保护：subagent-tool.ts execute 把 _ctx?.model 传给 startHandler 的第 5 参 ctxModel。
+  it("execute passes ctx.model as ctxModel (SDK 5-param contract)", async () => {
+    let capturedExecute: ((...args: never[]) => Promise<unknown>) | undefined;
+    const pi = {
+      registerTool: (tool: unknown) => {
+        capturedExecute = (tool as { execute: (...args: never[]) => Promise<unknown> }).execute;
+      },
+    } as unknown as ExtensionAPI;
+    registerSubagentTool(pi);
+    expect(capturedExecute).toBeDefined();
+
+    mockServiceExecute.mockReset();
+    mockServiceExecute.mockResolvedValue({
+      mode: "background",
+      subagentId: "bg-test",
+      sessionFile: "/test/session.jsonl",
+    });
+    const ctxModel = { id: "test-model", name: "Test", provider: "test", reasoning: false };
+    const ctx = { model: ctxModel } as object;
+
+    await capturedExecute!(
+      "call-1",
+      { action: "start", startParam: { task: "test task" } },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    expect(mockServiceExecute).toHaveBeenCalledTimes(1);
+    expect(mockServiceExecute).toHaveBeenCalledWith(
+      expect.objectContaining({ ctxModel }),
+    );
   });
 });
 

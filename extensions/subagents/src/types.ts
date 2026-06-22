@@ -314,15 +314,17 @@ export interface CancelResponse {
  *   - list → listResponse（最外层 subagentId/sessionFile 为 null，sessionFile 在各 item 内）
  *   - cancel → cancelResponse（subagentId 有值；sessionFile 无意义，可为 null）
  */
-export interface SubagentToolResult {
-  action: "start" | "list" | "cancel";
-  subagentId: string | null;
-  sessionFile: string | null;
-  syncResponse?: SyncResponse;
-  bgResponse?: BgResponse;
-  listResponse?: ListResponse;
-  cancelResponse?: CancelResponse;
-}
+/**
+ * tool 出参（discriminated union）。action 作为主鉴别字段；
+ * action:"start" 分 sync/bg 两个成员（靠 syncResponse / bgResponse 字段区分）。
+ * 防止 action↔response 错配（如 {action:"start", listResponse}）——TS 编译期拒绝。
+ * sync 成员 subagentId 可 null（streaming 期未知，终态由 adapter 填）。
+ */
+export type SubagentToolResult =
+  | { action: "start"; subagentId: string | null; sessionFile: string | null; syncResponse: SyncResponse }
+  | { action: "start"; subagentId: string | null; sessionFile: string | null; bgResponse: BgResponse }
+  | { action: "list"; subagentId: null; sessionFile: null; listResponse: ListResponse }
+  | { action: "cancel"; subagentId: string; sessionFile: null; cancelResponse: CancelResponse };
 
 // ============================================================
 // TUI list 视图的合并 record（4 源 merge 后的形状）
