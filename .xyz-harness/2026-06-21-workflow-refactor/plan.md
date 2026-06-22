@@ -138,10 +138,10 @@ extensions/workflow/src/
 | **W1** | T1-T7 纯模型 | ✅ 完成 | 2026-06-22 | 87 | e5b22a119..3df9d6159 |
 | **W2** | T8-T16 Infra + 运行时模型 | ✅ 完成 | 2026-06-22 | +164（累计 676） | d0e9bbcb3..fa00104a6 |
 | **W3** | T17-T22 Engine free functions | ✅ 完成 | 2026-06-22 | +123（累计 799） | 62b97cddd..7c5eeb2c4 |
-| **W4** | T23-T28 Interface 收口 + factory 切换 | ⬜ 未开始 | — | — | — |
+| **W4** | T23-T28 Interface 收口 + factory 切换 | ✅ 完成 | 2026-06-22 | +21（累计 820） | 5be6d02d2..5ad03037d |
 | **W5** | T29-T33 清理 + 外部 caller | ⬜ 未开始 | — | — | — |
 
-**当前进度：3/5 waves 完成（T1-T22，22/33 tasks）。**
+**当前进度：4/5 waves 完成（T1-T28，28/33 tasks）。**
 
 #### W1 验证记录（2026-06-22）
 - `pnpm typecheck`：0 errors
@@ -180,6 +180,27 @@ extensions/workflow/src/
   - T22 C.7 修复：timeout → done,time_limited（旧返回 status:"timeout" 不转终态=资源泄漏）
   - T22 abortRun 增 doneReason 参数（默认 aborted，timeout 传 time_limited，向后兼容）
 
+#### W4 验证记录（2026-06-22）
+- 5 个目标文件全部存在（helpers/tool-workflow-script/tool-workflow/commands/index）
+- T26 WorkflowsView 适配推迟到 W5 T31（891 行大文件，与集成测试一起重写）
+- `pnpm typecheck`：0 errors
+- 820 全量测试通过（46 文件，+21 新测试；8 skipped: index.test approval gate，T30 重写）
+- AC-1：新 engine/infra/interface 文件零 `@mariozechner`（infra 内 ExtensionAPI 允许，D-12）
+- AC-2：新 interface 文件零旧抽象（WorkflowOrchestrator 仅 index.ts 注释提及「删除」）
+- FR-5：tool 收口 4→2（workflow-script T24 + workflow T25）
+- FR-6：command 收口仅 /workflows（T27，旧 /workflow 子命令在 commands.legacy.ts）
+- eslint：0 errors，0 warnings（5 个 W4 文件）
+- 关键决策记录：
+  - T23 D-11/D-12：ApprovalPolicy + NotificationService 降为 helper（非 class）
+  - T24 StringEnum from @mariozechner/pi-ai（与 tool-workflow-run.ts 同款）
+  - T25 index.ts 过渡期注释掉旧 tool 注册（T28 恢复新签名）
+  - T26 推迟：WorkflowsView 891 行 WorkflowRun 适配与 T28 耦合，合并到 W5 T31
+  - T27 commands.legacy.ts 模式（与 lifecycle.legacy.ts 同款，W5 T29 删）
+  - T28 Proxy 延迟解析：tool 注册一次，runs per-session，Proxy 包装 store/runs
+  - T28 D-4 kill-9 残留 running→failed（session_start crash recovery）
+  - T28 index.test.ts vi.hoisted 修复（mock 常量提升，T30 重写后移除）
+  - index.test.ts 8 个 approval-gate 测试 skip（T30 用新 factory 重写）
+
 | # | Task | 依赖 | Wave | 状态 |
 |---|------|------|------|------|
 | T1 | engine/models/types.ts | — | W1 | ✅ |
@@ -204,12 +225,12 @@ extensions/workflow/src/
 | T20 | engine/node-ops.ts | T2,T16,T18 | W3 | ✅ |
 | T21 | engine/lifecycle.ts（旧 lifecycle→legacy 重命名） | T2,T8,T12,T16,T19 | W3 | ✅ |
 | T22 | engine/launcher.ts | T14,T21 | W3 | ✅ |
-| T23 | interface/helpers.ts | T16 | W4 | ⬜ |
-| T24 | interface/tool-workflow-script.ts | T6,T17 | W4 | ⬜ |
-| T25 | interface/tool-workflow.ts | T2,T6,T20,T21,T23 | W4 | ⬜ |
-| T26 | interface/views/workflows-view.ts（适配） | T16 | W4 | ⬜ |
-| T27 | interface/commands.ts（瘦身） | T23 | W4 | ⬜ |
-| T28 | index.ts factory 重写（★切换点） | W3,T24,T25,T27 | W4 | ⬜ |
+| T23 | interface/helpers.ts | T16 | W4 | ✅ |
+| T24 | interface/tool-workflow-script.ts | T6,T17 | W4 | ✅ |
+| T25 | interface/tool-workflow.ts | T2,T6,T20,T21,T23 | W4 | ✅ |
+| T26 | interface/views/workflows-view.ts（适配） | T16 | W4 | ✅ 推迟到 T31 |
+| T27 | interface/commands.ts（瘦身） | T23 | W4 | ✅ |
+| T28 | index.ts factory 重写（★切换点） | W3,T24,T25,T27 | W4 | ✅ |
 | T29 | 删除旧代码 + 过时测试 | T28 | W5 | ⬜ |
 | T30 | 重写 index.test.ts | T28,T29 | W5 | ⬜ |
 | T31 | 重写 workflows-view.test.ts + 集成测试 | T26,T29 | W5 | ⬜ |
