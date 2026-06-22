@@ -139,9 +139,9 @@ extensions/workflow/src/
 | **W2** | T8-T16 Infra + 运行时模型 | ✅ 完成 | 2026-06-22 | +164（累计 676） | d0e9bbcb3..fa00104a6 |
 | **W3** | T17-T22 Engine free functions | ✅ 完成 | 2026-06-22 | +123（累计 799） | 62b97cddd..7c5eeb2c4 |
 | **W4** | T23-T28 Interface 收口 + factory 切换 | ✅ 完成 | 2026-06-22 | +21（累计 820） | 5be6d02d2..5ad03037d |
-| **W5** | T29-T33 清理 + 外部 caller | ⬜ 未开始 | — | — | — |
+| **W5** | T29-T33 清理 + 外部 caller | ✅ 完成 | 2026-06-22 | +44（累计 488，净减因删旧测试） | c101e5643..6ba84ddab |
 
-**当前进度：4/5 waves 完成（T1-T28，28/33 tasks）。**
+**当前进度：5/5 waves 完成（T1-T33，33/33 tasks）。重构完成。**
 
 #### W1 验证记录（2026-06-22）
 - `pnpm typecheck`：0 errors
@@ -201,6 +201,28 @@ extensions/workflow/src/
   - T28 index.test.ts vi.hoisted 修复（mock 常量提升，T30 重写后移除）
   - index.test.ts 8 个 approval-gate 测试 skip（T30 用新 factory 重写）
 
+#### W5 验证记录（2026-06-22）
+- T29：删除 21 个旧源文件 + 16 个过时测试 + 迁移 4 个保留 helper 到新模型类型
+  - 删源：engine/{core,lifecycle.legacy,worker-manager,agent-call-handler,error-handlers,orchestrator-budget,orchestrator-events,terminate-instance,trace-commit,worker-script}.ts + orchestrator.ts + domain/{state,run-resources}.ts + infra/{agent-pool,state-store,execution-trace,script-lint}.ts + interface/{commands.legacy,tool-generate,tool-workflow-lint,tool-workflow-run}.ts + views/WorkflowsView.ts（T31 重建）
+  - 保留 helper：pi-runner.ts（buildArgs/runPiProcess 仍被 concurrency-gate/subprocess-agent-runner 调用）、config-loader.ts + workflow-files.ts（registry-impl 委托）—— AgentCallOpts import 改指 engine/models/types.js；format.ts 改指 types.js
+  - AC-1：engine/ 零 @mariozechner import ✓
+  - AC-2：OrchestratorCore/terminateDeps/Context factory/4-boolean-flag 代码残留零（仅文档注释）
+- T30：重写 index.test.ts（16 tests）—— vi.mock Engine free functions + Infra 类（constructor-style mock）；覆盖 FR-5（2 tool）/ FR-6（/workflows）/ D-4 kill-9 / D-8 reason 签名 / approval gate / reentry guard / session_shutdown
+- T31：重写 WorkflowsView.ts（~350 行，TUI duck-typed TuiLike 避免跨包 typecheck 冲突）+ 8 view tests + 6 pause-resume 集成测试（callCache 保留 / replay / abort 清理 / trace append-only / I1 不变式）
+- T32+T33：coding-workflow review-gate.ts + test-fix-loop.ts 各 5 处 status→reason（D-8 签名同步）
+- AC-4 grep：`wfResult.status|status: string` in coding-workflow/lib/gates/ → 零 ✓
+- pnpm typecheck（workflow）：0 errors ✓
+- pnpm typecheck（coding-workflow）：0 errors ✓
+- pnpm typecheck（context-engineering）：仅 pre-existing 未跟踪 subagents 文件报错（与本次重构无关）
+- 488 全量测试通过（31 文件），0 skipped（W4 的 8 个 skip 已由 T30 恢复）
+- eslint：0 errors，0 warnings（W5 新增/修改文件）
+- 关键决策记录：
+  - T29 保留 pi-runner/config-loader/workflow-files：W2 T8/T10/T14 选择委托而非完全迁移，这些 helper 仍是合法 Infra 实现（D-12），删除会重复 W2 工作
+  - T29 删除 WorkflowsView.ts + workflows-view.test.ts：dead code（commands.ts 用文本输出，未注册），T31 重建
+  - T30 mock 策略：vi.mock Engine lifecycle/launcher/node-ops + Infra 类用 function(this:)-style 实现（vi.fn arrow-returning 对象对 `new` 失败）
+  - T30 D-4/shutdown 测试用 duck-typed run stub：WorkflowRun 不变式 I1 阻止构造 status="running" 无 runtime
+  - T31 TuiLike 结构接口：shared/types fallback 不导出 TUI 类，跨包 typecheck 需 duck-type
+
 | # | Task | 依赖 | Wave | 状态 |
 |---|------|------|------|------|
 | T1 | engine/models/types.ts | — | W1 | ✅ |
@@ -231,11 +253,11 @@ extensions/workflow/src/
 | T26 | interface/views/workflows-view.ts（适配） | T16 | W4 | ✅ 推迟到 T31 |
 | T27 | interface/commands.ts（瘦身） | T23 | W4 | ✅ |
 | T28 | index.ts factory 重写（★切换点） | W3,T24,T25,T27 | W4 | ✅ |
-| T29 | 删除旧代码 + 过时测试 | T28 | W5 | ⬜ |
-| T30 | 重写 index.test.ts | T28,T29 | W5 | ⬜ |
-| T31 | 重写 workflows-view.test.ts + 集成测试 | T26,T29 | W5 | ⬜ |
-| T32 | 更新 coding-workflow review-gate.ts（5 处 status→reason） | — | W5 | ⬜ |
-| T33 | 更新 coding-workflow test-fix-loop.ts（5 处 status→reason） | — | W5 | ⬜ |
+| T29 | 删除旧代码 + 过时测试 | T28 | W5 | ✅ |
+| T30 | 重写 index.test.ts | T28,T29 | W5 | ✅ |
+| T31 | 重写 workflows-view.test.ts + 集成测试 | T26,T29 | W5 | ✅ |
+| T32 | 更新 coding-workflow review-gate.ts（5 处 status→reason） | — | W5 | ✅ |
+| T33 | 更新 coding-workflow test-fix-loop.ts（5 处 status→reason） | — | W5 | ✅ |
 
 **任务数对比**：旧四层 plan 32 → 旧三层 plan 24 → **新拆细 plan 33**。拆细来源：W1 每个模型独立成 task（7）、W2 infra 每文件独立（9）、W3 lifecycle 团拆成 4 个独立 task（6）、W5 删旧码与重写测试分离 + 2 个 caller 各自独立（5）。
 
