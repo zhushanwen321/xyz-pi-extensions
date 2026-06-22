@@ -1,477 +1,276 @@
 /**
- * lifecycle.ts — Workflow run lifecycle operations.
+ * Workflow Extension — lifecycle（W3-T21，HIGH RISK）
  *
- * Extracted from orchestrator.ts (Wave 6).
+ * Workflow run 生命周期 free functions（D-12）。取代旧 lifecycle.legacy.ts
+ * 的 runWorkflow/pauseRun/resumeRun/abortRun（原为 OrchestratorCore 方法）。
  *
- * All functions are stateless — they receive an `OrchestratorCore` handle for
- * state access and worker-manager delegation. The orchestrator class stays
- * the sole owner of `runs`.
+ * 4 个导出函数：
+ *   - runWorkflow(spec, deps, signal?) → Promise<runId>
+ *   - pauseRun(runId, deps)            → Promise<void>（A4 原子性）
+ *   - resumeRun(runId, deps)           → Promise<void>（G3-001 整重建）
+ *   - abortRun(runId, deps, reason?)   → Promise<void>（done no-op）
  *
- * Lifecycle: run → pause/resume → abort/retry/skip/restart. Agent calls are
- * routed through worker-manager via the core handle.
+ * 私有 makeHandlers(run, deps) → WorkerHandlers：
+ *   - onMessage → handleWorkerMessage(run, raw, deps, handlers)
+ *   - onError   → handleWorkerError(run, err, deps, handlers) + workerErrorCount++
+ *   - onExit(code, handle) → handleWorkerExit(run, code, handle, deps, handlers)
+ *     （G-025：handle.isCurrent 检查内化在 handleWorkerExit 内）
+ *
+ * **A4 原子性**：pause/abort 内部 transition 先 releaseRuntime（cleanup before mutate），
+ * 失败时 status 不变。transition("paused"/"done") 在 WorkflowRun.transition 内已实现
+ * 「releaseRuntime → 改 status」原子顺序。
+ *
+ * **G3-001**：pause 时整个 RunRuntime 丢弃（AbortController 一次性，无法复用）；
+ * resume 时 assignRuntime 重建 worker/gate/controller。
+ *
+ * **D-13**：maxConcurrency=4（ConcurrencyGate 默认值，不显式传——见 T8）。
+ *
+ * 层归属：Engine。依赖 T2 LifecycleDeps + T8 ConcurrencyGate + T12 WorkerHost via port +
+ * T16 WorkflowRun + T19 handleWorker* 函数。
+ *
+ * 参考：
+ *   - domain-models.md §1（聚合根状态机）
+ *   - 旧 lifecycle.legacy.ts runWorkflow/pauseRun/resumeRun/abortRun（行为来源）
  */
 
-import * as fs from "node:fs";
-
+import { ConcurrencyGate, DEFAULT_CONCURRENCY } from "../infra/concurrency-gate.js";
 import {
-  type AgentResult as StateAgentResult,
-  createInstance as createStateInstance,
-  isTerminal,
-  transitionStatus,
-} from "../domain/state.js";
-import { AgentPool } from "../infra/agent-pool.js";
-import { getWorkflow } from "../infra/config-loader.js";
-import {
-  DEFAULT_RUNANDWAIT_TIMEOUT_MS,
-  RUNID_RADIX,
-  RUNID_SLICE_END,
-  RUNID_SLICE_START,
-  STATUS_POLL_INTERVAL_MS,
-} from "../infra/constants.js";
-import { lintScript } from "../infra/script-lint.js";
-import type { OrchestratorCore } from "./core.js";
-import { scheduleTimeBudgetCheck } from "./orchestrator-budget.js";
-import { terminateInstance } from "./terminate-instance.js";
+  handleWorkerError,
+  handleWorkerExit,
+  handleWorkerMessage,
+} from "./error-recovery.js";
+import { Budget } from "./models/budget.js";
+import type { LifecycleDeps, WorkerHandlers } from "./models/ports.js";
+import { RunRuntime } from "./models/run-runtime.js";
+import type { RunSpec } from "./models/run-spec.js";
+import { Trace } from "./models/trace.js";
+import { WorkflowRun } from "./models/workflow-run.js";
 
-// ── Constants ────────────────────────────────────────────────
+// ── 常量 ─────────────────────────────────────────────────────
 
-/** 生成 workflow runId：wf-<timestamp>-<base36 random> */
-export function generateRunId(): string {
+/** runId 生成：wf-<timestamp>-<base36 random 6 chars>。 */
+const RUNID_RADIX = 36;
+const RUNID_SLICE_START = 2;
+const RUNID_SLICE_END = 8;
+
+function generateRunId(): string {
   return `wf-${Date.now()}-${Math.random().toString(RUNID_RADIX).slice(RUNID_SLICE_START, RUNID_SLICE_END)}`;
 }
 
-// ── run ──────────────────────────────────────────────────────
+// ── makeHandlers（路由 worker 事件到 T19 handle* 函数） ──────
 
-/** Start a workflow. Returns runId for lifecycle operations. Signal propagated to AgentPool. */
+/**
+ * 构造 WorkerHandlers——将 worker 的 onMessage/onError/onExit 事件路由到
+ * T19 的 handleWorker* 函数。
+ *
+ * 闭包捕获 run + deps。runtime 重建（replaceRuntime）后 run 实例不变、deps 不变，
+ * 故 handlers 对新 worker 仍有效（lifecycle T21 与 error-recovery T19 共用 handlers）。
+ *
+ * **onExit G-025**：handleWorkerExit 内部检查 handle.isCurrent（stale exit 丢弃）。
+ * 本函数不在 onExit 里重复检查——T19 handleWorkerExit 是单一守卫点。
+ *
+ * **workerErrorCount**：onError 触发时递增（C.5 跨 runtime 存活的重试计数载体）。
+ * 注意 handleWorkerError 内部也会递增——这里 onError 递增是 worker 事件层面的
+ * 「error 事件到达」计数，handleWorkerError 内的是「错误处理决策」计数。
+ * 实际 handleWorkerError 会做最终计数（含重试上限判断），onError 不重复递增。
+ */
+function makeHandlers(run: WorkflowRun, deps: LifecycleDeps): WorkerHandlers {
+  // 自引用——error-recovery rebuildRuntime 需要 handlers 参数（handlers 引用自身）
+  const handlers: WorkerHandlers = {
+    async onMessage(raw: unknown): Promise<void> {
+      await handleWorkerMessage(run, raw, deps, handlers);
+    },
+    async onError(err: Error): Promise<void> {
+      await handleWorkerError(run, err, deps, handlers);
+    },
+    async onExit(code: number): Promise<void> {
+      // handle 由 WorkerHost 在 onExit 回调里传入——此处闭包拿不到具体 handle，
+      // 用 run.runtime?.worker 作为当前 handle（worker exit 时 runtime.worker 即
+      // 触发 exit 的那个 handle）。G-025 检查在 handleWorkerExit 内（handle.isCurrent）。
+      const handle = run.runtime?.worker;
+      if (handle) {
+        await handleWorkerExit(run, code, handle, deps, handlers);
+      }
+    },
+  };
+  return handlers;
+}
+
+// ── runWorkflow ──────────────────────────────────────────────
+
+/**
+ * 启动一个 workflow run。
+ *
+ * 流程：创建 WorkflowRun（paused）+ makeHandlers + 构建 RunRuntime（worker+gate+controller）
+ * + assignRuntime（paused → running）+ 注册到 deps.runs + store.save。
+ *
+ * @param spec   RunSpec（不可变输入，含 scriptSource/args）
+ * @param deps   LifecycleDeps（store/workerHost/runner/runs）
+ * @param signal 外部 abort signal（可选；abort 时调 abortRun）
+ * @returns runId（wf-<timestamp>-<random>）
+ * @throws signal 已 abort（pre-abort fail fast）
+ */
 export async function runWorkflow(
-  core: OrchestratorCore,
-  name: string,
-  args: Record<string, unknown>,
-  budgetTokens?: number,
-  budgetTimeMs?: number,
+  spec: RunSpec,
+  deps: LifecycleDeps,
   signal?: AbortSignal,
 ): Promise<string> {
-  // P1-2: Honor pre-aborted signal — fail fast before any setup
+  // P1-2: pre-aborted signal → fail fast
   if (signal?.aborted) {
     throw new Error("Workflow run aborted before start");
   }
 
-  const workflow = await getWorkflow(name);
-  if (!workflow || !workflow.available) {
-    throw new Error(`Workflow '${name}' not found or unavailable`);
-  }
-
-  // Read and normalize script: strip 'export' from 'export const meta' for CJS Worker
-  let scriptSource = fs.readFileSync(workflow.path, "utf-8");
-  scriptSource = scriptSource.replace(/\bexport\s+const\s+meta\b/, "const meta");
-
-  // Pre-flight lint: catch common API misuse before executing
-  const lintResult = lintScript(scriptSource);
-  if (!lintResult.valid) {
-    const errors = lintResult.findings
-      .filter((f) => f.severity === "error")
-      .map((f) => `  L${f.line}: ${f.message}\n         Suggestion: ${f.suggestion}`)
-      .join("\n");
-    throw new Error(
-      `Workflow script '${name}' has ${lintResult.findings.filter((f) => f.severity === "error").length} error(s):\n${errors}`,
-    );
-  }
-  // Log warnings (non-blocking)
-  for (const w of lintResult.findings.filter((f) => f.severity === "warning")) {
-    console.warn(`[workflow] Script lint warning at L${w.line}: ${w.message}`);
-  }
   const runId = generateRunId();
-
-  const instance = createStateInstance({
+  const run = new WorkflowRun(
     runId,
-    name,
-    worker: workflow.path,
-    status: "running",
-    budget: { maxTokens: budgetTokens, maxTimeMs: budgetTimeMs },
-  });
-  instance.startedAt = new Date().toISOString();
-  instance.description = workflow.description;
-
-  core.setRun(runId, {
-    instance,
-    meta: { scriptSource, args, budgetTokens, budgetTimeMs, signal },
-    retryCount: 0,
-  });
-
-  // Create per-run AbortController for agent subprocess cleanup.
-  // Orchestrator owns this controller — abort() on terminate/pause/abort.
-  const runAbortController = new AbortController();
-  core.getRun(runId)!.abortController = runAbortController;
-
-  // Create per-workflow AgentPool with soft-limit warning callback
-  // Each workflow run gets its own pool so agent call counts are isolated per AC-4.5
-  const pool = new AgentPool({
-    maxConcurrency: 4,
-    runName: instance.name,
-    onSoftLimitReached: ({ runName, totalCalls, budget }) => {
-      core.pi.sendUserMessage(
-        `[workflow:${runName}] Reached ${totalCalls} agent calls. ` +
-        `Budget: ${budget.usedTokens}/${budget.maxTokens ?? "unlimited"} tokens. ` +
-        `Consider aborting if this is unintended.`,
-      );
+    spec,
+    {
+      status: "paused",
+      budget: new Budget({
+        maxTokens: spec.budgetTokens,
+        maxTimeMs: spec.budgetTimeMs,
+      }),
+      calls: new Map(),
+      trace: new Trace(),
+      errorLogs: [],
     },
-  });
-  pool.setBudget(instance.budget);
-  core.getRun(runId)!.pool = pool;
+    { startedAt: new Date().toISOString() },
+  );
 
-  // P1-2: Tool-signal forwarders: (1) kill agent subprocess; (2) pause workflow
+  // signal abort → abortRun（一次性监听）
   if (signal) {
-    signal.addEventListener("abort", () => runAbortController.abort(), { once: true });
-    signal.addEventListener("abort", () => core.pauseOnSignal(runId), { once: true });
-  }
-  await core.persistState();
-
-  core.startWorker(runId, instance, scriptSource, args);
-
-  if (budgetTimeMs) {
-    scheduleTimeBudgetCheck(
-      (id) => core.getRun(id)?.instance,
-      runId,
-      budgetTimeMs,
-      core.budgetCallbacks(),
+    signal.addEventListener(
+      "abort",
+      () => {
+        void abortRun(runId, deps, "External signal aborted").catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[workflow] abortRun on signal failed: ${msg}`);
+        });
+      },
+      { once: true },
     );
   }
 
+  // 注册到 deps.runs（makeHandlers + assignRuntime 需要 run 已在 map）
+  deps.runs.set(runId, run);
+
+  // 构造 handlers + runtime（worker + gate + controller）
+  const handlers = makeHandlers(run, deps);
+  const controller = new AbortController();
+  const gate = new ConcurrencyGate({ maxConcurrency: DEFAULT_CONCURRENCY });
+  const worker = deps.workerHost.start(spec, spec.args, handlers);
+  const runtime = new RunRuntime(worker, gate, controller);
+
+  // assignRuntime（paused → running，原子绑定 runtime + status）
+  run.assignRuntime(runtime);
+
+  await deps.store.save(run);
   return runId;
 }
 
-// ── pause ────────────────────────────────────────────────────
+// ── pauseRun ─────────────────────────────────────────────────
 
 /**
- * Pause a running workflow. Terminates the Worker thread but preserves
- * the callCache so it can be resumed later from the point of interruption.
+ * 暂停 running workflow。
  *
- * Wave 5 (A4): cleanup runs BEFORE the status mutation so a terminateWorker
- * failure leaves the workflow in its pre-pause state (status unchanged).
- * terminateWorker is called with keepController=true so retry during pause
- * can still write callCache (Round 3 MF2). The pool is preserved for resume.
+ * **A4 原子性**：WorkflowRun.transition("paused") 内部先 releaseRuntime（cleanup
+ * before mutate），再改 status。releaseRuntime 失败时 status 不变（仍 running）。
+ *
+ * **G3-001**：transition("paused") 调 releaseRuntime，整个 RunRuntime 丢弃
+ * （runtime=undefined）。AbortController 一次性无法复用。
+ *
+ * @throws runId 不存在 / status !== "running"
  */
-export async function pauseRun(core: OrchestratorCore, runId: string): Promise<void> {
-  const run = core.getRun(runId);
-  const instance = run?.instance;
-  if (!instance) {
+export async function pauseRun(runId: string, deps: LifecycleDeps): Promise<void> {
+  const run = deps.runs.get(runId);
+  if (!run) {
     throw new Error(`Workflow '${runId}' not found`);
   }
-  if (instance.status !== "running") {
+  if (run.state.status !== "running") {
     throw new Error(
-      `Cannot pause workflow in state '${instance.status}': only 'running' can be paused`,
+      `Cannot pause workflow in state '${run.state.status}': only 'running' can be paused`,
     );
   }
 
-  // pausedAt is pause-specific bookkeeping — terminateInstance deliberately
-  // does not touch it so the orchestrator stays the sole owner.
-  instance.pausedAt = new Date().toISOString();
-  await terminateInstance(
-    run!,
-    {
-      status: "paused",
-      cleanupWorker: true,
-      keepController: true,
-      cleanupTempFiles: true,
-      deletePool: false,
-    },
-    core.terminateDeps(),
-  );
+  // A4: transition 内部 releaseRuntime（cleanup before mutate）
+  run.transition("paused");
+  await deps.store.save(run);
 }
 
-// ── resume ───────────────────────────────────────────────────
+// ── resumeRun ────────────────────────────────────────────────
 
 /**
- * Resume a paused workflow. Creates a new Worker thread with the
- * preserved callCache. Cached agent calls replay immediately from
- * the cache; uncached calls dispatch fresh.
+ * 恢复 paused workflow。
  *
- * Wave 5 (A4 mirror): startWorker (the side effect that can throw) runs
- * BEFORE the status mutation. If the Worker constructor throws, the
- * workflow stays paused and the caller can retry.
+ * **G3-001**：assignRuntime 重建 worker/gate/controller + transition running。
+ * worker 重跑脚本，已完成调用从 RunState.calls replay（callCache 在 calls Map 里）。
+ *
+ * **A4 mirror**：先 startWorker（副作用可能抛），成功后才 assignRuntime 改 status。
+ * 若 Worker 构造抛错，workflow 保持 paused，调用方可重试。
+ *
+ * @throws runId 不存在 / status !== "paused"
  */
-export async function resumeRun(core: OrchestratorCore, runId: string): Promise<void> {
-  const run = core.getRun(runId);
-  const instance = run?.instance;
-  if (!instance) {
+export async function resumeRun(runId: string, deps: LifecycleDeps): Promise<void> {
+  const run = deps.runs.get(runId);
+  if (!run) {
     throw new Error(`Workflow '${runId}' not found`);
   }
-  if (instance.status !== "paused") {
+  if (run.state.status !== "paused") {
     throw new Error(
-      `Cannot resume workflow in state '${instance.status}': only 'paused' can be resumed`,
+      `Cannot resume workflow in state '${run.state.status}': only 'paused' can be resumed`,
     );
   }
 
-  const meta = run?.meta;
-  if (meta) {
-    // Recreate AbortController for the resumed run (old one was aborted on pause)
-    core.recreateRunAbortController(runId);
+  // A4 mirror: 先 startWorker（副作用），成功后才 assignRuntime
+  const handlers = makeHandlers(run, deps);
+  const controller = new AbortController();
+  const gate = new ConcurrencyGate({ maxConcurrency: DEFAULT_CONCURRENCY });
+  const worker = deps.workerHost.start(run.spec, run.spec.args, handlers);
+  const runtime = new RunRuntime(worker, gate, controller);
 
-    // Worker-backed instance: restart Worker with preserved callCache.
-    // Do this BEFORE the status mutation so a throw leaves status=paused.
-    core.startWorker(runId, instance, meta.scriptSource, meta.args);
-
-    // P1-6: Re-schedule time budget check after resume
-    if (meta.budgetTimeMs) {
-      scheduleTimeBudgetCheck(
-        (id) => core.getRun(id)?.instance,
-        runId,
-        meta.budgetTimeMs,
-        core.budgetCallbacks(),
-      );
-    }
-  }
-
-  // Status mutation happens AFTER startWorker succeeds.
-  instance.pausedAt = undefined;
-  transitionStatus(instance, "running");
-  core.events.emit(runId, { type: "status", status: "running" });
-  await core.persistState();
+  // assignRuntime（paused → running，原子绑定 runtime + status）
+  run.assignRuntime(runtime);
+  await deps.store.save(run);
 }
 
-// ── abort ────────────────────────────────────────────────────
+// ── abortRun ─────────────────────────────────────────────────
 
 /**
- * Abort a workflow immediately. Terminates the Worker thread and
- * marks the instance as aborted (terminal state).
+ * 中止 workflow（running 或 paused）。
  *
- * Wave 5 (A4): cleanup runs BEFORE transitionStatus so a terminateWorker
- * throw leaves the workflow running/paused — caller can retry or observe.
- * Delegate the full pipeline (cleanup → mutate → persist → notify) to
- * terminateInstance so this site shares the same ordering as every other
- * terminal transition.
+ * **done 状态 no-op**：已终态的 run 不重复 abort。
+ * **A4 原子性**：transition("done", "aborted") 内部先 releaseRuntime。
+ *
+ * @param runId  
+ * @param deps   
+ * @param reason 可选中止原因（存 run.state.error）
+ * @throws runId 不存在
  */
-export async function abortRun(core: OrchestratorCore, runId: string, reason?: string): Promise<void> {
-  const run = core.getRun(runId);
-  const instance = run?.instance;
-  if (!instance) {
+export async function abortRun(
+  runId: string,
+  deps: LifecycleDeps,
+  reason?: string,
+): Promise<void> {
+  const run = deps.runs.get(runId);
+  if (!run) {
     throw new Error(`Workflow '${runId}' not found`);
   }
 
-  // P1-4: Allow abort from running or paused
-  if (instance.status !== "running" && instance.status !== "paused") {
+  // done 状态 no-op
+  if (run.state.status === "done") return;
+
+  // 只允许 running/paused abort（防御）
+  if (run.state.status !== "running" && run.state.status !== "paused") {
     throw new Error(
-      `Cannot abort workflow in state '${instance.status}': only 'running' or 'paused' can be aborted`,
+      `Cannot abort workflow in state '${run.state.status}': only 'running' or 'paused' can be aborted`,
     );
   }
 
-  await terminateInstance(
-    run!,
-    {
-      status: "aborted",
-      error: reason,
-      cleanupWorker: true,
-      cleanupTempFiles: true,
-      deletePool: true,
-    },
-    core.terminateDeps(),
-  );
-}
-
-// ── retryNode ────────────────────────────────────────────────
-
-/**
- * Retry a specific agent call. Removes the cached result for the
- * given callId, terminates the current Worker, and starts a new one.
- * The script re-executes from the top — completed calls replay from
- * cache, the retried call dispatches fresh.
- */
-export async function retryRunNode(core: OrchestratorCore, runId: string, callId: number): Promise<void> {
-  const run = core.getRun(runId);
-  const instance = run?.instance;
-  if (!instance) {
-    throw new Error(`Workflow '${runId}' not found`);
+  // 记录中止原因
+  if (reason) {
+    run.state.error = reason;
   }
-  // P1-7: Only running or paused can retry
-  if (instance.status !== "running" && instance.status !== "paused") {
-    throw new Error(
-      `Cannot retry node in state '${instance.status}': only 'running' or 'paused' allowed`,
-    );
-  }
-
-  // Remove the cached result for this call
-  instance.callCache.delete(callId);
-
-  // Reset the trace node so it re-dispatches
-  const node = instance.trace.find((n) => n.stepIndex === callId);
-  if (node) {
-    node.status = "pending";
-    node.result = undefined;
-    node.completedAt = undefined;
-  }
-
-  core.terminateWorker(runId);
-
-  // P1-7: Reset retry counts for fresh start
-  if (run) run.retryCount = 0;
-
-  const meta = run?.meta;
-  if (meta) {
-    // Recreate AbortController after terminate (old was aborted)
-    core.recreateRunAbortController(runId);
-    core.startWorker(runId, instance, meta.scriptSource, meta.args);
-  }
-
-  await core.persistState();
-}
-
-// ── skipNode ─────────────────────────────────────────────────
-
-/** Skip a specific agent call. Injects placeholder into callCache for immediate resolution. */
-export async function skipRunNode(core: OrchestratorCore, runId: string, callId: number): Promise<void> {
-  const instance = core.getRun(runId)?.instance;
-  if (!instance) {
-    throw new Error(`Workflow '${runId}' not found`);
-  }
-
-  const placeholder: StateAgentResult = {
-    content: "",
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-  };
-
-  instance.callCache.set(callId, placeholder);
-
-  const node = instance.trace.find((n) => n.stepIndex === callId);
-  if (node) {
-    node.status = "completed";
-    node.result = placeholder;
-    node.completedAt = new Date().toISOString();
-  }
-
-  // If worker is alive, send cached result immediately for any pending call
-  if (core.getRun(runId)?.worker) {
-    try {
-      core.postMessage(runId, { type: "agent-result", callId, result: placeholder, cached: true });
-    // eslint-disable-next-line taste/no-silent-catch
-    } catch {
-      // P1-8: Worker may have exited between has() and postMessage().
-      // This is an expected race condition — no recovery needed.
-    }
-  }
-
-  await core.persistState();
-}
-
-// ── restart ──────────────────────────────────────────────────
-
-/**
- * Restart a workflow: create a fresh instance from the same script,
- * then clean up the old one. Returns the new runId.
- *
- * Note: intentionally does NOT forward the original AbortSignal to the
- * new instance. Restart is a user-initiated action — the new run should
- * have an independent lifecycle from the original tool-execute caller's
- * signal (which may already be aborted).
- */
-export async function restartRun(core: OrchestratorCore, runId: string): Promise<string> {
-  const run = core.getRun(runId);
-  const instance = run?.instance;
-  if (!instance) {
-    throw new Error(`Workflow '${runId}' not found`);
-  }
-
-  const meta = run?.meta;
-  if (!meta) {
-    throw new Error("No metadata for restart — cannot re-run without original script");
-  }
-
-  const name = instance.name;
-  const scriptSource = meta.scriptSource;
-  const args = meta.args;
-  const budgetTokens = meta.budgetTokens;
-  const budgetTimeMs = meta.budgetTimeMs;
-
-  // 1. Abort old instance if still alive. Wave 5: route through terminateInstance
-  //    so the A4 ordering (cleanup before status) holds here too. We avoid
-  //    persisting mid-restart — persistState happens once below for the new run.
-  if (instance.status === "running" || instance.status === "paused") {
-    await terminateInstance(
-      run!,
-      { status: "aborted", cleanupWorker: true, cleanupTempFiles: true, deletePool: true },
-      { ...core.terminateDeps(), persistState: async () => { /* skip — persisted below */ } },
-    );
-  }
-
-  // 2. Create new instance directly from cached scriptSource (skip getWorkflow + readFile).
-  const newRunId = generateRunId();
-  const newInstance = createStateInstance({
-    runId: newRunId,
-    name,
-    worker: instance.worker,
-    budget: { maxTokens: budgetTokens, maxTimeMs: budgetTimeMs },
-  });
-  newInstance.startedAt = new Date().toISOString();
-
-  core.setRun(newRunId, {
-    instance: newInstance,
-    meta: { scriptSource, args, budgetTokens, budgetTimeMs },
-    retryCount: 0,
-    // Round 4 MF#1: create per-run AbortController so executeWithRetry can abort in-flight pi subprocess on user abort.
-    abortController: new AbortController(),
-  });
-  core.startWorker(newRunId, newInstance, scriptSource, args);
-
-  // 3. Schedule time budget check if needed
-  if (budgetTimeMs) {
-    scheduleTimeBudgetCheck(
-      (id) => core.getRun(id)?.instance,
-      newRunId,
-      budgetTimeMs,
-      core.budgetCallbacks(),
-    );
-  }
-
-  // 4. Persist new instance before cleaning old one
-  await core.persistState();
-
-  // 5. Clean up old run entry (keeps memory tight — restart is the only
-  //    path that fully drops a non-terminal run; terminal runs are kept for
-  //    history until session end).
-  core.deleteRun(runId);
-  await core.persistState();
-
-  return newRunId;
-}
-
-// ── runAndWait ───────────────────────────────────────────────
-
-/**
- * Run a workflow and wait for it to complete (synchronous from caller's POV).
- * Polls instance status at 500ms intervals until terminal state.
- *
- * Designed for cross-extension programmatic calls (e.g. pi.__workflowRun).
- * NOT intended for interactive use — use `run()` + lifecycle tools instead.
- */
-export async function runWorkflowAndWait(
-  core: OrchestratorCore,
-  name: string,
-  args: Record<string, unknown>,
-  signal?: AbortSignal,
-  timeoutMs: number = DEFAULT_RUNANDWAIT_TIMEOUT_MS,
-): Promise<{ status: string; scriptResult?: unknown; error?: string; runId: string }> {
-  const runId = await runWorkflow(core, name, args, undefined, undefined, signal);
-
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (signal?.aborted) {
-      try { await abortRun(core, runId); } catch { /* already terminal */ void undefined; }
-      return { status: "aborted", runId, error: "Aborted by signal" };
-    }
-    const instance = core.getRun(runId)?.instance;
-    if (!instance) {
-      return { status: "unknown", runId, error: "Instance not found" };
-    }
-    if (isTerminal(instance.status)) {
-      return {
-        status: instance.status,
-        scriptResult: instance.scriptResult,
-        error: instance.error,
-        runId,
-      };
-    }
-    await new Promise((r) => setTimeout(r, STATUS_POLL_INTERVAL_MS));
-  }
-  // Timeout — abort the workflow
-  try { await abortRun(core, runId); } catch { /* already terminal */ void undefined; }
-  return { status: "timeout", runId, error: `Workflow timed out after ${timeoutMs}ms` };
+  // A4: transition 内部 releaseRuntime（cleanup before mutate）
+  run.transition("done", "aborted");
+  await deps.store.save(run);
 }

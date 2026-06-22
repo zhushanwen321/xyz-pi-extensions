@@ -34,7 +34,7 @@ import {
   runWorkflow,
   runWorkflowAndWait,
   skipRunNode,
-} from "./engine/lifecycle.js";
+} from "./engine/lifecycle.legacy.js";
 import { WorkflowEventEmitter } from "./engine/orchestrator-events.js";
 import {
   agentCallContext,
