@@ -34,7 +34,7 @@
  * FR-6.5: persist 前调 tick 累计时间
  */
 
-import { checkBudgetOnResume, tick } from "./engine/budget";
+import { checkBudgetOnResume, tick, accumulateTokens } from "./engine/budget";
 import { createGoalState, isActiveStatus, isTerminalStatus, transitionStatus } from "./engine/goal";
 import type { GoalSession } from "./session";
 import { clearGoalSession } from "./session";
@@ -86,17 +86,6 @@ function persistState(session: GoalSession, ports: ServicePorts): void {
 	ports.persistence.appendState(serializeState(state));
 }
 
-/** persist + updateWidget 的统一入口 */
-function persistAndUpdate(session: GoalSession, ports: ServicePorts): void {
-	persistState(session, ports);
-	effects_updateWidget();
-}
-
-function effects_updateWidget(): void {
-	// widget 刷新由 event-adapter 调 projection/widget.updateWidget 实现
-	// service 只返回 effect，不直接操作 UI
-}
-
 // ── FR-3.1 唯一创建入口 ──────────────────────────────
 
 /**
@@ -127,20 +116,30 @@ export function createGoal(
 	session.tasksCompletedAtAgentStart = 0;
 
 	// 统一 task 构造（消除双轨）
-	const taskDescs = Array.isArray(tasks)
-		? tasks
-		: tasks.map((t) => t.description);
+	const taskDescs = toDescriptions(tasks);
 	const EXT_INIT_TASK_DESC_MAX = 60;
+	const TASK_DESC_MAX = 80;
 	const ELLIPSIS_LENGTH = 3;
+	const maxLength = isExternalInit ? EXT_INIT_TASK_DESC_MAX : TASK_DESC_MAX;
 	session.state.tasks = taskDescs.map((desc, i) => ({
 		id: i + 1,
-		description: normalizeDescription(desc, isExternalInit ? EXT_INIT_TASK_DESC_MAX : 80, ELLIPSIS_LENGTH),
+		description: normalizeDescription(desc, maxLength, ELLIPSIS_LENGTH),
 		status: "pending" as const,
 		lastUpdatedTurn: session.state!.currentTurnIndex,
 	}));
 
 	persistState(session, ports);
 	return true;
+}
+
+/** 区分 string[] vs GoalTask[]，统一输出描述数组。 */
+function toDescriptions(tasks: GoalTask[] | string[]): string[] {
+	if (tasks.length === 0) return [];
+	const first = tasks[0];
+	if (typeof first === "string") {
+		return tasks as string[];
+	}
+	return (tasks as GoalTask[]).map((t) => t.description);
 }
 
 function normalizeDescription(desc: string, maxLength: number, ellipsis: number): string {
@@ -428,26 +427,19 @@ export function applyEvent(
 	session: GoalSession,
 	eventType: string,
 	eventData: unknown,
-	ports: ServicePorts,
+	_ports: ServicePorts,
 ): EventEffect[] {
 	const effects: EventEffect[] = [];
 	if (!session.state) return effects;
 
 	switch (eventType) {
 		case "message_end": {
-			// token 累加（FR-8.6）
+			// token 累加（FR-8.6）—— 复用 engine 纯函数
 			const data = eventData as { message?: { role?: string; usage?: { input?: number; output?: number; cacheRead?: number; totalTokens?: number } } };
 			if (data?.message?.role !== "assistant") break;
 			const usage = data.message.usage;
 			if (!usage) break;
-			const input = usage.input ?? 0;
-			const output = usage.output ?? 0;
-			const cacheRead = usage.cacheRead ?? 0;
-			if (input > 0 || output > 0) {
-				session.state.tokensUsed += Math.max(input - cacheRead, 0) + output;
-			} else if (usage.totalTokens) {
-				session.state.tokensUsed += usage.totalTokens;
-			}
+			session.state.tokensUsed = accumulateTokens(session.state.tokensUsed, usage);
 			break;
 		}
 		case "turn_end":
@@ -456,7 +448,8 @@ export function applyEvent(
 			break;
 		case "agent_start":
 			if (isActiveStatus(session.state.status)) {
-				session.state.tasksCompletedAtAgentStart = session.state.tasks.filter(
+				// 字段在 session 上，不在 session.state 上
+				session.tasksCompletedAtAgentStart = session.state.tasks.filter(
 					(t) => t.status === "completed" || t.status === "verified",
 				).length;
 			}
@@ -495,10 +488,14 @@ function errorResult(message: string): ToolActionResult {
 ```
 
 > **重要说明**：
-> 1. `persistAndUpdate` / `effects_updateWidget` 是简化占位——实际 widget 刷新由 event-adapter 调 `projection/widget.updateWidget` 实现。service 只负责状态变更 + persist，不直接操作 UI。
+> 1. widget 刷新由 event-adapter 调 `projection/widget.updateWidget` 实现。service 只负责状态变更 + persist，不直接操作 UI。
 > 2. `applyToolAction` 只实现了核心 5 个 action（create_tasks / update_tasks / complete_goal / cancel_goal / report_blocked）。其余 5 个（add_tasks / list_tasks / add_subtasks / update_subtasks / delete_subtasks）由 adapters/actions.ts 直接实现（它们较简单，不需要 service 的统一 persist）。
-> 3. `applyEvent` 只处理简单事件（message_end / turn_end / agent_start）。复杂事件（before_agent_start / agent_end / session_start）由 event-adapter 直接实现，调 engine 纯函数 + service 辅助函数。
+> 3. `applyEvent` 只处理简单事件（message_end / turn_end / agent_start）。复杂事件（before_agent_start / agent_end / session_start）由 event-adapter 直接实现，调 engine 纯函数 + service 辅助函数。`_ports` 参数保持双入口签名一致性（复杂事件才需要 ports）。
 > 4. service 的核心价值是：createGoal 唯一入口 + finalizeGoal 唯一完成 + update_tasks/complete_goal/cancel_goal 的校验逻辑集中。
+> 5. **实现修正**：原计划 `agent_start` 误写 `session.state.tasksCompletedAtAgentStart`，实际字段在 `session.tasksCompletedAtAgentStart`（GoalSession 顶层字段，非 GoalRuntimeState）。
+> 6. **实现修正**：原计划 `message_end` 内联 token 算法，改为复用 `engine/budget.accumulateTokens`（消除重复，单一数据源）。
+> 7. **实现修正**：原计划 `createGoal` 用 `Array.isArray(tasks)` 区分 `string[]` vs `GoalTask[]`，但两者都是数组 → 改为 `typeof tasks[0] === "string"` 判首元素类型。
+> 8. **实现修正**：移除 dead code `persistAndUpdate` / `effects_updateWidget`（占位函数，从未调用）。
 
 - [ ] **步骤 2：编写 service.test.ts**
 
@@ -512,7 +509,7 @@ function errorResult(message: string): ToolActionResult {
  */
 import { describe, expect, it } from "vitest";
 
-import { applyToolAction, createGoal, finalizeGoal, type ServicePorts } from "../service";
+import { applyToolAction, applyEvent, createGoal, finalizeGoal, type ServicePorts } from "../service";
 import { createGoalSession, type GoalSession } from "../session";
 import type { GoalRuntimeState } from "../engine/types";
 import { createGoalState } from "../engine/goal";
@@ -747,6 +744,57 @@ describe("finalizeGoal — history 写入矩阵", () => {
 		const state = makeState();
 		finalizeGoal(state, "budget_limited", ports, { clearImmediately: false, completedTasks: 2 });
 		expect(ports.history.length).toBe(1);
+	});
+});
+
+// ── applyEvent — 简单事件（路径 B）────────────────────
+
+describe("applyEvent — 简单事件", () => {
+	it("message_end 累加 assistant token（FR-8.6）", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		const before = session.state.tokensUsed;
+		applyEvent(session, "message_end", {
+			message: { role: "assistant", usage: { input: 100, output: 50, cacheRead: 20 } },
+		}, makeFakePorts());
+		// accumulateTokens: max(100 - 20, 0) + 50 = 130
+		expect(session.state.tokensUsed).toBe(before + 130);
+	});
+
+	it("message_end 忽略非 assistant 消息", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		const before = session.state.tokensUsed;
+		applyEvent(session, "message_end", {
+			message: { role: "user", usage: { input: 100, output: 50 } },
+		}, makeFakePorts());
+		expect(session.state.tokensUsed).toBe(before);
+	});
+
+	it("turn_end → currentTurnIndex++ + updateWidget effect", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		const before = session.state.currentTurnIndex;
+		const effects = applyEvent(session, "turn_end", {}, makeFakePorts());
+		expect(session.state.currentTurnIndex).toBe(before + 1);
+		expect(effects).toContainEqual({ kind: "updateWidget" });
+	});
+
+	it("agent_start → 记录 session.tasksCompletedAtAgentStart（字段在 session 上）", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [
+			{ id: 1, description: "done", status: "completed", lastUpdatedTurn: 0 },
+			{ id: 2, description: "verified", status: "verified", lastUpdatedTurn: 0 },
+		];
+		applyEvent(session, "agent_start", {}, makeFakePorts());
+		expect(session.tasksCompletedAtAgentStart).toBe(2);
+	});
+
+	it("session.state=null → 返回空 effects", () => {
+		const session = createGoalSession();
+		const effects = applyEvent(session, "turn_end", {}, makeFakePorts());
+		expect(effects).toEqual([]);
 	});
 });
 ```
