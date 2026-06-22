@@ -21,8 +21,9 @@
 ```typescript
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Static } from "typebox";
-import type { GoalSession } from "../session.js";
-import type { ServicePorts, ToolActionResult } from "../service.js";
+// 实现修正 1：新层 import 不带 .js 后缀（与 service.ts / projection/* 一致；moduleResolution: "bundler" 接受）
+import type { GoalSession } from "../session";
+import type { ServicePorts, ToolActionResult } from "../service";
 
 /**
  * goal_manager tool 的参数 schema（typebox）。
@@ -71,8 +72,9 @@ export type ActionHandler = (actx: ActionContext) => ToolActionResult;
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import type { GoalSession } from "../session.js";
-import { applyToolAction, type ServicePorts, type ToolActionResult } from "../service.js";
+// 实现修正 1：新层 import 不带 .js 后缀（与 service.ts / projection/* 一致）
+import type { GoalSession } from "../session";
+import { applyToolAction, type ServicePorts, type ToolActionResult } from "../service";
 
 // ── Types ────────────────────────────────────────────
 
@@ -202,27 +204,34 @@ git commit -m "refactor(goal): add adapters/actions.ts task handlers (Wave 8)"
 
 ### 1. 测试
 
-- [ ] **无独立单元测试**——actions 是薄封装，逻辑在 service.applyToolAction（Wave 5 已测）
-- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
-- [ ] 全量 `test` 仍全绿
+- [x] **无独立单元测试**——actions 是薄封装，逻辑在 service.applyToolAction（Wave 5 已测）
+- [x] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
+- [x] 全量 `test` 仍全绿（231 tests passed）
 
 ### 2. 架构边界
 
-- [ ] `grep -rn "\.\./state\|\.\./tool-handler\|\.\./action-handlers" extensions/goal/src/adapters/actions.ts` 无输出（不 import 旧文件）
-- [ ] adapters 层可 import Pi 类型（`ExtensionAPI` / `ExtensionContext`）
-- [ ] 禁止 `any`（用 `Record<string, unknown>` + 内部断言）
+- [x] `grep -rn "\.\./state\|\.\./tool-handler\|\.\./action-handlers" extensions/goal/src/adapters/actions.ts` 无输出（不 import 旧文件）
+- [x] adapters 层可 import Pi 类型（`ExtensionAPI` / `ExtensionContext`）
+- [x] 禁止 `any`（用 `Record<string, unknown>` + 内部断言）
 
 ### 3. 接口契约
 
-- [ ] 导出 7 个 task handler：`handleCreateTasks` / `handleAddTasks` / `handleUpdateTasks` / `handleListTasks` / `handleCompleteGoal` / `handleReportBlocked` / `handleCancelGoal`
-- [ ] 导出类型：`ActionHandler` / `ActionContext` / `GoalToolParams`
-- [ ] 每个 handler 签名 `(actx: ActionContext) => ToolActionResult`
+- [x] 导出 7 个 task handler：`handleCreateTasks` / `handleAddTasks` / `handleUpdateTasks` / `handleListTasks` / `handleCompleteGoal` / `handleReportBlocked` / `handleCancelGoal`
+- [x] 导出类型：`ActionHandler` / `ActionContext` / `GoalToolParams`
+- [x] 每个 handler 签名 `(actx: ActionContext) => ToolActionResult`
 
 ### 4. 行为契约
 
-- [ ] 每个 handler 是薄封装（1-3 行），委托 `service.applyToolAction(session, action, params, ports)`
-- [ ] JSDoc 标注 FR 交叉引用：FR-8.8（create_tasks 覆盖）/ FR-8.9（verification steering）/ FR-8.10（全 cancelled 守卫）/ FR-3.3（blocked 不走 finalizeGoal）/ FR-8.7（cancel 立即 clear）/ FR-8.5（cancel tasks:[]）/ G-005（list_tasks 只读）
+- [x] 每个 handler 是薄封装（1 行），委托 `service.applyToolAction(session, action, params, ports)`
+- [x] JSDoc 标注 FR 交叉引用：FR-8.8（create_tasks 覆盖）/ FR-8.9（verification steering）/ FR-8.10（全 cancelled 守卫）/ FR-3.3（blocked 不走 finalizeGoal）/ FR-8.7（cancel 立即 clear）/ FR-8.5（cancel tasks:[]）/ G-005（list_tasks 只读）
 
 ### 5. 提交
 
-- [ ] commit message 以 `wave-8:` 开头，含「adapters/actions.ts」+「7 task handler」
+- [x] commit message 以 `wave-8:` 开头，含「adapters/actions.ts」+「7 task handler」
+
+---
+
+## 实现修正记录
+
+1. **import 不带 `.js` 后缀**：plan 原写 `from "../session.js"` / `from "../service.js"`，实现改为 `from "../session"` / `from "../service"`。理由：新层（service.ts / projection/widget.ts / projection/prompts.ts / projection/result.ts）统一不带后缀，`moduleResolution: "bundler"` 接受两种写法。保持一致性。
+2. **import 顺序自动修正**：eslint `simple-import-sort/imports` 自动重排（`applyToolAction` value import 排在 `GoalSession` type import 之前），通过 `eslint --fix` 处理，无行为影响。
