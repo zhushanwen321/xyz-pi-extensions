@@ -137,11 +137,11 @@ extensions/workflow/src/
 |------|------|------|----------|--------|-------------|
 | **W1** | T1-T7 纯模型 | ✅ 完成 | 2026-06-22 | 87 | e5b22a119..3df9d6159 |
 | **W2** | T8-T16 Infra + 运行时模型 | ✅ 完成 | 2026-06-22 | +164（累计 676） | d0e9bbcb3..fa00104a6 |
-| **W3** | T17-T22 Engine free functions | ⬜ 未开始 | — | — | — |
+| **W3** | T17-T22 Engine free functions | ✅ 完成 | 2026-06-22 | +123（累计 799） | 62b97cddd..7c5eeb2c4 |
 | **W4** | T23-T28 Interface 收口 + factory 切换 | ⬜ 未开始 | — | — | — |
 | **W5** | T29-T33 清理 + 外部 caller | ⬜ 未开始 | — | — | — |
 
-**当前进度：2/5 waves 完成（T1-T16，16/33 tasks）。**
+**当前进度：3/5 waves 完成（T1-T22，22/33 tasks）。**
 
 #### W1 验证记录（2026-06-22）
 - `pnpm typecheck`：0 errors
@@ -161,6 +161,25 @@ extensions/workflow/src/
   - Trace.fromArray 补充（T13 序列化需要，T4 非破坏性新增）
   - Worker exit 测试发现：正常 worker 不自然退出，只有崩溃路径触发 exit handler
 
+#### W3 验证记录（2026-06-22）
+- 6 个目标文件全部存在（script-lint/execute-agent-call/error-recovery/node-ops/lifecycle/launcher）
+- `pnpm typecheck`：0 errors
+- 799 全量测试通过（44 文件，+123 新测试：T17 25 + T18 24 + T19 24 + T20 16 + T21 22 + T22 12）
+- AC-1：新 W3 engine 文件零 `@mariozechner` 依赖（旧 core.ts/agent-call-handler.ts/trace-commit.ts 残留，W5 T29 删）
+- AC-2：新 W3 engine 文件零旧抽象（OrchestratorCore/terminateDeps/Context factory 仅注释提及）
+- eslint：0 errors，0 warnings（12 个 W3 文件）
+- 关键决策记录：
+  - T17 合并 entry-point 检查到 lintScript（validate() 委托后必须在此）
+  - T18 D.4 修复：cacheWrite 合并到 input 避免双重计数（去掉旧 as never 类型逃逸）
+  - T19 N1+N2 修复：rebuildRuntime 实际重建 gate+controller（旧 handleScriptError retry 缺重建=孤儿资源）
+  - T19 M1 修复：handleScriptError 接收 handlers 参数（rebuildRuntime 需要）
+  - T19 C.5：重试计数载体 run.meta.workerErrorCount/scriptErrorCount（跨 replaceRuntime 存活）
+  - T20 D.5 修复：retryNode 不再 replaceRuntime（单 call 重试 vs worker 重启语义纠偏）
+  - T21 HIGH RISK：旧 lifecycle.ts 先重命名为 lifecycle.legacy.ts 避免编译冲突
+  - T21 makeHandlers 自引用闭包（handlers 引用自身供 rebuildRuntime 传参）
+  - T22 C.7 修复：timeout → done,time_limited（旧返回 status:"timeout" 不转终态=资源泄漏）
+  - T22 abortRun 增 doneReason 参数（默认 aborted，timeout 传 time_limited，向后兼容）
+
 | # | Task | 依赖 | Wave | 状态 |
 |---|------|------|------|------|
 | T1 | engine/models/types.ts | — | W1 | ✅ |
@@ -179,12 +198,12 @@ extensions/workflow/src/
 | T14 | infra/workflow-script-registry-impl.ts + 5 保留文件改 import | T6 | W2 | ✅ |
 | T15 | engine/models/run-runtime.ts | T8,T9 | W2 | ✅ |
 | T16 | engine/models/workflow-run.ts（聚合根） | T7,T15 | W2 | ✅ |
-| T17 | engine/script-lint.ts（回填 WorkflowScript.validate） | T6 | W3 | ⬜ |
-| T18 | engine/execute-agent-call.ts | T2,T3,T4,T5 | W3 | ⬜ |
-| T19 | engine/error-recovery.ts | T2,T8,T16,T18 | W3 | ⬜ |
-| T20 | engine/node-ops.ts | T2,T16,T18 | W3 | ⬜ |
-| T21 | engine/lifecycle.ts（旧 lifecycle→legacy 重命名） | T2,T8,T12,T16,T19 | W3 | ⬜ |
-| T22 | engine/launcher.ts | T14,T21 | W3 | ⬜ |
+| T17 | engine/script-lint.ts（回填 WorkflowScript.validate） | T6 | W3 | ✅ |
+| T18 | engine/execute-agent-call.ts | T2,T3,T4,T5 | W3 | ✅ |
+| T19 | engine/error-recovery.ts | T2,T8,T16,T18 | W3 | ✅ |
+| T20 | engine/node-ops.ts | T2,T16,T18 | W3 | ✅ |
+| T21 | engine/lifecycle.ts（旧 lifecycle→legacy 重命名） | T2,T8,T12,T16,T19 | W3 | ✅ |
+| T22 | engine/launcher.ts | T14,T21 | W3 | ✅ |
 | T23 | interface/helpers.ts | T16 | W4 | ⬜ |
 | T24 | interface/tool-workflow-script.ts | T6,T17 | W4 | ⬜ |
 | T25 | interface/tool-workflow.ts | T2,T6,T20,T21,T23 | W4 | ⬜ |
