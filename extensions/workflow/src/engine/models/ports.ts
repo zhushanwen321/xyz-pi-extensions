@@ -11,25 +11,15 @@
  * 层归属：Engine。零 infra 依赖（AC-1）。
  *
  * ───────────────────────────────────────────────────────────────
- * FORWARD REF 状态（T9 已完成 / T7 已完成）
+ * FORWARD REF 状态（全部已创建）
  * ───────────────────────────────────────────────────────────────
- * RunSpec 已由 T7 创建（下方真实 import）。
- * WorkerHandle 已由 T9 创建（下方真实 import，Infra 层技术类型，Engine 允许引用，D-12）。
- * WorkflowRun 仍由 T16 创建，下方保留占位：
- *   - WorkflowRun  → T16 (engine/models/workflow-run.ts)
- * 对应 task 完成后：删除占位块，改为
- *   import type { WorkflowRun } from "./workflow-run.js";
+ * RunSpec (T7) / WorkerHandle (T9) / WorkflowRun (T16) 均已创建，
+ * 下方全部为真实 import。本文件无 forward-ref 占位。
  */
 import type { WorkerHandle } from "../../infra/worker-handle.js";
 import type { RunSpec } from "./run-spec.js";
 import type { AgentCallOpts, AgentResult } from "./types.js";
-
-// ── FORWARD REF 占位（待 T16 替换为真实 import） ────────────
-// 真实 WorkflowRun 见 domain-models.md §1（聚合根）。
-export interface WorkflowRunPlaceholder {
-  /** 占位——T16 后由真实 WorkflowRun 替换。 */
-  readonly runId: string;
-}
+import type { WorkflowRun } from "./workflow-run.js";
 
 // ── Port 1: AgentRunner ───────────────────────────────────────
 
@@ -52,8 +42,8 @@ export interface AgentRunner {
  * loadAll() 在 session_start 时重水合（D-5：JSONL 不向后兼容旧 session，旧格式返回空）。
  */
 export interface RunStore {
-  save(run: WorkflowRunPlaceholder): Promise<void>;
-  loadAll(): Promise<WorkflowRunPlaceholder[]>;
+  save(run: WorkflowRun): Promise<void>;
+  loadAll(): Promise<WorkflowRun[]>;
 }
 
 // ── Port 3: WorkerHost ────────────────────────────────────────
@@ -108,5 +98,5 @@ export interface LifecycleDeps {
   store: RunStore;
   workerHost: WorkerHost;
   runner: AgentRunner;
-  runs: Map<string, WorkflowRunPlaceholder>;
+  runs: Map<string, WorkflowRun>;
 }
