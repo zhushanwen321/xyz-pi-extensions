@@ -14,10 +14,9 @@
  * 未来 commands.ts 切回 createWorkflowsView 时即激活。
  */
 
-/* eslint-disable taste/no-unsafe-cast, taste/no-silent-catch */
+/* eslint-disable taste/no-silent-catch */
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { Component, KeybindingsManager, TUI } from "@mariozechner/pi-tui";
 import { Text } from "@mariozechner/pi-tui";
 
 import type { WorkflowRun } from "../../engine/models/workflow-run.js";
@@ -51,6 +50,17 @@ const MIN_BODY_LINES = 3;
 const BODY_HEIGHT_NUMERATOR = 2;
 const BODY_HEIGHT_DENOMINATOR = 3;
 const MAX_TOOL_CALLS_DISPLAY = 3;
+
+// ── Minimal TUI duck-types（避免直接 import TUI/KeybindingsManager 类型 ──
+// 共享类型 fallback shared/types/mariozechner/index.d.ts 不导出 TUI 类，
+// workspace 跨包 typecheck 会报 "no exported member 'TUI'"。
+// 此处用结构化接口替代——只声明 view 实际用到的成员。
+
+interface TuiLike {
+  terminal: { columns: number; rows: number };
+  requestRender(): void;
+  on(key: string, cb: () => void): void;
+}
 
 // ── View actions ──────────────────────────────────────────────
 
@@ -100,8 +110,9 @@ export function createWorkflowsView(
   ctx: ExtensionContext,
   actions: ViewActions,
 ): Promise<void> {
-  return ctx.ui.custom<void>((tui: TUI, _t: unknown, kb: KeybindingsManager, done: (result: void) => void) => {
+  return ctx.ui.custom<void>((_tui: unknown, _t: unknown, _kb: unknown, done: (result: void) => void) => {
     const state = createInitialState();
+    const tui = _tui as TuiLike;
 
     // trace.toArray() 返回 readonly；buildPhaseGroups 需 mutable，拷一份
     const traceNodes = [...run.state.trace.toArray()];
@@ -131,20 +142,15 @@ export function createWorkflowsView(
       tui.requestRender();
     }
 
-    // ── Key bindings via KeybindingsManager ──
-    // 注：pi-tui KeybindingsManager.bind 签名依实现，这里用 tui 事件接口。
-    // 过渡：用 (tui as未知) 退回 duck-typed 事件绑定（与旧 view 同款）。
-    const screen = tui as unknown as {
-      on(key: string, cb: () => void): void;
-    };
-    void kb;
+    // ── Key bindings via tui event interface ──
+    // TuiLike.on 已声明；tui 直接用（无需 duck-type 转换）。
 
-    screen.on("ctrl+c", () => {
+    tui.on("ctrl+c", () => {
       state.disposed = true;
       done();
     });
 
-    screen.on("escape", () => {
+    tui.on("escape", () => {
       if (state.level === 0) {
         state.disposed = true;
         done();
@@ -155,19 +161,19 @@ export function createWorkflowsView(
       }
     });
 
-    screen.on("up", () => {
+    tui.on("up", () => {
       if (state.level === 0 && state.phaseIdx > 0) state.phaseIdx--;
       else if (state.level === 1 && state.agentIdx > 0) state.agentIdx--;
       renderView();
     });
 
-    screen.on("down", () => {
+    tui.on("down", () => {
       if (state.level === 0 && state.phaseIdx < phaseGroups.length - 1) state.phaseIdx++;
       else if (state.level === 1 && state.agentIdx < currentPhaseAgents().length - 1) state.agentIdx++;
       renderView();
     });
 
-    screen.on("enter", () => {
+    tui.on("enter", () => {
       if (state.level === 0 && phaseGroups.length > 0) {
         state.level = 1;
         state.agentIdx = 0;
@@ -178,7 +184,7 @@ export function createWorkflowsView(
     });
 
     // ── Lifecycle shortcuts (no restart per D-9) ──
-    screen.on("p", async () => {
+    tui.on("p", async () => {
       if (run.state.status === "running") {
         try { await actions.pause(run.runId); } catch { /* pause 失败忽略，view 不阻断 */ }
         renderView();
@@ -188,7 +194,7 @@ export function createWorkflowsView(
       }
     });
 
-    screen.on("a", async () => {
+    tui.on("a", async () => {
       if (run.state.status === "running" || run.state.status === "paused") {
         try { await actions.abort(run.runId); } catch { /* abort 失败忽略 */ }
         renderView();
@@ -196,7 +202,7 @@ export function createWorkflowsView(
     });
 
     renderView();
-    return host as Component & { dispose?(): void };
+    return host;
   });
 }
 
