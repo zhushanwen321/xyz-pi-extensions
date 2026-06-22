@@ -11,27 +11,20 @@
  * 层归属：Engine。零 infra 依赖（AC-1）。
  *
  * ───────────────────────────────────────────────────────────────
- * FORWARD REF 占位（W1-T2 阶段）
+ * FORWARD REF 状态（T7 已完成）
  * ───────────────────────────────────────────────────────────────
- * RunSpec / WorkflowRun / WorkerHandle 由后续 task 创建：
- *   - RunSpec      → T7 (engine/models/run-spec.ts)
+ * RunSpec 已由 T7 创建（下方真实 import）。
+ * WorkflowRun / WorkerHandle 仍由后续 task 创建：
  *   - WorkflowRun  → T16 (engine/models/workflow-run.ts)
  *   - WorkerHandle → T9 (infra/worker-handle.ts)
- * 此处用占位 type 别名让 ports.ts 当前可独立 typecheck。
  * 对应 task 完成后：删除占位块，改为
- *   import type { RunSpec } from "./run-spec.js";
  *   import type { WorkflowRun } from "./workflow-run.js";
  *   import type { WorkerHandle } from "../../infra/worker-handle.js";
  */
+import type { RunSpec } from "./run-spec.js";
 import type { AgentCallOpts, AgentResult } from "./types.js";
 
-// ── FORWARD REF 占位（待 T7/T16/T9 替换为真实 import） ──────────
-// 真实 RunSpec 形状见 domain-models.md §2；此处仅需类型占位以满足 port 签名。
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface RunSpecPlaceholder {
-  /** 占位——T7 后由真实 RunSpec 替换。 */
-  readonly scriptSource: string;
-}
+// ── FORWARD REF 占位（待 T16/T9 替换为真实 import） ────────────
 // 真实 WorkflowRun 见 domain-models.md §1（聚合根）。
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface WorkflowRunPlaceholder {
@@ -80,7 +73,7 @@ export interface RunStore {
  */
 export interface WorkerHost {
   start(
-    spec: RunSpecPlaceholder,
+    spec: RunSpec,
     args: Record<string, unknown>,
     handlers: WorkerHandlers,
   ): WorkerHandlePlaceholder;
