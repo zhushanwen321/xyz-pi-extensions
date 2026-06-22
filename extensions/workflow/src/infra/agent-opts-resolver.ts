@@ -8,8 +8,8 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import type { AgentCallOpts } from "../engine/models/types.js";
 import { AgentRegistry } from "./agent-discovery.js";
-import type { AgentCallOpts } from "./agent-pool.js";
 import { resolveSkillPath } from "./skill-discovery.js";
 
 const UUID_SLICE_LEN = 8;

@@ -7,7 +7,7 @@
 
 import { truncateToWidth } from "@mariozechner/pi-tui";
 
-import type { ExecutionTraceNode, ToolCallEntry, WorkflowStatus } from "../../domain/state.js";
+import type { ExecutionTraceNode, ToolCallEntry } from "../../engine/models/types.js";
 import { MS_PER_SEC, SECS_PER_MIN } from "../../infra/constants.js";
 
 // ── Constants ─────────────────────────────────────────────────
@@ -41,7 +41,7 @@ export function statusDotStr(status: string, theme: ThemeLike): string {
 }
 
 /** Format a status badge with color for the header area. */
-export function formatStatusBadge(status: WorkflowStatus, theme: ThemeLike): string {
+export function formatStatusBadge(status: string, theme: ThemeLike): string {
   switch (status) {
     case "running": return theme.fg("warning", "\u25CF running");
     case "paused": return theme.fg("warning", "\u23F8 PAUSED");

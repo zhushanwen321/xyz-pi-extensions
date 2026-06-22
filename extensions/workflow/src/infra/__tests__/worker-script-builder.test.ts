@@ -3,32 +3,11 @@
 
 import { describe, expect, it } from "vitest";
 
-// 旧 builder，用于 AC-4 字节级一致性比对（过渡期保留）。
-// W5 T29 删除旧 engine/worker-script.ts 后此对比测试随之移除。
-import { buildWorkerScript as legacyBuildWorkerScript } from "../../engine/worker-script.js";
 import { buildWorkerScript } from "../worker-script-builder.js";
 
 describe("buildWorkerScript (T11)", () => {
   const userScript = 'log("hello from user script");';
   const result = buildWorkerScript(userScript);
-
-  // ── AC-4: 脚本格式不变（用户资产） ──────────────────────────
-
-  describe("AC-4 format preservation", () => {
-    it("produces byte-identical output to legacy engine/worker-script.ts", () => {
-      // 用户 workflow 脚本依赖 agent()/parallel()/pipeline()/$ARGS/$BUDGET 等契约。
-      // 任何字节差异都意味着用户资产破坏（AC-4）。
-      const probeScripts = [
-        'log("simple");',
-        'module.exports = { meta: {}, execute: async ({agent}) => agent("x") };',
-        'await agent("hello");\nawait parallel([agent("a"), agent("b")]);',
-        'export const meta = { name: "test" };\nreturn pipeline([(x) => x]);',
-      ];
-      for (const src of probeScripts) {
-        expect(buildWorkerScript(src)).toBe(legacyBuildWorkerScript(src));
-      }
-    });
-  });
 
   // ── Required injected globals (format契约) ─────────────────
 
