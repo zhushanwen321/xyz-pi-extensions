@@ -3,8 +3,8 @@
 
 import { describe, expect, it } from "vitest";
 
+import { type WorkflowMeta, WorkflowScript, type WorkflowSource } from "../workflow-script.js";
 import type { WorkflowScriptRegistry } from "../workflow-script-registry.js";
-import { WorkflowScript, type WorkflowMeta, type WorkflowSource } from "../workflow-script.js";
 
 function makeScript(overrides: {
   sourceCode?: string;

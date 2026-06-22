@@ -17,10 +17,14 @@
 /* eslint-disable taste/no-unsafe-cast */
 
 import { EventEmitter } from "node:events";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { Worker } from "node:worker_threads";
 
 import { describe, expect, it, vi } from "vitest";
 
+import type { AgentRegistry } from "../../infra/agent-discovery.js";
 import { ConcurrencyGate } from "../../infra/concurrency-gate.js";
 import { WorkerHandle } from "../../infra/worker-handle.js";
 import {
@@ -97,12 +101,18 @@ function makeDeps(overrides?: {
   workerHost?: WorkerHost;
   budget?: Budget;
   onRunDone?: (run: WorkflowRun) => void;
+  agentRegistry?: AgentRegistry;
+  sessionDir?: string;
+  activeTempFiles?: Set<string>;
 }): {
   store: RunStore;
   workerHost: WorkerHost;
   runner: AgentRunner;
   runs: Map<string, WorkflowRun>;
   onRunDone: (run: WorkflowRun) => void;
+  agentRegistry?: AgentRegistry;
+  sessionDir?: string;
+  activeTempFiles?: Set<string>;
 } {
   const run = makeRun(overrides?.budget ? { budget: overrides.budget } : undefined);
   const runs = new Map([[run.runId, run]]);
@@ -115,6 +125,10 @@ function makeDeps(overrides?: {
     runs,
     // T-2：onRunDone 默认注入 spy，让所有 done-transition 站点可被断言。
     onRunDone: overrides?.onRunDone ?? vi.fn(),
+    // BL-1: 解析依赖（可选——不传则 dispatchAgentCall 跳过 resolveAgentOpts）。
+    ...(overrides?.agentRegistry ? { agentRegistry: overrides.agentRegistry } : {}),
+    ...(overrides?.sessionDir ? { sessionDir: overrides.sessionDir } : {}),
+    ...(overrides?.activeTempFiles ? { activeTempFiles: overrides.activeTempFiles } : {}),
   };
 }
 
@@ -181,6 +195,148 @@ describe("handleWorkerMessage 路由", () => {
     // 等微任务让 executeAgentCall 完成
     await vi.waitFor(() => expect(call.status).toBe("done"));
     expect(runner.run).toHaveBeenCalledTimes(1);
+  });
+
+  // ── BL-1: agent/skill/schema 解析（dispatchAgentCall → resolveAgentOpts） ──
+
+  it("BL-1: agent() 解析 systemPrompt → runner 收到 systemPromptFiles（--append-system-prompt）", async () => {
+    const runner = { run: vi.fn().mockResolvedValue({ content: "ok" } as AgentResult) };
+    const fakeRegistry = {
+      resolve: vi.fn().mockReturnValue({
+        name: "code-review",
+        systemPrompt: "You are a code reviewer.",
+        model: "router-openai/glm-5.1",
+        filePath: "/fake/.agents/agents/code-review.md",
+        source: "project",
+      }),
+    } as unknown as AgentRegistry;
+    const deps = makeDeps({
+      runner,
+      agentRegistry: fakeRegistry,
+      sessionDir: os.tmpdir(),
+      activeTempFiles: new Set<string>(),
+    });
+    const run = runOf(deps);
+    await handleWorkerMessage(
+      run,
+      { type: "agent-call", callId: 0, opts: { prompt: "review this", agent: "code-review" } },
+      deps,
+      makeHandlers(),
+    );
+    const call = run.state.calls.get(0)!;
+    await vi.waitFor(() => expect(call.status).toBe("done"));
+    // runner.run 收到解析后的 opts，含 systemPromptFiles（agent systemPrompt 写临时文件）
+    expect(runner.run).toHaveBeenCalledTimes(1);
+    const passedOpts = runner.run.mock.calls[0]![0];
+    expect(passedOpts.systemPromptFiles).toBeDefined();
+    expect(passedOpts.systemPromptFiles.length).toBe(1);
+    // model fallback：opts 未传 model → 用 agent 注册的 model
+    expect(passedOpts.model).toBe("router-openai/glm-5.1");
+    // 临时文件已注册到 activeTempFiles（session_shutdown 回收）
+    expect(deps.activeTempFiles!.size).toBe(1);
+  });
+
+  it("BL-1: agent 未找到 → 回发 {error} 结果给 worker + call done/failed", async () => {
+    const runner = { run: vi.fn().mockResolvedValue({ content: "ok" } as AgentResult) };
+    const fakeRegistry = {
+      resolve: vi.fn().mockReturnValue(undefined),
+    } as unknown as AgentRegistry;
+    const deps = makeDeps({
+      runner,
+      agentRegistry: fakeRegistry,
+      sessionDir: os.tmpdir(),
+      activeTempFiles: new Set<string>(),
+    });
+    const run = runOf(deps);
+    await handleWorkerMessage(
+      run,
+      { type: "agent-call", callId: 0, opts: { prompt: "x", agent: "nonexistent" } },
+      deps,
+      makeHandlers(),
+    );
+    const call = run.state.calls.get(0)!;
+    // 解析失败：call 立即 done + failed，不调 runner
+    expect(call.status).toBe("done");
+    expect(call.result?.error).toBe("Agent not found: nonexistent");
+    expect(runner.run).not.toHaveBeenCalled();
+    // worker 收到 {error} 结果（pending Promise reject）
+    // WorkerHandle.postMessage 转发到底层 worker 的 postMessage（FakeWorker 的 spy）
+    expect(run.runtime?.worker.raw.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agent-result",
+        callId: 0,
+        result: expect.objectContaining({ error: "Agent not found: nonexistent" }),
+        cached: false,
+      }),
+    );
+    // trace 节点标 failed
+    const node = run.state.trace.find(0);
+    expect(node?.status).toBe("failed");
+  });
+
+  it("BL-1: skill 解析 → runner 收到 skillPath（--skill）", async () => {
+    const runner = { run: vi.fn().mockResolvedValue({ content: "ok" } as AgentResult) };
+    // resolveSkillPath 在模块加载时绑定 os/fs，这里用真实临时目录伪造 skill 目录
+    const skillDir = path.join(os.tmpdir(), ".agents", "skills", "my-skill");
+    fs.mkdirSync(skillDir, { recursive: true });
+    const fakeRegistry = { resolve: vi.fn() } as unknown as AgentRegistry;
+    const deps = makeDeps({
+      runner,
+      agentRegistry: fakeRegistry,
+      sessionDir: os.tmpdir(),
+      activeTempFiles: new Set<string>(),
+    });
+    const run = runOf(deps);
+    // resolveSkillPath 搜索 process.cwd() 相对 .agents/skills —— 改 cwd 到 tmpdir
+    const origCwd = process.cwd();
+    try {
+      process.chdir(os.tmpdir());
+      await handleWorkerMessage(
+        run,
+        { type: "agent-call", callId: 0, opts: { prompt: "x", skill: "my-skill" } },
+        deps,
+        makeHandlers(),
+      );
+      const call = run.state.calls.get(0)!;
+      await vi.waitFor(() => expect(call.status).toBe("done"));
+      const passedOpts = runner.run.mock.calls[0]![0];
+      // 用 endsWith 断言——macOS 上 os.tmpdir() 返回 /var/... 但 path.resolve 会
+      // 解析符号链接到 /private/var/...（realpath），两者语义等价但字面不同。
+      expect(passedOpts.skillPath).toBeTruthy();
+      expect(passedOpts.skillPath.replace(/^\/private/, "")).toBe(
+        path.join(os.tmpdir(), ".agents", "skills", "my-skill"),
+      );
+    } finally {
+      process.chdir(origCwd);
+      fs.rmSync(path.dirname(path.dirname(skillDir)), { recursive: true, force: true });
+    }
+  });
+
+  it("BL-1: schema 解析 → runner 收到 schemaEnv + systemPromptFiles（structured-output）", async () => {
+    const runner = { run: vi.fn().mockResolvedValue({ content: "ok" } as AgentResult) };
+    const deps = makeDeps({
+      runner,
+      agentRegistry: { resolve: vi.fn() } as unknown as AgentRegistry,
+      sessionDir: os.tmpdir(),
+      activeTempFiles: new Set<string>(),
+    });
+    const run = runOf(deps);
+    await handleWorkerMessage(
+      run,
+      { type: "agent-call", callId: 0, opts: { prompt: "x", schema: { type: "object", properties: { score: { type: "number" } } } } },
+      deps,
+      makeHandlers(),
+    );
+    const call = run.state.calls.get(0)!;
+    await vi.waitFor(() => expect(call.status).toBe("done"));
+    const passedOpts = runner.run.mock.calls[0]![0];
+    // schemaEnv = JSON 字符串（PI_WORKFLOW_SCHEMA env）
+    expect(passedOpts.schemaEnv).toBeDefined();
+    expect(JSON.parse(passedOpts.schemaEnv)).toEqual({ type: "object", properties: { score: { type: "number" } } });
+    // systemPromptFiles 含 structured-output 指令文件
+    expect(passedOpts.systemPromptFiles).toBeDefined();
+    expect(passedOpts.systemPromptFiles.length).toBe(1);
+    expect(deps.activeTempFiles!.size).toBe(1);
   });
 
   it("error 消息 → handleScriptError（递增 scriptErrorCount）", async () => {

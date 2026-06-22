@@ -32,3 +32,8 @@ Other changes:
 - `ApprovalPolicy` deleted (D-11) → 2-line Interface helper.
 - JSONL persistence format changed (D-5) — old session history not
   loadable; the guard returns empty for old-format files.
+- `resolveAgentOpts` restored in dispatch path (BL-1): agent/skill/schema
+  inline overrides (`agent({agent,skill,schema})`) are again resolved into
+  `--append-system-prompt` / `--skill` / `PI_WORKFLOW_SCHEMA` injection. This
+  was silently dropped during the D-12 engine refactor and is now wired back
+  via `LifecycleDeps.agentRegistry/sessionDir/activeTempFiles`.

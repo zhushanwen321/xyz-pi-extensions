@@ -36,6 +36,7 @@ import type { LauncherDeps } from "./engine/launcher.js";
 import { runAndWait, type WorkflowRunResult } from "./engine/launcher.js";
 import { pauseRun } from "./engine/lifecycle.js";
 import type { WorkflowRun } from "./engine/models/workflow-run.js";
+import { AgentRegistry } from "./infra/agent-discovery.js";
 import { cleanupAllTempFiles as cleanupAllFiles } from "./infra/agent-opts-resolver.js";
 import { JsonlRunStore } from "./infra/jsonl-run-store.js";
 import { SubprocessAgentRunner } from "./infra/subprocess-agent-runner.js";
@@ -81,6 +82,8 @@ export default function workflowExtension(pi: ExtensionAPI): void {
       store: JsonlRunStore;
       runs: Map<string, WorkflowRun>;
       activeTempFiles: Set<string>;
+      agentRegistry: AgentRegistry;
+      sessionDir: string;
     }
   >();
 
@@ -95,16 +98,27 @@ export default function workflowExtension(pi: ExtensionAPI): void {
 
   // ── Helper: 构建 LauncherDeps ─────────────────────────────
 
-  function makeDeps(store: JsonlRunStore, runs: Map<string, WorkflowRun>) {
+  function makeDeps(state: {
+    store: JsonlRunStore;
+    runs: Map<string, WorkflowRun>;
+    activeTempFiles: Set<string>;
+    agentRegistry: AgentRegistry;
+    sessionDir: string;
+  }) {
     // C-4: onRunDone callback——run 到达 done 终态时触发 notifyDone，唤醒 parent agent
     // 消费结果（UC-1 主路径）。所有 transition("done", ...) 路径调完 save 后触发。
+    // BL-1: agentRegistry/sessionDir/activeTempFiles 透传给 dispatchAgentCall，
+    // 让 resolveAgentOpts 能解析 agent({agent,skill,schema}) 的 inline override。
     return {
-      store,
+      store: state.store,
       workerHost,
       runner,
-      runs,
+      runs: state.runs,
       registry,
       onRunDone: (run: WorkflowRun) => notifyDone(pi, run.runId, run, notifiedRunIds),
+      agentRegistry: state.agentRegistry,
+      sessionDir: state.sessionDir,
+      activeTempFiles: state.activeTempFiles,
     };
   }
 
@@ -136,12 +150,18 @@ export default function workflowExtension(pi: ExtensionAPI): void {
     }
 
     // 构建 per-session store + runs
+    const sessionDir = resolveSessionDir();
     const store = new JsonlRunStore({
-      sessionDir: resolveSessionDir(),
+      sessionDir,
       pi,
       ctx,
     });
     const runs = new Map<string, WorkflowRun>();
+
+    // BL-1: per-session AgentRegistry（扫描 7 个 agent 发现路径一次，非 per-call）。
+    // 供 dispatchAgentCall → resolveAgentOpts 解析 agent({agent}) 的 systemPrompt。
+    const agentRegistry = new AgentRegistry(process.cwd());
+    agentRegistry.discoverAll();
 
     // D-5: store.loadAll 重水合（旧格式返回空，自动跳过）
     try {
@@ -159,7 +179,13 @@ export default function workflowExtension(pi: ExtensionAPI): void {
       void err;
     }
 
-    sessionState.set(sessionId, { store, runs, activeTempFiles: new Set() });
+    sessionState.set(sessionId, {
+      store,
+      runs,
+      activeTempFiles: new Set(),
+      agentRegistry,
+      sessionDir,
+    });
   });
 
   pi.on("session_tree", async (_event: Record<string, unknown>, ctx: ExtensionContext) => {
@@ -172,7 +198,7 @@ export default function workflowExtension(pi: ExtensionAPI): void {
       for (const run of state.runs.values()) {
         if (run.state.status === "running") {
           try {
-            await pauseRun(run.runId, makeDeps(state.store, state.runs));
+            await pauseRun(run.runId, makeDeps(state));
           } catch (err) {
             // pause 失败不阻断分支切换——run 保持 running，下次 session_start 会 D-4 修复
             void err;
@@ -189,7 +215,7 @@ export default function workflowExtension(pi: ExtensionAPI): void {
       // pause 所有 running run + 清理 temp files
       const running = Array.from(state.runs.values()).filter((r) => r.state.status === "running");
       await Promise.allSettled(
-        running.map((run) => pauseRun(run.runId, makeDeps(state.store, state.runs))),
+        running.map((run) => pauseRun(run.runId, makeDeps(state))),
       );
       cleanupAllFiles(state.activeTempFiles);
     }
@@ -216,7 +242,7 @@ export default function workflowExtension(pi: ExtensionAPI): void {
     return runAndWait(
       workflowName,
       workflowArgs,
-      makeDeps(state.store, state.runs),
+      makeDeps(state),
       workflowSignal,
       workflowTimeoutMs,
     );
@@ -229,13 +255,15 @@ export default function workflowExtension(pi: ExtensionAPI): void {
   const getDeps = () => {
     const state = sessionState.get(lsRef.lastSessionId);
     if (!state) throw new Error("Session not initialized");
-    return makeDeps(state.store, state.runs);
+    return makeDeps(state);
   };
 
   // T25 workflow tool 需要 LauncherDeps；但 deps 里的 store/runs/onRunDone 是 per-session 的。
   // 用 getter 对象字面量包装——tool execute 时每次属性访问都取最新 session 的 deps。
   // C-4 修复：onRunDone 必须随 store/runs 一起转发，否则交互式 run/abort 路径
   // 会丢失 notifyDone 通知（W-2：同时消除旧 Proxy 的 `as never` + `as object` 类型擦除）。
+  // BL-1: agentRegistry/sessionDir/activeTempFiles 同样需转发，供 dispatchAgentCall
+  // 调 resolveAgentOpts 解析 agent/skill/schema inline override。
   const lazyDeps: LauncherDeps = {
     get store() {
       return getDeps().store;
@@ -248,6 +276,15 @@ export default function workflowExtension(pi: ExtensionAPI): void {
     registry,
     get onRunDone() {
       return getDeps().onRunDone;
+    },
+    get agentRegistry() {
+      return getDeps().agentRegistry;
+    },
+    get sessionDir() {
+      return getDeps().sessionDir;
+    },
+    get activeTempFiles() {
+      return getDeps().activeTempFiles;
     },
   };
 

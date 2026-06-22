@@ -32,6 +32,7 @@
  *   - 旧 engine/worker-manager.ts handleWorkerMessage（消息路由）
  */
 
+import { resolveAgentOpts } from "../infra/agent-opts-resolver.js";
 import { ConcurrencyGate, DEFAULT_CONCURRENCY } from "../infra/concurrency-gate.js";
 import type { WorkerHandle } from "../infra/worker-handle.js";
 import { executeAgentCall } from "./execute-agent-call.js";
@@ -217,7 +218,33 @@ function dispatchAgentCall(
         ? (rawSchema as Record<string, unknown>)
         : undefined,
   };
-  const call = new AgentCall(msg.callId, opts, node);
+
+  // BL-1：解析 agent/skill/schema → systemPromptFiles / skillPath / schemaEnv。
+  // D-12 重构误删 resolveAgentOpts，导致 inline override 静默失效。此处从
+  // LifecycleDeps 取 agentRegistry/sessionDir/activeTempFiles（per-session，由
+  // Interface 层 session_start 注入），调 resolveAgentOpts 等价于旧 orchestrator:786。
+  // 解析失败（agent/skill 未找到、临时文件写入错）走 error 路径，不发 slot、不 spawn。
+  const hasResolverDeps = deps.agentRegistry && deps.sessionDir && deps.activeTempFiles;
+  const resolved = hasResolverDeps
+    ? resolveAgentOpts(opts, deps.agentRegistry!, deps.sessionDir!, deps.activeTempFiles!)
+    : { opts };
+  if (resolved.error) {
+    const call = new AgentCall(msg.callId, opts, node);
+    call.markRunning();
+    const errorResult: AgentResult = { content: "", error: resolved.error };
+    call.markDone(errorResult);
+    run.state.calls.set(msg.callId, call);
+    run.state.trace.update(msg.callId, {
+      status: "failed",
+      result: errorResult,
+      completedAt: new Date().toISOString(),
+    });
+    postAgentResult(run, msg.callId, errorResult, false);
+    void deps.store.save(run);
+    return;
+  }
+
+  const call = new AgentCall(msg.callId, resolved.opts, node);
   run.state.calls.set(msg.callId, call);
 
   // C-3：经 ConcurrencyGate.withSlot 获取并发槽位后执行。

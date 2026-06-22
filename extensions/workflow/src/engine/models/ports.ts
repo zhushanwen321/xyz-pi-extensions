@@ -16,6 +16,7 @@
  * RunSpec (T7) / WorkerHandle (T9) / WorkflowRun (T16) 均已创建，
  * 下方全部为真实 import。本文件无 forward-ref 占位。
  */
+import type { AgentRegistry } from "../../infra/agent-discovery.js";
 import type { WorkerHandle } from "../../infra/worker-handle.js";
 import type { RunSpec } from "./run-spec.js";
 import type { AgentCallOpts, AgentResult } from "./types.js";
@@ -106,4 +107,17 @@ export interface LifecycleDeps {
   runs: Map<string, WorkflowRun>;
   /** run 到达 done 终态时的回调（C-4 修复，可选）。Interface 层注入 notifyDone。 */
   onRunDone?: (run: WorkflowRun) => void;
+  /**
+   * BL-1：agent/skill/schema 解析依赖（per-session，可选）。
+   *
+   * Interface 层 factory 在 session_start 注入：agentRegistry（扫描 .agents/agents 等
+   * 7 路径）、sessionDir（临时文件根）、activeTempFiles（session_shutdown 回收集合）。
+   * error-recovery.dispatchAgentCall 用这 3 项调 resolveAgentOpts，把
+   * `agent({agent,skill,schema})` 的 inline override 解析成 systemPromptFiles /
+   * skillPath / schemaEnv，否则 pi 子进程只收到原始 prompt（D-12 重构误删导致回归）。
+   * 全部可选——测试 makeDeps 工厂无需改。
+   */
+  agentRegistry?: AgentRegistry;
+  sessionDir?: string;
+  activeTempFiles?: Set<string>;
 }

@@ -3,7 +3,6 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { AgentResult } from "../types.js";
 import type {
   AgentRunner,
   LifecycleDeps,
@@ -11,6 +10,7 @@ import type {
   WorkerHandlers,
   WorkerHost,
 } from "../ports.js";
+import type { AgentResult } from "../types.js";
 
 // ── Port 形状：用 mock 对象赋值校验（结构子类型） ──────────────
 
