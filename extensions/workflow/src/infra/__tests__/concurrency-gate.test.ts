@@ -1,6 +1,8 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/infra/__tests__/concurrency-gate.test.ts
-/* eslint-disable taste/prefer-allsettled */
+// Structural field-probe casts (as unknown as { field?: T }) verify legacy
+// fields are absent from T1 AgentResult — intentional double-casts for tests.
+/* eslint-disable taste/no-unsafe-cast */
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -34,7 +36,6 @@ function createMockProcess(): MockProc {
  * 不完整实现 ChildProcess 接口（pid/stdin 等缺省）。集中此处双重断言。
  */
 function asChildProcess(proc: MockProc): ChildProcess {
-  // eslint-disable-next-line taste/no-unsafe-cast
   return proc as unknown as ChildProcess;
 }
 
