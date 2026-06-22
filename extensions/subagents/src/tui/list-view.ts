@@ -41,6 +41,7 @@ import type { SubagentService } from "../runtime/subagent-service.ts";
 import type { SubagentRecord } from "../types.ts";
 import {
   firstLine,
+  foldEntries,
   formatElapsedSeconds,
   formatEventLine,
   formatTokens,
@@ -729,7 +730,9 @@ class SubagentsListComponent implements Component {
     ));
     lines.push("");
 
-    const recent = record.eventLog.slice(-PREVIEW_RECENT_LINES);
+    // 先 fold 全量 eventLog（合并相邻同类 chunk），再取最近 N 条——
+    // 避免逐碎片展示，并保证 slice(-3) 取到 3 条代表行而非同一句的 3 个碎片。
+    const recent = foldEntries(record.eventLog).slice(-PREVIEW_RECENT_LINES);
     if (recent.length === 0) {
       lines.push(truncLine(t.fg("dim", "(no event log — from history)"), width));
     } else {
@@ -792,10 +795,13 @@ class SubagentsListComponent implements Component {
     content.push("");
     content.push(truncLine(t.fg("accent", t.bold("── Event Log ──")), width));
 
-    if (record.eventLog.length === 0) {
+    // 先 fold（合并相邻同类 chunk），与 compact/expanded/preview 一致——
+    // 详情页里一条 message 一行，显示文本开头，避免 "text: Hel" / "text: lo" / "text: }" 逐碎片。
+    const foldedLog = foldEntries(record.eventLog);
+    if (foldedLog.length === 0) {
       content.push(truncLine(t.fg("dim", "(no event log — from history)"), width));
     } else {
-      for (const entry of record.eventLog) {
+      for (const entry of foldedLog) {
         content.push(truncLine(formatEventLine(entry, t), width));
       }
     }

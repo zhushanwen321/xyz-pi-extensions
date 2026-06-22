@@ -18,7 +18,6 @@ import { Text } from "@earendil-works/pi-tui";
 import type { AgentToolResult, Theme } from "@mariozechner/pi-coding-agent";
 
 import type {
-  AgentEventLogEntry,
   ExecutionStatus,
   ListResponse,
   SubagentToolResult,
@@ -27,6 +26,7 @@ import type {
 import {
   extractAgentName,
   firstLine,
+  foldEntries,
   formatElapsedSeconds,
   formatEventLine,
   formatTokens,
@@ -334,10 +334,13 @@ class SubagentResultComponent implements Component {
     if (!("syncResponse" in d)) return [truncLine(theme.fg("warning", "(subagent: no sync response)"), width)];
     const sync = d.syncResponse;
 
-    // sync expanded：完整 eventLog + 交付物
+    // sync expanded：完整 eventLog + 交付物。
+    // 与 compact 同样先 fold（相邻同类 text/thinking 合并成一条，label 取组首），
+    // 避免逐碎片展示 "text: Hello" / "text: world" / "text: }"。一条 message 一行。
+    const foldedLog = foldEntries(sync.eventLog);
     lines.push(truncLine(buildStatusLineFromSync(sync, theme), width));
     lines.push("");
-    for (const entry of sync.eventLog) {
+    for (const entry of foldedLog) {
       lines.push(truncLine(`${theme.fg("dim", STREAM_PREFIX)}${formatEventLine(entry, theme)}`, width));
     }
     const delivery = buildDeliveryLineFromSync(sync, theme);
@@ -506,38 +509,7 @@ function activityMatchesEntry(
   return sanitizeLabel(activity.label) === sanitizeLabel(entry.label);
 }
 
-/**
- * 折叠连续同类分片（text_output / thinking）为单条代表行。
- *
- * 问题：core 层把流式输出按 100 字符切成多个 chunk push 进 eventLog。
- * 压缩视图逐条显示这些 chunk，结果同一句话被拆成 N 个半句碎片（前 100 字符重复 N 次），可读性差。
- *
- * 解法：相邻且同类（text_output 或 thinking）的分片折叠为 1 条，
- * label 取组内**最后一条**（最新内容，反映流式进展）。被 tool 隔开的同类各自成组。
- *
- *   [text, text, text, tool, text] → [text(末), tool, text(末)]
- *
- * 纯渲染层折叠，不改 eventLog 本身（持久化仍是细粒度）。
- * expanded view 不折叠（那里用户想看完整内容）。
- */
-function foldEntries(entries: AgentEventLogEntry[]): AgentEventLogEntry[] {
-  const result: AgentEventLogEntry[] = [];
-  for (const entry of entries) {
-    const last = result[result.length - 1];
-    // 相邻同类（text_output 或 thinking）→ 合并，取最新 label + ts
-    if (
-      last !== undefined &&
-      last.type === entry.type &&
-      (entry.type === "text_output" || entry.type === "thinking")
-    ) {
-      // readonly 字段不能 mutate，替换整个元素
-      result[result.length - 1] = { ...last, label: entry.label, ts: entry.ts };
-    } else {
-      result.push({ ...entry });
-    }
-  }
-  return result;
-}
+// foldEntries 已上移到 ./format.ts 共享（compact / expanded / preview / detail 统一调用）。
 
 // ============================================================
 // list 渲染 helper（action:"list" 分支）
