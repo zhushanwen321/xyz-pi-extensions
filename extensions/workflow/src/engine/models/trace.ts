@@ -31,6 +31,20 @@ import type { ExecutionTraceNode, TracePatch } from "./types.js";
 export class Trace {
   private readonly nodes: ExecutionTraceNode[] = [];
 
+  /**
+   * 从已有节点数组重建 Trace（用于 RunStore 反序列化重水合）。
+   *
+   * 防御性拷贝——传入数组不被持有，外部 mutation 不影响 Trace。
+   * 不验证节点顺序/唯一性（调用方保证快照来源可信）。
+   */
+  static fromArray(nodes: readonly ExecutionTraceNode[]): Trace {
+    const trace = new Trace();
+    for (const node of nodes) {
+      trace.nodes.push({ ...node });
+    }
+    return trace;
+  }
+
   /** Append a trace node（append-only，不改已有节点）。 */
   append(node: ExecutionTraceNode): void {
     this.nodes.push(node);
