@@ -1,35 +1,3 @@
-# Wave 6: projection/widget.ts
-
-- **目标文件**：`extensions/goal/src/projection/widget.ts`
-- **前置 wave**：Wave 2（engine/budget.ts）、Wave 3（ports.ts）、Wave 4（session.ts）
-- **目标**：迁移现有 `src/widget.ts` 到 `src/projection/widget.ts`，新增 `updateWidget(session, uiPort)` 并加入 FR-6.6 `hasUI` 守卫。projection 层不直接 import Pi 类型（用 `ThemeLike` / `UiPort` 抽象）。
-
-## 关键改动点
-
-1. **移除 Pi 类型 import**：`ThemeColor` 改为 projection 层定义的 `ThemeLike`（`fg` 接收 `string` 而非 `ThemeColor`）。
-2. **import 来源切换**：
-   - 类型 `GoalRuntimeState` ← `../engine/types.js`
-   - 类型 `GoalTask` ← `../engine/task.js`
-   - `getTokenUsagePercent` / `getTimeUsagePercent` / `getBudgetColor` ← `../engine/budget.js`
-   - `isTerminalStatus` ← `../engine/goal.js`
-   - `GoalSession` ← `../session.js`，`UiPort` ← `../ports.js`
-3. **时间计算改造**：旧 `getElapsedTimeSeconds(state)` 依赖 `Date.now()`（副作用），新架构下 engine 纯净。widget 内部改用 `state.timeUsedSeconds`（adapter/service 在调用前通过 `tick()` 已更新此字段），保持终态/paused 不累计的语义。
-4. **新增 `updateWidget(session, uiPort)`**：FR-6.6 `hasUI` 守卫——`uiPort.hasUI === false` 时直接 return。
-5. **theme 桥接**：adapter 构造的 `UiPort` 实现同时满足 `ThemeLike` 形状（额外挂 `fg` / `bold` 方法），projection 通过 `asTheme(uiPort)` 单步结构化断言取出。
-
-## 改动映射
-
-| 旧函数 | 旧来源 | 新来源 |
-|--------|--------|--------|
-| `getTokenUsagePercent` / `getTimeUsagePercent` / `getBudgetColor` | `./budget.js`（旧） | `../engine/budget.js` |
-| `GoalRuntimeState` / `GoalTask` | `./state.js`（旧） | `../engine/types.js` + `../engine/task.js` |
-| `isTerminalStatus` | `./state.js`（旧） | `../engine/goal.js` |
-| `getCompletedCount` / `getElapsedTimeSeconds` | `./state.js`（旧，含 `Date.now()`） | 内联实现（基于 `state.timeUsedSeconds`） |
-| `ThemeColor` | `@mariozechner/pi-coding-agent` | projection 层 `ThemeLike`（fg 接收 `string`） |
-
-## 步骤 1：创建 `extensions/goal/src/projection/widget.ts`
-
-```typescript
 /**
  * Widget 渲染逻辑（projection 层）— 状态栏和侧边栏任务面板
  *
@@ -41,12 +9,6 @@
  * - 新增 updateWidget(session, uiPort) + FR-6.6 hasUI 守卫
  */
 
-import { getBudgetColor, getTimeUsagePercent, getTokenUsagePercent } from "../engine/budget";
-import { isTerminalStatus } from "../engine/goal";
-import type { GoalRuntimeState } from "../engine/types";
-import type { GoalTask } from "../engine/task";
-import type { GoalSession } from "../session";
-import type { UiPort } from "../ports";
 import {
 	ELLIPSIS_LENGTH,
 	OBJECTIVE_DISPLAY_LIMIT,
@@ -56,6 +18,12 @@ import {
 	SECONDS_PER_MINUTE,
 	VERIFY_METHOD_WIDGET_LEN,
 } from "../constants";
+import { getBudgetColor, getTimeUsagePercent, getTokenUsagePercent } from "../engine/budget";
+import { isTerminalStatus } from "../engine/goal";
+import type { GoalTask } from "../engine/task";
+import type { GoalRuntimeState } from "../engine/types";
+import type { UiPort } from "../ports";
+import type { GoalSession } from "../session";
 
 /**
  * projection 层的 Theme 抽象。不 import Pi 的 ThemeColor。
@@ -330,58 +298,3 @@ export function updateWidget(session: GoalSession, uiPort: UiPort): void {
 	uiPort.setStatus("goal", renderStatusLine(session.state, asTheme(uiPort)));
 	uiPort.setWidget("goal", renderWidgetLines(session.state, asTheme(uiPort)));
 }
-```
-
-> **设计说明（`asTheme` 与 theme 桥接）**：
-> - `ports.ts` 的 `UiPort` 不暴露 `theme`（保持抽象最小）。
-> - adapter 层（Wave 10/12）构造的 `UiPort` 实现是 `{ setWidget, setStatus, notify, hasUI, fg, bold }`——把 Pi 的 `ctx.ui.theme.fg`（接收 `ThemeColor`，与 `string` 兼容）和 `ctx.ui.theme.bold` 挂上来。该对象同时满足 `UiPort` 与 `ThemeLike` 形状。
-> - projection 层通过单步 `as unknown as ThemeLike` 断言取出（adapter 保证形状，不涉及双重断言违规）。
-> - 这避免了 projection 直接 import Pi 类型，也避免把 `theme` 提升到 `UiPort` 接口污染抽象。
->
-> **实现修正**：
-> 1. **import 去掉 `.js` 扩展名**：原计划用 `./engine/budget.js` 等 `.js` 后缀，但 Wave 0-5 已建的 engine/service 层统一用无扩展名风格。`moduleResolution: "bundler"` 两者都接受，但为保持新层一致性，改为无扩展名。
-> 2. **`getTimeUsagePercent` 双参数**：原计划 3 处调用只传 `state`，但 engine/budget.ts 的签名是 `getTimeUsagePercent(state, timeUsedSeconds): number`（2 参数）。修正为 `getTimeUsagePercent(state, getElapsedSeconds(state))`。注：`getTokenUsagePercent(state)` 是单参数，无需改。
-
-## 步骤 2：typecheck 验证
-
-```bash
-pnpm --filter @zhushanwen/pi-goal typecheck
-```
-
-> 新文件暂不被 `index.ts` 引用（大爆炸迁移，Wave 14 才接线），但仍需 typecheck 通过——确保 import 路径、类型签名与 engine 层（Wave 0-5 已建）一致。`tsconfig` 的 `include` 已覆盖 `src/**/*.ts`。
-
-## 步骤 3：提交
-
-```bash
-git add extensions/goal/src/projection/widget.ts
-git commit -m "refactor(goal): add projection/widget.ts with hasUI guard (Wave 6)"
-```
-
-## 验收标准
-
-### 1. 测试
-
-- [ ] **无独立单元测试**——widget 是纯渲染投影，由 Wave 14 集成测试间接覆盖
-- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
-- [ ] 全量 `test` 仍全绿（不破坏 Wave 0-5）
-
-### 2. 架构边界
-
-- [ ] `grep -rn "@mariozechner\|@earendil" extensions/goal/src/projection/widget.ts` 无输出（projection 零 Pi 依赖）
-- [ ] `grep -rn "\.\./state\|\.\./budget\|\.\./tool-handler\|\.\./widget" extensions/goal/src/projection/widget.ts` 无输出（不 import 旧文件）
-- [ ] `ThemeLike.fg` 接收 `string`，非 Pi 的 `ThemeColor`
-- [ ] `grep -n "Date.now" extensions/goal/src/projection/widget.ts` 无输出（时间读 state.timeUsedSeconds）
-
-### 3. 接口契约
-
-- [ ] 导出与 plan.md 契约一致：`ThemeLike` / `toSingleLine(text)` / `renderStatusLine(state, th)` / `renderTerminalStatusLine(state, th)` / `renderWidgetLines(state, th)` / `updateWidget(session, uiPort)`
-
-### 4. 行为契约
-
-- [ ] FR-6.6：`updateWidget` 在 `uiPort.hasUI === false` 时直接 return（不调 setWidget / setStatus）
-- [ ] cancelled / 无 state 时清除 widget + status（setWidget/setStatus 传 undefined）
-- [ ] 终态折叠为单行 status bar（renderTerminalStatusLine），非终态用完整 widget lines
-
-### 5. 提交
-
-- [ ] commit message 以 `wave-6:` 开头，含「projection/widget.ts」+「hasUI guard」
