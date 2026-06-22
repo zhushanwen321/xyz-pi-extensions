@@ -24,10 +24,8 @@ import {
   sendCompletionNotification,
   type WorkflowCommandsState,
 } from "./interface/commands.js";
-import { registerGenerateTool } from "./interface/tool-generate.js";
-import { registerWorkflowTool } from "./interface/tool-workflow.js";
-import { registerWorkflowLintTool } from "./interface/tool-workflow-lint.js";
-import { registerWorkflowRunTool } from "./interface/tool-workflow-run.js";
+// W4 过渡期：新 tool 由 T28 factory 注册，旧 tool 注册函数暂不 import
+// （registerGenerateTool/registerWorkflowTool/registerWorkflowLintTool/registerWorkflowRunTool）
 import { WorkflowOrchestrator } from "./orchestrator.js";
 
 // Augment ExtensionAPI so cross-extension callers can invoke workflow runs
@@ -50,8 +48,8 @@ export default function workflowExtension(pi: ExtensionAPI) {
   const sessionApprovals = new Set<string>();
   // P1-3: Per-factory dedup Set for completion notifications (was module-level in commands.ts)
   const notifiedRunIds = new Set<string>();
-  // P1-6: Reentry guard — shared object so both workflow and workflow-run tools see the same flag
-  const guard = { isProcessing: false };
+  // P1-6: Reentry guard — T28 factory 重写后由新 tool 共用
+  // const guard = { isProcessing: false };
 
   // ── Events ──────────────────────────────────────────────────
 
@@ -154,11 +152,14 @@ export default function workflowExtension(pi: ExtensionAPI) {
   });
 
   // ── Tools ───────────────────────────────────────────────────
+  // W4 过渡期：T23-T25 已创建新 tool（helpers/tool-workflow-script/tool-workflow），
+  // 但新 tool 需 LauncherDeps（T28 factory 重写时注入）。旧 registerWorkflowTool/
+  // registerWorkflowRunTool/registerGenerateTool/registerWorkflowLintTool 的签名已变，
+  // 此处暂不注册——T28 重写 factory 后用新签名注册新 tool。
+  // 过渡期旧 tool 不注册，lifecycle commands（/workflow run 等）仍走 registerWorkflowCommands。
 
-  registerWorkflowTool(pi, orchestrators, lsRef, guard);
-  registerWorkflowRunTool(pi, orchestrators, cmdState, sessionApprovals, lsRef, guard);
-  registerGenerateTool(pi);
-  registerWorkflowLintTool(pi);
+  // registerWorkflowTool / registerWorkflowRunTool / registerGenerateTool /
+  // registerWorkflowLintTool — 由 T28 factory 重写后注册新 tool
 
   // ── Commands & Shortcuts ───────────────────────────────────
 
