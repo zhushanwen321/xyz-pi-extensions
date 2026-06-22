@@ -52,7 +52,7 @@ vi.mock("../orchestrator.js", () => ({
   }),
 }));
 
-vi.mock("../interface/commands.js", () => ({
+vi.mock("../interface/commands.legacy.js", () => ({
   registerWorkflowCommands: vi.fn(),
   sendCompletionNotification: vi.fn(),
 }));

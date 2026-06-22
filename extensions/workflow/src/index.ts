@@ -23,7 +23,7 @@ import {
   registerWorkflowCommands,
   sendCompletionNotification,
   type WorkflowCommandsState,
-} from "./interface/commands.js";
+} from "./interface/commands.legacy.js";
 // W4 过渡期：新 tool 由 T28 factory 注册，旧 tool 注册函数暂不 import
 // （registerGenerateTool/registerWorkflowTool/registerWorkflowLintTool/registerWorkflowRunTool）
 import { WorkflowOrchestrator } from "./orchestrator.js";

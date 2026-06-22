@@ -13,7 +13,7 @@ import { type Static, Type } from "typebox";
 
 import { RUNID_INDEX_SHORT } from "../infra/constants.js";
 import { type WorkflowOrchestrator } from "../orchestrator.js";
-import type { WorkflowCommandsState } from "./commands.js";
+import type { WorkflowCommandsState } from "./commands.legacy.js";
 import { acquireReentryGuard, REENTRY_BUSY_MESSAGE, type ReentryGuardRef,releaseReentryGuard } from "./reentry-guard.js";
 import { renderTextFallback, statusColorToken } from "./views/format.js";
 
