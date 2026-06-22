@@ -3,12 +3,10 @@
 // 结果收集器（逆向：BuiltSession + CollectResultArgs → AgentResult）。
 // 与 session-factory 对称：factory 造 bundle，collector 拆 bundle。
 //
-// 基础层模块：依赖 event-bridge（读累积器）+ session-factory（AgentSessionLike）+ types。
+// 基础层模块：依赖 session-factory（AgentSessionLike）+ types。
 // 字段来源契约见 docs/subagents/session-runner.md §4。
 
-import type { AgentResult, AgentUsage, AgentUsageTotal, ToolCall } from "../types.ts";
-import type { EventBridge } from "./event-bridge.ts";
-import type { AgentSessionLike } from "./session-factory.ts";
+import type { AgentResult, AgentSessionLike, AgentUsage, AgentUsageTotal, ToolCall } from "../types.ts";
 
 // ============================================================
 // Result 收集
@@ -61,10 +59,8 @@ export function extractParsedOutput(toolCalls: ToolCall[]): unknown {
  */
 export function collectResult(
   session: AgentSessionLike,
-  bridge: EventBridge,
   args: CollectResultArgs,
 ): AgentResult {
-  void bridge; // bridge 累积器已在调用方（run）经 toUsageTotal/slice 提取后传入 args
   return {
     text: collectResponseText(session.messages),
     turns: args.turns,

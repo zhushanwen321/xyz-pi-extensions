@@ -7,7 +7,7 @@
 //   - Runtime 编排 Core，产出 Details/Record 给 TUI
 //   - TUI 只读 Record/Details 快照，永不持有可变引用
 
-import type { AgentConfig, ModelInfo, ResolvedModel } from "./core/model-resolver.ts";
+import type { AgentConfig, ModelInfo, ModelRegistryLike, ResolvedModel } from "./core/model-resolver.ts";
 
 // ============================================================
 // 全局常量
@@ -76,7 +76,27 @@ export interface AgentEventLogEntry {
 // Agent 结果（一次执行的 outcome）
 // ============================================================
 
-/** tool 调用结果（tool_execution_end 时 bridge 累积，含 structured-output 的 details）。 */
+/**
+ * SDK AgentSessionEvent 的最小可用子集（duck-typed，避免强耦合 SDK 类型）。
+ * 由 session-runner 内部消费，驱动累积器和事件翻译。
+ */
+export type SdkEvent = {
+  type: string;
+  toolCallId?: string;
+  toolName?: string;
+  args?: unknown;
+  result?: ToolCallResult;
+  isError?: boolean;
+  message?: {
+    usage?: AgentUsage & { cost?: { total: number } };
+    stopReason?: string;
+    errorMessage?: string;
+  };
+  assistantMessageEvent?: { type?: string; delta?: string };
+  reason?: string;
+};
+
+/** tool 调用结果（tool_execution_end 时累积，含 structured-output 的 details）。 */
 export interface ToolCallResult {
   content?: unknown[];
   details?: unknown;
@@ -405,4 +425,62 @@ export interface RecordSnapshot {
 }
 
 // Re-export 用于 ExecuteOptions 的 agent/model 契约
+// ============================================================
+// SDK duck-typed 接口（测试可 mock，session-runner 消费）
+// ============================================================
+
+/** AgentSession 的最小可用接口（duck-typed，与 SDK AgentSession 结构兼容）。 */
+export interface AgentSessionLike {
+  prompt(task: string, options?: unknown): Promise<void>;
+  steer(message: string): Promise<void>;
+  abort(): Promise<void>;
+  dispose(): void;
+  subscribe(fn: (event: unknown) => void): () => void;
+  sessionId: string;
+  readonly sessionManager: {
+    getSessionFile(): string | undefined;
+    getSessionId(): string;
+  };
+  messages: ReadonlyArray<{
+    role: string;
+    content?: ReadonlyArray<{ type: string; text?: string }>;
+  }>;
+  getAllTools(): Array<{ name: string }>;
+  setActiveToolsByName(names: string[]): void;
+}
+
+/** DefaultResourceLoader 的最小可用接口（duck-typed）。 */
+export interface ResourceLoaderLike {
+  reload(): Promise<void>;
+}
+
+/** createAgentSession 入参的类型化子集（对应 SDK CreateAgentSessionOptions）。 */
+export interface CreateAgentSessionArgs {
+  model: unknown;
+  thinkingLevel?: string;
+  cwd: string;
+  resourceLoader: ResourceLoaderLike;
+  modelRegistry: ModelRegistryLike;
+  sessionManager: unknown;
+}
+
+/** DefaultResourceLoader 构造参数的类型化子集。 */
+export interface ResourceLoaderOptions {
+  cwd: string;
+  agentDir: string;
+  appendSystemPrompt: string[];
+  additionalSkillPaths?: string[];
+}
+
+/** Pi SDK 动态 import 的形状（getSdk() 获取）。 */
+export interface SdkLike {
+  DefaultResourceLoader: new (opts: ResourceLoaderOptions) => ResourceLoaderLike;
+  SessionManager: {
+    inMemory(cwd?: string): unknown;
+    create(cwd: string, sessionDir?: string): unknown;
+  };
+  createAgentSession: (opts: CreateAgentSessionArgs) => Promise<{ session: AgentSessionLike }>;
+}
+
 export type { AgentConfig, ResolvedModel };
+export type { ModelRegistryLike };

@@ -19,8 +19,8 @@ import {
   tryTransition,
 } from "../core/execution-record.ts";
 import type { AgentConfig, ModelInfo } from "../core/model-resolver.ts";
-import type { SdkLike } from "../core/session-factory.ts";
-import { run, type SessionRunnerContext } from "../core/session-runner.ts";
+import { getSdk, run, type SessionRunnerContext } from "../core/session-runner.ts";
+import type { SdkLike } from "../types.ts";
 import type {
   AgentEvent,
   AgentResult,
@@ -476,19 +476,14 @@ export class SubagentService {
   /** 构造 SessionRunnerContext。sdk lazy 获取 + 缓存。 */
   private async buildSessionRunnerContext(): Promise<SessionRunnerContext> {
     if (this.sdk === null) {
-      const { getSdk } = await import("../core/session-factory.ts");
       this.sdk = await getSdk();
     }
     return {
       cwd: this.cwd,
       agentDir: this.modelService.getAgentDir(),
-      factoryCtx: {
-        modelRegistry: this.modelService.getModelRegistry(),
-        resolveAgent: (name: string) => this.modelService.getAgentConfig(name),
-        cwd: this.cwd,
-        agentDir: this.modelService.getAgentDir(),
-        skillDirs: this.modelService.getDiscoverySkillDirs(),
-      },
+      modelRegistry: this.modelService.getModelRegistry(),
+      resolveAgent: (name: string) => this.modelService.getAgentConfig(name),
+      skillDirs: this.modelService.getDiscoverySkillDirs(),
       sdk: this.sdk,
     };
   }
