@@ -44,6 +44,7 @@ import type { LifecycleDeps, WorkerHandlers } from "./models/ports.js";
 import { RunRuntime } from "./models/run-runtime.js";
 import type { RunSpec } from "./models/run-spec.js";
 import { Trace } from "./models/trace.js";
+import type { DoneReason } from "./models/types.js";
 import { WorkflowRun } from "./models/workflow-run.js";
 
 // ── 常量 ─────────────────────────────────────────────────────
@@ -239,17 +240,19 @@ export async function resumeRun(runId: string, deps: LifecycleDeps): Promise<voi
  * 中止 workflow（running 或 paused）。
  *
  * **done 状态 no-op**：已终态的 run 不重复 abort。
- * **A4 原子性**：transition("done", "aborted") 内部先 releaseRuntime。
+ * **A4 原子性**：transition("done", doneReason) 内部先 releaseRuntime。
  *
- * @param runId  
- * @param deps   
- * @param reason 可选中止原因（存 run.state.error）
+ * @param runId
+ * @param deps
+ * @param reason      可选中止原因（存 run.state.error）
+ * @param doneReason  终态原因（默认 "aborted"；超时场景传 "time_limited"，C.7）
  * @throws runId 不存在
  */
 export async function abortRun(
   runId: string,
   deps: LifecycleDeps,
   reason?: string,
+  doneReason: DoneReason = "aborted",
 ): Promise<void> {
   const run = deps.runs.get(runId);
   if (!run) {
@@ -271,6 +274,6 @@ export async function abortRun(
     run.state.error = reason;
   }
   // A4: transition 内部 releaseRuntime（cleanup before mutate）
-  run.transition("done", "aborted");
+  run.transition("done", doneReason);
   await deps.store.save(run);
 }
