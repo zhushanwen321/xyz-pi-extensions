@@ -333,30 +333,41 @@ git commit -m "wave-11: add command-adapter.ts — 8 /goal subcommands, FR-8.12 
 
 ### 1. 测试
 
-- [ ] **无独立单元测试**——command handler 是 Pi ctx 桥接，由 Wave 14 集成测试覆盖
-- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
-- [ ] 全量 `test` 仍全绿
+- [x] **无独立单元测试**——command handler 是 Pi ctx 桥接，由 Wave 14 集成测试覆盖
+- [x] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
+- [x] 全量 `test` 仍全绿（253 tests passed）
 
 > ⚠️ **风险提示**：handleSet 有 FR-8.7 双分支（非终态写 cancelled history vs 终态快速路径）+ FR-8.12 AI 触发，是命令路径最复杂处。建议执行者用 fake pi（mock sendUserMessage / appendEntry）补 command-adapter.test.ts 覆盖 set 的两分支。
 
 ### 2. 架构边界
 
-- [ ] `grep -rn "\.\./state\|\.\./command-handler" extensions/goal/src/adapters/command-adapter.ts` 无输出（不 import 旧文件）
-- [ ] adapters 层可 import Pi 类型（`ExtensionAPI` / `ExtensionContext` / `CustomEntry`）
-- [ ] 禁止 `any`
+- [x] `grep -rn "\.\./state\|\.\./command-handler" extensions/goal/src/adapters/command-adapter.ts` 无输出（不 import 旧文件）
+- [x] adapters 层可 import Pi 类型（`ExtensionAPI` / `ExtensionContext` / `CustomEntry`）
+- [x] 禁止 `any`
 
 ### 3. 接口契约
 
-- [ ] 导出 8 个子命令 handler：`handleSet` / `handleResume` / `handleClear` / `handleAbort` / `handleUpdate` / `handleStatus` / `handleHistory` / `handleHelp`（或统一的 `handleGoalCommand` 分发器 + 内部 8 个函数）
-- [ ] 导出 `makePorts(pi, ctx): ServicePorts`（command-adapter 与 event-adapter 共用的 Pi→ports 桥接）
+- [x] 导出 `handleGoalCommand` 分发器（内部 8 个函数：handleStatus / handlePause / handleResume / handleHistory / handleClear / handleAbort / handleUpdate / handleSet）
+- [~] 导出 `makePorts(pi, ctx): ServicePorts`：**实现修正 2**——不重复定义，复用 Wave 10 `tool-adapter.ts` export 的 `buildPorts`（DRY 单一 ports 桥接点）。Wave 11 把 tool-adapter 的 `buildPorts` 由 private 改为 export。
 
 ### 4. 行为契约
 
-- [ ] FR-8.12：handleSet 创建后调 `pi.sendUserMessage(objective, { deliverAs: "followUp" })`；handleResume 有未完成任务时同样调 sendUserMessage
-- [ ] FR-8.7 G-R2-008：handleSet 覆盖非终态旧 goal 写 cancelled history；覆盖终态旧 goal 快速路径（不写 history）
-- [ ] FR-8.4 G-002：handleUpdate 重塑（重置 objective/tasks/budget flags/stallCount/currentTurnIndex，保留 goalId）
-- [ ] FR-6.3：clear（强制清，不检查未完成）/ abort（检查未完成，有非 cancelled task 则拒绝）语义
+- [x] FR-8.12：handleSet 创建后调 `pi.sendUserMessage(objective, { deliverAs: "followUp" })`；handleResume 有未完成任务时同样调 sendUserMessage
+- [x] FR-8.7 G-R2-008：handleSet 覆盖非终态旧 goal 写 cancelled history；覆盖终态旧 goal 快速路径（不写 history）
+- [x] FR-8.4 G-002：handleUpdate 重塑（重置 objective/tasks/budget flags/stallCount/currentTurnIndex/lastProgressTurn + tasksCompletedAtAgentStart，保留 goalId）
+- [x] FR-6.3：clear（强制清，不检查未完成）/ abort（检查未完成，有非 cancelled task 则拒绝）语义
 
 ### 5. 提交
 
-- [ ] commit message 以 `wave-11:` 开头，含「8 /goal subcommands」+「FR-8.12」+「FR-8.7」
+- [x] commit message 以 `wave-11:` 开头，含「8 /goal subcommands」+「FR-8.12」+「FR-8.7」
+
+---
+
+## 实现修正记录
+
+1. **import 不带 `.js` 后缀**：plan 多处写 `from "../engine/budget.js"` 等，实现改为无后缀，与新层（service.ts / projection/* / actions.ts / tool-adapter.ts）保持一致（`moduleResolution: "bundler"` 接受）。
+2. **ports 桥接复用 Wave 10 的 `buildPorts`（DRY）**：plan 在 command-adapter 内联 `makePorts`（与 tool-adapter 的 buildPorts 几乎相同）。实现改为把 tool-adapter.ts 的 `buildPorts` 由 private 改为 `export`，command-adapter import 复用。避免重复定义，单一 ports 桥接点。Wave 12 event-adapter 同样可复用。
+3. **删除 4 个未使用 import**：plan 引入 `GoalRuntimeState` / `makeHistoryEntry` / `ServicePorts` / `createGoalState` 但代码未用（finalizeGoal 内部已调 makeHistoryEntry；createGoal 内部已调 createGoalState）。eslint `no-unused-vars` 报错，全部删除。
+4. **history entries 类型谓词**：plan 用 `as Array<CustomEntry<{...}>>` 双断言。实现改用 type guard `(e): e is CustomEntry<GoalHistoryData> => ...` 收敛类型（更安全，且把 inline 类型提取为 `GoalHistoryData` interface 提升可读性）。
+5. **handleStatus `lines.filter(Boolean)` 显式类型**：plan 用 `string[]` + `null` 元素，TS 推断为 `(string | null)[]`。实现改用 `Array<string | null>` 显式标注，`filter(Boolean)` 后 join 安全。
+6. **budgetNotice / blockerNote 字符串拼接**：plan 用多行字符串拼接带 `\n\n`，实现用模板字符串 + 条件拼接（`blockerNote` 变量），可读性等价但 lint 干净（无隐式换行 magic）。

@@ -114,7 +114,7 @@ export const GoalManagerParams = Type.Object({
  * 注意：persistence 的 appendState 用 GOAL_ENTRY_TYPE，appendHistory 用 HISTORY_ENTRY_TYPE，
  * 与 serializeState / makeHistoryEntry 的输出对齐（session.ts reconstructGoalState 据此识别）。
  */
-function buildPorts(pi: ExtensionAPI, ctx: ExtensionContext): ServicePorts {
+export function buildPorts(pi: ExtensionAPI, ctx: ExtensionContext): ServicePorts {
 	const persistence: PersistencePort = {
 		appendState: (state): void => {
 			pi.appendEntry(GOAL_ENTRY_TYPE, state);
