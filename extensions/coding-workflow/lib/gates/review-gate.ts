@@ -30,13 +30,16 @@ interface WorkflowReviewResult {
 	reviewPath?: string;
 }
 
-/** Signature of pi.__workflowRun exposed by workflow extension. */
+/** WorkflowRunResult.reason 字段类型（与 workflow extension D-8 对齐）。 */
+type DoneReason = "completed" | "failed" | "aborted" | "budget_limited" | "time_limited";
+
+/** Signature of pi.__workflowRun exposed by workflow extension (D-8 new shape). */
 type WorkflowRunFn = (
 	name: string,
 	args: Record<string, unknown>,
 	signal?: AbortSignal,
 	timeoutMs?: number,
-) => Promise<{ status: string; scriptResult?: unknown; error?: string; runId: string }>;
+) => Promise<{ status: "done"; reason: DoneReason; scriptResult?: unknown; error?: string; runId: string }>;
 
 /** Type adapter: GateContext.onUpdate has UsageStats, runReviewGateLoop expects unknown. */
 type RunReviewGateLoopOnUpdate = (partial: { content: Array<{ type: string; text: string }>; usage?: unknown }) => void;
@@ -73,11 +76,11 @@ export class ReviewGate implements Gate {
 
 		const wfResult = await workflowRun(workflowName, args, ctx.signal, ReviewGate.WORKFLOW_TIMEOUT_MS);
 
-		if (wfResult.status !== "completed" || wfResult.error) {
+		if (wfResult.reason !== "completed" || wfResult.error) {
 			return {
 				passed: false,
-				fixGuidance: `Review-Gate workflow '${workflowName}' failed (status=${wfResult.status}): ${wfResult.error ?? "unknown error"}. Fix the issues, then call coding-workflow-gate(phase=${ctx.phase}) again.`,
-				details: { status: wfResult.status, runId: wfResult.runId, source: "workflow" },
+				fixGuidance: `Review-Gate workflow '${workflowName}' failed (reason=${wfResult.reason}): ${wfResult.error ?? "unknown error"}. Fix the issues, then call coding-workflow-gate(phase=${ctx.phase}) again.`,
+				details: { reason: wfResult.reason, runId: wfResult.runId, source: "workflow" },
 			};
 		}
 
@@ -86,7 +89,7 @@ export class ReviewGate implements Gate {
 			return {
 				passed: false,
 				fixGuidance: `Review-Gate workflow '${workflowName}' returned no result. Fix the issues, then call coding-workflow-gate(phase=${ctx.phase}) again.`,
-				details: { status: wfResult.status, source: "workflow" },
+				details: { reason: wfResult.reason, source: "workflow" },
 			};
 		}
 
