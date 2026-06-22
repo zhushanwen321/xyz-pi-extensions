@@ -189,31 +189,44 @@ git commit -m "wave-12: add event-adapter.ts infrastructure + 4 simple events (a
 
 ### 1. 测试
 
-- [ ] **无独立单元测试**——ESC guard / token 累加等行为由 Wave 13 补齐 agent_end 后，在 Wave 14 集成测试覆盖
-- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
-- [ ] 全量 `test` 仍全绿
+- [x] **无独立单元测试**——ESC guard / token 累加等行为由 Wave 13 补齐 agent_end 后，在 Wave 14 集成测试覆盖（service.applyEvent 的 message_end/turn_end/agent_start 已有 8 个 Wave 5 单测）
+- [x] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误
+- [x] 全量 `test` 仍全绿（253 tests passed）
 
 > ⚠️ **风险提示**：FR-6.7 ESC 守卫（turn_end + message_end）是本次重构核心修复之一。无独立测试意味着 aborted 路径的错误要到 Wave 14 才暴露。建议执行者在 Wave 13 完成后补 event-adapter.test.ts（用 fake ctx.signal 模拟 aborted）。
 
 ### 2. 架构边界
 
-- [ ] `grep -rn "\.\./state\|\.\./agent-end-handler\|\.\./before-agent-start-handler" extensions/goal/src/adapters/event-adapter.ts` 无输出（不 import 旧文件）
-- [ ] adapters 层可 import Pi 类型
-- [ ] 禁止 `any`
+- [x] `grep -rn "\.\./state\|\.\./agent-end-handler\|\.\./before-agent-start-handler" extensions/goal/src/adapters/event-adapter.ts` 无输出（不 import 旧文件）
+- [x] adapters 层可 import Pi 类型
+- [x] 禁止 `any`（`undefined as never` 是合法的单步断言，非 any）
 
 ### 3. 接口契约
 
-- [ ] 导出基础设施：`makeStaleChecker(session)` / `makePorts(pi, ctx): ServicePorts`（若 Wave 11 已导出则 import 复用）/ `isProcessing` 防重入机制
-- [ ] 导出 4 个事件 handler：`handleAgentStart` / `handleTurnEnd` / `handleMessageEnd` / `handleSessionStart`
+- [x] 导出基础设施：`makeStaleChecker(session)` / `acquireProcessing(session)` / `releaseProcessing(session)`（FR-8.2 G-020/G-021）
+- [x] 导出 4 个事件 handler：`handleAgentStart` / `handleTurnEnd` / `handleMessageEnd` / `handleSessionStart`
+- [~] 导出 `makePorts(pi, ctx): ServicePorts`：**实现修正 2**——不重复定义，复用 Wave 10/11 `tool-adapter.buildPorts`（DRY 单一 ports 桥接点）。
 
 ### 4. 行为契约
 
-- [ ] FR-6.7 ESC 守卫：turn_end 和 message_end 入口检查 `ctx.signal?.aborted`，true 时跳过副作用（turn_end 不递增 currentTurnIndex；message_end 不累加 token）
-- [ ] FR-8.6：agent_start 设 `tasksCompletedAtAgentStart` 基线；message_end token 累加算法 `(max(input-cacheRead,0) + output)`；turn_end 正常路径 currentTurnIndex++
-- [ ] FR-8.2 G-020：makeStaleChecker 捕获 goalId snapshot，checkStale 对比当前 goalId
-- [ ] FR-8.2 G-021：isProcessing 防重入标志（agent_end 用，在此定义供 Wave 13 用）
-- [ ] session_start：调 reconstructGoalState + 设 tasksCompletedAtAgentStart + updateWidget
+- [x] FR-6.7 ESC 守卫：turn_end 和 message_end 入口检查 `ctx.signal?.aborted`，true 时跳过副作用（turn_end 不递增 currentTurnIndex；message_end 不累加 token）
+- [x] FR-8.6：agent_start 设 `tasksCompletedAtAgentStart` 基线（委托 applyEvent("agent_start")）；message_end token 累加算法（委托 applyEvent("message_end")，内部 accumulateTokens）；turn_end 正常路径 currentTurnIndex++（委托 applyEvent("turn_end")）
+- [x] FR-8.2 G-020：makeStaleChecker 捕获 goalId snapshot，checkStale 对比当前 goalId
+- [x] FR-8.2 G-021：acquireProcessing/releaseProcessing 防重入（agent_end 用，Wave 13）
+- [x] session_start：调 reconstructGoalState + 设 tasksCompletedAtAgentStart + updateWidget
 
 ### 5. 提交
 
-- [ ] commit message 以 `wave-12:` 开头，含「4 simple events」+「ESC guards」
+- [x] commit message 以 `wave-12:` 开头，含「4 simple events」+「ESC guards」
+
+---
+
+## 实现修正记录
+
+1. **委托 service.applyEvent 而非内联逻辑**（架构决策）：plan 直接内联 token 累加、turn_end++、agent_start 基线逻辑。实现改为委托 Wave 5 的 `service.applyEvent(session, eventType, eventData, _ports)`（它已实现这 3 个事件并有 8 个单测）。adapter 职责收窄为：① ESC 守卫（ctx.signal.aborted）② 执行 applyEvent 返回的 EventEffect[]（updateWidget）③ persist（与旧 index.ts 对齐：turn_end/message_end 不 persist）。理由：避免状态变更逻辑重复，单一变更路径。
+2. **ports 桥接复用 tool-adapter.buildPorts（DRY）**：plan 重新定义 `makePorts`（与 tool-adapter.buildPorts 几乎相同）。实现改为 import 复用 Wave 11 已 export 的 buildPorts，避免三处重复定义。
+3. **删除 `persistAndUpdate` 函数**：plan 定义了 `persistAndUpdate`（内联 tick + persist + updateWidget）。但它与旧 index.ts 行为不符（旧 turn_end/message_end 不 persist），且 plan 注释（第 170 行）承认「实际应调 engine/budget.tick，但为了 event-adapter 自洽这里内联」。实现删除此函数——persist 由 Wave 13 的 before_agent_start/agent_end 触发（与旧行为对齐），tick 由 service.persistState 统一调用（FR-6.5）。
+4. **删除未使用 import**：plan 引入 `getTokenUsagePercent` / `isTerminalStatus` / `isActiveStatus` / `serializeState` / `GoalRuntimeState` 但代码未用（简单事件委托 applyEvent，不需要这些）。eslint `no-unused-vars` 报错，全部删除。
+5. **`handleAgentStart` / `handleMessageEnd` 用 `undefined as never`**：applyEvent 签名要求 ServicePorts，但 agent_start/message_end case 不用 ports（参数声明但忽略，Wave 5 已确认）。传 `undefined as never` 是合法的单步断言（运行时安全：case 不读 ports）。避免构造 fake pi/ctx。
+6. **isProcessing 拆为 acquireProcessing + releaseProcessing**：plan 验收要求「isProcessing 防重入机制」。实现拆为两个函数（acquireProcessing 返回是否成功获取锁；releaseProcessing 释放），语义更清晰，Wave 13 agent_end 用 `if (!acquireProcessing(session)) return;` + try/finally release。
+7. **`handleTurnEnd` 用 Effect[] 循环执行**：applyEvent("turn_end") 返回 `[{kind:"updateWidget"}]`。实现 for-of 遍历 effects 执行 updateWidget，而非直接调 updateWidget（保留扩展性——未来 applyEvent 可能返回更多 effect）。
