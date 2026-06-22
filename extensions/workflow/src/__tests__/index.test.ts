@@ -10,23 +10,26 @@ import { beforeEach,describe, expect, it, vi } from "vitest";
 const mockRun = vi.hoisted(() => vi.fn().mockResolvedValue("run-id-123"));
 const mockList = vi.hoisted(() => vi.fn().mockReturnValue([]));
 
-const TEST_SAVED_WORKFLOW = {
-  name: "deploy-app",
-  description: "Deploy the app to staging",
-  phases: ["build", "deploy"],
-  path: "/project/.pi/workflows/deploy-app.js",
-  available: true,
-  source: "saved",
-};
-
-const TEST_TMP_WORKFLOW = {
-  name: "tmp-cleanup",
-  description: "Temporary cleanup workflow",
-  phases: ["cleanup"],
-  path: "/project/.pi/workflows/.tmp/tmp-cleanup.js",
-  available: true,
-  source: "tmp",
-};
+// W4 过渡期：vi.mock 被 hoist 到顶部，引用的常量必须用 vi.hoisted 声明
+// （T30 重写整个文件后可移除）
+const { TEST_SAVED_WORKFLOW, TEST_TMP_WORKFLOW } = vi.hoisted(() => ({
+  TEST_SAVED_WORKFLOW: {
+    name: "deploy-app",
+    description: "Deploy the app to staging",
+    phases: ["build", "deploy"],
+    path: "/project/.pi/workflows/deploy-app.js",
+    available: true,
+    source: "saved",
+  },
+  TEST_TMP_WORKFLOW: {
+    name: "tmp-cleanup",
+    description: "Temporary cleanup workflow",
+    phases: ["cleanup"],
+    path: "/project/.pi/workflows/.tmp/tmp-cleanup.js",
+    available: true,
+    source: "tmp",
+  },
+}));
 
 vi.mock("../infra/config-loader.js", () => ({
   loadWorkflows: vi.fn().mockResolvedValue([TEST_SAVED_WORKFLOW, TEST_TMP_WORKFLOW]),
