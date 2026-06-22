@@ -34,7 +34,6 @@ import {
 	getTimeUsagePercent,
 	getTokenUsagePercent,
 	tick,
-	type TokenUsage,
 } from "../budget";
 import type { GoalRuntimeState } from "../types";
 import type { GoalTask } from "../task";
@@ -90,17 +89,18 @@ describe("accumulateTokens", () => {
 // ── tick（FR-6.5 纯函数）──────────────────────────────
 
 describe("tick", () => {
-	it("isRunning=true → 累加 now-start 到 timeUsedSeconds", () => {
-		expect(tick(1000, 0, 1600, true)).toEqual({ timeUsedSeconds: 600, timeStartedAt: 1600 });
+	// timeStartedAt 是 Date.now() 毫秒时间戳；timeUsedSeconds 是累计秒数
+	it("isRunning=true → 累加 (now-start)/1000 到 timeUsedSeconds", () => {
+		expect(tick(1000000, 0, 1600000, true)).toEqual({ timeUsedSeconds: 600, timeStartedAt: 1600000 });
 	});
 	it("isRunning=true → 叠加已有 timeUsedSeconds", () => {
-		expect(tick(1000, 100, 1600, true)).toEqual({ timeUsedSeconds: 700, timeStartedAt: 1600 });
+		expect(tick(1000000, 100, 1600000, true)).toEqual({ timeUsedSeconds: 700, timeStartedAt: 1600000 });
 	});
 	it("isRunning=false → 不累加，但重置 timeStartedAt=now", () => {
-		expect(tick(1000, 500, 2000, false)).toEqual({ timeUsedSeconds: 500, timeStartedAt: 2000 });
+		expect(tick(1000000, 500, 2000000, false)).toEqual({ timeUsedSeconds: 500, timeStartedAt: 2000000 });
 	});
 	it("纯函数：相同输入相同输出", () => {
-		expect(tick(1000, 50, 2000, true)).toEqual(tick(1000, 50, 2000, true));
+		expect(tick(1000000, 50, 2000000, true)).toEqual(tick(1000000, 50, 2000000, true));
 	});
 });
 
