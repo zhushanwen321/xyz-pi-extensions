@@ -32,6 +32,7 @@ import * as path from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
+import type { LauncherDeps } from "./engine/launcher.js";
 import { runAndWait, type WorkflowRunResult } from "./engine/launcher.js";
 import { pauseRun } from "./engine/lifecycle.js";
 import type { WorkflowRun } from "./engine/models/workflow-run.js";
@@ -181,7 +182,7 @@ export default function workflowExtension(pi: ExtensionAPI): void {
     }
   });
 
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (_event: Record<string, unknown>, _ctx: ExtensionContext) => {
     const sessionId = lsRef.lastSessionId;
     const state = sessionState.get(sessionId);
     if (state) {
@@ -231,30 +232,26 @@ export default function workflowExtension(pi: ExtensionAPI): void {
     return makeDeps(state.store, state.runs);
   };
 
-  // T25 workflow tool 需要 LauncherDeps；但 deps 里的 runs 是 per-session 的。
-  // 注册时传一个 lazy getter 包装——tool 调用时取最新 session 的 runs。
-  // 简化方案：注册时传当前 session 的 deps（session_start 后），tool 用 lsRef 查找。
-  // 由于 registerWorkflowTool 需要 LauncherDeps（含 runs: Map），而 runs 是 per-session 的，
-  // 我们传一个 Proxy 或在 tool 内部动态查找。
-  // 实际上 T25 tool 已经接收 deps 参数并在 execute 内用——我们传一个稳定的 deps 对象，
-  // 其 runs 是一个动态 Map（每次访问取当前 session 的）。
-  const lazyDeps = {
-    store: new Proxy({} as JsonlRunStore, {
-      get(_t, prop) {
-        return Reflect.get(getDeps().store as object, prop);
-      },
-    }),
+  // T25 workflow tool 需要 LauncherDeps；但 deps 里的 store/runs/onRunDone 是 per-session 的。
+  // 用 getter 对象字面量包装——tool execute 时每次属性访问都取最新 session 的 deps。
+  // C-4 修复：onRunDone 必须随 store/runs 一起转发，否则交互式 run/abort 路径
+  // 会丢失 notifyDone 通知（W-2：同时消除旧 Proxy 的 `as never` + `as object` 类型擦除）。
+  const lazyDeps: LauncherDeps = {
+    get store() {
+      return getDeps().store;
+    },
     workerHost,
     runner,
-    runs: new Proxy({} as Map<string, WorkflowRun>, {
-      get(_t, prop) {
-        return Reflect.get(getDeps().runs as object, prop);
-      },
-    }),
+    get runs() {
+      return getDeps().runs;
+    },
     registry,
+    get onRunDone() {
+      return getDeps().onRunDone;
+    },
   };
 
-  registerWorkflowTool(pi, lazyDeps as never, sessionApprovals, guard);
+  registerWorkflowTool(pi, lazyDeps, sessionApprovals, guard);
   registerWorkflowScriptTool(pi, registry, isScriptRunning);
 
   // ── Commands（仅 /workflows，FR-6） ────────────────────────

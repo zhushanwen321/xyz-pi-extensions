@@ -182,7 +182,10 @@ export class ConcurrencyGate {
         return await fn();
       } finally {
         this.active--;
-        this.drain();
+        // 释放槽位后唤醒 slotQueue 中的 withSlot 等待者。
+        // 注意：调 drainSlots（slotQueue），非 drain（enqueue 的 this.queue）。
+        // 旧代码误调 drain → withSlot 排队项永不唤醒（C-3 FIFO bug，T-4 测试捕获）。
+        this.drainSlots();
       }
     }
 

@@ -59,11 +59,13 @@ function makeDeps(overrides?: {
   runner?: AgentRunner;
   store?: RunStore;
   workerHost?: WorkerHost;
+  onRunDone?: (run: WorkflowRun) => void;
 }): {
   store: RunStore;
   workerHost: WorkerHost;
   runner: AgentRunner;
   runs: Map<string, WorkflowRun>;
+  onRunDone: (run: WorkflowRun) => void;
 } {
   return {
     store: overrides?.store ?? {
@@ -75,6 +77,8 @@ function makeDeps(overrides?: {
     },
     runner: overrides?.runner ?? { run: vi.fn().mockResolvedValue({ content: "ok" }) },
     runs: new Map(),
+    // T-2: onRunDone 默认注入 spy，让 abortRun 的 done,aborted 站点可被断言。
+    onRunDone: overrides?.onRunDone ?? vi.fn(),
   };
 }
 
@@ -254,6 +258,8 @@ describe("abortRun", () => {
     expect(run.state.reason).toBe("aborted");
     expect(run.state.error).toBe("user requested");
     expect(run.runtime).toBeUndefined(); // releaseRuntime
+    // T-2: abortRun 的 done,aborted 站点触发 onRunDone
+    expect(deps.onRunDone).toHaveBeenCalledWith(run);
   });
 
   it("done 状态 abort → no-op（不抛错不改状态）", async () => {
@@ -267,6 +273,8 @@ describe("abortRun", () => {
     // 状态不变（done/completed 保留，不覆盖为 aborted）
     expect(run.state.reason).toBe("completed");
     expect(run.state.error).toBeUndefined(); // reason 未设
+    // T-2: 已 done → abortRun no-op，不再触发 onRunDone
+    expect(deps.onRunDone).not.toHaveBeenCalled();
   });
 
   it("paused 状态 abort → done,aborted（允许从 paused abort）", async () => {

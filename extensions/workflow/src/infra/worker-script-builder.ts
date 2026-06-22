@@ -10,7 +10,9 @@
  * 关键变化（相对旧 engine/worker-script.ts）：
  *   - 路径 engine/ → infra/（D-12 归位）
  *   - WorkerLogEntry 类型来源改为 engine/models/types.js（T1，删除此处重复声明）
- *   - WorkerScriptData/WorkerInMsg 类型保留导出（WorkerHost T12 与 lifecycle T21 依赖）
+ *   - Fallow 审计：删除未使用的 WorkerScriptData/WorkerInMsg 导出类型
+ *     （原注释称 WorkerHost/lifecycle 依赖，实际无引用——消息类型在 error-recovery.ts
+ *     内联定义，workerData 形状在 WorkerHost.start 处即席构造）。
  *   - **AC-4 不变式**：buildWorkerScript 生成的脚本格式逐字保留——
  *     用户资产（workflow 脚本依赖 agent()/parallel()/pipeline()/$ARGS/$BUDGET 等契约）
  *
@@ -37,46 +39,6 @@
  *     { type: "budget-update", budget: unknown }
  *     { type: "abort", reason: string }
  */
-
-import type { AgentResult, WorkerLogEntry } from "../engine/models/types.js";
-
-// ── Worker data shape (for main-thread consumption) ──────────
-
-export interface WorkerScriptData {
-  /** Path to the workflow script file. */
-  scriptPath: string;
-  /** Arguments passed to the workflow via $ARGS. */
-  args: Record<string, unknown>;
-  /** Pre-populated callCache for pause/resume replay. */
-  callCache: Map<number, AgentResult>;
-  /** Token/time budget constraints. */
-  budget?: { usedTokens: number; usedCost: number; maxTokens?: number; maxTimeMs?: number };
-  /** Absolute path to the project workspace root. */
-  workspace: string;
-  /** Workflow meta (name, description, phases). */
-  meta: Record<string, unknown>;
-}
-
-// ── WorkerInMsg type (for main-thread consumption) ──────────
-
-// WorkerLogEntry 复用 T1（不再此处重复声明）
-
-export type WorkerInMsg =
-  | {
-      type: "agent-call";
-      callId: number;
-      opts: {
-        prompt: string;
-        schema?: unknown;
-        model?: string;
-        scene?: string;
-        description?: string;
-        agent?: string;
-      };
-      phase?: string;
-    }
-  | { type: "return"; runId: string; result: unknown; workerLogs?: WorkerLogEntry[] }
-  | { type: "error"; runId: string; error: string; workerLogs?: WorkerLogEntry[] };
 
 // ── Build worker source ─────────────────────────────────────
 

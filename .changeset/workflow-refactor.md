@@ -1,5 +1,5 @@
 ---
-"@zhushanwen/pi-workflow": minor
+"@zhushanwen/pi-workflow": major
 "@zhushanwen/pi-coding-workflow": minor
 ---
 Workflow extension refactor: 3-layer architecture (Interface/Engine/Infra)

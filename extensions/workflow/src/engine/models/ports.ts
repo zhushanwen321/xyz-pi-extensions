@@ -86,8 +86,8 @@ export interface WorkerHandlers {
  * lifecycle / error-recovery / node-ops 3 个 engine 函数文件的共同依赖 bag。
  *
  * 取代旧 4 个 Context factory（errorHandlerContext / agentCallContext /
- * budgetCallbacks / terminateDeps，AC-2 目标）。函数签名 `(deps: LifecycleDeps, ...)`
- * 让每个 free function 自包含依赖，无需 OrchestratorCore 中介。
+ * budgetCallbacks / 旧 terminate bag，AC-2 目标）。函数签名 `(deps: LifecycleDeps, ...)`
+ * 让每个 free function 自包含依赖，无需 God Facade 中介。
  *
  * - store: 持久化（RunStore port）
  * - workerHost: 启动 worker（WorkerHost port）

@@ -21,9 +21,8 @@
  *   - 旧 infra/config-loader.ts WorkflowMeta / WorkflowSource（类型迁移）
  */
 import { type LintResult,lintScript } from "../script-lint.js";
-// LintFinding/LintResult 类型规范归属 engine/script-lint.ts（T17），
-// 此处 re-export 保持 workflow-script 的既有导入路径不变（向后兼容）。
-export type { LintFinding, LintResult } from "../script-lint.js";
+// 注：LintFinding/LintResult 类型规范归属 engine/script-lint.ts（T17）。
+// 原先此处有 re-export，Fallow 审计标记为未使用 re-export（canonical 源在 script-lint）。
 
 /** 脚本来源：saved（.pi/workflows/ 固定）或 tmp（.pi/workflows/.tmp/ 临时）。 */
 export type WorkflowSource = "saved" | "tmp";

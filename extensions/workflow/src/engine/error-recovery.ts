@@ -208,9 +208,14 @@ function dispatchAgentCall(
   run.state.trace.append(node);
 
   // 构建 AgentCall（opts 形状对齐 AgentCallOpts；schema: unknown → Record）
+  // W-1：跨进程 IPC 边界的 schema 为 unknown，窄化前加 typeof guard 兜底。
+  const rawSchema = msg.opts.schema;
   const opts: AgentCallOpts = {
     ...msg.opts,
-    schema: msg.opts.schema as Record<string, unknown> | undefined,
+    schema:
+      typeof rawSchema === "object" && rawSchema !== null
+        ? (rawSchema as Record<string, unknown>)
+        : undefined,
   };
   const call = new AgentCall(msg.callId, opts, node);
   run.state.calls.set(msg.callId, call);

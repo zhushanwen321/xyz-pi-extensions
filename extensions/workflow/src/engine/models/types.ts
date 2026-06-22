@@ -153,7 +153,7 @@ export interface ToolCallEntry {
 /**
  * 单次 agent 调用的结果（统一形态）。
  *
- * 合并旧 state.AgentResult（OrchestratorCore 消费的形态：content/usage/toolCalls）与
+ * 合并旧 state.AgentResult（旧 God Facade 消费的形态：content/usage/toolCalls）与
  * 旧 pool.AgentResult（池返回形态：output/success/sessionId/...）。新形态以 pool 形态
  * 为准——Engine 直接消费 SubprocessAgentRunner 返回值；callCache replay 时 worker
  * 取 parsedOutput ?? content（见 worker-script.ts 消息处理）。

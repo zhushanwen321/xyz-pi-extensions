@@ -58,7 +58,7 @@ function asWorker(fw: FakeWorker): Worker {
 
 // ── 测试夹具 ─────────────────────────────────────────────────
 
-function makeRun(overrides?: { status?: "running" | "paused" | "done" }): WorkflowRun {
+function makeRun(overrides?: { status?: "running" | "paused" | "done"; budget?: Budget }): WorkflowRun {
   const run = new WorkflowRun(
     "run-1",
     {
@@ -69,7 +69,7 @@ function makeRun(overrides?: { status?: "running" | "paused" | "done" }): Workfl
     },
     {
       status: "paused",
-      budget: new Budget(),
+      budget: overrides?.budget ?? new Budget(),
       calls: new Map(),
       trace: new Trace(),
       errorLogs: [],
@@ -95,13 +95,16 @@ function makeDeps(overrides?: {
   runner?: AgentRunner;
   store?: RunStore;
   workerHost?: WorkerHost;
+  budget?: Budget;
+  onRunDone?: (run: WorkflowRun) => void;
 }): {
   store: RunStore;
   workerHost: WorkerHost;
   runner: AgentRunner;
   runs: Map<string, WorkflowRun>;
+  onRunDone: (run: WorkflowRun) => void;
 } {
-  const run = makeRun();
+  const run = makeRun(overrides?.budget ? { budget: overrides.budget } : undefined);
   const runs = new Map([[run.runId, run]]);
   return {
     store: overrides?.store ?? { save: vi.fn().mockResolvedValue(undefined), loadAll: vi.fn().mockResolvedValue([]) },
@@ -110,6 +113,8 @@ function makeDeps(overrides?: {
     },
     runner: overrides?.runner ?? { run: vi.fn().mockResolvedValue({ content: "ok" } as AgentResult) },
     runs,
+    // T-2：onRunDone 默认注入 spy，让所有 done-transition 站点可被断言。
+    onRunDone: overrides?.onRunDone ?? vi.fn(),
   };
 }
 
@@ -292,6 +297,8 @@ describe("handleWorkerError 重试矩阵", () => {
     expect(run.state.status).toBe("done");
     expect(run.state.reason).toBe("failed");
     expect(run.state.error).toBe("boom");
+    // T-2: done,failed 站点也触发 onRunDone
+    expect(deps.onRunDone).toHaveBeenCalledWith(run);
   });
 
   it("每次重试递增 workerErrorCount（C.5 跨 runtime 存活）", async () => {
@@ -351,6 +358,8 @@ describe("handleScriptError 重试矩阵", () => {
     expect(run.state.reason).toBe("failed");
     expect(run.state.error).toContain("3 retries");
     expect(run.state.error).toContain("fatal");
+    // T-2: script-error done,failed 站点也触发 onRunDone
+    expect(deps.onRunDone).toHaveBeenCalledWith(run);
   });
 
   it("workerLogs 捕获到 errorLogs（P2-2）", async () => {
@@ -511,5 +520,116 @@ describe("scheduleRebuild 退避", () => {
     }
     // 3 次 rebuild（每次 workerErrorCount 递增触发一次）
     expect(deps.workerHost.start).toHaveBeenCalledTimes(3);
+  });
+});
+
+// ── T-1: C-2 budget_limited 终止路径 ─────────────────────────
+
+describe("T-1: C-2 budget_limited 终止", () => {
+  it("agent-call 完成后 budget 超限 → transition done,budget_limited", async () => {
+    // maxTokens=10，runner 返回 usage 消耗 50 token（超限）
+    const budget = new Budget({ maxTokens: 10 });
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        content: "ok",
+        usage: { input: 20, output: 20, cacheRead: 5, cacheWrite: 5, cost: 0 },
+      } as AgentResult),
+    };
+    const deps = makeDeps({ runner, budget });
+    const run = runOf(deps);
+
+    await handleWorkerMessage(
+      run,
+      { type: "agent-call", callId: 0, opts: { prompt: "hi" } },
+      deps,
+      makeHandlers(),
+    );
+    // 等异步 dispatchAgentCall 的 .then() 完成（含 budget 检查）
+    await vi.waitFor(() => expect(run.state.status).toBe("done"));
+
+    expect(run.state.reason).toBe("budget_limited");
+    expect(run.state.error).toBe("Budget exceeded");
+    expect(run.state.budget.isExceeded()).toBe(true);
+    expect(deps.store.save).toHaveBeenCalled();
+  });
+
+  it("budget 未超限时不触发 budget_limited", async () => {
+    const budget = new Budget({ maxTokens: 1000 });
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        content: "ok",
+        usage: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      } as AgentResult),
+    };
+    const deps = makeDeps({ runner, budget });
+    const run = runOf(deps);
+
+    await handleWorkerMessage(
+      run,
+      { type: "agent-call", callId: 0, opts: { prompt: "hi" } },
+      deps,
+      makeHandlers(),
+    );
+    await vi.waitFor(() => expect(runner.run).toHaveBeenCalled());
+
+    // 给 .then() 一个微任务窗口
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(run.state.status).toBe("running");
+    expect(run.state.budget.isExceeded()).toBe(false);
+  });
+});
+
+// ── T-2: C-4 onRunDone 完成通知 ──────────────────────────────
+
+describe("T-2: C-4 onRunDone 在所有 done-transition 站点触发", () => {
+  it("return 消息（done,completed）→ onRunDone 触发", async () => {
+    const deps = makeDeps();
+    const run = runOf(deps);
+    await handleWorkerMessage(
+      run,
+      { type: "return", result: { value: 42 } },
+      deps,
+      makeHandlers(),
+    );
+    expect(run.state.status).toBe("done");
+    expect(deps.onRunDone).toHaveBeenCalledWith(run);
+  });
+
+  it("budget 终止（done,budget_limited）→ onRunDone 触发", async () => {
+    const budget = new Budget({ maxTokens: 10 });
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        content: "ok",
+        usage: { input: 20, output: 20, cacheRead: 5, cacheWrite: 5, cost: 0 },
+      } as AgentResult),
+    };
+    const deps = makeDeps({ runner, budget });
+    const run = runOf(deps);
+
+    await handleWorkerMessage(
+      run,
+      { type: "agent-call", callId: 0, opts: { prompt: "hi" } },
+      deps,
+      makeHandlers(),
+    );
+    await vi.waitFor(() => expect(run.state.status).toBe("done"));
+    expect(run.state.reason).toBe("budget_limited");
+    expect(deps.onRunDone).toHaveBeenCalledWith(run);
+  });
+
+  it("paused 状态 → onRunDone 不触发（非终态）", async () => {
+    const deps = makeDeps();
+    const run = runOf(deps);
+    run.transition("paused");
+    await handleWorkerMessage(
+      run,
+      { type: "return", result: "x" },
+      deps,
+      makeHandlers(),
+    );
+    expect(run.state.status).toBe("paused");
+    expect(deps.onRunDone).not.toHaveBeenCalled();
   });
 });

@@ -95,7 +95,7 @@ describe("workflow tool contract [MANDATORY]", () => {
     expect(Array.isArray(tool?.promptGuidelines)).toBe(true);
   });
 
-  it("execute is a function with arity >= 5 (toolCallId, params, signal, onUpdate, ctx)", () => {
+  it("execute is a function with arity 5 (toolCallId, params, signal, onUpdate, ctx)", () => {
     const { pi, getTool } = captureToolRegistration();
     registerWorkflowTool(
       pi,
@@ -105,12 +105,11 @@ describe("workflow tool contract [MANDATORY]", () => {
       { isProcessing: false },
     );
     const tool = getTool("workflow");
-    // execute 是 method（隐式 this 参数），故 fn.length 应 >= 4（不算 this）
-    // SDK ToolDefinition.execute(toolCallId, params, signal, onUpdate, ctx) = 5 显式参数
+    // SDK ToolDefinition.execute(toolCallId, params, signal, onUpdate, ctx) = 5 显式参数。
+    // Function.length 不计 this，故 method 形式下仍为 5。精确断言锁定 5 参数契约。
     const execute = tool?.execute as ((...args: unknown[]) => unknown) | undefined;
     expect(typeof execute).toBe("function");
-    // 5 个显式参数（method 形式下 fn.length 仍是 5，因为 TS 不把 this 算入 length）
-    expect(execute?.length).toBeGreaterThanOrEqual(4);
+    expect(execute?.length).toBe(5);
   });
 });
 
@@ -158,17 +157,18 @@ describe("workflow-script tool contract [MANDATORY]", () => {
 describe("factory handler registration [MANDATORY]", () => {
   it("default export registers 2 tools + /workflows command + 3 session handlers", async () => {
     const tools: Record<string, unknown> = {};
-    const commands: string[] = [];
-    const events: string[] = [];
+    const commands: Record<string, unknown> = {};
+    const events: Record<string, ((...args: unknown[]) => unknown) | undefined> = {};
     const pi = {
       registerTool: vi.fn((t: Record<string, unknown>) => {
         tools[t.name as string] = t;
       }),
-      registerCommand: vi.fn((name: string) => {
-        commands.push(name);
+      registerCommand: vi.fn((name: string, def: unknown) => {
+        commands[name] = def;
       }),
-      on: vi.fn((event: string) => {
-        events.push(event);
+      // W-3：捕获 handler 本身（而非仅 event 名），以便断言 arity。
+      on: vi.fn((event: string, handler: (...args: unknown[]) => unknown) => {
+        events[event] = handler;
       }),
       sendMessage: vi.fn(),
       appendEntry: vi.fn(),
@@ -181,12 +181,59 @@ describe("factory handler registration [MANDATORY]", () => {
     // FR-5: 2 tools
     expect(Object.keys(tools).sort()).toEqual(["workflow", "workflow-script"]);
     // FR-6: 1 command (/workflows)
-    expect(commands).toEqual(["workflows"]);
+    expect(Object.keys(commands)).toEqual(["workflows"]);
     // 3 session handlers
-    expect(events.filter((e) => e.startsWith("session_")).sort()).toEqual([
+    expect(Object.keys(events).filter((e) => e.startsWith("session_")).sort()).toEqual([
       "session_shutdown",
       "session_start",
       "session_tree",
     ]);
+  });
+
+  it("W-3: session handlers have 2-arg (event, ctx) signature — not 1-arg (ctx)", async () => {
+    // 回归保护：handler 必须是 (event, ctx) 两参数。若退化为 (ctx) => ctx.sessionManager
+    // （清单 item 1 的历史 bug），fn.length 会是 1，本断言会失败。
+    const events: Record<string, ((...args: unknown[]) => unknown) | undefined> = {};
+    const pi = {
+      registerTool: vi.fn(),
+      registerCommand: vi.fn(),
+      on: vi.fn((event: string, handler: (...args: unknown[]) => unknown) => {
+        events[event] = handler;
+      }),
+      sendMessage: vi.fn(),
+      appendEntry: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    const workflowExtension = (await import("../index.js")).default;
+    workflowExtension(pi);
+
+    for (const name of ["session_start", "session_tree", "session_shutdown"]) {
+      const handler = events[name];
+      expect(typeof handler).toBe("function");
+      // SDK ExtensionHandler<E> = (event: E, ctx: ExtensionContext) => ... —— 2 参数。
+      // 注：async (event, ctx) 的 fn.length = 2（参数均无默认值）。
+      expect(handler?.length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it("W-3: /workflows command handler has 2-arg (args, ctx) signature", async () => {
+    const commands: Record<string, unknown> = {};
+    const pi = {
+      registerTool: vi.fn(),
+      registerCommand: vi.fn((name: string, def: unknown) => {
+        commands[name] = def;
+      }),
+      on: vi.fn(),
+      sendMessage: vi.fn(),
+      appendEntry: vi.fn(),
+    } as unknown as ExtensionAPI;
+
+    const workflowExtension = (await import("../index.js")).default;
+    workflowExtension(pi);
+
+    const cmd = commands["workflows"] as { handler?: (...args: unknown[]) => unknown } | undefined;
+    expect(typeof cmd?.handler).toBe("function");
+    // Pi Command handler = (args: ParsedArgs, ctx: ExtensionContext) => ... —— 2 参数。
+    expect(cmd?.handler?.length).toBeGreaterThanOrEqual(2);
   });
 });

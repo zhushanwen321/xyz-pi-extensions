@@ -2,7 +2,7 @@
  * Workflow Extension — lifecycle（W3-T21，HIGH RISK）
  *
  * Workflow run 生命周期 free functions（D-12）。取代旧 lifecycle.legacy.ts
- * 的 runWorkflow/pauseRun/resumeRun/abortRun（原为 OrchestratorCore 方法）。
+ * 的 runWorkflow/pauseRun/resumeRun/abortRun（原 God Facade 方法）。
  *
  * 4 个导出函数：
  *   - runWorkflow(spec, deps, signal?) → Promise<runId>

@@ -474,3 +474,128 @@ describe("ConcurrencyGate", () => {
     });
   });
 });
+
+// ── T-4: withSlot (C-3 并发槽位入口) ─────────────────────────
+//
+// withSlot 是 dispatchAgentCall 实际调用的入口（不走 enqueue 的 spawn 路径）。
+// 覆盖 3 条独有分支：pre-abort throw、queued-abort rejection、FIFO drain。
+
+describe("ConcurrencyGate.withSlot (T-4)", () => {
+  it("槽位可用 → 直接执行 fn 并返回其结果", async () => {
+    const gate = new ConcurrencyGate({ maxConcurrency: 2 });
+    const fn = vi.fn(async () => "result");
+    const result = await gate.withSlot(fn);
+    expect(result).toBe("result");
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("pre-aborted signal → 立即 throw AbortError（不调 fn）", async () => {
+    const gate = new ConcurrencyGate({ maxConcurrency: 2 });
+    const fn = vi.fn(async () => "result");
+    const controller = new AbortController();
+    controller.abort();
+    await expect(gate.withSlot(fn, controller.signal)).rejects.toThrow(/aborted before start/);
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it("maxConcurrency=1 串行化：第 2 个 fn 等第 1 个完成", async () => {
+    const gate = new ConcurrencyGate({ maxConcurrency: 1 });
+    const order: string[] = [];
+    let resolveFirst: () => void = () => {};
+    const firstPromise = new Promise<void>((r) => {
+      resolveFirst = r;
+    });
+
+    const fn1 = vi.fn(async () => {
+      order.push("fn1-start");
+      await firstPromise;
+      order.push("fn1-end");
+      return 1;
+    });
+    const fn2 = vi.fn(async () => {
+      order.push("fn2-start");
+      return 2;
+    });
+
+    const p1 = gate.withSlot(fn1);
+    // p2 进入排队（maxConcurrency=1，fn1 占槽）
+    const p2 = gate.withSlot(fn2);
+
+    // fn2 尚未执行（fn1 占槽）
+    expect(fn2).not.toHaveBeenCalled();
+
+    resolveFirst();
+    // 语义就是全 resolve（串行链必须都成功）——非独立数据源，禁 allSettled 建议
+    const [r1, r2] = await Promise.all([p1, p2]); // eslint-disable-line taste/prefer-allsettled
+    expect(r1).toBe(1);
+    expect(r2).toBe(2);
+    // fn1 完成后 fn2 才开始（串行）
+    expect(order).toEqual(["fn1-start", "fn1-end", "fn2-start"]);
+  });
+
+  it("queued 中 signal abort → reject AbortError + 从队列移除", async () => {
+    const gate = new ConcurrencyGate({ maxConcurrency: 1 });
+    let resolveFirst: () => void = () => {};
+    const firstPromise = new Promise<void>((r) => {
+      resolveFirst = r;
+    });
+
+    const fn1 = vi.fn(async () => {
+      await firstPromise;
+      return 1;
+    });
+    const fn2 = vi.fn(async () => 2);
+
+    const controller2 = new AbortController();
+    const p1 = gate.withSlot(fn1);
+    const p2 = gate.withSlot(fn2, controller2.signal);
+
+    // fn2 在排队中——abort
+    controller2.abort();
+    await expect(p2).rejects.toThrow(/aborted while queued/);
+
+    // 释放 fn1，确认 fn2 没被执行（已从队列移除）
+    resolveFirst();
+    await p1;
+    expect(fn2).not.toHaveBeenCalled();
+  });
+
+  it("FIFO 顺序：maxConcurrency=1，3 个 fn 按入队顺序执行", async () => {
+    const gate = new ConcurrencyGate({ maxConcurrency: 1 });
+    const order: number[] = [];
+
+    const makeFn = (n: number) =>
+      async (): Promise<number> => {
+        order.push(n);
+        // 让出微任务，确保下一个能进入
+        await Promise.resolve();
+        return n;
+      };
+
+    // FIFO 顺序断言需全部 resolve——非独立数据源，禁 allSettled 建议
+    const ps = await Promise.all([ // eslint-disable-line taste/prefer-allsettled
+      gate.withSlot(makeFn(1)),
+      gate.withSlot(makeFn(2)),
+      gate.withSlot(makeFn(3)),
+    ]);
+    expect(ps).toEqual([1, 2, 3]);
+    expect(order).toEqual([1, 2, 3]);
+  });
+
+  it("槽位释放后 drain：fn 完成即递减 active 并唤醒队列", async () => {
+    const gate = new ConcurrencyGate({ maxConcurrency: 1 });
+    const results: string[] = [];
+
+    const fn = async (id: string): Promise<string> => {
+      results.push(id);
+      return id;
+    };
+
+    // 并发提交 3 个，maxConcurrency=1 → 串行
+    const ps = [gate.withSlot(() => fn("a")), gate.withSlot(() => fn("b")), gate.withSlot(() => fn("c"))];
+    // 串行链全部 resolve 才算通过——非独立数据源，禁 allSettled 建议
+    const settled = await Promise.all(ps); // eslint-disable-line taste/prefer-allsettled
+    expect(settled).toEqual(["a", "b", "c"]);
+    expect(results).toEqual(["a", "b", "c"]);
+  });
+});
