@@ -6,10 +6,10 @@ import { describe, expect, it } from "vitest";
 import {
 	getCompletionState,
 	getVerificationState,
+	type GoalTask,
 	isTaskDone,
 	isTerminalTaskStatus,
 	validateTaskTransition,
-	type GoalTask,
 } from "../task";
 
 const makeTask = (overrides: Partial<GoalTask> = {}): GoalTask => ({

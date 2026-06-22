@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { type GoalTask, isTaskDone } from "../state";
+import { type GoalTask, isTaskDone } from "../engine/task";
 
 const makeTask = (overrides: Partial<GoalTask> = {}): GoalTask => ({
 	id: 1,

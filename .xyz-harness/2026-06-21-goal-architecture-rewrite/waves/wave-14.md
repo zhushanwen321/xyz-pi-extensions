@@ -393,3 +393,61 @@ pnpm --filter @zhushanwen/pi-goal test
 ### 5. 提交
 
 - [ ] commit message 以 `wave-14:` 开头，含「index.ts rewrite」+「delete 9 legacy files」+「FR-4.1/4.2/6.4/6.7」
+
+---
+
+## 实现修正（实施时发现的 plan 缺陷 + 修复）
+
+### 修正 1：`handleAgentStart` 签名是 `(session)`，不是 `(pi, session, ctx)`
+**plan bug**：plan 调 `handleAgentStart(pi, session, undefined as unknown as ExtensionContext)`。
+**实际签名**：`handleAgentStart(session: GoalSession): Promise<void>`（event-adapter.ts:100，Wave 12 设计——agent_start 不需 pi/ctx，只调 applyEvent）。
+**修复**：改为 `handleAgentStart(session)`。
+
+### 修正 2：`handleMessageEnd` 签名是 `(session, ctx, event)`，不是 `(pi, session, ctx, event)`
+**plan bug**：plan 调 `handleMessageEnd(pi, session, ctx, event)`（4 参数）。
+**实际签名**：`handleMessageEnd(session, ctx, event): Promise<void>`（event-adapter.ts:156，Wave 12——message_end 只需 ctx 做 ESC 守卫 + event 取 usage，不需 pi）。
+**修复**：改为 `handleMessageEnd(session, ctx, event)`。
+
+### 修正 3：`GoalManagerDetails` 从 `./projection/result` import，不是 `./adapters/tool-adapter`
+**plan bug**：plan 写 `import { type GoalManagerDetails } from "./adapters/tool-adapter"`。
+**实际位置**：`projection/result.ts:23` export。tool-adapter.ts 既未 import 也未 re-export 它。
+**修复**：改为 `from "./projection/result"`。
+
+### 修正 4：保留旧版完整 `description` + `promptGuidelines`（AC-4 行为契约）
+**plan 偏差**：plan 步骤 1 的代码示例把 tool description 大幅简化（去掉 promptGuidelines + 缩短 description）。
+**AC-4 要求**：「goal_manager tool schema 不变」+「行为与重构前等价」。promptGuidelines 含 26 条 LLM 行为指导（[Status flow]/[Verification]/[Audit] 等），是行为契约的一部分。
+**修复**：完整保留旧版 description + promptGuidelines + renderCall（含 subtask-aware 的 texts/subUpdates/subIds 行）+ renderResult（含 subtask 展开逻辑）。
+
+### 修正 5：`__goalInit` 复用 `buildPorts`（DRY），不重写 ServicePorts 构造
+**plan 偏差**：plan 步骤 1 的 `initializeGoalFromExternal` 内联手写 ServicePorts 构造（~20 行），与 tool-adapter.buildPorts 重复。
+**修复**：调 `buildPorts(pi, ctx)`（Wave 11 已 export，DRY 单一 ports 构造点）。__goalInit 从 ~30 行收窄到 1 行：`createGoal(session, objective, tasks, budget ?? {}, buildPorts(pi, ctx), true)`。
+
+### 修正 6：`commands.ts` 的 `BudgetConfig` import 路径修复
+**plan 遗漏**：plan 未提到 commands.ts 从 `./state` import `BudgetConfig`（删 state.ts 后断链）。
+**修复**：改为 `from "./engine/types"`。
+
+### 修正 7：删除 `validate-update-tasks.test.ts`（service.test.ts 已覆盖）
+**plan 建议**：「执行者选择：保留但改为测 validateTaskTransition，或删除」。
+**验证**：service.test.ts:196 起已覆盖 update_tasks 全部校验（合法转换/终态/evidence 缺失/verified/duplicate）。validate-update-tasks.test.ts 重复。
+**决定**：删除（25 条 test → service.test.ts 的 update_tasks 块已覆盖同等路径）。
+
+### 修正 8：magic number 2 提取为 `JSON_INDENT` 常量（AC-7：零 eslint-disable）
+**plan/旧版**：旧 index.ts:252 用 `// eslint-disable-line no-magic-numbers` 抑制 `JSON.stringify(params, null, 2)` 的 magic-number 警告。新架构 AC-7 禁止 eslint-disable。
+**修复**：提取 `const JSON_INDENT = 2;`，改为 `JSON.stringify(params, null, JSON_INDENT)`。
+
+### 修正 9：`deserialize-state.test.ts` 已正确 import `../persistence`（无需迁移）
+**plan 说明**：「2 个迁移测试文件的 import 已从旧模块改为新模块（deserialize-state ← persistence）」。
+**实际**：deserialize-state.test.ts 从一开始就从 `../persistence` import（FR-5 时已正确），不需迁移。只有 is-task-done.test.ts（`../state` → `../engine/task`）需迁移。
+
+### 验收结果（实施完成 — 架构重写全部收口）
+- [x] typecheck 零错误
+- [x] lint 零错误（21 acceptable warnings：Pi 类型边界的 `as never`/`as unknown as` casts + service.ts task 截断的 magic-number 80/3，均为 Wave 5-13 遗留，无新增）
+- [x] test 全绿：259 passing（7 test files：engine task/budget/goal + service + event-adapter + deserialize-state + is-task-done）
+- [x] 架构边界全量 grep：engine/ 零 Pi import；无 hasPendingInjection/pendingPause/lastCtx 代码（仅注释文档）；无 any/eslint-disable
+- [x] 9 个旧文件已删除
+- [x] index.ts 只 import adapters/engine/projection/service/session
+- [x] AC-4：tool description + promptGuidelines + renderCall/renderResult 完整保留（行为等价）
+- [x] FR-4.1：__goalInit 调 service.createGoal（双轨消除）
+- [x] FR-4.2/D-16：ctx 必填，移除 lastCtx
+- [x] FR-6.4：移除 hasPendingInjection
+- [x] FR-6.7：移除 pendingPause（ESC 改用 ctx.signal.aborted 守卫）
