@@ -185,6 +185,23 @@ export function sanitizeLabel(label: string): string {
   return label.replace(/[\r\n]+/g, " ").replace(/\t/g, "  ");
 }
 
+/**
+ * 提取文本的前 maxChars 个字符（不包括换行符）。
+ * 用于 thinking/text 类型的 event log 条目，确保显示完整文本的开头部分。
+ *
+ *   prefixNoNewline("Hello\nWorld", 10) → "HelloWorld"
+ *   prefixNoNewline("Line1\nLine2\nLine3", 8) → "Line1Line"
+ */
+export function prefixNoNewline(text: string, maxChars: number): string {
+  let result = "";
+  for (const ch of text) {
+    if (ch === "\n" || ch === "\r") continue;
+    if (result.length >= maxChars) break;
+    result += ch;
+  }
+  return result;
+}
+
 // ============================================================
 // 共享文本/参数提取 helper（tool-render / list-view / bg-notify-render / subagent-tool 复用）
 // ============================================================
@@ -231,7 +248,12 @@ export function extractAgentName(args: unknown): string {
  * label 经 sanitizeLabel 压成单行，再 truncLine 截到 EVENT_LINE_MAX_WIDTH。
  */
 export function formatEventLine(entry: AgentEventLogEntry, theme: ThemeLike): string {
-  const label = truncLine(sanitizeLabel(entry.label), EVENT_LINE_MAX_WIDTH);
+  // thinking/text：取前 N 个非换行字符（用户要求显示开头）
+  // tool/error：sanitizeLabel 压平 + truncLine 截断
+  const isTextOrThinking = entry.type === "text_output" || entry.type === "thinking";
+  const label = isTextOrThinking
+    ? truncLine(prefixNoNewline(entry.label, EVENT_LINE_MAX_WIDTH), EVENT_LINE_MAX_WIDTH)
+    : truncLine(sanitizeLabel(entry.label), EVENT_LINE_MAX_WIDTH);
 
   switch (entry.type) {
     case "tool_start":
