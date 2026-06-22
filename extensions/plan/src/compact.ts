@@ -79,8 +79,8 @@ function tryGoalInit(pi: ExtensionAPI, planFilePath: string, ctx: ExtensionConte
   type GoalInitFn = (
     objective: string,
     tasks: string[],
-    budget?: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number },
-    ctx?: ExtensionContext,
+    budget: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number } | undefined,
+    ctx: ExtensionContext,
   ) => boolean;
 
   try {

@@ -153,6 +153,7 @@ describe("applyToolAction — create_tasks", () => {
 		const result = applyToolAction(session, "create_tasks", { tasks: ["a", "b"] }, ports);
 		expect(result.isError).toBeUndefined();
 		expect(session.state!.tasks).toHaveLength(2);
+		expect(ports.states).toHaveLength(1); // FR-6.5: persist 被调用（MF-1 回归测试）
 	});
 
 	it("已有未完成 tasks → 拒绝", () => {
@@ -173,6 +174,7 @@ describe("applyToolAction — create_tasks", () => {
 		expect(result.isError).toBeUndefined();
 		expect(session.state!.tasks).toHaveLength(1);
 		expect(session.state!.tasks[0]!.description).toBe("new");
+		expect(ports.states).toHaveLength(1); // FR-6.5: 覆盖路径也 persist（MF-1 回归测试）
 	});
 
 	it("空 tasks → 报错", () => {
@@ -198,14 +200,16 @@ describe("applyToolAction — update_tasks", () => {
 		const session = createGoalSession();
 		session.state = makeState();
 		session.state.tasks = [{ id: 1, description: "t", status: "pending", lastUpdatedTurn: 0 }];
+		const ports = makeFakePorts();
 		const result = applyToolAction(
 			session,
 			"update_tasks",
 			{ updates: [{ taskId: 1, status: "in_progress" }] },
-			makeFakePorts(),
+			ports,
 		);
 		expect(result.isError).toBeUndefined();
 		expect(session.state!.tasks[0]!.status).toBe("in_progress");
+		expect(ports.states).toHaveLength(1); // FR-6.5: persist 被调用（MF-2 回归测试）
 	});
 
 	it("pending → completed 非法（跳过 in_progress）", () => {
@@ -301,6 +305,8 @@ describe("applyToolAction — update_tasks", () => {
 		const steer = ports.messages.find((m) => m.deliverAs === "steer");
 		expect(steer).toBeTruthy();
 		expect(steer!.content).toContain("verification");
+		// FR-6.5: completed 转换后 persist（MF-2 回归测试）
+		expect(ports.states).toHaveLength(1);
 	});
 
 	it("completed 缺 evidence → 报错", () => {

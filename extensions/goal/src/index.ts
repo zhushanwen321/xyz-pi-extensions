@@ -299,6 +299,12 @@ export default function goalExtension(pi: ExtensionAPI) {
 	 * FR-4.2/D-16: ctx 必填（消除 lastCtx 模块级可变状态）。
 	 * D-12: tasks 参数保留（核心价值是 task 构造逻辑唯一，不是砍参数）。
 	 * ports 构造复用 tool-adapter.buildPorts（DRY：单一 ports 构造点）。
+	 *
+	 * @param objective 目标描述
+	 * @param tasks 初始任务描述数组（空数组表示等待 AI 调 create_tasks）
+	 * @param budget 预算配置，传 undefined 用默认值
+	 * @param ctx **必填**——调用方的 ExtensionContext。省略会返回 false（创建失败）。
+	 * @returns true 创建成功；false 已有 active goal 或 ctx 缺失
 	 */
 	const api = pi as unknown as Record<string, unknown>;
 	api.__goalInit = (
@@ -307,6 +313,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 		budget: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number } | undefined,
 		ctx: ExtensionContext,
 	): boolean => {
+		if (!ctx) return false;
 		return createGoal(session, objective, tasks, budget ?? {}, buildPorts(pi, ctx), true);
 	};
 }

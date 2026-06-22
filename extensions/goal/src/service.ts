@@ -56,8 +56,16 @@ export type EventEffect =
 
 // ── 持久化辅助 ────────────────────────────────────────
 
-/** FR-6.5: persist 前调 tick 累计时间，然后 serialize + appendState */
-function persistState(session: GoalSession, ports: ServicePorts): void {
+/**
+ * FR-6.5: persist 前调 tick 累计时间，然后 serialize + appendState。
+ *
+ * tick 使用**当前 status** 判断是否累加（active 才累加）。因此对于 pause/clear/abort
+ * 这类「active → 非活跃」的转换，调用方必须在改 status **之前**先调本函数，
+ * 或使用 {@link persistStateBeforeTransition}。
+ *
+ * 导出供 command-adapter 复用（DRY：命令路径与 tool 路径共用同一持久化语义）。
+ */
+export function persistState(session: GoalSession, ports: ServicePorts): void {
 	if (!session.state) return;
 	const state = session.state;
 	const isRunning = isActiveStatus(state.status);
@@ -210,7 +218,7 @@ export function applyToolAction(
 function actionCreateTasks(
 	session: GoalSession,
 	params: Record<string, unknown>,
-	_ports: ServicePorts,
+	ports: ServicePorts,
 ): ToolActionResult {
 	const state = session.state!;
 	const tasks = params.tasks as string[] | undefined;
@@ -232,6 +240,8 @@ function actionCreateTasks(
 		verification: verifications?.[i],
 		lastUpdatedTurn: state.currentTurnIndex,
 	}));
+	// FR-6.5: 变更后持久化（tick + serialize + appendState）
+	persistState(session, ports);
 	return makeResult(session, `Created ${state.tasks.length} tasks`);
 }
 
@@ -323,6 +333,8 @@ function actionUpdateTasks(
 		);
 	}
 
+	// FR-6.5: 变更后持久化（tick + serialize + appendState）
+	persistState(session, ports);
 	return makeResult(session, `Updated ${updates.length} task actions`);
 }
 

@@ -25,7 +25,7 @@ import type { BudgetConfig } from "../engine/types";
 import { DEFAULT_BUDGET } from "../engine/types";
 import { serializeState } from "../persistence";
 import { objectiveUpdatedPrompt } from "../projection/prompts";
-import { createGoal, finalizeGoal } from "../service";
+import { createGoal, finalizeGoal, persistState } from "../service";
 import type { GoalSession } from "../session";
 import { clearGoalSession } from "../session";
 import { buildPorts } from "./tool-adapter";
@@ -100,8 +100,11 @@ function handlePause(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionConte
 		ctx.ui.notify(`Goal is in terminal state (${session.state.status}), cannot pause.`, "warning");
 		return;
 	}
+	// FR-6.5: 转换前先 persist（此时 status 仍为 active，tick 会累加当前运行段）
+	const ports = buildPorts(pi, ctx);
+	persistState(session, ports);
 	session.state.status = transitionStatus(session.state.status, "paused");
-	buildPorts(pi, ctx).persistence.appendState(serializeState(session.state));
+	ports.persistence.appendState(serializeState(session.state));
 	ctx.ui.notify("Goal paused. Use /goal resume to continue.", "info");
 }
 
@@ -125,19 +128,21 @@ function handleResume(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionCont
 	state.stallCount = 0;
 	state.timeStartedAt = Date.now();
 
+	const ports = buildPorts(pi, ctx);
+
 	// FR-8.3 G-014: resume 时 budget 重检
 	const resumeCheck = checkBudgetOnResume(state);
 	if (resumeCheck) {
 		const dim = resumeCheck.dimension;
 		state.status = transitionStatus(state.status, dim === "token" ? "budget_limited" : "time_limited");
-		buildPorts(pi, ctx).persistence.appendState(serializeState(state));
+		persistState(session, ports);
 		ctx.ui.notify(
 			`${dim === "token" ? "Token" : "Time"} budget exhausted, cannot resume. Use /goal clear to reset.`,
 			"warning",
 		);
 		return;
 	}
-	buildPorts(pi, ctx).persistence.appendState(serializeState(state));
+	persistState(session, ports);
 
 	// FR-8.12 并行模式：resume 有未完成任务时触发 AI
 	const incomplete = getIncompleteTasks(state.tasks);
@@ -215,6 +220,8 @@ function handleClear(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionConte
 		return;
 	}
 	const ports = buildPorts(pi, ctx);
+	// FR-6.5: 转 cancelled 前先 persist（tick 累加当前运行段，保证 history elapsedSeconds 准确）
+	persistState(session, ports);
 	const completedCount = getCompletedCount(session.state.tasks);
 	finalizeGoal(session.state, "cancelled", ports, {
 		clearImmediately: true,
@@ -252,6 +259,8 @@ function handleAbort(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionConte
 		}
 	}
 	const ports = buildPorts(pi, ctx);
+	// FR-6.5: 转 cancelled 前先 persist（tick 累加当前运行段，保证 history elapsedSeconds 准确）
+	persistState(session, ports);
 	const completedCount = getCompletedCount(session.state.tasks);
 	finalizeGoal(session.state, "cancelled", ports, {
 		clearImmediately: true,
@@ -298,7 +307,8 @@ function handleUpdate(
 	state.timeWarning70Sent = false;
 	state.timeWarning90Sent = false;
 	session.tasksCompletedAtAgentStart = 0;
-	buildPorts(pi, ctx).persistence.appendState(serializeState(state));
+	// FR-6.5: 持久化重塑后的状态（persistState 按当前 status tick 累加）
+	persistState(session, buildPorts(pi, ctx));
 	ctx.ui.notify(`Objective updated:\nPrevious: ${oldObjective}\nNew: ${newObjective}`, "info");
 
 	if (isActiveStatus(state.status)) {
@@ -331,6 +341,8 @@ function handleSet(
 	if (session.state && !isTerminalStatus(session.state.status)) {
 		// 非终态旧 goal：写 cancelled history
 		ctx.ui.notify(`Cancelled previous Goal: ${session.state.objective}\n(new goal started)`, "info");
+		// FR-6.5: 转 cancelled 前先 persist（tick 累加当前运行段，保证 history elapsedSeconds 准确）
+		persistState(session, ports);
 		const completedCount = getCompletedCount(session.state.tasks);
 		finalizeGoal(session.state, "cancelled", ports, {
 			clearImmediately: false,
