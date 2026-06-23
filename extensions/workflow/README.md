@@ -77,35 +77,49 @@ const meta = { name: "my-review", description: "批量代码审查" };
 
 ```
 workflow/
-├── index.ts                              # Factory — 纯胶水，~150 行
+├── index.ts                              # Factory 入口，re-export src/index.ts
 └── src/
-    ├── index.ts                          # 工厂入口
-    ├── domain/
-    │   └── state.ts                      # WorkflowInstance / 状态机（8 态） / 序列化
-    ├── infra/
+    ├── index.ts                          # 工厂：事件注册 + tool/command 注册胶水
+    ├── orchestrator.ts                   # WorkflowOrchestrator 类（runs map 唯一持有者）
+    ├── domain/                           # 纯数据 + 状态机，零依赖
+    │   ├── state.ts                      # WorkflowInstance / 状态机（8 态） / 序列化
+    │   └── run-resources.ts              # RunResources 聚合（instance+meta+pool+worker+controller）
+    ├── infra/                            # 子进程 / 文件 / 状态持久化
     │   ├── agent-pool.ts                 # 并发调度（enqueue / drain）
     │   ├── state-store.ts                # 状态持久化（rewrite 模式）
     │   ├── config-loader.ts              # workflow 脚本发现 + meta 提取
-    │   ├── agent-opts-resolver.ts        # agent/skill/schema → runAgent opts
-    │   ├── execution-trace.ts            # 执行追踪节点
-    │   └── script-lint.ts                # 脚本静态 lint
-    ├── engine/
-    │   ├── orchestrator.ts               # 编排核心：状态机 + 协调
-    │   ├── worker-manager.ts             # Worker 线程生命周期
-    │   ├── agent-executor.ts             # agent 调用执行 + 重试
+    │   ├── workflow-files.ts             # workflow 脚本 save/delete（tmp ↔ saved）
+    │   ├── agent-discovery.ts            # AgentRegistry：发现 project/user/npm agents
+    │   ├── skill-discovery.ts            # skill 路径发现（project/user/npm）
+    │   ├── agent-opts-resolver.ts        # agent/skill/schema → systemPromptFiles + schemaEnv
+    │   ├── execution-trace.ts            # 执行追踪节点 append
+    │   ├── script-lint.ts                # 脚本静态 lint
+    │   ├── constants.ts                  # 跨模块共享常量（runId 生成/显示长度/时间）
+    │   ├── pi-runner.ts                  # spawn pi --mode json 子进程执行
+    │   └── jsonl-parser.ts               # JSONL 流式解析
+    ├── engine/                           # 状态机 + Worker 协调 + 预算
+    │   ├── core.ts                        # OrchestratorCore 共享访问契约（engine 层共享）
+    │   ├── lifecycle.ts                  # run/pause/resume/abort/retry/skip/restart
+    │   ├── worker-manager.ts             # Worker 线程生命周期 + 消息路由 + OrchestratorCore 契约
     │   ├── worker-script.ts              # Worker 运行时代码生成
-    │   ├── orchestrator-events.ts        # 实时事件订阅 API
-    │   ├── orchestrator-budget.ts        # Token/Cost/时间预算
-    │   └── model-resolver.ts             # 模型解析（显式 > scene > 默认）
-    └── interface/
+    │   ├── agent-call-handler.ts         # agent 调用执行 + 重试 + stale-context 检测
+    │   ├── error-handlers.ts             # Worker error/exit + script error 重试
+    │   ├── terminate-instance.ts         # 统一终止管线（A4 原子性：cleanup→mutate→persist→notify）
+    │   ├── trace-commit.ts                # trace node 更新三件套（mutate→append→emit）
+    │   ├── orchestrator-events.ts        # 实时事件订阅 API（WorkflowEventEmitter）
+    │   └── orchestrator-budget.ts        # Token/Cost/时间预算 + 90% 预警
+    └── interface/                        # Pi API 表面
         ├── tool-workflow.ts              # workflow tool (pause/resume/abort/status)
         ├── tool-workflow-run.ts          # workflow-run tool (name/mode/args)
         ├── tool-generate.ts              # workflow-generate tool (脚本生成)
-        ├── tool-lint.ts                  # workflow-lint tool (静态检查)
+        ├── tool-workflow-lint.ts         # workflow-lint tool (静态检查)
+        ├── reentry-guard.ts              # acquire/release guard helper + 统一 busy 文案
         ├── commands.ts                   # /workflow + /workflows 命令
         └── views/
             ├── WorkflowsView.ts          # 全屏三级导航 TUI
-            └── format.ts                 # 纯格式化函数
+            └── format.ts                 # 纯格式化函数（status 颜色 / elapsed / token 统计）
 ```
 
 > **依赖说明**：workflow 采用自包含的 `spawn pi --mode json` 子进程架构执行 agent，不依赖任何外部 agent 运行时。`infra/` 内含子进程管理（`pi-runner.ts`）和 JSONL 流式解析（`jsonl-parser.ts`）。
+
+> **架构注记**：`orchestrator.ts` 在 `src/` 根级（不在 `engine/` 下），它是 class 定义；engine/ 下的模块是无状态函数，通过 `OrchestratorCore` 契约访问 orchestrator 状态。

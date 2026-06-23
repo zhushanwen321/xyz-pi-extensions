@@ -13,6 +13,7 @@ import { getReviewGateStatePath } from "../helpers.js";
 import { type ReviewGateResult,runReviewGateLoop } from "../review-gate-impl.js";
 // fallow-ignore-file — implements Gate interface members consumed via polymorphism
 import type { Gate, GateContext, GateResult } from "./gate.js";
+import type { WorkflowRunFn } from "./workflow-types.js";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -29,14 +30,6 @@ interface WorkflowTestFixResult {
   noncore: WorkflowTestFixResult["core"] | null;
   overall: boolean;
 }
-
-/** Signature of pi.__workflowRun exposed by workflow extension. */
-type WorkflowRunFn = (
-  name: string,
-  args: Record<string, unknown>,
-  signal?: AbortSignal,
-  timeoutMs?: number,
-) => Promise<{ status: string; scriptResult?: unknown; error?: string; runId: string }>;
 
 /** Type adapter: GateContext.onUpdate has UsageStats, runReviewGateLoop expects unknown. */
 type RunReviewGateLoopOnUpdate = (partial: { content: Array<{ type: string; text: string }>; usage?: unknown }) => void;
@@ -73,11 +66,11 @@ export class TestFixLoopGate implements Gate {
 
     const wfResult = await workflowRun(workflowName, args, ctx.signal, TestFixLoopGate.WORKFLOW_TIMEOUT_MS);
 
-    if (wfResult.status !== "completed" || wfResult.error) {
+    if (wfResult.reason !== "completed" || wfResult.error) {
       return {
         passed: false,
-        fixGuidance: `Test-Fix Loop workflow '${workflowName}' failed (status=${wfResult.status}): ${wfResult.error ?? "unknown error"}. Fix the failing test cases, then call coding-workflow-gate(phase=${ctx.phase}) again.`,
-        details: { status: wfResult.status, runId: wfResult.runId, source: "workflow" },
+        fixGuidance: `Test-Fix Loop workflow '${workflowName}' failed (reason=${wfResult.reason}): ${wfResult.error ?? "unknown error"}. Fix the failing test cases, then call coding-workflow-gate(phase=${ctx.phase}) again.`,
+        details: { reason: wfResult.reason, runId: wfResult.runId, source: "workflow" },
       };
     }
 
@@ -86,7 +79,7 @@ export class TestFixLoopGate implements Gate {
       return {
         passed: false,
         fixGuidance: `Test-Fix Loop workflow '${workflowName}' returned no result. Fix the failing test cases, then call coding-workflow-gate(phase=${ctx.phase}) again.`,
-        details: { status: wfResult.status, source: "workflow" },
+        details: { reason: wfResult.reason, source: "workflow" },
       };
     }
 

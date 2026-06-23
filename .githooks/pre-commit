@@ -268,6 +268,14 @@ if [[ -n "$STAGED_EXT_TS" ]]; then
 fi
 
 # ── 1. tsc 类型检查 ──────────────────────────────────────
+# worktree 切换后可能缺 node_modules，自动装一次避免 tsc 报 "Cannot find type definition"
+if [[ ! -d node_modules/@types/node ]]; then
+  echo -e "${C_YELLOW}[INFO]${C_RESET} node_modules 缺失，自动安装依赖..."
+  if ! pnpm install --prefer-offline >/dev/null 2>&1; then
+    echo -e "${C_RED}[FAIL]${C_RESET} pnpm install 失败，请手动安装后重试"
+    exit 1
+  fi
+fi
 echo "--- tsc --noEmit ---"
 if ! npx tsc --noEmit 2>&1; then
   echo -e "${C_RED}[FAIL]${C_RESET} TypeScript 类型检查失败"

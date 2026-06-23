@@ -87,7 +87,7 @@ L0/L1 规则化 + L2 时调用 LLM 做摘要。
 
 Compaction 做粗粒度的整体摘要（整段对话 → 一段总结），Context Engineering 做细粒度的消息级优化（单条 toolResult 太长 → 截断 + recall）。两者作用在不同层面，同时启用效果最好。
 
-详见 `docs/analysis/compaction-vs-context-event.md`。
+详见 `docs/research/context-compaction/analysis.md`。
 
 ## 后果
 

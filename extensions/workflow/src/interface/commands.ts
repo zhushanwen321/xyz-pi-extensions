@@ -1,549 +1,157 @@
 /**
- * Workflow Extension — Commands & Completion Notification
+ * Workflow Extension — commands
  *
- * Commands:
- *   /workflow run <name> [--args key=val ...] [--tokens N] [--time N]
- *   /workflows              — fullscreen workflow view (three-level navigation)
- *   /workflow list          — list running workflows
- *   /workflow abort <run-id>
+ * 仅注册 /workflows 命令（FR-6）——打开交互式 TUI 面板（WorkflowsView，三级导航
+ * phase → agent → detail，UC-3）。
  *
- * Completion notification sends a custom message via pi.sendMessage()
- * when a workflow reaches a terminal state, with a _render descriptor
- * for GUI display.
+ * 功能由 tool 承担，命令仅保留 /workflows 打开面板：
+ * - /workflow run <name> → 用 workflow tool { action: "run" }
+ * - /workflow list → 用 workflow tool { action: "status" }
+ * - /workflow abort <run-id> → 用 workflow tool { action: "abort" }
+ * - /workflow save <name> → 用 workflow-script tool { action: "save" }
+ * - /workflow delete <name> → 用 workflow-script tool { action: "delete" }
+ *
+ * 层归属：Interface。依赖 Pi SDK + Engine lifecycle（pause/resume/abort，注入 ViewActions）
+ * + WorkflowsView（读 WorkflowRun 聚合根）。
+ *
+ * 参考：
+ * - domain-models.md §FR-6（command 收口仅 /workflows，打开交互式面板）
+ * - spec.md UC-3（用户输入 /workflows，打开三级导航 TUI 面板）
  */
 
-import { existsSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
-import { resolve } from "node:path";
+import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@mariozechner/pi-coding-agent";
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import type { LauncherDeps } from "../engine/launcher.js";
+import { abortRun, pauseRun, resumeRun } from "../engine/lifecycle.js";
+import type { WorkflowRun } from "../engine/models/workflow-run.js";
+import { createWorkflowsView, type ViewActions } from "./views/WorkflowsView.js";
 
-import { loadWorkflows } from "../infra/config-loader.js";
-import { type WorkflowOrchestrator } from "../orchestrator.js";
-import { type WorkflowInstance } from "../domain/state.js";
-import { createWorkflowsView } from "./views/WorkflowsView.js";
+/** runId 截断长度（显示用）。 */
+const RUNID_SHORT = 8;
 
-// ── Constants ─────────────────────────────────────────────────
-
-const JSON_INDENT = 2;
-const MAX_RESULT_LENGTH = 8000;
-const RUNID_SHORT_LENGTH = 12;
-const RUNID_SLICE_LENGTH = 16;
-const TASK_SHORT_LENGTH = 150;
-const CONTENT_TRUNC_LENGTH = 500;
-const SPLIT_LIMIT = 2;
-const _TASK_PREVIEW_LENGTH = 60;
-
-// ── Types ──────────────────────────────────────────────────────
-
-export interface WorkflowCommandsState {
-  /** Last-started run ID, used by shortcuts that need a default target */
-  lastRunId: string | null;
-}
-
-// ── Completion Notification ────────────────────────────────────
-
-const statusToItemStatus = (
-  s: string,
-): "pending" | "in_progress" | "completed" | "failed" | "cancelled" => {
-  if (s === "completed") return "completed";
-  if (s === "failed") return "failed";
-  if (s === "running") return "in_progress";
-  return "pending";
+/** status 显示顺序：running/paused 优先（活跃态在前），再 startedAt 倒序。 */
+const STATUS_ORDER: Record<string, number> = {
+  running: 0,
+  paused: 1,
+  done: 2,
 };
+/** 未知 status 的默认排序权重（排在已知 status 之后）。 */
+const UNKNOWN_STATUS_WEIGHT = 9;
+
+// ── /workflows command ───────────────────────────────────────
 
 /**
- * Send a completion notification via pi.sendMessage when a workflow
- * reaches a terminal state. Includes a _render descriptor for GUI.
+ * 注册 /workflows command——打开 workflow 交互式 TUI 面板（FR-6, UC-3）。
  *
- * The `notifiedRunIds` Set is provided by the caller so that dedup
- * state is scoped to the factory/extension instance, not shared
- * across all callers globally. A default module-level Set is used
- * for backwards compatibility with direct callers (e.g. tests).
+ * 行为：
+ * - 无 UI（RPC/print/json 模式）→ notify 提示（降级，不打开 TUI）
+ * - `/workflows <runId>` 或前缀匹配唯一 run → 直接打开该 run 的 view
+ * - `/workflows`（无参）：
+ * · 0 runs → notify "No workflows"
+ * · 1 run → 直接打开
+ * · 多 runs → select 选 → 打开选中 run 的 view
+ *
+ * ViewActions（pause/resume/abort）由本 command 注入——view 本身不持 lifecycle 依赖，
+ * 只通过 actions 回调与 engine 交互（解耦，便于 view 单测）。
+ *
+ * @param api ExtensionAPI
+ * @param getRuns 获取当前 session 的 runs（Map<runId, WorkflowRun>）
+ * @param deps LauncherDeps（lifecycle pause/resume/abort 用）
  */
-const defaultNotifiedRunIds = new Set<string>();
-
-export function sendCompletionNotification(
+export function registerWorkflowsCommand(
   api: ExtensionAPI,
-  runId: string,
-  instance: WorkflowInstance,
-  notifiedRunIds: Set<string> = defaultNotifiedRunIds,
+  getRuns: () => Map<string, WorkflowRun>,
+  deps: LauncherDeps,
 ): void {
-  if (notifiedRunIds.has(runId)) return;
-  notifiedRunIds.add(runId);
-
-  // FR-2: Build content with optional scriptResult summary + trace summary
-  const parts: string[] = [];
-  parts.push(`Workflow '${instance.name}' completed: ${instance.status}`);
-
-  if (instance.scriptResult !== undefined && instance.scriptResult !== null) {
-    const serialized = JSON.stringify(instance.scriptResult, null, JSON_INDENT);
-    const truncated = serialized.length > MAX_RESULT_LENGTH ? serialized.slice(0, MAX_RESULT_LENGTH) + "\n... (truncated)" : serialized;
-    parts.push("");
-    parts.push("--- Script Result ---");
-    parts.push(truncated);
-  }
-
-  parts.push("");
-  parts.push("--- Agent Trace ---");
-  for (const node of instance.trace) {
-    parts.push(`[${node.stepIndex}] ${node.agent}: ${node.status}`);
-  }
-
-  const content = parts.join("\n");
-
-  // deliverAs:"steer" + triggerTurn:true —— workflow 完成时作为 steering 消息注入
-  // 并立即唤醒 parent agent 处理结果（默认开启，无 opt-in 参数）。
-  // 与 subagent 的 followUp+triggerTurn 对称，仅注入方式按需求用 steer。
-  api.sendMessage({
-    customType: "workflow-result",
-    content,
-    display: true,
-    details: {
-      runId,
-      name: instance.name,
-      status: instance.status,
-      traceLength: instance.trace.length,
-      _render: {
-        type: "task-list" as const,
-        data: {
-          title: `Workflow: ${instance.name} (${runId.slice(0, RUNID_SHORT_LENGTH)}...)`,
-          items: instance.trace.map((node) => ({
-            label: `[${node.stepIndex}] ${node.agent}: ${node.task.slice(0, TASK_SHORT_LENGTH)}`,
-            status: statusToItemStatus(node.status),
-            detail: node.result?.content?.slice(0, CONTENT_TRUNC_LENGTH),
-          })),
-          summary: `Status: ${instance.status} | ${instance.trace.length} agent calls`,
-        },
-      },
-    },
-  }, { triggerTurn: true, deliverAs: "steer" });
-}
-
-// ── Argument parsing ───────────────────────────────────────────
-
-interface ParsedRunArgs {
-  name: string;
-  args: Record<string, unknown>;
-  tokens?: number;
-  time?: number;
-}
-
-function parseRunArgs(tokens: string[]): ParsedRunArgs {
-  const name = tokens[0] ?? "";
-  const result: ParsedRunArgs = { name, args: {} };
-
-  let i = 1;
-  while (i < tokens.length) {
-    const token = tokens[i];
-    if (token === "--args") {
-      i++;
-      while (i < tokens.length && !tokens[i].startsWith("--")) {
-        const kv = tokens[i].split("=", SPLIT_LIMIT);
-        if (kv.length === SPLIT_LIMIT) {
-          result.args[kv[0]] = kv[1];
-        }
-        i++;
-      }
-    } else if (token === "--tokens") {
-      i++;
-      if (i < tokens.length) {
-        result.tokens = Number(tokens[i]);
-        i++;
-      }
-    } else if (token === "--time") {
-      i++;
-      if (i < tokens.length) {
-        result.time = Number(tokens[i]);
-        i++;
-      }
-    } else {
-      // Unknown token, skip
-      i++;
-    }
-  }
-
-  return result;
-}
-
-
-
-// ── Command registration ───────────────────────────────────────
-
-/**
- * Register /workflow and /workflows commands.
- * The `orchestrators` map allows command handlers to resolve the
- * correct orchestrator for the current session at runtime.
- */
-export function registerWorkflowCommands(
-  api: ExtensionAPI,
-  orchestrators: Map<string, WorkflowOrchestrator>,
-  cmdState: WorkflowCommandsState,
-): void {
-  // ── /workflow ────────────────────────────────────────────────
-
-  api.registerCommand("workflow", {
-    description: [
-      "Workflow management.",
-      "Subcommands:",
-      "  run <name> [--args key=val ...] [--tokens N] [--time N]  Start a workflow",
-      "  list              List running instances and available scripts",
-      "  abort <run-id>    Abort a running workflow",
-      "  save <tmp-name> [--as <name>]  Save a temporary workflow as permanent",
-      "  delete <name>     Delete a workflow script",
-      "",
-      "Shorthand: /workflows opens the interactive panel.",
-    ].join("\n"),
-    handler: async (args: string, ctx: ExtensionCommandContext) => {
-      const parts = args.trim().split(/\s+/);
-      if (parts.length === 0) {
-        ctx.ui.notify("Usage: /workflow run|list|abort|save|delete", "warning");
-        return;
-      }
-
-      const sessionId = ctx.sessionManager.getSessionId();
-      const orch = orchestrators.get(sessionId);
-      if (!orch) {
-        ctx.ui.notify("Workflow system not initialized", "error");
-        return;
-      }
-
-      const subcommand = parts[0];
-
-      switch (subcommand) {
-        // ── run ──
-        case "run": {
-          const parsed = parseRunArgs(parts.slice(1));
-          if (!parsed.name) {
-            ctx.ui.notify("Usage: /workflow run <name> [--args ...]", "warning");
-            return;
-          }
-
-          try {
-            const runId = await orch.run(
-              parsed.name,
-              parsed.args,
-              parsed.tokens,
-              parsed.time,
-            );
-            cmdState.lastRunId = runId;
-            ctx.ui.notify(
-              `Started '${parsed.name}' (${runId.slice(0, RUNID_SLICE_LENGTH)}...)`,
-              "info",
-            );
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            // If workflow not found, pass to AI to handle
-            if (msg.includes("not found") || msg.includes("unavailable")) {
-              // Load available workflows for suggestions
-              let availableList = "";
-              try {
-                const workflows = await loadWorkflows();
-                const available = workflows.filter((wf) => wf.available);
-                if (available.length > 0) {
-                  availableList = "\n\nAvailable workflow scripts:\n" +
-                    available.map((wf) => `  - ${wf.name}: ${wf.description || "(no description)"}`).join("\n");
-                } else {
-                  availableList = "\n\nNo workflow scripts are currently available.";
-                }
-              } catch {
-                availableList = "";
-              }
-
-              api.sendUserMessage(
-                `The user tried to run /workflow run '${parsed.name}' but no exact match was found. ` +
-                `The original /workflow run input was:\n${args.trim()}${availableList}\n\n` +
-                `Use workflow-run with name='${parsed.name}' and mode='auto' — the tool will search by description, ` +
-                `list candidates if any match, or suggest creating a new workflow.`
-              );
-            } else {
-              ctx.ui.notify(`Failed: ${msg}`, "error");
-            }
-          }
-          return;
-        }
-
-        // ── list ──
-        case "list": {
-          // Show available workflow scripts with source tags
-          let scriptSection = "";
-          try {
-            const workflows = await loadWorkflows();
-            const available = workflows.filter((wf) => wf.available);
-            if (available.length > 0) {
-              scriptSection = "\nAvailable workflows:\n" +
-                available
-                  .map((wf) => `  [${wf.source}] ${wf.name} — ${wf.description || "(no description)"}`)
-                  .join("\n");
-            }
-          // eslint-disable-next-line taste/no-silent-catch
-          } catch {
-            // Loading the workflow list is best-effort; the script section
-            // is omitted and the instance list still renders. Surfacing to
-            // the terminal would leak to the input area.
-            scriptSection = "";
-          }
-
-          const instances = orch.list();
-          if (instances.length === 0 && !scriptSection) {
-            ctx.ui.notify("No workflow instances or scripts available", "info");
-            return;
-          }
-
-          const sections: string[] = [];
-
-          if (instances.length > 0) {
-            sections.push("Running:");
-            sections.push(...instances.map((inst) => {
-              const ts = inst.startedAt
-                ? new Date(inst.startedAt).toLocaleTimeString()
-                : "-";
-              return (
-                `  [${inst.status}] ${inst.name} (${inst.runId.slice(0, RUNID_SLICE_LENGTH)}...) ${ts}` +
-                (inst.error ? ` error: ${inst.error}` : "")
-              );
-            }));
-          }
-
-          if (scriptSection) {
-            sections.push(scriptSection);
-          }
-
-          ctx.ui.notify(sections.join("\n"), "info");
-          return;
-        }
-
-        // ── abort ──
-        case "abort": {
-          const runId = parts[1];
-          if (!runId) {
-            ctx.ui.notify("Usage: /workflow abort <run-id>", "warning");
-            return;
-          }
-          try {
-            await orch.abort(runId);
-            ctx.ui.notify(`Aborted ${runId.slice(0, RUNID_SLICE_LENGTH)}...`, "info");
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            ctx.ui.notify(`Abort failed: ${msg}`, "error");
-          }
-          return;
-        }
-
-        // ── save ──
-        case "save": {
-          const tmpName = parts[1];
-          if (!tmpName) {
-            ctx.ui.notify("Usage: /workflow save <tmp-name> [--as <new-name>]", "warning");
-            return;
-          }
-
-          // Parse --as parameter
-          let newName: string | undefined;
-          const asIdx = parts.indexOf("--as");
-          if (asIdx !== -1 && parts[asIdx + 1]) {
-            newName = parts[asIdx + 1];
-          }
-
-          try {
-            const result = await saveWorkflow(tmpName, newName);
-            ctx.ui.notify(result, "info");
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            ctx.ui.notify(`Save failed: ${msg}`, "error");
-          }
-          return;
-        }
-
-        // ── delete ──
-        case "delete": {
-          const name = parts[1];
-          if (!name) {
-            ctx.ui.notify("Usage: /workflow delete <name>", "warning");
-            return;
-          }
-
-          try {
-            const isRunning = (n: string) =>
-              orch.list().some((i) => i.name === n && i.status === "running");
-            const result = deleteWorkflow(name, isRunning);
-            ctx.ui.notify(result, "info");
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            ctx.ui.notify(`Delete failed: ${msg}`, "error");
-          }
-          return;
-        }
-
-        default: {
-          // Unknown subcommand — check if it could be a workflow name or natural language
-          // Collect available workflows and pass to AI for routing
-          const userInput = args.trim();
-          let workflowList = "";
-          try {
-            const workflows = await loadWorkflows();
-            const available = workflows.filter((wf) => wf.available);
-            if (available.length > 0) {
-              workflowList = available
-                .map((wf) => `  [${wf.source}] ${wf.name} — ${wf.description || "(no description)"}`)
-                .join("\n");
-            }
-          // eslint-disable-next-line taste/no-silent-catch
-          } catch {
-            // Loading the workflow list is best-effort; the AI routing
-            // message is sent without a list. Surfacing to the terminal
-            // would leak to the input area.
-            workflowList = "";
-          }
-
-          const listSection = workflowList
-            ? `\nAvailable workflows:\n${workflowList}`
-            : "\nNo available workflows found.";
-
-          api.sendUserMessage(
-            `The user typed /workflow with input: "${userInput}"` +
-            listSection +
-            `\n\nMatch by workflow name and description (do NOT read script files). Then:\n` +
-            `1. If a workflow matches, use workflow-run with name='${userInput}' and mode='auto'. The tool will confirm with the user.\n` +
-            `2. If no match, use workflow-generate to create a new temporary workflow.\n` +
-            `3. Before executing a generated workflow, ALWAYS show the script path and wait for user confirmation.`,
-          );
-          return;
-        }
-      }
-    },
-  });
-
-  // ── /workflows — interactive panel ───────────────────────────
-
   api.registerCommand("workflows", {
-    description: "Open workflow fullscreen view. /workflows [runId] to open specific workflow.",
+    description: "Open workflow interactive panel. /workflows [runId] to open a specific run.",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
+ // RPC/print/json 模式无 TUI——降级提示
       if (!ctx.hasUI) {
         ctx.ui.notify("/workflows requires interactive mode", "error");
         return;
       }
 
-      const sessionId = ctx.sessionManager.getSessionId();
-      const orch = orchestrators.get(sessionId);
-      if (!orch) {
-        ctx.ui.notify("Workflow system not initialized", "error");
-        return;
-      }
-
-      // Direct entry by runId (FR-1.1)
+ // 直接按 runId / 前缀匹配打开
       const directRunId = args.trim();
       if (directRunId) {
-        const instance = orch.getInstance(directRunId);
-        if (!instance) {
-          // Try prefix match
-          const all = orch.list();
-          const matched = all.filter((s) => s.runId.startsWith(directRunId));
-          if (matched.length === 1) {
-            await createWorkflowsView(orch, matched[0].runId, ctx.ui.theme, ctx);
-            return;
-          }
-          ctx.ui.notify(`Workflow '${directRunId}' not found`, "error");
+        const all = sortedRuns(getRuns());
+ // 精确匹配优先
+        const exact = all.find((r) => r.runId === directRunId);
+        if (exact) {
+          await openView(exact, ctx.ui.theme, ctx, deps);
           return;
         }
-        await createWorkflowsView(orch, directRunId, ctx.ui.theme, ctx);
+ // 前缀匹配
+        const matched = all.filter((r) => r.runId.startsWith(directRunId));
+        if (matched.length === 1) {
+          await openView(matched[0], ctx.ui.theme, ctx, deps);
+          return;
+        }
+        ctx.ui.notify(`Workflow '${directRunId}' not found`, "error");
         return;
       }
 
-      // No runId — list all instances (active first), select or enter directly
-      const all = orch.list();
-
+ // 无参——列表选择
+      const all = sortedRuns(getRuns());
       if (all.length === 0) {
-        ctx.ui.notify("No workflows found. Use /workflow <name> to start one.", "info");
+        ctx.ui.notify("No workflows in current session.", "info");
         return;
       }
 
-      // Sort: running/paused first, then by startedAt descending
-      const statusOrder: Record<string, number> = { running: 0, paused: 1, completed: 2, failed: 3 };
-      all.sort((a, b) => {
-        const sa = statusOrder[a.status] ?? 9;
-        const sb = statusOrder[b.status] ?? 9;
-        if (sa !== sb) return sa - sb;
-        const ta = a.startedAt ? new Date(a.startedAt).getTime() : 0;
-        const tb = b.startedAt ? new Date(b.startedAt).getTime() : 0;
-        return tb - ta;
-      });
-
-      // Single instance — enter directly
+ // 单 run 直开
       if (all.length === 1) {
-        await createWorkflowsView(orch, all[0].runId, ctx.ui.theme, ctx);
+        await openView(all[0], ctx.ui.theme, ctx, deps);
         return;
       }
 
-      // Multiple — SelectList
+ // 多 run——select 选择
       const entries = all.map(
-        (s) => `${s.name} [${s.status}] (${s.runId.slice(0, RUNID_SHORT_LENGTH)}...)`,
+        (r) => `${r.spec.scriptName} [${r.state.status}] (${r.runId.slice(0, RUNID_SHORT)})`,
       );
       const selected = await ctx.ui.select("Select workflow:", entries);
       if (!selected) return;
-
       const idx = entries.indexOf(selected);
       if (idx === -1) return;
-
-      await createWorkflowsView(orch, all[idx].runId, ctx.ui.theme, ctx);
+      await openView(all[idx], ctx.ui.theme, ctx, deps);
     },
   });
 }
 
-// ── Shared workflow file operations ──────────────────────────────
-
-const TMP_DIR = resolve(".pi/workflows/.tmp");
-const SAVED_DIR = resolve(".pi/workflows");
+// ── Helpers ──────────────────────────────────────────────────
 
 /**
- * Save a temporary workflow to the saved directory.
- * Moves .pi/workflows/.tmp/{name}.js → .pi/workflows/{newName||name}.js
+ * 取 runs 按 status（running/paused 优先）+ startedAt 倒序排序。
+ * 复用 main 的 UX 顺序（活跃态在前，新的在前）。
  */
-async function saveWorkflow(tmpName: string, newName?: string): Promise<string> {
-  const workflows = await loadWorkflows();
-  const target = workflows.find(
-    (wf) => wf.source === "tmp" && wf.name === tmpName,
-  );
-  if (!target) {
-    throw new Error(`Temporary workflow '${tmpName}' not found`);
-  }
-
-  const destName = newName ?? tmpName;
-  const destPath = resolve(SAVED_DIR, `${destName}.js`);
-
-  // Check destination exists (reject, not auto-rename)
-  if (existsSync(destPath)) {
-    throw new Error(`'${destName}' already exists in saved workflows. Use --as to save with a different name.`);
-  }
-
-  mkdirSync(SAVED_DIR, { recursive: true });
-
-  renameSync(target.path, destPath);
-  return `Saved '${tmpName}' → '${destName}' (${destPath})`;
+function sortedRuns(runs: Map<string, WorkflowRun>): WorkflowRun[] {
+  const arr = Array.from(runs.values());
+  return arr.sort((a, b) => {
+    const sa = STATUS_ORDER[a.state.status] ?? UNKNOWN_STATUS_WEIGHT;
+    const sb = STATUS_ORDER[b.state.status] ?? UNKNOWN_STATUS_WEIGHT;
+    if (sa !== sb) return sa - sb;
+    const ta = a.meta.startedAt ? new Date(a.meta.startedAt).getTime() : 0;
+    const tb = b.meta.startedAt ? new Date(b.meta.startedAt).getTime() : 0;
+    return tb - ta;
+  });
 }
 
 /**
- * Delete a workflow script file.
- * Rejects if the workflow is currently running.
+ * 打开 WorkflowsView（三级导航 TUI），注入 lifecycle ViewActions。
+ *
+ * ViewActions 通过 deps 调 lifecycle（pause/resume/abort），与 view 解耦——
+ * view 单测可注入 mock actions（见 workflows-view.test.ts）。
  */
-export function deleteWorkflow(
-  name: string,
-  isRunning: (name: string) => boolean,
-): string {
-  if (isRunning(name)) {
-    throw new Error(`Cannot delete '${name}': workflow is currently running. Abort it first.`);
-  }
-
-  const candidates = [
-    resolve(TMP_DIR, `${name}.js`),
-    resolve(SAVED_DIR, `${name}.js`),
-  ];
-
-  for (const filePath of candidates) {
-    if (existsSync(filePath)) {
-      unlinkSync(filePath);
-      return `Deleted workflow '${name}' (${filePath})`;
-    }
-  }
-
-  throw new Error(`Workflow file '${name}' not found`);
+async function openView(
+  run: WorkflowRun,
+  theme: Theme,
+  ctx: ExtensionCommandContext,
+  deps: LauncherDeps,
+): Promise<void> {
+  const actions: ViewActions = {
+    pause: (runId: string) => pauseRun(runId, deps),
+    resume: (runId: string) => resumeRun(runId, deps),
+    abort: (runId: string) => abortRun(runId, deps),
+  };
+  await createWorkflowsView(run, theme, ctx, actions);
 }

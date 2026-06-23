@@ -536,7 +536,7 @@ export class SubagentService {
 // 导致单例分裂。场景：其它扩展 import "@zhushanwen/pi-subagents" 与本扩展被 Pi host
 // 直接加载，若 jiti 缓存 key 用路径字符串（非 realpath），两份 subagent-service.ts 各持
 // 一个 _service，setSubagentService 写 A、getSubagentService 读 B(null)。globalThis 跨所有模块实例共享，彻底消除。
-// 详见 docs/pi-extension-standards.md §7.5。
+// 详见 docs/standards.md §7.5。
 const SERVICE_SLOT_KEY = Symbol.for("@zhushanwen/pi-subagents.service");
 
 type ServiceSlot = { current: SubagentService | null };

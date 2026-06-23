@@ -1,16 +1,26 @@
 /**
- * Agent options resolver — resolves agent name and schema to system prompt files.
+ * Agent options resolver — resolves agent name / skill / schema to system
+ * prompt files + env vars on every dispatch (BL-1).
  *
- * Extracted from orchestrator.ts to keep file size under 1000 lines.
+ * BL-1：解析 workflow 脚本里 `agent({agent,skill,schema})` 的 inline override，
+ * 否则 pi 子进程只收到原始 prompt，没有 --append-system-prompt / --skill /
+ * PI_WORKFLOW_SCHEMA。AgentCallOpts 从 engine/models/types 引入。
+ *
+ * 调用方：engine/error-recovery.ts dispatchAgentCall（每次 agent-call 消息）。
+ * - agent → AgentRegistry.resolve → systemPrompt 写临时文件 → systemPromptFiles（--append-system-prompt）
+ * - skill → resolveSkillPath → skillPath（--skill）
+ * - schema → 结构化输出指令写临时文件 → systemPromptFiles + schemaEnv（PI_WORKFLOW_SCHEMA）
+ *
+ * 临时文件在 activeTempFiles 集合注册，session_shutdown 时由 cleanupAllTempFiles 统一回收。
  */
 
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 
+import type { AgentCallOpts } from "../engine/models/types.js";
 import { AgentRegistry } from "./agent-discovery.js";
-import type { AgentCallOpts } from "./agent-pool.js";
+import { resolveSkillPath } from "./skill-discovery.js";
 
 const UUID_SLICE_LEN = 8;
 
@@ -20,13 +30,14 @@ export interface ResolveResult {
 }
 
 /**
- * Resolve agent name and schema into systemPromptFiles.
+ * Resolve agent name and schema into systemPromptFiles + skillPath + schemaEnv.
  *
  * - Agent systemPrompt -> temp file via --append-system-prompt
- * - Schema JSON -> temp file with structured-output instruction
+ * - Skill name -> resolved SKILL.md dir path via --skill
+ * - Schema JSON -> temp file with structured-output instruction + PI_WORKFLOW_SCHEMA env
  *
- * Returns the enriched opts and any temp files created.
- * Caller is responsible for cleaning up files via cleanupTempFile().
+ * Returns the enriched opts and any temp files created (registered in activeTempFiles).
+ * Caller is responsible for cleaning up files via cleanupAllTempFiles (session-scoped).
  */
 export function resolveAgentOpts(
   opts: AgentCallOpts,
@@ -36,7 +47,7 @@ export function resolveAgentOpts(
 ): ResolveResult {
   const systemPromptFiles: string[] = [];
 
-  // Resolve agent system prompt
+ // Resolve agent system prompt
   if (opts.agent) {
     const discovered = agentRegistry.resolve(opts.agent);
     if (!discovered) return { opts, error: `Agent not found: ${opts.agent}` };
@@ -59,7 +70,7 @@ export function resolveAgentOpts(
     opts = { ...opts, model: opts.model || discovered.model };
   }
 
-  // Resolve skill name to SKILL.md path
+ // Resolve skill name to SKILL.md path
   if (opts.skill) {
     const skillPath = resolveSkillPath(opts.skill);
     if (!skillPath) {
@@ -68,8 +79,8 @@ export function resolveAgentOpts(
     opts = { ...opts, skillPath };
   }
 
-  // Inject schema as structured-output instruction via --append-system-prompt
-  // and set environment variable for conditional tool + hook activation.
+ // Inject schema as structured-output instruction via --append-system-prompt
+ // and set environment variable for conditional tool + hook activation.
   if (opts.schema) {
     try {
       const tmpDir = path.join(sessionDir, "workflow-tmp");
@@ -95,7 +106,7 @@ export function resolveAgentOpts(
       activeTempFiles.add(tmpFile);
       systemPromptFiles.push(tmpFile);
 
-      // Set env var for structured-output extension to activate tool + hook
+ // Set env var for structured-output extension to activate tool + hook
       opts = { ...opts, schemaEnv: schemaJson };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -108,66 +119,10 @@ export function resolveAgentOpts(
   };
 }
 
-/** Remove a temp file and unregister it from the active set. */
-export function cleanupTempFile(filePath: string, activeTempFiles: Set<string>): void {
-  try { fs.unlinkSync(filePath); } catch { /* already deleted */ void undefined; }
-  activeTempFiles.delete(filePath);
-}
-
-/** Remove all remaining active temp files. */
+/** Remove all remaining active temp files (called from session_shutdown). */
 export function cleanupAllTempFiles(activeTempFiles: Set<string>): void {
   for (const fp of activeTempFiles) {
     try { fs.unlinkSync(fp); } catch { /* already deleted */ void undefined; }
   }
   activeTempFiles.clear();
-}
-
-// ── Skill path resolution (with npm dir cache) ─────────────────────
-
-const skillCandidatesCache = new Map<string, string[]>();
-
-/** List npm skill candidate paths — cached per npmSkillsDir. */
-function getNpmSkillCandidates(npmSkillsDir: string): string[] {
-  const cached = skillCandidatesCache.get(npmSkillsDir);
-  if (cached) return cached;
-
-  const candidates: string[] = [];
-  try {
-    for (const pkg of fs.readdirSync(npmSkillsDir)) {
-      candidates.push(path.join(npmSkillsDir, pkg, "skills"));
-    }
-  } catch { /* npm dir not found */ }
-  skillCandidatesCache.set(npmSkillsDir, candidates);
-  return candidates;
-}
-
-/**
- * Resolve a skill name to its directory or SKILL.md path.
- * Search order:
- *   1. Project-level: .agents/skills/<name>/
- *   2. Global: ~/.pi/agent/skills/<name>/
- *   3. npm packages: ~/.pi/agent/npm/node_modules/<pkg>/skills/<name>/
- * Returns the directory path if found, undefined otherwise.
- */
-export function resolveSkillPath(skillName: string): string | undefined {
-  const candidates = [
-    // Project-level
-    path.resolve(process.cwd(), ".agents/skills", skillName),
-    // Global user skills
-    path.join(os.homedir(), ".pi/agent/skills", skillName),
-  ];
-
-  // npm package skills (cached)
-  const npmSkillsDir = path.join(os.homedir(), ".pi/agent/npm/node_modules");
-  for (const pkgSkillsBase of getNpmSkillCandidates(npmSkillsDir)) {
-    candidates.push(path.join(pkgSkillsBase, skillName));
-  }
-
-  for (const dir of candidates) {
-    if (fs.existsSync(dir)) {
-      return dir;
-    }
-  }
-
-  return undefined;
 }

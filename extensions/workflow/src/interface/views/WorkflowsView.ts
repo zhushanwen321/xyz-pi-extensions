@@ -1,493 +1,557 @@
 /**
  * Workflow Fullscreen TUI View — Three-level navigation.
  *
- * Level 0 (Phase):
- *   Left = phase list, Right = agent overview in selected phase
- *   ↑↓ navigate phases · Enter drill into agent list · esc exit
+ * Level 0 (Phase): 左 phase list，右 agent overview
+ * Level 1 (Agent): 左 agent list，右 agent summary
+ * Level 2 (Detail): 完整 agent 执行详情
  *
- * Level 1 (Agent):
- *   Left = agent list in current phase, Right = selected agent summary
- *   ↑↓ navigate agents · Enter drill into detail · esc back to phase
+ * 读 WorkflowRun 聚合根；移除 restart（D-9）。新 engine 无 orchestrator 事件层
+ * （AC-3），view 改用内部轮询（setInterval TICK_MS）从 run.state.trace 实时读 +
+ * requestRender。
  *
- * Level 2 (Detail):
- *   Full agent execution detail (prompt, activity, outcome)
- *   ⏎ expand/collapse prompt · esc back to agent list · s save trace
+ * SDK 集成：ctx.ui.custom factory 返回 Component{render(width), handleInput(data),
+ * invalidate}，第二参数 `{overlay:true, overlayOptions}`（全屏 overlay，对齐 main +
+ * subagents 扩展 + docs/pi-tui-development-guide.md §3.2）。按键经
+ * matchesKey(data, KeyId) 解析（兼容 xterm/iTerm/kitty 转义序列差异）。
+ * escape/ctrl+c 在 keybindings 同映射到 exit。
+ *
+ * 关键实现点：(a) overlay 第二参数必须传，否则 view 不全屏；(b) trace 必须 per-render
+ * 重读（run.state.trace.toArray 返回内部数组引用，trace.append 后下次 render 可见），
+ * 配 1s tick invalidate + requestRender 保证运行中刷新；(c) 's' save 模式无条件可用
+ * （saveWorkflow 内部对非 tmp workflow 返回错误消息）；(d) pause/resume/abort 失败时
+ * notify 反馈，不静默吞。
  */
 
-import { copyFileSync, existsSync, mkdirSync, promises as fsPromises } from "node:fs";
+import { promises as fsPromises } from "node:fs";
 import { homedir } from "node:os";
-import { join as pathJoin, resolve } from "node:path";
+import { join as pathJoin } from "node:path";
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { matchesKey, Key, truncateToWidth } from "@mariozechner/pi-tui";
-
-import type { WorkflowOrchestrator } from "../../orchestrator.js";
-import type { WorkflowInstance } from "../../domain/state.js";
+import { Key, matchesKey } from "@mariozechner/pi-tui";
 
 import {
-  type PhaseGroup,
-  type ThemeLike,
+  getAllToolCalls,
+  projectLiveProgress,
+} from "../../engine/live/execution-record.js";
+import type { ExecutionTraceNode } from "../../engine/models/types.js";
+import type { WorkflowRun } from "../../engine/models/workflow-run.js";
+import { saveWorkflow } from "../../infra/workflow-files.js";
+import {
+  BOX_BORDER_CHARS,
+  BUDGET_TOKENS_DIVISOR,
   buildPhaseGroups,
   ELLIPSIS,
   formatActivityLine,
+  formatAgentOneLiner,
   formatElapsed,
+  formatElapsedSeconds,
   formatPhaseLine,
   formatStatusBadge,
-  formatTokenStat,
-  isTerminalStatus,
-  OUTPUT_TRUNCATE_BYTES,
   padVisible,
-  PROMPT_FOLD_LINES,
   SIDEBAR_WIDTH,
   statusDotStr,
+  TERM_ROWS_FALLBACK,
+  type ThemeLike,
   visibleLen,
 } from "./format.js";
 
-const MAX_TOOL_CALLS_DISPLAY = 3;
+// L2 详情内容构建 + 滚动按键（纯函数）抽到 detail-content.ts；此处 re-export 保持
+// view 的对外 API 不变（测试仍从 WorkflowsView 导入）。
+export {
+  buildDetailContent,
+  detailContentLength,
+  type DetailKeyResult,
+  type DetailScrollContext,
+  processDetailKey,
+} from "./detail-content.js";
+import { buildDetailContent, detailContentLength, type DetailScrollContext,processDetailKey } from "./detail-content.js";
 
-function statusLabel(status: string, theme: ThemeLike): string {
-  switch (status) {
-    case "completed": return theme.fg("success", status);
-    case "running": return theme.fg("warning", status);
-    case "failed": return theme.fg("error", status);
-    default: return theme.fg("muted", status);
-  }
+// ── TUI layout constants ──────────────────────────────────────
+
+const NAV_LEVEL_DETAIL = 2;
+type NavLevel = 0 | 1 | typeof NAV_LEVEL_DETAIL;
+const MIN_BODY_LINES = 3;
+const BODY_HEIGHT_NUMERATOR = 2;
+const BODY_HEIGHT_DENOMINATOR = 3;
+/** save overlay 居中计算的除数（÷2 居中）。 */
+const OVERLAY_CENTER_DIVISOR = 2;
+
+/** 轮询间隔：engine 无事件推送，view 自轮询 trace 变化。
+ *  200ms 对齐 subagents spinner 节奏，保证 agent 运行中 live 进度（tool calls/activity）流式可见。 */
+const TICK_MS = 200;
+
+/** 可打印 ASCII 字符下限（用于 save overlay 输入过滤）。 */
+const PRINTABLE_CHAR_MIN = 32;
+
+// ── Minimal TUI duck-types（避免直接 import TUI/KeybindingsManager 类型 ──
+// 共享类型 fallback shared/types/mariozechner/index.d.ts 不导出 TUI 类，
+// workspace 跨包 typecheck 会报 "no exported member 'TUI'"。
+// 此处用结构化接口替代——只声明 view 实际用到的成员（requestRender + terminal）。
+
+interface TuiLike {
+  terminal: { columns: number; rows: number };
+  requestRender(): void;
+}
+
+// ── View actions ──────────────────────────────────────────────
+
+/**
+ * view 可触发的 lifecycle 操作（由调用方注入，避免 view 直接依赖 Engine 函数）。
+ * 每个 action 接收 runId；调用方绑到 pauseRun/resumeRun/abortRun。
+ */
+export interface ViewActions {
+  pause: (runId: string) => Promise<void>;
+  resume: (runId: string) => Promise<void>;
+  abort: (runId: string) => Promise<void>;
 }
 
 // ── View state ────────────────────────────────────────────────
 
 interface ViewState {
-  level: 0 | 1 | 2;
+  level: NavLevel;
   phaseIdx: number;
   agentIdx: number;
   promptExpanded: boolean;
   disposed: boolean;
-  // Save mode
+ // ── Save mode ──
   saveMode: boolean;
-  saveScope: "project" | "user";
   saveInputValue: string;
-  saveMessage: string;    // inline feedback in save overlay
-  saveMsgOk: boolean;     // true = success style, false = error style
+  saveMessage: string;
+  saveMsgOk: boolean;
+ // ── L2 详情滚动 ──
+  /** 右侧 detail 当前滚动 offset（render 路径 clamp 收敛）。 */
+  detailScrollOffset: number;
+  /** running 态是否自动钉底部（用户 PgUp 后置 false，End/PgDn 到底恢复 true）。 */
+  followTail: boolean;
+}
+
+function createInitialState(): ViewState {
+  return {
+    level: 0,
+    phaseIdx: 0,
+    agentIdx: 0,
+    promptExpanded: false,
+    disposed: false,
+    saveMode: false,
+    saveInputValue: "",
+    saveMessage: "",
+    saveMsgOk: false,
+    detailScrollOffset: 0,
+    followTail: true, // 默认钉底（对齐 subagents 进详情即底部对齐）
+  };
 }
 
 // ── View factory ──────────────────────────────────────────────
 
+/**
+ * 创建 workflow fullscreen view。
+ *
+ * @param run WorkflowRun 聚合根（读 state.status/spec/trace/meta）
+ * @param theme ThemeLike（避免直接 import Pi runtime）
+ * @param ctx ExtensionContext（调 ui.custom 渲染 + ui.notify 错误反馈）
+ * @param actions lifecycle 操作（pause/resume/abort），由调用方注入
+ */
 export function createWorkflowsView(
-  orchestrator: WorkflowOrchestrator,
-  runId: string,
+  run: WorkflowRun,
   theme: ThemeLike,
   ctx: ExtensionContext,
+  actions: ViewActions,
 ): Promise<void> {
-  return ctx.ui.custom<void>((tui: unknown, _theme: unknown, _kb: unknown, done: () => void) => {
-    const instance = orchestrator.getInstance(runId);
-    if (!instance) {
-      ctx.ui.notify("Workflow not found", "warning");
-      done();
-      return { render: () => [], invalidate() {}, handleInput() {} };
+  return ctx.ui.custom<void>((_tui: unknown, _t: unknown, _kb: unknown, done: (result: void) => void) => {
+    const state = createInitialState();
+    const tui = _tui as TuiLike;
+
+    function currentPhaseAgents() {
+      const live = buildPhaseGroups([...run.state.trace.toArray()]);
+      const pg = live[state.phaseIdx];
+      return pg ? pg.nodes : [];
     }
 
-    const initialState: ViewState = {
-      level: 0,
-      phaseIdx: 0,
-      agentIdx: 0,
-      promptExpanded: false,
-      disposed: false,
-      saveMode: false,
-      saveScope: "project",
-      saveInputValue: "",
-      saveMessage: "",
-      saveMsgOk: false,
-    };
-    const state = initialState;
+    function clampSelections() {
+      const live = buildPhaseGroups([...run.state.trace.toArray()]);
+      if (state.phaseIdx >= live.length) state.phaseIdx = Math.max(0, live.length - 1);
+      const agents = currentPhaseAgents();
+      if (state.agentIdx >= agents.length) state.agentIdx = Math.max(0, agents.length - 1);
+    }
 
+ // 渲染缓存：与 main 同构。width 变化或交互后 invalidate，避免每帧重算。
     const cache = { width: undefined as number | undefined, lines: undefined as string[] | undefined };
-    const tuiAny = tui as { requestRender(): void; terminal: { rows: number } };
-    const requestRender = () => tuiAny.requestRender();
+    const requestRender = () => tui.requestRender();
 
-    const unsubscribe = orchestrator.events.subscribe(runId, () => {
-      if (!state.disposed) requestRender();
-    });
+ // ── 轮询 tick（缺陷 #1+#5 修复）：engine 无事件推送，view 自轮询 trace 变化 ──
+ // 对齐 subagents list-view 的 setInterval 做法。TICK_MS=1s 对 trace 低频更新够用。
+    const tick = setInterval(() => {
+      if (state.disposed) return;
+      cache.width = undefined;
+      cache.lines = undefined;
+      requestRender();
+    }, TICK_MS);
 
     const wrappedDone = () => {
       if (state.disposed) return;
       state.disposed = true;
-      unsubscribe();
+      clearInterval(tick);
       done();
     };
 
-    const component = {
-      invalidate(): void { cache.width = undefined; cache.lines = undefined; },
+ // ── L2 详情滚动辅助 ──
+    /** 安全读 terminal.rows（duck-type 失败兜底，对齐 subagents termRows）。 */
+    function termRows(): number {
+      const rows = tui.terminal?.rows;
+      return typeof rows === "number" && rows > 0 ? rows : TERM_ROWS_FALLBACK;
+    }
+    /** L2 右侧 detail viewport 高度（与 renderLayout 的 viewH 同源）。 */
+    function detailViewportHeight(): number {
+      return Math.max(MIN_BODY_LINES, bodyHeight(termRows()));
+    }
+    /** 重置 detail 滚动到底部对齐（切 agent / 进 L2 时调用）。 */
+    function resetDetailScroll(): void {
+      state.detailScrollOffset = Number.MAX_SAFE_INTEGER; // render clamp 收敛到 max
+      state.followTail = true;
+    }
+
+ // ── Key handling（SDK Component.handleInput 模式，对齐 main） ──
+ // matchesKey(data, KeyId) 处理终端转义序列差异（xterm/iTerm/kitty），
+ // 优于手写 \x1b[A 等原始序列。escape/ctrl+c 在 keybindings 里同映射到 exit。
+    function handleInput(data: string): void {
+      if (state.disposed) return;
+
+ // ── Save mode 拦截（缺陷 #3 恢复）── save overlay 活跃时，所有键走 save 流程
+      if (state.saveMode) {
+        handleSaveModeInput(data);
+        return;
+      }
+
+ // Escape / ctrl+c: level back or exit
+      if (matchesKey(data, Key.escape)) {
+        if (state.level === 0) {
+          wrappedDone();
+          return;
+        }
+        state.level = (state.level - 1) as NavLevel;
+        state.promptExpanded = false;
+        cache.width = undefined;
+        requestRender();
+        return;
+      }
+
+ // ── L2 详情滚动（PgUp/PgDn/Home/End，对齐 subagents processKey 阶段 2） ──
+ // up/down 在 L2 用于切 agent，故滚动键独立于此；未命中则落到下面的 up/down/enter。
+      if (state.level === NAV_LEVEL_DETAIL) {
+        const node = currentPhaseAgents()[state.agentIdx];
+        if (node) {
+          const detailCtx: DetailScrollContext = {
+            viewportHeight: detailViewportHeight(),
+            contentLines: detailContentLength(node, state, run, theme),
+            isRunning: node.status === "running",
+          };
+          const r = processDetailKey(
+            data,
+            { scrollOffset: state.detailScrollOffset, followTail: state.followTail },
+            detailCtx,
+          );
+          if (r.handled) {
+            state.detailScrollOffset = r.scrollOffset;
+            state.followTail = r.followTail;
+            cache.width = undefined;
+            requestRender();
+            return;
+          }
+        }
+      }
+
+ // Navigation: up/down
+      if (matchesKey(data, Key.up)) {
+        if (state.level === 0 && state.phaseIdx > 0) {
+          state.phaseIdx--;
+          state.agentIdx = 0;
+        } else if (state.level === 1 && state.agentIdx > 0) {
+          state.agentIdx--;
+        } else if (state.level === NAV_LEVEL_DETAIL && state.agentIdx > 0) {
+          state.agentIdx--;
+          state.promptExpanded = false;
+          resetDetailScroll(); // 切 agent → 底部对齐（对齐 subagents 进详情即钉底）
+        }
+        cache.width = undefined;
+        requestRender();
+        return;
+      }
+      if (matchesKey(data, Key.down)) {
+        if (state.level === 0) {
+          const live = buildPhaseGroups([...run.state.trace.toArray()]);
+          if (state.phaseIdx < live.length - 1) {
+            state.phaseIdx++;
+            state.agentIdx = 0;
+          }
+        } else if (state.level === 1) {
+          const agents = currentPhaseAgents();
+          if (state.agentIdx < agents.length - 1) state.agentIdx++;
+        } else if (state.level === NAV_LEVEL_DETAIL) {
+          const agents = currentPhaseAgents();
+          if (state.agentIdx < agents.length - 1) {
+            state.agentIdx++;
+            state.promptExpanded = false;
+            resetDetailScroll(); // 切 agent → 底部对齐
+          }
+        }
+        cache.width = undefined;
+        requestRender();
+        return;
+      }
+
+ // Enter: drill down (L0→L1→L2) or toggle prompt (L2)
+      if (matchesKey(data, Key.enter)) {
+        if (state.level === 0 && currentPhaseAgents().length > 0) {
+          state.level = 1;
+          state.agentIdx = 0;
+        } else if (state.level === 1) {
+          state.level = NAV_LEVEL_DETAIL;
+          state.promptExpanded = false;
+          resetDetailScroll(); // 进 L2 → 底部对齐
+        } else if (state.level === NAV_LEVEL_DETAIL) {
+          state.promptExpanded = !state.promptExpanded;
+          // 展开/折叠改变内容长度，render 路径 clamp 收敛；保持当前锚点语义
+        }
+        cache.width = undefined;
+        requestRender();
+        return;
+      }
+
+ // ── Lifecycle shortcuts (no restart per D-9) ──
+      if (data === "p") {
+        if (run.state.status === "running") {
+          void actions.pause(run.runId)
+            .then(() => { cache.width = undefined; requestRender(); })
+            .catch((err: Error) => ctx.ui.notify(`Pause failed: ${err.message}`, "error"));
+        } else if (run.state.status === "paused") {
+          void actions.resume(run.runId)
+            .then(() => { cache.width = undefined; requestRender(); })
+            .catch((err: Error) => ctx.ui.notify(`Resume failed: ${err.message}`, "error"));
+        }
+        return;
+      }
+      if (data === "a") {
+        if (run.state.status === "running" || run.state.status === "paused") {
+          void actions.abort(run.runId)
+            .then(() => { cache.width = undefined; requestRender(); })
+            .catch((err: Error) => ctx.ui.notify(`Abort failed: ${err.message}`, "error"));
+        }
+        return;
+      }
+
+ // ── Save shortcut（对齐 main：总是进入 save mode，非 tmp 时 saveWorkflow 报错） ──
+      if (data === "s") {
+        state.saveMode = true;
+        state.saveInputValue = run.spec.scriptName;
+        state.saveMessage = "";
+        state.saveMsgOk = false;
+        cache.width = undefined;
+        requestRender();
+        return;
+      }
+
+ // ── Trace export（对齐 main 的 S 键）：导出完整 trace 到 Markdown 文件 ──
+      if (data === "S") {
+        saveTraceToFile(run, ctx);
+        return;
+      }
+    }
+
+ /** save overlay 内的按键处理（esc 取消 / enter 保存 / backspace 删除 / 可打印追加）。 */
+    function handleSaveModeInput(data: string): void {
+ // Escape → 退出 save 模式
+      if (matchesKey(data, Key.escape)) {
+        state.saveMode = false;
+        cache.width = undefined;
+        requestRender();
+        return;
+      }
+ // Enter → 保存
+      if (data === "\r" || data === "\n") {
+        const name = state.saveInputValue.trim();
+        if (!name) {
+          state.saveMessage = "Please enter a name";
+          state.saveMsgOk = false;
+          cache.width = undefined;
+          requestRender();
+          return;
+        }
+        void saveWorkflow(run.spec.scriptName, name)
+          .then((msg) => {
+            state.saveMessage = msg;
+            state.saveMsgOk = true;
+            state.saveMode = false;
+            cache.width = undefined;
+            requestRender();
+          })
+          .catch((err: Error) => {
+            state.saveMessage = err.message;
+            state.saveMsgOk = false;
+            cache.width = undefined;
+            requestRender();
+          });
+        return;
+      }
+ // Backspace → 删除最后一个字符
+      if (data === "\x7f" || data === "\b") {
+        state.saveMessage = "";
+        if (state.saveInputValue.length > 0) {
+          state.saveInputValue = state.saveInputValue.slice(0, -1);
+        }
+        cache.width = undefined;
+        requestRender();
+        return;
+      }
+ // 可打印字符 → 追加
+      if (data.length === 1 && data.charCodeAt(0) >= PRINTABLE_CHAR_MIN) {
+        state.saveMessage = "";
+        state.saveInputValue += data;
+        cache.width = undefined;
+        requestRender();
+        return;
+      }
+ // 屏蔽其他键（↑↓ 等）
+    }
+
+ // ── Component（SDK 规范：render(width) → string[] + handleInput + invalidate） ──
+    return {
+      invalidate(): void {
+        cache.width = undefined;
+        cache.lines = undefined;
+      },
       render(width: number): string[] {
         if (cache.lines && cache.width === width) return cache.lines;
-        const inst = orchestrator.getInstance(runId);
-        const raw = inst ? renderView(inst, theme, width, state, tuiAny.terminal.rows) : ["(workflow not found)"];
-        const termHeight = tuiAny.terminal.rows;
-        const lines = raw.length < termHeight
-          ? [...raw, ...Array.from({ length: termHeight - raw.length }, () => "")]
+        clampSelections();
+        const height = tui.terminal.rows;
+ // 缺陷 #1 修复：每次 render 从 run.state.trace 实时读（toArray 返回内部数组引用，
+ // 后续 trace.append 会反映到 view），不再用 factory 时的冻结快照。
+        const liveGroups = buildPhaseGroups([...run.state.trace.toArray()]);
+        const raw = renderLayout(run, state, liveGroups, theme, width, height);
+ // Pad to terminal height so the overlay fills the screen (matches main 行为）
+        const lines = raw.length < height
+          ? [...raw, ...Array.from({ length: height - raw.length }, () => "")]
           : raw;
         cache.width = width;
         cache.lines = lines;
         return lines;
       },
-      handleInput(data: string): void {
-        if (state.disposed) return;
-        if (processKey(data, orchestrator, runId, state, ctx, wrappedDone, cache, requestRender)) {
-          cache.width = undefined;
-          cache.lines = undefined;
-          requestRender();
-        }
-      },
+      handleInput,
     };
-
-    return component;
   }, {
+ // 缺陷 #2 修复：overlay 第二参数（对齐 main + subagents + pi-tui guide §3.2）
     overlay: true,
     overlayOptions: { anchor: "center" as const, width: "100%", maxHeight: "100%", margin: 0 },
   });
 }
 
-// ── Keyboard ──────────────────────────────────────────────────
+// ── Layout rendering（box-drawing 框架，对齐 main）──────────────
+//
+// 视觉结构（与 main 一致）：
+// ╭───────────────────────────────────────────────────╮
+// │ name (bold) ● status · x/y · Ns │ ← header
+// ├───────────────────────────────────────────────────┤
+// │ Phases │ title · N agents │
+// │ ──────────────── │ ────────────────── │ ← body
+// │ ❯ ● 1 build 0/2 │ ● builder model ... │
+// │ ● 2 deploy 0/1 │ ● tester model ... │
+// │ (pad) │ (pad) │
+// ╰───────────────────────────────────────────────────╯
+// ↑↓ phase · ⏎ enter · p pause · a abort · s save · esc back ← footer (框外)
+//
+// body = sidebar(SIDEBAR_WIDTH) │ main(rest)
+// save overlay 活跃时居中覆盖 body。
 
-function processGlobalActions(
-  data: string,
-  orchestrator: WorkflowOrchestrator,
-  runId: string,
-  instance: WorkflowInstance,
-  ctx: ExtensionContext,
+function bodyHeight(screenHeight: number): number {
+ // header(2: name+desc/blank) + border(1) + body + border(1) + footer(1)
+  const HEADER_FOOTER_LINES = 6;
+  return Math.max(MIN_BODY_LINES, Math.floor((screenHeight * BODY_HEIGHT_NUMERATOR) / BODY_HEIGHT_DENOMINATOR) - HEADER_FOOTER_LINES);
+}
+
+const BUDGET_COST_DECIMALS = 4;
+
+function renderLayout(
+  run: WorkflowRun,
   state: ViewState,
-  done: () => void,
-): boolean | undefined {
-  if (data === "x") {
-    handleAbort(orchestrator, runId, instance, ctx);
-    return false;
-  }
-  if (data === "p") {
-    handlePauseResume(orchestrator, runId, instance, ctx);
-    return false;
-  }
-  if (data === "r") {
-    if (isTerminalStatus(instance.status) || instance.status === "paused") {
-      handleRestart(orchestrator, runId, instance, ctx, state, done);
-    }
-    return false;
-  }
-  if (data === "s") {
-    state.saveMode = true;
-    state.saveInputValue = instance.name;
-    state.saveScope = "project";
-    state.saveMessage = "";
-    state.saveMsgOk = false;
-    return true;
-  }
-  if (data === "S") {
-    saveTraceToFile(instance, ctx);
-    return false;
-  }
-  return undefined;
-}
-
-function processNavigation(
-  data: string,
-  phases: PhaseGroup[],
-  state: ViewState,
-): boolean {
-  if (phases.length === 0) return false;
-
-  // Level 2 (Detail)
-  if (state.level === 2) {
-    if (matchesKey(data, Key.up)) {
-      if (state.agentIdx > 0) { state.agentIdx--; state.promptExpanded = false; return true; }
-      return false;
-    }
-    if (matchesKey(data, Key.down)) {
-      const agents = phases[state.phaseIdx]?.nodes ?? [];
-      if (state.agentIdx < agents.length - 1) { state.agentIdx++; state.promptExpanded = false; return true; }
-      return false;
-    }
-    if (data === "\r" || data === "\n" || data === "I") {
-      state.promptExpanded = !state.promptExpanded;
-      return true;
-    }
-    return false;
-  }
-
-  // Level 0 & 1: up/down navigation
-  if (matchesKey(data, Key.up)) {
-    if (state.level === 0 && state.phaseIdx > 0) {
-      state.phaseIdx--;
-      state.agentIdx = 0;
-      return true;
-    }
-    if (state.level === 1 && state.agentIdx > 0) {
-      state.agentIdx--;
-      return true;
-    }
-    return false;
-  }
-
-  if (matchesKey(data, Key.down)) {
-    if (state.level === 0 && state.phaseIdx < phases.length - 1) {
-      state.phaseIdx++;
-      state.agentIdx = 0;
-      return true;
-    }
-    if (state.level === 1) {
-      const agents = phases[state.phaseIdx]?.nodes ?? [];
-      if (state.agentIdx < agents.length - 1) { state.agentIdx++; return true; }
-    }
-    return false;
-  }
-
-  // Enter: drill down
-  if (data === "\r" || data === "\n") {
-    if (state.level === 0) {
-      const agents = phases[state.phaseIdx]?.nodes ?? [];
-      if (agents.length > 0) { state.level = 1; state.agentIdx = 0; return true; }
-    } else if (state.level === 1) {
-      state.level = 2;
-      state.promptExpanded = false;
-      return true;
-    }
-    return false;
-  }
-
-  return false;
-}
-
-function processKey(
-  data: string,
-  orchestrator: WorkflowOrchestrator,
-  runId: string,
-  state: ViewState,
-  ctx: ExtensionContext,
-  done: () => void,
-  cache: { width: number | undefined; lines: string[] | undefined },
-  requestRender: () => void,
-): boolean {
-  const instance = orchestrator.getInstance(runId);
-  if (!instance) return false;
-  const phases = buildPhaseGroups(instance.trace);
-
-  // 1. Save mode intercept
-  if (state.saveMode) return processSaveModeInput(data, instance, state, ctx, cache, requestRender);
-
-  // 2. Escape: level back or exit
-  if (matchesKey(data, Key.escape)) {
-    if (state.level === 0) { done(); return false; }
-    state.level = (state.level - 1) as 0 | 1 | 2;
-    return true;
-  }
-
-  // 3. Global actions (x/p/r/s/S)
-  const globalResult = processGlobalActions(data, orchestrator, runId, instance, ctx, state, done);
-  if (globalResult !== undefined) return globalResult;
-
-  // 4. Navigation
-  return processNavigation(data, phases, state);
-}
-
-// ── Save mode input handling ──────────────────────────────────
-
-function processSaveModeInput(
-  data: string,
-  instance: WorkflowInstance,
-  state: ViewState,
-  ctx: ExtensionContext,
-  cache: { width: number | undefined; lines: string[] | undefined },
-  requestRender: () => void,
-): boolean {
-  // Escape → exit save mode
-  if (matchesKey(data, Key.escape)) {
-    state.saveMode = false;
-    return true;
-  }
-  // Tab → toggle scope
-  if (data === "\t") {
-    state.saveScope = state.saveScope === "project" ? "user" : "project";
-    return true;
-  }
-  // Enter → save
-  if (data === "\r" || data === "\n") {
-    if (!state.saveInputValue.trim()) {
-      state.saveMessage = "Please enter a name";
-      state.saveMsgOk = false;
-      return true;
-    }
-    void doSaveWorkflow(instance, state, ctx).then((result) => {
-      state.saveMessage = result.msg;
-      state.saveMsgOk = result.ok;
-      if (result.ok) {
-        state.saveMode = false;
-      }
-      cache.width = undefined;
-      cache.lines = undefined;
-      requestRender();
-    });
-    return false;
-  }
-  // Backspace → clear message on edit
-  if (data === "\x7f" || data === "\b") {
-    state.saveMessage = "";
-    if (state.saveInputValue.length > 0) {
-      state.saveInputValue = state.saveInputValue.slice(0, -1);
-      return true;
-    }
-    return false;
-  }
-  // Printable chars → clear message on edit
-  if (data.length === 1 && data.charCodeAt(0) >= 32) {
-    state.saveMessage = "";
-    state.saveInputValue += data;
-    return true;
-  }
-  // Block all other keys (↑↓ etc.) from falling through
-  return false;
-}
-
-// ── Save trace ────────────────────────────────────────────────
-
-function handlePauseResume(
-  orchestrator: WorkflowOrchestrator,
-  runId: string,
-  instance: WorkflowInstance,
-  ctx: ExtensionContext,
-): void {
-  if (isTerminalStatus(instance.status)) {
-    ctx.ui.notify(`Workflow already ${instance.status}`, "warning");
-    return;
-  }
-  const action = instance.status === "running" ? "pause" : "resume";
-  void (action === "pause" ? orchestrator.pause(runId) : orchestrator.resume(runId))
-    .then(() => ctx.ui.notify(`Workflow ${action}d`, "info"))
-    .catch((err: Error) => ctx.ui.notify(`${action} failed: ${err.message}`, "error"));
-}
-
-function saveTraceToFile(instance: WorkflowInstance, ctx: ExtensionContext): void {
-  const dir = pathJoin(homedir(), ".pi", "agent", "workflow-traces");
-  const filePath = pathJoin(dir, `${instance.runId}.md`);
+  phaseGroups: ReturnType<typeof buildPhaseGroups>,
+  theme: ThemeLike,
+  screenWidth: number,
+  screenHeight: number,
+): string[] {
   const lines: string[] = [];
-  lines.push(`# Workflow Trace: ${instance.name} (${instance.runId})`, "");
-  lines.push(`Status: ${instance.status} | Started: ${instance.startedAt ?? "-"} | Duration: ${formatElapsed(instance.startedAt)}`);
-  lines.push(`Budget: ${instance.budget.usedTokens}/${instance.budget.maxTokens ?? "unlimited"} tokens, $${instance.budget.usedCost.toFixed(4)}`, "");
-  const phases = buildPhaseGroups(instance.trace);
-  for (const pg of phases) {
-    lines.push(`## Phase: ${pg.name || "(unnamed)"}`, "");
-    for (const node of pg.nodes) {
-      lines.push(`### [#${node.stepIndex}] ${node.agent} — ${node.status}`);
-      lines.push(`- Model: ${node.model}`);
-      lines.push(`- Duration: ${formatElapsed(node.startedAt, node.completedAt ? new Date(node.completedAt).getTime() : Date.now())}`, "");
-      lines.push("**Prompt:**", node.task, "");
-      if (node.result?.toolCalls && node.result.toolCalls.length > 0) {
-        lines.push("**Activity:**");
-        for (const tc of node.result.toolCalls) lines.push(`- ${formatActivityLine(tc, 80)}`);
-        lines.push("");
-      }
-      lines.push("**Outcome:**");
-      if (node.status === "running") lines.push("Still running...");
-      else if (node.result?.error) lines.push(node.result.error);
-      else if (node.result?.content) lines.push(node.result.content.slice(0, 2000));
-      lines.push("");
+  const contentWidth = screenWidth - BOX_BORDER_CHARS;
+  const mainWidth = contentWidth - SIDEBAR_WIDTH - 1; // -1 for the │ divider
+
+  renderHeader(lines, run, theme, contentWidth);
+
+  const phase = phaseGroups[state.phaseIdx] ?? phaseGroups[0];
+  const agents = phase?.nodes ?? [];
+  const now = Date.now();
+
+  const bodyStart = lines.length;
+  if (state.level === 0) {
+    renderLevel0(lines, run, phaseGroups, state, theme, mainWidth, now);
+  } else if (state.level === 1) {
+    renderLevel1(lines, run, phaseGroups, state, theme, mainWidth, now);
+  } else {
+    // L2 详情走固定高度 viewport（右侧滚动），高度 = minBody（与 L0/L1 最小一致）
+    const viewH = Math.max(MIN_BODY_LINES, bodyHeight(screenHeight));
+    renderLevel2(lines, run, agents, state, theme, mainWidth, now, viewH);
+  }
+
+ // Pad body to min height（L2 已固定高度，此处对 L0/L1 补短）
+  const minBody = bodyHeight(screenHeight);
+  const emptyBodyLine = padVisible("", SIDEBAR_WIDTH) + "│" + padVisible("", mainWidth);
+  while (lines.length - bodyStart < minBody) {
+    lines.push(emptyBodyLine);
+  }
+
+ // Wrap body lines with │ borders + sidebar divider
+  for (let i = bodyStart; i < lines.length; i++) {
+    lines[i] = "│" + padVisible(lines[i], contentWidth) + "│";
+  }
+
+  lines.push("╰" + "─".repeat(contentWidth) + "╯");
+
+ // Save overlay（缺陷 #3）：居中覆盖 body
+  if (state.saveMode) {
+    const overlayLines = renderSaveOverlay(state, theme, screenWidth);
+    const overlayStart = Math.max(bodyStart, bodyStart + Math.floor((lines.length - bodyStart - overlayLines.length) / OVERLAY_CENTER_DIVISOR));
+    for (let i = 0; i < overlayLines.length && overlayStart + i < lines.length; i++) {
+      lines[overlayStart + i] = overlayLines[i];
     }
   }
-  fsPromises.mkdir(dir, { recursive: true })
-    .then(() => fsPromises.writeFile(filePath, lines.join("\n"), "utf8"))
-    .then(() => ctx.ui.notify(`Trace saved: ${filePath}`, "info"))
-    .catch((err: Error) => ctx.ui.notify(`Save failed: ${err.message}`, "error"));
+
+ // Footer（框外，对齐 main renderFooter）
+  renderFooter(lines, run, state, theme);
+  return lines;
 }
 
-function handleAbort(
-  orchestrator: WorkflowOrchestrator,
-  runId: string,
-  instance: WorkflowInstance,
-  ctx: ExtensionContext,
-): void {
-  if (isTerminalStatus(instance.status)) {
-    ctx.ui.notify(`Workflow already ${instance.status}`, "warning");
-    return;
-  }
-  void orchestrator.abort(runId)
-    .then(() => ctx.ui.notify("Workflow aborted", "info"))
-    .catch((err: Error) => ctx.ui.notify(`Abort failed: ${err.message}`, "error"));
-}
-
-function handleRestart(
-  orchestrator: WorkflowOrchestrator,
-  runId: string,
-  instance: WorkflowInstance,
-  ctx: ExtensionContext,
-  state: ViewState,
-  done: () => void,
-): void {
-  // Block renders before async restart to avoid flickering "(workflow not found)"
-  state.disposed = true;
-  void orchestrator.restart(runId)
-    .then((newRunId) => {
-      ctx.ui.notify(`Restarted '${instance.name}' (${newRunId.slice(0, 12)}...)`, "info");
-      done();
-    })
-    .catch((err: Error) => {
-      ctx.ui.notify(`Restart failed: ${err.message}`, "error");
-      state.disposed = false;
-    });
-}
-
-// ── Save workflow script ──────────────────────────────────────
-
-async function doSaveWorkflow(
-  instance: WorkflowInstance,
-  state: ViewState,
-  _ctx: ExtensionContext,
-): Promise<{ ok: boolean; msg: string }> {
-  const isTmp = instance.worker.includes("/.tmp/") || instance.worker.includes("\\.tmp\\");
-
-  if (!isTmp) {
-    return { ok: false, msg: "Only temporary workflows can be saved." };
-  }
-
-  const name = state.saveInputValue.trim();
-  const savedDir = state.saveScope === "project"
-    ? resolve(process.cwd(), ".pi/workflows")
-    : resolve(homedir(), ".pi/agent/workflows");
-  const destPath = resolve(savedDir, `${name}.js`);
-
-  if (existsSync(destPath)) {
-    return { ok: false, msg: `'${name}' already exists. Use a different name.` };
-  }
-
-  try {
-    mkdirSync(savedDir, { recursive: true });
-    copyFileSync(instance.worker, destPath);
-    return { ok: true, msg: `Saved '${name}' → ${destPath}` };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, msg: `Save failed: ${msg}` };
-  }
-}
-
-// ── Render ────────────────────────────────────────────────────
-
+/** Header：╭─╮ + name(bold) + 右侧 status/agents/elapsed/budget。 */
 function renderHeader(
   lines: string[],
-  instance: WorkflowInstance,
+  run: WorkflowRun,
   theme: ThemeLike,
   contentWidth: number,
 ): void {
-  const completed = instance.trace.filter((n) => n.status === "completed").length;
-  const total = instance.trace.length;
-  const elapsed = formatElapsed(instance.startedAt);
-  const headerRight = `${formatStatusBadge(instance.status, theme)} · ${completed}/${total} agents · ${elapsed}`;
+  const traceArr = run.state.trace.toArray();
+  const completed = traceArr.filter((n) => n.status === "completed").length;
+  const total = traceArr.length;
+  const elapsed = formatElapsed(run.meta.startedAt);
+  const headerRight = `${formatStatusBadge(run.state.status, theme)} · ${completed}/${total} agents · ${elapsed}`;
+  const budget = run.state.budget;
+  const budgetStr = `${Math.round(budget.usedTokens / BUDGET_TOKENS_DIVISOR)}k/${budget.maxTokens ? `${Math.round(budget.maxTokens / BUDGET_TOKENS_DIVISOR)}k` : "∞"} tok · $${budget.usedCost.toFixed(BUDGET_COST_DECIMALS)}`;
 
-  const nameLine = theme.bold(instance.name);
-  const rightPart = theme.fg("muted", headerRight);
+  const nameLine = theme.bold(run.spec.scriptName);
+  const rightPart = theme.fg("muted", `${headerRight} · ${budgetStr}`);
 
   lines.push("╭" + "─".repeat(contentWidth) + "╮");
   lines.push("│" + padVisible(nameLine, contentWidth) + "│");
 
-  if (instance.description) {
+  if (run.spec.description) {
     const maxDesc = contentWidth - visibleLen(rightPart) - 1;
-    const descText = instance.description.length > maxDesc
-      ? instance.description.slice(0, maxDesc - 1) + ELLIPSIS
-      : instance.description;
+    const descText = run.spec.description.length > maxDesc
+      ? run.spec.description.slice(0, maxDesc - 1) + ELLIPSIS
+      : run.spec.description;
     const descPart = theme.fg("dim", descText);
     const padLen = Math.max(0, contentWidth - visibleLen(descPart) - visibleLen(rightPart));
     lines.push("│" + descPart + " ".repeat(padLen) + rightPart + "│");
@@ -497,9 +561,10 @@ function renderHeader(
   lines.push("├" + "─".repeat(contentWidth) + "┤");
 }
 
+/** Footer（框外）：nav hint + lifecycle shortcuts + esc/ctrl+c。 */
 function renderFooter(
   lines: string[],
-  instance: WorkflowInstance,
+  run: WorkflowRun,
   state: ViewState,
   theme: ThemeLike,
 ): void {
@@ -507,15 +572,12 @@ function renderFooter(
     ? "↑↓ phase · ⏎ enter"
     : state.level === 1
       ? "↑↓ agent · ⏎ detail"
-      : "↑↓ agent · ⏎ prompt";
+      : "↑↓ agent · ⏎ prompt · PgUp/PgDn scroll";
   const actionParts: string[] = [];
-  const terminal = isTerminalStatus(instance.status);
-  if (!terminal) {
-    actionParts.push("x stop");
-    actionParts.push(instance.status === "paused" ? "p resume" : "p pause");
-  }
-  if (terminal || instance.status === "paused") {
-    actionParts.push("r restart");
+  const status = run.state.status;
+  if (status === "running" || status === "paused") {
+    actionParts.push("a abort");
+    actionParts.push(status === "paused" ? "p resume" : "p pause");
   }
   actionParts.push("s save");
   actionParts.push("S trace");
@@ -525,99 +587,50 @@ function renderFooter(
   lines.push(theme.fg("muted", footer));
 }
 
-function renderView(
-  instance: WorkflowInstance,
-  theme: ThemeLike,
-  width: number,
-  state: ViewState,
-  termRows: number,
-): string[] {
-  const lines: string[] = [];
-  const now = Date.now();
-  const phases = buildPhaseGroups(instance.trace);
-  if (phases.length === 0) return ["(no agents)"];
-
-  const contentWidth = width - 2;
-  renderHeader(lines, instance, theme, contentWidth);
-
-  const phase = phases[state.phaseIdx] ?? phases[0];
-  const agents = phase.nodes;
-  const mainWidth = contentWidth - SIDEBAR_WIDTH - 1;
-
-  const bodyStart = lines.length;
-
-  if (state.level === 0) {
-    renderLevel0(lines, phases, state, theme, width, mainWidth, now);
-  } else if (state.level === 1) {
-    renderLevel1(lines, phases, agents, state, theme, width, mainWidth, now);
-  } else {
-    renderLevel2(lines, instance, phase, agents, state, theme, width, mainWidth, now);
+/** mergeBody：左侧 sidebar + │ divider + 右侧 main，拼成 body 行。 */
+function mergeBody(
+  lines: string[],
+  leftLines: string[],
+  rightLines: string[],
+): void {
+  const bodyHeightVal = Math.max(leftLines.length, rightLines.length);
+  for (let i = 0; i < bodyHeightVal; i++) {
+    const left = padVisible(leftLines[i] ?? "", SIDEBAR_WIDTH);
+    lines.push(left + "│" + (rightLines[i] ?? ""));
   }
-
-  const headerFooterLines = 6;
-  const minBodyHeight = Math.max(3, Math.floor(termRows * 2 / 3) - headerFooterLines);
-  const emptyBodyLine = padVisible("", SIDEBAR_WIDTH) + "│" + padVisible("", mainWidth);
-  while (lines.length - bodyStart < minBodyHeight) {
-    lines.push(emptyBodyLine);
-  }
-
-  for (let i = bodyStart; i < lines.length; i++) {
-    lines[i] = "│" + padVisible(lines[i], contentWidth) + "│";
-  }
-
-  lines.push("╰" + "─".repeat(contentWidth) + "╯");
-
-  if (state.saveMode) {
-    const overlayLines = renderSaveOverlay(instance, state, theme, width);
-    const overlayStart = Math.max(bodyStart, bodyStart + Math.floor((lines.length - bodyStart - overlayLines.length) / 2));
-    for (let i = 0; i < overlayLines.length && overlayStart + i < lines.length; i++) {
-      lines[overlayStart + i] = overlayLines[i];
-    }
-  }
-
-  renderFooter(lines, instance, state, theme);
-  return lines;
 }
 
 // ── Level 0: Phase selection ──────────────────────────────────
 
 function renderLevel0(
   lines: string[],
-  phases: PhaseGroup[],
+  run: WorkflowRun,
+  phases: ReturnType<typeof buildPhaseGroups>,
   state: ViewState,
   theme: ThemeLike,
-  width: number,
   mainWidth: number,
   now: number,
 ): void {
   const leftLines: string[] = [];
   const rightLines: string[] = [];
 
-  // Left: sidebar title + phase list
+ // Left: sidebar title + phase list
   leftLines.push(theme.fg("muted", "Phases"));
   leftLines.push("─".repeat(SIDEBAR_WIDTH));
   for (let i = 0; i < phases.length; i++) {
     leftLines.push(formatPhaseLine(phases[i], i, i === state.phaseIdx, theme, SIDEBAR_WIDTH));
   }
 
-  // Right: agents in the currently selected phase only
+ // Right: agents in the currently selected phase only
   const selectedPhase = phases[state.phaseIdx] ?? phases[0];
   if (selectedPhase) {
     const title = selectedPhase.name
-      ? `${selectedPhase.name} · ${selectedPhase.nodes.length} agents`
-      : `${selectedPhase.nodes.length} agents`;
+      ? `${selectedPhase.name} · ${selectedPhase.nodes.length} agents · ${formatElapsed(run.meta.startedAt, now)}`
+      : `${selectedPhase.nodes.length} agents · ${formatElapsed(run.meta.startedAt, now)}`;
     rightLines.push(theme.fg("muted", title));
     rightLines.push("─".repeat(mainWidth));
     for (const node of selectedPhase.nodes) {
-      const dot = statusDotStr(node.status, theme);
-      const elapsed = formatElapsed(
-        node.startedAt,
-        node.completedAt ? new Date(node.completedAt).getTime() : now,
-      );
-      const tok = node.result?.usage;
-      const tokStr = tok ? `${Math.round((tok.input + tok.output) / 1000)}k tok` : "";
-      const tcCount = node.result?.toolCalls?.length ?? 0;
-      rightLines.push(`  ${dot} ${node.agent}    ${node.model}    ${tokStr} · ${tcCount} tools · ${elapsed}`);
+      rightLines.push(formatAgentOneLiner(node, theme));
     }
   }
 
@@ -628,11 +641,10 @@ function renderLevel0(
 
 function renderLevel1(
   lines: string[],
-  phases: PhaseGroup[],
-  agents: import("../../domain/state.js").ExecutionTraceNode[],
+  _run: WorkflowRun,
+  phases: ReturnType<typeof buildPhaseGroups>,
   state: ViewState,
   theme: ThemeLike,
-  width: number,
   mainWidth: number,
   now: number,
 ): void {
@@ -645,231 +657,192 @@ function renderLevel1(
     leftLines.push(formatPhaseLine(phases[i], i, i === state.phaseIdx, theme, SIDEBAR_WIDTH));
   }
 
-  // Right: agent list for current phase (agents parameter already scoped to current phase)
   const currentPhase = phases[state.phaseIdx];
+  const agents = currentPhase?.nodes ?? [];
   if (currentPhase) {
-    const title = currentPhase.name ? `${currentPhase.name} · ${currentPhase.nodes.length} agents` : `${currentPhase.nodes.length} agents`;
+    const title = currentPhase.name
+      ? `${currentPhase.name} · ${currentPhase.nodes.length} agents`
+      : `${currentPhase.nodes.length} agents`;
     rightLines.push(theme.fg("muted", title));
     rightLines.push("─".repeat(mainWidth));
   }
   for (let i = 0; i < agents.length; i++) {
     const node = agents[i];
-    const isSelected = i === state.agentIdx;
-    const pointer = isSelected ? "❯ " : "  ";
+    const pointer = i === state.agentIdx ? "❯ " : "  ";
     const dot = statusDotStr(node.status, theme);
-    const elapsed = formatElapsed(
-      node.startedAt,
-      node.completedAt ? new Date(node.completedAt).getTime() : now,
-    );
-    const tok = node.result?.usage;
-    const tokStr = tok ? `${Math.round((tok.input + tok.output) / 1000)}k tok` : "";
-    const tcCount = node.result?.toolCalls?.length ?? 0;
-    rightLines.push(`${pointer}${dot} ${node.agent}    ${node.model}    ${tokStr} · ${tcCount} tools · ${elapsed}`);
+    // Live 路径优先：运行中从 node.live 读实时 token/tool 计数 + elapsed。
+    if (node.live) {
+      const live = projectLiveProgress(node.live);
+      const tokStr = live.totalTokens > 0 ? `${Math.round(live.totalTokens / BUDGET_TOKENS_DIVISOR)}k tok` : "";
+      const tcCount = getAllToolCalls(node.live).length;
+      const elapsed = formatElapsedSeconds(live.elapsedSeconds);
+      rightLines.push(`${pointer}${dot} ${node.agent}    ${node.model}    ${tokStr} · ${tcCount} tools · ${elapsed}`);
+    } else {
+      const elapsed = formatElapsed(
+        node.startedAt,
+        node.completedAt ? new Date(node.completedAt).getTime() : now,
+      );
+      const tok = node.result?.usage;
+      const tokStr = tok ? `${Math.round((tok.input + tok.output) / BUDGET_TOKENS_DIVISOR)}k tok` : "";
+      const tcCount = node.result?.toolCalls?.length ?? 0;
+      rightLines.push(`${pointer}${dot} ${node.agent}    ${node.model}    ${tokStr} · ${tcCount} tools · ${elapsed}`);
+    }
   }
 
   mergeBody(lines, leftLines, rightLines);
 }
 
 // ── Level 2: Execution detail ─────────────────────────────────
-
-function renderWorkerLogSection(
-  rightLines: string[],
-  instance: WorkflowInstance,
-  mainWidth: number,
-  theme: ThemeLike,
-): void {
-  const logs = instance.errorLogs;
-  if (!logs || logs.length === 0) return;
-  const total = logs.length;
-  const showCount = Math.min(total, 20);
-  const label = total > showCount
-    ? `Worker diagnostics · last ${showCount} of ${total}`
-    : `Worker diagnostics · ${total} entr${total !== 1 ? "ies" : "y"}`;
-  rightLines.push(theme.fg("warning", label));
-  const start = total - showCount;
-  for (let i = start; i < total; i++) {
-    const entry = logs[i];
-    const levelToken = entry.level === "error" ? "error" : entry.level === "warn" ? "warning" : "muted";
-    const prefix = `[${entry.level}]`;
-    const line = `  ${prefix} ${entry.message}`.slice(0, mainWidth - 2);
-    rightLines.push(theme.fg(levelToken, line));
-  }
-  rightLines.push("");
-}
-
-function renderPromptSection(
-  rightLines: string[],
-  node: import("../../domain/state.js").ExecutionTraceNode,
-  mainWidth: number,
-  state: ViewState,
-  theme: ThemeLike,
-): void {
-  const taskLines = node.task.split("\n");
-  const lineCount = taskLines.length;
-  rightLines.push(theme.fg("muted", `Prompt · ${lineCount} lines · ⏎ ${state.promptExpanded ? "collapse" : "expand"}`));
-  if (state.promptExpanded || lineCount <= PROMPT_FOLD_LINES) {
-    rightLines.push(...taskLines.map((l) => `  ${l}`));
-  } else {
-    rightLines.push(...taskLines.slice(0, PROMPT_FOLD_LINES).map((l) => `  ${l}`));
-    rightLines.push(theme.fg("dim", `  ${ELLIPSIS} ${lineCount - PROMPT_FOLD_LINES} more lines`));
-  }
-  rightLines.push("");
-}
-
-function renderActivitySection(
-  rightLines: string[],
-  node: import("../../domain/state.js").ExecutionTraceNode,
-  mainWidth: number,
-  theme: ThemeLike,
-): void {
-  const toolCalls = node.result?.toolCalls ?? [];
-  const totalCount = toolCalls.length;
-  if (totalCount > 0) {
-    const showCount = Math.min(MAX_TOOL_CALLS_DISPLAY, totalCount);
-    const isTruncated = totalCount > MAX_TOOL_CALLS_DISPLAY;
-    const label = isTruncated
-      ? `Activity · last ${showCount} of ${totalCount} tool calls`
-      : `Activity · ${totalCount} tool call${totalCount !== 1 ? "s" : ""}`;
-    rightLines.push(theme.fg("muted", label));
-    const start = totalCount - showCount;
-    for (let i = start; i < totalCount; i++) {
-      rightLines.push(`  ${formatActivityLine(toolCalls[i], mainWidth - 2)}`);
-    }
-  } else {
-    rightLines.push(theme.fg("muted", "Activity"));
-    rightLines.push(theme.fg("dim", `  ${node.status === "running" ? "(no tool calls yet)" : "(no activity recorded)"}`));
-  }
-  rightLines.push("");
-}
-
-function renderOutcomeSection(
-  rightLines: string[],
-  node: import("../../domain/state.js").ExecutionTraceNode,
-  mainWidth: number,
-  theme: ThemeLike,
-): void {
-  rightLines.push(theme.fg("muted", "Outcome"));
-  if (node.status === "running") {
-    rightLines.push(theme.fg("dim", "  Still running..."));
-  } else if (node.result?.error) {
-    rightLines.push(theme.fg("error", `  ${node.result.error.slice(0, mainWidth - 4)}`));
-  } else if (node.result?.content) {
-    const raw = node.result.content;
-    if (Buffer.byteLength(raw, "utf8") > OUTPUT_TRUNCATE_BYTES) {
-      const truncated = Buffer.from(raw, "utf8").slice(0, OUTPUT_TRUNCATE_BYTES).toString("utf8");
-      const allLines = truncated.split("\n");
-      const tail = allLines.slice(-5);
-      rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - 4)}`));
-      rightLines.push(theme.fg("dim", "  (truncated)"));
-    } else {
-      const allLines = raw.split("\n");
-      const tail = allLines.slice(-5);
-      rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - 4)}`));
-    }
-  }
-}
+// 详情内容构建 + 滚动按键已抽到 detail-content.ts（纯函数，可单测，且控制本文件行数）。
 
 function renderLevel2(
   lines: string[],
-  instance: WorkflowInstance,
-  phase: PhaseGroup,
-  agents: import("../../domain/state.js").ExecutionTraceNode[],
+  run: WorkflowRun,
+  agents: ExecutionTraceNode[],
   state: ViewState,
   theme: ThemeLike,
-  width: number,
   mainWidth: number,
   now: number,
+  viewH: number,
 ): void {
   const leftLines: string[] = [];
   const rightLines: string[] = [];
 
-  // Left: agents title + agent names
+ // Left: agents title + agent names
   leftLines.push(theme.fg("muted", "Agents"));
   leftLines.push("─".repeat(SIDEBAR_WIDTH));
+  const AGENT_NAME_BUDGET = 4; // pointer(2) + spacing(2)
   for (let i = 0; i < agents.length; i++) {
     const a = agents[i];
-    const isSelected = i === state.agentIdx;
-    const pointer = isSelected ? "❯ " : "  ";
-    const maxNameWidth = SIDEBAR_WIDTH - 4;
+    const pointer = i === state.agentIdx ? "❯ " : "  ";
+    const maxNameWidth = SIDEBAR_WIDTH - AGENT_NAME_BUDGET;
     const agentName = visibleLen(a.agent) > maxNameWidth
-      ? truncateToWidth(a.agent, maxNameWidth - 1) + ELLIPSIS
+      ? a.agent.slice(0, maxNameWidth - 1) + ELLIPSIS
       : a.agent;
     leftLines.push(`${pointer}${agentName}`);
   }
 
-  // Right: full detail
+ // Right: full detail（viewport 截断 + 滚动，对齐 subagents renderRightDetail）
   const node = agents[state.agentIdx];
   if (node) {
-    const elapsed = formatElapsed(
-      node.startedAt,
-      node.completedAt ? new Date(node.completedAt).getTime() : now,
-    );
-    rightLines.push(theme.fg("muted", "Detail"));
-    rightLines.push("─".repeat(mainWidth));
-    rightLines.push(`${statusDotStr(node.status, theme)} ${statusLabel(node.status, theme)} · ${node.model}`);
-    rightLines.push(theme.fg("dim", formatTokenStat(node.result?.usage, node.result?.toolCalls, elapsed)));
-    rightLines.push("");
-    renderWorkerLogSection(rightLines, instance, mainWidth, theme);
-    renderPromptSection(rightLines, node, mainWidth, state, theme);
-    renderActivitySection(rightLines, node, mainWidth, theme);
-    renderOutcomeSection(rightLines, node, mainWidth, theme);
+    const content = buildDetailContent(node, state, run, theme, mainWidth, now);
+    const maxOff = Math.max(0, content.length - viewH);
+    // running 且 followTail → 钉底部（最新输出始终可见，用户 PgUp 后停止跟随）
+    if (node.status === "running" && state.followTail) {
+      state.detailScrollOffset = maxOff;
+    }
+    // clamp 收敛（切 agent / End 越界后下次 render 归位）
+    if (state.detailScrollOffset > maxOff) state.detailScrollOffset = maxOff;
+    const start = state.detailScrollOffset;
+    const visible = content.slice(start, start + viewH);
+    while (visible.length < viewH) visible.push(""); // pad 填满视口
+    rightLines.push(...visible);
+
+    // 位置指示（仅内容超一屏时，对齐 subagents detailScrollInfo）
+    if (content.length > viewH) {
+      const end = Math.min(start + viewH, content.length);
+      // 覆盖第一行标题，拼上 (start+1-end/total)
+      const titleBase = "Detail";
+      const indicator = ` (${start + 1}-${end}/${content.length})`;
+      rightLines[0] = theme.fg("muted", titleBase + indicator);
+    }
   }
 
-  mergeBody(lines, leftLines, rightLines);
+ // body 固定高度 = viewH（左右都 pad/截到 viewH，避免内容撑高溢出）
+  const bodyH = viewH;
+  const leftPadded: string[] = [];
+  for (let i = 0; i < bodyH; i++) leftPadded.push(leftLines[i] ?? "");
+  const rightPadded: string[] = [];
+  for (let i = 0; i < bodyH; i++) rightPadded.push(rightLines[i] ?? "");
+  mergeBody(lines, leftPadded, rightPadded);
 }
 
-// ── Helpers ───────────────────────────────────────────────────
+// ── Trace export（S 键，对齐 main saveTraceToFile）─────────────
 
-function mergeBody(
-  lines: string[],
-  leftLines: string[],
-  rightLines: string[],
-): void {
-  const bodyHeight = Math.max(leftLines.length, rightLines.length);
-  for (let i = 0; i < bodyHeight; i++) {
-    const left = padVisible(leftLines[i] ?? "", SIDEBAR_WIDTH);
-    lines.push(left + "│" + (rightLines[i] ?? ""));
+/** trace 导出文件每节点 outcome 截断长度。 */
+const TRACE_OUTCOME_SLICE = 2000;
+/** trace 导出文件 activity 行宽。 */
+const TRACE_ACTIVITY_WIDTH = 80;
+
+/**
+ * 导出完整 workflow trace 到 Markdown 文件。
+ * 路径：~/.pi/agent/workflow-traces/{runId}.md
+ * 对齐 main 的 saveTraceToFile（WorkflowsView.ts:365-396）。
+ */
+function saveTraceToFile(run: WorkflowRun, ctx: ExtensionContext): void {
+  const dir = pathJoin(homedir(), ".pi", "agent", "workflow-traces");
+  const filePath = pathJoin(dir, `${run.runId}.md`);
+  const lines: string[] = [];
+  lines.push(`# Workflow Trace: ${run.spec.scriptName} (${run.runId})`, "");
+  lines.push(`Status: ${run.state.status} | Started: ${run.meta.startedAt ?? "-"} | Duration: ${formatElapsed(run.meta.startedAt)}`);
+  const budget = run.state.budget;
+  lines.push(`Budget: ${budget.usedTokens}/${budget.maxTokens ?? "unlimited"} tokens, $${budget.usedCost.toFixed(BUDGET_COST_DECIMALS)}`, "");
+  const phases = buildPhaseGroups([...run.state.trace.toArray()]);
+  for (const pg of phases) {
+    lines.push(`## Phase: ${pg.name || "(unnamed)"}`, "");
+    for (const node of pg.nodes) {
+      lines.push(`### [#${node.stepIndex}] ${node.agent} — ${node.status}`);
+      lines.push(`- Model: ${node.model}`);
+      lines.push(`- Duration: ${formatElapsed(node.startedAt, node.completedAt ? new Date(node.completedAt).getTime() : Date.now())}`, "");
+      lines.push("**Prompt:**", node.task, "");
+      const toolCalls = node.result?.toolCalls ?? [];
+      if (toolCalls.length > 0) {
+        lines.push("**Activity:**");
+        for (const tc of toolCalls) lines.push(`- ${formatActivityLine(tc, TRACE_ACTIVITY_WIDTH)}`);
+        lines.push("");
+      }
+      lines.push("**Outcome:**");
+      if (node.status === "running") lines.push("Still running...");
+      else if (node.result?.error) lines.push(node.result.error);
+      else if (node.result?.content) lines.push(node.result.content.slice(0, TRACE_OUTCOME_SLICE));
+      lines.push("");
+    }
   }
+  fsPromises.mkdir(dir, { recursive: true })
+    .then(() => fsPromises.writeFile(filePath, lines.join("\n"), "utf8"))
+    .then(() => ctx.ui.notify(`Trace saved: ${filePath}`, "info"))
+    .catch((err: Error) => ctx.ui.notify(`Save failed: ${err.message}`, "error"));
 }
 
-// ── Save overlay render ───────────────────────────────────────
+// ── Save overlay（缺陷 #3 恢复，从 main 移植简化版）────────────
 
+/**
+ * save overlay——名称输入框 + 状态消息。
+ * refactor 的 saveWorkflow 仅支持 project scope（workflow-files.ts 统一为 rename），
+ * 故去掉 main 的 scope 切换（Tab），只保留名称输入。
+ */
 function renderSaveOverlay(
-  instance: WorkflowInstance,
   state: ViewState,
   theme: ThemeLike,
   width: number,
 ): string[] {
-  const contentWidth = width - 2;
+  const contentWidth = width - BOX_BORDER_CHARS;
   const lines: string[] = [];
 
   lines.push("╭" + "─".repeat(contentWidth) + "╮");
 
-  // Title
-  const title = " Save dynamic workflow";
-  lines.push("│" + padVisible(theme.bold(title), contentWidth) + "│");
+ // Title
+  lines.push("│" + padVisible(theme.bold(" Save dynamic workflow"), contentWidth) + "│");
 
-  // Scope + destination
-  const scopeLabel = state.saveScope === "project" ? "Project" : "User";
-  const scopeDir = state.saveScope === "project" ? ".pi/workflows/" : "~/.pi/agent/workflows/";
-  const destName = state.saveInputValue || instance.name;
-  const destLine = `${scopeLabel} scope · ${scopeDir}${destName}.js`;
+ // Destination preview
+  const destName = state.saveInputValue || "(name)";
+  const destLine = `.pi/workflows/${destName}.js`;
   lines.push("│" + padVisible(theme.fg("dim", destLine), contentWidth) + "│");
 
-  // Empty line
+ // Empty line
   lines.push("│" + padVisible("", contentWidth) + "│");
 
-  // Label
+ // Label
   lines.push("│" + padVisible("Save as:", contentWidth) + "│");
 
-  // Input line with cursor block
+ // Input line with cursor block
   const inputLine = `  > ${state.saveInputValue}\u2588`;
   lines.push("│" + padVisible(inputLine, contentWidth) + "│");
 
-  // Empty line
+ // Empty line
   lines.push("│" + padVisible("", contentWidth) + "│");
 
-  // Inline message (error or success)
+ // Inline message (error or success)
   if (state.saveMessage) {
     const msgStyle = state.saveMsgOk ? "success" : "error";
     const msgLine = `  ${state.saveMessage}`;
@@ -878,8 +851,8 @@ function renderSaveOverlay(
     lines.push("│" + padVisible("", contentWidth) + "│");
   }
 
-  // Hint
-  const hint = "Enter to save · Tab to toggle scope · Esc to cancel";
+ // Hint
+  const hint = "Enter to save · Esc to cancel";
   lines.push("│" + padVisible(theme.fg("muted", hint), contentWidth) + "│");
 
   lines.push("╰" + "─".repeat(contentWidth) + "╯");

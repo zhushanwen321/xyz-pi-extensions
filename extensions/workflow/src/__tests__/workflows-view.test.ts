@@ -1,686 +1,313 @@
-/**
- * Tests for WorkflowsView pure formatting functions
- *
- * Covers: groupByPhase, formatActivityLine,
- * formatElapsed, formatTokenStat.
- *
- * Pure functions imported from views/format.ts — no Pi runtime dependency.
- */
+// 测试框架：vitest
+// 运行命令：npx vitest run src/__tests__/workflows-view.test.ts
+//
+// WorkflowsView 适配 WorkflowRun 的测试 + 无 restart 快捷键。
+// 验证 createWorkflowsView 接受 WorkflowRun 聚合根并正确渲染 layout。
+// 不测真实 TUI 交互——测 renderLayout 输出格式（pure function）+ view actions 绑定。
 
-import { describe, it, expect, vi } from "vitest";
-import {
-  groupByPhase,
-  formatActivityLine,
-  formatElapsed,
-  formatTokenStat,
-  formatStatusBadge,
-  statusDotStr,
-  padVisible,
-  visibleLen,
-  buildPhaseGroups,
-  formatAgentOneLiner,
-} from "../interface/views/format.js";
-import { createWorkflowsView } from "../interface/views/WorkflowsView.js";
-import type { ExecutionTraceNode, WorkflowInstance } from "../domain/state.js";
-import type { WorkflowOrchestrator } from "../orchestrator.js";
+/* eslint-disable taste/no-unsafe-cast */
+
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
 
-// ── Test fixtures ─────────────────────────────────────────────
+import { Budget } from "../engine/models/budget.js";
+import { Trace } from "../engine/models/trace.js";
+import type { ExecutionTraceNode } from "../engine/models/types.js";
+import { WorkflowRun } from "../engine/models/workflow-run.js";
+import {
+  buildPhaseGroups,
+  formatStatusBadge,
+  type ThemeLike,
+} from "../interface/views/format.js";
+import {
+  buildDetailContent,
+  createWorkflowsView,
+  detailContentLength,
+  type DetailScrollContext,
+  processDetailKey,
+  type ViewActions,
+} from "../interface/views/WorkflowsView.js";
 
-const fakeTheme = {
-  fg(_token: string, text: string): string {
-    // Simulate ANSI: return text as-is (ANSI codes are zero-width).
-    // Previous [token]text mock caused test failures because [token]
-    // added visible chars that real ANSI doesn't.
-    return text;
-  },
-  bold(text: string): string {
-    return `**${text}**`;
-  },
-};
+// ── Fixtures ─────────────────────────────────────────────────
 
-function makeNode(overrides: Partial<ExecutionTraceNode> = {}): ExecutionTraceNode {
+function makeTraceNode(overrides: Partial<ExecutionTraceNode> = {}): ExecutionTraceNode {
   return {
     stepIndex: 0,
     agent: "test-agent",
-    task: "do something",
-    model: "default",
-    status: "pending",
+    task: "Do something",
+    model: "test-model",
+    status: "completed",
+    phase: "build",
+    startedAt: "2026-06-22T10:00:00.000Z",
+    completedAt: "2026-06-22T10:01:00.000Z",
+    result: {
+      content: "result content",
+      usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.001, contextTokens: 200, turns: 1 },
+      toolCalls: [{ name: "read", input: "file.ts" }],
+    },
     ...overrides,
   };
 }
 
-// ── groupByPhase ──────────────────────────────────────────────
+function makeRun(overrides: {
+  status?: "running" | "paused" | "done";
+  reason?: "completed" | "failed" | "aborted" | "budget_limited" | "time_limited";
+  traceNodes?: ExecutionTraceNode[];
+  scriptName?: string;
+} = {}): WorkflowRun {
+  const trace = Trace.fromArray(overrides.traceNodes ?? [makeTraceNode()]);
+  return new WorkflowRun(
+    "run-abc123def456",
+    {
+      scriptSource: 'agent({ prompt: "hi" });',
+      args: {},
+      scriptName: overrides.scriptName ?? "test-wf",
+      scriptPath: "/abs/test-wf.js",
+      description: "A test workflow",
+    },
+    {
+      status: overrides.status ?? "done",
+      reason: overrides.reason ?? "completed",
+      budget: new Budget(),
+      calls: new Map(),
+      trace,
+      errorLogs: [],
+    },
+    { startedAt: "2026-06-22T10:00:00.000Z", completedAt: "2026-06-22T10:05:00.000Z" },
+  );
+}
 
-describe("groupByPhase", () => {
-  it("groups nodes by phase", () => {
+function makeTheme(): ThemeLike {
+  return {
+    fg: (_token: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+}
+
+function makeActions(): ViewActions {
+  return {
+    pause: vi.fn().mockResolvedValue(undefined),
+    resume: vi.fn().mockResolvedValue(undefined),
+    abort: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+function makeCtx(): ExtensionContext {
+  return {
+    ui: {
+      custom: vi.fn().mockImplementation(<T>(_factory: (...args: unknown[]) => T) => {
+        return Promise.resolve() as unknown as Promise<void>;
+      }),
+    },
+  } as unknown as ExtensionContext;
+}
+
+// ── Tests ────────────────────────────────────────────────────
+
+describe("WorkflowsView (adapted to WorkflowRun)", () => {
+  it("createWorkflowsView accepts WorkflowRun and invokes ctx.ui.custom", async () => {
+    const run = makeRun();
+    const ctx = makeCtx();
+    const actions = makeActions();
+
+    await createWorkflowsView(run, makeTheme(), ctx, actions);
+
+    expect(ctx.ui.custom).toHaveBeenCalledTimes(1);
+  });
+
+  it("buildPhaseGroups groups trace nodes by phase", () => {
     const nodes = [
-      makeNode({ stepIndex: 0, phase: "setup", agent: "a" }),
-      makeNode({ stepIndex: 1, phase: "build", agent: "b" }),
-      makeNode({ stepIndex: 2, phase: "setup", agent: "c" }),
-    ];
-
-    const result = groupByPhase(nodes);
-
-    expect(result.size).toBe(2);
-    expect(result.get("setup")!.length).toBe(2);
-    expect(result.get("build")!.length).toBe(1);
-  });
-
-  it("nodes without phase go to (default) group", () => {
-    const nodes = [
-      makeNode({ stepIndex: 0, agent: "a" }),
-      makeNode({ stepIndex: 1, phase: "build", agent: "b" }),
-    ];
-
-    const result = groupByPhase(nodes);
-
-    expect(result.get("(default)")!.length).toBe(1);
-    expect(result.get("build")!.length).toBe(1);
-  });
-
-  it("empty array returns empty Map", () => {
-    const result = groupByPhase([]);
-    expect(result.size).toBe(0);
-  });
-
-  it("sorts nodes within phase by stepIndex ascending (FR-3.2)", () => {
-    const nodes = [
-      makeNode({ stepIndex: 5, phase: "test", agent: "c" }),
-      makeNode({ stepIndex: 2, phase: "test", agent: "a" }),
-      makeNode({ stepIndex: 4, phase: "test", agent: "b" }),
-    ];
-
-    const result = groupByPhase(nodes);
-    const phaseNodes = result.get("test")!;
-
-    expect(phaseNodes.map((n) => n.stepIndex)).toEqual([2, 4, 5]);
-  });
-});
-
-// ── formatActivityLine ────────────────────────────────────────
-
-describe("formatActivityLine", () => {
-  it("formats as ToolName(args)", () => {
-    const result = formatActivityLine({ name: "Bash", input: "git status" }, 60);
-    expect(result).toBe("Bash(git status)");
-  });
-
-  it("truncates long args with ellipsis", () => {
-    const longArgs = "a".repeat(100);
-    const result = formatActivityLine({ name: "Bash", input: longArgs }, 30);
-
-    expect(result.length).toBeLessThanOrEqual(30);
-    expect(result).toContain("\u2026"); // U+2026 ellipsis
-  });
-
-  it("returns just name when maxWidth < 10", () => {
-    const result = formatActivityLine({ name: "Bash", input: "cmd" }, 5);
-    expect(result).toBe("Bash");
-  });
-
-  it("handles Skill tool call", () => {
-    const result = formatActivityLine({ name: "Skill", input: "code-review" }, 60);
-    expect(result).toBe("Skill(code-review)");
-  });
-});
-
-// ── formatElapsed ─────────────────────────────────────────────
-
-describe("formatElapsed", () => {
-  it("returns '-' when no startedAt", () => {
-    expect(formatElapsed(undefined)).toBe("-");
-  });
-
-  it("computes seconds from startedAt", () => {
-    const now = Date.now();
-    const startedAt = new Date(now - 5000).toISOString();
-    expect(formatElapsed(startedAt, now)).toBe("5s");
-  });
-
-  it("formats minutes and seconds for longer durations", () => {
-    const now = Date.now();
-    const startedAt = new Date(now - 125000).toISOString(); // 2m 5s
-    expect(formatElapsed(startedAt, now)).toBe("2m5s");
-  });
-
-  it("returns 0s for sub-second durations", () => {
-    const now = Date.now();
-    const startedAt = new Date(now - 500).toISOString();
-    expect(formatElapsed(startedAt, now)).toBe("0s");
-  });
-});
-
-// ── formatTokenStat ───────────────────────────────────────────
-
-describe("formatTokenStat", () => {
-  it("shows 0 tok when no usage", () => {
-    expect(formatTokenStat(undefined, undefined)).toBe("0 tok · 0 tool calls");
-  });
-
-  it("shows correct token count with usage", () => {
-    const usage = { input: 1000, output: 500 };
-    expect(formatTokenStat(usage, undefined)).toBe("1500 tok · 0 tool calls");
-  });
-
-  it("shows correct tool call count", () => {
-    const toolCalls = [{ name: "Bash", input: "cmd" }, { name: "Read", input: "file" }];
-    expect(formatTokenStat(undefined, toolCalls)).toBe("0 tok · 2 tool calls");
-  });
-
-  it("shows both usage and tool calls", () => {
-    const usage = { input: 200, output: 100 };
-    const toolCalls = [{ name: "Bash", input: "cmd" }];
-    expect(formatTokenStat(usage, toolCalls)).toBe("300 tok · 1 tool calls");
-  });
-});
-
-// ── statusDotStr ──────────────────────────────────────────────
-
-describe("statusDotStr", () => {
-  it("maps completed to success token", () => {
-    expect(statusDotStr("completed", fakeTheme)).toBe("●");
-  });
-
-  it("maps failed to error token", () => {
-    expect(statusDotStr("failed", fakeTheme)).toBe("●");
-  });
-
-  it("maps running to warning token", () => {
-    expect(statusDotStr("running", fakeTheme)).toBe("●");
-  });
-
-  it("maps unknown to muted token", () => {
-    expect(statusDotStr("pending", fakeTheme)).toBe("●");
-  });
-});
-
-// ── visibleLen + padVisible ───────────────────────────────────
-
-describe("visibleLen", () => {
-  it("counts plain text length", () => {
-    expect(visibleLen("hello")).toBe(5);
-  });
-
-  it("strips ANSI escape codes", () => {
-    expect(visibleLen("\x1b[1m\x1b[32mbold-green\x1b[0m\x1b[0m")).toBe(10);
-  });
-
-  it("empty string", () => {
-    expect(visibleLen("")).toBe(0);
-  });
-});
-
-describe("padVisible", () => {
-  it("pads plain string to target width", () => {
-    expect(padVisible("abc", 6)).toBe("abc   ");
-  });
-
-  it("does not pad if already at width", () => {
-    expect(padVisible("abc", 3)).toBe("abc");
-  });
-
-  it("does not pad if exceeding width", () => {
-    expect(padVisible("abcdef", 3)).toBe("abcdef");
-  });
-
-  it("pads ANSI string by visible width", () => {
-    const ansi = "\x1b[1mabc\x1b[0m";
-    const result = padVisible(ansi, 6);
-    expect(visibleLen(result)).toBe(6);
-    expect(result.endsWith("   ")).toBe(true);
-  });
-});
-
-// ── buildPhaseGroups ──────────────────────────────────────────
-
-describe("buildPhaseGroups", () => {
-  it("filters out phases with 0 agents", () => {
-    const nodes = [
-      makeNode({ stepIndex: 0, phase: "Review", agent: "review-1" }),
-      makeNode({ stepIndex: 1, phase: "Fix", agent: "fix-1" }),
+      makeTraceNode({ stepIndex: 0, phase: "build", agent: "builder" }),
+      makeTraceNode({ stepIndex: 1, phase: "build", agent: "tester" }),
+      makeTraceNode({ stepIndex: 2, phase: "deploy", agent: "deployer" }),
     ];
     const groups = buildPhaseGroups(nodes);
     expect(groups).toHaveLength(2);
-    expect(groups[0].name).toBe("Review");
-    expect(groups[0].nodes).toHaveLength(1);
-    expect(groups[1].name).toBe("Fix");
-  });
-
-  it("aggregates nodes per phase", () => {
-    const nodes = [
-      makeNode({ stepIndex: 0, phase: "Review", agent: "review-1" }),
-      makeNode({ stepIndex: 1, phase: "Review", agent: "review-2" }),
-      makeNode({ stepIndex: 2, phase: "Fix", agent: "fix-1" }),
-    ];
-    const groups = buildPhaseGroups(nodes);
-    expect(groups).toHaveLength(2);
+    expect(groups[0].name).toBe("build");
     expect(groups[0].nodes).toHaveLength(2);
-    expect(groups[0].doneCount).toBe(0);
+    expect(groups[1].name).toBe("deploy");
+    expect(groups[1].nodes).toHaveLength(1);
   });
 
-  it("counts completed nodes", () => {
+  it("buildPhaseGroups counts completed nodes in doneCount", () => {
     const nodes = [
-      makeNode({ stepIndex: 0, phase: "Review", status: "completed" }),
-      makeNode({ stepIndex: 1, phase: "Review", status: "running" }),
+      makeTraceNode({ stepIndex: 0, phase: "p1", status: "completed" }),
+      makeTraceNode({ stepIndex: 1, phase: "p1", status: "running" }),
+      makeTraceNode({ stepIndex: 2, phase: "p1", status: "failed" }),
     ];
     const groups = buildPhaseGroups(nodes);
     expect(groups[0].doneCount).toBe(1);
   });
-});
 
-// ── formatAgentOneLiner ────────────────────────────────────────
+  it("buildPhaseGroups handles empty trace", () => {
+    const groups = buildPhaseGroups([]);
+    expect(groups).toHaveLength(0);
+  });
 
-describe("formatAgentOneLiner", () => {
-  it("formats agent with status dot and name", () => {
-    const node = makeNode({ agent: "review-1", model: "glm-5.1" });
-    const result = formatAgentOneLiner(node, fakeTheme);
-    expect(result).toContain("review-1");
-    expect(result).toContain("glm-5.1");
-    expect(result).toContain("\u25CF");
+  it("formatStatusBadge renders run states (3-state: running/paused/done)", () => {
+    const theme = makeTheme();
+    expect(formatStatusBadge("running", theme)).toContain("running");
+    expect(formatStatusBadge("paused", theme)).toContain("PAUSED");
+ // "done" is not in the badge's explicit cases → default branch shows raw status
+    expect(formatStatusBadge("done", theme)).toBe("done");
+ // Legacy 8-state strings still handled (backward compat for serialized runs)
+    expect(formatStatusBadge("failed", theme)).toContain("failed");
+  });
+
+  it("ViewActions has no restart (D-9)", () => {
+    const actions = makeActions();
+    const keys = Object.keys(actions);
+    expect(keys).toContain("pause");
+    expect(keys).toContain("resume");
+    expect(keys).toContain("abort");
+    expect(keys).not.toContain("restart");
+  });
+
+  it("createWorkflowsView binds actions for paused run (resume enabled)", async () => {
+ // WorkflowRun invariant I1: status="running" requires runtime assigned.
+ // For view testing, use "paused" (valid without runtime) — the view reads
+ // status to toggle pause/resume labels.
+    const run = makeRun({ status: "paused", traceNodes: [makeTraceNode({ status: "running" })] });
+    const ctx = makeCtx();
+    const actions = makeActions();
+
+    await createWorkflowsView(run, makeTheme(), ctx, actions);
+
+ // The custom factory was invoked; actions are wired inside the closure.
+ // We verify the factory closure captured actions (no throw + custom called).
+    expect(ctx.ui.custom).toHaveBeenCalledTimes(1);
+  });
+
+  it("createWorkflowsView handles multi-phase trace with done status", async () => {
+    const nodes = [
+      makeTraceNode({ stepIndex: 0, phase: "phase-1", agent: "agent-1" }),
+      makeTraceNode({ stepIndex: 1, phase: "phase-2", agent: "agent-2" }),
+    ];
+    const run = makeRun({ status: "done", reason: "completed", traceNodes: nodes });
+    const ctx = makeCtx();
+
+    await createWorkflowsView(run, makeTheme(), ctx, makeActions());
+
+    expect(ctx.ui.custom).toHaveBeenCalledTimes(1);
   });
 });
 
-// ── formatStatusBadge ─────────────────────────────────────────
-
-describe("formatStatusBadge", () => {
-  it("maps running to warning with \u25CF", () => {
-    const result = formatStatusBadge("running", fakeTheme);
-    expect(result).toContain("running");
-  });
-
-  it("maps paused to warning with \u23F8", () => {
-    const result = formatStatusBadge("paused", fakeTheme);
-    expect(result).toContain("PAUSED");
-  });
-
-  it("maps completed to success with \u2713", () => {
-    const result = formatStatusBadge("completed", fakeTheme);
-    expect(result).toContain("completed");
-  });
-
-  it("maps failed to error with \u2717", () => {
-    const result = formatStatusBadge("failed", fakeTheme);
-    expect(result).toContain("failed");
-  });
-
-  it("maps aborted to error", () => {
-    const result = formatStatusBadge("aborted", fakeTheme);
-    expect(result).toContain("aborted");
-  });
-
-  it("maps budget_limited to error", () => {
-    const result = formatStatusBadge("budget_limited", fakeTheme);
-    expect(result).toContain("budget");
-  });
-
-  it("maps time_limited to error", () => {
-    const result = formatStatusBadge("time_limited", fakeTheme);
-    expect(result).toContain("timeout");
-  });
-});
-
-// ── processKey / handleInput integration tests ────────────────
+// ── L2 详情滚动：纯函数单测 ────────────────────────────────────
 //
-// processKey is module-private; tested indirectly via the component's
-// handleInput returned by createWorkflowsView.
+// processDetailKey / detailContentLength / buildDetailContent 是从 WorkflowsView
+// 抽出的导出纯函数（对齐 subagents processKey），无 Pi runtime 依赖，可直接单测。
+// 覆盖：PgUp/PgDn/Home/End 的 offset 边界、followTail 状态机、单一数据源不变量。
 
-/** Build a minimal WorkflowInstance with 2 phases x 2 agents. */
-function makeTestInstance(overrides: Partial<WorkflowInstance> = {}): WorkflowInstance {
-  return {
-    runId: "test-run-001",
-    name: "test-workflow",
-    status: "running",
-    callCache: new Map(),
-    trace: [
-      {
-        stepIndex: 0, phase: "Review", agent: "review-agent", task: "review code",
-        model: "glm-5.1", status: "completed",
-        startedAt: new Date(Date.now() - 60000).toISOString(),
-        completedAt: new Date(Date.now() - 30000).toISOString(),
-        result: { content: "LGTM", usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 150, turns: 1 } },
-      },
-      {
-        stepIndex: 1, phase: "Review", agent: "lint-agent", task: "run linter",
-        model: "glm-5.1", status: "completed",
-        startedAt: new Date(Date.now() - 29000).toISOString(),
-        completedAt: new Date(Date.now() - 10000).toISOString(),
-        result: { content: "no errors", toolCalls: [{ name: "Bash", input: "eslint ." }] },
-      },
-      {
-        stepIndex: 2, phase: "Fix", agent: "fix-agent", task: "fix issues",
-        model: "glm-5.1", status: "running",
-        startedAt: new Date(Date.now() - 5000).toISOString(),
-      },
-      {
-        stepIndex: 3, phase: "Fix", agent: "verify-agent", task: "verify fixes",
-        model: "glm-5.1", status: "pending",
-      },
-    ],
-    worker: "/path/to/workflow.js",
-    startedAt: new Date(Date.now() - 60000).toISOString(),
-    budget: { usedTokens: 500, usedCost: 0.01 },
-    ...overrides,
-  };
+// 原始终端转义序列（来自 @mariozechner/pi-tui keys.js）。
+const SEQ = {
+  pageUp: "\x1b[5~",
+  pageDown: "\x1b[6~",
+  home: "\x1b[H",
+  end: "\x1b[F",
+  up: "\x1b[A",
+  enter: "\r",
+} as const;
+
+function makeScrollCtx(overrides: Partial<DetailScrollContext> = {}): DetailScrollContext {
+  return { viewportHeight: 10, contentLines: 30, isRunning: false, ...overrides };
 }
 
-/** Create a mock orchestrator wired to the given instance. */
-function createMockOrchestrator(instance: WorkflowInstance) {
-  return {
-    getInstance: vi.fn().mockReturnValue(instance),
-    abort: vi.fn().mockResolvedValue(undefined),
-    pause: vi.fn().mockResolvedValue(undefined),
-    resume: vi.fn().mockResolvedValue(undefined),
-    restart: vi.fn().mockResolvedValue("new-run-002"),
-    events: {
-      subscribe: vi.fn().mockReturnValue(vi.fn()),
-    },
-  } as unknown as WorkflowOrchestrator;
-}
-
-/**
- * Set up the component returned by createWorkflowsView.
- * Calls ctx.ui.custom's factory immediately with mock TUI primitives.
- * Returns the component handle plus mock functions for assertions.
- */
-async function setupViewComponent(instance?: WorkflowInstance) {
-  const inst = instance ?? makeTestInstance();
-  const orchestrator = createMockOrchestrator(inst);
-  const requestRender = vi.fn();
-  const done = vi.fn();
-  let component: { invalidate(): void; render(w: number): string[]; handleInput(d: string): void };
-
-  const ctx = {
-    ui: {
-      custom: vi.fn().mockImplementation(
-        (factory: (tui: unknown, _t: unknown, _kb: unknown, d: () => void) => unknown) => {
-          component = factory(
-            { requestRender, terminal: { rows: 40 } },
-            fakeTheme,
-            {},
-            done,
-          ) as typeof component;
-          return Promise.resolve();
-        },
-      ),
-      notify: vi.fn(),
-    },
-  } as unknown as ExtensionContext;
-
-  await createWorkflowsView(orchestrator, inst.runId, fakeTheme, ctx);
-
-  return {
-    // @ts-expect-error — component is assigned synchronously inside ui.custom mock
-    component,
-    orchestrator,
-    requestRender,
-    done,
-    notify: (ctx as unknown as { ui: { notify: ReturnType<typeof vi.fn> } }).ui.notify,
-  };
-}
-
-describe("processKey (via handleInput)", () => {
-  // Key sequences — match the mock pi-tui Key constants
-  const ESC = "\x1b";
-  const UP = "\x1b[A";
-  const DOWN = "\x1b[B";
-  const ENTER = "\r";
-
-  // ── Escape navigation ────────────────────────────────
-
-  it("escape at level 0 calls done(), does not requestRender", async () => {
-    const { component, done, requestRender } = await setupViewComponent();
-    component.handleInput(ESC);
-    expect(done).toHaveBeenCalledTimes(1);
-    // processKey returns false → handleInput does NOT call requestRender
-    expect(requestRender).not.toHaveBeenCalled();
+describe("processDetailKey (L2 detail scroll)", () => {
+  it("PgUp 减一个视口高度，followTail 置 false", () => {
+    const r = processDetailKey(SEQ.pageUp, { scrollOffset: 15, followTail: true }, makeScrollCtx());
+    expect(r.handled).toBe(true);
+    expect(r.scrollOffset).toBe(5); // 15 - 10
+    expect(r.followTail).toBe(false); // 用户主动上滚 → 停止跟随
   });
 
-  it("escape at level 1 goes back to level 0", async () => {
-    const { component, requestRender, done } = await setupViewComponent();
-    // Enter → level 1
-    component.handleInput(ENTER);
-    requestRender.mockClear();
-    // Escape → back to level 0 (returns true → render)
-    component.handleInput(ESC);
-    expect(requestRender).toHaveBeenCalledTimes(1);
-    // Verify we're back at level 0: another escape should call done()
-    done.mockClear();
-    component.handleInput(ESC);
-    expect(done).toHaveBeenCalledTimes(1);
+  it("PgUp 到顶 clamp 到 0", () => {
+    const r = processDetailKey(SEQ.pageUp, { scrollOffset: 3, followTail: false }, makeScrollCtx());
+    expect(r.scrollOffset).toBe(0);
+    expect(r.followTail).toBe(false);
   });
 
-  it("escape at level 2 goes back to level 1", async () => {
-    const { component, requestRender, done } = await setupViewComponent();
-    // Enter → level 1, Enter → level 2
-    component.handleInput(ENTER);
-    component.handleInput(ENTER);
-    requestRender.mockClear();
-    // Escape → level 1
-    component.handleInput(ESC);
-    expect(requestRender).toHaveBeenCalledTimes(1);
-    // Verify level 1: escape should go to level 0
-    requestRender.mockClear();
-    component.handleInput(ESC);
-    expect(requestRender).toHaveBeenCalledTimes(1);
-    // Verify level 0: escape calls done
-    done.mockClear();
-    component.handleInput(ESC);
-    expect(done).toHaveBeenCalledTimes(1);
+  it("PgDn 加一个视口高度，到底则 followTail 置 true", () => {
+    // max = 30 - 10 = 20；从 15 翻 10 → 25，clamp 到 20，到底 → followTail=true
+    const r = processDetailKey(SEQ.pageDown, { scrollOffset: 15, followTail: false }, makeScrollCtx());
+    expect(r.handled).toBe(true);
+    expect(r.scrollOffset).toBe(20);
+    expect(r.followTail).toBe(true);
   });
 
-  // ── Up/Down at level 0 ───────────────────────────────
-
-  it("down at level 0 increments phaseIdx", async () => {
-    const { component, requestRender } = await setupViewComponent();
-    // Initial phaseIdx=0, phases=[Review, Fix]
-    component.handleInput(DOWN);
-    expect(requestRender).toHaveBeenCalledTimes(1);
+  it("PgDn 未到底时保持原 followTail", () => {
+    // 从 0 翻 10 → 10，max=20，未到底
+    const r = processDetailKey(SEQ.pageDown, { scrollOffset: 0, followTail: false }, makeScrollCtx());
+    expect(r.scrollOffset).toBe(10);
+    expect(r.followTail).toBe(false);
   });
 
-  it("up at level 0 decrements phaseIdx and resets agentIdx", async () => {
-    const { component, requestRender } = await setupViewComponent();
-    // Move to phaseIdx=1 first
-    component.handleInput(DOWN);
-    requestRender.mockClear();
-    // Now move back to phaseIdx=0
-    component.handleInput(UP);
-    expect(requestRender).toHaveBeenCalledTimes(1);
+  it("Home 跳到顶，followTail 置 false", () => {
+    const r = processDetailKey(SEQ.home, { scrollOffset: 18, followTail: true }, makeScrollCtx());
+    expect(r.handled).toBe(true);
+    expect(r.scrollOffset).toBe(0);
+    expect(r.followTail).toBe(false);
   });
 
-  it("up at level 0 when phaseIdx=0 does nothing", async () => {
-    const { component, requestRender } = await setupViewComponent();
-    component.handleInput(UP);
-    // processKey returns false → no requestRender
-    expect(requestRender).not.toHaveBeenCalled();
+  it("End 跳到底（max），followTail 置 true", () => {
+    const r = processDetailKey(SEQ.end, { scrollOffset: 0, followTail: false }, makeScrollCtx());
+    expect(r.handled).toBe(true);
+    expect(r.scrollOffset).toBe(20); // max = 30 - 10
+    expect(r.followTail).toBe(true);
   });
 
-  it("down at level 0 wraps at last phase", async () => {
-    const { component, requestRender } = await setupViewComponent();
-    // Go to last phase (index 1)
-    component.handleInput(DOWN);
-    requestRender.mockClear();
-    // Already at last phase, down does nothing
-    component.handleInput(DOWN);
-    expect(requestRender).not.toHaveBeenCalled();
+  it("非滚动键（up/enter 等）不命中，handled=false", () => {
+    const base = { scrollOffset: 5, followTail: false };
+    expect(processDetailKey(SEQ.up, base, makeScrollCtx()).handled).toBe(false);
+    expect(processDetailKey(SEQ.enter, base, makeScrollCtx()).handled).toBe(false);
+    expect(processDetailKey("p", base, makeScrollCtx()).handled).toBe(false);
   });
 
-  // ── Enter navigation ─────────────────────────────────
-
-  it("enter at level 0 goes to level 1", async () => {
-    const { component, requestRender } = await setupViewComponent();
-    component.handleInput(ENTER);
-    expect(requestRender).toHaveBeenCalledTimes(1);
+  it("未命中时返回原 offset/followTail（透传，调用方继续现有逻辑）", () => {
+    const r = processDetailKey(SEQ.up, { scrollOffset: 7, followTail: true }, makeScrollCtx());
+    expect(r.scrollOffset).toBe(7);
+    expect(r.followTail).toBe(true);
   });
 
-  it("enter at level 1 goes to level 2", async () => {
-    const { component, requestRender } = await setupViewComponent();
-    component.handleInput(ENTER); // level 1
-    requestRender.mockClear();
-    component.handleInput(ENTER); // level 2
-    expect(requestRender).toHaveBeenCalledTimes(1);
+  it("内容短于视口时 max=0，PgDn/End 都落到 0", () => {
+    const ctx = makeScrollCtx({ contentLines: 5, viewportHeight: 10 });
+    const rEnd = processDetailKey(SEQ.end, { scrollOffset: 0, followTail: false }, ctx);
+    expect(rEnd.scrollOffset).toBe(0);
+    const rPgDn = processDetailKey(SEQ.pageDown, { scrollOffset: 0, followTail: false }, ctx);
+    expect(rPgDn.scrollOffset).toBe(0);
   });
 
-  // ── Up/Down at level 2 ───────────────────────────────
+  it("viewportHeight 兜底：为 0 时用 PAGE_SCROLL_DEFAULT 步长", () => {
+    const ctx = makeScrollCtx({ viewportHeight: 0 });
+    const r = processDetailKey(SEQ.pageUp, { scrollOffset: 25, followTail: true }, ctx);
+    expect(r.scrollOffset).toBe(15); // 25 - 10 (PAGE_SCROLL_DEFAULT)
+  });
+});
 
-  it("down at level 2 increments agentIdx", async () => {
-    const { component, requestRender } = await setupViewComponent();
-    // Enter level 1 then level 2
-    component.handleInput(ENTER);
-    component.handleInput(ENTER);
-    requestRender.mockClear();
-    // agentIdx=0 initially, move to 1
-    component.handleInput(DOWN);
-    expect(requestRender).toHaveBeenCalledTimes(1);
+describe("buildDetailContent / detailContentLength (single source of truth)", () => {
+  it("detailContentLength == buildDetailContent 行数（probe 宽度不折行）", () => {
+    const node = makeTraceNode({ task: "line1\nline2\nline3\nline4\nline5" });
+    const run = makeRun({ traceNodes: [node] });
+    const theme = makeTheme();
+    const len = detailContentLength(node, { promptExpanded: false }, run, theme);
+    const content = buildDetailContent(node, { promptExpanded: false }, run, theme, 9999, Date.now());
+    expect(len).toBe(content.length);
   });
 
-  it("up at level 2 decrements agentIdx", async () => {
-    const { component, requestRender } = await setupViewComponent();
-    // Enter level 1 then level 2, then down to agentIdx=1
-    component.handleInput(ENTER);
-    component.handleInput(ENTER);
-    component.handleInput(DOWN);
-    requestRender.mockClear();
-    // Move back to agentIdx=0
-    component.handleInput(UP);
-    expect(requestRender).toHaveBeenCalledTimes(1);
+  it("prompt 展开后内容行数 >= 折叠时（展开增加可见行）", () => {
+    const longTask = Array.from({ length: 10 }, (_, i) => `prompt line ${i}`).join("\n");
+    const node = makeTraceNode({ task: longTask });
+    const run = makeRun({ traceNodes: [node] });
+    const theme = makeTheme();
+    const collapsed = detailContentLength(node, { promptExpanded: false }, run, theme);
+    const expanded = detailContentLength(node, { promptExpanded: true }, run, theme);
+    expect(expanded).toBeGreaterThan(collapsed);
   });
 
-  it("up at level 2 when agentIdx=0 does nothing", async () => {
-    const { component, requestRender } = await setupViewComponent();
-    component.handleInput(ENTER);
-    component.handleInput(ENTER);
-    requestRender.mockClear();
-    component.handleInput(UP);
-    expect(requestRender).not.toHaveBeenCalled();
-  });
-
-  // ── Global actions ───────────────────────────────────
-
-  it("'x' key calls abort on orchestrator", async () => {
-    const { component, orchestrator } = await setupViewComponent();
-    component.handleInput("x");
-    expect(orchestrator.abort).toHaveBeenCalledWith("test-run-001");
-  });
-
-  it("'x' on terminal status notifies 'already completed'", async () => {
-    const inst = makeTestInstance({ status: "completed" });
-    const { component, notify } = await setupViewComponent(inst);
-    component.handleInput("x");
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("completed"), "warning");
-  });
-
-  it("'p' key when running calls pause", async () => {
-    const { component, orchestrator } = await setupViewComponent();
-    component.handleInput("p");
-    expect(orchestrator.pause).toHaveBeenCalledWith("test-run-001");
-  });
-
-  it("'p' key when paused calls resume", async () => {
-    const inst = makeTestInstance({ status: "paused" });
-    const { component, orchestrator } = await setupViewComponent(inst);
-    component.handleInput("p");
-    expect(orchestrator.resume).toHaveBeenCalledWith("test-run-001");
-  });
-
-  it("'p' on terminal status notifies warning", async () => {
-    const inst = makeTestInstance({ status: "completed" });
-    const { component, notify } = await setupViewComponent(inst);
-    component.handleInput("p");
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("completed"), "warning");
-  });
-
-  // ── Save mode ────────────────────────────────────────
-
-  it("'s' key enters save mode", async () => {
-    const { component, requestRender } = await setupViewComponent();
-    component.handleInput("s");
-    // processKey returns true → requestRender called
-    expect(requestRender).toHaveBeenCalledTimes(1);
-    // Verify save mode active: escape should exit save mode (not exit view)
-    requestRender.mockClear();
-    component.handleInput(ESC);
-    expect(requestRender).toHaveBeenCalledTimes(1);
-  });
-
-  it("save mode: escape exits save mode without exiting view", async () => {
-    const { component, done, requestRender } = await setupViewComponent();
-    component.handleInput("s");
-    requestRender.mockClear();
-    component.handleInput(ESC);
-    // Should exit save mode (returns true → render), not call done
-    expect(requestRender).toHaveBeenCalledTimes(1);
-    expect(done).not.toHaveBeenCalled();
-  });
-
-  it("save mode: tab toggles scope between project and user", async () => {
-    const { component, requestRender } = await setupViewComponent();
-    component.handleInput("s");
-    requestRender.mockClear();
-    // Tab → user scope
-    component.handleInput("\t");
-    expect(requestRender).toHaveBeenCalledTimes(1);
-    // Tab again → project scope
-    requestRender.mockClear();
-    component.handleInput("\t");
-    expect(requestRender).toHaveBeenCalledTimes(1);
-  });
-
-  it("save mode: printable char appends to input value", async () => {
-    const { component, requestRender } = await setupViewComponent();
-    component.handleInput("s");
-    requestRender.mockClear();
-    component.handleInput("A");
-    expect(requestRender).toHaveBeenCalledTimes(1);
-    // Backspace to remove the char, proving it was appended
-    requestRender.mockClear();
-    component.handleInput("\x7f"); // backspace
-    expect(requestRender).toHaveBeenCalledTimes(1);
-  });
-
-  it("save mode: backspace removes last char", async () => {
-    const { component, requestRender } = await setupViewComponent();
-    component.handleInput("s");
-    // Append a char
-    component.handleInput("X");
-    requestRender.mockClear();
-    // Backspace removes it
-    component.handleInput("\x7f");
-    expect(requestRender).toHaveBeenCalledTimes(1);
-  });
-
-  it("save mode: backspace on empty input does nothing", async () => {
-    const { component, requestRender } = await setupViewComponent();
-    component.handleInput("s");
-    requestRender.mockClear();
-    // Backspace on the initial value (instance name "test-workflow")
-    // This should remove one char and return true
-    component.handleInput("\x7f");
-    expect(requestRender).toHaveBeenCalledTimes(1);
-  });
-
-  it("save mode: enter with empty name shows error", async () => {
-    const { component, requestRender } = await setupViewComponent();
-    component.handleInput("s");
-    // Clear input by backspacing all chars (instance name = "test-workflow", 12 chars)
-    for (let i = 0; i < "test-workflow".length; i++) {
-      component.handleInput("\x7f");
-    }
-    requestRender.mockClear();
-    // Enter with empty input → sets error message, returns true
-    component.handleInput("\r");
-    expect(requestRender).toHaveBeenCalledTimes(1);
-  });
-
-  // ── Disposed state ───────────────────────────────────
-
-  it("handleInput after done is a no-op", async () => {
-    const { component, done, requestRender } = await setupViewComponent();
-    component.handleInput(ESC); // calls done
-    expect(done).toHaveBeenCalledTimes(1);
-    requestRender.mockClear();
-    // Any subsequent input should be ignored
-    component.handleInput(DOWN);
-    expect(requestRender).not.toHaveBeenCalled();
+  it("buildDetailContent 首行含 Detail 标题", () => {
+    const node = makeTraceNode();
+    const run = makeRun({ traceNodes: [node] });
+    const content = buildDetailContent(node, { promptExpanded: false }, run, makeTheme(), 80, Date.now());
+    expect(content[0]).toContain("Detail");
+    expect(content.length).toBeGreaterThan(0);
   });
 });

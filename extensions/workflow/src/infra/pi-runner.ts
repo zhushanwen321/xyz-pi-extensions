@@ -2,9 +2,9 @@
  * Workflow Extension — Pi Runner
  *
  * Manages pi --mode json subprocess lifecycle:
- *   - buildArgs(): construct CLI arguments from AgentCallOpts
- *   - resolveInvocation(): locate pi binary (current process or PATH)
- *   - runPiProcess(): spawn, stream-parse JSONL, return exit code
+ * - buildArgs: construct CLI arguments from AgentCallOpts
+ * - resolveInvocation: locate pi binary (current process or PATH)
+ * - runPiProcess: spawn, stream-parse JSONL, return exit code
  *
  * Depends on jsonl-parser for JSONL event parsing.
  */
@@ -12,15 +12,15 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 
-import type { AgentCallOpts } from "./agent-pool.js";
-import { processJsonlEvent } from "./jsonl-parser.js";
+import type { AgentCallOpts } from "../engine/models/types.js";
 import type { ParsedPipelineEvent } from "./jsonl-parser.js";
+import { processJsonlEvent } from "./jsonl-parser.js";
 
 // ── Constants ─────────────────────────────────────────────────
 
 // 24-hour safety net — prevents zombie pi subprocesses if all other
 // cleanup paths (abort signal, budget enforcement) fail.
-// Business-level timeouts are handled by orchestrator's budget enforcement.
+// Business-level timeouts are handled by Engine budget enforcement.
 export const PROCESS_TIMEOUT_MS = 86_400_000;
 export const TIMEOUT_DISPLAY_DIVISOR = 1000;
 
@@ -37,14 +37,14 @@ export function buildArgs(opts: AgentCallOpts): string[] {
     args.push("--model", opts.model);
   }
 
-  // Inject system prompt files (agent systemPrompt + schema injection)
+ // Inject system prompt files (agent systemPrompt + schema injection)
   if (opts.systemPromptFiles) {
     for (const fp of opts.systemPromptFiles) {
       args.push("--append-system-prompt", fp);
     }
   }
 
-  // Inject skill via --skill flag
+ // Inject skill via --skill flag
   if (opts.skillPath) {
     args.push("--skill", opts.skillPath);
   }
@@ -84,6 +84,7 @@ export async function runPiProcess(
   pipeline: ParsedPipelineEvent,
   signal?: AbortSignal,
   env?: Record<string, string>,
+  onEvent?: (raw: Record<string, unknown>) => void,
 ): Promise<{ exitCode: number; stderr: string }> {
   let stderr = "";
   const exitCode = await new Promise<number>((resolve, reject) => {
@@ -105,9 +106,12 @@ export async function runPiProcess(
         try {
           const event = JSON.parse(line) as Record<string, unknown>;
           processJsonlEvent(event, pipeline);
-        // eslint-disable-next-line taste/no-silent-catch
+          // 实时回调：把原始 JSONL 事件（即 SDK session.subscribe 事件）吐给调用方，
+          // 供其更新 live record 驱动 TUI 进度展示。与 processJsonlEvent 并行旁路（各取所需）。
+          onEvent?.(event);
+ // eslint-disable-next-line taste/no-silent-catch
         } catch {
-          // Skip malformed JSON lines
+ // Skip malformed JSON lines
         }
       }
     }
@@ -129,7 +133,7 @@ export async function runPiProcess(
     }, PROCESS_TIMEOUT_MS);
     timer.unref();
 
-    // P1-2: Wire abort signal to SIGKILL the subprocess
+ // P1-2: Wire abort signal to SIGKILL the subprocess
     const abortHandler = signal
       ? () => {
           if (settled) return;
@@ -141,7 +145,7 @@ export async function runPiProcess(
     if (abortHandler && !signal?.aborted) {
       signal!.addEventListener("abort", abortHandler, { once: true });
     } else if (signal?.aborted) {
-      // Already aborted — resolve quickly without spawning
+ // Already aborted — resolve quickly without spawning
       settled = true;
       clearTimeout(timer);
       stderr += "Operation aborted before start";
@@ -159,17 +163,18 @@ export async function runPiProcess(
     });
 
     proc.on("close", (code) => {
-      // Flush remaining buffer on EOF
+ // Flush remaining buffer on EOF
       if (buffer.trim()) {
         try {
           const event = JSON.parse(buffer) as Record<string, unknown>;
           processJsonlEvent(event, pipeline);
-        // eslint-disable-next-line taste/no-silent-catch
+          onEvent?.(event);
+ // eslint-disable-next-line taste/no-silent-catch
         } catch {
-          // Ignore trailing garbage
+ // Ignore trailing garbage
         }
       }
-      // P1-2: Normalize exit code for abort so caller can detect it
+ // P1-2: Normalize exit code for abort so caller can detect it
       settle(aborted ? 1 : (code ?? 0));
     });
 

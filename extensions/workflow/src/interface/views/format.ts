@@ -5,16 +5,50 @@
  * All functions are pure: no Pi runtime, no side effects.
  */
 
-import type { ExecutionTraceNode, ToolCallEntry, WorkflowStatus } from "../../domain/state.js";
 import { truncateToWidth } from "@mariozechner/pi-tui";
+
+import type { AgentEventLogEntry } from "../../engine/live/types.js";
+import type { ExecutionTraceNode, ToolCallEntry } from "../../engine/models/types.js";
+import type { DoneReason, RunStatus } from "../../engine/models/types.js";
 
 // ── Constants ─────────────────────────────────────────────────
 
 export const SIDEBAR_WIDTH = 24;
-const MS_PER_SEC = 1000;
 export const PROMPT_FOLD_LINES = 3;
 export const OUTPUT_TRUNCATE_BYTES = 100_000;
 export const ELLIPSIS = "\u2026"; // U+2026
+
+// L2 详情滚动常量（对齐 subagents list-view.ts）。
+/** terminal.rows 读不到时的翻页兜底步长（防 NaN）。 */
+export const PAGE_SCROLL_DEFAULT = 10;
+/** tui.terminal.rows 兜底行数（duck-type 失败时，对齐 subagents TERM_ROWS_FALLBACK）。 */
+export const TERM_ROWS_FALLBACK = 24;
+
+// 跨 view 共享的布局常量（WorkflowsView + detail-content 都用）。
+/** box 左右边框字符宽度（│ x 2），用于内容行截断预算。 */
+export const BOX_BORDER_CHARS = 2;
+/** token 数 → k 单位的除数。 */
+export const BUDGET_TOKENS_DIVISOR = 1000;
+/** Activity 区最多显示的 tool call 条数。 */
+export const MAX_TOOL_CALLS_DISPLAY = 3;
+
+// 时间换算（模块私有常量）。
+const MS_PER_SEC = 1000;
+const SECS_PER_MIN = 60;
+
+/**
+ * 可显示的状态文本集合。
+ *
+ * 包含 RunStatus（"running"|"paused"|"done" 不直接显示，转 reason）+ DoneReason
+ * （completed/failed/aborted/budget_limited/time_limited）+ ExecutionTraceNode.status
+ * （含 "pending"——trace 节点的初始态）。
+ *
+ * 收窄自 string → 显式联合，编译器会在新增 status 时强制 switch 补齐分支。
+ */
+type StatusText =
+  | RunStatus
+  | DoneReason
+  | "pending";
 
 // ── Theme interface (avoids importing Pi runtime) ─────────────
 
@@ -25,21 +59,30 @@ export interface ThemeLike {
 
 // ── Status helpers ────────────────────────────────────────────
 
-export function statusDotStr(status: string, theme: ThemeLike): string {
+/** status → 语义颜色 token（用于给任意文本染色，不含符号）。 */
+function statusColorToken(
+  status: StatusText,
+): "success" | "warning" | "error" | "muted" {
   switch (status) {
-    case "completed": return theme.fg("success", "●");
-    case "running": return theme.fg("warning", "●");
-    case "failed": return theme.fg("error", "●");
-    default: return theme.fg("muted", "●");
+    case "completed": return "success";
+    case "running": return "warning";
+    case "failed": case "aborted": return "error";
+    default: return "muted";
   }
 }
 
-export function isTerminalStatus(status: WorkflowStatus): boolean {
-  return ["completed", "failed", "aborted", "budget_limited", "time_limited", "state_lost"].includes(status);
+export function statusDotStr(
+  status: StatusText,
+  theme: ThemeLike,
+): string {
+  return theme.fg(statusColorToken(status), "●");
 }
 
 /** Format a status badge with color for the header area. */
-export function formatStatusBadge(status: WorkflowStatus, theme: ThemeLike): string {
+export function formatStatusBadge(
+  status: StatusText,
+  theme: ThemeLike,
+): string {
   switch (status) {
     case "running": return theme.fg("warning", "\u25CF running");
     case "paused": return theme.fg("warning", "\u23F8 PAUSED");
@@ -48,7 +91,6 @@ export function formatStatusBadge(status: WorkflowStatus, theme: ThemeLike): str
     case "aborted": return theme.fg("error", "\u2717 aborted");
     case "budget_limited": return theme.fg("error", "\u26A0 budget");
     case "time_limited": return theme.fg("error", "\u26A0 timeout");
-    case "state_lost": return theme.fg("muted", "? lost");
     default: return theme.fg("muted", status);
   }
 }
@@ -56,7 +98,7 @@ export function formatStatusBadge(status: WorkflowStatus, theme: ThemeLike): str
 // ── Pure formatting functions ─────────────────────────────────
 
 /** Group trace nodes by phase. Nodes without phase go to "(no phase)". */
-export function groupByPhase(nodes: ExecutionTraceNode[]): Map<string, ExecutionTraceNode[]> {
+function groupByPhase(nodes: ExecutionTraceNode[]): Map<string, ExecutionTraceNode[]> {
   const map = new Map<string, ExecutionTraceNode[]>();
   for (const node of nodes) {
     const phase = node.phase || "(default)";
@@ -67,7 +109,7 @@ export function groupByPhase(nodes: ExecutionTraceNode[]): Map<string, Execution
     }
     arr.push(node);
   }
-  // Sort within each phase by stepIndex ascending (FR-3.2)
+ // Sort within each phase by stepIndex ascending (FR-3.2)
   for (const arr of map.values()) {
     arr.sort((a, b) => a.stepIndex - b.stepIndex);
   }
@@ -80,10 +122,49 @@ export function formatElapsed(startedAt?: string, now: number = Date.now()): str
   const ms = now - new Date(startedAt).getTime();
   if (ms < MS_PER_SEC) return "0s";
   const secs = Math.floor(ms / MS_PER_SEC);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  const remSecs = secs % 60;
+  if (secs < SECS_PER_MIN) return `${secs}s`;
+  const mins = Math.floor(secs / SECS_PER_MIN);
+  const remSecs = secs % SECS_PER_MIN;
   return `${mins}m${remSecs}s`;
+}
+
+/**
+ * Format elapsed time from integer seconds（live 路径用）。
+ * 与 formatElapsed 输出格式一致，但输入是 computeElapsedSeconds 的秒数（非时间戳）。
+ */
+export function formatElapsedSeconds(seconds: number): string {
+  if (seconds < 1) return "0s";
+  if (seconds < SECS_PER_MIN) return `${seconds}s`;
+  const mins = Math.floor(seconds / SECS_PER_MIN);
+  const remSecs = seconds % SECS_PER_MIN;
+  return `${mins}m${remSecs}s`;
+}
+
+/**
+ * Format a live eventLog entry（live 路径 Activity 区用）。
+ *
+ *   tool_start → "→ {label}"
+ *   tool_end   → "← {label}"（done）/ "✗ {label}"（failed）
+ *   turn_end   → "∘ {label}"（turn 摘要）
+ *   error      → "✗ {label}"
+ *
+ * 对齐 subagents formatEventLine 的视觉风格，但用 workflow 的 ThemeLike（无 spinner）。
+ */
+export function formatEventLine(entry: AgentEventLogEntry, theme: ThemeLike): string {
+  switch (entry.type) {
+    case "tool_start":
+      return `→ ${entry.label}`;
+    case "tool_end":
+      return entry.status === "failed"
+        ? theme.fg("error", `✗ ${entry.label}`)
+        : `✓ ${entry.label}`;
+    case "turn_end":
+      return theme.fg("dim", `∘ ${entry.label}`);
+    case "error":
+      return theme.fg("error", `✗ ${entry.label}`);
+    default:
+      return entry.label;
+  }
 }
 
 /** Format token + tool call statistics. */
@@ -98,10 +179,24 @@ export function formatTokenStat(
   return elapsed ? `${base} · ${elapsed}` : base;
 }
 
+/**
+ * renderResult 的文本兜底：从 result.content[0] 提取纯文本。
+ * 多处 tool 的 renderResult 曾各自内联此逻辑，提取后统一调用。
+ */
+export function renderTextFallback(
+  result: { content?: Array<{ type: string; text?: string }> },
+): string {
+  const first = result.content?.[0];
+  return first?.type === "text" ? (first.text ?? "") : "";
+}
+
 /** Format a single activity line: ToolName(argsPreview). */
 export function formatActivityLine(entry: ToolCallEntry, maxWidth: number): string {
-  if (maxWidth < 10) return entry.name;
-  const argsBudget = maxWidth - entry.name.length - 2; // name()
+ // 语义阈值与开销：低于此宽度只显名称；括号占 2 字符 (name)。
+  const MIN_ACTIVITY_WIDTH = 10;
+  const PARENS_OVERHEAD = 2;
+  if (maxWidth < MIN_ACTIVITY_WIDTH) return entry.name;
+  const argsBudget = maxWidth - entry.name.length - PARENS_OVERHEAD;
   if (argsBudget <= 0) return truncateToWidth(entry.name, maxWidth);
   const truncated = entry.input.length > argsBudget
     ? entry.input.slice(0, argsBudget - 1) + ELLIPSIS
@@ -113,7 +208,7 @@ export function formatActivityLine(entry: ToolCallEntry, maxWidth: number): stri
 
 /** Measure visible width of a string (strips ANSI escapes). */
 export function visibleLen(s: string): number {
-  // eslint-disable-next-line no-control-regex
+   
   return s.replace(/\x1b\[[0-9;]*m/g, "").replace(/\x1b\][^\x07]*\x07/g, "").length;
 }
 
@@ -164,7 +259,9 @@ export function formatPhaseLine(
   const dot = statusDotStr(pg.doneCount === pg.nodes.length ? "completed" : "running", theme);
   const name = pg.name || "(unnamed)";
   const label = `${idx + 1} ${name} ${pg.doneCount}/${pg.nodes.length}`;
-  const budget = maxWidth - 4; // pointer(2) + dot(1) + space(1)
+ // pointer(2) + dot(1) + space(1)
+  const PHASE_PREFIX_WIDTH = 4;
+  const budget = maxWidth - PHASE_PREFIX_WIDTH;
   const truncated = visibleLen(label) > budget
     ? truncateToWidth(label, budget - 1) + ELLIPSIS
     : label;

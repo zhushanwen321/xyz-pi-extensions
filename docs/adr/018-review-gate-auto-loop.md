@@ -1,8 +1,7 @@
 # ADR 018: Review-Gate 自动循环审查机制
 
 > **⚠️ SUPERSEDED — 本 ADR 已被以下文档取代：**
-> - 各 Phase 详细规格：`docs/phase-specs/phase-{1-4}-*.md`
-> - 统一分析范式：`docs/review-gate-phase-analysis-playbook.md`
+> 最终实现见 coding-workflow extension 的 xyz-harness-* skills。
 >
 > 本 ADR 中的以下决策已变更：
 > - Phase 1/2/4 Review-Gate：从"单次无循环"改为"Workflow 循环（agent 审查+修复）"
@@ -11,7 +10,7 @@
 > - Phase 3 Review-Gate：前置节点从"单 reviewer"改为"spec-plan-conformance-reviewer（独立循环）"
 > - Phase 3 Review-Gate：新增 Fallow 静态分析审查维度
 >
-> 请以 `docs/phase-specs/` 为准。
+> 注：原引用的 phase-specs / playbook 为 harness 产出物，已移除。
 
 Status: ~~accepted~~ superseded
 

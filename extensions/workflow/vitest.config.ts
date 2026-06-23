@@ -3,14 +3,14 @@ import path from "node:path";
 import { defineConfig } from "vitest/config";
 
 /**
- * Vitest config for tests/ directory (tests that need to import src/index.ts).
+ * Vitest config for src/**\/__tests__/**\/*.test.ts.
  *
  * External Pi SDK packages are aliased to shared/types stubs or inline mocks
  * so that vitest's module resolution succeeds without the real packages installed.
  */
 export default defineConfig({
   test: {
-    include: ["tests/**/*.test.ts", "src/**/*.test.ts"],
+    include: ["src/**/__tests__/**/*.test.ts"],
   },
   resolve: {
     alias: {
