@@ -1,8 +1,6 @@
 /**
  * goal_manager tool 适配器（adapters 层）
  *
- * 迁移自 src/tool-handler.ts 的 executeGoalAction + GoalManagerParams。
- *
  * 职责：
  * - 定义 GoalManagerParams schema（AC-4 契约稳定，与现有逐字段一致）
  * - executeGoalAction 分发入口：状态检查 + signal 守卫 + stale context 检测 + ACTION_HANDLERS 查表

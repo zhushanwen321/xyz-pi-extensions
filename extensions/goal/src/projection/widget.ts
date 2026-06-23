@@ -1,12 +1,12 @@
 /**
  * Widget 渲染逻辑（projection 层）— 状态栏和侧边栏任务面板
  *
- * 迁移自 src/widget.ts。改动：
- * - 移除 Pi 类型 import（ThemeColor → ThemeLike，fg 接收 string）
+ * 设计要点：
+ * - 不 import Pi 类型（ThemeColor → ThemeLike，fg 接收 string）
  * - 类型 import 自 engine/types.ts + engine/task.ts
  * - 工具函数 import 自 engine/budget.ts
  * - 时间计算基于 state.timeUsedSeconds（不含 Date.now() 副作用段）
- * - 新增 updateWidget(session, uiPort) + FR-6.6 hasUI 守卫
+ * - updateWidget(session, uiPort) 含 FR-6.6 hasUI 守卫
  */
 
 import {
@@ -254,7 +254,7 @@ function renderSubtaskLines(t: GoalTask, th: ThemeLike): string[] {
 /**
  * 从 UiPort 取出 ThemeLike。
  *
- * ports.ts 的 UiPort 故意不暴露 theme（保持抽象最小）。adapter 层（Wave 10/12）
+ * ports.ts 的 UiPort 故意不暴露 theme（保持抽象最小）。adapter 层在
  * 构造 UiPort 实现时，把 Pi 的 ctx.ui.theme 的 fg/bold 方法挂到对象上，
  * 使该实现同时满足 UiPort 与 ThemeLike 形状。projection 层通过此单步断言取出。
  *

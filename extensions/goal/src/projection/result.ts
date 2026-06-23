@@ -1,8 +1,7 @@
 /**
  * Tool result 类型 + 错误结果构造器（projection 层）
  *
- * 历史背景：旧版有 makeGoalResult / buildBudgetReport / errorResult 三个构造器，
- * 重构后 action 结果由 service 层内联构造（makeResult），budget 格式化收敛到
+ * action 结果由 service 层内联构造（makeResult），budget 格式化收敛到
  * prompts.ts 的 formatBudget。本文件保留两样东西：
  * - GoalManagerDetails：goal_manager tool 返回结果的 details 字段类型（index.ts 消费）
  * - errorResult：跨层的标准错误结果构造器（service / tool-adapter 共用，DRY）

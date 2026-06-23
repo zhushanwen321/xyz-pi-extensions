@@ -13,7 +13,7 @@
  *
  * 行为契约（与重构前等价，AC-4）：
  * - goal_manager tool schema 不变
- * - /goal 命令子命令不变（8 个）
+ * - /goal 命令子命令不变（7 个，ADR-002 删除 pause 后）
  * - 6 个事件 handler 覆盖 Pi 的 6 个事件
  *
  * FR-4.2/D-16：ctx 必填，移除 lastCtx 模块级可变状态。

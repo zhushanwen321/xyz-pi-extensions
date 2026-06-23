@@ -1,11 +1,12 @@
 /**
- * /goal 命令适配器 — 8 个子命令 handler（adapters 层）
+ * /goal 命令适配器 — 7 个子命令 handler（adapters 层）
  *
- * 迁移自 src/command-handler.ts。改动：
- * - 状态变更调 service（createGoal / finalizeAndPersist）
- * - import 类型自 engine 层 + commands.ts + projection
- * - ports 桥接复用 tool-adapter.buildPorts（DRY：单一 ports 构造点）
- * - FR-8.12: set/resume 后 sendUserMessage 触发 AI（保持不变）
+ * ADR-002 后 7 个子命令：set / status / resume / clear / abort / update / history
+ * （原 /goal pause 已删除）。
+ *
+ * 状态变更调 service（createGoal / finalizeAndPersist）；
+ * ports 桥接复用 tool-adapter.buildPorts（DRY：单一 ports 构造点）；
+ * FR-8.12: set/resume 后 sendUserMessage 触发 AI。
  *
  * adapters 层可 import Pi 类型（桥接 Pi 和 service）。
  */
@@ -33,7 +34,7 @@ import { buildPorts } from "./tool-adapter";
 // ── Orchestrator ──────────────────────────────────────
 
 /**
- * /goal 命令分发器。按 parseGoalArgs 结果路由到 8 个子命令 handler。
+ * /goal 命令分发器。按 parseGoalArgs 结果路由到 7 个子命令 handler。
  *
  * 调用方（index.ts 的 command handler）把原始 args 透传到这里。
  */

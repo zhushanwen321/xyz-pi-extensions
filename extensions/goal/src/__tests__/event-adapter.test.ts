@@ -1,8 +1,8 @@
 /**
- * event-adapter.ts 测试 — Wave 13 核心逻辑
+ * event-adapter.ts 测试 — agent_end / before_agent_start 核心逻辑
  *
  * 覆盖 agent_end 的 4 层分支优先级（FR-8.7）+ ESC 守卫（FR-6.7）+
- * before_agent_start 的 AUTO_CLEAR/staleness/context pause。
+ * before_agent_start 的 AUTO_CLEAR/staleness/context wrap-up。
  *
  * 用 fake pi + fake ctx（不 import Pi SDK）。handler 签名 (pi, session, ctx) → void/result。
  */

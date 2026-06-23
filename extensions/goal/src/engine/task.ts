@@ -4,7 +4,7 @@
  * 零 Pi 依赖（engine 层地基）。
  *
  * 关键约束：validateTaskTransition 只看 status，不看 verification。
- * `completed && !verification` 的全锁逻辑在 service 层（Wave 5）实现。
+ * `completed && !verification` 的全锁逻辑在 service 层实现（见 service.ts complete_goal）。
  */
 
 // ── 状态枚举 ────────────────────────────────────────

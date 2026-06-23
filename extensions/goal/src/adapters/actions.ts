@@ -4,14 +4,11 @@
  * 每个 action 一个薄封装 handler，委托 service.applyToolAction 完成实际工作
  * （状态变更 + persist + widget 刷新 + 副作用）。
  *
- * 迁移自 src/action-handlers.ts。改动：
- * - 状态变更 / persist / widget / history / clearSession 逻辑下沉到 service.applyToolAction
- * - handler 仅做：委托 service
- * - FR-8.x 行为契约在 service 对应 case 实现（见交叉引用）
+ * 状态变更 / persist / widget / history / clearSession 逻辑下沉到 service.applyToolAction；
+ * handler 仅做委托。FR-8.x 行为契约在 service 对应 case 实现（见交叉引用）。
  *
- * 本文件含 task 部分 7 个 handler；subtask 部分 3 个 handler 在文件末尾接续（Wave 9）。
- * ACTION_HANDLERS Record 完整组装在 Wave 10 的 tool-adapter.ts（避免本 wave 引用尚未存在的
- * subtask handler 导致编译错误）。
+ * 本文件含 task 部分 7 个 handler + 文件末尾 subtask 部分 3 个 handler。
+ * ACTION_HANDLERS Record 完整组装在 tool-adapter.ts（合并两张子表）。
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -161,11 +158,11 @@ export const handleDeleteSubtasks: ActionHandler = (actx): ToolActionResult => {
 	return applyToolAction(actx.session, "delete_subtasks", actx.params, actx.ports);
 };
 
-// ── 局部 Action Record（供 Wave 10 组装最终 ACTION_HANDLERS）──
+// ── 局部 Action Record（供 tool-adapter.ts 组装最终 ACTION_HANDLERS）──
 
 /**
  * task action 路由表（7 条）。
- * Wave 10 的 tool-adapter.ts 把它与 SUBTASK_ACTION_HANDLERS 合并为最终 ACTION_HANDLERS。
+ * tool-adapter.ts 把它与 SUBTASK_ACTION_HANDLERS 合并为最终 ACTION_HANDLERS。
  */
 export const TASK_ACTION_HANDLERS: Record<string, ActionHandler> = {
 	create_tasks: handleCreateTasks,
@@ -179,7 +176,7 @@ export const TASK_ACTION_HANDLERS: Record<string, ActionHandler> = {
 
 /**
  * subtask action 路由表（3 条）。
- * Wave 10 的 tool-adapter.ts 把它与 TASK_ACTION_HANDLERS 合并为最终 ACTION_HANDLERS。
+ * tool-adapter.ts 把它与 TASK_ACTION_HANDLERS 合并为最终 ACTION_HANDLERS。
  */
 export const SUBTASK_ACTION_HANDLERS: Record<string, ActionHandler> = {
 	add_subtasks: handleAddSubtasks,

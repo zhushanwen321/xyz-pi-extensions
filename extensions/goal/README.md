@@ -14,7 +14,7 @@ Codex 风格的 `/goal` 命令 — 持久目标驱动自主循环，支持任务
 
 ```bash
 # symlink 方式（开发推荐）
-ln -s /path/to/xyz-pi-extensions-workspace/main/packages/goal \
+ln -s /path/to/xyz-pi-extensions-workspace/<branch>/extensions/goal \
       ~/.pi/agent/extensions/goal
 
 # npm 方式（正式）
@@ -35,14 +35,16 @@ pi install npm:@zhushanwen/pi-goal
 
 ```
 goal/
-├── index.ts
+├── index.ts            # 入口 — 命令、事件、工具注册 + __goalInit
 └── src/
-    ├── index.ts       # 入口 — 命令、事件、工具注册
-    ├── state.ts       # 状态机（6 态）
-    ├── commands.ts    # 命令参数解析
-    ├── templates.ts   # Steering prompt 模板
-    ├── tool-handler.ts# goal_manager 工具处理
-    ├── budget.ts      # 预算计算
-    ├── constants.ts   # 常量
-    └── widget.ts      # TUI 状态栏渲染
+    ├── index.ts        # 工厂入口（注册 tool/command/events，全部委托 adapters）
+    ├── commands.ts     # /goal 命令参数解析
+    ├── constants.ts    # 语义常量
+    ├── ports.ts        # Pi 能力抽象（Persistence/Ui/Messaging/Session）
+    ├── service.ts      # 协调层 — applyToolAction / applyEvent 双入口
+    ├── persistence.ts  # serialize/deserialize + GoalHistoryEntry
+    ├── session.ts      # 运行时句柄 + 状态重建 + entry GC
+    ├── engine/         # 零 Pi 依赖的纯状态机（goal/task/budget/types）
+    ├── adapters/       # Pi 桥接（tool/command/event-adapter + actions）
+    └── projection/     # 渲染（widget/prompts/result）
 ```

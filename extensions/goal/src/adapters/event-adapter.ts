@@ -1,22 +1,21 @@
 /**
  * Event adapter — Pi 事件 handler + 并发保护（adapters 层）
  *
- * 6 个事件 handler 分两 wave 实现：
- * - Wave 12（本文件）：基础设施 + agent_start + turn_end + message_end + session_start
- * - Wave 13（追加）：before_agent_start + agent_end（最复杂）
+ * 6 个事件 handler：
+ * - agent_start / turn_end / message_end / session_start：委托 service.applyEvent
+ *   （路径 B）做状态变更，adapter 负责 ESC 守卫 + 执行 EventEffect[] + persist
+ * - before_agent_start：AUTO_CLEAR + staleness reminder + context wrap-up + injection
+ * - agent_end：FR-8.7 完整分支优先级 + ESC 守卫 + 并发保护
  *
  * 设计（D-21 双路径）：
- * - 4 个简单事件委托 service.applyEvent（路径 B）做状态变更，adapter 负责：
- *   ① ESC 守卫（ctx.signal.aborted）
- *   ② 执行 applyEvent 返回的 EventEffect[]（updateWidget 等）
- *   ③ persist（与旧 index.ts 行为对齐：turn_end/message_end 不 persist，
- *      persist 在 before_agent_start/agent_end 触发——Wave 13）
+ * - persist 时机：before_agent_start / agent_end 触发（turn_end / message_end 不 persist，
+ *   与重构前 index.ts 行为对齐）
  *
  * 并发保护（在此层，D-21）：
- * - isProcessing 防重入（FR-8.2 G-021，agent_end 用，在此定义供 Wave 13 用）
+ * - isProcessing 防重入（FR-8.2 G-021，agent_end 用）
  * - makeStaleChecker goalId snapshot（FR-8.2 G-020，agent_end 用）
  *
- * FR-6.7 ESC 守卫：turn_end + message_end 在此，agent_end 在 Wave 13。
+ * FR-6.7 ESC 守卫：message_end / turn_end / agent_end 三 handler 入口检查 ctx.signal.aborted。
  *
  * ports 桥接复用 tool-adapter.buildPorts（DRY：单一 ports 构造点）。
  */
@@ -51,7 +50,7 @@ import { buildPorts } from "./tool-adapter";
 /**
  * 构造 stale-check 闭包：入口快照 goalId，后续判断是否被新 goal 覆盖。
  *
- * 用法（Wave 13 agent_end）：
+ * 用法（agent_end）：
  * ```ts
  * const checkStale = makeStaleChecker(session);
  * // ... 长流程 ...
@@ -71,7 +70,7 @@ export function makeStaleChecker(session: GoalSession): () => boolean {
  *
  * agent_end 可能并发触发（多 message），重入时直接返回（不重复预算检查/续跑）。
  * 通过 session.isProcessing flag 实现（定义在 session.ts）。
- * 本函数为 agent_end 提供「锁住 + 解锁」语义，Wave 13 使用。
+ * 本函数为 agent_end 提供「锁住 + 解锁」语义。
  */
 export function acquireProcessing(session: GoalSession): boolean {
 	if (session.isProcessing) return false; // 已被占用
@@ -188,7 +187,7 @@ export async function handleSessionStart(
 // ── 持久化辅助（before_agent_start / agent_end 用）────
 
 /**
- * persist + updateWidget 的统一入口（对应旧 tool-handler.persistAndUpdate）。
+ * persist + updateWidget 的统一入口。
  *
  * BL-3 DRY：tick 逻辑复用 service.tickState（单一 tick 定义点）。
  * 与 service.persistState 的差异：adapter 层 event handler 需要在 persist 后再 updateWidget，
@@ -211,7 +210,7 @@ function persistAndUpdate(
 	return false;
 }
 
-// ── 事件 5: before_agent_start（staleness + context pause + injection）───
+// ── 事件 5: before_agent_start（staleness + context wrap-up + injection）───
 
 /**
  * before_agent_start 事件 handler（FR-8.1 G-007 + FR-8.6）。

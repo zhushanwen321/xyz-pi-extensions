@@ -1,10 +1,9 @@
 /**
  * Steering prompt 模板（projection 层）
  *
- * 迁移自 src/templates.ts。改动：
- * - 类型 import 自 engine/types.ts + engine/task.ts
- * - 时间计算参数化（调用方传 timeUsedSeconds，不调 Date.now()）
- * - FR-3.4：formatBudgetInfo / formatBudgetLine 收敛为 formatBudget
+ * 类型 import 自 engine/types.ts + engine/task.ts；时间计算参数化（调用方传
+ * timeUsedSeconds，不调 Date.now()）。FR-3.4：formatBudgetInfo / formatBudgetLine
+ * 收敛为 formatBudget 单一出口。
  *
  * 设计原则（来自 Codex 调研）：
  * - Completion audit: 逐项证据验证，intent/partial progress 不是 evidence
@@ -49,11 +48,11 @@ export type BudgetFormatStyle = "percent" | "line" | "remaining" | "report";
 /**
  * FR-3.4 唯一 budget 格式化收敛出口。
  *
- * 收敛旧 4 处重复：
- * - "percent"  → `(Token: N%, Time: M%)`（旧 formatBudgetInfo，contextInjectionPrompt 用）
- * - "line"     → ` | Tokens: remaining/total Time: Xm/Ym`（旧 formatBudgetLine，continuationPrompt 用）
- * - "remaining"→ `Token: used/total (N remaining) | Time: Xm/Ym (Zm remaining)`（旧 makeGoalResult 拼接）
- * - "report"   → 多行数组（旧 buildBudgetReport 的 budget 行）
+ * 4 种输出样式（FR-3.4 唯一出口，替代原先散落各处的拼接）：
+ * - "percent"  → `(Token: N%, Time: M%)`（contextInjectionPrompt 用）
+ * - "line"     → ` | Tokens: remaining/total Time: Xm/Ym`（continuationPrompt 用）
+ * - "remaining"→ `Token: used/total (N remaining) | Time: Xm/Ym (Zm remaining)`（result 拼接用）
+ * - "report"   → 多行数组（complete_goal Budget Report 用）
  *
  * @param state runtime state（读 budget / tokensUsed）
  * @param timeUsedSeconds 累计耗时秒数（由 adapter/service 通过 tick() 计算后传入）
