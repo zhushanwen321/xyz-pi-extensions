@@ -21,6 +21,10 @@
  * (d) pause/resume/abort 失败静默吞 → 加 notify。
  */
 
+import { promises as fsPromises } from "node:fs";
+import { homedir } from "node:os";
+import { join as pathJoin } from "node:path";
+
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key, matchesKey } from "@mariozechner/pi-tui";
 
@@ -60,9 +64,6 @@ const OVERLAY_CENTER_DIVISOR = 2;
 /** 轮询间隔：engine 无事件推送，view 自轮询 trace 变化（缺陷 #1+#5 修复）。 */
 const TICK_MS = 1000;
 
-/** tmp workflow 路径标志（用于判断是否允许 save）。 */
-const TMP_PATH_POSIX = "/.tmp/";
-const TMP_PATH_WIN = "\\.tmp\\";
 /** 可打印 ASCII 字符下限（用于 save overlay 输入过滤）。 */
 const PRINTABLE_CHAR_MIN = 32;
 
@@ -115,11 +116,6 @@ function createInitialState(): ViewState {
     saveMessage: "",
     saveMsgOk: false,
   };
-}
-
-/** 判断 run 是否来自临时 workflow（仅 tmp workflow 可 save）。 */
-function isTmpRun(run: WorkflowRun): boolean {
-  return run.spec.scriptPath.includes(TMP_PATH_POSIX) || run.spec.scriptPath.includes(TMP_PATH_WIN);
 }
 
 // ── View factory ──────────────────────────────────────────────
@@ -275,14 +271,20 @@ export function createWorkflowsView(
         return;
       }
 
-      // ── Save shortcut（缺陷 #3 恢复）：仅 tmp workflow 可 save ──
-      if (data === "s" && isTmpRun(run)) {
+      // ── Save shortcut（对齐 main：总是进入 save mode，非 tmp 时 saveWorkflow 报错） ──
+      if (data === "s") {
         state.saveMode = true;
         state.saveInputValue = run.spec.scriptName;
         state.saveMessage = "";
         state.saveMsgOk = false;
         cache.width = undefined;
         requestRender();
+        return;
+      }
+
+      // ── Trace export（对齐 main 的 S 键）：导出完整 trace 到 Markdown 文件 ──
+      if (data === "S") {
+        saveTraceToFile(run, ctx);
         return;
       }
     }
@@ -518,7 +520,8 @@ function renderFooter(
     actionParts.push("a abort");
     actionParts.push(status === "paused" ? "p resume" : "p pause");
   }
-  if (isTmpRun(run)) actionParts.push("s save");
+  actionParts.push("s save");
+  actionParts.push("S trace");
   actionParts.push("esc back");
   const footer = `${navPart} · ${actionParts.join(" · ")}`;
   lines.push("");
@@ -766,6 +769,53 @@ function renderLevel2(
   }
 
   mergeBody(lines, leftLines, rightLines);
+}
+
+// ── Trace export（S 键，对齐 main saveTraceToFile）─────────────
+
+/** trace 导出文件每节点 outcome 截断长度。 */
+const TRACE_OUTCOME_SLICE = 2000;
+/** trace 导出文件 activity 行宽。 */
+const TRACE_ACTIVITY_WIDTH = 80;
+
+/**
+ * 导出完整 workflow trace 到 Markdown 文件。
+ * 路径：~/.pi/agent/workflow-traces/{runId}.md
+ * 对齐 main 的 saveTraceToFile（WorkflowsView.ts:365-396）。
+ */
+function saveTraceToFile(run: WorkflowRun, ctx: ExtensionContext): void {
+  const dir = pathJoin(homedir(), ".pi", "agent", "workflow-traces");
+  const filePath = pathJoin(dir, `${run.runId}.md`);
+  const lines: string[] = [];
+  lines.push(`# Workflow Trace: ${run.spec.scriptName} (${run.runId})`, "");
+  lines.push(`Status: ${run.state.status} | Started: ${run.meta.startedAt ?? "-"} | Duration: ${formatElapsed(run.meta.startedAt)}`);
+  const budget = run.state.budget;
+  lines.push(`Budget: ${budget.usedTokens}/${budget.maxTokens ?? "unlimited"} tokens, $${budget.usedCost.toFixed(BUDGET_COST_DECIMALS)}`, "");
+  const phases = buildPhaseGroups([...run.state.trace.toArray()]);
+  for (const pg of phases) {
+    lines.push(`## Phase: ${pg.name || "(unnamed)"}`, "");
+    for (const node of pg.nodes) {
+      lines.push(`### [#${node.stepIndex}] ${node.agent} — ${node.status}`);
+      lines.push(`- Model: ${node.model}`);
+      lines.push(`- Duration: ${formatElapsed(node.startedAt, node.completedAt ? new Date(node.completedAt).getTime() : Date.now())}`, "");
+      lines.push("**Prompt:**", node.task, "");
+      const toolCalls = node.result?.toolCalls ?? [];
+      if (toolCalls.length > 0) {
+        lines.push("**Activity:**");
+        for (const tc of toolCalls) lines.push(`- ${formatActivityLine(tc, TRACE_ACTIVITY_WIDTH)}`);
+        lines.push("");
+      }
+      lines.push("**Outcome:**");
+      if (node.status === "running") lines.push("Still running...");
+      else if (node.result?.error) lines.push(node.result.error);
+      else if (node.result?.content) lines.push(node.result.content.slice(0, TRACE_OUTCOME_SLICE));
+      lines.push("");
+    }
+  }
+  fsPromises.mkdir(dir, { recursive: true })
+    .then(() => fsPromises.writeFile(filePath, lines.join("\n"), "utf8"))
+    .then(() => ctx.ui.notify(`Trace saved: ${filePath}`, "info"))
+    .catch((err: Error) => ctx.ui.notify(`Save failed: ${err.message}`, "error"));
 }
 
 // ── Save overlay（缺陷 #3 恢复，从 main 移植简化版）────────────
