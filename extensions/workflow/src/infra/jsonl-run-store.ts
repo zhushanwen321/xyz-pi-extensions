@@ -109,16 +109,22 @@ function serializeRun(run: WorkflowRun): RunSnapshot {
         usedCost: run.state.budget.usedCost,
         totalCallCount: run.state.budget.totalCallCount,
       },
-      calls: Array.from(run.state.calls.values()).map((c) => ({
-        id: c.id,
-        opts: c.opts,
-        status: c.status,
-        attempts: c.attempts,
-        result: c.result,
-        sessionId: c.sessionId,
-        traceNode: c.traceNode,
-      })),
-      trace: [...run.state.trace.toArray()],
+      calls: Array.from(run.state.calls.values()).map((c) => {
+        // strip live（同 trace 序列化，不持久化运行期对象）
+        const { live: _live, ...traceNodeRest } = c.traceNode;
+        return {
+          id: c.id,
+          opts: c.opts,
+          status: c.status,
+          attempts: c.attempts,
+          result: c.result,
+          sessionId: c.sessionId,
+          traceNode: traceNodeRest,
+        };
+      }),
+      // trace 节点浅拷贝时 strip live 字段——ExecutionRecord 含可变 turns[]/controller，
+      // 不适合序列化；pause/resume 后 live 为 undefined（重跑时由 dispatchAgentCall 重建）。
+      trace: run.state.trace.toArray().map(({ live: _live, ...rest }) => rest),
       errorLogs: run.state.errorLogs,
       error: run.state.error,
       scriptResult: run.state.scriptResult,

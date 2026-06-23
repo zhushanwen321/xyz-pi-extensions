@@ -29,11 +29,13 @@ import { resolveAgentOpts } from "../infra/agent-opts-resolver.js";
 import { ConcurrencyGate, DEFAULT_CONCURRENCY } from "../infra/concurrency-gate.js";
 import type { WorkerHandle } from "../infra/worker-handle.js";
 import { executeAgentCall } from "./execute-agent-call.js";
+import { createRecord, updateFromEvent } from "./live/execution-record.js";
+import { jsonlToAgentEvent } from "./live/jsonl-to-agent-event.js";
 import { AgentCall } from "./models/agent-call.js";
 import type { LifecycleDeps, WorkerHandlers } from "./models/ports.js";
 import { RunRuntime } from "./models/run-runtime.js";
 import type { WorkerLogEntry } from "./models/types.js";
-import type { AgentCallOpts, AgentResult } from "./models/types.js";
+import type { AgentCallOpts, AgentResult, ExecutionTraceNode } from "./models/types.js";
 import type { WorkflowRun } from "./models/workflow-run.js";
 
 // ── 常量 ─────────────────────────────────────────────────────
@@ -196,10 +198,20 @@ function dispatchAgentCall(
     return;
   }
 
- // 构建 trace 节点
+ // 构建 trace 节点 + live record（TUI 实时进度）
   const agentName = msg.opts.description ?? msg.opts.agent ?? "unknown";
   const now = new Date().toISOString();
-  const node = {
+  // live record：收口 agent 执行过程中的 text/thinking/toolCalls/usage，
+  // 供 TUI 在 agent 运行期间显示进度（getEventLog/getCurrentActivity）。
+  // 完成时由下方 .then 清除（终态由 node.result 承载）。
+  const liveRecord = createRecord(String(msg.callId), {
+    agent: agentName,
+    model: msg.opts.model ?? "default",
+    mode: "sync",
+    task: msg.opts.prompt,
+    startedAt: Date.now(),
+  });
+  const node: ExecutionTraceNode = {
     stepIndex: msg.callId,
     agent: agentName,
     task: msg.opts.prompt,
@@ -207,6 +219,7 @@ function dispatchAgentCall(
     status: "running" as const,
     phase: msg.phase,
     startedAt: now,
+    live: liveRecord,
   };
   run.state.trace.append(node);
 
@@ -236,6 +249,8 @@ function dispatchAgentCall(
     const errorResult: AgentResult = { content: "", error: resolved.error };
     call.markDone(errorResult);
     run.state.calls.set(msg.callId, call);
+    // 无子进程执行，清除空 live record（终态由 result 承载）
+    node.live = undefined;
     run.state.trace.update(msg.callId, {
       status: "failed",
       result: errorResult,
@@ -257,11 +272,21 @@ function dispatchAgentCall(
  // 后者已守 paused/terminal 早期 return）。fallback new AbortController 已移除。
   const runtime = run.runtime!;
   const signal = runtime.controller.signal;
+  // onEvent：子进程每吐一条 JSONL 事件就翻译成 AgentEvent 喂给 live record。
+  // TUI 靠 tick 轮询 trace.toArray() 读 node.live，无需显式通知。
+  const onEvent = (raw: Record<string, unknown>): void => {
+    for (const agentEvent of jsonlToAgentEvent(raw)) {
+      updateFromEvent(liveRecord, agentEvent);
+    }
+  };
   void runtime.gate
-    .withSlot(() => executeAgentCall(call, deps.runner, run.state.budget, signal, run.state.trace), signal)
+    .withSlot(() => executeAgentCall(call, deps.runner, run.state.budget, signal, run.state.trace, onEvent), signal)
     .then(() => {
  // pause/abort 后到达的 stale completion 不写 state（pause 是干净快照）
       if (run.state.status !== "running") return;
+      // 清除 live record：终态已由 executeAgentCall → finalizeCall 写入 node.result，
+      // live 不再需要（且含可变状态，不保留）。无论 stale 与否都清，避免内存泄漏。
+      node.live = undefined;
       if (call.result) postAgentResult(run, msg.callId, call.result, false);
  // D-12 regression fix (round-2 #1)：executeAgentCall 内 consume/incrementCallCount
  // 后同步 worker $BUDGET（否则 $BUDGET.spent()/remaining() 恒为 0）

@@ -141,10 +141,11 @@ export async function executeAgentCall(
   budget: Budget,
   signal: AbortSignal,
   trace: Trace,
+  onEvent?: (raw: Record<string, unknown>) => void,
 ): Promise<void> {
   call.markRunning();
 
-  const result = await runner.run(call.opts, signal);
+  const result = await runner.run(call.opts, signal, onEvent);
 
  // 累加 usage（D.4：cacheWrite 合并到 input，cacheWrite=0 避免双重计数）
   if (result.usage) {
@@ -181,7 +182,7 @@ export async function executeAgentCall(
       budget.incrementCallCount();
       return;
     }
-    await executeAgentCall(call, runner, budget, signal, trace);
+    await executeAgentCall(call, runner, budget, signal, trace, onEvent);
     return;
   }
 

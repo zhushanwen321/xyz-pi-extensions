@@ -13,6 +13,8 @@
  * 层归属：Engine（数据结构 + 不变式守卫）。
  */
 
+import type { ExecutionRecord } from "../live/types.ts";
+
 // ── 状态机 ────────────────────────────────────────────────────
 
 /**
@@ -197,6 +199,14 @@ export interface ExecutionTraceNode {
  * Used to locate the session JSONL for post-run inspection.
  */
   sessionId?: string;
+ /**
+ * Live 执行进度对象（running 时存在，done 时由 dispatchAgentCall 清除）。
+ *
+ * 挂在 node 上（D-10 单源延伸：AgentCall.traceNode 与 Trace.nodes 共享同一引用）。
+ * TUI 通过 trace.toArray() 读 node.live，派生 getEventLog/getCurrentActivity 实时展示。
+ * 不持久化（pause/resume 时为 undefined，重跑时重建）。
+ */
+  live?: ExecutionRecord;
 }
 
 /**

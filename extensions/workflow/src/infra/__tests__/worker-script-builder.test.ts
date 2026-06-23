@@ -92,8 +92,11 @@ describe("buildWorkerScript", () => {
       expect(result).toContain("cached.parsedOutput ?? cached.content");
     });
 
-    it("rejects cached error path (cached.error throws)", () => {
-      expect(result).toContain("if (cached && cached.error)");
+    it("does NOT throw on cached error — resolves to content (failure isolation)", () => {
+      // B1: 失败不传播到 agent 外部。旧实现 `if (cached && cached.error) throw`
+      // 会把单 agent 失败放大成整批崩溃（parallel reject → rebuildRuntime → SIGKILL）。
+      // 现在 cache replay 也统一 resolve，不再有 throw-on-error 分支。
+      expect(result).not.toContain("cached.error) { throw");
     });
   });
 
@@ -105,13 +108,24 @@ describe("buildWorkerScript", () => {
       expect(result).toContain("opts, phase: _effectivePhase");
     });
 
-    it("handles agent-result message and resolves/rejects pending call", () => {
+    it("handles agent-result message — resolves pending call (no reject on error)", () => {
+      // B1: 失败不传播到 agent 外部。旧实现 result.error 时 pending.reject，
+      // 现在统一 resolve（错误时回退 content）。
       expect(result).toContain('msg.type === "agent-result"');
       expect(result).toContain("pending.resolve(msg.result.parsedOutput ?? msg.result.content)");
+      expect(result).not.toContain("pending.reject(new Error(msg.result.error))");
     });
 
     it("handles budget-update message", () => {
       expect(result).toContain('msg.type === "budget-update"');
+    });
+  });
+
+ // ── parallel() failure isolation (B2) ──────────────────────
+
+  describe("parallel() failure isolation", () => {
+    it("uses Promise.allSettled so a single rejection does not kill the batch", () => {
+      expect(result).toContain("Promise.allSettled(");
     });
   });
 

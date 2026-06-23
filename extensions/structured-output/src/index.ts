@@ -110,32 +110,65 @@ function createToolDefinition() {
 // ── Workflow hook ──────────────────────────────────────────────
 
 /**
- * 注册 turn_end hook，检查模型是否调用了 structured-output 工具。
- * 如果没有调用，通过 pi.sendUserMessage() 注入 steering message。
+ * 从 tool 执行结果里提取错误文本。
  *
- * 检测逻辑：在 tool_execution_end 事件中追踪是否有成功的 structured-output 调用。
+ * Pi 框架在 tool execute 抛错时，构造 `{ content: [{ type: "text", text }] }`
+ * 塞进 result.content[0].text（见 extensions/unified-hooks 的 extractErrorText 及其
+ * 文档：SDK 事件结构里没有独立 errorMessage 字段，错误文本只能从 result.content 里取）。
+ * 这里防御性取多种结构，取不到就返回 undefined（调用方降级为通用提示）。
+ */
+function extractToolErrorText(result: unknown): string | undefined {
+	// 常见结构：{ content: [{ type: "text", text: "..." }] }
+	if (typeof result === "object" && result !== null) {
+		const content = (result as Record<string, unknown>).content;
+		if (Array.isArray(content)) {
+			for (const item of content) {
+				if (typeof item === "object" && item !== null) {
+					const text = (item as Record<string, unknown>).text;
+					if (typeof text === "string" && text.length > 0) return text;
+				}
+			}
+		}
+		// 兜底：某些 tool 直接塞 { error: "..." }
+		const err = (result as Record<string, unknown>).error;
+		if (typeof err === "string" && err.length > 0) return err;
+	}
+	return undefined;
+}
+
+/**
+ * 注册 turn_end hook，检查模型是否成功调用 structured-output 工具。
+ * 未成功时通过 pi.sendUserMessage({deliverAs:"steer"}) 注入 steering message 重试。
+ *
+ * 两种失败形态都会触发 steer：
+ * 1. 完全没调用（soCallCount === 0）→ 注入"必须调用"提示 + 正确 schema
+ * 2. 调了但全是 isError（soCallCount > 0 && !soSucceededEver）→ 注入具体校验错误
+ *    + 正确 schema。旧实现在此处撒手交给 Pi 自然修正，但模型遇到 "Invalid JSON Schema"
+ *    时无法自行修正（它不知道正确 schema 长什么样），实测会放弃 → 子进程正常退出 →
+ *    workflow 把单点失败放大成整批崩溃。故此处主动 steer 并回灌错误细节。
+ *
+ * 检测时序：Pi 保证同 turn 内所有 tool_execution_end 都在 turn_end 之前触发，
+ * 故 turn_end 读取的状态已反映本 turn 全部 tool 调用结果。
  */
 function setupWorkflowHook(pi: PiAPI, schemaJson: string): void {
-	// ── soCalledThisTurn 时序依赖说明 ──
-	// Pi 的事件顺序保证：tool_execution_end → Pi 内部错误处理 → 模型下一个 turn → turn_end
-	// 这意味着同一 turn 内，所有 tool_execution_end 事件都在 turn_end 之前触发。
-	// 因此 soCallCount 在 turn_end 读取时已经反映了本 turn 的所有 tool 调用结果。
-	// 如果 model 先调 structured-output 失败（isError=true），soCallCount++ 但 soSucceededEver 仍 false，
-	// Pi 的自然错误修正流程会在下一 turn 重试，我们只在本 turn 完全未调用时才注入 steering message。
 	let soCallCount = 0;
 	let soSucceededEver = false;
 	let hookRetryCount = 0;
+	// 最近一次 structured-output 调用的错误文本（isError=true 时从 result.content 提取）。
+	// turn_end 据此决定 steer 消息是"必须调用"还是"修正后重试"。
+	let lastSchemaError = "";
 
-	// 追踪 structured-output 调用
-	// 成功调用 → soSucceededEver=true，后续不再注入
-	// 失败调用 → soCallCount++ 但 soSucceededEver 仍 false，让 Pi 自行重试
+	// 追踪 structured-output 调用结果：
+	// 成功 → soSucceededEver=true（终态，后续不再干预）
+	// 失败 → soCallCount++，记录 lastSchemaError，由 turn_end 决定是否 steer 重试
 	pi.on("tool_execution_end", async (event: unknown) => {
-		const e = event as { toolName: string; isError: boolean };
-		if (e.toolName === TOOL_NAME) {
-			soCallCount++;
-			if (!e.isError) {
-				soSucceededEver = true;
-			}
+		const e = event as { toolName: string; isError: boolean; result?: unknown };
+		if (e.toolName !== TOOL_NAME) return;
+		soCallCount++;
+		if (!e.isError) {
+			soSucceededEver = true;
+		} else {
+			lastSchemaError = extractToolErrorText(e.result) ?? "structured-output call failed";
 		}
 	});
 
@@ -143,29 +176,36 @@ function setupWorkflowHook(pi: PiAPI, schemaJson: string): void {
 		// 已经成功调用过 structured-output，不再干预
 		if (soSucceededEver) return;
 
-		// 本 turn 调了 structured-output（无论成功失败），让 Pi 自然处理
-		// 失败时 Pi 会自动返回错误让模型修正，不需要 hook 干预
-		if (soCallCount > 0) {
-			soCallCount = 0;
-			return;
-		}
-
-		const e = event as { message?: { stopReason?: string } };
+		// 完全没调用 OR 调了但全是失败 → 都需要 steer。两种情况共用重试上限与计数。
 		// stopReason="toolUse" → 模型还在调工具链，不需要干预
+		const e = event as { message?: { stopReason?: string } };
 		if (e.message?.stopReason === "toolUse") return;
 
-		// 超过重试上限
+		// 超过重试上限：放弃，让子进程自然结束（调用方据 result.error 判定失败）
 		if (hookRetryCount >= MAX_HOOK_RETRIES) return;
 
+		const calledButFailed = soCallCount > 0;
+		// 按本 turn 重置计数；lastSchemaError 在下次 steer 消息构造后自然覆盖
+		soCallCount = 0;
 		hookRetryCount++;
 
-		const reminder = [
-			"[MANDATORY] You MUST call the structured-output tool now.",
-			"Your task requires a structured output. Do NOT respond with plain text.",
-			`Call the structured-output tool with: schema = ${schemaJson}, data = <your result>`,
-			"This is enforced by the workflow system. Just call the tool.",
-		].join("\n");
+		const reminder = calledButFailed
+			? [
+					"[MANDATORY] Your structured-output call FAILED validation:",
+					lastSchemaError,
+					"",
+					`The correct schema is: ${schemaJson}`,
+					"Call the structured-output tool AGAIN with data conforming to this schema.",
+					"Do NOT output the result as text — call the tool.",
+				].join("\n")
+			: [
+					"[MANDATORY] You MUST call the structured-output tool now.",
+					"Your task requires a structured output. Do NOT respond with plain text.",
+					`Call the structured-output tool with: schema = ${schemaJson}, data = <your result>`,
+					"This is enforced by the workflow system. Just call the tool.",
+				].join("\n");
 
+		lastSchemaError = "";
 		pi.sendUserMessage(reminder, { deliverAs: "steer" });
 	});
 }

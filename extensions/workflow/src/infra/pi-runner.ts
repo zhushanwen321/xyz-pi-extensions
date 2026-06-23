@@ -84,6 +84,7 @@ export async function runPiProcess(
   pipeline: ParsedPipelineEvent,
   signal?: AbortSignal,
   env?: Record<string, string>,
+  onEvent?: (raw: Record<string, unknown>) => void,
 ): Promise<{ exitCode: number; stderr: string }> {
   let stderr = "";
   const exitCode = await new Promise<number>((resolve, reject) => {
@@ -105,6 +106,9 @@ export async function runPiProcess(
         try {
           const event = JSON.parse(line) as Record<string, unknown>;
           processJsonlEvent(event, pipeline);
+          // 实时回调：把原始 JSONL 事件（即 SDK session.subscribe 事件）吐给调用方，
+          // 供其更新 live record 驱动 TUI 进度展示。与 processJsonlEvent 并行旁路（各取所需）。
+          onEvent?.(event);
  // eslint-disable-next-line taste/no-silent-catch
         } catch {
  // Skip malformed JSON lines
@@ -164,6 +168,7 @@ export async function runPiProcess(
         try {
           const event = JSON.parse(buffer) as Record<string, unknown>;
           processJsonlEvent(event, pipeline);
+          onEvent?.(event);
  // eslint-disable-next-line taste/no-silent-catch
         } catch {
  // Ignore trailing garbage

@@ -23,9 +23,13 @@ import type { WorkflowRun } from "./workflow-run.js";
  *
  * run 在子进程中执行单次 agent 调用，返回结构化结果（含 usage/toolCalls）。
  * signal 用于 abort 传播（kill subprocess）。
+ *
+ * onEvent（可选）：子进程 stdout 每解析出一条 JSONL 事件（即 SDK session.subscribe 事件，
+ * 见 pi print-mode.ts）就回调一次，供调用方实时更新 live record 供 TUI 展示进度。
+ * 不传则不回调（向后兼容；现有调用点不传不受影响）。
  */
 export interface AgentRunner {
-  run(opts: AgentCallOpts, signal: AbortSignal): Promise<AgentResult>;
+  run(opts: AgentCallOpts, signal: AbortSignal, onEvent?: (raw: Record<string, unknown>) => void): Promise<AgentResult>;
 }
 
 // ── Port 2: RunStore ──────────────────────────────────────────
