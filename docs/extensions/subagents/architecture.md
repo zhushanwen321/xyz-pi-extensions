@@ -30,9 +30,9 @@
    │  ModelConfigService（配置/模型域）                       │
    │  SubagentService（执行/记录/通知域）                     │
    │  ── 编排与基础设施 ──                                    │
-   │  executor · record-store · notifier · history-store      │
+   │  executor · record-store · notifier · tombstone-store     │
    │  config · session-file-gc                                │
-   │  职责：编排 Core，管理 record 生命周期，持久化，回注通知  │
+   │  职责：编排 Core，管理 record 生命周期，回注通知           │
    └────────────────────────▲────────────────────────────────┘
                             │ 委托
                             │
@@ -40,15 +40,15 @@
    │                    Core 层（核心）                       │
    │                                                          │
    │  ── 编排子层（Orchestration）──                          │
-   │  session-runner（一次性）                                │
+   │  session-runner（一次性，含原 session-factory 组装       │
+   │  + EventBridge 事件翻译，已内联）                        │
    │                                                          │
-   │  ── 基础子层（Foundation / Engine）──                    │
-   │  session-factory（造 bundle）· output-collector（拆）    │
-   │  event-bridge（事件翻译+累积，内核数据通路）             │
+   │  ── 基础子层（Foundation）──                              │
+   │  output-collector（拆：Record → AgentResult）            │
    │                                                          │
    │  ── 叶子原语 ──                                          │
    │  execution-record · model-resolver · agent-registry      │
-   │  concurrency-pool · turn-limiter                         │
+   │  concurrency-pool · turn-limiter · path-encoding         │
    │  职责：零 Pi 依赖的执行与状态原语，可独立单测            │
    └──────────────────────────────────────────────────────────┘
 ```
@@ -64,7 +64,7 @@
 | **TUI** | `types.ts` + Runtime 的只读快照类型 | Core 可变状态、Pi SDK 执行 API |
 | **外壳** | Runtime 公共 API + Pi SDK 注册 API | Core 内部实现 |
 
-Core 零 Pi 依赖是可测试性的根基——`execution-record`、`concurrency-pool` 等纯函数可在无 Pi 进程下单测。Pi SDK 只在 `session-factory`（动态 import + 装配）和外壳（注册）两处出现。
+Core 零 Pi 依赖是可测试性的根基——`execution-record`、`concurrency-pool` 等纯函数可在无 Pi 进程下单测。Pi SDK 只在 `session-runner`（`getSdk` 动态 import + `createAgentSession` 装配）和外壳（注册）两处出现。
 
 ### Core 子层依赖铁律
 
@@ -73,17 +73,16 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 | 子层 | 文件 | 可 import | 禁止 import |
 |---|---|---|---|
 | **编排（Orchestration）** | session-runner | 基础子层 + 叶子原语 + types | 基础子层禁止反向引用 |
-| **基础（Foundation）** | session-factory · output-collector · event-bridge | 自身 + types + 叶子原语 | 编排子层 |
-| **叶子原语** | execution-record · model-resolver · agent-registry · concurrency-pool · turn-limiter | 自身 + types | 编排/基础子层 |
+| **基础（Foundation）** | output-collector | 自身 + types + 叶子原语 | 编排子层 |
+| **叶子原语** | execution-record · model-resolver · agent-registry · concurrency-pool · turn-limiter · path-encoding | 自身 + types | 编排/基础子层 |
 
-- `event-bridge` 是基础子层的 leaf（只依赖 types.ts），是 session-factory / output-collector 共享的数据通路内核。
-- `session-factory`（造 bundle：input → BuiltSession）与 `output-collector`（拆 bundle：BuiltSession → AgentResult）方向对称，都被 session-runner 复用。
+> **[HISTORICAL]** 早期实现有独立的 `session-factory.ts`（造 bundle：input → BuiltSession）和 `event-bridge.ts`（SDK 事件翻译 + 累积）。技术债治理（debt-governance Wave 1/3）把它们内联进 `session-runner.ts`——session-factory 是 session-runner 的唯一调用方（四步组装中两步是一行包装），EventBridge 的 switch 翻译逻辑无独立状态、无独立生命周期。合并后 session-runner 完整表达「跑一次 session」，依赖方向不变。详见 [debt-governance spec](../../../.xyz-harness/2026-06-22-subagent-debt-governance/spec.md)。
 
 ## 3. 文件归属
 
-29 个文件，按层 + 状态标注。状态：✅ 已实现 ｜ ⬜ 骨架（签名+流程图，待填）。
+按层 + 状态标注。状态：✅ 已实现 ｜ ⬜ 骨架（签名+流程图，待填）。
 
-### Core 层（9）
+### Core 层（8）
 
 > 分编排 / 基础 / 叶子三个子层（依赖方向见 §2 Core 子层依赖铁律）。
 
@@ -91,26 +90,24 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
-| `session-runner.ts` | 一次性 session 执行编排，sync/bg 共用，零 mode 感知 | ✅ |
+| `session-runner.ts` | 一次性 session 执行编排，sync/bg 共用，零 mode 感知。含原 session-factory 的 session 组装（四步 → BuiltSession）+ EventBridge 的 SDK 事件翻译（已内联） | ✅ |
 
-#### 基础子层（Foundation）— 3
+#### 基础子层（Foundation）— 1
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
-| `event-bridge.ts` | SDK 事件 → AgentEvent 翻译 + turn/toolCall/usage 累积（内核数据通路，leaf） | ✅ |
-| `session-factory.ts` | Pi session 组装（四步 → BuiltSession）：env block + resourceLoader + createAgentSession + bridge 订阅 | ✅ |
-| `output-collector.ts` | BuiltSession → AgentResult 收集（text/usage/toolCalls/parsedOutput 字段单源） | ✅ |
+| `output-collector.ts` | Record → AgentResult 收集（text/usage/toolCalls/parsedOutput 字段单源，全部从 record.turns[] 派生） | ✅ |
 
 #### 叶子原语（Primitives）— 6
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
-| `execution-record.ts` | 唯一状态对象 + 创建/更新/完成/投影入口 | ✅ |
+| `execution-record.ts` | 唯一状态对象（turns[] 收口）+ 创建/更新/完成/投影/派生入口 | ✅ |
 | `model-resolver.ts` | 5 级 fallback 模型解析链 + category 推断 | ✅ |
 | `agent-registry.ts` | agent `.md` 文件发现与解析（hot-reload） | ✅ |
 | `concurrency-pool.ts` | 并发控制 + 优先级排队（sync=0，bg=1000），maxConcurrent 下限 1 | ✅ |
 | `turn-limiter.ts` | soft/hard turn 限制器（steer + abort） | ✅ |
-| `path-encoding.ts` | cwd → 安全目录名编码（session-factory + history-store 共享，消除旧重复） | ✅ |
+| `path-encoding.ts` | cwd → 安全目录名编码（session-runner + session-file-gc 共享，消除旧重复） | ✅ |
 
 ### Runtime 层（7）
 
@@ -123,11 +120,11 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
-| `model-config-service.ts` | 配置/模型域 Service：globalConfig + sessionState + agentRegistry + modelRegistry + resolveModel（含确认回调） | ✅ |
-| `subagent-service.ts` | 执行/记录/通知域 Service：execute 编排（含原 executor 逻辑）+ query/cancel + 组件持有（pool/store/history/notifier，全 private） | ✅ |
-| `execution/record-store.ts` | Record 三 map 容器（live/completed/bg）+ 四源合并 | ✅ |
-| `execution/notifier.ts` | background 完成回注主对话（合并窗口 + 去重 + dedup TTL sweep） | ✅ |
-| `execution/history-store.ts` | 跨 session 执行记录持久化（jsonl + GC） | ✅ |
+| `model-config-service.ts` | 配置/模型域 Service：globalConfig + sessionState + agentRegistry + modelRegistry + resolveModel | ✅ |
+| `subagent-service.ts` | 执行/记录/通知域 Service：execute 编排（含原 executor 逻辑）+ query/cancel + 组件持有（pool/store/notifier，全 private） | ✅ |
+| `execution/record-store.ts` | Record 容器：内存(running) + 磁盘(session.jsonl 重建) 合并 + statusFilter | ✅ |
+| `execution/notifier.ts` | background 完成回注主对话（滑动窗口合并 + 去重 TTL） | ✅ |
+| `execution/tombstone-store.ts` | cancelled 状态 sidecar 持久化（.cancelled 文件读写） | ✅ |
 | `config/config.ts` | 全局配置（单一真相源读 config.json）+ session 级状态（纯函数，被 ModelConfigService 调用） | ✅ |
 | `session-file-gc.ts` | 过期 subagent session 文件清理 | ✅ |
 
@@ -145,18 +142,35 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 | `format.ts` | 纯格式化函数（tokens/duration/firstLine/extractAgentName 共享 helper） | ✅ |
 | `format-helpers.ts` | 配置摘要格式化（拆出避免循环依赖） | ✅ |
 
-### 测试（7 文件，130 tests）
+### 测试（23 文件，356 tests）
 
-`src/__tests__/` 下 7 个测试文件覆盖 Core + Runtime 关键模块。详见 [standards.md](../../standards.md) §7 测试要求。
+`src/__tests__/` 下 23 个测试文件覆盖 Core + Runtime + TUI 关键模块。详见 [pi-extension-standards.md](../../pi-extension-standards.md) §7 测试要求。
 
 | 文件 | 覆盖 |
 |---|---|
 | `turn-limiter.test.ts` | steer/abort 时序 + didSteer/didAbort getter |
 | `concurrency-pool.test.ts` | 满载阻塞/优先级抢占/FIFO/maxConcurrent=0 clamp/防负 |
 | `throttle.test.ts` | leading/trailing edge/flush/默认 150ms |
-| `execution-record.test.ts` | turns/tokens 累积/chunking/ring buffer/tryTransition CAS/project/snapshot/toPersisted |
-| `notifier.test.ts` | 即时 flush/滑窗合并/dedup TTL/dispose 清 dedup/format |
-| `format.test.ts` | formatTokens/formatElapsedSeconds/truncLine(ANSI SGR)/segFillColored |
+| `execution-record.test.ts` | turns[] 收口累积/派生视图(getEventLog/getCurrentActivity/getFullText/getAllToolCalls/getTotalUsage)/tryTransition CAS/project/snapshot |
+| `output-collector.test.ts` | collectResult 字段单源（从 record 派生）+ extractParsedOutput |
+| `session-runner.test.ts` | run() 编排骨架 + 事件处理内联 |
+| `session-factory.test.ts` | session-runner 内联纯函数（applyToolFilter/buildAppendSystemPrompt/buildEnvBlock/getSubagentSessionDir）——文件名为历史遗留，测的是合并进 session-runner 的函数 |
+| `record-store.test.ts` | 内存(running) + 磁盘(session.jsonl 重建) 合并 + statusFilter + tombstone override + 重建缓存 |
+| `session-reconstructor.test.ts` | session.jsonl → turns[]/usage/result/error 重建 + toolCall 配对 + 防御性降级 |
+| `tombstone-store.test.ts` | cancelled sidecar write/read 往返 + 降级 |
+| `notifier.test.ts` | 滑窗合并/dedup TTL/dispose 清 dedup/buildLlmContent |
+| `subagent-service.test.ts` | execute 编排 + mode 分叉 + CAS 收尾竞争 |
+| `execute-integration.test.ts` | execute() 集成（run() 事件处理 → record 投影） |
+| `model-resolver.test.ts` | 5 级 fallback 模型解析链 |
+| `agent-registry.test.ts` | agent `.md` 发现与 hot-reload |
+| `config.test.ts` | 全局配置 + session 状态 |
+| `discovery-config.test.ts` | ADR-025 资源发现契约 |
+| `session-file-gc.test.ts` | 过期 session 文件清理 |
+| `path-encoding.test.ts` | cwd → 安全目录名编码 |
+| `format.test.ts` | formatTokens/formatElapsedSeconds/truncLine(ANSI SGR)/segFillColored/formatEventLine |
+| `tool-render-spinner.test.ts` | 对话流 block spinner 启停（sync running gate） |
+| `bg-notify-render.test.ts` | background 完成通知渲染 |
+| `tool-action.test.ts` | tool action 分发（start/list/cancel）契约 |
 | `sdk-contract.test.ts` | 命令/工具注册契约/notifier sendMessage followUp/session_start 编译期契约 |
 
 ### 外壳（4）
@@ -175,7 +189,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 **1. 唯一状态源** — 所有执行路径共用一个 `ExecutionRecord` 对象，由 Core 层 `execution-record.ts` 的四个入口（create/update/complete/project）唯一操作。消灭旧实现 11 种状态形状、6 个 turns 累加器、双状态构建。
 → 详见 [data-model.md](./data-model.md)
 
-**2. 统一执行入口** — sync/background 共用一条 `executor.execute()` 路径，mode 分叉点集中在此函数顶部 4 处。`session-runner.run()` 完全不感知 mode。消灭旧实现 runAgent + startBackground 两份重复逻辑、死 state、history 双写。
+**2. 统一执行入口** — sync/background 共用一条 `executor.execute()` 路径，mode 分叉点集中在此函数顶部 4 处。`session-runner.run()` 完全不感知 mode。消灭旧实现 runAgent + startBackground 两份重复逻辑、死 state。
 → 详见 [execution-flow.md](./execution-flow.md)
 
 **3. 投影单点** — `ExecutionRecord` 到展示层（Details/Snapshot/Persisted）的转换各只有一个入口，三路径字段一致。消灭旧实现 6 处手工构造 Details 导致的字段丢失（Mode 3 cancelled 丢 turns/tokens、poll 无 model 等）。
@@ -191,7 +205,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 **推理**：用"变化轴"分析——哪些东西会**一起变**？
 - globalConfig/sessionState/agentRegistry/modelRegistry → 配置变化（用户改 config.json、注入新 modelRegistry）
-- pool/store/history/notifier → 执行状态变化（并发槽分配、record 生命周期、历史落盘）
+- pool/store/notifier → 执行状态变化（并发槽分配、record 生命周期、回注通知）
 
 这两组东西**从不一起变**。command/wizard 只碰配置，不碰执行；executor 只碰执行组件，不碰配置。是**正交的关注点**。
 
@@ -199,7 +213,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 **决策**：按领域拆为两个平级 Service：
 - ModelConfigService（配置/模型域）：globalConfig + sessionState + agentRegistry + modelRegistry + resolveModel
-- SubagentService（执行/记录/通知域）：pool + store + history + notifier + execute/query/cancel
+- SubagentService（执行/记录/通知域）：pool + store + notifier + execute/query/cancel
 
 **代价**：index.ts 从一个 `rt.initSession(...)` 变成两个 init 调用（modelService.initModel + service.initSession）。但这两个调用的时序是确定的（先配置后执行），index.ts 作为装配层承担这个协调是合理的。
 
@@ -211,7 +225,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 合并进 SubagentService.ts 后，行为方法自然降为 private——TS 的 `private` 在同类内生效，executor 逻辑作为 SubagentService 的 private 方法访问组件，无需任何妥协。
 
-**决策**：executor 逻辑合并进 `subagent-service.ts`，作为 SubagentService 的 private 方法（resolveIdentity/createRecordForMode/runAndFinalize/kickOffBackground/cancelBackground/finalizeRecord/notifyComplete/onEventThrottled）。删除 `executor.ts` 文件。组件（pool/store/history/notifier）全 private，编排方法全 private，SubagentService 对外只有业务方法。
+**决策**：executor 逻辑合并进 `subagent-service.ts`，作为 SubagentService 的 private 方法（resolveIdentity/createRecordForMode/runAndFinalize/kickOffBackground/cancelBackground/finalizeRecord/notifyComplete/onEventThrottled）。删除 `executor.ts` 文件。组件（pool/store/notifier）全 private，编排方法全 private，SubagentService 对外只有业务方法。
 
 **代价**：subagent-service.ts 从 ~240 行增到 ~400 行。但 SubagentService 本来就是这个文件的主角，400 行可接受——它现在完整表达了"执行编排"这个领域。
 
@@ -234,7 +248,7 @@ SubagentService 内部调：       │
   resolveMode()               │  → modelService.getAgentConfig()（判 defaultBackground）
   resolveIdentity()           │  → resolveModel()
   buildSessionRunnerContext() │ → modelService.getModelRegistry()/getAgentDir()
-  collectRecords()            │  → modelService.sessionId（history 过滤）
+  collectRecords()            │  → statusFilter（running/all）
 ```
 
 **铁律**：SubagentService → ModelConfigService 单向引用，**禁止反向**。ModelConfigService 不知道 SubagentService 的存在。tool/command 层不穿透 SubagentService 调 ModelConfigService——tool 只传 `wait` 意图，mode 判定（wait + defaultBackground → ExecutionMode）完全内化在 SubagentService.resolveMode()。

@@ -1,28 +1,22 @@
 // src/runtime/model-config-service.ts
 //
-// 配置 + 模型解析领域 Service。"给定 agent 名 + 用户参数，用哪个模型？"
+// 配置 + 模型解析领域 Service。"给定 agent 名 + 用户参数 + 主 agent 模型，用哪个模型？"
 //
 // 与 SubagentService（执行/记录/通知域）正交——本 Service 不碰 pool/store/notifier。
-// 上游：SubagentService.execute 内部调 resolveModel；command/wizard 直接用（不经 SubagentService）。
-// session_start 时经 initModel 注入 modelRegistry + 恢复 sessionState。
+// 上游：SubagentService.execute 内部调 resolveModel。
+// session_start 时经 initModel 注入 modelRegistry。
 
 import { AgentRegistry, createPackageBuiltinRegistry } from "../core/agent-registry.ts";
 import {
   type AgentConfig,
-  inferCategory,
+  type ModelInfo,
   type ModelRegistryLike,
   type ResolvedModel,
-  resolveModelForAgent,
+  resolveModel,
 } from "../core/model-resolver.ts";
-import type {
-  SessionModelState,
-  SubagentsGlobalConfig,
-} from "../types.ts";
+import type { SubagentsGlobalConfig } from "../types.ts";
 import {
-  createSessionState,
   loadGlobalConfig,
-  restoreSessionState,
-  saveGlobalConfig as saveConfig,
 } from "./config/config.ts";
 import { DiscoveryConfigLoader } from "./discovery-config.ts";
 
@@ -47,8 +41,17 @@ export interface ModelServiceSessionInit {
   modelRegistry: ModelRegistryLike | null;
   /** 当前 session ID。 */
   sessionId: string;
-  /** session 历史条目（/resume /fork 时恢复 sessionState）。 */
-  entries: ReadonlyArray<{ type: string; data?: unknown }>;
+  /**
+   * 主 agent 当前 model（session_start 时注入，model_select 时刷新）。
+   *
+   * renderCall 阶段的 ToolRenderContext 不含 model 字段（SDK 限制），无法直接拿到
+   * 主 agent model。缓存后 renderCall 的 resolveModel 能命中第三层（ctxModel），
+   * 让标题行恢复显示 model——即使未显式传 model 也能展示默认 model。
+   *
+   * [HISTORICAL] 99f20da1e 引入三层 fallback 后，renderCall 因拿不到 ctxModel
+   * 而 resolveModel 拗错→降级不显示 model。此缓存修复该降级。
+   */
+  ctxModel?: ModelInfo;
 }
 
 // ============================================================
@@ -59,23 +62,23 @@ export interface ModelServiceSessionInit {
  * 配置 + 模型解析 Service。进程级单例。
  *
  *   ┌──────────────────────────────────────────────────────┐
- *   │  globalConfig（~/.pi/.../config.json）                │
- *   │  sessionState（内存，经 entries 持久化/恢复）          │
+ *   │  globalConfig（~/.pi/.../config.json，仅 maxConcurrent）│
  *   │  agentRegistry（agent .md 发现 + frontmatter）         │
  *   │  modelRegistry（SDK 注入的可用模型）                    │
  *   │                                                      │
- *   │  resolveModel: agent → category → 5级fallback → 确认  │
+ *   │  resolveModel: override → agentConfig → 主 agent model │
  *   └──────────────────────────────────────────────────────┘
  */
 export class ModelConfigService {
   private globalConfig: SubagentsGlobalConfig;
-  private sessionState: SessionModelState;
   private readonly agentRegistry: AgentRegistry;
   private readonly agentRegistryDir: string;
   /** discovery 加载器（resources_discover 时重新读，喂主 agent skill）。 */
   private readonly discoveryLoader: DiscoveryConfigLoader | undefined;
   private modelRegistry: ModelRegistryLike | null = null;
   private _sessionId: string | undefined;
+  /** 主 agent 当前 model 缓存（session_start 注入，model_select 刷新）。 */
+  private _ctxModel: ModelInfo | undefined;
 
   /** 包内 builtin agent（agents/*.md，优先级最低，被用户覆盖）。 */
   private readonly builtinRegistry = createPackageBuiltinRegistry();
@@ -84,11 +87,9 @@ export class ModelConfigService {
     this.agentRegistryDir = init.agentDir;
     this.discoveryLoader = init.discoveryLoader;
     this.globalConfig = loadGlobalConfig(init.agentDir);
-    this.sessionState = createSessionState();
     // agentDirs：discovery 声明的目录（靠前覆盖靠后），空则回退默认 agentDir 单目录
     const agentDirs = this.resolveAgentDirs();
     this.agentRegistry = new AgentRegistry(agentDirs);
-    // 接通发现机制：扫描 agentDirs + 合并 builtin（此前从未调用，registry 永远为空）
     this.agentRegistry.discoverAll(this.builtinRegistry);
   }
 
@@ -107,11 +108,10 @@ export class ModelConfigService {
   // ── 生命周期（index.ts 调）──────────────────────────────
 
   /**
-   * session_start 注入。封装 4 步固定时序：
+   * session_start 注入。封装 3 步固定时序：
    *   1. reloadGlobalConfig（复用时拿最新 config）
    *   2. injectModelRegistry（fail-fast：null 抛错）
    *   3. setSessionId
-   *   4. restoreFromEntries（恢复 sessionState）
    */
   initModel(init: ModelServiceSessionInit): void {
     // 1. 重载配置 + 重扫 agent（hot-reload：用户可能新增/修改 agent .md）
@@ -124,71 +124,57 @@ export class ModelConfigService {
     }
     this.modelRegistry = init.modelRegistry;
 
-    // 3. sessionId
+    // 3. sessionId + ctxModel 缓存（model_select 后续调 setCtxModel 刷新）
     this._sessionId = init.sessionId;
+    this._ctxModel = init.ctxModel;
+  }
 
-    // 4. 恢复 sessionState
-    Object.assign(this.sessionState, restoreSessionState(init.entries));
+  /**
+   * 刷新主 agent model 缓存。model_select 事件时调用。
+   * renderCall 的 resolveModel 读此缓存以显示标题行 model。
+   */
+  setCtxModel(model: ModelInfo | undefined): void {
+    this._ctxModel = model;
   }
 
   // ── 模型解析（SubagentService.execute 内部调）──────────────
 
   /**
-   * 解析 agent 的模型（纯解析）。
+   * 解析 agent 的模型（三层：override → agentConfig → 主 agent model）。
    *
-   * D-1：取消首次确认拦截——categoryConfirmed 默认 true，本方法直接解析不再阻塞。
-   * 用户改 category 模型走 /subagents config（写 globalConfig）。
+   * @param agentName     agent 名（查 agentConfig.model override）
+   * @param override      调用方显式 override（最高优先级）
+   * @param ctxModel      主 agent 当前模型（兜底，直接透传）
    */
   resolveModel(
     agentName: string,
     override?: { model?: string; thinkingLevel?: string },
+    ctxModel?: ModelInfo,
   ): ResolvedModel {
     this.assertReady();
     const agentConfig = this.agentRegistry.get(agentName);
-    const category = inferCategory(
-      agentName,
-      agentConfig,
-      this.globalConfig.agentCategoryOverrides,
-      "general",
-    );
-    return this.doResolve(agentName, agentConfig, category, override);
+    // ctxModel 优先用显式传入（execute 路径），其次用 session 缓存（renderCall 路径）
+    return resolveModel(agentConfig, this.modelRegistry!, override, ctxModel ?? this._ctxModel);
   }
 
-  /** 查询 agent 配置（SubagentService 内部判定 defaultBackground + resolveIdentity 用）。 */
+  /** 查询 agent 配置（SubagentService 内部判定 defaultBackground 用）。 */
   getAgentConfig(name?: string): AgentConfig | undefined {
     return name ? this.agentRegistry.get(name) : undefined;
   }
 
-  // ── 配置读写（command/wizard 调）────────────────────────
+  // ── 配置读取（subagent-service 调）────────────────────────
 
   /** 全局配置深拷贝（调用方拿到副本，改不影响 Service 内部）。 */
   getGlobalConfig(): SubagentsGlobalConfig {
     return structuredClone(this.globalConfig);
   }
 
-  /** session 状态深拷贝。 */
-  getSessionState(): SessionModelState {
-    return structuredClone(this.sessionState);
-  }
-
-  /** 更新全局配置 + 落盘（config-wizard 改完调）。 */
-  async saveGlobalConfig(config: SubagentsGlobalConfig): Promise<void> {
-    this.globalConfig = config;
-    await saveConfig(this.agentRegistryDir, config);
-  }
-
-  /** 翻转 YOLO 模式。返回翻转后的新值。 */
-  toggleYolo(): boolean {
-    this.sessionState.yoloMode = !this.sessionState.yoloMode;
-    return this.sessionState.yoloMode;
-  }
-
-  /** 内部：用于 SubagentService 经 session id 过滤 history（只读访问 sessionId）。 */
+  /** 内部：session id 缓存（initModel 注入；当前无消费者，保留供未来 session 作用域需求）。 */
   get sessionId(): string | undefined {
     return this._sessionId;
   }
 
-  /** agent 配置目录（SubagentService 构造 history/store/SessionRunnerContext 时读）。 */
+  /** agent 配置目录（SubagentService 构造 store/SessionRunnerContext 时读）。 */
   getAgentDir(): string {
     return this.agentRegistryDir;
   }
@@ -212,24 +198,6 @@ export class ModelConfigService {
 
   // ── 内部 ────────────────────────────────────────────────
 
-  /** 实际的 5 级 fallback 解析（不含确认逻辑）。 */
-  private doResolve(
-    agentName: string,
-    agentConfig: AgentConfig | undefined,
-    category: string,
-    override?: { model?: string; thinkingLevel?: string },
-  ): ResolvedModel {
-    return resolveModelForAgent({
-      agentName,
-      agentConfig,
-      category,
-      globalConfig: this.globalConfig,
-      sessionState: this.sessionState,
-      modelRegistry: this.modelRegistry!,
-      paramOverride: override,
-    });
-  }
-
   /** 校验 modelRegistry 已注入。 */
   private assertReady(): void {
     if (this.modelRegistry === null) {
@@ -249,9 +217,14 @@ const MODEL_SERVICE_SLOT_KEY = Symbol.for("@zhushanwen/pi-subagents.model-servic
 type ModelServiceSlot = { current: ModelConfigService | null };
 
 function getModelServiceSlot(): ModelServiceSlot {
-  const record = globalThis as unknown as Record<symbol, unknown>;
-  if (!record[MODEL_SERVICE_SLOT_KEY]) record[MODEL_SERVICE_SLOT_KEY] = { current: null };
-  return record[MODEL_SERVICE_SLOT_KEY] as ModelServiceSlot;
+  // globalThis 无 symbol 索引签名，但运行时支持 symbol 键——用 Reflect 安全读写，
+  // 避免双重断言。ModelServiceSlot 是运行时保证的固定形状（同文件唯一写入点）。
+  let slot = Reflect.get(globalThis, MODEL_SERVICE_SLOT_KEY) as ModelServiceSlot | undefined;
+  if (!slot) {
+    slot = { current: null };
+    Reflect.set(globalThis, MODEL_SERVICE_SLOT_KEY, slot);
+  }
+  return slot;
 }
 
 /** 获取进程单例。session_start 前为 null。 */

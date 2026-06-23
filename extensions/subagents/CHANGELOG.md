@@ -1,5 +1,146 @@
 # @zhushanwen/pi-subagents
 
+## 0.0.2
+
+### Patch Changes
+
+- b7d010e: ExecutionRecord consolidated as the single source of truth for execution data.
+  Scattered storage (eventLog slices / \_currentTurnText buffer / closure accumulators /
+  session.messages reads) is replaced by `turns: Turn[]`. eventLog / currentActivity /
+  result text are now derived from turns[] (getEventLog / getCurrentActivity / getFullText).
+
+  ## Breaking changes (types.ts public API)
+
+  **`AgentEventLogEntry.type`** — removed `"text_output"` and `"thinking"` variants.
+  eventLog now carries only discrete semantic events (tool_start / tool_end / turn_end /
+  error). Streaming text/thinking content lives in `record.turns[].text` / `.thinking`
+  (full content, not 100-char slices). Consumers reading eventLog for streaming text
+  should read `currentActivity.label` (running) or `result` (terminal) instead.
+
+  **`RecordSnapshot`** — removed `eventLog` field. Snapshot consumers that read eventLog
+  should use `project()` → `SubagentToolDetails.eventLog` instead. The `SubagentRecord`
+  (TUI list merge) still carries eventLog.
+
+  **`AgentUsageTotal`** — added `cost: number` field (accumulated from
+  `SdkEvent.message.usage.cost.total`). Previously cost was accumulated at runtime but
+  not declared on the type; now the type and runtime are consistent.
+
+  **`ToolCall`** — removed internal `_status` field. It moved to `InternalToolCall`
+  (ToolCall + \_status + startedTs), used only inside `ExecutionRecord.turns[].toolCalls`.
+  `getAllToolCalls()` strips internal fields when exporting, so `AgentResult.toolCalls`
+  no longer leaks the running/done/failed state machine.
+
+  ## Bug fixes
+
+  - **compact view `text: }` tail fragment** — the root cause (eventLog stored 100-char
+    text slices with residual tail entries) is eliminated. Text is now accumulated in
+    full in `turns[].text`; `getCurrentActivity()` derives the label from the text
+    **start**, never a tail fragment.
+  - **phantom empty turn on `message_end` after `turn_end`** — usage now accumulates
+    field-wise into `turn.usageDelta` instead of overwriting, and `message_end` writes
+    to the last turn directly (no ghost turn creation).
+  - **transient error recovery** — `turn_end` now clears `lastError`, so a transient
+    error that recovers no longer flips a successful run to `success=false`.
+  - **lagged `tool_end` after `turn_end`** — tool_end matching now scans across all
+    turns (not just current), preventing phantom ToolCall duplication.
+  - **derived eventLog timestamps** — `getEventLog` now uses real wall-clock timestamps
+    (tool: `startedTs`, turn_end: `closedTs`) instead of synthetic `ts += 1` increments.
+  - **tool label truncation** — restored truncation (`TOOL_LABEL_MAX = 100`) in
+    `extractLabelFromArgs` to keep TUI column-width stable (a 10KB bash command no
+    longer inflates the compact view).
+
+- 012035b: Model resolution falls back to the main agent's current model. The category-based
+  5-level fallback system has been removed.
+
+  ## Breaking changes
+
+  **Tool parameter schema** — the `subagent` tool moved from positional params to an
+  `action` discriminator. Old `{ task, backgroundId?, poll? }` → new
+  `{ action, startParam?, listParam?, cancelParam? }`. All callers (LLMs, scripts)
+  must switch to the action-based schema.
+
+  **Config schema** — `~/.pi/agent/subagents/config.json` now only reads `version`
+  and `maxConcurrent`. Legacy fields (`categories`, `fallback`, `yoloByDefault`,
+  `agentCategoryOverrides`) are ignored on load. Delete them from your config —
+  they no longer affect anything.
+
+  **Removed source files** (internal, not re-exported from package entry — no
+  compile-time impact on consumers):
+
+  - `src/core/event-bridge.ts` + test
+  - `src/core/session-factory.ts`
+  - `src/tui/config-wizard.ts`
+  - `src/tui/format-helpers.ts`
+
+  **Removed types** (internal, not re-exported from package entry):
+
+  - `QueryResult`, `backgroundId` (old query surface)
+  - `SessionModelState` (categoryConfirmed/categoryModels/agentModels/yoloMode — all dead fields)
+  - `CategoryDefinition` (categories config retired)
+
+  ## New model resolution order (top wins)
+
+  1. `paramOverride.model` (explicit tool param) — registry lookup + auth, throws on miss
+  2. `agentConfig.model` (agent .md frontmatter) — registry lookup + auth, throws on miss
+  3. `ctx.model` (main agent's current model) — direct passthrough, zero-config default
+
+  Explicit overrides no longer silently fall back to the main model — if you ask
+  for a model that's missing or unauthed, you get an error.
+
+  ## Internal notes
+
+  Version is 0.0.1 (pre-1.0 semver): minor is allowed to carry breaking changes.
+  Deleted types/files were never re-exported from `index.ts`, so compile-time
+  impact is confined to the package itself. The runtime breaking change that
+  affects all consumers is the tool parameter schema reshape.
+
+- 6868ad9: Completed/background subagents are reconstructed from `session.jsonl` instead of
+  lingering in memory. `history.jsonl` and `HistoryStore` are removed; `session.jsonl`
+  (the Pi SDK append-only file, real-time flush) is now the single source of truth.
+
+  ## Breaking changes
+
+  **Completed records no longer retained in memory** — terminal records are evicted
+  immediately on `archive()` and reconstructed from disk on the next `list`/`collect`
+  call. Previously they lingered via an arbitrary sync-expire timer and a background
+  FIFO. In-memory state now only holds records that are still running.
+
+  **`HistoryStore` removed** — `runtime/execution/history-store.ts` and its test are
+  deleted. `RecordStore` constructor now takes `sessionsDir: string` instead of a
+  `HistoryStore`. The separate `history.jsonl` persistence layer is gone.
+
+  **`PersistedAgentRecord` type removed** — `ExecutionRecord.toPersisted()` and
+  `truncatePreview`/`PREVIEW_MAX` helpers are deleted (no more history-row shaping).
+
+  **No migration** — records persisted to `history.jsonl` before this change will not
+  be reconstructed (that format is unreadable by the new reconstructor). Only records
+  with a `session.jsonl` that contains a `subagent-identity` custom entry are visible.
+
+  ## New persistence model
+
+  - **`core/session-reconstructor.ts`** — reads `session.jsonl` line-by-line and
+    rebuilds `turns[]`/`eventLog`/`result`/`error`/`status`. Identity (id/agent/mode/
+    task) comes from a `subagent-identity` custom entry written at session creation.
+    Status is derived from the last assistant message `stopReason`
+    (`error`/`aborted` → `failed`, else `done`); `lastError` clears on a clean stop.
+    Degrades to `undefined` on any file/format failure.
+  - **`runtime/execution/tombstone-store.ts`** — `.cancelled` sidecar tombstone
+    persists cancelled state, since `session.abort()` truncates `session.jsonl`
+    mid-run with no final marker.
+  - **`collectRecords(limit, statusFilter)`** — status filtering is now a service/
+    store core capability. Merges in-memory running records with disk
+    reconstruction (cached, invalidated on change). Tombstone sidecar overrides
+    status to `cancelled`.
+
+  ## Why
+
+  The 5s memory linger and the background FIFO were arbitrary (no design doc), and
+  `history.jsonl` duplicated content already present in `session.jsonl`. The
+  extension never read `session.jsonl` back. Making `session.jsonl` the single
+  source of truth removes the duplication, the expiry timers, and the FIFO
+  enforcement — and means `/subagents` and the `subagent` tool `list` action reuse
+  the exact same reconstruction path with only a different status filter.
+
 ## 0.0.1
 
 ### Patch Changes

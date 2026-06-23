@@ -1,15 +1,19 @@
 // src/core/model-resolver.ts
 //
-// 5 级 fallback 模型解析链。runtime 层调此函数解析后传入 SessionRunner，
-// SessionRunner 不重复解析。
+// 模型解析（三层）：
+//   1. 用户显式 override（tool 参数 startParam.model）→ registry lookup + auth
+//   2. agent .md frontmatter model（agent 作者指定）→ registry lookup + auth
+//   3. 主 agent 当前模型（ctx.model）→ 直接透传，无需 lookup
+//
+// 设计：默认与主 agent 同模型（零配置）。只有「有人显式指定 model」时才查
+// registry 做解析 + 鉴权校验。thinkingLevel 同链路，无指定时 undefined。
 
 /**
  * ModelRegistry 的最小接口（duck-typed，测试可 mock）。
- * 字段结构与 Pi SDK 的 ctx.modelRegistry 对齐（见 shared/types stub），
- * 保证 `runtime.initSession({ modelRegistry: ctx.modelRegistry })` 类型兼容。
+ * 字段结构与 Pi SDK 的 ctx.modelRegistry 对齐（见 shared/types stub）。
  */
 export interface ModelRegistryLike {
-  /** 返回所有已配置的可用模型。 */
+  /** 返回所有已配置鉴权的可用模型。 */
   getAvailable(): ModelInfo[];
   /** 按 (provider, modelId) 查找。 */
   find(provider: string, modelId: string): ModelInfo | undefined;
@@ -17,7 +21,10 @@ export interface ModelRegistryLike {
   hasConfiguredAuth(model: unknown): boolean;
 }
 
-/** 模型信息（getAvailable 返回元素 / find 返回值）。 */
+/**
+ * 模型信息（registry 返回元素 / ctx.model 鸭子类型兼容）。
+ * ctx.model（SDK Model<Api>）是此类型的超集，运行时直接当 ModelInfo 用。
+ */
 export interface ModelInfo {
   id: string;
   name: string;
@@ -35,7 +42,7 @@ export interface AgentConfig {
   systemPrompt: string;
   /** tool allowlist（三层过滤之一）。 */
   tools?: string[];
-  /** 默认模型 override（"provider/modelId"）。 */
+  /** 默认模型 override（"provider/modelId"）。agent 作者显式指定。 */
   model?: string;
   /** 默认 thinkingLevel override。 */
   thinkingLevel?: string;
@@ -43,23 +50,10 @@ export interface AgentConfig {
   defaultBackground?: boolean;
 }
 
-/** 解析结果（model 实例 + 生效的 thinkingLevel）。复用 ModelInfo 消除重复。 */
+/** 解析结果（model 实例 + 生效的 thinkingLevel）。 */
 export interface ResolvedModel {
   model: ModelInfo;
   thinkingLevel: string | undefined;
-}
-
-/** resolveModelForAgent 的入参。 */
-export interface ResolveModelArgs {
-  agentName: string;
-  agentConfig: AgentConfig | undefined;
-  /** agent 推断出的 category。 */
-  category: string;
-  globalConfig: { categories: Record<string, { model: string; thinkingLevel?: string }>; fallback: { model: string; thinkingLevel?: string } };
-  sessionState: { categoryModels: Record<string, { model: string; thinkingLevel?: string }>; agentModels: Record<string, { model: string; thinkingLevel?: string }> };
-  modelRegistry: ModelRegistryLike;
-  /** 用户显式 override（tool 参数）。最高优先级。 */
-  paramOverride?: { model?: string; thinkingLevel?: string };
 }
 
 // ============================================================
@@ -72,78 +66,94 @@ const THINKING_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh"] as c
 /** 解析失败时错误信息列出的可用模型上限（防超长错误信息）。 */
 const MODEL_LIST_LIMIT = 20;
 
-/** agent 名 → category 的推断规则（按优先级，命中即返回）。 */
-const NAME_INFERENCE: ReadonlyArray<{ pattern: RegExp; category: string }> = [
-  { pattern: /cod|review|fix|refactor|implement|develop/i, category: "coding" },
-  { pattern: /research|search|investigat|scout|explore/i, category: "research" },
-  { pattern: /test|qa|lint|valid/i, category: "testing" },
-  { pattern: /plan|architect|design|strateg/i, category: "planning" },
-  { pattern: /vision|image|ocr|visual/i, category: "vision" },
-];
-
-/** 候选链条目：modelStr + 该级对应的 thinkingLevel。 */
-interface ModelCandidate {
-  modelStr: string;
-  thinkingLevel?: string;
-}
+// ============================================================
+// 解析
+// ============================================================
 
 /**
- * 5 级 fallback 解析：
+ * 三层模型解析：
  *
  *   ╔═══════════════════════════════════════════════════════════════╗
 //   ║  优先级（高→低）:                                              ║
-//   ║    1. paramOverride.model      （用户显式指定，tool 参数）      ║
-//   ║    2. agent.model              （agent .md frontmatter）        ║
-//   ║    3. sessionState.agentModels （/subagents config 临时覆盖）   ║
-//   ║    4. sessionState.categoryModels + category                   ║
-//   ║    5. globalConfig.fallback    （兜底，保证总有一个 model）      ║
+//   ║    1. paramOverride.model      （调用方显式指定，tool 参数）     ║
+//   ║    2. agentConfig.model        （agent .md frontmatter）        ║
+//   ║    3. ctxModel                 （主 agent 当前模型，直接透传）   ║
 //   ║                                                                ║
-//   ║  thinkingLevel 同链路解析（无指定时用 model 默认或 undefined）  ║
-//   ║  解析失败（前 4 级全不可用）→ 抛错（让 Runtime 决定静默/失败）  ║
+//   ║  1/2 级查 registry + auth 校验；3 级无需 lookup（主 agent 在用  ║
+//   ║  说明 auth OK）。thinkingLevel 无指定时 undefined（model 默认） ║
+//   ║                                                                ║
+//   ║  显式指定但 lookup/auth 失败 → 抛错（不静默降级到主 agent，     ║
+//   ║  因为用户明确要求了某个 model，降级会造成「以为用了 X 实际用 Y」║
 //   ╚═══════════════════════════════════════════════════════════════╝
+ *
+ * @param agentConfig     agent .md 解析结果（查 model override + thinkingLevel）
+ * @param modelRegistry   registry（仅 override 路径用）
+ * @param paramOverride   调用方显式 override（最高优先级）
+ * @param ctxModel        主 agent 当前模型（兜底，直接透传）
  */
-export function resolveModelForAgent(args: ResolveModelArgs): ResolvedModel {
-  const { agentConfig, agentName, category, globalConfig, sessionState, modelRegistry } = args;
-
-  // 组装候选链（按优先级）
-  const candidates: ModelCandidate[] = [];
-  if (args.paramOverride?.model) {
-    candidates.push({ modelStr: args.paramOverride.model, thinkingLevel: args.paramOverride.thinkingLevel });
+export function resolveModel(
+  agentConfig: AgentConfig | undefined,
+  modelRegistry: ModelRegistryLike,
+  paramOverride?: { model?: string; thinkingLevel?: string },
+  ctxModel?: ModelInfo,
+): ResolvedModel {
+  // 1. paramOverride（最高优先级）。显式指定但 lookup/auth 失败 → 直接抛错，
+  // 不降级到下层（避免「以为用了 X 实际用 Y」的静默错误）。
+  if (paramOverride?.model) {
+    return lookupAndResolve(
+      paramOverride.model,
+      paramOverride.thinkingLevel,
+      modelRegistry,
+      "paramOverride",
+    );
   }
+
+  // 2. agentConfig.model（agent 作者指定）。同样显式 → 失败即抛错。
   if (agentConfig?.model) {
-    candidates.push({ modelStr: agentConfig.model, thinkingLevel: agentConfig.thinkingLevel });
+    return lookupAndResolve(
+      agentConfig.model,
+      agentConfig.thinkingLevel,
+      modelRegistry,
+      "agentConfig",
+    );
   }
-  const agentOverride = sessionState.agentModels[agentName];
-  if (agentOverride) {
-    candidates.push({ modelStr: agentOverride.model, thinkingLevel: agentOverride.thinkingLevel });
-  }
-  const categoryModel = sessionState.categoryModels[category] ?? globalConfig.categories[category];
-  if (categoryModel) {
-    candidates.push({ modelStr: categoryModel.model, thinkingLevel: categoryModel.thinkingLevel });
-  }
-  candidates.push({ modelStr: globalConfig.fallback.model, thinkingLevel: globalConfig.fallback.thinkingLevel });
 
-  const tried: string[] = [];
-  for (const candidate of candidates) {
-    const model = lookupModel(candidate.modelStr, modelRegistry);
-    if (!model || !modelRegistry.hasConfiguredAuth(model)) {
-      tried.push(candidate.modelStr);
-      continue;
-    }
+  // 3. 主 agent model（直接透传，thinkingLevel 用 override 或 undefined）
+  if (ctxModel) {
     return {
-      model,
-      thinkingLevel: resolveThinkingLevel(model, candidate.thinkingLevel),
+      model: ctxModel,
+      thinkingLevel: paramOverride?.thinkingLevel ?? agentConfig?.thinkingLevel,
     };
   }
 
-  // 所有候选失败 → 列出可用模型辅助调试
+  // 全部不可用 → 列出可用模型辅助调试
   const available = modelRegistry.getAvailable().map((m) => `${m.provider}/${m.id}`);
   throw new Error(
-    `No available model for agent "${agentName}". Tried: ${tried.join(", ") || "(none)"}.` +
+    `No available model. Main agent has no active model, and no override was resolved.` +
       (available.length > 0
         ? `\nAvailable models:\n  ${available.slice(0, MODEL_LIST_LIMIT).join("\n  ")}`
         : ""),
   );
+}
+
+/** lookup + auth 校验 + thinkingLevel clamp。显式指定但失败 → 抛错（不降级）。 */
+function lookupAndResolve(
+  modelStr: string,
+  requestedThinking: string | undefined,
+  registry: ModelRegistryLike,
+  source: "paramOverride" | "agentConfig",
+): ResolvedModel {
+  const model = lookupModel(modelStr, registry);
+  if (!model || !registry.hasConfiguredAuth(model)) {
+    throw new Error(
+      `Model "${modelStr}" (${source}) not found or auth not configured. ` +
+        `Fix the model string or configure auth in models.json.`,
+    );
+  }
+  return {
+    model,
+    thinkingLevel: resolveThinkingLevel(model, requestedThinking),
+  };
 }
 
 /** 解析 "provider/modelId"（modelId 可含 /，取第一个 / 分割）并查 registry。 */
@@ -174,9 +184,6 @@ function resolveThinkingLevel(
  *   - model.reasoning === false → [] （不支持 thinking）
  *   - 无 thinkingLevelMap → [] （无级别信息，调用方按需透传）
  *   - 有 map → THINKING_ORDER 中 map[lvl] != null 的子集（保留升序）
- *
- * confirm 组件 / config-wizard 用它渲染「该模型可选的 thinking 级别」菜单，
- * 取代写死的全集 THINKING_LEVELS（不同 model 支持的级别不同）。
  */
 export function availableThinkingLevels(
   model: { reasoning: boolean; thinkingLevelMap?: Record<string, unknown> },
@@ -185,22 +192,4 @@ export function availableThinkingLevels(
   const map = model.thinkingLevelMap;
   if (!map) return [];
   return THINKING_ORDER.filter((lvl) => map[lvl] != null);
-}
-
-/** 从 agentName + config 推断 category（agentCategoryOverrides 优先）。 */
-export function inferCategory(
-  agentName: string,
-  agentConfig: AgentConfig | undefined,
-  overrides: Record<string, string>,
-  defaultCategory: string,
-): string {
-  // 1. 显式 override 命中
-  if (overrides[agentName]) return overrides[agentName];
-  // 2. agent 名前缀/约定推断
-  for (const rule of NAME_INFERENCE) {
-    if (rule.pattern.test(agentName)) return rule.category;
-  }
-  // 3. fallback
-  void agentConfig;
-  return defaultCategory;
 }

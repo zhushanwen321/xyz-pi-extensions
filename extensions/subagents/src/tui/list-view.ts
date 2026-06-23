@@ -37,6 +37,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import { matchesKey } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
+import { computeElapsedSeconds } from "../core/execution-record.ts";
 import type { SubagentService } from "../runtime/subagent-service.ts";
 import type { SubagentRecord } from "../types.ts";
 import {
@@ -74,8 +75,6 @@ const DETAIL_SCROLL_STEP = 1;
 const PAGE_SCROLL_DEFAULT = 10;
 /** 右列预览的最近 eventLog 条数。 */
 const PREVIEW_RECENT_LINES = 3;
-/** 秒→毫秒换算。 */
-const MS_PER_SECOND = 1000;
 
 // ── 边框常量 ──
 /** 左右边框字符宽度（│ x 2）。 */
@@ -729,9 +728,10 @@ class SubagentsListComponent implements Component {
     ));
     lines.push("");
 
+    // eventLog 现从 turns[] 派生（离散语义事件，无碎片），直接取最近 N 条。
     const recent = record.eventLog.slice(-PREVIEW_RECENT_LINES);
     if (recent.length === 0) {
-      lines.push(truncLine(t.fg("dim", "(no event log — from history)"), width));
+      lines.push(truncLine(t.fg("dim", "(no events)"), width));
     } else {
       for (const entry of recent) {
         lines.push(truncLine(formatEventLine(entry, t), width));
@@ -792,8 +792,9 @@ class SubagentsListComponent implements Component {
     content.push("");
     content.push(truncLine(t.fg("accent", t.bold("── Event Log ──")), width));
 
+    // eventLog 从 turns[] 派生（离散语义事件），直接遍历。
     if (record.eventLog.length === 0) {
-      content.push(truncLine(t.fg("dim", "(no event log — from history)"), width));
+      content.push(truncLine(t.fg("dim", "(no events)"), width));
     } else {
       for (const entry of record.eventLog) {
         content.push(truncLine(formatEventLine(entry, t), width));
@@ -840,10 +841,10 @@ class SubagentsListComponent implements Component {
 // 内部辅助
 // ============================================================
 
-/** 计算 record 已耗时秒（endedAt 优先，否则 now - startedAt）。 */
+/** 计算 record 已耗时秒（endedAt 优先，否则 now - startedAt）。
+ *  委托给 Core 层共享 helper computeElapsedSeconds，消除发散。 */
 function elapsedSec(r: SubagentRecord): number {
-  const end = r.endedAt ?? Date.now();
-  return Math.max(0, Math.floor((end - r.startedAt) / MS_PER_SECOND));
+  return computeElapsedSeconds(r);
 }
 
 /** 详情翻屏最大 offset（contentLines - viewportHeight，兜底 0）。

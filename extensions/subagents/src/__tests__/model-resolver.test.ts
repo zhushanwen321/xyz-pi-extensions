@@ -1,12 +1,11 @@
 // src/__tests__/model-resolver.test.ts
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   availableThinkingLevels,
-  inferCategory,
-  resolveModelForAgent,
   type ModelInfo,
   type ModelRegistryLike,
+  resolveModel,
 } from "../core/model-resolver.ts";
 
 // ============================================================
@@ -38,136 +37,102 @@ function makeRegistry(models: ModelInfo[], authed: string[] = models.map((m) => 
   };
 }
 
-const baseArgs = {
-  agentName: "worker",
-  agentConfig: undefined,
-  category: "coding",
-  globalConfig: { categories: {}, fallback: { model: "anthropic/claude-sonnet-4-5", thinkingLevel: undefined } },
-  sessionState: { categoryModels: {}, agentModels: {} },
-};
+/** 主 agent model（第三层兼底）。 */
+const ctxModel = makeModel({ id: "main-model", provider: "main" });
 
 // ============================================================
-// resolveModelForAgent — 5 级 fallback 优先级
+// resolveModel — 三层优先级
 // ============================================================
 
-describe("resolveModelForAgent — candidate priority chain", () => {
-  it("L1: paramOverride.model wins over all", () => {
+describe("resolveModel — three-layer priority", () => {
+  it("L1: paramOverride.model wins over agentConfig and ctxModel", () => {
     const m1 = makeModel({ id: "explicit", provider: "p1" });
-    const m2 = makeModel({ id: "fallback-used", provider: "p2" });
-    const reg = makeRegistry([m1, m2]);
-    const r = resolveModelForAgent({
-      ...baseArgs,
-      modelRegistry: reg,
-      paramOverride: { model: "p1/explicit" },
-    });
+    const reg = makeRegistry([m1]);
+    const r = resolveModel(
+      { name: "worker", systemPrompt: "", model: "main/agent-md" },
+      reg,
+      { model: "p1/explicit" },
+      ctxModel,
+    );
     expect(r.model.id).toBe("explicit");
   });
 
-  it("L2: agentConfig.model used when no param override", () => {
+  it("L2: agentConfig.model used when no paramOverride", () => {
     const m = makeModel({ id: "agent-md-model", provider: "ap" });
     const reg = makeRegistry([m]);
-    const r = resolveModelForAgent({
-      ...baseArgs,
-      agentConfig: { name: "worker", systemPrompt: "", model: "ap/agent-md-model" },
-      modelRegistry: reg,
-    });
+    const r = resolveModel(
+      { name: "worker", systemPrompt: "", model: "ap/agent-md-model" },
+      reg,
+      undefined,
+      ctxModel,
+    );
     expect(r.model.id).toBe("agent-md-model");
   });
 
-  it("L3: sessionState.agentModels[agentName] used when no agentConfig.model", () => {
-    const m = makeModel({ id: "session-agent-model", provider: "sp" });
-    const reg = makeRegistry([m]);
-    const r = resolveModelForAgent({
-      ...baseArgs,
-      agentConfig: { name: "worker", systemPrompt: "" },
-      sessionState: { categoryModels: {}, agentModels: { worker: { model: "sp/session-agent-model" } } },
-      modelRegistry: reg,
-    });
-    expect(r.model.id).toBe("session-agent-model");
+  it("L3: ctxModel (main agent model) used when no override and no agentConfig.model", () => {
+    const reg = makeRegistry([]);
+    const r = resolveModel(
+      { name: "worker", systemPrompt: "" },
+      reg,
+      undefined,
+      ctxModel,
+    );
+    expect(r.model).toBe(ctxModel);
+    expect(r.thinkingLevel).toBeUndefined();
   });
 
-  it("L4: sessionState.categoryModels wins over globalConfig.categories", () => {
-    const mSession = makeModel({ id: "session-cat", provider: "sc" });
-    const mGlobal = makeModel({ id: "global-cat", provider: "gc" });
-    const reg = makeRegistry([mSession, mGlobal]);
-    const r = resolveModelForAgent({
-      ...baseArgs,
-      category: "coding",
-      globalConfig: { categories: { coding: { model: "gc/global-cat" } }, fallback: { model: "anthropic/x" } },
-      sessionState: { categoryModels: { coding: { model: "sc/session-cat" } }, agentModels: {} },
-      modelRegistry: reg,
-    });
-    expect(r.model.id).toBe("session-cat");
-  });
-
-  it("L4 falls back to globalConfig.categories when sessionState empty", () => {
-    const m = makeModel({ id: "global-cat", provider: "gc" });
-    const reg = makeRegistry([m]);
-    const r = resolveModelForAgent({
-      ...baseArgs,
-      globalConfig: { categories: { coding: { model: "gc/global-cat" } }, fallback: { model: "anthropic/x" } },
-      sessionState: { categoryModels: {}, agentModels: {} },
-      modelRegistry: reg,
-    });
-    expect(r.model.id).toBe("global-cat");
-  });
-
-  it("L5: fallback.model used when all higher levels unavailable", () => {
-    const m = makeModel({ id: "claude-sonnet-4-5", provider: "anthropic" });
-    const reg = makeRegistry([m]);
-    const r = resolveModelForAgent({
-      ...baseArgs,
-      globalConfig: { categories: {}, fallback: { model: "anthropic/claude-sonnet-4-5" } },
-      sessionState: { categoryModels: {}, agentModels: {} },
-      modelRegistry: reg,
-    });
-    expect(r.model.id).toBe("claude-sonnet-4-5");
+  it("L3: ctxModel used even when registry is empty (no lookup needed)", () => {
+    const reg = makeRegistry([]);
+    const r = resolveModel(undefined, reg, undefined, ctxModel);
+    expect(r.model).toBe(ctxModel);
   });
 });
 
 // ============================================================
-// 失败/降级行为
+// 显式指定失败的错误行为
 // ============================================================
 
-describe("resolveModelForAgent — skip unavailable + throw on total miss", () => {
-  it("skips candidate lacking auth and uses next available", () => {
-    const mUnauthed = makeModel({ id: "unauthed", provider: "u" });
-    const mAuthed = makeModel({ id: "authed", provider: "a" });
-    const reg = makeRegistry([mUnauthed, mAuthed], ["a/authed"]); // unauthed 无鉴权
-    const r = resolveModelForAgent({
-      ...baseArgs,
-      paramOverride: { model: "u/unauthed" },
-      globalConfig: { categories: {}, fallback: { model: "a/authed" } },
-      modelRegistry: reg,
-    });
-    expect(r.model.id).toBe("authed");
-  });
-
-  it("skips empty/invalid modelStr (no slash) and continues chain", () => {
-    // 历史 bug 关联：fallback.model="" 曾导致 lookupModel("") 返回 undefined。
-    // 这里验证空候选被跳过，不阻断后续链路。
-    const m = makeModel({ id: "real", provider: "r" });
-    const reg = makeRegistry([m]);
-    const r = resolveModelForAgent({
-      ...baseArgs,
-      paramOverride: { model: "" }, // 空，应被跳过
-      globalConfig: { categories: {}, fallback: { model: "r/real" } },
-      modelRegistry: reg,
-    });
-    expect(r.model.id).toBe("real");
-  });
-
-  it("throws listing tried candidates + available models when all fail", () => {
-    const m = makeModel({ id: "visible", provider: "v" });
-    const reg = makeRegistry([m], []); // 全部无鉴权
+describe("resolveModel — explicit override failures throw (no silent fallback)", () => {
+  it("paramOverride.model not in registry → throws (does NOT fall back to ctxModel)", () => {
+    const reg = makeRegistry([]);
     expect(() =>
-      resolveModelForAgent({
-        ...baseArgs,
-        paramOverride: { model: "x/explicit" },
-        globalConfig: { categories: {}, fallback: { model: "y/fallback" } },
-        modelRegistry: reg,
-      }),
-    ).toThrow(/No available model.*Tried: x\/explicit, y\/fallback.*Available models/s);
+      resolveModel(undefined, reg, { model: "x/nonexistent" }, ctxModel),
+    ).toThrow(/not found or auth not configured/);
+  });
+
+  it("paramOverride.model found but auth missing → throws", () => {
+    const m = makeModel({ id: "unauthed", provider: "u" });
+    const reg = makeRegistry([m], []); // 无鉴权
+    expect(() =>
+      resolveModel(undefined, reg, { model: "u/unauthed" }, ctxModel),
+    ).toThrow(/not found or auth not configured/);
+  });
+
+  it("agentConfig.model not in registry → throws", () => {
+    const reg = makeRegistry([]);
+    expect(() =>
+      resolveModel(
+        { name: "worker", systemPrompt: "", model: "x/missing" },
+        reg,
+        undefined,
+        ctxModel,
+      ),
+    ).toThrow(/not found or auth not configured/);
+  });
+
+  it("no override, no agentConfig.model, no ctxModel → throws listing available", () => {
+    const m = makeModel({ id: "visible", provider: "v" });
+    const reg = makeRegistry([m]);
+    expect(() => resolveModel(undefined, reg, undefined, undefined)).toThrow(
+      /No available model.*Available models/s,
+    );
+  });
+
+  it("invalid model string (no slash) → throws", () => {
+    const reg = makeRegistry([]);
+    expect(() =>
+      resolveModel(undefined, reg, { model: "no-slash" }, ctxModel),
+    ).toThrow(/not found or auth not configured/);
   });
 });
 
@@ -175,8 +140,8 @@ describe("resolveModelForAgent — skip unavailable + throw on total miss", () =
 // thinkingLevel 解析
 // ============================================================
 
-describe("resolveModelForAgent — thinkingLevel resolution", () => {
-  it("returns requested thinkingLevel when model supports it", () => {
+describe("resolveModel — thinkingLevel resolution", () => {
+  it("override path: returns requested thinkingLevel when model supports it", () => {
     const m = makeModel({
       id: "reasoning-model",
       provider: "rp",
@@ -184,15 +149,11 @@ describe("resolveModelForAgent — thinkingLevel resolution", () => {
       thinkingLevelMap: { low: 1, high: 2, xhigh: 3 },
     });
     const reg = makeRegistry([m]);
-    const r = resolveModelForAgent({
-      ...baseArgs,
-      paramOverride: { model: "rp/reasoning-model", thinkingLevel: "high" },
-      modelRegistry: reg,
-    });
+    const r = resolveModel(undefined, reg, { model: "rp/reasoning-model", thinkingLevel: "high" });
     expect(r.thinkingLevel).toBe("high");
   });
 
-  it("clamps down to highest available when requested unsupported", () => {
+  it("override path: clamps down to highest available when requested unsupported", () => {
     const m = makeModel({
       id: "limited-model",
       provider: "lp",
@@ -200,22 +161,38 @@ describe("resolveModelForAgent — thinkingLevel resolution", () => {
       thinkingLevelMap: { low: 1, medium: 2 }, // 不含 xhigh
     });
     const reg = makeRegistry([m]);
-    const r = resolveModelForAgent({
-      ...baseArgs,
-      paramOverride: { model: "lp/limited-model", thinkingLevel: "xhigh" },
-      modelRegistry: reg,
-    });
-    expect(r.thinkingLevel).toBe("medium"); // clamp 到最高可用
+    const r = resolveModel(undefined, reg, { model: "lp/limited-model", thinkingLevel: "xhigh" });
+    expect(r.thinkingLevel).toBe("medium");
   });
 
-  it("returns undefined when model.reasoning === false", () => {
+  it("override path: returns undefined when model.reasoning === false", () => {
     const m = makeModel({ id: "non-reasoning", provider: "nr", reasoning: false });
     const reg = makeRegistry([m]);
-    const r = resolveModelForAgent({
-      ...baseArgs,
-      paramOverride: { model: "nr/non-reasoning", thinkingLevel: "high" },
-      modelRegistry: reg,
-    });
+    const r = resolveModel(undefined, reg, { model: "nr/non-reasoning", thinkingLevel: "high" });
+    expect(r.thinkingLevel).toBeUndefined();
+  });
+
+  it("ctxModel path: thinkingLevel from paramOverride.thinkingLevel (pass-through, no clamp)", () => {
+    const reg = makeRegistry([]);
+    const r = resolveModel(undefined, reg, { thinkingLevel: "high" }, ctxModel);
+    // ctxModel reasoning=false，但 ctxModel 路径不 clamp（主 agent model 直接透传）
+    expect(r.thinkingLevel).toBe("high");
+  });
+
+  it("ctxModel path: thinkingLevel from agentConfig.thinkingLevel when no paramOverride", () => {
+    const reg = makeRegistry([]);
+    const r = resolveModel(
+      { name: "worker", systemPrompt: "", thinkingLevel: "medium" },
+      reg,
+      undefined,
+      ctxModel,
+    );
+    expect(r.thinkingLevel).toBe("medium");
+  });
+
+  it("ctxModel path: thinkingLevel undefined when no override anywhere", () => {
+    const reg = makeRegistry([]);
+    const r = resolveModel(undefined, reg, undefined, ctxModel);
     expect(r.thinkingLevel).toBeUndefined();
   });
 });
@@ -239,30 +216,62 @@ describe("availableThinkingLevels", () => {
 });
 
 // ============================================================
-// inferCategory
+// ModelConfigService: initModel(ctxModel) → resolveModel L3 plumb-through
+// changeset 主打路径的 runtime 契约保护（EA-4）。
+// 链路：session_start initModel({ctxModel}) → _ctxModel 缓存 → resolveModel 第三层命中
 // ============================================================
 
-describe("inferCategory", () => {
-  const overrides = { worker: "coding", reviewer: "coding", scout: "research" };
-  it("explicit override wins", () => {
-    expect(inferCategory("worker", undefined, overrides, "general")).toBe("coding");
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { ModelConfigService } from "../runtime/model-config-service.ts";
+
+describe("ModelConfigService: ctx.model plumb-through (EA-4)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-resolver-test-"));
   });
-  it("name pattern inference (cod/review/fix)", () => {
-    expect(inferCategory("code-fixer", undefined, {}, "general")).toBe("coding");
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
-  it("name pattern inference (research/scout)", () => {
-    expect(inferCategory("deep-researcher", undefined, {}, "general")).toBe("research");
+
+  /** 构造已 initModel 的 ModelConfigService，ctxModel 注入缓存。 */
+  function makeService(ctxModel: ModelInfo | undefined, registry: ModelRegistryLike = makeRegistry([])): ModelConfigService {
+    const svc = new ModelConfigService({ agentDir: tmpDir });
+    svc.initModel({
+      modelRegistry: registry,
+      sessionId: "test-session",
+      ctxModel,
+    });
+    return svc;
+  }
+
+  it("initModel caches ctxModel; resolveModel L3 returns it (no override, no agentConfig.model)", () => {
+    const main = makeModel({ id: "main-model", provider: "main" });
+    const svc = makeService(main);
+
+    // 无 override、无 agentConfig.model → 第三层命中缓存的 ctxModel
+    const r = svc.resolveModel("general-purpose", undefined);
+    expect(r.model).toBe(main);
   });
-  it("name pattern inference (test/qa)", () => {
-    expect(inferCategory("qa-validator", undefined, {}, "general")).toBe("testing");
+
+  it("resolveModel L3 hits cached ctxModel even with agent that has no model in frontmatter", () => {
+    const main = makeModel({ id: "inherited", provider: "parent" });
+    const svc = makeService(main);
+
+    // worker.md 无 model frontmatter → 跳过 L2，命中 L3 ctxModel
+    const r = svc.resolveModel("worker", undefined);
+    expect(r.model).toBe(main);
   });
-  it("name pattern inference (plan/architect)", () => {
-    expect(inferCategory("architect-bot", undefined, {}, "general")).toBe("planning");
-  });
-  it("name pattern inference (vision/ocr)", () => {
-    expect(inferCategory("ocr-vision", undefined, {}, "general")).toBe("vision");
-  });
-  it("falls back to defaultCategory when no match", () => {
-    expect(inferCategory("random-name", undefined, {}, "general")).toBe("general");
+
+  it("resolveModel still prefers explicit paramOverride over cached ctxModel (L1 > L3)", () => {
+    const main = makeModel({ id: "main", provider: "main" });
+    const explicit = makeModel({ id: "explicit", provider: "p1" });
+    const svc = makeService(main, makeRegistry([explicit]));
+
+    const r = svc.resolveModel("worker", { model: "p1/explicit" });
+    expect(r.model.id).toBe("explicit");
   });
 });
