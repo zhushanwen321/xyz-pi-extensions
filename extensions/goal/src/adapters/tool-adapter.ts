@@ -18,6 +18,7 @@ import { type Static, Type } from "typebox";
 
 import { SUBTASK_STATUSES, TASK_STATUSES } from "../engine/task";
 import type { MessagingPort, PersistencePort, SessionPort, UiPort } from "../ports";
+import { errorResult } from "../projection/result";
 import type { ServicePorts, ToolActionResult } from "../service";
 import type { GoalSession } from "../session";
 import { isStaleContextError } from "../session";
@@ -246,12 +247,4 @@ export async function executeGoalAction(
 	}
 }
 
-// ── 错误结果构造器 ────────────────────────────────────
-
-/** 构造标准的错误结果（与 projection/result.ts 的 errorResult 等价，此处用于入口层避免循环 import）。 */
-function errorResult(message: string): ToolActionResult {
-	return {
-		content: [{ type: "text", text: message }],
-		isError: true,
-	};
-}
+// errorResult 由 projection/result.ts 统一导出（DRY：service / tool-adapter 共用）。

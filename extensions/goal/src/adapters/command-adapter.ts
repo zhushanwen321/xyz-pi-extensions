@@ -2,7 +2,7 @@
  * /goal 命令适配器 — 8 个子命令 handler（adapters 层）
  *
  * 迁移自 src/command-handler.ts。改动：
- * - 状态变更调 service（createGoal / finalizeGoal）
+ * - 状态变更调 service（createGoal / finalizeAndPersist）
  * - import 类型自 engine 层 + commands.ts + projection
  * - ports 桥接复用 tool-adapter.buildPorts（DRY：单一 ports 构造点）
  * - FR-8.12: set/resume 后 sendUserMessage 触发 AI（保持不变）
@@ -25,7 +25,7 @@ import type { BudgetConfig } from "../engine/types";
 import { DEFAULT_BUDGET } from "../engine/types";
 import { serializeState } from "../persistence";
 import { objectiveUpdatedPrompt } from "../projection/prompts";
-import { createGoal, finalizeGoal, persistState } from "../service";
+import { createGoal, finalizeAndPersist, persistState } from "../service";
 import type { GoalSession } from "../session";
 import { clearGoalSession } from "../session";
 import { buildPorts } from "./tool-adapter";
@@ -220,14 +220,9 @@ function handleClear(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionConte
 		return;
 	}
 	const ports = buildPorts(pi, ctx);
-	// FR-6.5: 转 cancelled 前先 persist（tick 累加当前运行段，保证 history elapsedSeconds 准确）
-	persistState(session, ports);
-	const completedCount = getCompletedCount(session.state.tasks);
-	finalizeGoal(session.state, "cancelled", ports, {
-		clearImmediately: true,
-		completedTasks: completedCount,
-	});
-	ports.persistence.appendState(serializeState(session.state)); // finalizeGoal 只写 history 不 persist state
+	// FR-3.3: 唯一终态序列入口（tick + finalizeGoal + persist）
+	finalizeAndPersist(session.state, "cancelled", getCompletedCount(session.state.tasks), ports);
+	// FR-8.7: cancelled → 立即 clearSession
 	clearGoalSession(session, ports.ui);
 	ctx.ui.notify("Goal cleared.", "info");
 }
@@ -259,14 +254,8 @@ function handleAbort(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionConte
 		}
 	}
 	const ports = buildPorts(pi, ctx);
-	// FR-6.5: 转 cancelled 前先 persist（tick 累加当前运行段，保证 history elapsedSeconds 准确）
-	persistState(session, ports);
-	const completedCount = getCompletedCount(session.state.tasks);
-	finalizeGoal(session.state, "cancelled", ports, {
-		clearImmediately: true,
-		completedTasks: completedCount,
-	});
-	ports.persistence.appendState(serializeState(session.state));
+	// FR-3.3: 唯一终态序列入口（tick + finalizeGoal + persist）
+	finalizeAndPersist(session.state, "cancelled", getCompletedCount(session.state.tasks), ports);
 	clearGoalSession(session, ports.ui);
 	ctx.ui.notify("Goal aborted: no work needed.", "info");
 }
@@ -339,16 +328,10 @@ function handleSet(
 
 	// FR-8.7 G-R2-008: 覆盖已有 goal 的两分支
 	if (session.state && !isTerminalStatus(session.state.status)) {
-		// 非终态旧 goal：写 cancelled history
+		// 非终态旧 goal：写 cancelled history（不 clearSession——createGoal 紧接覆盖 session.state）
 		ctx.ui.notify(`Cancelled previous Goal: ${session.state.objective}\n(new goal started)`, "info");
-		// FR-6.5: 转 cancelled 前先 persist（tick 累加当前运行段，保证 history elapsedSeconds 准确）
-		persistState(session, ports);
-		const completedCount = getCompletedCount(session.state.tasks);
-		finalizeGoal(session.state, "cancelled", ports, {
-			clearImmediately: false,
-			completedTasks: completedCount,
-		});
-		ports.persistence.appendState(serializeState(session.state));
+		// FR-3.3: 唯一终态序列入口（tick + finalizeGoal + persist）
+		finalizeAndPersist(session.state, "cancelled", getCompletedCount(session.state.tasks), ports);
 	}
 	// 终态旧 goal：快速路径（不写 history，createGoal 直接覆盖）
 

@@ -11,15 +11,15 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
-import { createGoalState } from "../engine/goal";
-import type { GoalRuntimeState } from "../engine/types";
-import { createGoalSession } from "../session";
 import {
 	ACTION_HANDLERS,
 	buildPorts,
 	executeGoalAction,
 	HISTORY_ENTRY_TYPE,
 } from "../adapters/tool-adapter";
+import { createGoalState } from "../engine/goal";
+import type { GoalRuntimeState } from "../engine/types";
+import { createGoalSession } from "../session";
 
 // ── Fake pi / ctx ────────────────────────────────────
 

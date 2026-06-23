@@ -7,10 +7,16 @@
  * D-16: service 不持有 ctx，通过 ports 参数接收能力。
  *
  * FR-3.1: createGoal 唯一创建入口（三个调用源都走它）
- * FR-3.3: finalizeGoal 唯一完成入口（按矩阵决定 writeHistory + clearSession）
+ * FR-3.3: finalizeAndPersist 唯一终态序列入口（tick → finalizeGoal → persist）
+ *         finalizeGoal 只做 transitionStatus + writeHistory（纯）
  * FR-6.5: persist 前调 tick 累计时间
  */
 
+import {
+	ELLIPSIS_LENGTH,
+	EXT_INIT_TASK_DESC_MAX,
+	TASK_DESC_MAX_LENGTH,
+} from "./constants";
 import { accumulateTokens, checkBudgetOnResume, tick } from "./engine/budget";
 import { createGoalState, isActiveStatus, isTerminalStatus, transitionStatus } from "./engine/goal";
 import type { GoalTask, Subtask, TaskVerification } from "./engine/task";
@@ -25,6 +31,7 @@ import type {
 	UiPort,
 } from "./ports";
 import { formatTaskList } from "./projection/prompts";
+import { errorResult } from "./projection/result";
 import type { GoalSession } from "./session";
 import { clearGoalSession } from "./session";
 
@@ -129,10 +136,7 @@ export function createGoal(
 
 	// 统一 task 构造（消除双轨）
 	const taskDescs = toDescriptions(tasks);
-	const EXT_INIT_TASK_DESC_MAX = 60;
-	const TASK_DESC_MAX = 80;
-	const ELLIPSIS_LENGTH = 3;
-	const maxLength = isExternalInit ? EXT_INIT_TASK_DESC_MAX : TASK_DESC_MAX;
+	const maxLength = isExternalInit ? EXT_INIT_TASK_DESC_MAX : TASK_DESC_MAX_LENGTH;
 	session.state.tasks = taskDescs.map((desc, i) => ({
 		id: i + 1,
 		description: normalizeDescription(desc, maxLength, ELLIPSIS_LENGTH),
@@ -154,20 +158,52 @@ function toDescriptions(tasks: GoalTask[] | string[]): string[] {
 	return (tasks as GoalTask[]).map((t) => t.description);
 }
 
-// ── FR-3.3 唯一完成入口 ──────────────────────────────
+// ── FR-3.3 唯一终态序列入口 ──────────────────────────
 
 /**
- * 唯一完成入口。按 FR-8.7 矩阵：所有终态都写 history（paused/blocked 不走此入口）。
+ * 唯一终态序列入口（FR-3.3 / AC-3）。
  *
- * 注意：finalizeGoal 只负责状态变更 + 写 history。
- * clearSession 由调用方（command-adapter/event-adapter）根据 options.clearImmediately
- * 决定是否在 finalizeGoal 之后执行（cancelled → 立即 clearSession）。
+ * 收口所有 active→terminal 转换的完整副作用序列，消除此前散在 service /
+ * command-adapter / event-adapter 7 处的重复 `transitionStatus + completedAtTurnIndex +
+ * writeHistory + appendState` 序列。
+ *
+ * 序列（严格顺序）：
+ * 1. tickState(state)（FR-6.5：转 terminal 前累加当前运行段——此时 status 仍为 active）
+ * 2. finalizeGoal(state, terminalStatus, ports, { completedTasks })
+ *    — transitionStatus(终态守卫) + completedAtTurnIndex= + appendHistory（FR-8.7 矩阵）
+ * 3. ports.persistence.appendState(serializeState(state))（持久化终态 state）
+ *
+ * **clearSession 不在此处**（FR-8.7）：cancelled 是否立即 clear 由调用方按语义决定——
+ * command/service 的 cancel 立即 clearGoalSession，event 路径的 cancelled（noTask/maxTurns）
+ * 不立即 clear（靠 AUTO_CLEAR_TURNS）。
+ *
+ * @param state runtime state（mutate）
+ * @param terminalStatus 目标终态（complete / cancelled / budget_limited / time_limited）
+ * @param completedTasks 已完成任务数（写入 history entry）
+ * @param ports ServicePorts（persistence.appendHistory + appendState）
+ */
+export function finalizeAndPersist(
+	state: GoalRuntimeState,
+	terminalStatus: GoalStatus,
+	completedTasks: number,
+	ports: ServicePorts,
+): void {
+	tickState(state);
+	finalizeGoal(state, terminalStatus, ports, { completedTasks });
+	ports.persistence.appendState(serializeState(state));
+}
+
+/**
+ * 终态变更 + 写 history（纯状态变更，不含 tick / persist / clearSession）。
+ *
+ * 被 {@link finalizeAndPersist} 内部调用，也可单独调用（如仅需状态变更 + history）。
+ * 按 FR-8.7 矩阵：所有终态都写 history（paused/blocked 不走此入口）。
  */
 export function finalizeGoal(
 	state: GoalRuntimeState,
 	terminalStatus: GoalStatus,
 	ports: ServicePorts,
-	options: { clearImmediately: boolean; completedTasks: number },
+	options: { completedTasks: number },
 ): void {
 	state.status = transitionStatus(state.status, terminalStatus);
 	state.completedAtTurnIndex = state.currentTurnIndex;
@@ -247,7 +283,7 @@ function actionCreateTasks(
 	const verifications = params.verifications as GoalTask["verification"][] | undefined;
 	state.tasks = tasks.map((desc, i) => ({
 		id: i + 1,
-		description: normalizeDescription(desc, 80, 3),
+		description: normalizeDescription(desc, TASK_DESC_MAX_LENGTH, ELLIPSIS_LENGTH),
 		status: "pending" as const,
 		verification: verifications?.[i],
 		lastUpdatedTurn: state.currentTurnIndex,
@@ -374,12 +410,9 @@ function actionCompleteGoal(
 		return errorResult("At least one task must be completed or verified. All-cancelled does not count.");
 	}
 
-	// finalizeGoal
+	// FR-3.3: 唯一终态序列入口（tick + finalizeGoal + persist）
 	const completedCount = completedOrVerified.length;
-	// FR-6.5: 转 complete 前先 tick（此时 status 仍为 active，累加当前运行段）
-	tickState(state);
-	finalizeGoal(state, "complete", ports, { clearImmediately: false, completedTasks: completedCount });
-	ports.persistence.appendState(serializeState(state));
+	finalizeAndPersist(state, "complete", completedCount, ports);
 	return makeResult(session, `Objective completed! Evidence: ${evidence}`);
 }
 
@@ -394,10 +427,8 @@ function actionCancelGoal(
 	}
 	const reason = (params.cancelReason as string) ?? "User requested cancellation";
 	const completedCount = state.tasks.filter((t) => t.status === "completed" || t.status === "verified").length;
-	// FR-6.5: 转 cancelled 前先 tick（累加当前运行段，保证 history elapsedSeconds 准确）
-	tickState(state);
-	finalizeGoal(state, "cancelled", ports, { clearImmediately: true, completedTasks: completedCount });
-	ports.persistence.appendState(serializeState(state));
+	// FR-3.3: 唯一终态序列入口（tick + finalizeGoal + persist）
+	finalizeAndPersist(state, "cancelled", completedCount, ports);
 	// FR-8.7: cancelled → 立即 clearSession
 	clearGoalSession(session, ports.ui);
 	return {
@@ -441,7 +472,7 @@ function actionAddTasks(
 	const verifications = params.verifications as TaskVerification[] | undefined;
 	const newTasks: GoalTask[] = tasks.map((desc, i) => ({
 		id: startId + i,
-		description: normalizeDescription(desc, 80, 3),
+		description: normalizeDescription(desc, TASK_DESC_MAX_LENGTH, ELLIPSIS_LENGTH),
 		status: "pending" as const,
 		verification: verifications?.[i],
 		lastUpdatedTurn: state.currentTurnIndex,
@@ -647,9 +678,4 @@ function makeResult(session: GoalSession, text: string): ToolActionResult {
 	};
 }
 
-function errorResult(message: string): ToolActionResult {
-	return {
-		content: [{ type: "text", text: message }],
-		isError: true,
-	};
-}
+// errorResult 由 projection/result.ts 统一导出（DRY：service / tool-adapter 共用）

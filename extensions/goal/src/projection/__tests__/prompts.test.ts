@@ -12,13 +12,13 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { GoalTask } from "../../engine/task";
 import { createGoalState } from "../../engine/goal";
+import type { GoalTask } from "../../engine/task";
 import type { GoalRuntimeState } from "../../engine/types";
 import {
 	budgetLimitPrompt,
-	continuationPrompt,
 	contextInjectionPrompt,
+	continuationPrompt,
 	formatBudget,
 	formatTaskList,
 	objectiveUpdatedPrompt,

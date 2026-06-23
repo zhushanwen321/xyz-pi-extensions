@@ -33,7 +33,7 @@ import { checkBudgetOnTurnEnd, checkProgress } from "../engine/budget";
 import { isActiveStatus, isTerminalStatus, transitionStatus } from "../engine/goal";
 import type { GoalTask } from "../engine/task";
 import { getCompletedCount, getIncompleteTasks, isTaskDone } from "../engine/task";
-import { makeHistoryEntry, serializeState } from "../persistence";
+import { serializeState } from "../persistence";
 import {
 	budgetLimitPrompt,
 	contextInjectionPrompt,
@@ -41,7 +41,7 @@ import {
 	stalenessReminderPrompt,
 } from "../projection/prompts";
 import { asTheme,renderTerminalStatusLine, updateWidget } from "../projection/widget";
-import { applyEvent, tickState } from "../service";
+import { applyEvent, finalizeAndPersist, tickState } from "../service";
 import type { GoalSession } from "../session";
 import { clearGoalSession, reconstructGoalState } from "../session";
 import { buildPorts } from "./tool-adapter";
@@ -522,16 +522,13 @@ async function handleBudgetChecks(
 	// 预算耗尽 → 终止
 	if (budgetResult.terminal) {
 		const dim = budgetResult.terminal.dimension;
-		// FR-6.5: 转 terminal 前先 tick（此时 status 仍为 active，累加当前运行段）
-		tickState(state);
-		state.status = transitionStatus(
-			state.status,
+		// FR-3.3: 唯一终态序列入口（tick + finalizeGoal + persist）
+		finalizeAndPersist(
+			state,
 			dim === "token" ? "budget_limited" : "time_limited",
+			getCompletedCount(state.tasks),
+			buildPorts(pi, ctx),
 		);
-		state.completedAtTurnIndex = state.currentTurnIndex;
-		// FR-8.7: 写 history
-		pi.appendEntry("goal-history", makeHistoryEntry(state, getCompletedCount(state.tasks)));
-		pi.appendEntry("goal-state", serializeState(state));
 		if (checkStale()) return "stop";
 		updateWidget(session, buildPorts(pi, ctx).ui);
 		ctx.ui.notify(
@@ -601,12 +598,8 @@ function handleAllTasksDone(
 	const state = session.state!;
 	// FR-8.7 1a: maxTurnsReached → complete（优先 complete，不因 maxTurns 变 cancelled）
 	if (progress.maxTurnsReached) {
-		// FR-6.5: 转 complete 前先 tick（此时 status 仍为 active，累加当前运行段）
-		tickState(state);
-		state.status = transitionStatus(state.status, "complete");
-		state.completedAtTurnIndex = state.currentTurnIndex;
-		pi.appendEntry("goal-history", makeHistoryEntry(state, progress.completedCount));
-		pi.appendEntry("goal-state", serializeState(state));
+		// FR-3.3: 唯一终态序列入口（tick + finalizeGoal + persist）
+		finalizeAndPersist(state, "complete", progress.completedCount, buildPorts(pi, ctx));
 		if (checkStale()) return "stop";
 		updateWidget(session, buildPorts(pi, ctx).ui);
 		ctx.ui.notify(
@@ -649,12 +642,8 @@ function handleNoTasksOrMaxTurns(
 	const state = session.state!;
 	// FR-8.7 2a: maxTurnsReached → cancelled
 	if (progress.maxTurnsReached) {
-		// FR-6.5: 转 cancelled 前先 tick（此时 status 仍为 active，累加当前运行段）
-		tickState(state);
-		state.status = transitionStatus(state.status, "cancelled");
-		state.completedAtTurnIndex = state.currentTurnIndex;
-		pi.appendEntry("goal-history", makeHistoryEntry(state, 0));
-		pi.appendEntry("goal-state", serializeState(state));
+		// FR-3.3: 唯一终态序列入口（tick + finalizeGoal + persist）
+		finalizeAndPersist(state, "cancelled", 0, buildPorts(pi, ctx));
 		if (checkStale()) return "stop";
 		updateWidget(session, buildPorts(pi, ctx).ui);
 		ctx.ui.notify(
@@ -683,12 +672,8 @@ function handleMaxTurnsReached(
 ): ProgressAction {
 	const state = session.state!;
 	const incomplete = getIncompleteTasks(state.tasks);
-	// FR-6.5: 转 cancelled 前先 tick（此时 status 仍为 active，累加当前运行段）
-	tickState(state);
-	state.status = transitionStatus(state.status, "cancelled");
-	state.completedAtTurnIndex = state.currentTurnIndex;
-	pi.appendEntry("goal-history", makeHistoryEntry(state, getCompletedCount(state.tasks)));
-	pi.appendEntry("goal-state", serializeState(state));
+	// FR-3.3: 唯一终态序列入口（tick + finalizeGoal + persist）
+	finalizeAndPersist(state, "cancelled", getCompletedCount(state.tasks), buildPorts(pi, ctx));
 	if (checkStale()) return "stop";
 	updateWidget(session, buildPorts(pi, ctx).ui);
 	ctx.ui.notify(

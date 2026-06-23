@@ -1,18 +1,15 @@
 /**
- * Tool result 构建器（projection 层）
+ * Tool result 类型 + 错误结果构造器（projection 层）
  *
- * 迁移自 src/tool-handler.ts 的 makeGoalResult / errorResult 和
- * src/action-handlers.ts 的 buildBudgetReport。
- *
- * FR-3.4：budget 格式化收敛到 prompts.ts 的 formatBudget。
+ * 历史背景：旧版有 makeGoalResult / buildBudgetReport / errorResult 三个构造器，
+ * 重构后 action 结果由 service 层内联构造（makeResult），budget 格式化收敛到
+ * prompts.ts 的 formatBudget。本文件保留两样东西：
+ * - GoalManagerDetails：goal_manager tool 返回结果的 details 字段类型（index.ts 消费）
+ * - errorResult：跨层的标准错误结果构造器（service / tool-adapter 共用，DRY）
  */
 
-import { SECONDS_PER_MINUTE } from "../constants";
 import type { GoalTask } from "../engine/task";
-import type { GoalRuntimeState } from "../engine/types";
 import type { ToolActionResult } from "../service";
-import type { GoalSession } from "../session";
-import { formatBudget } from "./prompts";
 
 // ── Tool Details Types ───────────────────────────────
 
@@ -30,66 +27,13 @@ export interface GoalManagerDetails {
 // ── Result Builders ──────────────────────────────────
 
 /**
- * 构造标准成功结果，附带 budget 后缀。
+ * 构造标准的错误结果（避免重复的 content 模板）。
  *
- * FR-3.4：budget 拼接通过 formatBudget(state, timeUsedSeconds, "remaining") 收敛，
- * 替代旧 makeGoalResult 内联的 budgetInfo 数组拼接逻辑。
- *
- * @param session goal session（读 state）
- * @param text 结果正文
- * @param timeUsedSeconds 累计耗时秒数（adapter/service 计算后传入）
+ * 唯一定义点：service.ts / tool-adapter.ts 都 import 此函数，消除三处重复。
  */
-export function makeGoalResult(
-	session: GoalSession,
-	text: string,
-	timeUsedSeconds: number,
-): ToolActionResult {
-	const state = session.state;
-	if (!state) {
-		// P1-1: 不再抛异常，返回标准 isError 结果
-		return errorResult("No active goal");
-	}
-	const budgetStr = formatBudget(state, timeUsedSeconds, "remaining");
-	const suffix = budgetStr ? `\n\n${budgetStr}` : "";
-	return {
-		content: [{ type: "text", text: text + suffix }],
-		details: {
-			action: "update",
-			tasks: state.tasks.map((t) => ({ ...t })),
-			goalId: state.goalId,
-			status: state.status,
-		} satisfies GoalManagerDetails,
-	};
-}
-
-/** 构造标准的错误结果（避免重复的 content 模板）。 */
 export function errorResult(message: string): ToolActionResult {
 	return {
 		content: [{ type: "text", text: message }],
 		isError: true,
 	};
-}
-
-/**
- * 构建 goal 完成时的 budget 报告（多行数组）。
- *
- * FR-3.4：budget 行通过 formatBudget(state, timeUsedSeconds, "report") 收敛，
- * 替代旧 buildBudgetReport 的内联拼接。total turns / tasks completed 行保持独立。
- *
- * @returns 报告行数组（complete_goal 的 result 文本用它 join("\n")）
- */
-export function buildBudgetReport(state: GoalRuntimeState, timeUsedSeconds: number): string[] {
-	const lines: string[] = [];
-	lines.push(`Total turns: ${state.currentTurnIndex}`);
-	const completedCount = state.tasks.filter(
-		(t) => t.status === "completed" || t.status === "verified",
-	).length;
-	lines.push(`Tasks completed: ${completedCount}/${state.tasks.length}`);
-	if (state.budget.tokenBudget) {
-		lines.push(`Token usage: ${state.tokensUsed}/${state.budget.tokenBudget}`);
-	}
-	lines.push(
-		`Duration: ${Math.floor(timeUsedSeconds / SECONDS_PER_MINUTE)}m${Math.floor(timeUsedSeconds % SECONDS_PER_MINUTE)}s`,
-	);
-	return lines;
 }

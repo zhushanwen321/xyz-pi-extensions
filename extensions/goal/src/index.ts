@@ -39,7 +39,7 @@ import { getCompletedCount } from "./engine/task";
 import { type GoalManagerDetails } from "./projection/result";
 import { toSingleLine } from "./projection/widget";
 import { createGoal } from "./service";
-import { createGoalSession, type GoalSession,isStaleContextError } from "./session";
+import { createGoalSession, type GoalSession, isStaleContextError } from "./session";
 
 // ── Local Interfaces (Like*Event — 避免 any on Pi callback/event signatures) ────
 

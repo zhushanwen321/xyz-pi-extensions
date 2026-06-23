@@ -844,7 +844,7 @@ describe("finalizeGoal — history 写入矩阵", () => {
 	it("complete → 写 history", () => {
 		const ports = makeFakePorts();
 		const state = makeState();
-		finalizeGoal(state, "complete", ports, { clearImmediately: false, completedTasks: 1 });
+		finalizeGoal(state, "complete", ports, { completedTasks: 1 });
 		expect(ports.history.length).toBe(1);
 		expect((ports.history[0] as { status: string }).status).toBe("complete");
 		expect(state.completedAtTurnIndex).toBe(state.currentTurnIndex);
@@ -853,21 +853,21 @@ describe("finalizeGoal — history 写入矩阵", () => {
 	it("cancelled → 写 history", () => {
 		const ports = makeFakePorts();
 		const state = makeState();
-		finalizeGoal(state, "cancelled", ports, { clearImmediately: true, completedTasks: 0 });
+		finalizeGoal(state, "cancelled", ports, { completedTasks: 0 });
 		expect(ports.history.length).toBe(1);
 	});
 
 	it("budget_limited → 写 history", () => {
 		const ports = makeFakePorts();
 		const state = makeState();
-		finalizeGoal(state, "budget_limited", ports, { clearImmediately: false, completedTasks: 2 });
+		finalizeGoal(state, "budget_limited", ports, { completedTasks: 2 });
 		expect(ports.history.length).toBe(1);
 	});
 
 	it("time_limited → 写 history", () => {
 		const ports = makeFakePorts();
 		const state = makeState();
-		finalizeGoal(state, "time_limited", ports, { clearImmediately: false, completedTasks: 0 });
+		finalizeGoal(state, "time_limited", ports, { completedTasks: 0 });
 		expect(ports.history.length).toBe(1);
 	});
 
@@ -875,7 +875,7 @@ describe("finalizeGoal — history 写入矩阵", () => {
 		const ports = makeFakePorts();
 		const state = makeState();
 		state.status = "complete";
-		finalizeGoal(state, "cancelled", ports, { clearImmediately: false, completedTasks: 0 });
+		finalizeGoal(state, "cancelled", ports, { completedTasks: 0 });
 		// transitionStatus 终态守卫：保持 complete
 		expect(state.status).toBe("complete");
 	});
