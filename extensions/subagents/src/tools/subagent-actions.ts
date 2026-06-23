@@ -32,12 +32,6 @@ import type {
 const DEFAULT_LIST_LIMIT = 20;
 /** list limit 上限。 */
 const MAX_LIST_LIMIT = 100;
-/**
- * collectRecords 的取数下限。includeFinished=false 时先取够多再过滤 running，
- * 避免「limit=5 但前 5 条全 done → running 全被过滤掉」。
- * includeFinished=true 时 collect 上限即 limit。
- */
-const MIN_COLLECT_FOR_FILTER = 100;
 
 /** background 启动提示文案（spec FR-3 bgResponse.message）。 */
 const BG_MESSAGE = "detached, will notify on completion";
@@ -90,10 +84,10 @@ export interface CancelHandlerResult {
 // ============================================================
 
 /**
- * list session 作用域（诚实声明 G3-003）：
- * collectRecords(limit) 由 service 内部按 modelService.sessionId 过滤 history 源；
- * 内存源（live/completed/bg）天然跨 session 可见——/new /resume /fork 后可能残留
- * 前 session 的 record（通常很少，多为刚 cancel 的 background）。
+ * list 数据源（诚实声明 G3-003）：
+ * collectRecords(limit, statusFilter) 合并内存(running) + 磁盘(sessions/*.jsonl 重建)。
+ * 磁盘源天然跨 session 可见——/new /resume /fork 后前 session 的终态 record 仍在
+ * sessions 目录里（直到 30 天 GC）。内存源仅当前 session 的 running record。
  * 不新增 sessionId 到 ExecutionRecord（YAGNI，修跨 session 清理是独立问题）。
  */
 
@@ -206,13 +200,11 @@ export function listHandler(
   const rawLimit = input?.limit ?? DEFAULT_LIST_LIMIT;
   const limit = Math.max(1, Math.min(rawLimit, MAX_LIST_LIMIT));
 
-  // collectRecords 合并四源（service 内部已按 sessionId 过滤 history 源），
-  // 按 status priority + startedAt desc 排好序。
-  // includeFinished=false 时先多取再过滤 running（避免 limit 截断把 running 滤没）。
-  const collectLimit = includeFinished ? limit : MIN_COLLECT_FOR_FILTER;
-  const all = service.collectRecords(collectLimit);
-  const filtered = includeFinished ? all : all.filter((r) => r.status === "running");
-  const items: SubagentListItem[] = filtered.slice(0, limit).map(recordToListItem);
+  // collectRecords 是 service 核心能力：statusFilter 决定 running-only 还是全部。
+  // 防截断（先多取再过滤）已下沉到 store 层——这里直接传 limit + filter。
+  const filter = includeFinished ? "all" : "running";
+  const all = service.collectRecords(limit, filter);
+  const items: SubagentListItem[] = all.map(recordToListItem);
   const running = items.filter((i) => i.status === "running").length;
 
   return { response: { running, items } };
@@ -229,7 +221,7 @@ export async function cancelHandler(
   const id = input?.subagentId?.trim();
   if (!id) throw new Error("cancelParam.subagentId is required for action:'cancel'");
 
-  // step 1: id 不存在（findRecord 查内存三源，不查 history）
+  // step 1: id 不存在（findRecord 只查内存 running record，不从 session.jsonl 重建）
   const rec = service.findRecord(id);
   if (!rec) throw new Error(`No subagent record with id "${id}"`);
   // step 2: mode 非 background（sync record controller 为 undefined，不可 cancel）
@@ -241,8 +233,8 @@ export async function cancelHandler(
   // 路径 CAS 到 done/failed）。重新查当前状态，避免「status: running」与「already finished」矛盾。
   if (!service.cancel(id)) {
     // CAS 失败 = record 在 cancel 期间被 detached 路径 finalize（done/failed）。
-    // re-query 查当前真实状态。若 record 已被内存淘汰（bg FIFO 50 cap / sync 5s linger），
-    // 诚实报告 "unknown (evicted)" 而非回落到可能过期的 rec.status（BL-3）。
+    // re-query 查当前真实状态。终态 record 被 archive 立即移出内存，
+    // 诚实报告 "unknown (evicted from memory)" 而非回落到可能过期的 rec.status（BL-3）。
     const now = service.findRecord(id);
     const statusDesc = now ? now.status : "unknown (evicted from memory)";
     throw new Error(`Subagent ${id} could not be cancelled (it likely just finished; status: ${statusDesc})`);

@@ -10,7 +10,7 @@
 //   createRecord    唯一创建入口（model 创建时必填，消灭 poll 路径 model 丢失）
 //   updateFromEvent 唯一事件更新入口（累积进 turns[]，消灭闭包旁路累积器）
 //   completeRecord  唯一完成入口（冻结状态）
-//   project/snapshot/toPersisted 唯一投影入口（三路径字段一致）
+//   project/snapshot 唯一投影入口（两路径字段一致）
 //
 // Core 层叶子原语：仅依赖 types.ts。零 Pi / Runtime / TUI 依赖。
 
@@ -23,7 +23,6 @@ import type {
   ExecutionMode,
   ExecutionRecord,
   InternalToolCall,
-  PersistedAgentRecord,
   RecordSnapshot,
   SubagentToolDetails,
   ToolCall,
@@ -42,8 +41,6 @@ const TURN_SUMMARY_MAX = 80;
 const TOOL_LABEL_MAX = 100;
 /** ms → s 换算。elapsedSeconds 唯一计算点用。 */
 const MS_PER_SECOND = 1000;
-/** 持久化预览（taskPreview/resultPreview）截断长度。与旧 PREVIEW_MAX 对齐。 */
-const PREVIEW_MAX = 200;
 
 // ============================================================
 // Label 提取（eventLog 派生的伴生逻辑，co-locate 于 Core）
@@ -571,42 +568,4 @@ export function snapshot(record: ExecutionRecord): RecordSnapshot {
     error: record.error,
     sessionFile: record.sessionFile,
   };
-}
-
-/**
- * 投影到 PersistedAgentRecord（history.jsonl 一行）。预览字段截断。
- * 不持久化 turns[]（完整内容在 session.jsonl），只存预览。
- */
-export function toPersisted(
-  record: ExecutionRecord,
-  cwd: string,
-  sessionId?: string,
-): PersistedAgentRecord {
-  return {
-    id: record.id,
-    agent: record.agent,
-    status: record.status,
-    mode: record.mode,
-    taskPreview: truncatePreview(record.task),
-    startedAt: record.startedAt,
-    endedAt: record.endedAt,
-    turns: record.turnCount,
-    totalTokens: record.totalTokens,
-    error: record.error,
-    resultPreview: record.result ? truncatePreview(record.result) : undefined,
-    sessionFile: record.sessionFile,
-    cwd,
-    sessionId,
-    model: record.model,
-    thinkingLevel: record.thinkingLevel,
-  };
-}
-
-// ============================================================
-// 投影内部 helper
-// ============================================================
-
-/** 持久化预览截断（task/result 长文本截到单行可读长度）。 */
-function truncatePreview(text: string): string {
-  return text.length > PREVIEW_MAX ? text.slice(0, PREVIEW_MAX) : text;
 }

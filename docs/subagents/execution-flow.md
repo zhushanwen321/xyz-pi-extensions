@@ -17,7 +17,7 @@
 
 ## 2. 统一执行流
 
-`SubagentService.execute(opts)` 是 sync/bg 共用的唯一入口。分七步，mode 分叉集中在第 3 步。执行编排逻辑（原 executor）已合并进 SubagentService——组件（pool/store/history/notifier）全 private，编排方法（runAndFinalize/finalizeRecord/notifyComplete 等）全 private，作为同类方法直接访问组件。
+`SubagentService.execute(opts)` 是 sync/bg 共用的唯一入口。分七步，mode 分叉集中在第 3 步。执行编排逻辑（原 executor）已合并进 SubagentService——组件（pool/store/notifier）全 private，编排方法（runAndFinalize/finalizeRecord/notifyComplete 等）全 private，作为同类方法直接访问组件。
 
 ```mermaid
 flowchart TD
@@ -98,7 +98,7 @@ sequenceDiagram
     par detached promise
         Exec->>Run: run(record, ...)
         Run-->>Exec: AgentResult
-        Exec->>Exec: completeRecord + archive + history.append
+        Exec->>Exec: completeRecord + archive（终态移出内存）
         Exec->>Notifier: notify(snapshot)
         Notifier->>Main: sendMessage({triggerTurn:true})
         Note over Main: 唤醒父 agent 下一 turn
@@ -118,8 +118,8 @@ sequenceDiagram
     Cancel->>Record: controller.abort()
     Cancel->>Record: tryTransition("cancelled")
     Record-->>Cancel: CAS 成功（status was "running"）
-    Cancel->>Record: completeRecord + archive + notify(cancelled)
-    Note over Cancel: 不写 history（用户意图）
+    Cancel->>Record: completeRecord + 写 tombstone + archive + notify(cancelled)
+    Note over Cancel: 写 .cancelled sidecar（session.jsonl 被 abort 截断）
 
     Then->>Record: .then/.catch 触发
     Then->>Record: tryTransition(...)
@@ -127,7 +127,7 @@ sequenceDiagram
     Note over Then: 什么都不做——status 状态机已锁
 ```
 
-`tryTransition(record, target)` 是唯一的 CAS 入口：仅当 `record.status === "running"` 时改为 target 并返回 true，否则返回 false。**status 状态机本身就是互斥锁**——不需要额外的 `_settled` 字段。谁先把 status 从 running 转走，谁负责完整收尾（completeRecord + archive + history + notify）；后来的 `tryTransition` 必然失败，自然跳过所有副作用。
+`tryTransition(record, target)` 是唯一的 CAS 入口：仅当 `record.status === "running"` 时改为 target 并返回 true，否则返回 false。**status 状态机本身就是互斥锁**——不需要额外的 `_settled` 字段。谁先把 status 从 running 转走，谁负责完整收尾（completeRecord + archive + notify）；后来的 `tryTransition` 必然失败，自然跳过所有副作用。
 
 **为何不用 `_settled` 字段**：`_settled` 是早期防御性设计，把"收尾互斥"和"业务 status"拆成两个字段，增加理解成本。但两者本质是同一个锁——status 终态本就不可逆（done/failed/cancelled 都是终态），用它当锁更简单自洽：被锁的字段（status）自身不可逆，check-then-set 在 JS 单线程事件循环里天然原子。
 
@@ -149,13 +149,12 @@ sequenceDiagram
 
 `completeRecord` 由抢到 CAS 的一方唯一调用，status 参数已确定。`project()` 读取 record 的 turns/totalTokens（updateFromEvent 累积值，completeRecord 不清零），三路径（sync 返回 / bg poll / list 显示）字段完全一致。
 
-## 6. history 单点写入
+## 6. 终态收尾单点
 
-旧实现 sync 路径在 `runAgent` 写一条、background 在 `.then`/`.catch` 各写一条，且 cancel 会产生同 id 双写（cancelled + failed）。新设计：
+旧实现 sync 路径在 `runAgent` 写一条 history、background 在 `.then`/`.catch` 各写一条，且 cancel 会产生同 id 双写（cancelled + failed）。新设计：
 
-- **唯一写入点**：`finalizeRecord`（抢到 CAS 的一方调用），内部完成 completeRecord + store.archive + history.append 三步。mode 字段区分 sync/background
-- **cancel 不写 history**：cancel 是用户意图不计入执行记录（cancel 抢到 CAS 后直接 completeRecord + notify，不走 finalizeRecord）
-- **去重**：`history-store.recent()` 仍保留同 id merge 逻辑（endedAt 最新 + cancelled 优先），作为历史数据的防御性处理
+- **唯一收尾点**：`finalizeRecord`（抢到 CAS 的一方调用），内部完成 completeRecord + store.archive 两步。archive 立即将终态 record 移出内存（读时从 session.jsonl 重建）
+- **cancel 写 tombstone**：cancel 抢到 CAS 后 completeRecord + 写 `.cancelled` sidecar（session.jsonl 被 abort 截断，cancelled 状态靠 sidecar 标记）+ archive + notify。collectRecords 重建时读 tombstone override status=cancelled
 
 ## 相关文档
 

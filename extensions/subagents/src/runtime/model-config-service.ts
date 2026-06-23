@@ -169,12 +169,12 @@ export class ModelConfigService {
     return structuredClone(this.globalConfig);
   }
 
-  /** 内部：用于 SubagentService 经 session id 过滤 history（只读访问 sessionId）。 */
+  /** 内部：session id 缓存（initModel 注入；当前无消费者，保留供未来 session 作用域需求）。 */
   get sessionId(): string | undefined {
     return this._sessionId;
   }
 
-  /** agent 配置目录（SubagentService 构造 history/store/SessionRunnerContext 时读）。 */
+  /** agent 配置目录（SubagentService 构造 store/SessionRunnerContext 时读）。 */
   getAgentDir(): string {
     return this.agentRegistryDir;
   }

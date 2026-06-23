@@ -1,32 +1,29 @@
 // src/runtime/execution/record-store.ts
 //
-// Record 的统一容器。单 Map + 按 status/mode 过滤。
+// Record 的统一容器。内存只留 running record；终态从 session.jsonl 重建。
 //
 // 职责：
-//   - 持有所有内存 record（单 Map，按 status/mode 过滤替代物理分区）
+//   - 持有 running record（终态 record 在 archive 时立即从内存移除）
 //   - onChange 订阅（TUI widget/list 据此重渲）
-//   - 与 history-store 协作：completed 后写入持久化，list 时 merge 四源
+//   - collectRecords：内存(running) + 磁盘(sessions/*.jsonl 重建) 合并
 //   - 提供 snapshot() 只读视图给 TUI（永不返回可变引用）
 
+import * as fs from "node:fs";
+import * as path from "node:path";
+
 import { getEventLog, snapshot as toSnapshot } from "../../core/execution-record.ts";
+import { reconstructFromFile } from "../../core/session-reconstructor.ts";
 import type {
-  ExecutionMode,
   ExecutionRecord,
   ExecutionStatus,
   RecordSnapshot,
   SubagentRecord,
 } from "../../types.ts";
-import type { HistoryStore } from "./history-store.ts";
+import { readCancelledTombstone } from "./tombstone-store.ts";
 
 // ============================================================
 // 常量
 // ============================================================
-
-/** sync completed record 在内存的 linger 时长（ms）。过期后从 completed map 移除。 */
-const SYNC_LINGER_MS = 5000;
-
-/** background record 的 FIFO 上限（绝不淘汰 running）。 */
-const BG_FIFO_MAX = 50;
 
 /** status → 排序优先级（值小排前）：running < failed < cancelled < done。 */
 const STATUS_PRIORITY: Record<ExecutionStatus, number> = {
@@ -39,6 +36,9 @@ const STATUS_PRIORITY: Record<ExecutionStatus, number> = {
 /** store 变更监听器（返回取消订阅函数）。 */
 export type ChangeListener = () => void;
 
+/** status 过滤模式（collectRecords 的核心能力参数）。 */
+export type StatusFilter = "running" | "all";
+
 // ============================================================
 // RecordStore
 // ============================================================
@@ -46,18 +46,21 @@ export type ChangeListener = () => void;
 /**
  * Record 容器。进程单例（随 SubagentService 重建）。
  *
- * 单 Map 架构：所有 record 存在一个 Map 中，按 status/mode 过滤。
- * 终态 record 通过 TTL 定时器自动清理（sync 5s linger，bg FIFO）。
+ * 内存只留 running record——终态 record 在 archive 时立即移除，collectRecords
+ * 读时从 sessions/*.jsonl 重建（reconstructFromFile）。重建结果有缓存，在
+ * notifyChange 时失效（终态 record 不再变化，但新 finalize 触发重扫）。
+ *
  * 任何 mutate → notifyChange()。
  */
 export class RecordStore {
   private readonly records = new Map<string, ExecutionRecord>();
   private readonly listeners = new Set<ChangeListener>();
-  /** 定时器（key=record id，用于 sync linger 和 bg TTL 清理）。 */
-  private readonly expireTimers = new Map<string, NodeJS.Timeout>();
   private _disposed = false;
 
-  constructor(private readonly history: HistoryStore) {}
+  /** 重建缓存：sessionFile → SubagentRecord。notifyChange 时失效。 */
+  private reconCache: Map<string, SubagentRecord> | undefined;
+
+  constructor(private readonly sessionsDir: string) {}
 
   /** 注册新 record。触发 onChange。 */
   register(record: ExecutionRecord): void {
@@ -66,16 +69,12 @@ export class RecordStore {
   }
 
   /**
-   * 归档：record 已被 completeRecord 设置了终态 status，不迁移 Map。
-   * sync 启动 5s linger 定时器，到期后从 records 移除。
-   * bg 直接保留（活到被查询或 FIFO 淘汰）。
+   * 归档：record 已被 completeRecord 设置了终态 status。
+   * 立即从内存移除（终态 record 下次读时从 session.jsonl 重建）。
+   * cancelled record 由调用方先写 tombstone（cancel 路径），此处只负责移除。
    */
   archive(record: ExecutionRecord): void {
-    if (record.mode === "background") {
-      this.enforceBgFifo();
-    } else {
-      this.scheduleSyncExpire(record.id);
-    }
+    this.records.delete(record.id);
     this.notifyChange();
   }
 
@@ -92,29 +91,42 @@ export class RecordStore {
   }
 
   /**
-   * 合并内存 + history → SubagentRecord[]（/subagents list 消费）。
-   *   - history（跨 session jsonl，按 sessionId 过滤）
-   *   - memory（当前 session，所有 mode/status）
-   * 合并规则：内存源覆盖 history；cancelled 状态优先保留（用户意图）。
-   * 排序：status priority（running<failed<cancelled<done）+ startedAt desc。
+   * 合并内存(running) + 磁盘(sessions/*.jsonl 重建) → SubagentRecord[]。
+   *
+   *   ╔══════════════════════════════════════════════════════════════════╗
+   *   ║  1. 磁盘源：扫 sessionsDir 的 .jsonl，逐个 reconstructFromFile   ║
+   *   ║     （命中缓存则跳过读文件）。cancelled tombstone override status ║
+   *   ║  2. 内存源覆盖（同 id 内存优先——running record 更新鲜）          ║
+   *   ║  3. statusFilter："running" → 只留 running（内存源）；            ║
+   *   ║                   "all"（默认）→ 内存 + 磁盘                       ║
+   *   ║  4. 排序：STATUS_PRIORITY + startedAt desc                        ║
+   *   ║  5. slice(limit)                                                  ║
+   *   ╚══════════════════════════════════════════════════════════════════╝
+   *
+   * statusFilter="running" 时仍先取够多再过滤（防 limit 截断把 running 滤没），
+   * 与旧 listHandler 的防截断逻辑一致，下沉到此。
    */
-  collectRecords(limit: number, sessionId?: string): SubagentRecord[] {
-    // 1. history 基底（跨 session，按 sessionId 过滤）
+  collectRecords(limit: number, statusFilter: StatusFilter = "all"): SubagentRecord[] {
     const byId = new Map<string, SubagentRecord>();
-    for (const h of this.history.recent(limit, sessionId)) {
-      byId.set(h.id, RecordStore.persistedToSubagent(h));
+
+    // 1. 磁盘源（重建终态 record）。
+    for (const rec of this.reconstructAll()) {
+      byId.set(rec.id, rec);
     }
-    // 2. 内存源覆盖（单 Map，当前 session）
+
+    // 2. 内存源覆盖（running record 优先——它是活态，比磁盘重建更新鲜）。
     for (const r of this.records.values()) {
-      const existing = byId.get(r.id);
-      // cancelled 状态优先保留（用户意图，即使被内存覆盖）
-      if (existing?.status === "cancelled" && r.status !== "cancelled") {
-        continue;
-      }
       byId.set(r.id, RecordStore.recordToSubagent(r));
     }
-    // 3. 排序 + slice
-    return [...byId.values()]
+
+    // 3. statusFilter。
+    let result = [...byId.values()];
+    if (statusFilter === "running") {
+      result = result.filter((r) => r.status === "running");
+    }
+
+    // 4-5. 排序 + slice。
+    return result
       .sort(RecordStore.compareRecords)
       .slice(0, limit);
   }
@@ -127,21 +139,18 @@ export class RecordStore {
     };
   }
 
-  /** 触发所有监听器（TUI widget/list requestRender）。dispose 后短路。 */
+  /** 触发所有监听器（TUI widget/list requestRender）。dispose 后短路。同时失效重建缓存。 */
   notifyChange(): void {
     if (this._disposed) return;
+    this.reconCache = undefined; // 失效缓存（新 finalize 可能产出新 session.jsonl）。
     for (const listener of this.listeners) {
       listener();
     }
   }
 
-  /** session 结束清理：清空所有定时器、丢弃 pending 通知。 */
+  /** session 结束清理。 */
   dispose(): void {
     this._disposed = true;
-    for (const timer of this.expireTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.expireTimers.clear();
     this.listeners.clear();
   }
 
@@ -152,39 +161,56 @@ export class RecordStore {
 
   // ── 内部 ──────────────────────────────────────────────────
 
-  /** sync record 的 linger 定时器：到期后从 records 移除。 */
-  private scheduleSyncExpire(id: string): void {
-    // 防御：dispose 后不再 re-arm
-    if (this._disposed) return;
-    const timer = setTimeout(() => {
-      this.expireTimers.delete(id);
-      if (this._disposed) return;
-      // 仅当仍为终态时移除（避免竞态）
-      const record = this.records.get(id);
-      if (record && record.status !== "running") {
-        this.records.delete(id);
-        this.notifyChange();
-      }
-    }, SYNC_LINGER_MS);
-    this.expireTimers.set(id, timer);
-  }
+  /**
+   * 扫 sessionsDir 的 .jsonl 文件，逐个重建 SubagentRecord。
+   * 结果缓存（reconCache），notifyChange 时失效。
+   * best-effort：目录不存在/读失败 → 空数组（不抛）。
+   */
+  private reconstructAll(): SubagentRecord[] {
+    if (this.reconCache) return [...this.reconCache.values()];
 
-  /** bg FIFO 淘汰：超 BG_FIFO_MAX 时移除最旧的非 running 终态 bg record。 */
-  private enforceBgFifo(): void {
-    // 计算 bg mode 的终态 record
-    const bgTerminal: Array<{ id: string; startedAt: number }> = [];
-    for (const [id, r] of this.records) {
-      if (r.mode === "background" && r.status !== "running") {
-        bgTerminal.push({ id, startedAt: r.startedAt });
-      }
+    const cache = new Map<string, SubagentRecord>();
+    let files: string[];
+    try {
+      files = fs.readdirSync(this.sessionsDir)
+        .filter((f) => f.endsWith(".jsonl"))
+        .map((f) => path.join(this.sessionsDir, f));
+    } catch {
+      this.reconCache = cache;
+      return [];
     }
-    if (bgTerminal.length <= BG_FIFO_MAX) return;
-    // 按 startedAt 升序，淘汰最旧的
-    bgTerminal.sort((a, b) => a.startedAt - b.startedAt);
-    const toRemove = bgTerminal.length - BG_FIFO_MAX;
-    for (let i = 0; i < toRemove; i++) {
-      this.records.delete(bgTerminal[i].id);
+
+    for (const file of files) {
+      const recon = reconstructFromFile(file);
+      if (!recon) continue; // 文件缺失/损坏/缺 identity → 跳过。
+
+      // cancelled tombstone override（session.jsonl 被 abort 截断，状态靠 sidecar 标记）。
+      const tomb = readCancelledTombstone(file);
+      const status: ExecutionStatus = tomb ? "cancelled" : recon.status;
+      const error = tomb ? "cancelled by user" : recon.error;
+      const endedAt = tomb ? tomb.endedAt : undefined;
+
+      const rec: SubagentRecord = {
+        id: recon.id,
+        agent: recon.agent,
+        status,
+        mode: recon.mode,
+        startedAt: recon.startedAt,
+        endedAt,
+        turns: recon.turnCount,
+        totalTokens: recon.totalTokens,
+        model: recon.model,
+        thinkingLevel: recon.thinkingLevel,
+        eventLog: recon.eventLog,
+        result: recon.result,
+        error,
+        sessionFile: recon.sessionFile,
+      };
+      cache.set(file, rec);
     }
+
+    this.reconCache = cache;
+    return [...cache.values()];
   }
 
   /** 排序比较器：status priority（running<failed<cancelled<done）+ startedAt desc。 */
@@ -210,42 +236,7 @@ export class RecordStore {
       eventLog: getEventLog(r),
       result: r.result,
       error: r.error,
-      // sessionFile 由 record.sessionFile 提供（规范源，见 session-runner）。
       sessionFile: r.sessionFile,
-    };
-  }
-
-  /** PersistedAgentRecord → SubagentRecord（history 源投影）。 */
-  private static persistedToSubagent(p: {
-    id: string;
-    agent: string;
-    status: ExecutionStatus;
-    mode: ExecutionMode;
-    startedAt: number;
-    endedAt?: number;
-    turns?: number;
-    totalTokens?: number;
-    model?: string;
-    thinkingLevel?: string;
-    resultPreview?: string;
-    error?: string;
-    sessionFile?: string;
-  }): SubagentRecord {
-    return {
-      id: p.id,
-      agent: p.agent,
-      status: p.status,
-      mode: p.mode,
-      startedAt: p.startedAt,
-      endedAt: p.endedAt,
-      turns: p.turns ?? 0,
-      totalTokens: p.totalTokens ?? 0,
-      model: p.model ?? "",
-      thinkingLevel: p.thinkingLevel,
-      eventLog: [],
-      result: p.resultPreview,
-      error: p.error,
-      sessionFile: p.sessionFile,
     };
   }
 }

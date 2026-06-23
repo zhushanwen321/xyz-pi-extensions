@@ -1,7 +1,7 @@
 // src/tools/subagent-tool.ts
 //
 // `subagent` LLM 工具。薄壳——参数解析 + 调 runtime.execute。
-// 不创建 state、不节流 onUpdate、不写 history（全部在 runtime 层统一）。
+// 不创建 state、不节流 onUpdate、不持久化（全部在 runtime 层统一）。
 //
 // 设计说明：renderCall/renderResult/execute 三个回调均抽成模块级 const +
 // 顶层 type alias。原因：stub 的 registerTool(tool: unknown) 参数是 unknown，

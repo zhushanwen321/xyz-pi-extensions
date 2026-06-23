@@ -15,11 +15,10 @@ import {
   createRecord,
   project,
   snapshot,
-  toPersisted,
   tryTransition,
 } from "../core/execution-record.ts";
 import type { AgentConfig, ModelInfo } from "../core/model-resolver.ts";
-import { getSdk, run, type SessionRunnerContext } from "../core/session-runner.ts";
+import { getSdk, getSubagentSessionDir, run, type SessionRunnerContext } from "../core/session-runner.ts";
 import type { SdkLike } from "../types.ts";
 import type {
   AgentEvent,
@@ -34,10 +33,11 @@ import type {
   SubagentToolDetails,
 } from "../types.ts";
 import { DEFAULT_AGENT_NAME } from "../types.ts";
-import { HistoryStore } from "./execution/history-store.ts";
 import type { BgNotifyRecord, NotifierHost } from "./execution/notifier.ts";
 import { BgNotifier } from "./execution/notifier.ts";
+import type { StatusFilter } from "./execution/record-store.ts";
 import { RecordStore } from "./execution/record-store.ts";
+import { writeCancelledTombstone } from "./execution/tombstone-store.ts";
 import type { ModelConfigService } from "./model-config-service.ts";
 
 /** Pi ExtensionAPI 的最小接口（duck-typed）。 */
@@ -99,7 +99,6 @@ interface ResolvedIdentity {
 export class SubagentService {
   private readonly pool: ConcurrencyPool;
   private readonly store: RecordStore;
-  private readonly history: HistoryStore;
   private readonly notifier: BgNotifier;
   private readonly modelService: ModelConfigService;
   private readonly cwd: string;
@@ -113,8 +112,8 @@ export class SubagentService {
     this.cwd = init.cwd;
     this.modelService = init.modelService;
     this.pool = new DefaultConcurrencyPool(this.modelService.getGlobalConfig().maxConcurrent);
-    this.history = new HistoryStore(this.modelService.getAgentDir(), init.cwd);
-    this.store = new RecordStore(this.history);
+    const sessionsDir = getSubagentSessionDir(this.modelService.getAgentDir(), init.cwd);
+    this.store = new RecordStore(sessionsDir);
     this.notifier = new BgNotifier(this.piAdapter());
   }
 
@@ -205,8 +204,8 @@ export class SubagentService {
   }
 
   /**
-   * 按 id 查内存三源（live/completed/bg）record 的只读快照（G3-002 修复）。
-   * 不查 history（cancel/list 单点查询只关心内存 record）。
+   * 按 id 查内存 running record 的只读快照（G3-002 修复）。
+   * 不从 session.jsonl 重建（cancel/list 单点查询只关心内存 running record）。
    * 供 tool 层 cancelHandler 翻译 throw 用（id 不存在 / mode / 终态三种错误）。
    * 不存在返回 undefined。
    */
@@ -236,9 +235,9 @@ export class SubagentService {
     return this.store.listRunning();
   }
 
-  /** 合并四源 record（/subagents list 消费）。 */
-  collectRecords(limit: number): SubagentRecord[] {
-    return this.store.collectRecords(limit, this.modelService.sessionId);
+  /** 合并内存(running) + 磁盘(session.jsonl 重建) record（/subagents list + tool list 消费）。 */
+  collectRecords(limit: number, statusFilter: StatusFilter = "all"): SubagentRecord[] {
+    return this.store.collectRecords(limit, statusFilter);
   }
 
   // ── 执行内部：mode 判定 + 身份解析 + record 创建 ──────────
@@ -370,14 +369,15 @@ export class SubagentService {
       });
   }
 
-  /** 取消 background record。CAS 抢锁——抢到则 notify，不写 history。 */
+  /** 取消 background record。CAS 抢锁——抢到则 notify + 写 tombstone。 */
   private cancelBackground(record: ExecutionRecord): boolean {
     record.controller?.abort();
     if (!tryTransition(record, "cancelled")) {
       return false; // detached 已 finalize，cancel 来晚了
     }
-    // 抢到锁：completeRecord（用空 result 填 cancelled）+ archive（设终态 status，
-    // 否则 hasRunningBackground 永真）+ notify。不走 finalizeRecord（cancel 不写 history）。
+    // 抢到锁：completeRecord（用空 result 填 cancelled）+ archive（立即移出内存）+ notify。
+    // 写 cancelled tombstone：session.jsonl 被 abort 截断，cancelled 状态靠 sidecar 标记，
+    // collectRecords 重建时 override status=cancelled。
     // durationMs 用真实耗时（startedAt → now），避免耗时统计恒为 0 失真。
     const cancelledResult: AgentResult = {
       text: "",
@@ -389,12 +389,22 @@ export class SubagentService {
       toolCalls: [],
     };
     completeRecord(record, cancelledResult, "cancelled");
+    // 写 tombstone（best-effort，sessionFile 可能为 undefined——窗口期 cancel）。
+    if (record.sessionFile) {
+      writeCancelledTombstone(record.sessionFile, {
+        id: record.id,
+        status: "cancelled",
+        agent: record.agent,
+        startedAt: record.startedAt,
+        endedAt: record.endedAt ?? Date.now(),
+      });
+    }
     this.store.archive(record);
     this.notifyComplete(record);
     return true;
   }
 
-  /** 收尾三件套：completeRecord + store.archive + history.append。 */
+  /** 收尾两件套：completeRecord + store.archive（终态 record 立即移出内存，读时从 session.jsonl 重建）。 */
   private async finalizeRecord(
     record: ExecutionRecord,
     result: AgentResult,
@@ -402,14 +412,13 @@ export class SubagentService {
   ): Promise<void> {
     completeRecord(record, result, status);
     this.store.archive(record);
-    await this.history.append(toPersisted(record, this.cwd));
   }
 
   /**
    * run() 创建期异常的收尾（H1 修复）。
    * run() 正常路径不抛错，但 createAndConfigureSession 失败会抛——
    * 本方法合成 failed AgentResult → CAS 抢锁 → finalizeRecord
-   * （与正常路径同形，写 history + archive）。
+   * （与正常路径同形：completeRecord + archive）。
    * 返回合成 result 供 runAndFinalize 继续返回（不 re-throw，swallow 策略）。
    */
   private async finalizeFailed(record: ExecutionRecord, err: unknown): Promise<AgentResult> {

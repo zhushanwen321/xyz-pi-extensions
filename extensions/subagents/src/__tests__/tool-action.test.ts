@@ -161,36 +161,36 @@ describe("listHandler", () => {
   it("limit 夹紧 [1,100]——collectRecords 收到夹紧后的值（C1 回归）", () => {
     const collect = vi.fn(() => [] as SubagentRecord[]);
     const svc = makeService({ collectRecords: collect });
-    // includeFinished=true 时 collect 即 limit，验证夹紧：
+    // includeFinished=true 时 filter="all"，验证 limit 夹紧：
     // 0 → 1
     listHandler(svc, { includeFinished: true, limit: 0 });
-    expect(collect).toHaveBeenLastCalledWith(1);
+    expect(collect).toHaveBeenLastCalledWith(1, "all");
     // 100000 → 100
     listHandler(svc, { includeFinished: true, limit: 100000 });
-    expect(collect).toHaveBeenLastCalledWith(100);
+    expect(collect).toHaveBeenLastCalledWith(100, "all");
     // undefined → 20（默认）
     listHandler(svc, { includeFinished: true });
-    expect(collect).toHaveBeenLastCalledWith(20);
+    expect(collect).toHaveBeenLastCalledWith(20, "all");
     // 负数 → 1
     listHandler(svc, { includeFinished: true, limit: -5 });
-    expect(collect).toHaveBeenLastCalledWith(1);
+    expect(collect).toHaveBeenLastCalledWith(1, "all");
   });
 
-  it("includeFinished=false → collectRecords 收到 MIN_COLLECT_FOR_FILTER(100) 而非 limit（C2 回归）", () => {
+  it("includeFinished=false → collectRecords 收到 filter='running'（C2 回归）", () => {
     const collect = vi.fn(() => [] as SubagentRecord[]);
     const svc = makeService({ collectRecords: collect });
-    // limit=5 但 includeFinished=false → 应取 100（避免 running 被截断滤掉）
+    // includeFinished=false → filter="running"（防截断下沉到 store）
     listHandler(svc, { includeFinished: false, limit: 5 });
-    expect(collect).toHaveBeenLastCalledWith(100);
-    // includeFinished=true → collect 即 limit
+    expect(collect).toHaveBeenLastCalledWith(5, "running");
+    // includeFinished=true → filter="all"
     listHandler(svc, { includeFinished: true, limit: 5 });
-    expect(collect).toHaveBeenLastCalledWith(5);
+    expect(collect).toHaveBeenLastCalledWith(5, "all");
   });
 
-  it("includeFinished=false 过滤非 running", () => {
+  it("includeFinished=false → collectRecords 返回 running-only（过滤在 store 层）", () => {
+    // store 层已过滤，listHandler 只做透传——mock 返回的即 running-only。
     const records: SubagentRecord[] = [
       { id: "r1", agent: "w", status: "running", mode: "background", startedAt: 1, endedAt: undefined, turns: 0, totalTokens: 0, model: "m", thinkingLevel: undefined, eventLog: [] },
-      { id: "r2", agent: "w", status: "done", mode: "sync", startedAt: 2, endedAt: 3, turns: 0, totalTokens: 0, model: "m", thinkingLevel: undefined, eventLog: [] },
     ];
     const svc = makeService({ collectRecords: vi.fn(() => records) });
     const r = listHandler(svc, { includeFinished: false });
@@ -212,15 +212,21 @@ describe("listHandler", () => {
     });
   });
 
-  it("items 超过 limit → 截断到 limit 条", () => {
+  it("items 超过 limit → 截断在 store 层（listHandler 透传 limit）", () => {
+    // 截断责任在 collectRecords（store 层），listHandler 只透传 limit + map。
+    // mock 返回 3 条（模拟 store 未截断），验证 listHandler 不自行截断——全量透传。
     const records: SubagentRecord[] = [
       { id: "r1", agent: "w", status: "running", mode: "background", startedAt: 1, endedAt: undefined, turns: 0, totalTokens: 0, model: "m", thinkingLevel: undefined, eventLog: [] },
       { id: "r2", agent: "w", status: "running", mode: "background", startedAt: 2, endedAt: undefined, turns: 0, totalTokens: 0, model: "m", thinkingLevel: undefined, eventLog: [] },
       { id: "r3", agent: "w", status: "running", mode: "background", startedAt: 3, endedAt: undefined, turns: 0, totalTokens: 0, model: "m", thinkingLevel: undefined, eventLog: [] },
     ];
-    const svc = makeService({ collectRecords: vi.fn(() => records) });
+    const collect = vi.fn(() => records);
+    const svc = makeService({ collectRecords: collect });
     const r = listHandler(svc, { includeFinished: true, limit: 2 });
-    expect(r.response.items).toHaveLength(2);
+    // listHandler 透传 collectRecords 的结果（截断是 store 的责任）。
+    expect(r.response.items).toHaveLength(3);
+    // 验证 limit 确实透传给了 collectRecords。
+    expect(collect).toHaveBeenCalledWith(2, "all");
   });
 
   // TC-2: running 态实时 duration（Date.now()-startedAt）随时间增长，
@@ -331,7 +337,7 @@ describe("cancelHandler", () => {
     expect(svc.cancel).toHaveBeenCalledTimes(2);
   });
 
-  // BL-3 回归：CAS 失败后 re-query 时 record 已被内存淘汰（bg FIFO 50 cap / sync 5s linger），
+  // BL-3 回归：CAS 失败后 re-query 时 record 已被 archive 移出内存，
   // 文案诚实报告 "evicted" 而非回落到可能过期的 stale status。
   it("CAS 失败 + record 被内存淘汰 → 文案诚实报告 evicted（BL-3）", async () => {
     const svc = makeService({

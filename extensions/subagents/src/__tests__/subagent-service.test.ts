@@ -141,7 +141,7 @@ describe("SubagentService", () => {
       expect(service.listRunning()).toEqual([]);
     });
 
-    it("collectRecords 返回数组(空 history 时也为空或仅含历史)", () => {
+    it("collectRecords 返回数组(空 sessions 目录时为空)", () => {
       const service = new SubagentService({ cwd: agentDir, modelService });
       service.initSession({ pi: makePi(), sessionId: "s1" });
       const records = service.collectRecords(100);

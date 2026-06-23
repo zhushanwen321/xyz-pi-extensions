@@ -13,7 +13,6 @@ import {
   getTotalUsage,
   project,
   snapshot,
-  toPersisted,
   tryTransition,
   updateFromEvent,
 } from "../core/execution-record.ts";
@@ -21,7 +20,6 @@ import type { AgentResult, ExecutionRecord, Turn } from "../types.ts";
 
 // ── 常量（与源码 module-private 值对齐，测试用字面量）──
 const TURN_SUMMARY_MAX = 80;
-const PREVIEW_MAX = 200;
 
 // ── 工厂 ──
 function emptyTurn(): Turn {
@@ -687,7 +685,7 @@ describe("completeRecord", () => {
 });
 
 // ============================================================
-// project / snapshot / toPersisted — projections
+// project / snapshot — projections
 // ============================================================
 describe("projections", () => {
   describe("project", () => {
@@ -782,30 +780,6 @@ describe("projections", () => {
     it("sessionFile is undefined when unset", () => {
       const r = makeRecord();
       expect(snapshot(r).sessionFile).toBeUndefined();
-    });
-  });
-
-  describe("toPersisted", () => {
-    it("returns PersistedAgentRecord with truncated previews", () => {
-      const longTask = "t".repeat(300);
-      const longText = "r".repeat(300);
-      const r = makeRecord({ task: longTask, turnCount: 1, status: "done" });
-      r.status = "done";
-      r.sessionFile = "sess.jsonl";
-      completeRecord(r, { ...SAMPLE_RESULT, text: longText, sessionFile: "sess.jsonl" }, "done");
-      const p = toPersisted(r, "/cwd", "session-xyz");
-      expect(p.id).toBe("test-1");
-      expect(p.taskPreview.length).toBe(PREVIEW_MAX);
-      expect(p.resultPreview?.length).toBe(PREVIEW_MAX);
-      expect(p.cwd).toBe("/cwd");
-      expect(p.sessionId).toBe("session-xyz");
-      expect(p.sessionFile).toBe("sess.jsonl");
-      expect(p.status).toBe("done");
-    });
-
-    it("resultPreview is undefined when no result", () => {
-      const r = makeRecord();
-      expect(toPersisted(r, "/cwd").resultPreview).toBeUndefined();
     });
   });
 });

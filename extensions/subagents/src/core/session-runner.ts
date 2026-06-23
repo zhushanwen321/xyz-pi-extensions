@@ -30,6 +30,7 @@ import { getAllToolCalls, updateFromEvent } from "./execution-record.ts";
 import type { ModelRegistryLike } from "./model-resolver.ts";
 import { collectResult } from "./output-collector.ts";
 import { encodeCwd } from "./path-encoding.ts";
+import { IDENTITY_CUSTOM_TYPE } from "./session-reconstructor.ts";
 import { createTurnLimiter } from "./turn-limiter.ts";
 
 /**
@@ -453,6 +454,17 @@ export async function run(
 
     // session 创建成功：回填 sessionFile（FR-7 窗口期方案）。
     record.sessionFile = built.session.sessionManager.getSessionFile() ?? undefined;
+
+    // 写 identity custom entry：session.jsonl 的 header 不含 ExecutionRecord.id/agent/mode，
+    // 故在此写一条 custom entry 携带身份，collectRecords 重建时读它恢复 record 身份。
+    // session.jsonl 是唯一 source of truth（history.jsonl 已废弃）。
+    built.session.sessionManager.appendCustomEntry(IDENTITY_CUSTOM_TYPE, {
+      id: record.id,
+      agent: record.agent,
+      mode: record.mode,
+      task: record.task,
+      startedAt: record.startedAt,
+    });
 
     // subscribe SDK events → handleSdkEvent → agentEvent → updateFromEvent + onTurnEnd + opts.onEvent
     const sdkSub = built.session.subscribe((raw: unknown) => {

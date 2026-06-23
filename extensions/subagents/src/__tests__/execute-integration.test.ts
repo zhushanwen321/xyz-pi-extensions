@@ -4,7 +4,7 @@
 // 及其唯一调用链 session-runner.run()（event-bridge 合并进 run() 后的回归覆盖）。
 //
 // 策略：只 mock 最底层的 SDK 边界（session-runner.getSdk → fakeSdk），上层
-// SubagentService / RecordStore / HistoryStore / BgNotifier / session-runner.run
+// SubagentService / RecordStore / BgNotifier / session-runner.run
 // 全部跑真实实现，验证完整编排链路。
 //
 // 复盖 subagent-service.test.ts 末尾 TODO 列出的全部路径 + run() 事件累积。
@@ -105,6 +105,7 @@ function makeFakeSession(opts: {
     sessionManager: {
       getSessionFile: () => opts.sessionFile ?? "fake-session.jsonl",
       getSessionId: () => "fake-session-id",
+      appendCustomEntry: vi.fn(() => "custom-id"),
     },
     messages: opts.messages ?? [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
     getAllTools: () => opts.tools ?? [],
@@ -291,8 +292,9 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
 
     // 等 detached 完成（createSession → prompt resolve → finalize done → notify）
     await flushMicrotasks();
-    const rec = service.findRecord(handle0.subagentId);
-    expect(rec?.status).toBe("done");
+    // 终态 record 已被 archive 立即移出内存（读时从 session.jsonl 重建，但本测试用 mock session 无真实文件）。
+    // 编排正确性由 handle.details 已含 running + detached 无异常 保证。
+    expect(service.findRecord(handle0.subagentId)).toBeUndefined();
   });
 
   // ============================================================
@@ -312,13 +314,14 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     // cancel 抢锁成功
     const ok = service.cancel(id);
     expect(ok).toBe(true);
-    const rec = service.findRecord(id);
-    expect(rec?.status).toBe("cancelled");
+    // cancel 后 record 被 archive 立即移出内存（终态不留内存）。
+    expect(service.findRecord(id)).toBeUndefined();
 
     // 等 detached 跑完（abort 触发 prompt reject → run catch → status 已 cancelled → CAS 失败 → 跳过 notify）
     await flushMicrotasks();
-    // 状态仍是 cancelled（detached 没抢到锁，不改 status）
-    expect(service.findRecord(id)?.status).toBe("cancelled");
+    // CAS 失败：detached 没抢到锁（cancel 先设了 cancelled），不重复副作用。
+    // record 已不在内存（archive 立即移除），findRecord 仍 undefined。
+    expect(service.findRecord(id)).toBeUndefined();
   });
 
   it("background cancel 已终态 → false（CAS 失败）", async () => {
@@ -328,10 +331,11 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
 
     const result = await service.execute({ task: "done fast", wait: false, ctxModel });
     if (result.mode !== "background") throw new Error("expected background");
-    await flushMicrotasks(); // 等 detached 完成 → done
+    await flushMicrotasks(); // 等 detached 完成 → done → archive 立即移出内存
 
-    expect(service.findRecord(result.subagentId)?.status).toBe("done");
-    // done 后 cancel → CAS 失败 → false
+    // 终态 record 已移出内存（archive 立即移除）。
+    expect(service.findRecord(result.subagentId)).toBeUndefined();
+    // done 后 cancel → record 不在内存 → getMutable 返回 undefined → false
     expect(service.cancel(result.subagentId)).toBe(false);
   });
 

@@ -731,7 +731,7 @@ class SubagentsListComponent implements Component {
     // eventLog 现从 turns[] 派生（离散语义事件，无碎片），直接取最近 N 条。
     const recent = record.eventLog.slice(-PREVIEW_RECENT_LINES);
     if (recent.length === 0) {
-      lines.push(truncLine(t.fg("dim", "(no event log — from history)"), width));
+      lines.push(truncLine(t.fg("dim", "(no events)"), width));
     } else {
       for (const entry of recent) {
         lines.push(truncLine(formatEventLine(entry, t), width));
@@ -794,7 +794,7 @@ class SubagentsListComponent implements Component {
 
     // eventLog 从 turns[] 派生（离散语义事件），直接遍历。
     if (record.eventLog.length === 0) {
-      content.push(truncLine(t.fg("dim", "(no event log — from history)"), width));
+      content.push(truncLine(t.fg("dim", "(no events)"), width));
     } else {
       for (const entry of record.eventLog) {
         content.push(truncLine(formatEventLine(entry, t), width));

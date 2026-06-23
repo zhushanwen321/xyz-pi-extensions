@@ -203,7 +203,7 @@ export interface AgentResult {
  * （getEventLog / getCurrentActivity / getFullText），不再独立存储切片或缓冲。
  *
  * 生命周期：createRecord() 创建 → updateFromEvent() 实时更新（累积进 turns）→
- *           completeRecord() 冻结 → archive/history 持久化。
+ *           completeRecord() 冻结 → archive 立即移出内存（读时从 session.jsonl 重建）。
  *
  * TUI 永远拿 RecordSnapshot（.slice() 快照），不直接持此可变对象。
  */
@@ -394,7 +394,7 @@ export type SubagentToolResult =
 // TUI list 视图的合并 record（4 源 merge 后的形状）
 // ============================================================
 
-/** /subagents list 左列展示单元。合并自 live/completed/bg/history 四源。 */
+/** /subagents list 左列展示单元。来自内存(running) 或 session.jsonl 重建(终态)。 */
 export interface SubagentRecord {
   id: string;
   agent: string;
@@ -410,29 +410,6 @@ export interface SubagentRecord {
   result?: string;
   error?: string;
   sessionFile?: string;
-}
-
-// ============================================================
-// 持久化（history.jsonl 一行）
-// ============================================================
-
-export interface PersistedAgentRecord {
-  id: string;
-  agent: string;
-  status: ExecutionStatus;
-  mode: ExecutionMode;
-  taskPreview: string;
-  startedAt: number;
-  endedAt?: number;
-  turns?: number;
-  totalTokens?: number;
-  error?: string;
-  resultPreview?: string;
-  sessionFile?: string;
-  cwd: string;
-  sessionId?: string;
-  model?: string;
-  thinkingLevel?: string;
 }
 
 // ============================================================
@@ -509,6 +486,8 @@ export interface AgentSessionLike {
   readonly sessionManager: {
     getSessionFile(): string | undefined;
     getSessionId(): string;
+    /** 写 custom entry（subagent-identity 持久化用）。SDK SessionManager.appendCustomEntry 的 duck-type。 */
+    appendCustomEntry(customType: string, data?: unknown): string;
   };
   messages: ReadonlyArray<{
     role: string;

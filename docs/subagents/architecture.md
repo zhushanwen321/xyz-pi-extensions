@@ -30,9 +30,9 @@
    │  ModelConfigService（配置/模型域）                       │
    │  SubagentService（执行/记录/通知域）                     │
    │  ── 编排与基础设施 ──                                    │
-   │  executor · record-store · notifier · history-store      │
+   │  executor · record-store · notifier · tombstone-store     │
    │  config · session-file-gc                                │
-   │  职责：编排 Core，管理 record 生命周期，持久化，回注通知  │
+   │  职责：编排 Core，管理 record 生命周期，回注通知           │
    └────────────────────────▲────────────────────────────────┘
                             │ 委托
                             │
@@ -107,7 +107,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 | `agent-registry.ts` | agent `.md` 文件发现与解析（hot-reload） | ✅ |
 | `concurrency-pool.ts` | 并发控制 + 优先级排队（sync=0，bg=1000），maxConcurrent 下限 1 | ✅ |
 | `turn-limiter.ts` | soft/hard turn 限制器（steer + abort） | ✅ |
-| `path-encoding.ts` | cwd → 安全目录名编码（session-runner + history-store 共享，消除旧重复） | ✅ |
+| `path-encoding.ts` | cwd → 安全目录名编码（session-runner + session-file-gc 共享，消除旧重复） | ✅ |
 
 ### Runtime 层（7）
 
@@ -121,10 +121,10 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 | 文件 | 职责 | 状态 |
 |---|---|---|
 | `model-config-service.ts` | 配置/模型域 Service：globalConfig + sessionState + agentRegistry + modelRegistry + resolveModel | ✅ |
-| `subagent-service.ts` | 执行/记录/通知域 Service：execute 编排（含原 executor 逻辑）+ query/cancel + 组件持有（pool/store/history/notifier，全 private） | ✅ |
-| `execution/record-store.ts` | Record 单 Map 容器（按 status/mode 过滤替代物理分区）+ history 合并 | ✅ |
+| `subagent-service.ts` | 执行/记录/通知域 Service：execute 编排（含原 executor 逻辑）+ query/cancel + 组件持有（pool/store/notifier，全 private） | ✅ |
+| `execution/record-store.ts` | Record 容器：内存(running) + 磁盘(session.jsonl 重建) 合并 + statusFilter | ✅ |
 | `execution/notifier.ts` | background 完成回注主对话（滑动窗口合并 + 去重 TTL） | ✅ |
-| `execution/history-store.ts` | 跨 session 执行记录持久化（jsonl + GC） | ✅ |
+| `execution/tombstone-store.ts` | cancelled 状态 sidecar 持久化（.cancelled 文件读写） | ✅ |
 | `config/config.ts` | 全局配置（单一真相源读 config.json）+ session 级状态（纯函数，被 ModelConfigService 调用） | ✅ |
 | `session-file-gc.ts` | 过期 subagent session 文件清理 | ✅ |
 
@@ -151,13 +151,14 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 | `turn-limiter.test.ts` | steer/abort 时序 + didSteer/didAbort getter |
 | `concurrency-pool.test.ts` | 满载阻塞/优先级抢占/FIFO/maxConcurrent=0 clamp/防负 |
 | `throttle.test.ts` | leading/trailing edge/flush/默认 150ms |
-| `execution-record.test.ts` | turns[] 收口累积/派生视图(getEventLog/getCurrentActivity/getFullText/getAllToolCalls/getTotalUsage)/tryTransition CAS/project/snapshot/toPersisted |
+| `execution-record.test.ts` | turns[] 收口累积/派生视图(getEventLog/getCurrentActivity/getFullText/getAllToolCalls/getTotalUsage)/tryTransition CAS/project/snapshot |
 | `output-collector.test.ts` | collectResult 字段单源（从 record 派生）+ extractParsedOutput |
 | `session-runner.test.ts` | run() 编排骨架 + 事件处理内联 |
 | `session-factory.test.ts` | session-runner 内联纯函数（applyToolFilter/buildAppendSystemPrompt/buildEnvBlock/getSubagentSessionDir）——文件名为历史遗留，测的是合并进 session-runner 的函数 |
-| `record-store.test.ts` | 单 Map 容器 + status/mode 过滤 + sync linger/bg FIFO + history 合并 |
+| `record-store.test.ts` | 内存(running) + 磁盘(session.jsonl 重建) 合并 + statusFilter + tombstone override + 重建缓存 |
+| `session-reconstructor.test.ts` | session.jsonl → turns[]/usage/result/error 重建 + toolCall 配对 + 防御性降级 |
+| `tombstone-store.test.ts` | cancelled sidecar write/read 往返 + 降级 |
 | `notifier.test.ts` | 滑窗合并/dedup TTL/dispose 清 dedup/buildLlmContent |
-| `history-store.test.ts` | jsonl 持久化 + recent merge + GC |
 | `subagent-service.test.ts` | execute 编排 + mode 分叉 + CAS 收尾竞争 |
 | `execute-integration.test.ts` | execute() 集成（run() 事件处理 → record 投影） |
 | `model-resolver.test.ts` | 5 级 fallback 模型解析链 |
@@ -188,7 +189,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 **1. 唯一状态源** — 所有执行路径共用一个 `ExecutionRecord` 对象，由 Core 层 `execution-record.ts` 的四个入口（create/update/complete/project）唯一操作。消灭旧实现 11 种状态形状、6 个 turns 累加器、双状态构建。
 → 详见 [data-model.md](./data-model.md)
 
-**2. 统一执行入口** — sync/background 共用一条 `executor.execute()` 路径，mode 分叉点集中在此函数顶部 4 处。`session-runner.run()` 完全不感知 mode。消灭旧实现 runAgent + startBackground 两份重复逻辑、死 state、history 双写。
+**2. 统一执行入口** — sync/background 共用一条 `executor.execute()` 路径，mode 分叉点集中在此函数顶部 4 处。`session-runner.run()` 完全不感知 mode。消灭旧实现 runAgent + startBackground 两份重复逻辑、死 state。
 → 详见 [execution-flow.md](./execution-flow.md)
 
 **3. 投影单点** — `ExecutionRecord` 到展示层（Details/Snapshot/Persisted）的转换各只有一个入口，三路径字段一致。消灭旧实现 6 处手工构造 Details 导致的字段丢失（Mode 3 cancelled 丢 turns/tokens、poll 无 model 等）。
@@ -204,7 +205,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 **推理**：用"变化轴"分析——哪些东西会**一起变**？
 - globalConfig/sessionState/agentRegistry/modelRegistry → 配置变化（用户改 config.json、注入新 modelRegistry）
-- pool/store/history/notifier → 执行状态变化（并发槽分配、record 生命周期、历史落盘）
+- pool/store/notifier → 执行状态变化（并发槽分配、record 生命周期、回注通知）
 
 这两组东西**从不一起变**。command/wizard 只碰配置，不碰执行；executor 只碰执行组件，不碰配置。是**正交的关注点**。
 
@@ -212,7 +213,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 **决策**：按领域拆为两个平级 Service：
 - ModelConfigService（配置/模型域）：globalConfig + sessionState + agentRegistry + modelRegistry + resolveModel
-- SubagentService（执行/记录/通知域）：pool + store + history + notifier + execute/query/cancel
+- SubagentService（执行/记录/通知域）：pool + store + notifier + execute/query/cancel
 
 **代价**：index.ts 从一个 `rt.initSession(...)` 变成两个 init 调用（modelService.initModel + service.initSession）。但这两个调用的时序是确定的（先配置后执行），index.ts 作为装配层承担这个协调是合理的。
 
@@ -224,7 +225,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 
 合并进 SubagentService.ts 后，行为方法自然降为 private——TS 的 `private` 在同类内生效，executor 逻辑作为 SubagentService 的 private 方法访问组件，无需任何妥协。
 
-**决策**：executor 逻辑合并进 `subagent-service.ts`，作为 SubagentService 的 private 方法（resolveIdentity/createRecordForMode/runAndFinalize/kickOffBackground/cancelBackground/finalizeRecord/notifyComplete/onEventThrottled）。删除 `executor.ts` 文件。组件（pool/store/history/notifier）全 private，编排方法全 private，SubagentService 对外只有业务方法。
+**决策**：executor 逻辑合并进 `subagent-service.ts`，作为 SubagentService 的 private 方法（resolveIdentity/createRecordForMode/runAndFinalize/kickOffBackground/cancelBackground/finalizeRecord/notifyComplete/onEventThrottled）。删除 `executor.ts` 文件。组件（pool/store/notifier）全 private，编排方法全 private，SubagentService 对外只有业务方法。
 
 **代价**：subagent-service.ts 从 ~240 行增到 ~400 行。但 SubagentService 本来就是这个文件的主角，400 行可接受——它现在完整表达了"执行编排"这个领域。
 
@@ -247,7 +248,7 @@ SubagentService 内部调：       │
   resolveMode()               │  → modelService.getAgentConfig()（判 defaultBackground）
   resolveIdentity()           │  → resolveModel()
   buildSessionRunnerContext() │ → modelService.getModelRegistry()/getAgentDir()
-  collectRecords()            │  → modelService.sessionId（history 过滤）
+  collectRecords()            │  → statusFilter（running/all）
 ```
 
 **铁律**：SubagentService → ModelConfigService 单向引用，**禁止反向**。ModelConfigService 不知道 SubagentService 的存在。tool/command 层不穿透 SubagentService 调 ModelConfigService——tool 只传 `wait` 意图，mode 判定（wait + defaultBackground → ExecutionMode）完全内化在 SubagentService.resolveMode()。

@@ -42,7 +42,7 @@ export function maybeCleanupExpiredSessionFiles(agentDir: string, cwd: string): 
   }
 }
 
-/** 递归扫描目录，unlink 超 TTL 的 .jsonl 文件。 */
+/** 递归扫描目录，unlink 超 TTL 的 .jsonl 文件及其 .cancelled sidecar。 */
 function walkAndClean(dir: string, now: number): void {
   let entries: fs.Dirent[];
   try {
@@ -60,9 +60,22 @@ function walkAndClean(dir: string, now: number): void {
         const stat = fs.statSync(full);
         if (now - stat.mtimeMs > TTL_MS) {
           fs.unlinkSync(full);
+          // 同名 .cancelled sidecar 一起清理（cancelled record 的 session.jsonl 过期）。
+          const sidecar = `${full}.cancelled`;
+          try { fs.unlinkSync(sidecar); } catch (_e) { void _e; /* sidecar 可能不存在，忽略 */ }
         }
       } catch (_e) {
         // 文件可能已被删除，忽略
+        void _e;
+      }
+    } else if (entry.name.endsWith(".cancelled")) {
+      // 孤儿 sidecar（兄弟 .jsonl 已被外部删除）：按同 TTL 清理。
+      try {
+        const stat = fs.statSync(full);
+        if (now - stat.mtimeMs > TTL_MS) {
+          fs.unlinkSync(full);
+        }
+      } catch (_e) {
         void _e;
       }
     }

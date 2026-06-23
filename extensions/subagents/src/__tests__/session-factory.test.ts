@@ -39,6 +39,7 @@ function makeMockSession(toolNames: string[]): AgentSessionLike & {
     sessionManager: {
       getSessionFile: () => undefined,
       getSessionId: () => "test-sess",
+      appendCustomEntry: () => "custom-id",
     },
     messages: [],
     getAllTools: () => toolNames.map((name) => ({ name })),

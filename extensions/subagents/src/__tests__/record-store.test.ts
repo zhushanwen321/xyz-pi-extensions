@@ -1,28 +1,27 @@
 // src/__tests__/record-store.test.ts
 //
-// RecordStore 专属测试（Must-Fix #1）。
-// 覆盖：archive mode 路由 / 四源 merge + 内存覆盖 history / cancelled-priority 覆盖 /
-//      enforceBgFifo（超限淘汰最旧 + 绝不淘汰 running）/ scheduleSyncExpire（正常 linger + dispose 守卫）/
-//      compareRecords（status priority + startedAt desc）。
+// RecordStore 专属测试。
+// 覆盖：
+//   - archive 立即移除（终态 record 不留内存，读时从 session.jsonl 重建）
+//   - collectRecords 合并内存(running) + 磁盘(session.jsonl 重建)
+//   - collectRecords statusFilter（"running" vs "all"）
+//   - cancelled tombstone override
+//   - compareRecords 排序（status priority + startedAt desc）
+//   - 重建缓存（notifyChange 失效）
 //
-// 用内存 HistoryStore stub 注入（record-store 只调 recent()，无文件 IO 依赖）。
+// 用 tmpdir + 真实 .jsonl fixture（隔离真实文件系统，同 session-reconstructor.test.ts 模式）。
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createRecord } from "../core/execution-record.ts";
-import type { HistoryStore } from "../runtime/execution/history-store.ts";
+import type { StatusFilter } from "../runtime/execution/record-store.ts";
 import { RecordStore } from "../runtime/execution/record-store.ts";
-import type { ExecutionRecord, PersistedAgentRecord } from "../types.ts";
-
-// ── 与源码 module-private 常量对齐 ──
-const SYNC_LINGER_MS = 5000;
-const BG_FIFO_MAX = 50;
-
-/** 内存 HistoryStore stub（record-store 只依赖 recent()，无需文件 IO）。
- *  partial 结构兼容 HistoryStore 的 recent() 签名——单次断言即可（非双重断言）。 */
-function makeHistoryStub(records: PersistedAgentRecord[] = []): HistoryStore {
-  return { recent: () => records.slice() } as HistoryStore;
-}
+import { writeCancelledTombstone } from "../runtime/execution/tombstone-store.ts";
+import type { ExecutionRecord } from "../types.ts";
 
 /** 构造 ExecutionRecord（base 默认 running，over 覆盖任意字段）。 */
 function makeRecord(over: Partial<ExecutionRecord> = {}): ExecutionRecord {
@@ -36,155 +35,222 @@ function makeRecord(over: Partial<ExecutionRecord> = {}): ExecutionRecord {
   return { ...base, ...over };
 }
 
+/**
+ * 写一个最小合法的 session.jsonl（含 identity custom entry + 1 个 assistant message）。
+ * 用于 collectRecords 磁盘源重建测试。
+ */
+function writeSessionJsonl(
+  filePath: string,
+  identity: { id: string; agent: string; mode: "sync" | "background"; task: string; startedAt: number },
+  assistantText = "result text",
+): void {
+  const header = JSON.stringify({
+    type: "session", version: 3, id: "sess-uuid", timestamp: new Date(identity.startedAt).toISOString(), cwd: "/tmp",
+  });
+  const identityEntry = JSON.stringify({
+    type: "custom",
+    id: "id-1",
+    parentId: null,
+    timestamp: new Date(identity.startedAt).toISOString(),
+    customType: "subagent-identity",
+    data: identity,
+  });
+  const assistantMsg = JSON.stringify({
+    type: "message",
+    id: "msg-1",
+    parentId: "id-1",
+    timestamp: new Date(identity.startedAt + 1000).toISOString(),
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: assistantText }],
+      usage: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 30, cost: { total: 0 } },
+      stopReason: "stop",
+      timestamp: identity.startedAt + 1000,
+    },
+  });
+  fs.writeFileSync(filePath, `${header}\n${identityEntry}\n${assistantMsg}\n`, "utf-8");
+}
+
 describe("RecordStore", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "rs-test-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
   // ============================================================
-  // archive mode 路由
+  // archive 立即移除
   // ============================================================
-  describe("archive mode 路由", () => {
-    it("sync record → completed map", () => {
-      const store = new RecordStore(makeHistoryStub());
+  describe("archive 立即移除", () => {
+    it("archive 后 record 立即从内存移除（不再 linger）", () => {
+      const store = new RecordStore(tmpDir);
       const r = makeRecord({ id: "sync-1", mode: "sync", status: "done" });
       store.register(r);
-      store.archive(r);
       expect(store.getMutable("sync-1")).toBeDefined();
+      store.archive(r);
+      expect(store.getMutable("sync-1")).toBeUndefined();
     });
 
-    it("background record → bg map", () => {
-      const store = new RecordStore(makeHistoryStub());
+    it("background record 同样立即移除（不再 FIFO）", () => {
+      const store = new RecordStore(tmpDir);
       const r = makeRecord({ id: "bg-1", mode: "background", status: "done" });
       store.register(r);
       store.archive(r);
-      expect(store.getMutable("bg-1")).toBeDefined();
+      expect(store.getMutable("bg-1")).toBeUndefined();
     });
   });
 
   // ============================================================
-  // 四源 merge + 内存覆盖 history
+  // collectRecords：内存(running) + 磁盘(重建) 合并
   // ============================================================
-  describe("四源 merge", () => {
-    it("内存源覆盖 history（同 id）", () => {
-      const historyRec: PersistedAgentRecord = {
-        id: "x1", agent: "worker", status: "done", mode: "sync",
-        taskPreview: "old", startedAt: 1000, endedAt: 1100, cwd: "/tmp",
-      };
-      const store = new RecordStore(makeHistoryStub([historyRec]));
-      store.register(makeRecord({ id: "x1", mode: "sync", status: "failed", startedAt: 1000 }));
-      const found = store.collectRecords(100).find((x) => x.id === "x1");
-      expect(found?.status).toBe("failed"); // 内存 failed 覆盖 history done
+  describe("collectRecords 合并", () => {
+    it("内存 running record 出现在结果中", () => {
+      const store = new RecordStore(tmpDir);
+      store.register(makeRecord({ id: "run-1", mode: "background", startedAt: 1000 }));
+      const ids = store.collectRecords(100).map((r) => r.id);
+      expect(ids).toContain("run-1");
+    });
+
+    it("磁盘 session.jsonl 重建的终态 record 出现在结果中", () => {
+      const sessionFile = path.join(tmpDir, "2026-01-01-uuid-a.jsonl");
+      writeSessionJsonl(sessionFile, {
+        id: "bg-1", agent: "worker", mode: "background", task: "do it", startedAt: 5000,
+      });
+      const store = new RecordStore(tmpDir);
+      const found = store.collectRecords(100).find((r) => r.id === "bg-1");
+      expect(found).toBeDefined();
+      expect(found?.status).toBe("done");
+      expect(found?.agent).toBe("worker");
+      expect(found?.turns).toBe(1);
+      expect(found?.totalTokens).toBe(30);
+      expect(found?.result).toBe("result text");
+    });
+
+    it("statusFilter='running' 只返回 running（磁盘终态被滤掉）", () => {
+      const sessionFile = path.join(tmpDir, "2026-01-01-uuid-a.jsonl");
+      writeSessionJsonl(sessionFile, {
+        id: "bg-1", agent: "worker", mode: "background", task: "do it", startedAt: 5000,
+      });
+      const store = new RecordStore(tmpDir);
+      store.register(makeRecord({ id: "run-1", mode: "background", startedAt: 1000 }));
+      const filter: StatusFilter = "running";
+      const ids = store.collectRecords(100, filter).map((r) => r.id);
+      expect(ids).toEqual(["run-1"]); // 只有内存 running，磁盘 done 被滤
+    });
+
+    it("statusFilter='all'（默认）返回内存 + 磁盘", () => {
+      const sessionFile = path.join(tmpDir, "2026-01-01-uuid-a.jsonl");
+      writeSessionJsonl(sessionFile, {
+        id: "bg-1", agent: "worker", mode: "background", task: "do it", startedAt: 5000,
+      });
+      const store = new RecordStore(tmpDir);
+      store.register(makeRecord({ id: "run-1", mode: "background", startedAt: 1000 }));
+      const ids = store.collectRecords(100).map((r) => r.id);
+      expect(ids).toContain("run-1");
+      expect(ids).toContain("bg-1");
+    });
+
+    it("内存 running 优先于磁盘同 id（内存覆盖）", () => {
+      const sessionFile = path.join(tmpDir, "2026-01-01-uuid-a.jsonl");
+      writeSessionJsonl(sessionFile, {
+        id: "dup-1", agent: "worker", mode: "background", task: "from disk", startedAt: 5000,
+      });
+      const store = new RecordStore(tmpDir);
+      store.register(makeRecord({ id: "dup-1", mode: "background", status: "running", startedAt: 5000 }));
+      const found = store.collectRecords(100).find((r) => r.id === "dup-1");
+      expect(found?.status).toBe("running"); // 内存 running 覆盖磁盘 done
     });
   });
 
   // ============================================================
-  // cancelled-priority 覆盖
+  // cancelled tombstone override
   // ============================================================
-  describe("cancelled-priority 覆盖", () => {
-    it("history 的 cancelled 优先保留（即使内存有不同状态）", () => {
-      const historyRec: PersistedAgentRecord = {
-        id: "c1", agent: "worker", status: "cancelled", mode: "sync",
-        taskPreview: "cancelled", startedAt: 1000, endedAt: 1100, cwd: "/tmp",
-      };
-      const store = new RecordStore(makeHistoryStub([historyRec]));
-      store.register(makeRecord({ id: "c1", mode: "sync", status: "done", startedAt: 1000 }));
-      const found = store.collectRecords(100).find((x) => x.id === "c1");
-      expect(found?.status).toBe("cancelled"); // cancelled 优先，不被内存覆盖
+  describe("cancelled tombstone", () => {
+    it("有 .cancelled sidecar → status override 为 cancelled", () => {
+      const sessionFile = path.join(tmpDir, "2026-01-01-uuid-a.jsonl");
+      writeSessionJsonl(sessionFile, {
+        id: "bg-1", agent: "worker", mode: "background", task: "do it", startedAt: 5000,
+      });
+      writeCancelledTombstone(sessionFile, {
+        id: "bg-1", status: "cancelled", agent: "worker", startedAt: 5000, endedAt: 6000,
+      });
+      const store = new RecordStore(tmpDir);
+      const found = store.collectRecords(100).find((r) => r.id === "bg-1");
+      expect(found?.status).toBe("cancelled");
+      expect(found?.error).toBe("cancelled by user");
     });
   });
 
   // ============================================================
-  // enforceBgFifo：超 BG_FIFO_MAX 淘汰最旧且不淘汰 running
-  // ============================================================
-  describe("enforceBgFifo", () => {
-    it("超 BG_FIFO_MAX 淘汰最旧的非 running", () => {
-      const store = new RecordStore(makeHistoryStub());
-      for (let i = 0; i < BG_FIFO_MAX + 1; i++) {
-        const r = makeRecord({
-          id: `bg-${i}`,
-          mode: "background",
-          startedAt: 1000 + i,
-          status: "done",
-        });
-        store.register(r);
-        store.archive(r);
-      }
-      expect(store.getMutable("bg-0")).toBeUndefined(); // 最旧被淘汰
-      expect(store.getMutable(`bg-${BG_FIFO_MAX}`)).toBeDefined();
-    });
-
-    it("全是 running 时绝不淘汰（size 可超 BG_FIFO_MAX）", () => {
-      const store = new RecordStore(makeHistoryStub());
-      for (let i = 0; i < BG_FIFO_MAX + 3; i++) {
-        const r = makeRecord({
-          id: `run-${i}`,
-          mode: "background",
-          startedAt: 1000 + i,
-          // status 保持 running（createRecord 默认）
-        });
-        store.register(r);
-        store.archive(r);
-      }
-      for (let i = 0; i < BG_FIFO_MAX + 3; i++) {
-        expect(store.getMutable(`run-${i}`)).toBeDefined();
-      }
-    });
-  });
-
-  // ============================================================
-  // scheduleSyncExpire：正常 linger + dispose 守卫
-  // ============================================================
-  describe("scheduleSyncExpire", () => {
-    beforeEach(() => vi.useFakeTimers());
-    afterEach(() => vi.useRealTimers());
-
-    it("正常 linger：超时后从 completed 移除", () => {
-      const store = new RecordStore(makeHistoryStub());
-      const r = makeRecord({ id: "ling-1", mode: "sync", status: "done", startedAt: 1000 });
-      store.register(r);
-      store.archive(r);
-      expect(store.getMutable("ling-1")).toBeDefined();
-      vi.advanceTimersByTime(SYNC_LINGER_MS + 10);
-      expect(store.getMutable("ling-1")).toBeUndefined();
-    });
-
-    it("dispose 后 linger timer 不再移除 record（守卫生效）", () => {
-      const store = new RecordStore(makeHistoryStub());
-      const r = makeRecord({ id: "ling-2", mode: "sync", status: "done", startedAt: 1000 });
-      store.register(r);
-      store.archive(r);
-      store.dispose();
-      vi.advanceTimersByTime(SYNC_LINGER_MS + 10);
-      // dispose 清除了 timer（且 timer 回调内 _disposed 守卫短路）→ record 不被移除
-      expect(store.getMutable("ling-2")).toBeDefined();
-    });
-  });
-
-  // ============================================================
-  // compareRecords 排序稳定性
+  // compareRecords 排序稳定性（内存 running record）
   // ============================================================
   describe("compareRecords 排序", () => {
     it("status priority（running < failed < done）", () => {
-      const store = new RecordStore(makeHistoryStub());
-      const done = makeRecord({ id: "done-1", mode: "background", startedAt: 5000, status: "done" });
-      const failed = makeRecord({ id: "fail-1", mode: "background", startedAt: 4000, status: "failed" });
-      const running = makeRecord({ id: "run-1", mode: "background", startedAt: 3000 });
-      for (const r of [done, failed, running]) {
-        store.register(r);
-        store.archive(r);
-      }
+      const store = new RecordStore(tmpDir);
+      // 只用内存 running record 验证排序（终态靠磁盘，排序逻辑相同）。
+      const running = makeRecord({ id: "run-1", mode: "background", startedAt: 3000, status: "running" });
+      store.register(running);
+      // 磁盘 done record
+      writeSessionJsonl(path.join(tmpDir, "a.jsonl"), {
+        id: "done-1", agent: "w", mode: "background", task: "t", startedAt: 5000,
+      });
       const ids = store.collectRecords(100).map((r) => r.id);
-      expect(ids[0]).toBe("run-1");
-      expect(ids[1]).toBe("fail-1");
-      expect(ids[2]).toBe("done-1");
+      expect(ids[0]).toBe("run-1"); // running 排前
     });
 
     it("同 status 时 startedAt desc（新→旧）", () => {
-      const store = new RecordStore(makeHistoryStub());
-      const older = makeRecord({ id: "old", mode: "background", startedAt: 1000, status: "done" });
-      const newer = makeRecord({ id: "new", mode: "background", startedAt: 9000, status: "done" });
-      for (const r of [older, newer]) {
-        store.register(r);
-        store.archive(r);
-      }
-      expect(store.collectRecords(100).map((r) => r.id)).toEqual(["new", "old"]);
+      const store = new RecordStore(tmpDir);
+      writeSessionJsonl(path.join(tmpDir, "old.jsonl"), {
+        id: "old", agent: "w", mode: "background", task: "t", startedAt: 1000,
+      });
+      writeSessionJsonl(path.join(tmpDir, "new.jsonl"), {
+        id: "new", agent: "w", mode: "background", task: "t", startedAt: 9000,
+      });
+      // 两个都是 done（磁盘重建），按 startedAt desc
+      const ids = store.collectRecords(100).map((r) => r.id);
+      expect(ids).toEqual(["new", "old"]);
+    });
+  });
+
+  // ============================================================
+  // 重建缓存
+  // ============================================================
+  describe("重建缓存", () => {
+    it("notifyChange 后缓存失效（新 session.jsonl 可见）", () => {
+      const store = new RecordStore(tmpDir);
+      // 首次 collect：空目录
+      expect(store.collectRecords(100)).toHaveLength(0);
+      // 写新 session.jsonl
+      writeSessionJsonl(path.join(tmpDir, "new.jsonl"), {
+        id: "bg-1", agent: "w", mode: "background", task: "t", startedAt: 1000,
+      });
+      // 缓存仍命中旧结果（notifyChange 未触发）
+      expect(store.collectRecords(100)).toHaveLength(0);
+      // register 触发 notifyChange → 缓存失效
+      store.register(makeRecord({ id: "trigger", mode: "sync", startedAt: 2000 }));
+      store.archive(makeRecord({ id: "trigger", mode: "sync", startedAt: 2000 }));
+      // 现在 bg-1 可见
+      const ids = store.collectRecords(100).map((r) => r.id);
+      expect(ids).toContain("bg-1");
+    });
+  });
+
+  // ============================================================
+  // dispose / revive
+  // ============================================================
+  describe("dispose / revive", () => {
+    it("dispose 后 notifyChange 不再触发 listener", () => {
+      const store = new RecordStore(tmpDir);
+      let count = 0;
+      store.onChange(() => { count++; });
+      store.register(makeRecord({ id: "r1", startedAt: 1000 }));
+      expect(count).toBe(1);
+      store.dispose();
+      store.register(makeRecord({ id: "r2", startedAt: 2000 }));
+      expect(count).toBe(1); // dispose 后不再通知
     });
   });
 });

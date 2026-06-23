@@ -22,8 +22,8 @@
 ### 选函数式的三个硬约束
 
 1. **TS interface 运行时消失**——不能有方法，"行为绑类型"在语言层不自然
-2. **三路径共享 + 快照隔离**——sync/bg/poll 同时读同一份 record，TUI/history/widget 各取快照，纯数据 + `.slice()` 比 deep clone 简单一个数量级
-3. **jsonl 持久化**——`toPersisted(record)` 直接产 plain object，无 class 反序列化
+2. **三路径共享 + 快照隔离**——sync/bg 同时读同一份 record，TUI/widget 各取快照，纯数据 + `.slice()` 比 deep clone 简单一个数量级
+3. **session.jsonl 持久化**——SDK 实时 flush 完整对话进 session.jsonl，终态后 `reconstructFromFile` 从它重建 turns[]，无需独立持久化层
 
 ### 保留的"充血内核"
 
@@ -44,7 +44,7 @@
 
 | 指标 | 旧 | 新 |
 |---|---|---|
-| 状态形状 | 11 种 | 1 种（`ExecutionRecord`）+ 2 种只读投影（`RecordSnapshot`/`PersistedAgentRecord`） |
+| 状态形状 | 11 种 | 1 种（`ExecutionRecord`）+ 2 种只读投影（`RecordSnapshot`/`ReconstructedRecord`） |
 | turns 累加器 | 6 个 | 1 个（`updateFromEvent` 唯一写点） |
 | Details 构造点 | 6 处 | 1 处（`project()`） |
 
@@ -132,7 +132,7 @@ status = result.success ? "done"
 | `createRecord(id, identity)` | 创建。identity（agent/model/mode/task/controller）一次确定不可变 | SubagentService.createRecordForMode |
 | `updateFromEvent(record, event)` | 实时更新。累积进 `turns[]`（text/thinking/toolCalls/usage）+ totalTokens + lastError | session-runner（`agentEvent` 回调，内联事件处理） |
 | `completeRecord(record, result, status)` | 冻结。写 endedAt/agentResult/result/error，不改 turns/tokens | SubagentService.finalizeRecord |
-| `project(record)` / `snapshot(record)` / `toPersisted(record)` + 派生函数 | 投影。只读产出展示层对象 | 详见下节 |
+| `project(record)` / `snapshot(record)` + 派生函数 | 投影。只读产出展示层对象 | 详见下节 |
 
 > 派生函数（与投影并列的只读读出器）：`getEventLog`（turns[] → 离散语义事件序列）、`getCurrentActivity`（turns[] 末尾 → running 活动行）、`getFullText`（turns[] → 完整正文）、`getAllToolCalls`（turns[] → 扁平 toolCalls）、`getTotalUsage`（turns[] → 聚合 usage）。
 
@@ -142,28 +142,26 @@ status = result.success ? "done"
 flowchart LR
     A[createRecord<br/>identity 注入] --> B[updateFromEvent ×N<br/>累积进 turns[]]
     B --> C[completeRecord<br/>冻结状态]
-    C --> D[store.archive<br/>单 Map 不迁移]
-    D --> E{mode?}
-    E -->|sync| F[scheduleSyncExpire<br/>5s linger]
-    E -->|background| G[enforceBgFifo<br/>FIFO 淘汰]
-    F --> H[history.append<br/>toPersisted]
-    G --> H
-    H --> I[/subagents list<br/>collectRecords 合并源]
+    C --> D[store.archive<br/>立即移出内存]
+    D --> E[/subagents list<br/>collectRecords 重建]
+    E --> F[reconstructFromFile<br/>session.jsonl → turns[]]
 ```
 
 - **create → update×N → complete** 由 SubagentService.runAndFinalize 驱动
-- **archive**：`RecordStore` 单 Map 架构——record 不物理迁移，`completeRecord` 已设终态 status，archive 仅按 mode 启动清理定时器（sync 5s linger / bg FIFO 淘汰，绝不淘汰 running）
-- **persist**：`toPersisted` 投影后写 `history.jsonl`，跨 session 可见
+- **archive**：终态 record **立即**从内存 Map 移除（不再 linger / FIFO）。内存只留 running record。
+- **读时重建**：`collectRecords` 合并内存(running) + 磁盘(sessions/*.jsonl 重建)。`reconstructFromFile`（`core/session-reconstructor.ts`）从 session.jsonl 重建 turns[]/eventLog/result/error 等富数据——session.jsonl 是唯一 source of truth（history.jsonl 已废弃）。
+- **身份持久化**：session.jsonl 的 header 不含 ExecutionRecord.id/agent/mode，故 session-runner 在创建 session 后写一条 custom entry（`subagent-identity`）携带身份，reconstructor 读它恢复。
+- **cancelled 持久化**：cancel 时 session.jsonl 被 abort 截断，cancelled 状态无法从文件检测。故 cancelBackground 写一个 `.cancelled` sidecar 文件（tombstone），collectRecords 重建时 override status=cancelled。
 
-## 6. 投影入口（3 个只读视图）
+## 6. 投影入口（只读视图）
 
-`ExecutionRecord` 是唯一可变源，产出三种只读视图供不同消费者。`eventLog` 不存储——由 `getEventLog(record)` 每次现算派生，消费方按需调（投影时用），不存在「持有被 mutate 的引用」风险。
+`ExecutionRecord` 是唯一可变源，产出只读视图供不同消费者。`eventLog` 不存储——由 `getEventLog(record)` 每次现算派生，消费方按需调（投影时用），不存在「持有被 mutate 的引用」风险。
 
 | 投影函数 | 产出类型 | 消费者 | 用途 |
 |---|---|---|---|
 | `project(record)` | `SubagentToolDetails` | tool-render（对话流 block） | LLM 可见的工具结果 + 实时渲染 |
-| `snapshot(record)` | `RecordSnapshot` | list-view / poll（`query()`） | 只读详情，字段标 readonly（不含 eventLog） |
-| `toPersisted(record)` | `PersistedAgentRecord` | history-store | 持久化到 jsonl，预览字段截断 |
+| `snapshot(record)` | `RecordSnapshot` | list-view / cancel（`findRecord()`） | 只读详情，字段标 readonly（不含 eventLog） |
+| `reconstructFromFile(sessionFile)` | `ReconstructedRecord` | RecordStore.collectRecords | 从 session.jsonl 重建终态 record（turns[]/eventLog/result/error） |
 
 ### 投影单点的修复效果
 
