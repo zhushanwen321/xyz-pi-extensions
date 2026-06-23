@@ -39,12 +39,16 @@ export function createPackageBuiltinRegistry(): BuiltinAgentRegistry {
         const raw = fs.readFileSync(filePath, "utf-8");
         const config = parseAgentFrontmatter(filePath, raw);
         if (config) cache.set(config.name, config);
-      } catch {
-        // 单个文件损坏不影响其他
+      } catch (err) {
+        // 单个 builtin agent 文件损坏不影响其他——降级跳过该文件。
+        void err; // 显式确认忽略：单个文件损坏不阻断其余 builtin 加载
+        console.warn(`[subagents] skip malformed builtin agent: ${entry}`, err);
       }
     }
-  } catch {
-    // agents/ 目录不存在（打包遗漏）→ 空 builtin，不崩
+  } catch (err) {
+    // agents/ 目录不存在（打包遗漏）→ 空 builtin，不崩。降级返回空集，不阻断 session。
+    void err; // 显式确认忽略：目录缺失是合法降级场景（打包遗漏等）
+    console.warn("[subagents] builtin agents/ directory unreadable, falling back to empty set:", err);
   }
   return {
     get: (name) => cache.get(name),
