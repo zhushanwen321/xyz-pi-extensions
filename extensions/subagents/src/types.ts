@@ -7,7 +7,24 @@
 //   - Runtime 编排 Core，产出 Details/Record 给 TUI
 //   - TUI 只读 Record/Details 快照，永不持有可变引用
 
-import type { AgentConfig, ResolvedModel } from "./core/model-resolver.ts";
+import type { AgentConfig, ModelInfo, ModelRegistryLike, ResolvedModel } from "./core/model-resolver.ts";
+
+// ============================================================
+// 全局常量
+// ============================================================
+
+/**
+ * 未显式指定 agent 时的兌底名。
+ *
+ * 必须是真实存在、可被 agentRegistry 发现的 agent（用户 agentDir 内置的通用 agent）。
+ * Service 层（resolveIdentity）与 TUI 层（extractAgentName）共用此常量，保证
+ * 「调用时显示的名」与「实际加载的 agent.md」一致。
+ *
+ * [HISTORICAL] 旧实现两处各硬编码：service 用 "default"（虚构名），format 用
+ * "worker"（真实但不是兌底语义）。导致不传 agent 时，block 标题显示 worker，
+ * 但实际执行兌底逻辑不一致。统一为 general-purpose 后名实相符。
+ */
+export const DEFAULT_AGENT_NAME = "general-purpose";
 
 // ============================================================
 // 执行状态机
@@ -23,10 +40,15 @@ export type ExecutionMode = "sync" | "background";
 // Agent 事件流（Core → Record 的唯一更新驱动）
 // ============================================================
 
-/** Pi session.subscribe 上报的事件。Runtime 把它喂给 updateFromEvent。 */
+/**
+ * Pi session.subscribe 上报的事件。Runtime 把它喂给 updateFromEvent。
+ *
+ * 设计：AgentEvent 携带 updateFromEvent 收口进 record 所需的**全部数据**——
+ * tool_end 带 result（供 turn.toolCalls 存完整 ToolCall），无需翻译层旁路累积。
+ */
 export type AgentEvent =
   | { type: "tool_start"; toolName: string; args?: unknown }
-  | { type: "tool_end"; toolName: string; args?: unknown; isError?: boolean }
+  | { type: "tool_end"; toolName: string; args?: unknown; result?: ToolCallResult; isError?: boolean }
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
   | { type: "turn_end"; summary?: string }
@@ -40,17 +62,28 @@ export interface AgentUsage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** 本 message 的成本（USD，来自 SDK usage.cost.total）。可选——无成本数据时缺省。 */
+  cost?: number;
 }
 
 export interface AgentUsageTotal extends AgentUsage {
   /** 上述四项之和。投影时不再手工求和。 */
   total: number;
+  /** 累计成本（USD，来自 SdkEvent.message.usage.cost.total 求和）。无成本数据时为 0。 */
+  cost: number;
 }
 
-/** eventLog 条目（Record.eventLog 的元素）。所有字段 readonly。 */
+/**
+ * eventLog 条目（getEventLog 派生产出的元素）。所有字段 readonly。
+ *
+ * text_output / thinking 类型已移除——它们是 100 字切片的碎片副产物，
+ * 现在完整内容收口在 record.turns[] 里，eventLog 只承载离散语义事件
+ * （tool 调用 / turn 边界 / error）。
+ */
 export interface AgentEventLogEntry {
-  readonly type: "tool_start" | "tool_end" | "text_output" | "thinking" | "turn_end" | "error";
+  readonly type: "tool_start" | "tool_end" | "turn_end" | "error";
   readonly label: string;
+  /** 事件发生的墙钟时间戳（Date.now()，ms）。由 getEventLog 从 turns[] 派生时记录。 */
   readonly ts: number;
   readonly status?: "running" | "done" | "failed";
 }
@@ -59,17 +92,87 @@ export interface AgentEventLogEntry {
 // Agent 结果（一次执行的 outcome）
 // ============================================================
 
-/** tool 调用结果（tool_execution_end 时 bridge 累积，含 structured-output 的 details）。 */
+/**
+ * SDK AgentSessionEvent 的最小可用子集（duck-typed，避免强耦合 SDK 类型）。
+ * 由 session-runner 内部消费，驱动累积器和事件翻译。
+ */
+export type SdkEvent = {
+  type: string;
+  toolCallId?: string;
+  toolName?: string;
+  args?: unknown;
+  result?: ToolCallResult;
+  isError?: boolean;
+  message?: {
+    usage?: AgentUsage & { cost?: { total: number } };
+    stopReason?: string;
+    errorMessage?: string;
+  };
+  assistantMessageEvent?: { type?: string; delta?: string };
+  reason?: string;
+};
+
+/** tool 调用结果（tool_execution_end 时累积，含 structured-output 的 details）。 */
 export interface ToolCallResult {
   content?: unknown[];
   details?: unknown;
 }
 
+/**
+ * tool 调用（导出的纯净数据形状，不含内部状态）。
+ *
+ *   tool_start 到达但 tool_end 未到时，调用为进行中；一旦 tool_end 到达，
+ *   result/isError 填充完成。对外投影（AgentResult.toolCalls / getAllToolCalls）
+ *   一律返回此类型——**不泄漏 running/done/failed 内部状态机**。
+ *
+ * 进行中状态由 execution-record 内部的 `InternalToolCall`（= ToolCall + _status）承载，
+ * 只存在于 record.turns[].toolCalls，跨边界导出时由 getAllToolCalls strip _status。
+ */
 export interface ToolCall {
   toolName: string;
   args?: unknown;
   result?: ToolCallResult;
   isError?: boolean;
+}
+
+/**
+ * 内部 ToolCall：在 ToolCall 基础上追加 _status 进行中状态标记与 startedTs 时间戳。
+ *
+ *   running = tool_start 已收到但 tool_end 未到；
+ *   done/failed = tool_end 已到。
+ *
+ * 仅存在于 ExecutionRecord.turns[].toolCalls（Core 内部可变状态）。
+ * 跨边界导出（getAllToolCalls → AgentResult.toolCalls / 持久化）由 getAllToolCalls
+ * 映射回 ToolCall（丢弃 _status / startedTs），保证导出形状清洁。
+ */
+export interface InternalToolCall extends ToolCall {
+  _status: "running" | "done" | "failed";
+  /** tool_start 到达时的墙钟时间戳（Date.now()，ms）。getEventLog 派生 tool 条目 ts 用。 */
+  startedTs: number;
+}
+
+/**
+ * 一个 turn 的完整内容（ExecutionRecord.turns[] 的元素）。
+ *
+ * 收口设计：text/thinking 流式累积**完整内容**（非 100 字切片），
+ * toolCalls 存完整 ToolCall（含 result + _status 内部状态）。turn_end 到达后 closed=true，
+ * 下次 text/thinking/tool 时开新 turn。
+ *
+ * eventLog / currentActivity / result 均从 turns[] 派生，不再独立存储。
+ */
+export interface Turn {
+  /** 本 turn assistant 正文（text_delta 流式累积，完整）。 */
+  text: string;
+  /** 本 turn 推理（thinking_delta 流式累积，完整）。 */
+  thinking: string;
+  /** 本 turn 工具调用（InternalToolCall：含完整 result + _status 进行中标记）。 */
+  toolCalls: InternalToolCall[];
+  /** 本 turn message_end 的 token 增量（聚合得 totalUsage）。 */
+  usageDelta?: AgentUsage;
+  /** turn_end 是否已到达。false=正在进行；true=已闭合，下次内容开新 turn。 */
+  closed: boolean;
+  /** turn_end 到达时的墙钟时间戳（Date.now()，ms）。getEventLog 派生 turn_end 条目 ts 用。 */
+  closedTs?: number;
 }
 
 /** 一次 session 执行的完整结果。collectResult 产出，写入 Record.outcome。 */
@@ -95,8 +198,12 @@ export interface AgentResult {
 /**
  * 所有执行路径的唯一状态源。
  *
- * 生命周期：createRecord() 创建 → updateFromEvent() 实时更新 →
- *           completeRecord() 冻结 → archive/history 持久化。
+ * 收口设计：一次执行的完整内容（text/thinking/toolCalls/usage）按 turn 收口在
+ * `turns: Turn[]` 里。eventLog / currentActivity / result 文本均从 turns[] 派生
+ * （getEventLog / getCurrentActivity / getFullText），不再独立存储切片或缓冲。
+ *
+ * 生命周期：createRecord() 创建 → updateFromEvent() 实时更新（累积进 turns）→
+ *           completeRecord() 冻结 → archive 立即移出内存（读时从 session.jsonl 重建）。
  *
  * TUI 永远拿 RecordSnapshot（.slice() 快照），不直接持此可变对象。
  */
@@ -114,9 +221,13 @@ export interface ExecutionRecord {
 
   // ── 状态（实时更新）──
   status: ExecutionStatus;
-  eventLog: AgentEventLogEntry[];
-  turns: number;
+  /** 完整执行内容，按 turn 组织。createRecord 初始化为 [空 turn]。 */
+  turns: Turn[];
+  /** turn 计数（= turns.filter(closed).length，冗余存储供投影直接读）。 */
+  turnCount: number;
   totalTokens: number;
+  /** 运行期最近一次 error 事件的消息（getEventLog 派生 error 条目用）。 */
+  lastError: string | undefined;
 
   // ── 完成 ──
   endedAt: number | undefined;
@@ -125,12 +236,11 @@ export interface ExecutionRecord {
   /** 完整 AgentResult（含 usage/toolCalls，完成时填）。 */
   agentResult: AgentResult | undefined;
 
+  /** session jsonl 文件名。session 创建成功后由 session-runner.run() 回填（窗口期内 undefined）。 */
+  sessionFile?: string;
+
   // ── 控制（仅 background 持有）──
   controller: AbortController | undefined;
-
-  // ── eventLog chunking 缓冲（跨事件持久，修复 sink reset bug）──
-  _currentTurnText: string;
-  _currentThinking: string;
 }
 
 // ============================================================
@@ -138,11 +248,16 @@ export interface ExecutionRecord {
 // ============================================================
 
 /**
- * Tool 返回的 details（renderResult 消费）。
- * 由 project(record) 唯一产出——sync/bg/poll 三路径字段一致。
+ * Tool 返回的 details（内层扁平结构）。
+ * 由 project(record) 唯一产出——sync/bg 两路径字段一致。
+ * 含 mode + sessionFile（供外层 SubagentToolResult 分组 + spinner 判断）。
+ *
+ * 分层（spec FR-3）：此为**内层**，不感知 action/外层分组。
+ * 外层 SubagentToolResult 由 adapter 包裹产出（加 action/subagentId/sessionFile + 分组）。
  */
 export interface SubagentToolDetails {
   status: ExecutionStatus;
+  mode: ExecutionMode;
   agent: string;
   model: string;
   thinkingLevel: string | undefined;
@@ -154,10 +269,10 @@ export interface SubagentToolDetails {
   error?: string;
   /** running 时的当前活动行（tool/thinking/text 优先级）。 */
   currentActivity?: { type: "tool" | "text" | "thinking"; label: string };
-  /** 仅 background 模式返回，供 LLM 后续 poll。 */
-  backgroundId?: string;
   /** schema 模式下，structured-output tool 的 result.details（对齐 workflow agent-pool）。 */
   parsedOutput?: unknown;
+  /** session jsonl 文件名（不含目录）。窗口期内可能 undefined（session 尚未创建成功）。 */
+  sessionFile?: string;
 }
 
 // ============================================================
@@ -185,6 +300,8 @@ export interface ExecuteOptions {
   graceTurns?: number;
   /** sync 模式来自 Pi tool 框架；background 模式 hub 忽略，自建 controller。 */
   signal?: AbortSignal;
+  /** 主 agent 当前模型（模型解析第三层兼底）。execute 调用方从 ctx.model 传入。 */
+  ctxModel?: ModelInfo;
   /** live 状态回流（对话流 block 实时刷新）。 */
   onUpdate?: (details: SubagentToolDetails) => void;
   /** background 完成回调（sync 不调）。 */
@@ -194,36 +311,90 @@ export interface ExecuteOptions {
 /**
  * execute 返回值。
  *   sync:    { mode:"sync", record, details } —— 调用方 await，record 已 settled。
- *            record 是只读快照（持久化/poll 用），details 是 TUI 渲染投影（含 elapsedSeconds/currentActivity）。
- *   background: { mode:"background", backgroundId } —— 立即返回。
+ *            record 是只读快照（持久化用），details 是 TUI 渲染投影（含 elapsedSeconds/currentActivity/mode/sessionFile）。
+ *   background: { mode:"background", subagentId, sessionFile, details } —— 立即返回。
+ *            subagentId 供后续 cancel/list 用；sessionFile 窗口期可能 undefined。
  */
 export type ExecutionHandle =
   | { mode: "sync"; record: RecordSnapshot; details: SubagentToolDetails }
-  | { mode: "background"; backgroundId: string; details: SubagentToolDetails };
+  | { mode: "background"; subagentId: string; sessionFile: string | undefined; details: SubagentToolDetails };
 
-/** poll(backgroundId) 返回。record 的只读视图。 */
-export interface QueryResult {
-  id: string;
-  status: ExecutionStatus;
+// ============================================================
+// tool action 出参（外层分组，adapter 产出）
+// ============================================================
+
+/** list 的 item 结构（8 字段）。 */
+export interface SubagentListItem {
+  subagentId: string;
   agent: string;
-  model: string;
-  thinkingLevel: string | undefined;
-  turns: number;
-  totalTokens: number;
-  startedAt: number;
-  endedAt: number | undefined;
-  elapsedSeconds: number;
-  result?: string;
-  error?: string;
-  eventLog: AgentEventLogEntry[];
+  status: ExecutionStatus;
   mode: ExecutionMode;
+  /** 运行秒数（running 态实时计算，终态 endedAt-startedAt）。 */
+  duration: number;
+  model: string;
+  totalTokens: number;
+  /** session jsonl 文件名（窗口期内可能 undefined）。 */
+  sessionFile?: string;
 }
+
+/**
+ * sync 执行的内层响应（挂在 SubagentToolResult.syncResponse）。
+ *
+ * 与 SubagentToolDetails 字段完全一致——liftSync 现为恒等投影（字段零搬运）。
+ * 与 SubagentToolDetails 的唯一区别：mode 收窄为字面量 "sync"（sync 路径投影时
+ * 必为 "sync"），让 TS 在 adapter 层静态保证 syncResponse 只能来自 sync 路径。
+ * 结构兼容 SubagentToolDetails（mode 是其子类型），故 liftSync 可直接 return。
+ */
+export interface SyncResponse extends SubagentToolDetails {
+  mode: "sync";
+}
+
+/** background 启动的内层响应（挂在 SubagentToolResult.bgResponse）。 */
+export interface BgResponse {
+  status: "running";
+  mode: "background";
+  /** 启动提示文案（"detached, will notify on completion"）。 */
+  message: string;
+}
+
+/** list 的内层响应（挂在 SubagentToolResult.listResponse）。 */
+export interface ListResponse {
+  /** items 中 status==="running" 的计数（受 limit 截断如实反映，非全局总数）。 */
+  running: number;
+  items: SubagentListItem[];
+}
+
+/** cancel 的内层响应（挂在 SubagentToolResult.cancelResponse）。 */
+export interface CancelResponse {
+  cancelled: true;
+}
+
+/**
+ * Tool 外层出参（renderResult + LLM content JSON 同源）。
+ * adapter 唯一产出：领域对象（sync/bg/list/cancel 四选一）+ action/subagentId/sessionFile。
+ *
+ *   - sync 完成 → syncResponse（最外层 subagentId/sessionFile 有值）
+ *   - background 启动 → bgResponse（subagentId 有值；sessionFile 窗口期可能 undefined）
+ *   - list → listResponse（最外层 subagentId/sessionFile 为 null，sessionFile 在各 item 内）
+ *   - cancel → cancelResponse（subagentId 有值；sessionFile 无意义，可为 null）
+ */
+/**
+ * tool 出参（discriminated union）。action 作为主鉴别字段；
+ * action:"start" 分 sync/bg 两个成员（靠 syncResponse / bgResponse 字段区分）。
+ * 防止 action↔response 错配（如 {action:"start", listResponse}）——TS 编译期拒绝。
+ * sync 成员 subagentId 可 null（streaming 期未知，终态由 adapter 填）。
+ */
+export type SubagentToolResult =
+  | { action: "start"; subagentId: string | null; sessionFile: string | null; syncResponse: SyncResponse }
+  | { action: "start"; subagentId: string | null; sessionFile: string | null; bgResponse: BgResponse }
+  | { action: "list"; subagentId: null; sessionFile: null; listResponse: ListResponse }
+  | { action: "cancel"; subagentId: string; sessionFile: null; cancelResponse: CancelResponse };
 
 // ============================================================
 // TUI list 视图的合并 record（4 源 merge 后的形状）
 // ============================================================
 
-/** /subagents list 左列展示单元。合并自 live/completed/bg/history 四源。 */
+/** /subagents list 左列展示单元。来自内存(running) 或 session.jsonl 重建(终态)。 */
 export interface SubagentRecord {
   id: string;
   agent: string;
@@ -242,45 +413,19 @@ export interface SubagentRecord {
 }
 
 // ============================================================
-// 持久化（history.jsonl 一行）
-// ============================================================
-
-export interface PersistedAgentRecord {
-  id: string;
-  agent: string;
-  status: ExecutionStatus;
-  mode: ExecutionMode;
-  taskPreview: string;
-  startedAt: number;
-  endedAt?: number;
-  turns?: number;
-  totalTokens?: number;
-  error?: string;
-  resultPreview?: string;
-  sessionFile?: string;
-  cwd: string;
-  sessionId?: string;
-  model?: string;
-  thinkingLevel?: string;
-}
-
-// ============================================================
 // 配置（global + session）
 // ============================================================
 
+/**
+ * 全局配置（~/.pi/agent/subagents/config.json）。
+ *
+ * 模型解析已退化为「主 agent model 优先，仅 override 时查 registry」——
+ * 不再有 category/fallback/yolo 字段。config.json 只保留 maxConcurrent
+ * （pool 大小）。旧 config.json 中的 categories/fallback 等字段读取时忽略。
+ */
 export interface SubagentsGlobalConfig {
   version: number;
-  yoloByDefault: boolean;
   maxConcurrent: number;
-  categories: Record<string, CategoryDefinition>;
-  agentCategoryOverrides: Record<string, string>;
-  fallback: { model: string; thinkingLevel?: string };
-}
-
-export interface CategoryDefinition {
-  label: string;
-  model: string;
-  thinkingLevel?: string;
 }
 
 /**
@@ -296,15 +441,6 @@ export interface DiscoveryConfig {
   agentDirs: string[];
 }
 
-/** 首次 category 模型确认后的 per-session 覆盖。 */
-export interface SessionModelState {
-  yoloMode: boolean;
-  /** @deprecated D-1：取消首次确认后此字段恒为 true，仅 restoreSessionState 保留读写以向后兼容。 */
-  categoryConfirmed: boolean;
-  categoryModels: Record<string, { model: string; thinkingLevel?: string }>;
-  agentModels: Record<string, { model: string; thinkingLevel?: string }>;
-}
-
 // ============================================================
 // 只读快照（TUI 消费，永不 mutate）
 // ============================================================
@@ -312,6 +448,10 @@ export interface SessionModelState {
 /**
  * Record 的只读视图。store.snapshot() 返回。
  * TUI 拿到此类型，保证不会回写 Core 状态。
+ *
+ * 不含 eventLog——snapshot 的消费点（cancel 判 mode/status、hasRunning 判 mode、
+ * toNotifyRecord 取 result/error）均不读 eventLog。需要 eventLog 的场景用 project()
+ * 投影的 SubagentToolDetails。需要完整内容用 record.turns[]（Core 内部）。
  */
 export interface RecordSnapshot {
   readonly id: string;
@@ -321,14 +461,74 @@ export interface RecordSnapshot {
   readonly mode: ExecutionMode;
   readonly task: string;
   readonly status: ExecutionStatus;
-  readonly eventLog: readonly AgentEventLogEntry[];
   readonly turns: number;
   readonly totalTokens: number;
   readonly startedAt: number;
   readonly endedAt: number | undefined;
   readonly result: string | undefined;
   readonly error: string | undefined;
+  readonly sessionFile: string | undefined;
 }
 
 // Re-export 用于 ExecuteOptions 的 agent/model 契约
+// ============================================================
+// SDK duck-typed 接口（测试可 mock，session-runner 消费）
+// ============================================================
+
+/** AgentSession 的最小可用接口（duck-typed，与 SDK AgentSession 结构兼容）。 */
+export interface AgentSessionLike {
+  prompt(task: string, options?: unknown): Promise<void>;
+  steer(message: string): Promise<void>;
+  abort(): Promise<void>;
+  dispose(): void;
+  subscribe(fn: (event: unknown) => void): () => void;
+  sessionId: string;
+  readonly sessionManager: {
+    getSessionFile(): string | undefined;
+    getSessionId(): string;
+    /** 写 custom entry（subagent-identity 持久化用）。SDK SessionManager.appendCustomEntry 的 duck-type。 */
+    appendCustomEntry(customType: string, data?: unknown): string;
+  };
+  messages: ReadonlyArray<{
+    role: string;
+    content?: ReadonlyArray<{ type: string; text?: string }>;
+  }>;
+  getAllTools(): Array<{ name: string }>;
+  setActiveToolsByName(names: string[]): void;
+}
+
+/** DefaultResourceLoader 的最小可用接口（duck-typed）。 */
+export interface ResourceLoaderLike {
+  reload(): Promise<void>;
+}
+
+/** createAgentSession 入参的类型化子集（对应 SDK CreateAgentSessionOptions）。 */
+export interface CreateAgentSessionArgs {
+  model: unknown;
+  thinkingLevel?: string;
+  cwd: string;
+  resourceLoader: ResourceLoaderLike;
+  modelRegistry: ModelRegistryLike;
+  sessionManager: unknown;
+}
+
+/** DefaultResourceLoader 构造参数的类型化子集。 */
+export interface ResourceLoaderOptions {
+  cwd: string;
+  agentDir: string;
+  appendSystemPrompt: string[];
+  additionalSkillPaths?: string[];
+}
+
+/** Pi SDK 动态 import 的形状（getSdk() 获取）。 */
+export interface SdkLike {
+  DefaultResourceLoader: new (opts: ResourceLoaderOptions) => ResourceLoaderLike;
+  SessionManager: {
+    inMemory(cwd?: string): unknown;
+    create(cwd: string, sessionDir?: string): unknown;
+  };
+  createAgentSession: (opts: CreateAgentSessionArgs) => Promise<{ session: AgentSessionLike }>;
+}
+
 export type { AgentConfig, ResolvedModel };
+export type { ModelRegistryLike };

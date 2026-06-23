@@ -75,7 +75,9 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     modelService.initModel({
       modelRegistry: ctx.modelRegistry,
       sessionId: ctx.sessionManager.getSessionId(),
-      entries: ctx.sessionManager.getEntries() ?? [],
+      // 缓存主 agent model：renderCall 阶段 ToolRenderContext 不含 model（SDK 限制），
+      // 缓存后 resolveModel 第三层能命中，标题行恢复显示 model（详见 model-config-service.ts）。
+      ctxModel: ctx.model ?? undefined,
     });
     service.initSession({
       pi,
@@ -93,12 +95,24 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     // 万一仍抛错，catch 住防止 session_start 整体崩。
     try {
       maybeCleanupExpiredSessionFiles(agentDir, cwd);
-    } catch {
-      // best-effort 清理失败，忽略——service 已注册，session 可用
+    } catch (err) {
+      // best-effort 清理失败，忽略——service 已注册，session 可用。记录但不阻断。
+      void err; // 显式确认忽略：GC 清理失败不应阻断 session_start
+      console.warn("[subagents] expired session file cleanup failed:", err);
     }
   });
 
-  pi.on("session_shutdown", (_event: SessionShutdownEvent) => {
+  // model_select：用户切换 model 时刷新缓存，保证后续 renderCall 显示新 model。
+  // SDK 的 ModelSelectEvent 未从包入口 export，此处用最小结构类型（仅需 .model 字段）。
+  // ponytail: 防御性检查——全局 Symbol 单例可能缓存旧版本实例（无 setCtxModel）
+  pi.on("model_select", (event: { model: NonNullable<ExtensionContext["model"]> }, _ctx: ExtensionContext) => {
+    const service = getModelConfigService();
+    if (service && typeof service.setCtxModel === "function") {
+      service.setCtxModel(event.model);
+    }
+  });
+
+  pi.on("session_shutdown", (_event: SessionShutdownEvent, _ctx: ExtensionContext) => {
     getSubagentService()?.dispose();
   });
 }
