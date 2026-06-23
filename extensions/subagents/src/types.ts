@@ -40,10 +40,15 @@ export type ExecutionMode = "sync" | "background";
 // Agent 事件流（Core → Record 的唯一更新驱动）
 // ============================================================
 
-/** Pi session.subscribe 上报的事件。Runtime 把它喂给 updateFromEvent。 */
+/**
+ * Pi session.subscribe 上报的事件。Runtime 把它喂给 updateFromEvent。
+ *
+ * 设计：AgentEvent 携带 updateFromEvent 收口进 record 所需的**全部数据**——
+ * tool_end 带 result（供 turn.toolCalls 存完整 ToolCall），无需翻译层旁路累积。
+ */
 export type AgentEvent =
   | { type: "tool_start"; toolName: string; args?: unknown }
-  | { type: "tool_end"; toolName: string; args?: unknown; isError?: boolean }
+  | { type: "tool_end"; toolName: string; args?: unknown; result?: ToolCallResult; isError?: boolean }
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
   | { type: "turn_end"; summary?: string }
@@ -57,17 +62,28 @@ export interface AgentUsage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** 本 message 的成本（USD，来自 SDK usage.cost.total）。可选——无成本数据时缺省。 */
+  cost?: number;
 }
 
 export interface AgentUsageTotal extends AgentUsage {
   /** 上述四项之和。投影时不再手工求和。 */
   total: number;
+  /** 累计成本（USD，来自 SdkEvent.message.usage.cost.total 求和）。无成本数据时为 0。 */
+  cost: number;
 }
 
-/** eventLog 条目（Record.eventLog 的元素）。所有字段 readonly。 */
+/**
+ * eventLog 条目（getEventLog 派生产出的元素）。所有字段 readonly。
+ *
+ * text_output / thinking 类型已移除——它们是 100 字切片的碎片副产物，
+ * 现在完整内容收口在 record.turns[] 里，eventLog 只承载离散语义事件
+ * （tool 调用 / turn 边界 / error）。
+ */
 export interface AgentEventLogEntry {
-  readonly type: "tool_start" | "tool_end" | "text_output" | "thinking" | "turn_end" | "error";
+  readonly type: "tool_start" | "tool_end" | "turn_end" | "error";
   readonly label: string;
+  /** 事件发生的墙钟时间戳（Date.now()，ms）。由 getEventLog 从 turns[] 派生时记录。 */
   readonly ts: number;
   readonly status?: "running" | "done" | "failed";
 }
@@ -102,11 +118,61 @@ export interface ToolCallResult {
   details?: unknown;
 }
 
+/**
+ * tool 调用（导出的纯净数据形状，不含内部状态）。
+ *
+ *   tool_start 到达但 tool_end 未到时，调用为进行中；一旦 tool_end 到达，
+ *   result/isError 填充完成。对外投影（AgentResult.toolCalls / getAllToolCalls）
+ *   一律返回此类型——**不泄漏 running/done/failed 内部状态机**。
+ *
+ * 进行中状态由 execution-record 内部的 `InternalToolCall`（= ToolCall + _status）承载，
+ * 只存在于 record.turns[].toolCalls，跨边界导出时由 getAllToolCalls strip _status。
+ */
 export interface ToolCall {
   toolName: string;
   args?: unknown;
   result?: ToolCallResult;
   isError?: boolean;
+}
+
+/**
+ * 内部 ToolCall：在 ToolCall 基础上追加 _status 进行中状态标记与 startedTs 时间戳。
+ *
+ *   running = tool_start 已收到但 tool_end 未到；
+ *   done/failed = tool_end 已到。
+ *
+ * 仅存在于 ExecutionRecord.turns[].toolCalls（Core 内部可变状态）。
+ * 跨边界导出（getAllToolCalls → AgentResult.toolCalls / 持久化）由 getAllToolCalls
+ * 映射回 ToolCall（丢弃 _status / startedTs），保证导出形状清洁。
+ */
+export interface InternalToolCall extends ToolCall {
+  _status: "running" | "done" | "failed";
+  /** tool_start 到达时的墙钟时间戳（Date.now()，ms）。getEventLog 派生 tool 条目 ts 用。 */
+  startedTs: number;
+}
+
+/**
+ * 一个 turn 的完整内容（ExecutionRecord.turns[] 的元素）。
+ *
+ * 收口设计：text/thinking 流式累积**完整内容**（非 100 字切片），
+ * toolCalls 存完整 ToolCall（含 result + _status 内部状态）。turn_end 到达后 closed=true，
+ * 下次 text/thinking/tool 时开新 turn。
+ *
+ * eventLog / currentActivity / result 均从 turns[] 派生，不再独立存储。
+ */
+export interface Turn {
+  /** 本 turn assistant 正文（text_delta 流式累积，完整）。 */
+  text: string;
+  /** 本 turn 推理（thinking_delta 流式累积，完整）。 */
+  thinking: string;
+  /** 本 turn 工具调用（InternalToolCall：含完整 result + _status 进行中标记）。 */
+  toolCalls: InternalToolCall[];
+  /** 本 turn message_end 的 token 增量（聚合得 totalUsage）。 */
+  usageDelta?: AgentUsage;
+  /** turn_end 是否已到达。false=正在进行；true=已闭合，下次内容开新 turn。 */
+  closed: boolean;
+  /** turn_end 到达时的墙钟时间戳（Date.now()，ms）。getEventLog 派生 turn_end 条目 ts 用。 */
+  closedTs?: number;
 }
 
 /** 一次 session 执行的完整结果。collectResult 产出，写入 Record.outcome。 */
@@ -132,7 +198,11 @@ export interface AgentResult {
 /**
  * 所有执行路径的唯一状态源。
  *
- * 生命周期：createRecord() 创建 → updateFromEvent() 实时更新 →
+ * 收口设计：一次执行的完整内容（text/thinking/toolCalls/usage）按 turn 收口在
+ * `turns: Turn[]` 里。eventLog / currentActivity / result 文本均从 turns[] 派生
+ * （getEventLog / getCurrentActivity / getFullText），不再独立存储切片或缓冲。
+ *
+ * 生命周期：createRecord() 创建 → updateFromEvent() 实时更新（累积进 turns）→
  *           completeRecord() 冻结 → archive/history 持久化。
  *
  * TUI 永远拿 RecordSnapshot（.slice() 快照），不直接持此可变对象。
@@ -151,9 +221,13 @@ export interface ExecutionRecord {
 
   // ── 状态（实时更新）──
   status: ExecutionStatus;
-  eventLog: AgentEventLogEntry[];
-  turns: number;
+  /** 完整执行内容，按 turn 组织。createRecord 初始化为 [空 turn]。 */
+  turns: Turn[];
+  /** turn 计数（= turns.filter(closed).length，冗余存储供投影直接读）。 */
+  turnCount: number;
   totalTokens: number;
+  /** 运行期最近一次 error 事件的消息（getEventLog 派生 error 条目用）。 */
+  lastError: string | undefined;
 
   // ── 完成 ──
   endedAt: number | undefined;
@@ -167,10 +241,6 @@ export interface ExecutionRecord {
 
   // ── 控制（仅 background 持有）──
   controller: AbortController | undefined;
-
-  // ── eventLog chunking 缓冲（跨事件持久，修复 sink reset bug）──
-  _currentTurnText: string;
-  _currentThinking: string;
 }
 
 // ============================================================
@@ -267,22 +337,16 @@ export interface SubagentListItem {
   sessionFile?: string;
 }
 
-/** sync 执行的内层响应（挂在 SubagentToolResult.syncResponse）。 */
-export interface SyncResponse {
-  status: ExecutionStatus;
+/**
+ * sync 执行的内层响应（挂在 SubagentToolResult.syncResponse）。
+ *
+ * 与 SubagentToolDetails 字段完全一致——liftSync 现为恒等投影（字段零搬运）。
+ * 与 SubagentToolDetails 的唯一区别：mode 收窄为字面量 "sync"（sync 路径投影时
+ * 必为 "sync"），让 TS 在 adapter 层静态保证 syncResponse 只能来自 sync 路径。
+ * 结构兼容 SubagentToolDetails（mode 是其子类型），故 liftSync 可直接 return。
+ */
+export interface SyncResponse extends SubagentToolDetails {
   mode: "sync";
-  agent: string;
-  model: string;
-  thinkingLevel: string | undefined;
-  turns: number;
-  totalTokens: number;
-  elapsedSeconds: number;
-  eventLog: AgentEventLogEntry[];
-  currentActivity?: { type: "tool" | "text" | "thinking"; label: string };
-  result?: string;
-  error?: string;
-  parsedOutput?: unknown;
-  sessionFile?: string;
 }
 
 /** background 启动的内层响应（挂在 SubagentToolResult.bgResponse）。 */
@@ -407,6 +471,10 @@ export interface DiscoveryConfig {
 /**
  * Record 的只读视图。store.snapshot() 返回。
  * TUI 拿到此类型，保证不会回写 Core 状态。
+ *
+ * 不含 eventLog——snapshot 的消费点（cancel 判 mode/status、hasRunning 判 mode、
+ * toNotifyRecord 取 result/error）均不读 eventLog。需要 eventLog 的场景用 project()
+ * 投影的 SubagentToolDetails。需要完整内容用 record.turns[]（Core 内部）。
  */
 export interface RecordSnapshot {
   readonly id: string;
@@ -416,7 +484,6 @@ export interface RecordSnapshot {
   readonly mode: ExecutionMode;
   readonly task: string;
   readonly status: ExecutionStatus;
-  readonly eventLog: readonly AgentEventLogEntry[];
   readonly turns: number;
   readonly totalTokens: number;
   readonly startedAt: number;

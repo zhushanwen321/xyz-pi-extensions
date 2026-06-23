@@ -10,6 +10,7 @@
 
 import type { AgentToolResult } from "@mariozechner/pi-coding-agent";
 
+import { computeElapsedSeconds } from "../core/execution-record.ts";
 import type { ModelInfo } from "../core/model-resolver.ts";
 import type { SubagentService } from "../runtime/subagent-service.ts";
 import type {
@@ -37,9 +38,6 @@ const MAX_LIST_LIMIT = 100;
  * includeFinished=true 时 collect 上限即 limit。
  */
 const MIN_COLLECT_FOR_FILTER = 100;
-
-/** 毫秒/秒换算（duration 实时计算用）。 */
-const MS_PER_SECOND = 1000;
 
 /** background 启动提示文案（spec FR-3 bgResponse.message）。 */
 const BG_MESSAGE = "detached, will notify on completion";
@@ -101,43 +99,33 @@ export interface CancelHandlerResult {
 
 /** SubagentRecord → SubagentListItem（8 字段，duration 实时计算）。 */
 function recordToListItem(r: SubagentRecord): SubagentListItem {
-  const end = r.endedAt ?? Date.now();
-  const duration = Math.max(0, Math.floor((end - r.startedAt) / MS_PER_SECOND));
   return {
     subagentId: r.id,
     agent: r.agent,
     status: r.status,
     mode: r.mode,
-    duration,
+    duration: computeElapsedSeconds(r),
     model: r.model,
     totalTokens: r.totalTokens,
     sessionFile: r.sessionFile,
   };
 }
 
-/** 把内层 SubagentToolDetails（sync streaming）包成外层 SubagentToolResult（onUpdate 回流用）。 */
+/**
+ * 把内层 SubagentToolDetails（sync 路径）包成外层 SubagentToolResult（onUpdate 回流用）。
+ *
+ * SyncResponse 是 SubagentToolDetails 的子类型（mode 收窄为字面量 "sync"）。
+ * 调用方保证此函数只在 sync 路径调用——details.mode 运行时必为 "sync"。
+ * 字段无搬运（结构兼容，直接透传）。
+ */
 function liftSync(details: SubagentToolDetails): SubagentToolResult {
   return {
     action: "start",
     // streaming 期 subagentId 未知，终态由 adapter 填；此处给 null 保持类型合法。
     subagentId: null,
     sessionFile: details.sessionFile ?? null,
-    syncResponse: {
-      status: details.status,
-      mode: "sync",
-      agent: details.agent,
-      model: details.model,
-      thinkingLevel: details.thinkingLevel,
-      turns: details.turns,
-      totalTokens: details.totalTokens,
-      elapsedSeconds: details.elapsedSeconds,
-      eventLog: details.eventLog,
-      currentActivity: details.currentActivity,
-      result: details.result,
-      error: details.error,
-      parsedOutput: details.parsedOutput,
-      sessionFile: details.sessionFile,
-    },
+    // details 已由 sync 路径产出（mode==="sync"），结构兼容 SyncResponse。
+    syncResponse: details as SyncResponse,
   };
 }
 
@@ -196,27 +184,12 @@ export async function startHandler(
   }
 
   // sync 完成：record 已 settled，details 含 mode/sessionFile/elapsedSeconds。
-  const d = handle.details;
+  // SyncResponse 是 SubagentToolDetails 的子类型（mode==="sync"）；sync 路径产出保证。
   return {
     kind: "sync",
     subagentId: handle.record.id,
-    sessionFile: d.sessionFile,
-    response: {
-      status: d.status,
-      mode: "sync",
-      agent: d.agent,
-      model: d.model,
-      thinkingLevel: d.thinkingLevel,
-      turns: d.turns,
-      totalTokens: d.totalTokens,
-      elapsedSeconds: d.elapsedSeconds,
-      eventLog: d.eventLog,
-      currentActivity: d.currentActivity,
-      result: d.result,
-      error: d.error,
-      parsedOutput: d.parsedOutput,
-      sessionFile: d.sessionFile,
-    },
+    sessionFile: handle.details.sessionFile,
+    response: handle.details as SyncResponse,
   };
 }
 

@@ -8,7 +8,7 @@
 //   - 与 history-store 协作：completed 后写入持久化，list 时 merge 四源
 //   - 提供 snapshot() 只读视图给 TUI（永不返回可变引用）
 
-import { snapshot as toSnapshot } from "../../core/execution-record.ts";
+import { getEventLog, snapshot as toSnapshot } from "../../core/execution-record.ts";
 import type {
   ExecutionMode,
   ExecutionRecord,
@@ -203,11 +203,11 @@ export class RecordStore {
       mode: r.mode,
       startedAt: r.startedAt,
       endedAt: r.endedAt,
-      turns: r.turns,
+      turns: r.turnCount,
       totalTokens: r.totalTokens,
       model: r.model,
       thinkingLevel: r.thinkingLevel,
-      eventLog: r.eventLog.slice(),
+      eventLog: getEventLog(r),
       result: r.result,
       error: r.error,
       // sessionFile 由 record.sessionFile 提供（规范源，见 session-runner）。

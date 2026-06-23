@@ -23,14 +23,12 @@ import type {
 import type {
   AgentEvent,
   AgentResult,
-  AgentUsage,
   ExecutionRecord,
   SdkEvent,
-  ToolCall,
 } from "../types.ts";
-import { updateFromEvent } from "./execution-record.ts";
+import { getAllToolCalls, updateFromEvent } from "./execution-record.ts";
 import type { ModelRegistryLike } from "./model-resolver.ts";
-import { collectResult, toUsageTotal } from "./output-collector.ts";
+import { collectResult } from "./output-collector.ts";
 import { encodeCwd } from "./path-encoding.ts";
 import { createTurnLimiter } from "./turn-limiter.ts";
 
@@ -42,11 +40,6 @@ function isSdkEvent(x: unknown): x is SdkEvent {
   if (typeof x !== "object" || x === null) return false;
   if (!("type" in x)) return false;
   return typeof (x as SdkEvent).type === "string";
-}
-
-/** 空累积器的统一初值。 */
-function zeroUsage(): AgentUsage & { cost: number } {
-  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 }
 
 // ============================================================
@@ -350,12 +343,9 @@ export async function run(
 ): Promise<AgentResult> {
   const startTime = Date.now();
 
-  // a. 局部累积器（替代 EventBridge：turn/toolCall/usage/lastError 由 run() 自己持有）。
-  let turnCount = 0;
-  const toolCalls: ToolCall[] = [];
-  let usage = zeroUsage();
-  let lastError: string | undefined;
-  // toolCallId → {toolName, args}：tool_end 取回 args（SDK end 不一定带）
+  // a. transient 寄存器：pendingTools 是 SDK 契约补全层（tool_end 可能不带 args，
+  // 需用 tool_start 时寄存的 args 回填）。非结果数据，不进 record。
+  // turnCount/toolCalls/usage/lastError 已收口进 record.turns[]，不再旁路累积。
   const pendingTools = new Map<string, { toolName: string; args?: unknown }>();
 
   // b. turnLimiter + schema enforcement 闭包（built 创建后初始化）。
@@ -363,27 +353,23 @@ export async function run(
   let onAbort: (() => void) | undefined;
 
   // ── SDK 事件累积器（从 EventBridge.handle 搬过来的 switch 逻辑）──
-  // accumulateMessageEnd：usage 累积 + error 判定。
-  // LLM provider 常在错误响应里也携带 usage（计费需如此）。必须先累积 usage，
-  // 再独立判断 error/aborted，否则携带 usage 的错误响应会跳过 lastError 设置，
+  // accumulateMessageEnd：发 AgentEvent（message_end 带 usage / error 带 message），
+  // 由 updateFromEvent 收口进 record.turns[].usageDelta + record.lastError + record.totalTokens。
+  // LLM provider 常在错误响应里也携带 usage（计费需如此）。必须先发 message_end(usage)，
+  // 再独立判断 error/aborted，否则携带 usage 的错误响应会跳过 error 事件，
   // 导致 session-runner 把 errored session 误判为 success=true。[HISTORICAL]
   const accumulateMessageEnd = (raw: SdkEvent): void => {
     const msg = raw.message;
     if (msg?.usage) {
-      const u = msg.usage;
-      usage = {
-        input: usage.input + (u.input ?? 0),
-        output: usage.output + (u.output ?? 0),
-        cacheRead: usage.cacheRead + (u.cacheRead ?? 0),
-        cacheWrite: usage.cacheWrite + (u.cacheWrite ?? 0),
-        cost: usage.cost + (u.cost?.total ?? 0),
-      };
-      agentEvent({ type: "message_end", usage: u });
+      // SDK usage.cost 形如 { total: number }；拍平成 AgentUsage.cost（number），
+      // 供 getTotalUsage 累加。缺省时 cost=undefined（getTotalUsage 按 0 累加）。
+      const { cost: costObj, ...usageBase } = msg.usage;
+      const usage = { ...usageBase, cost: costObj?.total };
+      agentEvent({ type: "message_end", usage });
     }
     const stopReason = msg?.stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
       const errMsg = msg?.errorMessage ?? raw.reason ?? stopReason;
-      lastError = errMsg;
       agentEvent({ type: "error", message: errMsg });
     }
   };
@@ -408,13 +394,8 @@ export async function run(
             pendingTools.delete(raw.toolCallId);
           }
         }
-        toolCalls.push({
-          toolName,
-          args,
-          result: raw.result,
-          isError: raw.isError,
-        });
-        agentEvent({ type: "tool_end", toolName, args, isError: raw.isError });
+        // 透传 result 到 AgentEvent——updateFromEvent 把完整 ToolCall（含 result）收口进 turn.toolCalls。
+        agentEvent({ type: "tool_end", toolName, args, result: raw.result, isError: raw.isError });
         return;
       }
       case "message_update": {
@@ -427,7 +408,6 @@ export async function run(
         return;
       }
       case "turn_end": {
-        turnCount += 1;
         agentEvent({ type: "turn_end" });
         return;
       }
@@ -444,10 +424,10 @@ export async function run(
     }
   };
 
-  // agentEvent 统一出口：updateFromEvent + onTurnEnd + opts.onEvent
+  // agentEvent 统一出口：updateFromEvent（收口进 record.turns[]）+ onTurnEnd + opts.onEvent
   const agentEvent = (event: AgentEvent): void => {
     updateFromEvent(record, event);
-    if (event.type === "turn_end") onTurnEnd?.(record.turns);
+    if (event.type === "turn_end") onTurnEnd?.(record.turnCount);
     opts.onEvent?.(event);
   };
 
@@ -504,7 +484,8 @@ export async function run(
 
       // schema enforcement：漏调 structured-output 则 steer 提醒（≤ MAX_SCHEMA_STEERS）
       if (!opts.schema) return;
-      const calledStructuredOutput = toolCalls.some(
+      // 从 record.turns[] 扁平化读 toolCalls（收口后闭包 toolCalls 已删除）
+      const calledStructuredOutput = getAllToolCalls(record).some(
         (tc) => tc.toolName === STRUCTURED_OUTPUT_TOOL,
       );
       if (calledStructuredOutput) return;
@@ -524,26 +505,25 @@ export async function run(
     try {
       const instruction = opts.schema ? formatSchemaInstruction(opts.schema) : "";
       await session.prompt(task + instruction);
-      // 双来源 success 判定：prompt 成功但 lastError 非空也算失败
-      if (lastError) {
+      // 双来源 success 判定：prompt 成功但 record.lastError 非空也算失败
+      // （error 事件已由 updateFromEvent 收口进 record.lastError）
+      if (record.lastError) {
         success = false;
-        error = lastError;
+        error = record.lastError;
       }
     } catch (err) {
       success = false;
       error = err instanceof Error ? err.message : String(err);
     }
 
-    // g. collectResult 组装 AgentResult（累积值直接传入，不依赖 bridge）
-    return collectResult(built.session, {
+    // g. collectResult 组装 AgentResult——全部从 record 读（收口后不再依赖闭包累积器）。
+    // text 从 turns[] 聚合（getFullText），turns/toolCalls/usage 从 record 派生。
+    return collectResult(record, {
       startTime,
       success,
       error,
       sessionId: built.session.sessionId,
       sessionFile: built.session.sessionManager.getSessionFile() ?? undefined,
-      turns: turnCount,
-      usage: toUsageTotal(usage),
-      toolCalls: toolCalls.slice(),
     });
   } finally {
     // h. 清理：signal listener → unsubscribe（session.subscribe）→ dispose

@@ -3,24 +3,31 @@ import { describe, expect, it } from "vitest";
 
 import {
   completeRecord,
+  computeElapsedSeconds,
   createRecord,
   extractLabelFromArgs,
+  getAllToolCalls,
+  getCurrentActivity,
+  getEventLog,
+  getFullText,
+  getTotalUsage,
   project,
   snapshot,
   toPersisted,
   tryTransition,
   updateFromEvent,
 } from "../core/execution-record.ts";
-import type { AgentResult, ExecutionRecord } from "../types.ts";
+import type { AgentResult, ExecutionRecord, Turn } from "../types.ts";
 
 // ── 常量（与源码 module-private 值对齐，测试用字面量）──
-const TEXT_OUTPUT_CHUNK = 100;
-const THINKING_CHUNK = 100;
-const MAX_EVENT_LOG_ENTRIES = 20;
 const TURN_SUMMARY_MAX = 80;
-const EVENT_LOG_LABEL_MAX = 100;
+const PREVIEW_MAX = 200;
 
 // ── 工厂 ──
+function emptyTurn(): Turn {
+  return { text: "", thinking: "", toolCalls: [], usageDelta: undefined, closed: false, closedTs: undefined };
+}
+
 function makeRecord(over: Partial<ExecutionRecord> = {}): ExecutionRecord {
   return {
     id: "test-1",
@@ -31,16 +38,15 @@ function makeRecord(over: Partial<ExecutionRecord> = {}): ExecutionRecord {
     task: "test task",
     startedAt: 1000,
     status: "running",
-    eventLog: [],
-    turns: 0,
+    turns: [emptyTurn()],
+    turnCount: 0,
     totalTokens: 0,
+    lastError: undefined,
     endedAt: undefined,
     result: undefined,
     error: undefined,
     agentResult: undefined,
     controller: undefined,
-    _currentTurnText: "",
-    _currentThinking: "",
     ...over,
   };
 }
@@ -75,17 +81,17 @@ describe("createRecord", () => {
     expect(r.task).toBe("review PR");
     expect(r.startedAt).toBe(2000);
 
-    // defaults
+    // defaults——turns[] 初始化为 [空 turn]，turnCount=0
     expect(r.status).toBe("running");
-    expect(r.eventLog).toEqual([]);
-    expect(r.turns).toBe(0);
+    expect(r.turns).toHaveLength(1);
+    expect(r.turns[0]).toMatchObject({ text: "", thinking: "", toolCalls: [], closed: false });
+    expect(r.turnCount).toBe(0);
     expect(r.totalTokens).toBe(0);
+    expect(r.lastError).toBeUndefined();
     expect(r.endedAt).toBeUndefined();
     expect(r.result).toBeUndefined();
     expect(r.error).toBeUndefined();
     expect(r.agentResult).toBeUndefined();
-    expect(r._currentTurnText).toBe("");
-    expect(r._currentThinking).toBe("");
   });
 
   it("stores controller when provided (background)", () => {
@@ -98,24 +104,24 @@ describe("createRecord", () => {
 });
 
 // ============================================================
-// updateFromEvent — turns / totalTokens accumulation
+// updateFromEvent — turns accumulation
 // ============================================================
 describe("updateFromEvent", () => {
-  describe("turns accumulation", () => {
-    it("increments turns on turn_end", () => {
+  describe("turnCount accumulation", () => {
+    it("increments turnCount on turn_end", () => {
       const r = makeRecord();
       updateFromEvent(r, { type: "turn_end", summary: "done" });
-      expect(r.turns).toBe(1);
+      expect(r.turnCount).toBe(1);
       updateFromEvent(r, { type: "turn_end" });
-      expect(r.turns).toBe(2);
+      expect(r.turnCount).toBe(2);
     });
 
-    it("does not increment turns on other events", () => {
+    it("does not increment turnCount on other events", () => {
       const r = makeRecord();
       updateFromEvent(r, { type: "text_delta", delta: "hi" });
       updateFromEvent(r, { type: "tool_start", toolName: "read" });
       updateFromEvent(r, { type: "message_end" });
-      expect(r.turns).toBe(0);
+      expect(r.turnCount).toBe(0);
     });
   });
 
@@ -141,157 +147,482 @@ describe("updateFromEvent", () => {
       updateFromEvent(r, { type: "message_end" });
       expect(r.totalTokens).toBe(0);
     });
-  });
 
-  // ============================================================
-  // eventLog — text_delta chunking
-  // ============================================================
-  describe("text_delta chunking", () => {
-    it("accumulates text and flushes at TEXT_OUTPUT_CHUNK boundary", () => {
+    it("stores usageDelta on current turn", () => {
       const r = makeRecord();
-      const chunk = "x".repeat(TEXT_OUTPUT_CHUNK);
-      updateFromEvent(r, { type: "text_delta", delta: chunk });
-      // exactly chunkSize → one text_output entry pushed, buffer cleared
-      const textEntries = r.eventLog.filter((e) => e.type === "text_output");
-      expect(textEntries).toHaveLength(1);
-      expect(textEntries[0].label).toBe(chunk);
-      expect(r._currentTurnText).toBe("");
-    });
-
-    it("leaves remainder in buffer below chunk size", () => {
-      const r = makeRecord();
-      updateFromEvent(r, { type: "text_delta", delta: "ab" });
-      expect(r.eventLog.filter((e) => e.type === "text_output")).toHaveLength(0);
-      expect(r._currentTurnText).toBe("ab");
-    });
-
-    it("handles super-long delta (multiple chunks via while loop)", () => {
-      const r = makeRecord();
-      const longDelta = "y".repeat(TEXT_OUTPUT_CHUNK * 3 + 10);
-      updateFromEvent(r, { type: "text_delta", delta: longDelta });
-      const textEntries = r.eventLog.filter((e) => e.type === "text_output");
-      expect(textEntries).toHaveLength(3);
-      expect(r._currentTurnText).toBe("y".repeat(10));
+      updateFromEvent(r, {
+        type: "message_end",
+        usage: { input: 10, output: 20, cacheRead: 5, cacheWrite: 3 },
+      });
+      expect(r.turns[0]?.usageDelta).toEqual({ input: 10, output: 20, cacheRead: 5, cacheWrite: 3 });
     });
   });
 
   // ============================================================
-  // eventLog — thinking_delta chunking
+  // text / thinking accumulation (替代旧 chunking)
   // ============================================================
-  describe("thinking_delta chunking", () => {
-    it("accumulates thinking and flushes at THINKING_CHUNK boundary", () => {
+  describe("text accumulation", () => {
+    it("accumulates text_delta into current turn.text (完整内容，非切片)", () => {
       const r = makeRecord();
-      const chunk = "z".repeat(THINKING_CHUNK);
-      updateFromEvent(r, { type: "thinking_delta", delta: chunk });
-      const entries = r.eventLog.filter((e) => e.type === "thinking");
-      expect(entries).toHaveLength(1);
-      expect(r._currentThinking).toBe("");
+      updateFromEvent(r, { type: "text_delta", delta: "Hello " });
+      updateFromEvent(r, { type: "text_delta", delta: "world" });
+      expect(r.turns[0]?.text).toBe("Hello world");
+    });
+
+    it("text accumulation survives long delta (>100 chars, no chunking)", () => {
+      const r = makeRecord();
+      const longText = "y".repeat(350);
+      updateFromEvent(r, { type: "text_delta", delta: longText });
+      // 完整存储，不切片——这是收口设计的核心
+      expect(r.turns[0]?.text).toBe(longText);
+      expect(r.turns).toHaveLength(1);
     });
   });
 
-  // ============================================================
-  // eventLog — tool events
-  // ============================================================
-  describe("tool events", () => {
-    it("tool_start pushes a running entry", () => {
+  describe("thinking accumulation", () => {
+    it("accumulates thinking_delta into current turn.thinking (完整内容)", () => {
       const r = makeRecord();
-      updateFromEvent(r, { type: "tool_start", toolName: "read", args: { path: "/a/b/foo.ts" } });
-      expect(r.eventLog).toHaveLength(1);
-      expect(r.eventLog[0]).toMatchObject({ type: "tool_start", label: "read foo.ts", status: "running" });
-    });
-
-    it("tool_end pushes a done entry when not error", () => {
-      const r = makeRecord();
-      updateFromEvent(r, { type: "tool_end", toolName: "bash", args: { command: "ls" } });
-      expect(r.eventLog[0]).toMatchObject({ type: "tool_end", label: "bash ls", status: "done" });
-    });
-
-    it("tool_end pushes a failed entry when isError", () => {
-      const r = makeRecord();
-      updateFromEvent(r, { type: "tool_end", toolName: "bash", args: { command: "rm" }, isError: true });
-      expect(r.eventLog[0].status).toBe("failed");
+      updateFromEvent(r, { type: "thinking_delta", delta: "Analyzing " });
+      updateFromEvent(r, { type: "thinking_delta", delta: "the problem" });
+      expect(r.turns[0]?.thinking).toBe("Analyzing the problem");
     });
   });
 
-  // ============================================================
-  // eventLog — turn_end
-  // ============================================================
-  describe("turn_end", () => {
-    it("flushes residual text/thinking buffers then pushes turn_end", () => {
+  describe("turn boundary", () => {
+    it("turn_end closes current turn; next delta opens new turn", () => {
+      const r = makeRecord();
+      updateFromEvent(r, { type: "text_delta", delta: "turn 1 text" });
+      updateFromEvent(r, { type: "turn_end" });
+      expect(r.turns[0]?.closed).toBe(true);
+      expect(r.turnCount).toBe(1);
+
+      // 新 delta 开新 turn
+      updateFromEvent(r, { type: "text_delta", delta: "turn 2 text" });
+      expect(r.turns).toHaveLength(2);
+      expect(r.turns[1]?.closed).toBe(false);
+      expect(r.turns[1]?.text).toBe("turn 2 text");
+      // turn 1 不受影响
+      expect(r.turns[0]?.text).toBe("turn 1 text");
+    });
+
+    it("turn_end closes turn and records closedTs (real wall-clock)", () => {
       const r = makeRecord();
       updateFromEvent(r, { type: "text_delta", delta: "partial" });
-      updateFromEvent(r, { type: "thinking_delta", delta: "thought" });
-      updateFromEvent(r, { type: "turn_end", summary: "summary text" });
-      // thinking flushed, text flushed, turn_end pushed
-      const types = r.eventLog.map((e) => e.type);
-      expect(types).toContain("thinking");
-      expect(types).toContain("text_output");
-      expect(types).toContain("turn_end");
-      expect(r._currentTurnText).toBe("");
-      expect(r._currentThinking).toBe("");
-    });
-
-    it("turn_end label comes from event.summary", () => {
-      const r = makeRecord();
-      updateFromEvent(r, { type: "turn_end", summary: "completed refactor" });
-      const turnEntry = r.eventLog.find((e) => e.type === "turn_end");
-      expect(turnEntry?.label).toBe("completed refactor");
-    });
-
-    it("truncates long summary to TURN_SUMMARY_MAX", () => {
-      const r = makeRecord();
-      const longSummary = "s".repeat(TURN_SUMMARY_MAX + 20);
-      updateFromEvent(r, { type: "turn_end", summary: longSummary });
-      const turnEntry = r.eventLog.find((e) => e.type === "turn_end");
-      expect(turnEntry?.label.length).toBe(TURN_SUMMARY_MAX);
-    });
-
-    it("turn_end label defaults to 'turn' when no summary", () => {
-      const r = makeRecord();
+      const before = Date.now();
       updateFromEvent(r, { type: "turn_end" });
-      const turnEntry = r.eventLog.find((e) => e.type === "turn_end");
-      expect(turnEntry?.label).toBe("turn");
+      const after = Date.now();
+      expect(r.turns[0]?.closed).toBe(true);
+      expect(r.turns[0]?.closedTs).toBeGreaterThanOrEqual(before);
+      expect(r.turns[0]?.closedTs).toBeLessThanOrEqual(after);
+      // turn_end 不再覆盖已累积的 text（旧 dead branch 已移除）
+      expect(r.turns[0]?.text).toBe("partial");
+      expect(r.turnCount).toBe(1);
+    });
+
+    it("turn_end clears lastError (transient error recovery → success)", () => {
+      // 瞬态 error 到达后，若 turn 正常闭合，lastError 应清空——
+      // 否则 session-runner 会据残留 lastError 把成功误判为 success=false。
+      const r = makeRecord();
+      updateFromEvent(r, { type: "error", message: "transient" });
+      expect(r.lastError).toBe("transient");
+      updateFromEvent(r, { type: "turn_end" });
+      expect(r.lastError).toBeUndefined();
+    });
+
+    it("turn_end after turn_end: next delta opens 3rd turn (not mutate 2nd)", () => {
+      // 连续两次 turn_end 后再发 text_delta，应 push 第 3 个 turn，
+      // 而非回填已 closed 的第 2 个空 turn。
+      const r = makeRecord();
+      updateFromEvent(r, { type: "text_delta", delta: "t1" });
+      updateFromEvent(r, { type: "turn_end" });
+      updateFromEvent(r, { type: "turn_end" }); // 第 2 个空 turn 立即 closed
+      updateFromEvent(r, { type: "text_delta", delta: "t3" });
+      expect(r.turns).toHaveLength(3);
+      expect(r.turns[0]?.text).toBe("t1");
+      expect(r.turns[1]?.text).toBe(""); // 第 2 个空 turn 未被回填
+      expect(r.turns[2]?.text).toBe("t3");
     });
   });
 
   // ============================================================
-  // eventLog — error event (NEW: appends entry, opposite of old)
+  // tool events → turn.toolCalls
+  // ============================================================
+  describe("tool events", () => {
+    it("tool_start pushes a running ToolCall into current turn", () => {
+      const r = makeRecord();
+      updateFromEvent(r, { type: "tool_start", toolName: "read", args: { path: "/a/b/foo.ts" } });
+      expect(r.turns[0]?.toolCalls).toHaveLength(1);
+      expect(r.turns[0]?.toolCalls[0]).toMatchObject({
+        toolName: "read",
+        _status: "running",
+      });
+    });
+
+    it("tool_end matches back running toolCall and sets result/status", () => {
+      const r = makeRecord();
+      updateFromEvent(r, { type: "tool_start", toolName: "bash", args: { command: "ls" } });
+      const result = { content: [{ type: "text", text: "file.ts" }] };
+      updateFromEvent(r, { type: "tool_end", toolName: "bash", args: { command: "ls" }, result });
+      const tc = r.turns[0]?.toolCalls[0];
+      expect(tc).toMatchObject({ toolName: "bash", _status: "done", isError: false });
+      expect(tc?.result).toBe(result);
+    });
+
+    it("tool_end sets failed status when isError", () => {
+      const r = makeRecord();
+      updateFromEvent(r, { type: "tool_start", toolName: "bash", args: { command: "rm" } });
+      updateFromEvent(r, { type: "tool_end", toolName: "bash", args: { command: "rm" }, isError: true });
+      expect(r.turns[0]?.toolCalls[0]?._status).toBe("failed");
+      expect(r.turns[0]?.toolCalls[0]?.isError).toBe(true);
+    });
+
+    it("tool_end without matching tool_start pushes a completed ToolCall", () => {
+      const r = makeRecord();
+      updateFromEvent(r, { type: "tool_end", toolName: "external", args: {} });
+      expect(r.turns[0]?.toolCalls).toHaveLength(1);
+      expect(r.turns[0]?.toolCalls[0]?._status).toBe("done");
+    });
+
+    it("LIFO matching: same-name tool twice, tool_end matches last running", () => {
+      // 同 turn 内两次 tool_start: bash → tool_end: bash 倒序匹配最后一个 running。
+      // 正序匹配会错误地把 result 填到第一个 bash，留下第二个 running。
+      const r = makeRecord();
+      updateFromEvent(r, { type: "tool_start", toolName: "bash", args: { command: "cmd-a" } });
+      updateFromEvent(r, { type: "tool_start", toolName: "bash", args: { command: "cmd-b" } });
+      const resultA = { content: [{ type: "text", text: "A" }] };
+      updateFromEvent(r, { type: "tool_end", toolName: "bash", args: { command: "cmd-b" }, result: resultA });
+      const calls = r.turns[0]?.toolCalls ?? [];
+      expect(calls).toHaveLength(2);
+      // 第二个 bash（cmd-b）命中 LIFO，标记 done + result=A
+      expect(calls[1]?._status).toBe("done");
+      expect(calls[1]?.result).toBe(resultA);
+      // 第一个 bash（cmd-a）仍未匹配，仍 running
+      expect(calls[0]?._status).toBe("running");
+      expect(calls[0]?.result).toBeUndefined();
+    });
+
+    it("tool_end without result leaves result undefined (SDK may omit result)", () => {
+      // SDK 契约下 tool_end 的 result 可为 undefined——不应抛错，getEventLog 仍正常派生。
+      const r = makeRecord();
+      updateFromEvent(r, { type: "tool_start", toolName: "read", args: { path: "/a.ts" } });
+      updateFromEvent(r, { type: "tool_end", toolName: "read", args: { path: "/a.ts" } });
+      expect(r.turns[0]?.toolCalls[0]?.result).toBeUndefined();
+      expect(r.turns[0]?.toolCalls[0]?._status).toBe("done");
+      // getEventLog 仍能派生 tool_start/tool_end 对
+      const log = getEventLog(r);
+      expect(log.map((e) => e.type)).toEqual(["tool_start", "tool_end", "turn_end"].slice(0, 2));
+    });
+
+    it("tool_end matches running toolCall across turns (lagged SDK event)", () => {
+      // SDK 在 turn_end 后仍可能补发滞后的 tool_end——跨 turn 扫描兜底，
+      // 不误 push 幽灵 ToolCall。
+      const r = makeRecord();
+      updateFromEvent(r, { type: "tool_start", toolName: "read", args: { path: "/a.ts" } });
+      updateFromEvent(r, { type: "turn_end" }); // turn[0] closed，read 仍 running
+      updateFromEvent(r, { type: "tool_end", toolName: "read", args: { path: "/a.ts" } });
+      // 匹配到 turn[0] 的 read（跨 turn 扫描命中），未产生幽灵 ToolCall
+      expect(r.turns).toHaveLength(1); // 没有 turn[1]——tool_end 单独不开新 turn
+      expect(r.turns[0]?.toolCalls[0]?._status).toBe("done");
+      expect(r.turns[0]?.toolCalls).toHaveLength(1);
+    });
+  });
+
+  // ============================================================
+  // error event → record.lastError
   // ============================================================
   describe("error event", () => {
-    it("appends an error entry to eventLog", () => {
+    it("stores error message in record.lastError", () => {
       const r = makeRecord();
       updateFromEvent(r, { type: "error", message: "boom" });
-      expect(r.eventLog).toHaveLength(1);
-      expect(r.eventLog[0]).toMatchObject({ type: "error", label: "boom" });
+      expect(r.lastError).toBe("boom");
+    });
+
+    it("message_end with error field also sets lastError", () => {
+      const r = makeRecord();
+      updateFromEvent(r, { type: "message_end", error: "provider error" });
+      expect(r.lastError).toBe("provider error");
     });
   });
 
   // ============================================================
-  // ring buffer
+  // compaction (no-op)
   // ============================================================
-  describe("ring buffer", () => {
-    it("keeps at most MAX_EVENT_LOG_ENTRIES, dropping oldest", () => {
+  describe("compaction", () => {
+    it("compaction is a no-op", () => {
       const r = makeRecord();
-      for (let i = 0; i < MAX_EVENT_LOG_ENTRIES + 5; i++) {
-        updateFromEvent(r, { type: "tool_start", toolName: `tool${i}` });
-      }
-      expect(r.eventLog.length).toBe(MAX_EVENT_LOG_ENTRIES);
-      // oldest 5 dropped
-      expect(r.eventLog[0].label).toBe("tool5");
-      expect(r.eventLog[r.eventLog.length - 1].label).toBe(`tool${MAX_EVENT_LOG_ENTRIES + 4}`);
-    });
-  });
-
-  // ============================================================
-  // message_end / compaction do not produce eventLog entries
-  // ============================================================
-  describe("non-eventLog events", () => {
-    it("message_end and compaction produce no eventLog entries", () => {
-      const r = makeRecord();
-      updateFromEvent(r, { type: "message_end", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } });
       updateFromEvent(r, { type: "compaction" });
-      expect(r.eventLog).toHaveLength(0);
+      expect(r.turns).toHaveLength(1);
+      expect(r.turnCount).toBe(0);
+      expect(r.totalTokens).toBe(0);
     });
+  });
+});
+
+// ============================================================
+// getEventLog — 派生事件序列
+// ============================================================
+describe("getEventLog", () => {
+  it("returns empty array for fresh record (empty turn, not closed)", () => {
+    const r = makeRecord();
+    expect(getEventLog(r)).toEqual([]);
+  });
+
+  it("derives tool_start/tool_end pairs from turns[].toolCalls", () => {
+    const r = makeRecord();
+    updateFromEvent(r, { type: "tool_start", toolName: "read", args: { path: "/x.ts" } });
+    updateFromEvent(r, { type: "tool_end", toolName: "read", args: { path: "/x.ts" } });
+    const log = getEventLog(r);
+    expect(log.map((e) => e.type)).toEqual(["tool_start", "tool_end"]);
+    expect(log[0]).toMatchObject({ type: "tool_start", label: "read x.ts", status: "running" });
+    expect(log[1]).toMatchObject({ type: "tool_end", label: "read x.ts", status: "done" });
+  });
+
+  it("running toolCall (no tool_end yet) derives only tool_start", () => {
+    const r = makeRecord();
+    updateFromEvent(r, { type: "tool_start", toolName: "read", args: { path: "/x.ts" } });
+    const log = getEventLog(r);
+    expect(log.map((e) => e.type)).toEqual(["tool_start"]);
+  });
+
+  it("derives turn_end after turn closes (label from turn text)", () => {
+    const r = makeRecord();
+    updateFromEvent(r, { type: "text_delta", delta: "Result is 42" });
+    updateFromEvent(r, { type: "turn_end" });
+    const log = getEventLog(r);
+    const turnEntry = log.find((e) => e.type === "turn_end");
+    expect(turnEntry?.label).toBe("Result is 42");
+  });
+
+  it("turn_end label defaults to 'turn' when turn has no text", () => {
+    const r = makeRecord();
+    updateFromEvent(r, { type: "turn_end" });
+    const log = getEventLog(r);
+    const turnEntry = log.find((e) => e.type === "turn_end");
+    expect(turnEntry?.label).toBe("turn");
+  });
+
+  it("truncates long turn text to TURN_SUMMARY_MAX in turn_end label", () => {
+    const r = makeRecord();
+    const longText = "s".repeat(TURN_SUMMARY_MAX + 20);
+    updateFromEvent(r, { type: "text_delta", delta: longText });
+    updateFromEvent(r, { type: "turn_end" });
+    const log = getEventLog(r);
+    const turnEntry = log.find((e) => e.type === "turn_end");
+    expect(turnEntry?.label.length).toBe(TURN_SUMMARY_MAX);
+  });
+
+  it("appends error entry when record.lastError is set", () => {
+    const r = makeRecord();
+    updateFromEvent(r, { type: "error", message: "crashed" });
+    const log = getEventLog(r);
+    expect(log[log.length - 1]).toMatchObject({ type: "error", label: "crashed" });
+  });
+
+  it("multi-turn: events ordered across turns", () => {
+    const r = makeRecord();
+    // turn 1: tool A + text
+    updateFromEvent(r, { type: "tool_start", toolName: "read", args: { path: "/a.ts" } });
+    updateFromEvent(r, { type: "tool_end", toolName: "read", args: { path: "/a.ts" } });
+    updateFromEvent(r, { type: "text_delta", delta: "done turn 1" });
+    updateFromEvent(r, { type: "turn_end" });
+    // turn 2: tool B
+    updateFromEvent(r, { type: "tool_start", toolName: "edit", args: { path: "/b.ts" } });
+    updateFromEvent(r, { type: "turn_end" });
+    const types = getEventLog(r).map((e) => e.type);
+    expect(types).toEqual([
+      "tool_start", "tool_end", "turn_end",  // turn 1
+      "tool_start", "turn_end",               // turn 2 (tool_start only, no tool_end)
+    ]);
+  });
+
+  it("uses real wall-clock ts (tool: startedTs, turn_end: closedTs)", () => {
+    // ts 不再是合成 +1，而是真实 Date.now()——消费方可按时序/时长分析。
+    const before = Date.now();
+    const r = makeRecord({ startedAt: before });
+    updateFromEvent(r, { type: "tool_start", toolName: "read", args: { path: "/a.ts" } });
+    const afterToolStart = Date.now();
+    updateFromEvent(r, { type: "tool_end", toolName: "read", args: { path: "/a.ts" } });
+    updateFromEvent(r, { type: "turn_end" });
+    const afterTurnEnd = Date.now();
+    const log = getEventLog(r);
+    const toolStartTs = log[0]?.ts;
+    const turnEndTs = log[2]?.ts;
+    expect(toolStartTs).toBeGreaterThanOrEqual(before);
+    expect(toolStartTs).toBeLessThanOrEqual(afterToolStart);
+    expect(turnEndTs).toBeGreaterThanOrEqual(afterToolStart);
+    expect(turnEndTs).toBeLessThanOrEqual(afterTurnEnd);
+  });
+});
+
+// ============================================================
+// getCurrentActivity — 派生活动行
+// ============================================================
+describe("getCurrentActivity", () => {
+  it("returns undefined when status is not running", () => {
+    const r = makeRecord({ status: "done" });
+    expect(getCurrentActivity(r)).toBeUndefined();
+  });
+
+  it("returns undefined when turn is closed", () => {
+    const r = makeRecord();
+    updateFromEvent(r, { type: "turn_end" });
+    expect(getCurrentActivity(r)).toBeUndefined();
+  });
+
+  it("prefers running tool over thinking/text", () => {
+    const r = makeRecord();
+    updateFromEvent(r, { type: "tool_start", toolName: "edit", args: { path: "/a.ts" } });
+    r.turns[0]!.thinking = "thinking...";
+    r.turns[0]!.text = "text...";
+    expect(getCurrentActivity(r)).toEqual({ type: "tool", label: "edit a.ts" });
+  });
+
+  it("falls back to thinking when no running tool", () => {
+    const r = makeRecord();
+    updateFromEvent(r, { type: "tool_start", toolName: "read", args: { path: "/a.ts" } });
+    updateFromEvent(r, { type: "tool_end", toolName: "read", args: { path: "/a.ts" } });
+    r.turns[0]!.thinking = "pondering";
+    expect(getCurrentActivity(r)).toEqual({ type: "thinking", label: "pondering" });
+  });
+
+  it("falls back to text when no tool/thinking", () => {
+    const r = makeRecord();
+    r.turns[0]!.text = "writing output";
+    expect(getCurrentActivity(r)).toEqual({ type: "text", label: "writing output" });
+  });
+
+  it("text label takes START not tail fragment (regression: text: } bug)", () => {
+    // 原始 bug：compact view 显示流式文本的末尾碎片（如 "text: }"）而非开头。
+    // getCurrentActivity 必须取 turn.text 开头——本测试在 bug 回归时会失败。
+    const r = makeRecord();
+    updateFromEvent(r, { type: "text_delta", delta: "Hello world this is the response start" });
+    updateFromEvent(r, { type: "text_delta", delta: " ... more content ... }" });
+    const activity = getCurrentActivity(r);
+    expect(activity?.type).toBe("text");
+    // label 以开头而非尾巴开始
+    expect(activity?.label.startsWith("Hello world")).toBe(true);
+    // 绝不以尾巴碎片开头
+    expect(activity?.label.startsWith("}")).toBe(false);
+    expect(activity?.label.startsWith(" ... more")).toBe(false);
+  });
+
+  it("truncates text label to ACTIVITY_LABEL_MAX (60)", () => {
+    const r = makeRecord();
+    const longText = "y".repeat(120);
+    r.turns[0]!.text = longText;
+    const activity = getCurrentActivity(r);
+    expect(activity?.label.length).toBe(60);
+    expect(activity?.label).toBe(longText.slice(0, 60));
+  });
+
+  it("returns undefined when idle (empty turn)", () => {
+    const r = makeRecord();
+    expect(getCurrentActivity(r)).toBeUndefined();
+  });
+});
+
+// ============================================================
+// getFullText — 聚合文本
+// ============================================================
+describe("getFullText", () => {
+  it("returns empty string for fresh record", () => {
+    const r = makeRecord();
+    expect(getFullText(r)).toBe("");
+  });
+
+  it("returns single turn text", () => {
+    const r = makeRecord();
+    updateFromEvent(r, { type: "text_delta", delta: "Hello world" });
+    expect(getFullText(r)).toBe("Hello world");
+  });
+
+  it("joins multiple turns with double newline", () => {
+    const r = makeRecord();
+    updateFromEvent(r, { type: "text_delta", delta: "Turn 1" });
+    updateFromEvent(r, { type: "turn_end" });
+    updateFromEvent(r, { type: "text_delta", delta: "Turn 2" });
+    expect(getFullText(r)).toBe("Turn 1\n\nTurn 2");
+  });
+
+  it("skips empty turns", () => {
+    const r = makeRecord();
+    updateFromEvent(r, { type: "text_delta", delta: "Turn 1" });
+    updateFromEvent(r, { type: "turn_end" });
+    updateFromEvent(r, { type: "turn_end" }); // 空 turn 2
+    updateFromEvent(r, { type: "text_delta", delta: "Turn 3" });
+    expect(getFullText(r)).toBe("Turn 1\n\nTurn 3");
+  });
+
+  it("aggregates multiple text_deltas within a single turn", () => {
+    const r = makeRecord();
+    updateFromEvent(r, { type: "text_delta", delta: "Hello " });
+    updateFromEvent(r, { type: "text_delta", delta: "world" });
+    updateFromEvent(r, { type: "text_delta", delta: "!" });
+    expect(getFullText(r)).toBe("Hello world!");
+  });
+});
+
+// ============================================================
+// getAllToolCalls / getTotalUsage — 聚合派生
+// ============================================================
+describe("getAllToolCalls", () => {
+  it("flattens toolCalls across turns", () => {
+    const r = makeRecord();
+    updateFromEvent(r, { type: "tool_start", toolName: "read", args: { path: "/a.ts" } });
+    updateFromEvent(r, { type: "tool_end", toolName: "read", args: { path: "/a.ts" } });
+    updateFromEvent(r, { type: "turn_end" });
+    updateFromEvent(r, { type: "tool_start", toolName: "edit", args: { path: "/b.ts" } });
+    const calls = getAllToolCalls(r);
+    expect(calls).toHaveLength(2);
+    expect(calls.map((c) => c.toolName)).toEqual(["read", "edit"]);
+  });
+
+  it("strips internal _status / startedTs (exported shape is clean ToolCall)", () => {
+    // 导出的 ToolCall 不应泄漏内部状态机字段（_status / startedTs）——
+    // 这些是 execution-record 内部实现细节。
+    const r = makeRecord();
+    updateFromEvent(r, { type: "tool_start", toolName: "read", args: { path: "/a.ts" } });
+    const calls = getAllToolCalls(r);
+    const tc = calls[0];
+    expect(tc).toBeDefined();
+    // 导出形状只有 4 个语义字段
+    expect(Object.keys(tc!).sort()).toEqual(["args", "isError", "result", "toolName"]);
+    // 内部字段不存在
+    expect((tc as Record<string, unknown>)._status).toBeUndefined();
+    expect((tc as Record<string, unknown>).startedTs).toBeUndefined();
+  });
+});
+
+describe("getTotalUsage", () => {
+  it("returns undefined when no usage", () => {
+    const r = makeRecord();
+    expect(getTotalUsage(r)).toBeUndefined();
+  });
+
+  it("aggregates usageDelta across turns", () => {
+    const r = makeRecord();
+    updateFromEvent(r, { type: "message_end", usage: { input: 10, output: 20, cacheRead: 5, cacheWrite: 3 } });
+    updateFromEvent(r, { type: "turn_end" });
+    updateFromEvent(r, { type: "message_end", usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } });
+    const usage = getTotalUsage(r);
+    expect(usage).toEqual({ input: 11, output: 22, cacheRead: 5, cacheWrite: 3, total: 41, cost: 0 });
+  });
+
+  it("accumulates cost from message_end usage.cost", () => {
+    const r = makeRecord();
+    updateFromEvent(r, { type: "message_end", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0.5 } });
+    updateFromEvent(r, { type: "message_end", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0.25 } });
+    const usage = getTotalUsage(r);
+    expect(usage?.cost).toBe(0.75);
+  });
+
+  it("accumulates multiple message_end within same turn (no usage loss)", () => {
+    // 同 turn 内多次 message_end——usageDelta 按 field 累加（非覆盖），不丢 usage。
+    const r = makeRecord();
+    updateFromEvent(r, { type: "message_end", usage: { input: 10, output: 20, cacheRead: 5, cacheWrite: 3 } });
+    updateFromEvent(r, { type: "message_end", usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } });
+    const usage = getTotalUsage(r);
+    expect(usage).toEqual({ input: 11, output: 22, cacheRead: 5, cacheWrite: 3, total: 41, cost: 0 });
   });
 });
 
@@ -324,7 +655,6 @@ describe("tryTransition", () => {
   it("first transition wins in concurrent race (running → done beats running → cancelled)", () => {
     const r = makeRecord({ status: "running" });
     expect(tryTransition(r, "done")).toBe(true);
-    // second call sees status !== running
     expect(tryTransition(r, "cancelled")).toBe(false);
     expect(r.status).toBe("done");
   });
@@ -334,17 +664,16 @@ describe("tryTransition", () => {
 // completeRecord
 // ============================================================
 describe("completeRecord", () => {
-  it("writes outcome fields without resetting turns/totalTokens", () => {
-    const r = makeRecord({ turns: 5, totalTokens: 42 });
-    r.status = "done"; // simulate tryTransition already ran
+  it("writes outcome fields without resetting turnCount/totalTokens", () => {
+    const r = makeRecord({ turnCount: 5, totalTokens: 42 });
+    r.status = "done";
     completeRecord(r, SAMPLE_RESULT, "done");
     expect(r.status).toBe("done");
     expect(r.endedAt).toBeTypeOf("number");
     expect(r.agentResult).toBe(SAMPLE_RESULT);
     expect(r.result).toBe("done");
     expect(r.error).toBeUndefined();
-    // turns/totalTokens not reset
-    expect(r.turns).toBe(5);
+    expect(r.turnCount).toBe(5);
     expect(r.totalTokens).toBe(42);
   });
 
@@ -363,7 +692,7 @@ describe("completeRecord", () => {
 describe("projections", () => {
   describe("project", () => {
     it("returns SubagentToolDetails with all fields", () => {
-      const r = makeRecord({ turns: 3, totalTokens: 100 });
+      const r = makeRecord({ turnCount: 3, totalTokens: 100 });
       updateFromEvent(r, { type: "tool_start", toolName: "read", args: { path: "/x.ts" } });
       const d = project(r);
       expect(d.status).toBe("running");
@@ -371,44 +700,42 @@ describe("projections", () => {
       expect(d.model).toBe("test-model");
       expect(d.turns).toBe(3);
       expect(d.totalTokens).toBe(100);
-      expect(d.eventLog).toHaveLength(1);
+      expect(d.eventLog).toHaveLength(1); // tool_start derived
       expect(d.currentActivity).toEqual({ type: "tool", label: "read x.ts" });
     });
 
-    it("eventLog is a defensive copy (mutating projection does not affect record)", () => {
+    it("eventLog is a fresh array each call (派生，非存储引用)", () => {
       const r = makeRecord();
       updateFromEvent(r, { type: "tool_start", toolName: "read" });
-      const d = project(r);
-      d.eventLog.push({ type: "error", label: "x", ts: 0 });
-      expect(r.eventLog).toHaveLength(1);
+      const d1 = project(r);
+      const d2 = project(r);
+      expect(d1.eventLog).not.toBe(d2.eventLog); // 不同数组实例
+      expect(d1.eventLog).toEqual(d2.eventLog);   // 内容相同
     });
 
     it("currentActivity is undefined when status is not running", () => {
       const r = makeRecord({ status: "done" });
-      const d = project(r);
-      expect(d.currentActivity).toBeUndefined();
+      expect(project(r).currentActivity).toBeUndefined();
     });
 
-    it("outputs mode + sessionFile (T2: action refactor 投影)", () => {
-      const r = makeRecord({ mode: "background", turns: 2 });
+    it("outputs mode + sessionFile", () => {
+      const r = makeRecord({ mode: "background", turnCount: 2 });
       r.sessionFile = "bg-1-abc.jsonl";
       const d = project(r);
       expect(d.mode).toBe("background");
       expect(d.sessionFile).toBe("bg-1-abc.jsonl");
     });
 
-    it("sessionFile is undefined when record.sessionFile unset (窗口期)", () => {
+    it("sessionFile is undefined when record.sessionFile unset", () => {
       const r = makeRecord();
-      const d = project(r);
-      expect(d.sessionFile).toBeUndefined();
+      expect(project(r).sessionFile).toBeUndefined();
     });
 
     it("currentActivity prefers tool over thinking over text", () => {
       const r = makeRecord();
-      // tool_start (running) → tool wins
       updateFromEvent(r, { type: "tool_start", toolName: "edit", args: { path: "/a.ts" } });
-      r._currentThinking = "thinking...";
-      r._currentTurnText = "text...";
+      r.turns[0]!.thinking = "thinking...";
+      r.turns[0]!.text = "text...";
       expect(project(r).currentActivity).toEqual({ type: "tool", label: "edit a.ts" });
     });
 
@@ -416,13 +743,13 @@ describe("projections", () => {
       const r = makeRecord();
       updateFromEvent(r, { type: "tool_start", toolName: "read", args: { path: "/a.ts" } });
       updateFromEvent(r, { type: "tool_end", toolName: "read", args: { path: "/a.ts" } });
-      r._currentThinking = "pondering";
+      r.turns[0]!.thinking = "pondering";
       expect(project(r).currentActivity).toEqual({ type: "thinking", label: "pondering" });
     });
 
     it("currentActivity falls back to text when no tool/thinking", () => {
       const r = makeRecord();
-      r._currentTurnText = "writing output";
+      r.turns[0]!.text = "writing output";
       expect(project(r).currentActivity).toEqual({ type: "text", label: "writing output" });
     });
 
@@ -434,7 +761,7 @@ describe("projections", () => {
 
   describe("snapshot", () => {
     it("returns a readonly snapshot with identity + status fields", () => {
-      const r = makeRecord({ turns: 2, status: "done", endedAt: 5000, result: "ok" });
+      const r = makeRecord({ turnCount: 2, status: "done", endedAt: 5000, result: "ok" });
       const s = snapshot(r);
       expect(s.id).toBe("test-1");
       expect(s.agent).toBe("worker");
@@ -446,22 +773,13 @@ describe("projections", () => {
       expect(s.result).toBe("ok");
     });
 
-    it("eventLog is a defensive copy", () => {
-      const r = makeRecord();
-      updateFromEvent(r, { type: "tool_start", toolName: "x" });
-      const s = snapshot(r);
-      s.eventLog.length = 0;
-      expect(r.eventLog).toHaveLength(1);
-    });
-
-    it("outputs sessionFile (T2)", () => {
+    it("outputs sessionFile", () => {
       const r = makeRecord();
       r.sessionFile = "s.jsonl";
-      const s = snapshot(r);
-      expect(s.sessionFile).toBe("s.jsonl");
+      expect(snapshot(r).sessionFile).toBe("s.jsonl");
     });
 
-    it("sessionFile is undefined when unset (T2)", () => {
+    it("sessionFile is undefined when unset", () => {
       const r = makeRecord();
       expect(snapshot(r).sessionFile).toBeUndefined();
     });
@@ -471,15 +789,14 @@ describe("projections", () => {
     it("returns PersistedAgentRecord with truncated previews", () => {
       const longTask = "t".repeat(300);
       const longText = "r".repeat(300);
-      const r = makeRecord({ task: longTask, turns: 1, status: "done" });
+      const r = makeRecord({ task: longTask, turnCount: 1, status: "done" });
       r.status = "done";
-      // sessionFile 由 session-runner 写入 record.sessionFile（规范源，早于 agentResult 冠结）。
       r.sessionFile = "sess.jsonl";
       completeRecord(r, { ...SAMPLE_RESULT, text: longText, sessionFile: "sess.jsonl" }, "done");
       const p = toPersisted(r, "/cwd", "session-xyz");
       expect(p.id).toBe("test-1");
-      expect(p.taskPreview.length).toBe(200);
-      expect(p.resultPreview?.length).toBe(200);
+      expect(p.taskPreview.length).toBe(PREVIEW_MAX);
+      expect(p.resultPreview?.length).toBe(PREVIEW_MAX);
       expect(p.cwd).toBe("/cwd");
       expect(p.sessionId).toBe("session-xyz");
       expect(p.sessionFile).toBe("sess.jsonl");
@@ -488,8 +805,7 @@ describe("projections", () => {
 
     it("resultPreview is undefined when no result", () => {
       const r = makeRecord();
-      const p = toPersisted(r, "/cwd");
-      expect(p.resultPreview).toBeUndefined();
+      expect(toPersisted(r, "/cwd").resultPreview).toBeUndefined();
     });
   });
 });
@@ -526,9 +842,50 @@ describe("extractLabelFromArgs", () => {
     expect(extractLabelFromArgs("web_fetch", { url: "https://example.com" })).toBe("web_fetch https://example.com");
   });
 
-  it("truncates long labels to EVENT_LOG_LABEL_MAX", () => {
-    const longQuery = "q".repeat(EVENT_LOG_LABEL_MAX + 50);
-    const label = extractLabelFromArgs("web_search", { query: longQuery });
-    expect(label.length).toBe("web_search ".length + EVENT_LOG_LABEL_MAX);
+  it("truncates long labels to TOOL_LABEL_MAX (TUI column-width stability)", () => {
+    // 旧 foldEntries 的设计意图：保持 TUI 列宽稳定，避免 10KB bash 命令撑爆 compact view。
+    const longCmd = "x".repeat(200);
+    const label = extractLabelFromArgs("bash", { command: longCmd });
+    // label = "bash " + 截断到 100 的 command
+    const expectedCmd = "x".repeat(100);
+    expect(label).toBe(`bash ${expectedCmd}`);
+    expect(label.length).toBe("bash ".length + 100);
+  });
+
+  it("truncates long path basename", () => {
+    const longName = "f".repeat(150) + ".ts";
+    const label = extractLabelFromArgs("read", { path: `/dir/${longName}` });
+    // basename 截断到 100
+    expect(label.length).toBe("read ".length + 100);
+  });
+
+  it("truncates long query and url", () => {
+    const longQuery = "q".repeat(150);
+    expect(extractLabelFromArgs("web_search", { query: longQuery }).length).toBe("web_search ".length + 100);
+    const longUrl = "u".repeat(150);
+    expect(extractLabelFromArgs("web_fetch", { url: longUrl }).length).toBe("web_fetch ".length + 100);
+  });
+});
+
+// ============================================================
+// computeElapsedSeconds — 共享 helper
+// ============================================================
+describe("computeElapsedSeconds", () => {
+  it("computes floor((endedAt - startedAt) / 1000)", () => {
+    expect(computeElapsedSeconds({ startedAt: 0, endedAt: 1500 })).toBe(1);
+    expect(computeElapsedSeconds({ startedAt: 1000, endedAt: 1599 })).toBe(0);
+    expect(computeElapsedSeconds({ startedAt: 1000, endedAt: 2600 })).toBe(1);
+  });
+
+  it("uses Date.now() when endedAt is undefined (running state)", () => {
+    const startedAt = Date.now() - 3000;
+    const secs = computeElapsedSeconds({ startedAt });
+    // 至少 2 秒（允许调度延迟），不超过 10 秒（防止假死）
+    expect(secs).toBeGreaterThanOrEqual(2);
+    expect(secs).toBeLessThan(10);
+  });
+
+  it("handles identical startedAt/endedAt (0 seconds)", () => {
+    expect(computeElapsedSeconds({ startedAt: 5000, endedAt: 5000 })).toBe(0);
   });
 });

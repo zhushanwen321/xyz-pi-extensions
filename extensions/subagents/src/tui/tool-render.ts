@@ -26,7 +26,6 @@ import type {
 import {
   extractAgentName,
   firstLine,
-  foldEntries,
   formatElapsedSeconds,
   formatEventLine,
   formatTokens,
@@ -281,14 +280,13 @@ class SubagentResultComponent implements Component {
     lines.push(truncLine(buildStatusLineFromSync(sync, theme), width));
 
     // 滚动区：最近 N 条 eventLog（不含 turn_end），running 和 terminal 态统一展示。
-    const scrollEntries = foldEntries(sync.eventLog.filter((e) => e.type !== "turn_end"));
+    // eventLog 现已从 turns[] 派生（离散语义事件，无 text/thinking 切片碎片），无需 fold。
+    const scrollEntries = sync.eventLog.filter((e) => e.type !== "turn_end");
 
+    // currentActivity 与 eventLog 末条不再重复（currentActivity 从 turns[] 末尾推导，
+    // eventLog 末条是已完成的 tool_end/turn_end，语义不同），无需去重。
     if (sync.status === "running" && sync.currentActivity) {
-      const lastEntry = scrollEntries[scrollEntries.length - 1];
-      const sameAsLast = lastEntry !== undefined && activityMatchesEntry(sync.currentActivity, lastEntry);
-      if (!sameAsLast) {
-        lines.push(truncLine(buildActivityLine(sync.currentActivity, theme), width));
-      }
+      lines.push(truncLine(buildActivityLine(sync.currentActivity, theme), width));
     }
 
     for (const entry of scrollEntries.slice(-COMPACT_SCROLL_LINES)) {
@@ -334,13 +332,10 @@ class SubagentResultComponent implements Component {
     if (!("syncResponse" in d)) return [truncLine(theme.fg("warning", "(subagent: no sync response)"), width)];
     const sync = d.syncResponse;
 
-    // sync expanded：完整 eventLog + 交付物。
-    // 与 compact 同样先 fold（相邻同类 text/thinking 合并成一条，label 取组首），
-    // 避免逐碎片展示 "text: Hello" / "text: world" / "text: }"。一条 message 一行。
-    const foldedLog = foldEntries(sync.eventLog);
+    // sync expanded：完整 eventLog（从 turns[] 派生，离散语义事件）+ 交付物。
     lines.push(truncLine(buildStatusLineFromSync(sync, theme), width));
     lines.push("");
-    for (const entry of foldedLog) {
+    for (const entry of sync.eventLog) {
       lines.push(truncLine(`${theme.fg("dim", STREAM_PREFIX)}${formatEventLine(entry, theme)}`, width));
     }
     const delivery = buildDeliveryLineFromSync(sync, theme);
@@ -489,27 +484,6 @@ function buildDeliveryLineFromSync(s: SyncResponse, theme: ThemeLike): string | 
 function firstLineSanitized(text?: string): string {
   return sanitizeLabel(firstLine(text));
 }
-
-/**
- * 判断 currentActivity 是否与某条 eventLog 末条语义重复。
- *
- * running 时 currentActivity（实时 streaming 锚点）可能正好是 eventLog 末条
- * 正在跑的 tool_start（同 label）。此时滚动区不再重复铺该条，避免两行近乎相同。
- *
- *   activity.type === "tool" 且 entry 是 tool_start + status:"running" + 同 label → 重复
- *   其他情况 → 不重复（thinking/text 的 streaming 与 eventLog 分片语义不同）
- */
-function activityMatchesEntry(
-  activity: { type: "tool" | "text" | "thinking"; label: string },
-  entry: { type: string; label: string; status?: string },
-): boolean {
-  if (activity.type !== "tool") return false;
-  if (entry.type !== "tool_start") return false;
-  if (entry.status !== "running") return false;
-  return sanitizeLabel(activity.label) === sanitizeLabel(entry.label);
-}
-
-// foldEntries 已上移到 ./format.ts 共享（compact / expanded / preview / detail 统一调用）。
 
 // ============================================================
 // list 渲染 helper（action:"list" 分支）

@@ -381,7 +381,7 @@ export class SubagentService {
     // durationMs 用真实耗时（startedAt → now），避免耗时统计恒为 0 失真。
     const cancelledResult: AgentResult = {
       text: "",
-      turns: record.turns,
+      turns: record.turnCount,
       durationMs: Date.now() - record.startedAt,
       success: false,
       error: "cancelled by user",
@@ -417,7 +417,7 @@ export class SubagentService {
     // durationMs 用真实耗时（startedAt → now），避免失败统计恒为 0 失真。
     const failedResult: AgentResult = {
       text: "",
-      turns: record.turns,
+      turns: record.turnCount,
       durationMs: Date.now() - record.startedAt,
       success: false,
       error: errMsg,

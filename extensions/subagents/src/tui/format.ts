@@ -182,45 +182,6 @@ export function sanitizeLabel(label: string): string {
   return label.replace(/[\r\n]+/g, " ").replace(/\t/g, "  ");
 }
 
-/**
- * 折叠连续同类分片(text_output / thinking)为单条代表行.
- *
- * 问题:core 层(execution-record.ts 的 flushChunked)把流式 text/thinking 按每 100
- * 字符切成多个 chunk push 进 eventLog;一条 LLM message → N 条相邻同类条目.
- * 逐条展示会把同一句话拆成 N 个半句碎片("Hello" / "world" / "this" …),可读性差,
- * 且折叠取末条时还会显示残余尾巴(如 `}`).
- *
- * 解法:相邻且同类(text_output 或 thinking)的分片折叠为 1 条:
- *   - label 取组内**第一条**(= 文本开头,避免显示残余尾巴)
- *   - ts 取组内**最后一条**(保留最新时间戳)
- *   - 其他字段(type/status)同类必然相同,取首条即可
- * 被非同类(tool_start / tool_end / turn_end / error)隔开的同类各自成组.
- *
- *   [text("Hello"), text("world"), tool, text("Result"), text("}")]
- *     → [text("Hello"), tool, text("Result")]
- *
- * 纯渲染层折叠,不改 eventLog 本身(持久化仍是细粒度).
- * compact / expanded / preview / detail 4 处渲染统一走这里,保证一致.
- */
-export function foldEntries(entries: readonly AgentEventLogEntry[]): AgentEventLogEntry[] {
-  const result: AgentEventLogEntry[] = [];
-  for (const entry of entries) {
-    const last = result[result.length - 1];
-    // 相邻同类(text_output 或 thinking)→ 合并:label 保首条,ts 取最新
-    if (
-      last !== undefined &&
-      last.type === entry.type &&
-      (entry.type === "text_output" || entry.type === "thinking")
-    ) {
-      // readonly 字段不能 mutate,替换整个元素(label 沿用 last 的首条,ts 更新为 entry 的最新)
-      result[result.length - 1] = { ...last, ts: entry.ts };
-    } else {
-      result.push({ ...entry });
-    }
-  }
-  return result;
-}
-
 // ============================================================
 // 共享文本/参数提取 helper(tool-render / list-view / bg-notify-render / subagent-tool 复用)
 // ============================================================
@@ -258,13 +219,15 @@ export function extractAgentName(args: unknown): string {
 /**
  * 格式化单条 eventLog 条目(带类型图标 + 着色,不含 `⎿` 前缀——前缀由调用方加).
  *
- * 标签语义(tui-conversation.md §7,比单字符图标更明确):
+ * 标签语义(tui-conversation.md §7):
  *   tool:    tool_start/tool_end(尾部追加 ✓/✗)
- *   text:    text_output
- *   thinking: thinking(整行 dim,含标签)
  *   ── turn ──  turn_end(仅 expanded)
+ *   error:   tool label + ✗
  *
- * 预处理统一用 sanitizeLabel(换行→空格、tab→2空格),消灭 text/tool 分支.
+ * text_output / thinking 类型已移除——完整内容收口在 record.turns[]，
+ * eventLog 只承载离散语义事件。实时 text/thinking 进度由 currentActivity 行展示。
+ *
+ * 预处理统一用 sanitizeLabel(换行→空格、tab→2空格).
  * 不做预截断——宽度截断全部交给外层调用点的 `truncLine(formatEventLine(...), width)`.
  */
 export function formatEventLine(entry: AgentEventLogEntry, theme: ThemeLike): string {
@@ -280,13 +243,6 @@ export function formatEventLine(entry: AgentEventLogEntry, theme: ThemeLike): st
         : ` ${theme.fg("success", "✓")}`;
       return `tool: ${label}${mark}`;
     }
-
-    case "text_output":
-      return `text: ${label}`;
-
-    case "thinking":
-      // 推理片段:整行 dim(含标签)
-      return theme.fg("dim", `thinking: ${label}`);
 
     case "turn_end":
       // turn 分隔(仅 expanded view 显示)

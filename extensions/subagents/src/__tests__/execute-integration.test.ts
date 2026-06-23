@@ -196,6 +196,8 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       promptBehavior: {
         kind: "resolve",
         events: [
+          // 模拟真实 LLM 输出：先 text_delta（正文），再 turn_end + message_end
+          { type: "message_update", assistantMessageEvent: { delta: "done" } },
           { type: "turn_end" },
           { type: "message_end", message: { usage: { input: 100, output: 50 } } },
         ],
@@ -212,7 +214,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     expect(result.record.turns).toBe(1);
     expect(result.details.totalTokens).toBe(150);
     expect(result.details.sessionFile).toBe("fake-session.jsonl");
-    // run() 的 collectResult 从 session.messages 提取 text
+    // run() 的 collectResult 从 record.turns[] 聚合 text（收口后不再读 session.messages）
     expect(result.details.result).toBe("done");
   });
 
