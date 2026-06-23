@@ -310,10 +310,47 @@ export default function goalExtension(pi: ExtensionAPI) {
 	api.__goalInit = (
 		objective: string,
 		tasks: string[],
-		budget: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number } | undefined,
+		budget: GoalInitBudget | undefined,
 		ctx: ExtensionContext,
 	): boolean => {
 		if (!ctx) return false;
 		return createGoal(session, objective, tasks, budget ?? {}, buildPorts(pi, ctx), true);
 	};
 }
+
+// ── Cross-extension API 类型（单一 source of truth，API-1）──────────
+
+/**
+ * `pi.__goalInit` 的预算配置形状。
+ *
+ * 跨扩展（coding-workflow / plan）通过 `pi.__goalInit` 编程式初始化 goal 时使用。
+ * 与 `BudgetConfig` 的差异：本类型只暴露外部可设的 3 个可选字段（maxStallTurns
+ * 不对外暴露，用默认值），且全部 optional。
+ */
+export interface GoalInitBudget {
+	tokenBudget?: number;
+	timeBudgetMinutes?: number;
+	maxTurns?: number;
+}
+
+/**
+ * `pi.__goalInit` 的规范函数签名（API-1：单一 source of truth）。
+ *
+ * 跨扩展消费者应 import 本类型而非重复声明 inline alias，避免签名 drift：
+ * ```ts
+ * import type { GoalInitFn } from "@zhushanwen/pi-goal";
+ * const goalInit = (pi as unknown as { __goalInit?: GoalInitFn }).__goalInit;
+ * ```
+ *
+ * @param objective 目标描述
+ * @param tasks 初始任务描述数组（空数组表示等待 AI 调 create_tasks）
+ * @param budget 预算配置，传 undefined 用默认值
+ * @param ctx **必填**——调用方的 ExtensionContext。省略会返回 false（创建失败）。
+ * @returns true 创建成功；false 已有 active goal 或 ctx 缺失
+ */
+export type GoalInitFn = (
+	objective: string,
+	tasks: string[],
+	budget: GoalInitBudget | undefined,
+	ctx: ExtensionContext,
+) => boolean;

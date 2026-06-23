@@ -1,5 +1,7 @@
 ---
 "@zhushanwen/pi-goal": minor
+"@zhushanwen/pi-coding-workflow": patch
+"@zhushanwen/pi-plan": patch
 ---
 
 Architecture rewrite: 6-layer ports/adapters architecture with zero-Pi-dep engine.
@@ -21,3 +23,7 @@ changes (all documented in spec FR-4/5/6):
   removed `pendingPause` field
 - FR-4.1: `__goalInit` delegates to `service.createGoal` (dual-track eliminated)
 - FR-4.2/D-16: `ctx` is now required (removed `lastCtx` module-level mutable state)
+
+`pi-coding-workflow` / `pi-plan` receive a patch: their inline `GoalInitFn` type
+alias is updated to mirror goal's new required-ctx signature (no runtime change;
+callers already pass `ctx`).

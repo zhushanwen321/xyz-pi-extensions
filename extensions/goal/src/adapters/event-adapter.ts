@@ -26,7 +26,6 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import {
 	AUTO_CLEAR_TURNS,
 	CONTEXT_USAGE_RATIO_LIMIT,
-	MS_PER_SECOND,
 	PERCENT_FACTOR,
 	TASK_STALL_TURN_THRESHOLD,
 } from "../constants";
@@ -41,9 +40,8 @@ import {
 	continuationPrompt,
 	stalenessReminderPrompt,
 } from "../projection/prompts";
-import type { ThemeLike } from "../projection/widget";
-import { renderTerminalStatusLine, updateWidget } from "../projection/widget";
-import { applyEvent } from "../service";
+import { asTheme,renderTerminalStatusLine, updateWidget } from "../projection/widget";
+import { applyEvent, tickState } from "../service";
 import type { GoalSession } from "../session";
 import { clearGoalSession, reconstructGoalState } from "../session";
 import { buildPorts } from "./tool-adapter";
@@ -95,11 +93,12 @@ export function releaseProcessing(session: GoalSession): void {
  *
  * 无 ESC 守卫（agent_start 是 agent 开始时的信号，此时无 aborted 可能）。
  * 无 persist / updateWidget（基线字段是瞬态，不需持久化或渲染）。
- * applyEvent 对 agent_start 不用 ports（参数声明但忽略），传 undefined 断言即可。
+ * applyEvent 对 agent_start 不用 ports（参数可选，省略）。
  */
 export async function handleAgentStart(session: GoalSession): Promise<void> {
 	if (!session.state) return;
-	applyEvent(session, "agent_start", undefined, undefined as never);
+	// TS-2: applyEvent 的 _ports 参数可选（未使用），省略第 4 参数
+	applyEvent(session, "agent_start", undefined);
 }
 
 // ── 事件 2: turn_end（FR-6.7 ESC 守卫 + 递增）──────────
@@ -151,7 +150,7 @@ export interface MessageEndLikeEvent {
  * 内部用 accumulateTokens：`max(input-cacheRead,0) + output`）。
  *
  * 不 persist / updateWidget（与旧 index.ts:350-365 行为对齐——message_end 只累加 token）。
- * applyEvent 对 message_end 不用 ports，传 undefined 断言即可。
+ * applyEvent 对 message_end 不用 ports（参数可选，省略）。
  */
 export async function handleMessageEnd(
 	session: GoalSession,
@@ -162,7 +161,8 @@ export async function handleMessageEnd(
 	// FR-6.7 ESC 守卫
 	if (ctx.signal?.aborted) return;
 
-	applyEvent(session, "message_end", event, undefined as never);
+	// TS-2: applyEvent 的 _ports 参数可选（未使用），直接省略
+	applyEvent(session, "message_end", event);
 }
 
 // ── 事件 4: session_start（状态重建）───────────────────
@@ -190,8 +190,9 @@ export async function handleSessionStart(
 /**
  * persist + updateWidget 的统一入口（对应旧 tool-handler.persistAndUpdate）。
  *
- * 与 service.persistState 的差异：service 层 persistState 是私有的且只 appendState；
- * adapter 层 event handler 需要在 persist 后再 updateWidget，并支持可选 stale check。
+ * BL-3 DRY：tick 逻辑复用 service.tickState（单一 tick 定义点）。
+ * 与 service.persistState 的差异：adapter 层 event handler 需要在 persist 后再 updateWidget，
+ * 并支持可选 stale check。
  *
  * 语义：返回 true 表示 state 已被新 goal 覆盖（checkStale 触发），调用方应中止后续副作用。
  */
@@ -202,14 +203,9 @@ function persistAndUpdate(
 	checkStale?: (() => boolean) | undefined,
 ): boolean {
 	if (!session.state) return false;
-	const state = session.state;
-	const now = Date.now();
-	// FR-6.5: 与旧 persistGoalState 一致——累计运行时间后再 serialize
-	if (state.timeStartedAt > 0 && isActiveStatus(state.status)) {
-		state.timeUsedSeconds += (now - state.timeStartedAt) / MS_PER_SECOND;
-		state.timeStartedAt = now;
-	}
-	pi.appendEntry("goal-state", serializeState(state));
+	// FR-6.5: tick 累加运行时间（复用 service.tickState——单一 tick 定义点）
+	tickState(session.state);
+	pi.appendEntry("goal-state", serializeState(session.state));
 	if (checkStale?.()) return true;
 	updateWidget(session, buildPorts(pi, ctx).ui);
 	return false;
@@ -286,8 +282,8 @@ function handleTerminalStateBeforeAgent(
 		return;
 	}
 	// 折叠 status bar（终态显示）
-	const theme = ctx.ui.theme as unknown as ThemeLike;
-	const statusText = renderTerminalStatusLine(state, theme);
+	// TS-1: 复用 widget.asTheme（单一 theme 断言点），避免重复 cast
+	const statusText = renderTerminalStatusLine(state, asTheme(buildPorts(pi, ctx).ui));
 	if (statusText && ctx.hasUI) ctx.ui.setStatus("goal", statusText);
 	if (ctx.hasUI) ctx.ui.setWidget("goal", undefined);
 }
@@ -378,8 +374,11 @@ function checkContextUsage(
 		(usage.tokens ?? 0) / usage.contextWindow > CONTEXT_USAGE_RATIO_LIMIT
 	) {
 		const state = session.state!;
+		// FR-6.5: 转 paused 前先 tick（此时 status 仍为 active，累加当前运行段）
+		tickState(state);
 		state.status = transitionStatus(state.status, "paused");
-		persistAndUpdate(pi, session, ctx);
+		pi.appendEntry("goal-state", serializeState(state));
+		updateWidget(session, buildPorts(pi, ctx).ui);
 		return {
 			message: {
 				customType: "goal-context-exceeded",
@@ -523,6 +522,8 @@ async function handleBudgetChecks(
 	// 预算耗尽 → 终止
 	if (budgetResult.terminal) {
 		const dim = budgetResult.terminal.dimension;
+		// FR-6.5: 转 terminal 前先 tick（此时 status 仍为 active，累加当前运行段）
+		tickState(state);
 		state.status = transitionStatus(
 			state.status,
 			dim === "token" ? "budget_limited" : "time_limited",
@@ -530,7 +531,9 @@ async function handleBudgetChecks(
 		state.completedAtTurnIndex = state.currentTurnIndex;
 		// FR-8.7: 写 history
 		pi.appendEntry("goal-history", makeHistoryEntry(state, getCompletedCount(state.tasks)));
-		if (persistAndUpdate(pi, session, ctx, checkStale)) return "stop";
+		pi.appendEntry("goal-state", serializeState(state));
+		if (checkStale()) return "stop";
+		updateWidget(session, buildPorts(pi, ctx).ui);
 		ctx.ui.notify(
 			dim === "token"
 				? "Token budget exhausted, Goal terminated."
@@ -598,10 +601,14 @@ function handleAllTasksDone(
 	const state = session.state!;
 	// FR-8.7 1a: maxTurnsReached → complete（优先 complete，不因 maxTurns 变 cancelled）
 	if (progress.maxTurnsReached) {
+		// FR-6.5: 转 complete 前先 tick（此时 status 仍为 active，累加当前运行段）
+		tickState(state);
 		state.status = transitionStatus(state.status, "complete");
 		state.completedAtTurnIndex = state.currentTurnIndex;
 		pi.appendEntry("goal-history", makeHistoryEntry(state, progress.completedCount));
-		if (persistAndUpdate(pi, session, ctx, checkStale)) return "stop";
+		pi.appendEntry("goal-state", serializeState(state));
+		if (checkStale()) return "stop";
+		updateWidget(session, buildPorts(pi, ctx).ui);
 		ctx.ui.notify(
 			`All tasks completed, Goal auto-closed. (${progress.completedCount}/${progress.totalCount} tasks, ${state.currentTurnIndex} turns)`,
 			"info",
@@ -642,10 +649,14 @@ function handleNoTasksOrMaxTurns(
 	const state = session.state!;
 	// FR-8.7 2a: maxTurnsReached → cancelled
 	if (progress.maxTurnsReached) {
+		// FR-6.5: 转 cancelled 前先 tick（此时 status 仍为 active，累加当前运行段）
+		tickState(state);
 		state.status = transitionStatus(state.status, "cancelled");
 		state.completedAtTurnIndex = state.currentTurnIndex;
 		pi.appendEntry("goal-history", makeHistoryEntry(state, 0));
-		if (persistAndUpdate(pi, session, ctx, checkStale)) return "stop";
+		pi.appendEntry("goal-state", serializeState(state));
+		if (checkStale()) return "stop";
+		updateWidget(session, buildPorts(pi, ctx).ui);
 		ctx.ui.notify(
 			`Max turns reached (${state.budget.maxTurns}), LLM did not create task list.`,
 			"warning",
@@ -672,10 +683,14 @@ function handleMaxTurnsReached(
 ): ProgressAction {
 	const state = session.state!;
 	const incomplete = getIncompleteTasks(state.tasks);
+	// FR-6.5: 转 cancelled 前先 tick（此时 status 仍为 active，累加当前运行段）
+	tickState(state);
 	state.status = transitionStatus(state.status, "cancelled");
 	state.completedAtTurnIndex = state.currentTurnIndex;
 	pi.appendEntry("goal-history", makeHistoryEntry(state, getCompletedCount(state.tasks)));
-	if (persistAndUpdate(pi, session, ctx, checkStale)) return "stop";
+	pi.appendEntry("goal-state", serializeState(state));
+	if (checkStale()) return "stop";
+	updateWidget(session, buildPorts(pi, ctx).ui);
 	ctx.ui.notify(
 		`Max turns reached (${state.budget.maxTurns}), ${incomplete.length} tasks still incomplete.`,
 		"warning",
@@ -710,8 +725,12 @@ async function handleStallAndContinuation(
 	}
 	if (state.stallCount >= state.budget.maxStallTurns) {
 		// stall 超限 → blocked（中间态，不走 finalizeGoal，不写 history）
+		// FR-6.5: 转 blocked 前先 tick（此时 status 仍为 active，累加当前运行段）
+		tickState(state);
 		state.status = transitionStatus(state.status, "blocked");
-		if (persistAndUpdate(pi, session, ctx, checkStale)) return;
+		pi.appendEntry("goal-state", serializeState(state));
+		if (checkStale()) return;
+		updateWidget(session, buildPorts(pi, ctx).ui);
 		ctx.ui.notify(
 			`${state.stallCount} consecutive turns without progress, Goal auto-blocked. Use /goal resume to continue or /goal clear to reset.`,
 			"warning",

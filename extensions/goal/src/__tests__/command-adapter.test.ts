@@ -243,6 +243,21 @@ describe("handleGoalCommand — clear vs abort (FR-6.3)", () => {
 		expect(notifyText(h).some((t) => t.includes("aborted"))).toBe(true);
 	});
 
+	it("abort：MF-3 tick — active goal 转 cancelled 前累加时间", async () => {
+		const h = makeHarness();
+		const session = createGoalSession();
+		const past = Date.now() - 4000;
+		session.state = makeActiveState({
+			timeStartedAt: past,
+			timeUsedSeconds: 3,
+			tasks: [{ id: 1, description: "cancelled-task", status: "cancelled", lastUpdatedTurn: 0 }],
+		});
+		await handleGoalCommand(h.pi, session, "abort", h.ctx);
+		// MF-3 核心：history 的 elapsedSeconds 应 ≈ 7（3 + 4）
+		const histEntry = h.history[0] as { elapsedSeconds?: number } | undefined;
+		expect(histEntry?.elapsedSeconds).toBeGreaterThanOrEqual(6);
+	});
+
 	it("clear：MF-3 tick — active goal 转 cancelled 前累加时间", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();
@@ -319,6 +334,21 @@ describe("handleGoalCommand — set (FR-3.1 + G-R2-008)", () => {
 		expect(h.history.length).toBe(historyBefore + 1); // 写了 cancelled history
 		expect(notifyText(h).some((t) => t.includes("Cancelled previous"))).toBe(true);
 		expect(session.state!.objective).toBe("new objective");
+	});
+
+	it("set 覆盖：MF-3 tick — active goal 转 cancelled 前累加时间", async () => {
+		const h = makeHarness();
+		const session = createGoalSession();
+		const past = Date.now() - 4000;
+		session.state = makeActiveState({
+			objective: "old active goal",
+			timeStartedAt: past,
+			timeUsedSeconds: 6,
+		});
+		await handleGoalCommand(h.pi, session, "new objective", h.ctx);
+		// MF-3 核心：history 的 elapsedSeconds 应 ≈ 10（6 + 4）
+		const histEntry = h.history[0] as { elapsedSeconds?: number } | undefined;
+		expect(histEntry?.elapsedSeconds).toBeGreaterThanOrEqual(9);
 	});
 
 	it("覆盖终态旧 goal → 快速路径（不写 history）", async () => {

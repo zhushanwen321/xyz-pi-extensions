@@ -269,6 +269,14 @@ function asTheme(uiPort: UiPort): ThemeLike {
 }
 
 /**
+ * 导出 asTheme：单一 theme 提取断言点（TS-1）。
+ *
+ * adapter 层（event-adapter handleTerminalStateBeforeAgent）复用本函数，
+ * 避免重复 `ctx.ui.theme as unknown as ThemeLike` 断言。
+ */
+export { asTheme };
+
+/**
  * 刷新 widget + status bar。
  *
  * FR-6.6：`uiPort.hasUI === false`（headless / RPC mode）时直接 return，

@@ -499,7 +499,8 @@ export async function executePhaseStartTool(hctx: HandlerContext, tctx: ToolExec
 	// Initialize goal for Phase 2 (L1 default tasks)
 	if (state.currentPhase === PHASE_GOAL_INIT) {
 		try {
-			// Type matches goal extension's __goalInit (FR-4.2/D-16: ctx required)
+			// Inline alias mirrors @zhushanwen/pi-goal's GoalInitFn (exported from goal/src/index.ts).
+			// Kept inline due to optional duck-typed coupling (pi.__goalInit) — update both if signature changes.
 			type GoalInitFn = (objective: string, tasks: string[], budget: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number } | undefined, ctx: ExtensionContext) => boolean;
 			const goalInit = (pi as unknown as Record<string, unknown>).__goalInit as GoalInitFn | undefined;
 			if (goalInit) {
@@ -523,6 +524,7 @@ export async function executePhaseStartTool(hctx: HandlerContext, tctx: ToolExec
 	const PHASE_DEV_GOAL_INIT = 3;
 	if (state.currentPhase === PHASE_DEV_GOAL_INIT) {
 		try {
+			// Inline alias mirrors @zhushanwen/pi-goal's GoalInitFn (see Phase 2 block above).
 			type GoalInitFn = (objective: string, tasks: string[], budget: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number } | undefined, ctx: ExtensionContext) => boolean;
 			const goalInit = (pi as unknown as Record<string, unknown>).__goalInit as GoalInitFn | undefined;
 			if (goalInit) {

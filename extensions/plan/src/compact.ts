@@ -76,6 +76,8 @@ export function detectGoalCapability(pi: ExtensionAPI): boolean {
 
 /** Try to initialize goal via programming interface */
 function tryGoalInit(pi: ExtensionAPI, planFilePath: string, ctx: ExtensionContext): boolean {
+  // Inline alias mirrors @zhushanwen/pi-goal's GoalInitFn (exported from goal/src/index.ts).
+  // Kept inline due to optional duck-typed coupling (pi.__goalInit) — update both if signature changes.
   type GoalInitFn = (
     objective: string,
     tasks: string[],

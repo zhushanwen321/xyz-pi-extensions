@@ -57,22 +57,34 @@ export type EventEffect =
 // ── 持久化辅助 ────────────────────────────────────────
 
 /**
- * FR-6.5: persist 前调 tick 累计时间，然后 serialize + appendState。
+ * FR-6.5 tick 核心：按当前 status 累加运行时间（active 才累加），mutate state。
  *
- * tick 使用**当前 status** 判断是否累加（active 才累加）。因此对于 pause/clear/abort
- * 这类「active → 非活跃」的转换，调用方必须在改 status **之前**先调本函数，
- * 或使用 {@link persistStateBeforeTransition}。
+ * 用于 active→非活跃转换前捕获最后一段运行时间——调用方在 `transitionStatus`
+ * **之前**调本函数，使 tick 看到 active 状态并累加当前运行段。
  *
- * 导出供 command-adapter 复用（DRY：命令路径与 tool 路径共用同一持久化语义）。
+ * 导出供 `persistState`（service/tool/command 路径）、`persistAndUpdate`（event 路径）、
+ * 以及各 transition 调用点共用——**单一 tick 定义点**（BL-3 DRY）。
  */
-export function persistState(session: GoalSession, ports: ServicePorts): void {
-	if (!session.state) return;
-	const state = session.state;
+export function tickState(state: GoalRuntimeState): void {
 	const isRunning = isActiveStatus(state.status);
 	const ticked = tick(state.timeStartedAt, state.timeUsedSeconds, Date.now(), isRunning);
 	state.timeUsedSeconds = ticked.timeUsedSeconds;
 	state.timeStartedAt = ticked.timeStartedAt;
-	ports.persistence.appendState(serializeState(state));
+}
+
+/**
+ * FR-6.5: persist 前调 tick 累加时间，然后 serialize + appendState。
+ *
+ * tick 使用**当前 status** 判断是否累加（active 才累加）。因此对于 pause/clear/abort/blocked
+ * 这类「active → 非活跃」的转换，调用方必须在改 status **之前**先调本函数
+ * （或先调 {@link tickState} 捕获最后运行段）。
+ *
+ * 导出供 command-adapter / event-adapter 复用（DRY：所有路径共用同一持久化语义）。
+ */
+export function persistState(session: GoalSession, ports: ServicePorts): void {
+	if (!session.state) return;
+	tickState(session.state);
+	ports.persistence.appendState(serializeState(session.state));
 }
 
 // ── 描述归一化 ────────────────────────────────────────
@@ -364,8 +376,10 @@ function actionCompleteGoal(
 
 	// finalizeGoal
 	const completedCount = completedOrVerified.length;
+	// FR-6.5: 转 complete 前先 tick（此时 status 仍为 active，累加当前运行段）
+	tickState(state);
 	finalizeGoal(state, "complete", ports, { clearImmediately: false, completedTasks: completedCount });
-	persistState(session, ports);
+	ports.persistence.appendState(serializeState(state));
 	return makeResult(session, `Objective completed! Evidence: ${evidence}`);
 }
 
@@ -380,8 +394,10 @@ function actionCancelGoal(
 	}
 	const reason = (params.cancelReason as string) ?? "User requested cancellation";
 	const completedCount = state.tasks.filter((t) => t.status === "completed" || t.status === "verified").length;
+	// FR-6.5: 转 cancelled 前先 tick（累加当前运行段，保证 history elapsedSeconds 准确）
+	tickState(state);
 	finalizeGoal(state, "cancelled", ports, { clearImmediately: true, completedTasks: completedCount });
-	persistState(session, ports);
+	ports.persistence.appendState(serializeState(state));
 	// FR-8.7: cancelled → 立即 clearSession
 	clearGoalSession(session, ports.ui);
 	return {
@@ -402,8 +418,10 @@ function actionReportBlocked(
 	}
 	// FR-8.7: blocked 是中间态，不走 finalizeGoal，不写 history
 	state.lastBlockerReason = reason;
+	// FR-6.5: 转 blocked 前先 tick（此时 status 仍为 active，累加当前运行段）
+	tickState(state);
 	state.status = transitionStatus(state.status, "blocked");
-	persistState(session, ports);
+	ports.persistence.appendState(serializeState(state));
 	return makeResult(session, `Blocked reported. Reason: ${reason}`);
 }
 
@@ -567,7 +585,9 @@ export function applyEvent(
 	session: GoalSession,
 	eventType: string,
 	eventData: unknown,
-	_ports: ServicePorts,
+	// TS-2: 参数未使用，放宽为 undefined 以消除调用方 `undefined as never` 断言。
+	// 保留参数位以备未来 event 类型需要 ports（applyEvent 是统一事件入口）。
+	_ports?: ServicePorts,
 ): EventEffect[] {
 	const effects: EventEffect[] = [];
 	if (!session.state) return effects;
