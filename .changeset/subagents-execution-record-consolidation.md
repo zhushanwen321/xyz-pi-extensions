@@ -1,5 +1,5 @@
 ---
-"@zhushanwen/pi-subagents": minor
+"@zhushanwen/pi-subagents": patch
 ---
 
 ExecutionRecord consolidated as the single source of truth for execution data.

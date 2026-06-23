@@ -1,5 +1,5 @@
 ---
-"@zhushanwen/pi-subagents": minor
+"@zhushanwen/pi-subagents": patch
 ---
 
 Model resolution falls back to the main agent's current model. The category-based

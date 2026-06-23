@@ -1,5 +1,5 @@
 ---
-"@zhushanwen/pi-subagents": minor
+"@zhushanwen/pi-subagents": patch
 ---
 
 Completed/background subagents are reconstructed from `session.jsonl` instead of
