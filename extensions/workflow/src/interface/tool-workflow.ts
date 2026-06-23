@@ -87,9 +87,25 @@ interface RunSummary {
   error?: string;
 }
 
-interface ToolResult {
+// ── Tool result types (S2: typed details, replaces Record<string, unknown>) ──
+
+/**
+ * Discriminated union of `workflow` tool `details` payloads.
+ *
+ * Discriminant: `action`. Each action's details shape is explicitly typed so
+ * downstream consumers (GUI task-list renderer, structured-output) can narrow
+ * without unsafe casts.
+ */
+export type WorkflowToolDetails =
+  | { action: "run"; runId: string; status: "running" | "not_found" | "declined"; name: string }
+  | { action: "status"; instances: RunSummary[] }
+  | { action: "pause" | "resume" | "abort"; runId: string; status: string; reason?: string }
+  | { action: "retry-node" | "skip-node"; runId: string; callId: number };
+
+/** Result returned by the `workflow` tool's execute(). */
+export interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
-  details: Record<string, unknown> | undefined;
+  details: WorkflowToolDetails | undefined;
   isError?: boolean;
 }
 

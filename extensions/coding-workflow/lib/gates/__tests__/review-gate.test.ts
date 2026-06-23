@@ -13,21 +13,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { GateContext } from "../gate.js";
 import { ReviewGate } from "../review-gate.js";
+import type { WorkflowRunResult } from "../workflow-types.js";
 
 // ── Helpers ─────────────────────────────────────────────────
 
-type DoneReason = "completed" | "failed" | "aborted" | "budget_limited" | "time_limited";
-
-interface WfResult {
-  status: "done";
-  reason: DoneReason;
-  scriptResult?: unknown;
-  error?: string;
-  runId: string;
-}
-
 /** Build a GateContext with a fake pi exposing __workflowRun. */
-function makeCtx(workflowRunImpl: (name: string) => Promise<WfResult>): GateContext {
+function makeCtx(workflowRunImpl: (name: string) => Promise<WorkflowRunResult>): GateContext {
   const pi = {
     __workflowRun: vi.fn(async (name: string) => workflowRunImpl(name)),
   } as unknown as ExtensionAPI;

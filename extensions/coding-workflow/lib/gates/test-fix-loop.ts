@@ -13,6 +13,7 @@ import { getReviewGateStatePath } from "../helpers.js";
 import { type ReviewGateResult,runReviewGateLoop } from "../review-gate-impl.js";
 // fallow-ignore-file — implements Gate interface members consumed via polymorphism
 import type { Gate, GateContext, GateResult } from "./gate.js";
+import type { WorkflowRunFn } from "./workflow-types.js";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -29,17 +30,6 @@ interface WorkflowTestFixResult {
   noncore: WorkflowTestFixResult["core"] | null;
   overall: boolean;
 }
-
-/** WorkflowRunResult.reason 字段类型（与 workflow extension D-8 对齐）。 */
-type DoneReason = "completed" | "failed" | "aborted" | "budget_limited" | "time_limited";
-
-/** Signature of pi.__workflowRun exposed by workflow extension (D-8 new shape). */
-type WorkflowRunFn = (
-  name: string,
-  args: Record<string, unknown>,
-  signal?: AbortSignal,
-  timeoutMs?: number,
-) => Promise<{ status: "done"; reason: DoneReason; scriptResult?: unknown; error?: string; runId: string }>;
 
 /** Type adapter: GateContext.onUpdate has UsageStats, runReviewGateLoop expects unknown. */
 type RunReviewGateLoopOnUpdate = (partial: { content: Array<{ type: string; text: string }>; usage?: unknown }) => void;

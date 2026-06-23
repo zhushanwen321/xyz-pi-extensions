@@ -54,9 +54,26 @@ const WorkflowScriptParams = Type.Object({
 
 type ScriptParams = Static<typeof WorkflowScriptParams>;
 
-interface TextContent {
+// ── Tool result types (S3: typed details, replaces Record<string, unknown>) ──
+
+/**
+ * Discriminated union of `workflow-script` tool `details` payloads.
+ *
+ * Discriminant: `action`. `save`/`delete` may surface structured `ok:false`
+ * details on failure (instead of bare `undefined`) so programmatic consumers
+ * can distinguish error shape from success.
+ */
+export type WorkflowScriptToolDetails =
+  | { action: "generate"; path: string; name: string; status: "ready" }
+  | { action: "lint"; name: string; valid: boolean; findingCount: number }
+  | { action: "list"; count: number }
+  | { action: "save"; name: string; ok: boolean }
+  | { action: "delete"; name: string; ok: boolean };
+
+/** Result returned by the `workflow-script` tool's execute(). */
+export interface TextContent {
   content: Array<{ type: "text"; text: string }>;
-  details: Record<string, unknown> | undefined;
+  details: WorkflowScriptToolDetails | undefined;
   isError?: boolean;
 }
 
@@ -260,10 +277,17 @@ async function actionSave(params: ScriptParams): Promise<TextContent> {
   }
   try {
     const result = await saveWorkflow(name, params.newName);
-    return textResult(result);
+    return {
+      content: [{ type: "text", text: result }],
+      details: { action: "save", name, ok: true },
+    };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    return textResult(`Save failed: ${msg}`, true);
+    return {
+      content: [{ type: "text", text: `Save failed: ${msg}` }],
+      details: { action: "save", name, ok: false },
+      isError: true,
+    };
   }
 }
 
@@ -283,10 +307,17 @@ function actionDelete(
     const result = deleteWorkflow(name, isRunning);
     // 失效 registry 缓存（下次 list/get 重扫）
     registry.invalidate();
-    return textResult(result);
+    return {
+      content: [{ type: "text", text: result }],
+      details: { action: "delete", name, ok: true },
+    };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    return textResult(`Delete failed: ${msg}`, true);
+    return {
+      content: [{ type: "text", text: `Delete failed: ${msg}` }],
+      details: { action: "delete", name, ok: false },
+      isError: true,
+    };
   }
 }
 

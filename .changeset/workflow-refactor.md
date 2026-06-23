@@ -37,3 +37,14 @@ Other changes:
   `--append-system-prompt` / `--skill` / `PI_WORKFLOW_SCHEMA` injection. This
   was silently dropped during the D-12 engine refactor and is now wired back
   via `LifecycleDeps.agentRegistry/sessionDir/activeTempFiles`.
+- Round-4 review cleanup (non-blocking SUGGESTIONs):
+  - `WorkflowToolDetails` / `WorkflowScriptToolDetails` discriminated unions
+    replace `Record<string, unknown>` for the two tools' `details` payloads;
+    `save`/`delete` now surface structured `{ok:false}` details on failure
+    (S2/S3).
+  - `DoneReason` / `WorkflowRunResult` / `WorkflowRunFn` de-duplicated into
+    `coding-workflow/lib/gates/workflow-types.ts` (single source of truth),
+    consumed by both gates + both gate tests (MI-1).
+  - Test coverage backfilled: `/workflows` command handler (5 tests, was
+    zero-covered) and `format.ts` pure functions (29 tests — formatElapsed /
+    formatTokenStat / formatActivityLine / visibleLen / padVisible) (S4/S5).
