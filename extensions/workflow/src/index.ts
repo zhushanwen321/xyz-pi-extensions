@@ -30,7 +30,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 
 import type { LauncherDeps } from "./engine/launcher.js";
 import { runAndWait, type WorkflowRunResult } from "./engine/launcher.js";
-import { pauseRun } from "./engine/lifecycle.js";
+import { pauseRun, scheduleTimeBudget } from "./engine/lifecycle.js";
 import type { WorkflowRun } from "./engine/models/workflow-run.js";
 import { AgentRegistry } from "./infra/agent-discovery.js";
 import { cleanupAllTempFiles as cleanupAllFiles } from "./infra/agent-opts-resolver.js";
@@ -105,7 +105,10 @@ export default function workflowExtension(pi: ExtensionAPI): void {
  // 消费结果（UC-1 主路径）。所有 transition("done", ...) 路径调完 save 后触发。
  // BL-1: agentRegistry/sessionDir/activeTempFiles 透传给 dispatchAgentCall，
  // 让 resolveAgentOpts 能解析 agent({agent,skill,schema}) 的 inline override。
-    return {
+ // D-12 regression fix (round-2 #2)：scheduleTimeBudget 闭包捕获 deps，供
+ // error-recovery.rebuildRuntime 在错误重试后重新调度墙钟预算计时器。
+ // 箭头函数体延迟访问 deps，构造时不触发 TDZ。
+    const deps: LauncherDeps = {
       store: state.store,
       workerHost,
       runner,
@@ -115,7 +118,10 @@ export default function workflowExtension(pi: ExtensionAPI): void {
       agentRegistry: state.agentRegistry,
       sessionDir: state.sessionDir,
       activeTempFiles: state.activeTempFiles,
+      scheduleTimeBudget: (runId: string, budgetTimeMs: number) =>
+        scheduleTimeBudget(runId, deps, budgetTimeMs),
     };
+    return deps;
   }
 
  // ── Helper: 检查脚本是否正在运行（delete guard 用） ────────
@@ -281,6 +287,9 @@ export default function workflowExtension(pi: ExtensionAPI): void {
     },
     get activeTempFiles() {
       return getDeps().activeTempFiles;
+    },
+    get scheduleTimeBudget() {
+      return getDeps().scheduleTimeBudget;
     },
   };
 

@@ -26,6 +26,7 @@
  * 参考：domain-models.md §失败处理矩阵（retryNode 语义）、clarification.md D.5/G6-001。
  */
 
+import { postBudgetUpdate } from "./error-recovery.js";
 import { executeAgentCall } from "./execute-agent-call.js";
 import type { LifecycleDeps } from "./models/ports.js";
 import type { AgentResult } from "./models/types.js";
@@ -124,6 +125,9 @@ export async function retryNode(
     });
   }
 
+ // D-12 regression fix (round-2 #1)：retry 重跑消费 usage 后同步 worker $BUDGET
+  postBudgetUpdate(run);
+
   await deps.store.save(run);
 }
 
@@ -179,6 +183,10 @@ export async function skipNode(
       void err;
     }
   }
+
+ // D-12 regression fix (round-2 #1)：skip 后同步 worker $BUDGET（占位 result 零 usage，
+ // 值不变，但保持 $BUDGET 与主线程一致）
+  postBudgetUpdate(run);
 
   await deps.store.save(run);
 }

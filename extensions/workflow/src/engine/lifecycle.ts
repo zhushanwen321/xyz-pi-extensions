@@ -107,7 +107,7 @@ function makeHandlers(run: WorkflowRun, deps: LifecycleDeps): WorkerHandlers {
  *
  * @returns 计时器句柄（未设预算时 undefined）
  */
-function scheduleTimeBudget(
+export function scheduleTimeBudget(
   runId: string,
   deps: LifecycleDeps,
   budgetTimeMs: number,

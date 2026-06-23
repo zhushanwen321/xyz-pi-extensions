@@ -59,6 +59,14 @@ export class WorkerHostImpl implements WorkerHost {
           name: spec.scriptName,
           description: spec.description,
         },
+ // D-12 regression fix (round-2 #1)：注入 budget，否则 worker 内 $BUDGET.total 恒为 0。
+ // 旧 agent-call-handler.ts 删除时同时丢失了 budget 注入和 budget-update 发送方，
+ // 导致依赖 $BUDGET 做动态预算分支的脚本静默得到全 0。
+        budget: {
+          maxTokens: spec.budgetTokens,
+          usedTokens: 0,
+          usedCost: 0,
+        },
       },
     });
 

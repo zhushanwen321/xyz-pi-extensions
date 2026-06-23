@@ -116,7 +116,16 @@ export function rebuildRuntime(
   const controller = new AbortController();
   const gate = new ConcurrencyGate({ maxConcurrency: DEFAULT_CONCURRENCY });
   const worker = deps.workerHost.start(run.spec, run.spec.args, handlers);
-  run.replaceRuntime(new RunRuntime(worker, gate, controller));
+ // D-12 regression fix (round-2 #2)：重新调度 run 级墙钟预算计时器。
+ // replaceRuntime 释放旧 runtime 时 clearTimeout 了旧计时器（run-runtime.release），
+ // 新 runtime 必须重排，否则带 budgetTimeMs 的 run 命中一次 worker/script 错误重试后
+ // 时间预算静默失效（直到 pause/resume 才重排）。deps.scheduleTimeBudget 由 Interface
+ // 层注入；未注入时（旧测试）跳过重排（兼容，不影响无时间预算的 run）。
+  const timeBudgetTimer =
+    run.spec.budgetTimeMs && run.spec.budgetTimeMs > 0 && deps.scheduleTimeBudget
+      ? deps.scheduleTimeBudget(run.runId, run.spec.budgetTimeMs)
+      : undefined;
+  run.replaceRuntime(new RunRuntime(worker, gate, controller, timeBudgetTimer));
 }
 
 // ── handleWorkerMessage（消息路由） ──────────────────────────
@@ -254,6 +263,9 @@ function dispatchAgentCall(
  // pause/abort 后到达的 stale completion 不写 state（pause 是干净快照）
       if (run.state.status !== "running") return;
       if (call.result) postAgentResult(run, msg.callId, call.result, false);
+ // D-12 regression fix (round-2 #1)：executeAgentCall 内 consume/incrementCallCount
+ // 后同步 worker $BUDGET（否则 $BUDGET.spent()/remaining() 恒为 0）
+      postBudgetUpdate(run);
       void deps.store.save(run);
 
  // C-2：budget 超限 → 终止整个 run（避免继续 spawn 烧预算）
@@ -292,6 +304,24 @@ function postAgentResult(
   cached: boolean,
 ): void {
   run.runtime?.worker.postMessage({ type: "agent-result", callId, result, cached });
+}
+
+/**
+ * 回发 budget-update 给 worker（$BUDGET 据 worker-script-builder 的 budget-update 分支
+ * 更新 spent()/remaining()）。每次 agent 调用消费 usage 后发送，保持 worker 内 $BUDGET
+ * 与主线程 Budget 值对象同步。
+ *
+ * D-12 regression fix (round-2 #1)：重建 budget-update 发送方。被 error-recovery（dispatch
+ * 后）和 node-ops（retry/skip 后）共用——单一实现，避免消息形状漂移。
+ */
+export function postBudgetUpdate(run: WorkflowRun): void {
+  run.runtime?.worker.postMessage({
+    type: "budget-update",
+    budget: {
+      usedTokens: run.state.budget.usedTokens,
+      usedCost: run.state.budget.usedCost,
+    },
+  });
 }
 
 /**
