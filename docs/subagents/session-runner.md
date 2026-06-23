@@ -1,7 +1,7 @@
 # SessionRunner 深化
 
 > SessionRunner 是 sync/background 共用的 session 执行核心，零 mode 感知。
-> 本文细化 `run()` 的 EventBridge 契约、session 组装、collectResult 字段来源、失败路径与资源清理。
+> 本文细化 `run()` 的 SDK 事件处理（内联，原 EventBridge）、session 组装、collectResult 字段来源、失败路径与资源清理。
 > 执行流总览见 [execution-flow.md](./execution-flow.md)，状态对象见 [data-model.md](./data-model.md)。
 
 ---
@@ -10,84 +10,61 @@
 
 ```
 SubagentService.execute（统一入口，含原 executor 编排逻辑）
-      │  ├─ ensureConfirmed（已废弃 D-1，原首次确认经 onConfirmCategory 回调）
       │  └─ resolveModel（5 级 fallback）
       ▼
 SubagentService 内部编排（mode 分叉点，组件全 private 直接访问）
       │
       ▼
 SessionRunner.run(record, task, opts, ctx)   ◄── 本文
-      ├─ createAndConfigureSession
+      ├─ createAndConfigureSession（原 session-factory 四步，已合并）
       │     ├─ buildEnvBlock（防注入环境信息）
       │     ├─ DefaultResourceLoader（skills + appendSystemPrompt）
       │     ├─ createAgentSession
-      │     ├─ filterTools → setActiveToolsByName
-      │     └─ EventBridge.subscribe → updateFromEvent(record)
-      ├─ turnLimiter.attach
-      ├─ signal 监听
-      ├─ schema enforcement（turn_end 时 steer）
+      │     └─ applyToolFilter → setActiveToolsByName
+      ├─ session.subscribe → handleSdkEvent → updateFromEvent(record)（原 EventBridge，已内联）
+      ├─ turnLimiter（steer/abort 绑到 session，原 RunHooks 已内联）
+      ├─ signal 监听（→ session.abort，一次性）
+      ├─ schema enforcement（turn_end 时漏调 structured-output 则 steer）
       ├─ session.prompt(task)
       ├─ collectResult
       └─ session.dispose()
 ```
 
-**职责边界**：record 在 `run` 内被 `updateFromEvent` 实时更新，但**不被 `completeRecord`**——完成态由 executor finalize 写，保证 status 判定单点。
+**职责边界**：record 在 `run` 内被 `updateFromEvent` 实时更新，但**不被 `completeRecord`**——完成态由 SubagentService.runAndFinalize 的 finalize 写，保证 status 判定单点。
 
-### 为什么用 ensureConfirmed + ConfirmCancelledError
+> **[HISTORICAL — D-1]** 早期 `execute` 在 resolveModel 前有一次 category 确认（`ensureConfirmed` + `ConfirmCancelledError` 异步信号）。该交互已废弃——`categoryConfirmed` 恒为 true，首次确认增加摩擦且无收益。用户改 category 模型走 `/subagents config`（写 globalConfig）。详见 [architecture.md §5.3](./architecture.md#53-为什么用-ensureconfirmed--confirmcancellederror已废弃-d-1)。
 
-category 确认是 async（UI 交互），但 `resolveModel` 是纯 sync（5 级 fallback 不涉及 IO）。两个问题需要解：
+## 2. SDK 事件处理（内联，原 EventBridge）
 
-1. **async 和 sync 怎么协调？** — `ensureConfirmed(onConfirm?)` 是 async（可以 await），`resolveModel` 保持 sync。execute 先 `await hub.ensureConfirmed(...)`，再调 `hub.resolveModel(...)`。确认逻辑在 execute 编排层完成，不在 resolveModel 内部。
+`run()` 内联处理 SDK 事件——`session.subscribe` 回调 → `isSdkEvent` guard → `handleSdkEvent`（switch 翻译）→ `agentEvent`（统一出口：`updateFromEvent` 收口进 record + `onTurnEnd` + `opts.onEvent`）。这是 record 的唯一事件输入源。转换规则必须敲死，否则 `updateFromEvent` 输入错误全链路歪。
 
-2. **用户取消确认怎么表达？** — 用异常 `ConfirmCancelledError` 做控制流信号。catch 后终止执行（"用户不想执行子代理"是用户意图，不是程序错误）。比返回值更显式：调用方不需要先判 `needsConfirm` 再做分支。
-
-**为什么不用返回值方案**（`{needsConfirm: true, input}`）？因为调用方要先判类型，再 await 确认，再重新调 resolveModel——两次调用，重复解析。异常方案一步到位：ensureConfirmed 抛异常 = 终止，不抛 = 已确认，resolveModel 直接用结果。
-
-→ 详见 [architecture.md §6.3](./architecture.md#63-为什么用-ensureconfirmed--confirmcancellederror)
-
-## 2. EventBridge 契约（SDK 事件 → AgentEvent）
-
-EventBridge 把 Pi SDK 的原始 `AgentSessionEvent` 转成 subagents 内部的 `AgentEvent`，是 record 的唯一事件输入源。转换规则必须敲死，否则 `updateFromEvent` 输入错误全链路歪。
+> **[HISTORICAL]** 早期有独立的 `event-bridge.ts` 做这套翻译 + 累积。技术债治理（debt-governance Wave 1）内联进 session-runner——EventBridge 无独立状态、无独立生命周期（唯一调用方是 session-runner），独立文件只带来封装漏洞（累积器字段跨文件可见）。合并后 turn/toolCall/usage 累积全部收口进 `record.turns[]`（D-4），闭包只保留 `pendingTools`（SDK 契约补全层：tool_end 可能不带 args，需用 tool_start 寄存的 args 回填——非结果数据）。
 
 ### 事件映射
 
-| SDK 事件 | AgentEvent | bridge 累积 | updateFromEvent 动作 |
-|---|---|---|---|
-| `tool_execution_start` | `{type:"tool_start", toolName, args}` | pendingTools.set(id) | eventLog 推 tool_start |
-| `tool_execution_end` | `{type:"tool_end", toolName, args, result, isError}` | toolCalls.push + pendingTools.delete | eventLog 推 tool_end |
-| `message_update`（ame.type==="thinking_delta"） | `{type:"thinking_delta", delta}` | — | _currentThinking 累积 |
-| `message_update`（ame.delta） | `{type:"text_delta", delta}` | — | _currentTurnText 累积 |
-| `turn_end` | `{type:"turn_end"}` | turnCount++ | flush 缓冲 + turns++ |
-| `message_end`（usage） | `{type:"message_end", usage}` | usageAccum += usage | totalTokens += Σ |
-| `message_end`（stopReason error/aborted） | `{type:"error", error}` | lastError = msg | — |
-| `compaction_start` | `{type:"compaction"}` | — | — |
-| 其他（agent_start/message_start 等） | 丢弃 | — | — |
+| SDK 事件 | AgentEvent | updateFromEvent 动作（收口进 record.turns[]） |
+|---|---|---|
+| `tool_execution_start` | `{type:"tool_start", toolName, args}` | currentTurn().toolCalls.push(running InternalToolCall) + pendingTools.set(id) |
+| `tool_execution_end` | `{type:"tool_end", toolName, args, result, isError}` | 跨 turn 找 running 同名 toolCall，补全 result/_status + pendingTools.delete |
+| `message_update`（ame.type==="thinking_delta"） | `{type:"thinking_delta", delta}` | currentTurn().thinking += delta（完整累积） |
+| `message_update`（ame.delta） | `{type:"text_delta", delta}` | currentTurn().text += delta（完整累积） |
+| `turn_end` | `{type:"turn_end"}` | currentTurn().closed=true + closedTs + turnCount++ + 清 lastError |
+| `message_end`（usage） | `{type:"message_end", usage}` | currentTurn().usageDelta += usage + totalTokens += Σ |
+| `message_end`（stopReason error/aborted） | `{type:"error", message}` | record.lastError = message |
+| `compaction_start` | `{type:"compaction"}` | — |
+| 其他（agent_start/message_start 等） | 丢弃 | — |
 
 ### 三个易错点
 
 **① thinking_delta 必须在 text_delta 之前判断**。SDK 的 thinking_delta 事件也带 `delta` 字段，若先无条件提取 `ame.delta` 会把 thinking 内容误当 text。
 
-**② tool_end 的 args 来自 pendingTools**。SDK 的 `tool_execution_end` 不一定带 args，需用 `toolCallId` 从 `pendingTools`（tool_start 时暂存）取回，供 `extractLabelFromArgs` 提取人类可读 label（如 `bash find /Users/...` 而非裸 `bash`）。
+**② tool_end 的 args 来自 pendingTools**。SDK 的 `tool_execution_end` 不一定带 args，需用 `toolCallId` 从 `pendingTools`（tool_start 时暂存）取回，供 `extractLabelFromArgs` 提取人类可读 label（如 `bash find /Users/...` 而非裸 `bash`）。pendingTools 是闭包局部变量，非 record 字段——它是 SDK 契约补全层，不进结果数据。
 
-**③ subscribe 回调收到的是 unknown**。必须先 `isSdkEvent(event)` 运行时 guard（校验 `type` 字段是 string），再断言为 SdkEvent。非法形状直接丢弃——SDK 事件结构变化时避免 `switch(raw.type)` 静默失配（全走 default 不报错）。
+**③ subscribe 回调收到的是 unknown**。必须先 `isSdkEvent(event)` 运行时 guard（校验 `type` 字段是 string），再交给 `handleSdkEvent`。非法形状直接丢弃——SDK 事件结构变化时避免 `switch(raw.type)` 静默失配（全走 default 不报错）。
 
-### bridge 累积器 vs record 字段
+### message_end 的 usage/error 顺序（accumulateMessageEnd）
 
-```mermaid
-flowchart LR
-    SDK[SdkEvent] --> B[EventBridge.handle]
-    B -->|累积| Acc[turnCount<br/>toolCalls[]<br/>usageAccum<br/>lastError<br/>pendingTools]
-    B -->|转发| AE[AgentEvent]
-    AE --> UF[updateFromEvent]
-    UF -->|mutate| Record[ExecutionRecord<br/>turns / totalTokens<br/>eventLog]
-    Acc -->|collectResult 读取| Result[AgentResult<br/>turns=bridge.turnCount<br/>usage=bridge.usage<br/>toolCalls=bridge.toolCalls]
-```
-
-`turnCount`/`toolCalls`/`usage` 在 bridge 和 record 各存一份，看似冗余，实际分工不同：
-- **bridge 累积器**：供 `collectResult` 构造 AgentResult（执行结果）
-- **record 字段**：供 `project()` 实时投影 Details（展示）
-
-两套数据**同源**（都由 handle 驱动），但消费者不同。turn_end 时 bridge.turnCount++ 与 record.turns++ 同时发生，保持一致。
+LLM provider 常在错误响应里也携带 usage（计费需如此）。`accumulateMessageEnd` 必须**先发 `message_end(usage)`，再独立判断 error/aborted**——否则携带 usage 的错误响应会跳过 error 事件，导致 session-runner 把 errored session 误判为 `success=true`。
 
 ## 3. createAndConfigureSession 组装
 
@@ -135,43 +112,42 @@ flowchart TD
 
 **SDK 约束（spec FR-1.7 偏差）**：`createAgentSession({tools})` 构造时传 allowlist 需预知工具全集，但扩展工具要等 resourceLoader 加载后才注册。SDK 无 `resourceLoader.getTools()` 预加载 API。因此工具过滤**必须创建后**用 `setActiveToolsByName` 执行。仅当 allowlist 严格小于 allTools 时才调（避免无谓调用）。
 
-### 步骤 4：EventBridge 订阅
+### 步骤 4：SDK 事件订阅（内联）
 
 ```typescript
-bridge = createEventBridge(onEvent ?? (() => {}));
-unsubscribe = session.subscribe((event: unknown) => {
-  if (!isSdkEvent(event)) return;
-  bridge.handle(event as SdkEvent);
+unsubscribe = session.subscribe((raw: unknown) => {
+  if (!isSdkEvent(raw)) return;
+  handleSdkEvent(raw);  // → agentEvent → updateFromEvent(record) + onTurnEnd + opts.onEvent
 });
 ```
 
-调用方的 `onEvent`（executor 传入的 `updateFromEvent` wrapper）由 bridge 持有，每个 AgentEvent 转发时触发。
+subscribe 在 `run()` 内完成（不在 createAndConfigureSession 内——后者只负责造 session，run 负责「跑」）。回调链：`isSdkEvent` guard → `handleSdkEvent`（switch 翻译成 AgentEvent）→ `agentEvent`（统一出口）→ `updateFromEvent`（收口进 record.turns[]）+ `onTurnEnd`（turnLimiter + schema enforcement）+ `opts.onEvent`（调用方回流，widget/notify）。详见 §2。
 
 ## 4. collectResult 字段来源
 
-一次执行结束，`collectResult` 从 session + bridge 组装 AgentResult。每个字段的来源必须明确，避免旧实现的多处拼装。
+一次执行结束，`collectResult` **全部从 record 读**（D-4 收口后单一数据源），不再读 session.messages 或闭包累积器。每个字段的来源必须明确，避免旧实现的多处拼装。
 
 | AgentResult 字段 | 来源 |
 |---|---|
-| `text` | session.messages 最后一条 assistant message 的 text 部分（倒序找） |
-| `turns` | bridge.turnCount（turn_end 累积） |
-| `usage` | bridge.usageAccum（input/output/cacheRead/cacheWrite/cost），全零则 undefined |
-| `toolCalls` | bridge.toolCalls（tool_execution_end 累积） |
+| `text` | `getFullText(record)`（聚合 turns[].text，多 turn 用空行分隔） |
+| `turns` | `record.turnCount`（turn_end 累积） |
+| `usage` | `getTotalUsage(record)`（聚合 turns[].usageDelta，全零则 undefined） |
+| `toolCalls` | `getAllToolCalls(record)`（扁平化 turns[].toolCalls，strip _status/startedTs） |
 | `durationMs` | Date.now() - startTime |
-| `success` | 参数传入（prompt 未抛错 + bridge.lastError 为空 → true） |
-| `error` | 参数传入（prompt catch 的 err.message 或 bridge.lastError） |
-| `sessionId` | session.sessionId |
-| `sessionFile` | session.sessionManager.getSessionFile()（持久化路径） |
+| `success` | 参数传入（prompt 未抛错 + record.lastError 为空 → true） |
+| `error` | 参数传入（prompt catch 的 err.message 或 record.lastError） |
+| `sessionId` | session.sessionId（参数传入） |
+| `sessionFile` | session.sessionManager.getSessionFile()（参数传入） |
 
 **success 判定的两个来源**：
 1. `session.prompt()` 抛错 → catch 里 `success=false, error=err.message`
-2. prompt 成功但 `bridge.lastError` 非空（message_end stopReason=error/aborted）→ `success=false`
+2. prompt 成功但 `record.lastError` 非空（message_end stopReason=error/aborted，已由 updateFromEvent 收口）→ `success=false`
 
 两者都检查，缺一会漏 SDK 偶发以 message_end error 结束但 prompt 未抛错的情况。
 
 ### parsedOutput（结构化输出）
 
-从 bridge.toolCalls 找 `toolName==="structured-output"` 的 result.details。配合 schema enforcement（§5），保证 schema 模式下 agent 一定调了该 tool。
+从 `getAllToolCalls(record)` 找 `toolName==="structured-output"` 的 result.details。配合 schema enforcement（§5），保证 schema 模式下 agent 一定调了该 tool。
 
 ## 5. schema enforcement
 
@@ -188,9 +164,9 @@ flowchart TD
     Limit -->|否| GiveUp[放任结束]
 ```
 
-- **判定只看 toolName**：isError 视为"调用了但失败"，agent 自己会重试修正 schema。原要求"未出错才算调用过"会导致 agent 调用但失败时反复 steer 达上限后放任，parsedOutput 为 undefined。
+- **判定只看 toolName**（从 `getAllToolCalls(record)` 扁平化读）：isError 视为"调用了但失败"，agent 自己会重试修正 schema。原要求"未出错才算调用过"会导致 agent 调用但失败时反复 steer 达上限后放任，parsedOutput 为 undefined。
 - **MAX_SCHEMA_STEERS = 2**：对齐 structured-output 扩展原 setupWorkflowHook 的 MAX_HOOK_RETRIES。
-- **替代原 hook**：structured-output 扩展的 setupWorkflowHook 依赖 `PI_WORKFLOW_SCHEMA` env + 主 pi 的 turn_end，但进程内 runAgent 路径既不设 env 也不冒泡 turn_end 到主 pi，hook 从未生效。此处内联 enforcement 修复。
+- **替代原 hook**：structured-output 扩展的 setupWorkflowHook 依赖 `PI_WORKFLOW_SCHEMA` env + 主 pi 的 turn_end，但进程内 session 执行路径既不设 env 也不冒泡 turn_end 到主 pi，hook 从未生效。此处内联 enforcement 修复。
 
 ## 6. 失败路径与资源清理时序
 
@@ -199,10 +175,10 @@ flowchart TD
     Start[run 开始] --> Acq[pool.acquire]
     Acq --> Session[createAndConfigureSession<br/>含 H2: post-create try/catch]
     Session -->|post-create 抛错| H2Catch[H2 catch:<br/>session.dispose + re-throw]
-    Session -->|成功| Bind[绑定 limiter + signal + schema]
+    Session -->|成功| Bind[内联绑定 limiter + signal + schema<br/>原 RunHooks 已删]
     Bind --> Prompt[session.prompt]
     Prompt -->|抛错| InnerCatch[catch:<br/>success=false]
-    Prompt -->|成功| CheckErr{bridge.lastError?}
+    Prompt -->|成功| CheckErr{record.lastError?}
     CheckErr -->|有| InnerCatch
     CheckErr -->|无| Collect[collectResult]
     InnerCatch --> Collect
@@ -212,9 +188,9 @@ flowchart TD
 
 **资源清理三层保障**：
 
-1. **H2 — session-factory post-create try/catch**：`createAndConfigureSession` 在 `createAgentSession` 成功后，把 `applyToolFilter`/`session.subscribe` 包进 `try { ... } catch (err) { session.dispose(); throw err; }`。若 post-creation 步骤抛错，已创建的 Pi session 被 dispose，不泄漏连接（SDK dispose 实际幂等，无双重 dispose 风险）。
+1. **H2 — createAndConfigureSession post-create try/catch**：`createAndConfigureSession` 在 `createAgentSession` 成功后，把 `applyToolFilter` 包进 `try { ... } catch (err) { session.dispose(); ... throw err; }`（dispose 失败时把 err 作为 cause 链上、不掩盖原始 err）。若 post-creation 步骤抛错，已创建的 Pi session 被 dispose，不泄漏连接（SDK dispose 实际幂等，无双重 dispose 风险）。
 
-2. **run() 的 finally**：`unsubscribe`（session.subscribe 返回的清理函数）+ `session.dispose()`。覆盖 prompt 抛错路径。
+2. **run() 的 finally**：移除 signal listener + `unsubscribe`（session.subscribe 返回的清理函数）+ `session.dispose()`。覆盖 prompt 抛错路径。
 
 3. **H1 — runAndFinalize catch + finalizeFailed**：`run()` 契约是"不抛错"，但防御意外异常——`runAndFinalize` 的 catch 调 `finalizeFailed`（合成 failed AgentResult → CAS → finalizeRecord → archive + history.append），swallow 不 re-throw。sync 路径拿到合成 failed result 正常返回（修复异常逃逸 tool 层），background 路径 `.then` 跑 notify（background 失败现在会通知）。pool.release 由 finally 保证（git 锁/磁盘满时并发槽不泄漏）。
 

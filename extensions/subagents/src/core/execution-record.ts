@@ -96,7 +96,7 @@ export function extractLabelFromArgs(toolName: string, args: unknown): string {
   return toolName;
 }
 
-/** 截断 label 到 maxLen（非省略号——保持列宽稳定，与旧 foldEntries 设计意图一致）。 */
+/** 截断 label 到 maxLen（非省略号——保持列宽稳定，避免长命令/路径撑爆 TUI 列宽）。 */
 function truncateLabel(label: string): string {
   return label.length > TOOL_LABEL_MAX ? label.slice(0, TOOL_LABEL_MAX) : label;
 }

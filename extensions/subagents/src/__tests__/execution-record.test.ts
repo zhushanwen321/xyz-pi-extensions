@@ -843,7 +843,7 @@ describe("extractLabelFromArgs", () => {
   });
 
   it("truncates long labels to TOOL_LABEL_MAX (TUI column-width stability)", () => {
-    // 旧 foldEntries 的设计意图：保持 TUI 列宽稳定，避免 10KB bash 命令撑爆 compact view。
+    // 设计意图：保持 TUI 列宽稳定，避免 10KB bash 命令撑爆 compact view。
     const longCmd = "x".repeat(200);
     const label = extractLabelFromArgs("bash", { command: longCmd });
     // label = "bash " + 截断到 100 的 command

@@ -92,3 +92,24 @@ ring buffer 淘汰头部）。收口为 `turns: Turn[]` 后：
 **偏差理由**：旧 toUsageTotal/session-runner 累积 cost 但 AgentUsageTotal 类型未声明，
 类型与运行时不一致。重构后显式声明 cost 字段，getTotalUsage 累加 turns[].usageDelta.cost
 （来自 SdkEvent.message.usage.cost.total，message_end 时拍平传入）。
+
+### D-6: `BgNotifier` 滑动窗口保留（偏离 plan W5）
+
+**plan 目标**：plan Wave 5 计划砍掉 `BgNotifier` 的滑动窗口合并，改为直接 `sendMessage`——
+删除 `pending` 队列、`dedup` Map、`timer`。理由是「用户几乎不会同时启动多个 background
+subagent 让它们同时完成」，合并窗口（plan 当时写 2000ms）让通知不及时。
+
+**采纳偏差（保留滑动窗口）**：经评估决定**保留** `BgNotifier` 的滑动窗口架构
+（`pending[]` + `dedup` Map + timer）。理由：
+
+1. **批量合并是真实价值**：workflow 场景（如 `evolve`、`review-gate`）会一次性 fan-out
+   多个 background subagent，密集完成时合并为一条通知避免对话流被刷屏。
+2. **延迟可调**：窗口从 plan 提到的 2000ms 改为 `MERGE_WINDOW_MS = 60_000`，配合
+   「无 running background 时立即 flush」——最后一批不等窗口，兼顾合并与及时性。
+3. **dedup 有语义**：cancel 与 detached 完成回调的竞态由 CAS 抢锁解决（见 execution-flow §4），
+   但 dedup TTL 是通知层的二重防御（防同 id 短时间内重复 notify），非冗余。
+
+**行为**：`notify()` → dedup TTL 检查 → 入 pending → 无 running 立即 flush / 否则重启窗口 timer。
+窗口到期或 session_shutdown 时 flush 全部 pending 为一条消息（多条时列 bullet list）。
+
+**plan 状态标注**：plan Wave 5 标注为「未按 plan 执行（有意偏差）」，非遗漏。

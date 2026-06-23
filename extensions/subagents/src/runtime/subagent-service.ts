@@ -326,8 +326,8 @@ export class SubagentService {
         onEvent,
       }, ctx);
     } catch (err) {
-      // run() 正常路径不抛错，但创建期异常（createAndConfigureSession /
-      // attachRunHooks 失败）会逃逸出 run() —— 合成 failed result + 收尾。
+      // run() 正常路径不抛错，但创建期异常（createAndConfigureSession 失败）
+      // 会逃逸出 run() —— 合成 failed result + 收尾。
       // swallow（不 re-throw）：sync 调用方拿到合成 failed result，background 的
       // .then 正常跑 notify。避免异常逃逸到 tool 层 + record 卡 running。
       result = await this.finalizeFailed(record, err);
@@ -376,8 +376,8 @@ export class SubagentService {
     if (!tryTransition(record, "cancelled")) {
       return false; // detached 已 finalize，cancel 来晚了
     }
-    // 抢到锁：completeRecord（用空 result 填 cancelled）+ archive（移出 live map，否则
-    // hasRunningBackground 永真）+ notify。不走 finalizeRecord（cancel 不写 history）。
+    // 抢到锁：completeRecord（用空 result 填 cancelled）+ archive（设终态 status，
+    // 否则 hasRunningBackground 永真）+ notify。不走 finalizeRecord（cancel 不写 history）。
     // durationMs 用真实耗时（startedAt → now），避免耗时统计恒为 0 失真。
     const cancelledResult: AgentResult = {
       text: "",
@@ -407,8 +407,8 @@ export class SubagentService {
 
   /**
    * run() 创建期异常的收尾（H1 修复）。
-   * run() 正常路径不抛错，但 createAndConfigureSession / attachRunHooks 失败
-   * 会抛——本方法合成 failed AgentResult → CAS 抢锁 → finalizeRecord
+   * run() 正常路径不抛错，但 createAndConfigureSession 失败会抛——
+   * 本方法合成 failed AgentResult → CAS 抢锁 → finalizeRecord
    * （与正常路径同形，写 history + archive）。
    * 返回合成 result 供 runAndFinalize 继续返回（不 re-throw，swallow 策略）。
    */
