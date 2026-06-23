@@ -12,7 +12,7 @@ import {
 import type { GoalStatus } from "../types";
 
 const TERMINAL: GoalStatus[] = ["complete", "budget_limited", "time_limited", "cancelled"];
-const NON_TERMINAL: GoalStatus[] = ["active", "paused", "blocked"];
+const NON_TERMINAL: GoalStatus[] = ["active", "blocked"]; // ADR-002：paused 已删除
 const ALL = [...NON_TERMINAL, ...TERMINAL];
 
 // ── isTerminalStatus / isActiveStatus ─────────────────

@@ -419,6 +419,24 @@ describe("applyToolAction — complete_goal", () => {
 		expect(ports.history.length).toBe(1);
 		expect((ports.history[0] as { status: string }).status).toBe("complete");
 	});
+
+	it("回归#2: complete 结果含 Budget Report（Total turns / Tasks / Token / Duration）", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.tasks = [
+			{ id: 1, description: "t1", status: "completed", lastUpdatedTurn: 0 },
+			{ id: 2, description: "t2", status: "verified", lastUpdatedTurn: 1 }];
+		session.state.currentTurnIndex = 7;
+		session.state.budget.tokenBudget = 5000;
+		const result = applyToolAction(session, "complete_goal", { evidence: "done" }, makeFakePorts());
+		const text = (result.content[0] as { text: string }).text;
+		// 回归修复：Budget Report 应包含 4 段（原 bug：重构时丢失）
+		expect(text).toContain("--- Budget Report ---");
+		expect(text).toContain("Total turns: 7");
+		expect(text).toContain("Tasks completed: 2/2");
+		expect(text).toContain("Token usage:");
+		expect(text).toContain("Duration:");
+	});
 });
 
 // ── applyToolAction — cancel_goal ────────────────────
@@ -916,6 +934,21 @@ describe("applyEvent — 简单事件", () => {
 		expect(session.state.tokensUsed).toBe(before);
 	});
 
+	it("回归#1: message_end 非 active（blocked）→ 不累加 token（FR-8.6 G-R2-001）", () => {
+		const session = createGoalSession();
+		session.state = makeState();
+		session.state.status = "blocked"; // 非 active
+		const before = session.state.tokensUsed;
+		applyEvent(session, "message_end", {
+			message: {
+				role: "assistant",
+				usage: { input: 100, output: 50, cacheRead: 20 },
+			},
+		}, makeFakePorts());
+		// 回归修复：blocked 状态不累加 token（原 bug：缺 isActiveStatus 守卫）
+		expect(session.state.tokensUsed).toBe(before);
+	});
+
 	it("turn_end → currentTurnIndex++ + updateWidget effect", () => {
 		const session = createGoalSession();
 		session.state = makeState();
@@ -943,7 +976,7 @@ describe("applyEvent — 简单事件", () => {
 	it("agent_start + 非 active status → 不更新", () => {
 		const session = createGoalSession();
 		session.state = makeState();
-		session.state.status = "paused";
+		session.state.status = "blocked"; // ADR-002：paused 已删除，用 blocked 代表非 active
 		session.state.tasks = [
 			{ id: 1, description: "done", status: "completed", lastUpdatedTurn: 0 },
 		];

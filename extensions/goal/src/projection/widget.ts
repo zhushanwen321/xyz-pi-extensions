@@ -55,7 +55,7 @@ function truncateText(text: string, maxLen: number): string {
 
 /**
  * 返回累计耗时秒数（仅基于 state 内字段，不含 Date.now() 副作用）。
- * 终态 / paused 状态下停止累计，直接返回已记录值。
+ * 终态 / blocked 状态下停止累计，直接返回已记录值。
  * adapter/service 在调用 projection 前已通过 budget.tick() 把当前活跃段计入
  * state.timeUsedSeconds，因此此处直接读取即可。
  */
@@ -103,11 +103,8 @@ export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string
 		text += th.fg("warning", ` | ⚠ ${state.stallCount} turns stalled`);
 	}
 
-	// Status suffix
+	// Status suffix（ADR-002：paused 视图已删除）
 	switch (state.status) {
-		case "paused":
-			text += th.fg("warning", " | ⏸ Paused");
-			break;
 		case "blocked":
 			text += th.fg("error", " | ⊘ Blocked");
 			break;

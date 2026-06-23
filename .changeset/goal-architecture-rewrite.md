@@ -27,3 +27,20 @@ changes (all documented in spec FR-4/5/6):
 `pi-coding-workflow` / `pi-plan` receive a patch: their inline `GoalInitFn` type
 alias is updated to mirror goal's new required-ctx signature (no runtime change;
 callers already pass `ctx`).
+
+**ADR-002: `paused` state removed** (user-visible behavior change):
+
+- Removed the `paused` goal status and the `/goal pause` command.
+- ESC interrupt no longer needs `paused` — Pi's native abort mechanism already
+  stops the agent and waits for the next user message (FR-6.7).
+- Context-usage protection (>85%) now keeps the goal `active` and only injects
+  a wrap-up instruction (no state transition).
+- `/goal resume` now only recovers `blocked → active` (was `paused|blocked`).
+- The `blocked` status (AI `report_blocked` action + auto-block on stall) is
+  retained unchanged — it is independent of ESC/pause.
+- Goal status enum is now 6 states: `active | blocked | complete | budget_limited | time_limited | cancelled`.
+
+Users who previously used `/goal pause` should rely on ESC (pure interrupt) or
+`/goal clear`/`/goal abort` instead. See
+`.xyz-harness/2026-06-21-goal-architecture-rewrite/changes/adr-002-remove-paused-state.md`
+for full rationale.

@@ -7,7 +7,7 @@
  * FR-6.4: 删除 hasPendingInjection（僵尸字段）
  * FR-6.7: 删除 pendingPause（ESC 改用 aborted 守卫）
  * FR-8.1 G-006: entry GC（goal-state 最新 1 条，goal-history 20 条）
- * FR-8.3 G-015: 非对称强制激活（非终态非 paused → active）
+ * ADR-002（G-015 简化）: 非终态 → active（paused 状态已删除，无特判）
  */
 
 import { isTerminalStatus } from "./engine/goal";
@@ -54,7 +54,8 @@ export function isStaleContextError(error: Error | unknown): boolean {
  * 从 session entries 恢复 goal state。
  *
  * FR-8.1 G-006: goal-state 只保留最新 1 条（splice 其余）
- * FR-8.3 G-015: 非终态且非 paused → 强制 active（crashed blocked 重启变 active）
+ * ADR-002（G-015 简化）：非终态 → 强制 active（crashed blocked 重启变 active）。
+ *   原 G-015 的 "paused 保持 paused" 特判已删除（paused 状态不存在）
  * FR-8.1 G-024: deserialize throw → state=null（部分损坏全丢）
  * FR-8.1 G-006: goal-history entry 保留最近 MAX_HISTORY_ENTRIES=20 条
  */
@@ -118,8 +119,8 @@ export function reconstructGoalState(session: GoalSession, sessionPort: SessionP
 
 	if (!session.state) return;
 
-	// FR-8.3 G-015: 非对称强制激活
-	if (!isTerminalStatus(session.state.status) && session.state.status !== "paused") {
+	// ADR-002（G-015 简化）：非终态 → 强制 active（paused 状态已删除，无需特判）
+	if (!isTerminalStatus(session.state.status)) {
 		session.state.status = "active";
 		session.state.timeStartedAt = Date.now();
 	}

@@ -221,7 +221,7 @@ function persistAndUpdate(
  * 分支顺序：
  * 1. 终态：currentTurnIndex - completedAtTurnIndex >= AUTO_CLEAR_TURNS(2) → clearGoalSession
  * 2. 停滞检测（TASK_STALL_TURN_THRESHOLD=10）：重置被提醒项 lastUpdatedTurn 后注入提醒
- * 3. Context 使用率 > 85% → 转 paused + 注入 wrap-up 指令
+ * 3. ADR-002：Context 使用率 > 85% → 保持 active + 注入 wrap-up 指令
  * 4. 正常：注入 contextInjectionPrompt
  *
  * 无 ESC 守卫（before_agent_start 是 agent 开始前的信号，此时无 aborted 可能）。
@@ -252,8 +252,8 @@ export async function handleBeforeAgentStart(
 	const staleResult = checkStaleness(session);
 	if (staleResult) return staleResult;
 
-	// Context 使用率检查
-	const ctxResult = checkContextUsage(pi, session, ctx);
+	// Context 使用率检查（ADR-002：保持 active，仅注入提示）
+	const ctxResult = checkContextUsage(session, ctx);
 	if (ctxResult) return ctxResult;
 
 	// 正常 context injection
@@ -360,25 +360,20 @@ function checkStaleness(session: GoalSession): BeforeAgentStartResult | undefine
 }
 
 /**
- * FR-8.6 context pause：getContextUsage 超过 CONTEXT_USAGE_RATIO_LIMIT(0.85) → 转 paused。
+ * ADR-002 context usage 提示：getContextUsage 超过 CONTEXT_USAGE_RATIO_LIMIT(0.85)
+ * → goal **保持 active**（不转 paused），仅注入 wrap-up 指令让 AI 自行 complete/cancel。
+ * 不做状态变更、不 persist、不 tick（资源保护通过"提示"而非"状态机"实现）。
  */
 function checkContextUsage(
-	pi: ExtensionAPI,
-	session: GoalSession,
-	ctx: ExtensionContext,
+	_session: GoalSession,
+	_ctx: ExtensionContext,
 ): BeforeAgentStartResult | undefined {
-	const usage = ctx.getContextUsage();
+	const usage = _ctx.getContextUsage();
 	if (
 		usage &&
 		usage.contextWindow > 0 &&
 		(usage.tokens ?? 0) / usage.contextWindow > CONTEXT_USAGE_RATIO_LIMIT
 	) {
-		const state = session.state!;
-		// FR-6.5: 转 paused 前先 tick（此时 status 仍为 active，累加当前运行段）
-		tickState(state);
-		state.status = transitionStatus(state.status, "paused");
-		pi.appendEntry("goal-state", serializeState(state));
-		updateWidget(session, buildPorts(pi, ctx).ui);
 		return {
 			message: {
 				customType: "goal-context-exceeded",
@@ -404,7 +399,7 @@ function checkContextUsage(
  * - FR-8.2 G-021 防重入：session.isProcessing 入口加锁，finally 释放
  * - FR-8.2 G-020 stale 快照：入口 makeStaleChecker snapshot goalId，每个副作用前 checkStale
  * - FR-6.7 ESC 守卫（最关键）：ctx.signal?.aborted → 不发 continuation、不递增 stall、
- *   不做 budget 检查、不转 paused，goal 保持 active，等用户下次输入恢复
+ *   不做 budget 检查、不做任何状态变更，goal 保持 active，等用户下次输入恢复
  *
  * FR-8.7 分支优先级（严格按序）：
  * 1. allTasksDone → maxTurnsReached? complete : budgetTight? steer : followUp
@@ -435,12 +430,14 @@ export async function handleAgentEnd(
 
 		// FR-6.7 ESC 守卫（最关键）：aborted 时 goal 保持 active，不做任何副作用
 		if (ctx.signal?.aborted) {
-			// 不发 continuation、不递增 stall、不做 budget 检查、不转 paused
+			// 不发 continuation、不递增 stall、不做 budget 检查、不做状态变更
 			// goal 保持 active，等用户下次输入恢复
 			return;
 		}
 
-		// 预算检查（FR-6.2 维度独立）
+		// 预算检查（FR-6.2 维度独立）——先 tick 把当前运行段计入 timeUsedSeconds，
+		// 否则时间预算检测会比实际晚一轮（回归修复）
+		tickState(session.state);
 		const budgetResult = checkBudgetOnTurnEnd(session.state, session.state.timeUsedSeconds);
 		const budgetAction = await handleBudgetChecks(pi, session, ctx, budgetResult, checkStale);
 		if (budgetAction !== "continue") return;

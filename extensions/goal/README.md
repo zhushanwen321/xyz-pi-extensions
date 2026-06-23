@@ -27,8 +27,7 @@ pi install npm:@zhushanwen/pi-goal
 /goal 修复项目中所有失败的测试
 /goal 实现用户认证功能 --tokens 500000 --timeout 30
 /goal status      # 查看进度
-/goal pause       # 暂停
-/goal resume      # 恢复
+/goal resume      # 恢复（blocked → active）
 /goal clear       # 清除
 ```
 

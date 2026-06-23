@@ -133,7 +133,7 @@ describe("reconstructGoalState", () => {
 		expect(Math.min(...timestamps)).toBe(5);
 	});
 
-	it("G-015: blocked 非终态非 paused → 强制 active + reset timeStartedAt", () => {
+	it("ADR-002 G-015: blocked 非终态 → 强制 active + reset timeStartedAt", () => {
 		const session = createGoalSession();
 		const state = createGoalState("blocked goal");
 		state.status = "blocked";
@@ -147,14 +147,7 @@ describe("reconstructGoalState", () => {
 		expect(session.state!.timeStartedAt).toBeLessThanOrEqual(after);
 	});
 
-	it("G-015: paused 保持 paused（不强制激活）", () => {
-		const session = createGoalSession();
-		const state = createGoalState("paused goal");
-		state.status = "paused";
-		const port = makeFakeSessionPort([makeGoalStateEntry(state)]);
-		reconstructGoalState(session, port);
-		expect(session.state!.status).toBe("paused");
-	});
+	// ADR-002：paused 状态已删除，旧 paused entry 重建时强制 active（向前兼容）
 
 	it("G-015: 终态保持终态（不强制激活）", () => {
 		const session = createGoalSession();

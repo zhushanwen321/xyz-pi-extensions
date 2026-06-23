@@ -82,10 +82,7 @@ describe("renderStatusLine", () => {
 		expect(text).toContain("3/50"); // DEFAULT_BUDGET.maxTurns=50
 	});
 
-	it("paused → 含 ⏸ Paused 后缀", () => {
-		const text = renderStatusLine(makeState({ status: "paused" }), theme);
-		expect(text).toContain("⏸ Paused");
-	});
+	// ADR-002：paused 视图已删除（status 不再含 paused）
 
 	it("blocked → 含 ⊘ Blocked 后缀", () => {
 		const text = renderStatusLine(makeState({ status: "blocked" }), theme);

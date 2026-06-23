@@ -13,7 +13,6 @@ import type { GoalTask } from "./task";
 
 export type GoalStatus =
 	| "active"
-	| "paused"
 	| "blocked"
 	| "complete"
 	| "budget_limited"

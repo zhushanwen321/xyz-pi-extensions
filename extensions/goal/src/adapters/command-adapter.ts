@@ -23,9 +23,9 @@ import { isActiveStatus, isTerminalStatus, transitionStatus } from "../engine/go
 import { getCompletedCount, getIncompleteTasks } from "../engine/task";
 import type { BudgetConfig } from "../engine/types";
 import { DEFAULT_BUDGET } from "../engine/types";
-import { serializeState } from "../persistence";
 import { objectiveUpdatedPrompt } from "../projection/prompts";
-import { createGoal, finalizeAndPersist, persistState } from "../service";
+import { updateWidget } from "../projection/widget";
+import { createGoal, finalizeAndPersist, persistState, tickState } from "../service";
 import type { GoalSession } from "../session";
 import { clearGoalSession } from "../session";
 import { buildPorts } from "./tool-adapter";
@@ -47,8 +47,6 @@ export async function handleGoalCommand(
 	switch (parsed.action) {
 		case "status":
 			return handleStatus(session, ctx);
-		case "pause":
-			return handlePause(pi, session, ctx);
 		case "resume":
 			return handleResume(pi, session, ctx);
 		case "history":
@@ -72,6 +70,10 @@ function handleStatus(session: GoalSession, ctx: ExtensionContext): void {
 		return;
 	}
 	const state = session.state;
+	// 回归修复：active goal 显示实时耗时（tick 累加当前运行段后再读）
+	if (isActiveStatus(state.status)) {
+		tickState(state);
+	}
 	const completed = getCompletedCount(state.tasks);
 	const total = state.tasks.length;
 	const timeMins = Math.floor(state.timeUsedSeconds / SECONDS_PER_MINUTE);
@@ -89,25 +91,6 @@ function handleStatus(session: GoalSession, ctx: ExtensionContext): void {
 	ctx.ui.notify(lines.filter(Boolean).join("\n"), "info");
 }
 
-// ── /goal pause ───────────────────────────────────────
-
-function handlePause(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionContext): void {
-	if (!session.state) {
-		ctx.ui.notify("Goal mode not active.", "warning");
-		return;
-	}
-	if (isTerminalStatus(session.state.status)) {
-		ctx.ui.notify(`Goal is in terminal state (${session.state.status}), cannot pause.`, "warning");
-		return;
-	}
-	// FR-6.5: 转换前先 persist（此时 status 仍为 active，tick 会累加当前运行段）
-	const ports = buildPorts(pi, ctx);
-	persistState(session, ports);
-	session.state.status = transitionStatus(session.state.status, "paused");
-	ports.persistence.appendState(serializeState(session.state));
-	ctx.ui.notify("Goal paused. Use /goal resume to continue.", "info");
-}
-
 // ── /goal resume ──────────────────────────────────────
 
 function handleResume(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionContext): void {
@@ -120,8 +103,9 @@ function handleResume(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionCont
 		ctx.ui.notify(`Goal is in terminal state (${state.status}), cannot resume.`, "warning");
 		return;
 	}
-	if (state.status !== "paused" && state.status !== "blocked") {
-		ctx.ui.notify("Goal is not paused or blocked, no need to resume.", "info");
+	// ADR-002: resume 仅恢复 blocked（paused 状态已删除）
+	if (state.status !== "blocked") {
+		ctx.ui.notify("Goal is not blocked, no need to resume.", "info");
 		return;
 	}
 	state.status = "active";
@@ -136,6 +120,7 @@ function handleResume(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionCont
 		const dim = resumeCheck.dimension;
 		state.status = transitionStatus(state.status, dim === "token" ? "budget_limited" : "time_limited");
 		persistState(session, ports);
+		updateWidget(session, ports.ui);
 		ctx.ui.notify(
 			`${dim === "token" ? "Token" : "Time"} budget exhausted, cannot resume. Use /goal clear to reset.`,
 			"warning",
@@ -143,6 +128,7 @@ function handleResume(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionCont
 		return;
 	}
 	persistState(session, ports);
+	updateWidget(session, ports.ui);
 
 	// FR-8.12 并行模式：resume 有未完成任务时触发 AI
 	const incomplete = getIncompleteTasks(state.tasks);
@@ -296,8 +282,10 @@ function handleUpdate(
 	state.timeWarning70Sent = false;
 	state.timeWarning90Sent = false;
 	session.tasksCompletedAtAgentStart = 0;
-	// FR-6.5: 持久化重塑后的状态（persistState 按当前 status tick 累加）
-	persistState(session, buildPorts(pi, ctx));
+	// FR-6.5: 持久化重塑后的状态（persistState 按当前 status tick 累加）+ FR-6.1 widget 刷新
+	const updatePorts = buildPorts(pi, ctx);
+	persistState(session, updatePorts);
+	updateWidget(session, updatePorts.ui);
 	ctx.ui.notify(`Objective updated:\nPrevious: ${oldObjective}\nNew: ${newObjective}`, "info");
 
 	if (isActiveStatus(state.status)) {

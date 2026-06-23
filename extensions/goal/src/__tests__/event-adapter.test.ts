@@ -513,8 +513,8 @@ describe("handleBeforeAgentStart", () => {
 		expect(result!.message.content).toContain("complete_goal");
 	});
 
-	// FR-8.6 context pause（CONTEXT_USAGE_RATIO_LIMIT=0.85）
-	it("context 使用率 > 85% → 转 paused + 注入 wrap-up 指令", async () => {
+	// ADR-002 context usage 提示（CONTEXT_USAGE_RATIO_LIMIT=0.85，保持 active）
+	it("context 使用率 > 85% → 保持 active + 注入 wrap-up 指令", async () => {
 		const { pi } = makeFakePi();
 		const { ctx } = makeFakeCtx({ contextUsage: { tokens: 9000, contextWindow: 10000 } }); // 90% > 85%
 		const session = createGoalSession();
@@ -524,10 +524,11 @@ describe("handleBeforeAgentStart", () => {
 
 		expect(result).toBeDefined();
 		expect(result!.message.customType).toBe("goal-context-exceeded");
-		expect(session.state!.status).toBe("paused");
+		// ADR-002：goal 保持 active（不转 paused）
+		expect(session.state!.status).toBe("active");
 	});
 
-	it("context 使用率 <= 85% → 正常 context injection（不转 paused）", async () => {
+	it("context 使用率 <= 85% → 正常 context injection", async () => {
 		const { pi } = makeFakePi();
 		const { ctx } = makeFakeCtx({ contextUsage: { tokens: 5000, contextWindow: 10000 } }); // 50%
 		const session = createGoalSession();
@@ -539,11 +540,11 @@ describe("handleBeforeAgentStart", () => {
 		expect(session.state!.status).toBe("active");
 	});
 
-	it("非 active（paused）→ 返回 undefined（不注入）", async () => {
+	it("非 active（blocked）→ 返回 undefined（不注入）", async () => {
 		const { pi } = makeFakePi();
 		const { ctx } = makeFakeCtx();
 		const session = createGoalSession();
-		session.state = makeRunningState({ status: "paused" });
+		session.state = makeRunningState({ status: "blocked" });
 
 		const result = await handleBeforeAgentStart(pi, session, ctx);
 

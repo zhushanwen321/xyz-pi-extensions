@@ -20,7 +20,7 @@ import {
 import { accumulateTokens, checkBudgetOnResume, tick } from "./engine/budget";
 import { createGoalState, isActiveStatus, isTerminalStatus, transitionStatus } from "./engine/goal";
 import type { GoalTask, Subtask, TaskVerification } from "./engine/task";
-import { getNextTaskId, isTaskDone, isTerminalTaskStatus, validateTaskTransition } from "./engine/task";
+import { getCompletedCount, getNextTaskId, isTaskDone, isTerminalTaskStatus, validateTaskTransition } from "./engine/task";
 import type { BudgetConfig, GoalRuntimeState, GoalStatus } from "./engine/types";
 import { makeHistoryEntry, serializeState } from "./persistence";
 import type {
@@ -30,7 +30,7 @@ import type {
 	SessionPort,
 	UiPort,
 } from "./ports";
-import { formatTaskList } from "./projection/prompts";
+import { formatBudget, formatTaskList } from "./projection/prompts";
 import { errorResult } from "./projection/result";
 import type { GoalSession } from "./session";
 import { clearGoalSession } from "./session";
@@ -82,7 +82,7 @@ export function tickState(state: GoalRuntimeState): void {
 /**
  * FR-6.5: persist 前调 tick 累加时间，然后 serialize + appendState。
  *
- * tick 使用**当前 status** 判断是否累加（active 才累加）。因此对于 pause/clear/abort/blocked
+ * tick 使用**当前 status** 判断是否累加（active 才累加）。因此对于 clear/abort/blocked
  * 这类「active → 非活跃」的转换，调用方必须在改 status **之前**先调本函数
  * （或先调 {@link tickState} 捕获最后运行段）。
  *
@@ -197,7 +197,7 @@ export function finalizeAndPersist(
  * 终态变更 + 写 history（纯状态变更，不含 tick / persist / clearSession）。
  *
  * 被 {@link finalizeAndPersist} 内部调用，也可单独调用（如仅需状态变更 + history）。
- * 按 FR-8.7 矩阵：所有终态都写 history（paused/blocked 不走此入口）。
+ * 按 FR-8.7 矩阵：所有终态都写 history（blocked 是中间态，不走此入口）。
  */
 export function finalizeGoal(
 	state: GoalRuntimeState,
@@ -208,7 +208,7 @@ export function finalizeGoal(
 	state.status = transitionStatus(state.status, terminalStatus);
 	state.completedAtTurnIndex = state.currentTurnIndex;
 
-	// FR-8.7: 所有终态都写 history（paused/blocked 不走此入口）
+	// FR-8.7: 所有终态都写 history（blocked 是中间态，不走此入口）
 	const entry: GoalHistoryEntry = makeHistoryEntry(state, options.completedTasks);
 	ports.persistence.appendHistory(entry);
 }
@@ -386,6 +386,21 @@ function actionUpdateTasks(
 	return makeResult(session, `Updated ${updates.length} task actions`);
 }
 
+/**
+ * 回归修复 #2：complete_goal 的 Budget Report（对齐 main buildBudgetReport）。
+ * Total turns / Tasks completed 两行独立，budget 行（token + duration）复用
+ * FR-3.4 唯一格式化出口 formatBudget("report")，避免重新散落拼接。
+ */
+function buildCompleteBudgetReport(state: GoalRuntimeState): string {
+	const lines: string[] = [
+		`Total turns: ${state.currentTurnIndex}`,
+		`Tasks completed: ${getCompletedCount(state.tasks)}/${state.tasks.length}`,
+	];
+	const budgetPart = formatBudget(state, state.timeUsedSeconds, "report");
+	if (budgetPart) lines.push(budgetPart);
+	return lines.join("\n");
+}
+
 function actionCompleteGoal(
 	session: GoalSession,
 	params: Record<string, unknown>,
@@ -413,7 +428,9 @@ function actionCompleteGoal(
 	// FR-3.3: 唯一终态序列入口（tick + finalizeGoal + persist）
 	const completedCount = completedOrVerified.length;
 	finalizeAndPersist(state, "complete", completedCount, ports);
-	return makeResult(session, `Objective completed! Evidence: ${evidence}`);
+	// 回归修复 #2：补回 Budget Report（main 既有，重构时丢失）
+	const budgetReport = buildCompleteBudgetReport(state);
+	return makeResult(session, `Objective completed! Evidence: ${evidence}\n\n--- Budget Report ---\n${budgetReport}`);
 }
 
 function actionCancelGoal(
@@ -625,7 +642,9 @@ export function applyEvent(
 
 	switch (eventType) {
 		case "message_end": {
-			// token 累加（FR-8.6）—— 复用 engine 纯函数
+			// token 累加（FR-8.6 G-R2-001）—— 仅 active 时累加（回归修复：原缺 isActiveStatus 守卫，
+			// blocked 等 non-active 状态会错误累加 token）。复用 engine 纯函数。
+			if (!isActiveStatus(session.state.status)) break;
 			const data = eventData as {
 				message?: {
 					role?: string;
