@@ -29,41 +29,56 @@ import { join as pathJoin } from "node:path";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key, matchesKey } from "@mariozechner/pi-tui";
 
+import {
+  getAllToolCalls,
+  projectLiveProgress,
+} from "../../engine/live/execution-record.js";
 import type { ExecutionTraceNode } from "../../engine/models/types.js";
 import type { WorkflowRun } from "../../engine/models/workflow-run.js";
 import { saveWorkflow } from "../../infra/workflow-files.js";
 import {
+  BOX_BORDER_CHARS,
+  BUDGET_TOKENS_DIVISOR,
   buildPhaseGroups,
   ELLIPSIS,
   formatActivityLine,
   formatAgentOneLiner,
   formatElapsed,
+  formatElapsedSeconds,
   formatPhaseLine,
   formatStatusBadge,
-  formatTokenStat,
-  OUTPUT_TRUNCATE_BYTES,
   padVisible,
-  PROMPT_FOLD_LINES,
   SIDEBAR_WIDTH,
   statusDotStr,
+  TERM_ROWS_FALLBACK,
   type ThemeLike,
   visibleLen,
 } from "./format.js";
 
+// L2 详情内容构建 + 滚动按键（纯函数）抽到 detail-content.ts；此处 re-export 保持
+// view 的对外 API 不变（测试仍从 WorkflowsView 导入）。
+export {
+  buildDetailContent,
+  detailContentLength,
+  type DetailKeyResult,
+  type DetailScrollContext,
+  processDetailKey,
+} from "./detail-content.js";
+import { buildDetailContent, detailContentLength, type DetailScrollContext,processDetailKey } from "./detail-content.js";
+
 // ── TUI layout constants ──────────────────────────────────────
 
-const BOX_BORDER_CHARS = 2;
 const NAV_LEVEL_DETAIL = 2;
 type NavLevel = 0 | 1 | typeof NAV_LEVEL_DETAIL;
 const MIN_BODY_LINES = 3;
 const BODY_HEIGHT_NUMERATOR = 2;
 const BODY_HEIGHT_DENOMINATOR = 3;
-const MAX_TOOL_CALLS_DISPLAY = 3;
 /** save overlay 居中计算的除数（÷2 居中）。 */
 const OVERLAY_CENTER_DIVISOR = 2;
 
-/** 轮询间隔：engine 无事件推送，view 自轮询 trace 变化（缺陷 #1+#5 修复）。 */
-const TICK_MS = 1000;
+/** 轮询间隔：engine 无事件推送，view 自轮询 trace 变化。
+ *  200ms 对齐 subagents spinner 节奏，保证 agent 运行中 live 进度（tool calls/activity）流式可见。 */
+const TICK_MS = 200;
 
 /** 可打印 ASCII 字符下限（用于 save overlay 输入过滤）。 */
 const PRINTABLE_CHAR_MIN = 32;
@@ -103,6 +118,11 @@ interface ViewState {
   saveInputValue: string;
   saveMessage: string;
   saveMsgOk: boolean;
+ // ── L2 详情滚动 ──
+  /** 右侧 detail 当前滚动 offset（render 路径 clamp 收敛）。 */
+  detailScrollOffset: number;
+  /** running 态是否自动钉底部（用户 PgUp 后置 false，End/PgDn 到底恢复 true）。 */
+  followTail: boolean;
 }
 
 function createInitialState(): ViewState {
@@ -116,6 +136,8 @@ function createInitialState(): ViewState {
     saveInputValue: "",
     saveMessage: "",
     saveMsgOk: false,
+    detailScrollOffset: 0,
+    followTail: true, // 默认钉底（对齐 subagents 进详情即底部对齐）
   };
 }
 
@@ -172,6 +194,22 @@ export function createWorkflowsView(
       done();
     };
 
+ // ── L2 详情滚动辅助 ──
+    /** 安全读 terminal.rows（duck-type 失败兜底，对齐 subagents termRows）。 */
+    function termRows(): number {
+      const rows = tui.terminal?.rows;
+      return typeof rows === "number" && rows > 0 ? rows : TERM_ROWS_FALLBACK;
+    }
+    /** L2 右侧 detail viewport 高度（与 renderLayout 的 viewH 同源）。 */
+    function detailViewportHeight(): number {
+      return Math.max(MIN_BODY_LINES, bodyHeight(termRows()));
+    }
+    /** 重置 detail 滚动到底部对齐（切 agent / 进 L2 时调用）。 */
+    function resetDetailScroll(): void {
+      state.detailScrollOffset = Number.MAX_SAFE_INTEGER; // render clamp 收敛到 max
+      state.followTail = true;
+    }
+
  // ── Key handling（SDK Component.handleInput 模式，对齐 main） ──
  // matchesKey(data, KeyId) 处理终端转义序列差异（xterm/iTerm/kitty），
  // 优于手写 \x1b[A 等原始序列。escape/ctrl+c 在 keybindings 里同映射到 exit。
@@ -197,6 +235,31 @@ export function createWorkflowsView(
         return;
       }
 
+ // ── L2 详情滚动（PgUp/PgDn/Home/End，对齐 subagents processKey 阶段 2） ──
+ // up/down 在 L2 用于切 agent，故滚动键独立于此；未命中则落到下面的 up/down/enter。
+      if (state.level === NAV_LEVEL_DETAIL) {
+        const node = currentPhaseAgents()[state.agentIdx];
+        if (node) {
+          const detailCtx: DetailScrollContext = {
+            viewportHeight: detailViewportHeight(),
+            contentLines: detailContentLength(node, state, run, theme),
+            isRunning: node.status === "running",
+          };
+          const r = processDetailKey(
+            data,
+            { scrollOffset: state.detailScrollOffset, followTail: state.followTail },
+            detailCtx,
+          );
+          if (r.handled) {
+            state.detailScrollOffset = r.scrollOffset;
+            state.followTail = r.followTail;
+            cache.width = undefined;
+            requestRender();
+            return;
+          }
+        }
+      }
+
  // Navigation: up/down
       if (matchesKey(data, Key.up)) {
         if (state.level === 0 && state.phaseIdx > 0) {
@@ -207,6 +270,7 @@ export function createWorkflowsView(
         } else if (state.level === NAV_LEVEL_DETAIL && state.agentIdx > 0) {
           state.agentIdx--;
           state.promptExpanded = false;
+          resetDetailScroll(); // 切 agent → 底部对齐（对齐 subagents 进详情即钉底）
         }
         cache.width = undefined;
         requestRender();
@@ -227,6 +291,7 @@ export function createWorkflowsView(
           if (state.agentIdx < agents.length - 1) {
             state.agentIdx++;
             state.promptExpanded = false;
+            resetDetailScroll(); // 切 agent → 底部对齐
           }
         }
         cache.width = undefined;
@@ -242,8 +307,10 @@ export function createWorkflowsView(
         } else if (state.level === 1) {
           state.level = NAV_LEVEL_DETAIL;
           state.promptExpanded = false;
+          resetDetailScroll(); // 进 L2 → 底部对齐
         } else if (state.level === NAV_LEVEL_DETAIL) {
           state.promptExpanded = !state.promptExpanded;
+          // 展开/折叠改变内容长度，render 路径 clamp 收敛；保持当前锚点语义
         }
         cache.width = undefined;
         requestRender();
@@ -400,18 +467,7 @@ function bodyHeight(screenHeight: number): number {
   return Math.max(MIN_BODY_LINES, Math.floor((screenHeight * BODY_HEIGHT_NUMERATOR) / BODY_HEIGHT_DENOMINATOR) - HEADER_FOOTER_LINES);
 }
 
-const BUDGET_TOKENS_DIVISOR = 1000;
 const BUDGET_COST_DECIMALS = 4;
-
-/** status → 语义色标签（L2 detail 头用）。 */
-function statusLabel(status: string, theme: ThemeLike): string {
-  switch (status) {
-    case "completed": return theme.fg("success", status);
-    case "running": return theme.fg("warning", status);
-    case "failed": return theme.fg("error", status);
-    default: return theme.fg("muted", status);
-  }
-}
 
 function renderLayout(
   run: WorkflowRun,
@@ -437,10 +493,12 @@ function renderLayout(
   } else if (state.level === 1) {
     renderLevel1(lines, run, phaseGroups, state, theme, mainWidth, now);
   } else {
-    renderLevel2(lines, run, agents, state, theme, mainWidth, now);
+    // L2 详情走固定高度 viewport（右侧滚动），高度 = minBody（与 L0/L1 最小一致）
+    const viewH = Math.max(MIN_BODY_LINES, bodyHeight(screenHeight));
+    renderLevel2(lines, run, agents, state, theme, mainWidth, now, viewH);
   }
 
- // Pad body to min height
+ // Pad body to min height（L2 已固定高度，此处对 L0/L1 补短）
   const minBody = bodyHeight(screenHeight);
   const emptyBodyLine = padVisible("", SIDEBAR_WIDTH) + "│" + padVisible("", mainWidth);
   while (lines.length - bodyStart < minBody) {
@@ -514,7 +572,7 @@ function renderFooter(
     ? "↑↓ phase · ⏎ enter"
     : state.level === 1
       ? "↑↓ agent · ⏎ detail"
-      : "↑↓ agent · ⏎ prompt";
+      : "↑↓ agent · ⏎ prompt · PgUp/PgDn scroll";
   const actionParts: string[] = [];
   const status = run.state.status;
   if (status === "running" || status === "paused") {
@@ -612,118 +670,30 @@ function renderLevel1(
     const node = agents[i];
     const pointer = i === state.agentIdx ? "❯ " : "  ";
     const dot = statusDotStr(node.status, theme);
-    const elapsed = formatElapsed(
-      node.startedAt,
-      node.completedAt ? new Date(node.completedAt).getTime() : now,
-    );
-    const tok = node.result?.usage;
-    const tokStr = tok ? `${Math.round((tok.input + tok.output) / BUDGET_TOKENS_DIVISOR)}k tok` : "";
-    const tcCount = node.result?.toolCalls?.length ?? 0;
-    rightLines.push(`${pointer}${dot} ${node.agent}    ${node.model}    ${tokStr} · ${tcCount} tools · ${elapsed}`);
+    // Live 路径优先：运行中从 node.live 读实时 token/tool 计数 + elapsed。
+    if (node.live) {
+      const live = projectLiveProgress(node.live);
+      const tokStr = live.totalTokens > 0 ? `${Math.round(live.totalTokens / BUDGET_TOKENS_DIVISOR)}k tok` : "";
+      const tcCount = getAllToolCalls(node.live).length;
+      const elapsed = formatElapsedSeconds(live.elapsedSeconds);
+      rightLines.push(`${pointer}${dot} ${node.agent}    ${node.model}    ${tokStr} · ${tcCount} tools · ${elapsed}`);
+    } else {
+      const elapsed = formatElapsed(
+        node.startedAt,
+        node.completedAt ? new Date(node.completedAt).getTime() : now,
+      );
+      const tok = node.result?.usage;
+      const tokStr = tok ? `${Math.round((tok.input + tok.output) / BUDGET_TOKENS_DIVISOR)}k tok` : "";
+      const tcCount = node.result?.toolCalls?.length ?? 0;
+      rightLines.push(`${pointer}${dot} ${node.agent}    ${node.model}    ${tokStr} · ${tcCount} tools · ${elapsed}`);
+    }
   }
 
   mergeBody(lines, leftLines, rightLines);
 }
 
 // ── Level 2: Execution detail ─────────────────────────────────
-
-function renderWorkerLogSection(
-  rightLines: string[],
-  run: WorkflowRun,
-  mainWidth: number,
-  theme: ThemeLike,
-): void {
-  const logs = run.state.errorLogs;
-  if (!logs || logs.length === 0) return;
-  const total = logs.length;
-  const WORKER_LOG_SHOW = 20;
-  const showCount = Math.min(total, WORKER_LOG_SHOW);
-  const label = total > showCount
-    ? `Worker diagnostics · last ${showCount} of ${total}`
-    : `Worker diagnostics · ${total} entr${total !== 1 ? "ies" : "y"}`;
-  rightLines.push(theme.fg("warning", label));
-  const start = total - showCount;
-  for (let i = start; i < total; i++) {
-    const entry = logs[i];
-    const levelToken = entry.level === "error" ? "error" : entry.level === "warn" ? "warning" : "muted";
-    const prefix = `[${entry.level}]`;
-    const line = `  ${prefix} ${entry.message}`.slice(0, mainWidth - BOX_BORDER_CHARS);
-    rightLines.push(theme.fg(levelToken, line));
-  }
-  rightLines.push("");
-}
-
-function renderPromptSection(
-  rightLines: string[],
-  node: ExecutionTraceNode,
-  state: ViewState,
-  theme: ThemeLike,
-): void {
-  const taskLines = node.task.split("\n");
-  const lineCount = taskLines.length;
-  rightLines.push(theme.fg("muted", `Prompt · ${lineCount} lines · ⏎ ${state.promptExpanded ? "collapse" : "expand"}`));
-  if (state.promptExpanded || lineCount <= PROMPT_FOLD_LINES) {
-    rightLines.push(...taskLines.map((l) => `  ${l}`));
-  } else {
-    rightLines.push(...taskLines.slice(0, PROMPT_FOLD_LINES).map((l) => `  ${l}`));
-    rightLines.push(theme.fg("dim", `  ${ELLIPSIS} ${lineCount - PROMPT_FOLD_LINES} more lines`));
-  }
-  rightLines.push("");
-}
-
-function renderActivitySection(
-  rightLines: string[],
-  node: ExecutionTraceNode,
-  mainWidth: number,
-  theme: ThemeLike,
-): void {
-  const toolCalls = node.result?.toolCalls ?? [];
-  const totalCount = toolCalls.length;
-  if (totalCount > 0) {
-    const showCount = Math.min(MAX_TOOL_CALLS_DISPLAY, totalCount);
-    const isTruncated = totalCount > MAX_TOOL_CALLS_DISPLAY;
-    const label = isTruncated
-      ? `Activity · last ${showCount} of ${totalCount} tool calls`
-      : `Activity · ${totalCount} tool call${totalCount !== 1 ? "s" : ""}`;
-    rightLines.push(theme.fg("muted", label));
-    const start = totalCount - showCount;
-    for (let i = start; i < totalCount; i++) {
-      rightLines.push(`  ${formatActivityLine(toolCalls[i], mainWidth - BOX_BORDER_CHARS)}`);
-    }
-  } else {
-    rightLines.push(theme.fg("muted", "Activity"));
-    rightLines.push(theme.fg("dim", `  ${node.status === "running" ? "(no tool calls yet)" : "(no activity recorded)"}`));
-  }
-  rightLines.push("");
-}
-
-function renderOutcomeSection(
-  rightLines: string[],
-  node: ExecutionTraceNode,
-  mainWidth: number,
-  theme: ThemeLike,
-): void {
-  rightLines.push(theme.fg("muted", "Outcome"));
-  if (node.status === "running") {
-    rightLines.push(theme.fg("dim", "  Still running..."));
-  } else if (node.result?.error) {
-    rightLines.push(theme.fg("error", `  ${node.result.error.slice(0, mainWidth - BOX_BORDER_CHARS)}`));
-  } else if (node.result?.content) {
-    const raw = node.result.content;
-    const OUTCOME_TAIL_LINES = 5;
-    if (Buffer.byteLength(raw, "utf8") > OUTPUT_TRUNCATE_BYTES) {
-      const truncated = Buffer.from(raw, "utf8").slice(0, OUTPUT_TRUNCATE_BYTES).toString("utf8");
-      const allLines = truncated.split("\n");
-      const tail = allLines.slice(-OUTCOME_TAIL_LINES);
-      rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - BOX_BORDER_CHARS)}`));
-      rightLines.push(theme.fg("dim", "  (truncated)"));
-    } else {
-      const allLines = raw.split("\n");
-      const tail = allLines.slice(-OUTCOME_TAIL_LINES);
-      rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - BOX_BORDER_CHARS)}`));
-    }
-  }
-}
+// 详情内容构建 + 滚动按键已抽到 detail-content.ts（纯函数，可单测，且控制本文件行数）。
 
 function renderLevel2(
   lines: string[],
@@ -733,6 +703,7 @@ function renderLevel2(
   theme: ThemeLike,
   mainWidth: number,
   now: number,
+  viewH: number,
 ): void {
   const leftLines: string[] = [];
   const rightLines: string[] = [];
@@ -751,25 +722,39 @@ function renderLevel2(
     leftLines.push(`${pointer}${agentName}`);
   }
 
- // Right: full detail
+ // Right: full detail（viewport 截断 + 滚动，对齐 subagents renderRightDetail）
   const node = agents[state.agentIdx];
   if (node) {
-    const elapsed = formatElapsed(
-      node.startedAt,
-      node.completedAt ? new Date(node.completedAt).getTime() : now,
-    );
-    rightLines.push(theme.fg("muted", "Detail"));
-    rightLines.push("─".repeat(mainWidth));
-    rightLines.push(`${statusDotStr(node.status, theme)} ${statusLabel(node.status, theme)} · ${node.model}`);
-    rightLines.push(theme.fg("dim", formatTokenStat(node.result?.usage, node.result?.toolCalls, elapsed)));
-    rightLines.push("");
-    renderWorkerLogSection(rightLines, run, mainWidth, theme);
-    renderPromptSection(rightLines, node, state, theme);
-    renderActivitySection(rightLines, node, mainWidth, theme);
-    renderOutcomeSection(rightLines, node, mainWidth, theme);
+    const content = buildDetailContent(node, state, run, theme, mainWidth, now);
+    const maxOff = Math.max(0, content.length - viewH);
+    // running 且 followTail → 钉底部（最新输出始终可见，用户 PgUp 后停止跟随）
+    if (node.status === "running" && state.followTail) {
+      state.detailScrollOffset = maxOff;
+    }
+    // clamp 收敛（切 agent / End 越界后下次 render 归位）
+    if (state.detailScrollOffset > maxOff) state.detailScrollOffset = maxOff;
+    const start = state.detailScrollOffset;
+    const visible = content.slice(start, start + viewH);
+    while (visible.length < viewH) visible.push(""); // pad 填满视口
+    rightLines.push(...visible);
+
+    // 位置指示（仅内容超一屏时，对齐 subagents detailScrollInfo）
+    if (content.length > viewH) {
+      const end = Math.min(start + viewH, content.length);
+      // 覆盖第一行标题，拼上 (start+1-end/total)
+      const titleBase = "Detail";
+      const indicator = ` (${start + 1}-${end}/${content.length})`;
+      rightLines[0] = theme.fg("muted", titleBase + indicator);
+    }
   }
 
-  mergeBody(lines, leftLines, rightLines);
+ // body 固定高度 = viewH（左右都 pad/截到 viewH，避免内容撑高溢出）
+  const bodyH = viewH;
+  const leftPadded: string[] = [];
+  for (let i = 0; i < bodyH; i++) leftPadded.push(leftLines[i] ?? "");
+  const rightPadded: string[] = [];
+  for (let i = 0; i < bodyH; i++) rightPadded.push(rightLines[i] ?? "");
+  mergeBody(lines, leftPadded, rightPadded);
 }
 
 // ── Trace export（S 键，对齐 main saveTraceToFile）─────────────

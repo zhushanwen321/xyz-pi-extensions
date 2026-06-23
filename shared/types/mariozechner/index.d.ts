@@ -226,6 +226,7 @@ declare module "@mariozechner/pi-tui" {
 	export const Key: {
 		escape: string; up: string; down: string; left: string; right: string;
 		enter: string; space: string; tab: string; backspace: string; delete: string;
+		home: string; end: string; pageUp: string; pageDown: string;
 		ctrl(k: string): string; shift(k: string): string; alt(k: string): string;
 	};
 	export interface SelectItem {

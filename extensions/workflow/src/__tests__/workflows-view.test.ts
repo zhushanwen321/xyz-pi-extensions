@@ -19,7 +19,14 @@ import {
   formatStatusBadge,
   type ThemeLike,
 } from "../interface/views/format.js";
-import { createWorkflowsView, type ViewActions } from "../interface/views/WorkflowsView.js";
+import {
+  buildDetailContent,
+  createWorkflowsView,
+  detailContentLength,
+  type DetailScrollContext,
+  processDetailKey,
+  type ViewActions,
+} from "../interface/views/WorkflowsView.js";
 
 // ── Fixtures ─────────────────────────────────────────────────
 
@@ -182,5 +189,125 @@ describe("WorkflowsView (adapted to WorkflowRun)", () => {
     await createWorkflowsView(run, makeTheme(), ctx, makeActions());
 
     expect(ctx.ui.custom).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── L2 详情滚动：纯函数单测 ────────────────────────────────────
+//
+// processDetailKey / detailContentLength / buildDetailContent 是从 WorkflowsView
+// 抽出的导出纯函数（对齐 subagents processKey），无 Pi runtime 依赖，可直接单测。
+// 覆盖：PgUp/PgDn/Home/End 的 offset 边界、followTail 状态机、单一数据源不变量。
+
+// 原始终端转义序列（来自 @mariozechner/pi-tui keys.js）。
+const SEQ = {
+  pageUp: "\x1b[5~",
+  pageDown: "\x1b[6~",
+  home: "\x1b[H",
+  end: "\x1b[F",
+  up: "\x1b[A",
+  enter: "\r",
+} as const;
+
+function makeScrollCtx(overrides: Partial<DetailScrollContext> = {}): DetailScrollContext {
+  return { viewportHeight: 10, contentLines: 30, isRunning: false, ...overrides };
+}
+
+describe("processDetailKey (L2 detail scroll)", () => {
+  it("PgUp 减一个视口高度，followTail 置 false", () => {
+    const r = processDetailKey(SEQ.pageUp, { scrollOffset: 15, followTail: true }, makeScrollCtx());
+    expect(r.handled).toBe(true);
+    expect(r.scrollOffset).toBe(5); // 15 - 10
+    expect(r.followTail).toBe(false); // 用户主动上滚 → 停止跟随
+  });
+
+  it("PgUp 到顶 clamp 到 0", () => {
+    const r = processDetailKey(SEQ.pageUp, { scrollOffset: 3, followTail: false }, makeScrollCtx());
+    expect(r.scrollOffset).toBe(0);
+    expect(r.followTail).toBe(false);
+  });
+
+  it("PgDn 加一个视口高度，到底则 followTail 置 true", () => {
+    // max = 30 - 10 = 20；从 15 翻 10 → 25，clamp 到 20，到底 → followTail=true
+    const r = processDetailKey(SEQ.pageDown, { scrollOffset: 15, followTail: false }, makeScrollCtx());
+    expect(r.handled).toBe(true);
+    expect(r.scrollOffset).toBe(20);
+    expect(r.followTail).toBe(true);
+  });
+
+  it("PgDn 未到底时保持原 followTail", () => {
+    // 从 0 翻 10 → 10，max=20，未到底
+    const r = processDetailKey(SEQ.pageDown, { scrollOffset: 0, followTail: false }, makeScrollCtx());
+    expect(r.scrollOffset).toBe(10);
+    expect(r.followTail).toBe(false);
+  });
+
+  it("Home 跳到顶，followTail 置 false", () => {
+    const r = processDetailKey(SEQ.home, { scrollOffset: 18, followTail: true }, makeScrollCtx());
+    expect(r.handled).toBe(true);
+    expect(r.scrollOffset).toBe(0);
+    expect(r.followTail).toBe(false);
+  });
+
+  it("End 跳到底（max），followTail 置 true", () => {
+    const r = processDetailKey(SEQ.end, { scrollOffset: 0, followTail: false }, makeScrollCtx());
+    expect(r.handled).toBe(true);
+    expect(r.scrollOffset).toBe(20); // max = 30 - 10
+    expect(r.followTail).toBe(true);
+  });
+
+  it("非滚动键（up/enter 等）不命中，handled=false", () => {
+    const base = { scrollOffset: 5, followTail: false };
+    expect(processDetailKey(SEQ.up, base, makeScrollCtx()).handled).toBe(false);
+    expect(processDetailKey(SEQ.enter, base, makeScrollCtx()).handled).toBe(false);
+    expect(processDetailKey("p", base, makeScrollCtx()).handled).toBe(false);
+  });
+
+  it("未命中时返回原 offset/followTail（透传，调用方继续现有逻辑）", () => {
+    const r = processDetailKey(SEQ.up, { scrollOffset: 7, followTail: true }, makeScrollCtx());
+    expect(r.scrollOffset).toBe(7);
+    expect(r.followTail).toBe(true);
+  });
+
+  it("内容短于视口时 max=0，PgDn/End 都落到 0", () => {
+    const ctx = makeScrollCtx({ contentLines: 5, viewportHeight: 10 });
+    const rEnd = processDetailKey(SEQ.end, { scrollOffset: 0, followTail: false }, ctx);
+    expect(rEnd.scrollOffset).toBe(0);
+    const rPgDn = processDetailKey(SEQ.pageDown, { scrollOffset: 0, followTail: false }, ctx);
+    expect(rPgDn.scrollOffset).toBe(0);
+  });
+
+  it("viewportHeight 兜底：为 0 时用 PAGE_SCROLL_DEFAULT 步长", () => {
+    const ctx = makeScrollCtx({ viewportHeight: 0 });
+    const r = processDetailKey(SEQ.pageUp, { scrollOffset: 25, followTail: true }, ctx);
+    expect(r.scrollOffset).toBe(15); // 25 - 10 (PAGE_SCROLL_DEFAULT)
+  });
+});
+
+describe("buildDetailContent / detailContentLength (single source of truth)", () => {
+  it("detailContentLength == buildDetailContent 行数（probe 宽度不折行）", () => {
+    const node = makeTraceNode({ task: "line1\nline2\nline3\nline4\nline5" });
+    const run = makeRun({ traceNodes: [node] });
+    const theme = makeTheme();
+    const len = detailContentLength(node, { promptExpanded: false }, run, theme);
+    const content = buildDetailContent(node, { promptExpanded: false }, run, theme, 9999, Date.now());
+    expect(len).toBe(content.length);
+  });
+
+  it("prompt 展开后内容行数 >= 折叠时（展开增加可见行）", () => {
+    const longTask = Array.from({ length: 10 }, (_, i) => `prompt line ${i}`).join("\n");
+    const node = makeTraceNode({ task: longTask });
+    const run = makeRun({ traceNodes: [node] });
+    const theme = makeTheme();
+    const collapsed = detailContentLength(node, { promptExpanded: false }, run, theme);
+    const expanded = detailContentLength(node, { promptExpanded: true }, run, theme);
+    expect(expanded).toBeGreaterThan(collapsed);
+  });
+
+  it("buildDetailContent 首行含 Detail 标题", () => {
+    const node = makeTraceNode();
+    const run = makeRun({ traceNodes: [node] });
+    const content = buildDetailContent(node, { promptExpanded: false }, run, makeTheme(), 80, Date.now());
+    expect(content[0]).toContain("Detail");
+    expect(content.length).toBeGreaterThan(0);
   });
 });

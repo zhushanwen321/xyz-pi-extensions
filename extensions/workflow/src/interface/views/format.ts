@@ -7,6 +7,7 @@
 
 import { truncateToWidth } from "@mariozechner/pi-tui";
 
+import type { AgentEventLogEntry } from "../../engine/live/types.js";
 import type { ExecutionTraceNode, ToolCallEntry } from "../../engine/models/types.js";
 import type { DoneReason, RunStatus } from "../../engine/models/types.js";
 
@@ -16,6 +17,20 @@ export const SIDEBAR_WIDTH = 24;
 export const PROMPT_FOLD_LINES = 3;
 export const OUTPUT_TRUNCATE_BYTES = 100_000;
 export const ELLIPSIS = "\u2026"; // U+2026
+
+// L2 详情滚动常量（对齐 subagents list-view.ts）。
+/** terminal.rows 读不到时的翻页兜底步长（防 NaN）。 */
+export const PAGE_SCROLL_DEFAULT = 10;
+/** tui.terminal.rows 兜底行数（duck-type 失败时，对齐 subagents TERM_ROWS_FALLBACK）。 */
+export const TERM_ROWS_FALLBACK = 24;
+
+// 跨 view 共享的布局常量（WorkflowsView + detail-content 都用）。
+/** box 左右边框字符宽度（│ x 2），用于内容行截断预算。 */
+export const BOX_BORDER_CHARS = 2;
+/** token 数 → k 单位的除数。 */
+export const BUDGET_TOKENS_DIVISOR = 1000;
+/** Activity 区最多显示的 tool call 条数。 */
+export const MAX_TOOL_CALLS_DISPLAY = 3;
 
 // 时间换算（模块私有常量）。
 const MS_PER_SEC = 1000;
@@ -111,6 +126,45 @@ export function formatElapsed(startedAt?: string, now: number = Date.now()): str
   const mins = Math.floor(secs / SECS_PER_MIN);
   const remSecs = secs % SECS_PER_MIN;
   return `${mins}m${remSecs}s`;
+}
+
+/**
+ * Format elapsed time from integer seconds（live 路径用）。
+ * 与 formatElapsed 输出格式一致，但输入是 computeElapsedSeconds 的秒数（非时间戳）。
+ */
+export function formatElapsedSeconds(seconds: number): string {
+  if (seconds < 1) return "0s";
+  if (seconds < SECS_PER_MIN) return `${seconds}s`;
+  const mins = Math.floor(seconds / SECS_PER_MIN);
+  const remSecs = seconds % SECS_PER_MIN;
+  return `${mins}m${remSecs}s`;
+}
+
+/**
+ * Format a live eventLog entry（live 路径 Activity 区用）。
+ *
+ *   tool_start → "→ {label}"
+ *   tool_end   → "← {label}"（done）/ "✗ {label}"（failed）
+ *   turn_end   → "∘ {label}"（turn 摘要）
+ *   error      → "✗ {label}"
+ *
+ * 对齐 subagents formatEventLine 的视觉风格，但用 workflow 的 ThemeLike（无 spinner）。
+ */
+export function formatEventLine(entry: AgentEventLogEntry, theme: ThemeLike): string {
+  switch (entry.type) {
+    case "tool_start":
+      return `→ ${entry.label}`;
+    case "tool_end":
+      return entry.status === "failed"
+        ? theme.fg("error", `✗ ${entry.label}`)
+        : `✓ ${entry.label}`;
+    case "turn_end":
+      return theme.fg("dim", `∘ ${entry.label}`);
+    case "error":
+      return theme.fg("error", `✗ ${entry.label}`);
+    default:
+      return entry.label;
+  }
 }
 
 /** Format token + tool call statistics. */
