@@ -9,15 +9,13 @@
  * 旧 view 通过 WorkflowOrchestrator.pause/resume/abort/restart 操作；
  * 新 view 直接读 WorkflowRun.state + 传 lifecycle 操作 callback。
  *
- * 注：T27 commands.ts 当前 /workflows 用文本输出（view 未注册）。
- * 本 view 为 T31 重建——结构正确、typecheck 通过、基础测试覆盖。
- * 未来 commands.ts 切回 createWorkflowsView 时即激活。
+ * SDK 集成：ctx.ui.custom factory 返回 Component{render(width), handleInput(data),
+ * invalidate()}。按键经 matchesKey(data, KeyId) 解析（对齐 main，兼容 xterm/iTerm/kitty
+ * 转义序列差异）。escape/ctrl+c 在 keybindings 同映射到 exit。
  */
 
-/* eslint-disable taste/no-silent-catch */
-
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import { Key, matchesKey } from "@mariozechner/pi-tui";
 
 import type { WorkflowRun } from "../../engine/models/workflow-run.js";
 import {
@@ -54,12 +52,11 @@ const MAX_TOOL_CALLS_DISPLAY = 3;
 // ── Minimal TUI duck-types（避免直接 import TUI/KeybindingsManager 类型 ──
 // 共享类型 fallback shared/types/mariozechner/index.d.ts 不导出 TUI 类，
 // workspace 跨包 typecheck 会报 "no exported member 'TUI'"。
-// 此处用结构化接口替代——只声明 view 实际用到的成员。
+// 此处用结构化接口替代——只声明 view 实际用到的成员（requestRender + terminal）。
 
 interface TuiLike {
   terminal: { columns: number; rows: number };
   requestRender(): void;
-  on(key: string, cb: () => void): void;
 }
 
 // ── View actions ──────────────────────────────────────────────
@@ -129,80 +126,123 @@ export function createWorkflowsView(
       if (state.agentIdx >= agents.length) state.agentIdx = Math.max(0, agents.length - 1);
     }
 
-    // 当前显示的 Text 行（每次 renderView 更新）
-    const host = new Text("", 0, 0);
+    // 渲染缓存：与 main 同构。width 变化或交互后 invalidate，避免每帧重算。
+    const cache = { width: undefined as number | undefined, lines: undefined as string[] | undefined };
+    const requestRender = () => tui.requestRender();
 
-    function renderView() {
-      clampSelections();
-      const width = tui.terminal.columns;
-      const height = tui.terminal.rows;
-      const lines = renderLayout(run, state, phaseGroups, theme, width, height);
-      // Text 组件以换行拼接，TUI 渲染时按行展开
-      host.setText(lines.join("\n"));
-      tui.requestRender();
-    }
-
-    // ── Key bindings via tui event interface ──
-    // TuiLike.on 已声明；tui 直接用（无需 duck-type 转换）。
-
-    tui.on("ctrl+c", () => {
+    const wrappedDone = () => {
+      if (state.disposed) return;
       state.disposed = true;
       done();
-    });
+    };
 
-    tui.on("escape", () => {
-      if (state.level === 0) {
-        state.disposed = true;
-        done();
-      } else {
+    // ── Key handling（SDK Component.handleInput 模式，对齐 main） ──
+    // matchesKey(data, KeyId) 处理终端转义序列差异（xterm/iTerm/kitty），
+    // 优于手写 \x1b[A 等原始序列。escape/ctrl+c 在 keybindings 里同映射到 exit。
+    function handleInput(data: string): void {
+      if (state.disposed) return;
+
+      // Escape / ctrl+c: level back or exit
+      if (matchesKey(data, Key.escape)) {
+        if (state.level === 0) {
+          wrappedDone();
+          return;
+        }
         state.level = (state.level - 1) as NavLevel;
         state.promptExpanded = false;
-        renderView();
+        cache.width = undefined;
+        requestRender();
+        return;
       }
-    });
 
-    tui.on("up", () => {
-      if (state.level === 0 && state.phaseIdx > 0) state.phaseIdx--;
-      else if (state.level === 1 && state.agentIdx > 0) state.agentIdx--;
-      renderView();
-    });
-
-    tui.on("down", () => {
-      if (state.level === 0 && state.phaseIdx < phaseGroups.length - 1) state.phaseIdx++;
-      else if (state.level === 1 && state.agentIdx < currentPhaseAgents().length - 1) state.agentIdx++;
-      renderView();
-    });
-
-    tui.on("enter", () => {
-      if (state.level === 0 && phaseGroups.length > 0) {
-        state.level = 1;
-        state.agentIdx = 0;
-      } else if (state.level === 1) {
-        state.level = NAV_LEVEL_DETAIL;
+      // Navigation: up/down
+      if (matchesKey(data, Key.up)) {
+        if (state.level === 0 && state.phaseIdx > 0) {
+          state.phaseIdx--;
+          state.agentIdx = 0;
+        } else if (state.level === 1 && state.agentIdx > 0) {
+          state.agentIdx--;
+        } else if (state.level === NAV_LEVEL_DETAIL && state.agentIdx > 0) {
+          state.agentIdx--;
+          state.promptExpanded = false;
+        }
+        cache.width = undefined;
+        requestRender();
+        return;
       }
-      renderView();
-    });
-
-    // ── Lifecycle shortcuts (no restart per D-9) ──
-    tui.on("p", async () => {
-      if (run.state.status === "running") {
-        try { await actions.pause(run.runId); } catch { /* pause 失败忽略，view 不阻断 */ }
-        renderView();
-      } else if (run.state.status === "paused") {
-        try { await actions.resume(run.runId); } catch { /* resume 失败忽略 */ }
-        renderView();
+      if (matchesKey(data, Key.down)) {
+        if (state.level === 0 && state.phaseIdx < phaseGroups.length - 1) {
+          state.phaseIdx++;
+          state.agentIdx = 0;
+        } else if (state.level === 1) {
+          const agents = currentPhaseAgents();
+          if (state.agentIdx < agents.length - 1) state.agentIdx++;
+        } else if (state.level === NAV_LEVEL_DETAIL) {
+          const agents = currentPhaseAgents();
+          if (state.agentIdx < agents.length - 1) {
+            state.agentIdx++;
+            state.promptExpanded = false;
+          }
+        }
+        cache.width = undefined;
+        requestRender();
+        return;
       }
-    });
 
-    tui.on("a", async () => {
-      if (run.state.status === "running" || run.state.status === "paused") {
-        try { await actions.abort(run.runId); } catch { /* abort 失败忽略 */ }
-        renderView();
+      // Enter: drill down (L0→L1→L2) or toggle prompt (L2)
+      if (matchesKey(data, Key.enter)) {
+        if (state.level === 0 && currentPhaseAgents().length > 0) {
+          state.level = 1;
+          state.agentIdx = 0;
+        } else if (state.level === 1) {
+          state.level = NAV_LEVEL_DETAIL;
+          state.promptExpanded = false;
+        } else if (state.level === NAV_LEVEL_DETAIL) {
+          state.promptExpanded = !state.promptExpanded;
+        }
+        cache.width = undefined;
+        requestRender();
+        return;
       }
-    });
 
-    renderView();
-    return host;
+      // ── Lifecycle shortcuts (no restart per D-9) ──
+      if (data === "p") {
+        if (run.state.status === "running") {
+          void actions.pause(run.runId).then(() => { cache.width = undefined; requestRender(); }).catch(() => {});
+        } else if (run.state.status === "paused") {
+          void actions.resume(run.runId).then(() => { cache.width = undefined; requestRender(); }).catch(() => {});
+        }
+        return;
+      }
+      if (data === "a") {
+        if (run.state.status === "running" || run.state.status === "paused") {
+          void actions.abort(run.runId).then(() => { cache.width = undefined; requestRender(); }).catch(() => {});
+        }
+        return;
+      }
+    }
+
+    // ── Component（SDK 规范：render(width) → string[] + handleInput + invalidate） ──
+    return {
+      invalidate(): void {
+        cache.width = undefined;
+        cache.lines = undefined;
+      },
+      render(width: number): string[] {
+        if (cache.lines && cache.width === width) return cache.lines;
+        clampSelections();
+        const height = tui.terminal.rows;
+        const raw = renderLayout(run, state, phaseGroups, theme, width, height);
+        // Pad to terminal height so the overlay fills the screen (matches main 行为）
+        const lines = raw.length < height
+          ? [...raw, ...Array.from({ length: height - raw.length }, () => "")]
+          : raw;
+        cache.width = width;
+        cache.lines = lines;
+        return lines;
+      },
+      handleInput,
+    };
   });
 }
 

@@ -64,3 +64,12 @@ Other changes:
     TUI handler: `/workflows` → sort runs (active first) → `ctx.ui.select`
     → `createWorkflowsView`; `/workflows <runId>` does exact/prefix direct-open.
     `ViewActions` (pause/resume/abort) injected from `LauncherDeps`.
+  - **Bug #3 (TUI crashed on open — `tui.on is not a function`)**: the T31
+    WorkflowsView rewrite used a non-existent `tui.on(key, cb)` API and
+    returned a raw `Text` component. The real SDK `TUI` class has no `.on()`;
+    `ctx.ui.custom` expects a `Component{render(width), handleInput(data),
+    invalidate()}`. Rewrote the view body to the SDK-conformant Component
+    pattern (aligned with `main`): keys parsed via `matchesKey(data, Key.*)`
+    from `@mariozechner/pi-tui` (handles xterm/iTerm/kitty escape-sequence
+    differences), render cache mirrors main's width-keyed cache, escape/ctrl+c
+    exit, p/a lifecycle shortcuts preserved (no restart per D-9).
