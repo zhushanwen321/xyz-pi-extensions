@@ -95,8 +95,10 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     // 万一仍抛错，catch 住防止 session_start 整体崩。
     try {
       maybeCleanupExpiredSessionFiles(agentDir, cwd);
-    } catch {
-      // best-effort 清理失败，忽略——service 已注册，session 可用
+    } catch (err) {
+      // best-effort 清理失败，忽略——service 已注册，session 可用。记录但不阻断。
+      void err; // 显式确认忽略：GC 清理失败不应阻断 session_start
+      console.warn("[subagents] expired session file cleanup failed:", err);
     }
   });
 

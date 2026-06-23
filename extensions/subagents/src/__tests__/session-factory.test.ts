@@ -10,13 +10,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentConfig } from "../core/model-resolver.ts";
-import type { AgentSessionLike } from "../types.ts";
 import {
   applyToolFilter,
   buildAppendSystemPrompt,
   buildEnvBlock,
   getSubagentSessionDir,
 } from "../core/session-runner.ts";
+import type { AgentSessionLike } from "../types.ts";
 
 // ============================================================
 // helpers

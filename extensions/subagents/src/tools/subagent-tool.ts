@@ -217,8 +217,10 @@ const subagentRenderCall: SubagentRenderCallCb = (args, theme, ctx) => {
     const service = getSubagentService();
     const r = service?.resolveModel(agent, override);
     if (r) resolved = { model: `${r.model.provider}/${r.model.id}`, thinkingLevel: r.thinkingLevel };
-  } catch {
-    // service 未注册 / modelRegistry 未注入 / 无可用 model → 降级不显示 model
+  } catch (err) {
+    // service 未注册 / modelRegistry 未注入 / 无可用 model → 降级不显示 model（renderCall 不应崩）。
+    void err; // 显式确认忽略：renderCall 降级是设计意图，不阻断渲染
+    console.debug("[subagents] renderCall model resolution failed, degrading:", err);
   }
   return renderSubagentCall(args, theme, ctx, resolved);
 };

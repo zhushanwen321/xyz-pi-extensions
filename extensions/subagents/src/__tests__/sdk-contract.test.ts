@@ -47,11 +47,10 @@ vi.mock("../runtime/subagent-service.ts", () => ({
   getSubagentService: () => ({ execute: mockServiceExecute }),
 }));
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-
 import { registerSubagentsCommand } from "../commands/subagents.ts";
-import { BgNotifier } from "../runtime/execution/notifier.ts";
+import { BgNotifier, type NotifierHost } from "../runtime/execution/notifier.ts";
 import { registerSubagentTool } from "../tools/subagent-tool.ts";
+import { mockExtensionApi } from "./helpers/mock-extension-api.ts";
 
 // ============================================================
 // /subagents command 契约
@@ -59,20 +58,20 @@ import { registerSubagentTool } from "../tools/subagent-tool.ts";
 describe("/subagents command contract [MANDATORY]", () => {
   it("registers a command named 'subagents'", () => {
     let registeredName: string | undefined;
-    const pi = {
+    const pi = mockExtensionApi({
       registerCommand: (name: string) => { registeredName = name; },
-    } as unknown as ExtensionAPI;
+    });
     registerSubagentsCommand(pi);
     expect(registeredName).toBe("subagents");
   });
 
   it("handler accepts (args, ctx) — two parameters", () => {
     let capturedHandler: ((...args: unknown[]) => unknown) | undefined;
-    const pi = {
+    const pi = mockExtensionApi({
       registerCommand: (_name: string, command: { handler: (...args: unknown[]) => unknown }) => {
         capturedHandler = command.handler;
       },
-    } as unknown as ExtensionAPI;
+    });
     registerSubagentsCommand(pi);
     expect(capturedHandler).toBeDefined();
     // function.length 反映必填参数数（ctx 至少是第 2 个）
@@ -86,9 +85,9 @@ describe("/subagents command contract [MANDATORY]", () => {
 describe("subagent tool contract [MANDATORY]", () => {
   it("registers a tool named 'subagent' with a parameters schema", () => {
     let registeredTool: { name: string; parameters: unknown } | undefined;
-    const pi = {
+    const pi = mockExtensionApi({
       registerTool: (tool: unknown) => { registeredTool = tool as { name: string; parameters: unknown }; },
-    } as unknown as ExtensionAPI;
+    });
     registerSubagentTool(pi);
     expect(registeredTool?.name).toBe("subagent");
     expect(registeredTool?.parameters).toBeDefined();
@@ -96,9 +95,9 @@ describe("subagent tool contract [MANDATORY]", () => {
 
   it("tool has execute, renderCall, renderResult callbacks", () => {
     let registeredTool: Record<string, unknown> | undefined;
-    const pi = {
+    const pi = mockExtensionApi({
       registerTool: (tool: unknown) => { registeredTool = tool as Record<string, unknown>; },
-    } as unknown as ExtensionAPI;
+    });
     registerSubagentTool(pi);
     expect(typeof registeredTool?.execute).toBe("function");
   });
@@ -109,11 +108,11 @@ describe("subagent tool contract [MANDATORY]", () => {
   // 回归保护：subagent-tool.ts execute 把 _ctx?.model 传给 startHandler 的第 5 参 ctxModel。
   it("execute passes ctx.model as ctxModel (SDK 5-param contract)", async () => {
     let capturedExecute: ((...args: never[]) => Promise<unknown>) | undefined;
-    const pi = {
+    const pi = mockExtensionApi({
       registerTool: (tool: unknown) => {
         capturedExecute = (tool as { execute: (...args: never[]) => Promise<unknown> }).execute;
       },
-    } as unknown as ExtensionAPI;
+    });
     registerSubagentTool(pi);
     expect(capturedExecute).toBeDefined();
 
@@ -148,11 +147,11 @@ describe("subagent tool contract [MANDATORY]", () => {
   // getFullText(record)，eventLog 改为派生——此测试覆盖「派生投影 → LLM JSON」端到端。
   it("sync execute returns content JSON with syncResponse shape (mode:'sync')", async () => {
     let capturedExecute: ((...args: never[]) => Promise<unknown>) | undefined;
-    const pi = {
+    const pi = mockExtensionApi({
       registerTool: (tool: unknown) => {
         capturedExecute = (tool as { execute: (...args: never[]) => Promise<unknown> }).execute;
       },
-    } as unknown as ExtensionAPI;
+    });
     registerSubagentTool(pi);
 
     // mock sync ExecutionHandle：record 已 settled，details 含完整派生投影
@@ -237,7 +236,7 @@ describe("notifier sendMessage contract [MANDATORY]", () => {
       sendMessage,
       hasRunningBackground: () => false,
     };
-    const notifier = new BgNotifier(host as never);
+    const notifier = new BgNotifier(host as NotifierHost);
     notifier.notify({
       id: "bg-1",
       status: "done",
@@ -255,7 +254,7 @@ describe("notifier sendMessage contract [MANDATORY]", () => {
   it("immediate flush when hasRunningBackground is false", () => {
     const sendMessage = vi.fn();
     const host = { sendMessage, hasRunningBackground: () => false };
-    const notifier = new BgNotifier(host as never);
+    const notifier = new BgNotifier(host as NotifierHost);
     notifier.notify({ id: "bg-1", status: "done", agent: "w", result: "ok", startedAt: 0, endedAt: 1 });
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });

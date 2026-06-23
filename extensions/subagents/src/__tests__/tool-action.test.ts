@@ -60,7 +60,7 @@ function makeService(over: Partial<SubagentService> = {}): SubagentService {
     cancel: vi.fn(() => false),
     collectRecords: vi.fn(() => [] as SubagentRecord[]),
     ...over,
-  } as unknown as SubagentService;
+  } as SubagentService;
 }
 
 // ============================================================
@@ -122,7 +122,7 @@ describe("startHandler", () => {
           record: makeSnapshot({ id: "run-1", sessionFile: "s.jsonl" }),
           details: makeDetails({ status: "done", sessionFile: "s.jsonl" }),
         };
-      }) as unknown as SubagentService["execute"],
+      }) as SubagentService["execute"],
     });
     const toolOnUpdate = vi.fn();
     await startHandler(svc, { task: "do" }, undefined, toolOnUpdate);

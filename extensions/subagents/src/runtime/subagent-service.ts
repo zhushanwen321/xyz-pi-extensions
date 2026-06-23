@@ -533,9 +533,14 @@ const SERVICE_SLOT_KEY = Symbol.for("@zhushanwen/pi-subagents.service");
 type ServiceSlot = { current: SubagentService | null };
 
 function getServiceSlot(): ServiceSlot {
-  const record = globalThis as unknown as Record<symbol, unknown>;
-  if (!record[SERVICE_SLOT_KEY]) record[SERVICE_SLOT_KEY] = { current: null };
-  return record[SERVICE_SLOT_KEY] as ServiceSlot;
+  // globalThis 无 symbol 索引签名，但运行时支持 symbol 键——用 Reflect 安全读写，
+  // 避免双重断言。ServiceSlot 是运行时保证的固定形状（同文件唯一写入点）。
+  let slot = Reflect.get(globalThis, SERVICE_SLOT_KEY) as ServiceSlot | undefined;
+  if (!slot) {
+    slot = { current: null };
+    Reflect.set(globalThis, SERVICE_SLOT_KEY, slot);
+  }
+  return slot;
 }
 
 /** 获取进程单例。session_start 前为 null。 */

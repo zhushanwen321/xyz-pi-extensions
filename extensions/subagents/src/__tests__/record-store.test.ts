@@ -18,9 +18,10 @@ import type { ExecutionRecord, PersistedAgentRecord } from "../types.ts";
 const SYNC_LINGER_MS = 5000;
 const BG_FIFO_MAX = 50;
 
-/** 内存 HistoryStore stub（record-store 只依赖 recent()，无需文件 IO）。 */
+/** 内存 HistoryStore stub（record-store 只依赖 recent()，无需文件 IO）。
+ *  partial 结构兼容 HistoryStore 的 recent() 签名——单次断言即可（非双重断言）。 */
 function makeHistoryStub(records: PersistedAgentRecord[] = []): HistoryStore {
-  return { recent: () => records.slice() } as unknown as HistoryStore;
+  return { recent: () => records.slice() } as HistoryStore;
 }
 
 /** 构造 ExecutionRecord（base 默认 running，over 覆盖任意字段）。 */

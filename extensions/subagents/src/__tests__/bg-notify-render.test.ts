@@ -25,7 +25,7 @@ function makeTheme(): { theme: Theme; bgColors: string[] } {
       return text;
     },
   };
-  return { theme: theme as unknown as Theme, bgColors };
+  return { theme: theme as Theme, bgColors };
 }
 
 describe("renderBgNotifyMessage", () => {

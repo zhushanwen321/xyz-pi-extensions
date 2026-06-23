@@ -188,11 +188,15 @@ describe("HistoryStore", () => {
     it("并发 append 不交错（所有记录都落盘）", async () => {
       const store = new HistoryStore(tmpDir, cwd);
       const N = 20;
-      await Promise.all(
+      // 各 append 独立写自己的 record——allSettled 允许部分失败降级，
+      // 但此处期望全部成功（验证串行化不丢记录）。
+      const results = await Promise.allSettled(
         Array.from({ length: N }, (_, i) =>
           store.append(makeRecord({ id: `c-${i}`, startedAt: i })),
         ),
       );
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      expect(fulfilled).toHaveLength(N);
       expect(store.read().map((r) => r.id)).toHaveLength(N);
     });
   });

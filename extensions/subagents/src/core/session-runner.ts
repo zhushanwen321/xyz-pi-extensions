@@ -294,6 +294,11 @@ async function createAndConfigureSession(
     };
   } catch (err) {
     try { session.dispose(); } catch (disposeErr) {
+      // dispose 是清理，失败不应掩盖原始 err。把 disposeErr 作为 cause 链上去，
+      // 既不静默吞掉，又不覆盖主错误（err 仍是被抛出的那一个）。
+      if (err instanceof Error) {
+        err.cause = disposeErr;
+      }
       console.error("[subagents] session.dispose() threw during cleanup:", disposeErr);
     }
     throw err;

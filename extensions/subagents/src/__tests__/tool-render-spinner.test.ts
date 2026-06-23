@@ -16,10 +16,11 @@ import { type RenderContext,renderSubagentResult } from "../tui/tool-render.ts";
 import type { SubagentToolResult } from "../types.ts";
 
 // ── 最小 theme stub（tool-render 经 ThemeLike 只调 fg/bold）──
+// partial 结构兼容 Theme（其余方法 render 不调用）——单次断言。
 const theme = {
   fg: (_tag: string, text: string) => text,
   bold: (text: string) => text,
-} as unknown as Theme;
+} as Theme;
 
 function makeCtx(invalidate: () => void): RenderContext {
   return { state: {} as Record<string, never>, invalidate };
