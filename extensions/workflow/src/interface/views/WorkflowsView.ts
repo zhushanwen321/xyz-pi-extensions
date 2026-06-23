@@ -24,6 +24,7 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key, matchesKey } from "@mariozechner/pi-tui";
 
+import type { ExecutionTraceNode } from "../../engine/models/types.js";
 import type { WorkflowRun } from "../../engine/models/workflow-run.js";
 import { saveWorkflow } from "../../infra/workflow-files.js";
 import {
@@ -47,15 +48,14 @@ import {
 // ── TUI layout constants ──────────────────────────────────────
 
 const BOX_BORDER_CHARS = 2;
-const RIGHT_MARGIN = 2;
-const DETAIL_INDENT = 2;
-const POINTER_WIDTH = 2;
 const NAV_LEVEL_DETAIL = 2;
 type NavLevel = 0 | 1 | typeof NAV_LEVEL_DETAIL;
 const MIN_BODY_LINES = 3;
 const BODY_HEIGHT_NUMERATOR = 2;
 const BODY_HEIGHT_DENOMINATOR = 3;
 const MAX_TOOL_CALLS_DISPLAY = 3;
+/** save overlay 居中计算的除数（÷2 居中）。 */
+const OVERLAY_CENTER_DIVISOR = 2;
 
 /** 轮询间隔：engine 无事件推送，view 自轮询 trace 变化（缺陷 #1+#5 修复）。 */
 const TICK_MS = 1000;
@@ -374,13 +374,41 @@ export function createWorkflowsView(
   });
 }
 
-// ── Layout rendering ──────────────────────────────────────────
+// ── Layout rendering（box-drawing 框架，对齐 main）──────────────
+//
+// 视觉结构（与 main 一致）：
+//   ╭───────────────────────────────────────────────────╮
+//   │ name (bold)                  ● status · x/y · Ns │  ← header
+//   ├───────────────────────────────────────────────────┤
+//   │ Phases            │ title · N agents              │
+//   │ ────────────────  │ ──────────────────             │  ← body
+//   │ ❯ ● 1 build 0/2   │   ● builder    model  ...     │
+//   │   ● 2 deploy 0/1  │   ● tester     model  ...     │
+//   │ (pad)             │ (pad)                          │
+//   ╰───────────────────────────────────────────────────╯
+//     ↑↓ phase · ⏎ enter · p pause · a abort · s save · esc back  ← footer (框外)
+//
+//   body = sidebar(SIDEBAR_WIDTH) │ main(rest)
+//   save overlay 活跃时居中覆盖 body。
 
 function bodyHeight(screenHeight: number): number {
-  return Math.max(MIN_BODY_LINES, Math.floor((screenHeight * BODY_HEIGHT_NUMERATOR) / BODY_HEIGHT_DENOMINATOR));
+  // header(2: name+desc/blank) + border(1) + body + border(1) + footer(1)
+  const HEADER_FOOTER_LINES = 6;
+  return Math.max(MIN_BODY_LINES, Math.floor((screenHeight * BODY_HEIGHT_NUMERATOR) / BODY_HEIGHT_DENOMINATOR) - HEADER_FOOTER_LINES);
 }
 
-const RUNID_HEADER_SHORT = 8;
+const BUDGET_TOKENS_DIVISOR = 1000;
+const BUDGET_COST_DECIMALS = 4;
+
+/** status → 语义色标签（L2 detail 头用）。 */
+function statusLabel(status: string, theme: ThemeLike): string {
+  switch (status) {
+    case "completed": return theme.fg("success", status);
+    case "running": return theme.fg("warning", status);
+    case "failed": return theme.fg("error", status);
+    default: return theme.fg("muted", status);
+  }
+}
 
 function renderLayout(
   run: WorkflowRun,
@@ -391,211 +419,353 @@ function renderLayout(
   screenHeight: number,
 ): string[] {
   const lines: string[] = [];
-  const innerWidth = screenWidth - BOX_BORDER_CHARS;
+  const contentWidth = screenWidth - BOX_BORDER_CHARS;
+  const mainWidth = contentWidth - SIDEBAR_WIDTH - 1; // -1 for the │ divider
 
-  // ── Header ──
-  const reasonSuffix = run.state.reason && run.state.reason !== "completed" ? ` (${run.state.reason})` : "";
-  const header = `${formatStatusBadge(run.state.status, theme)} ${run.spec.scriptName} — ${run.runId.slice(0, RUNID_HEADER_SHORT)}${reasonSuffix}`;
-  lines.push(padVisible(header, innerWidth));
-  lines.push("─".repeat(innerWidth));
+  renderHeader(lines, run, theme, contentWidth);
 
-  // ── Body depends on nav level ──
-  const bh = bodyHeight(screenHeight);
+  const phase = phaseGroups[state.phaseIdx] ?? phaseGroups[0];
+  const agents = phase?.nodes ?? [];
+  const now = Date.now();
+
+  const bodyStart = lines.length;
   if (state.level === 0) {
-    lines.push(...renderPhaseLevel(run, state, phaseGroups, theme, innerWidth, bh));
+    renderLevel0(lines, run, phaseGroups, state, theme, mainWidth, now);
   } else if (state.level === 1) {
-    lines.push(...renderAgentLevel(state, phaseGroups, theme, innerWidth, bh));
+    renderLevel1(lines, run, phaseGroups, state, theme, mainWidth, now);
   } else {
-    lines.push(...renderDetailLevel(run, state, phaseGroups, theme, innerWidth, bh));
+    renderLevel2(lines, run, agents, state, theme, mainWidth, now);
   }
 
-  // ── Footer (keymap, no restart) ──
-  lines.push("─".repeat(innerWidth));
-  const status = run.state.status;
-  const pauseResumeHint = status === "running" ? "p=pause" : status === "paused" ? "p=resume" : "";
-  const abortHint = status === "running" || status === "paused" ? "a=abort" : "";
-  const saveHint = isTmpRun(run) ? "s=save" : "";
-  const navHint = state.level === 0 ? "↑↓ phases · ⏎ drill in" : state.level === 1 ? "↑↓ agents · ⏎ detail" : "⏎ collapse";
-  const footer = [navHint, pauseResumeHint, abortHint, saveHint, "esc=back · ctrl+c=exit"].filter(Boolean).join(" · ");
-  lines.push(padVisible(theme.fg("muted", footer), innerWidth));
+  // Pad body to min height
+  const minBody = bodyHeight(screenHeight);
+  const emptyBodyLine = padVisible("", SIDEBAR_WIDTH) + "│" + padVisible("", mainWidth);
+  while (lines.length - bodyStart < minBody) {
+    lines.push(emptyBodyLine);
+  }
 
-  // ── Save overlay（缺陷 #3 恢复）：saveMode 活跃时叠加在底部 ──
+  // Wrap body lines with │ borders + sidebar divider
+  for (let i = bodyStart; i < lines.length; i++) {
+    lines[i] = "│" + padVisible(lines[i], contentWidth) + "│";
+  }
+
+  lines.push("╰" + "─".repeat(contentWidth) + "╯");
+
+  // Save overlay（缺陷 #3）：居中覆盖 body
   if (state.saveMode) {
-    lines.push(...renderSaveOverlay(state, theme, innerWidth));
+    const overlayLines = renderSaveOverlay(state, theme, screenWidth);
+    const overlayStart = Math.max(bodyStart, bodyStart + Math.floor((lines.length - bodyStart - overlayLines.length) / OVERLAY_CENTER_DIVISOR));
+    for (let i = 0; i < overlayLines.length && overlayStart + i < lines.length; i++) {
+      lines[overlayStart + i] = overlayLines[i];
+    }
   }
 
+  // Footer（框外，对齐 main renderFooter）
+  renderFooter(lines, run, state, theme);
   return lines;
 }
 
-function renderPhaseLevel(
+/** Header：╭─╮ + name(bold) + 右侧 status/agents/elapsed/budget。 */
+function renderHeader(
+  lines: string[],
+  run: WorkflowRun,
+  theme: ThemeLike,
+  contentWidth: number,
+): void {
+  const traceArr = run.state.trace.toArray();
+  const completed = traceArr.filter((n) => n.status === "completed").length;
+  const total = traceArr.length;
+  const elapsed = formatElapsed(run.meta.startedAt);
+  const headerRight = `${formatStatusBadge(run.state.status, theme)} · ${completed}/${total} agents · ${elapsed}`;
+  const budget = run.state.budget;
+  const budgetStr = `${Math.round(budget.usedTokens / BUDGET_TOKENS_DIVISOR)}k/${budget.maxTokens ? `${Math.round(budget.maxTokens / BUDGET_TOKENS_DIVISOR)}k` : "∞"} tok · $${budget.usedCost.toFixed(BUDGET_COST_DECIMALS)}`;
+
+  const nameLine = theme.bold(run.spec.scriptName);
+  const rightPart = theme.fg("muted", `${headerRight} · ${budgetStr}`);
+
+  lines.push("╭" + "─".repeat(contentWidth) + "╮");
+  lines.push("│" + padVisible(nameLine, contentWidth) + "│");
+
+  if (run.spec.description) {
+    const maxDesc = contentWidth - visibleLen(rightPart) - 1;
+    const descText = run.spec.description.length > maxDesc
+      ? run.spec.description.slice(0, maxDesc - 1) + ELLIPSIS
+      : run.spec.description;
+    const descPart = theme.fg("dim", descText);
+    const padLen = Math.max(0, contentWidth - visibleLen(descPart) - visibleLen(rightPart));
+    lines.push("│" + descPart + " ".repeat(padLen) + rightPart + "│");
+  } else {
+    lines.push("│" + padVisible(rightPart, contentWidth) + "│");
+  }
+  lines.push("├" + "─".repeat(contentWidth) + "┤");
+}
+
+/** Footer（框外）：nav hint + lifecycle shortcuts + esc/ctrl+c。 */
+function renderFooter(
+  lines: string[],
   run: WorkflowRun,
   state: ViewState,
-  phaseGroups: ReturnType<typeof buildPhaseGroups>,
   theme: ThemeLike,
-  width: number,
-  height: number,
-): string[] {
-  const leftWidth = SIDEBAR_WIDTH;
-  const rightWidth = width - leftWidth;
-  const lines: string[] = [];
-
-  if (phaseGroups.length === 0) {
-    lines.push(theme.fg("muted", "No phases yet. Workflow may still be starting..."));
-    while (lines.length < height) lines.push("");
-    return lines;
+): void {
+  const navPart = state.level === 0
+    ? "↑↓ phase · ⏎ enter"
+    : state.level === 1
+      ? "↑↓ agent · ⏎ detail"
+      : "↑↓ agent · ⏎ prompt";
+  const actionParts: string[] = [];
+  const status = run.state.status;
+  if (status === "running" || status === "paused") {
+    actionParts.push("a abort");
+    actionParts.push(status === "paused" ? "p resume" : "p pause");
   }
+  if (isTmpRun(run)) actionParts.push("s save");
+  actionParts.push("esc back");
+  const footer = `${navPart} · ${actionParts.join(" · ")}`;
+  lines.push("");
+  lines.push(theme.fg("muted", footer));
+}
 
-  // Left: phase list
+/** mergeBody：左侧 sidebar + │ divider + 右侧 main，拼成 body 行。 */
+function mergeBody(
+  lines: string[],
+  leftLines: string[],
+  rightLines: string[],
+): void {
+  const bodyHeightVal = Math.max(leftLines.length, rightLines.length);
+  for (let i = 0; i < bodyHeightVal; i++) {
+    const left = padVisible(leftLines[i] ?? "", SIDEBAR_WIDTH);
+    lines.push(left + "│" + (rightLines[i] ?? ""));
+  }
+}
+
+// ── Level 0: Phase selection ──────────────────────────────────
+
+function renderLevel0(
+  lines: string[],
+  run: WorkflowRun,
+  phases: ReturnType<typeof buildPhaseGroups>,
+  state: ViewState,
+  theme: ThemeLike,
+  mainWidth: number,
+  now: number,
+): void {
   const leftLines: string[] = [];
-  for (let i = 0; i < phaseGroups.length; i++) {
-    leftLines.push(formatPhaseLine(phaseGroups[i], i, i === state.phaseIdx, theme, leftWidth));
+  const rightLines: string[] = [];
+
+  // Left: sidebar title + phase list
+  leftLines.push(theme.fg("muted", "Phases"));
+  leftLines.push("─".repeat(SIDEBAR_WIDTH));
+  for (let i = 0; i < phases.length; i++) {
+    leftLines.push(formatPhaseLine(phases[i], i, i === state.phaseIdx, theme, SIDEBAR_WIDTH));
   }
 
-  // Right: selected phase agents overview
-  const pg = phaseGroups[state.phaseIdx];
-  const rightLines: string[] = [];
-  if (pg) {
-    rightLines.push(theme.bold(pg.name || "(unnamed phase)"));
-    rightLines.push(theme.fg("muted", `${pg.doneCount}/${pg.nodes.length} completed · ${formatElapsed(run.meta.startedAt)}`));
-    rightLines.push("");
-    for (const node of pg.nodes) {
+  // Right: agents in the currently selected phase only
+  const selectedPhase = phases[state.phaseIdx] ?? phases[0];
+  if (selectedPhase) {
+    const title = selectedPhase.name
+      ? `${selectedPhase.name} · ${selectedPhase.nodes.length} agents · ${formatElapsed(run.meta.startedAt, now)}`
+      : `${selectedPhase.nodes.length} agents · ${formatElapsed(run.meta.startedAt, now)}`;
+    rightLines.push(theme.fg("muted", title));
+    rightLines.push("─".repeat(mainWidth));
+    for (const node of selectedPhase.nodes) {
       rightLines.push(formatAgentOneLiner(node, theme));
     }
   }
 
-  // Merge columns
-  const rowCount = Math.max(leftLines.length, rightLines.length, height);
-  for (let i = 0; i < rowCount; i++) {
-    const left = leftLines[i] ?? "";
-    const right = rightLines[i] ?? "";
-    const leftPadded = padVisible(left, leftWidth);
-    const rightTrunc = visibleLen(right) > rightWidth ? right.slice(0, rightWidth - 1) + ELLIPSIS : right;
-    lines.push(`${leftPadded}${rightTrunc}`);
-  }
-
-  return lines;
+  mergeBody(lines, leftLines, rightLines);
 }
 
-function renderAgentLevel(
-  state: ViewState,
-  phaseGroups: ReturnType<typeof buildPhaseGroups>,
-  theme: ThemeLike,
-  width: number,
-  height: number,
-): string[] {
-  const leftWidth = SIDEBAR_WIDTH;
-  const rightWidth = width - leftWidth;
-  const lines: string[] = [];
+// ── Level 1: Agent selection ──────────────────────────────────
 
-  const pg = phaseGroups[state.phaseIdx];
-  if (!pg || pg.nodes.length === 0) {
-    lines.push(theme.fg("muted", "No agents in this phase."));
-    while (lines.length < height) lines.push("");
-    return lines;
+function renderLevel1(
+  lines: string[],
+  _run: WorkflowRun,
+  phases: ReturnType<typeof buildPhaseGroups>,
+  state: ViewState,
+  theme: ThemeLike,
+  mainWidth: number,
+  now: number,
+): void {
+  const leftLines: string[] = [];
+  const rightLines: string[] = [];
+
+  leftLines.push(theme.fg("muted", "Phases"));
+  leftLines.push("─".repeat(SIDEBAR_WIDTH));
+  for (let i = 0; i < phases.length; i++) {
+    leftLines.push(formatPhaseLine(phases[i], i, i === state.phaseIdx, theme, SIDEBAR_WIDTH));
   }
 
-  // Left: agent list
-  const leftLines: string[] = [];
-  for (let i = 0; i < pg.nodes.length; i++) {
-    const node = pg.nodes[i];
+  const currentPhase = phases[state.phaseIdx];
+  const agents = currentPhase?.nodes ?? [];
+  if (currentPhase) {
+    const title = currentPhase.name
+      ? `${currentPhase.name} · ${currentPhase.nodes.length} agents`
+      : `${currentPhase.nodes.length} agents`;
+    rightLines.push(theme.fg("muted", title));
+    rightLines.push("─".repeat(mainWidth));
+  }
+  for (let i = 0; i < agents.length; i++) {
+    const node = agents[i];
     const pointer = i === state.agentIdx ? "❯ " : "  ";
     const dot = statusDotStr(node.status, theme);
-    const label = truncateText(`${node.agent}`, leftWidth - POINTER_WIDTH - 1);
-    leftLines.push(`${pointer}${dot} ${label}`);
+    const elapsed = formatElapsed(
+      node.startedAt,
+      node.completedAt ? new Date(node.completedAt).getTime() : now,
+    );
+    const tok = node.result?.usage;
+    const tokStr = tok ? `${Math.round((tok.input + tok.output) / BUDGET_TOKENS_DIVISOR)}k tok` : "";
+    const tcCount = node.result?.toolCalls?.length ?? 0;
+    rightLines.push(`${pointer}${dot} ${node.agent}    ${node.model}    ${tokStr} · ${tcCount} tools · ${elapsed}`);
   }
 
-  // Right: selected agent summary
-  const node = pg.nodes[state.agentIdx];
-  const rightLines: string[] = [];
-  if (node) {
-    rightLines.push(theme.bold(node.agent));
-    rightLines.push(theme.fg("muted", node.model));
-    rightLines.push("");
-    rightLines.push(`Task: ${truncateText(node.task, rightWidth - "Task: ".length)}`);
-    rightLines.push(`Status: ${node.status}`);
-    if (node.result) {
-      const usage = node.result.usage;
-      if (usage) {
-        rightLines.push(formatTokenStat(usage, node.result.toolCalls, formatElapsed(node.startedAt, node.completedAt ? new Date(node.completedAt).getTime() : Date.now())));
-      }
-      const tc = node.result.toolCalls ?? [];
-      if (tc.length > 0) {
-        rightLines.push("");
-        rightLines.push(theme.bold("Activity:"));
-        for (const call of tc.slice(0, MAX_TOOL_CALLS_DISPLAY)) {
-          rightLines.push(`  ${formatActivityLine(call, rightWidth - DETAIL_INDENT)}`);
-        }
-        if (tc.length > MAX_TOOL_CALLS_DISPLAY) {
-          rightLines.push(theme.fg("muted", `  … +${tc.length - MAX_TOOL_CALLS_DISPLAY} more`));
-        }
-      }
-    }
-  }
-
-  const rowCount = Math.max(leftLines.length, rightLines.length, height);
-  for (let i = 0; i < rowCount; i++) {
-    const left = leftLines[i] ?? "";
-    const right = rightLines[i] ?? "";
-    const leftPadded = padVisible(left, leftWidth);
-    const rightTrunc = visibleLen(right) > rightWidth ? right.slice(0, rightWidth - 1) + ELLIPSIS : right;
-    lines.push(`${leftPadded}${rightTrunc}`);
-  }
-
-  return lines;
+  mergeBody(lines, leftLines, rightLines);
 }
 
-function renderDetailLevel(
+// ── Level 2: Execution detail ─────────────────────────────────
+
+function renderWorkerLogSection(
+  rightLines: string[],
   run: WorkflowRun,
-  state: ViewState,
-  phaseGroups: ReturnType<typeof buildPhaseGroups>,
+  mainWidth: number,
   theme: ThemeLike,
-  width: number,
-  height: number,
-): string[] {
-  const lines: string[] = [];
-  const pg = phaseGroups[state.phaseIdx];
-  const node = pg?.nodes[state.agentIdx];
-  if (!node) {
-    lines.push(theme.fg("muted", "No agent selected."));
-    while (lines.length < height) lines.push("");
-    return lines;
+): void {
+  const logs = run.state.errorLogs;
+  if (!logs || logs.length === 0) return;
+  const total = logs.length;
+  const WORKER_LOG_SHOW = 20;
+  const showCount = Math.min(total, WORKER_LOG_SHOW);
+  const label = total > showCount
+    ? `Worker diagnostics · last ${showCount} of ${total}`
+    : `Worker diagnostics · ${total} entr${total !== 1 ? "ies" : "y"}`;
+  rightLines.push(theme.fg("warning", label));
+  const start = total - showCount;
+  for (let i = start; i < total; i++) {
+    const entry = logs[i];
+    const levelToken = entry.level === "error" ? "error" : entry.level === "warn" ? "warning" : "muted";
+    const prefix = `[${entry.level}]`;
+    const line = `  ${prefix} ${entry.message}`.slice(0, mainWidth - BOX_BORDER_CHARS);
+    rightLines.push(theme.fg(levelToken, line));
   }
+  rightLines.push("");
+}
 
-  void run; // run available for future error display
-  const indent = " ".repeat(DETAIL_INDENT);
-  const bodyWidth = width - DETAIL_INDENT - RIGHT_MARGIN;
-
-  lines.push(theme.bold(`Agent: ${node.agent}`));
-  lines.push(theme.fg("muted", `Model: ${node.model} · Status: ${node.status}`));
-  lines.push("");
-
-  // Prompt
-  lines.push(theme.bold("Prompt:"));
-  const promptLines = node.task.split("\n");
-  const visiblePromptLines = state.promptExpanded ? promptLines : promptLines.slice(0, PROMPT_FOLD_LINES);
-  for (const pl of visiblePromptLines) {
-    lines.push(`${indent}${truncateText(pl, bodyWidth)}`);
+function renderPromptSection(
+  rightLines: string[],
+  node: ExecutionTraceNode,
+  state: ViewState,
+  theme: ThemeLike,
+): void {
+  const taskLines = node.task.split("\n");
+  const lineCount = taskLines.length;
+  rightLines.push(theme.fg("muted", `Prompt · ${lineCount} lines · ⏎ ${state.promptExpanded ? "collapse" : "expand"}`));
+  if (state.promptExpanded || lineCount <= PROMPT_FOLD_LINES) {
+    rightLines.push(...taskLines.map((l) => `  ${l}`));
+  } else {
+    rightLines.push(...taskLines.slice(0, PROMPT_FOLD_LINES).map((l) => `  ${l}`));
+    rightLines.push(theme.fg("dim", `  ${ELLIPSIS} ${lineCount - PROMPT_FOLD_LINES} more lines`));
   }
-  if (promptLines.length > PROMPT_FOLD_LINES && !state.promptExpanded) {
-    lines.push(theme.fg("muted", `${indent}… +${promptLines.length - PROMPT_FOLD_LINES} more lines (⏎ expand)`));
-  }
-  lines.push("");
+  rightLines.push("");
+}
 
-  // Outcome
-  if (node.result?.content) {
-    lines.push(theme.bold("Outcome:"));
-    const content = node.result.content;
-    const contentLines = content.slice(0, OUTPUT_TRUNCATE_BYTES).split("\n");
-    for (const cl of contentLines) {
-      lines.push(`${indent}${truncateText(cl, bodyWidth)}`);
+function renderActivitySection(
+  rightLines: string[],
+  node: ExecutionTraceNode,
+  mainWidth: number,
+  theme: ThemeLike,
+): void {
+  const toolCalls = node.result?.toolCalls ?? [];
+  const totalCount = toolCalls.length;
+  if (totalCount > 0) {
+    const showCount = Math.min(MAX_TOOL_CALLS_DISPLAY, totalCount);
+    const isTruncated = totalCount > MAX_TOOL_CALLS_DISPLAY;
+    const label = isTruncated
+      ? `Activity · last ${showCount} of ${totalCount} tool calls`
+      : `Activity · ${totalCount} tool call${totalCount !== 1 ? "s" : ""}`;
+    rightLines.push(theme.fg("muted", label));
+    const start = totalCount - showCount;
+    for (let i = start; i < totalCount; i++) {
+      rightLines.push(`  ${formatActivityLine(toolCalls[i], mainWidth - BOX_BORDER_CHARS)}`);
     }
-  } else if (node.error) {
-    lines.push(theme.bold(theme.fg("error", "Error:")));
-    lines.push(`${indent}${truncateText(node.error, bodyWidth)}`);
+  } else {
+    rightLines.push(theme.fg("muted", "Activity"));
+    rightLines.push(theme.fg("dim", `  ${node.status === "running" ? "(no tool calls yet)" : "(no activity recorded)"}`));
+  }
+  rightLines.push("");
+}
+
+function renderOutcomeSection(
+  rightLines: string[],
+  node: ExecutionTraceNode,
+  mainWidth: number,
+  theme: ThemeLike,
+): void {
+  rightLines.push(theme.fg("muted", "Outcome"));
+  if (node.status === "running") {
+    rightLines.push(theme.fg("dim", "  Still running..."));
+  } else if (node.result?.error) {
+    rightLines.push(theme.fg("error", `  ${node.result.error.slice(0, mainWidth - BOX_BORDER_CHARS)}`));
+  } else if (node.result?.content) {
+    const raw = node.result.content;
+    const OUTCOME_TAIL_LINES = 5;
+    if (Buffer.byteLength(raw, "utf8") > OUTPUT_TRUNCATE_BYTES) {
+      const truncated = Buffer.from(raw, "utf8").slice(0, OUTPUT_TRUNCATE_BYTES).toString("utf8");
+      const allLines = truncated.split("\n");
+      const tail = allLines.slice(-OUTCOME_TAIL_LINES);
+      rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - BOX_BORDER_CHARS)}`));
+      rightLines.push(theme.fg("dim", "  (truncated)"));
+    } else {
+      const allLines = raw.split("\n");
+      const tail = allLines.slice(-OUTCOME_TAIL_LINES);
+      rightLines.push(...tail.map((l) => `  ${l.slice(0, mainWidth - BOX_BORDER_CHARS)}`));
+    }
+  }
+}
+
+function renderLevel2(
+  lines: string[],
+  run: WorkflowRun,
+  agents: ExecutionTraceNode[],
+  state: ViewState,
+  theme: ThemeLike,
+  mainWidth: number,
+  now: number,
+): void {
+  const leftLines: string[] = [];
+  const rightLines: string[] = [];
+
+  // Left: agents title + agent names
+  leftLines.push(theme.fg("muted", "Agents"));
+  leftLines.push("─".repeat(SIDEBAR_WIDTH));
+  const AGENT_NAME_BUDGET = 4; // pointer(2) + spacing(2)
+  for (let i = 0; i < agents.length; i++) {
+    const a = agents[i];
+    const pointer = i === state.agentIdx ? "❯ " : "  ";
+    const maxNameWidth = SIDEBAR_WIDTH - AGENT_NAME_BUDGET;
+    const agentName = visibleLen(a.agent) > maxNameWidth
+      ? a.agent.slice(0, maxNameWidth - 1) + ELLIPSIS
+      : a.agent;
+    leftLines.push(`${pointer}${agentName}`);
   }
 
-  while (lines.length < height) lines.push("");
-  return lines;
+  // Right: full detail
+  const node = agents[state.agentIdx];
+  if (node) {
+    const elapsed = formatElapsed(
+      node.startedAt,
+      node.completedAt ? new Date(node.completedAt).getTime() : now,
+    );
+    rightLines.push(theme.fg("muted", "Detail"));
+    rightLines.push("─".repeat(mainWidth));
+    rightLines.push(`${statusDotStr(node.status, theme)} ${statusLabel(node.status, theme)} · ${node.model}`);
+    rightLines.push(theme.fg("dim", formatTokenStat(node.result?.usage, node.result?.toolCalls, elapsed)));
+    rightLines.push("");
+    renderWorkerLogSection(rightLines, run, mainWidth, theme);
+    renderPromptSection(rightLines, node, state, theme);
+    renderActivitySection(rightLines, node, mainWidth, theme);
+    renderOutcomeSection(rightLines, node, mainWidth, theme);
+  }
+
+  mergeBody(lines, leftLines, rightLines);
 }
 
 // ── Save overlay（缺陷 #3 恢复，从 main 移植简化版）────────────
@@ -652,11 +822,4 @@ function renderSaveOverlay(
   lines.push("╰" + "─".repeat(contentWidth) + "╯");
 
   return lines;
-}
-
-function truncateText(text: string, maxWidth: number): string {
-  if (maxWidth <= 0) return "";
-  if (visibleLen(text) <= maxWidth) return text;
-  if (maxWidth <= 1) return ELLIPSIS;
-  return text.slice(0, maxWidth - 1) + ELLIPSIS;
 }
