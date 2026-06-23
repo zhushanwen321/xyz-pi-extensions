@@ -76,6 +76,20 @@ export class Trace {
     return this.findByStepIndex(stepIndex);
   }
 
+ /**
+ * 按 stepIndex 移除节点（仅 pause 清理在飞 call 用）。
+ *
+ * 正常运行不调用（append-only 不变式）。仅 lifecycle.pauseRun 清理被 abort 的
+ * 在飞 call 时用——移除其 trace 节点，让 resume 重发 agent-call 时 append 全新
+ * 节点走全新执行路径（避免 stale "running" 节点残留 + trace.update 命中旧节点
+ * 导致新节点 orphan）。stepIndex 不存在时 no-op（防御性）。
+ */
+  removeByStepIndex(stepIndex: number): void {
+    const idx = this.nodes.findIndex((n) => n.stepIndex === stepIndex);
+    if (idx === -1) return;
+    this.nodes.splice(idx, 1);
+  }
+
  /** readonly 视图——外部不应直接 mutate（不变式保护）。 */
   toArray(): readonly ExecutionTraceNode[] {
     return this.nodes;

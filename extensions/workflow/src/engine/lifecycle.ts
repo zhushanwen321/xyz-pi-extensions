@@ -228,7 +228,39 @@ export async function pauseRun(runId: string, deps: LifecycleDeps): Promise<void
 
  // A4: transition 内部 releaseRuntime（cleanup before mutate）
   run.transition("paused");
+
+ // MUST_FIX (round-4 #1): 清理被 abort 的在飞 call（status !== "done"）。
+ // transition 已同步 abort controller + terminate worker，但 in-flight 的
+ // executeAgentCall 会在后续 microtask 被 finalizeCall 标记为 "done"（带 abort
+ // 错误结果）。若保留，resume 时 dispatchAgentCall 的 cached 路径会把该 failed
+ // 结果原样 replay，静默污染 workflow 输出。此处同步移除在飞 call + 其 trace 节点，
+ // 让 resume 重发 agent-call 走全新执行路径。
+ //
+ // 同步执行（在 await store.save 前）：transition 与本清理间无 await，微任务无法
+ // 插入，此时在飞 call 仍为 "running"/"pending"，可精确清理；genuinely-done 的
+ // call 不受影响（resume 时正常 replay）。后续 finalizeCall 在已移除的 orphan call
+ // 上运行（markDone 无外部副作用），trace.update 因节点已移除为 no-op。
+  discardInFlightCalls(run);
+
   await deps.store.save(run);
+}
+
+/**
+ * 移除 run 中未真正完成的在飞 call（status !== "done"）及其 trace 节点。
+ *
+ * 仅 pauseRun 调用——清理被 abort 的在飞 call，避免 resume 时 cached replay
+ * 把 abort 产生的 failed 结果当作已完成结果回放（MUST_FIX round-4 #1）。
+ * genuinely-done 的 call（成功或失败均 "done"）保留，resume 时按原语义 replay。
+ */
+function discardInFlightCalls(run: WorkflowRun): void {
+  const inFlight: number[] = [];
+  for (const [callId, call] of run.state.calls) {
+    if (call.status !== "done") inFlight.push(callId);
+  }
+  for (const callId of inFlight) {
+    run.state.calls.delete(callId);
+    run.state.trace.removeByStepIndex(callId);
+  }
 }
 
 // ── resumeRun ────────────────────────────────────────────────

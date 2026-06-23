@@ -248,6 +248,48 @@ describe("pauseRun", () => {
     await pauseRun(runId, deps);
     expect(deps.store.save).toHaveBeenCalledWith(deps.runs.get(runId));
   });
+
+  it("在飞 call（status !== done）及其 trace 节点被清理（round-4 #1）", async () => {
+    const deps = makeDeps();
+    const runId = await runWorkflow(makeSpec(), deps);
+    const run = deps.runs.get(runId)!;
+
+ // callId 0: genuinely done（成功）—— 应保留，resume 时 cached replay
+    run.state.calls.set(0, {
+      id: 0, opts: { prompt: "x" }, status: "done", attempts: 1,
+      result: { content: "ok" },
+      traceNode: { stepIndex: 0, agent: "a", task: "t", model: "m", status: "completed" },
+    } as never);
+    run.state.trace.append({ stepIndex: 0, agent: "a", task: "t", model: "m", status: "completed" });
+
+ // callId 1: running（in-flight，被 pause abort）—— 应清理
+    run.state.calls.set(1, {
+      id: 1, opts: { prompt: "y" }, status: "running", attempts: 1,
+      traceNode: { stepIndex: 1, agent: "b", task: "u", model: "m", status: "running" },
+    } as never);
+    run.state.trace.append({ stepIndex: 1, agent: "b", task: "u", model: "m", status: "running" });
+
+ // callId 2: pending（queued，未真正执行）—— 应清理
+    run.state.calls.set(2, {
+      id: 2, opts: { prompt: "z" }, status: "pending", attempts: 0,
+      traceNode: { stepIndex: 2, agent: "c", task: "v", model: "m", status: "running" },
+    } as never);
+    run.state.trace.append({ stepIndex: 2, agent: "c", task: "v", model: "m", status: "running" });
+
+    await pauseRun(runId, deps);
+
+ // done call 保留（resume 时 cached replay）
+    expect(run.state.calls.has(0)).toBe(true);
+    expect(run.state.calls.get(0)?.status).toBe("done");
+    expect(run.state.trace.find(0)).toBeDefined();
+
+ // 在飞 call（running/pending）被清理——resume 重发 agent-call 走全新执行路径，
+ // 避免 cached replay 把 abort 的 failed 结果当作已完成结果回放（输出污染）
+    expect(run.state.calls.has(1)).toBe(false);
+    expect(run.state.calls.has(2)).toBe(false);
+    expect(run.state.trace.find(1)).toBeUndefined();
+    expect(run.state.trace.find(2)).toBeUndefined();
+  });
 });
 
 // ── resumeRun ────────────────────────────────────────────────
