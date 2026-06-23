@@ -308,6 +308,26 @@ describe("SubprocessAgentRunner", () => {
       const result = await p;
       expect(result.error).toBeDefined();
     });
+
+    it("honors per-call timeoutMs by aborting subprocess (review round 1 #2)", async () => {
+ // 生产链路 dispatchAgentCall → withSlot → executeAgentCall → runner.run 全程
+ // 走 SubprocessAgentRunner（不经 gate.enqueue 的合并分支）。opts.timeoutMs 必须在此
+ // 合并进 per-call AbortController，否则 agent({timeoutMs:5000}) 静默无效。
+      const runner = new SubprocessAgentRunner();
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(asChildProcess(proc));
+
+      const ac = new AbortController();
+      const p = runner.run({ prompt: "x", timeoutMs: 5 }, ac.signal);
+ // Wait beyond timeoutMs
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+
+      proc.emit("close", 1);
+      const result = await p;
+      expect(result.error).toBeDefined();
+    });
   });
 
  // ── Env / args wiring ──────────────────────────────────────

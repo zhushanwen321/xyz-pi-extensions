@@ -38,13 +38,23 @@ export class RunRuntime {
   readonly gate: ConcurrencyGate;
  /** per-running-segment AbortController（一次性，无法复用——G3-001）。 */
   readonly controller: AbortController;
+ /** Run 级墙钟时间预算计时器（spec.budgetTimeMs > 0 时由 lifecycle 调度，
+   * 到期 abortRun time_limited）。release 时清理，避免 pause/abort 后孤儿计时器
+   * 仍触发（resume 会重新调度一个全新的计时器，旧的不应残留）。 */
+  readonly timeBudgetTimer?: ReturnType<typeof setTimeout>;
  /** 防止 release 重复执行（幂等）。 */
   private released = false;
 
-  constructor(worker: WorkerHandle, gate: ConcurrencyGate, controller: AbortController) {
+  constructor(
+    worker: WorkerHandle,
+    gate: ConcurrencyGate,
+    controller: AbortController,
+    timeBudgetTimer?: ReturnType<typeof setTimeout>,
+  ) {
     this.worker = worker;
     this.gate = gate;
     this.controller = controller;
+    this.timeBudgetTimer = timeBudgetTimer;
   }
 
  /**
@@ -63,6 +73,9 @@ export class RunRuntime {
   release(_mode: ReleaseMode): void {
     if (this.released) return;
     this.released = true;
+ // 清理 run 级时间预算计时器——pause/abort/replaceRuntime 后它不应再触发
+ // （resume 会调度全新计时器；孤儿触发会把已 paused/aborted 的 run 误转 done）。
+    if (this.timeBudgetTimer) clearTimeout(this.timeBudgetTimer);
  // worker.terminate 异步但幂等——不 await（release 是同步签名，调用方
  // 不应被底层线程关闭阻塞；worker 收到 terminate 后自行清理）。
     void this.worker.terminate();

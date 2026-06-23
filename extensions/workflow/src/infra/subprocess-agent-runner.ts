@@ -35,9 +35,29 @@ export class SubprocessAgentRunner implements AgentRunner {
  *
  * signal 传播：传入的 AbortSignal 触发时，runPiProcess 内部向子进程发 SIGKILL，
  * 返回 exitCode=1 + "aborted" stderr，本方法据此填充 result.error。
+ *
+ * per-call timeoutMs：opts.timeoutMs > 0 时合并进同一 AbortController——到期 abort
+ * 子进程（agent({timeoutMs:5000}) 生效）。与 ConcurrencyGate.run 路径对称。
  */
   async run(opts: AgentCallOpts, signal: AbortSignal): Promise<AgentResult> {
     const startedAt = Date.now();
+
+ // 合并 per-call AbortController：墙钟 timeoutMs（per-call）+ 外部
+ // signal（run 级 abort）都生效。缺此合并则 agent({timeoutMs:5000}) 静默无效
+ // （与 ConcurrencyGate.run 路径一致——生产链路 dispatchAgentCall → withSlot →
+ // executeAgentCall → runner.run 全程走本方法，不经 gate.enqueue 的合并分支）。
+    const controller = new AbortController();
+    const onExternalAbort = (): void => controller.abort();
+    if (signal.aborted) {
+      controller.abort();
+    } else {
+      signal.addEventListener("abort", onExternalAbort, { once: true });
+    }
+    const timeoutTimer =
+      opts.timeoutMs && opts.timeoutMs > 0
+        ? setTimeout(() => controller.abort(), opts.timeoutMs)
+        : undefined;
+    if (timeoutTimer) timeoutTimer.unref();
 
     try {
       const args = buildArgs(opts);
@@ -57,7 +77,7 @@ export class SubprocessAgentRunner implements AgentRunner {
       let exitCode: number;
 
       try {
-        const result = await runPiProcess(command, cmdArgs, pipeline, signal, env);
+        const result = await runPiProcess(command, cmdArgs, pipeline, controller.signal, env);
         exitCode = result.exitCode;
         stderr = result.stderr;
       } catch (err) {
@@ -109,6 +129,14 @@ export class SubprocessAgentRunner implements AgentRunner {
         error: message,
         toolCalls: [],
       };
+    } finally {
+ // 清理 per-call 计时器，并摘除外部 signal 的 abort listener（与 ConcurrencyGate.run
+ // 对称：正常完成时必须摘除，否则随 agent 调用数线性泄漏——signal 生命周期长于单次
+ // run，持久的 listener 引用会阻止 controller GC；abort 路径因 { once: true } 自动移除）。
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (!signal.aborted) {
+        signal.removeEventListener("abort", onExternalAbort);
+      }
     }
   }
 }

@@ -94,6 +94,37 @@ function makeHandlers(run: WorkflowRun, deps: LifecycleDeps): WorkerHandlers {
   return handlers;
 }
 
+// ── scheduleTimeBudget（C.7 Run 级时间预算调度） ──────────
+
+/**
+ * 启动 run 级墙钟时间预算计时器：到期后 abortRun(doneReason="time_limited")。
+ *
+ * 恢复旧 orchestrator-budget.ts 的 scheduleTimeBudgetCheck 语义——run/resume 各
+ * 启一个 setTimeout(maxTimeMs)，到期若 run 仍 running/paused 则转 done,time_limited。
+ * 计时器存入 RunRuntime.timeBudgetTimer，release（pause/abort/replaceRuntime）时
+ * 自动清理，避免孤儿触发。resume 会调度全新计时器（与旧语义一致：pause+resume
+ * 重置墙钟预算）。
+ *
+ * @returns 计时器句柄（未设预算时 undefined）
+ */
+function scheduleTimeBudget(
+  runId: string,
+  deps: LifecycleDeps,
+  budgetTimeMs: number,
+): ReturnType<typeof setTimeout> {
+  const timer = setTimeout(() => {
+    void abortRun(runId, deps, "Time budget exceeded", "time_limited").catch(
+      (err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[workflow] time budget abort failed: ${msg}`);
+      },
+    );
+  }, budgetTimeMs);
+ // unref：不阻止 Node 退出（workflow 是后台任务，不应因计时器持有事件循环）。
+  timer.unref();
+  return timer;
+}
+
 // ── runWorkflow ──────────────────────────────────────────────
 
 /**
@@ -157,7 +188,12 @@ export async function runWorkflow(
   const controller = new AbortController();
   const gate = new ConcurrencyGate({ maxConcurrency: DEFAULT_CONCURRENCY });
   const worker = deps.workerHost.start(spec, spec.args, handlers);
-  const runtime = new RunRuntime(worker, gate, controller);
+ // C.7：run 级时间预算计时器（spec.budgetTimeMs > 0 时启用，到期 abortRun time_limited）。
+  const timeBudgetTimer =
+    spec.budgetTimeMs && spec.budgetTimeMs > 0
+      ? scheduleTimeBudget(runId, deps, spec.budgetTimeMs)
+      : undefined;
+  const runtime = new RunRuntime(worker, gate, controller, timeBudgetTimer);
 
  // assignRuntime（paused → running，原子绑定 runtime + status）
   run.assignRuntime(runtime);
@@ -224,7 +260,12 @@ export async function resumeRun(runId: string, deps: LifecycleDeps): Promise<voi
   const controller = new AbortController();
   const gate = new ConcurrencyGate({ maxConcurrency: DEFAULT_CONCURRENCY });
   const worker = deps.workerHost.start(run.spec, run.spec.args, handlers);
-  const runtime = new RunRuntime(worker, gate, controller);
+ // C.7：resume 重新调度时间预算计时器（与 run 对称；旧 pause 已清旧计时器）。
+  const timeBudgetTimer =
+    run.spec.budgetTimeMs && run.spec.budgetTimeMs > 0
+      ? scheduleTimeBudget(runId, deps, run.spec.budgetTimeMs)
+      : undefined;
+  const runtime = new RunRuntime(worker, gate, controller, timeBudgetTimer);
 
  // assignRuntime（paused → running，原子绑定 runtime + status）
   run.assignRuntime(runtime);

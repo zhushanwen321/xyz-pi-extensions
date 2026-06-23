@@ -26,7 +26,7 @@ export interface RunSpec {
   readonly args: Record<string, unknown>;
  /** Token 预算上限（未设或 0 = 不限制，见 Budget 守卫）。 */
   readonly budgetTokens?: number;
- /** 时间预算上限（ms，wall-clock，由 scheduleTimeBudgetCheck 调度）。 */
+ /** 时间预算上限（ms，wall-clock，由 lifecycle.scheduleTimeBudget 调度）。 */
   readonly budgetTimeMs?: number;
  /** 脚本名（meta.name 或文件名 stem）。 */
   readonly scriptName: string;

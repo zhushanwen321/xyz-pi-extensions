@@ -147,11 +147,14 @@ export async function runAndWait(
   }
 
  // 3. 构建 RunSpec
+ // 不设 budgetTimeMs：runAndWait 自身用轮询 deadline（下方 while 循环 + safeAbort）
+ // 实施 timeout，并产出「Workflow timed out after Xms」的具体错误信息。spec 级
+ // 时间预算（lifecycle.scheduleTimeBudget）服务于 fire-and-forget 的交互式 run
+ // （tool-workflow actionRun），若在此也设会与轮询 deadline 同时触发产生竞态。
   const spec: RunSpec = {
     scriptSource: script.toExecutable(),
     args,
     budgetTokens: undefined,
-    budgetTimeMs: timeoutMs,
     scriptName: script.name,
     scriptPath: script.path,
     description: script.meta.description,

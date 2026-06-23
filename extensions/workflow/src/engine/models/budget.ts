@@ -73,8 +73,9 @@ export class Budget {
  *
  * maxTokens===0 或 undefined 视为不限制（守卫）；
  * maxCost===0 或 undefined 视为不限制。
- * 时间预算（maxTimeMs）不由本方法判断——它是 wall-clock 约束，
- * 需参照 startedAt，由 lifecycle 层的 scheduleTimeBudgetCheck 独立调度。
+ * 时间预算（maxTimeMs）不由本方法判断——它是 wall-clock 约束，需参照 startedAt，
+ * 由 lifecycle 层的 scheduleTimeBudget（runWorkflow/resumeRun 内 setTimeout）
+ * 独立调度，到期 abortRun(doneReason="time_limited")。
  */
   isExceeded(): boolean {
     if (this.maxTokens !== undefined && this.maxTokens > 0 && this.usedTokens >= this.maxTokens) {

@@ -127,14 +127,18 @@ export function registerWorkflowTool(
     label: "Workflow",
     description:
       "Execute and control workflows: run (start), status, pause, resume, abort, " +
-      "retry-node (re-dispatch a failed agent call), skip-node (mark a call as skipped).\n" +
+      "retry-node (re-run a failed agent call to refresh its trace; does NOT resume the " +
+      "workflow script or change its output — see promptGuidelines), skip-node (mark a call as skipped).\n" +
       "Replaces workflow + workflow-run tools.",
     promptSnippet: "Run, pause, resume, abort, or check workflow status",
     promptGuidelines: [
       "PRIORITY: When user says 'workflow', 'run workflow', try run action FIRST.",
       "run: discover by name/description, confirm with user (tmp or unapproved), then start in background.",
       "Do NOT poll status after starting — results appear automatically via notifyDone.",
-      "retry-node/skip-node: for specific failed agent calls (requires runId + callId).",
+      "retry-node/skip-node: for specific failed agent calls (requires runId + callId). " +
+      "retry-node only re-runs the call and refreshes the trace — the workflow script has " +
+      "already moved past the failed call, so the new result does NOT feed back into the " +
+      "script flow. Use retry-node for diagnostics, not to resume the workflow.",
     ],
     parameters: WorkflowParams,
 

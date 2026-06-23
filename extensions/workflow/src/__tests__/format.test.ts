@@ -33,38 +33,43 @@ function makeToolCall(overrides: Partial<ToolCallEntry> = {}): ToolCallEntry {
 // 4. else → "NmMs"
 
 describe("formatElapsed", () => {
+ // 固定参考时间，避免 wall-clock 调度延迟把 elapsed 推过边界（原用例在 CI 飘红）。
+  const NOW = new Date("2026-06-22T10:05:00.000Z").getTime();
+
   it("branch 1: undefined startedAt → '-'", () => {
-    expect(formatElapsed(undefined)).toBe("-");
+    expect(formatElapsed(undefined, NOW)).toBe("-");
   });
 
   it("branch 1: empty-string startedAt → '-'", () => {
-    expect(formatElapsed("")).toBe("-");
+    expect(formatElapsed("", NOW)).toBe("-");
   });
 
   it("branch 2: < 1s elapsed → '0s'", () => {
-    const startedAt = new Date(Date.now() - 500).toISOString();
-    expect(formatElapsed(startedAt)).toBe("0s");
+    const startedAt = new Date(NOW - 500).toISOString();
+    expect(formatElapsed(startedAt, NOW)).toBe("0s");
   });
 
-  it("branch 2: exactly at boundary (just under 1s) → '0s'", () => {
-    const startedAt = new Date(Date.now() - 999).toISOString();
-    expect(formatElapsed(startedAt)).toBe("0s");
+  it("branch 2: just under 1s boundary → '0s'", () => {
+ // NOW 固定，NOW-999 与 NOW 之间 elapsed=999ms < 1000ms，确定性命中 branch 2。
+    const startedAt = new Date(NOW - 999).toISOString();
+    expect(formatElapsed(startedAt, NOW)).toBe("0s");
   });
 
   it("branch 3: 1s..59s → 'Ns'", () => {
-    const startedAt = new Date(Date.now() - 30_000).toISOString();
-    expect(formatElapsed(startedAt)).toBe("30s");
+    const startedAt = new Date(NOW - 30_000).toISOString();
+    expect(formatElapsed(startedAt, NOW)).toBe("30s");
   });
 
   it("branch 3: just under 60s → '59s'", () => {
-    const startedAt = new Date(Date.now() - 59_999).toISOString();
-    expect(formatElapsed(startedAt)).toBe("59s");
+ // NOW 固定，NOW-59999 与 NOW 之间 elapsed=59999ms → floor(59999/1000)=59s。
+    const startedAt = new Date(NOW - 59_999).toISOString();
+    expect(formatElapsed(startedAt, NOW)).toBe("59s");
   });
 
   it("branch 4: >= 60s → 'NmMs'", () => {
  // 125s = 2m5s
-    const startedAt = new Date(Date.now() - 125_000).toISOString();
-    expect(formatElapsed(startedAt)).toBe("2m5s");
+    const startedAt = new Date(NOW - 125_000).toISOString();
+    expect(formatElapsed(startedAt, NOW)).toBe("2m5s");
   });
 
   it("deterministic with explicit `now` param (no wall-clock flakiness)", () => {

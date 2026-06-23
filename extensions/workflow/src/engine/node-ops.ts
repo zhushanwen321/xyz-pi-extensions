@@ -11,6 +11,14 @@
  * 主线程直接调 executeAgentCall，worker 不重启，已完成调用不受影响（worker 重启是
  * worker-error-retry handleWorkerError 的语义，不在本职责内）。
  *
+ * **retryNode 不影响脚本流程**：worker 在首次失败结果被 postAgentResult 投递后即
+ * resolve 并删除该 callId 的 pending Promise（worker-script-builder agent-result 分支）。
+ * retryNode 的二次 postMessage 因此被 worker 丢弃——新结果只更新 trace/TUI，
+ * 回不到脚本（脚本早已带着首次结果往下走）。这是 D.5「不重启 worker」的直接后果：
+ * 要让新结果回到脚本必须重启 worker 重跑整个脚本（旧 orchestrator.ts 语义），
+ * 与「不干扰已完成调用」的设计意图冲突。故 retryNode 定位为「失败节点的诊断性重跑
+ * + trace 刷新」，不承诺改变脚本输出。tool-workflow 的描述已如实声明此语义。
+ *
  * **G6-001**：retryNode 前置 status==="running"（paused 下拒绝，要 retry 先 resume）。
  *
  * 层归属：Engine。依赖 LifecycleDeps + WorkflowRun + executeAgentCall。
@@ -42,11 +50,16 @@ const SKIP_PLACEHOLDER: AgentResult = {
 // ── retryNode ────────────────────────────────────────────────
 
 /**
- * 重试单个失败 agent call。
+ * 重试单个失败 agent call（诊断性重跑 + trace 刷新，不影响脚本流程）。
  *
  * **D.5 修复**：不 replaceRuntime、不重启 worker。只重置 call 状态（status=pending,
  * attempts=0, result=undefined）+ 同步 trace 节点 + 主线程直接调 executeAgentCall。
  * worker 仍在运行，已完成调用不受影响。
+ *
+ * **结果不回到脚本**：见文件头说明——worker 在首次失败结果投递后已 resolve 并删除
+ * 该 callId 的 pending Promise，本函数末尾的 postMessage 通常被 worker 丢弃。新结果
+ * 只反映在 trace/TUI，不改变脚本输出（若需让脚本拿新结果，须重启 worker 重跑整个
+ * 脚本，与 D.5 冲突，未采用）。
  *
  * 与 worker-error-retry的区别：
  * - handleWorkerError：worker 本身崩溃 → replaceRuntime 重启整个 worker
@@ -98,7 +111,10 @@ export async function retryNode(
   const signal = run.runtime!.controller.signal;
   await executeAgentCall(call, deps.runner, run.state.budget, signal, run.state.trace);
 
- // 回发结果给 worker（worker 可能在 pending await）
+ // 回发结果给 worker（best-effort：worker 通常已在首次失败结果投递后 resolve 并删除
+ // 该 callId 的 pending Promise，故本 postMessage 多被丢弃——见文件头 D.5 说明）。
+ // 保留是为覆盖「executeAgentCall 已完成但 dispatchAgentCall.then 尚未投递结果」的
+ // 极窄竞态窗口，以及与 skipNode 的回发路径对称。结果无论如何都已写入 trace/TUI。
   if (call.result) {
     run.runtime?.worker.postMessage({
       type: "agent-result",

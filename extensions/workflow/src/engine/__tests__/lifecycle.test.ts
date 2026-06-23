@@ -147,6 +147,64 @@ describe("runWorkflow", () => {
   });
 });
 
+// ── 时间预算调度（C.7 scheduleTimeBudget，review round 1 must-fix #1） ──
+
+describe("runWorkflow 时间预算（C.7 scheduleTimeBudget）", () => {
+  it("budgetTimeMs > 0：到期 → done,time_limited + error='Time budget exceeded'", async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      const runId = await runWorkflow(makeSpec({ budgetTimeMs: 1000 }), deps);
+      const run = deps.runs.get(runId)!;
+      expect(run.state.status).toBe("running");
+
+      await vi.advanceTimersByTimeAsync(1000);
+
+      await vi.waitFor(() => expect(run.state.status).toBe("done"));
+      expect(run.state.reason).toBe("time_limited");
+      expect(run.state.error).toBe("Time budget exceeded");
+ // runtime 已 release（done ⟺ runtime undefined，不变式 I1）
+      expect(run.runtime).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("budgetTimeMs 未设：不调度计时器，推进时间后仍 running", async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      const runId = await runWorkflow(makeSpec(), deps);
+      const run = deps.runs.get(runId)!;
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(run.state.status).toBe("running");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pause 清理计时器：pause 后推进时间不因旧计时器转 done", async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      const runId = await runWorkflow(makeSpec({ budgetTimeMs: 1000 }), deps);
+      const run = deps.runs.get(runId)!;
+
+      await pauseRun(runId, deps);
+      expect(run.state.status).toBe("paused");
+
+      await vi.advanceTimersByTimeAsync(5000);
+
+ // 旧计时器随 releaseRuntime 清理，不会把 paused run 误转 done
+      expect(run.state.status).toBe("paused");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 // ── pauseRun ─────────────────────────────────────────────────
 
 describe("pauseRun", () => {
