@@ -73,3 +73,23 @@ Other changes:
     from `@mariozechner/pi-tui` (handles xterm/iTerm/kitty escape-sequence
     differences), render cache mirrors main's width-keyed cache, escape/ctrl+c
     exit, p/a lifecycle shortcuts preserved (no restart per D-9).
+  - **Bug #4 (TUI still non-functional after Bug #3 fix)**: full comparison
+    vs `main` revealed 3 root causes that made the view open but not work:
+    (a) `ctx.ui.custom` was called without the second `{overlay:true,
+    overlayOptions}` argument — the view rendered in default non-overlay
+    mode (wrong size/position). Restored overlay params (aligned with main +
+    subagents extension + `docs/pi-tui-development-guide.md` §3.2).
+    (b) Trace snapshot frozen at open time — `phaseGroups` was computed once
+    in the factory (with a spread-copy of `trace.toArray()`) and reused on
+    every render, so running workflows appeared stuck with their open-time
+    state. The refactored engine has no event emitter (orchestrator was
+    removed per AC-3), so the view now self-polls via a 1s `setInterval`
+    tick that invalidates the cache and recomputes `phaseGroups` from the
+    live `run.state.trace` on every render.
+    (c) `s` save shortcut had been removed during the D-9 "remove restart"
+    pass (over-read — D-9 only targets restart). Restored save-as-workflow
+    mode: `s` opens an inline name-input overlay (only for tmp workflows,
+    detected via `scriptPath` containing `/.tmp/`); Enter calls infra
+    `saveWorkflow` (project scope only, per `workflow-files.ts`). Also
+    restored `ctx.ui.notify` error feedback on pause/resume/abort failure
+    (was silently swallowed by empty `.catch(() => {})`).
