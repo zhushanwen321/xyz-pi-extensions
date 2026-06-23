@@ -1,10 +1,16 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/__tests__/commands.test.ts
 //
-// S4 (round-4 review): /workflows command handler 的直接单测。
-// 之前 index.test.ts 只断言 registerCommand 被调用 + name === "workflows"，
-// 从未 invoke handler —— handler 函数体零覆盖（2 个分支：empty / non-empty runs，
-// 含 runId.slice(0, RUNID_SHORT) 截断 + reasonSuffix 拼接）。本文件补全。
+// /workflows command handler 测试（Bug #2 修复：TUI 恢复）。
+//
+// handler 行为：
+//   - 无 UI（RPC 模式）→ notify error
+//   - 0 runs → notify info "No workflows"
+//   - 1 run → 直接打开 view（ctx.ui.custom 被调）
+//   - 多 runs → ctx.ui.select 选 → 打开选中 run 的 view
+//   - `/workflows <runId>` → 精确/前缀匹配 → 直开
+//
+// view 内部渲染（键盘导航等）由 workflows-view.test.ts 覆盖，本文件只测 command 路由。
 
 /* eslint-disable taste/no-unsafe-cast */
 
@@ -20,25 +26,25 @@ import { registerWorkflowsCommand } from "../interface/commands.js";
 // ── Fixtures ─────────────────────────────────────────────────
 
 /**
- * Build a WorkflowRun with minimal valid state for command rendering.
+ * Build a WorkflowRun with minimal valid state for view rendering.
  *
  * Uses `WorkflowRun.reconstruct()` (not `new WorkflowRun`) so we can construct
  * `status: "running"` snapshots without violating invariant I1
  * (running ⟹ runtime defined). The command handler is read-only on state
  * fields, so a reconstructed snapshot is a faithful fixture.
  *
- * `reason` defaults to undefined — done runs only get a reason suffix when the
- * caller explicitly sets one (matching how real persisted snapshots look when
- * reconstructed from incomplete fixtures).
+ * Default status is "paused" — avoids I2 (done ⟹ reason) for tests that don't
+ * care about status. Tests that need "done" must pass a reason.
  */
 function makeRun(overrides: {
   runId?: string;
   scriptName?: string;
   status?: RunStatus;
   reason?: DoneReason;
+  startedAt?: string;
 } = {}): WorkflowRun {
   const state: ConstructorParameters<typeof WorkflowRun>[2] = {
-    status: overrides.status ?? "done",
+    status: overrides.status ?? "paused",
     budget: new Budget(),
     calls: new Map(),
     trace: Trace.fromArray([]),
@@ -55,11 +61,25 @@ function makeRun(overrides: {
       description: "A test workflow",
     },
     state,
-    { startedAt: "2026-06-22T10:00:00.000Z", completedAt: "2026-06-22T10:05:00.000Z" },
+    { startedAt: overrides.startedAt ?? "2026-06-22T10:00:00.000Z", completedAt: "2026-06-22T10:05:00.000Z" },
   );
 }
 
-/** Minimal mock Pi with registerCommand captured for later invocation. */
+/** Minimal mock LauncherDeps — command handler only invokes pause/resume/abort through it. */
+function makeDeps(): unknown {
+  // Handler only reads deps to pass into ViewActions; lifecycle functions are
+  // not invoked in these tests (no key pressed inside the view). Cast via
+  // unknown to avoid constructing the full LifecycleDeps surface.
+  return {
+    runs: new Map(),
+    store: {},
+    workerHost: {},
+    runner: {},
+    registry: {},
+  };
+}
+
+/** Capture registerCommand + return its handler for invocation. */
 function makePi(): { pi: ExtensionAPI; getCommandOpts: () => { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> } } {
   let captured: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> } | undefined;
   const pi = {
@@ -76,93 +96,169 @@ function makePi(): { pi: ExtensionAPI; getCommandOpts: () => { handler: (args: s
   };
 }
 
-/** Mock ExtensionCommandContext with a notify spy. */
-function makeCommandCtx(): { ctx: ExtensionCommandContext; notify: ReturnType<typeof vi.fn> } {
+/** Mock ExtensionCommandContext. hasUI defaults to true; select/custom/notify are spies. */
+function makeCommandCtx(overrides: {
+  hasUI?: boolean;
+  selectResult?: string | undefined;
+} = {}): { ctx: ExtensionCommandContext; notify: ReturnType<typeof vi.fn>; select: ReturnType<typeof vi.fn>; custom: ReturnType<typeof vi.fn> } {
   const notify = vi.fn();
-  const ctx = { ui: { notify } } as unknown as ExtensionCommandContext;
-  return { ctx, notify };
+  const select = vi.fn().mockResolvedValue(overrides.selectResult);
+  const custom = vi.fn().mockResolvedValue(undefined);
+  const ctx = {
+    hasUI: overrides.hasUI ?? true,
+    ui: {
+      notify,
+      select,
+      custom,
+      theme: { fg: (_t: string, text: string) => text, bold: (t: string) => t },
+    },
+  } as unknown as ExtensionCommandContext;
+  return { ctx, notify, select, custom };
 }
 
 // ── Tests ────────────────────────────────────────────────────
 
-describe("registerWorkflowsCommand handler (S4)", () => {
+describe("registerWorkflowsCommand handler (Bug #2: TUI restored)", () => {
   it("registers command named 'workflows'", () => {
     const { pi } = makePi();
-    registerWorkflowsCommand(pi, () => new Map());
+    registerWorkflowsCommand(pi, () => new Map(), makeDeps() as never);
     expect(pi.registerCommand).toHaveBeenCalledTimes(1);
     expect((pi.registerCommand as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe("workflows");
   });
 
-  it("empty runs → notify 'No workflows in current session.' (info)", async () => {
+  it("no UI (RPC mode) → notify error, view not opened", async () => {
     const { pi, getCommandOpts } = makePi();
-    registerWorkflowsCommand(pi, () => new Map());
-    const { ctx, notify } = makeCommandCtx();
+    registerWorkflowsCommand(pi, () => new Map(), makeDeps() as never);
+    const { ctx, notify, custom } = makeCommandCtx({ hasUI: false });
 
     await getCommandOpts().handler("", ctx);
 
-    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith("/workflows requires interactive mode", "error");
+    expect(custom).not.toHaveBeenCalled();
+  });
+
+  it("0 runs → notify 'No workflows in current session.'", async () => {
+    const { pi, getCommandOpts } = makePi();
+    registerWorkflowsCommand(pi, () => new Map(), makeDeps() as never);
+    const { ctx, notify, custom } = makeCommandCtx();
+
+    await getCommandOpts().handler("", ctx);
+
     expect(notify).toHaveBeenCalledWith("No workflows in current session.", "info");
+    expect(custom).not.toHaveBeenCalled();
   });
 
-  it("non-empty runs → notify formatted lines with [status (reason)] scriptName (runId前8位)", async () => {
+  it("1 run → directly opens view (ctx.ui.custom invoked)", async () => {
     const { pi, getCommandOpts } = makePi();
     const runs = new Map<string, WorkflowRun>([
-      // paused run → no reason (I2 only requires reason for done; paused has none) → no suffix
-      ["run-abc123def456", makeRun({ runId: "run-abc123def456", scriptName: "deploy-app", status: "paused" })],
-      // done with reason → " (failed)" suffix appended
-      ["run-999888777666", makeRun({ runId: "run-999888777666", scriptName: "rollback", status: "done", reason: "failed" })],
+      ["run-abc123def456", makeRun({ runId: "run-abc123def456", scriptName: "deploy" })],
     ]);
-    registerWorkflowsCommand(pi, () => runs);
-    const { ctx, notify } = makeCommandCtx();
+    registerWorkflowsCommand(pi, () => runs, makeDeps() as never);
+    const { ctx, notify, select, custom } = makeCommandCtx();
 
     await getCommandOpts().handler("", ctx);
 
-    expect(notify).toHaveBeenCalledTimes(1);
-    const [message, level] = notify.mock.calls[0];
-    expect(level).toBe("info");
-    // Two lines, one per run
-    const lines = message.split("\n");
-    expect(lines).toHaveLength(2);
-    // paused without reason → no suffix
-    expect(lines[0]).toBe("[paused] deploy-app (run-abc1)");
-    // done with reason → reasonSuffix " (failed)" appended
-    expect(lines[1]).toBe("[done (failed)] rollback (run-9998)");
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(select).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
   });
 
-  it("runId is truncated to 8 chars (RUNID_SHORT)", async () => {
+  it("multiple runs → select invoked, then opens selected run's view", async () => {
     const { pi, getCommandOpts } = makePi();
-    const longRunId = "run-abcdefghijklmnopqrstuvwxyz1234567890";
     const runs = new Map<string, WorkflowRun>([
-      [longRunId, makeRun({ runId: longRunId, scriptName: "wf", status: "paused" })],
+      ["run-abc123def456", makeRun({ runId: "run-abc123def456", scriptName: "deploy" })],
+      ["run-999888777666", makeRun({ runId: "run-999888777666", scriptName: "rollback", status: "paused" })],
     ]);
-    registerWorkflowsCommand(pi, () => runs);
-    const { ctx, notify } = makeCommandCtx();
+    registerWorkflowsCommand(pi, () => runs, makeDeps() as never);
+    // select returns the second entry
+    const { ctx, select, custom } = makeCommandCtx({
+      selectResult: "rollback [paused] (run-9998)",
+    });
 
     await getCommandOpts().handler("", ctx);
 
-    const [message] = notify.mock.calls[0];
-    // paused run has no reason → no suffix; runId truncated to first 8 chars
-    expect(message).toBe(`[paused] wf (${longRunId.slice(0, 8)})`);
-    expect(message).not.toContain(longRunId.slice(8));
+    expect(select).toHaveBeenCalledTimes(1);
+    const [, options] = select.mock.calls[0];
+    expect(options).toHaveLength(2);
+    expect(options[0]).toContain("deploy");
+    expect(options[1]).toContain("rollback");
+    expect(custom).toHaveBeenCalledTimes(1);
   });
 
-  it("getRuns closure is evaluated at invocation time (reflects live state)", async () => {
-    // Verify the handler reads the Map fresh each call — not captured at registration.
+  it("multiple runs + user cancels select → view not opened", async () => {
     const { pi, getCommandOpts } = makePi();
-    const runs = new Map<string, WorkflowRun>();
-    registerWorkflowsCommand(pi, () => runs);
-    const { ctx, notify } = makeCommandCtx();
+    const runs = new Map<string, WorkflowRun>([
+      ["run-abc123def456", makeRun({ runId: "run-abc123def456", scriptName: "a" })],
+      ["run-999888777666", makeRun({ runId: "run-999888777666", scriptName: "b" })],
+    ]);
+    registerWorkflowsCommand(pi, () => runs, makeDeps() as never);
+    const { ctx, custom } = makeCommandCtx({ selectResult: undefined });
 
-    // First call: empty
     await getCommandOpts().handler("", ctx);
-    expect(notify.mock.calls[0][0]).toBe("No workflows in current session.");
 
-    // Mutate the same Map between calls
-    runs.set("run-111111111111", makeRun({ runId: "run-111111111111", scriptName: "late", status: "running" }));
+    expect(custom).not.toHaveBeenCalled();
+  });
 
-    // Second call: now non-empty
+  it("/workflows <runId> → exact match → opens view, no select", async () => {
+    const { pi, getCommandOpts } = makePi();
+    const runs = new Map<string, WorkflowRun>([
+      ["run-abc123def456", makeRun({ runId: "run-abc123def456", scriptName: "deploy" })],
+      ["run-999888777666", makeRun({ runId: "run-999888777666", scriptName: "rollback" })],
+    ]);
+    registerWorkflowsCommand(pi, () => runs, makeDeps() as never);
+    const { ctx, select, custom } = makeCommandCtx();
+
+    await getCommandOpts().handler("run-abc123def456", ctx);
+
+    expect(custom).toHaveBeenCalledTimes(1);
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("/workflows <prefix> → unique prefix match → opens view", async () => {
+    const { pi, getCommandOpts } = makePi();
+    const runs = new Map<string, WorkflowRun>([
+      ["run-abc123def456", makeRun({ runId: "run-abc123def456", scriptName: "deploy" })],
+      ["run-999888777666", makeRun({ runId: "run-999888777666", scriptName: "rollback" })],
+    ]);
+    registerWorkflowsCommand(pi, () => runs, makeDeps() as never);
+    const { ctx, custom } = makeCommandCtx();
+
+    await getCommandOpts().handler("run-abc", ctx);
+
+    expect(custom).toHaveBeenCalledTimes(1);
+  });
+
+  it("/workflows <unknown runId> → notify 'not found'", async () => {
+    const { pi, getCommandOpts } = makePi();
+    const runs = new Map<string, WorkflowRun>([
+      ["run-abc123def456", makeRun({ runId: "run-abc123def456", scriptName: "deploy" })],
+    ]);
+    registerWorkflowsCommand(pi, () => runs, makeDeps() as never);
+    const { ctx, notify, custom } = makeCommandCtx();
+
+    await getCommandOpts().handler("run-nonexistent", ctx);
+
+    expect(notify).toHaveBeenCalledWith("Workflow 'run-nonexistent' not found", "error");
+    expect(custom).not.toHaveBeenCalled();
+  });
+
+  it("runs sorted: running/paused before done, newer startedAt first", async () => {
+    // Verify sort order via select options order.
+    const { pi, getCommandOpts } = makePi();
+    const runs = new Map<string, WorkflowRun>([
+      // done, older
+      ["run-old", makeRun({ runId: "run-old", scriptName: "old-done", status: "done", reason: "completed", startedAt: "2026-06-22T09:00:00.000Z" })],
+      // paused, newer (should be first — paused sorts before done)
+      ["run-new", makeRun({ runId: "run-new", scriptName: "new-paused", status: "paused", startedAt: "2026-06-22T11:00:00.000Z" })],
+    ]);
+    registerWorkflowsCommand(pi, () => runs, makeDeps() as never);
+    const { ctx, select } = makeCommandCtx({ selectResult: "placeholder" });
+
     await getCommandOpts().handler("", ctx);
-    const [message] = notify.mock.calls[1];
-    expect(message).toBe("[running] late (run-1111)");
+
+    const [, options] = select.mock.calls[0];
+    // paused sorts before done → "new-paused" first
+    expect(options[0]).toContain("new-paused");
+    expect(options[1]).toContain("old-done");
   });
 });

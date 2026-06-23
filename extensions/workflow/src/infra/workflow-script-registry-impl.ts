@@ -20,6 +20,8 @@
  * 调用方仍依赖；W4 T25 切换到新 registry 后旧函数成死代码，W5 T29 删除）。
  */
 
+import { readFileSync } from "node:fs";
+
 import {
   type WorkflowMeta,
   WorkflowScript,
@@ -66,12 +68,12 @@ export class WorkflowScriptRegistryImpl implements WorkflowScriptRegistry {
    * 把旧 CachedWorkflowMeta 转换为 WorkflowScript 实体（T6 构造）。
    *
    * 字段映射：
-   *   - name/path/source/available 直接传
+   *   - name/path/source 直接传
    *   - meta 拆为 WorkflowMeta（name/description/phases）
-   *   - sourceCode 这里不预读（lazy）——WorkflowScript.toExecutable() 按需读
-   *     实际：旧 config-loader 不读 sourceCode（只 regex 提 meta），WorkflowScript
-   *     的 sourceCode 字段对 registry 来说非必需（validate/toExecutable 由 Interface
-   *     层按需调用）。此处填空字符串占位——真要 sourceCode 时 Interface 层 readFile。
+   *   - sourceCode 在此 readFile 填充（FR-2：registry 是唯一读文件处，扫描+缓存+去重；
+   *     60s TTL 缓存避免重复读）。caller（launcher.runAndWait / tool-workflow.actionRun）
+   *     直接用 script.validate() / script.toExecutable()，不再各自 readFile。
+   *   - available：meta 提取失败（config-loader 标 available=false）或文件不可读时为 false
    */
   private toScript(m: {
     name: string;
@@ -86,16 +88,27 @@ export class WorkflowScriptRegistryImpl implements WorkflowScriptRegistry {
       description: m.description,
       phases: m.phases,
     };
+    // FR-2: registry 是唯一读文件处。readFileSync 填 sourceCode —— 这样 launcher/tool
+    // 直接调 toExecutable()/validate() 即可，无需各自 readFile（避免重复读，60s TTL 缓存生效）。
+    let sourceCode = "";
+    let available = m.available;
+    if (available) {
+      try {
+        sourceCode = readFileSync(m.path, "utf-8");
+      } catch {
+        // 文件不可读（race condition 删除、权限等）——标 available=false，
+        // 与 meta 提取失败的现有语义一致（loader "never throws"）。
+        sourceCode = "";
+        available = false;
+      }
+    }
     return new WorkflowScript({
       name: m.name,
       source: m.source,
       path: m.path,
-      // sourceCode 暂留空串——旧 config-loader 不读文件内容（只 regex 提 meta），
-      // WorkflowScript.sourceCode 在 registry 场景不需要（Interface 层调用 readFile
-      // 按需填充，或 T22 launcher 直接用 spec.scriptSource）。空串不影响 list/get。
-      sourceCode: "",
+      sourceCode,
       meta,
-      available: m.available,
+      available,
     });
   }
 }

@@ -1,7 +1,8 @@
 /**
- * Workflow Extension — commands（W4-T27，瘦身）
+ * Workflow Extension — commands（W4-T27 + W5-T31 收尾）
  *
- * 仅注册 /workflows 打开 WorkflowsView（FR-6）。
+ * 仅注册 /workflows 命令（FR-6）——打开交互式 TUI 面板（WorkflowsView，三级导航
+ * phase → agent → detail，UC-3）。
  *
  * 移除的旧子命令（FR-6）：
  *   - /workflow run <name>     → 用 workflow tool { action: "run" }
@@ -10,56 +11,151 @@
  *   - /workflow save <name>    → 用 workflow-script tool { action: "save" }
  *   - /workflow delete <name>  → 用 workflow-script tool { action: "delete" }
  *
- * 旧 sendCompletionNotification 移到 T23 helpers（notifyDone）。
- * 旧 /workflow 子命令在 commands.legacy.ts（W5 T29 删）。
+ * 历史说明：T26/T31 期间此文件曾用文本 notify 占位（"过渡期"），T31 重建
+ * WorkflowsView 后已接回 createWorkflowsView。Bug #2 修复（round-5）恢复 TUI。
  *
- * 层归属：Interface。依赖 Pi SDK。
- *
- * 注意：WorkflowsView 的 WorkflowRun 适配（T26）推迟到 W5 T31。
- * 此过渡期 /workflows 暂用 status 文本输出（view 适配后切回 createWorkflowsView）。
+ * 层归属：Interface。依赖 Pi SDK + Engine lifecycle（pause/resume/abort，注入 ViewActions）
+ * + WorkflowsView（T26/T31 重建，读 WorkflowRun 聚合根）。
  *
  * 参考：
- *   - domain-models.md §FR-6（command 收口仅 /workflows）
- *   - 旧 interface/commands.ts registerWorkflowCommands（瘦身来源）
+ *   - domain-models.md §FR-6（command 收口仅 /workflows，打开交互式面板）
+ *   - spec.md UC-3（用户输入 /workflows，打开三级导航 TUI 面板）
+ *   - 旧 interface/commands.ts registerWorkflowsCommand（TUI 行为来源）
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@mariozechner/pi-coding-agent";
 
+import type { LauncherDeps } from "../engine/launcher.js";
+import { abortRun, pauseRun, resumeRun } from "../engine/lifecycle.js";
 import type { WorkflowRun } from "../engine/models/workflow-run.js";
+import { createWorkflowsView, type ViewActions } from "./views/WorkflowsView.js";
 
 /** runId 截断长度（显示用）。 */
 const RUNID_SHORT = 8;
 
+/** status 显示顺序：running/paused 优先（活跃态在前），再 startedAt 倒序。 */
+const STATUS_ORDER: Record<string, number> = {
+  running: 0,
+  paused: 1,
+  done: 2,
+};
+/** 未知 status 的默认排序权重（排在已知 status 之后）。 */
+const UNKNOWN_STATUS_WEIGHT = 9;
+
 // ── /workflows command ───────────────────────────────────────
 
 /**
- * 注册 /workflows command——列出当前 session 的 workflow runs。
+ * 注册 /workflows command——打开 workflow 交互式 TUI 面板（FR-6, UC-3）。
  *
- * FR-6：仅保留 /workflows（移除 /workflow run|list|abort|save|delete 子命令，
- * 它们已收口到 workflow / workflow-script 两个 tool）。
+ * 行为：
+ *   - 无 UI（RPC/print/json 模式）→ notify 提示（降级，不打开 TUI）
+ *   - `/workflows <runId>` 或前缀匹配唯一 run → 直接打开该 run 的 view
+ *   - `/workflows`（无参）：
+ *       · 0 runs → notify "No workflows"
+ *       · 1 run  → 直接打开
+ *       · 多 runs → select 选 → 打开选中 run 的 view
  *
- * T26 WorkflowsView 适配推迟到 W5 T31。此过渡期 /workflows 输出 status 文本。
+ * ViewActions（pause/resume/abort）由本 command 注入——view 本身不持 lifecycle 依赖，
+ * 只通过 actions 回调与 engine 交互（解耦，便于 view 单测）。
  *
  * @param api      ExtensionAPI
  * @param getRuns  获取当前 session 的 runs（Map<runId, WorkflowRun>）
+ * @param deps     LauncherDeps（lifecycle pause/resume/abort 用）
  */
 export function registerWorkflowsCommand(
   api: ExtensionAPI,
   getRuns: () => Map<string, WorkflowRun>,
+  deps: LauncherDeps,
 ): void {
   api.registerCommand("workflows", {
-    description: "List workflow runs in current session (interactive panel coming in T31).",
-    handler: async (_args: string, ctx: ExtensionCommandContext) => {
-      const runs = Array.from(getRuns().values());
-      if (runs.length === 0) {
+    description: "Open workflow interactive panel. /workflows [runId] to open a specific run.",
+    handler: async (args: string, ctx: ExtensionCommandContext) => {
+      // RPC/print/json 模式无 TUI——降级提示
+      if (!ctx.hasUI) {
+        ctx.ui.notify("/workflows requires interactive mode", "error");
+        return;
+      }
+
+      // 直接按 runId / 前缀匹配打开
+      const directRunId = args.trim();
+      if (directRunId) {
+        const all = sortedRuns(getRuns());
+        // 精确匹配优先
+        const exact = all.find((r) => r.runId === directRunId);
+        if (exact) {
+          await openView(exact, ctx.ui.theme, ctx, deps);
+          return;
+        }
+        // 前缀匹配
+        const matched = all.filter((r) => r.runId.startsWith(directRunId));
+        if (matched.length === 1) {
+          await openView(matched[0], ctx.ui.theme, ctx, deps);
+          return;
+        }
+        ctx.ui.notify(`Workflow '${directRunId}' not found`, "error");
+        return;
+      }
+
+      // 无参——列表选择
+      const all = sortedRuns(getRuns());
+      if (all.length === 0) {
         ctx.ui.notify("No workflows in current session.", "info");
         return;
       }
-      const lines = runs.map((run) => {
-        const reasonSuffix = run.state.reason ? ` (${run.state.reason})` : "";
-        return `[${run.state.status}${reasonSuffix}] ${run.spec.scriptName} (${run.runId.slice(0, RUNID_SHORT)})`;
-      });
-      ctx.ui.notify(lines.join("\n"), "info");
+
+      // 单 run 直开
+      if (all.length === 1) {
+        await openView(all[0], ctx.ui.theme, ctx, deps);
+        return;
+      }
+
+      // 多 run——select 选择
+      const entries = all.map(
+        (r) => `${r.spec.scriptName} [${r.state.status}] (${r.runId.slice(0, RUNID_SHORT)})`,
+      );
+      const selected = await ctx.ui.select("Select workflow:", entries);
+      if (!selected) return;
+      const idx = entries.indexOf(selected);
+      if (idx === -1) return;
+      await openView(all[idx], ctx.ui.theme, ctx, deps);
     },
   });
+}
+
+// ── Helpers ──────────────────────────────────────────────────
+
+/**
+ * 取 runs 按 status（running/paused 优先）+ startedAt 倒序排序。
+ * 复用 main 的 UX 顺序（活跃态在前，新的在前）。
+ */
+function sortedRuns(runs: Map<string, WorkflowRun>): WorkflowRun[] {
+  const arr = Array.from(runs.values());
+  return arr.sort((a, b) => {
+    const sa = STATUS_ORDER[a.state.status] ?? UNKNOWN_STATUS_WEIGHT;
+    const sb = STATUS_ORDER[b.state.status] ?? UNKNOWN_STATUS_WEIGHT;
+    if (sa !== sb) return sa - sb;
+    const ta = a.meta.startedAt ? new Date(a.meta.startedAt).getTime() : 0;
+    const tb = b.meta.startedAt ? new Date(b.meta.startedAt).getTime() : 0;
+    return tb - ta;
+  });
+}
+
+/**
+ * 打开 WorkflowsView（三级导航 TUI），注入 lifecycle ViewActions。
+ *
+ * ViewActions 通过 deps 调 lifecycle（pause/resume/abort），与 view 解耦——
+ * view 单测可注入 mock actions（见 workflows-view.test.ts）。
+ */
+async function openView(
+  run: WorkflowRun,
+  theme: Theme,
+  ctx: ExtensionCommandContext,
+  deps: LauncherDeps,
+): Promise<void> {
+  const actions: ViewActions = {
+    pause: (runId: string) => pauseRun(runId, deps),
+    resume: (runId: string) => resumeRun(runId, deps),
+    abort: (runId: string) => abortRun(runId, deps),
+  };
+  await createWorkflowsView(run, theme, ctx, actions);
 }

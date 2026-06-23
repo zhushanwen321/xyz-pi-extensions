@@ -48,3 +48,19 @@ Other changes:
   - Test coverage backfilled: `/workflows` command handler (5 tests, was
     zero-covered) and `format.ts` pure functions (29 tests — formatElapsed /
     formatTokenStat / formatActivityLine / visibleLen / padVisible) (S4/S5).
+- Critical regression fixes (found via session-log analysis post-link):
+  - **Bug #1 (workflow scripts didn't execute)**: `WorkflowScriptRegistryImpl`
+    returned `WorkflowScript` with `sourceCode: ""` (placeholder comment
+    claimed "Interface layer reads file as needed", but no layer did).
+    `launcher.runAndWait` / `tool-workflow.actionRun` called
+    `script.toExecutable()` on the empty source → worker received an empty
+    script → workflows silently completed in ~13ms with 0 agent calls.
+    Fixed per spec FR-2 (registry is the single filesystem reader, 扫描+缓存+去重):
+    registry now `readFileSync`-populates `sourceCode`; 60s TTL cache remains
+    the single read path. Callers consume `validate()`/`toExecutable()` directly.
+  - **Bug #2 (/workflows command lost its TUI)**: the T27/T31 transition left
+    `registerWorkflowsCommand` emitting text via `ctx.ui.notify` instead of
+    opening the `WorkflowsView` interactive panel (UC-3, FR-6). Restored the
+    TUI handler: `/workflows` → sort runs (active first) → `ctx.ui.select`
+    → `createWorkflowsView`; `/workflows <runId>` does exact/prefix direct-open.
+    `ViewActions` (pause/resume/abort) injected from `LauncherDeps`.

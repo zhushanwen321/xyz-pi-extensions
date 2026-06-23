@@ -236,16 +236,21 @@ describe("WorkflowScriptRegistryImpl", () => {
   // ── sourceCode field ──────────────────────────────────────
 
   describe("sourceCode field", () => {
-    it("registry leaves sourceCode empty (Interface layer reads file as needed)", async () => {
+    it("registry populates sourceCode from file (Bug #1 fix: FR-2 single read path)", async () => {
       const dir = makeWorkflowDir();
-      writeScript(dir, "src-test", VALID_SCRIPT("src-test"));
+      const expected = VALID_SCRIPT("src-test");
+      writeScript(dir, "src-test", expected);
 
       const registry = new WorkflowScriptRegistryImpl();
       const [script] = await registry.loadAll();
 
-      // Registry doesn't pre-read sourceCode — it's filled by Interface layer
-      // or spec.scriptSource. Empty string is the safe placeholder.
-      expect(script!.sourceCode).toBe("");
+      // FR-2: registry is the single filesystem reader (扫描+缓存+去重).
+      // sourceCode MUST be populated here so launcher.runAndWait /
+      // tool-workflow.actionRun can call validate()/toExecutable() directly
+      // without each doing their own readFile. (Previously sourceCode was ""
+      // — Bug #1: workflows silently ran 0 agents in 13ms.)
+      expect(script!.sourceCode).toBe(expected);
+      expect(script!.sourceCode.length).toBeGreaterThan(0);
     });
   });
 });

@@ -293,8 +293,12 @@ export default function workflowExtension(pi: ExtensionAPI): void {
 
   // ── Commands（仅 /workflows，FR-6） ────────────────────────
 
-  registerWorkflowsCommand(pi, () => {
-    const state = sessionState.get(lsRef.lastSessionId);
-    return state?.runs ?? new Map();
-  });
+  registerWorkflowsCommand(
+    pi,
+    () => {
+      const state = sessionState.get(lsRef.lastSessionId);
+      return state?.runs ?? new Map();
+    },
+    lazyDeps,
+  );
 }
