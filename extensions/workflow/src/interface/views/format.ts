@@ -17,13 +17,12 @@ export const PROMPT_FOLD_LINES = 3;
 export const OUTPUT_TRUNCATE_BYTES = 100_000;
 export const ELLIPSIS = "\u2026"; // U+2026
 
-// 时间换算（原 infra/constants.ts 内联——constants.ts 仅这两个常量真被使用，
-// 其余 RUNID_* 是死代码，各使用点保留本地副本。W-6 修复删 constants.ts）。
+// 时间换算（模块私有常量）。
 const MS_PER_SEC = 1000;
 const SECS_PER_MIN = 60;
 
 /**
- * 可显示的状态文本集合（W-7 修复）。
+ * 可显示的状态文本集合。
  *
  * 包含 RunStatus（"running"|"paused"|"done" 不直接显示，转 reason）+ DoneReason
  * （completed/failed/aborted/budget_limited/time_limited）+ ExecutionTraceNode.status
@@ -31,7 +30,7 @@ const SECS_PER_MIN = 60;
  *
  * 收窄自 string → 显式联合，编译器会在新增 status 时强制 switch 补齐分支。
  */
-export type StatusText =
+type StatusText =
   | RunStatus
   | DoneReason
   | "pending";
@@ -46,7 +45,7 @@ export interface ThemeLike {
 // ── Status helpers ────────────────────────────────────────────
 
 /** status → 语义颜色 token（用于给任意文本染色，不含符号）。 */
-export function statusColorToken(
+function statusColorToken(
   status: StatusText,
 ): "success" | "warning" | "error" | "muted" {
   switch (status) {
@@ -84,7 +83,7 @@ export function formatStatusBadge(
 // ── Pure formatting functions ─────────────────────────────────
 
 /** Group trace nodes by phase. Nodes without phase go to "(no phase)". */
-export function groupByPhase(nodes: ExecutionTraceNode[]): Map<string, ExecutionTraceNode[]> {
+function groupByPhase(nodes: ExecutionTraceNode[]): Map<string, ExecutionTraceNode[]> {
   const map = new Map<string, ExecutionTraceNode[]>();
   for (const node of nodes) {
     const phase = node.phase || "(default)";
@@ -95,7 +94,7 @@ export function groupByPhase(nodes: ExecutionTraceNode[]): Map<string, Execution
     }
     arr.push(node);
   }
-  // Sort within each phase by stepIndex ascending (FR-3.2)
+ // Sort within each phase by stepIndex ascending (FR-3.2)
   for (const arr of map.values()) {
     arr.sort((a, b) => a.stepIndex - b.stepIndex);
   }
@@ -139,7 +138,7 @@ export function renderTextFallback(
 
 /** Format a single activity line: ToolName(argsPreview). */
 export function formatActivityLine(entry: ToolCallEntry, maxWidth: number): string {
-  // 语义阈值与开销：低于此宽度只显名称；括号占 2 字符 (name())。
+ // 语义阈值与开销：低于此宽度只显名称；括号占 2 字符 (name)。
   const MIN_ACTIVITY_WIDTH = 10;
   const PARENS_OVERHEAD = 2;
   if (maxWidth < MIN_ACTIVITY_WIDTH) return entry.name;
@@ -206,7 +205,7 @@ export function formatPhaseLine(
   const dot = statusDotStr(pg.doneCount === pg.nodes.length ? "completed" : "running", theme);
   const name = pg.name || "(unnamed)";
   const label = `${idx + 1} ${name} ${pg.doneCount}/${pg.nodes.length}`;
-  // pointer(2) + dot(1) + space(1)
+ // pointer(2) + dot(1) + space(1)
   const PHASE_PREFIX_WIDTH = 4;
   const budget = maxWidth - PHASE_PREFIX_WIDTH;
   const truncated = visibleLen(label) > budget

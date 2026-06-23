@@ -1,26 +1,22 @@
 /**
- * Workflow Extension — commands（W4-T27 + W5-T31 收尾）
+ * Workflow Extension — commands
  *
  * 仅注册 /workflows 命令（FR-6）——打开交互式 TUI 面板（WorkflowsView，三级导航
  * phase → agent → detail，UC-3）。
  *
- * 移除的旧子命令（FR-6）：
- *   - /workflow run <name>     → 用 workflow tool { action: "run" }
- *   - /workflow list           → 用 workflow tool { action: "status" }
- *   - /workflow abort <run-id> → 用 workflow tool { action: "abort" }
- *   - /workflow save <name>    → 用 workflow-script tool { action: "save" }
- *   - /workflow delete <name>  → 用 workflow-script tool { action: "delete" }
- *
- * 历史说明：T26/T31 期间此文件曾用文本 notify 占位（"过渡期"），T31 重建
- * WorkflowsView 后已接回 createWorkflowsView。Bug #2 修复（round-5）恢复 TUI。
+ * 功能由 tool 承担，命令仅保留 /workflows 打开面板：
+ * - /workflow run <name> → 用 workflow tool { action: "run" }
+ * - /workflow list → 用 workflow tool { action: "status" }
+ * - /workflow abort <run-id> → 用 workflow tool { action: "abort" }
+ * - /workflow save <name> → 用 workflow-script tool { action: "save" }
+ * - /workflow delete <name> → 用 workflow-script tool { action: "delete" }
  *
  * 层归属：Interface。依赖 Pi SDK + Engine lifecycle（pause/resume/abort，注入 ViewActions）
- * + WorkflowsView（T26/T31 重建，读 WorkflowRun 聚合根）。
+ * + WorkflowsView（读 WorkflowRun 聚合根）。
  *
  * 参考：
- *   - domain-models.md §FR-6（command 收口仅 /workflows，打开交互式面板）
- *   - spec.md UC-3（用户输入 /workflows，打开三级导航 TUI 面板）
- *   - 旧 interface/commands.ts registerWorkflowsCommand（TUI 行为来源）
+ * - domain-models.md §FR-6（command 收口仅 /workflows，打开交互式面板）
+ * - spec.md UC-3（用户输入 /workflows，打开三级导航 TUI 面板）
  */
 
 import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@mariozechner/pi-coding-agent";
@@ -48,19 +44,19 @@ const UNKNOWN_STATUS_WEIGHT = 9;
  * 注册 /workflows command——打开 workflow 交互式 TUI 面板（FR-6, UC-3）。
  *
  * 行为：
- *   - 无 UI（RPC/print/json 模式）→ notify 提示（降级，不打开 TUI）
- *   - `/workflows <runId>` 或前缀匹配唯一 run → 直接打开该 run 的 view
- *   - `/workflows`（无参）：
- *       · 0 runs → notify "No workflows"
- *       · 1 run  → 直接打开
- *       · 多 runs → select 选 → 打开选中 run 的 view
+ * - 无 UI（RPC/print/json 模式）→ notify 提示（降级，不打开 TUI）
+ * - `/workflows <runId>` 或前缀匹配唯一 run → 直接打开该 run 的 view
+ * - `/workflows`（无参）：
+ * · 0 runs → notify "No workflows"
+ * · 1 run → 直接打开
+ * · 多 runs → select 选 → 打开选中 run 的 view
  *
  * ViewActions（pause/resume/abort）由本 command 注入——view 本身不持 lifecycle 依赖，
  * 只通过 actions 回调与 engine 交互（解耦，便于 view 单测）。
  *
- * @param api      ExtensionAPI
- * @param getRuns  获取当前 session 的 runs（Map<runId, WorkflowRun>）
- * @param deps     LauncherDeps（lifecycle pause/resume/abort 用）
+ * @param api ExtensionAPI
+ * @param getRuns 获取当前 session 的 runs（Map<runId, WorkflowRun>）
+ * @param deps LauncherDeps（lifecycle pause/resume/abort 用）
  */
 export function registerWorkflowsCommand(
   api: ExtensionAPI,
@@ -70,23 +66,23 @@ export function registerWorkflowsCommand(
   api.registerCommand("workflows", {
     description: "Open workflow interactive panel. /workflows [runId] to open a specific run.",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
-      // RPC/print/json 模式无 TUI——降级提示
+ // RPC/print/json 模式无 TUI——降级提示
       if (!ctx.hasUI) {
         ctx.ui.notify("/workflows requires interactive mode", "error");
         return;
       }
 
-      // 直接按 runId / 前缀匹配打开
+ // 直接按 runId / 前缀匹配打开
       const directRunId = args.trim();
       if (directRunId) {
         const all = sortedRuns(getRuns());
-        // 精确匹配优先
+ // 精确匹配优先
         const exact = all.find((r) => r.runId === directRunId);
         if (exact) {
           await openView(exact, ctx.ui.theme, ctx, deps);
           return;
         }
-        // 前缀匹配
+ // 前缀匹配
         const matched = all.filter((r) => r.runId.startsWith(directRunId));
         if (matched.length === 1) {
           await openView(matched[0], ctx.ui.theme, ctx, deps);
@@ -96,20 +92,20 @@ export function registerWorkflowsCommand(
         return;
       }
 
-      // 无参——列表选择
+ // 无参——列表选择
       const all = sortedRuns(getRuns());
       if (all.length === 0) {
         ctx.ui.notify("No workflows in current session.", "info");
         return;
       }
 
-      // 单 run 直开
+ // 单 run 直开
       if (all.length === 1) {
         await openView(all[0], ctx.ui.theme, ctx, deps);
         return;
       }
 
-      // 多 run——select 选择
+ // 多 run——select 选择
       const entries = all.map(
         (r) => `${r.spec.scriptName} [${r.state.status}] (${r.runId.slice(0, RUNID_SHORT)})`,
       );

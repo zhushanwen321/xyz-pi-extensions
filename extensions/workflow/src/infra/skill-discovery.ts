@@ -31,20 +31,20 @@ function getNpmSkillCandidates(npmSkillsDir: string): string[] {
 /**
  * Resolve a skill name to its directory or SKILL.md path.
  * Search order:
- *   1. Project-level: .agents/skills/<name>/
- *   2. Global: ~/.pi/agent/skills/<name>/
- *   3. npm packages: ~/.pi/agent/npm/node_modules/<pkg>/skills/<name>/
+ * 1. Project-level: .agents/skills/<name>/
+ * 2. Global: ~/.pi/agent/skills/<name>/
+ * 3. npm packages: ~/.pi/agent/npm/node_modules/<pkg>/skills/<name>/
  * Returns the directory path if found, undefined otherwise.
  */
 export function resolveSkillPath(skillName: string): string | undefined {
   const candidates = [
-    // Project-level
+ // Project-level
     path.resolve(process.cwd(), ".agents/skills", skillName),
-    // Global user skills
+ // Global user skills
     path.join(os.homedir(), ".pi/agent/skills", skillName),
   ];
 
-  // npm package skills (cached)
+ // npm package skills (cached)
   const npmSkillsDir = path.join(os.homedir(), ".pi/agent/npm/node_modules");
   for (const pkgSkillsBase of getNpmSkillCandidates(npmSkillsDir)) {
     candidates.push(path.join(pkgSkillsBase, skillName));

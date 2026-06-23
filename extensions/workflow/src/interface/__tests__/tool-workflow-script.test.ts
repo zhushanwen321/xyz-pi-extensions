@@ -1,7 +1,7 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/interface/__tests__/tool-workflow-script.test.ts
 //
-// T24：tool-workflow-script（5 actions: generate/lint/save/delete/list）测试。
+// tool-workflow-script（5 actions: generate/lint/save/delete/list）测试。
 // 不实际注册 tool——直接测 execute 路由（通过提取的 action 函数或注册后的 tool）。
 //
 // 测试 fixture 用结构化 stub 构造 mock ExtensionAPI（vi.fn 注册 tool），

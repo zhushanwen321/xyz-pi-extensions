@@ -2,10 +2,9 @@
  * Agent options resolver — resolves agent name / skill / schema to system
  * prompt files + env vars on every dispatch (BL-1).
  *
- * BL-1 修复：D-12 重构误删本函数，导致 workflow 脚本里 `agent({agent,skill,schema})`
- * 的 inline override 静默失效（pi 子进程只收到原始 prompt，没有
- * --append-system-prompt / --skill / PI_WORKFLOW_SCHEMA）。本函数从 main 分支恢复，
- * 适配新 import 路径（AgentCallOpts 从 engine/models/types 而非 infra/agent-pool）。
+ * BL-1：解析 workflow 脚本里 `agent({agent,skill,schema})` 的 inline override，
+ * 否则 pi 子进程只收到原始 prompt，没有 --append-system-prompt / --skill /
+ * PI_WORKFLOW_SCHEMA。AgentCallOpts 从 engine/models/types 引入。
  *
  * 调用方：engine/error-recovery.ts dispatchAgentCall（每次 agent-call 消息）。
  * - agent → AgentRegistry.resolve → systemPrompt 写临时文件 → systemPromptFiles（--append-system-prompt）
@@ -38,7 +37,7 @@ export interface ResolveResult {
  * - Schema JSON -> temp file with structured-output instruction + PI_WORKFLOW_SCHEMA env
  *
  * Returns the enriched opts and any temp files created (registered in activeTempFiles).
- * Caller is responsible for cleaning up files via cleanupAllTempFiles() (session-scoped).
+ * Caller is responsible for cleaning up files via cleanupAllTempFiles (session-scoped).
  */
 export function resolveAgentOpts(
   opts: AgentCallOpts,
@@ -48,7 +47,7 @@ export function resolveAgentOpts(
 ): ResolveResult {
   const systemPromptFiles: string[] = [];
 
-  // Resolve agent system prompt
+ // Resolve agent system prompt
   if (opts.agent) {
     const discovered = agentRegistry.resolve(opts.agent);
     if (!discovered) return { opts, error: `Agent not found: ${opts.agent}` };
@@ -71,7 +70,7 @@ export function resolveAgentOpts(
     opts = { ...opts, model: opts.model || discovered.model };
   }
 
-  // Resolve skill name to SKILL.md path
+ // Resolve skill name to SKILL.md path
   if (opts.skill) {
     const skillPath = resolveSkillPath(opts.skill);
     if (!skillPath) {
@@ -80,8 +79,8 @@ export function resolveAgentOpts(
     opts = { ...opts, skillPath };
   }
 
-  // Inject schema as structured-output instruction via --append-system-prompt
-  // and set environment variable for conditional tool + hook activation.
+ // Inject schema as structured-output instruction via --append-system-prompt
+ // and set environment variable for conditional tool + hook activation.
   if (opts.schema) {
     try {
       const tmpDir = path.join(sessionDir, "workflow-tmp");
@@ -107,7 +106,7 @@ export function resolveAgentOpts(
       activeTempFiles.add(tmpFile);
       systemPromptFiles.push(tmpFile);
 
-      // Set env var for structured-output extension to activate tool + hook
+ // Set env var for structured-output extension to activate tool + hook
       opts = { ...opts, schemaEnv: schemaJson };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

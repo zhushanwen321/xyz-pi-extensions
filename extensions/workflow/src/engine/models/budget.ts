@@ -1,22 +1,17 @@
 /**
- * Workflow Extension — Budget 值对象（W1-T3）
+ * Workflow Extension — Budget 值对象
  *
  * Token / cost 预算值对象（D-12）。纯数据 + 不变式守卫，无副作用。
  *
- * 关键变化（相对旧 engine/orchestrator-budget.ts + infra/agent-pool.ts 计数）：
- *   - 删除 onConsume 回调（值对象不应持可变回调）
- *   - 删除 softWarningSent + setBudget + maybeEmitSoftWarning 副作用链
- *     （soft limit 通知改由 lifecycle 层 consume 后查 isSoftLimitReached() 发出，职责分离）
- *   - 删除 _budgetWarningSent（90% 预警改查询式 isThresholdReached，无状态）
- *   - maxTokens===0 视为不限制（守卫，避免首个 agent 完成误判 budget_limited）
+ * 设计：
+ * - 无 onConsume 回调（值对象不应持可变回调）。
+ * - soft limit 通知由 lifecycle 层 consume 后查 isSoftLimitReached 发出（职责分离）。
+ * - 90% 预警用查询式 isThresholdReached（无状态，可重复查）。
+ * - maxTokens===0 视为不限制（守卫，避免首个 agent 完成误判 budget_limited）。
  *
  * 层归属：Engine。
  *
- * 参考：
- *   - domain-models.md §4（字段/不变式/操作）
- *   - 旧 engine/orchestrator-budget.ts checkBudget（maxTokens>0 守卫、阈值）
- *   - 旧 engine/agent-call-handler.ts L93-97（四项 token 累加）
- *   - 旧 infra/agent-pool.ts totalCallCount / SOFT_MAX_AGENTS_WARNING
+ * 参考：domain-models.md §4（字段/不变式/操作）。
  */
 import type { AgentUsage } from "./types.js";
 
@@ -27,10 +22,10 @@ export const SOFT_MAX_AGENTS_WARNING = 500;
  * Budget 值对象。
  *
  * 不变式（domain-models.md §4）：
- *   - maxTokens > 0 守卫：maxTokens===0 或 undefined 视为不限制
- *   - maxCost > 0 守卫：同上
- *   - consume() 只累加，不减；isExceeded() 只读
- *   - 无回调字段——所有副作用由调用方在 consume() 后查询决定
+ * - maxTokens > 0 守卫：maxTokens===0 或 undefined 视为不限制
+ * - maxCost > 0 守卫：同上
+ * - consume 只累加，不减；isExceeded 只读
+ * - 无回调字段——所有副作用由调用方在 consume 后查询决定
  */
 export class Budget {
   readonly maxTokens?: number;
@@ -38,7 +33,7 @@ export class Budget {
   readonly maxTimeMs?: number;
   usedTokens = 0;
   usedCost = 0;
-  /** 总调用计数（soft limit 用，从 ConcurrencyGate.totalCallCount 迁入）。 */
+ /** 总调用计数（soft limit 用，从 ConcurrencyGate.totalCallCount 迁入）。 */
   totalCallCount = 0;
 
   constructor(opts: {
@@ -57,30 +52,30 @@ export class Budget {
     this.totalCallCount = opts.totalCallCount ?? 0;
   }
 
-  /**
-   * 累加一次 agent 调用的 usage。
-   *
-   * 四项 token 全计（对齐旧 executeWithRetry：input+output+cacheRead+cacheWrite），
-   * retry 间的真实计费如实记录，否则 budget 限制被 retry/cache 双重放大或低估。
-   */
+ /**
+ * 累加一次 agent 调用的 usage。
+ *
+ * 四项 token 全计（input+output+cacheRead+cacheWrite），retry 间的真实计费
+ * 如实记录，否则 budget 限制被 retry/cache 双重放大或低估。
+ */
   consume(usage: AgentUsage): void {
     this.usedTokens += usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
     this.usedCost += usage.cost;
   }
 
-  /** 累加调用计数（每次 agent dispatch 后调用）。 */
+ /** 累加调用计数（每次 agent dispatch 后调用）。 */
   incrementCallCount(): void {
     this.totalCallCount += 1;
   }
 
-  /**
-   * 是否超 token / cost 预算（FR-3）。
-   *
-   * maxTokens===0 或 undefined 视为不限制（守卫）；
-   * maxCost===0 或 undefined 视为不限制。
-   * 时间预算（maxTimeMs）不由本方法判断——它是 wall-clock 约束，
-   * 需参照 startedAt，由 lifecycle 层的 scheduleTimeBudgetCheck 独立调度。
-   */
+ /**
+ * 是否超 token / cost 预算（FR-3）。
+ *
+ * maxTokens===0 或 undefined 视为不限制（守卫）；
+ * maxCost===0 或 undefined 视为不限制。
+ * 时间预算（maxTimeMs）不由本方法判断——它是 wall-clock 约束，
+ * 需参照 startedAt，由 lifecycle 层的 scheduleTimeBudgetCheck 独立调度。
+ */
   isExceeded(): boolean {
     if (this.maxTokens !== undefined && this.maxTokens > 0 && this.usedTokens >= this.maxTokens) {
       return true;
@@ -88,23 +83,23 @@ export class Budget {
     return this.maxCost !== undefined && this.maxCost > 0 && this.usedCost >= this.maxCost;
   }
 
-  /**
-   * 是否达到 soft limit（FR-7）。
-   *
-   * totalCallCount > SOFT_MAX_AGENTS_WARNING（500）。
-   * 调用方（lifecycle）在 consume()/incrementCallCount() 后查询，
-   * 命中时发通知（无状态——可重复查询，不会像旧 softWarningSent 只发一次）。
-   */
+ /**
+ * 是否达到 soft limit（FR-7）。
+ *
+ * totalCallCount > SOFT_MAX_AGENTS_WARNING（500）。
+ * 调用方（lifecycle）在 consume/incrementCallCount 后查询，
+ * 命中时发通知（无状态——可重复查询）。
+ */
   isSoftLimitReached(): boolean {
     return this.totalCallCount > SOFT_MAX_AGENTS_WARNING;
   }
 
-  /**
-   * 是否达到 token 预算的给定比例阈值（如 0.9 = 90% 预警）。
-   *
-   * 纯查询，无状态——调用方负责去重（旧 _budgetWarningSent 语义由 lifecycle 层用
-   * 外部 Set 或 once-listener 实现）。maxTokens 未设或为 0 时返回 false。
-   */
+ /**
+ * 是否达到 token 预算的给定比例阈值（如 0.9 = 90% 预警）。
+ *
+ * 纯查询，无状态——调用方负责去重（旧 _budgetWarningSent 语义由 lifecycle 层用
+ * 外部 Set 或 once-listener 实现）。maxTokens 未设或为 0 时返回 false。
+ */
   isThresholdReached(ratio: number): boolean {
     return (
       this.maxTokens !== undefined &&

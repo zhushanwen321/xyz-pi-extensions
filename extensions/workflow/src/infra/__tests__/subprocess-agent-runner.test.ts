@@ -32,7 +32,7 @@ function createMockProcess(): MockProc {
 
 /** Cast fake to ChildProcess for spawn mock. */
 function asChildProcess(proc: MockProc): ChildProcess {
-  // eslint-disable-next-line taste/no-unsafe-cast
+ // eslint-disable-next-line taste/no-unsafe-cast
   return proc as unknown as ChildProcess;
 }
 
@@ -83,16 +83,16 @@ beforeEach(() => {
 // ═══════════════════════════════════════════════════════════════
 
 describe("SubprocessAgentRunner", () => {
-  it("implements AgentRunner port (T2 contract)", () => {
+  it("implements AgentRunner port", () => {
     const runner: AgentRunner = new SubprocessAgentRunner();
-    // Type-level check: assigning to AgentRunner succeeds
+ // Type-level check: assigning to AgentRunner succeeds
     expect(typeof runner.run).toBe("function");
   });
 
-  // ── Success path ───────────────────────────────────────────
+ // ── Success path ───────────────────────────────────────────
 
   describe("run — success path", () => {
-    it("returns content + usage on happy path (T1 AgentResult shape)", async () => {
+    it("returns content + usage on happy path (AgentResult shape)", async () => {
       const runner = new SubprocessAgentRunner();
       const proc = createMockProcess();
       mockSpawn.mockReturnValue(asChildProcess(proc));
@@ -117,10 +117,10 @@ describe("SubprocessAgentRunner", () => {
       expect(result.usage?.cost).toBe(0.05);
       expect(result.usage?.turns).toBe(1);
       expect(result.durationMs).toBeGreaterThanOrEqual(0);
-      // T1 AgentResult has no `success` boolean / legacy `output` field
-      // eslint-disable-next-line taste/no-unsafe-cast
+ // AgentResult has no `success` boolean / `output` field
+ // eslint-disable-next-line taste/no-unsafe-cast
       expect((result as unknown as { success?: boolean }).success).toBeUndefined();
-      // eslint-disable-next-line taste/no-unsafe-cast
+ // eslint-disable-next-line taste/no-unsafe-cast
       expect((result as unknown as { output?: string }).output).toBeUndefined();
     });
 
@@ -204,7 +204,7 @@ describe("SubprocessAgentRunner", () => {
     });
   });
 
-  // ── Error path ─────────────────────────────────────────────
+ // ── Error path ─────────────────────────────────────────────
 
   describe("run — error path", () => {
     it("non-zero exit populates error field (no reject)", async () => {
@@ -275,7 +275,7 @@ describe("SubprocessAgentRunner", () => {
     });
   });
 
-  // ── Abort / signal ─────────────────────────────────────────
+ // ── Abort / signal ─────────────────────────────────────────
 
   describe("run — abort propagation", () => {
     it("SIGKILLs subprocess when signal aborts mid-flight", async () => {
@@ -287,7 +287,7 @@ describe("SubprocessAgentRunner", () => {
       const p = runner.run({ prompt: "x" }, ac.signal);
 
       ac.abort();
-      // runPiProcess wires abort -> proc.kill("SIGKILL")
+ // runPiProcess wires abort -> proc.kill("SIGKILL")
       expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
 
       proc.emit("close", 1);
@@ -310,7 +310,7 @@ describe("SubprocessAgentRunner", () => {
     });
   });
 
-  // ── Env / args wiring ──────────────────────────────────────
+ // ── Env / args wiring ──────────────────────────────────────
 
   describe("run — env & args wiring", () => {
     it("injects PI_WORKFLOW_SCHEMA env when schemaEnv provided", async () => {
@@ -378,7 +378,7 @@ describe("SubprocessAgentRunner", () => {
     });
   });
 
-  // ── Process isolation ──────────────────────────────────────
+ // ── Process isolation ──────────────────────────────────────
 
   describe("run — process isolation (spec Constraints)", () => {
     it("spawns a fresh process each call (never reuses)", async () => {

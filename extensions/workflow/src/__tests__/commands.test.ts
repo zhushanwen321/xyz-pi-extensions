@@ -1,14 +1,14 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/__tests__/commands.test.ts
 //
-// /workflows command handler 测试（Bug #2 修复：TUI 恢复）。
+// /workflows command handler 测试（验证 TUI 恢复）。
 //
 // handler 行为：
-//   - 无 UI（RPC 模式）→ notify error
-//   - 0 runs → notify info "No workflows"
-//   - 1 run → 直接打开 view（ctx.ui.custom 被调）
-//   - 多 runs → ctx.ui.select 选 → 打开选中 run 的 view
-//   - `/workflows <runId>` → 精确/前缀匹配 → 直开
+// - 无 UI（RPC 模式）→ notify error
+// - 0 runs → notify info "No workflows"
+// - 1 run → 直接打开 view（ctx.ui.custom 被调）
+// - 多 runs → ctx.ui.select 选 → 打开选中 run 的 view
+// - `/workflows <runId>` → 精确/前缀匹配 → 直开
 //
 // view 内部渲染（键盘导航等）由 workflows-view.test.ts 覆盖，本文件只测 command 路由。
 
@@ -28,7 +28,7 @@ import { registerWorkflowsCommand } from "../interface/commands.js";
 /**
  * Build a WorkflowRun with minimal valid state for view rendering.
  *
- * Uses `WorkflowRun.reconstruct()` (not `new WorkflowRun`) so we can construct
+ * Uses `WorkflowRun.reconstruct` (not `new WorkflowRun`) so we can construct
  * `status: "running"` snapshots without violating invariant I1
  * (running ⟹ runtime defined). The command handler is read-only on state
  * fields, so a reconstructed snapshot is a faithful fixture.
@@ -67,9 +67,9 @@ function makeRun(overrides: {
 
 /** Minimal mock LauncherDeps — command handler only invokes pause/resume/abort through it. */
 function makeDeps(): unknown {
-  // Handler only reads deps to pass into ViewActions; lifecycle functions are
-  // not invoked in these tests (no key pressed inside the view). Cast via
-  // unknown to avoid constructing the full LifecycleDeps surface.
+ // Handler only reads deps to pass into ViewActions; lifecycle functions are
+ // not invoked in these tests (no key pressed inside the view). Cast via
+ // unknown to avoid constructing the full LifecycleDeps surface.
   return {
     runs: new Map(),
     store: {},
@@ -118,7 +118,7 @@ function makeCommandCtx(overrides: {
 
 // ── Tests ────────────────────────────────────────────────────
 
-describe("registerWorkflowsCommand handler (Bug #2: TUI restored)", () => {
+describe("registerWorkflowsCommand handler (TUI restored)", () => {
   it("registers command named 'workflows'", () => {
     const { pi } = makePi();
     registerWorkflowsCommand(pi, () => new Map(), makeDeps() as never);
@@ -170,7 +170,7 @@ describe("registerWorkflowsCommand handler (Bug #2: TUI restored)", () => {
       ["run-999888777666", makeRun({ runId: "run-999888777666", scriptName: "rollback", status: "paused" })],
     ]);
     registerWorkflowsCommand(pi, () => runs, makeDeps() as never);
-    // select returns the second entry
+ // select returns the second entry
     const { ctx, select, custom } = makeCommandCtx({
       selectResult: "rollback [paused] (run-9998)",
     });
@@ -243,12 +243,12 @@ describe("registerWorkflowsCommand handler (Bug #2: TUI restored)", () => {
   });
 
   it("runs sorted: running/paused before done, newer startedAt first", async () => {
-    // Verify sort order via select options order.
+ // Verify sort order via select options order.
     const { pi, getCommandOpts } = makePi();
     const runs = new Map<string, WorkflowRun>([
-      // done, older
+ // done, older
       ["run-old", makeRun({ runId: "run-old", scriptName: "old-done", status: "done", reason: "completed", startedAt: "2026-06-22T09:00:00.000Z" })],
-      // paused, newer (should be first — paused sorts before done)
+ // paused, newer (should be first — paused sorts before done)
       ["run-new", makeRun({ runId: "run-new", scriptName: "new-paused", status: "paused", startedAt: "2026-06-22T11:00:00.000Z" })],
     ]);
     registerWorkflowsCommand(pi, () => runs, makeDeps() as never);
@@ -257,7 +257,7 @@ describe("registerWorkflowsCommand handler (Bug #2: TUI restored)", () => {
     await getCommandOpts().handler("", ctx);
 
     const [, options] = select.mock.calls[0];
-    // paused sorts before done → "new-paused" first
+ // paused sorts before done → "new-paused" first
     expect(options[0]).toContain("new-paused");
     expect(options[1]).toContain("old-done");
   });

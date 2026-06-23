@@ -1,7 +1,7 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/__tests__/index.test.ts
 //
-// T30：factory 集成测试（T28 新 factory + 新 tool 签名）。
+// factory 集成测试。
 // 不 mock WorkflowOrchestrator（已删）—— mock Engine free functions + Infra 类。
 // 覆盖：session_start 重建 sessionApprovals + D-5 旧格式返回空 + D-4 kill-9 残留
 // running→failed + pi.__workflowRun 新签名(status:"done"+reason) + reentry-guard
@@ -70,7 +70,7 @@ vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return {
     ...actual,
-    // resolveSessionDir: sessionScopedDir 不存在 → 回退 defaultDir
+ // resolveSessionDir: sessionScopedDir 不存在 → 回退 defaultDir
     existsSync: vi.fn().mockReturnValue(false),
   };
 });
@@ -172,7 +172,7 @@ async function bootstrap(overrides: {
 
   workflowExtension(pi as unknown as ExtensionAPI);
 
-  // Configure the mock registry instance to return scripts on get()
+ // Configure the mock registry instance to return scripts on get
   const registryInstance = MockedRegistry.mock.results[0]?.value;
   if (registryInstance && overrides.loadAllResult) {
     registryInstance.get = vi.fn(async (name: string) =>
@@ -181,29 +181,29 @@ async function bootstrap(overrides: {
     registryInstance.loadAll = vi.fn().mockResolvedValue(overrides.loadAllResult ?? []);
   }
 
-  // Configure the mock store instance loadAll
+ // Configure the mock store instance loadAll
   const storeInstance = MockedJsonlRunStore.mock.results[0]?.value;
   if (storeInstance) {
     storeInstance.loadAll = vi.fn().mockResolvedValue([]);
   }
 
-  // Trigger session_start to initialize per-session state
+ // Trigger session_start to initialize per-session state
   const sessionStartCall = pi.on.mock.calls.find((call: any[]) => call[0] === "session_start");
   if (!sessionStartCall) throw new Error("session_start handler not registered");
   const sessionCtx = createMockCtx({
     sessionId,
     existingEntries: overrides.existingEntries ?? [],
   });
-  // session_start is async — await so sessionState is populated before assertions
+ // session_start is async — await so sessionState is populated before assertions
   await sessionStartCall[1]({}, sessionCtx);
 
-  // Find the workflow tool
+ // Find the workflow tool
   const workflowTool = pi.registerTool.mock.calls.find(
     (call: any[]) => call[0].name === "workflow",
   )?.[0];
   if (!workflowTool) throw new Error("workflow tool not registered");
 
-  // Find workflow-script tool (verify FR-5: 2 tools)
+ // Find workflow-script tool (verify FR-5: 2 tools)
   const workflowScriptTool = pi.registerTool.mock.calls.find(
     (call: any[]) => call[0].name === "workflow-script",
   )?.[0];
@@ -213,7 +213,7 @@ async function bootstrap(overrides: {
 
 // ── Tests ─────────────────────────────────────────────────────
 
-describe("factory registration (T28)", () => {
+describe("factory registration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRunWorkflow.mockResolvedValue("run-id-123");
@@ -247,13 +247,13 @@ describe("factory registration (T28)", () => {
   it("registers /workflows command (FR-6)", async () => {
     const { pi } = await bootstrap();
     expect(pi.registerCommand).toHaveBeenCalledTimes(1);
-    // registerCommand(name, options) — name is first arg
+ // registerCommand(name, options) — name is first arg
     const cmdName = pi.registerCommand.mock.calls[0][0];
     expect(cmdName).toBe("workflows");
   });
 });
 
-describe("workflow run approval gate (T28 factory + T25 tool)", () => {
+describe("workflow run approval gate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRunWorkflow.mockResolvedValue("run-id-123");
@@ -275,7 +275,7 @@ describe("workflow run approval gate (T28 factory + T25 tool)", () => {
     expect(ctx.ui.confirm).toHaveBeenCalledTimes(1);
     expect(mockRunWorkflow).toHaveBeenCalledTimes(1);
     expect(result.details).toMatchObject({ action: "run", status: "running", name: "deploy-app" });
-    // persisted to session memory
+ // persisted to session memory
     expect(pi.appendEntry).toHaveBeenCalledWith(
       "workflow-approval-memory",
       expect.objectContaining({ workflowName: "deploy-app" }),
@@ -302,7 +302,7 @@ describe("workflow run approval gate (T28 factory + T25 tool)", () => {
 
   it("saved + already approved (same session) → skips confirm", async () => {
     const script = makeSavedScript("deploy-app");
-    // bootstrap with pre-existing approval entries → session_start rehydrates
+ // bootstrap with pre-existing approval entries → session_start rehydrates
     const { workflowTool } = await bootstrap({
       sessionId: "s-mem",
       existingEntries: [
@@ -320,7 +320,7 @@ describe("workflow run approval gate (T28 factory + T25 tool)", () => {
       ctx,
     );
 
-    // rehydrated → no confirm needed
+ // rehydrated → no confirm needed
     expect(ctx.ui.confirm).not.toHaveBeenCalled();
     expect(mockRunWorkflow).toHaveBeenCalledTimes(1);
     expect(result.details).toMatchObject({ status: "running" });
@@ -333,7 +333,7 @@ describe("workflow run approval gate (T28 factory + T25 tool)", () => {
       loadAllResult: [script],
     });
 
-    // First call: tmp → confirm
+ // First call: tmp → confirm
     const ctx1 = createMockCtx({ hasUI: true, confirmResult: true, sessionId: "s-tmp" });
     const result1 = await workflowTool.execute(
       "tc8a",
@@ -344,12 +344,12 @@ describe("workflow run approval gate (T28 factory + T25 tool)", () => {
     );
     expect(ctx1.ui.confirm).toHaveBeenCalledTimes(1);
     expect(result1.details).toMatchObject({ status: "running" });
-    // tmp must NOT be persisted
+ // tmp must NOT be persisted
     expect(pi.appendEntry).not.toHaveBeenCalled();
 
     mockRunWorkflow.mockClear();
 
-    // Second call for same tmp → still confirms (not in sessionApprovals)
+ // Second call for same tmp → still confirms (not in sessionApprovals)
     const ctx2 = createMockCtx({ hasUI: true, confirmResult: true, sessionId: "s-tmp" });
     await workflowTool.execute(
       "tc8b",
@@ -437,7 +437,7 @@ describe("pi.__workflowRun (D-8 new signature)", () => {
   it("returns failed when session not initialized", async () => {
     const pi = createMockPi();
     workflowExtension(pi as unknown as ExtensionAPI);
-    // do NOT trigger session_start → sessionState empty
+ // do NOT trigger session_start → sessionState empty
     const result = await pi.__workflowRun!("wf", {});
     expect(result.status).toBe("done");
     expect(result.reason).toBe("failed");
@@ -451,14 +451,13 @@ describe("session_start recovery (D-4 kill-9, D-5 empty)", () => {
     vi.clearAllMocks();
   });
 
-  /**
-   * Real WorkflowRun reconstructed from a persisted running snapshot (kill-9 crash).
-   *
-   * W-1 修复：原来用 duck-typed `{state, transition}` stub 绕过 WorkflowRun 不变式 I1，
-   * 测试通过但生产路径仍坏（见 C-1）。改用 WorkflowRun.reconstruct() —— 它跳过 I1 校验
-   * （持久化的 running run 没有 worker，违反 I1；D-4 在 session_start 时恢复 I1）。
-   * 这样测试覆盖的是真实的 transition() 方法，不是 stub。
-   */
+ /**
+ * Real WorkflowRun reconstructed from a persisted running snapshot (kill-9 crash).
+ *
+ * 用真 WorkflowRun.reconstruct —— 它跳过 I1 校验（持久化的 running run 没有 worker，
+ * 违反 I1；D-4 在 session_start 时恢复 I1）。这样测试覆盖的是真实的 transition
+ * 方法，不是 duck-typed stub（stub 会绕过不变式，测试通过但生产路径仍坏，见 C-1）。
+ */
   function makeRunningRun(runId: string, scriptName: string): WorkflowRun {
     return WorkflowRun.reconstruct(
       runId,
@@ -480,18 +479,18 @@ describe("session_start recovery (D-4 kill-9, D-5 empty)", () => {
   }
 
   it("D-5: store.loadAll returns empty → no runs in sessionState", async () => {
-    // Default mock already returns []
+ // Default mock already returns []
     const { pi } = await bootstrap();
     const storeInstance = MockedJsonlRunStore.mock.results[0]?.value;
     expect(storeInstance.loadAll).toHaveBeenCalled();
-    // /workflows command getter returns empty Map (verified via no throw)
+ // /workflows command getter returns empty Map (verified via no throw)
     expect(pi.registerCommand).toHaveBeenCalledTimes(1);
   });
 
   it("D-4: store.loadAll returns running run → transitioned to failed", async () => {
     const run = makeRunningRun("kill9-run", "killed");
 
-    // Override the store mock to return our running run (real WorkflowRun)
+ // Override the store mock to return our running run (real WorkflowRun)
     MockedJsonlRunStore.mockImplementation(function (this: any) {
       this.loadAll = vi.fn().mockResolvedValue([run]);
       this.save = vi.fn().mockResolvedValue(undefined);
@@ -499,12 +498,12 @@ describe("session_start recovery (D-4 kill-9, D-5 empty)", () => {
 
     await bootstrap({ sessionId: "s-kill9" });
 
-    // After session_start, the run should be transitioned to done/failed
-    // via the REAL WorkflowRun.transition() method (not a stub).
+ // After session_start, the run should be transitioned to done/failed
+ // via the REAL WorkflowRun.transition method (not a stub).
     expect(run.state.status).toBe("done");
     expect(run.state.reason).toBe("failed");
     expect(run.state.error).toContain("kill-9");
-    // I1 恢复：done 状态 runtime 必为 undefined
+ // I1 恢复：done 状态 runtime 必为 undefined
     expect(run.runtime).toBeUndefined();
   });
 });
@@ -518,19 +517,19 @@ describe("reentry guard (shared between 2 tools)", () => {
   it("both tools share the same guard (isProcessing flag)", async () => {
     const script = makeSavedScript("deploy-app");
     const { workflowTool, workflowScriptTool } = await bootstrap({ loadAllResult: [script] });
-    // The guard is a shared object passed to both register functions.
-    // We verify both tools are registered (guard sharing is internal;
-    // integration: calling workflow with guard held → busy message).
+ // The guard is a shared object passed to both register functions.
+ // We verify both tools are registered (guard sharing is internal;
+ // integration: calling workflow with guard held → busy message).
     expect(workflowTool).toBeDefined();
     expect(workflowScriptTool).toBeDefined();
   });
 
-  it("workflow tool returns busy when guard held (deterministic, W-13)", async () => {
+  it("workflow tool returns busy when guard held (deterministic)", async () => {
     const script = makeSavedScript("deploy-app");
     const { workflowTool } = await bootstrap({ loadAllResult: [script] });
 
-    // W-13 修复：让首个 execute 的 runWorkflow 处于 pending（controllable promise），
-    // 第二个 execute 必然命中 guard —— 不再依赖时序。
+ // 让首个 execute 的 runWorkflow 处于 pending（controllable promise），
+ // 第二个 execute 必然命中 guard —— 不再依赖时序。
     let releaseFirst!: () => void;
     mockRunWorkflow.mockImplementation(
       () =>
@@ -547,11 +546,11 @@ describe("reentry guard (shared between 2 tools)", () => {
       undefined,
       ctx,
     );
-    // 让 p1 microtask 推进到 acquireReentryGuard 之后
+ // 让 p1 microtask 推进到 acquireReentryGuard 之后
     await Promise.resolve();
     await Promise.resolve();
 
-    // 第二个 execute：guard 已被 p1 持有 → 必返回 busy
+ // 第二个 execute：guard 已被 p1 持有 → 必返回 busy
     const result2 = await workflowTool.execute(
       "tc-b",
       { action: "run", name: "deploy-app" },
@@ -559,12 +558,12 @@ describe("reentry guard (shared between 2 tools)", () => {
       undefined,
       ctx,
     );
-    // 关键断言（W-13）：result2 必是 busy 错误，不是 toBeDefined() 软断言
+ // 关键断言：result2 必是 busy 错误，不是 toBeDefined 软断言
     expect(result2).toMatchObject({ isError: true });
     const content = (result2 as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "";
     expect(content).toMatch(/in progress|busy|already running/i);
 
-    // 释放第一个，避免 hang / afterEach 泄漏
+ // 释放第一个，避免 hang / afterEach 泄漏
     releaseFirst();
     await p1;
   });
@@ -579,9 +578,9 @@ describe("session_shutdown pauses running + cleans temp files", () => {
     const { cleanupAllTempFiles } = await import("../infra/agent-opts-resolver.js");
     const mockCleanup = vi.mocked(cleanupAllTempFiles);
 
-    // W-1 修复：用真 WorkflowRun.reconstruct（status="paused"，D-4 不触发）。
-    // 模拟 active-session run：session_start 后用 assignRuntime 翻转 paused → running
-    // （runWorkflow 的真实路径，不变式 I1 全程保持）。
+ // 用真 WorkflowRun.reconstruct（status="paused"，D-4 不触发）。
+ // 模拟 active-session run：session_start 后用 assignRuntime 翻转 paused → running
+ // （runWorkflow 的真实路径，不变式 I1 全程保持）。
     const run = WorkflowRun.reconstruct(
       "shutdown-run",
       {
@@ -607,7 +606,7 @@ describe("session_shutdown pauses running + cleans temp files", () => {
 
     const { pi } = await bootstrap({ sessionId: "s-shutdown" });
 
-    // Simulate active run: assignRuntime → running（真路径，I1 保持）
+ // Simulate active run: assignRuntime → running（真路径，I1 保持）
      
     run.assignRuntime({
       worker: { postMessage() {}, terminate() {}, isCurrent: true, on() {} },
@@ -618,7 +617,7 @@ describe("session_shutdown pauses running + cleans temp files", () => {
     } as any);
     expect(run.state.status).toBe("running");
 
-    // Trigger session_shutdown
+ // Trigger session_shutdown
     const shutdownCall = pi.on.mock.calls.find((c: any[]) => c[0] === "session_shutdown");
     expect(shutdownCall).toBeDefined();
     await shutdownCall![1]({}, createMockCtx({ sessionId: "s-shutdown" }));
@@ -628,13 +627,13 @@ describe("session_shutdown pauses running + cleans temp files", () => {
   });
 });
 
-describe("session_tree pauses all running runs on branch switch (W-14)", () => {
+describe("session_tree pauses all running runs on branch switch", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("session_tree handler pauses every running run in the session", async () => {
-    // W-14 修复：原测试只验证 handler 注册，未 invoke。补 invoke + assert pauseRun 调用。
+ // invoke handler 并断言 pauseRun 被调用（不只验证 handler 注册）。
     const runA = WorkflowRun.reconstruct(
       "run-a",
       { scriptSource: "", args: {}, scriptName: "wf-a", scriptPath: "/tmp/a.mjs" },
@@ -667,7 +666,7 @@ describe("session_tree pauses all running runs on branch switch (W-14)", () => {
 
     const { pi } = await bootstrap({ sessionId: "s-tree" });
 
-    // Simulate both runs active via assignRuntime (real path, I1 preserved)
+ // Simulate both runs active via assignRuntime (real path, I1 preserved)
      
     const fakeRuntime = {
       worker: { postMessage() {}, terminate() {}, isCurrent: true, on() {} },
@@ -681,12 +680,12 @@ describe("session_tree pauses all running runs on branch switch (W-14)", () => {
     expect(runA.state.status).toBe("running");
     expect(runB.state.status).toBe("running");
 
-    // Trigger session_tree
+ // Trigger session_tree
     const treeCall = pi.on.mock.calls.find((c: any[]) => c[0] === "session_tree");
     expect(treeCall).toBeDefined();
     await treeCall![1]({}, createMockCtx({ sessionId: "s-tree" }));
 
-    // 关键断言：两个 running run 都被 pauseRun 调过（2 次）
+ // 关键断言：两个 running run 都被 pauseRun 调过（2 次）
     expect(mockPauseRun).toHaveBeenCalledTimes(2);
     const pausedIds = mockPauseRun.mock.calls.map((c: any[]) => c[0]);
     expect(pausedIds.sort()).toEqual(["run-a", "run-b"]);
@@ -711,7 +710,7 @@ describe("session_tree pauses all running runs on branch switch (W-14)", () => {
       this.save = vi.fn().mockResolvedValue(undefined);
     } as any);
 
-    // pauseRun throws —— session_tree must swallow
+ // pauseRun throws —— session_tree must swallow
     mockPauseRun.mockRejectedValueOnce(new Error("pause failed"));
 
     const { pi } = await bootstrap({ sessionId: "s-tree-err" });
@@ -726,7 +725,7 @@ describe("session_tree pauses all running runs on branch switch (W-14)", () => {
 
     const treeCall = pi.on.mock.calls.find((c: any[]) => c[0] === "session_tree");
     expect(treeCall).toBeDefined();
-    // Should not throw
+ // Should not throw
     await expect(treeCall![1]({}, createMockCtx({ sessionId: "s-tree-err" }))).resolves.toBeUndefined();
   });
 });

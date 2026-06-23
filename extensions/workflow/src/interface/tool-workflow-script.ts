@@ -1,22 +1,18 @@
 /**
- * Workflow Extension — tool-workflow-script（W4-T24）
+ * Workflow Extension — tool-workflow-script
  *
- * 合并旧 tool-generate.ts + tool-workflow-lint.ts 为单 tool，5 actions（FR-5）。
+ * workflow-script tool，5 actions（FR-5：脚本领域收口为单 tool）。
  *
  * Actions:
- *   - generate: AI 生成临时脚本 → 写 .pi/workflows/.tmp/
- *   - lint:     静态检查脚本（调 engine/script-lint.ts lintScript）
- *   - save:     临时脚本转固定（.tmp → .pi/workflows/）
- *   - delete:   删除脚本（前查 isRunning 防删运行中脚本）
- *   - list:     列出可用脚本（调 registry.loadAll）
+ * - generate: AI 生成临时脚本 → 写 .pi/workflows/.tmp/
+ * - lint: 静态检查脚本（调 engine/script-lint.ts lintScript）
+ * - save: 临时脚本转固定（.tmp → .pi/workflows/）
+ * - delete: 删除脚本（前查 isRunning 防删运行中脚本）
+ * - list: 列出可用脚本（调 registry.loadAll）
  *
  * 层归属：Interface。依赖 Pi SDK + engine script-lint + infra workflow-files。
  *
- * 参考：
- *   - domain-models.md §FR-5（tool 收口 4→2）
- *   - 旧 interface/tool-generate.ts（generate action）
- *   - 旧 interface/tool-workflow-lint.ts（lint action）
- *   - 旧 interface/commands.ts save/delete/list 子命令
+ * 参考：domain-models.md §FR-5（tool 收口 4→2）。
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -70,7 +66,7 @@ export type WorkflowScriptToolDetails =
   | { action: "save"; name: string; ok: boolean }
   | { action: "delete"; name: string; ok: boolean };
 
-/** Result returned by the `workflow-script` tool's execute(). */
+/** Result returned by the `workflow-script` tool's execute. */
 export interface TextContent {
   content: Array<{ type: "text"; text: string }>;
   details: WorkflowScriptToolDetails | undefined;
@@ -82,8 +78,8 @@ export interface TextContent {
 /**
  * 注册 workflow-script tool（5 actions: generate/lint/save/delete/list）。
  *
- * @param pi        ExtensionAPI
- * @param registry  WorkflowScriptRegistry（T14 实现，list action 用）
+ * @param pi ExtensionAPI
+ * @param registry WorkflowScriptRegistry
  * @param isRunning 判断脚本是否正在运行（delete 前防删运行中脚本；factory 传入）
  */
 export function registerWorkflowScriptTool(
@@ -161,7 +157,7 @@ function actionGenerate(params: ScriptParams, signal: AbortSignal | undefined): 
     return textResult("generate requires 'name' and 'script' parameters", true);
   }
 
-  // 1. Reject ESM syntax (Worker runs CJS); 'export const meta' 例外
+ // 1. Reject ESM syntax (Worker runs CJS); 'export const meta' 例外
   const stripped = script.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
   if (/\bimport\s+(?:type\s+)?[\w{*]/.test(stripped)) {
     return textResult(
@@ -178,7 +174,7 @@ function actionGenerate(params: ScriptParams, signal: AbortSignal | undefined): 
     );
   }
 
-  // 2. Validate meta declaration
+ // 2. Validate meta declaration
   if (!script.includes("const meta") && !script.includes("export const meta")) {
     return textResult(
       "Script must contain a meta declaration: const meta = { name, description, phases }",
@@ -186,7 +182,7 @@ function actionGenerate(params: ScriptParams, signal: AbortSignal | undefined): 
     );
   }
 
-  // 3. Check agent() usage
+ // 3. Check agent usage
   if (!/\bagent\s*\(/.test(stripped)) {
     return textResult(
       "Script does not contain any agent() calls. A workflow must call agent() at least once.",
@@ -194,7 +190,7 @@ function actionGenerate(params: ScriptParams, signal: AbortSignal | undefined): 
     );
   }
 
-  // 4. Syntax check (wrap in async IIFE like runtime)
+ // 4. Syntax check (wrap in async IIFE like runtime)
   const cjsScript = script.replace(/\bexport\s+const\s+meta\b/, "const meta");
   try {
     new Function(`(async () => { ${cjsScript} })();`);
@@ -203,7 +199,7 @@ function actionGenerate(params: ScriptParams, signal: AbortSignal | undefined): 
     return textResult(`Syntax error in script: ${msg}`, true);
   }
 
-  // 5. Write to .tmp directory
+ // 5. Write to .tmp directory
   const tmpDir = pathResolve(".pi/workflows/.tmp");
   mkdirSync(tmpDir, { recursive: true });
   const filePath = pathResolve(tmpDir, `${name}.js`);
@@ -227,7 +223,7 @@ async function actionLint(params: ScriptParams): Promise<TextContent> {
   if (!name) {
     return textResult("lint requires 'name' parameter", true);
   }
-  // 读脚本源（从 registry 或直接文件系统）
+ // 读脚本源（从 registry 或直接文件系统）
   const script = await loadScriptSource(name);
   if (!script) {
     return textResult(`Workflow '${name}' not found or not available.`, true);
@@ -257,7 +253,7 @@ async function actionLint(params: ScriptParams): Promise<TextContent> {
 /** 加载脚本源码（lint 用）。从文件系统直接读（registry 不暴露 sourceCode 读取）。 */
 async function loadScriptSource(name: string): Promise<string | undefined> {
   try {
-    // 用 config-loader 找到 path（T14 WorkflowScriptRegistryImpl 内部也用它）
+ // 用 config-loader 找到 path
     const { loadWorkflows } = await import("../infra/config-loader.js");
     const all = await loadWorkflows();
     const wf = all.find((w) => w.name === name && w.available);
@@ -302,10 +298,10 @@ function actionDelete(
   if (!name) {
     return textResult("delete requires 'name' parameter", true);
   }
-  // deleteWorkflow 内部检查 isRunning（防止删运行中脚本）
+ // deleteWorkflow 内部检查 isRunning（防止删运行中脚本）
   try {
     const result = deleteWorkflow(name, isRunning);
-    // 失效 registry 缓存（下次 list/get 重扫）
+ // 失效 registry 缓存（下次 list/get 重扫）
     registry.invalidate();
     return {
       content: [{ type: "text", text: result }],

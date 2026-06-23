@@ -46,7 +46,7 @@ function writeScript(dir: string, name: string, content: string): string {
 // ═══════════════════════════════════════════════════════════════
 
 describe("config-loader", () => {
-  // ── loadWorkflows ─────────────────────────────────────────
+ // ── loadWorkflows ─────────────────────────────────────────
 
   describe("loadWorkflows()", () => {
     it("returns empty array when no workflow directories exist", async () => {
@@ -181,7 +181,7 @@ module.exports = { meta };`,
     });
   });
 
-  // ── getWorkflow ───────────────────────────────────────────
+ // ── getWorkflow ───────────────────────────────────────────
 
   describe("getWorkflow()", () => {
     it("returns undefined for non-existent workflow", async () => {
@@ -193,7 +193,7 @@ module.exports = { meta };`,
       const dir = makeWorkflowDir();
       writeScript(dir, "my-wf", `const meta = { name: 'my-wf', description: 'My workflow', phases: ['step1'] };`);
 
-      // Invalidate cache to force fresh load
+ // Invalidate cache to force fresh load
       invalidateCache();
 
       const result = await getWorkflow("my-wf");
@@ -210,14 +210,14 @@ module.exports = { meta };`,
       const first = await getWorkflow("cached-wf");
       expect(first).toBeDefined();
 
-      // Second call should hit cache (same result)
+ // Second call should hit cache (same result)
       const second = await getWorkflow("cached-wf");
       expect(second).toBeDefined();
       expect(second!.name).toBe("cached-wf");
     });
   });
 
-  // ── invalidateCache ───────────────────────────────────────
+ // ── invalidateCache ───────────────────────────────────────
 
   describe("invalidateCache()", () => {
     it("forces re-scan after invalidation", async () => {
@@ -228,7 +228,7 @@ module.exports = { meta };`,
       const first = await getWorkflow("fresh");
       expect(first).toBeDefined();
 
-      // Write a new script with the same name (simulating update)
+ // Write a new script with the same name (simulating update)
       writeScript(
         dir,
         "fresh",
@@ -242,7 +242,7 @@ module.exports = { meta };`,
     });
   });
 
-  // ── Phases type extension (AC-2.1) ─────────────────────────
+ // ── Phases type extension (AC-2.1) ─────────────────────────
 
   describe("phases type extension", () => {
     it("parses phases as array of {title, detail?} objects", async () => {
@@ -286,7 +286,7 @@ module.exports = { meta };`,
       writeScript(
         dir,
         "phase-filter",
-        // safeEvalObject will parse 42 and null as-is, which the filter rejects
+ // safeEvalObject will parse 42 and null as-is, which the filter rejects
         `const meta = { name: 'phase-filter', description: 'Filter bad phases', phases: ['Valid', 42, null, {title: 'Ok'}] };`,
       );
 

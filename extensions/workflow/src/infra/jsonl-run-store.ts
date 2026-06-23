@@ -1,30 +1,26 @@
 /**
- * Workflow Extension — JSONL Run Store（W2-T13）
+ * Workflow Extension — JSONL Run Store
  *
- * RunStore port 的 Infra 实现（原 infra/state-store.ts）。
+ * RunStore port 的 Infra 实现。
  *
  * 职责：持久化 WorkflowRun 聚合根到 JSONL 文件 + 跨 session 重水合。
  *
- * 层归属：Infra（D-12）。implements Engine 层的 RunStore port（T2）。
+ * 层归属：Infra（D-12）。implements Engine 层的 RunStore port。
  * 依赖 @mariozechner/pi-coding-agent 的 ExtensionAPI/ExtensionContext（Infra 允许 Pi SDK）。
  *
- * 关键变化（相对旧 infra/state-store.ts）：
- *   - JsonlRunStore implements RunStore（而非散落的 persistState/reconstructState 函数）
- *   - 序列化 WorkflowRun（聚合根）而非 WorkflowInstance（旧域模型）
- *   - **D-5: 旧格式返回空**——reconstruct 时检查 snapshotVersion，旧 session
- *     （无版本号或版本不匹配）返回空数组，不尝试向后兼容（spec 决策）
- *   - rewrite mode 保留（writeFile 覆盖，文件始终是最新单行快照）
- *   - workflow-state-link 指针条目机制保留（pi.appendEntry）
+ * 设计：
+ * - JsonlRunStore implements RunStore（而非散落的 persist/reconstruct 自由函数）。
+ * - **D-5: 不向后兼容**——reconstruct 时检查 snapshotVersion，无版本号或版本不匹配
+ * 的 session 返回空数组（spec 决策：旧 run 历史价值低，不尝试兼容迁移）。
+ * - rewrite mode（writeFile 覆盖，文件始终是最新单行快照）。
+ * - workflow-state-link 指针条目机制保留（pi.appendEntry）。
  *
  * 序列化策略：
- *   - WorkflowRun 是带方法的 class 聚合根——序列化只取公共字段快照
- *   - Budget/Trace/AgentCall 都有公共构造器或 fromArray 工厂，反序列化时重建实例
- *   - Snapshot 形态用 SnapshotVersion 守护（D-5：旧格式识别）
+ * - WorkflowRun 是带方法的 class 聚合根——序列化只取公共字段快照。
+ * - Budget/Trace/AgentCall 都有公共构造器或 fromArray 工厂，反序列化时重建实例。
+ * - Snapshot 形态用 SnapshotVersion 守护（D-5：格式识别）。
  *
- * 参考：
- *   - domain-models.md §Ports（RunStore 定义）
- *   - 旧 infra/state-store.ts persistState/reconstructState
- *   - clarification.md D-5（旧 session 不向后兼容）
+ * 参考：domain-models.md §Ports（RunStore 定义）、clarification.md D-5。
  */
 
 import * as fs from "node:fs";
@@ -135,7 +131,7 @@ function serializeRun(run: WorkflowRun): RunSnapshot {
  * 反序列化快照为 WorkflowRun。D-5：版本不匹配返回 null（旧 session）。
  */
 function deserializeRun(snapshot: RunSnapshot): WorkflowRun | null {
-  // D-5 version guard
+ // D-5 version guard
   if (snapshot.v !== SNAPSHOT_VERSION) return null;
 
   const budget = new Budget({
@@ -152,8 +148,8 @@ function deserializeRun(snapshot: RunSnapshot): WorkflowRun | null {
     const call = new AgentCall(c.id, c.opts, c.traceNode);
     call.status = c.status;
     call.attempts = c.attempts;
-    // Restore result directly — bypasses markRunning/markDone state-machine guards
-    // because we're reconstructing a known-good persisted state, not transitioning.
+ // Restore result directly — bypasses markRunning/markDone state-machine guards
+ // because we're reconstructing a known-good persisted state, not transitioning.
     if (c.result !== undefined) {
       call.result = c.result;
     }
@@ -184,20 +180,20 @@ function deserializeRun(snapshot: RunSnapshot): WorkflowRun | null {
     scriptErrorCount: snapshot.meta.scriptErrorCount,
   };
 
-  // WorkflowRun.reconstruct 跳过 I1 校验——持久化的 running 状态没有 worker
-  // （进程被杀后 worker 不可能还活着），违反 I1。D-4 kill-9 恢复在 session_start
-  // 时把残留 running 转 done,failed，恢复 I1（见 index.ts session_start handler）。
+ // WorkflowRun.reconstruct 跳过 I1 校验——持久化的 running 状态没有 worker
+ // （进程被杀后 worker 不可能还活着），违反 I1。D-4 kill-9 恢复在 session_start
+ // 时把残留 running 转 done,failed，恢复 I1（见 index.ts session_start handler）。
   return WorkflowRun.reconstruct(snapshot.runId, snapshot.spec, state, meta);
 }
 
 // ── JsonlRunStore ────────────────────────────────────────────
 
 export interface JsonlRunStoreOptions {
-  /** Session directory root (state files live under <sessionDir>/workflow-state/). */
+ /** Session directory root (state files live under <sessionDir>/workflow-state/). */
   sessionDir: string;
-  /** Pi ExtensionAPI for appendEntry pointer writes (optional for testing). */
+ /** Pi ExtensionAPI for appendEntry pointer writes (optional for testing). */
   pi?: ExtensionAPI;
-  /** Pi ExtensionContext for sessionManager.getEntries (optional for testing). */
+ /** Pi ExtensionContext for sessionManager.getEntries (optional for testing). */
   ctx?: ExtensionContext;
 }
 
@@ -212,21 +208,21 @@ export class JsonlRunStore {
     this.ctx = opts.ctx;
   }
 
-  /** State directory: <sessionDir>/workflow-state/ */
+ /** State directory: <sessionDir>/workflow-state/ */
   private get stateDir(): string {
     return path.join(this.sessionDir, "workflow-state");
   }
 
-  /** State file path for a given runId. */
+ /** State file path for a given runId. */
   private filePathFor(runId: string): string {
     return path.join(this.stateDir, `${runId}.jsonl`);
   }
 
-  /**
-   * Persist a single run: rewrite mode (overwrite) — file always contains the
-   * latest complete snapshot on a single line. Appends a workflow-state-link
-   * pointer entry via pi.appendEntry so loadAll can locate files.
-   */
+ /**
+ * Persist a single run: rewrite mode (overwrite) — file always contains the
+ * latest complete snapshot on a single line. Appends a workflow-state-link
+ * pointer entry via pi.appendEntry so loadAll can locate files.
+ */
   async save(run: WorkflowRun): Promise<void> {
     const filePath = this.filePathFor(run.runId);
     await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
@@ -241,14 +237,14 @@ export class JsonlRunStore {
     }
   }
 
-  /**
-   * Reconstruct all runs from session JSONL pointer entries.
-   *
-   * D-5:旧格式（无版本号 / 版本不匹配）返回空——loadAll 跳过这些条目，
-   * 不尝试向后兼容旧 session（spec 决策）。
-   *
-   * 需要 ctx（构造时注入）——无 ctx 时返回空（测试或非 Pi 环境下）。
-   */
+ /**
+ * Reconstruct all runs from session JSONL pointer entries.
+ *
+ * D-5:旧格式（无版本号 / 版本不匹配）返回空——loadAll 跳过这些条目，
+ * 不尝试向后兼容旧 session（spec 决策）。
+ *
+ * 需要 ctx（构造时注入）——无 ctx 时返回空（测试或非 Pi 环境下）。
+ */
   async loadAll(): Promise<WorkflowRun[]> {
     if (!this.ctx) return [];
     const runs: WorkflowRun[] = [];
@@ -273,16 +269,16 @@ export class JsonlRunStore {
           if (!lastLine) continue;
           const parsed = JSON.parse(lastLine) as RunSnapshot;
           const run = deserializeRun(parsed);
-          // D-5: null = old format / version mismatch — skip silently
+ // D-5: null = old format / version mismatch — skip silently
           if (run) runs.push(run);
         } catch (err) {
-          // Corrupt/unreadable state file — skip (don't crash loadAll).
-          // Single bad file must not abort reconstruction of the rest.
+ // Corrupt/unreadable state file — skip (don't crash loadAll).
+ // Single bad file must not abort reconstruction of the rest.
           void err;
         }
       }
     } catch (err) {
-      // getEntries failed — return what we have (empty).
+ // getEntries failed — return what we have (empty).
       void err;
     }
     return runs;

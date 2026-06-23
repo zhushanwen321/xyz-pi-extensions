@@ -1,20 +1,19 @@
 /**
- * Workflow Extension — lifecycle（W3-T21，HIGH RISK）
+ * Workflow Extension — lifecycle
  *
- * Workflow run 生命周期 free functions（D-12）。取代旧 lifecycle.legacy.ts
- * 的 runWorkflow/pauseRun/resumeRun/abortRun（原 God Facade 方法）。
+ * Workflow run 生命周期 free functions（D-12）。
  *
  * 4 个导出函数：
- *   - runWorkflow(spec, deps, signal?) → Promise<runId>
- *   - pauseRun(runId, deps)            → Promise<void>（A4 原子性）
- *   - resumeRun(runId, deps)           → Promise<void>（G3-001 整重建）
- *   - abortRun(runId, deps, reason?)   → Promise<void>（done no-op）
+ * - runWorkflow(spec, deps, signal?) → Promise<runId>
+ * - pauseRun(runId, deps) → Promise<void>（A4 原子性）
+ * - resumeRun(runId, deps) → Promise<void>（G3-001 整重建）
+ * - abortRun(runId, deps, reason?) → Promise<void>（done no-op）
  *
  * 私有 makeHandlers(run, deps) → WorkerHandlers：
- *   - onMessage → handleWorkerMessage(run, raw, deps, handlers)
- *   - onError   → handleWorkerError(run, err, deps, handlers) + workerErrorCount++
- *   - onExit(code, handle) → handleWorkerExit(run, code, handle, deps, handlers)
- *     （G-025：handle.isCurrent 检查内化在 handleWorkerExit 内）
+ * - onMessage → handleWorkerMessage(run, raw, deps, handlers)
+ * - onError → handleWorkerError(run, err, deps, handlers) + workerErrorCount++
+ * - onExit(code, handle) → handleWorkerExit(run, code, handle, deps, handlers)
+ * （G-025：handle.isCurrent 检查内化在 handleWorkerExit 内）
  *
  * **A4 原子性**：pause/abort 内部 transition 先 releaseRuntime（cleanup before mutate），
  * 失败时 status 不变。transition("paused"/"done") 在 WorkflowRun.transition 内已实现
@@ -23,14 +22,12 @@
  * **G3-001**：pause 时整个 RunRuntime 丢弃（AbortController 一次性，无法复用）；
  * resume 时 assignRuntime 重建 worker/gate/controller。
  *
- * **D-13**：maxConcurrency=4（ConcurrencyGate 默认值，不显式传——见 T8）。
+ * **D-13**：maxConcurrency=4（ConcurrencyGate 默认值）。
  *
- * 层归属：Engine。依赖 T2 LifecycleDeps + T8 ConcurrencyGate + T12 WorkerHost via port +
- * T16 WorkflowRun + T19 handleWorker* 函数。
+ * 层归属：Engine。依赖 LifecycleDeps + ConcurrencyGate + WorkerHost via port +
+ * WorkflowRun + handleWorker* 函数。
  *
- * 参考：
- *   - domain-models.md §1（聚合根状态机）
- *   - 旧 lifecycle.legacy.ts runWorkflow/pauseRun/resumeRun/abortRun（行为来源）
+ * 参考：domain-models.md §1（聚合根状态机）。
  */
 
 import { ConcurrencyGate, DEFAULT_CONCURRENCY } from "../infra/concurrency-gate.js";
@@ -58,17 +55,17 @@ function generateRunId(): string {
   return `wf-${Date.now()}-${Math.random().toString(RUNID_RADIX).slice(RUNID_SLICE_START, RUNID_SLICE_END)}`;
 }
 
-// ── makeHandlers（路由 worker 事件到 T19 handle* 函数） ──────
+// ── makeHandlers（路由 worker 事件到 error-recovery handle* 函数） ──────
 
 /**
  * 构造 WorkerHandlers——将 worker 的 onMessage/onError/onExit 事件路由到
- * T19 的 handleWorker* 函数。
+ * error-recovery 的 handleWorker* 函数。
  *
  * 闭包捕获 run + deps。runtime 重建（replaceRuntime）后 run 实例不变、deps 不变，
- * 故 handlers 对新 worker 仍有效（lifecycle T21 与 error-recovery T19 共用 handlers）。
+ * 故 handlers 对新 worker 仍有效（lifecycle 与 error-recovery 共用 handlers）。
  *
  * **onExit G-025**：handleWorkerExit 内部检查 handle.isCurrent（stale exit 丢弃）。
- * 本函数不在 onExit 里重复检查——T19 handleWorkerExit 是单一守卫点。
+ * 本函数不在 onExit 里重复检查——error-recovery.handleWorkerExit 是单一守卫点。
  *
  * **workerErrorCount**：onError 触发时递增（C.5 跨 runtime 存活的重试计数载体）。
  * 注意 handleWorkerError 内部也会递增——这里 onError 递增是 worker 事件层面的
@@ -76,7 +73,7 @@ function generateRunId(): string {
  * 实际 handleWorkerError 会做最终计数（含重试上限判断），onError 不重复递增。
  */
 function makeHandlers(run: WorkflowRun, deps: LifecycleDeps): WorkerHandlers {
-  // 自引用——error-recovery rebuildRuntime 需要 handlers 参数（handlers 引用自身）
+ // 自引用——error-recovery rebuildRuntime 需要 handlers 参数（handlers 引用自身）
   const handlers: WorkerHandlers = {
     async onMessage(raw: unknown): Promise<void> {
       await handleWorkerMessage(run, raw, deps, handlers);
@@ -85,9 +82,9 @@ function makeHandlers(run: WorkflowRun, deps: LifecycleDeps): WorkerHandlers {
       await handleWorkerError(run, err, deps, handlers);
     },
     async onExit(code: number): Promise<void> {
-      // handle 由 WorkerHost 在 onExit 回调里传入——此处闭包拿不到具体 handle，
-      // 用 run.runtime?.worker 作为当前 handle（worker exit 时 runtime.worker 即
-      // 触发 exit 的那个 handle）。G-025 检查在 handleWorkerExit 内（handle.isCurrent）。
+ // handle 由 WorkerHost 在 onExit 回调里传入——此处闭包拿不到具体 handle，
+ // 用 run.runtime?.worker 作为当前 handle（worker exit 时 runtime.worker 即
+ // 触发 exit 的那个 handle）。G-025 检查在 handleWorkerExit 内（handle.isCurrent）。
       const handle = run.runtime?.worker;
       if (handle) {
         await handleWorkerExit(run, code, handle, deps, handlers);
@@ -105,8 +102,8 @@ function makeHandlers(run: WorkflowRun, deps: LifecycleDeps): WorkerHandlers {
  * 流程：创建 WorkflowRun（paused）+ makeHandlers + 构建 RunRuntime（worker+gate+controller）
  * + assignRuntime（paused → running）+ 注册到 deps.runs + store.save。
  *
- * @param spec   RunSpec（不可变输入，含 scriptSource/args）
- * @param deps   LifecycleDeps（store/workerHost/runner/runs）
+ * @param spec RunSpec（不可变输入，含 scriptSource/args）
+ * @param deps LifecycleDeps（store/workerHost/runner/runs）
  * @param signal 外部 abort signal（可选；abort 时调 abortRun）
  * @returns runId（wf-<timestamp>-<random>）
  * @throws signal 已 abort（pre-abort fail fast）
@@ -116,7 +113,7 @@ export async function runWorkflow(
   deps: LifecycleDeps,
   signal?: AbortSignal,
 ): Promise<string> {
-  // P1-2: pre-aborted signal → fail fast
+ // P1-2: pre-aborted signal → fail fast
   if (signal?.aborted) {
     throw new Error("Workflow run aborted before start");
   }
@@ -138,7 +135,7 @@ export async function runWorkflow(
     { startedAt: new Date().toISOString() },
   );
 
-  // signal abort → abortRun（一次性监听）
+ // signal abort → abortRun（一次性监听）
   if (signal) {
     signal.addEventListener(
       "abort",
@@ -152,17 +149,17 @@ export async function runWorkflow(
     );
   }
 
-  // 注册到 deps.runs（makeHandlers + assignRuntime 需要 run 已在 map）
+ // 注册到 deps.runs（makeHandlers + assignRuntime 需要 run 已在 map）
   deps.runs.set(runId, run);
 
-  // 构造 handlers + runtime（worker + gate + controller）
+ // 构造 handlers + runtime（worker + gate + controller）
   const handlers = makeHandlers(run, deps);
   const controller = new AbortController();
   const gate = new ConcurrencyGate({ maxConcurrency: DEFAULT_CONCURRENCY });
   const worker = deps.workerHost.start(spec, spec.args, handlers);
   const runtime = new RunRuntime(worker, gate, controller);
 
-  // assignRuntime（paused → running，原子绑定 runtime + status）
+ // assignRuntime（paused → running，原子绑定 runtime + status）
   run.assignRuntime(runtime);
 
   await deps.store.save(run);
@@ -193,7 +190,7 @@ export async function pauseRun(runId: string, deps: LifecycleDeps): Promise<void
     );
   }
 
-  // A4: transition 内部 releaseRuntime（cleanup before mutate）
+ // A4: transition 内部 releaseRuntime（cleanup before mutate）
   run.transition("paused");
   await deps.store.save(run);
 }
@@ -222,14 +219,14 @@ export async function resumeRun(runId: string, deps: LifecycleDeps): Promise<voi
     );
   }
 
-  // A4 mirror: 先 startWorker（副作用），成功后才 assignRuntime
+ // A4 mirror: 先 startWorker（副作用），成功后才 assignRuntime
   const handlers = makeHandlers(run, deps);
   const controller = new AbortController();
   const gate = new ConcurrencyGate({ maxConcurrency: DEFAULT_CONCURRENCY });
   const worker = deps.workerHost.start(run.spec, run.spec.args, handlers);
   const runtime = new RunRuntime(worker, gate, controller);
 
-  // assignRuntime（paused → running，原子绑定 runtime + status）
+ // assignRuntime（paused → running，原子绑定 runtime + status）
   run.assignRuntime(runtime);
   await deps.store.save(run);
 }
@@ -244,8 +241,8 @@ export async function resumeRun(runId: string, deps: LifecycleDeps): Promise<voi
  *
  * @param runId
  * @param deps
- * @param reason      可选中止原因（存 run.state.error）
- * @param doneReason  终态原因（默认 "aborted"；超时场景传 "time_limited"，C.7）
+ * @param reason 可选中止原因（存 run.state.error）
+ * @param doneReason 终态原因（默认 "aborted"；超时场景传 "time_limited"，C.7）
  * @throws runId 不存在
  */
 export async function abortRun(
@@ -259,23 +256,23 @@ export async function abortRun(
     throw new Error(`Workflow '${runId}' not found`);
   }
 
-  // done 状态 no-op
+ // done 状态 no-op
   if (run.state.status === "done") return;
 
-  // 只允许 running/paused abort（防御）
+ // 只允许 running/paused abort（防御）
   if (run.state.status !== "running" && run.state.status !== "paused") {
     throw new Error(
       `Cannot abort workflow in state '${run.state.status}': only 'running' or 'paused' can be aborted`,
     );
   }
 
-  // 记录中止原因
+ // 记录中止原因
   if (reason) {
     run.state.error = reason;
   }
-  // A4: transition 内部 releaseRuntime（cleanup before mutate）
+ // A4: transition 内部 releaseRuntime（cleanup before mutate）
   run.transition("done", doneReason);
   await deps.store.save(run);
-  // C-4: run 到达 done 终态 → 通知 Interface 层（notifyDone 唤醒 parent agent）
+ // C-4: run 到达 done 终态 → 通知 Interface 层（notifyDone 唤醒 parent agent）
   deps.onRunDone?.(run);
 }

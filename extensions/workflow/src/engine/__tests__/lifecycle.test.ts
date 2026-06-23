@@ -1,15 +1,15 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/engine/__tests__/lifecycle.test.ts
 //
-// T21：lifecycle free functions 测试。
+// lifecycle free functions 测试。
 // 覆盖：
-//   1. runWorkflow 创建 + assignRuntime + 注册 runs + store.save
-//   2. runWorkflow pre-aborted signal 抛错（P1-2）
-//   3. pauseRun A4 原子性（transition 内 releaseRuntime）+ 非法状态抛错
-//   4. resumeRun G3-001 重建（新 worker/gate/controller）+ 非法状态抛错
-//   5. abortRun done no-op + A4 + 非法状态抛错
-//   6. pause/resume 跨 runtime（callCache 保留）
-//   7. signal abort → abortRun 触发
+// 1. runWorkflow 创建 + assignRuntime + 注册 runs + store.save
+// 2. runWorkflow pre-aborted signal 抛错（P1-2）
+// 3. pauseRun A4 原子性（transition 内 releaseRuntime）+ 非法状态抛错
+// 4. resumeRun G3-001 重建（新 worker/gate/controller）+ 非法状态抛错
+// 5. abortRun done no-op + A4 + 非法状态抛错
+// 6. pause/resume 跨 runtime（callCache 保留）
+// 7. signal abort → abortRun 触发
 
 /* eslint-disable taste/no-unsafe-cast */
 
@@ -77,7 +77,7 @@ function makeDeps(overrides?: {
     },
     runner: overrides?.runner ?? { run: vi.fn().mockResolvedValue({ content: "ok" }) },
     runs: new Map(),
-    // T-2: onRunDone 默认注入 spy，让 abortRun 的 done,aborted 站点可被断言。
+ // T-2: onRunDone 默认注入 spy，让 abortRun 的 done,aborted 站点可被断言。
     onRunDone: overrides?.onRunDone ?? vi.fn(),
   };
 }
@@ -122,7 +122,7 @@ describe("runWorkflow", () => {
     const deps = makeDeps();
     const runId = await runWorkflow(makeSpec(), deps);
     const run = deps.runs.get(runId)!;
-    // gate 是 ConcurrencyGate 实例（通过 runtime 持有）
+ // gate 是 ConcurrencyGate 实例（通过 runtime 持有）
     expect(run.runtime?.gate).toBeInstanceOf(ConcurrencyGate);
   });
 
@@ -140,7 +140,7 @@ describe("runWorkflow", () => {
     expect(run.state.status).toBe("running");
 
     controller.abort();
-    // abortRun 是异步的——等微任务
+ // abortRun 是异步的——等微任务
     await vi.waitFor(() => expect(run.state.status).toBe("done"));
     expect(run.state.reason).toBe("aborted");
     expect(run.state.error).toBe("External signal aborted");
@@ -225,7 +225,7 @@ describe("resumeRun", () => {
     const deps = makeDeps();
     const runId = await runWorkflow(makeSpec(), deps);
     const run = deps.runs.get(runId)!;
-    // 模拟已完成的 call
+ // 模拟已完成的 call
     run.state.calls.set(0, {
       id: 0,
       opts: { prompt: "x" },
@@ -238,7 +238,7 @@ describe("resumeRun", () => {
     await pauseRun(runId, deps);
     await resumeRun(runId, deps);
 
-    // calls Map 仍含 callId 0（跨 runtime 存活）
+ // calls Map 仍含 callId 0（跨 runtime 存活）
     expect(run.state.calls.has(0)).toBe(true);
     expect(run.state.calls.size).toBe(1);
   });
@@ -258,7 +258,7 @@ describe("abortRun", () => {
     expect(run.state.reason).toBe("aborted");
     expect(run.state.error).toBe("user requested");
     expect(run.runtime).toBeUndefined(); // releaseRuntime
-    // T-2: abortRun 的 done,aborted 站点触发 onRunDone
+ // T-2: abortRun 的 done,aborted 站点触发 onRunDone
     expect(deps.onRunDone).toHaveBeenCalledWith(run);
   });
 
@@ -270,10 +270,10 @@ describe("abortRun", () => {
 
     await abortRun(runId, deps, "late");
 
-    // 状态不变（done/completed 保留，不覆盖为 aborted）
+ // 状态不变（done/completed 保留，不覆盖为 aborted）
     expect(run.state.reason).toBe("completed");
     expect(run.state.error).toBeUndefined(); // reason 未设
-    // T-2: 已 done → abortRun no-op，不再触发 onRunDone
+ // T-2: 已 done → abortRun no-op，不再触发 onRunDone
     expect(deps.onRunDone).not.toHaveBeenCalled();
   });
 
@@ -314,18 +314,18 @@ describe("跨 runtime 生命周期", () => {
     const runId = await runWorkflow(makeSpec(), deps);
     const run = deps.runs.get(runId)!;
 
-    // 第 1 轮 pause/resume
+ // 第 1 轮 pause/resume
     await pauseRun(runId, deps);
     expect(run.state.status).toBe("paused");
     await resumeRun(runId, deps);
     expect(run.state.status).toBe("running");
 
-    // 第 2 轮 pause/resume
+ // 第 2 轮 pause/resume
     await pauseRun(runId, deps);
     await resumeRun(runId, deps);
     expect(run.state.status).toBe("running");
 
-    // abort 终态
+ // abort 终态
     await abortRun(runId, deps);
     expect(run.state.status).toBe("done");
     expect(run.state.reason).toBe("aborted");

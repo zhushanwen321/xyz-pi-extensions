@@ -1,14 +1,14 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/engine/__tests__/launcher.test.ts
 //
-// T22：launcher runAndWait 测试。
+// launcher runAndWait 测试。
 // 覆盖：
-//   1. 正常完成（reason=completed）—— mock workerHost 启动后异步转 done
-//   2. 脚本未找到 → reason=failed
-//   3. timeout → reason=time_limited（C.7 修复）
-//   4. signal abort → reason=aborted
-//   5. lint 失败 → 抛错（不静默吞）
-//   6. WorkflowRunResult D-8 签名（status 恒 done + reason）
+// 1. 正常完成（reason=completed）—— mock workerHost 启动后异步转 done
+// 2. 脚本未找到 → reason=failed
+// 3. timeout → reason=time_limited（C.7 修复）
+// 4. signal abort → reason=aborted
+// 5. lint 失败 → 抛错（不静默吞）
+// 6. WorkflowRunResult D-8 签名（status 恒 done + reason）
 
 /* eslint-disable taste/no-unsafe-cast */
 
@@ -68,9 +68,9 @@ function makeDeps(opts?: {
   runner?: AgentRunner;
   store?: RunStore;
   workerHost?: WorkerHost;
-  /** 启动后异步转 done 的延迟（ms）。默认立即转 done,completed */
+ /** 启动后异步转 done 的延迟（ms）。默认立即转 done,completed */
   completeAfterMs?: number;
-  /** 启动后转什么 reason（默认 completed） */
+ /** 启动后转什么 reason（默认 completed） */
   completeReason?: "completed" | "failed";
 }): LauncherDeps {
   const script = opts?.script ?? makeScript();
@@ -81,7 +81,7 @@ function makeDeps(opts?: {
   const workerHost: WorkerHost = opts?.workerHost ?? {
     start: vi.fn().mockImplementation(() => {
       const handle = new WorkerHandle(asWorker(createFakeWorker()));
-      // 异步把 run 转 done（模拟 worker return）
+ // 异步把 run 转 done（模拟 worker return）
       setTimeout(() => {
         for (const run of runs.values()) {
           if (run.state.status === "running") {
@@ -132,7 +132,7 @@ describe("runAndWait 正常完成", () => {
   });
 
   it("脚本 available=false 时仍尝试运行（available 由 loader 标记，launcher 不拒绝）", async () => {
-    // launcher 只检查 registry.get 返回 undefined；available=false 不阻止
+ // launcher 只检查 registry.get 返回 undefined；available=false 不阻止
     const deps = makeDeps({ script: makeScript({ available: false }) });
     const result = await runAndWait("test-wf", {}, deps);
     expect(result.status).toBe("done");
@@ -150,7 +150,7 @@ describe("runAndWait 脚本未找到", () => {
     expect(result.reason).toBe("failed");
     expect(result.error).toContain("not found");
     expect(result.runId).toBe("");
-    // 不启动 worker
+ // 不启动 worker
     expect(deps.workerHost.start).not.toHaveBeenCalled();
   });
 });
@@ -159,7 +159,7 @@ describe("runAndWait 脚本未找到", () => {
 
 describe("runAndWait lint 失败", () => {
   it("validate 失败 → 抛错（不静默吞）", async () => {
-    // 无编排函数 → validate 报 error
+ // 无编排函数 → validate 报 error
     const deps = makeDeps({
       script: makeScript({ sourceCode: "const x = 1;" }),
     });
@@ -172,12 +172,12 @@ describe("runAndWait lint 失败", () => {
 
 describe("runAndWait timeout（C.7 修复）", () => {
   it("超时 → reason=time_limited（非 aborted）", async () => {
-    // completeAfterMs 设大（5s），timeoutMs 设小（100ms）→ 必超时
+ // completeAfterMs 设大（5s），timeoutMs 设小（100ms）→ 必超时
     const deps = makeDeps({ completeAfterMs: 5000 });
     vi.useFakeTimers();
     try {
       const p = runAndWait("test-wf", {}, deps, undefined, 100);
-      // 推进 timer 让轮询循环跑
+ // 推进 timer 让轮询循环跑
       for (let i = 0; i < 20; i++) {
         await vi.advanceTimersByTimeAsync(50);
       }
@@ -220,7 +220,7 @@ describe("runAndWait signal abort", () => {
     vi.useFakeTimers();
     try {
       const p = runAndWait("test-wf", {}, deps, controller.signal, 5000);
-      // 第一轮轮询后 abort
+ // 第一轮轮询后 abort
       await vi.advanceTimersByTimeAsync(50);
       controller.abort();
       for (let i = 0; i < 10; i++) {
@@ -229,9 +229,9 @@ describe("runAndWait signal abort", () => {
       const result = await p;
       expect(result.status).toBe("done");
       expect(result.reason).toBe("aborted");
-      // runWorkflow 的 signal listener 与 runAndWait 的 poll loop 都可能响应 abort；
-      // 两者都写入 aborted reason。error message 可能是 "External signal aborted"
-      // （runWorkflow 的 listener）或 "Aborted by signal"（runAndWait poll）。
+ // runWorkflow 的 signal listener 与 runAndWait 的 poll loop 都可能响应 abort；
+ // 两者都写入 aborted reason。error message 可能是 "External signal aborted"
+ // （runWorkflow 的 listener）或 "Aborted by signal"（runAndWait poll）。
       expect(result.error).toMatch(/aborted/i);
     } finally {
       vi.useRealTimers();
@@ -243,11 +243,11 @@ describe("runAndWait signal abort", () => {
 
 describe("WorkflowRunResult D-8 签名", () => {
   it("status 恒为 'done'（所有路径）", async () => {
-    // 正常完成
+ // 正常完成
     const r1 = await runAndWait("test-wf", {}, makeDeps());
     expect(r1.status).toBe("done");
 
-    // 未找到
+ // 未找到
     const deps2 = makeDeps();
     deps2.registry.get = vi.fn().mockResolvedValue(undefined);
     const r2 = await runAndWait("missing", {}, deps2);
@@ -262,10 +262,10 @@ describe("WorkflowRunResult D-8 签名", () => {
 
   it("failed 完成时 error 有值", async () => {
     const deps = makeDeps({ completeReason: "failed" });
-    // transition done,failed 需先设 error（否则 run.state.error undefined）
-    // 这里 completeReason:failed 走 transition("done","failed")，error 字段空
+ // transition done,failed 需先设 error（否则 run.state.error undefined）
+ // 这里 completeReason:failed 走 transition("done","failed")，error 字段空
     const r = await runAndWait("test-wf", {}, deps);
     expect(r.reason).toBe("failed");
-    // error 可空（failed 不强制 error，但 reason 区分了失败类型）
+ // error 可空（failed 不强制 error，但 reason 区分了失败类型）
   });
 });

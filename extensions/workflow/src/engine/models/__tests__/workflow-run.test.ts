@@ -14,7 +14,7 @@ import { WorkflowRun } from "../workflow-run.js";
 // ── Stub factories ───────────────────────────────────────────
 
 /**
- * Stub WorkerHandle — RunRuntime.release() only calls worker.terminate().
+ * Stub WorkerHandle — RunRuntime.release only calls worker.terminate.
  */
 class StubWorkerHandle {
   isCurrent = true;
@@ -24,20 +24,20 @@ class StubWorkerHandle {
   onError = vi.fn(() => this);
   onExit = vi.fn(() => this);
   get raw(): never {
-    // eslint-disable-next-line taste/no-unsafe-cast
+ // eslint-disable-next-line taste/no-unsafe-cast
     return null as never;
   }
 }
 
 /** Cast stub to WorkerHandle (single concentrated cast). */
 function stubHandle(): WorkerHandle {
-  // eslint-disable-next-line taste/no-unsafe-cast
+ // eslint-disable-next-line taste/no-unsafe-cast
   return new StubWorkerHandle() as unknown as WorkerHandle;
 }
 
 /** Read terminate spy from a stub-cast handle. */
 function spyTerminate(h: WorkerHandle): ReturnType<typeof vi.fn> {
-  // eslint-disable-next-line taste/no-unsafe-cast
+ // eslint-disable-next-line taste/no-unsafe-cast
   return (h as unknown as StubWorkerHandle).terminate;
 }
 
@@ -194,7 +194,7 @@ describe("assignRuntime (paused → running)", () => {
   });
 
   it("throws if status !== 'paused'", () => {
-    // Construct a done run (no runtime)
+ // Construct a done run (no runtime)
     const run = new WorkflowRun("r", makeSpec(), {
       status: "done",
       reason: "completed",
@@ -210,7 +210,7 @@ describe("assignRuntime (paused → running)", () => {
   it("maintains invariant I1 after assign (no intermediate visible state)", () => {
     const run = makePausedRun();
     const { rt } = makeRuntime();
-    // After assignRuntime: status="running" AND runtime!==undefined (I1 holds)
+ // After assignRuntime: status="running" AND runtime!==undefined (I1 holds)
     run.assignRuntime(rt);
     expect(run.state.status).toBe("running");
     expect(run.runtime).toBe(rt);
@@ -233,7 +233,7 @@ describe("releaseRuntime", () => {
 
   it("is no-op when runtime is already undefined (idempotent)", () => {
     const run = makePausedRun();
-    // runtime is undefined; releaseRuntime should not throw
+ // runtime is undefined; releaseRuntime should not throw
     expect(() => run.releaseRuntime()).not.toThrow();
     expect(run.runtime).toBeUndefined();
   });
@@ -366,8 +366,8 @@ describe("illegal transitions throw", () => {
     const run = makePausedRun();
     const { rt } = makeRuntime();
     run.assignRuntime(rt);
-    // running → running isn't even in VALID_RUN_TRANSITIONS, but our code
-    // specifically rejects "running" target with assignRuntime hint
+ // running → running isn't even in VALID_RUN_TRANSITIONS, but our code
+ // specifically rejects "running" target with assignRuntime hint
     expect(() => run.transition("running")).toThrow(/assignRuntime/);
   });
 });
@@ -385,7 +385,7 @@ describe("replaceRuntime (G5-001 atomic, G6-001 running-only)", () => {
 
     expect(run.runtime).toBe(newRt);
     expect(run.state.status).toBe("running"); // unchanged
-    // old runtime released
+ // old runtime released
     expect(spyTerminate(oldHandle)).toHaveBeenCalledTimes(1);
   });
 
@@ -414,7 +414,7 @@ describe("replaceRuntime (G5-001 atomic, G6-001 running-only)", () => {
     run.assignRuntime(old);
     const { rt: newRt } = makeRuntime();
 
-    // Replace is atomic — after call, runtime is newRt and status still running
+ // Replace is atomic — after call, runtime is newRt and status still running
     run.replaceRuntime(newRt);
     expect(run.state.status).toBe("running");
     expect(run.runtime).toBe(newRt);
@@ -429,7 +429,7 @@ describe("replaceRuntime (G5-001 atomic, G6-001 running-only)", () => {
     run.replaceRuntime(newRt);
 
     expect(spyTerminate(oldHandle)).toHaveBeenCalledTimes(1);
-    // New runtime's worker is NOT terminated (still active)
+ // New runtime's worker is NOT terminated (still active)
     expect(spyTerminate(newHandle)).not.toHaveBeenCalled();
   });
 });
@@ -440,23 +440,23 @@ describe("full lifecycle (pause/resume + done)", () => {
   it("supports paused → running → paused → running → done", () => {
     const run = makePausedRun();
 
-    // First running segment
+ // First running segment
     const { rt: rt1 } = makeRuntime();
     run.assignRuntime(rt1);
     expect(run.state.status).toBe("running");
 
-    // Pause
+ // Pause
     run.transition("paused");
     expect(run.state.status).toBe("paused");
     expect(run.runtime).toBeUndefined();
 
-    // Resume (new runtime — G3-001 rebuild)
+ // Resume (new runtime — G3-001 rebuild)
     const { rt: rt2 } = makeRuntime();
     run.assignRuntime(rt2);
     expect(run.state.status).toBe("running");
     expect(run.runtime).toBe(rt2);
 
-    // Done
+ // Done
     run.transition("done", "completed");
     expect(run.state.status).toBe("done");
     expect(run.state.reason).toBe("completed");

@@ -42,9 +42,9 @@ describe("WorkflowScript 构造", () => {
   });
 });
 
-// ── validate（T17 前基础检查） ───────────────────────────────
+// ── validate ───────────────────────────────
 
-describe("WorkflowScript.validate (basic, pre-T17)", () => {
+describe("WorkflowScript.validate (basic)", () => {
   it("含 agent() 调用 → valid", () => {
     const s = makeScript({ sourceCode: 'const r = await agent({ prompt: "hi" });' });
     expect(s.validate().valid).toBe(true);
@@ -130,7 +130,7 @@ describe("WorkflowScriptRegistry interface", () => {
         return name === "test-wf" ? makeScript() : undefined;
       },
       invalidate() {
-        /* mock */
+ /* mock */
       },
     };
     const all = await registry.loadAll();

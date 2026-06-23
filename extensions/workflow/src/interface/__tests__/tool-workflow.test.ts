@@ -1,7 +1,7 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/interface/__tests__/tool-workflow.test.ts
 //
-// T25：tool-workflow（7 actions: run/status/pause/resume/abort/retry-node/skip-node）测试。
+// tool-workflow（7 actions: run/status/pause/resume/abort/retry-node/skip-node）测试。
 // 不实际启动 worker——mock deps.runner + deps.workerHost。
 
 /* eslint-disable taste/no-unsafe-cast */

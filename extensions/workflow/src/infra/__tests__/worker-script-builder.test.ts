@@ -5,11 +5,11 @@ import { describe, expect, it } from "vitest";
 
 import { buildWorkerScript } from "../worker-script-builder.js";
 
-describe("buildWorkerScript (T11)", () => {
+describe("buildWorkerScript", () => {
   const userScript = 'log("hello from user script");';
   const result = buildWorkerScript(userScript);
 
-  // ── Required injected globals (format契约) ─────────────────
+ // ── Required injected globals (format契约) ─────────────────
 
   describe("required injected globals", () => {
     it("contains 'use strict' declaration", () => {
@@ -58,7 +58,7 @@ describe("buildWorkerScript (T11)", () => {
     });
   });
 
-  // ── User script injection ──────────────────────────────────
+ // ── User script injection ──────────────────────────────────
 
   describe("user script injection", () => {
     it("embeds the user script verbatim", () => {
@@ -80,7 +80,7 @@ describe("buildWorkerScript (T11)", () => {
     });
   });
 
-  // ── Call cache replay (pause/resume contract) ─────────────
+ // ── Call cache replay (pause/resume contract) ─────────────
 
   describe("call cache replay (G3-001 pause/resume)", () => {
     it("initializes _callCache from workerData.callCache", () => {
@@ -97,7 +97,7 @@ describe("buildWorkerScript (T11)", () => {
     });
   });
 
-  // ── Communication protocol ─────────────────────────────────
+ // ── Communication protocol ─────────────────────────────────
 
   describe("communication protocol", () => {
     it("posts agent-call with callId + opts + phase", () => {
@@ -115,7 +115,7 @@ describe("buildWorkerScript (T11)", () => {
     });
   });
 
-  // ── Worker thread guard ────────────────────────────────────
+ // ── Worker thread guard ────────────────────────────────────
 
   describe("worker thread guard", () => {
     it("throws if parentPort is null (not in Worker thread)", () => {

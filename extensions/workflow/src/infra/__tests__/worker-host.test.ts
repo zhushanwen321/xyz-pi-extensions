@@ -92,12 +92,12 @@ async function waitForMessages(
 // ═══════════════════════════════════════════════════════════════
 
 describe("WorkerHostImpl", () => {
-  it("implements WorkerHost port (T2 contract)", () => {
+  it("implements WorkerHost port", () => {
     const host: WorkerHost = new WorkerHostImpl();
     expect(typeof host.start).toBe("function");
   });
 
-  // ── start — basic contract ─────────────────────────────────
+ // ── start — basic contract ─────────────────────────────────
 
   describe("start — basic contract", () => {
     it("returns a WorkerHandle", () => {
@@ -106,7 +106,7 @@ describe("WorkerHostImpl", () => {
       const handle = host.start(makeSpec(), {}, handlers);
 
       expect(handle).toBeInstanceOf(WorkerHandle);
-      // Cleanup
+ // Cleanup
       void handle.terminate();
     });
 
@@ -120,24 +120,24 @@ describe("WorkerHostImpl", () => {
     });
   });
 
-  // ── Event wiring — message / return ───────────────────────
+ // ── Event wiring — message / return ───────────────────────
 
   describe("event wiring — message", () => {
     it("forwards worker messages to handlers.onMessage", async () => {
       const host = new WorkerHostImpl();
       const { spies, handlers } = makeHandlerSpies();
 
-      // Script that posts a log message, then returns
+ // Script that posts a log message, then returns
       const spec = makeSpec({
         scriptSource: 'log("hello-from-worker"); return { ok: true };',
       });
       const handle = host.start(spec, {}, handlers);
 
-      // Wait for worker to post at least one message
+ // Wait for worker to post at least one message
       await waitForMessages(spies.onMessage, 1);
 
       expect(spies.onMessage).toHaveBeenCalled();
-      // The "log" and "return" message types should both route to onMessage
+ // The "log" and "return" message types should both route to onMessage
       const messages = spies.onMessage.mock.calls.map((c) => c[0]);
       const hasLog = messages.some((m) => msgType(m) === "log");
       const hasReturn = messages.some((m) => msgType(m) === "return");
@@ -150,9 +150,9 @@ describe("WorkerHostImpl", () => {
       const host = new WorkerHostImpl();
       const { spies, handlers } = makeHandlerSpies();
 
-      // Use a script with a syntax error to force the worker thread to exit
-      // on its own (non-zero). A well-formed script posts a "return" message
-      // and stays alive — only crash paths trigger natural exit.
+ // Use a script with a syntax error to force the worker thread to exit
+ // on its own (non-zero). A well-formed script posts a "return" message
+ // and stays alive — only crash paths trigger natural exit.
       const spec = makeSpec({ scriptSource: "const broken = ;" });
       const handle = host.start(spec, {}, handlers);
 
@@ -160,24 +160,24 @@ describe("WorkerHostImpl", () => {
       expect(exitCall).not.toBeNull();
       const [code, handleArg] = exitCall!;
       expect(code).toBe(1);
-      // C.3 fix: handle is passed to onExit so caller can use isCurrent
+ // C.3 fix: handle is passed to onExit so caller can use isCurrent
       expect(handleArg).toBe(handle);
 
       await handle.terminate();
     });
   });
 
-  // ── Event wiring — error ──────────────────────────────────
+ // ── Event wiring — error ──────────────────────────────────
 
   describe("event wiring — error", () => {
     it("forwards worker error to handlers.onError", async () => {
       const host = new WorkerHostImpl();
       const { spies, handlers } = makeHandlerSpies();
 
-      // Script that throws inside the IIFE — routes through .catch() which
-      // posts an "error" message (handled by onMessage), but a synchronous
-      // throw in user code at top-level may surface as worker 'error' event.
-      // Use an unreachable reference to force an error path.
+ // Script that throws inside the IIFE — routes through .catch which
+ // posts an "error" message (handled by onMessage), but a synchronous
+ // throw in user code at top-level may surface as worker 'error' event.
+ // Use an unreachable reference to force an error path.
       const spec = makeSpec({
         scriptSource: 'throw new Error("script-boom");',
       });
@@ -185,8 +185,8 @@ describe("WorkerHostImpl", () => {
 
       await waitForMessages(spies.onMessage, 1);
 
-      // The thrown error is caught by the IIFE .catch() and posted as a
-      // type:"error" message — verify onMessage received it.
+ // The thrown error is caught by the IIFE .catch and posted as a
+ // type:"error" message — verify onMessage received it.
       expect(spies.onMessage).toHaveBeenCalled();
       const messages = spies.onMessage.mock.calls.map((c) => c[0]);
       const hasErrorMsg = messages.some(
@@ -201,7 +201,7 @@ describe("WorkerHostImpl", () => {
     });
   });
 
-  // ── workerData injection ──────────────────────────────────
+ // ── workerData injection ──────────────────────────────────
 
   describe("workerData injection", () => {
     it("passes args to worker via $ARGS", async () => {
@@ -215,7 +215,7 @@ describe("WorkerHostImpl", () => {
 
       await waitForMessages(spies.onMessage, 1);
 
-      // Worker should post a "return" message with result.argsVal === "bar"
+ // Worker should post a "return" message with result.argsVal === "bar"
       expect(spies.onMessage).toHaveBeenCalled();
       const messages = spies.onMessage.mock.calls.map((c) => c[0]);
       const returnMsg = messages.find((m) => msgType(m) === "return");
@@ -236,8 +236,8 @@ describe("WorkerHostImpl", () => {
       });
       const handle = host.start(spec, {}, handlers);
 
-      // Worker posts a "return" message — if workerData was malformed, worker
-      // would crash instead. Verify the return message arrived.
+ // Worker posts a "return" message — if workerData was malformed, worker
+ // would crash instead. Verify the return message arrived.
       await waitForMessages(spies.onMessage, 1);
       const messages = spies.onMessage.mock.calls.map((c) => c[0]);
       const hasReturn = messages.some((m) => msgType(m) === "return");
@@ -247,23 +247,23 @@ describe("WorkerHostImpl", () => {
     });
   });
 
-  // ── C.3: handle passed to onExit for G-025 race guard ──────
+ // ── C.3: handle passed to onExit for G-025 race guard ──────
 
   describe("C.3 + G-025 — onExit handle enables race guard", () => {
     it("onExit receives the same handle instance returned by start()", async () => {
       const host = new WorkerHostImpl();
       const { spies, handlers } = makeHandlerSpies();
 
-      // Syntax-error script forces the worker to exit on its own (non-zero).
-      // A well-formed script stays alive after posting "return" — only crash
-      // paths exercise the natural-exit handler.
+ // Syntax-error script forces the worker to exit on its own (non-zero).
+ // A well-formed script stays alive after posting "return" — only crash
+ // paths exercise the natural-exit handler.
       const spec = makeSpec({ scriptSource: "const broken = ;" });
       const returnedHandle = host.start(spec, {}, handlers);
 
       const exitCall = await waitForExit(spies.onExit);
       expect(exitCall).not.toBeNull();
       const [, exitHandle] = exitCall!;
-      // C.3: same reference — caller can check exitHandle.isCurrent
+ // C.3: same reference — caller can check exitHandle.isCurrent
       expect(exitHandle).toBe(returnedHandle);
 
       await returnedHandle.terminate();
@@ -273,19 +273,19 @@ describe("WorkerHostImpl", () => {
       const host = new WorkerHostImpl();
       const { spies, handlers } = makeHandlerSpies();
 
-      // Long-running script that won't exit on its own
+ // Long-running script that won't exit on its own
       const spec = makeSpec({
         scriptSource: 'await new Promise(() => {});', // never resolves
       });
       const handle = host.start(spec, {}, handlers);
 
-      // Terminate immediately
+ // Terminate immediately
       await handle.terminate();
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      // Worker was force-killed; its exit event fires but WorkerHandle's
-      // isCurrent guard means handlers.onExit must NOT fire
-      // (the race guard: terminate(old) → old exit must be ignored).
+ // Worker was force-killed; its exit event fires but WorkerHandle's
+ // isCurrent guard means handlers.onExit must NOT fire
+ // (the race guard: terminate(old) → old exit must be ignored).
       expect(spies.onExit).not.toHaveBeenCalled();
     });
   });

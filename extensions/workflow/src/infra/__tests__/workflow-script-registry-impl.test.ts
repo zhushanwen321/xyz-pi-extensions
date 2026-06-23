@@ -9,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { WorkflowScript } from "../../engine/models/workflow-script.js";
 import type { WorkflowScriptRegistry } from "../../engine/models/workflow-script-registry.js";
-// 过渡期：直接 import 旧 invalidateCache 清缓存（W4 T25 后改用 registry.invalidate）
+// 直接测底层 invalidateCache（registry.invalidate 只是它的薄包装；这里要验证
+// 缓存失效后真正触发文件系统重扫，故绕过包装直达底层）。
 import { invalidateCache } from "../config-loader.js";
 import { WorkflowScriptRegistryImpl } from "../workflow-script-registry-impl.js";
 
@@ -56,14 +57,14 @@ agent("test");`;
 // ═══════════════════════════════════════════════════════════════
 
 describe("WorkflowScriptRegistryImpl", () => {
-  it("implements WorkflowScriptRegistry port (T6 contract)", () => {
+  it("implements WorkflowScriptRegistry port", () => {
     const registry: WorkflowScriptRegistry = new WorkflowScriptRegistryImpl();
     expect(typeof registry.loadAll).toBe("function");
     expect(typeof registry.get).toBe("function");
     expect(typeof registry.invalidate).toBe("function");
   });
 
-  // ── loadAll ───────────────────────────────────────────────
+ // ── loadAll ───────────────────────────────────────────────
 
   describe("loadAll", () => {
     it("returns empty array when no workflow directories exist", async () => {
@@ -72,7 +73,7 @@ describe("WorkflowScriptRegistryImpl", () => {
       expect(scripts).toEqual([]);
     });
 
-    it("returns WorkflowScript instances (not legacy CachedWorkflowMeta)", async () => {
+    it("returns WorkflowScript instances (not raw CachedWorkflowMeta)", async () => {
       const dir = makeWorkflowDir();
       writeScript(dir, "hello", VALID_SCRIPT("hello", "Hello workflow"));
 
@@ -92,7 +93,7 @@ describe("WorkflowScriptRegistryImpl", () => {
 
       expect(script!.name).toBe("test-wf");
       expect(script!.source).toBe("saved");
-      // macOS may prefix /private — assert by suffix only for portability
+ // macOS may prefix /private — assert by suffix only for portability
       expect(script!.path).toMatch(/test-wf\.js$/);
       expect(script!.available).toBe(true);
       expect(script!.meta.name).toBe("test-wf");
@@ -113,32 +114,32 @@ describe("WorkflowScriptRegistryImpl", () => {
     });
 
     it("deduplicates by priority tmp > project > user (same name)", async () => {
-      // project workflow
+ // project workflow
       const projDir = makeWorkflowDir();
       writeScript(projDir, "shared", VALID_SCRIPT("shared", "project version"));
-      // tmp workflow with same name overrides
+ // tmp workflow with same name overrides
       const tmpDir = makeTmpDir();
       writeScript(tmpDir, "shared", VALID_SCRIPT("shared", "tmp version"));
 
       const registry = new WorkflowScriptRegistryImpl();
       const scripts = await registry.loadAll();
 
-      // Only one "shared" entry — tmp wins
+ // Only one "shared" entry — tmp wins
       expect(scripts.length).toBe(1);
       expect(scripts[0]!.meta.description).toBe("tmp version");
       expect(scripts[0]!.source).toBe("tmp");
     });
 
     it("get() uses 60s TTL cache after loadAll populates it", async () => {
-      // loadAll() always re-scans, but it writes to the cache that get() reads.
-      // Verify: after loadAll, get() serves from cache even if file is removed.
+ // loadAll always re-scans, but it writes to the cache that get reads.
+ // Verify: after loadAll, get serves from cache even if file is removed.
       const dir = makeWorkflowDir();
       writeScript(dir, "cached", VALID_SCRIPT("cached"));
 
       const registry = new WorkflowScriptRegistryImpl();
       await registry.loadAll(); // populates cache
 
-      // Remove the file — get() should still find it via cache
+ // Remove the file — get should still find it via cache
       rmSync(join(dir, "cached.js"), { force: true });
       const script = await registry.get("cached");
       expect(script).toBeDefined();
@@ -146,7 +147,7 @@ describe("WorkflowScriptRegistryImpl", () => {
     });
   });
 
-  // ── get (exact match) ─────────────────────────────────────
+ // ── get (exact match) ─────────────────────────────────────
 
   describe("get (exact match)", () => {
     it("returns the matching script by name", async () => {
@@ -173,8 +174,8 @@ describe("WorkflowScriptRegistryImpl", () => {
       writeScript(dir, "code-review", VALID_SCRIPT("code-review"));
 
       const registry = new WorkflowScriptRegistryImpl();
-      // "code" is a prefix but not exact match — registry returns undefined
-      // (fuzzy matching is the Interface layer's job, T25)
+ // "code" is a prefix but not exact match — registry returns undefined
+ // (fuzzy matching is the Interface layer's job)
       const script = await registry.get("code");
       expect(script).toBeUndefined();
     });
@@ -193,7 +194,7 @@ describe("WorkflowScriptRegistryImpl", () => {
     });
   });
 
-  // ── invalidate ────────────────────────────────────────────
+ // ── invalidate ────────────────────────────────────────────
 
   describe("invalidate", () => {
     it("clears cache — next loadAll re-scans filesystem", async () => {
@@ -204,7 +205,7 @@ describe("WorkflowScriptRegistryImpl", () => {
       const firstLoad = await registry.loadAll();
       expect(firstLoad.length).toBe(1);
 
-      // Add a new script + invalidate
+ // Add a new script + invalidate
       writeScript(dir, "second", VALID_SCRIPT("second"));
       registry.invalidate();
       const secondLoad = await registry.loadAll();
@@ -233,10 +234,10 @@ describe("WorkflowScriptRegistryImpl", () => {
     });
   });
 
-  // ── sourceCode field ──────────────────────────────────────
+ // ── sourceCode field ──────────────────────────────────────
 
   describe("sourceCode field", () => {
-    it("registry populates sourceCode from file (Bug #1 fix: FR-2 single read path)", async () => {
+    it("registry populates sourceCode from file (FR-2 single read path)", async () => {
       const dir = makeWorkflowDir();
       const expected = VALID_SCRIPT("src-test");
       writeScript(dir, "src-test", expected);
@@ -244,11 +245,10 @@ describe("WorkflowScriptRegistryImpl", () => {
       const registry = new WorkflowScriptRegistryImpl();
       const [script] = await registry.loadAll();
 
-      // FR-2: registry is the single filesystem reader (扫描+缓存+去重).
-      // sourceCode MUST be populated here so launcher.runAndWait /
-      // tool-workflow.actionRun can call validate()/toExecutable() directly
-      // without each doing their own readFile. (Previously sourceCode was ""
-      // — Bug #1: workflows silently ran 0 agents in 13ms.)
+ // FR-2: registry is the single filesystem reader (扫描+缓存+去重).
+ // sourceCode MUST be populated here so launcher.runAndWait /
+ // tool-workflow.actionRun can call validate/toExecutable directly
+ // without each doing their own readFile.
       expect(script!.sourceCode).toBe(expected);
       expect(script!.sourceCode.length).toBeGreaterThan(0);
     });

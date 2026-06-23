@@ -38,8 +38,7 @@ describe("Budget.consume", () => {
 
   it("无副作用回调——consume 后无任何通知发出（D-12）", () => {
     const b = new Budget({ maxTokens: 10 });
-    // 旧 Budget 会在 consume 时调用 onConsume/maybeEmitSoftWarning；
-    // 新 Budget 是纯值对象——这里只能断言不抛、状态正确。
+ // Budget 是纯值对象——consume 无副作用回调，这里断言不抛、状态正确。
     expect(() => b.consume(usage({ input: 5 }))).not.toThrow();
     expect(b.usedTokens).toBe(5);
   });
@@ -108,7 +107,7 @@ describe("Budget.isSoftLimitReached", () => {
     expect(b.isSoftLimitReached()).toBe(true);
   });
 
-  it("无状态——可重复查询，不像旧 softWarningSent 只返回一次", () => {
+  it("无状态——可重复查询（不像一次性 flag 只返回一次）", () => {
     const b = new Budget({ totalCallCount: SOFT_MAX_AGENTS_WARNING + 1 });
     expect(b.isSoftLimitReached()).toBe(true);
     expect(b.isSoftLimitReached()).toBe(true); // 仍 true

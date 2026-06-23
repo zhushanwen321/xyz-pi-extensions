@@ -1,7 +1,7 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/__tests__/workflows-view.test.ts
 //
-// T31：WorkflowsView 适配 WorkflowRun 测试（不再 WorkflowInstance）+ 无 restart 快捷键。
+// WorkflowsView 适配 WorkflowRun 的测试 + 无 restart 快捷键。
 // 验证 createWorkflowsView 接受 WorkflowRun 聚合根并正确渲染 layout。
 // 不测真实 TUI 交互——测 renderLayout 输出格式（pure function）+ view actions 绑定。
 
@@ -97,7 +97,7 @@ function makeCtx(): ExtensionContext {
 
 // ── Tests ────────────────────────────────────────────────────
 
-describe("WorkflowsView (T31, adapted to WorkflowRun)", () => {
+describe("WorkflowsView (adapted to WorkflowRun)", () => {
   it("createWorkflowsView accepts WorkflowRun and invokes ctx.ui.custom", async () => {
     const run = makeRun();
     const ctx = makeCtx();
@@ -141,9 +141,9 @@ describe("WorkflowsView (T31, adapted to WorkflowRun)", () => {
     const theme = makeTheme();
     expect(formatStatusBadge("running", theme)).toContain("running");
     expect(formatStatusBadge("paused", theme)).toContain("PAUSED");
-    // "done" is not in the badge's explicit cases → default branch shows raw status
+ // "done" is not in the badge's explicit cases → default branch shows raw status
     expect(formatStatusBadge("done", theme)).toBe("done");
-    // Legacy 8-state strings still handled (backward compat for serialized runs)
+ // Legacy 8-state strings still handled (backward compat for serialized runs)
     expect(formatStatusBadge("failed", theme)).toContain("failed");
   });
 
@@ -157,17 +157,17 @@ describe("WorkflowsView (T31, adapted to WorkflowRun)", () => {
   });
 
   it("createWorkflowsView binds actions for paused run (resume enabled)", async () => {
-    // WorkflowRun invariant I1: status="running" requires runtime assigned.
-    // For view testing, use "paused" (valid without runtime) — the view reads
-    // status to toggle pause/resume labels.
+ // WorkflowRun invariant I1: status="running" requires runtime assigned.
+ // For view testing, use "paused" (valid without runtime) — the view reads
+ // status to toggle pause/resume labels.
     const run = makeRun({ status: "paused", traceNodes: [makeTraceNode({ status: "running" })] });
     const ctx = makeCtx();
     const actions = makeActions();
 
     await createWorkflowsView(run, makeTheme(), ctx, actions);
 
-    // The custom factory was invoked; actions are wired inside the closure.
-    // We verify the factory closure captured actions (no throw + custom called).
+ // The custom factory was invoked; actions are wired inside the closure.
+ // We verify the factory closure captured actions (no throw + custom called).
     expect(ctx.ui.custom).toHaveBeenCalledTimes(1);
   });
 

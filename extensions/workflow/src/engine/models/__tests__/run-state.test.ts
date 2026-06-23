@@ -64,7 +64,7 @@ describe("RunSpec 形状", () => {
       scriptName: "n",
       scriptPath: "p",
     };
-    // readonly 修饰符在 TS 层阻止赋值；这里只验证运行时可读
+ // readonly 修饰符在 TS 层阻止赋值；这里只验证运行时可读
     expect(spec.scriptSource).toBe("x");
   });
 });

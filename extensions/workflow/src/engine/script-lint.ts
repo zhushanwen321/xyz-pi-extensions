@@ -1,32 +1,29 @@
 /**
- * Workflow Extension — 静态 lint（W3-T17，从 infra/script-lint.ts 迁入）
+ * Workflow Extension — 静态 lint
  *
  * 在执行前捕获常见的 workflow 脚本 API 误用。纯函数，零副作用，零 IO。
  *
- * 迁移要点（相对旧 infra/script-lint.ts）：
- *   - 路径 infra/ → engine/（lint 是编排层关注，非技术资源）
- *   - **合并 entry-point 检查**：脚本必须含 agent()/parallel()/pipeline() 之一，
- *     否则视为 error。旧 infra 版本不含此检查（由 WorkflowScript.validate 占位补）；
- *     T17 后 validate() 直接委托 lintScript，故 entry-point 检查必须在此。
- *   - LintFinding/LintResult 类型规范归属改到此文件（workflow-script.ts 改为 re-export）
+ * 设计：
+ * - lint 是编排层关注（非技术资源），归属 Engine 层。
+ * - **entry-point 检查**：脚本必须含 agent/parallel/pipeline 之一，否则视为 error。
+ * WorkflowScript.validate 直接委托 lintScript，故 entry-point 检查必须在此。
+ * - LintFinding/LintResult 类型规范的 canonical 源在本文件。
  *
  * 检查项：
- *   1. 必须含 agent()/parallel()/pipeline() 入口（error）
- *   2. agent() 选项中 outputSchema 当 key 用 → 应为 schema（error）
- *   3. result.output / result.parsedOutput / result.content → agent() 返回未包装值（error）
- *   4. readFileSync/writeFileSync 传状态 → 脆弱（warning）
- *   5. unlinkSync 清理状态 → 与 subprocess 文件读竞态（warning）
+ * 1. 必须含 agent/parallel/pipeline 入口（error）
+ * 2. agent 选项中 outputSchema 当 key 用 → 应为 schema（error）
+ * 3. result.output / result.parsedOutput / result.content → agent 返回未包装值（error）
+ * 4. readFileSync/writeFileSync 传状态 → 脆弱（warning）
+ * 5. unlinkSync 清理状态 → 与 subprocess 文件读竞态（warning）
  *
  * 层归属：Engine。
  *
- * 参考：
- *   - domain-models.md §7（validate 语义）
- *   - 旧 infra/script-lint.ts（lint 逻辑来源）
+ * 参考：domain-models.md §7（validate 语义）。
  */
 
 /** Lint 检查发现项。 */
 export interface LintFinding {
-  /** error = 会导致运行时崩溃; warning = 可能的错误 */
+ /** error = 会导致运行时崩溃; warning = 可能的错误 */
   severity: "error" | "warning";
   line: number;
   message: string;
@@ -65,13 +62,13 @@ function checkEntryPoint(source: string): LintFinding[] {
 function checkLine(lineText: string, lineNum: number): LintFinding[] {
   const results: LintFinding[] = [];
 
-  // 跳过注释行
+ // 跳过注释行
   const trimmed = lineText.trim();
   if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) {
     return results;
   }
 
-  // result.output / result.parsedOutput / result.content
+ // result.output / result.parsedOutput / result.content
   const resultAccessPatterns: Array<{ regex: RegExp; field: string }> = [
     { regex: /\bresult\s*\.\s*output\b/, field: "output" },
     { regex: /\bresult\s*\.\s*parsedOutput\b/, field: "parsedOutput" },
@@ -88,7 +85,7 @@ function checkLine(lineText: string, lineNum: number): LintFinding[] {
     }
   }
 
-  // 文件传状态（readFileSync of STATE）
+ // 文件传状态（readFileSync of STATE）
   if (/readFileSync\(.*STATE.*\)|readFileSync\(.*state.*\.json/i.test(lineText)) {
     results.push({
       severity: "warning",
@@ -98,7 +95,7 @@ function checkLine(lineText: string, lineNum: number): LintFinding[] {
     });
   }
 
-  // unlinkSync 清理状态
+ // unlinkSync 清理状态
   if (/unlinkSync.*state/i.test(lineText)) {
     results.push({
       severity: "warning",
@@ -112,15 +109,15 @@ function checkLine(lineText: string, lineNum: number): LintFinding[] {
 }
 
 /**
- * 找出 source 中所有 agent() 调用跨度，检查错误的选项 key。
+ * 找出 source 中所有 agent 调用跨度，检查错误的选项 key。
  *
- * agent() 调用可能跨多行：
- *   agent({
- *     prompt: ...,
- *     outputSchema,    ← error: 应为 schema
- *   })
+ * agent 调用可能跨多行：
+ * agent({
+ * prompt: ...,
+ * outputSchema, ← error: 应为 schema
+ * })
  *
- * 定位 agent() 调用边界，检查 outputSchema 是否作为 key（非 value 如 `schema: outputSchema`）。
+ * 定位 agent 调用边界，检查 outputSchema 是否作为 key（非 value 如 `schema: outputSchema`）。
  */
 function checkAgentCalls(source: string): LintFinding[] {
   const findings: LintFinding[] = [];
@@ -134,24 +131,24 @@ function checkAgentCalls(source: string): LintFinding[] {
     const line = lines[i];
     const trimmed = line.trim();
 
-    // 跳过注释
+ // 跳过注释
     if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) {
       continue;
     }
 
-    // 检测 agent() 调用开始
+ // 检测 agent 调用开始
     if (!inAgentCall && /\bagent\s*\(/.test(line)) {
       inAgentCall = true;
       depth = 0;
       agentStartLine = i;
-      // 从 agent( 开始计括号
+ // 从 agent( 开始计括号
       const afterAgent = line.replace(/^.*?\bagent\s*\(/, "(");
       for (const ch of afterAgent) {
         if (ch === "(" || ch === "{" || ch === "[") depth++;
         if (ch === ")" || ch === "}" || ch === "]") depth--;
       }
       if (depth <= 0) {
-        // 单行 agent() 调用
+ // 单行 agent 调用
         checkAgentCallOptions(lines, agentStartLine, i, findings);
         inAgentCall = false;
       }
@@ -174,13 +171,13 @@ function checkAgentCalls(source: string): LintFinding[] {
 }
 
 /**
- * 检查 agent() 调用内的错误选项 key。
+ * 检查 agent 调用内的错误选项 key。
  * 只标记 outputSchema 作为 KEY（属性名）使用的情况，不标记作为 VALUE。
  *
- * Error:   { outputSchema }          ← 简写属性（outputSchema 是 key）
- * Error:   { outputSchema: ... }     ← 显式 key
- * OK:      { schema: outputSchema }  ← outputSchema 是 value，`schema` 是 key
- * OK:      const outputSchema = {}   ← 变量声明（在 agent 调用外）
+ * Error: { outputSchema } ← 简写属性（outputSchema 是 key）
+ * Error: { outputSchema: ... } ← 显式 key
+ * OK: { schema: outputSchema } ← outputSchema 是 value，`schema` 是 key
+ * OK: const outputSchema = {} ← 变量声明（在 agent 调用外）
  */
 function checkAgentCallOptions(
   lines: string[],
@@ -191,15 +188,15 @@ function checkAgentCallOptions(
   for (let i = startLine; i <= endLine; i++) {
     const line = lines[i];
 
-    // 跳过变量声明（const/let/var outputSchema = ...）
+ // 跳过变量声明（const/let/var outputSchema = ...）
     if (/\b(?:const|let|var)\s+outputSchema\b/.test(line)) {
       continue;
     }
 
-    // 匹配：outputSchema 作为对象 key（简写或显式）
+ // 匹配：outputSchema 作为对象 key（简写或显式）
     if (/\boutputSchema\s*[,\}]/.test(line) || /\boutputSchema\s*:/.test(line)) {
-      // 排除：outputSchema 作为 value（在另一个 key 的冒号后）
-      // e.g. "schema: outputSchema," — outputSchema 前是冒号
+ // 排除：outputSchema 作为 value（在另一个 key 的冒号后）
+ // e.g. "schema: outputSchema," — outputSchema 前是冒号
       const beforeOutput = line.substring(0, line.indexOf("outputSchema"));
       if (/:\s*$/.test(beforeOutput)) {
         continue; // outputSchema 是 value，不是 key
@@ -225,18 +222,18 @@ export function lintScript(source: string): LintResult {
   const lines = source.split("\n");
   const findings: LintFinding[] = [];
 
-  // 入口检查（必须有 agent/parallel/pipeline 之一）
+ // 入口检查（必须有 agent/parallel/pipeline 之一）
   findings.push(...checkEntryPoint(source));
 
-  // 逐行检查（result.output、文件传状态等）
+ // 逐行检查（result.output、文件传状态等）
   for (let i = 0; i < lines.length; i++) {
     findings.push(...checkLine(lines[i], i + 1));
   }
 
-  // agent() 调用上下文检查（outputSchema 作为 key）
+ // agent 调用上下文检查（outputSchema 作为 key）
   findings.push(...checkAgentCalls(source));
 
-  // 按行号排序，稳定输出
+ // 按行号排序，稳定输出
   findings.sort((a, b) => a.line - b.line);
 
   return {

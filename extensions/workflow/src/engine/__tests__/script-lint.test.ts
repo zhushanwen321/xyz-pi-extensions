@@ -1,8 +1,8 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/engine/__tests__/script-lint.test.ts
 //
-// T17：lintScript 从 infra/script-lint.ts 迁入 engine/script-lint.ts。
-// 本测试覆盖迁入后的 lintScript，并验证 WorkflowScript.validate() 的回填委托。
+// lintScript 从 infra/script-lint.ts 迁入 engine/script-lint.ts。
+// 本测试覆盖迁入后的 lintScript，并验证 WorkflowScript.validate 的回填委托。
 
 import { describe, expect, it } from "vitest";
 
@@ -153,7 +153,7 @@ await agent({
   });
 });
 
-// ── entry-point 检查（T17 新增，从 WorkflowScript.validate 占位迁入） ─────
+// ── entry-point 检查 ─────
 
 describe("lintScript entry-point check", () => {
   it("含 agent() → 无 entry-point error", () => {
@@ -184,7 +184,7 @@ describe("lintScript entry-point check", () => {
   });
 
   it("findings 按行号排序", () => {
-    // line 2: result.output (error)，line 0: 无 entry point（error）
+ // line 2: result.output (error)，line 0: 无 entry point（error）
     const source = `
 const x = result.output;`;
     const r = lintScript(source);

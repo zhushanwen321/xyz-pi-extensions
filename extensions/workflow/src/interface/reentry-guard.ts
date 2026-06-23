@@ -2,7 +2,7 @@
  * reentry-guard.ts — Shared reentry guard helpers for workflow tools.
  *
  * Keeps the "check → set → try/finally release" pattern in one place
- * without wrapping execute() in a higher-order function (which would
+ * without wrapping execute in a higher-order function (which would
  * complicate inferred union return types).
  */
 

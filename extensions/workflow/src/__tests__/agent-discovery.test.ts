@@ -15,9 +15,9 @@
  * - TC-1-08: 空目录不报错
  * - TC-1-09: 不存在的 cwd 不报错
  * - TC-1-10: scoped npm 包发现
- * - TC-1-11: resolve() 对不存在的 agent 返回 undefined
- * - TC-1-12: list() 返回所有 agent
- * - TC-1-13: discoverAll() 清除旧缓存
+ * - TC-1-11: resolve 对不存在的 agent 返回 undefined
+ * - TC-1-12: list 返回所有 agent
+ * - TC-1-13: discoverAll 清除旧缓存
  */
 
 import * as fs from "node:fs";
@@ -37,7 +37,7 @@ function createTempFixture(structure: Record<string, string>): {
   cleanup: () => void;
 } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-disc-test-"));
-  // Isolated home directory to prevent real user agents from interfering
+ // Isolated home directory to prevent real user agents from interfering
   const homeDir = path.join(root, "__home__");
   fs.mkdirSync(homeDir, { recursive: true });
   for (const [relPath, content] of Object.entries(structure)) {
@@ -84,7 +84,7 @@ describe("AgentRegistry", () => {
     fixture = undefined;
   });
 
-  // ── TC-1-01: Project agent 发现 ──
+ // ── TC-1-01: Project agent 发现 ──
 
   it("TC-1-01: discovers project agent from .pi/agents/", () => {
     fixture = createTempFixture({
@@ -103,7 +103,7 @@ describe("AgentRegistry", () => {
     expect(agent!.source).toBe("project");
   });
 
-  // ── TC-1-02: npm 包 agent 发现 ──
+ // ── TC-1-02: npm 包 agent 发现 ──
 
   it("TC-1-02: discovers agent from npm package agents/ directory", () => {
     fixture = createTempFixture({
@@ -120,7 +120,7 @@ describe("AgentRegistry", () => {
     expect(agent!.source).toBe("package");
   });
 
-  // ── TC-1-03: 优先级覆盖 ──
+ // ── TC-1-03: 优先级覆盖 ──
 
   it("TC-1-03: project agent overrides package agent with same name", () => {
     const projectAgent = `---
@@ -147,7 +147,7 @@ Project version of review-taste.
     expect(agent!.systemPrompt).toContain("Project version");
   });
 
-  // ── TC-1-04: _ 开头文件跳过 ──
+ // ── TC-1-04: _ 开头文件跳过 ──
 
   it("TC-1-04: skips files starting with underscore", () => {
     fixture = createTempFixture({
@@ -160,11 +160,11 @@ Project version of review-taste.
 
     expect(registry.resolve("_draft")).toBeUndefined();
     expect(registry.resolve("real-agent")).toBeUndefined();
-    // Only real agent with frontmatter name is found
+ // Only real agent with frontmatter name is found
     expect(registry.resolve("review-taste")).toBeDefined();
   });
 
-  // ── TC-1-05: .chain.md 跳过 ──
+ // ── TC-1-05: .chain.md 跳过 ──
 
   it("TC-1-05: skips .chain.md files", () => {
     fixture = createTempFixture({
@@ -174,11 +174,11 @@ Project version of review-taste.
     const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
 
-    // review.chain.md should be skipped; "review.chain" should NOT be found
+ // review.chain.md should be skipped; "review.chain" should NOT be found
     expect(registry.resolve("review.chain")).toBeUndefined();
   });
 
-  // ── TC-1-06: 无 frontmatter → 文件名作 name ──
+ // ── TC-1-06: 无 frontmatter → 文件名作 name ──
 
   it("TC-1-06: uses filename as name when no frontmatter", () => {
     fixture = createTempFixture({
@@ -196,7 +196,7 @@ Project version of review-taste.
     expect(agent!.systemPrompt).toBe(AGENT_BARE.trim());
   });
 
-  // ── TC-1-07: Frontmatter 解析 ──
+ // ── TC-1-07: Frontmatter 解析 ──
 
   it("TC-1-07: parses name, model, description from frontmatter", () => {
     const content = `---
@@ -223,11 +223,11 @@ System prompt body here.
     expect(agent!.systemPrompt).toBe("System prompt body here.");
   });
 
-  // ── TC-1-08: 空目录不报错 ──
+ // ── TC-1-08: 空目录不报错 ──
 
   it("TC-1-08: handles empty directories gracefully", () => {
     fixture = createTempFixture({
-      // Create dirs but no .md files
+ // Create dirs but no .md files
       ".pi/agents/.gitkeep": "",
     });
 
@@ -236,10 +236,10 @@ System prompt body here.
     expect(registry.list()).toHaveLength(0);
   });
 
-  // ── TC-1-09: 不存在的 cwd 不报错 ──
+ // ── TC-1-09: 不存在的 cwd 不报错 ──
 
   it("TC-1-09: handles non-existent cwd gracefully", () => {
-    // Use an isolated homeDir so real user agents don't appear
+ // Use an isolated homeDir so real user agents don't appear
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "agent-disc-home-"));
     try {
       const registry = new AgentRegistry("/nonexistent/path/that/does/not/exist", tempHome);
@@ -250,7 +250,7 @@ System prompt body here.
     }
   });
 
-  // ── TC-1-10: scoped npm 包 ──
+ // ── TC-1-10: scoped npm 包 ──
 
   it("TC-1-10: discovers agent from scoped npm package", () => {
     fixture = createTempFixture({
@@ -271,7 +271,7 @@ Scoped package agent.
     expect(agent!.source).toBe("package");
   });
 
-  // ── TC-1-11: resolve() 不存在 → undefined ──
+ // ── TC-1-11: resolve 不存在 → undefined ──
 
   it("TC-1-11: resolve() returns undefined for non-existent agent", () => {
     fixture = createTempFixture({});
@@ -282,7 +282,7 @@ Scoped package agent.
     expect(registry.resolve("nonexistent")).toBeUndefined();
   });
 
-  // ── TC-1-12: list() 返回所有 ──
+ // ── TC-1-12: list 返回所有 ──
 
   it("TC-1-12: list() returns all discovered agents", () => {
     fixture = createTempFixture({
@@ -305,7 +305,7 @@ Beta agent.
     expect(names).toContain("beta-agent");
   });
 
-  // ── TC-1-13: discoverAll() 清除旧缓存 ──
+ // ── TC-1-13: discoverAll 清除旧缓存 ──
 
   it("TC-1-13: discoverAll() clears stale cache before re-scan", () => {
     fixture = createTempFixture({
@@ -316,20 +316,20 @@ Beta agent.
     registry.discoverAll();
     expect(registry.resolve("review-taste")).toBeDefined();
 
-    // Delete the file and re-discover
+ // Delete the file and re-discover
     fs.unlinkSync(path.join(fixture.root, ".pi/agents/alpha.md"));
     registry.discoverAll();
 
     expect(registry.resolve("review-taste")).toBeUndefined();
   });
 
-  // ── TC-1-14: user 级 agent 发现 ──
+ // ── TC-1-14: user 级 agent 发现 ──
 
   it("TC-1-14: discovers user-level agents from ~/.pi/agent/agents/", () => {
-    // We can't write to real home dir, so test via the scanDir method indirectly
-    // by creating a temp home-like structure and verifying it would work.
-    // Since we can't override os.homedir() easily, this test uses project paths
-    // which are functionally equivalent.
+ // We can't write to real home dir, so test via the scanDir method indirectly
+ // by creating a temp home-like structure and verifying it would work.
+ // Since we can't override os.homedir easily, this test uses project paths
+ // which are functionally equivalent.
     fixture = createTempFixture({
       ".pi/agents/user-like.md": `---
 name: user-like
@@ -350,7 +350,7 @@ User-level system prompt.
     expect(agent!.model).toBe("glm-5.1");
   });
 
-  // ── TC-1-15: local extension agent 发现 ──
+ // ── TC-1-15: local extension agent 发现 ──
 
   it("TC-1-15: discovers agents from extensions/*/agents/", () => {
     fixture = createTempFixture({
@@ -371,7 +371,7 @@ Extension agent.
     expect(agent!.systemPrompt).toContain("Extension agent");
   });
 
-  // ── TC-1-16: 损坏的 frontmatter ──
+ // ── TC-1-16: 损坏的 frontmatter ──
 
   it("TC-1-16: handles malformed frontmatter gracefully", () => {
     const content = `---
@@ -389,13 +389,13 @@ Still usable as system prompt.
     const registry = new AgentRegistry(fixture.root, fixture.homeDir);
     registry.discoverAll();
 
-    // Should still parse (our simple regex parser is lenient)
+ // Should still parse (our simple regex parser is lenient)
     const agent = registry.resolve("broken");
     expect(agent).toBeDefined();
     expect(agent!.name).toBe("broken");
   });
 
-  // ── TC-1-17: frontmatter 无闭合 --- ──
+ // ── TC-1-17: frontmatter 无闭合 --- ──
 
   it("TC-1-17: handles unclosed frontmarker by treating entire file as prompt", () => {
     const content = `---
@@ -414,7 +414,7 @@ This is all treated as content.
 
     const agent = registry.resolve("unclosed");
     expect(agent).toBeDefined();
-    // Falls back to entire content as systemPrompt, filename as name
+ // Falls back to entire content as systemPrompt, filename as name
     expect(agent!.systemPrompt).toContain("---");
   });
 });

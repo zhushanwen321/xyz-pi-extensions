@@ -1,15 +1,15 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/engine/__tests__/node-ops.test.ts
 //
-// T20：node-ops free functions 测试。
+// node-ops free functions 测试。
 // 覆盖：
-//   1. retryNode 前置 running（G6-001）
-//   2. retryNode 重置 call（status=pending, attempts=0, result=undefined）
-//   3. retryNode 重跑 executeAgentCall（不 replaceRuntime）
-//   4. retryNode call 不存在抛错
-//   5. skipNode 标记 done + 占位 result
-//   6. skipNode 回发 agent-result（worker 活着时）
-//   7. skipNode worker terminate 时不抛错（P1-8）
+// 1. retryNode 前置 running（G6-001）
+// 2. retryNode 重置 call（status=pending, attempts=0, result=undefined）
+// 3. retryNode 重跑 executeAgentCall（不 replaceRuntime）
+// 4. retryNode call 不存在抛错
+// 5. skipNode 标记 done + 占位 result
+// 6. skipNode 回发 agent-result（worker 活着时）
+// 7. skipNode worker terminate 时不抛错（P1-8）
 
 /* eslint-disable taste/no-unsafe-cast */
 
@@ -103,7 +103,7 @@ function makeFailedCall(run: WorkflowRun, callId: number): AgentCall {
   };
   run.state.trace.append(node);
   const call = new AgentCall(callId, { prompt: "work" }, node);
-  // 进入 done failed 状态
+ // 进入 done failed 状态
   call.markRunning();
   call.markDone({ content: "", error: "boom", toolCalls: [] });
   run.state.calls.set(callId, call);
@@ -143,8 +143,8 @@ describe("retryNode", () => {
     const deps = makeDeps(run);
     await retryNode(run, 0, deps);
 
-    // executeAgentCall 完成后 call 再次 done，但 attempts 应已重置过
-    //（markRunning 重新递增，最终 attempts=1，因为 retryNode 重置 attempts=0 后 executeAgentCall markRunning +1）
+ // executeAgentCall 完成后 call 再次 done，但 attempts 应已重置过
+ //（markRunning 重新递增，最终 attempts=1，因为 retryNode 重置 attempts=0 后 executeAgentCall markRunning +1）
     expect(call.status).toBe("done");
     expect(call.attempts).toBe(1);
     expect(call.result?.error).toBeUndefined();
@@ -171,7 +171,7 @@ describe("retryNode", () => {
 
     await retryNode(run, 0, deps);
 
-    // runtime 不变（D.5: retryNode 不重启 worker）
+ // runtime 不变（D.5: retryNode 不重启 worker）
     expect(run.runtime).toBe(originalRuntime);
     expect(deps.workerHost.start).not.toHaveBeenCalled();
   });
@@ -263,7 +263,7 @@ describe("skipNode", () => {
     const deps = makeDeps(run);
 
     await expect(skipNode(run, 0, deps)).resolves.toBeUndefined();
-    // call 仍被标记
+ // call 仍被标记
     const call = run.state.calls.get(0)!;
     expect(call.status).toBe("done");
     expect(call.result?.content).toBe("");
@@ -295,8 +295,8 @@ describe("skipNode", () => {
 
     await skipNode(run, 42, deps);
 
-    // trace 节点被 update（若不存在 no-op，但 completedAt 仍尝试设）
-    // calls Map 不新增（call 不存在时只 update trace）
+ // trace 节点被 update（若不存在 no-op，但 completedAt 仍尝试设）
+ // calls Map 不新增（call 不存在时只 update trace）
     expect(run.state.calls.has(42)).toBe(false);
   });
 });

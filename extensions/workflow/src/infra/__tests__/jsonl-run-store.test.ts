@@ -57,7 +57,7 @@ function mockPi(): ExtensionAPI & {
   _entries: Array<{ type: string; data: unknown }>;
 } {
   const entries: Array<{ type: string; data: unknown }> = [];
-  // eslint-disable-next-line taste/no-unsafe-cast
+ // eslint-disable-next-line taste/no-unsafe-cast
   return {
     appendEntry: vi.fn((type: string, data: unknown) => {
       entries.push({ type, data });
@@ -68,7 +68,7 @@ function mockPi(): ExtensionAPI & {
 
 /** Build a mock ctx whose sessionManager.getEntries returns given entries. */
 function mockCtx(entries: Array<{ type: string; customType?: string; data?: unknown }>): ExtensionContext {
-  // eslint-disable-next-line taste/no-unsafe-cast
+ // eslint-disable-next-line taste/no-unsafe-cast
   return {
     sessionManager: {
       getEntries: () => entries,
@@ -82,7 +82,7 @@ function mockCtx(entries: Array<{ type: string; customType?: string; data?: unkn
 // length exceeds default 300-line function cap intentionally.
 // eslint-disable-next-line max-lines-per-function
 describe("JsonlRunStore", () => {
-  // ── save ──────────────────────────────────────────────────
+ // ── save ──────────────────────────────────────────────────
 
   describe("save", () => {
     it("writes a single-line JSON snapshot to <sessionDir>/workflow-state/<runId>.jsonl", async () => {
@@ -123,7 +123,7 @@ describe("JsonlRunStore", () => {
       const run = makePausedRun();
       await store.save(run);
 
-      // Modify + re-save
+ // Modify + re-save
       run.meta.pausedAt = "2026-01-02T00:00:00.000Z";
       await store.save(run);
 
@@ -138,13 +138,13 @@ describe("JsonlRunStore", () => {
     it("works without pi (no pointer entries, just file)", async () => {
       const store = new JsonlRunStore({ sessionDir: tmpDir });
       await store.save(makePausedRun());
-      // No throw — pi is optional
+ // No throw — pi is optional
       const filePath = path.join(tmpDir, "workflow-state", "run-1.jsonl");
       expect(fs.existsSync(filePath)).toBe(true);
     });
   });
 
-  // ── loadAll — round trip ──────────────────────────────────
+ // ── loadAll — round trip ──────────────────────────────────
 
   describe("loadAll round trip", () => {
     it("returns empty when ctx is undefined", async () => {
@@ -159,7 +159,7 @@ describe("JsonlRunStore", () => {
       const original = makePausedRun("run-rt");
       await store.save(original);
 
-      // Build a fresh store with ctx that returns the pointer entries pi captured
+ // Build a fresh store with ctx that returns the pointer entries pi captured
       const store2 = new JsonlRunStore({
         sessionDir: tmpDir,
         ctx: mockCtx(pi._entries.map((e) => ({
@@ -307,18 +307,18 @@ describe("JsonlRunStore", () => {
       expect(loaded!.runtime).toBeUndefined();
     });
 
-    // ── D-4: reconstruct 不崩溃于 running 快照（I1 跳过） ───
+ // ── D-4: reconstruct 不崩溃于 running 快照（I1 跳过） ───
 
     it("D-4: reconstructs a running run WITHOUT throwing I1 (kill-9 recovery path)", async () => {
-      // 模拟 kill-9 崩溃前持久化的 running run：
-      // 1. 构造 paused run（constructor 校验 I1 通过）
-      // 2. 用 assignRuntime 进入 running（I1 保持：runtime!==undefined && status==="running"）
-      // 3. 直接序列化（绕过 store.save，因为 save 会触发额外状态变化）——模拟崩溃前快照
-      // 4. loadAll 重水合——必须不抛 I1（reconstruct 跳过校验），D-4 循环才能 catch 到
+ // 模拟 kill-9 崩溃前持久化的 running run：
+ // 1. 构造 paused run（constructor 校验 I1 通过）
+ // 2. 用 assignRuntime 进入 running（I1 保持：runtime!==undefined && status==="running"）
+ // 3. 直接序列化（绕过 store.save，因为 save 会触发额外状态变化）——模拟崩溃前快照
+ // 4. loadAll 重水合——必须不抛 I1（reconstruct 跳过校验），D-4 循环才能 catch 到
       const pi = mockPi();
       const store = new JsonlRunStore({ sessionDir: tmpDir, pi });
 
-      // 构造 running run via assignRuntime
+ // 构造 running run via assignRuntime
       const pausedRun = makePausedRun("kill9-run");
       const fakeRuntime = {
         worker: { postMessage() {}, terminate() {}, isCurrent: true, on() {} },
@@ -327,14 +327,14 @@ describe("JsonlRunStore", () => {
         release() {},
         isReleased: false,
       };
-      // eslint-disable-next-line taste/no-unsafe-cast
+ // eslint-disable-next-line taste/no-unsafe-cast
       pausedRun.assignRuntime(fakeRuntime as any);
       expect(pausedRun.state.status).toBe("running");
 
-      // 持久化（snapshot 会含 status:"running"，runtime 不持久化）
+ // 持久化（snapshot 会含 status:"running"，runtime 不持久化）
       await store.save(pausedRun);
 
-      // 重水合——D-4 路径的关键：reconstruct 不抛 I1
+ // 重水合——D-4 路径的关键：reconstruct 不抛 I1
       const store2 = new JsonlRunStore({
         sessionDir: tmpDir,
         ctx: mockCtx(pi._entries.map((e) => ({
@@ -347,11 +347,11 @@ describe("JsonlRunStore", () => {
       expect(loaded.length).toBe(1);
       const [reconstructed] = loaded;
       expect(reconstructed!.runId).toBe("kill9-run");
-      // 关键断言：重水合后的 run status 仍是 running（worker 缺失但 I1 跳过校验）
+ // 关键断言：重水合后的 run status 仍是 running（worker 缺失但 I1 跳过校验）
       expect(reconstructed!.state.status).toBe("running");
       expect(reconstructed!.runtime).toBeUndefined();
 
-      // D-4 kill-9 恢复：调用方把 running → done,failed（恢复 I1）
+ // D-4 kill-9 恢复：调用方把 running → done,failed（恢复 I1）
       reconstructed!.state.error = "Process killed (kill-9 or crash recovery)";
       reconstructed!.transition("done", "failed");
       expect(reconstructed!.state.status).toBe("done");
@@ -359,18 +359,18 @@ describe("JsonlRunStore", () => {
     });
   });
 
-  // ── D-5: old format returns empty ─────────────────────────
+ // ── D-5: old format returns empty ─────────────────────────
 
   describe("D-5 — old format / version mismatch", () => {
     it("skips snapshots with wrong version (old session)", async () => {
-      // Write a fake "old format" file with v="legacy-v0"
+ // Write a fake "old format" file with v="legacy-v0"
       const stateDir = path.join(tmpDir, "workflow-state");
       fs.mkdirSync(stateDir, { recursive: true });
       const filePath = path.join(stateDir, "run-old.jsonl");
       fs.writeFileSync(filePath, JSON.stringify({
         v: "legacy-v0",
         runId: "run-old",
-        // ...old shape
+ // ...old shape
       }) + "\n", "utf8");
 
       const store = new JsonlRunStore({
@@ -382,7 +382,7 @@ describe("JsonlRunStore", () => {
         }]),
       });
       const runs = await store.loadAll();
-      // D-5: old format skipped, not reconstructed
+ // D-5: old format skipped, not reconstructed
       expect(runs.length).toBe(0);
     });
 
@@ -391,7 +391,7 @@ describe("JsonlRunStore", () => {
       fs.mkdirSync(stateDir, { recursive: true });
       const filePath = path.join(stateDir, "run-noversion.jsonl");
       fs.writeFileSync(filePath, JSON.stringify({
-        // No v field at all
+ // No v field at all
         runId: "run-noversion",
         status: "running",
       }) + "\n", "utf8");
@@ -431,7 +431,7 @@ describe("JsonlRunStore", () => {
       const store = new JsonlRunStore({ sessionDir: tmpDir, pi });
       await store.save(makePausedRun("valid-run"));
 
-      // Add an old-format file manually
+ // Add an old-format file manually
       const stateDir = path.join(tmpDir, "workflow-state");
       const oldFilePath = path.join(stateDir, "old-run.jsonl");
       fs.writeFileSync(oldFilePath, JSON.stringify({ v: "legacy-v0", runId: "old-run" }) + "\n", "utf8");
@@ -447,7 +447,7 @@ describe("JsonlRunStore", () => {
     });
   });
 
-  // ── Multiple runs ─────────────────────────────────────────
+ // ── Multiple runs ─────────────────────────────────────────
 
   describe("multiple runs", () => {
     it("reconstructs multiple saved runs", async () => {
@@ -472,7 +472,7 @@ describe("JsonlRunStore", () => {
     });
   });
 
-  // ── Non-custom entries ignored ───────────────────────────
+ // ── Non-custom entries ignored ───────────────────────────
 
   describe("filtering", () => {
     it("ignores non-custom and non-workflow-state-link entries", async () => {
@@ -483,11 +483,11 @@ describe("JsonlRunStore", () => {
       const store2 = new JsonlRunStore({
         sessionDir: tmpDir,
         ctx: mockCtx([
-          // noise entries
+ // noise entries
           { type: "user-message", data: {} },
           { type: "assistant-message", data: {} },
           { type: "custom", customType: "some-other-type", data: {} },
-          // valid pointer
+ // valid pointer
           ...pi._entries.map((e) => ({ type: "custom", customType: e.type, data: e.data })),
         ]),
       });

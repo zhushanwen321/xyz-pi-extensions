@@ -1,7 +1,7 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/infra/__tests__/concurrency-gate.test.ts
 // Structural field-probe casts (as unknown as { field?: T }) verify legacy
-// fields are absent from T1 AgentResult — intentional double-casts for tests.
+// fields are absent from AgentResult — intentional double-casts for tests.
 /* eslint-disable taste/no-unsafe-cast */
 
 import { type ChildProcess, spawn } from "node:child_process";
@@ -91,7 +91,7 @@ describe("ConcurrencyGate", () => {
     mockSpawn.mockReset();
   });
 
-  // ── Constructor & constants ────────────────────────────────
+ // ── Constructor & constants ────────────────────────────────
 
   describe("constructor + defaults (D-13)", () => {
     it("DEFAULT_CONCURRENCY constant is 4", () => {
@@ -117,10 +117,10 @@ describe("ConcurrencyGate", () => {
     });
   });
 
-  // ── enqueue — success path ─────────────────────────────────
+ // ── enqueue — success path ─────────────────────────────────
 
   describe("enqueue — success path", () => {
-    it("resolves with content and usage on happy path (T1 unified AgentResult)", async () => {
+    it("resolves with content and usage on happy path (unified AgentResult)", async () => {
       const gate = new ConcurrencyGate(2);
       const proc = createMockProcess();
       mockSpawn.mockReturnValue(asChildProcess(proc));
@@ -145,9 +145,9 @@ describe("ConcurrencyGate", () => {
       expect(result.usage!.cost).toBe(0.05);
       expect(result.usage!.turns).toBe(1);
       expect(result.durationMs).toBeGreaterThanOrEqual(0);
-      // T1 AgentResult has no `success` boolean (removed in unification)
+ // AgentResult has no `success` boolean (removed in unification)
       expect((result as unknown as { success?: boolean }).success).toBeUndefined();
-      // T1 AgentResult has no legacy `output` field
+ // AgentResult has no `output` field
       expect((result as unknown as { output?: string }).output).toBeUndefined();
     });
 
@@ -237,13 +237,13 @@ describe("ConcurrencyGate", () => {
       proc.emit("close", 0);
 
       const result = await resultPromise;
-      // FR-1.4: hasToolCall=true + exit=0 + no SO → fail (blind-spot fix)
+ // FR-1.4: hasToolCall=true + exit=0 + no SO → fail (blind-spot fix)
       expect(result.error).toContain("structured-output");
       expect(result.parsedOutput).toBeUndefined();
     });
   });
 
-  // ── enqueue — error path ───────────────────────────────────
+ // ── enqueue — error path ───────────────────────────────────
 
   describe("enqueue — error path", () => {
     it("non-zero exit code populates error field", async () => {
@@ -276,12 +276,12 @@ describe("ConcurrencyGate", () => {
         throw new Error("always-fail-spawn");
       });
 
-      // Never throws despite internal spawn error
+ // Never throws despite internal spawn error
       await expect(gate.enqueue({ prompt: "x" })).resolves.toHaveProperty("error");
     });
   });
 
-  // ── Concurrency — FIFO ─────────────────────────────────────
+ // ── Concurrency — FIFO ─────────────────────────────────────
 
   describe("FIFO queue under concurrency limit", () => {
     it("dispatches in arrival order when slot frees up", async () => {
@@ -294,7 +294,7 @@ describe("ConcurrencyGate", () => {
       const p1 = gate.enqueue({ prompt: "first" });
       const p2 = gate.enqueue({ prompt: "second" });
 
-      // Only first dispatches (limit 1)
+ // Only first dispatches (limit 1)
       expect(gate.activeCount).toBe(1);
       expect(gate.queueLength).toBe(1);
 
@@ -302,7 +302,7 @@ describe("ConcurrencyGate", () => {
       const r1 = await p1;
       expect(r1.content).toBe("first");
 
-      // After first completes, second dispatches
+ // After first completes, second dispatches
       await flush();
       expect(gate.activeCount).toBe(1);
       expect(gate.queueLength).toBe(0);
@@ -331,7 +331,7 @@ describe("ConcurrencyGate", () => {
       completeSuccess(proc1, "a");
       await p1;
       await flush();
-      // After first frees, third dispatches
+ // After first frees, third dispatches
       expect(gate.activeCount).toBe(2);
       expect(gate.queueLength).toBe(0);
 
@@ -342,7 +342,7 @@ describe("ConcurrencyGate", () => {
     });
   });
 
-  // ── Abort propagation ──────────────────────────────────────
+ // ── Abort propagation ──────────────────────────────────────
 
   describe("abort propagation", () => {
     it("resolves with error when signal already aborted before start", async () => {
@@ -362,7 +362,7 @@ describe("ConcurrencyGate", () => {
       mockSpawn.mockReturnValueOnce(asChildProcess(blockingProc));
       const blockingPromise = gate.enqueue({ prompt: "block" });
 
-      // Queue second
+ // Queue second
       const ac = new AbortController();
       const queuedPromise = gate.enqueue({ prompt: "queued" }, ac.signal);
 
@@ -373,7 +373,7 @@ describe("ConcurrencyGate", () => {
       expect(r.error).toContain("aborted while queued");
       expect(gate.queueLength).toBe(0);
 
-      // Cleanup blocker
+ // Cleanup blocker
       completeSuccess(blockingProc, "block");
       await blockingPromise;
     });
@@ -389,10 +389,10 @@ describe("ConcurrencyGate", () => {
       expect(gate.activeCount).toBe(1);
 
       ac.abort();
-      // runPiProcess wires abort -> proc.kill("SIGKILL")
+ // runPiProcess wires abort -> proc.kill("SIGKILL")
       expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
 
-      // close after kill settles the result
+ // close after kill settles the result
       proc.emit("close", 1);
       const r = await p;
       expect(r.error).toBeDefined();
@@ -404,7 +404,7 @@ describe("ConcurrencyGate", () => {
       mockSpawn.mockReturnValue(asChildProcess(proc));
 
       const p = gate.enqueue({ prompt: "x", timeoutMs: 5 });
-      // Wait beyond timeoutMs
+ // Wait beyond timeoutMs
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
 
@@ -414,7 +414,7 @@ describe("ConcurrencyGate", () => {
     });
   });
 
-  // ── Arg / env wiring ───────────────────────────────────────
+ // ── Arg / env wiring ───────────────────────────────────────
 
   describe("arg & env wiring", () => {
     it("injects PI_WORKFLOW_SCHEMA env when schemaEnv provided", async () => {
@@ -451,12 +451,12 @@ describe("ConcurrencyGate", () => {
     });
   });
 
-  // ── D-12: budget removal ───────────────────────────────────
+ // ── D-12: budget removal ───────────────────────────────────
 
   describe("soft-limit / budget removed (D-12)", () => {
     it("has no setBudget / onSoftLimitReached / totalCallCount (moved to Budget)", () => {
       const gate = new ConcurrencyGate();
-      // soft-limit handling removed entirely
+ // soft-limit handling removed entirely
       expect((gate as unknown as { setBudget?: unknown }).setBudget).toBeUndefined();
       expect(
         (gate as unknown as { maybeEmitSoftWarning?: unknown }).maybeEmitSoftWarning,
@@ -467,7 +467,7 @@ describe("ConcurrencyGate", () => {
     });
 
     it("does not import SOFT_MAX_AGENTS_WARNING constant (moved to Budget)", async () => {
-      // SOFT_MAX_AGENTS_WARNING no longer exported from this module
+ // SOFT_MAX_AGENTS_WARNING no longer exported from this module
       const mod = await import("../concurrency-gate.js");
       expect((mod as unknown as { SOFT_MAX_AGENTS_WARNING?: unknown }).SOFT_MAX_AGENTS_WARNING)
         .toBeUndefined();
@@ -518,18 +518,18 @@ describe("ConcurrencyGate.withSlot (T-4)", () => {
     });
 
     const p1 = gate.withSlot(fn1);
-    // p2 进入排队（maxConcurrency=1，fn1 占槽）
+ // p2 进入排队（maxConcurrency=1，fn1 占槽）
     const p2 = gate.withSlot(fn2);
 
-    // fn2 尚未执行（fn1 占槽）
+ // fn2 尚未执行（fn1 占槽）
     expect(fn2).not.toHaveBeenCalled();
 
     resolveFirst();
-    // 语义就是全 resolve（串行链必须都成功）——非独立数据源，禁 allSettled 建议
+ // 语义就是全 resolve（串行链必须都成功）——非独立数据源，禁 allSettled 建议
     const [r1, r2] = await Promise.all([p1, p2]); // eslint-disable-line taste/prefer-allsettled
     expect(r1).toBe(1);
     expect(r2).toBe(2);
-    // fn1 完成后 fn2 才开始（串行）
+ // fn1 完成后 fn2 才开始（串行）
     expect(order).toEqual(["fn1-start", "fn1-end", "fn2-start"]);
   });
 
@@ -550,11 +550,11 @@ describe("ConcurrencyGate.withSlot (T-4)", () => {
     const p1 = gate.withSlot(fn1);
     const p2 = gate.withSlot(fn2, controller2.signal);
 
-    // fn2 在排队中——abort
+ // fn2 在排队中——abort
     controller2.abort();
     await expect(p2).rejects.toThrow(/aborted while queued/);
 
-    // 释放 fn1，确认 fn2 没被执行（已从队列移除）
+ // 释放 fn1，确认 fn2 没被执行（已从队列移除）
     resolveFirst();
     await p1;
     expect(fn2).not.toHaveBeenCalled();
@@ -567,12 +567,12 @@ describe("ConcurrencyGate.withSlot (T-4)", () => {
     const makeFn = (n: number) =>
       async (): Promise<number> => {
         order.push(n);
-        // 让出微任务，确保下一个能进入
+ // 让出微任务，确保下一个能进入
         await Promise.resolve();
         return n;
       };
 
-    // FIFO 顺序断言需全部 resolve——非独立数据源，禁 allSettled 建议
+ // FIFO 顺序断言需全部 resolve——非独立数据源，禁 allSettled 建议
     const ps = await Promise.all([ // eslint-disable-line taste/prefer-allsettled
       gate.withSlot(makeFn(1)),
       gate.withSlot(makeFn(2)),
@@ -591,9 +591,9 @@ describe("ConcurrencyGate.withSlot (T-4)", () => {
       return id;
     };
 
-    // 并发提交 3 个，maxConcurrency=1 → 串行
+ // 并发提交 3 个，maxConcurrency=1 → 串行
     const ps = [gate.withSlot(() => fn("a")), gate.withSlot(() => fn("b")), gate.withSlot(() => fn("c"))];
-    // 串行链全部 resolve 才算通过——非独立数据源，禁 allSettled 建议
+ // 串行链全部 resolve 才算通过——非独立数据源，禁 allSettled 建议
     const settled = await Promise.all(ps); // eslint-disable-line taste/prefer-allsettled
     expect(settled).toEqual(["a", "b", "c"]);
     expect(results).toEqual(["a", "b", "c"]);

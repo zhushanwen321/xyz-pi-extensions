@@ -1,25 +1,22 @@
 /**
- * Workflow Extension — tool-workflow（W4-T25）
+ * Workflow Extension — workflow tool（7 actions，FR-5 tool 收口）。
  *
- * 合并旧 tool-workflow.ts + tool-workflow-run.ts 为单 tool，7 actions（FR-5）。
+ * 合并原 tool-workflow.ts + tool-workflow-run.ts 为单 tool。
  *
  * Actions:
- *   - run:         registry.get → requiresConfirmation → RPC 降级确认 → recordApproval → runWorkflow
- *   - status:      列出 runs（deps.runs）
- *   - pause:       调 T21 pauseRun
- *   - resume:      调 T21 resumeRun
- *   - abort:       调 T21 abortRun
- *   - retry-node:  调 T20 retryNode
- *   - skip-node:   调 T20 skipNode
+ * - run: registry.get → requiresConfirmation → RPC 降级确认 → recordApproval → runWorkflow
+ * - status: 列出 runs（deps.runs）
+ * - pause: 调 pauseRun
+ * - resume: 调 resumeRun
+ * - abort: 调 abortRun
+ * - retry-node: 调 retryNode
+ * - skip-node: 调 skipNode
  *
  * **restart 不包含**（D-9 废弃）。
  *
  * 层归属：Interface。依赖 Pi SDK + Engine lifecycle/node-ops/launcher + helpers。
  *
- * 参考：
- *   - domain-models.md §FR-5（tool 收口 4→2）
- *   - 旧 interface/tool-workflow.ts（pause/resume/abort/status）
- *   - 旧 interface/tool-workflow-run.ts（run action）
+ * 参考：domain-models.md §FR-5（tool 收口 4→2）。
  */
 
 import { StringEnum } from "@mariozechner/pi-ai";
@@ -72,7 +69,7 @@ type WorkflowToolParams = Static<typeof WorkflowParams>;
 
 // ── Constants ────────────────────────────────────────────────
 
-/** runId 截断长度（显示用，与旧 RUNID_INDEX_SHORT 一致）。 */
+/** runId 截断长度（显示用）。 */
 const RUNID_SHORT = 8;
 
 // ── Types ────────────────────────────────────────────────────
@@ -87,7 +84,7 @@ interface RunSummary {
   error?: string;
 }
 
-// ── Tool result types (S2: typed details, replaces Record<string, unknown>) ──
+// ── Tool result types ──
 
 /**
  * Discriminated union of `workflow` tool `details` payloads.
@@ -98,11 +95,11 @@ interface RunSummary {
  */
 export type WorkflowToolDetails =
   | { action: "run"; runId: string; status: "running" | "not_found" | "declined"; name: string }
-  | { action: "status"; instances: RunSummary[] }
+  | { action: "status"; runs: RunSummary[] }
   | { action: "pause" | "resume" | "abort"; runId: string; status: string; reason?: string }
   | { action: "retry-node" | "skip-node"; runId: string; callId: number };
 
-/** Result returned by the `workflow` tool's execute(). */
+/** Result returned by the `workflow` tool's execute. */
 export interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
   details: WorkflowToolDetails | undefined;
@@ -114,10 +111,10 @@ export interface ToolResult {
 /**
  * 注册 workflow tool（7 actions）。
  *
- * @param pi              ExtensionAPI
- * @param deps            LauncherDeps（LifecycleDeps + registry）
+ * @param pi ExtensionAPI
+ * @param deps LauncherDeps（LifecycleDeps + registry）
  * @param sessionApprovals 本 session 已批准的脚本名集合（requiresConfirmation 用）
- * @param reentryRef       共享 reentry guard（与 T24 tool 共用）
+ * @param reentryRef 共享 reentry guard（与 workflow-script tool 共用）
  */
 export function registerWorkflowTool(
   pi: ExtensionAPI,
@@ -148,11 +145,11 @@ export function registerWorkflowTool(
       _onUpdate: unknown,
       ctx: ExtensionContext,
     ): Promise<ToolResult> {
-      // P1-2: Honor abort signal up-front
+ // P1-2: Honor abort signal up-front
       if (signal?.aborted) {
         return textResult("Operation aborted before start", true);
       }
-      // P1-6: Reentry guard
+ // P1-6: Reentry guard
       if (!acquireReentryGuard(reentryRef)) {
         return textResult(REENTRY_BUSY_MESSAGE, true);
       }
@@ -220,7 +217,7 @@ async function actionRun(
 
   const script = await deps.registry.get(name);
   if (!script) {
-    // 模糊匹配建议
+ // 模糊匹配建议
     const all = await deps.registry.loadAll();
     const available = all.filter((wf) => wf.available);
     const suggestions = available
@@ -238,7 +235,7 @@ async function actionRun(
     };
   }
 
-  // 确认流程（tmp 或未批准需确认）
+ // 确认流程（tmp 或未批准需确认）
   if (requiresConfirmation(script, sessionApprovals)) {
     if (ctx.hasUI) {
       const ok = await ctx.ui.confirm(
@@ -251,13 +248,13 @@ async function actionRun(
           details: { action: "run", runId: "", status: "declined", name: script.name },
         };
       }
-      // 持久化批准（tmp 不持久化——每次都要确认）
+ // 持久化批准（tmp 不持久化——每次都要确认）
       if (script.source !== "tmp") {
         sessionApprovals.add(script.name);
         await recordApproval(script.name, pi);
       }
     } else {
-      // RPC 降级：sendUserMessage 提示
+ // RPC 降级：sendUserMessage 提示
       pi.sendUserMessage(
         `Confirm to run '${script.name}'? (RPC mode — auto-confirm not available, proceed with caution)`,
         { deliverAs: "steer" },
@@ -265,7 +262,7 @@ async function actionRun(
     }
   }
 
-  // 构建 RunSpec + 启动
+ // 构建 RunSpec + 启动
   const runId = await runWorkflow(
     {
       scriptSource: script.toExecutable(),
@@ -298,7 +295,7 @@ function actionStatus(deps: LauncherDeps): ToolResult {
   if (runs.length === 0) {
     return {
       content: [{ type: "text", text: "No workflows in current session." }],
-      details: { action: "status", instances: [] },
+      details: { action: "status", runs: [] },
     };
   }
   const summaries = runs.map(toRunSummary);
@@ -309,7 +306,7 @@ function actionStatus(deps: LauncherDeps): ToolResult {
   });
   return {
     content: [{ type: "text", text: lines.join("\n") }],
-    details: { action: "status", instances: summaries },
+    details: { action: "status", runs: summaries },
   };
 }
 

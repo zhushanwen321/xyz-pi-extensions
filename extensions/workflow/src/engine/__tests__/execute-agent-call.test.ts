@@ -1,9 +1,9 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/engine/__tests__/execute-agent-call.test.ts
 //
-// T18：executeAgentCall free function 测试。
+// executeAgentCall free function 测试。
 // 覆盖：成功路径 / stale 不重试 / 预算超限不重试 / 3 次退避 / signal abort 不重试 /
-//       D.4 cacheWrite 合并 / markRunning+markDone 状态机 / trace.update。
+// D.4 cacheWrite 合并 / markRunning+markDone 状态机 / trace.update。
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -59,8 +59,8 @@ function makeRunner(results: AgentResult[]): AgentRunner & { calls: number } {
     i++;
     return r;
   });
-  // vi.fn 返回的 Mock 含额外属性，TS 不认直接赋给 AgentRunner.run 方法签名，故断言。
-  // 非 `as unknown as` 双重断言，结构兼容（safe cast）。
+ // vi.fn 返回的 Mock 含额外属性，TS 不认直接赋给 AgentRunner.run 方法签名，故断言。
+ // 非 `as unknown as` 双重断言，结构兼容（safe cast）。
   return {
     run,
     get calls() {
@@ -170,8 +170,8 @@ describe("executeAgentCall 成功路径", () => {
 
     await executeAgentCall(call, runner, budget, controller.signal, trace);
 
-    // D.4: input(100) + cacheWrite(20) 合并 + output(50) + cacheRead(10) + cacheWrite(0)
-    // = 100+20 + 50 + 10 + 0 = 180
+ // D.4: input(100) + cacheWrite(20) 合并 + output(50) + cacheRead(10) + cacheWrite(0)
+ // = 100+20 + 50 + 10 + 0 = 180
     expect(budget.usedTokens).toBe(180);
     expect(budget.usedCost).toBe(0.001);
   });
@@ -188,7 +188,7 @@ describe("executeAgentCall 成功路径", () => {
 
     expect(budget.usedTokens).toBe(0);
     expect(budget.usedCost).toBe(0);
-    // 但 totalCallCount 仍 +1（dispatch 完成即计数）
+ // 但 totalCallCount 仍 +1（dispatch 完成即计数）
     expect(budget.totalCallCount).toBe(1);
   });
 
@@ -253,7 +253,7 @@ describe("executeAgentCall stale-context 不重试", () => {
 describe("executeAgentCall 预算超限不重试", () => {
   it("失败 + 预算超限 → 直接 failed，不重试", async () => {
     const call = makeCall();
-    // maxTokens=50，单次 usage input=100 已超
+ // maxTokens=50，单次 usage input=100 已超
     const budget = makeBudget({ maxTokens: 50 });
     const trace = new Trace();
     trace.append(makeTraceNode(0));
@@ -267,7 +267,7 @@ describe("executeAgentCall 预算超限不重试", () => {
     expect(runner.calls).toBe(1);
     expect(call.status).toBe("done");
     expect(call.result?.error).toBe("rate limit exceeded");
-    // 预算已累加（即使失败也累加 retry token，Round 5 MF#4）
+ // 预算已累加（即使失败也累加 retry token，Round 5 MF#4）
     expect(budget.usedTokens).toBeGreaterThan(0);
   });
 
@@ -283,7 +283,7 @@ describe("executeAgentCall 预算超限不重试", () => {
 
     await executeAgentCall(call, runner, budget, controller.signal, trace);
 
-    // 成功不受 budget.isExceeded() 影响（只在 result.error 时检查预算）
+ // 成功不受 budget.isExceeded 影响（只在 result.error 时检查预算）
     expect(call.result?.error).toBeUndefined();
     expect(trace.find(0)?.status).toBe("completed");
   });
@@ -307,7 +307,7 @@ describe("executeAgentCall 重试", () => {
     vi.useFakeTimers();
     try {
       const p = executeAgentCall(call, runner, budget, controller.signal, trace);
-      // 推进 2 轮退避 timer（1s + 2s）
+ // 推进 2 轮退避 timer（1s + 2s）
       for (let i = 0; i < 5; i++) {
         await vi.runAllTimersAsync();
       }
@@ -402,7 +402,7 @@ describe("executeAgentCall 重试", () => {
       vi.useRealTimers();
     }
 
-    // 3 次 enqueue，每次 input=100，cacheWrite=0，总 300
+ // 3 次 enqueue，每次 input=100，cacheWrite=0，总 300
     expect(budget.usedTokens).toBe(300);
     expect(budget.totalCallCount).toBe(1); // 终态化时 incrementCallCount 仅 1 次
   });
@@ -419,7 +419,7 @@ describe("executeAgentCall signal abort", () => {
     const runner = makeRunner([failureResult("err")]);
     const controller = new AbortController();
 
-    // 在退避期间 abort
+ // 在退避期间 abort
     vi.useFakeTimers();
     try {
       const p = executeAgentCall(call, runner, budget, controller.signal, trace);
@@ -460,7 +460,7 @@ describe("executeAgentCall AgentCall 状态机", () => {
     const runner = makeRunner([successResult()]);
     const controller = new AbortController();
 
-    // 不应抛错——trace.update 防御性 no-op（D-10）
+ // 不应抛错——trace.update 防御性 no-op（D-10）
     await expect(
       executeAgentCall(call, runner, budget, controller.signal, trace),
     ).resolves.toBeUndefined();

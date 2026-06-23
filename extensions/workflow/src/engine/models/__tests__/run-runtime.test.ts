@@ -11,7 +11,7 @@ import { RunRuntime } from "../run-runtime.js";
 
 /**
  * Stub WorkerHandle: implements the WorkerHandle surface as a class so the
- * RunRuntime (which only calls worker.terminate() in release()) can be tested
+ * RunRuntime (which only calls worker.terminate in release) can be tested
  * without spinning up a real node:worker_threads Worker.
  */
 class StubWorkerHandle {
@@ -22,31 +22,31 @@ class StubWorkerHandle {
   onError = vi.fn(() => this);
   onExit = vi.fn(() => this);
   get raw(): never {
-    // RunRuntime never accesses .raw; satisfy the type only.
-    // eslint-disable-next-line taste/no-unsafe-cast
+ // RunRuntime never accesses .raw; satisfy the type only.
+ // eslint-disable-next-line taste/no-unsafe-cast
     return null as never;
   }
 }
 
 /** Test-facing handle with spied terminate, cast to WorkerHandle for RunRuntime. */
 function createStubWorkerHandle(): WorkerHandle {
-  // Single concentrated cast — StubWorkerHandle structurally satisfies the
-  // WorkerHandle surface RunRuntime uses (terminate/isCurrent). The `raw` getter
-  // is unreachable in release() so the null-coercion is harmless.
-  // eslint-disable-next-line taste/no-unsafe-cast
+ // Single concentrated cast — StubWorkerHandle structurally satisfies the
+ // WorkerHandle surface RunRuntime uses (terminate/isCurrent). The `raw` getter
+ // is unreachable in release so the null-coercion is harmless.
+ // eslint-disable-next-line taste/no-unsafe-cast
   return new StubWorkerHandle() as unknown as WorkerHandle;
 }
 
 /** Spy accessor (read terminate call count) — recovers the spied instance. */
 function spyTerminate(handle: WorkerHandle): ReturnType<typeof vi.fn> {
-  // eslint-disable-next-line taste/no-unsafe-cast
+ // eslint-disable-next-line taste/no-unsafe-cast
   return (handle as unknown as StubWorkerHandle).terminate;
 }
 
 // ═══════════════════════════════════════════════════════════════
 
 describe("RunRuntime", () => {
-  // ── Construction ───────────────────────────────────────────
+ // ── Construction ───────────────────────────────────────────
 
   describe("construction", () => {
     it("holds worker / gate / controller references", () => {
@@ -70,7 +70,7 @@ describe("RunRuntime", () => {
     });
   });
 
-  // ── release — idempotency ──────────────────────────────────
+ // ── release — idempotency ──────────────────────────────────
 
   describe("release — idempotency", () => {
     it("terminates the worker on release (pause mode)", () => {
@@ -101,7 +101,7 @@ describe("RunRuntime", () => {
       rt.release("pause");
       rt.release("terminal");
 
-      // worker.terminate() called exactly once despite 3 release() calls
+ // worker.terminate called exactly once despite 3 release calls
       expect(spyTerminate(worker)).toHaveBeenCalledTimes(1);
       expect(rt.isReleased).toBe(true);
     });
@@ -117,7 +117,7 @@ describe("RunRuntime", () => {
     });
   });
 
-  // ── release — controller abort ─────────────────────────────
+ // ── release — controller abort ─────────────────────────────
 
   describe("release — controller abort", () => {
     it("aborts the controller on release", () => {
@@ -147,7 +147,7 @@ describe("RunRuntime", () => {
     });
   });
 
-  // ── release — fire-once semantics for listener chain ──────
+ // ── release — fire-once semantics for listener chain ──────
 
   describe("release — listener chain", () => {
     it("controller abort fires registered listeners exactly once", () => {
@@ -164,7 +164,7 @@ describe("RunRuntime", () => {
     });
   });
 
-  // ── Mode equivalence (G3-001 comment) ─────────────────────
+ // ── Mode equivalence (G3-001 comment) ─────────────────────
 
   describe("mode equivalence", () => {
     it("pause and terminal both fully release resources (semantic equivalence)", () => {
@@ -178,7 +178,7 @@ describe("RunRuntime", () => {
       const rt2 = new RunRuntime(worker2, new ConcurrencyGate(), controller2);
       rt2.release("terminal");
 
-      // Both modes terminate worker + abort controller
+ // Both modes terminate worker + abort controller
       expect(spyTerminate(worker1)).toHaveBeenCalledTimes(1);
       expect(spyTerminate(worker2)).toHaveBeenCalledTimes(1);
       expect(controller1.signal.aborted).toBe(true);
@@ -188,7 +188,7 @@ describe("RunRuntime", () => {
     });
   });
 
-  // ── G3-001 discard semantics ──────────────────────────────
+ // ── G3-001 discard semantics ──────────────────────────────
 
   describe("G3-001 — discard after release", () => {
     it("a released runtime is meant to be discarded (not reused)", () => {
@@ -198,10 +198,10 @@ describe("RunRuntime", () => {
       rt.release("pause");
       expect(rt.isReleased).toBe(true);
 
-      // Caller (WorkflowRun.releaseRuntime) sets runtime=undefined after this.
-      // Resume creates a new RunRuntime via assignRuntime(new RunRuntime(...)).
-      // The old instance lingers for GC but its callbacks are no-ops (WorkerHandle
-      // isCurrent guard) and controller is one-shot aborted.
+ // Caller (WorkflowRun.releaseRuntime) sets runtime=undefined after this.
+ // Resume creates a new RunRuntime via assignRuntime(new RunRuntime(...)).
+ // The old instance lingers for GC but its callbacks are no-ops (WorkerHandle
+ // isCurrent guard) and controller is one-shot aborted.
       expect(spyTerminate(worker)).toHaveBeenCalledTimes(1);
     });
   });

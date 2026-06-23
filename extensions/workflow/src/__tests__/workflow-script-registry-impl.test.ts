@@ -1,11 +1,11 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/__tests__/workflow-script-registry-impl.test.ts
 //
-// Bug #1 回归测试：WorkflowScriptRegistryImpl 必须填充 sourceCode。
+// 回归测试：WorkflowScriptRegistryImpl 必须填充 sourceCode。
 //
 // 重构期 registry 曾用 sourceCode: "" 占位（注释自称"Interface 层 readFile"），
-// 但 launcher.runAndWait / tool-workflow.actionRun 直接调 script.toExecutable()
-// / validate() 不读文件 → worker 收到空脚本 → workflow 13ms 内 0 agent 调用空跑完成。
+// 但 launcher.runAndWait / tool-workflow.actionRun 直接调 script.toExecutable
+// / validate 不读文件 → worker 收到空脚本 → workflow 13ms 内 0 agent 调用空跑完成。
 //
 // Spec（domain-models.md §7 + spec.md FR-2）：registry 是唯一读文件处（扫描+缓存+去重），
 // 必须返回 sourceCode 已填充的 WorkflowScript。
@@ -53,7 +53,7 @@ function scriptFor(name: string, prompt = "Review the diff"): string {
   phases: ["review", "fix"],
 };
 
-// Workflow body — calls agent()
+// Workflow body — calls agent
 const result = await agent({ prompt: "${prompt}", model: "test-model" });
 return { reviewed: true };
 `;
@@ -61,7 +61,7 @@ return { reviewed: true };
 
 // ── Tests ────────────────────────────────────────────────────
 
-describe("WorkflowScriptRegistryImpl — sourceCode population (Bug #1 regression)", () => {
+describe("WorkflowScriptRegistryImpl — sourceCode population", () => {
   it("get() returns WorkflowScript with sourceCode populated from file", async () => {
     const dir = makeWorkflowDir();
     const expected = scriptFor("review-fix-loop");
@@ -72,7 +72,7 @@ describe("WorkflowScriptRegistryImpl — sourceCode population (Bug #1 regressio
 
     expect(script).toBeDefined();
     expect(script!.available).toBe(true);
-    // Bug #1 核心断言：sourceCode 非空，等于文件内容
+ // 核心断言：sourceCode 非空，等于文件内容
     expect(script!.sourceCode).toBe(expected);
     expect(script!.sourceCode.length).toBeGreaterThan(0);
   });
@@ -101,7 +101,7 @@ agent({ prompt: "hi" });
 
   it("toExecutable() returns strip-`export const meta` source (sourceCode flows through)", async () => {
     const dir = makeWorkflowDir();
-    // Use `export const meta` form to verify the strip transformation
+ // Use `export const meta` form to verify the strip transformation
     const sourceWithExport = `export const meta = {
   name: "with-export",
   description: "Has export keyword",
@@ -116,9 +116,9 @@ agent({ prompt: "run" });
     const script = await registry.get("with-export");
 
     expect(script).toBeDefined();
-    // sourceCode preserves original (with export)
+ // sourceCode preserves original (with export)
     expect(script!.sourceCode).toContain("export const meta");
-    // toExecutable strips `export const meta` → `const meta`
+ // toExecutable strips `export const meta` → `const meta`
     const executable = script!.toExecutable();
     expect(executable).not.toContain("export const meta");
     expect(executable).toContain("const meta");
@@ -136,7 +136,7 @@ agent({ prompt: "run" });
 
     expect(first).toBeDefined();
     expect(second).toBeDefined();
-    // Both reads populate sourceCode (cache hit still returns fully-formed entity)
+ // Both reads populate sourceCode (cache hit still returns fully-formed entity)
     expect(first!.sourceCode).toBe(expected);
     expect(second!.sourceCode).toBe(expected);
   });
@@ -149,10 +149,10 @@ agent({ prompt: "run" });
     const before = await registry.get("editable");
     expect(before!.sourceCode).toContain("ORIGINAL");
 
-    // Mutate the file
+ // Mutate the file
     writeFileSync(path, scriptFor("editable", "UPDATED"), "utf-8");
 
-    // After invalidate, fresh read reflects new content
+ // After invalidate, fresh read reflects new content
     registry.invalidate();
     const after = await registry.get("editable");
     expect(after!.sourceCode).toContain("UPDATED");
@@ -161,7 +161,7 @@ agent({ prompt: "run" });
 
   it("available=false when meta extraction fails (sourceCode still read but script unusable)", async () => {
     const dir = makeWorkflowDir();
-    // No `const meta` declaration → meta extraction fails → available=false
+ // No `const meta` declaration → meta extraction fails → available=false
     writeScript(dir, "no-meta", 'console.log("no meta here"); agent({ prompt: "x" });');
 
     const registry = new WorkflowScriptRegistryImpl();

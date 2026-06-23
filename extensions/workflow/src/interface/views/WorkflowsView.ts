@@ -1,24 +1,25 @@
 /**
- * Workflow Fullscreen TUI View — Three-level navigation（W5-T31 重写 + Bug #4 修复）.
+ * Workflow Fullscreen TUI View — Three-level navigation.
  *
- * Level 0 (Phase):   左 phase list，右 agent overview
- * Level 1 (Agent):   左 agent list，右 agent summary
- * Level 2 (Detail):  完整 agent 执行详情
+ * Level 0 (Phase): 左 phase list，右 agent overview
+ * Level 1 (Agent): 左 agent list，右 agent summary
+ * Level 2 (Detail): 完整 agent 执行详情
  *
- * 适配新 WorkflowRun 聚合根（替换旧 WorkflowInstance）+ 移除 restart（D-9）。
- * 旧 view 通过 WorkflowOrchestrator.pause/resume/abort/restart 操作 + events.subscribe
- * 推送更新；新 engine 拆掉 orchestrator 事件层（方向正确，AC-3），view 改用
- * 内部轮询（setInterval TICK_MS）从 run.state.trace 实时读 + requestRender。
+ * 读 WorkflowRun 聚合根；移除 restart（D-9）。新 engine 无 orchestrator 事件层
+ * （AC-3），view 改用内部轮询（setInterval TICK_MS）从 run.state.trace 实时读 +
+ * requestRender。
  *
  * SDK 集成：ctx.ui.custom factory 返回 Component{render(width), handleInput(data),
- * invalidate()}，第二参数 `{overlay:true, overlayOptions}`（全屏 overlay，对齐 main +
+ * invalidate}，第二参数 `{overlay:true, overlayOptions}`（全屏 overlay，对齐 main +
  * subagents 扩展 + docs/pi-tui-development-guide.md §3.2）。按键经
  * matchesKey(data, KeyId) 解析（兼容 xterm/iTerm/kitty 转义序列差异）。
  * escape/ctrl+c 在 keybindings 同映射到 exit。
  *
- * Bug #4 修复（本次）：(a) overlay 参数缺失 → view 不全屏；(b) trace 快照冻结
- * → 运行中不刷新（加轮询 tick）；(c) 's' save 快捷键被 D-9 误删 → 恢复 save 模式；
- * (d) pause/resume/abort 失败静默吞 → 加 notify。
+ * 关键实现点：(a) overlay 第二参数必须传，否则 view 不全屏；(b) trace 必须 per-render
+ * 重读（run.state.trace.toArray 返回内部数组引用，trace.append 后下次 render 可见），
+ * 配 1s tick invalidate + requestRender 保证运行中刷新；(c) 's' save 模式无条件可用
+ * （saveWorkflow 内部对非 tmp workflow 返回错误消息）；(d) pause/resume/abort 失败时
+ * notify 反馈，不静默吞。
  */
 
 import { promises as fsPromises } from "node:fs";
@@ -97,7 +98,7 @@ interface ViewState {
   agentIdx: number;
   promptExpanded: boolean;
   disposed: boolean;
-  // ── Save mode（Bug #4 恢复，缺陷 #3）──
+ // ── Save mode ──
   saveMode: boolean;
   saveInputValue: string;
   saveMessage: string;
@@ -123,9 +124,9 @@ function createInitialState(): ViewState {
 /**
  * 创建 workflow fullscreen view。
  *
- * @param run    WorkflowRun 聚合根（读 state.status/spec/trace/meta）
- * @param theme  ThemeLike（避免直接 import Pi runtime）
- * @param ctx    ExtensionContext（调 ui.custom 渲染 + ui.notify 错误反馈）
+ * @param run WorkflowRun 聚合根（读 state.status/spec/trace/meta）
+ * @param theme ThemeLike（避免直接 import Pi runtime）
+ * @param ctx ExtensionContext（调 ui.custom 渲染 + ui.notify 错误反馈）
  * @param actions lifecycle 操作（pause/resume/abort），由调用方注入
  */
 export function createWorkflowsView(
@@ -151,12 +152,12 @@ export function createWorkflowsView(
       if (state.agentIdx >= agents.length) state.agentIdx = Math.max(0, agents.length - 1);
     }
 
-    // 渲染缓存：与 main 同构。width 变化或交互后 invalidate，避免每帧重算。
+ // 渲染缓存：与 main 同构。width 变化或交互后 invalidate，避免每帧重算。
     const cache = { width: undefined as number | undefined, lines: undefined as string[] | undefined };
     const requestRender = () => tui.requestRender();
 
-    // ── 轮询 tick（缺陷 #1+#5 修复）：engine 无事件推送，view 自轮询 trace 变化 ──
-    // 对齐 subagents list-view 的 setInterval 做法。TICK_MS=1s 对 trace 低频更新够用。
+ // ── 轮询 tick（缺陷 #1+#5 修复）：engine 无事件推送，view 自轮询 trace 变化 ──
+ // 对齐 subagents list-view 的 setInterval 做法。TICK_MS=1s 对 trace 低频更新够用。
     const tick = setInterval(() => {
       if (state.disposed) return;
       cache.width = undefined;
@@ -171,19 +172,19 @@ export function createWorkflowsView(
       done();
     };
 
-    // ── Key handling（SDK Component.handleInput 模式，对齐 main） ──
-    // matchesKey(data, KeyId) 处理终端转义序列差异（xterm/iTerm/kitty），
-    // 优于手写 \x1b[A 等原始序列。escape/ctrl+c 在 keybindings 里同映射到 exit。
+ // ── Key handling（SDK Component.handleInput 模式，对齐 main） ──
+ // matchesKey(data, KeyId) 处理终端转义序列差异（xterm/iTerm/kitty），
+ // 优于手写 \x1b[A 等原始序列。escape/ctrl+c 在 keybindings 里同映射到 exit。
     function handleInput(data: string): void {
       if (state.disposed) return;
 
-      // ── Save mode 拦截（缺陷 #3 恢复）── save overlay 活跃时，所有键走 save 流程
+ // ── Save mode 拦截（缺陷 #3 恢复）── save overlay 活跃时，所有键走 save 流程
       if (state.saveMode) {
         handleSaveModeInput(data);
         return;
       }
 
-      // Escape / ctrl+c: level back or exit
+ // Escape / ctrl+c: level back or exit
       if (matchesKey(data, Key.escape)) {
         if (state.level === 0) {
           wrappedDone();
@@ -196,7 +197,7 @@ export function createWorkflowsView(
         return;
       }
 
-      // Navigation: up/down
+ // Navigation: up/down
       if (matchesKey(data, Key.up)) {
         if (state.level === 0 && state.phaseIdx > 0) {
           state.phaseIdx--;
@@ -233,7 +234,7 @@ export function createWorkflowsView(
         return;
       }
 
-      // Enter: drill down (L0→L1→L2) or toggle prompt (L2)
+ // Enter: drill down (L0→L1→L2) or toggle prompt (L2)
       if (matchesKey(data, Key.enter)) {
         if (state.level === 0 && currentPhaseAgents().length > 0) {
           state.level = 1;
@@ -249,7 +250,7 @@ export function createWorkflowsView(
         return;
       }
 
-      // ── Lifecycle shortcuts (no restart per D-9) ──
+ // ── Lifecycle shortcuts (no restart per D-9) ──
       if (data === "p") {
         if (run.state.status === "running") {
           void actions.pause(run.runId)
@@ -271,7 +272,7 @@ export function createWorkflowsView(
         return;
       }
 
-      // ── Save shortcut（对齐 main：总是进入 save mode，非 tmp 时 saveWorkflow 报错） ──
+ // ── Save shortcut（对齐 main：总是进入 save mode，非 tmp 时 saveWorkflow 报错） ──
       if (data === "s") {
         state.saveMode = true;
         state.saveInputValue = run.spec.scriptName;
@@ -282,23 +283,23 @@ export function createWorkflowsView(
         return;
       }
 
-      // ── Trace export（对齐 main 的 S 键）：导出完整 trace 到 Markdown 文件 ──
+ // ── Trace export（对齐 main 的 S 键）：导出完整 trace 到 Markdown 文件 ──
       if (data === "S") {
         saveTraceToFile(run, ctx);
         return;
       }
     }
 
-    /** save overlay 内的按键处理（esc 取消 / enter 保存 / backspace 删除 / 可打印追加）。 */
+ /** save overlay 内的按键处理（esc 取消 / enter 保存 / backspace 删除 / 可打印追加）。 */
     function handleSaveModeInput(data: string): void {
-      // Escape → 退出 save 模式
+ // Escape → 退出 save 模式
       if (matchesKey(data, Key.escape)) {
         state.saveMode = false;
         cache.width = undefined;
         requestRender();
         return;
       }
-      // Enter → 保存
+ // Enter → 保存
       if (data === "\r" || data === "\n") {
         const name = state.saveInputValue.trim();
         if (!name) {
@@ -324,7 +325,7 @@ export function createWorkflowsView(
           });
         return;
       }
-      // Backspace → 删除最后一个字符
+ // Backspace → 删除最后一个字符
       if (data === "\x7f" || data === "\b") {
         state.saveMessage = "";
         if (state.saveInputValue.length > 0) {
@@ -334,7 +335,7 @@ export function createWorkflowsView(
         requestRender();
         return;
       }
-      // 可打印字符 → 追加
+ // 可打印字符 → 追加
       if (data.length === 1 && data.charCodeAt(0) >= PRINTABLE_CHAR_MIN) {
         state.saveMessage = "";
         state.saveInputValue += data;
@@ -342,10 +343,10 @@ export function createWorkflowsView(
         requestRender();
         return;
       }
-      // 屏蔽其他键（↑↓ 等）
+ // 屏蔽其他键（↑↓ 等）
     }
 
-    // ── Component（SDK 规范：render(width) → string[] + handleInput + invalidate） ──
+ // ── Component（SDK 规范：render(width) → string[] + handleInput + invalidate） ──
     return {
       invalidate(): void {
         cache.width = undefined;
@@ -355,11 +356,11 @@ export function createWorkflowsView(
         if (cache.lines && cache.width === width) return cache.lines;
         clampSelections();
         const height = tui.terminal.rows;
-        // 缺陷 #1 修复：每次 render 从 run.state.trace 实时读（toArray 返回内部数组引用，
-        // 后续 trace.append 会反映到 view），不再用 factory 时的冻结快照。
+ // 缺陷 #1 修复：每次 render 从 run.state.trace 实时读（toArray 返回内部数组引用，
+ // 后续 trace.append 会反映到 view），不再用 factory 时的冻结快照。
         const liveGroups = buildPhaseGroups([...run.state.trace.toArray()]);
         const raw = renderLayout(run, state, liveGroups, theme, width, height);
-        // Pad to terminal height so the overlay fills the screen (matches main 行为）
+ // Pad to terminal height so the overlay fills the screen (matches main 行为）
         const lines = raw.length < height
           ? [...raw, ...Array.from({ length: height - raw.length }, () => "")]
           : raw;
@@ -370,7 +371,7 @@ export function createWorkflowsView(
       handleInput,
     };
   }, {
-    // 缺陷 #2 修复：overlay 第二参数（对齐 main + subagents + pi-tui guide §3.2）
+ // 缺陷 #2 修复：overlay 第二参数（对齐 main + subagents + pi-tui guide §3.2）
     overlay: true,
     overlayOptions: { anchor: "center" as const, width: "100%", maxHeight: "100%", margin: 0 },
   });
@@ -379,22 +380,22 @@ export function createWorkflowsView(
 // ── Layout rendering（box-drawing 框架，对齐 main）──────────────
 //
 // 视觉结构（与 main 一致）：
-//   ╭───────────────────────────────────────────────────╮
-//   │ name (bold)                  ● status · x/y · Ns │  ← header
-//   ├───────────────────────────────────────────────────┤
-//   │ Phases            │ title · N agents              │
-//   │ ────────────────  │ ──────────────────             │  ← body
-//   │ ❯ ● 1 build 0/2   │   ● builder    model  ...     │
-//   │   ● 2 deploy 0/1  │   ● tester     model  ...     │
-//   │ (pad)             │ (pad)                          │
-//   ╰───────────────────────────────────────────────────╯
-//     ↑↓ phase · ⏎ enter · p pause · a abort · s save · esc back  ← footer (框外)
+// ╭───────────────────────────────────────────────────╮
+// │ name (bold) ● status · x/y · Ns │ ← header
+// ├───────────────────────────────────────────────────┤
+// │ Phases │ title · N agents │
+// │ ──────────────── │ ────────────────── │ ← body
+// │ ❯ ● 1 build 0/2 │ ● builder model ... │
+// │ ● 2 deploy 0/1 │ ● tester model ... │
+// │ (pad) │ (pad) │
+// ╰───────────────────────────────────────────────────╯
+// ↑↓ phase · ⏎ enter · p pause · a abort · s save · esc back ← footer (框外)
 //
-//   body = sidebar(SIDEBAR_WIDTH) │ main(rest)
-//   save overlay 活跃时居中覆盖 body。
+// body = sidebar(SIDEBAR_WIDTH) │ main(rest)
+// save overlay 活跃时居中覆盖 body。
 
 function bodyHeight(screenHeight: number): number {
-  // header(2: name+desc/blank) + border(1) + body + border(1) + footer(1)
+ // header(2: name+desc/blank) + border(1) + body + border(1) + footer(1)
   const HEADER_FOOTER_LINES = 6;
   return Math.max(MIN_BODY_LINES, Math.floor((screenHeight * BODY_HEIGHT_NUMERATOR) / BODY_HEIGHT_DENOMINATOR) - HEADER_FOOTER_LINES);
 }
@@ -439,21 +440,21 @@ function renderLayout(
     renderLevel2(lines, run, agents, state, theme, mainWidth, now);
   }
 
-  // Pad body to min height
+ // Pad body to min height
   const minBody = bodyHeight(screenHeight);
   const emptyBodyLine = padVisible("", SIDEBAR_WIDTH) + "│" + padVisible("", mainWidth);
   while (lines.length - bodyStart < minBody) {
     lines.push(emptyBodyLine);
   }
 
-  // Wrap body lines with │ borders + sidebar divider
+ // Wrap body lines with │ borders + sidebar divider
   for (let i = bodyStart; i < lines.length; i++) {
     lines[i] = "│" + padVisible(lines[i], contentWidth) + "│";
   }
 
   lines.push("╰" + "─".repeat(contentWidth) + "╯");
 
-  // Save overlay（缺陷 #3）：居中覆盖 body
+ // Save overlay（缺陷 #3）：居中覆盖 body
   if (state.saveMode) {
     const overlayLines = renderSaveOverlay(state, theme, screenWidth);
     const overlayStart = Math.max(bodyStart, bodyStart + Math.floor((lines.length - bodyStart - overlayLines.length) / OVERLAY_CENTER_DIVISOR));
@@ -462,7 +463,7 @@ function renderLayout(
     }
   }
 
-  // Footer（框外，对齐 main renderFooter）
+ // Footer（框外，对齐 main renderFooter）
   renderFooter(lines, run, state, theme);
   return lines;
 }
@@ -555,14 +556,14 @@ function renderLevel0(
   const leftLines: string[] = [];
   const rightLines: string[] = [];
 
-  // Left: sidebar title + phase list
+ // Left: sidebar title + phase list
   leftLines.push(theme.fg("muted", "Phases"));
   leftLines.push("─".repeat(SIDEBAR_WIDTH));
   for (let i = 0; i < phases.length; i++) {
     leftLines.push(formatPhaseLine(phases[i], i, i === state.phaseIdx, theme, SIDEBAR_WIDTH));
   }
 
-  // Right: agents in the currently selected phase only
+ // Right: agents in the currently selected phase only
   const selectedPhase = phases[state.phaseIdx] ?? phases[0];
   if (selectedPhase) {
     const title = selectedPhase.name
@@ -736,7 +737,7 @@ function renderLevel2(
   const leftLines: string[] = [];
   const rightLines: string[] = [];
 
-  // Left: agents title + agent names
+ // Left: agents title + agent names
   leftLines.push(theme.fg("muted", "Agents"));
   leftLines.push("─".repeat(SIDEBAR_WIDTH));
   const AGENT_NAME_BUDGET = 4; // pointer(2) + spacing(2)
@@ -750,7 +751,7 @@ function renderLevel2(
     leftLines.push(`${pointer}${agentName}`);
   }
 
-  // Right: full detail
+ // Right: full detail
   const node = agents[state.agentIdx];
   if (node) {
     const elapsed = formatElapsed(
@@ -835,28 +836,28 @@ function renderSaveOverlay(
 
   lines.push("╭" + "─".repeat(contentWidth) + "╮");
 
-  // Title
+ // Title
   lines.push("│" + padVisible(theme.bold(" Save dynamic workflow"), contentWidth) + "│");
 
-  // Destination preview
+ // Destination preview
   const destName = state.saveInputValue || "(name)";
   const destLine = `.pi/workflows/${destName}.js`;
   lines.push("│" + padVisible(theme.fg("dim", destLine), contentWidth) + "│");
 
-  // Empty line
+ // Empty line
   lines.push("│" + padVisible("", contentWidth) + "│");
 
-  // Label
+ // Label
   lines.push("│" + padVisible("Save as:", contentWidth) + "│");
 
-  // Input line with cursor block
+ // Input line with cursor block
   const inputLine = `  > ${state.saveInputValue}\u2588`;
   lines.push("│" + padVisible(inputLine, contentWidth) + "│");
 
-  // Empty line
+ // Empty line
   lines.push("│" + padVisible("", contentWidth) + "│");
 
-  // Inline message (error or success)
+ // Inline message (error or success)
   if (state.saveMessage) {
     const msgStyle = state.saveMsgOk ? "success" : "error";
     const msgLine = `  ${state.saveMessage}`;
@@ -865,7 +866,7 @@ function renderSaveOverlay(
     lines.push("│" + padVisible("", contentWidth) + "│");
   }
 
-  // Hint
+ // Hint
   const hint = "Enter to save · Esc to cancel";
   lines.push("│" + padVisible(theme.fg("muted", hint), contentWidth) + "│");
 

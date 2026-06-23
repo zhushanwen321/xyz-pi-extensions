@@ -140,8 +140,8 @@ describe("类型形状 mock 赋值", () => {
       phase: "build",
       startedAt: "2026-06-22T00:00:00.000Z",
     };
-    // verifyStrategy 字段已从类型定义移除——以下赋值在编译期即报错。
-    // 这里仅断言 node 上不存在该键。
+ // verifyStrategy 字段已从类型定义移除——以下赋值在编译期即报错。
+ // 这里仅断言 node 上不存在该键。
     expect("verifyStrategy" in node).toBe(false);
   });
 

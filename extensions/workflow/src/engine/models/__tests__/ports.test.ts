@@ -28,7 +28,7 @@ describe("Port interface 形状", () => {
   it("RunStore: save(run) + loadAll()", async () => {
     const store: RunStore = {
       async save(_run) {
-        /* mock */
+ /* mock */
       },
       async loadAll() {
         return [{ runId: "r1" }];
@@ -48,13 +48,13 @@ describe("Port interface 形状", () => {
     };
     const handlers: WorkerHandlers = {
       async onMessage(_raw) {
-        /* mock */
+ /* mock */
       },
       async onError(_err) {
-        /* mock */
+ /* mock */
       },
       async onExit(_code, _handle) {
-        /* mock */
+ /* mock */
       },
     };
     const handle = host.start({ scriptSource: "x" }, {}, handlers);
@@ -67,7 +67,7 @@ describe("Port interface 形状", () => {
       onError: async () => {},
       onExit: async () => {},
     };
-    // Promise-returning 校验：调用得到 thenable
+ // Promise-returning 校验：调用得到 thenable
     expect(typeof handlers.onMessage).toBe("function");
   });
 });

@@ -1,20 +1,14 @@
 /**
- * Workflow Extension — Engine Ports + 编排层共享类型（W1-T2）
+ * Workflow Extension — Engine Ports + 编排层共享类型
  *
  * 3 个注入 Port（AgentRunner / RunStore / WorkerHost）——Engine 定义、Infra 实现，
  * 是真需要 mock 测试的依赖（子进程/文件系统/线程）。
  *
- * 编排层共享类型（WorkerHandlers / LifecycleDeps）——W3 拆细的关键，打破
- * lifecycle ↔ error-recovery ↔ node-ops 循环依赖：3 个 engine 函数文件各自独立成 task，
- * 共用同一组依赖签名（D-12）。
+ * 编排层共享类型（WorkerHandlers / LifecycleDeps）——打破 lifecycle ↔
+ * error-recovery ↔ node-ops 循环依赖：3 个 engine 函数文件各自独立，共用同一组
+ * 依赖签名（D-12）。
  *
  * 层归属：Engine。零 infra 依赖（AC-1）。
- *
- * ───────────────────────────────────────────────────────────────
- * FORWARD REF 状态（全部已创建）
- * ───────────────────────────────────────────────────────────────
- * RunSpec (T7) / WorkerHandle (T9) / WorkflowRun (T16) 均已创建，
- * 下方全部为真实 import。本文件无 forward-ref 占位。
  */
 import type { AgentRegistry } from "../../infra/agent-discovery.js";
 import type { WorkerHandle } from "../../infra/worker-handle.js";
@@ -25,9 +19,9 @@ import type { WorkflowRun } from "./workflow-run.js";
 // ── Port 1: AgentRunner ───────────────────────────────────────
 
 /**
- * Agent 子进程执行 port。Infra 实现：SubprocessAgentRunner（T10，原 pi-runner）。
+ * Agent 子进程执行 port。Infra 实现：SubprocessAgentRunner。
  *
- * run() 在子进程中执行单次 agent 调用，返回结构化结果（含 usage/toolCalls）。
+ * run 在子进程中执行单次 agent 调用，返回结构化结果（含 usage/toolCalls）。
  * signal 用于 abort 传播（kill subprocess）。
  */
 export interface AgentRunner {
@@ -37,10 +31,10 @@ export interface AgentRunner {
 // ── Port 2: RunStore ──────────────────────────────────────────
 
 /**
- * WorkflowRun 持久化 port。Infra 实现：JsonlRunStore（T13，原 state-store）。
+ * WorkflowRun 持久化 port。Infra 实现：JsonlRunStore。
  *
- * save() 在每次状态变更后持久化整个 WorkflowRun（聚合根）；
- * loadAll() 在 session_start 时重水合（D-5：JSONL 不向后兼容旧 session，旧格式返回空）。
+ * save 在每次状态变更后持久化整个 WorkflowRun（聚合根）；
+ * loadAll 在 session_start 时重水合（D-5：JSONL 不向后兼容旧 session，旧格式返回空）。
  */
 export interface RunStore {
   save(run: WorkflowRun): Promise<void>;
@@ -50,9 +44,9 @@ export interface RunStore {
 // ── Port 3: WorkerHost ────────────────────────────────────────
 
 /**
- * Worker 线程启动 port。Infra 实现：WorkerHostImpl（T12，原 worker-manager）。
+ * Worker 线程启动 port。Infra 实现：WorkerHostImpl。
  *
- * start() 创建一个 Worker thread 运行 workflow 脚本，返回 WorkerHandle。
+ * start 创建一个 Worker thread 运行 workflow 脚本，返回 WorkerHandle。
  * handlers 绑定 message/error/exit 回调（见 WorkerHandlers）。
  */
 export interface WorkerHost {
@@ -66,18 +60,18 @@ export interface WorkerHost {
 // ── 编排层共享类型 1: WorkerHandlers ───────────────────────────
 
 /**
- * Worker 线程事件回调集合——WorkerHost.start() 的入参，由 lifecycle（T21）
+ * Worker 线程事件回调集合——WorkerHost.start 的入参，由 lifecycle
  * 构造并注入。3 个 engine 文件（lifecycle / error-recovery / node-ops）共用此签名，
  * 避免各自定义形状不一致的 handler bag（打破循环依赖）。
  *
- * 所有回调返回 Promise——允许 engine 层在回调内做 await persistState() 等异步操作。
+ * 所有回调返回 Promise——允许 engine 层在回调内做 await persistState 等异步操作。
  */
 export interface WorkerHandlers {
-  /** Worker → Main 的业务消息（agent-call / return / error / log）。 */
+ /** Worker → Main 的业务消息（agent-call / return / error / log）。 */
   onMessage(raw: unknown): Promise<void>;
-  /** Worker 线程 uncaught error。 */
+ /** Worker 线程 uncaught error。 */
   onError(err: Error): Promise<void>;
-  /** Worker 线程 exit（含 code，用于区分正常退出 vs 崩溃）。handle 用于竞态防护 G-025。 */
+ /** Worker 线程 exit（含 code，用于区分正常退出 vs 崩溃）。handle 用于竞态防护 G-025。 */
   onExit(code: number, handle: WorkerHandle): Promise<void>;
 }
 
@@ -95,28 +89,28 @@ export interface WorkerHandlers {
  * - runner: 执行 agent（AgentRunner port）
  * - runs: 内存中的活动 run 聚合根索引（runId → WorkflowRun），替代旧 6 张并行 map
  * - onRunDone?: run 到达 done 终态时的回调（C-4 修复，可选）。由 Interface 层
- *   factory 注入（notifyDone —— 唤醒 parent agent 消费结果）。Engine 层不依赖
- *   Pi SDK，通过 callback 把完成信号外推到 Interface 层。所有 transition("done", ...)
- *   路径（handleReturn / handleWorkerError / handleScriptError / abortRun /
- *   dispatchAgentCall budget 终止）调完 transition + save 后触发本回调。
+ * factory 注入（notifyDone —— 唤醒 parent agent 消费结果）。Engine 层不依赖
+ * Pi SDK，通过 callback 把完成信号外推到 Interface 层。所有 transition("done", ...)
+ * 路径（handleReturn / handleWorkerError / handleScriptError / abortRun /
+ * dispatchAgentCall budget 终止）调完 transition + save 后触发本回调。
  */
 export interface LifecycleDeps {
   store: RunStore;
   workerHost: WorkerHost;
   runner: AgentRunner;
   runs: Map<string, WorkflowRun>;
-  /** run 到达 done 终态时的回调（C-4 修复，可选）。Interface 层注入 notifyDone。 */
+ /** run 到达 done 终态时的回调（C-4 修复，可选）。Interface 层注入 notifyDone。 */
   onRunDone?: (run: WorkflowRun) => void;
-  /**
-   * BL-1：agent/skill/schema 解析依赖（per-session，可选）。
-   *
-   * Interface 层 factory 在 session_start 注入：agentRegistry（扫描 .agents/agents 等
-   * 7 路径）、sessionDir（临时文件根）、activeTempFiles（session_shutdown 回收集合）。
-   * error-recovery.dispatchAgentCall 用这 3 项调 resolveAgentOpts，把
-   * `agent({agent,skill,schema})` 的 inline override 解析成 systemPromptFiles /
-   * skillPath / schemaEnv，否则 pi 子进程只收到原始 prompt（D-12 重构误删导致回归）。
-   * 全部可选——测试 makeDeps 工厂无需改。
-   */
+ /**
+ * BL-1：agent/skill/schema 解析依赖（per-session，可选）。
+ *
+ * Interface 层 factory 在 session_start 注入：agentRegistry（扫描 .agents/agents 等
+ * 7 路径）、sessionDir（临时文件根）、activeTempFiles（session_shutdown 回收集合）。
+ * error-recovery.dispatchAgentCall 用这 3 项调 resolveAgentOpts，把
+ * `agent({agent,skill,schema})` 的 inline override 解析成 systemPromptFiles /
+ * skillPath / schemaEnv，否则 pi 子进程只收到原始 prompt（D-12 重构误删导致回归）。
+ * 全部可选——测试 makeDeps 工厂无需改。
+ */
   agentRegistry?: AgentRegistry;
   sessionDir?: string;
   activeTempFiles?: Set<string>;

@@ -27,7 +27,7 @@ function createFakeWorker(): FakeWorker {
 
 /** Cast fake to the type WorkerHandle expects. */
 function asWorker(fw: FakeWorker): Worker {
-  // eslint-disable-next-line taste/no-unsafe-cast
+ // eslint-disable-next-line taste/no-unsafe-cast
   return fw as unknown as Worker;
 }
 
@@ -66,7 +66,7 @@ describe("WorkerHandle — isCurrent (race guard G-025)", () => {
       throw new Error("already exited");
     });
     const handle = new WorkerHandle(asWorker(fw));
-    // Must not reject
+ // Must not reject
     await expect(handle.terminate()).resolves.toBeUndefined();
     expect(handle.isCurrent).toBe(false);
   });
@@ -152,14 +152,14 @@ describe("WorkerHandle — onMessage / onError / onExit", () => {
   });
 
   it("onExit handler is NOT called after terminate (THE G-025 race)", async () => {
-    // Race scenario: terminate(old) → startWorker(new) → old exit fires.
-    // Without the guard, old exit would be handled as if it's the new worker.
+ // Race scenario: terminate(old) → startWorker(new) → old exit fires.
+ // Without the guard, old exit would be handled as if it's the new worker.
     const fw = createFakeWorker();
     const handler = vi.fn();
     const handle = new WorkerHandle(asWorker(fw)).onExit(handler);
 
     await handle.terminate();
-    // Old worker emits exit AFTER terminate — must be ignored.
+ // Old worker emits exit AFTER terminate — must be ignored.
     fw.emit("exit", 1);
 
     expect(handler).not.toHaveBeenCalled();
@@ -184,7 +184,7 @@ describe("WorkerHandle — onMessage / onError / onExit", () => {
     expect(errHandler).toHaveBeenCalledTimes(1);
     expect(exitHandler).toHaveBeenCalledTimes(1);
 
-    // After terminate, ALL handlers go silent
+ // After terminate, ALL handlers go silent
     void handle.terminate();
   });
 });
@@ -195,7 +195,7 @@ describe("WorkerHandle — raw accessor", () => {
   it("exposes the underlying Worker for direct access", () => {
     const fw = createFakeWorker();
     const handle = new WorkerHandle(asWorker(fw));
-    // Identity preserved (cast back to FakeWorker for assertion)
+ // Identity preserved (cast back to FakeWorker for assertion)
     expect(handle.raw).toBe(fw);
   });
 });
@@ -204,8 +204,8 @@ describe("WorkerHandle — raw accessor", () => {
 
 describe("WorkerHandle — multi-handle race (G-025 end-to-end)", () => {
   it("old handle's exit does not fire when new handle is current", async () => {
-    // Simulate: WorkerHost creates handle A → terminate A → creates handle B
-    // → A's worker emits a delayed exit. B's exit handler should be unaffected.
+ // Simulate: WorkerHost creates handle A → terminate A → creates handle B
+ // → A's worker emits a delayed exit. B's exit handler should be unaffected.
     const workerA = createFakeWorker();
     const workerB = createFakeWorker();
 
@@ -213,18 +213,18 @@ describe("WorkerHandle — multi-handle race (G-025 end-to-end)", () => {
     const exitCalls: string[] = [];
     handleA.onExit(() => exitCalls.push("A"));
 
-    // Terminate A (e.g. on pause)
+ // Terminate A (e.g. on pause)
     await handleA.terminate();
     expect(handleA.isCurrent).toBe(false);
 
-    // New handle B for resume
+ // New handle B for resume
     const handleB = new WorkerHandle(asWorker(workerB));
     handleB.onExit(() => exitCalls.push("B"));
     expect(handleB.isCurrent).toBe(true);
 
-    // A's worker emits a delayed exit — MUST be ignored (stale)
+ // A's worker emits a delayed exit — MUST be ignored (stale)
     workerA.emit("exit", 1);
-    // B's worker emits exit — MUST be processed
+ // B's worker emits exit — MUST be processed
     workerB.emit("exit", 0);
 
     expect(exitCalls).toEqual(["B"]);

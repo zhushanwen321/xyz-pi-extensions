@@ -118,11 +118,11 @@ describe("AgentCall.setSessionId", () => {
 // ── D-12 不变式：无 execute 上帝方法 ──────────────────────────
 
 describe("D-12 不变式", () => {
-  it("AgentCall.execute === undefined（执行编排移到 T18）", () => {
+  it("AgentCall.execute === undefined（执行编排由 executeAgentCall 承担）", () => {
     const call = new AgentCall(0, makeOpts(), makeTraceNode(0));
-    // @ts-expect-error — execute 不应存在
+ // @ts-expect-error — execute 不应存在
     expect(call.execute).toBeUndefined();
-    // @ts-expect-error — executeWithRetry 不应存在
+ // @ts-expect-error — executeWithRetry 不应存在
     expect(call.executeWithRetry).toBeUndefined();
   });
 });

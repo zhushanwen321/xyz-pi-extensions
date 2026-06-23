@@ -1,31 +1,28 @@
 /**
- * Workflow Extension — launcher（W3-T22）
+ * Workflow Extension — launcher
  *
- * runAndWait free function（D-12）。取代旧 lifecycle.legacy.ts runWorkflowAndWait。
- * 跨扩展编程入口（pi.__workflowRun）——阻塞至 run 到达 done 终态。
+ * runAndWait free function（D-12）。跨扩展编程入口（pi.__workflowRun）——
+ * 阻塞至 run 到达 done 终态。
  *
- * **D-8 新签名**：返回 WorkflowRunResult（{status:"done", reason, ...}），
- * 替换旧 {status: string, scriptResult?, error?, runId}——status 恒为 "done"，
- * 具体原因由 reason 区分（completed/failed/aborted/budget_limited/time_limited）。
+ * **D-8 签名**：返回 WorkflowRunResult（{status:"done", reason, ...}）——
+ * status 恒为 "done"，具体原因由 reason 区分
+ * （completed/failed/aborted/budget_limited/time_limited）。
  *
- * **C.7 修复**：timeout → transition done,time_limited（旧代码返回 status:"timeout"
- * 但不转 time_limited 终态——workflow 可能仍 running，资源泄漏）。
+ * **C.7**：timeout → transition done,time_limited（仅返回 timeout 标记但不转终态
+ * 会让 workflow 仍 running，资源泄漏）。
  *
  * 流程：
- *   1. registry.get(name) → WorkflowScript（未找到返回 failed）
- *   2. script.validate()（lint 检查）→ 失败抛错（不进 runWorkflow）
- *   3. script.toExecutable() → 可执行源
- *   4. 构建 RunSpec + runWorkflow(spec, deps, signal)
- *   5. 轮询至 done（间隔 STATUS_POLL_INTERVAL_MS）
- *   6. timeout → abortRun + transition done,time_limited
- *   7. signal.aborted → abortRun + reason=aborted
+ * 1. registry.get(name) → WorkflowScript（未找到返回 failed）
+ * 2. script.validate（lint 检查）→ 失败抛错（不进 runWorkflow）
+ * 3. script.toExecutable → 可执行源
+ * 4. 构建 RunSpec + runWorkflow(spec, deps, signal)
+ * 5. 轮询至 done（间隔 STATUS_POLL_INTERVAL_MS）
+ * 6. timeout → abortRun + transition done,time_limited
+ * 7. signal.aborted → abortRun + reason=aborted
  *
- * 层归属：Engine。依赖 T14 registry + T21 runWorkflow/abortRun + T2 LifecycleDeps。
+ * 层归属：Engine。依赖 registry + runWorkflow/abortRun + LifecycleDeps。
  *
- * 参考：
- *   - domain-models.md §D-8（WorkflowRunResult 签名）
- *   - clarification.md C.7（timeout → time_limited 修复）
- *   - 旧 lifecycle.legacy.ts runWorkflowAndWait（行为来源）
+ * 参考：domain-models.md §D-8（WorkflowRunResult 签名）、clarification.md C.7。
  */
 
 import { abortRun, runWorkflow } from "./lifecycle.js";
@@ -46,21 +43,21 @@ const STATUS_POLL_INTERVAL_MS = 500;
 // ── 类型 ─────────────────────────────────────────────────────
 
 /**
- * runAndWait 的返回（D-8 新签名）。
+ * runAndWait 的返回（D-8 签名）。
  *
- * status 恒为 "done"（runAndWait 阻塞至 done 才返回）；具体原因由 reason 区分。
- * 替换旧 {status: string, ...}（旧 status 可能是 running/aborted/timeout 等多种值）。
+ * status 恒为 "done"（runAndWait 阻塞至 done 才返回）；具体原因由 reason 区分
+ * （completed/failed/aborted/budget_limited/time_limited）。
  */
 export interface WorkflowRunResult {
-  /** 恒为 "done"（runAndWait 阻塞至 done）。 */
+ /** 恒为 "done"（runAndWait 阻塞至 done）。 */
   status: "done";
-  /** 终态原因（completed/failed/aborted/budget_limited/time_limited）。 */
+ /** 终态原因（completed/failed/aborted/budget_limited/time_limited）。 */
   reason: DoneReason;
-  /** 脚本返回值（reason==="completed" 时有）。 */
+ /** 脚本返回值（reason==="completed" 时有）。 */
   scriptResult?: unknown;
-  /** 错误信息（reason!=="completed" 时可有）。 */
+ /** 错误信息（reason!=="completed" 时可有）。 */
   error?: string;
-  /** run 标识。 */
+ /** run 标识。 */
   runId: string;
 }
 
@@ -71,7 +68,7 @@ export interface WorkflowRunResult {
  * （执行依赖：子进程/线程/持久化）性质不同——故单独扩展，不进 LifecycleDeps。
  */
 export interface LauncherDeps extends LifecycleDeps {
-  /** workflow 脚本仓库（T14 WorkflowScriptRegistryImpl）。 */
+ /** workflow 脚本仓库。 */
   registry: WorkflowScriptRegistry;
 }
 
@@ -104,7 +101,7 @@ function toResult(run: WorkflowRun): WorkflowRunResult {
  * 同步运行 workflow 至终态（跨扩展编程入口）。
  *
  * 阻塞至 run 到达 done，返回 WorkflowRunResult。用于 pi.__workflowRun 等
- * 编程式调用——非交互场景（交互用 run() + lifecycle tools）。
+ * 编程式调用——非交互场景（交互用 run + lifecycle tools）。
  *
  * **超时处理（C.7）**：timeout → abortRun + 返回 reason=time_limited。
  * 旧代码返回 status:"timeout" 但 workflow 可能仍 running（资源泄漏）；
@@ -114,10 +111,10 @@ function toResult(run: WorkflowRun): WorkflowRunResult {
  *
  * **脚本未找到**：返回 reason=failed（不抛错——编程调用方据 reason 判断）。
  *
- * @param name      workflow 脚本名（registry.get 查找）
- * @param args      调用参数（worker 内 $ARGS 访问）
- * @param deps      LauncherDeps（LifecycleDeps + registry）
- * @param signal    外部 abort signal（可选）
+ * @param name workflow 脚本名（registry.get 查找）
+ * @param args 调用参数（worker 内 $ARGS 访问）
+ * @param deps LauncherDeps（LifecycleDeps + registry）
+ * @param signal 外部 abort signal（可选）
  * @param timeoutMs 超时上限（默认 10 分钟）
  * @returns WorkflowRunResult（status 恒 "done"）
  */
@@ -128,7 +125,7 @@ export async function runAndWait(
   signal?: AbortSignal,
   timeoutMs: number = DEFAULT_RUNANDWAIT_TIMEOUT_MS,
 ): Promise<WorkflowRunResult> {
-  // 1. registry 查找脚本
+ // 1. registry 查找脚本
   const script = await deps.registry.get(name);
   if (!script) {
     return {
@@ -139,7 +136,7 @@ export async function runAndWait(
     };
   }
 
-  // 2. lint 校验（失败抛错——脚本本身有问题，不应静默吞）
+ // 2. lint 校验（失败抛错——脚本本身有问题，不应静默吞）
   const lintResult = script.validate();
   if (!lintResult.valid) {
     const errors = lintResult.findings
@@ -149,7 +146,7 @@ export async function runAndWait(
     throw new Error(`Workflow script '${name}' has lint errors: ${errors}`);
   }
 
-  // 3. 构建 RunSpec
+ // 3. 构建 RunSpec
   const spec: RunSpec = {
     scriptSource: script.toExecutable(),
     args,
@@ -160,17 +157,17 @@ export async function runAndWait(
     description: script.meta.description,
   };
 
-  // 4. 启动 workflow
+ // 4. 启动 workflow
   const runId = await runWorkflow(spec, deps, signal);
   const deadline = Date.now() + timeoutMs;
 
-  // 5. 轮询至 done
+ // 5. 轮询至 done
   while (Date.now() < deadline) {
-    // signal abort 检查
+ // signal abort 检查
     if (signal?.aborted) {
-      // W-3 修复：runWorkflow 的 signal listener 可能已先触发 abortRun
-      // （reason="External signal aborted"）。检查 run 是否已 done —— 若已 done，
-      // 直接返回（避免二次 safeAbort 写不同的 error message 造成非确定性）。
+ // runWorkflow 的 signal listener 可能已先触发 abortRun
+ // （reason="External signal aborted"）。检查 run 是否已 done —— 若已 done，
+ // 直接返回（避免二次 safeAbort 写不同的 error message 造成非确定性）。
       const runBeforeAbort = deps.runs.get(runId);
       if (runBeforeAbort?.state.status === "done") {
         return toResult(runBeforeAbort);
@@ -192,8 +189,8 @@ export async function runAndWait(
     await pollInterval();
   }
 
-  // 6. timeout → abortRun（C.7：转 done,time_limited）
-  // W-3 修复：超时前 run 可能已被 signal/其他路径 abort 到 done —— 检查避免覆盖。
+ // 6. timeout → abortRun（C.7：转 done,time_limited）
+ // 超时前 run 可能已被 signal/其他路径 abort 到 done —— 检查避免覆盖。
   const runBeforeTimeout = deps.runs.get(runId);
   if (runBeforeTimeout?.state.status === "done") {
     return toResult(runBeforeTimeout);
@@ -222,7 +219,7 @@ async function safeAbort(
   try {
     await abortRun(runId, deps, reason, doneReason);
   } catch (err) {
-    // run 可能已终态或不存在——忽略，调用方据 toResult 判断
+ // run 可能已终态或不存在——忽略，调用方据 toResult 判断
     void err;
   }
 }

@@ -1,15 +1,15 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/infra/__tests__/skill-discovery.test.ts
 //
-// T-3: resolveSkillPath() 单元测试——对称 agent-discovery.test.ts 的覆盖模式。
+// T-3: resolveSkillPath 单元测试——对称 agent-discovery.test.ts 的覆盖模式。
 //
 // 覆盖：
-//   1. Project-level skill（.agents/skills/<name>/）发现
-//   2. Global skill（~/.pi/agent/skills/<name>/）发现
-//   3. npm 包 skill（~/.pi/agent/npm/node_modules/<pkg>/skills/<name>/）发现
-//   4. 优先级：project > global > npm
-//   5. 不存在的 skill → undefined
-//   6. npm 目录不存在不抛错
+// 1. Project-level skill（.agents/skills/<name>/）发现
+// 2. Global skill（~/.pi/agent/skills/<name>/）发现
+// 3. npm 包 skill（~/.pi/agent/npm/node_modules/<pkg>/skills/<name>/）发现
+// 4. 优先级：project > global > npm
+// 5. 不存在的 skill → undefined
+// 6. npm 目录不存在不抛错
 //
 // 注意：skill-discovery.ts 有模块级 skillCandidatesCache，测试间需 resetModules
 // 避免缓存污染。每个用例 doMock + 动态 import 获得新鲜模块实例。
@@ -139,7 +139,7 @@ describe("resolveSkillPath", () => {
   it("TC-S-07: npm 目录不存在不抛错（返回 undefined 或回退路径）", async () => {
     vi.stubGlobal("process", { ...process, cwd: () => CWD });
     try {
-      // npmPackages 为空 → readdirSync 抛 ENOENT → catch 兜底，不抛错
+ // npmPackages 为空 → readdirSync 抛 ENOENT → catch 兜底，不抛错
       const existsDirs = new Set([globalSkillDir("only-global")]);
       const { resolveSkillPath } = await loadResolver({ existsDirs, npmPackages: [] });
       expect(resolveSkillPath("only-global")).toBe(globalSkillDir("only-global"));

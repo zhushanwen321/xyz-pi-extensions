@@ -102,7 +102,7 @@ describe("Trace.update", () => {
     trace.update(0, { status: "running" }); // retry
     trace.update(0, { status: "completed", completedAt: "2026-06-22T00:02:00.000Z" });
     expect(trace.find(0)?.status).toBe("completed");
-    // error 字段在最后一次 patch 未提供，保留前值（调用方负责清理）
+ // error 字段在最后一次 patch 未提供，保留前值（调用方负责清理）
     expect(trace.find(0)?.error).toBe("first attempt");
   });
 });
@@ -120,7 +120,7 @@ describe("Trace 不变式", () => {
     const trace = new Trace();
     trace.append(makeNode(0));
     const arr = trace.toArray();
-    // readonly 类型在编译期阻止 push，这里只验证运行时是同一份数据
+ // readonly 类型在编译期阻止 push，这里只验证运行时是同一份数据
     expect(arr).toHaveLength(1);
   });
 });

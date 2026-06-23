@@ -1,18 +1,18 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/engine/__tests__/error-recovery.test.ts
 //
-// T19：error-recovery free functions 测试。
+// error-recovery free functions 测试。
 // 覆盖：
-//   1. handleWorkerMessage 路由（agent-call/return/error）
-//   2. handleWorkerError 3 次重试 + 超限 failed
-//   3. handleScriptError 3 次重试 + 超限 failed + workerLogs 捕获
-//   4. handleWorkerExit code===0 no-op / code!==0 委托 handleWorkerError
-//   5. handleWorkerExit G-025 stale handle 丢弃
-//   6. rebuildRuntime 原子替换
-//   7. 终态/paused stale 消息丢弃
+// 1. handleWorkerMessage 路由（agent-call/return/error）
+// 2. handleWorkerError 3 次重试 + 超限 failed
+// 3. handleScriptError 3 次重试 + 超限 failed + workerLogs 捕获
+// 4. handleWorkerExit code===0 no-op / code!==0 委托 handleWorkerError
+// 5. handleWorkerExit G-025 stale handle 丢弃
+// 6. rebuildRuntime 原子替换
+// 7. 终态/paused stale 消息丢弃
 //
 // 测试 fixture 用 EventEmitter-based FakeWorker 构造 WorkerHandle（避开真实
-// worker_threads spawn），与 W2 worker-handle.test.ts 同款 stub 模式。
+// worker_threads spawn），与 worker-handle.test.ts 同款 stub 模式。
 
 /* eslint-disable taste/no-unsafe-cast */
 
@@ -42,7 +42,7 @@ import { Trace } from "../models/trace.js";
 import type { AgentResult, WorkerLogEntry } from "../models/types.js";
 import { WorkflowRun } from "../models/workflow-run.js";
 
-// ── FakeWorker（与 W2 worker-handle.test.ts 同款） ───────────
+// ── FakeWorker（与 worker-handle.test.ts 同款） ───────────
 
 interface FakeWorker extends EventEmitter {
   postMessage: (msg: unknown) => void;
@@ -80,7 +80,7 @@ function makeRun(overrides?: { status?: "running" | "paused" | "done"; budget?: 
     },
     { startedAt: new Date().toISOString() },
   );
-  // 进入 running 状态（需注入 runtime）
+ // 进入 running 状态（需注入 runtime）
   const worker = makeWorkerHandle();
   const gate = new ConcurrencyGate({ maxConcurrency: 4 });
   const rt = new RunRuntime(worker, gate, new AbortController());
@@ -123,9 +123,9 @@ function makeDeps(overrides?: {
     },
     runner: overrides?.runner ?? { run: vi.fn().mockResolvedValue({ content: "ok" } as AgentResult) },
     runs,
-    // T-2：onRunDone 默认注入 spy，让所有 done-transition 站点可被断言。
+ // T-2：onRunDone 默认注入 spy，让所有 done-transition 站点可被断言。
     onRunDone: overrides?.onRunDone ?? vi.fn(),
-    // BL-1: 解析依赖（可选——不传则 dispatchAgentCall 跳过 resolveAgentOpts）。
+ // BL-1: 解析依赖（可选——不传则 dispatchAgentCall 跳过 resolveAgentOpts）。
     ...(overrides?.agentRegistry ? { agentRegistry: overrides.agentRegistry } : {}),
     ...(overrides?.sessionDir ? { sessionDir: overrides.sessionDir } : {}),
     ...(overrides?.activeTempFiles ? { activeTempFiles: overrides.activeTempFiles } : {}),
@@ -187,17 +187,17 @@ describe("handleWorkerMessage 路由", () => {
       deps,
       makeHandlers(),
     );
-    // 异步触发——立即返回时 call 已建但可能未完成
+ // 异步触发——立即返回时 call 已建但可能未完成
     expect(run.state.calls.has(0)).toBe(true);
     const call = run.state.calls.get(0)!;
     expect(call.opts.prompt).toBe("hi");
     expect(run.state.trace.length).toBe(1);
-    // 等微任务让 executeAgentCall 完成
+ // 等微任务让 executeAgentCall 完成
     await vi.waitFor(() => expect(call.status).toBe("done"));
     expect(runner.run).toHaveBeenCalledTimes(1);
   });
 
-  // ── BL-1: agent/skill/schema 解析（dispatchAgentCall → resolveAgentOpts） ──
+ // ── BL-1: agent/skill/schema 解析（dispatchAgentCall → resolveAgentOpts） ──
 
   it("BL-1: agent() 解析 systemPrompt → runner 收到 systemPromptFiles（--append-system-prompt）", async () => {
     const runner = { run: vi.fn().mockResolvedValue({ content: "ok" } as AgentResult) };
@@ -225,14 +225,14 @@ describe("handleWorkerMessage 路由", () => {
     );
     const call = run.state.calls.get(0)!;
     await vi.waitFor(() => expect(call.status).toBe("done"));
-    // runner.run 收到解析后的 opts，含 systemPromptFiles（agent systemPrompt 写临时文件）
+ // runner.run 收到解析后的 opts，含 systemPromptFiles（agent systemPrompt 写临时文件）
     expect(runner.run).toHaveBeenCalledTimes(1);
     const passedOpts = runner.run.mock.calls[0]![0];
     expect(passedOpts.systemPromptFiles).toBeDefined();
     expect(passedOpts.systemPromptFiles.length).toBe(1);
-    // model fallback：opts 未传 model → 用 agent 注册的 model
+ // model fallback：opts 未传 model → 用 agent 注册的 model
     expect(passedOpts.model).toBe("router-openai/glm-5.1");
-    // 临时文件已注册到 activeTempFiles（session_shutdown 回收）
+ // 临时文件已注册到 activeTempFiles（session_shutdown 回收）
     expect(deps.activeTempFiles!.size).toBe(1);
   });
 
@@ -255,12 +255,12 @@ describe("handleWorkerMessage 路由", () => {
       makeHandlers(),
     );
     const call = run.state.calls.get(0)!;
-    // 解析失败：call 立即 done + failed，不调 runner
+ // 解析失败：call 立即 done + failed，不调 runner
     expect(call.status).toBe("done");
     expect(call.result?.error).toBe("Agent not found: nonexistent");
     expect(runner.run).not.toHaveBeenCalled();
-    // worker 收到 {error} 结果（pending Promise reject）
-    // WorkerHandle.postMessage 转发到底层 worker 的 postMessage（FakeWorker 的 spy）
+ // worker 收到 {error} 结果（pending Promise reject）
+ // WorkerHandle.postMessage 转发到底层 worker 的 postMessage（FakeWorker 的 spy）
     expect(run.runtime?.worker.raw.postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "agent-result",
@@ -269,14 +269,14 @@ describe("handleWorkerMessage 路由", () => {
         cached: false,
       }),
     );
-    // trace 节点标 failed
+ // trace 节点标 failed
     const node = run.state.trace.find(0);
     expect(node?.status).toBe("failed");
   });
 
   it("BL-1: skill 解析 → runner 收到 skillPath（--skill）", async () => {
     const runner = { run: vi.fn().mockResolvedValue({ content: "ok" } as AgentResult) };
-    // resolveSkillPath 在模块加载时绑定 os/fs，这里用真实临时目录伪造 skill 目录
+ // resolveSkillPath 在模块加载时绑定 os/fs，这里用真实临时目录伪造 skill 目录
     const skillDir = path.join(os.tmpdir(), ".agents", "skills", "my-skill");
     fs.mkdirSync(skillDir, { recursive: true });
     const fakeRegistry = { resolve: vi.fn() } as unknown as AgentRegistry;
@@ -287,7 +287,7 @@ describe("handleWorkerMessage 路由", () => {
       activeTempFiles: new Set<string>(),
     });
     const run = runOf(deps);
-    // resolveSkillPath 搜索 process.cwd() 相对 .agents/skills —— 改 cwd 到 tmpdir
+ // resolveSkillPath 搜索 process.cwd 相对 .agents/skills —— 改 cwd 到 tmpdir
     const origCwd = process.cwd();
     try {
       process.chdir(os.tmpdir());
@@ -300,8 +300,8 @@ describe("handleWorkerMessage 路由", () => {
       const call = run.state.calls.get(0)!;
       await vi.waitFor(() => expect(call.status).toBe("done"));
       const passedOpts = runner.run.mock.calls[0]![0];
-      // 用 endsWith 断言——macOS 上 os.tmpdir() 返回 /var/... 但 path.resolve 会
-      // 解析符号链接到 /private/var/...（realpath），两者语义等价但字面不同。
+ // 用 endsWith 断言——macOS 上 os.tmpdir 返回 /var/... 但 path.resolve 会
+ // 解析符号链接到 /private/var/...（realpath），两者语义等价但字面不同。
       expect(passedOpts.skillPath).toBeTruthy();
       expect(passedOpts.skillPath.replace(/^\/private/, "")).toBe(
         path.join(os.tmpdir(), ".agents", "skills", "my-skill"),
@@ -330,10 +330,10 @@ describe("handleWorkerMessage 路由", () => {
     const call = run.state.calls.get(0)!;
     await vi.waitFor(() => expect(call.status).toBe("done"));
     const passedOpts = runner.run.mock.calls[0]![0];
-    // schemaEnv = JSON 字符串（PI_WORKFLOW_SCHEMA env）
+ // schemaEnv = JSON 字符串（PI_WORKFLOW_SCHEMA env）
     expect(passedOpts.schemaEnv).toBeDefined();
     expect(JSON.parse(passedOpts.schemaEnv)).toEqual({ type: "object", properties: { score: { type: "number" } } });
-    // systemPromptFiles 含 structured-output 指令文件
+ // systemPromptFiles 含 structured-output 指令文件
     expect(passedOpts.systemPromptFiles).toBeDefined();
     expect(passedOpts.systemPromptFiles.length).toBe(1);
     expect(deps.activeTempFiles!.size).toBe(1);
@@ -368,7 +368,7 @@ describe("handleWorkerMessage 路由", () => {
       deps,
       makeHandlers(),
     );
-    // 已 done 状态不变（stale return 不改 reason）
+ // 已 done 状态不变（stale return 不改 reason）
     expect(run.state.reason).toBe("aborted");
   });
 
@@ -385,14 +385,14 @@ describe("handleWorkerMessage 路由", () => {
     expect(run.state.status).toBe("paused");
   });
 
-  it("W-15: 已缓存的 callId（calls.get(id).status==='done'）→ replay 不再调 runner.run", async () => {
-    // W-15 修复：覆盖 dispatchAgentCall 的 cached replay 真路径（error-recovery.ts:181-185）。
-    // 跨 pause/resume，已完成调用走 callCache replay，不重跑 runner。
+  it("已缓存的 callId（calls.get(id).status==='done'）→ replay 不再调 runner.run", async () => {
+ // 覆盖 dispatchAgentCall 的 cached replay 真路径（error-recovery.ts:181-185）。
+ // 跨 pause/resume，已完成调用走 callCache replay，不重跑 runner。
     const runner = { run: vi.fn().mockResolvedValue({ content: "fresh" } as AgentResult) };
     const deps = makeDeps({ runner });
     const run = runOf(deps);
 
-    // 预置一个已完成 call（模拟上一 running-segment 的结果）
+ // 预置一个已完成 call（模拟上一 running-segment 的结果）
     const cachedResult: AgentResult = { content: "cached-42", toolCalls: [] };
     const cachedCall = new AgentCall(
       0,
@@ -403,7 +403,7 @@ describe("handleWorkerMessage 路由", () => {
     cachedCall.result = cachedResult;
     run.state.calls.set(0, cachedCall);
 
-    // Worker 重新请求同一 callId（resume 后 worker 重跑脚本到 agent-call）
+ // Worker 重新请求同一 callId（resume 后 worker 重跑脚本到 agent-call）
     const postMessageSpy = vi.spyOn(run.runtime!.worker, "postMessage");
     await handleWorkerMessage(
       run,
@@ -412,9 +412,9 @@ describe("handleWorkerMessage 路由", () => {
       makeHandlers(),
     );
 
-    // 关键断言 1：runner.run 没被调（cached 路径不重跑）
+ // 关键断言 1：runner.run 没被调（cached 路径不重跑）
     expect(runner.run).not.toHaveBeenCalled();
-    // 关键断言 2：worker 收到 agent-result（cached:true）—— 回发缓存结果解锁 pending await
+ // 关键断言 2：worker 收到 agent-result（cached:true）—— 回发缓存结果解锁 pending await
     expect(postMessageSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "agent-result",
@@ -453,7 +453,7 @@ describe("handleWorkerError 重试矩阵", () => {
     expect(run.state.status).toBe("done");
     expect(run.state.reason).toBe("failed");
     expect(run.state.error).toBe("boom");
-    // T-2: done,failed 站点也触发 onRunDone
+ // T-2: done,failed 站点也触发 onRunDone
     expect(deps.onRunDone).toHaveBeenCalledWith(run);
   });
 
@@ -471,7 +471,7 @@ describe("handleWorkerError 重试矩阵", () => {
       vi.useRealTimers();
     }
     expect(run.meta.workerErrorCount).toBe(3);
-    // 3 次仍在重试限内（<=MAX_WORKER_RETRIES=3），未 failed
+ // 3 次仍在重试限内（<=MAX_WORKER_RETRIES=3），未 failed
     expect(run.state.status).toBe("running");
   });
 
@@ -480,7 +480,7 @@ describe("handleWorkerError 重试矩阵", () => {
     const run = runOf(deps);
     run.transition("done", "completed");
     await handleWorkerError(run, new Error("late"), deps, makeHandlers());
-    // 不递增
+ // 不递增
     expect(run.meta.workerErrorCount).toBeUndefined();
   });
 });
@@ -514,7 +514,7 @@ describe("handleScriptError 重试矩阵", () => {
     expect(run.state.reason).toBe("failed");
     expect(run.state.error).toContain("3 retries");
     expect(run.state.error).toContain("fatal");
-    // T-2: script-error done,failed 站点也触发 onRunDone
+ // T-2: script-error done,failed 站点也触发 onRunDone
     expect(deps.onRunDone).toHaveBeenCalledWith(run);
   });
 
@@ -576,12 +576,12 @@ describe("handleWorkerExit", () => {
     const deps = makeDeps();
     const run = runOf(deps);
     const staleHandle = run.runtime!.worker;
-    // terminate 让 handle.isCurrent=false
+ // terminate 让 handle.isCurrent=false
     await staleHandle.terminate();
     expect(staleHandle.isCurrent).toBe(false);
 
     await handleWorkerExit(run, 1, staleHandle, deps, makeHandlers());
-    // stale exit 丢弃——workerErrorCount 未递增
+ // stale exit 丢弃——workerErrorCount 未递增
     expect(run.meta.workerErrorCount).toBeUndefined();
   });
 
@@ -589,7 +589,7 @@ describe("handleWorkerExit", () => {
     const deps = makeDeps();
     const run = runOf(deps);
     run.transition("paused");
-    // paused 后 runtime undefined，用独立 handle 模拟
+ // paused 后 runtime undefined，用独立 handle 模拟
     const handle = makeWorkerHandle();
     await handleWorkerExit(run, 1, handle, deps, makeHandlers());
     expect(run.meta.workerErrorCount).toBeUndefined();
@@ -619,7 +619,7 @@ describe("rebuildRuntime", () => {
     expect(run.runtime).not.toBe(oldRuntime);
     expect(run.runtime).toBeDefined();
     expect(deps.workerHost.start).toHaveBeenCalledTimes(1);
-    // status 保持 running（replaceRuntime 不改 status）
+ // status 保持 running（replaceRuntime 不改 status）
     expect(run.state.status).toBe("running");
   });
 
@@ -635,7 +635,7 @@ describe("rebuildRuntime", () => {
     const deps = makeDeps();
     const run = runOf(deps);
     run.transition("paused"); // paused 后 runtime undefined
-    // rebuildRuntime 内调 replaceRuntime，前置要求 running
+ // rebuildRuntime 内调 replaceRuntime，前置要求 running
     expect(() => rebuildRuntime(run, deps, makeHandlers())).toThrow(/running/);
   });
 });
@@ -648,7 +648,7 @@ describe("scheduleRebuild 退避", () => {
     const run = runOf(deps);
     vi.useFakeTimers();
     try {
-      // 启 handleWorkerError（会 delay），在 delay 期间 transition done
+ // 启 handleWorkerError（会 delay），在 delay 期间 transition done
       const p = handleWorkerError(run, new Error("x"), deps, makeHandlers());
       run.transition("done", "aborted");
       await vi.runAllTimersAsync();
@@ -656,7 +656,7 @@ describe("scheduleRebuild 退避", () => {
     } finally {
       vi.useRealTimers();
     }
-    // done 后不 rebuild（workerHost.start 未调）
+ // done 后不 rebuild（workerHost.start 未调）
     expect(deps.workerHost.start).not.toHaveBeenCalled();
   });
 
@@ -665,7 +665,7 @@ describe("scheduleRebuild 退避", () => {
     const run = runOf(deps);
     vi.useFakeTimers();
     try {
-      // 记录每次 scheduleRebuild 触发 workerHost.start 的时刻
+ // 记录每次 scheduleRebuild 触发 workerHost.start 的时刻
       for (let i = 0; i < 3; i++) {
         const p = handleWorkerError(run, new Error(`e${i}`), deps, makeHandlers());
         await vi.runAllTimersAsync();
@@ -674,7 +674,7 @@ describe("scheduleRebuild 退避", () => {
     } finally {
       vi.useRealTimers();
     }
-    // 3 次 rebuild（每次 workerErrorCount 递增触发一次）
+ // 3 次 rebuild（每次 workerErrorCount 递增触发一次）
     expect(deps.workerHost.start).toHaveBeenCalledTimes(3);
   });
 });
@@ -683,7 +683,7 @@ describe("scheduleRebuild 退避", () => {
 
 describe("T-1: C-2 budget_limited 终止", () => {
   it("agent-call 完成后 budget 超限 → transition done,budget_limited", async () => {
-    // maxTokens=10，runner 返回 usage 消耗 50 token（超限）
+ // maxTokens=10，runner 返回 usage 消耗 50 token（超限）
     const budget = new Budget({ maxTokens: 10 });
     const runner = {
       run: vi.fn().mockResolvedValue({
@@ -700,7 +700,7 @@ describe("T-1: C-2 budget_limited 终止", () => {
       deps,
       makeHandlers(),
     );
-    // 等异步 dispatchAgentCall 的 .then() 完成（含 budget 检查）
+ // 等异步 dispatchAgentCall 的 .then 完成（含 budget 检查）
     await vi.waitFor(() => expect(run.state.status).toBe("done"));
 
     expect(run.state.reason).toBe("budget_limited");
@@ -728,7 +728,7 @@ describe("T-1: C-2 budget_limited 终止", () => {
     );
     await vi.waitFor(() => expect(runner.run).toHaveBeenCalled());
 
-    // 给 .then() 一个微任务窗口
+ // 给 .then 一个微任务窗口
     await Promise.resolve();
     await Promise.resolve();
 

@@ -4,11 +4,11 @@
 // 关闭 CI sdk-contract-audit job 的前向引用。
 //
 // 核心断言（[MANDATORY] checklist）：
-//   1. registerWorkflowTool 注册名为 "workflow" 的工具，execute 是 5 参数
-//      (toolCallId, params, signal, onUpdate, ctx) —— ctx 是第 5 参数（SDK 契约）
-//   2. registerWorkflowScriptTool 注册名为 "workflow-script" 的工具，schema 存在
-//   3. /workflows command 注册名为 "workflows"，handler 是 (args, ctx)
-//   4. Factory 注册 session_start / session_tree / session_shutdown 三个 handler
+// 1. registerWorkflowTool 注册名为 "workflow" 的工具，execute 是 5 参数
+// (toolCallId, params, signal, onUpdate, ctx) —— ctx 是第 5 参数（SDK 契约）
+// 2. registerWorkflowScriptTool 注册名为 "workflow-script" 的工具，schema 存在
+// 3. /workflows command 注册名为 "workflows"，handler 是 (args, ctx)
+// 4. Factory 注册 session_start / session_tree / session_shutdown 三个 handler
 //
 // 参考：extensions/subagents/src/__tests__/sdk-contract.test.ts（模板来源）。
 
@@ -105,8 +105,8 @@ describe("workflow tool contract [MANDATORY]", () => {
       { isProcessing: false },
     );
     const tool = getTool("workflow");
-    // SDK ToolDefinition.execute(toolCallId, params, signal, onUpdate, ctx) = 5 显式参数。
-    // Function.length 不计 this，故 method 形式下仍为 5。精确断言锁定 5 参数契约。
+ // SDK ToolDefinition.execute(toolCallId, params, signal, onUpdate, ctx) = 5 显式参数。
+ // Function.length 不计 this，故 method 形式下仍为 5。精确断言锁定 5 参数契约。
     const execute = tool?.execute as ((...args: unknown[]) => unknown) | undefined;
     expect(typeof execute).toBe("function");
     expect(execute?.length).toBe(5);
@@ -166,7 +166,7 @@ describe("factory handler registration [MANDATORY]", () => {
       registerCommand: vi.fn((name: string, def: unknown) => {
         commands[name] = def;
       }),
-      // W-3：捕获 handler 本身（而非仅 event 名），以便断言 arity。
+ // 捕获 handler 本身（而非仅 event 名），以便断言 arity。
       on: vi.fn((event: string, handler: (...args: unknown[]) => unknown) => {
         events[event] = handler;
       }),
@@ -174,15 +174,15 @@ describe("factory handler registration [MANDATORY]", () => {
       appendEntry: vi.fn(),
     } as unknown as ExtensionAPI;
 
-    // Dynamic import to avoid alias-resolution issues at module load
+ // Dynamic import to avoid alias-resolution issues at module load
     const workflowExtension = (await import("../index.js")).default;
     workflowExtension(pi);
 
-    // FR-5: 2 tools
+ // FR-5: 2 tools
     expect(Object.keys(tools).sort()).toEqual(["workflow", "workflow-script"]);
-    // FR-6: 1 command (/workflows)
+ // FR-6: 1 command (/workflows)
     expect(Object.keys(commands)).toEqual(["workflows"]);
-    // 3 session handlers
+ // 3 session handlers
     expect(Object.keys(events).filter((e) => e.startsWith("session_")).sort()).toEqual([
       "session_shutdown",
       "session_start",
@@ -190,9 +190,9 @@ describe("factory handler registration [MANDATORY]", () => {
     ]);
   });
 
-  it("W-3: session handlers have 2-arg (event, ctx) signature — not 1-arg (ctx)", async () => {
-    // 回归保护：handler 必须是 (event, ctx) 两参数。若退化为 (ctx) => ctx.sessionManager
-    // （清单 item 1 的历史 bug），fn.length 会是 1，本断言会失败。
+  it("session handlers have 2-arg (event, ctx) signature — not 1-arg (ctx)", async () => {
+ // 回归保护：handler 必须是 (event, ctx) 两参数。若退化为 (ctx) => ctx.sessionManager
+ // （清单 item 1 的历史 bug），fn.length 会是 1，本断言会失败。
     const events: Record<string, ((...args: unknown[]) => unknown) | undefined> = {};
     const pi = {
       registerTool: vi.fn(),
@@ -210,13 +210,13 @@ describe("factory handler registration [MANDATORY]", () => {
     for (const name of ["session_start", "session_tree", "session_shutdown"]) {
       const handler = events[name];
       expect(typeof handler).toBe("function");
-      // SDK ExtensionHandler<E> = (event: E, ctx: ExtensionContext) => ... —— 2 参数。
-      // 注：async (event, ctx) 的 fn.length = 2（参数均无默认值）。
+ // SDK ExtensionHandler<E> = (event: E, ctx: ExtensionContext) => ... —— 2 参数。
+ // 注：async (event, ctx) 的 fn.length = 2（参数均无默认值）。
       expect(handler?.length).toBeGreaterThanOrEqual(2);
     }
   });
 
-  it("W-3: /workflows command handler has 2-arg (args, ctx) signature", async () => {
+  it("/workflows command handler has 2-arg (args, ctx) signature", async () => {
     const commands: Record<string, unknown> = {};
     const pi = {
       registerTool: vi.fn(),
@@ -233,7 +233,7 @@ describe("factory handler registration [MANDATORY]", () => {
 
     const cmd = commands["workflows"] as { handler?: (...args: unknown[]) => unknown } | undefined;
     expect(typeof cmd?.handler).toBe("function");
-    // Pi Command handler = (args: ParsedArgs, ctx: ExtensionContext) => ... —— 2 参数。
+ // Pi Command handler = (args: ParsedArgs, ctx: ExtensionContext) => ... —— 2 参数。
     expect(cmd?.handler?.length).toBeGreaterThanOrEqual(2);
   });
 });

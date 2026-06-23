@@ -1,43 +1,39 @@
 /**
- * Workflow Extension — Worker Script Builder（W2-T11）
+ * Workflow Extension — Worker Script Builder
  *
  * 生成运行 workflow 脚本的 Worker 线程源码字符串：注入全局函数
- * agent()/parallel()/pipeline()/phase()/log()，并在 worker 内部处理
+ * agent/parallel/pipeline/phase/log，并在 worker 内部处理
  * parentPort 消息循环（agent-call / agent-result / abort / budget-update）。
  *
  * 层归属：Infra（源码字符串生成，纯文本拼接，无 Pi 依赖）。
  *
- * 关键变化（相对旧 engine/worker-script.ts）：
- *   - 路径 engine/ → infra/（D-12 归位）
- *   - WorkerLogEntry 类型来源改为 engine/models/types.js（T1，删除此处重复声明）
- *   - Fallow 审计：删除未使用的 WorkerScriptData/WorkerInMsg 导出类型
- *     （原注释称 WorkerHost/lifecycle 依赖，实际无引用——消息类型在 error-recovery.ts
- *     内联定义，workerData 形状在 WorkerHost.start 处即席构造）。
- *   - **AC-4 不变式**：buildWorkerScript 生成的脚本格式逐字保留——
- *     用户资产（workflow 脚本依赖 agent()/parallel()/pipeline()/$ARGS/$BUDGET 等契约）
+ * 设计：
+ * - WorkerLogEntry 类型来源 engine/models/types.js（不在本文件重复声明）。
+ * - **AC-4 不变式**：buildWorkerScript 生成的脚本格式逐字保留——
+ * 用户资产（workflow 脚本依赖 agent/parallel/pipeline/$ARGS/$BUDGET 等契约）。
  *
  * 兼容 Claude Code Workflow 脚本格式：
- *   - agent(promptString) / agent(promptString, { label?, schema?, model?, scene? }) /
- *     agent({ prompt, schema?, model?, scene?, description? })
- *   - parallel([agent(...), ...]) 或 parallel([{ task, agent }, ...])
- *   - pipeline([stageFn, ...])
- *   - phase(name), log(msg)
- *   - $ARGS, $WORKSPACE, $BUDGET
- *   - module.exports = { meta, execute } 自动调用
+ * - agent(promptString) / agent(promptString, { label?, schema?, model?, scene? }) /
+ * agent({ prompt, schema?, model?, scene?, description? })
+ * - parallel([agent(...), ...]) 或 parallel([{ task, agent }, ...])
+ * - pipeline([stageFn, ...])
+ * - phase(name), log(msg)
+ * - $ARGS, $WORKSPACE, $BUDGET
+ * - module.exports = { meta, execute } 自动调用
  *
  * 生成的源码通过 `new Worker(code, { eval: true, workerData })` 在隔离的 Worker 线程运行。
  *
  * 通信协议（AC-4 契约，逐字保留）：
- *   Worker → Main (postMessage):
- *     { type: "agent-call", callId: number, opts: AgentCallOpts }
- *     { type: "return", runId: string, result: unknown }
- *     { type: "error", runId: string, error: string }
- *     { type: "log", phase: string, message: string }
+ * Worker → Main (postMessage):
+ * { type: "agent-call", callId: number, opts: AgentCallOpts }
+ * { type: "return", runId: string, result: unknown }
+ * { type: "error", runId: string, error: string }
+ * { type: "log", phase: string, message: string }
  *
- *   Main → Worker (parentPort.on("message")):
- *     { type: "agent-result", callId: number, result: AgentResult, cached: boolean }
- *     { type: "budget-update", budget: unknown }
- *     { type: "abort", reason: string }
+ * Main → Worker (parentPort.on("message")):
+ * { type: "agent-result", callId: number, result: AgentResult, cached: boolean }
+ * { type: "budget-update", budget: unknown }
+ * { type: "abort", reason: string }
  */
 
 // ── Build worker source ─────────────────────────────────────
@@ -131,16 +127,16 @@ export function buildWorkerScript(userScript: string): string {
     '    // "budget-warning" is informational; no required handling',
     '  });',
     '',
-    // ── phase() global ──
+ // ── phase global ──
     '  let _currentPhase = "";',
     '  function phase(name) { _currentPhase = String(name); }',
     '',
-    // ── log() global ──
+ // ── log global ──
     '  function log(msg) {',
     '    try { parentPort.postMessage({ type: "log", phase: _currentPhase, message: String(msg) }); } catch(e) { /* swallow */ }',
     '  }',
     '',
-    // ── agent() global — CC-compatible multi-signature ──
+ // ── agent global — CC-compatible multi-signature ──
     '  async function agent(firstArg, secondArg) {',
     '    let opts;',
     '    if (typeof firstArg === "string") {',
@@ -197,7 +193,7 @@ export function buildWorkerScript(userScript: string): string {
     '    });',
     '  }',
     '',
-    // ── parallel() global — CC-compatible ──
+ // ── parallel global — CC-compatible ──
     '  async function parallel(calls) {',
     '    if (typeof calls === "function") { return calls(); }',
     '    return Promise.all(calls.map((c) => {',
@@ -207,7 +203,7 @@ export function buildWorkerScript(userScript: string): string {
     '    }));',
     '  }',
     '',
-    // ── pipeline() global ──
+ // ── pipeline global ──
     '  async function pipeline(firstArg, ...restStages) {',
     '    // Single-arg mode: pipeline([stage1, stage2, ...])',
     '    if (Array.isArray(firstArg) && restStages.length === 0) {',

@@ -5,13 +5,13 @@
  * 运行命令：npx vitest run src/infra/__tests__/agent-opts-resolver.test.ts
  *
  * 覆盖 resolveAgentOpts 的 3 条解析路径：
- *   1. agent → AgentRegistry.resolve → systemPrompt 写临时文件 → systemPromptFiles
- *   2. skill → resolveSkillPath → skillPath
- *   3. schema → 结构化输出指令写临时文件 → systemPromptFiles + schemaEnv
+ * 1. agent → AgentRegistry.resolve → systemPrompt 写临时文件 → systemPromptFiles
+ * 2. skill → resolveSkillPath → skillPath
+ * 3. schema → 结构化输出指令写临时文件 → systemPromptFiles + schemaEnv
  *
  * 以及错误路径：agent 未找到 / skill 未找到 / 临时文件注册到 activeTempFiles。
  *
- * resolveSkillPath 内部用 process.cwd() 与 os.homedir()——skill 测试需 chdir 到
+ * resolveSkillPath 内部用 process.cwd 与 os.homedir——skill 测试需 chdir 到
  * tmp fixture 或改 homeDir，见 skill-discovery.test.ts 同款隔离模式。
  */
 
@@ -81,7 +81,7 @@ describe("resolveAgentOpts (BL-1)", () => {
     fixture = undefined;
   });
 
-  // ── agent 解析 ──
+ // ── agent 解析 ──
 
   it("agent 已找到 → 写 systemPrompt 临时文件 + 填 systemPromptFiles + model fallback", () => {
     fixture = createFixture({ ".pi/agents/code-review.md": AGENT_REVIEW });
@@ -99,11 +99,11 @@ describe("resolveAgentOpts (BL-1)", () => {
     expect(result.error).toBeUndefined();
     expect(result.opts.systemPromptFiles).toBeDefined();
     expect(result.opts.systemPromptFiles!.length).toBe(1);
-    // model fallback：opts 未传 model → 用 agent 注册的 model
+ // model fallback：opts 未传 model → 用 agent 注册的 model
     expect(result.opts.model).toBe("ds-flash");
-    // 临时文件已注册到 activeTempFiles
+ // 临时文件已注册到 activeTempFiles
     expect(fixture.activeTempFiles.size).toBe(1);
-    // 临时文件内容 = agent systemPrompt
+ // 临时文件内容 = agent systemPrompt
     const tmpFile = result.opts.systemPromptFiles![0];
     expect(fs.readFileSync(tmpFile, "utf-8").trim()).toBe("You are a meticulous code reviewer.");
   });
@@ -157,11 +157,11 @@ describe("resolveAgentOpts (BL-1)", () => {
     expect(fixture.activeTempFiles.size).toBe(0);
   });
 
-  // ── skill 解析 ──
+ // ── skill 解析 ──
 
   it("skill 已找到 → 填 skillPath（项目 .agents/skills 目录）", () => {
     fixture = createFixture();
-    // resolveSkillPath 搜索 process.cwd()/.agents/skills/<name> —— chdir 到 fixture root
+ // resolveSkillPath 搜索 process.cwd/.agents/skills/<name> —— chdir 到 fixture root
     const skillDir = path.join(fixture.root, ".agents", "skills", "my-skill");
     fs.mkdirSync(skillDir, { recursive: true });
     origCwd = process.cwd();
@@ -177,8 +177,8 @@ describe("resolveAgentOpts (BL-1)", () => {
     );
 
     expect(result.error).toBeUndefined();
-    // resolveSkillPath 内部用 path.resolve（会解析 macOS /var → /private/var 符号链接），
-    // 故预期值需 realpathSync 标准化。
+ // resolveSkillPath 内部用 path.resolve（会解析 macOS /var → /private/var 符号链接），
+ // 故预期值需 realpathSync 标准化。
     expect(result.opts.skillPath).toBe(fs.realpathSync(skillDir));
   });
 
@@ -200,7 +200,7 @@ describe("resolveAgentOpts (BL-1)", () => {
     expect(result.opts.skillPath).toBeUndefined();
   });
 
-  // ── schema 解析 ──
+ // ── schema 解析 ──
 
   it("schema 提供 → 写 structured-output 指令临时文件 + 填 schemaEnv", () => {
     fixture = createFixture();
@@ -219,14 +219,14 @@ describe("resolveAgentOpts (BL-1)", () => {
     expect(result.opts.schemaEnv).toBe(JSON.stringify(schema));
     expect(result.opts.systemPromptFiles).toBeDefined();
     expect(result.opts.systemPromptFiles!.length).toBe(1);
-    // 临时文件内容含 structured-output 指令
+ // 临时文件内容含 structured-output 指令
     const content = fs.readFileSync(result.opts.systemPromptFiles![0], "utf-8");
     expect(content).toContain("Structured Output Requirement");
     expect(content).toContain(JSON.stringify(schema));
     expect(fixture.activeTempFiles.size).toBe(1);
   });
 
-  // ── 组合 + cleanup ──
+ // ── 组合 + cleanup ──
 
   it("agent + skill + schema 组合 → 2 个临时文件（agent prompt + schema 指令）+ skillPath", () => {
     fixture = createFixture({ ".pi/agents/code-review.md": AGENT_REVIEW });
@@ -246,7 +246,7 @@ describe("resolveAgentOpts (BL-1)", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.opts.systemPromptFiles!.length).toBe(2); // agent prompt + schema 指令
-    // resolveSkillPath 用 path.resolve（macOS /var → /private/var），需 realpathSync 标准化
+ // resolveSkillPath 用 path.resolve（macOS /var → /private/var），需 realpathSync 标准化
     expect(result.opts.skillPath).toBe(fs.realpathSync(skillDir));
     expect(result.opts.schemaEnv).toBe(JSON.stringify({ type: "object" }));
     expect(fixture.activeTempFiles.size).toBe(2);

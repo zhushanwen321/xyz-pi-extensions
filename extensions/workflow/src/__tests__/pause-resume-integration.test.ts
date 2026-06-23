@@ -1,12 +1,12 @@
 // 测试框架：vitest
 // 运行命令：npx vitest run src/__tests__/pause-resume-integration.test.ts
 //
-// T31 集成测试：domain-models.md §测试不变式清单 —— 跨 session pause/resume。
+// 集成测试：domain-models.md §测试不变式清单 —— 跨 session pause/resume。
 //
 // 不变式：
-//   - pause 后 RunState.calls 保留（callCache 不丢）
-//   - resume 时 worker 用 calls replay，不重复执行已完成的 call
-//   - abort 清理 worker + runtime=undefined
+// - pause 后 RunState.calls 保留（callCache 不丢）
+// - resume 时 worker 用 calls replay，不重复执行已完成的 call
+// - abort 清理 worker + runtime=undefined
 //
 // 这些测 WorkflowRun + RunRuntime 模型层契约（不启真实 worker——用 FakeWorker）。
 
@@ -74,7 +74,7 @@ function makeCompletedCall(callId: number): AgentCall {
 
 /**
  * 创建一个 running WorkflowRun（含 runtime + 已完成的 callCache + trace）。
- * 模拟「agent() 已执行过一次，结果缓存在 calls 里」的状态。
+ * 模拟「agent 已执行过一次，结果缓存在 calls 里」的状态。
  */
 function makeRunningRunWithCachedCall(): {
   run: WorkflowRun;
@@ -101,7 +101,7 @@ function makeRunningRunWithCachedCall(): {
     { startedAt: new Date().toISOString() },
   );
 
-  // 给 run 分配 runtime（进入 running）
+ // 给 run 分配 runtime（进入 running）
   const fakeWorker = createFakeWorker();
   const handle = new WorkerHandle(asWorker(fakeWorker));
   const gate = new ConcurrencyGate({ maxConcurrency: 4 });
@@ -120,11 +120,11 @@ describe("pause/resume integration (domain-models §测试不变式)", () => {
     expect(run.runtime).toBeDefined();
     expect(run.state.calls.size).toBe(1);
 
-    // pause：transition("paused") + releaseRuntime
+ // pause：transition("paused") + releaseRuntime
     run.transition("paused");
     run.releaseRuntime();
 
-    // 不变式：calls 保留（callCache 不随 runtime 释放）
+ // 不变式：calls 保留（callCache 不随 runtime 释放）
     expect(run.state.status).toBe("paused");
     expect(run.runtime).toBeUndefined();
     expect(run.state.calls.size).toBe(1);
@@ -137,11 +137,11 @@ describe("pause/resume integration (domain-models §测试不变式)", () => {
   it("resume rebuilds runtime; callCache intact for replay (no re-execution)", () => {
     const { run } = makeRunningRunWithCachedCall();
 
-    // pause
+ // pause
     run.transition("paused");
     run.releaseRuntime();
 
-    // resume：重新分配 runtime（worker 由 lifecycle 重新 start）
+ // resume：重新分配 runtime（worker 由 lifecycle 重新 start）
     const fakeWorker2 = createFakeWorker();
     const handle2 = new WorkerHandle(asWorker(fakeWorker2));
     const gate2 = new ConcurrencyGate({ maxConcurrency: 4 });
@@ -150,7 +150,7 @@ describe("pause/resume integration (domain-models §测试不变式)", () => {
 
     expect(run.state.status).toBe("running");
     expect(run.runtime).toBeDefined();
-    // callCache 仍在——worker resume 时 replay calls，不重复执行
+ // callCache 仍在——worker resume 时 replay calls，不重复执行
     expect(run.state.calls.size).toBe(1);
     const cachedCall = run.state.calls.get(0);
     expect(cachedCall?.status).toBe("done");
@@ -161,15 +161,15 @@ describe("pause/resume integration (domain-models §测试不变式)", () => {
     expect(run.state.status).toBe("running");
     expect(run.runtime).toBeDefined();
 
-    // abort：transition("done", "aborted") + releaseRuntime
+ // abort：transition("done", "aborted") + releaseRuntime
     run.transition("done", "aborted");
     run.releaseRuntime();
 
     expect(run.state.status).toBe("done");
     expect(run.state.reason).toBe("aborted");
     expect(run.runtime).toBeUndefined();
-    // WorkerHandle.isCurrent=false after terminate（竞态防护 G-025）
-    // (terminate is idempotent; releaseRuntime terminates the worker)
+ // WorkerHandle.isCurrent=false after terminate（竞态防护 G-025）
+ // (terminate is idempotent; releaseRuntime terminates the worker)
     void handle; // handle captured, terminate called via runtime release
   });
 
@@ -187,7 +187,7 @@ describe("pause/resume integration (domain-models §测试不变式)", () => {
     const runtime2 = new RunRuntime(handle2, gate2, new AbortController());
     run.assignRuntime(runtime2);
 
-    // trace 保留（pause/resume 不丢历史节点）
+ // trace 保留（pause/resume 不丢历史节点）
     const nodesAfter = run.state.trace.toArray();
     expect(nodesAfter).toHaveLength(1);
     expect(nodesAfter[0]).toEqual(nodesBefore[0]);
@@ -197,7 +197,7 @@ describe("pause/resume integration (domain-models §测试不变式)", () => {
     const { run } = makeRunningRunWithCachedCall();
     run.transition("paused");
     run.releaseRuntime();
-    // 二次 release 不抛（幂等）
+ // 二次 release 不抛（幂等）
     expect(() => run.releaseRuntime()).not.toThrow();
     expect(run.runtime).toBeUndefined();
   });

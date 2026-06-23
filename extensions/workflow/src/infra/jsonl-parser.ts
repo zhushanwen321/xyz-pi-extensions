@@ -2,7 +2,7 @@
  * Workflow Extension — JSONL Parser
  *
  * Pure functions for parsing pi --mode json JSONL events.
- * No side effects, no dependency on AgentPool state.
+ * No side effects, no runtime state dependency.
  * Mutates a ParsedPipelineEvent accumulator in place for O(1) memory per event.
  */
 
@@ -15,22 +15,22 @@ export interface ParsedPipelineEvent {
   usage: PipelineUsage;
   model?: string;
   stopReason?: string;
-  /**
-   * Structured output from successful structured-output tool call.
-   * Source: `tool_execution_end.result.details` — the validated & parsed data object
-   * returned by the extension's execute(). NOT the raw tool call args (which may contain
-   * JSON strings for schema/data that models sometimes pass).
-   */
+ /**
+ * Structured output from successful structured-output tool call.
+ * Source: `tool_execution_end.result.details` — the validated & parsed data object
+ * returned by the extension's execute. NOT the raw tool call args (which may contain
+ * JSON strings for schema/data that models sometimes pass).
+ */
   parsedOutput?: unknown;
-  /** Pending args from tool_execution_start, awaiting tool_execution_end confirmation. */
+ /** Pending args from tool_execution_start, awaiting tool_execution_end confirmation. */
   pendingStructuredArgs?: unknown;
-  /** Pending toolCallId to match against tool_execution_end. */
+ /** Pending toolCallId to match against tool_execution_end. */
   pendingStructuredCallId?: string;
-  /** Whether any tool_execution_start event was seen (for schema failure detection). */
+ /** Whether any tool_execution_start event was seen (for schema failure detection). */
   hasToolCall?: boolean;
-  /** Session ID extracted from the first JSONL event (type=session header). */
+ /** Session ID extracted from the first JSONL event (type=session header). */
   sessionId?: string;
-  /** All tool calls collected from JSONL stream (FR-7). */
+ /** All tool calls collected from JSONL stream (FR-7). */
   toolCalls: ToolCallEntry[];
 }
 
@@ -62,7 +62,7 @@ export function makeEmptyPipeline(): ParsedPipelineEvent {
  * Mutates `pipeline` in place with O(1) memory overhead per event.
  */
 export function processJsonlEvent(event: Record<string, unknown>, pipeline: ParsedPipelineEvent): void {
-  // First event in --mode json stdout: session header with ID for locating session JSONL
+ // First event in --mode json stdout: session header with ID for locating session JSONL
   if (event.type === "session") {
     if (typeof event.id === "string") {
       pipeline.sessionId = event.id;

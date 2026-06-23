@@ -36,57 +36,57 @@ export class AgentRegistry {
     this.homeDir = homeDir ?? os.homedir();
   }
 
-  /** Scan all discovery paths and populate the internal cache. Clears previous entries first. */
+ /** Scan all discovery paths and populate the internal cache. Clears previous entries first. */
   discoverAll(): void {
     this.cache.clear();
 
     const home = this.homeDir;
 
-    // Ordered lowest → highest priority. Map.set overwrites, so last writer wins.
+ // Ordered lowest → highest priority. Map.set overwrites, so last writer wins.
     const scanTargets: Array<{ dir: string; source: DiscoveredAgent["source"] }> = [
-      // Priority 9 (lowest): extensions/*/agents/*.md
+ // Priority 9 (lowest): extensions/*/agents/*.md
       { dir: path.join(this.cwd, "extensions"), source: "local" },
-      // Priority 7-8: cwd/.pi/npm/node_modules/{@scope/pkg,pkg}/agents/*.md
+ // Priority 7-8: cwd/.pi/npm/node_modules/{@scope/pkg,pkg}/agents/*.md
       { dir: path.join(this.cwd, ".pi", "npm", "node_modules"), source: "package" },
-      // Priority 5-6: ~/.pi/agent/npm/node_modules/{@scope/pkg,pkg}/agents/*.md
+ // Priority 5-6: ~/.pi/agent/npm/node_modules/{@scope/pkg,pkg}/agents/*.md
       { dir: path.join(home, ".pi", "agent", "npm", "node_modules"), source: "package" },
-      // Priority 4: ~/.agents/agents/*.md
+ // Priority 4: ~/.agents/agents/*.md
       { dir: path.join(home, ".agents", "agents"), source: "user" },
-      // Priority 3: ~/.pi/agent/agents/*.md
+ // Priority 3: ~/.pi/agent/agents/*.md
       { dir: path.join(home, ".pi", "agent", "agents"), source: "user" },
-      // Priority 2: cwd/.agents/agents/*.md
+ // Priority 2: cwd/.agents/agents/*.md
       { dir: path.join(this.cwd, ".agents", "agents"), source: "project" },
-      // Priority 1 (highest): cwd/.pi/agents/*.md
+ // Priority 1 (highest): cwd/.pi/agents/*.md
       { dir: path.join(this.cwd, ".pi", "agents"), source: "project" },
     ];
 
     for (const target of scanTargets) {
       if (target.source === "local") {
-        // extensions/*/agents/ — iterate extension dirs, then scan their agents/
+ // extensions/*/agents/ — iterate extension dirs, then scan their agents/
         this.scanExtensionsDir(target.dir, target.source);
       } else if (target.source === "package") {
-        // node_modules — iterate packages, then scan their agents/
+ // node_modules — iterate packages, then scan their agents/
         this.scanNpmDir(target.dir, target.source);
       } else {
-        // Direct agents/ directory
+ // Direct agents/ directory
         this.scanDir(target.dir, target.source);
       }
     }
   }
 
-  /** Look up an agent by name. Returns undefined if not found. */
+ /** Look up an agent by name. Returns undefined if not found. */
   resolve(name: string): DiscoveredAgent | undefined {
     return this.cache.get(name);
   }
 
-  /** Return all discovered agents. */
+ /** Return all discovered agents. */
   list(): DiscoveredAgent[] {
     return [...this.cache.values()];
   }
 
-  // ── Internal scanning helpers ──────────────────────────────
+ // ── Internal scanning helpers ──────────────────────────────
 
-  /** Scan an extensions/ directory: each subdirectory's agents/ folder. */
+ /** Scan an extensions/ directory: each subdirectory's agents/ folder. */
   private scanExtensionsDir(extensionsDir: string, source: DiscoveredAgent["source"]): void {
     if (!this.safeStatDir(extensionsDir)) return;
 
@@ -94,7 +94,7 @@ export class AgentRegistry {
     try {
       entries = fs.readdirSync(extensionsDir);
     } catch {
-      // Directory not readable — skip
+ // Directory not readable — skip
       return;
     }
 
@@ -104,10 +104,10 @@ export class AgentRegistry {
     }
   }
 
-  /**
-   * Scan an npm node_modules directory: handle both scoped (@scope/pkg)
-   * and unscoped (pkg) packages, looking for agents/ subdirectory in each.
-   */
+ /**
+ * Scan an npm node_modules directory: handle both scoped (@scope/pkg)
+ * and unscoped (pkg) packages, looking for agents/ subdirectory in each.
+ */
   private scanNpmDir(nodeModulesDir: string, source: DiscoveredAgent["source"]): void {
     if (!this.safeStatDir(nodeModulesDir)) return;
 
@@ -115,19 +115,19 @@ export class AgentRegistry {
     try {
       entries = fs.readdirSync(nodeModulesDir);
     } catch {
-      // node_modules not readable — skip
+ // node_modules not readable — skip
       return;
     }
 
     for (const entry of entries) {
       const entryPath = path.join(nodeModulesDir, entry);
       if (entry.startsWith("@")) {
-        // Scoped package directory — iterate children
+ // Scoped package directory — iterate children
         let scopedEntries: string[];
         try {
           scopedEntries = fs.readdirSync(entryPath);
         } catch {
-          // Scoped directory not readable — skip
+ // Scoped directory not readable — skip
           continue;
         }
         for (const scopedPkg of scopedEntries) {
@@ -135,14 +135,14 @@ export class AgentRegistry {
           this.scanDir(agentsDir, source);
         }
       } else {
-        // Unscoped package
+ // Unscoped package
         const agentsDir = path.join(entryPath, "agents");
         this.scanDir(agentsDir, source);
       }
     }
   }
 
-  /** Scan a single directory for .md agent files. */
+ /** Scan a single directory for .md agent files. */
   private scanDir(dir: string, source: DiscoveredAgent["source"]): void {
     if (!this.safeStatDir(dir)) return;
 
@@ -150,7 +150,7 @@ export class AgentRegistry {
     try {
       entries = fs.readdirSync(dir);
     } catch {
-      // Agents directory not readable — skip
+ // Agents directory not readable — skip
       return;
     }
 
@@ -164,13 +164,13 @@ export class AgentRegistry {
     }
   }
 
-  /** Read and parse a single .md agent file, adding it to the cache. */
+ /** Read and parse a single .md agent file, adding it to the cache. */
   private processFile(filePath: string, fileName: string, source: DiscoveredAgent["source"]): void {
     let content: string;
     try {
       content = fs.readFileSync(filePath, "utf-8");
     } catch {
-      // File not readable — skip
+ // File not readable — skip
       return;
     }
 
@@ -185,12 +185,12 @@ export class AgentRegistry {
     });
   }
 
-  /** Check if a path exists and is a directory. Returns false on any error. */
+ /** Check if a path exists and is a directory. Returns false on any error. */
   private safeStatDir(dirPath: string): boolean {
     try {
       return fs.statSync(dirPath).isDirectory();
     } catch {
-      // Path doesn't exist or not accessible — skip
+ // Path doesn't exist or not accessible — skip
       return false;
     }
   }
@@ -202,8 +202,8 @@ export class AgentRegistry {
  * Parse a .md file's frontmatter and body.
  *
  * - If file starts with `---`, look for closing `---`. If found, extract YAML
- *   fields via regex and use the rest as systemPrompt. If not found, treat
- *   entire file as systemPrompt with filename as name.
+ * fields via regex and use the rest as systemPrompt. If not found, treat
+ * entire file as systemPrompt with filename as name.
  * - If no frontmatter, filename (minus .md) is name, entire content is systemPrompt.
  *
  * Limitation: uses simple indexOf to find the closing `---`, so YAML field values
@@ -212,18 +212,18 @@ export class AgentRegistry {
  */
 function parseFrontmatter(content: string, fileName: string): FrontmatterResult {
   const baseName = fileName.replace(/\.md$/, "");
-  // Length of the opening "---" delimiter (3 chars). The closing ---
-  // search starts after this position, not after a newline — see closeIdx.
+ // Length of the opening "---" delimiter (3 chars). The closing ---
+ // search starts after this position, not after a newline — see closeIdx.
   const FM_DELIM_LEN = "---".length;
 
   if (!content.startsWith("---")) {
     return { name: baseName, systemPrompt: content.trim() };
   }
 
-  // Look for closing ---, starting after the opening delimiter
+ // Look for closing ---, starting after the opening delimiter
   const closeIdx = content.indexOf("---", FM_DELIM_LEN);
 
-  // Unclosed frontmatter — entire file as systemPrompt, filename as name
+ // Unclosed frontmatter — entire file as systemPrompt, filename as name
   if (closeIdx === -1) {
     return { name: baseName, systemPrompt: content.trim() };
   }
@@ -245,13 +245,13 @@ function parseFrontmatter(content: string, fileName: string): FrontmatterResult 
 
 /** Extract a simple `key: value` field from YAML text. Strips surrounding quotes. */
 function extractYamlField(yaml: string, key: string): string | null {
-  // Match `key: value` — value may be quoted with double quotes
+ // Match `key: value` — value may be quoted with double quotes
   const regex = new RegExp(`^${key}:\\s*(.+)$`, "m");
   const match = yaml.match(regex);
   if (!match) return null;
 
   let value = match[1].trim();
-  // Strip surrounding quotes (double or single)
+ // Strip surrounding quotes (double or single)
   if (
     (value.startsWith('"') && value.endsWith('"')) ||
     (value.startsWith("'") && value.endsWith("'"))
