@@ -1,8 +1,8 @@
 # 交付物模板：issues.md + issues.html
 
-> issues.md 的章节结构模板。本文件是格式起点，具体内容由 shared-loop 的 Step 1-5 产出。
+> issues.md 的章节结构模板。本文件是格式起点，具体内容由 loop-skeleton 的 Step 1-5 产出。
 > 单个 issue 的完整格式见 `issue-template.md`。决策图机制见 `fog-of-war.md`。
-> 渲染 HTML 的规范见 `skills/xyz-harness-design-clarity/references/visual-deliverable.md`。
+> 渲染 HTML 的规范见 `skills/design-clarity/references/visual-deliverable.md`。
 
 ## frontmatter
 

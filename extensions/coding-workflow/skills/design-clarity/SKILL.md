@@ -1,5 +1,5 @@
 ---
-name: xyz-harness-design-clarity
+name: design-clarity
 description: >-
   Use when the user says "澄清需求", "clarify requirements", "需求分析",
   "业务建模", "use case", "start design", or is at the beginning of the
@@ -19,7 +19,7 @@ description: >-
 
 ## 执行流程
 
-按 `references/shared-loop.md` 的 6 步循环执行。本阶段特有内容：
+按 `references/loop-skeleton.md`（6 步操作速查）的流程执行。**首次执行本工作流时，先 read `references/loop-method.md`** 了解 Grilling 提问法等方法论。本阶段特有内容：
 
 **Step 1（交互+初稿）— Grilling 遍历业务目标树：**
 
@@ -39,9 +39,9 @@ description: >-
 **Step 2（追踪）— 派 fresh-context subagent，按 `references/business-perspectives.md` 的 5 视角追踪：**
 目标可追溯性 / 角色与用例完整性 / 数据流完整性 / 界面场景覆盖 / 跨系统关联。每视角必须核对或写降级理由。
 
-**Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 shared-loop.md。
+**Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
-**Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 requirements.md；按 `references/visual-deliverable.md` 渲染 requirements.html（主角图：用例图）。**
+**Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 requirements.md；派 fresh subagent 渲染 requirements.html（机制见 loop-skeleton.md Step 5b）（主角图：用例图）。**
 
 **Step 6（审查）— 派 fresh-context 审查 subagent，5 维评审，报告写 `changes/review-clarity.md`。APPROVED 才交接。**
 
@@ -51,11 +51,11 @@ description: >-
 - 审查 CHANGES_REQUESTED → 审查意见当 gap 回 Step 3
 - Stagnation（连续 3 轮 gap 不降）→ 强制收敛，未解决标 `[UNRESOLVED]`
 
-不接入 coding-workflow 的 gate 编排，靠 shared-loop 追踪+审查双重机制自证质量。
+不接入 coding-workflow 的 gate 编排，靠 loop-skeleton 追踪+审查双重机制自证质量。
 
 ## Self-Check
 
-**[MANDATORY] 禁止在未实际完成 shared-loop 全流程（含 Step 6 审查 APPROVED）的情况下声称完成。**
+**[MANDATORY] 禁止在未实际完成 loop-skeleton 全流程（含 Step 6 审查 APPROVED）的情况下声称完成。**
 
 - [ ] requirements.md 存在，frontmatter 含 `verdict: pass`
 - [ ] requirements.html 存在，用例图正确渲染
@@ -75,14 +75,14 @@ description: >-
 
 ## 下游衔接
 
-审查 APPROVED 后向用户交接（按 shared-loop.md Step 6 格式）：
+审查 APPROVED 后向用户交接（按 loop-skeleton.md Step 6 格式）：
 
 ```
 ✅ ①澄清需求 已完成并通过独立审查。
    产出：requirements.md + requirements.html
    审查报告：changes/review-clarity.md（verdict: APPROVED）
 下一步：②系统设计概要 — 业务目标→系统目标，统一语言/架构/模块/状态机
-调用：/xyz-harness-design-architecture
+调用：/design-architecture
 是否现在进入下一步？
 ```
 

@@ -1,15 +1,15 @@
-# 设计工作流（6 步）
+# 设计工作流
 
-> 从业务需求到执行计划的完整设计流程。6 个 skill 按顺序串联，每个独立可调用。
+> 从业务需求到执行计划的完整设计流程。可选初始化（Step 0）+ 6 个设计 skill（Steps 1-6）按顺序串联，每个独立可调用。
 > **不修改现有 coding-workflow 的 5-phase gate 流程**——这是独立的「设计前序」工作流，
 > 在编码实现之前完成设计决策。
 
 ## 流程总览
 
 ```
-①澄清需求  →  ②系统设计  →  ③Issue拆分  →  ④非功能设计  →  ⑤代码架构  →  ⑥执行计划
- 业务目标      系统目标      细节问题       副作用分析      代码链路       Wave编排
- 不碰实现      架构建模      P0-P3+方案      7维度兜底      类方法时序      串并行DAG
+⓪初始化  →  ①澄清需求  →  ②系统设计  →  ③Issue拆分  →  ④非功能设计  →  ⑤代码架构  →  ⑥执行计划
+ 项目基建     业务目标      系统目标      细节问题       副作用分析      代码链路       Wave编排
+ 扫描+补齐    不碰实现      架构建模      P0-P3+方案      7维度兜底      类方法时序      串并行DAG
 ```
 
 每一步内部走 **6 步循环**（交互→追踪→gap分流→收敛→定稿+HTML→独立审查），**审查 APPROVED 后**才提示进入下一步。用户确认才跳转。用户可随时手动跳过或回退。
@@ -28,12 +28,13 @@
 
 | 步骤 | Skill | 触发命令 | 产出文件（.md + .html） | 一句话目标 | 可跳过当 |
 |------|-------|---------|------------------------|-----------|---------|
-| ① | xyz-harness-design-clarity | `/xyz-harness-design-clarity` | `requirements` | 明确业务目标→路线→用例/数据流/UI-UX，**不考虑系统实现** | 纯技术重构无业务变更 |
-| ② | xyz-harness-design-architecture | `/xyz-harness-design-architecture` | `system-architecture` | 业务目标→系统目标，统一语言/架构/模块/边界/领域模型/状态机 | 已有成熟的 system-design.md |
-| ③ | xyz-harness-design-issues | `/xyz-harness-design-issues` | `issues` | 系统设计→具体问题，P0-P3 优先级 + 方案对比取舍 | 系统设计已足够细化到代码层 |
-| ④ | xyz-harness-design-nfr | `/xyz-harness-design-nfr` | `non-functional-design` | issue 解决方案的副作用分析 + 缓解（安全/性能/并发/稳定性/兼容性/可观测性） | 纯功能性小改动无 NFR 风险 |
-| ⑤ | xyz-harness-design-code-arch | `/xyz-harness-design-code-arch` | `code-architecture` | 工程目录/契约协议/包管理/API入口→最底层 类方法时序图 | 已有详细的 interface 契约 + 时序 |
-| ⑥ | xyz-harness-design-execution | `/xyz-harness-design-execution` | `execution-plan` | Wave 拆分（每 wave≈一个 subagent 高度专注），依赖 DAG，串并行标注 | 单人直接实现无需编排 |
+| ⓪ | design-init | `/design-init` | —（产出 AGENTS/CONTEXT/ARCHITECTURE） | 扫描项目文档基建，补齐缺失骨架，AGENTS.md 归一化 | 项目已有健全文档 |
+| ① | design-clarity | `/design-clarity` | `requirements` | 明确业务目标→路线→用例/数据流/UI-UX，**不考虑系统实现** | 纯技术重构无业务变更 |
+| ② | design-architecture | `/design-architecture` | `system-architecture` | 业务目标→系统目标，统一语言/架构/模块/边界/领域模型/状态机 | 已有成熟的 system-design.md |
+| ③ | design-issues | `/design-issues` | `issues` | 系统设计→具体问题，P0-P3 优先级 + 方案对比取舍 | 系统设计已足够细化到代码层 |
+| ④ | design-nfr | `/design-nfr` | `non-functional-design` | issue 解决方案的副作用分析 + 缓解（安全/性能/并发/稳定性/兼容性/可观测性） | 纯功能性小改动无 NFR 风险 |
+| ⑤ | design-code-arch | `/design-code-arch` | `code-architecture` | 工程目录/契约协议/包管理/API入口→最底层 类方法时序图 | 已有详细的 interface 契约 + 时序 |
+| ⑥ | design-execution | `/design-execution` | `execution-plan` | Wave 拆分（每 wave≈一个 subagent 高度专注），依赖 DAG，串并行标注 | 单人直接实现无需编排 |
 
 > 每步产出**两份**：`.md`（真相源）+ `.html`（可视化视图，浏览器双击即可打开）。
 
@@ -48,7 +49,7 @@
 - **定稿 + HTML 渲染** — 收敛后定稿 .md，并渲染自包含 .html（移植自 visual-explainer，Mermaid 图表直接渲染）
 - **独立审查门（Review Gate）** — 定稿后派 fresh-context 审查 subagent 从 5 维（内部一致性/上游对齐/可执行性/完整性/可视化质量）评审，APPROVED 才交接
 
-详见 `skills/xyz-harness-design-clarity/references/shared-loop.md`（6 个 skill 共享引用，6 步循环的单一真相源）和 `skills/xyz-harness-design-clarity/references/visual-deliverable.md`（HTML 渲染规范）。
+详见 `skills/design-clarity/references/loop-skeleton.md`（6 步操作速查，每阶段 read）、`loop-method.md`（Grilling 提问法等方法论，clarity 首次 read）、`visual-deliverable.md`（HTML 渲染规范）。
 
 ## 审查门（Review Gate）的作用
 

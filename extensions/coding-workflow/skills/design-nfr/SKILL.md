@@ -1,5 +1,5 @@
 ---
-name: xyz-harness-design-nfr
+name: design-nfr
 description: >-
   Use when the user says "非功能性设计", "NFR", "副作用分析", "风险评估",
   "non-functional design", "安全性分析", "性能分析", or has finished issues.md
@@ -20,7 +20,7 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 
 ## 执行流程
 
-按 `references/shared-loop.md`（位于 design-clarity skill 的 references 目录）的 6 步循环执行。
+按 `references/loop-skeleton.md`（位于 design-clarity skill 的 references 目录）的 6 步循环执行。**（loop-method.md 的方法论仅 clarity 首次 read，本阶段无需 read。）**
 
 **Step 1（交互+初稿）— Grilling 遍历副作用分析树：**
 
@@ -40,9 +40,9 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 **Step 2（追踪）— 派 fresh-context subagent，按 2 视角追踪：**
 副作用覆盖性（每已决策方案评估 7 维度？不适用有理由？）/ 缓解可行性（缓解方案可落地？残余风险可接受？）。
 
-**Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 shared-loop.md。
+**Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
-**Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 non-functional-design.md；按 design-clarity skill 的 `references/visual-deliverable.md` 渲染 non-functional-design.html（主角图：风险矩阵热力图 issue×7维度 ✅⚠️❌着色）。**
+**Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 non-functional-design.md；派 fresh subagent 渲染 non-functional-design.html（机制见 loop-skeleton.md Step 5b）（主角图：风险矩阵热力图 issue×7维度 ✅⚠️❌着色）。**
 
 **Step 6（审查）— 派 fresh-context 审查 subagent，5 维评审，报告写 `changes/review-nfr.md`。APPROVED 才交接。**
 
@@ -55,7 +55,7 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 
 ## Self-Check
 
-**[MANDATORY] 禁止在未完成 shared-loop 全流程（含 Step 6 审查 APPROVED）时声称完成。**
+**[MANDATORY] 禁止在未完成 loop-skeleton 全流程（含 Step 6 审查 APPROVED）时声称完成。**
 
 - [ ] non-functional-design.md 存在，frontmatter 含 `verdict: pass`
 - [ ] non-functional-design.html 存在，风险矩阵热力图正确渲染（✅⚠️❌着色）
@@ -75,14 +75,14 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 
 ## 下游衔接
 
-审查 APPROVED 后向用户交接（按 shared-loop.md Step 6 格式）：
+审查 APPROVED 后向用户交接（按 loop-skeleton.md Step 6 格式）：
 
 ```
 ✅ ④非功能性设计 已完成并通过独立审查。
    产出：non-functional-design.md + non-functional-design.html
    审查报告：changes/review-nfr.md（verdict: APPROVED）
 下一步：⑤代码架构设计 — 工程目录/契约/包管理/类方法时序图
-调用：/xyz-harness-design-code-arch
+调用：/design-code-arch
 是否现在进入下一步？
 ```
 

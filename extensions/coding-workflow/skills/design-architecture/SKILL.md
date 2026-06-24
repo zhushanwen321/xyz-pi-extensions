@@ -1,5 +1,5 @@
 ---
-name: xyz-harness-design-architecture
+name: design-architecture
 description: >-
   Use when the user says "系统设计", "架构设计", "architecture design",
   "领域建模", "domain modeling", "模块划分", "状态机", or has finished
@@ -18,7 +18,7 @@ description: >-
 
 ## 执行流程
 
-按 `references/shared-loop.md`（位于 design-clarity skill 的 references 目录）的 6 步循环执行。
+按 `references/loop-skeleton.md`（位于 design-clarity skill 的 references 目录）的 6 步循环执行。**（loop-method.md 的方法论仅 clarity 首次 read，本阶段无需 read。）**
 
 **Step 1（交互+建模初稿）— Grilling 遍历架构决策树：**
 
@@ -38,9 +38,9 @@ Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 **Step 2（追踪）— 派 fresh-context subagent，按 `references/architecture-perspectives.md` 的 5+1 视角追踪：**
 模型完整性 / 状态正交性 / 分层纪律 / 依赖边界 / 变化轴 / 行为契约(refactor 专用)。
 
-**Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 shared-loop.md。
+**Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
-**Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 system-architecture.md；按 design-clarity skill 的 `references/visual-deliverable.md` 渲染 system-architecture.html（主角图：分层架构图+状态机图）。**
+**Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 system-architecture.md；派 fresh subagent 渲染 system-architecture.html（机制见 loop-skeleton.md Step 5b）（主角图：分层架构图+状态机图）。**
 
 **Step 6（审查）— 派 fresh-context 审查 subagent，5 维评审，报告写 `changes/review-architecture.md`。APPROVED 才交接。**
 
@@ -52,7 +52,7 @@ Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 
 ## Self-Check
 
-**[MANDATORY] 禁止在未完成 shared-loop 全流程（含 Step 6 审查 APPROVED）时声称完成。**
+**[MANDATORY] 禁止在未完成 loop-skeleton 全流程（含 Step 6 审查 APPROVED）时声称完成。**
 
 - [ ] system-architecture.md 存在，frontmatter 含 `verdict: pass`
 - [ ] system-architecture.html 存在，分层图+状态机图正确渲染
@@ -73,14 +73,14 @@ Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 
 ## 下游衔接
 
-审查 APPROVED 后向用户交接（按 shared-loop.md Step 6 格式）：
+审查 APPROVED 后向用户交接（按 loop-skeleton.md Step 6 格式）：
 
 ```
 ✅ ②系统设计概要 已完成并通过独立审查。
    产出：system-architecture.md + system-architecture.html
    审查报告：changes/review-architecture.md（verdict: APPROVED）
 下一步：③Issue 拆分 — 系统设计→具体问题，P0-P3 优先级 + 方案对比
-调用：/xyz-harness-design-issues
+调用：/design-issues
 是否现在进入下一步？
 ```
 

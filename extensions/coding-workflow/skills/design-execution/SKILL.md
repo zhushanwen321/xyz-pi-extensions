@@ -1,5 +1,5 @@
 ---
-name: xyz-harness-design-execution
+name: design-execution
 description: >-
   Use when the user says "执行计划", "execution plan", "wave编排",
   "任务拆分", "交付计划", "sprint 规划", or has finished code-architecture.md
@@ -22,7 +22,7 @@ description: >-
 
 ## 执行流程
 
-按 `references/shared-loop.md`（位于 design-clarity skill 的 references 目录）的 6 步循环执行。
+按 `references/loop-skeleton.md`（位于 design-clarity skill 的 references 目录）的 6 步循环执行。**（loop-method.md 的方法论仅 clarity 首次 read，本阶段无需 read。）**
 
 **Step 1（交互+初稿）— Grilling 遍历 Wave 依赖树：**
 
@@ -45,9 +45,9 @@ Wave 编排（根：从时序图推导）
 **Step 2（追踪）— 派 fresh-context subagent，按 3 视角追踪：**
 切片独立性（每 Wave 可独立验证？非水平切片？）/ 依赖闭合（Wave 依赖从时序图完整推导？）/ 并行安全（同并行组真不改同一文件？）。
 
-**Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 shared-loop.md。
+**Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
-**Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 execution-plan.md；按 design-clarity skill 的 `references/visual-deliverable.md` 渲染 execution-plan.html（主角图：Wave 依赖 DAG 图，标注并行组）。**
+**Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 execution-plan.md；派 fresh subagent 渲染 execution-plan.html（机制见 loop-skeleton.md Step 5b）（主角图：Wave 依赖 DAG 图，标注并行组）。**
 
 **Step 6（审查）— 派 fresh-context 审查 subagent，5 维评审，报告写 `changes/review-execution.md`。APPROVED 才交接。**
 
@@ -60,7 +60,7 @@ Wave 编排（根：从时序图推导）
 
 ## Self-Check
 
-**[MANDATORY] 禁止在未完成 shared-loop 全流程（含 Step 6 审查 APPROVED）时声称完成。**
+**[MANDATORY] 禁止在未完成 loop-skeleton 全流程（含 Step 6 审查 APPROVED）时声称完成。**
 
 - [ ] execution-plan.md 存在，frontmatter 含 `verdict: pass`
 - [ ] execution-plan.html 存在，Wave DAG 图正确渲染（并行组标注）

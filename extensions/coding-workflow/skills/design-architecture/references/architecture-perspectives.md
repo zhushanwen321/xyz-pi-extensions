@@ -152,7 +152,7 @@
 | **K（Knowledge）** | 主 agent 不知道的信息 | 直接问用户 |
 | **D（Decision）** | 需要做权衡的设计点 | 给方案对比 + trade-off |
 
-详见 shared-loop.md 的 Step 3。
+详见 loop-skeleton.md 的 Step 3。
 
 ## 收敛判定
 

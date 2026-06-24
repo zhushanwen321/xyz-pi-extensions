@@ -1,5 +1,5 @@
 ---
-name: xyz-harness-design-code-arch
+name: design-code-arch
 description: >-
   Use when the user says "代码架构", "code architecture", "详细设计",
   "接口契约", "时序图", "工程目录", "API 设计", or has finished
@@ -18,7 +18,7 @@ description: >-
 
 ## 执行流程
 
-按 `references/shared-loop.md`（位于 design-clarity skill 的 references 目录）的 6 步循环执行。
+按 `references/loop-skeleton.md`（位于 design-clarity skill 的 references 目录）的 6 步循环执行。**（loop-method.md 的方法论仅 clarity 首次 read，本阶段无需 read。）**
 
 **Step 1（交互+初稿）— Grilling 遍历代码契约树：**
 
@@ -40,11 +40,11 @@ description: >-
 **Step 2（追踪）— 派 fresh-context subagent，按 3 视角追踪：**
 契约完整性（每用例/功能有对应 API 契约？）/ 调用链闭合（每时序图入口到底层完整、异常路径覆盖？）/ 依赖健康（包依赖无环、无上帝对象 LOC<400？）。
 
-**Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 shared-loop.md。
+**Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
 **特有信号：** 时序图走不通（数据流需跨层穿透/调用链断裂）→ system-architecture.md 模型边界有问题 → 回 Step 2 调整。
 
-**Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 code-architecture.md；按 design-clarity skill 的 `references/visual-deliverable.md` 渲染 code-architecture.html（主角图：包依赖图+核心时序图）。**
+**Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 code-architecture.md；派 fresh subagent 渲染 code-architecture.html（机制见 loop-skeleton.md Step 5b）（主角图：包依赖图+核心时序图）。**
 
 **Step 6（审查）— 派 fresh-context 审查 subagent，5 维评审，报告写 `changes/review-code-arch.md`。APPROVED 才交接。**
 
@@ -57,7 +57,7 @@ description: >-
 
 ## Self-Check
 
-**[MANDATORY] 禁止在未完成 shared-loop 全流程（含 Step 6 审查 APPROVED）时声称完成。**
+**[MANDATORY] 禁止在未完成 loop-skeleton 全流程（含 Step 6 审查 APPROVED）时声称完成。**
 
 - [ ] code-architecture.md 存在，frontmatter 含 `verdict: pass`
 - [ ] code-architecture.html 存在，包依赖图+时序图正确渲染
@@ -77,14 +77,14 @@ description: >-
 
 ## 下游衔接
 
-审查 APPROVED 后向用户交接（按 shared-loop.md Step 6 格式）：
+审查 APPROVED 后向用户交接（按 loop-skeleton.md Step 6 格式）：
 
 ```
 ✅ ⑤代码架构设计 已完成并通过独立审查。
    产出：code-architecture.md + code-architecture.html
    审查报告：changes/review-code-arch.md（verdict: APPROVED）
 下一步：⑥执行计划 — Wave 拆分，依赖 DAG，串并行标注
-调用：/xyz-harness-design-execution
+调用：/design-execution
 是否现在进入下一步？
 ```
 

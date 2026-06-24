@@ -148,7 +148,7 @@
 | **K（Knowledge）** | 主 agent 不知道的业务规则 | 直接问用户 |
 | **D（Decision）** | 需要做权衡的业务决策 | 给方案对比 + trade-off |
 
-详见 shared-loop.md 的 Step 3。
+详见 loop-skeleton.md 的 Step 3。
 
 ## 收敛判定
 
