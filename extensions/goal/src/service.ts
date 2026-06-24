@@ -12,7 +12,12 @@
  * FR-6.5: persist 前调 tick 累计时间
  */
 
-import { accumulateTokens, checkBudgetOnResume, tick } from "./engine/budget";
+import {
+	accumulateTokens,
+	checkBudgetOnResume,
+	checkBudgetOnTurnEnd,
+	tick,
+} from "./engine/budget";
 import { createGoalState, isActiveStatus, transitionStatus } from "./engine/goal";
 import type { BudgetConfig, GoalRuntimeState, GoalStatus } from "./engine/types";
 import { makeHistoryEntry, serializeState } from "./persistence";
@@ -80,10 +85,12 @@ export function persistState(session: GoalSession, ports: ServicePorts): void {
 /**
  * 事件路径 persist + updateWidget（FR-6.5 tick + appendState + updateWidget）。
  *
- * 与 {@link persistState}（command/tool 路径）的差异：事件路径多 updateWidget + 可选 checkStale。
- * 两者都调 {@link tickState}（单一 tick 定义点，BL-3 DRY）。
+ * 与 {@link persistState}（command/tool 路径）的差异：事件路径多 updateWidget + 可选 checkStale
+ * + **budget 终态检查（#5 单一检查点）**。两者都调 {@link tickState}（单一 tick 定义点，BL-3 DRY）。
  *
- * NFR F2：budget 终态检查将在此函数内（#5 范围，#4 只迁位置不加 budget 检查）。
+ * NFR F2：budget 终态检查在此函数内（事件路径单一检查点，对齐 Codex SQL CASE）。
+ * 不在 {@link persistState}（command/tool 路径）—— 否则 token 累加后检查永不触发。
+ * 仅 active 状态检查（paused/blocked/终态不重复触发；终态 goal 进不了此函数，event handler 入口已过滤）。
  *
  * @returns true 表示 state 已被新 goal 覆盖（checkStale 触发），调用方应中止后续副作用
  */
@@ -94,6 +101,30 @@ export function persistAndUpdate(
 ): boolean {
 	if (!session.state) return false;
 	tickState(session.state);
+
+	// #5: budget 终态检查（事件路径单一检查点，NFR F2）。仅在 active 时检查，
+	// 避免对 paused/blocked/终态重复触发。checkBudgetOnTurnEnd 是 engine 纯函数，
+	// service 复用它不破坏纯 ports 设计（engine 是零 Pi 依赖纯函数层）。
+	if (session.state.status === "active") {
+		const budgetResult = checkBudgetOnTurnEnd(session.state, session.state.timeUsedSeconds);
+		if (budgetResult.terminal) {
+			const dim = budgetResult.terminal.dimension;
+			// FR-3.3: 唯一终态序列入口（finalizeAndPersist 内部 tickState 是 no-op——
+			// 上面已 tick，且状态此时仍 active——+ finalizeGoal + appendState）。
+			// terminal 分支不再单独 appendState：finalizeAndPersist 已含终态 state 持久化。
+			finalizeAndPersist(
+				session.state,
+				dim === "token" ? "budget_limited" : "time_limited",
+				0,
+				ports,
+			);
+			if (checkStale?.()) return true;
+			updateWidget(session, ports.ui);
+			return false; // 终态已处理
+		}
+	}
+
+	// 非终态路径：正常 persist + updateWidget
 	ports.persistence.appendState(serializeState(session.state));
 	if (checkStale?.()) return true;
 	updateWidget(session, ports.ui);

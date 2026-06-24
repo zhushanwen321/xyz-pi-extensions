@@ -149,6 +149,26 @@ describe("handleGoalCommand — resume (ADR-002 blocked-only + G-014)", () => {
 		expect(notifyText(h).some((t) => t.includes("Token budget exhausted"))).toBe(true);
 	});
 
+	it("time 预算耗尽 → resume 转 time_limited（G-014）", async () => {
+		const h = makeHarness();
+		const session = createGoalSession();
+		session.state = makeActiveState({
+			status: "blocked",
+			timeStartedAt: 0,
+			budget: {
+				tokenBudget: 1000,
+				timeBudgetMinutes: 30,
+			},
+			tokensUsed: 100, // token 未超
+			timeUsedSeconds: 30 * 60, // 已超 timeBudgetMinutes*60
+		});
+		await handleGoalCommand(h.pi, session, "resume", h.ctx);
+		expect(session.state!.status).toBe("time_limited");
+		expect(notifyText(h).some((t) => t.includes("Time budget exhausted"))).toBe(true);
+		// 拒绝 resume：不触发 AI
+		expect(h.piCalls.some((c) => c.kind === "sendUser")).toBe(false);
+	});
+
 	it("非 blocked 状态（active）→ 无需 resume", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();

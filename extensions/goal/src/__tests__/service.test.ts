@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { createGoalState } from "../engine/goal";
 import type { GoalRuntimeState } from "../engine/types";
-import { applyEvent, createGoal, finalizeGoal, type ServicePorts } from "../service";
+import { applyEvent, createGoal, finalizeGoal, persistAndUpdate, type ServicePorts } from "../service";
 import { createGoalSession } from "../session";
 
 // ── Fake Ports ───────────────────────────────────────
@@ -34,6 +34,9 @@ function makeFakePorts(): ServicePorts & {
 			setStatus: () => {},
 			notify: () => {},
 			hasUI: true,
+			// ThemeLike 直接成员（widget 经 asTheme 取出，见 projection/widget.ts）
+			fg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
 		},
 		messaging: {
 			sendContextMessage: () => {},
@@ -203,5 +206,113 @@ describe("applyEvent — 简单事件", () => {
 		session.state = makeState();
 		const effects = applyEvent(session, "unknown_event", {}, makeFakePorts());
 		expect(effects).toEqual([]);
+	});
+});
+
+// ── persistAndUpdate — #5 budget 终态检查（事件路径单一检查点，NFR F2）──
+
+describe("persistAndUpdate — #5 budget 终态检查（事件路径单一检查点）", () => {
+	it("active + token 超额（steering 已发）→ status 转 budget_limited + 写 history", () => {
+		const session = createGoalSession();
+		session.state = {
+			...makeState(),
+			status: "active",
+			timeStartedAt: 0, // 关闭时间累计，保证 tick 不额外累加
+			budget: { tokenBudget: 1000 },
+			tokensUsed: 1000, // >= tokenBudget
+			budgetLimitSteeringSent: true, // token terminal 要求 steering 已发
+		};
+		const ports = makeFakePorts();
+		const stale = persistAndUpdate(session, ports);
+
+		expect(stale).toBe(false);
+		expect(session.state!.status).toBe("budget_limited");
+		expect(ports.history.length).toBe(1); // FR-8.7: 终态写 history
+		expect((ports.history[0] as { status: string }).status).toBe("budget_limited");
+	});
+
+	it("token 终态分支不重复 appendState（finalizeAndPersist 已含持久化）", () => {
+		const session = createGoalSession();
+		session.state = {
+			...makeState(),
+			status: "active",
+			timeStartedAt: 0,
+			budget: { tokenBudget: 1000 },
+			tokensUsed: 1000,
+			budgetLimitSteeringSent: true,
+		};
+		const ports = makeFakePorts();
+		persistAndUpdate(session, ports);
+		// 仅 finalizeAndPersist 内部 1 次 appendState，不再走正常 appendState
+		expect(ports.states.length).toBe(1);
+	});
+
+	it("active + time 超额 → status 转 time_limited + 写 history", () => {
+		const session = createGoalSession();
+		session.state = {
+			...makeState(),
+			status: "active",
+			timeStartedAt: 0,
+			budget: { timeBudgetMinutes: 10 },
+			timeUsedSeconds: 600, // >= 10*60
+		};
+		const ports = makeFakePorts();
+		persistAndUpdate(session, ports);
+
+		expect(session.state!.status).toBe("time_limited");
+		expect(ports.history.length).toBe(1);
+		expect((ports.history[0] as { status: string }).status).toBe("time_limited");
+	});
+
+	it("非 active（blocked）→ 不触发 budget 检查，保持 blocked", () => {
+		const session = createGoalSession();
+		session.state = {
+			...makeState(),
+			status: "blocked",
+			timeStartedAt: 0,
+			budget: { tokenBudget: 1000 },
+			tokensUsed: 1000, // 已超额，但 blocked 不检查
+			budgetLimitSteeringSent: true,
+		};
+		const ports = makeFakePorts();
+		persistAndUpdate(session, ports);
+
+		expect(session.state!.status).toBe("blocked"); // 未变
+		expect(ports.history.length).toBe(0); // blocked 不写 history
+		expect(ports.states.length).toBe(1); // 走正常 appendState 路径
+	});
+
+	it("active 但未超额 → 正常 persist（无终态、无 history）", () => {
+		const session = createGoalSession();
+		session.state = {
+			...makeState(),
+			status: "active",
+			timeStartedAt: 0,
+			budget: { tokenBudget: 1000 },
+			tokensUsed: 100, // 未超额
+		};
+		const ports = makeFakePorts();
+		persistAndUpdate(session, ports);
+
+		expect(session.state!.status).toBe("active"); // 未变
+		expect(ports.history.length).toBe(0);
+		expect(ports.states.length).toBe(1); // 正常 appendState
+	});
+
+	it("终态处理后 checkStale 触发 → 返回 true（status 已转终态）", () => {
+		const session = createGoalSession();
+		session.state = {
+			...makeState(),
+			status: "active",
+			timeStartedAt: 0,
+			budget: { tokenBudget: 1000 },
+			tokensUsed: 1000,
+			budgetLimitSteeringSent: true,
+		};
+		const ports = makeFakePorts();
+		const stale = persistAndUpdate(session, ports, () => true);
+		expect(stale).toBe(true);
+		// finalizeAndPersist 已执行，status 已转终态
+		expect(session.state!.status).toBe("budget_limited");
 	});
 });

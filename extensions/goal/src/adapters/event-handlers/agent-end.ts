@@ -7,8 +7,9 @@
  * - FR-6.7 ESC 守卫（最关键）：ctx.signal?.aborted → 不发 continuation、不做 budget 检查、
  *   不做任何状态变更，goal 保持 active，等用户下次输入恢复
  *
- * #6 后流程：budget 检查（预警/steering/终态）→ continuation 去抖。
- * maxTurnsReached / stall 自动终态路径已删（对齐 Codex），终态仅由 budget 耗尽触发。
+ * #8 后流程：budget 预警/steering → allTasksDone followUp → continuation 去抖。
+ * agent_end 只做提醒（warning + steering + followUp），不做终态转换。
+ * 终态转换不在 agent_end——由 persistAndUpdate 兜底（#5 范围，单一检查点）。
  *
  * ESC 路径：aborted 时直接 return（goal 保持 active）。注意 ESC 守卫在终态/非 active
  * 检查之后——终态 goal 仍走终态 notify（不被 ESC 影响），非 active 状态直接返回。
@@ -16,15 +17,15 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { checkBudgetOnTurnEnd } from "../../engine/budget";
+import { checkBudgetOnTurnEnd, checkProgress } from "../../engine/budget";
 import { isActiveStatus } from "../../engine/goal";
 import {
 	budgetLimitPrompt,
 	continuationPrompt,
 } from "../../projection/prompts";
-import { updateWidget } from "../../projection/widget";
-import { finalizeAndPersist, persistAndUpdate, tickState } from "../../service";
+import { persistAndUpdate, tickState } from "../../service";
 import type { GoalSession } from "../../session";
+import { buildProgressInput } from "../goal-control-adapter";
 import { buildPorts } from "../ports";
 import { makeStaleChecker } from "./shared";
 
@@ -58,7 +59,15 @@ export async function handleAgentEnd(
 		const budgetAction = await handleBudgetChecks(pi, session, ctx, budgetResult, checkStale);
 		if (budgetAction !== "continue") return;
 
-		// continuation 去抖（#6 删 maxTurns/stall 自动终态后，剩余路径只有 continuation）
+		// allTasksDone followUp（#8）：所有 todo 完成但 agent 未调 goal_control.complete → 提示收尾。
+		// progressInput=undefined（todo 未加载）时 checkProgress 降级返回 allTasksDone=false，不触发。
+		const progress = checkProgress(session.state, buildProgressInput(pi));
+		if (progress.allTasksDone) {
+			await handleAllDoneFollowUp(pi, session, ctx, checkStale);
+			return; // 已发 followUp，不再发 continuation
+		}
+
+		// continuation 去抖（budget 预警 + allTasksDone 都未拦截时）
 		await handleContinuation(pi, session, ctx, checkStale);
 	} finally {
 		session.isProcessing = false;
@@ -87,10 +96,11 @@ async function handleTerminalStateAgentEnd(
 type BudgetAction = "continue" | "stop";
 
 /**
- * FR-6.2 维度独立预算检查：
+ * FR-6.2 维度独立预算检查（#8 后只做提醒，不做终态）：
  * - 预警（warning70/warning90）：set flag + notify（不阻塞 continuation）
- * - 耗尽（terminal）：转 budget_limited/time_limited + 写 history + notify
- * - 90% steering（shouldSendSteering）：set flag + 发 budgetLimitPrompt（收尾）
+ * - 90% steering（shouldSendSteering）：set flag + 发 budgetLimitPrompt（收尾），返回 "stop" 中断 continuation
+ *
+ * 终态转换（budget 耗尽）不在 agent_end，由 persistAndUpdate 兜底（#5 范围，单一检查点）。
  */
 async function handleBudgetChecks(
 	pi: ExtensionAPI,
@@ -120,27 +130,6 @@ async function handleBudgetChecks(
 		}
 	}
 
-	// 预算耗尽 → 终止
-	if (budgetResult.terminal) {
-		const dim = budgetResult.terminal.dimension;
-		// FR-3.3: 唯一终态序列入口（tick + finalizeGoal + persist）
-		finalizeAndPersist(
-			state,
-			dim === "token" ? "budget_limited" : "time_limited",
-			0,
-			buildPorts(pi, ctx),
-		);
-		if (checkStale()) return "stop";
-		updateWidget(session, buildPorts(pi, ctx).ui);
-		ctx.ui.notify(
-			dim === "token"
-				? "Token budget exhausted, Goal terminated."
-				: "Time budget exhausted, Goal terminated.",
-			"warning",
-		);
-		return "stop";
-	}
-
 	// 90% steering → 收尾
 	if (budgetResult.shouldSendSteering) {
 		state.budgetLimitSteeringSent = true;
@@ -157,14 +146,38 @@ async function handleBudgetChecks(
 }
 
 /**
- * continuation 去抖（#6 后唯一剩余的 agent_end 尾部逻辑）。
+ * allTasksDone followUp（#8）：所有 todo 完成但 agent 未调 goal_control.complete。
+ *
+ * 发 followUp 提示 agent 收尾（persist + sendUserMessage）。sendUserMessage（而非
+ * sendContextMessage）是因为要让 agent 主动响应、调用 goal_control.complete 收尾。
+ *
+ * progressInput=undefined（todo 未加载）时，调用方（handleAgentEnd 主流程）已通过
+ * checkProgress 降级过滤，不会进入此函数。
+ */
+async function handleAllDoneFollowUp(
+	pi: ExtensionAPI,
+	session: GoalSession,
+	ctx: ExtensionContext,
+	checkStale: () => boolean,
+): Promise<void> {
+	if (checkStale()) return;
+	persistAndUpdate(session, buildPorts(pi, ctx));
+	if (checkStale()) return;
+	buildPorts(pi, ctx).messaging.sendUserMessage(
+		"All todos are completed. If the objective is genuinely achieved with evidence, call goal_control with action=complete. Otherwise continue working.",
+		"followUp",
+	);
+}
+
+/**
+ * continuation 去抖（budget 预警 + allTasksDone 都未拦截时的尾部逻辑）。
  *
  * - continuation 去抖：tokenDelta=0（空 turn）不发，只 persist
  * - 否则 persist + 发 continuationPrompt
  *
- * 注：maxTurnsReached / stall 自动终态分支已随 #6 删除。终态仅由 budget 耗尽触发
- * （见 handleBudgetChecks）。staleness reminder 基于 lastProgressTurn/lastUpdatedTurn
- * 的重建属 #10 范围。
+ * 注：maxTurnsReached / stall 自动终态分支随 #6 删除；budget terminal 分支随 #8 删除。
+ * 终态转换由 persistAndUpdate 兑底（#5 范围，单一检查点）。staleness reminder 基于
+ * lastProgressTurn/lastUpdatedTurn 的重建属 #10 范围。
  */
 async function handleContinuation(
 	pi: ExtensionAPI,

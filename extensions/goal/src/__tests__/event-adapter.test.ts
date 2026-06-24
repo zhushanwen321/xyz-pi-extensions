@@ -31,7 +31,7 @@ interface RecordedCall {
 	key?: string;
 }
 
-function makeFakePi(): { pi: ExtensionAPI; calls: RecordedCall[]; states: unknown[]; history: unknown[] } {
+function makeFakePi(todoList?: unknown[]): { pi: ExtensionAPI; calls: RecordedCall[]; states: unknown[]; history: unknown[] } {
 	const calls: RecordedCall[] = [];
 	const states: unknown[] = [];
 	const history: unknown[] = [];
@@ -50,8 +50,16 @@ function makeFakePi(): { pi: ExtensionAPI; calls: RecordedCall[]; states: unknow
 				payload: _options,
 			});
 		},
-		sendUserMessage(_content: string | unknown[], _options?: unknown): void {
-			calls.push({ kind: "sendUser", content: typeof _content === "string" ? _content : undefined });
+		sendUserMessage(content: string | unknown[], options?: unknown): void {
+			calls.push({
+				kind: "sendUser",
+				content: typeof content === "string" ? content : undefined,
+				payload: options,
+			});
+		},
+		// duck-typed todo 读取（#7）：undefined=未加载（降级），数组=已加载
+		__todoGetList(): unknown[] | undefined {
+			return todoList;
 		},
 	} as unknown as ExtensionAPI;
 	return { pi, calls, states, history };
@@ -174,6 +182,67 @@ describe("handleAgentEnd — continuation", () => {
 		const sendContext = all.filter((c) => c.kind === "sendContext");
 		expect(sendContext).toHaveLength(1);
 		expect(sendContext[0]!.content).toContain("[GOAL]");
+	});
+});
+
+// ── handleAgentEnd：allTasksDone followUp（#8）──────
+
+describe("handleAgentEnd — allTasksDone followUp", () => {
+	it("todo 全完成（allTasksDone）→ 发 followUp 提示调 goal_control.complete，不发 continuation", async () => {
+		const todoList = [
+			{ id: 1, status: "completed" },
+			{ id: 2, status: "completed" },
+		];
+		const { pi, calls: piCalls } = makeFakePi(todoList);
+		const { ctx, calls: ctxCalls } = makeFakeCtx();
+		const session = createGoalSession();
+		session.state = makeRunningState({ tokensUsed: 100, lastTurnTokensUsed: 0 });
+
+		await handleAgentEnd(pi, session, ctx);
+		const all = allCalls(piCalls, ctxCalls);
+
+		const sendUser = all.filter((c) => c.kind === "sendUser");
+		expect(sendUser).toHaveLength(1);
+		expect(sendUser[0]!.payload).toEqual({ deliverAs: "followUp" });
+		expect(sendUser[0]!.content).toContain("goal_control");
+		// 已发 followUp → 不发 continuation
+		const sendContext = all.filter((c) => c.kind === "sendContext");
+		expect(sendContext).toHaveLength(0);
+	});
+
+	it("todo 部分完成（非 allTasksDone）→ 不触发 followUp，走 continuation", async () => {
+		const todoList = [
+			{ id: 1, status: "completed" },
+			{ id: 2, status: "pending" },
+		];
+		const { pi, calls: piCalls } = makeFakePi(todoList);
+		const { ctx, calls: ctxCalls } = makeFakeCtx();
+		const session = createGoalSession();
+		session.state = makeRunningState({ tokensUsed: 200, lastTurnTokensUsed: 0 });
+
+		await handleAgentEnd(pi, session, ctx);
+		const all = allCalls(piCalls, ctxCalls);
+
+		const sendUser = all.filter((c) => c.kind === "sendUser");
+		expect(sendUser).toHaveLength(0); // 无 followUp
+		const sendContext = all.filter((c) => c.kind === "sendContext");
+		expect(sendContext).toHaveLength(1); // continuation 正常
+	});
+
+	it("todo 未加载（__todoGetList=undefined）→ 降级不触发 followUp，走 continuation", async () => {
+		const { pi, calls: piCalls } = makeFakePi(); // 不传 todoList → undefined
+		const { ctx, calls: ctxCalls } = makeFakeCtx();
+		const session = createGoalSession();
+		session.state = makeRunningState({ tokensUsed: 200, lastTurnTokensUsed: 0 });
+
+		await handleAgentEnd(pi, session, ctx);
+		const all = allCalls(piCalls, ctxCalls);
+
+		// undefined 降级 → allTasksDone=false → 无 followUp
+		const sendUser = all.filter((c) => c.kind === "sendUser");
+		expect(sendUser).toHaveLength(0);
+		const sendContext = all.filter((c) => c.kind === "sendContext");
+		expect(sendContext).toHaveLength(1);
 	});
 });
 
