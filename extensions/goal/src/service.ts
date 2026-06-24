@@ -23,6 +23,7 @@ import type {
 	SessionPort,
 	UiPort,
 } from "./ports";
+import { updateWidget } from "./projection/widget";
 import type { GoalSession } from "./session";
 
 // ── Ports 组合 ────────────────────────────────────────
@@ -74,6 +75,29 @@ export function persistState(session: GoalSession, ports: ServicePorts): void {
 	if (!session.state) return;
 	tickState(session.state);
 	ports.persistence.appendState(serializeState(session.state));
+}
+
+/**
+ * 事件路径 persist + updateWidget（FR-6.5 tick + appendState + updateWidget）。
+ *
+ * 与 {@link persistState}（command/tool 路径）的差异：事件路径多 updateWidget + 可选 checkStale。
+ * 两者都调 {@link tickState}（单一 tick 定义点，BL-3 DRY）。
+ *
+ * NFR F2：budget 终态检查将在此函数内（#5 范围，#4 只迁位置不加 budget 检查）。
+ *
+ * @returns true 表示 state 已被新 goal 覆盖（checkStale 触发），调用方应中止后续副作用
+ */
+export function persistAndUpdate(
+	session: GoalSession,
+	ports: ServicePorts,
+	checkStale?: (() => boolean) | undefined,
+): boolean {
+	if (!session.state) return false;
+	tickState(session.state);
+	ports.persistence.appendState(serializeState(session.state));
+	if (checkStale?.()) return true;
+	updateWidget(session, ports.ui);
+	return false;
 }
 
 // ── FR-3.1 唯一创建入口 ──────────────────────────────

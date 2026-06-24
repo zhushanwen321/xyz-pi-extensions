@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { acquireProcessing, makeStaleChecker, releaseProcessing } from "../adapters/event-adapter";
+import { acquireProcessing, makeStaleChecker, releaseProcessing } from "../adapters/event-handlers/shared";
 import { createGoalState } from "../engine/goal";
 import { createGoalSession } from "../session";
 

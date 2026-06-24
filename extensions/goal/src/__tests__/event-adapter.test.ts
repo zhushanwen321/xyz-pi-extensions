@@ -13,10 +13,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
-import {
-	handleAgentEnd,
-	handleBeforeAgentStart,
-} from "../adapters/event-adapter";
+import { handleAgentEnd } from "../adapters/event-handlers/agent-end";
+import { handleBeforeAgentStart } from "../adapters/event-handlers/before-agent-start";
 import { createGoalState } from "../engine/goal";
 import type { GoalRuntimeState } from "../engine/types";
 import { createGoalSession } from "../session";
