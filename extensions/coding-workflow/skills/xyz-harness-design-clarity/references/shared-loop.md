@@ -196,6 +196,18 @@ read `references/visual-deliverable.md`（位于 design-clarity skill 的 refere
 
 输出路径：`.xyz-harness/${主题}/{deliverable-name}.html`（与 .md 同目录）。
 
+#### 5c. 主动打开 HTML 供用户审查
+
+[MANDATORY] **HTML 渲染完成后，立即用 bash `open` 命令打开它**，让用户在浏览器里审查，不要只生成不打开。
+
+```bash
+open .xyz-harness/${主题}/{deliverable-name}.html
+```
+
+- macOS 用 `open`，Linux 用 `xdg-open`，Windows 用 `start`
+- 打开后向用户说明：「已生成 `{deliverable-name}.html` 并在浏览器打开。请在审查时关注 {本阶段主角图表}。如需调整告诉我，否则进入 Step 6 独立审查。」
+- **用户审查 HTML 的反馈** 与 Step 6 审查 subagent 的反馈同等对待——如有修改意见，作为 gap 回 Step 3 处理后重新渲染
+
 ### Step 6: 独立审查（Review Gate）+ 交接
 
 [MANDATORY] **定稿后必须过独立审查。** 这是质量门，不是可选步骤。
