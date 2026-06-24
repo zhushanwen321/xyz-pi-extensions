@@ -1,15 +1,13 @@
 /**
  * Budget 决策引擎 — 纯函数
  *
- * 零 Pi 依赖。import from "./types" 和 "./task"。
+ * 零 Pi 依赖。import from "./types"。
  *
  * FR-6.5: tick 是纯函数（不调 Date.now，不查 status）
  * FR-6.2: checkBudgetOnTurnEnd 用 4 个独立 flag
  * FR-8.6: accumulateTokens token 累加算法
  */
 
-import type { GoalTask } from "./task";
-import { getCompletedCount } from "./task";
 import type { GoalRuntimeState } from "./types";
 
 // ── 常量（engine 内部，保持自洽）──────────────────────
@@ -154,23 +152,27 @@ export function checkBudgetOnResume(state: GoalRuntimeState): { type: "exceeded"
 	return null;
 }
 
-// ── 进度检查（isTaskDoneFn 注入）─────────────────────
+// ── 进度检查 ────────────────────────────────
 
-export function checkProgress(
-	state: GoalRuntimeState,
-	tasksCompletedAtStart: number,
-	isTaskDoneFn: (task: GoalTask) => boolean,
-): ProgressCheck {
-	const incomplete = state.tasks.filter((t) => !isTaskDoneFn(t));
-	const completedCount = getCompletedCount(state.tasks);
-	const totalCount = state.tasks.length;
+/**
+ * 进度检查（三阶段演进函数，D0）。
+ *
+ * - #1（当前）：去 task 依赖最小改动。task 相关返回字段
+ *   （allTasksDone/noTasksCreated/isStalled/completedCount/totalCount）暂置默认值，
+ *   等 #7 注入 ProgressInput 后重填。maxTurnsReached/budgetTight 保留计算。
+ * - #6：删 maxTurnsReached 字段与计算。
+ * - #7：改签名接收 ProgressInput，重填 task 相关字段。
+ */
+export function checkProgress(state: GoalRuntimeState): ProgressCheck {
 	return {
-		allTasksDone: totalCount > 0 && incomplete.length === 0 && completedCount > 0,
-		noTasksCreated: totalCount === 0,
+		allTasksDone: false,
+		noTasksCreated: false,
 		maxTurnsReached: state.currentTurnIndex >= state.budget.maxTurns,
-		isStalled: completedCount - tasksCompletedAtStart === 0,
-		budgetTight: Boolean(state.budget.tokenBudget && state.tokensUsed >= state.budget.tokenBudget * RATIO_TIGHT),
-		completedCount,
-		totalCount,
+		isStalled: false,
+		budgetTight: Boolean(
+			state.budget.tokenBudget && state.tokensUsed >= state.budget.tokenBudget * RATIO_TIGHT,
+		),
+		completedCount: 0,
+		totalCount: 0,
 	};
 }

@@ -1,17 +1,10 @@
 /**
  * 持久化层 — serialize/deserialize + history entry 构造
  *
- * FR-5: 移除旧格式兼容，字段缺失直接 throw。
+ * FR-5: 移除旧格式兼容，字段缺失直接 throw（tasks 字段例外——向后兼容忽略）。
  * 零 Pi 依赖。
  */
 
-import type {
-	GoalTask,
-	Subtask,
-	SubtaskStatus,
-	TaskStatus,
-	TaskVerification,
-} from "./engine/task";
 import type { GoalRuntimeState } from "./engine/types";
 import type { GoalHistoryEntry } from "./ports";
 
@@ -25,16 +18,18 @@ export const HISTORY_ENTRY_TYPE = "goal-history";
 export function serializeState(state: GoalRuntimeState): GoalRuntimeState {
 	return {
 		...state,
-		tasks: state.tasks.map((t) => ({
-			...t,
-			subtasks: t.subtasks?.map((s) => ({ ...s })),
-		})),
 		budget: { ...state.budget },
 	};
 }
 
 // ── deserialize（FR-5 严格解析，缺字段 throw）──────────
 
+/**
+ * 反序列化持久化 state。
+ *
+ * 向后兼容：旧 entry 可能含 `tasks` 字段（task CRUD 删除前的格式），此处忽略不 throw。
+ * 其余必填字段缺失仍 throw（FR-5）。
+ */
 export function deserializeState(data: Record<string, unknown>): GoalRuntimeState {
 	const req = <T>(key: string): T => {
 		if (!(key in data) || data[key] === undefined) {
@@ -43,37 +38,10 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 		return data[key] as T;
 	};
 
-	const tasksRaw = req<unknown[]>("tasks");
-	const tasks: GoalTask[] = tasksRaw.map((tRaw): GoalTask => {
-		const t = tRaw as Record<string, unknown>;
-		if (!("status" in t)) {
-			throw new Error("Legacy goal-state format detected, session reset required");
-		}
-		const subtasksRaw = t.subtasks as Record<string, unknown>[] | undefined;
-		const subtasks: Subtask[] | undefined = Array.isArray(subtasksRaw)
-			? subtasksRaw.map((s) => ({
-					id: s.id as number,
-					text: s.text as string,
-					status: s.status as SubtaskStatus,
-					lastUpdatedTurn: (s.lastUpdatedTurn as number) ?? 0,
-				}))
-			: undefined;
-		return {
-			id: t.id as number,
-			description: t.description as string,
-			status: t.status as TaskStatus,
-			evidence: t.evidence as string | undefined,
-			verification: t.verification as TaskVerification | undefined,
-			subtasks,
-			lastUpdatedTurn: (t.lastUpdatedTurn as number) ?? 0,
-		};
-	});
-
 	return {
 		goalId: req("goalId"),
 		objective: req("objective"),
 		status: req("status"),
-		tasks,
 		stallCount: req("stallCount"),
 		tokensUsed: req("tokensUsed"),
 		timeStartedAt: req("timeStartedAt"),
@@ -95,14 +63,18 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 
 // ── makeHistoryEntry ─────────────────────────────────
 
-/** 从 state 构造 GoalHistoryEntry（纯函数） */
+/**
+ * 从 state 构造 GoalHistoryEntry（纯函数）。
+ *
+ * totalTasks 暂置 0（task CRUD 已删除，#7 注入 todo 进度后可重填）。
+ */
 export function makeHistoryEntry(state: GoalRuntimeState, completedTasks: number): GoalHistoryEntry {
 	return {
 		goalId: state.goalId,
 		objective: state.objective,
 		status: state.status,
 		completedTasks,
-		totalTasks: state.tasks.length,
+		totalTasks: 0,
 		elapsedSeconds: Math.floor(state.timeUsedSeconds),
 		timestamp: Date.now(),
 	};

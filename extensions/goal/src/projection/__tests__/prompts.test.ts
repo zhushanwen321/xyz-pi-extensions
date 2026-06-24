@@ -1,28 +1,25 @@
 /**
- * projection/prompts.ts 测试 — 7 个 prompt 生成函数 + formatBudget 4 样式
+ * projection/prompts.ts 测试 — prompt 生成函数 + formatBudget 4 样式
  *
  * 覆盖：
  * - formatBudget 4 种 style（percent/line/remaining/report）
  * - escapeXmlText（XML 注入防护）
- * - continuationPrompt / budgetLimitPrompt / objectiveUpdatedPrompt
- * - contextInjectionPrompt / stalenessReminderPrompt
- * - formatTaskList（5 状态分支 + 子任务）
+ * - continuationPrompt / budgetLimitPrompt / objectiveUpdatedPrompt / contextInjectionPrompt
+ *
+ * 注：stalenessReminderPrompt / formatTaskList 随 task CRUD 删除（#6 基于 lastUpdatedTurn 重做 staleness）。
  *
  * 纯函数测试，不 import Pi SDK。
  */
 import { describe, expect, it } from "vitest";
 
 import { createGoalState } from "../../engine/goal";
-import type { GoalTask } from "../../engine/task";
 import type { GoalRuntimeState } from "../../engine/types";
 import {
 	budgetLimitPrompt,
 	contextInjectionPrompt,
 	continuationPrompt,
 	formatBudget,
-	formatTaskList,
 	objectiveUpdatedPrompt,
-	stalenessReminderPrompt,
 } from "../prompts";
 
 // ── 辅助 ─────────────────────────────────────────────
@@ -32,10 +29,6 @@ function makeState(overrides?: Partial<GoalRuntimeState>): GoalRuntimeState {
 		...createGoalState("test objective"),
 		...overrides,
 	};
-}
-
-function makeTask(id: number, status: GoalTask["status"], extra?: Partial<GoalTask>): GoalTask {
-	return { id, description: `task ${id}`, status, lastUpdatedTurn: 0, ...extra };
 }
 
 // ── formatBudget 4 样式（FR-3.4 唯一收敛出口）────────
@@ -125,35 +118,12 @@ describe("XML escaping in prompts", () => {
 // ── continuationPrompt ───────────────────────────────
 
 describe("continuationPrompt", () => {
-	it("有未完成任务 → 显示 remaining task ids", () => {
-		const state = makeState({
-			tasks: [
-				makeTask(1, "completed"),
-				makeTask(2, "in_progress"),
-				makeTask(3, "pending"),
-			],
-			currentTurnIndex: 3,
-		});
+	it("含 objective + Turn + Completion audit 段落", () => {
+		const state = makeState({ currentTurnIndex: 3 });
 		const out = continuationPrompt(state, 0);
 		expect(out).toContain("Turn 3/");
-		expect(out).toContain("1/3");
-		expect(out).toContain("remaining: #2,#3");
-	});
-
-	it("无任务 → 提示 create_tasks", () => {
-		const state = makeState({ tasks: [] });
-		const out = continuationPrompt(state, 0);
-		expect(out).toContain("Not created");
-		expect(out).toContain("create_tasks");
-	});
-
-	it("全部完成 → ✓ 标记", () => {
-		const state = makeState({
-			tasks: [makeTask(1, "completed"), makeTask(2, "verified")],
-		});
-		const out = continuationPrompt(state, 0);
-		expect(out).toContain("✓");
-		expect(out).not.toContain("remaining:");
+		expect(out).toContain("test objective");
+		expect(out).toContain("Completion audit");
 	});
 
 	it("stallCount > 0 → 显示 stall 行", () => {
@@ -170,7 +140,6 @@ describe("budgetLimitPrompt", () => {
 		const state = makeState({
 			budget: { tokenBudget: 1000, timeBudgetMinutes: 10, maxTurns: 5, maxStallTurns: 3 },
 			tokensUsed: 950,
-			tasks: [makeTask(1, "in_progress")],
 		});
 		const out = budgetLimitPrompt(state, "token", 60);
 		expect(out).toContain("TOKEN budget");
@@ -181,17 +150,10 @@ describe("budgetLimitPrompt", () => {
 	it("time 维度 → time budget 提示", () => {
 		const state = makeState({
 			budget: { tokenBudget: 1000, timeBudgetMinutes: 10, maxTurns: 5, maxStallTurns: 3 },
-			tasks: [makeTask(1, "in_progress")],
 		});
 		const out = budgetLimitPrompt(state, "time", 540); // 540s = 9m
 		expect(out).toContain("time budget");
 		expect(out).toContain("Time elapsed: 9m0s / 10 min");
-	});
-
-	it("全部完成 → All tasks completed", () => {
-		const state = makeState({ tasks: [makeTask(1, "completed")] });
-		const out = budgetLimitPrompt(state, "token", 0);
-		expect(out).toContain("All tasks completed");
 	});
 });
 
@@ -211,11 +173,10 @@ describe("objectiveUpdatedPrompt", () => {
 // ── contextInjectionPrompt ───────────────────────────
 
 describe("contextInjectionPrompt", () => {
-	it("包含 objective/status/turn/progress + 规则", () => {
+	it("包含 objective/status/turn + 预算百分比 + 规则", () => {
 		const state = makeState({
 			status: "active",
 			currentTurnIndex: 2,
-			tasks: [makeTask(1, "completed"), makeTask(2, "pending")],
 			budget: { tokenBudget: 1000, timeBudgetMinutes: 10, maxTurns: 5, maxStallTurns: 3 },
 			tokensUsed: 200,
 		});
@@ -223,106 +184,7 @@ describe("contextInjectionPrompt", () => {
 		expect(out).toContain("GOAL mode activated");
 		expect(out).toContain("Status: active");
 		expect(out).toContain("Turn: 2/5");
-		expect(out).toContain("Task progress: 1/2");
 		expect(out).toContain("Token: 20%"); // 200/1000
-		expect(out).toContain("create_tasks");
-	});
-});
-
-// ── stalenessReminderPrompt ──────────────────────────
-
-describe("stalenessReminderPrompt", () => {
-	it("allTerminal=true → 提示 complete/cancel", () => {
-		const state = makeState({
-			tasks: [makeTask(1, "completed"), makeTask(2, "verified")],
-		});
-		const out = stalenessReminderPrompt(state, [], true);
-		expect(out).toContain("All tasks completed");
-		expect(out).toContain("complete_goal");
-	});
-
-	it("有 stale tasks → 列出 stale task 详情", () => {
-		const state = makeState({ currentTurnIndex: 15 });
-		const staleTasks = [
-			{
-				task: makeTask(3, "in_progress"),
-				staleTurns: 12,
-				staleSubtasks: [{ text: "sub A", staleTurns: 8 }],
-			},
-		];
-		const out = stalenessReminderPrompt(state, staleTasks, false);
-		expect(out).toContain("#3");
-		expect(out).toContain("12 turns idle");
-		expect(out).toContain("sub A");
-		expect(out).toContain("8 turns");
-	});
-});
-
-// ── formatTaskList（5 状态 + 子任务）─────────────────
-
-describe("formatTaskList", () => {
-	it("空数组 → No tasks yet", () => {
-		expect(formatTaskList([])).toBe("No tasks yet.");
-	});
-
-	it("5 种状态分组渲染 + 汇总", () => {
-		const tasks: GoalTask[] = [
-			makeTask(1, "in_progress"),
-			makeTask(2, "pending", { verification: { method: "npm test", expected: "pass" } }),
-			makeTask(3, "completed", { evidence: "done" }),
-			makeTask(4, "verified", { verification: { method: "lint", expected: "0 err", actual: "0 err" } }),
-			makeTask(5, "cancelled"),
-		];
-		const out = formatTaskList(tasks);
-		// active 分组
-		expect(out).toContain("In progress / Pending (2):");
-		expect(out).toContain("● #1:");
-		expect(out).toContain("☐ #2:");
-		expect(out).toContain("[验证: npm test]");
-		// verified 分组
-		expect(out).toContain("Verified (1):");
-		expect(out).toContain("◉ #4:");
-		expect(out).toContain("actual: 0 err");
-		// completed 分组
-		expect(out).toContain("Completed (1):");
-		expect(out).toContain("✓ #3:");
-		expect(out).toContain("done");
-		// cancelled 分组
-		expect(out).toContain("Cancelled (1):");
-		expect(out).toContain("✗ #5:");
-		// 汇总
-		expect(out).toContain("2/5 completed");
-		expect(out).toContain("1 cancelled");
-	});
-
-	it("子任务渲染", () => {
-		const tasks: GoalTask[] = [
-			{
-				id: 1,
-				description: "parent",
-				status: "in_progress",
-				lastUpdatedTurn: 0,
-				subtasks: [
-					{ id: 1, text: "sub done", status: "completed" },
-					{ id: 2, text: "sub active", status: "in_progress" },
-					{ id: 3, text: "sub pending", status: "pending" },
-				],
-			},
-		];
-		const out = formatTaskList(tasks);
-		expect(out).toContain("✓ #1.1: sub done");
-		expect(out).toContain("● #1.2: sub active");
-		expect(out).toContain("○ #1.3: sub pending");
-	});
-
-	it("completed 有 verification → awaiting verification 标记", () => {
-		const tasks: GoalTask[] = [
-			makeTask(1, "completed", {
-				evidence: "done",
-				verification: { method: "test", expected: "pass" },
-			}),
-		];
-		const out = formatTaskList(tasks);
-		expect(out).toContain("[awaiting verification]");
+		expect(out).toContain("test objective");
 	});
 });

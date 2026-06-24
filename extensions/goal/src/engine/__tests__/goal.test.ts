@@ -12,7 +12,7 @@ import {
 import type { GoalStatus } from "../types";
 
 const TERMINAL: GoalStatus[] = ["complete", "budget_limited", "time_limited", "cancelled"];
-const NON_TERMINAL: GoalStatus[] = ["active", "blocked"]; // ADR-002：paused 已删除
+const NON_TERMINAL: GoalStatus[] = ["active", "paused", "blocked"]; // paused #2 新增
 const ALL = [...NON_TERMINAL, ...TERMINAL];
 
 // ── isTerminalStatus / isActiveStatus ─────────────────
@@ -34,25 +34,51 @@ describe("isActiveStatus", () => {
 	}
 });
 
-// ── transitionStatus（终态守卫，宽松）──────────────────
+// ── transitionStatus（查表，非法转换 throw）──────────────
 
-describe("transitionStatus — 终态不可覆盖", () => {
-	for (const terminal of TERMINAL) {
-		for (const target of ALL) {
-			it(`terminal ${terminal} → ${target} 保持 ${terminal}`, () => {
-				expect(transitionStatus(terminal, target)).toBe(terminal);
-			});
-		}
+describe("transitionStatus — 合法转换返回 next", () => {
+	const legalCases: Array<[GoalStatus, GoalStatus]> = [
+		["active", "paused"],
+		["active", "blocked"],
+		["active", "complete"],
+		["active", "budget_limited"],
+		["active", "time_limited"],
+		["active", "cancelled"],
+		["paused", "active"],
+		["paused", "cancelled"],
+		["blocked", "active"],
+		["blocked", "cancelled"],
+	];
+	for (const [from, to] of legalCases) {
+		it(`${from} → ${to} 返回 ${to}`, () => {
+			expect(transitionStatus(from, to)).toBe(to);
+		});
 	}
 });
 
-describe("transitionStatus — 非终态可被任意覆盖", () => {
-	for (const current of NON_TERMINAL) {
+describe("transitionStatus — 非法转换 throw", () => {
+	// 终态不可转任何状态（VALID_TRANSITIONS 表为空）
+	for (const terminal of TERMINAL) {
 		for (const target of ALL) {
-			it(`${current} → ${target} 返回 ${target}`, () => {
-				expect(transitionStatus(current, target)).toBe(target);
+			it(`terminal ${terminal} → ${target} throw`, () => {
+				expect(() => transitionStatus(terminal, target)).toThrow();
 			});
 		}
+	}
+	// 非终态的非法路径（不在 VALID_TRANSITIONS 表内）
+	const illegalNonTerminal: Array<[GoalStatus, GoalStatus]> = [
+		["active", "active"], // 自转不在表内
+		["paused", "paused"],
+		["paused", "blocked"],
+		["paused", "complete"],
+		["blocked", "blocked"],
+		["blocked", "paused"],
+		["blocked", "complete"],
+	];
+	for (const [from, to] of illegalNonTerminal) {
+		it(`${from} → ${to} throw`, () => {
+			expect(() => transitionStatus(from, to)).toThrow();
+		});
 	}
 });
 
@@ -61,7 +87,6 @@ describe("transitionStatus — 非终态可被任意覆盖", () => {
 describe("createGoalState — 初始值", () => {
 	it("status = active", () => expect(createGoalState("obj").status).toBe("active"));
 	it("objective 透传", () => expect(createGoalState("my obj").objective).toBe("my obj"));
-	it("tasks 为空数组", () => expect(createGoalState("obj").tasks).toEqual([]));
 	it("stallCount = 0", () => expect(createGoalState("obj").stallCount).toBe(0));
 	it("tokensUsed = 0", () => expect(createGoalState("obj").tokensUsed).toBe(0));
 	it("timeUsedSeconds = 0", () => expect(createGoalState("obj").timeUsedSeconds).toBe(0));

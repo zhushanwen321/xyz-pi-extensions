@@ -5,7 +5,7 @@
  */
 
 import type { BudgetConfig, GoalRuntimeState, GoalStatus } from "./types";
-import { DEFAULT_BUDGET, TERMINAL_GOAL_STATUSES } from "./types";
+import { DEFAULT_BUDGET, TERMINAL_GOAL_STATUSES, VALID_TRANSITIONS } from "./types";
 
 export function isTerminalStatus(status: GoalStatus): boolean {
 	return TERMINAL_GOAL_STATUSES.has(status);
@@ -16,11 +16,18 @@ export function isActiveStatus(status: GoalStatus): boolean {
 }
 
 /**
- * 安全的状态转换。终态不可被覆盖（G-016 保持宽松）。
+ * 安全的状态转换。查 VALID_TRANSITIONS 表，非法转换 throw。
+ *
+ * 调用方必须在终态转换前自行检查 isTerminalStatus（如 finalizeAndPersist），
+ * 因为终态→终态不是合法转换（表为空）。对 active→终态、active→paused/blocked、
+ * paused/blocked→active/cancelled 这些合法路径直接返回 next。
  */
 export function transitionStatus(current: GoalStatus, next: GoalStatus): GoalStatus {
-	if (TERMINAL_GOAL_STATUSES.has(current)) return current;
-	return next;
+	const allowed = VALID_TRANSITIONS[current];
+	if (allowed && allowed.includes(next)) {
+		return next;
+	}
+	throw new Error(`Invalid goal state transition: ${current} → ${next}`);
 }
 
 /**
@@ -35,7 +42,6 @@ export function createGoalState(
 		goalId: crypto.randomUUID(),
 		objective,
 		status: "active",
-		tasks: [],
 		stallCount: 0,
 		tokensUsed: 0,
 		timeStartedAt: now,

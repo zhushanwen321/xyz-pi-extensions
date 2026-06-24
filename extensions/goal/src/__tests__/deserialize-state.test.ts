@@ -1,5 +1,8 @@
 /**
  * FR-5/FR-7.3: deserializeState — 新格式严格解析（字段缺失 throw）
+ *
+ * #1 向后兼容：旧 entry 可能含 `tasks` 字段（task CRUD 删除前的格式），
+ * 反序列化时忽略该字段不 throw。
  */
 import { describe, expect, it } from "vitest";
 
@@ -9,6 +12,7 @@ const FULL_DATA = {
 	goalId: "g1",
 	objective: "test",
 	status: "active",
+	// tasks 字段保留以模拟旧 entry（#1 后被忽略，不 throw）
 	tasks: [{
 		id: 1,
 		description: "task 1",
@@ -34,21 +38,16 @@ const FULL_DATA = {
 };
 
 describe("deserializeState — 新格式严格解析", () => {
-	it("完整新格式数据 → 正确还原", () => {
+	it("完整数据（含旧 tasks 字段）→ 正确还原，tasks 被忽略", () => {
 		const state = deserializeState(FULL_DATA);
-		expect(state.tasks[0]!.verification).toEqual({
-			method: "pnpm test", expected: "all pass", actual: "passed",
-		});
 		expect(state.tokenWarning70Sent).toBe(false);
-	});
-
-	it("task 缺 status 字段 → throw（FR-5）", () => {
-		const data = { ...FULL_DATA, tasks: [{ id: 1, description: "t1", lastUpdatedTurn: 0 }] };
-		expect(() => deserializeState(data)).toThrow();
+		expect(state.objective).toBe("test");
+		// tasks 字段不还原到 state（GoalRuntimeState 已无 tasks 字段）
+		expect((state as unknown as { tasks?: unknown }).tasks).toBeUndefined();
 	});
 
 	it("顶层缺 budget → throw（不再兜底默认值）", () => {
-		const data = { goalId: "g1", objective: "test", status: "active", tasks: [] };
+		const data = { goalId: "g1", objective: "test", status: "active" };
 		expect(() => deserializeState(data)).toThrow();
 	});
 
@@ -56,19 +55,6 @@ describe("deserializeState — 新格式严格解析", () => {
 		const data = { ...FULL_DATA };
 		delete (data as Record<string, unknown>).tokenWarning70Sent;
 		expect(() => deserializeState(data)).toThrow();
-	});
-
-	it("subtasks 新格式正确解析", () => {
-		const data = {
-			...FULL_DATA,
-			tasks: [{
-				id: 1, description: "t1", status: "in_progress", lastUpdatedTurn: 0,
-				subtasks: [{ id: 1, text: "sub", status: "pending", lastUpdatedTurn: 0 }],
-			}],
-		};
-		const state = deserializeState(data);
-		expect(state.tasks[0]!.subtasks).toHaveLength(1);
-		expect(state.tasks[0]!.subtasks![0]!.status).toBe("pending");
 	});
 
 	it("completedAtTurnIndex 可选（缺失 → undefined）", () => {

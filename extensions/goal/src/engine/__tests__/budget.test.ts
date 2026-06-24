@@ -13,15 +13,12 @@ import {
 	getTokenUsagePercent,
 	tick,
 } from "../budget";
-import type { GoalTask } from "../task";
-import { isTaskDone } from "../task";
 import type { GoalRuntimeState } from "../types";
 
 const makeState = (overrides: Partial<GoalRuntimeState> = {}): GoalRuntimeState => ({
 	goalId: "test",
 	objective: "test",
 	status: "active",
-	tasks: [],
 	stallCount: 0,
 	tokensUsed: 0,
 	timeStartedAt: 1000,
@@ -38,10 +35,6 @@ const makeState = (overrides: Partial<GoalRuntimeState> = {}): GoalRuntimeState 
 	lastTurnTokensUsed: 0,
 	currentTurnIndex: 0,
 	...overrides,
-});
-
-const makeTask = (o: Partial<GoalTask> = {}): GoalTask => ({
-	id: 1, description: "t", status: "pending", lastUpdatedTurn: 0, ...o,
 });
 
 // ── accumulateTokens（FR-8.6）─────────────────────────
@@ -172,30 +165,17 @@ describe("checkBudgetOnResume", () => {
 
 // ── checkProgress ────────────────────────────────────
 
+// #1 去 task 依赖后，checkProgress 的 allTasksDone/noTasksCreated/isStalled/
+// completedCount/totalCount 暂置默认值，仅 maxTurnsReached/budgetTight 保留计算。
+// task 相关字段的重填测试随 #7（ProgressInput 注入）补回。
 describe("checkProgress", () => {
-	it("无任务 → noTasksCreated", () => {
-		const r = checkProgress(makeState({ tasks: [] }), 0, isTaskDone);
-		expect(r.noTasksCreated).toBe(true);
-	});
-	it("全 done → allTasksDone", () => {
-		const s = makeState({ tasks: [makeTask({ id: 1, status: "completed" }), makeTask({ id: 2, status: "verified" })] });
-		expect(checkProgress(s, 0, isTaskDone).allTasksDone).toBe(true);
-	});
-	it("有未完成 → allTasksDone=false", () => {
-		const s = makeState({ tasks: [makeTask({ id: 1, status: "in_progress" })] });
-		expect(checkProgress(s, 0, isTaskDone).allTasksDone).toBe(false);
-	});
 	it("maxTurnsReached", () => {
 		const s = makeState({ currentTurnIndex: 50, budget: { maxStallTurns: 5, maxTurns: 50 } });
-		expect(checkProgress(s, 0, isTaskDone).maxTurnsReached).toBe(true);
-	});
-	it("isStalled：本 round 无进展", () => {
-		const s = makeState({ tasks: [makeTask({ id: 1, status: "completed" })], currentTurnIndex: 5 });
-		expect(checkProgress(s, 1, isTaskDone).isStalled).toBe(true);
+		expect(checkProgress(s).maxTurnsReached).toBe(true);
 	});
 	it("budgetTight：tokensUsed >= 80%", () => {
 		const s = makeState({ tokensUsed: 850, budget: { maxStallTurns: 5, maxTurns: 50, tokenBudget: 1000 } });
-		expect(checkProgress(s, 0, isTaskDone).budgetTight).toBe(true);
+		expect(checkProgress(s).budgetTight).toBe(true);
 	});
 });
 

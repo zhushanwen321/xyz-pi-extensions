@@ -19,7 +19,6 @@ import type { SessionEntryLike, SessionPort, UiPort } from "./ports";
 
 export interface GoalSession {
 	state: GoalRuntimeState | null;
-	tasksCompletedAtAgentStart: number;
 	/** 防重入标志：agent_end / before_agent_start 等事件处理器入口检查 */
 	isProcessing: boolean;
 }
@@ -27,7 +26,6 @@ export interface GoalSession {
 export function createGoalSession(): GoalSession {
 	return {
 		state: null,
-		tasksCompletedAtAgentStart: 0,
 		isProcessing: false,
 	};
 }
@@ -134,7 +132,6 @@ function isGoalStateEntry(entry: SessionEntryLike): boolean {
 
 export function clearGoalSession(session: GoalSession, uiPort: UiPort): void {
 	session.state = null;
-	session.tasksCompletedAtAgentStart = 0;
 	session.isProcessing = false;
 	// FR-6.6: hasUI 守卫
 	if (uiPort.hasUI) {

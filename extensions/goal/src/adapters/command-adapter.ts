@@ -1,11 +1,11 @@
 /**
- * /goal 命令适配器 — 7 个子命令 handler（adapters 层）
+ * /goal 命令适配器 — 子命令 handler（adapters 层）
  *
- * ADR-002 后 7 个子命令：set / status / resume / clear / abort / update / history
- * （原 /goal pause 已删除）。
+ * ADR-002 后子命令：set / status / resume / clear / update / history
+ * （原 /goal pause 已删除；/goal abort 随 task CRUD 一并废弃）。
  *
  * 状态变更调 service（createGoal / finalizeAndPersist）；
- * ports 桥接复用 tool-adapter.buildPorts（DRY：单一 ports 构造点）；
+ * ports 桥接复用 adapters/ports.buildPorts（DRY：单一 ports 构造点）；
  * FR-8.12: set/resume 后 sendUserMessage 触发 AI。
  *
  * adapters 层可 import Pi 类型（桥接 Pi 和 service）。
@@ -21,7 +21,6 @@ import {
 } from "../constants";
 import { checkBudgetOnResume } from "../engine/budget";
 import { isActiveStatus, isTerminalStatus, transitionStatus } from "../engine/goal";
-import { getCompletedCount, getIncompleteTasks } from "../engine/task";
 import type { BudgetConfig } from "../engine/types";
 import { DEFAULT_BUDGET } from "../engine/types";
 import { objectiveUpdatedPrompt } from "../projection/prompts";
@@ -29,12 +28,12 @@ import { updateWidget } from "../projection/widget";
 import { createGoal, finalizeAndPersist, persistState, tickState } from "../service";
 import type { GoalSession } from "../session";
 import { clearGoalSession } from "../session";
-import { buildPorts } from "./tool-adapter";
+import { buildPorts } from "./ports";
 
 // ── Orchestrator ──────────────────────────────────────
 
 /**
- * /goal 命令分发器。按 parseGoalArgs 结果路由到 7 个子命令 handler。
+ * /goal 命令分发器。按 parseGoalArgs 结果路由到子命令 handler。
  *
  * 调用方（index.ts 的 command handler）把原始 args 透传到这里。
  */
@@ -54,8 +53,6 @@ export async function handleGoalCommand(
 			return handleHistory(ctx);
 		case "clear":
 			return handleClear(pi, session, ctx);
-		case "abort":
-			return handleAbort(pi, session, ctx);
 		case "update":
 			return handleUpdate(pi, session, parsed.objective, ctx);
 		case "set":
@@ -75,15 +72,12 @@ function handleStatus(session: GoalSession, ctx: ExtensionContext): void {
 	if (isActiveStatus(state.status)) {
 		tickState(state);
 	}
-	const completed = getCompletedCount(state.tasks);
-	const total = state.tasks.length;
 	const timeMins = Math.floor(state.timeUsedSeconds / SECONDS_PER_MINUTE);
 	const timeSecs = Math.floor(state.timeUsedSeconds % SECONDS_PER_MINUTE);
 	const lines: Array<string | null> = [
 		`Objective: ${state.objective}`,
 		`Status: ${state.status}`,
 		`Turn: ${state.currentTurnIndex}/${state.budget.maxTurns}`,
-		`Tasks: ${completed}/${total} completed`,
 		`Stall turns: ${state.stallCount}`,
 		`Time elapsed: ${timeMins}m${timeSecs}s`,
 		state.budget.tokenBudget ? `Token: ${state.tokensUsed}/${state.budget.tokenBudget}` : null,
@@ -131,19 +125,14 @@ function handleResume(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionCont
 	persistState(session, ports);
 	updateWidget(session, ports.ui);
 
-	// FR-8.12 并行模式：resume 有未完成任务时触发 AI
-	const incomplete = getIncompleteTasks(state.tasks);
-	if (incomplete.length > 0) {
-		const blockerNote = state.lastBlockerReason
-			? `\n\nPrevious blocker: ${state.lastBlockerReason}. Try a different approach.`
-			: "";
-		pi.sendUserMessage(
-			`Goal resumed. Continuing with ${incomplete.length} remaining tasks.${blockerNote}\n\nObjective: ${state.objective}`,
-			{ deliverAs: "followUp" },
-		);
-	} else {
-		ctx.ui.notify("All tasks completed.", "info");
-	}
+	// FR-8.12 并行模式：resume 后触发 AI 继续
+	const blockerNote = state.lastBlockerReason
+		? `\n\nPrevious blocker: ${state.lastBlockerReason}. Try a different approach.`
+		: "";
+	pi.sendUserMessage(
+		`Goal resumed. Continuing toward the objective.${blockerNote}\n\nObjective: ${state.objective}`,
+		{ deliverAs: "followUp" },
+	);
 }
 
 // ── /goal history ─────────────────────────────────────
@@ -191,7 +180,7 @@ function handleHistory(ctx: ExtensionContext): void {
 		const mins = Math.floor(h.elapsedSeconds / SECONDS_PER_MINUTE);
 		const secs = Math.floor(h.elapsedSeconds % SECONDS_PER_MINUTE);
 		lines.push(`${i + 1}. ${icon} ${obj}`);
-		lines.push(`   ${h.completedTasks}/${h.totalTasks} tasks | ${mins}m${secs}s | ${h.status}`);
+		lines.push(`   ${mins}m${secs}s | ${h.status}`);
 	});
 	ctx.ui.notify(lines.join("\n"), "info");
 }
@@ -199,7 +188,7 @@ function handleHistory(ctx: ExtensionContext): void {
 // ── /goal clear（强制清）──────────────────────────────
 
 /**
- * FR-6.3：强制清。不检查未完成任务，直接 cancelled + clearSession。
+ * FR-6.3：强制清。直接 cancelled + clearSession。
  */
 function handleClear(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionContext): void {
 	if (!session.state) {
@@ -207,51 +196,21 @@ function handleClear(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionConte
 		return;
 	}
 	const ports = buildPorts(pi, ctx);
-	// FR-3.3: 唯一终态序列入口（tick + finalizeGoal + persist）
-	finalizeAndPersist(session.state, "cancelled", getCompletedCount(session.state.tasks), ports);
+	// transitionStatus 查表终态不可转（engine/goal.ts）：已终态 goal 直接 clearSession
+	if (!isTerminalStatus(session.state.status)) {
+		// FR-3.3: 唯一终态序列入口（tick + finalizeGoal + persist）
+		finalizeAndPersist(session.state, "cancelled", 0, ports);
+	}
 	// FR-8.7: cancelled → 立即 clearSession
 	clearGoalSession(session, ports.ui);
 	ctx.ui.notify("Goal cleared.", "info");
 }
 
-// ── /goal abort（检查未完成）──────────────────────────
-
-/**
- * FR-6.3：检查未完成。仅当所有 task 都 cancelled（无未完成工作）才允许，
- * 否则拒绝（避免误丢工作）。force clear 用 /goal clear。
- */
-function handleAbort(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionContext): void {
-	if (!session.state) {
-		ctx.ui.notify("Goal mode not active.", "info");
-		return;
-	}
-	if (isTerminalStatus(session.state.status)) {
-		ctx.ui.notify(`Goal is already in terminal state (${session.state.status}).`, "warning");
-		return;
-	}
-	// FR-6.3: 有非 cancelled task 拒绝
-	if (session.state.tasks.length > 0) {
-		const nonCancelled = session.state.tasks.filter((t) => t.status !== "cancelled");
-		if (nonCancelled.length > 0) {
-			ctx.ui.notify(
-				`Cannot abort: ${nonCancelled.length} non-cancelled tasks exist. Use /goal clear to force cancel.`,
-				"warning",
-			);
-			return;
-		}
-	}
-	const ports = buildPorts(pi, ctx);
-	// FR-3.3: 唯一终态序列入口（tick + finalizeGoal + persist）
-	finalizeAndPersist(session.state, "cancelled", getCompletedCount(session.state.tasks), ports);
-	clearGoalSession(session, ports.ui);
-	ctx.ui.notify("Goal aborted: no work needed.", "info");
-}
-
 // ── /goal update（重塑）──────────────────────────────
 
 /**
- * FR-8.4 G-002：重塑（reset）。重置 objective/tasks/budget flags/stallCount/
- * currentTurnIndex/lastProgressTurn + tasksCompletedAtAgentStart，保留 goalId。
+ * FR-8.4 G-002：重塑（reset）。重置 objective/budget flags/stallCount/
+ * currentTurnIndex/lastProgressTurn，保留 goalId。
  * active 状态下向 AI 注入 objective-updated steering。
  */
 function handleUpdate(
@@ -273,7 +232,6 @@ function handleUpdate(
 	// FR-8.4 G-002: 重塑（重置，保留 goalId）
 	state.objective = newObjective;
 	state.objectiveUpdatedAt = Date.now();
-	state.tasks = [];
 	state.stallCount = 0;
 	state.currentTurnIndex = 0;
 	state.lastProgressTurn = 0;
@@ -282,7 +240,6 @@ function handleUpdate(
 	state.tokenWarning90Sent = false;
 	state.timeWarning70Sent = false;
 	state.timeWarning90Sent = false;
-	session.tasksCompletedAtAgentStart = 0;
 	// FR-6.5: 持久化重塑后的状态（persistState 按当前 status tick 累加）+ FR-6.1 widget 刷新
 	const updatePorts = buildPorts(pi, ctx);
 	persistState(session, updatePorts);
@@ -320,7 +277,7 @@ function handleSet(
 		// 非终态旧 goal：写 cancelled history（不 clearSession——createGoal 紧接覆盖 session.state）
 		ctx.ui.notify(`Cancelled previous Goal: ${session.state.objective}\n(new goal started)`, "info");
 		// FR-3.3: 唯一终态序列入口（tick + finalizeGoal + persist）
-		finalizeAndPersist(session.state, "cancelled", getCompletedCount(session.state.tasks), ports);
+		finalizeAndPersist(session.state, "cancelled", 0, ports);
 	}
 	// 终态旧 goal：快速路径（不写 history，createGoal 直接覆盖）
 
@@ -335,9 +292,8 @@ function handleSet(
 	budget.maxTurns = budgetOverrides?.maxTurns ?? DEFAULT_BUDGET.maxTurns;
 	budget.maxStallTurns = budgetOverrides?.maxStallTurns ?? DEFAULT_BUDGET.maxStallTurns;
 
-	// FR-3.1: 唯一创建入口（set 传空 tasks，AI 后续调 create_tasks）
-	createGoal(session, objective, [], budget, ports, false);
-	session.tasksCompletedAtAgentStart = 0;
+	// FR-3.1: 唯一创建入口
+	createGoal(session, objective, budget, ports, false);
 
 	const budgetNotice: string[] = [];
 	if (budget.tokenBudget) budgetNotice.push(`Token budget: ${budget.tokenBudget}`);

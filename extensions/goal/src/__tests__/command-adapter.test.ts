@@ -1,9 +1,9 @@
 /**
- * command-adapter.ts 测试 — 7 个 /goal 子命令（ADR-002 删除 pause）
+ * command-adapter.ts 测试 — /goal 子命令（ADR-002 删除 pause；#1 删除 abort + task CRUD）
  *
  * 覆盖：
- * - MF-3 回归：clear/abort/set-overwrite 转 cancelled 前 tick 累加时间
- * - MF-6 覆盖：命令分发 + 各 FR 分支（G-R2-008/G-014/G-002/G-063）
+ * - MF-3 回归：clear/set-overwrite 转 cancelled 前 tick 累加时间
+ * - MF-6 覆盖：命令分发 + 各 FR 分支（G-R2-008/G-014/G-002）
  *
  * 用 fake pi + fake ctx（不 import Pi SDK 真实实现）。
  * handleGoalCommand(pi, session, args, ctx) → Promise<void>。
@@ -111,16 +111,11 @@ describe("handleGoalCommand — status", () => {
 	it("有 active goal → 显示 status 面板", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();
-		session.state = makeActiveState({
-			tasks: [
-				{ id: 1, description: "t1", status: "completed", lastUpdatedTurn: 0 },
-				{ id: 2, description: "t2", status: "pending", lastUpdatedTurn: 0 },
-			],
-		});
+		session.state = makeActiveState();
 		await handleGoalCommand(h.pi, session, "status", h.ctx);
 		const text = notifyText(h).join("\n");
 		expect(text).toContain("test objective");
-		expect(text).toContain("1/2 completed");
+		expect(text).toContain("Status: active");
 	});
 });
 
@@ -130,15 +125,12 @@ describe("handleGoalCommand — resume (ADR-002 blocked-only + G-014)", () => {
 	it("blocked → active：resume 成功 + persist + 触发 AI", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();
-		session.state = makeActiveState({
-			status: "blocked",
-			tasks: [{ id: 1, description: "t", status: "in_progress", lastUpdatedTurn: 0 }],
-		});
+		session.state = makeActiveState({ status: "blocked" });
 		await handleGoalCommand(h.pi, session, "resume", h.ctx);
 		expect(session.state!.status).toBe("active");
 		expect(session.state!.stallCount).toBe(0);
 		expect(h.states.length).toBeGreaterThanOrEqual(1); // persist 调用
-		// FR-8.12: 有未完成任务 → sendUserMessage 触发 AI
+		// FR-8.12: resume 后触发 AI
 		expect(h.piCalls.some((c) => c.kind === "sendUser")).toBe(true);
 	});
 
@@ -169,56 +161,17 @@ describe("handleGoalCommand — resume (ADR-002 blocked-only + G-014)", () => {
 	});
 });
 
-// ── /goal clear vs abort（FR-6.3 G-063 守卫差异）──
+// ── /goal clear（FR-6.3 强制清）──
 
-describe("handleGoalCommand — clear vs abort (FR-6.3)", () => {
-	it("clear：强制清，不检查未完成任务", async () => {
+describe("handleGoalCommand — clear (FR-6.3)", () => {
+	it("clear：强制清，写 cancelled history + clearSession", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();
-		session.state = makeActiveState({
-			tasks: [{ id: 1, description: "unfinished", status: "in_progress", lastUpdatedTurn: 0 }],
-		});
+		session.state = makeActiveState();
 		await handleGoalCommand(h.pi, session, "clear", h.ctx);
 		expect(session.state).toBeNull(); // clearGoalSession 清空
 		expect(h.history.length).toBe(1); // 写 cancelled history
 		expect(notifyText(h).some((t) => t.includes("cleared"))).toBe(true);
-	});
-
-	it("abort：有非 cancelled 任务 → 拒绝", async () => {
-		const h = makeHarness();
-		const session = createGoalSession();
-		session.state = makeActiveState({
-			tasks: [{ id: 1, description: "unfinished", status: "in_progress", lastUpdatedTurn: 0 }],
-		});
-		await handleGoalCommand(h.pi, session, "abort", h.ctx);
-		expect(notifyText(h).some((t) => t.includes("Cannot abort"))).toBe(true);
-		expect(session.state).not.toBeNull(); // 未清空
-	});
-
-	it("abort：全部 cancelled → 允许清空", async () => {
-		const h = makeHarness();
-		const session = createGoalSession();
-		session.state = makeActiveState({
-			tasks: [{ id: 1, description: "cancelled-task", status: "cancelled", lastUpdatedTurn: 0 }],
-		});
-		await handleGoalCommand(h.pi, session, "abort", h.ctx);
-		expect(session.state).toBeNull();
-		expect(notifyText(h).some((t) => t.includes("aborted"))).toBe(true);
-	});
-
-	it("abort：MF-3 tick — active goal 转 cancelled 前累加时间", async () => {
-		const h = makeHarness();
-		const session = createGoalSession();
-		const past = Date.now() - 4000;
-		session.state = makeActiveState({
-			timeStartedAt: past,
-			timeUsedSeconds: 3,
-			tasks: [{ id: 1, description: "cancelled-task", status: "cancelled", lastUpdatedTurn: 0 }],
-		});
-		await handleGoalCommand(h.pi, session, "abort", h.ctx);
-		// MF-3 核心：history 的 elapsedSeconds 应 ≈ 7（3 + 4）
-		const histEntry = h.history[0] as { elapsedSeconds?: number } | undefined;
-		expect(histEntry?.elapsedSeconds).toBeGreaterThanOrEqual(6);
 	});
 
 	it("clear：MF-3 tick — active goal 转 cancelled 前累加时间", async () => {
@@ -236,7 +189,7 @@ describe("handleGoalCommand — clear vs abort (FR-6.3)", () => {
 // ── /goal update（FR-8.4 G-002 重塑）──────────────
 
 describe("handleGoalCommand — update (FR-8.4 G-002)", () => {
-	it("重塑：重置 objective/tasks/flags，保留 goalId", async () => {
+	it("重塑：重置 objective/flags，保留 goalId", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();
 		const originalGoalId = "goal-original-123";
@@ -245,13 +198,11 @@ describe("handleGoalCommand — update (FR-8.4 G-002)", () => {
 			objective: "old objective",
 			stallCount: 5,
 			currentTurnIndex: 8,
-			tasks: [{ id: 1, description: "old", status: "completed", lastUpdatedTurn: 0 }],
 		});
 		await handleGoalCommand(h.pi, session, "update brand new objective", h.ctx);
 
 		expect(session.state!.objective).toBe("brand new objective");
 		expect(session.state!.goalId).toBe(originalGoalId); // 保留
-		expect(session.state!.tasks).toHaveLength(0); // 重置
 		expect(session.state!.stallCount).toBe(0);
 		expect(session.state!.currentTurnIndex).toBe(0);
 		expect(session.state!.budgetLimitSteeringSent).toBe(false);

@@ -1,18 +1,17 @@
 /**
  * Goal 运行时组合状态类型 — engine 层共享类型定义
  *
- * 零 Pi 依赖。仅 import GoalTask from "./task"。
+ * 零 Pi 依赖。
  *
  * FR-6.2 修复：预警 flag 按 token/time 维度独立（4 个独立 flag），
  * 取代旧版 budgetWarning70Sent/budgetWarning90Sent 共享 flag。
  */
 
-import type { GoalTask } from "./task";
-
 // ── Goal 状态枚举 ────────────────────────────────────
 
 export type GoalStatus =
 	| "active"
+	| "paused"
 	| "blocked"
 	| "complete"
 	| "budget_limited"
@@ -25,6 +24,20 @@ export const TERMINAL_GOAL_STATUSES: ReadonlySet<GoalStatus> = new Set([
 	"time_limited",
 	"cancelled",
 ]);
+
+/**
+ * 显式状态转换表（system-architecture §5）。终态映射空数组——不可逆。
+ * transitionStatus 据此查表，非法转换 throw。新增状态时必须更新此表（forcing function）。
+ */
+export const VALID_TRANSITIONS: Record<GoalStatus, GoalStatus[]> = {
+	active: ["paused", "blocked", "complete", "budget_limited", "time_limited", "cancelled"],
+	paused: ["active", "cancelled"],
+	blocked: ["active", "cancelled"],
+	complete: [],
+	budget_limited: [],
+	time_limited: [],
+	cancelled: [],
+};
 
 // ── 预算配置 ────────────────────────────────────────
 
@@ -46,7 +59,6 @@ export interface GoalRuntimeState {
 	goalId: string;
 	objective: string;
 	status: GoalStatus;
-	tasks: GoalTask[];
 	stallCount: number;
 	tokensUsed: number;
 	timeStartedAt: number;
