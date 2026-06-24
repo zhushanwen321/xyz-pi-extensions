@@ -44,14 +44,9 @@ export const VALID_TRANSITIONS: Record<GoalStatus, GoalStatus[]> = {
 export interface BudgetConfig {
 	tokenBudget?: number;
 	timeBudgetMinutes?: number;
-	maxStallTurns: number;
-	maxTurns: number;
 }
 
-export const DEFAULT_BUDGET: BudgetConfig = {
-	maxStallTurns: 5,
-	maxTurns: 50,
-};
+export const DEFAULT_BUDGET: BudgetConfig = {};
 
 // ── 运行时状态（也是持久化格式）─────────────────────
 
@@ -59,7 +54,6 @@ export interface GoalRuntimeState {
 	goalId: string;
 	objective: string;
 	status: GoalStatus;
-	stallCount: number;
 	tokensUsed: number;
 	timeStartedAt: number;
 	timeUsedSeconds: number;

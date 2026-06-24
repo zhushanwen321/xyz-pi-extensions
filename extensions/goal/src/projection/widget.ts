@@ -58,7 +58,7 @@ function getElapsedSeconds(state: GoalRuntimeState): number {
 export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string {
 	if (state.status === "cancelled") return "";
 
-	let text = th.fg("accent", `◆ Goal`) + th.fg("muted", ` ${state.currentTurnIndex}/${state.budget.maxTurns}`);
+	let text = th.fg("accent", `◆ Goal`) + th.fg("muted", ` ${state.currentTurnIndex}`);
 
 	// Budget indicators
 	if (state.budget.tokenBudget && state.budget.tokenBudget > 0) {
@@ -68,10 +68,6 @@ export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string
 	if (state.budget.timeBudgetMinutes && state.budget.timeBudgetMinutes > 0) {
 		const pct = Math.round(getTimeUsagePercent(state, getElapsedSeconds(state)));
 		text += th.fg(getBudgetColor(pct), ` | ${pct}% time`);
-	}
-
-	if (state.stallCount > 0) {
-		text += th.fg("warning", ` | ⚠ ${state.stallCount} turns stalled`);
 	}
 
 	// Status suffix：非终态（paused = 用户暂停等待 resume / blocked = agent 报告卡住）

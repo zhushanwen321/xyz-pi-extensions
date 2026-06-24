@@ -23,8 +23,6 @@ export const BUDGET_PERCENT_LOW = 70;    // widget 颜色变黄
 
 // ── 长度/数量上限 ───────────────────────────────────
 
-export const MAX_TURNS_CAP = 100;             // maxTurns 上限
-export const MAX_STALL_CAP = 20;              // maxStallTurns 上限
 export const UPDATE_PREFIX_LENGTH = 7;        // "update ".length
 
 // ── 百分比换算因子 ──────────────────────────────────
@@ -39,6 +37,5 @@ export const OBJECTIVE_TRUNCATE_KEEP = 77; // DISPLAY_LIMIT - 3 for "..."
 
 // ── 停滞/清理阈值 ────────────────────────────────────
 
-export const TASK_STALL_TURN_THRESHOLD = 10;	// goal 停滞提醒阈值（turn 数，#6 基于 lastUpdatedTurn 重做）
 export const AUTO_CLEAR_TURNS = 2;				// 终态后自动清理轮数
 export const MAX_HISTORY_ENTRIES = 20;			// goal-history entry GC 上限

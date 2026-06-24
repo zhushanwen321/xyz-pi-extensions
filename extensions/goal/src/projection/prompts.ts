@@ -11,7 +11,7 @@
  * - 防注入: XML 标签包裹 + escapeXmlText 转义
  *
  * 注：#1 去 task CRUD 后，prompt 暂不含 task 进度数据（等 #7 注入 todo 进度）。
- * staleness reminder 基于 task 的逻辑已移除，#6 会基于 lastUpdatedTurn 重做。
+ * staleness reminder 基于 task 的逻辑已移除，#10 会基于 lastProgressTurn/lastUpdatedTurn 重做。
  */
 
 import { PERCENT_FACTOR, SECONDS_PER_MINUTE } from "../constants";
@@ -125,12 +125,10 @@ function formatBudgetReport(state: GoalRuntimeState, timeUsedSeconds: number): s
 export function continuationPrompt(state: GoalRuntimeState, timeUsedSeconds: number): string {
 	const objective = escapeXmlText(state.objective);
 	const budgetLine = formatBudget(state, timeUsedSeconds, "line");
-	const stallLine =
-		state.stallCount > 0 ? `\nStall: ${state.stallCount}/${state.budget.maxStallTurns} turns stalled` : "";
 
 	return (
 		`<goal_context>\n` +
-		`[GOAL] Turn ${state.currentTurnIndex}/${state.budget.maxTurns}${budgetLine}${stallLine}\n` +
+		`[GOAL] Turn ${state.currentTurnIndex}${budgetLine}\n` +
 		`<objective>${objective}</objective>\n` +
 		`Keep working toward the objective. Report completion with overall evidence when done, or report blocked with what you have tried if genuinely stuck.\n` +
 		`\n` +
@@ -219,7 +217,7 @@ export function contextInjectionPrompt(
 		`[GOAL mode activated]\n\n` +
 		`<objective>\n${objective}\n</objective>\n` +
 		`Status: ${state.status}\n` +
-		`Turn: ${state.currentTurnIndex}/${state.budget.maxTurns}${budgetInfo}\n\n` +
+		`Turn: ${state.currentTurnIndex}${budgetInfo}\n\n` +
 		`Strict rules:\n` +
 		`1. Work from evidence: use the current filesystem and external state as authoritative. Inspect current state before relying on prior context.\n` +
 		`2. Track remaining work and only claim completion for work backed by concrete evidence (files changed, tests passed, commands run)\n` +

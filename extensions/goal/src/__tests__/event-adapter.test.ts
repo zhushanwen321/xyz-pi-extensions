@@ -1,12 +1,11 @@
 /**
  * event-adapter.ts 测试 — agent_end / before_agent_start 核心逻辑
  *
- * 覆盖 agent_end 的 maxTurns 分支 + stall/continuation + ESC 守卫（FR-6.7）+
+ * 覆盖 agent_end 的 continuation + ESC 守卫（FR-6.7）+
  * before_agent_start 的 AUTO_CLEAR/context wrap-up。
  *
- * 注：#1 去 task CRUD 后，allTasksDone/noTasksCreated/isStalled 暂置默认值，
- * 分支 1（allTasksDone）/分支 2（noTasksCreated）不触发；staleness reminder
- * 暂禁用（#6 基于 lastUpdatedTurn 重做）。相关测试随 #7/#8 补回。
+ * 注：#1 去 task CRUD 后，allTasksDone/noTasksCreated/isStalled 暂置默认值；
+ * #6 删除 maxTurnsReached / stall 自动终态分支。相关分支测试随 #7/#8 补回。
  *
  * 用 fake pi + fake ctx（不 import Pi SDK）。handler 签名 (pi, session, ctx) → void/result。
  */
@@ -123,8 +122,6 @@ describe("handleAgentEnd — FR-6.7 ESC 守卫", () => {
 		expect(session.state!.status).toBe("active");
 		// 不 persist（ESC 不触发副作用）
 		expect(states).toHaveLength(0);
-		// 不递增 stallCount
-		expect(session.state!.stallCount).toBe(0);
 	});
 
 	it("aborted=true + 终态：仍走终态 notify（ESC 不影响终态路径）", async () => {
@@ -143,45 +140,9 @@ describe("handleAgentEnd — FR-6.7 ESC 守卫", () => {
 	});
 });
 
-// ── handleAgentEnd：maxTurnsReached → cancelled ──────
+// ── handleAgentEnd：continuation（去抖 + 正常发送）──────
 
-describe("handleAgentEnd — maxTurnsReached → cancelled", () => {
-	it("currentTurnIndex >= maxTurns → cancelled + 写 history", async () => {
-		const { pi, calls: piCalls, history } = makeFakePi();
-		const { ctx, calls: ctxCalls } = makeFakeCtx();
-		const session = createGoalSession();
-		session.state = makeRunningState({ currentTurnIndex: 50 }); // = maxTurns (50)
-
-		await handleAgentEnd(pi, session, ctx);
-		const all = allCalls(piCalls, ctxCalls);
-
-		expect(session.state!.status).toBe("cancelled");
-		expect(history).toHaveLength(1);
-		const notify = all.filter((c) => c.kind === "notify");
-		expect(notify[0]!.text).toContain("Max turns");
-	});
-});
-
-// ── handleAgentEnd：stall + continuation ─────────────
-
-describe("handleAgentEnd — stall 检测 + continuation", () => {
-	it("isStalled=false（#1 后恒 false）→ stallCount 重置为 0", async () => {
-		const { pi } = makeFakePi();
-		const { ctx } = makeFakeCtx();
-		const session = createGoalSession();
-		session.state = makeRunningState({
-			lastTurnTokensUsed: 0,
-			tokensUsed: 100, // tokenDelta > 0 → 发 continuation
-			stallCount: 3, // 预置非 0，验证重置
-		});
-
-		await handleAgentEnd(pi, session, ctx);
-
-		expect(session.state!.stallCount).toBe(0);
-		expect(session.state!.status).toBe("active"); // 未超 maxStallTurns
-		expect(session.state!.lastProgressTurn).toBe(session.state!.currentTurnIndex);
-	});
-
+describe("handleAgentEnd — continuation", () => {
 	it("continuation 去抖：tokenDelta=0（空 turn）不发", async () => {
 		const { pi, calls: piCalls } = makeFakePi();
 		const { ctx, calls: ctxCalls } = makeFakeCtx();

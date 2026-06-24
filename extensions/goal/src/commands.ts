@@ -2,7 +2,7 @@
  * /goal 命令定义和参数解析
  */
 
-import { MAX_STALL_CAP, MAX_TURNS_CAP, UPDATE_PREFIX_LENGTH } from "./constants";
+import { UPDATE_PREFIX_LENGTH } from "./constants";
 import type { BudgetConfig } from "./engine/types";
 
 export interface GoalCommandArgs {
@@ -38,9 +38,9 @@ export function parseGoalArgs(raw: string): GoalCommandArgs {
 		return { action: "update" };
 	}
 
-	// /goal <objective> [--tokens N] [--timeout N] [--max-turns N] [--max-stall N]
+	// /goal <objective> [--tokens N] [--timeout N]
 	// 只匹配已知 flag，避免误删 objective 中的 -- 文本
-	const knownFlags = /--(?:tokens|timeout|max-turns|max-stall)\s+\d+/g;
+	const knownFlags = /--(?:tokens|timeout)\s+\d+/g;
 	const objective = fullRaw.replace(knownFlags, "").trim();
 	const budget: Partial<BudgetConfig> = {};
 
@@ -54,18 +54,6 @@ export function parseGoalArgs(raw: string): GoalCommandArgs {
 	if (timeMatch) {
 		const val = parseInt(timeMatch[1]!, 10);
 		if (!isNaN(val) && val > 0) budget.timeBudgetMinutes = val;
-	}
-
-	const maxTurnsMatch = fullRaw.match(/--max-turns\s+(\d+)/);
-	if (maxTurnsMatch) {
-		const val = parseInt(maxTurnsMatch[1]!, 10);
-		if (!isNaN(val)) budget.maxTurns = Math.max(1, Math.min(val, MAX_TURNS_CAP));
-	}
-
-	const maxStallMatch = fullRaw.match(/--max-stall\s+(\d+)/);
-	if (maxStallMatch) {
-		const val = parseInt(maxStallMatch[1]!, 10);
-		if (!isNaN(val)) budget.maxStallTurns = Math.max(1, Math.min(val, MAX_STALL_CAP));
 	}
 
 	if (!objective) {

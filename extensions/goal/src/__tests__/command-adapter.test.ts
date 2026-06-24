@@ -128,7 +128,6 @@ describe("handleGoalCommand — resume (ADR-002 blocked-only + G-014)", () => {
 		session.state = makeActiveState({ status: "blocked" });
 		await handleGoalCommand(h.pi, session, "resume", h.ctx);
 		expect(session.state!.status).toBe("active");
-		expect(session.state!.stallCount).toBe(0);
 		expect(h.states.length).toBeGreaterThanOrEqual(1); // persist 调用
 		// FR-8.12: resume 后触发 AI
 		expect(h.piCalls.some((c) => c.kind === "sendUser")).toBe(true);
@@ -142,8 +141,6 @@ describe("handleGoalCommand — resume (ADR-002 blocked-only + G-014)", () => {
 			budget: {
 				tokenBudget: 1000,
 				timeBudgetMinutes: 30,
-				maxTurns: 10,
-				maxStallTurns: 3,
 			},
 			tokensUsed: 1200, // 已超 tokenBudget
 		});
@@ -196,14 +193,12 @@ describe("handleGoalCommand — update (FR-8.4 G-002)", () => {
 		session.state = makeActiveState({
 			goalId: originalGoalId,
 			objective: "old objective",
-			stallCount: 5,
 			currentTurnIndex: 8,
 		});
 		await handleGoalCommand(h.pi, session, "update brand new objective", h.ctx);
 
 		expect(session.state!.objective).toBe("brand new objective");
 		expect(session.state!.goalId).toBe(originalGoalId); // 保留
-		expect(session.state!.stallCount).toBe(0);
 		expect(session.state!.currentTurnIndex).toBe(0);
 		expect(session.state!.budgetLimitSteeringSent).toBe(false);
 		expect(h.states.length).toBeGreaterThanOrEqual(1); // persist

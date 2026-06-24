@@ -19,11 +19,10 @@ const makeState = (overrides: Partial<GoalRuntimeState> = {}): GoalRuntimeState 
 	goalId: "test",
 	objective: "test",
 	status: "active",
-	stallCount: 0,
 	tokensUsed: 0,
 	timeStartedAt: 1000,
 	timeUsedSeconds: 0,
-	budget: { maxStallTurns: 5, maxTurns: 50 },
+	budget: {},
 	lastProgressTurn: 0,
 	budgetLimitSteeringSent: false,
 	objectiveUpdatedAt: 1000,
@@ -88,38 +87,38 @@ describe("checkBudgetOnTurnEnd — 无预算", () => {
 
 describe("checkBudgetOnTurnEnd — token 阈值", () => {
 	it("token < 70% → 无预警", () => {
-		const s = makeState({ tokensUsed: 600, budget: { maxStallTurns: 5, maxTurns: 50, tokenBudget: 1000 } });
+		const s = makeState({ tokensUsed: 600, budget: { tokenBudget: 1000 } });
 		expect(checkBudgetOnTurnEnd(s, 0).warnings).toEqual([]);
 	});
 	it("token >= 70% 未发 → warning70 token", () => {
-		const s = makeState({ tokensUsed: 700, budget: { maxStallTurns: 5, maxTurns: 50, tokenBudget: 1000 } });
+		const s = makeState({ tokensUsed: 700, budget: { tokenBudget: 1000 } });
 		expect(checkBudgetOnTurnEnd(s, 0).warnings).toContainEqual({ type: "warning70", dimension: "token" });
 	});
 	it("token >= 70% 已发 → 不重复", () => {
-		const s = makeState({ tokensUsed: 750, tokenWarning70Sent: true, budget: { maxStallTurns: 5, maxTurns: 50, tokenBudget: 1000 } });
+		const s = makeState({ tokensUsed: 750, tokenWarning70Sent: true, budget: { tokenBudget: 1000 } });
 		expect(checkBudgetOnTurnEnd(s, 0).warnings).not.toContainEqual({ type: "warning70", dimension: "token" });
 	});
 	it("token >= 90% 未发 steering → shouldSendSteering", () => {
-		const s = makeState({ tokensUsed: 950, budget: { maxStallTurns: 5, maxTurns: 50, tokenBudget: 1000 } });
+		const s = makeState({ tokensUsed: 950, budget: { tokenBudget: 1000 } });
 		expect(checkBudgetOnTurnEnd(s, 0).shouldSendSteering).toBe(true);
 	});
 	it("token >= 100% 已发 steering → terminal exceeded token", () => {
-		const s = makeState({ tokensUsed: 1000, budgetLimitSteeringSent: true, budget: { maxStallTurns: 5, maxTurns: 50, tokenBudget: 1000 } });
+		const s = makeState({ tokensUsed: 1000, budgetLimitSteeringSent: true, budget: { tokenBudget: 1000 } });
 		expect(checkBudgetOnTurnEnd(s, 0).terminal).toEqual({ type: "exceeded", dimension: "token" });
 	});
 });
 
 describe("checkBudgetOnTurnEnd — time 阈值", () => {
 	it("time < 70% → 无预警", () => {
-		const s = makeState({ budget: { maxStallTurns: 5, maxTurns: 50, timeBudgetMinutes: 10 } });
+		const s = makeState({ budget: { timeBudgetMinutes: 10 } });
 		expect(checkBudgetOnTurnEnd(s, 300).warnings).toEqual([]);
 	});
 	it("time >= 70% → warning70 time", () => {
-		const s = makeState({ budget: { maxStallTurns: 5, maxTurns: 50, timeBudgetMinutes: 10 } });
+		const s = makeState({ budget: { timeBudgetMinutes: 10 } });
 		expect(checkBudgetOnTurnEnd(s, 420).warnings).toContainEqual({ type: "warning70", dimension: "time" });
 	});
 	it("time >= 100% → terminal exceeded time", () => {
-		const s = makeState({ budget: { maxStallTurns: 5, maxTurns: 50, timeBudgetMinutes: 10 } });
+		const s = makeState({ budget: { timeBudgetMinutes: 10 } });
 		expect(checkBudgetOnTurnEnd(s, 600).terminal).toEqual({ type: "exceeded", dimension: "time" });
 	});
 });
@@ -128,7 +127,7 @@ describe("checkBudgetOnTurnEnd — FR-6.2 维度独立（核心 bug 修复）", 
 	it("token 已发 70%，time 到 70% 也独立发", () => {
 		const s = makeState({
 			tokensUsed: 750, tokenWarning70Sent: true,
-			budget: { maxStallTurns: 5, maxTurns: 50, tokenBudget: 1000, timeBudgetMinutes: 10 },
+			budget: { tokenBudget: 1000, timeBudgetMinutes: 10 },
 		});
 		const r = checkBudgetOnTurnEnd(s, 450); // time 75%
 		expect(r.warnings).toContainEqual({ type: "warning70", dimension: "time" });
@@ -137,7 +136,7 @@ describe("checkBudgetOnTurnEnd — FR-6.2 维度独立（核心 bug 修复）", 
 	it("两个维度同时到 70% → 两个 warning70 都发", () => {
 		const s = makeState({
 			tokensUsed: 750,
-			budget: { maxStallTurns: 5, maxTurns: 50, tokenBudget: 1000, timeBudgetMinutes: 10 },
+			budget: { tokenBudget: 1000, timeBudgetMinutes: 10 },
 		});
 		const r = checkBudgetOnTurnEnd(s, 450);
 		expect(r.warnings).toContainEqual({ type: "warning70", dimension: "token" });
@@ -150,15 +149,15 @@ describe("checkBudgetOnTurnEnd — FR-6.2 维度独立（核心 bug 修复）", 
 describe("checkBudgetOnResume", () => {
 	it("无预算 → null", () => expect(checkBudgetOnResume(makeState())).toBeNull());
 	it("token 超额 → exceeded token", () => {
-		const s = makeState({ tokensUsed: 1000, budget: { maxStallTurns: 5, maxTurns: 50, tokenBudget: 1000 } });
+		const s = makeState({ tokensUsed: 1000, budget: { tokenBudget: 1000 } });
 		expect(checkBudgetOnResume(s)).toEqual({ type: "exceeded", dimension: "token" });
 	});
 	it("time 超额 → exceeded time", () => {
-		const s = makeState({ timeUsedSeconds: 700, budget: { maxStallTurns: 5, maxTurns: 50, timeBudgetMinutes: 10 } });
+		const s = makeState({ timeUsedSeconds: 700, budget: { timeBudgetMinutes: 10 } });
 		expect(checkBudgetOnResume(s)).toEqual({ type: "exceeded", dimension: "time" });
 	});
 	it("未超额 → null", () => {
-		const s = makeState({ tokensUsed: 500, budget: { maxStallTurns: 5, maxTurns: 50, tokenBudget: 1000 } });
+		const s = makeState({ tokensUsed: 500, budget: { tokenBudget: 1000 } });
 		expect(checkBudgetOnResume(s)).toBeNull();
 	});
 });
@@ -166,16 +165,44 @@ describe("checkBudgetOnResume", () => {
 // ── checkProgress ────────────────────────────────────
 
 // #1 去 task 依赖后，checkProgress 的 allTasksDone/noTasksCreated/isStalled/
-// completedCount/totalCount 暂置默认值，仅 maxTurnsReached/budgetTight 保留计算。
+// completedCount/totalCount 暂置默认值。#6 已删 maxTurnsReached 字段。
 // task 相关字段的重填测试随 #7（ProgressInput 注入）补回。
 describe("checkProgress", () => {
-	it("maxTurnsReached", () => {
-		const s = makeState({ currentTurnIndex: 50, budget: { maxStallTurns: 5, maxTurns: 50 } });
-		expect(checkProgress(s).maxTurnsReached).toBe(true);
-	});
 	it("budgetTight：tokensUsed >= 80%", () => {
-		const s = makeState({ tokensUsed: 850, budget: { maxStallTurns: 5, maxTurns: 50, tokenBudget: 1000 } });
+		const s = makeState({ tokensUsed: 850, budget: { tokenBudget: 1000 } });
 		expect(checkProgress(s).budgetTight).toBe(true);
+	});
+
+	// #7 ProgressInput 注入（重填 task 相关字段）
+	it("progress undefined → 降级（progress 字段全 false/0）", () => {
+		const s = makeState();
+		const r = checkProgress(s);
+		expect(r.allTasksDone).toBe(false);
+		expect(r.noTasksCreated).toBe(false);
+		expect(r.completedCount).toBe(0);
+		expect(r.totalCount).toBe(0);
+	});
+
+	it("total=0 → noTasksCreated=true", () => {
+		const s = makeState();
+		expect(
+			checkProgress(s, { completedCount: 0, totalCount: 0, incompleteIds: [] }).noTasksCreated,
+		).toBe(true);
+	});
+
+	it("全完成 → allTasksDone=true", () => {
+		const s = makeState();
+		expect(
+			checkProgress(s, { completedCount: 3, totalCount: 3, incompleteIds: [] }).allTasksDone,
+		).toBe(true);
+	});
+
+	it("部分完成 → 非 allTasksDone + 计数回填", () => {
+		const s = makeState();
+		const r = checkProgress(s, { completedCount: 2, totalCount: 3, incompleteIds: [3] });
+		expect(r.allTasksDone).toBe(false);
+		expect(r.completedCount).toBe(2);
+		expect(r.totalCount).toBe(3);
 	});
 });
 
@@ -184,11 +211,11 @@ describe("checkProgress", () => {
 describe("getTokenUsagePercent / getTimeUsagePercent", () => {
 	it("无 tokenBudget → 0", () => expect(getTokenUsagePercent(makeState())).toBe(0));
 	it("50% token", () => {
-		expect(getTokenUsagePercent(makeState({ tokensUsed: 500, budget: { maxStallTurns: 5, maxTurns: 50, tokenBudget: 1000 } }))).toBe(50);
+		expect(getTokenUsagePercent(makeState({ tokensUsed: 500, budget: { tokenBudget: 1000 } }))).toBe(50);
 	});
 	it("无 timeBudgetMinutes → 0", () => expect(getTimeUsagePercent(makeState(), 100)).toBe(0));
 	it("50% time", () => {
-		expect(getTimeUsagePercent(makeState({ budget: { maxStallTurns: 5, maxTurns: 50, timeBudgetMinutes: 10 } }), 300)).toBe(50);
+		expect(getTimeUsagePercent(makeState({ budget: { timeBudgetMinutes: 10 } }), 300)).toBe(50);
 	});
 });
 

@@ -87,7 +87,6 @@ describe("transitionStatus — 非法转换 throw", () => {
 describe("createGoalState — 初始值", () => {
 	it("status = active", () => expect(createGoalState("obj").status).toBe("active"));
 	it("objective 透传", () => expect(createGoalState("my obj").objective).toBe("my obj"));
-	it("stallCount = 0", () => expect(createGoalState("obj").stallCount).toBe(0));
 	it("tokensUsed = 0", () => expect(createGoalState("obj").tokensUsed).toBe(0));
 	it("timeUsedSeconds = 0", () => expect(createGoalState("obj").timeUsedSeconds).toBe(0));
 	it("goalId 非空", () => {
@@ -111,18 +110,17 @@ describe("createGoalState — 初始值", () => {
 describe("createGoalState — budget 合并", () => {
 	it("无 overrides 用 DEFAULT_BUDGET", () => {
 		const s = createGoalState("obj");
-		expect(s.budget).toEqual({ maxStallTurns: 5, maxTurns: 50 });
+		expect(s.budget).toEqual({});
 	});
 	it("tokenBudget override", () => {
 		expect(createGoalState("obj", { tokenBudget: 10000 }).budget.tokenBudget).toBe(10000);
 	});
-	it("maxTurns override", () => {
-		expect(createGoalState("obj", { maxTurns: 100 }).budget.maxTurns).toBe(100);
+	it("timeBudgetMinutes override", () => {
+		expect(createGoalState("obj", { timeBudgetMinutes: 30 }).budget.timeBudgetMinutes).toBe(30);
 	});
 	it("多字段 override", () => {
-		const s = createGoalState("obj", { tokenBudget: 5000, maxStallTurns: 3 });
+		const s = createGoalState("obj", { tokenBudget: 5000, timeBudgetMinutes: 30 });
 		expect(s.budget.tokenBudget).toBe(5000);
-		expect(s.budget.maxStallTurns).toBe(3);
-		expect(s.budget.maxTurns).toBe(50);
+		expect(s.budget.timeBudgetMinutes).toBe(30);
 	});
 });

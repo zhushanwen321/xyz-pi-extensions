@@ -83,7 +83,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("goal", {
 		description:
-			"Goal-driven mode: /goal <objective> [--tokens N] [--timeout N] [--max-turns N] [--max-stall N] | /goal resume | /goal clear | /goal update <new-objective> | /goal status | /goal history",
+			"Goal-driven mode: /goal <objective> [--tokens N] [--timeout N] | /goal resume | /goal clear | /goal update <new-objective> | /goal status | /goal history",
 		handler: async (args: string | undefined, ctx: ExtensionCommandContext) => {
 			await handleGoalCommand(pi, session, args, ctx);
 		},
@@ -173,13 +173,11 @@ export default function goalExtension(pi: ExtensionAPI) {
  * `pi.__goalInit` 的预算配置形状。
  *
  * 跨扩展（coding-workflow / plan）通过 `pi.__goalInit` 编程式初始化 goal 时使用。
- * 与 `BudgetConfig` 的差异：本类型只暴露外部可设的 3 个可选字段（maxStallTurns
- * 不对外暴露，用默认值），且全部 optional。
+ * 与 `BudgetConfig` 的差异：本类型只暴露外部可设的可选字段，且全部 optional。
  */
 export interface GoalInitBudget {
 	tokenBudget?: number;
 	timeBudgetMinutes?: number;
-	maxTurns?: number;
 }
 
 /**

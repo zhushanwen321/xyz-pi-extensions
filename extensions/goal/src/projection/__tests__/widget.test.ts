@@ -65,7 +65,7 @@ describe("renderStatusLine", () => {
 	it("active 状态：含 Goal 标识 + turn 计数", () => {
 		const text = renderStatusLine(makeState({ status: "active", currentTurnIndex: 3 }), theme);
 		expect(text).toContain("◆ Goal");
-		expect(text).toContain("3/50"); // DEFAULT_BUDGET.maxTurns=50
+		expect(text).toContain("3"); // currentTurnIndex
 	});
 
 	it("blocked → 含 ⊘ Blocked 后缀", () => {
@@ -93,16 +93,11 @@ describe("renderStatusLine", () => {
 		expect(text).toContain("⏱ Time budget exhausted");
 	});
 
-	it("stallCount > 0 → 显示停滞警告", () => {
-		const text = renderStatusLine(makeState({ status: "active", stallCount: 3 }), theme);
-		expect(text).toContain("⚠ 3 turns stalled");
-	});
-
 	it("tokenBudget > 0 → 显示 token 百分比", () => {
 		const text = renderStatusLine(
 			makeState({
 				status: "active",
-				budget: { tokenBudget: 1000, timeBudgetMinutes: 0, maxTurns: 20, maxStallTurns: 3 },
+				budget: { tokenBudget: 1000, timeBudgetMinutes: 0 },
 				tokensUsed: 500,
 			}),
 			theme,
@@ -145,7 +140,7 @@ describe("renderWidgetLines", () => {
 		const lines = renderWidgetLines(
 			makeState({
 				status: "active",
-				budget: { tokenBudget: 1000, timeBudgetMinutes: 30, maxTurns: 20, maxStallTurns: 3 },
+				budget: { tokenBudget: 1000, timeBudgetMinutes: 30 },
 				tokensUsed: 250,
 				timeUsedSeconds: 540, // 9 min
 			}),

@@ -24,6 +24,7 @@ import { Text } from "@mariozechner/pi-tui";
 import { type Static, Type } from "typebox";
 
 import { isActiveStatus, transitionStatus } from "../engine/goal";
+import type { ProgressInput } from "../engine/budget";
 import type { GoalStatus } from "../engine/types";
 import { updateWidget } from "../projection/widget";
 import { finalizeAndPersist, persistState, tickState, type ServicePorts } from "../service";
@@ -63,29 +64,43 @@ export interface GoalControlDetails {
 	status: GoalStatus;
 }
 
-// ── duck-typed todo 检查（#7 正式暴露前降级）────────
+// ── duck-typed todo 读取（#7 正式暴露后组装 ProgressInput）────────
 
 export const TODO_DEGRADED = "degraded" as const;
 
 /**
- * 读 pi.__todoGetList()（#7 才在 todo extension 正式暴露）。
+ * 从 pi.__todoGetList 组装 ProgressInput（duck-typed，#7）。
  *
- * 方案 A "undefined=降级"：
- * - 返回值 undefined（todo 未加载）→ "degraded"，调用方跳过 todo 检查（允许 complete）
- * - 非 undefined 且有未完成项（status 非 completed/cancelled）→ 返回未完成项数组
- *
- * 不 import todo extension 类型，纯 duck-typed（运行时按 status 字段判断），
- * 避免 #7 未落地时产生编译期依赖。
+ * 方案 A "undefined=降级"：todo 未加载或返回非数组 → undefined，调用方跳过 todo 检查。
+ * 不 import todo extension 类型，纯运行时按 status/id 字段判断，避免编译期依赖。
  */
-export function findIncompleteTodos(pi: ExtensionAPI): unknown[] | typeof TODO_DEGRADED {
+export function buildProgressInput(pi: ExtensionAPI): ProgressInput | undefined {
 	const todoList = (pi as unknown as { __todoGetList?: () => unknown }).__todoGetList?.();
-	if (todoList === undefined) return TODO_DEGRADED;
-	if (!Array.isArray(todoList)) return TODO_DEGRADED;
-	return todoList.filter((t) => {
-		if (!t || typeof t !== "object") return false;
-		const status = (t as { status?: unknown }).status;
-		return status !== "completed" && status !== "cancelled";
-	});
+	if (!Array.isArray(todoList)) return undefined;
+	let completed = 0;
+	const incompleteIds: number[] = [];
+	for (const t of todoList) {
+		if (!t || typeof t !== "object") continue;
+		const todo = t as { id?: number; status?: string };
+		if (todo.status === "completed") {
+			completed++;
+		} else if (typeof todo.id === "number") {
+			incompleteIds.push(todo.id);
+		}
+	}
+	return { completedCount: completed, totalCount: todoList.length, incompleteIds };
+}
+
+/**
+ * complete 动作的 todo 完成守卫：返回未完成项 id 或降级标记。
+ *
+ * 委托 buildProgressInput（不重复 duck-typed 读取逻辑）。
+ * 返回 undefined（todo 未加载）→ "degraded"，调用方跳过检查（允许 complete）。
+ */
+export function findIncompleteTodos(pi: ExtensionAPI): number[] | typeof TODO_DEGRADED {
+	const progress = buildProgressInput(pi);
+	if (!progress) return TODO_DEGRADED;
+	return progress.incompleteIds;
 }
 
 // ── 业务 handler（契约对齐 §3，可测：fake ports）──────
@@ -182,7 +197,7 @@ export function registerGoalControlTool(pi: ExtensionAPI, session: GoalSession):
 				const incomplete = findIncompleteTodos(pi);
 				if (incomplete !== TODO_DEGRADED && incomplete.length > 0) {
 					throw new Error(
-						`Cannot complete goal: ${incomplete.length} todo item(s) still incomplete. Finish them (or mark cancelled) before completing the goal.`,
+						`Cannot complete goal: ${incomplete.length} todo item(s) still incomplete. Finish them before completing the goal.`,
 					);
 				}
 				details = handleComplete(params, session, ports);

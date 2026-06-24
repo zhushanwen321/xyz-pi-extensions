@@ -43,10 +43,18 @@ export interface BudgetCheckResult {
 	shouldSendSteering: boolean;
 }
 
+export interface ProgressInput {
+	/** 已完成项数（status === "completed"） */
+	completedCount: number;
+	/** 总项数 */
+	totalCount: number;
+	/** 未完成项 id（用于 followUp 提示，#8 用） */
+	incompleteIds: number[];
+}
+
 export interface ProgressCheck {
 	allTasksDone: boolean;
 	noTasksCreated: boolean;
-	maxTurnsReached: boolean;
 	isStalled: boolean;
 	budgetTight: boolean;
 	completedCount: number;
@@ -157,22 +165,23 @@ export function checkBudgetOnResume(state: GoalRuntimeState): { type: "exceeded"
 /**
  * 进度检查（三阶段演进函数，D0）。
  *
- * - #1（当前）：去 task 依赖最小改动。task 相关返回字段
- *   （allTasksDone/noTasksCreated/isStalled/completedCount/totalCount）暂置默认值，
- *   等 #7 注入 ProgressInput 后重填。maxTurnsReached/budgetTight 保留计算。
- * - #6：删 maxTurnsReached 字段与计算。
+ * - #1：去 task 依赖最小改动（task 字段暂置默认值）。
+ * - #6（已完成）：删 maxTurnsReached 字段与计算。
  * - #7：改签名接收 ProgressInput，重填 task 相关字段。
+ *   progress=undefined（todo 未加载）→ 降级：allTasksDone/noTasksCreated=false、计数为 0。
+ *   isStalled 恒 false（#6 后 stall 概念已删，保留字段供 #8 基于 lastProgressTurn 判断）。
  */
-export function checkProgress(state: GoalRuntimeState): ProgressCheck {
+export function checkProgress(state: GoalRuntimeState, progress?: ProgressInput): ProgressCheck {
+	const completed = progress?.completedCount ?? 0;
+	const total = progress?.totalCount ?? 0;
 	return {
-		allTasksDone: false,
-		noTasksCreated: false,
-		maxTurnsReached: state.currentTurnIndex >= state.budget.maxTurns,
+		allTasksDone: progress ? total > 0 && completed >= total : false,
+		noTasksCreated: progress ? total === 0 : false,
 		isStalled: false,
 		budgetTight: Boolean(
 			state.budget.tokenBudget && state.tokensUsed >= state.budget.tokenBudget * RATIO_TIGHT,
 		),
-		completedCount: 0,
-		totalCount: 0,
+		completedCount: completed,
+		totalCount: total,
 	};
 }

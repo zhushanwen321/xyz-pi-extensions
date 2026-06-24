@@ -25,6 +25,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 
 import { registerTodosCommand } from "./commands";
 import { registerTodoEventHandlers } from "./handlers";
+import type { Todo } from "./model";
 import { renderStatusText, renderWidgetLines } from "./render";
 import { createTodoSessionState } from "./state";
 import { registerTodoTool } from "./tool";
@@ -34,6 +35,11 @@ import { registerTodoTool } from "./tool";
 export default function (pi: ExtensionAPI) {
 	// ── 闭包内状态（session 隔离） ─────────────────────
 	const state = createTodoSessionState();
+
+	// ── 跨扩展 API：goal 等 adapter 通过 pi.__todoGetList() 读取进度（#7）──
+	// 返回浅拷贝快照，避免外部 mutate 内部 state。duck-typed：调用方不 import Todo 类型。
+	const api = pi as unknown as Record<string, unknown>;
+	api.__todoGetList = (): Todo[] => state.todos.map((t) => ({ ...t }));
 
 	// ── 刷新显示（依赖闭包 state） ─────────────────────
 	function refreshDisplay(ctx: ExtensionContext): void {

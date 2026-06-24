@@ -42,7 +42,6 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 		goalId: req("goalId"),
 		objective: req("objective"),
 		status: req("status"),
-		stallCount: req("stallCount"),
 		tokensUsed: req("tokensUsed"),
 		timeStartedAt: req("timeStartedAt"),
 		timeUsedSeconds: req("timeUsedSeconds"),

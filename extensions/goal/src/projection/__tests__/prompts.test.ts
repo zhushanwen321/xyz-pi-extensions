@@ -6,7 +6,7 @@
  * - escapeXmlText（XML 注入防护）
  * - continuationPrompt / budgetLimitPrompt / objectiveUpdatedPrompt / contextInjectionPrompt
  *
- * 注：stalenessReminderPrompt / formatTaskList 随 task CRUD 删除（#6 基于 lastUpdatedTurn 重做 staleness）。
+ * 注：stalenessReminderPrompt / formatTaskList 随 task CRUD 删除（#10 基于 lastProgressTurn/lastUpdatedTurn 重做 staleness）。
  *
  * 纯函数测试，不 import Pi SDK。
  */
@@ -36,7 +36,7 @@ function makeState(overrides?: Partial<GoalRuntimeState>): GoalRuntimeState {
 describe("formatBudget — 4 styles (FR-3.4)", () => {
 	it("percent: Token + Time 百分比", () => {
 		const state = makeState({
-			budget: { tokenBudget: 1000, timeBudgetMinutes: 10, maxTurns: 5, maxStallTurns: 3 },
+			budget: { tokenBudget: 1000, timeBudgetMinutes: 10 },
 			tokensUsed: 500,
 		});
 		const out = formatBudget(state, 300, "percent"); // 300s = 5min / 10min = 50%
@@ -51,7 +51,7 @@ describe("formatBudget — 4 styles (FR-3.4)", () => {
 
 	it("line: 剩余/总量格式", () => {
 		const state = makeState({
-			budget: { tokenBudget: 1000, timeBudgetMinutes: 10, maxTurns: 5, maxStallTurns: 3 },
+			budget: { tokenBudget: 1000, timeBudgetMinutes: 10 },
 			tokensUsed: 300,
 		});
 		const out = formatBudget(state, 120, "line"); // 120s = 2min used, 8min remaining
@@ -61,7 +61,7 @@ describe("formatBudget — 4 styles (FR-3.4)", () => {
 
 	it("remaining: used/total (N remaining) 格式", () => {
 		const state = makeState({
-			budget: { tokenBudget: 1000, timeBudgetMinutes: 10, maxTurns: 5, maxStallTurns: 3 },
+			budget: { tokenBudget: 1000, timeBudgetMinutes: 10 },
 			tokensUsed: 400,
 		});
 		const out = formatBudget(state, 60, "remaining"); // 60s=1min used, 9min remaining
@@ -71,7 +71,7 @@ describe("formatBudget — 4 styles (FR-3.4)", () => {
 
 	it("report: 多行 usage + duration", () => {
 		const state = makeState({
-			budget: { tokenBudget: 1000, timeBudgetMinutes: 10, maxTurns: 5, maxStallTurns: 3 },
+			budget: { tokenBudget: 1000, timeBudgetMinutes: 10 },
 			tokensUsed: 700,
 		});
 		const out = formatBudget(state, 125, "report"); // 125s = 2m5s
@@ -87,7 +87,7 @@ describe("formatBudget — 4 styles (FR-3.4)", () => {
 
 	it("remaining clamp: 超预算不出现负数", () => {
 		const state = makeState({
-			budget: { tokenBudget: 100, timeBudgetMinutes: 1, maxTurns: 5, maxStallTurns: 3 },
+			budget: { tokenBudget: 100, timeBudgetMinutes: 1 },
 			tokensUsed: 150, // 超 tokenBudget
 		});
 		const out = formatBudget(state, 120, "remaining"); // 120s 超 1min budget
@@ -121,15 +121,9 @@ describe("continuationPrompt", () => {
 	it("含 objective + Turn + Completion audit 段落", () => {
 		const state = makeState({ currentTurnIndex: 3 });
 		const out = continuationPrompt(state, 0);
-		expect(out).toContain("Turn 3/");
+		expect(out).toContain("Turn 3");
 		expect(out).toContain("test objective");
 		expect(out).toContain("Completion audit");
-	});
-
-	it("stallCount > 0 → 显示 stall 行", () => {
-		const state = makeState({ stallCount: 2 });
-		const out = continuationPrompt(state, 0);
-		expect(out).toContain("Stall: 2/");
 	});
 });
 
@@ -138,7 +132,7 @@ describe("continuationPrompt", () => {
 describe("budgetLimitPrompt", () => {
 	it("token 维度 → TOKEN budget 提示", () => {
 		const state = makeState({
-			budget: { tokenBudget: 1000, timeBudgetMinutes: 10, maxTurns: 5, maxStallTurns: 3 },
+			budget: { tokenBudget: 1000, timeBudgetMinutes: 10 },
 			tokensUsed: 950,
 		});
 		const out = budgetLimitPrompt(state, "token", 60);
@@ -149,7 +143,7 @@ describe("budgetLimitPrompt", () => {
 
 	it("time 维度 → time budget 提示", () => {
 		const state = makeState({
-			budget: { tokenBudget: 1000, timeBudgetMinutes: 10, maxTurns: 5, maxStallTurns: 3 },
+			budget: { tokenBudget: 1000, timeBudgetMinutes: 10 },
 		});
 		const out = budgetLimitPrompt(state, "time", 540); // 540s = 9m
 		expect(out).toContain("time budget");
@@ -177,13 +171,13 @@ describe("contextInjectionPrompt", () => {
 		const state = makeState({
 			status: "active",
 			currentTurnIndex: 2,
-			budget: { tokenBudget: 1000, timeBudgetMinutes: 10, maxTurns: 5, maxStallTurns: 3 },
+			budget: { tokenBudget: 1000, timeBudgetMinutes: 10 },
 			tokensUsed: 200,
 		});
 		const out = contextInjectionPrompt(state, 60);
 		expect(out).toContain("GOAL mode activated");
 		expect(out).toContain("Status: active");
-		expect(out).toContain("Turn: 2/5");
+		expect(out).toContain("Turn: 2");
 		expect(out).toContain("Token: 20%"); // 200/1000
 		expect(out).toContain("test objective");
 	});

@@ -37,7 +37,13 @@
     {
       "name": "@zhushanwen/pi-goal",
       "directory": "extensions/goal",
-      "dependsOn": []
+      "dependsOn": [
+        {
+          "package": "@zhushanwen/pi-todo",
+          "type": "optional",
+          "reason": "goal_control.complete 检查 todo 完成状态、budget checkProgress 接收 todo 进度数据，通过 duck-typed pi.__todoGetList 读取，缺失时降级跳过"
+        }
+      ]
     },
     {
       "name": "@zhushanwen/pi-todo",

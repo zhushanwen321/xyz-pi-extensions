@@ -42,7 +42,6 @@ export function createGoalState(
 		goalId: crypto.randomUUID(),
 		objective,
 		status: "active",
-		stallCount: 0,
 		tokensUsed: 0,
 		timeStartedAt: now,
 		timeUsedSeconds: 0,

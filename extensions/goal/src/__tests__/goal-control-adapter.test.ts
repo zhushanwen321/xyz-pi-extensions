@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	buildProgressInput,
 	findIncompleteTodos,
 	handleComplete,
 	handleReportBlocked,
@@ -78,34 +79,70 @@ const activeState = (overrides: Partial<GoalRuntimeState> = {}): GoalRuntimeStat
 	...overrides,
 });
 
-// ── findIncompleteTodos（duck-typed todo 检查）──────
+// ── findIncompleteTodos（委托 buildProgressInput，duck-typed 降级）──
 
-describe("findIncompleteTodos — duck-typed 降级", () => {
+describe("findIncompleteTodos — duck-typed 降级（#7 委托 buildProgressInput）", () => {
 	it("__todoGetList 不存在 → degraded", () => {
 		const pi = {} as never;
 		expect(findIncompleteTodos(pi)).toBe(TODO_DEGRADED);
 	});
 
-	it("返回 undefined → degraded（#3 阶段允许 complete）", () => {
+	it("返回 undefined → degraded（允许 complete）", () => {
 		const pi = { __todoGetList: () => undefined } as never;
 		expect(findIncompleteTodos(pi)).toBe(TODO_DEGRADED);
 	});
 
-	it("全完成/取消 → 空数组", () => {
+	it("全完成 → 空数组", () => {
 		const pi = makeMockPi([
-			{ status: "completed" },
-			{ status: "cancelled" },
+			{ id: 1, text: "a", status: "completed" },
+			{ id: 2, text: "b", status: "completed" },
 		]);
 		expect(findIncompleteTodos(pi)).toEqual([]);
 	});
 
-	it("有未完成项 → 返回未完成项", () => {
+	it("有未完成项 → 返回未完成 id", () => {
 		const pi = makeMockPi([
-			{ status: "completed" },
-			{ status: "in_progress" },
-			{ status: "pending" },
+			{ id: 1, text: "a", status: "completed" },
+			{ id: 2, text: "b", status: "in_progress" },
+			{ id: 3, text: "c", status: "pending" },
 		]);
-		expect(findIncompleteTodos(pi)).toHaveLength(2);
+		expect(findIncompleteTodos(pi)).toEqual([2, 3]);
+	});
+});
+
+// ── buildProgressInput（#7 ProgressInput 组装）──────
+
+describe("buildProgressInput — duck-typed ProgressInput 组装", () => {
+	it("__todoGetList 不存在 → undefined（降级）", () => {
+		const pi = {} as never;
+		expect(buildProgressInput(pi)).toBeUndefined();
+	});
+
+	it("返回非数组 → undefined（降级）", () => {
+		const pi = { __todoGetList: () => "not-array" } as never;
+		expect(buildProgressInput(pi)).toBeUndefined();
+	});
+
+	it("正常 → 组装 ProgressInput", () => {
+		const pi = makeMockPi([
+			{ id: 1, text: "a", status: "completed" },
+			{ id: 2, text: "b", status: "in_progress" },
+			{ id: 3, text: "c", status: "pending" },
+		]);
+		expect(buildProgressInput(pi)).toEqual({
+			completedCount: 1,
+			totalCount: 3,
+			incompleteIds: [2, 3],
+		});
+	});
+
+	it("空列表 → total=0", () => {
+		const pi = makeMockPi([]);
+		expect(buildProgressInput(pi)).toEqual({
+			completedCount: 0,
+			totalCount: 0,
+			incompleteIds: [],
+		});
 	});
 });
 

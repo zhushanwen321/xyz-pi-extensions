@@ -22,7 +22,6 @@ import {
 import { checkBudgetOnResume } from "../engine/budget";
 import { isActiveStatus, isTerminalStatus, transitionStatus } from "../engine/goal";
 import type { BudgetConfig } from "../engine/types";
-import { DEFAULT_BUDGET } from "../engine/types";
 import { objectiveUpdatedPrompt } from "../projection/prompts";
 import { updateWidget } from "../projection/widget";
 import { createGoal, finalizeAndPersist, persistState, tickState } from "../service";
@@ -77,8 +76,7 @@ function handleStatus(session: GoalSession, ctx: ExtensionContext): void {
 	const lines: Array<string | null> = [
 		`Objective: ${state.objective}`,
 		`Status: ${state.status}`,
-		`Turn: ${state.currentTurnIndex}/${state.budget.maxTurns}`,
-		`Stall turns: ${state.stallCount}`,
+		`Turn: ${state.currentTurnIndex}`,
 		`Time elapsed: ${timeMins}m${timeSecs}s`,
 		state.budget.tokenBudget ? `Token: ${state.tokensUsed}/${state.budget.tokenBudget}` : null,
 		`Goal ID: ${state.goalId}`,
@@ -104,7 +102,6 @@ function handleResume(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionCont
 		return;
 	}
 	state.status = "active";
-	state.stallCount = 0;
 	state.timeStartedAt = Date.now();
 
 	const ports = buildPorts(pi, ctx);
@@ -209,7 +206,7 @@ function handleClear(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionConte
 // ── /goal update（重塑）──────────────────────────────
 
 /**
- * FR-8.4 G-002：重塑（reset）。重置 objective/budget flags/stallCount/
+ * FR-8.4 G-002：重塑（reset）。重置 objective/budget flags/
  * currentTurnIndex/lastProgressTurn，保留 goalId。
  * active 状态下向 AI 注入 objective-updated steering。
  */
@@ -232,7 +229,6 @@ function handleUpdate(
 	// FR-8.4 G-002: 重塑（重置，保留 goalId）
 	state.objective = newObjective;
 	state.objectiveUpdatedAt = Date.now();
-	state.stallCount = 0;
 	state.currentTurnIndex = 0;
 	state.lastProgressTurn = 0;
 	state.budgetLimitSteeringSent = false;
@@ -293,8 +289,6 @@ function handleSet(
 	const budget: Partial<BudgetConfig> = {};
 	if (budgetOverrides?.tokenBudget) budget.tokenBudget = budgetOverrides.tokenBudget;
 	if (budgetOverrides?.timeBudgetMinutes) budget.timeBudgetMinutes = budgetOverrides.timeBudgetMinutes;
-	budget.maxTurns = budgetOverrides?.maxTurns ?? DEFAULT_BUDGET.maxTurns;
-	budget.maxStallTurns = budgetOverrides?.maxStallTurns ?? DEFAULT_BUDGET.maxStallTurns;
 
 	// FR-3.1: 唯一创建入口
 	createGoal(session, objective, budget, ports, false);
@@ -303,7 +297,7 @@ function handleSet(
 	if (budget.tokenBudget) budgetNotice.push(`Token budget: ${budget.tokenBudget}`);
 	if (budget.timeBudgetMinutes) budgetNotice.push(`Time budget: ${budget.timeBudgetMinutes} min`);
 	ctx.ui.notify(
-		[`Goal started: ${objective}`, `Max turns: ${budget.maxTurns}`, ...budgetNotice].join("\n"),
+		[`Goal started: ${objective}`, ...budgetNotice].join("\n"),
 		"info",
 	);
 
