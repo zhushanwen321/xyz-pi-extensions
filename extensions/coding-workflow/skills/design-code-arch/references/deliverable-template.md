@@ -1,8 +1,6 @@
 # 交付物模板：code-architecture.md + code-architecture.html
 
-> code-architecture.md 的章节结构模板。本文件是格式起点，具体内容由 loop-skeleton 的 Step 1-5 产出。
 > 时序图详细模板见 `sequence-template.md`。Deep Module 词汇见 `deep-module-vocabulary.md`。
-> 渲染 HTML 的规范见 `skills/design-clarity/references/visual-deliverable.md`。
 
 ## frontmatter
 

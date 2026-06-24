@@ -1,7 +1,6 @@
 # 交付物模板：non-functional-design.md + non-functional-design.html
 
-> non-functional-design.md 的章节结构模板。本文件是格式起点，具体内容由 loop-skeleton 的 Step 1-5 产出。
-> 7 维度详解见 `nfr-dimensions.md`。渲染 HTML 的规范见 `skills/design-clarity/references/visual-deliverable.md`。
+> 7 维度详解见 `nfr-dimensions.md`。
 
 ## frontmatter
 

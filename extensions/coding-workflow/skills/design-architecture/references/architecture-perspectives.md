@@ -144,18 +144,4 @@
 
 ---
 
-## gap 分流
-
-| 类型 | 含义 | 处理 |
-|------|------|------|
-| **F（Fact）** | 代码里有但初稿没提到的信息 | 主 agent 二次确认 |
-| **K（Knowledge）** | 主 agent 不知道的信息 | 直接问用户 |
-| **D（Decision）** | 需要做权衡的设计点 | 给方案对比 + trade-off |
-
-详见 loop-skeleton.md 的 Step 3。
-
-## 收敛判定
-
-收敛复核轮次额外执行：
-- 无新 gap → 标注 `CONVERGED` + 列出已追踪的视角
-- 有新 gap → 正常返回 gap 列表
+gap 分流（F/K/D）与收敛判定详见 loop-skeleton.md 的 Step 3-4。

@@ -138,21 +138,4 @@
 
 ---
 
-## gap 分流
-
-追踪完成后，所有 gap 按 F/K/D 分类：
-
-| 类型 | 含义 | 处理 |
-|------|------|------|
-| **F（Fact）** | 客观事实（代码/文档里有但初稿没提到的信息） | 主 agent 二次确认（可能误报） |
-| **K（Knowledge）** | 主 agent 不知道的业务规则 | 直接问用户 |
-| **D（Decision）** | 需要做权衡的业务决策 | 给方案对比 + trade-off |
-
-详见 loop-skeleton.md 的 Step 3。
-
-## 收敛判定
-
-收敛复核轮次（除追踪外）还要执行：
-
-- 如果追踪无新 gap → 在 tracing-round-{N}.md 顶部标注 `CONVERGED` 并列出已追踪的视角
-- 如果有新 gap → 正常返回 gap 列表（不标 CONVERGED）
+gap 分流（F/K/D）与收敛判定详见 loop-skeleton.md 的 Step 3-4。

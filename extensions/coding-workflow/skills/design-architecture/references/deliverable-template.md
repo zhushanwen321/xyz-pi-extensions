@@ -1,8 +1,5 @@
 # 交付物模板：system-architecture.md + system-architecture.html
 
-> system-architecture.md 的章节结构模板。本文件是格式起点，具体内容由 loop-skeleton 的 Step 1-5 产出。
-> 渲染 HTML 的规范见 `skills/design-clarity/references/visual-deliverable.md`。
-
 ## frontmatter
 
 ```yaml
