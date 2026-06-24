@@ -12,7 +12,7 @@ xyz-pi-extensions/
 │   ├── goal/                → @zhushanwen/pi-goal
 │   ├── todo/                → @zhushanwen/pi-todo
 │   ├── vision/             → @zhushanwen/pi-vision
-│   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills)
+│   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills + 6 个 xyz-harness-design-* 设计工作流 skills)
 │   ├── claude-rules-loader/ → @zhushanwen/pi-claude-rules-loader
 │   ├── context-engineering/ → @zhushanwen/pi-context-engineering
 │   ├── evolve-daily/        → @zhushanwen/pi-evolve-daily (含 evolve skills + tracker 框架)

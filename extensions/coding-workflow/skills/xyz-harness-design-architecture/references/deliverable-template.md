@@ -1,0 +1,97 @@
+# 交付物模板：system-architecture.md + system-architecture.html
+
+> system-architecture.md 的章节结构模板。本文件是格式起点，具体内容由 shared-loop 的 Step 1-5 产出。
+> 渲染 HTML 的规范见 `skills/xyz-harness-design-clarity/references/visual-deliverable.md`。
+
+## frontmatter
+
+```yaml
+---
+verdict: pass
+mode: refactor | greenfield
+upstream: requirements.md
+downstream: issues.md
+---
+```
+
+## 章节结构
+
+```markdown
+# {系统/模块} 架构设计
+
+## 1. 目标转换
+
+### 业务目标 → 系统目标
+| 业务目标(requirements) | 转换为系统目标 | 衡量标准 |
+|----------------------|--------------|---------|
+
+### 搭便车改造目标
+（顺带做的非业务驱动的架构改进，标注来源：技术债/性能/可维护性）
+| 改造目标 | 动机 | 关联业务目标 |
+
+## 2. 设计立场
+
+一句话回答根因问题：**核心计算是什么？** 及分层决策。
+
+## 3. 统一语言（Ubiquitous Language）
+
+> 引用/更新项目根目录 CONTEXT.md。本节只列本次新增/修改的术语。
+
+## 4. 核心模型
+
+| 模型 | 类型 | 不变式 | 建模理由 |
+|------|------|--------|---------|
+| {Name} | aggregate/实体/值对象/DTO | {变更守卫} | {为什么建模} |
+
+### 降级决策（主动不建模）
+| 概念 | 为什么不建模 | 应有的处理 |
+
+## 5. 状态流转
+
+### Status 枚举（只描述阶段，不含原因）
+### Reason 字段（描述终态原因，与 Status 正交）
+### 合法转换（图或表，含终态集合不可逆）
+
+## 6. 分层架构
+
+### 层级图
+（Interface / Engine / Infrastructure，标注每层职责）
+
+### Port 清单
+| Port | 价值定位 | 实现数 |
+
+## 7. 模块划分与变化轴
+
+| 模块 | 职责 | 变化轴 | LOC(预估) |
+|------|------|--------|----------|
+
+## 8. 系统间上下文边界（Context Map）
+
+（Mermaid — 系统间关系：本系统/上下游/共享内核/客户-供应商）
+
+| 关联系统 | 关系模式 | 交互方式 | 契约稳定性 |
+
+## 9. 泳道图（Swimlane）
+
+（Mermaid sequenceDiagram 或 flowchart — 系统/模块间职责流转，谁做什么）
+
+## 10. 挑战与决策
+
+### D-{N}: {决策标题}
+**张力**: {X 和 Y 的张力}
+**决策**: {选择}
+**理由**: {基于系统性质}
+
+### 特化决策（违反通用规则的）
+每条记录：违反什么 + 为什么合理 + 触发变化怎么办
+
+## 11. 反模式检查（grep 验收清单）
+
+机器可检查的 AC：
+### AC-1: {反模式}消除
+- 验证：`grep -rn "{pattern}" src/` 无输出
+
+## 下游衔接
+### 喂给 Step 3（Issue 拆分）的部分
+| 本文档章节 | issue 拆分用途 |
+```
