@@ -15,6 +15,7 @@ export default defineConfig({
 			"@earendil-works/pi-ai": piStub,
 			"@earendil-works/pi-tui": piStub,
 			"@mariozechner/pi-ai": piStub,
+			"@mariozechner/pi-tui": piStub,
 			"@sinclair/typebox": typeboxStub,
 			"typebox": typeboxStub,
 		},

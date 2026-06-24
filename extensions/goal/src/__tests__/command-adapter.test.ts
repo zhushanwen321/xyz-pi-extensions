@@ -229,7 +229,7 @@ describe("handleGoalCommand — update (FR-8.4 G-002)", () => {
 
 // ── /goal set（FR-3.1 唯一创建 + G-R2-008 覆盖）──
 
-describe("handleGoalCommand — set (FR-3.1 + G-R2-008)", () => {
+describe("handleGoalCommand — set (FR-3.1 + #11/D25 拒绝非终态)", () => {
 	it("无旧 goal → 创建新 goal", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();
@@ -239,30 +239,29 @@ describe("handleGoalCommand — set (FR-3.1 + G-R2-008)", () => {
 		expect(h.piCalls.some((c) => c.kind === "sendUser")).toBe(true); // FR-8.12 触发 AI
 	});
 
-	it("覆盖非终态旧 goal → 写 cancelled history（G-R2-008）", async () => {
+	it("非终态旧 goal（active）→ 拒绝创建 + 提示（#11/D25）", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();
 		session.state = makeActiveState({ objective: "old active goal" });
 		const historyBefore = h.history.length;
 		await handleGoalCommand(h.pi, session, "new objective", h.ctx);
-		expect(h.history.length).toBe(historyBefore + 1); // 写了 cancelled history
-		expect(notifyText(h).some((t) => t.includes("Cancelled previous"))).toBe(true);
-		expect(session.state!.objective).toBe("new objective");
+		// #11: 拒绝，不写 history，不覆盖旧 goal
+		expect(h.history.length).toBe(historyBefore); // 不写 history
+		expect(notifyText(h).some((t) => t.includes("Goal already active"))).toBe(true);
+		expect(notifyText(h).some((t) => t.includes("resume"))).toBe(true);
+		expect(notifyText(h).some((t) => t.includes("clear"))).toBe(true);
+		expect(session.state!.objective).toBe("old active goal"); // 旧 goal 保留，未覆盖
+		expect(h.piCalls.some((c) => c.kind === "sendUser")).toBe(false); // 不触发 AI
 	});
 
-	it("set 覆盖：MF-3 tick — active goal 转 cancelled 前累加时间", async () => {
+	it("非终态旧 goal（paused）→ 拒绝创建（#11/D25）", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();
-		const past = Date.now() - 4000;
-		session.state = makeActiveState({
-			objective: "old active goal",
-			timeStartedAt: past,
-			timeUsedSeconds: 6,
-		});
+		session.state = makeActiveState({ status: "paused", objective: "old paused goal" });
 		await handleGoalCommand(h.pi, session, "new objective", h.ctx);
-		// MF-3 核心：history 的 elapsedSeconds 应 ≈ 10（6 + 4）
-		const histEntry = h.history[0] as { elapsedSeconds?: number } | undefined;
-		expect(histEntry?.elapsedSeconds).toBeGreaterThanOrEqual(9);
+		expect(notifyText(h).some((t) => t.includes("Goal already active"))).toBe(true);
+		expect(session.state!.status).toBe("paused"); // 状态不变
+		expect(session.state!.objective).toBe("old paused goal"); // 旧 goal 保留
 	});
 
 	it("覆盖终态旧 goal → 快速路径（不写 history）", async () => {

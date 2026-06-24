@@ -256,7 +256,9 @@ function handleUpdate(
 
 /**
  * FR-3.1: 唯一创建入口之一（/goal set）。
- * FR-8.7 G-R2-008: 覆盖非终态旧 goal → 写 cancelled history；终态旧 goal → 快速路径（不写 history）。
+ * #11 / D25: 非终态旧 goal（active/paused/blocked）→ 拒绝创建，提示 /goal resume 或 /goal clear
+ *           （对齐 Codex create_goal，不允许有未完成 goal 时新建）。
+ *           终态旧 goal → 快速路径覆盖（不写 history）。
  * FR-8.12: 创建后 sendUserMessage(objective, followUp) 触发 AI（整个 goal workflow 启动机制）。
  */
 function handleSet(
@@ -270,15 +272,17 @@ function handleSet(
 		ctx.ui.notify("Usage: /goal <objective> [--tokens N] [--timeout N]", "warning");
 		return;
 	}
-	const ports = buildPorts(pi, ctx);
 
-	// FR-8.7 G-R2-008: 覆盖已有 goal 的两分支
+	// #11 / D25: 非终态旧 goal（active/paused/blocked）→ 拒绝创建（不覆盖、不写 history）
 	if (session.state && !isTerminalStatus(session.state.status)) {
-		// 非终态旧 goal：写 cancelled history（不 clearSession——createGoal 紧接覆盖 session.state）
-		ctx.ui.notify(`Cancelled previous Goal: ${session.state.objective}\n(new goal started)`, "info");
-		// FR-3.3: 唯一终态序列入口（tick + finalizeGoal + persist）
-		finalizeAndPersist(session.state, "cancelled", 0, ports);
+		ctx.ui.notify(
+			"Goal already active. Use /goal resume to continue or /goal clear to reset.",
+			"warning",
+		);
+		return;
 	}
+
+	const ports = buildPorts(pi, ctx);
 	// 终态旧 goal：快速路径（不写 history，createGoal 直接覆盖）
 
 	// budget 校验 + 默认值合并

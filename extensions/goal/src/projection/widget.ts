@@ -74,8 +74,12 @@ export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string
 		text += th.fg("warning", ` | ⚠ ${state.stallCount} turns stalled`);
 	}
 
-	// Status suffix（ADR-002：paused 视图已删除）
+	// Status suffix：非终态（paused = 用户暂停等待 resume / blocked = agent 报告卡住）
+	// + 终态（complete/budget_limited/time_limited）。paused 非终态，走 renderStatusLine。
 	switch (state.status) {
+		case "paused":
+			text += th.fg("warning", " | ⏸ Paused");
+			break;
 		case "blocked":
 			text += th.fg("error", " | ⊘ Blocked");
 			break;

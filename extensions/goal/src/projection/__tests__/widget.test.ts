@@ -73,6 +73,11 @@ describe("renderStatusLine", () => {
 		expect(text).toContain("⊘ Blocked");
 	});
 
+	it("paused → 含 ⏸ Paused 后缀", () => {
+		const text = renderStatusLine(makeState({ status: "paused" }), theme);
+		expect(text).toContain("⏸ Paused");
+	});
+
 	it("complete → 含 ✓ Completed 后缀", () => {
 		const text = renderStatusLine(makeState({ status: "complete" }), theme);
 		expect(text).toContain("✓ Completed");

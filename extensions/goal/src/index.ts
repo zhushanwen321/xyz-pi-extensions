@@ -21,6 +21,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } f
 import { Text } from "@mariozechner/pi-tui";
 
 import { handleGoalCommand } from "./adapters/command-adapter";
+import { registerGoalControlTool } from "./adapters/goal-control-adapter";
 import {
 	handleAgentEnd,
 	handleAgentStart,
@@ -87,6 +88,10 @@ export default function goalExtension(pi: ExtensionAPI) {
 			await handleGoalCommand(pi, session, args, ctx);
 		},
 	});
+
+	// ── Tool: goal_control（complete / report_blocked，#3 替代已删 goal_manager）──
+
+	registerGoalControlTool(pi, session);
 
 	// ── Events（全部委托 adapters/event-adapter）────────
 
