@@ -501,18 +501,11 @@ export async function executePhaseStartTool(hctx: HandlerContext, tctx: ToolExec
 		try {
 			// Inline alias mirrors @zhushanwen/pi-goal's GoalInitFn (exported from goal/src/index.ts).
 			// Kept inline due to optional duck-typed coupling (pi.__goalInit) — update both if signature changes.
-			type GoalInitFn = (objective: string, tasks: string[], budget: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number } | undefined, ctx: ExtensionContext) => boolean;
+			type GoalInitFn = (objective: string, budget: { tokenBudget?: number; timeBudgetMinutes?: number } | undefined, ctx: ExtensionContext) => boolean;
 			const goalInit = (pi as unknown as Record<string, unknown>).__goalInit as GoalInitFn | undefined;
 			if (goalInit) {
 				goalInit(
 					"Phase 2: Complete plan phase deliverables",
-					[
-						"Write plan.md (with Execution Groups)",
-						"Write e2e-test-plan.md",
-						"Write test_cases_template.json",
-						"Write use-cases.md",
-						"Write non-functional-design.md",
-					],
 					undefined,
 					tctx.ctx,
 				);
@@ -525,13 +518,13 @@ export async function executePhaseStartTool(hctx: HandlerContext, tctx: ToolExec
 	if (state.currentPhase === PHASE_DEV_GOAL_INIT) {
 		try {
 			// Inline alias mirrors @zhushanwen/pi-goal's GoalInitFn (see Phase 2 block above).
-			type GoalInitFn = (objective: string, tasks: string[], budget: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number } | undefined, ctx: ExtensionContext) => boolean;
+			type GoalInitFn = (objective: string, budget: { tokenBudget?: number; timeBudgetMinutes?: number } | undefined, ctx: ExtensionContext) => boolean;
 			const goalInit = (pi as unknown as Record<string, unknown>).__goalInit as GoalInitFn | undefined;
 			if (goalInit) {
 				const planPath = path.join(state.topicDir, "plan.md");
 				const taskList = buildDevGoalTasks(planPath);
 				if (taskList.length > 0) {
-					goalInit("Phase 3: Dev coding implementation", taskList, undefined, tctx.ctx);
+					goalInit("Phase 3: Dev coding implementation", undefined, tctx.ctx);
 				}
 			}
 		} catch { /* goal init failure is non-blocking */ void undefined; }

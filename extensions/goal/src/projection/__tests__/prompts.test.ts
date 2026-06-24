@@ -125,6 +125,30 @@ describe("continuationPrompt", () => {
 		expect(out).toContain("test objective");
 		expect(out).toContain("Completion audit");
 	});
+
+	it("对标 Codex 三约束：Completion audit / Fidelity / Blocked 完整", () => {
+		const state = makeState();
+		const out = continuationPrompt(state, 0);
+		// Completion audit: 逐项证据验证
+		expect(out).toContain("Completion audit");
+		expect(out).toContain("Evidence must prove completion");
+		expect(out).toContain("are NOT evidence");
+		// Fidelity: 不缩小目标范围
+		expect(out).toContain("Fidelity");
+		expect(out).toContain("requested end state");
+		expect(out).toContain("narrower or safer solution");
+		// Blocked: 不首次就放弃
+		expect(out).toContain("Blocked");
+		expect(out).toContain("Do not report blocked the first time");
+		expect(out).toContain("try alternative approaches first");
+	});
+
+	it("持续提醒 complete 前完成所有 todo（FR-6）", () => {
+		const state = makeState();
+		const out = continuationPrompt(state, 0);
+		expect(out).toContain("All todos must be completed");
+		expect(out).toContain("verification todos");
+	});
 });
 
 // ── budgetLimitPrompt ────────────────────────────────
@@ -180,5 +204,21 @@ describe("contextInjectionPrompt", () => {
 		expect(out).toContain("Turn: 2");
 		expect(out).toContain("Token: 20%"); // 200/1000
 		expect(out).toContain("test objective");
+	});
+
+	it("要求建 todo（含 verification todo，FR-6/#10）", () => {
+		const state = makeState();
+		const out = contextInjectionPrompt(state, 0);
+		expect(out).toContain("todo tool");
+		expect(out).toContain("verification todos");
+		expect(out).toContain("isVerification intent");
+	});
+
+	it("无 goal_manager 引用（#1 清理后）", () => {
+		const state = makeState();
+		const out = contextInjectionPrompt(state, 0);
+		expect(out).not.toContain("goal_manager");
+		expect(out).not.toContain("create_tasks");
+		expect(out).not.toContain("add_subtasks");
 	});
 });

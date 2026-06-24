@@ -149,8 +149,6 @@ export default function goalExtension(pi: ExtensionAPI) {
 	 * ports 构造复用 adapters/ports.buildPorts（DRY：单一 ports 构造点）。
 	 *
 	 * @param objective 目标描述
-	 * @param _tasks （已废弃）初始任务描述数组。task CRUD 已删除，此参数被忽略；
-	 *               保留参数位以维持向后兼容签名，#9 将从签名移除。
 	 * @param budget 预算配置，传 undefined 用默认值
 	 * @param ctx **必填**——调用方的 ExtensionContext。省略会返回 false（创建失败）。
 	 * @returns true 创建成功；false 已有 active goal 或 ctx 缺失
@@ -158,7 +156,6 @@ export default function goalExtension(pi: ExtensionAPI) {
 	const api = pi as unknown as Record<string, unknown>;
 	api.__goalInit = (
 		objective: string,
-		_tasks: string[],
 		budget: GoalInitBudget | undefined,
 		ctx: ExtensionContext,
 	): boolean => {
@@ -190,14 +187,12 @@ export interface GoalInitBudget {
  * ```
  *
  * @param objective 目标描述
- * @param tasks （已废弃）初始任务描述数组。保留参数位以维持向后兼容，#9 将移除。
  * @param budget 预算配置，传 undefined 用默认值
  * @param ctx **必填**——调用方的 ExtensionContext。省略会返回 false（创建失败）。
  * @returns true 创建成功；false 已有 active goal 或 ctx 缺失
  */
 export type GoalInitFn = (
 	objective: string,
-	tasks: string[],
 	budget: GoalInitBudget | undefined,
 	ctx: ExtensionContext,
 ) => boolean;

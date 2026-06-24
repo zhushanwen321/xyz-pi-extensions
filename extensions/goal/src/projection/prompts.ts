@@ -137,6 +137,7 @@ export function continuationPrompt(state: GoalRuntimeState, timeUsedSeconds: num
 		`- Evidence must prove completion — intent, partial progress, or 'it should work' are NOT evidence\n` +
 		`- Do not redefine success around work already done; preserve original scope\n` +
 		`- Uncertain or indirect evidence means not completed — keep working\n` +
+		`- All todos must be completed (including verification todos) before reporting completion\n` +
 		`Do not mark completed due to budget exhaustion. Do not report blocked due to difficulty.\n` +
 		`\n` +
 		`Fidelity:\n` +
@@ -223,6 +224,14 @@ export function contextInjectionPrompt(
 		`2. Track remaining work and only claim completion for work backed by concrete evidence (files changed, tests passed, commands run)\n` +
 		`3. Report completion with overall evidence only when the objective is actually achieved\n` +
 		`4. If blocked after trying alternative approaches, report blocked with what you have tried\n` +
+		`\n` +
+		`Track work with todos:\n` +
+		`Before working, create todos for the task breakdown using the todo tool:\n` +
+		`- Each concrete step becomes a todo item\n` +
+		`- Include verification todos (e.g., 'run tests', 'typecheck') with isVerification intent\n` +
+		`- Track progress by updating todo status as you complete items\n` +
+		`\n` +
+		`Complex tasks: If the objective is complex (multi-step, unclear architecture), consider using plan mode (/plan or pi.__planStart) to design before executing. Plan produces a structured plan that guides execution.\n` +
 		`\n` +
 		`Fidelity: Optimize for movement toward the requested end state, not the easiest passing change. Do not substitute a narrower or safer solution because it is easier to verify.\n` +
 		`Audit: Verify each requirement against actual current state. Intent and partial progress are not evidence. Do not claim completion due to budget exhaustion.\n` +

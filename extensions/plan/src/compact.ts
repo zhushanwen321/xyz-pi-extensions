@@ -80,8 +80,7 @@ function tryGoalInit(pi: ExtensionAPI, planFilePath: string, ctx: ExtensionConte
   // Kept inline due to optional duck-typed coupling (pi.__goalInit) — update both if signature changes.
   type GoalInitFn = (
     objective: string,
-    tasks: string[],
-    budget: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number } | undefined,
+    budget: { tokenBudget?: number; timeBudgetMinutes?: number } | undefined,
     ctx: ExtensionContext,
   ) => boolean;
 
@@ -97,7 +96,7 @@ function tryGoalInit(pi: ExtensionAPI, planFilePath: string, ctx: ExtensionConte
     const tasks = extractPlanSteps(planContent);
     if (tasks.length === 0) return false;
 
-    return goalInit(objective, tasks, undefined, ctx);
+    return goalInit(objective, undefined, ctx);
   } catch {
     return false;
   }
