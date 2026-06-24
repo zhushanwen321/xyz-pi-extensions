@@ -3,9 +3,8 @@ name: design-init
 description: >-
   Use when the user says "初始化项目", "init project", "准备项目文档",
   "新建 AGENTS.md", "项目基建", "project bootstrap", "start design workflow",
-  or before running design-clarity and the project's documentation foundation
-  is incomplete or unverified. Produces/aggregates the canonical project
-  context files (AGENTS.md, CONTEXT.md, ARCHITECTURE.md). Design Step 0 of 6.
+  or when the project lacks AGENTS.md/CONTEXT.md/ARCHITECTURE.md
+  and needs documentation bootstrapped before design work.
   Not for business requirements (Step 1), architecture modeling (Step 2), or
   coding. Not for overwriting existing docs — only scans, reports, and fills
   gaps with minimal skeletons on user confirmation.
@@ -17,7 +16,7 @@ description: >-
 
 为 design 工作流（Steps 1-6）建立**正确的文档载体**：让后续阶段的产出归位到项目根的长期文档，而非只堆在 `.xyz-harness/` 一次性目录里。
 
-> **[铁律] 只扫描、报告、按确认填充缺失。绝不覆盖或改写已有文档内容。**
+> **[MANDATORY] 只扫描、报告、按确认填充缺失。绝不覆盖或改写已有文档内容。**（已有文档是用户资产，覆盖不可逆。）
 
 ## 文档清单与分级
 
@@ -108,5 +107,5 @@ description: >-
 
 | 标记 | 含义 | 修改约束 |
 |------|------|----------|
-| [铁律] | 阶段核心不可逾越的边界 | 不允许削弱或移除 |
 | [MANDATORY] | 流程强制要求 | 必须严格遵守 |
+| [OPTIONAL] | 可选步骤 | 可根据实际情况决定是否执行 |
