@@ -77,16 +77,16 @@ description: >-
    - **Tier 0 基础层先串行**（1 subagent）：`shared/`（types.ts/errors.ts，从 §3 跨层共享类型 + §4 数据流链一次固化）+ `infra/`（含各模块 adapter stub）
    - **Tier 1 模块层并行**（每 `modules/{module}/` 一个 fresh subagent）：§2 强制 `modules/* 不能互相 import` → 无写冲突。**Tier 1 只读不改 `shared/`**，发现缺类型标 gap 回主 agent 补 Tier 0
    - 读取 = §3 签名表 + §4 时序图 + §1 工程目录 + §2 包依赖图，生成到 `code-skeleton/`
-2. 骨架 = 所有类/方法签名/参数/返回类型 + **分层接线**（Level 1：模块内真接线 `this.x.foo()` + adapter 真引 SDK，方法体不再全 throw，见 `references/skeleton-spike.md`「分层接线规则」）+ import 关系 + 类型契约 + 状态机枚举 + port/adapter 占位
+2. 骨架 = 所有类/方法签名/参数/返回类型 + **分层接线**（Level 1：模块内真接线 `this.x()`/`self.x()`/`receiver.x()`（按语言）+ adapter 真引 SDK，方法体不再全 throw，见 `references/skeleton-spike.md`「分层接线规则」）+ import 关系 + 类型契约 + 状态机枚举 + port/adapter 占位
 3. **高密度骨架原则**——骨架注释暴露数据流/失败路径/SDK 契约/竞态/不变式（agent 不读代码推不出的信息），不只堆签名
 4. **停止点**——签名+调用链+依赖方向可验证即停，不写实现逻辑。Level 1 下「调用链」= 代码里真实接线，**接线边界画线**见 `references/skeleton-spike.md`「接线边界画线（防 Level 1 滑向实现）」——硬纪律：只接调用+透传参数，不写业务逻辑/数据组装
 
 **强制验证（移植 recursive-skeleton [MANDATORY]）：**
-- [ ] `tsc --noEmit` / `cargo check` / `mypy` 类型检查通过（签名自洽 + Level 1 接线调用链签名匹配）
-- [ ] `eslint` / lint 通过（无 `any` / `eslint-disable` / `TODO` 占位）
+- [ ] 类型/编译检查通过（按项目语言：tsc/mypy/cargo/go build/javac；签名自洽 + Level 1 接线调用链签名匹配）
+- [ ] lint 通过（无类型逃逸/占位符：跨语言 any/@ts-ignore/eslint-disable/`# type: ignore`//nolint/`#[allow]`/TODO）
 - [ ] 包依赖无环（import 与 §2 包依赖图一致）
-- [ ] **调用链代码接线可达**（Level 1：每张 §4 时序图入口→底层在骨架代码里真实 `this.x.foo()` 接线，非仅 import 图）
-- [ ] **adapter 真引 SDK** — 每个 `infra/*` adapter 方法真引用其 SDK（tsc 对 `@types/*` 验签），不 throw 占位
+- [ ] **调用链代码接线可达**（Level 1：每张 §4 时序图入口→底层在骨架代码里真实接线——`this.x()`/`self.x()`/`receiver.x()`，非仅 import 图）
+- [ ] **adapter 真引 SDK** — 每个 `infra/*` adapter 方法真引用其 SDK（类型检查器/编译器对依赖声明验签），不 throw 占位
 - [ ] **§3 签名表每个方法在骨架有定义**（orphan 检查，`check_code_arch.py` ③f）
 - [ ] NFR④ 标并发的 UC，骨架已有幂等键/idempotency/锁字段
 
@@ -120,11 +120,11 @@ description: >-
 - [ ] **时序图每个 alt/else 异常分支映射到 ≥1 条异常用例**（§4↔§6 双向可查）
 - [ ] **§6 来源 B（NFR 风险→用例映射表）存在**，④每条 `验收方式=代码测试` 的缓解项有 ≥1 对应用例（双向可查）
 - [ ] 方法签名表与时序图一致；Deep Module 词汇统一使用；接口满足可测性三原则
-- [ ] **`code-skeleton/` 骨架代码存在，`tsc`/`eslint`（或等价）全过**（Step 7 gate）
-- [ ] **每张时序图入口→底层调用链在骨架代码接线可达（Level 1：`this.x.foo()` 真实接线，非仅 import）**
-- [ ] **adapter 真引 SDK** — `infra/*` adapter 不全 throw，真引用第三方 SDK（tsc 验 `@types/*`）
+- [ ] **`code-skeleton/` 骨架代码存在，类型检查/lint（按项目语言）全过**（Step 7 gate）
+- [ ] **每张时序图入口→底层调用链在骨架代码接线可达（Level 1：`this.x()`/`self.x()`/`receiver.x()` 真实接线，非仅 import）**
+- [ ] **adapter 真引 SDK** — `infra/*` adapter 不全 throw，真引用第三方 SDK（类型检查器/编译器验依赖声明）
 - [ ] **§9 骨架覆盖核验表存在且无 `❌ 未定义` / 无空行**（§3 签名 ↔ 骨架定义双向可查）
-- [ ] **无 `any`/`eslint-disable`/`TODO` 占位**（非叶子方法体用接线，叶子逻辑用 `not implemented` 异常）
+- [ ] **无类型逃逸/占位符**（跨语言：any/@ts-ignore/eslint-disable/`# type: ignore`//nolint/`#[allow]`/TODO；非叶子方法体用接线，叶子逻辑用 not-implemented 异常）
 - [ ] **NFR④ 标并发的 UC，骨架已有幂等/锁字段**
 - [ ] **②搭便车清单每项有⑤落点或已回流②打回**（追踪视角「搭便车闭环」）
 
@@ -144,7 +144,7 @@ description: >-
 ✅ ⑤代码架构设计 已完成并通过独立审查 + 骨架验证。
    产出：code-architecture.md + code-architecture.html + code-skeleton/（可编译骨架）
    审查报告：changes/review-code-arch.md（verdict: APPROVED）
-   骨架验证：tsc/eslint 通过，调用链全可达
+   骨架验证：类型检查/lint 通过，调用链全可达
 下一步：⑥执行计划 — Wave 拆分（从骨架叶子作用域推导），依赖 DAG，串并行标注
 调用：/design-execution
 是否现在进入下一步？

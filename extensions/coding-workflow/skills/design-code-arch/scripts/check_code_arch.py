@@ -12,12 +12,12 @@ Usage:
     - §6 测试矩阵存在（来源 A 功能 + 来源 B NFR）
     - 来源 B（NFR 风险→用例映射）每行映射到用例 ID
   ③骨架反模式（P1，code-skeleton/ 存在时）：
-    - tsc/cargo/mypy 类型检查通过
-    - 无 any / eslint-disable / TODO 占位（方法体应用 not implemented 异常）
+    - 类型/编译检查通过（按语言：tsc/mypy/cargo/go build/javac）
+    - 无占位符/类型逃逸（跨语言：TODO/eslint-disable/any/@ts-ignore/type:ignore//nolint/#[allow]）
     - 每文件 LOC ≤ 600（骨架阈值，god object 检测）
-    - 无 import 循环（tsc 已含，此处额外 grep 交叉引用）
+    - 无 import 循环（类型检查器已含，此处额外 grep 交叉引用）
     - ②§11 grep pattern 执行（层级穿透/依赖方向，若②文档提供了 pattern）
-    - 调用链接线密度（Level 1：整骨架无 this.x() 接线 → 退化回 Level 0）
+    - 调用链接线密度（Level 1：整骨架无注入依赖接线 → 退化回 Level 0）
     - orphan 方法（§3 签名表每方法在骨架有定义）
 
 Exit code: 0 = 全过，1 = 有硬伤
@@ -43,6 +43,33 @@ from _shared_check_lib import (
 DELIVERABLE = "code-architecture.md"
 SKELETON_DIR = "code-skeleton"
 GOD_OBJECT_THRESHOLD = 600  # 骨架阶段阈值（实现期回到 400）
+
+# 骨架源文件扩展名——比共享库默认多加 .go / .java，让多语言项目可检
+SKEL_EXTS = (".ts", ".tsx", ".py", ".rs", ".js", ".jsx", ".go", ".java")
+
+# 多语言占位符逃逸模式（③a 占位符检查用，按语言分支）
+# 叶子逻辑方法体应抛 not-implemented 异常，而非用语言特定的「跳过类型检查」逃逸
+PLACEHOLDER_PATTERNS = [
+    # 跨语言通用
+    (r"\bTODO\b", "TODO 占位"),
+    (r"eslint-disable", "eslint-disable"),
+    # TS/JS 专属：逃逸类型检查
+    (r":\s*any\b|as\s+any\b", "TS any 类型"),
+    (r"@ts-ignore|@ts-nocheck", "ts-ignore"),
+    # Python 专属：逃逸类型检查
+    (r"#\s*type:\s*ignore", "Python type: ignore"),
+    # Go 专属：逃逸 lint
+    (r"//nolint", "Go //nolint"),
+    # Rust 专属：逃逸 lint
+    (r"#\[allow\(", "Rust #[allow]"),
+]
+
+# 多语言「调用注入依赖」接线模式（③e 接线密度用，按语言分支）
+# Level 1 骨架要求模块内方法体真实接线下游。各语言的「调用注入依赖」语法不同：
+#   TS/JS/Java: this.x.foo()      Python: self.x.foo()    Rust: self.x.foo()
+#   Go:         receiver.x() (receiver 名任意，常见 s/receiver)
+# 用最大并集：this./self./receiver 名 + .method( 都算接线
+WIRING_PATTERN = r"\b(this|self|s|rcv|receiver)\.\w+\s*\("
 
 
 def main():
@@ -102,30 +129,26 @@ def main():
 
 def _check_skeleton(report, skeleton_path, topic_dir, md_path):
     """③ 代码骨架反模式检查（P1）。"""
-    src_files = iter_source_files(skeleton_path)
+    src_files = iter_source_files(skeleton_path, exts=SKEL_EXTS)
     if not src_files:
-        report.add_fail("骨架源文件", f"{SKELETON_DIR}/ 下无 .ts/.py/.rs 源文件")
+        report.add_fail("骨架源文件", f"{SKELETON_DIR}/ 下无源文件（支持 {', '.join(SKEL_EXTS)}）")
         return
     report.add_pass("骨架源文件存在", f"{len(src_files)} 个源文件")
 
-    # ③a 无 any / eslint-disable / TODO 占位
+    # ③a 无占位符 / 类型逃逸（按语言分支的多模式）
     placeholder_hits = []
-    for pattern, label in [
-        (r":\s*any\b|as\s+any\b", "TS any 类型"),
-        (r"eslint-disable", "eslint-disable"),
-        (r"\bTODO\b", "TODO 占位"),
-        (r"@ts-ignore|@ts-nocheck", "ts-ignore"),
-    ]:
+    for pattern, label in PLACEHOLDER_PATTERNS:
         hits = run_grep(pattern, skeleton_path)
         if hits:
             placeholder_hits.append(f"{label}: {len(hits)} 处")
     if placeholder_hits:
         report.add_fail(
-            "骨架无占位符（③）",
-            "; ".join(placeholder_hits) + "（方法体应用 NotImplementedError 异常）",
+            "骨架无占位符/类型逃逸（③）",
+            "; ".join(placeholder_hits) + "（叶子逻辑方法体应抛 not-implemented 异常，"
+            "非叶子方法体用接线，不用语言特定的类型逃逸）",
         )
     else:
-        report.add_pass("骨架无占位符（③）", "无 any/eslint-disable/TODO/ts-ignore")
+        report.add_pass("骨架无占位符/类型逃逸（③）", "无 TODO/eslint-disable/any/type:ignore/nolint 等逃逸")
 
     # ③b god object 检测（每文件 LOC ≤ 阈值）
     over_limit = []
@@ -161,34 +184,38 @@ def _check_skeleton(report, skeleton_path, topic_dir, md_path):
 
 
 def _check_typecheck(report, skeleton_path):
-    """③c 类型检查（自动检测项目用 tsc/mypy/cargo 哪个）。"""
-    # 检测：有 .ts 用 tsc，有 .py 用 mypy，有 .rs 用 cargo
-    has_ts = any(f.endswith((".ts", ".tsx")) for f in iter_source_files(skeleton_path))
-    has_py = any(f.endswith(".py") for f in iter_source_files(skeleton_path))
+    """③c 类型/编译检查（按骨架语言自动选 tsc/mypy/cargo/go/javac）。
 
-    if has_ts:
-        # 找最近 tsconfig（skeleton 内或项目根）
-        tsconfig = os.path.join(skeleton_path, "tsconfig.json")
-        if not os.path.isfile(tsconfig):
-            # 向上找
-            tsconfig = os.path.join(os.path.dirname(skeleton_path), "tsconfig.json")
-        rc, out, err = run_cmd(["npx", "tsc", "--noEmit"], cwd=skeleton_path, timeout=180)
+    多语言骨架：遍历语言映射表，检测到哪种扩展名就跑对应的类型检查器。
+    有多种语言（如混合 TS+Python）则都跑，任一失败即 FAIL。
+    """
+    src_files = iter_source_files(skeleton_path, exts=SKEL_EXTS)
+    exts_present = {os.path.splitext(f)[1] for f in src_files}
+
+    # (扩展名集合, 检查器名, 命令, 报告名)
+    checkers = [
+        ((".ts", ".tsx"), "tsc", ["npx", "tsc", "--noEmit"], "类型检查（tsc）"),
+        ((".py",), "mypy", ["mypy", "."], "类型检查（mypy）"),
+        ((".rs",), "cargo", ["cargo", "check"], "编译检查（cargo check）"),
+        ((".go",), "go", ["go", "build", "./..."], "编译检查（go build）"),
+        ((".java",), "javac", ["javac", "-d", "/tmp/skel-javac-check", "-sourcepath", "."], "编译检查（javac）"),
+    ]
+
+    ran_any = False
+    for exts, name, cmd, report_name in checkers:
+        if not (exts_present & set(exts)):
+            continue
+        ran_any = True
+        rc, out, err = run_cmd(cmd, cwd=skeleton_path, timeout=180)
         if rc == 0:
-            report.add_pass("类型检查（tsc）", "tsc --noEmit 通过")
+            report.add_pass(report_name, f"{name} 通过")
         elif rc == -1:
-            report.add_skip("类型检查（tsc）", f"tsc 不可用: {err[:60]}")
+            report.add_skip(report_name, f"{name} 不可用: {err[:60]}")
         else:
-            report.add_fail("类型检查（tsc）", f"tsc 失败: {(err or out)[:120]}")
-    elif has_py:
-        rc, out, err = run_cmd(["mypy", "."], cwd=skeleton_path, timeout=180)
-        if rc == 0:
-            report.add_pass("类型检查（mypy）", "mypy 通过")
-        elif rc == -1:
-            report.add_skip("类型检查（mypy）", f"mypy 不可用: {err[:60]}")
-        else:
-            report.add_fail("类型检查（mypy）", f"mypy 失败: {(err or out)[:120]}")
-    else:
-        report.add_skip("类型检查", "骨架无 .ts/.py 文件，跳过")
+            report.add_fail(report_name, f"{name} 失败: {(err or out)[:120]}")
+
+    if not ran_any:
+        report.add_skip("类型检查", f"骨架无可识别语言的源文件（支持 {', '.join(SKEL_EXTS)}）")
 
 
 def _check_arch_grep_patterns(report, arch_md, skeleton_path):
@@ -223,33 +250,33 @@ def _check_arch_grep_patterns(report, arch_md, skeleton_path):
 
 
 def _check_wiring_density(report, skeleton_path, src_files):
-    """③e 调用链接线密度（Level 1 反退化检查）。
+    """③e 调用链接线密度（Level 1 反退化检查，多语言）。
 
-    Level 1 骨架要求模块内方法体真实接线下游（this.x.foo()），不再全 throw。
-    启发式：统计全骨架 `this.<method>(` 调用数。整骨架无任何 this. 接线
-    → 退化回 Level 0（调用链仍靠注释/import 表达，tsc 异质 oracle 威力浪费）→ FAIL。
+    Level 1 骨架要求模块内方法体真实接线下游，不再全 throw。
+    启发式：统计全骨架「调用注入依赖」的语法数。各语言形式不同：
+      TS/JS/Java: this.x.foo()    Python: self.x.foo()    Rust: self.x.foo()
+      Go:         receiver.x() (receiver 名任意，常见 s/receiver/rcv)
+    整骨架无任何接线 → 退化回 Level 0（调用链仍靠注释/import 表达，
+    类型检查器/编译器的异质 oracle 威力浪费）→ FAIL。
 
     宽松检查：不要求每方法都接线（叶子 throw 是合法的），只要求骨架整体有接线密度。
     避免误伤纯叶子模块/纯类型定义文件。
     """
-    # infra/ adapter 真引 SDK 的接线也算（this.stripe.charges.create）
-    # this.<x>( 形式覆盖：this.repo.save( / this.stripe.charges.create( / this.model.create(
-    wiring_hits = run_grep(r"\bthis\.\w+\.\w+\s*\(", skeleton_path)
-    # 也算直接 this.method( 调用（同类内方法互调）
-    wiring_hits += run_grep(r"\bthis\.\w+\s*\(", skeleton_path)
-    # 去重（同一行可能被两个 pattern 命中）
+    # WIRING_PATTERN 已含多语言 receiver 名（this/self/s/rcv/receiver）
+    wiring_hits = run_grep(WIRING_PATTERN, skeleton_path)
+    # 去重（同一行可能被命中多次）
     unique_lines = set(h.split(":", 1)[-1].strip() for h in wiring_hits if ":" in h)
 
     if unique_lines:
         report.add_pass(
             "调用链接线密度（③e）",
-            f"Level 1 接线：{len(unique_lines)} 处 this.x() 调用（调用链在代码里真实接上）",
+            f"Level 1 接线：{len(unique_lines)} 处注入依赖调用（this./self./receiver. 等，调用链在代码里真实接上）",
         )
     else:
         report.add_fail(
             "调用链接线密度（③e）",
-            "全骨架无 this.x() 接线——退化回 Level 0（方法体全 throw）。"
-            "Level 1 要求模块内方法真实接线下游（this.repo.save(order) 等），"
+            "全骨架无注入依赖接线——退化回 Level 0（方法体全 throw）。"
+            "Level 1 要求模块内方法真实接线下游（this.x.foo() / self.x.foo() / receiver.x() 等），"
             "仅叶子逻辑 throw。见 skeleton-spike.md「分层接线规则」",
         )
 
