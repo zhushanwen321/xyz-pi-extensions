@@ -26,6 +26,8 @@ description: >-
 
 **Step 1（交互+初稿）— Grilling 遍历 Wave 依赖树：**
 
+> **提问从宽：** Wave 编排、依赖推导、串并行多为技术推导，agent 自决为主。仅当出现"是否需要 Prefactor Wave""哪些 P3 真延后""并行组是否真不冲突"等只有用户能判断的点时才 ask_user。
+
 ```
 Wave 编排（根：从时序图推导）
 ├── Wave 0: Prefactor → 是否有让后续更易的前置重构？
@@ -34,16 +36,20 @@ Wave 编排（根：从时序图推导）
 │   ├── blocked_by？→ Wave 0 or 无
 │   └── subagent 配置 → 注入哪些上下文/读取哪些文件
 ├── Wave 2-N: 后续切片 → 并行还是串行？（看时序图依赖+文件冲突）
+├── Wave N+1: 验收 Wave → blocked_by 所有功能 Wave，必须最后
+│   └── 职责：读测试验收清单全量→跑测试→全 PASS 才算实现完成（闭环闸门）
 └── P3 延后项 → 标注「后续迭代」+ 理由
 ```
 
 遍历纪律：先走 Prefactor Wave（如有）和 P0 Wave——它们是后续 Wave 的依赖根。
 从 code-architecture.md §4 时序图推导：功能 B 调用功能 A → Wave(B) blocked_by Wave(A)；同文件被多时序修改→必须串行。
+**编排末端强制加 Wave N+1「验收 Wave」**（blocked_by 所有功能 Wave），它不做功能开发，只读测试验收清单全量→跑测试→全 PASS 才算实现完成（设计→实现的闭环闸门）。
 按 `references/vertical-slice.md` 垂直切片原则（不水平切片，每 Wave 切穿所有层可独立验证）。
+**[MANDATORY] 定稿必须含「测试验收清单」章节**——把⑤test-matrix 全量用例（来源 A 功能 + 来源 B NFR）按归属 Wave 列全，作为实现期的 Definition of Done。
 初稿用 `references/deliverable-template.md`。
 
-**Step 2（追踪）— 派 fresh-context subagent，按 3 视角追踪：**
-切片独立性（每 Wave 可独立验证？非水平切片？）/ 依赖闭合（Wave 依赖从时序图完整推导？）/ 并行安全（同并行组真不改同一文件？）。
+**Step 2（追踪）— 派 fresh-context subagent，按 4 视角追踪：**
+切片独立性（每 Wave 可独立验证？非水平切片？）/ 依赖闭合（Wave 依赖从时序图完整推导？）/ 并行安全（同并行组真不改同一文件？）/ **测试闭环（每 Wave 标注覆盖的⑤test-matrix 用例 ID（含来源 B NFR 用例），并集=全部？每个时序图 alt/else 异常分支落在某 Wave 覆盖里？）/ 实现闭环（「测试验收清单」用例 ID 集合 = ⑤test-matrix 全量？末尾验收 Wave blocked_by 所有功能 Wave？每个功能 Wave 覆盖的用例 ID 都在清单出现？）**。
 
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
@@ -51,26 +57,34 @@ Wave 编排（根：从时序图推导）
 
 **Step 6（审查）— 派 fresh-context 审查 subagent，5 维评审，报告写 `changes/review-execution.md`。APPROVED 才交接。**
 
+**Step 6c（全文档一致性终检）— 仅⑥阶段：编码前的总闸门。** 派独立 fresh-context subagent，读取①-⑥全部 .md + CONTEXT.md + ⑤骨架代码，按 6 维做跨文档一致性审计（详见 `references/consistency-check.md`）。产出 `changes/consistency-final.md`（verdict: CONSISTENT / INCONSISTENT）。INCONSISTENT → 矛盾当 gap 回相应阶段 Step 3。**CONSISTENT 才允许交接编码。**
+
 ## Phase Loop 机制
 
 - 收敛失败 → 回 Step 1 调整 Wave 编排
 - 依赖推导不出 → 回 Step 5 补充时序图细节
 - 审查 CHANGES_REQUESTED → 审查意见当 gap 回 Step 3
+- **一致性终检 INCONSISTENT → 矛盾当 gap 回相应阶段 Step 3**（用例链断回⑤/⑥，决策被推翻回②/③ Step 6b 反哺流程，NFR 没落地回⑤/⑥，骨架漂移回⑤）
+- **反哺触发上游修订**（详见 loop-skeleton.md Step 6b）→ 上游 .md 更新后，本阶段可能需重新对齐 → 回 Step 2 重追踪
 - Stagnation（连续 3 轮 gap 不降）→ 强制收敛
 
 ## Self-Check
 
-**[MANDATORY] 禁止在未完成 loop-skeleton 全流程（含 Step 6 审查 APPROVED）时声称完成。**
+**[MANDATORY] 禁止在未完成 loop-skeleton 全流程（含 Step 6 审查 APPROVED + Step 6c 一致性终检 CONSISTENT）时声称完成。**
 
 - [ ] execution-plan.md 存在，frontmatter 含 `verdict: pass`
 - [ ] execution-plan.html 存在，Wave DAG 图正确渲染（并行组标注）
 - [ ] `changes/tracing-round-{N}.md` 存在
 - [ ] `changes/review-execution.md` 存在且 verdict: APPROVED
+- [ ] **`changes/consistency-final.md` 存在且 verdict: CONSISTENT**（Step 6c 总闸门）
 - [ ] Wave DAG 图存在，节点+blocked_by 边清晰；调度表完整（切片/P级/依赖/并行组/说明）
+- [ ] **末尾验收 Wave 存在，blocked_by 所有功能 Wave**（DAG 末端，必须最后，闭环闸门）
 - [ ] 垂直切片——每 Wave 切穿所有层可独立验证（无水平切片）
 - [ ] 依赖从时序图推导（有调用证据）；并行安全（同组不改同一文件）
 - [ ] P0 在最前 Wave，P3 标注「后续迭代」+理由；Prefactor Wave（如有）为后续铺路
 - [ ] 每 Wave 的 subagent 配置完整（注入上下文/读取文件/修改文件）
+- [ ] **「测试验收清单」章节存在**，用例 ID 集合 = ⑤test-matrix 全量（来源 A 功能 + 来源 B NFR），每条标归属 Wave
+- [ ] **每 Wave 标注覆盖的⑤test-matrix 用例 ID（含 NFR 来源 B），并集 = 全部 test-matrix 用例**（测试闭环）
 
 ## 本地目录覆盖规则
 
@@ -81,17 +95,20 @@ Wave 编排（根：从时序图推导）
 
 ## 下游衔接
 
-**设计工作流全部完成并通过独立审查。** 审查 APPROVED 后向用户交接：
+**设计工作流全部完成并通过独立审查 + 一致性终检。** 审查 APPROVED 且一致性终检 CONSISTENT 后向用户交接：
 
 ```
-✅ ⑥执行计划 已完成并通过独立审查。
-   产出：execution-plan.md + execution-plan.html
+✅ ⑥执行计划 已完成并通过独立审查 + 全文档一致性终检。
+   产出：execution-plan.md + execution-plan.html（含「测试验收清单」）
    审查报告：changes/review-execution.md（verdict: APPROVED）
+   一致性终检：changes/consistency-final.md（verdict: CONSISTENT）
 
-🎉 设计工作流（6 步）全部完成！
+🎉 设计工作流（6 步 + 骨架验证 + 一致性终检）全部完成！
 下一步：编码实现
-   方式 A（推荐）：接入 coding-workflow — 启动 Phase 流程
-   方式 B：手动执行 — 每个 Wave 派一个 fresh subagent
+   ⚠️ 编码完成的定义 = 测试验收清单全绿（末尾验收 Wave 不绿 = 未完成）
+   方式 A（推荐）：接入 coding-workflow — 启动 Phase 流程（Phase-test gate 以测试验收清单为验收基线）
+   方式 B：手动执行 — 每个 Wave 派一个 fresh subagent；末尾验收 Wave 最后跑
+   偏离通道：编码中发现用例设计错误/不可行，走 [DEVIATED] 登记（原因+用户确认），不可静默跳过
 是否现在开始编码？
 ```
 
