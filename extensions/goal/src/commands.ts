@@ -6,7 +6,7 @@ import { UPDATE_PREFIX_LENGTH } from "./constants";
 import type { BudgetConfig } from "./engine/types";
 
 export interface GoalCommandArgs {
-	action: "set" | "status" | "resume" | "clear" | "update" | "history";
+	action: "set" | "status" | "pause" | "resume" | "clear" | "update" | "history";
 	objective?: string;
 	budget?: Partial<BudgetConfig>;
 }
@@ -21,6 +21,9 @@ export function parseGoalArgs(raw: string): GoalCommandArgs {
 	}
 	if (trimmed === "resume") {
 		return { action: "resume" };
+	}
+	if (trimmed === "pause") {
+		return { action: "pause" };
 	}
 	if (trimmed === "clear") {
 		return { action: "clear" };

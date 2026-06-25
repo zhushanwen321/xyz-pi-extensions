@@ -1,8 +1,11 @@
 /**
  * /goal 命令适配器 — 子命令 handler（adapters 层）
  *
- * ADR-002 后子命令：set / status / resume / clear / update / history
- * （原 /goal pause 已删除；/goal abort 随 task CRUD 一并废弃）。
+ * 子命令：set / status / pause / resume / clear / update / history
+ * （/goal abort 随 task CRUD 一并废弃）。
+ *
+ * FR-3: pause（active→paused）与 resume（paused/blocked→active）对称设计——
+ *   两者都是非终态「停止」状态，用户控制续跑节奏。
  *
  * 状态变更调 service（createGoal / finalizeAndPersist）；
  * ports 桥接复用 adapters/ports.buildPorts（DRY：单一 ports 构造点）；
@@ -46,6 +49,8 @@ export async function handleGoalCommand(
 	switch (parsed.action) {
 		case "status":
 			return handleStatus(session, ctx);
+		case "pause":
+			return handlePause(pi, session, ctx);
 		case "resume":
 			return handleResume(pi, session, ctx);
 		case "history":
@@ -84,6 +89,40 @@ function handleStatus(session: GoalSession, ctx: ExtensionContext): void {
 	ctx.ui.notify(lines.filter(Boolean).join("\n"), "info");
 }
 
+// ── /goal pause（FR-3 用户暂停）──────────────────────
+
+/**
+ * FR-3: active → paused（用户叫停续跑）。
+ *
+ * 对称设计（与 blocked 行为对称）：两者都是非终态「停止」状态，区别只在触发主体
+ * （paused = 用户，blocked = agent）。都不续跑、不 budget 检查、不注入 context。
+ *
+ * 先 tickState 捕获最后运行段（status 仍 active 才累加），再 transitionStatus。
+ * 复用 handleReportBlocked 的 tick-before-transition 模式（见 goal-control-adapter.ts）。
+ */
+function handlePause(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionContext): void {
+	if (!session.state) {
+		ctx.ui.notify("Goal mode not active.", "warning");
+		return;
+	}
+	const state = session.state;
+	if (!isActiveStatus(state.status)) {
+		ctx.ui.notify(
+			`Goal is not active (status: ${state.status}). Only an active goal can be paused.`,
+			"warning",
+		);
+		return;
+	}
+	// 先 tickState 累加当前运行段（此时 status 仍为 active）
+	tickState(state);
+	state.status = transitionStatus(state.status, "paused");
+
+	const ports = buildPorts(pi, ctx);
+	persistState(session, ports);
+	updateWidget(session, ports.ui);
+	ctx.ui.notify("Goal paused. Use /goal resume to continue.", "info");
+}
+
 // ── /goal resume ──────────────────────────────────────
 
 function handleResume(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionContext): void {
@@ -96,9 +135,9 @@ function handleResume(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionCont
 		ctx.ui.notify(`Goal is in terminal state (${state.status}), cannot resume.`, "warning");
 		return;
 	}
-	// ADR-002: resume 仅恢复 blocked（paused 状态已删除）
-	if (state.status !== "blocked") {
-		ctx.ui.notify("Goal is not blocked, no need to resume.", "info");
+	// FR-3: resume 支持 paused→active 和 blocked→active（两者对称，都做 budget 重检 + 触发 AI）
+	if (state.status !== "paused" && state.status !== "blocked") {
+		ctx.ui.notify("Goal is not paused or blocked, no need to resume.", "info");
 		return;
 	}
 	state.status = "active";

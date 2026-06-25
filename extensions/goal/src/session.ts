@@ -7,10 +7,9 @@
  * FR-6.4: 删除 hasPendingInjection（僵尸字段）
  * FR-6.7: 删除 pendingPause（ESC 改用 aborted 守卫）
  * FR-8.1 G-006: entry GC（goal-state 最新 1 条，goal-history 20 条）
- * ADR-002（G-015 简化）: 非终态 → active（paused 状态已删除，无特判）
+ * FR-3: 崩溃后保持原状态（active 重启计时；paused/blocked 保持；终态保持）
  */
 
-import { isTerminalStatus } from "./engine/goal";
 import type { GoalRuntimeState } from "./engine/types";
 import { deserializeState, ENTRY_TYPE, HISTORY_ENTRY_TYPE } from "./persistence";
 import type { SessionEntryLike, SessionPort, UiPort } from "./ports";
@@ -52,8 +51,8 @@ export function isStaleContextError(error: Error | unknown): boolean {
  * 从 session entries 恢复 goal state。
  *
  * FR-8.1 G-006: goal-state 只保留最新 1 条（splice 其余）
- * ADR-002（G-015 简化）：非终态 → 强制 active（crashed blocked 重启变 active）。
- *   原 G-015 的 "paused 保持 paused" 特判已删除（paused 状态不存在）
+ * FR-3: 崩溃后状态保持原状——active 重启计时（timeStartedAt = now），
+ *   paused/blocked 保持（用户/agent 主动叫停不被抹除），终态保持。
  * FR-8.1 G-024: deserialize throw → state=null（部分损坏全丢）
  * FR-8.1 G-006: goal-history entry 保留最近 MAX_HISTORY_ENTRIES=20 条
  */
@@ -117,9 +116,11 @@ export function reconstructGoalState(session: GoalSession, sessionPort: SessionP
 
 	if (!session.state) return;
 
-	// ADR-002（G-015 简化）：非终态 → 强制 active（paused 状态已删除，无需特判）
-	if (!isTerminalStatus(session.state.status)) {
-		session.state.status = "active";
+	// FR-3: 崩溃后状态保持。
+	// - active：重启计时（timeStartedAt = now，开启新运行段）
+	// - paused/blocked：保持原状（对称设计——用户/agent 主动叫停的状态不被崩溃抹除）
+	// - 终态：保持终态（不会被强制激活）
+	if (session.state.status === "active") {
 		session.state.timeStartedAt = Date.now();
 	}
 }

@@ -133,10 +133,33 @@ describe("reconstructGoalState", () => {
 		expect(Math.min(...timestamps)).toBe(5);
 	});
 
-	it("ADR-002 G-015: blocked 非终态 → 强制 active + reset timeStartedAt", () => {
+	it("FR-3: blocked 非终态 → 保持 blocked（崩溃不抹除 agent 叫停状态）", () => {
 		const session = createGoalSession();
 		const state = createGoalState("blocked goal");
 		state.status = "blocked";
+		state.timeStartedAt = 1000; // 旧值
+		const port = makeFakeSessionPort([makeGoalStateEntry(state)]);
+		reconstructGoalState(session, port);
+		// blocked 保持 blocked（不强制 active）
+		expect(session.state!.status).toBe("blocked");
+		// timeStartedAt 不重置（非 active 不重启计时）
+		expect(session.state!.timeStartedAt).toBe(1000);
+	});
+
+	it("FR-3: paused 非终态 → 保持 paused（崩溃不抹除用户叫停状态）", () => {
+		const session = createGoalSession();
+		const state = createGoalState("paused goal");
+		state.status = "paused";
+		state.timeStartedAt = 2000;
+		const port = makeFakeSessionPort([makeGoalStateEntry(state)]);
+		reconstructGoalState(session, port);
+		expect(session.state!.status).toBe("paused");
+		expect(session.state!.timeStartedAt).toBe(2000);
+	});
+
+	it("FR-3: active → 保持 active + 重启计时（timeStartedAt = now）", () => {
+		const session = createGoalSession();
+		const state = createGoalState("active goal");
 		state.timeStartedAt = 1000; // 旧值
 		const port = makeFakeSessionPort([makeGoalStateEntry(state)]);
 		const before = Date.now();
@@ -146,8 +169,6 @@ describe("reconstructGoalState", () => {
 		expect(session.state!.timeStartedAt).toBeGreaterThanOrEqual(before);
 		expect(session.state!.timeStartedAt).toBeLessThanOrEqual(after);
 	});
-
-	// ADR-002：paused 状态已删除，旧 paused entry 重建时强制 active（向前兼容）
 
 	it("G-015: 终态保持终态（不强制激活）", () => {
 		const session = createGoalSession();

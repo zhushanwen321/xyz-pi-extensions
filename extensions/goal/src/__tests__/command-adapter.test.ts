@@ -1,7 +1,8 @@
 /**
- * command-adapter.ts 测试 — /goal 子命令（ADR-002 删除 pause；#1 删除 abort + task CRUD）
+ * command-adapter.ts 测试 — /goal 子命令（FR-3 pause/resume 对称；#1 删除 abort + task CRUD）
  *
  * 覆盖：
+ * - FR-3: pause（active→paused tick 前置）+ resume（paused/blocked→active 对称 + budget 重检）
  * - MF-3 回归：clear/set-overwrite 转 cancelled 前 tick 累加时间
  * - MF-6 覆盖：命令分发 + 各 FR 分支（G-R2-008/G-014/G-002）
  *
@@ -119,13 +120,58 @@ describe("handleGoalCommand — status", () => {
 	});
 });
 
-// ── /goal resume（ADR-002：仅 blocked→active；FR-8.3 G-014 预算重检）──
+// ── /goal pause（FR-3 用户暂停 active→paused）──
 
-describe("handleGoalCommand — resume (ADR-002 blocked-only + G-014)", () => {
+describe("handleGoalCommand — pause (FR-3 active→paused)", () => {
+	it("active → paused：tick 前置累加 + persist + notify", async () => {
+		const h = makeHarness();
+		const session = createGoalSession();
+		const past = Date.now() - 4000;
+		session.state = makeActiveState({ timeStartedAt: past, timeUsedSeconds: 6 });
+		await handleGoalCommand(h.pi, session, "pause", h.ctx);
+		expect(session.state!.status).toBe("paused");
+		// tick 前置：转 paused 前累加当前运行段（6 + ~4s）
+		expect(session.state!.timeUsedSeconds).toBeGreaterThanOrEqual(9);
+		expect(h.states.length).toBeGreaterThanOrEqual(1); // persist 调用
+		expect(notifyText(h).some((t) => t.includes("paused"))).toBe(true);
+		expect(notifyText(h).some((t) => t.includes("resume"))).toBe(true);
+	});
+
+	it("非 active（blocked）→ 拒绝 pause", async () => {
+		const h = makeHarness();
+		const session = createGoalSession();
+		session.state = makeActiveState({ status: "blocked" });
+		await handleGoalCommand(h.pi, session, "pause", h.ctx);
+		expect(session.state!.status).toBe("blocked"); // 未变
+		expect(notifyText(h).some((t) => t.includes("not active"))).toBe(true);
+	});
+
+	it("无 active goal → 提示未激活", async () => {
+		const h = makeHarness();
+		const session = createGoalSession();
+		await handleGoalCommand(h.pi, session, "pause", h.ctx);
+		expect(notifyText(h).some((t) => t.includes("not active"))).toBe(true);
+	});
+});
+
+// ── /goal resume（FR-3：paused/blocked→active 对称 + G-014 预算重检）──
+
+describe("handleGoalCommand — resume (FR-3 paused/blocked→active + G-014)", () => {
 	it("blocked → active：resume 成功 + persist + 触发 AI", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();
 		session.state = makeActiveState({ status: "blocked" });
+		await handleGoalCommand(h.pi, session, "resume", h.ctx);
+		expect(session.state!.status).toBe("active");
+		expect(h.states.length).toBeGreaterThanOrEqual(1); // persist 调用
+		// FR-8.12: resume 后触发 AI
+		expect(h.piCalls.some((c) => c.kind === "sendUser")).toBe(true);
+	});
+
+	it("paused → active：resume 成功 + persist + 触发 AI（FR-3 对称）", async () => {
+		const h = makeHarness();
+		const session = createGoalSession();
+		session.state = makeActiveState({ status: "paused" });
 		await handleGoalCommand(h.pi, session, "resume", h.ctx);
 		expect(session.state!.status).toBe("active");
 		expect(h.states.length).toBeGreaterThanOrEqual(1); // persist 调用
@@ -169,12 +215,12 @@ describe("handleGoalCommand — resume (ADR-002 blocked-only + G-014)", () => {
 		expect(h.piCalls.some((c) => c.kind === "sendUser")).toBe(false);
 	});
 
-	it("非 blocked 状态（active）→ 无需 resume", async () => {
+	it("非 paused/blocked 状态（active）→ 无需 resume", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();
 		session.state = makeActiveState({ status: "active" });
 		await handleGoalCommand(h.pi, session, "resume", h.ctx);
-		expect(notifyText(h).some((t) => t.includes("not blocked"))).toBe(true);
+		expect(notifyText(h).some((t) => t.includes("not paused or blocked"))).toBe(true);
 	});
 });
 
