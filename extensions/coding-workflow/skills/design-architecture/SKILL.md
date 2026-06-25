@@ -14,7 +14,29 @@ description: >-
 
 将业务目标转换为系统目标（含搭便车改造目标），完成：统一语言、分层架构、模块划分、Context 边界、领域建模、状态机流转。
 
+> **[铁律] 本阶段不进入代码级细节。** 不做代码级 API 签名/时序图/DB schema（属 ⑤design-code-arch），
+> 不做 Issue 拆分（属 ③design-issues），不做性能/成本量化（属 ④design-nfr）。架构决策落到
+> `system-architecture.md` 为止，向下只给约束（grep 规则、Port 清单、不变式），不给实现。
+
 **统摄 metric：复杂度归位** — 所有决策回问「复杂度是否归位到正确的地方？」模型复杂度集中 aggregate 而非散落？反模式本质都是「复杂度没在正确的地方」。
+
+### 边界划分原则（核心版，完整版见 `references/architecture-perspectives.md` 顶部）
+
+> **边界 = 捕获一个不对称**（变化率 / 所有权 / 失效域 / 语言的差异）。边界的代价必须与它捕获的不对称相匹配；
+> 没有不对称可捕获的边界 = 零价值（伪 port / 空壳层 / 空壳模块）。这就是「复杂度归位」的操作化。
+
+三层边界，同一原则三个代价台阶——**代价越高，配得上的不对称要越大**：
+
+| 边界 | 跨越代价 | 判据 |
+|------|---------|------|
+| 模块 | import（最廉） | 2+ 改动原因=该拆 |
+| 层 | interface/port（中） | 依赖指向稳定方；核心层零外部依赖 |
+| 系统 | 进程/契约+团队（最贵） | 同一 Ubiquitous Language？同团队？同部署节奏？ |
+
+常见事故：过早微服务（模块级不对称、划了系统级边界）/ 分了层却 god module（层划了、模块没跟上）。
+**Port ≠ interface**：port 让结构边界（编译期 import，指向稳定方）与控制边界（运行期调用流，§9 泳道图）
+反向——domain 结构上依赖 port、运行时通过 port 调用 infra。不能反转的 interface = 伪 port。
+**证伪三连**（删/翻/挪）见 perspectives 文档。
 
 ## 执行流程
 
@@ -47,6 +69,7 @@ Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 
 **Step 2（追踪）— 派 fresh-context subagent，按 `references/architecture-perspectives.md` 的 5+1 视角追踪：**
 模型完整性 / 状态正交性 / 分层纪律 / 依赖边界 / 变化轴 / 行为契约(refactor 专用)。
+5+1 视角共享一个判据——**边界是否捕获了不对称 / 复杂度是否归位**（preamble 根原则）；追踪中遇到疑似多余边界，用删/翻/挪证伪。
 
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
@@ -73,6 +96,7 @@ Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 - [ ] 设计立场回答了「核心计算是什么」
 - [ ] 核心模型标注类型+不变式+建模理由；状态机 Status/Reason 正交、终态不可逆
 - [ ] §11 所有 grep AC 实际可运行；Context Map/泳道图存在
+- [ ] **refactor 模式**：§12 行为契约清单完整（每条标 file:line + 保持/变更/删除，`[CONFLICT]` 已决策）；**greenfield**：§12 写降级理由
 - [ ] 所有特化决策有「违反什么+为什么合理」
 
 ## 本地目录覆盖规则
