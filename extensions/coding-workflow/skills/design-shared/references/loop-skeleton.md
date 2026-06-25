@@ -104,22 +104,37 @@ Announce at start: "我正在使用 {skill-name} skill 来 {本阶段目标}。"
 
 ### 5b. 派 fresh subagent 渲染 HTML
 
-[MANDATORY] **HTML 渲染下沉 fresh subagent，主 agent 不 read visual-deliverable.md、不 write HTML 全文**（~25KB 留在 subagent 隔离上下文）。
+[MANDATORY] **HTML 渲染下沉 fresh subagent，主 agent 不 write HTML 全文。** 渲染由 [visual-explainer](https://github.com/nicobailon/visual-explainer) 技能承担（需先 `pi install npm:visual-explainer`）——它内置自包含 HTML 生成、Mermaid 渲染（带 zoom/pan）、CSS 配色与模板，比手写更可控。
 
-**派发配置：** Agent=general-purpose，Context=**fresh**，读取=刚定稿 `{deliverable}.md` + visual-deliverable.md（design-clarity skill 的 references 目录），产出=`.xyz-harness/${主题}/{deliverable-name}.html`（write）+ `open` 打开。
+**派发配置：** Agent=general-purpose，Context=**fresh**，加载=visual-explainer skill，读取=刚定稿 `{deliverable}.md`，产出=`.xyz-harness/${主题}/{deliverable-name}.html`（write）+ `open` 打开。
 
 **Task prompt 模板：**
 
 ```
-你是独立渲染 subagent。上下文与主 agent 隔离。把定稿渲染成自包含可视化 HTML：
-1. read {final_deliverable_md}（定稿，真相源）
-2. read design-clarity skill 的 references/visual-deliverable.md（渲染规范+骨架模板）
-3. 按 visual-deliverable.md 的「最小骨架模板」生成 {deliverable-name}.html（内联 CSS/JS，主角图={本阶段主角图表}）
-4. 执行 Anti-Slop 清单自检（Mermaid 语法/占位符/空章节/死链/编码）
-5. 用 `open`（macOS）/`xdg-open`（Linux）/`start`（Windows）打开
-6. 向主 agent 只返回：html 路径 + Anti-Slop 自检结果（✅全过/❌哪几项）+ 一行 TL;DR
+你是独立渲染 subagent。上下文与主 agent 隔离。用 visual-explainer 技能把定稿渲染成自包含可视化 HTML：
+
+**前置：** 加载 visual-explainer skill（如未安装提示主 agent：需 `pi install npm:visual-explainer`）。
+1. read {final_deliverable_md}（定稿，真相源）——HTML 只做可视化呈现，不产生新内容
+2. 按 visual-explainer 的 workflow 生成 {deliverable-name}.html：
+   - 主角图（hero，紧随 header 最显眼位置）= {本阶段主角图表}——见各 SKILL.md Step 5 标注
+   - 配一段 TL;DR（3-5 行核心结论），让人不滚动就能 grasp 要点
+   - .md 的 Mermaid 代码块必须渲染成实际图表（不是 <pre> 源码）
+3. 自检：Mermaid 语法正确渲染 / 无 {占位符} / 无空章节 / TOC 锚点无死链 / UTF-8 中文正常
+4. 写到 .xyz-harness/${主题}/{deliverable-name}.html，用 `open`（macOS）/`xdg-open`（Linux）/`start`（Windows）打开
+5. 向主 agent 只返回：html 路径 + 自检结果（✅全过/❌哪几项）+ 一行 TL;DR
 不要返回 HTML 全文，不要返回渲染推理过程。
 ```
+
+**各阶段主角图表（subagent 生成时对齐）：**
+
+| 阶段 | 主角图（hero） |
+|------|---------------|
+| ① 澄清需求 | 用例图（Actor × 用例 × 系统边界） |
+| ② 系统设计 | 分层架构图 + 状态机图 |
+| ③ Issue 拆分 | 决策 DAG 图（节点=issue，边=blocked_by，状态色标） |
+| ④ 非功能设计 | 风险矩阵热力图（issue × 7 维度，✅⚠️❌ 着色） |
+| ⑤ 代码架构 | 包依赖图 + 核心时序图 |
+| ⑥ 执行计划 | Wave 依赖 DAG 图（节点=Wave，标注并行组） |
 
 ### 5c. 主 agent 处理返回
 
@@ -130,7 +145,7 @@ Announce at start: "我正在使用 {skill-name} skill 来 {本阶段目标}。"
 [MANDATORY] 定稿后必须过独立审查（质量门）。审查判质量（不是找 gap）；追踪 vs 审查区别详见 `loop-method.md`。
 **审查分两层：先跑机器检查脚本（硬阻断），后做 6 维 LLM 审查。** 审查 subagent 规范见 `review-agent.md`。
 
-**派发配置：** Agent=general-purpose，Context=**fresh**，读取=design-clarity skill 的 `references/review-agent.md`（审查规范）+ 定稿 .md + 定稿 .html + 所有上游交付物 + CONTEXT.md，产出=`changes/review-{phase-slug}.md`。
+**派发配置：** Agent=general-purpose，Context=**fresh**，读取=design-shared 的 `references/review-agent.md`（审查规范）+ 定稿 .md + 定稿 .html + 所有上游交付物 + CONTEXT.md，产出=`changes/review-{phase-slug}.md`。
 
 **Step 0（机器检查，审查 subagent 最先做）：** 审查 subagent 先跑对应阶段的机器检查脚本：
 
@@ -148,7 +163,7 @@ python3 ${SKILL_DIR}/scripts/check_{phase}.py {topic_dir}
 你是独立审查 subagent。上下文与主 agent 隔离。审查定稿是否达可交接质量：
 
 **Step 0（机器检查，硬阻断，最先做）：**
-0a. read design-clarity skill 的 references/review-agent.md（审查规范）
+0a. read design-shared skill 的 references/review-agent.md（审查规范）
 0b. 跑 `python3 {skill_dir}/scripts/check_{phase}.py {topic_dir}`
 0c. exit 1 = 机器检查 FAIL → 直接判 CHANGES_REQUESTED，把 machine-check-{phase}.md 的 ❌ 当"必须修改"，不许 APPROVED（硬阻断）
 0d. exit 0 才进下面的 6 维 LLM 审查

@@ -66,7 +66,7 @@
 [MANDATORY] 骨架生成后必须通过以下验证，任一失败 → 回 Step 1 修签名/目录/依赖，不带着错误交接 ⑥。
 
 > **机器验证**：⑤Step 6 审查 subagent 会跑 `scripts/check_code_arch.py {topic_dir}` 自动执行下面的 ③反模式检查（any/TODO/god object/tsc/②§11 grep）。
-> 脚本失败 = review 直接 CHANGES_REQUESTED（硬阻断）。详见 design-clarity 的 `references/review-agent.md`。
+> 脚本失败 = review 直接 CHANGES_REQUESTED（硬阻断）。详见 `design-shared/references/review-agent.md`。
 
 ```bash
 # 1. 类型检查通过（证明签名自洽）

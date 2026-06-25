@@ -56,13 +56,13 @@
 - **交互与追踪分离** — 主 agent 做交互，独立 fresh-context subagent 做强制视角追踪
 - **F/K/D gap 分类** — 事实(二次确认)/知识(直接问)/决策(方案对比)
 - **独立收敛** — 连续追踪到无新 gap 才收敛，不靠主 agent 自判
-- **定稿 + HTML 渲染** — 收敛后定稿 .md，并渲染自包含 .html（移植自 visual-explainer，Mermaid 图表直接渲染）
+- **定稿 + HTML 渲染** — 收敛后定稿 .md，并渲染自包含 .html（用 [visual-explainer](https://github.com/nicobailon/visual-explainer) 技能，Mermaid 图表直接渲染）
 - **独立审查门（Review Gate，6 维含红队）** — 定稿后派 fresh-context 审查 subagent 从 6 维评审：内部一致性 / 上游对齐 / 可执行性 / 完整性 / 可视化质量 / **必要性与比例性（红队维度，反过度设计）**，APPROVED 才进反哺
 - **上游反哺（Step 6b）** — 审查通过后，fresh subagent 回扫上游检测矛盾，反哺修订上游 .md（标注来源+原因），保证每阶段交接时文档一致。D-不可逆矛盾必须 ask_user
 - **代码骨架验证（⑤Step 7）** — ⑤设计落成可编译骨架代码，物理验证签名/调用链/依赖方向。移植 recursive-skeleton 的顶层骨架机制
 - **全文档一致性终检（⑥Step 6c）** — 仅⑥，编码前对①-⑥全部 .md + 骨架代码做总闸门审计，CONSISTENT 才交接编码
 
-详见 `skills/design-clarity/references/loop-skeleton.md`（6+步操作速查，每阶段 read）、`loop-method.md`（Grilling 提问法等方法论，clarity 首次 read）、`visual-deliverable.md`（HTML 渲染规范）。
+详见 `skills/design-shared/references/loop-skeleton.md`（6+步操作速查，每阶段 read）、`loop-method.md`（Grilling 提问法等方法论，clarity 首次 read）。HTML 渲染用 [visual-explainer](https://github.com/nicobailon/visual-explainer) 技能（`pi install npm:visual-explainer`）。
 
 ## 审查门（Review Gate）的作用
 

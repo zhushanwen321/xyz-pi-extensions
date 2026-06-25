@@ -19,7 +19,7 @@ description: >-
 
 ## 执行流程
 
-按 `references/loop-skeleton.md`（6 步操作速查）的流程执行。**首次执行本工作流时，先 read `references/loop-method.md`** 了解 Grilling 提问法等方法论。本阶段特有内容：
+按 `design-shared/references/loop-skeleton.md`（6 步操作速查）的流程执行。**首次执行本工作流时，先 read `design-shared/references/loop-method.md`** 了解 Grilling 提问法等方法论。本阶段特有内容：
 
 **Step 1（交互+初稿）— Grilling 遍历业务目标树：**
 
@@ -36,14 +36,25 @@ description: >-
 提问焦点：先问目标再问功能；区分「目标」和「方案」；业务用例非技术用例。
 即时写入项目根 CONTEXT.md（统一语言）。初稿用 `references/deliverable-template.md`。
 
-**Step 2（追踪）— 派 fresh-context subagent，按 `references/business-perspectives.md` 的 5 视角追踪：**
-目标可追溯性 / 角色与用例完整性 / 数据流完整性 / 界面场景覆盖 / 跨系统关联。每视角必须核对或写降级理由。
+**Step 2（追踪）— 派 fresh-context subagent，按下述 5 业务视角追踪。** 每视角必须核对或写降级理由；卡住的地方 = gap（标 F/K/D 类型）。
+
+> **业务视角，非实现视角。** 追踪中发现实现层问题（API 契约、状态机、技术架构），记录为「移交②系统设计处理」，不在本阶段展开。
+
+1. **目标可追溯性**（必查，无降级）— 业务目标→达成路线→用例的完整可追溯链。查：孤立用例（无对应目标）/ 孤立目标（无路线或用例支撑）/ 成功标准是否可衡量（「X 达到 Y 指标」而非「做好 X」）。
+2. **角色与用例完整性**（必查，无降级）— 所有参与角色及其用例完整。查：隐含 Actor（被提到但未纳入，如审核人/管理员）/ 同一 Actor 不同权限级别是否区分 / **每用例必须答出 主流程+替代+异常 + 前置/后置**（最常漏异常流程）。
+3. **数据流完整性**（必查，无降级）— 数据产生→处理→消费→归档/销毁的完整生命周期。查：数据孤岛（产生但无人消费）/ 无源数据（被消费但无人负责产生）/ 敏感级别标注（公开/内部/机密 → 影响④非功能）。
+4. **界面场景覆盖**（降级：纯后端/API/无 UI 交互写降级理由跳过）— 用户交互场景完整性（线框/流程级）。查：每用例是否有 UI 场景描述 / 空状态·加载·错误三态交互 / 无 UI 用例（API-only、定时任务）也要描述触发与结果。
+5. **跨系统关联**（降级：单系统无外部依赖写降级理由跳过）— 系统间功能依赖关系。查：依赖的外部系统功能逐一列出 / 跨系统交互同步 vs 异步（影响④非功能）/ 外部契约是否稳定（自有可控 vs 第三方不可控）。
+
+> gap 分流（F/K/D）与收敛判定见 `design-shared/references/loop-skeleton.md` Step 3-4。
+
+> **为何内联：** clarity 的 5 视角较轻量，故内联于本 SKILL；其余阶段（②③④）视角较重，仍各自独立成 references 文件。
 
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 requirements.md；派 fresh subagent 渲染 requirements.html（机制见 loop-skeleton.md Step 5b）（主角图：用例图）。**
 
-**Step 6（审查）— 派 fresh-context 审查 subagent（按 `references/review-agent.md` 规范，先跑 `scripts/check_clarity.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-clarity.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（①无上游，反哺检查直接 pass），再交接。**
+**Step 6（审查）— 派 fresh-context 审查 subagent（按 `design-shared/references/review-agent.md` 规范，先跑 `scripts/check_clarity.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-clarity.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（①无上游，反哺检查直接 pass），再交接。**
 
 ## Phase Loop 机制
 

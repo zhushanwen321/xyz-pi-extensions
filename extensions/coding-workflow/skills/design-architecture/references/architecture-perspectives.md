@@ -144,4 +144,4 @@
 
 ---
 
-gap 分流（F/K/D）与收敛判定详见 loop-skeleton.md 的 Step 3-4。
+gap 分流（F/K/D）与收敛判定详见 `design-shared/references/loop-skeleton.md` 的 Step 3-4。
