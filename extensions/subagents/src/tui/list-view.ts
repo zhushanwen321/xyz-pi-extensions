@@ -43,8 +43,8 @@ import type { SubagentRecord } from "../types.ts";
 import {
   firstLine,
   formatElapsedSeconds,
-  formatToolEventPairs,
   formatTokens,
+  formatToolEventPairs,
   padToVisible,
   sanitizeLabel,
   segFillColored,
