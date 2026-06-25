@@ -70,4 +70,9 @@ export interface GoalRuntimeState {
 	lastTurnTokensUsed: number;
 	currentTurnIndex: number;
 	completedAtTurnIndex?: number;
+	// FR-4/AC-4 staleness: 单 task 级（现 goal 级）lastUpdatedTurn 提醒。
+	// 上次「todo 进度发生」的轮号（incompleteCount 减少时更新）。
+	lastUpdatedTurn: number;
+	// 上次检测到的未完成 todo 数（用于判断进度是否发生）。
+	lastIncompleteCount: number;
 }

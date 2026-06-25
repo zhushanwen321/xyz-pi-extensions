@@ -17,8 +17,9 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { checkBudgetOnTurnEnd, checkProgress } from "../../engine/budget";
+import { checkBudgetOnTurnEnd, checkProgress, type ProgressInput } from "../../engine/budget";
 import { isActiveStatus } from "../../engine/goal";
+import type { GoalRuntimeState } from "../../engine/types";
 import {
 	budgetLimitPrompt,
 	continuationPrompt,
@@ -61,7 +62,11 @@ export async function handleAgentEnd(
 
 		// allTasksDone followUp（#8）：所有 todo 完成但 agent 未调 goal_control.complete → 提示收尾。
 		// progressInput=undefined（todo 未加载）时 checkProgress 降级返回 allTasksDone=false，不触发。
-		const progress = checkProgress(session.state, buildProgressInput(pi));
+		const progressInput = buildProgressInput(pi);
+		const progress = checkProgress(session.state, progressInput);
+		// FR-4/AC-4 staleness 进度追踪：未完成 todo 数减少 → 视为有进度，更新 lastUpdatedTurn。
+		// todo 未加载（progressInput=undefined）时不追踪（无进度数据）。
+		updateStalenessProgress(session.state, progressInput);
 		if (progress.allTasksDone) {
 			await handleAllDoneFollowUp(pi, session, ctx, checkStale);
 			return; // 已发 followUp，不再发 continuation
@@ -176,8 +181,7 @@ async function handleAllDoneFollowUp(
  * - 否则 persist + 发 continuationPrompt
  *
  * 注：maxTurnsReached / stall 自动终态分支随 #6 删除；budget terminal 分支随 #8 删除。
- * 终态转换由 persistAndUpdate 兑底（#5 范围，单一检查点）。staleness reminder 基于
- * lastProgressTurn/lastUpdatedTurn 的重建属 #10 范围。
+ * 终态转换由 persistAndUpdate 兑底（#5 范围，单一检查点）。
  */
 async function handleContinuation(
 	pi: ExtensionAPI,
@@ -202,4 +206,21 @@ async function handleContinuation(
 		continuationPrompt(state, state.timeUsedSeconds),
 		"followUp",
 	);
+}
+
+/**
+ * FR-4/AC-4 staleness 进度追踪。
+ *
+ * 未完成 todo 数（incompleteIds.length）相比上次检测减少 → 视为「有进度」，
+ * 更新 lastUpdatedTurn 为当前轮。todo 未加载（undefined）时不追踪。
+ *
+ * staleness 提醒在 before_agent_start 基于 `currentTurnIndex - lastUpdatedTurn >= 阈值` 触发。
+ */
+function updateStalenessProgress(state: GoalRuntimeState, progressInput: ProgressInput | undefined): void {
+	if (!progressInput) return; // todo 未加载，无进度数据
+	const currentIncomplete = progressInput.incompleteIds.length;
+	if (currentIncomplete < state.lastIncompleteCount) {
+		state.lastUpdatedTurn = state.currentTurnIndex;
+	}
+	state.lastIncompleteCount = currentIncomplete;
 }

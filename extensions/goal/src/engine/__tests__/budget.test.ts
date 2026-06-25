@@ -33,6 +33,8 @@ const makeState = (overrides: Partial<GoalRuntimeState> = {}): GoalRuntimeState 
 	timeWarning90Sent: false,
 	lastTurnTokensUsed: 0,
 	currentTurnIndex: 0,
+	lastUpdatedTurn: 0,
+	lastIncompleteCount: 0,
 	...overrides,
 });
 

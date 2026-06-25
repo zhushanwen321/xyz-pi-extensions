@@ -115,6 +115,9 @@ export function checkBudgetOnTurnEnd(state: GoalRuntimeState, timeUsedSeconds: n
 	const result: BudgetCheckResult = { terminal: null, warnings: [], shouldSendSteering: false };
 
 	// token 维度
+	// 注：token 终态需 budgetLimitSteeringSent=true（90% steering 已发），time 维度无此 gate。
+	// 这是有意设计——token 有 90% steering 中间态（给 agent 收尾机会），需 steering 已发才确认
+	// 「agent 已被提醒但未收尾」→ 终态合理；time 维度无 steering 中间态，超额直接终态。
 	if (state.budget.tokenBudget) {
 		const tokenPct = state.tokensUsed / state.budget.tokenBudget;
 		if (tokenPct >= 1 && state.budgetLimitSteeringSent) {

@@ -17,12 +17,13 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { AUTO_CLEAR_TURNS, CONTEXT_USAGE_RATIO_LIMIT } from "../../constants";
+import { AUTO_CLEAR_TURNS, CONTEXT_USAGE_RATIO_LIMIT, STALENESS_THRESHOLD_TURNS } from "../../constants";
 import { isActiveStatus, isTerminalStatus } from "../../engine/goal";
-import { contextInjectionPrompt } from "../../projection/prompts";
+import { contextInjectionPrompt, stalenessReminderPrompt } from "../../projection/prompts";
 import { asTheme, renderTerminalStatusLine } from "../../projection/widget";
 import type { GoalSession } from "../../session";
 import { clearGoalSession } from "../../session";
+import { buildProgressInput } from "../goal-control-adapter";
 import { buildPorts } from "../ports";
 
 interface BeforeAgentStartResult {
@@ -51,6 +52,11 @@ export async function handleBeforeAgentStart(
 	const ctxResult = checkContextUsage(session, ctx);
 	if (ctxResult) return ctxResult;
 
+	// FR-4/AC-4 staleness 提醒：todo 进度停滞超过阈值轮数 → 注入推进提醒（纯 prompt，不转终态）。
+	// todo 未加载（undefined）时不触发（无进度数据）。
+	const stalenessResult = checkStaleness(pi, session);
+	if (stalenessResult) return stalenessResult;
+
 	// 正常 context injection
 	// FR-7: 运行时检测 plan extension 可用性（typeof pi.__planStart === "function"），
 	// 决定 contextInjectionPrompt 是否注入 plan mode 建议段落。
@@ -63,6 +69,34 @@ export async function handleBeforeAgentStart(
 			display: false,
 		},
 	};
+}
+
+/**
+ * FR-4/AC-4 staleness 检测：未完成 todo 存在且 `currentTurnIndex - lastUpdatedTurn >= 阈值` 时，
+ * 注入 stalenessReminderPrompt（推进提醒）。纯 prompt 驱动，不做状态变更。
+ *
+ * todo 未加载（undefined）或有未完成项时才检测；全完成或无 todo 数据 → 返回 undefined（走正常 injection）。
+ */
+function checkStaleness(
+	pi: ExtensionAPI,
+	session: GoalSession,
+): BeforeAgentStartResult | undefined {
+	const state = session.state!;
+	const progress = buildProgressInput(pi);
+	if (!progress) return undefined; // todo 未加载
+	if (progress.incompleteIds.length === 0) return undefined; // 无未完成项
+
+	const stalledTurns = state.currentTurnIndex - state.lastUpdatedTurn;
+	if (stalledTurns >= STALENESS_THRESHOLD_TURNS) {
+		return {
+			message: {
+				customType: "goal-staleness-reminder",
+				content: stalenessReminderPrompt(stalledTurns, progress.incompleteIds.length),
+				display: false,
+			},
+		};
+	}
+	return undefined;
 }
 
 /**

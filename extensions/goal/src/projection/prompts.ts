@@ -205,6 +205,29 @@ export function objectiveUpdatedPrompt(
 	);
 }
 
+// ── Staleness Reminder Prompt (before_agent_start, FR-4/AC-4) ─────
+
+/**
+ * FR-4/AC-4 staleness 提醒：todo 进度停滞超过阈值轮数时注入，提醒 agent 推进未完成项。
+ *
+ * 基于单 task 级（现 goal 级）lastUpdatedTurn——非自动终态，纯 prompt 驱动软提醒。
+ * 不做状态变更（对齐 Codex：staleness 不触发终态，只提醒）。
+ *
+ * @param stalledTurns 已停滞轮数（currentTurnIndex - lastUpdatedTurn）
+ * @param incompleteCount 未完成 todo 数
+ */
+export function stalenessReminderPrompt(stalledTurns: number, incompleteCount: number): string {
+	return (
+		`<goal_context>\n` +
+		`[GOAL — progress stalled]\n\n` +
+		`No todo progress for ${stalledTurns} turn(s); ${incompleteCount} todo item(s) remain incomplete.\n` +
+		`- Pick up the next incomplete todo and advance it\n` +
+		`- If genuinely blocked on a todo, report_blocked with what you have tried\n` +
+		`- Do not stall — keep making concrete progress toward the objective\n` +
+		`</goal_context>`
+	);
+}
+
 // ── Context Injection Prompt (before_agent_start) ─────
 
 /**
