@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Issue 决策图 — Goal V2 Refactor</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      --bg: #fafafa; --surface: #ffffff; --text: #1a1a1a; --muted: #6b7280;
+      --accent: #2563eb; --ok: #16a34a; --warn: #d97706; --err: #dc2626;
+      --border: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+      line-height: 1.7; }
+    main, header, footer { max-width: 860px; margin: 0 auto; padding: 0 24px; }
+    header { padding-top: 40px; padding-bottom: 24px; border-bottom: 2px solid var(--accent); }
+    header h1 { margin: 0 0 8px; }
+    .meta { color: var(--muted); font-size: 14px; }
+    .toc { max-width: 860px; margin: 24px auto; padding: 0 24px; }
+    .toc ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+    .toc a { display: inline-block; padding: 4px 12px; background: var(--surface);
+      border: 1px solid var(--border); border-radius: 16px; text-decoration: none;
+      color: var(--accent); font-size: 14px; }
+    section { background: var(--surface); margin: 24px 0; padding: 24px 32px;
+      border-radius: 8px; border: 1px solid var(--border); }
+    h2 { color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+    h3 { margin-top: 28px; }
+    table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14px; }
+    th, td { padding: 8px 12px; border: 1px solid var(--border); text-align: left; }
+    th { background: #f3f4f6; font-weight: 600; }
+    tbody tr:nth-child(even) { background: #f9fafb; }
+    code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+    .mermaid { background: var(--surface); padding: 16px; border-radius: 8px;
+      border: 1px solid var(--border); text-align: center; margin: 16px 0; }
+    .hero { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent);
+      border-radius: 8px; padding: 24px 32px; margin: 24px 0; }
+    .tldr h2 { border: none; margin-top: 0; }
+    .callout { border-left: 4px solid var(--accent); padding: 12px 16px; margin: 12px 0;
+      background: #eff6ff; border-radius: 0 8px 8px 0; }
+    .callout.p0 { border-color: var(--err); background: #fef2f2; }
+    .callout.p1 { border-color: var(--warn); background: #fffbeb; }
+    .callout.p2 { border-color: var(--accent); background: #eff6ff; }
+    .issue-card { border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; margin: 12px 0; }
+    .issue-card.p0 { border-left: 4px solid var(--err); }
+    .issue-card.p1 { border-left: 4px solid var(--warn); }
+    .issue-card.p2 { border-left: 4px solid var(--accent); }
+    .issue-card h4 { margin: 0 0 8px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+    .badge-p0 { background: #fee2e2; color: #991b1b; }
+    .badge-p1 { background: #fef3c7; color: #92400e; }
+    .badge-p2 { background: #dbeafe; color: #1e40af; }
+    .badge-p3 { background: #f3f4f6; color: #374151; }
+    footer { padding: 40px 24px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Issue 决策图：Goal V2 Refactor</h1>
+    <div class="meta">阶段 3/6 · verdict: pass · 生成于 2026-06-24</div>
+  </header>
+
+  <nav class="toc">
+    <ul>
+      <li><a href="#hero">DAG</a></li>
+      <li><a href="#p0">P0 阻塞项 (4)</a></li>
+      <li><a href="#p1">P1 核心 (8)</a></li>
+      <li><a href="#p2">P2 重要 (1)</a></li>
+      <li><a href="#p3">P3 延后 (3)</a></li>
+    </ul>
+  </nav>
+
+  <main>
+    <section class="hero" id="hero">
+      <div class="tldr">
+        <h2>TL;DR</h2>
+        <ul>
+          <li><strong>12 个 issue</strong>：P0×4（阻塞）+ P1×7（核心）+ P2×1（重要）+ P3×3（延后）</li>
+          <li><strong>关键路径</strong>：#1 删 goal_manager → #3 新建 goal_control → #4 拆 event-adapter → #5/#6/#8 重构</li>
+          <li><strong>并行组</strong>：#1 和 #2 无依赖可并行；#5/#6/#7/#8 在 #4 后可并行</li>
+        </ul>
+      </div>
+      <div class="mermaid">
+graph LR
+    #1["#1 P0: 删 goal_manager + task CRUD"]:::p0
+    #2["#2 P0: paused + VALID_TRANSITIONS"]:::p0
+    #3["#3 P0: 新建 goal_control"]:::p0
+    #4["#4 P0: 拆 event-adapter"]:::p0
+    #5["#5 P1: budget 单一检查点"]:::p1
+    #6["#6 P1: 删 maxTurns/stall 终态"]:::p1
+    #7["#7 P1: todo API + ProgressInput"]:::p1
+    #8["#8 P1: agent_end 重构"]:::p1
+    #9["#9 P2: plan↔goal 联动"]:::p2
+    #10["#10 P1: completion audit prompt"]:::p1
+    #11["#11 P1: /goal set 拒绝"]:::p1
+    #12["#12 P1: widget 状态显示"]:::p1
+
+    #1 --> #3
+    #2 --> #4
+    #3 --> #4
+    #4 --> #5
+    #4 --> #6
+    #4 --> #8
+    #7 --> #5
+    #7 --> #10
+
+    classDef p0 fill:#fee2e2,stroke:#dc2626,color:#991b1b
+    classDef p1 fill:#fef3c7,stroke:#d97706,color:#92400e
+    classDef p2 fill:#dbeafe,stroke:#2563eb,color:#1e40af
+      </div>
+    </section>
+
+    <!-- P0 -->
+    <section id="p0">
+      <h2>P0 Issues（阻塞项）</h2>
+
+      <div class="issue-card p0">
+        <h4><span class="badge badge-p0">P0</span> #1: 删除 goal_manager + task CRUD</h4>
+        <p><strong>Blocked by:</strong> 无 · <strong>类型:</strong> 架构</p>
+        <p>删除 goal_manager tool（10 action）+ engine/task.ts + adapters/tool-adapter.ts + adapters/actions.ts + command-adapter::handleAbort。所有后续 issue 的结构基础。</p>
+        <p><strong>选方案 A</strong>（一步删除）— 确定要删，分步废弃引入不必要中间态。</p>
+        <table>
+          <thead><tr><th>验收</th></tr></thead>
+          <tbody>
+            <tr><td>grep GoalTask/create_tasks/update_tasks 无输出</td></tr>
+            <tr><td>grep goal_manager 无输出</td></tr>
+            <tr><td>handleAbort 函数删除</td></tr>
+            <tr><td>typecheck 通过</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="issue-card p0">
+        <h4><span class="badge badge-p0">P0</span> #2: 新增 paused + VALID_TRANSITIONS</h4>
+        <p><strong>Blocked by:</strong> 无 · <strong>类型:</strong> 模型</p>
+        <p>GoalStatus 加 "paused"；VALID_TRANSITIONS 显式转换表替代宽松守卫；删 maxTurns/maxStallTurns/stallCount。</p>
+        <p><strong>选方案 A</strong>（显式转换表）— 用户决策，与权限三分层双重保障。</p>
+      </div>
+
+      <div class="issue-card p0">
+        <h4><span class="badge badge-p0">P0</span> #3: 新建 goal_control adapter</h4>
+        <p><strong>Blocked by:</strong> #1 · <strong>类型:</strong> 模块</p>
+        <p>新建 goal-control-adapter.ts（~120 LOC），2 action：complete（todo 检查 + evidence）+ report_blocked（active 守卫）。标 executionMode: "sequential"。</p>
+        <p><strong>选方案 A</strong>（独立文件）— 职责清晰，独立可测。</p>
+      </div>
+
+      <div class="issue-card p0">
+        <h4><span class="badge badge-p0">P0</span> #4: event-adapter 按事件拆分</h4>
+        <p><strong>Blocked by:</strong> #2, #3 · <strong>类型:</strong> 模块</p>
+        <p>737 行拆为 6 个 handler 独立文件 + 薄路由（~50 LOC）。每个 handler 独立可测。</p>
+        <p><strong>选方案 A</strong>（6 文件拆分）— 变化轴不同。含行为等价验证 checklist（6 个 handler 关键行为点）。</p>
+      </div>
+    </section>
+
+    <!-- P1 -->
+    <section id="p1">
+      <h2>P1 Issues（核心）</h2>
+
+      <div class="issue-card p1">
+        <h4><span class="badge badge-p1">P1</span> #5: budget 单一检查点</h4>
+        <p><strong>Blocked by:</strong> #4, #7 · persistState 内加 budget 终态检查；agent_end 删 terminal 分支，只做 70/90 预警 + 90% steering。</p>
+      </div>
+
+      <div class="issue-card p1">
+        <h4><span class="badge badge-p1">P1</span> #6: 删除 maxTurns/stall 自动终态</h4>
+        <p><strong>Blocked by:</strong> #4 · 删 handleAllTasksDone/handleMaxTurnsReached 的终态分支；stallCount→blocked 分支删除。stalenessReminderPrompt 基于 lastUpdatedTurn 保留。</p>
+      </div>
+
+      <div class="issue-card p1">
+        <h4><span class="badge badge-p1">P1</span> #7: todo 跨扩展 API + ProgressInput</h4>
+        <p><strong>Blocked by:</strong> #1 · pi.__todoGetList() duck-typed；adapter 组装 ProgressInput 注入 engine。undefined 时降级（checkProgress 跳过 progress 检查，只做 token/time budget）。</p>
+      </div>
+
+      <div class="issue-card p1">
+        <h4><span class="badge badge-p1">P1</span> #8: agent_end 重构</h4>
+        <p><strong>Blocked by:</strong> #4 · 只做 warning/steering（70/90 预警 + 90% steering + allTasksDone followUp）。删所有 terminal 分支。</p>
+      </div>
+
+
+
+      <div class="issue-card p1">
+        <h4><span class="badge badge-p1">P1</span> #10: completion audit prompt</h4>
+        <p><strong>Blocked by:</strong> #7 · prompt 对标 Codex 三约束（Completion audit / Fidelity / Blocked audit）。硬编码在 contextInjectionPrompt（单一消费方，无配置需求）。</p>
+      </div>
+
+      <div class="issue-card p1">
+        <h4><span class="badge badge-p1">P1</span> #11: /goal set 非终态拒绝</h4>
+        <p><strong>Blocked by:</strong> #2 · 已有非终态 goal（含 paused）时拒绝 set，提示先 resume/clear。对齐 Codex。</p>
+      </div>
+
+      <div class="issue-card p1">
+        <h4><span class="badge badge-p1">P1</span> #12: widget paused/blocked 显示</h4>
+        <p><strong>Blocked by:</strong> #2 · widget status suffix 加 paused/blocked 分支。</p>
+      </div>
+    </section>
+
+    <!-- P2 -->
+    <section id="p2">
+      <h2>P2 Issues（重要）</h2>
+
+      <div class="issue-card p2">
+        <h4><span class="badge badge-p2">P2</span> #9: plan↔goal 联动</h4>
+        <p><strong>Blocked by:</strong> #7 · LLM 自主判断复杂度 + duck-typed API（__planStart/__goalInit）。contextInjectionPrompt 增加 plan 建议段落。</p>
+      </div>
+    </section>
+
+    <!-- P3 -->
+    <section id="p3">
+      <h2>P3 延后项</h2>
+      <table>
+        <thead><tr><th>Issue</th><th>描述</th><th>延后理由</th></tr></thead>
+        <tbody>
+          <tr><td><span class="badge badge-p3">P3</span></td><td>预警 flag 合并（4 boolean → Set）</td><td>收益低，4 个 flag 不影响功能</td></tr>
+          <tr><td><span class="badge badge-p3">P3</span></td><td>budget.ts 变化轴分离（tick 独立）</td><td>180 LOC 不需要拆</td></tr>
+          <tr><td><span class="badge badge-p3">P3</span></td><td>prompts.ts 变化轴分离</td><td>370 LOC 按投影层职责统一归类可接受</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer>
+    <p>本文档由 xyz-harness-design-issues 生成。真相源：issues.md · 图表需联网加载 Mermaid</p>
+  </footer>
+
+  <script>
+    mermaid.initialize({ startOnLoad: true, theme: 'neutral', securityLevel: 'loose' });
+  </script>
+</body>
+</html>

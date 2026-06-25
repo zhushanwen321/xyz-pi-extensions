@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>非功能性设计 — Goal V2 Refactor</title>
+  <style>
+    :root {
+      --bg: #fafafa; --surface: #ffffff; --text: #1a1a1a; --muted: #6b7280;
+      --accent: #2563eb; --ok: #16a34a; --warn: #d97706; --err: #dc2626;
+      --border: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+      line-height: 1.7; }
+    main, header { max-width: 900px; margin: 0 auto; padding: 0 24px; }
+    header { padding-top: 40px; padding-bottom: 24px; border-bottom: 2px solid var(--accent); }
+    .meta { color: var(--muted); font-size: 14px; }
+    section { background: var(--surface); margin: 24px 0; padding: 24px 32px;
+      border-radius: 8px; border: 1px solid var(--border); }
+    h2 { color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+    h3 { margin-top: 28px; color: #374151; }
+    table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14px; }
+    th, td { padding: 8px 10px; border: 1px solid var(--border); text-align: center; }
+    th { background: #f3f4f6; font-weight: 600; }
+    tbody tr:nth-child(even) { background: #f9fafb; }
+    td.left { text-align: left; }
+    code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+    .risk-ok { background: #dcfce7; color: #166534; font-weight: 700; }
+    .risk-warn { background: #fef3c7; color: #92400e; font-weight: 700; }
+    .risk-na { background: #f3f4f6; color: #9ca3af; }
+    .callout { border-left: 4px solid var(--accent); padding: 12px 16px; margin: 12px 0;
+      background: #eff6ff; border-radius: 0 8px 8px 0; }
+    .callout.critical { border-color: var(--err); background: #fef2f2; }
+    .issue-block { border-left: 3px solid var(--border); padding-left: 16px; margin: 16px 0; }
+    .issue-block h3 { border-bottom: none; }
+    .dim { font-weight: 600; color: #374151; }
+    footer { max-width: 900px; margin: 0 auto; padding: 40px 24px; color: var(--muted);
+      font-size: 13px; border-top: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>非功能性设计：Goal V2 Refactor</h1>
+    <div class="meta">阶段 4/6 · verdict: pass · 生成于 2026-06-24</div>
+  </header>
+
+  <main>
+    <section>
+      <div class="callout">
+        <strong>运行时上下文</strong>：本扩展是 Pi extension，运行在 Pi 进程内（单线程 JS、无数据库、无网络、无多用户）。
+        因此<strong>安全维度全 N/A</strong>（无认证/注入/越权面），<strong>性能多数 N/A</strong>（goal 低频）。
+        假设单 session 使用（GoalSession 在 session_start 重建闭包）。
+      </div>
+    </section>
+
+    <section>
+      <h2>风险矩阵热力图（Issue × 7 维度）</h2>
+      <table>
+        <thead>
+          <tr>
+            <th class="left">Issue</th>
+            <th>方案</th>
+            <th>安全</th>
+            <th>数据</th>
+            <th>性能</th>
+            <th>并发</th>
+            <th>稳定性</th>
+            <th>兼容性</th>
+            <th>可观测</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="left">#1 删 goal_manager+task</td><td>A</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td><td class="risk-ok">✅</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td></tr>
+          <tr><td class="left">#2 paused+TRANSITIONS</td><td>A</td><td class="risk-na">—</td><td class="risk-ok">✅</td><td class="risk-na">—</td><td class="risk-ok">✅</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td><td class="risk-na">—</td></tr>
+          <tr><td class="left">#3 goal_control</td><td>A</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td><td class="risk-na">—</td></tr>
+          <tr><td class="left">#4 拆 event-adapter</td><td>A</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td></tr>
+          <tr><td class="left">#5 budget 单一检查点</td><td>A</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td></tr>
+          <tr><td class="left">#6 删 maxTurns/stall</td><td>A</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td></tr>
+          <tr><td class="left">#7 todo API+ProgressInput</td><td>A</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-ok">✅</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td><td class="risk-na">—</td><td class="risk-na">—</td></tr>
+          <tr><td class="left">#8 agent_end 重构</td><td>A</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td></tr>
+          <tr><td class="left">#9 plan↔goal 联动</td><td>A</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td><td class="risk-warn">⚠️</td><td class="risk-na">—</td></tr>
+          <tr><td class="left">#10 completion audit prompt</td><td>A</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td></tr>
+          <tr><td class="left">#11 /goal set 拒绝</td><td>A</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-warn">⚠️</td><td class="risk-na">—</td></tr>
+          <tr><td class="left">#12 widget 显示</td><td>A</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td></tr>
+        </tbody>
+      </table>
+      <p style="font-size:13px;color:var(--muted)">图例：<span class="risk-ok">✅</span> 无风险 · <span class="risk-warn">⚠️</span> 有风险已缓解 · <span class="risk-na">—</span> 不适用 · <span style="color:var(--err)">❌</span> 不可接受（本设计无此项）</p>
+    </section>
+
+    <section>
+      <h2>关键副作用（需下游 code-architecture 关注）</h2>
+
+      <div class="callout critical">
+        <h3 style="margin-top:0">#5 budget 检查点位置修正</h3>
+        <p>代码取证确认：<strong>事件路径走 <code>persistAndUpdate</code>（tickState + appendEntry + updateWidget），不走 <code>service.persistState</code></strong>。budget 终态检查必须挂在事件路径的 persist 函数内（<code>persistAndUpdate</code> 或 #4 拆分后的等价函数），不是 <code>persistState</code>。</p>
+        <p><strong>影响</strong>：#5 验收标准需修正——检查点在 persistAndUpdate，非 persistState。#4 拆分时 budget 检查逻辑随之迁移。</p>
+      </div>
+
+      <div class="callout critical">
+        <h3 style="margin-top:0">#9 __goalInit tasks 废弃影响三方</h3>
+        <p>代码取证：<code>__goalInit</code> 有 <strong>2 个调用方</strong>——coding-workflow（主力，Phase 2/3 传真实 taskList）+ plan。均用 <strong>inline alias</strong>（非 import type），签名变更编译期不报错 → 静默 drift。</p>
+        <p><strong>缓解</strong>：goal 侧容忍（忽略 tasks 参数不 throw）+ 同步迁移两个调用方 + 推动改用 import type。<code>GoalInitBudget.maxTurns</code> 需同步清理（#6 连带）。</p>
+      </div>
+
+      <div class="callout">
+        <h3 style="margin-top:0">#6 删自动终态后的兜底依赖</h3>
+        <p>agent 不调 complete 时，唯一兜底是 budget 耗尽（persistAndUpdate 内检查）。<strong>这是 D21 决策的有意代价</strong>（对齐 Codex）。残余风险可接受：budget 兜底 + followUp 提示 + 手动 clear。</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>数据迁移策略（统一）</h2>
+      <p>多个 issue 删除字段（tasks/stallCount/maxTurns），<code>deserializeState</code> 必须向后兼容：</p>
+      <table>
+        <thead><tr><th class="left">旧字段</th><th class="left">删除来源</th><th class="left">迁移策略</th></tr></thead>
+        <tbody>
+          <tr><td class="left">GoalRuntimeState.tasks</td><td class="left">#1</td><td class="left">反序列化时忽略，不 throw</td></tr>
+          <tr><td class="left">GoalRuntimeState.stallCount</td><td class="left">#6</td><td class="left">反序列化时忽略，不 throw</td></tr>
+          <tr><td class="left">BudgetConfig.maxTurns</td><td class="left">#6</td><td class="left">反序列化时忽略，不 throw</td></tr>
+          <tr><td class="left">BudgetConfig.maxStallTurns</td><td class="left">#6</td><td class="left">反序列化时忽略，不 throw</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>降级策略（跨扩展 API）</h2>
+      <table>
+        <thead><tr><th class="left">API</th><th class="left">缺失时行为</th><th class="left">受影响功能</th></tr></thead>
+        <tbody>
+          <tr><td class="left">pi.__todoGetList</td><td class="left">undefined → 降级</td><td class="left">context 不注入进度；checkProgress 跳过 progress；complete 提示手动确认</td></tr>
+          <tr><td class="left">pi.__planStart</td><td class="left">undefined → 降级</td><td class="left">context 不含 plan 建议段落；goal 独立运行</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>残余风险登记</h2>
+      <table>
+        <thead><tr><th class="left">风险</th><th class="left">接受理由</th><th class="left">监控方式</th></tr></thead>
+        <tbody>
+          <tr><td class="left">agent 不调 complete → goal 不终态</td><td class="left">budget 兜底 + followUp + 手动 clear（D21 有意代价）</td><td class="left">widget 显示 token/turn 消耗</td></tr>
+          <tr><td class="left">旧 entry 字段静默丢失</td><td class="left">task 模型整体废弃，数据无意义</td><td class="left">无需监控（一次性迁移）</td></tr>
+          <tr><td class="left">prompt 体积增加 token 成本</td><td class="left">对齐 Codex prompt 量级</td><td class="left">widget 显示 token 用量</td></tr>
+          <tr><td class="left">__goalInit inline alias 静默 drift</td><td class="left">goal 侧容忍（不 throw），同步迁移调用方</td><td class="left">迁移后 grep 验证无 tasks 传参</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer>
+    <p>本文档由 xyz-harness-design-nfr 生成。真相源：non-functional-design.md</p>
+  </footer>
+</body>
+</html>
