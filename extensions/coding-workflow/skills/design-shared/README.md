@@ -19,6 +19,7 @@
 
 各设计阶段 SKILL.md 用相对路径 `design-shared/references/{file}.md` 引用本目录文件。
 
-> **HTML 渲染不在此处。** Step 5b 的 `.html` 渲染由 [visual-explainer](https://github.com/nicobailon/visual-explainer)
-> 技能承担（`pi install npm:visual-explainer`），派 fresh subagent 加载该技能生成。设计阶段特有的「主角图表」
+> **HTML 渲染不在此处。** Step 5b 的 `.html` 渲染由本包内置的 **design-visual-explainer**
+> 技能承担（无需 `pi install`），派 fresh subagent 加载该技能生成。它整合了 Mermaid + drawio + 手画 HTML/CSS
+> 三种渲染引擎，按各阶段主角图类型自动选择。设计阶段特有的「主角图表」
 > 映射见 `loop-skeleton.md` Step 5b。
