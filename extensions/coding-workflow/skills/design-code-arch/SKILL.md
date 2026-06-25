@@ -71,7 +71,10 @@ description: >-
 > **[MANDATORY] 骨架验证是本阶段的强制 gate。** 通过才能交接 ⑥。详见 `references/skeleton-spike.md`。
 
 **机制：**
-1. 派 fresh subagent，读取 §3 签名表 + §4 时序图 + §1 工程目录 + §2 包依赖图，生成真实骨架代码到 `code-skeleton/`
+1. **按模块 DAG 划分生成**（模块数 > 1 时；≤1 或 §2 有 `modules/* 互相 import` 循环嫌疑时不并行，单 agent 够）——详见 `references/skeleton-spike.md`「按模块 DAG 划分并行生成」：
+   - **Tier 0 基础层先串行**（1 subagent）：`shared/`（types.ts/errors.ts，从 §3 跨层共享类型 + §4 数据流链一次固化）+ `infra/`（含各模块 adapter stub）
+   - **Tier 1 模块层并行**（每 `modules/{module}/` 一个 fresh subagent）：§2 强制 `modules/* 不能互相 import` → 无写冲突。**Tier 1 只读不改 `shared/`**，发现缺类型标 gap 回主 agent 补 Tier 0
+   - 读取 = §3 签名表 + §4 时序图 + §1 工程目录 + §2 包依赖图，生成到 `code-skeleton/`
 2. 骨架 = 所有类/方法签名/参数/返回类型（方法体 `throw new NotImplementedError()`）+ import 关系 + 类型契约 + 状态机枚举 + port/adapter 占位
 3. **高密度骨架原则**——骨架注释暴露数据流/失败路径/SDK 契约/竞态/不变式（agent 不读代码推不出的信息），不只堆签名
 4. **停止点**——签名+调用链+依赖方向可验证即停，不写实现逻辑

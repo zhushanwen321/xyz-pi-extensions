@@ -20,6 +20,29 @@
 
 派 fresh-context subagent 生成骨架，输入 = §3 签名表 + §4 时序图 + §1 工程目录 + §2 包依赖图。
 
+### 按模块 DAG 划分并行生成（模块数 > 1 时）
+
+> **与 ②③④ 的多 agent 动机不同**：那里是**对抗认知盲区**（换 context/换认知帧）。
+> Step7 的并行是 **DAG 依赖划分**——模块在 §1/§2 已被设计为独立单元（§2 包依赖图强制
+> `modules/* 不能互相 import`），是真正的并行工作单元。价值 = 大系统提速 + 故障定位更精确
+> （哪几个 agent 报 tsc 错就定位到哪几个模块，而非串行写完全骨架后才报错难定位）。
+
+骨架生成按 §1 工程目录 + §2 包依赖图分两层（依赖 DAG）：
+
+| 层 | 生成什么 | 派发 | 为什么这个顺序 |
+|----|---------|------|---------------|
+| **Tier 0 基础层** | `shared/`（types.ts, errors.ts — 跨模块共享类型）+ `infra/`（db.ts, logger.ts + 各模块的 adapter stub）| **先串行**（1 个 subagent）| 所有模块 import 它。Tier 0 不稳定 → Tier 1 各 agent 各自发明类型 → 冲突 |
+| **Tier 1 模块层** | 每个 `modules/{module}/`（controller/service/model/repository/port）| **并行**（每模块 1 个 fresh subagent）| §2 强制 `modules/* 不能互相 import` → 模块间无写冲突 |
+
+**Tier 0 先行固化共享类型（关键纪律）：** Tier 0 agent 从 §3 签名表的跨层共享类型 + §4 数据流链推导出全部共享类型（DTO、enum、result type、error type），一次写进 `shared/types.ts`。Tier 1 各 agent **只读不改 `shared/`**——若发现缺类型，标 gap 回主 agent 补 Tier 0，不自行往 shared/ 加（否则并发写冲突）。
+
+**port/adapter 归属：** port interface 归属模块（`modules/A/port.ts`），adapter stub 归 infra（`infra/`）。Tier 0 agent 生成 infra stub 时需读**所有模块**的 port 清单（§5 Deep Module 标注的 seam）。
+
+**触发条件（何时不并行，防过度设计）：**
+- 模块数 ≤ 1（小系统/单模块改动）→ 不并行，单 agent 够
+- §2 包依赖图有 `modules/* 互相 import`（循环依赖嫌疑）→ 不并行，先回 Step 2 修依赖图（并行前提不成立）
+- 只有 1-2 个模块的 greenfield → 不并行
+
 ### 必须落地的
 
 1. **所有类 + 方法签名** — 参数类型、返回类型完整（方法体 `throw new NotImplementedError()`
