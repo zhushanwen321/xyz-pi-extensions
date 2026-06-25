@@ -7,7 +7,7 @@
 | 引擎 | 谁放置节点 | 后果 |
 |------|-----------|------|
 | **Mermaid** | 引擎自动布局（dagre/ELK） | 写文字快、git-diffable，但**无法修正**特定重叠——auto-layout 烂了你没办法。这就是「渲染难看」的根因 |
-| **drawio** | 你手动指定坐标（或 Graphviz autolayout 处理大图） | 像素级控制，但费力，且需 CLI。delegate 到 drawio-skill |
+| **drawio** | 你手动指定坐标（或内置 autolayout.py 用 Graphviz 处理大图） | 像素级控制，但费力，且需 CLI。本 skill 内置脚本 |
 | **手画 HTML/CSS** | 你用 Grid/Flexbox | 节点能放富内容（描述/代码/列表），但没有自动连线——箭头要手画 |
 
 ## 每个引擎何时真正占优
@@ -45,34 +45,19 @@
 ## 三句话总结
 
 - **Mermaid** = "图小，让引擎帮我连线"（>8 节点或长标签会崩）
-- **drawio** = "图复杂/要精美/要云图标"（需 CLI，delegate drawio-skill）
+- **drawio** = "图复杂/要精美/要云图标"（需 CLI，内置 autolayout 脚本）
 - **手画 CSS** = "节点是富卡片" 或 "这是表格/矩阵"
 
 ---
 
-## Embedding drawio diagrams
+## drawio 嵌入（指向内置指南）
 
-当引擎决策选了 drawio（② 分层架构、⑤ 包依赖图等复杂场景），你在本 skill 之外生成图，然后把结果嵌入。完整生成工作流（形状库、布局、验证、导出标志）在 **drawio-skill** 里——invoke 它得到 `.drawio` 文件 + 导出的 SVG。**不要在本 skill 内手写 drawio XML。**
+当引擎决策选了 drawio（② 分层架构、⑤ 包依赖图、复杂 ER），**完整工作流见 `references/drawio-guide.md`**——包括：CLI 检查、手写 XML 结构、autolayout（复杂图自动布局）、validate（结构校验）、SVG 导出与 HTML 嵌入、形状速查表。
 
-**嵌入工作流（drawio-skill 产出 `diagram.drawio` 之后）：**
+核心路径（4步速查）：
+1. `which drawio` 检查 → 不可用降级 Mermaid/CSS
+2. 生成 `.drawio`（小图手写 XML / 大图 `scripts/autolayout.py graph.json -o out.drawio`）
+3. `python3 scripts/validate.py out.drawio`（结构校验门）
+4. `drawio -x -f svg -e -o out.svg out.drawio` → SVG 内联进页面 `.drawio-wrap` 容器 + zoom 控件
 
-1. **导出带嵌入 XML 的 SVG** — 让 drawio-skill 跑 `drawio -x -f svg -e -o diagram.svg diagram.drawio`。`-e` 保持可编辑；SVG 是纯文本，没有 PNG 的 IEND 截断问题。**SVG 是首选嵌入格式**——清晰缩放，匹配页面向量美学，无需 JS。
-
-2. **把 SVG 内联进 HTML 页面。** 读导出的 `.svg` 文件，把标记直接粘贴进页面的容器（`.drawio-wrap` 或复用 `.mermaid-wrap` 样式）。内联的 SVG 不继承 drawio 任何东西——用页面 CSS 变量样式化容器。容器加 `max-width` + `margin: 0 auto` 居中。
-
-3. **加 zoom 控件**（同 Mermaid 模式：+/−/reset/expand、Ctrl/Cmd+scroll、click-to-expand）。复用 zoom JS——它对任何元素生效，不只 Mermaid。见 `references/css-patterns.md` 的 Mermaid Zoom Controls 段。
-
-**两种嵌入模式：**
-
-| 需求 | 导出格式 | 嵌入方法 | 需 JS |
-|------|---------|---------|-------|
-| 静态、清晰、可缩放（首选） | `drawio -x -f svg -e` | SVG 标记内联进页面 | 无（要 zoom 控件才加 JS） |
-| 交互预览（zoom/图层/lightbox/多页） | `drawio -x -f html` | 自包含 HTML 文件（CDN 加载 `viewer-static.min.js`）——iframe 它，或提取 `data-mxgraph` 块进页面 | 是（首次需联网） |
-
-**[HISTORICAL] 不要手建 `data-mxgraph` 属性。** drawio 的 `-f html` 正确处理 JSON/HTML/XML 三重编码；手建会静默损坏 XML 实体（`&quot;`/`&amp;`），同时破坏 JSON 和 XML。永远用 CLI 导出后整体嵌入其输出。
-
-**离线/气隙页面：** 交互 HTML 嵌入默认从 `viewer.diagrams.net` 加载 `viewer-static.min.js`。离线用时，下载该脚本一次，把 `<script src>` 换成本地路径。静态 SVG 嵌入无此依赖。
-
-**配色/调色板对齐：** drawio-skill 有自己的调色板和样式预设。嵌入 visual-explainer 页面时，要么 (a) 让 drawio-skill 用匹配页面 CSS 变量的调色板（传 hex 值），要么 (b) 把内联 SVG 包在容器里，用 CSS 覆盖关键 fill/stroke 色以协调页面。方案 (a) 效果更干净。
-
-**drawio CLI 不可用时降级：** `which drawio` 失败就别尝试 drawio。按上面的决策表降级到 Mermaid（拓扑）或 CSS Grid 卡片（文本密集架构）。drawio-skill 还有浏览器降级 URL 生成器，但它产出的是外部 diagrams.net 链接，不是可嵌入资产——对自包含 HTML 页面没用。
+`[HISTORICAL]` 不手建 `data-mxgraph`（三重编码必须由 CLI 处理）；边的 mxCell 必须含 `<mxGeometry>` 子元素（自闭合无效）。详见 `drawio-guide.md`。
