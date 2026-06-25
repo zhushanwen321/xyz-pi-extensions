@@ -1,0 +1,42 @@
+{
+  "name": "@zhushanwen/pi-design-status",
+  "version": "0.1.0",
+  "description": "Design workflow phase status & progress tracker — single tool governing 7 design skills with state-machine constraints and deliverable-derived gates.",
+  "type": "module",
+  "main": "src/index.ts",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "keywords": [
+    "pi-package",
+    "extension",
+    "design",
+    "workflow",
+    "status",
+    "tracker"
+  ],
+  "license": "MIT",
+  "files": [
+    "src/",
+    "index.ts"
+  ],
+  "devDependencies": {
+    "vitest": "^4.1.8"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "@sinclair/typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run"
+  }
+}

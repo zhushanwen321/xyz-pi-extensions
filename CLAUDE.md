@@ -11,6 +11,7 @@ xyz-pi-extensions/
 ├── extensions/                  # Pi 扩展（可发布的 npm 包，@zhushanwen/pi-*）
 │   ├── goal/                → @zhushanwen/pi-goal
 │   ├── todo/                → @zhushanwen/pi-todo
+│   ├── design-status/       → @zhushanwen/pi-design-status (design 工作流 7 阶段状态/进度追踪 tool)
 │   ├── vision/             → @zhushanwen/pi-vision
 │   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills + 7 个 design-* 设计工作流 skills（含 1 个初始化）+ design-shared 共享参考目录)
 │   ├── claude-rules-loader/ → @zhushanwen/pi-claude-rules-loader
@@ -52,7 +53,7 @@ xyz-pi-extensions/
 
 | 功能 | 归属目录 | 示例 |
 |------|---------|------|
-| Pi 扩展（产品） | `extensions/` | goal, todo, vision, statusline |
+| Pi 扩展（产品） | `extensions/` | goal, todo, design-status, vision, statusline |
 | 内部共享依赖 | `shared/` | quota-providers, types, taste-lint |
 | 独立 skills | `skills/` | vision-analysis, zcommit |
 | 共享脚本 | `scripts/` | publish.sh（运维）；gate 脚本见 `.githooks/` |
