@@ -36,6 +36,16 @@ Issue 决策图（根：从 system-architecture 的挑战推导）
 按 `references/fog-of-war.md` 构建决策图（不一次性列完）。按 `references/issue-template.md` 写方案对比。
 复杂根本性 issue 用 DESIGN-IT-TWICE（3+ 并行 subagent 发散）。初稿用 `references/deliverable-template.md`。
 
+**Step 1 必问决策点（代码答不了，逐个 ask_user；本阶段 agent 最易自作主张，务必逐条问）：**
+
+1. **P0/P1 划线** — 每个候选阻塞项问："不做它，后续真的无法推进 / 目标真的无法达成吗？" P 级依赖用户对**业务优先级**的判断，不能 agent 凭技术启发式定。这是本阶段最高频被 agent 吞掉的决策。【D】
+2. **取舍原则的局部例外** — 全局默认"长期架构优先、较少考虑成本"，但每个 P0/P1 issue 要问："这里是否仍然适用？有没有成本其实重要的例外？"【D】
+3. **DESIGN-IT-TWICE 的最终选定** ⭐ — 凡触发并行 subagent 发散的根本性架构选择，**最终选定必须 ask_user**，不能 agent 给完 opinionated 推荐就记录进 issues.md。（当前 issue-template 让 agent "选择+记录"，这是最大的提问漏洞）【D-不可逆】
+4. **迷雾展开判断** — fog-of-war"前沿清晰即停"，但"够不够清晰 / 还有没有没说的需求"必须问用户，不能 agent 自判收敛。【K/D】
+5. **P3 延后项逐条确认** — 每个标 P3 的问用户是否同意延后 + 理由（用户可能说"这个其实重要"）。【D】
+
+> 方案对比的技术分析（改动/优点/缺点）= agent 产出，作为用户决策的参考材料。
+
 **Step 2（追踪）— 派 fresh-context subagent，按 4 视角追踪：**
 issue 覆盖性（每个挑战有对应 issue？）/ 方案完整性（每个 P0/P1 有 ≥2 方案+取舍？）/ 优先级一致性（P 级与 blocked_by 一致？）/ 前沿清晰度（迷雾该展开吗？）。
 
@@ -43,12 +53,13 @@ issue 覆盖性（每个挑战有对应 issue？）/ 方案完整性（每个 P0
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 issues.md；派 fresh subagent 渲染 issues.html（机制见 loop-skeleton.md Step 5b）（主角图：决策 DAG 图，节点状态色标）。**
 
-**Step 6（审查）— 派 fresh-context 审查 subagent，5 维评审，报告写 `changes/review-issues.md`。APPROVED 才交接。**
+**Step 6（审查）— 派 fresh-context 审查 subagent（按 design-clarity/references/review-agent.md 规范，先跑 `scripts/check_issues.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-issues.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（回扫 ①②上游），再交接。**
 
 ## Phase Loop 机制
 
 - 收敛失败 → 回 Step 3 补充方案对比/追踪新 issue
 - 审查 CHANGES_REQUESTED → 审查意见当 gap 回 Step 3
+- **反哺触发上游修订**（详见 loop-skeleton.md Step 6b）→ 上游 .md 更新后，本阶段可能需重新对齐 → 回 Step 2 重追踪
 - Stagnation（连续 3 轮 gap 不降）→ 强制收敛
 
 ## Self-Check

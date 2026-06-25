@@ -43,15 +43,16 @@ description: >-
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 requirements.md；派 fresh subagent 渲染 requirements.html（机制见 loop-skeleton.md Step 5b）（主角图：用例图）。**
 
-**Step 6（审查）— 派 fresh-context 审查 subagent，5 维评审，报告写 `changes/review-clarity.md`。APPROVED 才交接。**
+**Step 6（审查）— 派 fresh-context 审查 subagent（按 `references/review-agent.md` 规范，先跑 `scripts/check_clarity.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-clarity.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（①无上游，反哺检查直接 pass），再交接。**
 
 ## Phase Loop 机制
 
 - 收敛失败（仍有新 gap）→ 回 Step 3
 - 审查 CHANGES_REQUESTED → 审查意见当 gap 回 Step 3
+- **反哺触发下游修订本阶段 .md**（详见 loop-skeleton.md Step 6b）→ 本阶段 .md 被改后，下游需重新对齐
 - Stagnation（连续 3 轮 gap 不降）→ 强制收敛，未解决标 `[UNRESOLVED]`
 
-不接入 coding-workflow 的 gate 编排，靠 loop-skeleton 追踪+审查双重机制自证质量。
+不接入 coding-workflow 的 gate 编排，靠 loop-skeleton 追踪+审查+反哺三重机制自证质量与文档一致性。
 
 ## Self-Check
 
@@ -63,6 +64,7 @@ description: >-
 - [ ] `changes/review-clarity.md` 存在且 verdict: APPROVED
 - [ ] 所有 `[AMBIGUOUS]` 已解决或显式列为待确认
 - [ ] **目标→路线→用例可追溯**：每用例能追溯到目标，每目标有用例支撑
+- [ ] **每 UC 有 ≥1 条 AC**（正常/异常/边界可验证，非占位符）
 - [ ] **未含系统实现**：无 API/数据库 schema/技术架构图（属 Step 2）
 - [ ] 用例图（Mermaid）覆盖所有 Actor；数据流图生命周期完整
 

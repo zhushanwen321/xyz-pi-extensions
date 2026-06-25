@@ -35,6 +35,16 @@ description: >-
 Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 初稿用 `references/deliverable-template.md`。
 
+**Step 1 必问决策点（代码答不了，逐个 ask_user；其余 = agent 自决，审查时暴露）：**
+
+1. **核心计算的复杂度预期** — "核心是业务规则编排（→DDD4层）还是技术流程编排（→三层）？未来会不会长出复杂规则/策略引擎？" 代码只看现状，"会不会长出"是用户对未来复杂度的判断，决定分层深度（不可逆）。【D-不可逆】
+2. **搭便车改造清单（候选，⑤骨架验证后最终确认）** — business-goal→system-goal 转换时发现的"趁机可做的重构"，逐个问用户本轮是否做（候选意向）。用户对范围/风险拍板意向，但**真实工作量要到⑤骨架验证才能确定**——⑤发现某项远超预期会回流本阶段重新确认范围。【D】
+3. **Seam/port 真伪边界** — 哪些依赖值得做 port（可替换性 vs 复杂度成本）。agent 按启发式标"假设 seam"，但"真 seam 还是删掉"是用户取舍。【D-不可逆】
+4. **领域模型边界争议** — aggregate vs DTO、有状态机 vs 无状态，有真实不确定性时逐个问。【D-不可逆】
+5. **状态机严格度** — 显式转换表（紧，早暴露错误）还是只守终态（松，灵活）？用户偏好。【D】
+
+> 其余（依赖 4 类分类启发式、命名、不变式推导、Context Map 画法）= agent 自决。
+
 **Step 2（追踪）— 派 fresh-context subagent，按 `references/architecture-perspectives.md` 的 5+1 视角追踪：**
 模型完整性 / 状态正交性 / 分层纪律 / 依赖边界 / 变化轴 / 行为契约(refactor 专用)。
 
@@ -42,12 +52,13 @@ Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 system-architecture.md；派 fresh subagent 渲染 system-architecture.html（机制见 loop-skeleton.md Step 5b）（主角图：分层架构图+状态机图）。**
 
-**Step 6（审查）— 派 fresh-context 审查 subagent，5 维评审，报告写 `changes/review-architecture.md`。APPROVED 才交接。**
+**Step 6（审查）— 派 fresh-context 审查 subagent（按 design-clarity/references/review-agent.md 规范，先跑 `scripts/check_architecture.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-architecture.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（回扫 ①上游），再交接。**
 
 ## Phase Loop 机制
 
 - 收敛失败 → 回 Step 3 补充交互更新模型
 - 审查 CHANGES_REQUESTED → 审查意见当 gap 回 Step 3
+- **反哺触发上游修订**（详见 loop-skeleton.md Step 6b）→ 上游 .md 更新后，本阶段可能需重新对齐 → 回 Step 2 重追踪
 - Stagnation（连续 3 轮 gap 不降）→ 强制收敛
 
 ## Self-Check

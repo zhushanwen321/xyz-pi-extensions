@@ -64,7 +64,7 @@ description: >-
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 code-architecture.md；派 fresh subagent 渲染 code-architecture.html（机制见 loop-skeleton.md Step 5b）（主角图：包依赖图+核心时序图）。**
 
-**Step 6（审查）— 派 fresh-context 审查 subagent，5 维评审，报告写 `changes/review-code-arch.md`。APPROVED 才交接。**
+**Step 6（审查）— 派 fresh-context 审查 subagent（按 design-clarity/references/review-agent.md 规范，先跑 `scripts/check_code_arch.py` 机器检查——含 P1 骨架反模式，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-code-arch.md`（frontmatter 含 verdict + machine_check）。APPROVED 才进 Step 7。**
 
 **Step 7（骨架验证）— 派 fresh-context subagent 生成可编译骨架代码，物理验证 Step 1-5 的设计假设。**
 
