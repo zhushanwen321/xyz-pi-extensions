@@ -384,14 +384,17 @@ export async function run(
     switch (raw.type) {
       case "tool_execution_start": {
         const toolName = raw.toolName ?? "";
+        const toolCallId = raw.toolCallId ?? "";
         if (raw.toolCallId) {
           pendingTools.set(raw.toolCallId, { toolName, args: raw.args });
         }
-        agentEvent({ type: "tool_start", toolName, args: raw.args });
+        // 带 toolCallId——updateFromEvent 用 id 精确关联 content 里的 toolCall block。
+        agentEvent({ type: "tool_start", toolCallId, toolName, args: raw.args });
         return;
       }
       case "tool_execution_end": {
         const toolName = raw.toolName ?? "";
+        const toolCallId = raw.toolCallId ?? "";
         let args = raw.args;
         if (raw.toolCallId) {
           const pending = pendingTools.get(raw.toolCallId);
@@ -400,16 +403,17 @@ export async function run(
             pendingTools.delete(raw.toolCallId);
           }
         }
-        // 透传 result 到 AgentEvent——updateFromEvent 把完整 ToolCall（含 result）收口进 turn.toolCalls。
-        agentEvent({ type: "tool_end", toolName, args, result: raw.result, isError: raw.isError });
+        // 带 toolCallId——updateFromEvent 用 id 精确找到 content 里的 toolCall block，补 result/_status。
+        agentEvent({ type: "tool_end", toolCallId, toolName, args, result: raw.result, isError: raw.isError });
         return;
       }
       case "message_update": {
-        const ame = raw.assistantMessageEvent;
-        if (ame?.type === "thinking_delta") {
-          agentEvent({ type: "thinking_delta", delta: ame.delta ?? "" });
-        } else if (ame?.delta !== undefined) {
-          agentEvent({ type: "text_delta", delta: ame.delta });
+        // 单源核心：SDK message_update 带 message.content 完整快照（text/thinking/toolCall 同构）。
+        // 不再拆 delta 碎片——updateFromEvent 用 content 整体覆盖 currentTurn.content。
+        // content 缺失时（极少数 edge case）静默跳过，不破坏已有状态。
+        const content = raw.message?.content;
+        if (content && content.length > 0) {
+          agentEvent({ type: "message_update", content });
         }
         return;
       }

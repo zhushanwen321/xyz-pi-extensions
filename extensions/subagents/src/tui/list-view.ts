@@ -43,13 +43,14 @@ import type { SubagentRecord } from "../types.ts";
 import {
   firstLine,
   formatElapsedSeconds,
-  formatEventLine,
+  formatToolEventPairs,
   formatTokens,
   padToVisible,
   sanitizeLabel,
   segFillColored,
   spinnerGlyph,
   statusGlyph,
+  tailFixedLines,
   type ThemeLike,
   truncLine,
 } from "./format.ts";
@@ -97,10 +98,14 @@ const MIN_INNER_ROWS = 4;
 const DETAIL_LEN_PROBE_WIDTH = 9999;
 /** 垂直居中除数（floor(剩余/2)）。 */
 const VERT_CENTER_DIVISOR = 2;
-/** overlay 动画刷新间隔（spinner 换帧 + elapsed 跳动）。同 tool-render.ts SPINNER_INTERVAL_MS。 */
-const OVERLAY_REFRESH_MS = 250;
-/** spinner 帧切换粒度（与 Date.now() 配合选帧）。 */
-const SPINNER_FRAME_MS = 250;
+/**
+ * overlay 动画刷新间隔（spinner 换帧 + elapsed 跳动）。
+ * 对齐 tool-render.ts SPINNER_INTERVAL_MS=80（同 Pi Loader DEFAULT_INTERVAL_MS）。
+ * 80ms 刷新 elapsed（秒级）无视觉影响——diff 引擎秒数不变就不重绘。
+ */
+const OVERLAY_REFRESH_MS = 80;
+/** spinner 帧切换粒度（与 Date.now() 配合选帧）。对齐 SPINNER_INTERVAL_MS。 */
+const SPINNER_FRAME_MS = 80;
 /** 顶框嵌入标题（分屏模式）。 */
 const TITLE_SPLIT = "Subagents";
 /** 分屏分区线左/右嵌入标题。 */
@@ -728,13 +733,17 @@ class SubagentsListComponent implements Component {
     ));
     lines.push("");
 
-    // eventLog 现从 turns[] 派生（离散语义事件，无碎片），直接取最近 N 条。
-    const recent = record.eventLog.slice(-PREVIEW_RECENT_LINES);
+    // eventLog 现从 turns[] 派生（离散语义事件，无碎片）。
+    // 固定高度窗口（对齐 tool-render compact）：fold tool 对后取尾部 PREVIEW_RECENT_LINES 行，
+    // 不足 pad dim 空行 → eventLog 区行数恒定，running record 推进时右列不抖动。
+    // 空事件单独处理（显示 (no events) 提示而非 pad 空行——空态有专门文案更友好）。
+    const recent = record.eventLog.slice(0); // 全量 fold 后再取尾部（窗口含 fold 合并效果）
     if (recent.length === 0) {
       lines.push(truncLine(t.fg("dim", "(no events)"), width));
     } else {
-      for (const entry of recent) {
-        lines.push(truncLine(formatEventLine(entry, t), width));
+      const folded = formatToolEventPairs(recent, t);
+      for (const line of tailFixedLines(folded, PREVIEW_RECENT_LINES, "", t)) {
+        lines.push(truncLine(line, width));
       }
     }
 
@@ -792,19 +801,23 @@ class SubagentsListComponent implements Component {
     content.push("");
     content.push(truncLine(t.fg("accent", t.bold("── Event Log ──")), width));
 
-    // eventLog 从 turns[] 派生（离散语义事件），直接遍历。
+    // eventLog 从 turns[] 派生（离散语义事件）。tool_start/tool_end 对折叠成 1 行
+    // （每个 tool 一行，尾部 ✓/✗）；turn_end/error 原样保留。
     if (record.eventLog.length === 0) {
       content.push(truncLine(t.fg("dim", "(no events)"), width));
     } else {
-      for (const entry of record.eventLog) {
-        content.push(truncLine(formatEventLine(entry, t), width));
+      for (const line of formatToolEventPairs(record.eventLog, t)) {
+        content.push(truncLine(line, width));
       }
     }
 
     if (record.result) {
       content.push("");
       content.push(truncLine(t.fg("accent", "Result:"), width));
+      // 跳过空行：getFullText 用 \n\n 拼接多 turn 文本，split("\n") 会多出空字符串元素
+      // （turn 间空行）。trim 判断兼容首尾空白行 + turn 间隔行，紧贴换行不多空。
       for (const l of record.result.split("\n")) {
+        if (l.trim().length === 0) continue;
         content.push(truncLine(sanitizeLabel(l), width));
       }
     }

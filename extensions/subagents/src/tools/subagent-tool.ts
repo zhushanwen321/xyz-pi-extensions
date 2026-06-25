@@ -15,7 +15,6 @@ import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@ma
 import { Type } from "@sinclair/typebox";
 
 import { getSubagentService } from "../runtime/subagent-service.ts";
-import { extractAgentName } from "../tui/format.ts";
 import { type RenderContext,renderSubagentCall, renderSubagentResult } from "../tui/tool-render.ts";
 import type { SubagentToolResult } from "../types.ts";
 import { adapter, cancelHandler, listHandler, startHandler } from "./subagent-actions.ts";
@@ -132,25 +131,6 @@ function assertNever(value: never): string {
   return String(value);
 }
 
-/** unknown 是否为含 model/thinkingLevel 的对象（类型守卫，替代全可选结构 `as`）。 */
-function isModelOverrideObj(a: unknown): a is { model?: unknown; thinkingLevel?: unknown } {
-  return typeof a === "object" && a !== null;
-}
-
-/** unknown args 是否含 startParam（类型守卫，替代 `in` 后的 `as`）。 */
-function hasStartParam(a: unknown): a is { startParam?: unknown } {
-  return typeof a === "object" && a !== null && "startParam" in a;
-}
-
-/** 从 unknown args 安全提取 model/thinkingLevel override（传给 resolveModel）。 */
-function extractModelOverride(args: unknown): { model?: string; thinkingLevel?: string } | undefined {
-  if (!isModelOverrideObj(args)) return undefined;
-  const override: { model?: string; thinkingLevel?: string } = {};
-  if (typeof args.model === "string" && args.model.length > 0) override.model = args.model;
-  if (typeof args.thinkingLevel === "string" && args.thinkingLevel.length > 0) override.thinkingLevel = args.thinkingLevel;
-  return Object.keys(override).length > 0 ? override : undefined;
-}
-
 // ============================================================
 // 注册
 // ============================================================
@@ -204,25 +184,12 @@ Completion auto-notifies you (a message is injected that wakes your next turn). 
 // ============================================================
 
 const subagentRenderCall: SubagentRenderCallCb = (args, theme, ctx) => {
-  // 预解析 model（同步）：让标题行能显示 model/thinking，不必等 execute。
-  // resolveModel 三层：override → agentConfig.model → 主 agent model（session 缓存）。
-  // 主 agent model 由 ModelConfigService 缓存（session_start 注入，model_select 刷新），
-  // 补偿 renderCall 的 ToolRenderContext 不含 model 的 SDK 限制。
-  // service 未就绪 / 缓存为空 / 解析失败 → 降级不显示 model。
-  const startParam = hasStartParam(args) ? args.startParam : undefined;
-  const agent = extractAgentName(startParam);
-  const override = extractModelOverride(startParam);
-  let resolved: { model: string; thinkingLevel?: string } | undefined;
-  try {
-    const service = getSubagentService();
-    const r = service?.resolveModel(agent, override);
-    if (r) resolved = { model: `${r.model.provider}/${r.model.id}`, thinkingLevel: r.thinkingLevel };
-  } catch (err) {
-    // service 未注册 / modelRegistry 未注入 / 无可用 model → 降级不显示 model（renderCall 不应崩）。
-    void err; // 显式确认忽略：renderCall 降级是设计意图，不阻断渲染
-    console.debug("[subagents] renderCall model resolution failed, degrading:", err);
-  }
-  return renderSubagentCall(args, theme, ctx, resolved);
+  // renderCall 不预解析 model——model 统一由 status 行（execute 后的实时 sync.model）显示。
+  // 旧实现在此同步预解析 model（靠 ModelConfigService 缓存），但 ToolRenderContext 不含
+  // 主 agent 当前 model（SDK 限制），缓存与 execute 的实时 ctxModel 不同步，导致标题行
+  // 和 status 行显示两个不一致的模型名。与其显示可能错的，不如只显示 agent 名，
+  // model 等 execute 后的实时值（status 行）。[问题 2 修复]
+  return renderSubagentCall(args, theme, ctx, undefined);
 };
 
 const subagentRenderResult: SubagentRenderResultCb = (result, options, theme, ctx) =>

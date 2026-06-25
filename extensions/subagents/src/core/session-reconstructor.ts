@@ -24,8 +24,8 @@ import type {
   AgentUsage,
   ExecutionMode,
   ExecutionStatus,
-  InternalToolCall,
   Turn,
+  TurnContentBlock,
 } from "../types.ts";
 import { extractLabelFromArgs } from "./execution-record.ts";
 
@@ -139,7 +139,7 @@ export interface ReconstructedRecord {
 /** turn_end 摘要截断长度（镜像 execution-record.ts TURN_SUMMARY_MAX）。 */
 const TURN_SUMMARY_MAX = 80;
 
-/** 从 turns[] 派生 eventLog（镜像 execution-record.ts getEventLog，但接受最小结构）。 */
+/** 从 turns[] 派生 eventLog（镜像 execution-record.ts getEventLog，从 content 派生）。 */
 function deriveEventLog(
   turns: Turn[],
   lastError: string | undefined,
@@ -147,17 +147,22 @@ function deriveEventLog(
 ): AgentEventLogEntry[] {
   const log: AgentEventLogEntry[] = [];
   for (const turn of turns) {
-    for (const tc of turn.toolCalls) {
-      const label = extractLabelFromArgs(tc.toolName, tc.args);
-      const ts = tc.startedTs;
-      log.push({ type: "tool_start", label, ts, status: "running" });
-      if (tc._status !== "running") {
-        log.push({ type: "tool_end", label, ts, status: tc._status });
+    const turnText = turn.content
+      .filter((b): b is Extract<TurnContentBlock, { type: "text" }> => b.type === "text")
+      .map((b) => b.text).join("");
+    for (const block of turn.content) {
+      if (block.type === "toolCall") {
+        const label = extractLabelFromArgs(block.name, block.arguments);
+        const ts = block.startedTs;
+        log.push({ type: "tool_start", label, ts, status: "running" });
+        if (block._status !== "running") {
+          log.push({ type: "tool_end", label, ts, status: block._status });
+        }
       }
     }
     if (turn.closed) {
-      const summary = turn.text.length > 0
-        ? (turn.text.length > TURN_SUMMARY_MAX ? turn.text.slice(0, TURN_SUMMARY_MAX) : turn.text)
+      const summary = turnText.length > 0
+        ? (turnText.length > TURN_SUMMARY_MAX ? turnText.slice(0, TURN_SUMMARY_MAX) : turnText)
         : "turn";
       log.push({ type: "turn_end", label: summary, ts: turn.closedTs ?? startedAt });
     }
@@ -170,7 +175,7 @@ function deriveEventLog(
 
 /** 空 turn（镜像 execution-record.ts 的 emptyTurn，但本模块独立——避免循环依赖）。 */
 function emptyTurn(): Turn {
-  return { text: "", thinking: "", toolCalls: [], usageDelta: undefined, closed: false };
+  return { content: [], usageDelta: undefined, closed: false };
 }
 
 /** JsonlUsage → AgentUsage（cost 取 cost.total，与 session-runner 扁平化一致）。 */
@@ -215,12 +220,10 @@ function isIdentityData(data: unknown): data is SubagentIdentityData {
  */
 interface PendingToolCall {
   toolCallId: string;
-  toolName: string;
-  args: unknown;
-  /** 所属 Turn（toolResult 回填时推进这个 Turn 的 toolCalls）。 */
+  /** 所属 Turn（toolResult 按 id 回填时更新此 placeholder block 的 _status/result）。 */
   turn: Turn;
-  /** assistant message timestamp（作为 InternalToolCall.startedTs）。 */
-  startedTs: number;
+  /** content 里的 toolCall block 占位（toolResult 到达时原地补全 _status/result）。 */
+  blockPlaceholder: Extract<TurnContentBlock, { type: "toolCall" }>;
 }
 
 // ============================================================
@@ -323,19 +326,29 @@ export function reconstructFromFile(sessionFile: string): ReconstructedRecord | 
       const turn = emptyTurn();
       turns.push(turn);
 
+      // 单源：assistant message.content 直接透传进 turn.content（text/thinking/toolCall 同构）。
+      // toolCall block 带 _status:running 骨架（_status/result 由后续 toolResult 按 id 补全）。
       for (const block of msg.content) {
         if (block.type === "text") {
-          turn.text += block.text;
+          turn.content.push({ type: "text", text: block.text });
         } else if (block.type === "thinking") {
-          turn.thinking += block.thinking;
+          turn.content.push({ type: "thinking", thinking: block.thinking });
         } else if (block.type === "toolCall") {
           pending.push({
             toolCallId: block.id,
-            toolName: block.name,
-            args: block.arguments,
             turn,
-            startedTs: msg.timestamp,
+            blockPlaceholder: {
+              type: "toolCall" as const,
+              id: block.id,
+              name: block.name,
+              arguments: block.arguments,
+              result: undefined,
+              isError: false,
+              _status: "running" as const,
+              startedTs: msg.timestamp,
+            },
           });
+          turn.content.push(pending[pending.length - 1]!.blockPlaceholder);
         }
       }
 
@@ -355,19 +368,14 @@ export function reconstructFromFile(sessionFile: string): ReconstructedRecord | 
         lastError = undefined;
       }
     } else if (msg.role === "toolResult") {
+      // 按 id 找到 content 里对应的 toolCall block，补全 result/_status（原地更新，保持 block 顺序）。
       const idx = pending.findIndex((p) => p.toolCallId === msg.toolCallId);
       if (idx >= 0) {
         const p = pending[idx];
         pending.splice(idx, 1);
-        const tc: InternalToolCall = {
-          toolName: p.toolName,
-          args: p.args,
-          result: { content: msg.content, details: msg.details },
-          isError: msg.isError ?? false,
-          _status: msg.isError ? "failed" : "done",
-          startedTs: p.startedTs,
-        };
-        p.turn.toolCalls.push(tc);
+        p.blockPlaceholder.result = { content: msg.content, details: msg.details };
+        p.blockPlaceholder.isError = msg.isError ?? false;
+        p.blockPlaceholder._status = msg.isError ? "failed" : "done";
       }
       // 未配对（孤儿 toolResult）→ 丢弃。
     }
@@ -383,7 +391,12 @@ export function reconstructFromFile(sessionFile: string): ReconstructedRecord | 
 
   const turnCount = turns.length;
   const resultText = turns
-    .map((t) => t.text)
+    .map((t) =>
+      t.content
+        .filter((b): b is Extract<TurnContentBlock, { type: "text" }> => b.type === "text")
+        .map((b) => b.text)
+        .join(""),
+    )
     .filter((t) => t.length > 0)
     .join("\n\n");
 
