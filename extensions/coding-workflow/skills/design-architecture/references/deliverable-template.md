@@ -8,6 +8,7 @@ verdict: pass
 mode: refactor | greenfield
 upstream: requirements.md
 downstream: issues.md
+backfed_from:   # 被哪些下游阶段反哺过（如 [③, ⑤]），初始为空
 ---
 ```
 

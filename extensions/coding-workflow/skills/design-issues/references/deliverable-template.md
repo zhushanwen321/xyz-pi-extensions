@@ -9,6 +9,7 @@
 verdict: pass
 upstream: system-architecture.md
 downstream: non-functional-design.md
+backfed_from:   # 被哪些下游阶段反哺过（如 [④, ⑤]），初始为空
 ---
 ```
 
