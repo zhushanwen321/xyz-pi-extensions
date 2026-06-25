@@ -416,14 +416,26 @@ describe("getEventLog", () => {
     expect(log.some((e) => e.type === "text" && e.label === "writing output")).toBe(true);
   });
 
-  it("closed turn: no thinking/text entry (历史不重复展示)", () => {
+  it("closed turn: text 不派生（由 turn_end summary 承载），但 thinking 保留（历史推理不丢）", () => {
     const r = makeRecord();
-    updateFromEvent(r, { type: "message_update", content: [textBlock("done")] });
+    updateFromEvent(r, { type: "message_update", content: [thinkingBlock("analyzing"), textBlock("done")] });
     updateFromEvent(r, { type: "turn_end" });
     const log = getEventLog(r);
-    // 闭合 turn 不派生 text 条目（只有 turn_end summary）
+    // text 闭合 turn 不派生（turn_end summary 已承载）
     expect(log.some((e) => e.type === "text")).toBe(false);
+    // thinking 闭合 turn 仍保留（历史推理有价值，不应执行完就刷掉——回归 bug）
+    expect(log.some((e) => e.type === "thinking" && e.label === "analyzing")).toBe(true);
     expect(log.some((e) => e.type === "turn_end")).toBe(true);
+  });
+
+  it("thinking 保留在 terminal 态（done 后不消失）", () => {
+    // 用户报告的 bug：执行过程中有 thinking 流式显示，但执行完（status=done）被刷掉。
+    // thinking 应像 tool 一样作为历史保留，不依赖 running 态。
+    const r = makeRecord({ status: "done" });
+    r.turns[0]!.content = [thinkingBlock("important reasoning")];
+    r.turns[0]!.closed = true;
+    const log = getEventLog(r);
+    expect(log.some((e) => e.type === "thinking" && e.label === "important reasoning")).toBe(true);
   });
 
   it("derives turn_end after turn closes (label from turn text)", () => {

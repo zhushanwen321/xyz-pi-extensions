@@ -413,8 +413,9 @@ export function getEventLog(record: ExecutionRecord): AgentEventLogEntry[] {
   for (let ti = 0; ti < record.turns.length; ti++) {
     const turn = record.turns[ti]!;
     const isLastTurn = ti === record.turns.length - 1;
-    const turnText = turn.content.filter((b): b is Extract<TurnContentBlock, { type: "text" }> => b.type === "text")
-      .map((b) => b.text).join("");
+    const isRunningTurn = isLastTurn && !turn.closed && record.status === "running";
+    // content 顺序遍历：text/thinking/toolCall 同构产出条目（单源——与 tool 一样保留为历史，
+    // 不再只在 running 态显示后刷掉）。text/thinking 取首行摘要避免膨胀（与 turn_end summary 同策略）。
     for (const block of turn.content) {
       if (block.type === "toolCall") {
         const label = extractLabelFromArgs(block.name, block.arguments);
@@ -423,31 +424,29 @@ export function getEventLog(record: ExecutionRecord): AgentEventLogEntry[] {
         if (block._status !== "running") {
           log.push({ type: "tool_end", label, ts, status: block._status });
         }
-      }
-    }
-    // thinking/text 条目：仅最后一个未闭合 turn（running 态的实时进度）派生，
-    // 闭合的 turn 不重复展示历史 thinking/text（避免 eventLog 膨胀；用户在 list/detail
-    // 看完整内容用 result 文本）。这也是 single-source 后 text/thinking 可见性的关键——
-    // 它们和 tool 一样进 eventLog，经节流刷新显示。
-    if (isLastTurn && !turn.closed && record.status === "running") {
-      // 倒序取末尾 block（最新活动）：toolCall running 优先已有 tool 条目，
-      // 这里补 thinking/text（若无 running tool 在末尾）
-      const lastNonTool = [...turn.content].reverse().find((b) => b.type !== "toolCall");
-      if (lastNonTool?.type === "thinking" && lastNonTool.thinking) {
+      } else if (block.type === "thinking" && block.thinking) {
         log.push({
           type: "thinking",
-          label: lastNonTool.thinking.slice(0, ACTIVITY_LABEL_MAX),
-          ts: Date.now(),
+          label: block.thinking.slice(0, ACTIVITY_LABEL_MAX),
+          ts: turn.closedTs ?? Date.now(),
         });
-      } else if (lastNonTool?.type === "text" && lastNonTool.text) {
-        log.push({
-          type: "text",
-          label: lastNonTool.text.slice(0, ACTIVITY_LABEL_MAX),
-          ts: Date.now(),
-        });
+      } else if (block.type === "text" && block.text) {
+        // running 态的最后一个 text block 用完整首行（实时进度）；
+        // 已闭合 turn 的 text 不重复产出（其内容已由 turn_end summary + result 文本承载，
+        // 避免 eventLog 膨胀 + 与 turn_end label 重复）。
+        if (isRunningTurn) {
+          log.push({
+            type: "text",
+            label: block.text.slice(0, ACTIVITY_LABEL_MAX),
+            ts: Date.now(),
+          });
+        }
       }
     }
     if (turn.closed) {
+      const turnText = turn.content
+        .filter((b): b is Extract<TurnContentBlock, { type: "text" }> => b.type === "text")
+        .map((b) => b.text).join("");
       const summary = turnText.length > 0
         ? (turnText.length > TURN_SUMMARY_MAX ? turnText.slice(0, TURN_SUMMARY_MAX) : turnText)
         : "turn";

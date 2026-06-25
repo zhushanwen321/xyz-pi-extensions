@@ -138,6 +138,8 @@ export interface ReconstructedRecord {
 
 /** turn_end 摘要截断长度（镜像 execution-record.ts TURN_SUMMARY_MAX）。 */
 const TURN_SUMMARY_MAX = 80;
+/** thinking/text 活动行 label 截断长度（镜像 execution-record.ts ACTIVITY_LABEL_MAX）。 */
+const ACTIVITY_LABEL_MAX = 60;
 
 /** 从 turns[] 派生 eventLog（镜像 execution-record.ts getEventLog，从 content 派生）。 */
 function deriveEventLog(
@@ -150,6 +152,8 @@ function deriveEventLog(
     const turnText = turn.content
       .filter((b): b is Extract<TurnContentBlock, { type: "text" }> => b.type === "text")
       .map((b) => b.text).join("");
+    // 镜像 getEventLog：thinking 每个 turn 产出（历史推理保留），text 闭合 turn 不产出
+    // （已由 turn_end summary 承载，避免膨胀）。重建的均为 closed turn，无 running 态 text。
     for (const block of turn.content) {
       if (block.type === "toolCall") {
         const label = extractLabelFromArgs(block.name, block.arguments);
@@ -158,6 +162,12 @@ function deriveEventLog(
         if (block._status !== "running") {
           log.push({ type: "tool_end", label, ts, status: block._status });
         }
+      } else if (block.type === "thinking" && block.thinking) {
+        log.push({
+          type: "thinking",
+          label: block.thinking.slice(0, ACTIVITY_LABEL_MAX),
+          ts: turn.closedTs ?? startedAt,
+        });
       }
     }
     if (turn.closed) {
