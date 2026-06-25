@@ -32,9 +32,10 @@ Issue 决策图（根：从 system-architecture 的挑战推导）
 ```
 
 遍历纪律：先走 P0 前沿，方案对比做完再走 P1。迷雾中的 P2/P3 标注 `?` 不强求展开。
+**生成候选 issue 先按 4 轴扫**（见 `references/fog-of-war.md`「拆分维度 checklist」：状态§5/模块§7/边界§8/挑战§10 + 兜底）→ 再标 P 级。**P 级不是拆分维度，先用轴扫再标 P 级**，否则天然不 MECE。
 从 system-architecture.md 的 §5 状态流转 / §7 模块划分 / §8 Context Map / §10 挑战推导 issue。
 按 `references/fog-of-war.md` 构建决策图（不一次性列完）。按 `references/issue-template.md` 写方案对比。
-复杂根本性 issue 用 DESIGN-IT-TWICE（3+ 并行 subagent 发散）。初稿用 `references/deliverable-template.md`。
+复杂根本性 issue 用 DESIGN-IT-TWICE（3+ 并行 subagent 发散）。初稿用 `references/deliverable-template.md`（**含「上游覆盖核验」表——每个②元素必须对应 issue 或标 N/A+理由，这是 Step2 独立重建能 diff 的前提**）。
 
 **Step 1 必问决策点（代码答不了，逐个 ask_user；本阶段 agent 最易自作主张，务必逐条问）：**
 
@@ -46,8 +47,56 @@ Issue 决策图（根：从 system-architecture 的挑战推导）
 
 > 方案对比的技术分析（改动/优点/缺点）= agent 产出，作为用户决策的参考材料。
 
-**Step 2（追踪）— 派 fresh-context subagent，按 4 视角追踪：**
-issue 覆盖性（每个挑战有对应 issue？）/ 方案完整性（每个 P0/P1 有 ≥2 方案+取舍？）/ 优先级一致性（P 级与 blocked_by 一致？）/ 前沿清晰度（迷雾该展开吗？）。
+**Step 2（追踪）— 派 fresh-context subagent，对抗主 agent 同源盲区：**
+
+主 agent 写 issues.md（含覆盖核验表）时带着某个盲区——它漏掉的元素，自己填表也填不进，表看起来 100% 覆盖实则是自证。Step2 用 fresh context **他证**：subagent 从 ② 独立重建覆盖表，与主 agent 的表 diff，差异即真 gap。
+
+**派两个异质角色（认知帧不同，不是同名分身）：**
+
+| 角色 | 认知帧 | 输入 | 对抗什么 |
+|------|--------|------|----------|
+| **A 覆盖重建者**（必跑）| 规范帧（top-down：② 里每个元素**该**对应什么 issue）| **禁读 issues.md（重建阶段）**，只读 ② + CONTEXT.md | L1 注意力盲区 + 同源自证 |
+| **B 异常猎手**（条件触发）| 失败帧（bottom-up：每个元素**什么会坏、什么没人处理**）| 读 ② + issues.md | L2 认知同构盲区（类别选择性）|
+
+**角色 B 触发条件**（满足任一即开，否则只跑 A）：
+- ② §5 含状态机 / §8 有外部系统边界（跨进程/跨团队）/ §10 含并发·时序·一致性挑战。
+- 无状态单一模块的小改动 → B 不触发，A 足矣。
+
+**角色 A 关键约束：重建覆盖表 T_recon 之前绝不能 read issues.md**——读了就被锚定，回到自证。流程：先从 ② 按 4 轴（与主 agent 同一套，见 fog-of-war.md）独立枚举可拆元素建 T_recon → **重建完才读 issues.md** → 两表逐行 diff。
+
+**gap = 三态 diff（MECE，覆盖问题的完整分类）：**
+- **MISSING（漏项）**：T_recon 有、issues.md 无对应 issue（②有元素没被拆）
+- **PHANTOM（脱锚）**：issues.md 有 issue、② 查不到根（假冒/越界）
+- **MISMATCH（虚覆盖）**：标了对应但内容没真解决（如只写了正常路径，异常分支空缺）
+
+**角色 A Task prompt：**
+
+```
+你是独立覆盖重建 subagent。上下文与主 agent 隔离——**重建阶段禁止读 issues.md**。
+1. read system-architecture.md（②，真相源）+ 项目根 CONTEXT.md
+2. 按拆分维度 4 轴（状态§5/模块§7/边界§8/挑战§10）从 ② 逐条枚举每个可拆元素，
+   对每个判断：需不需要 issue、是什么 issue。建成覆盖表 T_recon。
+   （4 轴之外扫 ② 其余章节，凡可拆元素照同样规则处理）
+3. **重建完成后**才 read issues.md 的「上游覆盖核验」表。逐行 diff T_recon vs 主 agent 的表。
+   产出三类 gap：MISSING（②有issue无）/ PHANTOM（issue有②无根）/ MISMATCH（标覆盖但内容未解决）。
+4. 每条 gap 标类型（F/K/D）。写入 {topic_dir}/changes/tracing-round-{N}.md。
+```
+
+**角色 B Task prompt（条件触发时追加）：**
+
+```
+你是独立异常猎手 subagent。上下文与主 agent 隔离。假设 issues.md 是错且不全的。
+1. read system-architecture.md（②）+ issues.md
+2. 戴失败帧，按 hunting 清单对每个 issue/元素找未覆盖面：
+   异常路径(error/fallback/超时/重试/降级) / 边界值(空/单元素/极大极小) /
+   并发时序(race/幂等/乱序) / 状态机死角(不可达/缺转移/卡死) /
+   删除测试(对每个 issue 问「不做它会怎样」——抓伪 issue)
+3. 产出「未处理清单」，每条标 F/K/D。追加到 tracing-round-{N}.md。
+```
+
+**为什么 A、B 是真异质（非换名分身）**：A 从 ② 往下推问「该有什么」抓**漏项**；B 从失败模式往上戳问「什么会坏」抓**虚覆盖/伪 issue**。同一元素，A 抓「完全没拆」，B 抓「拆了但没拆干净」。不重叠。
+
+**追踪原 4 视角的新归属**：方案完整性 / 优先级一致性 / 前沿清晰度 由角色 A 在 diff 时顺带核验（读 issues.md 后）；原「覆盖性」视角已升级为 A 的独立重建 diff（更强）。
 
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
@@ -68,7 +117,8 @@ issue 覆盖性（每个挑战有对应 issue？）/ 方案完整性（每个 P0
 
 - [ ] issues.md 存在，frontmatter 含 `verdict: pass`
 - [ ] issues.html 存在，决策 DAG 图正确渲染（状态色标）
-- [ ] `changes/tracing-round-{N}.md` 存在
+- [ ] **「上游覆盖核验」表存在，每行状态为 ✅ 或 N/A（无 ❌ 待补、无空行）**
+- [ ] `changes/tracing-round-{N}.md` 存在，**含角色 A 独立重建 diff（MISSING/PHANTOM/MISMATCH）**
 - [ ] `changes/review-issues.md` 存在且 verdict: APPROVED
 - [ ] 所有 P0/P1 issue 有 ≥2 方案对比+取舍决策（按 issue-template.md）
 - [ ] P 级与 blocked_by 一致（P0 不依赖 P2/P3）；取舍体现「长期架构优先」
