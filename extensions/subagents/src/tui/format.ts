@@ -291,6 +291,7 @@ export function formatToolEventPairs(
   theme: ThemeLike,
 ): string[] {
   const lines: string[] = [];
+  const PAIR_SIZE = 2; // tool_start + tool_end 配对占 2 个 entry
   let i = 0;
   while (i < entries.length) {
     const entry = entries[i]!;
@@ -299,7 +300,7 @@ export function formatToolEventPairs(
       if (next?.type === "tool_end" && next.label === entry.label) {
         // 已完成:合并成 1 行(用 tool_end 的状态),跳过 start 行
         lines.push(formatEventLine(next, theme));
-        i += 2;
+        i += PAIR_SIZE;
         continue;
       }
       // running:只有 start,无 end —— 单独 1 行无尾标
