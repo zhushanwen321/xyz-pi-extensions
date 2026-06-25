@@ -22,6 +22,8 @@ description: >-
 
 **Step 1（交互+初稿）— Grilling 遍历 issue 决策树：**
 
+> **[状态追踪]** 开始时调 `design_status(action: start_phase, phase: issues)` 标记阶段开始（会校验 architecture 已 completed）。
+
 ```
 Issue 决策图（根：从 system-architecture 的挑战推导）
 ├── P0 阻塞项（前沿，必须先做）
@@ -135,6 +137,8 @@ Issue 决策图（根：从 system-architecture 的挑战推导）
 ## 下游衔接
 
 审查 APPROVED 后向用户交接（按 loop-skeleton.md Step 6 格式）：
+
+> **[状态追踪]** 交接前调 `design_status(action: complete_phase, phase: issues)` 收尾——自动校验 issues.md + verdict:pass + review APPROVED，过了才标 completed。
 
 ```
 ✅ ③Issue 拆分 已完成并通过独立审查。

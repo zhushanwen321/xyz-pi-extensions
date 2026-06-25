@@ -44,6 +44,8 @@ description: >-
 
 **Step 1（交互+建模初稿）— Grilling 遍历架构决策树：**
 
+> **[状态追踪]** 开始时调 `design_status(action: start_phase, phase: architecture)` 标记阶段开始（会校验 clarity 已 completed）。
+
 ```
 系统设计立场（根：核心计算是什么？）
 ├── 分层决策 → DDD 4 层 or 三层？（看核心计算是业务规则还是技术编排）
@@ -146,6 +148,8 @@ Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 ## 下游衔接
 
 审查 APPROVED 后向用户交接（按 loop-skeleton.md Step 6 格式）：
+
+> **[状态追踪]** 交接前调 `design_status(action: complete_phase, phase: architecture)` 收尾——自动校验 system-architecture.md + verdict:pass + review APPROVED，过了才标 completed。
 
 ```
 ✅ ②系统设计概要 已完成并通过独立审查。

@@ -24,6 +24,8 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 
 **Step 1（交互+初稿）— Grilling 遍历副作用分析树：**
 
+> **[状态追踪]** 开始时调 `design_status(action: start_phase, phase: nfr)` 标记阶段开始（会校验 issues 已 completed）。
+
 ```
 副作用分析（根：每个 issue 的已决策方案）
 ├── Issue #1 → 方案 A
@@ -107,6 +109,8 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 ## 下游衔接
 
 审查 APPROVED 后向用户交接（按 loop-skeleton.md Step 6 格式）：
+
+> **[状态追踪]** 交接前调 `design_status(action: complete_phase, phase: nfr)` 收尾——自动校验 non-functional-design.md + verdict:pass + review APPROVED，过了才标 completed。
 
 ```
 ✅ ④非功能性设计 已完成并通过独立审查。

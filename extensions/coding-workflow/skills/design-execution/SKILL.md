@@ -26,6 +26,8 @@ description: >-
 
 **Step 1（交互+初稿）— Grilling 遍历 Wave 依赖树：**
 
+> **[状态追踪]** 开始时调 `design_status(action: start_phase, phase: execution)` 标记阶段开始（会校验 code-arch 已 completed）。
+
 > **提问从宽：** Wave 编排、依赖推导、串并行多为技术推导，agent 自决为主。仅当出现"是否需要 Prefactor Wave""哪些 P3 真延后""并行组是否真不冲突"等只有用户能判断的点时才 ask_user。
 
 ```
@@ -96,6 +98,8 @@ Wave 编排（根：从时序图推导）
 ## 下游衔接
 
 **设计工作流全部完成并通过独立审查 + 一致性终检。** 审查 APPROVED 且一致性终检 CONSISTENT 后向用户交接：
+
+> **[状态追踪]** 交接前调 `design_status(action: complete_phase, phase: execution)` 收尾——自动校验 execution-plan.md + verdict:pass + review APPROVED + consistency CONSISTENT，过了才标 completed（全流程完成）。
 
 ```
 ✅ ⑥执行计划 已完成并通过独立审查 + 全文档一致性终检。

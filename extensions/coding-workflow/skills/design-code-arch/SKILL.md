@@ -26,6 +26,8 @@ description: >-
 
 **Step 1（交互+初稿）— Grilling 遍历代码契约树：**
 
+> **[状态追踪]** 开始时调 `design_status(action: start_phase, phase: code-arch)` 标记阶段开始（会校验 nfr 已 completed）。
+
 ```
 代码架构（根：工程目录 + 契约 + 时序）
 ├── 工程目录 → 从 system-architecture §7 模块划分推导（每目录=一变化轴）
@@ -139,6 +141,8 @@ description: >-
 ## 下游衔接
 
 **Step 7 骨架验证通过后**向用户交接（按 loop-skeleton.md Step 6 格式）：
+
+> **[状态追踪]** 交接前调 `design_status(action: complete_phase, phase: code-arch)` 收尾——自动校验 code-architecture.md + verdict:pass + review APPROVED + 骨架 gate，过了才标 completed。
 
 ```
 ✅ ⑤代码架构设计 已完成并通过独立审查 + 骨架验证。
