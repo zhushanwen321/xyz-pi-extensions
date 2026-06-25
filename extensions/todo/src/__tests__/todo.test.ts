@@ -24,8 +24,8 @@ describe("Todo data model", () => {
 		expect(migrated.id).toBe(1);
 	});
 
-	it("should include exactly three valid statuses", () => {
-		expect(VALID_STATUSES).toEqual(["pending", "in_progress", "completed"]);
+	it("should include exactly four valid statuses", () => {
+		expect(VALID_STATUSES).toEqual(["pending", "in_progress", "completed", "cancelled"]);
 	});
 
 	it("should migrate verifying → in_progress", () => {
@@ -50,6 +50,18 @@ describe("Todo data model", () => {
 		const veryOldTodo = { id: 4, text: "ancient2", done: false } as unknown as Todo;
 		const migrated = migrateTodo(veryOldTodo);
 		expect(migrated.status).toBe("pending");
+	});
+
+	it("should preserve isVerification flag (FR-6)", () => {
+		const todo = { id: 1, text: "run tests", status: "pending", isVerification: true } as unknown as Todo;
+		const migrated = migrateTodo(todo);
+		expect(migrated.isVerification).toBe(true);
+	});
+
+	it("should preserve cancelled status (FR-1 four-state)", () => {
+		const todo = { id: 1, text: "dropped", status: "cancelled" } as unknown as Todo;
+		const migrated = migrateTodo(todo);
+		expect(migrated.status).toBe("cancelled");
 	});
 });
 
@@ -89,6 +101,25 @@ describe("todo add", () => {
 		const result = addTodos([], 1, ["  new task  "]);
 		expect(result.error).toBeUndefined();
 		expect(result.newTodos[0].text).toBe("new task");
+	});
+
+	it("should mark todos as verification when isVerification=true (FR-6)", () => {
+		const result = addTodos([], 1, ["run tests", "typecheck"], true);
+		expect(result.error).toBeUndefined();
+		expect(result.newTodos[0].isVerification).toBe(true);
+		expect(result.newTodos[1].isVerification).toBe(true);
+	});
+
+	it("should not set isVerification when omitted", () => {
+		const result = addTodos([], 1, ["regular task"]);
+		expect(result.error).toBeUndefined();
+		expect(result.newTodos[0].isVerification).toBeUndefined();
+	});
+
+	it("should not set isVerification when isVerification=false", () => {
+		const result = addTodos([], 1, ["regular task"], false);
+		expect(result.error).toBeUndefined();
+		expect(result.newTodos[0].isVerification).toBeUndefined();
 	});
 });
 
@@ -194,6 +225,11 @@ describe("formatTodoLine", () => {
 	it("should format completed todo", () => {
 		const todo: Todo = { id: 3, text: "task C", status: "completed" };
 		expect(formatTodoLine(todo)).toBe("[x] #3: task C");
+	});
+
+	it("should format cancelled todo", () => {
+		const todo: Todo = { id: 4, text: "task D", status: "cancelled" };
+		expect(formatTodoLine(todo)).toBe("[-] #4: task D");
 	});
 });
 

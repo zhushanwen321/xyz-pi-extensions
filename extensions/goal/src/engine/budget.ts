@@ -44,12 +44,14 @@ export interface BudgetCheckResult {
 }
 
 export interface ProgressInput {
-	/** 已完成项数（status === "completed"） */
+	/** 已完成项数（status === "completed"，FR-1 cancelled 非验证项也计为已解决） */
 	completedCount: number;
 	/** 总项数 */
 	totalCount: number;
 	/** 未完成项 id（用于 followUp 提示，#8 用） */
 	incompleteIds: number[];
+	/** 是否有未完成的验证任务（isVerification=true 且未 completed，FR-6 completion audit 用） */
+	hasVerificationPending?: boolean;
 }
 
 export interface ProgressCheck {

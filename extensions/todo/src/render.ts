@@ -60,9 +60,12 @@ function renderWidgetItem(t: Todo, th: Theme): string {
 			? th.fg("success", "\u2713")
 			: t.status === "in_progress"
 				? th.fg("warning", "\u25cf")
-				: th.fg("dim", "\u25cb");
+				: t.status === "cancelled"
+					? th.fg("error", "\u2715")
+					: th.fg("dim", "\u25cb");
 	const id = th.fg("accent", `#${t.id}`);
-	const text = t.status === "completed" ? th.fg("dim", t.text) : th.fg("text", t.text);
+	const text =
+		t.status === "completed" || t.status === "cancelled" ? th.fg("dim", t.text) : th.fg("text", t.text);
 	return `${mark} ${id} ${text}`;
 }
 
@@ -148,9 +151,11 @@ function buildTodoListText(todoList: Todo[], options: { expanded: boolean }, the
 				? theme.fg("success", "\u2713")
 				: status === "in_progress"
 					? theme.fg("warning", "\u25cf")
-					: theme.fg("dim", "\u25cb");
+					: status === "cancelled"
+						? theme.fg("error", "\u2715")
+						: theme.fg("dim", "\u25cb");
 		const itemText =
-			status === "completed" ? theme.fg("dim", t.text) : theme.fg("muted", t.text);
+			status === "completed" || status === "cancelled" ? theme.fg("dim", t.text) : theme.fg("muted", t.text);
 		listText += `\n${mark} ${theme.fg("accent", `#${t.id}`)} ${itemText}`;
 	}
 	if (!options.expanded && todoList.length > MAX_COLLAPSED_ITEMS) {

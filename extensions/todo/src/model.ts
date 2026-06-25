@@ -1,6 +1,7 @@
 /**
  * Todo 数据模型 — 纯函数，不依赖 Pi 运行时。
- * 三态: pending → in_progress → completed
+ * 四态: pending → in_progress → completed；任一状态 → cancelled
+ * （cancelled 不可恢复；isVerification 标记验证任务，FR-6 completion audit 用）
  */
 
 // ── 数据模型 ─────────────────────────────────────────
@@ -8,7 +9,9 @@
 export interface Todo {
 	id: number;
 	text: string;
-	status: "pending" | "in_progress" | "completed";
+	status: "pending" | "in_progress" | "completed" | "cancelled";
+	/** 验证任务标记（FR-6 completion audit）。验证任务必须 completed，不可 cancelled。 */
+	isVerification?: boolean;
 }
 
 export interface TodoDetails {
@@ -26,7 +29,7 @@ export interface TodoDetails {
 	};
 }
 
-export const VALID_STATUSES = ["pending", "in_progress", "completed"] as const;
+export const VALID_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
 
 export type ValidStatus = (typeof VALID_STATUSES)[number];
 
@@ -57,6 +60,8 @@ export function migrateTodo(raw: Todo): Todo {
 		id: record.id as number,
 		text: record.text as string,
 		status,
+		// FR-6: 保留 isVerification 标记（可选字段，旧数据可能缺失）
+		isVerification: record.isVerification === true ? true : undefined,
 	};
 }
 
@@ -92,6 +97,7 @@ export function addTodos(
 	currentTodos: Todo[],
 	currentNextId: number,
 	texts: string[],
+	isVerification?: boolean,
 ): AddResult {
 	if (!texts || texts.length === 0) {
 		return {
@@ -120,6 +126,8 @@ export function addTodos(
 			id: nextId++,
 			text: trimmed[i],
 			status: "pending" as const,
+			// FR-6: isVerification 标记验证任务（可选，仅 add 时可设）
+			isVerification: isVerification === true ? true : undefined,
 		});
 	}
 	const endId = nextId - 1;
@@ -198,6 +206,8 @@ export function formatTodoLine(t: Todo): string {
 			? "x"
 			: t.status === "in_progress"
 				? "~"
-				: " ";
+				: t.status === "cancelled"
+					? "-"
+					: " ";
 	return `[${mark}] #${t.id}: ${t.text}`;
 }
