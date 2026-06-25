@@ -12,6 +12,7 @@
  *
  * 注：staleness reminder 暂时禁用（原基于 task/subtask，task 已移除）。
  * #6 会基于 lastUpdatedTurn 重做 goal 级 staleness 检测。
+ * FR-7: contextInjectionPrompt 注入时运行时检测 pi.__planStart，plan 不可用时不建议 plan mode。
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -51,10 +52,14 @@ export async function handleBeforeAgentStart(
 	if (ctxResult) return ctxResult;
 
 	// 正常 context injection
+	// FR-7: 运行时检测 plan extension 可用性（typeof pi.__planStart === "function"），
+	// 决定 contextInjectionPrompt 是否注入 plan mode 建议段落。
+	const planAvailable =
+		typeof (pi as unknown as { __planStart?: unknown }).__planStart === "function";
 	return {
 		message: {
 			customType: "goal-context",
-			content: contextInjectionPrompt(session.state, session.state.timeUsedSeconds),
+			content: contextInjectionPrompt(session.state, session.state.timeUsedSeconds, planAvailable),
 			display: false,
 		},
 	};

@@ -138,6 +138,7 @@ export function continuationPrompt(state: GoalRuntimeState, timeUsedSeconds: num
 		`- Do not redefine success around work already done; preserve original scope\n` +
 		`- Uncertain or indirect evidence means not completed — keep working\n` +
 		`- All todos must be completed (including verification todos) before reporting completion\n` +
+		`- If you used plan mode, verify each plan.md step was executed before reporting completion\n` +
 		`Do not mark completed due to budget exhaustion. Do not report blocked due to difficulty.\n` +
 		`\n` +
 		`Fidelity:\n` +
@@ -206,12 +207,22 @@ export function objectiveUpdatedPrompt(
 
 // ── Context Injection Prompt (before_agent_start) ─────
 
+/**
+ * contextInjectionPrompt（before_agent_start 注入 LLM context）。
+ *
+ * @param planAvailable plan extension 是否可用（typeof pi.__planStart === "function"）。
+ *   true 时注入 plan mode 建议段落（FR-7 LLM 自主判断复杂度）；false 时 omit，避免建议不存在的工具。
+ */
 export function contextInjectionPrompt(
 	state: GoalRuntimeState,
 	timeUsedSeconds: number,
+	planAvailable = false,
 ): string {
 	const objective = escapeXmlText(state.objective);
 	const budgetInfo = formatBudget(state, timeUsedSeconds, "percent");
+	const planSection = planAvailable
+		? `\nComplex tasks: If the objective is complex (multi-step, unclear architecture), consider using plan mode (/plan or pi.__planStart) to design before executing. Plan produces a structured plan that guides execution.\n`
+		: "";
 
 	return (
 		`<goal_context>\n` +
@@ -230,8 +241,7 @@ export function contextInjectionPrompt(
 		`- Each concrete step becomes a todo item\n` +
 		`- Include verification todos (e.g., 'run tests', 'typecheck') with isVerification intent\n` +
 		`- Track progress by updating todo status as you complete items\n` +
-		`\n` +
-		`Complex tasks: If the objective is complex (multi-step, unclear architecture), consider using plan mode (/plan or pi.__planStart) to design before executing. Plan produces a structured plan that guides execution.\n` +
+		planSection +
 		`\n` +
 		`Fidelity: Optimize for movement toward the requested end state, not the easiest passing change. Do not substitute a narrower or safer solution because it is easier to verify.\n` +
 		`Audit: Verify each requirement against actual current state. Intent and partial progress are not evidence. Do not claim completion due to budget exhaustion.\n` +

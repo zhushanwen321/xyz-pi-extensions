@@ -149,6 +149,12 @@ describe("continuationPrompt", () => {
 		expect(out).toContain("All todos must be completed");
 		expect(out).toContain("verification todos");
 	});
+
+	it("含 plan audit 软提醒（FR-7/D27 prompt 驱动）", () => {
+		const state = makeState();
+		const out = continuationPrompt(state, 0);
+		expect(out).toContain("plan.md step was executed");
+	});
 });
 
 // ── budgetLimitPrompt ────────────────────────────────
@@ -220,5 +226,20 @@ describe("contextInjectionPrompt", () => {
 		expect(out).not.toContain("goal_manager");
 		expect(out).not.toContain("create_tasks");
 		expect(out).not.toContain("add_subtasks");
+	});
+
+	it("planAvailable=false（默认）→ 不建议 plan mode（避免建议不存在的工具，FR-7）", () => {
+		const state = makeState();
+		const out = contextInjectionPrompt(state, 0, false);
+		expect(out).not.toContain("plan mode");
+		expect(out).not.toContain("__planStart");
+	});
+
+	it("planAvailable=true → 注入 plan mode 建议段落（FR-7 LLM 自主判断复杂度）", () => {
+		const state = makeState();
+		const out = contextInjectionPrompt(state, 0, true);
+		expect(out).toContain("plan mode");
+		expect(out).toContain("__planStart");
+		expect(out).toContain("Complex tasks");
 	});
 });
