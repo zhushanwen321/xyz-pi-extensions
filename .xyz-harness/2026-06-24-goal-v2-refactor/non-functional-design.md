@@ -2,6 +2,7 @@
 verdict: pass
 upstream: issues.md
 downstream: code-architecture.md
+backfed_from: []
 ---
 
 # 非功能性设计 — Goal V2 Refactor
@@ -31,7 +32,7 @@ downstream: code-architecture.md
 | #11 | A | — | — | — | — | — | ⚠️ | — |
 | #12 | A | — | — | — | — | — | — | — |
 
-图例：✅ 无风险 / ⚠️ 有风险已缓解 / ❌ 不可接受需回退 / — 不适用
+图例：✅ 无风险 / ⚠️ 有风险已缓解 / — 不适用（本设计无"不可接受需回退"项，见下方残余风险登记）
 
 **维度 N/A 的统一理由**：
 - **安全**：全 N/A。Extension 运行在 Pi 进程内，无认证模型、无用户输入注入面（tool 参数由 Pi schema 校验，command 参数由 Pi 解析），无越权场景（单用户本地工具）
@@ -142,7 +143,9 @@ JS 单线程保证这些 handler 串行执行（同一时刻只有一个 handler
 
 ---
 
-### Issue #7: todo 跨扩展 API + ProgressInput — 方案 A
+### Issue #7: todo 跨扩展 API + ProgressInput — 方案 A — 【全解耦后已废弃】
+
+> **全解耦后状态**：本节描述的 todo 跨扩展 API 已整体废弃（根因：pi 框架给每个 extension 独立 api 实例，goal 读 `pi.__todoGetList` 跨 ext 失效）。goal 不再依赖 todo——无降级、无前置硬检查。以下内容保留作为决策历史。
 
 #### 性能影响
 **预期负载**: `pi.__todoGetList()` 调用频率 — 每次 `before_agent_start`（context 注入）+ `goal_control.complete`（检查）。低频（每 turn 1 次），**无性能压力**
@@ -150,12 +153,9 @@ JS 单线程保证这些 handler 串行执行（同一时刻只有一个 handler
 **残余风险**: 无
 
 #### 稳定性影响
-**故障场景**: **关键** — todo extension 未安装或未暴露 `__todoGetList`。代码取证：当前 todo extension **未导出** `__todoGetList`（grep 零命中），#7 要求 todo 包新增此导出（属 todo extension 的代码改动 + 版本 bump）
-**降级方案**: `if (typeof pi.__todoGetList !== "function") return undefined`，goal 降级运行：
-- contextInjectionPrompt 不注入进度段落
-- budget.checkProgress(undefined) 跳过 progress 检查（只做 token/time budget）
-- goal_control.complete 无法验证 todo 完成 → 提示「todo 未安装，无法自动验证完成，请手动确认」
-**残余风险**: 无（降级路径完整）
+**故障场景**: ~~**关键** — todo extension 未安装或未暴露 `__todoGetList`。代码取证：当前 todo extension **未导出** `__todoGetList`（grep 零命中），#7 要求 todo 包新增此导出（属 todo extension 的代码改动 + 版本 bump）~~ **全解耦后此故障场景消失**：goal 不再读 todo，`__todoGetList` 已删除。
+**降级方案**: ~~`if (typeof pi.__todoGetList !== "function") return undefined`，goal 降级运行（AC-4.4）~~ **全解耦后无降级概念**：goal 与 todo 完全独立，todo 缺失不影响 goal 任何能力。
+**残余风险**: 无（全解耦后 goal 不依赖 todo）
 
 ---
 
@@ -219,6 +219,35 @@ JS 单线程保证这些 handler 串行执行（同一时刻只有一个 handler
 
 ---
 
+## 缓解项回灌登记（Mitigation Rollback）
+
+> 每条缓解方案不能只留在本文档——必须落地为下游可执行项。未回灌的缓解 = 设计期发现风险却不修。
+> 「验收方式」列决定风险是否进⑤test-matrix 成为代码测试项。
+
+| 缓解项 | 来源 Issue# | 维度 | 回灌去向 | 落地为 | 验收方式 | 状态 |
+|--------|------------|------|---------|--------|---------|------|
+| deserializeState 容忍旧字段（tasks/stallCount/maxTurns/maxStallTurns，忽略不 throw） | #1, #6 | 数据 | ⑤骨架 | GoalRuntimeState/BudgetConfig 类型 + deserializeState 实现 | 代码测试（NFR-AC-1，UC-3 崩溃重启路径） | 待落 |
+| contextInjectionPrompt 不再注入 goal_manager 指令 | #1, #10 | 兼容性 | ⑤契约 | prompts.ts: contextInjectionPrompt 内容 | 代码测试（NFR-AC-2，UC-1） | 待落 |
+| VALID_TRANSITIONS 枚举全合法转换（含 active→{cancelled,complete,blocked,budget_limited,time_limited,paused}） | #2 | 兼容性 | ⑤骨架 | VALID_TRANSITIONS 常量 | 骨架约束（枚举存在性 + tsc） | 待落 |
+| goal_control.complete 的 evidence 必填校验 | #3 | 兼容性 | ⑤契约 | goal_control tool schema | 代码测试（NFR-AC-3，UC-4） | 待落 |
+| event handler 不持有过期 state 引用（每次从闭包读最新值） | #4 | 并发 | ⑤骨架 | event-adapter.ts 拆分实现 | 骨架约束（闭包读取模式） | 待落 |
+| budget 终态检查在 persistAndUpdate（事件路径 persist 函数）内发出 | #5 | 数据/可观测 | ⑤时序图 | budget 检查挂载点时序图 | 代码测试（NFR-AC-4，UC-3 单一检查点） | 待落 |
+| persist 函数转终态时同步 notify + updateWidget | #5, #8 | 可观测 | ⑤契约 | persistAndUpdate: notify + updateWidget 调用 | 代码测试（NFR-AC-5，UC-3） | 待落 |
+| ~~__todoGetList 缺失降级（context 注入照常 / checkProgress 跳过 progress / complete 前置硬拒绝）~~ | ~~#7, #10~~ | ~~稳定性/兼容性~~ | ~~⑤契约~~ | **全解耦后已移除**：goal 不读 todo，无降级路径 | ~~代码测试（NFR-AC-6，AC-4.4）~~ | ~~待落~~ |
+| __planStart 缺失降级（context 不含 plan 段落，goal 独立运行） | #9 | 稳定性 | ⑤契约 | contextInjectionPrompt: typeof pi.__planStart 守卫 | 代码测试（NFR-AC-7，UC-1.3） | 待落 |
+| __goalInit 忽略 tasks 参数（向后兼容不 throw） | #9 | 兼容性 | ⑤契约 | __goalInit: tasks 参数忽略 | 代码测试（NFR-AC-8，UC-1） | 待落 |
+| 迁移 coding-workflow/plan 调用方（不传 tasks）+ 推动改 import type | #9 | 兼容性 | ③新issue | issues.md 已登记（见下方回灌到③的新 issue） | 代码测试（NFR-AC-9） | 待落 |
+| 同步清理 GoalInitBudget.maxTurns（index.ts:333）+ 调用方 inline alias | #6 连带 | 兼容性 | ⑤骨架 | index.ts: GoalInitBudget 类型 | 骨架约束（类型移除 + tsc） | 待落 |
+| /goal set 非终态拒绝 + 错误提示「先 resume 或 clear」 | #11 | 兼容性 | ⑤契约 | commands.ts: handleSet 守卫 | 代码测试（NFR-AC-10，UC-6.2） | 待落 |
+| stalenessReminderPrompt 保留（基于 lastUpdatedTurn） | #6, #8 | 可观测 | ⑤契约 | agent_end handler: staleness 提示注入 | 骨架约束（提示存在性） | 待落 |
+| 70%/90% budget 预警 + 90% steering prompt + allTasksDone followUp 对用户可见 | #8 | 可观测 | ⑤契约 | agent_end handler: notify + widget | 代码测试（NFR-AC-11，UC-3.2） | 待落 |
+
+**回灌到 ③的新 issue（已在 issues.md 出现，双向可查）：**
+
+- **issues.md #9 的"三方调用方迁移"子项**（触发来源：本节 #9 兼容性缓解）— coding-workflow Phase 2（tool-handlers.ts:510-518，5 项硬编码 taskList）+ Phase 3（:530，buildDevGoalTasks）+ plan（compact.ts:90）需改为不传 tasks，改为 plan complete 后 prompt 驱动 agent 建 todo；推动 inline alias → import type。**状态：已登记于 issues.md #9「缓解」**。
+
+> **本扩展无安全类风险（全 N/A，见运行时上下文），故无"输入参数化防注入"等安全缓解项。**
+
 ## 残余风险登记
 
 | 风险 | 影响 | 接受理由 | 监控方式 |
@@ -233,3 +262,21 @@ JS 单线程保证这些 handler 串行执行（同一时刻只有一个 handler
 无。本阶段副作用均为确定性问题，无需 prototype 验证。
 
 关于 budget 单一检查点时序：代码取证已确认事件路径走 `persistAndUpdate`（非 service.persistState）。Pi 注册 6 个事件（before_agent_start/agent_start/turn_end/message_end/agent_end/session_start），budget 检查挂在事件路径的 persist 函数内，handler 修改 state 后调 persist 即触发检查，时序正确。
+
+## NFR-AC 清单（代码测试类缓解的验收断言）
+
+> 归属 UC 对齐 requirements.md。这些 NFR-AC 进⑤test-matrix「NFR 风险→用例映射表」，与功能 AC 同等进入验收清单。骨架约束类缓解（VALID_TRANSITIONS 枚举、闭包读取模式、staleness 提示存在性、maxTurns 类型移除）由⑤骨架 tsc gate 验证，不在此列。
+
+| NFR-AC | 归属 UC | 断言摘要 |
+|--------|---------|---------|
+| NFR-AC-1 | UC-3（崩溃重启，AC-2.3/AC-5.4 对称） | 反序列化含旧 entry（tasks/stallCount/maxTurns/maxStallTurns）时不 throw，静默忽略，state 正常重建 |
+| NFR-AC-2 | UC-1 | contextInjectionPrompt 不含 goal_manager 相关指令（grep 零命中 create_tasks 等旧 action 名） |
+| NFR-AC-3 | UC-4（AC-4.2） | goal_control.complete 缺 evidence → 拒绝完成并提示「需提交完成证据」 |
+| NFR-AC-4 | UC-3（AC-3.1 单一检查点） | budget 耗尽时由 persistAndUpdate 内的检查转入终态，不存在第二个检查点路径漏触发 |
+| NFR-AC-5 | UC-3（AC-3.2） | persist 转终态时同步触发 notify（UiPort）+ updateWidget，用户能收到终止原因通知 |
+| ~~NFR-AC-6~~ | ~~UC-4（AC-4.4 降级）~~ | **全解耦后已移除**：goal 不读 todo，无"__todoGetList undefined 降级"场景。todo 缺失对 goal 无影响。 |
+| NFR-AC-7 | UC-1（AC-1.3 边界） | 全解耦后：goal 恒定建议 plan mode（不再探测 pi.__planStart）；goal 可独立启动/续跑 |
+| NFR-AC-8 | UC-1 | __goalInit 收到 tasks 参数时忽略（不 throw，不创建 task），goal 正常初始化 |
+| NFR-AC-9 | UC-1 | coding-workflow/plan 迁移后调用 __goalInit 不传 tasks（grep 验证 tool-handlers.ts/compact.ts 无 taskList 传参） |
+| NFR-AC-10 | UC-6（AC-6.2） | 存在非终态 goal 时 /goal set 被拒绝，错误提示含「先 resume 或 clear」 |
+| NFR-AC-11 | UC-3（AC-3.2 替代流程预警） | token 到 70%/90% 时发出预警通知；90% 注入 steering prompt；allTasksDone 时注入 followUp |

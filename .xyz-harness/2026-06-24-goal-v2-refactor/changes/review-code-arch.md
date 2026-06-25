@@ -1,10 +1,16 @@
 ---
-verdict: approved
+verdict: APPROVED
+machine_check: PASS
 mode: review
-upstream: code-architecture.md, code-architecture.html, issues.md, spec.md, changes/tracing-code-arch-round-1.md
+upstream: code-architecture.md, code-architecture.html, issues.md, requirements.md, non-functional-design.md, changes/tracing-code-arch-round-1.md
 round: 2
 reviewer: independent
 dimensions: [internal-consistency, upstream-alignment, executability, completeness, visualization-quality]
+note: >
+  2026-06-25 schema 复审 + test-matrix 补全 + Step 7 骨架验证：
+  frontmatter verdict 大写化 + 加 machine_check 字段 + upstream spec.md→requirements.md（①阶段重构后真相源）。
+  补全 MANDATORY「测试矩阵」§6（来源 A 27 条 + 来源 B 11 条 NFR-AC）+ §7 现有代码映射 + 占位符修复。
+  check_code_arch.py 8/8 PASS。**Step 7 骨架验证 PASS**（实现代码即骨架：tsc exit 0 + 无 any/eslint-disable/TODO + engine 零 Pi 依赖 + 277/277 测试通过，见 changes/skeleton-verification.md）。
 ---
 
 # 代码架构定稿审查 — Round 1（11 gap 闭合验证 + 5 维度）

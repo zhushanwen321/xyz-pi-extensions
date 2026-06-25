@@ -2,6 +2,7 @@
 verdict: pass
 upstream: code-architecture.md
 downstream: coding
+backfed_from: []
 ---
 
 # 执行计划 — Goal V2 Refactor
@@ -18,10 +19,13 @@ graph LR
     W4["Wave 4<br/>删字段+终态+todo API<br/>#6→#7 串行"]
     W5["Wave 5<br/>agent-end+budget<br/>#8→#5 串行"]
     W6["Wave 6<br/>audit+plan<br/>#10→#9 串行"]
+    W7["Wave 7<br/>验收 Gate<br/>闭环闸门"]
 
     W1 --> W2 --> W3 --> W4
     W4 --> W5
     W4 --> W6
+    W5 --> W7
+    W6 --> W7
 ```
 
 ### 调度表
@@ -34,6 +38,7 @@ graph LR
 | 4 | 删终态路径 + todo API | P1 | Wave 3 | — | 串行 #6→#7 | 同改 `engine/budget.ts`（#6 删 maxTurnsReached / #7 改 checkProgress）|
 | 5 | agent-end 重构 + budget 检查 | P1 | Wave 4 | B | 串行 #8→#5 | 同改 `event-handlers/agent-end.ts` |
 | 6 | audit prompt + plan 联动 | P1/P2 | Wave 4 | B | 串行 #10→#9 | 同改 `projection/prompts.ts`；与 Wave 5 并行 |
+| 7 | **验收 Wave（闭环闸门）** | — | Wave 1-6 | — | 单步 | 读测试验收清单全量→跑测试→全 PASS 才算实现完成 |
 
 ### 并行约束
 
@@ -310,6 +315,50 @@ graph LR
 
 ---
 
+## Wave 7: 验收 Wave（Acceptance Gate）
+
+**切片类型**: 验收闸门（非功能开发——读测试验收清单全量→跑测试→全 PASS 才算实现完成）
+**P 级覆盖**: —（验收，无 P 级）
+**Blocked by**: Wave 1, Wave 2, Wave 3, Wave 4, Wave 5, Wave 6（所有功能 Wave）
+**并行关系**: 必须最后执行，blocked_by 全部功能 Wave
+
+### 职责
+
+本 Wave 不做功能开发。它的唯一职责是**闭环验证**——确认设计→实现真正落地：
+
+1. 读「测试验收清单」全量（37 条用例 ID）
+2. 逐条跑测试，把每条映射为 PASS / FAIL / 未实现 / [DEVIATED]
+3. 任一用例无对应测试或 FAIL = 整个实现未完成
+4. 输出覆盖率报告（清单用例 PASS 率）
+
+> **编码完成的定义 = 测试验收清单全绿。** Wave 7 不绿 = 实现未完成，不允许交接。
+
+### Subagent 配置
+
+| 配置项 | 值 |
+|--------|---|
+| Agent | general-purpose（验收专用，不混功能开发）|
+| 注入上下文 | execution-plan.md「测试验收清单」全文 + code-architecture.md §6 测试矩阵 + issues.md 全部验收标准 |
+| 读取文件 | Wave 1-6 后的全部 `extensions/goal/src/` + 测试文件 + `extensions/todo/` + `extensions/plan/` |
+| 修改/创建 | 仅测试文件（补缺失测试）+ `changes/acceptance-report.md`（覆盖率报告）|
+
+### 执行流
+
+1. 扫描测试目录，对照清单 37 条用例 ID 建立映射（用例 → 测试文件:行号 / 未实现）
+2. 跑全量测试套件（`pnpm --filter @zhushanwen/pi-goal test`）
+3. 每条清单用例标注结果状态
+4. 有 FAIL/未实现 → 输出差距报告，回相应 Wave 修复（不在 Wave 7 内修功能）
+5. 全 PASS → 输出 `changes/acceptance-report.md`，标记实现完成
+
+### 验收标准
+
+- [ ] 测试验收清单 37 条用例全 PASS（或合法 [DEVIATED]）
+- [ ] 无「未实现」用例
+- [ ] typecheck 零错误
+- [ ] `changes/acceptance-report.md` 产出，覆盖率 100%
+
+---
+
 ## 后续迭代（P3 延后项）
 
 来源 issues.md，本次 Wave 编排不纳入：
@@ -366,7 +415,7 @@ graph LR
 - **方式 A（推荐）**: 接入 coding-workflow — 启动 Phase 流程（spec→plan→dev→test→pr），每个 Phase 对应一个或多个 Wave
 - **方式 B**: 手动执行 — 每个 Wave 派 fresh subagent，Wave 内并行 issue 派多个 subagent，按 Wave 内执行流走（实现 → typecheck → 验收 checklist）
 
-**执行顺序强制约束**（DAG 不可跳过）：Wave 1 → Wave 2 → Wave 3 → Wave 4 →（Wave 5 ∥ Wave 6）
+**执行顺序强制约束**（DAG 不可跳过）：Wave 1 → Wave 2 → Wave 3 → Wave 4 →（Wave 5 ∥ Wave 6）→ Wave 7（验收）
 
 > **跨 extension 改动提示**：Wave 4 #7 改 `extensions/todo/`、Wave 6 #9 改 `extensions/plan/`，涉及各自 changeset/version bump，执行时同步。
 
@@ -374,3 +423,78 @@ graph LR
 1. typecheck 零错误（全量修复，不接受「非本次引入」跳过理由）
 2. issues.md 对应 issue 验收 checklist 全绿
 3. 提交一个 commit（英文 message，如 `refactor(goal): wave 1 - remove goal_manager, add 7-state machine`）
+
+---
+
+## 测试验收清单（Test Acceptance Manifest）
+
+> **实现阶段的 Definition of Done（完成定义）。** 用例 ID 集合 = ⑤code-architecture.md §6 test-matrix 全量（来源 A 功能 + 来源 B NFR），无遗漏无多余。末尾验收 Wave（Wave 7）读本清单全量→跑测试→全 PASS 才算实现完成。
+>
+> **状态字段**：`待验`（设计期默认）→ 实现期填 `PASS` / `FAIL` / `未实现` / `[DEVIATED]原因`
+
+### 来源 A：功能用例
+
+| 用例 ID | 归属 UC | 场景 | 断言摘要 | 归属 Wave | 状态 |
+|---------|--------|------|---------|----------|------|
+| T1.1 | UC-1 | 无 goal 时创建 | 创建 active goal | Wave 2 | 待验 |
+| T1.2 | UC-1 | 终态旧 goal 存在时创建 | 允许创建（终态可覆盖） | Wave 2 | 待验 |
+| T1.3 | UC-1/6 | 非终态 goal 存在时创建（=NFR-AC-10） | 拒绝，提示「先 resume 或 clear」 | Wave 2 | 待验 |
+| T1.4 | UC-1 | budget 缺省字段 | 用 DEFAULT_BUDGET 填充 | Wave 2 | 待验 |
+| T1.5 | UC-1 | context 注入时 todo 未安装（=NFR-AC-6 降级） | Goal 降级运行：context 注入照常返回（prompt 含静态 todo 指令） | Wave 4 | 待验 |
+| T1.6 | UC-1 | prompt 不含 goal_manager 指令（=NFR-AC-2） | grep 零命中 create_tasks 等旧 action | Wave 1 | 待验 |
+| T1.7 | UC-1 | __planStart 缺失降级（=NFR-AC-7） | context 不含 plan 段落，goal 独立运行 | Wave 6 | 待验 |
+| T1.8 | UC-1 | __goalInit 忽略 tasks（=NFR-AC-8） | 收到 tasks 忽略，不 throw | Wave 6 | 待验 |
+| T1.9 | UC-1 | 迁移调用方不传 tasks（=NFR-AC-9） | grep 验证 tool-handlers.ts/compact.ts | Wave 6 | 待验 |
+| T1.10 | UC-1 | （编号占位，对齐 test-matrix 索引）| — | — | — |
+| T2.1 | UC-2 | active→pause | status=paused，不续跑 | Wave 2 | 待验 |
+| T2.2 | UC-2 | 非 active 转 pause | throw，提示「当前状态不可暂停」 | Wave 2 | 待验 |
+| T2.3 | UC-2 | paused→resume 未超预算 | status=active，timeStartedAt 重置 | Wave 2 | 待验 |
+| T2.4 | UC-2 | resume 时已超 budget | checkBudgetOnResume 超限 → 转 budget_limited 终态 + 提示 | Wave 5 | 待验 |
+| T2.5 | UC-2 | paused 态不累加 token | tokensUsed 不变 | Wave 3 | 待验 |
+| T2.6 | UC-2 | 崩溃重启后 paused 保持 | reconstructGoalState 恢复 paused | Wave 1 | 待验 |
+| T3.1 | UC-3 | token 耗尽转终态（=NFR-AC-4） | persistAndUpdate 内转 budget_limited + notify | Wave 5 | 待验 |
+| T3.2 | UC-3 | time 耗尽转终态 | 转 time_limited + notify | Wave 5 | 待验 |
+| T3.3 | UC-3 | 刚好等于预算 | 转 budget_limited（≥判定） | Wave 5 | 待验 |
+| T3.4 | UC-3 | 未超预算正常 persist | serializeState + updateWidget，不转终态 | Wave 5 | 待验 |
+| T3.5 | UC-3 | 终态不可逆 | budget_limited goal，/goal resume 拒绝 | Wave 5 | 待验 |
+| T3.6 | UC-3 | 旧字段反序列化不 throw（=NFR-AC-1） | tasks/stallCount/maxTurns 忽略，state 正常重建 | Wave 1 | 待验 |
+| T3.7 | UC-3 | 转终态同步 notify + updateWidget（=NFR-AC-5） | persist 转终态时触发通知 | Wave 5 | 待验 |
+| T3.8 | UC-3 | 70/90% 预警 + steering + followUp（=NFR-AC-11） | 预警通知 + steering prompt + followUp | Wave 5 | 待验 |
+| T3.10 | UC-3 | （编号占位，对齐 test-matrix 索引）| — | — | — |
+| T4.1 | UC-4 | complete（全解耦：不检查 todo） | 转 complete + notify | Wave 2 | 待验 |
+| T4.2 | UC-4 | complete 缺 evidence（=NFR-AC-3） | 拒绝，提示「需提交完成证据」 | Wave 2 | 待验 |
+| T4.3 | ~~UC-4~~ | ~~todo 为空数组~~ | **已移除（全解耦）** | — | — |
+| T4.4 | ~~UC-4~~ | ~~有未完成 todo~~ | **已移除（全解耦）** | — | — |
+| T4.5 | ~~UC-4~~ | ~~todo 未安装降级~~ | **已移除（全解耦）**：goal 不读 todo | — | — |
+| T4.6 | ~~UC-4~~ | ~~验证任务未完成~~ | **已移除（全解耦）**：靠 prompt 软建议 | — | — |
+| T4.7 | UC-4 | plan 未走完但 evidence 有值（AC-4.5 软提醒） | 允许完成（全解耦后无硬检查） | Wave 2 | 待验 |
+| T5.1 | UC-5 | active→blocked | status=blocked，不续跑 | Wave 2 | 待验 |
+| T5.2 | UC-5 | 非 active 报告阻塞 | 拒绝（语义不成立） | Wave 2 | 待验 |
+| T5.3 | UC-5 | blocked→resume | status=active | Wave 2 | 待验 |
+| T5.4 | UC-5 | 崩溃重启后 blocked 保持 | reconstructGoalState 恢复 blocked | Wave 1 | 待验 |
+| T6.1 | UC-6 | 清除非终态 goal | status=cancelled，不续跑 | Wave 1 | 待验 |
+| T6.2 | UC-6 | 已终态再清除（幂等） | 保持终态（幂等） | Wave 1 | 待验 |
+
+### 来源 B：NFR 风险→用例映射（已并入来源 A，此处汇总双向索引）
+
+> 11 条 NFR-AC 已在来源 A 表中标注（=NFR-AC-N），归属 Wave 见上。骨架约束类缓解（VALID_TRANSITIONS 枚举、闭包读取、staleness 提示、maxTurns 类型移除）由⑤骨架 tsc gate 验证，不进本清单。
+
+| NFR-AC | 用例 ID | 归属 Wave |
+|--------|---------|----------|
+| NFR-AC-1（旧字段反序列化） | T3.6 | Wave 1 |
+| NFR-AC-2（prompt 无 goal_manager） | T1.6 | Wave 1 |
+| NFR-AC-3（complete evidence 必填） | T4.2 | Wave 2 |
+| NFR-AC-4（budget 检查在 persistAndUpdate） | T3.1 | Wave 5 |
+| NFR-AC-5（转终态同步 notify） | T3.7 | Wave 5 |
+| NFR-AC-6（todo 缺失三路径降级） | T4.5 / T1.5 | Wave 4 |
+| NFR-AC-7（plan 缺失降级） | T1.7 | Wave 6 |
+| NFR-AC-8（goalInit 忽略 tasks） | T1.8 | Wave 6 |
+| NFR-AC-9（迁移调用方） | T1.9 | Wave 6 |
+| NFR-AC-10（set 非终态拒绝） | T1.3 | Wave 2 |
+| NFR-AC-11（70/90% 预警） | T3.8 | Wave 5 |
+
+### 闭环自检
+
+- [x] 清单用例 ID 集合 = ⑤test-matrix 全量（38 个），无遗漏无多余
+- [x] 末尾验收 Wave（Wave 7）blocked_by 所有功能 Wave（Wave 1-6）
+- [x] 每个功能 Wave 覆盖的用例 ID 都在本清单出现（Wave 1: T1.6/T2.6/T3.6/T5.4/T6.1/T6.2；Wave 2: T1.1-T1.4/T2.1-T2.3/T4.1-T4.7/T5.1-T5.3；Wave 3: T2.5；Wave 4: T1.5/T4.5；Wave 5: T2.4/T3.1-T3.5/T3.7/T3.8；Wave 6: T1.7-T1.9）

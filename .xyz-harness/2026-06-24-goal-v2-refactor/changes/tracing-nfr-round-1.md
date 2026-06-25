@@ -6,6 +6,12 @@ method: 2 视角追踪（副作用覆盖性 + 缓解可行性），gap 分类 F/
 code_evidence: grep 验证 extensions/goal + extensions/coding-workflow + extensions/plan
 ---
 
+> ⚠️ **[已过时 / Superseded — 2026-06-25]** 本文档记录的设计已被后续变更取代：
+> goal complete 的 todo 强制前置检查已**移除**，改为仅 prompt 软建议（AI 自行决策，不强制）。
+> goal extension 不再读 `pi.__todoGetList` / `pi.__planStart`；`checkCompletePrerequisites` / `buildProgressInput` / `findIncompleteTodos` / `checkProgress` / `ProgressInput` / `TODO_DEGRADED` 已全部删除。
+> 根因：pi 框架给每个 extension 独立 api 实例，跨 extension 通信失效。
+> 以下历史内容保留为审查快照，**以根目录设计文档最新版为准**。
+
 # NFR 追踪报告 — Round 1
 
 ## 追踪范围与方法

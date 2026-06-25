@@ -179,6 +179,22 @@ describe("handleGoalCommand — resume (FR-3 paused/blocked→active + G-014)", 
 		expect(h.piCalls.some((c) => c.kind === "sendUser")).toBe(true);
 	});
 
+	it("resume 重置 timeStartedAt=now（FR-3.2 重启计时器）", async () => {
+		// T2.3 显式断言：resume 时 timeStartedAt 必须重置为当前时刻（command-adapter.ts:144）
+		const h = makeHarness();
+		const session = createGoalSession();
+		const staleTimeStartedAt = Date.now() - 100_000; // 旧值，远早于现在
+		session.state = makeActiveState({ status: "paused", timeStartedAt: staleTimeStartedAt });
+		const before = Date.now();
+		await handleGoalCommand(h.pi, session, "resume", h.ctx);
+		const after = Date.now();
+		expect(session.state!.status).toBe("active");
+		// timeStartedAt 已重置为 resume 调用时刻（落在 [before, after] 窗口内）
+		expect(session.state!.timeStartedAt).toBeGreaterThanOrEqual(before);
+		expect(session.state!.timeStartedAt).toBeLessThanOrEqual(after);
+		expect(session.state!.timeStartedAt).not.toBe(staleTimeStartedAt); // 旧值已废弃
+	});
+
 	it("token 预算耗尽 → resume 转 budget_limited（G-014）", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();

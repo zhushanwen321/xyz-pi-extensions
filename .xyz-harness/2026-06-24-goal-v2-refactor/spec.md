@@ -104,7 +104,7 @@ verdict: pass
 - contextInjectionPrompt 强制要求 agent 先建 todo（执行任务 + 验证任务 isVerification=true）
 - continuationPrompt 持续提醒 complete 前完成所有 todo
 - prompt 对标 Codex continuation.md 三约束：Completion audit / Fidelity / Blocked audit
-- goal_control.complete 前置检查：todo 完成状态硬检查（调用 pi.__todoGetList）；plan.md 步骤对照为 prompt 驱动软提醒（D27 决策）
+- goal_control.complete 前置检查：**已移除（全解耦）**——complete 不再检查 todo 完成状态（原 `pi.__todoGetList` 跨 extension 失效）。todo 是否全完成由 AI 自行判断，goal 仅通过 prompt 软建议。complete 唯一前置：evidence 必填 + status==active。plan.md 步骤对照为 prompt 驱动软提醒（D27 决策）
 - 所有 prompt 更新：goal_manager/cancel_goal/add_subtasks → goal_control + todo
 
 ### FR-7: plan↔goal 自动联动
@@ -113,7 +113,7 @@ verdict: pass
 **plan → goal：** plan complete 选 goal 模式 → `__goalInit(objective, budget, ctx)`（tasks 参数废弃）。步骤通过 prompt 引导 agent 调 todo 创建。
 **复杂度判定：** LLM 判定——goal 启动第一轮 prompt 引导 agent 自行判断是否需要 plan（"如任务复杂，先进 plan mode 规划"），不硬编码关键词/阈值。
 
-**plan audit：** goal_control.complete 时若 goal 关联了 plan（pi.__planStart 曾被调用），agent 应验证 plan.md 的每个步骤是否已执行。此为 **prompt 驱动的软提醒**（D27 决策，对标 Codex Completion audit），非性硬检查——todo 完成状态是唯一硬检查。
+**plan audit：** goal_control.complete 时若 goal 关联了 plan，agent 应验证 plan.md 的每个步骤是否已执行。此为 **prompt 驱动的软提醒**（D27 决策，对标 Codex Completion audit），无硬检查——全解耦后 complete 不检查 todo/plan 状态，全部由 AI 自行决策。
 
 ## Acceptance Criteria
 

@@ -86,7 +86,7 @@
           <tr><td class="left">#12 widget 显示</td><td>A</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td><td class="risk-na">—</td></tr>
         </tbody>
       </table>
-      <p style="font-size:13px;color:var(--muted)">图例：<span class="risk-ok">✅</span> 无风险 · <span class="risk-warn">⚠️</span> 有风险已缓解 · <span class="risk-na">—</span> 不适用 · <span style="color:var(--err)">❌</span> 不可接受（本设计无此项）</p>
+      <p style="font-size:13px;color:var(--muted)">图例：<span class="risk-ok">✅</span> 无风险 · <span class="risk-warn">⚠️</span> 有风险已缓解 · <span class="risk-na">—</span> 不适用（本设计无"不可接受需回退"项，见下方残余风险登记）</p>
     </section>
 
     <section>
@@ -129,7 +129,7 @@
       <table>
         <thead><tr><th class="left">API</th><th class="left">缺失时行为</th><th class="left">受影响功能</th></tr></thead>
         <tbody>
-          <tr><td class="left">pi.__todoGetList</td><td class="left">undefined → 降级</td><td class="left">context 不注入进度；checkProgress 跳过 progress；complete 提示手动确认</td></tr>
+          <tr><td class="left">pi.__todoGetList</td><td class="left">undefined → 降级</td><td class="left">context 注入照常（staleness 跳过）；checkProgress 跳过 progress；complete 前置硬拒绝（AC-4.4）</td></tr>
           <tr><td class="left">pi.__planStart</td><td class="left">undefined → 降级</td><td class="left">context 不含 plan 建议段落；goal 独立运行</td></tr>
         </tbody>
       </table>
@@ -144,6 +144,58 @@
           <tr><td class="left">旧 entry 字段静默丢失</td><td class="left">task 模型整体废弃，数据无意义</td><td class="left">无需监控（一次性迁移）</td></tr>
           <tr><td class="left">prompt 体积增加 token 成本</td><td class="left">对齐 Codex prompt 量级</td><td class="left">widget 显示 token 用量</td></tr>
           <tr><td class="left">__goalInit inline alias 静默 drift</td><td class="left">goal 侧容忍（不 throw），同步迁移调用方</td><td class="left">迁移后 grep 验证无 tasks 传参</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>缓解项回灌登记（Mitigation Rollback）</h2>
+      <p style="color:var(--muted);font-size:13px">每条缓解须落地为下游可执行项。「验收方式」决定风险是否进⑤test-matrix 成为代码测试项。</p>
+      <table style="font-size:13px">
+        <thead><tr>
+          <th class="left">缓解项</th><th>#</th><th>维度</th><th>回灌去向</th><th class="left">落地为</th><th>验收方式</th><th>状态</th>
+        </tr></thead>
+        <tbody>
+          <tr><td class="left">deserializeState 容忍旧字段</td><td>#1,#6</td><td>数据</td><td>⑤骨架</td><td class="left">类型 + 反序列化实现</td><td>代码测试</td><td>待落</td></tr>
+          <tr><td class="left">contextInjectionPrompt 不注入 goal_manager 指令</td><td>#1,#10</td><td>兼容性</td><td>⑤契约</td><td class="left">prompts.ts 内容</td><td>代码测试</td><td>待落</td></tr>
+          <tr><td class="left">VALID_TRANSITIONS 枚举全合法转换</td><td>#2</td><td>兼容性</td><td>⑤骨架</td><td class="left">VALID_TRANSITIONS 常量</td><td>骨架约束</td><td>待落</td></tr>
+          <tr><td class="left">goal_control.complete evidence 必填</td><td>#3</td><td>兼容性</td><td>⑤契约</td><td class="left">tool schema</td><td>代码测试</td><td>待落</td></tr>
+          <tr><td class="left">handler 不持有过期 state 引用</td><td>#4</td><td>并发</td><td>⑤骨架</td><td class="left">闭包读取模式</td><td>骨架约束</td><td>待落</td></tr>
+          <tr><td class="left">budget 检查在 persistAndUpdate 内</td><td>#5</td><td>数据/可观测</td><td>⑤时序图</td><td class="left">检查挂载点时序图</td><td>代码测试</td><td>待落</td></tr>
+          <tr><td class="left">转终态同步 notify + updateWidget</td><td>#5,#8</td><td>可观测</td><td>⑤契约</td><td class="left">persistAndUpdate 调用</td><td>代码测试</td><td>待落</td></tr>
+          <tr><td class="left">__todoGetList 缺失降级</td><td>#7,#10</td><td>稳定性</td><td>⑤契约</td><td class="left">typeof 守卫</td><td>代码测试</td><td>待落</td></tr>
+          <tr><td class="left">__planStart 缺失降级</td><td>#9</td><td>稳定性</td><td>⑤契约</td><td class="left">typeof 守卫</td><td>代码测试</td><td>待落</td></tr>
+          <tr><td class="left">__goalInit 忽略 tasks 参数</td><td>#9</td><td>兼容性</td><td>⑤契约</td><td class="left">参数忽略</td><td>代码测试</td><td>待落</td></tr>
+          <tr><td class="left">迁移 coding-workflow/plan 调用方</td><td>#9</td><td>兼容性</td><td>③新issue</td><td class="left">见 issues.md #9</td><td>代码测试</td><td>待落</td></tr>
+          <tr><td class="left">清理 GoalInitBudget.maxTurns</td><td>#6</td><td>兼容性</td><td>⑤骨架</td><td class="left">index.ts 类型</td><td>骨架约束</td><td>待落</td></tr>
+          <tr><td class="left">/goal set 非终态拒绝</td><td>#11</td><td>兼容性</td><td>⑤契约</td><td class="left">handleSet 守卫</td><td>代码测试</td><td>待落</td></tr>
+          <tr><td class="left">stalenessReminderPrompt 保留</td><td>#6,#8</td><td>可观测</td><td>⑤契约</td><td class="left">提示注入</td><td>骨架约束</td><td>待落</td></tr>
+          <tr><td class="left">70%/90% 预警 + steering + followUp</td><td>#8</td><td>可观测</td><td>⑤契约</td><td class="left">agent_end notify</td><td>代码测试</td><td>待落</td></tr>
+        </tbody>
+      </table>
+      <div class="callout" style="margin-top:16px">
+        <strong>回灌到 ③的新 issue（双向可查）</strong>：issues.md #9 的「三方调用方迁移」子项 — coding-workflow（tool-handlers.ts:510-518 / :530）+ plan（compact.ts:90）改不传 tasks + 推动改用 import type。状态：已登记于 issues.md #9「缓解」。
+      </div>
+      <p style="color:var(--muted);font-size:13px;margin-top:8px">本扩展无安全类风险（全 N/A），故无防注入等安全缓解项。</p>
+    </section>
+
+    <section>
+      <h2>NFR-AC 清单（代码测试类验收断言）</h2>
+      <p style="color:var(--muted);font-size:13px">归属 UC 对齐 requirements.md，进⑤test-matrix。骨架约束类缓解由⑤ tsc gate 验证，不在此列。</p>
+      <table style="font-size:13px">
+        <thead><tr><th>NFR-AC</th><th class="left">归属 UC</th><th class="left">断言摘要</th></tr></thead>
+        <tbody>
+          <tr><td>NFR-AC-1</td><td class="left">UC-3（崩溃重启）</td><td class="left">反序列化旧字段不 throw，state 正常重建</td></tr>
+          <tr><td>NFR-AC-2</td><td class="left">UC-1</td><td class="left">contextInjectionPrompt 不含 goal_manager 旧指令（grep 零命中）</td></tr>
+          <tr><td>NFR-AC-3</td><td class="left">UC-4（AC-4.2）</td><td class="left">complete 缺 evidence → 拒绝并提示</td></tr>
+          <tr><td>NFR-AC-4</td><td class="left">UC-3（AC-3.1）</td><td class="left">budget 耗尽由 persistAndUpdate 检查转终态，无第二检查点漏触发</td></tr>
+          <tr><td>NFR-AC-5</td><td class="left">UC-3（AC-3.2）</td><td class="left">persist 转终态同步 notify + updateWidget</td></tr>
+          <tr><td>NFR-AC-6</td><td class="left">UC-4（AC-4.4 降级）</td><td class="left">__todoGetList undefined → 三处降级路径</td></tr>
+          <tr><td>NFR-AC-7</td><td class="left">UC-1（AC-1.3）</td><td class="left">__planStart undefined → context 不含 plan 段落，goal 独立运行</td></tr>
+          <tr><td>NFR-AC-8</td><td class="left">UC-1</td><td class="left">__goalInit 忽略 tasks（不 throw，不创建 task）</td></tr>
+          <tr><td>NFR-AC-9</td><td class="left">UC-1</td><td class="left">迁移后 coding-workflow/plan 不传 tasks（grep 验证）</td></tr>
+          <tr><td>NFR-AC-10</td><td class="left">UC-6（AC-6.2）</td><td class="left">非终态时 /goal set 拒绝，提示含「resume 或 clear」</td></tr>
+          <tr><td>NFR-AC-11</td><td class="left">UC-3（AC-3.2 预警）</td><td class="left">70%/90% 预警通知 + steering + followUp</td></tr>
         </tbody>
       </table>
     </section>

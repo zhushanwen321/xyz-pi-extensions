@@ -1,5 +1,5 @@
 /**
- * 事件 5: before_agent_start（staleness + context wrap-up + injection）。
+ * 事件 5: before_agent_start（context wrap-up + injection）。
  *
  * FR-8.1 G-007 + FR-8.6。返回 message（注入到 LLM context）或 undefined（无注入）。
  *
@@ -10,20 +10,19 @@
  *
  * 无 ESC 守卫（before_agent_start 是 agent 开始前的信号，此时无 aborted 可能）。
  *
- * 注：staleness reminder 暂时禁用（原基于 task/subtask，task 已移除）。
- * #6 会基于 lastUpdatedTurn 重做 goal 级 staleness 检测。
- * FR-7: contextInjectionPrompt 注入时运行时检测 pi.__planStart，plan 不可用时不建议 plan mode。
+ * 全解耦：不再做 staleness 检测（原依赖 pi.__todoGetList，跨 ext 失效），
+ * 不再探测 plan extension（原 typeof pi.__planStart，跨 ext 失效）。
+ * contextInjectionPrompt 恒定建议 plan mode（AI 自行决定是否用）。
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { AUTO_CLEAR_TURNS, CONTEXT_USAGE_RATIO_LIMIT, STALENESS_THRESHOLD_TURNS } from "../../constants";
+import { AUTO_CLEAR_TURNS, CONTEXT_USAGE_RATIO_LIMIT } from "../../constants";
 import { isActiveStatus, isTerminalStatus } from "../../engine/goal";
-import { contextInjectionPrompt, stalenessReminderPrompt } from "../../projection/prompts";
+import { contextInjectionPrompt } from "../../projection/prompts";
 import { asTheme, renderTerminalStatusLine } from "../../projection/widget";
 import type { GoalSession } from "../../session";
 import { clearGoalSession } from "../../session";
-import { buildProgressInput } from "../goal-control-adapter";
 import { buildPorts } from "../ports";
 
 interface BeforeAgentStartResult {
@@ -52,51 +51,15 @@ export async function handleBeforeAgentStart(
 	const ctxResult = checkContextUsage(session, ctx);
 	if (ctxResult) return ctxResult;
 
-	// FR-4/AC-4 staleness 提醒：todo 进度停滞超过阈值轮数 → 注入推进提醒（纯 prompt，不转终态）。
-	// todo 未加载（undefined）时不触发（无进度数据）。
-	const stalenessResult = checkStaleness(pi, session);
-	if (stalenessResult) return stalenessResult;
-
-	// 正常 context injection
-	// FR-7: 运行时检测 plan extension 可用性（typeof pi.__planStart === "function"），
-	// 决定 contextInjectionPrompt 是否注入 plan mode 建议段落。
-	const planAvailable =
-		typeof (pi as unknown as { __planStart?: unknown }).__planStart === "function";
+	// 正常 context injection。
+	// 全解耦：planAvailable 恒 true（contextInjectionPrompt 恒定建议 plan mode，AI 自行决定）。
 	return {
 		message: {
 			customType: "goal-context",
-			content: contextInjectionPrompt(session.state, session.state.timeUsedSeconds, planAvailable),
+			content: contextInjectionPrompt(session.state, session.state.timeUsedSeconds, true),
 			display: false,
 		},
 	};
-}
-
-/**
- * FR-4/AC-4 staleness 检测：未完成 todo 存在且 `currentTurnIndex - lastUpdatedTurn >= 阈值` 时，
- * 注入 stalenessReminderPrompt（推进提醒）。纯 prompt 驱动，不做状态变更。
- *
- * todo 未加载（undefined）或有未完成项时才检测；全完成或无 todo 数据 → 返回 undefined（走正常 injection）。
- */
-function checkStaleness(
-	pi: ExtensionAPI,
-	session: GoalSession,
-): BeforeAgentStartResult | undefined {
-	const state = session.state!;
-	const progress = buildProgressInput(pi);
-	if (!progress) return undefined; // todo 未加载
-	if (progress.incompleteIds.length === 0) return undefined; // 无未完成项
-
-	const stalledTurns = state.currentTurnIndex - state.lastUpdatedTurn;
-	if (stalledTurns >= STALENESS_THRESHOLD_TURNS) {
-		return {
-			message: {
-				customType: "goal-staleness-reminder",
-				content: stalenessReminderPrompt(stalledTurns, progress.incompleteIds.length),
-				display: false,
-			},
-		};
-	}
-	return undefined;
 }
 
 /**

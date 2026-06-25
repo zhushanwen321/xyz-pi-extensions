@@ -4,8 +4,8 @@
  * 覆盖 agent_end 的 continuation + ESC 守卫（FR-6.7）+
  * before_agent_start 的 AUTO_CLEAR/context wrap-up。
  *
- * 注：#1 去 task CRUD 后，allTasksDone/noTasksCreated/isStalled 暂置默认值；
- * #6 删除 maxTurnsReached / stall 自动终态分支。相关分支测试随 #7/#8 补回。
+ * 全解耦后不再测 allTasksDone followUp（原依赖 pi.__todoGetList，已删）。
+ * agent_end 流程简化为：budget 检查 → continuation 去抖。
  *
  * 用 fake pi + fake ctx（不 import Pi SDK）。handler 签名 (pi, session, ctx) → void/result。
  */
@@ -31,7 +31,7 @@ interface RecordedCall {
 	key?: string;
 }
 
-function makeFakePi(todoList?: unknown[]): { pi: ExtensionAPI; calls: RecordedCall[]; states: unknown[]; history: unknown[] } {
+function makeFakePi(): { pi: ExtensionAPI; calls: RecordedCall[]; states: unknown[]; history: unknown[] } {
 	const calls: RecordedCall[] = [];
 	const states: unknown[] = [];
 	const history: unknown[] = [];
@@ -56,10 +56,6 @@ function makeFakePi(todoList?: unknown[]): { pi: ExtensionAPI; calls: RecordedCa
 				content: typeof content === "string" ? content : undefined,
 				payload: options,
 			});
-		},
-		// duck-typed todo 读取（#7）：undefined=未加载（降级），数组=已加载
-		__todoGetList(): unknown[] | undefined {
-			return todoList;
 		},
 	} as unknown as ExtensionAPI;
 	return { pi, calls, states, history };
@@ -185,67 +181,6 @@ describe("handleAgentEnd — continuation", () => {
 	});
 });
 
-// ── handleAgentEnd：allTasksDone followUp（#8）──────
-
-describe("handleAgentEnd — allTasksDone followUp", () => {
-	it("todo 全完成（allTasksDone）→ 发 followUp 提示调 goal_control.complete，不发 continuation", async () => {
-		const todoList = [
-			{ id: 1, status: "completed" },
-			{ id: 2, status: "completed" },
-		];
-		const { pi, calls: piCalls } = makeFakePi(todoList);
-		const { ctx, calls: ctxCalls } = makeFakeCtx();
-		const session = createGoalSession();
-		session.state = makeRunningState({ tokensUsed: 100, lastTurnTokensUsed: 0 });
-
-		await handleAgentEnd(pi, session, ctx);
-		const all = allCalls(piCalls, ctxCalls);
-
-		const sendUser = all.filter((c) => c.kind === "sendUser");
-		expect(sendUser).toHaveLength(1);
-		expect(sendUser[0]!.payload).toEqual({ deliverAs: "followUp" });
-		expect(sendUser[0]!.content).toContain("goal_control");
-		// 已发 followUp → 不发 continuation
-		const sendContext = all.filter((c) => c.kind === "sendContext");
-		expect(sendContext).toHaveLength(0);
-	});
-
-	it("todo 部分完成（非 allTasksDone）→ 不触发 followUp，走 continuation", async () => {
-		const todoList = [
-			{ id: 1, status: "completed" },
-			{ id: 2, status: "pending" },
-		];
-		const { pi, calls: piCalls } = makeFakePi(todoList);
-		const { ctx, calls: ctxCalls } = makeFakeCtx();
-		const session = createGoalSession();
-		session.state = makeRunningState({ tokensUsed: 200, lastTurnTokensUsed: 0 });
-
-		await handleAgentEnd(pi, session, ctx);
-		const all = allCalls(piCalls, ctxCalls);
-
-		const sendUser = all.filter((c) => c.kind === "sendUser");
-		expect(sendUser).toHaveLength(0); // 无 followUp
-		const sendContext = all.filter((c) => c.kind === "sendContext");
-		expect(sendContext).toHaveLength(1); // continuation 正常
-	});
-
-	it("todo 未加载（__todoGetList=undefined）→ 降级不触发 followUp，走 continuation", async () => {
-		const { pi, calls: piCalls } = makeFakePi(); // 不传 todoList → undefined
-		const { ctx, calls: ctxCalls } = makeFakeCtx();
-		const session = createGoalSession();
-		session.state = makeRunningState({ tokensUsed: 200, lastTurnTokensUsed: 0 });
-
-		await handleAgentEnd(pi, session, ctx);
-		const all = allCalls(piCalls, ctxCalls);
-
-		// undefined 降级 → allTasksDone=false → 无 followUp
-		const sendUser = all.filter((c) => c.kind === "sendUser");
-		expect(sendUser).toHaveLength(0);
-		const sendContext = all.filter((c) => c.kind === "sendContext");
-		expect(sendContext).toHaveLength(1);
-	});
-});
-
 // ── handleAgentEnd：并发保护（G-021）+ stale（G-020）───
 
 describe("handleAgentEnd — 并发保护 + stale 快照", () => {
@@ -311,6 +246,21 @@ describe("handleBeforeAgentStart", () => {
 		expect(result!.message.customType).toBe("goal-context");
 		expect(result!.message.content).toContain("[GOAL mode activated]");
 		expect(result!.message.display).toBe(false);
+	});
+
+	// 全解耦后：planAvailable 恒 true（不再运行时探测 pi.__planStart）。
+	// contextInjectionPrompt 恒定注入 plan mode 建议段落，AI 自行判断是否用。
+	it("恒定注入 plan mode 建议段落（全解耦：不再探测 plan extension）", async () => {
+		const { pi } = makeFakePi();
+		const { ctx } = makeFakeCtx();
+		const session = createGoalSession();
+		session.state = makeRunningState();
+
+		const result = await handleBeforeAgentStart(pi, session, ctx);
+
+		expect(result).toBeDefined();
+		expect(result!.message.customType).toBe("goal-context");
+		expect(result!.message.content).toContain("plan mode");
 	});
 
 	// FR-8.1 G-007: AUTO_CLEAR_TURNS=2

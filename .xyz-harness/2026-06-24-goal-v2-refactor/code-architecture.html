@@ -117,7 +117,7 @@ sequenceDiagram
     participant EG as engine/goal
     participant PP as persistence
 
-    PI->>ME: message_end {usage}
+    PI->>ME: message_end(usage)
     activate ME
     ME->>ME: accumulateTokens(tokensUsed, usage)
     ME->>SVC: persistAndUpdate(pi, session, ctx)
@@ -152,7 +152,7 @@ sequenceDiagram
     TA->>TODO: __todoGetList()
     alt todo 未安装
         TODO-->>TA: undefined
-        TA-->>A: 提示：todo 未安装，手动确认
+        TA-->>A: 拒绝（complete 前置硬闸门）：需加载 Todo extension 才能验证完成
     else todo 为空
         TODO-->>TA: []
         TA-->>A: 错误：无任务
@@ -234,6 +234,57 @@ sequenceDiagram
           <tr><td>3</td><td>#4 拆 event-adapter</td><td>6 handler + persistAndUpdate 迁 service</td></tr>
           <tr><td>4</td><td>#5 budget检查点 + #6 删终态 + #7 todo API + #8 agent_end</td><td>核心逻辑重构</td></tr>
           <tr><td>5</td><td>#9 plan联动 + #10 completion audit</td><td>watch: prompts.ts LOC</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>测试矩阵（Test Matrix）</h2>
+      <div class="callout">
+        <strong>两个来源：</strong>来源 A（功能用例，从时序图 alt/else 推导）+ 来源 B（NFR 风险→用例，从④缓解项回灌登记表 <code>验收方式=代码测试</code> 推导）。共 27 条用例，作为 ⑥Wave 测试输入 + 实现期 TDD 种子。
+      </div>
+      <h3>来源 A：功能用例（按 UC）</h3>
+      <table style="font-size:13px">
+        <thead><tr><th>用例 ID</th><th>UC</th><th class="left">场景</th><th class="left">预期</th><th>关联 AC</th></tr></thead>
+        <tbody>
+          <tr><td>T1.1-T1.5</td><td>UC-1</td><td class="left">set 创建/终态覆盖/非终态拒绝/缺省 budget/todo 缺失降级运行</td><td class="left">正常创建 / 拒绝含提示 / context 注入照常</td><td>AC-1.1/6.1/6.2/4.4</td></tr>
+          <tr><td>T2.1-T2.6</td><td>UC-2</td><td class="left">pause/resume/超预算拒绝/不累加/崩溃保持</td><td class="left">状态转换 / 拒绝 / paused 保持</td><td>AC-2.1/2.2/2.3/2.4/5.3</td></tr>
+          <tr><td>T3.1-T3.5</td><td>UC-3</td><td class="left">token/time 耗尽终态/等于预算/未超 persist/终态不可逆</td><td class="left">转 budget_limited/time_limited + notify</td><td>AC-3.1/3.2</td></tr>
+          <tr><td>T4.1-T4.6</td><td>UC-4</td><td class="left">全完成 complete/缺 evidence/空 todo/未完成/todo 未安装/验证任务未完成</td><td class="left">转 complete / 拒绝含理由 / 降级</td><td>AC-4.1/4.2/4.3/4.4</td></tr>
+          <tr><td>T5.1-T5.4</td><td>UC-5</td><td class="left">blocked/resume/非active拒绝/崩溃保持</td><td class="left">转 blocked / 拒绝 / blocked 保持</td><td>AC-5.1/5.2/5.3/5.4</td></tr>
+          <tr><td>T6.1-T6.2</td><td>UC-6</td><td class="left">clear 非终态/已终态幂等</td><td class="left">转 cancelled / 保持终态</td><td>AC-6.1</td></tr>
+        </tbody>
+      </table>
+      <h3>来源 B：NFR 风险→用例映射（11 条 NFR-AC）</h3>
+      <table style="font-size:13px">
+        <thead><tr><th>NFR-AC</th><th>#</th><th class="left">验证断言</th><th>用例 ID</th></tr></thead>
+        <tbody>
+          <tr><td>NFR-AC-1</td><td>#1,#6</td><td class="left">旧字段反序列化不 throw</td><td>T3.6</td></tr>
+          <tr><td>NFR-AC-2</td><td>#1,#10</td><td class="left">prompt 不含 goal_manager 指令</td><td>T1.6</td></tr>
+          <tr><td>NFR-AC-3</td><td>#3</td><td class="left">complete 缺 evidence 拒绝</td><td>T4.2</td></tr>
+          <tr><td>NFR-AC-4</td><td>#5</td><td class="left">budget 检查在 persistAndUpdate 内</td><td>T3.1</td></tr>
+          <tr><td>NFR-AC-5</td><td>#5,#8</td><td class="left">转终态同步 notify + updateWidget</td><td>T3.7</td></tr>
+          <tr><td>NFR-AC-6</td><td>#7,#10</td><td class="left">todo 缺失三路径降级</td><td>T4.5</td></tr>
+          <tr><td>NFR-AC-7</td><td>#9</td><td class="left">plan 缺失降级</td><td>T1.7</td></tr>
+          <tr><td>NFR-AC-8</td><td>#9</td><td class="left">__goalInit 忽略 tasks</td><td>T1.8</td></tr>
+          <tr><td>NFR-AC-9</td><td>#9</td><td class="left">迁移调用方不传 tasks</td><td>T1.9</td></tr>
+          <tr><td>NFR-AC-10</td><td>#11</td><td class="left">set 非终态拒绝</td><td>T1.3</td></tr>
+          <tr><td>NFR-AC-11</td><td>#8</td><td class="left">70/90% 预警 + steering + followUp</td><td>T3.8</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>现有代码映射（refactor）</h2>
+      <table style="font-size:13px">
+        <thead><tr><th class="left">新模块</th><th class="left">现有代码</th><th>处置</th><th>Wave</th></tr></thead>
+        <tbody>
+          <tr><td class="left">engine/types.ts</td><td class="left">types.ts（含旧字段）</td><td>split</td><td>1/4</td></tr>
+          <tr><td class="left">adapters/goal-control-adapter.ts</td><td class="left">tool-adapter.ts（goal_manager）</td><td>delete+create</td><td>2</td></tr>
+          <tr><td class="left">adapters/event-handlers/*.ts</td><td class="left">event-adapter.ts（737行）</td><td>split</td><td>3</td></tr>
+          <tr><td class="left">projection/widget.ts</td><td class="left">widget.ts（GoalTask/stallCount）</td><td>modify</td><td>2</td></tr>
+          <tr><td class="left">projection/prompts.ts</td><td class="left">prompts.ts（goal_manager 指令）</td><td>modify</td><td>6</td></tr>
+          <tr><td class="left">index.ts</td><td class="left">index.ts（__goalInit 含 tasks）</td><td>modify</td><td>4/6</td></tr>
         </tbody>
       </table>
     </section>

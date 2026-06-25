@@ -100,13 +100,6 @@ describe("createGoalState — 初始值", () => {
 	it("completedAtTurnIndex = undefined", () => {
 		expect(createGoalState("obj").completedAtTurnIndex).toBeUndefined();
 	});
-	// FR-4/AC-4 staleness 初始值
-	it("lastUpdatedTurn = 0（staleness 初始）", () => {
-		expect(createGoalState("obj").lastUpdatedTurn).toBe(0);
-	});
-	it("lastIncompleteCount = 0（staleness 初始）", () => {
-		expect(createGoalState("obj").lastIncompleteCount).toBe(0);
-	});
 	// FR-6.2: 4 个独立预警 flag
 	it("tokenWarning70Sent = false", () => expect(createGoalState("obj").tokenWarning70Sent).toBe(false));
 	it("tokenWarning90Sent = false", () => expect(createGoalState("obj").tokenWarning90Sent).toBe(false));

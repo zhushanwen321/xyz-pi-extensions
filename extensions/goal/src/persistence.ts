@@ -57,9 +57,6 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 		lastTurnTokensUsed: req("lastTurnTokensUsed"),
 		currentTurnIndex: req("currentTurnIndex"),
 		completedAtTurnIndex: data.completedAtTurnIndex as number | undefined,
-		// FR-4/AC-4 staleness: 迁移友好——旧 entry 缺失时默认 0（不 throw）
-		lastUpdatedTurn: (data.lastUpdatedTurn as number | undefined) ?? 0,
-		lastIncompleteCount: (data.lastIncompleteCount as number | undefined) ?? 0,
 	};
 }
 

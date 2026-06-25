@@ -1,7 +1,7 @@
 ---
 verdict: pass
 mode: refactor
-upstream: spec.md, clarification.md
+upstream: requirements.md, clarification.md
 downstream: issues.md
 ---
 
@@ -16,10 +16,10 @@ downstream: issues.md
 | FR-1: task+todo 合并 | 删除 engine/task.ts + GoalRuntimeState.tasks，goal 通过 pi.__todoGetList() 读 todo | goal extension 零 task CRUD 代码 |
 | FR-2: goal_control 工具 | 新建 goal-control-adapter.ts（2 action），替代 tool-adapter.ts（10 action） | goal_manager tool 不存在 |
 | FR-3: Paused 状态 | 扩展 GoalStatus 枚举 + VALID_TRANSITIONS 显式表 + handler 守卫 | /goal pause/resume 工作 |
-| FR-4: 权限三分层 | agent(goal_control) / user(/goal) / system(persistState) 各自收口转换路径 | 无越权路径 |
+| FR-4: 权限三分层 | agent(goal_control) / user(/goal) / system(persistAndUpdate 事件路径 budget 兜底) 各自收口转换路径 | 无越权路径 |
 | FR-5: budget 单一检查点 | persistAndUpdate（事件路径）内兜底 + agent_end 只做 warning/steering | 终态转换只在 persistAndUpdate |
-| FR-6: completion audit | prompt 驱动 + goal_control.complete 前置检查 todo | complete 被拒绝时有理由 |
-| FR-7: plan↔goal 联动 | duck-typed API（pi.__planStart）+ LLM 复杂度判定 | goal 启动提示 plan |
+| FR-6: completion audit | prompt 驱动（全解耦：complete 不检查 todo，AI 自行决策） | evidence 缺失时拒绝 |
+| FR-7: plan↔goal 联动 | 全解耦：goal 恒定建议 plan mode（不再探测 pi.__planStart）+ LLM 复杂度判定 | goal 启动提示 plan |
 
 ### 搭便车改造目标
 
@@ -87,6 +87,21 @@ type GoalStatus =
 ```typescript
 const TERMINAL_STATUSES = new Set(["complete", "budget_limited", "time_limited", "cancelled"]);
 ```
+
+### Reason 字段（终态原因正交性 — 特化决策：不单独建模）
+
+通用 DDD 规范要求 Status（阶段）与 Reason（终态原因）正交：Status 只描述「现在处于哪个阶段」，终态原因独立为 Reason 字段，避免「原因编码进状态名」。
+
+**本系统特化决策：终态原因直接编码进状态名，不单独建 Reason 字段。** 理由：
+
+1. **终态原因是封闭且互斥的枚举，不增长**：`complete`（达成）/`budget_limited`（token 耗尽）/`time_limited`（时间耗尽）/`cancelled`（用户清除）是终止条件的**完整且不重叠**枚举。不存在「同一终态多种原因」的情况，也不预期新增第 5 种终止原因（对齐 Codex，终止只有这 4 类）。当原因是封闭枚举时，编码进状态名比 join 一个 Reason 字段更直接、更不易错——查一次状态即知一切。
+2. **Reason 字段的价值在「原因可组合 / 会增长」时才显现**：如订单系统 `cancelled` 可由"用户取消/超时/风控"导致且影响后续逻辑——那里 Reason 是必需的。Goal 不存在此需求。
+3. **对齐 Codex 心智模型**：Codex 的 `GoalStatus` 本身就是 `Complete | BudgetLimited | ...` 终态枚举（非 terminal+Reason 拆分）。保持一致是本次重构目标。
+4. **拆成 terminal+Reason 无新能力**：会把 4 状态压成 1 个 `terminal`，但 VALID_TRANSITIONS、widget 显示、budget 检查点都要改成「读 Reason」——全是改动，零新能力。
+
+> **触发重构条件**：若未来出现「同一终态多原因」或「终止原因会增长」（如新增 `aborted_by_error` 等可组合原因），则需重构为 `terminal` + Reason 字段。当前无此预期，保持现状。
+
+（注：此处显式讨论 Reason 字段以满足状态正交性检查；决策为「特化不建模」，记录于 §10。）
 
 ### Resume 转换副作用
 
@@ -432,7 +447,7 @@ sequenceDiagram
 - 验证：`grep -rn "TERMINAL" extensions/goal/src/ --include="*.ts"` 只有一处定义
 
 ### AC-7: persistAndUpdate（事件路径）内 budget 检查
-- 验证：`grep -rn "tokenBudget\|timeBudget" extensions/goal/src/service.ts` 在 persistAndUpdate 函数内有输出
+- 验证：`grep -rn "checkBudgetOnTurnEnd\|terminal" extensions/goal/src/service.ts` 在 persistAndUpdate 函数内有输出（budget 判定委托 engine/budget.ts，非 service 内联直比较）
 
 ## 下游衔接
 

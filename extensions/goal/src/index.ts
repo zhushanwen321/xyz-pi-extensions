@@ -21,7 +21,6 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } f
 import { Text } from "@mariozechner/pi-tui";
 
 import { handleGoalCommand } from "./adapters/command-adapter";
-import { registerGoalControlTool } from "./adapters/goal-control-adapter";
 import {
 	handleAgentEnd,
 	handleAgentStart,
@@ -30,6 +29,7 @@ import {
 	handleSessionStart,
 	handleTurnEnd,
 } from "./adapters/event-adapter";
+import { registerGoalControlTool } from "./adapters/goal-control-adapter";
 import { buildPorts } from "./adapters/ports";
 import { createGoal } from "./service";
 import { createGoalSession, type GoalSession } from "./session";
@@ -121,7 +121,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	// ── Message Renderers ──────────────────────────────
 
-	const goalMessageTypes = ["goal-context", "goal-context-exceeded", "goal-staleness-reminder"];
+	const goalMessageTypes = ["goal-context", "goal-context-exceeded"];
 	for (const customType of goalMessageTypes) {
 		pi.registerMessageRenderer(
 			customType,
@@ -129,9 +129,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 				const prefix =
 					message.customType === "goal-context-exceeded"
 						? theme.fg("error", "[GOAL Budget] ")
-						: message.customType === "goal-staleness-reminder"
-							? theme.fg("warning", "[GOAL Reminder] ")
-							: theme.fg("accent", "[GOAL] ");
+						: theme.fg("accent", "[GOAL] ");
 				const content =
 					typeof message.content === "string" ? message.content : JSON.stringify(message.content);
 				return new Text(prefix + theme.fg("dim", content), 0, 0);

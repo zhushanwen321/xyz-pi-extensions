@@ -1,3 +1,9 @@
+> ⚠️ **[已过时 / Superseded — 2026-06-25]** 本文档记录的设计已被后续变更取代：
+> goal complete 的 todo 强制前置检查已**移除**，改为仅 prompt 软建议（AI 自行决策，不强制）。
+> goal extension 不再读 `pi.__todoGetList` / `pi.__planStart`；`checkCompletePrerequisites` / `buildProgressInput` / `findIncompleteTodos` / `checkProgress` / `ProgressInput` / `TODO_DEGRADED` 已全部删除。
+> 根因：pi 框架给每个 extension 独立 api 实例，跨 extension 通信失效。
+> 以下历史内容保留为审查快照，**以根目录设计文档最新版为准**。
+
 # 跨文档一致性审查
 
 ## 总体结论

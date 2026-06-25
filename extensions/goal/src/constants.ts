@@ -39,4 +39,3 @@ export const OBJECTIVE_TRUNCATE_KEEP = 77; // DISPLAY_LIMIT - 3 for "..."
 
 export const AUTO_CLEAR_TURNS = 2;				// 终态后自动清理轮数
 export const MAX_HISTORY_ENTRIES = 20;			// goal-history entry GC 上限
-export const STALENESS_THRESHOLD_TURNS = 3;		// FR-4/AC-4: 进度停滞 N 轮后注入 staleness 提醒

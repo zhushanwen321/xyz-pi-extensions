@@ -55,7 +55,7 @@
 <body>
   <header>
     <h1>系统架构：Goal V2 Refactor</h1>
-    <div class="meta">阶段 2/6 · verdict: pass · 生成于 2026-06-24</div>
+    <div class="meta">阶段 2/6 · verdict: pass · 生成于 2026-06-24（Reason 字段讨论同步于 2026-06-25）</div>
   </header>
 
   <nav class="toc">
@@ -84,7 +84,7 @@
           <li>Goal 是 7 状态生命周期状态机（active/paused/blocked + 4 终态），显式转换表 VALID_TRANSITIONS 保障合法性</li>
           <li>3 层架构：engine（纯函数，零 Pi 依赖）→ adapters（Pi 桥接，按事件拆 6 handler）→ service+projection（协调+渲染）</li>
           <li>task 合并到 todo extension（跨扩展读取），goal_manager 10 action → goal_control 2 action</li>
-          <li>budget 单一检查点在 persistState（对齐 Codex SQL CASE），删除 maxTurns/stall 自动终态</li>
+          <li>budget 单一检查点在 persistAndUpdate（事件路径，对齐 Codex SQL CASE），删除 maxTurns/stall 自动终态</li>
         </ul>
       </div>
       <div class="mermaid">
@@ -93,8 +93,8 @@ stateDiagram-v2
     active --> paused: /goal pause
     active --> blocked: report_blocked
     active --> complete: complete
-    active --> budget_limited: persistState
-    active --> time_limited: persistState
+    active --> budget_limited: persistAndUpdate
+    active --> time_limited: persistAndUpdate
     active --> cancelled: /goal clear
     paused --> active: /goal resume
     paused --> cancelled: /goal clear
@@ -117,8 +117,8 @@ stateDiagram-v2
           <tr><td>FR-1: task+todo 合并</td><td>删除 engine/task.ts，goal 通过 pi.__todoGetList() 读 todo</td><td>goal 零 task CRUD</td></tr>
           <tr><td>FR-2: goal_control 工具</td><td>新建 goal-control-adapter（2 action）替代 tool-adapter（10 action）</td><td>goal_manager 不存在</td></tr>
           <tr><td>FR-3: Paused 状态</td><td>VALID_TRANSITIONS 显式表 + handler 守卫</td><td>/goal pause/resume 工作</td></tr>
-          <tr><td>FR-4: 权限三分层</td><td>agent(goal_control) / user(/goal) / system(persistState)</td><td>无越权路径</td></tr>
-          <tr><td>FR-5: budget 单一检查点</td><td>persistState 兜底 + agent_end 只做 warning</td><td>终态只在 persistState</td></tr>
+          <tr><td>FR-4: 权限三分层</td><td>agent(goal_control) / user(/goal) / system(persistAndUpdate 事件路径 budget 兜底)</td><td>无越权路径</td></tr>
+          <tr><td>FR-5: budget 单一检查点</td><td>persistAndUpdate（事件路径）兜底 + agent_end 只做 warning</td><td>终态只在 persistAndUpdate</td></tr>
           <tr><td>FR-6: completion audit</td><td>prompt 驱动 + complete 前置检查 todo</td><td>拒绝有理由</td></tr>
           <tr><td>FR-7: plan↔goal 联动</td><td>duck-typed API + LLM 复杂度判定</td><td>goal 启动提示 plan</td></tr>
         </tbody>
@@ -154,7 +154,8 @@ stateDiagram-v2
           <tr><td>ProgressInput</td><td>todo 数据的 engine 层投影</td><td>DTO，adapter→engine</td></tr>
           <tr><td>BudgetConfig</td><td>预算配置（tokenBudget/timeBudgetMinutes）</td><td>值对象</td></tr>
           <tr><td>GoalControl</td><td>新工具，2 action：complete/report_blocked</td><td>替代 goal_manager</td></tr>
-          <tr><td>persistState</td><td>持久化函数，内含 budget 兜底</td><td>单一检查点</td></tr>
+          <tr><td>persistState</td><td>持久化函数（command/tool 路径，无 budget 检查）</td><td>落盘</td></tr>
+          <tr><td>persistAndUpdate</td><td>事件路径 persist 函数（tickState + 落盘 + updateWidget），内含 budget 终态检查</td><td>单一检查点（D29）</td></tr>
         </tbody>
       </table>
     </section>
@@ -201,6 +202,18 @@ stateDiagram-v2
           <tr><td><span class="tag tag-terminal">cancelled</span></td><td>终态</td><td>用户取消</td></tr>
         </tbody>
       </table>
+
+      <h3>Reason 字段（终态原因正交性 — 特化决策：不单独建模）</h3>
+      <div class="callout warn">
+        <p>通用 DDD 规范要求 Status（阶段）与 Reason（终态原因）正交。<strong>本系统特化决策：终态原因直接编码进状态名，不单独建 Reason 字段。</strong></p>
+        <ol>
+          <li><strong>终态原因是封闭且互斥的枚举，不增长</strong>：complete / budget_limited / time_limited / cancelled 是终止条件的完整且不重叠枚举。不存在「同一终态多原因」，也不预期新增第 5 种（对齐 Codex）。封闭枚举编码进状态名比 join Reason 字段更直接、不易错。</li>
+          <li><strong>Reason 字段价值在「原因可组合 / 会增长」时才显现</strong>：如订单 cancelled 可由用户/超时/风控导致且影响后续——那里 Reason 必需。Goal 无此需求。</li>
+          <li><strong>对齐 Codex 心智模型</strong>：Codex GoalStatus 本身就是 Complete | BudgetLimited | ... 终态枚举（非 terminal+Reason 拆分）。</li>
+          <li><strong>拆 terminal+Reason 无新能力</strong>：会压 4 状态为 1 terminal，但 VALID_TRANSITIONS/widget/budget 检查都要改读 Reason——零新能力。</li>
+        </ol>
+        <p><strong>触发重构条件</strong>：若未来出现「同一终态多原因」或原因会增长（如 aborted_by_error），则需重构为 terminal + Reason。当前无此预期。</p>
+      </div>
 
       <h3>各状态运行时行为</h3>
       <table>
@@ -417,7 +430,7 @@ sequenceDiagram
 
     Note over GoalExt: before_agent_start (turn N-1):<br/>tokenWarning90 → steering
 
-    PiCore->>GoalExt: persistState (turn N)
+    PiCore->>GoalExt: persistAndUpdate (turn N)
     GoalExt->>Engine: tick + checkBudget
     Note over Engine: tokensUsed >= tokenBudget
     GoalExt->>Engine: active → budget_limited
@@ -448,7 +461,7 @@ sequenceDiagram
         <tbody>
           <tr><td>engine 通过 adapter 间接依赖 todo</td><td>engine 零 Pi 依赖不变；ProgressInput 是注入 DTO</td><td>只改 adapter</td></tr>
           <tr><td>VALID_TRANSITIONS 与权限三分层重复</td><td>双重保障</td><td>两处都更新</td></tr>
-          <tr><td>persistState 同时做 persist + budget</td><td>单一检查点（对齐 Codex）</td><td>只改 persistState</td></tr>
+          <tr><td>persistAndUpdate 同时做 persist + budget</td><td>单一检查点（对齐 Codex），落点在事件路径 persist 函数（D29 勘误，非 command/tool 的 persistState）</td><td>只改 persistAndUpdate</td></tr>
         </tbody>
       </table>
     </section>
@@ -465,7 +478,7 @@ sequenceDiagram
           <tr><td>AC-4</td><td>engine 零 Pi 依赖</td><td><code>grep -rn "@mariozechner" extensions/goal/src/engine/</code></td></tr>
           <tr><td>AC-5</td><td>显式转换表</td><td><code>grep -rn "VALID_TRANSITIONS" extensions/goal/src/</code></td></tr>
           <tr><td>AC-6</td><td>终态集合一致</td><td><code>grep -rn "TERMINAL" extensions/goal/src/</code></td></tr>
-          <tr><td>AC-7</td><td>persistState 内 budget 检查</td><td><code>grep -rn "tokenBudget" extensions/goal/src/service.ts</code></td></tr>
+          <tr><td>AC-7</td><td>persistAndUpdate 内 budget 检查（事件路径）</td><td><code>grep -rn "checkBudgetOnTurnEnd\|terminal" extensions/goal/src/service.ts</code> 在 persistAndUpdate 内（委托 engine/budget.ts）</td></tr>
         </tbody>
       </table>
     </section>

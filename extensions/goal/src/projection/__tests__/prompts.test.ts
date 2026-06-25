@@ -6,7 +6,7 @@
  * - escapeXmlText（XML 注入防护）
  * - continuationPrompt / budgetLimitPrompt / objectiveUpdatedPrompt / contextInjectionPrompt
  *
- * 注：stalenessReminderPrompt / formatTaskList 随 task CRUD 删除（#10 基于 lastProgressTurn/lastUpdatedTurn 重做 staleness）。
+ * 全解耦后 stalenessReminderPrompt 已删（原依赖 pi.__todoGetList，跨 ext 失效）。
  *
  * 纯函数测试，不 import Pi SDK。
  */
@@ -20,7 +20,6 @@ import {
 	continuationPrompt,
 	formatBudget,
 	objectiveUpdatedPrompt,
-	stalenessReminderPrompt,
 } from "../prompts";
 
 // ── 辅助 ─────────────────────────────────────────────
@@ -144,10 +143,10 @@ describe("continuationPrompt", () => {
 		expect(out).toContain("try alternative approaches first");
 	});
 
-	it("持续提醒 complete 前完成所有 todo（FR-6）", () => {
+	it("软建议 complete 前完成所有 todo（FR-6，全解耦后非强制）", () => {
 		const state = makeState();
 		const out = continuationPrompt(state, 0);
-		expect(out).toContain("All todos must be completed");
+		expect(out).toContain("Recommend finishing all todos");
 		expect(out).toContain("verification todos");
 	});
 
@@ -192,25 +191,6 @@ describe("objectiveUpdatedPrompt", () => {
 		expect(out).toContain("Previous objective: old obj");
 		expect(out).toContain("new obj");
 		expect(out).toContain("supersedes");
-	});
-});
-
-// ── stalenessReminderPrompt（FR-4/AC-4 停滞提醒）──────
-
-describe("stalenessReminderPrompt (FR-4/AC-4)", () => {
-	it("含停滞轮数 + 未完成项数 + 推进指令", () => {
-		const out = stalenessReminderPrompt(3, 2);
-		expect(out).toContain("3 turn(s)");
-		expect(out).toContain("2 todo item(s)");
-		expect(out).toContain("next incomplete todo");
-		expect(out).toContain("report_blocked");
-	});
-
-	it("XML 标签包裹（防注入结构）", () => {
-		const out = stalenessReminderPrompt(5, 1);
-		expect(out).toContain("<goal_context>");
-		expect(out).toContain("</goal_context>");
-		expect(out).toContain("progress stalled");
 	});
 });
 

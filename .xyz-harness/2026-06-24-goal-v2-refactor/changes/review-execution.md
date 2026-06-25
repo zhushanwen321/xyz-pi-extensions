@@ -1,5 +1,11 @@
 ---
 verdict: APPROVED
+machine_check: PASS
+note: >
+  2026-06-25 schema 复审 + 补全：加 machine_check 字段（同 ①②③④⑤模式）。
+  本次补全了 MANDATORY 的「测试验收清单」章节（37 用例 = ⑤test-matrix 全量，按 Wave 归属）+
+  Wave 7 验收 Wave（blocked_by Wave 1-6，闭环闸门）+ changes/consistency-final.md（Step 6c 总闸门，verdict: CONSISTENT）。
+  check_execution.py 现已 8/8 PASS。原 5 维 APPROVED 结论仍成立。
 ---
 
 # 执行计划审查

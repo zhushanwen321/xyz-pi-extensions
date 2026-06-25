@@ -65,18 +65,4 @@ describe("deserializeState — 新格式严格解析", () => {
 		const data = { ...FULL_DATA, completedAtTurnIndex: 42 };
 		expect(deserializeState(data).completedAtTurnIndex).toBe(42);
 	});
-
-	it("FR-4 staleness: 旧 entry 缺 lastUpdatedTurn/lastIncompleteCount → 默认 0（迁移友好，不 throw）", () => {
-		// FULL_DATA 不含 staleness 两字段（模拟旧 entry）
-		const state = deserializeState(FULL_DATA);
-		expect(state.lastUpdatedTurn).toBe(0);
-		expect(state.lastIncompleteCount).toBe(0);
-	});
-
-	it("FR-4 staleness: 有字段 → 正确还原", () => {
-		const data = { ...FULL_DATA, lastUpdatedTurn: 7, lastIncompleteCount: 3 };
-		const state = deserializeState(data);
-		expect(state.lastUpdatedTurn).toBe(7);
-		expect(state.lastIncompleteCount).toBe(3);
-	});
 });

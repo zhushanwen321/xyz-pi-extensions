@@ -56,8 +56,5 @@ export function createGoalState(
 		timeWarning90Sent: false,
 		lastTurnTokensUsed: 0,
 		currentTurnIndex: 0,
-		// FR-4/AC-4: staleness 初始值——goal 创建即视为「有进度」（轮 0）
-		lastUpdatedTurn: 0,
-		lastIncompleteCount: 0,
 	};
 }

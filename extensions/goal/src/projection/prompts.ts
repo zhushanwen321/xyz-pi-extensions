@@ -10,8 +10,8 @@
  * - Blocked: 不首次就放弃，需要尝试替代方案
  * - 防注入: XML 标签包裹 + escapeXmlText 转义
  *
- * 注：#1 去 task CRUD 后，prompt 暂不含 task 进度数据（等 #7 注入 todo 进度）。
- * staleness reminder 基于 task 的逻辑已移除，#10 会基于 lastProgressTurn/lastUpdatedTurn 重做。
+ * 全解耦后：prompt 不含 todo 进度数据（不再依赖 pi.__todoGetList）。
+ * todo 是否完成由 AI 自行判断，prompt 仅做软建议。
  */
 
 import { PERCENT_FACTOR, SECONDS_PER_MINUTE } from "../constants";
@@ -137,7 +137,7 @@ export function continuationPrompt(state: GoalRuntimeState, timeUsedSeconds: num
 		`- Evidence must prove completion — intent, partial progress, or 'it should work' are NOT evidence\n` +
 		`- Do not redefine success around work already done; preserve original scope\n` +
 		`- Uncertain or indirect evidence means not completed — keep working\n` +
-		`- All todos must be completed (including verification todos) before reporting completion\n` +
+		`- Recommend finishing all todos (including verification todos) before reporting completion — you decide\n` +
 		`- If you used plan mode, verify each plan.md step was executed before reporting completion\n` +
 		`Do not mark completed due to budget exhaustion. Do not report blocked due to difficulty.\n` +
 		`\n` +
@@ -205,36 +205,13 @@ export function objectiveUpdatedPrompt(
 	);
 }
 
-// ── Staleness Reminder Prompt (before_agent_start, FR-4/AC-4) ─────
-
-/**
- * FR-4/AC-4 staleness 提醒：todo 进度停滞超过阈值轮数时注入，提醒 agent 推进未完成项。
- *
- * 基于单 task 级（现 goal 级）lastUpdatedTurn——非自动终态，纯 prompt 驱动软提醒。
- * 不做状态变更（对齐 Codex：staleness 不触发终态，只提醒）。
- *
- * @param stalledTurns 已停滞轮数（currentTurnIndex - lastUpdatedTurn）
- * @param incompleteCount 未完成 todo 数
- */
-export function stalenessReminderPrompt(stalledTurns: number, incompleteCount: number): string {
-	return (
-		`<goal_context>\n` +
-		`[GOAL — progress stalled]\n\n` +
-		`No todo progress for ${stalledTurns} turn(s); ${incompleteCount} todo item(s) remain incomplete.\n` +
-		`- Pick up the next incomplete todo and advance it\n` +
-		`- If genuinely blocked on a todo, report_blocked with what you have tried\n` +
-		`- Do not stall — keep making concrete progress toward the objective\n` +
-		`</goal_context>`
-	);
-}
-
 // ── Context Injection Prompt (before_agent_start) ─────
 
 /**
  * contextInjectionPrompt（before_agent_start 注入 LLM context）。
  *
- * @param planAvailable plan extension 是否可用（typeof pi.__planStart === "function"）。
- *   true 时注入 plan mode 建议段落（FR-7 LLM 自主判断复杂度）；false 时 omit，避免建议不存在的工具。
+ * 全解耦后 planAvailable 恒 true（不再运行时探测 pi.__planStart）。
+ * plan mode 建议段落恒定注入，AI 自行判断是否使用。
  */
 export function contextInjectionPrompt(
 	state: GoalRuntimeState,

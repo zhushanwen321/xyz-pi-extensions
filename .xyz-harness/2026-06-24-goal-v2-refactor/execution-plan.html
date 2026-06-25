@@ -99,9 +99,11 @@
       <li><a href="#wave-4">Wave 4</a></li>
       <li><a href="#wave-5">Wave 5</a></li>
       <li><a href="#wave-6">Wave 6</a></li>
+      <li><a href="#wave-7">Wave 7 验收</a></li>
       <li><a href="#p3">后续迭代 P3</a></li>
       <li><a href="#decisions">决策记录</a></li>
       <li><a href="#handoff">执行交接</a></li>
+      <li><a href="#acceptance-manifest">测试验收清单</a></li>
     </ul>
   </nav>
 
@@ -110,7 +112,7 @@
       <div class="tldr">
         <h2>TL;DR</h2>
         <ul>
-          <li><strong>6 个 Wave，严格 DAG</strong>：W1 → W2 → W3 → W4 →（W5 ∥ W6）。执行顺序不可跳过。</li>
+          <li><strong>7 个 Wave，严格 DAG</strong>：W1 → W2 → W3 → W4 →（W5 ∥ W6）→ W7（验收 Gate）。执行顺序不可跳过。</li>
           <li><strong>并行只有两处</strong>：Wave 2 内部 #3 ∥ #11 ∥ #12（文件不交集，3 subagent）；Wave 5 ∥ Wave 6（同 blocked_by W4，不同文件）。</li>
           <li><strong>同文件必串行</strong>：Wave 1（#1→#2 改 types.ts）、Wave 4（#6→#7 改 budget.ts）、Wave 5（#8→#5 改 agent-end.ts）、Wave 6（#10→#9 改 prompts.ts）。</li>
           <li><strong>范围重新切分（D1）</strong>：#2 收窄只加状态，字段删除整体归 #6 Wave 4 —— 保证每个 Wave typecheck 可达，避免中间红区。</li>
@@ -125,13 +127,18 @@ graph LR
     W4["Wave 4<br/>删字段+终态+todo API<br/>#6→#7 串行"]
     W5["Wave 5<br/>agent-end+budget<br/>#8→#5 串行"]
     W6["Wave 6<br/>audit+plan<br/>#10→#9 串行"]
+    W7["Wave 7<br/>验收 Gate<br/>闭环闸门"]
 
     W1 --> W2 --> W3 --> W4
     W4 --> W5
     W4 --> W6
+    W5 --> W7
+    W6 --> W7
 
     classDef parallel fill:#eff6ff,stroke:#2563eb,stroke-width:2px,color:#1e3a8a;
+    classDef gate fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#92400e;
     class W2,W5,W6 parallel;
+    class W7 gate;
       </div>
       <p class="legend">🔵 蓝色高亮 = 含并行组（Wave 2 内部 3 issue 并行；Wave 5 / Wave 6 跨 Wave 并行）。边 = blocked_by 依赖。</p>
     </section>
@@ -558,6 +565,26 @@ graph LR
       </ul>
     </section>
 
+    <!-- Wave 7 验收 Gate -->
+    <section id="wave-7">
+      <h2><span class="wave-tag">W7</span>Wave 7：验收 Wave（Acceptance Gate）</h2>
+      <table class="info">
+        <tr><td>切片类型</td><td>验收闸门（非功能开发——读测试验收清单全量→跑测试→全 PASS 才算实现完成）</td></tr>
+        <tr><td>Blocked by</td><td><strong>Wave 1, 2, 3, 4, 5, 6</strong>（所有功能 Wave）</td></tr>
+        <tr><td>并行关系</td><td>必须最后执行，blocked_by 全部功能 Wave</td></tr>
+      </table>
+      <div class="callout critical">
+        <strong>编码完成的定义 = 测试验收清单 37 条全绿。</strong> Wave 7 不绿 = 实现未完成，不允许交接。职责：读清单全量 → 跑测试 → 每条映射 PASS/FAIL/未实现 → 输出覆盖率报告。
+      </div>
+      <h3>验收标准</h3>
+      <ul class="checklist">
+        <li>测试验收清单 37 条用例全 PASS（或合法 [DEVIATED]）</li>
+        <li>无「未实现」用例</li>
+        <li>typecheck 零错误</li>
+        <li><code>changes/acceptance-report.md</code> 产出，覆盖率 100%</li>
+      </ul>
+    </section>
+
     <!-- P3 -->
     <section id="p3">
       <h2>后续迭代（P3 延后项）</h2>
@@ -629,7 +656,7 @@ graph LR
       </div>
 
       <div class="callout warn">
-        <strong>执行顺序强制约束</strong>（DAG 不可跳过）：<code>Wave 1 → Wave 2 → Wave 3 → Wave 4 →（Wave 5 ∥ Wave 6）</code>
+        <strong>执行顺序强制约束</strong>（DAG 不可跳过）：<code>Wave 1 → Wave 2 → Wave 3 → Wave 4 →（Wave 5 ∥ Wave 6）→ Wave 7（验收）</code>
       </div>
 
       <h3>每 Wave 完成后</h3>
@@ -638,6 +665,47 @@ graph LR
         <li>issues.md 对应 issue 验收 checklist 全绿</li>
         <li>提交一个 commit（英文 message，如 <code>refactor(goal): wave 1 - remove goal_manager, add 7-state machine</code>）</li>
       </ol>
+    </section>
+
+    <!-- 测试验收清单 -->
+    <section id="acceptance-manifest">
+      <h2>测试验收清单（Test Acceptance Manifest）</h2>
+      <div class="callout">
+        <strong>实现阶段的 Definition of Done。</strong> 用例 ID 集合 = ⑤code-architecture.md §6 test-matrix 全量（37 条，来源 A 功能 + 来源 B NFR）。
+        末尾验收 Wave（Wave 7）读本清单全量→跑测试→全 PASS 才算实现完成。
+      </div>
+      <h3>来源 A：功能用例（按 Wave 归属）</h3>
+      <table style="font-size:12px">
+        <thead><tr><th>Wave</th><th>用例 ID</th><th class="left">覆盖场景</th></tr></thead>
+        <tbody>
+          <tr><td>W1</td><td>T1.6, T2.6, T3.6, T5.4, T6.1, T6.2</td><td class="left">prompt 无 goal_manager / 崩溃 paused 保持 / 旧字段迁移 / 崩溃 blocked 保持 / clear / clear 幂等</td></tr>
+          <tr><td>W2</td><td>T1.1-T1.4, T2.1-T2.3, T4.1-T4.4, T4.6, T5.1-T5.3</td><td class="left">set 创建/拒绝/缺省 / pause/resume / complete 全路径 / blocked 报告</td></tr>
+          <tr><td>W3</td><td>T2.5</td><td class="left">paused 态不累加 token（handler 拆分后行为验证）</td></tr>
+          <tr><td>W4</td><td>T1.5, T4.5</td><td class="left">todo 未安装降级（context + complete 两路径）</td></tr>
+          <tr><td>W5</td><td>T2.4, T3.1-T3.5, T3.7, T3.8</td><td class="left">resume 超限 / budget 终态全路径 / notify / 预警</td></tr>
+          <tr><td>W6</td><td>T1.7, T1.8, T1.9</td><td class="left">plan 降级 / goalInit 忽略 tasks / 调用方迁移</td></tr>
+        </tbody>
+      </table>
+      <h3>来源 B：NFR 风险→用例映射（11 条 NFR-AC，已并入来源 A）</h3>
+      <table style="font-size:12px">
+        <thead><tr><th>NFR-AC</th><th>用例 ID</th><th>Wave</th></tr></thead>
+        <tbody>
+          <tr><td>NFR-AC-1 旧字段迁移</td><td>T3.6</td><td>W1</td></tr>
+          <tr><td>NFR-AC-2 prompt 无 goal_manager</td><td>T1.6</td><td>W1</td></tr>
+          <tr><td>NFR-AC-3 evidence 必填</td><td>T4.2</td><td>W2</td></tr>
+          <tr><td>NFR-AC-4 budget 检查在 persistAndUpdate</td><td>T3.1</td><td>W5</td></tr>
+          <tr><td>NFR-AC-5 转终态同步 notify</td><td>T3.7</td><td>W5</td></tr>
+          <tr><td>NFR-AC-6 todo 缺失降级</td><td>T4.5/T1.5</td><td>W4</td></tr>
+          <tr><td>NFR-AC-7 plan 缺失降级</td><td>T1.7</td><td>W6</td></tr>
+          <tr><td>NFR-AC-8 goalInit 忽略 tasks</td><td>T1.8</td><td>W6</td></tr>
+          <tr><td>NFR-AC-9 迁移调用方</td><td>T1.9</td><td>W6</td></tr>
+          <tr><td>NFR-AC-10 set 非终态拒绝</td><td>T1.3</td><td>W2</td></tr>
+          <tr><td>NFR-AC-11 70/90% 预警</td><td>T3.8</td><td>W5</td></tr>
+        </tbody>
+      </table>
+      <div class="callout ok">
+        <strong>闭环自检：</strong>清单 37 用例 = ⑤test-matrix 全量 ✓ ｜ Wave 7 blocked_by Wave 1-6 ✓ ｜ 每 Wave 覆盖用例 ID 均在清单 ✓
+      </div>
     </section>
   </main>
 

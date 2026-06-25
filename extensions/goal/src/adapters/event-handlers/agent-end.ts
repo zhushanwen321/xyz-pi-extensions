@@ -7,9 +7,12 @@
  * - FR-6.7 ESC 守卫（最关键）：ctx.signal?.aborted → 不发 continuation、不做 budget 检查、
  *   不做任何状态变更，goal 保持 active，等用户下次输入恢复
  *
- * #8 后流程：budget 预警/steering → allTasksDone followUp → continuation 去抖。
- * agent_end 只做提醒（warning + steering + followUp），不做终态转换。
+ * #8 后流程：budget 预警/steering → continuation 去抖。
+ * agent_end 只做提醒（warning + steering），不做终态转换。
  * 终态转换不在 agent_end——由 persistAndUpdate 兜底（#5 范围，单一检查点）。
+ *
+ * 全解耦：不再做 allTasksDone followUp（原依赖 pi.__todoGetList，跨 ext 失效）。
+ * todo 是否全完成由 AI 自行判断（prompt 软建议）。
  *
  * ESC 路径：aborted 时直接 return（goal 保持 active）。注意 ESC 守卫在终态/非 active
  * 检查之后——终态 goal 仍走终态 notify（不被 ESC 影响），非 active 状态直接返回。
@@ -17,16 +20,14 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { checkBudgetOnTurnEnd, checkProgress, type ProgressInput } from "../../engine/budget";
+import { checkBudgetOnTurnEnd } from "../../engine/budget";
 import { isActiveStatus } from "../../engine/goal";
-import type { GoalRuntimeState } from "../../engine/types";
 import {
 	budgetLimitPrompt,
 	continuationPrompt,
 } from "../../projection/prompts";
 import { persistAndUpdate, tickState } from "../../service";
 import type { GoalSession } from "../../session";
-import { buildProgressInput } from "../goal-control-adapter";
 import { buildPorts } from "../ports";
 import { makeStaleChecker } from "./shared";
 
@@ -60,19 +61,7 @@ export async function handleAgentEnd(
 		const budgetAction = await handleBudgetChecks(pi, session, ctx, budgetResult, checkStale);
 		if (budgetAction !== "continue") return;
 
-		// allTasksDone followUp（#8）：所有 todo 完成但 agent 未调 goal_control.complete → 提示收尾。
-		// progressInput=undefined（todo 未加载）时 checkProgress 降级返回 allTasksDone=false，不触发。
-		const progressInput = buildProgressInput(pi);
-		const progress = checkProgress(session.state, progressInput);
-		// FR-4/AC-4 staleness 进度追踪：未完成 todo 数减少 → 视为有进度，更新 lastUpdatedTurn。
-		// todo 未加载（progressInput=undefined）时不追踪（无进度数据）。
-		updateStalenessProgress(session.state, progressInput);
-		if (progress.allTasksDone) {
-			await handleAllDoneFollowUp(pi, session, ctx, checkStale);
-			return; // 已发 followUp，不再发 continuation
-		}
-
-		// continuation 去抖（budget 预警 + allTasksDone 都未拦截时）
+		// continuation 去抖（budget 预警未拦截时）
 		await handleContinuation(pi, session, ctx, checkStale);
 	} finally {
 		session.isProcessing = false;
@@ -151,31 +140,7 @@ async function handleBudgetChecks(
 }
 
 /**
- * allTasksDone followUp（#8）：所有 todo 完成但 agent 未调 goal_control.complete。
- *
- * 发 followUp 提示 agent 收尾（persist + sendUserMessage）。sendUserMessage（而非
- * sendContextMessage）是因为要让 agent 主动响应、调用 goal_control.complete 收尾。
- *
- * progressInput=undefined（todo 未加载）时，调用方（handleAgentEnd 主流程）已通过
- * checkProgress 降级过滤，不会进入此函数。
- */
-async function handleAllDoneFollowUp(
-	pi: ExtensionAPI,
-	session: GoalSession,
-	ctx: ExtensionContext,
-	checkStale: () => boolean,
-): Promise<void> {
-	if (checkStale()) return;
-	persistAndUpdate(session, buildPorts(pi, ctx));
-	if (checkStale()) return;
-	buildPorts(pi, ctx).messaging.sendUserMessage(
-		"All todos are completed. If the objective is genuinely achieved with evidence, call goal_control with action=complete. Otherwise continue working.",
-		"followUp",
-	);
-}
-
-/**
- * continuation 去抖（budget 预警 + allTasksDone 都未拦截时的尾部逻辑）。
+ * continuation 去抖（budget 预警未拦截时的尾部逻辑）。
  *
  * - continuation 去抖：tokenDelta=0（空 turn）不发，只 persist
  * - 否则 persist + 发 continuationPrompt
@@ -206,21 +171,4 @@ async function handleContinuation(
 		continuationPrompt(state, state.timeUsedSeconds),
 		"followUp",
 	);
-}
-
-/**
- * FR-4/AC-4 staleness 进度追踪。
- *
- * 未完成 todo 数（incompleteIds.length）相比上次检测减少 → 视为「有进度」，
- * 更新 lastUpdatedTurn 为当前轮。todo 未加载（undefined）时不追踪。
- *
- * staleness 提醒在 before_agent_start 基于 `currentTurnIndex - lastUpdatedTurn >= 阈值` 触发。
- */
-function updateStalenessProgress(state: GoalRuntimeState, progressInput: ProgressInput | undefined): void {
-	if (!progressInput) return; // todo 未加载，无进度数据
-	const currentIncomplete = progressInput.incompleteIds.length;
-	if (currentIncomplete < state.lastIncompleteCount) {
-		state.lastUpdatedTurn = state.currentTurnIndex;
-	}
-	state.lastIncompleteCount = currentIncomplete;
 }

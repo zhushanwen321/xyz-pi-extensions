@@ -182,17 +182,20 @@ graph LR
 
       <div class="issue-card p1">
         <h4><span class="badge badge-p1">P1</span> #10: completion audit prompt</h4>
-        <p><strong>Blocked by:</strong> #7 · prompt 对标 Codex 三约束（Completion audit / Fidelity / Blocked audit）。硬编码在 contextInjectionPrompt（单一消费方，无配置需求）。</p>
+        <p><strong>Blocked by:</strong> #7 · prompt 对标 Codex 三约束（Completion audit / Fidelity / Blocked audit）。</p>
+        <p><strong>选方案 A</strong>（硬编码在 contextInjectionPrompt）vs 方案 B（独立 prompt 文件+模板插值）— 单消费方无配置需求，独立文件过度设计（YAGNI）。</p>
       </div>
 
       <div class="issue-card p1">
         <h4><span class="badge badge-p1">P1</span> #11: /goal set 非终态拒绝</h4>
-        <p><strong>Blocked by:</strong> #2 · 已有非终态 goal（含 paused）时拒绝 set，提示先 resume/clear。对齐 Codex。</p>
+        <p><strong>Blocked by:</strong> #2 · 已有非终态 goal（含 paused）时拒绝 set，提示先 resume/clear。</p>
+        <p><strong>选方案 A</strong>（直接拒绝）vs 方案 B（覆盖路径+二次确认）— 对齐 Codex create_goal，拒绝比二次确认更安全，TUI 无确认复杂度。</p>
       </div>
 
       <div class="issue-card p1">
         <h4><span class="badge badge-p1">P1</span> #12: widget paused/blocked 显示</h4>
         <p><strong>Blocked by:</strong> #2 · widget status suffix 加 paused/blocked 分支。</p>
+        <p><strong>选方案 A</strong>（status suffix 加分支）vs 方案 B（独立 widget 状态组件）— paused/blocked 与 active 同构，独立组件过度设计（YAGNI）。</p>
       </div>
     </section>
 

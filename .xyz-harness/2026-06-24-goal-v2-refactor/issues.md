@@ -392,12 +392,14 @@ graph LR
 
 ---
 
-### #7: todo 跨扩展 API + ProgressInput 注入
+### #7: todo 跨扩展 API + ProgressInput 注入 — 【全解耦后已废弃】
+
+> **全解耦后状态**：本 issue 整体废弃。根因：pi 框架给每个 extension 独立 api 实例，goal 读 `pi.__todoGetList` 跨 ext 失败。goal extension 不再读 todo，todo extension 已删 `__todoGetList`。`checkCompletePrerequisites` / `buildProgressInput` / `findIncompleteTodos` / `TODO_DEGRADED` / `ProgressInput` / `ProgressCheck` / `checkProgress` 全部删除。complete 不做 todo 前置硬检查（对齐 codex CLI），改为 prompt 软建议、AI 自行决策。以下正文保留作为决策历史，验收标准全部作废。
 
 **P 级**: P1
 **类型**: 模型
 **Blocked by**: #1
-**推荐强度**: Strong
+**推荐强度**: ~~Strong~~（已废弃）
 
 #### 问题描述
 
@@ -551,10 +553,33 @@ prompt 对标 Codex continuation.md 三约束（Completion audit / Fidelity / Bl
 
 关联 spec FR-6。
 
+#### 方案对比
+
+##### 方案 A: 硬编码在 contextInjectionPrompt（推荐）
+
+**改动**:
+- `projection/prompts.ts`: contextInjectionPrompt 增加段落——强制要求 agent 先建 todo（含 isVerification 验证任务）
+- continuationPrompt 对标 Codex continuation.md 三约束（Completion audit / Fidelity / Blocked audit）
+
+**优点**: prompt 只有一个消费方（before_agent_start handler），无配置需求，硬编码内聚
+**缺点**: prompt 变更需改 prompts.ts（但 prompt 本就是高频变更轴，已在 §7 归一）
+**适用场景**: prompt 单消费方、无运行时配置需求
+
+##### 方案 B: 独立 prompt 文件 + 模板插值
+
+**改动**:
+- 新建 `projection/templates/continuation.md` 等独立 prompt 文件
+- prompts.ts 读取模板文件 + 变量插值（双花括号占位符语法）
+
+**优点**: prompt 与代码分离，非工程角色可改 prompt
+**缺点**: 增加文件读取 + 模板引擎复杂度；prompt 仍只一个消费方，分离无收益
+**适用场景**: prompt 多消费方、需运行时配置或多人维护
+
 #### 取舍决策
 
-**选择**: 硬编码在 contextInjectionPrompt（推荐）
-**理由**: prompt 只有一个消费方（before_agent_start），无配置需求。独立文件增加不必要的复杂度。
+**选择**: 方案 A（硬编码）
+**理由**: prompt 只有一个消费方（before_agent_start），无配置需求。独立文件增加不必要的复杂度（YAGNI）。prompt 变更轴已由 §7 prompts.ts 单文件承担。
+**放弃方案 B 的理由**: 模板插值对单消费方 prompt 是过度设计，无运行时配置需求。
 
 **验收标准**:
 - [ ] contextInjectionPrompt 要求建 todo（含 isVerification）
@@ -576,10 +601,31 @@ prompt 对标 Codex continuation.md 三约束（Completion audit / Fidelity / Bl
 
 关联 system-architecture.md §7 行为变更 + clarification D25。
 
+#### 方案对比
+
+##### 方案 A: 直接改 handleSet 拒绝逻辑（推荐）
+
+**改动**:
+- `command-adapter.ts::handleSet`: 已有非终态 goal 时拒绝，提示"先 /goal resume 或 /goal clear"；只有终态旧 goal 时允许快速路径覆盖
+
+**优点**: 行为与 Codex `create_goal` 一致（已有 goal 时报错）；逻辑集中在单一函数
+**缺点**: 用户想覆盖非终态 goal 必须先 clear（多一步）
+**适用场景**: 对齐 Codex、防止误覆盖进行中的 goal
+
+##### 方案 B: 保留覆盖路径 + 二次确认
+
+**改动**:
+- 已有非终态 goal 时弹 confirm，用户确认后覆盖（写 cancelled history）
+
+**优点**: 用户可一步覆盖，少一次 clear
+**缺点**: 与 Codex 不一致；二次确认在 TUI 增加交互复杂度；误确认风险
+**适用场景**: 不对齐 Codex、频繁切换 goal
+
 #### 取舍决策
 
-**选择**: 直接改 handleSet 逻辑
-**理由**: 用户已决策（D25）。
+**选择**: 方案 A（直接拒绝）
+**理由**: 用户已决策（D25），对齐 Codex `create_goal` 行为。非终态 goal 含未完成工作，覆盖会丢失上下文，拒绝比二次确认更安全。
+**放弃方案 B 的理由**: 与 Codex 心智模型不一致，且 TUI 二次确认增加复杂度、误确认风险。
 
 **验收标准**:
 - [ ] /goal set 在 active/paused/blocked 时拒绝
@@ -601,10 +647,31 @@ widget.ts 补 paused 和 blocked 状态的显示（status suffix）。
 
 关联 system-architecture.md §5 运行时行为。
 
+#### 方案对比
+
+##### 方案 A: 在 widget status suffix 加 paused/blocked 分支（推荐）
+
+**改动**:
+- `projection/widget.ts`: status suffix 补 paused/blocked 分支（与现有 active/终态 同一 switch/映射）
+
+**优点**: 改动最小，复用现有 status suffix 渲染路径；状态显示集中一处
+**缺点**: widget.ts status suffix 逻辑略增（2 个分支）
+**适用场景**: paused/blocked 显示规则与现有状态同构
+
+##### 方案 B: 独立 widget 状态组件/视图分支
+
+**改动**:
+- widget.ts 为非终态非 active 状态（paused/blocked）建独立渲染分支或子组件
+
+**优点**: paused/blocked 可有差异化展示（如不同图标/颜色）
+**缺点**: 过度设计——paused/blocked 与 active 同属「进行中但停止」语义，无独立展示需求
+**适用场景**: 各状态需显著差异化 UI
+
 #### 取舍决策
 
-**选择**: 在 widget status suffix 加 paused/blocked 分支
-**理由**: 简单改动，不需方案对比。
+**选择**: 方案 A（status suffix 加分支）
+**理由**: paused/blocked 与 active 同构（都是 status suffix），独立组件是过度设计。现有 widget 已有 status suffix 渲染，加 2 分支即可。UI 差异化（颜色）由 §5 状态可见性约束，不需独立组件。
+**放弃方案 B 的理由**: 无独立展示需求，独立组件增加无收益复杂度（YAGNI）。
 
 **验收标准**:
 - [ ] widget 显示 paused 状态

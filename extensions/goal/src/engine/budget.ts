@@ -14,7 +14,6 @@ import type { GoalRuntimeState } from "./types";
 
 const RATIO_HIGH = 0.9;
 const RATIO_LOW = 0.7;
-const RATIO_TIGHT = 0.8;
 const PERCENT_FACTOR = 100;
 const SECONDS_PER_MINUTE = 60;
 const MS_PER_SECOND = 1000;
@@ -43,25 +42,6 @@ export interface BudgetCheckResult {
 	shouldSendSteering: boolean;
 }
 
-export interface ProgressInput {
-	/** 已完成项数（status === "completed"，FR-1 cancelled 非验证项也计为已解决） */
-	completedCount: number;
-	/** 总项数 */
-	totalCount: number;
-	/** 未完成项 id（用于 followUp 提示，#8 用） */
-	incompleteIds: number[];
-	/** 是否有未完成的验证任务（isVerification=true 且未 completed，FR-6 completion audit 用） */
-	hasVerificationPending?: boolean;
-}
-
-export interface ProgressCheck {
-	allTasksDone: boolean;
-	noTasksCreated: boolean;
-	isStalled: boolean;
-	budgetTight: boolean;
-	completedCount: number;
-	totalCount: number;
-}
 
 // ── token 累加（FR-8.6）──────────────────────────────
 
@@ -163,30 +143,4 @@ export function checkBudgetOnResume(state: GoalRuntimeState): { type: "exceeded"
 		}
 	}
 	return null;
-}
-
-// ── 进度检查 ────────────────────────────────
-
-/**
- * 进度检查（三阶段演进函数，D0）。
- *
- * - #1：去 task 依赖最小改动（task 字段暂置默认值）。
- * - #6（已完成）：删 maxTurnsReached 字段与计算。
- * - #7：改签名接收 ProgressInput，重填 task 相关字段。
- *   progress=undefined（todo 未加载）→ 降级：allTasksDone/noTasksCreated=false、计数为 0。
- *   isStalled 恒 false（#6 后 stall 概念已删，保留字段供 #8 基于 lastProgressTurn 判断）。
- */
-export function checkProgress(state: GoalRuntimeState, progress?: ProgressInput): ProgressCheck {
-	const completed = progress?.completedCount ?? 0;
-	const total = progress?.totalCount ?? 0;
-	return {
-		allTasksDone: progress ? total > 0 && completed >= total : false,
-		noTasksCreated: progress ? total === 0 : false,
-		isStalled: false,
-		budgetTight: Boolean(
-			state.budget.tokenBudget && state.tokensUsed >= state.budget.tokenBudget * RATIO_TIGHT,
-		),
-		completedCount: completed,
-		totalCount: total,
-	};
 }

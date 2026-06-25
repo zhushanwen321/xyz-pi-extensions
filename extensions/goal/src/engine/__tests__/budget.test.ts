@@ -7,7 +7,6 @@ import {
 	accumulateTokens,
 	checkBudgetOnResume,
 	checkBudgetOnTurnEnd,
-	checkProgress,
 	getBudgetColor,
 	getTimeUsagePercent,
 	getTokenUsagePercent,
@@ -33,8 +32,6 @@ const makeState = (overrides: Partial<GoalRuntimeState> = {}): GoalRuntimeState 
 	timeWarning90Sent: false,
 	lastTurnTokensUsed: 0,
 	currentTurnIndex: 0,
-	lastUpdatedTurn: 0,
-	lastIncompleteCount: 0,
 	...overrides,
 });
 
@@ -164,49 +161,6 @@ describe("checkBudgetOnResume", () => {
 	});
 });
 
-// ── checkProgress ────────────────────────────────────
-
-// #1 去 task 依赖后，checkProgress 的 allTasksDone/noTasksCreated/isStalled/
-// completedCount/totalCount 暂置默认值。#6 已删 maxTurnsReached 字段。
-// task 相关字段的重填测试随 #7（ProgressInput 注入）补回。
-describe("checkProgress", () => {
-	it("budgetTight：tokensUsed >= 80%", () => {
-		const s = makeState({ tokensUsed: 850, budget: { tokenBudget: 1000 } });
-		expect(checkProgress(s).budgetTight).toBe(true);
-	});
-
-	// #7 ProgressInput 注入（重填 task 相关字段）
-	it("progress undefined → 降级（progress 字段全 false/0）", () => {
-		const s = makeState();
-		const r = checkProgress(s);
-		expect(r.allTasksDone).toBe(false);
-		expect(r.noTasksCreated).toBe(false);
-		expect(r.completedCount).toBe(0);
-		expect(r.totalCount).toBe(0);
-	});
-
-	it("total=0 → noTasksCreated=true", () => {
-		const s = makeState();
-		expect(
-			checkProgress(s, { completedCount: 0, totalCount: 0, incompleteIds: [] }).noTasksCreated,
-		).toBe(true);
-	});
-
-	it("全完成 → allTasksDone=true", () => {
-		const s = makeState();
-		expect(
-			checkProgress(s, { completedCount: 3, totalCount: 3, incompleteIds: [] }).allTasksDone,
-		).toBe(true);
-	});
-
-	it("部分完成 → 非 allTasksDone + 计数回填", () => {
-		const s = makeState();
-		const r = checkProgress(s, { completedCount: 2, totalCount: 3, incompleteIds: [3] });
-		expect(r.allTasksDone).toBe(false);
-		expect(r.completedCount).toBe(2);
-		expect(r.totalCount).toBe(3);
-	});
-});
 
 // ── 百分比 + 颜色 ────────────────────────────────────
 
