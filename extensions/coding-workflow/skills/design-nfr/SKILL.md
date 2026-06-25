@@ -37,8 +37,34 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 不确定性高的副作用（并发死锁/缓存命中率）→ 标记为需⑤骨架验证，不纯靠脑力推演（见 `references/nfr-dimensions.md`）。
 初稿用 `references/deliverable-template.md`。
 
-**Step 2（追踪）— 派 fresh-context subagent，按 3 视角追踪：**
-副作用覆盖性（每已决策方案评估 7 维度？不适用有理由？）/ 缓解可行性（缓解方案可落地？残余风险可接受？）/ **回灌完整性（每条缓解项是否登记了回灌去向 + **验收方式**？去 ⑤的是否标注到章节？验收方式=代码测试的是否附 NFR-AC？去 ③的是否新建了 issue？）**。
+**Step 2（追踪）— 拆两部分：正向追踪 + 回灌指针重建器（反向覆盖）：**
+
+视角1（副作用覆盖性）+ 视角2（缓解可行性）是正向核查（像 ①⑤⑥，单 agent 串行够）。但视角3（回灌完整性）是**反向覆盖问题**——主 agent 声明「去 ③ 新 issue #7」时若漏建/写错编号，自己填表也查不出（同源自证），需 fresh context 他证。
+
+**① 正向追踪（单 fresh subagent，沿用 loop-skeleton Step 2）：** 视角1 副作用覆盖性（每已决策方案评估 7 维度？不适用有理由？）/ 视角2 缓解可行性（缓解方案可落地？残余风险可接受？）。产出 `tracing-round-{N}.md`。
+
+**② 回灌指针重建器（新增 1 fresh subagent，只做视角3，反向重建）：**
+
+> **时序约束（决定能查什么）：** ④ 执行时③ issues.md 已存在、⑤ code-arch 尚未产出。
+> - **③ 指针（即时承诺，本重建器查）**：④ 说「去 ③ 新 issue #N」→ 从 issues.md 反向核对 #N 真实存在
+> - **⑤ 指针（延期承诺，④ 查不了）**：⑤ 还没写。但这条闭环已被 ⑤ 接住——⑤ code-arch §6「来源 B：NFR 风险→用例映射表」+ ⑤ Step2 反向核对每条 `验收方式=代码测试` 的缓解项有 ≥1 对应用例。**④ 不重复查 ⑤，只对现在能查的 ③ 指针负责。**
+
+**重建器机制：** 读 issues.md（③，不先读 ④ 回灌表——避免被锚定）重建「issues.md 里有哪些 issue」，再读 ④ 回灌表，对每条「回灌去向=③issue」的行 diff。产出三态 gap：
+- **PHANTOM**：④ 说「去 ③ 新 issue #7」但 issues.md 无 #7（漏建/写错编号）
+- **MISMATCH**：④ 说「新 issue #7 是 P1」但 issues.md 里 #7 是 P2 / 标题不符（属性不一致）
+- **ORPHAN**（反向）：issues.md 有 issue 声称来自 ④ 回灌，但 ④ 回灌表无对应登记（仅当 issues.md 有来源标注时查；当前 issue-template 无此字段则跳过）
+
+**重建器 Task prompt：**
+
+```
+你是独立回灌指针重建 subagent。上下文与主 agent 隔离。
+1. read issues.md（③，真相源）—— 重建「issues.md 里真实存在哪些 issue（编号+P级+标题）」
+2. read non-functional-design.md 的「缓解项回灌登记」表
+3. 对每条「回灌去向」含 ③issue 的行，核对指向的 #N 是否真实存在于 issues.md：
+   PHANTOM（#N 不存在）/ MISMATCH（P级或标题不符）/ ORPHAN（issues.md 有来源标注但④无登记，若有）
+4. ⑤ 指针不查（⑤尚未产出，闭环由⑤来源B接住）
+5. 每条 gap 标类型（F/K/D）。写入 {topic_dir}/changes/tracing-round-{N}-backfeed.md
+```
 
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
@@ -60,7 +86,8 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 
 - [ ] non-functional-design.md 存在，frontmatter 含 `verdict: pass`
 - [ ] non-functional-design.html 存在，风险矩阵热力图正确渲染（✅⚠️❌着色）
-- [ ] `changes/tracing-round-{N}.md` 存在
+- [ ] `changes/tracing-round-{N}.md` 存在（正向追踪）
+- [ ] **`changes/tracing-round-{N}-backfeed.md` 存在（回灌指针重建，含 PHANTOM/MISMATCH diff）**
 - [ ] `changes/review-nfr.md` 存在且 verdict: APPROVED
 - [ ] issues.md 的每已决策方案评估了 7 维度（不适用有理由）
 - [ ] 标注的风险都有缓解方案或显式列为残余风险（接受理由）
