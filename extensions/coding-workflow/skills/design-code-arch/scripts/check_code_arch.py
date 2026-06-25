@@ -17,6 +17,8 @@ Usage:
     - 每文件 LOC ≤ 600（骨架阈值，god object 检测）
     - 无 import 循环（tsc 已含，此处额外 grep 交叉引用）
     - ②§11 grep pattern 执行（层级穿透/依赖方向，若②文档提供了 pattern）
+    - 调用链接线密度（Level 1：整骨架无 this.x() 接线 → 退化回 Level 0）
+    - orphan 方法（§3 签名表每方法在骨架有定义）
 
 Exit code: 0 = 全过，1 = 有硬伤
 """
@@ -151,6 +153,12 @@ def _check_skeleton(report, skeleton_path, topic_dir, md_path):
     else:
         report.add_skip("②§11 grep pattern", "无 system-architecture.md，跳过架构规则检查")
 
+    # ③e 调用链接线密度（Level 1：整模块无 this. 接线 → 退化回 Level 0）
+    _check_wiring_density(report, skeleton_path, src_files)
+
+    # ③f orphan 方法（§3 签名表每方法在骨架有定义）
+    _check_orphan_methods(report, md_path, skeleton_path)
+
 
 def _check_typecheck(report, skeleton_path):
     """③c 类型检查（自动检测项目用 tsc/mypy/cargo 哪个）。"""
@@ -211,6 +219,112 @@ def _check_arch_grep_patterns(report, arch_md, skeleton_path):
         report.add_pass(
             "②§11 架构规则（③）",
             f"{len(patterns)} 条 grep pattern 全部通过（无层级穿透/方向违规）",
+        )
+
+
+def _check_wiring_density(report, skeleton_path, src_files):
+    """③e 调用链接线密度（Level 1 反退化检查）。
+
+    Level 1 骨架要求模块内方法体真实接线下游（this.x.foo()），不再全 throw。
+    启发式：统计全骨架 `this.<method>(` 调用数。整骨架无任何 this. 接线
+    → 退化回 Level 0（调用链仍靠注释/import 表达，tsc 异质 oracle 威力浪费）→ FAIL。
+
+    宽松检查：不要求每方法都接线（叶子 throw 是合法的），只要求骨架整体有接线密度。
+    避免误伤纯叶子模块/纯类型定义文件。
+    """
+    # infra/ adapter 真引 SDK 的接线也算（this.stripe.charges.create）
+    # this.<x>( 形式覆盖：this.repo.save( / this.stripe.charges.create( / this.model.create(
+    wiring_hits = run_grep(r"\bthis\.\w+\.\w+\s*\(", skeleton_path)
+    # 也算直接 this.method( 调用（同类内方法互调）
+    wiring_hits += run_grep(r"\bthis\.\w+\s*\(", skeleton_path)
+    # 去重（同一行可能被两个 pattern 命中）
+    unique_lines = set(h.split(":", 1)[-1].strip() for h in wiring_hits if ":" in h)
+
+    if unique_lines:
+        report.add_pass(
+            "调用链接线密度（③e）",
+            f"Level 1 接线：{len(unique_lines)} 处 this.x() 调用（调用链在代码里真实接上）",
+        )
+    else:
+        report.add_fail(
+            "调用链接线密度（③e）",
+            "全骨架无 this.x() 接线——退化回 Level 0（方法体全 throw）。"
+            "Level 1 要求模块内方法真实接线下游（this.repo.save(order) 等），"
+            "仅叶子逻辑 throw。见 skeleton-spike.md「分层接线规则」",
+        )
+
+
+def _check_orphan_methods(report, md_path, skeleton_path):
+    """③f orphan 方法（§3 签名表每方法在骨架有定义）。
+
+    对抗 orphan：§3 签名表写了某个方法，但骨架代码里没有定义（设计写了骨架没落地）。
+    提取 §3 签名表的方法名，grep 骨架确认每个有定义。缺定义 → FAIL。
+
+    §3 缺失或无签名表行 → SKIP（无法提取）。
+    """
+    section = extract_section(md_path, r"API\s*契约|签名")
+    if not section:
+        report.add_skip("orphan 方法（③f）", "§3 API 契约章节缺失，跳过")
+        return
+
+    # 提取签名表的方法名：表格行 | 方法 | 签名 | ... 的第一列（方法名）
+    # 方法名可能含 . （类.方法）或纯方法名。取最后一段方法名 grep。
+    method_names = set()
+    for line in section.splitlines():
+        line = line.strip()
+        if not line.startswith("|") or "----" in line:
+            continue
+        cells = [c.strip() for c in line.split("|")]
+        # cells[0] 为空（| 开头），cells[1] 是第一列内容
+        if len(cells) < 2:
+            continue
+        first_cell = cells[1]
+        # 跳过表头行（类、方法 等标题）和分组标题（### 模块: / #### 类:）
+        if first_cell in ("方法", "类", "Class", "Method", ""):
+            continue
+        if first_cell.startswith("#") or first_cell.startswith("##"):
+            continue
+        # 方法名可能是 "createOrder" 或 "类.方法" 或 "| OrderController | createOrder |"
+        # 取标识符部分（字母/下划线开头，含字母数字下划线）
+        # 若第一列是方法名直接取；若是类名，尝试第二列
+        candidates = []
+        ident = re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", first_cell)
+        if ident:
+            candidates.append(first_cell)
+        # 也看第二列（可能是方法名）
+        if len(cells) > 2:
+            second_cell = cells[2]
+            ident2 = re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", second_cell)
+            if ident2:
+                candidates.append(second_cell)
+        for c in candidates:
+            # 过滤明显非方法名的（参数类型、返回类型等误匹配）
+            if len(c) >= 2 and c not in ("参数", "返回", "边界", "签名"):
+                method_names.add(c)
+
+    if not method_names:
+        report.add_skip("orphan 方法（③f）", "§3 未提取到签名表方法名（可能格式不同），跳过")
+        return
+
+    # grep 每个方法名在骨架有定义（methodName( 出现，且是定义不是注释）
+    # 定义形式：methodName(...) → Type { 或 methodName(...) { 或 methodName(...) {
+    missing = []
+    for method in sorted(method_names):
+        # 搜 methodName 后跟 ( ——定义或调用都算（调用也证明该方法存在）
+        hits = run_grep(re.escape(method) + r"\s*\(", skeleton_path)
+        if not hits:
+            missing.append(method)
+
+    if missing:
+        report.add_fail(
+            "orphan 方法（③f）",
+            f"{len(missing)} 个 §3 方法在骨架无定义: {missing[:5]}"
+            f"（设计写了骨架没落地，orphan）",
+        )
+    else:
+        report.add_pass(
+            "orphan 方法（③f）",
+            f"§3 全部 {len(method_names)} 个方法在骨架有定义（无 orphan）",
         )
 
 

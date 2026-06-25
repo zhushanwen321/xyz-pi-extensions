@@ -129,3 +129,31 @@ downstream: execution-plan.md
 ### 喂给 Step 6（执行计划）的部分
 | 时序图 | 对应 Wave | 依赖的其他时序图 |
 ```
+
+## 9. 骨架覆盖核验（MANDATORY）— 双向
+
+> 对抗 orphan（§3 签名表写了但骨架没定义/没人引用）。Level 1 接线后调用链在代码里真实接上，
+> 本表把 §3 签名表每个方法 ↔ 骨架定义双向对应，让遗漏变成**可见、可审计的决定**，不是沉默疏漏。
+>
+> **机器兜底**：check 脚本 ③f 验「§3 每方法在骨架有定义」（存在性硬检查）；
+> 本表由 agent 人工填「文件:行 + 接线状态」（补脚本查不到的语义）。
+
+| §3 方法（模块.类.方法） | 骨架定义位置（文件:行） | 接线状态 | 备注 |
+|------------------------|------------------------|---------|------|
+| order.OrderController.createOrder | modules/order/controller.ts:12 | ✅ 接线完整 | 透传到 Service |
+| order.OrderService.createOrder | modules/order/service.ts:8 | ✅ 接线(model+repo) | 叶子 throw（领域规则未写） |
+| order.OrderModel.create | modules/order/model.ts:24 | ✅ 签名(叶子) | 纯领域逻辑，throw |
+| payment.PaymentPort.charge | modules/payment/port.ts:5 | ✅ port 定义 | adapter 在 infra/ |
+| infra.StripeAdapter.charge | infra/stripe-adapter.ts:18 | ✅ adapter 真引SDK | tsc 验 @types/stripe |
+
+**接线状态：**
+- `✅ 接线完整` — 方法体真实接线下游（`this.x.foo()`），tsc 实证调用链
+- `✅ 签名(叶子throw)` — 叶子逻辑，方法体 `throw new NotImplementedError()`（纯计算/领域规则/IO 细节）
+- `✅ adapter 真引SDK` — adapter 真引第三方 SDK（Tier 2 证伪）
+- `❌ 未定义` — §3 有签名但骨架无对应定义（**终稿不允许**）
+- `N/A` — refactor 迁移项，处置查 §7（不新建骨架文件）
+
+**覆盖完整性自检：**
+- [ ] §3 签名表每个公开方法在本表有对应行（无遗漏）
+- [ ] 无 `❌ 未定义`（终稿硬阻断，check 脚本 ③f 兜底）
+- [ ] 接线状态标注准确（叶子标叶子，非叶子标接线完整，不混）

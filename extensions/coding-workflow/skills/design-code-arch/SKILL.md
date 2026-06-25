@@ -37,6 +37,8 @@ description: >-
 ```
 
 遍历纪律：先定工程目录（根）——目录决定模块边界，方法签名和时序图在骨架内展开。
+**签名设计时标注每个方法的接线层级**（模块内直调 / 跨模块 port / adapter 真引 SDK），供 Step 7 分层接线——
+哪些方法该真接线下游、哪些是叶子（throw）、哪些 adapter 该真引 SDK，在签名表就标清。
 用 `references/deep-module-vocabulary.md` 的 Module/Interface/Depth/Seam/Adapter 统一语言设计接口。
 依赖按 4 类分类决定 port；接口满足可测性三原则（accept deps / return results / small surface）。
 时序图按 `references/sequence-template.md`。初稿用 `references/deliverable-template.md`。
@@ -75,15 +77,17 @@ description: >-
    - **Tier 0 基础层先串行**（1 subagent）：`shared/`（types.ts/errors.ts，从 §3 跨层共享类型 + §4 数据流链一次固化）+ `infra/`（含各模块 adapter stub）
    - **Tier 1 模块层并行**（每 `modules/{module}/` 一个 fresh subagent）：§2 强制 `modules/* 不能互相 import` → 无写冲突。**Tier 1 只读不改 `shared/`**，发现缺类型标 gap 回主 agent 补 Tier 0
    - 读取 = §3 签名表 + §4 时序图 + §1 工程目录 + §2 包依赖图，生成到 `code-skeleton/`
-2. 骨架 = 所有类/方法签名/参数/返回类型（方法体 `throw new NotImplementedError()`）+ import 关系 + 类型契约 + 状态机枚举 + port/adapter 占位
+2. 骨架 = 所有类/方法签名/参数/返回类型 + **分层接线**（Level 1：模块内真接线 `this.x.foo()` + adapter 真引 SDK，方法体不再全 throw，见 `references/skeleton-spike.md`「分层接线规则」）+ import 关系 + 类型契约 + 状态机枚举 + port/adapter 占位
 3. **高密度骨架原则**——骨架注释暴露数据流/失败路径/SDK 契约/竞态/不变式（agent 不读代码推不出的信息），不只堆签名
-4. **停止点**——签名+调用链+依赖方向可验证即停，不写实现逻辑
+4. **停止点**——签名+调用链+依赖方向可验证即停，不写实现逻辑。Level 1 下「调用链」= 代码里真实接线，**接线边界画线**见 `references/skeleton-spike.md`「接线边界画线（防 Level 1 滑向实现）」——硬纪律：只接调用+透传参数，不写业务逻辑/数据组装
 
 **强制验证（移植 recursive-skeleton [MANDATORY]）：**
-- [ ] `tsc --noEmit` / `cargo check` / `mypy` 类型检查通过（签名自洽）
+- [ ] `tsc --noEmit` / `cargo check` / `mypy` 类型检查通过（签名自洽 + Level 1 接线调用链签名匹配）
 - [ ] `eslint` / lint 通过（无 `any` / `eslint-disable` / `TODO` 占位）
 - [ ] 包依赖无环（import 与 §2 包依赖图一致）
-- [ ] 每张 §4 时序图入口→底层调用链，在骨架 import 真实可达
+- [ ] **调用链代码接线可达**（Level 1：每张 §4 时序图入口→底层在骨架代码里真实 `this.x.foo()` 接线，非仅 import 图）
+- [ ] **adapter 真引 SDK** — 每个 `infra/*` adapter 方法真引用其 SDK（tsc 对 `@types/*` 验签），不 throw 占位
+- [ ] **§3 签名表每个方法在骨架有定义**（orphan 检查，`check_code_arch.py` ③f）
 - [ ] NFR④ 标并发的 UC，骨架已有幂等键/idempotency/锁字段
 
 **失败处理：** 验证失败 → 回 Step 1 修签名/目录/依赖/时序图，不带着错误交接 ⑥。
@@ -117,8 +121,10 @@ description: >-
 - [ ] **§6 来源 B（NFR 风险→用例映射表）存在**，④每条 `验收方式=代码测试` 的缓解项有 ≥1 对应用例（双向可查）
 - [ ] 方法签名表与时序图一致；Deep Module 词汇统一使用；接口满足可测性三原则
 - [ ] **`code-skeleton/` 骨架代码存在，`tsc`/`eslint`（或等价）全过**（Step 7 gate）
-- [ ] **每张时序图入口→底层调用链在骨架 import 可达**
-- [ ] **无 `any`/`eslint-disable`/`TODO` 占位**（方法体用 `not implemented` 异常）
+- [ ] **每张时序图入口→底层调用链在骨架代码接线可达（Level 1：`this.x.foo()` 真实接线，非仅 import）**
+- [ ] **adapter 真引 SDK** — `infra/*` adapter 不全 throw，真引用第三方 SDK（tsc 验 `@types/*`）
+- [ ] **§9 骨架覆盖核验表存在且无 `❌ 未定义` / 无空行**（§3 签名 ↔ 骨架定义双向可查）
+- [ ] **无 `any`/`eslint-disable`/`TODO` 占位**（非叶子方法体用接线，叶子逻辑用 `not implemented` 异常）
 - [ ] **NFR④ 标并发的 UC，骨架已有幂等/锁字段**
 - [ ] **②搭便车清单每项有⑤落点或已回流②打回**（追踪视角「搭便车闭环」）
 
