@@ -33,7 +33,9 @@ from xml.sax.saxutils import escape
 
 DEFAULT_W, DEFAULT_H = 120, 60
 NODE_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;"
-EDGE_STYLE = "html=1;rounded=0;"
+# orthogonalEdgeStyle = right-angle routing; rounded = smooth corners; jettySize=auto =
+# adaptive segment length so parallel edges don't stack on top of each other.
+EDGE_STYLE = "edgeStyle=orthogonalEdgeStyle;rounded=1;jettySize=auto;html=1;"
 GROUP_STYLE = ("rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#999999;"
                "verticalAlign=top;fontStyle=2;dashed=1;")
 # Group colours come from the skill's own palette (styles/built-in/default.json)
@@ -82,6 +84,16 @@ def dot_quote(value):
 def snap(value, grid=10):
     # Align to the grid the skill uses everywhere (multiples of 10).
     return int(round(value / grid) * grid)
+
+
+def clamp_ratio(value):
+    """Clamp a draw.io exit/entry ratio to [0, 1] and round to 2 decimals.
+
+    Ratios outside [0,1] (e.g. when a Graphviz exit point lands just past a node
+    edge due to spline snapping) cause draw.io to render the connector floating
+    in space. Clamping anchors the endpoint firmly on the node border.
+    """
+    return round(min(1.0, max(0.0, value)), 2)
 
 
 def group_tree(nodes):
@@ -285,9 +297,29 @@ def to_drawio(graph, height, pos, edge_pts, color=True):
             f"        </mxCell>"
         )
     for i, edge in enumerate(graph.get("edges", [])):
+        src, dst = edge["source"], edge["target"]
+        full_pts = edge_pts.get((src, dst), [])
+        # Pin the entry/exit connection points so draw.io's orthogonal router
+        # starts and ends exactly where Graphviz computed the route, instead of
+        # guessing a free-floating point and producing kinked/overlapping edges.
+        # draw.io's exitX/entryX/Y are ratios (0.0–1.0) of the node's width/height;
+        # clamp to [0,1] and round to 2dp to avoid drawing artefacts.
+        exit_attrs = entry_attrs = ""
+        if len(full_pts) >= 2 and src in rects and dst in rects:
+            sx, sy = full_pts[0]
+            tx, ty = full_pts[-1]
+            sxr, syr, sw, sh = rects[src]
+            txr, tyr, tw, th = rects[dst]
+            # Graphviz point -> ratio relative to the node's bounding rect.
+            ex = clamp_ratio((sx * 72 - sxr) / sw)
+            ey = clamp_ratio((sy * 72 - syr) / sh) * -1  # flip Y (drawio top-left)
+            enx = clamp_ratio((tx * 72 - txr) / tw)
+            eny = clamp_ratio((ty * 72 - tyr) / th) * -1
+            exit_attrs = f"exitX={ex};exitY={ey};exitDx=0;exitDy=0;"
+            entry_attrs = f"entryX={enx};entryY={eny};entryDx=0;entryDy=0;"
         # Drop the first/last points (they sit on the node borders, where
-        # draw.io attaches anyway) and replay the interior bends as waypoints.
-        interior = edge_pts.get((edge["source"], edge["target"]), [])[1:-1]
+        # draw.io attaches via exit/entry anchors) and replay interior bends.
+        interior = full_pts[1:-1]
         if interior:
             points = "".join(
                 f'<mxPoint x="{snap(x * 72) + dx}" y="{snap((height - y) * 72) + dy}"/>'
@@ -297,10 +329,11 @@ def to_drawio(graph, height, pos, edge_pts, color=True):
                     f'<Array as="points">{points}</Array></mxGeometry>')
         else:
             geom = '<mxGeometry relative="1" as="geometry"/>'
+        style = EDGE_STYLE + exit_attrs + entry_attrs
         cells.append(
             f'        <mxCell id="e{i}" value="{attr(edge.get("label", ""))}" '
-            f'style="{EDGE_STYLE}" edge="1" parent="1" '
-            f'source="{attr(edge["source"])}" target="{attr(edge["target"])}">\n'
+            f'style="{style}" edge="1" parent="1" '
+            f'source="{attr(src)}" target="{attr(dst)}">\n'
             f"          {geom}\n"
             f"        </mxCell>"
         )

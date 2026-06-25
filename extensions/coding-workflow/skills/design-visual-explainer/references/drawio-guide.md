@@ -150,8 +150,10 @@ drawio -x -f svg -e -o diagram.svg diagram.drawio
 | 判断（菱形） | `rhombus;whiteSpace=wrap;html=1` |
 | 外部系统（云） | `shape=cloud;whiteSpace=wrap;html=1` |
 | 容器/分层（泳道） | `swimlane;startSize=30;whiteSpace=wrap;html=1;container=1` |
-| 边：正交连线 | `edgeStyle=orthogonalEdgeStyle;html=1` |
-| 边：虚线（异步/可选） | `edgeStyle=orthogonalEdgeStyle;html=1;dashed=1` |
+| 边：正交连线（推荐） | `edgeStyle=orthogonalEdgeStyle;rounded=1;jettySize=auto;html=1` |
+| 边：虚线（异步/可选） | `edgeStyle=orthogonalEdgeStyle;rounded=1;jettySize=auto;html=1;dashed=1` |
+| 边：流向（带箭头标签） | `edgeStyle=orthogonalEdgeStyle;rounded=1;jettySize=auto;html=1;endArrow=block;endFill=1;` |
+| 边：ER 关系 | `endArrow=ERmandOne;startArrow=ERoneToMany;html=1;` |
 | ER 表 | `shape=table;startSize=30;container=1;collapsible=1;childLayout=tableLayout;fixedRows=1;rowLines=0;` |
 | ER 行 | `shape=tableRow;horizontal=0;startSize=0;swimlaneHead=0;swimlaneBody=0;strokeColor=inherit;top=0;left=0;bottom=0;right=0;collapsible=0;dropTarget=0;fillColor=none;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;` |
 
@@ -164,6 +166,66 @@ drawio -x -f svg -e -o diagram.svg diagram.drawio
 - **同层服务等宽对齐**；跨层用正交边
 - **按 tier 着色**：gateway 蓝、domain 绿、infra 橙、external 灰
 - **复杂图（>15节点）用 autolayout**——手算坐标易重叠，Graphviz 的 `splines=ortho` 自动避让
+
+---
+
+## 连接线规范（防不规则/绕路/穿节点）
+
+**[HISTORICAL] drawio 连接线不规则的三大成因及修复：**
+
+### 1. 必须用 orthogonalEdgeStyle
+
+裸 `html=1` 会让 drawio 用**自由直线**路由——角度随意、不对齐、交叉混乱。**所有边必须带 `edgeStyle=orthogonalEdgeStyle`**（正交折线，只走横/竖），加 `rounded=1`（圆角弯折）和 `jettySize=auto`（平行边自动错开，防止重叠）：
+
+```
+edgeStyle=orthogonalEdgeStyle;rounded=1;jettySize=auto;html=1
+```
+
+autolayout.py 已默认用此样式。**手写 XML 时也必须加**，不要省略。
+
+### 2. 连接点锚定（exitX/exitY/entryX/entryY）
+
+drawio 默认让正交路由器**自由选择**出入点——它会重新计算一条路径，可能和 Graphviz 的布局不匹配，产生绕路/穿节点。解决方案：**锚定连接点**。
+
+drawio 的 `exitX/exitY`（源节点出点）和 `entryX/entryY`（目标节点入点）是 **0.0-1.0 的比例值**（相对于节点宽高）：
+
+| 锚点位置 | exitX | exitY |
+|---------|:-----:|:-----:|
+| 顶边中央 | 0.5 | 0 |
+| 底边中央 | 0.5 | 1 |
+| 左边中央 | 0 | 0.5 |
+| 右边中央 | 1 | 0.5 |
+
+```xml
+<!-- TB（上到下）布局的典型边：源节点底部出，目标节点顶部入 -->
+<mxCell style="edgeStyle=orthogonalEdgeStyle;rounded=1;jettySize=auto;html=1;
+  exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;"
+  edge="1" source="2" target="3">...</mxCell>
+```
+
+**autolayout.py 已自动计算这些锚点**（从 Graphviz 的路由首尾点转换）。**手写 XML 的 TB 布局用 exitY=1→entryY=0，LR 布局用 exitX=1→entryX=0**，能消除大部分不规则连线。
+
+### 3. 同向多边用 jettySize 防重叠
+
+两个节点间有多条边时，drawio 默认把它们叠在一起。`jettySize=auto` 让平行边自动错开（每个多出一段不同长度的折线）。autolayout 已含此项；手写时也要加。
+
+### 速查：手写边的正确模板
+
+```xml
+<!-- TB 布局（上到下） -->
+<mxCell style="edgeStyle=orthogonalEdgeStyle;rounded=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;"
+  edge="1" parent="1" source="A" target="B">
+  <mxGeometry relative="1" as="geometry"/>
+</mxCell>
+
+<!-- LR 布局（左到右） -->
+<mxCell style="edgeStyle=orthogonalEdgeStyle;rounded=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;"
+  edge="1" parent="1" source="A" target="B">
+  <mxGeometry relative="1" as="geometry"/>
+</mxCell>
+```
+
+**违反这些规则的症状**：连线斜着穿过节点、多条边叠成一线、弯折角度怪异、边绕远路。遇到这些 → 检查是否缺 `edgeStyle=orthogonalEdgeStyle` 或没锚定 exit/entry 点。
 
 ---
 
