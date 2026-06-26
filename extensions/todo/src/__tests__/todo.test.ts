@@ -11,6 +11,8 @@ import {
 	VALID_STATUSES,
 } from "../model";
 import { renderWidgetLines } from "../render";
+import { createTodoSessionState } from "../state";
+import { handleSingleUpdate } from "../tool";
 
 // ── 数据模型 + 向后兼容 ──────────────────────────────
 
@@ -174,6 +176,40 @@ describe("todo update batch", () => {
 		const todos: Todo[] = [{ id: 1, text: "A", status: "pending" }];
 		const result = updateTodos(todos, [{ id: 1, status: "banana" }]);
 		expect(result.error).toContain("invalid status");
+	});
+
+	it("FR-6: cancelled todo 不可恢复（status 更新拒绝）", () => {
+		const todos: Todo[] = [{ id: 1, text: "dropped", status: "cancelled" }];
+		const result = updateTodos(todos, [{ id: 1, status: "pending" }]);
+		expect(result.error).toBe("id 1 is cancelled");
+		expect(result.resultText).toContain("cannot be restored");
+		expect(result.updatedTodos).toEqual(todos);
+	});
+
+	it("FR-6: 验证任务不可 cancelled", () => {
+		const todos: Todo[] = [{ id: 2, text: "run tests", status: "in_progress", isVerification: true }];
+		const result = updateTodos(todos, [{ id: 2, status: "cancelled" }]);
+		expect(result.error).toBe("id 2 is verification todo");
+		expect(result.resultText).toContain("cannot be cancelled");
+		expect(result.updatedTodos).toEqual(todos);
+	});
+});
+
+// ── handleSingleUpdate FR-6 守卫（tool 单条路径）────
+
+describe("handleSingleUpdate FR-6 guards (tool single path)", () => {
+	it("FR-6: cancelled todo + status → cannot restore", () => {
+		const state = createTodoSessionState();
+		state.todos = [{ id: 1, text: "dropped", status: "cancelled" }];
+		const result = handleSingleUpdate(state, { action: "update", id: 1, status: "pending" });
+		expect(result.error).toBe("#1 is cancelled (cannot restore)");
+	});
+
+	it("FR-6: verification todo + status=cancelled → cannot cancel", () => {
+		const state = createTodoSessionState();
+		state.todos = [{ id: 2, text: "run tests", status: "in_progress", isVerification: true }];
+		const result = handleSingleUpdate(state, { action: "update", id: 2, status: "cancelled" });
+		expect(result.error).toBe("#2 is verification todo (cannot cancel)");
 	});
 });
 

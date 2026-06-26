@@ -63,7 +63,6 @@ export interface SessionEntryLike {
 
 export interface SessionPort {
 	getEntries(): SessionEntryLike[];
-	spliceEntry(index: number, count: number): void;
 	getContextUsage(): { tokens?: number; contextWindow?: number } | null;
 	readonly signal: AbortSignal | undefined;
 }

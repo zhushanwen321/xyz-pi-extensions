@@ -18,6 +18,7 @@ import type { CustomEntry, ExtensionAPI, ExtensionContext } from "@mariozechner/
 
 import { parseGoalArgs } from "../commands";
 import {
+	MAX_HISTORY_ENTRIES,
 	OBJECTIVE_DISPLAY_LIMIT,
 	OBJECTIVE_TRUNCATE_KEEP,
 	SECONDS_PER_MINUTE,
@@ -196,7 +197,10 @@ function handleHistory(ctx: ExtensionContext): void {
 		ctx.ui.notify("No goal history", "info");
 		return;
 	}
-	const sorted = [...historyEntries].reverse();
+	// FR-8.1 G-006: session append-only（Pi getEntries 返回 filter-copy，无法 splice 旧 entry）。
+	// 显示侧截断为最近 MAX_HISTORY_ENTRIES 条，避免历史无界增长刷屏。
+	const recent = historyEntries.slice(-MAX_HISTORY_ENTRIES);
+	const sorted = [...recent].reverse();
 	const lines: string[] = ["Goal history:\n"];
 	sorted.forEach((entry, i) => {
 		const h = entry.data;

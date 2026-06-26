@@ -6,12 +6,12 @@
  *
  * FR-6.4: 删除 hasPendingInjection（僵尸字段）
  * FR-6.7: 删除 pendingPause（ESC 改用 aborted 守卫）
- * FR-8.1 G-006: entry GC（goal-state 最新 1 条，goal-history 20 条）
+ * FR-8.1 G-006: session append-only——entry GC 不生效（生产），history 显示侧截断
  * FR-3: 崩溃后保持原状态（active 重启计时；paused/blocked 保持；终态保持）
  */
 
 import type { GoalRuntimeState } from "./engine/types";
-import { deserializeState, ENTRY_TYPE, HISTORY_ENTRY_TYPE } from "./persistence";
+import { deserializeState, ENTRY_TYPE } from "./persistence";
 import type { SessionEntryLike, SessionPort, UiPort } from "./ports";
 
 // ── 运行时句柄 ────────────────────────────────────────
@@ -50,11 +50,13 @@ export function isStaleContextError(error: Error | unknown): boolean {
 /**
  * 从 session entries 恢复 goal state。
  *
- * FR-8.1 G-006: goal-state 只保留最新 1 条（splice 其余）
+ * Pi SDK 的 session 是 append-only，getEntries() 返回 filter-copy——splice
+ * 无法修改真实 entries。Entry GC（goal-state 留 1、goal-history 留 20）在生产
+ * 不生效：本函数只读最新一条 goal-state，不删旧 entry；history 显示侧用
+ * .slice(-MAX_HISTORY_ENTRIES) 截断（handleHistory）。长期需 compaction API。
  * FR-3: 崩溃后状态保持原状——active 重启计时（timeStartedAt = now），
  *   paused/blocked 保持（用户/agent 主动叫停不被抹除），终态保持。
  * FR-8.1 G-024: deserialize throw → state=null（部分损坏全丢）
- * FR-8.1 G-006: goal-history entry 保留最近 MAX_HISTORY_ENTRIES=20 条
  */
 export function reconstructGoalState(session: GoalSession, sessionPort: SessionPort): void {
 	session.state = null;
@@ -81,38 +83,8 @@ export function reconstructGoalState(session: GoalSession, sessionPort: SessionP
 		}
 	}
 
-	// Entry GC — 收集除最新外的所有 goal-state entries（从后往前，降序）
-	const goalStateIndicesToDelete: number[] = [];
-	let latestFound = false;
-	for (let i = entries.length - 1; i >= 0; i--) {
-		if (isGoalStateEntry(entries[i]!)) {
-			if (!latestFound) {
-				latestFound = true;
-			} else {
-				goalStateIndicesToDelete.push(i);
-			}
-		}
-	}
-	// 降序 splice（先删大索引，不影响小索引）
-	for (const idx of goalStateIndicesToDelete) {
-		sessionPort.spliceEntry(idx, 1);
-	}
-
-	// Goal-history entry GC（保留最近 MAX_HISTORY_ENTRIES 条）
-	const MAX_HISTORY_ENTRIES = 20;
-	const historyIndices: number[] = [];
-	for (let i = 0; i < entries.length; i++) {
-		if (entries[i]!.type === "custom" && (entries[i] as { customType?: string }).customType === HISTORY_ENTRY_TYPE) {
-			historyIndices.push(i);
-		}
-	}
-	if (historyIndices.length > MAX_HISTORY_ENTRIES) {
-		const toDelete = historyIndices.slice(0, historyIndices.length - MAX_HISTORY_ENTRIES);
-		// 降序 splice
-		for (let i = toDelete.length - 1; i >= 0; i--) {
-			sessionPort.spliceEntry(toDelete[i]!, 1);
-		}
-	}
+	// FR-8.1 G-006: session append-only，splice GC 在生产不生效（见上方函数注释）。
+	// 不在此处删旧 entry；history 显示侧截断。
 
 	if (!session.state) return;
 

@@ -28,15 +28,12 @@ import {
 // ── Fake SessionPort ─────────────────────────────────
 
 function makeFakeSessionPort(entries: SessionEntryLike[]): SessionPort {
-	const port: SessionPort = {
-		getEntries: () => entries,
-		spliceEntry: (index, count) => {
-			entries.splice(index, count);
-		},
+	return {
+		// 模拟 Pi SDK filter-copy 语义：返回新数组，避免测试掩盖 splice GC 失效
+		getEntries: () => entries.slice(),
 		getContextUsage: () => null,
 		signal: undefined,
 	};
-	return port;
 }
 
 function makeGoalStateEntry(state: GoalRuntimeState): SessionEntryLike {
@@ -97,7 +94,7 @@ describe("reconstructGoalState", () => {
 		expect(session.state!.objective).toBe("my objective");
 	});
 
-	it("G-006: 多个 goal-state entry → 只保留最新 1 条（splice 其余）", () => {
+	it("G-006: 多个 goal-state entry → 恢复最新（append-only，不 splice）", () => {
 		const session = createGoalSession();
 		const oldState = createGoalState("old");
 		const newState = createGoalState("new");
@@ -109,12 +106,12 @@ describe("reconstructGoalState", () => {
 		reconstructGoalState(session, port);
 		// 恢复的是最新的
 		expect(session.state!.objective).toBe("new");
-		// 旧 entry 被 splice（只剩 1 个 goal-state entry）
+		// append-only：旧 entry 不被删除（splice GC 在生产不生效）
 		const remaining = entries.filter((e) => e.customType === ENTRY_TYPE);
-		expect(remaining).toHaveLength(1);
+		expect(remaining).toHaveLength(2);
 	});
 
-	it("G-006: goal-history entry 保留最近 20 条（超出 splice）", () => {
+	it("G-006: goal-history 超出 20 条仍正确恢复 state（append-only，不 splice）", () => {
 		const session = createGoalSession();
 		const state = createGoalState("active goal");
 		// 插入 25 个 history entry + 1 个 goal-state
@@ -125,12 +122,11 @@ describe("reconstructGoalState", () => {
 		entries.push(makeGoalStateEntry(state));
 		const port = makeFakeSessionPort(entries);
 		reconstructGoalState(session, port);
-		// history 应只剩 20 条
+		// append-only：history 不被删除（显示侧截断，splice GC 在生产不生效）
 		const historyRemaining = entries.filter((e) => e.customType === HISTORY_ENTRY_TYPE);
-		expect(historyRemaining).toHaveLength(20);
-		// 保留的是最新的 20 条（timestamp 5-24）
-		const timestamps = historyRemaining.map((e) => (e.data as { timestamp: number }).timestamp);
-		expect(Math.min(...timestamps)).toBe(5);
+		expect(historyRemaining).toHaveLength(25);
+		// state 仍正确恢复
+		expect(session.state!.objective).toBe("active goal");
 	});
 
 	it("FR-3: blocked 非终态 → 保持 blocked（崩溃不抹除 agent 叫停状态）", () => {

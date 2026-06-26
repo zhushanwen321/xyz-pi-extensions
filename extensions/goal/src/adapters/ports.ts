@@ -6,7 +6,7 @@
  * - persistence: pi.appendEntry 映射到 appendState / appendHistory（type 字符串区分）
  * - ui: ctx.ui 的 setWidget/setStatus/notify + hasUI + theme 的 fg/bold（满足 ThemeLike 形状）
  * - messaging: pi.sendMessage 映射到 sendContextMessage / sendUserMessage
- * - session: ctx.sessionManager.getEntries + best-effort splice + ctx.getContextUsage + ctx.signal
+ * - session: ctx.sessionManager.getEntries + ctx.getContextUsage + ctx.signal
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -76,10 +76,6 @@ export function buildPorts(pi: ExtensionAPI, ctx: ExtensionContext): ServicePort
 
 	const session: SessionPort = {
 		getEntries: () => ctx.sessionManager.getEntries(),
-		// best-effort splice：对 getEntries() 返回的数组执行 splice（reconstructGoalState 的 entry GC 用）。
-		spliceEntry: (index, count): void => {
-			ctx.sessionManager.getEntries().splice(index, count);
-		},
 		getContextUsage: () => {
 			const usage = ctx.getContextUsage();
 			return usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow } : null;

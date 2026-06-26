@@ -44,7 +44,6 @@ function makeFakePorts(): ServicePorts & {
 		},
 		session: {
 			getEntries: () => [],
-			spliceEntry: () => {},
 			getContextUsage: () => null,
 			signal: undefined,
 		},

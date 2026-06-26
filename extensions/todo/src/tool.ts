@@ -140,7 +140,7 @@ function handleBatchUpdate(
 }
 
 /** update action: single */
-function handleSingleUpdate(
+export function handleSingleUpdate(
 	state: TodoSessionState,
 	params: TodoActionParams,
 ): { resultText: string; error?: string } {
