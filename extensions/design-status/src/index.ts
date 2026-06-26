@@ -8,7 +8,7 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-import { registerDesignStatusTool } from "./tool";
+import { registerDesignStatusTool } from "./tool.ts";
 
 export default function (pi: ExtensionAPI) {
 	registerDesignStatusTool(pi);

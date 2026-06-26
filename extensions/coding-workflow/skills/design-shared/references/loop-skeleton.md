@@ -268,19 +268,24 @@ python3 ${SKILL_DIR}/scripts/check_{phase}.py {topic_dir}
 > 扫描 `verdict: pass` 的 .md，提取其决策记录章节中标记为 D-不可逆 的决策、搭便车清单、残余风险接受理由。
 > 主 agent 只负责汇总格式化，不主观筛选（避免主 agent 的确认偏误漏掉硬约束）。
 
-### 阶段状态追踪（design_status tool）
+### 阶段状态追踪（design_status tool / CLI）
 
-> **[RECOMMENDED]** 用 `design_status` tool 追踪 7 阶段状态，替代手写 `_progress.md` 的进度部分。
-> tool 是**权威状态机**：阶段线性依赖（防跳阶）+ complete_phase 自动校验交付物 gate（防伪造完成）。
-> `_progress.md` 降级为 tool 状态的可读快照（跨会话交接用，tool 每次 complete_phase 可选同步生成）。
+> **[RECOMMENDED]** 用 `design_status` 追踪 7 阶段状态，替代手写 `_progress.md` 的进度部分。
+> 它是**权威状态机**：阶段线性依赖（防跳阶）+ complete_phase 自动校验交付物 gate（防伪造完成）。
+> `_progress.md` 降级为其状态的可读快照（跨会话交接用，每次 complete_phase 可选同步生成）。
+>
+> **两种调用方式**（语义完全一致，调同一批约束/gate 逻辑）：
+> - **Pi tool**（Pi 环境）：`design_status(action: start_phase, phase: {本阶段})`
+> - **CLI**（Claude Code / Cursor / 纯 shell）：`design-status start-phase {本阶段}`
+>   非 Pi 环境用 `npx @zhushanwen/pi-design-status <command>` 或装 bin 后直接 `design-status <command>`。
 
-各阶段 SKILL.md 在两处调 tool：
-- **Step 1 开头**：`design_status(action: start_phase, phase: {本阶段})` 标记开始（会校验前置阶段是否 completed）
-- **Step 6 审查 APPROVED 后**：`design_status(action: complete_phase, phase: {本阶段})` 收尾——自动验交付物存在 + verdict:pass + review APPROVED，过了才标 completed，否则拒绝并告缺什么
+各阶段 SKILL.md 在两处调：
+- **Step 1 开头**：`start_phase {本阶段}` 标记开始（会校验前置阶段是否 completed）
+- **Step 6 审查 APPROVED 后**：`complete_phase {本阶段}` 收尾——自动验交付物存在 + verdict:pass + review APPROVED，过了才标 completed，否则拒绝并告缺什么
 
-> **为什么用 tool 而非手写 _progress.md**：tool 的「完成状态」从交付物派生（不是 agent 主观写），无法伪造「做完了」；
-> 阶段状态机约束（completed 不可回退、不可跳阶）由 tool 强制，agent 无法绕过 gate。
-> 提示词不暴露存储实现（json），tool action 即全部接口。
+> **为什么用它而非手写 _progress.md**：「完成状态」从交付物派生（不是 agent 主观写），无法伪造「做完了」；
+> 阶段状态机约束（completed 不可回退、不可跳阶）被强制，agent 无法绕过 gate。
+> 提示词不暴露存储实现（json），tool action / CLI command 即全部接口。
 
 ## Stagnation 保底
 

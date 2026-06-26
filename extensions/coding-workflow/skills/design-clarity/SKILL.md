@@ -23,7 +23,7 @@ description: >-
 
 **Step 1（交互+初稿）— Grilling 遍历业务目标树：**
 
-> **[状态追踪]** 开始时调 `design_status(action: start_phase, phase: clarity)` 标记阶段开始（会校验 init 已 completed）。
+> **[状态追踪]** 开始时调 `design_status start_phase clarity`（Pi tool: `design_status(action: start_phase, phase: clarity)`；CLI: `design-status start-phase clarity`）标记阶段开始（会校验 init 已 completed）。
 
 ```
 业务目标（根）
@@ -92,7 +92,7 @@ description: >-
 
 审查 APPROVED 后向用户交接（按 loop-skeleton.md Step 6 格式）：
 
-> **[状态追踪]** 交接前调 `design_status(action: complete_phase, phase: clarity)` 收尾——自动校验 requirements.md + verdict:pass + review APPROVED，过了才标 completed。
+> **[状态追踪]** 交接前调 `design_status complete_phase clarity`（CLI: `design-status complete-phase clarity`）收尾——自动校验 requirements.md + verdict:pass + review APPROVED，过了才标 completed。
 
 ```
 ✅ ①澄清需求 已完成并通过独立审查。

@@ -8,10 +8,10 @@
  * 不满足返回 error，不改 status。
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { checkPhaseGate, type GateResult } from "./gate";
+import { checkPhaseGate, type GateResult } from "./gate.ts";
 import {
 	createInitialStatus,
 	type DesignStatus,
@@ -26,7 +26,7 @@ import {
 	PHASE_ORDER,
 	type PhaseStatus,
 	prerequisiteOf,
-} from "./model";
+} from "./model.ts";
 
 // ── 结果类型 ──────────────────────────────────────────
 
@@ -264,4 +264,26 @@ export function saveStatus(cwd: string, status: DesignStatus): void {
 	const path = join(dir, STATUS_FILENAME);
 	const JSON_INDENT = 2;
 	writeFileSync(path, JSON.stringify(status, null, JSON_INDENT) + "\n", "utf-8");
+}
+
+// ── topic 解析（tool.ts / cli.ts 共用） ───────────────
+
+/**
+ * 推断当前 topic。扫 {cwd}/.xyz-harness/ 下的子目录取最近修改的。
+ * 返回 { topic, topicDir }，无 .xyz-harness 或无子目录时返回 null。
+ */
+export function resolveTopic(cwd: string): { topic: string; topicDir: string } | null {
+	const harnessDir = join(cwd, ".xyz-harness");
+	if (!existsSync(harnessDir)) return null;
+	const entries = readdirSync(harnessDir, { withFileTypes: true })
+		.filter((e) => e.isDirectory())
+		.map((e) => {
+			const dir = join(harnessDir, e.name);
+			const stat = statSync(dir);
+			return { name: e.name, mtime: stat.mtimeMs };
+		})
+		.sort((a, b) => b.mtime - a.mtime);
+	if (entries.length === 0) return null;
+	const topic = entries[0].name;
+	return { topic, topicDir: join(harnessDir, topic) };
 }

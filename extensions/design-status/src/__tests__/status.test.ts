@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { checkPhaseGate, parseFrontmatter } from "../gate";
-import type { DesignStatus } from "../model";
+import { checkPhaseGate, parseFrontmatter } from "../gate.ts";
+import type { DesignStatus } from "../model.ts";
 import {
 	createInitialStatus,
 	currentPhase,
@@ -13,14 +13,14 @@ import {
 	isStepAdvance,
 	PHASE_ORDER,
 	prerequisiteOf,
-} from "../model";
+} from "../model.ts";
 import {
 	advanceStep,
 	completePhase,
 	logGap,
 	reviewPhase,
 	startPhase,
-} from "../store";
+} from "../store.ts";
 
 // ── 测试夹具 ──────────────────────────────────────────
 

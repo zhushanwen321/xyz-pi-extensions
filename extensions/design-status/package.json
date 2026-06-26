@@ -4,6 +4,9 @@
   "description": "Design workflow phase status & progress tracker — single tool governing 7 design skills with state-machine constraints and deliverable-derived gates.",
   "type": "module",
   "main": "src/index.ts",
+  "bin": {
+    "design-status": "src/cli.ts"
+  },
   "pi": {
     "extensions": [
       "./index.ts"
@@ -15,7 +18,9 @@
     "design",
     "workflow",
     "status",
-    "tracker"
+    "tracker",
+    "cli",
+    "bin"
   ],
   "license": "MIT",
   "files": [

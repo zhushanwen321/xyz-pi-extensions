@@ -13,7 +13,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { type Phase,PHASE_GATES } from "./model";
+import { type Phase, PHASE_GATES } from "./model.ts";
 
 export interface GateResult {
 	ok: boolean;
