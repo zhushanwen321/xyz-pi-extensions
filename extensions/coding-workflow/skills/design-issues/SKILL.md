@@ -18,7 +18,7 @@ description: >-
 
 ## 执行流程
 
-按 `design-shared/references/loop-skeleton.md`（共享参考目录）的 6 步循环执行。**（loop-method.md 的方法论仅 clarity 首次 read，本阶段无需 read。）**
+按 `../design-shared/references/loop-skeleton.md`（共享参考目录）的 6 步循环执行。**（loop-method.md 的方法论仅 clarity 首次 read，本阶段无需 read。）**
 
 **Step 1（交互+初稿）— Grilling 遍历 issue 决策树：**
 
@@ -105,7 +105,7 @@ Issue 决策图（根：从 system-architecture 的挑战推导）
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 issues.md；派 fresh subagent 渲染 issues.html（机制见 loop-skeleton.md Step 5b）（主角图：决策 DAG 图，节点状态色标）。**
 
-**Step 6（审查）— 派 fresh-context 审查 subagent（按 design-shared/references/review-agent.md 规范，先跑 `scripts/check_issues.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-issues.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（回扫 ①②上游），再交接。**
+**Step 6（审查）— 派 fresh-context 审查 subagent（按 ../design-shared/references/review-agent.md 规范，先跑 `scripts/check_issues.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-issues.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（回扫 ①②上游），再交接。**
 
 ## Phase Loop 机制
 

@@ -145,7 +145,7 @@ Announce at start: "我正在使用 {skill-name} skill 来 {本阶段目标}。"
 [MANDATORY] 定稿后必须过独立审查（质量门）。审查判质量（不是找 gap）；追踪 vs 审查区别详见 `loop-method.md`。
 **审查分两层：先跑机器检查脚本（硬阻断），后做 6 维 LLM 审查。** 审查 subagent 规范见 `review-agent.md`。
 
-**派发配置：** Agent=general-purpose，Context=**fresh**，读取=design-shared 的 `references/review-agent.md`（审查规范）+ 定稿 .md + 定稿 .html + 所有上游交付物 + CONTEXT.md，产出=`changes/review-{phase-slug}.md`。
+**派发配置：** Agent=general-purpose，Context=**fresh**，读取=`review-agent.md`（审查规范，与本文件同目录：`design-shared/references/`）+ 定稿 .md + 定稿 .html + 所有上游交付物 + CONTEXT.md，产出=`changes/review-{phase-slug}.md`。
 
 **Step 0（机器检查，审查 subagent 最先做）：** 审查 subagent 先跑对应阶段的机器检查脚本：
 
@@ -163,7 +163,7 @@ python3 ${SKILL_DIR}/scripts/check_{phase}.py {topic_dir}
 你是独立审查 subagent。上下文与主 agent 隔离。审查定稿是否达可交接质量：
 
 **Step 0（机器检查，硬阻断，最先做）：**
-0a. read design-shared skill 的 references/review-agent.md（审查规范）
+0a. read `review-agent.md`（审查规范，与本文件同目录 `design-shared/references/`）
 0b. 跑 `python3 {skill_dir}/scripts/check_{phase}.py {topic_dir}`
 0c. exit 1 = 机器检查 FAIL → 直接判 CHANGES_REQUESTED，把 machine-check-{phase}.md 的 ❌ 当"必须修改"，不许 APPROVED（硬阻断）
 0d. exit 0 才进下面的 6 维 LLM 审查

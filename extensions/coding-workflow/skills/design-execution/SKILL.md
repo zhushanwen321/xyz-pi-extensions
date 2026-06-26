@@ -22,7 +22,7 @@ description: >-
 
 ## 执行流程
 
-按 `design-shared/references/loop-skeleton.md`（共享参考目录）的 6 步循环执行。**（loop-method.md 的方法论仅 clarity 首次 read，本阶段无需 read。）**
+按 `../design-shared/references/loop-skeleton.md`（共享参考目录）的 6 步循环执行。**（loop-method.md 的方法论仅 clarity 首次 read，本阶段无需 read。）**
 
 **Step 1（交互+初稿）— Grilling 遍历 Wave 依赖树：**
 
@@ -58,7 +58,7 @@ Wave 编排（根：从时序图推导）
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 execution-plan.md；派 fresh subagent 渲染 execution-plan.html（机制见 loop-skeleton.md Step 5b）（主角图：Wave 依赖 DAG 图，标注并行组）。**
 
-**Step 6（审查）— 派 fresh-context 审查 subagent（按 design-shared/references/review-agent.md 规范，先跑 `scripts/check_execution.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-execution.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（回扫①-⑤上游），再进 Step 6c。**
+**Step 6（审查）— 派 fresh-context 审查 subagent（按 ../design-shared/references/review-agent.md 规范，先跑 `scripts/check_execution.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-execution.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（回扫①-⑤上游），再进 Step 6c。**
 
 **Step 6c（全文档一致性终检）— 仅⑥阶段：编码前的总闸门。** 派独立 fresh-context subagent，读取①-⑥全部 .md + CONTEXT.md + ⑤骨架代码，按 6 维做跨文档一致性审计（详见 `references/consistency-check.md`）。产出 `changes/consistency-final.md`（verdict: CONSISTENT / INCONSISTENT）。INCONSISTENT → 矛盾当 gap 回相应阶段 Step 3。**CONSISTENT 才允许交接编码。**
 

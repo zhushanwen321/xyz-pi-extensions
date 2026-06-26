@@ -19,7 +19,7 @@ description: >-
 
 ## 执行流程
 
-按 `design-shared/references/loop-skeleton.md`（6 步操作速查）的流程执行。**首次执行本工作流时，先 read `design-shared/references/loop-method.md`** 了解 Grilling 提问法等方法论。本阶段特有内容：
+按 `../design-shared/references/loop-skeleton.md`（6 步操作速查）的流程执行。**首次执行本工作流时，先 read `../design-shared/references/loop-method.md`** 了解 Grilling 提问法等方法论。本阶段特有内容：
 
 **Step 1（交互+初稿）— Grilling 遍历业务目标树：**
 
@@ -49,7 +49,7 @@ description: >-
 4. **界面场景覆盖**（降级：纯后端/API/无 UI 交互写降级理由跳过）— 用户交互场景完整性（线框/流程级）。查：每用例是否有 UI 场景描述 / 空状态·加载·错误三态交互 / 无 UI 用例（API-only、定时任务）也要描述触发与结果。
 5. **跨系统关联**（降级：单系统无外部依赖写降级理由跳过）— 系统间功能依赖关系。查：依赖的外部系统功能逐一列出 / 跨系统交互同步 vs 异步（影响④非功能）/ 外部契约是否稳定（自有可控 vs 第三方不可控）。
 
-> gap 分流（F/K/D）与收敛判定见 `design-shared/references/loop-skeleton.md` Step 3-4。
+> gap 分流（F/K/D）与收敛判定见 `../design-shared/references/loop-skeleton.md` Step 3-4。
 
 > **为何内联：** clarity 的 5 视角较轻量，故内联于本 SKILL；其余阶段（②③④）视角较重，仍各自独立成 references 文件。
 
@@ -57,7 +57,7 @@ description: >-
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 requirements.md；派 fresh subagent 渲染 requirements.html（机制见 loop-skeleton.md Step 5b）（主角图：用例图）。**
 
-**Step 6（审查）— 派 fresh-context 审查 subagent（按 `design-shared/references/review-agent.md` 规范，先跑 `scripts/check_clarity.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-clarity.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（①无上游，反哺检查直接 pass），再交接。**
+**Step 6（审查）— 派 fresh-context 审查 subagent（按 `../design-shared/references/review-agent.md` 规范，先跑 `scripts/check_clarity.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-clarity.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（①无上游，反哺检查直接 pass），再交接。**
 
 ## Phase Loop 机制
 

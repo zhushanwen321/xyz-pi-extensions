@@ -1,11 +1,18 @@
 # design-shared（共享参考文件）
 
-> **这不是一个可调用的 skill**——没有 `SKILL.md`，不会出现在 skill 列表中。
-> skill-resolver 按 `skills/{name}/SKILL.md` 精确查找，本目录无该文件故不被识别。
+> **物理载体 skill，不可主动调用。** 本目录带 `SKILL.md`，但 frontmatter 设了
+> `disable-model-invocation: true`——pi 会 symlink 安装本目录、路径可解析，
+> 但本 skill **不进** system prompt 的 `<available_skills>` 列表，AI 无法主动发现/调用。
+> 详见 `SKILL.md`。
 
 ## 用途
 
 6 个设计阶段 skill（design-clarity / design-architecture / design-issues / design-nfr / design-code-arch / design-execution）**共用**的参考文件统一存放处。物理上从 design-clarity 中抽出，消除"design-clarity 借住全局文件"的耦合。
+
+> 为何带 SKILL.md：pi 的 installer 按「目录含 SKILL.md」决定是否 symlink 安装。
+> 不带 SKILL.md 的目录会被跳过——历史上 design-shared 因此未安装，导致所有
+> `design-shared/references/...` 引用在安装态悬空（开发态能跑只是 CWD 巧合）。
+> 带 SKILL.md + `disable-model-invocation: true` 既触发安装、又保持对 AI 不可见。
 
 ## 文件清单
 
@@ -17,7 +24,9 @@
 
 ## 引用约定
 
-各设计阶段 SKILL.md 用相对路径 `design-shared/references/{file}.md` 引用本目录文件。
+各设计阶段 SKILL.md 引用本目录文件，**必须用** `../design-shared/references/{file}.md`
+（相对路径基准 = 当前 skill 的 baseDir = SKILL.md 的 dirname；`../` 跨到兄弟目录）。
+裸路径 `design-shared/references/...` 会解析成 `{当前skill}/design-shared/...`，安装态下 broken。
 
 > **HTML 渲染不在此处。** Step 5b 的 `.html` 渲染由本包内置的 **design-visual-explainer**
 > 技能承担（无需 `pi install`），派 fresh subagent 加载该技能生成。它整合了 Mermaid + drawio + 手画 HTML/CSS

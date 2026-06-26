@@ -223,4 +223,4 @@ domain 在结构上依赖 port（指向 domain 这个稳定方），运行时却
 
 ---
 
-gap 分流（F/K/D）与收敛判定详见 `design-shared/references/loop-skeleton.md` 的 Step 3-4。
+gap 分流（F/K/D）与收敛判定详见 `../../design-shared/references/loop-skeleton.md` 的 Step 3-4。

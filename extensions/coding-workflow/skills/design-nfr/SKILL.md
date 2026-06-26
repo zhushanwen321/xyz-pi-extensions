@@ -20,7 +20,7 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 
 ## 执行流程
 
-按 `design-shared/references/loop-skeleton.md`（共享参考目录）的 6 步循环执行。**（loop-method.md 的方法论仅 clarity 首次 read，本阶段无需 read。）**
+按 `../design-shared/references/loop-skeleton.md`（共享参考目录）的 6 步循环执行。**（loop-method.md 的方法论仅 clarity 首次 read，本阶段无需 read。）**
 
 **Step 1（交互+初稿）— Grilling 遍历副作用分析树：**
 
@@ -73,7 +73,7 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 non-functional-design.md；派 fresh subagent 渲染 non-functional-design.html（机制见 loop-skeleton.md Step 5b）（主角图：风险矩阵热力图 issue×7维度 ✅⚠️❌着色）。**
 
-**Step 6（审查）— 派 fresh-context 审查 subagent（按 design-shared/references/review-agent.md 规范，先跑 `scripts/check_nfr.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-nfr.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（回扫 ①②③上游），再交接。**
+**Step 6（审查）— 派 fresh-context 审查 subagent（按 ../design-shared/references/review-agent.md 规范，先跑 `scripts/check_nfr.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-nfr.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（回扫 ①②③上游），再交接。**
 
 ## Phase Loop 机制
 
