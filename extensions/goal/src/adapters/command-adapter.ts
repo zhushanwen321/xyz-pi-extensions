@@ -150,8 +150,9 @@ function handleResume(pi: ExtensionAPI, session: GoalSession, ctx: ExtensionCont
 	const resumeCheck = checkBudgetOnResume(state);
 	if (resumeCheck) {
 		const dim = resumeCheck.dimension;
-		state.status = transitionStatus(state.status, dim === "token" ? "budget_limited" : "time_limited");
-		persistState(session, ports);
+		// FR-8.7: 走 finalizeAndPersist 写 history（含 tick + transition + history + appendState），
+		// 勿用 transitionStatus + persistState（不写 history，goal 会从 /goal history 凭空消失）
+		finalizeAndPersist(state, dim === "token" ? "budget_limited" : "time_limited", 0, ports);
 		updateWidget(session, ports.ui);
 		ctx.ui.notify(
 			`${dim === "token" ? "Token" : "Time"} budget exhausted, cannot resume. Use /goal clear to reset.`,

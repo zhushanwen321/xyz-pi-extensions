@@ -157,6 +157,14 @@ function handleSingleUpdate(
 	const todo = state.todos.find((t) => t.id === params.id);
 	if (!todo) return { resultText: "", error: `#${params.id} not found` };
 
+	// FR-6 不变量守卫：(a) cancelled 不可恢复；(b) 验证任务不可 cancelled
+	if (todo.status === "cancelled" && params.status !== undefined) {
+		return { resultText: "", error: `#${params.id} is cancelled (cannot restore)` };
+	}
+	if (todo.isVerification && params.status === "cancelled") {
+		return { resultText: "", error: `#${params.id} is verification todo (cannot cancel)` };
+	}
+
 	if (params.status !== undefined) {
 		todo.status = params.status as Todo["status"];
 	}

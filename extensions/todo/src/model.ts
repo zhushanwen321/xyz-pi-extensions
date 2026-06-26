@@ -182,6 +182,21 @@ export function updateTodos(
 				resultText: `Error: invalid status '${u.status}' for update item id ${u.id}`,
 			};
 		}
+		// FR-6 不变量守卫：(a) cancelled 不可恢复；(b) 验证任务不可 cancelled
+		if (todo.status === "cancelled" && u.status !== undefined) {
+			return {
+				updatedTodos: currentTodos,
+				error: `id ${u.id} is cancelled`,
+				resultText: `Error: Todo #${u.id} is cancelled and cannot be restored`,
+			};
+		}
+		if (todo.isVerification && u.status === "cancelled") {
+			return {
+				updatedTodos: currentTodos,
+				error: `id ${u.id} is verification todo`,
+				resultText: `Error: Todo #${u.id} is a verification todo and cannot be cancelled`,
+			};
+		}
 	}
 
 	const updated = currentTodos.map((t) => {
