@@ -53,6 +53,13 @@ export const DEFAULT_BUDGET: BudgetConfig = {};
 export interface GoalRuntimeState {
 	goalId: string;
 	objective: string;
+	/**
+	 * AI 生成的短标识（kebab-case 风格），仅用于 widget 状态栏标题与 history。
+	 * 不注入 prompt（prompt 仍读 objective，保证方向感）。
+	 * 由 goal_control create 时 AI 提供；/goal 命令路径走提示词触发器由 AI toolcall 生成。
+	 * optional：旧持久化数据无此字段，widget fallback 到 objective 截断。
+	 */
+	slug?: string;
 	status: GoalStatus;
 	tokensUsed: number;
 	timeStartedAt: number;

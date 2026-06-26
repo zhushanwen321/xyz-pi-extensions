@@ -34,6 +34,7 @@ export const PERCENT_FACTOR = 100;
 export const PROGRESS_BAR_DEFAULT_WIDTH = 10;
 export const OBJECTIVE_DISPLAY_LIMIT = 80;
 export const OBJECTIVE_TRUNCATE_KEEP = 77; // DISPLAY_LIMIT - 3 for "..."
+export const TOKEN_K_THRESHOLD = 1000;     // token 数 ≥ 此值时缩写为 k 单位（12000 → 12k）
 
 // ── 停滞/清理阈值 ────────────────────────────────────
 

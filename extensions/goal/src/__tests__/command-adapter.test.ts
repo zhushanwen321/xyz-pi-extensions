@@ -268,7 +268,7 @@ describe("handleGoalCommand — clear (FR-6.3)", () => {
 // ── /goal update（FR-8.4 G-002 重塑）──────────────
 
 describe("handleGoalCommand — update (FR-8.4 G-002)", () => {
-	it("重塑：重置 objective/flags，保留 goalId", async () => {
+	it("重塑：重置 objective/flags/slug，保留 goalId", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();
 		const originalGoalId = "goal-original-123";
@@ -276,6 +276,7 @@ describe("handleGoalCommand — update (FR-8.4 G-002)", () => {
 			goalId: originalGoalId,
 			objective: "old objective",
 			currentTurnIndex: 8,
+			slug: "old-slug",
 		});
 		await handleGoalCommand(h.pi, session, "update brand new objective", h.ctx);
 
@@ -283,6 +284,7 @@ describe("handleGoalCommand — update (FR-8.4 G-002)", () => {
 		expect(session.state!.goalId).toBe(originalGoalId); // 保留
 		expect(session.state!.currentTurnIndex).toBe(0);
 		expect(session.state!.budgetLimitSteeringSent).toBe(false);
+		expect(session.state!.slug).toBeUndefined(); // GAP-6: update 重置 slug
 		expect(h.states.length).toBeGreaterThanOrEqual(1); // persist
 	});
 
@@ -304,25 +306,30 @@ describe("handleGoalCommand — update (FR-8.4 G-002)", () => {
 	});
 });
 
-// ── /goal set（FR-3.1 唯一创建 + G-R2-008 覆盖）──
+// ── /goal set（提示词触发器：sendUserMessage 让 AI 调 goal_control create）──
 
-describe("handleGoalCommand — set (FR-3.1 + #11/D25 拒绝非终态)", () => {
-	it("无旧 goal → 创建新 goal", async () => {
+describe("handleGoalCommand — set (提示词触发器 + #11/D25 拒绝非终态)", () => {
+	it("无旧 goal → 发触发消息（不直接创建 state）", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();
 		await handleGoalCommand(h.pi, session, "my objective", h.ctx);
-		expect(session.state).not.toBeNull();
-		expect(session.state!.objective).toBe("my objective");
-		expect(h.piCalls.some((c) => c.kind === "sendUser")).toBe(true); // FR-8.12 触发 AI
+		// 提示词触发器：不直接 createGoal，state 仍为 null（由 AI 后续 toolcall 创建）
+		expect(session.state).toBeNull();
+		expect(h.states).toHaveLength(0); // 不写 state
+		// 发送 sendUserMessage 引导 AI 调 create
+		const sendUserCalls = h.piCalls.filter((c) => c.kind === "sendUser");
+		expect(sendUserCalls).toHaveLength(1);
+		expect(sendUserCalls[0]?.content).toContain("my objective");
+		expect(sendUserCalls[0]?.content).toContain("goal_control");
 	});
 
-	it("非终态旧 goal（active）→ 拒绝创建 + 提示（#11/D25）", async () => {
+	it("非终态旧 goal（active）→ 拒绝 + 提示（#11/D25），不发触发消息", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();
 		session.state = makeActiveState({ objective: "old active goal" });
 		const historyBefore = h.history.length;
 		await handleGoalCommand(h.pi, session, "new objective", h.ctx);
-		// #11: 拒绝，不写 history，不覆盖旧 goal
+		// #11: 拒绝，不写 history，不覆盖旧 goal，不发触发消息
 		expect(h.history.length).toBe(historyBefore); // 不写 history
 		expect(notifyText(h).some((t) => t.includes("Goal already active"))).toBe(true);
 		expect(notifyText(h).some((t) => t.includes("resume"))).toBe(true);
@@ -339,15 +346,18 @@ describe("handleGoalCommand — set (FR-3.1 + #11/D25 拒绝非终态)", () => {
 		expect(notifyText(h).some((t) => t.includes("Goal already active"))).toBe(true);
 		expect(session.state!.status).toBe("paused"); // 状态不变
 		expect(session.state!.objective).toBe("old paused goal"); // 旧 goal 保留
+		expect(h.piCalls.some((c) => c.kind === "sendUser")).toBe(false); // 不触发 AI
 	});
 
-	it("覆盖终态旧 goal → 快速路径（不写 history）", async () => {
+	it("终态旧 goal → 发触发消息（AI 会覆盖终态 goal）", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();
 		session.state = makeActiveState({ status: "complete", objective: "old done" });
 		const historyBefore = h.history.length;
 		await handleGoalCommand(h.pi, session, "new objective", h.ctx);
-		expect(h.history.length).toBe(historyBefore); // 不写 history
+		expect(h.history.length).toBe(historyBefore); // 不写 history（触发器不直接创建）
+		// 终态旧 goal 不挡触发器，发消息让 AI 创建
+		expect(h.piCalls.some((c) => c.kind === "sendUser")).toBe(true);
 	});
 
 	it("空 objective → usage 提示", async () => {
@@ -359,14 +369,27 @@ describe("handleGoalCommand — set (FR-3.1 + #11/D25 拒绝非终态)", () => {
 		expect(notifyText(h).some((t) => t.includes("not active"))).toBe(true);
 	});
 
-	it("--tokens 0 → parseGoalArgs 过滤（val > 0 校验），创建成功", async () => {
+	it("--tokens 0 → parseGoalArgs 过滤（val > 0 校验），发触发消息", async () => {
 		const h = makeHarness();
 		const session = createGoalSession();
 		// parseGoalArgs 对 --tokens 0 的 val>0 校验失败，budget.tokenBudget 不设置
-		// handleSet 收到 budgetOverrides=undefined（无 tokenBudget），跳过预算校验直接创建
+		// handleSet 收到 budgetOverrides=undefined（无 tokenBudget），发触发消息（objective 去掉了 flag）
 		await handleGoalCommand(h.pi, session, "obj --tokens 0", h.ctx);
-		expect(session.state).not.toBeNull();
-		expect(session.state!.objective).toBe("obj"); // objective 去掉了 flag
+		// 提示词触发器不直接创建 state
+		expect(session.state).toBeNull();
+		const sendUserCalls = h.piCalls.filter((c) => c.kind === "sendUser");
+		expect(sendUserCalls).toHaveLength(1);
+		expect(sendUserCalls[0]?.content).toContain("obj");
+	});
+
+	it("--tokens N --timeout M → 触发消息含 budget 值", async () => {
+		const h = makeHarness();
+		const session = createGoalSession();
+		await handleGoalCommand(h.pi, session, "obj --tokens 5000 --timeout 30", h.ctx);
+		const sendUserCalls = h.piCalls.filter((c) => c.kind === "sendUser");
+		expect(sendUserCalls).toHaveLength(1);
+		expect(sendUserCalls[0]?.content).toContain("5000");
+		expect(sendUserCalls[0]?.content).toContain("30");
 	});
 });
 

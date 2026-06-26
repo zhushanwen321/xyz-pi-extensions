@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 
 import {
 	handleComplete,
+	handleCreate,
 	handleReportBlocked,
 } from "../adapters/goal-control-adapter";
 import { createGoalState, transitionStatus } from "../engine/goal";
@@ -113,6 +114,144 @@ describe("handleComplete — active 守卫 + evidence + finalizeAndPersist", () 
 		const ports = makeFakePorts();
 		handleComplete({ action: "complete", evidence: "done", completedTasks: 5 }, session, ports);
 		expect((ports.history[0] as { completedTasks?: number }).completedTasks).toBe(5);
+	});
+});
+
+// ── handleCreate ─────────────────────────────────────
+
+describe("handleCreate — slug+objective 必填 + 非终态守卫 + createGoal", () => {
+	it("无旧 goal + slug + objective → status active + slug 写入 + 持久化 + notify", () => {
+		const session = createGoalSession();
+		const ports = makeFakePorts();
+
+		const details = handleCreate(
+			{ action: "create", slug: "ship-feature-x", objective: "ship feature X" },
+			session,
+			ports,
+		);
+
+		expect(details.action).toBe("create");
+		expect(details.status).toBe("active");
+		expect(details.slug).toBe("ship-feature-x");
+		expect(session.state).not.toBeNull();
+		expect(session.state!.objective).toBe("ship feature X");
+		expect(session.state!.slug).toBe("ship-feature-x");
+		expect(session.state!.status).toBe("active");
+		// createGoal 内部 persistState 写一条 state
+		expect(ports.states).toHaveLength(1);
+		expect(ports.notifications[0]?.level).toBe("info");
+		expect(ports.notifications[0]?.text).toContain("ship feature X");
+	});
+
+	it("objective 空 → throw（即使有 slug）", () => {
+		const session = createGoalSession();
+		expect(() =>
+			handleCreate({ action: "create", slug: "x", objective: "   " }, session, makeFakePorts()),
+		).toThrow(/objective/);
+	});
+
+	it("slug 空 → throw（即使有 objective）", () => {
+		const session = createGoalSession();
+		expect(() =>
+			handleCreate({ action: "create", slug: "   ", objective: "do thing" }, session, makeFakePorts()),
+		).toThrow(/slug/);
+	});
+
+	it("slug 缺省 → throw", () => {
+		const session = createGoalSession();
+		expect(() =>
+			handleCreate({ action: "create", objective: "do thing" }, session, makeFakePorts()),
+		).toThrow(/slug/);
+	});
+
+	it("已有 active goal → throw（D25 非终态守卫）", () => {
+		const session = createGoalSession();
+		session.state = activeState({ status: "active" });
+		expect(() =>
+			handleCreate(
+				{ action: "create", slug: "new", objective: "new obj" },
+				session,
+				makeFakePorts(),
+			),
+		).toThrow(/already active/i);
+	});
+
+	it("已有 paused goal → throw（paused 也是非终态）", () => {
+		const session = createGoalSession();
+		session.state = activeState({ status: "paused" });
+		expect(() =>
+			handleCreate(
+				{ action: "create", slug: "new", objective: "new obj" },
+				session,
+				makeFakePorts(),
+			),
+		).toThrow(/already active/i);
+	});
+
+	it("已有 blocked goal → throw（blocked 也是非终态）", () => {
+		const session = createGoalSession();
+		session.state = activeState({ status: "blocked" });
+		expect(() =>
+			handleCreate(
+				{ action: "create", slug: "new", objective: "new obj" },
+				session,
+				makeFakePorts(),
+			),
+		).toThrow(/already active/i);
+	});
+
+	it("已有终态 goal → 覆盖创建（快速路径，goalId 变新，slug 写入）", () => {
+		const session = createGoalSession();
+		session.state = activeState({ status: "complete" });
+		const oldId = session.state!.goalId;
+		const ports = makeFakePorts();
+
+		const details = handleCreate(
+			{ action: "create", slug: "next-obj", objective: "next obj" },
+			session,
+			ports,
+		);
+
+		expect(details.status).toBe("active");
+		expect(session.state!.objective).toBe("next obj");
+		expect(session.state!.slug).toBe("next-obj");
+		expect(session.state!.goalId).not.toBe(oldId);
+	});
+
+	it("tokenBudget <= 0 → throw", () => {
+		const session = createGoalSession();
+		expect(() =>
+			handleCreate(
+				{ action: "create", slug: "x", objective: "x", tokenBudget: 0 },
+				session,
+				makeFakePorts(),
+			),
+		).toThrow(/tokenBudget/);
+	});
+
+	it("timeBudgetMinutes <= 0 → throw", () => {
+		const session = createGoalSession();
+		expect(() =>
+			handleCreate(
+				{ action: "create", slug: "x", objective: "x", timeBudgetMinutes: -5 },
+				session,
+				makeFakePorts(),
+			),
+		).toThrow(/timeBudgetMinutes/);
+	});
+
+	it("合法 budget → 合并进新 state", () => {
+		const session = createGoalSession();
+		const ports = makeFakePorts();
+
+		handleCreate(
+			{ action: "create", slug: "x", objective: "x", tokenBudget: 8000, timeBudgetMinutes: 30 },
+			session,
+			ports,
+		);
+
+		expect(session.state!.budget.tokenBudget).toBe(8000);
+		expect(session.state!.budget.timeBudgetMinutes).toBe(30);
 	});
 });
 

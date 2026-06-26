@@ -36,11 +36,13 @@ export function transitionStatus(current: GoalStatus, next: GoalStatus): GoalSta
 export function createGoalState(
 	objective: string,
 	budgetOverrides?: Partial<BudgetConfig>,
+	slug?: string,
 ): GoalRuntimeState {
 	const now = Date.now();
 	return {
 		goalId: crypto.randomUUID(),
 		objective,
+		slug,
 		status: "active",
 		tokensUsed: 0,
 		timeStartedAt: now,

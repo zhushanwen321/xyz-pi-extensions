@@ -62,10 +62,29 @@ describe("renderStatusLine", () => {
 		expect(renderStatusLine(makeState({ status: "cancelled" }), theme)).toBe("");
 	});
 
-	it("active 状态：含 Goal 标识 + turn 计数", () => {
+	it("active 状态：标题用 slug（fallback objective）+ turn 计数", () => {
 		const text = renderStatusLine(makeState({ status: "active", currentTurnIndex: 3 }), theme);
-		expect(text).toContain("◆ Goal");
-		expect(text).toContain("3"); // currentTurnIndex
+		// 无 slug 时 fallback 到 objective 截断
+		expect(text).toContain("◆ test objective");
+		expect(text).toContain("Turn 3"); // currentTurnIndex
+	});
+
+	it("active 状态有 slug → 标题用 slug", () => {
+		const text = renderStatusLine(
+			makeState({ status: "active", slug: "refactor-auth", currentTurnIndex: 2 }),
+			theme,
+		);
+		expect(text).toContain("◆ refactor-auth");
+		expect(text).not.toContain("test objective"); // slug 优先，objective 不显示
+	});
+
+	it("无预算 → 显示已消耗绝对值（token + time）", () => {
+		const text = renderStatusLine(
+			makeState({ status: "active", tokensUsed: 12000, timeUsedSeconds: 90 }),
+			theme,
+		);
+		expect(text).toContain("12k tokens"); // formatTokens 缩写
+		expect(text).toContain("1m30s"); // formatMinutes
 	});
 
 	it("blocked → 含 ⊘ Blocked 后缀", () => {
@@ -131,12 +150,18 @@ describe("renderWidgetLines", () => {
 		expect(renderWidgetLines(makeState({ status: "cancelled" }), theme)).toEqual([]);
 	});
 
-	it("active → 含 objective 行", () => {
+	it("active → 不含 objective 全文行（精简，slug 作标题）", () => {
 		const lines = renderWidgetLines(makeState({ status: "active" }), theme);
-		expect(lines.some((l) => l.includes("Objective: test objective"))).toBe(true);
+		// GAP-8: 移除 Objective 全文行（slug 已作标题）
+		expect(lines.some((l) => l.includes("Objective:"))).toBe(false);
 	});
 
-	it("tokenBudget + timeBudget → 含进度条行", () => {
+	it("active 无 slug → 标题 fallback objective 截断", () => {
+		const lines = renderWidgetLines(makeState({ status: "active" }), theme);
+		expect(lines[0]).toContain("◆ test objective");
+	});
+
+	it("tokenBudget + timeBudget → 含进度条行（used/total 格式）", () => {
 		const lines = renderWidgetLines(
 			makeState({
 				status: "active",
@@ -146,8 +171,18 @@ describe("renderWidgetLines", () => {
 			}),
 			theme,
 		);
-		expect(lines.some((l) => l.includes("Token:") && l.includes("25%"))).toBe(true);
-		expect(lines.some((l) => l.includes("Time:") && l.includes("9/30min"))).toBe(true);
+		// 新格式：进度条 + used/total（缩写）
+		expect(lines.some((l) => l.includes("Token:") && l.includes("250/1k"))).toBe(true);
+		expect(lines.some((l) => l.includes("Time:") && l.includes("9m/30min"))).toBe(true);
+	});
+
+	it("无预算 → 显示已消耗绝对值行（no budget）", () => {
+		const lines = renderWidgetLines(
+			makeState({ status: "active", tokensUsed: 5000, timeUsedSeconds: 120 }),
+			theme,
+		);
+		expect(lines.some((l) => l.includes("5k used (no budget)"))).toBe(true);
+		expect(lines.some((l) => l.includes("2m elapsed (no budget)"))).toBe(true);
 	});
 });
 

@@ -27,7 +27,7 @@ import { isActiveStatus, isTerminalStatus, transitionStatus } from "../engine/go
 import type { BudgetConfig } from "../engine/types";
 import { objectiveUpdatedPrompt } from "../projection/prompts";
 import { updateWidget } from "../projection/widget";
-import { createGoal, finalizeAndPersist, persistState, tickState } from "../service";
+import { finalizeAndPersist, persistState, tickState } from "../service";
 import type { GoalSession } from "../session";
 import { clearGoalSession } from "../session";
 import { buildPorts } from "./ports";
@@ -79,6 +79,7 @@ function handleStatus(session: GoalSession, ctx: ExtensionContext): void {
 	const timeMins = Math.floor(state.timeUsedSeconds / SECONDS_PER_MINUTE);
 	const timeSecs = Math.floor(state.timeUsedSeconds % SECONDS_PER_MINUTE);
 	const lines: Array<string | null> = [
+		state.slug ? `Slug: ${state.slug}` : null,
 		`Objective: ${state.objective}`,
 		`Status: ${state.status}`,
 		`Turn: ${state.currentTurnIndex}`,
@@ -209,13 +210,13 @@ function handleHistory(ctx: ExtensionContext): void {
 						: h.status === "time_limited"
 							? "⏱"
 							: "?";
-		const obj =
-			h.objective.length > OBJECTIVE_DISPLAY_LIMIT
-				? `${h.objective.slice(0, OBJECTIVE_TRUNCATE_KEEP)}...`
-				: h.objective;
+		// GAP-5: 标题优先用 slug（紧凑），无 slug fallback objective 截断（旧 entry 兼容）
+		const title = h.slug ?? (h.objective.length > OBJECTIVE_DISPLAY_LIMIT
+			? `${h.objective.slice(0, OBJECTIVE_TRUNCATE_KEEP)}...`
+			: h.objective);
 		const mins = Math.floor(h.elapsedSeconds / SECONDS_PER_MINUTE);
 		const secs = Math.floor(h.elapsedSeconds % SECONDS_PER_MINUTE);
-		lines.push(`${i + 1}. ${icon} ${obj}`);
+		lines.push(`${i + 1}. ${icon} ${title}`);
 		lines.push(`   ${mins}m${secs}s | ${h.status}`);
 	});
 	ctx.ui.notify(lines.join("\n"), "info");
@@ -275,6 +276,8 @@ function handleUpdate(
 	state.tokenWarning90Sent = false;
 	state.timeWarning70Sent = false;
 	state.timeWarning90Sent = false;
+	// GAP-6: update 是重塑，旧 slug 已不匹配新 objective → 置空（widget fallback objective 截断）
+	state.slug = undefined;
 	// FR-6.5: 持久化重塑后的状态（persistState 按当前 status tick 累加）+ FR-6.1 widget 刷新
 	const updatePorts = buildPorts(pi, ctx);
 	persistState(session, updatePorts);
@@ -287,14 +290,19 @@ function handleUpdate(
 	}
 }
 
-// ── /goal set（创建）─────────────────────────────────
+// ── /goal set（提示词触发器）─────────────────────────
 
 /**
- * FR-3.1: 唯一创建入口之一（/goal set）。
- * #11 / D25: 非终态旧 goal（active/paused/blocked）→ 拒绝创建，提示 /goal resume 或 /goal clear
- *           （对齐 Codex create_goal，不允许有未完成 goal 时新建）。
- *           终态旧 goal → 快速路径覆盖（不写 history）。
- * FR-8.12: 创建后 sendUserMessage(objective, followUp) 触发 AI（整个 goal workflow 启动机制）。
+ * /goal <objective> 改为「提示词触发器」：不直接 createGoal，
+ * 而是 sendUserMessage 引导 AI 调 goal_control create（slug 由 AI 生成）。
+ *
+ * 这样 goal 创建的唯一路径是 goal_control toolcall（统一入口），
+ * slug/objective/budget 都由 AI 在 toolcall 时决定。
+ *
+ * D25 守卫仍在此处预检：非终态旧 goal（active/paused/blocked）→ 拒绝，
+ * 提示 /goal resume 或 /goal clear（避免 AI 在已有未完成 goal 时重复创建）。
+ *
+ * budget flag（--tokens/--timeout）写入消息体，让 AI 原样传给 create。
  */
 function handleSet(
 	pi: ExtensionAPI,
@@ -308,7 +316,7 @@ function handleSet(
 		return;
 	}
 
-	// #11 / D25: 非终态旧 goal（active/paused/blocked）→ 拒绝创建（不覆盖、不写 history）
+	// #11 / D25: 非终态旧 goal（active/paused/blocked）→ 拒绝（不覆盖、不写 history）
 	if (session.state && !isTerminalStatus(session.state.status)) {
 		ctx.ui.notify(
 			"Goal already active. Use /goal resume to continue or /goal clear to reset.",
@@ -317,29 +325,31 @@ function handleSet(
 		return;
 	}
 
-	const ports = buildPorts(pi, ctx);
-	// 终态旧 goal：快速路径（不写 history，createGoal 直接覆盖）
-
-	// budget 校验 + 默认值合并
+	// budget 校验（非法值在此拦截，不进入消息体）
 	if (budgetOverrides?.tokenBudget !== undefined && budgetOverrides.tokenBudget <= 0) {
 		ctx.ui.notify("Token budget must be greater than 0.", "warning");
 		return;
 	}
-	const budget: Partial<BudgetConfig> = {};
-	if (budgetOverrides?.tokenBudget) budget.tokenBudget = budgetOverrides.tokenBudget;
-	if (budgetOverrides?.timeBudgetMinutes) budget.timeBudgetMinutes = budgetOverrides.timeBudgetMinutes;
+	if (budgetOverrides?.timeBudgetMinutes !== undefined && budgetOverrides.timeBudgetMinutes <= 0) {
+		ctx.ui.notify("Time budget must be greater than 0.", "warning");
+		return;
+	}
 
-	// FR-3.1: 唯一创建入口
-	createGoal(session, objective, budget, ports, false);
+	// 构造引导 AI 创建 goal 的消息（含 objective + 可选 budget）
+	const budgetHints: string[] = [];
+	if (budgetOverrides?.tokenBudget) budgetHints.push(`tokenBudget: ${budgetOverrides.tokenBudget}`);
+	if (budgetOverrides?.timeBudgetMinutes)
+		budgetHints.push(`timeBudgetMinutes: ${budgetOverrides.timeBudgetMinutes}`);
+	const budgetLine = budgetHints.length > 0 ? `\nBudget: ${budgetHints.join(", ")}` : "";
 
-	const budgetNotice: string[] = [];
-	if (budget.tokenBudget) budgetNotice.push(`Token budget: ${budget.tokenBudget}`);
-	if (budget.timeBudgetMinutes) budgetNotice.push(`Time budget: ${budget.timeBudgetMinutes} min`);
-	ctx.ui.notify(
-		[`Goal started: ${objective}`, ...budgetNotice].join("\n"),
-		"info",
-	);
+	const message =
+		`Start a new goal with the objective below. Call goal_control(action="create") with:\n` +
+		`- slug: a short kebab-case identifier you generate for this goal\n` +
+		`- objective: the full objective text\n` +
+		(budgetHints.length > 0 ? `- pass through the budget values below as-is\n` : "") +
+		`\nObjective: ${objective.trim()}${budgetLine}`;
 
-	// FR-8.12: 创建后触发 AI（整个 goal workflow 的启动机制）
-	pi.sendUserMessage(objective, { deliverAs: "followUp" });
+	ctx.ui.notify(`Requesting goal start: ${objective.trim()}`, "info");
+	// FR-8.12: 触发 AI（followUp）—— AI 消化后调 goal_control create
+	pi.sendUserMessage(message, { deliverAs: "followUp" });
 }

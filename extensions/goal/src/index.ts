@@ -141,7 +141,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	/**
 	 * 允许其他扩展（coding-workflow / plan）通过 pi.__goalInit 编程式初始化 goal。
-	 * 内部调 service.createGoal（FR-4.1——与 /goal set 走同一创建逻辑）。
+	 * 内部调 service.createGoal（FR-4.1——与 goal_control create 走同一创建逻辑）。
 	 *
 	 * FR-4.2/D-16: ctx 必填（消除 lastCtx 模块级可变状态）。
 	 * ports 构造复用 adapters/ports.buildPorts（DRY：单一 ports 构造点）。
@@ -149,6 +149,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 	 * @param objective 目标描述
 	 * @param budget 预算配置，传 undefined 用默认值
 	 * @param ctx **必填**——调用方的 ExtensionContext。省略会返回 false（创建失败）。
+	 * @param slug 可选短标识（仅 widget 标题 + history 用，不注入 prompt）
 	 * @returns true 创建成功；false 已有 active goal 或 ctx 缺失
 	 */
 	const api = pi as unknown as Record<string, unknown>;
@@ -156,9 +157,10 @@ export default function goalExtension(pi: ExtensionAPI) {
 		objective: string,
 		budget: GoalInitBudget | undefined,
 		ctx: ExtensionContext,
+		slug?: string,
 	): boolean => {
 		if (!ctx) return false;
-		return createGoal(session, objective, budget ?? {}, buildPorts(pi, ctx), true);
+		return createGoal(session, objective, budget ?? {}, buildPorts(pi, ctx), true, slug);
 	};
 }
 
@@ -187,10 +189,12 @@ export interface GoalInitBudget {
  * @param objective 目标描述
  * @param budget 预算配置，传 undefined 用默认值
  * @param ctx **必填**——调用方的 ExtensionContext。省略会返回 false（创建失败）。
+ * @param slug 可选短标识（仅 widget 标题 + history 用，不注入 prompt）
  * @returns true 创建成功；false 已有 active goal 或 ctx 缺失
  */
 export type GoalInitFn = (
 	objective: string,
 	budget: GoalInitBudget | undefined,
 	ctx: ExtensionContext,
+	slug?: string,
 ) => boolean;

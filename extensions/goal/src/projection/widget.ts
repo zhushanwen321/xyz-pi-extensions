@@ -7,6 +7,11 @@
  * - 工具函数 import 自 engine/budget.ts
  * - 时间计算基于 state.timeUsedSeconds（不含 Date.now() 副作用段）
  * - updateWidget(session, uiPort) 含 FR-6.6 hasUI 守卫
+ *
+ * slug 精简（widget 显示优化）：
+ * - 状态栏/侧边栏标题用 slug（AI 生成），无 slug fallback objective 截断。
+ * - 完整 objective 仍注入 prompt（不在此显示），用户要看全文用 /goal status。
+ * - budget 显示：配了预算显示 used/budget；没配显示已消耗绝对值（D-widget-3）。
  */
 
 import {
@@ -15,6 +20,7 @@ import {
 	PERCENT_FACTOR,
 	PROGRESS_BAR_DEFAULT_WIDTH,
 	SECONDS_PER_MINUTE,
+	TOKEN_K_THRESHOLD,
 } from "../constants";
 import { getBudgetColor, getTimeUsagePercent, getTokenUsagePercent } from "../engine/budget";
 import { isTerminalStatus } from "../engine/goal";
@@ -39,6 +45,34 @@ export function toSingleLine(text: string): string {
 	return text.replace(/\r?\n/g, " ").trim();
 }
 
+// ── token 缩写格式化（GAP-7）──────────────────────────
+
+/**
+ * 把 token 数缩写为紧凑形式：≥1000 用 k 单位（12000 → "12k"，1500 → "1.5k"）。
+ * 用于 widget 状态栏，避免长数字挤占空间。
+ */
+export function formatTokens(n: number): string {
+	if (n >= TOKEN_K_THRESHOLD) {
+		const k = n / TOKEN_K_THRESHOLD;
+		// 整数 k 不带小数（12k），非整数保留一位小数（1.5k）
+		return Number.isInteger(k) ? `${k}k` : `${k.toFixed(1)}k`;
+	}
+	return String(n);
+}
+
+// ── slug 标题（fallback objective 截断，GAP-8）─────────
+
+/**
+ * 返回 widget 标题：优先 slug，无 slug fallback objective 截断（单行）。
+ */
+export function getTitle(state: GoalRuntimeState): string {
+	if (state.slug) return state.slug;
+	const objSingleLine = toSingleLine(state.objective);
+	return objSingleLine.length > OBJECTIVE_DISPLAY_LIMIT
+		? `${objSingleLine.slice(0, OBJECTIVE_TRUNCATE_KEEP)}...`
+		: objSingleLine;
+}
+
 function renderProgressBar(pct: number, width: number = PROGRESS_BAR_DEFAULT_WIDTH): string {
 	const clamped = Math.min(Math.max(pct, 0), 1);
 	const filled = Math.round(clamped * width);
@@ -55,19 +89,29 @@ function getElapsedSeconds(state: GoalRuntimeState): number {
 	return state.timeUsedSeconds;
 }
 
+function formatMinutes(seconds: number): string {
+	const mins = Math.floor(seconds / SECONDS_PER_MINUTE);
+	const secs = Math.floor(seconds % SECONDS_PER_MINUTE);
+	return secs > 0 ? `${mins}m${secs}s` : `${mins}m`;
+}
+
 export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string {
 	if (state.status === "cancelled") return "";
 
-	let text = th.fg("accent", `◆ Goal`) + th.fg("muted", ` ${state.currentTurnIndex}`);
+	let text = th.fg("accent", `◆ ${getTitle(state)}`) + th.fg("muted", ` Turn ${state.currentTurnIndex}`);
 
-	// Budget indicators
+	// Budget indicators：配了预算显示百分比，没配显示已消耗绝对值（D-widget-3）
 	if (state.budget.tokenBudget && state.budget.tokenBudget > 0) {
 		const pct = Math.round(getTokenUsagePercent(state));
 		text += th.fg(getBudgetColor(pct), ` | ${pct}% tokens`);
+	} else {
+		text += th.fg("dim", ` | ${formatTokens(state.tokensUsed)} tokens`);
 	}
 	if (state.budget.timeBudgetMinutes && state.budget.timeBudgetMinutes > 0) {
 		const pct = Math.round(getTimeUsagePercent(state, getElapsedSeconds(state)));
 		text += th.fg(getBudgetColor(pct), ` | ${pct}% time`);
+	} else {
+		text += th.fg("dim", ` | ${formatMinutes(getElapsedSeconds(state))}`);
 	}
 
 	// Status suffix：非终态（paused = 用户暂停等待 resume / blocked = agent 报告卡住）
@@ -96,6 +140,8 @@ export function renderStatusLine(state: GoalRuntimeState, th: ThemeLike): string
 export function renderTerminalStatusLine(state: GoalRuntimeState, th: ThemeLike): string {
 	if (state.status === "cancelled") return "";
 
+	// GAP-12: 终态行维持现状——只显示状态后缀 + 有预算的维度百分比。
+	// 终态 goal 已结束，显示「used (no budget)」绝对值意义不大。
 	let text = th.fg("accent", "◆ Goal");
 
 	// 状态后缀
@@ -113,7 +159,7 @@ export function renderTerminalStatusLine(state: GoalRuntimeState, th: ThemeLike)
 			break;
 	}
 
-	// 预算摘要
+	// 预算摘要（仅有预算的维度）
 	if (state.budget.tokenBudget && state.budget.tokenBudget > 0) {
 		const pct = Math.round(getTokenUsagePercent(state));
 		text += th.fg(getBudgetColor(pct), ` | ${pct}% tokens`);
@@ -132,22 +178,24 @@ export function renderWidgetLines(state: GoalRuntimeState, th: ThemeLike): strin
 	const header = renderStatusLine(state, th);
 	const lines: string[] = [header];
 
-	const objSingleLine = toSingleLine(state.objective);
-	const objDisplay =
-		objSingleLine.length > OBJECTIVE_DISPLAY_LIMIT
-			? objSingleLine.slice(0, OBJECTIVE_TRUNCATE_KEEP) + "..."
-			: objSingleLine;
-	lines.push(th.fg("dim", `Objective: ${objDisplay}`));
+	// GAP-8: 精简——移除 Objective 全文行（slug 已作标题；完整 objective 注入 prompt，用户看全文用 /goal status）
 
+	// Token 行：配预算显示 used/budget 进度条；没配显示已消耗绝对值
 	if (state.budget.tokenBudget && state.budget.tokenBudget > 0) {
 		const pct = getTokenUsagePercent(state) / PERCENT_FACTOR;
-		lines.push(`  Token: ${renderProgressBar(pct)} ${Math.round(pct * PERCENT_FACTOR)}%`);
+		const used = formatTokens(state.tokensUsed);
+		const total = formatTokens(state.budget.tokenBudget);
+		lines.push(`  Token: ${renderProgressBar(pct)} ${used}/${total}`);
+	} else {
+		lines.push(th.fg("dim", `  Token: ${formatTokens(state.tokensUsed)} used (no budget)`));
 	}
+	// Time 行：配预算显示 Xm/Ymin 进度条；没配显示已耗时绝对值
 	if (state.budget.timeBudgetMinutes && state.budget.timeBudgetMinutes > 0) {
 		const elapsed = getElapsedSeconds(state);
 		const pct = getTimeUsagePercent(state, elapsed) / PERCENT_FACTOR;
-		const mins = Math.floor(elapsed / SECONDS_PER_MINUTE);
-		lines.push(`  Time: ${renderProgressBar(pct)} ${mins}/${state.budget.timeBudgetMinutes}min`);
+		lines.push(`  Time: ${renderProgressBar(pct)} ${formatMinutes(elapsed)}/${state.budget.timeBudgetMinutes}min`);
+	} else {
+		lines.push(th.fg("dim", `  Time: ${formatMinutes(getElapsedSeconds(state))} elapsed (no budget)`));
 	}
 
 	return lines;

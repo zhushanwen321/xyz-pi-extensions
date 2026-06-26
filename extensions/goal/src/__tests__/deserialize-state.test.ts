@@ -65,4 +65,16 @@ describe("deserializeState — 新格式严格解析", () => {
 		const data = { ...FULL_DATA, completedAtTurnIndex: 42 };
 		expect(deserializeState(data).completedAtTurnIndex).toBe(42);
 	});
+
+	// GAP-4: slug 向后兼容——旧持久化数据无 slug 字段，deserialize 不能 throw
+	// （误用 req() 会导致旧数据整个 state 丢失，G-024 部分损坏全丢）
+	it("缺 slug → 不 throw，slug 为 undefined（GAP-4 旧数据兼容）", () => {
+		const state = deserializeState(FULL_DATA); // FULL_DATA 无 slug
+		expect(state.slug).toBeUndefined();
+	});
+
+	it("有 slug → 正确还原", () => {
+		const data = { ...FULL_DATA, slug: "refactor-auth" };
+		expect(deserializeState(data).slug).toBe("refactor-auth");
+	});
 });

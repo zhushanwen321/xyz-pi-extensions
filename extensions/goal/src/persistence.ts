@@ -41,6 +41,8 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 	return {
 		goalId: req("goalId"),
 		objective: req("objective"),
+		// slug 用可选解析：旧持久化数据无此字段，不能误用 req()（否则旧数据 throw → state 全丢，GAP-4）
+		slug: data.slug as string | undefined,
 		status: req("status"),
 		tokensUsed: req("tokensUsed"),
 		timeStartedAt: req("timeStartedAt"),
@@ -71,6 +73,7 @@ export function makeHistoryEntry(state: GoalRuntimeState, completedTasks: number
 	return {
 		goalId: state.goalId,
 		objective: state.objective,
+		slug: state.slug,
 		status: state.status,
 		completedTasks,
 		totalTasks: 0,
