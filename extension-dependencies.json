@@ -41,7 +41,7 @@
         {
           "package": "@zhushanwen/pi-todo",
           "type": "optional",
-          "reason": "goal_control.complete 检查 todo 完成状态、budget checkProgress 接收 todo 进度数据，通过 duck-typed pi.__todoGetList 读取，缺失时降级跳过"
+          "reason": "goal 的 prompt 软建议 AI 使用 todo 工具分解/跟踪任务（见 prompts.ts），无运行时/编译期耦合（不再读 pi.__todoGetList，budget 不接收 todo 进度），缺失时 AI 自行判断任务分解"
         }
       ]
     },

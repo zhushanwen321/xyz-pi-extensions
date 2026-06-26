@@ -218,7 +218,7 @@ export const PROBLEM_REGISTRY: ProblemDefinition[] = [
     },
     detector: {
       events: ["tool_result"],
-      match: { toolName: "goal_manager", custom: "goalQualityMatcher" },
+      match: { toolName: "goal_control", custom: "goalQualityMatcher" },
       template: { category: "workflow" },
       steering:
         "Goal task updated (id={{id}}). Completion rate={{completionRate}}. If objective met, update status=completed, detail='completion summary'. If blocked, update status=error, detail='blocker description'.",

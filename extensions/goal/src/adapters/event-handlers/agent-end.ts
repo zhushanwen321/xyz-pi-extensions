@@ -21,7 +21,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import { checkBudgetOnTurnEnd } from "../../engine/budget";
-import { isActiveStatus } from "../../engine/goal";
+import { isActiveStatus, isTerminalStatus } from "../../engine/goal";
 import {
 	budgetLimitPrompt,
 	continuationPrompt,
@@ -166,6 +166,9 @@ async function handleContinuation(
 		return;
 	}
 	persistAndUpdate(session, buildPorts(pi, ctx));
+	// 终态守卫：persistAndUpdate 可能把 goal 转为 budget_limited/time_limited 终态。
+	// 此时不应发 continuation（deliverAs:"followUp" 会触发新 turn，让已耗尽预算的 agent 再跑一轮）。
+	if (isTerminalStatus(state.status)) return;
 	// 发 continuation（FR-8.7: 去 debounce 后才发）
 	buildPorts(pi, ctx).messaging.sendContextMessage(
 		continuationPrompt(state, state.timeUsedSeconds),
