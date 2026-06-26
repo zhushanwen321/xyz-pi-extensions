@@ -71,6 +71,13 @@ body { background-color: var(--bg);
 
 ## 2. Mermaid zoom/pan 外壳（`[HISTORICAL]` 必须完整使用）
 
+> **⚠️ 权威已转移（2026-06 改造）。** 本节的 CSS + JS 已抽到公共文件，**不要再从这里复制代码块**：
+> - **CSS** → `templates/design.css`（`.mermaid-wrap` / `.zoom-controls` / `.diagram-shell` 等类）
+> - **JS**（zoom/pan/fit/expand + scroll-spy）→ `templates/zoom.js`
+> - 产物骨架 `templates/skeletons/{phase}.html` 已预埋完整的 `.diagram-shell` HTML 结构作为 AGENT-FILL: hero-diagram 槽位，render.sh 自动内联 CSS/JS。
+>
+> **本节保留下方代码仅作历史参考**（了解 shell 的结构契约）。正常渲染流程看 SKILL.md「渲染流程」段，不读本节。
+
 裸 `<pre class="mermaid">` 无 zoom，图极小不可用。**每个 Mermaid 图用这个完整 shell。** 多图共存靠 `querySelectorAll('.diagram-shell').forEach(initDiagram)`。
 
 ### HTML 结构（每图一个）

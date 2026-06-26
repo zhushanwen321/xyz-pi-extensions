@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<!--
+  system-architecture.html 骨架 — design-architecture（② 系统设计）阶段产物模板。
+  主角图：stateDiagram-v2 状态机（hero 内）+ 分层架构 graph TB + 泳道 sequenceDiagram。
+  特有 CSS：无（沿用公共 .diagram-shell / .data-table / .callout / .ve-card）。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>系统架构设计 — {{TOPIC}}</title>
+<style>
+/* INLINE: design.css */
+/* === system-architecture 阶段无特有样式，沿用公共类 === */
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" id="toc">
+  <div class="toc-title">目录</div>
+  <!-- AGENT-FILL: toc-links — 建议含：TL;DR / 目标转换 / 设计立场 / 统一语言 / 核心模型 / 状态流转 / 分层架构 / 模块划分 / Context边界 / 泳道图 / 决策 / 反模式 -->
+</nav>
+<main class="main">
+<header class="doc-head">
+  <h1>系统架构设计</h1>
+  <p class="subtitle">{{TOPIC}} · ② 系统设计 · upstream: requirements.md</p>
+  <div class="badge-row">
+    <!-- AGENT-FILL: badges — verdict + 搭便车候选计数等 -->
+  </div>
+</header>
+
+<!-- AGENT-FILL: tldr — TL;DR 摘要框 -->
+
+<!-- AGENT-FILL: hero-diagram — 状态机主角图。stateDiagram-v2。
+<div class="diagram-shell">
+  <p class="diagram-shell__hint">状态机流转 · terminal states 不可逆</p>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">…</div>
+    <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+stateDiagram-v2
+  [*] --> Created
+  Created --> Paid: 支付
+  Paid --> Shipped: 发货
+  ...
+  </script>
+</div>
+注意：stateDiagram-v2 的 label 解析极严格，冒号/括号/HTML 实体会静默失败。
+含这些字符的标签改用 flowchart TD + 圆角节点 + 带引号边标签（见 cookbook 四条铁律 #2）。
+-->
+
+<!-- AGENT-FILL: goal-transform — 目标转换（业务目标→系统目标，含搭便车清单 §1 表） -->
+
+<!-- AGENT-FILL: design-stance — 设计立场（核心计算是什么） -->
+
+<!-- AGENT-FILL: ubiquitous-language — 统一语言。用 .data-table -->
+
+<!-- AGENT-FILL: core-model — 核心模型 + 不变式。可用 .ve-card 卡片 -->
+
+<!-- AGENT-FILL: layering — 分层架构。graph TB + subgraph，可用 .ve-card 展示各层职责 -->
+
+<!-- AGENT-FILL: modules — 模块划分。graph LR 或 .ve-card 网格 -->
+
+<!-- AGENT-FILL: context-map — Context 边界 / 泳道图。sequenceDiagram 或 graph -->
+
+<!-- AGENT-FILL: decisions — 决策记录 -->
+
+<!-- AGENT-FILL: anti-patterns — 反模式检查（grep AC 等） -->
+
+<footer class="doc-foot">{{TOPIC}} · 系统架构设计 · upstream: requirements.md</footer>
+</main>
+</div>
+
+<script type="module">/* INLINE: zoom.js */</script>
+</body>
+</html>

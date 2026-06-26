@@ -17,6 +17,8 @@ mermaid.registerLayoutLoaders(elkLayouts);
 
 ## themeVariables 完整模板
 
+> **⚠️ 权威定义已转移（2026-06 改造）。** 实际渲染用的 themeVariables（teal 调色板双主题）**权威定义在 `templates/zoom.js`** 的 `mermaid.initialize` 块。本节的模板保留作调色板参考，但若与 zoom.js 冲突，以 zoom.js 为准。换调色板时改 zoom.js + `templates/design.css` 的 `:root`（两处必须同改）。
+
 **必须用 `theme: 'base'`**——只有它是全变量可定制的。内置主题（default/dark/forest/neutral）会忽略大部分变量覆盖。
 
 ```javascript

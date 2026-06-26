@@ -34,7 +34,7 @@ description: >-
 
 ## 各阶段主角图规范
 
-`[MANDATORY]` HTML header 之后紧接该阶段的 hero 图。这是 `design-shared/references/loop-skeleton.md` Step 5b 的展开实现：
+`[MANDATORY]` HTML header 之后紧接该阶段的 hero 图。这是 `../design-shared/references/loop-skeleton.md` Step 5b 的展开实现：
 
 | 阶段 | 主角图 | 首选引擎 | 渲染要点 |
 |------|--------|---------|---------|
@@ -47,29 +47,46 @@ description: >-
 
 ## 渲染流程
 
-`[MANDATORY]` 按需加载——勿一次全读资产。先定内容类型，只读对应文件：
+`[MANDATORY]` **骨架填充模式**——不再从零写 HTML，而是复制阶段骨架 → 填 AGENT-FILL 槽位 → 跑 render.sh。
 
 1. **read 定稿 `.md`**——定阶段、hero 类型、内含的 Mermaid 块和表格
-2. **选引擎**——按上面 hero 表 + 引擎决策
-3. **按需读参考**——查对应段（勿整读）：
+2. **读对应阶段骨架** `templates/skeletons/{phase}.html`——它是该阶段的完整 HTML 外壳（含 TOC/header/固定 CSS/zoom JS 占位符 + AGENT-FILL 槽位注释）。每个骨架顶部注释说明该阶段的主角图类型和特有 CSS 类。
 
-   | 你要渲染… | 读这个 |
-   |---|---|
-   | Mermaid 图（用例/DAG/时序/状态机/Wave） | `templates/anatomy-demo.html` Mermaid 段 + `references/mermaid-theming.md` |
-   | 富卡片架构（每节点带描述/代码/列表） | `templates/anatomy-demo.html` 卡片段 |
-   | 表格/热力图（AC清单/追溯表/风险矩阵） | `templates/anatomy-demo.html` 表格段 + `rendering-cookbook.md` §4-5 |
-   | 4+ section 大文档导航 | `rendering-cookbook.md` §7（响应式导航） |
-   | CSS theming / zoom JS / 代码块/折叠 | `rendering-cookbook.md` 对应节 |
-   | drawio 复杂架构/包依赖/ER | `references/drawio-guide.md`（含内置 autolayout/validate 脚本） |
-   | drawio vs mermaid vs 手画HTML 决策 | `references/rendering-engine-guide.md` |
-4. **生成 HTML**——hero 紧随 header + TL;DR。`.md` 的 Mermaid 块**必须渲染成实际图表**，不是 `<pre>` 源码
-5. **自检**（见下）→ 写文件 → `open` 打开
+   | 阶段 | 骨架文件 | 主角图 | 特有 CSS |
+   |---|---|---|---|
+   | ① 澄清需求 | `skeletons/requirements.html` | flowchart LR 用例图 | .uc/.ac/.ac-normal/.ac-abnormal/.ac-boundary |
+   | ② 系统设计 | `skeletons/system-architecture.html` | stateDiagram-v2 状态机 | （沿用公共类） |
+   | ③ Issue 拆分 | `skeletons/issues.html` | graph LR 决策 DAG | .issue/.sol/.pick/.ac-list/.pill |
+   | ④ 非功能设计 | `skeletons/non-functional-design.html` | HTML table 风险矩阵 | .risk-ok/.risk-warn/.risk-na |
+   | ⑤ 代码架构 | `skeletons/code-architecture.html` | graph TD 包依赖 + sequenceDiagram 时序 | .dir-tree |
+   | ⑥ 执行计划 | `skeletons/execution-plan.html` | graph LR Wave DAG | .wave-card/.wave-tag/.kv/.checklist |
+3. **填 AGENT-FILL 槽位**——骨架里 `<!-- AGENT-FILL: xxx -->` 注释是填充指引，按它把定稿 `.md` 内容填进对应位置。槽位覆盖：TOC 锚点、badges、TL;DR、hero 主角图、各内容 section、footer。**不要改骨架的外壳结构（head/style 占位符/TOC 容器/script 占位符）**——它们由 render.sh 统一注入。
+4. **跑 render.sh 内联公共资产**——填完槽位后：
+   ```bash
+   bash {skill_dir}/templates/render.sh {填好的骨架.html} {deliverable-name}.html
+   ```
+   render.sh 把 `/* INLINE: design.css */` 和 `/* INLINE: zoom.js */` 占位符替换为公共 CSS/JS 全文，输出单文件自包含 HTML。
+5. **自检**（见下）→ `open` 打开
+
+> **为何用骨架而非从零写**：骨架把 style（~200行）+ zoom JS（~70行）+ TOC + 外壳结构全部固化，agent 只填内容槽位——输入侧省 ~9K tokens（不再读 anatomy-demo + cookbook 样板），输出侧省 60%+（不写 CSS/JS/外壳）。一致性也保证：所有产物统一 teal 调色板 + 类名 + TOC 布局。
+
+### 按需参考（可选，非必读）
+
+骨架已自带该阶段所需的全部结构信息。以下文件仅当**骨架不够用**时查阅：
+
+| 你要查… | 读这个 |
+|---|---|
+| 某形态的完整 HTML 示例（卡片/DAG/表格） | `templates/anatomy-demo.html`（三形态样例，可选） |
+| 某组件的 CSS 变体 / 高级 theming | `references/rendering-cookbook.md` 对应节 |
+| Mermaid themeVariables 细节 / 调色板 | `references/mermaid-theming.md`（注意：权威定义已在 `templates/zoom.js`） |
+| drawio 复杂架构/包依赖/ER | `references/drawio-guide.md`（含内置 autolayout/validate 脚本） |
+| drawio vs mermaid vs 手画HTML 决策 | `references/rendering-engine-guide.md` |
 
 ## 四条踩坑铁律
 
 `[HISTORICAL]` 这些规则来自反复出现的实际失败，不允许削弱：
 
-1. **禁用裸 `<pre class="mermaid">`**——无 zoom/pan，图变得极小不可用。必须用 `rendering-cookbook.md` 的完整 `diagram-shell` 模式（HTML 结构 + CSS + ~360 行 zoom JS 一起复制）。源码放 `<script type="text/plain" class="diagram-source">`，JS 用 `mermaid.render(id, code)` 手动渲染。
+1. **禁用裸 `<pre class="mermaid">`**——无 zoom/pan，图变得极小不可用。骨架的 AGENT-FILL: hero-diagram 槽位已预埋完整的 `.diagram-shell` 结构（HTML + zoom-controls + viewport + canvas + `diagram-source` script 容器），zoom JS 由 render.sh 内联。填槽位时只改 `<script type="text/plain" class="diagram-source">` 里的 Mermaid 源码，不要拆掉外壳。
 2. **`stateDiagram-v2` label 解析陷阱**——转换标签解析器极严格，冒号/括号/`<br/>`/HTML 实体会静默失败（"Syntax error"）。含这些字符的标签改用 `flowchart TD` + 圆角节点 + 带引号边标签。
 3. **`.node` CSS 类冲突**——禁止把 `.node` 定义为页面级 CSS 类。Mermaid 内部用它做 SVG 定位，页面级 `.node` 样式会泄漏进图表破坏布局。卡片用 `.ve-card`（architecture）或 `.section` 类。
 4. `[HISTORICAL]` **C4 用 flowchart 不用 native C4**——`C4Context` 硬编码尖角/字体/蓝色图标，忽略 `themeVariables`。用 `graph TD` + `subgraph` 表达边界。
@@ -105,7 +122,7 @@ Mermaid（浏览器 CDN 加载）和手画 HTML/CSS（纯文本）**无外部依
 
 3. 生成 `.drawio`：小图（≤15节点）手写 XML；大图跑 `python3 scripts/autolayout.py graph.json -o diagram.drawio`
 4. 校验：`python3 scripts/validate.py diagram.drawio`（结构门）
-5. 导出 SVG 嵌入：`drawio -x -f svg -e -o diagram.svg`，SVG 内联进页面容器 + zoom 控件（复用 cookbook 的 zoom JS）
+5. 导出 SVG 嵌入：`drawio -x -f svg -e -o diagram.svg`，SVG 内联进页面容器 + zoom 控件（复用 `templates/zoom.js` 的 zoom 逻辑）
 
 **[HISTORICAL] 不手建 `data-mxgraph`**——交互式 HTML 嵌入的三重编码必须由 CLI 处理。设计阶段首选 SVG 内联（无 bug、无 JS 依赖）。
 

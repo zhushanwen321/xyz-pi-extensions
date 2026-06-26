@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<!--
+  execution-plan.html 骨架 — design-execution（⑥ 执行计划）阶段产物模板。
+  主角图：graph LR Wave 依赖 DAG（并行组 subgraph + blocked_by 虚线）。
+  特有 CSS：.wave-card / .wave-tag / .kv / .checklist（Wave 卡片 + 键值表 + 验收清单）。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>执行计划 — {{TOPIC}}</title>
+<style>
+/* INLINE: design.css */
+
+/* === execution-plan 阶段特有样式 === */
+.wave-card { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 12px; padding: 20px 24px; margin: 18px 0; }
+.wave-card--prefactor { border-left-color: var(--amber); }
+.wave-card--gate { border-left-color: var(--green); background: var(--green-dim); }
+.wave-tag { display: inline-block; font-family: var(--font-mono); font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 5px; background: var(--accent-dim); color: var(--accent); margin-right: 8px; vertical-align: middle; }
+.wave-tag--prefactor { background: var(--amber-dim); color: var(--amber); }
+.wave-tag--gate { background: var(--green-dim); color: var(--green); }
+.kv { width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0; }
+.kv th { text-align: left; padding: 6px 12px; background: var(--surface-2); font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); width: 140px; vertical-align: top; }
+.kv td { padding: 6px 12px; border-bottom: 1px solid var(--border); }
+.kv tr:last-child td { border-bottom: none; }
+.checklist { list-style: none; padding: 0; }
+.checklist li { font-size: 13px; line-height: 1.6; padding: 5px 0 5px 26px; position: relative; }
+.checklist li::before { content: '☐'; position: absolute; left: 4px; color: var(--accent); font-size: 14px; }
+.checklist code { font-family: var(--font-mono); font-size: 11px; background: var(--surface-2); color: var(--text-dim); padding: 1px 5px; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" id="toc">
+  <div class="toc-title">目录</div>
+  <!-- AGENT-FILL: toc-links — 建议含：TL;DR / Wave总览 / W1~WN 各 Wave / 验收Wave / P3延后 / 决策记录 / 执行交接 / 测试验收清单 -->
+</nav>
+<main class="main">
+<header class="doc-head">
+  <h1>执行计划</h1>
+  <p class="subtitle">{{TOPIC}} · ⑥ 执行计划 · upstream: code-architecture.md</p>
+  <div class="badge-row">
+    <!-- AGENT-FILL: badges — Wave 计数、并行组数等 -->
+  </div>
+</header>
+
+<!-- AGENT-FILL: tldr — TL;DR 摘要框 -->
+
+<!-- AGENT-FILL: hero-diagram — Wave 依赖 DAG 主角图。graph LR，subgraph 分并行组，blocked_by 虚线。
+<div class="diagram-shell">
+  <p class="diagram-shell__hint">Wave 依赖 DAG · 实线=blocked_by · subgraph=并行组</p>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">…</div>
+    <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+graph LR
+  W0[Prefactor]:::pre
+  W1[Wave 1]:::w1
+  W2[Wave 2]:::w2
+  W1 --> W2
+  ...
+  classDef pre fill:#fde68a,stroke:#b45309
+  classDef w1 fill:#bbf7d0,stroke:#059669
+  classDef gate fill:#e2e8f0,stroke:#94a3b8,stroke-dasharray: 5 5
+  </script>
+</div>
+-->
+
+<!-- AGENT-FILL: wave-overview — Wave 编排总览。用 .data-table（Wave/P级/切片/依赖/并行组/说明） -->
+
+<!-- AGENT-FILL: wave-cards — 各 Wave 详情。每个 Wave 用 .wave-card：
+<div class="wave-card" id="wave-1">
+  <h2><span class="wave-tag">W1</span>Wave 1：标题</h2>
+  <table class="kv">
+    <tr><th>切片</th><td>垂直切片描述</td></tr>
+    <tr><th>P 级</th><td>P0</td></tr>
+    <tr><th>Blocked by</th><td>无 / Wave 0</td></tr>
+    <tr><th>并行组</th><td>组 A</td></tr>
+    <tr><th>Issue</th><td>#1 #2</td></tr>
+    <tr><th>subagent 配置</th><td>读取/注入/修改文件</td></tr>
+  </table>
+  <h4>验收标准</h4>
+  <ul class="checklist">
+    <li><code>AC-1.1</code> ...</li>
+  </ul>
+</div>
+Prefactor Wave 用 .wave-card--prefactor + .wave-tag--prefactor；
+末尾验收 Wave 用 .wave-card--gate + .wave-tag--gate。
+-->
+
+<!-- AGENT-FILL: p3-deferred — P3 延后项。用 .data-table 或 .callout -->
+
+<!-- AGENT-FILL: decisions — 决策记录 -->
+
+<!-- AGENT-FILL: handoff — 执行交接说明（编码完成的定义 = 测试验收清单全绿） -->
+
+<!-- AGENT-FILL: acceptance-manifest — 测试验收清单（⑤test-matrix 全量用例按归属 Wave）。MANDATORY 章节。
+用 .data-table（用例 ID / 类型 / 场景 / 归属 Wave），并集须 = 全部 test-matrix 用例。
+末尾验收 Wave blocked_by 所有功能 Wave。
+-->
+
+<footer class="doc-foot">{{TOPIC}} · 执行计划 · upstream: code-architecture.md · 编码完成 = 测试验收清单全绿</footer>
+</main>
+</div>
+
+<script type="module">/* INLINE: zoom.js */</script>
+</body>
+</html>
