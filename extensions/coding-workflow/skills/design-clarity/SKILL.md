@@ -39,9 +39,16 @@ description: >-
 提问焦点：先问目标再问功能；区分「目标」和「方案」；业务用例非技术用例。
 即时写入项目根 CONTEXT.md（统一语言）。初稿用 `references/deliverable-template.md`。
 
-**Step 2（追踪）— 派 fresh-context subagent，按下述 5 业务视角追踪。** 每视角必须核对或写降级理由；卡住的地方 = gap（标 F/K/D 类型）。
+**Step 1 末尾 — 机器结构检查前置自跑（零成本提速）：** 初稿写完后，主 agent 立即自跑 `python3 ${SKILL_DIR}/scripts/check_clarity.py {topic_dir}`，FAIL 当场修低级硬伤（占位符没替换/章节缺/每 UC 缺 AC/系统实现越界/frontmatter verdict 缺），不必等 Step 6。
+> **与 Step 6 审查的分工**：此处只杀机器可证的结构硬伤（快、主 agent 自跑）；Step 6 才是质量门（fresh subagent 跑）。两者不替代——Step 6 的 check_clarity.py exit 1 仍硬阻断判 FAIL。
+
+**Step 2（追踪）— 2 个并行 fresh-context subagent：5 视角追踪 + 禁读产出物异质重建。**
 
 > **业务视角，非实现视角。** 追踪中发现实现层问题（API 契约、状态机、技术架构），记录为「移交②系统设计处理」，不在本阶段展开。
+>
+> **为何加禁读重建（提质附带提速）：** ① 是业务根，遗漏全链放大（下游⑤时序图都基于①用例集，①漏一个用例=下游全在为不完整前提做精致打磨）。现有 5 视角都读同一份 requirements.md 初稿——**同源盲区**：初稿漏的用例，5 视角查不出（视角2查的是"已列用例是否完整"，不是"该列而未列的用例"）。范式照搬③issues 的 A 角色（fog-of-war.md 论证的「同源盲区靠 fresh context 他证对抗」）。与 5 视角并行跑（共 2 个 subagent），比现状串行快。
+
+**① 5 视角追踪 subagent**（1 个 fresh-context，读 requirements.md + 上游无 + 项目源码）：
 
 1. **目标可追溯性**（必查，无降级）— 业务目标→达成路线→用例的完整可追溯链。查：孤立用例（无对应目标）/ 孤立目标（无路线或用例支撑）/ 成功标准是否可衡量（「X 达到 Y 指标」而非「做好 X」）。
 2. **角色与用例完整性**（必查，无降级）— 所有参与角色及其用例完整。查：隐含 Actor（被提到但未纳入，如审核人/管理员）/ 同一 Actor 不同权限级别是否区分 / **每用例必须答出 主流程+替代+异常 + 前置/后置**（最常漏异常流程）。
@@ -52,6 +59,23 @@ description: >-
 > gap 分流（F/K/D）与收敛判定见 `../design-shared/references/loop-skeleton.md` Step 3-4。
 
 > **为何内联：** clarity 的 5 视角较轻量，故内联于本 SKILL；其余阶段（②③④）视角较重，仍各自独立成 references 文件。
+
+**② 禁读产出物异质重建 subagent**（1 个 fresh-context，**禁读 requirements.md**，只读 CONTEXT.md + 项目源码）：
+
+独立重建「Actor 清单 + 用例清单 + 主流程/异常 + 数据流」，与主 agent 初稿 diff。diff 出来的就是同源盲区 gap（标 F/K/D 进 Step3）。产出 `changes/tracing-round-{N}-reconstruct.md`。
+
+**重建器 Task prompt：**
+
+```
+你是独立重建 subagent。上下文与主 agent 隔离。**禁止读 requirements.md**（避免被主 agent 初稿锚定）。只读 CONTEXT.md + 项目源码（若有）。
+1. 独立重建：① 有哪些 Actor（含隐含的，如审核人/管理员）② 每个.Actor 有哪些用例 ③ 每用例的主流程+替代+异常 ④ 核心数据流（产生→处理→消费→归档）
+2. 重建完成后，才 read requirements.md（主 agent 初稿），与你的重建做 diff
+3. diff 出的差异就是同源盲区 gap，逐条标 F/K/D：
+   - 你重建有但初稿无（MISSING，最可能是 D-不可逆/未问的业务意图）
+   - 初稿有但属性不符（MISMATCH，如缺异常流程）
+   - 术语不一致（ACTOR/用例名不统一）
+4. 写入 {topic_dir}/changes/tracing-round-{N}-reconstruct.md
+```
 
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
@@ -74,7 +98,8 @@ description: >-
 
 - [ ] requirements.md 存在，frontmatter 含 `verdict: pass`
 - [ ] requirements.html 存在，用例图正确渲染
-- [ ] `changes/tracing-round-{N}.md` 存在（追踪真执行了，非主 agent 自圆其说）
+- [ ] `changes/tracing-round-{N}.md` 存在（5 视角追踪真执行了，非主 agent 自圆其说）
+- [ ] `changes/tracing-round-{N}-reconstruct.md` 存在（禁读重建真执行了——① 的同源盲区防线）
 - [ ] `changes/review-clarity.md` 存在且 verdict: APPROVED
 - [ ] 所有 `[AMBIGUOUS]` 已解决或显式列为待确认
 - [ ] **目标→路线→用例可追溯**：每用例能追溯到目标，每目标有用例支撑

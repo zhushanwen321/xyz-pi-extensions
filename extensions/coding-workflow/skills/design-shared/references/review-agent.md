@@ -65,18 +65,27 @@ python3 ${SKILL_DIR}/scripts/check_{phase}.py {topic_dir}
   - 对分层深度：「核心计算真的复杂到需要这层吗？三层够不够？」
   - 判定：若认为某决策过度设计，即使其他 5 维全过也标 CHANGES_REQUESTED + 注「建议降级为 X」
 
+## 审查并行模式（默认）
+
+6 维拆 2 组并行 fresh subagent——**对齐组**跑 5 客观维（内部一致性/上游对齐/可执行性/完整性/可视化质量），**红队组**只跑红队维（必要性与比例性，独立 fresh context）。
+
+**为何拆：** 红队维度（删/质疑过度设计）与其余 5 维（补/对齐）**认知方向相反**，塞同一 context 串行会 confirmation bias 沿维度链累积（前半程补完 gap，后半程要删时心态已偏向「刚补的是必要的」）。拆开后各跑正交认知帧，盲区更少。详见 `loop-skeleton.md` Step 6。
+
+**轻量项目降级：** 本阶段交付物体量小（如 ③issues.md 仅决策图），红队维度常无可质询对象，可降级为单组审查（红队维度合进对齐组 context，强制「先 5 维补 → redact → 再红队删」内部顺序），review 报告 frontmatter 标 `review_mode: single`。
+
 ## 报告格式
 
-写入 `{topic_dir}/changes/review-{phase-slug}.md`，frontmatter 必须含两个字段：
+写入 `{topic_dir}/changes/review-{phase-slug}.md`（对齐组）和 `{topic_dir}/changes/review-{phase-slug}-redteam.md`（红队组）。对齐组 frontmatter 必须含三个字段：
 
 ```yaml
 ---
 verdict: APPROVED | CHANGES_REQUESTED
 machine_check: PASS | FAIL    # 脚本退出码：0=PASS，1=FAIL
+review_mode: parallel          # parallel=2组并行(对齐+红队), single=轻量项目降级单组
 ---
 ```
 
-正文结构：
+对齐组正文结构：
 
 ```markdown
 ## Verdict
@@ -85,19 +94,52 @@ APPROVED / CHANGES_REQUESTED
 ## 机器检查结果
 （附 machine-check-{phase}.md 摘要：N/M passed，失败项列表）
 
-## 维度评估（6 维 ✅⚠️❌）
+## 维度评估（5 维 ✅⚠️❌）
 - 内部一致性：✅/⚠️/❌ {说明}
 - 上游对齐：...
 - 可执行性：...
 - 完整性：...
 - 可视化质量：...
-- 必要性与比例性（红队）：...
+（红队维度不在此报告，见 review-{phase-slug}-redteam.md）
 
 ## 必须修改
 （CHANGES_REQUESTED 时列；机器检查的 ❌ 必须在此逐条出现）
 
 ## 可选改进
 ```
+
+红队组 frontmatter：
+
+```yaml
+---
+verdict: APPROVED | CHANGES_REQUESTED
+machine_check: PASS | FAIL
+dimension: redteam
+---
+```
+
+红队组正文结构：
+
+```markdown
+## Verdict
+APPROVED / CHANGES_REQUESTED
+
+## 过度设计发现
+（每条：对象(port/层/决策) + deletion test 结论 + 建议降级方案；无发现则写"无过度设计"）
+
+## [CROSS-VALIDATED] 与对齐组冲突
+（若红队判某对象过度设计、但对齐组判该对象是上游对齐必需，在此列出；主 agent 据此判断，D-不可逆转 ask_user）
+
+## 必须修改
+```
+
+**单组降级模式**（`review_mode: single`，轻量项目）：所有内容写进单个 `review-{phase-slug}.md`，维度评估含全 6 维（红队维度归位）。
+
+## 聚合规则（主 agent）
+
+- 两组 verdict 取 **OR**：任一 CHANGES_REQUESTED → 整体 CHANGES_REQUESTED
+- 两组都 APPROVED → 进 Step 6b
+- [CROSS-VALIDATED] 冲突条目单独提取，D-不可逆决策转 ask_user，其余主 agent 按事实性矛盾原则裁决
 
 ## 铁律
 

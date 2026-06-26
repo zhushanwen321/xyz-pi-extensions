@@ -50,6 +50,9 @@ Issue 决策图（根：从 system-architecture 的挑战推导）
 
 > 方案对比的技术分析（改动/优点/缺点）= agent 产出，作为用户决策的参考材料。
 
+**Step 1 末尾 — 机器结构检查前置自跑（零成本提速）：** 初稿（含必问决策点定稿）写完后，主 agent 立即自跑 `python3 ${SKILL_DIR}/scripts/check_issues.py {topic_dir}`，FAIL 当场修低级硬伤（幽灵 #N、空 N/A、❌/待补残留、P0/P1 缺 ≥2 方案、P 级与 blocked_by 不一致），不必等 Step 6。
+> **与 Step 6 审查的分工**：此处只杀机器可证的结构硬伤（快、主 agent 自跑）；Step 6 才是质量门（fresh subagent 跑，含语义/盲区/红队评审）。两者不替代——Step 6 的 check_issues.py exit 1 仍硬阻断判 FAIL。
+
 **Step 2（追踪）— 派 fresh-context subagent，对抗主 agent 同源盲区：**
 
 主 agent 写 issues.md（含覆盖核验表）时带着某个盲区——它漏掉的元素，自己填表也填不进，表看起来 100% 覆盖实则是自证。Step2 用 fresh context **他证**：subagent 从 ② 独立重建覆盖表，与主 agent 的表 diff，差异即真 gap。

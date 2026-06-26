@@ -36,7 +36,55 @@ from _shared_check_lib import (
 DELIVERABLE = "execution-plan.md"
 
 
+def generate_manifest(topic_dir):
+    """生成测试验收清单草稿（减写）：读⑤§6 test-matrix，输出清单 markdown。
+
+    保留「功能归属 Wave」「测试执行层」两列空给 agent 填（Wave 编排是判断，不是推导）。
+    用法：python3 check_execution.py <topic_dir> --generate-manifest > manifest-draft.md
+    """
+    code_arch_path = os.path.join(topic_dir, "code-architecture.md")
+    if not os.path.isfile(code_arch_path):
+        print(f"ERROR: {code_arch_path} 不存在，无法推导清单", file=sys.stderr)
+        sys.exit(1)
+
+    tm_section = extract_section(code_arch_path, r"测试矩阵|Test Matrix") or ""
+    # 提取所有 T{N}.{M} 用例 ID（同时定位出现上下文判断来源 A/B）
+    all_ids = re.findall(r"T(\d+\.\d+)", tm_section)
+    # 来源 B 表行：含「安全|并发|司观测|性能」维度词且末列有 T ID
+    b_context = set()
+    for line in tm_section.splitlines():
+        if re.search(r"安全|并发|司观测|性能|稳定性", line) and re.search(r"T\d+\.\d+", line):
+            for m in re.findall(r"T(\d+\.\d+)", line):
+                b_context.add(m)
+    # e2e 类型行（来源 A 表里类型列含 e2e）
+    e2e_ids = set()
+    for line in tm_section.splitlines():
+        if re.search(r"\|\s*e2e\s*\|", line):
+            for m in re.findall(r"T(\d+\.\d+)", line):
+                e2e_ids.add(m)
+
+    seen = set()
+    print("## 测试验收清单（Test Acceptance Manifest）— 草稿（脚本生成，需 agent 补全）\n")
+    print("> 脚本仅提取用例 ID + 推断来源/执行层；断言摘要/功能归属 Wave 需 agent 从⑤§4/§6 补（判断，非推导）。\n")
+    print("| 用例 ID | 归属 UC | 来源 | 断言摘要 | 功能归属 Wave | 测试执行层 | 状态 |")
+    print("|---------|--------|------|---------|--------------|----------|------|")
+    for tid in sorted(set(all_ids), key=lambda x: tuple(int(n) for n in x.split("."))):
+        if tid in seen:
+            continue
+        seen.add(tid)
+        uc_num = tid.split(".")[0]
+        source = "B NFR" if tid in b_context else "A 功能"
+        layer = "e2e" if tid in e2e_ids else ("integration" if tid in b_context else "_待填_")
+        print(f"| T{tid} | UC-{uc_num} | {source} | _待填_ | _待填_ | {layer} | 待验 |")
+    print(f"\n<!-- 共 {len(seen)} 条用例。来源 B/安全并发默认 integration，e2e 类型默认 e2e，其余执行层待 agent 定。 -->")
+
+
 def main():
+    # CLI 分流：--generate-manifest 生成清单草稿（减写），不走默认校验
+    if "--generate-manifest" in sys.argv:
+        topic_dir = resolve_topic_dir()
+        generate_manifest(topic_dir)
+        return
     topic_dir = resolve_topic_dir()
     report = CheckReport("execution")
     md_path = os.path.join(topic_dir, DELIVERABLE)

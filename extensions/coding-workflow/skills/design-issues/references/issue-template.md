@@ -98,11 +98,21 @@
 ### 流程
 
 1. 主 agent 写问题空间说明（约束 + 依赖分类 + 粗略代码 sketch）
-2. 派 3+ subagent 并行，每个给**不同设计约束**：
+2. 派 3+ subagent 并行，每个给**不同设计约束**（radically different 的来源——约束不同，不是改名分身）：
    - Agent 1: 「最小化 interface——1-3 个入口，最大化 leverage」
    - Agent 2: 「最大化灵活性——支持多种用例和扩展」
    - Agent 3: 「优化最常见 caller——让默认情况 trivial」
-3. 每个 subagent 产出 radically different 设计（interface + 使用示例 + 背后藏了什么 + trade-off）
-4. 主 agent 按**复杂度归位**、**depth**、**seam 位置**对比，给 opinionated 推荐
+3. 每个 subagent 按**固定 slot 表**产出（结构化，不是自由文档）：
+
+   | slot | 内容 | 约束 |
+   |------|------|------|
+   | **interface sketch** | 接口签名/入口形状（伪代码或类型） | 1 块 |
+   | **使用示例** | 1 个 caller 视角的真实调用片段 | 1 个 |
+   | **trade-off** | 3 条取舍点（每条：得 X / 付 Y） | 3 条 |
+   | **hidden-cost** | 背后藏了什么（隐含约束/耦合/技术债） | 1 行 |
+   | **其他权衡**（开放兜底） | slot 之外的真 radically different 权衡 | 可空 |
+
+   > slot 化只是**结构化产出**，不压创新——§2 约束不同才保证 radically different，开放 slot 兜底防 slot 太死。
+4. 主 agent 收敛 = **逐 slot diff**（不是读 3 篇自由文档）：同 slot 横向对比 3 方案。给用户决策时**用同一 slot 表**呈现 3 方案差异，再给 opinionated 推荐（最终选定仍必须 ask_user，见 SKILL.md Step1 决策点 #3）。
 
 详见 system-architecture skill 的 codebase-design 词汇引用。

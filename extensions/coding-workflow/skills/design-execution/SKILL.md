@@ -51,8 +51,24 @@ Wave 编排（根：从时序图推导）
 **[MANDATORY] 定稿必须含「测试验收清单」章节**——把⑤test-matrix 全量用例（来源 A 功能 + 来源 B NFR）按归属 Wave 列全，作为实现期的 Definition of Done。
 初稿用 `references/deliverable-template.md`。
 
-**Step 2（追踪）— 派 fresh-context subagent，按 4 视角追踪：**
-切片独立性（每 Wave 可独立验证？非水平切片？）/ 依赖闭合（Wave 依赖从时序图完整推导？）/ 并行安全（同并行组真不改同一文件？）/ **测试闭环（每 Wave 标注覆盖的⑤test-matrix 用例 ID（含来源 B NFR 用例），并集=全部？每个时序图 alt/else 异常分支落在某 Wave 覆盖里？）/ 实现闭环（「测试验收清单」用例 ID 集合 = ⑤test-matrix 全量？末尾验收 Wave blocked_by 所有功能 Wave？每个功能 Wave 覆盖的用例 ID 都在清单出现？）**。
+**Step 1 末尾 — 机器结构检查前置自跑（零成本提速）：** 初稿写完后，主 agent 立即自跑 `python3 ${SKILL_DIR}/scripts/check_execution.py {topic_dir}`，FAIL 当场修低级硬伤（验收清单缺用例/末尾验收 Wave 缺 blocked_by/consistency-final 缺），不必等 Step 6。
+> **与 Step 6 审查的分工**：此处只杀机器可证的结构硬伤；Step 6 才是质量门（含红队反过度编排）。两者不替代——Step 6 的 check_execution.py exit 1 仍硬阻断判 FAIL。
+>
+> **测试验收清单可脚本生成草稿（减写）：** `python3 ${SKILL_DIR}/scripts/check_execution.py {topic_dir} --generate-manifest` 读⑤§6 test-matrix 自动生成清单行（用例 ID/UC/来源/断言/执行层），「功能归属 Wave」列留空给 agent 从⑤§4时序图推导填入。生成后 agent 只补该列 + 校对，不必从零写。
+
+**Step 2（追踪）— 2 组并行 fresh-context subagent（认知帧内聚）：**
+
+> **为何拆 2 组（不拆 4）**：3 个结构视角（切片独立性/依赖闭合/并行安全）同属"Wave 图结构审计"认知域，fresh context 已消除对话偏误，同域内一个 subagent 顺序切换帧的帧内偏误很低，拆 4 = 4x IO 换不来等量盲区消除（过度并行）。测试/实现闭环跨读⑤test-matrix↔⑥清单，是不同认知帧，独立成组。Wave 编排脚本化（见 check_execution.py 生成器）后，结构三视角退化为机器自检，组A 几乎消失。
+
+| 组（认知帧） | 视角 | 主读 |
+|---|---|---|
+| **组 A：编排结构审计** | 切片独立性 + 依赖闭合 + 并行安全 | Wave 定义 + ⑤§4 时序图 + blocked_by + 文件影响集 + 并行组 |
+| **组 B：测试闭环审计** | 测试闭环 + 实现闭环 | ⑤test-matrix ↔ ⑥测试验收清单 |
+
+**组 A 详细检查**：每 Wave 可独立验证？非水平切片？/ Wave 依赖从时序图完整推导？/ 同并行组真不改同一文件？
+**组 B 详细检查**：每 Wave 标注覆盖的⑤test-matrix 用例 ID（含来源 B NFR 用例），并集=全部？每个时序图 alt/else 异常分支落在某 Wave 覆盖里？/「测试验收清单」用例 ID 集合 = ⑤test-matrix 全量？末尾验收 Wave blocked_by 所有功能 Wave？每个功能 Wave 覆盖的用例 ID 都在清单出现？清单的「测试执行层」列与⑤§6 来源 B「强制层级」一致？
+
+产出：组 A 写 `tracing-round-{N}-structure.md`，组 B 写 `tracing-round-{N}-testclosure.md`。轻量项目（单 Wave）可降级为单 agent。
 
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 

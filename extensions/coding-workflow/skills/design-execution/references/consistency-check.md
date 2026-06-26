@@ -30,20 +30,26 @@ done
 
 ## 6 维检查
 
-派独立 fresh-context subagent，读取全部 6 份 .md + CONTEXT.md + ⑤骨架代码目录。
+**【并行提速】拆 4 组并行 fresh-context subagent（按维度正交切，不按文档组切）。**
 
-**Task prompt 模板：**
+> **为何按维度切不按文档组切**：6 维中维 2（用例追溯①UC→③issue→⑤时序→⑥Wave）、维 3（AC 闭环①→③→⑤→⑥）、维 5（NFR 回灌④→⑤→⑥）都**跨文档组**——按①②/③④/⑤⑥ 切会断追溯链（⑤⑥组验不了①的 UC 落⑥Wave，③④组看不到⑤test-matrix 落点）。维度本身正交（每维读各自证据、输出各自矛盾，无一维结论依赖另一维），按维度切才是真并行单元。
+>
+> **maxConcurrent=4 刚好放下**（4 个并行 fresh subagent，符合 ≤5 并发约束）。
 
-```
-你是独立一致性终检 subagent。上下文与主 agent 隔离。编码前对①-⑥全部文档做总闸门审计：
-1. read 全部交付物：requirements.md, system-architecture.md, issues.md,
-   non-functional-design.md, code-architecture.md, execution-plan.md
-2. read 项目根 CONTEXT.md（统一语言）
-3. read code-skeleton/（⑤骨架代码）
+| 组（认知帧） | 跑的维度 | 主读 |
+|---|---|---|
+| **术语审计组** | 维 1 术语一致性 | 全 6 文档 + CONTEXT.md |
+| **全链追溯审计组** | 维 2 用例可追溯 + 维 3 AC 覆盖闭环（合并：同走①→③→⑤→⑥链，省重复遍历） | 全 6 文档 |
+| **决策守护审计组** | 维 4 决策一致性（②③ D-不可逆 vs ④⑤⑥） | 全 6 文档 |
+| **落地审计组** | 维 5 NFR 回灌闭环 + 维 6 骨架↔文档一致（合并：都查"⑤是否真落地"） | 全 6 文档 + ⑤骨架代码 |
 
-从 6 维检查跨文档一致性（见下），将矛盾逐条记录。
-写入 {topic_dir}/changes/consistency-final.md（frontmatter verdict: CONSISTENT / INCONSISTENT）。
-```
+**被并行单元无依赖**：每维读各自证据、输出各自矛盾。维 6（骨架→⑥Wave 映射）与维 3（test-matrix→⑥Wave 覆盖）都查"⑥Wave 覆盖 X"但 X 不同（骨架叶子 vs 用例 ID），结论独立。
+
+**两处串行约束（不可并行）：**
+1. **Step 0 机器检查必须先依次跑完**（6 个阶段脚本依次串行 bash，全 PASS 才进并行 LLM 审计）
+2. **合并写 consistency-final.md 是撞写层**，串行（主 agent 或 1 个 merge subagent 收集 4 组输出后写）
+
+各并行组产出 `changes/consistency-{terminology|trace|decision|landing}.md`，主 agent 汇总后写 `consistency-final.md`。
 
 ### 维度 1: 术语一致性
 

@@ -140,54 +140,97 @@ Announce at start: "我正在使用 {skill-name} skill 来 {本阶段目标}。"
 
 向用户说明：「已生成 `{deliverable-name}.html` 并在浏览器打开。请关注 {本阶段主角图表}。如需调整告诉我，否则进入 Step 6。」用户反馈当 gap 处理，更新定稿后重新派 subagent 渲染。
 
-## Step 6: 独立审查 + 交接
+### 5d. 机器检查前置自检（定稿后立即跑，提前消灭低级硬伤）
 
-[MANDATORY] 定稿后必须过独立审查（质量门）。审查判质量（不是找 gap）；追踪 vs 审查区别详见 `loop-method.md`。
-**审查分两层：先跑机器检查脚本（硬阻断），后做 6 维 LLM 审查。** 审查 subagent 规范见 `review-agent.md`。
-
-**派发配置：** Agent=general-purpose，Context=**fresh**，读取=`review-agent.md`（审查规范，与本文件同目录：`design-shared/references/`）+ 定稿 .md + 定稿 .html + 所有上游交付物 + CONTEXT.md，产出=`changes/review-{phase-slug}.md`。
-
-**Step 0（机器检查，审查 subagent 最先做）：** 审查 subagent 先跑对应阶段的机器检查脚本：
+[RECOMMENDED] **定稿 .md 后、派审查 subagent 前，主 agent 立即自跑本阶段的机器检查脚本。** 把占位符/缺章节/幽灵引用/集合差集等低级硬伤的反馈环从「Step6 审查 → 回 Step3 → Step4 → Step5 → Step6」缩到「Step5 当场修」。审查 subagent 仍复跑一次做最终门（**不取消**，硬阻断铁律不变）。
 
 ```bash
 python3 ${SKILL_DIR}/scripts/check_{phase}.py {topic_dir}
 ```
 
-脚本输出 `changes/machine-check-{phase}.md` + 退出码。**exit 1（机器检查 FAIL）= 直接判 CHANGES_REQUESTED，不许 APPROVED（硬阻断）**——机器可证伪的硬伤（缺章节/占位符/引用断裂/骨架反模式）不存在"审查认为可以过"。exit 0 才进 6 维 LLM 审查。各阶段脚本路径见 `review-agent.md`。
+- exit 0 → 进 Step 6（审查 subagent 仍会复跑确认为最终门）
+- exit 1 → 看脚本报告 `changes/machine-check-{phase}.md`，当场修低级硬伤（不进 Step 6），修完重跑直到 exit 0
 
-**审查 6 维：** 内部一致性 / 上游对齐 / 可执行性 / 完整性 / 可视化质量 / **必要性与比例性（红队维度）**。
+**与 Step 6 审查的分工：** Step 5d 只杀机器可证的**结构**硬伤（快、主 agent 自跑、不阻塞交接）；Step 6 才是**质量门**（红队反过度设计等语义判断，fresh subagent 跑）。两者不替代。
 
-**Task prompt 模板：**
+## Step 6: 独立审查 + 交接
+
+[MANDATORY] 定稿后必须过独立审查（质量门）。审查判质量（不是找 gap）；追踪 vs 审查区别详见 `loop-method.md`。
+**审查分两层：先跑机器检查脚本（硬阻断），后做 6 维 LLM 审查。** 审查 subagent 规范见 `review-agent.md`。
+
+**【并行提速】6 维拆 2 组并行认知帧（红队独立 fresh context）。** 6 维不是天然一个任务——**红队维度（必要性与比例性，反过度设计）与其余 5 维认知方向相反**（一个删/质疑，一个补/对齐），塞进同一 context 串行会 confirmation bias 沿维度链累积（前半程补完 gap，后半程要删时心态已偏向「刚补的是必要的」）。拆成 2 组并行 fresh subagent，各跑正交认知帧，盲区更少、wall-clock 更短。审查 subagent 规范见 `review-agent.md`。
+
+**派发配置（2 组并行）：** Agent=general-purpose，Context=**fresh**，两组读取材料不同（见下表），产出各写一份。两组都先跑 Step 0 机器检查（同一脚本，谁先跑都行）。
+
+| 组 | 认知帧 | 跑的维度 | 读取材料 | 产出文件 |
+|----|--------|---------|---------|---------|
+| **对齐组** | 对齐/补齐（与设计同向） | 内部一致性 / 上游对齐 / 可执行性 / 完整性 / 可视化质量（5 维） | `review-agent.md` + 定稿 .md + .html + 上游交付物 + CONTEXT.md | `changes/review-{phase-slug}.md`（主报告）|
+| **红队组** | 反过度设计（与设计反向） | 必要性与比例性（1 维，独立 fresh context） | `review-agent.md` + 定稿 .md + 上游交付物（可执行性判断需要）+ {⑤: 骨架代码} | `changes/review-{phase-slug}-redteam.md`（红队报告）|
+
+> **交叉验证机制（红队 × 对齐冲突）：** 红队组说「某 port/层该删」、对齐组说「该 port 是上游对齐必需」——两组独立命中同一对象但结论相反，标 `[CROSS-VALIDATED]` 转主 agent。主 agent 判断：若涉及 D-不可逆决策（分层/状态机/领域边界）→ **必须 ask_user**，不能 agent 自判；其余主 agent 按「事实性矛盾」原则裁决。范式同 Step2 追踪的 `[CROSS-VALIDATED]`。
+
+**Step 0（机器检查，两组最先做，硬阻断）：** 任一组先跑对应阶段的机器检查脚本：
+
+```bash
+python3 ${SKILL_DIR}/scripts/check_{phase}.py {topic_dir}
+```
+
+脚本输出 `changes/machine-check-{phase}.md` + 退出码。**exit 1（机器检查 FAIL）= 两组都直接判 CHANGES_REQUESTED，不许 APPROVED（硬阻断）**——机器可证伪的硬伤（缺章节/占位符/引用断裂/骨架反模式）不存在"审查认为可以过"。exit 0 才进各自的维度审查。
+
+**Task prompt 模板（对齐组）：**
 
 ```
-你是独立审查 subagent。上下文与主 agent 隔离。审查定稿是否达可交接质量：
+你是独立审查 subagent（对齐组）。上下文与主 agent 隔离。审查定稿的 5 个客观维度：
 
 **Step 0（机器检查，硬阻断，最先做）：**
 0a. read `review-agent.md`（审查规范，与本文件同目录 `design-shared/references/`）
 0b. 跑 `python3 {skill_dir}/scripts/check_{phase}.py {topic_dir}`
 0c. exit 1 = 机器检查 FAIL → 直接判 CHANGES_REQUESTED，把 machine-check-{phase}.md 的 ❌ 当"必须修改"，不许 APPROVED（硬阻断）
-0d. exit 0 才进下面的 6 维 LLM 审查
+0d. exit 0 才进下面的 5 维审查
 
-**Step 1（6 维 LLM 审查，机器全过后才做）：**
+**Step 1（5 维客观审查，机器全过后才做）：**
 1. read {final_deliverable_md}（定稿）
 2. read {final_deliverable_html}（可视化页面）
 3. read {upstream_deliverables}（所有上游交付物，对齐检查）
 4. read 项目根 CONTEXT.md（统一语言对齐）
 
-从 6 维审查：
-- 内部一致性 / 上游对齐 / 可执行性 / 完整性 / 可视化质量（5 个客观维度）
-- **必要性与比例性（红队维度）**——站在「这个设计过度/不合理」的反方立场质询：
-  · 对每个 port/adapter/interface：「删掉它会怎样？最小可行版本是什么？」(deletion test)
-  · 对每个 D-不可逆决策：「这是真不可逆，还是 agent 没找到可逆方案？」
-  · 对分层深度：「核心计算真的复杂到需要这层吗？三层够不够？」
-  判定：若认为某决策过度设计，即使其他 5 维全过也标 CHANGES_REQUESTED + 注「建议降级为 X」
+从 5 维审查（**不跑红队维度，那是红队组的活**）：
+- 内部一致性 / 上游对齐 / 可执行性 / 完整性 / 可视化质量
 
-判定：APPROVED（机器检查 PASS + 6 维均过或仅 cosmetic）/ CHANGES_REQUESTED（机器检查 FAIL，或任一维实质问题，含过度设计）。
+判定：APPROVED（机器检查 PASS + 5 维均过或仅 cosmetic）/ CHANGES_REQUESTED（机器检查 FAIL，或任一维实质问题）。
 报告写入 {topic_dir}/changes/review-{phase-slug}.md（frontmatter 含 verdict + machine_check）。
-格式：## Verdict / ## 机器检查结果 / ## 维度评估（6 维 ✅⚠️❌）/ ## 必须修改 / ## 可选改进
+格式：## Verdict / ## 机器检查结果 / ## 维度评估（5 维 ✅⚠️❌）/ ## 必须修改 / ## 可选改进
 ```
 
-**结果处理：** APPROVED → 进 Step 6b 反哺检查；CHANGES_REQUESTED → 「必须修改」当 gap 回 Step 3，更新后重走 Step 4→5→6。审查不通过不交接。
+**Task prompt 模板（红队组）：**
+
+```
+你是独立审查 subagent（红队组）。上下文与主 agent 隔离，**与对齐组也隔离**。你只跑 1 个维度——**必要性与比例性（红队维度，反过度设计）**。
+
+**Step 0（机器检查，硬阻断，最先做）：** 跑 `python3 {skill_dir}/scripts/check_{phase}.py {topic_dir}`（若对齐组已跑且 machine-check-{phase}.md 存在，复用其结果，不重复跑）。exit 1 → 直接判 CHANGES_REQUESTED。
+
+**Step 1（红队维度审查）：**
+1. read `review-agent.md` 的「必要性与比例性」节
+2. read {final_deliverable_md}（定稿）
+3. read {upstream_deliverables}（判断某决策是否真必需）
+4. {⑤: read 骨架代码}（验证 port/adapter 是否真接 SDK）
+
+站在「这个设计过度/不合理」的反方立场质询：
+- 对每个 port/adapter/interface：「删掉它会怎样？最小可行版本是什么？」(deletion test)
+- 对每个 D-不可逆决策：「这是真不可逆，还是 agent 没找到可逆方案？」
+- 对分层深度：「核心计算真的复杂到需要这层吗？三层够不够？」
+
+判定：若认为某决策过度设计，即使其他 5 维全过也标 CHANGES_REQUESTED + 注「建议降级为 X」。
+报告写入 {topic_dir}/changes/review-{phase-slug}-redteam.md（frontmatter: verdict: APPROVED|CHANGES_REQUESTED, machine_check: PASS|FAIL, dimension: redteam）。
+格式：## Verdict / ## 过度设计发现（每条：对象 + deletion test 结论 + 建议降级方案）/ ## 必须修改
+```
+
+**结果处理：**
+- 两组都 APPROVED → 进 Step 6b 反哺检查
+- 任一组 CHANGES_REQUESTED → 该组「必须修改」当 gap 回 Step 3，更新后重走该组审查（另一组若已 APPROVED 不必重跑）
+- [CROSS-VALIDATED] 冲突 → 主 agent 判断，D-不可逆必须 ask_user
+
+**轻量项目降级：** 本阶段交付物体量小（如 ③issues.md 仅决策图），红队维度常无可质询对象，可降级为单组审查（红队维度合进对齐组 context，强制「先 5 维补 → redact → 再红队删」内部顺序）。是否降级由主 agent 按交付物复杂度判断，并在 review 报告 frontmatter 标 `review_mode: single|parallel`。
 
 ## Step 6b: 上游反哺检查（审查 APPROVED 后、交接前）
 

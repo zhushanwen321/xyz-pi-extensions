@@ -90,9 +90,15 @@ Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 
 > 这个检查点不是新 Step——是 Step 1 的收尾动作，不改动 loop-skeleton 的 6 步骨架。Step 2 的 subagent 找 gap（完整性），但**整体方向对不对是用户的判断**，不能外包给 subagent。
 
+**Step 1 末尾 — 机器检查前置自跑 [RECOMMENDED]：**
+
+方案对齐检查点通过、初稿写完后，主 agent 立即自跑 `scripts/check_architecture.py <topic_dir>`（exit 0 才进 Step 2）。
+
+**与 Step 6 审查的分工：** Step 1 末自跑 = 早反馈（占位符/缺章节/verdict 缺失/状态机 Status/Reason 漏标等低级硬伤，在交给 Step 2 subagent 前就修掉，避免 subagent 追着低级错误跑）；Step 6 审查 subagent 仍复跑一次做最终门（**不取消，硬阻断铁律不变**）。同一脚本两道关：Step 1 末是「早修低级伤」，Step 6 是「最终门」。
+
 **Step 2（追踪）— 派 3 个 fresh-context subagent 并行，各戴一个认知帧（2 视角）：**
 
-5+1 视角是 6 副异质认知眼镜。一个 subagent 串行戴 6 副，每换一帧要 re-orient，后半程吃前半程的残留预设（confirmation bias 沿视角链累积）。拆成 3 组并行，每个只聚焦一个认知帧——分组映射 + 交叉验证点定义见 `references/architecture-perspectives.md`「并行分组」。
+5+1 视角是 6 副异质认知眼镜。一个 subagent 串行戴 6 副，每换一帧要 re-orient，后半程吃前半程的残留预设（confirmation bias 沿视角链累积）。拆成 3 组并行，每个只聚焦一个认知帧——分组映射 + 交叉验证点 + **降级判据（简单项目可降到 2 组/1 组，Step 1 末自评）**见 `references/architecture-perspectives.md`「并行分组」。默认 3 组，CRUD 单层无状态机等简单项目按判据降级。
 
 | 组（认知帧）| 追踪视角 | 写入 |
 |-------------|---------|------|
@@ -107,7 +113,7 @@ Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 
 **交叉验证（主 agent 汇总时做）：** 3 组 gap 汇总后，识别**交叉命中**——同一边界/模型被两组独立报告（如「粒度错配」建模帧视角1 + 演进帧视角5 都报、「伪边界」结构帧视角3 + 演进帧视角5 都报）。交叉命中标 `[CROSS-VALIDATED]`，**优先级最高**——两个独立 context 都盯上了，不是单方盲区。
 
-**收敛判定（Step 4 复核）：** 3 组都 CONVERGED（无新 gap）才算整轮收敛；任一组有新 gap → 回 Step 3 处理后重跑该组（不必 3 组全重跑）。
+**收敛判定（Step 4 复核）：** 各组（3 组或降级后的 2/1 组）都 CONVERGED（无新 gap）才算整轮收敛。**Step 4 收敛复核只重跑「未 CONVERGED 的组」——已 CONVERGED 的组不必重跑（首轮复核和回流后复核均同此规则）**，避免对已收敛的组重复派 fresh context。任一组有新 gap → 回 Step 3 处理后只重跑该组。
 
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 

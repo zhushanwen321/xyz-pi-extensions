@@ -60,8 +60,32 @@ description: >-
 
 > 时序图调用链推导、签名表语法、Deep Module 词汇应用 = agent 自决。
 
-**Step 2（追踪）— 派 fresh-context subagent，按 5 视角追踪：**
-契约完整性（每用例/功能有对应 API 契约？**NFR④ 回灌到契约的字段（如 idempotency-key）是否在签名表体现？**）/ 调用链闭合（每时序图入口到底层完整、异常路径覆盖？）/ 依赖健康（包依赖无环、无上帝对象 LOC<400？）/ **测试覆盖完整性（每 UC 正常+边界+异常+状态 4 类齐全？时序图每个 alt/else 有对应异常用例（来源A）？**NFR④ `验收方式=代码测试` 的每条缓解项在 §6 来源B 有 ≥1 对应用例（非仅并发）？**）** / **搭便车闭环（②搭便车清单每项是否有⑤代码架构落点？无落点的是否已回流②打回？）**。
+**Step 1 末尾 — 机器结构检查前置自跑（零成本提速）：** 初稿（含 §6 test-matrix）写完后，主 agent 立即自跑 `python3 ${SKILL_DIR}/scripts/check_code_arch.py {topic_dir}`（若骨架未生成用 `--no-skeleton` 参数跳过骨架检查），FAIL 当场修低级硬伤（缺章节/占位符/§9 未定义签名/类型逃逸），不必等 Step 6。
+> **与 Step 6 审查的分工**：此处只杀机器可证的结构硬伤；Step 6 才是质量门（含骨架 P1 反模式 + 红队）。两者不替代——Step 6 的 check_code_arch.py exit 1 仍硬阻断判 FAIL。
+
+**§6 test-matrix 来源 A/B 拆 2 并行 subagent（减写+提速）：** 来源 A（功能用例，从 §4 时序图 alt/else 正向推导）与来源 B（NFR 用例，从④回灌表 `验收方式=代码测试` 反向映射）**认知帧不同**（功能边界 vs 风险登记），读文件基本不重叠（A 读 §4+①UC；B 读④回灌表），拆 2 并行 fresh subagent 无写冲突（写入 template §6 的分表，ID 段 T{UC}.6+ 区分）。来源 A 内部可选"按 UC 并行"（每 UC 1 subagent），但需上限保护：UC≤3 全并行；>3 按模块归组或分批（撞≤5 并发约束）。
+
+**Step 2（追踪）— 4 组并行 fresh-context subagent（认知帧内聚，抄② architecture-perspectives 范式）：**
+
+> **为何拆**：⑤ 是 6 阶段信息密度最高、追踪最弱的（现状单 agent 串行 5 视角）。拆 4 组各跑正交认知帧，盲区更少。**诚实标注**：⑤的5视角异质性<②的3组（②是不同工程思维，⑤更像同一批代码审查检查项），收益主要在**上下文隔离+读取并行提速**，盲区对抗次要。
+
+| 组（认知帧） | 吞入的视角 | 主读文件 | 写入文件 |
+|---|---|---|---|
+| **契约帧** | 契约完整性 + 调用链闭合 | §3 签名表 + §4 时序图 | `tracing-round-{N}-contract.md` |
+| **结构帧** | 依赖健康（无环 / god object LOC） | §2 包依赖图 + 骨架 LOC | `tracing-round-{N}-structure.md` |
+| **覆盖帧** | 测试覆盖完整性（来源 A alt/else + 来源 B NFR映射） | §6 + §4 + ④NFR 表 | `tracing-round-{N}-coverage.md` |
+| **闭环帧** | 搭便车闭环（②清单→⑤落点） | ②搭便车清单 + ⑤各章节落点 | `tracing-round-{N}-closure.md` |
+
+**契约帧详细检查**：每用例/功能有对应 API 契约？**NFR④ 回灌到契约的字段（如 idempotency-key）是否在签名表体现？** / 每时序图入口到底层完整、异常路径覆盖？
+**结构帧详细检查**：包依赖无环、无上帝对象 LOC<400？
+**覆盖帧详细检查**：每 UC 正常+边界+异常+状态+e2e 类齐全？时序图每个 alt/else 有对应异常用例（来源 A）？**NFR④ `验收方式=代码测试` 的每条缓解项在 §6 来源 B 有 ≥1 对应用例（非仅并发）？来源 B 安全/并发用例是否标了"强制层级"？**
+**闭环帧详细检查**：②搭便车清单每项是否有⑤代码架构落点？无落点的是否已回流②打回？
+
+**交叉验证点（组间重叠区）**：契约帧「调用链闭合」隐含"签名都在"与结构帧可能重叠→两组都报=强信号 `[CROSS-VALIDATED]`。
+
+**轻量项目降级**：单模块/无骨架的小系统，4 帧合回单 agent 串行（标明降级理由）。
+
+**收敛判定**：4 组都 CONVERGED 才算整轮收敛；任一组有新 gap → 回 Step 3 处理后重跑该组（不必 4 组全重跑）。
 
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
@@ -114,7 +138,7 @@ description: >-
 
 - [ ] code-architecture.md 存在，frontmatter 含 `verdict: pass`
 - [ ] code-architecture.html 存在，包依赖图+时序图正确渲染
-- [ ] `changes/tracing-round-{N}.md` 存在
+- [ ] `changes/tracing-round-{N}-{contract|structure|coverage|closure}.md` 存在（4 帧组追踪真执行了；轻量降级为单 `tracing-round-{N}.md`）
 - [ ] `changes/review-code-arch.md` 存在且 verdict: APPROVED
 - [ ] 工程目录树存在，每目录标注职责+变化轴
 - [ ] 包依赖图（Mermaid）无循环依赖

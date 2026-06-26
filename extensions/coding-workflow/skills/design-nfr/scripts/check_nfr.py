@@ -8,7 +8,7 @@ Usage:
 检查项：
   ①结构性：non-functional-design.md 存在 / verdict:pass / 关键章节 / 无占位符 / review-nfr APPROVED
   ②引用：
-    - 缓解项回灌登记表每行有「验收方式」列且值 ∈ {代码测试, 骨架约束, 运维项}
+    - 缓解项回灌登记表每行有「验收方式」列且值 ∈ {代码测试, 骨架约束, 性能混沌, 运维项}
     - 代码测试类的缓解项有对应 NFR-AC（归属 UC + 断言）
     - 无 ❌（不可接受）项残留——如有说明未回 Step 3 重选方案
     - 回灌表「回灌去向=③issue」的行，#N 真实存在于 issues.md（PHANTOM 形式检查）
@@ -34,7 +34,7 @@ from _shared_check_lib import (
 )
 
 DELIVERABLE = "non-functional-design.md"
-VALID_ACCEPTANCE = {"代码测试", "骨架约束", "运维项"}
+VALID_ACCEPTANCE = {"代码测试", "骨架约束", "性能混沌", "运维项"}
 
 
 def check_backfeed_phantom(report, topic_dir, mitigation_section):
