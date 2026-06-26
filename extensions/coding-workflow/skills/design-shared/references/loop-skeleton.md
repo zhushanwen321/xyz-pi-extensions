@@ -273,11 +273,12 @@ python3 ${SKILL_DIR}/scripts/check_{phase}.py {topic_dir}
 > **[RECOMMENDED]** 用 `design_status` 追踪 7 阶段状态，替代手写 `_progress.md` 的进度部分。
 > 它是**权威状态机**：阶段线性依赖（防跳阶）+ complete_phase 自动校验交付物 gate（防伪造完成）。
 > `_progress.md` 降级为其状态的可读快照（跨会话交接用，每次 complete_phase 可选同步生成）。
->
-> **两种调用方式**（语义完全一致，调同一批约束/gate 逻辑）：
-> - **Pi tool**（Pi 环境）：`design_status(action: start_phase, phase: {本阶段})`
-> - **CLI**（Claude Code / Cursor / 纯 shell）：`design-status start-phase {本阶段}`
->   非 Pi 环境用 `npx @zhushanwen/pi-design-status <command>` 或装 bin 后直接 `design-status <command>`。
+
+**优先用 tool，无 tool 用 CLI。** 两者调同一批约束/gate 逻辑（单一真相源），语义完全一致：
+- **Pi 环境**（有 `design_status` tool）：调 tool —— `design_status(action: start_phase, phase: {本阶段})`
+- **无 tool 环境**（Claude Code / Cursor / 纯 shell）：调 CLI —— `design-status start-phase {本阶段}`
+  - 已装 bin（`npm link` / `npm i -g`）：直接 `design-status <command>`
+  - 未装 bin：`npx @zhushanwen/pi-design-status <command>`
 
 各阶段 SKILL.md 在两处调：
 - **Step 1 开头**：`start_phase {本阶段}` 标记开始（会校验前置阶段是否 completed）
@@ -286,6 +287,44 @@ python3 ${SKILL_DIR}/scripts/check_{phase}.py {topic_dir}
 > **为什么用它而非手写 _progress.md**：「完成状态」从交付物派生（不是 agent 主观写），无法伪造「做完了」；
 > 阶段状态机约束（completed 不可回退、不可跳阶）被强制，agent 无法绕过 gate。
 > 提示词不暴露存储实现（json），tool action / CLI command 即全部接口。
+
+#### CLI 完整用法（无 tool 环境参考）
+
+```bash
+# 概览 / 单阶段详情（只读）
+design-status get-status                            # 7 阶段状态 + 进度 + open gaps
+design-status get-phase <phase>                     # 单阶段：step/round/gaps/gate 校验结果
+
+# 阶段流转（会改状态，受状态机约束）
+design-status start-phase <phase>                   # 开始阶段（校验前置 completed，防跳阶）
+design-status advance <phase> <step> [--note ...]   # 推进 loop step（step 单调前进，不能倒退）
+design-status review-phase <phase>                  # 标记进入 Step 6 审查（in_progress → under_review）
+design-status complete-phase <phase>                # 收尾（强制校验交付物 gate，过了才标 completed）
+
+# 追踪发现（会改状态）
+design-status log-gap <phase> <gap_id> -c F|K|D -s open|resolved [-d "描述"]
+```
+
+**参数：**
+- `<phase>` = `init | clarity | architecture | issues | nfr | code-arch | execution`
+- `<step>` = `1 交互初稿 / 2 追踪 / 3 gap分流 / 4 收敛 / 5 定稿 / 6 审查 / 6b 反哺`
+- `-c` gap 分类：`F`(二次确认) / `K`(直接问用户) / `D`(agent 自决)
+- `-s` gap 状态：`open` / `resolved`
+
+**输出惯例：** 成功 → stdout（exit 0）；约束拒绝/错误 → stderr（exit 1，shell 脚本可判断）。
+
+**运行前提：** 在含 `.xyz-harness/{topic}/` 的项目根运行（自动检测最近修改的 topic）。无则报错提示先 `/design-init`。
+
+**示例（一次完整阶段流转）：**
+```bash
+design-status start-phase clarity        # Step 1 开始
+design-status advance clarity 2          # 进 Step 2 追踪
+design-status log-gap clarity G1 -c K -s open -d "需确认支付渠道"
+design-status advance clarity 6          # 进 Step 6 审查
+design-status review-phase clarity       # → under_review
+design-status complete-phase clarity     # 校验 requirements.md + review APPROVED → completed
+design-status get-status                 # 看全貌
+```
 
 ## Stagnation 保底
 

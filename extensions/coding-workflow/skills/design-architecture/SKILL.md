@@ -44,7 +44,8 @@ description: >-
 
 **Step 1（交互+建模初稿）— Grilling 遍历架构决策树：**
 
-> **[状态追踪]** 开始时调 `design_status start_phase architecture`（CLI: `design-status start-phase architecture`）标记阶段开始（会校验 clarity 已 completed）。
+> **[状态追踪]** 开始时调 `design_status start_phase architecture` 标记阶段开始（会校验 clarity 已 completed）。
+> **有 `design_status` tool 优先用 tool**：`design_status(action: start_phase, phase: architecture)`；**无 tool（Claude Code/Cursor/shell）用 CLI**：`design-status start-phase architecture`。CLI 完整用法见 loop-skeleton.md「CLI 完整用法」。
 
 ```
 系统设计立场（根：核心计算是什么？）
@@ -149,7 +150,8 @@ Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 
 审查 APPROVED 后向用户交接（按 loop-skeleton.md Step 6 格式）：
 
-> **[状态追踪]** 交接前调 `design_status complete_phase architecture`（CLI: `design-status complete-phase architecture`）收尾——自动校验 system-architecture.md + verdict:pass + review APPROVED，过了才标 completed。
+> **[状态追踪]** 交接前调 `design_status complete_phase architecture` 收尾——自动校验 system-architecture.md + verdict:pass + review APPROVED，过了才标 completed。
+> **有 tool 优先用 tool**：`design_status(action: complete_phase, phase: architecture)`；**无 tool 用 CLI**：`design-status complete-phase architecture`。
 
 ```
 ✅ ②系统设计概要 已完成并通过独立审查。

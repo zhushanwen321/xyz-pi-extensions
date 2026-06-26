@@ -24,7 +24,8 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 
 **Step 1（交互+初稿）— Grilling 遍历副作用分析树：**
 
-> **[状态追踪]** 开始时调 `design_status start_phase nfr`（CLI: `design-status start-phase nfr`）标记阶段开始（会校验 issues 已 completed）。
+> **[状态追踪]** 开始时调 `design_status start_phase nfr` 标记阶段开始（会校验 issues 已 completed）。
+> **有 `design_status` tool 优先用 tool**：`design_status(action: start_phase, phase: nfr)`；**无 tool（Claude Code/Cursor/shell）用 CLI**：`design-status start-phase nfr`。CLI 完整用法见 loop-skeleton.md「CLI 完整用法」。
 
 ```
 副作用分析（根：每个 issue 的已决策方案）
@@ -110,7 +111,8 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 
 审查 APPROVED 后向用户交接（按 loop-skeleton.md Step 6 格式）：
 
-> **[状态追踪]** 交接前调 `design_status complete_phase nfr`（CLI: `design-status complete-phase nfr`）收尾——自动校验 non-functional-design.md + verdict:pass + review APPROVED，过了才标 completed。
+> **[状态追踪]** 交接前调 `design_status complete_phase nfr` 收尾——自动校验 non-functional-design.md + verdict:pass + review APPROVED，过了才标 completed。
+> **有 tool 优先用 tool**：`design_status(action: complete_phase, phase: nfr)`；**无 tool 用 CLI**：`design-status complete-phase nfr`。
 
 ```
 ✅ ④非功能性设计 已完成并通过独立审查。

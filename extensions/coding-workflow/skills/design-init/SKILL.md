@@ -50,7 +50,8 @@ description: >-
 
 本 skill 是基建准备，**不接入** loop-skeleton 的追踪/审查机制——它只做扫描 + 报告 + 按确认创建。
 
-> **[状态追踪]** 开始时调 `design_status start_phase init`（CLI: `design-status start-phase init`）标记阶段开始。
+> **[状态追踪]** 开始时调 `design_status start_phase init` 标记阶段开始。
+> **有 `design_status` tool 优先用 tool**：`design_status(action: start_phase, phase: init)`；**无 tool（Claude Code/Cursor/shell）用 CLI**：`design-status start-phase init`。CLI 完整用法见 loop-skeleton.md「CLI 完整用法」。
 
 ### 1. 扫描
 
@@ -91,7 +92,8 @@ description: >-
 
 基建就绪后向用户提示：
 
-> **[状态追踪]** 交接前调 `design_status complete_phase init`（CLI: `design-status complete-phase init`）收尾——校验 AGENTS.md/CONTEXT.md 就位后才标 completed。
+> **[状态追踪]** 交接前调 `design_status complete_phase init` 收尾——校验 AGENTS.md/CONTEXT.md 就位后才标 completed。
+> **有 tool 优先用 tool**：`design_status(action: complete_phase, phase: init)`；**无 tool 用 CLI**：`design-status complete-phase init`。
 
 ```
 ✅ 项目文档基建就绪。

@@ -22,7 +22,8 @@ description: >-
 
 **Step 1（交互+初稿）— Grilling 遍历 issue 决策树：**
 
-> **[状态追踪]** 开始时调 `design_status start_phase issues`（CLI: `design-status start-phase issues`）标记阶段开始（会校验 architecture 已 completed）。
+> **[状态追踪]** 开始时调 `design_status start_phase issues` 标记阶段开始（会校验 architecture 已 completed）。
+> **有 `design_status` tool 优先用 tool**：`design_status(action: start_phase, phase: issues)`；**无 tool（Claude Code/Cursor/shell）用 CLI**：`design-status start-phase issues`。CLI 完整用法见 loop-skeleton.md「CLI 完整用法」。
 
 ```
 Issue 决策图（根：从 system-architecture 的挑战推导）
@@ -138,7 +139,8 @@ Issue 决策图（根：从 system-architecture 的挑战推导）
 
 审查 APPROVED 后向用户交接（按 loop-skeleton.md Step 6 格式）：
 
-> **[状态追踪]** 交接前调 `design_status complete_phase issues`（CLI: `design-status complete-phase issues`）收尾——自动校验 issues.md + verdict:pass + review APPROVED，过了才标 completed。
+> **[状态追踪]** 交接前调 `design_status complete_phase issues` 收尾——自动校验 issues.md + verdict:pass + review APPROVED，过了才标 completed。
+> **有 tool 优先用 tool**：`design_status(action: complete_phase, phase: issues)`；**无 tool 用 CLI**：`design-status complete-phase issues`。
 
 ```
 ✅ ③Issue 拆分 已完成并通过独立审查。
