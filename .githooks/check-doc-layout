@@ -1,0 +1,94 @@
+#!/bin/bash
+# check-doc-layout — 项目根与 docs/ 文档布局检查
+#
+# 规则：
+#   1. 项目根 .md 必须在白名单内（阻断）—— 根目录是项目门面，禁止散落过程产物
+#   2. docs/ 根级 .md 必须在白名单内（阻断）—— 跨主题规范才放 docs/ 根级；
+#      主题/临时内容进 docs/<分类>/ 子目录，过程产物进 .xyz-harness/
+#
+# 用法：
+#   bash .githooks/check-doc-layout          # 完整检查（阻断级）
+#   bash .githooks/check-doc-layout --quiet  # 只输出违规
+#
+# 新增长期文档：在下方白名单数组补条目。
+# docs/ 白名单增长缓慢是正常的——鼓励文档进子目录（docs/research/、docs/adr/ 等）。
+set -uo pipefail
+
+QUIET="${1:-}"
+[[ "$QUIET" == "--quiet" ]] && QUIET=1 || QUIET=0
+
+# ─── 项目根 .md 白名单（design-init 长期文档容器）───
+ROOT_MD_WHITELIST=(
+  README.md
+  CONTEXT.md
+  CLAUDE.md
+  AGENTS.md
+  ARCHITECTURE.md
+  PRODUCT.md
+  NFR.md
+  TEST-STRATEGY.md
+  DESIGN-LOG.md
+)
+
+# ─── docs/ 根级 .md 白名单（跨主题规范文档）───
+# 主题/调研/过程内容应进子目录：docs/research/、docs/adr/、docs/evolution/ 等
+DOCS_ROOT_MD_WHITELIST=(
+  monorepo-conventions.md
+  pi-extension-standards.md
+  pi-tui-development-guide.md
+  quality-gates.md
+  harness-design-framework.md
+  harness-current-state-assessment.md
+  review-gate-phase-analysis-playbook.md
+  goal-todo.md
+)
+
+C_RED='\033[0;31m'
+C_GREEN='\033[0;32m'
+C_RESET='\033[0m'
+FAILS=0
+
+emit_fail() { echo -e "  ${C_RED}[FAIL]${C_RESET} $1"; FAILS=$((FAILS + 1)); }
+emit_pass() { [[ $QUIET -eq 0 ]] && echo -e "  ${C_GREEN}[PASS]${C_RESET} $1"; }
+
+# ─── 1. 项目根 .md 白名单 ────────────────────────────
+[[ $QUIET -eq 0 ]] && echo "=== 文档布局：项目根 .md 白名单 ==="
+shopt -s nullglob
+root_violations=0
+for f in *.md; do
+  ok=0
+  for w in "${ROOT_MD_WHITELIST[@]}"; do
+    [[ "$f" == "$w" ]] && ok=1 && break
+  done
+  if [[ $ok -eq 0 ]]; then
+    emit_fail "根目录不允许散放 .md：${f}（白名单：${ROOT_MD_WHITELIST[*]}）。过程产物进 .xyz-harness/，设计调研进 docs/research/"
+    root_violations=$((root_violations + 1))
+  fi
+done
+[[ $root_violations -eq 0 ]] && emit_pass "项目根 .md 全部在白名单内"
+
+# ─── 2. docs/ 根级 .md 白名单 ────────────────────────
+[[ $QUIET -eq 0 ]] && echo "=== 文档布局：docs/ 根级 .md 白名单 ==="
+docs_violations=0
+if [[ -d docs ]]; then
+  for f in docs/*.md; do
+    [[ -f "$f" ]] || continue
+    bn=$(basename "$f")
+    ok=0
+    for w in "${DOCS_ROOT_MD_WHITELIST[@]}"; do
+      [[ "$bn" == "$w" ]] && ok=1 && break
+    done
+    if [[ $ok -eq 0 ]]; then
+      emit_fail "docs/ 根级不允许散放 .md：${bn}。主题/调研内容进 docs/<分类>/ 子目录，过程产物进 .xyz-harness/"
+      docs_violations=$((docs_violations + 1))
+    fi
+  done
+  [[ $docs_violations -eq 0 ]] && emit_pass "docs/ 根级 .md 全部在白名单内"
+fi
+
+if [[ $FAILS -gt 0 ]]; then
+  echo ""
+  echo -e "${C_RED}文档布局检查失败：$FAILS 项${C_RESET}"
+  exit 1
+fi
+exit 0

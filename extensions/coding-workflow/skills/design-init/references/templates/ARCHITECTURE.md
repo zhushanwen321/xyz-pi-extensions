@@ -1,6 +1,8 @@
 # 系统架构
 
-> 由 design-architecture skill 维护（长期沉淀）。本次设计的完整过程在 `.xyz-harness/{主题}/system-architecture.md`，本文件是稳定结论的归档。
+> 由 **design-closeout** 在收尾时从 `.xyz-harness/{主题}/system-architecture.md` 沉淀。
+> ②design-architecture 的执行流程只写 topic 目录，**不回写本文件**（历史遗留的空头承诺已废止）。
+> **当前态快照，非历史**——架构演进的历史决策见 `docs/adr/`。
 
 ## 分层
 

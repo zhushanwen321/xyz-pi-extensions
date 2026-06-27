@@ -228,6 +228,21 @@ if [[ -n "$STAGED_SKILLS" ]]; then
   echo -e "${C_GREEN}[ OK ]${C_RESET} SKILL.md YAML frontmatter 校验通过"
 fi
 
+# ── 0e. 文档布局检查（按需触发）─────────────────────
+# 根目录/docs 根级 .md 白名单，防散落过程产物
+STAGED_ROOT_MD=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^[^/]+\.md$' || true)
+STAGED_DOCS_ROOT_MD=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^docs/[^/]+\.md$' || true)
+
+if [[ -n "$STAGED_ROOT_MD" || -n "$STAGED_DOCS_ROOT_MD" ]]; then
+  echo "--- check-doc-layout ---"
+  if ! bash .githooks/check-doc-layout --quiet; then
+    echo -e "${C_RED}[FAIL]${C_RESET} 文档布局检查失败"
+    echo -e "${C_YELLOW}根目录/docs 根级 .md 须在白名单内，修复后重新提交${C_RESET}"
+    exit 1
+  fi
+  echo -e "${C_GREEN}[ OK ]${C_RESET} 文档布局检查通过"
+fi
+
 # ── 0d. console.log/info 禁止检查（扩展源码）──────────────────
 # 依据 pi-extension-standards.md §10：禁止在扩展中使用 console.log 和 console.info
 STAGED_EXT_TS=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^extensions/.*\.ts$' | grep -v '\.d\.ts$' | grep -v '__tests__\|\.test\.' || true)
