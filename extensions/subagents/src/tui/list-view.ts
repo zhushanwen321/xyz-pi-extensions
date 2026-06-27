@@ -140,11 +140,27 @@ interface TuiLike {
 export type NotifyFn = (message: string, type?: "info" | "warning" | "error") => void;
 
 // ============================================================
-// G-017：模块级 overlay 单例（防叠加）
+// G-017：防叠加 overlay 句柄（session 隔离）
 // ============================================================
+// ponytail: 用 const Map 而非 let 单例，按 sessionId 索引实现 session 隔离
+// （同进程多 session 不会互相清掉对方的 overlay）。session_shutdown 钩子清理防泄漏。
+const activeViews = new Map<string, { close: () => void }>();
 
-/** 当前活动的 list overlay 句柄（null 表示无）。连按两次快捷键时先 close 前一个。 */
-let activeView: { close: () => void } | null = null;
+/** 获取指定 session 的活动 overlay 句柄（null 表示无）。 */
+function getActiveView(sessionId: string): { close: () => void } | null {
+  return activeViews.get(sessionId) ?? null;
+}
+
+/** 设置指定 session 的活动 overlay 句柄。 */
+function setActiveView(sessionId: string, view: { close: () => void } | null): void {
+  if (view) activeViews.set(sessionId, view);
+  else activeViews.delete(sessionId);
+}
+
+/** session 结束时清理句柄（防 Map 泄漏）。 */
+export function clearActiveViewOnShutdown(sessionId: string): void {
+  activeViews.delete(sessionId);
+}
 
 // ============================================================
 // overlay 工厂
@@ -170,10 +186,12 @@ export async function createSubagentsView(
   ctx: ExtensionContext,
   directId?: string,
 ): Promise<void> {
-  // G-017：先关前一个 overlay
-  if (activeView) {
-    activeView.close();
-    activeView = null;
+  const sessionId = ctx.sessionManager.getSessionId();
+  // G-017：先关前一个 overlay（session 级隔离）
+  const prev = getActiveView(sessionId);
+  if (prev) {
+    prev.close();
+    setActiveView(sessionId, null);
   }
 
   const notify: NotifyFn = (msg, type) => ctx.ui.notify(msg, type);
@@ -234,11 +252,11 @@ export async function createSubagentsView(
         state.disposed = true; // ① 标记
         unsubscribe(); // ② 解订 store 事件
         clearInterval(animTimer); // ③ 清动画 timer
-        activeView = null; // ④ 清 G-017 句柄
+        setActiveView(sessionId, null); // ④ 清 G-017 句柄（session 级）
         done(undefined); // ⑤ 框架 done（触发 overlay 销毁）
       };
       component.setCloseFn(wrappedDone);
-      activeView = { close: wrappedDone };
+      setActiveView(sessionId, { close: wrappedDone });
 
       return component;
     },
