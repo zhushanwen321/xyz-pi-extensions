@@ -782,6 +782,7 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `extensions/plan/` | `@zhushanwen/pi-plan` | 轻量级 Plan Mode（brainstorming + writing-plans） | — |
 | `extensions/ask-user/` | `@zhushanwen/pi-ask-user` | 内联自适应 ask_user 工具（单/多问题、分屏预览、内联编辑器） | — |
 | `extensions/subagents/` | `@zhushanwen/pi-subagents` | 进程内 subagent 执行运行时（agent 发现、模型解析、并发控制） | — |
+| `extensions/system-prompt-loader/` | `@zhushanwen/pi-system-prompt-loader` | 可配置 system prompt 规则加载器（explicit/walk-files/walk-dirs/glob 四类 source） | — |
 
 **`shared/`** — 内部共享包（private）
 

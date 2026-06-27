@@ -313,7 +313,7 @@ for f in $(git diff --cached --name-only --diff-filter=ACM | grep '\.ts$' | grep
   fi
 done
 
-if [[ ${#TEST_PKGS[@]:-} -gt 0 ]]; then
+if [[ ${#TEST_PKGS[@]} -gt 0 ]]; then
   echo "--- vitest ---"
   for pkg in "${TEST_PKGS[@]}"; do
     pkg_name=$(python3 -c "import json; print(json.load(open('$pkg/package.json')).get('name', '$pkg'))" 2>/dev/null || echo "$pkg")
