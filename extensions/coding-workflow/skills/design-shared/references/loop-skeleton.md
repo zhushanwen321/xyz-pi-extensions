@@ -385,5 +385,7 @@ design-status get-status                 # 看全貌
 | `consistency-final.md`（仅⑥） | `verdict` | `CONSISTENT`/`INCONSISTENT` |
 | `machine-check-{phase}.md` | `phase` + `machine_check` | 脚本自动产出，machine_check: `PASS`/`FAIL` |
 
+> **closeout-report.md（topic 根，非 changes/）：** 由 design-closeout 产出，frontmatter 含 `archived: true` + `unverified_count: N`（未代码验证的约束数）。check_closeout.py 依赖这两个字段（不写 changes/，避免污染「changes/ 已清理」检查项）。
+
 各阶段交付物（requirements.md / system-architecture.md / ...）的 frontmatter 见各 `deliverable-template.md`，核心字段 `verdict: pass`。
 

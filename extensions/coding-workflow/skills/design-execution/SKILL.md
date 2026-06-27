@@ -128,6 +128,8 @@ Wave 编排（根：从时序图推导）
 🎉 设计工作流（6 步 + 骨架验证 + 一致性终检）全部完成！
 下一步：编码实现
    ⚠️ 编码完成的定义 = 测试验收清单全绿（末尾验收 Wave 不绿 = 未完成）
+   ⚠️ 编码全绿后须 /design-closeout 收尾——把稳定结论沉淀进长期文档（ARCHITECTURE/PRODUCT/NFR/ADR/TEST-STRATEGY），否则随 topic 归档流失。
+      编码完成 ≠ 真正 Done；编码完成 + 沉淀归档 = Done（闭合设计→实施→沉淀管道）。
    方式 A（推荐）：接入 coding-workflow — 启动 Phase 流程（Phase-test gate 以测试验收清单为验收基线）
    方式 B：手动执行 — 每个 Wave 派一个 fresh subagent；末尾验收 Wave 最后跑
    偏离通道：编码中发现用例设计错误/不可行，走 [DEVIATED] 登记（原因+用户确认），不可静默跳过

@@ -1,19 +1,26 @@
 # 设计工作流
 
 > 从业务需求到执行计划的完整设计流程。可选初始化（Step 0）+ 6 个设计 skill（Steps 1-6）按顺序串联，每个独立可调用。
+> 编码实施后由 **design-closeout** 收尾——把稳定结论沉淀进长期文档（ARCHITECTURE/PRODUCT/NFR/ADR/TEST-STRATEGY），闭合设计→实施→沉淀管道。
 > **不修改现有 coding-workflow 的 5-phase gate 流程**——这是独立的「设计前序」工作流，
 > 在编码实现之前完成设计决策。
 
 ## 流程总览
 
 ```
-⓪初始化  →  ①澄清需求  →  ②系统设计  →  ③Issue拆分  →  ④非功能设计  →  ⑤代码架构  →  ⑥执行计划
- 项目基建     业务目标      系统目标      细节问题       副作用分析      代码链路       Wave编排
- 扫描+补齐    不碰实现      架构建模      P0-P3+方案      7维度兜底      类方法时序      串并行DAG
+【设计阶段 · Steps 0-6】
+⓪初始化 → ①澄清需求 → ②系统设计 → ③Issue拆分 → ④非功能设计 → ⑤代码架构 → ⑥执行计划
+ 扫描+补齐  业务目标    系统目标    细节问题     副作用分析    代码链路     Wave编排
+            不碰实现    架构建模    P0-P3+方案   7维度兜底    类方法时序   串并行DAG
                                                                     │
-                                                               Step 7 骨架验证
-                                                               （可编译骨架，
-                                                                物理验证设计）
+                                                            ⑤Step7 骨架验证（可编译骨架）
+                                                            ⑥Step6c 一致性终检（CONSISTENT）
+                                                                    ↓ 交接编码
+【实施阶段】编码实现 — 测试验收清单全绿 = 完成
+                                                                    ↓ 全绿后
+【收尾阶段】⓼ design-closeout — 沉淀进长期文档（ARCHITECTURE/PRODUCT/NFR/ADR/TEST-STRATEGY）
+                                                                    ↓
+                                                          下次 /design-init 回读（闭环）
 ```
 
 每一步内部走 **6+步循环**（交互→追踪→gap分流→收敛→定稿+HTML→独立审查6维→反哺检查），**审查 APPROVED 且反哺通过后**才提示进入下一步。⑥额外有 **Step 6c 全文档一致性终检**（编码前总闸门）。用户确认才跳转。用户可随时手动跳过或回退。
@@ -34,7 +41,7 @@
   仅⑥额外：Step6c 全文档一致性终检(①-⑥总闸门, CONSISTENT 才交接编码)
 ```
 
-## 6 个 skill 速查
+## skill 速查（8 个）
 
 | 步骤 | Skill | 触发命令 | 产出文件（.md + .html） | 一句话目标 | 可跳过当 |
 |------|-------|---------|------------------------|-----------|---------|
@@ -45,6 +52,7 @@
 | ④ | design-nfr | `/design-nfr` | `non-functional-design` | issue 解决方案的副作用分析 + 缓解（安全/性能/并发/稳定性/兼容性/可观测性） | 纯功能性小改动无 NFR 风险 |
 | ⑤ | design-code-arch | `/design-code-arch` | `code-architecture` + `code-skeleton/` | 工程目录/契约/包管理/API入口→最底层 类方法时序图 + **Step7 可编译骨架验证** | 已有详细的 interface 契约 + 时序 + 骨架验证 |
 | ⑥ | design-execution | `/design-execution` | `execution-plan` | Wave 拆分（从骨架叶子作用域推导），依赖 DAG，串并行标注 + **Step6c 编码前一致性终检** | 单人直接实现无需编排 |
+| ⓼ | design-closeout | `/design-closeout` | `ARCHIVED.md` + `closeout-report.md`（+ 沉淀进长期文档） | **编码全绿后**沉淀稳定结论进长期文档，归档 topic，闭合设计→实施→沉淀管道 | 原型/实验项目用完即弃 |
 
 > 每步产出**两份**：`.md`（真相源）+ `.html`（可视化视图，浏览器双击即可打开）。
 
@@ -84,9 +92,10 @@
 ## 与 coding-workflow 5-phase 的关系
 
 ```
-[设计工作流]                          [coding-workflow 编码流程]
-①~⑥ 设计阶段  ──── ⑥执行计划产出 ────→  Phase 1-5 (spec→plan→dev→test→pr)
-(本指南，独立)                        (现有 gate 编排，自动)
+[设计工作流]              [编码实施]                [收尾]
+①~⑥ 设计  ──→  ⑥执行计划  ──→  Phase 1-5      ──→  ⓼ design-closeout 沉淀
+                              (spec→plan→dev→test→pr)     │
+(本指南)   (gate 编排可选串联)  (测试全绿=完成)            ↓ 长期文档更新 + topic 归档 → 下次 /design-init 回读
 ```
 
 - 设计工作流的 6 个 skill **不接入**现有 gate 编排，是用户主动发起的设计工具
@@ -132,6 +141,8 @@
 ├── code-skeleton/                     ← ⑤Step7 可编译骨架代码（⑥Wave 起点）
 │   └── src/...
 ├── execution-plan.md / .html         ← ⑥
+├── ARCHIVED.md                       ← ⓼ closeout 归档标记（沉淀去向清单）
+├── closeout-report.md                ← ⓼ closeout 报告（unverified_count）
 └── changes/
     ├── tracing-round-1.md   ← 各阶段追踪记录
     ├── tracing-round-2.md
