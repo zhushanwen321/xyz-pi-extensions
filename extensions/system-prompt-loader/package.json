@@ -1,0 +1,34 @@
+{
+  "name": "@zhushanwen/pi-system-prompt-loader",
+  "version": "0.1.0",
+  "description": "Configurable system prompt rules loader for Pi coding agent",
+  "main": "index.ts",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "license": "MIT",
+  "files": [
+    "index.ts",
+    "src/",
+    "config.example.json",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": ">=0.1.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "vitest": "^4.1.8"
+  }
+}

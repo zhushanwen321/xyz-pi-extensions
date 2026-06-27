@@ -1,0 +1,11 @@
+{
+  "system-prompt-loader": {
+    "sources": [
+      { "kind": "walk-files", "filenames": ["CLAUDE.md", "AGENTS.md"] },
+      { "kind": "walk-dirs", "dirnames": [".rules", ".claude/rules"] },
+      { "kind": "explicit", "path": "~/global-rules.md" },
+      { "kind": "explicit", "path": "./project-rules/" },
+      { "kind": "glob", "patterns": ["docs/conventions/**/*.md"] }
+    ]
+  }
+}
