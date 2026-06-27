@@ -1,4 +1,4 @@
-# ADR-022: skill tracker 主动声明替代被动监听（误报零容忍）
+# ADR-024: skill tracker 主动声明替代被动监听（误报零容忍）
 
 ## Status
 

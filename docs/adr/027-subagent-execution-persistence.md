@@ -1,10 +1,10 @@
-# ADR-024: Subagent 执行记录与会话持久化（L1+L2）
+# ADR-027: Subagent 执行记录与会话持久化（L1+L2）
 
-## Status: Accepted
+## Status: Accepted（L2 会话持久化有效；L1 `history.jsonl` 机制已废弃——见下方 L1 段注记）
 
 ## Context
 
-ADR-022 将 agent 执行从子进程改为进程内 `createAgentSession()`。此后执行记录与会话内容存在三个纯内存数据源：
+ADR-025 将 agent 执行从子进程改为进程内 `createAgentSession()`。此后执行记录与会话内容存在三个纯内存数据源：
 
 | 数据源 | 字段 | 生命周期 |
 |--------|------|---------|
@@ -12,9 +12,11 @@ ADR-022 将 agent 执行从子进程改为进程内 `createAgentSession()`。此
 | `SubagentRuntime._bgRecords` | background 任务 | 随进程死 |
 | `SubagentRuntime._completedAgents` | sync agent 归档（FIFO 50） | 随进程死 |
 
+> **重构后现状（本 ADR 决策落地后的演进）**：上述三个类已重构为 `RecordStore`（`runtime/execution/record-store.ts`）——内存只留 running record，终态从 `sessions/*.jsonl` 重建（含 cancelled tombstone sidecar override）。下文 `subagent-bg-record`/`subagent-model-state`/`restoreFromEntries` 等 entry 类型与函数也已由 `appendCustomEntry(IDENTITY_CUSTOM_TYPE, ...)` + session.jsonl 重建机制取代。
+
 进程重启（resume / 新 session / crash）后三者清空，`/subagents list` 显示 "No subagent executions"。`subagent-bg-record` 虽 `appendEntry` 到父 session jsonl，但 `restoreFromEntries` 不读取它（只读 `subagent-model-state`），且写在父 session 上导致跨 session 不可见。
 
-ADR-022 的 in-process 决策带来一个根本约束：**detached Promise（`this.runAgent().then()`）随进程死**，运行中的 background agent 无法跨进程恢复（L3）。本 ADR 只解决已完成记录与会话内容的持久化（L1+L2），不触及 L3。
+ADR-025 的 in-process 决策带来一个根本约束：**detached Promise（`this.runAgent().then()`）随进程死**，运行中的 background agent 无法跨进程恢复（L3）。本 ADR 只解决已完成记录与会话内容的持久化（L1+L2），不触及 L3。
 
 ## Decision
 
@@ -23,14 +25,16 @@ ADR-022 的 in-process 决策带来一个根本约束：**detached Promise（`th
 ```
 ~/.pi/agent/subagents/
   <encoded-cwd>/              # 编码与主 session 一致（复用 getDefaultSessionDir）
-    history.jsonl             # L1: 执行记录（append-only）
+    history.jsonl             # L1: 执行记录（append-only）【⚠️ 已废弃，见下方 L1 段注记】
     sessions/                 # L2: subagent 会话文件
       <timestamp>_<uuid>.jsonl
 ```
 
 ### L1：执行记录持久化
 
-**存储**：`history.jsonl`，append-only，每行一个 `PersistedAgentRecord`。
+> **⚠️ 已废弃**：`history.jsonl` + `PersistedAgentRecord` 机制已整体移除。代码现状（`session-reconstructor.ts:8`、`session-runner.ts:464` 注释明确）：`session.jsonl` 是唯一 source of truth（history.jsonl 已废弃）。跨进程历史现由 `RecordStore.collectRecords` 从 `sessions/*.jsonl` 重建（含 cancelled tombstone sidecar override），不再有独立的 history.jsonl。本节保留作历史决策记录。
+
+**存储**（已废弃）：`history.jsonl`，append-only，每行一个 `PersistedAgentRecord`。
 
 **记录结构**（统一 sync + background）：
 
@@ -91,6 +95,6 @@ interface PersistedAgentRecord {
 
 ## 关联
 
-- ADR-022：in-process 执行决策（本 ADR 的前置约束）
-- ADR-023：两包架构（agent-runtime 即 `@zhushanwen/pi-subagents`）
+- ADR-025：in-process 执行决策（本 ADR 的前置约束）
+- ADR-026：两包架构（agent-runtime 即 `@zhushanwen/pi-subagents`）
 - 混合模式分析（in-process + spawn）：`docs/evolution/005-hybrid-subagent-modes.md`

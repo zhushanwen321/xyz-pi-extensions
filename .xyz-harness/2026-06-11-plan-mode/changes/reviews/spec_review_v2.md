@@ -116,8 +116,8 @@ info: 3
 ## 关键正面观察（与 v1 一致）
 
 - **AC 全部可验证**：AC-1~AC-11 没有「AI 应该……」类不可测试描述
-- **状态管理清晰**：FR-9.1/9.2/9.3（sessionManager + appendEntry + session_start 重建）与项目 ADR-021 决策一致
-- **只读约束设计正确**：FR-8.2 显式声明「仅通过提示词实现，不用 tool_call 拦截」与 ADR-020 一致
+- **状态管理清晰**：FR-9.1/9.2/9.3（sessionManager + appendEntry + session_start 重建）与项目 ADR-022 决策一致
+- **只读约束设计正确**：FR-8.2 显式声明「仅通过提示词实现，不用 tool_call 拦截」与 ADR-021 一致
 - **Goal API 引用正确**：FR-6.4 使用 `__goalInit`（验证 extensions/goal/src/index.ts:422 实际暴露此 API）
 - **复杂度评估合理**：核心机制（compact、goal API、状态管理）均有现成实现可参考
 - **AC 覆盖矩阵**：

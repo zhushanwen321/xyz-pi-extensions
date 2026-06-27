@@ -1,4 +1,4 @@
-# ADR-025: Subagents 资源发现与宿主解耦（discovery.json 契约）
+# ADR-028: Subagents 资源发现与宿主解耦（discovery.json 契约）
 
 ## Status: Accepted
 
@@ -73,14 +73,14 @@ skillPaths = [
 | 数据 | 谁读 discovery.json | 喂给谁 |
 |------|---------------------|--------|
 | `skillDirs` | subagents 的 `resources_discover` 处理器（主进程） | 主 agent 的 resourceLoader |
-| `skillDirs` | subagents 的 `session-factory`（创建子 session 时） | 子 agent 的 `additionalSkillPaths` |
+| `skillDirs` | subagents 的 session 创建逻辑（原 `session-factory.ts`，已合并进 `session-runner.ts`） | 子 agent 的 `additionalSkillPaths` |
 | `agentDirs` | subagents 的 `AgentRegistry`（主进程内） | agent .md 发现；子 session 自动继承解析结果（agent 配置作为静态数据传入 run） |
 
 ### 关键设计点
 
 1. **主 agent 的 skill 用 `resources_discover` 而非 argv**：pi 原生官方通道（`extensions/types.ts:501`），extension 返回 `skillPaths` 后 pi 自动 merge。比 argv 优势——单一真相源（宿主只写一个文件），主子 session 天然一致，支持 `/reload` 热重载。代价是 skill 优先级最低（见 Context「pi 原生 skill 加载机制」），但符合"补充加载"定位。
 
-2. **子 session 的 skill 由 session-factory 显式注入**：`createAndConfigureSession` 中 `additionalSkillPaths` 从 `[input.skillPath]` 改为 `[...discovery.skillDirs, input.skillPath].filter(Boolean)`。这是补齐"目录型 skill 在子 session 丢失"的唯一正确位置。
+2. **子 session 的 skill 由 session-runner 显式注入**：`createAndConfigureSession` 中 `additionalSkillPaths` 从 `[input.skillPath]` 改为 `[...discovery.skillDirs, input.skillPath].filter(Boolean)`。这是补齐"目录型 skill 在子 session 丢失"的唯一正确位置。
 
 3. **多目录优先级 = 数组顺序，靠前覆盖靠后**：该规则对 **agent .md** 完全成立（`AgentRegistry.discoverAll` 逆序扫描，靠前目录后写覆盖；`agent-registry.ts`）。对 **skill** 则受 pi 核心顺序约束——discovery 的 skillDirs 整体排在原生来源之后，仅在 discovery.json 内部多个目录间维持"靠前优先"（resources_discover 返回时保序，`loadSkills` 先到先得）。
 
@@ -107,4 +107,4 @@ skillPaths = [
 |------|----------|
 | 环境变量 `XYZ_AGENT_SKILL_DIRS` | 子进程自动继承 env 能解决 skill 一致性，但 agent 目录也要 env、宿主管两套机制、非 pi 标准 |
 | argv `--skill` | 主 agent 有效，子 session 不读 argv，丢失 |
-| 纯 `resources_discover` 不落盘 | session-factory 拿不到主 session 的 discover 结果（extension 间无共享状态通道），且子 session 不触发该事件 |
+| 纯 `resources_discover` 不落盘 | session-runner 拿不到主 session 的 discover 结果（extension 间无共享状态通道），且子 session 不触发该事件 |

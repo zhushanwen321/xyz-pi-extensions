@@ -160,7 +160,7 @@ export interface ToolCall {
  *   running = tool_start 已收到但 tool_end 未到；
  *   done/failed = tool_end 已到。
  *
- * 仅存在于 ExecutionRecord.turns[].toolCalls（Core 内部可变状态）。
+ * 仅存在于 ExecutionRecord.turns[].content 的 toolCall block（Core 内部可变状态）。
  * 跨边界导出（getAllToolCalls → AgentResult.toolCalls / 持久化）由 getAllToolCalls
  * 映射回 ToolCall（丢弃 _status / startedTs），保证导出形状清洁。
  */
@@ -476,7 +476,7 @@ export interface SubagentsGlobalConfig {
 /**
  * 资源发现契约（<agentDir>/subagents/discovery.json）。
  * 宿主（如 xyz-agent GUI）启动 pi 前写入，subagents 在 session_start 与 resources_discover 时读取。
- * 文件缺失/字段缺失时各数组视为空，走默认行为（零破坏）。详见 ADR-025。
+ * 文件缺失/字段缺失时各数组视为空，走默认行为（零破坏）。详见 ADR-028。
  */
 export interface DiscoveryConfig {
   version: number;

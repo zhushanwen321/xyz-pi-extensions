@@ -1,4 +1,4 @@
-# ADR-020: Plan Mode 只读约束采用提示词 + setActiveTools 双重保障
+# ADR-021: Plan Mode 只读约束采用提示词 + setActiveTools 双重保障
 
 ## Status
 

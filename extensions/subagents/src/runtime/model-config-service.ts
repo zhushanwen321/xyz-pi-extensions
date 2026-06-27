@@ -30,7 +30,7 @@ export interface ModelConfigServiceInit {
   /**
    * 资源发现契约加载器（宿主声明的多 skill/agent 目录）。
    * undefined 时仅用 agentDir 单目录（默认行为，零破坏）。
-   * 详见 ADR-025。
+   * 详见 ADR-028。
    */
   discoveryLoader?: DiscoveryConfigLoader;
 }

@@ -9,7 +9,7 @@
 - Phase 2/3 Goal 自动注入
 - Retrospect 上下文注入
 - 4 个清理后的 SKILL.md（brainstorming/writing-plans/phase-dev/phase-test）
-- ADR-019: coding-workflow 依赖 workflow extension 的决策记录
+- ADR-020: coding-workflow 依赖 workflow extension 的决策记录
 
 ### Changed
 - Review-Gate 全部改为 Workflow Extension 驱动

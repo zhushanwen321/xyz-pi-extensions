@@ -1,4 +1,4 @@
-# ADR-020: GoalRuntimeState Mixed-Frequency Tech Debt
+# ADR-023: GoalRuntimeState Mixed-Frequency Tech Debt
 
 **Status**: Accepted (tech debt record)
 

@@ -1,6 +1,6 @@
-# ADR-022: Agent 执行引擎从子进程改为进程内
+# ADR-025: Agent 执行引擎从子进程改为进程内
 
-## Status: Accepted
+## Status: Accepted（决策已采纳；`@zhushanwen/pi-subagents` 已落地进程内 `createAgentSession`，但 `@zhushanwen/pi-workflow` 仍为 spawn 子进程，迁移尚未实施）
 
 ## Context
 

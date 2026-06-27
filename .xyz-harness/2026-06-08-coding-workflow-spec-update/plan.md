@@ -772,7 +772,7 @@ BG1 (基础设施)
 
 **评估结果：创建 1 个 ADR**
 
-### ADR-019: Coding-Workflow 依赖 Workflow Extension
+### ADR-020: Coding-Workflow 依赖 Workflow Extension
 
 **上下文**: coding-workflow 的 Review-Gate / Test-Fix Loop 需要多 agent 编排能力（循环、并行、暂停/恢复、预算控制）。
 

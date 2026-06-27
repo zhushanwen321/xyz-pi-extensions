@@ -1,4 +1,4 @@
-# ADR-021: Plan Mode 状态存储使用 sessionManager
+# ADR-022: Plan Mode 状态存储使用 sessionManager
 
 ## Status
 

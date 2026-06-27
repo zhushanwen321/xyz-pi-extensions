@@ -5,8 +5,10 @@
 // 这是 sync/background 两路径完全共用的核心。mode 分叉在 Runtime.execute 顶部，
 // 不渗透到此处。Core 不知道谁调用它、是否 await、是否回注通知。
 //
-// 编排层（Orchestration）：站在基础层（session-factory / output-collector）之上，
+// 编排层（Orchestration）：站在基础层（output-collector）之上，
 // 负责执行时序、SDK 事件累积与清理。不持有 Pi SDK 实例，只通过 factory 间接用。
+// （原 session-factory.ts 的 session 组装 + EventBridge 事件翻译已内联进本文件——
+// 两者无独立状态/生命周期，详见 architecture.md §2 [HISTORICAL]。）
 // 设计信息见 docs/subagents/session-runner.md。
 
 import { execFileSync } from "node:child_process";

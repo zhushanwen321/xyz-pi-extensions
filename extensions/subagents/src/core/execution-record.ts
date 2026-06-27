@@ -4,7 +4,8 @@
 //
 // 单源设计（2026-06 重构）：record.turns[].content 是 SDK message.content 的直接镜像
 // （text/thinking/toolCall 同构 block）。eventLog / result 文本均从 content 派生——
-// 不再有 currentActivity 独立出口（text/thinking 现在是 eventLog 条目，与 tool 同源）。
+// （text/thinking 现在是 eventLog 条目，与 tool 同源——getCurrentActivity 从 turns[] 派生，
+//   不再有独立的 currentActivity 存储字段）。
 // 不再 delta 累积（源头每次给完整 message 快照，message_update 整体覆盖 content）。
 //
 //   createRecord    唯一创建入口（model 创建时必填，消灭 poll 路径 model 丢失）

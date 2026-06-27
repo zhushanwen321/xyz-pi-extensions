@@ -1,4 +1,4 @@
-# ADR-023: 两包架构——Agent Runtime + Workflow（不做 L3A 交互式编排）
+# ADR-026: 两包架构——Agent Runtime + Workflow（不做 L3A 交互式编排）
 
 ## Status: Accepted
 

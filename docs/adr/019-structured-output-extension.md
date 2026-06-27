@@ -1,4 +1,4 @@
-# ADR-018: StructuredOutput 独立扩展与 Extension 依赖管理
+# ADR-019: StructuredOutput 独立扩展与 Extension 依赖管理
 
 > 状态：proposed
 > 日期：2026-06-07

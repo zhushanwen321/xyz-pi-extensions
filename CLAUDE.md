@@ -94,7 +94,7 @@ Schema：`docs/third-party-extensions/extensions.schema.json`
 - [docs/pi-extension-standards.md](./docs/pi-extension-standards.md) — **Pi Extension 开发规范**（所有新增/修改 extension 前必须阅读）
 - [docs/pi-tui-development-guide.md](./docs/pi-tui-development-guide.md) — **Pi TUI 扩展开发避坑指南**（渲染管线/shell 策略、ANSI/宽度/截断、键盘交互/overlay、流式更新/性能；开发带 TUI 的 extension 前必读）
 - [docs/adr/](./docs/adr/) — 架构决策记录（已做出的决策，不可逆）
-  - [001-subagent-architecture.md](./docs/adr/001-subagent-architecture.md) — Subagent 进程隔离、上下文传递、background 模式、能力边界、模型选择
+  - [001-subagent-architecture.md](./docs/adr/001-subagent-architecture.md) — Subagent 架构与使用模型（⚠️ 决策 1/3 已被 [ADR-025](./docs/adr/025-agent-execution-in-process.md)/[ADR-027](./docs/adr/027-subagent-execution-persistence.md) 取代，仅 prompt 工程结论参考价值）
   - [002-goal-7-state-machine.md](./docs/adr/002-goal-7-state-machine.md) — Goal 为什么有 7 种状态（time_limited + cancelled），以及为什么没有 usage_limited
   - [003-evidence-based-completion.md](./docs/adr/003-evidence-based-completion.md) — Goal 为什么强制任务分解 + evidence，以及代价
 - [docs/evolution/](./docs/evolution/) — 架构演进与 Brainstorming（决策前的思考过程，可迭代）
@@ -239,7 +239,7 @@ bash .githooks/check-structure
 
 - 扩展在 Pi 进程内执行，**不是独立进程**
 - 同一进程可能有多个 session。模块级 `let` 变量会被所有 session 共享，必须用闭包或 session_start 重建
-- 扩展不能依赖 fs 之外的 Node.js 原生模块（网络、child_process 等由 Pi 核心控制）。**subagent 是已知例外**——它使用 `child_process.spawn` 启动独立 Pi 进程
+- 扩展不能依赖 fs 之外的 Node.js 原生模块（网络、child_process 等由 Pi 核心控制）。两个已知例外：`@zhushanwen/pi-workflow` 通过 `child_process.spawn` 起独立 Pi 进程执行 agent（见 `extensions/workflow/src/infra/pi-runner.ts`，[ADR-025](./docs/adr/025-agent-execution-in-process.md) 记录了向进程内迁移的决策但尚未实施）；`@zhushanwen/pi-subagents` 已改为进程内 `createAgentSession()`，不 spawn，仅在 `execFileSync("git", ...)` 等只读子进程调用上使用 child_process
 
 ### 资源自包含
 
@@ -757,6 +757,7 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `extensions/todo/` | `@zhushanwen/pi-todo` | 轻量三态任务清单 | — |
 | `extensions/vision/` | `@zhushanwen/pi-vision` | 图片分析（vision model + memory session） | — |
 | `extensions/coding-workflow/` | `@zhushanwen/pi-coding-workflow` | 5-Phase 编码工作流 | ~20 个 xyz-harness-* skills |
+| `extensions/design-status/` | `@zhushanwen/pi-design-status` | design 工作流 7 阶段状态/进度追踪 tool | — |
 | `extensions/claude-rules-loader/` | `@zhushanwen/pi-claude-rules-loader` | 加载 CLAUDE.md 规则 | — |
 | `extensions/context-engineering/` | `@zhushanwen/pi-context-engineering` | 渐进式上下文压缩 | — |
 | `extensions/evolve-daily/` | `@zhushanwen/pi-evolve-daily` | 每日数据收集 + Tracker 框架 | evolve, evolve-apply, evolve-report |
@@ -801,4 +802,4 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 
 **校验**：`npx ajv-cli validate -s extension-dependencies.schema.json -d extension-dependencies.json`
 
-详见：[ADR-018](./docs/adr/018-structured-output-extension.md)
+详见：[ADR-019](./docs/adr/019-structured-output-extension.md)

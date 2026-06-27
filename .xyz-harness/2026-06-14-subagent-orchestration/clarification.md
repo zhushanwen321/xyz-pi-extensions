@@ -4,8 +4,8 @@
 
 | ID | 决策 | 来源 |
 |----|------|------|
-| D-1 | in-process 架构不变（ADR-022），不引入 spawn | ADR-022 |
-| D-2 | 不做跨进程恢复（L3），进程死=任务死 | ADR-024 + 用户确认 |
+| D-1 | in-process 架构不变（ADR-025），不引入 spawn | ADR-025 |
+| D-2 | 不做跨进程恢复（L3），进程死=任务死 | ADR-027 + 用户确认 |
 | D-3 | background 完成应回注主进程（Q2 答案=是） | 用户原始问题 + 参考实现 notify.ts |
 | D-4 | 编排与 background 是正交组合（Q4 答案） | 用户原始问题 |
 | D-5 | `sendMessage({triggerTurn:true})` 是回注的实现手段 | shared/types/mariozechner/index.d.ts:129 + notify.ts:97 |
@@ -34,7 +34,7 @@
 | `runs/background/notify.ts:97 sendMessage+triggerTurn` | FR-O1 | 模式移植（in-process 无需 fs watcher） |
 | `runs/background/completion-dedupe.ts` | FR-O1.3 | 移植去重逻辑 |
 | `runs/background/result-watcher.ts` | ❌ 不移植 | 子进程 IPC 机制，in-process 不需要 |
-| `runs/background/async-execution.ts spawn` | ❌ 不移植 | spawn 子进程，ADR-022 禁止 |
+| `runs/background/async-execution.ts spawn` | ❌ 不移植 | spawn 子进程，ADR-025 禁止 |
 
 ## Step 3 追踪后的用户决策记录
 
