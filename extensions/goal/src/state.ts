@@ -1,7 +1,7 @@
 /**
  * Goal 状态定义和管理
  *
- * 状态机参考 Codex /goal 的 6 种状态：
+ * 状态机共 7 种状态（详见 docs/adr/002-goal-7-state-machine.md）：
  *   Active → Paused (用户暂停)
  *   Active → Blocked (连续 stall)
  *   Active → Complete (目标达成)

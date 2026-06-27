@@ -1,8 +1,8 @@
 /**
  * /goal 命令处理子函数
  *
- * handleGoalCommand (orchestrator, ≤20 行) 委托到 7 个子函数：
- *   handleStatus, handlePause, handleResume, handleHistory, handleClear, handleUpdate, handleSet
+ * handleGoalCommand (orchestrator, ≤20 行) 委托到 8 个子函数：
+ *   handleStatus, handlePause, handleResume, handleHistory, handleClear, handleAbort, handleUpdate, handleSet
  *
  * P1-5/6 修复：将 233 行的大函数拆分为 ≤20 行子函数。
  */

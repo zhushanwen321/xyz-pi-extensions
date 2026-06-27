@@ -22,9 +22,9 @@ xyz-pi-extensions 是 monorepo，三层：
 
 | 模块 | 职责 | 变化轴 |
 |------|------|--------|
-| {核心模块} | {职责} | {会因为什么而改} |
+| goal | 持久目标驱动自主循环（任务分解 + 证据验证 + 三重预算 + 阻塞/停滞检测） | 状态机、护栏策略（预算/stall/context）、Pi 事件钩子、steering prompt |
 
-> 详细变化轴待 design-closeout 沉淀。
+> 其他模块的变化轴待 design-closeout 沉淀。
 
 ## 关键状态机
 
