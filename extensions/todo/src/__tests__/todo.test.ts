@@ -11,6 +11,8 @@ import {
 	VALID_STATUSES,
 } from "../model";
 import { renderWidgetLines } from "../render";
+import { createTodoSessionState } from "../state";
+import { handleSingleUpdate } from "../tool";
 
 // ── 数据模型 + 向后兼容 ──────────────────────────────
 
@@ -24,8 +26,8 @@ describe("Todo data model", () => {
 		expect(migrated.id).toBe(1);
 	});
 
-	it("should include exactly three valid statuses", () => {
-		expect(VALID_STATUSES).toEqual(["pending", "in_progress", "completed"]);
+	it("should include exactly four valid statuses", () => {
+		expect(VALID_STATUSES).toEqual(["pending", "in_progress", "completed", "cancelled"]);
 	});
 
 	it("should migrate verifying → in_progress", () => {
@@ -50,6 +52,18 @@ describe("Todo data model", () => {
 		const veryOldTodo = { id: 4, text: "ancient2", done: false } as unknown as Todo;
 		const migrated = migrateTodo(veryOldTodo);
 		expect(migrated.status).toBe("pending");
+	});
+
+	it("should preserve isVerification flag (FR-6)", () => {
+		const todo = { id: 1, text: "run tests", status: "pending", isVerification: true } as unknown as Todo;
+		const migrated = migrateTodo(todo);
+		expect(migrated.isVerification).toBe(true);
+	});
+
+	it("should preserve cancelled status (FR-1 four-state)", () => {
+		const todo = { id: 1, text: "dropped", status: "cancelled" } as unknown as Todo;
+		const migrated = migrateTodo(todo);
+		expect(migrated.status).toBe("cancelled");
 	});
 });
 
@@ -89,6 +103,25 @@ describe("todo add", () => {
 		const result = addTodos([], 1, ["  new task  "]);
 		expect(result.error).toBeUndefined();
 		expect(result.newTodos[0].text).toBe("new task");
+	});
+
+	it("should mark todos as verification when isVerification=true (FR-6)", () => {
+		const result = addTodos([], 1, ["run tests", "typecheck"], true);
+		expect(result.error).toBeUndefined();
+		expect(result.newTodos[0].isVerification).toBe(true);
+		expect(result.newTodos[1].isVerification).toBe(true);
+	});
+
+	it("should not set isVerification when omitted", () => {
+		const result = addTodos([], 1, ["regular task"]);
+		expect(result.error).toBeUndefined();
+		expect(result.newTodos[0].isVerification).toBeUndefined();
+	});
+
+	it("should not set isVerification when isVerification=false", () => {
+		const result = addTodos([], 1, ["regular task"], false);
+		expect(result.error).toBeUndefined();
+		expect(result.newTodos[0].isVerification).toBeUndefined();
 	});
 });
 
@@ -144,6 +177,40 @@ describe("todo update batch", () => {
 		const result = updateTodos(todos, [{ id: 1, status: "banana" }]);
 		expect(result.error).toContain("invalid status");
 	});
+
+	it("FR-6: cancelled todo 不可恢复（status 更新拒绝）", () => {
+		const todos: Todo[] = [{ id: 1, text: "dropped", status: "cancelled" }];
+		const result = updateTodos(todos, [{ id: 1, status: "pending" }]);
+		expect(result.error).toBe("id 1 is cancelled");
+		expect(result.resultText).toContain("cannot be restored");
+		expect(result.updatedTodos).toEqual(todos);
+	});
+
+	it("FR-6: 验证任务不可 cancelled", () => {
+		const todos: Todo[] = [{ id: 2, text: "run tests", status: "in_progress", isVerification: true }];
+		const result = updateTodos(todos, [{ id: 2, status: "cancelled" }]);
+		expect(result.error).toBe("id 2 is verification todo");
+		expect(result.resultText).toContain("cannot be cancelled");
+		expect(result.updatedTodos).toEqual(todos);
+	});
+});
+
+// ── handleSingleUpdate FR-6 守卫（tool 单条路径）────
+
+describe("handleSingleUpdate FR-6 guards (tool single path)", () => {
+	it("FR-6: cancelled todo + status → cannot restore", () => {
+		const state = createTodoSessionState();
+		state.todos = [{ id: 1, text: "dropped", status: "cancelled" }];
+		const result = handleSingleUpdate(state, { action: "update", id: 1, status: "pending" });
+		expect(result.error).toBe("#1 is cancelled (cannot restore)");
+	});
+
+	it("FR-6: verification todo + status=cancelled → cannot cancel", () => {
+		const state = createTodoSessionState();
+		state.todos = [{ id: 2, text: "run tests", status: "in_progress", isVerification: true }];
+		const result = handleSingleUpdate(state, { action: "update", id: 2, status: "cancelled" });
+		expect(result.error).toBe("#2 is verification todo (cannot cancel)");
+	});
 });
 
 // ── completed 无拦截 ────────────────────────────────
@@ -194,6 +261,11 @@ describe("formatTodoLine", () => {
 	it("should format completed todo", () => {
 		const todo: Todo = { id: 3, text: "task C", status: "completed" };
 		expect(formatTodoLine(todo)).toBe("[x] #3: task C");
+	});
+
+	it("should format cancelled todo", () => {
+		const todo: Todo = { id: 4, text: "task D", status: "cancelled" };
+		expect(formatTodoLine(todo)).toBe("[-] #4: task D");
 	});
 });
 

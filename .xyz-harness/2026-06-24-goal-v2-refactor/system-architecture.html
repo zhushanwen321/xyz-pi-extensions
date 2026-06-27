@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>系统架构 — Goal V2 Refactor</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      --bg: #fafafa; --surface: #ffffff; --text: #1a1a1a; --muted: #6b7280;
+      --accent: #2563eb; --ok: #16a34a; --warn: #d97706; --err: #dc2626;
+      --border: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+      line-height: 1.7; }
+    main, header, footer { max-width: 860px; margin: 0 auto; padding: 0 24px; }
+    header { padding-top: 40px; padding-bottom: 24px; border-bottom: 2px solid var(--accent); }
+    header h1 { margin: 0 0 8px; }
+    .meta { color: var(--muted); font-size: 14px; }
+    .toc { max-width: 860px; margin: 24px auto; padding: 0 24px; }
+    .toc ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+    .toc a { display: inline-block; padding: 4px 12px; background: var(--surface);
+      border: 1px solid var(--border); border-radius: 16px; text-decoration: none;
+      color: var(--accent); font-size: 14px; }
+    section { background: var(--surface); margin: 24px 0; padding: 24px 32px;
+      border-radius: 8px; border: 1px solid var(--border); }
+    h2 { color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+    h3 { margin-top: 28px; }
+    table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14px; }
+    th, td { padding: 8px 12px; border: 1px solid var(--border); text-align: left; }
+    th { background: #f3f4f6; font-weight: 600; }
+    tbody tr:nth-child(even) { background: #f9fafb; }
+    code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+    pre { background: #1e293b; color: #e2e8f0; padding: 16px; border-radius: 8px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    .mermaid { background: var(--surface); padding: 16px; border-radius: 8px;
+      border: 1px solid var(--border); text-align: center; margin: 16px 0; }
+    .hero { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent);
+      border-radius: 8px; padding: 24px 32px; margin: 24px 0; }
+    .tldr h2 { border: none; margin-top: 0; }
+    .callout { border-left: 4px solid var(--accent); padding: 12px 16px; margin: 16px 0;
+      background: #eff6ff; border-radius: 0 8px 8px 0; }
+    .callout.warn { border-color: var(--warn); background: #fffbeb; }
+    .callout.ok { border-color: var(--ok); background: #f0fdf4; }
+    footer { padding: 40px 24px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); }
+    .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+    .tag-active { background: #dbeafe; color: #1d4ed8; }
+    .tag-paused { background: #fef3c7; color: #92400e; }
+    .tag-blocked { background: #fee2e2; color: #991b1b; }
+    .tag-terminal { background: #f3f4f6; color: #374151; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>系统架构：Goal V2 Refactor</h1>
+    <div class="meta">阶段 2/6 · verdict: pass · 生成于 2026-06-24（Reason 字段讨论同步于 2026-06-25）</div>
+  </header>
+
+  <nav class="toc">
+    <ul>
+      <li><a href="#hero">TL;DR</a></li>
+      <li><a href="#s1">1. 目标转换</a></li>
+      <li><a href="#s2">2. 设计立场</a></li>
+      <li><a href="#s3">3. 统一语言</a></li>
+      <li><a href="#s4">4. 核心模型</a></li>
+      <li><a href="#s5">5. 状态流转</a></li>
+      <li><a href="#s6">6. 分层架构</a></li>
+      <li><a href="#s7">7. 模块划分</a></li>
+      <li><a href="#s8">8. Context Map</a></li>
+      <li><a href="#s9">9. 泳道图</a></li>
+      <li><a href="#s10">10. 决策</a></li>
+      <li><a href="#s11">11. 反模式检查</a></li>
+    </ul>
+  </nav>
+
+  <main>
+    <!-- Hero: TL;DR + 状态机图 -->
+    <section class="hero" id="hero">
+      <div class="tldr">
+        <h2>TL;DR</h2>
+        <ul>
+          <li>Goal 是 7 状态生命周期状态机（active/paused/blocked + 4 终态），显式转换表 VALID_TRANSITIONS 保障合法性</li>
+          <li>3 层架构：engine（纯函数，零 Pi 依赖）→ adapters（Pi 桥接，按事件拆 6 handler）→ service+projection（协调+渲染）</li>
+          <li>task 合并到 todo extension（跨扩展读取），goal_manager 10 action → goal_control 2 action</li>
+          <li>budget 单一检查点在 persistAndUpdate（事件路径，对齐 Codex SQL CASE），删除 maxTurns/stall 自动终态</li>
+        </ul>
+      </div>
+      <div class="mermaid">
+stateDiagram-v2
+    [*] --> active: /goal set
+    active --> paused: /goal pause
+    active --> blocked: report_blocked
+    active --> complete: complete
+    active --> budget_limited: persistAndUpdate
+    active --> time_limited: persistAndUpdate
+    active --> cancelled: /goal clear
+    paused --> active: /goal resume
+    paused --> cancelled: /goal clear
+    blocked --> active: /goal resume
+    blocked --> cancelled: /goal clear
+    complete --> [*]
+    budget_limited --> [*]
+    time_limited --> [*]
+    cancelled --> [*]
+      </div>
+    </section>
+
+    <!-- §1 目标转换 -->
+    <section id="s1">
+      <h2>1. 目标转换</h2>
+      <h3>业务目标 → 系统目标</h3>
+      <table>
+        <thead><tr><th>业务目标（spec FR）</th><th>系统目标</th><th>衡量标准</th></tr></thead>
+        <tbody>
+          <tr><td>FR-1: task+todo 合并</td><td>删除 engine/task.ts，goal 通过 pi.__todoGetList() 读 todo</td><td>goal 零 task CRUD</td></tr>
+          <tr><td>FR-2: goal_control 工具</td><td>新建 goal-control-adapter（2 action）替代 tool-adapter（10 action）</td><td>goal_manager 不存在</td></tr>
+          <tr><td>FR-3: Paused 状态</td><td>VALID_TRANSITIONS 显式表 + handler 守卫</td><td>/goal pause/resume 工作</td></tr>
+          <tr><td>FR-4: 权限三分层</td><td>agent(goal_control) / user(/goal) / system(persistAndUpdate 事件路径 budget 兜底)</td><td>无越权路径</td></tr>
+          <tr><td>FR-5: budget 单一检查点</td><td>persistAndUpdate（事件路径）兜底 + agent_end 只做 warning</td><td>终态只在 persistAndUpdate</td></tr>
+          <tr><td>FR-6: completion audit</td><td>prompt 驱动 + complete 前置检查 todo</td><td>拒绝有理由</td></tr>
+          <tr><td>FR-7: plan↔goal 联动</td><td>duck-typed API + LLM 复杂度判定</td><td>goal 启动提示 plan</td></tr>
+        </tbody>
+      </table>
+      <h3>搭便车改造</h3>
+      <table>
+        <thead><tr><th>改造目标</th><th>动机</th><th>关联 FR</th></tr></thead>
+        <tbody>
+          <tr><td>event-adapter 按事件拆分</td><td>737 行 6 handler，变化轴不同</td><td>FR-3/4/5</td></tr>
+          <tr><td>删除 maxTurns/stall</td><td>对齐 Codex，消除权限冲突</td><td>FR-4</td></tr>
+          <tr><td>BudgetConfig 精简</td><td>只留 tokenBudget + timeBudgetMinutes</td><td>FR-5</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- §2 设计立场 -->
+    <section id="s2">
+      <h2>2. 设计立场</h2>
+      <div class="callout">
+        <strong>核心计算：</strong>Goal 是一个带 budget 约束的生命周期状态机。核心 = 状态转换 + budget 计量 + context prompt 注入。
+      </div>
+      <p><strong>分层决策：</strong>3 层（engine / adapters / service+projection）。engine 是纯领域层（零 Pi 依赖），adapters 是接口层，service+projection 是应用层。不套 DDD 四层——核心计算是纯领域规则，不是复杂业务流程编排。</p>
+    </section>
+
+    <!-- §3 统一语言 -->
+    <section id="s3">
+      <h2>3. 统一语言</h2>
+      <table>
+        <thead><tr><th>术语</th><th>定义</th><th>备注</th></tr></thead>
+        <tbody>
+          <tr><td>Goal</td><td>带 budget 的生命周期单元，7 状态</td><td>aggregate root</td></tr>
+          <tr><td>Todo</td><td>任务项（pending/in_progress/completed/cancelled）</td><td>todo extension 管理</td></tr>
+          <tr><td>ProgressInput</td><td>todo 数据的 engine 层投影</td><td>DTO，adapter→engine</td></tr>
+          <tr><td>BudgetConfig</td><td>预算配置（tokenBudget/timeBudgetMinutes）</td><td>值对象</td></tr>
+          <tr><td>GoalControl</td><td>新工具，2 action：complete/report_blocked</td><td>替代 goal_manager</td></tr>
+          <tr><td>persistState</td><td>持久化函数（command/tool 路径，无 budget 检查）</td><td>落盘</td></tr>
+          <tr><td>persistAndUpdate</td><td>事件路径 persist 函数（tickState + 落盘 + updateWidget），内含 budget 终态检查</td><td>单一检查点（D29）</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- §4 核心模型 -->
+    <section id="s4">
+      <h2>4. 核心模型</h2>
+      <table>
+        <thead><tr><th>模型</th><th>类型</th><th>不变式</th><th>建模理由</th></tr></thead>
+        <tbody>
+          <tr><td>GoalRuntimeState</td><td>aggregate</td><td>终态不可逆；tokensUsed >= tokenBudget → budget_limited；重构删除 tasks/stallCount</td><td>Goal 运行时完整状态</td></tr>
+          <tr><td>BudgetConfig</td><td>值对象</td><td>tokenBudget > 0, timeBudgetMinutes > 0；删除 maxTurns/maxStallTurns</td><td>预算配置</td></tr>
+          <tr><td>ProgressInput</td><td>DTO</td><td>totalCount >= completedCount >= 0；hasVerificationPending → incompleteIds 含 isVerification</td><td>adapter→engine 契约</td></tr>
+          <tr><td>GoalStatus</td><td>枚举</td><td>7 值含 paused，终态集合不可变</td><td>状态机身份</td></tr>
+          <tr><td>VALID_TRANSITIONS</td><td>Map</td><td>终态 → 空数组</td><td>转换合法性查表</td></tr>
+          <tr><td>Todo（跨扩展）</td><td>实体</td><td>id 唯一；4 态；isVerification=true 不可 cancelled</td><td>goal 通过 __todoGetList 读取</td></tr>
+        </tbody>
+      </table>
+      <h3>降级决策（主动不建模）</h3>
+      <table>
+        <thead><tr><th>概念</th><th>为什么不建模</th><th>应有处理</th></tr></thead>
+        <tbody>
+          <tr><td>Task（goal 内嵌）</td><td>合并到 todo extension</td><td>通过 pi.__todoGetList() 读取</td></tr>
+          <tr><td>Stall</td><td>Codex 无此概念</td><td>单 task 级 lastUpdatedTurn 提醒</td></tr>
+          <tr><td>Plan complexity</td><td>LLM 判定</td><td>prompt 引导</td></tr>
+          <tr><td>预警 flag 合并</td><td>收益低</td><td>保持 4 个独立 flag</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- §5 状态流转 -->
+    <section id="s5">
+      <h2>5. 状态流转</h2>
+      <h3>Status 枚举</h3>
+      <table>
+        <thead><tr><th>状态</th><th>性质</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><span class="tag tag-active">active</span></td><td>非终态</td><td>工作中</td></tr>
+          <tr><td><span class="tag tag-paused">paused</span></td><td>非终态</td><td>用户暂停</td></tr>
+          <tr><td><span class="tag tag-blocked">blocked</span></td><td>非终态</td><td>agent 报告卡住</td></tr>
+          <tr><td><span class="tag tag-terminal">complete</span></td><td>终态</td><td>agent 完成</td></tr>
+          <tr><td><span class="tag tag-terminal">budget_limited</span></td><td>终态</td><td>token 耗尽</td></tr>
+          <tr><td><span class="tag tag-terminal">time_limited</span></td><td>终态</td><td>时间耗尽</td></tr>
+          <tr><td><span class="tag tag-terminal">cancelled</span></td><td>终态</td><td>用户取消</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Reason 字段（终态原因正交性 — 特化决策：不单独建模）</h3>
+      <div class="callout warn">
+        <p>通用 DDD 规范要求 Status（阶段）与 Reason（终态原因）正交。<strong>本系统特化决策：终态原因直接编码进状态名，不单独建 Reason 字段。</strong></p>
+        <ol>
+          <li><strong>终态原因是封闭且互斥的枚举，不增长</strong>：complete / budget_limited / time_limited / cancelled 是终止条件的完整且不重叠枚举。不存在「同一终态多原因」，也不预期新增第 5 种（对齐 Codex）。封闭枚举编码进状态名比 join Reason 字段更直接、不易错。</li>
+          <li><strong>Reason 字段价值在「原因可组合 / 会增长」时才显现</strong>：如订单 cancelled 可由用户/超时/风控导致且影响后续——那里 Reason 必需。Goal 无此需求。</li>
+          <li><strong>对齐 Codex 心智模型</strong>：Codex GoalStatus 本身就是 Complete | BudgetLimited | ... 终态枚举（非 terminal+Reason 拆分）。</li>
+          <li><strong>拆 terminal+Reason 无新能力</strong>：会压 4 状态为 1 terminal，但 VALID_TRANSITIONS/widget/budget 检查都要改读 Reason——零新能力。</li>
+        </ol>
+        <p><strong>触发重构条件</strong>：若未来出现「同一终态多原因」或原因会增长（如 aborted_by_error），则需重构为 terminal + Reason。当前无此预期。</p>
+      </div>
+
+      <h3>各状态运行时行为</h3>
+      <table>
+        <thead><tr><th>行为维度</th><th>active</th><th>paused</th><th>blocked</th><th>终态</th></tr></thead>
+        <tbody>
+          <tr><td>续跑</td><td>是（去抖+steer/followUp）</td><td>否</td><td>否</td><td>否</td></tr>
+          <tr><td>budget 检查</td><td>是</td><td>否</td><td>否</td><td>N/A</td></tr>
+          <tr><td>context 注入</td><td>是</td><td>否</td><td>否</td><td>N/A</td></tr>
+          <tr><td>token 累加</td><td>是</td><td>否</td><td>否</td><td>N/A</td></tr>
+          <tr><td>ESC</td><td>保持 active</td><td>保持 paused</td><td>保持 blocked</td><td>N/A</td></tr>
+          <tr><td>agent_end notify</td><td>终态发通知</td><td>N/A</td><td>发 blocked notify</td><td>是</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Resume 副作用</h3>
+      <ol>
+        <li><code>checkBudgetOnResume</code> — 超 budget → 拒绝 resume</li>
+        <li><code>tickState</code> — timeStartedAt 重置</li>
+        <li><code>transitionStatus</code> — 查 VALID_TRANSITIONS</li>
+        <li><code>persistState</code> — 持久化</li>
+        <li><code>sendUserMessage</code> — 触发 AI</li>
+      </ol>
+    </section>
+
+    <!-- §6 分层架构 -->
+    <section id="s6">
+      <h2>6. 分层架构</h2>
+      <div class="mermaid">
+graph TB
+    subgraph Interface["Interface Layer (adapters/)"]
+        GCA["goal-control-adapter<br/>complete / report_blocked"]
+        CA["command-adapter<br/>/goal set|pause|resume|clear|status|update|history"]
+        EA["event-adapter (薄路由)"]
+        EA --> H1["before-agent-start.ts"]
+        EA --> H2["agent-end.ts"]
+        EA --> H3["message-end.ts"]
+        EA --> H4["turn-end.ts"]
+        EA --> H5["agent-start.ts"]
+        EA --> H6["session-start.ts"]
+    end
+    
+    subgraph Application["Application Layer"]
+        SVC["service.ts (~300行)<br/>createGoal / finalizeAndPersist<br/>persistState / applyEvent"]
+        PROJ["projection/<br/>widget.ts / prompts.ts / result.ts"]
+    end
+    
+    subgraph Domain["Domain Layer (engine/) — 零 Pi 依赖"]
+        T["types.ts<br/>GoalStatus / BudgetConfig<br/>GoalRuntimeState / ProgressInput<br/>VALID_TRANSITIONS"]
+        G["goal.ts<br/>transitionStatus / createGoalState<br/>isActive / isTerminal"]
+        B["budget.ts<br/>tick / checkBudget<br/>accumulateTokens"]
+    end
+    
+    subgraph Ports["Ports"]
+        PP["PersistencePort"]
+        UP["UiPort"]
+        MP["MessagingPort"]
+        SP["SessionPort"]
+    end
+    
+    Interface --> Application
+    Application --> Domain
+    Application --> Ports
+    SVC --> PP
+    SVC --> UP
+    GCA --> MP
+    H1 --> MP
+    
+    style Interface fill:#dbeafe,stroke:#2563eb
+    style Application fill:#fef3c7,stroke:#d97706
+    style Domain fill:#d1fae5,stroke:#16a34a
+    style Ports fill:#f3f4f6,stroke:#6b7280
+      </div>
+
+      <h3>Port 清单</h3>
+      <table>
+        <thead><tr><th>Port</th><th>价值定位</th><th>实现数</th></tr></thead>
+        <tbody>
+          <tr><td>PersistencePort</td><td>持久化抽象（appendState/appendHistory）</td><td>1</td></tr>
+          <tr><td>UiPort</td><td>UI 操作（widget/status/notify/hasUI）</td><td>1</td></tr>
+          <tr><td>MessagingPort</td><td>消息发送（context/user message + steer/followUp）</td><td>1</td></tr>
+          <tr><td>SessionPort</td><td>会话读取（entries/contextUsage/signal）</td><td>1</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- §7 模块划分 -->
+    <section id="s7">
+      <h2>7. 模块划分与变化轴</h2>
+      <table>
+        <thead><tr><th>模块</th><th>职责</th><th>变化轴</th><th>LOC</th></tr></thead>
+        <tbody>
+          <tr><td>engine/types.ts</td><td>状态机类型定义</td><td>新增状态/预算字段</td><td>~100</td></tr>
+          <tr><td>engine/goal.ts</td><td>纯状态转换</td><td>新增转换规则</td><td>~80</td></tr>
+          <tr><td>engine/budget.ts</td><td>预算计量</td><td>新增预算维度</td><td>~180</td></tr>
+          <tr><td>adapters/goal-control-adapter.ts</td><td>goal_control tool</td><td>新增 action</td><td>~120</td></tr>
+          <tr><td>adapters/command-adapter.ts</td><td>/goal 命令</td><td>新增子命令</td><td>~350</td></tr>
+          <tr><td>adapters/event-adapter.ts</td><td>事件路由</td><td>新增事件类型</td><td>~50</td></tr>
+          <tr><td>handlers/before-agent-start.ts</td><td>context 注入</td><td>prompt 变更、plan 联动</td><td>~180</td></tr>
+          <tr><td>handlers/agent-end.ts</td><td>turn 结束</td><td>budget 预警</td><td>~100</td></tr>
+          <tr><td>handlers/message-end.ts</td><td>token 累加</td><td>稳定</td><td>~30</td></tr>
+          <tr><td>handlers/turn-end.ts</td><td>turn 计数</td><td>稳定</td><td>~20</td></tr>
+          <tr><td>handlers/agent-start.ts</td><td>agent 启动</td><td>稳定</td><td>~20</td></tr>
+          <tr><td>handlers/session-start.ts</td><td>状态恢复</td><td>迁移逻辑</td><td>~80</td></tr>
+          <tr><td>service.ts</td><td>应用协调</td><td>状态管理/persist</td><td>~300</td></tr>
+          <tr><td>projection/widget.ts</td><td>TUI 渲染</td><td>新增状态显示</td><td>~310</td></tr>
+          <tr><td>projection/prompts.ts</td><td>prompt 生成</td><td>prompt 策略</td><td>~370</td></tr>
+        </tbody>
+      </table>
+
+      <h3>删除清单</h3>
+      <div class="callout warn">
+        <strong>字段级删除：</strong>engine/task.ts · adapters/tool-adapter.ts · adapters/actions.ts · command-adapter::handleAbort · GoalRuntimeState.tasks · GoalRuntimeState.stallCount · BudgetConfig.maxTurns · BudgetConfig.maxStallTurns
+      </div>
+      <h4>Handler 分支级删除</h4>
+      <table>
+        <thead><tr><th>源码位置</th><th>删除内容</th><th>原因</th></tr></thead>
+        <tbody>
+          <tr><td>handleAllTasksDone:587</td><td>maxTurnsReached→complete 分支</td><td>D21</td></tr>
+          <tr><td>handleNoTasksOrMaxTurns:631</td><td>maxTurnsReached→cancelled 分支</td><td>D22</td></tr>
+          <tr><td>handleMaxTurnsReached:663</td><td>整个函数</td><td>D22</td></tr>
+          <tr><td>handleStallAndContinuation:707</td><td>stallCount++→blocked 分支</td><td>D28</td></tr>
+        </tbody>
+      </table>
+      <h4>保持行为</h4>
+      <table>
+        <thead><tr><th>源码位置</th><th>行为</th></tr></thead>
+        <tbody>
+          <tr><td>checkContextUsage:297</td><td>context > 85% 注入 wrap-up</td></tr>
+          <tr><td>handleTerminalStateBeforeAgent:182</td><td>AUTO_CLEAR_TURNS</td></tr>
+          <tr><td>handleTerminalStateAgentEnd:157</td><td>blocked notify</td></tr>
+        </tbody>
+      </table>
+      <h4>行为变更</h4>
+      <table>
+        <thead><tr><th>位置</th><th>当前</th><th>变更后</th><th>原因</th></tr></thead>
+        <tbody>
+          <tr><td>handleSet:212</td><td>覆盖非终态旧 goal</td><td>拒绝，提示先 resume/clear</td><td>D25</td></tr>
+          <tr><td>checkBudgetOnTurnEnd</td><td>terminal→自动转终态</td><td>只做 warning/steering</td><td>D23</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- §8 Context Map -->
+    <section id="s8">
+      <h2>8. 系统间上下文边界</h2>
+      <div class="mermaid">
+graph LR
+    subgraph Goal["Goal Extension"]
+        G["Goal<br/>state machine + budget"]
+    end
+    subgraph Todo["Todo Extension"]
+        T["Todo<br/>task management"]
+    end
+    subgraph Plan["Plan Extension"]
+        P["Plan<br/>planning mode"]
+    end
+    subgraph Pi["Pi Core"]
+        PI["ExtensionAPI"]
+    end
+    G -->|"pi.__todoGetList()<br/>optional"| T
+    G -->|"pi.__planStart()<br/>optional"| P
+    P -->|"pi.__goalInit()"| G
+    PI -->|"tool/cmd/events"| G
+    G -->|"Ports"| PI
+      </div>
+      <table>
+        <thead><tr><th>关联系统</th><th>关系模式</th><th>交互方式</th><th>契约稳定性</th></tr></thead>
+        <tbody>
+          <tr><td>Pi Core</td><td>客户-供应商</td><td>ExtensionAPI</td><td>稳定</td></tr>
+          <tr><td>Todo Extension</td><td>共享内核（可选）</td><td>duck-typed</td><td>弱</td></tr>
+          <tr><td>Plan Extension</td><td>共享内核（可选）</td><td>duck-typed</td><td>弱</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- §9 泳道图 -->
+    <section id="s9">
+      <h2>9. 泳道图</h2>
+      <h3>Goal 生命周期主流程</h3>
+      <div class="mermaid">
+sequenceDiagram
+    actor User
+    participant Agent
+    participant GoalCtrl as goal_control
+    participant GoalExt as goal extension
+    participant Engine as engine/
+    participant TodoExt as todo extension
+
+    User->>GoalExt: /goal set objective --tokens N
+    GoalExt->>Engine: createGoalState
+    Engine-->>GoalExt: GoalRuntimeState
+
+    Note over GoalExt: before_agent_start → inject context
+
+    Agent->>TodoExt: todo add [task1, task2, verify]
+    Agent->>Agent: execute tasks
+    Agent->>TodoExt: todo update completed
+
+    Agent->>GoalCtrl: complete(evidence)
+    GoalCtrl->>TodoExt: __todoGetList()
+    TodoExt-->>GoalCtrl: all completed
+    GoalCtrl->>Engine: transitionStatus → complete
+      </div>
+
+      <h3>Budget 兜底</h3>
+      <div class="mermaid">
+sequenceDiagram
+    participant GoalExt as goal extension
+    participant Engine as engine/
+    participant PiCore as Pi Core
+
+    PiCore->>GoalExt: message_end (usage)
+    GoalExt->>Engine: accumulateTokens
+
+    Note over GoalExt: before_agent_start (turn N-1):<br/>tokenWarning90 → steering
+
+    PiCore->>GoalExt: persistAndUpdate (turn N)
+    GoalExt->>Engine: tick + checkBudget
+    Note over Engine: tokensUsed >= tokenBudget
+    GoalExt->>Engine: active → budget_limited
+      </div>
+    </section>
+
+    <!-- §10 决策 -->
+    <section id="s10">
+      <h2>10. 挑战与决策</h2>
+      <div class="callout">
+        <strong>D-A1:</strong> event-adapter 按事件类型拆分（6 handler + 薄路由）。理由：变化轴不同。
+      </div>
+      <div class="callout">
+        <strong>D-A2:</strong> service.ts 保持单文件 ~300 行。理由：删 10 action 后够用。
+      </div>
+      <div class="callout">
+        <strong>D-A3:</strong> 跨扩展 API 保持 duck-typed。理由：可选特性，undefined=降级。
+      </div>
+      <div class="callout">
+        <strong>D-A4:</strong> 显式转换表 VALID_TRANSITIONS。理由：与权限三分层双重保障。
+      </div>
+      <div class="callout">
+        <strong>D-A5:</strong> BudgetConfig 只留 tokenBudget + timeBudgetMinutes。理由：对齐 Codex。
+      </div>
+      <h3>特化决策</h3>
+      <table>
+        <thead><tr><th>违反什么</th><th>为什么合理</th><th>触发变化怎么办</th></tr></thead>
+        <tbody>
+          <tr><td>engine 通过 adapter 间接依赖 todo</td><td>engine 零 Pi 依赖不变；ProgressInput 是注入 DTO</td><td>只改 adapter</td></tr>
+          <tr><td>VALID_TRANSITIONS 与权限三分层重复</td><td>双重保障</td><td>两处都更新</td></tr>
+          <tr><td>persistAndUpdate 同时做 persist + budget</td><td>单一检查点（对齐 Codex），落点在事件路径 persist 函数（D29 勘误，非 command/tool 的 persistState）</td><td>只改 persistAndUpdate</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- §11 反模式检查 -->
+    <section id="s11">
+      <h2>11. 反模式检查</h2>
+      <table>
+        <thead><tr><th>AC</th><th>检查项</th><th>验证命令</th></tr></thead>
+        <tbody>
+          <tr><td>AC-1</td><td>task CRUD 消除</td><td><code>grep -rn "GoalTask\|create_tasks\|update_tasks" extensions/goal/src/ --include="*.ts"</code></td></tr>
+          <tr><td>AC-2</td><td>goal_manager 消除</td><td><code>grep -rn "goal_manager" extensions/goal/src/ --include="*.ts"</code></td></tr>
+          <tr><td>AC-3</td><td>maxTurns/stallCount 消除</td><td><code>grep -rn "maxTurns\|stallCount" extensions/goal/src/ --include="*.ts"</code></td></tr>
+          <tr><td>AC-4</td><td>engine 零 Pi 依赖</td><td><code>grep -rn "@mariozechner" extensions/goal/src/engine/</code></td></tr>
+          <tr><td>AC-5</td><td>显式转换表</td><td><code>grep -rn "VALID_TRANSITIONS" extensions/goal/src/</code></td></tr>
+          <tr><td>AC-6</td><td>终态集合一致</td><td><code>grep -rn "TERMINAL" extensions/goal/src/</code></td></tr>
+          <tr><td>AC-7</td><td>persistAndUpdate 内 budget 检查（事件路径）</td><td><code>grep -rn "checkBudgetOnTurnEnd\|terminal" extensions/goal/src/service.ts</code> 在 persistAndUpdate 内（委托 engine/budget.ts）</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer>
+    <p>本文档由 xyz-harness-design-architecture 生成。真相源：system-architecture.md · 图表需联网加载 Mermaid</p>
+  </footer>
+
+  <script>
+    mermaid.initialize({ startOnLoad: true, theme: 'neutral', securityLevel: 'loose' });
+  </script>
+</body>
+</html>

@@ -175,3 +175,24 @@ function handleEnterPlanMode(
     `3. After plan complete: check subagent capability → suggest goal + wave or single-agent execution.`,
   );
 }
+
+/**
+ * Programmatic entry to start plan mode (for `pi.__planStart`).
+ *
+ * Mirrors the `/plan` command's enter logic. Returns false if plan mode is
+ * already active (caller can then surface a message or wait).
+ *
+ * @returns true if plan mode started; false if already active
+ */
+export function startPlanMode(
+  pi: ExtensionAPI,
+  sessions: PlanSessionMap,
+  ctx: ExtensionContext,
+  requirement: string,
+): boolean {
+  const sessionId = ctx.sessionManager.getSessionId();
+  const state = getPlanState(sessions, sessionId, ctx);
+  if (state.isActive) return false;
+  handleEnterPlanMode(pi, sessions, sessionId, ctx, state, requirement);
+  return true;
+}

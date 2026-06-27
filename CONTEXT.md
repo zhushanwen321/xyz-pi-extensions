@@ -77,43 +77,34 @@ Plan Mode 的需求探索阶段（Phase B）。包含 Quick Overview、渐进式
 ### Goal
 
 **Goal**
-用户通过 `/goal <objective>` 发起的持久化自主循环。有预算约束、7 态状态机、任务清单、stall 检测。保证目标一定被完成或被显式取消。
+用户通过 `/goal <objective>` 发起的持久化自主循环。有预算约束、7 态状态机、与 Todo 扩展集成的任务清单。保证目标一定被完成、被阻塞、或被资源耗尽兜底终止。V2 重构后 Goal 不再内嵌任务系统，统一通过 Todo 扩展管理任务。
 _Avoid_: 目标（口语可，正式文档用 Goal）
 
 **GoalStatus**
 Goal 的生命周期状态，共 7 种：
 - `active` — 唯一驱动 agent 循环的状态
-- `paused` — 用户暂停，不计时不消耗 turn
-- `blocked` — 连续无进展触发，可 resume
-- `complete` — 终态，所有任务完成且有证据
+- `paused` — 用户主动暂停，不计时不消耗预算，可恢复
+- `blocked` — agent 主动报告卡住，与 paused 行为对称（不续跑/不消耗预算），可恢复
+- `complete` — 终态，所有任务（含验证任务）完成且有证据
 - `budget_limited` — 终态，token 预算耗尽
 - `time_limited` — 终态，时间预算耗尽
 - `cancelled` — 终态，用户清除
-终态不可被覆盖。
-
-**GoalTask**
-Goal 内的可追踪工作单元。每个 GoalTask 有四种状态：`pending`（未开始）、`in_progress`（执行中）、`completed`（已完成，必须提供 **Evidence**）、`cancelled`（已取消，不阻碍 goal 完成）。ID 为递增整数。终态（completed / cancelled）不可再变更。
-_Avoid_: 任务（指 Goal 的 task 时用 GoalTask，避免与通用"任务"混淆）
+终态不可被覆盖。状态转换严格三分层：agent（complete/blocked）、用户（pause/resume/clear）、系统（budget/time_limited）。
 
 **Evidence**
-完成任务（`complete_task`）或完成目标（`complete_goal`）时必须提供的具体验证信息。如"测试 X 通过"、"文件 F 已创建"。防止无证据标记完成。
+Agent 声明 goal 完成时必须提供的具体验证信息（如"测试 X 通过"、"文件 F 已创建"）。防止无证据标记完成。完成前置检查还要求任务清单中所有任务（含验证任务）已完成。
 
 **Budget**
-Goal 的资源约束，包含四个维度：
+Goal 的资源约束，两个维度（V2 重构删除了 Max Turns 和 Max Stall Turns，对齐 Codex）：
 - **Token Budget** — token 消耗上限
 - **Time Budget** — 墙钟时间上限（分钟）
-- **Max Turns** — 最大 agent turn 数（默认 50，上限 100）
-- **Max Stall Turns** — 连续无进展轮数阈值（默认 5，上限 20），触发 blocked
+资源耗尽由持久化单一检查点兜底判定（不依赖分散的事件检查），转 `budget_limited` / `time_limited` 终态。
 
-**TaskVerification**
-GoalTask 的可选验证配置，包含 `method`（验证方法描述）和 `expected`（预期结果）。创建 task 时声明，用于引导 AI 在完成代码后执行可量化的验证。
+**Verification Todo（验证任务）**
+Todo 清单中标记 `isVerification: true` 的任务项。Agent 完成一个 goal 前必须建执行任务与验证任务，且验证任务不可取消（必须 completed），作为 completion audit 的硬检查依据。
 
-**verified 状态**
-GoalTask 生命周期阶段。当 task 有 verification 配置时，`completed` 不是终态——AI 需执行验证方法（如 `pnpm test`），验证通过后调用 `update_tasks(status=verified, actual=<result>)` 将 task 转为 `verified` 终态。验证结果记录在 `TaskVerification.actual` 字段。无 verification 的 task，`completed` 即为终态。
-_Avoid_: verify_task（已废弃，旧版创建独立验证 task 的方案已移除）
-
-**Stall**
-连续无 **GoalTask** 完成的 turn 数。达到 `maxStallTurns` 时 Goal 自动转为 `blocked`。
+**Stall（已废弃概念）**
+V2 重构删除了 stallCount/maxStallTurns 自动终态机制（对齐 Codex）。停滞检测退化为基于单任务级 `lastUpdatedTurn` 的提示词提醒（注入 staleness reminder），不再自动转 blocked。
 
 **Steering Template**
 Goal 扩展的四种提示词模板：
@@ -128,7 +119,7 @@ Goal 扩展的四种提示词模板：
 ### Todo
 
 **Todo**
-轻量级三态任务项：`pending` / `in_progress` / `completed`。无预算、无状态机、无 Evidence 要求。agent 的短期工作记忆，3-8 项为宜。`add` 和 `delete` 操作只接受数组参数（批量），单条操作通过长度为 1 的数组实现。
+任务管理扩展。V2 重构后是 Goal 任务管理的**唯一来源**（Goal 不再内嵌任务系统）。Todo 项四态：`pending` / `in_progress` / `completed` / `cancelled`，可选字段 `isVerification?: boolean` 标记验证任务（completion audit 硬检查依据，不可取消）。`add` 和 `delete` 操作只接受数组参数（批量），单条操作通过长度为 1 的数组实现。Goal 通过只读快照接口读取 Todo 进度（瞬态快照，未加载时 Goal 降级运行但完成能力受限）。
 _Avoid_: 待办
 
 ### Subagent
@@ -228,8 +219,8 @@ _Avoid_: check mode, validation level
 **"压缩"同时存在于 Pi 原生（Compaction）和 Context Engineering（L0/L1/L2）**
 Compaction 在 agent loop 外做 token 级 LLM 摘要（不可逆），Context Engineering 在 agent loop 内做消息级规则化处理（可逆 Recall）。两者互补不冲突。
 
-**"任务"同时存在于 Goal（GoalTask）和 Todo（Todo item）**
-两者定位不同：GoalTask 要求 Evidence，是完成目标的强制路径；Todo 是可选的轻量备忘。在 Goal 激活时不应同时使用 Todo 追踪同类工作。
+**"任务"统一到 Todo（V2 重构已解决）**
+V2 重构后 Goal 不再内嵌任务系统（GoalTask/TaskVerification/verified 已删除），任务管理统一到 Todo 扩展。Goal 通过只读快照接口读取 Todo 进度，验证任务由 Todo 的 `isVerification` 标记承载，完成审计（completion audit）以任务清单完成状态为唯一硬检查。
 
 ## Example Dialogue
 
@@ -241,4 +232,4 @@ Compaction 在 agent loop 外做 token 级 LLM 摘要（不可逆），Context E
 >
 > **Dev**: 现在子任务完成后我不想每次都手动调用 complete_task。可以让 **Todo** 自动追踪吗？
 >
-> **Expert**: 不建议。**GoalTask** 要求 **Evidence**，这是核心设计——防止模型跳过验证。**Todo** 没有这个保证。在 Goal 激活时，用 GoalTask，不用 Todo。
+> **Expert**: V2 重构后正是如此——Goal 不再内嵌任务系统，统一用 **Todo** 管理任务。完成审计通过在 Todo 清单中标记 `isVerification: true` 的**验证任务**实现：agent 完成 goal 前必须先完成所有任务（含验证任务，且验证任务不可取消）并提交 **Evidence**。这样既保留了"防止模型跳过验证"的核心设计，又消除了两套任务系统的冲突。

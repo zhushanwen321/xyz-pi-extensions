@@ -7,7 +7,7 @@ const typeboxStub = path.resolve(__dirname, "src/__tests__/stubs/typebox.ts");
 
 export default defineConfig({
 	test: {
-		include: ["src/__tests__/**/*.test.ts"],
+		include: ["src/**/*.test.ts"],
 	},
 	resolve: {
 		alias: {
@@ -15,6 +15,7 @@ export default defineConfig({
 			"@earendil-works/pi-ai": piStub,
 			"@earendil-works/pi-tui": piStub,
 			"@mariozechner/pi-ai": piStub,
+			"@mariozechner/pi-tui": piStub,
 			"@sinclair/typebox": typeboxStub,
 			"typebox": typeboxStub,
 		},

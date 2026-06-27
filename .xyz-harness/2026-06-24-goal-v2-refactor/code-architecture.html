@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>代码架构设计 — Goal V2 Refactor</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      --bg: #fafafa; --surface: #fff; --text: #1a1a1a; --muted: #6b7280;
+      --accent: #2563eb; --border: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, "PingFang SC", sans-serif; line-height: 1.7; }
+    main, header, footer { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+    header { padding-top: 40px; padding-bottom: 24px; border-bottom: 2px solid var(--accent); }
+    .meta { color: var(--muted); font-size: 14px; }
+    section { background: var(--surface); margin: 24px 0; padding: 24px 32px;
+      border-radius: 8px; border: 1px solid var(--border); }
+    h2 { color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+    h3 { color: #374151; margin-top: 24px; }
+    table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }
+    th, td { padding: 6px 8px; border: 1px solid var(--border); text-align: left; }
+    th { background: #f3f4f6; font-weight: 600; }
+    tbody tr:nth-child(even) { background: #f9fafb; }
+    code { background: #f3f4f6; padding: 2px 5px; border-radius: 3px; font-size: 0.9em; }
+    .mermaid { background: var(--surface); padding: 16px; border-radius: 8px;
+      border: 1px solid var(--border); text-align: center; margin: 12px 0; overflow-x: auto; }
+    .callout { border-left: 4px solid var(--accent); padding: 12px 16px; margin: 12px 0;
+      background: #eff6ff; border-radius: 0 8px 8px 0; font-size: 14px; }
+    .callout.warn { border-color: #d97706; background: #fffbeb; }
+    pre { background: #1e293b; color: #e2e8f0; padding: 12px; border-radius: 6px;
+      overflow-x: auto; font-size: 12px; }
+    footer { padding: 40px 24px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>代码架构设计：Goal V2 Refactor</h1>
+    <div class="meta">阶段 5/6 · verdict: pass · 生成于 2026-06-24</div>
+  </header>
+
+  <main>
+    <section>
+      <div class="callout warn">
+        <strong>架构决策（G4 闭合）</strong>：budget 终态检查在 <code>persistAndUpdate</code>（事件路径），不在 <code>persistState</code>（command/tool 路径）。NFR F2 取证确认事件路径走 persistAndUpdate。
+      </div>
+    </section>
+
+    <section>
+      <h2>工程目录</h2>
+      <pre>extensions/goal/src/
+├── engine/              # 纯计算，零 Pi 依赖
+│   ├── types.ts         # GoalStatus / VALID_TRANSITIONS / ProgressInput
+│   ├── goal.ts          # transitionStatus / createGoalState
+│   └── budget.ts        # tick / checkBudget / checkProgress
+├── ports.ts             # PersistencePort / UiPort / MessagingPort / SessionPort
+├── service.ts           # 业务编排（persistState / persistAndUpdate / finalizeAndPersist）
+├── adapters/
+│   ├── tool-adapter.ts          # goal_control（complete / report_blocked）
+│   ├── command-adapter.ts       # /goal 命令
+│   ├── event-adapter.ts         # 薄路由（≤60 LOC）
+│   └── event-handlers/          # 6 个独立 handler
+├── projection/          # 渲染（widget / prompts / result）
+├── persistence.ts       # serializeState / deserializeState（迁移）
+├── session.ts           # GoalSession / reconstructGoalState
+└── index.ts             # 工厂（注册 tool/command/events/跨扩展API）</pre>
+      <p style="font-size:13px;color:var(--muted)"><strong>变化轴</strong>：engine=领域规则 · ports=外部副作用边界 · service=状态编排 · adapters=Pi 接入方式 · projection=展示形态。engine/ports 是叶子，依赖单向向下。</p>
+    </section>
+
+    <section>
+      <h2>包依赖图（无环）</h2>
+      <div class="mermaid">
+graph TD
+    index[index.ts 工厂]
+    adapters[adapters/*]
+    service[service.ts]
+    projection[projection/*]
+    persistence[persistence.ts]
+    session[session.ts]
+    engine[engine/* 领域规则]
+    ports[ports.ts]
+
+    index --> adapters
+    index --> service
+    index --> projection
+    index --> session
+    adapters --> service
+    adapters --> engine
+    adapters --> ports
+    service --> engine
+    service --> ports
+    projection --> service
+    projection --> engine
+    persistence --> engine
+    persistence --> ports
+    session --> engine
+    session --> persistence
+
+    classDef leaf fill:#dcfce7,stroke:#16a34a
+    classDef core fill:#dbeafe,stroke:#2563eb
+    class engine,ports leaf
+    class service core
+      </div>
+      <p style="font-size:13px;color:var(--muted)">engine/ports = 绿（叶子）· service = 蓝（核心编排）。无循环依赖。</p>
+    </section>
+
+    <section>
+      <h2>核心时序图 1：budget 自动终态（UC-3）</h2>
+      <p style="font-size:13px">budget 终态检查在 persistAndUpdate 内（事件路径），非 checkBudgetOnTurnEnd（后者只 warning）。</p>
+      <div class="mermaid">
+sequenceDiagram
+    participant PI as Pi runtime
+    participant ME as message-end
+    participant SVC as service.persistAndUpdate
+    participant EG as engine/goal
+    participant PP as persistence
+
+    PI->>ME: message_end(usage)
+    activate ME
+    ME->>ME: accumulateTokens(tokensUsed, usage)
+    ME->>SVC: persistAndUpdate(pi, session, ctx)
+    activate SVC
+    SVC->>SVC: tickState(state)
+    SVC->>SVC: 直比较 tokensUsed>=tokenBudget || timeUsed>=timeBudget
+    alt 超 budget
+        SVC->>EG: transitionStatus(active, budget_limited)
+        SVC->>PP: serializeState + appendEntry
+        SVC->>SVC: notify + updateWidget（终态通知）
+    else 未超
+        SVC->>PP: serializeState + appendEntry
+        SVC->>SVC: updateWidget
+    end
+    deactivate SVC
+    deactivate ME
+      </div>
+    </section>
+
+    <section>
+      <h2>核心时序图 2：goal_control.complete（UC-2/UC-4）</h2>
+      <div class="mermaid">
+sequenceDiagram
+    participant A as Agent
+    participant TA as tool-adapter
+    participant TODO as pi.__todoGetList
+    participant SVC as service.finalizeAndPersist
+    participant EG as engine/goal
+
+    A->>TA: goal_control {action: complete, evidence}
+    activate TA
+    TA->>TODO: __todoGetList()
+    alt todo 未安装
+        TODO-->>TA: undefined
+        TA-->>A: 拒绝（complete 前置硬闸门）：需加载 Todo extension 才能验证完成
+    else todo 为空
+        TODO-->>TA: []
+        TA-->>A: 错误：无任务
+    else 有未完成
+        TODO-->>TA: Todo[]
+        TA-->>A: 错误：仍有 N 项未完成
+    else 全部完成
+        TODO-->>TA: Todo[]
+        TA->>SVC: finalizeAndPersist(state, complete, count, ports)
+        activate SVC
+        SVC->>EG: transitionStatus(active, complete)
+        SVC->>SVC: tickState + serialize + notify
+        deactivate SVC
+        TA-->>A: 目标已完成
+    end
+    deactivate TA
+      </div>
+    </section>
+
+    <section>
+      <h2>核心时序图 3：/goal pause → resume（UC-5）</h2>
+      <div class="mermaid">
+sequenceDiagram
+    participant U as User
+    participant CA as command-adapter
+    participant SVC as service
+    participant EG as engine/goal
+    participant EB as engine/budget
+
+    U->>CA: /goal pause
+    activate CA
+    CA->>EG: transitionStatus(active, paused)
+    EG-->>CA: paused
+    CA->>SVC: persistState(session, ports)
+    CA-->>U: 已暂停
+    deactivate CA
+
+    U->>CA: /goal resume
+    activate CA
+    CA->>EB: checkBudgetOnResume(state)
+    alt 超 budget
+        EB-->>CA: exceeded
+        CA-->>U: 错误：已超 budget
+    else 未超
+        EB-->>CA: null
+        CA->>EG: transitionStatus(paused, active)
+        CA->>CA: timeStartedAt = Date.now()
+        CA->>SVC: persistAndUpdate(pi, session, ctx)
+        CA-->>U: 已恢复
+    end
+    deactivate CA
+      </div>
+    </section>
+
+    <section>
+      <h2>API 契约摘要</h2>
+      <table>
+        <thead><tr><th>模块</th><th>关键方法</th><th>边界条件</th></tr></thead>
+        <tbody>
+          <tr><td>engine/goal</td><td>transitionStatus(cur, next)</td><td>next 不在 VALID_TRANSITIONS → throw</td></tr>
+          <tr><td>engine/budget</td><td>checkBudgetOnTurnEnd(state)</td><td>只返回 warning，不 terminal</td></tr>
+          <tr><td>engine/budget</td><td>checkProgress(state, progress?)</td><td>progress=undefined → 跳过</td></tr>
+          <tr><td>service</td><td>persistAndUpdate(pi, session, ctx)</td><td>事件路径；含 budget 终态检查</td></tr>
+          <tr><td>service</td><td>persistState(session, ports)</td><td>command/tool 路径；无 budget 检查</td></tr>
+          <tr><td>service</td><td>finalizeAndPersist(state, status, count, ports)</td><td>唯一终态入口</td></tr>
+          <tr><td>tool-adapter</td><td>handleComplete / handleReportBlocked</td><td>todo 检查 + active 守卫</td></tr>
+          <tr><td>index</td><td>pi.__goalInit(objective, budget?, ctx)</td><td>不含 tasks 参数</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Wave 编排推导</h2>
+      <table>
+        <thead><tr><th>Wave</th><th>Issues</th><th>关键产出</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>#1 删 goal_manager + #2 paused</td><td>结构基础 + 状态机</td></tr>
+          <tr><td>2</td><td>#3 goal_control + #11 set拒绝 + #12 widget</td><td>新 tool + 行为变更</td></tr>
+          <tr><td>3</td><td>#4 拆 event-adapter</td><td>6 handler + persistAndUpdate 迁 service</td></tr>
+          <tr><td>4</td><td>#5 budget检查点 + #6 删终态 + #7 todo API + #8 agent_end</td><td>核心逻辑重构</td></tr>
+          <tr><td>5</td><td>#9 plan联动 + #10 completion audit</td><td>watch: prompts.ts LOC</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>测试矩阵（Test Matrix）</h2>
+      <div class="callout">
+        <strong>两个来源：</strong>来源 A（功能用例，从时序图 alt/else 推导）+ 来源 B（NFR 风险→用例，从④缓解项回灌登记表 <code>验收方式=代码测试</code> 推导）。共 27 条用例，作为 ⑥Wave 测试输入 + 实现期 TDD 种子。
+      </div>
+      <h3>来源 A：功能用例（按 UC）</h3>
+      <table style="font-size:13px">
+        <thead><tr><th>用例 ID</th><th>UC</th><th class="left">场景</th><th class="left">预期</th><th>关联 AC</th></tr></thead>
+        <tbody>
+          <tr><td>T1.1-T1.5</td><td>UC-1</td><td class="left">set 创建/终态覆盖/非终态拒绝/缺省 budget/todo 缺失降级运行</td><td class="left">正常创建 / 拒绝含提示 / context 注入照常</td><td>AC-1.1/6.1/6.2/4.4</td></tr>
+          <tr><td>T2.1-T2.6</td><td>UC-2</td><td class="left">pause/resume/超预算拒绝/不累加/崩溃保持</td><td class="left">状态转换 / 拒绝 / paused 保持</td><td>AC-2.1/2.2/2.3/2.4/5.3</td></tr>
+          <tr><td>T3.1-T3.5</td><td>UC-3</td><td class="left">token/time 耗尽终态/等于预算/未超 persist/终态不可逆</td><td class="left">转 budget_limited/time_limited + notify</td><td>AC-3.1/3.2</td></tr>
+          <tr><td>T4.1-T4.6</td><td>UC-4</td><td class="left">全完成 complete/缺 evidence/空 todo/未完成/todo 未安装/验证任务未完成</td><td class="left">转 complete / 拒绝含理由 / 降级</td><td>AC-4.1/4.2/4.3/4.4</td></tr>
+          <tr><td>T5.1-T5.4</td><td>UC-5</td><td class="left">blocked/resume/非active拒绝/崩溃保持</td><td class="left">转 blocked / 拒绝 / blocked 保持</td><td>AC-5.1/5.2/5.3/5.4</td></tr>
+          <tr><td>T6.1-T6.2</td><td>UC-6</td><td class="left">clear 非终态/已终态幂等</td><td class="left">转 cancelled / 保持终态</td><td>AC-6.1</td></tr>
+        </tbody>
+      </table>
+      <h3>来源 B：NFR 风险→用例映射（11 条 NFR-AC）</h3>
+      <table style="font-size:13px">
+        <thead><tr><th>NFR-AC</th><th>#</th><th class="left">验证断言</th><th>用例 ID</th></tr></thead>
+        <tbody>
+          <tr><td>NFR-AC-1</td><td>#1,#6</td><td class="left">旧字段反序列化不 throw</td><td>T3.6</td></tr>
+          <tr><td>NFR-AC-2</td><td>#1,#10</td><td class="left">prompt 不含 goal_manager 指令</td><td>T1.6</td></tr>
+          <tr><td>NFR-AC-3</td><td>#3</td><td class="left">complete 缺 evidence 拒绝</td><td>T4.2</td></tr>
+          <tr><td>NFR-AC-4</td><td>#5</td><td class="left">budget 检查在 persistAndUpdate 内</td><td>T3.1</td></tr>
+          <tr><td>NFR-AC-5</td><td>#5,#8</td><td class="left">转终态同步 notify + updateWidget</td><td>T3.7</td></tr>
+          <tr><td>NFR-AC-6</td><td>#7,#10</td><td class="left">todo 缺失三路径降级</td><td>T4.5</td></tr>
+          <tr><td>NFR-AC-7</td><td>#9</td><td class="left">plan 缺失降级</td><td>T1.7</td></tr>
+          <tr><td>NFR-AC-8</td><td>#9</td><td class="left">__goalInit 忽略 tasks</td><td>T1.8</td></tr>
+          <tr><td>NFR-AC-9</td><td>#9</td><td class="left">迁移调用方不传 tasks</td><td>T1.9</td></tr>
+          <tr><td>NFR-AC-10</td><td>#11</td><td class="left">set 非终态拒绝</td><td>T1.3</td></tr>
+          <tr><td>NFR-AC-11</td><td>#8</td><td class="left">70/90% 预警 + steering + followUp</td><td>T3.8</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>现有代码映射（refactor）</h2>
+      <table style="font-size:13px">
+        <thead><tr><th class="left">新模块</th><th class="left">现有代码</th><th>处置</th><th>Wave</th></tr></thead>
+        <tbody>
+          <tr><td class="left">engine/types.ts</td><td class="left">types.ts（含旧字段）</td><td>split</td><td>1/4</td></tr>
+          <tr><td class="left">adapters/goal-control-adapter.ts</td><td class="left">tool-adapter.ts（goal_manager）</td><td>delete+create</td><td>2</td></tr>
+          <tr><td class="left">adapters/event-handlers/*.ts</td><td class="left">event-adapter.ts（737行）</td><td>split</td><td>3</td></tr>
+          <tr><td class="left">projection/widget.ts</td><td class="left">widget.ts（GoalTask/stallCount）</td><td>modify</td><td>2</td></tr>
+          <tr><td class="left">projection/prompts.ts</td><td class="left">prompts.ts（goal_manager 指令）</td><td>modify</td><td>6</td></tr>
+          <tr><td class="left">index.ts</td><td class="left">index.ts（__goalInit 含 tasks）</td><td>modify</td><td>4/6</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer>
+    <p>本文档由 xyz-harness-design-code-arch 生成。真相源：code-architecture.md · 图表需联网加载 Mermaid</p>
+  </footer>
+
+  <script>
+    mermaid.initialize({ startOnLoad: true, theme: 'neutral', securityLevel: 'loose' });
+  </script>
+</body>
+</html>

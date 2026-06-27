@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>① 澄清需求 — Goal V2 Refactor</title>
+<style>
+  :root {
+    --bg: #fafafa; --card: #ffffff; --text: #1a1a1a; --muted: #666;
+    --accent: #2563eb; --accent-bg: #eff6ff; --border: #e5e7eb;
+    --green: #16a34a; --orange: #d97706; --red: #dc2626;
+    --code-bg: #f4f4f5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    line-height: 1.7; font-size: 15px;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 24px 80px; }
+  header { padding: 40px 0 24px; border-bottom: 2px solid var(--accent); }
+  header h1 { margin: 0 0 8px; font-size: 28px; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .meta span + span::before { content: " · "; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+  .tag-pass { background: #dcfce7; color: var(--green); }
+  nav.toc {
+    position: sticky; top: 0; background: var(--bg); z-index: 10;
+    padding: 12px 0; border-bottom: 1px solid var(--border); margin: 0 -24px 24px;
+    display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: center;
+    font-size: 13px;
+  }
+  nav.toc a { color: var(--accent); text-decoration: none; }
+  nav.toc a:hover { text-decoration: underline; }
+  section { padding: 20px 0; border-bottom: 1px solid var(--border); }
+  section:last-of-type { border-bottom: none; }
+  h2 { font-size: 21px; margin: 0 0 12px; color: var(--accent); border-left: 4px solid var(--accent); padding-left: 10px; }
+  h3 { font-size: 17px; margin: 20px 0 8px; }
+  h4 { font-size: 15px; margin: 14px 0 6px; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 3px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+  th { background: #f3f4f6; text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border); font-weight: 600; }
+  td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  tr:nth-child(even) td { background: #fafafa; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
+  pre { background: var(--code-bg); padding: 12px; border-radius: 6px; overflow-x: auto; }
+  .hero { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; }
+  .tldr { background: var(--accent-bg); border-left: 4px solid var(--accent); padding: 12px 16px; border-radius: 0 6px 6px 0; margin-bottom: 16px; }
+  .tldr h2 { border: none; padding: 0; margin: 0 0 6px; font-size: 16px; }
+  .tldr ul { margin: 0; }
+  .mermaid { background: var(--card); padding: 16px; border-radius: 8px; border: 1px solid var(--border); text-align: center; margin: 12px 0; }
+  .callout { border-left: 4px solid var(--accent); background: var(--accent-bg); padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 10px 0; }
+  .callout-warn { border-color: var(--orange); background: #fffbeb; }
+  .callout-red { border-color: var(--red); background: #fef2f2; }
+  .uc { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; margin: 14px 0; }
+  .uc h3 { margin-top: 0; color: var(--accent); }
+  .uc-meta { color: var(--muted); font-size: 13px; margin: 2px 0 8px; }
+  .ac { font-size: 14px; }
+  .ac li { margin: 2px 0; }
+  .ac-normal { color: var(--green); font-weight: 600; }
+  .ac-abnormal { color: var(--red); font-weight: 600; }
+  .ac-boundary { color: var(--orange); font-weight: 600; }
+  .feats th, .feats td { font-size: 13.5px; }
+  .net-notice { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 12px; }
+  footer { text-align: center; color: var(--muted); font-size: 13px; padding: 24px 0; border-top: 1px solid var(--border); }
+  .gap-fix { background: #f0fdf4; border-left: 4px solid var(--green); padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 10px 0; font-size: 13.5px; }
+  .anchor { display:block; position: relative; top: -60px; visibility: hidden; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>① 澄清需求：Goal V2 Refactor</h1>
+    <div class="meta">
+      <span>阶段 1/6</span>
+      <span class="tag tag-pass">verdict: pass</span>
+      <span>生成于 2026-06-25</span>
+    </div>
+  </header>
+
+  <div class="net-notice">⚠️ 需联网渲染图表（Mermaid via CDN）。</div>
+
+  <nav class="toc">
+    <a href="#goals">1.业务目标</a>
+    <a href="#uc">2.业务用例</a>
+    <a href="#dataflow">3.数据流转</a>
+    <a href="#features">4.功能清单</a>
+    <a href="#uiux">5.UI/UX</a>
+    <a href="#crosssys">6.系统间关联</a>
+    <a href="#constraints">7.约束</a>
+    <a href="#outofscope">8.不做</a>
+    <a href="#decisions">决策</a>
+  </nav>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="tldr">
+      <h2>TL;DR</h2>
+      <ul>
+        <li><b>用户可靠交付目标</b>：任意时刻可暂停/恢复，暂停不耗预算；agent 卡住可报告阻塞等待介入。</li>
+        <li><b>终态必然</b>：删除"按轮数/停滞自动终止"，资源预算单一检查点兜底不漏触发；完成须自证。</li>
+        <li><b>单一任务源</b>：Goal 不再内嵌任务，统一 Todo 管理（含验证任务）；复杂目标可先规划后执行。</li>
+        <li><b>职责三分层</b>：agent（完成/阻塞）、用户（暂停/恢复/清除）、系统（资源耗尽），对齐 Codex 心智模型。</li>
+      </ul>
+    </div>
+    <div class="mermaid">
+flowchart LR
+    subgraph SYS["Goal 扩展（系统边界）"]
+        UC1["UC-1 复杂任务规划执行"]
+        UC2["UC-2 暂停与恢复目标"]
+        UC3["UC-3 资源耗尽终止"]
+        UC4["UC-4 自主完成并自证"]
+        UC5["UC-5 报告阻塞并等待"]
+        UC6["UC-6 用户主动清除"]
+    end
+    用户(("开发者")) --> UC1
+    用户 --> UC2
+    用户 --> UC6
+    用户 --> UC5
+    agent(("Agent")) --> UC4
+    agent --> UC5
+    系统(("预算系统")) --> UC3
+    UC1 -. extend .-> UC4
+    UC5 -. extend .-> UC2
+    </div>
+  </section>
+
+  <!-- 1. 业务目标 -->
+  <span class="anchor" id="goals"></span>
+  <section>
+    <h2>1. 业务目标（Business Goals）</h2>
+    <div class="callout">
+      <b>背景</b>：Pi 的 Goal 扩展提供「持久化自主循环」。相对 Codex 有架构优势，但存在三个影响「用户能否可靠地把目标交给 agent」的业务级差距：
+      <ol>
+        <li><b>用户无法干净地叫停</b>：无"暂停"状态，中途插入指令会让目标状态混乱。</li>
+        <li><b>资源耗尽可能漏触发</b>：预算检查分散在事件处理器，存在空转烧资源风险。</li>
+        <li><b>两套任务系统打架</b>：Goal 内嵌任务与 Todo 并存，需提示词硬规则禁用一个，心智负担重。</li>
+      </ol>
+    </div>
+
+    <h3>目标树</h3>
+    <ul>
+      <li><b>G1</b> 用户可可靠交付目标并随时干预
+        <ul>
+          <li><b>G1.1</b> 干净暂停与恢复，不丢上下文 — <i>量化: 续跑 ≤1 turn 停止/恢复；任务清单 0 丢失</i></li>
+          <li><b>G1.2</b> agent 卡住有明确信号 — <i>量化: 阻塞可见延迟 ≤1 turn；阻塞态预算消耗 0</i></li>
+        </ul>
+      </li>
+      <li><b>G2</b> 目标必有明确终态，不无限空转
+        <ul>
+          <li><b>G2.1</b> 资源约束唯一兜底，单一检查点不漏 — <i>量化: 耗尽后 ≤1 检查点转终态；漏触发=0</i></li>
+          <li><b>G2.2</b> 完成须先完成全部任务（含验证）并给证据 — <i>量化: 违规完成拦截率=100%</i></li>
+        </ul>
+      </li>
+      <li><b>G3</b> 任务管理单一来源
+        <ul>
+          <li><b>G3.1</b> Goal 与 Todo 协作不冲突 — <i>量化: Goal 内嵌任务残留=0</i></li>
+          <li><b>G3.2</b> 复杂目标可先规划后执行 — <i>量化: plan→goal 衔接 ≤1 步用户动作</i></li>
+        </ul>
+      </li>
+      <li><b>G4</b> 职责边界清晰可预期 — <i>量化: 越界操作拦截率=100%</i></li>
+    </ul>
+
+    <h3>达成路线</h3>
+    <table>
+      <thead><tr><th>目标</th><th>路线/策略</th><th>对应用例</th></tr></thead>
+      <tbody>
+        <tr><td>G1.1</td><td>用户主导"暂停"状态，暂停/恢复对称且不丢上下文</td><td>UC-2</td></tr>
+        <tr><td>G1.2</td><td>agent 主动报告"被阻塞"（与暂停对称的停止态）</td><td>UC-5</td></tr>
+        <tr><td>G2.1</td><td>删"按轮数/停滞自动终止"，改资源约束单一兜底</td><td>UC-3</td></tr>
+        <tr><td>G2.2</td><td>完成审计：完成前完成全部任务（含验证）并附证据</td><td>UC-4</td></tr>
+        <tr><td>G3.1</td><td>合并两套任务系统为单一 Todo；Goal 只读快照</td><td>UC-1, UC-4</td></tr>
+        <tr><td>G3.2</td><td>Goal 与 Plan 双向联动：复杂先规划再执行</td><td>UC-1</td></tr>
+        <tr><td>G4</td><td>状态转换三分层：agent/用户/系统各司其职</td><td>UC-2~6</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 2. 业务用例 -->
+  <span class="anchor" id="uc"></span>
+  <section>
+    <h2>2. 业务用例（Use Cases）</h2>
+    <p class="uc-meta">用例图见上方 Hero。每个 UC 含前置/主流程/替代/异常/后置 + AC。</p>
+
+    <div class="uc">
+      <h3>UC-1: 复杂任务规划执行（plan → goal → todo → audit）</h3>
+      <div class="uc-meta"><b>Actor</b>: 开发者（主）、Agent（协助） · <b>关联目标</b>: G3.1, G3.2, G2.2</div>
+      <b>主流程</b>: 发起 goal → Agent 判复杂建议规划 → 规划完成自动衔接 → 建任务（含验证）→ 持续推进 → 全完成声明完成附证据<br>
+      <b>替代</b>: 简单任务 Agent 跳过规划直接执行 · <b>异常</b>: 遇阻转 UC-5 · <b>后置</b>: 完成终态附证据
+      <ul class="ac">
+        <li><span class="ac-normal">AC-1.1 [正常]</span> 复杂目标可走"规划→执行→完成"全流程，最终完成态附证据</li>
+        <li><span class="ac-abnormal">AC-1.2 [异常]</span> 规划/执行中遇阻可转 UC-5，不卡死</li>
+        <li><span class="ac-boundary">AC-1.3 [边界]</span> 简单目标可不规划直接执行，衔接不被强制</li>
+      </ul>
+    </div>
+
+    <div class="uc">
+      <h3>UC-2: 用户叫停与恢复目标（暂停/恢复）</h3>
+      <div class="uc-meta"><b>Actor</b>: 开发者 · <b>关联目标</b>: G1.1</div>
+      <b>主流程</b>: pause → 暂停态停续跑 → 插入指令/改任务 → resume → 活跃继续<br>
+      <b>替代</b>: 从 blocked 恢复（重检资源） · <b>异常</b>: 崩溃后暂停态保持；resume 时已超预算 → 拒绝恢复
+      <ul class="ac">
+        <li><span class="ac-normal">AC-2.1 [正常]</span> 暂停期间 agent 不续跑、不消耗预算</li>
+        <li><span class="ac-normal">AC-2.2 [正常]</span> 恢复后基于最新任务清单继续，不丢上下文</li>
+        <li><span class="ac-boundary">AC-2.3 [边界]</span> 崩溃重启后暂停态保持，不自动恢复</li>
+        <li><span class="ac-abnormal">AC-2.4 [异常]</span> 恢复时若已超预算，拒绝恢复（不转活跃）</li>
+      </ul>
+    </div>
+
+    <div class="uc">
+      <h3>UC-3: 资源耗尽自动终止</h3>
+      <div class="uc-meta"><b>Actor</b>: 预算系统（自动） · <b>关联目标</b>: G2.1</div>
+      <b>主流程</b>: 持续消耗 → 统一检查点检测耗尽 → 转资源耗尽终态（区分 token/时间）→ 通知原因<br>
+      <b>替代</b>: 70%/90% 预警引导收尾 · <b>异常</b>: agent 忘完成 → 不自动替它完成，预算兜底
+      <ul class="ac">
+        <li><span class="ac-normal">AC-3.1 [正常]</span> 预算耗尽必然终止，不漏触发（单一检查点）</li>
+        <li><span class="ac-normal">AC-3.2 [正常]</span> 终态区分 token 耗尽与时间耗尽</li>
+        <li><span class="ac-boundary">AC-3.3 [边界]</span> agent 忘记完成时不被自动"帮"完成</li>
+      </ul>
+    </div>
+
+    <div class="uc">
+      <h3>UC-4: Agent 自主完成并自证</h3>
+      <div class="uc-meta"><b>Actor</b>: Agent · <b>关联目标</b>: G2.2, G3.1</div>
+      <b>主流程</b>: 确认全任务（含验证）完成 → 声明完成附证据 → 校验任务完整性 → 完成终态<br>
+      <b>替代</b>: 关联规划则软提醒核对步骤（非硬阻断） · <b>异常</b>: 未全完成/未建/验证跳过 → 拒绝
+      <ul class="ac">
+        <li><span class="ac-normal">AC-4.1 [正常]</span> 全部任务（含验证）完成后可声明完成并附证据</li>
+        <li><span class="ac-abnormal">AC-4.2 [异常]</span> 任务清单为空/未加载/验证未完成时拒绝完成</li>
+        <li><span class="ac-boundary">AC-4.3 [边界]</span> 验证任务不可取消，常规任务可取消视作完成</li>
+        <li><span class="ac-boundary">AC-4.4 [边界]</span> Todo 未加载时降级运行，完成检查拒绝（完成受限，非不可用）</li>
+        <li><span class="ac-boundary">AC-4.5 [边界]</span> plan 步骤未全执行但任务全完成仍允许完成（plan 软提醒，任务清单是唯一硬检查）</li>
+      </ul>
+    </div>
+
+    <div class="uc">
+      <h3>UC-5: Agent 报告阻塞并等待用户介入</h3>
+      <div class="uc-meta"><b>Actor</b>: Agent（报告）、用户（介入） · <b>关联目标</b>: G1.2, G4</div>
+      <b>主流程</b>: 报告阻塞附原因 → 阻塞态（与暂停对称）→ 任务仍可改 → 用户介入后恢复<br>
+      <b>替代</b>: 用户判断无价值转 UC-6 · <b>异常</b>: 非活跃态拒绝；崩溃后阻塞态保持
+      <ul class="ac">
+        <li><span class="ac-normal">AC-5.1 [正常]</span> 阻塞态不续跑、不消耗预算，等用户介入</li>
+        <li><span class="ac-normal">AC-5.2 [正常]</span> 用户可恢复阻塞态目标</li>
+        <li><span class="ac-boundary">AC-5.3 [边界]</span> 非活跃态下报告阻塞被拒绝</li>
+        <li><span class="ac-boundary">AC-5.4 [边界]</span> 崩溃重启后阻塞态保持，不自动恢复</li>
+      </ul>
+    </div>
+
+    <div class="uc">
+      <h3>UC-6: 用户主动清除目标</h3>
+      <div class="uc-meta"><b>Actor</b>: 开发者 · <b>关联目标</b>: G4</div>
+      <b>主流程</b>: 清除指令 → 取消终态（不可逆）→ 不续跑<br>
+      <b>替代</b>: 有未终态目标时发起新目标被拒 · <b>异常</b>: 已终态再清除幂等
+      <ul class="ac">
+        <li><span class="ac-normal">AC-6.1 [正常]</span> 清除后进入取消终态，不再续跑</li>
+        <li><span class="ac-boundary">AC-6.2 [边界]</span> 存在未终态目标时发起新目标被拒</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 3. 数据流转 -->
+  <span class="anchor" id="dataflow"></span>
+  <section>
+    <h2>3. 数据流转（Data Flow）</h2>
+    <div class="mermaid">
+flowchart LR
+    用户(["用户"]) -->|发起/恢复/清除 指令| G["Goal 目标"]
+    A(["Agent"]) -->|声明完成/报告阻塞| G
+    A -->|建/改任务| T["Todo 任务清单"]
+    G -.只读快照.-> T
+    G -->|消耗| B["资源预算 token/时间"]
+    B -->|耗尽兜底| G
+    P["Plan 规划产物"] -->|复杂目标衔接| G
+    G -->|建议规划| P
+    G -->|状态显示| W["用户界面 状态提示"]
+    G -->|完成证据| H["持久化历史"]
+    T -->|任务清单| W
+    </div>
+    <table>
+      <thead><tr><th>数据</th><th>来源</th><th>处理</th><th>消费者</th><th>归档</th><th>敏感</th></tr></thead>
+      <tbody>
+        <tr><td>Goal 状态</td><td>用户/Agent/预算系统</td><td>状态机转换</td><td>UI、续跑决策</td><td>随会话持久化</td><td>内部</td></tr>
+        <tr><td>资源预算</td><td>每轮累加</td><td>单一检查点判定耗尽</td><td>终止决策、预警</td><td>随会话持久化</td><td>内部</td></tr>
+        <tr><td>任务清单</td><td>Agent/用户创建增删</td><td>完成审计校验</td><td>完成前置、进度展示</td><td>随会话持久化</td><td>内部</td></tr>
+        <tr><td>完成证据</td><td>Agent 提交</td><td>校验后存档</td><td>完成终态记录</td><td>随会话持久化</td><td>内部</td></tr>
+        <tr><td>规划产物</td><td>Plan Mode</td><td>复杂目标衔接读取</td><td>建任务引导、软提醒</td><td>项目 .xyz-harness/</td><td>内部</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 4. 功能清单 -->
+  <span class="anchor" id="features"></span>
+  <section>
+    <h2>4. 功能清单（Features）</h2>
+    <div class="callout callout-warn"><b>注</b>：业务功能（非技术实现）。技术实现在下游 ②/⑤，不在本阶段展开。</div>
+    <table class="feats">
+      <thead><tr><th>编号</th><th>功能</th><th>对应用例</th><th>关联目标</th></tr></thead>
+      <tbody>
+        <tr><td>F1</td><td>任务管理单一来源：Goal 不内嵌任务，统一 Todo，Goal 只读</td><td>UC-1, UC-4</td><td>G3.1</td></tr>
+        <tr><td>F2</td><td>用户暂停/恢复：干净叫停、恢复不丢上下文、不耗预算</td><td>UC-2</td><td>G1.1</td></tr>
+        <tr><td>F3</td><td>Agent 报告阻塞：与暂停对称的停止态，等用户介入</td><td>UC-5</td><td>G1.2</td></tr>
+        <tr><td>F4</td><td>资源耗尽兜底终止：唯一终止兜底，单一检查点不漏</td><td>UC-3</td><td>G2.1</td></tr>
+        <tr><td>F5</td><td>Agent 自主完成并自证：完成前须全任务（含验证）完成附证据</td><td>UC-4</td><td>G2.2</td></tr>
+        <tr><td>F6</td><td>职责三分层：agent/用户/系统各司其职</td><td>UC-2~6</td><td>G4</td></tr>
+        <tr><td>F7</td><td>Goal 与 Plan 双向联动：复杂先规划后执行</td><td>UC-1</td><td>G3.2</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 5. UI/UX -->
+  <span class="anchor" id="uiux"></span>
+  <section>
+    <h2>5. UI/UX 场景（Interface Scenarios）</h2>
+    <div class="callout"><b>注</b>：交互界面为编辑器内状态提示 + 命令面板 + <code>/goal</code> 指令，无独立页面级 UI。</div>
+    <h3>交互流程</h3>
+    <ul>
+      <li><b>发起</b>：<code>/goal &lt;目标&gt;</code>（可带预算）→ 活跃态，状态栏显示目标+剩余预算</li>
+      <li><b>暂停/恢复</b>：<code>/goal pause</code> → 暂停态、停续跑；<code>/goal resume</code> → 活跃</li>
+      <li><b>查看状态</b>：状态栏始终反映状态 + 剩余预算</li>
+      <li><b>预警</b>：70%/90% 主动提示</li>
+      <li><b>终止通知</b>：资源耗尽/完成时通知原因（含证据）</li>
+      <li><b>Agent 触发态变化</b>（UC-4/UC-5）：完成展示证据摘要，阻塞高亮提示阻塞原因</li>
+      <li><b>错误/拒绝反馈</b>：操作被拒（非活跃态、resume 超预算、完成检查失败等）有明确回显+建议</li>
+    </ul>
+    <h3>状态可见性</h3>
+    <ul>
+      <li>每状态（活跃/暂停/阻塞/完成/资源耗尽/取消）有对应显示</li>
+      <li>暂停 vs 阻塞外观可区分（触发主体不同）</li>
+      <li>资源耗尽终态区分 token / 时间耗尽</li>
+    </ul>
+  </section>
+
+  <!-- 6. 系统间关联 -->
+  <span class="anchor" id="crosssys"></span>
+  <section>
+    <h2>6. 系统间功能关联（Cross-System）</h2>
+    <div class="mermaid">
+flowchart LR
+    Goal["Goal 扩展"]
+    Todo["Todo 扩展"]
+    Plan["Plan Mode"]
+    Budget["资源预算 计量"]
+    Goal -.只读快照 依赖.-> Todo
+    Todo -.被 Goal 读.-> Goal
+    Goal <-->|复杂目标双向联动| Plan
+    Goal -->|消耗/被兜底终止| Budget
+    </div>
+    <table>
+      <thead><tr><th>关联系统</th><th>方向</th><th>交互方式</th><th>稳定性</th></tr></thead>
+      <tbody>
+        <tr><td>Todo 扩展</td><td>Goal 只读快照（入向）</td><td>瞬态快照，未加载降级（完成受限，AC-4.4）</td><td>稳定</td></tr>
+        <tr><td>Plan Mode</td><td>双向（建议规划 + 衔接执行）</td><td>检测可用性 + 自动衔接（≤1 步动作）</td><td>稳定</td></tr>
+        <tr><td>Plan / Coding Workflow</td><td>Goal 对外提供启动（出向）</td><td>其他扩展通过 Goal 启动接口发起</td><td>稳定</td></tr>
+        <tr><td>资源预算计量</td><td>Goal 消耗，预算兜底终止</td><td>每轮累加 + 单一检查点</td><td>稳定</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 7. 约束 -->
+  <span class="anchor" id="constraints"></span>
+  <section>
+    <h2>7. 约束（Constraints）</h2>
+    <h3>业务约束</h3>
+    <ul>
+      <li>对齐 Codex 心智模型：不依赖"轮数/停滞自动终止"，信任 agent 自主完成/报告阻塞 + 资源预算兜底</li>
+      <li>职责三分层不可越界（agent 不能替用户清除目标，用户指令优先）</li>
+    </ul>
+    <h3>技术约束（仅记录不展开）</h3>
+    <ul>
+      <li>TypeScript + Pi 扩展 API；会话持久化（无独立数据库）</li>
+      <li>跨扩展协作用鸭子类型编程式接口（不合并扩展）</li>
+      <li>事件串行、工具执行可能并发的并发模型</li>
+    </ul>
+  </section>
+
+  <!-- 8. 不做 -->
+  <span class="anchor" id="outofscope"></span>
+  <section>
+    <h2>8. 不做（Out of Scope）</h2>
+    <div class="callout callout-red">
+      <ul style="margin:0;">
+        <li><b>不做自动完成</b>：agent 忘声明完成时，系统不替它完成（预算兜底终止）</li>
+        <li><b>不做按轮数/停滞自动终止</b>：删除 maxTurns/maxStall 终态路径</li>
+        <li><b>不保留两套任务系统</b>：Goal 内嵌任务废弃，不与 Todo 并存</li>
+        <li><b>不做 plan 完成审计硬校验</b>：plan 步骤核对是软提醒（唯一硬校验是任务清单）</li>
+        <li><b>不在暂停期间冻结任务清单</b>：暂停是 agent 停跑，任务仍可调整</li>
+        <li><b>不做 /goal abort</b>：语义与清除重叠，统一用清除</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 决策 -->
+  <span class="anchor" id="decisions"></span>
+  <section>
+    <h2>决策记录</h2>
+    <p>完整决策链（D1–D29）见 <code>clarification.md</code>。①阶段关键业务级决策摘要：</p>
+    <ul>
+      <li><b>D1</b> 合并任务系统（→F1）</li>
+      <li><b>D2/D15</b> Todo 四态 + 验证任务标记；完成审计靠前置检查（→F5）</li>
+      <li><b>D5/D20</b> 暂停与阻塞行为对称（→F2, F3）</li>
+      <li><b>D6</b> 职责三分层（→F6）</li>
+      <li><b>D11/D21/D22/D28</b> 删自动终态（→F4, "不做"）</li>
+      <li><b>D23/D29</b> 单一检查点（→F4）</li>
+      <li><b>D26</b> 复杂度 LLM 判定（→F7）</li>
+      <li><b>D27</b> plan audit 软提醒（→"不做"）</li>
+    </ul>
+    <div class="gap-fix">
+      <b>Round 1 追踪 gap 处理摘要</b>（17 gap，见 <code>tracing-clarity-round-1.md</code>）：
+      <b>F 类</b>已修复（CONTEXT.md 过时同步、UC-5 崩溃异常、出向依赖）；
+      <b>K 类</b>已定/降级②；<b>D 类</b>已裁决（AC-2.4/§5）。
+      <b>用户裁决</b>：① 量化指标已补入目标树；② Todo 缺失=降级运行但完成受限（AC-4.4）。
+    </div>
+    <p><b>待确认</b>：全部业务级问题已在 clarification.md D1–D29 解决。无 UNRESOLVED / AMBIGUOUS。</p>
+  </section>
+
+  <footer>
+    <p>本文档由 design-clarity skill 生成。真相源：requirements.md</p>
+  </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: 'neutral', flowchart: { htmlLabels: true, curve: 'basis' } });
+</script>
+</body>
+</html>

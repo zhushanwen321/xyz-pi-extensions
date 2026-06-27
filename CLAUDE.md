@@ -285,9 +285,18 @@ bash .githooks/check-structure
 - 展开/折叠：`options.expanded` 控制显示详细程度
 - **导航键规范**：自定义 TUI 组件（如 `CategoryConfirmComponent`）的列表导航用方向键，经 pi-tui 的 `matchesKey(data,"up"|"down")` 识别——它覆盖全部方向键编码（legacy `\x1b[A`/`\x1b[B`、application-mode `\x1bOA`/`\x1bOB`、Kitty CSI u、modifyOtherKeys），不要硬编码单一字节序列（会漏掉 application-mode/Kitty 终端，方向键直接失效）。禁止用 vim j/k 导航：自定义组件若用 j/k 导航，会与同一组件内的 filter 文本输入冲突——用户输入字母 j/k 时被误判为导航，字母进不了 filter。`matchesKey` 只匹配功能键码、对可打印字母返回 false，故天然避开此冲突。确认/取消多键位（Enter/Esc）走 `kb.matches` 以尊重用户键位，不受此限。Pi 内置 `SelectList` 的 j/k 行为是平台能力，不在此规范范围内。
 
-### GUI 渲染描述符（`_render` 协议）
+### GUI 渲染描述符（`_render` 协议）— 已废弃
 
-#### 协议概述
+> **⚠️ DEPRECATED（已废弃，不再维护）**
+>
+> `_render` 协议已废弃，**禁止在新代码中使用**。新扩展不要在 `details` 中输出 `_render` 字段。
+>
+> - 现有实现（`extensions/todo`、`extensions/workflow`）作为遗留代码保留，待后续迭代中逐步清理
+> - `extensions/goal` 已于 2026-06 清除，作为参考范例
+> - xyz-agent 侧不再实现/维护对应的消费组件
+> - 下方文档保留仅作历史参考，不代表当前推荐做法
+
+#### 协议概述（历史参考）
 
 扩展的 `execute()` 返回 `{ content: [...], details: {...} }` 结构。`details` 中的数据面向 TUI 的 `renderResult` 消费。为了让 xyz-agent（Electron + Vue 3 GUI）能以最小代价渲染扩展输出，在 `details` 中增加可选的 `_render` 字段，作为 GUI 渲染的声明式描述符。
 

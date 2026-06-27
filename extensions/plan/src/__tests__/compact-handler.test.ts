@@ -76,7 +76,6 @@ describe("handlePlanComplete", () => {
     expect(pi.sendUserMessage).toHaveBeenCalledWith(expect.any(String), { deliverAs: "steer" });
     expect((pi as unknown as Record<string, unknown>).__goalInit).toHaveBeenCalledWith(
       expect.any(String),
-      expect.arrayContaining([expect.any(String)]),
       undefined,
       ctx,
     );
@@ -107,7 +106,6 @@ describe("handlePlanComplete", () => {
     expect(ctx.ui.notify).not.toHaveBeenCalled();
     expect((pi as unknown as Record<string, unknown>).__goalInit).toHaveBeenCalledWith(
       expect.any(String),
-      expect.arrayContaining([expect.any(String)]),
       undefined,
       ctx,
     );

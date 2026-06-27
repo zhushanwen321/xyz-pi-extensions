@@ -7,5 +7,10 @@ export function StringEnum<T extends readonly string[]>(values: T, _options?: Re
 	return values[0] as T[number];
 }
 
+// Text: pi-tui 的渲染节点 stub（goal-control-adapter renderCall/renderResult 返回值）
+export class Text {
+	constructor(_content: unknown, _x: number, _y: number) {}
+}
+
 // Pi SDK types used in import chains — re-export as empty
 export {};
