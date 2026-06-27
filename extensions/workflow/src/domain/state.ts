@@ -2,15 +2,24 @@
  * Workflow Extension — State Model & State Machine
  *
  * Status lifecycle:
- *   created → running ↔ paused → completed | failed | aborted | budget_limited | time_limited
+ *   running ↔ paused → completed | failed | aborted | budget_limited | time_limited | state_lost
  *
- * Terminal states (completed, failed, aborted, budget_limited, time_limited)
- * are irreversible. paused ↔ running is the only bidirectional transition.
+ * Terminal states are irreversible. paused ↔ running is the only bidirectional
+ * transition. state_lost is only assigned externally by reconstructState
+ * (infra/state-store.ts) when a state file is missing/corrupt — never produced
+ * by the internal state machine.
  *
- * Persistence:
- *   - pi.appendEntry("workflow-state", serializedState) on every mutation
- *   - session_start rehydrates from Session JSONL entries
- *   - deserializeState is backward-compatible (missing fields get defaults)
+ * Persistence (see infra/state-store.ts for the real mechanism):
+ *   - Each run writes an independent <sessionDir>/workflow-state/<runId>.jsonl
+ *     file, overwritten on every mutation (rewrite mode — no append, no GC).
+ *   - A lightweight "workflow-state-link" pointer entry is appended to the
+ *     session JSONL so reconstructState can find each run's latest snapshot.
+ *   - deserializeInstance is backward-compatible (missing fields get defaults;
+ *     legacy "created" status maps to "running").
+ *
+ * NOTE: serializeState/deserializeState + ENTRY_TYPE below are a LEGACY public
+ * API kept for backward compatibility and covered by tests — the current
+ * persistence layer uses serializeInstance/deserializeInstance instead.
  */
 
 // ── Status type ───────────────────────────────────────────────

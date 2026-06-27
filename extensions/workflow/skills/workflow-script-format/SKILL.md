@@ -26,7 +26,12 @@ const meta = { name: 'workflow-name', description: '...', phases: ['phase1', 'ph
 
 ## Injected Globals (pre-defined, do NOT redeclare)
 
-### `agent(opts)` — Call an AI agent
+### `agent(...)` — Call an AI agent
+
+支持三种签名：
+- `agent(promptString)` — 最简，prompt 字符串，返回 content 字符串
+- `agent(promptString, { label?, schema?, ... })` — 字符串 + opts（`label` 是 `description` 的别名）
+- `agent({ prompt, schema?, description?, agent?, skill?, timeoutMs?, model?, scene? })` — 完整 opts 对象
 
 Returns `parsedOutput` (structured data when schema provided) or `content` (string).
 
@@ -65,11 +70,11 @@ const [r1, r2, r3] = await parallel([
 ]);
 ```
 
-No concurrency limit — be mindful of API rate limits.
+并发默认上限 4（agent-pool 限流），超出自动排队。元素也可以是返回 Promise 的函数，会被直接调用：
 
-### `pipeline(stages)` — Execute stages sequentially
+### `pipeline(...)` — Execute stages sequentially
 
-Each stage receives the previous stage's result.
+**模式一：顺序模式** — 传入 stage 数组，每个 stage 收到上一个 stage 的结果：
 
 ```javascript
 const final = await pipeline([
@@ -78,11 +83,29 @@ const final = await pipeline([
 ]);
 ```
 
+**模式二：笛卡尔积模式** — 传入 items 数组 + 多个 stage，对每个 item 依次跑完所有 stage（批处理杀手锏）：
+
+```javascript
+// 对每个 file 依次跑 review → fix
+await pipeline(
+  files,                                      // items
+  (file) => agent({ prompt: `Review ${file}`, description: `review-${file}`, schema: {...} }),
+  (review, file) => agent({ prompt: `Fix ${file}: ${JSON.stringify(review)}`, description: `fix-${file}` }),
+);
+// stage 函数签名：(prevResult, currentItem) => result；第一个 stage 只收 currentItem
+
 ### Other globals
 
 - `$ARGS` — Object with workflow arguments (from `--args key=val`)
 - `$WORKSPACE` — Absolute path to the project workspace root
-- `$BUDGET` — Budget info: `{ usedTokens, usedCost, maxTokens?, maxTimeMs? }`
+- `$BUDGET` — Budget info（getter + 方法，**不是**扁平字段）：
+  - `$BUDGET.total` — token 预算上限（未设预算时为 0）
+  - `$BUDGET.spent()` — 已用 token
+  - `$BUDGET.remaining()` — 剩余 token（最小为 0）
+  - 例：`if ($BUDGET.remaining() < 5000) { phase('wrap-up'); }`
+- `phase(name)` — 设置当前阶段名，影响 TUI 分组显示。`meta.phases` 只是声明，TUI 实际分组靠运行时 `phase()` 调用或 agent opts 的 `phase` 字段
+- `log(msg)` — 输出诊断信息（收集到 workerLogs，失败时附在错误消息里，不泄漏到主进程 stderr）
+- `module.exports = { meta, execute }` — 脚本可导出 `execute({ agent, parallel, pipeline, phase, log, $ARGS, $WORKSPACE, $BUDGET })`，运行时会自动调用（兼容 Claude Code 写法）
 
 ### `description` naming convention [MANDATORY]
 
@@ -109,8 +132,8 @@ agent({ prompt: '...', description: 'review-business-logic' });
 
 ## Constraints
 
-- `agent()` calls **must be deterministic in order** for pause/resume to work correctly.
-- `parallel()` has no concurrency limit — be mindful of API rate limits.
+- `agent()` calls **must be deterministic in order** for pause/resume to work correctly. 根因：调用结果按单调递增的 callId（从 0 起、按调用顺序）缓存，pause 时杀 Worker 但保留 callCache，resume 时按 callId 重放。`parallel()` 内的调用顺序不能随机，否则重放会错位命中旧结果。注意：无 script hash 校验，**改脚本后 resume 会用旧结果**，开发期改脚本应重新 run。
+- `parallel()` 并发默认上限 4（超出自动排队）。
 - Throwing an error aborts the workflow (after retries).
 - Use `require()` for Node.js built-ins: `const fs = require('node:fs');`
 
