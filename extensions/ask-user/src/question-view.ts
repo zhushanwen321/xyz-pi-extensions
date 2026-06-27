@@ -107,9 +107,11 @@ function buildOptionLines(
 
 		if (isOther) {
 			if (state.mode === "freeform") {
-				// 原地编辑：与多选普通选项的 [ ] 框视觉对齐（单选无勾选语义则留空）
+				// 原地编辑：与普通选项的 [ ] 框 + 编号视觉对齐（单选无勾选语义则留空）。
+				// lead = "> [ ] N. "，输入文本跟在编号后，与其他选项整体一致。
 				const box = q.multiSelect ? t.fg("dim", "[ ]") : "  ";
-				const lead = `${prefix} ${box} `;
+				const num = i + 1;
+				const lead = `${prefix} ${box} ${t.fg("muted", `${num}. `)}`;
 				const avail = Math.max(1, width - visibleWidth(lead));
 				// 文本 + 末尾光标 █ 整体软换行（空 input 时仅光标，wrapTextWithAnsi("█") 单行）
 				const styled = `${t.fg("text", editorText)}${t.fg("accent", "█")}`;
@@ -277,10 +279,12 @@ export function renderQuestionView(
 		divider();
 	}
 
-	// 编辑器/评论模式：选项列表 + 编辑器块（freeform 模式下编辑器块为空，由 buildOptionLines 原地渲染）
+	// 编辑器/评论模式：选项列表 + 编辑器块（freeform 模式下编辑器块为空，由 buildOptionLines 原地渲染）。
+	// 编辑器模式一律用全 width 单列渲染——分屏左列仅约 42% 宽，Other 自由输入会被压窄换行，
+	// 且右侧详情预览在输入自定义内容时无意义。隐藏 descriptions 以避免行数爆炸。
 	if (state.mode === "freeform" || state.mode === "comment") {
 		add("");
-		const optionLines = buildOptionLines(q, state, theme, split ? split.left : width, !!split, editorText);
+		const optionLines = buildOptionLines(q, state, theme, width, false, editorText);
 		for (const line of optionLines) add(line);
 		const editorBlock = buildEditorBlock(theme, width, state.mode, editorText);
 		lines.push(...editorBlock);
@@ -305,7 +309,7 @@ export function renderQuestionView(
 	// 帮助行（上下文相关）
 	const opts = allOptions(q);
 	const onOther = state.cursorIndex === opts.length - 1;
-	const tabHint = isSingle ? "" : " · Tab switch tabs";
+	const tabHint = isSingle ? "" : " · ←/→ switch tabs";
 	const actionHint = onOther
 		? "Enter open editor"
 		: q.multiSelect
