@@ -24,6 +24,10 @@ description: >-
 
 > **[状态追踪]** 开始时调 `design_status start_phase issues` 标记阶段开始（会校验 architecture 已 completed）。
 > **有 `design_status` tool 优先用 tool**：`design_status(action: start_phase, phase: issues)`；**无 tool（Claude Code/Cursor/shell）用 CLI**：`design-status start-phase issues`。CLI 完整用法见 loop-skeleton.md「CLI 完整用法」。
+>
+> **[按 loop-skeleton Step 1.0]** grilling 前先获取已确认决策：
+>
+> **[复杂度档位]** 先读 `_progress.md` 的 `complexity_tier`：**L1 档跳过 context-builder**（主 agent 直读 decisions.md + 必问决策点引用的上游章节）；L2/L3 派 context-builder。追踪/审查/重建帧的降级见 loop-skeleton「复杂度自评与降级档位·三档执行矩阵」。本阶段上游较多，派 **context-builder subagent**（fresh）读 `{topic_dir}/decisions.md`（本 topic 已确认决策）+ 相关长期文档（NFR.md/ADR/ARCHITECTURE.md）+ 上游 .md，输出「阶段工作摘要」（不可推翻决策清单 + 设计树入口 + 接口契约）注入主 agent context。**grilling 不得重新确认已 confirmed 决策**；每个 D 类决策拍板后按 Step 1.2 即时 append decisions.md。
 
 ```
 Issue 决策图（根：从 system-architecture 的挑战推导）
@@ -79,6 +83,7 @@ Issue 决策图（根：从 system-architecture 的挑战推导）
 
 ```
 你是独立覆盖重建 subagent。上下文与主 agent 隔离——**重建阶段禁止读 issues.md**。
+**决策账本纪律：** decisions.md（作为 context 参数注入）里 status=confirmed 的决策是用户已拍板结论，已 confirmed 决策不得当 gap 重报；有下游新证据推翻须标 `[REVISIT of D-NNN]` + 附新证据走 Step 6b 反哺（D-不可逆须主 agent ask_user）。
 1. read system-architecture.md（②，真相源）+ 项目根 CONTEXT.md
 2. 按拆分维度 4 轴（状态§5/模块§7/边界§8/挑战§10）从 ② 逐条枚举每个可拆元素，
    对每个判断：需不需要 issue、是什么 issue。建成覆盖表 T_recon。
@@ -92,6 +97,7 @@ Issue 决策图（根：从 system-architecture 的挑战推导）
 
 ```
 你是独立异常猎手 subagent。上下文与主 agent 隔离。假设 issues.md 是错且不全的。
+**决策账本纪律：** decisions.md（作为 context 参数注入）里 status=confirmed 的决策是用户已拍板结论，已 confirmed 决策不得当 gap 重报；有下游新证据推翻须标 `[REVISIT of D-NNN]` + 附新证据走 Step 6b 反哺（D-不可逆须主 agent ask_user）。
 1. read system-architecture.md（②）+ issues.md
 2. 戴失败帧，按 hunting 清单对每个 issue/元素找未覆盖面：
    异常路径(error/fallback/超时/重试/降级) / 边界值(空/单元素/极大极小) /
@@ -122,6 +128,8 @@ Issue 决策图（根：从 system-architecture 的挑战推导）
 **[MANDATORY] 禁止在未完成 loop-skeleton 全流程（含 Step 6 审查 APPROVED）时声称完成。**
 
 - [ ] issues.md 存在，frontmatter 含 `verdict: pass`
+- [ ] **`decisions.md` 已读**（Step 1.0）+ 本阶段 D 类决策（P0/P1 划线/DESIGN-IT-TWICE 选定/P3 延后）已即时 append
+- [ ] **`changes/backfeed-round-{{N}}.md` 存在**（Step 6b 反哺检查真执行了；entries=0 也算，只要文件产出）
 - [ ] issues.html 存在，决策 DAG 图正确渲染（状态色标）
 - [ ] **「上游覆盖核验」表存在，每行状态为 ✅ 或 N/A（无 ❌ 待补、无空行）**
 - [ ] `changes/tracing-round-{N}.md` 存在，**含角色 A 独立重建 diff（MISSING/PHANTOM/MISMATCH）**

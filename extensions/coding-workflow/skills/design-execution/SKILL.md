@@ -28,6 +28,10 @@ description: >-
 
 > **[状态追踪]** 开始时调 `design_status start_phase execution` 标记阶段开始（会校验 code-arch 已 completed）。
 > **有 `design_status` tool 优先用 tool**：`design_status(action: start_phase, phase: execution)`；**无 tool（Claude Code/Cursor/shell）用 CLI**：`design-status start-phase execution`。CLI 完整用法见 loop-skeleton.md「CLI 完整用法」。
+>
+> **[按 loop-skeleton Step 1.0]** grilling 前先获取已确认决策：
+>
+> **[复杂度档位]** 先读 `_progress.md` 的 `complexity_tier`：**L1 档跳过 context-builder**（主 agent 直读 decisions.md + 必问决策点引用的上游章节）；L2/L3 派 context-builder。追踪/审查/重建帧的降级见 loop-skeleton「复杂度自评与降级档位·三档执行矩阵」。本阶段上游较多，派 **context-builder subagent**（fresh）读 `{topic_dir}/decisions.md`（本 topic 已确认决策）+ 相关长期文档（NFR.md/ADR/ARCHITECTURE.md）+ 上游 .md，输出「阶段工作摘要」（不可推翻决策清单 + 设计树入口 + 接口契约）注入主 agent context。**grilling 不得重新确认已 confirmed 决策**；每个 D 类决策拍板后按 Step 1.2 即时 append decisions.md。
 
 > **提问从宽：** Wave 编排、依赖推导、串并行多为技术推导，agent 自决为主。仅当出现"是否需要 Prefactor Wave""哪些 P3 真延后""并行组是否真不冲突"等只有用户能判断的点时才 ask_user。
 
@@ -47,11 +51,12 @@ Wave 编排（根：从时序图推导）
 遍历纪律：先走 Prefactor Wave（如有）和 P0 Wave——它们是后续 Wave 的依赖根。
 从 code-architecture.md §4 时序图推导：功能 B 调用功能 A → Wave(B) blocked_by Wave(A)；同文件被多时序修改→必须串行。
 **编排末端强制加 Wave N+1「验收 Wave」**（blocked_by 所有功能 Wave），它不做功能开发，只读测试验收清单全量→跑测试→全 PASS 才算实现完成（设计→实现的闭环闸门）。
+**[MANDATORY] ④性能混沌类缓解项编排（接收 nfr 路由契约）：** 从④回灌表筛 `验收方式=性能混沌` 的缓解项，编排为**独立 perf/chaos Wave 或 pre-prod gate**（不混入功能 Wave——性能/混沌测试需独立负载·故障注入环境，与功能测试不同层）。该 Wave blocked_by 相关功能 Wave。无性能混沌类缓解项则跳过并注明。
 按 `references/vertical-slice.md` 垂直切片原则（不水平切片，每 Wave 切穿所有层可独立验证）。
 **[MANDATORY] 定稿必须含「测试验收清单」章节**——把⑤test-matrix 全量用例（来源 A 功能 + 来源 B NFR）按归属 Wave 列全，作为实现期的 Definition of Done。
 初稿用 `references/deliverable-template.md`。
 
-**Step 1 末尾 — 机器结构检查前置自跑（零成本提速）：** 初稿写完后，主 agent 立即自跑 `python3 ${SKILL_DIR}/scripts/check_execution.py {topic_dir}`，FAIL 当场修低级硬伤（验收清单缺用例/末尾验收 Wave 缺 blocked_by/consistency-final 缺），不必等 Step 6。
+**Step 1 末尾 — 机器结构检查前置自跑（零成本提速）：** 初稿写完后，主 agent 立即自跑 `python3 ${SKILL_DIR}/scripts/check_execution.py {topic_dir} --no-consistency-final`（`--no-consistency-final` 跳过 6c 总闸门检查——该文件 Step 6c 才产出，未到 6c 前必缺失），FAIL 当场修低级硬伤（验收清单缺用例/末尾验收 Wave 缺 blocked_by），不必等 Step 6。
 > **与 Step 6 审查的分工**：此处只杀机器可证的结构硬伤；Step 6 才是质量门（含红队反过度编排）。两者不替代——Step 6 的 check_execution.py exit 1 仍硬阻断判 FAIL。
 >
 > **测试验收清单可脚本生成草稿（减写）：** `python3 ${SKILL_DIR}/scripts/check_execution.py {topic_dir} --generate-manifest` 读⑤§6 test-matrix 自动生成清单行（用例 ID/UC/来源/断言/执行层），「功能归属 Wave」列留空给 agent 从⑤§4时序图推导填入。生成后 agent 只补该列 + 校对，不必从零写。
@@ -92,6 +97,8 @@ Wave 编排（根：从时序图推导）
 **[MANDATORY] 禁止在未完成 loop-skeleton 全流程（含 Step 6 审查 APPROVED + Step 6c 一致性终检 CONSISTENT）时声称完成。**
 
 - [ ] execution-plan.md 存在，frontmatter 含 `verdict: pass`
+- [ ] **`decisions.md` 已读**（Step 1.0）+ 本阶段 D 类决策（Prefactor 必要性/并行组划分/P3 延后）已即时 append
+- [ ] **`changes/backfeed-round-{{N}}.md` 存在**（Step 6b 反哺检查真执行了；entries=0 也算，只要文件产出）
 - [ ] execution-plan.html 存在，Wave DAG 图正确渲染（并行组标注）
 - [ ] `changes/tracing-round-{N}.md` 存在
 - [ ] `changes/review-execution.md` 存在且 verdict: APPROVED
@@ -104,6 +111,7 @@ Wave 编排（根：从时序图推导）
 - [ ] 每 Wave 的 subagent 配置完整（注入上下文/读取文件/修改文件）
 - [ ] **「测试验收清单」章节存在**，用例 ID 集合 = ⑤test-matrix 全量（来源 A 功能 + 来源 B NFR），每条标归属 Wave
 - [ ] **每 Wave 标注覆盖的⑤test-matrix 用例 ID（含 NFR 来源 B），并集 = 全部 test-matrix 用例**（测试闭环）
+- [ ] **④每条 `验收方式=性能混沌` 的缓解项有归属 Wave（独立 perf/chaos Wave 或 pre-prod gate），不悬空**（接收 nfr 路由契约）
 
 ## 本地目录覆盖规则
 

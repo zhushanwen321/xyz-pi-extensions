@@ -4,7 +4,7 @@
 > **首次执行本工作流（clarity 阶段）read 一次；后续阶段按 `loop-skeleton.md` 操作即可，无需重复 read 本文件。**
 > 操作指令（6 步流程、subagent task prompt 模板、F/K/D 规则）见 `loop-skeleton.md`。
 
-## 核心原则（完整 6 条）
+## 核心原则（完整 7 条）
 
 1. **交互与追踪分离** — 主 agent 做交互（提问、给方案、写初稿），独立 subagent 做追踪（强制枚举视角）。主 agent 不做系统追踪——它带着对话上下文有确认偏误。
 2. **强制视角是 forcing function** — 每个阶段定义自己的 N 视角。每个视角必须核对或写降级理由。视角清单在各 skill 的 references 文件中。
@@ -12,6 +12,7 @@
 4. **收敛靠独立复核** — 停止条件是「独立 subagent 跑完视角追踪无新 gap」，不靠主 agent 自我判断。
 5. **定稿后必须过独立审查** — Step 6 审查 subagent 从质量/一致性/可执行性维度判定稿是否合格，而非找 gap。审查通过才能交接下游。审查与追踪是两种不同的检查（追踪=完整性，审查=质量）。
 6. **一次一个问题** — 用 `ask_user` 逐个解决 gap，不一次性抛出所有问题。
+7. **决策是一等持久化公民（decisions.md）** — 用户拍板的决策即时 append 到 `{topic}/decisions.md`（append-only 账本），不靠对话痕迹传递。fresh subagent 通过 context 参数注入 decisions.md 拿到已确认决策，对抗主 agent context 被 compact。已 confirmed 决策不得当 gap 重报；推翻走 Step 6b 反哺（D-不可逆须 ask_user）。这是「fresh context 对抗 bias」与「主 agent 对抗 compact」的配套机制——前者靠隔离，后者靠持久化。
 
 ## Grilling 提问法（Step 1 详解）
 

@@ -69,8 +69,12 @@ done
 
 ### 维度 4: 决策一致性（未被静默推翻）
 
+> **以 decisions.md 为权威索引。** decisions.md 记录了本 topic 所有已拍板决策（status=confirmed / revisited）。维 4 以 decisions.md 为准对账各阶段 .md，而非逐阶段 grep 决策记录章节。
+
+- [ ] **decisions.md 里 status=confirmed 的决策，在①-⑥各 .md 中未被静默偏离**（尤其 D-不可逆：分层/状态机/领域边界/根本架构）
+- [ ] 若有偏离，是否有 Step 6b 反哺记录（上游 .md 的 `[BACKFED]` 标注）+ **decisions.md 同步（原决策 status→revisited + superseded_by + 新决策 `[REVISIT]` 溯源）** + 用户重新确认（D-不可逆的 NEEDS_USER_CONFIRM）
+- [ ] **decisions.md 的 revisit 链完整**：每个 status=revisited 的决策都有 superseded_by 指向，且新决策 confirmed_by=ask_user（D-不可逆）——没有「agent 自改了决策但没问用户」的漏网
 - [ ] ②③的 D-不可逆决策（分层/状态机/领域边界/根本架构）在④⑤⑥未被静默偏离
-- [ ] 若有偏离，是否有 Step 6b 反哺记录 + 用户重新确认（backfed_from + NEEDS_USER_CONFIRM）
 
 ### 维度 5: NFR 回灌闭环
 

@@ -56,6 +56,7 @@ python3 ${SKILL_DIR}/scripts/check_{phase}.py {topic_dir}
 3. read `{upstream_deliverables}`（所有上游交付物，对齐检查）
 4. read 项目根 `CONTEXT.md`（统一语言对齐）
 5. read `{topic_dir}/changes/machine-check-{phase}.md`（机器报告，附在审查报告里）
+6. **read `{topic_dir}/decisions.md`（决策账本）**——审查必读，区分哪些是用户拍板的 confirmed 决策
 
 从 6 维审查：
 - 内部一致性 / 上游对齐 / 可执行性 / 完整性 / 可视化质量（5 个客观维度）
@@ -63,6 +64,7 @@ python3 ${SKILL_DIR}/scripts/check_{phase}.py {topic_dir}
   - 对每个 port/adapter/interface：「删掉它会怎样？最小可行版本是什么？」(deletion test)
   - 对每个 D-不可逆决策：「这是真不可逆，还是 agent 没找到可逆方案？」
   - 对分层深度：「核心计算真的复杂到需要这层吗？三层够不够？」
+  - **[关键] 区分 confirmed 决策：** 对象若在 decisions.md 中 `status=confirmed`（用户已拍板），deletion test 结论必须是「确有新证据证明过度」才能建议降级，不能仅因「看起来多余」就质疑——那是用户的取舍，不是 agent 的误判。`confirmed_by=agent-opinionated` 的决策可正常质疑。
   - 判定：若认为某决策过度设计，即使其他 5 维全过也标 CHANGES_REQUESTED + 注「建议降级为 X」
 
 ## 审查并行模式（默认）

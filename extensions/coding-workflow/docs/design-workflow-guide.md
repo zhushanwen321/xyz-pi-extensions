@@ -67,6 +67,10 @@
 - **定稿 + HTML 渲染** — 收敛后定稿 .md，并渲染自包含 .html（用本包内置的 **design-visual-explainer** 技能，整合 Mermaid + drawio + 手画 HTML/CSS 三种引擎，Mermaid 图表直接渲染）
 - **独立审查门（Review Gate，6 维含红队）** — 定稿后派 fresh-context 审查 subagent 从 6 维评审：内部一致性 / 上游对齐 / 可执行性 / 完整性 / 可视化质量 / **必要性与比例性（红队维度，反过度设计）**，APPROVED 才进反哺
 - **上游反哺（Step 6b）** — 审查通过后，fresh subagent 回扫上游检测矛盾，反哺修订上游 .md（标注来源+原因），保证每阶段交接时文档一致。D-不可逆矛盾必须 ask_user
+- **decisions.md 决策账本** — 跨阶段 append-only 决策索引（每条含 ID/决策/理由/classification/confirmed_by/溯源）。每阶段 Step 1.0 读已确认决策（不得重问），D 类决策拍板后即时 append；追踪/审查 subagent 注入为 context，对抗 compact 丢决策。详细 schema + 模板见 `loop-skeleton.md` Step 1.2 + `design-clarity/references/decisions-template.md`
+- **context-builder subagent** — 重型阶段（L2/L3）Step 1.0 必派，读 decisions.md + 长期文档 + 上游 .md 产出「阶段工作摘要」注入主 agent（压缩传递，每阶段必派一次消除 compact 检测依赖）。规范见 `design-shared/references/context-builder.md`
+- **复杂度三档降级（L1/L2/L3）** — ①clarity 按 6 信号判定 `complexity_tier` 写入 `_progress.md`，驱动全程降级（context-builder/追踪/重建帧/review/max-rounds）。简单需求 L1 走轻量路径（单 agent 串行），复杂走完整循环。4 个硬约束不降级（decisions.md/⑤test-matrix重建/审查/gate）。见 `loop-skeleton.md`「复杂度自评与降级档位」
+- **_progress.md 跨会话交接** — design_status tool/CLI 是权威状态机，_progress.md 是其可读快照（含 complexity_tier + 阶段进度表 + 下阶段必读），换会话前写一次
 - **代码骨架验证（⑤Step 7）** — ⑤设计落成可编译骨架代码，物理验证签名/调用链/依赖方向。移植 recursive-skeleton 的顶层骨架机制
 - **全文档一致性终检（⑥Step 6c）** — 仅⑥，编码前对①-⑥全部 .md + 骨架代码做总闸门审计，CONSISTENT 才交接编码
 
@@ -104,7 +108,9 @@
 
 ## 设计→编码交接契约（Hard Handoff）
 
-设计阶段建得再严密，**实现端无人核对 = 设计闭环，但设计→实现开环**。这是"设计很全、实现还是漏"的典型断点。
+**设计阶段完成的定义（Definition of Done: Design）= ⑥execution completed（design_status 状态机）+ `changes/consistency-final.md` verdict:CONSISTENT（⑥Step 6c 总闸门）。** 两者满足才允许交接编码；编码完成的定义见下表（测试验收清单全绿）。
+
+设计阶段建得再严密，**实现端无人核对 = 设计闭环，但设计→实现开环**。这是“设计很全、实现还是漏”的典型断点。
 ⑥产出含**「测试验收清单」（Test Acceptance Manifest）**，把"设计闭环"延伸为"实现闭环"：
 
 | 层 | 机制 | 强制力来源 |

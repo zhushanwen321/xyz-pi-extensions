@@ -28,6 +28,10 @@ description: >-
 
 > **[状态追踪]** 开始时调 `design_status start_phase code-arch` 标记阶段开始（会校验 nfr 已 completed）。
 > **有 `design_status` tool 优先用 tool**：`design_status(action: start_phase, phase: code-arch)`；**无 tool（Claude Code/Cursor/shell）用 CLI**：`design-status start-phase code-arch`。CLI 完整用法见 loop-skeleton.md「CLI 完整用法」。
+>
+> **[按 loop-skeleton Step 1.0]** grilling 前先获取已确认决策：
+>
+> **[复杂度档位]** 先读 `_progress.md` 的 `complexity_tier`：**L1 档跳过 context-builder**（主 agent 直读 decisions.md + 必问决策点引用的上游章节）；L2/L3 派 context-builder。追踪/审查/重建帧的降级见 loop-skeleton「复杂度自评与降级档位·三档执行矩阵」。⑤是上游最多的阶段（读①②③④），必派 **context-builder subagent**（fresh）读 `{topic_dir}/decisions.md`（本 topic 已确认决策）+ 相关长期文档（NFR.md/ADR/ARCHITECTURE.md）+ 上游 .md，输出「阶段工作摘要」（不可推翻决策清单 + 设计树入口 + 接口契约）注入主 agent context。**grilling 不得重新确认已 confirmed 决策**；每个 D 类决策拍板后按 Step 1.2 即时 append decisions.md。
 
 ```
 代码架构（根：工程目录 + 契约 + 时序）
@@ -65,9 +69,11 @@ description: >-
 
 **§6 test-matrix 来源 A/B 拆 2 并行 subagent（减写+提速）：** 来源 A（功能用例，从 §4 时序图 alt/else 正向推导）与来源 B（NFR 用例，从④回灌表 `验收方式=代码测试` 反向映射）**认知帧不同**（功能边界 vs 风险登记），读文件基本不重叠（A 读 §4+①UC；B 读④回灌表），拆 2 并行 fresh subagent 无写冲突（写入 template §6 的分表，ID 段 T{UC}.6+ 区分）。来源 A 内部可选"按 UC 并行"（每 UC 1 subagent），但需上限保护：UC≤3 全并行；>3 按模块归组或分批（撞≤5 并发约束）。
 
-**Step 2（追踪）— 4 组并行 fresh-context subagent（认知帧内聚，抄② architecture-perspectives 范式）：**
+**Step 2（追踪）— 5 组并行 fresh-context subagent（4 认知帧 + 1 禁读重建帧）：**
 
 > **为何拆**：⑤ 是 6 阶段信息密度最高、追踪最弱的（现状单 agent 串行 5 视角）。拆 4 组各跑正交认知帧，盲区更少。**诚实标注**：⑤的5视角异质性<②的3组（②是不同工程思维，⑤更像同一批代码审查检查项），收益主要在**上下文隔离+读取并行提速**，盲区对抗次要。
+>
+> **为何加第 5 组（test-matrix 禁读重建）：** 前 4 组都读同一份 §6 test-matrix 初稿——**同源盲区**：初稿漏的用例类别，覆盖帧查的是"已列是否全"，查不出"该列未列"。这正是测试遗漏（事故重灾区）的机制根源——防线只能保证"已列的全覆盖"，保证不了"该列的都列了"。禁读重建 subagent 从①④⑤源头独立推导"该有哪些用例类别"，与初稿 diff，MISSING 即同源盲区。范式抄①clarity / ③issues 已验证有效的「禁读重建」。
 
 | 组（认知帧） | 吞入的视角 | 主读文件 | 写入文件 |
 |---|---|---|---|
@@ -75,17 +81,33 @@ description: >-
 | **结构帧** | 依赖健康（无环 / god object LOC） | §2 包依赖图 + 骨架 LOC | `tracing-round-{N}-structure.md` |
 | **覆盖帧** | 测试覆盖完整性（来源 A alt/else + 来源 B NFR映射） | §6 + §4 + ④NFR 表 | `tracing-round-{N}-coverage.md` |
 | **闭环帧** | 搭便车闭环（②清单→⑤落点） | ②搭便车清单 + ⑤各章节落点 | `tracing-round-{N}-closure.md` |
+| **重建帧（禁读）** | 同源盲区对抗（该列未列） | **禁读 §6 test-matrix**，只读①UC+AC / ④风险表 / ⑤§4 时序图 | `tracing-round-{N}-reconstruct.md` |
 
 **契约帧详细检查**：每用例/功能有对应 API 契约？**NFR④ 回灌到契约的字段（如 idempotency-key）是否在签名表体现？** / 每时序图入口到底层完整、异常路径覆盖？
 **结构帧详细检查**：包依赖无环、无上帝对象 LOC<400？
 **覆盖帧详细检查**：每 UC 正常+边界+异常+状态+e2e 类齐全？时序图每个 alt/else 有对应异常用例（来源 A）？**NFR④ `验收方式=代码测试` 的每条缓解项在 §6 来源 B 有 ≥1 对应用例（非仅并发）？来源 B 安全/并发用例是否标了"强制层级"？**
 **闭环帧详细检查**：②搭便车清单每项是否有⑤代码架构落点？无落点的是否已回流②打回？
+**重建帧（禁读，关键防遗漏）**：**禁止 read §6 test-matrix**（避免被主 agent 初稿锈定）。从三类源头独立推导「该有哪些测试用例类别」：① 每 UC 的正常/边界/异常 + ④ 每条 `验收方式=代码测试` 的风险 ≥1 用例 + ⑤§4 时序图每个 alt/else ≥1 异常用例。**重建完成才读 §6 test-matrix**，与初稿做集合 diff，产出三态 gap：MISSING（该有而初稿漏列，最致命）/ PHANTOM（初稿列但①④无根）/ MISMATCH（标覆盖但断言点不符）。
 
-**交叉验证点（组间重叠区）**：契约帧「调用链闭合」隐含"签名都在"与结构帧可能重叠→两组都报=强信号 `[CROSS-VALIDATED]`。
+**重建帧 Task prompt：**
 
-**轻量项目降级**：单模块/无骨架的小系统，4 帧合回单 agent 串行（标明降级理由）。
+```
+你是独立 test-matrix 重建 subagent。上下文与主 agent 隔离。**重建阶段禁止 read code-architecture.md 的 §6 test-matrix**（避免被初稿锈定）。
+**决策账本纪律：** decisions.md（作为 context 参数注入）里 status=confirmed 的决策是用户已拍板结论，已 confirmed 决策不得当 gap 重报；有下游新证据推翻须标 `[REVISIT of D-NNN]` + 附新证据走 Step 6b 反哺（D-不可逆须主 agent ask_user）。
+1. read requirements.md（①UC + AC，功能用例源头）
+2. read non-functional-design.md（④风险表，筛 `验收方式=代码测试` 的缓解项，NFR 用例源头）
+3. read code-architecture.md 的 §4 时序图（每个 alt/else 异常分支，来源 A 异常用例源头）
+4. 从三类源头独立推导「该有哪些测试用例类别」：① 每 UC 正常/边界/异常 + ④ 每条代码测试风险 ≥1 用例 + ⑤§4 每个 alt/else ≥1 异常用例
+5. **重建完成后**才 read §6 test-matrix，与你的重建做集合 diff：
+   MISSING（重建有、初稿漏列）/ PHANTOM（初稿有、①④无根）/ MISMATCH（标覆盖但断言不符）
+6. 每条 gap 标类型（F/K/D）。写入 {topic_dir}/changes/tracing-round-{N}-reconstruct.md
+```
 
-**收敛判定**：4 组都 CONVERGED 才算整轮收敛；任一组有新 gap → 回 Step 3 处理后重跑该组（不必 4 组全重跑）。
+**交叉验证点（组间重叠区）**：契约帧「调用链闭合」隐含"签名都在"与结构帧可能重叠→两组都报=强信号 `[CROSS-VALIDATED]`。重建帧 MISSING 与覆盖帧「时序图每个 alt/else 有异常用例」可能交叉命中→同一漏列被独立证实。
+
+**轻量项目降级**：单模块/无骨架的小系统，4 认知帧可合回单 agent 串行；但**重建帧不降级**（test-matrix 遗漏是事故重灾区，禁读重建是对抗它的唯一有效手段）。
+
+**收敛判定**：5 组都 CONVERGED 才算整轮收敛；任一组有新 gap → 回 Step 3 处理后重跑该组（不必 5 组全重跑）。
 
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
@@ -97,7 +119,9 @@ description: >-
 
 **Step 7（骨架验证）— 派 fresh-context subagent 生成可编译骨架代码，物理验证 Step 1-5 的设计假设。**
 
-> **[MANDATORY] 骨架验证是本阶段的强制 gate。** 通过才能交接 ⑥。详见 `references/skeleton-spike.md`。
+> **[MANDATORY] 骨架验证是本阶段的强制 gate。** 通过才能进 Step 6b。详见 `references/skeleton-spike.md`。
+
+**Step 6b（上游反哺检查）— 骨架验证后、交接前。** 按 loop-skeleton.md Step 6b（[MANDATORY]）。派 fresh-context subagent 回扫①-④上游：本阶段定稿 + **骨架物理验证**是否引入与上游矛盾的结论（骨架常证伪②的分层/领域边界/模块划分假设——这是⑤反哺的高发场景，比其他阶段的文档级反哺更硬）。产出 `changes/backfeed-round-{N}.md`。反哺纪律（只改事实性矛盾/D-不可逆须 ask_user/同步 decisions.md/只改内容不改 phase 状态/反哺后回流）见 loop-skeleton Step 6b。
 
 **机制：**
 1. **按模块 DAG 划分生成**（模块数 > 1 时；≤1 或 §2 有 `modules/* 互相 import` 循环嫌疑时不并行，单 agent 够）——详见 `references/skeleton-spike.md`「按模块 DAG 划分并行生成」：
@@ -137,8 +161,11 @@ description: >-
 **[MANDATORY] 禁止在未完成 loop-skeleton 全流程（含 Step 6 审查 APPROVED + Step 7 骨架验证通过）时声称完成。**
 
 - [ ] code-architecture.md 存在，frontmatter 含 `verdict: pass`
+- [ ] **`decisions.md` 已读**（Step 1.0）+ 本阶段 D 类决策（目录边界/契约抽象深度/依赖严格度）已即时 append
+- [ ] **`changes/backfeed-round-{{N}}.md` 存在**（Step 6b 反哺检查真执行了；entries=0 也算，只要文件产出）
 - [ ] code-architecture.html 存在，包依赖图+时序图正确渲染
 - [ ] `changes/tracing-round-{N}-{contract|structure|coverage|closure}.md` 存在（4 帧组追踪真执行了；轻量降级为单 `tracing-round-{N}.md`）
+- [ ] **`changes/tracing-round-{N}-reconstruct.md` 存在（test-matrix 禁读重建真执行了——⑤的测试遗漏防线，不降级）**
 - [ ] `changes/review-code-arch.md` 存在且 verdict: APPROVED
 - [ ] 工程目录树存在，每目录标注职责+变化轴
 - [ ] 包依赖图（Mermaid）无循环依赖
@@ -165,7 +192,7 @@ description: >-
 
 ## 下游衔接
 
-**Step 7 骨架验证通过后**向用户交接（按 loop-skeleton.md Step 6 格式）：
+**Step 7 骨架验证 + Step 6b 反哺检查通过后**向用户交接（按 loop-skeleton.md Step 6 格式）：
 
 > **[状态追踪]** 交接前调 `design_status complete_phase code-arch` 收尾——自动校验 code-architecture.md + verdict:pass + review APPROVED + 骨架 gate，过了才标 completed。
 > **有 tool 优先用 tool**：`design_status(action: complete_phase, phase: code-arch)`；**无 tool 用 CLI**：`design-status complete-phase code-arch`。

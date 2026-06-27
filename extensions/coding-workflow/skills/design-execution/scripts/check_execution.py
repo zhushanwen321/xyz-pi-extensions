@@ -88,6 +88,8 @@ def main():
     topic_dir = resolve_topic_dir()
     report = CheckReport("execution")
     md_path = os.path.join(topic_dir, DELIVERABLE)
+    # --no-consistency-final: Step 1 末自跑时跳过 6c 总闸门检查（该文件 Step 6c 才产出，未到 6c 前必缺失）
+    skip_consistency = "--no-consistency-final" in sys.argv
 
     # ① 结构性
     if not check_file_exists(report, f"{DELIVERABLE} 存在", md_path):
@@ -103,7 +105,9 @@ def main():
 
     # ① consistency-final.md（Step 6c 总闸门）
     consistency_path = os.path.join(topic_dir, "changes", "consistency-final.md")
-    if os.path.isfile(consistency_path):
+    if skip_consistency:
+        report.add_skip("consistency-final", "--no-consistency-final 跳过（Step 1 末自跑，6c 未到）")
+    elif os.path.isfile(consistency_path):
         fm = parse_frontmatter(consistency_path)
         verdict = fm.get("verdict", "").strip()
         if verdict == "CONSISTENT":

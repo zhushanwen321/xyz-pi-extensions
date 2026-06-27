@@ -75,6 +75,8 @@ description: >-
 
 > **[状态追踪]** 开始时调 `design_status start_phase init` 标记阶段开始。
 > **有 `design_status` tool 优先用 tool**：`design_status(action: start_phase, phase: init)`；**无 tool（Claude Code/Cursor/shell）用 CLI**：`design-status start-phase init`。CLI 完整用法见 loop-skeleton.md「CLI 完整用法」。
+>
+> **[init 特例：项目级状态]** init 在 ①clarity 选 topic 之前运行，无 topic 子目录。design_status 对 init 用**项目级状态存储**（`.xyz-harness/.design-status.json`，非 topic 子目录）——这是 design_status 内置的特例，正常调用即可，agent 无需特殊处理。
 
 ### 1. 扫描 + 回读一致性验证
 
@@ -137,7 +139,13 @@ description: >-
    单一真相源：CLAUDE.md（或 AGENTS.md，二者其一即可）
    缺失必备文档已补齐骨架，请在后续阶段填充实际内容。
 下一步：①需求澄清 — 明确业务目标→路线→用例/数据流/UI-UX
-调用：/design-clarity
+调用：`/design-clarity`
+
+> **①clarity 会创建两个 topic 级文件**（init 不预建）：
+> - `decisions.md` — 决策账本（跨阶段 append-only），用 `design-clarity/references/decisions-template.md` 骨架创建
+> - `_progress.md` — 含 `complexity_tier`（L1/L2/L3）+ 阶段进度表，驱动全程降级
+>
+> 两者由首阶段按 `loop-skeleton.md` 创建，init 只负责项目级文档（AGENTS/CONTEXT/ARCHITECTURE 等）。
 是否现在进入？
 ```
 

@@ -23,8 +23,14 @@ description: >-
 
 **Step 1（交互+初稿）— Grilling 遍历业务目标树：**
 
+> **[MANDATORY 判定复杂度档位]** ①是首阶段，负责按 loop-skeleton「复杂度自评」（6 信号打分）判定本 topic 的 `complexity_tier`（L1/L2/L3），写入 `_progress.md` frontmatter。创建 `_progress.md` 用 `references/_progress-template.md` 骨架。判定后 ask_user 确认一次（用户可覆盖）。后续所有阶段读此档位驱动降级。
+>
+> **[MANDATORY 创建决策账本]** ①是首个设计阶段，负责创建 `{topic_dir}/decisions.md`（空骨架，直接用 `references/decisions-template.md`）。后续所有阶段的 confirmed 决策都 append 到此文件。
+>
 > **[状态追踪]** 开始时调 `design_status start_phase clarity` 标记阶段开始（会校验 init 已 completed）。
 > **有 `design_status` tool 优先用 tool**：`design_status(action: start_phase, phase: clarity)`；**无 tool（Claude Code/Cursor/shell）用 CLI**：`design-status start-phase clarity`。CLI 完整用法见 loop-skeleton.md「CLI 完整用法」。
+>
+> **[按 loop-skeleton Step 1.0]** grilling 前，①是首阶段（decisions.md 刚创建为空），直接进入 Step 1.1 grilling。每个 D 类决策 ask_user 拍板后，按 Step 1.2 即时 append 到 decisions.md。
 
 ```
 业务目标（根）
@@ -48,7 +54,7 @@ description: >-
 >
 > **为何加禁读重建（提质附带提速）：** ① 是业务根，遗漏全链放大（下游⑤时序图都基于①用例集，①漏一个用例=下游全在为不完整前提做精致打磨）。现有 5 视角都读同一份 requirements.md 初稿——**同源盲区**：初稿漏的用例，5 视角查不出（视角2查的是"已列用例是否完整"，不是"该列而未列的用例"）。范式照搬③issues 的 A 角色（fog-of-war.md 论证的「同源盲区靠 fresh context 他证对抗」）。与 5 视角并行跑（共 2 个 subagent），比现状串行快。
 
-**① 5 视角追踪 subagent**（1 个 fresh-context，读 requirements.md + 上游无 + 项目源码）：
+**① 5 视角追踪 subagent**（1 个 fresh-context，按 loop-skeleton Step 2 模板——decisions.md 作为 context 参数注入 + [REVISIT] 硬规则；读 requirements.md + 上游无 + 项目源码）：
 
 1. **目标可追溯性**（必查，无降级）— 业务目标→达成路线→用例的完整可追溯链。查：孤立用例（无对应目标）/ 孤立目标（无路线或用例支撑）/ 成功标准是否可衡量（「X 达到 Y 指标」而非「做好 X」）。
 2. **角色与用例完整性**（必查，无降级）— 所有参与角色及其用例完整。查：隐含 Actor（被提到但未纳入，如审核人/管理员）/ 同一 Actor 不同权限级别是否区分 / **每用例必须答出 主流程+替代+异常 + 前置/后置**（最常漏异常流程）。
@@ -68,6 +74,7 @@ description: >-
 
 ```
 你是独立重建 subagent。上下文与主 agent 隔离。**禁止读 requirements.md**（避免被主 agent 初稿锚定）。只读 CONTEXT.md + 项目源码（若有）。
+**决策账本纪律：** decisions.md（作为 context 参数注入）里 status=confirmed 的决策是用户已拍板结论，已 confirmed 决策不得当 gap 重报；有下游新证据推翻须标 `[REVISIT of D-NNN]` + 附新证据走 Step 6b 反哺（D-不可逆须主 agent ask_user）。
 1. 独立重建：① 有哪些 Actor（含隐含的，如审核人/管理员）② 每个.Actor 有哪些用例 ③ 每用例的主流程+替代+异常 ④ 核心数据流（产生→处理→消费→归档）
 2. 重建完成后，才 read requirements.md（主 agent 初稿），与你的重建做 diff
 3. diff 出的差异就是同源盲区 gap，逐条标 F/K/D：
@@ -97,6 +104,7 @@ description: >-
 **[MANDATORY] 禁止在未实际完成 loop-skeleton 全流程（含 Step 6 审查 APPROVED）的情况下声称完成。**
 
 - [ ] requirements.md 存在，frontmatter 含 `verdict: pass`
+- [ ] **`decisions.md` 已创建**（①负责创建空骨架，Step 1 的 D 类决策已即时 append）
 - [ ] requirements.html 存在，用例图正确渲染
 - [ ] `changes/tracing-round-{N}.md` 存在（5 视角追踪真执行了，非主 agent 自圆其说）
 - [ ] `changes/tracing-round-{N}-reconstruct.md` 存在（禁读重建真执行了——① 的同源盲区防线）

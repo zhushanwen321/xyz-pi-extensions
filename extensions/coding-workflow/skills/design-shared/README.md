@@ -21,6 +21,7 @@
 | `references/loop-skeleton.md` | 6 步操作骨架（Step 1-6c）+ subagent 派发模板 | 每个设计阶段 Step 1 前 read |
 | `references/loop-method.md` | 方法论详解（Grilling 提问法、Question Hierarchy、gap 信号） | 仅首次执行工作流（clarity 阶段）read 一次 |
 | `references/review-agent.md` | Step 6 独立审查 subagent 规范（机器检查优先 + 6 维审查） | Step 6 派审查 subagent 时注入 |
+| `references/context-builder.md` | Step 1.0 上下文构建 subagent 规范（压缩上游→阶段工作摘要，对抗 compact 丢决策） | architecture 及之后各阶段 Step 1.0 派发时注入（L2/L3） |
 
 ## 引用约定
 

@@ -46,6 +46,10 @@ description: >-
 
 > **[状态追踪]** 开始时调 `design_status start_phase architecture` 标记阶段开始（会校验 clarity 已 completed）。
 > **有 `design_status` tool 优先用 tool**：`design_status(action: start_phase, phase: architecture)`；**无 tool（Claude Code/Cursor/shell）用 CLI**：`design-status start-phase architecture`。CLI 完整用法见 loop-skeleton.md「CLI 完整用法」。
+>
+> **[按 loop-skeleton Step 1.0]** grilling 前先获取已确认决策：
+>
+> **[复杂度档位]** 先读 `_progress.md` 的 `complexity_tier`：**L1 档跳过 context-builder**（主 agent 直读 decisions.md + 必问决策点引用的上游章节）；L2/L3 派 context-builder。追踪/审查/重建帧的降级见 loop-skeleton「复杂度自评与降级档位·三档执行矩阵」。本阶段上游较多，派 **context-builder subagent**（fresh）读 `{topic_dir}/decisions.md`（本 topic 已确认决策）+ 相关长期文档（NFR.md/ADR/ARCHITECTURE.md）+ 上游 .md，输出「阶段工作摘要」（不可推翻决策清单 + 设计树入口 + 接口契约）注入主 agent context。**grilling 不得重新确认已 confirmed 决策**；每个 D 类决策拍板后按 Step 1.2 即时 append decisions.md。
 
 ```
 系统设计立场（根：核心计算是什么？）
@@ -133,6 +137,8 @@ Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 **[MANDATORY] 禁止在未完成 loop-skeleton 全流程（含 Step 6 审查 APPROVED）时声称完成。**
 
 - [ ] system-architecture.md 存在，frontmatter 含 `verdict: pass`
+- [ ] **`decisions.md` 已读**（Step 1.0 获取已确认决策）+ 本阶段 D 类决策（分层/状态机/seam/领域边界）已即时 append
+- [ ] **`changes/backfeed-round-{{N}}.md` 存在**（Step 6b 反哺检查真执行了；entries=0 也算，只要文件产出）
 - [ ] system-architecture.html 存在，分层图+状态机图正确渲染
 - [ ] `changes/tracing-round-{N}-{modeling|structure|evolution}.md` 存在（3 组并行追踪都执行了）
 - [ ] `changes/review-architecture.md` 存在且 verdict: APPROVED

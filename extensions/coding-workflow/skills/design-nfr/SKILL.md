@@ -26,6 +26,10 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 
 > **[状态追踪]** 开始时调 `design_status start_phase nfr` 标记阶段开始（会校验 issues 已 completed）。
 > **有 `design_status` tool 优先用 tool**：`design_status(action: start_phase, phase: nfr)`；**无 tool（Claude Code/Cursor/shell）用 CLI**：`design-status start-phase nfr`。CLI 完整用法见 loop-skeleton.md「CLI 完整用法」。
+>
+> **[按 loop-skeleton Step 1.0]** grilling 前先获取已确认决策：
+>
+> **[复杂度档位]** 先读 `_progress.md` 的 `complexity_tier`：**L1 档跳过 context-builder**（主 agent 直读 decisions.md + 必问决策点引用的上游章节）；L2/L3 派 context-builder。追踪/审查/重建帧的降级见 loop-skeleton「复杂度自评与降级档位·三档执行矩阵」。本阶段上游较多，派 **context-builder subagent**（fresh）读 `{topic_dir}/decisions.md`（本 topic 已确认决策）+ 相关长期文档（NFR.md/ADR/ARCHITECTURE.md）+ 上游 .md，输出「阶段工作摘要」（不可推翻决策清单 + 设计树入口 + 接口契约）注入主 agent context。**grilling 不得重新确认已 confirmed 决策**；每个 D 类决策拍板后按 Step 1.2 即时 append decisions.md。
 
 ```
 副作用分析（根：每个 issue 的已决策方案）
@@ -40,11 +44,24 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 不确定性高的副作用（并发死锁/缓存命中率）→ 标记为需⑤骨架验证，不纯靠脑力推演（见 `references/nfr-dimensions.md`）。
 初稿用 `references/deliverable-template.md`。
 
+**Step 1 末尾 — 机器检查前置自跑（零成本提速）：** 初稿写完后，主 agent 立即自跑 `python3 ${SKILL_DIR}/scripts/check_nfr.py {topic_dir}`，FAIL 当场修低级硬伤（缺章节/占位符/缓解项缺验收方式），不必等 Step 6。
+
 **Step 2（追踪）— 拆两部分：正向追踪 + 回灌指针重建器（反向覆盖）：**
 
 视角1（副作用覆盖性）+ 视角2（缓解可行性）是正向核查（像 ①⑤⑥，单 agent 串行够）。但视角3（回灌完整性）是**反向覆盖问题**——主 agent 声明「去 ③ 新 issue #7」时若漏建/写错编号，自己填表也查不出（同源自证），需 fresh context 他证。
 
 **① 正向追踪（按 issue 拆并行，每 issue 1 fresh subagent）：** 7 维度认知帧不正交（并发族内重叠、性能↔稳定性重叠），按维度族拆会产重叠 gap + 丢跨族 gap；**真正正交的拆轴是按 issue 拆**（N issue = N 个不同代码面 = 认知帧天然正交，与③ issues 并行同款）。**issue ≥ 3 时每 issue 派 1 fresh subagent**，同 subagent 内跑视角1（副作用覆盖性：该方案 7 维度全评？不适用有理由？）+ 视角2（缓解可行性：缓解可落地？残余可接受？）；**issue ≤ 2 时不划算，保持单 agent 串行**。每个 subagent 显式接收：对应 issue 的方案摘要 + 7 维度模板 + 验收方式四选一规则。跨 issue 重复登记的缓解项由**主 agent dedup**（合并去重后回灌）。各 subagent 产出合并为 `tracing-round-{N}.md`。
+
+**正向追踪 subagent Task prompt（issue ≥ 3 时每 issue 派 1 个 fresh subagent）：**
+
+```
+你是独立正向追踪 subagent。上下文与主 agent 隔离。只负责分配给你的 issue（{issue_id}: {方案摘要}）。
+**决策账本纪律：** decisions.md（作为 context 参数注入）里 status=confirmed 的决策是用户已拍板结论，已 confirmed 决策不得当 gap 重报；有下游新证据推翻须标 `[REVISIT of D-NNN]` + 附新证据走 Step 6b 反哺（D-不可逆须主 agent ask_user）。
+1. read 对应 issue 的方案摘要 + 7 维度模板（references/nfr-dimensions.md）+ 验收方式四选一规则
+2. 视角1（副作用覆盖性）：该方案 7 维度全评？不适用有理由？
+3. 视角2（缓解可行性）：缓解可落地？残余风险可接受？
+4. 产出的 gap 标 F/K/D，写入合并到 tracing-round-{N}.md
+```
 
 **② 回灌指针重建器（新增 1 fresh subagent，只做视角3，反向重建）：**
 
@@ -61,6 +78,7 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 
 ```
 你是独立回灌指针重建 subagent。上下文与主 agent 隔离。
+**决策账本纪律：** decisions.md（作为 context 参数注入）里 status=confirmed 的决策是用户已拍板结论，已 confirmed 决策不得当 gap 重报；有下游新证据推翻须标 `[REVISIT of D-NNN]` + 附新证据走 Step 6b 反哺（D-不可逆须主 agent ask_user）。
 1. read issues.md（③，真相源）—— 重建「issues.md 里真实存在哪些 issue（编号+P级+标题）」
 2. read non-functional-design.md 的「缓解项回灌登记」表
 3. 对每条「回灌去向」含 ③issue 的行，核对指向的 #N 是否真实存在于 issues.md：
@@ -88,6 +106,8 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 **[MANDATORY] 禁止在未完成 loop-skeleton 全流程（含 Step 6 审查 APPROVED）时声称完成。**
 
 - [ ] non-functional-design.md 存在，frontmatter 含 `verdict: pass`
+- [ ] **`decisions.md` 已读**（Step 1.0）+ 本阶段 D 类决策（取舍原则例外/残余风险接受）已即时 append
+- [ ] **`changes/backfeed-round-{{N}}.md` 存在**（Step 6b 反哺检查真执行了；entries=0 也算，只要文件产出）
 - [ ] non-functional-design.html 存在，风险矩阵热力图正确渲染（✅⚠️❌着色）
 - [ ] `changes/tracing-round-{N}.md` 存在（正向追踪）
 - [ ] **`changes/tracing-round-{N}-backfeed.md` 存在（回灌指针重建，含 PHANTOM/MISMATCH diff）**

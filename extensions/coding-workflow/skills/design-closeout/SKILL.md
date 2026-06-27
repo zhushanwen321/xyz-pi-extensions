@@ -54,7 +54,7 @@ closeout 沉淀**设计产出**（信息归位），retrospect 回顾**执行过
 
 ### Step 1. 扫描 + 代码一致性验证（防腐烂闸门，本 skill 核心价值）
 
-**1a. 扫描 topic 产出：** 列 `{topic}/` 下 6 个 deliverable + `code-skeleton/` + `changes/`。
+**1a. 扫描 topic 产出：** 列 `{topic}/` 下 6 个 deliverable + `code-skeleton/` + `changes/` + **`decisions.md`（决策账本，Step 2 抽 ADR 的权威源）**。
 
 **1b. [核心] 代码一致性验证——只沉淀经代码验证的约束：**
 
@@ -97,6 +97,7 @@ closeout 沉淀**设计产出**（信息归位），retrospect 回顾**执行过
 **3a. 清理过程产物：**
 - 删 `{topic}/changes/` 全部（tracing/review/backfeed/machine-check/consistency-final 全是过程产物）
 - 删 `{topic}/*.html`（design-visual-explainer 可重新生成，归档态不需可视化）
+- **`decisions.md` 保留**（不清理）——它是本 topic 的决策审计链（append-only，含 revisit 记录）。Step 2 抽 ADR 只取 status=confirmed 的 D-不可逆决策，但 decisions.md 的完整历史（含 D-可逆决策、revisit 链）是归档态有价值的事后追溯材料，随 topic 保留
 
 **3b. 归档标记：**
 - 写 `{topic}/ARCHIVED.md`：一句话主题说明 + 沉淀去向清单（哪条进了哪个文件）
