@@ -23,7 +23,7 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 
 import { loadConfig, validateSource } from "./config.ts";
-import { collectSources } from "./discovery.ts";
+import { collectSources, isInHomeTree } from "./discovery.ts";
 import {
   buildSuffix,
   dedupAndSort,
@@ -103,7 +103,7 @@ export default function systemPromptLoader(pi: ExtensionAPI): void {
 /**
  * walk 退化判定（CA-13/AC-14）：validSources 含 walk-files/walk-dirs 且 cwd 不在 home 子树。
  * 退化时 walkDirs 只扫 cwd 一级，若零收集需 notify（spec AC-14 不静默零加载无提示）。
- * inHomeTree 逻辑与 discovery.walkDirs 一致（cwd===home || cwd.startsWith(home+sep)）。 [叶子] 纯判断。
+ * inHomeTree 复用 discovery.isInHomeTree（保证与 walkDirs 判定一致，含 home===根 特判）。 [叶子] 纯判断。
  */
 function isWalkDegraded(
   sources: ConfigSource[],
@@ -114,8 +114,7 @@ function isWalkDegraded(
     (s) => s.kind === "walk-files" || s.kind === "walk-dirs",
   );
   if (!hasWalk) return false;
-  const inHomeTree = cwd === home || cwd.startsWith(home + path.sep);
-  return !inHomeTree;
+  return !isInHomeTree(cwd, home);
 }
 
 /**

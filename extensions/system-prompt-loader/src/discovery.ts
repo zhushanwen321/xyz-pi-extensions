@@ -84,9 +84,18 @@ function collectGlob(source: { kind: "glob"; patterns: string[] }, cwd: string, 
   return rules;
 }
 
+/** cwd 是否在 home 子树内（cwd===home 或为其后代）。特判 home===根（"/"+sep="//" 误判）。 [叶子] 纯判断。 */
+export function isInHomeTree(cwd: string, home: string): boolean {
+  if (cwd === home) return true;
+  const sep = path.sep;
+  // home 已以 sep 结尾（如根 "/"）时勿再拼接，否则 home+sep="//" 永不匹配
+  const prefix = home.endsWith(sep) ? home : home + sep;
+  return cwd.startsWith(prefix);
+}
+
 /** cwd→home 目录列表（root→CWD 顺序，AC-5.2/BC-2）。cwd 不在 home 子树→退化只返回 [cwd]（AC-5.3/FR-2.5）。 */
 function walkDirs(cwd: string, home: string): string[] {
-  if (cwd !== home && !cwd.startsWith(home + path.sep)) return [cwd]; // 退化：只扫 cwd 一级
+  if (!isInHomeTree(cwd, home)) return [cwd]; // 退化：只扫 cwd 一级
   const dirs: string[] = [];
   let current: string = cwd;
   while (current.startsWith(home) && current !== path.dirname(current)) {

@@ -221,6 +221,37 @@ describe("T4.3 / AC-4.3 parseFrontmatter 空 globs=无条件（BC-16）", () => 
   });
 });
 
+describe("parseFrontmatter 换行容错（CRLF + 无尾换行）", () => {
+  // parseFrontmatter 正则显式支持 \r?\n；覆盖 Windows CRLF 与无尾换行边界，
+  // 防止回归（正则为 CRLF 编写但缺测试守护）。
+
+  it("CRLF 换行的 inline frontmatter 与 LF 路径解析一致", () => {
+    const parsed = parseFrontmatter('---\r\npaths: ["**/test/**", "**/spec/**"]\r\n---\r\nbody');
+    expect(parsed.globs).toEqual(["**/test/**", "**/spec/**"]);
+    expect(parsed.content).toBe("body");
+  });
+
+  it("CRLF 换行的 block 数组 frontmatter 正确解析", () => {
+    const parsed = parseFrontmatter("---\r\npaths:\r\n  - a/b\r\n  - c/d\r\n---\r\nbody");
+    expect(parsed.globs).toEqual(["a/b", "c/d"]);
+    expect(parsed.content).toBe("body");
+  });
+
+  it("闭合 --- 后无尾换行仍正确解析（globs 不丢失）", () => {
+    // 边界：规则文件存盘无末尾换行时，闭合 --- 后无 \n。
+    // 正则放宽为 ---\r?\n? 后此情形不再误判为无 frontmatter。
+    const parsed = parseFrontmatter('---\npaths: ["*.ts"]\n---');
+    expect(parsed.globs).toEqual(["*.ts"]);
+    expect(parsed.content).toBe("");
+  });
+
+  it("闭合 --- 后无尾换行 + 有正文", () => {
+    // 闭合 --- 紧跟正文（无换行分隔）——content 含正文首行
+    const parsed = parseFrontmatter('---\npaths: ["*.ts"]\n---body here');
+    expect(parsed.globs).toEqual(["*.ts"]);
+  });
+});
+
 describe("T4.4 / AC-4.4 空内容（BC-11，engine 层边界）", () => {
   // 注：真实"空内容跳过"过滤在 discovery 的 loadSingleRuleFile/loadRulesFromDir
   // （!parsed.content → null/continue）。engine 层验 parseFrontmatter 对空内容

@@ -122,6 +122,11 @@
       "name": "@zhushanwen/pi-ask-user",
       "directory": "extensions/ask-user",
       "dependsOn": []
+    },
+    {
+      "name": "@zhushanwen/pi-system-prompt-loader",
+      "directory": "extensions/system-prompt-loader",
+      "dependsOn": []
     }
   ]
 }

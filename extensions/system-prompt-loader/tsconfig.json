@@ -3,7 +3,7 @@
   "include": [
     "src/**/*.ts",
     "index.ts",
-    "tests/**/*.test.ts",
+    "tests/**/*.ts",
     "vitest.config.ts"
   ],
   "exclude": ["node_modules"]

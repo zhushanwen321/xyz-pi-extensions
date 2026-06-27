@@ -16,7 +16,7 @@ import type { RuleFile, SourceMeta } from "./types.ts";
 export function parseFrontmatter(
   raw: string,
 ): { content: string; globs?: string[] } {
-  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
+  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!match) {
     return { content: raw.trim() };
   }

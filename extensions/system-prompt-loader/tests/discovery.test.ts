@@ -4,7 +4,7 @@ import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { collectSources } from "../src/discovery.ts";
+import { collectSources, isInHomeTree } from "../src/discovery.ts";
 
 /**
  * W4 discovery.ts 验证测试（覆盖 UC-1 discovery 链路：4 收集器 + findMarkdownFiles + expandPath）。
@@ -466,5 +466,45 @@ describe("T1.18 / AC-5.8 + BC-15 显示路径按 kind 构造", () => {
     expect(explicitRules[0].path).toBe("shared.md");
     expect(globRules[0].path).toBe("shared.md");
     // 但若 explicit 用 ~/ 前缀，分化立现（见上 explicit 测试）
+  });
+});
+
+describe("边界：collectSources 空入参 + cwd===home 单层遍历", () => {
+  let fx: ReturnType<typeof useFixture>;
+  beforeEach(() => {
+    fx = useFixture();
+  });
+  afterEach(() => fx.cleanup());
+
+  it("collectSources([], cwd, home) → 空数组（导出函数空入参边界）", () => {
+    expect(collectSources([], fx.cwd, fx.home)).toEqual([]);
+  });
+
+  it("cwd===home：walk 单层遍历不退化、不向上越界", () => {
+    // cwd 恰等于 home：isInHomeTree 真，walkDirs 遍历 [home] 单级，
+    // 不退化（不像 T1.6 只扫 cwd 一级），也不向上越界到 home 之外。
+    fx.writeAt(fx.home, ".cursorules", "at home root");
+    // 不在 home 之外放任何文件，确保不误收
+    const rules = collectSources(
+      [{ kind: "walk-files", filenames: [".cursorules"] }],
+      fx.home, // cwd === home
+      fx.home,
+    );
+    expect(rules).toHaveLength(1);
+    expect(rules[0].content).toBe("at home root");
+  });
+});
+
+describe("isInHomeTree home===\"/\" 边界（S1 回归保护）", () => {
+  it("home=\"/\" 时任意绝对路径都在 home 子树内（home+sep=\"//\" 误判已修）", () => {
+    expect(isInHomeTree("/Users/x", "/")).toBe(true);
+    expect(isInHomeTree("/Users/x/proj", "/")).toBe(true);
+    expect(isInHomeTree("/", "/")).toBe(true); // cwd===home
+  });
+
+  it("home=\"/h\" 正常子树判定不受影响", () => {
+    expect(isInHomeTree("/h/proj", "/h")).toBe(true);
+    expect(isInHomeTree("/h", "/h")).toBe(true);
+    expect(isInHomeTree("/other", "/h")).toBe(false);
   });
 });

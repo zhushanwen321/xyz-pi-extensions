@@ -5,13 +5,16 @@ import * as path from "node:path";
 import type {
   BeforeAgentStartEvent,
   BeforeAgentStartEventResult,
-  ExtensionAPI,
   ExtensionContext,
   SessionStartEvent,
 } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import systemPromptLoader from "../src/index.ts";
+import {
+  mockExtensionApi,
+  mockExtensionContext,
+} from "./helpers/mock-extension-api.ts";
 
 /**
  * W5 src/index.ts 验证测试（覆盖 UC-1 index 编排 + UC-2 注入时序）。
@@ -76,22 +79,22 @@ function useExtensionFixture() {
   /** 捕获的 handler（精确事件类型，避免 as never 抹类型）。 */
   const sessionStartHandler = vi.fn();
   const beforeAgentStartHandler = vi.fn();
-  // mock pi：仅实现 .on（捕获注册），用 Pick 子集单次断言（命名类型，非 unknown 双断言）。
-  const pi = {
+  // mock pi：mockExtensionApi（Proxy 结构兼容 ExtensionAPI，免双重断言）。
+  // 仅 override .on 捕获注册，其余 30+ 方法 Proxy 短路为 no-op。
+  const pi = mockExtensionApi({
     on: (event: string, handler: (event: never, ctx: ExtensionContext) => unknown) => {
       if (event === "session_start") sessionStartHandler.mockImplementation(handler);
       if (event === "before_agent_start") beforeAgentStartHandler.mockImplementation(handler);
     },
-  };
-  // 实例化扩展（注册 handler）——ExtensionAPI 有 30+ 方法，测试只用到 .on；
-  // 单次 as 命名类型断言（taste/no-unsafe-cast 仅拦 as never/any/unknown as，不拦单次命名断言）。
-  systemPromptLoader(pi as unknown as ExtensionAPI);
+  });
+  // 实例化扩展（注册 handler）
+  systemPromptLoader(pi);
 
   /** mock ctx：仅 ui.notify + cwd（ExtensionContext 必填字段）。notify 委托到可替换的 notifyImpl。 */
-  const ctx = {
-    ui: { notify: (msg: string, type?: "info" | "warning" | "error") => notifyImpl(msg, type) },
-    cwd: home,
-  } as unknown as ExtensionContext;
+  const ctx = mockExtensionContext(
+    { notify: (msg: string, type?: "info" | "warning" | "error") => notifyImpl(msg, type) },
+    home,
+  );
 
   const triggerSessionStart = (reason: SessionStartEvent["reason"] = "startup") => {
     sessionStartHandler({ type: "session_start", reason }, ctx);
@@ -130,6 +133,17 @@ function useExtensionFixture() {
   const setNotifyImpl = (fn: (msg: string, type?: "info" | "warning" | "error") => void) => {
     notifyImpl = fn;
   };
+  /** 以指定 cwd 触发 session_start（用于 walk-退化测试：cwd 在 home 之外）。 */
+  const triggerSessionStartAt = (
+    cwd: string,
+    reason: SessionStartEvent["reason"] = "startup",
+  ) => {
+    const ctxAt = mockExtensionContext(
+      { notify: (msg: string, type?: "info" | "warning" | "error") => notifyImpl(msg, type) },
+      cwd,
+    );
+    sessionStartHandler({ type: "session_start", reason }, ctxAt);
+  };
 
   return {
     home,
@@ -137,6 +151,7 @@ function useExtensionFixture() {
     pi,
     ctx,
     triggerSessionStart,
+    triggerSessionStartAt,
     triggerBeforeAgentStart,
     writeConfig,
     writeRawConfig,
@@ -222,6 +237,38 @@ describe("T1.15 / AC-6.4 + BC-14 notify 文案", () => {
     // 不写 config.json → loadConfig ENOENT → 空配置
     fx.triggerSessionStart();
     expect(fx.notifyCalls).toHaveLength(0);
+  });
+});
+
+describe("walk 退化零加载提示（CA-13/AC-14）", () => {
+  let fx: ReturnType<typeof useExtensionFixture>;
+  beforeEach(() => {
+    fx = useExtensionFixture();
+  });
+  afterEach(() => fx.cleanup());
+
+  it("walk 源 + cwd 在 home 外 + 零收集 → 触发 walk-退化 info notify", () => {
+    // 配置含 walk-files 源，但触发时 cwd 设为 home 之外的临时目录（无命中文件）
+    fx.writeConfig([{ kind: "walk-files", filenames: [".cursorules"] }]);
+    const outsideCwd = fs.mkdtempSync(path.join(os.tmpdir(), "spl-walk-degrade-"));
+    try {
+      fx.triggerSessionStartAt(outsideCwd);
+      const degraded = fx.notifyCalls.find(
+        (c) => c.type === "info" && c.msg.includes("walk 退化"),
+      );
+      expect(degraded).toBeDefined();
+      expect(degraded?.msg).toContain("cwd 不在 home 子树");
+    } finally {
+      fs.rmSync(outsideCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("walk 源 + cwd 在 home 子树内 + 零收集 → 不触发 walk-退化 notify", () => {
+    // cwd 在 home 子树（fx.cwd=home），即便零收集也不退化提示
+    fx.writeConfig([{ kind: "walk-files", filenames: [".nonexistent"] }]);
+    fx.triggerSessionStart(); // cwd=home，在子树内
+    const degraded = fx.notifyCalls.find((c) => c.msg.includes("walk 退化"));
+    expect(degraded).toBeUndefined();
   });
 });
 
