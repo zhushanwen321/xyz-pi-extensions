@@ -221,14 +221,15 @@ export class AskUserComponent implements Component {
 			return;
 		}
 
-		// Tab / Shift+Tab 切换 tab（多问题，options 模式）。←/→ 故意不切 tab——
-		// 把左右键留给 Submit tab 上的 Submit/Cancel 焦点切换，避免在问题列表上意外跳走。
-		if (!this.isSingle && matchesKey(data, "tab")) {
-			this.gotoTab((this.activeTab + 1) % this.totalTabs);
+		// ← / → 切换问题 tab（多问题，options 模式）：末尾 → 进入 Submit tab，
+		// 首个 ← 在问题范围内环绕（停在首个问题）。Tab/Shift+Tab 不在问题 tab 切 tab——
+		// 留给 Submit tab 上的 Submit/Cancel 焦点切换。
+		if (!this.isSingle && matchesKey(data, "right")) {
+			this.gotoTab(Math.min(this.activeTab + 1, this.questions.length));
 			return;
 		}
-		if (!this.isSingle && matchesKey(data, "shift+tab")) {
-			this.gotoTab((this.activeTab - 1 + this.totalTabs) % this.totalTabs);
+		if (!this.isSingle && matchesKey(data, "left")) {
+			this.gotoTab(Math.max(this.activeTab - 1, 0));
 			return;
 		}
 
@@ -288,11 +289,9 @@ export class AskUserComponent implements Component {
 	 * Submit tab 输入路由：
 	 * - ← / → → 切换 submitTabFocus（Submit ↔ Cancel 视觉高亮）
 	 * - Enter → 触发当前 focus 项：Submit=allConfirmed 才提交；Cancel=直接取消
-	 * - Tab / → → 环绕到首个问题
-	 * - Esc / Shift+Tab → 回退到最后一个问题
+	 * - Tab → 环绕到首个问题；Shift+Tab → 回退到最后一个问题
 	 *
-	 * 注意：Submit tab 上 ←/→ 不再切回问题区（与问题 tab 上的"←/→ 不切 tab"对称，
-	 * 避免在 Submit 视图内意外跳走）。
+	 * 问题 tab 上用 ← / → 切换问题（末尾 → 进入本 tab），与这里的 ←/→ 焦点切换不冲突。
 	 */
 	private handleSubmitTabInput(data: string): void {
 		// ← / → 切换 focus（Submit ↔ Cancel）。Tab 单独处理（→ 行为）

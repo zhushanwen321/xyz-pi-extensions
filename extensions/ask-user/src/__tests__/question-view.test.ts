@@ -138,7 +138,7 @@ describe("renderQuestionView — split pane", () => {
 
 // ── Q-15 ~ Q-17: Other 编辑器模式 ───────────────────────
 describe("renderQuestionView — Other editor mode", () => {
-	it("Q-15: freeform mode renders Other row in-place with draft + cursor", () => {
+	it("Q-15: freeform mode renders Other row in-place with draft + cursor + number prefix", () => {
 		const lines = renderQuestionView(
 			singleQ,
 			makeState({ mode: "freeform", cursorIndex: 2 }),
@@ -153,6 +153,32 @@ describe("renderQuestionView — Other editor mode", () => {
 		expect(t).toContain("█");
 		// 不再独立 "Your answer" 提示行
 		expect(t).not.toContain("Your answer");
+		// 需求4：Other 在 freeform 态也有编号前缀（与其他选项一致）。
+		// singleQ 有 2 个选项 → Other 是第 3 项，lead 应含 "3. "
+		expect(t).toContain("3. ");
+	});
+
+	it("Q-15-NUM: multi-select freeform Other row shows [ ] + number prefix", () => {
+		// Auth(1), Search(2), Other(3)，多选 freeform 应渲染 "> [ ] 3. <input>█"
+		const multiQ: Question = {
+			question: "Which features?",
+			multiSelect: true,
+			options: [{ label: "Auth" }, { label: "Search" }],
+		};
+		const lines = renderQuestionView(
+			multiQ,
+			makeState({ mode: "freeform", cursorIndex: 2 }),
+			stubTheme,
+			60,
+			true,
+			"custom",
+		);
+		const t = text(lines);
+		// 多选 box [ ] + 编号 3. 都在编辑行上
+		expect(t).toContain("[ ]");
+		expect(t).toContain("3. ");
+		expect(t).toContain("custom");
+		expect(t).toContain("█");
 	});
 
 	it("Q-16: Other with saved free-text shows checkmark + preview", () => {
@@ -206,6 +232,31 @@ describe("renderQuestionView — Other editor mode", () => {
 		for (const l of lines) {
 			if (l.includes("x")) expect(l.length).toBeLessThanOrEqual(width);
 		}
+	});
+
+	it("Q-28-WIDE: freeform 模式在宽终端下用全宽渲染（不被分屏左列压窄）", () => {
+		// 回归：freeform/comment 模式忽略分屏，编辑器用全 width。
+		// 修复前：宽终端走 split.left(≈40)，Other 输入被压在左半屏换行频繁。
+		const width = 100;
+		// getSplitPaneWidths(100) 非 null（宽终端会进分屏分支），但 freeform 应绕过它
+		expect(getSplitPaneWidths(width)).not.toBeNull();
+		// 单选 lead visLen=5 → avail = width - 5 = 95。用 60 字符（< 95）应单行装下。
+		// 修复前若用 split.left≈40，avail≈35 → 60 字符会换 2 行。
+		const input = "a".repeat(60);
+		const lines = renderQuestionView(
+			singleQ,
+			makeState({ mode: "freeform", cursorIndex: 2 }),
+			stubTheme,
+			width,
+			true,
+			input,
+		);
+		// 用 █ 定位编辑器行（help 行不含 █），排除 “submit” 含 a 的干扰
+		const editorLines = lines.filter((l) => l.includes("█"));
+		expect(editorLines.length).toBe(1);
+		// 全部 60 个 a 都在这一行（未被换行拆分）
+		const aCount = editorLines[0]!.split("").filter((c) => c === "a").length;
+		expect(aCount).toBe(60);
 	});
 
 	it("Q-29: freeform 输入超 5 行时截断到 5 行并加省略号", () => {
