@@ -86,6 +86,21 @@ export function formatElapsedSeconds(seconds: number): string {
 }
 
 /**
+ * 从完整 record id 提取短编号用于列表展示.
+ *
+ * id 格式:
+ *   - sync:       `run-${seq}`       (如 run-1) → 原样
+ *   - background: `bg-${seq}-${ts}`  (如 bg-1-1719500000000) → 去掉时间戳得 bg-1
+ *
+ * 取前两段(`prefix-seq`)即可覆盖两种格式:sync 原样,background 丢弃冗长时间戳.
+ * seq 进程内递增唯一,作为「编号」足够区分;完整 id(含时间戳)在右列预览给出供精确引用.
+ */
+const SHORT_ID_SEGMENTS = 2;
+export function shortId(id: string): string {
+  return id.split("-").slice(0, SHORT_ID_SEGMENTS).join("-");
+}
+
+/**
  * 把文本 pad 到指定**可见**宽度(grapheme/emoji/CJK 安全).
  *
  * 用 visibleWidth 而非 `.length`——避免 ANSI 转义、emoji、宽字符(CJK 占 2 列)
