@@ -19,6 +19,7 @@ import {
 	type GapClassification,
 	type GapStatus,
 	type HistoryEntry,
+	INIT_TOPIC_SENTINEL,
 	isAllowedTransition,
 	isStepAdvance,
 	type LoopStep,
@@ -225,8 +226,14 @@ export function logGap(
 
 const STATUS_FILENAME = ".design-status.json";
 
-/** topic 目录路径 = {cwd}/.xyz-harness/{topic}/ */
+/**
+ * topic 目录路径。init 哨兵 → .xyz-harness/（项目级，状态文件直接放其下）；
+ * 否则 → .xyz-harness/{topic}/。
+ */
 export function topicDirFor(cwd: string, topic: string): string {
+	if (topic === INIT_TOPIC_SENTINEL) {
+		return join(cwd, ".xyz-harness");
+	}
 	return join(cwd, ".xyz-harness", topic);
 }
 
@@ -234,7 +241,8 @@ export function statusPath(cwd: string, topic: string): string {
 	return join(topicDirFor(cwd, topic), STATUS_FILENAME);
 }
 
-export function loadStatus(cwd: string, topic: string): DesignStatus {
+/** 读单个状态文件（不做 merge）。文件缺失或损坏返回该 topic 的初始状态。 */
+function loadRaw(cwd: string, topic: string): DesignStatus {
 	const path = statusPath(cwd, topic);
 	if (!existsSync(path)) {
 		return createInitialStatus(topic);
@@ -256,6 +264,26 @@ export function loadStatus(cwd: string, topic: string): DesignStatus {
 	}
 }
 
+/**
+ * 加载 topic 状态。init 是项目级一次性阶段，状态始终从项目级文件（哨兵 topic）派生，
+ * 不绑 topic——故非哨兵 topic 加载时，用项目级 init 状态覆盖 topic 文件里的 init 快照。
+ * 这样 clarity 的 start_phase 前置检查（init 是否 completed）能看到项目级真实状态。
+ */
+export function loadStatus(cwd: string, topic: string): DesignStatus {
+	const topicStatus = loadRaw(cwd, topic);
+	if (topic === INIT_TOPIC_SENTINEL) {
+		return topicStatus;
+	}
+	const initStatus = loadRaw(cwd, INIT_TOPIC_SENTINEL);
+	return {
+		...topicStatus,
+		phases: {
+			...topicStatus.phases,
+			init: initStatus.phases.init,
+		},
+	};
+}
+
 export function saveStatus(cwd: string, status: DesignStatus): void {
 	const dir = topicDirFor(cwd, status.topic);
 	if (!existsSync(dir)) {
@@ -269,11 +297,26 @@ export function saveStatus(cwd: string, status: DesignStatus): void {
 // ── topic 解析（tool.ts / cli.ts 共用） ───────────────
 
 /**
- * 推断当前 topic。扫 {cwd}/.xyz-harness/ 下的子目录取最近修改的。
- * 返回 { topic, topicDir }，无 .xyz-harness 或无子目录时返回 null。
+ * 推断当前 topic。
+ * - forPhase=init：init 是项目级，始终返回哨兵上下文（.xyz-harness/，必要时创建）
+ * - 否则：扫 .xyz-harness/ 子目录取最近修改的；无子目录 → null（非 init mutate 不落到哨兵，
+ *   避免把 clarity 等阶段状态误写进项目级文件；只读 get_status 由调用方回退哨兵展示 init）
+ * - 无 .xyz-harness 且非 init → null
  */
-export function resolveTopic(cwd: string): { topic: string; topicDir: string } | null {
+export function resolveTopic(
+	cwd: string,
+	opts?: { forPhase?: Phase },
+): { topic: string; topicDir: string } | null {
 	const harnessDir = join(cwd, ".xyz-harness");
+
+	// init 是项目级：始终用哨兵，确保 .xyz-harness 存在（init 本就是建项目基建）
+	if (opts?.forPhase === "init") {
+		if (!existsSync(harnessDir)) {
+			mkdirSync(harnessDir, { recursive: true });
+		}
+		return { topic: INIT_TOPIC_SENTINEL, topicDir: harnessDir };
+	}
+
 	if (!existsSync(harnessDir)) return null;
 	const entries = readdirSync(harnessDir, { withFileTypes: true })
 		.filter((e) => e.isDirectory())
@@ -283,7 +326,9 @@ export function resolveTopic(cwd: string): { topic: string; topicDir: string } |
 			return { name: e.name, mtime: stat.mtimeMs };
 		})
 		.sort((a, b) => b.mtime - a.mtime);
-	if (entries.length === 0) return null;
-	const topic = entries[0].name;
-	return { topic, topicDir: join(harnessDir, topic) };
+	if (entries.length > 0) {
+		const topic = entries[0].name;
+		return { topic, topicDir: join(harnessDir, topic) };
+	}
+	return null;
 }

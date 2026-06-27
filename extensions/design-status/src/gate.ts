@@ -87,6 +87,19 @@ function checkMachineCheck(topicDir: string, slug: string): string[] {
 	return [];
 }
 
+/** ⑥execution Step 6c 总闸门：changes/consistency-final.md verdict:CONSISTENT。 */
+function checkConsistencyFinal(topicDir: string): string[] {
+	const path = join(topicDir, "changes", "consistency-final.md");
+	if (!existsSync(path)) {
+		return ["changes/consistency-final.md 不存在（⑥Step 6c 总闸门未跑）"];
+	}
+	const fm = parseFrontmatter(path);
+	if (fm.verdict !== "CONSISTENT") {
+		return [`consistency-final.md verdict 非 CONSISTENT（实际: '${fm.verdict ?? "(无)"}'）—— ⑥Step 6c 未通过，不可交接编码`];
+	}
+	return [];
+}
+
 /** init 软 gate：AGENTS.md + CONTEXT.md 在项目根（cwd）或 topicDir 就位。 */
 function checkInitGate(cwd: string, topicDir: string): string[] {
 	const missing: string[] = [];
@@ -129,6 +142,9 @@ export function checkPhaseGate(
 	}
 	if (gate.machineCheckSlug) {
 		missing.push(...checkMachineCheck(topicDir, gate.machineCheckSlug));
+	}
+	if (gate.consistencyCheck) {
+		missing.push(...checkConsistencyFinal(topicDir));
 	}
 
 	return { ok: missing.length === 0, missing };

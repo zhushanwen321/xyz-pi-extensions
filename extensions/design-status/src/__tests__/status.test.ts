@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +9,7 @@ import type { DesignStatus } from "../model.ts";
 import {
 	createInitialStatus,
 	currentPhase,
+	INIT_TOPIC_SENTINEL,
 	isAllowedTransition,
 	isStepAdvance,
 	PHASE_ORDER,
@@ -17,9 +18,13 @@ import {
 import {
 	advanceStep,
 	completePhase,
+	loadStatus,
 	logGap,
+	resolveTopic,
 	reviewPhase,
+	saveStatus,
 	startPhase,
+	statusPath,
 } from "../store.ts";
 
 // ── 测试夹具 ──────────────────────────────────────────
@@ -376,5 +381,100 @@ describe("audit history", () => {
 			expect(h.phase).toBe("init");
 			expect(h.action).toBeTruthy();
 		}
+	});
+});
+
+// ── store.ts: init 项目级状态特例（哨兵 topic）────────
+
+describe("store: init project-level state (sentinel topic)", () => {
+	it("statusPath routes sentinel topic to project-level file", () => {
+		const cwd = "/proj";
+		expect(statusPath(cwd, INIT_TOPIC_SENTINEL)).toBe(
+			join(cwd, ".xyz-harness", ".design-status.json"),
+		);
+		expect(statusPath(cwd, "my-topic")).toBe(
+			join(cwd, ".xyz-harness", "my-topic", ".design-status.json"),
+		);
+	});
+
+	it("resolveTopic creates .xyz-harness and returns sentinel for init phase", () => {
+		const cwd = mkdtempSync(join(tmpdir(), "ds-init-"));
+		expect(existsSync(join(cwd, ".xyz-harness"))).toBe(false);
+		expect(resolveTopic(cwd, { forPhase: "init" })).toEqual({
+			topic: INIT_TOPIC_SENTINEL,
+			topicDir: join(cwd, ".xyz-harness"),
+		});
+		// .xyz-harness 被自动创建（init 本就是建项目基建）
+		expect(existsSync(join(cwd, ".xyz-harness"))).toBe(true);
+	});
+
+	it("resolveTopic returns sentinel for init even with no topic subdir", () => {
+		const cwd = mkdtempSync(join(tmpdir(), "ds-init2-"));
+		mkdirSync(join(cwd, ".xyz-harness"), { recursive: true });
+		expect(resolveTopic(cwd, { forPhase: "init" })).toEqual({
+			topic: INIT_TOPIC_SENTINEL,
+			topicDir: join(cwd, ".xyz-harness"),
+		});
+	});
+
+	it("resolveTopic returns null for non-init when no topic + no project init state", () => {
+		const cwd = mkdtempSync(join(tmpdir(), "ds-init3-"));
+		mkdirSync(join(cwd, ".xyz-harness"), { recursive: true });
+		expect(resolveTopic(cwd)).toBeNull();
+		expect(resolveTopic(cwd, { forPhase: "clarity" })).toBeNull();
+	});
+
+	it("resolveTopic returns null for non-init even when project init state exists (no topic subdir)", () => {
+		const cwd = mkdtempSync(join(tmpdir(), "ds-init4-"));
+		const harnessDir = join(cwd, ".xyz-harness");
+		mkdirSync(harnessDir, { recursive: true });
+		writeFileSync(join(cwd, "AGENTS.md"), "# a");
+		writeFileSync(join(cwd, "CONTEXT.md"), "# c");
+		// init completed → 写项目级状态文件
+		const done = completePhase(
+			reviewPhase(startPhase(createInitialStatus(INIT_TOPIC_SENTINEL), "init").status, "init").status,
+			"init",
+			harnessDir,
+			cwd,
+		).status;
+		saveStatus(cwd, done);
+		// 非 init 查询无 topic 子目录 → null（不会误落哨兵把 clarity 状态写进项目级文件）
+		expect(resolveTopic(cwd)).toBeNull();
+		expect(resolveTopic(cwd, { forPhase: "clarity" })).toBeNull();
+	});
+
+	it("end-to-end: init completes at project level, clarity sees it via loadStatus merge", () => {
+		const cwd = mkdtempSync(join(tmpdir(), "ds-e2e-"));
+		writeFileSync(join(cwd, "AGENTS.md"), "# a");
+		writeFileSync(join(cwd, "CONTEXT.md"), "# c");
+
+		// 1. init 在无 topic 时 start → review → complete（全走项目级哨兵）
+		const initCtx = resolveTopic(cwd, { forPhase: "init" })!;
+		expect(initCtx.topic).toBe(INIT_TOPIC_SENTINEL);
+		let status = loadStatus(cwd, initCtx.topic);
+		status = startPhase(status, "init").status;
+		status = reviewPhase(status, "init").status;
+		const done = completePhase(status, "init", initCtx.topicDir, cwd);
+		expect(done.ok).toBe(true);
+		saveStatus(cwd, done.status);
+		// 项目级状态文件就位
+		expect(existsSync(join(cwd, ".xyz-harness", ".design-status.json"))).toBe(true);
+
+		// 1.5 选 topic 前，clarity 无 topic → resolveTopic 拒绝（不会误落哨兵）
+		expect(resolveTopic(cwd, { forPhase: "clarity" })).toBeNull();
+
+		// 2. clarity 选 topic（建 topic 目录）
+		const topic = "2026-06-feature";
+		mkdirSync(join(cwd, ".xyz-harness", topic, "changes"), { recursive: true });
+
+		// 3. loadStatus merge：topic 状态看到项目级 init completed
+		const clarityStatus = loadStatus(cwd, topic);
+		expect(clarityStatus.phases.init.status).toBe("completed");
+		expect(clarityStatus.topic).toBe(topic); // topic 字段仍是真实 topic
+
+		// 4. start_phase clarity 前置检查通过（init 已 completed）
+		const r = startPhase(clarityStatus, "clarity");
+		expect(r.ok).toBe(true);
+		expect(r.status.phases.clarity.status).toBe("in_progress");
 	});
 });

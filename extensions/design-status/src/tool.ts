@@ -11,6 +11,8 @@ import { Text } from "@mariozechner/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 
 import { checkPhaseGate } from "./gate.ts";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import {
 	type GapClassification,
 	type GapStatus,
@@ -42,8 +44,8 @@ const DesignStatusParams = Type.Object({
 		}),
 	),
 	step: Type.Optional(
-		StringEnum(["1", "2", "3", "4", "5", "6", "6b"] as const, {
-			description: "Loop step (for advance action): 1=交互初稿 2=追踪 3=gap分流 4=收敛 5=定稿 6=审查 6b=反哺",
+		StringEnum(["1", "2", "3", "4", "5", "6", "6b", "6c"] as const, {
+			description: "Loop step (for advance action): 1=交互初稿 2=追踪 3=gap分流 4=收敛 5=定稿 6=审查 6b=反哺 6c=仅⑥一致性终检",
 		}),
 	),
 	gap_id: Type.Optional(Type.String({ description: "Gap ID (for log_gap action)" })),
@@ -57,6 +59,7 @@ const DesignStatusParams = Type.Object({
 		StringEnum(["open", "resolved"] as const, { description: "Gap status (for log_gap action)" }),
 	),
 	note: Type.Optional(Type.String({ description: "Optional note for advance/complete actions" })),
+	topic: Type.Optional(Type.String({ description: "显式绑定 topic slug（多 topic 并行操作时锁住，不依赖 mtime 自动选择）。省略则自动检测最近修改的 topic" })),
 });
 
 type Params = Static<typeof DesignStatusParams>;
@@ -70,17 +73,28 @@ function executeAction(
 	params: Params,
 	ctx: ExtensionContext,
 ): { content: Array<{ type: "text"; text: string }>; error?: boolean } {
-	const resolved = resolveTopic(ctx.cwd);
+	const phase = params.phase as Phase | undefined;
+	// 显式 topic 优先（多 topic 并行时锁住）；否则带 phase 路由，无 phase 回退哨兵展示项目级 init。
+	let resolved: { topic: string; topicDir: string } | null;
+	if (params.topic) {
+		const topicDir = join(ctx.cwd, ".xyz-harness", params.topic);
+		if (!existsSync(topicDir)) {
+			return { content: [{ type: "text", text: `Error: topic '${params.topic}' 不存在：无 ${topicDir} 目录` }], error: true };
+		}
+		resolved = { topic: params.topic, topicDir };
+	} else {
+		resolved = phase
+			? resolveTopic(ctx.cwd, { forPhase: phase })
+			: resolveTopic(ctx.cwd) ?? resolveTopic(ctx.cwd, { forPhase: "init" });
+	}
 	if (!resolved) {
 		return {
-			content: [{ type: "text", text: "Error: 未找到 .xyz-harness/ 目录。请先用 /design-init 初始化项目并创建主题目录。" }],
+			content: [{ type: "text", text: "Error: 未找到 .xyz-harness/{topic}/ 主题子目录。请先用 design-clarity 选 topic（它会创建 topic 目录），或在一个含 .xyz-harness/{topic}/ 的项目根运行。" }],
 			error: true,
 		};
 	}
 	const { topic, topicDir } = resolved;
 	let status = loadStatus(ctx.cwd, topic);
-
-	const phase = params.phase as Phase | undefined;
 
 	try {
 		switch (params.action) {

@@ -13,6 +13,8 @@
 
 import { checkPhaseGate } from "./gate.ts";
 import type { GapClassification, GapStatus, LoopStep, Phase } from "./model.ts";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import {
 	PHASE_ORDER,
 	VALID_GAP_CLASSIFICATIONS,
@@ -117,12 +119,22 @@ interface Ctx {
 	topicDir: string;
 }
 
-function resolveCtx(): Ctx {
+function resolveCtx(forPhase?: Phase): Ctx {
 	const cwd = process.cwd();
-	const resolved = resolveTopic(cwd);
+	// --topic <slug> 显式绑定 topic（多 topic 并行操作时锁住，不依赖 mtime 自动选择）
+	const topicIdx = process.argv.indexOf("--topic");
+	if (topicIdx >= 0 && process.argv[topicIdx + 1]) {
+		const explicitTopic = process.argv[topicIdx + 1];
+		const topicDir = join(cwd, ".xyz-harness", explicitTopic);
+		if (!existsSync(topicDir)) {
+			fail(`--topic '${explicitTopic}' 不存在：无 ${topicDir} 目录`);
+		}
+		return { cwd, topic: explicitTopic, topicDir };
+	}
+	const resolved = resolveTopic(cwd, { forPhase });
 	if (!resolved) {
 		fail(
-			`未找到 .xyz-harness/ 目录。请在项目根（含 .xyz-harness/{topic}/ 的目录）运行，或先用 /design-init 初始化。`,
+			`未找到 .xyz-harness/{topic}/ 主题子目录。请先用 design-clarity 选 topic（它会创建 .xyz-harness/{topic}/），或在含 topic 子目录的项目根运行。多 topic 并行操作时用 --topic <slug> 显式绑定。`,
 		);
 	}
 	return { cwd, ...resolved };
@@ -130,9 +142,10 @@ function resolveCtx(): Ctx {
 
 /** 执行一个 mutate 操作（load → mutate → save if ok），打印结果 + exit。 */
 function runMutate(
+	forPhase: Phase | undefined,
 	action: (cwd: string, topic: string, topicDir: string) => { ok: boolean; message: string },
 ): never {
-	const { cwd, topic, topicDir } = resolveCtx();
+	const { cwd, topic, topicDir } = resolveCtx(forPhase);
 	const r = action(cwd, topic, topicDir);
 	if (r.ok) {
 		ok(r.message);
@@ -154,14 +167,19 @@ function main(): never {
 
 	switch (cmd) {
 		case "get-status": {
-			const { cwd, topic } = resolveCtx();
-			const status = loadStatus(cwd, topic);
+			const cwd = process.cwd();
+			// 真实 topic 优先；无 topic 时回退哨兵展示项目级 init（init 阶段无 topic 也能看进度）
+			const resolved = resolveTopic(cwd) ?? resolveTopic(cwd, { forPhase: "init" });
+			if (!resolved) {
+				fail(`未找到 .xyz-harness/ 目录。请在项目根（含 .xyz-harness/{topic}/ 的目录）运行，或先用 /design-init 初始化。`);
+			}
+			const status = loadStatus(cwd, resolved.topic);
 			ok(renderOverview(status));
 		}
 
 		case "get-phase": {
 			const phase = parsePhase(args[1]);
-			const { cwd, topic, topicDir } = resolveCtx();
+			const { cwd, topic, topicDir } = resolveCtx(phase);
 			const status = loadStatus(cwd, topic);
 			const gate = checkPhaseGate(topicDir, cwd, phase);
 			ok(renderPhaseDetail(status, phase, gate));
@@ -169,7 +187,7 @@ function main(): never {
 
 		case "start-phase": {
 			const phase = parsePhase(args[1]);
-			runMutate((cwd, topic) => {
+			runMutate(phase, (cwd, topic) => {
 				const status = loadStatus(cwd, topic);
 				const r = startPhase(status, phase);
 				if (r.ok) saveStatus(cwd, r.status);
@@ -182,7 +200,7 @@ function main(): never {
 			const step = parseStep(args[2]);
 			const noteIdx = args.indexOf("--note");
 			const note = noteIdx >= 0 ? args[noteIdx + 1] : undefined;
-			runMutate((cwd, topic) => {
+			runMutate(phase, (cwd, topic) => {
 				const status = loadStatus(cwd, topic);
 				const r = advanceStep(status, phase, step, note);
 				if (r.ok) saveStatus(cwd, r.status);
@@ -192,7 +210,7 @@ function main(): never {
 
 		case "review-phase": {
 			const phase = parsePhase(args[1]);
-			runMutate((cwd, topic) => {
+			runMutate(phase, (cwd, topic) => {
 				const status = loadStatus(cwd, topic);
 				const r = reviewPhase(status, phase);
 				if (r.ok) saveStatus(cwd, r.status);
@@ -202,7 +220,7 @@ function main(): never {
 
 		case "complete-phase": {
 			const phase = parsePhase(args[1]);
-			runMutate((cwd, topic, topicDir) => {
+			runMutate(phase, (cwd, topic, topicDir) => {
 				const status = loadStatus(cwd, topic);
 				const r = completePhase(status, phase, topicDir, cwd);
 				if (r.ok) saveStatus(cwd, r.status);
@@ -220,7 +238,7 @@ function main(): never {
 			const gapStatus = parseGapStatus(args[args.indexOf("-s") + 1]);
 			const descIdx = args.indexOf("-d");
 			const desc = descIdx >= 0 ? args[descIdx + 1] : "(无描述)";
-			runMutate((cwd, topic) => {
+			runMutate(phase, (cwd, topic) => {
 				const status = loadStatus(cwd, topic);
 				const r = logGap(status, gapId, phase, classification, desc, gapStatus);
 				if (r.ok) saveStatus(cwd, r.status);

@@ -9,6 +9,7 @@ import {
 	completionRatio,
 	currentPhase,
 	type DesignStatus,
+	INIT_TOPIC_SENTINEL,
 	openGapCount,
 	type Phase,
 	PHASE_ORDER,
@@ -26,8 +27,10 @@ export function renderOverview(status: DesignStatus): string {
 	const { done, total } = completionRatio(status);
 	const cur = currentPhase(status);
 	const openGaps = openGapCount(status);
+	const topicLabel =
+		status.topic === INIT_TOPIC_SENTINEL ? "(项目级 init)" : status.topic;
 	const lines: string[] = [
-		`Design workflow — ${status.topic}`,
+		`Design workflow — ${topicLabel}`,
 		`进度：${done}/${total} 阶段 completed${cur ? `｜当前：${cur}（${status.phases[cur].status}）` : "｜无 active 阶段"}`,
 		`Open gaps：${openGaps}`,
 		"",

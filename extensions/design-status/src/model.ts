@@ -22,6 +22,13 @@ export const PHASE_ORDER = [
 
 export type Phase = (typeof PHASE_ORDER)[number];
 
+/**
+ * init 阶段在存储层的哨兵 topic。init 是项目级一次性阶段（AGENTS.md/CONTEXT.md 就位即完成），
+ * 状态存 .xyz-harness/.design-status.json（项目根），非 topic 子目录；store.ts 据此路由路径。
+ * 与真实 topic slug（yyyy-MM-dd-kebab）不冲突。
+ */
+export const INIT_TOPIC_SENTINEL = "__init__";
+
 /** 阶段编号（0-6），用于线性依赖校验。 */
 export const PHASE_INDEX: Record<Phase, number> = PHASE_ORDER.reduce(
 	(acc, p, i) => {
@@ -71,7 +78,7 @@ export function prerequisiteOf(phase: Phase): Phase | null {
 
 // ── Loop Step ─────────────────────────────────────────
 
-export const VALID_STEPS = ["1", "2", "3", "4", "5", "6", "6b"] as const;
+export const VALID_STEPS = ["1", "2", "3", "4", "5", "6", "6b", "6c"] as const;
 export type LoopStep = (typeof VALID_STEPS)[number];
 
 const STEP_ORDER: Record<LoopStep, number> = {
@@ -82,6 +89,7 @@ const STEP_ORDER: Record<LoopStep, number> = {
 	"5": 5,
 	"6": 6,
 	"6b": 7,
+	"6c": 8,
 };
 
 /** step 必须单调前进（不能倒退），同 step 允许（重入）。 */
@@ -159,6 +167,7 @@ export interface PhaseGate {
 	deliverable: string | null; // null = init 无主交付物（软 gate）
 	reviewSlug: string | null;
 	machineCheckSlug: string | null;
+	consistencyCheck: boolean; // true = 仅⑥execution，校验 changes/consistency-final.md verdict:CONSISTENT
 }
 
 export const PHASE_GATES: Record<Phase, PhaseGate> = {
@@ -167,42 +176,49 @@ export const PHASE_GATES: Record<Phase, PhaseGate> = {
 		deliverable: null, // 软 gate：AGENTS.md/CONTEXT.md，gate.ts 单独验
 		reviewSlug: null,
 		machineCheckSlug: null,
+		consistencyCheck: false,
 	},
 	clarity: {
 		phase: "clarity",
 		deliverable: "requirements.md",
 		reviewSlug: "clarity",
 		machineCheckSlug: "clarity",
+		consistencyCheck: false,
 	},
 	architecture: {
 		phase: "architecture",
 		deliverable: "system-architecture.md",
 		reviewSlug: "architecture",
 		machineCheckSlug: "architecture",
+		consistencyCheck: false,
 	},
 	issues: {
 		phase: "issues",
 		deliverable: "issues.md",
 		reviewSlug: "issues",
 		machineCheckSlug: "issues",
+		consistencyCheck: false,
 	},
 	nfr: {
 		phase: "nfr",
 		deliverable: "non-functional-design.md",
 		reviewSlug: "nfr",
 		machineCheckSlug: "nfr",
+		consistencyCheck: false,
 	},
 	"code-arch": {
 		phase: "code-arch",
 		deliverable: "code-architecture.md",
 		reviewSlug: "code-arch",
 		machineCheckSlug: "code-arch",
+		consistencyCheck: false,
 	},
 	execution: {
 		phase: "execution",
 		deliverable: "execution-plan.md",
 		reviewSlug: "execution",
 		machineCheckSlug: "execution",
+		consistencyCheck: true, // ⑥Step 6c 总闸门：changes/consistency-final.md verdict:CONSISTENT
 	},
 };
 
