@@ -2,8 +2,8 @@
  * discovery.ts — 文件发现 + 收集 + 噪声排除 + symlink 防护（Adapter 层）
  *
  * 变化轴：文件发现策略/fs/噪声清单。collectSources 协调器调纯函数(engine parseFrontmatter/glob matchGlob)+fs。
- * [骨架] ③#5 方案 A + ②§6 Adapter 层 + D-5 噪声排除 + BC-1/2/6/9/12/15。
- * SV-2 噪声削减 / SV-4 symlink visited Set key=realPath（BC-6）。
+ * ③#5 方案 A + ②§6 Adapter 层 + D-5 噪声排除 + BC-1/2/6/9/12/15。
+ * SV-2 噪声削减 / SV-4 symlink visited Set key=realPath（BC-6）/ SV-5 LOC ≤200。
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -16,152 +16,77 @@ import { NOISE_DIRS } from "./types.ts";
 /** `~/` 前缀长度（展开时剥去这两字符）。 */
 const HOME_PREFIX_LENGTH = 2;
 
-/**
- * 协调器：遍历 valid sources 按 kind 调对应收集器。每个收集器给产出的 RuleFile 打 sourceId（声明序）。
- * [模块内直调] 调 collectExplicit/WalkFiles/WalkDirs/Glob（按 kind 分派）。
- */
-export function collectSources(
-  sources: ConfigSource[],
-  cwd: string,
-  home: string,
-): RuleFile[] {
+/** 协调器：遍历 sources 按 kind 分派收集器，给每条 RuleFile 打 sourceId（声明序，FR-3.1）。 */
+export function collectSources(sources: ConfigSource[], cwd: string, home: string): RuleFile[] {
   const all: RuleFile[] = [];
   sources.forEach((source, sourceId) => {
-    switch (source.kind) {
-      case "explicit":
-        all.push(...collectExplicit(source, cwd, home, sourceId));
-        break;
-      case "walk-files":
-        all.push(...collectWalkFiles(source, cwd, home, sourceId));
-        break;
-      case "walk-dirs":
-        all.push(...collectWalkDirs(source, cwd, home, sourceId));
-        break;
-      case "glob":
-        all.push(...collectGlob(source, cwd, home, sourceId));
-        break;
-    }
+    const collected =
+      source.kind === "explicit" ? collectExplicit(source, cwd, home, sourceId)
+      : source.kind === "walk-files" ? collectWalkFiles(source, cwd, home, sourceId)
+      : source.kind === "walk-dirs" ? collectWalkDirs(source, cwd, home, sourceId)
+      : collectGlob(source, cwd, sourceId);
+    all.push(...collected);
   });
   return all;
 }
 
-/**
- * 展开 source.path：`~`/`~/` 开头→home；绝对直用；相对→path.resolve(cwd,p)。
- * ~ 展开归 discovery 层（source.path 是用户输入，加载时展开，CA-8）。 [叶子] 纯 path.resolve，无 fs。
- */
+/** 展开 source.path：`~`/`~/`→home；绝对直用；相对→resolve(cwd,p)。~ 展开归 discovery 层（CA-8/AC-2.5）。 [叶子] 无 fs。 */
 function expandPath(p: string, home: string, cwd: string): string {
   if (p === "~") return home;
   if (p.startsWith("~/")) return path.join(home, p.slice(HOME_PREFIX_LENGTH));
-  if (path.isAbsolute(p)) return p;
-  return path.resolve(cwd, p);
+  return path.isAbsolute(p) ? p : path.resolve(cwd, p);
 }
 
-/**
- * explicit 收集：path→文件（loadSingleRuleFile 单文件）/目录（loadRulesFromDir 递归）。
- * ENOENT/EACCES 静默返回[]（BC-9）。 [模块内直调] 调 loadSingleRuleFile/loadRulesFromDir + [adapter] fs。
- */
-function collectExplicit(
-  source: { kind: "explicit"; path: string },
-  cwd: string,
-  home: string,
-  sourceId: number,
-): RuleFile[] {
+/** explicit：path→单文件 / 目录递归。ENOENT/EACCES 静默返回[]（BC-9）。 */
+function collectExplicit(source: { kind: "explicit"; path: string }, cwd: string, home: string, sourceId: number): RuleFile[] {
   const resolved = expandPath(source.path, home, cwd);
   try {
-    const stat = fs.statSync(resolved);
-    if (stat.isDirectory()) {
-      return loadRulesFromDir(resolved, cwd, sourceId);
+    if (fs.statSync(resolved).isDirectory()) {
+      return loadRulesFromDir(resolved, cwd, sourceId, "walk-dirs");
     }
-    const single = loadSingleRuleFile(resolved, cwd, sourceId);
-    return single ? [single] : [];
+    return pushFile(resolved, cwd, sourceId, "explicit", source.path);
   } catch {
     return []; // ENOENT/EACCES 静默（BC-9）
   }
 }
 
-/**
- * walk-files：cwd→home 逐级（root→CWD 顺序，AC-5.11），每级查 filenames 命中→loadSingleRuleFile。
- * cwd 不在 home 子树 → 退化只扫 cwd 一级（AC-5.3/FR-2.5）。 [模块内直调] loadSingleRuleFile + [adapter] fs。
- */
-function collectWalkFiles(
-  source: { kind: "walk-files"; filenames: string[] },
-  cwd: string,
-  home: string,
-  sourceId: number,
-): RuleFile[] {
-  const dirs = walkDirs(cwd, home); // root→CWD 顺序
+/** walk-files：cwd→home 逐级（root→CWD 顺序，AC-5.11），每级查 filenames 命中→单文件加载。退化只扫 cwd（AC-5.3）。 */
+function collectWalkFiles(source: { kind: "walk-files"; filenames: string[] }, cwd: string, home: string, sourceId: number): RuleFile[] {
   const rules: RuleFile[] = [];
-  for (const dir of dirs) {
+  for (const dir of walkDirs(cwd, home)) {
     for (const filename of source.filenames) {
-      const candidate = path.join(dir, filename);
-      const single = loadSingleRuleFile(candidate, cwd, sourceId);
-      if (single) rules.push(single);
+      rules.push(...pushFile(path.join(dir, filename), cwd, sourceId, "walk-files"));
     }
   }
   return rules;
 }
 
-/**
- * walk-dirs：cwd→home 逐级，每级查 dirnames 命中→findMarkdownFiles 递归。退化同 walk-files。
- * [模块内直调] findMarkdownFiles/loadRulesFromDir + [adapter] fs。
- */
-function collectWalkDirs(
-  source: { kind: "walk-dirs"; dirnames: string[] },
-  cwd: string,
-  home: string,
-  sourceId: number,
-): RuleFile[] {
-  const dirs = walkDirs(cwd, home);
+/** walk-dirs：cwd→home 逐级，每级查 dirnames 命中→递归加载。退化同 walk-files。 */
+function collectWalkDirs(source: { kind: "walk-dirs"; dirnames: string[] }, cwd: string, home: string, sourceId: number): RuleFile[] {
   const rules: RuleFile[] = [];
-  for (const dir of dirs) {
+  for (const dir of walkDirs(cwd, home)) {
     for (const dirname of source.dirnames) {
-      const candidate = path.join(dir, dirname);
-      const rulesFromDir = loadRulesFromDir(candidate, cwd, sourceId);
-      rules.push(...rulesFromDir);
+      rules.push(...loadRulesFromDir(path.join(dir, dirname), cwd, sourceId, "walk-dirs"));
     }
   }
   return rules;
 }
 
-/**
- * glob：相对 cwd 遍历候选 + matchGlob 过滤 + isMarkdown 强制（AC-5.7/BC-12）。
- * 链接路径匹配不 realpath（AC-5.9，realpath 仅用于 RuleFile.realPath 去重键）。
- * [模块内直调] matchGlob/isMarkdown/findMarkdownFiles + [adapter] fs。
- */
-function collectGlob(
-  source: { kind: "glob"; patterns: string[] },
-  cwd: string,
-  _home: string,
-  sourceId: number,
-): RuleFile[] {
-  const candidates = findMarkdownFiles(cwd, new Set<string>());
+/** glob：相对 cwd 遍历 .md 候选 + matchGlob 过滤（AC-5.7/BC-12）。链接路径匹配不 realpath（AC-5.9）。 */
+function collectGlob(source: { kind: "glob"; patterns: string[] }, cwd: string, sourceId: number): RuleFile[] {
   const rules: RuleFile[] = [];
-  for (const candidate of candidates) {
+  for (const candidate of findMarkdownFiles(cwd, new Set<string>())) {
     const relToCwd = path.relative(cwd, candidate); // 链接路径空间匹配（不 realpath）
-    if (!patternsMatch(source.patterns, relToCwd)) continue;
-    if (!isMarkdown(candidate)) continue; // 强制 .md（BC-12）
-    const single = loadSingleRuleFile(candidate, cwd, sourceId);
-    if (single) rules.push(single);
+    if (source.patterns.some((p) => matchGlob(p, relToCwd))) {
+      rules.push(...pushFile(candidate, cwd, sourceId, "glob"));
+    }
   }
   return rules;
 }
 
-/** 任一 pattern 命中即 true（[模块内直调] matchGlob）。 */
-function patternsMatch(patterns: string[], relPath: string): boolean {
-  return patterns.some((p) => matchGlob(p, relPath));
-}
-
-/**
- * 从 cwd 向上到 home 的目录列表（root→CWD 顺序，AC-5.2/BC-2）。
- * cwd 不在 home 子树（且非 home 本身）→ 退化只返回 [cwd]（AC-5.3/FR-2.5）。
- * [模块内直调] path 操作。
- */
+/** cwd→home 目录列表（root→CWD 顺序，AC-5.2/BC-2）。cwd 不在 home 子树→退化只返回 [cwd]（AC-5.3/FR-2.5）。 */
 function walkDirs(cwd: string, home: string): string[] {
-  const inHomeTree =
-    cwd === home || cwd.startsWith(home + path.sep);
-  if (!inHomeTree) {
-    return [cwd]; // 退化：只扫 cwd 一级
-  }
+  if (cwd !== home && !cwd.startsWith(home + path.sep)) return [cwd]; // 退化：只扫 cwd 一级
   const dirs: string[] = [];
   let current: string = cwd;
   while (current.startsWith(home) && current !== path.dirname(current)) {
@@ -170,33 +95,26 @@ function walkDirs(cwd: string, home: string): string[] {
     current = path.dirname(current);
   }
   if (current === home && !dirs.includes(home)) dirs.push(home);
-  dirs.reverse(); // root(home) → CWD
-  return dirs;
+  return dirs.reverse(); // root(home) → CWD
 }
 
-/**
- * 递归找 .md 文件。跳过噪声目录 basename（D-5/NoiseDirs）；symlink 环 visited Set（realPath key，BC-6/SV-4）。
- * ENOENT/EACCES 静默返回[]（BC-9）。 [模块内直调] 递归自调 + [adapter] fs.realpathSync/readdirSync。
- */
+/** 递归找 .md 文件：跳噪声目录 basename（D-5/SV-2）；symlink 环 visited Set（realPath key，BC-6/SV-4）；ENOENT 静默（BC-9）。 */
 function findMarkdownFiles(dir: string, visited: Set<string>): string[] {
   const results: string[] = [];
   try {
     const real = fs.realpathSync(dir);
-    if (!real) return results;
-    if (visited.has(real)) return results; // symlink 环防护（realPath key，SV-4）
+    if (!real || visited.has(real)) return results; // symlink 环防护（SV-4）
     visited.add(real);
   } catch {
     return results; // ENOENT/EACCES 静默（BC-9）
   }
   try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (NOISE_DIRS.has(entry.name)) continue; // 噪声排除（D-5/SV-2）
-        results.push(...findMarkdownFiles(fullPath, visited));
-      } else if (entry.isFile() && entry.name.endsWith(".md")) {
-        results.push(fullPath);
+        if (!NOISE_DIRS.has(entry.name)) results.push(...findMarkdownFiles(fullPath, visited)); // 噪声排除（SV-2）
+      } else if (entry.isFile() && isMarkdown(fullPath)) {
+        results.push(fullPath); // 仅 .md（BC-12）
       }
     }
   } catch {
@@ -205,78 +123,36 @@ function findMarkdownFiles(dir: string, visited: Set<string>): string[] {
   return results.sort();
 }
 
-/**
- * 单文件加载（walk-files/explicit 单文件用，CA-10）。readFileSync+parseFrontmatter+realpathSync+显示路径+打 sourceId。
- * 空内容→null（BC-11）；ENOENT→null。 [模块内直调] parseFrontmatter + [adapter] fs。
- */
-function loadSingleRuleFile(
-  filePath: string,
-  cwd: string,
-  sourceId: number,
-): RuleFile | null {
+/** 单文件加载（walk-files/explicit/glob 用，CA-10）：readFileSync+parseFrontmatter+realpathSync+显示路径+sourceId。空内容/ENOENT→[]（BC-11/BC-9）。 */
+function pushFile(filePath: string, cwd: string, sourceId: number, kind: ConfigSource["kind"], configuredPath?: string): RuleFile[] {
   try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = parseFrontmatter(raw);
-    if (!parsed.content) return null; // 空内容跳过（BC-11）
-    let realPath: string;
-    try {
-      realPath = fs.realpathSync(filePath);
-    } catch {
-      return null;
-    }
-    return {
-      path: displayPath(filePath, cwd),
+    const realPath = fs.realpathSync(filePath);
+    const parsed = parseFrontmatter(fs.readFileSync(filePath, "utf-8"));
+    if (!parsed.content) return []; // 空内容跳过（BC-11）
+    return [{
+      path: displayPath(filePath, cwd, kind, configuredPath),
       realPath,
       content: parsed.content,
       ...(parsed.globs ? { globs: parsed.globs } : {}),
       sourceId,
-    };
+    }];
   } catch {
-    return null; // ENOENT 静默（BC-9）
+    return []; // ENOENT 静默（BC-9）
   }
 }
 
-/**
- * 目录递归加载：findMarkdownFiles 找 .md → 逐文件 loadSingleRuleFile 逻辑。
- * AC-5.8 显示路径按 kind+配置构造（BC-15 变更）。 [模块内直调] findMarkdownFiles + [adapter] fs。
- */
-function loadRulesFromDir(
-  dir: string,
-  cwd: string,
-  sourceId: number,
-): RuleFile[] {
-  const files = findMarkdownFiles(dir, new Set<string>());
+/** 目录递归加载：findMarkdownFiles 找 .md → 逐文件 pushFile（kind 分化显示路径 AC-5.8）。 */
+function loadRulesFromDir(dir: string, cwd: string, sourceId: number, kind: ConfigSource["kind"]): RuleFile[] {
   const rules: RuleFile[] = [];
-  for (const filePath of files) {
-    try {
-      const raw = fs.readFileSync(filePath, "utf-8");
-      const parsed = parseFrontmatter(raw);
-      if (!parsed.content) continue; // 空内容跳过（BC-11）
-      let realPath: string;
-      try {
-        realPath = fs.realpathSync(filePath);
-      } catch {
-        continue;
-      }
-      rules.push({
-        path: displayPath(filePath, cwd),
-        realPath,
-        content: parsed.content,
-        ...(parsed.globs ? { globs: parsed.globs } : {}),
-        sourceId,
-      });
-    } catch {
-      continue; // 静默跳过（BC-9）
-    }
+  for (const filePath of findMarkdownFiles(dir, new Set<string>())) {
+    rules.push(...pushFile(filePath, cwd, sourceId, kind));
   }
   return rules;
 }
 
-/**
- * 显示路径构造（BC-15 变更，AC-5.8）：path.relative(cwd, filePath) 或 "."（当就在 cwd）。
- * 目标：agent 靠内容识别规则，显示路径只需可辨识、确定性（参与 localeCompare 排序）。 [叶子] 纯 path.relative。
- */
-function displayPath(filePath: string, cwd: string): string {
-  const rel = path.relative(cwd, filePath);
-  return rel || ".";
+/** 显示路径构造（BC-15/AC-5.8 按 kind 分化）：explicit 用 configuredPath 原样；walk 用 relative(cwd,dirname)；glob 用 relative(cwd,file)。 [叶子] 纯 path。 */
+function displayPath(filePath: string, cwd: string, kind: ConfigSource["kind"], configuredPath?: string): string {
+  if (kind === "explicit") return configuredPath ?? path.relative(cwd, filePath);
+  if (kind === "glob") return path.relative(cwd, filePath) || ".";
+  return path.relative(cwd, path.dirname(filePath)) || "."; // walk-files/walk-dirs：目录相对路径
 }
