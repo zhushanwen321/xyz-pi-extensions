@@ -48,6 +48,7 @@ import {
   padToVisible,
   sanitizeLabel,
   segFillColored,
+  shortId,
   spinnerGlyph,
   statusGlyph,
   type ThemeLike,
@@ -705,7 +706,9 @@ class SubagentsListComponent implements Component {
       const iconStr = t.fg(glyph.color, icon);
       const modeTag = r.mode === "background" ? "bg" : "sync";
       const dur = formatElapsedSeconds(elapsedSec(r));
-      const label = `${iconStr} ${r.agent} ${t.fg("dim", modeTag)} ${t.fg("dim", dur)}`;
+      // 短编号(dim)置于行首——列表一眼看到「第几个」, 不必进详情. 完整 id 在右列预览.
+      const sid = t.fg("dim", shortId(r.id));
+      const label = `${iconStr} ${sid} ${r.agent} ${t.fg("dim", modeTag)} ${t.fg("dim", dur)}`;
       // 阶段 2：锚定行 accent + ▶；其余行 dim。阶段 1：选中 accent + →，其余正常。
       const content = inDetail
         ? (selected ? t.fg("accent", label) : t.fg("dim", label))
@@ -726,6 +729,8 @@ class SubagentsListComponent implements Component {
       t.fg("dim", `${record.status} · ${record.turns} turns · ${formatTokens(record.totalTokens)} · ${formatElapsedSeconds(elapsedSec(record))}`),
       width,
     ));
+    // 完整 id(含 background 时间戳): cancel/read session file 需精确引用. 左列只显示短编号.
+    lines.push(truncLine(t.fg("dim", `id: ${record.id}`), width));
     lines.push("");
 
     // eventLog 现从 turns[] 派生（离散语义事件，无碎片），直接取最近 N 条。
