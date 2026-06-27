@@ -35,8 +35,8 @@ export function getAnswerText(q: Question, s: QuestionState): string | null {
 
 /**
  * 渲染 Submit tab 视图。
- * focus: 当前在 [Submit]/[Cancel] 上的焦点（←/→ 切换）。
- *   渲染内嵌按钮栏高亮 focus；help 行更新为 "←/→ toggle · Enter confirm"。
+ * focus: 当前在 [Submit]/[Cancel] 上的焦点（Tab 切换）。
+ *   渲染内嵌按钮栏高亮 focus；help 行更新为 "←/→ navigate · Tab toggle · Enter confirm"。
  */
 export function renderSubmitView(
 	questions: Question[],
@@ -94,7 +94,7 @@ export function renderSubmitView(
 
 	// Submit tab 帮助行
 	add("");
-	add(t.fg("dim", " ←/→ toggle · Enter confirm · Tab back to first question"));
+	add(t.fg("dim", " ←/→ navigate · Tab toggle Submit/Cancel · Enter confirm · Esc back"));
 
 	return lines;
 }

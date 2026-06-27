@@ -316,7 +316,6 @@ export function renderQuestionView(
 			? "Space toggle · Enter confirm"
 			: "Enter select";
 	add(t.fg("dim", ` ↑↓ navigate · ${actionHint}${tabHint} · Esc back`));
-	// ponytail: tabHint 随键位变更同步
 
 	return lines;
 }

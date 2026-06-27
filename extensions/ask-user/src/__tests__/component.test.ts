@@ -537,8 +537,8 @@ describe("AskUserComponent — Submit tab", () => {
 		expect(result.val!.answers["Q2"]).toBe("X");
 	});
 
-	it("C-S12: Submit tab Shift+Tab navigates to last question tab", () => {
-		// S-12 锁定：Submit tab 上按 Shift+Tab → activeTab = questions.length - 1（最后一个问题）
+	it("C-S12: Submit tab Left navigates to last question tab", () => {
+		// 锁定：Submit tab 上按 ← → activeTab = questions.length - 1（最后一个问题）
 		const { c } = make(multiQ); // 3 questions → tabs 0,1,2,3=Submit
 		// 导航到 Submit（问题 tab 间用 →）
 		c.handleInput(RIGHT); // Q1 → Q2
@@ -547,8 +547,8 @@ describe("AskUserComponent — Submit tab", () => {
 		// 确认当前在 Submit（渲染 Submit 视图）
 		let lines = c.render(80);
 		expect(lines.some((l) => l.includes("Ready") || l.includes("Unanswered"))).toBe(true);
-		// 在 Submit 上按 Shift+Tab → 应回到最后一个问题 Q3
-		c.handleInput("\x1b[Z");
+		// 在 Submit 上按 ← → 应回到最后一个问题 Q3（←/→ 在所有 tab 上都是导航）
+		c.handleInput(LEFT);
 		lines = c.render(80);
 		// Q3 不再是 Submit 视图（无 Ready/Unanswered），且渲染了 Q3 的选项 M
 		expect(lines.some((l) => l.includes("Ready") || l.includes("Unanswered"))).toBe(false);
@@ -659,8 +659,8 @@ describe("AskUserComponent — confirm-checkmark, Esc-back, Tab browsing", () =>
 		c.handleInput(RIGHT); // Q2→Q3
 		c.handleInput(RIGHT); // Q3→Submit
 		expect(c.render(80).some((l) => l.includes("Ready") || l.includes("Unanswered"))).toBe(true);
-		// Submit 上 Shift+Tab → 回退到 Q3（环绕导航保留）
-		c.handleInput("\x1b[Z");
+		// Submit 上 ← → 回退到 Q3（←/→ 在所有 tab 上都是导航）
+		c.handleInput(LEFT);
 		expect(c.render(80).some((l) => l.includes("M"))).toBe(true);
 		// Q1 上 ← 不环绕（停在首个问题）
 		c.handleInput(LEFT); // Q3→Q2
@@ -721,7 +721,7 @@ describe("AskUserComponent — new behavior (post-refactor)", () => {
 		expect(c.render(80).some((l) => l.includes("Q1") || l.includes("First"))).toBe(true);
 	});
 
-	it("C-NEW-3: Submit tab Left/Right toggles submitTabFocus (Submit ↔ Cancel)", () => {
+	it("C-NEW-3: Submit tab Tab toggles submitTabFocus (Submit ↔ Cancel)", () => {
 		// multiQ: 3 questions → tabs 0,1,2,3=Submit
 		const { c } = make(multiQ);
 		// 导航到 Submit（问题 tab 间用 →）
@@ -732,13 +732,13 @@ describe("AskUserComponent — new behavior (post-refactor)", () => {
 		let lines = c.render(80);
 		const focusedLineInitial = lines.find((l) => l.match(/[\[\(]\s*Submit\s*[\]\)]/));
 		expect(focusedLineInitial).toBeDefined();
-		// 按 Right → focus 切到 Cancel
-		c.handleInput(RIGHT);
+		// 按 Tab → focus 切到 Cancel（单键双向循环）
+		c.handleInput(TAB);
 		lines = c.render(80);
 		const focusedLineAfter = lines.find((l) => l.match(/[\[\(]\s*Cancel\s*[\]\)]/));
 		expect(focusedLineAfter).toBeDefined();
-		// 再按 Left → focus 回 Submit
-		c.handleInput(LEFT);
+		// 再按 Tab → focus 回 Submit
+		c.handleInput(TAB);
 		lines = c.render(80);
 		expect(lines.find((l) => l.match(/[\[\(]\s*Submit\s*[\]\)]/))).toBeDefined();
 	});
@@ -764,8 +764,8 @@ describe("AskUserComponent — new behavior (post-refactor)", () => {
 		c.handleInput(ENTER); // Q1 → Q2
 		c.handleInput(ENTER); // Q2 → Q3
 		c.handleInput(ENTER); // Q3 → Submit tab
-		// 切到 Submit 后，按 Right 把 focus 切到 Cancel
-		c.handleInput(RIGHT);
+		// 切到 Submit 后，按 Tab 把 focus 切到 Cancel
+		c.handleInput(TAB);
 		// Enter → 直接 cancel()（Submit tab 上无二次确认）
 		c.handleInput(ENTER);
 		expect(result.val).toBeNull();
