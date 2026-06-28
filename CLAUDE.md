@@ -13,7 +13,7 @@ xyz-pi-extensions/
 │   ├── todo/                → @zhushanwen/pi-todo
 │   ├── design-status/       → @zhushanwen/pi-design-status (design 工作流 7 阶段状态/进度追踪 tool)
 │   ├── vision/             → @zhushanwen/pi-vision
-│   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills + 8 个 design-* 设计工作流 skills（含 1 个初始化 + 1 个收尾）+ design-shared 共享参考目录)
+│   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills + 8 个 design-* 设计工作流 skills（含 1 个初始化 + 1 个收尾）+ design-shared 共享参考目录 + 3 个 lite-* 轻量编码工作流 skills（lite-plan/lite-execute/lite-retrospect）+ lite-shared 共享参考目录)
 │   ├── claude-rules-loader/ → @zhushanwen/pi-claude-rules-loader
 │   ├── context-engineering/ → @zhushanwen/pi-context-engineering
 │   ├── evolve-daily/        → @zhushanwen/pi-evolve-daily (含 evolve skills + tracker 框架)
@@ -770,7 +770,7 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `extensions/goal/` | `@zhushanwen/pi-goal` | 持久化目标驱动循环，7 态状态机 | — |
 | `extensions/todo/` | `@zhushanwen/pi-todo` | 轻量三态任务清单 | — |
 | `extensions/vision/` | `@zhushanwen/pi-vision` | 图片分析（vision model + memory session） | — |
-| `extensions/coding-workflow/` | `@zhushanwen/pi-coding-workflow` | 5-Phase 编码工作流 | ~20 个 xyz-harness-* skills |
+| `extensions/coding-workflow/` | `@zhushanwen/pi-coding-workflow` | 5-Phase 编码工作流 + design 工作流 + lite 轻量工作流 | ~20 个 xyz-harness-* + 8 个 design-* + 3 个 lite-* skills |
 | `extensions/design-status/` | `@zhushanwen/pi-design-status` | design 工作流 7 阶段状态/进度追踪 tool | — |
 | `extensions/claude-rules-loader/` | `@zhushanwen/pi-claude-rules-loader` | 加载 CLAUDE.md 规则 | — |
 | `extensions/context-engineering/` | `@zhushanwen/pi-context-engineering` | 渐进式上下文压缩 | — |
