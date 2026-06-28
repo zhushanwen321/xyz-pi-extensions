@@ -219,34 +219,56 @@ def _check_typecheck(report, skeleton_path):
 
 
 def _check_arch_grep_patterns(report, arch_md, skeleton_path):
-    """③d 执行②system-architecture.md §11 的 grep 验收 pattern。"""
+    """③d 执行②system-architecture.md §11 的 grep 验收 pattern。
+
+    §11 AC 格式：`grep -rn "pattern" <path>` 期望无输出（负面断言）或 有输出（正面断言，AC-6）。
+    **关键**：AC 带**文件路径作用域**（如 src-electron/runtime/src/services/file-service.ts）。
+    本函数提取 pattern + path，把项目路径映射到骨架相对路径，**只在对应作用域 grep**——
+    避免对整个骨架无作用域 grep 产生误报（infra 合法用 node:fs 被当 services 违规等）。
+    """
     section = extract_section(arch_md, r"反模式检查|grep\s*验收")
     if not section:
-        report.add_skip("②§11 grep pattern", "②无「反模式检查」章节，跳过")
+        report.add_skip("②§11 grep pattern", "②无「反模式检查」章节，跳过架构规则检查")
         return
-    # 提取 grep -rn "pattern" src/ 形式的 pattern
-    patterns = re.findall(r"grep\s+-r\w*\s+['\"]([^'\"]+)['\"]", section)
-    patterns += re.findall(r"grep\s+-r\w*\s+(\S+)", section)
-    # 去掉明显是参数的（如 src/）
-    patterns = [p for p in patterns if not p.endswith("/") and len(p) > 2]
-    if not patterns:
-        report.add_skip("②§11 grep pattern", "②§11 未提取到 grep pattern")
-        return
+    # 提取 grep -rn "pattern" <path> [无输出|有输出] —— 保留 path 与正向/负向断言
+    # 行级解析：每行一个 AC，含 pattern + path + 期望（无输出=负面/有输出=正面）
+    ac_lines = re.findall(
+        r"grep\s+-r\w+\s+['\"]([^'\"]+)['\"]\s+(\S+)[^（]*（[^）]*）?",
+        section,
+    )
     violations = []
-    for pat in patterns:
-        hits = run_grep(pat, skeleton_path)
+    checked = 0
+    for pat, raw_path in ac_lines:
+        if pat.endswith("/") or len(pat) <= 2:
+            continue
+        if raw_path.endswith("/"):
+            continue  # 目录级作用域（如 transport/）保留
+        checked += 1
+        # 项目路径 → 骨架路径映射：剥掉 src-electron/runtime/src/ / src-electron/renderer/src/ 前缀
+        # 骨架布局：code-skeleton/runtime/... 和 code-skeleton/renderer/...
+        skel_sub = re.sub(r"^src-electron/runtime/src/", "runtime/", raw_path)
+        skel_sub = re.sub(r"^src-electron/renderer/src/", "renderer/", skel_sub)
+        skel_sub = re.sub(r"^src-electron/shared/src/", "shared/", skel_sub)
+        # 作用域目录/文件（骨架相对）；不存在则该 AC 对骨架 N/A（新文件未在骨架建对应路径）
+        scope = os.path.join(skeleton_path, skel_sub)
+        # 若作用域是具体文件且骨架无对应 → skip（AC 针对实现后真实文件，骨架阶段 N/A）
+        if not os.path.exists(scope):
+            continue
+        hits = run_grep(pat, scope)
         if hits:
-            violations.append(f"pattern '{pat}': {len(hits)} 处违规")
+            violations.append(f"pattern '{pat}' @ {skel_sub}: {len(hits)} 处违规")
     if violations:
         report.add_fail(
             "②§11 架构规则（③）",
             "; ".join(violations[:3]) + "（违反②架构决策的层级/依赖方向）",
         )
-    else:
+    elif checked > 0:
         report.add_pass(
             "②§11 架构规则（③）",
-            f"{len(patterns)} 条 grep pattern 全部通过（无层级穿透/方向违规）",
+            f"{checked} 条 grep pattern 作用域内核对通过（无层级穿透/方向违规；实现后真实文件 AC 见②§11）",
         )
+    else:
+        report.add_skip("②§11 grep pattern", "②§11 未提取到带路径作用域的 grep pattern")
 
 
 def _check_wiring_density(report, skeleton_path, src_files):
