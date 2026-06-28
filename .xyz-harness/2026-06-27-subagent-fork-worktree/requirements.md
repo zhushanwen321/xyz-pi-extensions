@@ -71,7 +71,7 @@ graph TB
   7. finalize → patch 回传（若 worktree）/返回结果
 - **替代流程**:
   - fork 指定从某 entryId（position:"at"|"before"），而非当前 leaf（受 D-007 深度限制）
-  - 主 session 未 flush（无 assistant message）→ 降级为普通 from-scratch 启动 + 警告
+  - ~~主 session 未 flush（无 assistant message）→ 降级为普通 from-scratch 启动 + 警告~~ `[作废，AC-1.2 修订]` 经 D-018 演进，pi SDK 对空源抛错（不降级），与异常流程 line 77 合并为 finalizeFailed（见 AC-1.2 [BACKFED]）
 - **异常流程**:
   - 主 session 文件路径取不到 → finalizeFailed（已有模式）
   - forkFrom 源文件损坏 → 抛 "Cannot fork: source session file is empty or invalid"（session-manager.ts:1444）→ finalizeFailed
@@ -80,7 +80,7 @@ graph TB
 - **关联目标**: G1
 - **验收标准 (AC)**:
   - AC-1.1 [正常]: fork:true 时，子 agent 首次 prompt 的 SessionContext.messages 非空且包含主 agent 最近的历史
-  - AC-1.2 [异常]: 主 session 为空时，降级为 from-scratch 启动，不崩溃
+  - AC-1.2 [异常]: 主 session 为空或损坏时，pi SDK forkFrom/createBranchedSession 抛错（"Cannot fork: source session file is empty or invalid"，session-manager.ts:1444）→ finalizeFailed（不崩溃，按现有失败模式收尾）。`[BACKFED from ⑤code-arch 一致性终检]` 原替代流程（line 74「主 session 未 flush → 降级 from-scratch 启动」）经 D-018 演进：fork 统一经 pi SDK createBranchedSession/forkFrom，SDK 对空/损坏源抛错而非降级，故 empty 与 corrupt 合并为同一 hard-failure 路径（T1.3 验证）。替代流程 line 74 此条作废
   - AC-1.3 [边界]: fork 嵌套第 11 层被拒绝并报明确错误
 
 ### UC-2: 子 agent 在独立 git worktree 中运行
@@ -114,10 +114,10 @@ graph TB
 - **前置条件**: UC-1 + UC-2 前置均满足
 - **主流程**:
   1. 主 agent 调 `subagent` tool（action:start, fork:true, worktree:true, task:...）
-  2. WorktreeManager.create → worktreeCwd
-  3. resolveSessionContext(fork:true, cwd:worktreeCwd) → forkFrom(主session, worktreeCwd, subagentSessionDir(主cwd))
-  4. session 存 subagents/<encoded-主cwd>/sessions/（D-004，不随 worktreeCwd 变）
-  5. createAgentSession({cwd: worktreeCwd, sessionManager: forked}) → 既继承历史又在 worktree 跑
+  2. WorktreeManager.create → worktreePath
+  3. resolveSessionContext(fork:true, cwd:worktreePath) → forkFrom(主session, worktreePath, subagentSessionDir(主cwd))
+  4. session 存 subagents/<encoded-主cwd>/sessions/（D-004，不随 effectiveCwd(worktreePath) 变）
+  5. createAgentSession({cwd: worktreePath, sessionManager: forked}) → 既继承历史又在 worktree 跑
 - **异常流程**: 见 UC-1 + UC-2 异常的并集；fork + worktree 创建顺序：先建 worktree（失败则不 fork），再 fork session（失败则清 worktree）
 - **后置状态**: 子 agent 在 worktree 跑 + 带主 agent 历史 + session 存主命名空间
 - **关联目标**: G3
@@ -151,7 +151,7 @@ graph TB
 - **Actor**: subagents 扩展（session_start 时触发）
 - **前置条件**: 主 pi 进程启动（含 session_start 事件）
 - **主流程**:
-  1. session_start → WorktreeReaper.scan
+  1. session_start → WorktreeManager.scan（reaper 是 WorktreeManager 的方法，非独立类，D-019/②§6 已定）
   2. `git worktree list` → 找带 `pi-sub-` 前缀的 worktree
   3. 对照存活的 subagent records（session.jsonl + record 状态）：无关联 running record 的 worktree = 孤儿
   4. 清扫孤儿：worktree remove --force + branch -D（best-effort）
@@ -212,7 +212,7 @@ graph LR
     end
     subgraph Worktree["worktree 路径"]
         W1["git worktree add"]
-        W2["worktreeCwd 运行"]
+        W2["worktreePath 运行（effectiveCwd）"]
         W3["git diff → patch"]
         W4["worktree remove\n+ branch -D"]
     end

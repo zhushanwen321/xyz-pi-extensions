@@ -260,6 +260,13 @@ footer.doc-foot { margin-top: 48px; padding-top: 20px; border-top: 1px solid var
 
 <div class="diagram-shell animate" style="--i:4">
   <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button type="button" data-action="zoom-in" title="放大">+</button>
+      <button type="button" data-action="zoom-out" title="缩小">−</button>
+      <button type="button" data-action="zoom-fit" title="适配">⊡</button>
+      <button type="button" data-action="zoom-one" title="1:1">1:1</button>
+      <button type="button" data-action="zoom-expand" title="新窗口">⤢</button>
+    </div>
     <div class="zoom-label">滚轮缩放 · 拖拽平移 · 双击复位</div>
     <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
   </div>
@@ -357,6 +364,13 @@ graph TD
 <div class="diagram-shell animate" style="--i:7">
   <h3 style="margin-top:0;">UC-1 fork 继承主 agent 上下文（D-018 两级降级）</h3>
   <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button type="button" data-action="zoom-in" title="放大">+</button>
+      <button type="button" data-action="zoom-out" title="缩小">−</button>
+      <button type="button" data-action="zoom-fit" title="适配">⊡</button>
+      <button type="button" data-action="zoom-one" title="1:1">1:1</button>
+      <button type="button" data-action="zoom-expand" title="新窗口">⤢</button>
+    </div>
     <div class="zoom-label">滚轮缩放 · 拖拽平移 · 双击复位</div>
     <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
   </div>
@@ -394,6 +408,13 @@ sequenceDiagram
 <div class="diagram-shell animate" style="--i:8">
   <h3 style="margin-top:0;">UC-4 worktree 清理 + patch 回传（D-017 + D-022 数据黑洞防护）</h3>
   <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button type="button" data-action="zoom-in" title="放大">+</button>
+      <button type="button" data-action="zoom-out" title="缩小">−</button>
+      <button type="button" data-action="zoom-fit" title="适配">⊡</button>
+      <button type="button" data-action="zoom-one" title="1:1">1:1</button>
+      <button type="button" data-action="zoom-expand" title="新窗口">⤢</button>
+    </div>
     <div class="zoom-label">滚轮缩放 · 拖拽平移 · 双击复位</div>
     <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
   </div>
@@ -532,6 +553,13 @@ sequenceDiagram
 <h2 class="sec-head" id="wave">Wave DAG（供⑥，从骨架叶子推导）</h2>
 <div class="diagram-shell animate" style="--i:16">
   <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button type="button" data-action="zoom-in" title="放大">+</button>
+      <button type="button" data-action="zoom-out" title="缩小">−</button>
+      <button type="button" data-action="zoom-fit" title="适配">⊡</button>
+      <button type="button" data-action="zoom-one" title="1:1">1:1</button>
+      <button type="button" data-action="zoom-expand" title="新窗口">⤢</button>
+    </div>
     <div class="zoom-label">滚轮缩放 · 拖拽平移 · 双击复位</div>
     <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
   </div>
@@ -567,12 +595,12 @@ graph LR
     W2a --> W3c
     W2e --> W3d
 
-    classDef w1 fill:#d4edda,stroke:#28a745
-    classDef w2 fill:#cce5ff,stroke:#2196f3
-    classDef w3 fill:#fff3cd,stroke:#ffc107
-    class W1 w1
-    class W2a,W2b,W2c,W2d,W2e,W2f w2
-    class W3a,W3b,W3c,W3d w3
+    classDef base fill:#0d2424,stroke:#2dd4bf,stroke-width:2px,color:#ccfbf1
+    classDef leaf fill:#111d1d,stroke:#34d399,stroke-width:2px,color:#6ee7b7
+    classDef hub fill:#29220d,stroke:#fbbf24,stroke-width:2px,color:#fde68a
+    class W1 base
+    class W2a,W2b,W2c,W2d,W2e,W2f leaf
+    class W3a,W3b,W3c,W3d hub
   </script>
 </div>
 <div class="callout animate" style="--i:17">

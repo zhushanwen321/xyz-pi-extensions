@@ -635,7 +635,7 @@ RecordStore.collectRecords → reconstructAll → (session-reconstructor 推 don
 |---------|------|------|------|------|---------|
 | T1.1 | 正常 | fork:true，createBranchedSession 成功 | fork:true, parentForkDepth=2 | session.messages 含主历史，sessionManager 已 mutate | AC-1.1 |
 | T1.2 | 异常 | createBranchedSession 抛错→降级 forkFrom | fork:true + leafId 不存在 | 降级调 forkFrom，session 仍含主历史 | AC-6.3（两级降级） |
-| T1.3 | 异常 | forkFrom 也失败 | fork:true + mainSessionFile 损坏 | 抛错（不进入 run），finalizeFailed | AC-1.2 |
+| T1.3 | 异常 | forkFrom 失败（源空或损坏） | fork:true + mainSessionFile 空/损坏 | pi SDK 抛错（"Cannot fork: source empty or invalid"），不进入 run，finalizeFailed（empty+corrupt 合并路径，AC-1.2 修订） | AC-1.2 |
 | T1.4 | 边界 | fork 深度=10 拒绝 | fork:true, parentForkDepth=10 | 抛 ForkDepthExceededError | AC-1.3 / D-007 |
 | T1.5 | 状态 | 终态不可逆（fork 后正常完成 done） | fork:true + 正常完成 | status=done，markReconstructedStatus 不回退 | AC-1.1 |
 | T1.6 | 并发 | createBranchedSession mutate 不串台 | 两 fork 并发（不同 leafId） | 各自 sessionManager 实例独立，不互相 mutate | AC-6.4（⑤骨架验证） |
