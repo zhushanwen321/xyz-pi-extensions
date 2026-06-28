@@ -25,7 +25,7 @@ const REMINDER_INTERVAL = 2;
 export type RefreshDisplayFn = (ctx: ExtensionContext) => void;
 
 /** 构建极简提醒：只含下一个推荐任务 */
-function buildMinimalReminder(state: TodoSessionState): string {
+export function buildMinimalReminder(state: TodoSessionState): string {
 	const pendingTodos = state.todos.filter((t) => t.status !== "completed");
 	if (pendingTodos.length === 0) return "";
 
@@ -33,8 +33,7 @@ function buildMinimalReminder(state: TodoSessionState): string {
 	return `<todo_context>\n[TODO] 你有 ${pendingTodos.length} 个未完成任务。下一个应处理：#${next.id} ${next.text}\n</todo_context>`;
 }
 
-/** 构建 before_agent_start 的 todo context */
-function buildBeforeAgentStartMessage(state: TodoSessionState): { message: { customType: string; content: string; display: boolean } } | undefined {
+export function buildBeforeAgentStartMessage(state: TodoSessionState): { message: { customType: string; content: string; display: boolean } } | undefined {
 	if (state.todos.length === 0) return undefined;
 
 	const pendingTodos = state.todos.filter((t) => t.status !== "completed");
@@ -55,7 +54,7 @@ function buildBeforeAgentStartMessage(state: TodoSessionState): { message: { cus
 
 // ── 状态重建 ────────────────────────────────────────
 
-function reconstructState(state: TodoSessionState, ctx: ExtensionContext): void {
+export function reconstructState(state: TodoSessionState, ctx: ExtensionContext): void {
 	state.todos = [];
 	state.nextId = 1;
 	state.userMessageCount = 0;
@@ -100,8 +99,7 @@ function reconstructState(state: TodoSessionState, ctx: ExtensionContext): void 
 
 // ── agent_end 子函数 ────────────────────────────────
 
-/** 1. Auto-clear */
-function handleAutoClear(state: TodoSessionState): { handled: boolean; cleared: boolean } {
+export function handleAutoClear(state: TodoSessionState): { handled: boolean; cleared: boolean } {
 	const allCompleted = state.todos.every((t) => t.status === "completed");
 	if (!allCompleted) {
 		state.allCompletedAtCount = null;
@@ -120,8 +118,7 @@ function handleAutoClear(state: TodoSessionState): { handled: boolean; cleared: 
 	return { handled: true, cleared: false };
 }
 
-/** 2. 全部 completed 时设置延迟 steer（仅一次），由 before_agent_start 消费 */
-function handleCompletionSteer(state: TodoSessionState): boolean {
+export function handleCompletionSteer(state: TodoSessionState): boolean {
 	if (state.completionSteered) return false;
 	const allCompleted = state.todos.length > 0 && state.todos.every((t) => t.status === "completed");
 	if (!allCompleted) return false;
@@ -131,8 +128,7 @@ function handleCompletionSteer(state: TodoSessionState): boolean {
 	return true;
 }
 
-/** 3. Stall 检测 — 设置延迟 steer */
-function handleStallDetection(state: TodoSessionState): boolean {
+export function handleStallDetection(state: TodoSessionState): boolean {
 	if (
 		!state.stallNotified &&
 		state.userMessageCount - state.lastTodoCallCount >= STALL_THRESHOLD
@@ -147,8 +143,7 @@ function handleStallDetection(state: TodoSessionState): boolean {
 	return false;
 }
 
-/** 4. 提醒 — 设置延迟 steer */
-function handleReminder(state: TodoSessionState): boolean {
+export function handleReminder(state: TodoSessionState): boolean {
 	if (state.userMessageCount - state.lastTodoCallCount >= REMINDER_INTERVAL) {
 		const reminder = buildMinimalReminder(state);
 		if (reminder) {

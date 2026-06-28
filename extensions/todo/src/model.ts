@@ -15,7 +15,6 @@ export interface TodoDetails {
 	action: "list" | "add" | "update" | "delete" | "clear";
 	todos: Todo[];
 	nextId: number;
-	error?: string;
 	_render?: {
 		type: "task-list";
 		summary?: string;
