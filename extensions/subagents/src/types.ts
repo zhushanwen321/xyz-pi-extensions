@@ -361,14 +361,6 @@ export interface SubagentToolDetails {
 // ============================================================
 
 /** session-runner 内部上下文（扩展 effectiveCwd/mainCwd/mainSessionFile）。 */
-export interface SessionRunnerContext {
-  readonly agentDir: string;
-  readonly effectiveCwd: string;
-  readonly mainCwd: string;
-  readonly sessionDir: string;
-  readonly mainSessionFile: string;
-}
-
 /** session-runner.run() 的入参选项。 */
 export interface RunOptions {
   /** 是否使用 fork 模式（创建 worktree 隔离）。 */

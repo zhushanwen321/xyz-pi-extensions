@@ -110,6 +110,30 @@ describe("WorktreeManager", () => {
       );
     });
 
+    it("recordId 空字符串抛 DirtyWorktreeError", () => {
+      expect(() => mgr.create(MAIN_CWD, "")).toThrow(DirtyWorktreeError);
+    });
+
+    it("recordId 单字符合法", () => {
+      setupCleanTree();
+      const handle = mgr.create(MAIN_CWD, "a");
+      expect(handle.branch).toBe("pi-sub-a");
+    });
+
+    it("recordId 连续短横线合法", () => {
+      setupCleanTree();
+      const handle = mgr.create(MAIN_CWD, "--test--");
+      expect(handle.branch).toBe("pi-sub---test--");
+    });
+
+    it("recordId 包含分号抛 DirtyWorktreeError", () => {
+      expect(() => mgr.create(MAIN_CWD, "a;b")).toThrow(DirtyWorktreeError);
+    });
+
+    it("recordId 包含反引号抛 DirtyWorktreeError", () => {
+      expect(() => mgr.create(MAIN_CWD, "`cmd`")).toThrow(DirtyWorktreeError);
+    });
+
     it("调用 git worktree add 正确参数", () => {
       setupCleanTree();
 
@@ -263,6 +287,74 @@ describe("WorktreeManager", () => {
         (c) => c[1]?.[0] === "worktree" && c[1]?.[1] === "remove",
       );
       expect(removeCalls).toHaveLength(0);
+    });
+
+    it(".alive 超过 24h 软超时即使 pid 活也清理", () => {
+      mockExistsSync.mockImplementation((p: unknown) => {
+        const s = String(p);
+        if (s.endsWith("worktrees")) return true;
+        if (s.includes(".finalized")) return true;
+        if (s.includes("orphan1.jsonl")) return true;
+        return false;
+      });
+
+      mockReaddirSync.mockReturnValue(["pi-sub-orphan1"] as unknown as ReturnType<typeof fs.readdirSync>);
+
+      // .alive 超过 24h
+      const twentyFiveHoursAgo = Date.now() - 25 * 60 * 60 * 1000;
+      mockReadAliveMarker.mockReturnValue({
+        pid: 12345,
+        id: "orphan1",
+        startedAt: twentyFiveHoursAgo,
+      });
+      mockIsProcessAlive.mockReturnValue(true); // pid 仍然活
+
+      mockExec.mockImplementation((cmd: string, args?: readonly string[]) => {
+        if (args?.[0] === "rev-parse" && args?.[1] === "--git-dir") return ".git";
+        if (args?.[0] === "worktree") return "";
+        if (args?.[0] === "branch") return "";
+        return "";
+      });
+
+      mgr.scan(MAIN_CWD, AGENT_DIR);
+
+      // 应调用 worktree remove（超过 24h 软超时）
+      expect(mockExec).toHaveBeenCalledWith(
+        "git",
+        ["worktree", "remove", "--force", expect.stringContaining("pi-sub-orphan1")],
+        expect.objectContaining({ cwd: MAIN_CWD }),
+      );
+    });
+
+    it("readdirSync 抛错时静默返回", () => {
+      mockExistsSync.mockImplementation((p: unknown) => {
+        return String(p).endsWith("worktrees");
+      });
+
+      mockReaddirSync.mockImplementation(() => {
+        throw new Error("permission denied");
+      });
+
+      mockExec.mockImplementation((cmd: string, args?: readonly string[]) => {
+        if (args?.[0] === "rev-parse" && args?.[1] === "--git-dir") return ".git";
+        return "";
+      });
+
+      // 不应抛错
+      expect(() => mgr.scan(MAIN_CWD, AGENT_DIR)).not.toThrow();
+    });
+
+    it("worktreesRoot 不存在时静默返回", () => {
+      mockExistsSync.mockReturnValue(false);
+
+      mockExec.mockImplementation((cmd: string, args?: readonly string[]) => {
+        if (args?.[0] === "rev-parse" && args?.[1] === "--git-dir") return ".git";
+        return "";
+      });
+
+      // 不应抛错，不应调用 readdirSync
+      expect(() => mgr.scan(MAIN_CWD, AGENT_DIR)).not.toThrow();
+      expect(mockReaddirSync).not.toHaveBeenCalled();
     });
   });
 });

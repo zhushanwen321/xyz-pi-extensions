@@ -101,4 +101,47 @@ describe("alive-store", () => {
     // pid 0 不存在于用户空间（kill(0,0) 在某些 OS 有特殊语义，用大数更安全）
     expect(isProcessAlive(9999999)).toBe(false);
   });
+
+  it("isProcessAlive returns true for EPERM (process exists but no permission)", () => {
+    // 模拟 EPERM：进程存在但无权限发信号
+    const err = new Error("EPERM") as NodeJS.ErrnoException;
+    err.code = "EPERM";
+    const originalKill = process.kill;
+    process.kill = (_pid: number, _signal?: string | number) => {
+      throw err;
+    };
+    try {
+      expect(isProcessAlive(12345)).toBe(true);
+    } finally {
+      process.kill = originalKill;
+    }
+  });
+
+  it("isProcessAlive returns false for ESRCH (no such process)", () => {
+    // 模拟 ESRCH：进程不存在
+    const err = new Error("ESRCH") as NodeJS.ErrnoException;
+    err.code = "ESRCH";
+    const originalKill = process.kill;
+    process.kill = (_pid: number, _signal?: string | number) => {
+      throw err;
+    };
+    try {
+      expect(isProcessAlive(12345)).toBe(false);
+    } finally {
+      process.kill = originalKill;
+    }
+  });
+
+  it("isProcessAlive returns false for unknown errors", () => {
+    // 模拟未知错误：保守判死
+    const originalKill = process.kill;
+    process.kill = (_pid: number, _signal?: string | number) => {
+      throw new Error("unknown error");
+    };
+    try {
+      expect(isProcessAlive(12345)).toBe(false);
+    } finally {
+      process.kill = originalKill;
+    }
+  });
 });
