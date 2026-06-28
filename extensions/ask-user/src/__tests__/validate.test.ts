@@ -1,7 +1,7 @@
 // src/__tests__/validate.test.ts
 import { describe, expect, it } from "vitest";
 
-import type { Question } from "../types";
+import { HEADER_MAX_CHARS, type Question } from "../types";
 import { validateInput } from "../validate";
 
 const q = (overrides: Partial<Question> = {}): Question => ({
@@ -120,5 +120,18 @@ describe("validateInput", () => {
 			const result = validateInput([q({ question: text })]);
 			expect(result).toContain("control characters");
 		}
+	});
+
+	// V-15: header 超过 HEADER_MAX_CHARS(12) 上限被拒绝（A3：补 validate 层校验）
+	it("rejects header exceeding HEADER_MAX_CHARS (12)", () => {
+		const result = validateInput([q({ header: "This header is too long" })]);
+		expect(result).not.toBeNull();
+		expect(result).toContain("Header exceeds");
+		expect(result).toContain(`${HEADER_MAX_CHARS}`);
+	});
+
+	// V-16: header 恰好 12 字符（边界值，合法）
+	it("accepts header at exactly HEADER_MAX_CHARS (12)", () => {
+		expect(validateInput([q({ header: "123456789012" })])).toBeNull();
 	});
 });
