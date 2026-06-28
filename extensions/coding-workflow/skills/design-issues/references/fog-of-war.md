@@ -52,9 +52,9 @@ graph LR
   #2[P0: 认证模块]:::resolved --> #3
   #3 --> #5[? 状态机边界]:::fog
   #4[P2: 缓存]:::resolved
-  classDef resolved fill:#90EE90
-  classDef investigating fill:#FFD700
-  classDef fog fill:#D3D3D3
+  classDef resolved fill:#0d2922,stroke:#34d399,stroke-width:2px,color:#6ee7b7
+  classDef investigating fill:#38250d,stroke:#fbbf24,stroke-width:2px,color:#fde68a
+  classDef fog fill:#1a202c,stroke:#64748b,stroke-width:2px,stroke-dasharray:5 5,color:#94a3b8
 ```
 
 ## Issues

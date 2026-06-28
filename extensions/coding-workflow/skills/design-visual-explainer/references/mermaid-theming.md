@@ -31,19 +31,21 @@ mermaid.initialize({
   themeVariables: {
     fontFamily: "'Bricolage Grotesque', system-ui, sans-serif",
     fontSize: '16px',   // 10+ 节点调到 18-20px
-    primaryColor: isDark ? '#134e4a' : '#ccfbf1',
-    primaryBorderColor: isDark ? '#14b8a6' : '#0d9488',
-    primaryTextColor: isDark ? '#f0fdfa' : '#134e4a',
-    secondaryColor: isDark ? '#1e293b' : '#f0f9f4',
-    secondaryBorderColor: isDark ? '#059669' : '#16a34a',
-    secondaryTextColor: isDark ? '#f1f5f9' : '#1e293b',
-    tertiaryColor: isDark ? '#27201a' : '#fef3c7',
-    tertiaryBorderColor: isDark ? '#d97706' : '#f59e0b',
-    tertiaryTextColor: isDark ? '#fef3c7' : '#27201a',
-    lineColor: isDark ? '#64748b' : '#94a3b8',
-    noteBkgColor: isDark ? '#1e293b' : '#fefce8',
-    noteTextColor: isDark ? '#f1f5f9' : '#1e293b',
-    noteBorderColor: isDark ? '#fbbf24' : '#d97706',
+    // Page bg (#0a1414 dark / #f6f8f8 light) and lineColor stay stable;
+    // nodes use dark-fill + bright semantic borders in dark mode.
+    primaryColor: isDark ? '#0d2424' : '#ccfbf1',
+    primaryBorderColor: isDark ? '#5eead4' : '#0d9488',
+    primaryTextColor: isDark ? '#e3efee' : '#134e3a',
+    secondaryColor: isDark ? '#111d1d' : '#fffbeb',
+    secondaryBorderColor: isDark ? '#115e59' : '#d97706',
+    secondaryTextColor: isDark ? '#5eead4' : '#92400e',
+    tertiaryColor: isDark ? '#1a1a1a' : '#f8fafc',
+    tertiaryBorderColor: isDark ? '#64748b' : '#64748b',
+    tertiaryTextColor: isDark ? '#e2e8f0' : '#334155',
+    lineColor: isDark ? '#5eead4' : '#94a3b8',
+    noteBkgColor: isDark ? '#0d2424' : '#f0fdfa',
+    noteTextColor: isDark ? '#e3efee' : '#134e3a',
+    noteBorderColor: isDark ? '#2dd4bf' : '#0d9488',
   }
 });
 ```
@@ -78,12 +80,12 @@ graph TD
   I2[P1: 缓存策略]:::p1
   I3[P2: 日志格式]:::p2
   I1 --> I2
-  classDef p0 fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
-  classDef p1 fill:#fed7aa,stroke:#ea580c,color:#7c2d12
-  classDef p2 fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+  classDef p0 fill:#3f1818,stroke:#f87171,stroke-width:2px,color:#fecaca
+  classDef p1 fill:#38250d,stroke:#fb923c,stroke-width:2px,color:#fed7aa
+  classDef p2 fill:#0c243a,stroke:#38bdf8,stroke-width:2px,color:#bae6fd
 ```
 
-dark mode 下换深色 fill。或用 `rendering-cookbook.md` 的语义色变量统一着色。
+dark mode 下用深色填充 + 亮色边框/文字；light mode 用浅色填充 + 深色文字。包依赖图额外使用 `layer` / `types` / `sdk` 等语义 classDef（见 `skeletons/code-architecture.html`）。
 
 ## 复杂图缩放（10+ 节点）
 

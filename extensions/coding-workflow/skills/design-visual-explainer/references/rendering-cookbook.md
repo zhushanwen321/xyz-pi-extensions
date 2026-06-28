@@ -161,19 +161,20 @@ mermaid.initialize({
   startOnLoad: false, theme: 'base', look: 'classic', layout: 'elk',
   themeVariables: {
     fontFamily: "'Bricolage Grotesque', system-ui, sans-serif", fontSize: '16px',
-    primaryColor: isDark ? '#115e59' : '#ccfbf1',
-    primaryBorderColor: isDark ? '#2dd4bf' : '#0d9488',
-    primaryTextColor: isDark ? '#ccfbf1' : '#134e4a',
-    secondaryColor: isDark ? '#0c4a6e' : '#e0f2fe',
-    secondaryBorderColor: isDark ? '#38bdf8' : '#0369a1',
-    secondaryTextColor: isDark ? '#ccfbf1' : '#134e4a',
-    tertiaryColor: isDark ? '#2e2618' : '#fffbeb',
-    tertiaryBorderColor: isDark ? '#fbbf24' : '#d97706',
-    tertiaryTextColor: isDark ? '#ccfbf1' : '#134e4a',
-    lineColor: isDark ? '#5eead4' : '#5f8a85',
-    noteBkgColor: isDark ? '#115e59' : '#fefce8',
-    noteTextColor: isDark ? '#ccfbf1' : '#134e4a',
-    noteBorderColor: isDark ? '#fbbf24' : '#d97706',
+    // Page bg and lineColor stay stable; nodes use dark-fill + bright semantic borders in dark mode
+    primaryColor: isDark ? '#0d2424' : '#ccfbf1',
+    primaryBorderColor: isDark ? '#5eead4' : '#0d9488',
+    primaryTextColor: isDark ? '#e3efee' : '#134e4a',
+    secondaryColor: isDark ? '#111d1d' : '#fffbeb',
+    secondaryBorderColor: isDark ? '#115e59' : '#d97706',
+    secondaryTextColor: isDark ? '#5eead4' : '#92400e',
+    tertiaryColor: isDark ? '#1a1a1a' : '#f8fafc',
+    tertiaryBorderColor: isDark ? '#64748b' : '#64748b',
+    tertiaryTextColor: isDark ? '#e2e8f0' : '#334155',
+    lineColor: isDark ? '#5eead4' : '#94a3b8',
+    noteBkgColor: isDark ? '#0d2424' : '#f0fdfa',
+    noteTextColor: isDark ? '#e3efee' : '#134e4a',
+    noteBorderColor: isDark ? '#2dd4bf' : '#0d9488',
   }
 });
 

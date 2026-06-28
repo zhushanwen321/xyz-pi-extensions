@@ -50,7 +50,14 @@
 <div class="diagram-shell">
   <p class="diagram-shell__hint">Wave 依赖 DAG · 实线=blocked_by · subgraph=并行组</p>
   <div class="mermaid-wrap">
-    <div class="zoom-controls">…</div>
+    <div class="zoom-controls">
+      <button data-action="zoom-in" title="放大">+</button>
+      <button data-action="zoom-out" title="缩小">−</button>
+      <button data-action="zoom-fit" title="适配">⊡</button>
+      <button data-action="zoom-one" title="1:1">1:1</button>
+      <button data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">— contain</span>
+    </div>
     <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
   </div>
   <script type="text/plain" class="diagram-source">
@@ -60,9 +67,10 @@ graph LR
   W2[Wave 2]:::w2
   W1 --> W2
   ...
-  classDef pre fill:#fde68a,stroke:#b45309
-  classDef w1 fill:#bbf7d0,stroke:#059669
-  classDef gate fill:#e2e8f0,stroke:#94a3b8,stroke-dasharray: 5 5
+  classDef pre fill:#38250d,stroke:#fbbf24,stroke-width:2px,color:#fde68a
+  classDef w1 fill:#0d2922,stroke:#34d399,stroke-width:2px,color:#6ee7b7
+  classDef w2 fill:#0c243a,stroke:#38bdf8,stroke-width:2px,color:#bae6fd
+  classDef gate fill:#1a202c,stroke:#94a3b8,stroke-width:2px,stroke-dasharray:5 5,color:#94a3b8
   </script>
 </div>
 -->

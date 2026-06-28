@@ -51,13 +51,54 @@ src/
 
 <!-- AGENT-FILL: dependency-graph — 包依赖图（主角图之二）。graph TD + subgraph，无环。
 <div class="diagram-shell">
-  <div class="mermaid-wrap">…zoom-controls…<div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div></div>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button data-action="zoom-in" title="放大">+</button>
+      <button data-action="zoom-out" title="缩小">−</button>
+      <button data-action="zoom-fit" title="适配">⊡</button>
+      <button data-action="zoom-one" title="1:1">1:1</button>
+      <button data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">— contain</span>
+    </div>
+    <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
+  </div>
   <script type="text/plain" class="diagram-source">
 graph TD
-  subgraph 层A
-    M1[模块1]
+  subgraph Shell["外壳层"]
+    direction LR
+    tool[tools/xxx-tool]
+    index[index.ts]
   end
-  ...
+  subgraph Runtime["Runtime 执行域"]
+    direction TB
+    svc[runtime/xxx-service]
+    wtm["runtime/xxx-manager ★"]
+  end
+  subgraph Core["Core 编排子层"]
+    direction TB
+    rec[core/xxx-record]
+    scr["core/xxx-resolver ★"]
+  end
+  types[(types.ts)]
+  sdk[("外部 SDK")]
+
+  tool --> svc
+  svc --> wtm
+  svc --> scr
+  scr --> types
+  wtm --> types
+  svc -.-> sdk
+
+  classDef new fill:#0d2922,stroke:#34d399,stroke-width:2px,color:#6ee7b7
+  classDef mod fill:#29220d,stroke:#fbbf24,stroke-width:2px,color:#fde68a
+  classDef layer fill:#111d1d,stroke:#115e59,stroke-width:1.5px,color:#5eead4
+  classDef types fill:#0d2429,stroke:#2dd4bf,stroke-width:2px,color:#ccfbf1
+  classDef sdk fill:#1a1a1a,stroke:#94a3b8,stroke-width:2px,stroke-dasharray:5 5,color:#e2e8f0
+  class scr,wtm new
+  class tool,index,svc,rec,types mod
+  class Shell,Runtime,Core layer
+  class types types
+  class sdk sdk
   </script>
 </div>
 -->
@@ -66,7 +107,17 @@ graph TD
 
 <!-- AGENT-FILL: sequence-diagrams — 核心时序图×N。每张 sequenceDiagram 入口→底层 + 异常路径 alt/else。
 <div class="diagram-shell">
-  <div class="mermaid-wrap">…</div>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button data-action="zoom-in" title="放大">+</button>
+      <button data-action="zoom-out" title="缩小">−</button>
+      <button data-action="zoom-fit" title="适配">⊡</button>
+      <button data-action="zoom-one" title="1:1">1:1</button>
+      <button data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">— contain</span>
+    </div>
+    <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
+  </div>
   <script type="text/plain" class="diagram-source">
 sequenceDiagram
   participant U as 用户
@@ -82,7 +133,35 @@ sequenceDiagram
 
 <!-- AGENT-FILL: code-mapping — 现有代码映射（refactor 场景）。用 .data-table -->
 
-<!-- AGENT-FILL: wave-dag — Wave DAG（供⑥，从骨架叶子推导）。graph LR + classDef 着色 -->
+<!-- AGENT-FILL: wave-dag — Wave DAG（供⑥，从骨架叶子推导）。graph LR + classDef 着色
+<div class="diagram-shell">
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button data-action="zoom-in" title="放大">+</button>
+      <button data-action="zoom-out" title="缩小">−</button>
+      <button data-action="zoom-fit" title="适配">⊡</button>
+      <button data-action="zoom-one" title="1:1">1:1</button>
+      <button data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">— contain</span>
+    </div>
+    <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+graph LR
+  W1["W1 编译基石<br/>types + record"]
+  W2a["W2 叶子模块"]
+  W3a["W3 汇合点"]
+  W1 --> W2a
+  W2a --> W3a
+  classDef w1 fill:#0d2424,stroke:#2dd4bf,stroke-width:2px,color:#ccfbf1
+  classDef w2 fill:#111d1d,stroke:#34d399,stroke-width:2px,color:#6ee7b7
+  classDef w3 fill:#29220d,stroke:#fbbf24,stroke-width:2px,color:#fde68a
+  class W1 w1
+  class W2a w2
+  class W3a w3
+  </script>
+</div>
+-->
 
 <!-- AGENT-FILL: skeleton-coverage — 骨架覆盖核验表（§3 签名 ↔ 骨架定义）。用 .data-table -->
 

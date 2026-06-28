@@ -140,7 +140,7 @@ graph TD
     payment --> order
     infra --> shared
 
-    classDef warn fill:#ff9999
+    classDef warn fill:#3f1818,stroke:#f87171,stroke-width:2px,color:#fecaca
     class order,payment warn
 ```
 
