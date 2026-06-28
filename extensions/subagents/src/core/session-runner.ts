@@ -169,6 +169,14 @@ interface BuiltSession {
 /** 动态 import Pi SDK。 */
 async function getSdk(): Promise<SdkLike> {
   const mod = await import("@mariozechner/pi-coding-agent");
+  // 运行时 guard：验证 SDK 关键方法存在
+  const sdkMod = mod as Record<string, unknown>;
+  if (typeof sdkMod.createAgentSession !== "function") {
+    throw new Error("SDK missing createAgentSession function");
+  }
+  if (!sdkMod.SessionManager || typeof (sdkMod.SessionManager as Record<string, unknown>).create !== "function") {
+    throw new Error("SDK missing SessionManager.create function");
+  }
   // eslint-disable-next-line taste/no-unsafe-cast
   return mod as unknown as SdkLike;
 }

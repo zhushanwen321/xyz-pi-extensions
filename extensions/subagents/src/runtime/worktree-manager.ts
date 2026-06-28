@@ -17,11 +17,16 @@ import type { PatchResult,WorktreeHandle } from "../types.ts";
 import { DirtyWorktreeError } from "../types.ts";
 import { isProcessAlive,readAliveMarker } from "./execution/alive-store.ts";
 
+import { getSubagentSessionDir } from "../core/path-encoding.ts";
+
 // recordId 白名单：字母数字下划线短横线
 const SAFE_ID_RE = /^[\w-]+$/;
 
 // 默认 git 命令超时（ms）
 const GIT_TIMEOUT_MS = 30_000;
+
+// .alive 软超时（24h）：PID 复用兜底（D-021）
+const ALIVE_SOFT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 export class WorktreeManager {
   /**
@@ -91,8 +96,9 @@ export class WorktreeManager {
   collectPatch(handle: WorktreeHandle): PatchResult {
     const patchFile = path.join(handle.path, `.${handle.branch}.patch`);
 
+    // git diff HEAD：包含暂存区 + 未暂存的修改（AI agent 通常不会主动 git add）
     const diff = this.gitRun(
-      ["diff", "--cached", handle.baseCommit],
+      ["diff", "HEAD", handle.baseCommit],
       { cwd: handle.path },
     );
 
@@ -135,7 +141,7 @@ export class WorktreeManager {
     for (const name of entries) {
       const wtPath = path.join(worktreesRoot, name);
       const recordId = name.slice("pi-sub-".length);
-      const sessionFile = this.findSessionFile(agentDir, recordId);
+      const sessionFile = this.findSessionFile(agentDir, mainCwd, recordId);
       if (sessionFile === undefined) {
         continue; // 没有 session 文件，可能是主流程创建但还没跑完，不删
       }
@@ -147,8 +153,13 @@ export class WorktreeManager {
       }
 
       const aliveMarker = readAliveMarker(sessionFile);
-      if (aliveMarker !== undefined && isProcessAlive(aliveMarker.pid)) {
-        continue; // 有活进程，绝不删（D-024）
+      if (aliveMarker !== undefined) {
+        const isAlive = isProcessAlive(aliveMarker.pid);
+        const isSoftTimeout = Date.now() - aliveMarker.startedAt > ALIVE_SOFT_TIMEOUT_MS;
+        if (isAlive && !isSoftTimeout) {
+          continue; // 有活进程且未超 24h，绝不删（D-024）
+        }
+        // PID 复用兜底：超过 24h 即使 pid 活也视为孤儿（D-021）
       }
 
       // 是孤儿，执行清理
@@ -215,8 +226,10 @@ export class WorktreeManager {
    * 在 agentDir 下查找 recordId 对应的 session 文件。
    * 匹配 `<id>.jsonl` 模式。
    */
-  private findSessionFile(agentDir: string, recordId: string): string | undefined {
-    const candidate = path.join(agentDir, `${recordId}.jsonl`);
+  private findSessionFile(agentDir: string, mainCwd: string, recordId: string): string | undefined {
+    // session 文件存储在 agentDir/subagents/sessions/<encodedCwd>/<recordId>.jsonl
+    const sessionsDir = getSubagentSessionDir(agentDir, mainCwd);
+    const candidate = path.join(sessionsDir, `${recordId}.jsonl`);
     return fs.existsSync(candidate) ? candidate : undefined;
   }
 }

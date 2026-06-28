@@ -408,10 +408,12 @@ export interface ExecuteOptions {
   onComplete?: (record: RecordSnapshot) => void;
   /** fork 模式：创建 worktree 隔离执行。 */
   fork?: boolean;
-  /** fork 模式：指定 worktree handle。 */
-  worktree?: WorktreeHandle;
+  /** fork 模式：worktree 隔离（true=创建新 worktree，WorktreeHandle=使用已有）。 */
+  worktree?: boolean | WorktreeHandle;
   /** fork 模式：覆盖执行 cwd（默认 mainCwd）。 */
   cwd?: string;
+  /** 父级 fork depth（用于深度限制检查，D-007 MAX_FORK_DEPTH=10）。 */
+  parentForkDepth?: number;
 }
 
 /**

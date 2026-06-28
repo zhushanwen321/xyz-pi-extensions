@@ -19,7 +19,7 @@ import {
 } from "../core/execution-record.ts";
 import type { AgentConfig, ModelInfo } from "../core/model-resolver.ts";
 import { getSdk, getSubagentSessionDir, run, type SessionRunnerContext } from "../core/session-runner.ts";
-import type { SdkLike } from "../types.ts";
+import type { SdkLike, WorktreeHandle } from "../types.ts";
 import type {
   AgentEvent,
   AgentResult,
@@ -193,8 +193,22 @@ export class SubagentService {
 
     // ── 2.5 worktree 创建（fork=true 且未提供 handle 时）──
     // record 先创建，worktree 失败时可 finalizeFailed（record 已在 store 中）。
-    let worktreeHandle = opts.worktree;
-    if (opts.fork && !worktreeHandle) {
+    let worktreeHandle: WorktreeHandle | undefined;
+    if (typeof opts.worktree === "object") {
+      // 传入的是已创建的 WorktreeHandle
+      worktreeHandle = opts.worktree;
+    } else if (opts.fork && opts.worktree === true) {
+      // worktree=true，创建新 worktree
+      try {
+        worktreeHandle = this.worktreeManager.create(this.cwd, record.id);
+        record.worktreeHandle = worktreeHandle;
+      } catch (err) {
+        // create 失败→不进入 run，合成 failed result
+        const _result = await this.finalizeFailed(record, err);
+        return { mode, record: snapshot(record), details: project(record) } as ExecutionHandle;
+      }
+    } else if (opts.fork && opts.worktree !== false) {
+      // fork=true 但 worktree 未指定或 undefined，也创建 worktree
       try {
         worktreeHandle = this.worktreeManager.create(this.cwd, record.id);
         record.worktreeHandle = worktreeHandle;
@@ -334,6 +348,13 @@ export class SubagentService {
       ? (event: AgentEvent): void => this.onEventThrottled(record, event, opts.onUpdate!)
       : undefined;
 
+    // 解析 worktree 参数：boolean → WorktreeHandle | undefined
+    let worktreeHandle: WorktreeHandle | undefined;
+    if (typeof opts.worktree === "object") {
+      worktreeHandle = opts.worktree;
+    }
+    // worktree=true 或 undefined 时不传递 handle，由 run 内部处理
+
     let result: AgentResult;
     try {
       result = await run(record, opts.task, {
@@ -347,8 +368,8 @@ export class SubagentService {
         signal,
         onEvent,
         fork: opts.fork,
-        worktree: opts.worktree,
-        parentForkDepth: 0, // ponytail: 硬编码顶层 depth，多层 fork 由 session-runner 内部递增
+        worktree: worktreeHandle,
+        parentForkDepth: opts.parentForkDepth ?? 0, // 从 opts 读取，默认 0（顶层）
       }, ctx);
     } catch (err) {
       // run() 正常路径不抛错，但创建期异常（createAndConfigureSession 失败）
@@ -390,8 +411,12 @@ export class SubagentService {
           this.notifyComplete(record);
         }
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         // detached 吞错：runAndFinalize 内部已 finalize record，不外抛
+        // 但记录错误以便排查
+        if (err instanceof Error) {
+          console.debug(`[subagent] background finalize error (record=${record.id}): ${err.message}`);
+        }
       });
   }
 
