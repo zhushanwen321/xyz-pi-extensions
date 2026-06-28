@@ -356,6 +356,58 @@ graph LR
 └── reports/                           # E2E 运行报告（覆盖率映射回清单）
 ```
 
+**E2E 时序保障机制 [MANDATORY]**：
+
+> E2E 测试的核心挑战是**时序控制**：pi 启动后不会立刻进入 subagent，subagent 可能很快结束导致特殊操作（如 kill）无法命中。必须使用就绪信号 + sleep 窗口确保操作命中目标。
+
+**三层保障模型**：
+
+| 层级 | 机制 | 作用 |
+|------|------|------|
+| **1. 原子就绪信号** | `touch ready && sleep 60` | ready 出现 = subagent 已进入任务，且 sleep 开始 |
+| **2. 长 sleep 窗口** | `sleep 60` | 60 秒窗口，足够完成 kill/检查等操作 |
+| **3. 进程树确认** | `pgrep -P $PI_PID` | 只杀子进程，不杀 pi 主进程 |
+
+**任务模板**：
+
+| 测试类型 | 任务模板 | 验证点 |
+|----------|----------|--------|
+| **crash 测试** | `touch ready && sleep 60` | kill 在 ready 后、sleep 结束前 |
+| **正常完成** | `echo done && touch ready && sleep 1` | ready 出现后短暂等待，验证完成 |
+| **worktree 写入** | `touch ready && echo test > file && sleep 5` | ready 后验证文件创建 |
+| **fork 继承** | `touch ready && env && sleep 5` | ready 后验证环境变量继承 |
+
+**时序流程图**：
+
+```
+主脚本                    subagent (fork/worktree)
+   │                           │
+   ├─ pi -p "任务..." ────────►│
+   │                           ├─ 开始执行
+   │                           ├─ 创建就绪标记 /tmp/pi-e2e-test/ready
+   │                           └─ sleep 等待（保持进程存活）
+   │
+   ├─ while [ ! -f ready ]; do sleep 0.1; done
+   │                           │
+   ├─ 执行特殊操作 (kill -9) ──┤
+   │                           └─ 被杀死
+   │
+   └─ 验证结果
+```
+
+**各用例时序要求**：
+
+| 用例 | 就绪信号 | sleep 窗口 | 特殊操作 | 验证时机 |
+|------|----------|-----------|----------|----------|
+| T1.1 fork | ✓ | 30s | 无 | ready 后检查 session |
+| T2.1 worktree | ✓ | 30s | 无 | ready 后检查 cwd |
+| T2.5 node_modules | ✓ | 30s | 无 | ready 后检查软链 |
+| T4.1 patch | ✓ | 30s | 无 | 任务结束后检查 patch 文件 |
+| T5.4 reaper | ✓ | 30s | 预置孤儿 | ready 后检查孤儿清理 |
+| T7.5 crash | ✓ | 60s | kill -9 | pi 退出后检查 crashed 标记 |
+
+**E2E 测试沙盒路径**：`/tmp/pi-e2e-test/`（每次运行自动创建，完全隔离）
+
 **E2E 测试覆盖的 test-matrix 用例**（执行层=e2e 的用例 + 关键 integration 的真实 CLI 验证）：
 - T2.5（e2e：node_modules 软链生效，worktreePath/node_modules/.bin 存在）
 - T5.4（e2e：session_start 触发 reaper 扫孤儿）

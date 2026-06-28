@@ -33,12 +33,15 @@ import type {
   SubagentToolDetails,
 } from "../types.ts";
 import { DEFAULT_AGENT_NAME } from "../types.ts";
+import { removeAliveMarker } from "./execution/alive-store.ts";
+import { writeFinalized } from "./execution/finalized-marker.ts";
 import type { BgNotifyRecord, NotifierHost } from "./execution/notifier.ts";
 import { BgNotifier } from "./execution/notifier.ts";
 import type { StatusFilter } from "./execution/record-store.ts";
 import { RecordStore } from "./execution/record-store.ts";
 import { writeCancelledTombstone } from "./execution/tombstone-store.ts";
 import type { ModelConfigService } from "./model-config-service.ts";
+import { WorktreeManager } from "./worktree-manager.ts";
 
 /** Pi ExtensionAPI 的最小接口（duck-typed）。 */
 interface PiLike {
@@ -55,6 +58,8 @@ export interface SubagentServiceInit {
   cwd: string;
   /** 配置/模型域 Service（execute 内部调其 resolveModel）。 */
   modelService: ModelConfigService;
+  /** 缓存的主 session file 获取函数（fork source 解析用）。 */
+  getMainSessionFile?: () => string | undefined;
 }
 
 /** session_start 注入参数（session 级）。 */
@@ -102,6 +107,8 @@ export class SubagentService {
   private readonly notifier: BgNotifier;
   private readonly modelService: ModelConfigService;
   private readonly cwd: string;
+  private readonly worktreeManager: WorktreeManager;
+  private readonly getMainSessionFile: (() => string | undefined) | undefined;
 
   private pi: PiLike | null = null;
   private sdk: SdkLike | null = null;
@@ -111,7 +118,9 @@ export class SubagentService {
   constructor(init: SubagentServiceInit) {
     this.cwd = init.cwd;
     this.modelService = init.modelService;
+    this.getMainSessionFile = init.getMainSessionFile;
     this.pool = new DefaultConcurrencyPool(this.modelService.getGlobalConfig().maxConcurrent);
+    this.worktreeManager = new WorktreeManager();
     const sessionsDir = getSubagentSessionDir(this.modelService.getAgentDir(), init.cwd);
     this.store = new RecordStore(sessionsDir);
     this.notifier = new BgNotifier(this.piAdapter());
@@ -174,13 +183,27 @@ export class SubagentService {
 
     // mode 判定（业务规则归 Service，tool 层只传 wait 意图）
     const mode = this.resolveMode(opts);
-    const ctx = await this.buildSessionRunnerContext();
+    const ctx = await this.buildSessionRunnerContext(opts.cwd);
 
     // ── 1. IDENTITY 解析（确认 → agentConfig → resolveModel）──
     const identity = await this.resolveIdentity(opts);
 
     // ── 2. RECORD 创建 + 注册 ──
     const record = this.createRecordForMode(identity, opts, mode);
+
+    // ── 2.5 worktree 创建（fork=true 且未提供 handle 时）──
+    // record 先创建，worktree 失败时可 finalizeFailed（record 已在 store 中）。
+    let worktreeHandle = opts.worktree;
+    if (opts.fork && !worktreeHandle) {
+      try {
+        worktreeHandle = this.worktreeManager.create(this.cwd, record.id);
+        record.worktreeHandle = worktreeHandle;
+      } catch (err) {
+        // create 失败→不进入 run，合成 failed result
+        const _result = await this.finalizeFailed(record, err);
+        return { mode, record: snapshot(record), details: project(record) } as ExecutionHandle;
+      }
+    }
 
     // ── 3. MODE 分叉：signal/priority（仅此 2 处即时差异）──
     const signal = mode === "background"
@@ -190,7 +213,7 @@ export class SubagentService {
 
     // ── 4-7. sync 直接 await；background 包 detached 立即返回 id ──
     if (mode === "sync") {
-      await this.runAndFinalize(record, opts, ctx, identity, signal, priority);
+      await this.runAndFinalize(record, { ...opts, worktree: worktreeHandle }, ctx, identity, signal, priority);
       return { mode: "sync", record: snapshot(record), details: project(record) };
     }
 
@@ -199,7 +222,7 @@ export class SubagentService {
     // B1：background 不回流 onUpdate——detached 运行对 tool 层不可见，完成由 notify 驱动新 turn。
     // 若转发 onUpdate，liftSync 会把 bg 事件误标成 syncResponse(mode:"sync") → spinner setInterval 泄漏。
     const bgDetails = project(record);
-    this.kickOffBackground(record, { ...opts, onUpdate: undefined }, ctx, identity, signal, priority);
+    this.kickOffBackground(record, { ...opts, onUpdate: undefined, worktree: worktreeHandle }, ctx, identity, signal, priority);
     return { mode: "background", subagentId: record.id, sessionFile: record.sessionFile, details: bgDetails };
   }
 
@@ -323,6 +346,9 @@ export class SubagentService {
         graceTurns: opts.graceTurns,
         signal,
         onEvent,
+        fork: opts.fork,
+        worktree: opts.worktree,
+        parentForkDepth: 0, // ponytail: 硬编码顶层 depth，多层 fork 由 session-runner 内部递增
       }, ctx);
     } catch (err) {
       // run() 正常路径不抛错，但创建期异常（createAndConfigureSession 失败）
@@ -400,18 +426,83 @@ export class SubagentService {
       });
     }
     this.store.archive(record);
+    // worktree cleanup + removeAliveMarker（cancel 不写 finalized，BC-4 互斥）
+    if (record.worktreeHandle) {
+      try {
+        this.worktreeManager.cleanup(record.worktreeHandle);
+      } catch {
+        // best-effort
+      }
+    }
+    if (record.sessionFile) {
+      try {
+        removeAliveMarker(record.sessionFile);
+      } catch {
+        // best-effort
+      }
+    }
     this.notifyComplete(record);
     return true;
   }
 
-  /** 收尾两件套：completeRecord + store.archive（终态 record 立即移出内存，读时从 session.jsonl 重建）。 */
+  /**
+   * D-017 时序收尾：collectPatch → completeRecord → archive → writeFinalized + cleanup + removeAliveMarker。
+   * B9 兜底：completeRecord/archive 抛错→ finalized/cleanup/aliveMarker 仍执行。
+   */
   private async finalizeRecord(
     record: ExecutionRecord,
     result: AgentResult,
     status: "done" | "failed" | "cancelled",
   ): Promise<void> {
-    completeRecord(record, result, status);
-    this.store.archive(record);
+    // ── Step 0: collectPatch（best-effort，D-022 patchOk 守卫）──
+    let patchOk = true;
+    if (record.worktreeHandle) {
+      try {
+        const patch = this.worktreeManager.collectPatch(record.worktreeHandle);
+        patchOk = !patch.failed;
+      } catch {
+        patchOk = false;
+      }
+    }
+
+    // ── Step 1: completeRecord（B9: 抛错→3 仍执行）──
+    try {
+      completeRecord(record, result, status);
+    } catch (err) {
+      // B9: completeRecord 抛错→Step 3 仍执行
+      console.error("[subagents] completeRecord failed, continuing with cleanup:", err);
+    }
+
+    // ── Step 2: archive（B9: 抛错→3 仍执行）──
+    try {
+      this.store.archive(record);
+    } catch (err) {
+      // B9: archive 抛错→Step 3 仍执行
+      console.error("[subagents] archive failed, continuing with cleanup:", err);
+    }
+
+    // ── Step 3: finalized + cleanup + aliveMarker（三件各自独立 try/catch）──
+    if (record.sessionFile) {
+      try {
+        writeFinalized(record.sessionFile);
+      } catch {
+        // best-effort
+      }
+    }
+    if (record.worktreeHandle && patchOk) {
+      try {
+        this.worktreeManager.cleanup(record.worktreeHandle);
+      } catch {
+        // best-effort
+      }
+    }
+    if (record.sessionFile) {
+      try {
+        removeAliveMarker(record.sessionFile);
+      } catch {
+        // best-effort
+      }
+    }
   }
 
   /**
@@ -483,17 +574,20 @@ export class SubagentService {
   }
 
   /** 构造 SessionRunnerContext。sdk lazy 获取 + 缓存。 */
-  private async buildSessionRunnerContext(): Promise<SessionRunnerContext> {
+  private async buildSessionRunnerContext(overrideCwd?: string): Promise<SessionRunnerContext> {
     if (this.sdk === null) {
       this.sdk = await getSdk();
     }
     return {
-      cwd: this.cwd,
+      cwd: overrideCwd ?? this.cwd,
       agentDir: this.modelService.getAgentDir(),
       modelRegistry: this.modelService.getModelRegistry(),
       resolveAgent: (name: string) => this.modelService.getAgentConfig(name),
       skillDirs: this.modelService.getDiscoverySkillDirs(),
       sdk: this.sdk,
+      mainCwd: this.cwd,
+      // mainSessionFile: fork source 解析用，从 session_start 缓存获取。
+      mainSessionFile: this.getMainSessionFile?.() ?? undefined,
     };
   }
 

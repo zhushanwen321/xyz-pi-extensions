@@ -11,6 +11,7 @@ import {
   getEventLog,
   getFullText,
   getTotalUsage,
+  markReconstructedStatus,
   project,
   snapshot,
   tryTransition,
@@ -655,6 +656,51 @@ describe("tryTransition", () => {
     expect(tryTransition(r, "done")).toBe(true);
     expect(tryTransition(r, "cancelled")).toBe(false);
     expect(r.status).toBe("done");
+  });
+
+  it("transitions to crashed from running", () => {
+    const r = makeRecord({ status: "running" });
+    expect(tryTransition(r, "crashed")).toBe(true);
+    expect(r.status).toBe("crashed");
+  });
+
+  it("returns false when trying to transition from crashed to done", () => {
+    const r = makeRecord({ status: "crashed" });
+    expect(tryTransition(r, "done")).toBe(false);
+    expect(r.status).toBe("crashed");
+  });
+});
+
+describe("markReconstructedStatus", () => {
+  it("directly sets status without CAS check", () => {
+    const r = makeRecord({ status: "running" });
+    markReconstructedStatus(r, "crashed");
+    expect(r.status).toBe("crashed");
+  });
+
+  it("can overwrite terminal status (bypass CAS)", () => {
+    // 重建场景：旧 record 可能已有终态，重建时需要直接覆盖
+    const r = makeRecord({ status: "done" });
+    markReconstructedStatus(r, "crashed");
+    expect(r.status).toBe("crashed");
+  });
+
+  it("can overwrite running status", () => {
+    const r = makeRecord({ status: "running" });
+    markReconstructedStatus(r, "failed");
+    expect(r.status).toBe("failed");
+  });
+
+  it("can set crashed on running record", () => {
+    const r = makeRecord({ status: "running" });
+    markReconstructedStatus(r, "crashed");
+    expect(r.status).toBe("crashed");
+  });
+
+  it("can set crashed on done record (reconstruction override)", () => {
+    const r = makeRecord({ status: "done" });
+    markReconstructedStatus(r, "crashed");
+    expect(r.status).toBe("crashed");
   });
 });
 

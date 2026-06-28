@@ -11,7 +11,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { getEventLog, snapshot as toSnapshot } from "../../core/execution-record.ts";
+import { getEventLog, markReconstructedStatus, snapshot as toSnapshot } from "../../core/execution-record.ts";
 import { reconstructFromFile } from "../../core/session-reconstructor.ts";
 import type {
   ExecutionRecord,
@@ -19,19 +19,25 @@ import type {
   RecordSnapshot,
   SubagentRecord,
 } from "../../types.ts";
+import { isProcessAlive, readAliveMarker } from "./alive-store.ts";
+import { readFinalized } from "./finalized-marker.ts";
 import { readCancelledTombstone } from "./tombstone-store.ts";
 
 // ============================================================
 // 常量
 // ============================================================
 
-/** status → 排序优先级（值小排前）：running < failed < cancelled < done。 */
+/** status → 排序优先级（值小排前）：running < failed < crashed < cancelled < done。 */
 const STATUS_PRIORITY: Record<ExecutionStatus, number> = {
   running: 0,
   failed: 1,
+  crashed: 1,
   cancelled: 2,
   done: 3,
 };
+
+/** .alive sidecar 的 24 小时软超时（超过此时间即使 pid 存活也判 crashed）。 */
+const ALIVE_SOFT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 /** store 变更监听器（返回取消订阅函数）。 */
 export type ChangeListener = () => void;
@@ -162,9 +168,15 @@ export class RecordStore {
   // ── 内部 ──────────────────────────────────────────────────
 
   /**
-   * 扫 sessionsDir 的 .jsonl 文件，逐个重建 SubagentRecord。
-   * 结果缓存（reconCache），notifyChange 时失效。
-   * best-effort：目录不存在/读失败 → 空数组（不抛）。
+   * 四分支 sidecar 矩阵重建。
+   *
+   * 优先级：
+   *   1. .cancelled → cancelled
+   *   2. .finalized → done/failed（按 recon.stopReason 推）
+   *   3. .alive + pid 存活 + 未超 24h → running, externalInstance=true
+   *   4. 兜底 → crashed
+   *
+   * 所有分支经 markReconstructedStatus（不裸 .status=）。
    */
   private reconstructAll(): SubagentRecord[] {
     if (this.reconCache) return [...this.reconCache.values()];
@@ -180,32 +192,61 @@ export class RecordStore {
       return [];
     }
 
+    const now = Date.now();
+
     for (const file of files) {
       const recon = reconstructFromFile(file);
       if (!recon) continue; // 文件缺失/损坏/缺 identity → 跳过。
 
-      // cancelled tombstone override（session.jsonl 被 abort 截断，状态靠 sidecar 标记）。
+      // 读取三个 sidecar（best-effort，不存在返回 falsy）。
       const tomb = readCancelledTombstone(file);
-      const status: ExecutionStatus = tomb ? "cancelled" : recon.status;
-      const error = tomb ? "cancelled by user" : recon.error;
-      const endedAt = tomb ? tomb.endedAt : undefined;
+      const finalized = readFinalized(file);
+      const alive = readAliveMarker(file);
 
+      // 构造 base record（status/error/endedAt/externalInstance 后续按分支覆盖）。
       const rec: SubagentRecord = {
         id: recon.id,
         agent: recon.agent,
-        status,
+        status: recon.status, // 临时值，各分支覆盖
         mode: recon.mode,
         startedAt: recon.startedAt,
-        endedAt,
+        endedAt: undefined,
         turns: recon.turnCount,
         totalTokens: recon.totalTokens,
         model: recon.model,
         thinkingLevel: recon.thinkingLevel,
         eventLog: recon.eventLog,
         result: recon.result,
-        error,
+        error: recon.error,
         sessionFile: recon.sessionFile,
       };
+
+      // ── 分支 1: .cancelled ──
+      if (tomb) {
+        markReconstructedStatus(rec, "cancelled");
+        rec.error = "cancelled by user";
+        rec.endedAt = tomb.endedAt;
+      }
+      // ── 分支 2: .finalized ──
+      else if (finalized) {
+        // done/failed 按 recon 推导的 stopReason（reconstructFromFile 已映射为 status）。
+        const status: ExecutionStatus = recon.status === "failed" ? "failed" : "done";
+        markReconstructedStatus(rec, status);
+      }
+      // ── 分支 3: .alive + pid 存活 + 未超 24h 软超时 ──
+      else if (
+        alive !== undefined &&
+        isProcessAlive(alive.pid) &&
+        now - alive.startedAt < ALIVE_SOFT_TIMEOUT_MS
+      ) {
+        markReconstructedStatus(rec, "running");
+        rec.externalInstance = alive;
+      }
+      // ── 分支 4: 兜底（都无 / .alive 但 pid 死 / 超 24h）──
+      else {
+        markReconstructedStatus(rec, "crashed");
+      }
+
       cache.set(file, rec);
     }
 

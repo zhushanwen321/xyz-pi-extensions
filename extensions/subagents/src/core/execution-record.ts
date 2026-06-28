@@ -22,6 +22,7 @@ import type {
   AgentUsageTotal,
   ExecutionMode,
   ExecutionRecord,
+  ExecutionStatus,
   InternalToolCall,
   RecordSnapshot,
   SubagentToolDetails,
@@ -483,18 +484,35 @@ export function getTotalUsage(record: ExecutionRecord): AgentUsageTotal | undefi
 /**
  * status 状态机的 CAS 互斥锁。仅当 `record.status === "running"` 时改为 target
  * 并返回 true，否则返回 false。**status 状态机本身就是互斥锁**——终态
- * （done/failed/cancelled）不可逆，check-then-set 在 JS 单线程事件循环里天然原子。
+ * （done/failed/cancelled/crashed）不可逆，check-then-set 在 JS 单线程事件循环里天然原子。
  *
  * 用途：executor 的收尾竞争。cancelBackground 与 background detached 完成回调
  * 都调 tryTransition 抢锁：抢到负责完整收尾，没抢到闭嘴不做事。
+ *
+ * crashed 仅作为可选目标——crashed 主要通过重建推断（alive marker 存在但 session
+ * 文件无终态），不走正常 CAS 流程。
  */
 export function tryTransition(
   record: ExecutionRecord,
-  target: "done" | "failed" | "cancelled",
+  target: "done" | "failed" | "cancelled" | "crashed",
 ): boolean {
   if (record.status !== "running") return false;
   record.status = target;
   return true;
+}
+
+/**
+ * 重建专用收口：跳过 CAS 直接赋值 status。
+ *
+ * 仅用于 session-reconstructor 从 session.jsonl 重建终态 record 时——
+ * 重建的 record 没有 running 状态需要保护，直接赋值即可。
+ * 禁止在正常执行流程中使用此函数（应使用 tryTransition）。
+ */
+export function markReconstructedStatus(
+  record: { status: ExecutionStatus },
+  status: ExecutionStatus,
+): void {
+  record.status = status;
 }
 
 /**

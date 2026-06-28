@@ -6,6 +6,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { isProcessAlive, readAliveMarker } from "./execution/alive-store.ts";
+
 /** 30 天 TTL（毫秒）。 */
 const TTL_DAYS = 30;
 const HOURS_PER_DAY = 24;
@@ -59,16 +61,22 @@ function walkAndClean(dir: string, now: number): void {
       try {
         const stat = fs.statSync(full);
         if (now - stat.mtimeMs > TTL_MS) {
+          // .alive 探活：活进程的 session 不删（D-024 安全网）。
+          const aliveMarker = readAliveMarker(full);
+          if (aliveMarker !== undefined && isProcessAlive(aliveMarker.pid)) {
+            continue; // 活进程 → 跳过，不清理
+          }
           fs.unlinkSync(full);
-          // 同名 .cancelled sidecar 一起清理（cancelled record 的 session.jsonl 过期）。
-          const sidecar = `${full}.cancelled`;
-          try { fs.unlinkSync(sidecar); } catch (_e) { void _e; /* sidecar 可能不存在，忽略 */ }
+          // 同名 sidecar 一起清理。
+          for (const ext of [".cancelled", ".finalized", ".alive"]) {
+            try { fs.unlinkSync(`${full}${ext}`); } catch (_e) { void _e; /* sidecar 可能不存在 */ }
+          }
         }
       } catch (_e) {
         // 文件可能已被删除，忽略
         void _e;
       }
-    } else if (entry.name.endsWith(".cancelled")) {
+    } else if (entry.name.endsWith(".cancelled") || entry.name.endsWith(".finalized") || entry.name.endsWith(".alive")) {
       // 孤儿 sidecar（兄弟 .jsonl 已被外部删除）：按同 TTL 清理。
       try {
         const stat = fs.statSync(full);
