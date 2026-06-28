@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 import {
   makeEmptyPipeline,
   processJsonlEvent,
-
 } from "../infra/jsonl-parser.js";
 
 describe("jsonl-parser.ts", () => {
@@ -185,7 +184,7 @@ describe("jsonl-parser.ts", () => {
 
     it("clears pendingStructuredArgs on non-structured tool_execution_end", () => {
       const p = makeEmptyPipeline();
-      // Set up pending structured args from a prior structured-output start
+ // Set up pending structured args from a prior structured-output start
       processJsonlEvent({
         type: "tool_execution_start",
         toolName: "structured-output",
@@ -194,7 +193,7 @@ describe("jsonl-parser.ts", () => {
       }, p);
       expect(p.pendingStructuredArgs).toBeDefined();
 
-      // A different tool ends — should clear pending args but NOT set parsedOutput
+ // A different tool ends — should clear pending args but NOT set parsedOutput
       processJsonlEvent({
         type: "tool_execution_end",
         toolName: "bash",
@@ -216,11 +215,11 @@ describe("jsonl-parser.ts", () => {
           usage: { input: 10, output: 5 },
         },
       }, p);
-      // String content is not an array, so no text is extracted into output
+ // String content is not an array, so no text is extracted into output
       expect(p.output).toBe("");
-      // parsedOutput is never set by message_end (only by tool_execution_end)
+ // parsedOutput is never set by message_end (only by tool_execution_end)
       expect(p.parsedOutput).toBeUndefined();
-      // Usage is still accumulated even when content is a string
+ // Usage is still accumulated even when content is a string
       expect(p.usage.input).toBe(10);
       expect(p.usage.output).toBe(5);
       expect(p.usage.turns).toBe(1);

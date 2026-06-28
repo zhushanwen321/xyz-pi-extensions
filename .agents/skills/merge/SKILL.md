@@ -7,22 +7,32 @@ description: >-
 
 # Merge
 
+> **范围与命名区分**：本 skill 是 xyz-pi-extensions 的**纯手动 8 阶段合并流程**，所有命令直接可执行，**不依赖任何外部脚本**。
+> 另有一个随仓库分发的工具 `skills/merge-worktree/merge-and-publish.sh`（单体自动化脚本，一条命令跑完全程），那是**不同的执行方式**，不要与本 skill 混淆。本 skill 的价值在阶段 1.5（dev-link symlink 清理）、阶段 4（changeset 独立版本）等项目特化步骤——这些自动化脚本不覆盖。
+
 ## 8 阶段流程
 
-### 阶段 0: 初始化
+### 阶段 0: 前置确认
 
-⚠️ **关键**：第一个参数是 **feature worktree 目录名**（如 `feat-add-extension`），不是 `main`。脚本会自动检测 `$WS_ROOT/main` 用于 bump/tag/push。传 `main` 会导致阶段 7 删除 main worktree。
+手动流程无脚本初始化。确认以下前置条件后进入阶段 1：
 
-```bash
-CURRENT_WT=$(basename $(pwd))  # 如果从 feature worktree 的上级目录调用
-cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace
-bash ~/.agents/skills/merge-worktree/stages/0-init.sh $CURRENT_WT patch
-```
+- 当前位于 **workspace root**（`/Users/zhushanwen/Code/xyz-pi-extensions-workspace`），不在 feature worktree 内（阶段 7 会删 worktree）
+- feature 分支的 PR 已创建且为 open 状态（`gh pr view <num> --json state`）
+- 已确定版本类型（patch / minor / major），本次 PR 包含对应 changeset 文件
+- `main` worktree 可用（阶段 4 在 `$WS_ROOT/main` 内执行 bump/tag/push）
 
 ### 阶段 1: 本地验证
+
+在 feature worktree 内执行全量检查（与 `.githooks/pre-commit` 对齐）：
+
 ```bash
-bash ~/.agents/skills/merge-worktree/stages/1-local-check.sh
+cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace/<feature-worktree>
+pnpm -r typecheck   # 全量 tsc --noEmit
+pnpm -r lint        # 全量 eslint
+pnpm -r test        # 全量 vitest
 ```
+
+**[MANDATORY] 零容忍**：任何失败必须正面修复，不允许跳过。三项均 exit 0 方可继续。
 
 ### 阶段 1.5: Dev-Link Symlink 清理 [MANDATORY]
 
@@ -101,13 +111,24 @@ done
 如果仍有残留，**必须手动处理后再继续**。
 
 ### 阶段 2: PR CI + 合并
+
+本项目 `ci.yml` 在 PR 上自动跑（触发：`pull_request`）。等 CI 通过后用 merge commit 合并（保护 main 历史）：
+
 ```bash
-bash ~/.agents/skills/merge-worktree/stages/2-pr-merge.sh
+# 等 PR 上的 ci.yml 跑完（非必须，可直接 merge，GitHub 会阻断未绿 CI）
+gh pr checks <PR_NUM> --watch
+
+# merge commit 合并并删除远程分支（绝不用 squash）
+gh pr merge <PR_NUM> --merge --delete-branch
 ```
 
 ### 阶段 3: Post-merge CI
+
+合并后 `ci.yml` 在 main 上再跑一次（触发：`push: branches:[main]`）。等它通过再 bump 版本，避免发布基于未绿的 main：
+
 ```bash
-bash ~/.agents/skills/merge-worktree/stages/3-post-merge-ci.sh
+# 等 main 上最近一次 ci.yml 完成
+gh run watch --workflow=ci.yml --branch main
 ```
 
 ### 阶段 4: 版本 bump + 发布（项目特化）
@@ -203,8 +224,15 @@ gh run list --workflow=release.yml --limit=1
 ```
 
 ### 阶段 7: 清理
+
+用 `remove-worktree` skill 清理 feature worktree（会检查分支已合并到 main）。或手动：
+
 ```bash
-bash ~/.agents/skills/merge-worktree/stages/7-cleanup.sh
+cd /Users/zhushanwen/Code/xyz-pi-extensions-workspace
+git worktree remove <feature-worktree>   # 删 worktree 目录
+git branch -d <branch-name>               # 删本地分支（远程分支阶段 2 已删）
+# 同步其他 worktree 的 main 引用
+cd main && git fetch origin && git merge --ff-only origin/main
 ```
 
 **安全网：检查 dangling symlink**

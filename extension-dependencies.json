@@ -37,7 +37,13 @@
     {
       "name": "@zhushanwen/pi-goal",
       "directory": "extensions/goal",
-      "dependsOn": []
+      "dependsOn": [
+        {
+          "package": "@zhushanwen/pi-todo",
+          "type": "optional",
+          "reason": "goal 的 prompt 软建议 AI 使用 todo 工具分解/跟踪任务（见 prompts.ts），无运行时/编译期耦合（不再读 pi.__todoGetList，budget 不接收 todo 进度），缺失时 AI 自行判断任务分解"
+        }
+      ]
     },
     {
       "name": "@zhushanwen/pi-todo",

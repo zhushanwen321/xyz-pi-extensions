@@ -28,6 +28,7 @@ export interface TodoActionParams {
 	texts?: string[];
 	ids?: number[];
 	status?: string;
+	isVerification?: boolean;
 	updates?: Array<{ id: number; status?: string; text?: string }>;
 }
 
@@ -40,21 +41,26 @@ const TodoParams = Type.Object({
 	texts: Type.Optional(Type.Array(Type.String(), { description: "Todo text list (for add action)" })),
 	ids: Type.Optional(Type.Array(Type.Number(), { description: "Todo ID list (for delete action)" })),
 	status: Type.Optional(
-		StringEnum(VALID_STATUSES, { description: "Target status (for update action)" }),
+			StringEnum(VALID_STATUSES, { description: "Target status (for update action)" }),
+		),
+	isVerification: Type.Optional(
+		Type.Boolean({
+			description: "Mark added todos as verification tasks (for add action). Verification todos must be completed (not cancelled) before goal completion.",
+		}),
 	),
 	updates: Type.Optional(
-		Type.Array(
-			Type.Object({
-				id: Type.Number({ description: "Todo ID to update" }),
-				status: Type.Optional(
-					Type.String({ description: "Target status; one of pending/in_progress/completed" }),
-				),
-				text: Type.Optional(Type.String({ description: "New todo text" })),
-			}),
-			{ description: "Batch updates array (takes priority over single id/status/text)" },
+			Type.Array(
+				Type.Object({
+					id: Type.Number({ description: "Todo ID to update" }),
+					status: Type.Optional(
+						Type.String({ description: "Target status; one of pending/in_progress/completed/cancelled" }),
+					),
+					text: Type.Optional(Type.String({ description: "New todo text" })),
+				}),
+				{ description: "Batch updates array (takes priority over single id/status/text)" },
+			),
 		),
-	),
-});
+	});
 
 // ── 5 个 action handler ──────────────────────────────
 // 错误处理约定（见 CLAUDE.md「Tool 设计」）：handler 失败直接 throw，
@@ -73,7 +79,7 @@ function handleAdd(state: TodoSessionState, params: TodoActionParams): string {
 	if (!params.texts || params.texts.length === 0) {
 		throw new Error("add requires texts parameter (non-empty array)");
 	}
-	const r = addTodos(state.todos, state.nextId, params.texts);
+	const r = addTodos(state.todos, state.nextId, params.texts, params.isVerification);
 	if (r.error) throw new Error(r.resultText);
 	state.todos = r.newTodos;
 	state.nextId = r.newNextId;
@@ -89,11 +95,11 @@ function handleBatchUpdate(state: TodoSessionState, params: TodoActionParams): s
 }
 
 /** update action: single — 失败抛错 */
-function handleSingleUpdate(state: TodoSessionState, params: TodoActionParams): string {
+export function handleSingleUpdate(state: TodoSessionState, params: TodoActionParams): string {
 	if (params.id === undefined) throw new Error("update requires id parameter");
 	if (params.status === undefined && params.text === undefined)
 		throw new Error("update requires at least status or text parameter");
-	if (params.text === "") throw new Error("text cannot be empty string");
+	if (params.text !== undefined && params.text === "") throw new Error("text cannot be empty string");
 	if (
 		params.status !== undefined &&
 		!VALID_STATUSES.includes(params.status as (typeof VALID_STATUSES)[number])
@@ -103,6 +109,14 @@ function handleSingleUpdate(state: TodoSessionState, params: TodoActionParams): 
 
 	const todo = state.todos.find((t) => t.id === params.id);
 	if (!todo) throw new Error(`Todo #${params.id} not found`);
+
+	// FR-6 不变量守卫（失败抛错）：(a) cancelled 不可恢复；(b) 验证任务不可 cancelled
+	if (todo.status === "cancelled" && params.status !== undefined) {
+		throw new Error(`#${params.id} is cancelled (cannot restore)`);
+	}
+	if (todo.isVerification && params.status === "cancelled") {
+		throw new Error(`#${params.id} is verification todo (cannot cancel)`);
+	}
 
 	if (params.status !== undefined) todo.status = params.status as Todo["status"];
 	if (params.text !== undefined) todo.text = params.text;
@@ -218,19 +232,19 @@ export function registerTodoTool(
 			"Manage a todo list." +
 			"\n\nAvailable actions:" +
 			"\n- list: View all todos" +
-			"\n- add: Batch add todos (requires texts array)" +
+			"\n- add: Batch add todos (requires texts array; optional isVerification marks verification tasks)" +
 			"\n- update: Update todo(s) — single (id + optional status/text) or batch (updates[], takes priority)" +
 			"\n- delete: Batch delete todos (requires ids array)" +
-			"\n- clear: Clear all todos and reset IDs"
-		+ "\nWhen /goal is active, do NOT use this tool — use goal_manager's add_subtasks instead.",
-		promptSnippet: "Use todo when breaking multi-step work into trackable items during normal (non-goal) conversation. Not for single-step operations.",
+			"\n- clear: Clear all todos and reset IDs",
+		promptSnippet: "Use todo when breaking multi-step work into trackable items. Add verification todos (isVerification=true) for checks like running tests.",
 		promptGuidelines: [
 			"[Usage] 多步骤工作（3+步）时使用。AI 自发创建，无需用户触发",
-			"[Goal 冲突] /goal 激活后禁止使用 todo — 改用 add_subtasks",
+			"[验证任务] 执行任务 + 验证任务（isVerification=true，如 run tests / typecheck）一起建",
 			"[批量优先] 完成多项任务时使用 updates[] 批量更新，减少工具调用次数",
 			"[自动闭合] 全部完成后工具自动清理，无需手动 clear",
-			"[Not for] 单步操作、简单对话、/goal 已激活时",
+			"[Not for] 单步操作、简单对话",
 		],
+		executionMode: "sequential",
 		parameters: TodoParams,
 
 		async execute(_toolCallId: string, params: Static<typeof TodoParams>, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {

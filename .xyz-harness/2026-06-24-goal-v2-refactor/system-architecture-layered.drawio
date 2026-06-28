@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="30.0.4">
+  <diagram name="layered-architecture">
+    <mxGraphModel dx="1280" dy="820" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1280" pageHeight="820" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="Interface Layer (adapters/)" style="swimlane;startSize=30;fillColor=#dbeafe;strokeColor=#2563eb;fontStyle=1;fontSize=13;html=1;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="880" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="goal-control-adapter&#xa;complete / report_blocked" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2563eb;fontSize=11;align=center;" vertex="1" parent="2">
+          <mxGeometry x="20" y="50" width="250" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="command-adapter&#xa;/goal set|pause|resume|&#xa;clear|status|update|history" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2563eb;fontSize=11;align=center;" vertex="1" parent="2">
+          <mxGeometry x="290" y="50" width="260" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="event-adapter (薄路由)&#xa;├ before-agent-start&#xa;├ agent-end&#xa;├ message-end&#xa;├ turn-end&#xa;├ agent-start&#xa;└ session-start" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2563eb;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="2">
+          <mxGeometry x="570" y="50" width="290" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="Application Layer" style="swimlane;startSize=30;fillColor=#fef3c7;strokeColor=#d97706;fontStyle=1;fontSize=13;html=1;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="40" y="260" width="880" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="20" value="service.ts (~300行)&#xa;createGoal / finalizeAndPersist&#xa;persistState / applyEvent / tickState" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d97706;fontSize=11;align=center;" vertex="1" parent="3">
+          <mxGeometry x="110" y="45" width="340" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="21" value="projection/&#xa;widget.ts / prompts.ts / result.ts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d97706;fontSize=11;align=center;" vertex="1" parent="3">
+          <mxGeometry x="490" y="45" width="300" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="Domain Layer (engine/) — 零 Pi 依赖" style="swimlane;startSize=30;fillColor=#d1fae5;strokeColor=#16a34a;fontStyle=1;fontSize=13;html=1;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="40" y="450" width="880" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="30" value="types.ts&#xa;GoalStatus / BudgetConfig&#xa;GoalRuntimeState / ProgressInput&#xa;VALID_TRANSITIONS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#16a34a;fontSize=11;align=center;" vertex="1" parent="4">
+          <mxGeometry x="30" y="45" width="270" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="31" value="goal.ts&#xa;transitionStatus / createGoalState&#xa;isActive / isTerminal" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#16a34a;fontSize=11;align=center;" vertex="1" parent="4">
+          <mxGeometry x="320" y="45" width="250" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="32" value="budget.ts&#xa;tick / checkBudget&#xa;accumulateTokens" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#16a34a;fontSize=11;align=center;" vertex="1" parent="4">
+          <mxGeometry x="590" y="45" width="240" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="Ports (Pi 平台提供)" style="swimlane;startSize=30;fillColor=#f3f4f6;strokeColor=#6b7280;fontStyle=1;fontSize=13;html=1;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="960" y="40" width="280" height="560" as="geometry" />
+        </mxCell>
+        <mxCell id="40" value="PersistencePort&#xa;appendState / appendHistory" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6b7280;fontSize=11;align=center;" vertex="1" parent="5">
+          <mxGeometry x="20" y="50" width="240" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="41" value="UiPort&#xa;widget / status / notify / hasUI" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6b7280;fontSize=11;align=center;" vertex="1" parent="5">
+          <mxGeometry x="20" y="170" width="240" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="42" value="MessagingPort&#xa;contextMsg / userMsg&#xa;steer / followUp" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6b7280;fontSize=11;align=center;" vertex="1" parent="5">
+          <mxGeometry x="20" y="290" width="240" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="43" value="SessionPort&#xa;entries / contextUsage / signal" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6b7280;fontSize=11;align=center;" vertex="1" parent="5">
+          <mxGeometry x="20" y="410" width="240" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="50" value="依赖" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=3;strokeColor=#374151;fontSize=11;fontColor=#374151;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="2" target="3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="51" value="依赖" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=3;strokeColor=#374151;fontSize=11;fontColor=#374151;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="3" target="4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="52" value="依赖" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=3;strokeColor=#374151;fontSize=11;fontColor=#374151;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="3" target="5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="53" value="零依赖&#xa;(纯函数)" style="text;html=1;align=center;fontSize=10;fontColor=#16a34a;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="400" y="610" width="120" height="40" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

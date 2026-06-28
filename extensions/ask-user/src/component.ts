@@ -221,14 +221,15 @@ export class AskUserComponent implements Component {
 			return;
 		}
 
-		// Tab / Shift+Tab 切换 tab（多问题，options 模式）。←/→ 故意不切 tab——
-		// 把左右键留给 Submit tab 上的 Submit/Cancel 焦点切换，避免在问题列表上意外跳走。
-		if (!this.isSingle && matchesKey(data, "tab")) {
-			this.gotoTab((this.activeTab + 1) % this.totalTabs);
+		// ← / → 切换问题 tab（多问题，options 模式）：末尾 → 进入 Submit tab，
+		// 首个 ← 停在首个问题（不环绕）。Tab/Shift+Tab 不在问题 tab 切 tab——
+		// 留给 Submit tab 上的 Submit/Cancel 焦点切换。
+		if (!this.isSingle && matchesKey(data, "right")) {
+			this.gotoTab(Math.min(this.activeTab + 1, this.questions.length));
 			return;
 		}
-		if (!this.isSingle && matchesKey(data, "shift+tab")) {
-			this.gotoTab((this.activeTab - 1 + this.totalTabs) % this.totalTabs);
+		if (!this.isSingle && matchesKey(data, "left")) {
+			this.gotoTab(Math.max(this.activeTab - 1, 0));
 			return;
 		}
 
@@ -285,33 +286,33 @@ export class AskUserComponent implements Component {
 	}
 
 	/**
-	 * Submit tab 输入路由：
-	 * - ← / → → 切换 submitTabFocus（Submit ↔ Cancel 视觉高亮）
+	 * Submit tab 输入路由（键位语义与问题 tab 全局一致）：
+	 * - ← / → → tab 导航（← 回到最后一个问题；→ 环绕到首个问题）
+	 * - Tab → 在 Submit ↔ Cancel 间循环切焦点（单键双向，不依赖 shift+tab，
+	 *   规避 Pi 全局 app.thinking.cycle 对 shift+tab 的拦截）
 	 * - Enter → 触发当前 focus 项：Submit=allConfirmed 才提交；Cancel=直接取消
-	 * - Tab / → → 环绕到首个问题
-	 * - Esc / Shift+Tab → 回退到最后一个问题
-	 *
-	 * 注意：Submit tab 上 ←/→ 不再切回问题区（与问题 tab 上的"←/→ 不切 tab"对称，
-	 * 避免在 Submit 视图内意外跳走）。
+	 * - Esc → 回退到最后一个问题（与问题 tab 的 Esc-back 语义一致）
 	 */
 	private handleSubmitTabInput(data: string): void {
-		// ← / → 切换 focus（Submit ↔ Cancel）。Tab 单独处理（→ 行为）
-		if (matchesKey(data, "left") || matchesKey(data, "right")) {
-			this.submitTabFocus = this.submitTabFocus === "submit" ? "cancel" : "submit";
-			this.invalidate();
-			this.tui.requestRender();
+		// ← / → → tab 导航（与问题 tab 一致：方向键管 tab 间移动）
+		if (matchesKey(data, "left")) {
+			this.gotoTab(this.questions.length - 1);
 			return;
 		}
-		// Esc / Shift+Tab → 回退到最后一个问题
-		if (matchesKey(data, "escape") || matchesKey(data, "shift+tab")) {
+		if (matchesKey(data, "right")) {
+			this.gotoTab(0);
+			return;
+		}
+		// Esc → 回退到最后一个问题
+		if (matchesKey(data, "escape")) {
 			this.activeTab = this.questions.length - 1;
 			this.invalidate();
 			this.tui.requestRender();
 			return;
 		}
-		// Tab → 环绕到首个问题
+		// Tab → Submit ↔ Cancel 循环切焦点（单键双向）
 		if (matchesKey(data, "tab")) {
-			this.activeTab = 0;
+			this.submitTabFocus = this.submitTabFocus === "submit" ? "cancel" : "submit";
 			this.invalidate();
 			this.tui.requestRender();
 			return;

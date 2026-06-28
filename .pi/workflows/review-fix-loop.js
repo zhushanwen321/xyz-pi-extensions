@@ -419,16 +419,12 @@ while (round < MAX) {
     reportContent = "(could not read aggregated report)";
   }
 
-  // Capture files changed by fix for snapshot
-  function getChangedFiles() {
-    try {
-      const out = require("child_process").execSync(
-        "git diff --name-only HEAD", { encoding: "utf-8", timeout: 10_000 }
-      ).trim();
-      return out ? out.split("\n") : [];
-    } catch { return []; }
-  }
-  const filesBefore = new Set(getChangedFiles());
+  // Snapshot HEAD before fix: the fix agent commits its changes, so
+  // `git diff HEAD` reads empty afterwards. Compare prevHead → working
+  // tree afterwards to capture both the new fix commit and any uncommitted edits.
+  const prevHead = require("child_process").execSync(
+    "git rev-parse HEAD", { encoding: "utf-8", timeout: 10_000 }
+  ).trim();
 
   const fxRaw = await agent({
     prompt: [
@@ -469,8 +465,13 @@ while (round < MAX) {
   totalFixed += fixedCount;
 
   // S1: any fix reactivates all agents (conservative — fix may have introduced regressions)
-  const filesAfter = getChangedFiles();
-  const modifiedFiles = filesAfter.filter((f) => !filesBefore.has(f));
+  let modifiedFiles = [];
+  try {
+    const out = require("child_process").execSync(
+      "git diff --name-only " + prevHead, { encoding: "utf-8", timeout: 10_000 }
+    ).trim();
+    modifiedFiles = out ? out.split("\n") : [];
+  } catch { /* empty */ }
   currentRoundSnapshot.modifiedFiles = modifiedFiles;
   state.rounds.push(currentRoundSnapshot);
   reactivateAll(state);

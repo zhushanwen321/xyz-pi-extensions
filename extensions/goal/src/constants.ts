@@ -23,8 +23,6 @@ export const BUDGET_PERCENT_LOW = 70;    // widget 颜色变黄
 
 // ── 长度/数量上限 ───────────────────────────────────
 
-export const MAX_TURNS_CAP = 100;             // maxTurns 上限
-export const MAX_STALL_CAP = 20;              // maxStallTurns 上限
 export const UPDATE_PREFIX_LENGTH = 7;        // "update ".length
 
 // ── 百分比换算因子 ──────────────────────────────────
@@ -36,14 +34,9 @@ export const PERCENT_FACTOR = 100;
 export const PROGRESS_BAR_DEFAULT_WIDTH = 10;
 export const OBJECTIVE_DISPLAY_LIMIT = 80;
 export const OBJECTIVE_TRUNCATE_KEEP = 77; // DISPLAY_LIMIT - 3 for "..."
+export const TOKEN_K_THRESHOLD = 1000;     // token 数 ≥ 此值时缩写为 k 单位（12000 → 12k）
 
 // ── 停滞/清理阈值 ────────────────────────────────────
 
-export const TASK_STALL_TURN_THRESHOLD = 10;	// task/subtask 停滞提醒阈值（turn 数）
 export const AUTO_CLEAR_TURNS = 2;				// 终态后自动清理轮数
 export const MAX_HISTORY_ENTRIES = 20;			// goal-history entry GC 上限
-
-export const VERIFY_METHOD_WIDGET_LEN = 30;	// widget 中验证方法显示的截断长度
-export const EXT_INIT_TASK_DESC_MAX = 60;	// external init 中 task description 截断上限
-export const TASK_DESC_MAX_LENGTH = 80;		// task description 截断上限（normalizeDescription）
-export const ELLIPSIS_LENGTH = 3;

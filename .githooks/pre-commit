@@ -244,7 +244,7 @@ if [[ -n "$STAGED_ROOT_MD" || -n "$STAGED_DOCS_ROOT_MD" ]]; then
 fi
 
 # ── 0d. console.log/info 禁止检查（扩展源码）──────────────────
-# 依据 pi-extension-standards.md §10：禁止在扩展中使用 console.log 和 console.info
+# 依据 standards.md §10：禁止在扩展中使用 console.log 和 console.info
 STAGED_EXT_TS=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^extensions/.*\.ts$' | grep -v '\.d\.ts$' | grep -v '__tests__\|\.test\.' || true)
 
 if [[ -n "$STAGED_EXT_TS" ]]; then
@@ -269,7 +269,7 @@ if [[ -n "$STAGED_EXT_TS" ]]; then
     echo ""
     echo -e "${C_RED}不允许跳过，无论是否是本次引入的，必须正面修复${C_RESET}"
     echo ""
-    echo "替换方案（参见 docs/pi-extension-standards.md §10）："
+    echo "替换方案（参见 docs/standards.md §10）："
     echo "  用户可见消息 → ctx.ui.notify(msg, 'info'/'warning'/'error')"
     echo "  内部诊断     → console.warn('[ext-name] ...') 或 console.error('[ext-name] ...')"
     echo "  不可恢复错误 → throw new Error(msg)"
@@ -283,6 +283,14 @@ if [[ -n "$STAGED_EXT_TS" ]]; then
 fi
 
 # ── 1. tsc 类型检查 ──────────────────────────────────────
+# worktree 切换后可能缺 node_modules，自动装一次避免 tsc 报 "Cannot find type definition"
+if [[ ! -d node_modules/@types/node ]]; then
+  echo -e "${C_YELLOW}[INFO]${C_RESET} node_modules 缺失，自动安装依赖..."
+  if ! pnpm install --prefer-offline >/dev/null 2>&1; then
+    echo -e "${C_RED}[FAIL]${C_RESET} pnpm install 失败，请手动安装后重试"
+    exit 1
+  fi
+fi
 echo "--- tsc --noEmit ---"
 if ! npx tsc --noEmit 2>&1; then
   echo -e "${C_RED}[FAIL]${C_RESET} TypeScript 类型检查失败"

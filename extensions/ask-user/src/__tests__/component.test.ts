@@ -117,21 +117,21 @@ describe("AskUserComponent — multi question tab nav", () => {
 
 	it("C-9: Submit tab blocks when not all confirmed", () => {
 		const { c, result } = make(multiQ);
-		c.handleInput(TAB); // -> Q2
-		c.handleInput(TAB); // -> Q3
-		c.handleInput(TAB); // -> Submit
+		c.handleInput(RIGHT); // -> Q2
+		c.handleInput(RIGHT); // -> Q3
+		c.handleInput(RIGHT); // -> Submit
 		c.handleInput(ENTER); // should NOT submit
 		expect(result.val).toBeUndefined();
 	});
 
-	// C-10 / C-11 已废弃：←/→ 不再切 tab（C-E5/C-E6 覆盖 Tab/Shift+Tab 行为）
+	// C-10 / C-11 已废弃：Tab/Shift+Tab 不再切问题 tab（C-E5/C-E6 覆盖 ←/→ 切问题 tab 行为）
 
 	it("C-16 (AC-16): can re-edit confirmed answer", () => {
 		const { c, result } = make(multiQ);
 		// Q1: select A
 		c.handleInput(ENTER); // → Q2
-		// Go back to Q1
-		c.handleInput("\x1b[Z"); // Q1
+		// Go back to Q1（问题 tab 间用 ← 回退）
+		c.handleInput(LEFT); // Q1
 		// Select B instead
 		c.handleInput(DOWN);
 		c.handleInput(ENTER); // → Q2
@@ -152,7 +152,7 @@ describe("AskUserComponent — multi question tab nav", () => {
 		const { c, result } = make(twoQ);
 		c.handleInput(ENTER); // Q1 select A → Q2
 		c.handleInput(" ");   // Q2 toggle X (no Enter-confirm)
-		c.handleInput(TAB); // → Submit, should auto-confirm Q2
+		c.handleInput(RIGHT); // → Submit, should auto-confirm Q2
 		c.handleInput(ENTER); // Submit (all confirmed)
 		expect(result.val!.answers["Q1"]).toBe("A");
 		expect(result.val!.answers["Q2"]).toBe("X");
@@ -179,7 +179,7 @@ describe("AskUserComponent — multi question tab nav", () => {
 		];
 		const { c, result } = make(twoQMulti);
 		c.handleInput(" "); // Q1 toggle A
-		c.handleInput(TAB); // → Q2，auto-confirm Q1，不进评论
+		c.handleInput(RIGHT); // → Q2，auto-confirm Q1，不进评论
 		// 验证：当前在 Q2（非 Q1 的评论模式）。Q2 选 X → Submit
 		c.handleInput(ENTER); // Q2 select X → Submit
 		c.handleInput(ENTER); // Submit
@@ -201,8 +201,8 @@ describe("AskUserComponent — multi question tab nav", () => {
 		c.handleInput("o");
 		c.handleInput("m");
 		c.handleInput(ENTER); // 保存 freeText → confirmed=true → advance to Q2
-		// 切回 Q1，重进 Other 编辑器，清空后空 Enter
-		c.handleInput("\x1b[Z");  // Shift+Tab → Q1
+		// 切回 Q1，重进 Other 编辑器，清空后空 Enter（问题 tab 间用 ← 回退）
+		c.handleInput(LEFT);  // → Q1
 		c.handleInput(DOWN);  // idempotent: cursor stays on Other
 		c.handleInput(DOWN);
 		c.handleInput(ENTER);   // 重开 freeform，editorText 预填 "custom"
@@ -214,9 +214,9 @@ describe("AskUserComponent — multi question tab nav", () => {
 		c.handleInput(BKSP);
 		c.handleInput(ENTER); // 空 Enter → freeTextValue 清空，confirmed 应重置 false
 		// 导航到 Submit 并尝试提交 → 应被阻塞（Q1 回到未答）
-		c.handleInput(TAB); // → Q2
-		c.handleInput(TAB); // → Q3
-		c.handleInput(TAB); // → Submit
+		c.handleInput(RIGHT); // → Q2
+		c.handleInput(RIGHT); // → Q3
+		c.handleInput(RIGHT); // → Submit
 		c.handleInput(ENTER); // 应被阻塞
 		expect(result.val).toBeUndefined();
 	});
@@ -513,9 +513,9 @@ describe("AskUserComponent — render cache", () => {
 describe("AskUserComponent — Submit tab", () => {
 	it("C-47: Submit Esc backs to last question (no longer cancels)", () => {
 		const { c, result } = make(multiQ);
-		c.handleInput(TAB); // Q2
-		c.handleInput(TAB); // Q3
-		c.handleInput(TAB); // Submit
+		c.handleInput(RIGHT); // Q2
+		c.handleInput(RIGHT); // Q3
+		c.handleInput(RIGHT); // Submit
 		c.handleInput(ESC); // 回退到最后一个问题 Q3（不取消）
 		expect(result.val).toBeUndefined();
 		const lines = c.render(80);
@@ -538,17 +538,17 @@ describe("AskUserComponent — Submit tab", () => {
 	});
 
 	it("C-S12: Submit tab Left navigates to last question tab", () => {
-		// S-12 锁定：Submit tab 上按 Left → activeTab = questions.length - 1（最后一个问题）
+		// 锁定：Submit tab 上按 ← → activeTab = questions.length - 1（最后一个问题）
 		const { c } = make(multiQ); // 3 questions → tabs 0,1,2,3=Submit
-		// 导航到 Submit
-		c.handleInput(TAB); // Q1 → Q2
-		c.handleInput(TAB); // Q2 → Q3
-		c.handleInput(TAB); // Q3 → Submit
+		// 导航到 Submit（问题 tab 间用 →）
+		c.handleInput(RIGHT); // Q1 → Q2
+		c.handleInput(RIGHT); // Q2 → Q3
+		c.handleInput(RIGHT); // Q3 → Submit
 		// 确认当前在 Submit（渲染 Submit 视图）
 		let lines = c.render(80);
 		expect(lines.some((l) => l.includes("Ready") || l.includes("Unanswered"))).toBe(true);
-		// 在 Submit 上按 Left → 应回到最后一个问题 Q3
-		c.handleInput("\x1b[Z");
+		// 在 Submit 上按 ← → 应回到最后一个问题 Q3（←/→ 在所有 tab 上都是导航）
+		c.handleInput(LEFT);
 		lines = c.render(80);
 		// Q3 不再是 Submit 视图（无 Ready/Unanswered），且渲染了 Q3 的选项 M
 		expect(lines.some((l) => l.includes("Ready") || l.includes("Unanswered"))).toBe(false);
@@ -607,8 +607,8 @@ describe("AskUserComponent — confirm-checkmark, Esc-back, Tab browsing", () =>
 	it("C-E1: confirmed tab shows green ✓ marker", () => {
 		const { c } = make(multiQ);
 		c.handleInput(ENTER); // Q1 确认 → Q2
-		// 回到 Q1 看 tab 栏：Q1 已确认应有 ✓ 标识
-		c.handleInput("\x1b[Z"); // Q2 → Q1
+		// 回到 Q1 看 tab 栏：Q1 已确认应有 ✓ 标识（问题 tab 间用 ← 回退）
+		c.handleInput(LEFT); // Q2 → Q1
 		const lines = c.render(80);
 		expect(lines.some((l) => l.includes("✓") && l.includes("First"))).toBe(true);
 	});
@@ -642,29 +642,31 @@ describe("AskUserComponent — confirm-checkmark, Esc-back, Tab browsing", () =>
 		expect(c.render(80).some((l) => l.includes("Cancel all"))).toBe(false);
 	});
 
-	it("C-E5: Tab navigates to next tab; Shift+Tab to previous", () => {
+	it("C-E5: ←/→ navigates question tabs (→ next, ← previous)", () => {
 		const { c } = make(multiQ);
-		c.handleInput(TAB); // Q1 → Q2
+		c.handleInput(RIGHT); // Q1 → Q2
 		// 确认在 Q2：渲染含 Q2 的选项 X
 		expect(c.render(80).some((l) => l.includes("X"))).toBe(true);
-		// Shift+Tab（xterm 序列 ESC[Z）回退到 Q1
-		c.handleInput("\x1b[Z");
+		// ← 回退到 Q1
+		c.handleInput(LEFT);
 		expect(c.render(80).some((l) => l.includes("Q1") || l.includes("First"))).toBe(true);
 	});
 
-	it("C-E6: Tab wraps Submit → Q1, Shift+Tab wraps Q1 → Submit", () => {
+	it("C-E6: → at last question enters Submit; ← at first question stays (no wrap)", () => {
 		const { c } = make(multiQ);
 		// 到 Submit：Q1→Q2→Q3→Submit
 		c.handleInput(ENTER); // Q1→Q2
-		c.handleInput(TAB); // Q2→Q3
-		c.handleInput(TAB); // Q3→Submit
+		c.handleInput(RIGHT); // Q2→Q3
+		c.handleInput(RIGHT); // Q3→Submit
 		expect(c.render(80).some((l) => l.includes("Ready") || l.includes("Unanswered"))).toBe(true);
-		// Submit 上 Tab → 环绕到 Q1
-		c.handleInput(TAB);
+		// Submit 上 ← → 回退到 Q3（←/→ 在所有 tab 上都是导航）
+		c.handleInput(LEFT);
+		expect(c.render(80).some((l) => l.includes("M"))).toBe(true);
+		// Q1 上 ← 不环绕（停在首个问题）
+		c.handleInput(LEFT); // Q3→Q2
+		c.handleInput(LEFT); // Q2→Q1
+		c.handleInput(LEFT); // Q1 上 ← → 停留 Q1
 		expect(c.render(80).some((l) => l.includes("Q1") || l.includes("First"))).toBe(true);
-		// Q1 上 Shift+Tab → 环绕回 Submit
-		c.handleInput("\x1b[Z");
-		expect(c.render(80).some((l) => l.includes("Ready") || l.includes("Unanswered"))).toBe(true);
 	});
 });
 
@@ -704,39 +706,39 @@ describe("AskUserComponent — new behavior (post-refactor)", () => {
 		expect(result.val!.answers["Which features?"]).toBe("Auth, redis");
 	});
 
-	it("C-NEW-2: Left/Right on question tab do NOT switch tabs (only Tab/Shift+Tab do)", () => {
+	it("C-NEW-2: ←/→ on question tab switches tabs (→ next, ← previous; ← no wrap at first)", () => {
 		// multiQ: 3 questions → tabs 0,1,2,3=Submit
 		const { c } = make(multiQ);
 		c.render(80);
-		// 1) Q1 上按 Right → 应仍在 Q1（不切 tab）
+		// 1) Q1 上按 Right → 应切到 Q2
 		c.handleInput(RIGHT);
-		expect(c.render(80).some((l) => l.includes("Q1") || l.includes("First"))).toBe(true);
-		// 2) Left 也不切
+		expect(c.render(80).some((l) => l.includes("Q2") || l.includes("Second"))).toBe(true);
+		// 2) Left 回到 Q1
 		c.handleInput(LEFT);
 		expect(c.render(80).some((l) => l.includes("Q1") || l.includes("First"))).toBe(true);
-		// 3) Tab 仍然可以切到 Q2
-		c.handleInput(TAB);
-		expect(c.render(80).some((l) => l.includes("Q2") || l.includes("Second"))).toBe(true);
+		// 3) Q1 上 Left 不环绕（仍停 Q1）
+		c.handleInput(LEFT);
+		expect(c.render(80).some((l) => l.includes("Q1") || l.includes("First"))).toBe(true);
 	});
 
-	it("C-NEW-3: Submit tab Left/Right toggles submitTabFocus (Submit ↔ Cancel)", () => {
+	it("C-NEW-3: Submit tab Tab toggles submitTabFocus (Submit ↔ Cancel)", () => {
 		// multiQ: 3 questions → tabs 0,1,2,3=Submit
 		const { c } = make(multiQ);
-		// 导航到 Submit
-		c.handleInput(TAB); // Q1→Q2
-		c.handleInput(TAB); // Q2→Q3
-		c.handleInput(TAB); // Q3→Submit
+		// 导航到 Submit（问题 tab 间用 →）
+		c.handleInput(RIGHT); // Q1→Q2
+		c.handleInput(RIGHT); // Q2→Q3
+		c.handleInput(RIGHT); // Q3→Submit
 		// Submit tab 默认 focus=Submit。验证渲染中 Submit 高亮（accent）
 		let lines = c.render(80);
 		const focusedLineInitial = lines.find((l) => l.match(/[\[\(]\s*Submit\s*[\]\)]/));
 		expect(focusedLineInitial).toBeDefined();
-		// 按 Right → focus 切到 Cancel
-		c.handleInput(RIGHT);
+		// 按 Tab → focus 切到 Cancel（单键双向循环）
+		c.handleInput(TAB);
 		lines = c.render(80);
 		const focusedLineAfter = lines.find((l) => l.match(/[\[\(]\s*Cancel\s*[\]\)]/));
 		expect(focusedLineAfter).toBeDefined();
-		// 再按 Left → focus 回 Submit
-		c.handleInput(LEFT);
+		// 再按 Tab → focus 回 Submit
+		c.handleInput(TAB);
 		lines = c.render(80);
 		expect(lines.find((l) => l.match(/[\[\(]\s*Submit\s*[\]\)]/))).toBeDefined();
 	});
@@ -762,8 +764,8 @@ describe("AskUserComponent — new behavior (post-refactor)", () => {
 		c.handleInput(ENTER); // Q1 → Q2
 		c.handleInput(ENTER); // Q2 → Q3
 		c.handleInput(ENTER); // Q3 → Submit tab
-		// 切到 Submit 后，按 Right 把 focus 切到 Cancel
-		c.handleInput(RIGHT);
+		// 切到 Submit 后，按 Tab 把 focus 切到 Cancel
+		c.handleInput(TAB);
 		// Enter → 直接 cancel()（Submit tab 上无二次确认）
 		c.handleInput(ENTER);
 		expect(result.val).toBeNull();
@@ -774,9 +776,8 @@ describe("AskUserComponent — new behavior (post-refactor)", () => {
 		// 只答 Q1
 		c.handleInput(ENTER); // Q1 → Q2
 		// 切到 Submit（Q2 还未答）
-		c.handleInput(TAB); // Q2
-		c.handleInput(TAB); // Q3
-		c.handleInput(TAB); // Submit
+		c.handleInput(RIGHT); // Q2 → Q3
+		c.handleInput(RIGHT); // Q3 → Submit
 		// focus=Submit（默认），按 Enter → 不提交（Q2/Q3 未答）
 		c.handleInput(ENTER);
 		expect(result.val).toBeUndefined();

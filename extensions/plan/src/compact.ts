@@ -76,11 +76,12 @@ export function detectGoalCapability(pi: ExtensionAPI): boolean {
 
 /** Try to initialize goal via programming interface */
 function tryGoalInit(pi: ExtensionAPI, planFilePath: string, ctx: ExtensionContext): boolean {
+  // Inline alias mirrors @zhushanwen/pi-goal's GoalInitFn (exported from goal/src/index.ts).
+  // Kept inline due to optional duck-typed coupling (pi.__goalInit) — update both if signature changes.
   type GoalInitFn = (
     objective: string,
-    tasks: string[],
-    budget?: { tokenBudget?: number; timeBudgetMinutes?: number; maxTurns?: number },
-    ctx?: ExtensionContext,
+    budget: { tokenBudget?: number; timeBudgetMinutes?: number } | undefined,
+    ctx: ExtensionContext,
   ) => boolean;
 
   try {
@@ -95,7 +96,7 @@ function tryGoalInit(pi: ExtensionAPI, planFilePath: string, ctx: ExtensionConte
     const tasks = extractPlanSteps(planContent);
     if (tasks.length === 0) return false;
 
-    return goalInit(objective, tasks, undefined, ctx);
+    return goalInit(objective, undefined, ctx);
   } catch {
     return false;
   }

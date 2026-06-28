@@ -1,5 +1,30 @@
 # @zhushanwen/pi-todo
 
+## 0.3.0
+
+### Minor Changes
+
+- Four-state task model + verification flag for goal↔todo merge (FR-1).
+
+  `pi-todo` is upgraded from a three-state to a **four-state** model to become
+  the shared task backend for `@zhushanwen/pi-goal` (0.4.0+) and to mirror
+  Codex's task lifecycle:
+
+  - Status enum: `pending | in_progress | completed | cancelled`
+    (`cancelled` is terminal and non-recoverable)
+  - New optional `isVerification` field — marks verification tasks used by
+    goal's prompt-driven completion audit (FR-6). Verification tasks must reach
+    `completed`, never `cancelled`
+  - Legacy data migration on read:
+    - `status: "verifying"` → `"in_progress"`
+    - `status: "failed"` → `"pending"`
+    - `done: boolean` → `status: "completed" | "pending"`
+    - `isVerification` preserved when present (absent on old data is fine — field
+      is optional)
+
+  Backward compatible: existing stored todo lists load unchanged after migration.
+  Goal 0.4.0 depends on this model — pair this release with `pi-goal@0.4.0`.
+
 ## 0.2.0
 
 ### Minor Changes

@@ -28,16 +28,24 @@ export function createGoalQualityDetector(problem: ProblemDefinition) {
     events: problem.detector.events,
 
     match(event: { type: string; toolName?: string }): boolean {
-      if (event.type !== "tool_result") return false;
-      return event.toolName === "goal_manager";
+      // DISABLED: goal tool was renamed goal_manager → goal_control, and the new
+      // GoalControlDetails schema ({action, goalId, status, slug}) no longer
+      // exposes task data. Task-quality metrics (completion/cancel rate) have no
+      // data source, so matching would only produce 0/0 items that falsely trip
+      // the "high" severity rule. Re-enable once task progress is re-injected
+      // (see goal refactor #7 / ADR).
+      void event;
+      return false;
     },
 
     createItem(event: {
       type: string;
       toolName?: string;
-      details?: { tasks?: Array<{ status: string }> };
+      details?: unknown;
     }): GoalQualityTrackedItem {
-      const tasks = event.details?.tasks ?? [];
+      // details.tasks 已不存在于 GoalControlDetails；defensive 读取，缺数据时记 0。
+      const details = (event.details ?? {}) as { tasks?: Array<{ status: string }> };
+      const tasks = details.tasks ?? [];
       const completed = tasks.filter((t) => t.status === "completed").length;
       const cancelled = tasks.filter((t) => t.status === "cancelled").length;
       const total = tasks.length;

@@ -13,22 +13,20 @@ import { access, readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
+// WorkflowMeta / WorkflowSource 的规范来源是 engine/models/workflow-script.ts
+// （实体持有 meta）。infra 这里 re-export 是为了保持 loadWorkflows/getWorkflow
+// 调用方的现有 import 路径不变（registry-impl、workflow-files、tests）。
+import type { WorkflowMeta, WorkflowSource } from "../engine/models/workflow-script.js";
+export type { WorkflowMeta, WorkflowSource };
+
 // ── Public types ──────────────────────────────────────────────
 
-export interface WorkflowMeta {
-  name: string;
-  description: string;
-  phases: (string | { title: string; detail?: string })[];
-}
-
-export type WorkflowSource = "saved" | "tmp";
-
 export interface CachedWorkflowMeta extends WorkflowMeta {
-  /** Absolute path to the script file */
+ /** Absolute path to the script file */
   path: string;
-  /** false when the script failed to load or has no valid meta export */
+ /** false when the script failed to load or has no valid meta export */
   available: boolean;
-  /** Whether this is a saved (fixed) or temporary (ad-hoc) workflow */
+ /** Whether this is a saved (fixed) or temporary (ad-hoc) workflow */
   source: WorkflowSource;
 }
 
@@ -61,17 +59,17 @@ function findWorkspaceRoot(): string {
   const root = resolve("/");
 
   for (let i = 0; i < WORKSPACE_ROOT_MAX_DEPTH; i++) {
-    // Check for bare repo marker
+ // Check for bare repo marker
     const barePath = resolve(dir, ".bare");
     if (fsSync.existsSync(barePath)) {
       return dir;
     }
-    // Check for .pi directory marker (works in normal repos)
+ // Check for .pi directory marker (works in normal repos)
     const piPath = resolve(dir, ".pi");
     if (fsSync.existsSync(piPath)) {
       return dir;
     }
-    // Check for .git (normal git repo)
+ // Check for .git (normal git repo)
     const gitPath = resolve(dir, ".git");
     if (fsSync.existsSync(gitPath)) {
       return dir;
@@ -93,7 +91,7 @@ const CACHE_TTL_MS = 60_000;
 
 // P1-4: Keyed by workspace root so that switching projects does not
 // serve stale entries. A single module-level Map is now segmented by
-// `workspaceRoot`. invalidateCache() clears all workspaces' entries.
+// `workspaceRoot`. invalidateCache clears all workspaces' entries.
 const cache = new Map<string, Map<string, CacheEntry>>();
 
 function getCacheBucket(workspaceRoot: string): Map<string, CacheEntry> {
@@ -129,7 +127,7 @@ function stem(filePath: string): string {
  *
  * This avoids executing user code (no Worker/import/require), so it works
  * regardless of whether the script uses CJS, ESM, top-level await, or
- * references runtime globals like `agent()` or `$ARGS`.
+ * references runtime globals like `agent` or `$ARGS`.
  *
  * Supports both `const meta = { ... }` and `export const meta = { ... }`.
  */
@@ -137,16 +135,16 @@ async function extractMetaViaRegex(scriptPath: string): Promise<WorkerResult> {
   try {
     const content = await readFile(scriptPath, "utf-8");
 
-    // Match `const meta = { ... }` or `export const meta = { ... }`
-    // Use the rest-of-line approach: capture everything from the opening { to
-    // the closing } (greedy) on the same statement.
+ // Match `const meta = { ... }` or `export const meta = { ... }`
+ // Use the rest-of-line approach: capture everything from the opening { to
+ // the closing } (greedy) on the same statement.
     const metaPattern = /(?:export\s+)?const\s+meta\s*=\s*(\{[^]*?\});?\s*$/m;
     const match = metaPattern.exec(content);
     if (!match) {
       return { success: false, error: "No 'const meta = { ... }' declaration found" };
     }
 
-    // Evaluate the captured object literal in a safe sandbox
+ // Evaluate the captured object literal in a safe sandbox
     const metaObj = safeEvalObject(match[1]);
     if (!metaObj || typeof metaObj !== "object") {
       return { success: false, error: "Failed to parse meta object" };
@@ -175,14 +173,14 @@ async function extractMetaViaRegex(scriptPath: string): Promise<WorkerResult> {
 
 /**
  * Safely evaluate a simple object literal string.
- * Uses `new Function` to avoid eval() while still supporting basic JS
+ * Uses `new Function` to avoid eval while still supporting basic JS
  * literal syntax (strings, numbers, arrays, nested objects).
  *
  * Returns undefined if the string cannot be safely evaluated.
  */
 function safeEvalObject(literal: string): Record<string, unknown> | undefined {
   try {
-    // Wrap in parentheses to force expression evaluation
+ // Wrap in parentheses to force expression evaluation
     const fn = new Function(`return (${literal});`);
     const result = fn();
     if (typeof result === "object" && result !== null && !Array.isArray(result)) {
@@ -228,7 +226,7 @@ async function scanDirectory(dirPath: string, source: WorkflowSource): Promise<C
         source,
       });
     } else {
-      // Import failed — mark as unavailable but still include in listing
+ // Import failed — mark as unavailable but still include in listing
       results.push({
         name: fallbackName,
         description: "",
@@ -267,26 +265,26 @@ export async function loadWorkflows(): Promise<CachedWorkflowMeta[]> {
   const userWorkflows = results[1].status === "fulfilled" ? results[1].value : [];
   const tmpWorkflows = results[2].status === "fulfilled" ? results[2].value : [];
 
-  // Deduplicate by priority: tmp > project > user
-  // Use a Map keyed by name — later entries overwrite earlier ones
+ // Deduplicate by priority: tmp > project > user
+ // Use a Map keyed by name — later entries overwrite earlier ones
   const mergedMap = new Map<string, CachedWorkflowMeta>();
 
-  // Lowest priority first: user-level
+ // Lowest priority first: user-level
   for (const wf of userWorkflows) {
     mergedMap.set(wf.name, wf);
   }
-  // Project-level overrides user-level
+ // Project-level overrides user-level
   for (const wf of projectWorkflows) {
     mergedMap.set(wf.name, wf);
   }
-  // Tmp overrides everything
+ // Tmp overrides everything
   for (const wf of tmpWorkflows) {
     mergedMap.set(wf.name, wf);
   }
 
   const merged = Array.from(mergedMap.values());
 
-  // Update cache (scoped to current workspace root)
+ // Update cache (scoped to current workspace root)
   const bucket = getCacheBucket(workspaceRoot);
   const now = Date.now();
   for (const wf of merged) {
@@ -314,7 +312,7 @@ export async function getWorkflow(name: string): Promise<CachedWorkflowMeta | un
 
 /**
  * Invalidate the internal meta cache.
- * The next call to loadWorkflows() or getWorkflow() will re-scan directories.
+ * The next call to loadWorkflows or getWorkflow will re-scan directories.
  */
 export function invalidateCache(): void {
   cache.clear();

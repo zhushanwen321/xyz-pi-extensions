@@ -1,0 +1,295 @@
+{
+  "test_cases": [
+    {
+      "id": "TC-1-01",
+      "type": "unit",
+      "title": "WorkflowRun transition 合法转换",
+      "description": "验证 running→paused、paused→running、running→done、paused→done 转换成功",
+      "steps": [
+        "构造 WorkflowRun(status=running)",
+        "调用 transition(\"paused\")",
+        "验证 state.status === \"paused\"",
+        "调用 transition(\"running\")",
+        "验证 state.status === \"running\"",
+        "调用 transition(\"done\", \"completed\")",
+        "验证 state.status === \"done\" && state.reason === \"completed\""
+      ]
+    },
+    {
+      "id": "TC-1-02",
+      "type": "unit",
+      "title": "WorkflowRun transition 非法转换抛错",
+      "description": "done→running、done→paused、done→done 均抛 Error",
+      "steps": [
+        "构造 WorkflowRun(status=done, reason=completed)",
+        "调用 transition(\"running\") → expect throw",
+        "调用 transition(\"paused\") → expect throw",
+        "调用 transition(\"done\") → expect throw"
+      ]
+    },
+    {
+      "id": "TC-1-03",
+      "type": "unit",
+      "title": "WorkflowRun done 转换无 reason 抛错",
+      "description": "transition(\"done\") 不传 reason 时抛 Error",
+      "steps": [
+        "构造 WorkflowRun(status=running)",
+        "调用 transition(\"done\") 无 reason → expect throw"
+      ]
+    },
+    {
+      "id": "TC-1-04",
+      "type": "unit",
+      "title": "WorkflowRun replaceRuntime running 状态成功",
+      "description": "G5-001: status=running 时原子替换 runtime，status 保持 running",
+      "steps": [
+        "构造 WorkflowRun(status=running, runtime=oldRt)",
+        "调用 replaceRuntime(newRt)",
+        "验证 runtime === newRt",
+        "验证 state.status === \"running\"",
+        "验证 oldRt.worker.terminate() 被调用"
+      ]
+    },
+    {
+      "id": "TC-1-05",
+      "type": "unit",
+      "title": "WorkflowRun replaceRuntime paused 状态拒绝",
+      "description": "G6-001: status=paused 时 replaceRuntime 抛 Error",
+      "steps": [
+        "构造 WorkflowRun(status=paused, runtime=undefined)",
+        "调用 replaceRuntime(newRt) → expect throw"
+      ]
+    },
+    {
+      "id": "TC-2-01",
+      "type": "unit",
+      "title": "Budget maxTokens>0 守卫",
+      "description": "maxTokens=0 时不限制；maxTokens>0 时超限返回 true",
+      "steps": [
+        "构造 Budget(maxTokens=0)",
+        "consume(usage) 任意量",
+        "验证 isExceeded() === false",
+        "构造 Budget(maxTokens=1000)",
+        "consume(usage) 累计 >= 1000",
+        "验证 isExceeded() === true"
+      ]
+    },
+    {
+      "id": "TC-2-02",
+      "type": "unit",
+      "title": "Budget soft limit 预警",
+      "description": "totalCallCount > 500 时触发 onConsume 回调",
+      "steps": [
+        "构造 Budget(maxTokens=100000, onConsume=callback)",
+        "consume 501 次",
+        "验证 callback 被调用 1 次",
+        "验证 softWarningSent === true"
+      ]
+    },
+    {
+      "id": "TC-3-01",
+      "type": "unit",
+      "title": "Trace append-only",
+      "description": "append 后 node 顺序不变；update 不改变索引",
+      "steps": [
+        "构造 Trace",
+        "append(node1), append(node2), append(node3)",
+        "验证 toArray() === [node1, node2, node3]",
+        "update(node2.stepIndex, {status:\"completed\"})",
+        "验证 toArray() 顺序不变，node2.status === \"completed\""
+      ]
+    },
+    {
+      "id": "TC-3-02",
+      "type": "unit",
+      "title": "Trace update 不存在 callId no-op",
+      "description": "update 不存在的 callId 不抛错",
+      "steps": [
+        "构造 Trace（空）",
+        "update(999, {status:\"completed\"})",
+        "验证 toArray() 为空，无异常"
+      ]
+    },
+    {
+      "id": "TC-4-01",
+      "type": "unit",
+      "title": "AgentCall 成功执行",
+      "description": "正常执行：status pending→running→done，result 有值",
+      "steps": [
+        "构造 AgentCall + mock AgentRunner(返回成功 result)",
+        "调用 execute(runner, budget, signal, trace)",
+        "验证 status === \"done\"",
+        "验证 result 有值",
+        "验证 trace node updated"
+      ]
+    },
+    {
+      "id": "TC-4-02",
+      "type": "unit",
+      "title": "AgentCall stale-context 不重试",
+      "description": "命中 STALE_CONTEXT_PATTERNS 时 1 次即 done+error，不重试",
+      "steps": [
+        "构造 AgentCall + mock AgentRunner(返回 \"stale context\" error)",
+        "调用 execute()",
+        "验证 attempts === 1",
+        "验证 status === \"done\"",
+        "验证 result.error 包含 \"stale context\""
+      ]
+    },
+    {
+      "id": "TC-4-03",
+      "type": "unit",
+      "title": "AgentCall 3 次重试 + 指数退避",
+      "description": "失败重试 3 次（1000ms/2000ms/4000ms 退避）",
+      "steps": [
+        "构造 AgentCall + mock AgentRunner(始终返回 error)",
+        "mock sleep 验证延迟序列",
+        "调用 execute()",
+        "验证 attempts === 3",
+        "验证 status === \"done\"",
+        "验证 sleep 调用序列为 [1000, 2000, 4000]"
+      ]
+    },
+    {
+      "id": "TC-5-01",
+      "type": "unit",
+      "title": "WorkerHandle postMessage terminate 后不发送",
+      "description": "terminate 后 isCurrent=false，postMessage no-op",
+      "steps": [
+        "构造 WorkerHandleImpl(mockWorker)",
+        "调用 terminate()",
+        "验证 isCurrent === false",
+        "调用 postMessage(msg)",
+        "验证 mockWorker.postMessage 未被调用"
+      ]
+    },
+    {
+      "id": "TC-5-02",
+      "type": "unit",
+      "title": "WorkerHandle exit 竞态防护",
+      "description": "G-025: 旧 handle 的 exit 事件不误判新 handle",
+      "steps": [
+        "构造 handle1, replace 为 handle2",
+        "模拟 handle1 的 onExit 触发",
+        "验证 handle2 不受影响（run.runtime.worker === handle2）"
+      ]
+    },
+    {
+      "id": "TC-6-01",
+      "type": "unit",
+      "title": "RunLifecycleService run 成功创建",
+      "description": "run() 成功：status=running，runtime 已绑定",
+      "steps": [
+        "构造 RunLifecycleService(mock deps)",
+        "调用 run(\"test\", {}, undefined, undefined, undefined)",
+        "验证返回 runId",
+        "验证 run.state.status === \"running\"",
+        "验证 run.runtime !== undefined"
+      ]
+    },
+    {
+      "id": "TC-6-02",
+      "type": "unit",
+      "title": "RunLifecycleService pause/resume",
+      "description": "pause 后 runtime=undefined；resume 后 runtime 重建",
+      "steps": [
+        "run() 创建 workflow",
+        "调用 pause(runId)",
+        "验证 status === \"paused\", runtime === undefined",
+        "调用 resume(runId)",
+        "验证 status === \"running\", runtime !== undefined（新实例）"
+      ]
+    },
+    {
+      "id": "TC-6-03",
+      "type": "unit",
+      "title": "RunLifecycleService A4 原子性",
+      "description": "releaseRuntime 抛错时 status 未变",
+      "steps": [
+        "run() 创建 workflow",
+        "mock worker.terminate() 抛 Error",
+        "调用 pause(runId)",
+        "验证抛出 Error",
+        "验证 status === \"running\"（未变为 paused）"
+      ]
+    },
+    {
+      "id": "TC-7-01",
+      "type": "unit",
+      "title": "WorkflowLauncher 正常完成",
+      "description": "返回 {status:\"done\", reason:\"completed\", scriptResult}",
+      "steps": [
+        "构造 WorkflowLauncher(mock lifecycle)",
+        "调用 runAndWait(\"test\", {}, undefined, undefined)",
+        "验证返回 status === \"done\"",
+        "验证 reason === \"completed\"",
+        "验证 scriptResult 有值"
+      ]
+    },
+    {
+      "id": "TC-7-02",
+      "type": "unit",
+      "title": "WorkflowLauncher timeout",
+      "description": "timeoutMs 超时返回 reason=\"time_limited\"",
+      "steps": [
+        "构造 WorkflowLauncher",
+        "调用 runAndWait(\"test\", {}, undefined, 100)（100ms timeout）",
+        "等待 > 100ms",
+        "验证 reason === \"time_limited\""
+      ]
+    },
+    {
+      "id": "TC-8-01",
+      "type": "integration",
+      "title": "跨 session pause/resume 完整流程",
+      "description": "AC-5: run→pause→重启Pi→resume，callCache 保留",
+      "steps": [
+        "run() 创建 workflow，执行到一半",
+        "pause(runId)",
+        "模拟 session_shutdown（runStore.save）",
+        "模拟 session_start（runStore.loadAll）",
+        "resume(runId)",
+        "验证已完成调用从 callCache replay",
+        "验证 worker 重跑剩余部分"
+      ]
+    },
+    {
+      "id": "TC-9-01",
+      "type": "manual",
+      "title": "pi.__workflowRun 被 coding-workflow gate 调用",
+      "description": "触发 phase1-review-gate，确认 gate 正常消费新签名",
+      "steps": [
+        "启动 Pi（安装重构后的 workflow + 更新的 coding-workflow）",
+        "触发 coding-workflow 的 phase1 gate",
+        "确认 gate 调用 pi.__workflowRun 成功",
+        "确认 gate 消费 {status:\"done\", reason, scriptResult}",
+        "确认 gate 根据 reason 判断 pass/fail"
+      ]
+    },
+    {
+      "id": "TC-10-01",
+      "type": "manual",
+      "title": "/workflows 面板无 restart 快捷键",
+      "description": "D-9: 确认 TUI 面板无 'r' restart 快捷键",
+      "steps": [
+        "启动 Pi",
+        "输入 /workflows 打开面板",
+        "确认快捷键提示中无 'r restart'",
+        "确认按 'r' 无 restart 动作"
+      ]
+    },
+    {
+      "id": "TC-11-01",
+      "type": "manual",
+      "title": "架构合规验证命令",
+      "description": "AC-1/AC-2: 运行 rg 命令验证零依赖 + 重复消除",
+      "steps": [
+        "运行 rg domain 零依赖检查",
+        "运行 ls engine/ 不存在检查",
+        "运行 rg OrchestratorCore 等零匹配检查",
+        "运行 rg registerTool 2 匹配检查",
+        "运行 rg registerCommand 1 匹配检查"
+      ]
+    }
+  ]
+}

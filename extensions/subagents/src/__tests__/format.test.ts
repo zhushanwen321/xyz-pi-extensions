@@ -8,6 +8,7 @@ import {
   padToVisible,
   sanitizeLabel,
   segFillColored,
+  shortId,
   spinnerGlyph,
   statusGlyph,
   tailFixedLines,
@@ -427,5 +428,20 @@ describe("formatToolEventPairs: thinking/text", () => {
     expect(out).toHaveLength(2);
     expect(out[0]).toContain("read x.ts");
     expect(out[1]).toContain("thinking: analyzing");
+  });
+});
+
+// ============================================================
+// shortId
+// ============================================================
+describe("shortId", () => {
+  it("returns sync id unchanged (run-N already short)", () => {
+    expect(shortId("run-1")).toBe("run-1");
+    expect(shortId("run-42")).toBe("run-42");
+  });
+
+  it("strips timestamp from background id (bg-N-<ts> → bg-N)", () => {
+    expect(shortId("bg-1-1719500000000")).toBe("bg-1");
+    expect(shortId("bg-99-1719500123456")).toBe("bg-99");
   });
 });

@@ -33,14 +33,12 @@ ROOT_MD_WHITELIST=(
 # ─── docs/ 根级 .md 白名单（跨主题规范文档）───
 # 主题/调研/过程内容应进子目录：docs/research/、docs/adr/、docs/evolution/ 等
 DOCS_ROOT_MD_WHITELIST=(
+  README.md
+  architecture.md
   monorepo-conventions.md
-  pi-extension-standards.md
+  standards.md
   pi-tui-development-guide.md
   quality-gates.md
-  harness-design-framework.md
-  harness-current-state-assessment.md
-  review-gate-phase-analysis-playbook.md
-  goal-todo.md
 )
 
 C_RED='\033[0;31m'

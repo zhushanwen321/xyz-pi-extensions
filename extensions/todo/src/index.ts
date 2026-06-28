@@ -34,6 +34,9 @@ export default function (pi: ExtensionAPI) {
 	// ── 闭包内状态（session 隔离） ─────────────────────
 	const state = createTodoSessionState();
 
+	// 全解耦：不再暴露 pi.__todoGetList 跨扩展 API（goal 不再读 todo 状态）。
+	// todo 进度由 AI 自行管理，goal 不做强制检查。
+
 	// ── 刷新显示（依赖闭包 state） ─────────────────────
 	function refreshDisplay(ctx: ExtensionContext): void {
 		const statusText = renderStatusText(state.todos, ctx.ui.theme);

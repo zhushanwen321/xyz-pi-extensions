@@ -2,7 +2,7 @@
 
 > 基于 `@zhushanwen/pi-subagents` 扩展开发过程中 14 个 TUI 修复 commit 的实战总结，对照无 bug 的参考实现 `pi-subagents`（`~/GitApp/pi-ecosystem/pi-subagents`）及 Pi 渲染引擎源码（`pi-mono`）交叉验证。
 >
-> 本文档是 [Pi Extension 开发规范 §15 TUI 渲染指南](./pi-extension-standards.md#15-tui-渲染--指南) 的深度展开，专注「场景 → 怎么做」的可操作经验。
+> 本文档是 [Pi Extension 开发规范 §15 TUI 渲染指南](./standards.md#15-tui-渲染--指南) 的深度展开，专注「场景 → 怎么做」的可操作经验。
 >
 > 最后更新：2026-06-17
 

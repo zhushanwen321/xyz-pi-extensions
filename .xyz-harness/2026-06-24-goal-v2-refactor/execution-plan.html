@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>执行计划 — Goal V2 Refactor</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      --bg: #fafafa; --surface: #ffffff; --text: #1a1a1a; --muted: #6b7280;
+      --accent: #2563eb; --ok: #16a34a; --warn: #d97706; --err: #dc2626;
+      --border: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+      line-height: 1.7; }
+    main, header, footer { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+    header { padding-top: 40px; padding-bottom: 24px; border-bottom: 2px solid var(--accent); }
+    header h1 { margin: 0 0 8px; }
+    .meta { color: var(--muted); font-size: 14px; }
+    .meta .badge { display: inline-block; padding: 2px 8px; background: #f0fdf4;
+      color: var(--ok); border-radius: 4px; font-weight: 600; }
+    .toc { max-width: 920px; margin: 24px auto; padding: 0 24px; }
+    .toc ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+    .toc a { display: inline-block; padding: 4px 12px; background: var(--surface);
+      border: 1px solid var(--border); border-radius: 16px; text-decoration: none;
+      color: var(--accent); font-size: 14px; }
+    .toc a:hover { background: var(--accent); color: #fff; }
+    section { background: var(--surface); margin: 24px 0; padding: 24px 32px;
+      border-radius: 8px; border: 1px solid var(--border); }
+    h2 { color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-top: 0; }
+    h3 { margin-top: 28px; color: #1f2937; }
+    h4 { margin-top: 20px; margin-bottom: 6px; color: #374151; }
+    table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 13.5px; }
+    th, td { padding: 8px 12px; border: 1px solid var(--border); text-align: left;
+      vertical-align: top; }
+    th { background: #f3f4f6; font-weight: 600; }
+    tbody tr:nth-child(even) { background: #f9fafb; }
+    code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 0.9em;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+    pre { background: #1e293b; color: #e2e8f0; padding: 16px; border-radius: 8px;
+      overflow-x: auto; font-size: 13px; }
+    pre code { background: none; padding: 0; color: inherit; }
+    .mermaid { background: var(--surface); padding: 16px; border-radius: 8px;
+      border: 1px solid var(--border); text-align: center; margin: 16px 0; }
+    .hero { background: var(--surface); border: 1px solid var(--border);
+      border-left: 4px solid var(--accent); border-radius: 8px; padding: 24px 32px; margin: 24px 0; }
+    .tldr h2 { border: none; margin-top: 0; }
+    .tldr ul { margin-bottom: 0; }
+    .callout { border-left: 4px solid var(--accent); padding: 12px 16px; margin: 16px 0;
+      background: #eff6ff; border-radius: 0 8px 8px 0; }
+    .callout.warn { border-color: var(--warn); background: #fffbeb; }
+    .callout.err { border-color: var(--err); background: #fef2f2; }
+    .callout.ok { border-color: var(--ok); background: #f0fdf4; }
+    .callout.key { border-color: var(--err); background: #fef2f2; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+    .callout h4 { margin-top: 0; }
+    ul.checklist { list-style: none; padding-left: 4px; }
+    ul.checklist li { padding-left: 24px; text-indent: -24px; margin: 4px 0; }
+    ul.checklist li::before { content: "☐ "; color: var(--muted); }
+    .wave-card { border-top: 4px solid var(--accent); }
+    .wave-card h2 .wave-tag { font-size: 13px; font-weight: 600; color: #fff;
+      background: var(--accent); padding: 2px 10px; border-radius: 12px; margin-right: 8px;
+      vertical-align: middle; }
+    .kv { width: 100%; }
+    .kv td:first-child { width: 28%; font-weight: 600; color: #374151; white-space: nowrap; }
+    .p0 { color: var(--err); font-weight: 600; }
+    .p1 { color: var(--warn); font-weight: 600; }
+    .p2 { color: var(--accent); font-weight: 600; }
+    .p3 { color: var(--muted); }
+    .decision { border-left: 4px solid var(--accent); background: #eff6ff;
+      padding: 16px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; }
+    .decision.key { border-left-width: 5px; border-left-color: var(--err);
+      background: #fef2f2; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
+    .decision.key h3::after { content: " ⭐ 关键决策"; font-size: 12px; color: var(--err);
+      background: #fff; padding: 2px 8px; border-radius: 10px; vertical-align: middle; font-weight: 600; }
+    .legend { font-size: 13px; color: var(--muted); margin-top: 8px; }
+    footer { padding: 40px 24px; color: var(--muted); font-size: 13px;
+      border-top: 1px solid var(--border); }
+    @media (max-width: 600px) {
+      section { padding: 18px 16px; }
+      .kv td:first-child { width: 40%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>执行计划：Goal V2 Refactor</h1>
+    <div class="meta">阶段 6/6 · <span class="badge">verdict: pass</span> · 生成于 2026-06-24 · upstream: code-architecture.md · downstream: coding</div>
+  </header>
+
+  <nav class="toc">
+    <ul>
+      <li><a href="#hero">总览 TL;DR</a></li>
+      <li><a href="#overview">Wave 编排</a></li>
+      <li><a href="#wave-1">Wave 1</a></li>
+      <li><a href="#wave-2">Wave 2</a></li>
+      <li><a href="#wave-3">Wave 3</a></li>
+      <li><a href="#wave-4">Wave 4</a></li>
+      <li><a href="#wave-5">Wave 5</a></li>
+      <li><a href="#wave-6">Wave 6</a></li>
+      <li><a href="#wave-7">Wave 7 验收</a></li>
+      <li><a href="#p3">后续迭代 P3</a></li>
+      <li><a href="#decisions">决策记录</a></li>
+      <li><a href="#handoff">执行交接</a></li>
+      <li><a href="#acceptance-manifest">测试验收清单</a></li>
+    </ul>
+  </nav>
+
+  <main>
+    <section class="hero" id="hero">
+      <div class="tldr">
+        <h2>TL;DR</h2>
+        <ul>
+          <li><strong>7 个 Wave，严格 DAG</strong>：W1 → W2 → W3 → W4 →（W5 ∥ W6）→ W7（验收 Gate）。执行顺序不可跳过。</li>
+          <li><strong>并行只有两处</strong>：Wave 2 内部 #3 ∥ #11 ∥ #12（文件不交集，3 subagent）；Wave 5 ∥ Wave 6（同 blocked_by W4，不同文件）。</li>
+          <li><strong>同文件必串行</strong>：Wave 1（#1→#2 改 types.ts）、Wave 4（#6→#7 改 budget.ts）、Wave 5（#8→#5 改 agent-end.ts）、Wave 6（#10→#9 改 prompts.ts）。</li>
+          <li><strong>范围重新切分（D1）</strong>：#2 收窄只加状态，字段删除整体归 #6 Wave 4 —— 保证每个 Wave typecheck 可达，避免中间红区。</li>
+          <li><strong>不需要 Prefactor Wave</strong>：#1 清场即业务交付，#4 的 persistAndUpdate 迁移是其验收的一部分。</li>
+        </ul>
+      </div>
+      <div class="mermaid">
+graph LR
+    W1["Wave 1<br/>engine 基础结构<br/>#1→#2 串行"]
+    W2["Wave 2<br/>goal_control+set+widget<br/>#3∥#11∥#12"]
+    W3["Wave 3<br/>event-adapter 拆分<br/>#4"]
+    W4["Wave 4<br/>删字段+终态+todo API<br/>#6→#7 串行"]
+    W5["Wave 5<br/>agent-end+budget<br/>#8→#5 串行"]
+    W6["Wave 6<br/>audit+plan<br/>#10→#9 串行"]
+    W7["Wave 7<br/>验收 Gate<br/>闭环闸门"]
+
+    W1 --> W2 --> W3 --> W4
+    W4 --> W5
+    W4 --> W6
+    W5 --> W7
+    W6 --> W7
+
+    classDef parallel fill:#eff6ff,stroke:#2563eb,stroke-width:2px,color:#1e3a8a;
+    classDef gate fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#92400e;
+    class W2,W5,W6 parallel;
+    class W7 gate;
+      </div>
+      <p class="legend">🔵 蓝色高亮 = 含并行组（Wave 2 内部 3 issue 并行；Wave 5 / Wave 6 跨 Wave 并行）。边 = blocked_by 依赖。</p>
+    </section>
+
+    <section id="overview">
+      <h2>Wave 编排总览</h2>
+
+      <h3>调度表</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Wave</th><th>切片</th><th>P 级</th><th>Blocked by</th>
+            <th>并行组</th><th>Wave 内部</th><th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>1</strong></td>
+            <td>engine 基础结构</td>
+            <td><span class="p0">P0</span></td>
+            <td>无</td>
+            <td>—</td>
+            <td>串行 #1→#2</td>
+            <td>删 task CRUD + 7 态状态机；同改 <code>engine/types.ts</code></td>
+          </tr>
+          <tr>
+            <td><strong>2</strong></td>
+            <td>goal_control + set 拒绝 + widget</td>
+            <td><span class="p0">P0</span>/<span class="p1">P1</span></td>
+            <td>Wave 1</td>
+            <td>A</td>
+            <td>并行 #3∥#11∥#12</td>
+            <td>三 issue 文件不交集</td>
+          </tr>
+          <tr>
+            <td><strong>3</strong></td>
+            <td>event-adapter 拆分</td>
+            <td><span class="p0">P0</span></td>
+            <td>Wave 2</td>
+            <td>—</td>
+            <td>单 issue #4</td>
+            <td>结构重构，后续 handler 级改动依赖根</td>
+          </tr>
+          <tr>
+            <td><strong>4</strong></td>
+            <td>删终态路径 + todo API</td>
+            <td><span class="p1">P1</span></td>
+            <td>Wave 3</td>
+            <td>—</td>
+            <td>串行 #6→#7</td>
+            <td>同改 <code>engine/budget.ts</code>（#6 删 maxTurnsReached / #7 改 checkProgress）</td>
+          </tr>
+          <tr>
+            <td><strong>5</strong></td>
+            <td>agent-end 重构 + budget 检查</td>
+            <td><span class="p1">P1</span></td>
+            <td>Wave 4</td>
+            <td>B</td>
+            <td>串行 #8→#5</td>
+            <td>同改 <code>event-handlers/agent-end.ts</code></td>
+          </tr>
+          <tr>
+            <td><strong>6</strong></td>
+            <td>audit prompt + plan 联动</td>
+            <td><span class="p1">P1</span>/<span class="p2">P2</span></td>
+            <td>Wave 4</td>
+            <td>B</td>
+            <td>串行 #10→#9</td>
+            <td>同改 <code>projection/prompts.ts</code>；与 Wave 5 并行</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>并行约束</h3>
+      <ul>
+        <li><strong>同文件不允许多 Wave / Wave 内多 issue 同时修改</strong> —— 本计划的串行/并行划分均基于文件冲突检测（见各 Wave「文件影响」）。</li>
+        <li><strong>Wave 内部并行</strong>：同一 Wave 内 issue 改不同文件时可派多个 subagent 并行（仅 Wave 2：#3 ∥ #11 ∥ #12）。</li>
+        <li><strong>Wave 内部串行</strong>：同改一文件的 issue 必须串行（Wave 1、Wave 5、Wave 6）。</li>
+        <li><strong>Wave 5 ∥ Wave 6</strong>：同 blocked_by Wave 4，改不同文件（<code>agent-end.ts</code>/<code>service.ts</code> vs <code>prompts.ts</code>/<code>index.ts</code>），可并行。</li>
+        <li><strong>同并行组最多 3 subagent</strong>（Semaphore 限制）。</li>
+      </ul>
+
+      <div class="callout ok">
+        <h4>Prefactor Wave 评估 — 结论：不需要独立 Prefactor Wave</h4>
+        <ul style="margin-bottom:0">
+          <li>#1（删 goal_manager / task CRUD）本身是业务交付（对标 Codex 去 task 管理），非纯结构铺垫。</li>
+          <li>#4 的 <code>persistAndUpdate</code> 迁入 <code>service.ts</code> 是 #4 验收的一部分（见 issues.md #4 验收），不独立成 prefactor。</li>
+          <li>Wave 1 直接做 #1+#2（清场 + 状态机），是后续所有 Wave 的结构基础。</li>
+        </ul>
+      </div>
+
+      <h3>依赖推导依据（从 code-architecture.md §6 时序图）</h3>
+      <table>
+        <thead>
+          <tr><th>时序图</th><th>落入 Wave</th><th>依赖先行</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>功能 1 <code>/goal set</code></td><td>Wave 2（#11）</td><td>#2 状态机（Wave 1）</td></tr>
+          <tr><td>功能 2 <code>goal_control.complete</code></td><td>Wave 2（#3）</td><td>#1 删 goal_manager（Wave 1）</td></tr>
+          <tr><td>功能 3 budget 自动终态</td><td>Wave 5（#5）</td><td>#4 拆分（Wave 3）+ #7 todo API（Wave 4）</td></tr>
+          <tr><td>功能 4 context 注入</td><td>Wave 5-6（#7/#8/#10）</td><td>#4 + #7</td></tr>
+          <tr><td>功能 5 pause/resume</td><td>Wave 2（#11/#12）</td><td>#2 paused（Wave 1）</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Wave 1 -->
+    <section class="wave-card" id="wave-1">
+      <h2><span class="wave-tag">W1</span>Wave 1：engine 基础结构</h2>
+      <table class="kv">
+        <tr><td>切片类型</td><td>垂直切片（清场 + 状态机地基）</td></tr>
+        <tr><td>P 级覆盖</td><td><span class="p0">P0</span>（#1, #2）</td></tr>
+        <tr><td>Blocked by</td><td>无 —— 可立即开始</td></tr>
+        <tr><td>并行关系</td><td>Wave 内 <strong>串行</strong> #1 → #2（同改 <code>engine/types.ts</code>，#1 先删旧字段，#2 再加新状态）</td></tr>
+      </table>
+
+      <h3>包含的 issue</h3>
+      <ul>
+        <li><strong>#1</strong> 删除 goal_manager + task CRUD（<span class="p0">P0</span>，方案 A 一步删除）</li>
+        <li><strong>#2</strong> 新增 paused 状态 + VALID_TRANSITIONS（<span class="p0">P0</span>，方案 A 显式转换表）</li>
+      </ul>
+
+      <h3>文件影响</h3>
+      <h4>#1（subagent A）— 清理所有 GoalTask/goal_manager 引用（grep 现状：散布 10 文件）</h4>
+      <ul>
+        <li>删除文件：<code>engine/task.ts</code>、<code>adapters/tool-adapter.ts</code>、<code>adapters/actions.ts</code></li>
+        <li><code>engine/types.ts</code>：删 GoalTask/Subtask/TaskVerification 类型 + GoalRuntimeState.tasks 字段</li>
+        <li><code>engine/budget.ts</code>：删 <code>import GoalTask</code> + <code>import getCompletedCount</code>（task.ts 已删）+ <code>checkProgress</code> 函数体清理（移除 <code>state.tasks.filter</code>/<code>state.tasks.length</code>/<code>isTaskDoneFn</code> 参数/<code>tasksCompletedAtStart</code> 参数 —— 该函数是 #1→#6→#7 三阶段演进函数，#1 只做「去 task 依赖」最小改动，task 相关字段 allTasksDone/noTasksCreated/isStalled 暂置默认值，待 #7 用 ProgressInput 重填）</li>
+        <li><code>service.ts</code>：删 10 个 action 函数 + <strong>所有</strong> state.tasks 引用（现状 ~90 处，全量清理非局部改动）</li>
+        <li><code>command-adapter.ts</code>：删 handleAbort + 所有 tasks 引用</li>
+        <li><code>adapters/event-adapter.ts</code>：删 GoalTask import + 所有 state.tasks/tasksCompletedAtAgentStart 引用 + 所有 goal_manager prompt 字符串</li>
+        <li><code>persistence.ts</code>：deserializeState 旧 tasks 字段忽略迁移</li>
+        <li><code>index.ts</code>：删 goal_manager tool 注册</li>
+        <li><code>projection/prompts.ts</code> + <code>projection/widget.ts</code> + <code>projection/result.ts</code>：删 GoalTask import + tasks 渲染 + goal_manager 引用</li>
+      </ul>
+
+      <div class="callout">
+        <h4>#2（subagent B，#1 完成后）— 只加状态，不删字段（见决策记录 D1）</h4>
+        <ul style="margin-bottom:0">
+          <li>修改：<code>engine/types.ts</code>（GoalStatus 加 <code>paused</code> 共 7 值 + <code>VALID_TRANSITIONS</code> + <code>TERMINAL_STATUSES</code>）、<code>engine/goal.ts</code>（transitionStatus 改查表 throw）</li>
+          <li><strong>不删</strong> BudgetConfig.maxTurns/maxStallTurns 和 GoalRuntimeState.stallCount（字段+使用点删除整体归 Wave 4 #6）</li>
+          <li>验收 grep：<code>grep -rn "GoalTask\|create_tasks\|update_tasks\|add_subtasks\|delete_subtasks\|goal_manager" extensions/goal/src/ --include="*.ts"</code> 无非注释输出</li>
+        </ul>
+      </div>
+
+      <h3>Subagent 配置</h3>
+      <table class="kv">
+        <tr><td>Agent</td><td>general-purpose</td></tr>
+        <tr><td>注入上下文</td><td>spec.md UC-1~UC-4 + issues.md #1/#2 全文 + code-architecture.md §3 API 契约 + §4 时序图 1/5 + system-architecture.md §5 状态流转 / §7 删除清单</td></tr>
+        <tr><td>读取文件</td><td>现状全部 <code>extensions/goal/src/</code>（重点 engine/、adapters/、service.ts、persistence.ts、index.ts、projection/）</td></tr>
+        <tr><td>修改/创建</td><td>见上「文件影响」</td></tr>
+      </table>
+
+      <h3>执行流（Wave 内部，串行）</h3>
+      <ol>
+        <li>subagent A 执行 #1 → <code>pnpm --filter @zhushanwen/pi-goal typecheck</code> 通过 → grep 验收（issues.md #1 验收标准）</li>
+        <li>subagent B 执行 #2 → typecheck 通过 → grep 验收（issues.md #2 验收标准）</li>
+      </ol>
+
+      <h3>验收标准</h3>
+      <ul class="checklist">
+        <li>issues.md #1 验收（grep GoalTask/goal_manager 系列无非注释输出）</li>
+        <li>issues.md #2 验收（GoalStatus 7 值 + VALID_TRANSITIONS 查表）—— <strong>不含</strong>「BudgetConfig 无 maxTurns」「GoalRuntimeState 无 stallCount」两条（移至 #6，见 D1）</li>
+        <li>typecheck 零错误（stallCount/maxTurns 字段保留，编译可达）</li>
+      </ul>
+    </section>
+
+    <!-- Wave 2 -->
+    <section class="wave-card" id="wave-2">
+      <h2><span class="wave-tag">W2</span>Wave 2：goal_control + /goal set 拒绝 + widget</h2>
+      <table class="kv">
+        <tr><td>切片类型</td><td>垂直切片（三条独立窄路径，文件不交集）</td></tr>
+        <tr><td>P 级覆盖</td><td><span class="p0">P0</span>（#3）+ <span class="p1">P1</span>（#11, #12）</td></tr>
+        <tr><td>Blocked by</td><td>Wave 1</td></tr>
+        <tr><td>并行关系</td><td>Wave 内 <strong>并行</strong> #3 ∥ #11 ∥ #12（三 issue 文件不交集）</td></tr>
+      </table>
+
+      <h3>包含的 issue</h3>
+      <ul>
+        <li><strong>#3</strong> 新建 goal_control adapter（<span class="p0">P0</span>，方案 A 独立文件）</li>
+        <li><strong>#11</strong> /goal set 非终态拒绝（<span class="p1">P1</span>）</li>
+        <li><strong>#12</strong> widget paused/blocked 显示（<span class="p1">P1</span>）</li>
+      </ul>
+
+      <h3>文件影响（冲突检测：无交集）</h3>
+      <table>
+        <thead><tr><th>issue</th><th>改动文件</th><th>冲突</th></tr></thead>
+        <tbody>
+          <tr><td>#3</td><td>新建 <code>adapters/goal-control-adapter.ts</code>（~120 LOC）+ <code>index.ts</code>（注册 goal_control）</td><td>index.ts 仅 #3 改</td></tr>
+          <tr><td>#11</td><td><code>command-adapter.ts</code>（handleSet 拒绝逻辑）</td><td>仅 #11 改</td></tr>
+          <tr><td>#12</td><td><code>projection/widget.ts</code>（status suffix 加 paused/blocked）</td><td>仅 #12 改</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Subagent 配置</h3>
+      <table class="kv">
+        <tr><td>Agent</td><td>general-purpose（×3 并行）</td></tr>
+        <tr><td>注入上下文</td><td>共同：spec.md UC-2/UC-5 + code-architecture §4 时序图 2/5；#3 额外 issues.md #3 + §3 tool-adapter 契约；#11 额外 issues.md #11 + clarification D25；#12 额外 issues.md #12</td></tr>
+        <tr><td>读取文件</td><td>#3：service.ts（finalizeAndPersist/persistState 签名）、Wave1 后的 engine/；#11：command-adapter.ts；#12：projection/widget.ts + engine/types.ts（GoalStatus）</td></tr>
+        <tr><td>修改/创建</td><td>见上表</td></tr>
+      </table>
+
+      <h3>执行流（Wave 内部，并行）</h3>
+      <ol>
+        <li>同时派 3 个 subagent 执行 #3 / #11 / #12</li>
+        <li>各自 typecheck 通过 + 验收 checklist</li>
+      </ol>
+
+      <h3>验收标准</h3>
+      <ul class="checklist">
+        <li>issues.md #3（goal_control 注册 + complete/report_blocked）+ #11（active/paused/blocked 拒绝 + 提示语）+ #12（widget 两状态显示）</li>
+        <li>typecheck 零错误</li>
+      </ul>
+    </section>
+
+    <!-- Wave 3 -->
+    <section class="wave-card" id="wave-3">
+      <h2><span class="wave-tag">W3</span>Wave 3：event-adapter 按事件拆分</h2>
+      <table class="kv">
+        <tr><td>切片类型</td><td>结构重构（prefactor 性质 —— 为后续 handler 级改动铺路）</td></tr>
+        <tr><td>P 级覆盖</td><td><span class="p0">P0</span>（#4）</td></tr>
+        <tr><td>Blocked by</td><td>Wave 2</td></tr>
+        <tr><td>并行关系</td><td>单 issue，无 Wave 内并行</td></tr>
+      </table>
+
+      <h3>包含的 issue</h3>
+      <ul><li><strong>#4</strong> event-adapter 拆分为 6 handler + 薄路由（<span class="p0">P0</span>，方案 A）</li></ul>
+
+      <h3>文件影响</h3>
+      <ul>
+        <li>新建 <code>adapters/event-handlers/</code> 目录：<code>before-agent-start.ts</code>（~180 LOC）、<code>agent-end.ts</code>（~100 LOC）、<code>message-end.ts</code>（~30 LOC）、<code>turn-end.ts</code>（~20 LOC）、<code>agent-start.ts</code>（~20 LOC）、<code>session-start.ts</code>（~80 LOC）</li>
+        <li>修改：<code>event-adapter.ts</code> 退化为薄路由（≤60 LOC，import 6 handler + pi.on 转发）</li>
+        <li>迁移：<code>persistAndUpdate</code> 逻辑从 event-adapter.ts 迁入 <code>service.ts</code>（#4 验收明确要求）</li>
+      </ul>
+
+      <h3>Subagent 配置</h3>
+      <table class="kv">
+        <tr><td>Agent</td><td>general-purpose</td></tr>
+        <tr><td>注入上下文</td><td>issues.md #4 全文（含行为等价 checklist）+ code-architecture §3 service.ts 契约（persistAndUpdate/persistState/tickState）+ §5 Deep Module 决策（事件路径 vs command/tool 路径 seam）+ NFR F2 取证说明</td></tr>
+        <tr><td>读取文件</td><td>现状 <code>event-adapter.ts</code>（737 行）、<code>service.ts</code></td></tr>
+        <tr><td>修改/创建</td><td>见上「文件影响」</td></tr>
+      </table>
+
+      <h3>执行流</h3>
+      <ol>
+        <li>subagent 执行 #4 拆分 + persistAndUpdate 迁移</li>
+        <li>typecheck 通过 + 行为等价 checklist 逐项验证（issues.md #4 的 6 handler 行为点表）</li>
+      </ol>
+
+      <h3>验收标准</h3>
+      <ul class="checklist">
+        <li>issues.md #4 全部验收（event-handlers/ 6 文件 + event-adapter.ts ≤60 LOC + persistAndUpdate 迁入 service.ts）</li>
+        <li>行为等价：6 handler 关键行为点（context 注入 / paused guard / budget 预警 / token 累加 / turn 计数 / 状态恢复）逐一验证</li>
+        <li>typecheck 零错误</li>
+      </ul>
+    </section>
+
+    <!-- Wave 4 -->
+    <section class="wave-card" id="wave-4">
+      <h2><span class="wave-tag">W4</span>Wave 4：删终态路径 + todo 跨扩展 API</h2>
+      <table class="kv">
+        <tr><td>切片类型</td><td>垂直切片（同文件改动，串行）</td></tr>
+        <tr><td>P 级覆盖</td><td><span class="p1">P1</span>（#6, #7）</td></tr>
+        <tr><td>Blocked by</td><td>Wave 3（#7 改 #4 拆出的 <code>before-agent-start.ts</code> + #3 新建的 <code>goal-control-adapter.ts</code>；#6 改 #4 拆出的 <code>agent-end.ts</code>）</td></tr>
+        <tr><td>并行关系</td><td>Wave 内 <strong>串行</strong> #6 → #7（<strong>同改 <code>engine/budget.ts</code></strong>：#6 删 maxTurnsReached 字段+计算，#7 改 checkProgress 签名。先清场 #6 再扩建 #7）</td></tr>
+      </table>
+
+      <h3>包含的 issue</h3>
+      <ul>
+        <li><strong>#6</strong> 删除 maxTurns/stall 自动终态路径（<span class="p1">P1</span>，方案 A 直接删除）</li>
+        <li><strong>#7</strong> todo 跨扩展 API + ProgressInput 注入（<span class="p1">P1</span>，方案 A duck-typed）</li>
+      </ul>
+
+      <h3>文件影响（冲突检测：同改 <code>engine/budget.ts</code> → 串行）</h3>
+      <table>
+        <thead><tr><th>issue</th><th>改动文件</th><th>冲突</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>#6</td>
+            <td><strong>字段+使用点+控制流一次性删除（D1+D2）</strong>：<code>engine/types.ts</code>（删 BudgetConfig.maxTurns/maxStallTurns + GoalRuntimeState.stallCount）+ <code>event-handlers/agent-end.ts</code>（删 handleMaxTurnsReached/handleNoTasksOrMaxTurns/handleAllTasksDone 的 maxTurns 分支 + handleStallAndContinuation 的 stallCount→blocked，4 函数归此文件）+ <code>engine/budget.ts</code>（删 maxTurnsReached 字段+计算）+ <code>command-adapter.ts</code>/<code>persistence.ts</code>/<code>commands.ts</code>/<code>constants.ts</code>/<code>index.ts</code>/<code>service.ts</code>/<code>projection/prompts.ts</code>/<code>projection/widget.ts</code>/<code>engine/goal.ts</code>（删字段使用点）</td>
+            <td>仅 #6 改上述文件；#7 改 before-agent-start.ts，不交集</td>
+          </tr>
+          <tr>
+            <td>#7</td>
+            <td><code>extensions/todo/</code>（暴露 <code>pi.__todoGetList</code>）+ <code>adapters/goal-control-adapter.ts</code>（complete 时调）+ <code>event-handlers/before-agent-start.ts</code>（组装 ProgressInput）+ <code>engine/budget.ts</code>（checkProgress 接收 ProgressInput）</td>
+            <td>#7 改 before-agent-start 的 todo 注入段，不碰 agent-end</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <strong>依赖精度说明：</strong>issues.md #7 只标 blocked_by #1，实际文件依赖还含 #3（goal-control-adapter.ts 由 #3 创建）和 #4（before-agent-start.ts 由 #4 拆出）。Wave 编排已覆盖（#3 Wave 2 / #4 Wave 3 先于 #7 Wave 4）。
+      </div>
+
+      <h3>Subagent 配置</h3>
+      <table class="kv">
+        <tr><td>Agent</td><td>general-purpose（串行 2 步）</td></tr>
+        <tr><td>注入上下文</td><td>共同：code-architecture §4 时序图 3/4；#6 额外 issues.md #6 + system-architecture §7 handler 分支删除；#7 额外 issues.md #7 + system-architecture §4 核心模型 / §8 Context Map</td></tr>
+        <tr><td>读取文件</td><td>#6：Wave3 后的 event-handlers/；#7：extensions/todo/ + engine/budget.ts + goal-control-adapter.ts + before-agent-start.ts</td></tr>
+        <tr><td>修改/创建</td><td>见上表</td></tr>
+      </table>
+
+      <h3>执行流（Wave 内部，串行）</h3>
+      <ol>
+        <li>subagent A 执行 #6（删字段+使用点+控制流，清场）→ typecheck + grep 验收</li>
+        <li>subagent B 执行 #7（todo API + ProgressInput，扩建）→ typecheck + 验收 checklist</li>
+      </ol>
+
+      <h3>验收标准</h3>
+      <ul class="checklist">
+        <li><strong>#6（D1 扩展）</strong>：BudgetConfig 无 maxTurns/maxStallTurns + GoalRuntimeState 无 stallCount + 12 文件使用点全清 + agent-end.ts 4 终态分支删除 + stalenessReminder 保留 + budget.ts maxTurnsReached 删除</li>
+        <li><strong>#7</strong>：__todoGetList 暴露 + ProgressInput 组装 + engine 零 Pi 依赖 + undefined 降级</li>
+        <li><code>grep -rn "stallCount\|maxTurns\|maxStallTurns\|maxTurnsReached" extensions/goal/src/ --include="*.ts"</code> 无非注释输出（stallCount/maxTurns 在 Wave 4 末尾彻底清除）</li>
+        <li>typecheck 零错误</li>
+      </ul>
+    </section>
+
+    <!-- Wave 5 -->
+    <section class="wave-card" id="wave-5">
+      <h2><span class="wave-tag">W5</span>Wave 5：agent_end 重构 + budget 单一检查点</h2>
+      <table class="kv">
+        <tr><td>切片类型</td><td>垂直切片（同文件改动，串行保证不冲突）</td></tr>
+        <tr><td>P 级覆盖</td><td><span class="p1">P1</span>（#8, #5）</td></tr>
+        <tr><td>Blocked by</td><td>Wave 4（#5 依赖 #7 ProgressInput；#8 依赖 #6 先删 maxTurns 终态）</td></tr>
+        <tr><td>并行关系</td><td>Wave 内 <strong>串行</strong> #8 → #5（同改 <code>event-handlers/agent-end.ts</code>）；<strong>Wave 5 ∥ Wave 6</strong>（改不同文件）</td></tr>
+      </table>
+
+      <h3>包含的 issue</h3>
+      <ul>
+        <li><strong>#8</strong> agent_end 重构为只做 warning/steering（<span class="p1">P1</span>，方案 A）</li>
+        <li><strong>#5</strong> budget 单一检查点 persistAndUpdate 兜底（<span class="p1">P1</span>，方案 A）</li>
+      </ul>
+
+      <h3>文件影响</h3>
+      <h4>#8（subagent A）</h4>
+      <ul>
+        <li>修改 <code>event-handlers/agent-end.ts</code>：checkBudgetOnTurnEnd 只保留 70/90 预警 + 90% steering；allTasksDone 加 followUp 提示；删剩余 terminal 分支</li>
+      </ul>
+      <h4>#5（subagent B，#8 完成后）</h4>
+      <ul>
+        <li>修改 <code>service.ts</code> persistAndUpdate：加 budget 终态直比较（<code>tokensUsed &gt;= tokenBudget</code> → budget_limited / <code>timeUsed &gt;= timeBudget*60</code> → time_limited）</li>
+        <li>修改 <code>event-handlers/agent-end.ts</code>：checkBudgetOnTurnEnd 删 terminal 分支（与 #8 改动同文件 → 串行）</li>
+        <li>修改 <code>command-adapter.ts</code> 或 service：<code>/goal resume</code> 调 checkBudgetOnResume 拒绝超限</li>
+      </ul>
+
+      <div class="callout warn">
+        <strong>架构事实（NFR F2）：</strong>budget 终态检查在 <code>persistAndUpdate</code>（事件路径），不在 <code>persistState</code>（command/tool 路径）。#5 落点必须正确。
+      </div>
+
+      <h3>Subagent 配置</h3>
+      <table class="kv">
+        <tr><td>Agent</td><td>general-purpose</td></tr>
+        <tr><td>注入上下文</td><td>共同：code-architecture §4 时序图 3（budget 自动终态）+ §3 persistAndUpdate 契约；#8 额外 issues.md #8；#5 额外 issues.md #5 + clarification D23 + NFR F2 取证</td></tr>
+        <tr><td>读取文件</td><td>Wave4 后的 event-handlers/agent-end.ts + service.ts</td></tr>
+        <tr><td>修改/创建</td><td>见上</td></tr>
+      </table>
+
+      <h3>执行流（Wave 内部，串行）</h3>
+      <ol>
+        <li>subagent A 执行 #8 → typecheck + 验收</li>
+        <li>subagent B 执行 #5 → typecheck + 验收</li>
+      </ol>
+
+      <h3>验收标准</h3>
+      <ul class="checklist">
+        <li>issues.md #8（agent-end 无 terminal + 70/90 预警 + followUp）+ #5（persistAndUpdate budget 检查 + agent-end 无 terminal + resume 拒绝超限）</li>
+        <li>typecheck 零错误</li>
+      </ul>
+    </section>
+
+    <!-- Wave 6 -->
+    <section class="wave-card" id="wave-6">
+      <h2><span class="wave-tag">W6</span>Wave 6：completion audit prompt + plan 联动</h2>
+      <table class="kv">
+        <tr><td>切片类型</td><td>垂直切片（同文件改动，串行；与 Wave 5 并行）</td></tr>
+        <tr><td>P 级覆盖</td><td><span class="p1">P1</span>（#10）+ <span class="p2">P2</span>（#9）</td></tr>
+        <tr><td>Blocked by</td><td>Wave 4（#9/#10 依赖 #7 todo API）</td></tr>
+        <tr><td>并行关系</td><td>Wave 内 <strong>串行</strong> #10 → #9（同改 <code>projection/prompts.ts</code>）；<strong>Wave 6 ∥ Wave 5</strong></td></tr>
+      </table>
+
+      <h3>包含的 issue</h3>
+      <ul>
+        <li><strong>#10</strong> completion audit prompt 强化（<span class="p1">P1</span>）</li>
+        <li><strong>#9</strong> plan↔goal 联动（<span class="p2">P2</span>，方案 A LLM 自主判断）</li>
+      </ul>
+
+      <h3>文件影响</h3>
+      <h4>#10（subagent A）</h4>
+      <ul>
+        <li>修改 <code>projection/prompts.ts</code>：contextInjectionPrompt 要求建 todo（含 isVerification）+ continuationPrompt 含 completion audit 提醒 + 删所有 goal_manager 引用</li>
+      </ul>
+      <h4>#9（subagent B，#10 完成后）</h4>
+      <ul>
+        <li>修改 <code>projection/prompts.ts</code>：contextInjectionPrompt 加 plan 建议段落（与 #10 同文件 → 串行）</li>
+        <li>修改 <code>event-handlers/before-agent-start.ts</code>：plan 可用性判定 + plan 建议注入点（若 handler 层判 plan 可用性；若纯 prompt 文字内嵌则只改 prompts.ts）</li>
+        <li>修改 <code>index.ts</code>：<code>pi.__goalInit</code> 废弃 tasks 参数</li>
+        <li>修改 <code>extensions/plan/</code>：暴露 <code>pi.__planStart</code></li>
+      </ul>
+
+      <div class="callout warn">
+        <strong>Watch（code-architecture §6）：</strong>prompts.ts 重构后 ~370 LOC，#9/#10 prompt 膨胀有破 400 LOC 风险。执行时监控，超限则拆分 prompt 到独立常量文件。
+      </div>
+
+      <h3>Subagent 配置</h3>
+      <table class="kv">
+        <tr><td>Agent</td><td>general-purpose</td></tr>
+        <tr><td>注入上下文</td><td>共同：spec FR-6/FR-7 + code-architecture §4 时序图 4；#10 额外 issues.md #10 + Codex continuation.md 三约束；#9 额外 issues.md #9 + clarification D26/D27</td></tr>
+        <tr><td>读取文件</td><td>Wave4 后的 projection/prompts.ts + index.ts + extensions/plan/</td></tr>
+        <tr><td>修改/创建</td><td>见上</td></tr>
+      </table>
+
+      <h3>执行流（Wave 内部，串行；与 Wave 5 并行）</h3>
+      <ol>
+        <li>与 Wave 5 同时启动（不同 subagent，不同文件）</li>
+        <li>subagent A 执行 #10 → typecheck + 验收</li>
+        <li>subagent B 执行 #9 → typecheck + 验收 + prompts.ts LOC 检查</li>
+      </ol>
+
+      <h3>验收标准</h3>
+      <ul class="checklist">
+        <li>issues.md #10（建 todo 含 isVerification + completion audit + 无 goal_manager 引用）+ #9（plan 建议 + __planStart + __goalInit tasks 废弃）</li>
+        <li>prompts.ts ≤ 400 LOC（超限需拆分）</li>
+        <li>typecheck 零错误</li>
+      </ul>
+    </section>
+
+    <!-- Wave 7 验收 Gate -->
+    <section id="wave-7">
+      <h2><span class="wave-tag">W7</span>Wave 7：验收 Wave（Acceptance Gate）</h2>
+      <table class="info">
+        <tr><td>切片类型</td><td>验收闸门（非功能开发——读测试验收清单全量→跑测试→全 PASS 才算实现完成）</td></tr>
+        <tr><td>Blocked by</td><td><strong>Wave 1, 2, 3, 4, 5, 6</strong>（所有功能 Wave）</td></tr>
+        <tr><td>并行关系</td><td>必须最后执行，blocked_by 全部功能 Wave</td></tr>
+      </table>
+      <div class="callout critical">
+        <strong>编码完成的定义 = 测试验收清单 37 条全绿。</strong> Wave 7 不绿 = 实现未完成，不允许交接。职责：读清单全量 → 跑测试 → 每条映射 PASS/FAIL/未实现 → 输出覆盖率报告。
+      </div>
+      <h3>验收标准</h3>
+      <ul class="checklist">
+        <li>测试验收清单 37 条用例全 PASS（或合法 [DEVIATED]）</li>
+        <li>无「未实现」用例</li>
+        <li>typecheck 零错误</li>
+        <li><code>changes/acceptance-report.md</code> 产出，覆盖率 100%</li>
+      </ul>
+    </section>
+
+    <!-- P3 -->
+    <section id="p3">
+      <h2>后续迭代（P3 延后项）</h2>
+      <p>来源 issues.md，本次 Wave 编排不纳入：</p>
+      <table>
+        <thead><tr><th>项</th><th>内容</th><th>延后理由</th></tr></thead>
+        <tbody>
+          <tr><td><span class="p3">P3</span></td><td>预警 flag 合并（4 boolean → Set）</td><td>收益低，4 个 flag 不影响功能</td></tr>
+          <tr><td><span class="p3">P3</span></td><td>budget.ts 变化轴分离（tick 独立）</td><td>180 LOC 不需要拆</td></tr>
+          <tr><td><span class="p3">P3</span></td><td>prompts.ts 变化轴分离</td><td>370 LOC 按投影层职责统一归类可接受（若 Wave 6 破 400 则提前触发）</td></tr>
+          <tr><td><span class="p3">P3</span></td><td>多 session 重构</td><td>当前假设单 session（spec 明确）</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Decisions -->
+    <section id="decisions">
+      <h2>决策记录（追踪 gap 修正）</h2>
+      <p class="legend">⭐ 标记的两个决策（D1、D0）是本次 Wave 编排的关键修正，直接影响范围切分与执行正确性。</p>
+
+      <div class="decision key">
+        <h3>D1：#2/#6 范围重新切分（gap 1 + gap 7）</h3>
+        <p><strong>背景：</strong>原 issues.md #2（Wave 1）删 BudgetConfig.maxTurns/maxStallTurns + GoalRuntimeState.stallCount 字段定义，但字段使用点散布 <strong>12 文件 54 处</strong>（event-adapter.ts / command-adapter.ts / budget.ts / persistence.ts / commands.ts / constants.ts / index.ts / service.ts / prompts.ts / widget.ts / goal.ts / types.ts）。TS 强类型下，删字段定义必须同步删全部使用点，否则编译失败。原方案把「删字段定义」(#2 Wave 1) 和「删使用点+控制流」(#6 Wave 4) 拆到相隔 3 个 Wave，导致 Wave 1-3 的 typecheck 永不可达（红区）。</p>
+        <p><strong>决策（长期方案）：</strong>重新切分 #2/#6 范围，使每个 Wave typecheck 可达：</p>
+        <ul>
+          <li><strong>#2（Wave 1）收窄</strong>：只加 paused + VALID_TRANSITIONS + TERMINAL_STATUSES + transitionStatus 查表。<strong>不删</strong> stallCount/maxTurns/maxStallTurns 字段。验收移除「BudgetConfig 无 maxTurns」「GoalRuntimeState 无 stallCount」两条。</li>
+          <li><strong>#6（Wave 4）扩大</strong>：删 BudgetConfig.maxTurns/maxStallTurns + GoalRuntimeState.stallCount 字段定义 + 全部使用点（12 文件 54 处）+ handler 控制流分支（handleMaxTurnsReached / handleNoTasksOrMaxTurns / handleAllTasksDone 的 maxTurns 分支 / handleStallAndContinuation 的 stallCount→blocked 分支）+ BudgetCheckResult.maxTurnsReached 字段 + engine/budget.ts 的 maxTurns 计算。保留 stalenessReminderPrompt（基于 lastUpdatedTurn）。</li>
+        </ul>
+        <p><strong>理由：</strong>垂直切片要求每 Wave 独立 typecheck 可达。A1 方案让 Wave 1（纯加状态）、Wave 3（拆完整 event-adapter.ts）、Wave 4（一次性删字段+使用点+控制流）各自在自洽状态工作，不引入中间红区。这是唯一满足 TS 类型约束 + 垂直切片原则的切分。subagent 建议的方案 A（#2 在 Wave 1 一起删）会让 Wave 1 删 event-adapter.ts 里的函数、Wave 3 再拆残缺文件，更糟。</p>
+        <p><strong>issues.md 同步：</strong>#2 验收移除两条字段删除项 → 移至 #6 验收。#6 文件影响补 budget.ts。issue 语义不变（删 maxTurns/stall 终态路径）。</p>
+      </div>
+
+      <div class="decision key">
+        <h3>D0：checkProgress 三阶段演进（gap 8）</h3>
+        <p><strong>背景：</strong><code>engine/budget.ts</code> 的 <code>checkProgress</code>（现状 line 159-175）是 #1（去 tasks）/ #6（去 maxTurns）/ #7（加 ProgressInput）三次演进的收敛点。函数体引用 <code>state.tasks</code>（3 处）+ <code>getCompletedCount</code>（task.ts）+ GoalTask 类型 + maxTurns（#6 范围）。原 #1 文件影响只列「删 import GoalTask + isTaskDoneFn 类型注解」，遗漏函数体 4 处编译失败点。</p>
+        <p><strong>决策：</strong>明确 checkProgress 三阶段职责边界 ——</p>
+        <ul>
+          <li><strong>#1（Wave 1）</strong>：去 task 依赖最小改动。删 <code>state.tasks.*</code> 引用 + <code>isTaskDoneFn</code>/<code>tasksCompletedAtStart</code> 参数 + <code>getCompletedCount</code> import；task 相关返回字段（allTasksDone/noTasksCreated/isStalled）暂置默认值（false/false/false）</li>
+          <li><strong>#6（Wave 4）</strong>：删 <code>maxTurnsReached</code> 字段与计算</li>
+          <li><strong>#7（Wave 4）</strong>：改签名接收 <code>ProgressInput</code>，重填 allTasksDone/noTasksCreated/isStalled</li>
+        </ul>
+        <p><strong>理由：</strong>避免 subagent 在 #1 过度重构（撞 #7 范围）或不足（留 task 残骸）。不阻塞 Wave 启动（typecheck 零错误倒逼正确执行），但明确边界后描述与实际清理量对齐。</p>
+      </div>
+
+      <div class="decision">
+        <h3>D2：#6 文件归属修正（gap 2）</h3>
+        <p><strong>背景：</strong>handleStallAndContinuation / handleAllTasksDone / handleNoTasksOrMaxTurns / handleMaxTurnsReached 四函数的调用链（event-adapter.ts line 454 调用、line 568-690 定义）全部在 agent_end 主流程（line 392-460）。issues.md #6 原写「before-agent-start.ts 或 turn-end.ts」是归属误判。</p>
+        <p><strong>决策：</strong>#4 拆分后这 4 函数归 <code>event-handlers/agent-end.ts</code>。Wave 4 #6 文件影响修正为 <code>agent-end.ts</code>（+ D1 扩展的字段删除跨文件）。#7 改 <code>before-agent-start.ts</code>（ProgressInput 组装），两者文件不交集，并行安全。</p>
+      </div>
+
+      <div class="decision">
+        <h3>D3：与 code-architecture §6 的 Wave 差异（gap 5）</h3>
+        <p><strong>背景：</strong>code-architecture §6「Wave 推导」把 #5（blocked_by #7）与 #7 同放 Wave 4，违反依赖（#5 不能与 #7 同 Wave 并行）；且未拆出 Wave 6。本计划已修正：#7 Wave 4 / #5 Wave 5（串行 #8→#5）/ Wave 6（#10→#9，与 Wave 5 并行）。</p>
+        <p><strong>决策：</strong>execution-plan 以本计划的 Wave 划分为准（已通过依赖闭合追踪验证）。code-architecture §6 作为「喂给 Step 6 的建议」被本计划优化，不回改上游已审查产物。</p>
+      </div>
+    </section>
+
+    <!-- Handoff -->
+    <section id="handoff">
+      <h2>执行交接</h2>
+      <p>本计划完成后，进入编码实现：</p>
+      <div class="callout ok">
+        <h4>方式 A（推荐）：接入 coding-workflow</h4>
+        <p style="margin-bottom:0">启动 Phase 流程（spec→plan→dev→test→pr），每个 Phase 对应一个或多个 Wave。</p>
+      </div>
+      <div class="callout">
+        <h4>方式 B：手动执行</h4>
+        <p style="margin-bottom:0">每个 Wave 派 fresh subagent，Wave 内并行 issue 派多个 subagent，按 Wave 内执行流走（实现 → typecheck → 验收 checklist）。</p>
+      </div>
+
+      <div class="callout warn">
+        <strong>执行顺序强制约束</strong>（DAG 不可跳过）：<code>Wave 1 → Wave 2 → Wave 3 → Wave 4 →（Wave 5 ∥ Wave 6）→ Wave 7（验收）</code>
+      </div>
+
+      <h3>每 Wave 完成后</h3>
+      <ol>
+        <li>typecheck 零错误（全量修复，不接受「非本次引入」跳过理由）</li>
+        <li>issues.md 对应 issue 验收 checklist 全绿</li>
+        <li>提交一个 commit（英文 message，如 <code>refactor(goal): wave 1 - remove goal_manager, add 7-state machine</code>）</li>
+      </ol>
+    </section>
+
+    <!-- 测试验收清单 -->
+    <section id="acceptance-manifest">
+      <h2>测试验收清单（Test Acceptance Manifest）</h2>
+      <div class="callout">
+        <strong>实现阶段的 Definition of Done。</strong> 用例 ID 集合 = ⑤code-architecture.md §6 test-matrix 全量（37 条，来源 A 功能 + 来源 B NFR）。
+        末尾验收 Wave（Wave 7）读本清单全量→跑测试→全 PASS 才算实现完成。
+      </div>
+      <h3>来源 A：功能用例（按 Wave 归属）</h3>
+      <table style="font-size:12px">
+        <thead><tr><th>Wave</th><th>用例 ID</th><th class="left">覆盖场景</th></tr></thead>
+        <tbody>
+          <tr><td>W1</td><td>T1.6, T2.6, T3.6, T5.4, T6.1, T6.2</td><td class="left">prompt 无 goal_manager / 崩溃 paused 保持 / 旧字段迁移 / 崩溃 blocked 保持 / clear / clear 幂等</td></tr>
+          <tr><td>W2</td><td>T1.1-T1.4, T2.1-T2.3, T4.1-T4.4, T4.6, T5.1-T5.3</td><td class="left">set 创建/拒绝/缺省 / pause/resume / complete 全路径 / blocked 报告</td></tr>
+          <tr><td>W3</td><td>T2.5</td><td class="left">paused 态不累加 token（handler 拆分后行为验证）</td></tr>
+          <tr><td>W4</td><td>T1.5, T4.5</td><td class="left">todo 未安装降级（context + complete 两路径）</td></tr>
+          <tr><td>W5</td><td>T2.4, T3.1-T3.5, T3.7, T3.8</td><td class="left">resume 超限 / budget 终态全路径 / notify / 预警</td></tr>
+          <tr><td>W6</td><td>T1.7, T1.8, T1.9</td><td class="left">plan 降级 / goalInit 忽略 tasks / 调用方迁移</td></tr>
+        </tbody>
+      </table>
+      <h3>来源 B：NFR 风险→用例映射（11 条 NFR-AC，已并入来源 A）</h3>
+      <table style="font-size:12px">
+        <thead><tr><th>NFR-AC</th><th>用例 ID</th><th>Wave</th></tr></thead>
+        <tbody>
+          <tr><td>NFR-AC-1 旧字段迁移</td><td>T3.6</td><td>W1</td></tr>
+          <tr><td>NFR-AC-2 prompt 无 goal_manager</td><td>T1.6</td><td>W1</td></tr>
+          <tr><td>NFR-AC-3 evidence 必填</td><td>T4.2</td><td>W2</td></tr>
+          <tr><td>NFR-AC-4 budget 检查在 persistAndUpdate</td><td>T3.1</td><td>W5</td></tr>
+          <tr><td>NFR-AC-5 转终态同步 notify</td><td>T3.7</td><td>W5</td></tr>
+          <tr><td>NFR-AC-6 todo 缺失降级</td><td>T4.5/T1.5</td><td>W4</td></tr>
+          <tr><td>NFR-AC-7 plan 缺失降级</td><td>T1.7</td><td>W6</td></tr>
+          <tr><td>NFR-AC-8 goalInit 忽略 tasks</td><td>T1.8</td><td>W6</td></tr>
+          <tr><td>NFR-AC-9 迁移调用方</td><td>T1.9</td><td>W6</td></tr>
+          <tr><td>NFR-AC-10 set 非终态拒绝</td><td>T1.3</td><td>W2</td></tr>
+          <tr><td>NFR-AC-11 70/90% 预警</td><td>T3.8</td><td>W5</td></tr>
+        </tbody>
+      </table>
+      <div class="callout ok">
+        <strong>闭环自检：</strong>清单 37 用例 = ⑤test-matrix 全量 ✓ ｜ Wave 7 blocked_by Wave 1-6 ✓ ｜ 每 Wave 覆盖用例 ID 均在清单 ✓
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>本文档由 xyz-harness-design-execution 渲染生成。真相源：execution-plan.md · 图表需联网加载 Mermaid (jsdelivr CDN)。</p>
+  </footer>
+
+  <script>
+    mermaid.initialize({ startOnLoad: true, theme: 'neutral', securityLevel: 'loose', flowchart: { curve: 'basis' } });
+  </script>
+</body>
+</html>

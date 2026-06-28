@@ -271,6 +271,126 @@ describe("Enforcement flag logic", () => {
   });
 });
 
+// ── Workflow hook: "called but failed" retry (Fix A) ──────
+//
+// 验证 setupWorkflowHook 的核心行为：当模型调用了 structured-output 但校验失败
+// （isError=true）时，turn_end 应主动 steer 提示修正（而非旧实现的撒手交给 Pi 自然修正）。
+// 通过 mock pi API（捕获 on() 回调 + spy sendUserMessage）驱动真实扩展入口点。
+
+describe("Workflow hook: structured-output failure retry", () => {
+  const SCHEMA_ENV_NAME = "PI_WORKFLOW_SCHEMA";
+  const originalSchemaEnv = process.env[SCHEMA_ENV_NAME];
+
+  function createMockPi() {
+    const handlers = new Map<string, ((event: unknown) => Promise<void> | void)[]>();
+    const sendUserMessage = vi.fn();
+    return {
+      sendUserMessage,
+      registerTool: vi.fn(),
+      on: vi.fn((event: string, cb: (event: unknown) => Promise<void> | void) => {
+        if (!handlers.has(event)) handlers.set(event, []);
+        handlers.get(event)!.push(cb);
+      }),
+      // 驱动器：按注册顺序触发某事件的所有回调
+      async emit(event: string, payload: unknown): Promise<void> {
+        for (const cb of handlers.get(event) ?? []) {
+          await cb(payload);
+        }
+      },
+    };
+  }
+
+  async function loadExtension(mockPi: ReturnType<typeof createMockPi>, schemaJson: string): Promise<void> {
+    process.env[SCHEMA_ENV_NAME] = schemaJson;
+    // 动态 import 确保每次拿到模块级 const（环境变量已设好）。
+    // vitest 默认缓存模块，这里用 vi.resetModules + 动态 import 重置。
+    vi.resetModules();
+    const mod = await import("../src/index.js");
+    mod.default(mockPi as unknown as never);
+  }
+
+  afterEach(() => {
+    if (originalSchemaEnv === undefined) delete process.env[SCHEMA_ENV_NAME];
+    else process.env[SCHEMA_ENV_NAME] = originalSchemaEnv;
+    vi.restoreAllMocks();
+  });
+
+  const SCHEMA = JSON.stringify({ type: "object", properties: { count: { type: "number" } }, required: ["count"] });
+  // 校验失败时 Pi 把 execute() 抛出的 error.message 塞进 result.content[0].text。
+  const FAILED_TOOL_END = {
+    type: "tool_execution_end",
+    toolName: "structured-output",
+    isError: true,
+    result: { content: [{ type: "text", text: "Schema validation failed: /count must be number" }] },
+  };
+  const turnEndPayload = (stopReason = "end_turn") => ({ message: { stopReason } });
+
+  it("steers on 'called but failed' with the specific validation error + correct schema", async () => {
+    const pi = createMockPi();
+    await loadExtension(pi, SCHEMA);
+
+    await pi.emit("tool_execution_end", FAILED_TOOL_END);
+    await pi.emit("turn_end", turnEndPayload());
+
+    expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+    const [msg, opts] = pi.sendUserMessage.mock.calls[0]!;
+    expect(msg).toContain("FAILED validation");
+    expect(msg).toContain("Schema validation failed: /count must be number");
+    expect(msg).toContain(`The correct schema is: ${SCHEMA}`);
+    expect(opts).toEqual({ deliverAs: "steer" });
+  });
+
+  it("steers on 'never called' with the 'must call' reminder (no validation error)", async () => {
+    const pi = createMockPi();
+    await loadExtension(pi, SCHEMA);
+
+    // 没有 tool_execution_end（完全没调），直接 turn_end
+    await pi.emit("turn_end", turnEndPayload());
+
+    expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+    const msg = pi.sendUserMessage.mock.calls[0]![0] as string;
+    expect(msg).toContain("MUST call the structured-output tool");
+    expect(msg).not.toContain("FAILED validation");
+  });
+
+  it("does NOT steer when structured-output succeeded", async () => {
+    const pi = createMockPi();
+    await loadExtension(pi, SCHEMA);
+
+    await pi.emit("tool_execution_end", {
+      type: "tool_execution_end",
+      toolName: "structured-output",
+      isError: false,
+      result: { details: { count: 5 } },
+    });
+    await pi.emit("turn_end", turnEndPayload());
+
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("stops steering after MAX_HOOK_RETRIES (=2) exhausted", async () => {
+    const pi = createMockPi();
+    await loadExtension(pi, SCHEMA);
+
+    // 两次"调了但失败" → 两次 steer；第三次不再 steer
+    for (let i = 0; i < 3; i++) {
+      await pi.emit("tool_execution_end", FAILED_TOOL_END);
+      await pi.emit("turn_end", turnEndPayload());
+    }
+    expect(pi.sendUserMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not steer when stopReason is toolUse (still in tool chain)", async () => {
+    const pi = createMockPi();
+    await loadExtension(pi, SCHEMA);
+
+    await pi.emit("tool_execution_end", FAILED_TOOL_END);
+    await pi.emit("turn_end", turnEndPayload("toolUse"));
+
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+  });
+});
+
 // ── tool_call block 逻辑 ─────────────────────────────────
 
 describe("tool_call block logic", () => {

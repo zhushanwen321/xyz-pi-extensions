@@ -1,0 +1,215 @@
+# Wave 4: session.ts
+
+- **目标文件**：
+  - 创建：`extensions/goal/src/session.ts`
+- **前置 wave**：Wave 3（ports.ts + persistence.ts 已存在）
+- **目标**：GoalSession 运行时句柄（**删 hasPendingInjection + pendingPause**）+ reconstructGoalState（从 entries 恢复 + 非对称强制激活 + entry GC）+ clearGoalSession + isStaleContextError。
+
+## 关键约束
+
+- import from `./engine/types`、`./engine/goal`、`./persistence`、`./ports`
+- GoalSession 删除 hasPendingInjection（FR-6.4）和 pendingPause（FR-6.7）
+- FR-8.1 G-006：goal-state entry 只保留最新 1 条；goal-history 保留 20 条
+- FR-8.3 G-015：非对称强制激活——非终态且非 paused → active；paused 保持 paused
+- FR-8.1 G-024：deserialize throw 时 state=null
+
+---
+
+- [ ] **步骤 1：编写 session.ts**
+
+创建 `extensions/goal/src/session.ts`：
+
+```typescript
+/**
+ * Session 层 — 运行时句柄 + 状态重建 + entry GC
+ *
+ * GoalSession 是进程内瞬态句柄（不持久化）。
+ * reconstructGoalState 从 entry 恢复状态（session_start 时调）。
+ *
+ * FR-6.4: 删除 hasPendingInjection（僵尸字段）
+ * FR-6.7: 删除 pendingPause（ESC 改用 aborted 守卫）
+ * FR-8.1 G-006: entry GC（goal-state 最新 1 条，goal-history 20 条）
+ * FR-8.3 G-015: 非对称强制激活（非终态非 paused → active）
+ */
+
+import { isTerminalStatus } from "./engine/goal";
+import type { GoalRuntimeState } from "./engine/types";
+import { deserializeState, ENTRY_TYPE, HISTORY_ENTRY_TYPE } from "./persistence";
+import type { SessionPort, SessionEntryLike, UiPort } from "./ports";
+
+// ── 运行时句柄 ────────────────────────────────────────
+
+export interface GoalSession {
+	state: GoalRuntimeState | null;
+	tasksCompletedAtAgentStart: number;
+	/** 防重入标志：agent_end / before_agent_start 等事件处理器入口检查 */
+	isProcessing: boolean;
+}
+
+export function createGoalSession(): GoalSession {
+	return {
+		state: null,
+		tasksCompletedAtAgentStart: 0,
+		isProcessing: false,
+	};
+}
+
+// ── Stale Context 检测（FR-8.2 G-010）─────────────────
+
+export const STALE_CONTEXT_PATTERNS = [
+	"aborted",
+	"context canceled",
+	"stale context",
+	"stalecontext",
+	"extension context no longer active",
+] as const;
+
+export function isStaleContextError(error: Error | unknown): boolean {
+	const msg = error instanceof Error ? error.message : String(error);
+	const lower = msg.toLowerCase();
+	return STALE_CONTEXT_PATTERNS.some((p) => lower.includes(p));
+}
+
+// ── reconstructGoalState（session_start 时调）──────────
+
+/**
+ * 从 session entries 恢复 goal state。
+ *
+ * FR-8.1 G-006: goal-state 只保留最新 1 条（splice 其余）
+ * FR-8.3 G-015: 非终态且非 paused → 强制 active（crashed blocked 重启变 active）
+ * FR-8.1 G-024: deserialize throw → state=null（部分损坏全丢）
+ * FR-8.1 G-006: goal-history entry 保留最近 MAX_HISTORY_ENTRIES=20 条
+ */
+export function reconstructGoalState(session: GoalSession, sessionPort: SessionPort): void {
+	session.state = null;
+	const entries = sessionPort.getEntries();
+
+	// 找到最新的 goal-state entry（从后往前）
+	let latestStateIdx = -1;
+	for (let i = entries.length - 1; i >= 0; i--) {
+		if (isGoalStateEntry(entries[i]!)) {
+			latestStateIdx = i;
+			break;
+		}
+	}
+
+	if (latestStateIdx >= 0) {
+		const data = entries[latestStateIdx]!.data as Record<string, unknown> | undefined;
+		if (data) {
+			try {
+				session.state = deserializeState(data);
+			} catch {
+				// FR-8.1 G-024: 部分损坏全丢
+				session.state = null;
+			}
+		}
+	}
+
+	// Entry GC — 标记旧的 goal-state entries（只留最新 1 条）
+	const goalStateIndices: number[] = [];
+	for (let i = entries.length - 1; i >= 0; i--) {
+		if (isGoalStateEntry(entries[i]!)) {
+			goalStateIndices.push(i);
+		}
+	}
+	// goalStateIndices[0] 是最新的（已跳过 latestStateIdx 的检查逻辑一致）
+	// splice 掉除最新外的所有 goal-state entries
+	for (let k = 1; k < goalStateIndices.length; k++) {
+		sessionPort.spliceEntry(goalStateIndices[k]!, 1);
+	}
+
+	// Goal-history entry GC（保留最近 MAX_HISTORY_ENTRIES 条）
+	const MAX_HISTORY_ENTRIES = 20;
+	const historyIndices: number[] = [];
+	for (let i = 0; i < entries.length; i++) {
+		if (entries[i]!.type === "custom" && (entries[i] as { customType?: string }).customType === HISTORY_ENTRY_TYPE) {
+			historyIndices.push(i);
+		}
+	}
+	if (historyIndices.length > MAX_HISTORY_ENTRIES) {
+		const toDelete = historyIndices.slice(0, historyIndices.length - MAX_HISTORY_ENTRIES);
+		for (let i = toDelete.length - 1; i >= 0; i--) {
+			sessionPort.spliceEntry(toDelete[i]!, 1);
+		}
+	}
+
+	if (!session.state) return;
+
+	// FR-8.3 G-015: 非对称强制激活
+	if (!isTerminalStatus(session.state.status) && session.state.status !== "paused") {
+		session.state.status = "active";
+		session.state.timeStartedAt = Date.now();
+	}
+}
+
+function isGoalStateEntry(entry: SessionEntryLike): boolean {
+	return entry.type === "custom" && entry.customType === ENTRY_TYPE;
+}
+
+// ── clearGoalSession ──────────────────────────────────
+
+export function clearGoalSession(session: GoalSession, uiPort: UiPort): void {
+	session.state = null;
+	session.tasksCompletedAtAgentStart = 0;
+	session.isProcessing = false;
+	// FR-6.6: hasUI 守卫
+	if (uiPort.hasUI) {
+		uiPort.setWidget("goal", undefined);
+		uiPort.setStatus("goal", undefined);
+	}
+}
+```
+
+> **注意 entry GC 的 splice 顺序**：splice 会改变数组索引。上面的实现先收集索引（从后往前），然后从后往前 splice（避免索引偏移）。但 `sessionPort.spliceEntry` 的语义是 splice 原始 entries 数组——执行者需确认 SessionPort 实现确实操作同一个数组引用。如果 adapter 层每次 `getEntries()` 返回新数组，GC 不会生效。Wave 14 的 adapter 实现需保证 `spliceEntry` 操作的是 `getEntries()` 返回的同一个数组。
+
+- [ ] **步骤 2：typecheck**
+
+运行：`pnpm --filter @zhushanwen/pi-goal typecheck`
+预期：零错误。
+
+- [ ] **步骤 3：验证 GoalSession 不含已删字段**
+
+运行：`grep -rn "hasPendingInjection\|pendingPause" extensions/goal/src/session.ts`
+预期：无输出。
+
+- [ ] **步骤 4：提交**
+
+```bash
+git add extensions/goal/src/session.ts
+git commit -m "wave-4: add session.ts — GoalSession (no hasPendingInjection/pendingPause) + reconstructGoalState + entry GC + stale context detection"
+```
+
+---
+
+## 验收标准
+
+### 1. 测试
+
+- [ ] **无独立单元测试**——session.ts 的行为（reconstructGoalState / entry GC / stale 检测）由 Wave 14 集成测试 + Wave 13 event-adapter 间接覆盖
+- [ ] `pnpm --filter @zhushanwen/pi-goal typecheck` 零错误（类型正确性是本 wave 主验收手段）
+- [ ] 全量 `test` 仍全绿（不破坏 Wave 0-3）
+
+> ⚠️ **风险提示**：session.ts 含 entry GC（splice 索引顺序）+ 非对称强制激活 + stale 检测三段非平凡逻辑，无独立测试意味着这些逻辑的错误要到 Wave 13/14 才暴露。执行者若时间允许，建议补 `session.test.ts`（用 fake SessionPort 验证 GC + 非对称激活）。
+
+### 2. 架构边界
+
+- [ ] `grep -rn "hasPendingInjection\|pendingPause" extensions/goal/src/session.ts` 无输出（FR-6.4 / FR-6.7 字段已删）
+- [ ] import 自 `./engine/types` + `./engine/goal` + `./persistence` + `./ports`（不 import Pi / 旧文件）
+- [ ] 禁止 `any`
+
+### 3. 接口契约
+
+- [ ] `session.ts` 导出：`GoalSession` 类型（state / tasksCompletedAtAgentStart / isProcessing，无 hasPendingInjection/pendingPause）/ `reconstructGoalState(session, sessionPort)` / `clearGoalSession(session, uiPort)` / `isStaleContextError(error): boolean`
+
+### 4. 行为契约
+
+- [ ] FR-6.4：GoalSession 无 hasPendingInjection
+- [ ] FR-6.7：GoalSession 无 pendingPause
+- [ ] FR-8.1 G-006：reconstructGoalState 后 goal-state entry 只保留最新 1 条（splice GC）
+- [ ] FR-8.3 G-015：非对称强制激活——非终态且非 paused → active；paused 保持 paused
+- [ ] FR-8.1 G-024：deserialize throw 时 session.state = null（不崩）
+- [ ] clearGoalSession 内有 FR-6.6 hasUI 守卫
+
+### 5. 提交
+
+- [ ] commit message 以 `wave-4:` 开头，含「no hasPendingInjection/pendingPause」+「reconstructGoalState」+「entry GC」
