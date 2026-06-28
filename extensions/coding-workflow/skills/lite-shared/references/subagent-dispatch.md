@@ -31,6 +31,21 @@ subagent 工具：
 
 **派完后直接 STOP**，不要轮询/sleep。后台 subagent 完成时 notifier 自动注入消息唤醒主 agent（`deliverAs: "followUp"`）。
 
+### 后台 subagent 超时健康检查（STOP 的例外）
+
+notifier 只在完成/失败时触发。但 subagent 可能**静默 hang**（模型推理卡住、连接中断、等输入）——此时永远不会唤醒，主 agent 会无限等。STOP 是正常路径，但要有兜底：
+
+- 派出后台 subagent 后，估算预期时长（单测/review 通常 ≤60s，复杂 E2E ≤180s）
+- 超过**预期时长的 2 倍**仍未收到完成通知 → 主动检查：
+  ```
+  subagent(action='list')  # 看状态（running/finished/failed）
+  # 若仍 running：read 它的 sessionFile（jsonl），看最后一行的 token 是否增长
+  ```
+- **判定 hang**：token 连续 90s 无增长（读 session 文件比对）→ `subagent(action='cancel', subagentId=...)` → 重派，或降级为主 agent 自审
+- 这是 STOP 的**唯一例外**：正常 STOP 等唤醒，但超 2 倍时长要主动查，不盲等
+
+> 实测案例：reviewer subagent 跑了 145s，token 卡在 105036 两分钟不增长（模型无响应），靠手动 list + 读 session 才发现。无此兜底 = 无限等待。
+
 ## Worktree 隔离编排（核心）
 
 ### 隔离模型

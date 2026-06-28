@@ -24,7 +24,32 @@ bash ~/.claude/skills/create-worktree/create-worktree.sh feat/lite-w2 <base-bran
 
 > ⚠️ 不可逆：worktree 创建会切分支。按精确命令执行，base 统一用当前功能分支。
 
+#### worktree 建失败时的降级（A2/B2 通用）
+
+worktree 可能因各种原因建不成（脚本 bug、磁盘、分支冲突、依赖装失败）。**skill 不假设 worktree 100% 成功**——建不成时走显式降级，不即兴发挥：
+
+- **降级触发**：create-worktree 输出错误 / 无 `Worktree 创建完成!` / 目录未生成
+- **降级模式**：当前 worktree 跑，但必须约束：
+  - 各 subagent 用**工具白名单隔离**（implementer 限定改动文件域，test-runner 无 write 权限防副作用，code-review 只读）
+  - 无法文件系统隔离时**串行执行**（无 worktree 隔离的并行有 git index 冲突风险）
+- **必须向用户报告降级**（不静默降级）：说明「worktree 建不成，降级为当前 worktree + 权限隔离 + 串行」
+- **记录降级原因**进 lite-retrospect（root cause 追溯，是脚本 bug 还是环境问题）
+
+> 降级是可控的退路，不是失败。但静默降级 = 隐藏风险（如 test-runner 的 E2E 副作用污染了 code-review 的只读环境）。
+
 ### A3. 派 implementer subagent（严格 TDD）
+
+#### 实现方式选择（subagent 编排 vs 主 agent 直接实现）
+
+默认派 implementer subagent（fresh context 隔离 + worktree 隔离副作用）。仅当**全部**满足以下条件，才允许主 agent 直接实现：
+
+- [ ] 改动 ≤ 150 行且 ≤ 2 文件
+- [ ] 主 agent 已 read 全部目标文件（上下文已具备，无需传递）
+- [ ] 单一领域内聚（不跨子系统）
+
+> **反向约束**：若该 Wave 含复杂 SFC/模板语法（易出低级语法错，如 defineProps 括号、模板指令拼写），即使满足上述条件也**建议派 subagent**——fresh context 更易 catch 主 agent 因上下文污染漏掉的低级错（实测：主 agent 直接写 SFD 曾丢 defineProps 括号，3 fail 被放大成 8 fail）。
+
+任一不满足 → 必须派 implementer subagent。不要即兴判断。
 
 **单 Wave（wait:true 同步）**：
 
