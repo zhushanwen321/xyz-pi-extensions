@@ -31,20 +31,31 @@ subagent 工具：
 
 **派完后直接 STOP**，不要轮询/sleep。后台 subagent 完成时 notifier 自动注入消息唤醒主 agent（`deliverAs: "followUp"`）。
 
-### 后台 subagent 超时健康检查（STOP 的例外）
+### 后台 subagent hang 兜底（schedule_prompt 哨兵）
 
-notifier 只在完成/失败时触发。但 subagent 可能**静默 hang**（模型推理卡住、连接中断、等输入）——此时永远不会唤醒，主 agent 会无限等。STOP 是正常路径，但要有兜底：
+notifier 只在 subagent 完成/失败时唤醒主 agent。但 subagent 可能**静默 hang**（推理卡住/连接中断/等输入）——既不完成也不失败，notifier 永不触发。此时主 agent 在 STOP 状态**无法被唤醒**，旧规范写「超 2x 时长主动 list 检查」没有执行时机（实测打破僵局靠 goal_context 的 turn 推进偶然救场，不是规范）。
 
-- 派出后台 subagent 后，估算预期时长（单测/review 通常 ≤60s，复杂 E2E ≤180s）
-- 超过**预期时长的 2 倍**仍未收到完成通知 → 主动检查：
-  ```
-  subagent(action='list')  # 看状态（running/finished/failed）
-  # 若仍 running：read 它的 sessionFile（jsonl），看最后一行的 token 是否增长
-  ```
-- **判定 hang**：token 连续 90s 无增长（读 session 文件比对）→ `subagent(action='cancel', subagentId=...)` → 重派，或降级为主 agent 自审
-- 这是 STOP 的**唯一例外**：正常 STOP 等唤醒，但超 2 倍时长要主动查，不盲等
+**正解：派发后紧接埋哨兵，强制制造执行时机。** 派 `wait:false` subagent **拿到 subagentId 后，紧接的下一条消息**埋一个 schedule_prompt 哨兵，然后才 STOP：
 
-> 实测案例：reviewer subagent 跑了 145s，token 卡在 105036 两分钟不增长（模型无响应），靠手动 list + 读 session 才发现。无此兜底 = 无限等待。
+```
+# 步骤1：派 subagent（wait:false 立即返回 subagentId）
+subagent(action:'start', startParam:{ agent, wait:false, cwd, task })  → 返回 {subagentId}
+
+# 步骤2：拿到 id 后，埋哨兵（2x 预估时长后注入）
+schedule_prompt(action:'add', type:'once', schedule:'+{2x预估秒数}',
+  prompt:'检查后台 subagent {subagentId}：subagent(action:list) 看状态——finished 则忽略；running 则 read sessionFile 比对 token，连续 90s 无增长=hang → cancel + 降级主 agent 自审/重派')
+
+# 步骤3：STOP，等 notifier（正常路径）或哨兵（hang 路径）唤醒
+```
+
+- **正常路径**：subagent 先完成 → notifier 唤醒主 agent 处理结果；处理时可 `schedule_prompt(remove)` 清掉未触发的哨兵（不清也只是冗余一次检查）
+- **hang 路径**：subagent 卡住，notifier 不触发，**哨兵是唯一唤醒源**，到点强制唤醒执行 list/读 session/cancel
+
+预估时长：单测/review ≤60s（哨兵 +120s），复杂 E2E ≤180s（哨兵 +360s）。
+
+> 实测：reviewer 跑 145s 后 token 卡 105036 两分钟不增长，靠手动 list 才发现。无哨兵时靠 goal_context 偶然救场；哨兵把「偶然救场」变「必然兜底」。
+>
+> **根治（跨 repo，过渡期用本哨兵）**：subagents extension 加 heartbeat（后台 subagent 每 N 秒写心跳，主 agent 侧 2 周期无心跳自动 cancel）——责任与能力对位的分布式解法。本哨兵是 heartbeat 落地前的过渡方案。
 
 ## Worktree 隔离编排（核心）
 

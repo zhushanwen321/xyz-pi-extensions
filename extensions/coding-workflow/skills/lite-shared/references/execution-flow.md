@@ -5,6 +5,8 @@
 
 ## 阶段 A：开发（Wave 并行 + 严格 TDD）
 
+> **[工作习惯] multi-workspace 项目 cwd 提醒**：主 agent 自跑任何项目命令（A5 覆盖率 gate / 阶段 C 收尾验证 / subagent hang 降级自验）前，先确认命令绑定的工作目录。bash 工具 cwd **不跨调用持久**——每条 `cd X && cmd` 的 cd 只在那一条内有效，下一条回到默认。multi-workspace/monorepo 项目命令常分散多层级（lint 在根、test 在子包、dev 在更深层）。**不假设「刚才 cd 过了」**，每条命令显式带目录（如 `cd renderer && npx vitest run`）。implementer 中断后主 agent 接手时尤其注意——继承的 cwd 可能就是错的起点（实测：连续 6+ turn 漏写 cd）。
+
 ### A1. 调度 Wave
 
 读 plan.md 的 Wave 表 + 并行组（见 `wave-model.md`）：

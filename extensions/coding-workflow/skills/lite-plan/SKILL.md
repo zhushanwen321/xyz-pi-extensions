@@ -50,6 +50,23 @@ description: >-
 
 > [铁律] 步骤 1 不做架构设计。技术约束只记录到 Constraints，不展开选型/接口定义/数据建模。
 
+## 输入材料可信度 + 测试 fixture 对齐（步骤 1/4 必做）
+
+步骤 1 探索 / 步骤 4 测试设计时若依赖**输入材料**（handoff / PR 描述 / 上一阶段交接 / 测试 fixture / mock 数据），对其声明分两类处理：
+
+- **事实型声明**（「X 已实现 / 已配置 / 规则在 Y / 文件 Z 存在」）→ **必须 grep/ls/read 实测，不能读了就信**。handoff 常用「已验证 / 已实现」类标题预设权威性，直接抑制二次验证本能——事实型声明只有实测能证伪，逻辑推导不出。
+- **判断型结论**（「方案可行 / 逻辑自洽 / 这样改合理」）→ 可逻辑推导后采信，不必逐条实测。
+
+> 实测案例：handoff DoD 写「eslint no-magic-spacing 会查 Tailwind scale」，实测 `eslint.config.mjs` 仅 20 行无此规则——只有 grep 能发现。plan 阶段没 catch，执行期才暴露。**handoff 的事实声明不应盲信**。
+
+**步骤 4 测试设计的特化**（详见 `../lite-shared/references/test-case-schema.md`「fixture 对齐」「同源盲区反向自检」）：
+- 写测试清单前，先把涉及的 fixture/mock 数据（`MOCK_COMMANDS`、种子数据、现有测试数据集）**读进上下文**——预期值对照真实 fixture 推算，不从功能描述正向猜
+- 用例集合从**调用方 / 数据集反推**边界与异常，不只从功能描述正向推导（同源盲区：正向推导系统性漏掉非预期匹配项）
+
+> 实测案例：plan 设计 U6 用 `query='co'` 预期匹配 /commit，但 mock 数据集含 /compact 也匹配——设计时 fixture 没进上下文，只想着 /commit。
+
+plan.md 引用的事实型前提（依赖某文件/配置/接口存在）都要实测；无法实测标 `[未验证]` 暴露给用户，不默默采信。
+
 ## plan.md 六章节概览
 
 完整模板见 `../lite-shared/references/plan-template.md`。六章节：
