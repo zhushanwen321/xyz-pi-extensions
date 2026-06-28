@@ -55,7 +55,7 @@ xyz-pi-extensions/
 |------|---------|------|
 | Pi 扩展（产品） | `extensions/` | goal, todo, design-status, vision, statusline |
 | 内部共享依赖 | `shared/` | quota-providers, types, taste-lint |
-| 独立 skills | `skills/` | vision-analysis, zcommit |
+| 独立 skills | `skills/` | vision-analysis, zcommit, create-worktree, remove-worktree, lightmerge-branch |
 | 共享脚本 | `scripts/` | publish.sh（运维）；gate 脚本见 `.githooks/` |
 
 **硬性约束**：
