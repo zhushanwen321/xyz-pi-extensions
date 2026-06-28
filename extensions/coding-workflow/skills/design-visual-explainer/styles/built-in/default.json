@@ -14,6 +14,15 @@
     "neutral":   { "fillColor": "#f5f5f5", "strokeColor": "#666666" },
     "secondary": { "fillColor": "#e1d5e7", "strokeColor": "#9673a6" }
   },
+  "paletteDark": {
+    "primary":   { "fillColor": "#0d2424", "strokeColor": "#5eead4", "fontColor": "#e3efee" },
+    "success":   { "fillColor": "#0d2922", "strokeColor": "#34d399", "fontColor": "#6ee7b7" },
+    "warning":   { "fillColor": "#29220d", "strokeColor": "#fbbf24", "fontColor": "#fde68a" },
+    "accent":    { "fillColor": "#0c243a", "strokeColor": "#38bdf8", "fontColor": "#bae6fd" },
+    "danger":    { "fillColor": "#3f1818", "strokeColor": "#f87171", "fontColor": "#fecaca" },
+    "neutral":   { "fillColor": "#1a1a1a", "strokeColor": "#94a3b8", "fontColor": "#e2e8f0" },
+    "secondary": { "fillColor": "#0d2429", "strokeColor": "#2dd4bf", "fontColor": "#ccfbf1" }
+  },
   "roles": {
     "service":  "primary",
     "database": "success",

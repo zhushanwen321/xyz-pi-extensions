@@ -32,12 +32,15 @@ import sys
 from xml.sax.saxutils import escape
 
 DEFAULT_W, DEFAULT_H = 120, 60
-NODE_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;"
+NODE_STYLE_LIGHT = "rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#1e3a5f;"
+NODE_STYLE_DARK = "rounded=1;whiteSpace=wrap;html=1;fillColor=#0d2424;strokeColor=#5eead4;fontColor=#e3efee;"
 # orthogonalEdgeStyle = right-angle routing; rounded = smooth corners; jettySize=auto =
 # adaptive segment length so parallel edges don't stack on top of each other.
 EDGE_STYLE = "edgeStyle=orthogonalEdgeStyle;rounded=1;jettySize=auto;html=1;"
-GROUP_STYLE = ("rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#999999;"
-               "verticalAlign=top;fontStyle=2;dashed=1;")
+GROUP_STYLE_LIGHT = ("rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#999999;"
+                     "fontColor=#666666;verticalAlign=top;fontStyle=2;dashed=1;")
+GROUP_STYLE_DARK = ("rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#64748b;"
+                    "fontColor=#94a3b8;verticalAlign=top;fontStyle=2;dashed=1;")
 # Group colours come from the skill's own palette (styles/built-in/default.json)
 # so there is a single source of truth, not a second list baked in here. When a
 # grouped graph is laid out, each top-level group takes the next colour (cycled
@@ -50,21 +53,32 @@ _FALLBACK_PALETTE = [("#dae8fc", "#6c8ebf"), ("#d5e8d4", "#82b366"), ("#ffe6cc",
                      ("#e1d5e7", "#9673a6"), ("#fff2cc", "#d6b656"), ("#f8cecc", "#b85450")]
 
 
-def load_palette():
-    """Ordered (fill, stroke) list from the default preset's palette; fall back
-    to the same colours inline if the preset file can't be read."""
+def load_palette(theme="light"):
+    """Ordered (fill, stroke, fontColor) tuples from the default preset's palette;
+    fall back to the same colours inline if the preset file can't be read.
+
+    theme selects between the light palette (default) and paletteDark.
+    fontColor is None when the preset doesn't define one (light palette).
+    """
+    key = "paletteDark" if theme == "dark" else "palette"
     try:
         with open(_PALETTE_FILE, encoding="utf-8") as fh:
-            pal = json.load(fh)["palette"]
-        colors = [(pal[r]["fillColor"], pal[r]["strokeColor"]) for r in _PALETTE_ORDER if r in pal]
+            pal = json.load(fh)[key]
+        colors = []
+        for r in _PALETTE_ORDER:
+            if r not in pal:
+                continue
+            colors.append((pal[r]["fillColor"], pal[r]["strokeColor"],
+                           pal[r].get("fontColor")))
         if colors:
             return colors
     except (OSError, KeyError, ValueError):
         pass
-    return _FALLBACK_PALETTE
+    # Fallback has no fontColor.
+    return [(f, s, None) for f, s in _FALLBACK_PALETTE]
 
 
-PALETTE = load_palette()
+PALETTE = load_palette()  # light palette; dark is loaded on demand via --theme
 # Uniform container padding; the title sits in the top pad (verticalAlign=top).
 # dot's cluster margin is set to this same value so each container box equals
 # dot's cluster box — which dot guarantees never overlaps, at any nesting depth.
@@ -188,13 +202,13 @@ def layout(dot_src):
     return height, pos, edges
 
 
-def group_style(stroke):
+def group_style(stroke, font_color="#666666"):
     """Container box styled with a group's colour (coloured border + title)."""
     return (f"rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor={stroke};"
-            f"fontColor={stroke};verticalAlign=top;fontStyle=2;dashed=1;")
+            f"fontColor={font_color};verticalAlign=top;fontStyle=2;dashed=1;")
 
 
-def to_drawio(graph, height, pos, edge_pts, color=True):
+def to_drawio(graph, height, pos, edge_pts, color=True, theme="light"):
     nodes = graph["nodes"]
     # Absolute snapped rect for every placed node.
     rects = {}
@@ -217,8 +231,10 @@ def to_drawio(graph, height, pos, edge_pts, color=True):
         if t and t[0] not in top_order:
             top_order.append(t[0])
 
+    palette = PALETTE if theme == "light" else load_palette("dark")
+
     def gcolor(seg):
-        return PALETTE[top_order.index(seg) % len(PALETTE)]
+        return palette[top_order.index(seg) % len(palette)]
 
     used = {n["id"] for n in nodes}
     label_override = {}
@@ -270,7 +286,8 @@ def to_drawio(graph, height, pos, edge_pts, color=True):
             continue
         gx, gy, gw, gh = gbox[p]
         x, y, parent = rebase(gx, gy, p[:-1] if len(p) > 1 else None)
-        gstyle = group_style(gcolor(p[0])[1]) if color else GROUP_STYLE
+        gstyle = (group_style(gcolor(p[0])[1], gcolor(p[0])[2] or "#94a3b8") if theme == "dark"
+                  else group_style(gcolor(p[0])[1])) if color else (GROUP_STYLE_DARK if theme == "dark" else GROUP_STYLE_LIGHT)
         cells.append(
             f'        <mxCell id="{attr(gid[p])}" value="{attr(glabel[p])}" '
             f'style="{gstyle}" vertex="1" parent="{attr(parent)}">\n'
@@ -286,10 +303,11 @@ def to_drawio(graph, height, pos, edge_pts, color=True):
         if node.get("style"):
             style = node["style"]                         # explicit style always wins
         elif color and nid in gpath:
-            fill, stroke = gcolor(gpath[nid][0])          # tint styleless nodes by group
-            style = f"rounded=1;whiteSpace=wrap;html=1;fillColor={fill};strokeColor={stroke};"
+            fill, stroke, fcolor = gcolor(gpath[nid][0])   # tint styleless nodes by group
+            fc = f";fontColor={fcolor}" if fcolor else ""
+            style = f"rounded=1;whiteSpace=wrap;html=1;fillColor={fill};strokeColor={stroke};{fc}"
         else:
-            style = NODE_STYLE
+            style = NODE_STYLE_DARK if theme == "dark" else NODE_STYLE_LIGHT
         cells.append(
             f'        <mxCell id="{attr(nid)}" value="{attr(node.get("label", nid))}" '
             f'style="{attr(style)}" vertex="1" parent="{attr(parent)}">\n'
@@ -356,11 +374,14 @@ def main():
     ap.add_argument("-o", "--output", help="output .drawio path (default: stdout)")
     ap.add_argument("--mono", action="store_true",
                     help="don't colour groups by palette (monochrome boxes)")
+    ap.add_argument("--theme", choices=["light", "dark"], default="light",
+                    help="colour palette theme (default: light). dark uses paletteDark "
+                         "from default.json to match a dark page background.")
     args = ap.parse_args()
     with open(args.input, encoding="utf-8") as f:
         graph = json.load(f)
     height, pos, edge_pts = layout(build_dot(graph))
-    xml = to_drawio(graph, height, pos, edge_pts, color=not args.mono)
+    xml = to_drawio(graph, height, pos, edge_pts, color=not args.mono, theme=args.theme)
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
             f.write(xml)

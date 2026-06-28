@@ -120,7 +120,7 @@ Mermaid（浏览器 CDN 加载）和手画 HTML/CSS（纯文本）**无外部依
      - 用户同意 → `brew install graphviz`（macOS）/ `sudo apt install graphviz`（Linux）
      - 用户拒绝 → 改用手写 XML 小图，或降级 Mermaid
 
-3. 生成 `.drawio`：小图（≤15节点）手写 XML；大图跑 `python3 scripts/autolayout.py graph.json -o diagram.drawio`
+3. 生成 `.drawio`：小图（≤15节点）手写 XML；大图跑 `python3 scripts/autolayout.py graph.json -o diagram.drawio`。**dark 主题页面加 `--theme dark`**（用 paletteDark，否则导出的浅色块在深色背景上刺眼，详见 `drawio-guide.md` 配色对齐段）
 4. 校验：`python3 scripts/validate.py diagram.drawio`（结构门）
 5. 导出 SVG 嵌入：`drawio -x -f svg -e -o diagram.svg`，SVG 内联进页面容器 + zoom 控件（复用 `templates/zoom.js` 的 zoom 逻辑）
 
@@ -144,7 +144,7 @@ Mermaid（浏览器 CDN 加载）和手画 HTML/CSS（纯文本）**无外部依
 - 🔒 **Mermaid 实际渲染**：`.md` 的 Mermaid 块渲染成图表（非 `<pre>` 源码）。每个 `.mermaid-wrap` 有 zoom 控件 + click-to-expand
 - 🔒 **无占位符/空章节**：无 `{占位符}`、TODO、未填充模板段
 - 🔒 **TOC 锚点无死链**：4+ section 页面导航锚点全部可跳转
-- 🔒 **双主题**：light/dark 都正常（用 `prefers-color-scheme`）
+- 🔒 **双主题**：light/dark 都正常。Mermaid 用 `prefers-color-scheme` 自动切换；**drawio 导出 SVG 是静态的**——dark 页面必须用 `autolayout.py --theme dark` 或手写 dark 色值生成，不能复用 light 版
 - 🔒 **无 overflow**：resize 到不同宽度无内容溢出。grid/flex 子元素 `min-width: 0`
 - **主角图就位**：阶段 hero 图紧随 header
 - **TL;DR 到位**：3-5 行核心结论

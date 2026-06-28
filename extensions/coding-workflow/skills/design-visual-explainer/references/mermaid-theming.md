@@ -42,7 +42,7 @@ mermaid.initialize({
     tertiaryColor: isDark ? '#1a1a1a' : '#f8fafc',
     tertiaryBorderColor: isDark ? '#64748b' : '#64748b',
     tertiaryTextColor: isDark ? '#e2e8f0' : '#334155',
-    lineColor: isDark ? '#5eead4' : '#94a3b8',
+    lineColor: isDark ? '#5eead4' : '#5f8a85',
     noteBkgColor: isDark ? '#0d2424' : '#f0fdfa',
     noteTextColor: isDark ? '#e3efee' : '#134e3a',
     noteBorderColor: isDark ? '#2dd4bf' : '#0d9488',
