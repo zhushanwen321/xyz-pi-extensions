@@ -22,7 +22,9 @@ description: >-
 - lite-execute 已完成（goal 已 complete，验收全绿）
 - 可选：plan.md + 测试报告仍在（便于回顾）
 
-## 执行流程
+## 流程
+
+单一意图（复盘）：过自检清单 → 写报告 → 交付。三步线性推进。
 
 ### Step 1. 过自检清单
 
