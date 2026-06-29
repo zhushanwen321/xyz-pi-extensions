@@ -232,22 +232,14 @@ export class SubagentService {
 
     // ── 2.5 worktree 创建（fork=true 且未提供 handle 时）──
     // record 先创建，worktree 失败时可 finalizeFailed（record 已在 store 中）。
+    // 单分支覆盖 worktree===true 和 worktree===undefined（后者由 fork 兑底创建）；
+    // worktree===false 显式退出创建。两个重复分支体已合并（曾因 true/undefined 分写而漂移）。
     let worktreeHandle: WorktreeHandle | undefined;
     if (typeof opts.worktree === "object") {
       // 传入的是已创建的 WorktreeHandle
       worktreeHandle = opts.worktree;
-    } else if (opts.fork && opts.worktree === true) {
-      // worktree=true，创建新 worktree
-      try {
-        worktreeHandle = this.worktreeManager.create(this.cwd, record.id);
-        record.worktreeHandle = worktreeHandle;
-      } catch (err) {
-        // create 失败→不进入 run，合成 failed result
-        const _result = await this.finalizeFailed(record, err);
-        return this.buildEarlyFailedHandle(record, mode);
-      }
     } else if (opts.fork && opts.worktree !== false) {
-      // fork=true 但 worktree 未指定或 undefined，也创建 worktree
+      // worktree===true（显式要求）或 undefined（fork 兑底）——创建新 worktree
       try {
         worktreeHandle = this.worktreeManager.create(this.cwd, record.id);
         record.worktreeHandle = worktreeHandle;

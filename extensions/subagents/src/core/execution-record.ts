@@ -492,12 +492,13 @@ export function getTotalUsage(record: ExecutionRecord): AgentUsageTotal | undefi
  * 用途：executor 的收尾竞争。cancelBackground 与 background detached 完成回调
  * 都调 tryTransition 抢锁：抢到负责完整收尾，没抢到闭嘴不做事。
  *
- * crashed 仅作为可选目标——crashed 主要通过重建推断（alive marker 存在但 session
- * 文件无终态），不走正常 CAS 流程。
+ * target 仅限正常执行流的三终态。crashed 不作 target——它由重建路径推断
+ * （alive marker 存在但 session 文件无终态），不走 CAS；重建路径用 markReconstructedStatus
+ * 直接赋值。收窄 target 类型可在编译期拒绍误用 tryTransition(record, "crashed")。
  */
 export function tryTransition(
   record: ExecutionRecord,
-  target: "done" | "failed" | "cancelled" | "crashed",
+  target: "done" | "failed" | "cancelled",
 ): boolean {
   if (record.status !== "running") return false;
   record.status = target;

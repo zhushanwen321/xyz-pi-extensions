@@ -416,8 +416,8 @@ export interface ExecuteOptions {
   worktree?: boolean | WorktreeHandle;
   /** fork 模式：覆盖执行 cwd（默认 mainCwd）。 */
   cwd?: string;
-  /** 父级 fork depth（用于深度限制检查，D-007 MAX_FORK_DEPTH=10）。 */
-  parentForkDepth?: number;
+  // 注：fork 深度不从外部传入（曾暴露 parentForkDepth，改用 ALS 后 execute 内部从调用链派生，
+  // 公开字段成为死字段误导调用方，已移除）。深度限制检查见 RunOptions.parentForkDepth（内部层）。
 }
 
 /**

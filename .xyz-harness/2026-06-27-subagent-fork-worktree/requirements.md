@@ -323,6 +323,7 @@ graph TB
 - **OS-6**: 嵌套 worktree（worktree-of-worktree）—— 首版禁止，仅 fork 可嵌套（受 D-007 限制）
 - **OS-7**: Windows/跨平台符号链接兼容 —— 首版 POSIX-only，文档声明
 - **OS-8**: worktree 磁盘配额管理 / 大 repo LFS sparse checkout —— 首版不做
+- **OS-9**: 单进程多 Pi session 并发隔离 —— 首版不做。`SubagentService` 是进程单例，`sessionId` 为实例字段，`initSession` 每次覆写。Pi 平台当前以单进程单 session 为主流运行模式（项目 CLAUDE.md 已警告多 session 模式的副作用）。record 写入侧（subagent-service.ts createRecordForMode）在创建时正确捕获当时 sessionId，仅读侧 `collectRecords`（用 `this.sessionId` 过滤）在后启动 session 覆写后会按错误 sessionId 过滤。影响范围：本特性引入的 session 隔离在多 session 并发时失效（可见全部 record，非丢数据）。未来修复方向：将当前 sessionId 经 ALS 或调用参数传入 collectRecords，不读实例字段。
 
 ## 决策记录
 

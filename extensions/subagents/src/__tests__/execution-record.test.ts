@@ -672,12 +672,6 @@ describe("tryTransition", () => {
     expect(r.status).toBe("done");
   });
 
-  it("transitions to crashed from running", () => {
-    const r = makeRecord({ status: "running" });
-    expect(tryTransition(r, "crashed")).toBe(true);
-    expect(r.status).toBe("crashed");
-  });
-
   it("returns false when trying to transition from crashed to done", () => {
     const r = makeRecord({ status: "crashed" });
     expect(tryTransition(r, "done")).toBe(false);
