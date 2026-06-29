@@ -321,6 +321,9 @@ export interface ExecutionRecord {
   /** session jsonl 文件名。session 创建成功后由 session-runner.run() 回填（窗口期内 undefined）。 */
   sessionFile?: string;
 
+  /** [MF#3] fork+worktree 模式下子 agent 改动的 patch 文件路径（worktree 外，供调用方应用）。 */
+  patchFile?: string;
+
   /** fork 模式下的 worktree handle（可选）。 */
   worktreeHandle?: WorktreeHandle;
 
@@ -358,6 +361,8 @@ export interface SubagentToolDetails {
   parsedOutput?: unknown;
   /** session jsonl 文件名（不含目录）。窗口期内可能 undefined（session 尚未创建成功）。 */
   sessionFile?: string;
+  /** [MF#3] fork+worktree 模式下子 agent 改动的 patch 文件路径（worktree 外，供调用方应用）。 */
+  patchFile?: string;
 }
 
 // ============================================================
@@ -516,6 +521,8 @@ export interface SubagentRecord {
   result?: string;
   error?: string;
   sessionFile?: string;
+  /** [MF#3] fork+worktree 模式下子 agent 改动的 patch 文件路径（worktree 外，供调用方应用）。 */
+  patchFile?: string;
   /** 外部 Pi 实例（进程隔离模式下由外部启动的子进程）。 */
   externalInstance?: AliveMarker;
   /** fork 模式下的 worktree handle。 */
@@ -630,18 +637,25 @@ export interface ResourceLoaderOptions {
   additionalSkillPaths?: string[];
 }
 
+/** SessionManager 实例的最小接口（duck-typed，fork 路径消费 SDK 静态方法的返回值）。 */
+export interface SessionManagerLike {
+  getLeafId(): string | null;
+  createBranchedSession(leafId: string): string | undefined;
+  getSessionFile(): string | undefined;
+  getSessionId(): string;
+}
+
 /** Pi SDK 动态 import 的形状（getSdk() 获取）。 */
 export interface SdkLike {
   DefaultResourceLoader: new (opts: ResourceLoaderOptions) => ResourceLoaderLike;
   SessionManager: {
-    inMemory(cwd?: string): unknown;
-    create(cwd: string, sessionDir?: string): unknown;
+    inMemory(cwd?: string): SessionManagerLike;
+    create(cwd: string, sessionDir?: string): SessionManagerLike;
+    open(sessionFile: string, sessionDir?: string, cwdOverride?: string): SessionManagerLike;
+    /** [MF#1] fork 静态方法：从源 session 文件 fork 到目标 cwd，返回 SessionManager。 */
+    forkFrom(sourcePath: string, targetCwd: string, sessionDir?: string): SessionManagerLike;
   };
   createAgentSession: (opts: CreateAgentSessionArgs) => Promise<{ session: AgentSessionLike }>;
-  /** fork 模式：从已有 session 创建分支 session。 */
-  forkFrom?: (sessionFile: string, opts?: unknown) => Promise<{ session: AgentSessionLike }>;
-  /** fork 模式：创建 branched session（从特定 commit 分叉）。 */
-  createBranchedSession?: (opts: unknown) => Promise<{ session: AgentSessionLike }>;
 }
 
 export type { AgentConfig, ResolvedModel };

@@ -176,13 +176,13 @@ declare module "@mariozechner/pi-coding-agent" {
 	export function withFileMutationQueue(filePath: string, fn: () => Promise<void>): Promise<void>;
 	// Session factory methods
 	export function createAgentSession(opts: unknown): Promise<{ session: unknown }>;
-	/** fork 模式：从已有 session 文件创建 fork（静态方法）。 */
-	export function forkFrom(sessionFile: string, cwd: string, sessionDir?: string): unknown;
-	// SessionManager 静态方法
+	// SessionManager static methods
 	export const SessionManager: {
 		inMemory(cwd?: string): unknown;
 		create(cwd: string, sessionDir?: string): unknown;
-		open(sessionFile: string): unknown;
+		open(sessionFile: string, sessionDir?: string, cwdOverride?: string): unknown;
+		/** [MF#1] fork 静态方法：从源 session fork 到目标 cwd，返回 SessionManager。 */
+		forkFrom(sourcePath: string, targetCwd: string, sessionDir?: string): unknown;
 	};
 }
 

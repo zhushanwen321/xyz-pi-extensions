@@ -215,7 +215,7 @@ function setup(session: AgentSessionLike): SetupResult {
     sessionId: "exec-it",
     ctxModel: { id: "test-model", name: "Test", provider: "p", reasoning: false },
   });
-  const service = new SubagentService({ cwd: agentDir, modelService });
+  const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
   const pi = makePi();
   service.initSession({ pi, sessionId: "exec-it" });
   return {
@@ -341,7 +341,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       sessionId: "exec-it",
       ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
     });
-    const service = new SubagentService({ cwd: agentDir, modelService });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
     service.initSession({ pi: makePi(), sessionId: "exec-it" });
 
     const result = await service.execute({
@@ -441,7 +441,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       sessionId: "exec-it",
       ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
     });
-    const service = new SubagentService({ cwd: agentDir, modelService });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
     const pi = makePi();
     service.initSession({ pi, sessionId: "exec-it" });
     const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
@@ -603,13 +603,18 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
   // worktree 集成测试（Wave 4: SubagentService 接线）
   // ============================================================
 
-  // 辅助：构造带 createBranchedSession 的 fakeSdk（fork 路径需要）
+  // 辅助：[MF#1] 构造符合真实 SDK 契约的 fakeSdk（SessionManager.open/forkFrom + 实例 createBranchedSession）
   function makeBranchedSdk(session: AgentSessionLike): SdkLike {
+    const sourceSm = {
+      getLeafId: () => "leaf-1",
+      createBranchedSession: () => "/mock/branched.jsonl",
+      getSessionFile: () => undefined,
+      getSessionId: () => "src-sm-id",
+    };
     return {
       DefaultResourceLoader: class { reload = vi.fn(async () => {}); },
-      SessionManager: { inMemory: () => ({}), create: () => ({}) },
+      SessionManager: { inMemory: () => sourceSm, create: () => sourceSm, open: () => sourceSm, forkFrom: () => sourceSm },
       createAgentSession: vi.fn(async () => ({ session })),
-      createBranchedSession: vi.fn(async () => ({ session })),
     };
   }
 
@@ -624,7 +629,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       sessionId: "exec-wt",
       ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
     });
-    const service = new SubagentService({ cwd: agentDir, modelService });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
     service.initSession({ pi: makePi(), sessionId: "exec-wt" });
     const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
 
@@ -656,7 +661,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       sessionId: "exec-wt",
       ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
     });
-    const service = new SubagentService({ cwd: agentDir, modelService });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
     service.initSession({ pi: makePi(), sessionId: "exec-wt" });
 
     // 实例级 mock：worktreeManager 实例已创建，直接覆盖其 create 方法
@@ -696,7 +701,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       sessionId: "exec-wt",
       ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
     });
-    const service = new SubagentService({ cwd: agentDir, modelService });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
     service.initSession({ pi: makePi(), sessionId: "exec-wt" });
     const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
 
@@ -732,7 +737,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       sessionId: "exec-wt",
       ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
     });
-    const service = new SubagentService({ cwd: agentDir, modelService });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
     service.initSession({ pi: makePi(), sessionId: "exec-wt" });
     const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
 
@@ -761,7 +766,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       sessionId: "exec-wt",
       ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
     });
-    const service = new SubagentService({ cwd: agentDir, modelService });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
     service.initSession({ pi: makePi(), sessionId: "exec-wt" });
     const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
 
@@ -789,7 +794,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       sessionId: "exec-wt",
       ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
     });
-    const service = new SubagentService({ cwd: agentDir, modelService });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
     service.initSession({ pi: makePi(), sessionId: "exec-wt" });
     const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
 
@@ -825,7 +830,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       sessionId: "exec-wt",
       ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
     });
-    const service = new SubagentService({ cwd: agentDir, modelService });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
     service.initSession({ pi: makePi(), sessionId: "exec-wt" });
     const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
 

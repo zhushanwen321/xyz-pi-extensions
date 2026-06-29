@@ -9,6 +9,9 @@
 // 上游：subagent-tool（execute/query/cancel）、TUI（onChange/listRunning/collectRecords）。
 // session_start 时经 initSession 注入 pi；modelRegistry/entries 归 ModelConfigService.initModel。
 
+import * as fs from "node:fs";
+import * as path from "node:path";
+
 import { type ConcurrencyPool,DefaultConcurrencyPool } from "../core/concurrency-pool.ts";
 import {
   completeRecord,
@@ -491,11 +494,20 @@ export class SubagentService {
     status: "done" | "failed" | "cancelled",
   ): Promise<void> {
     // ── Step 0: collectPatch（best-effort，D-022 patchOk 守卫）──
+    // [MF#3] patchFile 写到 worktree 之外（sessionsDir/<branch>.patch），避免被 cleanup 删除；
+    //        路径回填 record.patchFile，供调用方（tool result / /subagents list）应用。
     let patchOk = true;
     if (record.worktreeHandle) {
       try {
-        const patch = this.worktreeManager.collectPatch(record.worktreeHandle);
+        const sessionsDir = getSubagentSessionDir(
+          this.modelService.getAgentDir(),
+          record.worktreeHandle.mainCwd,
+        );
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        const patchFile = path.join(sessionsDir, `${record.worktreeHandle.branch}.patch`);
+        const patch = this.worktreeManager.collectPatch(record.worktreeHandle, patchFile);
         patchOk = !patch.failed;
+        record.patchFile = patchFile;
       } catch {
         patchOk = false;
       }

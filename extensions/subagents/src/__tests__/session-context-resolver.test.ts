@@ -107,6 +107,7 @@ describe("resolveSessionContext", () => {
     const result = resolveSessionContext({
       fork: true,
       mainCwd: MAIN_CWD,
+      mainSessionFile: SESSION_FILE,
       parentForkDepth: 9,
       agentDir: AGENT_DIR,
     });
@@ -125,6 +126,18 @@ describe("resolveSessionContext", () => {
     // effectiveCwd 是 worktree checkout，但 sessionDir 仍基于 mainCwd
     expect(result.effectiveCwd).not.toBe(mainCwd);
     expect(result.sessionDir).toBe(expectedSessionDir(mainCwd));
+  });
+
+  // ── [MF#5] fork=true 但主 session 文件不可用 → 抛错（不静默降级）──
+  it("fork=true + mainSessionFile 缺失 → throws（不静默降级到 from-scratch）", () => {
+    expect(() =>
+      resolveSessionContext({
+        fork: true,
+        mainCwd: MAIN_CWD,
+        // mainSessionFile 故意不传
+        agentDir: AGENT_DIR,
+      }),
+    ).toThrow(/main session file is unavailable/);
   });
 
   // ── 默认值：fork/worktree 未传 → undefined → false ──

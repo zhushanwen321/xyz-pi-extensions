@@ -42,6 +42,16 @@ function mockSession(overrides?: Partial<AgentSessionLike>): AgentSessionLike {
   };
 }
 
+/** SessionManager 实例 mock（空实现，足够满足 SessionManagerLike duck-type）。 */
+function mockSessionManager(): unknown {
+  return {
+    getLeafId: vi.fn().mockReturnValue("leaf-1"),
+    createBranchedSession: vi.fn().mockReturnValue("/mock/branched.jsonl"),
+    getSessionFile: vi.fn().mockReturnValue("/mock/session.jsonl"),
+    getSessionId: vi.fn().mockReturnValue("sm-id"),
+  };
+}
+
 /** 创建最小 mock SDK。 */
 function mockSdk(overrides?: Partial<SdkLike>): SdkLike {
   return {
@@ -49,11 +59,56 @@ function mockSdk(overrides?: Partial<SdkLike>): SdkLike {
       reload = vi.fn().mockResolvedValue(undefined);
     },
     SessionManager: {
-      inMemory: vi.fn().mockReturnValue({}),
-      create: vi.fn().mockReturnValue({}),
+      inMemory: vi.fn().mockReturnValue(mockSessionManager()),
+      create: vi.fn().mockReturnValue(mockSessionManager()),
+      open: vi.fn().mockReturnValue(mockSessionManager()),
+      forkFrom: vi.fn().mockReturnValue(mockSessionManager()),
     },
     createAgentSession: vi.fn().mockResolvedValue({ session: mockSession() }),
     ...overrides,
+  };
+}
+
+/**
+ * [MF#1] 构造符合真实 SDK 契约的 fork mock。
+ *
+ * 真实契约：createBranchedSession 是 SessionManager **实例方法**（返回新文件路径），
+ * forkFrom 是 **静态方法**（返回 SessionManager）。两者均经 createAgentSession 装配最终 session。
+ *
+ * - open(src) → 源 SM（getLeafId/createBranchedSession 实例方法）
+ * - 源 SM.createBranchedSession(leafId) → branchedFile（可由 throwInBranch 抛错触发降级）
+ * - SessionManager.forkFrom(src, cwd, dir) → SM（可由 throwInFork 抛错）
+ * - createAgentSession → { session: finalSession }
+ */
+function makeForkSdk(opts: {
+  finalSession: AgentSessionLike;
+  throwInBranch?: Error;
+  throwInFork?: Error;
+  branchedFile?: string;
+}): SdkLike {
+  const sourceSm = {
+    getLeafId: vi.fn().mockReturnValue("leaf-1"),
+    createBranchedSession: vi.fn(() => {
+      if (opts.throwInBranch) throw opts.throwInBranch;
+      return opts.branchedFile ?? "/mock/branched.jsonl";
+    }),
+    getSessionFile: vi.fn().mockReturnValue("/mock/session.jsonl"),
+    getSessionId: vi.fn().mockReturnValue("src-sm-id"),
+  };
+  return {
+    DefaultResourceLoader: class MockResourceLoader {
+      reload = vi.fn().mockResolvedValue(undefined);
+    },
+    SessionManager: {
+      inMemory: vi.fn().mockReturnValue(mockSessionManager()),
+      create: vi.fn().mockReturnValue(mockSessionManager()),
+      open: vi.fn().mockReturnValue(sourceSm),
+      forkFrom: vi.fn(() => {
+        if (opts.throwInFork) throw opts.throwInFork;
+        return mockSessionManager();
+      }),
+    },
+    createAgentSession: vi.fn().mockResolvedValue({ session: opts.finalSession }),
   };
 }
 
@@ -183,9 +238,7 @@ describe("createAndConfigureSession fork branching", () => {
 
   it("createBranchedSession 成功 → 使用 branched session", async () => {
     const branchedSession = mockSession({ sessionId: "branched-id" });
-    const sdk = mockSdk({
-      createBranchedSession: vi.fn().mockResolvedValue({ session: branchedSession }),
-    });
+    const sdk = makeForkSdk({ finalSession: branchedSession });
     const ctx = mockCtx({
       sdk,
       mainCwd: "/mock/main",
@@ -199,16 +252,19 @@ describe("createAndConfigureSession fork branching", () => {
       ctx,
     );
 
-    expect(sdk.createBranchedSession).toHaveBeenCalledOnce();
-    expect(sdk.forkFrom).toBeUndefined();
+    // [MF#1] 走 open→createBranchedSession→open→createAgentSession
+    expect(sdk.SessionManager.open).toHaveBeenCalled();
+    expect(sdk.createAgentSession).toHaveBeenCalledOnce();
+    // forkFrom 未被调用（主路径成功）
+    expect(sdk.SessionManager.forkFrom).not.toHaveBeenCalled();
     expect(result.sessionId).toBe("branched-id");
   });
 
   it("createBranchedSession 抛错 → 降级 forkFrom（两级降级）", async () => {
     const forkedSession = mockSession({ sessionId: "forked-id" });
-    const sdk = mockSdk({
-      createBranchedSession: vi.fn().mockRejectedValue(new Error("branched failed")),
-      forkFrom: vi.fn().mockResolvedValue({ session: forkedSession }),
+    const sdk = makeForkSdk({
+      finalSession: forkedSession,
+      throwInBranch: new Error("branched failed"),
     });
     const ctx = mockCtx({
       sdk,
@@ -223,15 +279,17 @@ describe("createAndConfigureSession fork branching", () => {
       ctx,
     );
 
-    expect(sdk.createBranchedSession).toHaveBeenCalledOnce();
-    expect(sdk.forkFrom).toHaveBeenCalledOnce();
+    // [MF#1] 主路径 createBranchedSession 抛错 → 降级 forkFrom
+    expect(sdk.SessionManager.open).toHaveBeenCalled();
+    expect(sdk.SessionManager.forkFrom).toHaveBeenCalledOnce();
     expect(result.sessionId).toBe("forked-id");
   });
 
   it("两级都失败 → 抛错（run 合成 failed result）", async () => {
-    const sdk = mockSdk({
-      createBranchedSession: vi.fn().mockRejectedValue(new Error("branched failed")),
-      forkFrom: vi.fn().mockRejectedValue(new Error("fork failed")),
+    const sdk = makeForkSdk({
+      finalSession: mockSession(),
+      throwInBranch: new Error("branched failed"),
+      throwInFork: new Error("fork failed"),
     });
     const ctx = mockCtx({
       sdk,
@@ -252,9 +310,7 @@ describe("createAndConfigureSession fork branching", () => {
 
   it("fork 路径写 alive marker", async () => {
     const branchedSession = mockSession({ sessionId: "branched-id" });
-    const sdk = mockSdk({
-      createBranchedSession: vi.fn().mockResolvedValue({ session: branchedSession }),
-    });
+    const sdk = makeForkSdk({ finalSession: branchedSession });
     const ctx = mockCtx({
       sdk,
       mainCwd: "/mock/main",
@@ -279,9 +335,7 @@ describe("createAndConfigureSession fork branching", () => {
 
   it("fork 后正常完成 done，result.success=true", async () => {
     const branchedSession = mockSession({ sessionId: "branched-id" });
-    const sdk = mockSdk({
-      createBranchedSession: vi.fn().mockResolvedValue({ session: branchedSession }),
-    });
+    const sdk = makeForkSdk({ finalSession: branchedSession });
     const ctx = mockCtx({
       sdk,
       mainCwd: "/mock/main",
@@ -304,9 +358,7 @@ describe("createAndConfigureSession fork branching", () => {
 
   it("identity custom entry 包含 forkDepth=parentForkDepth+1", async () => {
     const branchedSession = mockSession({ sessionId: "branched-id" });
-    const sdk = mockSdk({
-      createBranchedSession: vi.fn().mockResolvedValue({ session: branchedSession }),
-    });
+    const sdk = makeForkSdk({ finalSession: branchedSession });
     const ctx = mockCtx({
       sdk,
       mainCwd: "/mock/main",
@@ -341,7 +393,9 @@ describe("createAndConfigureSession fork branching", () => {
     );
 
     expect(sdk.createAgentSession).toHaveBeenCalled();
-    expect(sdk.createBranchedSession).toBeUndefined();
+    // 非不开 fork：不走 SessionManager.open/forkFrom
+    expect(sdk.SessionManager.open).not.toHaveBeenCalled();
+    expect(sdk.SessionManager.forkFrom).not.toHaveBeenCalled();
     expect(result.sessionId).toBe("normal-id");
   });
 
@@ -349,11 +403,14 @@ describe("createAndConfigureSession fork branching", () => {
     const session1 = mockSession({ sessionId: "fork-1" });
     const session2 = mockSession({ sessionId: "fork-2" });
     let callCount = 0;
-    const sdk = mockSdk({
-      createBranchedSession: vi.fn().mockImplementation(() => {
-        callCount++;
-        return Promise.resolve({ session: callCount === 1 ? session1 : session2 });
-      }),
+    const sdk = makeForkSdk({
+      finalSession: session1,
+      // createAgentSession 按调用顺序返回独立 session
+    });
+    // 覆盖 createAgentSession 为按顺序返回 session1/session2
+    (sdk.createAgentSession as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      callCount++;
+      return Promise.resolve({ session: callCount === 1 ? session1 : session2 });
     });
     const ctx = mockCtx({
       sdk,
@@ -371,8 +428,8 @@ describe("createAndConfigureSession fork branching", () => {
     const result1 = settled1.status === "fulfilled" ? settled1.value : undefined;
     const result2 = settled2.status === "fulfilled" ? settled2.value : undefined;
 
-    // 两次 createBranchedSession 各自返回独立 session
-    expect(sdk.createBranchedSession).toHaveBeenCalledTimes(2);
+    // [MF#1] 两次 createAgentSession 各自返回独立 session
+    expect(sdk.createAgentSession).toHaveBeenCalledTimes(2);
     expect(result1.sessionId).toBe("fork-1");
     expect(result2.sessionId).toBe("fork-2");
     // 各自 prompt 各自的 session

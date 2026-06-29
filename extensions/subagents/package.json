@@ -20,7 +20,8 @@
     "src/runtime/",
     "src/tui/",
     "src/tools/",
-    "src/commands/"
+    "src/commands/",
+    "src/utils/"
   ],
   "pi": {
     "extensions": [

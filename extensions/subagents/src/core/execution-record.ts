@@ -565,6 +565,7 @@ export function project(record: ExecutionRecord): SubagentToolDetails {
     currentActivity: getCurrentActivity(record),
     parsedOutput: record.agentResult?.parsedOutput,
     sessionFile: record.sessionFile,
+    patchFile: record.patchFile,
   };
 }
 

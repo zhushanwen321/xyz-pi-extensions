@@ -56,6 +56,14 @@ const RECORD_ID = "bg-42-abc";
 const BASE_COMMIT = "abc123def456";
 // scan 测试：孤儿 worktree 的 checkout 路径（tmpdir 下）
 const ORPHAN_CHECKOUT = path.join(os.tmpdir(), "pi-sub-orphan1");
+// [MF#4] reaper 从 mapping sidecar 读到的 session 文件路径
+const ORPHAN_SESSION_FILE = path.join(
+  AGENT_DIR,
+  "subagents",
+  "sessions",
+  "--home-user-project--",
+  "2026-01-01T00-00-00-000Z_orphan1.jsonl",
+);
 
 /** create 路径期望（os.tmpdir 下） */
 function expectedCreatePath(recordId: string): string {
@@ -99,10 +107,11 @@ function setupScanGitCommonDir(): void {
   });
 }
 
-/** scan 公共 mock：readFileSync 读 gitdir 文件返回 <checkout>/.git */
+/** scan 公共 mock：readFileSync 读 gitdir 文件返回 <checkout>/.git；[MF#4] 读 mapping sidecar 返回 session 文件路径 */
 function setupScanGitdir(checkout: string): void {
   mockReadFileSync.mockImplementation((p: unknown) => {
     const s = String(p);
+    if (s.includes("pi-sub-orphan1.session")) return ORPHAN_SESSION_FILE;
     if (s.includes("gitdir")) return `${checkout}/.git`;
     return "";
   });
@@ -213,25 +222,38 @@ describe("WorktreeManager", () => {
   });
 
   describe("collectPatch", () => {
-    it("有暂存改动返回 patch 文件", () => {
+    it("有改动返回 patch 文件（[MF#2] git add -A + diff --cached；[MF#3] patchFile 在 worktree 外）", () => {
       const patchContent = "diff --git a/src/index.ts\n+// new line";
       mockExec.mockReturnValue(patchContent);
 
       const handle = makeHandle();
+      const patchFile = path.join(os.tmpdir(), `outside-${RECORD_ID}.patch`);
 
-      const result = mgr.collectPatch(handle);
+      const result = mgr.collectPatch(handle, patchFile);
 
       expect(result.failed).toBe(false);
-      expect(result.patchFile).toContain(".patch");
-      expect(result.patchFile).toContain(`pi-sub-${RECORD_ID}`);
+      expect(result.patchFile).toBe(patchFile);
+      // [MF#2] 先 git add -A 暂存（捕获未跟踪新文件）
+      expect(mockExec).toHaveBeenCalledWith(
+        "git",
+        ["add", "-A"],
+        expect.objectContaining({ cwd: handle.path }),
+      );
+      // [MF#2] 再 git diff --cached baseCommit（旧为 diff HEAD baseCommit 两参数，恒空）
+      expect(mockExec).toHaveBeenCalledWith(
+        "git",
+        ["diff", "--cached", BASE_COMMIT],
+        expect.objectContaining({ cwd: handle.path }),
+      );
     });
 
     it("无改动返回 failed=false", () => {
       mockExec.mockReturnValue("");
 
       const handle = makeHandle();
+      const patchFile = path.join(os.tmpdir(), `outside-${RECORD_ID}.patch`);
 
-      const result = mgr.collectPatch(handle);
+      const result = mgr.collectPatch(handle, patchFile);
 
       expect(result.failed).toBe(false);
     });
@@ -239,12 +261,12 @@ describe("WorktreeManager", () => {
 
   describe("scan", () => {
     it("清理终态且无活 .alive 的孤儿（remove 传 checkout 路径）", () => {
-      // worktrees 目录、.finalized、session 文件存在
+      // worktrees 目录、[MF#4] mapping sidecar、.finalized 存在
       mockExistsSync.mockImplementation((p: unknown) => {
         const s = String(p);
         if (s.endsWith("worktrees")) return true;
+        if (s.includes("pi-sub-orphan1.session")) return true;
         if (s.includes(".finalized")) return true;
-        if (s.includes("orphan1.jsonl")) return true;
         return false;
       });
 
@@ -275,8 +297,8 @@ describe("WorktreeManager", () => {
       mockExistsSync.mockImplementation((p: unknown) => {
         const s = String(p);
         if (s.endsWith("worktrees")) return true;
+        if (s.includes("pi-sub-orphan1.session")) return true;
         if (s.includes(".finalized")) return true;
-        if (s.includes("orphan1.jsonl")) return true;
         return false;
       });
 
@@ -290,6 +312,7 @@ describe("WorktreeManager", () => {
       mockIsProcessAlive.mockReturnValue(true);
 
       setupScanGitCommonDir();
+      setupScanGitdir(ORPHAN_CHECKOUT);
 
       mgr.scan(MAIN_CWD, AGENT_DIR);
 
@@ -305,7 +328,7 @@ describe("WorktreeManager", () => {
         const s = String(p);
         if (s.endsWith("worktrees")) return true;
         if (s.includes(".finalized")) return true;
-        if (s.includes("orphan1.jsonl")) return true;
+        if (s.includes("pi-sub-orphan1.session")) return true;
         return false;
       });
 
@@ -338,7 +361,7 @@ describe("WorktreeManager", () => {
         const s = String(p);
         if (s.endsWith("worktrees")) return true;
         if (s.includes(".finalized")) return true;
-        if (s.includes("orphan1.jsonl")) return true;
+        if (s.includes("pi-sub-orphan1.session")) return true;
         return false;
       });
 
@@ -346,8 +369,10 @@ describe("WorktreeManager", () => {
       mockReadAliveMarker.mockReturnValue(undefined);
 
       setupScanGitCommonDir();
-      // readFileSync 抛错（gitdir 元数据损坏）→ readCheckoutPath 返回 undefined → prune 兜底
-      mockReadFileSync.mockImplementation(() => {
+      // [MF#4] mapping sidecar 能读出 sessionFile；gitdir 元数据损坏 → readCheckoutPath 返回 undefined → prune 兑底
+      mockReadFileSync.mockImplementation((p: unknown) => {
+        const s = String(p);
+        if (s.includes("pi-sub-orphan1.session")) return ORPHAN_SESSION_FILE;
         throw new Error("ENOENT");
       });
 

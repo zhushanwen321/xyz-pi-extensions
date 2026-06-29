@@ -10,6 +10,7 @@
 // 设计信息见 docs/subagents/session-runner.md。
 
 import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { writeAliveMarker } from "../runtime/execution/alive-store.ts";
@@ -20,6 +21,7 @@ import type {
   ResourceLoaderLike,
   ResourceLoaderOptions,
   SdkLike,
+  SessionManagerLike,
 } from "../types.ts";
 import type {
   AgentEvent,
@@ -28,10 +30,11 @@ import type {
   SdkEvent,
   WorktreeHandle,
 } from "../types.ts";
+import { bestEffort } from "../utils/best-effort.ts";
 import { getAllToolCalls, updateFromEvent } from "./execution-record.ts";
 import type { ModelRegistryLike } from "./model-resolver.ts";
 import { collectResult } from "./output-collector.ts";
-import { encodeCwd } from "./path-encoding.ts";
+import { encodeCwd, getSubagentSessionDir as getSessionsDirByMainCwd, worktreeMappingFile } from "./path-encoding.ts";
 import { resolveSessionContext } from "./session-context-resolver.ts";
 import { IDENTITY_CUSTOM_TYPE } from "./session-reconstructor.ts";
 import { createTurnLimiter } from "./turn-limiter.ts";
@@ -309,7 +312,7 @@ async function createAndConfigureSession(
     // D-018: 优先 createBranchedSession，失败降级 forkFrom
     try {
       const branched = await createForkSession(
-        sdk, resolved.forkSource, resolved.effectiveCwd, resolved.sessionDir, input,
+        sdk, resolved.forkSource, resolved.effectiveCwd, resolved.sessionDir, input, ctx,
       );
       console.log(
         `[subagents] fork session: createBranched depth=${(input.parentForkDepth ?? 0) + 1}`,
@@ -319,7 +322,7 @@ async function createAndConfigureSession(
       // 两级降级：createBranchedSession 失败 → forkFrom
       try {
         const forked = await forkSessionFrom(
-          sdk, resolved.forkSource, resolved.effectiveCwd, resolved.sessionDir, input,
+          sdk, resolved.forkSource, resolved.effectiveCwd, resolved.sessionDir, input, ctx,
         );
         console.log(
           `[subagents] fork session: forkFrom (fallback) depth=${(input.parentForkDepth ?? 0) + 1}`,
@@ -342,83 +345,28 @@ async function createAndConfigureSession(
 }
 
 /**
- * fork 路径 1: createBranchedSession（D-018 优先，原地 mutate，体积更小）。
- * SDK SessionManager.createBranchedSession 返回完整 session。
+ * [MF#1] 共享装配：resourceLoader + createAgentSession + 工具过滤 +（fork 路径）alive marker。
+ *
+ * fork 与 from-scratch 路径唯一差异是 sessionManager 来源与 cwd——其余四步
+ * （appendSystemPrompt / ResourceLoader / createAgentSession / 工具过滤）完全一致，
+ * 抽到此函数避免 fork 路径漏接 resourceLoader/skill/tool 过滤。
  */
-async function createForkSession(
-  sdk: SdkLike,
-  forkSource: string,
-  effectiveCwd: string,
-  sessionDir: string,
-  _input: CreateSessionInput,
-): Promise<BuiltSession> {
-  if (!sdk.createBranchedSession) {
-    throw new Error("createBranchedSession not available in SDK");
-  }
-  const { session } = await sdk.createBranchedSession({
-    sessionFile: forkSource,
-    cwd: effectiveCwd,
-    sessionDir,
-  });
-  // fork 路径写 alive marker（sessionFile 就绪后立即写，窗口期最小化）
-  const sessionFile = session.sessionManager.getSessionFile();
-  if (sessionFile) {
-    writeAliveMarker(sessionFile, {
-      pid: process.pid,
-      id: session.sessionId,
-      startedAt: Date.now(),
-    });
-  }
-  return { session, sessionFile: sessionFile ?? undefined };
-}
-
-/**
- * fork 路径 2: forkFrom（D-018 降级，AC-6.3 两级）。
- * SDK SessionManager.forkFrom 返回完整 session。
- */
-async function forkSessionFrom(
-  sdk: SdkLike,
-  forkSource: string,
-  effectiveCwd: string,
-  sessionDir: string,
-  _input: CreateSessionInput,
-): Promise<BuiltSession> {
-  if (!sdk.forkFrom) {
-    throw new Error("forkFrom not available in SDK");
-  }
-  const { session } = await sdk.forkFrom(forkSource, {
-    cwd: effectiveCwd,
-    sessionDir,
-  });
-  // fork 路径写 alive marker
-  const sessionFile = session.sessionManager.getSessionFile();
-  if (sessionFile) {
-    writeAliveMarker(sessionFile, {
-      pid: process.pid,
-      id: session.sessionId,
-      startedAt: Date.now(),
-    });
-  }
-  return { session, sessionFile: sessionFile ?? undefined };
-}
-
-/**
- * 非 fork 路径：原有四步创建逻辑（行为不变）。
- */
-async function createSessionFromScratch(
+async function assembleSession(
   input: CreateSessionInput,
   ctx: SessionRunnerContext,
   sdk: SdkLike,
+  sessionManager: SessionManagerLike,
+  cwd: string,
 ): Promise<BuiltSession> {
-  // 步骤 1：appendSystemPrompt 组装
-  const fullAppend = buildAppendSystemPrompt(input.appendSystemPrompt, ctx.cwd, input.agentConfig);
+  // 步骤 1：appendSystemPrompt 组装（含环境块，防注入）
+  const fullAppend = buildAppendSystemPrompt(input.appendSystemPrompt, cwd, input.agentConfig);
 
-  // 步骤 2：ResourceLoader 构建 + reload
+  // 步骤 2：ResourceLoader 构建 + reload（发现 skills/agents）
   const additionalSkillPaths = [...ctx.skillDirs, input.skillPath].filter(
     (p): p is string => typeof p === "string" && p.length > 0,
   );
   const resourceLoader = buildResourceLoader(sdk, {
-    cwd: ctx.cwd,
+    cwd,
     agentDir: ctx.agentDir,
     appendSystemPrompt: fullAppend,
     additionalSkillPaths: additionalSkillPaths.length > 0 ? additionalSkillPaths : undefined,
@@ -426,23 +374,28 @@ async function createSessionFromScratch(
   await resourceLoader.reload();
 
   // 步骤 3：createAgentSession + 工具过滤
-  const subagentSessionDir = getSubagentSessionDir(ctx.agentDir, ctx.cwd);
   const { session } = await sdk.createAgentSession({
     model: input.resolved.model,
     thinkingLevel: input.resolved.thinkingLevel,
-    cwd: ctx.cwd,
+    cwd,
     resourceLoader,
     modelRegistry: ctx.modelRegistry,
-    sessionManager: sdk.SessionManager.create(ctx.cwd, subagentSessionDir),
+    sessionManager,
   });
 
-  // 步骤 4：工具过滤（subscribe 由 run() 负责）
+  // 步骤 4：工具过滤（subscribe 由 run() 负责）+ fork 路径 alive marker
   try {
     applyToolFilter(session, input.agentConfig);
-    return {
-      session,
-      sessionFile: session.sessionManager.getSessionFile() ?? undefined,
-    };
+    const sessionFile = session.sessionManager.getSessionFile() ?? undefined;
+    // fork 路径写 alive marker（sessionFile 就绪后立即写，窗口期最小化）
+    if (input.fork && sessionFile) {
+      writeAliveMarker(sessionFile, {
+        pid: process.pid,
+        id: session.sessionId,
+        startedAt: Date.now(),
+      });
+    }
+    return { session, sessionFile };
   } catch (err) {
     try { session.dispose(); } catch (disposeErr) {
       // dispose 是清理，失败不应掩盖原始 err。把 disposeErr 作为 cause 链上去，
@@ -454,6 +407,65 @@ async function createSessionFromScratch(
     }
     throw err;
   }
+}
+
+/**
+ * [MF#1] fork 路径 1: createBranchedSession（D-018 优先，原地 mutate，体积更小）。
+ *
+ * 真实 SDK 契约：createBranchedSession 是 SessionManager **实例方法**（返回新 session
+ * 文件路径 string|undefined），不是顶层导出。流程：open 源 session → 取 leafId →
+ * createBranchedSession 得新文件 → open 新文件为 SessionManager → assembleSession。
+ */
+async function createForkSession(
+  sdk: SdkLike,
+  forkSource: string,
+  effectiveCwd: string,
+  sessionDir: string,
+  _input: CreateSessionInput,
+  ctx: SessionRunnerContext,
+): Promise<BuiltSession> {
+  const sourceSm = sdk.SessionManager.open(forkSource);
+  const leafId = sourceSm.getLeafId();
+  if (leafId === null) {
+    throw new Error("source session has no leaf entry (cannot branch)");
+  }
+  const branchedFile = sourceSm.createBranchedSession(leafId);
+  if (branchedFile === undefined) {
+    throw new Error("createBranchedSession returned undefined (source session not persisting?)");
+  }
+  const sessionManager = sdk.SessionManager.open(branchedFile, sessionDir, effectiveCwd);
+  return assembleSession(_input, ctx, sdk, sessionManager, effectiveCwd);
+}
+
+/**
+ * [MF#1] fork 路径 2: forkFrom（D-018 降级，AC-6.3 两级）。
+ *
+ * 真实 SDK 契约：forkFrom 是 SessionManager **静态方法**（返回 SessionManager 实例），
+ * 签名 forkFrom(sourcePath, targetCwd, sessionDir?)——三个位置参数，不是 (src, opts)。
+ */
+async function forkSessionFrom(
+  sdk: SdkLike,
+  forkSource: string,
+  effectiveCwd: string,
+  sessionDir: string,
+  _input: CreateSessionInput,
+  ctx: SessionRunnerContext,
+): Promise<BuiltSession> {
+  const sessionManager = sdk.SessionManager.forkFrom(forkSource, effectiveCwd, sessionDir);
+  return assembleSession(_input, ctx, sdk, sessionManager, effectiveCwd);
+}
+
+/**
+ * 非 fork 路径：原有四步创建逻辑（行为不变，改走共享 assembleSession）。
+ */
+async function createSessionFromScratch(
+  input: CreateSessionInput,
+  ctx: SessionRunnerContext,
+  sdk: SdkLike,
+): Promise<BuiltSession> {
+  const subagentSessionDir = getSubagentSessionDir(ctx.agentDir, ctx.cwd);
+  const sessionManager = sdk.SessionManager.create(ctx.cwd, subagentSessionDir);
+  return assembleSession(input, ctx, sdk, sessionManager, ctx.cwd);
 }
 
 // ============================================================
@@ -607,6 +619,25 @@ export async function run(
 
     // session 创建成功：回填 sessionFile（FR-7 窗口期方案）。
     record.sessionFile = built.session.sessionManager.getSessionFile() ?? undefined;
+
+    // [MF#4] worktree 模式：落盘 branch→sessionFile 映射 sidecar，供 reaper 定位 session 文件。
+    // reaper 从 worktree 注册表目录名只能拿到 recordId（branch=pi-sub-<recordId>），
+    // 而 session 文件由 SDK 命名为 <date>-<uuid>.jsonl——不写映射则 reaper 永远找不到 session。
+    if (opts.worktree && record.sessionFile) {
+      try {
+        // [MF#4] 用 path-encoding 的 getSubagentSessionDir（与 worktree-manager reaper 读取一致），
+        // 不能用本文件局部的 getSubagentSessionDir（目录段顺序不同）。
+        const sessionsDir = getSessionsDirByMainCwd(ctx.agentDir, ctx.mainCwd);
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        fs.writeFileSync(
+          worktreeMappingFile(sessionsDir, opts.worktree.branch),
+          record.sessionFile,
+          "utf-8",
+        );
+      } catch (err) {
+        bestEffort(err, "write worktree→session mapping (MF#4)");
+      }
+    }
 
     // 写 identity custom entry：session.jsonl 的 header 不含 ExecutionRecord.id/agent/mode，
     // 故在此写一条 custom entry 携带身份，collectRecords 重建时读它恢复 record 身份。

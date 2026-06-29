@@ -32,6 +32,15 @@ export function resolveSessionContext(input: SessionResolveInput): ResolvedSessi
   const shouldFork = fork === true;
   const forkSource = shouldFork ? mainSessionFile : undefined;
 
+  // [MF#5] fork 显式请求但主 session 文件不可用（session_start 未缓存）时直接抛错，
+  // 不静默降级到 from-scratch——否则用户显式 fork 却得到无继承 session，且无任何告警。
+  if (shouldFork && !forkSource) {
+    throw new Error(
+      "fork requested but main session file is unavailable " +
+        "(session_start did not cache it); cannot fork without a source session",
+    );
+  }
+
   // effectiveCwd: worktree 模式用 handle.path（真实 checkout，由调用方传入），
   // 否则用显式 cwd 或 mainCwd。worktreePath 与 worktree 标志同源（都来自 WorktreeHandle），
   // 不再靠 tmpdir 拼凑，保证 effectiveCwd 与实际 checkout 严格一致。

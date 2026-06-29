@@ -16,7 +16,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { getSubagentSessionDir } from "../core/path-encoding.ts";
+import { getSubagentSessionDir,worktreeMappingFile } from "../core/path-encoding.ts";
 import type { PatchResult,WorktreeHandle } from "../types.ts";
 import { DirtyWorktreeError } from "../types.ts";
 import { bestEffort } from "../utils/best-effort.ts";
@@ -92,18 +92,27 @@ export class WorktreeManager {
   }
 
   /**
-   * 收集 worktree 的暂存区 patch。
+   * 收集 worktree 的改动为 patch。
+   *
+   * [MF#3] patchFile 由调用方指定（写在 worktree 之外，避免被 cleanup 删除）。
+   * [MF#2] 先 git add -A 暂存全部改动（含未跟踪新文件），再 git diff --cached baseCommit
+   * 对比暂存区与 base commit。旧实现 `git diff HEAD baseCommit` 是树 vs 树对比：
+   * worktree HEAD 初始即 baseCommit，子 agent 不提交时 HEAD 仍 == baseCommit → diff 恒空 → 改动丢失。
    *
    * @param handle worktree handle
+   * @param patchFile patch 输出路径（须在 worktree 之外）
    * @returns patch 结果（patchFile 路径 + failed 标记）
-   * @throws Error git diff 失败且无输出时
    */
-  collectPatch(handle: WorktreeHandle): PatchResult {
-    const patchFile = path.join(handle.path, `.${handle.branch}.patch`);
-
-    // git diff HEAD：包含暂存区 + 未暂存的修改（AI agent 通常不会主动 git add）
+  collectPatch(handle: WorktreeHandle, patchFile: string): PatchResult {
+    // git add -A：暂存全部改动（含未跟踪新文件），使后续 --cached diff 能捕获新建文件
+    try {
+      this.gitRun(["add", "-A"], { cwd: handle.path });
+    } catch (err) {
+      // add 失败不致命：继续尝试 diff，最差得到部分 diff（仅已跟踪文件的改动）
+      bestEffort(err, "git add -A (collectPatch)");
+    }
     const diff = this.gitRun(
-      ["diff", "HEAD", handle.baseCommit],
+      ["diff", "--cached", handle.baseCommit],
       { cwd: handle.path },
     );
 
@@ -253,12 +262,23 @@ export class WorktreeManager {
 
   /**
    * 在 agentDir 下查找 recordId 对应的 session 文件。
-   * 匹配 `<id>.jsonl` 模式。
+   *
+   * [MF#4] session 文件由 SDK 命名为 <date>-<uuid>.jsonl，recordId 仅存在于文件内部
+   * identity entry——旧实现查 <recordId>.jsonl 恒不存在 → reaper 永不清理孤儿 worktree。
+   * 改读 session-runner.run() 落盘的 branch→sessionFile 映射 sidecar（<branch>.session）。
    */
   private findSessionFile(agentDir: string, mainCwd: string, recordId: string): string | undefined {
-    // session 文件存储在 agentDir/subagents/sessions/<encodedCwd>/<recordId>.jsonl
     const sessionsDir = getSubagentSessionDir(agentDir, mainCwd);
-    const candidate = path.join(sessionsDir, `${recordId}.jsonl`);
-    return fs.existsSync(candidate) ? candidate : undefined;
+    const branch = `pi-sub-${recordId}`;
+    const mappingFile = worktreeMappingFile(sessionsDir, branch);
+    if (!fs.existsSync(mappingFile)) {
+      return undefined;
+    }
+    try {
+      const sessionFile = fs.readFileSync(mappingFile, "utf-8").trim();
+      return sessionFile.length > 0 ? sessionFile : undefined;
+    } catch {
+      return undefined;
+    }
   }
 }
