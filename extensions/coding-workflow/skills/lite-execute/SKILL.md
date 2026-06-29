@@ -11,7 +11,7 @@ description: >-
 
 # 轻量执行（Lite Execute）
 
-读取 lite-plan 产出的 plan.md，在 goal 模式下用 subagent 按 Wave 并行实现，用 worktree 隔离让测试 ‖ code-review 并行互不影响，失败自动回 Wave 修复（限 3 轮），全绿后收尾。
+读取 lite-plan 产出的 plan.md，在 goal 模式下用 subagent 按 Wave 并行实现，用 worktree 隔离让测试 ‖ code-review ensemble 并行互不影响，失败自动回 Wave 修复（限 3 轮），全绿后收尾。
 
 > **[铁律] 严格 TDD。** 每个 implementer 先写失败测试、跑确认失败、再实现、再跑通过。不接受"先写代码后补测试"。
 >
@@ -49,8 +49,8 @@ description: >-
   ↓
 阶段 B 测试验收（多任务严格执行）
   清开发 todo → 按测试用例逐条建验收 todo（U*/E*/覆盖率/回归）
-  → 建 2 个 worktree（test/review）→ 派 test-runner ‖ code-review 并行（wait:false）
-  → test-runner 跑单测+E2E+覆盖率判 pass/fail；code-review 只读审查出 must_fix
+  → 建 2 个 worktree（test/review）→ 派 test-runner ‖ code-review ensemble（2 路只读 reviewer 共享 review worktree，wait:false）
+  → test-runner 跑单测+E2E+覆盖率判 pass/fail；2 路 reviewer 各聚焦不同维度出 must_fix（并集去重）
   → 失败 → 回阶段 A 修复（限 3 轮，超限 Stagnation 暂停）
   ↓
 阶段 C 收尾
@@ -78,7 +78,7 @@ description: >-
 测试验收（严格执行）：
 - [ ] **每条测试用例（U*, E*）有独立 todo**，逐个验证
 - [ ] 验收 todo 全部 completed（无遗留 pending）
-- [ ] test-runner 和 code-review 在独立 worktree 并行执行（互不影响）
+- [ ] test-runner 独立 worktree；2 路 reviewer 共享 review worktree 并行只读审查（must_fix 并集去重，[NEEDS-VERIFY] 已复核）
 - [ ] 失败循环未超 3 轮（超限已 Stagnation 暂停）
 
 收尾：

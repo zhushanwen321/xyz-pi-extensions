@@ -168,41 +168,58 @@ todo(action='add', texts=[
 > **每条用例（U*/E*）各自一个 todo，不打包。** 单测也按条拆（不是「U1-U{N} 全绿」打包一条），E2E 按业务用例拆。失败能精确定位到哪条用例，与 lite-execute [铁律]「每条测试用例各自独立 todo」一致。
 > 验收 todo 全部 isVerification 性质（必须 completed，不可跳过）。todo 支持 isVerification 参数则标记；否则在描述注明 [验收] 强制执行。
 
-### B2. 建 worktree + 派 test-runner ‖ code-review（并行隔离）⚠️ 不可逆操作
+### B2. 建 worktree + 派 test-runner ‖ code-review ensemble（并行隔离）⚠️ 不可逆操作
 
-> **与 A7 早启动 review 的衔接**：若阶段 A 已早启动 review 且已完成 → 这里只派 test-runner，收集 A7 已产出的 must_fix 清单，不重复全程派 review；若 review 未早启动（单 Wave）或未完成 → 维持下方做法（test-runner ‖ code-review 并行）。
+> **code-review ensemble（默认启用）**：code-review 是主观判断任务（评估质量、找问题），单路 review 有遗漏率（5 维度里某个维度弱、某文件没细看）。派 2 个 reviewer 各自聚焦不同维度，must_fix 清单并集——直接攻击单路遗漏。reviewer 纯只读（tools: read），**2 个 reviewer 共享同一个 review worktree 并行只读完全安全**（无写入、无 git index 冲突），worktree 数量不增加。
+
+> **与 A7 早启动 review 的衔接**：若阶段 A 已早启动 review（单路，只审单个 Wave diff）且已完成 → 这里只派 test-runner，收集 A7 的 must_fix 清单并入下方 2 路 ensemble 结果；若 review 未早启动（单 Wave）或未完成 → 维持下方做法（test-runner ‖ 2 路 code-review ensemble 并行）。
 
 ```bash
 bash ~/.claude/skills/create-worktree/create-worktree.sh feat/lite-test <base-含全部改动>
 bash ~/.claude/skills/create-worktree/create-worktree.sh feat/lite-review <base-含全部改动>
 ```
 
-同消息派 2 个后台 subagent（详见 `subagent-dispatch.md`）：
+同消息派 3 个后台 subagent（test-runner 1 个 + reviewer 2 个共享 wt-review，详见 `subagent-dispatch.md`）：
 
 ```
 调用1（test-runner，cwd=wt-test）：
   agent: <test-runner>, wait: false, cwd: <wt-test>
   task: "跑单测+E2E+覆盖率，对照 plan 用例 U*-E* 逐条判定 pass/fail，报告覆盖率数值"
 
-调用2（code-review，cwd=wt-review）：
+调用2（reviewer-正确性组，cwd=wt-review）：
   agent: "reviewer", wait: false, cwd: <wt-review>
-  task: "只读审查 git diff，5 维度出 must_fix/should_fix/nit"
+  task: "只读审查 git diff，聚焦【业务逻辑正确性 + 类型安全 + 边界条件】，出 must_fix/should_fix/nit"
+
+调用3（reviewer-质量组，cwd=wt-review）：
+  agent: "reviewer", wait: false, cwd: <wt-review>
+  task: "只读审查 git diff，聚焦【测试覆盖 + 代码规范 + 边界条件】，出 must_fix/should_fix/nit"
 ```
 
-两条 start 返回后 STOP，notifier 唤醒后汇总。
+> **差异化（ensemble 的关键，否则 N 路盲区高度相关无增益）**：2 路 reviewer 认知方向不同——正确性组问「跑起来对不对」（与实现同向），质量组问「写得好不好」（与实现正交）。**边界条件是两路都跑的重叠维度**——它是 5 维度里最易漏且代价最大的一类（空值/并发/最大值），对它叠加冗余（两路独立找边界问题，并集）。
 
-> **为什么隔离**：test-runner 跑 E2E 有副作用（起服务/写文件），code-review 纯只读。各自 worktree 保证 review 看到干净代码态，测试副作用不污染 review。
+三条 start 返回后 STOP，notifier 唤醒后汇总。
+
+> **为什么隔离**：test-runner 跑 E2E 有副作用（起服务/写文件），reviewer 纯只读。test-runner 独立 worktree 保证 review 看到干净代码态，测试副作用不污染 review。**2 个 reviewer 共享 wt-review**：两者都纯只读（tools: read），无写入无副作用，并行读同一份代码完全安全，不需各建 worktree。
 
 ### B3. 结果汇总 + todo 更新
 
 ```
 test-runner：逐条用例 pass/fail + 覆盖率数值
-code-review：must_fix 清单
+reviewer-正确性组：must_fix/should_fix/nit 清单
+reviewer-质量组：must_fix/should_fix/nit 清单
+
+2 路 reviewer 清单并集去重（按「文件:行 + 问题」去重）：
+  - 两路都报同一问题 → [HIGH-CONFIDENCE]（明显问题，必修）
+  - 仅一路报 → [NEEDS-VERIFY]（边缘问题，主 agent 复核确认后转必修或丢弃）
+  - 趋同检测：2 路重合度 > 80%（都报同样几个问题）→ 该次改动 review 收敛，
+    记 `review_ensemble_overlap: high`（说明该 Wave review 单路已够，未来同类可降级单路）
 
 逐条更新验收 todo：
   pass 的用例 → todo 标 completed
   fail 的用例 → todo 保持 pending（进失败循环）
 ```
+
+> **review 并集不替代 test-runner**：review 找的是代码质量问题（逻辑/类型/边界/规范），test-runner 找的是测试失败。两者正交——review 全过不等于测试全绿，反之亦然。失败循环（B4）同时处理两者。
 
 ### B3.5 失败定位纪律（派 implementer 修复前必做）
 
@@ -238,7 +255,7 @@ code-review：must_fix 清单
 ### B5. 副作用隔离注意
 
 - 有副作用的 E2E（起服务、写文件、改 DB）**只在 test-runner 的 worktree 跑**
-- code-review 纯只读（tools: read），无副作用，但仍独立 worktree 保证看到干净代码态
+- 2 路 reviewer 纯只读（tools: read），无副作用，共享 wt-review 保证看到干净代码态
 - E2E 需启动被测服务时，test-runner 的 worktree 负责；不在主会话起（污染）
 
 ## 阶段 C：收尾 ⚠️ 不可逆操作
