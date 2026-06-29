@@ -231,6 +231,9 @@ export interface AliveMarker {
 export interface PatchResult {
   readonly patchFile: string;
   readonly failed: boolean;
+  /** patch 是否实际写入 patchFile。true=diff 非空且写盘成功；false=空 diff 或写失败。
+   *  调用方据此回填 record.patchFile，避免悬空路径（`git apply` 不存在的文件）。 */
+  readonly written: boolean;
 }
 
 /** resolveAgentIdentity 的入参。 */

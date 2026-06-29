@@ -561,7 +561,9 @@ export class SubagentService {
         const patchFile = path.join(sessionsDir, `${record.worktreeHandle.branch}.patch`);
         const patch = this.worktreeManager.collectPatch(record.worktreeHandle, patchFile);
         patchOk = !patch.failed;
-        record.patchFile = patchFile;
+        // 仅 patch 实际写盘（非空 diff 且未失败）才回填，避免指向不存在文件的悬空路径——
+        // 否则 notifier/render/sync 路径会向 LLM 输出 `git apply <不存在>`（纯查询任务命中）。
+        if (patch.written) record.patchFile = patchFile;
       } catch {
         patchOk = false;
       }

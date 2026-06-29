@@ -233,6 +233,7 @@ describe("WorktreeManager", () => {
       const result = mgr.collectPatch(handle, patchFile);
 
       expect(result.failed).toBe(false);
+      expect(result.written).toBe(true);
       expect(result.patchFile).toBe(patchFile);
       // [MF#2] 先 git add -A 暂存（捕获未跟踪新文件）
       expect(mockExec).toHaveBeenCalledWith(
@@ -248,7 +249,7 @@ describe("WorktreeManager", () => {
       );
     });
 
-    it("无改动返回 failed=false", () => {
+    it("无改动返回 failed=false, written=false（不写文件）", () => {
       mockExec.mockReturnValue("");
 
       const handle = makeHandle();
@@ -257,6 +258,7 @@ describe("WorktreeManager", () => {
       const result = mgr.collectPatch(handle, patchFile);
 
       expect(result.failed).toBe(false);
+      expect(result.written).toBe(false);
     });
   });
 

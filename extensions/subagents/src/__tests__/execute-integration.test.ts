@@ -54,7 +54,7 @@ const { mockWorktreeManager } = vi.hoisted(() => ({
       mainCwd: cwd,
     })),
     cleanup: vi.fn(),
-    collectPatch: vi.fn(() => ({ patchFile: "/fake.patch", failed: false })),
+    collectPatch: vi.fn(() => ({ patchFile: "/fake.patch", failed: false, written: true })),
     scan: vi.fn(),
   },
 }));
@@ -239,7 +239,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     }));
     mockWorktreeManager.cleanup.mockReset();
     mockWorktreeManager.collectPatch.mockReset();
-    mockWorktreeManager.collectPatch.mockImplementation(() => ({ patchFile: "/fake.patch", failed: false }));
+    mockWorktreeManager.collectPatch.mockImplementation(() => ({ patchFile: "/fake.patch", failed: false, written: true }));
     mockWorktreeManager.scan.mockReset();
     vi.mocked(writeFinalized).mockReset();
     vi.mocked(removeAliveMarker).mockReset();
@@ -726,8 +726,39 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     expect(collectOrder).toBeLessThan(cleanupOrder);
   });
 
+  it("finalizeRecord [MF-empty-diff]: collectPatch 无改动(written:false) → record.patchFile 不回填", async () => {
+    mockWorktreeManager.collectPatch.mockImplementation(() => ({ patchFile: "/fake.patch", failed: false, written: false }));
+    const handle = makeFakeSession({ promptBehavior: { kind: "resolve" } });
+    fakeSdkSlot.current = makeBranchedSdk(handle.session);
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-wt-"));
+    agentDirs.push(agentDir);
+    const modelService = new ModelConfigService({ agentDir });
+    modelService.initModel({
+      modelRegistry: makeEmptyRegistry(),
+      sessionId: "exec-wt",
+      ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
+    });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
+    service.initSession({ pi: makePi(), sessionId: "exec-wt" });
+    const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
+
+    const result = await service.execute({
+      task: "no changes",
+      wait: true,
+      ctxModel,
+      fork: true,
+    });
+
+    // 纯查询/分析任务：子 agent 零改动 → collectPatch written:false → patchFile 不回填，
+    // 避免 notifier/render/sync 路径输出 `git apply <不存在>`。
+    if (result.mode !== "sync") throw new Error("test setup: expected sync handle");
+    expect(result.details.patchFile).toBeUndefined();
+    // failed:false → patchOk=true → cleanup 仍执行（worktree 正常回收）
+    expect(mockWorktreeManager.cleanup).toHaveBeenCalled();
+  });
+
   it("finalizeRecord D-022: collectPatch failed → cleanup 跳过, finalized 仍执行", async () => {
-    mockWorktreeManager.collectPatch.mockImplementation(() => ({ patchFile: "/fake.patch", failed: true }));
+    mockWorktreeManager.collectPatch.mockImplementation(() => ({ patchFile: "/fake.patch", failed: true, written: false }));
     const handle = makeFakeSession({ promptBehavior: { kind: "resolve" } });
     fakeSdkSlot.current = makeBranchedSdk(handle.session);
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-wt-"));

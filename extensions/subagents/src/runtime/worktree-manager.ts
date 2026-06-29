@@ -118,7 +118,9 @@ export class WorktreeManager {
    *
    * @param handle worktree handle
    * @param patchFile patch 输出路径（须在 worktree 之外）
-   * @returns patch 结果（patchFile 路径 + failed 标记）
+   * @returns patch 结果（patchFile 路径 + failed/written 标记）。
+   *   written=true 仅当 diff 非空且写盘成功；空 diff 或写失败均 written=false，
+   *   调用方据此回填 record.patchFile，避免悬空路径（`git apply` 不存在的文件）。
    */
   collectPatch(handle: WorktreeHandle, patchFile: string): PatchResult {
     // git add -A：暂存全部改动（含未跟踪新文件），使后续 --cached diff 能捕获新建文件
@@ -134,14 +136,15 @@ export class WorktreeManager {
     );
 
     if (diff.length === 0) {
-      return Object.freeze({ patchFile, failed: false });
+      // 无改动：不写文件，written=false（与有改动写成功区分）
+      return Object.freeze({ patchFile, failed: false, written: false });
     }
 
     try {
       fs.writeFileSync(patchFile, diff, "utf-8");
-      return Object.freeze({ patchFile, failed: false });
+      return Object.freeze({ patchFile, failed: false, written: true });
     } catch {
-      return Object.freeze({ patchFile, failed: true });
+      return Object.freeze({ patchFile, failed: true, written: false });
     }
   }
 
