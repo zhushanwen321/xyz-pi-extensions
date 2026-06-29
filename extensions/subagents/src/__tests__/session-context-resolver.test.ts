@@ -1,7 +1,6 @@
 // src/__tests__/session-context-resolver.test.ts
 //
 // 覆盖 resolveSessionContext 全部 5 种输入组合 + ForkDepthExceededError 边界。
-import * as os from "node:os";
 import * as path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -49,35 +48,33 @@ describe("resolveSessionContext", () => {
   });
 
   // ── 边界 3: fork=false, worktree=true ──
-  it("fork=false, worktree=true → effectiveCwd=tmpdir/pi-sub-<recordId>", () => {
-    const recordId = "run-42";
+  it("fork=false, worktreePath 提供 → effectiveCwd=worktreePath", () => {
+    const worktreePath = "/tmp/pi-sub-run-42";
     const result = resolveSessionContext({
       fork: false,
-      worktree: true,
       mainCwd: MAIN_CWD,
       agentDir: AGENT_DIR,
-      recordId,
+      worktreePath,
     });
     expect(result.shouldFork).toBe(false);
     expect(result.forkSource).toBeUndefined();
-    expect(result.effectiveCwd).toBe(path.join(os.tmpdir(), `pi-sub-${recordId}`));
+    expect(result.effectiveCwd).toBe(worktreePath);
     expect(result.sessionDir).toBe(expectedSessionDir(MAIN_CWD));
   });
 
   // ── 边界 4: fork=true, worktree=true ──
-  it("fork=true, worktree=true → shouldFork=true + worktree effectiveCwd", () => {
-    const recordId = "bg-7-abc";
+  it("fork=true, worktreePath 提供 → shouldFork=true + effectiveCwd=worktreePath", () => {
+    const worktreePath = "/tmp/pi-sub-bg-7-abc";
     const result = resolveSessionContext({
       fork: true,
-      worktree: true,
       mainCwd: MAIN_CWD,
       mainSessionFile: SESSION_FILE,
       agentDir: AGENT_DIR,
-      recordId,
+      worktreePath,
     });
     expect(result.shouldFork).toBe(true);
     expect(result.forkSource).toBe(SESSION_FILE);
-    expect(result.effectiveCwd).toBe(path.join(os.tmpdir(), `pi-sub-${recordId}`));
+    expect(result.effectiveCwd).toBe(worktreePath);
     expect(result.sessionDir).toBe(expectedSessionDir(MAIN_CWD));
   });
 
@@ -117,16 +114,15 @@ describe("resolveSessionContext", () => {
   });
 
   // ── sessionDir 始终用 mainCwd 编码（非 effectiveCwd）──
-  it("sessionDir always encoded from mainCwd even when worktree overrides effectiveCwd", () => {
+  it("sessionDir always encoded from mainCwd even when worktreePath overrides effectiveCwd", () => {
     const mainCwd = "/Users/alice/code/my-app";
     const result = resolveSessionContext({
       fork: false,
-      worktree: true,
       mainCwd,
       agentDir: AGENT_DIR,
-      recordId: "run-1",
+      worktreePath: "/tmp/pi-sub-run-1",
     });
-    // effectiveCwd 是 tmpdir 路径，但 sessionDir 仍基于 mainCwd
+    // effectiveCwd 是 worktree checkout，但 sessionDir 仍基于 mainCwd
     expect(result.effectiveCwd).not.toBe(mainCwd);
     expect(result.sessionDir).toBe(expectedSessionDir(mainCwd));
   });

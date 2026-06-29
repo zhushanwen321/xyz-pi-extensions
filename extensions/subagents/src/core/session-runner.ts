@@ -155,8 +155,6 @@ interface CreateSessionInput {
   worktree?: WorktreeHandle;
   /** 父级 fork depth。 */
   parentForkDepth?: number;
-  /** 执行记录 ID（worktree=true 时计算 effectiveCwd 需要）。 */
-  recordId?: string;
 }
 
 /** createAndConfigureSession 的输出。 */
@@ -299,13 +297,12 @@ async function createAndConfigureSession(
   // ── fork 分流：resolveSessionContext 纯函数判定意图 ──
   const resolved = resolveSessionContext({
     fork: input.fork,
-    worktree: input.worktree !== undefined,
     cwd: ctx.cwd,
     mainCwd: ctx.mainCwd,
     mainSessionFile: ctx.mainSessionFile,
     parentForkDepth: input.parentForkDepth,
     agentDir: ctx.agentDir,
-    recordId: input.recordId,
+    worktreePath: input.worktree?.path,
   });
 
   if (resolved.shouldFork && resolved.forkSource) {
@@ -603,7 +600,6 @@ export async function run(
         fork: opts.fork,
         worktree: opts.worktree,
         parentForkDepth: opts.parentForkDepth,
-        recordId: record.id,
       },
       ctx,
       ctx.sdk,

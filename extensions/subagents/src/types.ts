@@ -212,9 +212,12 @@ export interface AgentResult {
  * Object.freeze 守卫保证不可变。
  */
 export interface WorktreeHandle {
+  /** checkout 目录（子 agent 工作目录，tmpdir 下）。 */
   readonly path: string;
   readonly branch: string;
   readonly baseCommit: string;
+  /** 主仓库根目录（cleanup/scan 需要，不再靠路径反推）。 */
+  readonly mainCwd: string;
 }
 
 /** alive marker：子进程存活标记，用于心跳检测和 crash 推断。 */
@@ -250,15 +253,14 @@ export interface SessionContext {
 /** resolveSessionContext 纯函数的入参（#3 SessionContextResolver）。 */
 export interface SessionResolveInput {
   fork?: boolean;
-  worktree?: boolean;
   cwd?: string;
   mainCwd: string;
   mainSessionFile?: string;
   parentForkDepth?: number;
   /** agent 配置目录（getSubagentSessionDir 需要）。 */
   agentDir: string;
-  /** 执行记录 ID（worktree=true 时计算 effectiveCwd 需要）。 */
-  recordId?: string;
+  /** worktree checkout 路径（来自 WorktreeHandle.path，作为 effectiveCwd）。 */
+  worktreePath?: string;
 }
 
 /** resolveSessionContext 纯函数的返回值。 */

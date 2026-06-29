@@ -49,6 +49,7 @@ const { mockWorktreeManager } = vi.hoisted(() => ({
       path: `/fake/worktree/${id}`,
       branch: `pi-sub-${id}`,
       baseCommit: "abc123",
+      mainCwd: cwd,
     })),
     cleanup: vi.fn(),
     collectPatch: vi.fn(() => ({ patchFile: "/fake.patch", failed: false })),
@@ -229,6 +230,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       path: `/fake/worktree/${id}`,
       branch: `pi-sub-${id}`,
       baseCommit: "abc123",
+      mainCwd: cwd,
     }));
     mockWorktreeManager.cleanup.mockReset();
     mockWorktreeManager.collectPatch.mockReset();

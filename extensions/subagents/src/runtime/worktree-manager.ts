@@ -6,18 +6,21 @@
 //   - gitRun 是唯一 git 命令出口，统一超时/错误包装
 //   - recordId 白名单 `^[\w-]+$` 防止路径注入
 //   - clean tree 前置校验防止创建脏 worktree
+//   - checkout 放 os.tmpdir()（脱离 .git/），兼容普通 repo 与 bare+worktree 结构
+//   - mainCwd 存入 handle，不靠路径反推
 //   - scan 只删终态且无活 .alive 的孤儿（绝不删有活进程的 worktree）
 //   - Object.freeze 保证 WorktreeHandle 不可变
 
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
+import { getSubagentSessionDir } from "../core/path-encoding.ts";
 import type { PatchResult,WorktreeHandle } from "../types.ts";
 import { DirtyWorktreeError } from "../types.ts";
+import { bestEffort } from "../utils/best-effort.ts";
 import { isProcessAlive,readAliveMarker } from "./execution/alive-store.ts";
-
-import { getSubagentSessionDir } from "../core/path-encoding.ts";
 
 // recordId 白名单：字母数字下划线短横线
 const SAFE_ID_RE = /^[\w-]+$/;
@@ -26,7 +29,7 @@ const SAFE_ID_RE = /^[\w-]+$/;
 const GIT_TIMEOUT_MS = 30_000;
 
 // .alive 软超时（24h）：PID 复用兜底（D-021）
-const ALIVE_SOFT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+const ALIVE_SOFT_TIMEOUT_MS = 86_400_000; // 24h in ms
 
 export class WorktreeManager {
   /**
@@ -47,7 +50,10 @@ export class WorktreeManager {
 
     const baseCommit = this.gitRun(["rev-parse", "HEAD"], { cwd: mainCwd });
     const branch = `pi-sub-${recordId}`;
-    const worktreePath = path.join(mainCwd, ".git", "worktrees", branch);
+    // checkout 放 tmpdir，脱离 .git/ 目录结构。
+    // 这样 git 自行把元数据注册到 <commonDir>/worktrees/<branch>/，
+    // 普通repo（.git/worktrees）与 bare+worktree（.bare/worktrees）都能正确工作。
+    const worktreePath = path.join(os.tmpdir(), branch);
 
     this.gitRun(["worktree", "add", "-b", branch, worktreePath, "HEAD"], {
       cwd: mainCwd,
@@ -64,6 +70,7 @@ export class WorktreeManager {
       path: worktreePath,
       branch,
       baseCommit,
+      mainCwd,
     });
 
     return handle;
@@ -72,17 +79,15 @@ export class WorktreeManager {
   /**
    * 清理 worktree：git worktree remove --force + git branch -D 成对执行。
    *
-   * @param handle 要清理的 worktree handle
+   * @param handle 要清理的 worktree handle（含 mainCwd，不靠路径反推）
    */
   cleanup(handle: WorktreeHandle): void {
-    const mainCwd = this.inferMainCwd(handle.path);
-
     this.gitRun(["worktree", "remove", "--force", handle.path], {
-      cwd: mainCwd,
+      cwd: handle.mainCwd,
     });
 
     this.gitRun(["branch", "-D", handle.branch], {
-      cwd: mainCwd,
+      cwd: handle.mainCwd,
     });
   }
 
@@ -124,8 +129,10 @@ export class WorktreeManager {
    * @param agentDir agent 目录（session 文件所在）
    */
   scan(mainCwd: string, agentDir: string): void {
-    const gitDir = this.gitRun(["rev-parse", "--git-dir"], { cwd: mainCwd });
-    const worktreesRoot = path.resolve(mainCwd, gitDir, "worktrees");
+    // --git-common-dir：普通repo 返回 .git，bare+worktree 返回 .bare。
+    // 这是 git worktree 元数据注册表的共享根，两种结构都能正确解析。
+    const commonDir = this.gitRun(["rev-parse", "--git-common-dir"], { cwd: mainCwd });
+    const worktreesRoot = path.resolve(mainCwd, commonDir, "worktrees");
 
     if (!fs.existsSync(worktreesRoot)) {
       return;
@@ -139,7 +146,7 @@ export class WorktreeManager {
     }
 
     for (const name of entries) {
-      const wtPath = path.join(worktreesRoot, name);
+      const wtEntryDir = path.join(worktreesRoot, name);
       const recordId = name.slice("pi-sub-".length);
       const sessionFile = this.findSessionFile(agentDir, mainCwd, recordId);
       if (sessionFile === undefined) {
@@ -164,15 +171,27 @@ export class WorktreeManager {
 
       // 是孤儿，执行清理
       const branch = `pi-sub-${recordId}`;
-      try {
-        this.gitRun(["worktree", "remove", "--force", wtPath], { cwd: mainCwd });
-      } catch {
-        // best-effort：worktree remove 失败不阻断
+      // 从注册表 gitdir 文件读 checkout 路径（gitdir 内容 = <checkout>/.git）。
+      // 不能直接用注册表目录 wtEntryDir，那是 git 内部路径，不是 checkout。
+      const checkoutPath = this.readCheckoutPath(wtEntryDir);
+      if (checkoutPath !== undefined) {
+        try {
+          this.gitRun(["worktree", "remove", "--force", checkoutPath], { cwd: mainCwd });
+        } catch (err) {
+          bestEffort(err, "worktree remove (orphan reaper)");
+        }
+      } else {
+        // gitdir 文件缺失（元数据损坏）或 checkout 路径异常：prune 兑底清理残留元数据
+        try {
+          this.gitRun(["worktree", "prune"], { cwd: mainCwd });
+        } catch (err) {
+          bestEffort(err, "worktree prune (orphan reaper)");
+        }
       }
       try {
         this.gitRun(["branch", "-D", branch], { cwd: mainCwd });
-      } catch {
-        // best-effort：branch delete 失败不阻断
+      } catch (err) {
+        bestEffort(err, "branch delete (orphan reaper)");
       }
     }
   }
@@ -213,13 +232,23 @@ export class WorktreeManager {
   }
 
   /**
-   * 从 worktree path 推断主仓库路径。
-   * .git/worktrees/<branch> 的 parent.parent 是主仓库的 .git 目录的 parent。
+   * 从 worktree 注册表条目读 checkout 路径。
+   * gitdir 文件内容 = <checkout>/.git，去后缀得 checkout 绝对路径。
+   * 返回 undefined 表示元数据损坏或路径异常。
    */
-  private inferMainCwd(worktreePath: string): string {
-    // worktreePath = <mainCwd>/.git/worktrees/<branch>
-    // 需要往上走 3 层
-    return path.resolve(worktreePath, "..", "..", "..");
+  private readCheckoutPath(wtEntryDir: string): string | undefined {
+    const gitdirFile = path.join(wtEntryDir, "gitdir");
+    let gitdirContent: string;
+    try {
+      gitdirContent = fs.readFileSync(gitdirFile, "utf-8").trim();
+    } catch {
+      return undefined;
+    }
+    // gitdir = <checkout>/.git
+    if (!gitdirContent.endsWith("/.git")) {
+      return undefined;
+    }
+    return gitdirContent.slice(0, -"/.git".length);
   }
 
   /**

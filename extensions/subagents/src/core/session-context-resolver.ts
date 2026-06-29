@@ -3,9 +3,6 @@
 // resolveSessionContext 纯函数——解析 fork/worktree 意图，返回执行上下文。
 // D-014: 零副作用，零 Pi import。只返回意图，不调 forkFrom/不创建 sessionDir。
 
-import * as os from "node:os";
-import * as path from "node:path";
-
 import type { ResolvedSessionContext, SessionResolveInput } from "../types.ts";
 import { ForkDepthExceededError } from "../types.ts";
 import { getSubagentSessionDir } from "./path-encoding.ts";
@@ -22,7 +19,7 @@ const MAX_FORK_DEPTH = 10;
  * @throws {ForkDepthExceededError} fork=true 且 parentForkDepth >= 10
  */
 export function resolveSessionContext(input: SessionResolveInput): ResolvedSessionContext {
-  const { fork, worktree, cwd, mainCwd, mainSessionFile, parentForkDepth, agentDir, recordId } =
+  const { fork, cwd, mainCwd, mainSessionFile, parentForkDepth, agentDir, worktreePath } =
     input;
 
   // fork 深度检查（D-007）
@@ -35,9 +32,10 @@ export function resolveSessionContext(input: SessionResolveInput): ResolvedSessi
   const shouldFork = fork === true;
   const forkSource = shouldFork ? mainSessionFile : undefined;
 
-  // effectiveCwd: worktree=true 时用临时隔离目录，否则用显式 cwd 或 mainCwd
-  const effectiveCwd =
-    worktree && recordId ? path.join(os.tmpdir(), `pi-sub-${recordId}`) : (cwd ?? mainCwd);
+  // effectiveCwd: worktree 模式用 handle.path（真实 checkout，由调用方传入），
+  // 否则用显式 cwd 或 mainCwd。worktreePath 与 worktree 标志同源（都来自 WorktreeHandle），
+  // 不再靠 tmpdir 拼凑，保证 effectiveCwd 与实际 checkout 严格一致。
+  const effectiveCwd = worktreePath ?? (cwd ?? mainCwd);
 
   // sessionDir 用 mainCwd 编码（D-004: 同一主 cwd 下所有 subagent 存同一目录）
   const sessionDir = getSubagentSessionDir(agentDir, mainCwd);
