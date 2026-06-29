@@ -44,6 +44,7 @@ description: >-
   读 plan.md → 建 todo（每功能 Wave 一个 + 覆盖率 gate）
   → 按 Wave 表调度：同并行组并行派 implementer（各自 worktree），有依赖串行
   → 每个 implementer 严格 TDD（先写测试→实现→跑通→提交）
+  → 多 Wave 时可选早启动 background review，与后续 Wave 实现重叠（详见 execution-flow.md §A7）
   → 覆盖率 gate ≥60% 才算开发收尾
   ↓
 阶段 B 测试验收（多任务严格执行）

@@ -166,7 +166,39 @@ implementer 返回 DONE → 进覆盖率 gate 检查
 
 > implementer 并行的前提：文件影响集无交集。有交集必须串行（wait:true 逐个派）。
 
+## 早启动 review（多 Wave 加速）
+
+> 可选。多 Wave（≥2）时，某个 Wave 合并到集成分支后，若后续还有未完成 Wave，立即 background 派 code-review 审该 Wave diff，与后续 Wave implementer 并行。单 Wave 不触发。对应 execution-flow.md §A7。
+
+### 派发模板（wait:false + 哨兵）
+
+照「后台 subagent hang 兜底（schedule_prompt 哨兵）」三步骤。reviewer 预估 ≤120s → 哨兵 +240s：
+
+```
+# 步骤1：派 code-review（wait:false 立即返回 subagentId）
+subagent(action:'start', startParam:{
+  agent: "reviewer",           # tools: read（纯只读）
+  wait: false,
+  cwd: <含已合并 Wave 改动的 worktree，或新建 wt-review-early-Wn>,
+  task: "只读审 Wave W{n} 的 diff（git diff <base>...HEAD），5 维度（业务逻辑/类型安全/测试覆盖/代码规范/边界）出 must_fix/should_fix/nit + 绝对路径:行号。不改代码。"
+})  → 返回 {subagentId}
+
+# 步骤2：拿 id 后埋哨兵（reviewer 预估 ≤120s → +240s）
+schedule_prompt(action:'add', type:'once', schedule:'+240s',
+  prompt:'检查早启动 review subagent {subagentId}：subagent(action:list) 看状态——finished 则忽略；running 则 read sessionFile 比对 token，连续 90s 无增长=hang → cancel + 降级主 agent 自审/重派')
+
+# 步骤3：STOP，等 notifier（正常）或哨兵（hang）唤醒；唤醒后回 A1 派下一个 Wave implementer
+```
+
+**base 说明**：审「已合并到集成分支的 Wave diff」，base 用该 Wave 合并前的集成分支 HEAD（lightmerge add 该 Wave 分支之前的 tip）。
+
+### 收集结果
+
+review 完成（notifier auto-inject 唤醒）→ 读 must_fix 清单存着，阶段 B 汇总用（不立即修，must_fix 反正等所有 Wave 完才统一处理）。
+
 ## 阶段 B：验收派发（test-runner ‖ code-review）
+
+> 若阶段 A 已早启动 review（见上节），这里收集其 must_fix 结果，只补审「早启动 review 之后的新增改动」（若有），不重复全程审。
 
 ### 派发（同消息并行）
 
