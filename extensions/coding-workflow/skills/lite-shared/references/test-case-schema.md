@@ -68,14 +68,26 @@
 ```markdown
 ## 覆盖率 gate
 
-- gate 命令：`pnpm --filter <pkg> test -- --coverage`（或项目实际命令）
-- 阈值：增量代码覆盖率 ≥ 60%
+- gate 命令：按下方「语言×框架增量覆盖率」表选项目实际命令
+- 阈值：增量代码覆盖率 ≥ 60%（下限；项目已有更高阈值则就高不就低）
 - gate 位置：列为开发阶段的独立 todo（isVerification=true），验收时执行
 ```
 
-> 60% 是下限。关键逻辑（状态机、金额计算、权限）应追求更高覆盖。覆盖率工具按项目实际（vitest --coverage / jest --coverage）。
+#### 语言×框架增量覆盖率计算（示例，按项目实际选）
 
-**gate 必须执行**：开发收尾不是"代码写完了"，而是"单测全绿 + 覆盖率≥60%"。不达标回 implementer 补测试。
+不同语言/测试框架算增量覆盖率的手段不同。下表每语言给一个主流框架的完整示例，其余同类框架同理用各自 `--coverage`。
+
+| 语言/运行时 | 主流框架（示例） | 跑覆盖率命令 | 如何界定"增量"范围 |
+|------------|----------------|-------------|---------------|
+| **TypeScript / Node.js** | vitest（示例）；jest 同理 | `npx vitest run --coverage` | vitest `--changed=<base分支>` 只跑改动相关用例并报这些文件覆盖；无 `--changed` 时用 `git diff --name-only <base>` 出改动文件，看报告中这些文件的行覆盖。jest 用 `--coverage --changedSince=<base>` |
+| **Python** | pytest + coverage.py（示例）；unittest 用 `coverage run -m unittest` | `pytest --cov=<pkg> --cov-report=term-missing` | `pip install diff-cover && diff-cover coverage.xml` 对比 git diff，报改动行的覆盖率 |
+| **Java** | JUnit5 + JaCoCo（示例；Maven/Gradle 均支持） | Maven: `mvn test jacoco:report`<br>Gradle: `./gradlew test jacocoTestReport` | JaCoCo 默认报全量；增量用 `diff-cover target/site/jacoco/jacoco.xml`（Gradle: `build/reports/jacoco/test/jacocoTestReport.xml`）对比 git diff |
+
+> **如何界定增量**：本质都是"只看本次改动涉及的代码行是否被测试覆盖"。框架原生支持 diff 过滤的优先用（vitest `--changed` / jest `--changedSince`）；不支持的用 `diff-cover` 这类工具拿 `git diff` 对比覆盖率报告（Python coverage.xml / Java jacoco.xml）。若项目无任何增量工具，降级为"看全量报告中改动文件的行覆盖"，并在 plan.md 标注。
+>
+> 60% 是下限。关键逻辑（状态机、金额计算、权限）应追求更高覆盖。阈值按项目既有约定调整（项目已配了 jacoco-check/vitest threshold 就从其配置，不重设）。
+
+**gate 必须执行**：开发收尾不是"代码写完了"，而是"单测全绿 + 增量覆盖率达标"。不达标回 implementer 补测试。
 
 ## E2E 用例清单 Schema
 
@@ -84,8 +96,8 @@
 
 | 用例ID | 场景 | 前置 | 步骤 | 预期 | 执行方式 |
 |--------|------|------|------|------|---------|
-| E1     | 用户登录主流程 | 已注册用户 | 1.打开/login 2.填表单 3.提交 | 跳转/profile，显示用户名 | playwright |
-| E2     | 登录失败边界 | 错误密码 | 1.打开/login 2.填错误密码 3.提交 | 显示"密码错误"，停留/login | playwright |
+| E1     | 用户登录主流程 | 已注册用户 | 1.打开/login 2.填表单 3.提交 | 跳转/profile，显示用户名 | <项目测试框架> |
+| E2     | 登录失败边界 | 错误密码 | 1.打开/login 2.填错误密码 3.提交 | 显示“密码错误”，停留/login | <项目测试框架> |
 | E3     | 并发下单边界 | 库存=1 | 1.两请求同时下单 | 仅1成功，1返回"售罄" | 手动/脚本 |
 ```
 
@@ -93,25 +105,27 @@
 
 - **用例ID**：`E` + 数字。
 - **场景**：业务用例（用户视角），非技术操作。
-- **执行方式**（关键，三选一）：
-  - `playwright`：项目装了 Playwright（探测 `playwright.config.*` 存在）。命令如 `npx playwright test e2e/<id>.spec.ts`
-  - `browser-automation`：用 browser-automation skill 驱动浏览器（连 CDP），适合调试型 E2E，但**无 assertion 框架**——agent 需自行解读截图/DOM 判定
+- **执行方式**（按项目实际测试栈适配，不写死某框架）：
+  - `项目测试框架`：探测项目装了什么 E2E/前端测试框架（Playwright / Cypress / Puppeteer / Testing Library / 项目自研等），执行方式写实测探测到的命令。Playwright/Cypress 只是常见示例，不是默认。
+  - `browser skill / MCP`：项目无 E2E 框架时，前端交互用例可调用 browser-automation **类** skill 或 CDP **类** MCP 驱动真实浏览器（Agent 主动发现当前环境有哪些 browser 类 skill/MCP，不限定具体名称）。注意这类手段**无 assertion 框架**——Agent 需自行解读截图/DOM 判定 pass/fail。
   - `手动`：无法自动化的场景（并发、物理设备等），写明手动验证步骤
 
-### ⚠️ E2E 框架探测（必做）
+### ⚠️ E2E / 前端测试栈探测（必做）
 
-lite-plan 写 E2E 清单前 [MANDATORY] 探测项目是否有 E2E 框架：
+lite-plan 写 E2E 清单前 [MANDATORY] 探测项目**实际**的测试栈（不预设 Playwright）：
 
 ```
-检查 playwright: 项目根或子包是否有 playwright.config.{ts,js} 或 cypress.config.{ts,js}
-  - 有 → E2E 用例写 playwright 执行命令（npx playwright test ...）
-  - 无 → 在 plan.md 显式标注「项目无 E2E 框架」，E2E 用例的执行方式降级为：
-         a) browser-automation skill 驱动（需 Chrome 9222 端口）
-         b) 手动验证步骤
-         并提示用户：建议安装 Playwright 以获得可回归的 E2E
+1. 扫描项目测试配置与依赖，确定实际用哪个框架：
+   - 前端/E2E：playwright.config.* / cypress.config.* / puppeteer / package.json 里 testing-library 等
+   - 后端/集成：项目实际用的测试框架（pytest / JUnit / go test / vitest / jest 等）
+2. 有框架 → E2E 用例的执行方式写「该框架的实际命令」（如探测到 Playwright 才写 npx playwright test ...）
+3. 无 E2E 框架但需测前端交互 → 执行方式写「browser 类 skill / CDP 类 MCP 驱动」
+   Agent 执行时主动发现当前环境可用的 browser 类 skill/MCP（不写死名称）
+4. 都不适用 → 在 plan.md 显式标注，执行方式写手动验证步骤
+   并提示用户：如需可回归 E2E，建议引入项目适配的测试框架
 ```
 
-> 不假设项目装了 E2E 框架。lite 只负责**设计用例 + 写明执行命令**，框架由项目自备。
+> 不假设项目用某特定框架。lite 只负责**设计用例 + 写明项目实际的执行命令**，框架由项目自备。不同项目测试栈差异大（TS 项目可能 vitest+Playwright，Java 项目可能 JUnit，Python 项目可能 pytest），泛化适配而非写死。
 
 ### ⚠️ E2E 用例可执行性自检（必做）
 
@@ -128,7 +142,7 @@ lite-plan 写 E2E 清单前 [MANDATORY] 探测项目是否有 E2E 框架：
 |---------|-------------------------|------|
 | 滚动/视口交互（如「上滚脱离锚定」） | ❌ happy-dom 无真实视口，mock 内容常小于视口无法制造滚动距离 | 标 `[执行前提待补:超长内容fixture]` 或拆为单测断言 + 手动 |
 | 真实后端依赖（如「并发下单库存」） | ❌ mock 无并发 | 拆为单测断言 + 手动/集成环境验证 |
-| 纯 DOM 断言（如「working 态全展开」） | ✅ happy-dom 可验 | 正常标 playwright/手动 |
+| 纯 DOM 断言（如「working 态全展开」） | ✅ happy-dom 可验 | 正常标项目测试框架/手动 |
 | 强依赖浏览器原生 API（contenteditable / Selection / Range / TreeWalker） | ⚠️ happy-dom 支持有限，单测层行为失真（单测过 ≠ 真实 DOM 对） | 单测覆盖逻辑层断言 + 标「需集成层/手动验证真实 DOM」 |
 
 > 实测案例：plan 设计了 E3-E5 滚动交互用例，执行时发现 mock 会话内容小于视口无法制造真实滚动距离，只能靠单测覆盖逻辑层——这在 plan 设计时就该预见并标注，而非执行时才发现。
@@ -148,11 +162,13 @@ E2E 用例**必须覆盖**以下边界（基于业务用例推导，非穷举）
 
 测试用例 → todo 任务的映射规则（lite-execute 据此建 todo）：
 
-| plan 清单条目 | todo 任务 | isVerification |
-|--------------|-----------|----------------|
-| 每条单测用例（U1, U2...） | 1 个 todo「实现 U1: ...」 | false（实现阶段） |
-| 覆盖率 gate | 1 个 todo「覆盖率≥60%」 | true（验收阶段） |
-| 每条 E2E 用例（E1, E2...） | 1 个 todo「E2E E1: ... 全绿」 | true（验收阶段） |
-| 整体回归 | 1 个 todo「全量单测+E2E 全绿」 | true（验收 Wave，最后） |
+| plan 清单条目 | 实现阶段 todo（isVerification=false） | 验收阶段 todo（isVerification=true） |
+|--------------|-------------------------------------|--------------------------------------|
+| 每条单测用例（U1, U2...） | 1 个「实现 U1: ...」 | 1 个「[验收] U1 全绿」 |
+| 每条 E2E 用例（E1, E2...） | —（实现期不建） | 1 个「[验收] E1 全绿」 |
+| 覆盖率 gate | — | 1 个「[验收] 覆盖率达标」 |
+| 整体回归 | — | 1 个「[验收] 全量单测+E2E 全绿」（最后） |
 
 > 验证任务（isVerification=true）不可取消，必须 completed。这是"测试验收不是一个任务、要严格执行"的落地机制。
+>
+> **粒度铁律：每条 U*/E* 各自一个 todo，跨阶段亦然。** 实现阶段每条 U* 一个「实现」todo，验收阶段**再次**每条 U*/E* 各建一个「[验收] 全绿」todo——不打包成「U1-U{N} 全绿」一条。打包会掩盖单条失败（一条红则全标红，定位不到具体用例）。

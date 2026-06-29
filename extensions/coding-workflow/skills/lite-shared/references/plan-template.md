@@ -42,8 +42,8 @@
 | E1     |      |      |      |      |         |
 
 ## 覆盖率 gate
-- gate 命令：`pnpm --filter <pkg> test -- --coverage`
-- 阈值：增量覆盖率 ≥ 60%
+- gate 命令：按 `../lite-shared/references/test-case-schema.md`「语言×框架增量覆盖率」表选项目实际命令
+- 阈值：增量覆盖率 ≥ 60%（项目已有更高阈值则就高）
 
 ## 实现步骤
 <!-- [MANDATORY] 必须用此标题（plan extension extractPlanSteps 识别）。按 Wave 顺序 -->
@@ -74,13 +74,15 @@
 - 每个改动点正常/异常/边界各 ≥1
 
 ### E2E 用例清单
-- **先探测框架**（playwright.config.* / cypress.config.*）
-- 有框架 → 执行方式写 `npx playwright test e2e/<id>.spec.ts`
-- 无框架 → 标注「项目无 E2E 框架」，降级 browser-automation / 手动，提示用户建议装 Playwright
+- **先探测项目实际测试栈**（不预设 Playwright；扫描 playwright.config / cypress.config / puppeteer / 项目测试依赖等）
+- 有框架 → 执行方式写「该框架的实际命令」（探测到 Playwright 才写 `npx playwright test`；Cypress 写 `npx cypress run`；后端框架按其命令）
+- 无 E2E 框架但需测前端交互 → 用 browser 类 skill / CDP 类 MCP 驱动（Agent 主动发现，不写死名称）
+- 都不适用 → 标注手动验证步骤
 - 覆盖每个业务用例的 happy path + ≥1 失败 path
 
 ### 覆盖率 gate
-- 写明命令 + 60% 阈值
+- read `test-case-schema.md`「语言×框架增量覆盖率」表后填
+- 写明项目实际的命令 + 如何界定增量（框架原生 diff 过滤 或 diff-cover）
 - 必须列为开发阶段独立 todo（isVerification）
 
 ### 实现步骤

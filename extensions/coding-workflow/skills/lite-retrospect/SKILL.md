@@ -130,9 +130,17 @@ description: >-
 3. [P2] ...
 ```
 
-> 轻量：不进长期文档（那是 design-closeout 的活），不强制 action item 落地。但**每条 ❌/⚠️ 必须有根因链 + 层级 + 归属**——否则复盘的价值（发现问题）无法转化为改进（修复问题），复盘就成了空转。
+> 轻量：不进长期文档（那是 design-closeout 的活）。但**每条 ❌/⚠️ 必须有根因链 + 层级 + 归属**——否则复盘的价值（发现问题）无法转化为改进（修复问题），复盘就成了空转。
 >
 > **[铁律] 报告里每个 ❌/⚠️ 条目后必须附 `| 根因：症状→why1→why2 | 层级：xxx`**。只写「问题→改进」、根因留空 = 未完成复盘，不能进 Step 4 交付。
+>
+> **[铁律] 改进项必须回流，禁止「追踪：待办」死信。** 归属为 lite-* / design-* / CLAUDE.md 的每条改进项，二选一：
+> - 当场改对应 skill / 文档，改进项的「追踪」标「已修（文件:行 或 commit）」
+> - 当场在 `docs/todos/` 建 followup 文件（如 `docs/todos/lite-skills-followups.md`），改进项的「追踪」标 followup 文件路径
+>
+> 只写「追踪：待办」= 未完成复盘。实测：上一轮 retrospect 标了「归属：lite-execute / 追踪：待办」，lite-execute 从未被改，5 条改进全部死信——没有回流机制，retrospect 是自嗨文档。
+>
+> **[提示] retrospect.md 产出在 `.xyz-harness/`，不进代码 commit。** 提交代码时用显式路径 `git add <改动文件>`，禁 `git add -A`（实测：retrospect.md 被 add -A 误加混进代码 commit）。`.xyz-harness/` 是工作流产出，独立于代码变更。
 
 ### Step 4. 交付
 

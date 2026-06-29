@@ -139,7 +139,8 @@ bash ~/.claude/skills/remove-worktree/remove-worktree.sh feat/lite-w1
   2. 跑测试确认失败
   3. 实现最小代码让测试通过
   4. 跑测试确认全绿
-  5. 提交
+  5. git add <本 Wave 改动文件显式路径> + commit（禁 git add -A，防误加 .xyz-harness/ 等无关文件）
+  涉及 lint 规则/错误处理/命名约定时，先 grep 项目现有同类写法照抄（如 `grep -rn "no-silent-catch"`）
   测试用例规范见 plan.md 单测清单。不要实现清单外的功能。
   """
   agent: "worker"（或自定义 implementer agent）
@@ -182,7 +183,7 @@ implementer 返回 DONE → 进覆盖率 gate 检查
   运行测试套件并报告结果（只读，不改代码）：
   1. 单测：pnpm --filter <pkg> test（或项目实际命令），报告 pass/fail 数 + 每个失败的 file:line
   2. 覆盖率：pnpm --filter <pkg> test -- --coverage，报告增量覆盖率数值
-  3. E2E：<按 plan E2E 清单的执行方式跑，如 npx playwright test e2e/>
+  3. E2E：<按 plan E2E 清单的执行方式跑；执行方式由 plan 探测项目测试栈决定，如项目装了 Playwright 才用 npx playwright test，无框架则用 browser 类 skill/MCP 或手动>
   对照 plan.md 的用例清单（U1-UN, E1-EN）逐条判定 pass/fail。
   输出：每条用例 ID + pass/fail + 失败详情。
   """

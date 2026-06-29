@@ -72,7 +72,9 @@ subagent 工具：
     2. 跑测试确认失败（预期 FAIL）
     3. 写最小实现让测试通过
     4. 跑测试确认全绿
-    5. git add + commit
+    5. git add <本 Wave 改动文件显式路径> + commit（禁 git add -A，防误加 .xyz-harness/ 等无关文件）
+    涉及 lint 规则/错误处理/命名约定时，先 grep 项目现有同类写法照抄，不自创
+    （如 `grep -rn "no-silent-catch"` 找现有 disable 写法，一次改对）
     只实现 plan.md 列出的用例覆盖范围，不加额外功能。
     """
   }
@@ -134,15 +136,18 @@ bash ~/.claude/skills/lightmerge-branch/scripts/lightmerge.sh add <project> feat
 开发 todo 已全 completed → todo(action='clear') 清空开发期 todo
 建验收 todo：
 todo(action='add', texts=[
-  "[验收] U1-U{N} 单测全绿",
-  "[验收] 覆盖率 ≥ 60%",
+  "[验收] U1: <用例描述> 全绿",
+  "[验收] U2: <用例描述> 全绿",
+  "...每条 U* 一个 todo，不打包...",
+  "[验收] 覆盖率 gate 达标",
   "[验收] E1 E2E: <场景> 全绿",
   "[验收] E2 E2E: <场景> 全绿",
+  "...每条 E* 一个 todo...",
   "[验收] 整体回归：全量单测+E2E 全绿"
 ])
 ```
 
-> 每条用例对应一个 todo。E2E 按业务用例拆（不是"跑一遍 E2E"，而是每条 E* 一个 todo）。失败能精确定位到哪条用例。
+> **每条用例（U*/E*）各自一个 todo，不打包。** 单测也按条拆（不是「U1-U{N} 全绿」打包一条），E2E 按业务用例拆。失败能精确定位到哪条用例，与 lite-execute [铁律]「每条测试用例各自独立 todo」一致。
 > 验收 todo 全部 isVerification 性质（必须 completed，不可跳过）。todo 支持 isVerification 参数则标记；否则在描述注明 [验收] 强制执行。
 
 ### B2. 建 worktree + 派 test-runner ‖ code-review（并行隔离）⚠️ 不可逆操作
@@ -179,6 +184,18 @@ code-review：must_fix 清单
   fail 的用例 → todo 保持 pending（进失败循环）
 ```
 
+### B3.5 失败定位纪律（派 implementer 修复前必做）
+
+失败循环的第一次修复最容易重蹈覆辙——拿着未验证的诊断假设直接改实现。**派 implementer 修复前，先确认诊断假设成立（顺序不可反）：**
+
+1. **先验证检测方法本身，再改实现**。别拿一次成功的观测就当真理——mock 环境巧合有效 ≠ 普遍有效。对每条「功能没生效/行为不对」的判断，先 dump 实际状态（getComputedStyle / 输出实际 DOM 属性 / 打印实际返回值）核对，确认观测手段能区分「功能在」和「功能不在」，再下结论。
+   > 实测案例：诊断脚本用 mock 环境巧合有效的选择器 `[data-radix-popper-content-wrapper]` 检测浮层，真实环境一直 false，误判「浮层没弹」，改了 5+ 轮实现逻辑才发现**检测方法本身就错**（浮层早弹了，是 z:1100 的 fixed div）。代价全在诊断阶段的 turn。
+2. **沿数据/消息链路逐层打点定位断点**。跨进程/跨层的问题别只看两端。正面手法：发送方 push log → 传输层 route log → 接收方 recv log，三层精确定位「发了但中间没到 / 到了但没处理」，直接锁定断点在哪一层，避免在错误方向（如改接收方订阅逻辑）空转。
+3. **根因归类抽象到模式层，不只修当前路径**。根因要写成「所有同类路径都需 X」，作为后续同类型 Wave 设计的前置输入——而非「这条路径需 X」。
+   > 实测案例：Wave 1 把时序根因归到「selectSession 这条路径」，Wave 2 预创建 session 遇**完全相同**的 broadcast 时序问题二次返工。真因是「任何 broadcast 时机早于订阅建立的路径都会丢」——归类停在具体路径 = Wave 间根因无法传播。
+
+> 诊断假设未实测验证就采信是反复出现的同构失败模式（mock 成功当真理 / handoff 事实声明盲信）。事实型假设只有实测能证伪，逻辑推导不出。详见 wave-model.md「Wave 间根因传播」。
+
 ### B4. 失败循环（限 3 轮）
 
 ```
@@ -207,6 +224,14 @@ code-review：must_fix 清单
 ## 阶段 C：收尾 ⚠️ 不可逆操作
 
 全部验收 todo completed：
+
+**0. 语义/契约变更审查（goal complete 前必做）**——逐条核对本次改动是否引入：
+- 新的状态可达路径（之前不可达的状态/分支现在可达）
+- 改变了既有函数的副作用语义（延迟→立即、同步→异步、单次→多次等）
+- 改变了数据生命周期（创建/销毁/缓存时机）
+
+任一为是 → 本次不是纯「小功能」：补 ADR 记录决策，或提示用户升级 design 工作流，再 complete。全否则继续。
+> 实测案例：预创建 session 改变了「延迟 create」语义、让 landing 态 branch 链路变可达——典型藏在「小功能」里的架构语义变更，范围守门（plan 前/execute 启动前）拦不住，全程无触发器，直到复盘才记录。收尾门补这个洞。
 
 ```
 1. goal_control(action='complete',
