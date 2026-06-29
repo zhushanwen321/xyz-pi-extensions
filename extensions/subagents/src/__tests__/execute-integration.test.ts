@@ -27,6 +27,8 @@ import type { SdkEvent } from "../types.ts";
 // ── fakeSdk 注入：mock getSdk，保留 run/formatSchemaInstruction 真实实现 ──
 
 const { fakeSdkSlot } = vi.hoisted(() => ({ fakeSdkSlot: { current: null as SdkLike | null } }));
+// makeFakeSession 每实例创建的 tmpdir，afterEach 统一清理。
+const { fakeSessionTmps } = vi.hoisted(() => ({ fakeSessionTmps: [] as string[] }));
 
 vi.mock("../core/session-runner.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../core/session-runner.ts")>();
@@ -106,6 +108,10 @@ function makeFakeSession(opts: {
   messages?: AgentSessionLike["messages"];
   tools?: Array<{ name: string }>;
 }): FakeSessionHandle {
+  // 每实例独立 tmpdir：sidecar (.cancelled/.finalized) 落在这里，afterEach 统一清理。
+  // 不再用全局固定路径——那是 sidecar 泄漏到项目根的根因。
+  const instanceTmp = fs.mkdtempSync(path.join(os.tmpdir(), "exec-session-"));
+  fakeSessionTmps.push(instanceTmp);
   let subscriber: ((e: unknown) => void) | null = null;
   const promptMock = vi.fn(async () => {
     for (const e of opts.promptBehavior.events ?? []) {
@@ -144,7 +150,7 @@ function makeFakeSession(opts: {
     }),
     sessionId: "fake-session-id",
     sessionManager: {
-      getSessionFile: () => opts.sessionFile ?? path.join(os.tmpdir(), "fake-session.jsonl"),
+      getSessionFile: () => opts.sessionFile ?? path.join(instanceTmp, "fake-session.jsonl"),
       getSessionId: () => "fake-session-id",
       appendCustomEntry: vi.fn(() => "custom-id"),
     },
@@ -225,8 +231,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
 
   beforeEach(() => {
     // 清理 prototype mock 状态（vi.mock 工厂在原型上设置 mock，共享状态）
-    mockWorktreeManager.create.mockReset();
-    mockWorktreeManager.create.mockImplementation((cwd: string, id: string) => ({
+    mockWorktreeManager.create.mockReset();   mockWorktreeManager.create.mockImplementation((cwd: string, id: string) => ({
       path: `/fake/worktree/${id}`,
       branch: `pi-sub-${id}`,
       baseCommit: "abc123",
@@ -243,6 +248,8 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
   afterEach(() => {
     for (const dir of agentDirs) fs.rmSync(dir, { recursive: true, force: true });
     agentDirs = [];
+    for (const dir of fakeSessionTmps) fs.rmSync(dir, { recursive: true, force: true });
+    fakeSessionTmps.length = 0;
     fakeSdkSlot.current = null;
   });
 
@@ -272,7 +279,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     expect(result.record.status).toBe("done");
     expect(result.record.turns).toBe(1);
     expect(result.details.totalTokens).toBe(150);
-    expect(result.details.sessionFile).toBe(path.join(os.tmpdir(), "fake-session.jsonl"));
+    expect(result.details.sessionFile).toBe(handle.session.sessionManager.getSessionFile());
     // run() 的 collectResult 从 record.turns[] 聚合 text（收口后不再读 session.messages）
     expect(result.details.result).toBe("done");
   });
