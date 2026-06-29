@@ -238,11 +238,12 @@ test-runner 结果：用例 X1-XN pass/fail
 reviewer-正确性组结果：must_fix/should_fix/nit 清单 A
 reviewer-质量组结果：must_fix/should_fix/nit 清单 B
 
-2 路 reviewer 清单并集去重（按「文件:行 + 问题」去重）：
+2 路 reviewer 清单并集去重（按「文件:行 + 问题」去重），合并清单写入 `.xyz-harness/{topic}/changes/review-merged.md`（frontmatter 含 `review_ensemble_overlap`）：
   - 两路都报同一问题 → [HIGH-CONFIDENCE]（明显问题，必修）
   - 仅一路报 → [NEEDS-VERIFY]（主 agent 复核确认后转必修或丢弃）
-  - 趋同检测：2 路重合度 > 80% → 记 review_ensemble_overlap: high
-    （该次改动 review 收敛，未来同类 Wave 可降级单路 review）
+  - 趋同检测：2 路重合度 > 80% → frontmatter 记 `review_ensemble_overlap: high`
+    （该次改动 review 收敛，未来同类 Wave 可降级单路 review）；重合度低 → 记 low。
+    **此字段是 lite-retrospect「ensemble 趋同数据复盘」的输入——落盘到 changes/ 才能被 retrospect grep 消费。**
 
 判定：
   全部用例 pass + 覆盖率≥60% + review 合并清单无 must_fix（[NEEDS-VERIFY] 复核后转 must_fix 的也算）

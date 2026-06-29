@@ -14,6 +14,8 @@ description: >-
 
 为**不涉及架构改动的小功能**产出一份 plan.md，含 6 个章节：业务目标、技术改动点（文件级）、Wave 依赖拆分、**完整的测试验收设计**（单测清单 + E2E 清单 + 覆盖率 gate）。
 
+> **含 3 个条件触发的 ensemble 点**（0b 范围守门投票 / 2b 复用检查并集 / 4b 测试完整性并集）：同源盲区高风险时派多路 fresh subagent 同题并行、综合去偏。触发条件见路由表与各步骤正文，明确小功能不启用。趋同数据（`*_ensemble_overlap`）记 frontmatter，供 lite-retrospect 消费做降级决策。
+
 > **[铁律] 本 skill 只做计划，不写实现代码。** 测试用例只设计（输入/预期/类型），不写测试代码——那是 lite-execute 的 implementer 按 TDD 写的。
 >
 > **[铁律] 测试设计是重中之重。** plan.md 测试章节不达标 = plan 未完成。验收全绿的前提是 plan 里有可执行、可判定的测试清单。
@@ -48,7 +50,7 @@ description: >-
 - 2:1 偏升级 design → **升级**（代价不对称：漏判架构返工 >> 过度流程成本，取偏严策略）
 - 2:1 偏留 lite → 留 lite，但**边界判据显式 ask_user 确认**（让用户拍板「这个算不算跨子系统/核心逻辑」），不 agent 自决
 
-> 趋同检测：3 票一致 → 记 `scope_ensemble_confidence: high`；2:1 分歧 → 记 `split`，边界判据已交用户。
+> 趋同检测（记 plan.md frontmatter，供 lite-retrospect「ensemble 趋同数据复盘」消费）：3 票一致 → 记 `scope_ensemble_overlap: high`（未来同类功能可降级单路判定）；2:1 分歧 → 记 `scope_ensemble_overlap: low`，边界判据已交用户。
 
 ## 前置
 
@@ -182,7 +184,7 @@ subagent(action:'start', startParam:{
 
 **汇合：** N 路「可复用候选」并集去重，主 agent 判定**真复用 vs 仅相似**（结构相似但语义不同的代码不算复用）。真复用进 plan.md 技术改动点（标注复用来源）。
 
-> 趋同检测：2 路候选重合度 > 80% → 记 `reuse_ensemble_overlap: high`（说明主 agent 单路搜索已充分，未来同类可降级）。
+> 趋同检测（记 plan.md frontmatter，供 lite-retrospect 消费）：2 路候选重合度 > 80% → 记 `reuse_ensemble_overlap: high`（说明主 agent 单路搜索已充分，未来同类可降级）；重合度低 → 记 `low`。
 
 ## 输入材料可信度 + 测试 fixture 对齐（步骤 1/4 必做）
 
@@ -276,8 +278,8 @@ subagent(action:'start', startParam:{
 主 agent 收齐 N 路建议后：
 1. **去重对照**：N 路建议 union，按「覆盖改动点 + 输入场景」去重。同时对照草案——剔除 subagent 误报的「已在草案里」的条目
 2. **合并入草案**：去重后的建议合并进单测清单，连续编号
-3. **趋同检测**（决定未来是否持续 ensemble）：
-   - N 路建议重合度 > 80%（都指出同样几个漏的用例）→ 高置信遗漏，直接补；同时在 plan.md frontmatter 记 `test_ensemble_overlap: high`（未来同类功能可降级回单路反向自检）
+3. **趋同检测**（决定未来是否持续 ensemble，记 plan.md frontmatter 供 lite-retrospect 消费）：
+   - N 路建议重合度 > 80%（都指出同样几个漏的用例）→ 高置信遗漏，直接补；同时记 `test_ensemble_overlap: high`（未来同类功能可降级回单路反向自检）
    - 重合度低（各找各的）→ 同源盲区确实大，ensemble 价值高，全部补进；记 `test_ensemble_overlap: low`
 
 ### 边界与风险

@@ -208,11 +208,13 @@ test-runner：逐条用例 pass/fail + 覆盖率数值
 reviewer-正确性组：must_fix/should_fix/nit 清单
 reviewer-质量组：must_fix/should_fix/nit 清单
 
-2 路 reviewer 清单并集去重（按「文件:行 + 问题」去重）：
+2 路 reviewer 清单并集去重（按「文件:行 + 问题」去重），合并清单写入 `.xyz-harness/{topic}/changes/review-merged.md`（frontmatter 含 `review_ensemble_overlap`）：
   - 两路都报同一问题 → [HIGH-CONFIDENCE]（明显问题，必修）
   - 仅一路报 → [NEEDS-VERIFY]（边缘问题，主 agent 复核确认后转必修或丢弃）
   - 趋同检测：2 路重合度 > 80%（都报同样几个问题）→ 该次改动 review 收敛，
-    记 `review_ensemble_overlap: high`（说明该 Wave review 单路已够，未来同类可降级单路）
+    frontmatter 记 `review_ensemble_overlap: high`（说明该 Wave review 单路已够，未来同类可降级单路）；
+    重合度低 → 记 `review_ensemble_overlap: low`。
+    **此字段是 lite-retrospect「ensemble 趋同数据复盘」的输入——落盘到 changes/ 才能被 retrospect grep 消费，否则是死数据。**
 
 逐条更新验收 todo：
   pass 的用例 → todo 标 completed

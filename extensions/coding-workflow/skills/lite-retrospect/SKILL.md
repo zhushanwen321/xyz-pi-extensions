@@ -57,6 +57,16 @@ description: >-
 - [ ] implementer / test-runner / code-review subagent 的 prompt 和 context 是否足够？有无 NEEDS_CONTEXT / BLOCKED
 - [ ] subagent 工具白名单是否过严（该有的工具没有）或过松（不该有的给了）
 
+#### ensemble 趋同数据复盘（消费上次跑的 *_ensemble_overlap）
+
+> lite-plan（scope/reuse/test）和 lite-execute（review）在 ensemble 点会产出趋同字段，记在 plan.md / review 清单 frontmatter。本项是这些数据的**唯一消费者**——读取它们判断哪些 ensemble 点恒定高重合（= 单路已够，未来应降级），让趋同检测真正闭环。否则这些字段是死数据。
+
+- [ ] grep 上次的 `*_ensemble_overlap` 字段（在 plan.md frontmatter、review 清单、或本 topic 的 `_progress.md`/retrospect 输入）：
+  - **连续 high**（≥2 次同类功能都 high overlap）→ 该 ensemble 点单路已够，记改进项「降级 X 为单路」（归属：对应 lite-* skill，方向：删条件触发的 ensemble 分支或默认关）
+  - **恒定 low**（每次都各找各的）→ 该 ensemble 点同源盲区大，ensemble 价值高，保持
+  - **无数据**（首次跑 ensemble 或字段缺失）→ 标「数据不足，至少跑 2 次同类功能再判」
+- [ ] 降级建议若有，进 Step 2 根因追溯（为什么该 ensemble 点恒定高重合——是问题本身简单，还是差异化不够导致 N 路盲区仍相关？）
+
 #### 系统提示词 / 业务 / 架构自检
 
 - [ ] 是否有反复出现的错误，提示了 CLAUDE.md 或系统提示词需要补充某条规则
