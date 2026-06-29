@@ -144,7 +144,7 @@ function makeFakeSession(opts: {
     }),
     sessionId: "fake-session-id",
     sessionManager: {
-      getSessionFile: () => opts.sessionFile ?? "fake-session.jsonl",
+      getSessionFile: () => opts.sessionFile ?? path.join(os.tmpdir(), "fake-session.jsonl"),
       getSessionId: () => "fake-session-id",
       appendCustomEntry: vi.fn(() => "custom-id"),
     },
@@ -272,7 +272,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     expect(result.record.status).toBe("done");
     expect(result.record.turns).toBe(1);
     expect(result.details.totalTokens).toBe(150);
-    expect(result.details.sessionFile).toBe("fake-session.jsonl");
+    expect(result.details.sessionFile).toBe(path.join(os.tmpdir(), "fake-session.jsonl"));
     // run() 的 collectResult 从 record.turns[] 聚合 text（收口后不再读 session.messages）
     expect(result.details.result).toBe("done");
   });
