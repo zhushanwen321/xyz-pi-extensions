@@ -31,31 +31,13 @@ subagent 工具：
 
 **派完后直接 STOP**，不要轮询/sleep。后台 subagent 完成时 notifier 自动注入消息唤醒主 agent（`deliverAs: "followUp"`）。
 
-### 后台 subagent hang 兜底（schedule_prompt 哨兵）
+### 已知限制：后台 subagent 静默 hang 无兜底
 
-notifier 只在 subagent 完成/失败时唤醒主 agent。但 subagent 可能**静默 hang**（推理卡住/连接中断/等输入）——既不完成也不失败，notifier 永不触发。此时主 agent 在 STOP 状态**无法被唤醒**，旧规范写「超 2x 时长主动 list 检查」没有执行时机（实测打破僵局靠 goal_context 的 turn 推进偶然救场，不是规范）。
+notifier 只在 subagent **完成/失败**时唤醒主 agent。但 subagent 可能**静默 hang**（推理卡住/连接中断/等输入）——既不完成也不失败，notifier 永不触发，主 agent 在 STOP 状态**无法被唤醒**。实测案例：reviewer 跑 145s 后 token 卡死两分钟不增长，靠手动 list 才发现。
 
-**正解：派发后紧接埋哨兵，强制制造执行时机。** 派 `wait:false` subagent **拿到 subagentId 后，紧接的下一条消息**埋一个 schedule_prompt 哨兵，然后才 STOP：
+**当前无可靠的工程级兜底**——Pi 核心工具仅 `read/bash/edit/write/grep/find/ls`，没有定时唤醒机制（此前文档臆造的 `schedule_prompt` 哨兵在平台并不存在，已移除）。主 agent 依赖**用户推进下一个 turn 时**才有执行时机 `subagent(action:list)` 排查——这不是规范保证，是偶发救场。
 
-```
-# 步骤1：派 subagent（wait:false 立即返回 subagentId）
-subagent(action:'start', startParam:{ agent, wait:false, cwd, task })  → 返回 {subagentId}
-
-# 步骤2：拿到 id 后，埋哨兵（2x 预估时长后注入）
-schedule_prompt(action:'add', type:'once', schedule:'+{2x预估秒数}',
-  prompt:'检查后台 subagent {subagentId}：subagent(action:list) 看状态——finished 则忽略；running 则 read sessionFile 比对 token，连续 90s 无增长=hang → cancel + 降级主 agent 自审/重派')
-
-# 步骤3：STOP，等 notifier（正常路径）或哨兵（hang 路径）唤醒
-```
-
-- **正常路径**：subagent 先完成 → notifier 唤醒主 agent 处理结果；处理时可 `schedule_prompt(remove)` 清掉未触发的哨兵（不清也只是冗余一次检查）
-- **hang 路径**：subagent 卡住，notifier 不触发，**哨兵是唯一唤醒源**，到点强制唤醒执行 list/读 session/cancel
-
-预估时长：单测/review ≤60s（哨兵 +120s），复杂 E2E ≤180s（哨兵 +360s）。
-
-> 实测：reviewer 跑 145s 后 token 卡 105036 两分钟不增长，靠手动 list 才发现。无哨兵时靠 goal_context 偶然救场；哨兵把「偶然救场」变「必然兜底」。
->
-> **根治（跨 repo，过渡期用本哨兵）**：subagents extension 加 heartbeat（后台 subagent 每 N 秒写心跳，主 agent 侧 2 周期无心跳自动 cancel）——责任与能力对位的分布式解法。本哨兵是 heartbeat 落地前的过渡方案。
+**根治方向**（未落地，跨 repo）：subagents extension 加 heartbeat（后台 subagent 每 N 秒写心跳，主 agent 侧 2 周期无心跳自动 cancel）——责任与能力对位的分布式解法。在此之前，长任务倾向用 `wait:true`（hang 时主 agent 同步阻塞、至少在 turn 边界可见），仅在确需并行的多组追踪场景用 `wait:false`。
 
 ## Worktree 隔离编排（核心）
 
@@ -170,9 +152,9 @@ implementer 返回 DONE → 进覆盖率 gate 检查
 
 > 可选。多 Wave（≥2）时，某个 Wave 合并到集成分支后，若后续还有未完成 Wave，立即 background 派 code-review 审该 Wave diff，与后续 Wave implementer 并行。单 Wave 不触发。对应 execution-flow.md §A7。
 
-### 派发模板（wait:false + 哨兵）
+### 派发模板（wait:false）
 
-照「后台 subagent hang 兜底（schedule_prompt 哨兵）」三步骤。reviewer 预估 ≤120s → 哨兵 +240s：
+派 background code-review，拿 subagentId 后 STOP 等 notifier 唤醒（hang 兜底见上方「已知限制」）：
 
 ```
 # 步骤1：派 code-review（wait:false 立即返回 subagentId）
@@ -183,11 +165,7 @@ subagent(action:'start', startParam:{
   task: "只读审 Wave W{n} 的 diff（git diff <base>...HEAD），5 维度（业务逻辑/类型安全/测试覆盖/代码规范/边界）出 must_fix/should_fix/nit + 绝对路径:行号。不改代码。"
 })  → 返回 {subagentId}
 
-# 步骤2：拿 id 后埋哨兵（reviewer 预估 ≤120s → +240s）
-schedule_prompt(action:'add', type:'once', schedule:'+240s',
-  prompt:'检查早启动 review subagent {subagentId}：subagent(action:list) 看状态——finished 则忽略；running 则 read sessionFile 比对 token，连续 90s 无增长=hang → cancel + 降级主 agent 自审/重派')
-
-# 步骤3：STOP，等 notifier（正常）或哨兵（hang）唤醒；唤醒后回 A1 派下一个 Wave implementer
+# 步骤2：STOP，等 notifier 唤醒；唤醒后回 A1 派下一个 Wave implementer
 ```
 
 **base 说明**：审「已合并到集成分支的 Wave diff」，base 用该 Wave 合并前的集成分支 HEAD（lightmerge add 该 Wave 分支之前的 tip）。

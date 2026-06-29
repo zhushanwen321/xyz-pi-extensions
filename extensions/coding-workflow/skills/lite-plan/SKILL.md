@@ -74,11 +74,11 @@ description: >-
 ```
 步骤 1 搜集完，识别问题集并二分类 → 满足门槛 → 主 agent 同消息分叉：
   ├─ 主 agent：ask_user(action='add') 批量提问（1-4 个，含阻塞性 + 细节性）
-  └─ bg subagent：planner agent, wait:false, 任务见下方派发模板，埋 schedule_prompt 哨兵
+  └─ bg subagent：planner agent, wait:false, 任务见下方派发模板
 
   ↓ ask_user 等用户响应 ‖ bg 写草案，两者并行
 
-汇合（ask_user 返回 + bg 草案产出 / 哨兵触发）→
+汇合（ask_user 返回 + bg 草案产出 / notifier 唤醒）→
   主 agent 核对草案：
     1. 阻塞性问题的假设：bg 用「假设X」标注的，拿用户答案逐条核对，推翻则重做该部分
     2. 细节性问题的占位符：拿用户答案填
@@ -110,11 +110,9 @@ subagent(action:'start', startParam:{
   - 不实现代码、不 commit
   """
 }) → 返回 {subagentId}
-
-# 拿 id 后埋哨兵（planner 预估 ≤180s → 哨兵 +360s）
-schedule_prompt(action:'add', type:'once', schedule:'+360s',
-  prompt:'检查 plan 草案 bg subagent {subagentId}：subagent(action:list) 看状态——finished 则忽略；running 则 read sessionFile 比对 token，连续 90s 无增长=hang → cancel + 降级主 agent 自写草案')
 ```
+
+> bg 草案产出由 notifier 自动唤醒主 agent（`deliverAs: followUp`），不需轮询。若 bg 静默 hang（既不完成也不失败），当前无平台级兜底——见 `subagent-dispatch.md`「已知限制」。汇合超时感明显时，主 agent 在下一个可用 turn 调 `subagent(action:list)` 排查。
 
 ### 边界与风险
 

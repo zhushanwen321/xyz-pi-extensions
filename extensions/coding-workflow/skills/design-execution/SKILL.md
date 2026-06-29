@@ -61,9 +61,11 @@ Wave 编排（根：从时序图推导）
 >
 > **测试验收清单可脚本生成草稿（减写）：** `python3 ${SKILL_DIR}/scripts/check_execution.py {topic_dir} --generate-manifest` 读⑤§6 test-matrix 自动生成清单行（用例 ID/UC/来源/断言/执行层），「功能归属 Wave」列留空给 agent 从⑤§4时序图推导填入。生成后 agent 只补该列 + 校对，不必从零写。
 
-**Step 2（追踪）— 2 组并行 fresh-context subagent（认知帧内聚）：**
+**Step 2（追踪）— 2 组并行 fresh-context subagent（认知帧内聚，用 `wait:false` 同消息派发，见 loop-skeleton「subagent 派发工程规范」）：**
 
-> **为何拆 2 组（不拆 4）**：3 个结构视角（切片独立性/依赖闭合/并行安全）同属"Wave 图结构审计"认知域，fresh context 已消除对话偏误，同域内一个 subagent 顺序切换帧的帧内偏误很低，拆 4 = 4x IO 换不来等量盲区消除（过度并行）。测试/实现闭环跨读⑤test-matrix↔⑥清单，是不同认知帧，独立成组。Wave 编排脚本化（见 check_execution.py 生成器）后，结构三视角退化为机器自检，组A 几乎消失。
+> **为何拆 2 组（不拆 4）**：3 个结构视角（切片独立性/依赖闭合/并行安全）同属"Wave 图结构审计"认知域，fresh context 已消除对话偏误，同域内一个 subagent 顺序切换帧的帧内偏误很低，拆 4 = 4x IO 换不来等量盲区消除（过度并行）。测试/实现闭环跨读⑤test-matrix↔⑥清单，是不同认知帧，独立成组。
+>
+> **组 A 机器化降级空间**：Wave 编排脚本化（`check_execution.py` 生成器 + 结构检查）后，结构三视角（切片独立性/依赖闭合/并行安全）可退化为机器自检。当脚本已覆盖这三项时，Step 2 只派组 B（测试闭环，1 个 subagent）即可，从 2 组并行降为单组——主 agent 自跑 `check_execution.py` 的结构检查替代组 A，省一个 subagent。脚本未覆盖前维持 2 组。
 
 | 组（认知帧） | 视角 | 主读 |
 |---|---|---|
@@ -79,7 +81,7 @@ Wave 编排（根：从时序图推导）
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 execution-plan.md；派 fresh subagent 渲染 execution-plan.html（机制见 loop-skeleton.md Step 5b）（主角图：Wave 依赖 DAG 图，标注并行组）。**
 
-**Step 6（审查）— 派 fresh-context 审查 subagent（按 ../design-shared/references/review-agent.md 规范，先跑 `scripts/check_execution.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-execution.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（回扫①-⑤上游），再进 Step 6c。**
+**Step 6（审查）— 派 2 组并行 fresh-context 审查 subagent（对齐组 ‖ 红队组，按 `../design-shared/references/review-agent.md` 规范 + loop-skeleton「subagent 派发工程规范」用 `wait:false` 同消息派发）。两组都先跑 `scripts/check_execution.py` 机器检查（FAIL 硬阻断），再各跑认知帧：对齐组 5 维（内部一致性/上游对齐/可执行性/完整性/可视化）写 `changes/review-execution.md`，红队组 1 维（必要性/比例性，反过度设计）写 `changes/review-execution-redteam.md`。两组 APPROVED 后进 Step 6b 反哺检查（回扫①-⑤上游），再进 Step 6c。轻量项目可降级单组（`review_mode: single`，见 loop-skeleton Step 6 降级条款）。**
 
 **Step 6c（全文档一致性终检）— 仅⑥阶段：编码前的总闸门。** 派独立 fresh-context subagent，读取①-⑥全部 .md + CONTEXT.md + ⑤骨架代码，按 6 维做跨文档一致性审计（详见 `references/consistency-check.md`）。产出 `changes/consistency-final.md`（verdict: CONSISTENT / INCONSISTENT）。INCONSISTENT → 矛盾当 gap 回相应阶段 Step 3。**CONSISTENT 才允许交接编码。**
 
@@ -101,7 +103,7 @@ Wave 编排（根：从时序图推导）
 - [ ] **`changes/backfeed-round-{{N}}.md` 存在**（Step 6b 反哺检查真执行了；entries=0 也算，只要文件产出）
 - [ ] execution-plan.html 存在，Wave DAG 图正确渲染（并行组标注）
 - [ ] `changes/tracing-round-{N}.md` 存在
-- [ ] `changes/review-execution.md` 存在且 verdict: APPROVED
+- [ ] `changes/review-execution.md` 存在且 verdict: APPROVED（对齐组）；并行模式另需 `changes/review-execution-redteam.md` verdict: APPROVED（红队组）
 - [ ] **`changes/consistency-final.md` 存在且 verdict: CONSISTENT**（Step 6c 总闸门）
 - [ ] Wave DAG 图存在，节点+blocked_by 边清晰；调度表完整（切片/P级/依赖/并行组/说明）
 - [ ] **末尾验收 Wave 存在，blocked_by 所有功能 Wave**（DAG 末端，必须最后，闭环闸门）

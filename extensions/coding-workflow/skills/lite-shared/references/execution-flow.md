@@ -128,19 +128,19 @@ bash ~/.claude/skills/lightmerge-branch/scripts/lightmerge.sh add <project> feat
 
 ### A7. 早启动 review（多 Wave 可选加速）
 
-> 可选优化，非 [铁律]。多 Wave（≥2）时，某个 Wave 合并到集成分支后，若后续还有未调度的 Wave，立即 background 派 code-review 审该 Wave diff，与后续 Wave 的 implementer 并行。**单 Wave 或已是最后一个 Wave → 不触发**（无重叠对象，反而增加哨兵维护开销），直接走 A5 覆盖率 gate → 阶段 B。
+> 可选优化，非 [铁律]。多 Wave（≥2）时，某个 Wave 合并到集成分支后，若后续还有未调度的 Wave，立即 background 派 code-review 审该 Wave diff，与后续 Wave 的 implementer 并行。**单 Wave 或已是最后一个 Wave → 不触发**（无重叠对象），直接走 A5 覆盖率 gate → 阶段 B。
 
 ```
 Wave Wn 合并到集成分支后（A6 方式 A 增量 add）：
   ↓
-background 派 code-review（wait:false）审 Wn diff + 埋 schedule_prompt 哨兵（防 hang）
+background 派 code-review（wait:false）审 Wn diff
   ↓
 不等 review，回 A1 调度 W{n+1} 的 implementer（review 与实现重叠）
   ↓
 review 完成（notifier auto-inject 唤醒）→ 收集 must_fix 清单存着（阶段 B 汇总用，不立即修）
 ```
 
-派发模板与哨兵写法见 `subagent-dispatch.md`「早启动 review（多 Wave 加速）」。
+派发模板见 `subagent-dispatch.md`「早启动 review（多 Wave 加速）」。
 
 **为什么安全**：code-review 纯只读（tools: read），不改代码、不起副作用，background 跑不污染 git 状态；review 与 implementer 各自独立 worktree 无写入冲突；must_fix 反正要等所有功能 Wave 完成才统一修（阶段 B 失败循环），提前发现不提前改。
 
