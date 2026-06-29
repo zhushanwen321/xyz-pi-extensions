@@ -45,10 +45,11 @@ describe("encodeCwd", () => {
 });
 
 describe("getSubagentSessionDir", () => {
-  it("returns agentDir/subagents/sessions/<encodedCwd>", () => {
+  it("returns agentDir/subagents/<encodedCwd>/sessions", () => {
+    // [MF#1] 既有布局：subagents/<enc>/sessions/（不改，避免升级用户既有数据 orphan）
     const result = getSubagentSessionDir("/home/user/.pi/agent", "/home/user/project");
     expect(result).toBe(
-      path.join("/home/user/.pi/agent", "subagents", "sessions", "--home-user-project--")
+      path.join("/home/user/.pi/agent", "subagents", "--home-user-project--", "sessions")
     );
   });
 
@@ -57,7 +58,7 @@ describe("getSubagentSessionDir", () => {
     const mainCwd = "/Users/zhushanwen/Code/my-project";
     const result = getSubagentSessionDir("~/.pi/agent", mainCwd);
     const encoded = encodeCwd(mainCwd);
-    expect(result).toBe(path.join("~/.pi/agent", "subagents", "sessions", encoded));
+    expect(result).toBe(path.join("~/.pi/agent", "subagents", encoded, "sessions"));
   });
 
   it("produces consistent path for same inputs", () => {

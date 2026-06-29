@@ -14,7 +14,8 @@ const MAIN_CWD = "/home/user/project";
 const SESSION_FILE = "session-abc.jsonl";
 
 function expectedSessionDir(mainCwd: string): string {
-  return path.join(AGENT_DIR, "subagents", "sessions", encodeCwd(mainCwd));
+  // [MF#1] 既有布局：subagents/<enc>/sessions/
+  return path.join(AGENT_DIR, "subagents", encodeCwd(mainCwd), "sessions");
 }
 
 describe("resolveSessionContext", () => {

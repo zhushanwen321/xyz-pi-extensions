@@ -87,6 +87,8 @@ export interface SubagentIdentityData {
   startedAt: number;
   /** 创建该 subagent 的主 Pi session ID（session 隔离过滤用）。旧文件可能缺失。 */
   parentSessionId?: string;
+  /** [MF#4] 本 session 的 fork 深度（session-runner 写入 parentForkDepth+1）。旧文件可能缺失。 */
+  forkDepth?: number;
 }
 
 /** SDK jsonl entry（getEntries() 返回，header 已排除）。 */
@@ -121,6 +123,8 @@ export interface ReconstructedRecord {
   startedAt: number;
   /** 创建该 subagent 的主 Pi session ID（session 隔离过滤用）。旧文件可能缺失。 */
   parentSessionId: string | undefined;
+  /** [MF#4] 本 session 的 fork 深度（来自 identity custom entry；旧文件为 undefined）。 */
+  forkDepth: number | undefined;
   sessionFile: string;
   // ── 可变状态（来自 message entries）──
   status: ExecutionStatus;
@@ -415,6 +419,7 @@ export function reconstructFromFile(sessionFile: string): ReconstructedRecord | 
   return {
     ...identity,
     parentSessionId: identity.parentSessionId,
+    forkDepth: identity.forkDepth,
     sessionFile,
     status,
     turns,

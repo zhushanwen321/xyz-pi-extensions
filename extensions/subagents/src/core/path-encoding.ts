@@ -27,7 +27,10 @@ export function encodeCwd(cwd: string): string {
  * @returns session 持久化目录绝对路径
  */
 export function getSubagentSessionDir(agentDir: string, mainCwd: string): string {
-  return path.join(agentDir, "subagents", "sessions", encodeCwd(mainCwd));
+  // [MF#1] 保持既有布局 subagents/<enc>/sessions/——曾改为 subagents/sessions/<enc>/ 会让
+  // 升级用户的既有 session 文件全部落到扫描目录外（历史记录消失 + GC 扫不到，双重 orphan）。
+  // 本分支未发布，回退到既有布局即无需迁移、无数据丢失。
+  return path.join(agentDir, "subagents", encodeCwd(mainCwd), "sessions");
 }
 
 /**

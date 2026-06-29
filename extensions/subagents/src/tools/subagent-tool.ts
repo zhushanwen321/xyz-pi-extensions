@@ -109,10 +109,10 @@ const SubagentParams = Type.Object({
     maxTurns: Type.Optional(Type.Number()),
     graceTurns: Type.Optional(Type.Number()),
     fork: Type.Optional(Type.Boolean({
-      description: "Fork mode: spawn a child process that inherits the parent's environment. When true, the subagent runs in a forked process with access to the parent's shell environment and working directory. WARNING: fork inherits all environment variables including secrets (API keys, tokens). Use worktree:true for file-level isolation.",
+      description: "Fork mode: inherit the parent's conversation context. When true, the subagent runs in a branched IN-PROCESS SDK session that shares the parent's full conversation history (prior turns/messages), so it sees the existing context and can continue from that state. Subagents ALWAYS run in-process (same Node process as the parent) and share process.env — fork does NOT spawn a separate process. Use worktree:true (requires fork:true) for file-system isolation.",
     })),
     worktree: Type.Optional(Type.Boolean({
-      description: "Worktree isolation: run the subagent in a dedicated git worktree, providing file-system level isolation from the parent session. Prevents concurrent file-write conflicts between parent and subagent.",
+      description: "Worktree isolation (requires fork:true): run the subagent in a dedicated git worktree, providing file-system level isolation from the parent session. Prevents concurrent file-write conflicts between parent and subagent. Only takes effect when fork:true; passing worktree:true without fork:true throws an error.",
     })),
     cwd: Type.Optional(Type.String({
       description: 'Override the working directory for the subagent execution. Must be an absolute path. Defaults to the parent session\'s cwd.',

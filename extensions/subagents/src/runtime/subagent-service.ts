@@ -9,6 +9,7 @@
 // 上游：subagent-tool（execute/query/cancel）、TUI（onChange/listRunning/collectRecords）。
 // session_start 时经 initSession 注入 pi；modelRegistry/entries 归 ModelConfigService.initModel。
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -77,6 +78,15 @@ export interface SubagentServiceSessionInit {
 const PRIORITY_BACKGROUND = 1000;
 const PRIORITY_SYNC = 0;
 
+/** [MF#5] sessionId 短哈希前缀（6 hex）。两个并发 Pi 进程在同一 repo fork 时，seq 各自从 0
+ *  自增 → recordId=run-1 / branch=pi-sub-run-1 冲突 → 第二个 git worktree add -b 失败。
+ *  加 session 作用域前缀保证跨进程唯一。sessionId 缺失时用 'x' 兌底（空值不进 hash）。 */
+const SESSION_TAG_HEX_LEN = 6;
+function sessionTag(sessionId: string | null): string {
+  if (!sessionId) return "x";
+  return createHash("sha1").update(sessionId).digest("hex").slice(0, SESSION_TAG_HEX_LEN);
+}
+
 /** 触发 onUpdate 的事件类型（streaming delta 不触发，避免每 token 刷新）。 */
 const TRIGGERING_EVENT_TYPES = new Set<AgentEvent["type"]>([
   "tool_start",
@@ -121,6 +131,9 @@ export class SubagentService {
   private sessionId: string | null = null;
   private _disposed = false;
   private _seq = 0;
+  /** [MF#4] 当前执行栈的 fork 深度（reentrant）。主 session=0；fork 进入子 session 期间
+   *  推进为子深度，供嵌套 fork 的 execute 读取作为 parentForkDepth，避免护栏恒过 0 失效。 */
+  private currentForkDepth = 0;
 
   constructor(init: SubagentServiceInit) {
     this.cwd = init.cwd;
@@ -139,6 +152,8 @@ export class SubagentService {
   initSession(init: SubagentServiceSessionInit): void {
     this.pi = init.pi;
     this.sessionId = init.sessionId;
+    // [MF#4] 主 session fork 深度重置为 0（/new /resume /fork 后复活时重置）
+    this.currentForkDepth = 0;
     // revive（dispose 的逆操作：/resume /fork /new 后复活）
     this._disposed = false;
     this.store.revive();
@@ -188,6 +203,16 @@ export class SubagentService {
    */
   async execute(opts: ExecuteOptions): Promise<ExecutionHandle> {
     this.assertReady();
+
+    // [MF#7] worktree:true 需要 fork:true——否则下面三个 worktree 分支都不命中，
+    // worktreeHandle 恒 undefined → 子 agent 零文件隔离且零报错（静默 no-op）。此处在
+    // 任何副作用（record 创建 / worktree 创建）之前 fail-fast，不吞误用。
+    if (opts.worktree === true && !opts.fork) {
+      throw new Error(
+        "worktree:true requires fork:true (worktree isolation only applies to forked sessions). " +
+          "Set fork:true together with worktree:true.",
+      );
+    }
 
     // mode 判定（业务规则归 Service，tool 层只传 wait 意图）
     const mode = this.resolveMode(opts);
@@ -326,9 +351,10 @@ export class SubagentService {
     mode: ExecutionMode,
   ): ExecutionRecord {
     const seq = ++this._seq;
+    const tag = sessionTag(this.sessionId);
     const id = mode === "background"
-      ? `bg-${seq}-${Date.now()}`
-      : `run-${seq}`;
+      ? `bg-${tag}-${seq}-${Date.now()}`
+      : `run-${tag}-${seq}`;
     const controller = mode === "background" ? new AbortController() : undefined;
 
     const record = createRecord(id, {
@@ -370,6 +396,12 @@ export class SubagentService {
     }
     // worktree=true 或 undefined 时不传递 handle，由 run 内部处理
 
+    // [MF#4] fork 深度护栏：fork 时把当前栈深度作为 child 的 parentForkDepth，并在 child session
+    // 运行期间推进 currentForkDepth（reentrant），让嵌套 fork 的 execute 能读到自身深度——
+    // 否则 parentForkDepth 恒为 0 → MAX_FORK_DEPTH 护栏形同虚设，递归 fork 可耗尽 worktree/进程。
+    const callerForkDepth = this.currentForkDepth;
+    this.currentForkDepth = opts.fork ? callerForkDepth + 1 : callerForkDepth;
+
     let result: AgentResult;
     try {
       result = await run(record, opts.task, {
@@ -384,7 +416,7 @@ export class SubagentService {
         onEvent,
         fork: opts.fork,
         worktree: worktreeHandle,
-        parentForkDepth: opts.parentForkDepth ?? 0, // 从 opts 读取，默认 0（顶层）
+        parentForkDepth: callerForkDepth, // [MF#4] 用服务跟踪的栈深度，不从 opts 读
       }, ctx);
     } catch (err) {
       // run() 正常路径不抛错，但创建期异常（createAndConfigureSession 失败）
@@ -394,6 +426,7 @@ export class SubagentService {
       result = await this.finalizeFailed(record, err);
       return result;
     } finally {
+      this.currentForkDepth = callerForkDepth;
       this.pool.release();
     }
 

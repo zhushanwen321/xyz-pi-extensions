@@ -61,21 +61,36 @@ export class WorktreeManager {
       cwd: mainCwd,
     });
 
-    // 软链 node_modules（复用主仓库依赖）
-    const mainNodeModules = path.join(mainCwd, "node_modules");
-    const worktreeNodeModules = path.join(worktreePath, "node_modules");
-    if (fs.existsSync(mainNodeModules) && !fs.existsSync(worktreeNodeModules)) {
-      fs.symlinkSync(mainNodeModules, worktreeNodeModules);
+    // [MF#3] worktree+分支已落盘，后续步骤（symlink）抛错时必须回滚，否则孤儿 reaper
+    // 因无 .session 映射永久跳过 → worktree+分支永久泄漏。create 后所有步骤包 try/catch。
+    try {
+      // 软链 node_modules（复用主仓库依赖）
+      const mainNodeModules = path.join(mainCwd, "node_modules");
+      const worktreeNodeModules = path.join(worktreePath, "node_modules");
+      if (fs.existsSync(mainNodeModules) && !fs.existsSync(worktreeNodeModules)) {
+        fs.symlinkSync(mainNodeModules, worktreeNodeModules);
+      }
+
+      return Object.freeze({
+        path: worktreePath,
+        branch,
+        baseCommit,
+        mainCwd,
+      });
+    } catch (err) {
+      // 回滚已创建的 worktree+分支，best-effort 吞清理异常（原始 err 仍外抛）
+      try {
+        this.gitRun(["worktree", "remove", "--force", worktreePath], { cwd: mainCwd });
+      } catch (cleanErr) {
+        bestEffort(cleanErr, "worktree remove (create rollback MF#3)");
+      }
+      try {
+        this.gitRun(["branch", "-D", branch], { cwd: mainCwd });
+      } catch (cleanErr) {
+        bestEffort(cleanErr, "branch delete (create rollback MF#3)");
+      }
+      throw err;
     }
-
-    const handle: WorktreeHandle = Object.freeze({
-      path: worktreePath,
-      branch,
-      baseCommit,
-      mainCwd,
-    });
-
-    return handle;
   }
 
   /**

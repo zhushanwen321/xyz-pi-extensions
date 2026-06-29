@@ -370,7 +370,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     const handle0 = await result;
     expect(handle0.mode).toBe("background");
     if (handle0.mode !== "background") throw new Error("unreachable");
-    expect(handle0.subagentId).toMatch(/^bg-\d+-\d+$/);
+    expect(handle0.subagentId).toMatch(/^bg-[0-9a-f]{6}-\d+-\d+$/);
     expect(handle0.details.status).toBe("running");
 
     // 等 detached 完成（createSession → prompt resolve → finalize done → notify）
@@ -458,7 +458,8 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     const sent = pi.sendMessage.mock.calls[0]![0];
     // notify content = `Subagent "<agent>" (<id>) completed. Result:\n<text>`
     expect(sent.content).toContain("completed");
-    expect(sent.content).toContain("bg-1-");
+    // [MF#5] id 含 session 哈希前缀：bg-<6hex>-<seq>-<ts>
+    expect(sent.content).toMatch(/bg-[0-9a-f]{6}-1-\d+/);
   });
 
   // ============================================================
@@ -644,7 +645,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     if (result.mode !== "sync") throw new Error("unreachable");
     expect(result.record.status).toBe("done");
     // worktreeManager.create 被调用（service 的 cwd 作为 mainCwd）
-    expect(mockWorktreeManager.create).toHaveBeenCalledWith(agentDir, expect.stringMatching(/^run-\d+$/));
+    expect(mockWorktreeManager.create).toHaveBeenCalledWith(agentDir, expect.stringMatching(/^run-[0-9a-f]{6}-\d+$/));
     // finalizeRecord D-017: finalized + cleanup 被调用
     expect(vi.mocked(writeFinalized)).toHaveBeenCalled();
     expect(mockWorktreeManager.cleanup).toHaveBeenCalled();

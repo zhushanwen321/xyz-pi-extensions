@@ -76,7 +76,15 @@ function walkAndClean(dir: string, now: number): void {
         // 文件可能已被删除，忽略
         void _e;
       }
-    } else if (entry.name.endsWith(".cancelled") || entry.name.endsWith(".finalized") || entry.name.endsWith(".alive")) {
+    } else if (
+      entry.name.endsWith(".cancelled") ||
+      entry.name.endsWith(".finalized") ||
+      entry.name.endsWith(".alive") ||
+      // [MF#2] worktree 分支映射（<branch>.session）与 patch 回传（<branch>.patch）按 branch 命名，
+      // 与 .jsonl basename 无关联，删除 .jsonl 时无法同删；作为孤儿按 TTL 清理，避免永久堆积。
+      entry.name.endsWith(".session") ||
+      entry.name.endsWith(".patch")
+    ) {
       // 孤儿 sidecar（兄弟 .jsonl 已被外部删除）：按同 TTL 清理。
       try {
         const stat = fs.statSync(full);
