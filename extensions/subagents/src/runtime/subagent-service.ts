@@ -238,7 +238,7 @@ export class SubagentService {
       } catch (err) {
         // create 失败→不进入 run，合成 failed result
         const _result = await this.finalizeFailed(record, err);
-        return { mode, record: snapshot(record), details: project(record) } as ExecutionHandle;
+        return this.buildEarlyFailedHandle(record, mode);
       }
     } else if (opts.fork && opts.worktree !== false) {
       // fork=true 但 worktree 未指定或 undefined，也创建 worktree
@@ -248,7 +248,7 @@ export class SubagentService {
       } catch (err) {
         // create 失败→不进入 run，合成 failed result
         const _result = await this.finalizeFailed(record, err);
-        return { mode, record: snapshot(record), details: project(record) } as ExecutionHandle;
+        return this.buildEarlyFailedHandle(record, mode);
       }
     }
 
@@ -370,6 +370,19 @@ export class SubagentService {
 
     this.store.register(record);
     return record;
+  }
+
+  /** [MF#R4] worktree 前置失败的 early-return handle。
+   *  按 mode 分支返回 ExecutionHandle 的正确判别变体——不能统一返回 sync 形状：
+   *  background 时 record 已被 finalizeFailed 收尾为 failed、detached promise 从未启动，
+   *  若返回 sync 形状（缺 subagentId/sessionFile），下游 startHandler 读 handle.subagentId
+   *  得 undefined → 用户见"已启动"实则已失败且无法 cancel。 */
+  private buildEarlyFailedHandle(record: ExecutionRecord, mode: ExecutionMode): ExecutionHandle {
+    const details = project(record);
+    if (mode === "background") {
+      return { mode: "background", subagentId: record.id, sessionFile: record.sessionFile, details };
+    }
+    return { mode: "sync", record: snapshot(record), details };
   }
 
   // ── 执行内部：run + finalize（sync/bg 共用）──────────────
