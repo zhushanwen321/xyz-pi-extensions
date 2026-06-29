@@ -8,6 +8,7 @@ Usage:
 检查项：
   ①结构性：system-architecture.md 存在 / verdict:pass / 关键章节 / 无占位符 / review-architecture APPROVED
   ②引用：设计立场回答了「核心计算是什么」/ 核心模型有类型标注 / 状态机 Status/Reason 正交
+  ③模型关联图（条件强制）：核心模型 ≥ 2 且存在聚合/引用关系时，§4 必须含 mermaid classDiagram
 
 Exit code: 0 = 全过，1 = 有硬伤
 """
@@ -87,7 +88,55 @@ def main():
     else:
         report.add_skip("状态机 Status/Reason 正交", "无状态流转章节（可能无状态机）")
 
+    # ② 模型关联图（条件强制：多模型 + 存在聚合/引用关系时必须 classDiagram）
+    _check_model_relation_diagram(report, md_path)
+
     report.finalize_and_exit(topic_dir)
+
+
+def _check_model_relation_diagram(report, md_path):
+    """模型关联图条件检查。
+
+    条件强制（与状态机降级同范式）：
+    - 模型数 >= 2 且模型间存在聚合/引用关系（facet/聚合/组合/contains/持有/内聚 等关键词）
+      → 必须有 mermaid classDiagram，否则 FAIL
+    - 模型数 <= 1 或无聚合关系（纯独立 DTO/值对象）→ skip（单模型画图是噪音）
+
+    理由：关系约束（聚合/基数/生命周期绑定）无法靠逐模型平铺表表达，
+    散落在不变式文字里会被遗漏（D-021「4 facet 内聚」「双源不一致」即关系问题）。
+    classDiagram 是 UML 结构关系标准表达，与 §8 flowchart/§9 sequenceDiagram 语义区分清晰。
+    """
+    model_section = _extract_model_table(md_path)
+    if not model_section:
+        report.add_skip("模型关联图", "无核心模型章节")
+        return
+
+    # 数模型行（粗体模型名：| **FileNode** | ...）
+    import re
+    model_rows = re.findall(r"\|\s*\*\*([^\*]+)\*\*\s*\|", model_section)
+    model_count = len(model_rows)
+
+    if model_count < 2:
+        report.add_skip("模型关联图", f"模型数 {model_count} <= 1（单模型/纯 DTO，画图为噪音）")
+        return
+
+    # 检测聚合/引用关系关键词
+    relation_keywords = ["聚合", "组合", "facet", "内聚", "contains", "持有",
+                         "引用", "关联", "join", "映射", "分桶", "同生命周期"]
+    has_relation = any(kw in model_section for kw in relation_keywords)
+    if not has_relation:
+        report.add_skip("模型关联图", f"{model_count} 个模型但无聚合/引用关系（独立模型，图无信息量）")
+        return
+
+    # 多模型 + 有聚合关系 → 必须有 classDiagram
+    if "classDiagram" in model_section:
+        report.add_pass("模型关联图", f"{model_count} 个模型含聚合关系，已出 classDiagram")
+    else:
+        report.add_fail(
+            "模型关联图",
+            f"{model_count} 个模型且存在聚合/引用关系，但 §4 缺 mermaid classDiagram（"
+            f"关系约束靠表格表达不了，须用 classDiagram 标聚合/组合/引用+基数）",
+        )
 
 
 def _section_exists_with(md_path, heading_pattern):
