@@ -2,9 +2,10 @@
 //
 // 锁定 session-factory 纯函数分支：
 //   - applyToolFilter 4 条分支（安全敏感：决定 subagent 可用工具域）
-//   - getSubagentSessionDir 路径编码
 //   - buildAppendSystemPrompt 拼接
 //   - buildEnvBlock 非 git 仓库 / 超时分支
+//
+// 注：getSubagentSessionDir 路径编码由 path-encoding.test.ts 覆盖（统一实现，无本地版）。
 //
 // 不覆盖 createAndConfigureSession（依赖动态 import SDK，已由 sdk-contract + session-runner 集成覆盖）。
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +15,6 @@ import {
   applyToolFilter,
   buildAppendSystemPrompt,
   buildEnvBlock,
-  getSubagentSessionDir,
 } from "../core/session-runner.ts";
 import type { AgentSessionLike } from "../types.ts";
 
@@ -110,26 +110,6 @@ describe("applyToolFilter", () => {
     // 只 tool-a 命中 → allowed.length(1) < allTools.length(2) → 调用
     expect(session.setActiveCalls).toBe(1);
     expect(session.setActiveTools).toEqual(["tool-a"]);
-  });
-});
-
-// ============================================================
-// getSubagentSessionDir
-// ============================================================
-
-describe("getSubagentSessionDir", () => {
-  it("joins agentDir/subagents/<encoded-cwd>/sessions", () => {
-    const dir = getSubagentSessionDir("/home/u/.pi/agent", "/home/u/proj");
-    // encodeCwd("/home/u/proj") = "--home-u-proj--"
-    expect(dir).toBe(
-      "/home/u/.pi/agent/subagents/--home-u-proj--/sessions",
-    );
-  });
-
-  it("different cwds produce different dirs", () => {
-    const a = getSubagentSessionDir("/x", "/proj-a");
-    const b = getSubagentSessionDir("/x", "/proj-b");
-    expect(a).not.toBe(b);
   });
 });
 

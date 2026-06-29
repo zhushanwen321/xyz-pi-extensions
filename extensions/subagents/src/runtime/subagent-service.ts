@@ -21,7 +21,8 @@ import {
   tryTransition,
 } from "../core/execution-record.ts";
 import type { AgentConfig, ModelInfo } from "../core/model-resolver.ts";
-import { getSdk, getSubagentSessionDir, run, type SessionRunnerContext } from "../core/session-runner.ts";
+import { getSubagentSessionDir } from "../core/path-encoding.ts";
+import { getSdk, run, type SessionRunnerContext } from "../core/session-runner.ts";
 import type { SdkLike, WorktreeHandle } from "../types.ts";
 import type {
   AgentEvent,

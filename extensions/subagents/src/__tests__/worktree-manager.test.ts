@@ -40,6 +40,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { encodeCwd } from "../core/path-encoding.ts";
 import { isProcessAlive,readAliveMarker } from "../runtime/execution/alive-store.ts";
 import { WorktreeManager } from "../runtime/worktree-manager.ts";
 
@@ -65,9 +66,9 @@ const ORPHAN_SESSION_FILE = path.join(
   "2026-01-01T00-00-00-000Z_orphan1.jsonl",
 );
 
-/** create 路径期望（os.tmpdir 下） */
+/** create 路径期望（tmpdir/pi-subagents/<enc(mainCwd)> 下） */
 function expectedCreatePath(recordId: string): string {
-  return path.join(os.tmpdir(), `pi-sub-${recordId}`);
+  return path.join(os.tmpdir(), "pi-subagents", encodeCwd(MAIN_CWD), `pi-sub-${recordId}`);
 }
 
 /** 构造完整 handle（含 mainCwd，供 cleanup/collectPatch 测试用） */

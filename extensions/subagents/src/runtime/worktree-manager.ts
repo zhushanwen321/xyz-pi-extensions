@@ -16,7 +16,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { getSubagentSessionDir,worktreeMappingFile } from "../core/path-encoding.ts";
+import { encodeCwd,getSubagentSessionDir,worktreeMappingFile } from "../core/path-encoding.ts";
 import type { PatchResult,WorktreeHandle } from "../types.ts";
 import { DirtyWorktreeError } from "../types.ts";
 import { bestEffort } from "../utils/best-effort.ts";
@@ -53,7 +53,9 @@ export class WorktreeManager {
     // checkout 放 tmpdir，脱离 .git/ 目录结构。
     // 这样 git 自行把元数据注册到 <commonDir>/worktrees/<branch>/，
     // 普通repo（.git/worktrees）与 bare+worktree（.bare/worktrees）都能正确工作。
-    const worktreePath = path.join(os.tmpdir(), branch);
+    // [MF3] 按 encodeCwd(mainCwd) 作用域——消除不同 repo / 不同 session 并发跑 sync
+    // fork subagent 时落到同一 /tmp/pi-sub-run-1 的冲突（recordId 是 per-session 自增，无 repo 作用域）。
+    const worktreePath = path.join(os.tmpdir(), "pi-subagents", encodeCwd(mainCwd), branch);
 
     this.gitRun(["worktree", "add", "-b", branch, worktreePath, "HEAD"], {
       cwd: mainCwd,

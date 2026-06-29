@@ -11,7 +11,6 @@
 
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
-import * as path from "node:path";
 
 import { writeAliveMarker } from "../runtime/execution/alive-store.ts";
 import type {
@@ -34,7 +33,7 @@ import { bestEffort } from "../utils/best-effort.ts";
 import { getAllToolCalls, updateFromEvent } from "./execution-record.ts";
 import type { ModelRegistryLike } from "./model-resolver.ts";
 import { collectResult } from "./output-collector.ts";
-import { encodeCwd, getSubagentSessionDir as getSessionsDirByMainCwd, worktreeMappingFile } from "./path-encoding.ts";
+import { getSubagentSessionDir, worktreeMappingFile } from "./path-encoding.ts";
 import { resolveSessionContext } from "./session-context-resolver.ts";
 import { IDENTITY_CUSTOM_TYPE } from "./session-reconstructor.ts";
 import { createTurnLimiter } from "./turn-limiter.ts";
@@ -210,11 +209,6 @@ function buildResourceLoader(
   opts: ResourceLoaderOptions,
 ): ResourceLoaderLike {
   return new sdk.DefaultResourceLoader(opts);
-}
-
-/** 计算 subagent session 持久化目录。 */
-export function getSubagentSessionDir(agentDir: string, cwd: string): string {
-  return path.join(agentDir, "subagents", encodeCwd(cwd), "sessions");
 }
 
 /**
@@ -463,7 +457,9 @@ async function createSessionFromScratch(
   ctx: SessionRunnerContext,
   sdk: SdkLike,
 ): Promise<BuiltSession> {
-  const subagentSessionDir = getSubagentSessionDir(ctx.agentDir, ctx.cwd);
+  // [MF1+MF2] sessionDir 恒由 mainCwd 派生（稳定身份），与 effectiveCwd 解耦——
+  // 保证 cwd override（opts.cwd≠mainCwd）时 session.jsonl 仍落 RecordStore 扫描目录。
+  const subagentSessionDir = getSubagentSessionDir(ctx.agentDir, ctx.mainCwd);
   const sessionManager = sdk.SessionManager.create(ctx.cwd, subagentSessionDir);
   return assembleSession(input, ctx, sdk, sessionManager, ctx.cwd);
 }
@@ -625,9 +621,8 @@ export async function run(
     // 而 session 文件由 SDK 命名为 <date>-<uuid>.jsonl——不写映射则 reaper 永远找不到 session。
     if (opts.worktree && record.sessionFile) {
       try {
-        // [MF#4] 用 path-encoding 的 getSubagentSessionDir（与 worktree-manager reaper 读取一致），
-        // 不能用本文件局部的 getSubagentSessionDir（目录段顺序不同）。
-        const sessionsDir = getSessionsDirByMainCwd(ctx.agentDir, ctx.mainCwd);
+        // [MF#4] 与 worktree-manager reaper 读取同一 sessionsDir（getSubagentSessionDir 唯一实现）。
+        const sessionsDir = getSubagentSessionDir(ctx.agentDir, ctx.mainCwd);
         fs.mkdirSync(sessionsDir, { recursive: true });
         fs.writeFileSync(
           worktreeMappingFile(sessionsDir, opts.worktree.branch),
