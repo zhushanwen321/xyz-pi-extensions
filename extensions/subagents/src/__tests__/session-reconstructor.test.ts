@@ -136,6 +136,37 @@ describe("reconstructFromFile", () => {
       expect(rec!.turnCount).toBe(2);
       expect(rec!.result).toBe("first\n\nsecond");
     });
+
+    it("读出 identity 里的 parentSessionId", () => {
+      writeJsonl([
+        headerLine(),
+        identityEntry({ id: "bg-1", agent: "w", mode: "background", task: "t", startedAt: 100, parentSessionId: "sess-A" }),
+        assistantEntry([{ type: "text", text: "ok" }]),
+      ]);
+      const rec = reconstructFromFile(filePath);
+      expect(rec!.parentSessionId).toBe("sess-A");
+    });
+
+    it("identity 无 parentSessionId（旧文件）→ parentSessionId 为 undefined", () => {
+      writeJsonl([
+        headerLine(),
+        identityEntry({ id: "bg-1", agent: "w", mode: "background", task: "t", startedAt: 100 }),
+        assistantEntry([{ type: "text", text: "ok" }]),
+      ]);
+      const rec = reconstructFromFile(filePath);
+      expect(rec!.parentSessionId).toBeUndefined();
+    });
+
+    it("endedAt 为最后一条 entry 的时间戳（非 now）", () => {
+      writeJsonl([
+        headerLine(),
+        identityEntry({ id: "bg-1", agent: "w", mode: "background", task: "t", startedAt: 100 }),
+        assistantEntry([{ type: "text", text: "first" }], { ts: 1000 }),
+        assistantEntry([{ type: "text", text: "second" }], { ts: 5000, parentId: undefined }),
+      ]);
+      const rec = reconstructFromFile(filePath);
+      expect(rec!.endedAt).toBe(5000);
+    });
   });
 
   // ============================================================

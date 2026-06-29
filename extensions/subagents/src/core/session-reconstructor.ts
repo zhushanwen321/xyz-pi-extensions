@@ -85,6 +85,8 @@ export interface SubagentIdentityData {
   mode: ExecutionMode;
   task: string;
   startedAt: number;
+  /** 创建该 subagent 的主 Pi session ID（session 隔离过滤用）。旧文件可能缺失。 */
+  parentSessionId?: string;
 }
 
 /** SDK jsonl entry（getEntries() 返回，header 已排除）。 */
@@ -98,6 +100,8 @@ interface JsonlEntry {
   modelId?: string;
   /** thinking_level_change entry 的字段。 */
   thinkingLevel?: string;
+  /** entry 级别的时间戳（ISO 字符串，SDK 逐行写入）。供 endedAt 推导。 */
+  timestamp?: string;
 }
 
 // ============================================================
@@ -115,6 +119,8 @@ export interface ReconstructedRecord {
   mode: ExecutionMode;
   task: string;
   startedAt: number;
+  /** 创建该 subagent 的主 Pi session ID（session 隔离过滤用）。旧文件可能缺失。 */
+  parentSessionId: string | undefined;
   sessionFile: string;
   // ── 可变状态（来自 message entries）──
   status: ExecutionStatus;
@@ -124,6 +130,8 @@ export interface ReconstructedRecord {
   lastError: string | undefined;
   model: string;
   thinkingLevel: string | undefined;
+  /** 最后一条 entry 的时间戳（ms）。供 finalize/crashed 重建填 endedAt，避免耗时无限增长。 */
+  endedAt: number | undefined;
   /** 各 turn text 拼接的完整正文（镜像 getFullText）。 */
   result: string | undefined;
   /** 来自最后一条 error/aborted assistant message（无则 undefined）。 */
@@ -207,9 +215,7 @@ function isIdentityData(data: unknown): data is SubagentIdentityData {
     typeof d.task === "string" &&
     typeof d.startedAt === "number"
   );
-}
-
-/**
+}/**
  * 待匹配的 toolCall（assistant 发起，等 toolResult 回填）。
  * 记录在 assistant Turn 上，toolResult 到达时按 toolCallId 找到并填充。
  */
@@ -313,11 +319,21 @@ export function reconstructFromFile(sessionFile: string): ReconstructedRecord | 
   let totalTokens = 0;
   /** 最后一条 assistant message 的 stopReason（推导终态 status）。 */
   let lastStopReason: string | undefined;
+  /** 最后一条 entry 的时间戳（ms），推导 endedAt（避免重建 record 耗时随墙钟无限增长）。 */
+  let lastEntryTsMs: number | undefined;
 
   for (const entry of entries) {
+    // entry 级别 timestamp（ISO）→ ms。优先用 entry 级别（每条都有），message.timestamp 作兼底。
+    if (typeof entry.timestamp === "string") {
+      const ms = Date.parse(entry.timestamp);
+      if (!Number.isNaN(ms)) lastEntryTsMs = ms;
+    }
     if (entry.type !== "message") continue;
     const msg = entry.message;
     if (!msg) continue;
+    if (typeof msg.timestamp === "number") {
+      lastEntryTsMs = msg.timestamp;
+    }
 
     if (msg.role === "assistant") {
       const turn = emptyTurn();
@@ -398,6 +414,7 @@ export function reconstructFromFile(sessionFile: string): ReconstructedRecord | 
 
   return {
     ...identity,
+    parentSessionId: identity.parentSessionId,
     sessionFile,
     status,
     turns,
@@ -406,6 +423,7 @@ export function reconstructFromFile(sessionFile: string): ReconstructedRecord | 
     lastError,
     model,
     thinkingLevel,
+    endedAt: lastEntryTsMs,
     result: resultText.length > 0 ? resultText : undefined,
     error: lastError,
     eventLog,

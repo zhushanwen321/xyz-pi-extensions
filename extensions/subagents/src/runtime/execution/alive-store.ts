@@ -8,6 +8,7 @@
 // 设计对齐 tombstone-store：单文件 sidecar、best-effort I/O、无全局 index。
 
 import * as fs from "node:fs";
+
 import type { AliveMarker } from "../../types.ts";
 
 // ============================================================

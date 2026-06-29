@@ -146,6 +146,8 @@ export function createRecord(
     mode: ExecutionMode;
     task: string;
     startedAt: number;
+    /** 创建该 subagent 的主 Pi session ID（session 隔离过滤用）。 */
+    parentSessionId?: string;
     controller?: AbortController;
   },
 ): ExecutionRecord {
@@ -157,6 +159,7 @@ export function createRecord(
     mode: identity.mode,
     task: identity.task,
     startedAt: identity.startedAt,
+    parentSessionId: identity.parentSessionId,
 
     // 状态（实时更新）
     status: "running",

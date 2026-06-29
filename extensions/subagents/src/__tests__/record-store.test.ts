@@ -33,6 +33,7 @@ function makeRecord(over: Partial<ExecutionRecord> = {}): ExecutionRecord {
     mode: "sync",
     task: "t",
     startedAt: 1000,
+    parentSessionId: "sess-current",
   });
   return { ...base, ...over };
 }
@@ -43,31 +44,40 @@ function makeRecord(over: Partial<ExecutionRecord> = {}): ExecutionRecord {
  */
 function writeSessionJsonl(
   filePath: string,
-  identity: { id: string; agent: string; mode: "sync" | "background"; task: string; startedAt: number },
+  identity: { id: string; agent: string; mode: "sync" | "background"; task: string; startedAt: number; parentSessionId?: string; lastTs?: number },
   assistantText = "result text",
 ): void {
+  const lastTs = identity.lastTs ?? identity.startedAt + 1000;
   const header = JSON.stringify({
     type: "session", version: 3, id: "sess-uuid", timestamp: new Date(identity.startedAt).toISOString(), cwd: "/tmp",
   });
+  const identityData: Record<string, unknown> = {
+    id: identity.id,
+    agent: identity.agent,
+    mode: identity.mode,
+    task: identity.task,
+    startedAt: identity.startedAt,
+  };
+  if (identity.parentSessionId !== undefined) identityData.parentSessionId = identity.parentSessionId;
   const identityEntry = JSON.stringify({
     type: "custom",
     id: "id-1",
     parentId: null,
     timestamp: new Date(identity.startedAt).toISOString(),
     customType: "subagent-identity",
-    data: identity,
+    data: identityData,
   });
   const assistantMsg = JSON.stringify({
     type: "message",
     id: "msg-1",
     parentId: "id-1",
-    timestamp: new Date(identity.startedAt + 1000).toISOString(),
+    timestamp: new Date(lastTs).toISOString(),
     message: {
       role: "assistant",
       content: [{ type: "text", text: assistantText }],
       usage: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 30, cost: { total: 0 } },
       stopReason: "stop",
-      timestamp: identity.startedAt + 1000,
+      timestamp: lastTs,
     },
   });
   fs.writeFileSync(filePath, `${header}\n${identityEntry}\n${assistantMsg}\n`, "utf-8");
@@ -412,6 +422,124 @@ describe("RecordStore", () => {
       expect(found?.status).toBe("cancelled");
       expect(found?.error).toBe("cancelled by user");
       expect(found?.endedAt).toBe(7000);
+    });
+  });
+
+  // ============================================================
+  // session 隔离（问题 1 修复）
+  // ============================================================
+  describe("session 隔离（parentSessionId 过滤）", () => {
+    it("磁盘源：只返回 parentSessionId 匹配的 record", () => {
+      writeSessionJsonl(path.join(tmpDir, "mine.jsonl"), {
+        id: "mine", agent: "w", mode: "background", task: "t", startedAt: 1000, parentSessionId: "sess-A",
+      });
+      writeSessionJsonl(path.join(tmpDir, "other.jsonl"), {
+        id: "other", agent: "w", mode: "background", task: "t", startedAt: 2000, parentSessionId: "sess-B",
+      });
+      const store = new RecordStore(tmpDir);
+      const ids = store.collectRecords(100, "all", "sess-A").map((r) => r.id);
+      expect(ids).toEqual(["mine"]); // other 属于 sess-B，被隔离
+    });
+
+    it("磁盘源：parentSessionId 缺失（旧文件）被排除（无法判定归属）", () => {
+      writeSessionJsonl(path.join(tmpDir, "legacy.jsonl"), {
+        id: "legacy", agent: "w", mode: "background", task: "t", startedAt: 1000, // 无 parentSessionId
+      });
+      const store = new RecordStore(tmpDir);
+      const ids = store.collectRecords(100, "all", "sess-A").map((r) => r.id);
+      expect(ids).toEqual([]); // 旧文件被排除
+    });
+
+    it("磁盘源：不传 filter（undefined）不过滤（向后兼容）", () => {
+      writeSessionJsonl(path.join(tmpDir, "legacy.jsonl"), {
+        id: "legacy", agent: "w", mode: "background", task: "t", startedAt: 1000,
+      });
+      writeSessionJsonl(path.join(tmpDir, "tagged.jsonl"), {
+        id: "tagged", agent: "w", mode: "background", task: "t", startedAt: 2000, parentSessionId: "sess-A",
+      });
+      const store = new RecordStore(tmpDir);
+      const ids = store.collectRecords(100).map((r) => r.id);
+      expect(ids.sort()).toEqual(["legacy", "tagged"]); // 全返回，不过滤
+    });
+
+    it("内存源：只返回 parentSessionId 匹配的 running record", () => {
+      const store = new RecordStore(tmpDir);
+      store.register(makeRecord({ id: "mine", startedAt: 1000, parentSessionId: "sess-A" }));
+      store.register(makeRecord({ id: "other", startedAt: 2000, parentSessionId: "sess-B" }));
+      const ids = store.collectRecords(100, "all", "sess-A").map((r) => r.id);
+      expect(ids).toEqual(["mine"]);
+    });
+
+    it("内存+磁盘混合：同时按 session 过滤", () => {
+      writeSessionJsonl(path.join(tmpDir, "disk-A.jsonl"), {
+        id: "disk-A", agent: "w", mode: "background", task: "t", startedAt: 1000, parentSessionId: "sess-A",
+      });
+      writeSessionJsonl(path.join(tmpDir, "disk-B.jsonl"), {
+        id: "disk-B", agent: "w", mode: "background", task: "t", startedAt: 2000, parentSessionId: "sess-B",
+      });
+      const store = new RecordStore(tmpDir);
+      store.register(makeRecord({ id: "mem-A", startedAt: 3000, parentSessionId: "sess-A" }));
+      store.register(makeRecord({ id: "mem-B", startedAt: 4000, parentSessionId: "sess-B" }));
+      const ids = store.collectRecords(100, "all", "sess-A").map((r) => r.id).sort();
+      expect(ids).toEqual(["disk-A", "mem-A"]);
+    });
+
+    it("重建缓存：不同 filter 共享缓存，不交叉污染", () => {
+      writeSessionJsonl(path.join(tmpDir, "a.jsonl"), {
+        id: "a", agent: "w", mode: "background", task: "t", startedAt: 1000, parentSessionId: "sess-A",
+      });
+      writeSessionJsonl(path.join(tmpDir, "b.jsonl"), {
+        id: "b", agent: "w", mode: "background", task: "t", startedAt: 2000, parentSessionId: "sess-B",
+      });
+      const store = new RecordStore(tmpDir);
+      // 先查 sess-A（建缓存）
+      expect(store.collectRecords(100, "all", "sess-A").map((r) => r.id)).toEqual(["a"]);
+      // 再查 sess-B（复用缓存基底，过滤不交叉）
+      expect(store.collectRecords(100, "all", "sess-B").map((r) => r.id)).toEqual(["b"]);
+      // 不带 filter（复用缓存，全量）
+      expect(store.collectRecords(100).map((r) => r.id).sort()).toEqual(["a", "b"]);
+    });
+  });
+
+  // ============================================================
+  // endedAt 重建（问题 2 修复：终态耗时不再随墙钟增长）
+  // ============================================================
+  describe("endedAt 重建（耗时不再无限增长）", () => {
+    it(".finalized → endedAt 为最后 entry 时间戳（非 now）", () => {
+      const sessionFile = path.join(tmpDir, "fin.jsonl");
+      writeSessionJsonl(sessionFile, {
+        id: "bg-1", agent: "w", mode: "background", task: "t",
+        startedAt: 5000, lastTs: 9000, parentSessionId: "sess-A",
+      });
+      writeFinalized(sessionFile);
+      const store = new RecordStore(tmpDir);
+      const found = store.collectRecords(100, "all", "sess-A").find((r) => r.id === "bg-1");
+      expect(found?.endedAt).toBe(9000); // 不是 Date.now()
+    });
+
+    it("无 sidecar（crashed）→ endedAt 为最后 entry 时间戳（非 now）", () => {
+      const sessionFile = path.join(tmpDir, "crash.jsonl");
+      writeSessionJsonl(sessionFile, {
+        id: "bg-1", agent: "w", mode: "background", task: "t",
+        startedAt: 5000, lastTs: 9000, parentSessionId: "sess-A",
+      });
+      const store = new RecordStore(tmpDir);
+      const found = store.collectRecords(100, "all", "sess-A").find((r) => r.id === "bg-1");
+      expect(found?.status).toBe("crashed");
+      expect(found?.endedAt).toBe(9000);
+    });
+
+    it(".alive running → endedAt 保持 undefined（running 耗时继续增长是正确的）", () => {
+      const sessionFile = path.join(tmpDir, "alive.jsonl");
+      writeSessionJsonl(sessionFile, {
+        id: "bg-1", agent: "w", mode: "background", task: "t",
+        startedAt: Date.now() - 1000, lastTs: Date.now(), parentSessionId: "sess-A",
+      });
+      writeAliveMarker(sessionFile, { pid: process.pid, id: "bg-1", startedAt: Date.now() - 1000 });
+      const store = new RecordStore(tmpDir);
+      const found = store.collectRecords(100, "all", "sess-A").find((r) => r.id === "bg-1");
+      expect(found?.status).toBe("running");
+      expect(found?.endedAt).toBeUndefined();
     });
   });
 });

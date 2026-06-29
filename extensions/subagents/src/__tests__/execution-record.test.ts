@@ -100,6 +100,20 @@ describe("createRecord", () => {
     });
     expect(r.controller).toBe(controller);
   });
+
+  it("stores parentSessionId when provided", () => {
+    const r = createRecord("r1", {
+      agent: "w", model: "m", mode: "sync", task: "t", startedAt: 0, parentSessionId: "sess-A",
+    });
+    expect(r.parentSessionId).toBe("sess-A");
+  });
+
+  it("defaults parentSessionId to undefined when omitted", () => {
+    const r = createRecord("r1", {
+      agent: "w", model: "m", mode: "sync", task: "t", startedAt: 0,
+    });
+    expect(r.parentSessionId).toBeUndefined();
+  });
 });
 
 // ============================================================

@@ -8,7 +8,6 @@ import { getAgentDir } from "@mariozechner/pi-coding-agent";
 
 import { registerSubagentsCommand } from "./commands/subagents.ts";
 import { DiscoveryConfigLoader } from "./runtime/discovery-config.ts";
-import { WorktreeManager } from "./runtime/worktree-manager.ts";
 import {
   getModelConfigService,
   ModelConfigService,
@@ -20,6 +19,7 @@ import {
   setSubagentService,
   SubagentService,
 } from "./runtime/subagent-service.ts";
+import { WorktreeManager } from "./runtime/worktree-manager.ts";
 import { registerSubagentTool } from "./tools/subagent-tool.ts";
 import { renderBgNotifyMessage } from "./tui/bg-notify-render.ts";
 

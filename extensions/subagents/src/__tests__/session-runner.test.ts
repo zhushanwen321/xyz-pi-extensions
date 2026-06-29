@@ -87,7 +87,10 @@ function mockCtx(overrides?: Partial<SessionRunnerContext>): SessionRunnerContex
     agentDir: "/mock/agent",
     modelRegistry: {
       resolve: vi.fn().mockResolvedValue({ id: "test-model", provider: "test" }),
-    } as unknown as SessionRunnerContext["modelRegistry"],
+      getAvailable: vi.fn().mockReturnValue([]),
+      find: vi.fn().mockReturnValue(undefined),
+      hasConfiguredAuth: vi.fn().mockReturnValue(true),
+    } as SessionRunnerContext["modelRegistry"],
     resolveAgent: vi.fn().mockReturnValue(undefined),
     skillDirs: [],
     sdk: mockSdk(),
@@ -358,10 +361,15 @@ describe("createAndConfigureSession fork branching", () => {
       mainSessionFile: "/mock/main-session.jsonl",
     });
 
-    const [result1, result2] = await Promise.all([
+    const [settled1, settled2] = await Promise.allSettled([
       run(mockRecord(), "task-1", mockRunOpts({ fork: true, parentForkDepth: 0 }), ctx),
       run(mockRecord(), "task-2", mockRunOpts({ fork: true, parentForkDepth: 0 }), ctx),
     ]);
+    // 两任务独立、应均成功（验证并发不互相干扰）
+    expect(settled1.status).toBe("fulfilled");
+    expect(settled2.status).toBe("fulfilled");
+    const result1 = settled1.status === "fulfilled" ? settled1.value : undefined;
+    const result2 = settled2.status === "fulfilled" ? settled2.value : undefined;
 
     // 两次 createBranchedSession 各自返回独立 session
     expect(sdk.createBranchedSession).toHaveBeenCalledTimes(2);

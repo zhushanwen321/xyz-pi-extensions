@@ -14,6 +14,8 @@
 
 import * as fs from "node:fs";
 
+import { bestEffort } from "../../utils/best-effort.ts";
+
 // ============================================================
 // 公开函数
 // ============================================================
@@ -29,8 +31,9 @@ export function writeFinalized(sessionFile: string): void {
     // BC-4 互斥：先清理可能存在的 .cancelled
     try {
       fs.unlinkSync(`${sessionFile}.cancelled`);
-    } catch {
-      // 不存在则忽略（正常路径）
+    } catch (err) {
+      // 不存在属正常路径，仅 debug 记录
+      bestEffort(err, "unlink .cancelled sidecar");
     }
     fs.writeFileSync(`${sessionFile}.finalized`, "", "utf-8");
   } catch (_e) {

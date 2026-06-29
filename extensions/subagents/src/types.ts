@@ -298,6 +298,8 @@ export interface ExecutionRecord {
   readonly mode: ExecutionMode;
   readonly task: string;
   readonly startedAt: number;
+  /** 创建该 subagent 的主 Pi session ID（session 隔离过滤用）。 */
+  readonly parentSessionId: string | undefined;
 
   // ── 状态（实时更新）──
   status: ExecutionStatus;
@@ -503,6 +505,8 @@ export interface SubagentRecord {
   status: ExecutionStatus;
   mode: ExecutionMode;
   startedAt: number;
+  /** 创建该 subagent 的主 Pi session ID（session 隔离过滤用）。 */
+  parentSessionId: string | undefined;
   endedAt: number | undefined;
   turns: number;
   totalTokens: number;

@@ -33,6 +33,7 @@ import type {
   SubagentToolDetails,
 } from "../types.ts";
 import { DEFAULT_AGENT_NAME } from "../types.ts";
+import { bestEffort } from "../utils/best-effort.ts";
 import { removeAliveMarker } from "./execution/alive-store.ts";
 import { writeFinalized } from "./execution/finalized-marker.ts";
 import type { BgNotifyRecord, NotifierHost } from "./execution/notifier.ts";
@@ -112,6 +113,8 @@ export class SubagentService {
 
   private pi: PiLike | null = null;
   private sdk: SdkLike | null = null;
+  /** 当前 Pi session ID（session 隔离过滤用）。initSession 时注入。 */
+  private sessionId: string | null = null;
   private _disposed = false;
   private _seq = 0;
 
@@ -131,6 +134,7 @@ export class SubagentService {
   /** session_start 注入 pi + revive（modelRegistry/entries 归 ModelConfigService.initModel）。 */
   initSession(init: SubagentServiceSessionInit): void {
     this.pi = init.pi;
+    this.sessionId = init.sessionId;
     // revive（dispose 的逆操作：/resume /fork /new 后复活）
     this._disposed = false;
     this.store.revive();
@@ -262,6 +266,11 @@ export class SubagentService {
 
   // ── 状态查询（TUI 调）──────────────────────────────────
 
+  /** 当前 Pi session ID（TUI/测试用）。initSession 前为 null。 */
+  getSessionId(): string | null {
+    return this.sessionId;
+  }
+
   /** 订阅 store 变更（widget/list requestRender）。返回取消订阅。 */
   onChange(listener: () => void): () => void {
     return this.store.onChange(listener);
@@ -272,9 +281,10 @@ export class SubagentService {
     return this.store.listRunning();
   }
 
-  /** 合并内存(running) + 磁盘(session.jsonl 重建) record（/subagents list + tool list 消费）。 */
+  /** 合并内存(running) + 磁盘(session.jsonl 重建) record（/subagents list + tool list 消费）。
+   *  按 parentSessionId 过滤，只返回当前 session 创建的 record（session 隔离）。 */
   collectRecords(limit: number, statusFilter: StatusFilter = "all"): SubagentRecord[] {
-    return this.store.collectRecords(limit, statusFilter);
+    return this.store.collectRecords(limit, statusFilter, this.sessionId ?? undefined);
   }
 
   // ── 执行内部：mode 判定 + 身份解析 + record 创建 ──────────
@@ -324,6 +334,7 @@ export class SubagentService {
       mode,
       task: opts.task,
       startedAt: Date.now(),
+      parentSessionId: this.sessionId ?? undefined,
       controller,
     });
 
@@ -455,15 +466,15 @@ export class SubagentService {
     if (record.worktreeHandle) {
       try {
         this.worktreeManager.cleanup(record.worktreeHandle);
-      } catch {
-        // best-effort
+      } catch (err) {
+        bestEffort(err, "worktree cleanup (cancelBackground)");
       }
     }
     if (record.sessionFile) {
       try {
         removeAliveMarker(record.sessionFile);
-      } catch {
-        // best-effort
+      } catch (err) {
+        bestEffort(err, "removeAliveMarker (cancelBackground)");
       }
     }
     this.notifyComplete(record);
@@ -494,38 +505,36 @@ export class SubagentService {
     try {
       completeRecord(record, result, status);
     } catch (err) {
-      // B9: completeRecord 抛错→Step 3 仍执行
-      console.error("[subagents] completeRecord failed, continuing with cleanup:", err);
+      bestEffort(err, "completeRecord (finalizeRecord B9)", "error");
     }
 
     // ── Step 2: archive（B9: 抛错→3 仍执行）──
     try {
       this.store.archive(record);
     } catch (err) {
-      // B9: archive 抛错→Step 3 仍执行
-      console.error("[subagents] archive failed, continuing with cleanup:", err);
+      bestEffort(err, "store.archive (finalizeRecord B9)", "error");
     }
 
     // ── Step 3: finalized + cleanup + aliveMarker（三件各自独立 try/catch）──
     if (record.sessionFile) {
       try {
         writeFinalized(record.sessionFile);
-      } catch {
-        // best-effort
+      } catch (err) {
+        bestEffort(err, "writeFinalized (finalizeRecord Step3)");
       }
     }
     if (record.worktreeHandle && patchOk) {
       try {
         this.worktreeManager.cleanup(record.worktreeHandle);
-      } catch {
-        // best-effort
+      } catch (err) {
+        bestEffort(err, "worktree cleanup (finalizeRecord Step3)");
       }
     }
     if (record.sessionFile) {
       try {
         removeAliveMarker(record.sessionFile);
-      } catch {
-        // best-effort
+      } catch (err) {
+        bestEffort(err, "removeAliveMarker (finalizeRecord Step3)");
       }
     }
   }

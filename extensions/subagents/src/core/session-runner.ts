@@ -611,6 +611,7 @@ export async function run(
     // 写 identity custom entry：session.jsonl 的 header 不含 ExecutionRecord.id/agent/mode，
     // 故在此写一条 custom entry 携带身份，collectRecords 重建时读它恢复 record 身份。
     // session.jsonl 是唯一 source of truth（history.jsonl 已废弃）。
+    // parentSessionId 用于 session 隔离过滤（同一 cwd 下多个 Pi session 共享 sessions 目录）。
     // forkDepth+1 标记本 session 的 fork 深度（reconstruct 时用来恢复 fork 层级）。
     built.session.sessionManager.appendCustomEntry(IDENTITY_CUSTOM_TYPE, {
       id: record.id,
@@ -618,6 +619,7 @@ export async function run(
       mode: record.mode,
       task: record.task,
       startedAt: record.startedAt,
+      parentSessionId: record.parentSessionId,
       forkDepth: (opts.parentForkDepth ?? 0) + 1,
     });
 

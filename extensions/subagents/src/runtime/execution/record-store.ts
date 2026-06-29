@@ -37,7 +37,7 @@ const STATUS_PRIORITY: Record<ExecutionStatus, number> = {
 };
 
 /** .alive sidecar 的 24 小时软超时（超过此时间即使 pid 存活也判 crashed）。 */
-const ALIVE_SOFT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+const ALIVE_SOFT_TIMEOUT_MS = 86_400_000; // 24h in ms
 
 /** store 变更监听器（返回取消订阅函数）。 */
 export type ChangeListener = () => void;
@@ -103,25 +103,37 @@ export class RecordStore {
    *   ║  1. 磁盘源：扫 sessionsDir 的 .jsonl，逐个 reconstructFromFile   ║
    *   ║     （命中缓存则跳过读文件）。cancelled tombstone override status ║
    *   ║  2. 内存源覆盖（同 id 内存优先——running record 更新鲜）          ║
-   *   ║  3. statusFilter："running" → 只留 running（内存源）；            ║
+   *   ║  3. session 过滤：只留 parentSessionId === parentSessionFilter 的  ║
+   *   ║     record。parentSessionId 缺失（旧文件）的 record 一律排除       ║
+   *   ║     （无法判定归属，隔离优先）。parentSessionFilter 为 undefined   ║
+   *   ║     时不过滤（向后兼容）。                                          ║
+   *   ║  4. statusFilter："running" → 只留 running（内存源）；            ║
    *   ║                   "all"（默认）→ 内存 + 磁盘                       ║
-   *   ║  4. 排序：STATUS_PRIORITY + startedAt desc                        ║
-   *   ║  5. slice(limit)                                                  ║
+   *   ║  5. 排序：STATUS_PRIORITY + startedAt desc                        ║
+   *   ║  6. slice(limit)                                                  ║
    *   ╚══════════════════════════════════════════════════════════════════╝
    *
    * statusFilter="running" 时仍先取够多再过滤（防 limit 截断把 running 滤没），
    * 与旧 listHandler 的防截断逻辑一致，下沉到此。
+   *
+   * session 隔离：同一 cwd 下多个 Pi session 共享 sessionsDir，靠 parentSessionId
+   * 区分。内存与磁盘源都按 parentSessionFilter 过滤后再 merge/sort/slice。
    */
-  collectRecords(limit: number, statusFilter: StatusFilter = "all"): SubagentRecord[] {
+  collectRecords(
+    limit: number,
+    statusFilter: StatusFilter = "all",
+    parentSessionFilter?: string,
+  ): SubagentRecord[] {
     const byId = new Map<string, SubagentRecord>();
 
-    // 1. 磁盘源（重建终态 record）。
-    for (const rec of this.reconstructAll()) {
+    // 1. 磁盘源（重建终态 record）。 reconstructAll 已按 parentSessionFilter 过滤。
+    for (const rec of this.reconstructAll(parentSessionFilter)) {
       byId.set(rec.id, rec);
     }
 
-    // 2. 内存源覆盖（running record 优先——它是活态，比磁盘重建更新鲜）。
+    // 2. 内存源覆盖（running record 优先——它是活态，比磁盘重建更新鲜）。同样按 session 过滤。
     for (const r of this.records.values()) {
+      if (parentSessionFilter !== undefined && r.parentSessionId !== parentSessionFilter) continue;
       byId.set(r.id, RecordStore.recordToSubagent(r));
     }
 
@@ -177,9 +189,17 @@ export class RecordStore {
    *   4. 兜底 → crashed
    *
    * 所有分支经 markReconstructedStatus（不裸 .status=）。
+   *
+   * session 隔离：parentSessionFilter 非空时，只保留 parentSessionId 匹配的 record。
+   * parentSessionId 缺失（旧文件，未带身份字段）一律排除（无法判定归属）。
+   * 缓存以 undefined 过滤结果为基底，带 filter 时在基底上再筛（避免缓存碎片化）。
    */
-  private reconstructAll(): SubagentRecord[] {
-    if (this.reconCache) return [...this.reconCache.values()];
+  private reconstructAll(parentSessionFilter?: string): SubagentRecord[] {
+    if (this.reconCache) {
+      const all = [...this.reconCache.values()];
+      if (parentSessionFilter === undefined) return all;
+      return all.filter((r) => r.parentSessionId === parentSessionFilter);
+    }
 
     const cache = new Map<string, SubagentRecord>();
     let files: string[];
@@ -210,6 +230,7 @@ export class RecordStore {
         status: recon.status, // 临时值，各分支覆盖
         mode: recon.mode,
         startedAt: recon.startedAt,
+        parentSessionId: recon.parentSessionId,
         endedAt: undefined,
         turns: recon.turnCount,
         totalTokens: recon.totalTokens,
@@ -232,6 +253,8 @@ export class RecordStore {
         // done/failed 按 recon 推导的 stopReason（reconstructFromFile 已映射为 status）。
         const status: ExecutionStatus = recon.status === "failed" ? "failed" : "done";
         markReconstructedStatus(rec, status);
+        // 用最后一条 entry 的时间戳作为 endedAt（避免重建后耗时随墙钟无限增长）。
+        rec.endedAt = recon.endedAt;
       }
       // ── 分支 3: .alive + pid 存活 + 未超 24h 软超时 ──
       else if (
@@ -245,13 +268,17 @@ export class RecordStore {
       // ── 分支 4: 兜底（都无 / .alive 但 pid 死 / 超 24h）──
       else {
         markReconstructedStatus(rec, "crashed");
+        // crashed 以最后已知活动时间为准（pid 死亡时间未知，用最后 entry 时间近似）。
+        rec.endedAt = recon.endedAt;
       }
 
       cache.set(file, rec);
     }
 
     this.reconCache = cache;
-    return [...cache.values()];
+    // 带 filter 时在缓存上筛（上面已构造全量缓存，便于后续调用复用）。
+    if (parentSessionFilter === undefined) return [...cache.values()];
+    return [...cache.values()].filter((r) => r.parentSessionId === parentSessionFilter);
   }
 
   /** 排序比较器：status priority（running<failed<cancelled<done）+ startedAt desc。 */
@@ -269,6 +296,7 @@ export class RecordStore {
       status: r.status,
       mode: r.mode,
       startedAt: r.startedAt,
+      parentSessionId: r.parentSessionId,
       endedAt: r.endedAt,
       turns: r.turnCount,
       totalTokens: r.totalTokens,

@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock,vi } from "vitest";
 
 import type { ModelInfo, ModelRegistryLike } from "../core/model-resolver.ts";
 import { removeAliveMarker } from "../runtime/execution/alive-store.ts";
@@ -275,6 +275,24 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     expect(result.details.sessionFile).toBe("fake-session.jsonl");
     // run() 的 collectResult 从 record.turns[] 聚合 text（收口后不再读 session.messages）
     expect(result.details.result).toBe("done");
+  });
+
+  it("identity custom entry 写入 parentSessionId（session 隔离）", async () => {
+    const handle = makeFakeSession({
+      promptBehavior: { kind: "resolve", events: [{ type: "turn_end" }, { type: "message_end" }] },
+    });
+    const { service, agentDir, ctxModel } = setup(handle.session);
+    agentDirs.push(agentDir);
+
+    await service.execute({ task: "do work", wait: true, ctxModel });
+
+    const append = handle.session.sessionManager.appendCustomEntry as Mock;
+    const identityCall = append.mock.calls.find(
+      ([ct]) => ct === "subagent-identity",
+    );
+    expect(identityCall).toBeDefined();
+    // setup() 用 sessionId="exec-it"
+    expect((identityCall![1] as Record<string, unknown>).parentSessionId).toBe("exec-it");
   });
 
   // ============================================================
@@ -635,9 +653,10 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     service.initSession({ pi: makePi(), sessionId: "exec-wt" });
 
     // 实例级 mock：worktreeManager 实例已创建，直接覆盖其 create 方法
-    const svc = service as unknown as { worktreeManager: typeof mockWorktreeManager };
-    const origCreate = svc.worktreeManager.create;
-    svc.worktreeManager.create = vi.fn().mockImplementation(() => {
+    // Reflect.get 绕过 TS private 访问检查（返回 any，单层断言合规）
+    const svc = Reflect.get(service, "worktreeManager") as typeof mockWorktreeManager;
+    const origCreate = svc.create;
+    svc.create = vi.fn().mockImplementation(() => {
       throw new Error("dirty worktree");
     });
 
@@ -649,7 +668,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     });
 
     // 恢复原始 mock（不影响其他测试）
-    svc.worktreeManager.create = origCreate;
+    svc.create = origCreate;
 
     expect(result.mode).toBe("sync");
     if (result.mode !== "sync") throw new Error("unreachable");
