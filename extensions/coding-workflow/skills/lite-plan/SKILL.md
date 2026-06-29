@@ -14,7 +14,7 @@ description: >-
 
 为**不涉及架构改动的小功能**产出一份 plan.md，含 6 个章节：业务目标、技术改动点（文件级）、Wave 依赖拆分、**完整的测试验收设计**（单测清单 + E2E 清单 + 覆盖率 gate）。
 
-> **含 3 个条件触发的 ensemble 点**（0b 范围守门投票 / 2b 复用检查并集 / 4b 测试完整性并集）：同源盲区高风险时派多路 fresh subagent 同题并行、综合去偏。触发条件见路由表与各步骤正文，明确小功能不启用。趋同数据（`*_ensemble_overlap`）记 frontmatter，供 lite-retrospect 消费做降级决策。
+> **含 4 个条件触发的 ensemble 点**（0b 范围守门投票 / 2b 复用检查并集 / 4b 测试完整性并集 / 5b 草案审查互补）：同源盲区高风险时派多路 fresh subagent 同题并行、综合去偏。触发条件见路由表与各步骤正文，明确小功能不启用。趋同数据（`*_ensemble_overlap`）记 frontmatter，供 lite-retrospect 消费做降级决策。
 
 > **[铁律] 本 skill 只做计划，不写实现代码。** 测试用例只设计（输入/预期/类型），不写测试代码——那是 lite-execute 的 implementer 按 TDD 写的。
 >
@@ -67,14 +67,15 @@ description: >-
 | 0b. 范围守门 ensemble（条件触发） | 5 条判据中 1-2 条处于边界时：派 fresh subagent 投票判范围（详见正文） | — |
 | 1. 读项目文档 + 探索澄清 | **必读** README/CLAUDE.md/AGENTS.md 等规范（详见下方「规划前置」）；读代码理解现状，与用户澄清业务目标（可衡量成功标准 + 约束/不做） | — |
 
-> **[可选加速] 并行模式**：步骤 1 搜集后，若识别到 ≥2 个需澄清问题且 ≥1 个是细节性（详见下方「并行加速模式」），主 agent 同消息分叉：ask_user 提问 ‖ 派 bg subagent 先写草案。把「等用户响应」的时间用于并行生成 plan 草案。
+> **[可选加速] 并行模式**：步骤 1 搜集后，若识别到 ≥2 个需澄清问题且 ≥1 个是细节性（详见下方「并行加速模式」），主 agent 同消息分叉：ask_user 提问 ‖ 派 2 路 bg subagent（技术方案 + 测试设计）并行写草案。把「等用户响应」的时间用于并行生成 plan 草案。
 | 2. 复用检查 + 列改动点 | **先查现有 codebase** 是否有类似功能/可复用代码（判复用 or 抽象，详见「规划前置」）；再列举创建/修改文件（文件级 + 职责） | — |
 | 2b. 复用检查 ensemble（条件触发） | 改动点 ≥3 时：派 fresh subagent 多路搜索策略并集找复用候选（详见正文） | — |
 | 3. Wave 拆分 | 从改动点推导 Wave 表（垂直切片 + 依赖 + 并行组 + 末尾验收 Wave） | `../lite-shared/references/wave-model.md` |
 | 4. 测试设计（随改动评估） | 代码每处改动评估现有测试如何随之改；单测清单（AC级可判定）+ E2E 清单（探测项目实际测试栈）+ 覆盖率 gate | `../lite-shared/references/test-case-schema.md` |
 | 4b. 多路反向自检（条件触发） | 改动点 ≥3 / 涉及过滤·查询·匹配·状态机时：派 fresh subagent ensemble 找漏用例（详见正文） | — |
-| 5. 写 plan.md | 用完整模板填 6 章节 | `../lite-shared/references/plan-template.md` |
-| 6. 自检 | 对照下方 Self-Check 逐条核对 | — |
+| 5. 写 plan.md | 用完整模板填 6 章节（若并行加速模式启用：合并技术方案路 + 测试设计路两份草案） | `../lite-shared/references/plan-template.md` |
+| 5b. 草案审查 ensemble（条件触发） | plan.md 写成后：派 2 路 fresh subagent 从方案 + 测试两角度审查（详见正文） | — |
+| 6. 自检 | 对照下方 Self-Check 逐条核对（含 5b 审查反馈处理） | — |
 
 > [铁律] 步骤 1 不做架构设计。技术约束只记录到 Constraints，不展开选型/接口定义/数据建模。
 
@@ -100,30 +101,35 @@ description: >-
 ```
 步骤 1 搜集完，识别问题集并二分类 → 满足门槛 → 主 agent 同消息分叉：
   ├─ 主 agent：ask_user(action='add') 批量提问（1-4 个，含阻塞性 + 细节性）
-  └─ bg subagent：planner agent, wait:false, 任务见下方派发模板
+  ├─ bg subagent 路1（技术方案）：planner agent, wait:false, 负责章节 1-3
+  └─ bg subagent 路2（测试设计）：general-purpose agent, wait:false, 负责章节 4-6
 
-  ↓ ask_user 等用户响应 ‖ bg 写草案，两者并行
+  ↓ ask_user 等用户响应 ‖ 2 路 bg 并行写草案，两者并行
 
-汇合（ask_user 返回 + bg 草案产出 / notifier 唤醒）→
-  主 agent 核对草案：
+汇合（ask_user 返回 + 2 路 bg 草案 / notifier 唤醒）→
+  主 agent 核对+合并草案：
     1. 阻塞性问题的假设：bg 用「假设X」标注的，拿用户答案逐条核对，推翻则重做该部分
     2. 细节性问题的占位符：拿用户答案填
-    3. 测试清单 fixture：review bg 的用例预期是否对照真实 fixture（不盲采，见「输入材料可信度」）
-  → 自检 → 定稿写入 planFilePath → plan(action='complete')
+    3. 合并两路草案：技术方案路输出章节 1-3 + 测试设计路输出章节 4-6 → 拼接为完整 plan.md
+    4. 交叉校验：技术方案路的改动点清单是否与测试设计路的用例覆盖清单一致？（不一致→补全）
+    5. 测试清单 fixture：review 测试设计路的用例预期是否对照真实 fixture（不盲采，见「输入材料可信度」）
+  → 进步骤 5b 草案审查（条件触发）→ 自检 → 定稿写入 planFilePath → plan(action='complete')
 ```
 
-### bg subagent 派发模板
+### bg subagent 派发模板（2 路，同消息并行派发）
+
+**路 1 — 技术方案（章节 1-3）：**
 
 ```
 subagent(action:'start', startParam:{
-  agent: "planner",         # Creates implementation plans from context
+  agent: "planner",
   wait: false,
   task: """
-  为以下需求写一份 plan 草案（按 plan-template.md 六章节），写到临时文件：
-  .xyz-harness/plan-draft-{slug}.md（不要碰 planFilePath，不要调 plan(complete)）。
+  为以下需求写 plan 草案的**前 3 章节**（业务目标、技术改动点、Wave 拆分），写到临时文件：
+  .xyz-harness/plan-draft-tech-{slug}.md（不要碰 planFilePath，不要调 plan(complete)）。
 
   需求：{一句话}
-  约束/规范（主 agent 已搜集）：{规范摘要 + 文件清单，bg 可自行 read 这些文件}
+  约束/规范（主 agent 已搜集）：{规范摘要 + 文件清单}
 
   需澄清问题及处理：
   - 阻塞性（你不能先定）：{问题1}、{问题2} → 用「假设：X」标注，待主 agent 汇合核对
@@ -131,21 +137,55 @@ subagent(action:'start', startParam:{
 
   要求：
   - read 下列关键文件理解现状：{文件清单}
-  - 按 wave-model.md 拆 Wave（垂直切片 + 依赖）
-  - 按 test-case-schema.md 写测试清单，预期值对照真实 fixture（grep/ls mock 数据）
+  - 读 ../lite-shared/references/wave-model.md 并按垂直切片拆 Wave
+  - 每个技术改动点标注复用来源或不可复用原因
+  - 输出章节 1-3 及「实现步骤」章节（含每 Wave 的 TDD 步骤）
+  - 不写章节 4-6（测试设计），那是另一路 subagent 的活
   - 不实现代码、不 commit
   """
-}) → 返回 {subagentId}
+})
 ```
 
-> bg 草案产出由 notifier 自动唤醒主 agent（`deliverAs: followUp`），不需轮询。若 bg 静默 hang（既不完成也不失败），当前无平台级兜底——见 `subagent-dispatch.md`「已知限制」。汇合超时感明显时，主 agent 在下一个可用 turn 调 `subagent(action:list)` 排查。
+**路 2 — 测试设计（章节 4-6）：**
+
+```
+subagent(action:'start', startParam:{
+  agent: "general-purpose",
+  wait: false,
+  task: """
+  为以下需求写 plan 草案的**后 3 章节**（单测用例清单、E2E 用例清单、覆盖率 gate），写到临时文件：
+  .xyz-harness/plan-draft-test-{slug}.md（不要碰 planFilePath，不要调 plan(complete)）。
+
+  需求：{一句话}
+  技术改动点（由主 agent 或技术方案路提供）：{改动点清单}
+  约束/规范（主 agent 已搜集）：{规范摘要}
+
+  需澄清问题及处理：
+  - 细节性（你用占位符先做）：{问题3} → 用 {PLACEHOLDER} 占位，待填
+
+  要求：
+  - read 下列关键文件理解现状：{技术文件 + fixture/mock 数据文件清单}
+  - 读 ../lite-shared/references/test-case-schema.md 并按 schema 写测试清单
+  - **fixture 对齐**：先 read 涉及的 fixture/mock 数据进上下文，预期值对照真实 fixture 推算
+  - 每个改动点正常/异常/边界各 ≥1 条单测
+  - 探测项目实际测试栈（不预设框架），按探测结果写 E2E 执行方式
+  - 覆盖率 gate 按语言×框架表选命令
+  - 不写章节 1-3（技术方案），那是另一路 subagent 的活
+  - 不实现代码、不 commit
+  """
+})
+```
+
+> 两路 bg 草案产出由 notifier 自动唤醒主 agent（`deliverAs: followUp`），不需轮询。若某路 bg 静默 hang（既不完成也不失败），当前无平台级兜底——见 `subagent-dispatch.md`「已知限制」。汇合超时感明显时，主 agent 在下一个可用 turn 调 `subagent(action:list)` 排查。
 
 ### 边界与风险
 
-- **bg 上下文不足风险**：plan 设计依赖 codebase 理解。解法——bg task 里让它**自己 read 关键文件**（主 agent 给清单），不靠摘要硬做。代价是 bg 耗时≈主 agent 自做耗时，但那是并行跑的，不亏。
-- **草案烂（阻塞性问题假设错）→ 重做**：汇合时若用户答案推翻了 bg 的阻塞性假设，必须重做该部分，不勉强用烂草案。这是并行的已知风险，主 agent 汇合 review 要识别。
+- **2 路拆分降低单路负担**：原来 1 个 bg subagent 写全部 6 章节，注意力和 token 预算倾斜技术方案，测试章节常被压缩。拆成 2 路后各聚焦 3 章节，测试设计质量预期显著提升。
+- **交叉校验防漂移**：技术方案路的改动点清单必须与测试设计路的用例覆盖清单一致。汇合时主 agent 做交叉校验——技术方案列了但测试没覆盖的改动点 → 补用例；测试覆盖了但技术方案没列的 → 核实后补改动点或删用例。
+- **bg 上下文不足风险**：plan 设计依赖 codebase 理解。解法——bg task 里让它**自己 read 关键文件**（主 agent 给清单），不靠摘要硬做。代价是 bg 耗时≈主 agent 自做耗时，但两路并行跑，不亏。
+- **草案烂（阻塞性问题假设错）→ 重做**：汇合时若用户答案推翻了 bg 的阻塞性假设，两路草案的相关部分都必须重做（阻塞性假设通常影响技术方案路，连带影响测试设计路的覆盖范围），不勉强用烂草案。
 - **plan mode 状态机**：bg 是独立 session，**只写临时文件，不调 plan(complete)**。主 agent 汇合定稿后才 complete。状态边界干净。
-- **不替代澄清质量**：此模式只加速，bg subagent 不找 gap（那是 spec-clarify 的活）。别因引入并行就觉得澄清更严谨。
+- **不替代澄清质量**：此模式只加速，bg subagent 不找 gap。系统化 gap-finding 走 design-clarity（design 工作流 Step 1）。别因引入并行就觉得澄清更严谨。
 
 ## 规划前置：读项目文档 + 复用检查（步骤 1/2 必做）
 
@@ -289,6 +329,96 @@ subagent(action:'start', startParam:{
 - **E2E 不 ensemble**：E2E 受执行栈强约束（happy-dom 无真实视口等），ensemble 边际收益低、误报多。E2E 走单路反向自检 + 「E2E 用例可执行性自检」（`test-case-schema.md`）
 - **小功能不触发**：明确属于 lite 的小功能（1-2 改动点）走单路反向自检即可，ensemble 是编排开销 ≥ 收益的反模式
 
+## 步骤 5b：草案审查 ensemble（互补角度，条件触发）
+
+> 触发条件：plan.md 写成后（含并行加速模式合并完成），满足以下**任一**条件触发；1-2 个改动点的小功能走单路自检（步骤 6），不启用 ensemble：
+> - 技术改动点 ≥3 个
+> - Wave 数 ≥2 个
+
+完整 plan.md 写成后，主 agent 自检之前，派 2 路 fresh subagent 从**互补角度**做独立审查。与步骤 0b/2b/4b 不同——那些是单维度深度检查（范围/复用/测试完整性），本步是**全 plan 结构性审查**：方案是否自洽、Wave 是否合理、测试是否可执行。
+
+### 差异化策略
+
+| 路 | 聚焦 | 审查内容 |
+|----|------|---------|
+| **方案审查路** | 章节 1-3 质量 | 业务目标可衡量？技术改动点无遗漏？Wave 拆分垂直切片否？依赖推导有依据？并行组文件无交集？ |
+| **测试审查路** | 章节 4-6 质量 | 单测可机器判定？fixture 对齐否？E2E 执行方式可落地？覆盖率 gate 命令正确？每个改动点正常/异常/边界各 ≥1？ |
+
+### 派发模板（wait:false，同消息并行）
+
+**路 1 — 方案审查：**
+
+```
+subagent(action:'start', startParam:{
+  agent: "general-purpose",
+  wait: false,
+  task: """
+  你是独立审查 subagent，上下文与主 agent 隔离。只审查 plan.md 的**技术方案质量**，不审查测试章节。
+
+  read plan.md（完整文件），逐一检查：
+  1. 业务目标：是否有可衡量成功标准？（非「做好 X」）
+  2. 技术改动点：文件级清单是否无遗漏？（grep 验证关键文件是否存在）
+  3. Wave 拆分：每个 Wave 是垂直切片否？blocked_by 是否有依据？并行组文件有交集否？
+  4. 实现步骤：每 Wave 是否含完整 TDD 步骤（先写测试→实现→跑通）？
+
+  输出「审查发现」清单，每条：
+  - 位置（章节/行）
+  - 问题描述
+  - 严重程度（must_fix / should_fix / nit）
+  - 建议修复方向
+
+  不关注测试章节（章节 4-6），那是另一路审查 subagent 的活。
+  不修改文件。
+  """
+})
+```
+
+**路 2 — 测试审查：**
+
+```
+subagent(action:'start', startParam:{
+  agent: "general-purpose",
+  wait: false,
+  task: """
+  你是独立审查 subagent，上下文与主 agent 隔离。只审查 plan.md 的**测试设计质量**，不审查技术方案章节。
+
+  read plan.md（完整文件），逐一检查：
+  1. 单测用例：每条是否可机器判定？（输入/预期有具体值，非「正常工作」）
+  2. fixture 对齐：预期值是否对照真实 fixture 推算？（read 涉及的 fixture 文件验证）
+  3. 覆盖完整性：每个技术改动点正常/异常/边界是否各 ≥1 条？
+  4. E2E 用例：执行方式是否写明了项目实际的命令？（非抽象「运行测试」）
+  5. 覆盖率 gate：命令是否正确？算法是否写明？阈值 ≥60%？
+
+  输出「审查发现」清单，每条：
+  - 位置（用例ID / 章节）
+  - 问题描述
+  - 严重程度（must_fix / should_fix / nit）
+  - 建议修复方向
+
+  不关注技术方案章节（章节 1-3），那是另一路审查 subagent 的活。
+  不修改文件。
+  """
+})
+```
+
+### 汇合（notifier 唤醒，不需轮询）
+
+主 agent 收齐 2 路审查发现后：
+1. **去重**：两路按「位置 + 问题描述」去重（两路聚焦不同章节，重叠通常少）
+2. **分级处理**：
+   - `must_fix` → 必须修改后才进步骤 6 自检
+   - `should_fix` → 主 agent 判断是否改（若改动成本低则直接改）
+   - `nit` → 记录，不阻塞
+3. **处理完后进步骤 6 自检**
+
+> 趋同检测（记 plan.md frontmatter，供 lite-retrospect 消费）：2 路 must_fix 指向同一问题时 → 记 `review_ensemble_overlap: high`（双路交叉验证，高置信）；must_fix 完全无重叠 → 记 `low`（两路确实互补，ensemble 价值高）。
+
+### 边界
+
+- **不替代步骤 0b/2b/4b**：本步是全 plan 结构性审查，0b/2b/4b 是单维度深度检查。互补关系，不是替代。
+- **小功能不触发**：1-2 改动点、1 Wave 的极简功能，本步编排开销 > 收益，走步骤 6 单路自检。
+- **审查 ≠ 重写**：subagent 只输出问题清单，不修改 plan.md。主 agent 决策是否采纳、如何修复。
+
 ## Self-Check
 
 **[MANDATORY] 全部满足才算 plan 完成。**
@@ -301,7 +431,7 @@ subagent(action:'start', startParam:{
 - [ ] 已读项目规范文档（README/CLAUDE.md/AGENTS.md 等），约束已进 Constraints
 - [ ] 每个技术改动点已查复用（标注复用来源 or 不可复用原因）
 - [ ] **若触发步骤 2b**（改动点 ≥3）：复用检查 ensemble 多路候选已并集去重 + 判定真复用（vs 仅相似）后进技术改动点；未触发则确认单路复用检查已做
-- [ ] 若启用并行加速模式：bg 草案的阻塞性假设已逐条拿用户答案核对（推翻的已重做）；细节性占位符已填；测试清单 fixture 已 review（不盲采 bg 预期）
+- [ ] 若启用并行加速模式：2 路 bg 草案（技术方案 + 测试设计）已合并；阻塞性假设已逐条拿用户答案核对（推翻的已重做）；细节性占位符已填；交叉校验已做（技术方案改动点 vs 测试覆盖清单一致）；测试清单 fixture 已 review（不盲采 bg 预期）
 
 Wave 拆分：
 - [ ] 每个 Wave 是垂直切片（非水平切片）
@@ -322,6 +452,9 @@ Wave 拆分：
 格式：
 - [ ] 含 `## 实现步骤` 标题（plan extension 桥接依赖）
 - [ ] 无占位符（TBD/TODO/...）
+
+审查：
+- [ ] **若触发步骤 5b**（改动点 ≥3 或 Wave ≥2）：2 路草案审查（方案 + 测试）已完成；must_fix 已全部处理；should_fix 已决策（改 or 不改）；未触发则确认属于明确小功能（1-2 改动点、1 Wave）单路自检已做
 
 ## 交付
 
