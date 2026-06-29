@@ -876,11 +876,19 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     // writeFinalized 仍被调用（finalizeRecord 总是写 finalized）
     expect(vi.mocked(writeFinalized)).toHaveBeenCalled();
   });
-});
+  it("[MF#3] execute({worktree:true, fork:false}) → throws (worktree requires fork)", async () => {
+    const handle = makeFakeSession({ promptBehavior: { kind: "resolve" } });
+    const { service, agentDir, ctxModel } = setup(handle.session);
+    agentDirs.push(agentDir);
 
-// ============================================================
-// helpers（追加）
-// ============================================================
+    await expect(
+      service.execute({ task: "bad combo", wait: true, ctxModel, worktree: true, fork: false }),
+    ).rejects.toThrow(/requires fork/);
+    // 守卫在任何副作用之前 fail-fast：worktree 未创建、prompt 未调用
+    expect(mockWorktreeManager.create).not.toHaveBeenCalled();
+    expect(handle.promptCalls()).toBe(0);
+  });
+});
 
 /** 让 microtask 队列跑空（detached promise / await 链推进）。 */
 async function flushMicrotasks(): Promise<void> {

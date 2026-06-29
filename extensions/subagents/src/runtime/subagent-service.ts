@@ -9,6 +9,7 @@
 // 上游：subagent-tool（execute/query/cancel）、TUI（onChange/listRunning/collectRecords）。
 // session_start 时经 initSession 注入 pi；modelRegistry/entries 归 ModelConfigService.initModel。
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -131,9 +132,14 @@ export class SubagentService {
   private sessionId: string | null = null;
   private _disposed = false;
   private _seq = 0;
-  /** [MF#4] 当前执行栈的 fork 深度（reentrant）。主 session=0；fork 进入子 session 期间
-   *  推进为子深度，供嵌套 fork 的 execute 读取作为 parentForkDepth，避免护栏恒过 0 失效。 */
-  private currentForkDepth = 0;
+  /** [MF#4][MF#2] fork 深度按 async 调用链传递（AsyncLocalStorage），替代共享可变计数器。
+   *  主 session=0；fork 进入子 session 期间推进为子深度，供嵌套 fork 的 execute（子 agent
+   *  在 run() 期间再调 subagent tool）经 ALS 读到自身深度作为 parentForkDepth。并发 background
+   *  fork 各自独立调用链，不再互相压低深度值 → MAX_FORK_DEPTH 递归护栏不被绕过。
+   *  [MF#2] 旧实现用单实例字段 currentForkDepth 跨所有执行链共享：并发 background 下 A 还原
+   *  深度后 B 的嵌套 fork 读到被压低的值 → 护栏恒不过限。ALS 是 node 跨 async 边界传递
+   *  “请求作用域”状态的标准机制，每条调用链隔离。 */
+  private readonly forkDepthAls = new AsyncLocalStorage<number>();
 
   constructor(init: SubagentServiceInit) {
     this.cwd = init.cwd;
@@ -152,8 +158,8 @@ export class SubagentService {
   initSession(init: SubagentServiceSessionInit): void {
     this.pi = init.pi;
     this.sessionId = init.sessionId;
-    // [MF#4] 主 session fork 深度重置为 0（/new /resume /fork 后复活时重置）
-    this.currentForkDepth = 0;
+    // [MF#2] fork 深度改用 ALS（按 async 调用链），无需 session 级重置：主 session 链上无
+    // ALS store，getStore()?? 0 兑底为 0。
     // revive（dispose 的逆操作：/resume /fork /new 后复活）
     this._disposed = false;
     this.store.revive();
@@ -409,28 +415,30 @@ export class SubagentService {
     }
     // worktree=true 或 undefined 时不传递 handle，由 run 内部处理
 
-    // [MF#4] fork 深度护栏：fork 时把当前栈深度作为 child 的 parentForkDepth，并在 child session
-    // 运行期间推进 currentForkDepth（reentrant），让嵌套 fork 的 execute 能读到自身深度——
-    // 否则 parentForkDepth 恒为 0 → MAX_FORK_DEPTH 护栏形同虚设，递归 fork 可耗尽 worktree/进程。
-    const callerForkDepth = this.currentForkDepth;
-    this.currentForkDepth = opts.fork ? callerForkDepth + 1 : callerForkDepth;
+    // [MF#4][MF#2] fork 深度护栏：深度按 async 调用链传递（ALS），不再用共享实例计数器。
+    // parentDepth = 当前调用链的深度（主 session 链上无 store→0）；fork 时推进为 parentDepth+1，
+    // 包进 run() 的 ALS 作用域，使子 agent 在 prompt() 期间发起的嵌套 execute 能读到该深度。
+    const parentDepth = this.forkDepthAls.getStore() ?? 0;
+    const effectiveDepth = opts.fork ? parentDepth + 1 : parentDepth;
 
     let result: AgentResult;
     try {
-      result = await run(record, opts.task, {
-        resolved: identity.resolved,
-        agentConfig: identity.agentConfig,
-        appendSystemPrompt: opts.appendSystemPrompt,
-        skillPath: opts.skillPath,
-        schema: opts.schema,
-        maxTurns: opts.maxTurns,
-        graceTurns: opts.graceTurns,
-        signal,
-        onEvent,
-        fork: opts.fork,
-        worktree: worktreeHandle,
-        parentForkDepth: callerForkDepth, // [MF#4] 用服务跟踪的栈深度，不从 opts 读
-      }, ctx);
+      result = await this.forkDepthAls.run(effectiveDepth, () =>
+        run(record, opts.task, {
+          resolved: identity.resolved,
+          agentConfig: identity.agentConfig,
+          appendSystemPrompt: opts.appendSystemPrompt,
+          skillPath: opts.skillPath,
+          schema: opts.schema,
+          maxTurns: opts.maxTurns,
+          graceTurns: opts.graceTurns,
+          signal,
+          onEvent,
+          fork: opts.fork,
+          worktree: worktreeHandle,
+          parentForkDepth: parentDepth, // [MF#4] 父链深度，不从 opts 读
+        }, ctx),
+      );
     } catch (err) {
       // run() 正常路径不抛错，但创建期异常（createAndConfigureSession 失败）
       // 会逃逸出 run() —— 合成 failed result + 收尾。
@@ -439,7 +447,6 @@ export class SubagentService {
       result = await this.finalizeFailed(record, err);
       return result;
     } finally {
-      this.currentForkDepth = callerForkDepth;
       this.pool.release();
     }
 
@@ -711,6 +718,8 @@ export class SubagentService {
       error: snap.error,
       startedAt: snap.startedAt,
       endedAt: snap.endedAt,
+      // [MF#1] 透传 patchFile，让 background 完成通知显式回传 patch 路径（否则改动静默丢失）。
+      patchFile: record.patchFile,
     };
   }
 }

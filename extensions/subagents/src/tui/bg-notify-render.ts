@@ -96,7 +96,7 @@ function wrapInBgBox(content: string, t: ThemeLike): Box {
  * 专门展示内容，长内容不被 id 挤压。
  */
 function renderRecordLines(
-  record: { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string },
+  record: { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string; patchFile?: string },
   t: ThemeLike,
 ): string[] {
   const glyph = statusGlyph(record.status);
@@ -108,9 +108,18 @@ function renderRecordLines(
   const head = `${t.fg(glyph.color, icon)} ${t.bold(agent)}${modelPart}${t.fg("dim", ` — background subagent ${verb} - ${record.id}`)}`;
 
   switch (record.status) {
-    case "done":
-      if (!record.result) return [head];
-      return [head, t.fg("dim", truncLine(firstLineSanitized(record.result), BODY_MAX_WIDTH))];
+    case "done": {
+      if (!record.result && !record.patchFile) return [head];
+      const lines: string[] = [];
+      if (record.result) {
+        lines.push(t.fg("dim", truncLine(firstLineSanitized(record.result), BODY_MAX_WIDTH)));
+      }
+      // [MF#1] 显示 patch 路径提示（与 LLM content 同源），让用户也能看到改动需 `git apply`。
+      if (record.patchFile) {
+        lines.push(t.fg("dim", truncLine(`patch: ${record.patchFile} (run: git apply)`, BODY_MAX_WIDTH)));
+      }
+      return [head, ...lines];
+    }
     case "failed":
       return [head, t.fg("dim", truncLine(`Error: ${record.error ? firstLineSanitized(record.error) : "(unknown)"}`, BODY_MAX_WIDTH))];
     case "cancelled":
@@ -125,11 +134,11 @@ function renderRecordLines(
  */
 function extractBatch(
   details: unknown,
-): { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string }[] | undefined {
+): { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string; patchFile?: string }[] | undefined {
   if (typeof details !== "object" || details === null) return undefined;
   const d = details as Record<string, unknown>;
   if (d.batch !== true || !Array.isArray(d.items)) return undefined;
-  const records: { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string }[] = [];
+  const records: { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string; patchFile?: string }[] = [];
   for (const item of d.items) {
     const r = extractBgNotifyRecord(item);
     if (r) records.push(r);
@@ -143,7 +152,7 @@ function extractBatch(
  */
 function extractBgNotifyRecord(
   details: unknown,
-): { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string } | undefined {
+): { id: string; status: "done" | "failed" | "cancelled"; agent: string; model?: string; result?: string; error?: string; patchFile?: string } | undefined {
   if (typeof details !== "object" || details === null) return undefined;
   const d = details as Record<string, unknown>;
   const status = d.status;
@@ -161,6 +170,8 @@ function extractBgNotifyRecord(
     model: typeof d.model === "string" ? d.model : undefined,
     result: typeof d.result === "string" ? d.result : undefined,
     error: typeof d.error === "string" ? d.error : undefined,
+    // [MF#1] 提取 patchFile（fork+worktree background 完成通知携带）。
+    patchFile: typeof d.patchFile === "string" ? d.patchFile : undefined,
   };
 }
 
