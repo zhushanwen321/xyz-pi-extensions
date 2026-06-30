@@ -108,7 +108,7 @@ Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 |-------------|---------|------|
 | 建模帧 | 1 模型完整性 + 2 状态正交性 | `tracing-round-{N}-modeling.md` |
 | 结构帧 | 3 分层纪律 + 4 依赖边界 | `tracing-round-{N}-structure.md` |
-| 演进帧 | 5 变化轴 + 6 行为契约（greenfield 视角6 降级→只跑视角5）| `tracing-round-{N}-evolution.md` |
+| 演进帧 | 5 变化轴 + 6 行为契约（greenfield 即技术选型开放度=高时，视角 6 降级→只跑视角 5）| `tracing-round-{N}-evolution.md` |
 
 3 个 subagent **各自独立 fresh context**（互不继承），并行派发。每个的 task prompt 沿用 loop-skeleton Step 2 模板，但：
 - `read architecture-perspectives.md` 后**只追踪本组的 2 视角**（其余视角不扫，避免越组重复）
@@ -118,6 +118,8 @@ Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 **交叉验证（主 agent 汇总时做）：** 3 组 gap 汇总后，识别**交叉命中**——同一边界/模型被两组独立报告（如「粒度错配」建模帧视角1 + 演进帧视角5 都报、「伪边界」结构帧视角3 + 演进帧视角5 都报）。交叉命中标 `[CROSS-VALIDATED]`，**优先级最高**——两个独立 context 都盯上了，不是单方盲区。
 
 **收敛判定（Step 4 复核）：** 各组（3 组或降级后的 2/1 组）都 CONVERGED（无新 gap）才算整轮收敛。**Step 4 收敛复核只重跑「未 CONVERGED 的组」——已 CONVERGED 的组不必重跑（首轮复核和回流后复核均同此规则）**，避免对已收敛的组重复派 fresh context。任一组有新 gap → 回 Step 3 处理后只重跑该组。
+
+> **机器化降级空间**：`check_architecture.py` 已覆盖「设计立场提『核心计算』」「核心模型类型标注」「状态机 Status/Reason 正交」「模型关联图」——即 3 组认知帧里「结构帧」的机器可判子集，这些可由主 agent 自跑脚本完成，不占 subagent 预算。当脚本覆盖结构帧两项视角时，Step 2 可从 3 组降为 2 组（只派建模帧 + 演进帧）。subagent 只做脚本做不了的：语义层级的边界划分与演进可扩展性判断。
 
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 

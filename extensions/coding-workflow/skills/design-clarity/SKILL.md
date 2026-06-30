@@ -84,6 +84,8 @@ description: >-
 4. 写入 {topic_dir}/changes/tracing-round-{N}-reconstruct.md
 ```
 
+> **机器化降级空间**：`check_clarity.py` 已覆盖「UC≥1 AC」「不含系统实现（①铁律）」——即 5 视角里视角1（目标可追溯性）的机器可判子集，这些可由主 agent 自跑脚本完成，不占 subagent 预算。subagent 只做脚本做不了的：禁读产出物的异质重建（Actor/用例/异常流程的语义盲区发现）。脚本未覆盖的视角2-5 仍需 subagent。
+
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 requirements.md；派 fresh subagent 渲染 requirements.html（机制见 loop-skeleton.md Step 5b）（主角图：用例图）。**

@@ -14,7 +14,7 @@ description: >-
 
 为**不涉及架构改动的小功能**产出一份 plan.md，含 6 个章节：业务目标、技术改动点（文件级）、Wave 依赖拆分、**完整的测试验收设计**（单测清单 + E2E 清单 + 覆盖率 gate）。
 
-> **含 4 个条件触发的 ensemble 点**（0b 范围守门投票 / 2b 复用检查并集 / 4b 测试完整性并集 / 5b 草案审查互补）：同源盲区高风险时派多路 fresh subagent 同题并行、综合去偏。触发条件见路由表与各步骤正文，明确小功能不启用。趋同数据（`*_ensemble_overlap`）记 frontmatter，供 lite-retrospect 消费做降级决策。
+> **含 4 个条件触发的 ensemble 点**（0b 范围守门投票 / 2b 复用检查并集 / 4b 测试完整性并集 / 5b 机器检查+禁读重建）：同源盲区高风险时派 fresh subagent 并行、综合去偏；5b 用机器脚本吃掉结构检查、禁读重建抓盲区。触发条件见路由表与各步骤正文，明确小功能不启用。趋同数据（`*_ensemble_overlap` / `reconstruct_blind_spot`）记 frontmatter，供 lite-retrospect 消费做降级决策。
 
 > **[铁律] 本 skill 只做计划，不写实现代码。** 测试用例只设计（输入/预期/类型），不写测试代码——那是 lite-execute 的 implementer 按 TDD 写的。
 >
@@ -74,7 +74,7 @@ description: >-
 | 4. 测试设计（随改动评估） | 代码每处改动评估现有测试如何随之改；单测清单（AC级可判定）+ E2E 清单（探测项目实际测试栈）+ 覆盖率 gate | `../lite-shared/references/test-case-schema.md` |
 | 4b. 多路反向自检（条件触发） | 改动点 ≥3 / 涉及过滤·查询·匹配·状态机时：派 fresh subagent ensemble 找漏用例（详见正文） | — |
 | 5. 写 plan.md | 用完整模板填 6 章节（若并行加速模式启用：合并技术方案路 + 测试设计路两份草案） | `../lite-shared/references/plan-template.md` |
-| 5b. 草案审查 ensemble（条件触发） | plan.md 写成后：派 2 路 fresh subagent 从方案 + 测试两角度审查（详见正文） | — |
+| 5b. 草案审查 ensemble（条件触发） | plan.md 写成后：先跑 `scripts/check_plan.py` 机器杀结构硬伤（零 subagent），再派 1 路禁读重建 subagent 做测试盲区三态 diff（详见正文） | — |
 | 6. 自检 | 对照下方 Self-Check 逐条核对（含 5b 审查反馈处理） | — |
 
 > [铁律] 步骤 1 不做架构设计。技术约束只记录到 Constraints，不展开选型/接口定义/数据建模。
@@ -113,7 +113,7 @@ description: >-
     3. 合并两路草案：技术方案路输出章节 1-3 + 测试设计路输出章节 4-6 → 拼接为完整 plan.md
     4. 交叉校验：技术方案路的改动点清单是否与测试设计路的用例覆盖清单一致？（不一致→补全）
     5. 测试清单 fixture：review 测试设计路的用例预期是否对照真实 fixture（不盲采，见「输入材料可信度」）
-  → 进步骤 5b 草案审查（条件触发）→ 自检 → 定稿写入 planFilePath → plan(action='complete')
+  → 进步骤 5b 草案审查（机器检查 + 禁读重建，条件触发）→ 自检 → 定稿写入 planFilePath → plan(action='complete')
 ```
 
 ### bg subagent 派发模板（2 路，同消息并行派发）
@@ -329,73 +329,62 @@ subagent(action:'start', startParam:{
 - **E2E 不 ensemble**：E2E 受执行栈强约束（happy-dom 无真实视口等），ensemble 边际收益低、误报多。E2E 走单路反向自检 + 「E2E 用例可执行性自检」（`test-case-schema.md`）
 - **小功能不触发**：明确属于 lite 的小功能（1-2 改动点）走单路反向自检即可，ensemble 是编排开销 ≥ 收益的反模式
 
-## 步骤 5b：草案审查 ensemble（互补角度，条件触发）
+## 步骤 5b：草案审查（机器检查 + 禁读重建，条件触发）
 
-> 触发条件：plan.md 写成后（含并行加速模式合并完成），满足以下**任一**条件触发；1-2 个改动点的小功能走单路自检（步骤 6），不启用 ensemble：
+> 触发条件：plan.md 写成后（含并行加速模式合并完成），满足以下**任一**条件触发；1-2 个改动点的小功能走单路自检（步骤 6），不启用本步：
 > - 技术改动点 ≥3 个
 > - Wave 数 ≥2 个
 
-完整 plan.md 写成后，主 agent 自检之前，派 2 路 fresh subagent 从**互补角度**做独立审查。与步骤 0b/2b/4b 不同——那些是单维度深度检查（范围/复用/测试完整性），本步是**全 plan 结构性审查**：方案是否自洽、Wave 是否合理、测试是否可执行。
+> **两层审查：机器吃结构，禁读重建抓盲区。** 本步用 `scripts/check_plan.py` 机器杀 7 项里的 5 项结构硬伤（零 subagent），再派 1 路禁读重建 subagent 做脚本做不了的语义/盲区审查。从原来的 2 路读后审查降为「机器 + 1 路禁读重建」——更强（禁读比读后审查能发现更多盲区）且更省。
 
-### 差异化策略
+### 第一层：机器结构检查（主 agent 自跑，零 subagent）
 
-| 路 | 聚焦 | 审查内容 |
-|----|------|---------|
-| **方案审查路** | 章节 1-3 质量 | 业务目标可衡量？技术改动点无遗漏？Wave 拆分垂直切片否？依赖推导有依据？并行组文件无交集？ |
-| **测试审查路** | 章节 4-6 质量 | 单测可机器判定？fixture 对齐否？E2E 执行方式可落地？覆盖率 gate 命令正确？每个改动点正常/异常/边界各 ≥1？ |
+plan.md 写成后，主 agent 立即自跑机器检查：
 
-### 派发模板（wait:false，同消息并行）
+```
+python3 ${SKILL_DIR}/scripts/check_plan.py {planFilePath}
+```
 
-**路 1 — 方案审查：**
+检查项（7 项中的 5 项机器可判）：
+- ① 结构：6 必须章节齐全 / `## 实现步骤` 标题存在 / 无占位符
+- ② 方案：Wave 表可解析 / 末尾验收 Wave 存在 / **同并行组文件无交集**（精确机器判）
+- ③ 测试：单测输入/预期非空且无模糊词（正常工作/应该返回...） / 每个改动点有对应单测 / 覆盖率 gate 命令存在且阈值 ≥60%
+
+**FAIL → 当场修**（主 agent 直接改 plan.md 结构硬伤），重跑直到 PASS。机器检查的定位：杀低级硬伤，不占 subagent 预算。
+
+### 第二层：禁读重建（1 路 fresh subagent，做机器做不了的）
+
+机器 PASS 后，派 1 路禁读重建 subagent。**禁读**是核心——不读 plan.md 的测试章节，而是从技术改动点 + fixture 数据**独立重建**该有哪些测试用例，再 diff plan.md 的测试清单。读了就被锚定，退回读后审查。
+
+> 范式照搬 design-issues 角色 A（覆盖重建者）：禁读产出物 → 独立按规则重建 → diff → 三态 MISSING/PHANTOM/MISMATCH。这比「读后挑错」强一个量级——读后审查发现「写错的」，禁读重建发现「该有没写的」（同源盲区）。
+
+**派发模板（wait:false）：**
 
 ```
 subagent(action:'start', startParam:{
   agent: "general-purpose",
   wait: false,
   task: """
-  你是独立审查 subagent，上下文与主 agent 隔离。只审查 plan.md 的**技术方案质量**，不审查测试章节。
+  你是独立禁读重建 subagent，上下文与主 agent 隔离。
+  **重建阶段禁止读 plan.md 的测试章节**（单测/E2E/覆盖率）。读了就被锚定，退回读后审查。
 
-  read plan.md（完整文件），逐一检查：
-  1. 业务目标：是否有可衡量成功标准？（非「做好 X」）
-  2. 技术改动点：文件级清单是否无遗漏？（grep 验证关键文件是否存在）
-  3. Wave 拆分：每个 Wave 是垂直切片否？blocked_by 是否有依据？并行组文件有交集否？
-  4. 实现步骤：每 Wave 是否含完整 TDD 步骤（先写测试→实现→跑通）？
+  你的任务：从技术改动点 + fixture 数据独立重建「该有哪些测试用例」，再 diff plan.md 现有清单。
 
-  输出「审查发现」清单，每条：
-  - 位置（章节/行）
-  - 问题描述
-  - 严重程度（must_fix / should_fix / nit）
-  - 建议修复方向
+  步骤：
+  1. read plan.md 的「技术改动点」章节（只读这章，建立改动点清单）
+  2. read 涉及的 fixture/mock 数据文件（主 agent 在 task 里给清单）：{fixture 文件清单}
+  3. 对每个改动点，按 test-case-schema.md 的反向自检规则，独立推导：
+     - 正常用例（主流程该测什么）
+     - 异常用例（调用方会传什么异常输入？空值/超长/并发？）
+     - 边界用例（数据集里哪些值会触发边界？）
+     建成重建用例集 T_recon（不参考 plan 现有用例）
+  4. **重建完成后**才 read plan.md 的测试章节。逐条 diff T_recon vs plan 现有用例，产出三态 gap：
+     - **MISSING（漏项）**：T_recon 有、plan 无对应用例（该测没测）
+     - **PHANTOM（脱锡）**：plan 有用例、但对应改动点查不到或无意义（假冒/越界）
+     - **MISMATCH（虚覆盖）**：标了覆盖但断言不对（如只测正常路径，异常分支空缺）
+  5. 输出三态 gap 清单，每条：改动点 / 输入 / 预期 / 类型 / **为什么主 agent 漏了它**（同源盲区诊断）
 
-  不关注测试章节（章节 4-6），那是另一路审查 subagent 的活。
-  不修改文件。
-  """
-})
-```
-
-**路 2 — 测试审查：**
-
-```
-subagent(action:'start', startParam:{
-  agent: "general-purpose",
-  wait: false,
-  task: """
-  你是独立审查 subagent，上下文与主 agent 隔离。只审查 plan.md 的**测试设计质量**，不审查技术方案章节。
-
-  read plan.md（完整文件），逐一检查：
-  1. 单测用例：每条是否可机器判定？（输入/预期有具体值，非「正常工作」）
-  2. fixture 对齐：预期值是否对照真实 fixture 推算？（read 涉及的 fixture 文件验证）
-  3. 覆盖完整性：每个技术改动点正常/异常/边界是否各 ≥1 条？
-  4. E2E 用例：执行方式是否写明了项目实际的命令？（非抽象「运行测试」）
-  5. 覆盖率 gate：命令是否正确？算法是否写明？阈值 ≥60%？
-
-  输出「审查发现」清单，每条：
-  - 位置（用例ID / 章节）
-  - 问题描述
-  - 严重程度（must_fix / should_fix / nit）
-  - 建议修复方向
-
-  不关注技术方案章节（章节 1-3），那是另一路审查 subagent 的活。
+  不重写已有用例。不评价已有用例质量（那是机器检查的活）。只输出 gap。
   不修改文件。
   """
 })
@@ -403,21 +392,22 @@ subagent(action:'start', startParam:{
 
 ### 汇合（notifier 唤醒，不需轮询）
 
-主 agent 收齐 2 路审查发现后：
-1. **去重**：两路按「位置 + 问题描述」去重（两路聚焦不同章节，重叠通常少）
-2. **分级处理**：
-   - `must_fix` → 必须修改后才进步骤 6 自检
-   - `should_fix` → 主 agent 判断是否改（若改动成本低则直接改）
-   - `nit` → 记录，不阻塞
+主 agent 收到禁读重建 gap 清单后：
+1. **去重对照**：gap 清单 vs plan 现有用例，剔除 subagent 误报的「已有」条目
+2. **三态分级处理**：
+   - `MISSING` → 必须补（该测没测 = 验收会漏）
+   - `PHANTOM` → 核实后删（假冒用例误导执行）
+   - `MISMATCH` → 改断言（虚覆盖比没有更危险）
 3. **处理完后进步骤 6 自检**
 
-> 趋同检测（记 plan.md frontmatter，供 lite-retrospect 消费）：2 路 must_fix 指向同一问题时 → 记 `review_ensemble_overlap: high`（双路交叉验证，高置信）；must_fix 完全无重叠 → 记 `low`（两路确实互补，ensemble 价值高）。
+> 趋同检测（记 plan.md frontmatter，供 lite-retrospect 消费）：MISSING gap 数量 >5 → 记 `reconstruct_blind_spot: high`（主 agent 同源盲区大，禁读重建价值高，保持启用）；MISSING ≤1 → 记 `low`（主 agent 单路已够，未来可降级）。
 
 ### 边界
 
-- **不替代步骤 0b/2b/4b**：本步是全 plan 结构性审查，0b/2b/4b 是单维度深度检查。互补关系，不是替代。
-- **小功能不触发**：1-2 改动点、1 Wave 的极简功能，本步编排开销 > 收益，走步骤 6 单路自检。
-- **审查 ≠ 重写**：subagent 只输出问题清单，不修改 plan.md。主 agent 决策是否采纳、如何修复。
+- **机器检查是前置门**：check_plan.py FAIL 时先修结构硬伤，不派禁读重建（结构烂的 plan 重建无意义）。
+- **不替代步骤 0b/2b/4b**：本步是测试设计的盲区重建，0b/2b/4b 是范围/复用/测试完整性检查。互补关系，不是替代。
+- **小功能不触发**：1-2 改动点、1 Wave 的极简功能，机器检查 + 步骤 6 单路自检已够，禁读重建编排开销 > 收益。
+- **E2E 不重建**：E2E 受执行栈强约束，重建误报多。禁读重建只针对单测。E2E 走机器检查（执行方式非抽象）+ 单路自检。
 
 ## Self-Check
 
@@ -454,7 +444,7 @@ Wave 拆分：
 - [ ] 无占位符（TBD/TODO/...）
 
 审查：
-- [ ] **若触发步骤 5b**（改动点 ≥3 或 Wave ≥2）：2 路草案审查（方案 + 测试）已完成；must_fix 已全部处理；should_fix 已决策（改 or 不改）；未触发则确认属于明确小功能（1-2 改动点、1 Wave）单路自检已做
+- [ ] **若触发步骤 5b**（改动点 ≥3 或 Wave ≥2）：`check_plan.py` 已跑且 PASS（结构硬伤已修）；禁读重建三态 gap 已处理（MISSING 已补 / PHANTOM 已删 / MISMATCH 已改）；未触发则确认属于明确小功能（1-2 改动点、1 Wave）机器检查 + 单路自检已做
 
 ## 交付
 

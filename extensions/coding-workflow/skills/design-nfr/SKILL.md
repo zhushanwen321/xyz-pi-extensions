@@ -87,6 +87,8 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 5. 每条 gap 标类型（F/K/D）。写入 {topic_dir}/changes/tracing-round-{N}-backfeed.md
 ```
 
+> **机器化降级空间**：`check_nfr.py` 已覆盖「回灌③指针 PHANTOM」「验收方式列合法」「无不可接受项」——即回灌重建器视角3 的机器可判子集，这些可由主 agent 自跑脚本完成，不占 subagent 预算。subagent 只做脚本做不了的：副作用的语义风险评估（缓解方案是否真消除风险）与回灌重建器视角3 之外的盲区。脚本未覆盖前维持回灌重建器 subagent。
+
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 non-functional-design.md；派 fresh subagent 渲染 non-functional-design.html（机制见 loop-skeleton.md Step 5b）（主角图：风险矩阵热力图 issue×7维度 ✅⚠️❌着色）。**
