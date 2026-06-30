@@ -50,10 +50,14 @@ description: >-
 依赖按 4 类分类决定 port；接口满足可测性三原则（accept deps / return results / small surface）。
 时序图按 `references/sequence-template.md`。初稿用 `references/deliverable-template.md`。
 
-**[MANDATORY] test-matrix 是 ⑤的核心产出之一**（与工程目录/契约/时序图并列）。**两个来源，缺一不可：**
+**[MANDATORY] test-matrix 是 ⑤的核心产出之一**（与工程目录/契约/时序图并列）。**三个来源，前 1 复用 + 后 2 推导，缺一不可：**
+
+- **来源 0（项目已有测试，先读复用）** — Step 1 开头先扫项目是否已有测试手册/策略文档（根 `TEST-STRATEGY.md`、`docs/testing/`、`CLAUDE.md`/`AGENTS.md` 测试规范章节）。有则 read **本次改动涉及功能**的对应文档，抽取：已有用例 ID（避免重复设计同覆盖）、data-testid 清单（复用 selector 不重新发明）、调用链/fixture 位置、已知坑（mock 回显双匹配、收起态 v-if 时序、预填默认值等仅靠读组件源码无法发现的运行时行为）。来源 0 **不替代** A/B 推导（A/B 仍独立枚举防漏），但 A/B 产出后与来源 0 做去重 + 补充——已有用例直接引用标来源，新用例归 A/B。成熟项目的测试手册记录了历次事故教训，复用是设计期规避历史坑的最高 ROI 动作。
 - **来源 A（功能用例）** — 沿 §4 时序图每个 alt/else 逐个枚举异常用例——AI 最易漏、bug 最多发处。
 - **来源 B（NFR 用例）** — 从④NFR「缓解项回灌登记表」中 `验收方式=代码测试` 的每条风险生成 ≥1 用例。安全/性能/可观测/兼容风险常不是时序图异常分支，若不单列会在⑤被遗漏、最终无人测试——正是线上事故重灾区。
 产出按 `references/deliverable-template.md` §6。
+
+> **来源 0 vs Step 6 禁读重建帧不冲突**：来源 0 是 Step 1 主 agent **主动 read 项目测试手册**（外部已有资产，复用）；Step 6 重建帧禁读的是**自己写的 §6 test-matrix 初稿**（防同源锈定）。两者对象不同——一个是项目历史经验（该读），一个是本次初稿（重建时禁读）。重建帧从①④⑤源头独立推导时，同样应先 read 来源 0（项目测试手册），否则重建也会重复发明已有用例。
 
 **Step 1 必问决策点（代码答不了，逐个 ask_user；其余 = agent 自决）：**
 

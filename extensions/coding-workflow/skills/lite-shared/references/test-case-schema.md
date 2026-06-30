@@ -118,14 +118,20 @@ lite-plan 写 E2E 清单前 [MANDATORY] 探测项目**实际**的测试栈（不
 1. 扫描项目测试配置与依赖，确定实际用哪个框架：
    - 前端/E2E：playwright.config.* / cypress.config.* / puppeteer / package.json 里 testing-library 等
    - 后端/集成：项目实际用的测试框架（pytest / JUnit / go test / vitest / jest 等）
-2. 有框架 → E2E 用例的执行方式写「该框架的实际命令」（如探测到 Playwright 才写 npx playwright test ...）
-3. 无 E2E 框架但需测前端交互 → 执行方式写「browser 类 skill / CDP 类 MCP 驱动」
+2. [MANDATORY] 扫描项目是否已有测试手册/策略文档，有则 read 对应功能章节复用，不从零探索：
+   - 优先扫：根目录 `TEST-STRATEGY.md`（测试分层/mock 策略/回归基线 SSOT）、`docs/testing/`（若有，各功能 MOCK/非MOCK/E2E 操作手册）、`CLAUDE.md`/`AGENTS.md` 的「测试规范」章节
+   - 复用内容：已有 data-testid 清单（避免重新发明 selector）、调用链/时序（fixture 怎么流转）、fixture/mock 数据位置、已知坑（mock 回显双匹配、收起态 v-if 时序、预填默认值等仅靠读组件代码无法发现的运行时行为）
+   - 与本次改动的功能对应：若 docs/testing/ 有该功能的文档，E2E 用例的「执行方式」「前置」「预期值」直接复用其调用链和断言模式，标注来源；无对应文档时才从 fixture 对齐（见核心原则二）推导
+3. 有框架 → E2E 用例的执行方式写「该框架的实际命令」（如探测到 Playwright 才写 npx playwright test ...）
+4. 无 E2E 框架但需测前端交互 → 执行方式写「browser 类 skill / CDP 类 MCP 驱动」
    Agent 执行时主动发现当前环境可用的 browser 类 skill/MCP（不写死名称）
-4. 都不适用 → 在 plan.md 显式标注，执行方式写手动验证步骤
+5. 都不适用 → 在 plan.md 显式标注，执行方式写手动验证步骤
    并提示用户：如需可回归 E2E，建议引入项目适配的测试框架
 ```
 
 > 不假设项目用某特定框架。lite 只负责**设计用例 + 写明项目实际的执行命令**，框架由项目自备。不同项目测试栈差异大（TS 项目可能 vitest+Playwright，Java 项目可能 JUnit，Python 项目可能 pytest），泛化适配而非写死。
+>
+> **复用优先于重新探索**：成熟项目往往已沉淀测试手册（docs/testing/）记录历史踩坑——这些经验（如 mock 会回显 user 输入导致 getByText 双匹配、contenteditable 不触发原生 input 事件、组件收起态 v-if 导致 toBeVisible 时序竞争）仅靠读组件源码无法发现，必须读测试手册。第 2 步的 read 是设计期规避历史坑的最高 ROI 动作。
 
 ### ⚠️ E2E 用例可执行性自检（必做）
 
