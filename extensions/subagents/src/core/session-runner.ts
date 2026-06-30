@@ -5,8 +5,10 @@
 // 这是 sync/background 两路径完全共用的核心。mode 分叉在 Runtime.execute 顶部，
 // 不渗透到此处。Core 不知道谁调用它、是否 await、是否回注通知。
 //
-// 编排层（Orchestration）：站在基础层（session-factory / output-collector）之上，
+// 编排层（Orchestration）：站在基础层（output-collector）之上，
 // 负责执行时序、SDK 事件累积与清理。不持有 Pi SDK 实例，只通过 factory 间接用。
+// （原 session-factory.ts 的 session 组装 + EventBridge 事件翻译已内联进本文件——
+// 两者无独立状态/生命周期，详见 architecture.md §2 [HISTORICAL]。）
 // 设计信息见 docs/subagents/session-runner.md。
 
 import { execFileSync } from "node:child_process";
@@ -384,14 +386,17 @@ export async function run(
     switch (raw.type) {
       case "tool_execution_start": {
         const toolName = raw.toolName ?? "";
+        const toolCallId = raw.toolCallId ?? "";
         if (raw.toolCallId) {
           pendingTools.set(raw.toolCallId, { toolName, args: raw.args });
         }
-        agentEvent({ type: "tool_start", toolName, args: raw.args });
+        // 带 toolCallId——updateFromEvent 用 id 精确关联 content 里的 toolCall block。
+        agentEvent({ type: "tool_start", toolCallId, toolName, args: raw.args });
         return;
       }
       case "tool_execution_end": {
         const toolName = raw.toolName ?? "";
+        const toolCallId = raw.toolCallId ?? "";
         let args = raw.args;
         if (raw.toolCallId) {
           const pending = pendingTools.get(raw.toolCallId);
@@ -400,16 +405,17 @@ export async function run(
             pendingTools.delete(raw.toolCallId);
           }
         }
-        // 透传 result 到 AgentEvent——updateFromEvent 把完整 ToolCall（含 result）收口进 turn.toolCalls。
-        agentEvent({ type: "tool_end", toolName, args, result: raw.result, isError: raw.isError });
+        // 带 toolCallId——updateFromEvent 用 id 精确找到 content 里的 toolCall block，补 result/_status。
+        agentEvent({ type: "tool_end", toolCallId, toolName, args, result: raw.result, isError: raw.isError });
         return;
       }
       case "message_update": {
-        const ame = raw.assistantMessageEvent;
-        if (ame?.type === "thinking_delta") {
-          agentEvent({ type: "thinking_delta", delta: ame.delta ?? "" });
-        } else if (ame?.delta !== undefined) {
-          agentEvent({ type: "text_delta", delta: ame.delta });
+        // 单源核心：SDK message_update 带 message.content 完整快照（text/thinking/toolCall 同构）。
+        // 不再拆 delta 碎片——updateFromEvent 用 content 整体覆盖 currentTurn.content。
+        // content 缺失时（极少数 edge case）静默跳过，不破坏已有状态。
+        const content = raw.message?.content;
+        if (content && content.length > 0) {
+          agentEvent({ type: "message_update", content });
         }
         return;
       }

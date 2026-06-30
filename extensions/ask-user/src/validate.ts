@@ -1,5 +1,5 @@
 // src/validate.ts
-import { type Question,QUESTION_MAX_CHARS } from "./types";
+import { HEADER_MAX_CHARS, type Question, QUESTION_MAX_CHARS } from "./types";
 
 /** 控制字符（含 \n \r \t 等）：question 文本禁止包含，避免 answers key 含不可见字符（spec FR-2） */
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
@@ -54,6 +54,14 @@ export function validateInput(questions: Question[]): string | null {
 			if (!q.header || q.header.trim() === "") {
 				return `Question "${q.question}" requires a non-empty header in multi-question mode (it labels the tab). Provide a header of <=12 chars.`;
 			}
+		}
+	}
+
+	// 4. header 长度上限（若提供）。单/多问题均校验：超出会在 tab 栏被静默截断，
+	//    这里提前拒绝，让 LLM 拿到可修复错误而非残缺 UI（兑现 schema description 的 ≤12 契约）。
+	for (const q of questions) {
+		if (q.header !== undefined && q.header.length > HEADER_MAX_CHARS) {
+			return `Header exceeds ${HEADER_MAX_CHARS} chars: "${q.header.slice(0, 20)}..." in question "${q.question}". Shorten it; longer headers are truncated in the tab bar.`;
 		}
 	}
 

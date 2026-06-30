@@ -171,7 +171,12 @@ with open('$entry_path') as f:
 m = re.search(r\"export\s+\{[^}]*\bdefault\b[^}]*\}\s+from\s+['\\\"]([^'\\\"]+)['\\\"]\", content)
 if m:
     target = m.group(1)
-    if not target.endswith('.ts'): target += '.ts'
+    # re-export 目标可能是 .js 后缀（Pi ESM 要求）或 .ts 后缀。
+    # 统一解析到实际源文件：.js→.ts，无后缀→.ts，.ts→.ts
+    if target.endswith('.js'):
+        target = target[:-3] + '.ts'
+    elif not target.endswith('.ts'):
+        target += '.ts'
     resolved = os.path.join(os.path.dirname('$entry_path'), target)
     if os.path.isfile(resolved):
         with open(resolved) as tf:
@@ -292,6 +297,15 @@ print('OK')
     log_fail "$name: files 不包含入口 $entry"
   fi
 done
+
+# ─── 文档布局（根目录/docs 白名单）──────────────────
+echo ""
+echo "=== 文档布局（根目录/docs 白名单）==="
+if ! bash "$(dirname "$0")/check-doc-layout" --quiet; then
+  log_fail "文档布局检查失败（见上方详情）"
+else
+  log_pass "文档布局检查通过"
+fi
 
 # ─── 总结 ─────────────────────────────────────────────
 echo ""

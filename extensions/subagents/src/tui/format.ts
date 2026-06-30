@@ -259,6 +259,14 @@ export function formatEventLine(entry: AgentEventLogEntry, theme: ThemeLike): st
       return `tool: ${label}${mark}`;
     }
 
+    case "thinking":
+      // thinking 整行 dim（推理流式进度，单源后与 tool 同构进 eventLog）
+      return theme.fg("dim", `thinking: ${label}`);
+
+    case "text":
+      // text 流式进度（模型最终输出，单源后与 tool 同构进 eventLog）
+      return `text: ${label}`;
+
     case "turn_end":
       // turn 分隔(仅 expanded view 显示)
       return theme.fg("dim", "── turn ──");
@@ -270,6 +278,99 @@ export function formatEventLine(entry: AgentEventLogEntry, theme: ThemeLike): st
     default:
       return label;
   }
+}
+
+/**
+ * 把 eventLog 的 tool_start/tool_end 对合并成单行输出(用户期望:每个 tool 只占 1 行,
+ * 调用与结果同一行,尾部用 ✓/✗ 标成功/失败)。
+ *
+ * `getEventLog` 对每个 tool 派生两条独立条目(tool_start + tool_end),逐条 formatEventLine
+ * 会导致每个已完成 tool 占 2 行(start 行冗余——其信息被 end 行完全覆盖)。本函数把
+ * 相邻的同 label `tool_start`→`tool_end` 配对折叠成 1 行。
+ *
+ * 配对规则(单遍扫描):
+ *   - tool_start + 紧邻同 label tool_end → 合并成 `tool: {label} ✓/✗`(1 行),跳过 start
+ *   - tool_start 无紧邻 tool_end(running 态,还没 end)→ 单独 1 行 `tool: {label}`(无尾标)
+ *   - 孤儿 tool_end(无对应 start,SDK 滞后/外部注入)→ 单独 1 行 `tool: {label} ✓/✗`
+ *   - turn_end / error → 原样 1 行(formatEventLine)
+ *
+ * 「相邻」配对而非「全局匹配」:tool_start 的 tool_end 总是紧随其后(同一 toolCall 派生),
+ * 用相邻判定 O(n) 单遍即可,无需回溯。窗口类调用点(tool-render compact 的 slice(-3))应在
+ * slice 之后再调本函数——窗口内若恰好把 start/end 切到窗口两侧,本函数会保守地各输出 1 行
+ * (start 行无尾标,end 行有尾标),不会错误合并跨窗口的对。
+ *
+ * 不含 `⎿` 前缀(由调用方加,与 formatEventLine 一致)。不做宽度截断(交给外层 truncLine)。
+ */
+export function formatToolEventPairs(
+  entries: readonly AgentEventLogEntry[],
+  theme: ThemeLike,
+): string[] {
+  const lines: string[] = [];
+  const PAIR_SIZE = 2; // tool_start + tool_end 配对占 2 个 entry
+  let i = 0;
+  while (i < entries.length) {
+    const entry = entries[i]!;
+    if (entry.type === "tool_start") {
+      const next = entries[i + 1];
+      if (next?.type === "tool_end" && next.label === entry.label) {
+        // 已完成:合并成 1 行(用 tool_end 的状态),跳过 start 行
+        lines.push(formatEventLine(next, theme));
+        i += PAIR_SIZE;
+        continue;
+      }
+      // running:只有 start,无 end —— 单独 1 行无尾标
+      lines.push(formatEventLine(entry, theme));
+      i += 1;
+      continue;
+    }
+    // tool_end(孤儿)/ turn_end / error —— 原样 1 行
+    lines.push(formatEventLine(entry, theme));
+    i += 1;
+  }
+  return lines;
+}
+
+// ============================================================
+// 固定高度滚动窗口(对齐 Pi bash 的行数稳定语义)
+// ============================================================
+
+/**
+ * 取行数组的尾部 N 行,不足补空行到恒定 height 行(对齐 Pi bash 的行数稳定语义)。
+ *
+ * 问题:running 态 compact 视图若直接展示「活动行 + eventLog 窗口」两个独立来源,
+ * 行数会随事件流涨缩(activity 行时有时无、eventLog 窗口 fold 后 1~3 行波动),
+ * 造成「达到最大行数后仍会变换行数」的视觉抖动(用户报告的活动行闪现闪消)。
+ *
+ * 解决:统一成一个连续的行数组,取尾部固定 height 行,不足用 dim 空行 pad。
+ * 行数恒定 = height,与 bash 的 `truncateToVisualLines(_, N, _)` 取尾部 N 行同义
+ * (bash 处理文本折行;本函数处理已格式化的行数组,不涉及折行)。
+ *
+ *   tailFixedLines(["a","b","c","d"], 3) → ["b","c","d"]        (截断:取尾部 3 行)
+ *   tailFixedLines(["a"], 3)             → ["a", "", ""]         (不足:pad dim 空行)
+ *   tailFixedLines([], 3)                → ["", "", ""]          (空:全 pad)
+ *
+ * pad 空行加 dim STREAM_PREFIX(`  ⎿ `),与活动行视觉对齐(占用相同的缩进列),
+ * 避免 contentBox 背景色在空行处出现「凹陷」错位。
+ *
+ * 返回的行已含前缀(调用方无需再加 ⎿)。这是与 formatToolEventPairs 的关键区别——
+ * 后者返回裸内容行(前缀由调用方加);本函数返回可直接 push 进 lines[] 的完整行,
+ * 因为 pad 空行也需要统一的前缀。
+ */
+export function tailFixedLines(
+  contentLines: readonly string[],
+  height: number,
+  prefix: string,
+  theme: ThemeLike,
+): string[] {
+  if (height <= 0) return [];
+  const tail = contentLines.length > height
+    ? contentLines.slice(contentLines.length - height)
+    : [...contentLines];
+  const padded = `${theme.fg("dim", prefix)}`;
+  while (tail.length < height) {
+    tail.push(padded);
+  }
+  return tail;
 }
 
 // ============================================================

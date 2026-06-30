@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<!--
+  non-functional-design.html 骨架 — design-nfr（④ 非功能性设计）阶段产物模板。
+  主角图：HTML table 风险矩阵热力图（issue × 7 维度，✅⚠️❌ 着色）——非 Mermaid。
+  特有 CSS：.risk-ok / .risk-warn / .risk-na / .heatmap（热力图单元格着色，复用公共 .heatmap-cell--* 亦可）。
+  注意：本阶段无 hero（首块是 callout 运行时上下文），主角图是表格。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>非功能性设计 — {{TOPIC}}</title>
+<style>
+/* INLINE: design.css */
+
+/* === nfr 阶段特有样式 === */
+/* 风险矩阵单元格（与公共 .heatmap-cell--* 互补，这里提供语义化别名） */
+.risk-ok { background: var(--green-dim); color: var(--green); text-align: center; font-weight: 600; }
+.risk-warn { background: var(--amber-dim); color: var(--amber); text-align: center; font-weight: 600; }
+.risk-na { background: transparent; color: var(--text-dim); text-align: center; }
+.callout--critical { border-left-color: var(--red); background: var(--red-dim); }
+.callout--critical strong { color: var(--red); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" id="toc">
+  <div class="toc-title">目录</div>
+  <!-- AGENT-FILL: toc-links — 建议含：风险矩阵 / 关键副作用 / 数据迁移 / 降级策略 / 残余风险 / 缓解项回灌 / NFR-AC 清单 -->
+</nav>
+<main class="main">
+<header class="doc-head">
+  <h1>非功能性设计</h1>
+  <p class="subtitle">{{TOPIC}} · ④ NFR · upstream: issues.md</p>
+  <div class="badge-row">
+    <!-- AGENT-FILL: badges — 如残余风险计数等 -->
+  </div>
+</header>
+
+<!-- AGENT-FILL: context-callout — 运行时上下文提示（非 hero）。用 .callout 或 .callout--critical -->
+
+<!-- AGENT-FILL: risk-matrix — 风险矩阵热力图（主角图）。HTML table：
+<div class="table-wrap"><div class="table-scroll"><table class="data-table">
+<thead><tr><th>Issue</th><th>安全</th><th>数据</th><th>性能</th><th>并发</th><th>稳定性</th><th>兼容性</th><th>可观测</th></tr></thead>
+<tbody>
+<tr><td>Issue #N</td><td class="risk-ok">✅</td><td class="risk-warn">⚠️</td><td class="risk-na">—</td>...</tr>
+</tbody>
+</table></div></div>
+配合 .legend 图例（✅ 无风险 / ⚠️ 需缓解 / ❌ 高风险 / — 不适用）
+-->
+
+<!-- AGENT-FILL: critical-side-effects — 关键副作用（需下游 code-arch 关注）。用 .callout--critical -->
+
+<!-- AGENT-FILL: mitigation — 各 issue 的 7 维度副作用分析 + 缓解方案。用 .data-table 或分节 -->
+
+<!-- AGENT-FILL: residual-risk — 残余风险登记。用 .data-table -->
+
+<!-- AGENT-FILL: backfeed — 缓解项回灌登记表（去向：⑤章节/③新issue/运维项 + 验收方式） -->
+
+<!-- AGENT-FILL: nfr-ac — NFR-AC 清单（代码测试类附 UC + 断言摘要） -->
+
+<footer class="doc-foot">{{TOPIC}} · 非功能性设计 · upstream: issues.md</footer>
+</main>
+</div>
+
+<script type="module">/* INLINE: zoom.js */</script>
+</body>
+</html>

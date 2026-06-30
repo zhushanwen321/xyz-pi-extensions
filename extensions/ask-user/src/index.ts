@@ -111,13 +111,15 @@ If you recommend an option, prefix its label with "(Recommended)" and list it fi
 				};
 			}
 
-			// 3. Signal abort 入口检查（spec FR-10）
+			// 3. Signal abort 入口检查（spec FR-10）。
+			// abort 是 agent 被外部终止（goal 取消 / context compact / session 切换），
+			// 不是用户意图——文案必须区别于 step 5 的用户取消，避免 LLM 俊等用户。
 			if (signal?.aborted) {
 				return {
 					content: [
 						{
 							type: "text" as const,
-							text: "User cancelled. Do not assume an answer or continue the task — wait for new instructions or re-ask with refined options if the decision is still required.",
+							text: "Agent aborted (goal cancelled, context compacted, or session switched). Do not assume an answer; do not retry ask_user — propagate the abort, or wait for new instructions if the decision is still required.",
 						},
 					],
 					details: { questions, answers: {}, cancelled: true } satisfies Result,

@@ -97,8 +97,8 @@ issues:
 notes:
   - "FR-1.6 路径规范 /tmp/plan-{slug}.md 与设计文档 6.1 一致；slug 命名建议补充「使用随机 word + 数字」避免冲突"
   - "FR-2.4 / FR-2.5（先探索再提问、区分两类未知数）吸取了 Codex 经验，是 spec 的亮点，应在 SKILL.md 中严格落地"
-  - "FR-8.2 显式声明「仅通过提示词实现，不用 tool_call 拦截」与 ADR-020 决策一致"
-  - "FR-9.1 / FR-9.2 / FR-9.3（sessionManager + appendEntry + session_start 重建）与 ADR-021 决策一致"
+  - "FR-8.2 显式声明「仅通过提示词实现，不用 tool_call 拦截」与 ADR-021 决策一致"
+  - "FR-9.1 / FR-9.2 / FR-9.3（sessionManager + appendEntry + session_start 重建）与 ADR-022 决策一致"
   - "FR-6.4 使用 `__goalInit` 与 coding-workflow 一致（lib/tool-handlers.ts:504/525）；设计文档 5.8 节提到的 `startGoalFromPlan` 是错误表述，extensions/goal/src/index.ts 实际只暴露 `__goalInit`（line 422）"
   - "5 个内置模板（feature/bugfix/refactor/research/implementation）的覆盖度合理"
   - "Constraints 段的「运行环境」「状态存储」「上下文隔离」三项硬性约束与 FR / ADR 完全对齐，迁移到 plan 阶段时无需重新讨论"

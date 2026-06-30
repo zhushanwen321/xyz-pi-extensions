@@ -93,7 +93,7 @@ cancelled`). Pi adds `time_limited` + `cancelled` vs Codex and deliberately
   - Phase 3 dynamic goal task injection (from plan.md Execution Groups)
   - Retrospect context injection (deliverable summaries in steer prompt)
   - 4 SKILL.md files cleaned: removed manual review/gate handoff sections, added workflow gate guidance
-  - ADR-019: coding-workflow depends on workflow extension
+  - ADR-020: coding-workflow depends on workflow extension
 
 ## 0.2.0
 

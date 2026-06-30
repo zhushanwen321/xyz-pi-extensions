@@ -176,10 +176,6 @@ export function renderTodoResult(result: unknown, options: { expanded: boolean }
 		return new Text(text?.type === "text" ? (text.text ?? "") : "", 0, 0);
 	}
 
-	if (details.error) {
-		return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
-	}
-
 	const todoList = details.todos;
 
 	switch (details.action) {

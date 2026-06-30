@@ -21,6 +21,7 @@ import {
 } from "./runtime/subagent-service.ts";
 import { registerSubagentTool } from "./tools/subagent-tool.ts";
 import { renderBgNotifyMessage } from "./tui/bg-notify-render.ts";
+import { clearActiveViewOnShutdown } from "./tui/list-view.ts";
 
 /**
  * FR-10.2: Pi extension 工厂。
@@ -49,7 +50,7 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
 
   // discovery.json 契约加载器（进程级单例，跨 session 复用 mtime 缓存）。
   // 宿主启动 pi 前写入 <agentDir>/subagents/discovery.json 声明多 skill/agent 目录。
-  // 详见 ADR-025。
+  // 详见 ADR-028。
   const discoveryLoader = new DiscoveryConfigLoader(getAgentDir());
 
   // resources_discover：把 discovery 的 skillDirs 注入主 session 的 resourceLoader。
@@ -112,7 +113,9 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     }
   });
 
-  pi.on("session_shutdown", (_event: SessionShutdownEvent, _ctx: ExtensionContext) => {
+  pi.on("session_shutdown", (_event: SessionShutdownEvent, ctx: ExtensionContext) => {
     getSubagentService()?.dispose();
+    // G-017：清理本 session 的 overlay 句柄（防 Map 泄漏）
+    clearActiveViewOnShutdown(ctx.sessionManager.getSessionId());
   });
 }

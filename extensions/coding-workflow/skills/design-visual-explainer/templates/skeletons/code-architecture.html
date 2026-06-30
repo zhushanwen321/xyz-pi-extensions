@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<!--
+  code-architecture.html 骨架 — design-code-arch（⑤ 代码架构）阶段产物模板。
+  主角图：graph TD 包依赖图 + 多张 sequenceDiagram 核心时序图。
+  特有 CSS：.dir-tree pre（工程目录树展示）。
+  注意：本阶段无 hero（首块是 callout 架构决策），主角图是包依赖图。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码架构设计 — {{TOPIC}}</title>
+<style>
+/* INLINE: design.css */
+
+/* === code-architecture 阶段特有样式 === */
+.dir-tree { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; margin: 16px 0 24px; overflow-x: auto; }
+.dir-tree pre { font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6; color: var(--text-dim); margin: 0; white-space: pre; }
+.dir-tree pre code { background: transparent; color: var(--text); padding: 0; }
+.dir-tree .added { color: var(--green); font-weight: 600; }
+.dir-tree .modified { color: var(--amber); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" id="toc">
+  <div class="toc-title">目录</div>
+  <!-- AGENT-FILL: toc-links — 建议含：工程目录 / 包依赖图 / API契约 / 核心时序图×N / Deep Module / 测试矩阵 / 现有代码映射 / Wave DAG / 骨架覆盖核验 -->
+</nav>
+<main class="main">
+<header class="doc-head">
+  <h1>代码架构设计</h1>
+  <p class="subtitle">{{TOPIC}} · ⑤ 代码架构 · upstream: non-functional-design.md</p>
+  <div class="badge-row">
+    <!-- AGENT-FILL: badges — verdict + upstream/downstream -->
+  </div>
+</header>
+
+<!-- AGENT-FILL: decision-callout — 架构决策提示（非 hero）。用 .callout -->
+
+<!-- AGENT-FILL: dir-tree — 工程目录树（主角图之一）。用 .dir-tree pre：
+<div class="dir-tree"><pre><code>
+src/
+├── modules/
+│   ├── <span class="added">new-module/</span>     # 【新增】职责
+│   └── existing/      # 【扩展】
+└── shared/
+</code></pre></div>
+配合 .data-table 列目录职责/变化轴/依赖方向
+-->
+
+<!-- AGENT-FILL: dependency-graph — 包依赖图（主角图之二）。graph TD + subgraph，无环。
+<div class="diagram-shell">
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button data-action="zoom-in" title="放大">+</button>
+      <button data-action="zoom-out" title="缩小">−</button>
+      <button data-action="zoom-fit" title="适配">⊡</button>
+      <button data-action="zoom-one" title="1:1">1:1</button>
+      <button data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">— contain</span>
+    </div>
+    <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+graph TD
+  subgraph Shell["外壳层"]
+    direction LR
+    tool[tools/xxx-tool]
+    index[index.ts]
+  end
+  subgraph Runtime["Runtime 执行域"]
+    direction TB
+    svc[runtime/xxx-service]
+    wtm["runtime/xxx-manager ★"]
+  end
+  subgraph Core["Core 编排子层"]
+    direction TB
+    rec[core/xxx-record]
+    scr["core/xxx-resolver ★"]
+  end
+  types[(types.ts)]
+  sdk[("外部 SDK")]
+
+  tool --> svc
+  svc --> wtm
+  svc --> scr
+  scr --> types
+  wtm --> types
+  svc -.-> sdk
+
+  classDef new fill:#0d2922,stroke:#34d399,stroke-width:2px,color:#6ee7b7
+  classDef mod fill:#29220d,stroke:#fbbf24,stroke-width:2px,color:#fde68a
+  classDef layer fill:#111d1d,stroke:#115e59,stroke-width:1.5px,color:#5eead4
+  classDef types fill:#0d2429,stroke:#2dd4bf,stroke-width:2px,color:#ccfbf1
+  classDef sdk fill:#1a1a1a,stroke:#94a3b8,stroke-width:2px,stroke-dasharray:5 5,color:#e2e8f0
+  class scr,wtm new
+  class tool,index,svc,rec,types mod
+  class Shell,Runtime,Core layer
+  class types types
+  class sdk sdk
+  </script>
+</div>
+-->
+
+<!-- AGENT-FILL: api-contracts — API 契约签名表。用 .data-table（方法/签名/返回/边界/接线层级/Issue 关联） -->
+
+<!-- AGENT-FILL: sequence-diagrams — 核心时序图×N。每张 sequenceDiagram 入口→底层 + 异常路径 alt/else。
+<div class="diagram-shell">
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button data-action="zoom-in" title="放大">+</button>
+      <button data-action="zoom-out" title="缩小">−</button>
+      <button data-action="zoom-fit" title="适配">⊡</button>
+      <button data-action="zoom-one" title="1:1">1:1</button>
+      <button data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">— contain</span>
+    </div>
+    <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+sequenceDiagram
+  participant U as 用户
+  ...
+  </script>
+</div>
+每张时序图的 alt/else 异常分支须映射到 §test-matrix 异常用例（双向可查）
+-->
+
+<!-- AGENT-FILL: deep-module — Deep Module 设计决策 -->
+
+<!-- AGENT-FILL: test-matrix — 测试矩阵。来源 A（功能用例）+ 来源 B（NFR 风险→用例）。用 .data-table -->
+
+<!-- AGENT-FILL: code-mapping — 现有代码映射（refactor 场景）。用 .data-table -->
+
+<!-- AGENT-FILL: wave-dag — Wave DAG（供⑥，从骨架叶子推导）。graph LR + classDef 着色
+<div class="diagram-shell">
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button data-action="zoom-in" title="放大">+</button>
+      <button data-action="zoom-out" title="缩小">−</button>
+      <button data-action="zoom-fit" title="适配">⊡</button>
+      <button data-action="zoom-one" title="1:1">1:1</button>
+      <button data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">— contain</span>
+    </div>
+    <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+graph LR
+  W1["W1 编译基石<br/>types + record"]
+  W2a["W2 叶子模块"]
+  W3a["W3 汇合点"]
+  W1 --> W2a
+  W2a --> W3a
+  classDef base fill:#0d2424,stroke:#2dd4bf,stroke-width:2px,color:#ccfbf1
+  classDef leaf fill:#111d1d,stroke:#34d399,stroke-width:2px,color:#6ee7b7
+  classDef hub fill:#29220d,stroke:#fbbf24,stroke-width:2px,color:#fde68a
+  class W1 base
+  class W2a leaf
+  class W3a hub
+  </script>
+</div>
+-->
+
+<!-- AGENT-FILL: skeleton-coverage — 骨架覆盖核验表（§3 签名 ↔ 骨架定义）。用 .data-table -->
+
+<footer class="doc-foot">{{TOPIC}} · 代码架构设计 · upstream: non-functional-design.md</footer>
+</main>
+</div>
+
+<script type="module">/* INLINE: zoom.js */</script>
+</body>
+</html>

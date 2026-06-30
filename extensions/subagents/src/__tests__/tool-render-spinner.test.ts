@@ -3,7 +3,7 @@
 // maybeToggleSpinner 锁死 bug 回归测试（FR-8 / 分支命名根因）。
 //
 // 旧 bug：poll 返回的 QueryResult 无 backgroundId → spinner 误启动 → setInterval 永久泄漏 →
-// viewport 永久钉底（200ms invalidate 不停）。修复后判定信号改为 syncResponse.mode === "sync"。
+// viewport 永久钉底（invalidate 不停）。修复后判定信号改为 syncResponse.mode === "sync"。
 //
 // 本测试用 fake timer 直接钉死 setInterval 启停，无需真实 TUI。
 // 关键：maybeToggleSpinner 在 render(width) 内调用，故测试显式调 comp.render(80) 驱动。
@@ -73,8 +73,8 @@ describe("maybeToggleSpinner (锁死 bug 回归)", () => {
   it("sync running + invalidate 注入 → render 后 setInterval 启动（invalidate 被定时调）", () => {
     const invalidate = vi.fn();
     mountAndRender(syncRunningResult(), invalidate);
-    // 推进 > SPINNER_INTERVAL_MS(200)，定时器应触发 invalidate
-    vi.advanceTimersByTime(201);
+    // 推进 > SPINNER_INTERVAL_MS(80)，定时器应触发 invalidate
+    vi.advanceTimersByTime(81);
     expect(invalidate).toHaveBeenCalled();
   });
 
@@ -125,7 +125,7 @@ describe("maybeToggleSpinner (锁死 bug 回归)", () => {
     const comp = renderSubagentResult(syncRunningResult(), { expanded: false, isPartial: true }, theme, ctx);
     ctx.lastComponent = comp; // 模拟 SDK 缓存 lastComponent
     comp.render(80);
-    vi.advanceTimersByTime(201);
+    vi.advanceTimersByTime(81);
     expect(invalidate.mock.calls.length).toBeGreaterThan(0);
 
     // 2) 转 done：复用路径（update details + setInvalidate）→ render 触发 maybeToggleSpinner 清定时器

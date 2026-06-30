@@ -201,15 +201,15 @@ describe("handleSingleUpdate FR-6 guards (tool single path)", () => {
 	it("FR-6: cancelled todo + status → cannot restore", () => {
 		const state = createTodoSessionState();
 		state.todos = [{ id: 1, text: "dropped", status: "cancelled" }];
-		const result = handleSingleUpdate(state, { action: "update", id: 1, status: "pending" });
-		expect(result.error).toBe("#1 is cancelled (cannot restore)");
+		expect(() => handleSingleUpdate(state, { action: "update", id: 1, status: "pending" }))
+			.toThrow("#1 is cancelled (cannot restore)");
 	});
 
 	it("FR-6: verification todo + status=cancelled → cannot cancel", () => {
 		const state = createTodoSessionState();
 		state.todos = [{ id: 2, text: "run tests", status: "in_progress", isVerification: true }];
-		const result = handleSingleUpdate(state, { action: "update", id: 2, status: "cancelled" });
-		expect(result.error).toBe("#2 is verification todo (cannot cancel)");
+		expect(() => handleSingleUpdate(state, { action: "update", id: 2, status: "cancelled" }))
+			.toThrow("#2 is verification todo (cannot cancel)");
 	});
 });
 

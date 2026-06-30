@@ -30,7 +30,7 @@ export const OptionSchema = Type.Object({
 export const QuestionSchema = Type.Object({
 	question: Type.String({
 		description:
-			"Full question text. Must be one self-contained decision; avoid multi-part questions. Plain text only (no newlines or control characters).",
+			"Full question text. Must be one self-contained decision; avoid multi-part questions. ≤1000 chars; plain single-line text only (no newlines or control characters).",
 	}),
 	header: Type.Optional(
 		Type.String({

@@ -44,10 +44,9 @@ SessionRunner.run(record, task, opts, ctx)   ◄── 本文
 
 | SDK 事件 | AgentEvent | updateFromEvent 动作（收口进 record.turns[]） |
 |---|---|---|
-| `tool_execution_start` | `{type:"tool_start", toolName, args}` | currentTurn().toolCalls.push(running InternalToolCall) + pendingTools.set(id) |
-| `tool_execution_end` | `{type:"tool_end", toolName, args, result, isError}` | 跨 turn 找 running 同名 toolCall，补全 result/_status + pendingTools.delete |
-| `message_update`（ame.type==="thinking_delta"） | `{type:"thinking_delta", delta}` | currentTurn().thinking += delta（完整累积） |
-| `message_update`（ame.delta） | `{type:"text_delta", delta}` | currentTurn().text += delta（完整累积） |
+| `tool_execution_start` | `{type:"tool_start", toolName, args}` | content.push(running toolCall block，带 id；若 message_update 快照已含同 id 骨架则补 _status) + pendingTools.set(id) |
+| `tool_execution_end` | `{type:"tool_end", toolName, args, result, isError}` | findRunningToolCallBlock 按 id 精确关联（fallback 按 name），补 result/_status + pendingTools.delete |
+| `message_update`（SDK message.content 快照） | `{type:"message_update", content}` | currentTurn().content = event.content 整体覆盖（单源镜像，不 delta 累积） |
 | `turn_end` | `{type:"turn_end"}` | currentTurn().closed=true + closedTs + turnCount++ + 清 lastError |
 | `message_end`（usage） | `{type:"message_end", usage}` | currentTurn().usageDelta += usage + totalTokens += Σ |
 | `message_end`（stopReason error/aborted） | `{type:"error", message}` | record.lastError = message |
@@ -56,7 +55,7 @@ SessionRunner.run(record, task, opts, ctx)   ◄── 本文
 
 ### 三个易错点
 
-**① thinking_delta 必须在 text_delta 之前判断**。SDK 的 thinking_delta 事件也带 `delta` 字段，若先无条件提取 `ame.delta` 会把 thinking 内容误当 text。
+**① message_update 是整体快照覆盖，非 delta 累积**。SDK 的 `message_update` 事件带完整 `message.content` 快照（text/thinking/toolCall 同构 block），`updateFromEvent` 整体覆盖 `currentTurn().content`。注意快照可能已含同名 toolCall 骨架但缺 `_status`/result——`tool_start` 按 id 去重时补全（见 `execution-record.ts` 注释）。
 
 **② tool_end 的 args 来自 pendingTools**。SDK 的 `tool_execution_end` 不一定带 args，需用 `toolCallId` 从 `pendingTools`（tool_start 时暂存）取回，供 `extractLabelFromArgs` 提取人类可读 label（如 `bash find /Users/...` 而非裸 `bash`）。pendingTools 是闭包局部变量，非 record 字段——它是 SDK 契约补全层，不进结果数据。
 

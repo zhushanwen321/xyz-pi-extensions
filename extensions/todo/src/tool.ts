@@ -62,30 +62,10 @@ const TodoParams = Type.Object({
 		),
 	});
 
-// ── 错误结果构造 helper ──────────────────────────────
-
-function errorResult(
-	action: TodoDetails["action"],
-	state: TodoSessionState,
-	errorText: string,
-	errorCode: string,
-): {
-	content: Array<{ type: "text"; text: string }>;
-	details: TodoDetails;
-} {
-	return {
-		content: [{ type: "text" as const, text: errorText }],
-		details: {
-			action,
-			todos: [...state.todos],
-			nextId: state.nextId,
-			error: errorCode,
-			_render: buildRender(state.todos),
-		} as TodoDetails,
-	};
-}
-
 // ── 5 个 action handler ──────────────────────────────
+// 错误处理约定（见 CLAUDE.md「Tool 设计」）：handler 失败直接 throw，
+// 不返回「错误成功模式」。model 层纯函数返回 Result 对象（合法），
+// 由 dispatcher 在拿到 error 时 throw，把友好文案交给 Pi 框架展示。
 
 /** list action */
 function handleList(state: TodoSessionState): string {
@@ -94,83 +74,52 @@ function handleList(state: TodoSessionState): string {
 		: "No todos";
 }
 
-/** add action */
-function handleAdd(
-	state: TodoSessionState,
-	params: TodoActionParams,
-): { resultText: string; error?: string } {
+/** add action — 失败抛错 */
+function handleAdd(state: TodoSessionState, params: TodoActionParams): string {
 	if (!params.texts || params.texts.length === 0) {
-		return { resultText: "", error: "texts required" };
+		throw new Error("add requires texts parameter (non-empty array)");
 	}
-
-	const addResult = addTodos(state.todos, state.nextId, params.texts, params.isVerification);
-	if (addResult.error) {
-		return { resultText: addResult.resultText || "", error: addResult.error };
-	}
-
-	state.todos = addResult.newTodos;
-	state.nextId = addResult.newNextId;
-	return { resultText: addResult.resultText || "" };
+	const r = addTodos(state.todos, state.nextId, params.texts, params.isVerification);
+	if (r.error) throw new Error(r.resultText);
+	state.todos = r.newTodos;
+	state.nextId = r.newNextId;
+	return r.resultText!;
 }
 
-/** update action: batch */
-function handleBatchUpdate(
-	state: TodoSessionState,
-	params: TodoActionParams,
-): { resultText: string; error?: string; earlyReturn?: { content: Array<{ type: "text"; text: string }>; details: TodoDetails } } {
-	const result = updateTodos(state.todos, params.updates ?? []);
-	if (result.error) {
-		return {
-			resultText: result.resultText || "",
-			error: result.error,
-			earlyReturn: {
-				content: [{ type: "text" as const, text: result.resultText || "" }],
-				details: {
-					action: "update" as const,
-					todos: [...state.todos],
-					nextId: state.nextId,
-					error: result.error,
-					_render: buildRender(state.todos),
-				} as TodoDetails,
-			},
-		};
-	}
-	state.todos = result.updatedTodos;
-	return { resultText: result.resultText || "" };
+/** update action: batch — 失败抛错 */
+function handleBatchUpdate(state: TodoSessionState, params: TodoActionParams): string {
+	const r = updateTodos(state.todos, params.updates ?? []);
+	if (r.error) throw new Error(r.resultText);
+	state.todos = r.updatedTodos;
+	return r.resultText!;
 }
 
-/** update action: single */
-export function handleSingleUpdate(
-	state: TodoSessionState,
-	params: TodoActionParams,
-): { resultText: string; error?: string } {
-	if (params.id === undefined) return { resultText: "", error: "id required" };
-	if (params.status === undefined && params.text === undefined) return { resultText: "", error: "need status or text" };
-	if (params.text !== undefined && params.text === "") return { resultText: "", error: "text empty" };
+/** update action: single — 失败抛错 */
+export function handleSingleUpdate(state: TodoSessionState, params: TodoActionParams): string {
+	if (params.id === undefined) throw new Error("update requires id parameter");
+	if (params.status === undefined && params.text === undefined)
+		throw new Error("update requires at least status or text parameter");
+	if (params.text !== undefined && params.text === "") throw new Error("text cannot be empty string");
 	if (
 		params.status !== undefined &&
 		!VALID_STATUSES.includes(params.status as (typeof VALID_STATUSES)[number])
 	) {
-		return { resultText: "", error: `invalid status: ${params.status}` };
+		throw new Error(`status only accepts ${VALID_STATUSES.join(" / ")}`);
 	}
 
 	const todo = state.todos.find((t) => t.id === params.id);
-	if (!todo) return { resultText: "", error: `#${params.id} not found` };
+	if (!todo) throw new Error(`Todo #${params.id} not found`);
 
-	// FR-6 不变量守卫：(a) cancelled 不可恢复；(b) 验证任务不可 cancelled
+	// FR-6 不变量守卫（失败抛错）：(a) cancelled 不可恢复；(b) 验证任务不可 cancelled
 	if (todo.status === "cancelled" && params.status !== undefined) {
-		return { resultText: "", error: `#${params.id} is cancelled (cannot restore)` };
+		throw new Error(`#${params.id} is cancelled (cannot restore)`);
 	}
 	if (todo.isVerification && params.status === "cancelled") {
-		return { resultText: "", error: `#${params.id} is verification todo (cannot cancel)` };
+		throw new Error(`#${params.id} is verification todo (cannot cancel)`);
 	}
 
-	if (params.status !== undefined) {
-		todo.status = params.status as Todo["status"];
-	}
-	if (params.text !== undefined) {
-		todo.text = params.text;
-	}
+	if (params.status !== undefined) todo.status = params.status as Todo["status"];
+	if (params.text !== undefined) todo.text = params.text;
 
 	const parts: string[] = [`Updated todo #${todo.id}`];
 	if (params.status !== undefined) parts.push(`status → ${params.status}`);
@@ -179,36 +128,26 @@ export function handleSingleUpdate(
 	// 最后一个完成提示
 	const incompleteAfter = state.todos.filter((t) => t.status !== "completed");
 	if (params.status === "completed" && incompleteAfter.length === 0) {
-		return { resultText: parts.join(", ") + "\n\nAll todos completed. Please summarize your work." };
+		return parts.join(", ") + "\n\nAll todos completed. Please summarize your work.";
 	}
-	return { resultText: parts.join(", ") };
+	return parts.join(", ");
 }
 
-/** update action: dispatcher */
-function handleUpdate(
-	state: TodoSessionState,
-	params: TodoActionParams,
-):
-	| { resultText: string; error?: string; earlyReturn?: { content: Array<{ type: "text"; text: string }>; details: TodoDetails } }
-	| undefined {
-	if (params.updates && params.updates.length > 0) {
-		return handleBatchUpdate(state, params);
-	}
+/** update action: dispatcher — batch 优先于 single */
+function handleUpdate(state: TodoSessionState, params: TodoActionParams): string {
+	if (params.updates && params.updates.length > 0) return handleBatchUpdate(state, params);
 	return handleSingleUpdate(state, params);
 }
 
-/** delete action */
-function handleDelete(
-	state: TodoSessionState,
-	params: TodoActionParams,
-): { resultText: string; error?: string } {
+/** delete action — 失败抛错；部分 id 缺失则整体拒绝（原子性） */
+function handleDelete(state: TodoSessionState, params: TodoActionParams): string {
 	if (!params.ids || params.ids.length === 0) {
-		return { resultText: "", error: "ids required" };
+		throw new Error("delete requires ids parameter (non-empty array)");
 	}
 	const uniqueIds = [...new Set(params.ids)];
 	const missing = uniqueIds.filter((id) => !state.todos.some((t) => t.id === id));
 	if (missing.length > 0) {
-		return { resultText: "", error: `#${missing.map((id) => id).join(", #")} not found` };
+		throw new Error(`Todo #${missing.join(", #")} not found`);
 	}
 	const removedIds: number[] = [];
 	for (const id of uniqueIds) {
@@ -218,7 +157,7 @@ function handleDelete(
 			removedIds.push(id);
 		}
 	}
-	return { resultText: `Deleted ${removedIds.length} items (#${removedIds.join(", #")}), ${state.todos.length} remaining` };
+	return `Deleted ${removedIds.length} items (#${removedIds.join(", #")}), ${state.todos.length} remaining`;
 }
 
 /** clear action */
@@ -245,60 +184,25 @@ function executeTodoAction(
 	state.lastTodoCallCount = state.userMessageCount;
 	state.stallNotified = false;
 
-	let resultText = "";
-
+	let resultText: string;
 	switch (params.action) {
-		case "list": {
+		case "list":
 			resultText = handleList(state);
 			break;
-		}
-
-		case "add": {
-			const r = handleAdd(state, params);
-			if (r.error === "texts required") {
-				return errorResult("add", state, "Error: add requires texts parameter (non-empty array)", r.error);
-			}
-			if (r.error) {
-				return errorResult("add", state, r.resultText, r.error);
-			}
-			resultText = r.resultText;
+		case "add":
+			resultText = handleAdd(state, params);
 			break;
-		}
-
-		case "update": {
-			const r = handleUpdate(state, params);
-			if (!r) {
-				resultText = "Unknown error";
-				break;
-			}
-			if (r.earlyReturn) return r.earlyReturn;
-			if (r.error) {
-				const errorText = mapUpdateErrorText(state, params, r.error);
-				return errorResult("update", state, errorText, r.error);
-			}
-			resultText = r.resultText;
+		case "update":
+			resultText = handleUpdate(state, params);
 			break;
-		}
-
-		case "delete": {
-			const r = handleDelete(state, params);
-			if (r.error === "ids required") {
-				return errorResult("delete", state, "Error: delete requires ids parameter (non-empty array)", r.error);
-			}
-			if (r.error) {
-				return errorResult("delete", state, `Error: Todo ${r.error.replace(/^#/, "#")}`, r.error);
-			}
-			resultText = r.resultText;
+		case "delete":
+			resultText = handleDelete(state, params);
 			break;
-		}
-
-		case "clear": {
+		case "clear":
 			resultText = handleClear(state);
 			break;
-		}
-
 		default:
-			return errorResult("list", state, `Unknown action: ${params.action}`, `unknown action: ${params.action}`);
+			throw new Error(`Unknown action: ${params.action}`);
 	}
 
 	refreshDisplay(ctx);
@@ -312,25 +216,6 @@ function executeTodoAction(
 			_render: buildRender(state.todos),
 		} as TodoDetails,
 	};
-}
-
-function mapUpdateErrorText(state: TodoSessionState, _params: TodoActionParams, code: string): string {
-	switch (code) {
-		case "id required":
-			return "Error: update requires id parameter";
-		case "need status or text":
-			return "Error: update requires at least status or text parameter";
-		case "text empty":
-			return "Error: text cannot be empty string";
-		default:
-			if (code.startsWith("invalid status:")) {
-				return `Error: status only accepts ${VALID_STATUSES.join(" / ")}`;
-			}
-			if (code.startsWith("#") && code.includes("not found")) {
-				return `Error: Todo ${code} not found`;
-			}
-			return `Error: ${code}`;
-	}
 }
 
 // ── Tool 注册入口 ─────────────────────────────────────
@@ -348,7 +233,7 @@ export function registerTodoTool(
 			"\n\nAvailable actions:" +
 			"\n- list: View all todos" +
 			"\n- add: Batch add todos (requires texts array; optional isVerification marks verification tasks)" +
-			"\n- update: Update a todo (requires id, optional status/text)" +
+			"\n- update: Update todo(s) — single (id + optional status/text) or batch (updates[], takes priority)" +
 			"\n- delete: Batch delete todos (requires ids array)" +
 			"\n- clear: Clear all todos and reset IDs",
 		promptSnippet: "Use todo when breaking multi-step work into trackable items. Add verification todos (isVerification=true) for checks like running tests.",
@@ -363,28 +248,8 @@ export function registerTodoTool(
 		parameters: TodoParams,
 
 		async execute(_toolCallId: string, params: Static<typeof TodoParams>, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: ExtensionContext) {
-			if (signal?.aborted) {
-				return {
-					content: [{ type: "text" as const, text: "Todo call aborted by signal." }],
-					details: {
-						action: "list" as const,
-						todos: [],
-						nextId: 1,
-						error: "aborted",
-						_render: undefined,
-					} as TodoDetails,
-				};
-			}
-			const result = executeTodoAction(params as TodoActionParams, state, ctx, refreshDisplay);
-			const details = result.details as { error?: string } | undefined;
-			if (details?.error) {
-				const textPart = result.content[0];
-				if (textPart?.type === "text") {
-					const inputSummary = JSON.stringify(params);
-					textPart.text += `\nInput: ${inputSummary}`;
-				}
-			}
-			return result;
+			if (signal?.aborted) throw new Error("Todo call aborted by signal.");
+			return executeTodoAction(params as TodoActionParams, state, ctx, refreshDisplay);
 		},
 
 		renderCall(args: Record<string, unknown>, theme: Theme, _context?: unknown) {

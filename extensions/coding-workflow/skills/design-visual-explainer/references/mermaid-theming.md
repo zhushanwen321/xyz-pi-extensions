@@ -1,0 +1,95 @@
+# Mermaid Theming 参考
+
+SKILL.md 的 Mermaid 部分展开。**按需读**——只在调 Mermaid themeVariables 或 ELK 布局时查。
+
+## CDN + 版本
+
+```html
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+// 复杂图（10+ 节点）才加 ELK，简单图不必（ELK 增加体积）
+import elkLayouts from 'https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk/dist/mermaid-layout-elk.esm.min.mjs';
+mermaid.registerLayoutLoaders(elkLayouts);
+</script>
+```
+
+**ELK 关键点：** 是独立包，不在 Mermaid core 里。必须 import + `registerLayoutLoaders()` 后才能用 `layout: 'elk'`，否则**静默降级到 dagre**。简单图（≤8 节点）用默认 dagre 即可。
+
+## themeVariables 完整模板
+
+> **⚠️ 权威定义已转移（2026-06 改造）。** 实际渲染用的 themeVariables（teal 调色板双主题）**权威定义在 `templates/zoom.js`** 的 `mermaid.initialize` 块。本节的模板保留作调色板参考，但若与 zoom.js 冲突，以 zoom.js 为准。换调色板时改 zoom.js + `templates/design.css` 的 `:root`（两处必须同改）。
+
+**必须用 `theme: 'base'`**——只有它是全变量可定制的。内置主题（default/dark/forest/neutral）会忽略大部分变量覆盖。
+
+```javascript
+const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+mermaid.initialize({
+  startOnLoad: false,   // 配合 diagram-shell 手动 render()
+  theme: 'base',
+  look: 'classic',
+  layout: 'elk',        // 简单图删掉这行 + 删 elk import，用默认 dagre
+  themeVariables: {
+    fontFamily: "'Bricolage Grotesque', system-ui, sans-serif",
+    fontSize: '16px',   // 10+ 节点调到 18-20px
+    // Page bg (#0a1414 dark / #f6f8f8 light) and lineColor stay stable;
+    // nodes use dark-fill + bright semantic borders in dark mode.
+    primaryColor: isDark ? '#0d2424' : '#ccfbf1',
+    primaryBorderColor: isDark ? '#5eead4' : '#0d9488',
+    primaryTextColor: isDark ? '#e3efee' : '#134e3a',
+    secondaryColor: isDark ? '#111d1d' : '#fffbeb',
+    secondaryBorderColor: isDark ? '#115e59' : '#d97706',
+    secondaryTextColor: isDark ? '#5eead4' : '#92400e',
+    tertiaryColor: isDark ? '#1a1a1a' : '#f8fafc',
+    tertiaryBorderColor: isDark ? '#64748b' : '#64748b',
+    tertiaryTextColor: isDark ? '#e2e8f0' : '#334155',
+    lineColor: isDark ? '#5eead4' : '#5f8a85',
+    noteBkgColor: isDark ? '#0d2424' : '#f0fdfa',
+    noteTextColor: isDark ? '#e3efee' : '#134e3a',
+    noteBorderColor: isDark ? '#2dd4bf' : '#0d9488',
+  }
+});
+```
+
+## 变量清单
+
+| 变量 | 作用 |
+|------|------|
+| `primaryColor` / `primaryBorderColor` / `primaryTextColor` | 主节点填充/边框/文字 |
+| `secondaryColor` / `secondaryBorderColor` / `secondaryTextColor` | 次级节点 |
+| `tertiaryColor` / `tertiaryBorderColor` / `tertiaryTextColor` | 三级节点 |
+| `lineColor` | 连线 |
+| `fontSize` / `fontFamily` | 全局字体 |
+| `noteBkgColor` / `noteTextColor` / `noteBorderColor` | note 块 |
+
+## 调色板选择（换色防 slop）
+
+每次渲染换一套，匹配页面 `--accent`：
+
+- **teal/slate**：primary `#ccfbf1`/`#0d9488`，secondary `#e0f2fe`/`#0369a1`
+- **terracotta/sage**：primary `#fed7aa`/`#c2410c`，secondary `#ecfccb`/`#65a30d`
+- **rose/cranberry**：primary `#ffe4e6`/`#be123c`，secondary `#fef3c7`/`#d97706`
+- **禁用**：`#8b5cf6`/`#7c3aed`/`#a78bfa`（indigo/violet）、`#d946ef`（fuchsia）
+
+## 节点状态着色（③ DAG / ⑥ Wave DAG 用 classDef）
+
+按 P 级或状态给节点着色，在 Mermaid 源码里定义 `classDef`：
+
+```mermaid
+graph TD
+  I1[P0: 数据模型]:::p0
+  I2[P1: 缓存策略]:::p1
+  I3[P2: 日志格式]:::p2
+  I1 --> I2
+  classDef p0 fill:#3f1818,stroke:#f87171,stroke-width:2px,color:#fecaca
+  classDef p1 fill:#38250d,stroke:#fb923c,stroke-width:2px,color:#fed7aa
+  classDef p2 fill:#0c243a,stroke:#38bdf8,stroke-width:2px,color:#bae6fd
+```
+
+dark mode 下用深色填充 + 亮色边框/文字；light mode 用浅色填充 + 深色文字。包依赖图额外使用 `layer` / `types` / `sdk` 等语义 classDef（见 `skeletons/code-architecture.html`）。
+
+## 复杂图缩放（10+ 节点）
+
+先考虑是否该换 drawio（见 `rendering-engine-guide.md`）。若坚持 Mermaid：
+- `fontSize` 调到 `18px`-`20px`
+- `INITIAL_ZOOM` / smart fit（diagram-shell 的 `computeSmartFit` 自动处理）
+- 15+ 元素别硬塞一张图——拆成「概览 Mermaid + 详情 CSS 卡片」混合模式

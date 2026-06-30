@@ -131,7 +131,7 @@ describe("startHandler", () => {
     // 但验证 wrapper 已透传给 service.execute）。
     expect(capturedOnUpdate).toBeDefined();
     // 模拟 service 在 streaming 期调 onUpdate(project(details))：
-    const streamDetails = makeDetails({ status: "running", sessionFile: "s.jsonl", currentActivity: { type: "tool", label: "ls" } });
+    const streamDetails = makeDetails({ status: "running", sessionFile: "s.jsonl" });
     capturedOnUpdate!(streamDetails);
     // tool 层的 onUpdate 应被调用一次，收到 liftSync 后的 SubagentToolResult。
     expect(toolOnUpdate).toHaveBeenCalledTimes(1);
@@ -141,7 +141,6 @@ describe("startHandler", () => {
     expect(arg.details.syncResponse).toBeDefined();
     expect(arg.details.syncResponse.mode).toBe("sync");
     expect(arg.details.syncResponse.status).toBe("running");
-    expect(arg.details.syncResponse.currentActivity).toEqual({ type: "tool", label: "ls" });
     expect(arg.details.sessionFile).toBe("s.jsonl");
     // content text 为 details.result（streaming 期通常空）
     expect(arg.content[0]).toMatchObject({ type: "text" });

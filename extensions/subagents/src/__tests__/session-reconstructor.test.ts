@@ -104,13 +104,13 @@ describe("reconstructFromFile", () => {
       expect(rec!.task).toBe("do it");
       expect(rec!.status).toBe("done");
       expect(rec!.turns).toHaveLength(1);
-      expect(rec!.turns[0].text).toBe("hello world");
+      expect(rec!.turns[0].content).toEqual([{ type: "text", text: "hello world" }]);
       expect(rec!.turnCount).toBe(1);
       expect(rec!.totalTokens).toBe(30); // 10+20+0+0
       expect(rec!.result).toBe("hello world");
     });
 
-    it("thinking block 累积进 turn.thinking", () => {
+    it("thinking + text block 进 turn.content（透传，单源）", () => {
       writeJsonl([
         headerLine(),
         identityEntry({ id: "r1", agent: "w", mode: "sync", task: "t", startedAt: 100 }),
@@ -120,8 +120,10 @@ describe("reconstructFromFile", () => {
         ]),
       ]);
       const rec = reconstructFromFile(filePath);
-      expect(rec!.turns[0].thinking).toBe("let me think");
-      expect(rec!.turns[0].text).toBe("answer");
+      expect(rec!.turns[0].content).toEqual([
+        { type: "thinking", thinking: "let me think" },
+        { type: "text", text: "answer" },
+      ]);
     });
 
     it("多 assistant message → 多 turn，result 用空行拼接", () => {
@@ -142,7 +144,7 @@ describe("reconstructFromFile", () => {
   // toolCall ↔ toolResult 配对
   // ============================================================
   describe("toolCall 配对", () => {
-    it("toolCall + toolResult → InternalToolCall done", () => {
+    it("toolCall + toolResult → content toolCall block done", () => {
       writeJsonl([
         headerLine(),
         identityEntry({ id: "r1", agent: "w", mode: "sync", task: "t", startedAt: 100 }),
@@ -152,14 +154,16 @@ describe("reconstructFromFile", () => {
         toolResultEntry("call-1", "read"),
       ]);
       const rec = reconstructFromFile(filePath);
-      expect(rec!.turns[0].toolCalls).toHaveLength(1);
-      const tc = rec!.turns[0].toolCalls[0];
-      expect(tc.toolName).toBe("read");
-      expect(tc._status).toBe("done");
-      expect(tc.isError).toBe(false);
+      const block = rec!.turns[0].content.find((b) => b.type === "toolCall");
+      expect(block?.type).toBe("toolCall");
+      if (block?.type === "toolCall") {
+        expect(block.name).toBe("read");
+        expect(block._status).toBe("done");
+        expect(block.isError).toBe(false);
+      }
     });
 
-    it("toolResult isError → InternalToolCall failed", () => {
+    it("toolResult isError → content toolCall block failed", () => {
       writeJsonl([
         headerLine(),
         identityEntry({ id: "r1", agent: "w", mode: "sync", task: "t", startedAt: 100 }),
@@ -169,8 +173,11 @@ describe("reconstructFromFile", () => {
         toolResultEntry("call-1", "bash", { isError: true }),
       ]);
       const rec = reconstructFromFile(filePath);
-      expect(rec!.turns[0].toolCalls[0]._status).toBe("failed");
-      expect(rec!.turns[0].toolCalls[0].isError).toBe(true);
+      const block = rec!.turns[0].content.find((b) => b.type === "toolCall");
+      if (block?.type === "toolCall") {
+        expect(block._status).toBe("failed");
+        expect(block.isError).toBe(true);
+      }
     });
 
     it("孤儿 toolResult（无匹配 toolCall）→ 丢弃，不崩", () => {
@@ -182,7 +189,7 @@ describe("reconstructFromFile", () => {
       ]);
       const rec = reconstructFromFile(filePath);
       expect(rec).toBeDefined();
-      expect(rec!.turns[0].toolCalls).toHaveLength(0);
+      expect(rec!.turns[0].content.filter((b) => b.type === "toolCall")).toHaveLength(0);
     });
   });
 

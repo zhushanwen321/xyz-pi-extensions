@@ -27,11 +27,12 @@ import {
   extractAgentName,
   firstLine,
   formatElapsedSeconds,
-  formatEventLine,
   formatTokens,
+  formatToolEventPairs,
   sanitizeLabel,
   spinnerGlyph,
   statusGlyph,
+  tailFixedLines,
   type ThemeLike,
   truncLine,
 } from "./format.ts";
@@ -46,8 +47,15 @@ const STREAM_PREFIX = "  ⎿ ";
 /** footer 用的纯空格缩进（与 STREAM_PREFIX 等宽 4 列，但不带 ⎿）。 */
 const FOOTER_PREFIX = "    ";
 
-/** spinner 帧间隔（ms）。低频丝滑转动，只触发单行重绘不锁滚动。 */
-const SPINNER_INTERVAL_MS = 200;
+/**
+ * spinner 帧间隔（ms）。对齐 Pi 原生 Loader 的 DEFAULT_INTERVAL_MS=80（loader.ts:12）——
+ * 10 帧 × 80ms = 800ms 转一圈（约 1.25 转/秒），与 Pi working 指示器视觉一致。
+ *
+ * 同时用于两处：maybeToggleSpinner 的 setInterval（驱动 invalidate 重绘换帧）+
+ * buildStatusLineFromSync 的 Date.now()/SPINNER_INTERVAL_MS 选帧。两者用同一常量保证
+ * 每次 invalidate 都恰好转一帧（setInterval 节奏 = 选帧粒度）。
+ */
+const SPINNER_INTERVAL_MS = 80;
 
 /** 压缩视图滚动区最多展示的 eventLog 条数（不含 currentActivity 行）。 */
 const COMPACT_SCROLL_LINES = 3;
@@ -279,18 +287,16 @@ class SubagentResultComponent implements Component {
     const lines: string[] = [];
     lines.push(truncLine(buildStatusLineFromSync(sync, theme), width));
 
-    // 滚动区：最近 N 条 eventLog（不含 turn_end），running 和 terminal 态统一展示。
-    // eventLog 现已从 turns[] 派生（离散语义事件，无 text/thinking 切片碎片），无需 fold。
+    // 滚动区：固定高度窗口（对齐 Pi bash 的行数稳定语义）。
+    // 单源设计：eventLog 已含 thinking/text 条目（与 tool 同构），不再有 currentActivity 独立出口。
+    // 用 formatToolEventPairs 折叠 tool 对（每个 tool 1 行 + ✓/✗），thinking/text 条目原样保留。
+    // 取尾部 COMPACT_SCROLL_LINES 行，不足 pad dim 空行 → 行数恒定，达到最大后只滚动更新。
     const scrollEntries = sync.eventLog.filter((e) => e.type !== "turn_end");
-
-    // currentActivity 与 eventLog 末条不再重复（currentActivity 从 turns[] 末尾推导，
-    // eventLog 末条是已完成的 tool_end/turn_end，语义不同），无需去重。
-    if (sync.status === "running" && sync.currentActivity) {
-      lines.push(truncLine(buildActivityLine(sync.currentActivity, theme), width));
-    }
-
-    for (const entry of scrollEntries.slice(-COMPACT_SCROLL_LINES)) {
-      lines.push(truncLine(`${theme.fg("dim", STREAM_PREFIX)}${formatEventLine(entry, theme)}`, width));
+    const stream = formatToolEventPairs(scrollEntries, theme);
+    // 加 ⎿ 前缀后交 tailFixedLines 取尾部 N 行 + pad（pad 空行用同样前缀对齐缩进列）
+    const prefixed = stream.map((l) => `${theme.fg("dim", STREAM_PREFIX)}${l}`);
+    for (const line of tailFixedLines(prefixed, COMPACT_SCROLL_LINES, STREAM_PREFIX, theme)) {
+      lines.push(truncLine(line, width));
     }
 
     if (sync.status === "running") {
@@ -333,10 +339,11 @@ class SubagentResultComponent implements Component {
     const sync = d.syncResponse;
 
     // sync expanded：完整 eventLog（从 turns[] 派生，离散语义事件）+ 交付物。
+    // tool_start/tool_end 对折叠成 1 行（每个 tool 一行，尾部 ✓/✗）；turn_end 原样保留。
     lines.push(truncLine(buildStatusLineFromSync(sync, theme), width));
     lines.push("");
-    for (const entry of sync.eventLog) {
-      lines.push(truncLine(`${theme.fg("dim", STREAM_PREFIX)}${formatEventLine(entry, theme)}`, width));
+    for (const line of formatToolEventPairs(sync.eventLog, theme)) {
+      lines.push(truncLine(`${theme.fg("dim", STREAM_PREFIX)}${line}`, width));
     }
     const delivery = buildDeliveryLineFromSync(sync, theme);
     if (delivery) {
@@ -437,24 +444,6 @@ function buildStats(d: { turns: number; totalTokens: number; elapsedSeconds: num
   if (d.elapsedSeconds > 0) parts.push(formatElapsedSeconds(d.elapsedSeconds));
   if (parts.length === 0) return "";
   return parts.map((p) => theme.fg("dim", p)).join(` ${theme.fg("dim", "·")} `);
-}
-
-/**
- * 构建 currentActivity 行：`  ⎿ {图标} {label}`。
- * 图标按 activity.type：tool→`›`、thinking→`·`、text→`>`。
- * label 经 sanitize 压成单行。
- */
-function buildActivityLine(
-  activity: { type: "tool" | "text" | "thinking"; label: string },
-  theme: ThemeLike,
-): string {
-  const tag = activity.type === "tool" ? "tool:" : activity.type === "thinking" ? "thinking:" : "text:";
-  const label = sanitizeLabel(activity.label);
-  // thinking 整行 dim（含标签）；其他标签 normal，前缀 dim
-  const content = activity.type === "thinking"
-    ? theme.fg("dim",`${tag} ${label}`)
-    : `${tag} ${label}`;
-  return `${theme.fg("dim",STREAM_PREFIX)}${content}`;
 }
 
 /**

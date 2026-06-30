@@ -1,5 +1,10 @@
 # Todo Extension v2 Plan
 
+> **Status: SUPERSEDED.** 本文是 v2 时代的实现计划（boolean→三态）。v2 之后又经历了 v3.1
+> 模块拆分（单文件 → 8 文件）、steer 注入机制引入、0.2.0 移除 verifying/failed 四态回归三态、
+> 以及错误处理规范化（throw 替代错误成功模式）。**保留作历史决策记录，勿作现状参考。**
+> 现状架构见 `ARCHITECTURE.md`，对外契约见 `README.md`。
+
 ## 目标
 
 升级 Pi 的 todo extension，参考业界最佳实践（Ona、Claude Code Tasks），提升可用性和健壮性。

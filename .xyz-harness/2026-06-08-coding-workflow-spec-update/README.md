@@ -21,7 +21,7 @@ Coding-workflow 的 v2 独立实现，完全基于 Workflow Extension 编排 Rev
 │   ├── types/              # Pi SDK stub 类型
 │   └── index.ts            # 扩展入口
 ├── skills/                 # 4 个 SKILL.md（brainstorming/writing-plans/phase-dev/phase-test）
-├── docs/adr/               # ADR-019
+├── docs/adr/               # ADR-020
 ├── package.json
 └── tsconfig.json
 ```

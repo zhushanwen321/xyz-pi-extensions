@@ -43,14 +43,15 @@ import type { SubagentRecord } from "../types.ts";
 import {
   firstLine,
   formatElapsedSeconds,
-  formatEventLine,
   formatTokens,
+  formatToolEventPairs,
   padToVisible,
   sanitizeLabel,
   segFillColored,
   shortId,
   spinnerGlyph,
   statusGlyph,
+  tailFixedLines,
   type ThemeLike,
   truncLine,
 } from "./format.ts";
@@ -98,10 +99,14 @@ const MIN_INNER_ROWS = 4;
 const DETAIL_LEN_PROBE_WIDTH = 9999;
 /** 垂直居中除数（floor(剩余/2)）。 */
 const VERT_CENTER_DIVISOR = 2;
-/** overlay 动画刷新间隔（spinner 换帧 + elapsed 跳动）。同 tool-render.ts SPINNER_INTERVAL_MS。 */
-const OVERLAY_REFRESH_MS = 250;
-/** spinner 帧切换粒度（与 Date.now() 配合选帧）。 */
-const SPINNER_FRAME_MS = 250;
+/**
+ * overlay 动画刷新间隔（spinner 换帧 + elapsed 跳动）。
+ * 对齐 tool-render.ts SPINNER_INTERVAL_MS=80（同 Pi Loader DEFAULT_INTERVAL_MS）。
+ * 80ms 刷新 elapsed（秒级）无视觉影响——diff 引擎秒数不变就不重绘。
+ */
+const OVERLAY_REFRESH_MS = 80;
+/** spinner 帧切换粒度（与 Date.now() 配合选帧）。对齐 SPINNER_INTERVAL_MS。 */
+const SPINNER_FRAME_MS = 80;
 /** 顶框嵌入标题（分屏模式）。 */
 const TITLE_SPLIT = "Subagents";
 /** 分屏分区线左/右嵌入标题。 */
@@ -136,11 +141,27 @@ interface TuiLike {
 export type NotifyFn = (message: string, type?: "info" | "warning" | "error") => void;
 
 // ============================================================
-// G-017：模块级 overlay 单例（防叠加）
+// G-017：防叠加 overlay 句柄（session 隔离）
 // ============================================================
+// ponytail: 用 const Map 而非 let 单例，按 sessionId 索引实现 session 隔离
+// （同进程多 session 不会互相清掉对方的 overlay）。session_shutdown 钩子清理防泄漏。
+const activeViews = new Map<string, { close: () => void }>();
 
-/** 当前活动的 list overlay 句柄（null 表示无）。连按两次快捷键时先 close 前一个。 */
-let activeView: { close: () => void } | null = null;
+/** 获取指定 session 的活动 overlay 句柄（null 表示无）。 */
+function getActiveView(sessionId: string): { close: () => void } | null {
+  return activeViews.get(sessionId) ?? null;
+}
+
+/** 设置指定 session 的活动 overlay 句柄。 */
+function setActiveView(sessionId: string, view: { close: () => void } | null): void {
+  if (view) activeViews.set(sessionId, view);
+  else activeViews.delete(sessionId);
+}
+
+/** session 结束时清理句柄（防 Map 泄漏）。 */
+export function clearActiveViewOnShutdown(sessionId: string): void {
+  activeViews.delete(sessionId);
+}
 
 // ============================================================
 // overlay 工厂
@@ -166,10 +187,12 @@ export async function createSubagentsView(
   ctx: ExtensionContext,
   directId?: string,
 ): Promise<void> {
-  // G-017：先关前一个 overlay
-  if (activeView) {
-    activeView.close();
-    activeView = null;
+  const sessionId = ctx.sessionManager.getSessionId();
+  // G-017：先关前一个 overlay（session 级隔离）
+  const prev = getActiveView(sessionId);
+  if (prev) {
+    prev.close();
+    setActiveView(sessionId, null);
   }
 
   const notify: NotifyFn = (msg, type) => ctx.ui.notify(msg, type);
@@ -230,11 +253,11 @@ export async function createSubagentsView(
         state.disposed = true; // ① 标记
         unsubscribe(); // ② 解订 store 事件
         clearInterval(animTimer); // ③ 清动画 timer
-        activeView = null; // ④ 清 G-017 句柄
+        setActiveView(sessionId, null); // ④ 清 G-017 句柄（session 级）
         done(undefined); // ⑤ 框架 done（触发 overlay 销毁）
       };
       component.setCloseFn(wrappedDone);
-      activeView = { close: wrappedDone };
+      setActiveView(sessionId, { close: wrappedDone });
 
       return component;
     },
@@ -733,13 +756,17 @@ class SubagentsListComponent implements Component {
     lines.push(truncLine(t.fg("dim", `id: ${record.id}`), width));
     lines.push("");
 
-    // eventLog 现从 turns[] 派生（离散语义事件，无碎片），直接取最近 N 条。
-    const recent = record.eventLog.slice(-PREVIEW_RECENT_LINES);
+    // eventLog 现从 turns[] 派生（离散语义事件，无碎片）。
+    // 固定高度窗口（对齐 tool-render compact）：fold tool 对后取尾部 PREVIEW_RECENT_LINES 行，
+    // 不足 pad dim 空行 → eventLog 区行数恒定，running record 推进时右列不抖动。
+    // 空事件单独处理（显示 (no events) 提示而非 pad 空行——空态有专门文案更友好）。
+    const recent = record.eventLog.slice(0); // 全量 fold 后再取尾部（窗口含 fold 合并效果）
     if (recent.length === 0) {
       lines.push(truncLine(t.fg("dim", "(no events)"), width));
     } else {
-      for (const entry of recent) {
-        lines.push(truncLine(formatEventLine(entry, t), width));
+      const folded = formatToolEventPairs(recent, t);
+      for (const line of tailFixedLines(folded, PREVIEW_RECENT_LINES, "", t)) {
+        lines.push(truncLine(line, width));
       }
     }
 
@@ -797,19 +824,23 @@ class SubagentsListComponent implements Component {
     content.push("");
     content.push(truncLine(t.fg("accent", t.bold("── Event Log ──")), width));
 
-    // eventLog 从 turns[] 派生（离散语义事件），直接遍历。
+    // eventLog 从 turns[] 派生（离散语义事件）。tool_start/tool_end 对折叠成 1 行
+    // （每个 tool 一行，尾部 ✓/✗）；turn_end/error 原样保留。
     if (record.eventLog.length === 0) {
       content.push(truncLine(t.fg("dim", "(no events)"), width));
     } else {
-      for (const entry of record.eventLog) {
-        content.push(truncLine(formatEventLine(entry, t), width));
+      for (const line of formatToolEventPairs(record.eventLog, t)) {
+        content.push(truncLine(line, width));
       }
     }
 
     if (record.result) {
       content.push("");
       content.push(truncLine(t.fg("accent", "Result:"), width));
+      // 跳过空行：getFullText 用 \n\n 拼接多 turn 文本，split("\n") 会多出空字符串元素
+      // （turn 间空行）。trim 判断兼容首尾空白行 + turn 间隔行，紧贴换行不多空。
       for (const l of record.result.split("\n")) {
+        if (l.trim().length === 0) continue;
         content.push(truncLine(sanitizeLabel(l), width));
       }
     }

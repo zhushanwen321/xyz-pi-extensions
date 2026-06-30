@@ -67,21 +67,87 @@ export interface SubagentServiceSessionInit {
 const PRIORITY_BACKGROUND = 1000;
 const PRIORITY_SYNC = 0;
 
-/** 触发 onUpdate 的事件类型（streaming delta 不触发，避免每 token 刷新）。 */
-const TRIGGERING_EVENT_TYPES = new Set<AgentEvent["type"]>([
-  "tool_start",
-  "tool_end",
-  "turn_end",
-  "message_end",
-  "error",
-  "compaction",
-]);
+/**
+ * onUpdate 节流间隔（对齐 Pi bash 的 BASH_UPDATE_THROTTLE_MS=100）。
+ *
+ * 所有事件（含 text_delta/thinking_delta）都参与刷新，但用时间节流合并——
+ * 100ms 内多次 delta 只触发一次 project+onUpdate，避免每 token 刷新卡 TUI。
+ * 离散事件（tool_start/tool_end/turn_end）立即触发（标记 dirty，若距上次刷新
+ * 超 100ms 则立即发，否则并入下一个节流 tick），保证边界事件不丢、不滞后太多。
+ *
+ * 旧实现用白名单 TRIGGERING_EVENT_TYPES 完全屏蔽 delta——导致 thinking/text
+ * 永远不在 compact 视图显示（getCurrentActivity 的 thinking/text 分支等不到刷新时机）。
+ */
+const ONUPDATE_THROTTLE_MS = 100;
 
 /** resolveIdentity 的产物——一次确定、写入 record 后不再变。 */
 interface ResolvedIdentity {
   agent: string;
   agentConfig: AgentConfig | undefined;
   resolved: ResolvedModel;
+}
+
+/**
+ * 创建一个按 record 隔离的 onUpdate 节流器（对齐 Pi bash 的节流模式）。
+ *
+ * 返回 `{ onEvent, flush, cancel }`：
+ *   - onEvent：每次 AgentEvent 调用。离散事件(tool_start/tool_end/turn_end/...)
+ *     与 streaming delta(text/thinking)都参与——delta 经节流合并避免每 token 刷新，
+ *     让 compact 视图能实时显示 thinking/text 活动行（旧白名单实现完全屏蔽 delta，导致不可见）。
+ *   - flush：立即派发挂起的 dirty 刷新（run 结束前调，保证末态 details 不丢）。
+ *   - cancel：清理节流 timer（run 的 finally 调，防泄漏）。
+ *
+ * 节流规则（镜像 bash.ts:296-330 的 updateDirty + lastUpdateAt + setTimeout）：
+ *   - 距上次派发 ≥ ONUPDATE_THROTTLE_MS → 立即派发
+ *   - 否则标记 dirty，安排一个 setTimeout(派发, 到节流窗口结束)（幂等：已有 timer 不重排）
+ *
+ * 状态全在闭包内（每次 runAndFinalize 创建一个）→ 并发多 subagent 各自独立节流，
+ * 随 record 生灭，cancel 即清。不污染 service 单例字段。
+ */
+function createThrottledOnUpdate(
+  record: ExecutionRecord,
+  onUpdate: (details: SubagentToolDetails) => void,
+): { onEvent: (event: AgentEvent) => void; flush: () => void; cancel: () => void } {
+  let updateDirty = false;
+  let lastUpdateAt = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const emit = (): void => {
+    if (!updateDirty) return;
+    updateDirty = false;
+    lastUpdateAt = Date.now();
+    onUpdate(project(record));
+  };
+
+  const clearTimer = (): void => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+
+  const schedule = (): void => {
+    updateDirty = true;
+    const delay = ONUPDATE_THROTTLE_MS - (Date.now() - lastUpdateAt);
+    if (delay <= 0) {
+      clearTimer();
+      emit();
+      return;
+    }
+    // 幂等：已有挂起 timer 则不重排（保留最早的窗口结束时机）。
+    if (timer === undefined) {
+      timer = setTimeout(() => {
+        timer = undefined;
+        emit();
+      }, delay);
+    }
+  };
+
+  return {
+    onEvent: schedule,
+    flush: () => { clearTimer(); emit(); },
+    cancel: clearTimer,
+  };
 }
 
 /**
@@ -306,10 +372,12 @@ export class SubagentService {
     priority: number,
   ): Promise<AgentResult> {
     await this.pool.acquire(priority);
-    // onEvent 包装：AgentEvent → onUpdate(project(record)) 回流调用方
-    const onEvent = opts.onUpdate
-      ? (event: AgentEvent): void => this.onEventThrottled(record, event, opts.onUpdate!)
+    // onEvent 节流器：按 record 隔离，delta 也参与刷新（节流合并，对齐 bash）。
+    // flush 保证 run 结束前末态 details 不丢；cancel 清 timer 防泄漏。
+    const throttle = opts.onUpdate
+      ? createThrottledOnUpdate(record, opts.onUpdate)
       : undefined;
+    const onEvent = throttle?.onEvent;
 
     let result: AgentResult;
     try {
@@ -332,6 +400,9 @@ export class SubagentService {
       result = await this.finalizeFailed(record, err);
       return result;
     } finally {
+      // flush 挂起的 dirty 刷新（run 结束前派发末态 details），再 cancel 清 timer。
+      throttle?.flush();
+      throttle?.cancel();
       this.pool.release();
     }
 
@@ -443,17 +514,6 @@ export class SubagentService {
   /** background 完成回注（record → BgNotifyRecord 映射 + notifier.notify）。 */
   private notifyComplete(record: ExecutionRecord): void {
     this.notifier.notify(this.toNotifyRecord(record));
-  }
-
-  /** AgentEvent 节流回流到 onUpdate（streaming delta 不触发）。 */
-  private onEventThrottled(
-    record: ExecutionRecord,
-    event: AgentEvent,
-    onUpdate: (details: SubagentToolDetails) => void,
-  ): void {
-    if (TRIGGERING_EVENT_TYPES.has(event.type)) {
-      onUpdate(project(record));
-    }
   }
 
   // ── 内部 ────────────────────────────────────────────────

@@ -170,7 +170,6 @@ describe("subagent tool contract [MANDATORY]", () => {
         { type: "turn_end", label: "Result is 42", ts: 1001 },
       ],
       result: "Result is 42",
-      currentActivity: undefined,
       parsedOutput: undefined,
       sessionFile: "sess-1.jsonl",
     };

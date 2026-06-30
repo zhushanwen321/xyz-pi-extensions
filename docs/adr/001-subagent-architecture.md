@@ -1,9 +1,18 @@
 # ADR-001: Subagent 架构与使用模型
 
-> 状态：accepted
+> **⚠️ 部分SUPERSEDED — 本 ADR 的进程模型已被后续 ADR 取代：**
+> - **决策 1（进程隔离模型，spawn 子进程）**：被 [ADR-025](./025-agent-execution-in-process.md) 取代——改为进程内 `createAgentSession()`
+> - **决策 3（background 自动注入机制，backgroundJob 追踪子进程退出）**：被 [ADR-027](./027-subagent-execution-persistence.md) 的 BgNotifier + `pi.sendMessage({deliverAs:"followUp"})` 取代
+> - 决策 2（上下文传递协议）、决策 4（能力边界 prompt 工程）、决策 5（模型选择策略思路）的 prompt 工程结论仍有参考价值
+>
+> 请以 ADR-025 / ADR-027 为进程模型与持久化的真相源。本 ADR 保留作历史决策记录。
+
+> 状态：~~accepted~~ superseded（决策 1、3）
 > 日期：2026-05-21
 
 ## 背景
+
+> **背景注记**：本 ADR 撰写时 subagent 工具是 `examples/extension`（非核心模块），现已演进出独立 npm 扩展包 `@zhushanwen/pi-subagents`（进程内 `createAgentSession` 执行，见 ADR-025）。以下背景描述的是当时状态。
 
 Pi coding agent 的 subagent 工具是一个 `examples/extension`（非核心模块），通过 `child_process.spawn` 启动独立 `pi --mode json` 进程实现任务委派。它的核心价值有三个：
 
@@ -141,10 +150,12 @@ subagent 工具是扩展实现，不是 Pi 核心。它无法：
 
 ## 已知限制（非 Pi Extension 可修复）
 
-| 限制 | 根因 |
-|------|------|
-| subagent 内部嵌套 subagent 结果不注入 | background injection 通道绑在主 Pi session，不在 spawn 子进程内 |
-| subagent 无法暂停并反问主 agent | 单向通信，没有交互式通道 |
-| 跨进程文件写冲突无保护 | `withFileMutationQueue` 是进程内机制 |
-| subagent 看不到主 agent 的对话历史 | 进程隔离的必然结果 |
-| 无法在一个 subagent 内靠 task prompt 实现严格的轮数限制 | pi-agent-core 没有 maxTurns 参数暴露到 CLI |
+> **注记**：以下限制表撰写于 spawn 架构时期（ADR-025 前）。标 ✅ 者已在进程内架构下解决。其他条目的根因（spawn/进程隔离）在 in-process 模型下部分改变，需重新评估，此处保留作历史参考。
+
+| 限制 | 根因 | 现状 |
+|------|------|------|
+| subagent 内部嵌套 subagent 结果不注入 | background injection 通道绑在主 Pi session，不在 spawn 子进程内 | spawn 根因已不成立（in-process 子 session 是完整 pi session） |
+| subagent 无法暂停并反问主 agent | 单向通信，没有交互式通道 | 仍成立（subagent 不继承主对话历史） |
+| 跨进程文件写冲突无保护 | `withFileMutationQueue` 是进程内机制 | in-process 后为跨 session，需复核 |
+| subagent 看不到主 agent 的对话历史 | 进程隔离的必然结果 | session 隔离的必然结果 |
+| 无法在一个 subagent 内靠 task prompt 实现严格的轮数限制 | pi-agent-core 没有 maxTurns 参数暴露到 CLI | ✅ 已解决：`SubagentService.execute` 支持 `maxTurns` + `graceTurns`，`createTurnLimiter` 实现 soft(steer)/hard(abort) 限制（见 `session-runner.ts`） |

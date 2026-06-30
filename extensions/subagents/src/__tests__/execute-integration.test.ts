@@ -197,8 +197,8 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       promptBehavior: {
         kind: "resolve",
         events: [
-          // 模拟真实 LLM 输出：先 text_delta（正文），再 turn_end + message_end
-          { type: "message_update", assistantMessageEvent: { delta: "done" } },
+          // 单源：message_update 带 message.content 快照（text/thinking/toolCall 同构 block）
+          { type: "message_update", message: { content: [{ type: "text", text: "done" }] } },
           { type: "turn_end" },
           { type: "message_end", message: { usage: { input: 100, output: 50 } } },
         ],
@@ -382,14 +382,14 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
   // run() SDK 事件累积（event-bridge 合并进 run 后的回归覆盖）
   // ============================================================
 
-  it("run 事件累积: turn_end/message_end(usage)/tool_start+tool_end/text_delta/thinking_delta", async () => {
+  it("run 事件累积: message_update(thinking/text)/tool/turn_end/message_end(usage)", async () => {
     const handle = makeFakeSession({
       promptBehavior: {
         kind: "resolve",
         events: [
-          { type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "think..." } },
-          { type: "message_update", assistantMessageEvent: { delta: "hello " } },
-          { type: "message_update", assistantMessageEvent: { delta: "world" } },
+          // 单源：message_update 带 content 快照（thinking → text 流式，整体覆盖）
+          { type: "message_update", message: { content: [{ type: "thinking", thinking: "think..." }] } },
+          { type: "message_update", message: { content: [{ type: "thinking", thinking: "think..." }, { type: "text", text: "hello world" }] } },
           { type: "tool_execution_start", toolCallId: "tc1", toolName: "bash", args: { cmd: "ls" } },
           { type: "tool_execution_end", toolCallId: "tc1", toolName: "bash", result: { details: "out" } },
           { type: "turn_end" },
@@ -407,8 +407,10 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     expect(result.record.turns).toBe(1);
     // message_end usage 累积
     expect(result.details.totalTokens).toBe(30);
-    // tool_end → toolCalls 收集（eventLog entry 结构: {type, label, ts}，无 toolName 字段）
+    // tool_end → eventLog 含 tool_end 条目
     expect(result.details.eventLog.some((e) => e.type === "tool_end")).toBe(true);
+    // message_update content 累积 → result text 聚合（单源：从 content text block 派生）
+    expect(result.details.result).toBe("hello world");
   });
 
   it("run message_end error stopReason → lastError 生效（success=false）", async () => {
@@ -514,6 +516,42 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     expect(updates.length).toBeGreaterThanOrEqual(1);
     // streaming 期 status 仍 running
     expect(updates[0]!.status).toBe("running");
+  });
+
+  it("onUpdate 回流: message_update（thinking/text）经节流触发 onUpdate（单源后实时进度可见）", async () => {
+    // 回归核心：旧实现 text/thinking 走 currentActivity 出口，白名单不含 delta → 永不刷新。
+    // 单源后 message_update 带 content 快照，节流触发 onUpdate，eventLog 含 thinking/text 条目。
+    const handle = makeFakeSession({
+      promptBehavior: {
+        kind: "resolve",
+        events: [
+          { type: "message_update", message: { content: [{ type: "thinking", thinking: "pondering" }] } },
+          { type: "message_update", message: { content: [{ type: "text", text: "writing output" }] } },
+          { type: "turn_end" },
+          { type: "message_end", message: { usage: { input: 5 } } },
+        ],
+      },
+    });
+    const { service, agentDir, ctxModel } = setup(handle.session);
+    agentDirs.push(agentDir);
+
+    const seenThinkingOrText: boolean[] = [];
+    await service.execute({
+      task: "delta-stream",
+      wait: true,
+      ctxModel,
+      onUpdate: (details) => {
+        // 单源：thinking/text 作为 eventLog 条目（不再有 currentActivity 独立出口）
+        const hasThinkingOrText = details.eventLog.some(
+          (e) => e.type === "thinking" || e.type === "text",
+        );
+        seenThinkingOrText.push(hasThinkingOrText);
+      },
+    });
+
+    // message_update 经节流/flush 触发了 onUpdate——至少一次回流看到 thinking/text 条目。
+    // 旧实现（白名单屏蔽 + currentActivity turn 间隙归空）：thinking/text 永不可见。
+    expect(seenThinkingOrText.some((v) => v === true)).toBe(true);
   });
 });
 
