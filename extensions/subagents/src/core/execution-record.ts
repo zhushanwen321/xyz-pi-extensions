@@ -146,8 +146,12 @@ export function createRecord(
     mode: ExecutionMode;
     task: string;
     startedAt: number;
-    /** 创建该 subagent 的主 Pi session ID（session 隔离过滤用）。 */
-    parentSessionId?: string;
+    /** 根 Pi session ID（session 隔离过滤用）。递归链上所有层同值。 */
+    rootSessionId?: string;
+    /** 直接父 subagent record ID。顶层为 undefined。 */
+    parentRecordId?: string;
+    /** subagent 递归深度。顶层=0。 */
+    depth?: number;
     controller?: AbortController;
   },
 ): ExecutionRecord {
@@ -159,7 +163,9 @@ export function createRecord(
     mode: identity.mode,
     task: identity.task,
     startedAt: identity.startedAt,
-    parentSessionId: identity.parentSessionId,
+    rootSessionId: identity.rootSessionId,
+    parentRecordId: identity.parentRecordId,
+    depth: identity.depth ?? 0,
 
     // 状态（实时更新）
     status: "running",

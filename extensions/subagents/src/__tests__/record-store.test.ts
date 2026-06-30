@@ -33,7 +33,7 @@ function makeRecord(over: Partial<ExecutionRecord> = {}): ExecutionRecord {
     mode: "sync",
     task: "t",
     startedAt: 1000,
-    parentSessionId: "sess-current",
+    rootSessionId: "sess-current",
   });
   return { ...base, ...over };
 }
@@ -44,7 +44,7 @@ function makeRecord(over: Partial<ExecutionRecord> = {}): ExecutionRecord {
  */
 function writeSessionJsonl(
   filePath: string,
-  identity: { id: string; agent: string; mode: "sync" | "background"; task: string; startedAt: number; parentSessionId?: string; lastTs?: number },
+  identity: { id: string; agent: string; mode: "sync" | "background"; task: string; startedAt: number; rootSessionId?: string; lastTs?: number },
   assistantText = "result text",
 ): void {
   const lastTs = identity.lastTs ?? identity.startedAt + 1000;
@@ -58,7 +58,7 @@ function writeSessionJsonl(
     task: identity.task,
     startedAt: identity.startedAt,
   };
-  if (identity.parentSessionId !== undefined) identityData.parentSessionId = identity.parentSessionId;
+  if (identity.rootSessionId !== undefined) identityData.rootSessionId = identity.rootSessionId;
   const identityEntry = JSON.stringify({
     type: "custom",
     id: "id-1",
@@ -428,22 +428,22 @@ describe("RecordStore", () => {
   // ============================================================
   // session 隔离（问题 1 修复）
   // ============================================================
-  describe("session 隔离（parentSessionId 过滤）", () => {
-    it("磁盘源：只返回 parentSessionId 匹配的 record", () => {
+  describe("session 隔离（rootSessionId 过滤）", () => {
+    it("磁盘源：只返回 rootSessionId 匹配的 record", () => {
       writeSessionJsonl(path.join(tmpDir, "mine.jsonl"), {
-        id: "mine", agent: "w", mode: "background", task: "t", startedAt: 1000, parentSessionId: "sess-A",
+        id: "mine", agent: "w", mode: "background", task: "t", startedAt: 1000, rootSessionId: "sess-A",
       });
       writeSessionJsonl(path.join(tmpDir, "other.jsonl"), {
-        id: "other", agent: "w", mode: "background", task: "t", startedAt: 2000, parentSessionId: "sess-B",
+        id: "other", agent: "w", mode: "background", task: "t", startedAt: 2000, rootSessionId: "sess-B",
       });
       const store = new RecordStore(tmpDir);
       const ids = store.collectRecords(100, "all", "sess-A").map((r) => r.id);
       expect(ids).toEqual(["mine"]); // other 属于 sess-B，被隔离
     });
 
-    it("磁盘源：parentSessionId 缺失（旧文件）被排除（无法判定归属）", () => {
+    it("磁盘源：rootSessionId 缺失（旧文件）被排除（无法判定归属）", () => {
       writeSessionJsonl(path.join(tmpDir, "legacy.jsonl"), {
-        id: "legacy", agent: "w", mode: "background", task: "t", startedAt: 1000, // 无 parentSessionId
+        id: "legacy", agent: "w", mode: "background", task: "t", startedAt: 1000, // 无 rootSessionId
       });
       const store = new RecordStore(tmpDir);
       const ids = store.collectRecords(100, "all", "sess-A").map((r) => r.id);
@@ -455,41 +455,41 @@ describe("RecordStore", () => {
         id: "legacy", agent: "w", mode: "background", task: "t", startedAt: 1000,
       });
       writeSessionJsonl(path.join(tmpDir, "tagged.jsonl"), {
-        id: "tagged", agent: "w", mode: "background", task: "t", startedAt: 2000, parentSessionId: "sess-A",
+        id: "tagged", agent: "w", mode: "background", task: "t", startedAt: 2000, rootSessionId: "sess-A",
       });
       const store = new RecordStore(tmpDir);
       const ids = store.collectRecords(100).map((r) => r.id);
       expect(ids.sort()).toEqual(["legacy", "tagged"]); // 全返回，不过滤
     });
 
-    it("内存源：只返回 parentSessionId 匹配的 running record", () => {
+    it("内存源：只返回 rootSessionId 匹配的 running record", () => {
       const store = new RecordStore(tmpDir);
-      store.register(makeRecord({ id: "mine", startedAt: 1000, parentSessionId: "sess-A" }));
-      store.register(makeRecord({ id: "other", startedAt: 2000, parentSessionId: "sess-B" }));
+      store.register(makeRecord({ id: "mine", startedAt: 1000, rootSessionId: "sess-A" }));
+      store.register(makeRecord({ id: "other", startedAt: 2000, rootSessionId: "sess-B" }));
       const ids = store.collectRecords(100, "all", "sess-A").map((r) => r.id);
       expect(ids).toEqual(["mine"]);
     });
 
     it("内存+磁盘混合：同时按 session 过滤", () => {
       writeSessionJsonl(path.join(tmpDir, "disk-A.jsonl"), {
-        id: "disk-A", agent: "w", mode: "background", task: "t", startedAt: 1000, parentSessionId: "sess-A",
+        id: "disk-A", agent: "w", mode: "background", task: "t", startedAt: 1000, rootSessionId: "sess-A",
       });
       writeSessionJsonl(path.join(tmpDir, "disk-B.jsonl"), {
-        id: "disk-B", agent: "w", mode: "background", task: "t", startedAt: 2000, parentSessionId: "sess-B",
+        id: "disk-B", agent: "w", mode: "background", task: "t", startedAt: 2000, rootSessionId: "sess-B",
       });
       const store = new RecordStore(tmpDir);
-      store.register(makeRecord({ id: "mem-A", startedAt: 3000, parentSessionId: "sess-A" }));
-      store.register(makeRecord({ id: "mem-B", startedAt: 4000, parentSessionId: "sess-B" }));
+      store.register(makeRecord({ id: "mem-A", startedAt: 3000, rootSessionId: "sess-A" }));
+      store.register(makeRecord({ id: "mem-B", startedAt: 4000, rootSessionId: "sess-B" }));
       const ids = store.collectRecords(100, "all", "sess-A").map((r) => r.id).sort();
       expect(ids).toEqual(["disk-A", "mem-A"]);
     });
 
     it("重建缓存：不同 filter 共享缓存，不交叉污染", () => {
       writeSessionJsonl(path.join(tmpDir, "a.jsonl"), {
-        id: "a", agent: "w", mode: "background", task: "t", startedAt: 1000, parentSessionId: "sess-A",
+        id: "a", agent: "w", mode: "background", task: "t", startedAt: 1000, rootSessionId: "sess-A",
       });
       writeSessionJsonl(path.join(tmpDir, "b.jsonl"), {
-        id: "b", agent: "w", mode: "background", task: "t", startedAt: 2000, parentSessionId: "sess-B",
+        id: "b", agent: "w", mode: "background", task: "t", startedAt: 2000, rootSessionId: "sess-B",
       });
       const store = new RecordStore(tmpDir);
       // 先查 sess-A（建缓存）
@@ -509,7 +509,7 @@ describe("RecordStore", () => {
       const sessionFile = path.join(tmpDir, "fin.jsonl");
       writeSessionJsonl(sessionFile, {
         id: "bg-1", agent: "w", mode: "background", task: "t",
-        startedAt: 5000, lastTs: 9000, parentSessionId: "sess-A",
+        startedAt: 5000, lastTs: 9000, rootSessionId: "sess-A",
       });
       writeFinalized(sessionFile);
       const store = new RecordStore(tmpDir);
@@ -521,7 +521,7 @@ describe("RecordStore", () => {
       const sessionFile = path.join(tmpDir, "crash.jsonl");
       writeSessionJsonl(sessionFile, {
         id: "bg-1", agent: "w", mode: "background", task: "t",
-        startedAt: 5000, lastTs: 9000, parentSessionId: "sess-A",
+        startedAt: 5000, lastTs: 9000, rootSessionId: "sess-A",
       });
       const store = new RecordStore(tmpDir);
       const found = store.collectRecords(100, "all", "sess-A").find((r) => r.id === "bg-1");
@@ -533,7 +533,7 @@ describe("RecordStore", () => {
       const sessionFile = path.join(tmpDir, "alive.jsonl");
       writeSessionJsonl(sessionFile, {
         id: "bg-1", agent: "w", mode: "background", task: "t",
-        startedAt: Date.now() - 1000, lastTs: Date.now(), parentSessionId: "sess-A",
+        startedAt: Date.now() - 1000, lastTs: Date.now(), rootSessionId: "sess-A",
       });
       writeAliveMarker(sessionFile, { pid: process.pid, id: "bg-1", startedAt: Date.now() - 1000 });
       const store = new RecordStore(tmpDir);

@@ -141,6 +141,12 @@ export class SubagentService {
    *  “请求作用域”状态的标准机制，每条调用链隔离。 */
   private readonly forkDepthAls = new AsyncLocalStorage<number>();
 
+  /** subagent 执行上下文按 async 调用链传递（当前正在跑的 record 身份 + 递归深度）。
+   *  B run() 期间包此 ALS，B 内创建 C 时 createRecordForMode 读到 B 的 recordId/depth，
+   *  据此设 C.parentRecordId=B.id、C.depth=B.depth+1。主 session 链上无 store → 顶层。
+   *  与 forkDepthAls 独立：后者只数 fork 链（fork=true 才递增），本 ALS 数所有 subagent 嵌套。 */
+  private readonly execCtxAls = new AsyncLocalStorage<{ recordId: string | undefined; depth: number }>();
+
   constructor(init: SubagentServiceInit) {
     this.cwd = init.cwd;
     this.modelService = init.modelService;
@@ -309,7 +315,7 @@ export class SubagentService {
   }
 
   /** 合并内存(running) + 磁盘(session.jsonl 重建) record（/subagents list + tool list 消费）。
-   *  按 parentSessionId 过滤，只返回当前 session 创建的 record（session 隔离）。 */
+   *  按 rootSessionId 过滤，只返回当前 session 创建的 record（session 隔离）。 */
   collectRecords(limit: number, statusFilter: StatusFilter = "all"): SubagentRecord[] {
     return this.store.collectRecords(limit, statusFilter, this.sessionId ?? undefined);
   }
@@ -355,6 +361,13 @@ export class SubagentService {
       : `run-${tag}-${seq}`;
     const controller = mode === "background" ? new AbortController() : undefined;
 
+    // 从 async 调用链读父执行上下文：主 session 链上无 store → 顶层 record；
+    // B run() 期间包了 execCtxAls，B 内创建 C 时读到 B → C.parentRecordId=B.id, C.depth=B.depth+1。
+    // depth 语义：顶层（无父）=0；有父=父 depth+1。靠 recordId 是否存在区分，不用负数魔数。
+    const parentCtx = this.execCtxAls.getStore();
+    const parentRecordId = parentCtx?.recordId;
+    const depth = parentCtx ? parentCtx.depth + 1 : 0;
+
     const record = createRecord(id, {
       agent: identity.agent,
       model: `${identity.resolved.model.provider}/${identity.resolved.model.id}`,
@@ -362,7 +375,9 @@ export class SubagentService {
       mode,
       task: opts.task,
       startedAt: Date.now(),
-      parentSessionId: this.sessionId ?? undefined,
+      rootSessionId: this.sessionId ?? undefined,
+      parentRecordId,
+      depth,
       controller,
     });
 
@@ -415,21 +430,26 @@ export class SubagentService {
 
     let result: AgentResult;
     try {
+      // execCtxAls 包在 forkDepthAls 内层：B run() 期间它的 store={recordId:B.id,depth:B.depth}，
+      // B 内创建 C 时 createRecordForMode 读到 B → C 挂到 B 名下。两层 ALS 独立但同生命周期。
       result = await this.forkDepthAls.run(effectiveDepth, () =>
-        run(record, opts.task, {
-          resolved: identity.resolved,
-          agentConfig: identity.agentConfig,
-          appendSystemPrompt: opts.appendSystemPrompt,
-          skillPath: opts.skillPath,
-          schema: opts.schema,
-          maxTurns: opts.maxTurns,
-          graceTurns: opts.graceTurns,
-          signal,
-          onEvent,
-          fork: opts.fork,
-          worktree: worktreeHandle,
-          parentForkDepth: parentDepth, // [MF#4] 父链深度，不从 opts 读
-        }, ctx),
+        this.execCtxAls.run(
+          { recordId: record.id, depth: record.depth },
+          () => run(record, opts.task, {
+            resolved: identity.resolved,
+            agentConfig: identity.agentConfig,
+            appendSystemPrompt: opts.appendSystemPrompt,
+            skillPath: opts.skillPath,
+            schema: opts.schema,
+            maxTurns: opts.maxTurns,
+            graceTurns: opts.graceTurns,
+            signal,
+            onEvent,
+            fork: opts.fork,
+            worktree: worktreeHandle,
+            parentForkDepth: parentDepth, // [MF#4] 父链深度，不从 opts 读
+          }, ctx),
+        ),
       );
     } catch (err) {
       // run() 正常路径不抛错，但创建期异常（createAndConfigureSession 失败）

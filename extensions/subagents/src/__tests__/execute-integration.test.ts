@@ -284,7 +284,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     expect(result.details.result).toBe("done");
   });
 
-  it("identity custom entry 写入 parentSessionId（session 隔离）", async () => {
+  it("identity custom entry 写入 rootSessionId（session 隔离）", async () => {
     const handle = makeFakeSession({
       promptBehavior: { kind: "resolve", events: [{ type: "turn_end" }, { type: "message_end" }] },
     });
@@ -299,7 +299,11 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     );
     expect(identityCall).toBeDefined();
     // setup() 用 sessionId="exec-it"
-    expect((identityCall![1] as Record<string, unknown>).parentSessionId).toBe("exec-it");
+    const identityData = identityCall![1] as Record<string, unknown>;
+    expect(identityData.rootSessionId).toBe("exec-it");
+    // 顶层 record（主 session 直接 execute）：无父 subagent，depth=0
+    expect(identityData.parentRecordId).toBeUndefined();
+    expect(identityData.depth).toBe(0);
   });
 
   // ============================================================

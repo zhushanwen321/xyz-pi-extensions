@@ -708,7 +708,10 @@ class SubagentsListComponent implements Component {
       const dur = formatElapsedSeconds(elapsedSec(r));
       // 短编号(dim)置于行首——列表一眼看到「第几个」, 不必进详情. 完整 id 在右列预览.
       const sid = t.fg("dim", shortId(r.id));
-      const label = `${iconStr} ${sid} ${r.agent} ${t.fg("dim", modeTag)} ${t.fg("dim", dur)}`;
+      // 方案 D：递归深度标记。顶层(depth=0, 主 session 直接创建)不显示；
+      // depth≥1 显示 [L2]/[L3]...——平铺列表一眼区分哪些是嵌套产生的，不干扰 fan-out 场景。
+      const depthTag = r.depth > 0 ? ` ${t.fg("dim", `[L${r.depth + 1}]`)}` : "";
+      const label = `${iconStr} ${sid}${depthTag} ${r.agent} ${t.fg("dim", modeTag)} ${t.fg("dim", dur)}`;
       // 阶段 2：锚定行 accent + ▶；其余行 dim。阶段 1：选中 accent + →，其余正常。
       const content = inDetail
         ? (selected ? t.fg("accent", label) : t.fg("dim", label))
@@ -731,6 +734,11 @@ class SubagentsListComponent implements Component {
     ));
     // 完整 id(含 background 时间戳): cancel/read session file 需精确引用. 左列只显示短编号.
     lines.push(truncLine(t.fg("dim", `id: ${record.id}`), width));
+    // 层级：父 subagent（顶层显示 root）——不需要外部数据，record 自带 parentRecordId。
+    lines.push(truncLine(
+      t.fg("dim", `parent: ${record.parentRecordId ? shortId(record.parentRecordId) : "(root)"}`),
+      width,
+    ));
     lines.push("");
 
     // eventLog 现从 turns[] 派生（离散语义事件，无碎片），直接取最近 N 条。
@@ -787,6 +795,19 @@ class SubagentsListComponent implements Component {
     content.push(metaParts.length > 0
       ? truncLine(t.fg("dim", `(${metaParts.join(" · ")})`), width)
       : "");
+
+    // 层级信息（方案 B）：parent + children，让递归链可追溯。
+    // parent 不需外部数据；children 需查同 session 的 record（collectRecords 有磁盘缓存，开销可接受）。
+    const parentLabel = record.parentRecordId ? shortId(record.parentRecordId) : "(root)";
+    content.push(truncLine(t.fg("dim", `parent: ${parentLabel}`), width));
+    const childIds = this.service
+      .collectRecords(LIST_LIMIT)
+      .filter((r) => r.parentRecordId === record.id)
+      .map((r) => shortId(r.id));
+    content.push(truncLine(
+      t.fg("dim", `children: ${childIds.length > 0 ? childIds.join(", ") : "(none)"}`),
+      width,
+    ));
 
     // syncCancelHint
     if (this.state.syncCancelHint) {

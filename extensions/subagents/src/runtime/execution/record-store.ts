@@ -103,9 +103,9 @@ export class RecordStore {
    *   ║  1. 磁盘源：扫 sessionsDir 的 .jsonl，逐个 reconstructFromFile   ║
    *   ║     （命中缓存则跳过读文件）。cancelled tombstone override status ║
    *   ║  2. 内存源覆盖（同 id 内存优先——running record 更新鲜）          ║
-   *   ║  3. session 过滤：只留 parentSessionId === parentSessionFilter 的  ║
-   *   ║     record。parentSessionId 缺失（旧文件）的 record 一律排除       ║
-   *   ║     （无法判定归属，隔离优先）。parentSessionFilter 为 undefined   ║
+   *   ║  3. session 过滤：只留 rootSessionId === rootSessionFilter 的       ║
+   *   ║     record。rootSessionId 缺失（旧文件）的 record 一律排除        ║
+   *   ║     （无法判定归属，隔离优先）。rootSessionFilter 为 undefined       ║
    *   ║     时不过滤（向后兼容）。                                          ║
    *   ║  4. statusFilter："running" → 只留 running（内存源）；            ║
    *   ║                   "all"（默认）→ 内存 + 磁盘                       ║
@@ -116,24 +116,24 @@ export class RecordStore {
    * statusFilter="running" 时仍先取够多再过滤（防 limit 截断把 running 滤没），
    * 与旧 listHandler 的防截断逻辑一致，下沉到此。
    *
-   * session 隔离：同一 cwd 下多个 Pi session 共享 sessionsDir，靠 parentSessionId
-   * 区分。内存与磁盘源都按 parentSessionFilter 过滤后再 merge/sort/slice。
+   * session 隔离：同一 cwd 下多个 Pi session 共享 sessionsDir，靠 rootSessionId
+   * 区分。内存与磁盘源都按 rootSessionFilter 过滤后再 merge/sort/slice。
    */
   collectRecords(
     limit: number,
     statusFilter: StatusFilter = "all",
-    parentSessionFilter?: string,
+    rootSessionFilter?: string,
   ): SubagentRecord[] {
     const byId = new Map<string, SubagentRecord>();
 
-    // 1. 磁盘源（重建终态 record）。 reconstructAll 已按 parentSessionFilter 过滤。
-    for (const rec of this.reconstructAll(parentSessionFilter)) {
+    // 1. 磁盘源（重建终态 record）。 reconstructAll 已按 rootSessionFilter 过滤。
+    for (const rec of this.reconstructAll(rootSessionFilter)) {
       byId.set(rec.id, rec);
     }
 
     // 2. 内存源覆盖（running record 优先——它是活态，比磁盘重建更新鲜）。同样按 session 过滤。
     for (const r of this.records.values()) {
-      if (parentSessionFilter !== undefined && r.parentSessionId !== parentSessionFilter) continue;
+      if (rootSessionFilter !== undefined && r.rootSessionId !== rootSessionFilter) continue;
       byId.set(r.id, RecordStore.recordToSubagent(r));
     }
 
@@ -190,15 +190,15 @@ export class RecordStore {
    *
    * 所有分支经 markReconstructedStatus（不裸 .status=）。
    *
-   * session 隔离：parentSessionFilter 非空时，只保留 parentSessionId 匹配的 record。
-   * parentSessionId 缺失（旧文件，未带身份字段）一律排除（无法判定归属）。
+   * session 隔离：rootSessionFilter 非空时，只保留 rootSessionId 匹配的 record。
+   * rootSessionId 缺失（旧文件，未带身份字段）一律排除（无法判定归属）。
    * 缓存以 undefined 过滤结果为基底，带 filter 时在基底上再筛（避免缓存碎片化）。
    */
-  private reconstructAll(parentSessionFilter?: string): SubagentRecord[] {
+  private reconstructAll(rootSessionFilter?: string): SubagentRecord[] {
     if (this.reconCache) {
       const all = [...this.reconCache.values()];
-      if (parentSessionFilter === undefined) return all;
-      return all.filter((r) => r.parentSessionId === parentSessionFilter);
+      if (rootSessionFilter === undefined) return all;
+      return all.filter((r) => r.rootSessionId === rootSessionFilter);
     }
 
     const cache = new Map<string, SubagentRecord>();
@@ -230,7 +230,9 @@ export class RecordStore {
         status: recon.status, // 临时值，各分支覆盖
         mode: recon.mode,
         startedAt: recon.startedAt,
-        parentSessionId: recon.parentSessionId,
+        rootSessionId: recon.rootSessionId,
+        parentRecordId: recon.parentRecordId,
+        depth: recon.depth,
         endedAt: undefined,
         turns: recon.turnCount,
         totalTokens: recon.totalTokens,
@@ -277,8 +279,8 @@ export class RecordStore {
 
     this.reconCache = cache;
     // 带 filter 时在缓存上筛（上面已构造全量缓存，便于后续调用复用）。
-    if (parentSessionFilter === undefined) return [...cache.values()];
-    return [...cache.values()].filter((r) => r.parentSessionId === parentSessionFilter);
+    if (rootSessionFilter === undefined) return [...cache.values()];
+    return [...cache.values()].filter((r) => r.rootSessionId === rootSessionFilter);
   }
 
   /** 排序比较器：status priority（running<failed<cancelled<done）+ startedAt desc。 */
@@ -296,7 +298,9 @@ export class RecordStore {
       status: r.status,
       mode: r.mode,
       startedAt: r.startedAt,
-      parentSessionId: r.parentSessionId,
+      rootSessionId: r.rootSessionId,
+      parentRecordId: r.parentRecordId,
+      depth: r.depth,
       endedAt: r.endedAt,
       turns: r.turnCount,
       totalTokens: r.totalTokens,

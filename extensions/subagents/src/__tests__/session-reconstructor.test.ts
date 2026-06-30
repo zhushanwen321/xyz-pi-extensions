@@ -137,24 +137,56 @@ describe("reconstructFromFile", () => {
       expect(rec!.result).toBe("first\n\nsecond");
     });
 
-    it("读出 identity 里的 parentSessionId", () => {
+    it("读出 identity 里的 rootSessionId", () => {
       writeJsonl([
         headerLine(),
-        identityEntry({ id: "bg-1", agent: "w", mode: "background", task: "t", startedAt: 100, parentSessionId: "sess-A" }),
+        identityEntry({ id: "bg-1", agent: "w", mode: "background", task: "t", startedAt: 100, rootSessionId: "sess-A" }),
         assistantEntry([{ type: "text", text: "ok" }]),
       ]);
       const rec = reconstructFromFile(filePath);
-      expect(rec!.parentSessionId).toBe("sess-A");
+      expect(rec!.rootSessionId).toBe("sess-A");
     });
 
-    it("identity 无 parentSessionId（旧文件）→ parentSessionId 为 undefined", () => {
+    it("旧文件 identity 写 parentSessionId → fallback 读到 rootSessionId（向后兼容）", () => {
+      writeJsonl([
+        headerLine(),
+        identityEntry({ id: "bg-1", agent: "w", mode: "background", task: "t", startedAt: 100, parentSessionId: "sess-legacy" }),
+        assistantEntry([{ type: "text", text: "ok" }]),
+      ]);
+      const rec = reconstructFromFile(filePath);
+      expect(rec!.rootSessionId).toBe("sess-legacy");
+    });
+
+    it("identity 无 rootSessionId（旧文件）→ rootSessionId 为 undefined", () => {
       writeJsonl([
         headerLine(),
         identityEntry({ id: "bg-1", agent: "w", mode: "background", task: "t", startedAt: 100 }),
         assistantEntry([{ type: "text", text: "ok" }]),
       ]);
       const rec = reconstructFromFile(filePath);
-      expect(rec!.parentSessionId).toBeUndefined();
+      expect(rec!.rootSessionId).toBeUndefined();
+    });
+
+    it("读出 identity 里的 parentRecordId/depth（递归层级）", () => {
+      writeJsonl([
+        headerLine(),
+        identityEntry({ id: "run-2", agent: "w", mode: "sync", task: "t", startedAt: 100, rootSessionId: "sess-A", parentRecordId: "run-1", depth: 2 }),
+        assistantEntry([{ type: "text", text: "ok" }]),
+      ]);
+      const rec = reconstructFromFile(filePath);
+      expect(rec!.parentRecordId).toBe("run-1");
+      expect(rec!.depth).toBe(2);
+    });
+
+    it("旧文件无 parentRecordId/depth → 兑底 undefined/0（顶层）", () => {
+      writeJsonl([
+        headerLine(),
+        identityEntry({ id: "bg-1", agent: "w", mode: "background", task: "t", startedAt: 100, rootSessionId: "sess-A" }),
+        assistantEntry([{ type: "text", text: "ok" }]),
+      ]);
+      const rec = reconstructFromFile(filePath);
+      expect(rec!.parentRecordId).toBeUndefined();
+      expect(rec!.depth).toBe(0);
     });
 
     it("endedAt 为最后一条 entry 的时间戳（非 now）", () => {

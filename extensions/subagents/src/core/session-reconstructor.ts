@@ -85,10 +85,16 @@ export interface SubagentIdentityData {
   mode: ExecutionMode;
   task: string;
   startedAt: number;
-  /** 创建该 subagent 的主 Pi session ID（session 隔离过滤用）。旧文件可能缺失。 */
-  parentSessionId?: string;
+  /** 根 Pi session ID（session 隔离过滤用）。旧文件可能缺失。 */
+  rootSessionId?: string;
+  /** 直接父 subagent record ID。旧文件缺失 → undefined（顶层）。 */
+  parentRecordId?: string;
+  /** subagent 递归深度。旧文件缺失 → 0（顶层）。 */
+  depth?: number;
   /** [MF#4] 本 session 的 fork 深度（session-runner 写入 parentForkDepth+1）。旧文件可能缺失。 */
   forkDepth?: number;
+  /** @deprecated 兼容旧文件：旧 identity entry 写的是 parentSessionId，读取时 fallback 到 rootSessionId。 */
+  parentSessionId?: string;
 }
 
 /** SDK jsonl entry（getEntries() 返回，header 已排除）。 */
@@ -121,8 +127,12 @@ export interface ReconstructedRecord {
   mode: ExecutionMode;
   task: string;
   startedAt: number;
-  /** 创建该 subagent 的主 Pi session ID（session 隔离过滤用）。旧文件可能缺失。 */
-  parentSessionId: string | undefined;
+  /** 根 Pi session ID（session 隔离过滤用）。旧文件可能缺失。 */
+  rootSessionId: string | undefined;
+  /** 直接父 subagent record ID。旧文件缺失 → undefined（顶层）。 */
+  parentRecordId: string | undefined;
+  /** subagent 递归深度。旧文件缺失 → 0（顶层）。 */
+  depth: number;
   /** [MF#4] 本 session 的 fork 深度（来自 identity custom entry；旧文件为 undefined）。 */
   forkDepth: number | undefined;
   sessionFile: string;
@@ -416,9 +426,13 @@ export function reconstructFromFile(sessionFile: string): ReconstructedRecord | 
   const status: ExecutionStatus =
     lastStopReason === "error" || lastStopReason === "aborted" ? "failed" : "done";
 
+  // rootSessionId 归一化：新文件读 rootSessionId，旧文件 fallback parentSessionId。
+  const rootSessionId = identity.rootSessionId ?? identity.parentSessionId;
   return {
     ...identity,
-    parentSessionId: identity.parentSessionId,
+    rootSessionId,
+    parentRecordId: identity.parentRecordId,
+    depth: identity.depth ?? 0,
     forkDepth: identity.forkDepth,
     sessionFile,
     status,

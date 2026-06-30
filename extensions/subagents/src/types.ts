@@ -302,8 +302,12 @@ export interface ExecutionRecord {
   readonly mode: ExecutionMode;
   readonly task: string;
   readonly startedAt: number;
-  /** 创建该 subagent 的主 Pi session ID（session 隔离过滤用）。 */
-  readonly parentSessionId: string | undefined;
+  /** 根 Pi session ID（session 隔离过滤用）。递归链上所有层 record 同值。 */
+  readonly rootSessionId: string | undefined;
+  /** 直接父 subagent record ID（层级树构建用）。顶层 record 为 undefined。 */
+  readonly parentRecordId: string | undefined;
+  /** subagent 递归深度。顶层（主 session 直接创建）=0，每层嵌套 +1。 */
+  readonly depth: number;
 
   // ── 状态（实时更新）──
   status: ExecutionStatus;
@@ -514,8 +518,12 @@ export interface SubagentRecord {
   status: ExecutionStatus;
   mode: ExecutionMode;
   startedAt: number;
-  /** 创建该 subagent 的主 Pi session ID（session 隔离过滤用）。 */
-  parentSessionId: string | undefined;
+  /** 根 Pi session ID（session 隔离过滤用）。递归链上所有层 record 同值。 */
+  rootSessionId: string | undefined;
+  /** 直接父 subagent record ID（层级树构建用）。顶层 record 为 undefined。 */
+  parentRecordId: string | undefined;
+  /** subagent 递归深度。顶层 =0，每层嵌套 +1。 */
+  depth: number;
   endedAt: number | undefined;
   turns: number;
   totalTokens: number;
