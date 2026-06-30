@@ -106,9 +106,9 @@ export interface RunOptions {
   signal: AbortSignal | undefined;
   /** event 回流——SessionRunner 内部 updateFromEvent 后，再回调调用方（widget/notify）。 */
   onEvent: ((event: AgentEvent) => void) | undefined;
-  /** fork 模式：创建 worktree 隔离执行。 */
+  /** 是否继承父会话上下文（fork 模式，只继承上下文）。 */
   fork?: boolean;
-  /** fork 模式下外部提供的 worktree handle。 */
+  /** 预创建的 worktree handle（undefined=不隔离，在 parent cwd 跑）。 */
   worktree?: WorktreeHandle;
   /** 父级 fork depth（用于深度限制 + identity entry）。 */
   parentForkDepth?: number;
@@ -151,9 +151,9 @@ interface CreateSessionInput {
   skillPath?: string;
   /** agent 配置（提取 tool 过滤策略）。 */
   agentConfig?: AgentConfig;
-  /** fork 模式标志。 */
+  /** fork 模式标志（仅继承上下文意图，不隐含 worktree）。 */
   fork?: boolean;
-  /** fork 模式下外部提供的 worktree handle。 */
+  /** 预创建的 worktree handle（undefined=不隔离）。 */
   worktree?: WorktreeHandle;
   /** 父级 fork depth。 */
   parentForkDepth?: number;

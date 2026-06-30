@@ -230,16 +230,16 @@ export class SubagentService {
     // ── 2. RECORD 创建 + 注册 ──
     const record = this.createRecordForMode(identity, opts, mode);
 
-    // ── 2.5 worktree 创建（fork=true 且未提供 handle 时）──
+    // ── 2.5 worktree 创建（仅 worktree===true 或已传入 handle 时）──
     // record 先创建，worktree 失败时可 finalizeFailed（record 已在 store 中）。
-    // 单分支覆盖 worktree===true 和 worktree===undefined（后者由 fork 兑底创建）；
-    // worktree===false 显式退出创建。两个重复分支体已合并（曾因 true/undefined 分写而漂移）。
+    // worktree 必须显式开启：worktree===true 创建新 worktree；worktree===undefined/false 不创建。
+    // fork 不隐含 worktree（UC-1 fork 可独立使用，fork 仅继承上下文，在 parent cwd 跑）。
     let worktreeHandle: WorktreeHandle | undefined;
     if (typeof opts.worktree === "object") {
       // 传入的是已创建的 WorktreeHandle
       worktreeHandle = opts.worktree;
-    } else if (opts.fork && opts.worktree !== false) {
-      // worktree===true（显式要求）或 undefined（fork 兑底）——创建新 worktree
+    } else if (opts.worktree === true) {
+      // worktree===true（显式要求）——创建新 worktree。MF#7 已保证此处 fork 必为 true。
       try {
         worktreeHandle = this.worktreeManager.create(this.cwd, record.id);
         record.worktreeHandle = worktreeHandle;

@@ -639,6 +639,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       wait: true,
       ctxModel,
       fork: true,
+      worktree: true,
     });
 
     expect(result.mode).toBe("sync");
@@ -678,6 +679,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       wait: true,
       ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
       fork: true,
+      worktree: true,
     });
 
     // 恢复原始 mock（不影响其他测试）
@@ -711,6 +713,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       wait: true,
       ctxModel,
       fork: true,
+      worktree: true,
     });
 
     // D-017: collectPatch 被调用（step 0）
@@ -747,6 +750,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       wait: true,
       ctxModel,
       fork: true,
+      worktree: true,
     });
 
     // 纯查询/分析任务：子 agent 零改动 → collectPatch written:false → patchFile 不回填，
@@ -778,6 +782,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       wait: true,
       ctxModel,
       fork: true,
+      worktree: true,
     });
 
     // D-022: patchOk=false → cleanup 跳过
@@ -807,6 +812,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       wait: true,
       ctxModel,
       fork: true,
+      worktree: true,
     });
 
     // D-022: collectPatch throw → patchOk=false → cleanup 跳过
@@ -842,6 +848,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       wait: true,
       ctxModel,
       fork: true,
+      worktree: true,
     });
 
     spy.mockRestore();
@@ -871,6 +878,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       wait: false,
       ctxModel,
       fork: true,
+      worktree: true,
     });
 
     if (result.mode !== "background") throw new Error("expected background");
@@ -883,6 +891,35 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     expect(vi.mocked(removeAliveMarker)).toHaveBeenCalled();
     // BC-4 互斥：cancel 不写 finalized
     expect(vi.mocked(writeFinalized)).not.toHaveBeenCalled();
+  });
+
+  it("[回归] fork:true alone (worktree 未传) → 不创建 worktree (fork 不隐含 worktree)", async () => {
+    const handle = makeFakeSession({ promptBehavior: { kind: "resolve" } });
+    fakeSdkSlot.current = makeBranchedSdk(handle.session);
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-wt-"));
+    agentDirs.push(agentDir);
+    const modelService = new ModelConfigService({ agentDir });
+    modelService.initModel({
+      modelRegistry: makeEmptyRegistry(),
+      sessionId: "exec-wt",
+      ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
+    });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
+    service.initSession({ pi: makePi(), sessionId: "exec-wt" });
+    const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
+
+    const result = await service.execute({
+      task: "fork only, no worktree",
+      wait: true,
+      ctxModel,
+      fork: true,
+      // worktree 不传——fork 不应兑底创建 worktree
+    });
+
+    expect(result.record.status).toBe("done");
+    expect(mockWorktreeManager.create).not.toHaveBeenCalled();
+    expect(mockWorktreeManager.cleanup).not.toHaveBeenCalled();
+    expect(mockWorktreeManager.collectPatch).not.toHaveBeenCalled();
   });
 
   it("非 worktree fork 路径: 新 mock 不影响行为 (writeFinalized/cleanup 不被调用)", async () => {

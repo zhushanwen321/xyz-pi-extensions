@@ -208,7 +208,8 @@ export interface AgentResult {
  * TUI 永远拿 RecordSnapshot（.slice() 快照），不直接持此可变对象。
  */
 /**
- * worktree handle 值对象。Fork 模式下每个子 agent 持有独立 worktree。
+ * worktree handle 值对象。仅 worktree:true 时持有——worktree 是独立维度，
+ * 需显式开启（且要求 fork:true），fork alone 不创建 worktree。
  * Object.freeze 守卫保证不可变。
  */
 export interface WorktreeHandle {
@@ -327,7 +328,7 @@ export interface ExecutionRecord {
   /** [MF#3] fork+worktree 模式下子 agent 改动的 patch 文件路径（worktree 外，供调用方应用）。 */
   patchFile?: string;
 
-  /** fork 模式下的 worktree handle（可选）。 */
+  /** worktree 隔离时的 handle（仅 worktree:true 时存在；fork alone 无此字段）。 */
   worktreeHandle?: WorktreeHandle;
 
   // ── 控制（仅 background 持有）──
@@ -375,9 +376,9 @@ export interface SubagentToolDetails {
 /** session-runner 内部上下文（扩展 effectiveCwd/mainCwd/mainSessionFile）。 */
 /** session-runner.run() 的入参选项。 */
 export interface RunOptions {
-  /** 是否使用 fork 模式（创建 worktree 隔离）。 */
+  /** 是否继承父会话上下文（fork 模式）。fork 只继承上下文，不创建 worktree。 */
   fork?: boolean;
-  /** 指定 worktree handle（fork 模式下由外部提供）。 */
+  /** 预创建的 worktree handle（worktree:true 时由 service 创建后传入；undefined=不隔离，在 parent cwd 跑）。 */
   worktree?: WorktreeHandle;
   /** 父级 fork depth（用于深度限制检查）。 */
   parentForkDepth?: number;
@@ -410,11 +411,11 @@ export interface ExecuteOptions {
   onUpdate?: (details: SubagentToolDetails) => void;
   /** background 完成回调（sync 不调）。 */
   onComplete?: (record: RecordSnapshot) => void;
-  /** fork 模式：创建 worktree 隔离执行。 */
+  /** 是否继承父会话上下文（fork 模式，只继承上下文）。 */
   fork?: boolean;
-  /** fork 模式：worktree 隔离（true=创建新 worktree，WorktreeHandle=使用已有）。 */
+  /** 文件系统隔离：true=创建新 git worktree（要求 fork:true），WorktreeHandle=复用外部已创建的；undefined=不隔离（parent cwd）。 */
   worktree?: boolean | WorktreeHandle;
-  /** fork 模式：覆盖执行 cwd（默认 mainCwd）。 */
+  /** 覆盖执行 cwd（默认 mainCwd）。 */
   cwd?: string;
   // 注：fork 深度不从外部传入（曾暴露 parentForkDepth，改用 ALS 后 execute 内部从调用链派生，
   // 公开字段成为死字段误导调用方，已移除）。深度限制检查见 RunOptions.parentForkDepth（内部层）。
