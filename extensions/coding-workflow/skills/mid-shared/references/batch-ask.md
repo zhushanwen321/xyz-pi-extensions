@@ -1,6 +1,6 @@
 # batch-ask 协议（mid 工作流的批量提问法）
 
-> **mid-design / mid-build 共用的交互协议。** 替代 design 的「Grilling 一问一答」（沿设计树逐节点、一次一个问题）。
+> **mid-plan / mid-detail-plan 共用的交互协议。** 替代 design 的「Grilling 一问一答」（沿设计树逐节点、一次一个问题）。
 > mid 先由主 agent 统一起草初稿，draft 过程中**积累**需要用户拍板的决策点，分类打包后**一次性批量提问**。
 >
 > 这是 mid 把 wall-clock 从「40~80 次 ask_user 串行」压到「3~5 次批量」的核心机制。

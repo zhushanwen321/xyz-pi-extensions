@@ -1,10 +1,10 @@
 # review-fix-loop 协议（mid 工作流核心抽象）
 
-> **mid-design / mid-build 共用的收敛循环。** 把 design 的「追踪(找 gap) + 审查(判质量) + 反哺(检测上游矛盾)」三道独立检查
+> **mid-plan / mid-detail-plan 共用的收敛循环。** 把 design 的「追踪(找 gap) + 审查(判质量) + 反哺(检测上游矛盾)」三道独立检查
 > **折叠成一路 reviewer 循环**，跨 deliverable 合并维度，MAX=2 轮收敛 + 残留打包二次 ask。
 >
 > 本文件是 loop 的**通用协议**（步骤/派发/汇总/收敛/降级）。**各路 reviewer 读什么、查什么维度**见
-> `mid-design/SKILL.md` 和 `mid-build/SKILL.md` 的「维度审查分配」节——那是阶段特有的，不在此重复。
+> `mid-plan/SKILL.md` 和 `mid-detail-plan/SKILL.md` 的「维度审查分配」节——那是阶段特有的，不在此重复。
 
 ## 为什么是它（vs design 6 步循环）
 
@@ -51,7 +51,7 @@ python3 ${对应阶段 skill dir}/scripts/check_{phase}.py {topic_dir}
 
 ### L2 · 派 N 路 reviewer（并行，wait:false）
 
-按当前 skill 的「维度审查分配」表派 N 路（mid-design=4 路，mid-build=5~6 路）。**必须 `wait:false` 同消息多 start**——见 `../design-shared/references/loop-skeleton.md`「subagent 派发工程规范」。逐个 `wait:true` 会让 N 路并行退化成串行 N 倍 wall-clock。
+按当前 skill 的「维度审查分配」表派 N 路（mid-plan=4 路，mid-detail-plan=5~6 路）。**必须 `wait:false` 同消息多 start**——见 `../design-shared/references/loop-skeleton.md`「subagent 派发工程规范」。逐个 `wait:true` 会让 N 路并行退化成串行 N 倍 wall-clock。
 
 **派发模板（每路一个 start，同消息发起）：**
 
@@ -95,7 +95,7 @@ subagent(action:'start', startParam:{
 | 禁读重建 | 反向（他证） | **禁读初稿**，从源独立重建 → diff（MISSING/PHANTOM/MISMATCH） |
 | 红队 | 反向（删/质疑） | 必要性与比例性（deletion test：删掉会怎样？） |
 
-> 三帧方向不同，盲区正交，并集才有效。具体每 skill 派几路各帧、读什么，见 `mid-design/SKILL.md` 和 `mid-build/SKILL.md` 的「维度审查分配」表。
+> 三帧方向不同，盲区正交，并集才有效。具体每 skill 派几路各帧、读什么，见 `mid-plan/SKILL.md` 和 `mid-detail-plan/SKILL.md` 的「维度审查分配」表。
 
 ### L4 · 汇总去重（主 agent，notifier 唤醒后）
 
@@ -123,7 +123,7 @@ subagent(action:'start', startParam:{
 ## 收敛后的动作（loop 外）
 
 跳出 loop 后，按当前 skill 的流程进定稿 + 渲染 HTML（派 1 个 fresh subagent 加载 design-visual-explainer）。
-**Skill B 额外有「全文档一致性终检」**（合并 design 的 Step 6b 反哺 + 6c 终检），在 loop 之后、定稿之前——见 `mid-build/SKILL.md`。
+**Skill B 额外有「全文档一致性终检」**（合并 design 的 Step 6b 反哺 + 6c 终检），在 loop 之后、定稿之前——见 `mid-detail-plan/SKILL.md`。
 
 ## 复杂度降级（loop 路数随档位缩）
 

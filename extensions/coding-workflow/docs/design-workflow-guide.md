@@ -180,8 +180,8 @@
 
 mid-* 的核心取舍：用「正交认知帧 + 跨阶段合并」换 wall-clock。合并追踪+审查损失了 design 两道隔离的 bias 防护，靠禁读重建路 + 红队路反向帧对冲。**L3 场景仍应走 design（每阶段深度收敛不可省）**。
 
-- `mid-design`：需求 + 架构（draft → batch-ask → 4 路 review-fix-loop）
-- `mid-build`：issues + nfr + code-arch + execution（ctx-build → 2 drafter 并行 → 5~6 路 loop → 一致性终检）
+- `mid-plan`：需求 + 架构（draft → batch-ask → 4 路 review-fix-loop）
+- `mid-detail-plan`：issues + nfr + code-arch + execution（ctx-build → 2 drafter 并行 → 5~6 路 loop → 一致性终检）
 - `mid-shared`：review-fix-loop + batch-ask 协议（共享参考）
 
 详见 `skills/mid-{design,build,shared}/SKILL.md`。

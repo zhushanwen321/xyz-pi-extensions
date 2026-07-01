@@ -13,7 +13,7 @@ xyz-pi-extensions/
 │   ├── todo/                → @zhushanwen/pi-todo
 │   ├── design-status/       → @zhushanwen/pi-design-status (design 工作流 7 阶段状态/进度追踪 tool)
 │   ├── vision/             → @zhushanwen/pi-vision
-│   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills + 8 个 design-* 设计工作流 skills（含 1 个初始化 + 1 个收尾）+ design-shared 共享参考目录 + 3 个 lite-* 轻量编码工作流 skills（lite-plan/lite-execute/lite-retrospect）+ lite-shared 共享参考目录 + 3 个 mid-* 中等档位工作流 skills（mid-design/mid-build/mid-shared，L2 标准档：内容对齐 design 全量、编排对齐 lite）)
+│   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills + 8 个 design-* 设计工作流 skills（含 1 个初始化 + 1 个收尾）+ design-shared 共享参考目录 + 3 个 lite-* 轻量编码工作流 skills（lite-plan/lite-execute/lite-retrospect）+ lite-shared 共享参考目录 + 3 个 mid-* 中等档位工作流 skills（mid-plan/mid-detail-plan/mid-shared，L2 标准档：内容对齐 design 全量、编排对齐 lite）)
 │   ├── claude-rules-loader/ → @zhushanwen/pi-claude-rules-loader
 │   ├── context-engineering/ → @zhushanwen/pi-context-engineering
 │   ├── evolve-daily/        → @zhushanwen/pi-evolve-daily (含 evolve skills + tracker 框架)
