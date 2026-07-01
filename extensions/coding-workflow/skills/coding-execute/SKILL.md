@@ -3,30 +3,35 @@ name: coding-execute
 description: >-
   Use when the user says "轻量执行", "lite execute", "按 Wave 执行",
   "goal 模式执行 plan", "执行 plan", or has a completed plan.md (from lite-plan)
+  **or execution-plan.md (from mid-detail-plan / full-execution-plan)**
   and an active goal, and needs to execute the Waves with subagents in parallel,
   run tests and code-review in isolated worktrees, and verify acceptance.
-  Produces code changes + test verification. Not for planning (that is lite-plan).
-  Not for retrospect (that is coding-retrospect).
+  Produces code changes + test verification. Not for planning (that is lite-plan /
+  mid-detail-plan). Not for retrospect (that is coding-retrospect).
 ---
 
-# 轻量执行（Lite Execute）
+# 执行（Execute）
 
-读取 lite-plan 产出的 plan.md，在 goal 模式下用 subagent 按 Wave 并行实现，用 worktree 隔离让测试 ‖ code-review ensemble 并行互不影响，失败自动回 Wave 修复（限 3 轮），全绿后收尾。
+读取 lite-plan 产出的 plan.md（或 mid-detail-plan / full-execution-plan 产出的 execution-plan.md），在 goal 模式下用 subagent 按 Wave 并行实现，用 worktree 隔离让测试 ‖ code-review ensemble 并行互不影响，失败自动回 Wave 修复（限 3 轮），全绿后收尾。
 
 > **[铁律] 严格 TDD。** 每个 implementer 先写失败测试、跑确认失败、再实现、再跑通过。不接受"先写代码后补测试"。
 >
-> **[铁律] 测试验收不是一个任务。** plan.md 每条测试用例（U*/E*）+ 覆盖率 gate + mock 层/real 层回归，各自独立 todo（isVerification=true，不可取消，必须 completed）。
+> **[铁律] 测试验收不是一个任务。** plan 每条测试用例（lite 的 U*/E*，或 mid/design 的 T{UC}.{N}）+ 覆盖率 gate + mock 层/real 层回归，各自独立 todo（isVerification=true，不可取消，必须 completed）。
 >
-> **[铁律] E2E 验收 todo 按 mock / real 测试层分组**（`[验收-mock]` / `[验收-real]`），test-runner 分层跑、分层报 pass/fail。mock 层验证逻辑、real 层验证集成，两层各自全绿才算验收通过。见 `test-case-schema.md` 核心原则四。
+> **[铁律] E2E 验收 todo 按 mock / real 测试层分组**（`[验收-mock]` / `[验收-real]`），test-runner 分层跑、分层报 pass/fail。mock 层验证逻辑、real 层验证集成，两层各自全绿才算验收通过。见 `../lite-shared/references/test-case-schema.md` 核心原则四。
+>
+> **[铁律] goal_control(complete) 前必须跑 `check_execute.py` 且 PASS。** 这是执行阶段唯一的机器硬门。脚本自动识别 plan 格式（lite plan.md 的单测/E2E 用例清单，或 mid/design execution-plan.md 的测试验收清单），读 test-runner 落盘的 `test-results.json` 逐条核对，堵住「建了验收 todo 不跑/略过 real fail/自标手动通过」等逃逸路径。FAIL 时禁止 complete，见 `../lite-shared/references/execution-flow.md` §阶段C。
 
 ## 前置检查
 
 [MANDATORY] 启动前逐项确认，任一不满足先补齐：
 
-- plan.md 已完成（lite-plan 产出，含 6 章节 + 测试清单）—— 不满足 → `/skill:lite-plan`
+- plan 产物已完成（二选一）：
+  - lite 路径：`plan.md`（lite-plan 产出，含 6 章节 + U*/E* 测试清单）—— 不满足 → `/skill:lite-plan`
+  - mid/design 路径：`execution-plan.md`（mid-detail-plan / full-execution-plan 产出，含测试验收清单 + T{UC}.{N} 用例）—— 不满足 → `/skill:mid-detail-plan`
 - goal 已创建（plan complete 选 "Goal-driven execution" 触发 `pi.__goalInit`）
   - 未创建 → `goal_control(action='create', slug='<feature>', objective='Execute plan: <planFilePath>')`
-- 已做范围守门（plan 属于 lite 非 design）—— 见 `../lite-shared/SKILL.md`
+- 已做范围守门（plan 属于 lite 非 design）—— 见 `../lite-shared/SKILL.md`（仅 lite 路径；mid/design 本身就是重型流程，不需此守门）
 
 ## 路由
 
@@ -38,6 +43,8 @@ description: >-
 | 功能已实现、待验收 | 阶段 B 测试验收 | `execution-flow.md` §阶段B + `subagent-dispatch.md` |
 | 验收全绿、待收尾 | 阶段 C 收尾 | `execution-flow.md` §阶段C |
 | 中途卡住（连续失败）| 失败循环判定 | `execution-flow.md` §B4 |
+
+> 上表裸文件名（`execution-flow.md` / `wave-model.md` / `subagent-dispatch.md`）均解析自 `../lite-shared/references/`。
 
 ## 三阶段概览
 
@@ -56,7 +63,10 @@ description: >-
   → 失败 → 回阶段 A 修复（限 3 轮，超限 Stagnation 暂停）
   ↓
 阶段 C 收尾
+  跑 check_execute.py 机器门（核对 test-results.json 覆盖 plan 全部用例）→ 语义/契约审查 →
   goal_control complete（带 evidence）→ 清 todo → 清理 worktree → 提示复盘
+  ↓
+  ⚠️ check_execute FAIL → 禁止 complete，回 B 补跑/补豁免后重跑直到 PASS
 ```
 
 ### 自由度分级
@@ -78,8 +88,10 @@ description: >-
 - [ ] 覆盖率 gate 执行且 ≥ 60%（不达标未收尾）
 
 测试验收（严格执行）：
+- [ ] **`check_execute.py` 已跑且 PASS**（机器核对 test-results.json 覆盖 plan 全部用例：mock 层全 pass、real 层 pass 或 user-skipped 带凭证）—— 这是以下几条的机器强制总门
 - [ ] **每条测试用例（U*, E*）有独立 todo**，逐个验证
 - [ ] **E2E 验收 todo 按 mock / real 测试层分组**（`[验收-mock]` / `[验收-real]`），test-runner 分层跑、分层报结果
+- [ ] test-runner 已落盘 `test-results.json`（check_execute 的数据源；real 层 pending-env 已由用户 ask_user 决策，无 AI 自标 manual/blocked）
 - [ ] 验收 todo 全部 completed（无遗留 pending）
 - [ ] test-runner 独立 worktree；2 路 reviewer 共享 review worktree 并行只读审查（must_fix 并集去重，[NEEDS-VERIFY] 已复核）
 - [ ] 失败循环未超 3 轮（超限已 Stagnation 暂停）
@@ -95,3 +107,4 @@ description: >-
 |------|------|----------|
 | [铁律] | 阶段核心不可逾越的边界 | 不允许削弱或移除 |
 | [MANDATORY] | 流程强制要求 | 必须严格遵守 |
+| [工作习惯] | 跨项目通用的工程习惯提醒（如 cwd 不跨调用持久） | 遵守，遇项目特例可调整 |

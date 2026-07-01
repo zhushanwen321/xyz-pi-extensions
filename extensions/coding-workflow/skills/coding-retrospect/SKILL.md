@@ -2,25 +2,26 @@
 name: coding-retrospect
 description: >-
   Use when the user says "轻量复盘", "lite retrospect", "做个复盘", "复盘一下",
-  or after a coding-execute run has completed (goal completed) and wants a quick
-  self-check retrospect on the dev/test process, docs, skill/subagent quality,
-  prompt tuning, and architecture signals. Produces a lightweight checklist
+  or after a coding-execute run has completed (goal completed)——whether the plan
+  was lite-plan's plan.md or mid-detail-plan's / full-execution-plan's execution-plan.md——
+  and wants a quick self-check retrospect on the dev/test process, docs, skill/subagent
+  quality, prompt tuning, and architecture signals. Produces a lightweight checklist
   report (not a deep evidence extraction). Not for design closeout (that is
   coding-closeout). Not for planning or execution.
 ---
 
-# 轻量复盘（Lite Retrospect）
+# 轻量复盘（Retrospect）
 
 ## 核心目标
 
-在一次 lite 工作流（lite-plan → coding-execute）跑完后，用**轻量自检清单**快速复盘：哪里顺、哪里卡、有什么可改进。不追求结构化证据提取，追求**快速发现问题 + 一句话改进建议**。
+在一次编码工作流（lite-plan → coding-execute，或 mid-plan → mid-detail-plan → coding-execute）跑完后，用**轻量自检清单**快速复盘：哪里顺、哪里卡、有什么可改进。不追求结构化证据提取，追求**快速发现问题 + 一句话改进建议**。
 
 > **定位：轻量。** 不是 coding-closeout（沉淀长期文档），不是 harness-retrospect（重流程质量复盘）。是一张 5 分钟过完的清单，帮下次跑得更好。
 
 ## 前置
 
-- coding-execute 已完成（goal 已 complete，验收全绿）
-- 可选：plan.md + 测试报告仍在（便于回顾）
+- coding-execute 已完成（goal 已 complete，验收全绿）——plan 可来自 lite-plan（plan.md）或 mid-detail-plan/full-execution-plan（execution-plan.md）
+- 可选：plan / execution-plan + 测试报告仍在（便于回顾）
 
 ## 流程
 
@@ -47,19 +48,21 @@ description: >-
 
 #### 文档自检
 
-- [ ] plan.md 是否与最终实现一致？有无偏差（实现改了 plan 没更新）
+- [ ] plan（plan.md / execution-plan.md）是否与最终实现一致？有无偏差（实现改了 plan 没更新）
 - [ ] 是否需要更新 CLAUDE.md / ARCHITECTURE.md / 相关 ADR（本次改动有无影响约定/架构）
 - [ ] 测试清单是否值得沉淀进 TEST-STRATEGY.md（如有破坏即事故的基线用例）
 
 #### skill / subagent 优化自检
 
-- [ ] lite-plan / coding-execute 的指令是否有歧义导致 AI 跑偏？哪步最模糊
+- [ ] 设计 skill（lite-plan / mid-plan / mid-detail-plan）与 coding-execute 的指令是否有歧义导致 AI 跑偏？哪步最模糊
 - [ ] implementer / test-runner / code-review subagent 的 prompt 和 context 是否足够？有无 NEEDS_CONTEXT / BLOCKED
 - [ ] subagent 工具白名单是否过严（该有的工具没有）或过松（不该有的给了）
 
-#### ensemble 趋同数据复盘（消费上次跑的 *_ensemble_overlap）
+#### ensemble 趋同数据复盘（仅 lite 产出，消费上次跑的 *_ensemble_overlap）
 
 > lite-plan（scope/reuse/test）和 coding-execute（review）在 ensemble 点会产出趋同字段，记在 plan.md / review 清单 frontmatter。本项是这些数据的**唯一消费者**——读取它们判断哪些 ensemble 点恒定高重合（= 单路已够，未来应降级），让趋同检测真正闭环。否则这些字段是死数据。
+>
+> **mid 不适用**：mid 用 review-fix-loop（mid-shared），不产 *_ensemble_overlap 字段。mid 场景此项标「不适用」跳过。
 
 - [ ] grep 上次的 `*_ensemble_overlap` 字段（在 plan.md frontmatter、review 清单、或本 topic 的 `_progress.md`/retrospect 输入）：
   - **连续 high**（≥2 次同类功能都 high overlap）→ 该 ensemble 点单路已够，记改进项「降级 X 为单路」（归属：对应 lite-* skill，方向：删条件触发的 ensemble 分支或默认关）

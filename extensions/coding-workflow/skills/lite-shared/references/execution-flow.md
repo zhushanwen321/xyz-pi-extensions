@@ -1,6 +1,8 @@
 # 执行流程详解（阶段 A / B / C）
 
 > coding-execute 正文只做阶段路由，本文件是各阶段的**完整操作步骤**。
+> 本流程同时服务 lite（plan.md）和 mid/design（execution-plan.md）两种 plan 格式——
+> check_execute.py 自动识别格式，Wave/TDD/worktree/test-runner 落盘机制两者通用。
 > 进入对应阶段前 read 本文件的对应章节。
 
 ## 阶段 A：开发（Wave 并行 + 严格 TDD）
@@ -163,7 +165,7 @@ todo(action='add', texts=[
   "...每条 mock 层 E* 一个 todo...",
   "[验收-real] E1-r real E2E: <场景> 全绿",
   "[验收-real] E3 real E2E: <场景> 全绿",
-  "...每条 real 层 E* 一个 todo（无环境的标 [需集成环境] 手动验证）...",
+  "...每条 real 层 E* 一个 todo（无环境的标 [需集成环境] 待 ask_user 决策）...",
   "[验收-mock] 全量单测 + mock E2E 全绿（CI 高频回归基线）",
   "[验收-real] 全量 real E2E 全绿（真实集成兼底，最后）"
 ])
@@ -196,9 +198,38 @@ bash ~/.claude/skills/create-worktree/create-worktree.sh feat/lite-review <base-
   2. 覆盖率：pnpm --filter <pkg> test -- --coverage，报告增量覆盖率数值
   3. mock 层 E2E：跑 plan E2E 清单中测试层=mock 的用例（按其执行方式）
   **real 层（真实层）**：
-  4. real 层 E2E：跑 plan E2E 清单中测试层=real 的用例（需真实后端/数据环境；标 [需集成环境] 的按手动步骤验证）
-  对照 plan.md 用例清单逐条判定 pass/fail，**分层报告**：mock 层 U*/mock E*/覆盖率 pass/fail + real 层 real E* pass/fail。
-  输出：每条用例 ID + 测试层 + pass/fail + 失败详情。"
+  4. real 层 E2E：跑 plan E2E 清单中测试层=real 的用例（需真实后端/数据环境）
+     - 能真跑（worktree 起本地 mock 后端 / docker-compose / 本地集成环境）→ 跑并报 pass/fail
+     - 确无环境 → **不要自标「手动通过」**，status 记 'pending-env'，由主 agent ask_user 决定（见 B3 用户豁免）
+  对照 plan.md 用例清单逐条判定，**必须落盘结构化报告**到
+  `.xyz-harness/{topic}/changes/test-results.json`（schema 见下方），
+  这是阶段 C `check_execute.py` 的强制门数据源——自由文本报告无法机器核对。
+  **分层报告**：mock 层 U*/mock E*/覆盖率 pass/fail + real 层 real E* pass/fail。"
+
+#### test-results.json 落盘 schema（test-runner 必须产出）
+
+```json
+{
+  "results": [
+    {"id": "U1", "status": "pass", "evidence": "vitest run: 3 passed"},
+    {"id": "E1", "status": "pass", "evidence": "npx playwright test e1: passed"},
+    {"id": "E1-r", "status": "pass", "evidence": "本地集成环境跑通"},
+    {"id": "E1-r", "status": "user-skipped", "evidence": "无真实后端",
+     "user_confirm_ref": "turn N 用户 ask_user 确认跳过"}
+  ],
+  "summary": {"total": 4, "passed": 3, "user_skipped": 1}
+}
+```
+
+字段规范：
+- **id**：与 plan.md 用例 ID 一致（U*/E*/E*-r）
+- **status**：`pass` | `fail` | `user-skipped` | `pending-env`
+  - **禁止** `manual` / `blocked` / `skipped`——这些是 AI 自标降级，check_execute 一律判 FAIL。`pending-env` 是合法中间态但终态未解析同样判 FAIL
+  - `user-skipped` 必须带 `user_confirm_ref`（用户确认凭证），否则 FAIL
+- **evidence**：命令输出摘要 / 失败 file:line（机器可追溯）
+- **user_confirm_ref**：仅 user-skipped 必填——记录用户在哪确认跳过（turn 号 / ask_user 引用）
+
+> [铁律] test-results.json 是执行收尾机器门的唯一数据源。test-runner 不落盘 = check_execute 无从核对 = goal 无法 complete。
 
 调用2（reviewer-正确性组，cwd=wt-review）：
   agent: "reviewer", wait: false, cwd: <wt-review>
@@ -217,8 +248,14 @@ bash ~/.claude/skills/create-worktree/create-worktree.sh feat/lite-review <base-
 
 ### B3. 结果汇总 + todo 更新
 
+> **real 层 pending-env 处理（用户豁免权）**：test-runner 把确无环境真跑的 real 用例记 `status: pending-env`。主 agent 收齐后，对每条 pending-env **必须 ask_user** 由用户显式决定：
+> - 用户确认跳过 → 改 status 为 `user-skipped` + 填 `user_confirm_ref`（记用户确认引用）
+> - 用户要求真跑 → 主 agent 提供环境方案（起本地 mock 后端 / docker-compose）重派 test-runner
+>
+> **禁止 AI 自决把 pending-env 改成 manual/blocked/pass**——降级决定权在用户。见 `test-case-schema.md` 核心原则四。
+
 ```
-test-runner：逐条用例 pass/fail + 覆盖率数值
+test-runner：逐条用例 pass/fail + 覆盖率数值（已落盘 test-results.json）
 reviewer-正确性组：must_fix/should_fix/nit 清单
 reviewer-质量组：must_fix/should_fix/nit 清单
 
@@ -278,7 +315,20 @@ reviewer-质量组：must_fix/should_fix/nit 清单
 
 全部验收 todo completed：
 
-**0. 语义/契约变更审查（goal complete 前必做）**——逐条核对本次改动是否引入：
+**0. 执行收尾机器门（goal complete 前必做，[MANDATORY]）**——跑 check_execute.py 核对 test-results.json 是否覆盖 plan 全部用例（脚本自动识别 lite plan.md 的 U*/E* 或 mid/design execution-plan.md 的 T{UC}.{N}）：
+```bash
+python3 ${SKILL_DIR}/../coding-execute/scripts/check_execute.py {planFilePath} .xyz-harness/{topic}/changes/test-results.json
+```
+- **PASS（exit 0）** → 进下方语义审查 + goal complete
+- **FAIL（exit 1）** → **禁止 goal_control(complete)**。报告指出的逃逸路径必须先补：
+  - 缺用例（mock/real 无结果）→ 重派 test-runner 补跑
+  - AI 自标 manual/blocked → 走 B3 用户豁免（ask_user）改 user-skipped+凭证，或真跑
+  - mock 层非 pass → 回阶段 A 修复
+  修完重跑 check_execute 直到 PASS。
+
+> 这是执行阶段唯一的机器硬门，对齐 lite-plan 的 check_plan.py。此前执行阶段零 gate，AI 能直接跳过 E2E 调 goal complete——本门堵死该路径。
+
+**0b. 语义/契约变更审查（goal complete 前必做）**——逐条核对本次改动是否引入：
 - 新的状态可达路径（之前不可达的状态/分支现在可达）
 - 改变了既有函数的副作用语义（延迟→立即、同步→异步、单次→多次等）
 - 改变了数据生命周期（创建/销毁/缓存时机）
@@ -295,7 +345,8 @@ reviewer-质量组：must_fix/should_fix/nit 清单
    bash ~/.claude/skills/remove-worktree/remove-worktree.sh feat/lite-w1
    bash ~/.claude/skills/remove-worktree/remove-worktree.sh feat/lite-test
    bash ~/.claude/skills/remove-worktree/remove-worktree.sh feat/lite-review
-4. 提示用户：下一步 /skill:coding-retrospect 复盘
+4. 提示用户：下一步 /skill:coding-retrospect 复盘；
+   若 plan 来自 mid-detail-plan / full-execution-plan（有设计 deliverable），再 /skill:coding-closeout 沉淀设计结论进长期文档（lite 无设计 deliverable，跳过 closeout）
 ```
 
 > remove-worktree 前必须 cd 到 workspace 根（含 `.bare/` 的目录）。

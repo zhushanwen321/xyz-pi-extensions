@@ -184,4 +184,4 @@ mid-* 的核心取舍：用「正交认知帧 + 跨阶段合并」换 wall-clock
 - `mid-detail-plan`：issues + nfr + code-arch + execution（ctx-build → 2 drafter 并行 → 5~6 路 loop → 一致性终检）
 - `mid-shared`：review-fix-loop + batch-ask 协议（共享参考）
 
-详见 `skills/mid-{design,build,shared}/SKILL.md`。
+详见 `skills/mid-{plan,mid-detail-plan,shared}/SKILL.md`。

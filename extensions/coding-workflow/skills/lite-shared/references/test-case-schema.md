@@ -56,9 +56,14 @@
 
 **单测（U\*）默认 mock 层**（单测本性就是隔离单元依赖），无需标。**E2E/集成（E\*）必须标 mock 或 real**——同一条业务流程往往两条都要：mock 层一条（快、CI 跑）+ real 层一条（真实集成兜底）。
 
-> **与 design/mid 体系的映射**：full-code-arch test-matrix 来源 B 的「强制层级」（`unit/integration/e2e`）是更细的 NFR 风险归属——`unit`≈mock 层，`integration/e2e`≈real 层。lite（L1 小功能）用 mock/real 粗分够用；design/mid（L2/L3）来源 A 也标 mock/real（与 lite 对齐），来源 B 保留 unit/integration/e2e 细分（NFR 风险需精确归属执行层）。
+> **与 full/mid 体系的映射**：full-code-arch test-matrix 来源 B 的「强制层级」（`unit/integration/e2e`）是更细的 NFR 风险归属——`unit`≈mock 层，`integration/e2e`≈real 层。lite（L1 小功能）用 mock/real 粗分够用；full（L3）/ mid（L2）来源 A 也标 mock/real（与 lite 对齐），来源 B 保留 unit/integration/e2e 细分（NFR 风险需精确归属执行层）。
 
-**项目无真实环境时**：real 层用例不能省略设计，标 `[需集成环境]` 或降级为手动/集成环境验证步骤（和「E2E 用例可执行性自检」一致）。略掉 real 层 = 默认「mock 过了真实就过」的危险假设。
+**项目无真实环境时**：real 层用例不能省略设计，标 `[需集成环境]`。但**执行阶段禁止 AI 自决「手动验证通过」**——这是最大的 E2E 逃逸口子。执行期（coding-execute）的合法出路只有两条：
+
+1. **test-runner 真跑**：worktree 起本地 mock 后端 / docker-compose / 本地集成环境，报 pass/fail
+2. **用户显式豁免**：确无环境时，主 agent **必须 ask_user** 由用户拍板跳过，报告中记 `status: user-skipped` + `user_confirm_ref`（用户确认凭证）
+
+`check_execute.py` 对 real 层用例只认 `pass` 或 `user-skipped`（须带凭证）；AI 自标的 `manual` / `blocked` / `skipped` 一律判 FAIL。`pending-env` 是 test-runner 的合法**中间态**（确无环境时记录，待主 agent ask_user 解析），但若留在终态（未解析）同样判 FAIL。降级决定权在用户不在 AI。略掉 real 层设计 = 默认「mock 过了真实就过」的危险假设。
 
 ## 单测用例清单 Schema
 
@@ -168,7 +173,7 @@ lite-plan 写 E2E 清单前 [MANDATORY] 探测项目**实际**的测试栈（不
 | 用例类型 | 在 mock/单测环境的可执行性 | 处理 |
 |---------|-------------------------|------|
 | 滚动/视口交互（如「上滚脱离锚定」） | ❌ happy-dom 无真实视口，mock 内容常小于视口无法制造滚动距离 | 标 `[执行前提待补:超长内容fixture]` 或拆为单测断言 + 手动 |
-| 真实后端依赖（如「并发下单库存」） | ❌ mock 无并发 | 拆为单测断言 + 手动/集成环境验证 |
+| 真实后端依赖（如「并发下单库存」） | ❌ mock 无并发 | 拆为单测断言 + real 层用例标 `[需集成环境]`（执行期由用户豁免或起本地集成环境，**禁止 AI 自标手动通过**） |
 | 纯 DOM 断言（如「working 态全展开」） | ✅ happy-dom 可验 | 正常标项目测试框架/手动 |
 | 强依赖浏览器原生 API（contenteditable / Selection / Range / TreeWalker） | ⚠️ happy-dom 支持有限，单测层行为失真（单测过 ≠ 真实 DOM 对） | 单测覆盖逻辑层断言 + 标「需集成层/手动验证真实 DOM」 |
 
