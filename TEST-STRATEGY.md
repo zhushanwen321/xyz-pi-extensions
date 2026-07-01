@@ -1,7 +1,7 @@
 # 测试策略
 
 > **always-current**。记录**测试策略**（金字塔 / 边界 / 门禁 / 约定），非每次的 test-matrix 堆叠。
-> 每次 ⑥的 test-matrix 留在 `.xyz-harness/{主题}/`；design-closeout 只把「不可回退基线」沉淀到此。
+> 每次 ⑥的 test-matrix 留在 `.xyz-harness/{主题}/`；coding-closeout 只把「不可回退基线」沉淀到此。
 > 命名刻意区分 TEST-STRATEGY（策略）vs per-topic test-matrix（用例）。
 
 ## 测试金字塔与边界
@@ -23,7 +23,7 @@
 
 ## 不可回退基线（Regression Baseline）
 
-> design-closeout 从 ⑥验收清单提炼：破坏即事故的用例。每条标溯源。
+> coding-closeout 从 ⑥验收清单提炼：破坏即事故的用例。每条标溯源。
 > 与 NFR.md「验证」字段双向引用。
 
 ### {待沉淀 RB-N}  [from: {topic}]

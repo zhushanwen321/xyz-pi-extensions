@@ -7,7 +7,7 @@
 
 ## 为什么是它（vs design Grilling）
 
-design 的 Grilling（见 `../design-shared/references/loop-method.md`）四条铁律之一是「**一次一个问题，等回答再继续**」——
+design 的 Grilling（见 `../full-shared/references/loop-method.md`）四条铁律之一是「**一次一个问题，等回答再继续**」——
 沿设计树从根到叶逐节点推进，解决父节点再问子节点。这保证决策深度（每个决策基于前一个的答案），但代价是
 **每阶段 5~15 次 ask_user 串行往返，6 阶段累计 40~80 次**——这是 design wall-clock 的最大杀手。
 
@@ -103,7 +103,7 @@ ask_user(action:'add', questions:[
 
 用户批量拍板后，主 agent：
 
-1. **即时 append decisions.md**——每个 D 类决策按 `../design-shared/references/loop-skeleton.md` Step 1.2 的 schema append（id/decision/rationale/classification/confirmed_by/stage/source/status）。不等阶段结束。**这是对抗主 agent context 被 compact 的第一道防线**（状态从「对话痕迹易丢」转为「文件派生可再生」）。
+1. **即时 append decisions.md**——每个 D 类决策按 `../full-shared/references/loop-skeleton.md` Step 1.2 的 schema append（id/decision/rationale/classification/confirmed_by/stage/source/status）。不等阶段结束。**这是对抗主 agent context 被 compact 的第一道防线**（状态从「对话痕迹易丢」转为「文件派生可再生」）。
 2. **更新初稿**——把用户答案纳入初稿对应章节。
 3. **D-可逆类在定稿时暴露**——agent 自决的 D-可逆决策，定稿时在「决策记录」章节列出（标 `confirmed_by: agent-opinionated`），让用户看到。
 
@@ -130,4 +130,4 @@ batch-ask 是默认，但以下情况**仍走 design 式单问**（退回 `loop-
 ## 与 design 决策持久化的关系
 
 batch-ask **完全复用** design 的 decisions.md 机制（append-only 账本、D-不可逆/D-可逆分类、confirmed_by、溯源、revisit 流程）——
-见 `../design-shared/references/loop-skeleton.md` Step 1.2。mid 只是把「提问方式」从逐个串行改成批量，**决策的持久化和反哺纪律不变**。
+见 `../full-shared/references/loop-skeleton.md` Step 1.2。mid 只是把「提问方式」从逐个串行改成批量，**决策的持久化和反哺纪律不变**。

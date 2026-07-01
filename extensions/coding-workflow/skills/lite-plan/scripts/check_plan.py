@@ -32,10 +32,10 @@ import os
 import re
 import sys
 
-# 复用 design-clarity 的共享检查库（跨 skill 目录引用，与 check_execution.py 同模式）
+# 复用 full-clarity 的共享检查库（跨 skill 目录引用，与 check_execution.py 同模式）
 _LIB_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    os.pardir, os.pardir, "design-clarity", "scripts",
+    os.pardir, os.pardir, "full-clarity", "scripts",
 )
 sys.path.insert(0, _LIB_DIR)
 from _shared_check_lib import (  # noqa: E402

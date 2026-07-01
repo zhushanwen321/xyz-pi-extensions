@@ -1,11 +1,11 @@
 # 设计历史索引
 
-> **跨主题导航**。每主题一行，design-closeout 收尾时更新状态。
+> **跨主题导航**。每主题一行，coding-closeout 收尾时更新状态。
 > 新人 / AI 先读本表，再决定深入哪个 topic 或 ADR。
 
 ## 主题台账
 
-> 初始录入自 git index 已确认的 topic 目录。实际归档状态待 design-closeout 核对更新。
+> 初始录入自 git index 已确认的 topic 目录。实际归档状态待 coding-closeout 核对更新。
 
 | Topic | 主题 | 开始 | 归档 | 沉淀去向 | 状态 |
 |-------|------|------|------|---------|------|
@@ -15,7 +15,7 @@
 ## 状态语义
 
 - `in-progress` — 设计 / 实施中，topic 目录可读写
-- `archived` — design-closeout 已收尾，topic 目录只读，沉淀已进长期文档
+- `archived` — coding-closeout 已收尾，topic 目录只读，沉淀已进长期文档
 - `abandoned` — 放弃，标理由（沉淀仍可能有价值，归档前提取）
 
 ## 活跃 ADR 索引

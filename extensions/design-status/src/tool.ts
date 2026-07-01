@@ -89,7 +89,7 @@ function executeAction(
 	}
 	if (!resolved) {
 		return {
-			content: [{ type: "text", text: "Error: 未找到 .xyz-harness/{topic}/ 主题子目录。请先用 design-clarity 选 topic（它会创建 topic 目录），或在一个含 .xyz-harness/{topic}/ 的项目根运行。" }],
+			content: [{ type: "text", text: "Error: 未找到 .xyz-harness/{topic}/ 主题子目录。请先用 full-clarity 选 topic（它会创建 topic 目录），或在一个含 .xyz-harness/{topic}/ 的项目根运行。" }],
 			error: true,
 		};
 	}

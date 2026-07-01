@@ -51,7 +51,7 @@ python3 ${对应阶段 skill dir}/scripts/check_{phase}.py {topic_dir}
 
 ### L2 · 派 N 路 reviewer（并行，wait:false）
 
-按当前 skill 的「维度审查分配」表派 N 路（mid-plan=4 路，mid-detail-plan=5~6 路）。**必须 `wait:false` 同消息多 start**——见 `../design-shared/references/loop-skeleton.md`「subagent 派发工程规范」。逐个 `wait:true` 会让 N 路并行退化成串行 N 倍 wall-clock。
+按当前 skill 的「维度审查分配」表派 N 路（mid-plan=4 路，mid-detail-plan=5~6 路）。**必须 `wait:false` 同消息多 start**——见 `../full-shared/references/loop-skeleton.md`「subagent 派发工程规范」。逐个 `wait:true` 会让 N 路并行退化成串行 N 倍 wall-clock。
 
 **派发模板（每路一个 start，同消息发起）：**
 
@@ -122,7 +122,7 @@ subagent(action:'start', startParam:{
 
 ## 收敛后的动作（loop 外）
 
-跳出 loop 后，按当前 skill 的流程进定稿 + 渲染 HTML（派 1 个 fresh subagent 加载 design-visual-explainer）。
+跳出 loop 后，按当前 skill 的流程进定稿 + 渲染 HTML（派 1 个 fresh subagent 加载 visual-explainer）。
 **Skill B 额外有「全文档一致性终检」**（合并 design 的 Step 6b 反哺 + 6c 终检），在 loop 之后、定稿之前——见 `mid-detail-plan/SKILL.md`。
 
 ## 复杂度降级（loop 路数随档位缩）

@@ -1,7 +1,7 @@
 # 设计工作流
 
 > 从业务需求到执行计划的完整设计流程。可选初始化（Step 0）+ 6 个设计 skill（Steps 1-6）按顺序串联，每个独立可调用。
-> 编码实施后由 **design-closeout** 收尾——把稳定结论沉淀进长期文档（ARCHITECTURE/PRODUCT/NFR/ADR/TEST-STRATEGY），闭合设计→实施→沉淀管道。
+> 编码实施后由 **coding-closeout** 收尾——把稳定结论沉淀进长期文档（ARCHITECTURE/PRODUCT/NFR/ADR/TEST-STRATEGY），闭合设计→实施→沉淀管道。
 > **不修改现有 coding-workflow 的 5-phase gate 流程**——这是独立的「设计前序」工作流，
 > 在编码实现之前完成设计决策。
 
@@ -18,9 +18,9 @@
                                                                     ↓ 交接编码
 【实施阶段】编码实现 — 测试验收清单全绿 = 完成
                                                                     ↓ 全绿后
-【收尾阶段】⓼ design-closeout — 沉淀进长期文档（ARCHITECTURE/PRODUCT/NFR/ADR/TEST-STRATEGY）
+【收尾阶段】⓼ coding-closeout — 沉淀进长期文档（ARCHITECTURE/PRODUCT/NFR/ADR/TEST-STRATEGY）
                                                                     ↓
-                                                          下次 /design-init 回读（闭环）
+                                                          下次 /coding-init 回读（闭环）
 ```
 
 每一步内部走 **6+步循环**（交互→追踪→gap分流→收敛→定稿+HTML→独立审查6维→反哺检查），**审查 APPROVED 且反哺通过后**才提示进入下一步。⑥额外有 **Step 6c 全文档一致性终检**（编码前总闸门）。用户确认才跳转。用户可随时手动跳过或回退。
@@ -45,14 +45,14 @@
 
 | 步骤 | Skill | 触发命令 | 产出文件（.md + .html） | 一句话目标 | 可跳过当 |
 |------|-------|---------|------------------------|-----------|---------|
-| ⓪ | design-init | `/design-init` | —（产出 AGENTS/CONTEXT/ARCHITECTURE） | 扫描项目文档基建，补齐缺失骨架，AGENTS.md 归一化 | 项目已有健全文档 |
-| ① | design-clarity | `/design-clarity` | `requirements` | 明确业务目标→路线→用例/数据流/UI-UX，**不考虑系统实现** | 纯技术重构无业务变更 |
-| ② | design-architecture | `/design-architecture` | `system-architecture` | 业务目标→系统目标，统一语言/架构/模块/边界/领域模型/状态机 | 已有成熟的 system-design.md |
-| ③ | design-issues | `/design-issues` | `issues` | 系统设计→具体问题，P0-P3 优先级 + 方案对比取舍 | 系统设计已足够细化到代码层 |
-| ④ | design-nfr | `/design-nfr` | `non-functional-design` | issue 解决方案的副作用分析 + 缓解（安全/性能/并发/稳定性/兼容性/可观测性） | 纯功能性小改动无 NFR 风险 |
-| ⑤ | design-code-arch | `/design-code-arch` | `code-architecture` + `code-skeleton/` | 工程目录/契约/包管理/API入口→最底层 类方法时序图 + **Step7 可编译骨架验证** | 已有详细的 interface 契约 + 时序 + 骨架验证 |
-| ⑥ | design-execution | `/design-execution` | `execution-plan` | Wave 拆分（从骨架叶子作用域推导），依赖 DAG，串并行标注 + **Step6c 编码前一致性终检** | 单人直接实现无需编排 |
-| ⓼ | design-closeout | `/design-closeout` | `ARCHIVED.md` + `closeout-report.md`（+ 沉淀进长期文档） | **编码全绿后**沉淀稳定结论进长期文档，归档 topic，闭合设计→实施→沉淀管道 | 原型/实验项目用完即弃 |
+| ⓪ | coding-init | `/coding-init` | —（产出 AGENTS/CONTEXT/ARCHITECTURE） | 扫描项目文档基建，补齐缺失骨架，AGENTS.md 归一化 | 项目已有健全文档 |
+| ① | full-clarity | `/full-clarity` | `requirements` | 明确业务目标→路线→用例/数据流/UI-UX，**不考虑系统实现** | 纯技术重构无业务变更 |
+| ② | full-architecture | `/full-architecture` | `system-architecture` | 业务目标→系统目标，统一语言/架构/模块/边界/领域模型/状态机 | 已有成熟的 system-design.md |
+| ③ | full-issues | `/full-issues` | `issues` | 系统设计→具体问题，P0-P3 优先级 + 方案对比取舍 | 系统设计已足够细化到代码层 |
+| ④ | full-nfr | `/full-nfr` | `non-functional-design` | issue 解决方案的副作用分析 + 缓解（安全/性能/并发/稳定性/兼容性/可观测性） | 纯功能性小改动无 NFR 风险 |
+| ⑤ | full-code-arch | `/full-code-arch` | `code-architecture` + `code-skeleton/` | 工程目录/契约/包管理/API入口→最底层 类方法时序图 + **Step7 可编译骨架验证** | 已有详细的 interface 契约 + 时序 + 骨架验证 |
+| ⑥ | full-execution-plan | `/full-execution-plan` | `execution-plan` | Wave 拆分（从骨架叶子作用域推导），依赖 DAG，串并行标注 + **Step6c 编码前一致性终检** | 单人直接实现无需编排 |
+| ⓼ | coding-closeout | `/coding-closeout` | `ARCHIVED.md` + `closeout-report.md`（+ 沉淀进长期文档） | **编码全绿后**沉淀稳定结论进长期文档，归档 topic，闭合设计→实施→沉淀管道 | 原型/实验项目用完即弃 |
 
 > 每步产出**两份**：`.md`（真相源）+ `.html`（可视化视图，浏览器双击即可打开）。
 
@@ -64,17 +64,17 @@
 - **交互与追踪分离** — 主 agent 做交互，独立 fresh-context subagent 做强制视角追踪
 - **F/K/D gap 分类** — 事实(二次确认)/知识(直接问)/决策(方案对比)
 - **独立收敛** — 连续追踪到无新 gap 才收敛，不靠主 agent 自判
-- **定稿 + HTML 渲染** — 收敛后定稿 .md，并渲染自包含 .html（用本包内置的 **design-visual-explainer** 技能，整合 Mermaid + drawio + 手画 HTML/CSS 三种引擎，Mermaid 图表直接渲染）
+- **定稿 + HTML 渲染** — 收敛后定稿 .md，并渲染自包含 .html（用本包内置的 **visual-explainer** 技能，整合 Mermaid + drawio + 手画 HTML/CSS 三种引擎，Mermaid 图表直接渲染）
 - **独立审查门（Review Gate，6 维含红队）** — 定稿后派 fresh-context 审查 subagent 从 6 维评审：内部一致性 / 上游对齐 / 可执行性 / 完整性 / 可视化质量 / **必要性与比例性（红队维度，反过度设计）**，APPROVED 才进反哺
 - **上游反哺（Step 6b）** — 审查通过后，fresh subagent 回扫上游检测矛盾，反哺修订上游 .md（标注来源+原因），保证每阶段交接时文档一致。D-不可逆矛盾必须 ask_user
-- **decisions.md 决策账本** — 跨阶段 append-only 决策索引（每条含 ID/决策/理由/classification/confirmed_by/溯源）。每阶段 Step 1.0 读已确认决策（不得重问），D 类决策拍板后即时 append；追踪/审查 subagent 注入为 context，对抗 compact 丢决策。详细 schema + 模板见 `loop-skeleton.md` Step 1.2 + `design-clarity/references/decisions-template.md`
-- **context-builder subagent** — 重型阶段（L2/L3）Step 1.0 必派，读 decisions.md + 长期文档 + 上游 .md 产出「阶段工作摘要」注入主 agent（压缩传递，每阶段必派一次消除 compact 检测依赖）。规范见 `design-shared/references/context-builder.md`
+- **decisions.md 决策账本** — 跨阶段 append-only 决策索引（每条含 ID/决策/理由/classification/confirmed_by/溯源）。每阶段 Step 1.0 读已确认决策（不得重问），D 类决策拍板后即时 append；追踪/审查 subagent 注入为 context，对抗 compact 丢决策。详细 schema + 模板见 `loop-skeleton.md` Step 1.2 + `full-clarity/references/decisions-template.md`
+- **context-builder subagent** — 重型阶段（L2/L3）Step 1.0 必派，读 decisions.md + 长期文档 + 上游 .md 产出「阶段工作摘要」注入主 agent（压缩传递，每阶段必派一次消除 compact 检测依赖）。规范见 `full-shared/references/context-builder.md`
 - **复杂度三档降级（L1/L2/L3）** — ①clarity 按 6 信号判定 `complexity_tier` 写入 `_progress.md`，驱动全程降级（context-builder/追踪/重建帧/review/max-rounds）。简单需求 L1 走轻量路径（单 agent 串行），复杂走完整循环。4 个硬约束不降级（decisions.md/⑤test-matrix重建/审查/gate）。见 `loop-skeleton.md`「复杂度自评与降级档位」
 - **_progress.md 跨会话交接** — design_status tool/CLI 是权威状态机，_progress.md 是其可读快照（含 complexity_tier + 阶段进度表 + 下阶段必读），换会话前写一次
 - **代码骨架验证（⑤Step 7）** — ⑤设计落成可编译骨架代码，物理验证签名/调用链/依赖方向。移植 recursive-skeleton 的顶层骨架机制
 - **全文档一致性终检（⑥Step 6c）** — 仅⑥，编码前对①-⑥全部 .md + 骨架代码做总闸门审计，CONSISTENT 才交接编码
 
-详见 `skills/design-shared/references/loop-skeleton.md`（6+步操作速查，每阶段 read）、`loop-method.md`（Grilling 提问法等方法论，clarity 首次 read）。HTML 渲染用本包内置的 **design-visual-explainer** 技能（无需安装，整合 Mermaid + drawio + 手画 HTML/CSS）。
+详见 `skills/full-shared/references/loop-skeleton.md`（6+步操作速查，每阶段 read）、`loop-method.md`（Grilling 提问法等方法论，clarity 首次 read）。HTML 渲染用本包内置的 **visual-explainer** 技能（无需安装，整合 Mermaid + drawio + 手画 HTML/CSS）。
 
 ## 审查门（Review Gate）的作用
 
@@ -97,9 +97,9 @@
 
 ```
 [设计工作流]              [编码实施]                [收尾]
-①~⑥ 设计  ──→  ⑥执行计划  ──→  Phase 1-5      ──→  ⓼ design-closeout 沉淀
+①~⑥ 设计  ──→  ⑥执行计划  ──→  Phase 1-5      ──→  ⓼ coding-closeout 沉淀
                               (spec→plan→dev→test→pr)     │
-(本指南)   (gate 编排可选串联)  (测试全绿=完成)            ↓ 长期文档更新 + topic 归档 → 下次 /design-init 回读
+(本指南)   (gate 编排可选串联)  (测试全绿=完成)            ↓ 长期文档更新 + topic 归档 → 下次 /coding-init 回读
 ```
 
 - 设计工作流的 6 个 skill **不接入**现有 gate 编排，是用户主动发起的设计工具
@@ -170,15 +170,15 @@
 
 ## mid-* 工作流（design 与 lite 之间的档位）
 
-如果 design 的 6 阶段深度收敛**太慢**（ask_user 40~80 次串行 + subagent 30~48 次派发），可选用 **mid-* 工作流**——内容对齐 design 全量（6 份 deliverable + 机器检查 + 红队门），编排改为 lite 风格（draft → batch-ask → review-fix-loop）。
+如果 full 的 6 阶段深度收敛**太慢**（ask_user 40~80 次串行 + subagent 30~48 次派发），可选用 **mid-* 工作流**——内容对齐 full 全量（6 份 deliverable + 机器检查 + 红队门），编排改为 lite 风格（draft → batch-ask → review-fix-loop）。
 
 | 档位 | 适用 | ask_user | subagent | 阶段 |
 |------|------|----------|----------|------|
-| **design-***（本指南） | L3 重型（多系统/跨组织/状态机复杂） | 40~80 | 30~48 | 6+1 |
+| **full-***（本指南） | L3 重型（多系统/跨组织/状态机复杂） | 40~80 | 30~48 | 6+1 |
 | **mid-***（更快） | L2 标准（多模块单系统/3~5 Wave） | 3~5 | ~20 | 2 |
 | lite-*（最轻） | L1 小功能（无架构改动） | 1~3 | 5~10 | 1 |
 
-mid-* 的核心取舍：用「正交认知帧 + 跨阶段合并」换 wall-clock。合并追踪+审查损失了 design 两道隔离的 bias 防护，靠禁读重建路 + 红队路反向帧对冲。**L3 场景仍应走 design（每阶段深度收敛不可省）**。
+mid-* 的核心取舍：用「正交认知帧 + 跨阶段合并」换 wall-clock。合并追踪+审查损失了 full 两道隔离的 bias 防护，靠禁读重建路 + 红队路反向帧对冲。**L3 场景仍应走 full（每阶段深度收敛不可省）**。
 
 - `mid-plan`：需求 + 架构（draft → batch-ask → 4 路 review-fix-loop）
 - `mid-detail-plan`：issues + nfr + code-arch + execution（ctx-build → 2 drafter 并行 → 5~6 路 loop → 一致性终检）

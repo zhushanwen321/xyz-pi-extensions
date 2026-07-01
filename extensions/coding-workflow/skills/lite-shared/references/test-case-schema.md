@@ -56,7 +56,7 @@
 
 **单测（U\*）默认 mock 层**（单测本性就是隔离单元依赖），无需标。**E2E/集成（E\*）必须标 mock 或 real**——同一条业务流程往往两条都要：mock 层一条（快、CI 跑）+ real 层一条（真实集成兜底）。
 
-> **与 design/mid 体系的映射**：design-code-arch test-matrix 来源 B 的「强制层级」（`unit/integration/e2e`）是更细的 NFR 风险归属——`unit`≈mock 层，`integration/e2e`≈real 层。lite（L1 小功能）用 mock/real 粗分够用；design/mid（L2/L3）来源 A 也标 mock/real（与 lite 对齐），来源 B 保留 unit/integration/e2e 细分（NFR 风险需精确归属执行层）。
+> **与 design/mid 体系的映射**：full-code-arch test-matrix 来源 B 的「强制层级」（`unit/integration/e2e`）是更细的 NFR 风险归属——`unit`≈mock 层，`integration/e2e`≈real 层。lite（L1 小功能）用 mock/real 粗分够用；design/mid（L2/L3）来源 A 也标 mock/real（与 lite 对齐），来源 B 保留 unit/integration/e2e 细分（NFR 风险需精确归属执行层）。
 
 **项目无真实环境时**：real 层用例不能省略设计，标 `[需集成环境]` 或降级为手动/集成环境验证步骤（和「E2E 用例可执行性自检」一致）。略掉 real 层 = 默认「mock 过了真实就过」的危险假设。
 
@@ -194,9 +194,9 @@ E2E 用例除上述边界外，**必须两层都有覆盖**（见「核心原则
 
 > 同一业务流程的 mock + real 两条用例，验证的是不同性质的问题（逻辑正确性 vs 集成正确性），不能互相替代。只有 mock 层 = 默认「mock 过了真实就过」的危险假设。
 
-## todo 映射（给 lite-execute 用）
+## todo 映射（给 coding-execute 用）
 
-测试用例 → todo 任务的映射规则（lite-execute 据此建 todo）：
+测试用例 → todo 任务的映射规则（coding-execute 据此建 todo）：
 
 | plan 清单条目 | 实现阶段 todo（isVerification=false） | 验收阶段 todo（isVerification=true） |
 |--------------|-------------------------------------|--------------------------------------|

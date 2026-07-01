@@ -1,6 +1,6 @@
 # 系统架构
 
-> 由 **design-closeout** 在收尾时从 `.xyz-harness/{主题}/system-architecture.md` 沉淀。
+> 由 **coding-closeout** 在收尾时从 `.xyz-harness/{主题}/system-architecture.md` 沉淀。
 > **当前态快照，非历史**——架构演进的历史决策见 `docs/adr/`。
 > 本文件不重复 CLAUDE.md 的目录清单，只记架构层级的稳定结论。
 
@@ -24,13 +24,13 @@ xyz-pi-extensions 是 monorepo，三层：
 |------|------|--------|
 | goal | 持久目标驱动自主循环（任务分解 + 证据验证 + 三重预算 + 阻塞/停滞检测） | 状态机、护栏策略（预算/stall/context）、Pi 事件钩子、steering prompt |
 
-> 其他模块的变化轴待 design-closeout 沉淀。
+> 其他模块的变化轴待 coding-closeout 沉淀。
 
 ## 关键状态机
 
 - **goal 7 态状态机**：详见 [docs/adr/002-goal-7-state-machine.md](./docs/adr/002-goal-7-state-machine.md)
 
-> 其他核心状态机待 design-closeout 沉淀。
+> 其他核心状态机待 coding-closeout 沉淀。
 
 ## 外部依赖
 

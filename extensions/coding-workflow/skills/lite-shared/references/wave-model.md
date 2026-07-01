@@ -1,7 +1,7 @@
 # Wave 拆分模型
 
 > lite-plan 写 plan.md 的「Wave 拆分与依赖」章节前 read 本文件。
-> lite-execute 按 Wave 派 subagent 前 read 本文件。
+> coding-execute 按 Wave 派 subagent 前 read 本文件。
 
 ## 核心原则：垂直切片
 

@@ -134,7 +134,7 @@ function resolveCtx(forPhase?: Phase): Ctx {
 	const resolved = resolveTopic(cwd, { forPhase });
 	if (!resolved) {
 		fail(
-			`未找到 .xyz-harness/{topic}/ 主题子目录。请先用 design-clarity 选 topic（它会创建 .xyz-harness/{topic}/），或在含 topic 子目录的项目根运行。多 topic 并行操作时用 --topic <slug> 显式绑定。`,
+			`未找到 .xyz-harness/{topic}/ 主题子目录。请先用 full-clarity 选 topic（它会创建 .xyz-harness/{topic}/），或在含 topic 子目录的项目根运行。多 topic 并行操作时用 --topic <slug> 显式绑定。`,
 		);
 	}
 	return { cwd, ...resolved };
@@ -171,7 +171,7 @@ function main(): never {
 			// 真实 topic 优先；无 topic 时回退哨兵展示项目级 init（init 阶段无 topic 也能看进度）
 			const resolved = resolveTopic(cwd) ?? resolveTopic(cwd, { forPhase: "init" });
 			if (!resolved) {
-				fail(`未找到 .xyz-harness/ 目录。请在项目根（含 .xyz-harness/{topic}/ 的目录）运行，或先用 /design-init 初始化。`);
+				fail(`未找到 .xyz-harness/ 目录。请在项目根（含 .xyz-harness/{topic}/ 的目录）运行，或先用 /coding-init 初始化。`);
 			}
 			const status = loadStatus(cwd, resolved.topic);
 			ok(renderOverview(status));

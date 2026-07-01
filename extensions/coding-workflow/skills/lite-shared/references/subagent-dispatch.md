@@ -1,6 +1,6 @@
 # Subagent 派发与 Worktree 隔离编排
 
-> lite-execute 派 subagent 前 read 本文件。
+> coding-execute 派 subagent 前 read 本文件。
 > 依赖：subagent 工具支持 `startParam.cwd`（per-subagent worktree 隔离）。
 
 ## 三种 subagent 角色
@@ -251,7 +251,7 @@ reviewer-质量组结果：must_fix/should_fix/nit 清单 B
   - 仅一路报 → [NEEDS-VERIFY]（主 agent 复核确认后转必修或丢弃）
   - 趋同检测：2 路重合度 > 80% → frontmatter 记 `review_ensemble_overlap: high`
     （该次改动 review 收敛，未来同类 Wave 可降级单路 review）；重合度低 → 记 low。
-    **此字段是 lite-retrospect「ensemble 趋同数据复盘」的输入——落盘到 changes/ 才能被 retrospect grep 消费。**
+    **此字段是 coding-retrospect「ensemble 趋同数据复盘」的输入——落盘到 changes/ 才能被 retrospect grep 消费。**
 
 判定：
   mock 层全部用例 pass + 覆盖率≥60% + real 层全部用例 pass + review 合并清单无 must_fix（[NEEDS-VERIFY] 复核后转 must_fix 的也算）

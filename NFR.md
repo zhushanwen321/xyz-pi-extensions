@@ -1,12 +1,12 @@
 # 工程约束（NFR）
 
-> **always-current**。每个主题 ④非功能性设计完成、代码验证落地后，由 **design-closeout** 沉淀**经代码验证**的约束。
+> **always-current**。每个主题 ④非功能性设计完成、代码验证落地后，由 **coding-closeout** 沉淀**经代码验证**的约束。
 > 完整分析过程在 `.xyz-harness/{主题}/non-functional-design.md`。
 > 每条约束必须四件套齐全（约束 / 为什么 / 验证 / 例外）；缺"验证" = 空头口号，check_closeout 报错。
 
 ## 安全
 
-<!-- 前缀 S-*：待 design-closeout 沉淀 -->
+<!-- 前缀 S-*：待 coding-closeout 沉淀 -->
 
 ## 业务数据安全
 
