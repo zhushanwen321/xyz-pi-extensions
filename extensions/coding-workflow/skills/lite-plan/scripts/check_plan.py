@@ -320,6 +320,86 @@ def check_coverage_gate(report: CheckReport, md_path: str) -> None:
         report.add_pass("覆盖率 gate", f"命令存在，阈值 {threshold}% ≥60%")
 
 
+def check_e2e_test_layer(report: CheckReport, md_path: str) -> None:
+    """③ E2E 每条标测试层（mock/real），且 mock 层 + real 层各至少 1 条。
+
+    测试层是 E2E 验收 todo 分组（mock 组 / real 组）的依据，见
+    test-case-schema.md「核心原则四」。机器判：表头有「测试层」列 +
+    每行值为 mock/real + 两层各≥1。
+    """
+    section = extract_section(md_path, r"E2E\s*用例清单|E2E\s*清单") or ""
+    if not section:
+        report.add_skip("E2E 测试层", "无 E2E 章节")
+        return
+    # 定位表头「测试层」列
+    layer_col = None
+    header_re = re.compile(r"用例\s*ID|用例id", re.IGNORECASE)
+    for line in section.splitlines():
+        if header_re.search(line):
+            cells = [c.strip() for c in line.split("|")]
+            cells = [c for c in cells if c != ""]
+            for idx, c in enumerate(cells):
+                if "测试层" in c:
+                    layer_col = idx
+                    break
+            break
+    # 收集数据行的测试层值
+    data_layers: list = []
+    missing: list = []
+    for line in section.splitlines():
+        s = line.strip()
+        if not s.startswith("|"):
+            continue
+        cells = [c.strip() for c in s.split("|")]
+        cells = [c for c in cells if c != ""]
+        if len(cells) < 2:
+            continue
+        first = cells[0]
+        if header_re.search(line):  # 表头行
+            continue
+        if not re.match(r"E\d", first, re.IGNORECASE):
+            continue  # 分隔行 / 非数据行
+        if layer_col is None or layer_col >= len(cells):
+            missing.append(first)
+        else:
+            val = cells[layer_col].lower().strip()
+            if val in ("mock", "real"):
+                data_layers.append(val)
+            else:
+                missing.append(first)
+    if not data_layers and not missing:
+        report.add_skip("E2E 测试层", "E2E 章节无可解析用例行")
+        return
+    if layer_col is None and missing:
+        report.add_fail(
+            "E2E 测试层",
+            f"E2E 表无「测试层」列（{len(missing)} 条未标）——见 test-case-schema.md 核心原则四",
+        )
+        return
+    if missing:
+        report.add_fail("E2E 测试层", f"{len(missing)} 条未标 mock/real: {missing[:3]}")
+        return
+    has_mock = "mock" in data_layers
+    has_real = "real" in data_layers
+    if not (has_mock and has_real):
+        lack = []
+        if not has_mock:
+            lack.append("mock")
+        if not has_real:
+            lack.append("real")
+        report.add_fail(
+            "E2E 测试层",
+            f"缺 {'/'.join(lack)} 层用例（现有 {set(data_layers)}）；"
+            f"real 无环境应标 [需集成环境] 不可省略",
+        )
+    else:
+        report.add_pass(
+            "E2E 测试层",
+            f"{len(data_layers)} 条均标层，mock={data_layers.count('mock')} "
+            f"real={data_layers.count('real')}",
+        )
+
+
 def main():
     md_path = resolve_plan_path()
     report = CheckReport("plan")
@@ -338,6 +418,7 @@ def main():
     # ③ 测试清单结构
     check_test_machine_judgable(report, md_path)
     check_test_coverage_of_changes(report, md_path)
+    check_e2e_test_layer(report, md_path)
     check_coverage_gate(report, md_path)
 
     report.finalize_and_exit(os.path.dirname(md_path))

@@ -69,7 +69,17 @@ PLACEHOLDER_PATTERNS = [
 #   TS/JS/Java: this.x.foo()      Python: self.x.foo()    Rust: self.x.foo()
 #   Go:         receiver.x() (receiver 名任意，常见 s/receiver)
 # 用最大并集：this./self./receiver 名 + .method( 都算接线
-WIRING_PATTERN = r"\b(this|self|s|rcv|receiver)\.\w+\s*\("
+#
+# [HISTORICAL] Vue composable / 函数式风格接线补充（2026-06-30 search-modal ⑤骨架验证）：
+# Vue 3 composable（useXxx）用函数式风格，无 this/self——接线是命名调用 `xxxApi.foo()` /
+# `store.foo()` / `recents.write()`。原 this./self. 模式对 class 骨架准确，但对 Vue composable
+# 骨架全漏报（误判为 Level 0 退化）。补充命名调用模式：标识符以 Api/store/Registry 等常见
+# 依赖注入名结尾 + .method(。仍宽松（只验整体有接线密度，不要求每方法）。
+WIRING_PATTERN = (
+    r"\b(this|self|s|rcv|receiver)\.\w+\s*\("  # class 风格（this./self./receiver.）
+    r"|\b\w+(Api|Store|Registry|Service|Repo|Client|recents|store|commandStore|fileSearchStore)"
+    r"\.\w+\s*\("  # [HISTORICAL] Vue composable 命名调用风格
+)
 
 
 def main():
@@ -115,6 +125,16 @@ def main():
             report.add_fail("test-matrix 来源 B", "测试矩阵缺「来源 B（NFR 风险→用例映射表）」")
     else:
         report.add_fail("测试矩阵", "无「测试矩阵」章节（MANDATORY）")
+
+    # ②b 来源 A 测试层（mock/real）软检查——只判「有没有」，逐行精确交 reviewer 覆盖帧
+    if test_matrix and ("来源 A" in test_matrix or "功能用例" in test_matrix):
+        if "测试层" in test_matrix:
+            report.add_pass("来源 A 测试层", "来源 A 表含「测试层」列（mock/real）")
+        else:
+            report.add_fail(
+                "来源 A 测试层",
+                "来源 A 表缺「测试层」列——每条功能用例须标 mock/real（见 deliverable-template §6）",
+            )
 
     # ③ 骨架反模式检查（P1）
     if skip_skeleton:

@@ -36,10 +36,11 @@
 | U3     |           |      |      | 边界 |
 
 ## E2E 用例清单
-<!-- E2E 框架探测结果：[有 playwright / 无框架，降级 browser-automation|手动] -->
-| 用例ID | 场景 | 前置 | 步骤 | 预期 | 执行方式 |
-|--------|------|------|------|------|---------|
-| E1     |      |      |      |      |         |
+<!-- E2E 框架探测结果：[有 playwright / 无框架，降级 browser-automation|手动]。每条必标测试层 mock/real，见 test-case-schema.md 核心原则四 -->
+| 用例ID | 场景 | 测试层 | 前置 | 步骤 | 预期 | 执行方式 |
+|--------|------|--------|------|------|------|---------|
+| E1     |      | mock   |      |      |      |         |
+| E1-r   |      | real   |      |      |      |         |
 
 ## 覆盖率 gate
 - gate 命令：按 `../lite-shared/references/test-case-schema.md`「语言×框架增量覆盖率」表选项目实际命令
@@ -75,6 +76,8 @@
 
 ### E2E 用例清单
 - **先探测项目实际测试栈**（不预设 Playwright；扫描 playwright.config / cypress.config / puppeteer / 项目测试依赖等）
+- **每条 E2E 必标测试层 `mock` 或 `real`**（见 `test-case-schema.md` 核心原则四）：mock = 隔离外部依赖（mock API/DB 跑流程）；real = 真实后端/数据/环境。同一业务流程常拆 mock + real 两条（E1 mock / E1-r real）
+- mock 层、real 层**各至少 1 条**；项目无真实环境时 real 层标 `[需集成环境]` 降级手动，不可省略设计
 - 有框架 → 执行方式写「该框架的实际命令」（探测到 Playwright 才写 `npx playwright test`；Cypress 写 `npx cypress run`；后端框架按其命令）
 - 无 E2E 框架但需测前端交互 → 用 browser 类 skill / CDP 类 MCP 驱动（Agent 主动发现，不写死名称）
 - 都不适用 → 标注手动验证步骤

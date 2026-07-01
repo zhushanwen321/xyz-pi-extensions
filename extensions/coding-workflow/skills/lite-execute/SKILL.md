@@ -15,7 +15,9 @@ description: >-
 
 > **[铁律] 严格 TDD。** 每个 implementer 先写失败测试、跑确认失败、再实现、再跑通过。不接受"先写代码后补测试"。
 >
-> **[铁律] 测试验收不是一个任务。** plan.md 每条测试用例（U*/E*）+ 覆盖率 gate + 整体回归，各自独立 todo（isVerification=true，不可取消，必须 completed）。
+> **[铁律] 测试验收不是一个任务。** plan.md 每条测试用例（U*/E*）+ 覆盖率 gate + mock 层/real 层回归，各自独立 todo（isVerification=true，不可取消，必须 completed）。
+>
+> **[铁律] E2E 验收 todo 按 mock / real 测试层分组**（`[验收-mock]` / `[验收-real]`），test-runner 分层跑、分层报 pass/fail。mock 层验证逻辑、real 层验证集成，两层各自全绿才算验收通过。见 `test-case-schema.md` 核心原则四。
 
 ## 前置检查
 
@@ -48,9 +50,9 @@ description: >-
   → 覆盖率 gate ≥60% 才算开发收尾
   ↓
 阶段 B 测试验收（多任务严格执行）
-  清开发 todo → 按测试用例逐条建验收 todo（U*/E*/覆盖率/回归）
+  清开发 todo → 按测试用例逐条建验收 todo（U*/E* 按 mock/real 测试层分组/覆盖率/回归）
   → 建 2 个 worktree（test/review）→ 派 test-runner ‖ code-review ensemble（2 路只读 reviewer 共享 review worktree，wait:false）
-  → test-runner 跑单测+E2E+覆盖率判 pass/fail；2 路 reviewer 各聚焦不同维度出 must_fix（并集去重）
+  → test-runner 分层跑：mock 层（单测+mock E2E+覆盖率）‖ real 层（real E2E），分层报 pass/fail；2 路 reviewer 各聚焦不同维度出 must_fix（并集去重）
   → 失败 → 回阶段 A 修复（限 3 轮，超限 Stagnation 暂停）
   ↓
 阶段 C 收尾
@@ -77,6 +79,7 @@ description: >-
 
 测试验收（严格执行）：
 - [ ] **每条测试用例（U*, E*）有独立 todo**，逐个验证
+- [ ] **E2E 验收 todo 按 mock / real 测试层分组**（`[验收-mock]` / `[验收-real]`），test-runner 分层跑、分层报结果
 - [ ] 验收 todo 全部 completed（无遗留 pending）
 - [ ] test-runner 独立 worktree；2 路 reviewer 共享 review worktree 并行只读审查（must_fix 并集去重，[NEEDS-VERIFY] 已复核）
 - [ ] 失败循环未超 3 轮（超限已 Stagnation 暂停）

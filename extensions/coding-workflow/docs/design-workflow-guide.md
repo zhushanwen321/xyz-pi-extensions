@@ -167,3 +167,21 @@
 - **简单功能**：①→②→⑥（跳过③④⑤，系统设计足够指导执行）
 
 每一步都独立可用，不必强制走完全部 6 步。
+
+## mid-* 工作流（design 与 lite 之间的档位）
+
+如果 design 的 6 阶段深度收敛**太慢**（ask_user 40~80 次串行 + subagent 30~48 次派发），可选用 **mid-* 工作流**——内容对齐 design 全量（6 份 deliverable + 机器检查 + 红队门），编排改为 lite 风格（draft → batch-ask → review-fix-loop）。
+
+| 档位 | 适用 | ask_user | subagent | 阶段 |
+|------|------|----------|----------|------|
+| **design-***（本指南） | L3 重型（多系统/跨组织/状态机复杂） | 40~80 | 30~48 | 6+1 |
+| **mid-***（更快） | L2 标准（多模块单系统/3~5 Wave） | 3~5 | ~20 | 2 |
+| lite-*（最轻） | L1 小功能（无架构改动） | 1~3 | 5~10 | 1 |
+
+mid-* 的核心取舍：用「正交认知帧 + 跨阶段合并」换 wall-clock。合并追踪+审查损失了 design 两道隔离的 bias 防护，靠禁读重建路 + 红队路反向帧对冲。**L3 场景仍应走 design（每阶段深度收敛不可省）**。
+
+- `mid-design`：需求 + 架构（draft → batch-ask → 4 路 review-fix-loop）
+- `mid-build`：issues + nfr + code-arch + execution（ctx-build → 2 drafter 并行 → 5~6 路 loop → 一致性终检）
+- `mid-shared`：review-fix-loop + batch-ask 协议（共享参考）
+
+详见 `skills/mid-{design,build,shared}/SKILL.md`。
