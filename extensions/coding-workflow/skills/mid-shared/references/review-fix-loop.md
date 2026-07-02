@@ -122,7 +122,7 @@ subagent(action:'start', startParam:{
 
 ## 收敛后的动作（loop 外）
 
-跳出 loop 后，按当前 skill 的流程进定稿 + 渲染 HTML（派 1 个 fresh subagent 加载 visual-explainer）。
+跳出 loop 后，按当前 skill 的流程进定稿 + 渲染 HTML（派 1 个 fresh subagent 加载 coding-visualizer）。
 **Skill B 额外有「全文档一致性终检」**（合并 design 的 Step 6b 反哺 + 6c 终检），在 loop 之后、定稿之前——见 `mid-detail-plan/SKILL.md`。
 
 ## 复杂度降级（loop 路数随档位缩）

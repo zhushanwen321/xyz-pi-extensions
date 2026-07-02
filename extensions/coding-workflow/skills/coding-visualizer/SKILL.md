@@ -1,5 +1,5 @@
 ---
-name: visual-explainer
+name: coding-visualizer
 description: >-
   Use when a design phase Step 5b needs a finalized .md rendered to a
   self-contained .html, or when the user says "可视化", "渲染", "画图", "render

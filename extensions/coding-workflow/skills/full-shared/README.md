@@ -29,7 +29,7 @@
 （相对路径基准 = 当前 skill 的 baseDir = SKILL.md 的 dirname；`../` 跨到兄弟目录）。
 裸路径 `full-shared/references/...` 会解析成 `{当前skill}/full-shared/...`，安装态下 broken。
 
-> **HTML 渲染不在此处。** Step 5b 的 `.html` 渲染由本包内置的 **visual-explainer**
+> **HTML 渲染不在此处。** Step 5b 的 `.html` 渲染由本包内置的 **coding-visualizer**
 > 技能承担（无需 `pi install`），派 fresh subagent 加载该技能生成。它整合了 Mermaid + drawio + 手画 HTML/CSS
 > 三种渲染引擎，按各阶段主角图类型自动选择。设计阶段特有的「主角图表」
 > 映射见 `loop-skeleton.md` Step 5b。

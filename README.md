@@ -25,7 +25,7 @@
 |------|------|------|
 | **pi-subagents** | 任务委派：single / parallel / chain / async 模式，subagent 可复用 session | `pi install npm:pi-subagents` |
 | **pi-mcp-adapter** | MCP 协议适配器，连接 MCP 服务器并调用其工具 | `pi install npm:pi-mcp-adapter` |
-| **visual-explainer** | 生成可视化 HTML 页面（架构图、diff review、计划审查、数据表格） | `pi install npm:visual-explainer` |
+| **coding-visualizer** | 生成可视化 HTML 页面（架构图、diff review、计划审查、数据表格） | `pi install npm:coding-visualizer` |
 | **pi-annotate** | 视觉标注工具，在浏览器中选择元素并添加评论 | `pi install npm:pi-annotate` |
 | **pi-rewind-hook** | Git 自动检查点，支持文件/对话回退恢复 | `pi install npm:pi-rewind-hook` |
 

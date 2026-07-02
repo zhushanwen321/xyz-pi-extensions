@@ -2,7 +2,7 @@
 
 设计阶段 HTML 渲染的 CSS/JS 模式手册。**按需查对应段，勿整读。** SKILL.md 的四条踩坑铁律适用于本文件所有模式。
 
-> 来源：从 visual-explainer v0.7.1 的 css-patterns.md / libraries.md / responsive-nav.md + 3 templates 提炼。
+> 来源：从 coding-visualizer v0.7.1 的 css-patterns.md / libraries.md / responsive-nav.md + 3 templates 提炼。
 
 ---
 

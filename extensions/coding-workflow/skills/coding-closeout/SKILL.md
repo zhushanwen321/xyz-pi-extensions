@@ -98,7 +98,7 @@ closeout 沉淀**设计产出**（信息归位），retrospect 回顾**执行过
 
 **3a. 清理过程产物：**
 - 删 `{topic}/changes/` 全部（tracing/review/backfeed/machine-check/consistency-final 全是过程产物）
-- 删 `{topic}/*.html`（visual-explainer 可重新生成，归档态不需可视化）
+- 删 `{topic}/*.html`（coding-visualizer 可重新生成，归档态不需可视化）
 - **`decisions.md` 保留**（不清理）——它是本 topic 的决策审计链（append-only，含 revisit 记录）。Step 2 抽 ADR 只取 status=confirmed 的 D-不可逆决策，但 decisions.md 的完整历史（含 D-可逆决策、revisit 链）是归档态有价值的事后追溯材料，随 topic 保留
 
 **3b. 归档标记：**

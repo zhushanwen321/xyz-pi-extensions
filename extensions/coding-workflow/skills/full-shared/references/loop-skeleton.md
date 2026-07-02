@@ -302,19 +302,19 @@ Announce at start: "我正在使用 {skill-name} skill 来 {本阶段目标}。"
 
 ### 5b. 派 fresh subagent 渲染 HTML
 
-[MANDATORY] **HTML 渲染下沉 fresh subagent，主 agent 不 write HTML 全文。** 渲染由本包内置的 **visual-explainer** 技能承担——它内置自包含 HTML 生成、Mermaid 渲染（带 zoom/pan）、drawio 集成（复杂架构）、CSS 配色与模板，比手写更可控。无需额外安装。
+[MANDATORY] **HTML 渲染下沉 fresh subagent，主 agent 不 write HTML 全文。** 渲染由本包内置的 **coding-visualizer** 技能承担——它内置自包含 HTML 生成、Mermaid 渲染（带 zoom/pan）、drawio 集成（复杂架构）、CSS 配色与模板，比手写更可控。无需额外安装。
 
-**派发配置：** Agent=general-purpose，Context=**fresh**，加载=visual-explainer skill，读取=刚定稿 `{deliverable}.md`，产出=`.xyz-harness/${主题}/{deliverable-name}.html`（write）+ `open` 打开。
+**派发配置：** Agent=general-purpose，Context=**fresh**，加载=coding-visualizer skill，读取=刚定稿 `{deliverable}.md`，产出=`.xyz-harness/${主题}/{deliverable-name}.html`（write）+ `open` 打开。
 
 **Task prompt 模板：**
 
 ```
-你是独立渲染 subagent。上下文与主 agent 隔离。用 visual-explainer 技能把定稿渲染成自包含可视化 HTML：
+你是独立渲染 subagent。上下文与主 agent 隔离。用 coding-visualizer 技能把定稿渲染成自包含可视化 HTML：
 
-**前置：** 加载 visual-explainer skill（本包内置，无需安装）。
+**前置：** 加载 coding-visualizer skill（本包内置，无需安装）。
 1. read {final_deliverable_md}（定稿，真相源）——HTML 只做可视化呈现，不产生新内容
-2. 按 visual-explainer 的 workflow 生成 {deliverable-name}.html：
-   - 主角图（hero，紧随 header 最显眼位置）= {本阶段主角图表}——见各 SKILL.md Step 5 标注 + visual-explainer SKILL.md 的「各阶段主角图规范」表
+2. 按 coding-visualizer 的 workflow 生成 {deliverable-name}.html：
+   - 主角图（hero，紧随 header 最显眼位置）= {本阶段主角图表}——见各 SKILL.md Step 5 标注 + coding-visualizer SKILL.md 的「各阶段主角图规范」表
    - 配一段 TL;DR（3-5 行核心结论），让人不滚动就能 grasp 要点
    - .md 的 Mermaid 代码块必须渲染成实际图表（不是 <pre> 源码）
 3. 自检：Mermaid 语法正确渲染 / 无 {占位符} / 无空章节 / TOC 锚点无死链 / UTF-8 中文正常
