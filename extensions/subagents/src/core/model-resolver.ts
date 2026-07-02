@@ -136,7 +136,13 @@ export function resolveModel(
   );
 }
 
-/** lookup + auth 校验 + thinkingLevel clamp。显式指定但失败 → 抛错（不降级）。 */
+/**
+ * lookup + auth 校验 + thinkingLevel clamp。显式指定但失败 → 抛错（不降级）。
+ *
+ * 错误信息区分两种失败（避免误导排查方向）：
+ *   - model 不存在 → 提示检查拼写 + 列出相近可用 model
+ *   - model 存在但 auth 未配置 → 提示在 models.json 配置鉴权
+ */
 function lookupAndResolve(
   modelStr: string,
   requestedThinking: string | undefined,
@@ -144,10 +150,16 @@ function lookupAndResolve(
   source: "paramOverride" | "agentConfig",
 ): ResolvedModel {
   const model = lookupModel(modelStr, registry);
-  if (!model || !registry.hasConfiguredAuth(model)) {
+  if (!model) {
     throw new Error(
-      `Model "${modelStr}" (${source}) not found or auth not configured. ` +
-        `Fix the model string or configure auth in models.json.`,
+      `Model "${modelStr}" (${source}) not found in registry. ` +
+        suggestSimilarModels(modelStr, registry),
+    );
+  }
+  if (!registry.hasConfiguredAuth(model)) {
+    throw new Error(
+      `Model "${modelStr}" (${source}) exists but auth is not configured. ` +
+        `Configure auth in models.json or switch to an authorized model.`,
     );
   }
   return {
@@ -156,11 +168,51 @@ function lookupAndResolve(
   };
 }
 
-/** 解析 "provider/modelId"（modelId 可含 /，取第一个 / 分割）并查 registry。 */
+/**
+ * 解析 "provider/modelId" 并查 registry。
+ *
+ * 容错：剥离尾部 ":thinkingLevel" 后缀（off/minimal/low/medium/high/xhigh）。
+ * 原因：LLM 常把平台复合标识 "provider/modelId:thinkingLevel"（如
+ * "deepseek-router/ds-pro:xhigh"）整体当 model 参数传入。registry 仅存
+ * "provider/modelId"（无后缀），不剥离则 modelId="ds-pro:xhigh" 查不到。
+ * 剥离后 thinkingLevel 仍由独立的 thinkingLevel 参数/resolveThinkingLevel 处理。
+ *
+ * modelId 可含 /，按第一个 / 分割 provider 与 modelId。
+ */
 function lookupModel(modelStr: string, registry: ModelRegistryLike): ModelInfo | undefined {
-  const idx = modelStr.indexOf("/");
+  const cleanStr = stripThinkingSuffix(modelStr);
+  const idx = cleanStr.indexOf("/");
   if (idx <= 0) return undefined;
-  return registry.find(modelStr.slice(0, idx), modelStr.slice(idx + 1));
+  return registry.find(cleanStr.slice(0, idx), cleanStr.slice(idx + 1));
+}
+
+/**
+ * 剥离模型字符串尾部 ":thinkingLevel" 后缀（如 "ds-pro:xhigh" → "ds-pro"）。
+ * 仅匹配合法 thinking level，避免误剥 "foo:bar" 这类无关冒号。
+ * 返回去除后缀的字符串；无后缀则原样返回。
+ */
+function stripThinkingSuffix(modelStr: string): string {
+  // THINKING_ORDER 含 off/minimal/low/medium/high/xhigh，按长度降序拼正则避免短串误匹配
+  const alt = THINKING_ORDER.slice().sort((a, b) => b.length - a.length).join("|");
+  return modelStr.replace(new RegExp(`:(${alt})$`), "");
+}
+
+/**
+ * 为 not-found 错误生成「相近可用 model」建议，辅助定位拼写错误。
+ * 策略：取 provider/modelId 的末段，与每个可用 model 的末段做小写包含匹配，
+ * 命中则列出。无命中则列出前 N 个全部可用 model（兜底）。空 registry 不列。
+ */
+function suggestSimilarModels(modelStr: string, registry: ModelRegistryLike): string {
+  const available = registry.getAvailable();
+  if (available.length === 0) return "Registry has no available models.";
+  const target = modelStr.split("/").pop()?.toLowerCase() ?? "";
+  // ponytail: 末段子串包含足够定位拼写错误，无需编辑距离/相似度库
+  const similar = available
+    .filter((m) => m.id.toLowerCase().includes(target) || target.includes(m.id.toLowerCase()))
+    .map((m) => `${m.provider}/${m.id}`)
+    .slice(0, MODEL_LIST_LIMIT);
+  const list = similar.length > 0 ? similar : available.slice(0, MODEL_LIST_LIMIT).map((m) => `${m.provider}/${m.id}`);
+  return `Check the model string (maybe a typo, or a ":thinkingLevel" suffix that should be passed via the thinkingLevel param instead). Similar available models:\n  ${list.join("\n  ")}`;
 }
 
 /**
