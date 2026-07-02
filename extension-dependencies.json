@@ -61,8 +61,8 @@
       "dependsOn": [
         {
           "package": "@zhushanwen/pi-workflow",
-          "type": "optional",
-          "reason": "Review-Gate / Test-Fix Loop 通过 pi.__workflowRun 启动 workflow 脚本，缺失时降级为 runSingleAgent"
+          "type": "runtime",
+          "reason": "ReviewGate / TestFixLoopGate 通过 pi.__workflowRun 启动 workflow 脚本；硬依赖，缺失时 gate.run() 直接抛错（无 fallback）"
         },
         {
           "package": "@zhushanwen/pi-goal",

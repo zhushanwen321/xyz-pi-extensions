@@ -82,30 +82,17 @@ export class ReviewGate extends Gate {
     };
   }
 
-  /**
-   * fallback 路径：workflow 扩展缺失时派单 agent 跑 review-gate loop。
-   *
-   * 触发文件系统 + 子进程依赖（runReviewGateLoop），属 e2e 范畴，单测不覆盖
-   * （见 review-gate.test.ts 顶部注释）。运行时由 workflow 扩展缺失时走到。
-   */
-  protected async runFallback(_ctx: GateContext): Promise<GateResult> {
-    // 占位实现：生产路径必走 workflow（coding-workflow 声明 workflow 为 runtime dep）。
-    // 真正的 fallback 需要 skillResolver 派 agent，当前 coding-workflow 尚未接入
-    // skill 运行时，故抛错明示「workflow 扩展未安装」而非静默成功。
-    throw new Error(
-      "ReviewGate.runFallback requires workflow extension (pi.__workflowRun not found)",
-    );
-  }
 }
 
 // ── 工具：供上层 phase runner 用（类型导出） ─────────────────
 
 /**
- * 类型守卫：ExtensionAPI 是否具备 ReviewGate 所需的 __workflowRun。
- *
- * 双重断言理由同 gate.ts:resolveWorkflowRun——__workflowRun 是 workflow 扩展
- * 的私有 RPC，SDK 公共类型不暴露，运行时探测必需。
- */
+ * 类型守卫：ExtensionAPI 是否具备 gate 所需的 __workflowRun。
+   *
+   * 双重断言理由：__workflowRun 是 workflow 扩展的私有 RPC，SDK 公共类型不
+   * 暴露，运行时探测必需。phase runner 可在调 gate.run 前用它预检，给出更
+   * 友好的提示（而非等到 gate.run 内部抛错）。
+   */
 export function hasReviewWorkflowApi(pi: ExtensionAPI): boolean {
   return typeof (pi as unknown as { __workflowRun?: unknown }).__workflowRun === "function";
 }

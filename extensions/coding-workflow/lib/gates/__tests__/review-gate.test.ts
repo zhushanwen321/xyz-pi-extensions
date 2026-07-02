@@ -191,3 +191,40 @@ describe("ReviewGate D-8 reason consumption (runViaWorkflow)", () => {
     );
   });
 });
+
+// ============================================================
+// 硬依赖：workflow 扩展缺失时直接抛错（无 fallback）
+// ============================================================
+
+describe("ReviewGate hard-requires workflow extension", () => {
+  it("pi 无 __workflowRun → run() 抛错（不降级）", async () => {
+    const gate = new ReviewGate();
+    // pi 不带 __workflowRun
+    const pi = {} as unknown as ExtensionAPI;
+    const ctx = {
+      phase: 1,
+      topicDir: "/tmp/topic",
+      state: {} as never,
+      phaseConfig: {} as never,
+      pi,
+      skillResolver: {} as never,
+    } as GateContext;
+
+    await expect(gate.run(ctx)).rejects.toThrow(/requires workflow extension/);
+  });
+
+  it("__workflowRun 存在但非函数 → 同样抛错", async () => {
+    const gate = new ReviewGate();
+    const pi = { __workflowRun: "not a function" } as unknown as ExtensionAPI;
+    const ctx = {
+      phase: 1,
+      topicDir: "/tmp/topic",
+      state: {} as never,
+      phaseConfig: {} as never,
+      pi,
+      skillResolver: {} as never,
+    } as GateContext;
+
+    await expect(gate.run(ctx)).rejects.toThrow(/requires workflow extension/);
+  });
+});

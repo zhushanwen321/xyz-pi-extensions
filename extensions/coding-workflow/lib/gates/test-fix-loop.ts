@@ -98,14 +98,4 @@ export class TestFixLoopGate extends Gate {
     if (script.noncore && !script.noncore.passed) scopes.push("noncore");
     return scopes;
   }
-
-  /**
-   * fallback 路径：workflow 扩展缺失时派单 agent 跑 test-fix loop。
-   * 与 ReviewGate 同因同果——e2e 范畴，单测不覆盖；当前抛错明示缺 workflow 扩展。
-   */
-  protected async runFallback(_ctx: GateContext): Promise<GateResult> {
-    throw new Error(
-      "TestFixLoopGate.runFallback requires workflow extension (pi.__workflowRun not found)",
-    );
-  }
 }
