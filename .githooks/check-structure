@@ -8,7 +8,7 @@
 #
 # 检查项：
 #   1. 扩展入口文件存在
-#   2. CLAUDE.md 扩展清单同步
+#   2. AGENTS.md 扩展清单同步
 #   3. 文件行数上限
 #   4. 入口模式检查（export default function）
 #   5. 模块级变量检查
@@ -55,16 +55,16 @@ for pkg_json in extensions/*/package.json; do
   done <<< "$exts"
 done
 
-# ─── 2. CLAUDE.md 扩展清单同步 ─────────────────────────
+# ─── 2. AGENTS.md 扩展清单同步 ─────────────────────────
 echo ""
-echo "=== 2. CLAUDE.md 扩展清单同步 ==="
-if [[ -f CLAUDE.md ]]; then
+echo "=== 2. AGENTS.md 扩展清单同步 ==="
+if [[ -f AGENTS.md ]]; then
   # 提取 extensions/ 下的目录列表
   ACTUAL_EXTS=$(find extensions -maxdepth 1 -mindepth 1 -type d -exec basename {} \; | sort | tr '\n' ' ')
-  # 提取 CLAUDE.md 中 extensions/ 段落列出的包
+  # 提取 AGENTS.md 中 extensions/ 段落列出的包
   DOC_EXTS=$(python3 <<'PYEOF'
 import re
-with open('CLAUDE.md') as f:
+with open('AGENTS.md') as f:
     content = f.read()
 found = re.findall(r'\|\s*`extensions/(\S+?)/`\s*\|', content)
 if not found:
@@ -74,7 +74,7 @@ PYEOF
 )
 
   if [[ -z "$DOC_EXTS" ]]; then
-    log_info "未从 CLAUDE.md 提取到扩展清单（表格格式可能变化，请手动检查）"
+    log_info "未从 AGENTS.md 提取到扩展清单（表格格式可能变化，请手动检查）"
   else
     MISSING_IN_DOC=()
     MISSING_ON_DISK=()
@@ -93,19 +93,19 @@ PYEOF
 
     for ext in "${MISSING_IN_DOC[@]}"; do
       [[ -z "$ext" ]] && continue
-      log_fail "CLAUDE.md 缺少: extensions/$ext/"
+      log_fail "AGENTS.md 缺少: extensions/$ext/"
     done
     for ext in "${MISSING_ON_DISK[@]}"; do
       [[ -z "$ext" ]] && continue
-      log_warn "CLAUDE.md 引用了不存在的: extensions/$ext/"
+      log_warn "AGENTS.md 引用了不存在的: extensions/$ext/"
     done
 
     if [[ ${#MISSING_IN_DOC[@]} -eq 0 && ${#MISSING_ON_DISK[@]} -eq 0 ]]; then
-      log_pass "CLAUDE.md 与 extensions/ 目录一致"
+      log_pass "AGENTS.md 与 extensions/ 目录一致"
     fi
   fi
 else
-  log_warn "CLAUDE.md 不存在，跳过"
+  log_warn "AGENTS.md 不存在，跳过"
 fi
 
 # ─── 3. 文件行数上限 ─────────────────────────────────────

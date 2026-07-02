@@ -1,5 +1,5 @@
 #!/bin/bash
-# pre-commit — 类型检查 + ESLint 品味检查 + pi manifest 检查 + scripts 校验 + CLAUDE.md 同步检查
+# pre-commit — 类型检查 + ESLint 品味检查 + pi manifest 检查 + scripts 校验 + AGENTS.md 同步检查
 #
 # 跳过方式：SKIP_LINT=1 git commit -m "..."
 set -euo pipefail
@@ -43,17 +43,17 @@ if [[ $LARGE_FILE_FOUND -eq 1 ]]; then
   exit 1
 fi
 
-# ── -1. CLAUDE.md 同步检查 ─────────────────────────────
-# 当 extensions/ 或 shared/ 目录新增/删除/重命名时，CLAUDE.md 必须同步更新
+# ── -1. AGENTS.md 同步检查 ─────────────────────────────
+# 当 extensions/ 或 shared/ 目录新增/删除/重命名时，AGENTS.md 必须同步更新
 STAGED_EXT_DIRS=$(git diff --cached --name-only --diff-filter=AD | grep -E '^(extensions|shared)/[^/]+/' | cut -d'/' -f1-2 | sort -u || true)
-STAGED_CLAUDE=$(git diff --cached --name-only --diff-filter=ACM | grep 'CLAUDE.md$' || true)
+STAGED_AGENTS=$(git diff --cached --name-only --diff-filter=ACM | grep 'AGENTS.md$' || true)
 
-if [[ -n "$STAGED_EXT_DIRS" && -z "$STAGED_CLAUDE" ]]; then
-  echo "--- CLAUDE.md 同步检查 ---"
-  echo -e "${C_YELLOW}[WARN]${C_RESET} extensions/ 或 shared/ 目录有变更但 CLAUDE.md 未同步更新"
-  echo "        CLAUDE.md 的「Monorepo 架构」章节需要反映目录变化"
+if [[ -n "$STAGED_EXT_DIRS" && -z "$STAGED_AGENTS" ]]; then
+  echo "--- AGENTS.md 同步检查 ---"
+  echo -e "${C_YELLOW}[WARN]${C_RESET} extensions/ 或 shared/ 目录有变更但 AGENTS.md 未同步更新"
+  echo "        AGENTS.md 的「Monorepo 架构」章节需要反映目录变化"
   echo "        如果本次变更不涉及新增/删除/重命名包，可以忽略此警告"
-  echo "        否则请同步更新 CLAUDE.md 后重新 commit"
+  echo "        否则请同步更新 AGENTS.md 后重新 commit"
   echo ""
 fi
 

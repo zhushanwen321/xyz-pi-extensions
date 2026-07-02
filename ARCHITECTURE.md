@@ -2,7 +2,7 @@
 
 > 由 **coding-closeout** 在收尾时从 `.xyz-harness/{主题}/system-architecture.md` 沉淀。
 > **当前态快照，非历史**——架构演进的历史决策见 `docs/adr/`。
-> 本文件不重复 CLAUDE.md 的目录清单，只记架构层级的稳定结论。
+> 本文件不重复 AGENTS.md 的目录清单，只记架构层级的稳定结论。
 
 ## 分层
 
@@ -14,11 +14,11 @@ xyz-pi-extensions 是 monorepo，三层：
 | 内部共享 | `shared/` | private 包，仅 workspace 内引用（types / quota-providers / taste-lint） |
 | 独立 skills | `skills/` | 无所属 extension 的 Markdown 资源，GitHub 分发 |
 
-> 命名 / 依赖 / 发布规则详见 [CLAUDE.md](./CLAUDE.md)「Monorepo 架构」与 [docs/monorepo-conventions.md](./docs/monorepo-conventions.md)。
+> 命名 / 依赖 / 发布规则详见 [AGENTS.md](./AGENTS.md)「Monorepo 架构」与 [docs/monorepo-conventions.md](./docs/monorepo-conventions.md)。
 
 ## 模块划分
 
-每个 extension 是独立 npm 包，职责单一。完整清单见 CLAUDE.md「当前包清单」。
+每个 extension 是独立 npm 包，职责单一。完整清单见 AGENTS.md「当前包清单」。
 
 | 模块 | 职责 | 变化轴 |
 |------|------|--------|
@@ -39,4 +39,4 @@ xyz-pi-extensions 是 monorepo，三层：
 | In-process | `@mariozechner/pi-coding-agent`（Pi 运行时提供 typebox / pi-tui / pi-ai） |
 | True-external | Pi 平台（扩展在 Pi 进程内执行，非独立进程；subagent 是已知例外） |
 
-> 详见 CLAUDE.md「运行环境」「技术栈」。
+> 详见 AGENTS.md「运行环境」「技术栈」。
