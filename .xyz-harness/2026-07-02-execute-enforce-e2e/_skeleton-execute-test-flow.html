@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<!--
+  基于 execution-plan.html 骨架，适配为「测试执行 Tool」流程设计图。
+  主角图：flowchart TD tool 四 action 交互流（机器校验三色，9 节点）。
+  v4：纯 tool 驱动，不隐藏，靠机器校验。替代 workflow 方案。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>测试执行 Tool — 流程设计 v4</title>
+<style>
+/* INLINE: design.css */
+
+/* === execution-plan 阶段特有样式 === */
+.wave-card { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 12px; padding: 20px 24px; margin: 18px 0; }
+.wave-card--prefactor { border-left-color: var(--amber); }
+.wave-card--gate { border-left-color: var(--green); background: var(--green-dim); }
+.wave-tag { display: inline-block; font-family: var(--font-mono); font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 5px; background: var(--accent-dim); color: var(--accent); margin-right: 8px; vertical-align: middle; }
+.wave-tag--prefactor { background: var(--amber-dim); color: var(--amber); }
+.wave-tag--gate { background: var(--green-dim); color: var(--green); }
+.kv { width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0; }
+.kv th { text-align: left; padding: 6px 12px; background: var(--surface-2); font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); width: 140px; vertical-align: top; }
+.kv td { padding: 6px 12px; border-bottom: 1px solid var(--border); }
+.kv tr:last-child td { border-bottom: none; }
+.checklist { list-style: none; padding: 0; }
+.checklist li { font-size: 13px; line-height: 1.6; padding: 5px 0 5px 26px; position: relative; }
+.checklist li::before { content: '☐'; position: absolute; left: 4px; color: var(--accent); font-size: 14px; }
+.checklist code { font-family: var(--font-mono); font-size: 11px; background: var(--surface-2); color: var(--text-dim); padding: 1px 5px; border-radius: 3px; }
+.api-sig { font-family: var(--font-mono); font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; margin: 8px 0 12px; color: var(--text-dim); }
+.api-sig b { color: var(--accent); }
+.api-sig .arg { color: var(--orange); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" id="toc">
+  <div class="toc-title">目录</div>
+  <a href="#tldr">TL;DR</a>
+  <a href="#overview">流程总览</a>
+  <a href="#why-tool">为何用 tool 不用 workflow</a>
+  <a href="#actions">四个 action 详解</a>
+  <a href="#state-calc">状态计算（核心）</a>
+  <a href="#force">两道焊死的关</a>
+  <a href="#session">软隔离（可选）</a>
+  <a href="#force-table">强制力对照</a>
+</nav>
+<main class="main">
+<header class="doc-head">
+  <h1>测试执行 Tool v4</h1>
+  <p class="subtitle">execute-enforce-e2e · 纯 tool 驱动 · 全局可见但谎报过不了 · 不需隐藏</p>
+  <div class="badge-row">
+    <span class="wave-tag">tool: get/complete/get-result</span>
+    <span class="wave-tag wave-tag--prefactor">状态闭包</span>
+    <span class="wave-tag wave-tag--gate">机器重算 status</span>
+    <span class="wave-tag">schema 拒收残缺</span>
+  </div>
+</header>
+
+<!-- TL;DR -->
+<div class="wave-card" id="tldr" style="border-left-color: var(--accent);">
+  <h2><span class="wave-tag">TL;DR</span>核心结论</h2>
+  <ul class="checklist" style="list-style: disc; padding-left: 20px;">
+    <li style="padding-left:0;"><b>不用 workflow，用 tool</b>。tool 能管状态（闭包 state）+ 强制参数（typebox schema）+ 拒收非法操作（throw），恰好满足「状态计算 + 上报校验」需求。</li>
+    <li style="padding-left:0;"><b>tool 全局可见，但谎报过不了</b>。「tool 只在 workflow 暴露」不可行（pi extension tool 是进程级注册，无 scoped 机制）。但<b>不需要隐藏</b>——<code>complete</code> 的机器校验焊死后，主 agent 传假证据直接 throw 拒收。</li>
+    <li style="padding-left:0;"><b>状态计算：AI 只传证据，status 机器重算</b>。<code>complete(caseId, actual, screenshotPath)</code> → 机器校验截图存在 + 拿 expected 逐字段比对 → 重算 pass/fail。AI 填的 status <b>丢弃</b>。</li>
+    <li style="padding-left:0;"><b>两道焊死的关</b>：① <code>complete</code> schema 强制 actual+screenshot，缺则 tool 层拒收；② <code>get-result</code> 全覆盖拒绝，未完成 throw 阻塞 goal complete。</li>
+    <li style="padding-left:0;"><b>soft 隔离可选</b>：sessionId 机制防误用/干扰，但不防恶意（真防恶意靠机器校验）。</li>
+  </ul>
+</div>
+
+<!-- hero-diagram -->
+<div class="diagram-shell">
+  <p class="diagram-shell__hint">tool 四 action 交互流 · 绿=机器校验 · 琥珀=AI 调用 · 灰虚=机器判定 · 红=throw 阻塞</p>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button data-action="zoom-in" title="放大">+</button>
+      <button data-action="zoom-out" title="缩小">−</button>
+      <button data-action="zoom-fit" title="适配">⊡</button>
+      <button data-action="zoom-one" title="1:1">1:1</button>
+      <button data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">— contain</span>
+    </div>
+    <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+flowchart TD
+  A([coding-execute 启动]) --> B
+  B["主 agent 调<br/>init(planPath)"]:::caller
+  B --> C["机器解析 plan<br/>缓存用例+expected<br/>返回 sessionId"]:::machine
+  C --> D
+  subgraph loop [real 层循环：AI 驱动 + 机器校验]
+    direction TB
+    D["subagent 调<br/>get(sessionId)"]:::caller
+    D --> E["机器返回下一个 pending 用例<br/>+预期/步骤/fixture<br/>标记 in-progress"]:::machine
+    E --> F["subagent 跑 browser skill<br/>收集证据 actual+screenshot"]:::caller
+    F --> G["subagent 调<br/>complete(sessionId, caseId,<br/>actual, screenshotPath)"]:::caller
+    G --> H{"机器校验<br/>截图存在 + 重算 status"}:::judge
+    H -->|拒收| D
+  end
+  H -->|全用例 complete| I
+  I["收尾门调<br/>get-result(sessionId)"]:::caller
+  I --> J{"机器校验<br/>全覆盖 + 全 pass"}:::judge
+  J -->|有 pending| K([throw 阻塞<br/>goal complete 失败]):::fail
+  J -->|全过| L([返回结果<br/>goal 可 complete]):::pass
+  classDef machine fill:#0d2922,stroke:#34d399,stroke-width:2px,color:#6ee7b7
+  classDef caller fill:#38250d,stroke:#fbbf24,stroke-width:2px,color:#fde68a
+  classDef judge fill:#1a202c,stroke:#94a3b8,stroke-width:2px,stroke-dasharray:5 5,color:#e2e8f0
+  classDef fail fill:#2a0d0d,stroke:#f87171,stroke-width:2px,color:#fca5a5
+  classDef pass fill:#0d2922,stroke:#34d399,stroke-width:2px,color:#6ee7b7
+  </script>
+</div>
+
+<!-- 流程总览 -->
+<div id="overview">
+  <h2>流程总览</h2>
+  <table class="data-table">
+    <thead><tr><th>阶段</th><th>谁做</th><th>调用</th><th>机器校验</th></tr></thead>
+    <tbody>
+      <tr><td>初始化</td><td>主 agent（一次）</td><td><code>init(planPath)</code></td><td>解析 plan，校验格式，缓存用例+expected</td></tr>
+      <tr><td>领任务</td><td>subagent（循环）</td><td><code>get(sessionId)</code></td><td>返回下一个 pending，标记 in-progress（防重复认领）</td></tr>
+      <tr><td>跑 + 上报</td><td>subagent</td><td>browser skill + <code>complete(...)</code></td><td>截图存在 + actual 逐字段比对 expected → 重算 status</td></tr>
+      <tr><td>收尾门</td><td>主 agent</td><td><code>get-result(sessionId)</code></td><td>全覆盖 + 全 pass 才返回，否则 throw</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- 为何用 tool -->
+<div id="why-tool">
+  <h2>为何用 tool 不用 workflow</h2>
+  <table class="data-table">
+    <thead><tr><th>维度</th><th>workflow 方案</th><th>tool 方案</th></tr></thead>
+    <tbody>
+      <tr><td>状态管理</td><td>fs 读写 json（双方都碰）</td><td>闭包 state（单点管理，todo 模式）</td></tr>
+      <tr><td>参数强制</td><td>无（prompt 要求）</td><td><b>typebox schema 层拒收残缺</b></td></tr>
+      <tr><td>谎报防护</td><td>靠 json 格式约定</td><td><b>complete schema + 机器重算 status</b></td></tr>
+      <tr><td>全覆盖校验</td><td>脚本 fs 读 json 自查</td><td><b>get-result throw 拒绝</b></td></tr>
+      <tr><td>跨进程限制</td><td>worker 线程不能调 tool</td><td>无（tool 是 pi 原生机制）</td></tr>
+      <tr><td>驱动循环</td><td>机器 JS（物理不可跳）</td><td>AI prompt（可跳，收尾门兜底）</td></tr>
+      <tr><td>实现成本</td><td>高（跨包改 workflow）</td><td>中（单 tool，复用 todo 模式）</td></tr>
+    </tbody>
+  </table>
+  <div class="callout callout--info">
+    <p><b>核心取舍</b>：tool 放弃了 workflow 的「物理不可跳」（AI 可选择不跑），换来更强的「上报必须真实」（schema + 机器重算）。<b>上报真实性比驱动不可跳更重要</b>——即使 AI 跳了，收尾门（get-result throw）兜底，goal complete 不了；但 AI 跑了谎报，tool 方案下过不了机器校验，workflow 方案下 json 自由格式可能漏。</p>
+  </div>
+</div>
+
+<!-- 四个 action -->
+<div id="actions">
+  <h2>四个 action 详解</h2>
+
+  <h3>① init — 主 agent 调一次</h3>
+  <div class="api-sig"><b>init</b>(<span class="arg">planPath</span>: string) → { sessionId, caseCount, layers }</div>
+  <ul class="checklist">
+    <li>读 plan.md，机器解析 mock 命令 + real 用例清单（ID/预期/步骤/fixture）</li>
+    <li>校验 plan 格式（复用 check_plan.py 逻辑：测试层、expected 具体值、real ≥1）</li>
+    <li>生成 sessionId（uuidv7），存进闭包 state</li>
+    <li>格式不合法 → throw（plan 设计阶段就该过 check_plan.py，这里是兜底）</li>
+  </ul>
+
+  <h3>② get — subagent 循环调</h3>
+  <div class="api-sig"><b>get</b>(<span class="arg">sessionId</span>: string) → { caseId, layer, expected, steps, fixture } | null</div>
+  <ul class="checklist">
+    <li>返回下一个 status=pending 的用例，标记 in-progress（防多 subagent 重复认领）</li>
+    <li>返回完整上下文：expected（机器用于后续重算）+ steps + fixture 位置</li>
+    <li>无 pending → null（信号：该层跑完，可进收尾门）</li>
+    <li>sessionId 不匹配 → throw</li>
+  </ul>
+
+  <h3>③ complete — subagent 跑完调（核心）</h3>
+  <div class="api-sig"><b>complete</b>(<span class="arg">sessionId</span>, <span class="arg">caseId</span>, <span class="arg">actual</span>: {url?, text?, domAttr?...}, <span class="arg">screenshotPath</span>: string) → { machineStatus, verifiedAt }</div>
+  <ul class="check-list" style="list-style:none;padding:0;">
+    <li style="padding:5px 0 5px 26px;position:relative;"><span style="position:absolute;left:4px;color:var(--accent);">🔒</span><b>typebox schema 强制</b>：<code>actual</code> 必须对象且非空，<code>screenshotPath</code> 必填。缺任一 → tool 层 throw 拒收（AI 拿不到「上报成功」）</li>
+    <li style="padding:5px 0 5px 26px;position:relative;"><span style="position:absolute;left:4px;color:var(--accent);">🔒</span><b>机器校验证据</b>：<code>fs.existsSync(screenshotPath)</code> → 不存在 throw</li>
+    <li style="padding:5px 0 5px 26px;position:relative;"><span style="position:absolute;left:4px;color:var(--accent);">🔒</span><b>机器重算 status</b>：拿 init 缓存的 expected，与 actual 逐字段比对 → pass/fail。<b>AI 传的 status 参数（若有）丢弃</b></li>
+    <li>存状态：{ caseId, machineStatus, actual, screenshotPath, verifiedAt }</li>
+    <li>返回 machineStatus（AI 拿到机器判定，可决定是否重试）</li>
+  </ul>
+
+  <h3>④ get-result — 收尾门调</h3>
+  <div class="api-sig"><b>get-result</b>(<span class="arg">sessionId</span>) → { allPassed, cases: [{id, status, evidence}], coverage } <b>| throw</b></div>
+  <ul class="checklist">
+    <li>校验全用例 completed（无 pending / in-progress 遗留）→ 否则 throw</li>
+    <li>校验全 pass → 否则 throw</li>
+    <li>返回聚合结果（每条用例的机器判定 status + 证据路径）</li>
+    <li><b>这是收尾门的硬阻塞</b>：<code>goal_control(complete)</code> 前必须先调 get-result，throw 则 goal complete 失败</li>
+  </ul>
+</div>
+
+<!-- 状态计算 -->
+<div id="state-calc">
+  <h2>状态计算（核心机制）</h2>
+  <div class="callout callout--info">
+    <p><b>一句话</b>：AI 调 complete 时只传「证据」，status 由机器重算，AI 填的丢弃。</p>
+  </div>
+  <h3>为何这样设计</h3>
+  <ul class="checklist">
+    <li><b>AI 自报 status 不可信</b>：AI 可能跑都没跑，直接传 <code>status: pass</code>。若采信，谎报成功。</li>
+    <li><b>AI 传实际观测值 actual 可信（有证据约束）</b>：actual 是 AI browser skill 抓到的真实 DOM/URL/text。配合 screenshotPath 存在性校验，AI 必须真跑了浏览器才能产出这些。</li>
+    <li><b>expected 来自 plan（机器解析缓存）</b>：check_plan.py 已强制 plan 的 expected 是具体值（如 <code>url === '/profile'</code>），不是模糊描述。机器拿这个具体值比对。</li>
+    <li><b>比对在 tool 内部（机器 JS）</b>：AI 摸不到比对逻辑。AI 只能传 actual，pass/fail 是机器算的。</li>
+  </ul>
+  <h3>状态生命周期</h3>
+  <table class="data-table">
+    <thead><tr><th>status</th><th>何时设置</th><th>谁设</th></tr></thead>
+    <tbody>
+      <tr><td>pending</td><td>init 时（plan 解析）</td><td>机器</td></tr>
+      <tr><td>in-progress</td><td>get 返回时</td><td>机器</td></tr>
+      <tr><td>passed / failed</td><td>complete 时（expected vs actual 比对）</td><td><b>机器</b>（AI 传的丢弃）</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- 两道焊死的关 -->
+<div id="force">
+  <h2>两道焊死的关</h2>
+  <div class="wave-card wave-card--gate">
+    <h3><span class="wave-tag wave-tag--gate">关 1</span>complete 的 schema + 机器校验</h3>
+    <table class="kv">
+      <tr><th>防线 1</th><td>typebox schema：<code>actual</code> 非空对象 + <code>screenshotPath</code> 必填。缺 → tool 层 throw 拒收</td></tr>
+      <tr><th>防线 2</th><td>机器 <code>fs.existsSync(screenshotPath)</code>：AI 没真跑浏览器就没截图 → throw</td></tr>
+      <tr><th>防线 3</th><td>机器重算 status：expected（plan 缓存）vs actual（AI 传）逐字段比对。AI 填的 status 丢弃</td></tr>
+    </table>
+    <p><b>三层叠加</b>：AI 必须真跑、必须截图、必须实际值对得上 plan 预期。任一缺失过不了。</p>
+  </div>
+  <div class="wave-card wave-card--gate">
+    <h3><span class="wave-tag wave-tag--gate">关 2</span>get-result 的全覆盖拒绝</h3>
+    <table class="kv">
+      <tr><th>触发</th><td><code>goal_control(complete)</code> 前主 agent 必调</td></tr>
+      <tr><th>校验</th><td>全用例 completed + 全 pass，否则 throw</td></tr>
+      <tr><th>效果</th><td>AI 跳过任一用例没调 complete → 该用例仍 pending → get-result throw → goal complete 失败</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- 软隔离 -->
+<div id="session">
+  <h2>软隔离（可选，不防恶意）</h3>
+  <div class="callout callout--warn">
+    <p><b>为何「不隐藏」仍安全</b>：tool 全局可见，但主 agent 调 <code>complete</code> 传假证据 → 机器校验 throw；调 <code>get-result</code> 提前放行 → 全覆盖校验 throw。<b>机器校验让全局可见变得无害</b>。</p>
+  </div>
+  <p>若仍想防误用/干扰（非恶意），加 sessionId 机制（照搬 todo 闭包 state）：</p>
+  <ul class="checklist">
+    <li><code>init</code> 创建 session，返回 sessionId；后续 action 必须带 sessionId</li>
+    <li>主 agent 不跑 workflow 就拿不到 sessionId → 调啥都 throw</li>
+    <li><b>局限</b>：主 agent 能自己调 <code>init</code> 拿 sessionId。真防恶意靠机器校验（关 1/关 2），不靠 sessionId</li>
+  </ul>
+</div>
+
+<!-- 强制力对照表 -->
+<div id="force-table">
+  <h2>强制力对照表</h2>
+  <p>核心：标「机器」的环节 AI 完全碰不到。tool 把「上报真实性」和「全覆盖」两道关焊死。</p>
+  <table class="data-table">
+    <thead><tr><th>环节</th><th>执行者</th><th>AI 能否干预</th><th>强制机制</th></tr></thead>
+    <tbody>
+      <tr><td>plan 解析 + expected 缓存</td><td>机器</td><td><b>否</b></td><td>init 时 fs 读 + 正则解析</td></tr>
+      <tr><td>用例分配（get）</td><td>机器</td><td><b>否</b></td><td>闭包 state 遍历，标记 in-progress</td></tr>
+      <tr><td>real 用例执行</td><td>AI</td><td><b>是</b></td><td>subagent + browser skill</td></tr>
+      <tr><td>证据上报（complete）</td><td>AI</td><td><b>是（受限）</b></td><td>schema 强制 actual+screenshot，缺则拒收</td></tr>
+      <tr><td>status 判定</td><td>机器</td><td><b>否</b></td><td>expected vs actual 逐字段重算，AI 填的丢弃</td></tr>
+      <tr><td>全覆盖校验（get-result）</td><td>机器</td><td><b>否</b></td><td>有 pending → throw 阻塞 goal complete</td></tr>
+      <tr><td>驱动循环（AI 主动去跑）</td><td>AI</td><td><b>是</b></td><td>⚠ 可跳过，收尾门兜底</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="callout callout--info">
+  <p><b>v4 确定方向</b>：纯 tool 驱动（get/complete/get-result），不隐藏，靠 schema + 机器重算 status + 全覆盖 throw 三重校验。可开始落地 tool 扩展。</p>
+</div>
+
+<footer class="doc-foot">execute-enforce-e2e · 测试执行 Tool v4 · 纯 tool 驱动 + 机器重算 status + 全覆盖拒绝</footer>
+</main>
+</div>
+
+<script type="module">/* INLINE: zoom.js */</script>
+</body>
+</html>

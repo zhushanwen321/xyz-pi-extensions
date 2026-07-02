@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>execute workflow 设计（修正版）</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+  window.addEventListener('error', function(e){
+    document.getElementById('err').textContent = 'JS错误: ' + e.message;
+  });
+</script>
+<style>
+  :root {
+    --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #e6edf3;
+    --dim: #8b949e; --teal: #2dd4bf; --orange: #fb923c; --amber: #facc15;
+    --font-body: -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px 24px 56px; background: var(--bg); color: var(--text);
+    font-family: var(--font-body); font-size: 15px; line-height: 1.7; max-width: 1000px; margin: 0 auto; }
+  header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+  h1 { font-size: 24px; margin: 0 0 6px; color: var(--teal); }
+  .subtitle { color: var(--dim); font-size: 13px; margin: 0; }
+  #err { color: var(--orange); font-size: 13px; }
+  section { margin: 36px 0; }
+  h2.sec { font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-top: 0; }
+  .diagram { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; overflow: auto; }
+  .mermaid { display: flex; justify-content: center; min-width: max-content; }
+  .note { color: var(--dim); font-size: 14px; margin-top: 10px; }
+  .note strong { color: var(--text); }
+  .legend { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 12px; font-size: 13px; color: var(--dim); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 12px; height: 12px; border-radius: 3px; border: 1.5px solid; display: inline-block; }
+  .dot-m { background: #0d3b3b; border-color: var(--teal); }
+  .dot-a { background: #4a1f0a; border-color: var(--orange); }
+  .dot-g { background: #3a2f08; border-color: var(--amber); border-radius: 50%; }
+  .qa { background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--teal);
+    border-radius: 0 6px 6px 0; padding: 12px 16px; margin: 12px 0; }
+  .qa h3 { margin: 0 0 6px; font-size: 14px; color: var(--teal); }
+  .qa p { margin: 0; font-size: 14px; }
+  footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--border); color: var(--dim); font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>execute workflow 设计（修正版）</h1>
+  <p class="subtitle">修 mermaid 渲染 · 修正测试执行冗余 · 明确状态与并发管理</p>
+  <div id="err"></div>
+</header>
+
+<section>
+  <h2 class="sec">一、大流程（5 个模块）</h2>
+  <p class="note">读 plan → 开发 → 测试 → 机器判定 → 收尾。失败回开发重做，限 3 轮。</p>
+  <div class="diagram">
+    <pre class="mermaid">
+flowchart LR
+    In([plan.md]):::input
+    M1[1.解析任务]:::machine
+    M2[2.开发 写代码]:::agent
+    M3[3.测试验收]:::agent
+    M4{4.机器门 全绿?}:::gate
+    M5[5.收尾 完成]:::machine
+    In --> M1 --> M2 --> M3 --> M4
+    M4 -- 是 --> M5
+    M4 -. 否 回重做 .-> M2
+    classDef machine fill:#0d3b3b,stroke:#2dd4bf,color:#e6fffa
+    classDef agent fill:#4a1f0a,stroke:#fb923c,color:#ffedd5
+    classDef gate fill:#3a2f08,stroke:#facc15,color:#fefce8
+    classDef input fill:#21262d,stroke:#8b949e,color:#e6edf3
+    </pre>
+  </div>
+  <div class="legend">
+    <span><span class="dot dot-m"></span>机器自动（AI 管不着）</span>
+    <span><span class="dot dot-a"></span>派 AI subagent</span>
+    <span><span class="dot dot-g"></span>判定门</span>
+  </div>
+</section>
+
+<section>
+  <h2 class="sec">二、测试执行分工（Q4 冗余修正 · 核心）</h2>
+  <p class="note">原来设计了两条「跑测试」路径，重复。现按测试层分工：<strong>跑测试只有一处</strong>。</p>
+  <div class="diagram">
+    <pre class="mermaid">
+flowchart TD
+    Start[开始测试验收]:::machine
+    subgraph Mock层 [mock 层 · 单测 + mock E2E · 环境简单]
+        direction LR
+        MM[机器门直接跑<br/>execSync 测试命令<br/>解析 coverage-summary.json<br/>真产物 不可伪造]:::machine
+    end
+    subgraph Real层 [real 层 · 真实集成 E2E · 环境复杂]
+        direction LR
+        RT[test-runner subagent 跑<br/>多轮 session<br/>起服务 等就绪 跑测试]:::agent
+        RV[机器门校验它产出的报告<br/>+ user_confirm_ref<br/>用户确认跳过的凭证]:::machine
+        RT --> RV
+    end
+    Start --> MM
+    Start --> RT
+    MM --> Merge{两层都过?}:::gate
+    RV --> Merge
+    Merge -. 否 回开发 .-> Dev[失败循环 限3轮]
+    classDef machine fill:#0d3b3b,stroke:#2dd4bf,color:#e6fffa
+    classDef agent fill:#4a1f0a,stroke:#fb923c,color:#ffedd5
+    classDef gate fill:#3a2f08,stroke:#facc15,color:#fefce8
+    </pre>
+  </div>
+  <div class="qa">
+    <h3>为什么这么分</h3>
+    <p>mock 层不需要复杂环境，机器门直接跑最可靠（AI 编不了 coverage 产物）。real 层要起服务/真实 DB，一个 subagent 的多轮 session 才搞得定，但它产出的报告可伪造——所以机器门只做「报告完整性校验 + 用户确认凭证」。</p>
+  </div>
+</section>
+
+<section>
+  <h2 class="sec">三、状态管理（Q1 + 综合）</h2>
+  <p class="note">三层状态，按「丢了能不能恢复」分级。</p>
+  <div class="diagram">
+    <pre class="mermaid">
+flowchart LR
+    subgraph 内存层 [内存层 · worker 线程内的 JS 变量]
+        direction LR
+        V1[当前第几个依赖层<br/>循环计数器]:::machine
+        V2[本次 agent 返回值<br/>马上消费]:::machine
+    end
+    subgraph 落盘层 [落盘层 · 防 worker 崩溃重建]
+        direction LR
+        F1[parsed-plan.json<br/>解析出的 waves + cases<br/>崩溃后能重跑]:::machine
+        F2[test-results.json<br/>每条用例状态<br/>增量更新]:::machine
+    end
+    subgraph 框架层 [框架层 · workflow 引擎管]
+        direction LR
+        T1[trace 记录<br/>每个 agent-call 的 status]:::machine
+        T2[run.meta 重试计数<br/>跨 worker 重建存活]:::machine
+    end
+    classDef machine fill:#0d3b3b,stroke:#2dd4bf,color:#e6fffa
+    </pre>
+  </div>
+  <div class="qa">
+    <h3>关键事实</h3>
+    <p>worker 崩溃重试会 <code>rebuildRuntime</code>（源码 error-recovery.ts）——整个线程重建，<strong>内存变量丢失</strong>。所以解析结果必须落盘，不能只靠内存。run.meta 的重试计数跨重建存活（框架保证）。</p>
+  </div>
+</section>
+
+<section>
+  <h2 class="sec">四、并发管理（Q2 + 综合）</h2>
+  <p class="note">两层并发，不同机制管。核心：写码可并行，git 操作必须串行。</p>
+  <div class="diagram">
+    <pre class="mermaid">
+flowchart TD
+    subgraph 写码阶段 [写码 · 可并行]
+        direction LR
+        W1[implementer 1<br/>worktree-A]:::agent
+        W2[implementer 2<br/>worktree-B]:::agent
+        W3[implementer 3<br/>worktree-C]:::agent
+    end
+    Gate[ConcurrencyGate<br/>源码 concurrency-gate.ts<br/>最多同时跑 4 个<br/>FIFO 排队]:::machine
+    subgraph 合并阶段 [合并 · 必须串行]
+        direction LR
+        G1[lightmerge add 分支1<br/>git index 单点]:::machine
+        G2[lightmerge add 分支2<br/>等上一个完]:::machine
+        G3[lightmerge add 分支3<br/>等上一个完]:::machine
+    end
+    W1 --> Gate
+    W2 --> Gate
+    W3 --> Gate
+    Gate -- 全部写完 --> G1 --> G2 --> G3
+    classDef machine fill:#0d3b3b,stroke:#2dd4bf,color:#e6fffa
+    classDef agent fill:#4a1f0a,stroke:#fb923c,color:#ffedd5
+    </pre>
+  </div>
+  <div class="qa">
+    <h3>为什么 git 必须串行</h3>
+    <p>三个 implementer 同时 <code>lightmerge add</code> 会抢同一个 git index（<code>.git/index</code> 是单点资源），产生锁冲突或索引损坏。<strong>并行写码靠文件系统隔离（各自 worktree），串行合并靠 JS for 循环序列化</strong>——这是脚本控制流的事，不需要特殊机制。</p>
+  </div>
+</section>
+
+<section>
+  <h2 class="sec">五、开发循环内部（Q3 失败谁修）</h2>
+  <p class="note">implementer 写完某一层 → 跑覆盖率 → 没过就派 implementer 补，同一层内循环。</p>
+  <div class="diagram">
+    <pre class="mermaid">
+flowchart TD
+    A[派 N 个 implementer<br/>并行写这一层的 Wave]:::agent
+    B[等全部完成]:::machine
+    C[合并 + 跑覆盖率 gate]:::machine
+    D{覆盖率 ≥ 60%?}:::gate
+    E[进下一依赖层]:::machine
+    F[派 implementer 补测试<br/>带失败详情]:::agent
+    G{已补 3 轮?}:::gate
+    H[Stagnation 暂停<br/>报告用户]:::machine
+    A --> B --> C --> D
+    D -- 是 --> E
+    D -- 否 --> F --> G
+    G -- 否 --> C
+    G -- 是 --> H
+    classDef machine fill:#0d3b3b,stroke:#2dd4bf,color:#e6fffa
+    classDef agent fill:#4a1f0a,stroke:#fb923c,color:#ffedd5
+    classDef gate fill:#3a2f08,stroke:#facc15,color:#fefce8
+    </pre>
+  </div>
+</section>
+
+<footer>修正版 · 基于 extensions/workflow 源码：concurrency-gate.ts / error-recovery.ts / subprocess-agent-runner.ts</footer>
+
+</body>
+</html>
