@@ -7,8 +7,11 @@ import type { ResolvedSessionContext, SessionResolveInput } from "../types.ts";
 import { ForkDepthExceededError } from "../types.ts";
 import { getSubagentSessionDir } from "./path-encoding.ts";
 
-/** fork 深度硬限。 */
-const MAX_FORK_DEPTH = 10;
+/**
+ * fork 深度硬限。export 供 session-runner 注入 LLM env block 时引用同一常量，
+ * 避免硬限（拦截）与展示（`N/10`）两处 10 漂移。
+ */
+export const MAX_FORK_DEPTH = 10;
 
 /**
  * 纯函数：解析 fork/worktree 意图 → 执行上下文。

@@ -515,6 +515,8 @@ export type SubagentToolResult =
 export interface SubagentRecord {
   id: string;
   agent: string;
+  /** 任务提示词（详情面板置顶展示）。磁盘/内存源均有。 */
+  task: string;
   status: ExecutionStatus;
   mode: ExecutionMode;
   startedAt: number;
@@ -530,6 +532,8 @@ export interface SubagentRecord {
   model: string;
   thinkingLevel: string | undefined;
   eventLog: AgentEventLogEntry[];
+  /** running 时的当前活动行（仅内存源；磁盘重建无此数据）。streaming 可观测性用。 */
+  currentActivity?: { type: "tool" | "text" | "thinking"; label: string };
   result?: string;
   error?: string;
   sessionFile?: string;

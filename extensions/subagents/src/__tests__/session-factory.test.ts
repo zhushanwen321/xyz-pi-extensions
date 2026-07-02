@@ -165,6 +165,19 @@ describe("buildAppendSystemPrompt", () => {
     expect(result.length).toBe(2);
     expect(result[1]).toBe("frag");
   });
+
+  // ── forkDepth 注入（D-030）──
+
+  it("forkDepth 为正数时 env block 含 'Fork depth: N/10'", () => {
+    const result = buildAppendSystemPrompt(["frag"], "/cwd", undefined, 3);
+    expect(result.length).toBe(2);
+    expect(result[0]).toContain("Fork depth: 3/10");
+  });
+
+  it("forkDepth 未传时不注入 fork depth 行（非 fork session 不显示深度）", () => {
+    const result = buildAppendSystemPrompt(["frag"], "/cwd");
+    expect(result[0]).not.toContain("Fork depth:");
+  });
 });
 
 // ============================================================
@@ -202,5 +215,21 @@ describe("buildEnvBlock", () => {
     const second = buildEnvBlock(uniqueCwd);
     expect(second).toBe(first);
     expect(second).not.toContain("Git branch:"); // 缓存的是空分支
+  });
+
+  // ── forkDepth 注入（D-030）──
+
+  it("forkDepth 为正数时注入 'Fork depth: N/10' 行", () => {
+    const uniqueCwd = `/tmp/sf-fork-${Date.now()}-${Math.random()}`;
+    const block = buildEnvBlock(uniqueCwd, 7);
+    expect(block).toContain("Fork depth: 7/10");
+  });
+
+  it("forkDepth 为 0/undefined/负数时不注入 fork depth 行", () => {
+    const uniqueCwd = `/tmp/sf-nofork-${Date.now()}-${Math.random()}`;
+    for (const fd of [undefined, 0, -1] as const) {
+      const block = buildEnvBlock(uniqueCwd, fd);
+      expect(block).not.toContain("Fork depth:");
+    }
   });
 });

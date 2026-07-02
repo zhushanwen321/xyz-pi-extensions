@@ -11,7 +11,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { getEventLog, markReconstructedStatus, snapshot as toSnapshot } from "../../core/execution-record.ts";
+import { getCurrentActivity, getEventLog, markReconstructedStatus, snapshot as toSnapshot } from "../../core/execution-record.ts";
 import { reconstructFromFile } from "../../core/session-reconstructor.ts";
 import type {
   ExecutionRecord,
@@ -238,6 +238,9 @@ export class RecordStore {
         totalTokens: recon.totalTokens,
         model: recon.model,
         thinkingLevel: recon.thinkingLevel,
+        task: recon.task,
+        // 磁盘重建是离线快照，无实时活动状态。
+        currentActivity: undefined,
         eventLog: recon.eventLog,
         result: recon.result,
         error: recon.error,
@@ -306,6 +309,8 @@ export class RecordStore {
       totalTokens: r.totalTokens,
       model: r.model,
       thinkingLevel: r.thinkingLevel,
+      task: r.task,
+      currentActivity: getCurrentActivity(r),
       eventLog: getEventLog(r),
       result: r.result,
       error: r.error,

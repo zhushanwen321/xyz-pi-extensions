@@ -82,6 +82,7 @@ graph TB
   - AC-1.1 [正常]: fork:true 时，子 agent 首次 prompt 的 SessionContext.messages 非空且包含主 agent 最近的历史
   - AC-1.2 [异常]: 主 session 为空或损坏时，pi SDK forkFrom/createBranchedSession 抛错（"Cannot fork: source session file is empty or invalid"，session-manager.ts:1444）→ finalizeFailed（不崩溃，按现有失败模式收尾）。`[BACKFED from ⑤code-arch 一致性终检]` 原替代流程（line 74「主 session 未 flush → 降级 from-scratch 启动」）经 D-018 演进：fork 统一经 pi SDK createBranchedSession/forkFrom，SDK 对空/损坏源抛错而非降级，故 empty 与 corrupt 合并为同一 hard-failure 路径（T1.3 验证）。替代流程 line 74 此条作废
   - AC-1.3 [边界]: fork 嵌套第 11 层被拒绝并报明确错误
+  - AC-1.4 [可观测] `[from D-030]`: fork 子 agent 的环境块含 `Fork depth: N/10`，子 agent 可感知自身嵌套层级与剩余预算；非 fork 子 agent 不注入（不在 fork 链中）。配套 subagent tool description 含 Nested spawning 授权说明，避免保守模型误判嵌套被禁
 
 ### UC-2: 子 agent 在独立 git worktree 中运行
 

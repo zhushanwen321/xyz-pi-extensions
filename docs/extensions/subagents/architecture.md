@@ -105,7 +105,7 @@ Core 内部进一步分两子层，依赖严格自上而下，禁止反向或同
 | `execution-record.ts` | 唯一状态对象（turns[] 收口）+ 创建/更新/完成/投影/派生入口 | ✅ |
 | `model-resolver.ts` | 5 级 fallback 模型解析链 + category 推断 | ✅ |
 | `agent-registry.ts` | agent `.md` 文件发现与解析（hot-reload） | ✅ |
-| `concurrency-pool.ts` | 并发控制 + 优先级排队（sync=0，bg=1000），maxConcurrent 下限 1 | ✅ |
+| `concurrency-pool.ts` | 并发控制 + 优先级排队（仅 background 进池，bg=1000），maxConcurrent 下限 1。sync 不进池（D-032），避免嵌套持有槽位死锁 | ✅ |
 | `turn-limiter.ts` | soft/hard turn 限制器（steer + abort） | ✅ |
 | `path-encoding.ts` | cwd → 安全目录名编码（session-runner + session-file-gc 共享，消除旧重复） | ✅ |
 

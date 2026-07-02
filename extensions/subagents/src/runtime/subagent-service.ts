@@ -24,6 +24,7 @@ import {
 } from "../core/execution-record.ts";
 import type { AgentConfig, ModelInfo } from "../core/model-resolver.ts";
 import { getSubagentSessionDir } from "../core/path-encoding.ts";
+import { MAX_FORK_DEPTH } from "../core/session-context-resolver.ts";
 import { getSdk, run, type SessionRunnerContext } from "../core/session-runner.ts";
 import type { SdkLike, WorktreeHandle } from "../types.ts";
 import type {
@@ -38,6 +39,7 @@ import type {
   SubagentRecord,
   SubagentToolDetails,
 } from "../types.ts";
+import { ForkDepthExceededError } from "../types.ts";
 import { DEFAULT_AGENT_NAME } from "../types.ts";
 import { bestEffort } from "../utils/best-effort.ts";
 import { removeAliveMarker } from "./execution/alive-store.ts";
@@ -97,6 +99,14 @@ const TRIGGERING_EVENT_TYPES = new Set<AgentEvent["type"]>([
   "error",
   "compaction",
 ]);
+
+/**
+ * onUpdate 最小发射间隔（ms）。leading + trailing 时间窗节流：窗口内首次事件立即发，
+ * 后续合并到窗口末尾补发一次。与 tool-render.ts SPINNER_INTERVAL_MS 对齐——视觉刷新
+ * 200ms 一帧，onUpdate 比这更快无感知增益，反而密集打 Pi tool_execution_update
+ * （嵌套场景内层一秒可产生 10+ 事件）触发 chatContainer 重绘残影。
+ */
+const ON_UPDATE_MIN_INTERVAL_MS = 200;
 
 /** resolveIdentity 的产物——一次确定、写入 record 后不再变。 */
 interface ResolvedIdentity {
@@ -176,6 +186,10 @@ export class SubagentService {
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
+    for (const s of this.throttleState.values()) {
+      if (s.timer !== undefined) clearTimeout(s.timer);
+    }
+    this.throttleState.clear();
     this.notifier.flushPendingNotifications();
     this.store.dispose();
     this.notifier.dispose();
@@ -215,6 +229,20 @@ export class SubagentService {
    */
   async execute(opts: ExecuteOptions): Promise<ExecutionHandle> {
     this.assertReady();
+
+    // 通用嵌套深度护栏（D-033）：execCtxAls 记录所有 subagent 嵌套层级（fork + 非 fork），
+    // 每层 +1。MAX_FORK_DEPTH 同时限 fork 链与通用嵌套——非 fork 递归虽不累积 session 体积，
+    // 但耗资源（每层 createAgentSession + resourceLoader + session 文件）且 LLM 易陷入
+    // 「委派子 agent → 子 agent 再委派」死循环（实测无护栏时递归到 L36 全 failed）。
+    // 在所有副作用（record/worktree/session）之前拦截，错误直达调用方。
+    // fork:true 的体积护栏（resolveSessionContext 的 parentForkDepth 检查）作为第二层保留。
+    const parentNesting = this.execCtxAls.getStore();
+    const nestingDepth = parentNesting ? parentNesting.depth + 1 : 0;
+    if (nestingDepth > MAX_FORK_DEPTH) {
+      throw new ForkDepthExceededError(
+        `subagent nesting depth ${nestingDepth} > ${MAX_FORK_DEPTH} (max recursion), refusing to spawn deeper`,
+      );
+    }
 
     // [MF#7] worktree:true 需要 fork:true——否则下面三个 worktree 分支都不命中，
     // worktreeHandle 恒 undefined → 子 agent 零文件隔离且零报错（静默 no-op）。此处在
@@ -264,7 +292,17 @@ export class SubagentService {
 
     // ── 4-7. sync 直接 await；background 包 detached 立即返回 id ──
     if (mode === "sync") {
-      await this.runAndFinalize(record, { ...opts, worktree: worktreeHandle }, ctx, identity, signal, priority);
+      // [长期方案] 嵌套 sync（subagent 内部再发起 subagent）不回流 onUpdate。
+      // 根因：递归 sync 时，内层 subagent 的 SubagentResultComponent 也启动 setInterval 驱动
+      // spinner，与外层 block 的 setInterval 在 Pi 嵌套 tool_execution 渲染管线下互相干扰，
+      // 导致 statusLine 帧堆叠残影（普通单层 sync 不残影已证 spinner 机制本身无问题）。
+      // 解法：嵌套层 onUpdate=undefined → runAndFinalize 的 onEvent=undefined → execute 期间不推
+      // partial renderResult → 内层 component 直到完成才创建（done 态）→ maybeToggleSpinner
+      // 检测非 running 不启动 setInterval。顶层回归单 setInterval，不堆叠。内层 block 仅显示
+      // renderCall 静态标题 + 完成结果（内层进度对顶层用户价值低，Ctrl+O 仍可看实时详情）。
+      // nestingDepth 在 execute 入口由 execCtxAls 推导（L2 内调 L3 时 parentNesting 非空 → ≥1）。
+      const nestedSyncOnUpdate = nestingDepth > 0 ? undefined : opts.onUpdate;
+      await this.runAndFinalize(record, { ...opts, onUpdate: nestedSyncOnUpdate, worktree: worktreeHandle }, ctx, identity, signal, priority);
       return { mode: "sync", record: snapshot(record), details: project(record) };
     }
 
@@ -409,7 +447,13 @@ export class SubagentService {
     signal: AbortSignal | undefined,
     priority: number,
   ): Promise<AgentResult> {
-    await this.pool.acquire(priority);
+    // 仅 background 进并发池限流。sync 不进池，原因：
+    // ① sync 由主 agent sequential executionMode 天然串行，无需限流；
+    // ② sync 嵌套持有槽位会死锁——顶层 + 每层 sync 各占 1 槽，嵌套深度达 maxConcurrent
+    //   时子层 acquire 永久排队、父层永等子层、release 永不触发（实测 maxConcurrent=4 → L5 卡死）。
+    // sync 嵌套深度由 MAX_FORK_DEPTH (session-context-resolver.ts) 兜底，不靠池限。
+    const pooled = record.mode === "background";
+    if (pooled) await this.pool.acquire(priority);
     // onEvent 包装：AgentEvent → onUpdate(project(record)) 回流调用方
     const onEvent = opts.onUpdate
       ? (event: AgentEvent): void => this.onEventThrottled(record, event, opts.onUpdate!)
@@ -459,7 +503,7 @@ export class SubagentService {
       result = await this.finalizeFailed(record, err);
       return result;
     } finally {
-      this.pool.release();
+      if (pooled) this.pool.release();
     }
 
     // status 唯一判定点：success ? done : (aborted ? cancelled : failed)
@@ -559,6 +603,8 @@ export class SubagentService {
     result: AgentResult,
     status: "done" | "failed" | "cancelled",
   ): Promise<void> {
+    // 终态清节流状态：防 trailing timer 在 record 归档后误发陈旧 onUpdate
+    this.clearThrottle(record.id);
     // ── Step 0: collectPatch（best-effort，D-022 patchOk 守卫）──
     // [MF#3] patchFile 写到 worktree 之外（sessionsDir/<branch>.patch），避免被 cleanup 删除；
     //        路径回填 record.patchFile，供调用方（tool result / /subagents list）应用。
@@ -650,15 +696,65 @@ export class SubagentService {
     this.notifier.notify(this.toNotifyRecord(record));
   }
 
-  /** AgentEvent 节流回流到 onUpdate（streaming delta 不触发）。 */
+  // onUpdate 节流状态（per-record Map）。每条 record（每条 onUpdate 回流链）独立节流，
+  // 避免嵌套（fork 链：主→A→B）多条 onUpdate 链争用同一份节流状态。
+  // [HISTORICAL] 旧实现用单个实例字段，注释假设“fork 嵌套串行，同时只有一条链”——错误：
+  // trailing timer 异步，B 设的 trailing 会在 B 完成、A 恢复期间触发，与 A 的同步事件争用
+  // onUpdateLastEmitAt/onUpdateTrailingTimer → A 的 onUpdate 被吞/延迟 → 主 agent 对话流
+  // A block 状态跳跃更新 → 残影。per-record 化让 A/B 各自独立节流，互不干扰。
+  private readonly throttleState = new Map<string, { lastEmitAt: number; timer?: ReturnType<typeof setTimeout> }>();
+
+  /**
+   * AgentEvent 节流回流到 onUpdate（streaming delta 不触发 + 时间窗节流）。
+   *
+   * 名为 Throttled 必须真节流——只过滤事件类型时，每个 tool_start/tool_end/turn_end
+   * 都直发 onUpdate，嵌套场景一秒 10+ 事件密集回流 → Pi tool_execution_update 密集重绘
+   * → 行数变化的流式 tool 组件在 chatContainer diff 中残影（状态行堆叠）。
+   *
+   * leading + trailing：首次事件立即发（响应性），窗口内后续合并到末尾补发一次
+   * （保证终态事件不丢——sync record 终态后 archive 移出内存，闭包持有的引用仍可 project）。
+   *
+   * 节流状态 per-record（Map）：每条 record 独立 leading/trailing 窗口。嵌套（fork 链）
+   * 时外层 A 与内层 B 各自节流，trailing timer 不会跨链污染。
+   */
   private onEventThrottled(
     record: ExecutionRecord,
     event: AgentEvent,
     onUpdate: (details: SubagentToolDetails) => void,
   ): void {
-    if (TRIGGERING_EVENT_TYPES.has(event.type)) {
+    if (!TRIGGERING_EVENT_TYPES.has(event.type)) return;
+    const state = this.throttleState.get(record.id) ?? { lastEmitAt: 0 };
+    const now = Date.now();
+    if (now - state.lastEmitAt >= ON_UPDATE_MIN_INTERVAL_MS) {
+      // leading：窗口外立即发，清掉该 record 残留的 trailing timer（避免补发陈旧状态）
+      if (state.timer !== undefined) {
+        clearTimeout(state.timer);
+        state.timer = undefined;
+      }
+      state.lastEmitAt = now;
+      this.throttleState.set(record.id, state);
       onUpdate(project(record));
+      return;
     }
+    // trailing：窗口末尾补发最新（per-record timer，不与其他 record 的 trailing 争用）。
+    if (state.timer === undefined) {
+      const wait = ON_UPDATE_MIN_INTERVAL_MS - (now - state.lastEmitAt);
+      state.timer = setTimeout(() => {
+        state.timer = undefined;
+        state.lastEmitAt = Date.now();
+        onUpdate(project(record));
+        // record 已终态且无 pending trailing → 清 entry 防 Map 无限增长
+        if (record.status !== "running") this.throttleState.delete(record.id);
+      }, wait);
+      this.throttleState.set(record.id, state);
+    }
+  }
+
+  /** 清指定 record 的节流状态（finalizeRecord 调，防终态后 trailing 误发陈旧状态）。 */
+  private clearThrottle(recordId: string): void {
+    const state = this.throttleState.get(recordId);
+    if (state?.timer !== undefined) clearTimeout(state.timer);
+    this.throttleState.delete(recordId);
   }
 
   // ── 内部 ────────────────────────────────────────────────

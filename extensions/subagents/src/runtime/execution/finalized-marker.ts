@@ -14,8 +14,6 @@
 
 import * as fs from "node:fs";
 
-import { bestEffort } from "../../utils/best-effort.ts";
-
 // ============================================================
 // 公开函数
 // ============================================================
@@ -28,13 +26,10 @@ import { bestEffort } from "../../utils/best-effort.ts";
  */
 export function writeFinalized(sessionFile: string): void {
   try {
-    // BC-4 互斥：先清理可能存在的 .cancelled
-    try {
-      fs.unlinkSync(`${sessionFile}.cancelled`);
-    } catch (err) {
-      // 不存在属正常路径，仅 debug 记录
-      bestEffort(err, "unlink .cancelled sidecar");
-    }
+    // BC-4 互斥：清理可能存在的 .cancelled。force:true 静默 ENOENT——
+    // 未 cancel 过的 session（done/failed/aborted）本就无 .cancelled，属正常路径。
+    // 此前用 unlinkSync+bestEffort 记 console.debug，取消嵌套链条时每层 ENOENT 刷屏。
+    fs.rmSync(`${sessionFile}.cancelled`, { force: true });
     fs.writeFileSync(`${sessionFile}.finalized`, "", "utf-8");
   } catch (_e) {
     void _e; // 静默：写失败不阻断 finalize 主流程。
