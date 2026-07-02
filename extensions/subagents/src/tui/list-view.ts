@@ -195,9 +195,17 @@ export async function createSubagentsView(
         syncCancelHint: false,
       };
 
-      // 订阅 store 变化 → requestRender（store 驱动重渲）
+      // 订阅 store 变化 → invalidate + requestRender（store 驱动重渲）。
+      // 必须 invalidate：render 命中 width×rows 缓存会返回旧行——最后一个 running record
+      // 完成、且无其他 running 时 animTimer 不再 invalidate（hasRunning=false 提前返回），
+      // 导致 running→done 状态翻转永不重绘。invalidateFn 在 component 创建后绑定。
+      // holder：onChange 注册时 component 尚未创建，用 ref 延后绑定 invalidate
+      // （避免 let 重赋值触发 prefer-const）
+      const invalidateRef = { fn: undefined as (() => void) | undefined };
       const unsubscribe = service.onChange(() => {
-        if (!state.disposed) tuiLike.requestRender();
+        if (state.disposed) return;
+        invalidateRef.fn?.();
+        tuiLike.requestRender();
       });
 
       // directId 命中 → 进详情模式（右侧就地展开，底部对齐）
@@ -212,6 +220,7 @@ export async function createSubagentsView(
       }
 
       const component = new SubagentsListComponent(service, theme, tuiLike, state, unsubscribe, notify);
+      invalidateRef.fn = () => component.invalidate();
 
       // 动画 timer：有 running record 时定期 invalidate + requestRender，
       // 让 spinner 丝滑换帧、elapsed 实时跳动（行数恒定，安全——对照
@@ -618,6 +627,9 @@ class SubagentsListComponent implements Component {
 
     const selected = records[this.state.selectedIdx] ?? null;
     const inDetail = this.state.detailMode; // 阶段 2：右侧滚动焦点
+    // 预构建详情内容（inDetail 时）：分区线标题(detailScrollInfo 算长度)与右列(renderRightDetail 渲染)
+    // 共用同一份，避免每帧双倍构建（animTimer 250ms 触发，长 eventLog 下有感）。
+    const detailContent = inDetail && selected ? this.buildDetailContent(selected, rightWidth) : null;
 
     const lines: string[] = [];
 
@@ -635,7 +647,7 @@ class SubagentsListComponent implements Component {
     // 分区线（嵌入左/右标题，分段着色）
     const leftTitleStyled = t.fg("accent", t.bold(` ${TITLE_LEFT} `));
     const rightTitleStyled = inDetail
-      ? t.fg("accent", t.bold(` ${TITLE_RIGHT}${this.detailScrollInfo(selected, bodyH)} `))
+      ? t.fg("accent", t.bold(` ${TITLE_RIGHT}${this.detailScrollInfo(selected, bodyH, detailContent?.length)} `))
       : t.fg("accent", t.bold(` ${TITLE_RIGHT} `));
     lines.push(
       this.b("├") + segFillColored(leftTitleStyled, this.dash(), leftWidth)
@@ -659,8 +671,8 @@ class SubagentsListComponent implements Component {
       ));
       leftLines = this.renderLeftColumn(records, leftWidth, leftStart, bodyH);
       rightLines = inDetail
-        ? this.renderRightDetail(selected, rightWidth, bodyH)
-        : this.renderRightPreview(selected, rightWidth);
+        ? this.renderRightDetail(selected, rightWidth, bodyH, detailContent)
+        : this.renderRightPreview(selected, rightWidth, bodyH);
     }
     const bodyRows = Math.max(leftLines.length, rightLines.length, bodyH);
     for (let i = 0; i < bodyRows; i++) {
@@ -685,15 +697,16 @@ class SubagentsListComponent implements Component {
     return lines;
   }
 
-  /** 详情模式滚动位置指示（嵌入分区线标题），如 "Detail (5-12/30)"。无内容则空。 */
-  private detailScrollInfo(record: SubagentRecord | null, viewH: number): string {
+  /** 详情模式滚动位置指示（嵌入分区线标题），如 "Detail (5-12/30)"。无内容则空。
+   *  contentLen 由调用方（renderSplitBox）从预构建的 detailContent 传入，避免重复构建。 */
+  private detailScrollInfo(record: SubagentRecord | null, viewH: number, contentLen?: number): string {
     if (!record) return "";
-    const contentLen = this.detailContentLength(record);
-    if (contentLen <= viewH) return ""; // 内容一屏装下，不显示
-    const max = Math.max(0, contentLen - viewH);
+    const len = contentLen ?? this.detailContentLength(record);
+    if (len <= viewH) return ""; // 内容一屏装下，不显示
+    const max = Math.max(0, len - viewH);
     const start = Math.max(0, Math.min(this.state.scrollOffset, max));
-    const end = Math.min(start + viewH, contentLen);
-    return ` (${start + 1}-${end}/${contentLen})`;
+    const end = Math.min(start + viewH, len);
+    return ` (${start + 1}-${end}/${len})`;
   }
 
   /** footer 的取消提示（仅 running 时显示）。 */
@@ -742,8 +755,8 @@ class SubagentsListComponent implements Component {
     return lines;
   }
 
-  /** 右列：选中 record 的预览（阶段 1）。 */
-  private renderRightPreview(record: SubagentRecord | null, width: number): string[] {
+  /** 右列：选中 record 的预览（阶段 1）。bodyH 截断防小终端溢出（见 renderSplitBox 不变量）。 */
+  private renderRightPreview(record: SubagentRecord | null, width: number, bodyH: number): string[] {
     const t = this.theme;
     if (!record) return [t.fg("dim", "(no record selected)")];
 
@@ -774,7 +787,10 @@ class SubagentsListComponent implements Component {
 
     lines.push("");
     lines.push(truncLine(t.fg("dim", "Enter for full detail"), width));
-    return lines;
+    // 截断到 bodyH：小终端（tmux 分屏 bodyH 可能 2-6 行）下预览固定 ~10 行会溢出框，
+    // 导致 bodyRows = max(left,right,bodyH) > bodyH → 帧行把底分区线/footer/底框推出终端（残影）。
+    // 左列已有视口窗口保证 <= bodyH，右列预览在此对齐。优先保留头部身份信息。
+    return lines.slice(0, bodyH);
   }
 
   /**
@@ -783,17 +799,17 @@ class SubagentsListComponent implements Component {
    *
    * 内容行生成与 detailContentLength 共用 buildDetailContent（单一数据源）。
    */
-  private renderRightDetail(record: SubagentRecord | null, width: number, viewH: number): string[] {
+  private renderRightDetail(record: SubagentRecord | null, width: number, viewH: number, content?: string[] | null): string[] {
     const t = this.theme;
     if (!record) return [t.fg("dim", "(no record selected)")];
 
-    const content = this.buildDetailContent(record, width);
-    // 翻屏（底部对齐：max = content.length - viewH）
-    const max = Math.max(0, content.length - viewH);
+    const lines = content ?? this.buildDetailContent(record, width);
+    // 翻屏（顶部对齐：scrollOffset ∈ [0, max]）
+    const max = Math.max(0, lines.length - viewH);
     if (this.state.scrollOffset > max) this.state.scrollOffset = max;
     const start = Math.max(0, Math.min(this.state.scrollOffset, max));
     this.state.scrollOffset = start; // 回写收敛（End/Home 越界后下次渲染归位）
-    const visible = content.slice(start, start + viewH);
+    const visible = lines.slice(start, start + viewH);
     // pad 到 viewH（视口填满）
     while (visible.length < viewH) visible.push("");
     return visible;

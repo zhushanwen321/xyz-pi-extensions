@@ -304,6 +304,8 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     // 顶层 record（主 session 直接 execute）：无父 subagent，depth=0
     expect(identityData.parentRecordId).toBeUndefined();
     expect(identityData.depth).toBe(0);
+    // task 字段（详情面板置顶展示）持久化到 identity entry，磁盘重建恢复
+    expect(identityData.task).toBe("do work");
   });
 
   // ============================================================

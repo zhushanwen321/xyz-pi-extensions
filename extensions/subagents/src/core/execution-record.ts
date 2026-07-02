@@ -398,6 +398,12 @@ export function getEventLog(record: ExecutionRecord): AgentEventLogEntry[] {
  *   优先级：最后一个未闭合 turn 的末尾 running toolCall → thinking → text → undefined
  *
  * 仅 status==="running" 时返回；terminal 态返回 undefined。
+ *
+ * 注意：返回的 type 联合（"tool"|"text"|"thinking"）是手写的，未通过类型守卫从
+ * AgentEvent 派生——它映射的是累积的 turn 状态（InternalToolCall._status + turn.thinking/text），
+ * 而非单个事件。若未来新增 turn 内容模式（如 reasoning_summary），须同步扩展本函数，
+ * 否则会静默返回 undefined（活动行运行中途消失）。updateFromEvent 的 switch 有 never 穷尽
+ * 检查，但本函数没有，依赖人工同步。
  */
 export function getCurrentActivity(
   record: ExecutionRecord,

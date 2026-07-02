@@ -241,6 +241,9 @@ export class RecordStore {
         task: recon.task,
         // 磁盘重建是离线快照，无实时活动状态。
         currentActivity: undefined,
+        // worktreeHandle 不从磁盘重建（session.jsonl 未持久化路径/分支）。
+        // 已结束的 worktree record 的 checkout 已被 cleanup 回收，重建句柄无意义。
+        // forkDepth 从 identity 重建（用于 TUI 深度标记），worktree 信息仅内存 running 时可见。
         eventLog: recon.eventLog,
         result: recon.result,
         error: recon.error,

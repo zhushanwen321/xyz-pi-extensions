@@ -11,6 +11,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentConfig } from "../core/model-resolver.ts";
+import { MAX_FORK_DEPTH } from "../core/session-context-resolver.ts";
 import {
   applyToolFilter,
   buildAppendSystemPrompt,
@@ -168,10 +169,11 @@ describe("buildAppendSystemPrompt", () => {
 
   // ── forkDepth 注入（D-030）──
 
-  it("forkDepth 为正数时 env block 含 'Fork depth: N/10'", () => {
+  it("forkDepth 为正数时 env block 含 'Fork depth: N/<MAX_FORK_DEPTH>'", () => {
     const result = buildAppendSystemPrompt(["frag"], "/cwd", undefined, 3);
     expect(result.length).toBe(2);
-    expect(result[0]).toContain("Fork depth: 3/10");
+    // N = 传入的 forkDepth；分母与 MAX_FORK_DEPTH 同源（拦截与展示不漂移）
+    expect(result[0]).toContain(`Fork depth: 3/${MAX_FORK_DEPTH}`);
   });
 
   it("forkDepth 未传时不注入 fork depth 行（非 fork session 不显示深度）", () => {
@@ -219,10 +221,10 @@ describe("buildEnvBlock", () => {
 
   // ── forkDepth 注入（D-030）──
 
-  it("forkDepth 为正数时注入 'Fork depth: N/10' 行", () => {
+  it("forkDepth 为正数时注入 'Fork depth: N/<MAX_FORK_DEPTH>' 行", () => {
     const uniqueCwd = `/tmp/sf-fork-${Date.now()}-${Math.random()}`;
     const block = buildEnvBlock(uniqueCwd, 7);
-    expect(block).toContain("Fork depth: 7/10");
+    expect(block).toContain(`Fork depth: 7/${MAX_FORK_DEPTH}`);
   });
 
   it("forkDepth 为 0/undefined/负数时不注入 fork depth 行", () => {

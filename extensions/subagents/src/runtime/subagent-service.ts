@@ -236,6 +236,9 @@ export class SubagentService {
     // 「委派子 agent → 子 agent 再委派」死循环（实测无护栏时递归到 L36 全 failed）。
     // 在所有副作用（record/worktree/session）之前拦截，错误直达调用方。
     // fork:true 的体积护栏（resolveSessionContext 的 parentForkDepth 检查）作为第二层保留。
+    // 计数基准：顶层 nestingDepth=0；每次嵌套 execute +1。允许 0..MAX_FORK_DEPTH（共 11 层），
+    // nestingDepth=MAX+1 被拒。与 fork 护栏（parentForkDepth>=MAX 拒，parent 计数基准）互补：
+    // 本护栏更严（计所有嵌套），混合链下先生效；两者共享 MAX_FORK_DEPTH 上限不漂移。
     const parentNesting = this.execCtxAls.getStore();
     const nestingDepth = parentNesting ? parentNesting.depth + 1 : 0;
     if (nestingDepth > MAX_FORK_DEPTH) {
@@ -308,8 +311,10 @@ export class SubagentService {
 
     // background：立即返回 subagentId + sessionFile（窗口期可能 undefined）+ details（status=running）。
     // 步骤 4-6 在 detached promise 里跑。
-    // B1：background 不回流 onUpdate——detached 运行对 tool 层不可见，完成由 notify 驱动新 turn。
-    // 若转发 onUpdate，liftSync 会把 bg 事件误标成 syncResponse(mode:"sync") → spinner setInterval 泄漏。
+    // B1：background 不回流 onUpdate（与 sync 嵌套抑制同理——任何嵌套 subagent 的 onUpdate 都须
+    // undefined，防 SubagentResultComponent spinner setInterval 堆叠）。此外 detached 运行对 tool
+    // 层不可见，完成由 notify 驱动新 turn；转发 onUpdate 还会被 liftSync 误标 syncResponse(mode:"sync")
+    // → spinner setInterval 泄漏。sync 嵌套抑制见上方 nestedSyncOnUpdate。
     const bgDetails = project(record);
     this.kickOffBackground(record, { ...opts, onUpdate: undefined, worktree: worktreeHandle }, ctx, identity, signal, priority);
     return { mode: "background", subagentId: record.id, sessionFile: record.sessionFile, details: bgDetails };
@@ -734,6 +739,8 @@ export class SubagentService {
       state.lastEmitAt = now;
       this.throttleState.set(record.id, state);
       onUpdate(project(record));
+      // 终态清 entry（与 trailing 分支对称）：防 CAS 后到 leading 误发陈旧状态 + Map 无限增长。
+      if (record.status !== "running") this.throttleState.delete(record.id);
       return;
     }
     // trailing：窗口末尾补发最新（per-record timer，不与其他 record 的 trailing 争用）。

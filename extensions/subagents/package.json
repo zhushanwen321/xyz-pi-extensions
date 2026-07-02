@@ -11,6 +11,9 @@
     "agent-runtime"
   ],
   "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
   "files": [
     "index.ts",
     "agents/",

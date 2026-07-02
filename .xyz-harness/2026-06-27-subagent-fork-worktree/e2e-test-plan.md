@@ -12,7 +12,7 @@ purpose: E2E 测试说明（通过实际调用 subagent 工具验证运行时行
 - 在**干净 working tree 的 git 仓库**启动 pi（worktree 隔离依赖 `git worktree add`，脏树被拦）
 - fork 测试需 parent session 已 flush 至少一条 assistant message
 - 查状态用 `/subagents`；patch 路径在 `<sessionsDir>/<branch>.patch`
-- 嵌套递归测试（A 组）建议用 claude-sonnet 级模型。注意：glm-5.2 会忠实遵守 agent systemPrompt，**feat-subagent-enhance 时代遗留的反递归禁令已在本 feat 删除（D-031）**，现仅由 MAX_FORK_DEPTH 兜底，任何 agent 均可嵌套 spawn
+- 嵌套递归测试（A 组）建议用 claude-sonnet 级模型。注意：glm-5.2 会忠实遵守 agent systemPrompt，**feat-subagent-enhance 时代遗留的反递归禁令已在本 feat 删除（D-031）**，现仅由 MAX_FORK_DEPTH 兜底。注意：只有持有 `subagent` 工具的 agent（general-purpose、worker 等未限制 tools 白名单的）能嵌套 spawn；专用 agent（researcher/reviewer/planner/scout/oracle/context-builder）的 tools 白名单不含 subagent，物理上无法 spawn（这是有意的领域约束，非禁令残留）
 
 ## 关键约束（源码确认）
 

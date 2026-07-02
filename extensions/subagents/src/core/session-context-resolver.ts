@@ -10,6 +10,14 @@ import { getSubagentSessionDir } from "./path-encoding.ts";
 /**
  * fork 深度硬限。export 供 session-runner 注入 LLM env block 时引用同一常量，
  * 避免硬限（拦截）与展示（`N/10`）两处 10 漂移。
+ *
+ * 双层护栏（互补，共享本常量）：
+ *   1. resolveSessionContext 的 fork 护栏（parentForkDepth >= MAX_FORK_DEPTH → 拒）：
+ *      只计 fork 链（fork=true 才递增 parentForkDepth），控 session 体积（每层 createBranchedSession）。
+ *   2. SubagentService.execute 入口的通用嵌套护栏（nestingDepth > MAX_FORK_DEPTH → 拒）：
+ *      经 execCtxAls 计所有 subagent 嵌套（fork + 非 fork），更严——混合链
+ *      （fork→非fork→fork）下 nestingDepth >= parentForkDepth，通用护栏先生效。
+ * 两者均允许深度 0..MAX_FORK_DEPTH（共 MAX+1 层），第 MAX+1 层（深度=MAX+1）被拒。
  */
 export const MAX_FORK_DEPTH = 10;
 
