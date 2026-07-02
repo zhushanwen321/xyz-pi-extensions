@@ -318,6 +318,62 @@ describe("action: complete — 机器重算 + AI claimedStatus 丢弃", () => {
     ).rejects.toThrow(/screenshot not found/);
   });
 
+  it("关 1：缺 actual 参数 → throw（运行时 requireParam 拒收残缺上报）", async () => {
+    mockContent.set("/tmp/p.md", makePlan([{ id: "E1" }]));
+    mockFiles.add("/tmp/shot.png");
+    const { execute } = setup();
+    const init = await call(execute, { action: "init", planPath: "/tmp/p.md" });
+    const sid = init.details.sessionId as string;
+    await call(execute, { action: "get", sessionId: sid });
+
+    await expect(
+      call(execute, {
+        action: "complete",
+        sessionId: sid,
+        caseId: "E1",
+        // actual 缺失
+        screenshotPath: "/tmp/shot.png",
+      }),
+    ).rejects.toThrow(/missing required parameter: actual/);
+  });
+
+  it("关 1：缺 screenshotPath 参数 → throw（运行时 requireParam 拒收残缺上报）", async () => {
+    mockContent.set("/tmp/p.md", makePlan([{ id: "E1" }]));
+    const { execute } = setup();
+    const init = await call(execute, { action: "init", planPath: "/tmp/p.md" });
+    const sid = init.details.sessionId as string;
+    await call(execute, { action: "get", sessionId: sid });
+
+    await expect(
+      call(execute, {
+        action: "complete",
+        sessionId: sid,
+        caseId: "E1",
+        actual: { url: "/profile" },
+        // screenshotPath 缺失
+      }),
+    ).rejects.toThrow(/missing required parameter: screenshotPath/);
+  });
+
+  it("关 1：缺 caseId 参数 → throw（运行时 requireParam 拒收残缺上报）", async () => {
+    mockContent.set("/tmp/p.md", makePlan([{ id: "E1" }]));
+    mockFiles.add("/tmp/shot.png");
+    const { execute } = setup();
+    const init = await call(execute, { action: "init", planPath: "/tmp/p.md" });
+    const sid = init.details.sessionId as string;
+    await call(execute, { action: "get", sessionId: sid });
+
+    await expect(
+      call(execute, {
+        action: "complete",
+        sessionId: sid,
+        // caseId 缺失
+        actual: { url: "/profile" },
+        screenshotPath: "/tmp/shot.png",
+      }),
+    ).rejects.toThrow(/missing required parameter: caseId/);
+  });
+
   it("caseId 不存在 → throw", async () => {
     mockContent.set("/tmp/p.md", makePlan([{ id: "E1" }]));
     mockFiles.add("/tmp/shot.png");

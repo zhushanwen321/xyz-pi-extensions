@@ -48,7 +48,7 @@
 <main class="main">
 <header class="doc-head">
   <h1>测试执行 Tool v4</h1>
-  <p class="subtitle">execute-enforce-e2e · 纯 tool 驱动 · 全局可见但谎报过不了 · 不需隐藏</p>
+  <p class="subtitle">execute-enforce-e2e · 纯 tool 驱动 · 全局可见但谎报过不了 · schema Optional + 运行时 requireParam 双层拒收</p>
   <div class="badge-row">
     <span class="wave-tag">tool: get/complete/get-result</span>
     <span class="wave-tag wave-tag--prefactor">状态闭包</span>
@@ -64,7 +64,7 @@
     <li style="padding-left:0;"><b>不用 workflow，用 tool</b>。tool 能管状态（闭包 state）+ 强制参数（typebox schema）+ 拒收非法操作（throw），恰好满足「状态计算 + 上报校验」需求。</li>
     <li style="padding-left:0;"><b>tool 全局可见，但谎报过不了</b>。「tool 只在 workflow 暴露」不可行（pi extension tool 是进程级注册，无 scoped 机制）。但<b>不需要隐藏</b>——<code>complete</code> 的机器校验焊死后，主 agent 传假证据直接 throw 拒收。</li>
     <li style="padding-left:0;"><b>状态计算：AI 只传证据，status 机器重算</b>。<code>complete(caseId, actual, screenshotPath)</code> → 机器校验截图存在 + 拿 expected 逐字段比对 → 重算 pass/fail。AI 填的 status <b>丢弃</b>。</li>
-    <li style="padding-left:0;"><b>两道焊死的关</b>：① <code>complete</code> schema 强制 actual+screenshot，缺则 tool 层拒收；② <code>get-result</code> 全覆盖拒绝，未完成 throw 阻塞 goal complete。</li>
+    <li style="padding-left:0;"><b>两道焊死的关</b>：① <code>complete</code> 运行时 requireParam 校验 actual+screenshotPath 必填（schema Optional 因同一 schema 服务 4 action，typebox 不支持条件必填），缺则 throw；② <code>get-result</code> 全覆盖拒绝，未完成 throw 阻塞 goal complete。</li>
     <li style="padding-left:0;"><b>soft 隔离可选</b>：sessionId 机制防误用/干扰，但不防恶意（真防恶意靠机器校验）。</li>
   </ul>
 </div>
@@ -170,7 +170,7 @@ flowchart TD
   <h3>③ complete — subagent 跑完调（核心）</h3>
   <div class="api-sig"><b>complete</b>(<span class="arg">sessionId</span>, <span class="arg">caseId</span>, <span class="arg">actual</span>: {url?, text?, domAttr?...}, <span class="arg">screenshotPath</span>: string) → { machineStatus, verifiedAt }</div>
   <ul class="check-list" style="list-style:none;padding:0;">
-    <li style="padding:5px 0 5px 26px;position:relative;"><span style="position:absolute;left:4px;color:var(--accent);">🔒</span><b>typebox schema 强制</b>：<code>actual</code> 必须对象且非空，<code>screenshotPath</code> 必填。缺任一 → tool 层 throw 拒收（AI 拿不到「上报成功」）</li>
+    <li style="padding:5px 0 5px 26px;position:relative;"><span style="position:absolute;left:4px;color:var(--accent);">🔒</span><b>运行时 requireParam 校验</b>：<code>actual</code>/<code>screenshotPath</code>/<code>caseId</code> 必填（schema Optional 因同一 schema 服务 4 action 不支持条件必填，运行时 throw 兑现）。缺任一 → tool 层 throw 拒收（AI 拿不到「上报成功」）</li>
     <li style="padding:5px 0 5px 26px;position:relative;"><span style="position:absolute;left:4px;color:var(--accent);">🔒</span><b>机器校验证据</b>：<code>fs.existsSync(screenshotPath)</code> → 不存在 throw</li>
     <li style="padding:5px 0 5px 26px;position:relative;"><span style="position:absolute;left:4px;color:var(--accent);">🔒</span><b>机器重算 status</b>：拿 init 缓存的 expected，与 actual 逐字段比对 → pass/fail。<b>AI 传的 status 参数（若有）丢弃</b></li>
     <li>存状态：{ caseId, machineStatus, actual, screenshotPath, verifiedAt }</li>
@@ -215,13 +215,14 @@ flowchart TD
 <div id="force">
   <h2>两道焊死的关</h2>
   <div class="wave-card wave-card--gate">
-    <h3><span class="wave-tag wave-tag--gate">关 1</span>complete 的 schema + 机器校验</h3>
+    <h3><span class="wave-tag wave-tag--gate">关 1</span>complete 的 schema Optional + 运行时 requireParam + 机器校验</h3>
     <table class="kv">
-      <tr><th>防线 1</th><td>typebox schema：<code>actual</code> 非空对象 + <code>screenshotPath</code> 必填。缺 → tool 层 throw 拒收</td></tr>
+      <tr><th>防线 1</th><td>typebox schema Optional（同一 schema 服务 4 action，不支持条件必填）+ 运行时 <code>requireParam</code> throw：actual/screenshotPath/caseId 缺则 throw</td></tr>
       <tr><th>防线 2</th><td>机器 <code>fs.existsSync(screenshotPath)</code>：AI 没真跑浏览器就没截图 → throw</td></tr>
       <tr><th>防线 3</th><td>机器重算 status：expected（plan 缓存）vs actual（AI 传）逐字段比对。AI 填的 status 丢弃</td></tr>
     </table>
     <p><b>三层叠加</b>：AI 必须真跑、必须截图、必须实际值对得上 plan 预期。任一缺失过不了。</p>
+    <p><b>校正措辞（v4 实现对齐）</b>：非「schema 层拒收」，是「schema Optional + 运行时 requireParam throw」。效果一致（都 throw），但机制需准确——条件必填靠运行时校验（见 AGENTS.md「Tool 设计」）。</p>
   </div>
   <div class="wave-card wave-card--gate">
     <h3><span class="wave-tag wave-tag--gate">关 2</span>get-result 的全覆盖拒绝</h3>
@@ -257,7 +258,7 @@ flowchart TD
       <tr><td>plan 解析 + expected 缓存</td><td>机器</td><td><b>否</b></td><td>init 时 fs 读 + 正则解析</td></tr>
       <tr><td>用例分配（get）</td><td>机器</td><td><b>否</b></td><td>闭包 state 遍历，标记 in-progress</td></tr>
       <tr><td>real 用例执行</td><td>AI</td><td><b>是</b></td><td>subagent + browser skill</td></tr>
-      <tr><td>证据上报（complete）</td><td>AI</td><td><b>是（受限）</b></td><td>schema 强制 actual+screenshot，缺则拒收</td></tr>
+      <tr><td>证据上报（complete）</td><td>AI</td><td><b>是（受限）</b></td><td>schema Optional + 运行时 requireParam 强制 actual+screenshot，缺则 throw</td></tr>
       <tr><td>status 判定</td><td>机器</td><td><b>否</b></td><td>expected vs actual 逐字段重算，AI 填的丢弃</td></tr>
       <tr><td>全覆盖校验（get-result）</td><td>机器</td><td><b>否</b></td><td>有 pending → throw 阻塞 goal complete</td></tr>
       <tr><td>驱动循环（AI 主动去跑）</td><td>AI</td><td><b>是</b></td><td>⚠ 可跳过，收尾门兜底</td></tr>

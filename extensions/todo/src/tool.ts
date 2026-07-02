@@ -2,9 +2,9 @@
  * Todo tool 注册 + execute dispatcher + 5 个 action handler。
  */
 
-import { StringEnum } from "@mariozechner/pi-ai";
+import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 
 import {
