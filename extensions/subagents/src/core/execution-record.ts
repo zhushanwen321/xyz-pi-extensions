@@ -22,6 +22,7 @@ import type {
   AgentUsageTotal,
   ExecutionMode,
   ExecutionRecord,
+  ExecutionStatus,
   InternalToolCall,
   RecordSnapshot,
   SubagentToolDetails,
@@ -145,6 +146,12 @@ export function createRecord(
     mode: ExecutionMode;
     task: string;
     startedAt: number;
+    /** 根 Pi session ID（session 隔离过滤用）。递归链上所有层同值。 */
+    rootSessionId?: string;
+    /** 直接父 subagent record ID。顶层为 undefined。 */
+    parentRecordId?: string;
+    /** subagent 递归深度。顶层=0。 */
+    depth?: number;
     controller?: AbortController;
   },
 ): ExecutionRecord {
@@ -156,6 +163,9 @@ export function createRecord(
     mode: identity.mode,
     task: identity.task,
     startedAt: identity.startedAt,
+    rootSessionId: identity.rootSessionId,
+    parentRecordId: identity.parentRecordId,
+    depth: identity.depth ?? 0,
 
     // 状态（实时更新）
     status: "running",
@@ -388,6 +398,12 @@ export function getEventLog(record: ExecutionRecord): AgentEventLogEntry[] {
  *   优先级：最后一个未闭合 turn 的末尾 running toolCall → thinking → text → undefined
  *
  * 仅 status==="running" 时返回；terminal 态返回 undefined。
+ *
+ * 注意：返回的 type 联合（"tool"|"text"|"thinking"）是手写的，未通过类型守卫从
+ * AgentEvent 派生——它映射的是累积的 turn 状态（InternalToolCall._status + turn.thinking/text），
+ * 而非单个事件。若未来新增 turn 内容模式（如 reasoning_summary），须同步扩展本函数，
+ * 否则会静默返回 undefined（活动行运行中途消失）。updateFromEvent 的 switch 有 never 穷尽
+ * 检查，但本函数没有，依赖人工同步。
  */
 export function getCurrentActivity(
   record: ExecutionRecord,
@@ -483,10 +499,14 @@ export function getTotalUsage(record: ExecutionRecord): AgentUsageTotal | undefi
 /**
  * status 状态机的 CAS 互斥锁。仅当 `record.status === "running"` 时改为 target
  * 并返回 true，否则返回 false。**status 状态机本身就是互斥锁**——终态
- * （done/failed/cancelled）不可逆，check-then-set 在 JS 单线程事件循环里天然原子。
+ * （done/failed/cancelled/crashed）不可逆，check-then-set 在 JS 单线程事件循环里天然原子。
  *
  * 用途：executor 的收尾竞争。cancelBackground 与 background detached 完成回调
  * 都调 tryTransition 抢锁：抢到负责完整收尾，没抢到闭嘴不做事。
+ *
+ * target 仅限正常执行流的三终态。crashed 不作 target——它由重建路径推断
+ * （alive marker 存在但 session 文件无终态），不走 CAS；重建路径用 markReconstructedStatus
+ * 直接赋值。收窄 target 类型可在编译期拒绍误用 tryTransition(record, "crashed")。
  */
 export function tryTransition(
   record: ExecutionRecord,
@@ -495,6 +515,20 @@ export function tryTransition(
   if (record.status !== "running") return false;
   record.status = target;
   return true;
+}
+
+/**
+ * 重建专用收口：跳过 CAS 直接赋值 status。
+ *
+ * 仅用于 session-reconstructor 从 session.jsonl 重建终态 record 时——
+ * 重建的 record 没有 running 状态需要保护，直接赋值即可。
+ * 禁止在正常执行流程中使用此函数（应使用 tryTransition）。
+ */
+export function markReconstructedStatus(
+  record: { status: ExecutionStatus },
+  status: ExecutionStatus,
+): void {
+  record.status = status;
 }
 
 /**
@@ -544,6 +578,7 @@ export function project(record: ExecutionRecord): SubagentToolDetails {
     currentActivity: getCurrentActivity(record),
     parsedOutput: record.agentResult?.parsedOutput,
     sessionFile: record.sessionFile,
+    patchFile: record.patchFile,
   };
 }
 

@@ -30,8 +30,8 @@ export const DEFAULT_AGENT_NAME = "general-purpose";
 // 执行状态机
 // ============================================================
 
-/** 唯一执行状态。所有路径（sync/bg/poll）共用。 */
-export type ExecutionStatus = "running" | "done" | "failed" | "cancelled";
+/** 唯一执行状态。所有路径（sync/bg/poll）共用。crashed 为进程崩溃终态（重建推断）。 */
+export type ExecutionStatus = "running" | "done" | "failed" | "cancelled" | "crashed";
 
 /** 执行模式。sync = 调用方 await；background = 调用方立即拿 handle 返回。 */
 export type ExecutionMode = "sync" | "background";
@@ -207,6 +207,90 @@ export interface AgentResult {
  *
  * TUI 永远拿 RecordSnapshot（.slice() 快照），不直接持此可变对象。
  */
+/**
+ * worktree handle 值对象。仅 worktree:true 时持有——worktree 是独立维度，
+ * 需显式开启（且要求 fork:true），fork alone 不创建 worktree。
+ * Object.freeze 守卫保证不可变。
+ */
+export interface WorktreeHandle {
+  /** checkout 目录（子 agent 工作目录，tmpdir 下）。 */
+  readonly path: string;
+  readonly branch: string;
+  readonly baseCommit: string;
+  /** 主仓库根目录（cleanup/scan 需要，不再靠路径反推）。 */
+  readonly mainCwd: string;
+}
+
+/** alive marker：子进程存活标记，用于心跳检测和 crash 推断。 */
+export interface AliveMarker {
+  readonly pid: number;
+  readonly id: string;
+  readonly startedAt: number;
+}
+
+/** git diff patch 结果。 */
+export interface PatchResult {
+  readonly patchFile: string;
+  readonly failed: boolean;
+  /** patch 是否实际写入 patchFile。true=diff 非空且写盘成功；false=空 diff 或写失败。
+   *  调用方据此回填 record.patchFile，避免悬空路径（`git apply` 不存在的文件）。 */
+  readonly written: boolean;
+}
+
+/** resolveAgentIdentity 的入参。 */
+export interface ResolveInput {
+  agent?: string;
+  model?: string;
+  thinkingLevel?: string;
+  skillPath?: string;
+  appendSystemPrompt?: string[];
+}
+
+/** session-runner 闭包捕获的上下文。 */
+export interface SessionContext {
+  readonly agentDir: string;
+  readonly mainCwd: string;
+  readonly sessionDir: string;
+  readonly mainSessionFile: string;
+}
+
+/** resolveSessionContext 纯函数的入参（#3 SessionContextResolver）。 */
+export interface SessionResolveInput {
+  fork?: boolean;
+  cwd?: string;
+  mainCwd: string;
+  mainSessionFile?: string;
+  parentForkDepth?: number;
+  /** agent 配置目录（getSubagentSessionDir 需要）。 */
+  agentDir: string;
+  /** worktree checkout 路径（来自 WorktreeHandle.path，作为 effectiveCwd）。 */
+  worktreePath?: string;
+}
+
+/** resolveSessionContext 纯函数的返回值。 */
+export interface ResolvedSessionContext {
+  readonly shouldFork: boolean;
+  readonly forkSource: string | undefined;
+  readonly effectiveCwd: string;
+  readonly sessionDir: string;
+}
+
+/** fork depth 超限错误。 */
+export class ForkDepthExceededError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ForkDepthExceededError";
+  }
+}
+
+/** worktree 有未提交变更错误。 */
+export class DirtyWorktreeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DirtyWorktreeError";
+  }
+}
+
 export interface ExecutionRecord {
   /** 唯一 ID（sync: "run-N"，bg: "bg-N-xxx"）。 */
   readonly id: string;
@@ -218,6 +302,12 @@ export interface ExecutionRecord {
   readonly mode: ExecutionMode;
   readonly task: string;
   readonly startedAt: number;
+  /** 根 Pi session ID（session 隔离过滤用）。递归链上所有层 record 同值。 */
+  readonly rootSessionId: string | undefined;
+  /** 直接父 subagent record ID（层级树构建用）。顶层 record 为 undefined。 */
+  readonly parentRecordId: string | undefined;
+  /** subagent 递归深度。顶层（主 session 直接创建）=0，每层嵌套 +1。 */
+  readonly depth: number;
 
   // ── 状态（实时更新）──
   status: ExecutionStatus;
@@ -238,6 +328,12 @@ export interface ExecutionRecord {
 
   /** session jsonl 文件名。session 创建成功后由 session-runner.run() 回填（窗口期内 undefined）。 */
   sessionFile?: string;
+
+  /** [MF#3] fork+worktree 模式下子 agent 改动的 patch 文件路径（worktree 外，供调用方应用）。 */
+  patchFile?: string;
+
+  /** worktree 隔离时的 handle（仅 worktree:true 时存在；fork alone 无此字段）。 */
+  worktreeHandle?: WorktreeHandle;
 
   // ── 控制（仅 background 持有）──
   controller: AbortController | undefined;
@@ -273,11 +369,24 @@ export interface SubagentToolDetails {
   parsedOutput?: unknown;
   /** session jsonl 文件名（不含目录）。窗口期内可能 undefined（session 尚未创建成功）。 */
   sessionFile?: string;
+  /** [MF#3] fork+worktree 模式下子 agent 改动的 patch 文件路径（worktree 外，供调用方应用）。 */
+  patchFile?: string;
 }
 
 // ============================================================
 // Runtime 公共 API 的入参/出参
 // ============================================================
+
+/** session-runner 内部上下文（扩展 effectiveCwd/mainCwd/mainSessionFile）。 */
+/** session-runner.run() 的入参选项。 */
+export interface RunOptions {
+  /** 是否继承父会话上下文（fork 模式）。fork 只继承上下文，不创建 worktree。 */
+  fork?: boolean;
+  /** 预创建的 worktree handle（worktree:true 时由 service 创建后传入；undefined=不隔离，在 parent cwd 跑）。 */
+  worktree?: WorktreeHandle;
+  /** 父级 fork depth（用于深度限制检查）。 */
+  parentForkDepth?: number;
+}
 
 /** Hub.execute 的入参（sync/bg 共用）。mode 由 Hub 内部判定，不暴露给调用方。 */
 export interface ExecuteOptions {
@@ -306,6 +415,14 @@ export interface ExecuteOptions {
   onUpdate?: (details: SubagentToolDetails) => void;
   /** background 完成回调（sync 不调）。 */
   onComplete?: (record: RecordSnapshot) => void;
+  /** 是否继承父会话上下文（fork 模式，只继承上下文）。 */
+  fork?: boolean;
+  /** 文件系统隔离：true=创建新 git worktree（要求 fork:true），WorktreeHandle=复用外部已创建的；undefined=不隔离（parent cwd）。 */
+  worktree?: boolean | WorktreeHandle;
+  /** 覆盖执行 cwd（默认 mainCwd）。 */
+  cwd?: string;
+  // 注：fork 深度不从外部传入（曾暴露 parentForkDepth，改用 ALS 后 execute 内部从调用链派生，
+  // 公开字段成为死字段误导调用方，已移除）。深度限制检查见 RunOptions.parentForkDepth（内部层）。
 }
 
 /**
@@ -398,18 +515,34 @@ export type SubagentToolResult =
 export interface SubagentRecord {
   id: string;
   agent: string;
+  /** 任务提示词（详情面板置顶展示）。磁盘/内存源均有。 */
+  task: string;
   status: ExecutionStatus;
   mode: ExecutionMode;
   startedAt: number;
+  /** 根 Pi session ID（session 隔离过滤用）。递归链上所有层 record 同值。 */
+  rootSessionId: string | undefined;
+  /** 直接父 subagent record ID（层级树构建用）。顶层 record 为 undefined。 */
+  parentRecordId: string | undefined;
+  /** subagent 递归深度。顶层 =0，每层嵌套 +1。 */
+  depth: number;
   endedAt: number | undefined;
   turns: number;
   totalTokens: number;
   model: string;
   thinkingLevel: string | undefined;
   eventLog: AgentEventLogEntry[];
+  /** running 时的当前活动行（仅内存源；磁盘重建无此数据）。streaming 可观测性用。 */
+  currentActivity?: { type: "tool" | "text" | "thinking"; label: string };
   result?: string;
   error?: string;
   sessionFile?: string;
+  /** [MF#3] fork+worktree 模式下子 agent 改动的 patch 文件路径（worktree 外，供调用方应用）。 */
+  patchFile?: string;
+  /** 外部 Pi 实例（进程隔离模式下由外部启动的子进程）。 */
+  externalInstance?: AliveMarker;
+  /** fork 模式下的 worktree handle。 */
+  worktreeHandle?: WorktreeHandle;
 }
 
 // ============================================================
@@ -520,12 +653,23 @@ export interface ResourceLoaderOptions {
   additionalSkillPaths?: string[];
 }
 
+/** SessionManager 实例的最小接口（duck-typed，fork 路径消费 SDK 静态方法的返回值）。 */
+export interface SessionManagerLike {
+  getLeafId(): string | null;
+  createBranchedSession(leafId: string): string | undefined;
+  getSessionFile(): string | undefined;
+  getSessionId(): string;
+}
+
 /** Pi SDK 动态 import 的形状（getSdk() 获取）。 */
 export interface SdkLike {
   DefaultResourceLoader: new (opts: ResourceLoaderOptions) => ResourceLoaderLike;
   SessionManager: {
-    inMemory(cwd?: string): unknown;
-    create(cwd: string, sessionDir?: string): unknown;
+    inMemory(cwd?: string): SessionManagerLike;
+    create(cwd: string, sessionDir?: string): SessionManagerLike;
+    open(sessionFile: string, sessionDir?: string, cwdOverride?: string): SessionManagerLike;
+    /** [MF#1] fork 静态方法：从源 session 文件 fork 到目标 cwd，返回 SessionManager。 */
+    forkFrom(sourcePath: string, targetCwd: string, sessionDir?: string): SessionManagerLike;
   };
   createAgentSession: (opts: CreateAgentSessionArgs) => Promise<{ session: AgentSessionLike }>;
 }

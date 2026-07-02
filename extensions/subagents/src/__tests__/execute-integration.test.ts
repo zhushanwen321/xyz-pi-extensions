@@ -13,9 +13,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock,vi } from "vitest";
 
 import type { ModelInfo, ModelRegistryLike } from "../core/model-resolver.ts";
+import { removeAliveMarker } from "../runtime/execution/alive-store.ts";
+import { writeFinalized } from "../runtime/execution/finalized-marker.ts";
 import { ModelConfigService } from "../runtime/model-config-service.ts";
 import { SubagentService } from "../runtime/subagent-service.ts";
 import type { SdkLike } from "../types.ts";
@@ -25,6 +27,8 @@ import type { SdkEvent } from "../types.ts";
 // ── fakeSdk 注入：mock getSdk，保留 run/formatSchemaInstruction 真实实现 ──
 
 const { fakeSdkSlot } = vi.hoisted(() => ({ fakeSdkSlot: { current: null as SdkLike | null } }));
+// makeFakeSession 每实例创建的 tmpdir，afterEach 统一清理。
+const { fakeSessionTmps } = vi.hoisted(() => ({ fakeSessionTmps: [] as string[] }));
 
 vi.mock("../core/session-runner.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../core/session-runner.ts")>();
@@ -35,6 +39,45 @@ vi.mock("../core/session-runner.ts", async (importOriginal) => {
       if (!fakeSdkSlot.current) throw new Error("fakeSdkSlot.current not set before execute()");
       return Promise.resolve(fakeSdkSlot.current);
     },
+  };
+});
+
+// ── mock worktree-manager / finalized-marker / alive-store ──
+// 保留原有行为（no-op），单测按需 override
+
+const { mockWorktreeManager } = vi.hoisted(() => ({
+  mockWorktreeManager: {
+    create: vi.fn((cwd: string, id: string) => ({
+      path: `/fake/worktree/${id}`,
+      branch: `pi-sub-${id}`,
+      baseCommit: "abc123",
+      mainCwd: cwd,
+    })),
+    cleanup: vi.fn(),
+    collectPatch: vi.fn(() => ({ patchFile: "/fake.patch", failed: false, written: true })),
+    scan: vi.fn(),
+  },
+}));
+
+vi.mock("../runtime/worktree-manager.ts", () => {
+  const MockWorktreeManager = vi.fn();
+  MockWorktreeManager.prototype.create = mockWorktreeManager.create;
+  MockWorktreeManager.prototype.cleanup = mockWorktreeManager.cleanup;
+  MockWorktreeManager.prototype.collectPatch = mockWorktreeManager.collectPatch;
+  MockWorktreeManager.prototype.scan = mockWorktreeManager.scan;
+  return { WorktreeManager: MockWorktreeManager };
+});
+
+vi.mock("../runtime/execution/finalized-marker.ts", () => ({
+  writeFinalized: vi.fn(),
+  readFinalized: vi.fn(() => false),
+}));
+
+vi.mock("../runtime/execution/alive-store.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime/execution/alive-store.ts")>();
+  return {
+    ...actual,
+    removeAliveMarker: vi.fn(),
   };
 });
 
@@ -65,6 +108,10 @@ function makeFakeSession(opts: {
   messages?: AgentSessionLike["messages"];
   tools?: Array<{ name: string }>;
 }): FakeSessionHandle {
+  // 每实例独立 tmpdir：sidecar (.cancelled/.finalized) 落在这里，afterEach 统一清理。
+  // 不再用全局固定路径——那是 sidecar 泄漏到项目根的根因。
+  const instanceTmp = fs.mkdtempSync(path.join(os.tmpdir(), "exec-session-"));
+  fakeSessionTmps.push(instanceTmp);
   let subscriber: ((e: unknown) => void) | null = null;
   const promptMock = vi.fn(async () => {
     for (const e of opts.promptBehavior.events ?? []) {
@@ -103,7 +150,7 @@ function makeFakeSession(opts: {
     }),
     sessionId: "fake-session-id",
     sessionManager: {
-      getSessionFile: () => opts.sessionFile ?? "fake-session.jsonl",
+      getSessionFile: () => opts.sessionFile ?? path.join(instanceTmp, "fake-session.jsonl"),
       getSessionId: () => "fake-session-id",
       appendCustomEntry: vi.fn(() => "custom-id"),
     },
@@ -168,7 +215,7 @@ function setup(session: AgentSessionLike): SetupResult {
     sessionId: "exec-it",
     ctxModel: { id: "test-model", name: "Test", provider: "p", reasoning: false },
   });
-  const service = new SubagentService({ cwd: agentDir, modelService });
+  const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
   const pi = makePi();
   service.initSession({ pi, sessionId: "exec-it" });
   return {
@@ -182,9 +229,27 @@ function setup(session: AgentSessionLike): SetupResult {
 describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
   let agentDirs: string[] = [];
 
+  beforeEach(() => {
+    // 清理 prototype mock 状态（vi.mock 工厂在原型上设置 mock，共享状态）
+    mockWorktreeManager.create.mockReset();   mockWorktreeManager.create.mockImplementation((cwd: string, id: string) => ({
+      path: `/fake/worktree/${id}`,
+      branch: `pi-sub-${id}`,
+      baseCommit: "abc123",
+      mainCwd: cwd,
+    }));
+    mockWorktreeManager.cleanup.mockReset();
+    mockWorktreeManager.collectPatch.mockReset();
+    mockWorktreeManager.collectPatch.mockImplementation(() => ({ patchFile: "/fake.patch", failed: false, written: true }));
+    mockWorktreeManager.scan.mockReset();
+    vi.mocked(writeFinalized).mockReset();
+    vi.mocked(removeAliveMarker).mockReset();
+  });
+
   afterEach(() => {
     for (const dir of agentDirs) fs.rmSync(dir, { recursive: true, force: true });
     agentDirs = [];
+    for (const dir of fakeSessionTmps) fs.rmSync(dir, { recursive: true, force: true });
+    fakeSessionTmps.length = 0;
     fakeSdkSlot.current = null;
   });
 
@@ -214,9 +279,33 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     expect(result.record.status).toBe("done");
     expect(result.record.turns).toBe(1);
     expect(result.details.totalTokens).toBe(150);
-    expect(result.details.sessionFile).toBe("fake-session.jsonl");
+    expect(result.details.sessionFile).toBe(handle.session.sessionManager.getSessionFile());
     // run() 的 collectResult 从 record.turns[] 聚合 text（收口后不再读 session.messages）
     expect(result.details.result).toBe("done");
+  });
+
+  it("identity custom entry 写入 rootSessionId（session 隔离）", async () => {
+    const handle = makeFakeSession({
+      promptBehavior: { kind: "resolve", events: [{ type: "turn_end" }, { type: "message_end" }] },
+    });
+    const { service, agentDir, ctxModel } = setup(handle.session);
+    agentDirs.push(agentDir);
+
+    await service.execute({ task: "do work", wait: true, ctxModel });
+
+    const append = handle.session.sessionManager.appendCustomEntry as Mock;
+    const identityCall = append.mock.calls.find(
+      ([ct]) => ct === "subagent-identity",
+    );
+    expect(identityCall).toBeDefined();
+    // setup() 用 sessionId="exec-it"
+    const identityData = identityCall![1] as Record<string, unknown>;
+    expect(identityData.rootSessionId).toBe("exec-it");
+    // 顶层 record（主 session 直接 execute）：无父 subagent，depth=0
+    expect(identityData.parentRecordId).toBeUndefined();
+    expect(identityData.depth).toBe(0);
+    // task 字段（详情面板置顶展示）持久化到 identity entry，磁盘重建恢复
+    expect(identityData.task).toBe("do work");
   });
 
   // ============================================================
@@ -258,7 +347,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       sessionId: "exec-it",
       ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
     });
-    const service = new SubagentService({ cwd: agentDir, modelService });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
     service.initSession({ pi: makePi(), sessionId: "exec-it" });
 
     const result = await service.execute({
@@ -287,7 +376,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     const handle0 = await result;
     expect(handle0.mode).toBe("background");
     if (handle0.mode !== "background") throw new Error("unreachable");
-    expect(handle0.subagentId).toMatch(/^bg-\d+-\d+$/);
+    expect(handle0.subagentId).toMatch(/^bg-[0-9a-f]{6}-\d+-\d+$/);
     expect(handle0.details.status).toBe("running");
 
     // 等 detached 完成（createSession → prompt resolve → finalize done → notify）
@@ -358,7 +447,7 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
       sessionId: "exec-it",
       ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
     });
-    const service = new SubagentService({ cwd: agentDir, modelService });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
     const pi = makePi();
     service.initSession({ pi, sessionId: "exec-it" });
     const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
@@ -375,7 +464,8 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     const sent = pi.sendMessage.mock.calls[0]![0];
     // notify content = `Subagent "<agent>" (<id>) completed. Result:\n<text>`
     expect(sent.content).toContain("completed");
-    expect(sent.content).toContain("bg-1-");
+    // [MF#5] id 含 session 哈希前缀：bg-<6hex>-<seq>-<ts>
+    expect(sent.content).toMatch(/bg-[0-9a-f]{6}-1-\d+/);
   });
 
   // ============================================================
@@ -515,11 +605,364 @@ describe("SubagentService.execute() 集成 (覆盖 session-runner.run)", () => {
     // streaming 期 status 仍 running
     expect(updates[0]!.status).toBe("running");
   });
-});
 
-// ============================================================
-// helpers（追加）
-// ============================================================
+  // ============================================================
+  // worktree 集成测试（Wave 4: SubagentService 接线）
+  // ============================================================
+
+  // 辅助：[MF#1] 构造符合真实 SDK 契约的 fakeSdk（SessionManager.open/forkFrom + 实例 createBranchedSession）
+  function makeBranchedSdk(session: AgentSessionLike): SdkLike {
+    const sourceSm = {
+      getLeafId: () => "leaf-1",
+      createBranchedSession: () => "/mock/branched.jsonl",
+      getSessionFile: () => undefined,
+      getSessionId: () => "src-sm-id",
+    };
+    return {
+      DefaultResourceLoader: class { reload = vi.fn(async () => {}); },
+      SessionManager: { inMemory: () => sourceSm, create: () => sourceSm, open: () => sourceSm, forkFrom: () => sourceSm },
+      createAgentSession: vi.fn(async () => ({ session })),
+    };
+  }
+
+  it("execute fork+worktree: worktreeManager.create 前置 → finalizeRecord 写 finalized + cleanup", async () => {
+    const handle = makeFakeSession({ promptBehavior: { kind: "resolve" } });
+    fakeSdkSlot.current = makeBranchedSdk(handle.session);
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-wt-"));
+    agentDirs.push(agentDir);
+    const modelService = new ModelConfigService({ agentDir });
+    modelService.initModel({
+      modelRegistry: makeEmptyRegistry(),
+      sessionId: "exec-wt",
+      ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
+    });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
+    service.initSession({ pi: makePi(), sessionId: "exec-wt" });
+    const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
+
+    const result = await service.execute({
+      task: "worktree work",
+      wait: true,
+      ctxModel,
+      fork: true,
+      worktree: true,
+    });
+
+    expect(result.mode).toBe("sync");
+    if (result.mode !== "sync") throw new Error("unreachable");
+    expect(result.record.status).toBe("done");
+    // worktreeManager.create 被调用（service 的 cwd 作为 mainCwd）
+    expect(mockWorktreeManager.create).toHaveBeenCalledWith(agentDir, expect.stringMatching(/^run-[0-9a-f]{6}-\d+$/));
+    // finalizeRecord D-017: finalized + cleanup 被调用
+    expect(vi.mocked(writeFinalized)).toHaveBeenCalled();
+    expect(mockWorktreeManager.cleanup).toHaveBeenCalled();
+  });
+
+  it("execute fork worktree create 失败 → status=failed, 不进入 run", async () => {
+    const handle = makeFakeSession({ promptBehavior: { kind: "resolve" } });
+    fakeSdkSlot.current = makeBranchedSdk(handle.session);
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-wt-"));
+    agentDirs.push(agentDir);
+    const modelService = new ModelConfigService({ agentDir });
+    modelService.initModel({
+      modelRegistry: makeEmptyRegistry(),
+      sessionId: "exec-wt",
+      ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
+    });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
+    service.initSession({ pi: makePi(), sessionId: "exec-wt" });
+
+    // 实例级 mock：worktreeManager 实例已创建，直接覆盖其 create 方法
+    // Reflect.get 绕过 TS private 访问检查（返回 any，单层断言合规）
+    const svc = Reflect.get(service, "worktreeManager") as typeof mockWorktreeManager;
+    const origCreate = svc.create;
+    svc.create = vi.fn().mockImplementation(() => {
+      throw new Error("dirty worktree");
+    });
+
+    const result = await service.execute({
+      task: "fail wt",
+      wait: true,
+      ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
+      fork: true,
+      worktree: true,
+    });
+
+    // 恢复原始 mock（不影响其他测试）
+    svc.create = origCreate;
+
+    expect(result.mode).toBe("sync");
+    if (result.mode !== "sync") throw new Error("unreachable");
+    expect(result.record.status).toBe("failed");
+    expect(result.details.error).toContain("dirty worktree");
+    // 不进入 run → prompt 不被调用
+    expect(handle.promptCalls()).toBe(0);
+  });
+
+  it("finalizeRecord D-017 时序: collectPatch→completeRecord→archive→finalized+cleanup (spy 验)", async () => {
+    const handle = makeFakeSession({ promptBehavior: { kind: "resolve" } });
+    fakeSdkSlot.current = makeBranchedSdk(handle.session);
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-wt-"));
+    agentDirs.push(agentDir);
+    const modelService = new ModelConfigService({ agentDir });
+    modelService.initModel({
+      modelRegistry: makeEmptyRegistry(),
+      sessionId: "exec-wt",
+      ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
+    });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
+    service.initSession({ pi: makePi(), sessionId: "exec-wt" });
+    const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
+
+    await service.execute({
+      task: "seq verify",
+      wait: true,
+      ctxModel,
+      fork: true,
+      worktree: true,
+    });
+
+    // D-017: collectPatch 被调用（step 0）
+    expect(mockWorktreeManager.collectPatch).toHaveBeenCalled();
+    // D-017: finalized + cleanup 被调用（step 3）
+    expect(vi.mocked(writeFinalized)).toHaveBeenCalled();
+    expect(mockWorktreeManager.cleanup).toHaveBeenCalled();
+    // collectPatch 在 finalized/cleanup 之前调用（时序）
+    const collectOrder = mockWorktreeManager.collectPatch.mock.invocationCallOrder[0]!;
+    const finalizedOrder = vi.mocked(writeFinalized).mock.invocationCallOrder[0]!;
+    const cleanupOrder = mockWorktreeManager.cleanup.mock.invocationCallOrder[0]!;
+    expect(collectOrder).toBeLessThan(finalizedOrder);
+    expect(collectOrder).toBeLessThan(cleanupOrder);
+  });
+
+  it("finalizeRecord [MF-empty-diff]: collectPatch 无改动(written:false) → record.patchFile 不回填", async () => {
+    mockWorktreeManager.collectPatch.mockImplementation(() => ({ patchFile: "/fake.patch", failed: false, written: false }));
+    const handle = makeFakeSession({ promptBehavior: { kind: "resolve" } });
+    fakeSdkSlot.current = makeBranchedSdk(handle.session);
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-wt-"));
+    agentDirs.push(agentDir);
+    const modelService = new ModelConfigService({ agentDir });
+    modelService.initModel({
+      modelRegistry: makeEmptyRegistry(),
+      sessionId: "exec-wt",
+      ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
+    });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
+    service.initSession({ pi: makePi(), sessionId: "exec-wt" });
+    const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
+
+    const result = await service.execute({
+      task: "no changes",
+      wait: true,
+      ctxModel,
+      fork: true,
+      worktree: true,
+    });
+
+    // 纯查询/分析任务：子 agent 零改动 → collectPatch written:false → patchFile 不回填，
+    // 避免 notifier/render/sync 路径输出 `git apply <不存在>`。
+    if (result.mode !== "sync") throw new Error("test setup: expected sync handle");
+    expect(result.details.patchFile).toBeUndefined();
+    // failed:false → patchOk=true → cleanup 仍执行（worktree 正常回收）
+    expect(mockWorktreeManager.cleanup).toHaveBeenCalled();
+  });
+
+  it("finalizeRecord D-022: collectPatch failed → cleanup 跳过, finalized 仍执行", async () => {
+    mockWorktreeManager.collectPatch.mockImplementation(() => ({ patchFile: "/fake.patch", failed: true, written: false }));
+    const handle = makeFakeSession({ promptBehavior: { kind: "resolve" } });
+    fakeSdkSlot.current = makeBranchedSdk(handle.session);
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-wt-"));
+    agentDirs.push(agentDir);
+    const modelService = new ModelConfigService({ agentDir });
+    modelService.initModel({
+      modelRegistry: makeEmptyRegistry(),
+      sessionId: "exec-wt",
+      ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
+    });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
+    service.initSession({ pi: makePi(), sessionId: "exec-wt" });
+    const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
+
+    await service.execute({
+      task: "patch fail",
+      wait: true,
+      ctxModel,
+      fork: true,
+      worktree: true,
+    });
+
+    // D-022: patchOk=false → cleanup 跳过
+    expect(mockWorktreeManager.cleanup).not.toHaveBeenCalled();
+    // finalized 仍执行
+    expect(vi.mocked(writeFinalized)).toHaveBeenCalled();
+  });
+
+  it("finalizeRecord D-022: collectPatch throw → cleanup 跳过, finalized 仍执行", async () => {
+    mockWorktreeManager.collectPatch.mockImplementation(() => { throw new Error("git failed"); });
+    const handle = makeFakeSession({ promptBehavior: { kind: "resolve" } });
+    fakeSdkSlot.current = makeBranchedSdk(handle.session);
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-wt-"));
+    agentDirs.push(agentDir);
+    const modelService = new ModelConfigService({ agentDir });
+    modelService.initModel({
+      modelRegistry: makeEmptyRegistry(),
+      sessionId: "exec-wt",
+      ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
+    });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
+    service.initSession({ pi: makePi(), sessionId: "exec-wt" });
+    const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
+
+    await service.execute({
+      task: "patch throw",
+      wait: true,
+      ctxModel,
+      fork: true,
+      worktree: true,
+    });
+
+    // D-022: collectPatch throw → patchOk=false → cleanup 跳过
+    expect(mockWorktreeManager.cleanup).not.toHaveBeenCalled();
+    // finalized 仍执行
+    expect(vi.mocked(writeFinalized)).toHaveBeenCalled();
+  });
+
+  it("finalizeRecord B9: completeRecord 抛错 → finalized/cleanup 仍执行", async () => {
+    const handle = makeFakeSession({ promptBehavior: { kind: "resolve" } });
+    fakeSdkSlot.current = makeBranchedSdk(handle.session);
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-wt-"));
+    agentDirs.push(agentDir);
+    const modelService = new ModelConfigService({ agentDir });
+    modelService.initModel({
+      modelRegistry: makeEmptyRegistry(),
+      sessionId: "exec-wt",
+      ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
+    });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
+    service.initSession({ pi: makePi(), sessionId: "exec-wt" });
+    const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
+
+    // spy on completeRecord to throw (需拦截 execution-record 的 completeRecord)
+    const executionRecord = await import("../core/execution-record.ts");
+    const _origComplete = executionRecord.completeRecord;
+    const spy = vi.spyOn(executionRecord, "completeRecord").mockImplementationOnce(() => {
+      throw new Error("completeRecord boom");
+    });
+
+    await service.execute({
+      task: "b9 test",
+      wait: true,
+      ctxModel,
+      fork: true,
+      worktree: true,
+    });
+
+    spy.mockRestore();
+
+    // B9: completeRecord 抛错后 finalized/cleanup 仍执行
+    expect(vi.mocked(writeFinalized)).toHaveBeenCalled();
+    expect(mockWorktreeManager.cleanup).toHaveBeenCalled();
+  });
+
+  it("cancelBackground: worktree cleanup + removeAliveMarker 被调用 (不写 finalized)", async () => {
+    const handle = makeFakeSession({ promptBehavior: { kind: "pending" } });
+    fakeSdkSlot.current = makeBranchedSdk(handle.session);
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-wt-"));
+    agentDirs.push(agentDir);
+    const modelService = new ModelConfigService({ agentDir });
+    modelService.initModel({
+      modelRegistry: makeEmptyRegistry(),
+      sessionId: "exec-wt",
+      ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
+    });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
+    service.initSession({ pi: makePi(), sessionId: "exec-wt" });
+    const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
+
+    const result = await service.execute({
+      task: "cancel wt",
+      wait: false,
+      ctxModel,
+      fork: true,
+      worktree: true,
+    });
+
+    if (result.mode !== "background") throw new Error("expected background");
+    // 等 detached 启动（createAndConfigureSession 设置 sessionFile）
+    await flushMicrotasks();
+    service.cancel(result.subagentId);
+
+    // worktree cleanup + removeAliveMarker 被调用
+    expect(mockWorktreeManager.cleanup).toHaveBeenCalled();
+    expect(vi.mocked(removeAliveMarker)).toHaveBeenCalled();
+    // BC-4 互斥：cancel 不写 finalized
+    expect(vi.mocked(writeFinalized)).not.toHaveBeenCalled();
+  });
+
+  it("[回归] fork:true alone (worktree 未传) → 不创建 worktree (fork 不隐含 worktree)", async () => {
+    const handle = makeFakeSession({ promptBehavior: { kind: "resolve" } });
+    fakeSdkSlot.current = makeBranchedSdk(handle.session);
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-wt-"));
+    agentDirs.push(agentDir);
+    const modelService = new ModelConfigService({ agentDir });
+    modelService.initModel({
+      modelRegistry: makeEmptyRegistry(),
+      sessionId: "exec-wt",
+      ctxModel: { id: "m", name: "M", provider: "p", reasoning: false },
+    });
+    const service = new SubagentService({ cwd: agentDir, modelService, getMainSessionFile: () => "/mock/main-session.jsonl" });
+    service.initSession({ pi: makePi(), sessionId: "exec-wt" });
+    const ctxModel = { id: "m", name: "M", provider: "p", reasoning: false } as ModelInfo;
+
+    const result = await service.execute({
+      task: "fork only, no worktree",
+      wait: true,
+      ctxModel,
+      fork: true,
+      // worktree 不传——fork 不应兑底创建 worktree
+    });
+
+    expect(result.record.status).toBe("done");
+    expect(mockWorktreeManager.create).not.toHaveBeenCalled();
+    expect(mockWorktreeManager.cleanup).not.toHaveBeenCalled();
+    expect(mockWorktreeManager.collectPatch).not.toHaveBeenCalled();
+  });
+
+  it("非 worktree fork 路径: 新 mock 不影响行为 (writeFinalized/cleanup 不被调用)", async () => {
+    const handle = makeFakeSession({
+      promptBehavior: {
+        kind: "resolve",
+        events: [
+          { type: "message_end", message: { usage: { input: 10, output: 5 } } },
+        ],
+      },
+    });
+    const { service, agentDir, ctxModel } = setup(handle.session);
+    agentDirs.push(agentDir);
+
+    const result = await service.execute({ task: "no wt", wait: true, ctxModel });
+
+    expect(result.record.status).toBe("done");
+    // 非 worktree 路径: 不调 worktreeManager.create/cleanup/collectPatch
+    expect(mockWorktreeManager.create).not.toHaveBeenCalled();
+    expect(mockWorktreeManager.cleanup).not.toHaveBeenCalled();
+    expect(mockWorktreeManager.collectPatch).not.toHaveBeenCalled();
+    // writeFinalized 仍被调用（finalizeRecord 总是写 finalized）
+    expect(vi.mocked(writeFinalized)).toHaveBeenCalled();
+  });
+  it("[MF#3] execute({worktree:true, fork:false}) → throws (worktree requires fork)", async () => {
+    const handle = makeFakeSession({ promptBehavior: { kind: "resolve" } });
+    const { service, agentDir, ctxModel } = setup(handle.session);
+    agentDirs.push(agentDir);
+
+    await expect(
+      service.execute({ task: "bad combo", wait: true, ctxModel, worktree: true, fork: false }),
+    ).rejects.toThrow(/requires fork/);
+    // 守卫在任何副作用之前 fail-fast：worktree 未创建、prompt 未调用
+    expect(mockWorktreeManager.create).not.toHaveBeenCalled();
+    expect(handle.promptCalls()).toBe(0);
+  });
+});
 
 /** 让 microtask 队列跑空（detached promise / await 链推进）。 */
 async function flushMicrotasks(): Promise<void> {

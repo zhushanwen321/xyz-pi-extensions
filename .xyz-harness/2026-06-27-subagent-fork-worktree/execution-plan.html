@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>执行计划 — subagent fork + worktree</title>
+<style>
+
+/*
+ * design.css — design-visual-explainer 公共样式
+ * 从 issues.html (feat-system-prompt-loader) 抽出，作为 6 阶段产物骨架的统一底座。
+ * 阶段特有类（.issue / .wave-card / .uc / .risk-* 等）放各骨架局部 style，不在此文件。
+ *
+ * render.sh 通过占位符注释 INLINE:design.css 将本文件内联进产物 HTML。
+ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --font-body: 'Bricolage Grotesque', 'PingFang SC', system-ui, sans-serif;
+  --font-mono: 'Space Mono', 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  --bg: #f6f8f8; --surface: #ffffff; --surface-2: #eef2f1; --surface-elevated: #ffffff;
+  --border: rgba(15, 40, 40, 0.08); --border-bright: rgba(15, 40, 40, 0.16);
+  --text: #0f2a2a; --text-dim: #5a6b6b;
+  --accent: #0d9488; --accent-dim: rgba(13, 148, 136, 0.10);
+  --slate: #334155; --slate-dim: rgba(51, 65, 85, 0.10);
+  --green: #059669; --green-dim: rgba(5, 150, 105, 0.12);
+  --red: #dc2626; --red-dim: rgba(220, 38, 38, 0.10);
+  --orange: #c2410c; --orange-dim: rgba(194, 65, 12, 0.10);
+  --amber: #b45309; --amber-dim: rgba(180, 83, 9, 0.12);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0a1414; --surface: #111d1d; --surface-2: #182626; --surface-elevated: #162121;
+    --border: rgba(180, 220, 220, 0.07); --border-bright: rgba(180, 220, 220, 0.15);
+    --text: #e3efee; --text-dim: #8aa0a0;
+    --accent: #2dd4bf; --accent-dim: rgba(45, 212, 191, 0.13);
+    --slate: #94a3b8; --slate-dim: rgba(148, 163, 184, 0.12);
+    --green: #34d399; --green-dim: rgba(52, 211, 153, 0.13);
+    --red: #f87171; --red-dim: rgba(248, 113, 113, 0.12);
+    --orange: #fb923c; --orange-dim: rgba(251, 146, 60, 0.12);
+    --amber: #fbbf24; --amber-dim: rgba(251, 191, 36, 0.14);
+  }
+}
+html { scroll-behavior: smooth; }
+body { font-family: var(--font-body); color: var(--text); line-height: 1.65; background: var(--bg); background-image: radial-gradient(ellipse at 50% -5%, var(--accent-dim) 0%, transparent 55%); padding: 32px; overflow-wrap: break-word; }
+.grid > *, .flex > *, [style*="display:grid"] > *, [style*="display:flex"] > * { min-width: 0; }
+h1 { font-size: 38px; font-weight: 700; letter-spacing: -1px; margin-bottom: 6px; text-wrap: balance; }
+h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.3px; margin: 56px 0 18px; padding-bottom: 10px; border-bottom: 1px solid var(--border); scroll-margin-top: 70px; }
+h3 { font-size: 16px; font-weight: 700; margin: 26px 0 12px; color: var(--accent); font-family: var(--font-mono); letter-spacing: 0.2px; scroll-margin-top: 70px; }
+h4 { font-size: 13px; font-weight: 600; margin: 18px 0 8px; color: var(--slate); font-family: var(--font-mono); }
+p { margin-bottom: 12px; }
+.subtitle { color: var(--text-dim); font-size: 13px; margin-bottom: 8px; font-family: var(--font-mono); }
+code { font-family: var(--font-mono); font-size: 0.92em; }
+strong { font-weight: 600; }
+
+/* Layout: TOC + main 双栏 */
+.wrap { max-width: 1380px; margin: 0 auto; display: grid; grid-template-columns: 168px 1fr; gap: 0 44px; }
+.main { min-width: 0; }
+header.doc-head { margin-bottom: 28px; }
+.badge-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.tag { font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; padding: 4px 10px; border-radius: 20px; background: var(--accent-dim); color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+.tag--slate { background: var(--slate-dim); color: var(--slate); border-color: color-mix(in srgb, var(--slate) 30%, transparent); }
+.tag--green { background: var(--green-dim); color: var(--green); border-color: color-mix(in srgb, var(--green) 30%, transparent); }
+.tag--amber { background: var(--amber-dim); color: var(--amber); border-color: color-mix(in srgb, var(--amber) 30%, transparent); }
+
+/* TOC sidebar + scroll-spy */
+.toc { position: sticky; top: 24px; align-self: start; padding: 14px 0; grid-row: 1/-1; max-height: calc(100dvh - 48px); overflow-y: auto; }
+.toc-title { font-family: var(--font-mono); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; color: var(--text-dim); padding: 0 0 10px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+.toc a { display: block; font-size: 11px; color: var(--text-dim); text-decoration: none; padding: 4px 8px; border-radius: 5px; border-left: 2px solid transparent; transition: all .15s; line-height: 1.35; margin-bottom: 1px; }
+.toc a:hover { color: var(--text); background: var(--surface-2); }
+.toc a.active { color: var(--text); border-left-color: var(--accent); background: var(--accent-dim); }
+
+/* TL;DR 摘要框 */
+.tldr { background: var(--surface-elevated); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 14px; padding: 20px 24px; margin: 24px 0 8px; box-shadow: 0 4px 18px rgba(13,148,136,.06); }
+.tldr__label { font-family: var(--font-mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.8px; color: var(--accent); margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.tldr__label::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.tldr ul { list-style: none; padding: 0; }
+.tldr li { padding: 5px 0 5px 18px; position: relative; font-size: 14px; line-height: 1.55; }
+.tldr li::before { content: '→'; position: absolute; left: 0; color: var(--accent); font-weight: 600; }
+.tldr code { font-family: var(--font-mono); font-size: 12px; background: var(--accent-dim); color: var(--accent); padding: 1px 6px; border-radius: 3px; }
+
+/* Mermaid zoom/pan 外壳（与 zoom.js 的选择器契约绑定，勿改名） */
+.mermaid-wrap { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px 24px; overflow: auto; margin-bottom: 24px; display: flex; justify-content: center; align-items: center; min-height: 400px; cursor: grab; }
+.mermaid-wrap.is-panning { cursor: grabbing; user-select: none; }
+.zoom-controls { position: absolute; top: 8px; right: 8px; display: flex; gap: 2px; z-index: 10; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 2px; }
+.zoom-controls button { width: 28px; height: 28px; border: none; background: transparent; color: var(--text-dim); font-family: var(--font-mono); font-size: 14px; cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; transition: background .15s, color .15s; }
+.zoom-controls button:hover { background: var(--border); color: var(--text); }
+.diagram-shell { position: relative; }
+.diagram-shell__hint { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); margin-bottom: 8px; opacity: .7; }
+.mermaid-viewport { position: relative; overflow: hidden; width: 100%; height: 100%; min-height: 300px; }
+.mermaid-canvas { position: absolute; top: 0; left: 0; }
+.zoom-label { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); padding: 0 6px; white-space: nowrap; }
+.mermaid .nodeLabel { font-family: var(--font-body) !important; font-size: 14px !important; }
+.mermaid .edgeLabel { font-family: var(--font-mono) !important; font-size: 12px !important; }
+.mermaid .node rect, .mermaid .node circle, .mermaid .node polygon { stroke-width: 1.5px !important; }
+
+/* 数据表格（功能清单/AC 清单/追溯表/签名表/决策记录） */
+.table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin: 16px 0 24px; }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.55; }
+.data-table thead { position: sticky; top: 0; z-index: 2; }
+.data-table th { background: var(--surface-2); font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); text-align: left; padding: 13px 16px; border-bottom: 2px solid var(--border-bright); white-space: nowrap; }
+.data-table td { padding: 11px 16px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.data-table tbody tr:nth-child(even) { background: var(--accent-dim); }
+.data-table tbody tr:hover { background: var(--border); }
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table code { font-family: var(--font-mono); font-size: 11px; background: var(--accent-dim); color: var(--accent); padding: 1px 5px; border-radius: 3px; }
+
+/* Callout 提示框 */
+.callout { background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 14px 18px; font-size: 13px; line-height: 1.6; color: var(--text-dim); margin: 20px 0; }
+.callout strong { color: var(--text); font-weight: 600; }
+.callout code { font-family: var(--font-mono); font-size: 11px; background: var(--accent-dim); color: var(--accent); padding: 1px 5px; border-radius: 3px; }
+
+/* 章节小标题（mono 大写，区别于 h2） */
+.sec-head { font-family: var(--font-mono); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--accent); margin: 40px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+
+/* 卡片组件（架构概览 / 决策记录 / 模块概览） */
+.ve-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 8px; }
+.ve-card--elevated { box-shadow: 0 4px 18px rgba(13,148,136,.06); }
+.ve-card__label { font-family: var(--font-mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: var(--accent); display: flex; align-items: center; gap: 6px; }
+.ve-card__label::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.ve-card h3 { margin: 0; color: var(--text); font-family: var(--font-body); font-size: 17px; letter-spacing: -0.2px; }
+.ve-card p { margin: 0; font-size: 13.5px; color: var(--text-dim); line-height: 1.55; }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 18px 0 28px; }
+.node-list { list-style: none; padding: 0; margin: 0; }
+.node-list li { padding: 4px 0 4px 16px; position: relative; font-size: 13px; line-height: 1.5; color: var(--text-dim); }
+.node-list li::before { content: '›'; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
+.node-list code { font-family: var(--font-mono); font-size: 11.5px; background: var(--accent-dim); color: var(--accent); padding: 1px 5px; border-radius: 3px; }
+
+/* 状态药丸（AC 清单 / 追溯表状态列） */
+.status { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 5px; white-space: nowrap; }
+.status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.status--match { background: var(--green-dim); color: var(--green); }
+.status--warn { background: var(--amber-dim); color: var(--amber); }
+.status--gap { background: var(--red-dim); color: var(--red); }
+.status--na { background: var(--slate-dim); color: var(--slate); }
+
+/* 热力图单元格（④ NFR 风险矩阵） */
+.heatmap-cell { text-align: center; font-size: 15px; padding: 8px; }
+.heatmap-cell--good { background: var(--green-dim); }
+.heatmap-cell--warn { background: var(--amber-dim); }
+.heatmap-cell--bad { background: var(--red-dim); }
+.heatmap-cell--na { background: transparent; color: var(--text-dim); }
+
+/* 图例 */
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 16px 0; font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+
+/* Footer */
+footer.doc-foot { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
+
+/* 入场动画 */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.animate { animation: fadeUp .35s ease-out both; animation-delay: calc(var(--i, 0) * .04s); }
+
+/* 响应式 */
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+@media (max-width: 1000px) {
+  .wrap { grid-template-columns: 1fr; }
+  .toc { position: sticky; top: 0; z-index: 200; max-height: none; display: flex; gap: 4px; align-items: center; overflow-x: auto; background: var(--bg); border-bottom: 1px solid var(--border); padding: 10px 0; grid-row: auto; }
+  .toc-title { display: none; }
+  .toc a { white-space: nowrap; flex-shrink: 0; border-left: none; border-bottom: 2px solid transparent; border-radius: 4px 4px 0 0; padding: 6px 10px; font-size: 10px; }
+  .toc a.active { border-left: none; border-bottom-color: var(--accent); background: var(--surface); }
+  h2, h3 { scroll-margin-top: 60px; }
+  body { padding: 16px; }
+}
+@media (max-width: 768px) { body { padding: 12px; } h1 { font-size: 26px; } }
+
+/* === execution-plan 阶段特有样式 === */
+.wave-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin: 14px 0; overflow: hidden; }
+.wave-card > summary { cursor: pointer; padding: 16px 20px; font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 10px; list-style: none; }
+.wave-card > summary::-webkit-details-marker { display: none; }
+.wave-card > summary::before { content: '▸'; color: var(--accent); transition: transform .15s; font-size: 13px; }
+.wave-card[open] > summary::before { transform: rotate(90deg); }
+.wave-card--gate { border-left: 4px solid var(--green); }
+.wave-num { font-family: var(--font-mono); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--accent); background: var(--accent-dim); padding: 3px 8px; border-radius: 5px; }
+.wave-card > *:not(summary) { padding: 0 20px; }
+.wave-card h4 { margin-top: 14px; }
+.wave-meta { font-size: 13px; color: var(--text-dim); margin: 8px 0 0; padding-top: 4px !important; }
+.wave-card .node-list { padding-bottom: 16px !important; }
+.manifest-hint { background: var(--amber-dim); border-left: 3px solid var(--amber); border-radius: 0 8px 8px 0; padding: 12px 16px; font-size: 13px; color: var(--text); margin: 16px 0; }
+.e2e-tree { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; margin: 16px 0 24px; overflow-x: auto; }
+.e2e-tree pre { font-family: var(--font-mono); font-size: 12px; line-height: 1.6; color: var(--text-dim); margin: 0; white-space: pre; }
+.e2e-tree .dir { color: var(--accent); font-weight: 600; }
+.e2e-tree .file { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" id="toc">
+  <div class="toc-title">目录</div>
+  <a href="#tldr">TL;DR</a>
+  <a href="#dag">Wave 依赖 DAG</a>
+  <a href="#sched">调度表</a>
+  <a href="#waves">Wave 详情</a>
+  <a href="#e2e">CLI E2E 沙盒</a>
+  <a href="#manifest">测试验收清单</a>
+  <a href="#handoff">执行交接</a>
+</nav>
+<main class="main">
+<header class="doc-head">
+  <p class="subtitle">⑥ 执行计划 · downstream: coding · upstream: code-architecture.md</p>
+  <h1>执行计划 — subagent fork + worktree 能力增强</h1>
+  <div class="badge-row">
+    <span class="tag">6 Waves</span>
+    <span class="tag tag--slate">3 并行组</span>
+    <span class="tag tag--slate">36 测试用例</span>
+    <span class="tag tag--slate">2 测试层（unit/integration + CLI E2E）</span>
+  </div>
+</header>
+
+<section class="tldr" id="tldr">
+  <div class="tldr__label">TL;DR · 核心结论</div>
+  <ul class="animate">
+    <li><strong>6 个 Wave 垂直切片</strong>：Wave 1 编译基石（types+状态机）→ Wave 2 五叶子模块并行 → Wave 3 编排分流并行 → Wave 4 汇合点串行 → Wave 5 外壳/文档并行 → Wave 6 CLI E2E + 验收 Gate。</li>
+    <li><strong>依赖从⑤时序图推导</strong>：功能 B 调用功能 A 的方法 → Wave(B) blocked_by Wave(A)。汇合点 SubagentService 必须 last 串行（唯一改 subagent-service.ts）。</li>
+    <li><strong>测试双层落地</strong>：unit/integration 走既有 vitest <code>src/__tests__/</code>；E2E 走 pi CLI 模式 <code>~/Code/test-pi-extension/</code> 沙盒（7 scenario 覆盖 UC-1~UC-7）。</li>
+    <li><strong>Definition of Done = 测试验收清单 36 用例全绿</strong>。末尾验收 Wave（Wave 6）blocked_by 全功能 Wave，不绿 = 未完成。</li>
+    <li><strong>Round 1 追踪 CONVERGED</strong>：6 gap 全修（2 笔误/文件影响 + 2 标注缺口 + 1 用例断链 + 1 层级漂移），manifest 36/36 = ⑤test-matrix 全量。</li>
+  </ul>
+</section>
+
+<h2 class="sec-head" id="dag">Wave 依赖 DAG（主角图）</h2>
+<div class="diagram-shell">
+  <div class="diagram-shell__hint">节点 = Wave，边 = blocked_by。并行组内子切片改不同文件可并行。</div>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button data-action="zoom-in" title="放大">+</button>
+      <button data-action="zoom-out" title="缩小">−</button>
+      <button data-action="zoom-fit" title="适应">⤢</button>
+      <button data-action="zoom-one" title="1:1">1:1</button>
+      <button data-action="zoom-expand" title="新窗口打开">⤴</button>
+    </div>
+    <div class="mermaid-viewport"><div class="mermaid-canvas"></div></div>
+    <span class="zoom-label">rendering…</span>
+  </div>
+  <script type="text/plain" class="diagram-source">
+graph LR
+    W1[Wave 1: 编译基石<br/>types + 状态机]
+    W1 --> W2a[Wave 2A: alive-store #13]
+    W1 --> W2b[Wave 2B: SCR #3]
+    W1 --> W2c[Wave 2C: FinalizedMarker #5]
+    W1 --> W2d[Wave 2D: WorktreeManager #4]
+    W1 --> W2e[Wave 2E: GC session-file-gc #10]
+    W2a --> W3a[Wave 3A: session-runner fork分流 #6]
+    W2b --> W3a
+    W2a --> W3b[Wave 3B: record-store 四分支 #12]
+    W2c --> W3b
+    W3a --> W4[Wave 4: SubagentService 集成 #7]
+    W2d --> W4
+    W3b --> W4
+    W2a --> W4
+    W2c --> W4
+    W4 --> W5a[Wave 5A: subagent-tool schema #8]
+    W4 --> W5b[Wave 5B: index.ts reaper #9]
+    W4 --> W5c[Wave 5C: ADR-001 修订 #11]
+    W5a --> W6[Wave 6: CLI E2E + 验收 Gate]
+    W5b --> W6
+    W5c --> W6
+    W4 --> W6
+    W3a --> W6
+    W2d --> W6
+  </script>
+</div>
+
+<h2 class="sec-head" id="sched">调度表</h2>
+<div class="callout"><strong>并行约束</strong>：同组最多 3 subagent 并行（Semaphore）；同文件不允许多 Wave 同时修改；Wave 2 有 5 子切片分两批（2A/2B/2C 先，2D/2E 后）。无独立 Prefactor Wave（refactor 铺路并入 Wave 1 编译基石）。</div>
+<div class="table-wrap"><div class="table-scroll"><table class="data-table"><thead><tr>
+<th>Wave</th><th>切片</th><th>P级</th><th>Blocked by</th><th>并行组</th><th>说明</th>
+</tr></thead><tbody>
+<tr><td>1</td><td>编译基石（types.ts + execution-record + path-encoding）</td><td>P0</td><td>无——可立即开始</td><td>—</td><td>#1 types（crashed/forkFrom/createBranchedSession/WorktreeHandle/AliveMarker/RunOptions+ExecuteOptions 字段）+ #2 状态机收敛口（markReconstructedStatus + tryTransition+crashed + STATUS_PRIORITY）。UC-6 list 投影类型（externalInstance）也在此。编译基石，所有下游类型层依赖</td></tr>
+<tr><td>2</td><td>P1 纯叶子模块（5 子切片并行）</td><td>P1</td><td>Wave 1（2D/2E 内部 blocked_by 2A：import alive-store）</td><td>A</td><td>**2A** alive-store #13（write/read/remove + isProcessAlive）/ **2B** SCR #3（resolveSessionContext 纯函数）/ **2C** FinalizedMarker #5（write/read）/ **2D** WorktreeManager #4（create/cleanup/collectPatch/scan/gitRun，scan import alive-store）/ **2E** session-file-gc #10（walkAndClean+.alive 探活，import alive-store）。五者改不同文件，可并行。D-025：#13 在此就绪解循环。2D/2E 均 import #13 导出（readAliveMarker/isProcessAlive），须在 2A 就绪后，靠第一批 2A 先行满足</td></tr>
+<tr><td>3</td><td>P1 编排分流（2 子切片并行）</td><td>P1</td><td>Wave 1, 2A, 2B, 2C</td><td>B</td><td>**3A** session-runner #6（fork 分流 createBranched→forkFrom 两级降级 + writeAliveMarker + identity forkDepth，依赖 SCR #3 + alive #13）/ **3B** record-store #12（reconstructAll 四分支 pid 探活，依赖 #2 状态机 + FinalizedMarker #5 + alive #13）。改不同文件（session-runner.ts vs record-store.ts），可并行</td></tr>
+<tr><td>4</td><td>P1 汇合点 SubagentService 集成</td><td>P1</td><td>Wave 3A, 3B, 2A, 2C, 2D</td><td>—</td><td>#7 execute 前置 WTM.create（worktreeHandle 回填）+ finalizeRecord D-017 时序（collectPatch→completeRecord→archive→三件套）+ D-022 patchOk 守卫 + cancelBackground cleanup。编排汇合点，必须串行（唯一修改 subagent-service.ts）</td></tr>
+<tr><td>5</td><td>P2 外壳/文档（3 子切片并行）</td><td>P2</td><td>Wave 4</td><td>C</td><td>**5A** subagent-tool #8（StartParam +fork/worktree/cwd 字段，依赖 Wave 1 类型经 Wave 4 传递）/ **5B** index.ts #9（session_start 挂 WTM.scan reaper + cache mainSessionFile，依赖 #4 WTM.scan + Wave 4 #7；index→gc 是现有调用，#10 仅扩展范围不改签名，非 5B 新依赖）/ **5C** ADR-001 修订 #11（文档，task=全部输入→可选 fork 继承）。三者改不同文件，可并行</td></tr>
+<tr><td>6</td><td>CLI E2E + 验收 Gate</td><td>—</td><td>Wave 1, Wave 2, Wave 3, Wave 4, Wave 5</td><td>—</td><td>**必须最后**：写 pi CLI E2E 测试（~/Code/test-pi-extension/ 沙盒）→ 跑全量测试（unit + integration + e2e）→ 核对测试验收清单全 PASS → 输出覆盖率报告</td></tr>
+</tbody></table></div></div>
+
+<h2 class="sec-head" id="waves">Wave 详情</h2>
+
+<details class="wave-card" open>
+  <summary><span class="wave-num">Wave 1</span> 编译基石（types + 状态机收敛） <span class="status status--warn">P0（#1 types / #2 execution-record + record-store 状态机基础）</span></summary>
+  <div class="wave-meta"><strong>Blocked by:</strong> 无——可立即开始</div>
+  <h4>覆盖的 test-matrix 用例 ID</h4>
+  <ul class="node-list"><li>T7.8（状态：status 不裸赋值，经 markReconstructedStatus 收口；本 Wave 产出收口方法，lint 层验证）</li><li>T6.1/T6.2 部分（UC-6 list 投影类型：externalInstance 字段 + crashed 状态枚举编译，投影路径基础在此 Wave 落地；端到端 list 可见性在 Wave 4 验、crashed 重建显示在 Wave 3B 验）</li></ul>
+</details>
+
+<details class="wave-card" open>
+  <summary><span class="wave-num">Wave 2</span> P1 纯叶子模块（5 子切片并行） <span class="status status--warn">P1（#13 alive-store / #3 SCR / #5 FinalizedMarker / #4 WorktreeManager / #10 session-file-gc）</span></summary>
+  <div class="wave-meta"><strong>Blocked by:</strong> Wave 1</div>
+  <h4>覆盖的 test-matrix 用例 ID</h4>
+  <ul class="node-list"><li>2A（alive-store）: T6.3 部分（GC 探活依赖 isProcessAlive——本 Wave 产出 isProcessAlive，GC 路径在 2E 验）</li><li>2B（SCR）: T1.4（边界：fork 深度≥10 拒绝，SCR 纯函数判 parentForkDepth 抛 ForkDepthExceededError）/ T3.1/T3.2 部分（SCR 返回 shouldFork+effectiveCwd+sessionDir）</li><li>2C（FinalizedMarker）: T7.2/T7.3 的标记读写依赖（readFinalized 在 Wave 3B 四分支用，本 Wave 产出 write/read 纯叶子单测）</li><li>2D（WorktreeManager）: T2.1（正常 clean 树 create 成功）/ T2.2（异常脏树抛 DirtyWorktreeError）/ T2.3（边界 recordId 白名单 `^[\w-]+$` 抛错）/ **T2.4（边界：嵌套 worktree .git 文件检测拒绝，首版禁止）** / T4.1（collectPatch 成功）/ T4.2（空改动 patch 空但成功）/ T4.3（collectPatch 失败 failed:true，D-022）/ T5.1 部分（scan 终态+无活→清）/ T5.2（有活 .alive→不删 D-024 安全网）/ T5.3（无标记无 .alive→保守跳过）/ **T2.6（并发：两 worktree 并发创建不同 recordId 各自独立分支+路径不冲突）** / **T2.5 部分（node_modules 软链 integration 断言：create 后 worktreePath/node_modules/.bin 存在，⑤§6 来源 B 强制 integration；e2e 真实验证在 Wave 6）**</li><li>2E（GC）: T6.3（GC walkAndClean + .alive 对应 pid 活→不被 unlink，独立 GC 路径，CV-2/RC-2 CROSS-VALIDATED）</li></ul>
+</details>
+
+<details class="wave-card" open>
+  <summary><span class="wave-num">Wave 3</span> P1 编排分流（2 子切片并行） <span class="status status--warn">P1（#6 session-runner / #12 record-store 四分支）</span></summary>
+  <div class="wave-meta"><strong>Blocked by:</strong> Wave 1, 2A（alive-store）, 2B（SCR）, 2C（FinalizedMarker）</div>
+  <h4>覆盖的 test-matrix 用例 ID</h4>
+  <ul class="node-list"><li>3A（session-runner）: T1.1（正常 createBranchedSession 成功）/ T1.2（异常降级 forkFrom，两级降级链 B NFR）/ T1.3（异常 forkFrom 也失败抛错）/ T1.5（状态 fork 后 done 不可逆）/ T1.6（并发 createBranched mutate 不串台）/ T3.4（异常 worktree create 成功但 fork 降级失败须 cleanup）</li><li>3B（record-store）: T7.1（.cancelled 分支）/ T7.2（.finalized done 分支）/ T7.3（.finalized failed 分支）/ T7.4（.alive+活pid running-elsewhere + externalInstance）/ T7.5（都无→crashed）/ T7.6（.alive+死pid→crashed）/ T7.7（&gt;24h 软超时→crashed D-021 pid 复用兜底）/ **T6.2 部分（crashed record 经四分支重建后 list 显示 status=crashed，投影路径在此 Wave 落地）**</li></ul>
+</details>
+
+<details class="wave-card" open>
+  <summary><span class="wave-num">Wave 4</span> P1 汇合点 SubagentService 集成 <span class="status status--warn">P1（#7 SubagentService）</span></summary>
+  <div class="wave-meta"><strong>Blocked by:</strong> Wave 3A, 3B, 2A（alive）, 2C（FinalizedMarker）, 2D（WorktreeManager）</div>
+  <h4>覆盖的 test-matrix 用例 ID</h4>
+  <ul class="node-list"><li>T3.1（正常 fork+worktree 组合，SCR 返回 shouldFork+effectiveCwd）/ T3.2（边界 session 落主命名空间 sessionDir 主 cwd 编码）/ T3.3（异常 fork 成功 worktree create 失败须不泄漏 CV-1/RC-1）/ T4.4（状态 finalize 时序 D-017 ⓪①②③ spy 验）/ T4.5（异常 completeRecord/archive 抛错兜底 B9 三件套仍执行）/ **T6.1 部分（fork/worktree record 经 execute 集成后 list 可见，sessionDir 主 cwd 编码端到端验证，UC-6 正常路径在此闭环）**</li></ul>
+</details>
+
+<details class="wave-card" open>
+  <summary><span class="wave-num">Wave 5</span> P2 外壳/文档（3 子切片并行） <span class="status status--warn">P2（#8 schema / #9 index reaper / #11 ADR）</span></summary>
+  <div class="wave-meta"><strong>Blocked by:</strong> Wave 4（#9 reaper 依赖 #4 WTM.scan；schema 依赖 Wave 1 类型；ADR 是收尾）</div>
+  <h4>覆盖的 test-matrix 用例 ID</h4>
+  <ul class="node-list"><li>5A（schema）: T2.1 部分（worktree:true 经 schema 入参）/ schema 字段编译（fork/worktree/cwd 可选）</li><li>5B（index reaper）: T5.1（终态+无活→清 scan 路径）/ T5.4（e2e session_start 触发 reaper）</li></ul>
+</details>
+
+<details class="wave-card wave-card--gate" open>
+  <summary><span class="wave-num">Wave 6</span> CLI E2E + 验收 Wave（Acceptance Gate） <span class="status status--match">验收 Gate</span></summary>
+  <div class="wave-meta"><strong>Blocked by:</strong> Wave 1, Wave 2, Wave 3, Wave 4, Wave 5（所有功能 Wave）</div>
+  <h4>覆盖的 test-matrix 用例 ID</h4>
+  <p class="callout">本 Wave 为验收/文档 Wave，无功能用例归属（见测试验收清单）。</p>
+</details>
+
+<h2 class="sec-head" id="e2e">Wave 6 · CLI E2E 测试沙盒（~/Code/test-pi-extension/）</h2>
+<div class="callout"><strong>为何 CLI E2E</strong>：各功能 Wave 的 unit/integration 覆盖单模块行为；E2E 补真实 pi CLI 场景（多 subagent 并发 fork、worktree 真实 git 操作、跨实例 reaper、kill -9 崩溃模拟）。pi CLI <code>v0.80.2</code> 已装。</div>
+<div class="e2e-tree"><pre><span class="dir">~/Code/test-pi-extension/</span>
+├── <span class="file">run-e2e.sh</span>              <span class="dir"># E2E 编排脚本（建沙盒→跑 pi→断言→清理）</span>
+├── <span class="dir">fixtures/</span>
+│   ├── <span class="dir">host-repo/</span>          <span class="dir"># 主 git 仓库（含 .git/node_modules/src 供 worktree 改）</span>
+│   ├── <span class="file">fork-source-session.jsonl</span>  <span class="dir"># fork source（模拟主 agent session）</span>
+│   └── <span class="file">corrupt-session.jsonl</span>      <span class="dir"># 损坏 session（测 T1.3 forkFrom 失败）</span>
+├── <span class="dir">scenarios/</span>           <span class="dir"># 7 个 UC 场景（pi CLI 触发 subagent 工具）</span>
+│   ├── <span class="file">s1-fork-inherit.sh</span>       <span class="dir"># UC-1 fork 继承主上下文</span>
+│   ├── <span class="file">s2-worktree-isolate.sh</span>   <span class="dir"># UC-2 worktree 独立运行</span>
+│   ├── <span class="file">s3-fork-plus-worktree.sh</span> <span class="dir"># UC-3 组合</span>
+│   ├── <span class="file">s4-worktree-patch-cleanup.sh</span> <span class="dir"># UC-4 清理+patch 回传</span>
+│   ├── <span class="file">s5-reaper-orphan.sh</span>     <span class="dir"># UC-5 孤儿清扫</span>
+│   ├── <span class="file">s6-subagents-list.sh</span>    <span class="dir"># UC-6 list 可见性</span>
+│   └── <span class="file">s7-crash-marker.sh</span>      <span class="dir"># UC-7 崩溃标记（kill -9）</span>
+├── <span class="dir">assertions/</span>          <span class="dir"># 断言脚本（验 fork 历史/worktree 路径/patch 文件/crashed 标记）</span>
+└── <span class="dir">reports/</span>             <span class="dir"># E2E 运行报告（覆盖率映射回清单）</span></pre></div>
+<div class="callout"><strong>E2E 覆盖用例</strong>（执行层=e2e + 关键 integration 真实 CLI 验证）：T2.5（node_modules 软链）/ T5.4（reaper 触发）/ T1.1（fork 继承）/ T2.1（worktree 隔离）/ T4.1（patch 回传）/ T7.5（崩溃标记）。</div>
+
+<h2 class="sec-head" id="manifest">测试验收清单（Test Acceptance Manifest）— Definition of Done</h2>
+<div class="manifest-hint">实现阶段的唯一验收真相源。用例 ID 集合 = ⑤test-matrix 全量（36 条）。末尾验收 Wave 不绿 = 实现未完成。「功能归属 Wave」= 产出代码的 Wave；「测试执行层」= 跑测试的阶段（继承⑤§6 来源 B 强制层级）。</div>
+<div class="table-wrap"><div class="table-scroll"><table class="data-table"><thead><tr>
+<th>用例 ID</th><th>归属 UC</th><th>来源</th><th>断言摘要</th><th>功能归属 Wave</th><th>测试执行层</th><th>状态</th>
+</tr></thead><tbody>
+<tr><td>T1.1</td><td>UC-1</td><td>A 功能</td><td>fork:true createBranchedSession 成功，session 含主历史，sessionManager 已 mutate</td><td>Wave 3A</td><td>integration+e2e</td><td>待验</td></tr>
+<tr><td>T1.2</td><td>UC-1</td><td>B NFR</td><td>createBranchedSession 抛错→降级 forkFrom（两级非三级），session 仍含主历史</td><td>Wave 3A</td><td>integration</td><td>待验</td></tr>
+<tr><td>T1.3</td><td>UC-1</td><td>A 功能</td><td>forkFrom 也失败（mainSessionFile 损坏），抛错不进入 run，finalizeFailed</td><td>Wave 3A</td><td>integration</td><td>待验</td></tr>
+<tr><td>T1.4</td><td>UC-1</td><td>A 功能</td><td>fork 深度≥10 拒绝，SCR 纯函数抛 ForkDepthExceededError</td><td>Wave 2B</td><td>unit</td><td>待验</td></tr>
+<tr><td>T1.5</td><td>UC-1</td><td>A 功能</td><td>fork 后正常完成 done，markReconstructedStatus 不回退（终态不可逆）</td><td>Wave 3A</td><td>integration</td><td>待验</td></tr>
+<tr><td>T1.6</td><td>UC-1</td><td>B NFR</td><td>两 fork 并发（不同 leafId），各自 sessionManager 实例独立不互相 mutate</td><td>Wave 3A</td><td>integration</td><td>待验</td></tr>
+<tr><td>T2.1</td><td>UC-2</td><td>A 功能</td><td>worktree:true clean 树，handle.path 存在，子 agent cwd=worktreePath</td><td>Wave 2D</td><td>integration+e2e</td><td>待验</td></tr>
+<tr><td>T2.2</td><td>UC-2</td><td>A 功能</td><td>脏树拒绝，抛 DirtyWorktreeError，不创建 worktree</td><td>Wave 2D</td><td>unit</td><td>待验</td></tr>
+<tr><td>T2.3</td><td>UC-2</td><td>B NFR</td><td>recordId 含特殊字符（`a;b`），白名单 `^[\w-]+$` 抛错</td><td>Wave 2D</td><td>unit</td><td>待验</td></tr>
+<tr><td>T2.4</td><td>UC-2</td><td>A 功能</td><td>嵌套 worktree 检测（.git 文件），拒绝/降级（首版禁止）</td><td>Wave 2D</td><td>unit</td><td>待验</td></tr>
+<tr><td>T2.5</td><td>UC-2</td><td>B NFR</td><td>node_modules 软链生效，worktreePath/node_modules/.bin 存在</td><td>Wave 2D</td><td>integration+e2e</td><td>待验</td></tr>
+<tr><td>T2.6</td><td>UC-2</td><td>B NFR</td><td>两 worktree 并发创建不同 recordId，各自独立分支+路径不冲突</td><td>Wave 2D</td><td>integration</td><td>待验</td></tr>
+<tr><td>T3.1</td><td>UC-3</td><td>A 功能</td><td>fork+worktree 同时，SCR 返回 shouldFork+effectiveCwd=worktree，先 branched 再 createAgentSession(cwd:worktree)</td><td>Wave 4</td><td>integration</td><td>待验</td></tr>
+<tr><td>T3.2</td><td>UC-3</td><td>A 功能</td><td>fork+worktree，sessionDir 用主 cwd 编码（D-004），list 可见</td><td>Wave 4</td><td>integration</td><td>待验</td></tr>
+<tr><td>T3.3</td><td>UC-3</td><td>A 功能</td><td>fork 成功 worktree create 失败（脏树），已 branched session 须不泄漏（CV-1/RC-1）</td><td>Wave 4</td><td>integration</td><td>待验</td></tr>
+<tr><td>T3.4</td><td>UC-3</td><td>A 功能</td><td>worktree create 成功但 fork 降级失败，已创建 worktree 须 cleanup 不泄漏孤儿</td><td>Wave 3A</td><td>integration</td><td>待验</td></tr>
+<tr><td>T4.1</td><td>UC-4</td><td>A 功能</td><td>collectPatch 成功→cleanup，patch 文件生成，worktree remove+branch-D</td><td>Wave 2D+4</td><td>integration+e2e</td><td>待验</td></tr>
+<tr><td>T4.2</td><td>UC-4</td><td>A 功能</td><td>空改动，patch 空但成功，仍 cleanup</td><td>Wave 2D</td><td>unit</td><td>待验</td></tr>
+<tr><td>T4.3</td><td>UC-4</td><td>B NFR</td><td>collectPatch 失败→保 worktree（D-022），patchFailed=true，cleanup callCount=0</td><td>Wave 2D+4</td><td>integration</td><td>待验</td></tr>
+<tr><td>T4.4</td><td>UC-4</td><td>A 功能</td><td>finalize 时序正确（D-017 ⓪①②③），collectPatch 在 completeRecord 前，archive 在 finalized 前（spy 验）</td><td>Wave 4</td><td>integration</td><td>待验</td></tr>
+<tr><td>T4.5</td><td>UC-4</td><td>B NFR</td><td>completeRecord/archive 抛错兜底（B9），③finalized/cleanup 仍执行（spy 验）</td><td>Wave 4</td><td>integration</td><td>待验</td></tr>
+<tr><td>T5.1</td><td>UC-5</td><td>A 功能</td><td>终态标记+无活→清，remove+branch-D</td><td>Wave 2D+5B</td><td>integration+e2e</td><td>待验</td></tr>
+<tr><td>T5.2</td><td>UC-5</td><td>B NFR</td><td>有活 .alive→不删（D-024 安全网），跨实例故障注入</td><td>Wave 2D</td><td>integration</td><td>待验</td></tr>
+<tr><td>T5.3</td><td>UC-5</td><td>A 功能</td><td>无标记无 .alive→保守跳过（可能跨实例正跑）</td><td>Wave 2D</td><td>unit</td><td>待验</td></tr>
+<tr><td>T5.4</td><td>UC-5</td><td>A 功能</td><td>session_start 触发 reaper，扫到孤儿清理活态保留</td><td>Wave 5B</td><td>e2e</td><td>待验</td></tr>
+<tr><td>T6.1</td><td>UC-6</td><td>A 功能</td><td>fork/worktree record 在 list 可见（sessionDir 主 cwd 编码 D-004）</td><td>Wave 1+4</td><td>integration</td><td>待验</td></tr>
+<tr><td>T6.2</td><td>UC-6</td><td>A 功能</td><td>crashed record 在 list 显示 status=crashed</td><td>Wave 1+3B</td><td>integration</td><td>待验</td></tr>
+<tr><td>T6.3</td><td>UC-6</td><td>B NFR</td><td>GC walkAndClean + .alive 对应 pid 活→不被 unlink（独立 GC 路径，CV-2/RC-2）</td><td>Wave 2E</td><td>integration</td><td>待验</td></tr>
+<tr><td>T7.1</td><td>UC-7</td><td>B NFR</td><td>.cancelled 分支→status=cancelled</td><td>Wave 3B</td><td>integration</td><td>待验</td></tr>
+<tr><td>T7.2</td><td>UC-7</td><td>A 功能</td><td>.finalized 分支 done→status=done</td><td>Wave 3B</td><td>integration</td><td>待验</td></tr>
+<tr><td>T7.3</td><td>UC-7</td><td>A 功能</td><td>.finalized 分支 failed→status=failed</td><td>Wave 3B</td><td>integration</td><td>待验</td></tr>
+<tr><td>T7.4</td><td>UC-7</td><td>A 功能</td><td>.alive+活pid 分支→status=running, externalInstance=true（D-023）</td><td>Wave 3B</td><td>integration</td><td>待验</td></tr>
+<tr><td>T7.5</td><td>UC-7</td><td>A 功能</td><td>都无→crashed</td><td>Wave 3B</td><td>integration+e2e</td><td>待验</td></tr>
+<tr><td>T7.6</td><td>UC-7</td><td>A 功能</td><td>.alive+死pid→crashed</td><td>Wave 3B</td><td>integration</td><td>待验</td></tr>
+<tr><td>T7.7</td><td>UC-7</td><td>B NFR</td><td>&gt;24h 软超时→crashed（D-021 pid 复用兜底，无视探活）</td><td>Wave 3B</td><td>integration</td><td>待验</td></tr>
+<tr><td>T7.8</td><td>UC-7</td><td>B NFR</td><td>status 不裸赋值，经 markReconstructedStatus（静态扫描禁 `.status=`）</td><td>Wave 1</td><td>lint</td><td>待验</td></tr>
+</tbody></table></div></div>
+
+<h3>④ NFR 代码测试缓解项 → test-matrix 闭环映射</h3>
+<div class="table-wrap"><div class="table-scroll"><table class="data-table"><thead><tr>
+<th>④缓解项</th><th>test-matrix ID</th><th>归属 Wave</th>
+</tr></thead><tbody>
+<tr><td>collectPatch 失败保 worktree（D-022）</td><td>T4.3</td><td>Wave 2D+4</td></tr>
+<tr><td>completeRecord/archive 抛错兜底（B9）</td><td>T4.5</td><td>Wave 4</td></tr>
+<tr><td>reaper 孤儿判据 .alive 守卫（D-024）</td><td>T5.2</td><td>Wave 2D</td></tr>
+<tr><td>GC 清 .alive 先探活（B3）</td><td>T6.3</td><td>Wave 2E</td></tr>
+<tr><td>四分支 sidecar 矩阵（D-021）</td><td>T7.1-T7.7</td><td>Wave 3B</td></tr>
+<tr><td>externalInstance 投影类型（D-023）</td><td>T7.4</td><td>Wave 3B</td></tr>
+<tr><td>fork 两级降级链</td><td>T1.2</td><td>Wave 3A</td></tr>
+<tr><td>node_modules 软链生效</td><td>T2.5</td><td>Wave 2D</td></tr>
+<tr><td>status 收口静态规则</td><td>T7.8</td><td>Wave 1</td></tr>
+</tbody></table></div></div>
+<div class="callout"><strong>④ 验收方式=性能混沌</strong>：无。回灌登记表无性能/混沌类缓解项（性能维度仅 node_modules 软链=代码测试），跳过独立 perf/chaos Wave。</div>
+
+<h2 class="sec-head" id="handoff">执行交接（硬契约）</h2>
+<div class="callout"><strong>编码完成的定义 = 测试验收清单全绿。</strong>无论方式 A/B，末尾验收 Wave（Wave 6，blocked_by 全功能 Wave）未绿 = 实现未完成。方式 A 接 coding-workflow（Phase-test gate 以清单为验收基线）；方式 B 手动每 Wave 派 fresh subagent。偏离通道：用例设计错误走 <code>[DEVIATED]</code> 登记（原因+用户确认），不可静默跳过。</div>
+<div class="callout"><strong>后续迭代（P3 延后）</strong>：worktree 嵌套（OS-6 首版禁止）/ fork keepBranch+merge（D-005 排除 D-015 删）/ ④4 条运维项（日志/指标配置，运维阶段）。</div>
+
+<footer class="doc-foot">
+  ⑥ 执行计划 · subagent fork + worktree · 6 Waves / 36 用例 / Round 1 CONVERGED（6 gap 全修）<br>
+  下游：编码实现（DoD = 测试验收清单全绿）
+</footer>
+</main>
+</div>
+<script type="module">/*
+ * zoom.js — design-visual-explainer 公共脚本
+ * 从 issues.html (feat-system-prompt-loader) 抽出，含 Mermaid zoom/pan/fit/expand + TOC scroll-spy。
+ * render.sh 通过占位符注释 INLINE:zoom.js 将本文件内联进产物 HTML 的 script[type=module]。
+ *
+ * 依赖：mermaid@11 + @mermaid-js/layout-elk（CDN ESM import）。
+ * CSS 契约：.diagram-shell 及内部 .mermaid-wrap/.mermaid-viewport/.mermaid-canvas/.diagram-source/.zoom-label
+ *          + [data-action] 按钮（zoom-in/out/fit/one/expand）— 类名与 design.css 绑定，勿改名。
+ */
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+import elkLayouts from 'https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk/dist/mermaid-layout-elk.esm.min.mjs';
+
+const config = { fitPadding: 28, minHeight: 360, maxHeightPx: 960, maxHeightVh: 0.84, maxInitialZoom: 1.8, minZoom: 0.08, maxZoom: 6.5, zoomStep: 0.14, readabilityFloor: 0.58 };
+const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+let activeDrag = null;
+addEventListener('mousemove', (e) => activeDrag?.onMove(e));
+addEventListener('mouseup', () => { activeDrag?.onEnd(); activeDrag = null; });
+const isDark = matchMedia('(prefers-color-scheme: dark)').matches;
+
+mermaid.registerLayoutLoaders(elkLayouts);
+mermaid.initialize({
+  startOnLoad: false, theme: 'base', look: 'classic', layout: 'elk',
+  themeVariables: {
+    fontFamily: "'Bricolage Grotesque', 'PingFang SC', system-ui, sans-serif", fontSize: '14px',
+    primaryColor: isDark ? '#0d2424' : '#ccfbf1', primaryBorderColor: isDark ? '#5eead4' : '#0d9488', primaryTextColor: isDark ? '#e3efee' : '#134e3a',
+    secondaryColor: isDark ? '#111d1d' : '#fffbeb', secondaryBorderColor: isDark ? '#115e59' : '#d97706', secondaryTextColor: isDark ? '#5eead4' : '#92400e',
+    tertiaryColor: isDark ? '#1a1a1a' : '#f8fafc', tertiaryBorderColor: isDark ? '#64748b' : '#64748b', tertiaryTextColor: isDark ? '#e2e8f0' : '#334155',
+    lineColor: isDark ? '#5eead4' : '#5f8a85',
+  }
+});
+
+function initDiagram(shell) {
+  const wrap = shell.querySelector('.mermaid-wrap');
+  const viewport = shell.querySelector('.mermaid-viewport');
+  const canvas = shell.querySelector('.mermaid-canvas');
+  const source = shell.querySelector('.diagram-source');
+  const label = shell.querySelector('.zoom-label');
+  if (!wrap || !viewport || !canvas || !source || !label) { console.error('initDiagram: missing elements', shell); return; }
+  let zoom = 1, fitMode = 'contain', panX = 0, panY = 0, svgW = 0, svgH = 0;
+  let sx = 0, sy = 0, spx = 0, spy = 0, touchDist = 0, touchCx = 0, touchCy = 0;
+  function constrainPan() { const vpW = viewport.clientWidth, vpH = viewport.clientHeight; const rW = svgW*zoom, rH = svgH*zoom, pad = config.fitPadding; panX = (rW+pad*2<=vpW)?(vpW-rW)/2:clamp(panX,vpW-rW-pad,pad); panY = (rH+pad*2<=vpH)?(vpH-rH)/2:clamp(panY,vpH-rH-pad,pad); }
+  function applyTransform() { const svg = canvas.querySelector('svg'); if (!svg||!svgW) return; constrainPan(); svg.style.width=(svgW*zoom)+'px'; svg.style.height=(svgH*zoom)+'px'; canvas.style.transform=`translate(${panX}px,${panY}px)`; label.textContent=Math.round(zoom*100)+'% \u2014 '+fitMode; }
+  function canPan() { return svgW*zoom+config.fitPadding*2>viewport.clientWidth || svgH*zoom+config.fitPadding*2>viewport.clientHeight; }
+  function computeSmartFit() { const vpW=viewport.clientWidth,vpH=viewport.clientHeight; const aW=Math.max(80,vpW-config.fitPadding*2),aH=Math.max(80,vpH-config.fitPadding*2); const contain=Math.min(aW/svgW,aH/svgH); let z=contain,mode='contain'; if(contain<config.readabilityFloor){const chartR=svgH/svgW,vpR=vpH/Math.max(vpW,1); if(chartR>=vpR){z=aW/svgW;mode='width-priority';}else{z=aH/svgH;mode='height-priority';}} return {zoom:clamp(z,config.minZoom,config.maxInitialZoom),mode}; }
+  function fitDiagram() { if(!svgW)return; const fit=computeSmartFit(); zoom=fit.zoom; fitMode=fit.mode; panX=(viewport.clientWidth-svgW*zoom)/2; panY=(viewport.clientHeight-svgH*zoom)/2; applyTransform(); }
+  function setOneToOne() { zoom=clamp(1,config.minZoom,config.maxZoom); fitMode='1:1'; panX=(viewport.clientWidth-svgW*zoom)/2; panY=(viewport.clientHeight-svgH*zoom)/2; applyTransform(); }
+  function zoomAround(factor,cx,cy) { const next=clamp(zoom*factor,config.minZoom,config.maxZoom); const ratio=next/zoom; panX=cx-ratio*(cx-panX); panY=cy-ratio*(cy-panY); zoom=next; fitMode='custom'; applyTransform(); }
+  function readSvgNaturalSize(svg) { let w=0,h=0; if(svg.viewBox?.baseVal?.width>0){w=svg.viewBox.baseVal.width;h=svg.viewBox.baseVal.height;} if(!w){w=parseFloat(svg.getAttribute('width'))||0;h=parseFloat(svg.getAttribute('height'))||0;} if(!w){const b=svg.getBBox();w=b.width;h=b.height;} if(!w){const r=svg.getBoundingClientRect();w=r.width||1000;h=r.height||700;} if(!svg.getAttribute('viewBox'))svg.setAttribute('viewBox',`0 0 ${w} ${h}`); return {w,h}; }
+  function setAdaptiveHeight() { if(!svgW)return; const usableW=Math.max(280,wrap.getBoundingClientRect().width-2); const idealH=(svgH/svgW)*usableW+config.fitPadding*2; const maxVp=Math.floor(innerHeight*config.maxHeightVh); const hardMax=Math.min(config.maxHeightPx,Math.max(config.minHeight+40,maxVp)); wrap.style.height=Math.round(clamp(idealH,config.minHeight,hardMax))+'px'; }
+  function openInNewTab() { const svg=canvas.querySelector('svg'); if(!svg)return; const clone=svg.cloneNode(true); clone.style.width=''; clone.style.height=''; const bg=isDark?'#0a1414':'#f6f8f8'; const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Diagram</title><style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:${bg};padding:40px;box-sizing:border-box}svg{max-width:100%;max-height:90vh;height:auto}</style></head><body>${clone.outerHTML}</body></html>`; open(URL.createObjectURL(new Blob([html],{type:'text/html'})),'_blank'); }
+  async function render() { try { const code=source.textContent.trim(); if(!code){label.textContent='Error: Empty source';return;} const id='diagram-'+Date.now()+'-'+Math.random().toString(36).slice(2,8); const {svg}=await mermaid.render(id,code); canvas.innerHTML=svg; const svgNode=canvas.querySelector('svg'); if(!svgNode){label.textContent='Error: No SVG';return;} const size=readSvgNaturalSize(svgNode); svgW=size.w; svgH=size.h; svgNode.removeAttribute('width'); svgNode.removeAttribute('height'); svgNode.style.maxWidth='none'; svgNode.style.display='block'; setAdaptiveHeight(); fitDiagram(); } catch(err){ console.error('Mermaid render failed:',err); label.textContent='Error: '+(err.message||'Render failed'); } }
+  const actions = { 'zoom-in':()=>zoomAround(1+config.zoomStep,viewport.clientWidth/2,viewport.clientHeight/2), 'zoom-out':()=>zoomAround(1/(1+config.zoomStep),viewport.clientWidth/2,viewport.clientHeight/2), 'zoom-fit':fitDiagram, 'zoom-one':setOneToOne, 'zoom-expand':openInNewTab };
+  Object.entries(actions).forEach(([a,h])=>wrap.querySelector(`[data-action="${a}"]`)?.addEventListener('click',h));
+  viewport.addEventListener('dblclick',fitDiagram);
+  viewport.addEventListener('wheel',(e)=>{ if(e.ctrlKey||e.metaKey){e.preventDefault();const rect=viewport.getBoundingClientRect();const f=e.deltaY<0?1+config.zoomStep:1/(1+config.zoomStep);zoomAround(f,e.clientX-rect.left,e.clientY-rect.top);return;} if(canPan()){e.preventDefault();panX-=e.deltaX;panY-=e.deltaY;applyTransform();} },{passive:false});
+  viewport.addEventListener('mousedown',(e)=>{ if(e.target.closest('.zoom-controls')||!canPan())return; wrap.classList.add('is-panning'); sx=e.clientX;sy=e.clientY;spx=panX;spy=panY;e.preventDefault(); activeDrag={onMove:(ev)=>{panX=spx+(ev.clientX-sx);panY=spy+(ev.clientY-sy);applyTransform();},onEnd:()=>wrap.classList.remove('is-panning')}; });
+  viewport.addEventListener('touchstart',(e)=>{ if(e.touches.length===1){sx=e.touches[0].clientX;sy=e.touches[0].clientY;spx=panX;spy=panY;} else if(e.touches.length===2){const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;touchDist=Math.sqrt(dx*dx+dy*dy);const r=viewport.getBoundingClientRect();touchCx=(e.touches[0].clientX+e.touches[1].clientX)/2-r.left;touchCy=(e.touches[0].clientY+e.touches[1].clientY)/2-r.top;} },{passive:true});
+  viewport.addEventListener('touchmove',(e)=>{ if(e.touches.length===1&&canPan()){if(touchDist>0){sx=e.touches[0].clientX;sy=e.touches[0].clientY;spx=panX;spy=panY;touchDist=0;}e.preventDefault();panX=spx+(e.touches[0].clientX-sx);panY=spy+(e.touches[0].clientY-sy);applyTransform();}else if(e.touches.length===2&&touchDist>0){e.preventDefault();const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;const d=Math.sqrt(dx*dx+dy*dy);zoomAround(d/touchDist,touchCx,touchCy);touchDist=d;} },{passive:false});
+  new ResizeObserver(()=>{if(svgW){setAdaptiveHeight();fitDiagram();}}).observe(wrap);
+  render();
+}
+document.querySelectorAll('.diagram-shell').forEach(initDiagram);
+
+/* TOC scroll-spy：高亮当前 section 对应的 TOC 链接 */
+(function() {
+  const toc = document.getElementById('toc'); if (!toc) return;
+  const links = toc.querySelectorAll('a'); const sections = [];
+  links.forEach(link => { const el = document.getElementById(link.getAttribute('href').slice(1)); if (el) sections.push({ el, link }); });
+  sections.forEach(s => new IntersectionObserver(entries => { entries.forEach(entry => { if (entry.isIntersecting) { links.forEach(l => l.classList.remove('active')); s.link.classList.add('active'); if (innerWidth <= 1000) s.link.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' }); } }); }, { rootMargin: '-10% 0px -80% 0px' }).observe(s.el));
+  links.forEach(link => link.addEventListener('click', e => { e.preventDefault(); const el = document.getElementById(link.getAttribute('href').slice(1)); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); history.replaceState(null, '', '#' + el.id); } }));
+})();
+</script>
+</body>
+</html>

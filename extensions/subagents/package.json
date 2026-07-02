@@ -11,6 +11,9 @@
     "agent-runtime"
   ],
   "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
   "files": [
     "index.ts",
     "agents/",
@@ -20,7 +23,8 @@
     "src/runtime/",
     "src/tui/",
     "src/tools/",
-    "src/commands/"
+    "src/commands/",
+    "src/utils/"
   ],
   "pi": {
     "extensions": [

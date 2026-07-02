@@ -1,11 +1,182 @@
 // src/__tests__/session-runner.test.ts
 //
-// 锁定 formatSchemaInstruction 契约：构造 schema enforcement 的 MANDATORY 指令。
-// 该字符串被拼入 task 末尾 + steer reminder 复用，一旦漏掉 "MUST call structured-output"
-// 关键词或 JSON 序列化漂移，schema 模式会静默失效。
-import { describe, expect, it } from "vitest";
+// 锁定 formatSchemaInstruction 契约 + fork 分流逻辑（D-018 两级降级链）。
+//
+// fork 测试策略：通过 run() 端到端测试，mock SDK 的 createBranchedSession/forkFrom。
+// createAndConfigureSession 是私有函数，不可直接测——但 run() 的 fork 行为完全
+// 由 SDK mock 驱动，测试足够精确。
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { formatSchemaInstruction } from "../core/session-runner.ts";
+import type { RunOptions, SessionRunnerContext } from "../core/session-runner.ts";
+import { formatSchemaInstruction, run } from "../core/session-runner.ts";
+import * as aliveStore from "../runtime/execution/alive-store.ts";
+import type {
+  AgentSessionLike,
+  ExecutionRecord,
+  ResolvedModel,
+  SdkLike,
+} from "../types.ts";
+
+// ============================================================
+// Mock 工具
+// ============================================================
+
+/** 创建最小 mock AgentSession。 */
+function mockSession(overrides?: Partial<AgentSessionLike>): AgentSessionLike {
+  return {
+    prompt: vi.fn().mockResolvedValue(undefined),
+    steer: vi.fn().mockResolvedValue(undefined),
+    abort: vi.fn().mockResolvedValue(undefined),
+    dispose: vi.fn(),
+    subscribe: vi.fn().mockReturnValue(() => {}),
+    sessionId: "mock-session-id",
+    sessionManager: {
+      getSessionFile: vi.fn().mockReturnValue("/mock/session.jsonl"),
+      getSessionId: vi.fn().mockReturnValue("mock-session-id"),
+      appendCustomEntry: vi.fn().mockReturnValue("entry-id"),
+    },
+    messages: [],
+    getAllTools: vi.fn().mockReturnValue([]),
+    setActiveToolsByName: vi.fn(),
+    ...overrides,
+  };
+}
+
+/** SessionManager 实例 mock（空实现，足够满足 SessionManagerLike duck-type）。 */
+function mockSessionManager(): unknown {
+  return {
+    getLeafId: vi.fn().mockReturnValue("leaf-1"),
+    createBranchedSession: vi.fn().mockReturnValue("/mock/branched.jsonl"),
+    getSessionFile: vi.fn().mockReturnValue("/mock/session.jsonl"),
+    getSessionId: vi.fn().mockReturnValue("sm-id"),
+  };
+}
+
+/** 创建最小 mock SDK。 */
+function mockSdk(overrides?: Partial<SdkLike>): SdkLike {
+  return {
+    DefaultResourceLoader: class MockResourceLoader {
+      reload = vi.fn().mockResolvedValue(undefined);
+    },
+    SessionManager: {
+      inMemory: vi.fn().mockReturnValue(mockSessionManager()),
+      create: vi.fn().mockReturnValue(mockSessionManager()),
+      open: vi.fn().mockReturnValue(mockSessionManager()),
+      forkFrom: vi.fn().mockReturnValue(mockSessionManager()),
+    },
+    createAgentSession: vi.fn().mockResolvedValue({ session: mockSession() }),
+    ...overrides,
+  };
+}
+
+/**
+ * [MF#1] 构造符合真实 SDK 契约的 fork mock。
+ *
+ * 真实契约：createBranchedSession 是 SessionManager **实例方法**（返回新文件路径），
+ * forkFrom 是 **静态方法**（返回 SessionManager）。两者均经 createAgentSession 装配最终 session。
+ *
+ * - open(src) → 源 SM（getLeafId/createBranchedSession 实例方法）
+ * - 源 SM.createBranchedSession(leafId) → branchedFile（可由 throwInBranch 抛错触发降级）
+ * - SessionManager.forkFrom(src, cwd, dir) → SM（可由 throwInFork 抛错）
+ * - createAgentSession → { session: finalSession }
+ */
+function makeForkSdk(opts: {
+  finalSession: AgentSessionLike;
+  throwInBranch?: Error;
+  throwInFork?: Error;
+  branchedFile?: string;
+}): SdkLike {
+  const sourceSm = {
+    getLeafId: vi.fn().mockReturnValue("leaf-1"),
+    createBranchedSession: vi.fn(() => {
+      if (opts.throwInBranch) throw opts.throwInBranch;
+      return opts.branchedFile ?? "/mock/branched.jsonl";
+    }),
+    getSessionFile: vi.fn().mockReturnValue("/mock/session.jsonl"),
+    getSessionId: vi.fn().mockReturnValue("src-sm-id"),
+  };
+  return {
+    DefaultResourceLoader: class MockResourceLoader {
+      reload = vi.fn().mockResolvedValue(undefined);
+    },
+    SessionManager: {
+      inMemory: vi.fn().mockReturnValue(mockSessionManager()),
+      create: vi.fn().mockReturnValue(mockSessionManager()),
+      open: vi.fn().mockReturnValue(sourceSm),
+      forkFrom: vi.fn(() => {
+        if (opts.throwInFork) throw opts.throwInFork;
+        return mockSessionManager();
+      }),
+    },
+    createAgentSession: vi.fn().mockResolvedValue({ session: opts.finalSession }),
+  };
+}
+
+/** 创建最小 ExecutionRecord。 */
+function mockRecord(): ExecutionRecord {
+  return {
+    id: "test-record-1",
+    agent: "general-purpose",
+    model: "test/model",
+    thinkingLevel: undefined,
+    mode: "sync",
+    task: "test task",
+    startedAt: Date.now(),
+    status: "running",
+    turns: [{ text: "", thinking: "", toolCalls: [], closed: false }],
+    turnCount: 0,
+    totalTokens: 0,
+    lastError: undefined,
+    endedAt: undefined,
+    result: undefined,
+    error: undefined,
+    agentResult: undefined,
+    controller: undefined,
+  };
+}
+
+/** 创建最小 SessionRunnerContext。 */
+function mockCtx(overrides?: Partial<SessionRunnerContext>): SessionRunnerContext {
+  return {
+    cwd: "/mock/cwd",
+    agentDir: "/mock/agent",
+    modelRegistry: {
+      resolve: vi.fn().mockResolvedValue({ id: "test-model", provider: "test" }),
+      getAvailable: vi.fn().mockReturnValue([]),
+      find: vi.fn().mockReturnValue(undefined),
+      hasConfiguredAuth: vi.fn().mockReturnValue(true),
+    } as SessionRunnerContext["modelRegistry"],
+    resolveAgent: vi.fn().mockReturnValue(undefined),
+    skillDirs: [],
+    sdk: mockSdk(),
+    mainCwd: "/mock/cwd",
+    mainSessionFile: undefined,
+    ...overrides,
+  };
+}
+
+/** 创建最小 RunOptions。 */
+function mockRunOpts(overrides?: Partial<RunOptions>): RunOptions {
+  return {
+    resolved: {
+      model: { id: "test-model", provider: "test" },
+      thinkingLevel: undefined,
+    } as ResolvedModel,
+    agentConfig: undefined,
+    appendSystemPrompt: undefined,
+    skillPath: undefined,
+    schema: undefined,
+    maxTurns: undefined,
+    graceTurns: undefined,
+    signal: undefined,
+    onEvent: undefined,
+    ...overrides,
+  };
+}
+
+// ============================================================
+// formatSchemaInstruction（原有测试）
+// ============================================================
 
 describe("formatSchemaInstruction", () => {
   it("contains the structured-output tool keyword", () => {
@@ -23,7 +194,6 @@ describe("formatSchemaInstruction", () => {
   it("embeds the schema as pretty-printed JSON (indent=2)", () => {
     const schema = { type: "object", properties: { name: { type: "string" } } };
     const out = formatSchemaInstruction(schema);
-    // 必须包含 JSON.stringify(schema, null, 2) 的完整结果
     expect(out).toContain(JSON.stringify(schema, null, 2));
     expect(out).toContain("```json");
     expect(out).toContain("```");
@@ -32,7 +202,6 @@ describe("formatSchemaInstruction", () => {
   it("escapes double quotes inside schema string values", () => {
     const schema = { prompt: 'say "hi"' };
     const out = formatSchemaInstruction(schema);
-    // JSON.stringify 会把内层 " 转义为 \"
     expect(out).toContain('say \\"hi\\"');
     expect(out).not.toContain('say "hi"');
   });
@@ -53,5 +222,237 @@ describe("formatSchemaInstruction", () => {
   it("is deterministic — same schema produces identical output", () => {
     const schema = { a: 1, b: [2, 3] };
     expect(formatSchemaInstruction(schema)).toBe(formatSchemaInstruction(schema));
+  });
+});
+
+// ============================================================
+// fork 分流逻辑（D-018 两级降级链）
+// ============================================================
+
+describe("createAndConfigureSession fork branching", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    // mock writeAliveMarker 为 no-op（避免 fs 依赖）
+    vi.spyOn(aliveStore, "writeAliveMarker").mockImplementation(() => {});
+  });
+
+  it("createBranchedSession 成功 → 使用 branched session", async () => {
+    const branchedSession = mockSession({ sessionId: "branched-id" });
+    const sdk = makeForkSdk({ finalSession: branchedSession });
+    const ctx = mockCtx({
+      sdk,
+      mainCwd: "/mock/main",
+      mainSessionFile: "/mock/main-session.jsonl",
+    });
+
+    const result = await run(
+      mockRecord(),
+      "test task",
+      mockRunOpts({ fork: true, parentForkDepth: 0 }),
+      ctx,
+    );
+
+    // [MF#1] 走 open→createBranchedSession→open→createAgentSession
+    expect(sdk.SessionManager.open).toHaveBeenCalled();
+    expect(sdk.createAgentSession).toHaveBeenCalledOnce();
+    // forkFrom 未被调用（主路径成功）
+    expect(sdk.SessionManager.forkFrom).not.toHaveBeenCalled();
+    expect(result.sessionId).toBe("branched-id");
+  });
+
+  it("createBranchedSession 抛错 → 降级 forkFrom（两级降级）", async () => {
+    const forkedSession = mockSession({ sessionId: "forked-id" });
+    const sdk = makeForkSdk({
+      finalSession: forkedSession,
+      throwInBranch: new Error("branched failed"),
+    });
+    const ctx = mockCtx({
+      sdk,
+      mainCwd: "/mock/main",
+      mainSessionFile: "/mock/main-session.jsonl",
+    });
+
+    const result = await run(
+      mockRecord(),
+      "test task",
+      mockRunOpts({ fork: true, parentForkDepth: 0 }),
+      ctx,
+    );
+
+    // [MF#1] 主路径 createBranchedSession 抛错 → 降级 forkFrom
+    expect(sdk.SessionManager.open).toHaveBeenCalled();
+    expect(sdk.SessionManager.forkFrom).toHaveBeenCalledOnce();
+    expect(result.sessionId).toBe("forked-id");
+  });
+
+  it("两级都失败 → 抛错（run 合成 failed result）", async () => {
+    const sdk = makeForkSdk({
+      finalSession: mockSession(),
+      throwInBranch: new Error("branched failed"),
+      throwInFork: new Error("fork failed"),
+    });
+    const ctx = mockCtx({
+      sdk,
+      mainCwd: "/mock/main",
+      mainSessionFile: "/mock/main-session.jsonl",
+    });
+
+    // run() 创建期异常会抛出——由 runAndFinalize 合成 failed result
+    await expect(
+      run(
+        mockRecord(),
+        "test task",
+        mockRunOpts({ fork: true, parentForkDepth: 0 }),
+        ctx,
+      ),
+    ).rejects.toThrow(/fork session failed.*branched failed.*fork failed/);
+  });
+
+  it("fork 路径写 alive marker", async () => {
+    const branchedSession = mockSession({ sessionId: "branched-id" });
+    const sdk = makeForkSdk({ finalSession: branchedSession });
+    const ctx = mockCtx({
+      sdk,
+      mainCwd: "/mock/main",
+      mainSessionFile: "/mock/main-session.jsonl",
+    });
+
+    await run(
+      mockRecord(),
+      "test task",
+      mockRunOpts({ fork: true, parentForkDepth: 0 }),
+      ctx,
+    );
+
+    expect(aliveStore.writeAliveMarker).toHaveBeenCalledWith(
+      "/mock/session.jsonl",
+      expect.objectContaining({
+        pid: process.pid,
+        id: "branched-id",
+      }),
+    );
+  });
+
+  it("fork 后正常完成 done，result.success=true", async () => {
+    const branchedSession = mockSession({ sessionId: "branched-id" });
+    const sdk = makeForkSdk({ finalSession: branchedSession });
+    const ctx = mockCtx({
+      sdk,
+      mainCwd: "/mock/main",
+      mainSessionFile: "/mock/main-session.jsonl",
+    });
+
+    const result = await run(
+      mockRecord(),
+      "test task",
+      mockRunOpts({ fork: true, parentForkDepth: 2 }),
+      ctx,
+    );
+
+    // prompt 被调用（session 正常运行）
+    expect(branchedSession.prompt).toHaveBeenCalled();
+    // 无 error → success
+    expect(result.success).toBe(true);
+    expect(result.error).toBeUndefined();
+  });
+
+  it("identity custom entry 包含 forkDepth=parentForkDepth+1", async () => {
+    const branchedSession = mockSession({ sessionId: "branched-id" });
+    const sdk = makeForkSdk({ finalSession: branchedSession });
+    const ctx = mockCtx({
+      sdk,
+      mainCwd: "/mock/main",
+      mainSessionFile: "/mock/main-session.jsonl",
+    });
+
+    await run(
+      mockRecord(),
+      "test task",
+      mockRunOpts({ fork: true, parentForkDepth: 3 }),
+      ctx,
+    );
+
+    expect(branchedSession.sessionManager.appendCustomEntry).toHaveBeenCalledWith(
+      "subagent-identity",
+      expect.objectContaining({ forkDepth: 4 }),
+    );
+  });
+
+  it("非 fork 路径 → createAgentSession（现有行为不变）", async () => {
+    const normalSession = mockSession({ sessionId: "normal-id" });
+    const sdk = mockSdk({
+      createAgentSession: vi.fn().mockResolvedValue({ session: normalSession }),
+    });
+    const ctx = mockCtx({ sdk });
+
+    const result = await run(
+      mockRecord(),
+      "test task",
+      mockRunOpts(), // fork 未设置
+      ctx,
+    );
+
+    expect(sdk.createAgentSession).toHaveBeenCalled();
+    // 非不开 fork：不走 SessionManager.open/forkFrom
+    expect(sdk.SessionManager.open).not.toHaveBeenCalled();
+    expect(sdk.SessionManager.forkFrom).not.toHaveBeenCalled();
+    expect(result.sessionId).toBe("normal-id");
+  });
+
+  it("两 fork 并发不互相 mutate（各自独立 session）", async () => {
+    const session1 = mockSession({ sessionId: "fork-1" });
+    const session2 = mockSession({ sessionId: "fork-2" });
+    let callCount = 0;
+    const sdk = makeForkSdk({
+      finalSession: session1,
+      // createAgentSession 按调用顺序返回独立 session
+    });
+    // 覆盖 createAgentSession 为按顺序返回 session1/session2
+    (sdk.createAgentSession as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      callCount++;
+      return Promise.resolve({ session: callCount === 1 ? session1 : session2 });
+    });
+    const ctx = mockCtx({
+      sdk,
+      mainCwd: "/mock/main",
+      mainSessionFile: "/mock/main-session.jsonl",
+    });
+
+    const [settled1, settled2] = await Promise.allSettled([
+      run(mockRecord(), "task-1", mockRunOpts({ fork: true, parentForkDepth: 0 }), ctx),
+      run(mockRecord(), "task-2", mockRunOpts({ fork: true, parentForkDepth: 0 }), ctx),
+    ]);
+    // 两任务独立、应均成功（验证并发不互相干扰）
+    expect(settled1.status).toBe("fulfilled");
+    expect(settled2.status).toBe("fulfilled");
+    const result1 = settled1.status === "fulfilled" ? settled1.value : undefined;
+    const result2 = settled2.status === "fulfilled" ? settled2.value : undefined;
+
+    // [MF#1] 两次 createAgentSession 各自返回独立 session
+    expect(sdk.createAgentSession).toHaveBeenCalledTimes(2);
+    expect(result1.sessionId).toBe("fork-1");
+    expect(result2.sessionId).toBe("fork-2");
+    // 各自 prompt 各自的 session
+    expect(session1.prompt).toHaveBeenCalledWith("task-1");
+    expect(session2.prompt).toHaveBeenCalledWith("task-2");
+  });
+
+  it("fork depth 超限 → ForkDepthExceededError → 抛错", async () => {
+    const sdk = mockSdk();
+    const ctx = mockCtx({
+      sdk,
+      mainCwd: "/mock/main",
+      mainSessionFile: "/mock/main-session.jsonl",
+    });
+
+    // ForkDepthExceededError 在 createAndConfigureSession 内抛出，run() 不吞
+    await expect(
+      run(
+        mockRecord(),
+        "test task",
+        mockRunOpts({ fork: true, parentForkDepth: 10 }), // >= MAX_FORK_DEPTH
+        ctx,
+      ),
+    ).rejects.toThrow(/fork depth.*10.*refusing to fork/);
   });
 });

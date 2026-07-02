@@ -40,6 +40,9 @@ interface StartParam {
   schema?: Record<string, unknown>;
   maxTurns?: number;
   graceTurns?: number;
+  fork?: boolean;
+  worktree?: boolean;
+  cwd?: string;
 }
 
 interface ListParam {
@@ -105,6 +108,15 @@ const SubagentParams = Type.Object({
     schema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     maxTurns: Type.Optional(Type.Number()),
     graceTurns: Type.Optional(Type.Number()),
+    fork: Type.Optional(Type.Boolean({
+      description: "Fork mode: inherit the parent's conversation context. When true, the subagent runs in a branched IN-PROCESS SDK session that shares the parent's full conversation history (prior turns/messages), so it sees the existing context and can continue from that state. Subagents ALWAYS run in-process (same Node process as the parent) and share process.env — fork does NOT spawn a separate process. Use worktree:true (requires fork:true) for file-system isolation.",
+    })),
+    worktree: Type.Optional(Type.Boolean({
+      description: "Worktree isolation (requires fork:true): run the subagent in a dedicated git worktree, providing file-system level isolation from the parent session. Prevents concurrent file-write conflicts between parent and subagent. Only takes effect when fork:true; passing worktree:true without fork:true throws an error.",
+    })),
+    cwd: Type.Optional(Type.String({
+      description: 'Override the working directory for the subagent execution. Must be an absolute path. Defaults to the parent session\'s cwd.',
+    })),
   })),
   listParam: Type.Optional(Type.Object({
     includeFinished: Type.Optional(Type.Boolean({
@@ -190,7 +202,11 @@ Completion auto-notifies you (a message is injected that wakes your next turn). 
 
 - Multiple sync (wait:true) calls in one message expecting parallelism → they serialize; a slow first call delays the rest and long chains may get interrupted.
 - Launching background, then sleeping/polling instead of working or stopping.
-- Using background for a result you need right now → use sync.`,
+- Using background for a result you need right now → use sync.
+
+## Nested spawning
+
+A subagent MAY itself call the \`subagent\` tool (nested delegation is supported, in-process). A forked subagent sees its own fork depth in the environment block ("Fork depth: N/10") — you may spawn deeper while N < 10. The 11th fork level is refused with a clear "fork depth 10 >= 10" error and fails the subagent gracefully (does not crash the parent). Do NOT refuse to spawn a sub-subagent by assuming it is disallowed — it is not; only the depth limit applies.`,
     executionMode: "sequential",
     parameters: SubagentParams,
     renderCall: subagentRenderCall,
@@ -202,6 +218,10 @@ Completion auto-notifies you (a message is injected that wakes your next turn). 
 // ============================================================
 // 回调实现（模块级 const）
 // ============================================================
+
+// ponytail: renderCall 每次 TUI invalidate 都触发，同一解析错误会重复刷屏。
+// 按错误消息去重（Set），session 内只报第一次。错误消息含 modelStr，足够区分。
+const reportedRenderErrors = new Set<string>();
 
 const subagentRenderCall: SubagentRenderCallCb = (args, theme, ctx) => {
   // 预解析 model（同步）：让标题行能显示 model/thinking，不必等 execute。
@@ -219,8 +239,13 @@ const subagentRenderCall: SubagentRenderCallCb = (args, theme, ctx) => {
     if (r) resolved = { model: `${r.model.provider}/${r.model.id}`, thinkingLevel: r.thinkingLevel };
   } catch (err) {
     // service 未注册 / modelRegistry 未注入 / 无可用 model → 降级不显示 model（renderCall 不应崩）。
-    void err; // 显式确认忽略：renderCall 降级是设计意图，不阻断渲染
-    console.debug("[subagents] renderCall model resolution failed, degrading:", err);
+    // 去重：同一 err.message 只 console.debug 一次，避免 TUI invalidate 反复刷屏。
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!reportedRenderErrors.has(msg)) {
+      reportedRenderErrors.add(msg);
+      void err; // 显式确认忽略：renderCall 降级是设计意图，不阻断渲染
+      console.debug("[subagents] renderCall model resolution failed, degrading:", err);
+    }
   }
   return renderSubagentCall(args, theme, ctx, resolved);
 };

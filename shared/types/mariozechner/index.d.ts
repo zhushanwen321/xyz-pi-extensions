@@ -75,6 +75,9 @@ declare module "@mariozechner/pi-coding-agent" {
 		setSessionFile(sessionFile: string): void;
 		isPersisted(): boolean;
 		newSession(options?: any): string | undefined;
+		// Fork methods (D-018: two-level fallback chain)
+		/** 从已有 session 创建分支 session（原地 mutate）。 */
+		createBranchedSession(leafId: string): string | undefined;
 	}
 
 	export type SessionEntry = any;
@@ -171,6 +174,16 @@ declare module "@mariozechner/pi-coding-agent" {
 	export function getMarkdownTheme(): Theme;
 	export function parseFrontmatter<T = Record<string, unknown>>(text: string): { frontmatter: T; body: string };
 	export function withFileMutationQueue(filePath: string, fn: () => Promise<void>): Promise<void>;
+	// Session factory methods
+	export function createAgentSession(opts: unknown): Promise<{ session: unknown }>;
+	// SessionManager static methods
+	export const SessionManager: {
+		inMemory(cwd?: string): unknown;
+		create(cwd: string, sessionDir?: string): unknown;
+		open(sessionFile: string, sessionDir?: string, cwdOverride?: string): unknown;
+		/** [MF#1] fork 静态方法：从源 session fork 到目标 cwd，返回 SessionManager。 */
+		forkFrom(sourcePath: string, targetCwd: string, sessionDir?: string): unknown;
+	};
 }
 
 declare module "@mariozechner/pi-tui" {

@@ -2,19 +2,20 @@
 //
 // 锁定 session-factory 纯函数分支：
 //   - applyToolFilter 4 条分支（安全敏感：决定 subagent 可用工具域）
-//   - getSubagentSessionDir 路径编码
 //   - buildAppendSystemPrompt 拼接
 //   - buildEnvBlock 非 git 仓库 / 超时分支
+//
+// 注：getSubagentSessionDir 路径编码由 path-encoding.test.ts 覆盖（统一实现，无本地版）。
 //
 // 不覆盖 createAndConfigureSession（依赖动态 import SDK，已由 sdk-contract + session-runner 集成覆盖）。
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentConfig } from "../core/model-resolver.ts";
+import { MAX_FORK_DEPTH } from "../core/session-context-resolver.ts";
 import {
   applyToolFilter,
   buildAppendSystemPrompt,
   buildEnvBlock,
-  getSubagentSessionDir,
 } from "../core/session-runner.ts";
 import type { AgentSessionLike } from "../types.ts";
 
@@ -114,26 +115,6 @@ describe("applyToolFilter", () => {
 });
 
 // ============================================================
-// getSubagentSessionDir
-// ============================================================
-
-describe("getSubagentSessionDir", () => {
-  it("joins agentDir/subagents/<encoded-cwd>/sessions", () => {
-    const dir = getSubagentSessionDir("/home/u/.pi/agent", "/home/u/proj");
-    // encodeCwd("/home/u/proj") = "--home-u-proj--"
-    expect(dir).toBe(
-      "/home/u/.pi/agent/subagents/--home-u-proj--/sessions",
-    );
-  });
-
-  it("different cwds produce different dirs", () => {
-    const a = getSubagentSessionDir("/x", "/proj-a");
-    const b = getSubagentSessionDir("/x", "/proj-b");
-    expect(a).not.toBe(b);
-  });
-});
-
-// ============================================================
 // buildAppendSystemPrompt
 // ============================================================
 
@@ -185,6 +166,20 @@ describe("buildAppendSystemPrompt", () => {
     expect(result.length).toBe(2);
     expect(result[1]).toBe("frag");
   });
+
+  // ── forkDepth 注入（D-030）──
+
+  it("forkDepth 为正数时 env block 含 'Fork depth: N/<MAX_FORK_DEPTH>'", () => {
+    const result = buildAppendSystemPrompt(["frag"], "/cwd", undefined, 3);
+    expect(result.length).toBe(2);
+    // N = 传入的 forkDepth；分母与 MAX_FORK_DEPTH 同源（拦截与展示不漂移）
+    expect(result[0]).toContain(`Fork depth: 3/${MAX_FORK_DEPTH}`);
+  });
+
+  it("forkDepth 未传时不注入 fork depth 行（非 fork session 不显示深度）", () => {
+    const result = buildAppendSystemPrompt(["frag"], "/cwd");
+    expect(result[0]).not.toContain("Fork depth:");
+  });
 });
 
 // ============================================================
@@ -222,5 +217,21 @@ describe("buildEnvBlock", () => {
     const second = buildEnvBlock(uniqueCwd);
     expect(second).toBe(first);
     expect(second).not.toContain("Git branch:"); // 缓存的是空分支
+  });
+
+  // ── forkDepth 注入（D-030）──
+
+  it("forkDepth 为正数时注入 'Fork depth: N/<MAX_FORK_DEPTH>' 行", () => {
+    const uniqueCwd = `/tmp/sf-fork-${Date.now()}-${Math.random()}`;
+    const block = buildEnvBlock(uniqueCwd, 7);
+    expect(block).toContain(`Fork depth: 7/${MAX_FORK_DEPTH}`);
+  });
+
+  it("forkDepth 为 0/undefined/负数时不注入 fork depth 行", () => {
+    const uniqueCwd = `/tmp/sf-nofork-${Date.now()}-${Math.random()}`;
+    for (const fd of [undefined, 0, -1] as const) {
+      const block = buildEnvBlock(uniqueCwd, fd);
+      expect(block).not.toContain("Fork depth:");
+    }
   });
 });

@@ -9,6 +9,11 @@
 // 上游：subagent-tool（execute/query/cancel）、TUI（onChange/listRunning/collectRecords）。
 // session_start 时经 initSession 注入 pi；modelRegistry/entries 归 ModelConfigService.initModel。
 
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
+import * as fs from "node:fs";
+import * as path from "node:path";
+
 import { type ConcurrencyPool,DefaultConcurrencyPool } from "../core/concurrency-pool.ts";
 import {
   completeRecord,
@@ -18,8 +23,10 @@ import {
   tryTransition,
 } from "../core/execution-record.ts";
 import type { AgentConfig, ModelInfo } from "../core/model-resolver.ts";
-import { getSdk, getSubagentSessionDir, run, type SessionRunnerContext } from "../core/session-runner.ts";
-import type { SdkLike } from "../types.ts";
+import { getSubagentSessionDir } from "../core/path-encoding.ts";
+import { MAX_FORK_DEPTH } from "../core/session-context-resolver.ts";
+import { getSdk, run, type SessionRunnerContext } from "../core/session-runner.ts";
+import type { SdkLike, WorktreeHandle } from "../types.ts";
 import type {
   AgentEvent,
   AgentResult,
@@ -32,13 +39,18 @@ import type {
   SubagentRecord,
   SubagentToolDetails,
 } from "../types.ts";
+import { ForkDepthExceededError } from "../types.ts";
 import { DEFAULT_AGENT_NAME } from "../types.ts";
+import { bestEffort } from "../utils/best-effort.ts";
+import { removeAliveMarker } from "./execution/alive-store.ts";
+import { writeFinalized } from "./execution/finalized-marker.ts";
 import type { BgNotifyRecord, NotifierHost } from "./execution/notifier.ts";
 import { BgNotifier } from "./execution/notifier.ts";
 import type { StatusFilter } from "./execution/record-store.ts";
 import { RecordStore } from "./execution/record-store.ts";
 import { writeCancelledTombstone } from "./execution/tombstone-store.ts";
 import type { ModelConfigService } from "./model-config-service.ts";
+import { WorktreeManager } from "./worktree-manager.ts";
 
 /** Pi ExtensionAPI 的最小接口（duck-typed）。 */
 interface PiLike {
@@ -55,6 +67,8 @@ export interface SubagentServiceInit {
   cwd: string;
   /** 配置/模型域 Service（execute 内部调其 resolveModel）。 */
   modelService: ModelConfigService;
+  /** 缓存的主 session file 获取函数（fork source 解析用）。 */
+  getMainSessionFile?: () => string | undefined;
 }
 
 /** session_start 注入参数（session 级）。 */
@@ -67,6 +81,15 @@ export interface SubagentServiceSessionInit {
 const PRIORITY_BACKGROUND = 1000;
 const PRIORITY_SYNC = 0;
 
+/** [MF#5] sessionId 短哈希前缀（6 hex）。两个并发 Pi 进程在同一 repo fork 时，seq 各自从 0
+ *  自增 → recordId=run-1 / branch=pi-sub-run-1 冲突 → 第二个 git worktree add -b 失败。
+ *  加 session 作用域前缀保证跨进程唯一。sessionId 缺失时用 'x' 兌底（空值不进 hash）。 */
+const SESSION_TAG_HEX_LEN = 6;
+function sessionTag(sessionId: string | null): string {
+  if (!sessionId) return "x";
+  return createHash("sha1").update(sessionId).digest("hex").slice(0, SESSION_TAG_HEX_LEN);
+}
+
 /** 触发 onUpdate 的事件类型（streaming delta 不触发，避免每 token 刷新）。 */
 const TRIGGERING_EVENT_TYPES = new Set<AgentEvent["type"]>([
   "tool_start",
@@ -76,6 +99,14 @@ const TRIGGERING_EVENT_TYPES = new Set<AgentEvent["type"]>([
   "error",
   "compaction",
 ]);
+
+/**
+ * onUpdate 最小发射间隔（ms）。leading + trailing 时间窗节流：窗口内首次事件立即发，
+ * 后续合并到窗口末尾补发一次。与 tool-render.ts SPINNER_INTERVAL_MS 对齐——视觉刷新
+ * 200ms 一帧，onUpdate 比这更快无感知增益，反而密集打 Pi tool_execution_update
+ * （嵌套场景内层一秒可产生 10+ 事件）触发 chatContainer 重绘残影。
+ */
+const ON_UPDATE_MIN_INTERVAL_MS = 200;
 
 /** resolveIdentity 的产物——一次确定、写入 record 后不再变。 */
 interface ResolvedIdentity {
@@ -102,16 +133,36 @@ export class SubagentService {
   private readonly notifier: BgNotifier;
   private readonly modelService: ModelConfigService;
   private readonly cwd: string;
+  private readonly worktreeManager: WorktreeManager;
+  private readonly getMainSessionFile: (() => string | undefined) | undefined;
 
   private pi: PiLike | null = null;
   private sdk: SdkLike | null = null;
+  /** 当前 Pi session ID（session 隔离过滤用）。initSession 时注入。 */
+  private sessionId: string | null = null;
   private _disposed = false;
   private _seq = 0;
+  /** [MF#4][MF#2] fork 深度按 async 调用链传递（AsyncLocalStorage），替代共享可变计数器。
+   *  主 session=0；fork 进入子 session 期间推进为子深度，供嵌套 fork 的 execute（子 agent
+   *  在 run() 期间再调 subagent tool）经 ALS 读到自身深度作为 parentForkDepth。并发 background
+   *  fork 各自独立调用链，不再互相压低深度值 → MAX_FORK_DEPTH 递归护栏不被绕过。
+   *  [MF#2] 旧实现用单实例字段 currentForkDepth 跨所有执行链共享：并发 background 下 A 还原
+   *  深度后 B 的嵌套 fork 读到被压低的值 → 护栏恒不过限。ALS 是 node 跨 async 边界传递
+   *  “请求作用域”状态的标准机制，每条调用链隔离。 */
+  private readonly forkDepthAls = new AsyncLocalStorage<number>();
+
+  /** subagent 执行上下文按 async 调用链传递（当前正在跑的 record 身份 + 递归深度）。
+   *  B run() 期间包此 ALS，B 内创建 C 时 createRecordForMode 读到 B 的 recordId/depth，
+   *  据此设 C.parentRecordId=B.id、C.depth=B.depth+1。主 session 链上无 store → 顶层。
+   *  与 forkDepthAls 独立：后者只数 fork 链（fork=true 才递增），本 ALS 数所有 subagent 嵌套。 */
+  private readonly execCtxAls = new AsyncLocalStorage<{ recordId: string | undefined; depth: number }>();
 
   constructor(init: SubagentServiceInit) {
     this.cwd = init.cwd;
     this.modelService = init.modelService;
+    this.getMainSessionFile = init.getMainSessionFile;
     this.pool = new DefaultConcurrencyPool(this.modelService.getGlobalConfig().maxConcurrent);
+    this.worktreeManager = new WorktreeManager();
     const sessionsDir = getSubagentSessionDir(this.modelService.getAgentDir(), init.cwd);
     this.store = new RecordStore(sessionsDir);
     this.notifier = new BgNotifier(this.piAdapter());
@@ -122,6 +173,9 @@ export class SubagentService {
   /** session_start 注入 pi + revive（modelRegistry/entries 归 ModelConfigService.initModel）。 */
   initSession(init: SubagentServiceSessionInit): void {
     this.pi = init.pi;
+    this.sessionId = init.sessionId;
+    // [MF#2] fork 深度改用 ALS（按 async 调用链），无需 session 级重置：主 session 链上无
+    // ALS store，getStore()?? 0 兑底为 0。
     // revive（dispose 的逆操作：/resume /fork /new 后复活）
     this._disposed = false;
     this.store.revive();
@@ -132,6 +186,10 @@ export class SubagentService {
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
+    for (const s of this.throttleState.values()) {
+      if (s.timer !== undefined) clearTimeout(s.timer);
+    }
+    this.throttleState.clear();
     this.notifier.flushPendingNotifications();
     this.store.dispose();
     this.notifier.dispose();
@@ -172,15 +230,62 @@ export class SubagentService {
   async execute(opts: ExecuteOptions): Promise<ExecutionHandle> {
     this.assertReady();
 
+    // 通用嵌套深度护栏（D-033）：execCtxAls 记录所有 subagent 嵌套层级（fork + 非 fork），
+    // 每层 +1。MAX_FORK_DEPTH 同时限 fork 链与通用嵌套——非 fork 递归虽不累积 session 体积，
+    // 但耗资源（每层 createAgentSession + resourceLoader + session 文件）且 LLM 易陷入
+    // 「委派子 agent → 子 agent 再委派」死循环（实测无护栏时递归到 L36 全 failed）。
+    // 在所有副作用（record/worktree/session）之前拦截，错误直达调用方。
+    // fork:true 的体积护栏（resolveSessionContext 的 parentForkDepth 检查）作为第二层保留。
+    // 计数基准：顶层 nestingDepth=0；每次嵌套 execute +1。允许 0..MAX_FORK_DEPTH（共 11 层），
+    // nestingDepth=MAX+1 被拒。与 fork 护栏（parentForkDepth>=MAX 拒，parent 计数基准）互补：
+    // 本护栏更严（计所有嵌套），混合链下先生效；两者共享 MAX_FORK_DEPTH 上限不漂移。
+    const parentNesting = this.execCtxAls.getStore();
+    const nestingDepth = parentNesting ? parentNesting.depth + 1 : 0;
+    if (nestingDepth > MAX_FORK_DEPTH) {
+      throw new ForkDepthExceededError(
+        `subagent nesting depth ${nestingDepth} > ${MAX_FORK_DEPTH} (max recursion), refusing to spawn deeper`,
+      );
+    }
+
+    // [MF#7] worktree:true 需要 fork:true——否则下面三个 worktree 分支都不命中，
+    // worktreeHandle 恒 undefined → 子 agent 零文件隔离且零报错（静默 no-op）。此处在
+    // 任何副作用（record 创建 / worktree 创建）之前 fail-fast，不吞误用。
+    if (opts.worktree === true && !opts.fork) {
+      throw new Error(
+        "worktree:true requires fork:true (worktree isolation only applies to forked sessions). " +
+          "Set fork:true together with worktree:true.",
+      );
+    }
+
     // mode 判定（业务规则归 Service，tool 层只传 wait 意图）
     const mode = this.resolveMode(opts);
-    const ctx = await this.buildSessionRunnerContext();
+    const ctx = await this.buildSessionRunnerContext(opts.cwd);
 
     // ── 1. IDENTITY 解析（确认 → agentConfig → resolveModel）──
     const identity = await this.resolveIdentity(opts);
 
     // ── 2. RECORD 创建 + 注册 ──
     const record = this.createRecordForMode(identity, opts, mode);
+
+    // ── 2.5 worktree 创建（仅 worktree===true 或已传入 handle 时）──
+    // record 先创建，worktree 失败时可 finalizeFailed（record 已在 store 中）。
+    // worktree 必须显式开启：worktree===true 创建新 worktree；worktree===undefined/false 不创建。
+    // fork 不隐含 worktree（UC-1 fork 可独立使用，fork 仅继承上下文，在 parent cwd 跑）。
+    let worktreeHandle: WorktreeHandle | undefined;
+    if (typeof opts.worktree === "object") {
+      // 传入的是已创建的 WorktreeHandle
+      worktreeHandle = opts.worktree;
+    } else if (opts.worktree === true) {
+      // worktree===true（显式要求）——创建新 worktree。MF#7 已保证此处 fork 必为 true。
+      try {
+        worktreeHandle = this.worktreeManager.create(this.cwd, record.id);
+        record.worktreeHandle = worktreeHandle;
+      } catch (err) {
+        // create 失败→不进入 run，合成 failed result
+        const _result = await this.finalizeFailed(record, err);
+        return this.buildEarlyFailedHandle(record, mode);
+      }
+    }
 
     // ── 3. MODE 分叉：signal/priority（仅此 2 处即时差异）──
     const signal = mode === "background"
@@ -190,16 +295,28 @@ export class SubagentService {
 
     // ── 4-7. sync 直接 await；background 包 detached 立即返回 id ──
     if (mode === "sync") {
-      await this.runAndFinalize(record, opts, ctx, identity, signal, priority);
+      // [长期方案] 嵌套 sync（subagent 内部再发起 subagent）不回流 onUpdate。
+      // 根因：递归 sync 时，内层 subagent 的 SubagentResultComponent 也启动 setInterval 驱动
+      // spinner，与外层 block 的 setInterval 在 Pi 嵌套 tool_execution 渲染管线下互相干扰，
+      // 导致 statusLine 帧堆叠残影（普通单层 sync 不残影已证 spinner 机制本身无问题）。
+      // 解法：嵌套层 onUpdate=undefined → runAndFinalize 的 onEvent=undefined → execute 期间不推
+      // partial renderResult → 内层 component 直到完成才创建（done 态）→ maybeToggleSpinner
+      // 检测非 running 不启动 setInterval。顶层回归单 setInterval，不堆叠。内层 block 仅显示
+      // renderCall 静态标题 + 完成结果（内层进度对顶层用户价值低，Ctrl+O 仍可看实时详情）。
+      // nestingDepth 在 execute 入口由 execCtxAls 推导（L2 内调 L3 时 parentNesting 非空 → ≥1）。
+      const nestedSyncOnUpdate = nestingDepth > 0 ? undefined : opts.onUpdate;
+      await this.runAndFinalize(record, { ...opts, onUpdate: nestedSyncOnUpdate, worktree: worktreeHandle }, ctx, identity, signal, priority);
       return { mode: "sync", record: snapshot(record), details: project(record) };
     }
 
     // background：立即返回 subagentId + sessionFile（窗口期可能 undefined）+ details（status=running）。
     // 步骤 4-6 在 detached promise 里跑。
-    // B1：background 不回流 onUpdate——detached 运行对 tool 层不可见，完成由 notify 驱动新 turn。
-    // 若转发 onUpdate，liftSync 会把 bg 事件误标成 syncResponse(mode:"sync") → spinner setInterval 泄漏。
+    // B1：background 不回流 onUpdate（与 sync 嵌套抑制同理——任何嵌套 subagent 的 onUpdate 都须
+    // undefined，防 SubagentResultComponent spinner setInterval 堆叠）。此外 detached 运行对 tool
+    // 层不可见，完成由 notify 驱动新 turn；转发 onUpdate 还会被 liftSync 误标 syncResponse(mode:"sync")
+    // → spinner setInterval 泄漏。sync 嵌套抑制见上方 nestedSyncOnUpdate。
     const bgDetails = project(record);
-    this.kickOffBackground(record, { ...opts, onUpdate: undefined }, ctx, identity, signal, priority);
+    this.kickOffBackground(record, { ...opts, onUpdate: undefined, worktree: worktreeHandle }, ctx, identity, signal, priority);
     return { mode: "background", subagentId: record.id, sessionFile: record.sessionFile, details: bgDetails };
   }
 
@@ -225,6 +342,11 @@ export class SubagentService {
 
   // ── 状态查询（TUI 调）──────────────────────────────────
 
+  /** 当前 Pi session ID（TUI/测试用）。initSession 前为 null。 */
+  getSessionId(): string | null {
+    return this.sessionId;
+  }
+
   /** 订阅 store 变更（widget/list requestRender）。返回取消订阅。 */
   onChange(listener: () => void): () => void {
     return this.store.onChange(listener);
@@ -235,9 +357,10 @@ export class SubagentService {
     return this.store.listRunning();
   }
 
-  /** 合并内存(running) + 磁盘(session.jsonl 重建) record（/subagents list + tool list 消费）。 */
+  /** 合并内存(running) + 磁盘(session.jsonl 重建) record（/subagents list + tool list 消费）。
+   *  按 rootSessionId 过滤，只返回当前 session 创建的 record（session 隔离）。 */
   collectRecords(limit: number, statusFilter: StatusFilter = "all"): SubagentRecord[] {
-    return this.store.collectRecords(limit, statusFilter);
+    return this.store.collectRecords(limit, statusFilter, this.sessionId ?? undefined);
   }
 
   // ── 执行内部：mode 判定 + 身份解析 + record 创建 ──────────
@@ -275,10 +398,18 @@ export class SubagentService {
     mode: ExecutionMode,
   ): ExecutionRecord {
     const seq = ++this._seq;
+    const tag = sessionTag(this.sessionId);
     const id = mode === "background"
-      ? `bg-${seq}-${Date.now()}`
-      : `run-${seq}`;
+      ? `bg-${tag}-${seq}-${Date.now()}`
+      : `run-${tag}-${seq}`;
     const controller = mode === "background" ? new AbortController() : undefined;
+
+    // 从 async 调用链读父执行上下文：主 session 链上无 store → 顶层 record；
+    // B run() 期间包了 execCtxAls，B 内创建 C 时读到 B → C.parentRecordId=B.id, C.depth=B.depth+1。
+    // depth 语义：顶层（无父）=0；有父=父 depth+1。靠 recordId 是否存在区分，不用负数魔数。
+    const parentCtx = this.execCtxAls.getStore();
+    const parentRecordId = parentCtx?.recordId;
+    const depth = parentCtx ? parentCtx.depth + 1 : 0;
 
     const record = createRecord(id, {
       agent: identity.agent,
@@ -287,11 +418,27 @@ export class SubagentService {
       mode,
       task: opts.task,
       startedAt: Date.now(),
+      rootSessionId: this.sessionId ?? undefined,
+      parentRecordId,
+      depth,
       controller,
     });
 
     this.store.register(record);
     return record;
+  }
+
+  /** [MF#R4] worktree 前置失败的 early-return handle。
+   *  按 mode 分支返回 ExecutionHandle 的正确判别变体——不能统一返回 sync 形状：
+   *  background 时 record 已被 finalizeFailed 收尾为 failed、detached promise 从未启动，
+   *  若返回 sync 形状（缺 subagentId/sessionFile），下游 startHandler 读 handle.subagentId
+   *  得 undefined → 用户见"已启动"实则已失败且无法 cancel。 */
+  private buildEarlyFailedHandle(record: ExecutionRecord, mode: ExecutionMode): ExecutionHandle {
+    const details = project(record);
+    if (mode === "background") {
+      return { mode: "background", subagentId: record.id, sessionFile: record.sessionFile, details };
+    }
+    return { mode: "sync", record: snapshot(record), details };
   }
 
   // ── 执行内部：run + finalize（sync/bg 共用）──────────────
@@ -305,25 +452,54 @@ export class SubagentService {
     signal: AbortSignal | undefined,
     priority: number,
   ): Promise<AgentResult> {
-    await this.pool.acquire(priority);
+    // 仅 background 进并发池限流。sync 不进池，原因：
+    // ① sync 由主 agent sequential executionMode 天然串行，无需限流；
+    // ② sync 嵌套持有槽位会死锁——顶层 + 每层 sync 各占 1 槽，嵌套深度达 maxConcurrent
+    //   时子层 acquire 永久排队、父层永等子层、release 永不触发（实测 maxConcurrent=4 → L5 卡死）。
+    // sync 嵌套深度由 MAX_FORK_DEPTH (session-context-resolver.ts) 兜底，不靠池限。
+    const pooled = record.mode === "background";
+    if (pooled) await this.pool.acquire(priority);
     // onEvent 包装：AgentEvent → onUpdate(project(record)) 回流调用方
     const onEvent = opts.onUpdate
       ? (event: AgentEvent): void => this.onEventThrottled(record, event, opts.onUpdate!)
       : undefined;
 
+    // 解析 worktree 参数：boolean → WorktreeHandle | undefined
+    let worktreeHandle: WorktreeHandle | undefined;
+    if (typeof opts.worktree === "object") {
+      worktreeHandle = opts.worktree;
+    }
+    // worktree=true 或 undefined 时不传递 handle，由 run 内部处理
+
+    // [MF#4][MF#2] fork 深度护栏：深度按 async 调用链传递（ALS），不再用共享实例计数器。
+    // parentDepth = 当前调用链的深度（主 session 链上无 store→0）；fork 时推进为 parentDepth+1，
+    // 包进 run() 的 ALS 作用域，使子 agent 在 prompt() 期间发起的嵌套 execute 能读到该深度。
+    const parentDepth = this.forkDepthAls.getStore() ?? 0;
+    const effectiveDepth = opts.fork ? parentDepth + 1 : parentDepth;
+
     let result: AgentResult;
     try {
-      result = await run(record, opts.task, {
-        resolved: identity.resolved,
-        agentConfig: identity.agentConfig,
-        appendSystemPrompt: opts.appendSystemPrompt,
-        skillPath: opts.skillPath,
-        schema: opts.schema,
-        maxTurns: opts.maxTurns,
-        graceTurns: opts.graceTurns,
-        signal,
-        onEvent,
-      }, ctx);
+      // execCtxAls 包在 forkDepthAls 内层：B run() 期间它的 store={recordId:B.id,depth:B.depth}，
+      // B 内创建 C 时 createRecordForMode 读到 B → C 挂到 B 名下。两层 ALS 独立但同生命周期。
+      result = await this.forkDepthAls.run(effectiveDepth, () =>
+        this.execCtxAls.run(
+          { recordId: record.id, depth: record.depth },
+          () => run(record, opts.task, {
+            resolved: identity.resolved,
+            agentConfig: identity.agentConfig,
+            appendSystemPrompt: opts.appendSystemPrompt,
+            skillPath: opts.skillPath,
+            schema: opts.schema,
+            maxTurns: opts.maxTurns,
+            graceTurns: opts.graceTurns,
+            signal,
+            onEvent,
+            fork: opts.fork,
+            worktree: worktreeHandle,
+            parentForkDepth: parentDepth, // [MF#4] 父链深度，不从 opts 读
+          }, ctx),
+        ),
+      );
     } catch (err) {
       // run() 正常路径不抛错，但创建期异常（createAndConfigureSession 失败）
       // 会逃逸出 run() —— 合成 failed result + 收尾。
@@ -332,7 +508,7 @@ export class SubagentService {
       result = await this.finalizeFailed(record, err);
       return result;
     } finally {
-      this.pool.release();
+      if (pooled) this.pool.release();
     }
 
     // status 唯一判定点：success ? done : (aborted ? cancelled : failed)
@@ -364,8 +540,12 @@ export class SubagentService {
           this.notifyComplete(record);
         }
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         // detached 吞错：runAndFinalize 内部已 finalize record，不外抛
+        // 但记录错误以便排查
+        if (err instanceof Error) {
+          console.debug(`[subagent] background finalize error (record=${record.id}): ${err.message}`);
+        }
       });
   }
 
@@ -400,18 +580,94 @@ export class SubagentService {
       });
     }
     this.store.archive(record);
+    // worktree cleanup + removeAliveMarker（cancel 不写 finalized，BC-4 互斥）
+    if (record.worktreeHandle) {
+      try {
+        this.worktreeManager.cleanup(record.worktreeHandle);
+      } catch (err) {
+        bestEffort(err, "worktree cleanup (cancelBackground)");
+      }
+    }
+    if (record.sessionFile) {
+      try {
+        removeAliveMarker(record.sessionFile);
+      } catch (err) {
+        bestEffort(err, "removeAliveMarker (cancelBackground)");
+      }
+    }
     this.notifyComplete(record);
     return true;
   }
 
-  /** 收尾两件套：completeRecord + store.archive（终态 record 立即移出内存，读时从 session.jsonl 重建）。 */
+  /**
+   * D-017 时序收尾：collectPatch → completeRecord → archive → writeFinalized + cleanup + removeAliveMarker。
+   * B9 兜底：completeRecord/archive 抛错→ finalized/cleanup/aliveMarker 仍执行。
+   */
   private async finalizeRecord(
     record: ExecutionRecord,
     result: AgentResult,
     status: "done" | "failed" | "cancelled",
   ): Promise<void> {
-    completeRecord(record, result, status);
-    this.store.archive(record);
+    // 终态清节流状态：防 trailing timer 在 record 归档后误发陈旧 onUpdate
+    this.clearThrottle(record.id);
+    // ── Step 0: collectPatch（best-effort，D-022 patchOk 守卫）──
+    // [MF#3] patchFile 写到 worktree 之外（sessionsDir/<branch>.patch），避免被 cleanup 删除；
+    //        路径回填 record.patchFile，供调用方（tool result / /subagents list）应用。
+    let patchOk = true;
+    if (record.worktreeHandle) {
+      try {
+        const sessionsDir = getSubagentSessionDir(
+          this.modelService.getAgentDir(),
+          record.worktreeHandle.mainCwd,
+        );
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        const patchFile = path.join(sessionsDir, `${record.worktreeHandle.branch}.patch`);
+        const patch = this.worktreeManager.collectPatch(record.worktreeHandle, patchFile);
+        patchOk = !patch.failed;
+        // 仅 patch 实际写盘（非空 diff 且未失败）才回填，避免指向不存在文件的悬空路径——
+        // 否则 notifier/render/sync 路径会向 LLM 输出 `git apply <不存在>`（纯查询任务命中）。
+        if (patch.written) record.patchFile = patchFile;
+      } catch {
+        patchOk = false;
+      }
+    }
+
+    // ── Step 1: completeRecord（B9: 抛错→3 仍执行）──
+    try {
+      completeRecord(record, result, status);
+    } catch (err) {
+      bestEffort(err, "completeRecord (finalizeRecord B9)", "error");
+    }
+
+    // ── Step 2: archive（B9: 抛错→3 仍执行）──
+    try {
+      this.store.archive(record);
+    } catch (err) {
+      bestEffort(err, "store.archive (finalizeRecord B9)", "error");
+    }
+
+    // ── Step 3: finalized + cleanup + aliveMarker（三件各自独立 try/catch）──
+    if (record.sessionFile) {
+      try {
+        writeFinalized(record.sessionFile);
+      } catch (err) {
+        bestEffort(err, "writeFinalized (finalizeRecord Step3)");
+      }
+    }
+    if (record.worktreeHandle && patchOk) {
+      try {
+        this.worktreeManager.cleanup(record.worktreeHandle);
+      } catch (err) {
+        bestEffort(err, "worktree cleanup (finalizeRecord Step3)");
+      }
+    }
+    if (record.sessionFile) {
+      try {
+        removeAliveMarker(record.sessionFile);
+      } catch (err) {
+        bestEffort(err, "removeAliveMarker (finalizeRecord Step3)");
+      }
+    }
   }
 
   /**
@@ -445,15 +701,67 @@ export class SubagentService {
     this.notifier.notify(this.toNotifyRecord(record));
   }
 
-  /** AgentEvent 节流回流到 onUpdate（streaming delta 不触发）。 */
+  // onUpdate 节流状态（per-record Map）。每条 record（每条 onUpdate 回流链）独立节流，
+  // 避免嵌套（fork 链：主→A→B）多条 onUpdate 链争用同一份节流状态。
+  // [HISTORICAL] 旧实现用单个实例字段，注释假设“fork 嵌套串行，同时只有一条链”——错误：
+  // trailing timer 异步，B 设的 trailing 会在 B 完成、A 恢复期间触发，与 A 的同步事件争用
+  // onUpdateLastEmitAt/onUpdateTrailingTimer → A 的 onUpdate 被吞/延迟 → 主 agent 对话流
+  // A block 状态跳跃更新 → 残影。per-record 化让 A/B 各自独立节流，互不干扰。
+  private readonly throttleState = new Map<string, { lastEmitAt: number; timer?: ReturnType<typeof setTimeout> }>();
+
+  /**
+   * AgentEvent 节流回流到 onUpdate（streaming delta 不触发 + 时间窗节流）。
+   *
+   * 名为 Throttled 必须真节流——只过滤事件类型时，每个 tool_start/tool_end/turn_end
+   * 都直发 onUpdate，嵌套场景一秒 10+ 事件密集回流 → Pi tool_execution_update 密集重绘
+   * → 行数变化的流式 tool 组件在 chatContainer diff 中残影（状态行堆叠）。
+   *
+   * leading + trailing：首次事件立即发（响应性），窗口内后续合并到末尾补发一次
+   * （保证终态事件不丢——sync record 终态后 archive 移出内存，闭包持有的引用仍可 project）。
+   *
+   * 节流状态 per-record（Map）：每条 record 独立 leading/trailing 窗口。嵌套（fork 链）
+   * 时外层 A 与内层 B 各自节流，trailing timer 不会跨链污染。
+   */
   private onEventThrottled(
     record: ExecutionRecord,
     event: AgentEvent,
     onUpdate: (details: SubagentToolDetails) => void,
   ): void {
-    if (TRIGGERING_EVENT_TYPES.has(event.type)) {
+    if (!TRIGGERING_EVENT_TYPES.has(event.type)) return;
+    const state = this.throttleState.get(record.id) ?? { lastEmitAt: 0 };
+    const now = Date.now();
+    if (now - state.lastEmitAt >= ON_UPDATE_MIN_INTERVAL_MS) {
+      // leading：窗口外立即发，清掉该 record 残留的 trailing timer（避免补发陈旧状态）
+      if (state.timer !== undefined) {
+        clearTimeout(state.timer);
+        state.timer = undefined;
+      }
+      state.lastEmitAt = now;
+      this.throttleState.set(record.id, state);
       onUpdate(project(record));
+      // 终态清 entry（与 trailing 分支对称）：防 CAS 后到 leading 误发陈旧状态 + Map 无限增长。
+      if (record.status !== "running") this.throttleState.delete(record.id);
+      return;
     }
+    // trailing：窗口末尾补发最新（per-record timer，不与其他 record 的 trailing 争用）。
+    if (state.timer === undefined) {
+      const wait = ON_UPDATE_MIN_INTERVAL_MS - (now - state.lastEmitAt);
+      state.timer = setTimeout(() => {
+        state.timer = undefined;
+        state.lastEmitAt = Date.now();
+        onUpdate(project(record));
+        // record 已终态且无 pending trailing → 清 entry 防 Map 无限增长
+        if (record.status !== "running") this.throttleState.delete(record.id);
+      }, wait);
+      this.throttleState.set(record.id, state);
+    }
+  }
+
+  /** 清指定 record 的节流状态（finalizeRecord 调，防终态后 trailing 误发陈旧状态）。 */
+  private clearThrottle(recordId: string): void {
+    const state = this.throttleState.get(recordId);
+    if (state?.timer !== undefined) clearTimeout(state.timer);
+    this.throttleState.delete(recordId);
   }
 
   // ── 内部 ────────────────────────────────────────────────
@@ -483,17 +791,20 @@ export class SubagentService {
   }
 
   /** 构造 SessionRunnerContext。sdk lazy 获取 + 缓存。 */
-  private async buildSessionRunnerContext(): Promise<SessionRunnerContext> {
+  private async buildSessionRunnerContext(overrideCwd?: string): Promise<SessionRunnerContext> {
     if (this.sdk === null) {
       this.sdk = await getSdk();
     }
     return {
-      cwd: this.cwd,
+      cwd: overrideCwd ?? this.cwd,
       agentDir: this.modelService.getAgentDir(),
       modelRegistry: this.modelService.getModelRegistry(),
       resolveAgent: (name: string) => this.modelService.getAgentConfig(name),
       skillDirs: this.modelService.getDiscoverySkillDirs(),
       sdk: this.sdk,
+      mainCwd: this.cwd,
+      // mainSessionFile: fork source 解析用，从 session_start 缓存获取。
+      mainSessionFile: this.getMainSessionFile?.() ?? undefined,
     };
   }
 
@@ -524,6 +835,8 @@ export class SubagentService {
       error: snap.error,
       startedAt: snap.startedAt,
       endedAt: snap.endedAt,
+      // [MF#1] 透传 patchFile，让 background 完成通知显式回传 patch 路径（否则改动静默丢失）。
+      patchFile: record.patchFile,
     };
   }
 }

@@ -195,9 +195,17 @@ export async function createSubagentsView(
         syncCancelHint: false,
       };
 
-      // 订阅 store 变化 → requestRender（store 驱动重渲）
+      // 订阅 store 变化 → invalidate + requestRender（store 驱动重渲）。
+      // 必须 invalidate：render 命中 width×rows 缓存会返回旧行——最后一个 running record
+      // 完成、且无其他 running 时 animTimer 不再 invalidate（hasRunning=false 提前返回），
+      // 导致 running→done 状态翻转永不重绘。invalidateFn 在 component 创建后绑定。
+      // holder：onChange 注册时 component 尚未创建，用 ref 延后绑定 invalidate
+      // （避免 let 重赋值触发 prefer-const）
+      const invalidateRef = { fn: undefined as (() => void) | undefined };
       const unsubscribe = service.onChange(() => {
-        if (!state.disposed) tuiLike.requestRender();
+        if (state.disposed) return;
+        invalidateRef.fn?.();
+        tuiLike.requestRender();
       });
 
       // directId 命中 → 进详情模式（右侧就地展开，底部对齐）
@@ -207,11 +215,12 @@ export async function createSubagentsView(
         if (idx >= 0) {
           state.selectedIdx = idx;
           state.detailMode = true;
-          state.scrollOffset = Number.MAX_SAFE_INTEGER; // 底部对齐，render clamp 收敛
+          state.scrollOffset = 0; // 顶部对齐：task 置顶可见（与 Enter 进详情一致）
         }
       }
 
       const component = new SubagentsListComponent(service, theme, tuiLike, state, unsubscribe, notify);
+      invalidateRef.fn = () => component.invalidate();
 
       // 动画 timer：有 running record 时定期 invalidate + requestRender，
       // 让 spinner 丝滑换帧、elapsed 实时跳动（行数恒定，安全——对照
@@ -355,8 +364,11 @@ export function processKey(
   if (matchesKey(data, "enter") || matchesKey(data, "return")) {
     if (selected) {
       state.detailMode = true;
-      // 底部对齐：设大值，renderRightDetail 的 clamp 收敛到 max（最新在底，向上看历史）
-      state.scrollOffset = Number.MAX_SAFE_INTEGER;
+      // 顶部对齐：task 提示词置顶（buildDetailContent 首行），进详情第一眼就看到。
+      // 此前用 MAX_SAFE_INTEGER 底部对齐是为「event log 最新在底」，但 content > viewH 时
+      // 会把置顶的 task 滚出视口顶——task 是「它在干嘛」的唯一线索（streaming 尤甚），
+      // 必须可见。event log 在下方，向下滚可看历史。
+      state.scrollOffset = 0;
       state.syncCancelHint = false;
       return { changed: true, exit: false };
     }
@@ -615,6 +627,9 @@ class SubagentsListComponent implements Component {
 
     const selected = records[this.state.selectedIdx] ?? null;
     const inDetail = this.state.detailMode; // 阶段 2：右侧滚动焦点
+    // 预构建详情内容（inDetail 时）：分区线标题(detailScrollInfo 算长度)与右列(renderRightDetail 渲染)
+    // 共用同一份，避免每帧双倍构建（animTimer 250ms 触发，长 eventLog 下有感）。
+    const detailContent = inDetail && selected ? this.buildDetailContent(selected, rightWidth) : null;
 
     const lines: string[] = [];
 
@@ -632,7 +647,7 @@ class SubagentsListComponent implements Component {
     // 分区线（嵌入左/右标题，分段着色）
     const leftTitleStyled = t.fg("accent", t.bold(` ${TITLE_LEFT} `));
     const rightTitleStyled = inDetail
-      ? t.fg("accent", t.bold(` ${TITLE_RIGHT}${this.detailScrollInfo(selected, bodyH)} `))
+      ? t.fg("accent", t.bold(` ${TITLE_RIGHT}${this.detailScrollInfo(selected, bodyH, detailContent?.length)} `))
       : t.fg("accent", t.bold(` ${TITLE_RIGHT} `));
     lines.push(
       this.b("├") + segFillColored(leftTitleStyled, this.dash(), leftWidth)
@@ -647,10 +662,17 @@ class SubagentsListComponent implements Component {
       leftLines = [t.fg("dim", `(no match for "${this.state.filterText}")`)];
       rightLines = [t.fg("dim", "(no record selected)")];
     } else {
-      leftLines = this.renderLeftColumn(records, leftWidth);
+      // 左列视口窗口：选中行尽量居中，到列表顶/底贴边。
+      // 保证 leftLines.length <= bodyH → bodyRows = bodyH 恒定，帧行不溢出终端（无残影）。
+      const maxLeftStart = Math.max(0, records.length - bodyH);
+      const leftStart = Math.max(0, Math.min(
+        Math.floor(this.state.selectedIdx - bodyH / VERT_CENTER_DIVISOR),
+        maxLeftStart,
+      ));
+      leftLines = this.renderLeftColumn(records, leftWidth, leftStart, bodyH);
       rightLines = inDetail
-        ? this.renderRightDetail(selected, rightWidth, bodyH)
-        : this.renderRightPreview(selected, rightWidth);
+        ? this.renderRightDetail(selected, rightWidth, bodyH, detailContent)
+        : this.renderRightPreview(selected, rightWidth, bodyH);
     }
     const bodyRows = Math.max(leftLines.length, rightLines.length, bodyH);
     for (let i = 0; i < bodyRows; i++) {
@@ -675,15 +697,16 @@ class SubagentsListComponent implements Component {
     return lines;
   }
 
-  /** 详情模式滚动位置指示（嵌入分区线标题），如 "Detail (5-12/30)"。无内容则空。 */
-  private detailScrollInfo(record: SubagentRecord | null, viewH: number): string {
+  /** 详情模式滚动位置指示（嵌入分区线标题），如 "Detail (5-12/30)"。无内容则空。
+   *  contentLen 由调用方（renderSplitBox）从预构建的 detailContent 传入，避免重复构建。 */
+  private detailScrollInfo(record: SubagentRecord | null, viewH: number, contentLen?: number): string {
     if (!record) return "";
-    const contentLen = this.detailContentLength(record);
-    if (contentLen <= viewH) return ""; // 内容一屏装下，不显示
-    const max = Math.max(0, contentLen - viewH);
+    const len = contentLen ?? this.detailContentLength(record);
+    if (len <= viewH) return ""; // 内容一屏装下，不显示
+    const max = Math.max(0, len - viewH);
     const start = Math.max(0, Math.min(this.state.scrollOffset, max));
-    const end = Math.min(start + viewH, contentLen);
-    return ` (${start + 1}-${end}/${contentLen})`;
+    const end = Math.min(start + viewH, len);
+    return ` (${start + 1}-${end}/${len})`;
   }
 
   /** footer 的取消提示（仅 running 时显示）。 */
@@ -692,34 +715,48 @@ class SubagentsListComponent implements Component {
     return record.mode === "background" ? " · x stop" : " · x stop (hint)";
   }
 
-  /** 左列：record 列表。阶段 2（detailMode）时非锚定行 dim，锚定行用 ▶。 */
-  private renderLeftColumn(records: SubagentRecord[], width: number): string[] {
+  /**
+   * 左列：record 列表（带视口窗口）。阶段 2（detailMode）时非锚定行 dim，锚定行用 ▶。
+   *
+   * 视口窗口 [startIdx, startIdx+count)：record 数超过 bodyH 时只渲染选中行附近的窗口，
+   * 保证 leftLines.length <= bodyH → bodyRows = bodyH 恒定 → 帧行不溢出终端。
+   * 溢出会导致 overlay 无法清屏，残留旧帧行（递归场景 record 多，必然触发）。
+   * 窗口由 renderSplitBox 按 selectedIdx 居中算定，此处只做切片渲染。
+   */
+  private renderLeftColumn(records: SubagentRecord[], width: number, startIdx: number, count: number): string[] {
     const t = this.theme;
     const innerWidth = Math.max(COL_INNER_MIN, width - COL_INDENT);
     const inDetail = this.state.detailMode;
     // spinner 当前帧（Date.now() 驱动；animTimer 定期 invalidate → render 重选帧）
     const spinFrame = spinnerGlyph(Math.floor(Date.now() / SPINNER_FRAME_MS));
-    return records.map((r, i) => {
+    const endIdx = Math.min(records.length, startIdx + count);
+    const lines: string[] = [];
+    for (let i = startIdx; i < endIdx; i++) {
+      const r = records[i];
       const selected = i === this.state.selectedIdx;
       const glyph = statusGlyph(r.status);
       const icon = glyph.icon ?? spinFrame;
       const iconStr = t.fg(glyph.color, icon);
       const modeTag = r.mode === "background" ? "bg" : "sync";
       const dur = formatElapsedSeconds(elapsedSec(r));
-      // 短编号(dim)置于行首——列表一眼看到「第几个」, 不必进详情. 完整 id 在右列预览.
+      // 短编号(dim)置于行首——列表一眼看到「第几个」, 不必进详情.
       const sid = t.fg("dim", shortId(r.id));
-      const label = `${iconStr} ${sid} ${r.agent} ${t.fg("dim", modeTag)} ${t.fg("dim", dur)}`;
+      // 方案 D：递归深度标记。顶层(depth=0, 主 session 直接创建)不显示；
+      // depth≥1 显示 [L2]/[L3]...——平铺列表一眼区分哪些是嵌套产生的，不干扰 fan-out 场景。
+      const depthTag = r.depth > 0 ? ` ${t.fg("dim", `[L${r.depth + 1}]`)}` : "";
+      const label = `${iconStr} ${sid}${depthTag} ${r.agent} ${t.fg("dim", modeTag)} ${t.fg("dim", dur)}`;
       // 阶段 2：锚定行 accent + ▶；其余行 dim。阶段 1：选中 accent + →，其余正常。
       const content = inDetail
         ? (selected ? t.fg("accent", label) : t.fg("dim", label))
         : (selected ? t.fg("accent", label) : label);
       const prefix = selected ? (inDetail ? "▶ " : "→ ") : "  ";
-      return `${prefix}${truncLine(content, innerWidth)}`;
-    });
+      lines.push(`${prefix}${truncLine(content, innerWidth)}`);
+    }
+    return lines;
   }
 
-  /** 右列：选中 record 的预览（阶段 1）。 */
-  private renderRightPreview(record: SubagentRecord | null, width: number): string[] {
+  /** 右列：选中 record 的预览（阶段 1）。bodyH 截断防小终端溢出（见 renderSplitBox 不变量）。 */
+  private renderRightPreview(record: SubagentRecord | null, width: number, bodyH: number): string[] {
     const t = this.theme;
     if (!record) return [t.fg("dim", "(no record selected)")];
 
@@ -731,6 +768,11 @@ class SubagentsListComponent implements Component {
     ));
     // 完整 id(含 background 时间戳): cancel/read session file 需精确引用. 左列只显示短编号.
     lines.push(truncLine(t.fg("dim", `id: ${record.id}`), width));
+    // 层级：父 subagent（顶层显示 root）——不需要外部数据，record 自带 parentRecordId。
+    lines.push(truncLine(
+      t.fg("dim", `parent: ${record.parentRecordId ? shortId(record.parentRecordId) : "(root)"}`),
+      width,
+    ));
     lines.push("");
 
     // eventLog 现从 turns[] 派生（离散语义事件，无碎片），直接取最近 N 条。
@@ -745,26 +787,29 @@ class SubagentsListComponent implements Component {
 
     lines.push("");
     lines.push(truncLine(t.fg("dim", "Enter for full detail"), width));
-    return lines;
+    // 截断到 bodyH：小终端（tmux 分屏 bodyH 可能 2-6 行）下预览固定 ~10 行会溢出框，
+    // 导致 bodyRows = max(left,right,bodyH) > bodyH → 帧行把底分区线/footer/底框推出终端（残影）。
+    // 左列已有视口窗口保证 <= bodyH，右列预览在此对齐。优先保留头部身份信息。
+    return lines.slice(0, bodyH);
   }
 
   /**
    * 右列：完整详情（阶段 2，detailMode）。完整 eventLog + result/error + sessionFile，
-   * scrollOffset 翻屏。底部对齐（最新在底，向上看历史）——Enter 进阶段 2 时 scrollOffset=max。
+   * scrollOffset 翻屏。顶部对齐（task 置顶可见）——Enter 进阶段 2 时 scrollOffset=0。
    *
    * 内容行生成与 detailContentLength 共用 buildDetailContent（单一数据源）。
    */
-  private renderRightDetail(record: SubagentRecord | null, width: number, viewH: number): string[] {
+  private renderRightDetail(record: SubagentRecord | null, width: number, viewH: number, content?: string[] | null): string[] {
     const t = this.theme;
     if (!record) return [t.fg("dim", "(no record selected)")];
 
-    const content = this.buildDetailContent(record, width);
-    // 翻屏（底部对齐：max = content.length - viewH）
-    const max = Math.max(0, content.length - viewH);
+    const lines = content ?? this.buildDetailContent(record, width);
+    // 翻屏（顶部对齐：scrollOffset ∈ [0, max]）
+    const max = Math.max(0, lines.length - viewH);
     if (this.state.scrollOffset > max) this.state.scrollOffset = max;
     const start = Math.max(0, Math.min(this.state.scrollOffset, max));
     this.state.scrollOffset = start; // 回写收敛（End/Home 越界后下次渲染归位）
-    const visible = content.slice(start, start + viewH);
+    const visible = lines.slice(start, start + viewH);
     // pad 到 viewH（视口填满）
     while (visible.length < viewH) visible.push("");
     return visible;
@@ -774,6 +819,9 @@ class SubagentsListComponent implements Component {
   private buildDetailContent(record: SubagentRecord, width: number): string[] {
     const t = this.theme;
     const content: string[] = [];
+
+    // 任务提示词（最重要信息，置顶）。streaming 时 result 未产出，这是「它在干嘛」的唯一线索。
+    content.push(truncLine(t.fg("accent", `task: ${record.task}`), width));
 
     // 元数据：第 1 行 id + 状态 + turns + tokens
     content.push(truncLine(
@@ -787,6 +835,24 @@ class SubagentsListComponent implements Component {
     content.push(metaParts.length > 0
       ? truncLine(t.fg("dim", `(${metaParts.join(" · ")})`), width)
       : "");
+
+    // 层级信息（方案 B）：parent + children，让递归链可追溯。
+    // parent 不需外部数据；children 需查同 session 的 record（collectRecords 有磁盘缓存，开销可接受）。
+    const parentLabel = record.parentRecordId ? shortId(record.parentRecordId) : "(root)";
+    content.push(truncLine(t.fg("dim", `parent: ${parentLabel}`), width));
+    const childIds = this.service
+      .collectRecords(LIST_LIMIT)
+      .filter((r) => r.parentRecordId === record.id)
+      .map((r) => shortId(r.id));
+    content.push(truncLine(
+      t.fg("dim", `children: ${childIds.length > 0 ? childIds.join(", ") : "(none)"}`),
+      width,
+    ));
+
+    // 当前活动（仅内存 running 源；磁盘重建为 undefined）。streaming 可观测性。
+    if (record.currentActivity) {
+      content.push(truncLine(t.fg("accent", `▸ ${record.currentActivity.label}`), width));
+    }
 
     // syncCancelHint
     if (this.state.syncCancelHint) {
