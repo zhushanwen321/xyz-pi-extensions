@@ -1,0 +1,51 @@
+{
+  "name": "@zhushanwen/pi-coding-workflow",
+  "version": "0.1.0",
+  "description": "Coding workflow tools for Pi — L1/L2/L3 design + execution orchestration with machine-enforced test gates.",
+  "type": "module",
+  "main": "src/index.ts",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "keywords": [
+    "pi-package",
+    "extension",
+    "coding-workflow",
+    "test-gate",
+    "tdd"
+  ],
+  "license": "MIT",
+  "files": [
+    "src/",
+    "index.ts",
+    "lib/",
+    "skills/",
+    "mocks/"
+  ],
+  "devDependencies": {
+    "vitest": "^4.1.8"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-ai": "*",
+    "@sinclair/typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "@earendil-works/pi-ai": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run"
+  }
+}

@@ -13,7 +13,7 @@ xyz-pi-extensions/
 │   ├── todo/                → @zhushanwen/pi-todo
 │   ├── design-status/       → @zhushanwen/pi-design-status (design 工作流 7 阶段状态/进度追踪 tool)
 │   ├── vision/             → @zhushanwen/pi-vision
-│   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills + L1/L2/L3 三档编码工作流：共享阶段 coding-init/coding-execute/coding-retrospect/coding-closeout + coding-visualizer 渲染工具 + lite-shared/mid-shared/full-shared 躯体；L1 lite-plan；L2 mid-plan/mid-detail-plan；L3 full-clarity/full-architecture/full-issues/full-nfr/full-code-arch/full-execution-plan)
+│   ├── coding-workflow/     → @zhushanwen/pi-coding-workflow (含 ~20 个 harness skills + L1/L2/L3 三档编码工作流：共享阶段 coding-init/coding-execute/coding-retrospect/coding-closeout + coding-visualizer 渲染工具 + lite-shared/mid-shared/full-shared 躯体；L1 lite-plan；L2 mid-plan/mid-detail-plan；L3 full-clarity/full-architecture/full-issues/full-nfr/full-code-arch/full-execution-plan；含 test-orchestrator tool 机器强制 E2E 测试门 + lib/gates 机器门控 ReviewGate/TestFixLoopGate)
 │   ├── claude-rules-loader/ → @zhushanwen/pi-claude-rules-loader
 │   ├── context-engineering/ → @zhushanwen/pi-context-engineering
 │   ├── evolve-daily/        → @zhushanwen/pi-evolve-daily (含 evolve skills + tracker 框架)
@@ -770,7 +770,7 @@ ln -s /path/to/xyz-pi-extensions/skills/<name> ~/.agents/skills/<name>
 | `extensions/goal/` | `@zhushanwen/pi-goal` | 持久化目标驱动循环，7 态状态机 | — |
 | `extensions/todo/` | `@zhushanwen/pi-todo` | 轻量三态任务清单 | — |
 | `extensions/vision/` | `@zhushanwen/pi-vision` | 图片分析（vision model + memory session） | — |
-| `extensions/coding-workflow/` | `@zhushanwen/pi-coding-workflow` | L1/L2/L3 三档编码工作流 | 共享 5 (coding-init/execute/retrospect/closeout + coding-visualizer) + L1 lite-plan + L2 mid-plan/mid-detail-plan + L3 full-* 6 + 躯体 lite/mid/full-shared |
+| `extensions/coding-workflow/` | `@zhushanwen/pi-coding-workflow` | L1/L2/L3 三档编码工作流 + 机器强制测试门 | 共享 5 (coding-init/execute/retrospect/closeout + coding-visualizer) + L1 lite-plan + L2 mid-plan/mid-detail-plan + L3 full-* 6 + 躯体 lite/mid/full-shared；含 test-orchestrator tool（4 action 机器重算 E2E 测试状态机）+ lib/gates（ReviewGate/TestFixLoopGate 机器门控） |
 | `extensions/design-status/` | `@zhushanwen/pi-design-status` | design 工作流 7 阶段状态/进度追踪 tool | — |
 | `extensions/claude-rules-loader/` | `@zhushanwen/pi-claude-rules-loader` | 加载 CLAUDE.md 规则 | — |
 | `extensions/context-engineering/` | `@zhushanwen/pi-context-engineering` | 渐进式上下文压缩 | — |
