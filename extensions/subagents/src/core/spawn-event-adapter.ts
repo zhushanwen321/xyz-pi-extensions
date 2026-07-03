@@ -38,13 +38,17 @@ export type ParsedSpawnLine =
 
 /**
  * 判断解析出的 JSON 是否为 header 行（type === "session"）。
+ * 校验所有必需字段（id/timestamp/cwd），缺任一则不收窄——避免下游
+ * deriveSessionFilePath 访问 undefined 字段时抛 TypeError。
  */
 function isSessionHeader(obj: unknown): obj is SpawnSessionHeader {
+  if (typeof obj !== "object" || obj === null) return false;
+  const r = obj as Record<string, unknown>;
   return (
-    typeof obj === "object" &&
-    obj !== null &&
-    (obj as Record<string, unknown>).type === "session" &&
-    typeof (obj as Record<string, unknown>).id === "string"
+    r.type === "session" &&
+    typeof r.id === "string" &&
+    typeof r.timestamp === "string" &&
+    typeof r.cwd === "string"
   );
 }
 

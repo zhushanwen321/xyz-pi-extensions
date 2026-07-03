@@ -106,10 +106,14 @@ const SubagentParams = Type.Object({
     skillPath: Type.Optional(Type.String()),
     appendSystemPrompt: Type.Optional(Type.Array(Type.String())),
     schema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-    maxTurns: Type.Optional(Type.Number()),
-    graceTurns: Type.Optional(Type.Number()),
+    maxTurns: Type.Optional(Type.Number({
+      description: "Turn limit. The subagent is terminated via SIGTERM after maxTurns turn_end events + graceTurns of slack. There is no graceful wrap-up message — the process is killed. 0 or omitted = unlimited.",
+    })),
+    graceTurns: Type.Optional(Type.Number({
+      description: "Extra turns allowed after maxTurns is reached before SIGTERM (default 2). Only meaningful when maxTurns is set.",
+    })),
     fork: Type.Optional(Type.Boolean({
-      description: "Fork mode: inherit the parent's conversation context. When true, the subagent runs in a branched IN-PROCESS SDK session that shares the parent's full conversation history (prior turns/messages), so it sees the existing context and can continue from that state. Subagents ALWAYS run in-process (same Node process as the parent) and share process.env — fork does NOT spawn a separate process. Use worktree:true (requires fork:true) for file-system isolation.",
+      description: "Fork mode: inherit the parent's conversation context. When true, the subagent receives the parent's session file via --fork and builds a branched conversation (it sees prior turns/messages). The subagent still runs in a separate spawned child process (process isolation) — fork is about context inheritance, not process sharing. Use worktree:true (requires fork:true) for file-system isolation.",
     })),
     worktree: Type.Optional(Type.Boolean({
       description: "Worktree isolation (requires fork:true): run the subagent in a dedicated git worktree, providing file-system level isolation from the parent session. Prevents concurrent file-write conflicts between parent and subagent. Only takes effect when fork:true; passing worktree:true without fork:true throws an error.",
@@ -206,7 +210,7 @@ Completion auto-notifies you (a message is injected that wakes your next turn). 
 
 ## Nested spawning
 
-A subagent MAY itself call the \`subagent\` tool (nested delegation is supported, in-process). A forked subagent sees its own fork depth in the environment block ("Fork depth: N/10") — you may spawn deeper while N < 10. The 11th fork level is refused with a clear "fork depth 10 >= 10" error and fails the subagent gracefully (does not crash the parent). Do NOT refuse to spawn a sub-subagent by assuming it is disallowed — it is not; only the depth limit applies.`,
+A subagent MAY itself call the \`subagent\` tool (nested delegation is supported; each level spawns its own child process). A forked subagent sees its own fork depth in the environment block ("Fork depth: N/10") — you may spawn deeper while N < 10. The 11th fork level is refused with a clear "fork depth 10 >= 10" error and fails the subagent gracefully (does not crash the parent). Do NOT refuse to spawn a sub-subagent by assuming it is disallowed — it is not; only the depth limit applies.`,
     executionMode: "sequential",
     parameters: SubagentParams,
     renderCall: subagentRenderCall,

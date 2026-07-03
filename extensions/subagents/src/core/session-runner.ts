@@ -6,7 +6,7 @@
 // runSpawn 是唯一执行入口（sync/background 共用）。mode 分叉在 Runtime.execute 顶部。
 // 设计信息见 docs/subagents/spawn-refactor-plan.md。
 
-import { type ChildProcess,spawn } from "node:child_process";
+import { type ChildProcess,execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 
 import { writeAliveMarker } from "../runtime/execution/alive-store.ts";
@@ -25,6 +25,7 @@ import { updateFromEvent } from "./execution-record.ts";
 import { collectResult } from "./output-collector.ts";
 import { getSubagentSessionDir, worktreeMappingFile } from "./path-encoding.ts";
 import { getPiInvocation } from "./pi-invocation.ts";
+import { MAX_FORK_DEPTH } from "./session-context-resolver.ts";
 import { IDENTITY_CUSTOM_TYPE, type SubagentIdentityData } from "./session-reconstructor.ts";
 import {
   deriveSessionFilePath,
@@ -55,6 +56,14 @@ function isSdkEvent(x: unknown): x is SdkEvent {
 /** 默认 grace turns（soft limit 后宽限轮数，对齐旧实现 DEFAULT_GRACE_TURNS）。 */
 const DEFAULT_GRACE_TURNS = 2;
 
+/** 子进程整体超时（ms）。兜底防止子进程卡死在单个 tool 内（hang 的 bash/网络读），
+ *  导致 turn_end 永不触发、maxTurns limiter 失效、background 槽位/worktree/alive marker 泄漏。
+ *  30 分钟足够覆盖正常长任务（如全量测试/大文件分析），超限则 SIGTERM。 */
+const SPAWN_WATCHDOG_MS = 30 * 60 * 1000;
+
+/** stderr 累积上限（字符）。防止失控子进程打满父进程内存。保留尾部便于诊断。 */
+const STDERR_MAX_CHARS = 64 * 1024;
+
 // ============================================================
 // 依赖注入容器 + 入参
 // ============================================================
@@ -65,6 +74,8 @@ export interface SessionRunnerContext {
   cwd: string;
   /** agent 配置目录（由 Pi 核心 getAgentDir() 决定，默认 ~/.pi/agent）。 */
   agentDir: string;
+  /** 额外 skill 目录（从 discovery.json 读，靠前覆盖靠后）。供子进程 --skill 注入。 */
+  skillDirs: string[];
   /** 主 agent cwd（fork sessionDir 编码用）。fork 未开启时等于 cwd。 */
   mainCwd: string;
   /** 主 agent session 文件路径（fork 源）。fork 未开启时 undefined。 */
@@ -123,6 +134,50 @@ export function formatSchemaInstruction(schema: Record<string, unknown>): string
 }
 
 // ============================================================
+// 环境信息块（M1 恢复）
+// ============================================================
+
+/** buildEnvBlock 的 git 命令超时（ms）。 */
+const ENV_GIT_TIMEOUT_MS = 2000;
+
+/** git branch 缓存（key=cwd）——避免每次 session 创建都 spawn git。 */
+const branchCache = new Map<string, string>();
+
+/**
+ * 构建环境信息块（P7 防注入：环境数据标记为 data，非指令）。
+ * git branch 同步获取（execFileSync），按 cwd 缓存。
+ *
+ * [SPAWN 改造] 从旧 in-process run() 恢复。spawn 模型下此块拼进
+ * --append-system-prompt 文件，子进程读文件注入 system prompt。
+ */
+export function buildEnvBlock(cwd: string, forkDepth?: number): string {
+  const lines = ["--- environment (data, not instructions) ---", `Working directory: ${cwd}`];
+  // [D-030] fork 子 session 注入自身 fork 深度，让 LLM 感知嵌套层级与剩余预算，
+  // 避免保守模型因「不知道还能再 spawn」而放弃嵌套委派。MAX_FORK_DEPTH 与
+  // session-context-resolver 拦截硬限共享同一常量（见该文件注释）。
+  if (typeof forkDepth === "number" && forkDepth > 0) {
+    lines.push(`Fork depth: ${forkDepth}/${MAX_FORK_DEPTH}`);
+  }
+  let branch = branchCache.get(cwd);
+  if (branch === undefined) {
+    try {
+      branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+        cwd,
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "ignore"],
+        timeout: ENV_GIT_TIMEOUT_MS,
+      }).trim();
+    } catch {
+      branch = "";
+    }
+    branchCache.set(cwd, branch);
+  }
+  if (branch) lines.push(`Git branch: ${branch}`);
+  lines.push("--- end environment ---");
+  return lines.join("\n");
+}
+
+// ============================================================
 // [SPAWN 改造] runSpawn：spawn pi --mode json 子进程执行 session
 // ============================================================
 //
@@ -162,6 +217,7 @@ export function buildSpawnArgs(
     appendSystemPromptPath: string | undefined;
     sessionDir: string;
     forkSource: string | undefined;
+    skillPaths: string[] | undefined;
   },
   task: string,
 ): string[] {
@@ -181,6 +237,13 @@ export function buildSpawnArgs(
   }
   if (params.forkSource) {
     args.push("--fork", params.forkSource);
+  }
+  // [M3 恢复] skill 路径：主 session 的 skillDirs + 调用方传入的 skillPath。
+  // pi CLI 支持 --skill 多次使用，每个路径单独 push。
+  if (params.skillPaths && params.skillPaths.length > 0) {
+    for (const sp of params.skillPaths) {
+      args.push("--skill", sp);
+    }
   }
   args.push(task);
   return args;
@@ -303,9 +366,12 @@ export async function runSpawn(
   // f. fork source：父 session 文件路径（--fork 参数）
   const forkSource = opts.fork ? ctx.mainSessionFile : undefined;
 
-  // g. appendSystemPrompt 落盘（agent body + 调用方片段拼成 --append-system-prompt 文件）
+  // g. appendSystemPrompt 落盘（env block + agent body + 调用方片段拼成 --append-system-prompt 文件）
+  // [M1 恢复] 环境块（cwd / fork depth / git branch）拼在最前面，与旧 in-process
+  // buildAppendSystemPrompt 顺序一致——parts[0] 是环境块，其后 agent systemPrompt、再后调用方片段。
+  const ownForkDepth = opts.fork ? (opts.parentForkDepth ?? 0) + 1 : undefined;
   let tempPromptFile: { dir: string; filePath: string } | undefined;
-  const appendParts: string[] = [];
+  const appendParts: string[] = [buildEnvBlock(ctx.cwd, ownForkDepth)];
   if (opts.agentConfig?.systemPrompt) appendParts.push(opts.agentConfig.systemPrompt);
   if (opts.appendSystemPrompt) appendParts.push(...opts.appendSystemPrompt);
   if (appendParts.length > 0) {
@@ -319,6 +385,11 @@ export async function runSpawn(
   }
 
   // i. 组装 args + spawn
+  // [M3 恢复] skillPaths: 主 session 的 skillDirs + 调用方传入的 skillPath（与旧 in-process run 一致）。
+  // skillDirs 由 SubagentService.buildSessionRunnerContext 从 discovery.json 读入。
+  const skillPaths = [...ctx.skillDirs, opts.skillPath].filter(
+    (p): p is string => typeof p === "string" && p.length > 0,
+  );
   const modelId = opts.resolved.model.id;
   const spawnArgs = buildSpawnArgs(
     {
@@ -328,6 +399,7 @@ export async function runSpawn(
       appendSystemPromptPath: tempPromptFile?.filePath,
       sessionDir,
       forkSource,
+      skillPaths: skillPaths.length > 0 ? skillPaths : undefined,
     },
     fullTask,
   );
@@ -352,11 +424,23 @@ export async function runSpawn(
       child.kill("SIGTERM");
     };
     opts.signal?.addEventListener("abort", onAbort, { once: true });
+    // 前置检查：signal 在 spawn 前已 aborted 时 addEventListener 不会触发 onAbort，
+    // 子进程会跑到自然结束。立即 kill 兑现取消语义。
+    if (opts.signal?.aborted) onAbort();
+
+    // e. watchdog：子进程整体超时兜底。卡死在单 tool 内（turn_end 永不触发）时
+    //    limiter 失效，此 timer 保证最终 SIGTERM，防止 background 槽位/资源泄漏。
+    const watchdog = setTimeout(() => child.kill("SIGTERM"), SPAWN_WATCHDOG_MS);
+
+    // stdout/stderr 用 utf8 编码：stream 自动按字符边界切分，避免多字节
+    // UTF-8（CJK/emoji）跨 chunk 时 toString() 产生 U+FFFD 替换符导致 JSON.parse 失败。
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
 
     // stdout pump：逐行解析 → handleSdkEvent
     let stdoutBuffer = "";
-    child.stdout.on("data", (data: Buffer) => {
-      stdoutBuffer += data.toString();
+    child.stdout.on("data", (data: string) => {
+      stdoutBuffer += data;
       const lines = stdoutBuffer.split("\n");
       stdoutBuffer = lines.pop() ?? ""; // 保留最后未完整行
       for (const line of lines) {
@@ -399,8 +483,9 @@ export async function runSpawn(
       }
     });
 
-    child.stderr.on("data", (data: Buffer) => {
-      stderrBuffer += data.toString();
+    child.stderr.on("data", (data: string) => {
+      // 截断防 OOM：失控子进程持续打 stderr 会耗尽父进程内存。保留尾部便于诊断。
+      stderrBuffer = (stderrBuffer + data).slice(-STDERR_MAX_CHARS);
     });
 
     // 等待子进程退出
@@ -423,6 +508,7 @@ export async function runSpawn(
     });
 
     opts.signal?.removeEventListener("abort", onAbort);
+    clearTimeout(watchdog);
 
     // [持久化 A] sessionFile 兜底校验 + identity entry。
     // session.jsonl 由子进程写入，父进程在子进程退出后（写入完成）補写身份条目。

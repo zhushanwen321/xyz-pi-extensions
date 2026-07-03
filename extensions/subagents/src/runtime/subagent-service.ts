@@ -803,6 +803,8 @@ export class SubagentService {
     return {
       cwd: overrideCwd ?? this.cwd,
       agentDir: this.modelService.getAgentDir(),
+      // [M3 恢复] discovery.json 声明的 skill 目录，供子进程 --skill 注入。
+      skillDirs: this.modelService.getDiscoverySkillDirs(),
       mainCwd: this.cwd,
       // mainSessionFile: fork source 解析用，从 session_start 缓存获取。
       mainSessionFile: this.getMainSessionFile?.() ?? undefined,

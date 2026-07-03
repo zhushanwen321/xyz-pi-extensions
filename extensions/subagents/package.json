@@ -3,7 +3,7 @@
   "version": "0.0.4",
   "type": "module",
   "main": "index.ts",
-  "description": "In-process agent execution runtime for Pi — unified execute entry, isolated state, sync/background modes",
+  "description": "Spawned-process agent execution runtime for Pi — unified execute entry, isolated state, sync/background modes",
   "keywords": [
     "pi-package",
     "extension",
