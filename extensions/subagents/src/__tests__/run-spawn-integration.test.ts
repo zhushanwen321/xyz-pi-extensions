@@ -11,8 +11,8 @@
 //   - node:child_process.execFileSync → 返回空串（buildEnvBlock 的 git branch 调用避免副作用）。
 //   - node:fs 同步方法 → mock（mkdirSync/existsSync/appendFileSync/writeFileSync 等），
 //     避免 sessionDir/sessionFile 触碰真实文件系统。
-//   - fs.promises.* → 保留真实实现（temp-prompt 的 mkdtemp/writeFile/rm 用真实 tmpdir，
-//     每次唯一目录、finally 清理，安全）。
+//   - fs.promises.* → 保留真实实现（temp-prompt 整体被 mock，不触发真实 I/O）。
+//   - temp-prompt → mock（writePromptToTempFile 返回固定路径，消除 fake-timers flaky）。
 //   - alive-store.writeAliveMarker → mock（避免写 .alive sidecar）。
 
 import type { PassThrough } from "node:stream";
@@ -68,13 +68,26 @@ vi.mock("node:fs", async () => {
     appendFileSync: vi.fn(),
     writeFileSync: vi.fn(),
     readdirSync: vi.fn(() => []),
-    // promises 保留真实实现——temp-prompt 用真实 tmpdir 写临时文件（每次唯一 + finally 清理）
+    // promises 保留真实实现——temp-prompt 已被 mock（见下方 vi.mock），不再触发真实 I/O
     promises: actual.promises,
   };
 });
 
 vi.mock("../runtime/execution/alive-store.ts", () => ({
   writeAliveMarker: vi.fn(),
+}));
+
+// temp-prompt：mock 掉真实 fs.promises I/O（mkdtemp/writeFile/rm）。
+// 原先保留真实实现导致 fake-timers 测试偶发 flaky——writePromptToTempFile 的真实异步
+// I/O 在 CI 慢机器上无法在 advanceTimersByTimeAsync 的有限步数内 resolve，spawn 永不触发。
+// runSpawn 只消费返回的 filePath 字符串（传给 --append-system-prompt），无需真实文件。
+vi.mock("../core/temp-prompt.ts", () => ({
+  // 文件名规则与真实实现对齐（safeName：非 \w.- 替换为 _），保持 spawn args 断言稳定
+  writePromptToTempFile: vi.fn(async (agent: string) => {
+    const safeName = agent.replace(/[^\w.-]+/g, "_");
+    return { dir: `/tmp/fake-${safeName}`, filePath: `/tmp/fake-${safeName}/prompt-${safeName}.md` };
+  }),
+  cleanupTempPrompt: vi.fn(async () => {}),
 }));
 
 import { execFileSync, spawn } from "node:child_process";
@@ -688,8 +701,8 @@ describe("runSpawn", () => {
 
       await promise;
 
-      // temp-prompt 用真实 fs.promises 写真实 tmpdir；
-      // 验证 spawn args 含 --append-system-prompt（说明临时文件被创建并传给子进程）
+      // temp-prompt 已 mock（见文件顶部 vi.mock），返回固定文件名；
+      // 验证 spawn args 含 --append-system-prompt（说明临时文件路径被传给子进程）
       const args = mockSpawn.mock.calls[0]?.[1] as string[];
       const appendIdx = args.indexOf("--append-system-prompt");
       expect(appendIdx).toBeGreaterThanOrEqual(0);

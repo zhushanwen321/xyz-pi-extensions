@@ -13,8 +13,8 @@
 //   - node:child_process.execFileSync → 返回空串（buildEnvBlock 的 git branch 调用避免副作用）。
 //   - node:fs 同步方法 → mock（mkdirSync/existsSync/appendFileSync/writeFileSync 等），
 //     避免 sessionDir/sessionFile 触碰真实文件系统。
-//   - fs.promises.* → 保留真实实现（temp-prompt 的 mkdtemp/writeFile/rm 用真实 tmpdir，
-//     每次唯一目录、finally 清理，安全）。
+//   - fs.promises.* → 保留真实实现（temp-prompt 整体被 mock，不触发真实 I/O）。
+//   - temp-prompt → mock（writePromptToTempFile 返回固定路径，消除 fake-timers flaky）。
 //   - alive-store.writeAliveMarker → mock（避免写 .alive sidecar）。
 
 import type { PassThrough } from "node:stream";
@@ -70,13 +70,23 @@ vi.mock("node:fs", async () => {
     appendFileSync: vi.fn(),
     writeFileSync: vi.fn(),
     readdirSync: vi.fn(() => []),
-    // promises 保留真实实现——temp-prompt 用真实 tmpdir 写临时文件（每次唯一 + finally 清理）
+    // promises 保留真实实现——temp-prompt 已被 mock（见下方 vi.mock），不再触发真实 I/O
     promises: actual.promises,
   };
 });
 
 vi.mock("../runtime/execution/alive-store.ts", () => ({
   writeAliveMarker: vi.fn(),
+}));
+
+// temp-prompt：mock 掉真实 fs.promises I/O，消除 fake-timers 下的 flaky 竞态
+// （详见 run-spawn-integration.test.ts 同名 mock 的注释）。
+vi.mock("../core/temp-prompt.ts", () => ({
+  writePromptToTempFile: vi.fn(async (agent: string) => {
+    const safeName = agent.replace(/[^\w.-]+/g, "_");
+    return { dir: `/tmp/fake-${safeName}`, filePath: `/tmp/fake-${safeName}/prompt-${safeName}.md` };
+  }),
+  cleanupTempPrompt: vi.fn(async () => {}),
 }));
 
 import { execFileSync, spawn } from "node:child_process";
