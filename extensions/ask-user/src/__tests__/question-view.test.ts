@@ -271,11 +271,12 @@ describe("renderQuestionView — Other editor mode", () => {
 			true,
 			huge,
 		);
-		// 统计含 'y' 的行数 = input 渲染行数（应被截到 5 行）
-		const yLines = lines.filter((l) => l.includes("y"));
-		expect(yLines.length).toBe(5);
+		// 统计含输入内容的行数 = input 渲染行数（应被截到 5 行）
+		// 编号 "3. " 现在是 styled 内容的一部分，首行包裹段 "3." 不含 'y'
+		const inputLines = lines.filter((l) => l.includes("y") || l.includes("3."));
+		expect(inputLines.length).toBe(5);
 		// 最后一行带省略号（表示还有更多，光标已被省略号取代）
-		expect(yLines[yLines.length - 1]).toContain("…");
+		expect(inputLines[inputLines.length - 1]).toContain("…");
 	});
 
 	it("Q-30: 已保存 freeText 预览超屏宽时多行换行展示", () => {

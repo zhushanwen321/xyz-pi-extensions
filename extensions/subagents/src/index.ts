@@ -19,6 +19,7 @@ import {
   setSubagentService,
   SubagentService,
 } from "./runtime/subagent-service.ts";
+import { WorktreeManager } from "./runtime/worktree-manager.ts";
 import { registerSubagentTool } from "./tools/subagent-tool.ts";
 import { renderBgNotifyMessage } from "./tui/bg-notify-render.ts";
 
@@ -47,6 +48,15 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
   registerSubagentTool(pi);
   pi.registerMessageRenderer("subagent-bg-notify", renderBgNotifyMessage);
 
+  // 模块级缓存：主 session 的 sessionFile（fork source 解析用）。
+  // session_start 时写入，SubagentService 读取。
+  let cachedMainSessionFile: string | undefined;
+
+  /** 获取缓存的主 session file（SubagentService 构造后调用）。 */
+  function getCachedMainSessionFile(): string | undefined {
+    return cachedMainSessionFile;
+  }
+
   // discovery.json 契约加载器（进程级单例，跨 session 复用 mtime 缓存）。
   // 宿主启动 pi 前写入 <agentDir>/subagents/discovery.json 声明多 skill/agent 目录。
   // 详见 ADR-025。
@@ -69,7 +79,7 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
     const existingService = getSubagentService();
     const existingModelService = getModelConfigService();
     const modelService = existingModelService ?? new ModelConfigService({ agentDir, discoveryLoader });
-    const service = existingService ?? new SubagentService({ cwd, modelService });
+    const service = existingService ?? new SubagentService({ cwd, modelService, getMainSessionFile: getCachedMainSessionFile });
 
     // 分别 init（两个域的生命周期独立）
     modelService.initModel({
@@ -91,6 +101,9 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
       setSubagentService(service);
     }
 
+    // 缓存主 session file（fork source 解析用）。
+    cachedMainSessionFile = ctx.sessionManager.getSessionFile() ?? undefined;
+
     // best-effort 清理（GC），失败不应阻断 session——但额外兜底：
     // 万一仍抛错，catch 住防止 session_start 整体崩。
     try {
@@ -99,6 +112,17 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
       // best-effort 清理失败，忽略——service 已注册，session 可用。记录但不阻断。
       void err; // 显式确认忽略：GC 清理失败不应阻断 session_start
       console.warn("[subagents] expired session file cleanup failed:", err);
+    }
+
+    // best-effort worktree 孤儿 reaper：扫描 pi-sub-* 孤儿 worktree 并清理。
+    // 终态（.finalized/.cancelled）且无活 .alive 的孤儿会被删除。
+    try {
+      const wtm = new WorktreeManager();
+      wtm.scan(cwd, agentDir);
+    } catch (err) {
+      // best-effort reaper 失败，忽略——不影响 session 启动。
+      void err;
+      console.warn("[subagents] worktree reaper scan failed:", err);
     }
   });
 

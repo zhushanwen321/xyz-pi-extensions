@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "topic": "__init__",
+  "phases": {
+    "init": {
+      "phase": "init",
+      "status": "completed",
+      "loopRound": 0,
+      "startedAt": "2026-06-27T15:13:17.697Z",
+      "currentStep": "6",
+      "completedAt": "2026-06-27T15:13:47.460Z"
+    },
+    "clarity": {
+      "phase": "clarity",
+      "status": "not_started",
+      "loopRound": 0
+    },
+    "architecture": {
+      "phase": "architecture",
+      "status": "not_started",
+      "loopRound": 0
+    },
+    "issues": {
+      "phase": "issues",
+      "status": "not_started",
+      "loopRound": 0
+    },
+    "nfr": {
+      "phase": "nfr",
+      "status": "not_started",
+      "loopRound": 0
+    },
+    "code-arch": {
+      "phase": "code-arch",
+      "status": "not_started",
+      "loopRound": 0
+    },
+    "execution": {
+      "phase": "execution",
+      "status": "not_started",
+      "loopRound": 0
+    }
+  },
+  "gaps": [],
+  "history": [
+    {
+      "timestamp": "2026-06-27T15:13:17.698Z",
+      "phase": "init",
+      "action": "start_phase",
+      "from": "not_started",
+      "to": "in_progress"
+    },
+    {
+      "timestamp": "2026-06-27T15:13:32.067Z",
+      "phase": "init",
+      "action": "advance",
+      "note": "step 1→6: 基建健全(CLAUDE.md+CONTEXT.md)，init 跳过扫描填充"
+    },
+    {
+      "timestamp": "2026-06-27T15:13:32.129Z",
+      "phase": "init",
+      "action": "review_phase",
+      "from": "in_progress",
+      "to": "under_review"
+    },
+    {
+      "timestamp": "2026-06-27T15:13:47.460Z",
+      "phase": "init",
+      "action": "complete_phase",
+      "from": "under_review",
+      "to": "completed",
+      "note": "gate PASS"
+    }
+  ],
+  "updatedAt": "2026-06-27T15:13:47.460Z"
+}

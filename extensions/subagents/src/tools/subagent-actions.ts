@@ -52,6 +52,12 @@ export interface StartHandlerInput {
   schema?: Record<string, unknown>;
   maxTurns?: number;
   graceTurns?: number;
+  /** fork 模式：继承主 session 上下文（D-018 两级降级）。 */
+  fork?: boolean;
+  /** worktree 模式：文件系统隔离运行（D-008 tmpdir）。 */
+  worktree?: boolean;
+  /** 覆盖子 agent 工作目录（默认 mainCwd）。 */
+  cwd?: string;
 }
 
 /** start 领域对象（adapter 包成 syncResponse 或 bgResponse）。 */
@@ -113,6 +119,10 @@ function recordToListItem(r: SubagentRecord): SubagentListItem {
  * 字段无搬运（结构兼容，直接透传）。
  */
 function liftSync(details: SubagentToolDetails): SubagentToolResult {
+  // 运行时守卫：确保 mode === "sync"
+  if (details.mode !== "sync") {
+    throw new Error(`liftSync called with mode="${details.mode}", expected "sync"`);
+  }
   return {
     action: "start",
     // streaming 期 subagentId 未知，终态由 adapter 填；此处给 null 保持类型合法。
@@ -150,6 +160,9 @@ export async function startHandler(
     schema: input.schema,
     maxTurns: input.maxTurns,
     graceTurns: input.graceTurns,
+    fork: input.fork,
+    worktree: input.worktree,
+    cwd: input.cwd,
     ctxModel,
     signal,
     onUpdate: onUpdate

@@ -14,6 +14,7 @@ import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import * as aliveStore from "../runtime/execution/alive-store.ts";
 import { maybeCleanupExpiredSessionFiles } from "../runtime/session-file-gc.ts";
 
 // ============================================================
@@ -145,5 +146,102 @@ describe("maybeCleanupExpiredSessionFiles", () => {
     // 创建空 subagents 目录
     fs.mkdirSync(path.join(tmpAgentDir, "subagents"), { recursive: true });
     expect(() => maybeCleanupExpiredSessionFiles(tmpAgentDir, "/cwd")).not.toThrow();
+  });
+
+  // ---- .finalized sidecar 清理 ----
+
+  it("deletes .finalized sidecar along with expired .jsonl", () => {
+    forceCleanupTrigger();
+    const jsonl = createSessionFile("sess-finalized.jsonl", 31);
+    const finalized = `${jsonl}.finalized`;
+    fs.writeFileSync(finalized, "", "utf-8");
+    const targetTime = Date.now() / 1000 - 31 * 86400;
+    fs.utimesSync(finalized, targetTime, targetTime);
+
+    maybeCleanupExpiredSessionFiles(tmpAgentDir, "/cwd");
+
+    expect(fs.existsSync(jsonl)).toBe(false);
+    expect(fs.existsSync(finalized)).toBe(false);
+  });
+
+  it("cleans orphan .finalized sidecar when .jsonl already gone", () => {
+    forceCleanupTrigger();
+    const subagentsDir = path.join(tmpAgentDir, "subagents");
+    fs.mkdirSync(subagentsDir, { recursive: true });
+    const orphan = path.join(subagentsDir, "dead-session.jsonl.finalized");
+    fs.writeFileSync(orphan, "", "utf-8");
+    const targetTime = Date.now() / 1000 - 31 * 86400;
+    fs.utimesSync(orphan, targetTime, targetTime);
+
+    maybeCleanupExpiredSessionFiles(tmpAgentDir, "/cwd");
+
+    expect(fs.existsSync(orphan)).toBe(false);
+  });
+
+  // ---- .alive sidecar + pid 探活 ----
+
+  it("preserves expired .jsonl when .alive sidecar indicates live process (D-024)", () => {
+    forceCleanupTrigger();
+    const jsonl = createSessionFile("sess-alive.jsonl", 31);
+    const alivePath = `${jsonl}.alive`;
+    fs.writeFileSync(alivePath, JSON.stringify({ pid: 1, id: "s1", startedAt: Date.now() }), "utf-8");
+
+    vi.spyOn(aliveStore, "readAliveMarker").mockReturnValue({ pid: 1, id: "s1", startedAt: Date.now() });
+    vi.spyOn(aliveStore, "isProcessAlive").mockReturnValue(true);
+
+    maybeCleanupExpiredSessionFiles(tmpAgentDir, "/cwd");
+
+    expect(fs.existsSync(jsonl)).toBe(true);
+    expect(fs.existsSync(alivePath)).toBe(true);
+  });
+
+  it("deletes expired .jsonl + .alive when process is dead", () => {
+    forceCleanupTrigger();
+    const jsonl = createSessionFile("sess-dead.jsonl", 31);
+    const alivePath = `${jsonl}.alive`;
+    fs.writeFileSync(alivePath, JSON.stringify({ pid: 99999, id: "s2", startedAt: Date.now() }), "utf-8");
+
+    vi.spyOn(aliveStore, "readAliveMarker").mockReturnValue({ pid: 99999, id: "s2", startedAt: Date.now() });
+    vi.spyOn(aliveStore, "isProcessAlive").mockReturnValue(false);
+
+    maybeCleanupExpiredSessionFiles(tmpAgentDir, "/cwd");
+
+    expect(fs.existsSync(jsonl)).toBe(false);
+    expect(fs.existsSync(alivePath)).toBe(false);
+  });
+
+  it("cleans orphan .alive sidecar when .jsonl already gone", () => {
+    forceCleanupTrigger();
+    const subagentsDir = path.join(tmpAgentDir, "subagents");
+    fs.mkdirSync(subagentsDir, { recursive: true });
+    const orphan = path.join(subagentsDir, "dead-session.jsonl.alive");
+    fs.writeFileSync(orphan, JSON.stringify({ pid: 99999, id: "s3", startedAt: Date.now() }), "utf-8");
+    const targetTime = Date.now() / 1000 - 31 * 86400;
+    fs.utimesSync(orphan, targetTime, targetTime);
+
+    maybeCleanupExpiredSessionFiles(tmpAgentDir, "/cwd");
+
+    expect(fs.existsSync(orphan)).toBe(false);
+  });
+
+  it("deletes .jsonl + all sidecars (.cancelled, .finalized, .alive) together", () => {
+    forceCleanupTrigger();
+    const jsonl = createSessionFile("sess-all-sidecars.jsonl", 31);
+    const cancelled = `${jsonl}.cancelled`;
+    const finalized = `${jsonl}.finalized`;
+    const alive = `${jsonl}.alive`;
+    fs.writeFileSync(cancelled, "", "utf-8");
+    fs.writeFileSync(finalized, "", "utf-8");
+    fs.writeFileSync(alive, JSON.stringify({ pid: 99999, id: "s4", startedAt: Date.now() }), "utf-8");
+
+    vi.spyOn(aliveStore, "readAliveMarker").mockReturnValue({ pid: 99999, id: "s4", startedAt: Date.now() });
+    vi.spyOn(aliveStore, "isProcessAlive").mockReturnValue(false);
+
+    maybeCleanupExpiredSessionFiles(tmpAgentDir, "/cwd");
+
+    expect(fs.existsSync(jsonl)).toBe(false);
+    expect(fs.existsSync(cancelled)).toBe(false);
+    expect(fs.existsSync(finalized)).toBe(false);
+    expect(fs.existsSync(alive)).toBe(false);
   });
 });

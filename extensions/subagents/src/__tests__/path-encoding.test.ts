@@ -2,9 +2,11 @@
 //
 // 锁定 encodeCwd 契约：session-runner 与 session-file-gc 共用此编码，
 // 漂移会导致同一 cwd 落到两个不同目录（见 path-encoding.ts 顶部注释）。
+import * as path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { encodeCwd } from "../core/path-encoding.ts";
+import { encodeCwd, getSubagentSessionDir } from "../core/path-encoding.ts";
 
 describe("encodeCwd", () => {
   it("encodes a normal unix absolute path", () => {
@@ -39,5 +41,35 @@ describe("encodeCwd", () => {
   it("encodes mixed separators and colon", () => {
     // /x:y\\z → 去前导 / → x:y\z → : \ → - - → x-y-z
     expect(encodeCwd("/x:y\\z")).toBe("--x-y-z--");
+  });
+});
+
+describe("getSubagentSessionDir", () => {
+  it("returns agentDir/subagents/<encodedCwd>/sessions", () => {
+    // [MF#1] 既有布局：subagents/<enc>/sessions/（不改，避免升级用户既有数据 orphan）
+    const result = getSubagentSessionDir("/home/user/.pi/agent", "/home/user/project");
+    expect(result).toBe(
+      path.join("/home/user/.pi/agent", "subagents", "--home-user-project--", "sessions")
+    );
+  });
+
+  it("uses mainCwd encoding (not effectiveCwd)", () => {
+    // D-004: 用主 cwd 编码，保证同一主 cwd 下所有 subagent 存同一目录
+    const mainCwd = "/Users/zhushanwen/Code/my-project";
+    const result = getSubagentSessionDir("~/.pi/agent", mainCwd);
+    const encoded = encodeCwd(mainCwd);
+    expect(result).toBe(path.join("~/.pi/agent", "subagents", encoded, "sessions"));
+  });
+
+  it("produces consistent path for same inputs", () => {
+    const a = getSubagentSessionDir("/agent", "/cwd");
+    const b = getSubagentSessionDir("/agent", "/cwd");
+    expect(a).toBe(b);
+  });
+
+  it("produces different path for different mainCwd", () => {
+    const a = getSubagentSessionDir("/agent", "/cwd1");
+    const b = getSubagentSessionDir("/agent", "/cwd2");
+    expect(a).not.toBe(b);
   });
 });

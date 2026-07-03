@@ -107,14 +107,14 @@ function buildOptionLines(
 
 		if (isOther) {
 			if (state.mode === "freeform") {
-				// 原地编辑：与普通选项的 [ ] 框 + 编号视觉对齐（单选无勾选语义则留空）。
-				// lead = "> [ ] N. "，输入文本跟在编号后，与其他选项整体一致。
+				// 原地编辑：与普通选项的 [ ] 框视觉对齐（单选无勾选语义则留空）。
+				// lead = "> [ ] "，编号 + 输入文本跟在框后，内容起始列与普通选项一致。
 				const box = q.multiSelect ? t.fg("dim", "[ ]") : "  ";
 				const num = i + 1;
-				const lead = `${prefix} ${box} ${t.fg("muted", `${num}. `)}`;
+				const lead = `${prefix} ${box} `;
 				const avail = Math.max(1, width - visibleWidth(lead));
-				// 文本 + 末尾光标 █ 整体软换行（空 input 时仅光标，wrapTextWithAnsi("█") 单行）
-				const styled = `${t.fg("text", editorText)}${t.fg("accent", "█")}`;
+				// 编号 + 文本 + 末尾光标 █ 整体软换行（空 input 时仅编号 + 光标，wrapTextWithAnsi 单行）
+				const styled = `${t.fg("muted", `${num}. `)}${t.fg("text", editorText)}${t.fg("accent", "█")}`;
 				addWrappedInput(add, lead, styled, avail, MAX_EDITOR_LINES);
 			} else {
 				const hasFreeText = state.freeTextValue !== null;
@@ -124,7 +124,7 @@ function buildOptionLines(
 				add(`${prefix} ${check} ${t.fg(labelColor, `${num}. ${opt.label}`)}`);
 				if (hasFreeText) {
 					// 已保存 freeText 预览：软换行展示，最多 MAX_EDITOR_LINES 行（不再单行截断）
-					const lead = "     "; // 5 列缩进，与上方 label 行对齐
+					const lead = "      "; // 6 列缩进，与上方 label 行对齐（prefix1 + sp1 + check1 + sp1 + num2 = 6）
 					const avail = Math.max(1, width - visibleWidth(lead));
 					const styled = t.fg("dim", `"${state.freeTextValue ?? ""}"`);
 					addWrappedInput(add, lead, styled, avail, MAX_EDITOR_LINES);
@@ -137,8 +137,8 @@ function buildOptionLines(
 			const num = i + 1;
 			add(`${prefix} ${box} ${t.fg(labelColor, `${num}. ${opt.label}`)}`);
 			if (opt.description && !hideDescriptions) {
-				const wrapped = wrapTextWithAnsi(t.fg("muted", opt.description), width - 7);
-				for (const line of wrapped) add(`       ${line}`);
+				const wrapped = wrapTextWithAnsi(t.fg("muted", opt.description), width - 10);
+				for (const line of wrapped) add(`          ${line}`);
 			}
 		} else {
 			const isConfirmed = state.selectedIndex === i;
@@ -147,8 +147,8 @@ function buildOptionLines(
 			const num = i + 1;
 			add(`${prefix} ${check} ${t.fg(labelColor, `${num}. ${opt.label}`)}`);
 			if (opt.description && !hideDescriptions) {
-				const wrapped = wrapTextWithAnsi(t.fg("muted", opt.description), width - 5);
-				for (const line of wrapped) add(`     ${line}`);
+				const wrapped = wrapTextWithAnsi(t.fg("muted", opt.description), width - 8);
+				for (const line of wrapped) add(`        ${line}`);
 			}
 		}
 	}

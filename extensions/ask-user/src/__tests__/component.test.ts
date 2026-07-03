@@ -362,6 +362,83 @@ describe("AskUserComponent — Other free-text editor", () => {
 	});
 });
 
+// ── 5e2. 多字符粘贴（M2/M7：完整保留，过滤控制字符，emoji 不丢）──
+// 回归 MUST_FIX-M2：handleEditorInput 按 code point 迭代粘贴 chunk，去掉了
+// `c.length === 1` 守卫（它误杀 BMP 之外的代理对，如 emoji）。
+describe("AskUserComponent — multi-char paste in editor", () => {
+	it("C-PASTE-1: multi-char chunk pasted at once is fully captured", () => {
+		// 终端把整段粘贴文本作为一个 data chunk 投递。修复前只取首字符。
+		const { c } = make([singleQ]);
+		c.handleInput(DOWN);
+		c.handleInput(DOWN);
+		c.handleInput(ENTER); // 打开 freeform 编辑器
+		c.handleInput("hello world"); // 一次粘贴多字符
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toBeDefined();
+		// 完整文本保留（非仅首字符 "h"）
+		expect(editorLine).toContain("hello world");
+	});
+
+	it("C-PASTE-2: paste with emoji (surrogate pair) preserves emoji (M2)", () => {
+		// 修复前：`c.length === 1` 守卫把代理对（🐛 length===2）过滤掉，emoji 被静默丢弃。
+		const { c } = make([singleQ]);
+		c.handleInput(DOWN);
+		c.handleInput(DOWN);
+		c.handleInput(ENTER);
+		c.handleInput("fix the 🐛 bug");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toBeDefined();
+		// emoji 完整保留，不丢失
+		expect(editorLine).toContain("fix the 🐛 bug");
+		expect(editorLine).toContain("🐛");
+	});
+
+	it("C-PASTE-3: multi-char chunk with control chars filters control, keeps printable", () => {
+		// 粘贴 "ab\tcd"：\t（U+0009）< 空格 → 被过滤；a/b/c/d 保留。
+		const { c } = make([singleQ]);
+		c.handleInput(DOWN);
+		c.handleInput(DOWN);
+		c.handleInput(ENTER);
+		c.handleInput("ab\tcd");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toBeDefined();
+		// 可打印字符保留，控制字符 \t 被过滤
+		expect(editorLine).toContain("abcd");
+		expect(editorLine).not.toContain("\t");
+	});
+
+	it("C-PASTE-4: empty string input is a no-op (no side effects)", () => {
+		const { c, result } = make([singleQ]);
+		c.handleInput(DOWN);
+		c.handleInput(DOWN);
+		c.handleInput(ENTER); // 打开编辑器
+		const before = c.render(60);
+		c.handleInput(""); // 空字符串，无副作用
+		const after = c.render(60);
+		// 未解析、未崩溃、视图不变
+		expect(result.val).toBeUndefined();
+		expect(after).toEqual(before);
+		// 编辑器仍在（光标在），editorText 仍为空
+		expect(after.some((l) => l.includes("█"))).toBe(true);
+	});
+
+	it("C-PASTE-5: single printable char still works (backward-compat)", () => {
+		// 回归：修复去掉守卫后单字符行为不变（与 C-27 等价的逐字符输入）。
+		const { c } = make([singleQ]);
+		c.handleInput(DOWN);
+		c.handleInput(DOWN);
+		c.handleInput(ENTER);
+		c.handleInput("x"); // 单字符
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toBeDefined();
+		expect(editorLine).toContain("x");
+	});
+});
+
 // ── 5f. 评论流程（FR-4.6 / FR-11 / AC-6/12/17）─────────
 describe("AskUserComponent — comment flow", () => {
 	it("C-33: single-select + allowComment Enter enters comment mode", () => {
