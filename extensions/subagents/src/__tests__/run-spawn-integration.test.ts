@@ -876,4 +876,7 @@ describe("runSpawn", () => {
       expect(record.turnCount).toBe(1); // 拆开的 turn_end 仍被解析为 1 次
     });
   });
+
+  // 注：C1（orphan 进程兜底）与 M8（stdout 边界）describe 块已移至 run-spawn-edges.test.ts，
+  // 拆分以保持本文件 < 1000 行（pre-commit hook 限制）。两文件各自独立声明文件级 mock。
 });

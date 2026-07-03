@@ -626,7 +626,8 @@ export class SubagentsListComponent implements Component {
   }
 
 
-  /** dispose 时清理（Pi overlay 销毁时调用；wrappedDone 已清过，此处兜底防漏）。 */
+  /** dispose 时清理（Pi overlay 销毁时调用；wrappedDone 已清过，此处兜底防漏）。
+   *  fallow 标记 unused-class-member——保留为 Pi overlay 生命周期的兜底清理（框架回调契约）。 */
   dispose(): void {
     this.unsubscribe();
     if (this.animTimer !== undefined) {

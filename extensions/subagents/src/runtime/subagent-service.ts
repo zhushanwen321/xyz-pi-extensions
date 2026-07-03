@@ -25,7 +25,7 @@ import {
 import type { AgentConfig, ModelInfo, ResolvedModel } from "../core/model-resolver.ts";
 import { getSubagentSessionDir } from "../core/path-encoding.ts";
 import { MAX_FORK_DEPTH } from "../core/session-context-resolver.ts";
-import { runSpawn, type SessionRunnerContext } from "../core/session-runner.ts";
+import { runSpawn, killAllSpawnedChildren, type SessionRunnerContext } from "../core/session-runner.ts";
 import type { WorktreeHandle } from "../types.ts";
 import type {
   AgentEvent,
@@ -193,14 +193,23 @@ export class SubagentService {
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
-    // [R0 孤儿进程修复] 进程退出路径：abort 所有 running background controller，
-    // 触发 runSpawn 的 signal listener → child.kill("SIGTERM")，防止子进程成孤儿。
+    // [R0/C1 孤儿进程修复] 进程退出路径：两层兜底 kill 所有 spawned 子进程（sync + background）。
+    //   1. store.abortRunningControllers()：background record 的 controller.abort → runSpawn signal
+    //      listener → child.kill("SIGTERM")。这是 background 的 CAS 收尾语义路径（不能动）。
+    //   2. killAllSpawnedChildren()：遍历 session-runner 的 spawnedChildren Set（sync + background
+    //      均注册），对仍存活的发 SIGTERM。sync record 的 controller 是 undefined，abortRunningControllers
+    //      跳过它们——此处补齐，防止 sync 子进程成孤儿（主进程崩溃/SIGKILL 之外的退出路径）。
     // 必须在 store.dispose 之前（dispose 后 records 仍可访问，但语义上先 kill 再清场）。
-    // sync record 无 controller，跳过；background controller.abort 后子进程收到 SIGTERM。
-    // 注意：dispose 是同步返回，主进程可能紧接着 process.exit()，runSpawn 的 finally
-    // 清理（identity 补写等）可能来不及跑——这是可接受的退化（session.jsonl 已由子进程
-    // 写入，缺 identity entry 只影响 list 重建的可观测性，不丢执行数据）。
+    // 注意：dispose 是同步返回，主进程可能紧接着 process.exit()，runSpawn 的 finally 清理
+    //（identity 补写等）可能来不及跑——这是可接受的退化（session.jsonl 已由子进程写入，
+    // 缺 identity entry 只影响 list 重建的可观测性，不丢执行数据）。
     this.store.abortRunningControllers();
+    // [C1] orphan 进程兜底：abortRunningControllers 只能 kill background 子进程（有 controller）。
+    // sync 子进程的 controller 是 undefined（见 createRecordForMode），主进程退出时会被遗漏成孤儿。
+    // killAllSpawnedChildren 遍历 session-runner 的 spawnedChildren Set（sync + background 均注册），
+    // 对仍存活的子进程发 SIGTERM。background 子进程此时已被 controller.abort 路径 kill，
+    // 此处对它们的二次 kill 是无害 noop（已 killed/退出）。不 await 子进程退出（dispose 要快）。
+    killAllSpawnedChildren();
     for (const s of this.throttleState.values()) {
       if (s.timer !== undefined) clearTimeout(s.timer);
     }
@@ -357,7 +366,8 @@ export class SubagentService {
 
   // ── 状态查询（TUI 调）──────────────────────────────────
 
-  /** 当前 Pi session ID（TUI/测试用）。initSession 前为 null。 */
+  /** 当前 Pi session ID（TUI/测试用）。initSession 前为 null。
+   *  fallow 标记 unused-class-member——保留为公共 API（types.ts 接口声明，外部消费者/TUI 可能调用）。 */
   getSessionId(): string | null {
     return this.sessionId;
   }

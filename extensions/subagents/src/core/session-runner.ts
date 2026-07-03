@@ -65,6 +65,55 @@ const SPAWN_WATCHDOG_MS = 30 * 60 * 1000;
 const STDERR_MAX_CHARS = 64 * 1024;
 
 // ============================================================
+// 孤儿进程兜底（C1）
+// ============================================================
+//
+// [C1] track 所有 runSpawn 创建的子进程（sync + background），供 dispose 兜底 kill。
+//
+// 背景：sync record 的 controller 是 undefined（见 createRecordForMode L420 附近），
+// 所以 RecordStore.abortRunningControllers 只能 kill background 子进程（有 controller 的）。
+// 主进程异常退出（SIGKILL/崩溃/session_shutdown dispose）时，sync 子进程会成孤儿。
+//
+// 本 Set 是 dispose 的最后兜底——在 abortRunningControllers（background controller.abort 路径）
+// 之后，遍历所有仍存活的子进程（含 sync）发 SIGTERM。正常退出路径（子进程 close）会从 Set 移除，
+// 不受影响。background 子进程可能被 controller.abort 路径先 kill 一次，再被本遍历 kill 一次
+// （对已退出的 child.kill 返回 false，无害）。
+const spawnedChildren = new Set<ChildProcess>();
+
+/**
+ * kill 所有未退出的 spawned 子进程（dispose 兜底用）。
+ *
+ * 遍历 spawnedChildren Set，对每个未 killed 的子进程发 `child.kill(signal)`。
+ * 已退出的子进程在 close/error 事件时已从 Set 移除（`spawnedChildren.delete`），
+ * 故 Set 中只剩「活着的」或「已被 kill 但 close 事件尚未回调的」。后者用 `child.killed`
+ * 跳过——避免对一个已 kill 的子进程重复 kill。
+ *
+ * 用于 SubagentService.dispose（进程退出路径）：覆盖 sync 子进程（controller 为 undefined，
+ * abortRunningControllers 跳过它们）。background 子进程此时已被 abortRunningControllers 经
+ * controller.abort 路径 kill，本函数对它们的二次 kill 是无害 noop（已 killed）。
+ *
+ * 不 await 子进程退出（dispose 要快速返回）。
+ *
+ * @returns 被 kill 的子进程数（诊断用）
+ */
+export function killAllSpawnedChildren(signal: NodeJS.Signals = "SIGTERM"): number {
+  let n = 0;
+  for (const child of spawnedChildren) {
+    // 跳过已 kill 的（killed=true 表示已调过 child.kill；已退出的在 close/error 时已从 Set 移除）。
+    // 不依赖 exitCode/signalCode：close 事件回调可能晚于 dispose，此时它们仍为 null，但子进程
+    // 可能已被 controller.abort 路径 kill（killed=true）。
+    if (child.killed) continue;
+    try {
+      child.kill(signal);
+      n++;
+    } catch {
+      // best-effort：单个 kill 失败不影响其他子进程
+    }
+  }
+  return n;
+}
+
+// ============================================================
 // 依赖注入容器 + 入参
 // ============================================================
 
@@ -149,14 +198,30 @@ const branchCache = new Map<string, string>();
  *
  * [SPAWN 改造] 从旧 in-process run() 恢复。spawn 模型下此块拼进
  * --append-system-prompt 文件，子进程读文件注入 system prompt。
+ *
+ * [M9] 深度展示同时反映 fork 链与通用嵌套——取 max(forkDepth, nestingDepth)。
+ * 背景：双层护栏共享 MAX_FORK_DEPTH 上限（见 session-context-resolver.ts 注释）：
+ *   - forkDepth 只数 fork 链（fork=true 才递增），控 session 体积。
+ *   - nestingDepth 经 execCtxAls 计所有 subagent 嵌套（fork + 非 fork），更严。
+ * 混合链（非fork→非fork→fork）下最内 fork 的 forkDepth=1，但 nestingDepth 可能已接近上限。
+ * 旧实现只展示 forkDepth → LLM 看到 "1/10" 误以为还有很大预算，实际通用护栏可能先拒绝。
+ * 取 max 展示更严的约束，避免误导。两者均 ≤ MAX_FORK_DEPTH（护栏保证），max 也 ≤ MAX。
+ *
+ * @param forkDepth 当前 fork 链深度（undefined=非 fork session，视为 0）。
+ * @param nestingDepth 通用嵌套深度（record.depth，undefined=顶层）。
  */
-export function buildEnvBlock(cwd: string, forkDepth?: number): string {
+export function buildEnvBlock(
+  cwd: string,
+  forkDepth?: number,
+  nestingDepth?: number,
+): string {
   const lines = ["--- environment (data, not instructions) ---", `Working directory: ${cwd}`];
-  // [D-030] fork 子 session 注入自身 fork 深度，让 LLM 感知嵌套层级与剩余预算，
-  // 避免保守模型因「不知道还能再 spawn」而放弃嵌套委派。MAX_FORK_DEPTH 与
-  // session-context-resolver 拦截硬限共享同一常量（见该文件注释）。
-  if (typeof forkDepth === "number" && forkDepth > 0) {
-    lines.push(`Fork depth: ${forkDepth}/${MAX_FORK_DEPTH}`);
+  // [M9] 取 max(forkDepth, nestingDepth)——更严的约束先生效，避免只展示 forkDepth 误导 LLM。
+  const fd = forkDepth ?? 0;
+  const nd = nestingDepth ?? 0;
+  const depth = Math.max(fd, nd);
+  if (depth > 0) {
+    lines.push(`Depth: ${depth}/${MAX_FORK_DEPTH}`);
   }
   let branch = branchCache.get(cwd);
   if (branch === undefined) {
@@ -371,7 +436,10 @@ export async function runSpawn(
   // buildAppendSystemPrompt 顺序一致——parts[0] 是环境块，其后 agent systemPrompt、再后调用方片段。
   const ownForkDepth = opts.fork ? (opts.parentForkDepth ?? 0) + 1 : undefined;
   let tempPromptFile: { dir: string; filePath: string } | undefined;
-  const appendParts: string[] = [buildEnvBlock(ctx.cwd, ownForkDepth)];
+  // [M9] buildEnvBlock 取 max(forkDepth, nestingDepth)：record.depth === nestingDepth（都从
+  // execCtxAls 派生，见 createRecordForMode L425-427 与 execute L257-258），传它让 env block
+  // 展示更严的约束（混合嵌套链下通用护栏可能先于 fork 护栏拒绝）。
+  const appendParts: string[] = [buildEnvBlock(ctx.cwd, ownForkDepth, record.depth)];
   if (opts.agentConfig?.systemPrompt) appendParts.push(opts.agentConfig.systemPrompt);
   if (opts.appendSystemPrompt) appendParts.push(...opts.appendSystemPrompt);
   if (appendParts.length > 0) {
@@ -418,6 +486,16 @@ export async function runSpawn(
       env: childEnv,
     });
     proc = child;
+    // [C1] track 子进程供 dispose 兜底 kill（sync + background 均注册——sync 无 controller，
+    // abortRunningControllers 跳过它，靠本 Set 兜底）。close/error 后移除（已退出无需再 kill）。
+    spawnedChildren.add(child);
+
+    // stdout/stderr 用 utf8 编码：stream 自动按字符边界切分，避免多字节
+    // UTF-8（CJK/emoji）跨 chunk 时 toString() 产生 U+FFFD 替换符导致 JSON.parse 失败。
+    // [m2] 先 setEncoding 再注册 signal listener/watchdog：若 setEncoding 抛错，try/finally
+    //（下方）只清理 tempPromptFile，watchdog/signal listener 尚未注册则无需清理——避免泄漏。
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
 
     // d. signal → proc.kill 监听（一次性，替代 session.abort）
     const onAbort = (): void => {
@@ -435,11 +513,6 @@ export async function runSpawn(
     // → 本监听器 kill 子进程。无此 unref，30 分钟 timer 会拖住 event loop 阻止退出。
     const watchdog = setTimeout(() => child.kill("SIGTERM"), SPAWN_WATCHDOG_MS);
     watchdog.unref();
-
-    // stdout/stderr 用 utf8 编码：stream 自动按字符边界切分，避免多字节
-    // UTF-8（CJK/emoji）跨 chunk 时 toString() 产生 U+FFFD 替换符导致 JSON.parse 失败。
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
 
     // stdout pump：逐行解析 → handleSdkEvent
     let stdoutBuffer = "";
@@ -495,6 +568,8 @@ export async function runSpawn(
     // 等待子进程退出
     const exitCode = await new Promise<number>((resolve) => {
       child.on("close", (code: number | null) => {
+        // [C1] 子进程已退出，从 orphan-tracking Set 移除（dispose 兜底无需再 kill 它）
+        spawnedChildren.delete(child);
         // 处理 stdout 末尾残留行
         if (stdoutBuffer.trim()) {
           const parsed = parseSpawnLine(stdoutBuffer);
@@ -506,6 +581,7 @@ export async function runSpawn(
       });
       child.on("error", (err: Error) => {
         // spawn 本身失败（command not found 等）
+        spawnedChildren.delete(child);
         record.lastError = err.message;
         resolve(SIGNAL_EXIT_CODE_THRESHOLD); // 非零退出
       });

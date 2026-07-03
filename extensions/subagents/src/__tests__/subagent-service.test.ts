@@ -305,10 +305,99 @@ describe("SubagentService", () => {
 
       // sync record 的 controller 是 undefined，running 状态下 dispose 不应抛
       // （abortRunningControllers 检查 r.controller 才 abort，sync 跳过）
+      // [C1] sync 子进程的 kill 由 killAllSpawnedChildren 兜底（spawnedChildren Set 注册），
+      //      集成验证见 run-spawn-integration.test.ts 的 C1 用例（mock spawn + spy kill）。
       const syncRecord = registerRunningSync(service, "sync-1");
       expect(syncRecord.controller).toBeUndefined();
 
       expect(() => service.dispose()).not.toThrow();
+    });
+  });
+
+  // ============================================================
+  // execute() worktree fail-fast 校验 [MF#7]（commit 8e8e75966）
+  // ============================================================
+  //
+  // [MF#7] execute 入口校验 `worktree:true && !fork` → fail-fast 抛错。
+  // 否则下面三个 worktree 分支都不命中，worktreeHandle 恒 undefined → 子 agent
+  // 零文件隔离且零报错（静默 no-op）。此组验证该校验的三种 fork/worktree 组合：
+  //   1. worktree:true + fork:false → 抛 "requires fork"（fail-fast 命中）
+  //   2. worktree:true + fork:true  → 不命中校验（执行越过 guard，后续因副作用失败）
+  //   3. worktree:false + fork:false → 不命中校验（默认路径，执行越过 guard）
+  //
+  // 被测点是 execute() 入口的 guard（subagent-service.ts L277-282），在任何副作用
+  // （record 创建 / worktree 创建 / spawn）之前。本文件不 mock spawn（保持与文件头
+  // 声明一致——execute 集成测试在 execute-nesting / run-spawn-integration），
+  // 因此 case 2/3 验证「guard 放行」而非「执行完成」：执行越过 guard 后在后续步骤
+  // （worktreeManager.create 调 git / runSpawn 调 spawn）抛与 fork/worktree 无关的错。
+  // 用 try/catch 断言抛出的不是 guard 错误，精确锁住 guard 的触发条件。
+
+  describe("execute() worktree fail-fast 校验 [MF#7]", () => {
+    /** 构造已就绪的 service（initSession + initModel 注入 ctxModel，使 resolveIdentity 不因 model 拗错）。 */
+    function makeReadyService(): SubagentService {
+      const service = new SubagentService({ cwd: agentDir, modelService });
+      service.initSession({ pi: makePi(), sessionId: "s1" });
+      // 注入 modelRegistry + ctxModel：让 resolveIdentity 越过 resolveModel，
+      // 使 guard 之后的失败点稳定在 worktreeManager.create（git）或 runSpawn（spawn），
+      // 而非 modelService.resolveModel——避免与 guard 无关的 model 错误掩盖被测点。
+      modelService.initModel({
+        modelRegistry: {
+          getAvailable: () => [],
+          find: () => undefined,
+          hasConfiguredAuth: () => false,
+        },
+        sessionId: "s1",
+        ctxModel: { id: "ctx-model", name: "Ctx", provider: "p", reasoning: false },
+      });
+      return service;
+    }
+
+    it("worktree:true + fork:false → fail-fast 抛错含 'requires fork'（guard 命中）", async () => {
+      const service = makeReadyService();
+      // guard 在所有副作用之前：无 record 创建、无 spawn
+      await expect(
+        service.execute({
+          task: "worktree without fork",
+          worktree: true,
+          fork: false,
+          ctxModel: { id: "ctx-model", name: "Ctx", provider: "p", reasoning: false },
+        }),
+      ).rejects.toThrow(/requires fork/);
+      // 无副作用：record 未创建（guard 在 createRecordForMode 之前）
+      expect(service.collectRecords(10)).toHaveLength(0);
+    });
+
+    it("worktree:true + fork:true → 不命中 guard（执行越过 guard，不抛 'requires fork'）", async () => {
+      const service = makeReadyService();
+      // guard 放行 → 执行继续：先创建 record，然后 worktreeManager.create 调 git（测试环境无 repo → 抛与 fork 无关的错）
+      try {
+        await service.execute({
+          task: "worktree with fork",
+          worktree: true,
+          fork: true,
+          ctxModel: { id: "ctx-model", name: "Ctx", provider: "p", reasoning: false },
+        });
+        // 若未抛（理论上 worktreeManager.create 在某些环境成功）也 OK——重点是没命中 guard
+      } catch (err) {
+        // guard 放行：抛出的错误绝不能是 "requires fork"
+        expect((err as Error).message).not.toMatch(/requires fork/);
+      }
+    });
+
+    it("worktree:false + fork:false → 不命中 guard（默认路径越过 guard，不抛 'requires fork'）", async () => {
+      const service = makeReadyService();
+      // guard 放行 → 执行继续：runSpawn 调 child_process.spawn（测试环境无真实 pi → 抛与 fork 无关的错）
+      try {
+        await service.execute({
+          task: "default path",
+          worktree: false,
+          fork: false,
+          ctxModel: { id: "ctx-model", name: "Ctx", provider: "p", reasoning: false },
+        });
+      } catch (err) {
+        // guard 放行：抛出的错误绝不能是 "requires fork"
+        expect((err as Error).message).not.toMatch(/requires fork/);
+      }
     });
   });
 });

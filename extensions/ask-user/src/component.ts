@@ -386,9 +386,12 @@ export class AskUserComponent implements Component {
 		// Terminals deliver pasted text as a single data chunk; iterating each char
 		// ensures the full paste is captured instead of silently dropping everything
 		// after the first character.
+		// for...of 按 code point 迭代：代理对（如 😀 U+1F600）作为一个 c（length===2）出现，
+		// 因此不能用 `c.length === 1` 守卫——那会把所有 BMP 之外的字符（emoji、部分 CJK 扩展）全过滤。
+		// 只保留 `c >= " "`（code point 比较），过滤控制字符（< 空格 U+0020）。
 		let changed = false;
 		for (const c of data) {
-			if (c.length === 1 && c >= " ") {
+			if (c >= " ") {
 				this.editorText += c;
 				changed = true;
 			}

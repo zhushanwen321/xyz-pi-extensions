@@ -174,19 +174,38 @@ describe("buildEnvBlock", () => {
     expect(block).toContain("--- end environment ---");
   });
 
-  it("forkDepth > 0 → 含 Fork depth: N/<MAX>", () => {
+  it("forkDepth > 0 → 含 Depth: N/<MAX>", () => {
     const block = buildEnvBlock(tmpGitRepo, 3);
-    expect(block).toContain(`Fork depth: 3/${MAX_FORK_DEPTH}`);
+    expect(block).toContain(`Depth: 3/${MAX_FORK_DEPTH}`);
   });
 
-  it("forkDepth === 0 → 不含 fork depth 行", () => {
+  it("forkDepth === 0 → 不含 depth 行", () => {
     const block = buildEnvBlock(tmpGitRepo, 0);
-    expect(block).not.toContain("Fork depth:");
+    expect(block).not.toContain("Depth:");
   });
 
-  it("forkDepth undefined → 不含 fork depth 行", () => {
+  it("forkDepth undefined → 不含 depth 行", () => {
     const block = buildEnvBlock(tmpGitRepo);
-    expect(block).not.toContain("Fork depth:");
+    expect(block).not.toContain("Depth:");
+  });
+
+  // [M9] nestingDepth：取 max(forkDepth, nestingDepth) 展示更严约束。
+  it("forkDepth < nestingDepth → 展示 max（nestingDepth 更严）", () => {
+    // forkDepth=1（最内 fork），nestingDepth=5（通用嵌套已深）→ 展示 5
+    const block = buildEnvBlock(tmpGitRepo, 1, 5);
+    expect(block).toContain(`Depth: 5/${MAX_FORK_DEPTH}`);
+    expect(block).not.toContain(`Depth: 1/${MAX_FORK_DEPTH}`);
+  });
+
+  it("forkDepth > nestingDepth → 展示 max（forkDepth 更严）", () => {
+    const block = buildEnvBlock(tmpGitRepo, 7, 2);
+    expect(block).toContain(`Depth: 7/${MAX_FORK_DEPTH}`);
+  });
+
+  it("forkDepth=0 + nestingDepth>0 → 展示 nestingDepth（非 fork 嵌套也计入）", () => {
+    // 非 fork 但有嵌套（如顶层 → 子 → 孙），nestingDepth=2 应展示
+    const block = buildEnvBlock(tmpGitRepo, undefined, 2);
+    expect(block).toContain(`Depth: 2/${MAX_FORK_DEPTH}`);
   });
 
   it("git branch 存在 → 含 Git branch 行", () => {

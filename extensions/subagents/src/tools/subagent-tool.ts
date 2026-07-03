@@ -210,7 +210,7 @@ Completion auto-notifies you (a message is injected that wakes your next turn). 
 
 ## Nested spawning
 
-A subagent MAY itself call the \`subagent\` tool (nested delegation is supported; each level spawns its own child process). A forked subagent sees its own fork depth in the environment block ("Fork depth: N/10") — you may spawn deeper while N < 10. The 11th fork level is refused with a clear "fork depth 10 >= 10" error and fails the subagent gracefully (does not crash the parent). Do NOT refuse to spawn a sub-subagent by assuming it is disallowed — it is not; only the depth limit applies.`,
+A subagent MAY itself call the \`subagent\` tool (nested delegation is supported; each level spawns its own child process). A subagent sees its nesting depth in the environment block ("Depth: N/10") — you may spawn deeper while N < 10. The 11th nesting level is refused with a clear "nesting depth 11 > 10" or "fork depth 10 >= 10" error and fails the subagent gracefully (does not crash the parent). Do NOT refuse to spawn a sub-subagent by assuming it is disallowed — it is not; only the depth limit applies.`,
     executionMode: "sequential",
     parameters: SubagentParams,
     renderCall: subagentRenderCall,
