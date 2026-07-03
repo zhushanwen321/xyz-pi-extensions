@@ -382,9 +382,18 @@ export class AskUserComponent implements Component {
 			this.tui.requestRender();
 			return;
 		}
-		// Printable char
-		if (data.length === 1 && data >= " ") {
-			this.editorText += data;
+		// Printable char(s) — handle both single keystrokes and multi-char paste.
+		// Terminals deliver pasted text as a single data chunk; iterating each char
+		// ensures the full paste is captured instead of silently dropping everything
+		// after the first character.
+		let changed = false;
+		for (const c of data) {
+			if (c.length === 1 && c >= " ") {
+				this.editorText += c;
+				changed = true;
+			}
+		}
+		if (changed) {
 			this.invalidate();
 			this.tui.requestRender();
 			return;
