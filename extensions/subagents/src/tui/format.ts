@@ -10,9 +10,11 @@
 // 否则背景色在省略号处断裂(contentBox 的 applyBg 被 `\x1b[0m` 抹掉).
 // 移植自 pi-subagents render.ts:44-89.
 
+import os from "node:os";
+
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-import type { AgentEventLogEntry, ExecutionStatus } from "../types.ts";
+import type { AgentEventLogEntry, DisplayItem, ExecutionStatus } from "../types.ts";
 import { DEFAULT_AGENT_NAME } from "../types.ts";
 
 /**
@@ -259,9 +261,16 @@ export function formatEventLine(entry: AgentEventLogEntry, theme: ThemeLike): st
       return `tool: ${label}${mark}`;
     }
 
-    case "turn_end":
-      // turn 分隔(仅 expanded view 显示)
-      return theme.fg("dim", "── turn ──");
+    case "turn_end": {
+      // label = turn.text 摘要（getEventLog 派生，TURN_SUMMARY_MAX=80），无 text 时为 "turn"。
+      // 若丢弃 label 只显 "── turn ──"，流式 text 在 turn 结束后完全消失（currentActivity
+      // 随 turn 闭合转为 undefined），用户无法回顾 subagent 说了什么。这里显示摘要保留可见性。
+      const summary = sanitizeLabel(entry.label);
+      if (!summary || summary === "turn") {
+        return theme.fg("dim", "── turn ──");
+      }
+      return theme.fg("toolOutput", summary);
+    }
 
     case "error":
       // 错误条目:标签 + label + ✗
@@ -270,6 +279,97 @@ export function formatEventLine(entry: AgentEventLogEntry, theme: ThemeLike): st
     default:
       return label;
   }
+}
+
+/**
+ * [STEP3] 格式化单个 toolCall 为展示行（对齐 nicobailon formatToolCall）。
+ *
+ * 返回不含前缀（`→ ` 由调用方加）。根据 toolName 提取关键参数格式化：
+ *   bash → `$ <command 预览>`
+ *   read → `read <~路径:offset-limit>`
+ *   edit/write → `<op> <~路径>`
+ *   grep/find/ls → 对应格式
+ *   default → `<toolName> <argsJSON 预览>`
+ */
+export function formatToolCall(
+  toolName: string,
+  args: Record<string, unknown>,
+  theme: ThemeLike,
+): string {
+  const shortenPath = (p: string): string => {
+    const home = os.homedir();
+    return p.startsWith(home) ? `~${p.slice(home.length)}` : p;
+  };
+
+  switch (toolName) {
+    case "bash": {
+      const command = (args.command as string) || "...";
+      const preview = command.length > 60 ? `${command.slice(0, 60)}...` : command;
+      return theme.fg("muted", "$ ") + theme.fg("toolOutput", preview);
+    }
+    case "read": {
+      const rawPath = (args.file_path || args.path || "...") as string;
+      const filePath = shortenPath(rawPath);
+      const offset = args.offset as number | undefined;
+      const limit = args.limit as number | undefined;
+      let text = theme.fg("accent", filePath);
+      if (offset !== undefined || limit !== undefined) {
+        const startLine = offset ?? 1;
+        const endLine = limit !== undefined ? startLine + limit - 1 : "";
+        text += theme.fg("warning", `:${startLine}${endLine ? `-${endLine}` : ""}`);
+      }
+      return theme.fg("muted", "read ") + text;
+    }
+    case "write": {
+      const rawPath = (args.file_path || args.path || "...") as string;
+      const content = (args.content || "") as string;
+      const lines = content.split("\n").length;
+      let text = theme.fg("muted", "write ") + theme.fg("accent", shortenPath(rawPath));
+      if (lines > 1) text += theme.fg("dim", ` (${lines} lines)`);
+      return text;
+    }
+    case "edit": {
+      const rawPath = (args.file_path || args.path || "...") as string;
+      return theme.fg("muted", "edit ") + theme.fg("accent", shortenPath(rawPath));
+    }
+    case "ls": {
+      const rawPath = (args.path || ".") as string;
+      return theme.fg("muted", "ls ") + theme.fg("accent", shortenPath(rawPath));
+    }
+    case "find": {
+      const pattern = (args.pattern || "*") as string;
+      const rawPath = (args.path || ".") as string;
+      return theme.fg("muted", "find ") + theme.fg("accent", pattern) + theme.fg("dim", ` in ${shortenPath(rawPath)}`);
+    }
+    case "grep": {
+      const pattern = (args.pattern || "") as string;
+      const rawPath = (args.path || ".") as string;
+      return theme.fg("muted", "grep ") + theme.fg("accent", `/${pattern}/`) + theme.fg("dim", ` in ${shortenPath(rawPath)}`);
+    }
+    default: {
+      const argsStr = JSON.stringify(args);
+      const preview = argsStr.length > 50 ? `${argsStr.slice(0, 50)}...` : argsStr;
+      return theme.fg("accent", toolName) + theme.fg("dim", ` ${preview}`);
+    }
+  }
+}
+
+/**
+ * [STEP3] 格式化单个 displayItem 为展示行（含 `→ ` 前缀）。
+ *
+ * toolCall：`→ <formatToolCall>` + 尾部 ✓/✗（done/failed 才加）。
+ * text：assistant 正文（compact 时调用方自行截断，这里返回原文）。
+ */
+export function formatDisplayItem(item: DisplayItem, theme: ThemeLike): string {
+  if (item.type === "text") {
+    return theme.fg("toolOutput", item.text ?? "");
+  }
+  const name = item.name ?? "unknown";
+  const args = item.args ?? {};
+  const base = `${theme.fg("muted", "→ ")}${formatToolCall(name, args, theme)}`;
+  if (item.status === "done") return `${base} ${theme.fg("success", "✓")}`;
+  if (item.status === "failed") return `${base} ${theme.fg("error", "✗")}`;
+  return base;
 }
 
 // ============================================================
@@ -290,7 +390,11 @@ export function formatEventLine(entry: AgentEventLogEntry, theme: ThemeLike): st
  */
 export function truncLine(text: string, maxWidth: number): string {
   if (maxWidth <= 0) return "";
-  if (visibleWidth(text) <= maxWidth) return text;
+  // 剥离换行符（\n / \r）：text 可能含多行 prompt / turn.text，\n 不占可见宽度
+  // 但在终端会换行，导致单行渲染意外变成多行，破坏行对齐（list overlay 左右列错位、
+  // tool block 行数跳变）。单行渲染入口必须保证无 \n。用空格替代（保留词边界可读性）。
+  const flat = text.replace(/[\r\n]+/g, " ");
+  if (visibleWidth(flat) <= maxWidth) return flat;
 
   const targetWidth = Math.max(0, maxWidth - 1);
   let result = "";
@@ -298,9 +402,9 @@ export function truncLine(text: string, maxWidth: number): string {
   let activeStyles: string[] = [];
   let i = 0;
 
-  while (i < text.length) {
+  while (i < flat.length) {
     // 捕获 ANSI SGR 序列
-    const ansiMatch = text.slice(i).match(/^\x1b\[[0-9;]*m/);
+    const ansiMatch = flat.slice(i).match(/^\x1b\[[0-9;]*m/);
     if (ansiMatch) {
       const code = ansiMatch[0];
       result += code;
@@ -316,19 +420,21 @@ export function truncLine(text: string, maxWidth: number): string {
 
     // 找到下一段纯文本(非 ANSI)的边界
     let end = i;
-    while (end < text.length && !text.slice(end).match(/^\x1b\[[0-9;]*m/)) {
+    while (end < flat.length && !flat.slice(end).match(/^\x1b\[[0-9;]*m/)) {
       end++;
     }
 
     // 按 grapheme 迭代这段文本,累加到 targetWidth
-    const textPortion = text.slice(i, end);
+    const textPortion = flat.slice(i, end);
     for (const seg of segmenter.segment(textPortion)) {
       const grapheme = seg.segment;
       const graphemeWidth = visibleWidth(grapheme);
 
       if (currentWidth + graphemeWidth > targetWidth) {
-        // 截断:重应用 active 样式 + 省略号
-        return result + activeStyles.join("") + "…";
+        // 截断:重应用 active 样式 + 省略号 + reset。
+        // reset 不可省——否则行尾颜色渗透到 padToVisible 的填充空格、乃至下一帧行，
+        // 视觉上表现为颜色重影（被截断的着色延伸到行尾之外）。
+        return result + activeStyles.join("") + "…\x1b[0m";
       }
 
       result += grapheme;
@@ -338,5 +444,49 @@ export function truncLine(text: string, maxWidth: number): string {
   }
 
   // 理论上 visibleWidth 检查已提前返回,此行兜底
-  return result + activeStyles.join("") + "…";
+  return result + activeStyles.join("") + "…\x1b[0m";
+}
+
+/**
+ * 把长文本按指定可见宽度拆成多行（word-wrap），完整展示不截断。
+ *
+ * 用于 detail 模式完整展示长内容（task / output text）。detail 有翻屏能力，
+ * 不应像预览那样截断成一行省略号——信息完整性优先。
+ *
+ * 输入为纯文本（不含 ANSI 颜色）。调用方对返回的每行单独着色，
+ * 这样避免对 ANSI 文本做复杂 wrap（SGR 状态跨行续重应用）。
+ *
+ * grapheme 迭代（CJK/emoji 安全）：逐字素累加可见宽度，超 maxWidth 即断行。
+ * CJK 可在任意字素间断（每个汉字占 2 列但可断），拉丁文不强制保留词边界
+ * （detail 场景优先完整性，width 足够宽时自然在空格附近断）。
+ *
+ * 原始 \n 保留为段落分隔（split 后每段独立 wrap，空行保留为 ""）。
+ * 与 truncLine 的扁平化不同：wrapText 的产物是多行，\n 是有意的段落边界。
+ */
+export function wrapText(text: string, maxWidth: number): string[] {
+  if (maxWidth <= 0) return [text];
+  const result: string[] = [];
+  for (const para of text.split(/\r?\n/)) {
+    const trimmed = para.trim();
+    if (!trimmed) {
+      result.push("");
+      continue;
+    }
+    let line = "";
+    let lineWidth = 0;
+    for (const seg of segmenter.segment(trimmed)) {
+      const g = seg.segment;
+      const gw = visibleWidth(g);
+      if (lineWidth + gw > maxWidth && line.length > 0) {
+        result.push(line);
+        line = g;
+        lineWidth = gw;
+      } else {
+        line += g;
+        lineWidth += gw;
+      }
+    }
+    if (line.length > 0) result.push(line);
+  }
+  return result;
 }

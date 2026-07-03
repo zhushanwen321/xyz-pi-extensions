@@ -1,26 +1,18 @@
 // src/core/session-runner.ts
 //
-// 唯一的一次性 session 执行编排器。零 mode 感知——只负责"跑一次 session + 更新 record"。
+// spawn pi --mode json 子进程执行 session 的编排器。零 mode 感知。
 //
-// 这是 sync/background 两路径完全共用的核心。mode 分叉在 Runtime.execute 顶部，
-// 不渗透到此处。Core 不知道谁调用它、是否 await、是否回注通知。
-//
-// 编排层（Orchestration）：站在基础层（session-factory / output-collector）之上，
-// 负责执行时序、SDK 事件累积与清理。不持有 Pi SDK 实例，只通过 factory 间接用。
-// 设计信息见 docs/subagents/session-runner.md。
+// spawn 改造后：session 在独立子进程跑（进程隔离），事件经 stdout JSON 流回流。
+// runSpawn 是唯一执行入口（sync/background 共用）。mode 分叉在 Runtime.execute 顶部。
+// 设计信息见 docs/subagents/spawn-refactor-plan.md。
 
-import { execFileSync } from "node:child_process";
+import { type ChildProcess,spawn } from "node:child_process";
 import * as fs from "node:fs";
 
 import { writeAliveMarker } from "../runtime/execution/alive-store.ts";
 import type {
   AgentConfig,
-  AgentSessionLike,
   ResolvedModel,
-  ResourceLoaderLike,
-  ResourceLoaderOptions,
-  SdkLike,
-  SessionManagerLike,
 } from "../types.ts";
 import type {
   AgentEvent,
@@ -29,13 +21,21 @@ import type {
   SdkEvent,
   WorktreeHandle,
 } from "../types.ts";
-import { bestEffort } from "../utils/best-effort.ts";
-import { getAllToolCalls, updateFromEvent } from "./execution-record.ts";
-import type { ModelRegistryLike } from "./model-resolver.ts";
+import { updateFromEvent } from "./execution-record.ts";
 import { collectResult } from "./output-collector.ts";
 import { getSubagentSessionDir, worktreeMappingFile } from "./path-encoding.ts";
-import { MAX_FORK_DEPTH, resolveSessionContext } from "./session-context-resolver.ts";
-import { IDENTITY_CUSTOM_TYPE } from "./session-reconstructor.ts";
+import { getPiInvocation } from "./pi-invocation.ts";
+import { IDENTITY_CUSTOM_TYPE, type SubagentIdentityData } from "./session-reconstructor.ts";
+import {
+  deriveSessionFilePath,
+  findSessionFileByHeaderId,
+  parseSpawnLine,
+  type SpawnSessionHeader,
+} from "./spawn-event-adapter.ts";
+import {
+  cleanupTempPrompt,
+  writePromptToTempFile,
+} from "./temp-prompt.ts";
 import { createTurnLimiter } from "./turn-limiter.ts";
 
 /**
@@ -55,31 +55,16 @@ function isSdkEvent(x: unknown): x is SdkEvent {
 /** 默认 grace turns（soft limit 后宽限轮数，对齐旧实现 DEFAULT_GRACE_TURNS）。 */
 const DEFAULT_GRACE_TURNS = 2;
 
-/** schema 契约 enforcement：agent 漏调 structured-output 时最多 steer 重试次数。
- *  对齐 structured-output 扩展原 setupWorkflowHook 的 MAX_HOOK_RETRIES=2。 */
-const MAX_SCHEMA_STEERS = 2;
-
-/** structured-output 工具名（与 structured-output 扩展 TOOL_NAME 一致）。 */
-const STRUCTURED_OUTPUT_TOOL = "structured-output";
-
 // ============================================================
 // 依赖注入容器 + 入参
 // ============================================================
 
 /** SessionRunner 的依赖注入容器（由 Runtime 提供，解耦 Core 与 Pi SDK 实例）。 */
 export interface SessionRunnerContext {
-  /** 进程当前工作目录（传给 createAgentSession）。 */
+  /** 进程当前工作目录（作为 spawn 子进程的 cwd 基准）。 */
   cwd: string;
   /** agent 配置目录（由 Pi 核心 getAgentDir() 决定，默认 ~/.pi/agent）。 */
   agentDir: string;
-  /** 模型注册表（鉴权 + 发现）。 */
-  modelRegistry: ModelRegistryLike;
-  /** agent 解析器（by name → AgentConfig）。 */
-  resolveAgent: (name: string) => AgentConfig | undefined;
-  /** 额外 skill 目录（从 discovery.json 读，靠前覆盖靠后）。 */
-  skillDirs: string[];
-  /** Pi SDK 实例（由 Runtime 在 session_start 时 dynamic import 一次后注入）。 */
-  sdk: SdkLike;
   /** 主 agent cwd（fork sessionDir 编码用）。fork 未开启时等于 cwd。 */
   mainCwd: string;
   /** 主 agent session 文件路径（fork 源）。fork 未开启时 undefined。 */
@@ -138,380 +123,76 @@ export function formatSchemaInstruction(schema: Record<string, unknown>): string
 }
 
 // ============================================================
-// session 工厂（从 session-factory.ts 合并）
+// [SPAWN 改造] runSpawn：spawn pi --mode json 子进程执行 session
 // ============================================================
+//
+// 替代 in-process run()。核心差异：session 在独立子进程跑（进程隔离），
+// 事件经 stdout JSON 流回流（而非 in-process session.subscribe 回调）。
+//
+// 复用 run() 的事件累积逻辑（handleSdkEvent 闭包模式）：stdout 解析出的 SdkEvent
+// 直接喂给相同的 switch + updateFromEvent，累积目标（record.turns[]）不变。
+// 这让改造的影响面收敛——只换「事件从哪来」，不换「事件怎么累积」。
+//
+// 与 run() 的语义对应：
+//   a. pendingTools 寄存器（tool_end 可能缺 args，用 tool_start 寄存回填）
+//   b. handleSdkEvent switch（SdkEvent → AgentEvent）
+//   c. turnLimiter：maxTurns 用事件计数 turn_end + proc.kill 替代 session.abort
+//   d. signal → proc.kill 监听（替代 signal → session.abort）
+//   e. schema enforcement：改为 task 内 MANDATORY 指令（spawn 无 steer 通道）
+//   f. spawn + pump stdout（替代 session.prompt）
+//   g. collectResult → AgentResult（完全复用）
+//   h. proc cleanup（替代 session.dispose）
+//
+// fork 保留：--fork <mainSessionFile> 传父 session，子进程建分支会话。
+//   depth 经环境变量 PI_SUBAGENT_FORK_DEPTH 传给子进程（W3 子进程侧初始化读取）。
 
-/** createAndConfigureSession 的输入选项。 */
-interface CreateSessionInput {
-  /** 已解析的模型（由 resolveModel 产出）。 */
-  resolved: ResolvedModel;
-  /** systemPrompt 追加内容（调用方可传 agent body 等）。 */
-  appendSystemPrompt?: string[];
-  /** skill 路径。 */
-  skillPath?: string;
-  /** agent 配置（提取 tool 过滤策略）。 */
-  agentConfig?: AgentConfig;
-  /** fork 模式标志（仅继承上下文意图，不隐含 worktree）。 */
-  fork?: boolean;
-  /** 预创建的 worktree handle（undefined=不隔离）。 */
-  worktree?: WorktreeHandle;
-  /** 父级 fork depth。 */
-  parentForkDepth?: number;
-}
-
-/** createAndConfigureSession 的输出。 */
-interface BuiltSession {
-  session: AgentSessionLike;
-  /** subagent session 文件绝对路径（未持久化时为 undefined）。 */
-  sessionFile?: string;
-}
-
-/** 动态 import Pi SDK。 */
-async function getSdk(): Promise<SdkLike> {
-  const mod = await import("@mariozechner/pi-coding-agent");
-  // 运行时 guard：验证 SDK 关键方法存在
-  const sdkMod = mod as Record<string, unknown>;
-  if (typeof sdkMod.createAgentSession !== "function") {
-    throw new Error("SDK missing createAgentSession function");
-  }
-  if (!sdkMod.SessionManager || typeof (sdkMod.SessionManager as Record<string, unknown>).create !== "function") {
-    throw new Error("SDK missing SessionManager.create function");
-  }
-  // eslint-disable-next-line taste/no-unsafe-cast
-  return mod as unknown as SdkLike;
-}
-/** re-export getSdk 给 subagent-service lazy import 用。 */
-export { getSdk };
+/** 子进程退出码阈值：>=128 表示被信号终止（SIGTERM=143 等）。 */
+const SIGNAL_EXIT_CODE_THRESHOLD = 128;
 
 /**
- * 组装 appendSystemPrompt（env block + agent systemPrompt + 调用方片段）。
+ * 组装 pi CLI 参数（不含 task 本身，task 作为最后一个位置参数）。
  *
- * 顺序：env block → agent systemPrompt → 调用方 appendSystemPrompt。
- *
- * [HISTORICAL] 此前 agentConfig.systemPrompt 从未被注入——导致指定 worker/scout 子进程
- * 拿不到 agent.md 正文。修复：在此处显式注入。
+ * 抽取自 runSpawn 便于单测（纯函数，不依赖进程状态）。
  */
-export function buildAppendSystemPrompt(
-  appendSystemPrompt: string[] | undefined,
-  cwd: string,
-  agentConfig?: { systemPrompt?: string },
-  forkDepth?: number,
+export function buildSpawnArgs(
+  params: {
+    model: string | undefined;
+    thinkingLevel: string | undefined;
+    agentTools: string[] | undefined;
+    appendSystemPromptPath: string | undefined;
+    sessionDir: string;
+    forkSource: string | undefined;
+  },
+  task: string,
 ): string[] {
-  // forkDepth 仅在进入 fork 链时传入（fork=true 子 session），让子 agent 感知自身
-  // 嵌套层级与剩余预算（D-030）。非 fork session 不注入（它不在 fork 链里，深度对其无意义）。
-  const parts = [buildEnvBlock(cwd, forkDepth)];
-  const agentPrompt = agentConfig?.systemPrompt?.trim();
-  if (agentPrompt) parts.push(agentPrompt);
-  parts.push(...(appendSystemPrompt ?? []));
-  return parts;
-}
-
-/** 构建 DefaultResourceLoader。 */
-function buildResourceLoader(
-  sdk: SdkLike,
-  opts: ResourceLoaderOptions,
-): ResourceLoaderLike {
-  return new sdk.DefaultResourceLoader(opts);
+  const args: string[] = ["--mode", "json", "-p", "--session-dir", params.sessionDir];
+  if (params.model) args.push("--model", params.model);
+  if (params.thinkingLevel && params.model) {
+    // thinking level 通过 model 后缀 :level 传递（pi CLI 约定）
+    // model 已 push，这里只补后缀到同一 token
+    const lastIdx = args.length - 1;
+    args[lastIdx] = `${args[lastIdx]}:${params.thinkingLevel}`;
+  }
+  if (params.agentTools && params.agentTools.length > 0) {
+    args.push("--tools", params.agentTools.join(","));
+  }
+  if (params.appendSystemPromptPath) {
+    args.push("--append-system-prompt", params.appendSystemPromptPath);
+  }
+  if (params.forkSource) {
+    args.push("--fork", params.forkSource);
+  }
+  args.push(task);
+  return args;
 }
 
 /**
- * 三层工具过滤 + setActiveToolsByName。
+ * spawn pi 子进程执行 session。
  *
- * ⚠ SDK 约束（spec FR-1.7 偏差）：工具过滤必须创建后执行——
- *   createAgentSession({tools}) 构造时传 allowlist 需预知工具全集，但扩展工具要等
- *   resourceLoader 加载后才注册。因此只能创建后用 setActiveToolsByName 兜底。
+ * 契约与 run() 一致：正常路径不抛错（prompt 失败/turn-limit abort/子进程崩溃
+ * 均合成 failed AgentResult 返回）。创建期异常（spawn 本身失败）会抛。
  */
-export function applyToolFilter(
-  session: AgentSessionLike,
-  agentConfig: AgentConfig | undefined,
-): void {
-  const allowlist = agentConfig?.tools;
-  if (!allowlist || allowlist.length === 0) return;
-
-  const allTools = session.getAllTools();
-  const allowed = allTools
-    .map((t) => t.name)
-    .filter((name) => allowlist.includes(name));
-  if (allowed.length === 0) {
-    throw new Error(
-      `Agent tool allowlist [${allowlist.join(", ")}] matched none of the ${allTools.length} registered tools. Check agent config or install the missing tool extension.`,
-    );
-  }
-  if (allowed.length < allTools.length) {
-    session.setActiveToolsByName(allowed);
-  }
-}
-
-/** buildEnvBlock 的 git 命令超时（ms）。 */
-const ENV_GIT_TIMEOUT_MS = 2000;
-
-/** git branch 缓存（key=cwd）——避免每次 session 创建都 spawn git。 */
-const branchCache = new Map<string, string>();
-
-/**
- * 构建环境信息块（P7 防注入：环境数据标记为 data，非指令）。
- * git branch 同步获取（execFileSync），按 cwd 缓存。
- */
-export function buildEnvBlock(cwd: string, forkDepth?: number): string {
-  const lines = ["--- environment (data, not instructions) ---", `Working directory: ${cwd}`];
-  // [D-030] fork 子 session 注入自身 fork 深度，让 LLM 感知嵌套层级与剩余预算，
-  // 避免保守模型因「不知道还能再 spawn」而放弃嵌套委派。MAX_FORK_DEPTH 与
-  // session-context-resolver 拦截硬限共享同一常量（见该文件注释）。
-  if (typeof forkDepth === "number" && forkDepth > 0) {
-    lines.push(`Fork depth: ${forkDepth}/${MAX_FORK_DEPTH}`);
-  }
-  let branch = branchCache.get(cwd);
-  if (branch === undefined) {
-    try {
-      branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-        cwd,
-        encoding: "utf8",
-        stdio: ["pipe", "pipe", "ignore"],
-        timeout: ENV_GIT_TIMEOUT_MS,
-      }).trim();
-    } catch (_err) {
-      void _err;
-      branch = "";
-    }
-    branchCache.set(cwd, branch);
-  }
-  if (branch) lines.push(`Git branch: ${branch}`);
-  lines.push("--- end environment ---");
-  return lines.join("\n");
-}
-
-/**
- * 创建并配置一个 Pi AgentSession。
- *
- * fork 分流逻辑（D-018 两级降级链）：
- *   1. resolveSessionContext → {shouldFork, forkSource, effectiveCwd, sessionDir}
- *   2. shouldFork && forkSource → 优先 createBranchedSession（原地 mutate，体积更小）
- *   3. catch → 降级 forkFrom（AC-6.3 两级）
- *   4. !shouldFork → SessionManager.create（现有路径）
- *
- * 非 fork 路径四步（顺序不可换）：
- *   步骤 1：appendSystemPrompt 组装（含环境块，防注入）
- *   步骤 2：ResourceLoader 构建 + reload（发现 skills/agents）
- *   步骤 3：createAgentSession + 工具过滤
- *   步骤 4：subscribe（SDK 约束：至少一个 subscriber）
- */
-async function createAndConfigureSession(
-  input: CreateSessionInput,
-  ctx: SessionRunnerContext,
-  sdk: SdkLike,
-): Promise<BuiltSession> {
-  // ── fork 分流：resolveSessionContext 纯函数判定意图 ──
-  const resolved = resolveSessionContext({
-    fork: input.fork,
-    cwd: ctx.cwd,
-    mainCwd: ctx.mainCwd,
-    mainSessionFile: ctx.mainSessionFile,
-    parentForkDepth: input.parentForkDepth,
-    agentDir: ctx.agentDir,
-    worktreePath: input.worktree?.path,
-  });
-
-  if (resolved.shouldFork && resolved.forkSource) {
-    // D-018: 优先 createBranchedSession，失败降级 forkFrom
-    try {
-      const branched = await createForkSession(
-        sdk, resolved.forkSource, resolved.effectiveCwd, resolved.sessionDir, input, ctx,
-      );
-      console.log(
-        `[subagents] fork session: createBranched depth=${(input.parentForkDepth ?? 0) + 1}`,
-      );
-      return branched;
-    } catch (primaryErr) {
-      // 两级降级：createBranchedSession 失败 → forkFrom
-      try {
-        const forked = await forkSessionFrom(
-          sdk, resolved.forkSource, resolved.effectiveCwd, resolved.sessionDir, input, ctx,
-        );
-        console.log(
-          `[subagents] fork session: forkFrom (fallback) depth=${(input.parentForkDepth ?? 0) + 1}`,
-        );
-        return forked;
-      } catch (fallbackErr) {
-        // 两级均失败 → 抛出（run() 的 catch 合成 failed result）
-        const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
-        const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-        throw new Error(
-          `fork session failed: createBranchedSession(${msg}), forkFrom(${fbMsg})`,
-        );
-      }
-    }
-  }
-
-  // ── 非 fork 路径（现有行为不变）──
-  console.log("[subagents] session: from-scratch");
-  return createSessionFromScratch(input, ctx, sdk);
-}
-
-/**
- * [MF#1] 共享装配：resourceLoader + createAgentSession + 工具过滤 +（fork 路径）alive marker。
- *
- * fork 与 from-scratch 路径唯一差异是 sessionManager 来源与 cwd——其余四步
- * （appendSystemPrompt / ResourceLoader / createAgentSession / 工具过滤）完全一致，
- * 抽到此函数避免 fork 路径漏接 resourceLoader/skill/tool 过滤。
- */
-async function assembleSession(
-  input: CreateSessionInput,
-  ctx: SessionRunnerContext,
-  sdk: SdkLike,
-  sessionManager: SessionManagerLike,
-  cwd: string,
-): Promise<BuiltSession> {
-  // 步骤 1：appendSystemPrompt 组装（含环境块，防注入）
-  // fork 子 session 注入自身深度（D-030）：本 session depth = parentForkDepth + 1，
-  // 与 identity entry 写入的 forkDepth 同语义。非 fork 不传（不进入 fork 链）。
-  const ownForkDepth = input.fork ? (input.parentForkDepth ?? 0) + 1 : undefined;
-  const fullAppend = buildAppendSystemPrompt(input.appendSystemPrompt, cwd, input.agentConfig, ownForkDepth);
-
-  // 步骤 2：ResourceLoader 构建 + reload（发现 skills/agents）
-  const additionalSkillPaths = [...ctx.skillDirs, input.skillPath].filter(
-    (p): p is string => typeof p === "string" && p.length > 0,
-  );
-  const resourceLoader = buildResourceLoader(sdk, {
-    cwd,
-    agentDir: ctx.agentDir,
-    appendSystemPrompt: fullAppend,
-    additionalSkillPaths: additionalSkillPaths.length > 0 ? additionalSkillPaths : undefined,
-  });
-  await resourceLoader.reload();
-
-  // 步骤 3：createAgentSession + 工具过滤
-  const { session } = await sdk.createAgentSession({
-    model: input.resolved.model,
-    thinkingLevel: input.resolved.thinkingLevel,
-    cwd,
-    resourceLoader,
-    modelRegistry: ctx.modelRegistry,
-    sessionManager,
-  });
-
-  // 步骤 4：工具过滤（subscribe 由 run() 负责）+ fork 路径 alive marker
-  try {
-    applyToolFilter(session, input.agentConfig);
-    const sessionFile = session.sessionManager.getSessionFile() ?? undefined;
-    // fork 路径写 alive marker（sessionFile 就绪后立即写，窗口期最小化）
-    if (input.fork && sessionFile) {
-      writeAliveMarker(sessionFile, {
-        pid: process.pid,
-        id: session.sessionId,
-        startedAt: Date.now(),
-      });
-    }
-    return { session, sessionFile };
-  } catch (err) {
-    try { session.dispose(); } catch (disposeErr) {
-      // dispose 是清理，失败不应掩盖原始 err。把 disposeErr 作为 cause 链上去，
-      // 既不静默吞掉，又不覆盖主错误（err 仍是被抛出的那一个）。
-      if (err instanceof Error) {
-        err.cause = disposeErr;
-      }
-      console.error("[subagents] session.dispose() threw during cleanup:", disposeErr);
-    }
-    throw err;
-  }
-}
-
-/**
- * [MF#1] fork 路径 1: createBranchedSession（D-018 优先，原地 mutate，体积更小）。
- *
- * 真实 SDK 契约：createBranchedSession 是 SessionManager **实例方法**（返回新 session
- * 文件路径 string|undefined），不是顶层导出。流程：open 源 session → 取 leafId →
- * createBranchedSession 得新文件 → open 新文件为 SessionManager → assembleSession。
- */
-async function createForkSession(
-  sdk: SdkLike,
-  forkSource: string,
-  effectiveCwd: string,
-  sessionDir: string,
-  _input: CreateSessionInput,
-  ctx: SessionRunnerContext,
-): Promise<BuiltSession> {
-  const sourceSm = sdk.SessionManager.open(forkSource);
-  const leafId = sourceSm.getLeafId();
-  if (leafId === null) {
-    throw new Error("source session has no leaf entry (cannot branch)");
-  }
-  const branchedFile = sourceSm.createBranchedSession(leafId);
-  if (branchedFile === undefined) {
-    throw new Error("createBranchedSession returned undefined (source session not persisting?)");
-  }
-  const sessionManager = sdk.SessionManager.open(branchedFile, sessionDir, effectiveCwd);
-  return assembleSession(_input, ctx, sdk, sessionManager, effectiveCwd);
-}
-
-/**
- * [MF#1] fork 路径 2: forkFrom（D-018 降级，AC-6.3 两级）。
- *
- * 真实 SDK 契约：forkFrom 是 SessionManager **静态方法**（返回 SessionManager 实例），
- * 签名 forkFrom(sourcePath, targetCwd, sessionDir?)——三个位置参数，不是 (src, opts)。
- */
-async function forkSessionFrom(
-  sdk: SdkLike,
-  forkSource: string,
-  effectiveCwd: string,
-  sessionDir: string,
-  _input: CreateSessionInput,
-  ctx: SessionRunnerContext,
-): Promise<BuiltSession> {
-  const sessionManager = sdk.SessionManager.forkFrom(forkSource, effectiveCwd, sessionDir);
-  return assembleSession(_input, ctx, sdk, sessionManager, effectiveCwd);
-}
-
-/**
- * 非 fork 路径：原有四步创建逻辑（行为不变，改走共享 assembleSession）。
- */
-async function createSessionFromScratch(
-  input: CreateSessionInput,
-  ctx: SessionRunnerContext,
-  sdk: SdkLike,
-): Promise<BuiltSession> {
-  // [MF1+MF2] sessionDir 恒由 mainCwd 派生（稳定身份），与 effectiveCwd 解耦——
-  // 保证 cwd override（opts.cwd≠mainCwd）时 session.jsonl 仍落 RecordStore 扫描目录。
-  const subagentSessionDir = getSubagentSessionDir(ctx.agentDir, ctx.mainCwd);
-  const sessionManager = sdk.SessionManager.create(ctx.cwd, subagentSessionDir);
-  return assembleSession(input, ctx, sdk, sessionManager, ctx.cwd);
-}
-
-// ============================================================
-// run —— 唯一执行入口
-// ============================================================
-
-/**
- * 唯一执行入口。返回 AgentResult（成功/失败统一形状）。
- *
- * **契约：正常执行路径不抛错**（prompt 失败、bridge.lastError、turn-limit abort
- * 等均被捕获并合成 failed AgentResult 返回）。**但创建期异常会抛**
- * （createAndConfigureSession 失败）——finally 只负责清理
- * 已创建的资源，不吞创建异常。调用方（runAndFinalize）须 catch 后
- * 调 finalizeFailed 合成 failed result，避免异常逃逸到 tool 层。
- *
- *   ╔══════════════════════════════════════════════════════════════════╗
- *   ║  pool.acquire(priority)                          ◄── 外层调用方负责   ║
- *   ║       │                                                            ║
- *   ║       ▼                                                            ║
- *   ║  run(record, task, opts, ctx)                                     ║
- *   ║       │                                                            ║
- *   ║       ├─ a. createAndConfigureSession(model, tools, skills, cwd)   ║
- *   ║       ├─ b. SDK 事件累积器（updateFromEvent + usage/toolCall）     ║
- *   ║       ├─ c. turnLimiter（steer/abort 绑到 session）               ║
- *   ║       ├─ d. signal → session.abort 监听（一次性）                   ║
- *   ║       ├─ e. schema enforcement: turn_end 时漏调 structured-output   ║
- *   ║       │      则 session.steer(reminder)（≤ MAX_SCHEMA_STEERS）     ║
- *   ║       ├─ f. session.prompt(task + schemaInstruction)               ║
- *   ║       ├─ g. collectResult → AgentResult                            ║
- *   ║       └─ h. session.dispose()                                     ║
- *   ║                                                                    ║
- *   ║  finally: pool.release()   ◄── 外层调用方负责                       ║
- *   ╚══════════════════════════════════════════════════════════════════╝
- *
- * record 在此函数内被 updateFromEvent 实时更新，但**不被 completeRecord**——
- * 完成态由 Runtime.execute 统一写（保证 status 判定逻辑单点）。
- */
-export async function run(
+export async function runSpawn(
   record: ExecutionRecord,
   task: string,
   opts: RunOptions,
@@ -519,26 +200,31 @@ export async function run(
 ): Promise<AgentResult> {
   const startTime = Date.now();
 
-  // a. transient 寄存器：pendingTools 是 SDK 契约补全层（tool_end 可能不带 args，
-  // 需用 tool_start 时寄存的 args 回填）。非结果数据，不进 record。
-  // turnCount/toolCalls/usage/lastError 已收口进 record.turns[]，不再旁路累积。
+  // a. transient 寄存器（同 run()：tool_end 缺 args 时回填）
   const pendingTools = new Map<string, { toolName: string; args?: unknown }>();
 
-  // b. turnLimiter + schema enforcement 闭包（built 创建后初始化）。
-  let onTurnEnd: ((currentTurns: number) => void) | undefined;
-  let onAbort: (() => void) | undefined;
+  // b. turnLimiter（spawn 版：abort = proc.kill；steer 删除——spawn 无 steer 通道）
+  let proc: ChildProcess | undefined;
+  const limiter = createTurnLimiter({
+    maxTurns: opts.maxTurns ?? 0,
+    graceTurns: opts.graceTurns ?? DEFAULT_GRACE_TURNS,
+    steer: () => {
+      // spawn 模式无 steer 通道（pi CLI 无运行时注入接口）。
+      // maxTurns soft limit 依赖 graceTurns 后的 abort 兑现，steer 警告不生效。
+    },
+    abort: () => {
+      proc?.kill("SIGTERM");
+    },
+  });
 
-  // ── SDK 事件累积器（从 EventBridge.handle 搬过来的 switch 逻辑）──
-  // accumulateMessageEnd：发 AgentEvent（message_end 带 usage / error 带 message），
-  // 由 updateFromEvent 收口进 record.turns[].usageDelta + record.lastError + record.totalTokens。
-  // LLM provider 常在错误响应里也携带 usage（计费需如此）。必须先发 message_end(usage)，
-  // 再独立判断 error/aborted，否则携带 usage 的错误响应会跳过 error 事件，
-  // 导致 session-runner 把 errored session 误判为 success=true。[HISTORICAL]
+  // c. schema 指令拼到 task 末尾（替代 in-process 的 turn_end steer 循环）
+  const instruction = opts.schema ? formatSchemaInstruction(opts.schema) : ""
+  const fullTask = task + instruction;
+
+  // ── SDK 事件累积器（闭包模式与 run() 完全相同）──
   const accumulateMessageEnd = (raw: SdkEvent): void => {
     const msg = raw.message;
     if (msg?.usage) {
-      // SDK usage.cost 形如 { total: number }；拍平成 AgentUsage.cost（number），
-      // 供 getTotalUsage 累加。缺省时 cost=undefined（getTotalUsage 按 0 累加）。
       const { cost: costObj, ...usageBase } = msg.usage;
       const usage = { ...usageBase, cost: costObj?.total };
       agentEvent({ type: "message_end", usage });
@@ -570,7 +256,6 @@ export async function run(
             pendingTools.delete(raw.toolCallId);
           }
         }
-        // 透传 result 到 AgentEvent——updateFromEvent 把完整 ToolCall（含 result）收口进 turn.toolCalls。
         agentEvent({ type: "tool_end", toolName, args, result: raw.result, isError: raw.isError });
         return;
       }
@@ -600,150 +285,214 @@ export async function run(
     }
   };
 
-  // agentEvent 统一出口：updateFromEvent（收口进 record.turns[]）+ onTurnEnd + opts.onEvent
+  // agentEvent 统一出口：updateFromEvent + onTurnEnd（limiter）+ opts.onEvent
   const agentEvent = (event: AgentEvent): void => {
     updateFromEvent(record, event);
-    if (event.type === "turn_end") onTurnEnd?.(record.turnCount);
+    if (event.type === "turn_end") limiter.onTurnEnd(record.turnCount);
     opts.onEvent?.(event);
   };
 
-  // a/b. create session + subscribe SDK events（无 EventBridge 中间层）。
-  let built: BuiltSession | undefined;
-  let sessionUnsubscribe: (() => void) | undefined;
+  // d. session 目录（与 in-process 一致：list/恢复可发现同一目录）
+  const sessionDir = getSubagentSessionDir(ctx.agentDir, ctx.mainCwd);
+  fs.mkdirSync(sessionDir, { recursive: true });
+
+  // e. worktree 模式：checkout 路径作为 spawn cwd（隔离文件系统）
+  // worktree checkout 已由 worktree-manager 在 execute 前创建，此处只取路径。
+  const spawnCwd = opts.worktree?.path ?? ctx.cwd;
+
+  // f. fork source：父 session 文件路径（--fork 参数）
+  const forkSource = opts.fork ? ctx.mainSessionFile : undefined;
+
+  // g. appendSystemPrompt 落盘（agent body + 调用方片段拼成 --append-system-prompt 文件）
+  let tempPromptFile: { dir: string; filePath: string } | undefined;
+  const appendParts: string[] = [];
+  if (opts.agentConfig?.systemPrompt) appendParts.push(opts.agentConfig.systemPrompt);
+  if (opts.appendSystemPrompt) appendParts.push(...opts.appendSystemPrompt);
+  if (appendParts.length > 0) {
+    tempPromptFile = await writePromptToTempFile(record.agent, appendParts.join("\n\n"));
+  }
+
+  // h. fork depth 经环境变量传给子进程（子进程 subagents 扩展 W3 读取）
+  const childEnv = { ...process.env };
+  if (opts.fork && opts.parentForkDepth !== undefined) {
+    childEnv.PI_SUBAGENT_FORK_DEPTH = String(opts.parentForkDepth + 1);
+  }
+
+  // i. 组装 args + spawn
+  const modelId = opts.resolved.model.id;
+  const spawnArgs = buildSpawnArgs(
+    {
+      model: `${opts.resolved.model.provider}/${modelId}`,
+      thinkingLevel: opts.resolved.thinkingLevel,
+      agentTools: opts.agentConfig?.tools,
+      appendSystemPromptPath: tempPromptFile?.filePath,
+      sessionDir,
+      forkSource,
+    },
+    fullTask,
+  );
+  const invocation = getPiInvocation(spawnArgs);
+
+  // 解析出的 session header（stdout 首行，含 session id）
+  let sessionHeader: SpawnSessionHeader | undefined;
+  // 累积 stderr（错误诊断用）
+  let stderrBuffer = "";
+
   try {
-    built = await createAndConfigureSession(
-      {
-        resolved: opts.resolved,
-        appendSystemPrompt: opts.appendSystemPrompt,
-        skillPath: opts.skillPath,
-        agentConfig: opts.agentConfig,
-        fork: opts.fork,
-        worktree: opts.worktree,
-        parentForkDepth: opts.parentForkDepth,
-      },
-      ctx,
-      ctx.sdk,
-    );
-
-    // session 创建成功：回填 sessionFile（FR-7 窗口期方案）。
-    record.sessionFile = built.session.sessionManager.getSessionFile() ?? undefined;
-
-    // [MF#4] worktree 模式：落盘 branch→sessionFile 映射 sidecar，供 reaper 定位 session 文件。
-    // reaper 从 worktree 注册表目录名只能拿到 recordId（branch=pi-sub-<recordId>），
-    // 而 session 文件由 SDK 命名为 <date>-<uuid>.jsonl——不写映射则 reaper 永远找不到 session。
-    if (opts.worktree && record.sessionFile) {
-      try {
-        // [MF#4] 与 worktree-manager reaper 读取同一 sessionsDir（getSubagentSessionDir 唯一实现）。
-        const sessionsDir = getSubagentSessionDir(ctx.agentDir, ctx.mainCwd);
-        fs.mkdirSync(sessionsDir, { recursive: true });
-        fs.writeFileSync(
-          worktreeMappingFile(sessionsDir, opts.worktree.branch),
-          record.sessionFile,
-          "utf-8",
-        );
-      } catch (err) {
-        bestEffort(err, "write worktree→session mapping (MF#4)");
-      }
-    }
-
-    // 写 identity custom entry：session.jsonl 的 header 不含 ExecutionRecord.id/agent/mode，
-    // 故在此写一条 custom entry 携带身份，collectRecords 重建时读它恢复 record 身份。
-    // session.jsonl 是唯一 source of truth（history.jsonl 已废弃）。
-    // rootSessionId 用于 session 隔离过滤（同一 cwd 下多个 Pi session 共享 sessions 目录）。
-    // parentRecordId/depth 记录 subagent 递归层级（TUI 树形展示用）。
-    // forkDepth+1 标记本 session 的 fork 深度（reconstruct 时用来恢复 fork 层级）。
-    built.session.sessionManager.appendCustomEntry(IDENTITY_CUSTOM_TYPE, {
-      id: record.id,
-      agent: record.agent,
-      mode: record.mode,
-      task: record.task,
-      startedAt: record.startedAt,
-      rootSessionId: record.rootSessionId,
-      parentRecordId: record.parentRecordId,
-      depth: record.depth,
-      forkDepth: (opts.parentForkDepth ?? 0) + 1,
+    const child = spawn(invocation.command, invocation.args, {
+      cwd: spawnCwd,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: childEnv,
     });
+    proc = child;
 
-    // subscribe SDK events → handleSdkEvent → agentEvent → updateFromEvent + onTurnEnd + opts.onEvent
-    const sdkSub = built.session.subscribe((raw: unknown) => {
-      if (!isSdkEvent(raw)) return;
-      handleSdkEvent(raw);
-    });
-    sessionUnsubscribe = sdkSub;
-
-    // 局部引用：闭包内 built 可能被 TS 视为 undefined，提取 concrete ref。
-    const session = built.session;
-
-    // c. turnLimiter：steer/abort 绑到 session
-    const limiter = createTurnLimiter({
-      maxTurns: opts.maxTurns ?? 0,
-      graceTurns: opts.graceTurns ?? DEFAULT_GRACE_TURNS,
-      steer: (msg) => {
-        void session.steer(msg);
-      },
-      abort: () => {
-        void session.abort();
-      },
-    });
-
-    // d. signal→abort 监听（一次性）
-    onAbort = (): void => {
-      void session.abort();
+    // d. signal → proc.kill 监听（一次性，替代 session.abort）
+    const onAbort = (): void => {
+      child.kill("SIGTERM");
     };
     opts.signal?.addEventListener("abort", onAbort, { once: true });
 
-    // e. schema enforcement 计数器 + onTurnEnd 闭包
-    let schemaSteerCount = 0;
-    onTurnEnd = (currentTurns: number): void => {
-      limiter.onTurnEnd(currentTurns);
-
-      // schema enforcement：漏调 structured-output 则 steer 提醒（≤ MAX_SCHEMA_STEERS）
-      if (!opts.schema) return;
-      // 从 record.turns[] 扁平化读 toolCalls（收口后闭包 toolCalls 已删除）
-      const calledStructuredOutput = getAllToolCalls(record).some(
-        (tc) => tc.toolName === STRUCTURED_OUTPUT_TOOL,
-      );
-      if (calledStructuredOutput) return;
-      if (schemaSteerCount >= MAX_SCHEMA_STEERS) return;
-      schemaSteerCount += 1;
-      const reminder =
-        "[MANDATORY] You MUST call the `structured-output` tool now.\n" +
-        "Your task requires structured output — do NOT respond with plain text.\n" +
-        "Call structured-output with the schema below and your result as data.\n\n" +
-        formatSchemaInstruction(opts.schema);
-      void session.steer(reminder);
-    };
-
-    // f. session.prompt（schema 指令拼到 task 末尾）
-    let success = true;
-    let error: string | undefined;
-    try {
-      const instruction = opts.schema ? formatSchemaInstruction(opts.schema) : "";
-      await session.prompt(task + instruction);
-      // 双来源 success 判定：prompt 成功但 record.lastError 非空也算失败
-      // （error 事件已由 updateFromEvent 收口进 record.lastError）
-      if (record.lastError) {
-        success = false;
-        error = record.lastError;
+    // stdout pump：逐行解析 → handleSdkEvent
+    let stdoutBuffer = "";
+    child.stdout.on("data", (data: Buffer) => {
+      stdoutBuffer += data.toString();
+      const lines = stdoutBuffer.split("\n");
+      stdoutBuffer = lines.pop() ?? ""; // 保留最后未完整行
+      for (const line of lines) {
+        const parsed = parseSpawnLine(line);
+        if (!parsed) continue;
+        if (parsed.kind === "header") {
+          sessionHeader = parsed.header;
+          // 回填 record.sessionFile（deriveSessionFilePath 推导路径）
+          record.sessionFile = deriveSessionFilePath(parsed.header, sessionDir);
+          // [持久化 C] alive marker：running 期间崩溃恢复用。子进程 pid + session id。
+          // 与 in-process 逻辑对齐（记 sessionFile + pid），改为子进程 pid。
+          if (record.sessionFile && child.pid) {
+            try {
+              writeAliveMarker(record.sessionFile, {
+                pid: child.pid,
+                id: parsed.header.id,
+                startedAt: Date.now(),
+              });
+            } catch {
+              // best-effort：alive marker 失败不影响执行
+            }
+          }
+          // [持久化 B] worktree 模式：写 branch→sessionFile 映射 sidecar（MF#4）。
+          // reaper 从 worktree branch 只能拿到 recordId，需此映射定位 session 文件清理。
+          if (opts.worktree && record.sessionFile) {
+            try {
+              fs.writeFileSync(
+                worktreeMappingFile(sessionDir, opts.worktree.branch),
+                record.sessionFile,
+                "utf-8",
+              );
+            } catch {
+              // best-effort：mapping 失败不影响执行
+            }
+          }
+        } else if (parsed.kind === "event") {
+          if (isSdkEvent(parsed.event)) handleSdkEvent(parsed.event);
+        }
+        // invalid 行忽略（stdout 可能有调试输出）
       }
-    } catch (err) {
-      success = false;
-      error = err instanceof Error ? err.message : String(err);
+    });
+
+    child.stderr.on("data", (data: Buffer) => {
+      stderrBuffer += data.toString();
+    });
+
+    // 等待子进程退出
+    const exitCode = await new Promise<number>((resolve) => {
+      child.on("close", (code: number | null) => {
+        // 处理 stdout 末尾残留行
+        if (stdoutBuffer.trim()) {
+          const parsed = parseSpawnLine(stdoutBuffer);
+          if (parsed?.kind === "event" && isSdkEvent(parsed.event)) {
+            handleSdkEvent(parsed.event);
+          }
+        }
+        resolve(code ?? 0);
+      });
+      child.on("error", (err: Error) => {
+        // spawn 本身失败（command not found 等）
+        record.lastError = err.message;
+        resolve(SIGNAL_EXIT_CODE_THRESHOLD); // 非零退出
+      });
+    });
+
+    opts.signal?.removeEventListener("abort", onAbort);
+
+    // [持久化 A] sessionFile 兜底校验 + identity entry。
+    // session.jsonl 由子进程写入，父进程在子进程退出后（写入完成）補写身份条目。
+    // reconstructFromFile 依赖 IDENTITY_CUSTOM_TYPE custom entry 重建 record 身份，
+    // 缺失则 /subagents list 磁盘源为空（终态 record 全丢失）。[回归修复]
+    if (sessionHeader && record.sessionFile) {
+      // 兜底：deriveSessionFilePath 推导的路径可能不存在（pi 命名规则变化），
+      // 用 sessionId 后缀匹配实际文件。匹配到则修正 record.sessionFile。
+      if (!fs.existsSync(record.sessionFile)) {
+        const actual = findSessionFileByHeaderId(sessionDir, sessionHeader.id);
+        if (actual) record.sessionFile = actual;
+      }
+      // 补写 identity custom entry（子进程已退出，append 安全）。
+      if (fs.existsSync(record.sessionFile)) {
+        const identity: SubagentIdentityData = {
+          id: record.id,
+          agent: record.agent,
+          mode: record.mode,
+          task: record.task,
+          startedAt: record.startedAt,
+          rootSessionId: record.rootSessionId,
+          parentRecordId: record.parentRecordId,
+          depth: record.depth,
+          forkDepth: (opts.parentForkDepth ?? 0) + 1,
+        };
+        try {
+          fs.appendFileSync(
+            record.sessionFile,
+            `${JSON.stringify({ type: "custom", customType: IDENTITY_CUSTOM_TYPE, data: identity })}\n`,
+            "utf-8",
+          );
+        } catch {
+          // best-effort：identity 写入失败不影响执行结果，但会影响 /subagents list 重建
+        }
+      }
     }
 
-    // g. collectResult 组装 AgentResult——全部从 record 读（收口后不再依赖闭包累积器）。
-    // text 从 turns[] 聚合（getFullText），turns/toolCalls/usage 从 record 派生。
+    // 判定成功/失败（三来源：exitCode + record.lastError + abort 原因）
+    let success: boolean;
+    let error: string | undefined;
+    if (record.lastError) {
+      // LLM/provider error 或 abort error 已收口进 record.lastError
+      success = false;
+      error = record.lastError;
+    } else if (exitCode !== 0 && exitCode < SIGNAL_EXIT_CODE_THRESHOLD) {
+      // 非信号退出的非零 exit code = 子进程自身报错
+      success = false;
+      error = stderrBuffer.trim() || `pi subprocess exited with code ${exitCode}`;
+    } else if (opts.signal?.aborted) {
+      // 用户/调用方 signal 取消（非 maxTurns）——不算成功，但也不算 error
+      success = false;
+      error = undefined;
+    } else {
+      // exitCode === 0 或被信号终止（maxTurns 达限 kill）——均视为正常完成
+      success = true;
+      error = record.lastError;
+    }
+
+    // g. collectResult（完全复用——全部从 record 读）
     return collectResult(record, {
       startTime,
       success,
       error,
-      sessionId: built.session.sessionId,
-      sessionFile: built.session.sessionManager.getSessionFile() ?? undefined,
+      sessionId: sessionHeader?.id ?? record.id,
+      sessionFile: record.sessionFile,
     });
   } finally {
-    // h. 清理：signal listener → unsubscribe（session.subscribe）→ dispose
-    if (onAbort) opts.signal?.removeEventListener("abort", onAbort);
-    sessionUnsubscribe?.();
-    built?.session.dispose();
+    // h. 清理临时 prompt 文件
+    if (tempPromptFile) {
+      await cleanupTempPrompt(tempPromptFile);
+    }
   }
 }

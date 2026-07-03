@@ -25,8 +25,8 @@ import {
 import type { AgentConfig, ModelInfo } from "../core/model-resolver.ts";
 import { getSubagentSessionDir } from "../core/path-encoding.ts";
 import { MAX_FORK_DEPTH } from "../core/session-context-resolver.ts";
-import { getSdk, run, type SessionRunnerContext } from "../core/session-runner.ts";
-import type { SdkLike, WorktreeHandle } from "../types.ts";
+import { runSpawn, type SessionRunnerContext } from "../core/session-runner.ts";
+import type { WorktreeHandle } from "../types.ts";
 import type {
   AgentEvent,
   AgentResult,
@@ -137,7 +137,6 @@ export class SubagentService {
   private readonly getMainSessionFile: (() => string | undefined) | undefined;
 
   private pi: PiLike | null = null;
-  private sdk: SdkLike | null = null;
   /** 当前 Pi session ID（session 隔离过滤用）。initSession 时注入。 */
   private sessionId: string | null = null;
   private _disposed = false;
@@ -174,8 +173,17 @@ export class SubagentService {
   initSession(init: SubagentServiceSessionInit): void {
     this.pi = init.pi;
     this.sessionId = init.sessionId;
-    // [MF#2] fork 深度改用 ALS（按 async 调用链），无需 session 级重置：主 session 链上无
-    // ALS store，getStore()?? 0 兑底为 0。
+    // [SPAWN fork depth 跨进程传递] 子进程被父 spawn 时，父通过 env
+    // PI_SUBAGENT_FORK_DEPTH 传入当前 fork 链深度。子进程 session_start 时
+    // 读取作为 forkDepthAls 基线，使后续嵌套 spawn fork 能从正确深度递增。
+    // 未设置（顶层主 session）→ 基线 0。enterWith 贯穿整个 session 生命周期。
+    const envDepth = process.env.PI_SUBAGENT_FORK_DEPTH;
+    if (envDepth !== undefined && envDepth !== "") {
+      const base = Number.parseInt(envDepth, 10);
+      if (!Number.isNaN(base) && base > 0) {
+        this.forkDepthAls.enterWith(base);
+      }
+    }
     // revive（dispose 的逆操作：/resume /fork /new 后复活）
     this._disposed = false;
     this.store.revive();
@@ -259,7 +267,7 @@ export class SubagentService {
 
     // mode 判定（业务规则归 Service，tool 层只传 wait 意图）
     const mode = this.resolveMode(opts);
-    const ctx = await this.buildSessionRunnerContext(opts.cwd);
+    const ctx = this.buildSessionRunnerContext(opts.cwd);
 
     // ── 1. IDENTITY 解析（确认 → agentConfig → resolveModel）──
     const identity = await this.resolveIdentity(opts);
@@ -484,7 +492,7 @@ export class SubagentService {
       result = await this.forkDepthAls.run(effectiveDepth, () =>
         this.execCtxAls.run(
           { recordId: record.id, depth: record.depth },
-          () => run(record, opts.task, {
+          () => runSpawn(record, opts.task, {
             resolved: identity.resolved,
             agentConfig: identity.agentConfig,
             appendSystemPrompt: opts.appendSystemPrompt,
@@ -790,18 +798,11 @@ export class SubagentService {
     }
   }
 
-  /** 构造 SessionRunnerContext。sdk lazy 获取 + 缓存。 */
-  private async buildSessionRunnerContext(overrideCwd?: string): Promise<SessionRunnerContext> {
-    if (this.sdk === null) {
-      this.sdk = await getSdk();
-    }
+  /** 构造 SessionRunnerContext（spawn 模式：无需 SDK 实例）。 */
+  private buildSessionRunnerContext(overrideCwd?: string): SessionRunnerContext {
     return {
       cwd: overrideCwd ?? this.cwd,
       agentDir: this.modelService.getAgentDir(),
-      modelRegistry: this.modelService.getModelRegistry(),
-      resolveAgent: (name: string) => this.modelService.getAgentConfig(name),
-      skillDirs: this.modelService.getDiscoverySkillDirs(),
-      sdk: this.sdk,
       mainCwd: this.cwd,
       // mainSessionFile: fork source 解析用，从 session_start 缓存获取。
       mainSessionFile: this.getMainSessionFile?.() ?? undefined,

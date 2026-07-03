@@ -11,7 +11,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { getCurrentActivity, getEventLog, markReconstructedStatus, snapshot as toSnapshot } from "../../core/execution-record.ts";
+import { getCurrentActivity, getDisplayItems, getEventLog, markReconstructedStatus, snapshot as toSnapshot } from "../../core/execution-record.ts";
 import { reconstructFromFile } from "../../core/session-reconstructor.ts";
 import type {
   ExecutionRecord,
@@ -245,6 +245,9 @@ export class RecordStore {
         // 已结束的 worktree record 的 checkout 已被 cleanup 回收，重建句柄无意义。
         // forkDepth 从 identity 重建（用于 TUI 深度标记），worktree 信息仅内存 running 时可见。
         eventLog: recon.eventLog,
+        // [STEP3] displayItems 从重建的 turns[] 派生（getDisplayItems 参数放宽为
+        // { turns }，ReconstructedRecord 满足）。终态 record 详情可看完整 text 输出。
+        displayItems: getDisplayItems(recon),
         result: recon.result,
         error: recon.error,
         sessionFile: recon.sessionFile,
@@ -315,6 +318,7 @@ export class RecordStore {
       task: r.task,
       currentActivity: getCurrentActivity(r),
       eventLog: getEventLog(r),
+      displayItems: getDisplayItems(r),
       result: r.result,
       error: r.error,
       sessionFile: r.sessionFile,

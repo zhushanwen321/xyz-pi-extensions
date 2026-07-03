@@ -20,6 +20,7 @@ import type {
   AgentResult,
   AgentUsage,
   AgentUsageTotal,
+  DisplayItem,
   ExecutionMode,
   ExecutionRecord,
   ExecutionStatus,
@@ -393,6 +394,42 @@ export function getEventLog(record: ExecutionRecord): AgentEventLogEntry[] {
 }
 
 /**
+ * [STEP3] 从 turns[] 派生 displayItems（对齐 nicobailon getDisplayItems）。
+ *
+ * 与 getEventLog 的区别：产出可渲染单元（toolCall 含完整 name+args，text 含正文），
+ * 而非离散事件。renderResult compact 用此数据 + formatToolCall 生成与 nicobailon
+ * 一致的 `→ formatToolCall` 行格式。
+ *
+ * 派生规则（与 nicobailon getDisplayItems(messages) 等价）：
+ *   - 遍历 turns[]，每个 turn：先 text（如果有），再 toolCalls
+ *   - toolCall：{ type:"toolCall", name, args, status }
+ *   - text：{ type:"text", text }（取首行，避免撑爆 compact）
+ *   - 跳过 thinking（与 nicobailon 一致，不在 compact 展示推理）
+ *
+ * 参数类型放宽为 `{ turns: readonly Turn[] }` 结构子集——ExecutionRecord 和
+ * ReconstructedRecord 都满足，磁盘重建路径（record-store）可复用此函数派生
+ * displayItems，而非给空数组（否则终态 record 详情看不到 text）。
+ */
+export function getDisplayItems(record: { turns: readonly Turn[] }): DisplayItem[] {
+  const items: DisplayItem[] = [];
+  for (const turn of record.turns) {
+    // assistant 正文（与 nicobailon 顺序一致：先 text 后 toolCall）
+    if (turn.text.length > 0) {
+      items.push({ type: "text", text: turn.text });
+    }
+    for (const tc of turn.toolCalls) {
+      items.push({
+        type: "toolCall",
+        name: tc.toolName,
+        args: (tc.args ?? {}) as Record<string, unknown>,
+        status: tc._status,
+      });
+    }
+  }
+  return items;
+}
+
+/**
  * 从 turns[] 末尾推导当前活动行（running 时）。
  *
  *   优先级：最后一个未闭合 turn 的末尾 running toolCall → thinking → text → undefined
@@ -573,6 +610,7 @@ export function project(record: ExecutionRecord): SubagentToolDetails {
     totalTokens: record.totalTokens,
     elapsedSeconds: computeElapsedSeconds(record),
     eventLog: getEventLog(record),
+    displayItems: getDisplayItems(record),
     result: record.result,
     error: record.error,
     currentActivity: getCurrentActivity(record),

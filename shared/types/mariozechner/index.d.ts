@@ -219,6 +219,7 @@ declare module "@mariozechner/pi-tui" {
 		removeChild(child: any): void;
 		clear(): void;
 		invalidate(): void;
+		render(width: number): string[];
 	}
 	export class Spacer {
 		constructor(size?: number);

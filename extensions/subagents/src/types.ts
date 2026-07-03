@@ -88,6 +88,26 @@ export interface AgentEventLogEntry {
   readonly status?: "running" | "done" | "failed";
 }
 
+/**
+ * [STEP3] displayItem：从 turns[] 派生的展示项（对齐 nicobailon getDisplayItems）。
+ *
+ * 与 eventLog 的区别：eventLog 承载离散语义事件（tool_start/tool_end/turn_end），
+ * displayItem 承载「可渲染单元」（toolCall 含完整 name+args 供 formatToolCall 格式化；
+ * text 含 assistant 正文）。renderResult compact 分支改用 displayItems 后，
+ * 行格式与 nicobailon 完全一致（→ formatToolCall）。
+ */
+export interface DisplayItem {
+  readonly type: "toolCall" | "text";
+  /** toolCall：tool 名称（bash/read/edit...）；text：无。 */
+  readonly name?: string;
+  /** toolCall：tool 原始 args（供 formatToolCall 提取路径/命令）；text：无。 */
+  readonly args?: Record<string, unknown>;
+  /** toolCall：执行状态（running 时无✓/✗标记）；text：正文文本。 */
+  readonly status?: "running" | "done" | "failed";
+  /** text：assistant 正文（compact 时取首行/截断）。 */
+  readonly text?: string;
+}
+
 // ============================================================
 // Agent 结果（一次执行的 outcome）
 // ============================================================
@@ -361,6 +381,8 @@ export interface SubagentToolDetails {
   totalTokens: number;
   elapsedSeconds: number;
   eventLog: AgentEventLogEntry[];
+  /** [STEP3] 从 turns[] 派生的展示项（对齐 nicobailon getDisplayItems）。 */
+  displayItems: DisplayItem[];
   result?: string;
   error?: string;
   /** running 时的当前活动行（tool/thinking/text 优先级）。 */
@@ -532,6 +554,8 @@ export interface SubagentRecord {
   model: string;
   thinkingLevel: string | undefined;
   eventLog: AgentEventLogEntry[];
+  /** [STEP3] 从 turns[] 派生的展示项（对齐 nicobailon getDisplayItems）。 */
+  displayItems: DisplayItem[];
   /** running 时的当前活动行（仅内存源；磁盘重建无此数据）。streaming 可观测性用。 */
   currentActivity?: { type: "tool" | "text" | "thinking"; label: string };
   result?: string;

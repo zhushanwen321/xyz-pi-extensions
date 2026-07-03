@@ -89,7 +89,7 @@ function sanitizeLine(text: string): string {
   return text.replace(/[\r\n]+/g, " ").replace(/\t/g, "  ");
 }
 
-/** 模拟 pi-tui Text 组件：将内容按 width 截断后返回单行。 */
+/** 模拟 pi-tui Text 组件。对齐真实 Text.render：按 \n 分割多行 + 截断 + pad。 */
 export class Text {
   constructor(
     private text: string = "",
@@ -109,15 +109,22 @@ export class Text {
   invalidate(): void {}
 
   render(width: number): string[] {
+    // 对齐真实 pi-tui：空文本返回空数组（不占行）
+    if (!this.text || this.text.trim() === "") {
+      return [];
+    }
     const innerW = Math.max(1, width - this.paddingX * 2);
-    const line = sanitizeLine(this.text);
-    const truncated = truncateToWidth(line, innerW);
-    const pad = " ".repeat(Math.max(0, innerW - visibleWidth(truncated)));
-    const padded = " ".repeat(this.paddingX) + truncated + pad + " ".repeat(this.paddingX);
-    const out = this.customBgFn ? this.customBgFn(padded) : padded;
+    // 对齐真实 pi-tui 的 wrapTextWithAnsi：按 \n 分割成多行
+    const inputLines = this.text.split("\n");
     const lines: string[] = [];
     for (let i = 0; i < this.paddingY; i++) lines.push("");
-    lines.push(out);
+    for (const inputLine of inputLines) {
+      const line = sanitizeLine(inputLine);
+      const truncated = truncateToWidth(line, innerW);
+      const pad = " ".repeat(Math.max(0, innerW - visibleWidth(truncated)));
+      const padded = " ".repeat(this.paddingX) + truncated + pad + " ".repeat(this.paddingX);
+      lines.push(this.customBgFn ? this.customBgFn(padded) : padded);
+    }
     for (let i = 0; i < this.paddingY; i++) lines.push("");
     return lines;
   }
