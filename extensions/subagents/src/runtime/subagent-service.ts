@@ -366,12 +366,6 @@ export class SubagentService {
 
   // ── 状态查询（TUI 调）──────────────────────────────────
 
-  /** 当前 Pi session ID（TUI/测试用）。initSession 前为 null。
-   *  fallow 标记 unused-class-member——保留为公共 API（types.ts 接口声明，外部消费者/TUI 可能调用）。 */
-  getSessionId(): string | null {
-    return this.sessionId;
-  }
-
   /** 订阅 store 变更（widget/list requestRender）。返回取消订阅。 */
   onChange(listener: () => void): () => void {
     return this.store.onChange(listener);

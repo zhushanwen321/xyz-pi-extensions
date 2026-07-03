@@ -12,6 +12,23 @@ const WRAP_UP_MESSAGE = [
   "Do NOT claim the task is complete if any part remains unfinished.",
 ].join(" ");
 
+/**
+ * 预防性 wrap-up 提示（启动时注入 --append-system-prompt）。
+ *
+ * spawn 模式下 runSpawn 无法在达 maxTurns 时运行时注入 steer（pi `--mode json` 是
+ * single-shot，无 stdin 命令通道；见 session-runner.ts limiter 注释）。作为短期补偿，
+ * 在启动时预置此预防性指令，让 agent 在感知接近上限时主动收尾。
+ *
+ * 长期方案是切到 pi `--mode rpc`（支持运行时 steer 命令），见 follow-up。
+ */
+export const WRAP_UP_HINT = [
+  `You have a turn limit. As you sense you are approaching it, proactively wrap up:`,
+  "1. Summarize what you have completed (with evidence: file paths, command output).",
+  "2. List what remains undone and why.",
+  "3. State the single most important next step for whoever continues.",
+  "Do NOT claim the task is complete if any part remains unfinished.",
+].join(" ");
+
 /** turn limiter 配置。 */
 export interface TurnLimiterOptions {
   maxTurns: number;

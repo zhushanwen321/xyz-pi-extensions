@@ -37,7 +37,7 @@ import {
   cleanupTempPrompt,
   writePromptToTempFile,
 } from "./temp-prompt.ts";
-import { createTurnLimiter } from "./turn-limiter.ts";
+import { createTurnLimiter, WRAP_UP_HINT } from "./turn-limiter.ts";
 
 /**
  * 运行时 guard：subscribe 回调收到的 event 形状未知，校验 type 字段后再交给 handle。
@@ -331,14 +331,16 @@ export async function runSpawn(
   // a. transient 寄存器（同 run()：tool_end 缺 args 时回填）
   const pendingTools = new Map<string, { toolName: string; args?: unknown }>();
 
-  // b. turnLimiter（spawn 版：abort = proc.kill；steer 删除——spawn 无 steer 通道）
+  // b. turnLimiter（spawn 版：abort = proc.kill；steer 是 no-op）
+  // [M1] pi --mode json 是 single-shot，无运行时 steer 通道。补偿：启动时通过
+  // --append-system-prompt 预置 WRAP_UP_HINT（见上方 appendParts），让 agent 感知
+  // 接近上限时主动收尾。maxTurns soft limit 仍依赖 graceTurns 后的 abort 兑现。
   let proc: ChildProcess | undefined;
   const limiter = createTurnLimiter({
     maxTurns: opts.maxTurns ?? 0,
     graceTurns: opts.graceTurns ?? DEFAULT_GRACE_TURNS,
     steer: () => {
-      // spawn 模式无 steer 通道（pi CLI 无运行时注入接口）。
-      // maxTurns soft limit 依赖 graceTurns 后的 abort 兑现，steer 警告不生效。
+      // no-op：spawn 无运行时 steer 通道，补偿已在启动时注入 WRAP_UP_HINT。
     },
     abort: () => {
       proc?.kill("SIGTERM");
@@ -442,6 +444,10 @@ export async function runSpawn(
   const appendParts: string[] = [buildEnvBlock(ctx.cwd, ownForkDepth, record.depth)];
   if (opts.agentConfig?.systemPrompt) appendParts.push(opts.agentConfig.systemPrompt);
   if (opts.appendSystemPrompt) appendParts.push(...opts.appendSystemPrompt);
+  // [M1 补偿] spawn 模式无运行时 steer 通道（pi --mode json 是 single-shot），
+  // 改为启动时预置 wrap-up 提示——agent 感知接近上限时主动收尾。
+  // 长期方案：切到 pi --mode rpc（支持运行时 steer），见 follow-up。
+  if (opts.maxTurns && opts.maxTurns > 0) appendParts.push(WRAP_UP_HINT);
   if (appendParts.length > 0) {
     tempPromptFile = await writePromptToTempFile(record.agent, appendParts.join("\n\n"));
   }

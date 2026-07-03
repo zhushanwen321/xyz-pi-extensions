@@ -627,7 +627,10 @@ export class SubagentsListComponent implements Component {
 
 
   /** dispose 时清理（Pi overlay 销毁时调用；wrappedDone 已清过，此处兜底防漏）。
-   *  fallow 标记 unused-class-member——保留为 Pi overlay 生命周期的兜底清理（框架回调契约）。 */
+   *  Pi SDK `showExtensionCustom.close()` 在 `done()` 后调 `component.dispose()`
+   *  （pi-mono interactive-mode.ts 的 close 回调）——框架回调契约，非死代码。
+   *  wrappedDone 已做 unsubscribe + clearInterval，此处幂等兜底。 */
+  // fallow 检测不到框架动态调用，标记 unused-class-member 是误报。
   dispose(): void {
     this.unsubscribe();
     if (this.animTimer !== undefined) {
