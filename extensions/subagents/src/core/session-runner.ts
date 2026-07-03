@@ -454,8 +454,10 @@ export async function runSpawn(
             `${JSON.stringify({ type: "custom", customType: IDENTITY_CUSTOM_TYPE, data: identity })}\n`,
             "utf-8",
           );
-        } catch {
-          // best-effort：identity 写入失败不影响执行结果，但会影响 /subagents list 重建
+        } catch (err) {
+          // best-effort：identity 写入失败不影响执行结果，但会影响 /subagents list 重建。
+          // 记录到 stderr（非阻断）—— 终态 record 会从 list 消失，这是可观测的退化信号。
+          console.error(`[subagents] identity append failed for ${record.sessionFile}:`, err);
         }
       }
     }
