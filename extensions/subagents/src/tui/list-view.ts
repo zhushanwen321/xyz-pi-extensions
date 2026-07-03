@@ -40,6 +40,15 @@ import type { SubagentService } from "../runtime/subagent-service.ts";
 import type { SubagentRecord } from "../types.ts";
 import { type ThemeLike } from "./format.ts";
 import { SubagentsListComponent } from "./list-component.ts";
+import {
+  type DetailKeyContext,
+  type KeyHandler,
+  type KeyResult,
+  LIST_LIMIT,
+  type NotifyFn,
+  type TuiLike,
+  type ViewState,
+} from "./list-shared.ts";
 
 // ============================================================
 // 常量
@@ -48,9 +57,8 @@ import { SubagentsListComponent } from "./list-component.ts";
 // 布局/边框常量（LEFT_COL_RATIO、COL_*、BORDER_WIDTH、PAD_*、MIN_*、TITLE_*、
 // SPLIT_FIXED_LINES、TERM_ROWS_FALLBACK、DETAIL_LEN_PROBE_WIDTH、VERT_CENTER_DIVISOR、
 // SPINNER_FRAME_MS、PREVIEW_RECENT_LINES）已随 SubagentsListComponent 移至 list-component.ts。
-
-/** list 收集的 record 上限（足够覆盖一个活跃 session）。factory/key/组件共用，导出供组件 import。 */
-export const LIST_LIMIT = 100;
+// 共享类型/常量/纯函数（LIST_LIMIT/ViewState/DetailKeyContext/TuiLike/NotifyFn/applyFilter/
+// KeyResult/KeyHandler）已移至 list-shared.ts（消除 list-view ↔ list-component 循环依赖）。
 
 /** 详情区 eventLog 翻屏步长（方向键单步）。 */
 const DETAIL_SCROLL_STEP = 1;
@@ -63,33 +71,6 @@ const OVERLAY_REFRESH_MS = 250;
  * 若每次全屏 invalidate + requestRender，重绘频率极高，pi diff 引擎在高频重绘下
  * 易产生 cell 残留（视觉重影）。节流到 120ms，animTimer（250ms）兜底保证刷新。 */
 const ONCHANGE_DEBOUNCE_MS = 120;
-
-/** list 视图内部状态。 */
-export interface ViewState {
-  selectedIdx: number;
-  scrollOffset: number;
-  filterText: string;
-  detailMode: boolean;
-  disposed: boolean;
-  /** sync 取消提示（runtime 无法主动 abort sync，提示用户按对话流 Esc）。 */
-  syncCancelHint: boolean;
-}
-
-/** 详情翻屏上下文（processKey 算步长用）。 */
-export interface DetailKeyContext {
-  viewportHeight: number;
-  contentLines?: number;
-}
-
-/** TUI 接口（duck-type：requestRender + terminal.rows）。
- *  terminal.rows 用于全屏框填满 + 详情翻屏步长（同 WorkflowsView.ts:104 cast）。 */
-export interface TuiLike {
-  requestRender(): void;
-  terminal: { rows: number };
-}
-
-/** 触发外部 notify 的回调（避免 list-view 直接依赖 ctx.ui）。 */
-export type NotifyFn = (message: string, type?: "info" | "warning" | "error") => void;
 
 // ============================================================
 // G-017：模块级 overlay 单例（防叠加）
@@ -185,7 +166,15 @@ export async function createSubagentsView(
         }
       }
 
-      const component = new SubagentsListComponent(service, theme, tuiLike, state, unsubscribe, notify);
+      const component = new SubagentsListComponent(
+        service,
+        theme,
+        tuiLike,
+        state,
+        unsubscribe,
+        notify,
+        processKey, // 依赖注入：组件不 import list-view（消除循环依赖）
+      );
       invalidateRef.fn = () => component.invalidate();
 
       // 动画 timer：有 running record 时定期 invalidate + requestRender，
@@ -249,23 +238,19 @@ export async function createSubagentsView(
  *
  * 返回 KeyResult：changed 表示状态变更需重绘；exit 表示调用方应关闭 overlay。
  * 二者正交——Esc 在阶段 1 无 filter 时 changed=false + exit=true。
+ *
+ * 注：KeyResult/KeyHandler 类型定义在 list-shared.ts（list-component 也用 KeyHandler 做构造
+ * 参数类型，避免组件 import list-view）。本函数由 list-view factory 注入组件（依赖注入）。
  */
-export interface KeyResult {
-  /** 状态变更，需 invalidate + requestRender。 */
-  changed: boolean;
-  /** 调用方应调用 closeFn 关闭 overlay。 */
-  exit: boolean;
-}
-
-export function processKey(
-  data: string,
-  records: SubagentRecord[],
-  state: ViewState,
-  selected: SubagentRecord | null,
-  service: SubagentService | null,
-  detailCtx: DetailKeyContext | undefined,
-  notify: NotifyFn | undefined,
-): KeyResult {
+export const processKey: KeyHandler = (
+  data,
+  records,
+  state,
+  selected,
+  service,
+  detailCtx,
+  notify,
+): KeyResult => {
   // ── 阶段 2（detail 焦点，detailMode=true）：左侧锚定，滚右侧详情 ──
   if (state.detailMode) {
     if (matchesKey(data, "escape")) {
@@ -356,20 +341,6 @@ export function processKey(
     return { changed: true, exit: false };
   }
   return { changed: false, exit: false };
-}
-
-/** filter 过滤 + 排序（纯函数，可单测）。 */
-export function applyFilter(records: SubagentRecord[], filterText: string): SubagentRecord[] {
-  const q = filterText.trim().toLowerCase();
-  if (!q) return records;
-  return records.filter((r) => {
-    return (
-      r.agent.toLowerCase().includes(q) ||
-      r.status.toLowerCase().includes(q) ||
-      r.mode.toLowerCase().includes(q) ||
-      r.id.toLowerCase().includes(q)
-    );
-  });
 }
 
 // ============================================================

@@ -11,10 +11,6 @@ import * as fs from "node:fs";
 
 import { writeAliveMarker } from "../runtime/execution/alive-store.ts";
 import type {
-  AgentConfig,
-  ResolvedModel,
-} from "../types.ts";
-import type {
   AgentEvent,
   AgentResult,
   ExecutionRecord,
@@ -22,6 +18,10 @@ import type {
   WorktreeHandle,
 } from "../types.ts";
 import { updateFromEvent } from "./execution-record.ts";
+import type {
+  AgentConfig,
+  ResolvedModel,
+} from "./model-resolver.ts";
 import { collectResult } from "./output-collector.ts";
 import { getSubagentSessionDir, worktreeMappingFile } from "./path-encoding.ts";
 import { getPiInvocation } from "./pi-invocation.ts";

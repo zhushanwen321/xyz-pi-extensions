@@ -7,7 +7,7 @@
 //   - Runtime 编排 Core，产出 Details/Record 给 TUI
 //   - TUI 只读 Record/Details 快照，永不持有可变引用
 
-import type { AgentConfig, ModelInfo, ModelRegistryLike, ResolvedModel } from "./core/model-resolver.ts";
+import type { ModelInfo, ModelRegistryLike } from "./core/model-resolver.ts";
 
 // ============================================================
 // 全局常量
@@ -257,23 +257,6 @@ export interface PatchResult {
   readonly written: boolean;
 }
 
-/** resolveAgentIdentity 的入参。 */
-export interface ResolveInput {
-  agent?: string;
-  model?: string;
-  thinkingLevel?: string;
-  skillPath?: string;
-  appendSystemPrompt?: string[];
-}
-
-/** session-runner 闭包捕获的上下文。 */
-export interface SessionContext {
-  readonly agentDir: string;
-  readonly mainCwd: string;
-  readonly sessionDir: string;
-  readonly mainSessionFile: string;
-}
-
 /** resolveSessionContext 纯函数的入参（#3 SessionContextResolver）。 */
 export interface SessionResolveInput {
   fork?: boolean;
@@ -399,17 +382,6 @@ export interface SubagentToolDetails {
 // Runtime 公共 API 的入参/出参
 // ============================================================
 
-/** session-runner 内部上下文（扩展 effectiveCwd/mainCwd/mainSessionFile）。 */
-/** session-runner.run() 的入参选项。 */
-export interface RunOptions {
-  /** 是否继承父会话上下文（fork 模式）。fork 只继承上下文，不创建 worktree。 */
-  fork?: boolean;
-  /** 预创建的 worktree handle（worktree:true 时由 service 创建后传入；undefined=不隔离，在 parent cwd 跑）。 */
-  worktree?: WorktreeHandle;
-  /** 父级 fork depth（用于深度限制检查）。 */
-  parentForkDepth?: number;
-}
-
 /** Hub.execute 的入参（sync/bg 共用）。mode 由 Hub 内部判定，不暴露给调用方。 */
 export interface ExecuteOptions {
   task: string;
@@ -444,7 +416,8 @@ export interface ExecuteOptions {
   /** 覆盖执行 cwd（默认 mainCwd）。 */
   cwd?: string;
   // 注：fork 深度不从外部传入（曾暴露 parentForkDepth，改用 ALS 后 execute 内部从调用链派生，
-  // 公开字段成为死字段误导调用方，已移除）。深度限制检查见 RunOptions.parentForkDepth（内部层）。
+  // 公开字段成为死字段误导调用方，已移除）。深度限制检查见 session-runner.ts 内部 RunOptions.parentForkDepth
+  // （与历史残留的 types.ts RunOptions 同名不同 interface——后者已删除）。
 }
 
 /**
@@ -697,6 +670,3 @@ export interface SdkLike {
   };
   createAgentSession: (opts: CreateAgentSessionArgs) => Promise<{ session: AgentSessionLike }>;
 }
-
-export type { AgentConfig, ResolvedModel };
-export type { ModelRegistryLike };

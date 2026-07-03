@@ -1,11 +1,12 @@
 // src/tui/list-component.ts
 //
 // /subagents list 全屏带框左右分屏组件实现。
-// 从 list-view.ts 抽出（文件行数控制）：list-view.ts 保留 factory / key 处理 / filter，
+// 从 list-view.ts 抽出（文件行数控制）：list-view.ts 保留 factory / key 处理，
 // 组件渲染逻辑（边框、分屏布局、详情翻屏）归此文件。
 //
 // 依赖关系：组件只读 service.collectRecords + applyFilter，状态由 list-view 注入（ViewState）。
-// 输入分发委托 processKey（list-view 导出），组件本身不处理按键语义。
+// 输入分发委托 keyHandler（list-view factory 注入 processKey），组件本身不处理按键语义。
+// 组件 import list-shared（共享契约），不 import list-view → list-view → 组件单向依赖，无循环。
 
 import type { Component } from "@earendil-works/pi-tui";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -32,12 +33,12 @@ import {
 import {
   applyFilter,
   type DetailKeyContext,
+  type KeyHandler,
   LIST_LIMIT,
   type NotifyFn,
-  processKey,
   type TuiLike,
   type ViewState,
-} from "./list-view.ts";
+} from "./list-shared.ts";
 
 // ── 组件专用布局常量（factory/key 层不使用） ──
 
@@ -101,6 +102,8 @@ export class SubagentsListComponent implements Component {
     private readonly state: ViewState,
     private readonly unsubscribe: () => void,
     private readonly notify: NotifyFn,
+    /** 按键处理（list-view 的 processKey，依赖注入避免组件 import list-view）。 */
+    private readonly keyHandler: KeyHandler,
   ) {}
 
   setCloseFn(fn: () => void): void {
@@ -147,7 +150,7 @@ export class SubagentsListComponent implements Component {
       contentLines: selected ? this.detailContentLength(selected) : 0,
     };
 
-    const result = processKey(data, records, this.state, selected, this.service, detailCtx, this.notify);
+    const result = this.keyHandler(data, records, this.state, selected, this.service, detailCtx, this.notify);
 
     if (result.exit) {
       this.closeFn();

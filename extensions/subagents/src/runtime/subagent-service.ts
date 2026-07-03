@@ -22,7 +22,7 @@ import {
   snapshot,
   tryTransition,
 } from "../core/execution-record.ts";
-import type { AgentConfig, ModelInfo } from "../core/model-resolver.ts";
+import type { AgentConfig, ModelInfo, ResolvedModel } from "../core/model-resolver.ts";
 import { getSubagentSessionDir } from "../core/path-encoding.ts";
 import { MAX_FORK_DEPTH } from "../core/session-context-resolver.ts";
 import { runSpawn, type SessionRunnerContext } from "../core/session-runner.ts";
@@ -35,7 +35,6 @@ import type {
   ExecutionMode,
   ExecutionRecord,
   RecordSnapshot,
-  ResolvedModel,
   SubagentRecord,
   SubagentToolDetails,
 } from "../types.ts";
