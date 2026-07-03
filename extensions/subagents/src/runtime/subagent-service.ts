@@ -193,6 +193,14 @@ export class SubagentService {
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
+    // [R0 孤儿进程修复] 进程退出路径：abort 所有 running background controller，
+    // 触发 runSpawn 的 signal listener → child.kill("SIGTERM")，防止子进程成孤儿。
+    // 必须在 store.dispose 之前（dispose 后 records 仍可访问，但语义上先 kill 再清场）。
+    // sync record 无 controller，跳过；background controller.abort 后子进程收到 SIGTERM。
+    // 注意：dispose 是同步返回，主进程可能紧接着 process.exit()，runSpawn 的 finally
+    // 清理（identity 补写等）可能来不及跑——这是可接受的退化（session.jsonl 已由子进程
+    // 写入，缺 identity entry 只影响 list 重建的可观测性，不丢执行数据）。
+    this.store.abortRunningControllers();
     for (const s of this.throttleState.values()) {
       if (s.timer !== undefined) clearTimeout(s.timer);
     }

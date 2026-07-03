@@ -89,6 +89,29 @@ export class RecordStore {
     return this.records.get(id);
   }
 
+  /**
+   * abort 所有 running record 的 controller（background 子进程 SIGTERM）。
+   *
+   * 仅在 SubagentService.dispose（进程退出路径）调用。不做 CAS/tombstone——dispose
+   * 是终局，状态机收尾无意义；目的是让 background 子进程的 AbortSignal 触发 →
+   * runSpawn 的 signal listener → child.kill("SIGTERM")，防止主进程退出后子进程成孤儿。
+   *
+   * sync record 无 controller（undefined），跳过——sync 是阻塞调用，主进程不会先于
+   * sync subagent 退出（除非 SIGKILL/崩溃，此时任何清理都无效）。
+   *
+   * 返回被 abort 的 record 数（诊断用）。
+   */
+  abortRunningControllers(): number {
+    let n = 0;
+    for (const r of this.records.values()) {
+      if (r.status === "running" && r.controller) {
+        r.controller.abort();
+        n++;
+      }
+    }
+    return n;
+  }
+
   /** 列出所有 running record 的只读快照（widget 计数、诊断用）。 */
   listRunning(): RecordSnapshot[] {
     return [...this.records.values()]

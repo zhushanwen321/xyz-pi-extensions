@@ -696,4 +696,184 @@ describe("runSpawn", () => {
       expect(args[appendIdx + 1]).toMatch(/prompt-general-purpose\.md$/);
     });
   });
+
+  // ── 12. watchdog 超时兜底（R1）──
+  //
+  // [R0/R1] SPAWN_WATCHDOG_MS = 30 * 60 * 1000（session-runner.ts 顶部）。
+  // 子进程卡死在单 tool 内（turn_end 永不触发）时 limiter 失效，watchdog timer 兜底 SIGTERM，
+  // 防止 background 槽位/资源泄漏。timer 加了 .unref()（不阻止 Node 退出）。
+  //
+  // fake timers 方案 A：describe 块内 beforeEach useFakeTimers、afterEach useRealTimers。
+  // 难点：waitForSpawn 内部用 `await new Promise(r => setTimeout(r, 5))` 轮询，fake timers 下
+  // 该 setTimeout 不会自动触发——改用 vi.advanceTimersByTimeAsync 推进时间，它会同步 flush
+  // 已到期的 timer + 让挂起的真实 I/O（writePromptToTempFile 的 fs.promises）resolve。
+  // 关键验证：unref 的 timer 在 fake timers 下仍能被 advanceTimersByTime 触发（vitest fake
+  // timers 忽略 unref）。
+  describe("watchdog 超时兜底 (R1)", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /**
+     * fake timers 下推进时间直到 spawn 被调用（替代 waitForSpawn）。
+     *
+     * runSpawn 在 mkdirSync + writePromptToTempFile（真实 fs.promises I/O）之后才调 spawn。
+     * 每次推进 10ms 让 waitForSpawn 轮询的 setTimeout(r,5) 触发；同时 advanceTimersByTimeAsync
+     * flush 已 resolve 的 I/O promise，使 runSpawn 继续走到 spawn。
+     */
+    async function waitForSpawnFake(timeoutSteps = 200): Promise<FakeChild> {
+      for (let i = 0; i < timeoutSteps; i++) {
+        if (mockSpawn.mock.results.length > 0) break;
+        await vi.advanceTimersByTimeAsync(10);
+      }
+      if (mockSpawn.mock.results.length === 0) {
+        throw new Error("spawn was not called (fake timers did not progress to spawn)");
+      }
+      return lastSpawnedChild();
+    }
+
+    it("watchdog 超时（>30min）→ child.kill(SIGTERM) 被调用", async () => {
+      const record = makeRecord();
+      // 不 await——runSpawn 内部 await 子进程 close，watchdog 触发 kill 后还需 emit close 才 resolve
+      const promise = runSpawn(record, "Task: hang", makeOpts(), makeCtx());
+
+      const child = await waitForSpawnFake();
+
+      // spawn 后 child.killed 应为 false（watchdog 尚未触发）
+      expect(child.killed).toBe(false);
+
+      // 推进时间越过 watchdog 阈值（30 * 60 * 1000 + 100ms 余量）
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000 + 100);
+
+      // watchdog 触发 child.kill("SIGTERM")
+      expect(child.killed).toBe(true);
+      expect(child.killSignal).toBe("SIGTERM");
+
+      // 收尾：emit close 让 runSpawn 的 await promise resolve（避免悬挂）
+      emitStdoutLine(child, sessionHeader());
+      child.stdout.end();
+      child.emit("close", 143); // SIGTERM = 128+15
+
+      const result = await promise;
+      // 信号终止（>=128）视为正常完成
+      expect(result.success).toBe(true);
+    });
+
+    it("正常 close(0) → clearTimeout 生效，watchdog 不触发 kill", async () => {
+      const record = makeRecord();
+      const promise = runSpawn(record, "Task: quick", makeOpts(), makeCtx());
+
+      const child = await waitForSpawnFake();
+
+      // 正常完成：emit header + close(0)
+      emitStdoutLine(child, sessionHeader());
+      child.stdout.end();
+      child.emit("close", 0);
+
+      const result = await promise;
+      expect(result.success).toBe(true);
+
+      // close 后 runSpawn 已 clearTimeout(watchdog)；推进 30+ 分钟验证 watchdog 未触发 kill
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000 + 100);
+
+      expect(child.killed).toBe(false);
+      expect(child.killSignal).toBeUndefined();
+    });
+  });
+
+  // ── 13. stderr 截断防 OOM（R2）──
+  //
+  // [R2] stderrBuffer = (stderrBuffer + data).slice(-STDERR_MAX_CHARS)（STDERR_MAX_CHARS=64*1024）。
+  // 失控子进程打满 stderr 会耗尽父进程内存；保留尾部 64KB 用于 error 诊断。
+  describe("stderr 截断防 OOM (R2)", () => {
+    it("stderr > 64KB → error 中的 stderr 内容是尾部 64KB（尾部标记保留，头部标记被截断）", async () => {
+      const record = makeRecord();
+      const promise = runSpawn(record, "Task: noisy stderr", makeOpts(), makeCtx());
+
+      await waitForSpawn();
+      const child = lastSpawnedChild();
+
+      // 头部标记（应被截断）：足够长的前缀让 64KB 窗口推过它
+      const HEAD_MARKER = "HEAD_MARKER_HEAD_MARKER";
+      child.stderr.write(HEAD_MARKER);
+      // 填充 > 64KB 的噪声（用 "x" 重复），把头部标记推出 64KB 尾部窗口
+      child.stderr.write("x".repeat(70 * 1024));
+      // 尾部标记（应在截断后仍保留）
+      child.stderr.write("TAIL_MARKER_TAIL_MARKER");
+
+      emitStdoutLine(child, sessionHeader());
+      child.stderr.end();
+      child.stdout.end();
+      child.emit("close", 1); // 非零退出 → error 含 stderr
+
+      const result = await promise;
+
+      // 非零退出码 → success=false
+      expect(result.success).toBe(false);
+      // error 含尾部标记（证明保留了尾部 64KB）
+      expect(result.error).toContain("TAIL_MARKER_TAIL_MARKER");
+      // error 不含头部标记（证明头部被截断丢弃）
+      expect(result.error).not.toContain(HEAD_MARKER);
+    });
+  });
+
+  // ── 14. UTF-8 编码跨 chunk 安全（R3）──
+  //
+  // [R3] child.stdout.setEncoding("utf8") 让流按字符边界切分，避免多字节 UTF-8
+  //（CJK/emoji）跨 chunk 时 toString() 产生 U+FFFD 替换符导致 JSON.parse 失败。
+  //
+  // 测法选择：用流状态（readableEncoding）验证 setEncoding("utf8") 被 runSpawn 调用过。
+  // 为什么不用 spy：runSpawn 在 spawn() 返回后同步调用 setEncoding，而 waitForSpawn 拿到
+  // child 时调用已完成，无法事后挂 spy 捕获。readableEncoding 是 PassThrough(Readable) 暴露的
+  // 只读属性，setEncoding("utf8") 后值变为 "utf8"，是"编码确实被设置"的可靠证据。
+  // 端到端分片写多字节字符无法真正模拟"字节边界切断"（PassThrough + setEncoding 已在更高层
+  // 合并），故补一个"分片写入仍能解析"的用例佐证行缓冲健壮性。
+  describe("UTF-8 编码跨 chunk 安全 (R3)", () => {
+    it("runSpawn 对 child.stdout 和 child.stderr 调用 setEncoding('utf8')（readableEncoding 验证）", async () => {
+      const record = makeRecord();
+      const promise = runSpawn(record, "Task: utf8", makeOpts(), makeCtx());
+
+      await waitForSpawn();
+      const child = lastSpawnedChild();
+
+      // spawn 后 runSpawn 已同步调用 setEncoding("utf8")：readableEncoding 反映该调用结果
+      expect(child.stdout.readableEncoding).toBe("utf8");
+      expect(child.stderr.readableEncoding).toBe("utf8");
+
+      emitStdoutLine(child, sessionHeader());
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("close", 0);
+
+      const result = await promise;
+      expect(result.success).toBe(true);
+    });
+
+    it("stdout 多次分片写入同一 JSON 行仍能正确解析 turn_end（行缓冲合并）", async () => {
+      // 端到端验证：数据分两次 write，runSpawn 的行缓冲（stdoutBuffer += data）合并后解析。
+      // 此用例验证"分片写入仍能解析"，setEncoding("utf8") 已由上一用例覆盖。
+      const record = makeRecord();
+      const promise = runSpawn(record, "Task: split", makeOpts(), makeCtx());
+
+      await waitForSpawn();
+      const child = lastSpawnedChild();
+
+      // header 完整一行
+      emitStdoutLine(child, sessionHeader());
+      // turn_end 拆成两半写入（跨 chunk 模拟）
+      child.stdout.write('{"type":"turn_e');
+      child.stdout.write('nd"}\n');
+      child.stdout.end();
+      child.emit("close", 0);
+
+      const result = await promise;
+
+      expect(result.success).toBe(true);
+      expect(record.turnCount).toBe(1); // 拆开的 turn_end 仍被解析为 1 次
+    });
+  });
 });

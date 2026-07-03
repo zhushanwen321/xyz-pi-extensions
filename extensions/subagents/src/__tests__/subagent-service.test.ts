@@ -17,10 +17,13 @@ import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createRecord } from "../core/execution-record.ts";
 import type { ModelInfo, ModelRegistryLike } from "../core/model-resolver.ts";
+import type { RecordStore } from "../runtime/execution/record-store.ts";
 import { ModelConfigService } from "../runtime/model-config-service.ts";
 import type { PiLike } from "../runtime/subagent-service.ts";
 import { getSubagentService, setSubagentService,SubagentService } from "../runtime/subagent-service.ts";
+import type { ExecutionRecord } from "../types.ts";
 
 // ── 工具:建临时 agentDir + 真实 ModelConfigService ──
 
@@ -186,6 +189,126 @@ describe("SubagentService", () => {
       const service = new SubagentService({ cwd: agentDir, modelService });
       setSubagentService(service);
       expect(getSubagentService()).toBe(service);
+    });
+  });
+
+  // ============================================================
+  // dispose abort 子进程（R0-D：孤儿进程治理）
+  // ============================================================
+  //
+  // [R0] 进程退出路径：SubagentService.dispose 调 store.abortRunningControllers()，
+  // 触发所有 running background record 的 controller.abort() → runSpawn signal listener
+  // → child.kill("SIGTERM")，防止主进程退出后 background 子进程成孤儿。
+  //
+  // 被测方法在 service 层，不需要 mock spawn——直接构造 record 注册到 store。
+  // store 是 private 字段，用 Reflect.get 取（与 execute-nesting.test.ts 访问 pool 同模式）。
+
+  describe("dispose abort 子进程 (R0-D)", () => {
+    /** 从 service 取出 private store（测试注入 running record 用）。 */
+    function getStore(service: SubagentService): RecordStore {
+      return Reflect.get(service, "store") as RecordStore;
+    }
+
+    /** 构造一个 running background record（带 controller）并注册到 store。 */
+    function registerRunningBackground(service: SubagentService, id: string): ExecutionRecord {
+      const controller = new AbortController();
+      const record = createRecord(id, {
+        agent: "general-purpose",
+        model: "test/model",
+        mode: "background",
+        task: "long task",
+        startedAt: 1_000_000,
+        rootSessionId: "s1",
+        controller,
+      });
+      // createRecord 默认 status="running"；background record 持有 controller。
+      getStore(service).register(record);
+      return record;
+    }
+
+    /** 构造一个 running sync record（无 controller）并注册到 store。 */
+    function registerRunningSync(service: SubagentService, id: string): ExecutionRecord {
+      const record = createRecord(id, {
+        agent: "general-purpose",
+        model: "test/model",
+        mode: "sync",
+        task: "sync task",
+        startedAt: 1_000_000,
+        rootSessionId: "s1",
+        // sync 不传 controller → controller === undefined
+      });
+      getStore(service).register(record);
+      return record;
+    }
+
+    /** 构造一个终态 background record 并注册（用于「无 running」场景）。 */
+    function registerTerminalBackground(service: SubagentService, id: string): ExecutionRecord {
+      const controller = new AbortController();
+      const record = createRecord(id, {
+        agent: "general-purpose",
+        model: "test/model",
+        mode: "background",
+        task: "done task",
+        startedAt: 1_000_000,
+        rootSessionId: "s1",
+        controller,
+      });
+      // 直接改 status 模拟终态（不走 CAS——测试不关心状态机，只关心 dispose 的 abort 过滤）
+      record.status = "done";
+      getStore(service).register(record);
+      return record;
+    }
+
+    it("dispose 时有 running background record → controller 被 abort", () => {
+      const service = new SubagentService({ cwd: agentDir, modelService });
+      service.initSession({ pi: makePi(), sessionId: "s1" });
+
+      const record = registerRunningBackground(service, "bg-1");
+
+      // 前置：dispose 前 controller 未 abort
+      expect(record.controller!.signal.aborted).toBe(false);
+
+      service.dispose();
+
+      // dispose 后 controller 被 abort → runSpawn 的 signal listener 会 kill 子进程
+      expect(record.controller!.signal.aborted).toBe(true);
+    });
+
+    it("dispose 时无 running record → 不报错，正常清理", () => {
+      const service = new SubagentService({ cwd: agentDir, modelService });
+      service.initSession({ pi: makePi(), sessionId: "s1" });
+
+      // 全是终态 record（无 running），dispose 不应抛
+      registerTerminalBackground(service, "bg-done-1");
+
+      expect(() => service.dispose()).not.toThrow();
+    });
+
+    it("dispose 已 dispose → 幂等（重复调用不抛，不重复 abort）", () => {
+      const service = new SubagentService({ cwd: agentDir, modelService });
+      service.initSession({ pi: makePi(), sessionId: "s1" });
+
+      const record = registerRunningBackground(service, "bg-2");
+
+      service.dispose();
+      expect(record.controller!.signal.aborted).toBe(true);
+
+      // 第二次 dispose：service 已 _disposed，early-return，abortRunningControllers 不再调
+      // （即使调了也无害——已 abort 的 controller.abort() 是幂等 noop）
+      expect(() => service.dispose()).not.toThrow();
+      expect(record.controller!.signal.aborted).toBe(true);
+    });
+
+    it("sync record（无 controller）→ dispose 跳过（不因 undefined controller 出错）", () => {
+      const service = new SubagentService({ cwd: agentDir, modelService });
+      service.initSession({ pi: makePi(), sessionId: "s1" });
+
+      // sync record 的 controller 是 undefined，running 状态下 dispose 不应抛
+      // （abortRunningControllers 检查 r.controller 才 abort，sync 跳过）
+      const syncRecord = registerRunningSync(service, "sync-1");
+      expect(syncRecord.controller).toBeUndefined();
+
+      expect(() => service.dispose()).not.toThrow();
     });
   });
 });

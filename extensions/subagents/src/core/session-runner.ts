@@ -430,7 +430,11 @@ export async function runSpawn(
 
     // e. watchdog：子进程整体超时兜底。卡死在单 tool 内（turn_end 永不触发）时
     //    limiter 失效，此 timer 保证最终 SIGTERM，防止 background 槽位/资源泄漏。
+    // [R0] unref：不阻止 Node 进程退出。安全性由 SubagentService.dispose 保证——
+    // 主进程退出时（session_shutdown reason=quit）dispose 会 abort running controller
+    // → 本监听器 kill 子进程。无此 unref，30 分钟 timer 会拖住 event loop 阻止退出。
     const watchdog = setTimeout(() => child.kill("SIGTERM"), SPAWN_WATCHDOG_MS);
+    watchdog.unref();
 
     // stdout/stderr 用 utf8 编码：stream 自动按字符边界切分，避免多字节
     // UTF-8（CJK/emoji）跨 chunk 时 toString() 产生 U+FFFD 替换符导致 JSON.parse 失败。
