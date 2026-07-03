@@ -44,10 +44,12 @@ const { mockScan, mockCleanup } = vi.hoisted(() => ({
 
 vi.mock("../runtime/worktree-manager.ts", () => ({
   WorktreeManager: class {
+    constructor(_agentDir: string) { /* mock */ }
     scan = mockScan;
     cleanup = mockCleanup;
     create = vi.fn();
     collectPatch = vi.fn();
+    registerPid = vi.fn();
   },
 }));
 
@@ -172,11 +174,8 @@ describe("session_start worktree reaper", () => {
     );
 
     expect(mockScan).toHaveBeenCalledTimes(1);
-    // scan 参数：mainCwd, agentDir
-    expect(mockScan).toHaveBeenCalledWith(
-      "/home/user/project",
-      expect.any(String), // agentDir (getAgentDir() 结果)
-    );
+    // scan 无参（全局注册表，不依赖 cwd）
+    expect(mockScan).toHaveBeenCalledWith();
   });
 
   it("scan 抛错不阻断 session_start", () => {

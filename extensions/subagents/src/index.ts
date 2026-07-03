@@ -114,11 +114,11 @@ export default function subagentsExtension(pi: ExtensionAPI): void {
       console.warn("[subagents] expired session file cleanup failed:", err);
     }
 
-    // best-effort worktree 孤儿 reaper：扫描 pi-sub-* 孤儿 worktree 并清理。
-    // 终态（.finalized/.cancelled）且无活 .alive 的孤儿会被删除。
+    // best-effort worktree 孤儿 reaper：遍历全局注册表清理 pid 已死的 pi-sub-* worktree。
+    // 不依赖 cwd 是否 git repo——注册表跨 repo 记录，任意目录启动都能清理。
     try {
-      const wtm = new WorktreeManager();
-      wtm.scan(cwd, agentDir);
+      const wtm = new WorktreeManager(agentDir);
+      wtm.scan();
     } catch (err) {
       // best-effort reaper 失败，忽略——不影响 session 启动。
       void err;

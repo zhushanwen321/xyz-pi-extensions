@@ -25,7 +25,7 @@ import {
 import type { AgentConfig, ModelInfo, ResolvedModel } from "../core/model-resolver.ts";
 import { getSubagentSessionDir } from "../core/path-encoding.ts";
 import { MAX_FORK_DEPTH } from "../core/session-context-resolver.ts";
-import { runSpawn, killAllSpawnedChildren, type SessionRunnerContext } from "../core/session-runner.ts";
+import { killAllSpawnedChildren, runSpawn, type SessionRunnerContext } from "../core/session-runner.ts";
 import type { WorktreeHandle } from "../types.ts";
 import type {
   AgentEvent,
@@ -160,7 +160,7 @@ export class SubagentService {
     this.modelService = init.modelService;
     this.getMainSessionFile = init.getMainSessionFile;
     this.pool = new DefaultConcurrencyPool(this.modelService.getGlobalConfig().maxConcurrent);
-    this.worktreeManager = new WorktreeManager();
+    this.worktreeManager = new WorktreeManager(this.modelService.getAgentDir());
     const sessionsDir = getSubagentSessionDir(this.modelService.getAgentDir(), init.cwd);
     this.store = new RecordStore(sessionsDir);
     this.notifier = new BgNotifier(this.piAdapter());
@@ -819,6 +819,8 @@ export class SubagentService {
       mainCwd: this.cwd,
       // mainSessionFile: fork source 解析用，从 session_start 缓存获取。
       mainSessionFile: this.getMainSessionFile?.() ?? undefined,
+      // worktree pid 回调：session-runner first header 时补全注册表 pid。
+      onWorktreePid: (branch: string, pid: number) => this.worktreeManager.registerPid(branch, pid),
     };
   }
 
