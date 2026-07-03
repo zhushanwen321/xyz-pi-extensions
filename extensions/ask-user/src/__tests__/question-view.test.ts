@@ -374,6 +374,99 @@ describe("renderQuestionView — help line", () => {
 	});
 });
 
+// ── Q-32 ~ Q-35: Other 选项对齐（单选/多选 freeform、非 freeform、预览） ──
+describe("renderQuestionView — Other row alignment", () => {
+	it("Q-32: 单选 Other freeform 编辑行编号与普通选项对齐", () => {
+		// 回归：单选 freeform 占位从 \"  \"(2列) 改为 \" \"(1列)，编号列与普通单选对齐
+		const lines = renderQuestionView(
+			singleQ,
+			makeState({ mode: "freeform", cursorIndex: 2 }),
+			stubTheme,
+			60,
+			true,
+			"custom",
+		);
+		const normalLine = lines.find((l) => l.includes("Postgres"))!;
+		const otherLine = lines.find((l) => l.includes("█"))!;
+		// stubTheme 无 ANSI，indexOf 反映可见列位置。普通选项编号 idx === Other 编号 idx
+		expect(normalLine.indexOf("1.")).toBe(otherLine.indexOf("3."));
+	});
+
+	it("Q-33: 多选 Other（无 freeText）编号与普通选项对齐", () => {
+		// 回归：多选 Other 非 freeform 标记从 check(1列) 改为 box(3列)，编号列与普通多选对齐
+		const multiQ: Question = {
+			question: "Which features?",
+			multiSelect: true,
+			options: [{ label: "Auth" }, { label: "Search" }],
+		};
+		const lines = renderQuestionView(
+			multiQ,
+			makeState({ cursorIndex: 2 }),
+			stubTheme,
+			60,
+			true,
+			"",
+		);
+		const normalLine = lines.find((l) => l.includes("Auth"))!;
+		const otherLine = lines.find((l) => l.includes("Other") && l.includes("3."))!;
+		expect(normalLine.indexOf("1.")).toBe(otherLine.indexOf("3."));
+	});
+
+	it("Q-34: 单选 Other freeText 预览缩进对齐到 label 起始列", () => {
+		// 回归：预览 lead 从硬编码 6 列改为动态计算（单选个位 = 7 列）
+		const lines = renderQuestionView(
+			singleQ,
+			makeState({ cursorIndex: 2, freeTextValue: "saved" }),
+			stubTheme,
+			60,
+			true,
+			"",
+		);
+		const labelLine = lines.find((l) => l.includes("Other") && !l.includes('"'))!;
+		const previewLine = lines.find((l) => l.includes('"saved"'))!;
+		expect(labelLine.indexOf("Other")).toBe(previewLine.indexOf('"'));
+	});
+
+	it("Q-35: 多选 Other freeText 预览缩进对齐到 label 起始列", () => {
+		// 回归：多选 marker=3列，预览 lead 应 = 9 列（个位编号），与 label 对齐
+		const multiQ: Question = {
+			question: "Which features?",
+			multiSelect: true,
+			options: [{ label: "Auth" }, { label: "Search" }],
+		};
+		const lines = renderQuestionView(
+			multiQ,
+			makeState({ cursorIndex: 2, freeTextValue: "saved" }),
+			stubTheme,
+			60,
+			true,
+			"",
+		);
+		const labelLine = lines.find((l) => l.includes("Other") && !l.includes('"'))!;
+		const previewLine = lines.find((l) => l.includes('"saved"'))!;
+		expect(labelLine.indexOf("Other")).toBe(previewLine.indexOf('"'));
+	});
+
+	it("Q-35b: 两位数编号时预览缩进随编号宽度自适应", () => {
+		// 10 个选项 + Other = 第 11 项，编号 \"11.\" 占 3 列，预览 lead 应比个位多 1 列
+		const bigQ: Question = {
+			question: "Q",
+			options: Array.from({ length: 10 }, (_, k) => ({ label: `Opt${k + 1}` })),
+		};
+		const lines = renderQuestionView(
+			bigQ,
+			makeState({ cursorIndex: 10, freeTextValue: "x" }),
+			stubTheme,
+			60,
+			true,
+			"",
+		);
+		const labelLine = lines.find((l) => l.includes("Other") && !l.includes('"'))!;
+		const previewLine = lines.find((l) => l.includes('"x"'))!;
+		expect(labelLine.indexOf("Other")).toBe(previewLine.indexOf('"'));
+	});
+});
+
 // ── Q-24 ~ Q-25: 上下文 ─────────────────────────────────
 describe("renderQuestionView — context", () => {
 	it("Q-24: renders context when present", () => {
