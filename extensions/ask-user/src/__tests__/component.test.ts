@@ -437,6 +437,39 @@ describe("AskUserComponent — multi-char paste in editor", () => {
 		expect(editorLine).toBeDefined();
 		expect(editorLine).toContain("x");
 	});
+
+	it("C-PASTE-6: bracketed paste 序列被剥离，不残留 [200~/[201~", () => {
+		// 回归：启用 bracketed paste mode 的终端粘贴时会把内容包裹在
+		// \x1b[200~ ... \x1b[201~ 中。ESC 被守卫过滤，但 [200~/[201~ 可见字符
+		// 会残留。修复：handleEditorInput 先 replace 剥离这两个序列。
+		const { c } = make([singleQ]);
+		c.handleInput(DOWN);
+		c.handleInput(DOWN);
+		c.handleInput(ENTER); // 打开 freeform
+		c.handleInput("\x1b[200~hello\x1b[201~");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toBeDefined();
+		expect(editorLine).toContain("hello");
+		expect(editorLine).not.toContain("[200~");
+		expect(editorLine).not.toContain("[201~");
+	});
+
+	it("C-PASTE-7: bracketed paste 跨 chunk 抵达时每个 chunk 独立剥离", () => {
+		// 边界：粘贴内容分多个 data chunk 抵达，每个 chunk 各自带始/末标记。
+		// 简单 replace 在此场景仍有效（每个 chunk 独立剥离自己的标记）。
+		const { c } = make([singleQ]);
+		c.handleInput(DOWN);
+		c.handleInput(DOWN);
+		c.handleInput(ENTER);
+		c.handleInput("\x1b[200~foo ");
+		c.handleInput(" bar\x1b[201~");
+		const lines = c.render(60);
+		const editorLine = lines.find((l) => l.includes("█"));
+		expect(editorLine).toContain("foo  bar");
+		expect(editorLine).not.toContain("[200~");
+		expect(editorLine).not.toContain("[201~");
+	});
 });
 
 // ── 5f. 评论流程（FR-4.6 / FR-11 / AC-6/12/17）─────────
