@@ -1,5 +1,11 @@
 # @zhushanwen/pi-ask-user
 
+## 0.0.4
+
+### Patch Changes
+
+- 7b4d775: Fix Other option marker misalignment (single-select freeform, multi-select non-freeform, freeText preview indent) and strip bracketed-paste escape sequences (`\x1b[200~` / `\x1b[201~`) that leaked into the Other/comment editor text.
+
 ## 0.0.3
 
 ### Patch Changes
