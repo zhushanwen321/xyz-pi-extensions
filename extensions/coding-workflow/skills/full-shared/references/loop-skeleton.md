@@ -62,9 +62,9 @@ subagent 工具 `executionMode: "sequential"`——**同消息多个 `subagent` 
 | `wait` | schema | true=同步阻塞 / false=后台并发 | 多组并行必 `false` |
 | `maxTurns` | schema | 防 runaway 的 turn 上限 | 长任务建议设 |
 | **`cwd`** | **pi 运行时** | per-subagent 工作目录（worktree 隔离） | **需要文件系统隔离时**（如 coding-execute 的多 Wave 并行 implementer 各跑独立 worktree，防 git index 冲突） |
-| **`context`** | **pi 运行时** | 启动即载入的强制材料（优先级高于 task prompt 文字提及） | **需要保证 fresh subagent 一定读到某文件时**（如 design 的 decisions.md 注入——对抗主 agent context 被 compact 丢决策） |
+| **`context`** | **pi 运行时** | 启动即载入的强制材料（优先级高于 task prompt 文字提及） | **需要保证 fresh subagent 一定读到某文件时**（如 full 的 decisions.md 注入——对抗主 agent context 被 compact 丢决策） |
 
-> `cwd` 和 `context` 是 pi 运行时层的能力，不是 subagents extension schema 的字段。本 repo schema 未声明不代表运行时不支持——派发时直接在 `startParam` 里传，pi 运行时会处理。design 工作流依赖 `context` 注入 decisions.md（见 Step 2 派发配置）；coding-execute 依赖 `cwd` 做 worktree 隔离（见 lite-shared/subagent-dispatch.md）。
+> `cwd` 和 `context` 是 pi 运行时层的能力，不是 subagents extension schema 的字段。本 repo schema 未声明不代表运行时不支持——派发时直接在 `startParam` 里传，pi 运行时会处理。full 工作流依赖 `context` 注入 decisions.md（见 Step 2 派发配置）；coding-execute 依赖 `cwd` 做 worktree 隔离（见 lite-shared/subagent-dispatch.md）。
 
 ### 派发模板（多组并行必用）
 
@@ -83,7 +83,7 @@ subagent(action:'start', startParam:{ agent: "general-purpose", wait:false, cont
 ```
 
 **必须 `wait:false`**。逐个 `wait:true` 会让「3 组并行」退化成串行 3 倍 wall-clock，多组并行设计失去意义。
-**`context` 注入 decisions.md 是 design 全工作流的硬约束**——对抗主 agent context 被 compact 丢决策的第一道防线（见 Step 1.0 / Step 2 派发配置）。fresh subagent 无对话上下文，只在 task prompt 里文字提及「请读 decisions.md」不可靠（可能漏读/读错版本），必须用 `context` 参数强制注入。
+**`context` 注入 decisions.md 是 full 全工作流的硬约束**——对抗主 agent context 被 compact 丢决策的第一道防线（见 Step 1.0 / Step 2 派发配置）。fresh subagent 无对话上下文，只在 task prompt 里文字提及「请读 decisions.md」不可靠（可能漏读/读错版本），必须用 `context` 参数强制注入。
 
 ### 何时用并行 vs 串行
 

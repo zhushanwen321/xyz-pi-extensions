@@ -143,14 +143,14 @@ def parse_e2e_cases(md_path: str) -> dict:
     return cases
 
 
-# mid/design 格式的测试执行层 → mock/real 映射。
+# mid/full 格式的测试执行层 → mock/real 映射。
 # unit 是隔离层（mock），integration/e2e/perf-chaos 都涉及真实集成/环境（real）。
 # 见 full-execution-plan/references/deliverable-template.md「测试验收清单」。
 _MID_LAYER_REAL = {"integration", "e2e", "perf-chaos", "perf", "chaos"}
 
 
 def parse_mid_manifest(md_path: str) -> dict:
-    """提取 mid/design execution-plan.md 的测试验收清单用例。
+    """提取 mid/full execution-plan.md 的测试验收清单用例。
 
     mid 格式：章节「测试验收清单（Test Acceptance Manifest）」，ID 为 T{UC}.{N}，
     「测试执行层」列取值 unit/integration/e2e/perf-chaos。
@@ -238,7 +238,7 @@ def main() -> None:
     mid_cases = parse_mid_manifest(plan_path)   # mid: T{UC}.{N}（含测试执行层）
 
     if mid_cases and not u_ids and not e_cases:
-        # mid/design execution-plan.md 格式
+        # mid/full execution-plan.md 格式
         plan_format = "mid"
         e_cases = mid_cases  # 复用 e_cases 的 mock/real 比对路径
         all_ids = set(mid_cases.keys())

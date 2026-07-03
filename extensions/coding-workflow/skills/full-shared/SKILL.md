@@ -1,6 +1,6 @@
 ---
 name: full-shared
-description: "[internal] Shared reference files for the design workflow phases. Not invoked directly — sibling design-* skills resolve paths via ../full-shared/references/{file}.md. Kept hidden from model invocation."
+description: "[internal] Shared reference files for the full-* workflow phases. Not invoked directly — sibling full-* skills resolve paths via ../full-shared/references/{file}.md. Kept hidden from model invocation."
 disable-model-invocation: true
 ---
 

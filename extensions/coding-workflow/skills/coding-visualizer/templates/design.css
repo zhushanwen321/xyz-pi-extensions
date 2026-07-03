@@ -1,5 +1,5 @@
 /*
- * design.css — design-visual-explainer 公共样式
+ * design.css — coding-visualizer 公共样式
  * 从 issues.html (feat-system-prompt-loader) 抽出，作为 6 阶段产物骨架的统一底座。
  * 阶段特有类（.issue / .wave-card / .uc / .risk-* 等）放各骨架局部 style，不在此文件。
  *

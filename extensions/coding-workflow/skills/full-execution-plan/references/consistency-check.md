@@ -21,7 +21,7 @@
 
 ```bash
 for phase in clarity architecture issues nfr code_arch execution; do
-  skill="design-${phase/_/-}"
+  skill="full-${phase/_/-}"
   python3 ${SKILL_DIR}/../$skill/scripts/check_${phase}.py {topic_dir}
 done
 ```

@@ -5,7 +5,7 @@ description: >-
   "方案对比", "tradeoff analysis", "优先级排序", or has finished
   system-architecture.md and needs to break it into prioritized issues with
   solution comparisons. Produces issues.md as a fog-of-war decision map.
-  Design Step 3 of 6.
+  Step 3 of 6.
   Not for business requirements (Step 1) or architecture modeling (Step 2).
   Not for non-functional risk analysis (Step 4) or code-level design (Step 5).
 ---
@@ -166,7 +166,7 @@ Issue 决策图（根：从 system-architecture 的挑战推导）
 是否现在进入下一步？
 ```
 
-用户确认后才加载下一 skill。完整设计流程见 `docs/design-workflow-guide.md`。
+用户确认后才加载下一 skill。
 
 ## 标记说明
 

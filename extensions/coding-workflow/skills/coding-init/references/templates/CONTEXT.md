@@ -1,6 +1,6 @@
 # 统一语言（Ubiquitous Language）
 
-> 由 full-clarity skill 维护。记录领域术语的统一定义，所有 design 阶段和编码都应使用此处的术语。
+> 由 full-clarity skill 维护。记录领域术语的统一定义，所有 full 阶段和编码都应使用此处的术语。
 
 ## 术语表
 

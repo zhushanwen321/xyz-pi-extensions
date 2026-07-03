@@ -16,9 +16,9 @@ disable-model-invocation: true
 
 ## 定位
 
-lite-* 是 design-* 的**轻量化对照**：design 服务"涉及架构决策的复杂需求"（L2/L3，6 步设计循环 + fresh-subagent 审查 + 反哺 + 一致性终检）；lite 服务"不涉及架构改动的小功能开发"（L1，plan + goal + todo + subagent 直连，强制严格测试）。
+lite-* 是 full-* 的**轻量化对照**：full 服务"涉及架构决策的复杂需求"（L2/L3，6 步设计循环 + fresh-subagent 审查 + 反哺 + 一致性终检）；lite 服务"不涉及架构改动的小功能开发"（L1，plan + goal + todo + subagent 直连，强制严格测试）。
 
-| 维度 | design-*（重） | lite-*（轻） |
+| 维度 | full-*（重） | lite-*（轻） |
 |------|---------------|-------------|
 | 适用场景 | 跨子系统/状态机变更/架构决策 | 小功能、单/少模块改动 |
 | 设计流程 | 6 步循环 + 追踪 + 审查门 + 反哺 + 终检 | plan.md 单文件（业务目标 + 技术改动点 + Wave + 测试清单） |
@@ -27,9 +27,9 @@ lite-* 是 design-* 的**轻量化对照**：design 服务"涉及架构决策的
 | 任务追踪 | design_status 状态机 | todo（isVerification）+ goal（方向/预算） |
 | 复盘 | coding-closeout 沉淀长期文档 | coding-retrospect 轻量自检清单 |
 
-## 何时升级到 design（范围守门）
+## 何时升级到 full（范围守门）
 
-coding-execute 启动前 [MANDATORY] 自检。以下任一信号出现 → **停止 lite，建议改用 design 工作流**：
+coding-execute 启动前 [MANDATORY] 自检。以下任一信号出现 → **停止 lite，建议改用 full 工作流**：
 
 - 需要跨 2 个及以上子系统/模块协调
 - 涉及状态机变更、核心数据模型变更、公共 API 契约变更
@@ -37,7 +37,7 @@ coding-execute 启动前 [MANDATORY] 自检。以下任一信号出现 → **停
 - 改动会影响 3 个以上既有文件的核心逻辑（非测试文件）
 - 需要非功能设计（安全/并发/性能/稳定性等 NFR 风险分析）
 
-> 小功能的判定不是"代码行数少"，而是"改动是否触及架构契约"。加一个工具函数是 lite；改一个扩展的状态机是 design。
+> 小功能的判定不是"代码行数少"，而是"改动是否触及架构契约"。加一个工具函数是 lite；改一个扩展的状态机是 full。
 
 ## 文件清单
 

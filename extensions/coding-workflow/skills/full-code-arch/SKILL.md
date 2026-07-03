@@ -4,7 +4,7 @@ description: >-
   Use when the user says "代码架构", "code architecture", "详细设计",
   "接口契约", "时序图", "工程目录", "API 设计", or has finished
   non-functional-design.md and needs concrete code-level architecture.
-  Produces code-architecture.md + code-skeleton/ (可编译骨架代码). Design Step 5 of 6.
+  Produces code-architecture.md + code-skeleton/ (可编译骨架代码). Step 5 of 6.
   Not for system-level architecture (Step 2) or issue decomposition (Step 3).
   This designs the code structure and contracts AND validates them via a
   compilable skeleton (Step 7) — it does not write the implementation bodies,
@@ -214,7 +214,7 @@ description: >-
 是否现在进入下一步？
 ```
 
-用户确认后才加载下一 skill。完整设计流程见 `docs/design-workflow-guide.md`。
+用户确认后才加载下一 skill。
 
 ## 标记说明
 

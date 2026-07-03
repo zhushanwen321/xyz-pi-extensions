@@ -1,7 +1,7 @@
 ---
 name: coding-visualizer
 description: >-
-  Use when a design phase Step 5b needs a finalized .md rendered to a
+  Use when a full-* phase Step 5b needs a finalized .md rendered to a
   self-contained .html, or when the user says "可视化", "渲染", "画图", "render
   html", "visualize". Produces {deliverable-name}.html with the phase's mandated
   hero diagram. Serves full-clarity / full-architecture / full-issues /
@@ -11,7 +11,7 @@ description: >-
   visualizes finalized content. Not for writing code.
 ---
 
-# Design Visual Explainer
+# Coding Visual Explainer
 
 设计阶段（①-⑥）的可视化渲染器。消费定稿 `.md`（真相源），产出自包含 `.html`（可视化视图）。**不产生新内容。**
 

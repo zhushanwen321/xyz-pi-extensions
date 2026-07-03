@@ -5,8 +5,8 @@ description: >-
   "归档 topic", "archive topic", or after ⑥execution-plan（或 mid-detail-plan 产出）已完成、
   编码实施已落地（经 coding-execute 执行）、测试验收清单已全绿，需要把本次设计的稳定结论沉淀进长期文档
   （ARCHITECTURE/PRODUCT/NFR/ADR/TEST-STRATEGY）并归档 .xyz-harness/{topic}。
-  设计→实施→沉淀闭环的最后一步。覆盖 design（①-⑥）与 mid（mid-plan+mid-detail-plan）两种产出路径。
-  Not for design phases ①-⑥ themselves, not for 回顾执行质量 (那是 xyz-harness-retrospect),
+  设计→实施→沉淀闭环的最后一步。覆盖 full（①-⑥）与 mid（mid-plan+mid-detail-plan）两种产出路径。
+  Not for full-* phases ①-⑥ themselves, not for 回顾执行质量 (那是 xyz-harness-retrospect),
   not for 需求澄清或编码实现。
 ---
 
@@ -42,7 +42,7 @@ closeout 沉淀**设计产出**（信息归位），retrospect 回顾**执行过
 **触发：** 用户手动 `/coding-closeout [topic]`。未指定 topic 则取 `.xyz-harness/` 下最近修改且无 `ARCHIVED.md` 的目录。
 
 **前置校验（不满足则拒绝并提示）：**
-1. `{topic}/execution-plan.md` 存在且 `verdict: pass`（design ⑥或 mid-detail-plan 产出均可）
+1. `{topic}/execution-plan.md` 存在且 `verdict: pass`（full ⑥或 mid-detail-plan 产出均可）
 2. 实施代码已存在：`{topic}/code-skeleton/` 有内容，或项目源码有对应改动（grep ⑥/mid 测试验收清单关键符号能命中）
 3. 测试验收已执行：`{topic}/changes/test-results.json` 存在且 coding-execute 的 `check_execute.py` PASS（lite/mid 均适用）；若无此文件说明未经 coding-execute 机器门，需人肉确认测试验收清单全绿
 4. `{topic}` 未被归档（无 `ARCHIVED.md`）

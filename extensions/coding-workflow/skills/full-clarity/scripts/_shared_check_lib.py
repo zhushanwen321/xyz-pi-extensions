@@ -2,7 +2,7 @@
 """
 设计工作流硬规则机器验证 — 共享库（Shared Check Library）
 
-6 个 design skill 的 check_{phase}.py 共用的基础设施：
+6 个 full skill 的 check_{phase}.py 共用的基础设施：
   - frontmatter / 章节 / 占位符解析
   - 跨文档引用 ID 提取
   - grep / 外部命令封装

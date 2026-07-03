@@ -1,19 +1,19 @@
 # batch-ask 协议（mid 工作流的批量提问法）
 
-> **mid-plan / mid-detail-plan 共用的交互协议。** 替代 design 的「Grilling 一问一答」（沿设计树逐节点、一次一个问题）。
+> **mid-plan / mid-detail-plan 共用的交互协议。** 替代 full 的「Grilling 一问一答」（沿设计树逐节点、一次一个问题）。
 > mid 先由主 agent 统一起草初稿，draft 过程中**积累**需要用户拍板的决策点，分类打包后**一次性批量提问**。
 >
 > 这是 mid 把 wall-clock 从「40~80 次 ask_user 串行」压到「3~5 次批量」的核心机制。
 
-## 为什么是它（vs design Grilling）
+## 为什么是它（vs full Grilling）
 
-design 的 Grilling（见 `../full-shared/references/loop-method.md`）四条铁律之一是「**一次一个问题，等回答再继续**」——
+full 的 Grilling（见 `../full-shared/references/loop-method.md`）四条铁律之一是「**一次一个问题，等回答再继续**」——
 沿设计树从根到叶逐节点推进，解决父节点再问子节点。这保证决策深度（每个决策基于前一个的答案），但代价是
-**每阶段 5~15 次 ask_user 串行往返，6 阶段累计 40~80 次**——这是 design wall-clock 的最大杀手。
+**每阶段 5~15 次 ask_user 串行往返，6 阶段累计 40~80 次**——这是 full wall-clock 的最大杀手。
 
 mid 的取舍：**用「agent 先整体 draft + 批量收集决策」换「逐节点串行确认」**。
 
-| | design Grilling | mid batch-ask |
+| | full Grilling | mid batch-ask |
 |---|---|---|
 | 时机 | 写初稿前（边问边写） | 写初稿中/后（draft 积累 → 批量问） |
 | 颗粒 | 一次一个，沿设计树 | 一次批量 4~8 个，分类打包 |
@@ -47,7 +47,7 @@ batch_queue = []
 #   "这个 port 真做还是假设 seam？" → 记（D-不可逆）
 ```
 
-> **能查代码答的，dispatch 只读 subagent 查，不进 batch 队列。** 进队列的只限：业务意图、取舍偏好、风险容忍、不可逆的根本选择——这些代码答不了。与 design Grilling 第 4 铁律同源。
+> **能查代码答的，dispatch 只读 subagent 查，不进 batch 队列。** 进队列的只限：业务意图、取舍偏好、风险容忍、不可逆的根本选择——这些代码答不了。与 full Grilling 第 4 铁律同源。
 
 ### B2 · 分类（四类分流）
 
@@ -60,7 +60,7 @@ batch_queue = []
 | **K** | 知识缺口（业务规则、外部约束） | 生成具体问题 | ✅ 进 |
 | **可代码自决** | 有明确启发式、代码可验证 | agent 直接产出 | ❌ 不进 |
 
-> **D-可逆 vs D-不可逆的判定**（关键，防 agent 吞决策）：分层深度、状态机结构、领域聚合边界、依赖方向、根本技术选型 = D-不可逆（改了牵一发动全身）；命名、局部重构、可逆实现细节 = D-可逆。与 design 的 Step 1 必问决策点判定同源。
+> **D-可逆 vs D-不可逆的判定**（关键，防 agent 吞决策）：分层深度、状态机结构、领域聚合边界、依赖方向、根本技术选型 = D-不可逆（改了牵一发动全身）；命名、局部重构、可逆实现细节 = D-可逆。与 full 的 Step 1 必问决策点判定同源。
 
 ### B3 · 批量提问（一次 ask_user，4~8 个）
 
@@ -119,7 +119,7 @@ ask_user(action:'add', questions:[
 
 ## 何时仍走单问（batch 的例外）
 
-batch-ask 是默认，但以下情况**仍走 design 式单问**（退回 `loop-method.md` 的 Grilling）：
+batch-ask 是默认，但以下情况**仍走 full 式单问**（退回 `loop-method.md` 的 Grilling）：
 
 1. **决策有强依赖链**——决策 B 的答案完全取决于决策 A（A 选 X 则 B 只能选 Y，A 选 Z 则 B 是另一组选项）。批量问会让用户在没有 A 的约束下答 B，答案可能无效。这类沿依赖链单问。
 2. **D-不可逆且影响范围大**——如根本架构选型（微服务 vs 单体），其答案会重塑后续所有决策。这类先单问拍板，再基于它 batch 收集其余。
@@ -127,7 +127,7 @@ batch-ask 是默认，但以下情况**仍走 design 式单问**（退回 `loop-
 
 > **判据：** 批量问的前提是「各决策点相对独立」。发现强依赖链就拆出来单问，其余批量。不是非此即彼——一次交互里可以「1 个单问拍板根决策 + 1 批 batch 问其余」。
 
-## 与 design 决策持久化的关系
+## 与 full 决策持久化的关系
 
-batch-ask **完全复用** design 的 decisions.md 机制（append-only 账本、D-不可逆/D-可逆分类、confirmed_by、溯源、revisit 流程）——
+batch-ask **完全复用** full 的 decisions.md 机制（append-only 账本、D-不可逆/D-可逆分类、confirmed_by、溯源、revisit 流程）——
 见 `../full-shared/references/loop-skeleton.md` Step 1.2。mid 只是把「提问方式」从逐个串行改成批量，**决策的持久化和反哺纪律不变**。

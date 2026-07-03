@@ -4,7 +4,7 @@ description: >-
   Use when the user says "非功能性设计", "NFR", "副作用分析", "风险评估",
   "non-functional design", "安全性分析", "性能分析", or has finished issues.md
   and needs to analyze side effects of the chosen solutions. Produces
-  non-functional-design.md. Design Step 4 of 6.
+  non-functional-design.md. Step 4 of 6.
   Not for issue decomposition/priorities (Step 3) or code architecture (Step 5).
   Not for writing code. Not for defining new features — only analyzing existing
   solutions' side effects.
@@ -147,7 +147,7 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 是否现在进入下一步？
 ```
 
-用户确认后才加载下一 skill。完整设计流程见 `docs/design-workflow-guide.md`。
+用户确认后才加载下一 skill。
 
 ## 标记说明
 

@@ -4,7 +4,7 @@ description: >-
   Use when the user says "系统设计", "架构设计", "architecture design",
   "领域建模", "domain modeling", "模块划分", "状态机", or has finished
   requirements.md and needs to model the system. Produces
-  system-architecture.md. Design Step 2 of 6.
+  system-architecture.md. Step 2 of 6.
   Not for business requirements/use-case work (Step 1), issue decomposition
   with priorities (Step 3), or code-level API/sequence design (Step 5).
   Not for writing code.
@@ -182,7 +182,7 @@ Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 
 > **搭便车清单显式提醒：** 交接时必须向用户列出当前候选清单（从 §1 表读取状态=`候选`/`待⑤确认` 的行）。让用户在 ②结束时就知道"这些悬挂项，到了 ⑤会再问你一次"——不让清单默默挂到 ⑤ 才被想起。
 
-用户确认后才加载下一 skill。完整设计流程见 `docs/design-workflow-guide.md`。
+用户确认后才加载下一 skill。
 
 ## 标记说明
 

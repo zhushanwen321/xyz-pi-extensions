@@ -1,7 +1,7 @@
 # 执行流程详解（阶段 A / B / C）
 
 > coding-execute 正文只做阶段路由，本文件是各阶段的**完整操作步骤**。
-> 本流程同时服务 lite（plan.md）和 mid/design（execution-plan.md）两种 plan 格式——
+> 本流程同时服务 lite（plan.md）和 mid/full（execution-plan.md）两种 plan 格式——
 > check_execute.py 自动识别格式，Wave/TDD/worktree/test-runner 落盘机制两者通用。
 > 进入对应阶段前 read 本文件的对应章节。
 
@@ -299,7 +299,7 @@ reviewer-质量组：must_fix/should_fix/nit 清单
        round > 3：Stagnation
          暂停，报告用户：「连续 3 轮未全绿，剩余：<清单>。
            可能：plan 设计缺陷 / 超出 lite 范围 / 需人工介入。
-           建议：调整 plan / 升级 design / 人工排查。」
+           建议：调整 plan / 升级 full / 人工排查。」
          不再自动重试
 ```
 
@@ -315,7 +315,7 @@ reviewer-质量组：must_fix/should_fix/nit 清单
 
 全部验收 todo completed：
 
-**0. 执行收尾机器门（goal complete 前必做，[MANDATORY]）**——跑 check_execute.py 核对 test-results.json 是否覆盖 plan 全部用例（脚本自动识别 lite plan.md 的 U*/E* 或 mid/design execution-plan.md 的 T{UC}.{N}）：
+**0. 执行收尾机器门（goal complete 前必做，[MANDATORY]）**——跑 check_execute.py 核对 test-results.json 是否覆盖 plan 全部用例（脚本自动识别 lite plan.md 的 U*/E* 或 mid/full execution-plan.md 的 T{UC}.{N}）：
 ```bash
 python3 ${SKILL_DIR}/../coding-execute/scripts/check_execute.py {planFilePath} .xyz-harness/{topic}/changes/test-results.json
 ```
@@ -333,7 +333,7 @@ python3 ${SKILL_DIR}/../coding-execute/scripts/check_execute.py {planFilePath} .
 - 改变了既有函数的副作用语义（延迟→立即、同步→异步、单次→多次等）
 - 改变了数据生命周期（创建/销毁/缓存时机）
 
-任一为是 → 本次不是纯「小功能」：补 ADR 记录决策，或提示用户升级 design 工作流，再 complete。全否则继续。
+任一为是 → 本次不是纯「小功能」：补 ADR 记录决策，或提示用户升级 full 工作流，再 complete。全否则继续。
 > 实测案例：预创建 session 改变了「延迟 create」语义、让 landing 态 branch 链路变可达——典型藏在「小功能」里的架构语义变更，范围守门（plan 前/execute 启动前）拦不住，全程无触发器，直到复盘才记录。收尾门补这个洞。
 
 ```

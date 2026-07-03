@@ -16,11 +16,11 @@ description: >-
 
 > **[铁律] 严格 TDD。** 每个 implementer 先写失败测试、跑确认失败、再实现、再跑通过。不接受"先写代码后补测试"。
 >
-> **[铁律] 测试验收不是一个任务。** plan 每条测试用例（lite 的 U*/E*，或 mid/design 的 T{UC}.{N}）+ 覆盖率 gate + mock 层/real 层回归，各自独立 todo（isVerification=true，不可取消，必须 completed）。
+> **[铁律] 测试验收不是一个任务。** plan 每条测试用例（lite 的 U*/E*，或 mid/full 的 T{UC}.{N}）+ 覆盖率 gate + mock 层/real 层回归，各自独立 todo（isVerification=true，不可取消，必须 completed）。
 >
 > **[铁律] E2E 验收 todo 按 mock / real 测试层分组**（`[验收-mock]` / `[验收-real]`），test-runner 分层跑、分层报 pass/fail。mock 层验证逻辑、real 层验证集成，两层各自全绿才算验收通过。见 `../lite-shared/references/test-case-schema.md` 核心原则四。
 >
-> **[铁律] goal_control(complete) 前必须跑 `check_execute.py` 且 PASS。** 这是执行阶段唯一的机器硬门。脚本自动识别 plan 格式（lite plan.md 的单测/E2E 用例清单，或 mid/design execution-plan.md 的测试验收清单），读 test-runner 落盘的 `test-results.json` 逐条核对，堵住「建了验收 todo 不跑/略过 real fail/自标手动通过」等逃逸路径。FAIL 时禁止 complete，见 `../lite-shared/references/execution-flow.md` §阶段C。
+> **[铁律] goal_control(complete) 前必须跑 `check_execute.py` 且 PASS。** 这是执行阶段唯一的机器硬门。脚本自动识别 plan 格式（lite plan.md 的单测/E2E 用例清单，或 mid/full execution-plan.md 的测试验收清单），读 test-runner 落盘的 `test-results.json` 逐条核对，堵住「建了验收 todo 不跑/略过 real fail/自标手动通过」等逃逸路径。FAIL 时禁止 complete，见 `../lite-shared/references/execution-flow.md` §阶段C。
 
 ## 前置检查
 
@@ -28,10 +28,10 @@ description: >-
 
 - plan 产物已完成（二选一）：
   - lite 路径：`plan.md`（lite-plan 产出，含 6 章节 + U*/E* 测试清单）—— 不满足 → `/skill:lite-plan`
-  - mid/design 路径：`execution-plan.md`（mid-detail-plan / full-execution-plan 产出，含测试验收清单 + T{UC}.{N} 用例）—— 不满足 → `/skill:mid-detail-plan`
+  - mid/full 路径：`execution-plan.md`（mid-detail-plan / full-execution-plan 产出，含测试验收清单 + T{UC}.{N} 用例）—— 不满足 → `/skill:mid-detail-plan`
 - goal 已创建（plan complete 选 "Goal-driven execution" 触发 `pi.__goalInit`）
   - 未创建 → `goal_control(action='create', slug='<feature>', objective='Execute plan: <planFilePath>')`
-- 已做范围守门（plan 属于 lite 非 design）—— 见 `../lite-shared/SKILL.md`（仅 lite 路径；mid/design 本身就是重型流程，不需此守门）
+- 已做范围守门（plan 属于 lite 非 full）—— 见 `../lite-shared/SKILL.md`（仅 lite 路径；mid/full 本身就是重型流程，不需此守门）
 
 ## 路由
 

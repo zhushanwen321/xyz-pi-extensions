@@ -256,7 +256,7 @@ def main() -> None:
     # 补充负例：非法 json（损坏文件不应抛 traceback，应报 FAIL）
     check_raw("bad_json", "{ not valid json", expect_zero=False)
 
-    # ===== mid/design execution-plan.md 格式测试（测试验收清单 + T{UC}.{N} ID）=====
+    # ===== mid/full execution-plan.md 格式测试（测试验收清单 + T{UC}.{N} ID）=====
     MID_PLAN = """\
 # 执行计划
 ## Wave 编排总览

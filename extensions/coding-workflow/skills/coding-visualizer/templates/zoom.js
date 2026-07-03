@@ -1,5 +1,5 @@
 /*
- * zoom.js — design-visual-explainer 公共脚本
+ * zoom.js — coding-visualizer 公共脚本
  * 从 issues.html (feat-system-prompt-loader) 抽出，含 Mermaid zoom/pan/fit/expand + TOC scroll-spy。
  * render.sh 通过占位符注释 INLINE:zoom.js 将本文件内联进产物 HTML 的 script[type=module]。
  *

@@ -3,8 +3,8 @@ name: full-clarity
 description: >-
   Use when the user says "澄清需求", "clarify requirements", "需求分析",
   "业务建模", "use case", "start design", or is at the beginning of the
-  design workflow and needs to define what to build before how to build it.
-  Produces requirements.md. Design Step 1 of 6.
+  full workflow and needs to define what to build before how to build it.
+  Produces requirements.md. Step 1 of 6.
   Not for system/architecture design, API definition, tech-stack selection,
   database schema, or coding — those belong to Steps 2-6. Not for pure
   technical refactors with no business change.
@@ -140,7 +140,7 @@ description: >-
 是否现在进入下一步？
 ```
 
-用户确认后才加载下一 skill。完整设计流程见 `docs/design-workflow-guide.md`。
+用户确认后才加载下一 skill。
 
 ## 标记说明
 

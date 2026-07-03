@@ -2,9 +2,9 @@
 name: coding-init
 description: >-
   Use when the user says "初始化项目", "init project", "准备项目文档",
-  "新建 AGENTS.md", "项目基建", "project bootstrap", "start design workflow",
+  "新建 AGENTS.md", "项目基建", "project bootstrap", "start full workflow",
   or when the project lacks AGENTS.md/CONTEXT.md/ARCHITECTURE.md
-  and needs documentation bootstrapped before design work.
+  and needs documentation bootstrapped before full-* design work.
   Not for business requirements (Step 1), architecture modeling (Step 2), or
   coding. Not for overwriting existing docs — only scans, reports, and fills
   gaps with minimal skeletons on user confirmation.
@@ -14,7 +14,7 @@ description: >-
 
 ## 核心目标
 
-为 design 工作流（Steps 1-6）建立**正确的文档载体**：建好长期文档容器，供 **coding-closeout**（收尾步骤）把稳定结论沉淀进项目根，而非只堆在 `.xyz-harness/` 一次性目录里流失。
+为 full 工作流（Steps 1-6）建立**正确的文档载体**：建好长期文档容器，供 **coding-closeout**（收尾步骤）把稳定结论沉淀进项目根，而非只堆在 `.xyz-harness/` 一次性目录里流失。
 
 > **职责边界：** 本 skill 只建容器（骨架 + 回读验证），**不负责沉淀**（沉淀是 coding-closeout 的职责）。①-⑥ 各阶段的产出仍写 `.xyz-harness/{topic}/`，收尾时才由 closeout 提炼进这里的长期文档。
 

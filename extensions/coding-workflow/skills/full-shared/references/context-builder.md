@@ -1,6 +1,6 @@
 # 上下文构建 subagent 规范（Context Builder）
 
-> design 工作流各阶段 Step 1.0 的独立上下文构建 subagent 共用规范。loop-skeleton Step 1.0 派发时注入本文件。
+> full 工作流各阶段 Step 1.0 的独立上下文构建 subagent 共用规范。loop-skeleton Step 1.0 派发时注入本文件。
 > 核心职责：把上游原料压缩成「阶段工作摘要」注入主 agent context，**对抗 compact 导致的决策丢失**——主 agent 即使被压缩，重派本 subagent 即可从文件恢复已确认决策。
 
 ## 你是谁

@@ -4,7 +4,7 @@ description: >-
   Use when the user says "执行计划", "execution plan", "wave编排",
   "任务拆分", "交付计划", "sprint 规划", or has finished code-architecture.md
   and needs to split the work into executable waves. Produces
-  execution-plan.md. Design Step 6 of 6.
+  execution-plan.md. Step 6 of 6.
   Not for code architecture design (Step 5). Not for writing code itself —
   this plans the execution sequence, it does not execute it.
 ---
@@ -67,7 +67,7 @@ Wave 编排（根：从时序图推导）
 >
 > **组 A 机器化降级空间**：Wave 编排脚本化（`check_execution.py` 生成器 + 结构检查）后，结构三视角（切片独立性/依赖闭合/并行安全）可退化为机器自检。当脚本已覆盖这三项时，Step 2 只派组 B（测试闭环，1 个 subagent）即可，从 2 组并行降为单组——主 agent 自跑 `check_execution.py` 的结构检查替代组 A，省一个 subagent。脚本未覆盖前维持 2 组。
 >
-> **本阶段是脚本化降级的范本**：其他 design 阶段（①-⑤）已参照本模式在各自 Step 2 标注「机器化降级空间」，说明各自的 `check_{phase}.py` 覆盖了哪些机器可判视角、subagent 只保留哪些语义盲区工作。
+> **本阶段是脚本化降级的范本**：其他 full 阶段（①-⑤）已参照本模式在各自 Step 2 标注「机器化降级空间」，说明各自的 `check_{phase}.py` 覆盖了哪些机器可判视角、subagent 只保留哪些语义盲区工作。
 
 | 组（认知帧） | 视角 | 主读 |
 |---|---|---|
@@ -148,7 +148,7 @@ Wave 编排（根：从时序图推导）
 是否现在开始编码？
 ```
 
-用户确认后才开始编码。完整设计流程见 `docs/design-workflow-guide.md`。
+用户确认后才开始编码。
 
 ## 标记说明
 

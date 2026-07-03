@@ -7,7 +7,7 @@ description: >-
   produced efficiently via draft + batch-ask + review-fix-loop. Produces requirements.md
   + system-architecture.md (+ .html). Content aligns with full-clarity + full-architecture;
   orchestration aligns with lite (batch-ask replaces one-by-one Grilling).
-  Not for L3 heavy (multi-system/cross-org/complex state machine) — use design-* workflow.
+  Not for L3 heavy (multi-system/cross-org/complex state machine) — use full-* workflow.
   Not for L1 small feature (no architecture change) — use lite-plan.
   Not for issues/nfr/code-arch/execution — that is mid-detail-plan.
 ---
@@ -26,9 +26,9 @@ full-architecture 全量；**编排**改为 draft → batch-ask → review-fix-l
 
 - **L2（12-18 分，本 skill 目标）** → 继续
 - **L1（8-11 分，小功能无架构改动）** → 停止，改用 `/skill:lite-plan`
-- **L3（19-24 分，重型）** → 停止，改用 design 工作流（每阶段深度收敛不可省）
+- **L3（19-24 分，重型）** → 停止，改用 full 工作流（每阶段深度收敛不可省）
 
-> mid 的定位是 **L2 专用**。L1 走 lite 更快，L3 走 design 更稳。范围错了后面全白做。
+> mid 的定位是 **L2 专用**。L1 走 lite 更快，L3 走 full 更稳。范围错了后面全白做。
 > 判定结果写入 `{topic_dir}/_progress.md` frontmatter 的 `complexity_tier`，用户可覆盖（判定后 ask_user 确认一次）。
 
 ## 前置
@@ -64,7 +64,7 @@ mid-plan 是 mid 工作流首阶段，负责建 topic 级基建：
    ```bash
    cp ../full-clarity/references/decisions-template.md {topic_dir}/decisions.md
    ```
-   decisions.md 是本 topic 的 append-only 决策账本，mid 全程沿用 design 的机制（见 `../full-shared/references/loop-skeleton.md` Step 1.2）。
+   decisions.md 是本 topic 的 append-only 决策账本，mid 全程沿用 full 的机制（见 `../full-shared/references/loop-skeleton.md` Step 1.2）。
 3. **建 _progress.md**（含 complexity_tier）：
    ```bash
    cp ../full-clarity/references/_progress-template.md {topic_dir}/_progress.md
@@ -175,7 +175,7 @@ draft 过程中积累的决策点，按四类分流：
 **汇总：** 按 L4 汇总去重（HIGH-CONFIDENCE / CROSS-VALIDATED / NEEDS-VERIFY）。
 **收敛：** 按 L5/L6（无 must_fix → CONVERGED；有 → 修复回 L1，round ≥ MAX=2 → 进 Step 6）。
 
-> **[CROSS-VALIDATED 冲突处理]** 红队说「某 port 该删」、对齐说「该 port 是上游对齐必需」——涉及 D-不可逆（分层/边界）→ 必须 ask_user，不能 agent 自判。与 design Step 6 同源。
+> **[CROSS-VALIDATED 冲突处理]** 红队说「某 port 该删」、对齐说「该 port 是上游对齐必需」——涉及 D-不可逆（分层/边界）→ 必须 ask_user，不能 agent 自判。与 full Step 6 同源。
 
 ## Step 6：二次 ask（loop 残留 D-不可逆）
 
