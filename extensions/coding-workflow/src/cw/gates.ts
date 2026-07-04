@@ -1,26 +1,26 @@
 /**
- * gates — gate 注册表 + 执行器 + subprocess/git adapter（§5 architecture）。
+ * gates — gate 注册表 + 执行器 + check/git adapter（§5 architecture）。
  *
  * 内容：
  *   - GATE_REGISTRY 声明式数组（§5.2 的 11 行表 1:1 编码，#4 方案 A）
  *   - runGate 通用执行器（串行 fail-fast，§5.3）
  *   - lookupGateTier（progressive gate 透传 gateTier 到 gateHistory）
- *   - GateRunner（subprocess adapter，#6，真引 spawnSync 调 check_*.py）
+ *   - GateRunner（dispatch 到 checks/ 下的 TS check 函数，原 python subprocess 已移除）
  *   - GitValidator（execFileSync adapter，#3，真引 git 三项校验）
  *
- * Adapter 真引 SDK（Tier 2 证伪）：spawnSync / execFileSync 真调用 + 透传参数，
+ * Adapter 真引 SDK（Tier 2 证伪）：execFileSync 真调用 + 透传参数，
  * 让 tsc 对 node:child_process 声明验签。
  *
- * 与骨架的分歧（nfr #3 + T2.15 / #6 + T2.21a / T2.19）：
+ * 与骨架的分歧（nfr #3 + T2.15）：
  *   - GitValidator：git ENOENT（可执行文件缺失）→ throw infra-error；commit 无效（非零退出）
  *     → {valid:false} 业务 fail。catch 里按 errno.code === 'ENOENT' 区分。
- *   - GateRunner：topicDir 路径遍历（.. / 绝对路径）→ infraError 拒（不 spawn）；
- *     verdict/exitcode 矛盾 → infraError（T2.21a）；无 verdict 行 → infraError（契约 pin）。
+ *   - GateRunner：dispatch 到 TS check 函数，crash 兜底返 infraError（业务 fail 由 check 自返 passed:false）。
  */
 
-import { execFileSync, spawnSync } from "node:child_process";
-import { isAbsolute } from "node:path";
+import { execFileSync } from "node:child_process";
 
+import { runCheckClarity } from "./checks/check-clarity.js";
+import type { CheckOutput } from "./checks/shared.js";
 import type { CwAction, CwTopic, GateTier, Tier } from "./types.js";
 
 // ── gate 注册表（#4 方案 A 声明式数组） ──────────────────────
@@ -135,99 +135,72 @@ export function lookupGateTier(tier: Tier, phase: CwAction): GateTier {
   return findRule(tier, phase).gateTier;
 }
 
-// ── GateRunner（subprocess adapter，#6） ─────────────────────
-
-export interface CheckOutput {
-  passed: boolean;
-  report?: string;
-  /** crash / timeout / 路径遍历 / 契约矛盾 → infraError（业务 fail vs 基础设施异常，#6 方案 A）。 */
-  infraError?: string;
-}
-
-// ── subprocess 契约常量（#6，语义化命名） ─────────────────
-/** check_*.py subprocess 超时（ms），超时 → kill + infraError（T2.20/T2.21c）。 */
-const SUBPROCESS_TIMEOUT_MS = 60_000;
-/** python exit code 2 = usage error（infra，见 finalize_and_exit 契约）。 */
-const EXIT_USAGE_ERROR = 2;
-/** infra 错误消息里 stderr/stdout 片段截断长度（防消息爆炸）。 */
-const ERR_FRAGMENT_LEN = 200;
-
-/** topicDir 路径遍历校验（T2.19）：含 .. 段或绝对路径 → true。 */
-function hasPathTraversal(p: string): boolean {
-  if (isAbsolute(p)) return true;
-  const segments = p.split(/[/\\]/);
-  return segments.some((s) => s === "..");
-}
+// ── GateRunner（check 函数 dispatch，原 subprocess adapter 已移除） ──
 
 /**
- * spawnSync 调 python check_*.py，解析 stdout 末行 verdict。
+ * CheckOutput —— 单一来源在 checks/shared.ts，此处 re-export 保持外部 import 兼容。
  *
- * 输出契约（_shared_check_lib.finalize_and_exit）：
- *   stdout 末行：`[{phase}] machine check: {passed}/{total} passed → PASS|FAIL`
- *   exit 0 = pass，exit 1 = 业务 fail，exit 2 = usage error（infra）。
+ * gate 消费链：check 函数 → CheckOutput → buildChecker → CheckerResult → GateResult。
+ * 只要这个接口不动，buildChecker/runGate/4 个 action handler 零改动。
+ */
+export type { CheckOutput };
+
+/**
+ * check 函数 dispatch 表。
  *
- * 三种 infra 场景（T2.21a/b/c）：
- *   - verdict/exitcode 矛盾（exit0+FAIL 或 exit1+PASS）→ infraError
- *   - python ENOENT / crash（status=null）→ infraError
- *   - timeout（SIGTERM）→ infraError
+ * key = GATE_REGISTRY 里 buildChecker 的 scriptPath 字符串（保持原值，当 dispatch key）。
+ * value = 移植后的 TS check 函数（签名 (topicDir) => CheckOutput）。
+ *
+ * 未实现的 check 暂用占位（throw infraError），逐步填充。
+ */
+type CheckFn = (topicDir: string) => CheckOutput;
+
+const NOT_IMPLEMENTED = (phase: string): CheckFn => () => ({
+  passed: false,
+  infraError: `check_${phase}.py TS port not implemented yet`,
+});
+
+const CHECK_DISPATCH: Record<string, CheckFn> = {
+  "check_clarity.py": runCheckClarity,
+  "check_architecture.py": NOT_IMPLEMENTED("architecture"),
+  "check_issues.py": NOT_IMPLEMENTED("issues"),
+  "check_nfr.py": NOT_IMPLEMENTED("nfr"),
+  "check_code_arch.py": NOT_IMPLEMENTED("code_arch"),
+  "check_execution.py": NOT_IMPLEMENTED("execution"),
+  "check_plan.py": NOT_IMPLEMENTED("plan"),
+  "check_closeout.py": NOT_IMPLEMENTED("closeout"),
+};
+
+/**
+ * dispatch 到 TS check 函数（取代原 spawnSync python）。
+ *
+ * 历史 bug：原 spawnSync 版本因 topicDir 绝对路径触发 hasPathTraversal 拒绝、
+ * scriptPath 相对路径找不到 python 脚本，gate 从未真正跑通。TS 函数方案彻底消除
+ * subprocess 边界、stdout 文本契约、path traversal 防御。
+ *
+ * infraError 场景（TS 函数世界）：
+ *   - 未知 scriptPath key → infraError（dispatch 表未注册）
+ *   - check 函数 throw → infraError（crash 兜底，业务 fail 由 check 自己返回 passed:false）
  */
 export class GateRunner {
   constructor(private cwd: string) {}
 
   runCheck(scriptPath: string, topicDir: string): CheckOutput {
-    // T2.19：路径遍历在 spawn 前拒（topicDir 由 topicId 派生，正常不含 .. / 绝对路径）。
-    if (hasPathTraversal(topicDir)) {
+    const fn = CHECK_DISPATCH[scriptPath];
+    if (!fn) {
       return {
         passed: false,
-        infraError: `path traversal rejected: topicDir="${topicDir}" must be relative without ..`,
+        infraError: `unknown check: ${scriptPath}（dispatch 表未注册）`,
       };
     }
-
-    const result = spawnSync("python3", [scriptPath, topicDir], {
-      cwd: this.cwd,
-      encoding: "utf8",
-      timeout: SUBPROCESS_TIMEOUT_MS,
-    });
-
-    // T2.21b（ENOENT/crash，status=null）/ T2.20·T2.21c（timeout，signal=SIGTERM）。
-    if (result.status === null || result.signal) {
+    try {
+      return fn(topicDir);
+    } catch (e) {
       return {
         passed: false,
-        infraError: `subprocess ${result.signal ?? "crash"}: ${(result.stderr ?? "").slice(0, ERR_FRAGMENT_LEN)}`,
+        infraError: `check crashed: ${e instanceof Error ? e.message : String(e)}`,
       };
     }
-    // exit 2 = usage error（infra）。
-    if (result.status === EXIT_USAGE_ERROR) {
-      return { passed: false, infraError: `usage error: ${(result.stderr ?? "").slice(0, ERR_FRAGMENT_LEN)}` };
-    }
-
-    // 业务 verdict：解析含 "machine check" 的末行（#6 方案 A 双信号：verdict 行 + exit code）。
-    const verdictLine = result.stdout
-      .split("\n")
-      .filter((l) => l.includes("machine check"))
-      .pop();
-
-    if (verdictLine === undefined) {
-      // 契约 pin（T2.22）：脚本未输出 verdict 行 → 无法判定 → infraError。
-      return {
-        passed: false,
-        infraError: `no verdict line in stdout: ${(result.stdout ?? "").slice(-ERR_FRAGMENT_LEN)}`,
-      };
-    }
-
-    const exitPass = result.status === 0;
-    const verdictPass = verdictLine.includes("PASS");
-    const verdictFail = verdictLine.includes("FAIL");
-
-    // T2.21a：verdict 与 exitcode 矛盾 → infraError（脚本输出不一致，不可信）。
-    if ((verdictPass && !exitPass) || (verdictFail && exitPass)) {
-      return {
-        passed: false,
-        infraError: `verdict/exitcode contradiction: verdict="${verdictPass ? "PASS" : verdictFail ? "FAIL" : "?"}" exit=${result.status}: ${verdictLine}`,
-      };
-    }
-
-    return { passed: verdictPass, report: verdictLine };
   }
 }
 

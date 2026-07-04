@@ -173,8 +173,12 @@ export function registerCodingWorkflowTool(pi: ExtensionAPI): void {
         throw new Error("coding-workflow call aborted by signal.");
       }
       // composition root：从 params 推 workspacePath，构造 deps。
-      // dbPath 放 workspacePath/.xyz-harness/_cw.db（topic 工作区约定，与 state-machine.ts 的
-      // topicDir 一致；.xyz-harness/ 已是 topic 级产出目录）。
+      // dbPath 放 workspacePath/.xyz-harness/_cw.db。
+      // topicDir 用 workspacePath（绝对路径）：TS check 函数和 review-stub 都用它定位
+      // changes/ 和 deliverable 文件。原 bug 是 topicDir 绝对路径触发 hasPathTraversal 拒绝；
+      // 现在 TS 函数方案删除了 hasPathTraversal 防御（subprocess 边界已消除），
+      // 绝对路径直接传给 check 函数，无 path traversal 风险（topicDir 来自 params，
+      // 非 LLM 自由输入；真要防 traversal 应在入口校验 workspacePath 合法性）。
       const workspacePath = rawParams.workspacePath ?? process.cwd();
       const deps: ActionDeps = {
         store: new CwStore(`${workspacePath}/.xyz-harness/_cw.db`),

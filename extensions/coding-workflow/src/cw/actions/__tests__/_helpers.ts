@@ -52,6 +52,8 @@ export function makeDeps(workspacePath: string): { deps: ActionDeps; store: CwSt
     git: new GitValidator(workspacePath),
     runner: new GateRunner(workspacePath),
     workspacePath,
+    // 与生产 index.ts 一致：topicDir=workspacePath（绝对路径）。
+    // 原 hasPathTraversal 防御已删（TS check 函数方案无 subprocess 边界）。
     topicDir: workspacePath,
   };
   return { deps, store };

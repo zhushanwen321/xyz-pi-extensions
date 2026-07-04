@@ -25,6 +25,7 @@ export default defineConfig({
     include: [
       "src/__tests__/**/*.test.ts",
       "src/cw/__tests__/**/*.test.ts",
+      "src/cw/checks/__tests__/**/*.test.ts",
       "src/cw/actions/__tests__/**/*.test.ts",
       "lib/gates/__tests__/**/*.test.ts",
     ],
