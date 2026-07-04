@@ -96,7 +96,8 @@ const DDL = [
     status TEXT NOT NULL,
     plan_format TEXT,
     coverage INTEGER,
-    gate_passed TEXT
+    gate_passed TEXT,
+    evidence TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS wave (
     topic_id TEXT NOT NULL,
@@ -294,6 +295,7 @@ export class CwStore {
       gateHistory,
       gatePassed: parseJsonField<Partial<Record<CwAction, boolean>>>(tr.gate_passed, {}),
       coverage: typeof tr.coverage === "number" ? tr.coverage : undefined,
+      evidence: parseJsonField<Evidence | undefined>(tr.evidence, undefined),
     };
   }
 
@@ -357,12 +359,11 @@ export class CwStore {
   }
 
   setEvidence(topicId: string, evidence: Evidence): void {
-    // 接线：closeout 终态填充（coverage + gateHistory 快照）。
-    void evidence;
-    this.db.prepare(`UPDATE topic SET coverage = ? WHERE topic_id = ?`).run(
-      evidence.coverage ?? null,
-      topicId,
-    );
+    // 接线：closeout 终态填充——evidence 整体序列化到 topic.evidence 列（closedAt/coverage/gateHistory 快照）。
+    // coverage 同时写独立列，便于按覆盖率直查（evidence JSON 是完整快照，coverage 列是冗余索引）。
+    this.db
+      .prepare(`UPDATE topic SET coverage = ?, evidence = ? WHERE topic_id = ?`)
+      .run(evidence.coverage ?? null, JSON.stringify(evidence), topicId);
   }
 
   // ── wave DAO ───────────────────────────────────────────────
