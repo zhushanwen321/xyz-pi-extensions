@@ -19,7 +19,10 @@
 
 import { execFileSync } from "node:child_process";
 
+import { runCheckArchitecture } from "./checks/check-architecture.js";
 import { runCheckClarity } from "./checks/check-clarity.js";
+import { runCheckIssues } from "./checks/check-issues.js";
+import { runCheckNfr } from "./checks/check-nfr.js";
 import type { CheckOutput } from "./checks/shared.js";
 import type { CwAction, CwTopic, GateTier, Tier } from "./types.js";
 
@@ -162,9 +165,9 @@ const NOT_IMPLEMENTED = (phase: string): CheckFn => () => ({
 
 const CHECK_DISPATCH: Record<string, CheckFn> = {
   "check_clarity.py": runCheckClarity,
-  "check_architecture.py": NOT_IMPLEMENTED("architecture"),
-  "check_issues.py": NOT_IMPLEMENTED("issues"),
-  "check_nfr.py": NOT_IMPLEMENTED("nfr"),
+  "check_architecture.py": runCheckArchitecture,
+  "check_issues.py": runCheckIssues,
+  "check_nfr.py": runCheckNfr,
   "check_code_arch.py": NOT_IMPLEMENTED("code_arch"),
   "check_execution.py": NOT_IMPLEMENTED("execution"),
   "check_plan.py": NOT_IMPLEMENTED("plan"),
