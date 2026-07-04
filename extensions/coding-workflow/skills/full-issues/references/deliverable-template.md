@@ -46,7 +46,7 @@ P 级定义（MoSCoW）与取舍原则详见 `issue-template.md`。
 
 > **这是「不漏项」的第一道防线——把上游每个元素从沉默变可见。**
 > 没有这张表，Step2 独立重建无表可 diff（覆盖关系必须显式声明）。
-> 机器检查（`check_issues.py`）只验形式（表存在、每行有 issue 或 N/A+理由），**查不了实质完整**——漏行/虚标/弱理由靠 Step2 独立重建对抗。
+> 机器检查（CW gate check-issues）只验形式（表存在、每行有 issue 或 N/A+理由），**查不了实质完整**——漏行/虚标/弱理由靠 Step2 独立重建对抗。
 
 按 `fog-of-war.md` 的 4 轴（状态/模块/边界/挑战）从 system-architecture.md 逐条扫描，每个可拆元素填一行：
 

@@ -68,8 +68,8 @@ description: >-
 
 > 时序图调用链推导、签名表语法、Deep Module 词汇应用 = agent 自决。
 
-**Step 1 末尾 — 机器结构检查前置自跑（零成本提速）：** 初稿（含 §6 test-matrix）写完后，主 agent 立即自跑 `python3 ${SKILL_DIR}/scripts/check_code_arch.py {topic_dir}`（若骨架未生成用 `--no-skeleton` 参数跳过骨架检查），FAIL 当场修低级硬伤（缺章节/占位符/§9 未定义签名/类型逃逸），不必等 Step 6。
-> **与 Step 6 审查的分工**：此处只杀机器可证的结构硬伤；Step 6 才是质量门（含骨架 P1 反模式 + 红队）。两者不替代——Step 6 的 check_code_arch.py exit 1 仍硬阻断判 FAIL。
+**Step 1 末尾 — 机器结构检查前置（零成本提速）：** 初稿（含 §6 test-matrix）写完后，主 agent 调 `cw(action=clarify)` / `cw(action=detail)` 触发 CW gate 的机器检查（若骨架未生成则骨架检查自动跳过），FAIL 当场修低级硬伤（缺章节/占位符/§9 未定义签名/类型逃逸），不必等 Step 6。
+> **与 Step 6 审查的分工**：此处只杀机器可证的结构硬伤；Step 6 才是质量门（含骨架 P1 反模式 + 红队）。两者不替代——Step 6 审查前 CW gate 的机器检查 FAIL 仍硬阻断。
 
 **§6 test-matrix 来源 A/B 拆 2 并行 subagent（减写+提速）：** 来源 A（功能用例，从 §4 时序图 alt/else 正向推导）与来源 B（NFR 用例，从④回灌表 `验收方式=代码测试` 反向映射）**认知帧不同**（功能边界 vs 风险登记），读文件基本不重叠（A 读 §4+①UC；B 读④回灌表），拆 2 并行 fresh subagent 无写冲突（写入 template §6 的分表，ID 段 T{UC}.6+ 区分）。来源 A 内部可选"按 UC 并行"（每 UC 1 subagent），但需上限保护：UC≤3 全并行；>3 按模块归组或分批（撞≤5 并发约束）。
 
@@ -113,7 +113,7 @@ description: >-
 
 **收敛判定**：5 组都 CONVERGED 才算整轮收敛；任一组有新 gap → 回 Step 3 处理后重跑该组（不必 5 组全重跑）。
 
-> **机器化降级空间**：`check_code_arch.py` 已覆盖「test-matrix 来源B」「骨架源文件」「骨架无占位符/类型逃逸」「god object 行数」「tsc 编译」——即 5 组认知帧里「结构帧+闭环帧」的机器可判子集，这些可由主 agent 自跑脚本完成，不占 subagent 预算。当脚本覆盖这两帧时，Step 2 可从 5 组降为 3 组。subagent 只做脚本做不了的：时序图语义贯通、API 契约一致性、禁读重建的盲区发现。
+> **机器化降级空间**：CW gate 的机器检查已覆盖「test-matrix 来源B」「骨架源文件」「骨架无占位符/类型逃逸」「god object 行数」「tsc 编译」——即 5 组认知帧里「结构帧+闭环帧」的机器可判子集，这些由 CW gate 在 `cw(action=clarify)` / `cw(action=detail)` 调用时自动完成，不占 subagent 预算。当机器检查覆盖这两帧时，Step 2 可从 5 组降为 3 组。subagent 只做机器做不了的：时序图语义贯通、API 契约一致性、禁读重建的盲区发现。
 
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
@@ -121,7 +121,7 @@ description: >-
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 code-architecture.md；派 fresh subagent 渲染 code-architecture.html（机制见 loop-skeleton.md Step 5b）（主角图：包依赖图+核心时序图）。**
 
-**Step 6（审查）— 派 fresh-context 审查 subagent（按 ../full-shared/references/review-agent.md 规范，先跑 `scripts/check_code_arch.py` 机器检查——含 P1 骨架反模式，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-code-arch.md`（frontmatter 含 verdict + machine_check）。APPROVED 才进 Step 7。**
+**Step 6（审查）— 派 fresh-context 审查 subagent（按 ../full-shared/references/review-agent.md 规范，CW gate 的机器检查——含 P1 骨架反模式，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-code-arch.md`（frontmatter 含 verdict + machine_check）。APPROVED 才进 Step 7。**
 
 **Step 7（骨架验证）— 派 fresh-context subagent 生成可编译骨架代码，物理验证 Step 1-5 的设计假设。**
 
@@ -144,7 +144,7 @@ description: >-
 - [ ] 包依赖无环（import 与 §2 包依赖图一致）
 - [ ] **调用链代码接线可达**（Level 1：每张 §4 时序图入口→底层在骨架代码里真实接线——`this.x()`/`self.x()`/`receiver.x()`，非仅 import 图）
 - [ ] **adapter 真引 SDK** — 每个 `infra/*` adapter 方法真引用其 SDK（类型检查器/编译器对依赖声明验签），不 throw 占位
-- [ ] **§3 签名表每个方法在骨架有定义**（orphan 检查，`check_code_arch.py` ③f）
+- [ ] **§3 签名表每个方法在骨架有定义**（orphan 检查，CW gate 代码架构检查 ③f）
 - [ ] NFR④ 标并发的 UC，骨架已有幂等键/idempotency/锁字段
 
 **失败处理：** 验证失败 → 回 Step 1 修签名/目录/依赖/时序图，不带着错误交接 ⑥。

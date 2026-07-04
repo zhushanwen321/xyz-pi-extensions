@@ -45,8 +45,8 @@ description: >-
 提问焦点：先问目标再问功能；区分「目标」和「方案」；业务用例非技术用例。
 即时写入项目根 CONTEXT.md（统一语言）。初稿用 `references/deliverable-template.md`。
 
-**Step 1 末尾 — 机器结构检查前置自跑（零成本提速）：** 初稿写完后，主 agent 立即自跑 `python3 ${SKILL_DIR}/scripts/check_clarity.py {topic_dir}`，FAIL 当场修低级硬伤（占位符没替换/章节缺/每 UC 缺 AC/系统实现越界/frontmatter verdict 缺），不必等 Step 6。
-> **与 Step 6 审查的分工**：此处只杀机器可证的结构硬伤（快、主 agent 自跑）；Step 6 才是质量门（fresh subagent 跑）。两者不替代——Step 6 的 check_clarity.py exit 1 仍硬阻断判 FAIL。
+**Step 1 末尾 — 机器结构检查前置（零成本提速）：** 初稿写完后，主 agent 调 `cw(action=clarify)` 触发 CW gate 的机器检查，FAIL 当场修低级硬伤（占位符没替换/章节缺/每 UC 缺 AC/系统实现越界/frontmatter verdict 缺），不必等 Step 6。
+> **与 Step 6 审查的分工**：此处只杀机器可证的结构硬伤（快、CW gate 自动跑）；Step 6 才是质量门（fresh subagent 跑）。两者不替代——Step 6 审查前 CW gate 的机器检查 FAIL 仍硬阻断。
 
 **Step 2（追踪）— 2 个并行 fresh-context subagent：5 视角追踪 + 禁读产出物异质重建。**
 
@@ -84,13 +84,13 @@ description: >-
 4. 写入 {topic_dir}/changes/tracing-round-{N}-reconstruct.md
 ```
 
-> **机器化降级空间**：`check_clarity.py` 已覆盖「UC≥1 AC」「不含系统实现（①铁律）」——即 5 视角里视角1（目标可追溯性）的机器可判子集，这些可由主 agent 自跑脚本完成，不占 subagent 预算。subagent 只做脚本做不了的：禁读产出物的异质重建（Actor/用例/异常流程的语义盲区发现）。脚本未覆盖的视角2-5 仍需 subagent。
+> **机器化降级空间**：CW gate 的机器检查已覆盖「UC≥1 AC」「不含系统实现（①铁律）」——即 5 视角里视角1（目标可追溯性）的机器可判子集，这些由 CW gate 在 `cw(action=clarify)` / `cw(action=detail)` 调用时自动完成，不占 subagent 预算。subagent 只做机器做不了的：禁读产出物的异质重建（Actor/用例/异常流程的语义盲区发现）。机器检查未覆盖的视角2-5 仍需 subagent。
 
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 requirements.md；派 fresh subagent 渲染 requirements.html（机制见 loop-skeleton.md Step 5b）（主角图：用例图）。**
 
-**Step 6（审查）— 派 fresh-context 审查 subagent（按 `../full-shared/references/review-agent.md` 规范，先跑 `scripts/check_clarity.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-clarity.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（①无上游，反哺检查直接 pass），再交接。**
+**Step 6（审查）— 派 fresh-context 审查 subagent（按 `../full-shared/references/review-agent.md` 规范，CW gate 的机器检查 FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-clarity.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（①无上游，反哺检查直接 pass），再交接。**
 
 ## Phase Loop 机制
 

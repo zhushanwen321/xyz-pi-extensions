@@ -44,7 +44,7 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 不确定性高的副作用（并发死锁/缓存命中率）→ 标记为需⑤骨架验证，不纯靠脑力推演（见 `references/nfr-dimensions.md`）。
 初稿用 `references/deliverable-template.md`。
 
-**Step 1 末尾 — 机器检查前置自跑（零成本提速）：** 初稿写完后，主 agent 立即自跑 `python3 ${SKILL_DIR}/scripts/check_nfr.py {topic_dir}`，FAIL 当场修低级硬伤（缺章节/占位符/缓解项缺验收方式），不必等 Step 6。
+**Step 1 末尾 — 机器检查前置（零成本提速）：** 初稿写完后，主 agent 调 `cw(action=clarify)` / `cw(action=detail)` 触发 CW gate 的机器检查，FAIL 当场修低级硬伤（缺章节/占位符/缓解项缺验收方式），不必等 Step 6。
 
 **Step 2（追踪）— 拆两部分：正向追踪 + 回灌指针重建器（反向覆盖）：**
 
@@ -87,13 +87,13 @@ Step 3 的 issue 解决方案对系统有什么**副作用**？如何解决？
 5. 每条 gap 标类型（F/K/D）。写入 {topic_dir}/changes/tracing-round-{N}-backfeed.md
 ```
 
-> **机器化降级空间**：`check_nfr.py` 已覆盖「回灌③指针 PHANTOM」「验收方式列合法」「无不可接受项」——即回灌重建器视角3 的机器可判子集，这些可由主 agent 自跑脚本完成，不占 subagent 预算。subagent 只做脚本做不了的：副作用的语义风险评估（缓解方案是否真消除风险）与回灌重建器视角3 之外的盲区。脚本未覆盖前维持回灌重建器 subagent。
+> **机器化降级空间**：CW gate 的机器检查已覆盖「回灌③指针 PHANTOM」「验收方式列合法」「无不可接受项」——即回灌重建器视角3 的机器可判子集，这些由 CW gate 在 `cw(action=clarify)` / `cw(action=detail)` 调用时自动完成，不占 subagent 预算。subagent 只做机器做不了的：副作用的语义风险评估（缓解方案是否真消除风险）与回灌重建器视角3 之外的盲区。机器检查未覆盖前维持回灌重建器 subagent。
 
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 non-functional-design.md；派 fresh subagent 渲染 non-functional-design.html（机制见 loop-skeleton.md Step 5b）（主角图：风险矩阵热力图 issue×7维度 ✅⚠️❌着色）。**
 
-**Step 6（审查）— 派 fresh-context 审查 subagent（按 ../full-shared/references/review-agent.md 规范，先跑 `scripts/check_nfr.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-nfr.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（回扫 ①②③上游），再交接。**
+**Step 6（审查）— 派 fresh-context 审查 subagent（按 ../full-shared/references/review-agent.md 规范，CW gate 的机器检查 FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-nfr.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（回扫 ①②③上游），再交接。**
 
 ## Phase Loop 机制
 

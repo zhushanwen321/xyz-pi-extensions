@@ -94,11 +94,11 @@ Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 
 > 这个检查点不是新 Step——是 Step 1 的收尾动作，不改动 loop-skeleton 的 6 步骨架。Step 2 的 subagent 找 gap（完整性），但**整体方向对不对是用户的判断**，不能外包给 subagent。
 
-**Step 1 末尾 — 机器检查前置自跑 [RECOMMENDED]：**
+**Step 1 末尾 — 机器检查前置 [RECOMMENDED]：**
 
-方案对齐检查点通过、初稿写完后，主 agent 立即自跑 `scripts/check_architecture.py <topic_dir>`（exit 0 才进 Step 2）。
+方案对齐检查点通过、初稿写完后，主 agent 调 `cw(action=clarify)` / `cw(action=detail)` 触发 CW gate 的机器检查（通过才进 Step 2）。
 
-**与 Step 6 审查的分工：** Step 1 末自跑 = 早反馈（占位符/缺章节/verdict 缺失/状态机 Status/Reason 漏标等低级硬伤，在交给 Step 2 subagent 前就修掉，避免 subagent 追着低级错误跑）；Step 6 审查 subagent 仍复跑一次做最终门（**不取消，硬阻断铁律不变**）。同一脚本两道关：Step 1 末是「早修低级伤」，Step 6 是「最终门」。
+**与 Step 6 审查的分工：** Step 1 末 CW gate 检查 = 早反馈（占位符/缺章节/verdict 缺失/状态机 Status/Reason 漏标等低级硬伤，在交给 Step 2 subagent 前就修掉，避免 subagent 追着低级错误跑）；Step 6 审查前 CW gate 仍复跑一次做最终门（**不取消，硬阻断铁律不变**）。同一检查两道关：Step 1 末是「早修低级伤」，Step 6 是「最终门」。
 
 **Step 2（追踪）— 派 3 个 fresh-context subagent 并行，各戴一个认知帧（2 视角）：**
 
@@ -119,13 +119,13 @@ Seam 纪律：一个 adapter=假设 seam；两个 adapter=真 seam。
 
 **收敛判定（Step 4 复核）：** 各组（3 组或降级后的 2/1 组）都 CONVERGED（无新 gap）才算整轮收敛。**Step 4 收敛复核只重跑「未 CONVERGED 的组」——已 CONVERGED 的组不必重跑（首轮复核和回流后复核均同此规则）**，避免对已收敛的组重复派 fresh context。任一组有新 gap → 回 Step 3 处理后只重跑该组。
 
-> **机器化降级空间**：`check_architecture.py` 已覆盖「设计立场提『核心计算』」「核心模型类型标注」「状态机 Status/Reason 正交」「模型关联图」——即 3 组认知帧里「结构帧」的机器可判子集，这些可由主 agent 自跑脚本完成，不占 subagent 预算。当脚本覆盖结构帧两项视角时，Step 2 可从 3 组降为 2 组（只派建模帧 + 演进帧）。subagent 只做脚本做不了的：语义层级的边界划分与演进可扩展性判断。
+> **机器化降级空间**：CW gate 的机器检查已覆盖「设计立场提『核心计算』」「核心模型类型标注」「状态机 Status/Reason 正交」「模型关联图」——即 3 组认知帧里「结构帧」的机器可判子集，这些由 CW gate 在 `cw(action=clarify)` / `cw(action=detail)` 调用时自动完成，不占 subagent 预算。当机器检查覆盖结构帧两项视角时，Step 2 可从 3 组降为 2 组（只派建模帧 + 演进帧）。subagent 只做机器做不了的：语义层级的边界划分与演进可扩展性判断。
 
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 system-architecture.md；派 fresh subagent 渲染 system-architecture.html（机制见 loop-skeleton.md Step 5b）（主角图：分层架构图+状态机图）。**
 
-**Step 6（审查）— 派 fresh-context 审查 subagent（按 ../full-shared/references/review-agent.md 规范，先跑 `scripts/check_architecture.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-architecture.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（回扫 ①上游），再交接。**
+**Step 6（审查）— 派 fresh-context 审查 subagent（按 ../full-shared/references/review-agent.md 规范，CW gate 的机器检查 FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-architecture.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（回扫 ①上游），再交接。**
 
 ## Phase Loop 机制
 

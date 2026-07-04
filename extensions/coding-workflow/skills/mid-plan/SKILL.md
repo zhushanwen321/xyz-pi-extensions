@@ -15,7 +15,7 @@ description: >-
 > **对应 CW action: `clarify`**（coding-workflow tool；skill 名 mid-plan 对应 CW 的 clarify 状态）。
 > 本 skill 产出 clarify.json + review-fix-loop 收敛后落盘 review 文件。完成后调
 > `cw(action=clarify, topicId, clarifyJson)`——CW 预检 changes/review-{clarity,architecture}.md
-> 存在 → 跑 check_clarity/check_architecture → pass 后返回 nextAction（→ detail）。
+> 存在 → 跑机器检查（clarity/architecture）→ pass 后返回 nextAction（→ detail）。
 
 为 **L2 复杂度**需求同时产出 `requirements.md` + `system-architecture.md`。**内容**对齐 full-clarity +
 full-architecture 全量；**编排**改为 draft → batch-ask → review-fix-loop（mid 风格）。
@@ -49,7 +49,7 @@ full-architecture 全量；**编排**改为 draft → batch-ask → review-fix-l
 | 1. 统一起草初稿 | 主 agent 读代码+文档，opinionated 起草 requirements.md + system-architecture.md | `../full-clarity/references/deliverable-template.md` + `../full-architecture/references/{deliverable-template\|architecture-perspectives}.md` |
 | 2. 批量收集决策点 | draft 过程积累「代码答不了」的决策，分类（D-不可逆/D-可逆/K） | `../mid-shared/references/batch-ask.md`（B1+B2 阶段） |
 | 3. 批量提问 | D-不可逆 + K 打包，一次 ask_user（4~8 个，附推荐+理由） | `../mid-shared/references/batch-ask.md`（B3 阶段） |
-| 4. 纳入 + 机器检查 | 答案落 decisions.md + 更新初稿 + 跑 check_clarity + check_architecture | `../full-clarity/scripts/check_clarity.py` + `../full-architecture/scripts/check_architecture.py` |
+| 4. 纳入 + 机器检查 | 答案落 decisions.md + 更新初稿；机器检查由 CW gate 在 `cw(action=clarify)` 调用时自动执行（clarity/architecture） | — |
 | 5. review-fix-loop | 派 4 路并行 reviewer → 汇总 must_fix → 修复 → 收敛（MAX=2 轮） | `../mid-shared/references/review-fix-loop.md` + 本 SKILL「维度审查分配」节 |
 | 6. 二次 ask | loop 残留 D-不可逆打包二次 ask_user | `../mid-shared/references/batch-ask.md`（二次 ask 节） |
 | 7. 定稿 + 渲染 | 定稿两份 .md + 派 fresh subagent 加载 coding-visualizer 渲染 2 个 HTML | `coding-visualizer` skill |
@@ -154,12 +154,7 @@ draft 过程中积累的决策点，按四类分流：
 
 1. **即时 append decisions.md**——每个 D 类决策按 `../full-shared/references/loop-skeleton.md` Step 1.2 schema append（id/decision/rationale/classification/confirmed_by:ask_user/stage:mid-plan/source/status:confirmed）。
 2. **更新初稿**——把用户答案纳入 requirements.md + system-architecture.md 对应章节。
-3. **机器检查自跑**（零成本前置门）：
-   ```bash
-   python3 ../full-clarity/scripts/check_clarity.py {topic_dir}
-   python3 ../full-architecture/scripts/check_architecture.py {topic_dir}
-   ```
-   exit 1 → 当场修低级硬伤（占位符/缺章节/每 UC 缺 AC/系统实现越界/frontmatter verdict 缺/分层缺失），重跑直到 exit 0。
+3. **机器检查由 CW gate 自动执行**——`cw(action=clarify)` 调用时 CW gate 内部跑 clarity/architecture 机器检查（agent 不再手动自跑脚本）。FAIL → 当场修低级硬伤（占位符/缺章节/每 UC 缺 AC/系统实现越界/frontmatter verdict 缺/分层缺失），重新调用直到 PASS。
 
 ## Step 5：review-fix-loop（4 路并行 reviewer）
 
@@ -183,7 +178,7 @@ draft 过程中积累的决策点，按四类分流：
 ### review 落盘（AC-15.3，CW clarify gate 前置）
 
 review-fix-loop **CONVERGED 后**，必须把各维度的 review 结论落盘到 `changes/` 目录，供 CW clarify gate
-的 `check_clarity.py` + `check_architecture.py` 预检（#7 review 桩机制——CW 不产桩，靠 skill 落盘）：
+的机器检查（clarity/architecture）预检（#7 review 桩机制——CW 不产桩，靠 skill 落盘）：
 
 ```
 changes/review-clarity.md       ← 需求完整性路 + 禁读重建路的 review 结论合并
@@ -230,7 +225,7 @@ cw(action=clarify, topicId="<create 时返回的 topicId>", clarifyJson=<JSON.pa
 **[MANDATORY] `clarifyJson` 必须是 object**（`JSON.parse` 后的值），不是 JSON 字符串。
 传 string 会被 CW 在 `assertFormat` 拒（报 `invalid plan json: not an object`），因为 schema 声明的是 `type: object`。
 
-CW clarify gate 预检 `changes/review-{clarity,architecture}.md` 存在 → 跑 check_clarity + check_architecture →
+CW clarify gate 预检 `changes/review-{clarity,architecture}.md` 存在 → 跑机器检查（clarity/architecture）→
 通过后返回 `nextAction: {action:"detail", skill:"mid-detail-plan", ...}`。
 
 ## Self-Check
@@ -250,7 +245,7 @@ batch-ask：
 - [ ] 用户答案即时 append decisions.md（confirmed_by:ask_user）
 
 机器检查 + loop：
-- [ ] check_clarity.py + check_architecture.py 均 exit 0
+- [ ] CW gate 机器检查通过（clarity/architecture，由 `cw(action=clarify)` 触发）
 - [ ] review-fix-loop 4 路并行派发（wait:false），禁读重建路禁读了初稿
 - [ ] 汇总 must_fix 已去重 + 交叉验证标注，CROSS-VALIDATED 的 D-不可逆已 ask_user
 - [ ] loop 收敛（CONVERGED 或 round=MAX 残留已二次 ask）

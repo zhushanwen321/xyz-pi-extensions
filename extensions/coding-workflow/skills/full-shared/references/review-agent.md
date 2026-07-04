@@ -10,38 +10,34 @@
 
 ## Step 0：机器检查（MANDATORY，硬阻断，最先做）
 
-[MANDATORY] **审查的第一步是跑机器检查脚本，不是读文档下判断。** 机器检查是客观的——它能证伪的东西，不许用 LLM 判断覆盖。
+[MANDATORY] **审查的第一步是看 CW gate 的机器检查结果，不是读文档下判断。** 机器检查是客观的——它能证伪的东西，不许用 LLM 判断覆盖。
 
-**执行命令**（替换 `{phase}` 和 `{topic_dir}`）：
+**触发方式**：主 agent 调 `cw(action=clarify)` / `cw(action=detail)` 等 tool call 时，CW gate 内部自动 dispatch 对应阶段的 check 函数（TS 实现，agent 不再手动自跑脚本）。
 
-```bash
-python3 ${SKILL_DIR}/scripts/check_{phase}.py {topic_dir}
-```
+各阶段检查（由 CW gate 的 `GateRunner.runCheck` dispatch）：
 
-各阶段脚本（`${SKILL_DIR}` = 对应 skill 目录）：
-
-| 阶段 | 脚本 | phase 参数 |
+| 阶段 | 检查 | phase 参数 |
 |------|------|-----------|
-| ①澄清需求 | `full-clarity/scripts/check_clarity.py` | — |
-| ②系统设计 | `full-architecture/scripts/check_architecture.py` | — |
-| ③Issue拆分 | `full-issues/scripts/check_issues.py` | — |
-| ④非功能性 | `full-nfr/scripts/check_nfr.py` | — |
-| ⑤代码架构 | `full-code-arch/scripts/check_code_arch.py` | —（骨架检查自动触发；无骨架加 `--no-skeleton`） |
-| ⑥执行计划 | `full-execution-plan/scripts/check_execution.py` | — |
+| ①澄清需求 | CW gate 机器检查（check-clarity） | — |
+| ②系统设计 | CW gate 机器检查（check-architecture） | — |
+| ③Issue拆分 | CW gate 机器检查（check-issues） | — |
+| ④非功能性 | CW gate 机器检查（check-nfr） | — |
+| ⑤代码架构 | CW gate 机器检查（check-code-arch） | —（骨架检查自动触发） |
+| ⑥执行计划 | CW gate 机器检查（check-execution） | — |
 
-**脚本做的事**（无需你重复）：
+**机器检查做的事**（无需你重复）：
 - ①结构性：交付物存在 / frontmatter `verdict: pass` / 关键章节齐全 / 无占位符 / `review-{phase}.md` verdict: APPROVED
 - ②引用闭环：UC→issue→test-matrix→Wave 用例 ID 并集 / NFR 缓解项验收方式闭环 / P级与 blocked_by 一致 / 验收清单 = test-matrix 全量
 - ③骨架反模式（仅⑤）：无 any/eslint-disable/TODO / god object（>600行）/ tsc 通过 / ②§11 架构 grep 规则
 
 ### 结果处理（关键）
 
-脚本输出报告到 `{topic_dir}/changes/machine-check-{phase}.md`，退出码决定你的动作：
+CW gate 输出报告到 `{topic_dir}/changes/machine-check-{phase}.md`，检查结果决定你的动作：
 
-| 退出码 | 含义 | 你的动作 |
+| 结果 | 含义 | 你的动作 |
 |--------|------|---------|
-| **0** | 机器检查全过 | 进 Step 1 的 6 维 LLM 审查 |
-| **1** | 有机器可证硬伤 | **直接判 CHANGES_REQUESTED，不许 APPROVED**。把脚本报告的每条 ❌ 当"必须修改"项写入 review 报告。这是硬阻断——机器说你错了，你就错了，不许"我觉得其实没问题" |
+| **PASS** | 机器检查全过 | 进 Step 1 的 6 维 LLM 审查 |
+| **FAIL** | 有机器可证硬伤 | **直接判 CHANGES_REQUESTED，不许 APPROVED**。把机器检查报告的每条 ❌ 当"必须修改"项写入 review 报告。这是硬阻断——机器说你错了，你就错了，不许"我觉得其实没问题" |
 
 > **为什么硬阻断？** LLM 审查带对话上下文有确认偏误，容易对"自己产出的文档"手下留情。
 > 机器检查是 fresh 的、客观的——它抓到"验收清单缺用例""P0 依赖 P3""骨架有 any"这些硬伤时，
@@ -49,7 +45,7 @@ python3 ${SKILL_DIR}/scripts/check_{phase}.py {topic_dir}
 
 ## Step 1：6 维 LLM 审查（机器全过后才做）
 
-机器检查 exit 0 后，读以下材料做质量审查：
+机器检查 PASS 后，读以下材料做质量审查：
 
 1. read `{final_deliverable_md}`（定稿）
 2. read `{final_deliverable_html}`（可视化页面）
@@ -82,7 +78,7 @@ python3 ${SKILL_DIR}/scripts/check_{phase}.py {topic_dir}
 ```yaml
 ---
 verdict: APPROVED | CHANGES_REQUESTED
-machine_check: PASS | FAIL    # 脚本退出码：0=PASS，1=FAIL
+machine_check: PASS | FAIL    # CW gate 机器检查结果：PASS=通过，FAIL=硬阻断
 review_mode: parallel          # parallel=2组并行(对齐+红队), single=轻量项目降级单组
 ---
 ```
@@ -146,6 +142,6 @@ APPROVED / CHANGES_REQUESTED
 ## 铁律
 
 1. **机器检查失败 = 必须 CHANGES_REQUESTED，没有例外。** 不许 APPROVED 一个 machine_check: FAIL 的交付物。
-2. **不许跳过 Step 0。** 即使你"一眼看上去没问题"，也必须先跑脚本——机器抓的硬伤肉眼常漏（集合差集、幽灵依赖、越界章节）。
+2. **不许跳过 Step 0。** 即使你"一眼看上去没问题"，也必须先看 CW gate 的机器检查结果——机器抓的硬伤肉眼常漏（集合差集、幽灵依赖、越界章节）。
 3. **机器报告的 ❌ 必须进"必须修改"。** 一一对应，不许合并/省略。
 4. **6 维审查是补充不是替代。** 机器查结构/引用/反模式，你查语义质量（过度设计/可执行性/可视化）。两者互补，机器管"硬对错"，你管"好不好"。

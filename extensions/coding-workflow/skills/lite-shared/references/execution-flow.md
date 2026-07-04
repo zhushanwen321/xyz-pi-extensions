@@ -2,7 +2,7 @@
 
 > coding-execute 正文只做阶段路由，本文件是各阶段的**完整操作步骤**。
 > 本流程同时服务 lite（plan.md）和 mid/full（execution-plan.md）两种 plan 格式——
-> check_execute.py 自动识别格式，Wave/TDD/worktree/test-runner 落盘机制两者通用。
+> coding-execute skill 内部的机器门（执行收尾门）自动识别格式，Wave/TDD/worktree/test-runner 落盘机制两者通用。
 > 进入对应阶段前 read 本文件的对应章节。
 
 ## 阶段 A：开发（Wave 并行 + 严格 TDD）
@@ -203,7 +203,7 @@ bash ~/.claude/skills/create-worktree/create-worktree.sh feat/lite-review <base-
      - 确无环境 → **不要自标「手动通过」**，status 记 'pending-env'，由主 agent ask_user 决定（见 B3 用户豁免）
   对照 plan.md 用例清单逐条判定，**必须落盘结构化报告**到
   `.xyz-harness/{topic}/changes/test-results.json`（schema 见下方），
-  这是阶段 C `check_execute.py` 的强制门数据源——自由文本报告无法机器核对。
+  这是阶段 C 执行收尾机器门的强制门数据源——自由文本报告无法机器核对。
   **分层报告**：mock 层 U*/mock E*/覆盖率 pass/fail + real 层 real E* pass/fail。"
 
 #### test-results.json 落盘 schema（test-runner 必须产出）
@@ -224,12 +224,12 @@ bash ~/.claude/skills/create-worktree/create-worktree.sh feat/lite-review <base-
 字段规范：
 - **id**：与 plan.md 用例 ID 一致（U*/E*/E*-r）
 - **status**：`pass` | `fail` | `user-skipped` | `pending-env`
-  - **禁止** `manual` / `blocked` / `skipped`——这些是 AI 自标降级，check_execute 一律判 FAIL。`pending-env` 是合法中间态但终态未解析同样判 FAIL
+  - **禁止** `manual` / `blocked` / `skipped`——这些是 AI 自标降级，执行收尾机器门一律判 FAIL。`pending-env` 是合法中间态但终态未解析同样判 FAIL
   - `user-skipped` 必须带 `user_confirm_ref`（用户确认凭证），否则 FAIL
 - **evidence**：命令输出摘要 / 失败 file:line（机器可追溯）
 - **user_confirm_ref**：仅 user-skipped 必填——记录用户在哪确认跳过（turn 号 / ask_user 引用）
 
-> [铁律] test-results.json 是执行收尾机器门的唯一数据源。test-runner 不落盘 = check_execute 无从核对 = goal 无法 complete。
+> [铁律] test-results.json 是执行收尾机器门的唯一数据源。test-runner 不落盘 = 执行收尾机器门无从核对 = goal 无法 complete。
 
 调用2（reviewer-正确性组，cwd=wt-review）：
   agent: "reviewer", wait: false, cwd: <wt-review>
@@ -315,18 +315,15 @@ reviewer-质量组：must_fix/should_fix/nit 清单
 
 全部验收 todo completed：
 
-**0. 执行收尾机器门（goal complete 前必做，[MANDATORY]）**——跑 check_execute.py 核对 test-results.json 是否覆盖 plan 全部用例（脚本自动识别 lite plan.md 的 U*/E* 或 mid/full execution-plan.md 的 T{UC}.{N}）：
-```bash
-python3 ${SKILL_DIR}/../coding-execute/scripts/check_execute.py {planFilePath} .xyz-harness/{topic}/changes/test-results.json
-```
-- **PASS（exit 0）** → 进下方语义审查 + goal complete
-- **FAIL（exit 1）** → **禁止 goal_control(complete)**。报告指出的逃逸路径必须先补：
+**0. 执行收尾机器门（goal complete 前必做，[MANDATORY]）**——coding-execute skill 内部的机器门核对 test-results.json 是否覆盖 plan 全部用例（自动识别 lite plan.md 的 U*/E* 或 mid/full execution-plan.md 的 T{UC}.{N}）。该门由 coding-execute skill 内部实现，agent 不直接调用 TS 函数；agent 的职责是确保 test-results.json 已正确落盘（见 B2），调用 goal complete 时由 skill 内部机器门自动核对：
+- **PASS** → 进下方语义审查 + goal complete
+- **FAIL** → **禁止 goal_control(complete)**。报告指出的逃逸路径必须先补：
   - 缺用例（mock/real 无结果）→ 重派 test-runner 补跑
   - AI 自标 manual/blocked → 走 B3 用户豁免（ask_user）改 user-skipped+凭证，或真跑
   - mock 层非 pass → 回阶段 A 修复
-  修完重跑 check_execute 直到 PASS。
+  修完重新触发执行收尾机器门直到 PASS。
 
-> 这是执行阶段唯一的机器硬门，对齐 lite-plan 的 check_plan.py。此前执行阶段零 gate，AI 能直接跳过 E2E 调 goal complete——本门堵死该路径。
+> 这是执行阶段唯一的机器硬门，对齐 lite-plan 的 CW gate 机器检查（plan 阶段）。此前执行阶段零 gate，AI 能直接跳过 E2E 调 goal complete——本门堵死该路径。
 
 **0b. 语义/契约变更审查（goal complete 前必做）**——逐条核对本次改动是否引入：
 - 新的状态可达路径（之前不可达的状态/分支现在可达）

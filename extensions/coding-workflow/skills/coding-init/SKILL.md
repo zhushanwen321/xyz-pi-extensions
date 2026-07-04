@@ -111,13 +111,13 @@ description: >-
 
 `[STALE]` **不阻断**（用户可选择带着偏差设计），但必须显式告知，建议「先更新过时文档，再开新设计」——否则新设计基于过时前提，偏差一路放大到①-⑥。
 
-**[RECOMMENDED] 机器回读诊断（零成本兜底）：** 扫描完成后，主 agent 自跑 `python3 ${SKILL_DIR}/scripts/check_init.py <项目根>`（默认当前目录）。脚本把上述「防腐烂闸门」+ 存在性/骨架态识别固化为机器诊断：
+**[RECOMMENDED] 项目级机器诊断（零成本兜底，软 gate）：** 扫描完成后，由 coding-init skill 的软 gate 诊断对项目根跑机器回读诊断。诊断把上述「防腐烂闸门」+ 存在性/骨架态识别固化为机器诊断：
 
 - **A 类（总是跑）**：对照文档分级表检测必备/推荐/可选文档的存在性 + 骨架态（含 `{占位符}`/TODO = 未沉淀骨架，标 SKELETON）。必备缺失标 MISSING。
 - **B 类（仅非骨架态 always-current 文档跑）**：ARCHITECTURE.md / NFR.md 已被 closeout 沉淀过（非骨架态）时，做回读一致性——模块名 grep 源码、状态机枚举 grep 源码、NFR「验证」字段反引号标识符 grep 源码，漂移标 `[STALE]`。仍是骨架的文档跳过回读（无内容可核对）。
-- **语义**：**exit 0 非阻断**（与 design_status gate.ts 的存在性门正交——gate 是完成态门，check_init 是设计期诊断）。产出 `.xyz-harness/_bootstrap-check.md`，Step 2 报告直接复用，不必主 agent 手动 grep。
+- **语义**：**exit 0 非阻断（软 gate 诊断）**（与 design_status gate.ts 的存在性门正交——gate 是完成态门，本诊断是设计期诊断）。产出 `.xyz-harness/_bootstrap-check.md`，Step 2 报告直接复用，不必主 agent 手动 grep。
 
-> 中文/含空格的模块名、纯描述性 NFR 验证文本，脚本保守跳过（机器不可靠验证）——这类项需主 agent 人工核对补充。
+> 中文/含空格的模块名、纯描述性 NFR 验证文本，诊断保守跳过（机器不可靠验证）——这类项需主 agent 人工核对补充。
 
 ### 2. 报告基建状态
 

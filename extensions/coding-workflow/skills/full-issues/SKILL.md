@@ -54,8 +54,8 @@ Issue 决策图（根：从 system-architecture 的挑战推导）
 
 > 方案对比的技术分析（改动/优点/缺点）= agent 产出，作为用户决策的参考材料。
 
-**Step 1 末尾 — 机器结构检查前置自跑（零成本提速）：** 初稿（含必问决策点定稿）写完后，主 agent 立即自跑 `python3 ${SKILL_DIR}/scripts/check_issues.py {topic_dir}`，FAIL 当场修低级硬伤（幽灵 #N、空 N/A、❌/待补残留、P0/P1 缺 ≥2 方案、P 级与 blocked_by 不一致），不必等 Step 6。
-> **与 Step 6 审查的分工**：此处只杀机器可证的结构硬伤（快、主 agent 自跑）；Step 6 才是质量门（fresh subagent 跑，含语义/盲区/红队评审）。两者不替代——Step 6 的 check_issues.py exit 1 仍硬阻断判 FAIL。
+**Step 1 末尾 — 机器结构检查前置（零成本提速）：** 初稿（含必问决策点定稿）写完后，主 agent 调 `cw(action=clarify)` / `cw(action=detail)` 触发 CW gate 的机器检查，FAIL 当场修低级硬伤（幽灵 #N、空 N/A、❌/待补残留、P0/P1 缺 ≥2 方案、P 级与 blocked_by 不一致），不必等 Step 6。
+> **与 Step 6 审查的分工**：此处只杀机器可证的结构硬伤（快、CW gate 自动跑）；Step 6 才是质量门（fresh subagent 跑，含语义/盲区/红队评审）。两者不替代——Step 6 审查前 CW gate 的机器检查 FAIL 仍硬阻断。
 
 **Step 2（追踪）— 派 fresh-context subagent，对抗主 agent 同源盲区：**
 
@@ -112,13 +112,13 @@ Issue 决策图（根：从 system-architecture 的挑战推导）
 
 **追踪原 4 视角的新归属**：方案完整性 / 优先级一致性 / 前沿清晰度 由角色 A 在 diff 时顺带核验（读 issues.md 后）；原「覆盖性」视角已升级为 A 的独立重建 diff（更强）。
 
-> **机器化降级空间**：`check_issues.py` 已覆盖「覆盖核验表形式」「P0/P1≥2 方案」「blocked_by 无幽灵」「P级一致性」——即角色 A（覆盖重建者）的机器可判子集，这些可由主 agent 自跑脚本完成，不占 subagent 预算。subagent 只做脚本做不了的：从 ②往下的语义重建 diff（漏项/虚覆盖/伪 issue）+ 失败帧异常猎手（角色 B）。脚本未覆盖前维持 A+B 双角色。
+> **机器化降级空间**：CW gate 的机器检查已覆盖「覆盖核验表形式」「P0/P1≥2 方案」「blocked_by 无幽灵」「P级一致性」——即角色 A（覆盖重建者）的机器可判子集，这些由 CW gate 在 `cw(action=clarify)` / `cw(action=detail)` 调用时自动完成，不占 subagent 预算。subagent 只做机器做不了的：从 ②往下的语义重建 diff（漏项/虚覆盖/伪 issue）+ 失败帧异常猎手（角色 B）。机器检查未覆盖前维持 A+B 双角色。
 
 **Step 3-4 — gap 分流(F/K/D) → 收敛复核。** 按 loop-skeleton.md。
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 issues.md；派 fresh subagent 渲染 issues.html（机制见 loop-skeleton.md Step 5b）（主角图：决策 DAG 图，节点状态色标）。**
 
-**Step 6（审查）— 派 fresh-context 审查 subagent（按 ../full-shared/references/review-agent.md 规范，先跑 `scripts/check_issues.py` 机器检查，FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-issues.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（回扫 ①②上游），再交接。**
+**Step 6（审查）— 派 fresh-context 审查 subagent（按 ../full-shared/references/review-agent.md 规范，CW gate 的机器检查 FAIL 硬阻断），6 维评审（含红队维度），报告写 `changes/review-issues.md`（frontmatter 含 verdict + machine_check）。APPROVED 后进 Step 6b 反哺检查（回扫 ①②上游），再交接。**
 
 ## Phase Loop 机制
 

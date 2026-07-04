@@ -63,7 +63,7 @@
 1. **test-runner 真跑**：worktree 起本地 mock 后端 / docker-compose / 本地集成环境，报 pass/fail
 2. **用户显式豁免**：确无环境时，主 agent **必须 ask_user** 由用户拍板跳过，报告中记 `status: user-skipped` + `user_confirm_ref`（用户确认凭证）
 
-`check_execute.py` 对 real 层用例只认 `pass` 或 `user-skipped`（须带凭证）；AI 自标的 `manual` / `blocked` / `skipped` 一律判 FAIL。`pending-env` 是 test-runner 的合法**中间态**（确无环境时记录，待主 agent ask_user 解析），但若留在终态（未解析）同样判 FAIL。降级决定权在用户不在 AI。略掉 real 层设计 = 默认「mock 过了真实就过」的危险假设。
+coding-execute 的执行收尾机器门对 real 层用例只认 `pass` 或 `user-skipped`（须带凭证）；AI 自标的 `manual` / `blocked` / `skipped` 一律判 FAIL。`pending-env` 是 test-runner 的合法**中间态**（确无环境时记录，待主 agent ask_user 解析），但若留在终态（未解析）同样判 FAIL。降级决定权在用户不在 AI。略掉 real 层设计 = 默认「mock 过了真实就过」的危险假设。
 
 ## 单测用例清单 Schema
 

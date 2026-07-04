@@ -340,25 +340,21 @@ Announce at start: "我正在使用 {skill-name} skill 来 {本阶段目标}。"
 
 ### 5d. 机器检查前置自检（初稿后立即跑，提前消灭低级硬伤）
 
-[RECOMMENDED] **初稿写完后（各阶段 Step 1 末），主 agent 立即自跑本阶段的机器检查脚本。** 时机统一为「初稿后」（非定稿后）——初稿后跑反馈更早；定稿后的硬伤由 Step 6 审查 subagent 复跑兜底（不取消最终门）。 把占位符/缺章节/幽灵引用/集合差集等低级硬伤的反馈环从「Step6 审查 → 回 Step3 → Step4 → Step5 → Step6」缩到「Step5 当场修」。审查 subagent 仍复跑一次做最终门（**不取消**，硬阻断铁律不变）。
+[RECOMMENDED] **初稿写完后（各阶段 Step 1 末），主 agent 调 `cw(action=clarify)` / `cw(action=detail)` 等 tool call 触发 CW gate 的机器检查。** 时机统一为「初稿后」（非定稿后）——初稿后跑反馈更早；定稿后的硬伤由 Step 6 审查 subagent 复跑兜底（不取消最终门）。 把占位符/缺章节/幽灵引用/集合差集等低级硬伤的反馈环从「Step6 审查 → 回 Step3 → Step4 → Step5 → Step6」缩到「Step5 当场修」。审查 subagent 仍复跑一次做最终门（**不取消**，硬阻断铁律不变）。
 
-```bash
-python3 ${SKILL_DIR}/scripts/check_{phase}.py {topic_dir}
-```
+- PASS → 进 Step 6（审查 subagent 仍会复跑确认为最终门）
+- FAIL → 看 CW gate 报告 `changes/machine-check-{phase}.md`，当场修低级硬伤（不进 Step 6），修完重跑直到 PASS
 
-- exit 0 → 进 Step 6（审查 subagent 仍会复跑确认为最终门）
-- exit 1 → 看脚本报告 `changes/machine-check-{phase}.md`，当场修低级硬伤（不进 Step 6），修完重跑直到 exit 0
-
-**与 Step 6 审查的分工：** Step 5d 只杀机器可证的**结构**硬伤（快、主 agent 自跑、不阻塞交接）；Step 6 才是**质量门**（红队反过度设计等语义判断，fresh subagent 跑）。两者不替代。
+**与 Step 6 审查的分工：** Step 5d 只杀机器可证的**结构**硬伤（快、CW gate 自动跑、不阻塞交接）；Step 6 才是**质量门**（红队反过度设计等语义判断，fresh subagent 跑）。两者不替代。
 
 ## Step 6: 独立审查 + 交接
 
 [MANDATORY] 定稿后必须过独立审查（质量门）。审查判质量（不是找 gap）；追踪 vs 审查区别详见 `loop-method.md`。
-**审查分两层：先跑机器检查脚本（硬阻断），后做 6 维 LLM 审查。** 审查 subagent 规范见 `review-agent.md`。
+**审查分两层：先看 CW gate 的机器检查结果（硬阻断），后做 6 维 LLM 审查。** 审查 subagent 规范见 `review-agent.md`。
 
 **【并行提速】6 维拆 2 组并行认知帧（红队独立 fresh context）。** 6 维不是天然一个任务——**红队维度（必要性与比例性，反过度设计）与其余 5 维认知方向相反**（一个删/质疑，一个补/对齐），塞进同一 context 串行会 confirmation bias 沿维度链累积（前半程补完 gap，后半程要删时心态已偏向「刚补的是必要的」）。拆成 2 组并行 fresh subagent，各跑正交认知帧，盲区更少、wall-clock 更短。审查 subagent 规范见 `review-agent.md`。
 
-**派发配置（2 组并行）：** Agent=general-purpose，Context=**fresh**，两组读取材料不同（见下表），产出各写一份。两组都先跑 Step 0 机器检查（同一脚本，谁先跑都行）。
+**派发配置（2 组并行）：** Agent=general-purpose，Context=**fresh**，两组读取材料不同（见下表），产出各写一份。两组都先看 Step 0 机器检查结果（同一 CW gate 检查，谁先看都行）。
 
 > **[并行派发]** 2 组用 `wait:false` 同消息派发（见上方「subagent 派发工程规范」）。两组完成由 notifier 唤醒主 agent 汇总，不需轮询。
 
@@ -369,13 +365,9 @@ python3 ${SKILL_DIR}/scripts/check_{phase}.py {topic_dir}
 
 > **交叉验证机制（红队 × 对齐冲突）：** 红队组说「某 port/层该删」、对齐组说「该 port 是上游对齐必需」——两组独立命中同一对象但结论相反，标 `[CROSS-VALIDATED]` 转主 agent。主 agent 判断：若涉及 D-不可逆决策（分层/状态机/领域边界）→ **必须 ask_user**，不能 agent 自判；其余主 agent 按「事实性矛盾」原则裁决。范式同 Step2 追踪的 `[CROSS-VALIDATED]`。
 
-**Step 0（机器检查，两组最先做，硬阻断）：** 任一组先跑对应阶段的机器检查脚本：
+**Step 0（机器检查，两组最先做，硬阻断）：** 主 agent 调 `cw(action=clarify)` / `cw(action=detail)` 等 tool call 触发 CW gate 的机器检查：
 
-```bash
-python3 ${SKILL_DIR}/scripts/check_{phase}.py {topic_dir}
-```
-
-脚本输出 `changes/machine-check-{phase}.md` + 退出码。**exit 1（机器检查 FAIL）= 两组都直接判 CHANGES_REQUESTED，不许 APPROVED（硬阻断）**——机器可证伪的硬伤（缺章节/占位符/引用断裂/骨架反模式）不存在"审查认为可以过"。exit 0 才进各自的维度审查。
+CW gate 输出 `changes/machine-check-{phase}.md` + 检查结果。**FAIL = 两组都直接判 CHANGES_REQUESTED，不许 APPROVED（硬阻断）**——机器可证伪的硬伤（缺章节/占位符/引用断裂/骨架反模式）不存在"审查认为可以过"。PASS 才进各自的维度审查。
 
 **Task prompt 模板（对齐组）：**
 
@@ -576,7 +568,7 @@ design-status get-status                 # 看全貌
 
 ## changes/ 目录文件的 frontmatter schema
 
-机器检查脚本依赖各文件的 frontmatter 字段。统一 schema：
+CW gate 的机器检查依赖各文件的 frontmatter 字段。统一 schema：
 
 | 文件 | frontmatter 字段 | 取值 |
 |------|----------------|------|
@@ -585,10 +577,10 @@ design-status get-status                 # 看全貌
 | `tracing-round-{N}-{frame}.md`（变体：-reconstruct/-modeling/-structure/-evolution/-contract/-coverage/-closure/-testclosure/-backfeed） | `converged` | 同上；各阶段认知帧的拆分追踪文件用同一 schema（-backfeed 为 nfr 回灌重建帧产出） |
 | `backfeed-round-{N}.md` | `entries` | 整数（检出矛盾条数，0 = 无矛盾直接 pass） |
 | `consistency-final.md`（仅⑥） | `verdict` | `CONSISTENT`/`INCONSISTENT` |
-| `machine-check-{phase}.md` | `phase` + `machine_check` | 脚本自动产出，machine_check: `PASS`/`FAIL` |
+| `machine-check-{phase}.md` | `phase` + `machine_check` | CW gate 自动产出，machine_check: `PASS`/`FAIL` |
 | `context-summary-{phase}-round-{N}.md` | （无强制 frontmatter） | context-builder subagent 产出的阶段工作摘要（仅 L2/L3），非 gate 强制，供主 agent 读不入校验链 |
 
-> **closeout-report.md（topic 根，非 changes/）：** 由 coding-closeout 产出，frontmatter 含 `archived: true` + `unverified_count: N`（未代码验证的约束数）。check_closeout.py 依赖这两个字段（不写 changes/，避免污染「changes/ 已清理」检查项）。
+> **closeout-report.md（topic 根，非 changes/）：** 由 coding-closeout 产出，frontmatter 含 `archived: true` + `unverified_count: N`（未代码验证的约束数）。CW gate 的 closeout 机器检查依赖这两个字段（不写 changes/，避免污染「changes/ 已清理」检查项）。
 
 各阶段交付物（requirements.md / system-architecture.md / ...）的 frontmatter 见各 `deliverable-template.md`，核心字段 `verdict: pass`。
 

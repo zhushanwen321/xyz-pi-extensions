@@ -12,7 +12,7 @@ description: >-
 # 设计收尾（Design Closeout）
 
 > **对应 CW action: `closeout`**（coding-workflow tool）。本 skill 沉淀稳定结论进长期文档后，
-> 调 `cw(action=closeout, topicId)` 通过 CW closeout gate（check_closeout.py + evidence 填充：
+> 调 `cw(action=closeout, topicId)` 通过 CW closeout gate（CW closeout 机器检查 + evidence 填充：
 > closedAt / coverage / 完整 gateHistory）。status 流转到 `closed`（终态不可逆，D-009）。
 > CW 返回 nextAction.action 为空 = 流程结束。
 
@@ -48,7 +48,7 @@ closeout 沉淀**设计产出**（信息归位），retrospect 回顾**执行过
 **前置校验（不满足则拒绝并提示）：**
 1. `{topic}/execution-plan.md` 存在且 `verdict: pass`（full ⑥或 mid-detail-plan 产出均可）
 2. 实施代码已存在：`{topic}/code-skeleton/` 有内容，或项目源码有对应改动（grep ⑥/mid 测试验收清单关键符号能命中）
-3. 测试验收已执行：`{topic}/changes/test-results.json` 存在且 coding-execute 的 `check_execute.py` PASS（lite/mid 均适用）；若无此文件说明未经 coding-execute 机器门，需人肉确认测试验收清单全绿
+3. 测试验收已执行：`{topic}/changes/test-results.json` 存在且 coding-execute 的执行收尾机器门 PASS（lite/mid 均适用）；若无此文件说明未经 coding-execute 机器门，需人肉确认测试验收清单全绿
 4. `{topic}` 未被归档（无 `ARCHIVED.md`）
 
 > **未实施的 topic 不允许 closeout**——否则沉淀的是纸面设计（如④缓解方案未落地），不是验证过的约束。
@@ -83,7 +83,7 @@ closeout 沉淀**设计产出**（信息归位），retrospect 回顾**执行过
 核心 spec 见 `references/distill-rules.md`（沉淀规则表 + 提取判据）。主 agent 读规则表，
 对 topic 产出逐项判断「提炼进哪 / 留 topic / 清理」，**每条提炼都 ask_user 确认**（沉淀是不可逆信息归位，须人拍板）。
 
-**强制溯源：** 每条沉淀标注 `[from: {topic} §{章节}]`。缺溯源 = check_closeout 报错。
+**强制溯源：** 每条沉淀标注 `[from: {topic} §{章节}]`。缺溯源 = CW closeout 机器检查报错。
 **去重：** 沉淀前 grep 目标文档现有 ID（如 NFR `S-1..S-N`），避免重复编号。
 **文档位置：** 分发表中的 PRODUCT/ARCHITECTURE/NFR/TEST-STRATEGY/DESIGN-LOG 建在主配置（CLAUDE.md/AGENTS.md）所在目录，与 coding-init 一致；`docs/adr/` 路径相对项目根不变。
 
@@ -116,7 +116,7 @@ closeout 沉淀**设计产出**（信息归位），retrospect 回顾**执行过
 - `[UNVERIFIED]` 清单（待补约束，标④原 issue + 缺失证据）
 - 清理记录
 
-然后主 agent 自跑 `python3 ${SKILL_DIR}/scripts/check_closeout.py {topic_dir}`，exit 1 修硬伤后重跑。
+然后调 `cw(action=closeout, topicId)`——机器检查由 CW gate 在 `cw(action=closeout)` 调用时自动执行（归档完整性校验：ARCHIVED.md 存在、溯源标注齐全、清理记录完整）。gate FAIL（exit 1）修硬伤后重调 cw。
 
 ## 交接
 

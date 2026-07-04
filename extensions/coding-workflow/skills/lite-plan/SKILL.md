@@ -76,7 +76,7 @@ description: >-
 | 4. 测试设计（随改动评估） | 代码每处改动评估现有测试如何随之改；单测清单（AC级可判定）+ E2E 清单（探测项目实际测试栈，**每条标测试层 mock/real，两层各≥1**）+ 覆盖率 gate | `../lite-shared/references/test-case-schema.md` |
 | 4b. 多路反向自检（条件触发） | 改动点 ≥3 / 涉及过滤·查询·匹配·状态机时：派 fresh subagent ensemble 找漏用例（详见正文） | — |
 | 5. 写 plan.md | 用完整模板填 6 章节（若并行加速模式启用：合并技术方案路 + 测试设计路两份草案） | `../lite-shared/references/plan-template.md` |
-| 5b. 草案审查 ensemble（条件触发） | plan.md 写成后：先跑 `scripts/check_plan.py` 机器杀结构硬伤（零 subagent），再派 1 路禁读重建 subagent 做测试盲区三态 diff（详见正文） | — |
+| 5b. 草案审查 ensemble（条件触发） | plan.md 写成后：先让 CW gate 机器检查杀结构硬伤（调 `cw(action=plan)` 时自动跑，零 subagent），再派 1 路禁读重建 subagent 做测试盲区三态 diff（详见正文） | — |
 | 6. 自检 | 对照下方 Self-Check 逐条核对（含 5b 审查反馈处理） | — |
 
 > [铁律] 步骤 1 不做架构设计。技术约束只记录到 Constraints，不展开选型/接口定义/数据建模。
@@ -339,26 +339,22 @@ subagent(action:'start', startParam:{
 > - 技术改动点 ≥3 个
 > - Wave 数 ≥2 个
 
-> **两层审查：机器吃结构，禁读重建抓盲区。** 本步用 `scripts/check_plan.py` 机器杀 7 项里的 5 项结构硬伤（零 subagent），再派 1 路禁读重建 subagent 做脚本做不了的语义/盲区审查。从原来的 2 路读后审查降为「机器 + 1 路禁读重建」——更强（禁读比读后审查能发现更多盲区）且更省。
+> **两层审查：机器吃结构，禁读重建抓盲区。** 本步用 CW gate 的机器检查杀 7 项里的 5 项结构硬伤（调 `cw(action=plan)` 时自动跑，零 subagent），再派 1 路禁读重建 subagent 做机器做不了的语义/盲区审查。从原来的 2 路读后审查降为「机器 + 1 路禁读重建」——更强（禁读比读后审查能发现更多盲区）且更省。
 
-### 第一层：机器结构检查（主 agent 自跑，零 subagent）
+### 第一层：机器结构检查（CW gate 自动跑，零 subagent）
 
-plan.md 写成后，主 agent 立即自跑机器检查：
-
-```
-python3 ${SKILL_DIR}/scripts/check_plan.py {planFilePath}
-```
-
-检查项（7 项中的 5 项机器可判）：
+plan.md 写成后，主 agent 产出 plan.json 并调 `cw(action=plan)` 时，CW gate 自动跑机器检查（agent 不再手动自跑脚本）。覆盖项（7 项中的 5 项机器可判）：
 - ① 结构：6 必须章节齐全 / `## 实现步骤` 标题存在 / 无占位符
 - ② 方案：Wave 表可解析 / 末尾验收 Wave 存在 / **同并行组文件无交集**（精确机器判）
 - ③ 测试：单测输入/预期非空且无模糊词（正常工作/应该返回...） / 每个改动点有对应单测 / 覆盖率 gate 命令存在且阈值 ≥60%
 
-**FAIL → 当场修**（主 agent 直接改 plan.md 结构硬伤），重跑直到 PASS。机器检查的定位：杀低级硬伤，不占 subagent 预算。
+**FAIL → 当场修**（主 agent 直接改 plan.md 结构硬伤），重新调 `cw(action=plan)` 直到 PASS。机器检查的定位：杀低级硬伤，不占 subagent 预算。
 
 ### 第二层：禁读重建（1 路 fresh subagent，做机器做不了的）
 
-机器 PASS 后，派 1 路禁读重建 subagent。**禁读**是核心——不读 plan.md 的测试章节，而是从技术改动点 + fixture 数据**独立重建**该有哪些测试用例，再 diff plan.md 的测试清单。读了就被锚定，退回读后审查。
+plan.md 草案完成后，派 1 路禁读重建 subagent。**禁读**是核心——不读 plan.md 的测试章节，而是从技术改动点 + fixture 数据**独立重建**该有哪些测试用例，再 diff plan.md 的测试清单。读了就被锚定，退回读后审查。
+
+> 注：机器结构检查现由 CW gate 在 `cw(action=plan)` 调用时自动执行（见下文「交付」），与本步的禁读重建解耦——本步只做 agent 侧的盲区重建，结构硬伤交给 CW gate 兜底。
 
 > 范式照搬 full-issues 角色 A（覆盖重建者）：禁读产出物 → 独立按规则重建 → diff → 三态 MISSING/PHANTOM/MISMATCH。这比「读后挑错」强一个量级——读后审查发现「写错的」，禁读重建发现「该有没写的」（同源盲区）。
 
@@ -408,7 +404,7 @@ subagent(action:'start', startParam:{
 
 ### 边界
 
-- **机器检查是前置门**：check_plan.py FAIL 时先修结构硬伤，不派禁读重建（结构烂的 plan 重建无意义）。
+- **机器检查是前置门**：CW gate 机器检查 FAIL 时先修结构硬伤，不派禁读重建（结构烂的 plan 重建无意义）。
 - **不替代步骤 0b/2b/4b**：本步是测试设计的盲区重建，0b/2b/4b 是范围/复用/测试完整性检查。互补关系，不是替代。
 - **小功能不触发**：1-2 改动点、1 Wave 的极简功能，机器检查 + 步骤 6 单路自检已够，禁读重建编排开销 > 收益。
 - **E2E 不重建**：E2E 受执行栈强约束，重建误报多。禁读重建只针对单测。E2E 走机器检查（执行方式非抽象）+ 单路自检。
@@ -449,7 +445,7 @@ Wave 拆分：
 - [ ] 无占位符（TBD/TODO/...）
 
 审查：
-- [ ] **若触发步骤 5b**（改动点 ≥3 或 Wave ≥2）：`check_plan.py` 已跑且 PASS（结构硬伤已修）；禁读重建三态 gap 已处理（MISSING 已补 / PHANTOM 已删 / MISMATCH 已改）；未触发则确认属于明确小功能（1-2 改动点、1 Wave）机器检查 + 单路自检已做
+- [ ] **若触发步骤 5b**（改动点 ≥3 或 Wave ≥2）：CW gate 机器检查通过（`cw(action=plan)` 触发，结构硬伤已修）；禁读重建三态 gap 已处理（MISSING 已补 / PHANTOM 已删 / MISMATCH 已改）；未触发则确认属于明确小功能（1-2 改动点、1 Wave）机器检查 + 单路自检已做
 
 ## 交付
 

@@ -56,18 +56,16 @@ Wave 编排（根：从时序图推导）
 **[MANDATORY] 定稿必须含「测试验收清单」章节**——把⑤test-matrix 全量用例（来源 A 功能 + 来源 B NFR）按归属 Wave 列全，作为实现期的 Definition of Done。
 初稿用 `references/deliverable-template.md`。
 
-**Step 1 末尾 — 机器结构检查前置自跑（零成本提速）：** 初稿写完后，主 agent 立即自跑 `python3 ${SKILL_DIR}/scripts/check_execution.py {topic_dir} --no-consistency-final`（`--no-consistency-final` 跳过 6c 总闸门检查——该文件 Step 6c 才产出，未到 6c 前必缺失），FAIL 当场修低级硬伤（验收清单缺用例/末尾验收 Wave 缺 blocked_by），不必等 Step 6。
-> **与 Step 6 审查的分工**：此处只杀机器可证的结构硬伤；Step 6 才是质量门（含红队反过度编排）。两者不替代——Step 6 的 check_execution.py exit 1 仍硬阻断判 FAIL。
->
-> **测试验收清单可脚本生成草稿（减写）：** `python3 ${SKILL_DIR}/scripts/check_execution.py {topic_dir} --generate-manifest` 读⑤§6 test-matrix 自动生成清单行（用例 ID/UC/来源/断言/执行层），「功能归属 Wave」列留空给 agent 从⑤§4时序图推导填入。生成后 agent 只补该列 + 校对，不必从零写。
+**Step 1 末尾 — 机器结构检查前置（零成本提速）：** 初稿写完后，主 agent 调 `cw(action=clarify)` / `cw(action=detail)` 触发 CW gate 的机器检查（CW gate 自动跳过 6c 总闸门检查——`consistency-final.md` 该文件 Step 6c 才产出，未到 6c 前必缺失），FAIL 当场修低级硬伤（验收清单缺用例/末尾验收 Wave 缺 blocked_by），不必等 Step 6。
+> **与 Step 6 审查的分工**：此处只杀机器可证的结构硬伤；Step 6 才是质量门（含红队反过度编排）。两者不替代——Step 6 审查前 CW gate 的机器检查 FAIL 仍硬阻断。
 
 **Step 2（追踪）— 2 组并行 fresh-context subagent（认知帧内聚，用 `wait:false` 同消息派发，见 loop-skeleton「subagent 派发工程规范」）：**
 
 > **为何拆 2 组（不拆 4）**：3 个结构视角（切片独立性/依赖闭合/并行安全）同属"Wave 图结构审计"认知域，fresh context 已消除对话偏误，同域内一个 subagent 顺序切换帧的帧内偏误很低，拆 4 = 4x IO 换不来等量盲区消除（过度并行）。测试/实现闭环跨读⑤test-matrix↔⑥清单，是不同认知帧，独立成组。
 >
-> **组 A 机器化降级空间**：Wave 编排脚本化（`check_execution.py` 生成器 + 结构检查）后，结构三视角（切片独立性/依赖闭合/并行安全）可退化为机器自检。当脚本已覆盖这三项时，Step 2 只派组 B（测试闭环，1 个 subagent）即可，从 2 组并行降为单组——主 agent 自跑 `check_execution.py` 的结构检查替代组 A，省一个 subagent。脚本未覆盖前维持 2 组。
+> **组 A 机器化降级空间**：Wave 编排机器化（CW gate 机器检查 + 结构检查）后，结构三视角（切片独立性/依赖闭合/并行安全）可退化为机器自检。当机器检查已覆盖这三项时，Step 2 只派组 B（测试闭环，1 个 subagent）即可，从 2 组并行降为单组——CW gate 的结构检查替代组 A，省一个 subagent。机器检查未覆盖前维持 2 组。
 >
-> **本阶段是脚本化降级的范本**：其他 full 阶段（①-⑤）已参照本模式在各自 Step 2 标注「机器化降级空间」，说明各自的 `check_{phase}.py` 覆盖了哪些机器可判视角、subagent 只保留哪些语义盲区工作。
+> **本阶段是机器化降级的范本**：其他 full 阶段（①-⑤）已参照本模式在各自 Step 2 标注「机器化降级空间」，说明各自的 CW gate 机器检查覆盖了哪些机器可判视角、subagent 只保留哪些语义盲区工作。
 
 | 组（认知帧） | 视角 | 主读 |
 |---|---|---|
@@ -83,7 +81,7 @@ Wave 编排（根：从时序图推导）
 
 **Step 5（定稿+HTML）— 按 `references/deliverable-template.md` 定稿 execution-plan.md；派 fresh subagent 渲染 execution-plan.html（机制见 loop-skeleton.md Step 5b）（主角图：Wave 依赖 DAG 图，标注并行组）。**
 
-**Step 6（审查）— 派 2 组并行 fresh-context 审查 subagent（对齐组 ‖ 红队组，按 `../full-shared/references/review-agent.md` 规范 + loop-skeleton「subagent 派发工程规范」用 `wait:false` 同消息派发）。两组都先跑 `scripts/check_execution.py` 机器检查（FAIL 硬阻断），再各跑认知帧：对齐组 5 维（内部一致性/上游对齐/可执行性/完整性/可视化）写 `changes/review-execution.md`，红队组 1 维（必要性/比例性，反过度设计）写 `changes/review-execution-redteam.md`。两组 APPROVED 后进 Step 6b 反哺检查（回扫①-⑤上游），再进 Step 6c。轻量项目可降级单组（`review_mode: single`，见 loop-skeleton Step 6 降级条款）。**
+**Step 6（审查）— 派 2 组并行 fresh-context 审查 subagent（对齐组 ‖ 红队组，按 `../full-shared/references/review-agent.md` 规范 + loop-skeleton「subagent 派发工程规范」用 `wait:false` 同消息派发）。两组都经 CW gate 的机器检查（FAIL 硬阻断），再各跑认知帧：对齐组 5 维（内部一致性/上游对齐/可执行性/完整性/可视化）写 `changes/review-execution.md`，红队组 1 维（必要性/比例性，反过度设计）写 `changes/review-execution-redteam.md`。两组 APPROVED 后进 Step 6b 反哺检查（回扫①-⑤上游），再进 Step 6c。轻量项目可降级单组（`review_mode: single`，见 loop-skeleton Step 6 降级条款）。**
 
 **Step 6c（全文档一致性终检）— 仅⑥阶段：编码前的总闸门。** 派独立 fresh-context subagent，读取①-⑥全部 .md + CONTEXT.md + ⑤骨架代码，按 6 维做跨文档一致性审计（详见 `references/consistency-check.md`）。产出 `changes/consistency-final.md`（verdict: CONSISTENT / INCONSISTENT）。INCONSISTENT → 矛盾当 gap 回相应阶段 Step 3。**CONSISTENT 才允许交接编码。**
 
