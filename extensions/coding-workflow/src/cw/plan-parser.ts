@@ -15,7 +15,9 @@ import type { TestCaseSeed, Tier, WaveSeed } from "./types.js";
 
 // ── 3 套 schema（§12 architecture，typebox 声明） ────────────
 
-const LitePlanSchema = Type.Object({
+// 导出供 tool schema 复用（src/index.ts 的 planJson/clarifyJson/detailJson 字段引用）。
+// 单一来源：tool 层和 parser 层共用同一 schema 定义，避免漂移。
+export const LitePlanSchema = Type.Object({
   format: Type.Literal("lite"),
   objective: Type.String(),
   waves: Type.Array(
@@ -41,7 +43,7 @@ const LitePlanSchema = Type.Object({
   ),
 });
 
-const MidClarifySchema = Type.Object({
+export const MidClarifySchema = Type.Object({
   format: Type.Literal("mid-clarify"),
   objective: Type.String(),
   deliverables: Type.Object({
@@ -50,7 +52,7 @@ const MidClarifySchema = Type.Object({
   }),
 });
 
-const MidDetailSchema = Type.Object({
+export const MidDetailSchema = Type.Object({
   format: Type.Literal("mid-detail"),
   objective: Type.String(),
   waves: Type.Array(
@@ -82,6 +84,25 @@ const MidDetailSchema = Type.Object({
     codeArchitecture: Type.String(),
     executionPlan: Type.String(),
   }),
+});
+
+/**
+ * test action 的 cases 数组元素 schema（TestCaseSubmission 结构契约）。
+ * 字段语义见 test.ts 的 TestCaseSubmission interface：
+ *   - caseId 必填（lite/mid 共有，匹配 topic 已 seed 的 testCase.id）
+ *   - actual/screenshotPath：lite 分支用（judgeByExpected 重算）
+ *   - commitHash/claimedStatus：mid 分支用（GitValidator + 信声明）
+ * tool 层和 test.ts 共用此 schema，避免漂移。
+ */
+export const TestCaseSubmissionSchema = Type.Object({
+  caseId: Type.String(),
+  actual: Type.Optional(Type.Object({
+    url: Type.Optional(Type.String()),
+    text: Type.Optional(Type.String()),
+  })),
+  screenshotPath: Type.Optional(Type.String()),
+  commitHash: Type.Optional(Type.String()),
+  claimedStatus: Type.Optional(Type.Union([Type.Literal("passed"), Type.Literal("failed")])),
 });
 
 // schema 入参类型从 Value.Check 签名派生（避免跨版本 TSchema 导出不稳定）。

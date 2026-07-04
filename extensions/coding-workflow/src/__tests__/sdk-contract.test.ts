@@ -12,6 +12,7 @@
 
 // SDK 值导入（StringEnum/Type）走 vitest alias 指向真实 pi-ai/typebox，无需 mock。
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Value } from "@sinclair/typebox/value";
 import { describe, expect, it } from "vitest";
 
 import codingWorkflowExtension, { registerCodingWorkflowTool } from "../index.js";
@@ -74,7 +75,11 @@ describe("coding-workflow SDK contract [MANDATORY]", () => {
   // 原因：LLM 看到 schema 无 type 提示，容易把 JSON 内容当 string 传；到 handler 的
   // typeof !== "object" 守卫被拒。显式 type:object 让 LLM 知道传 object，且 string
   // 输入在 Pi validation 层就拒（报 Validation failed，比 handler 的 not an object 更早更清晰）。
-  it("REGRESSION 2026-07-04: planJson/clarifyJson/detailJson schemas declare type:object (not Unknown)", () => {
+  //
+  // 2026-07-04 升级（方案 B）：3 个 JSON 字段直接引用 plan-parser 的完整 schema，
+  // 不只是 type:object，而是完整字段结构（format literal + waves/testCases/deliverables）。
+  // cases 元素引用 TestCaseSubmissionSchema（caseId 必填）。
+  it("REGRESSION 2026-07-04: planJson/clarifyJson/detailJson bind to plan-parser schemas (full structure, not ANY_OBJECT)", () => {
     let capturedSchema: { properties?: Record<string, Record<string, unknown>> } | undefined;
     const pi = mockExtensionApi({
       registerTool: (tool: { parameters: { properties?: Record<string, unknown> } }) => {
@@ -82,13 +87,37 @@ describe("coding-workflow SDK contract [MANDATORY]", () => {
       },
     });
     registerCodingWorkflowTool(pi);
-    for (const fieldName of ["planJson", "clarifyJson", "detailJson"]) {
-      const prop = capturedSchema!.properties![fieldName];
-      // anyOf/optional 包装下，type 应在某个分支里；直接检查序列化后含 "type":"object"
-      const serialized = JSON.stringify(prop);
-      expect(serialized).toContain('"type":"object"');
-      expect(serialized).not.toBe("{}"); // 不是 Unknown() 编译的空 schema
-    }
+
+    // planJson：LitePlanSchema（format:"lite" + waves + testCases 含 expected）
+    const planJson = capturedSchema!.properties!.planJson;
+    const planSerialized = JSON.stringify(planJson);
+    expect(planSerialized).toContain('"type":"object"');
+    expect(planSerialized).toContain('"const":"lite"'); // format literal 锁定
+    expect(planSerialized).toContain('"waves"');
+    expect(planSerialized).toContain('"testCases"');
+    expect(planSerialized).toContain('"expected"'); // lite 特有字段
+
+    // clarifyJson：MidClarifySchema（format:"mid-clarify" + deliverables）
+    const clarifyJson = capturedSchema!.properties!.clarifyJson;
+    const clarifySerialized = JSON.stringify(clarifyJson);
+    expect(clarifySerialized).toContain('"const":"mid-clarify"');
+    expect(clarifySerialized).toContain('"deliverables"');
+    expect(clarifySerialized).toContain('"requirements"');
+
+    // detailJson：MidDetailSchema（format:"mid-detail" + assertion + issues）
+    const detailJson = capturedSchema!.properties!.detailJson;
+    const detailSerialized = JSON.stringify(detailJson);
+    expect(detailSerialized).toContain('"const":"mid-detail"');
+    expect(detailSerialized).toContain('"assertion"'); // mid 特有字段（非 expected）
+    expect(detailSerialized).toContain('"issues"'); // mid wave 字段（非 changes）
+
+    // cases：TestCaseSubmissionSchema（caseId 必填 + actual/screenshotPath/commitHash/claimedStatus）
+    const cases = capturedSchema!.properties!.cases;
+    const casesSerialized = JSON.stringify(cases);
+    expect(casesSerialized).toContain('"caseId"');
+    expect(casesSerialized).toContain('"required":["caseId"]'); // caseId 必填
+    expect(casesSerialized).toContain('"screenshotPath"');
+    expect(casesSerialized).toContain('"commitHash"');
   });
 
   it("execute returns content array + details object on valid action", async () => {
@@ -140,5 +169,64 @@ describe("coding-workflow SDK contract [MANDATORY]", () => {
     } finally {
       fs.rmSync(workspacePath, { recursive: true, force: true });
     }
+  });
+
+  // 方案 B 核心 value-add：tool schema 直接绑定 plan-parser schema，
+  // Pi validation 层（Value.Check）就能拒绝三类常见 LLM 误用，不用到 handler 才报错。
+  // 每个用例对应一种 LLM 实际会犯的错误。
+  it("schema rejects common LLM misuse at validation layer (not at handler)", () => {
+    let capturedSchema: { properties?: Record<string, unknown> } | undefined;
+    const pi = mockExtensionApi({
+      registerTool: (tool: { parameters: { properties?: Record<string, unknown> } }) => {
+        capturedSchema = tool.parameters;
+      },
+    });
+    registerCodingWorkflowTool(pi);
+    // 拿到 schema 后用 Value.Check 模拟 Pi validation 层的拒绝行为。
+    // typebox 的 ~kind 是非枚举字符串键，Value.Check 能正确读取。
+    const planJsonSchema = capturedSchema!.properties!.planJson;
+    const casesSchema = capturedSchema!.properties!.cases;
+
+    // 1. 字符串误传（2026-07-04 bug 的核心场景）
+    expect(Value.Check(planJsonSchema, '{"format":"lite"}')).toBe(false);
+
+    // 2. format 不匹配（mid-clarify JSON 误传到 planJson 字段）
+    expect(
+      Value.Check(planJsonSchema, {
+        format: "mid-clarify",
+        objective: "x",
+        deliverables: { requirements: "r.md", systemArchitecture: "a.md" },
+      }),
+    ).toBe(false);
+
+    // 3. 缺必填字段（testCases 是 lite plan 必填）
+    expect(
+      Value.Check(planJsonSchema, {
+        format: "lite",
+        objective: "x",
+        waves: [{ id: "W1", changes: ["a.ts"], dependsOn: [] }],
+      }),
+    ).toBe(false);
+
+    // 4. cases 元素缺 caseId（caseId 是 TestCaseSubmission 必填）
+    expect(
+      Value.Check(casesSchema, [{ screenshotPath: "/tmp/x.png", claimedStatus: "passed" }]),
+    ).toBe(false);
+
+    // 5. 正当输入仍然通过（不能因为收紧而拒合法数据）
+    expect(
+      Value.Check(planJsonSchema, {
+        format: "lite",
+        objective: "x",
+        waves: [{ id: "W1", changes: ["a.ts"], dependsOn: [] }],
+        testCases: [{
+          id: "E1", layer: "real", scenario: "s", steps: "st",
+          expected: { url: "/dash" }, executor: "vitest",
+        }],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(casesSchema, [{ caseId: "E1", screenshotPath: "/tmp/x.png" }]),
+    ).toBe(true);
   });
 });

@@ -20,22 +20,25 @@ import { handlePlan, type PlanParams } from "./cw/actions/plan.js";
 import { handleRetrospect, type RetrospectParams } from "./cw/actions/retrospect.js";
 import { handleTest, type TestParams } from "./cw/actions/test.js";
 import { GateRunner, GitValidator } from "./cw/gates.js";
+import {
+  LitePlanSchema,
+  MidClarifySchema,
+  MidDetailSchema,
+  TestCaseSubmissionSchema,
+} from "./cw/plan-parser.js";
 import { CwStore } from "./cw/store.js";
 import type { ActionDeps, ActionResult } from "./cw/types.js";
 
 // ── typebox schema（tool 入参，Pi 运行时校验） ───────────────
 
-// plan/clarify/detail/cases 是 agent 从文件读的任意 JSON，schema 层只描述「是个值」，
-// 真正的结构校验在 plan-parser.ts 内（typebox Value.Check + format 锁定）。
-//
-// 为什么 plan/clarify/detail 用 Type.Object({}, { additionalProperties: true }) 而非
-// Type.Unknown()：后者编译成 JSON Schema `{}`（无 type 字段），LLM 看不到类型提示，
-// 容易把 planJson 当字符串传（"读 plan.json 的内容" 的歧义 + schema 空白），到 handler
-// 的 typeof !== "object" 守卫被拒。显式声明 type:object + additionalProperties:true
-// 既告诉 LLM 该传 object，又允许任意字段（真正结构校验在 plan-parser）。
-// 注意：Type.Object({}) 默认 additionalProperties:false 会拒收任意字段，必须显式 true。
-const ANY_OBJECT = Type.Object({}, { additionalProperties: true });
-
+// 3 个 JSON 字段（planJson/clarifyJson/detailJson）直接引用 plan-parser.ts 的 schema：
+//   - 单一来源（DRY）：tool 层和 parser 层共用同一 schema 定义，不会漂移
+//   - LLM 看到完整字段结构（id/scenario/expected/...），减少字段名猜错
+//   - format 字段两层都校验（tool 层 Literal 锁 + parser 层 assertFormat），冗余但安全
+// 每个 JSON 字段对应确定的 schema，不需要 union：
+//   planJson 只走 lite 路径（action=plan → tier=lite，state-machine.ts:228）
+//   clarifyJson 只走 mid clarify，detailJson 只走 mid detail
+// cases 引用 TestCaseSubmissionSchema（caseId 必填 + lite/mid 分支字段 optional）。
 const CwParamsSchema = Type.Object({
   action: StringEnum([
     "create", "plan", "clarify", "detail", "dev", "test", "retrospect", "closeout",
@@ -47,17 +50,19 @@ const CwParamsSchema = Type.Object({
   tier: Type.Optional(StringEnum(["lite", "mid"] as const)),
   objective: Type.Optional(Type.String()),
   workspacePath: Type.Optional(Type.String()),
-  // plan/clarify/detail：结构化 JSON（agent 读文件后内联传入，必须是 object 不是 string）
-  planJson: Type.Optional(ANY_OBJECT),
-  clarifyJson: Type.Optional(ANY_OBJECT),
-  detailJson: Type.Optional(ANY_OBJECT),
+  // plan：lite plan.json（action=plan 只走 lite，format 锁定 "lite"）
+  planJson: Type.Optional(LitePlanSchema),
+  // clarify：mid clarify.json（action=clarify 只走 mid，format 锁定 "mid-clarify"）
+  clarifyJson: Type.Optional(MidClarifySchema),
+  // detail：mid detail.json（action=detail 只走 mid，format 锁定 "mid-detail"）
+  detailJson: Type.Optional(MidDetailSchema),
   // dev（D-005 数组，长1=单个/N=批量）
   tasks: Type.Optional(Type.Array(Type.Object({
     waveId: Type.String(),
     commitHash: Type.String(),
   }))),
-  // test（数组，元素结构按 tier 分化，test.ts 内部校验）
-  cases: Type.Optional(Type.Array(ANY_OBJECT)),
+  // test（D-005 数组，元素结构跨 lite/mid 分支，test.ts 内部按 tier 校验 actual/commitHash）
+  cases: Type.Optional(Type.Array(TestCaseSubmissionSchema)),
   // retrospect
   retrospectPath: Type.Optional(Type.String()),
 });
@@ -69,11 +74,15 @@ export type CwParams = {
   tier?: "lite" | "mid";
   objective?: string;
   workspacePath?: string;
+  /** LitePlanSchema 静态类型派生（format:"lite" + waves + testCases）。 */
   planJson?: object;
+  /** MidClarifySchema 静态类型（format:"mid-clarify" + deliverables）。 */
   clarifyJson?: object;
+  /** MidDetailSchema 静态类型（format:"mid-detail" + waves + testCases + deliverables）。 */
   detailJson?: object;
   tasks?: Array<{ waveId: string; commitHash: string }>;
-  cases?: object[];
+  /** TestCaseSubmissionSchema 静态类型（caseId + lite/mid 分支 optional 字段）。 */
+  cases?: Array<{ caseId: string; actual?: object; screenshotPath?: string; commitHash?: string; claimedStatus?: "passed" | "failed" }>;
   retrospectPath?: string;
 };
 
