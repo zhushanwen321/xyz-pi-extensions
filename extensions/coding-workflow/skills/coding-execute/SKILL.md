@@ -6,11 +6,21 @@ description: >-
   **or execution-plan.md (from mid-detail-plan / full-execution-plan)**
   and an active goal, and needs to execute the Waves with subagents in parallel,
   run tests and code-review in isolated worktrees, and verify acceptance.
-  Produces code changes + test verification. Not for planning (that is lite-plan /
-  mid-detail-plan). Not for retrospect (that is coding-retrospect).
+  Produces code changes + test verification + test-results.json.
+  对应 CW action: dev（渐进式提交 commit）+ test（渐进式提交测试结果）。本 skill 派
+  implementer/test-runner subagent 执行 Wave，每个 Wave 完成后调 cw(action=dev, tasks)
+  提交 commit，测试全跑完后调 cw(action=test, cases) 提交结果，按 CW 返回的 nextAction
+  推进。Not for planning (that is lite-plan / mid-detail-plan).
+  Not for retrospect (that is coding-retrospect).
 ---
 
 # 执行（Execute）
+
+> **对应 CW action: `dev` + `test`**（coding-workflow tool，D-007-REVISIT 映射）。
+> 本 skill 派 subagent 执行 Wave（implementer TDD + test-runner 跑测试），产出 commit +
+> test-results.json。**每个 Wave 完成后调 `cw(action=dev, tasks)`** 把 commit 提交给 CW gate
+> （GitValidator 校验 commit 真实性）；**测试全跑完后调 `cw(action=test, cases)`** 把结果提交给
+> CW gate（lite: judgeByExpected 机器重算；mid: 信声明 + GitValidator）。按 CW 返回的 nextAction 推进。
 
 读取 lite-plan 产出的 plan.md（或 mid-detail-plan / full-execution-plan 产出的 execution-plan.md），在 goal 模式下用 subagent 按 Wave 并行实现，用 worktree 隔离让测试 ‖ code-review ensemble 并行互不影响，失败自动回 Wave 修复（限 3 轮），全绿后收尾。
 
@@ -21,6 +31,12 @@ description: >-
 > **[铁律] E2E 验收 todo 按 mock / real 测试层分组**（`[验收-mock]` / `[验收-real]`），test-runner 分层跑、分层报 pass/fail。mock 层验证逻辑、real 层验证集成，两层各自全绿才算验收通过。见 `../lite-shared/references/test-case-schema.md` 核心原则四。
 >
 > **[铁律] goal_control(complete) 前必须跑 `check_execute.py` 且 PASS。** 这是执行阶段唯一的机器硬门。脚本自动识别 plan 格式（lite plan.md 的单测/E2E 用例清单，或 mid/full execution-plan.md 的测试验收清单），读 test-runner 落盘的 `test-results.json` 逐条核对，堵住「建了验收 todo 不跑/略过 real fail/自标手动通过」等逃逸路径。FAIL 时禁止 complete，见 `../lite-shared/references/execution-flow.md` §阶段C。
+>
+> **[铁律] CW dev/test gate 是状态机强制点。** 不调 cw(dev) 提交 commit，CW 状态不流转到 developed；
+> 不调 cw(test) 提交结果，状态不流转到 tested。即使代码写完测试跑过，不调 CW 就无法进 retrospect/closeout
+> （D-009 主强制点在状态机本身）。CW dev gate 校验 commit 真实性（GitValidator: cat-file 存在 / merge-base
+> 属仓库 / diff-tree 非空），CW test gate 按 tier 分化（lite: judgeByExpected 重算丢 claimedStatus；
+> mid: 信声明 + GitValidator 校验 commitHash 可追溯到已 committed 的 dev commit）。
 
 ## 前置检查
 
@@ -56,9 +72,11 @@ description: >-
   → 多 Wave 时可选早启动 background review，与后续 Wave 实现重叠（详见 execution-flow.md §A7）
   → 覆盖率 gate ≥60% 才算开发收尾
   ↓
-阶段 B 测试验收（多任务严格执行）
+阶段 B 测试验收（多任务严格执行）[MANDATORY]
   清开发 todo → 按测试用例逐条建验收 todo（U*/E* 按 mock/real 测试层分组/覆盖率/回归）
   → 建 2 个 worktree（test/review）→ 派 test-runner ‖ code-review ensemble（2 路只读 reviewer 共享 review worktree，wait:false）
+  **[MANDATORY] 主 agent 不得自行跑测试，必须派 test-runner subagent 落盘 test-results.json。主 agent 自己跑 vitest + 手填 JSON = 流程违规。**
+  **[MANDATORY] 必须派 code-review ensemble（2 路 reviewer），不得跳过。测试通过 ≠ 代码质量合格。**
   → test-runner 分层跑：mock 层（单测+mock E2E+覆盖率）‖ real 层（real E2E），分层报 pass/fail；2 路 reviewer 各聚焦不同维度出 must_fix（并集去重）
   → 失败 → 回阶段 A 修复（限 3 轮，超限 Stagnation 暂停）
   ↓
@@ -78,6 +96,65 @@ description: >-
 | **建 worktree / 合并 / 删 worktree** | **低（精确命令）** | **⚠️ 不可逆**——切分支/合并/删除。按 `execution-flow.md` 精确命令执行，不自由发挥 |
 | 标 todo completed / goal complete | 低（必须证据）| 不可逆状态变更，必须有测试/review 证据 |
 
+## CW 数据契约（test-results.json ↔ cw dev/test，AC-16.3）
+
+coding-execute skill 产 test-results.json（test-runner 落盘）+ commit（implementer 落盘），
+agent 据其内容组装 `cw dev` / `cw test` 的入参数组。**用例 ID 必须与 plan.json/detail.json 一致**
+（lite 用 `E1` 格式，mid 用 `T2.4` 格式，check_execute.py 已支持双格式解析）。
+
+### test-results.json schema（check_execute.py 消费）
+
+```json
+[
+  {
+    "id": "E1",
+    "status": "pass",
+    "layer": "mock",
+    "screenshotPath": "/abs/path/screenshot.png",
+    "commitHash": "abc123",
+    "actual": { "url": "/dashboard", "text": "欢迎" }
+  }
+]
+```
+
+字段说明：
+- `id`（**不是 caseId**）：用例 ID，与 plan.json/detail.json 的 testCases[].id 一致
+- `status`：`pass` / `user-skipped`（real 层用户确认跳过，须带 `user_confirm_ref`）/ 其他非法值 check_execute 会拒
+- `layer`：`mock` / `real`（lite）或 `unit` / `integration` / `e2e` / `perf-chaos`（mid）
+- `screenshotPath`：lite real 层截图绝对路径（cw test lite 分支会 existsSync 校验）
+- `commitHash`：mid 路径需有（cw test mid 分支 GitValidator 校验可追溯到已 committed 的 dev commit）
+- `actual`：lite 路径需有（cw test lite 分支 judgeByExpected 用其重算，丢 claimedStatus）
+
+### cw dev 入参（tasks 数组，D-005 渐进式）
+
+```
+cw(action=dev, topicId, tasks: [
+  { waveId: "W1", commitHash: "abc123" },
+  { waveId: "W2", commitHash: "def456" }
+])
+```
+
+每个 Wave 的 implementer 完成 + commit 后，把 `{waveId, commitHash}` 加入 tasks 数组。
+长 1 = 单个渐进提交，长 N = 批量。CW 逐个 GitValidator 校验，全 committed 才算 dev gatePassed。
+
+### cw test 入参（cases 数组，D-005 渐进式）
+
+```
+cw(action=test, topicId, cases: [
+  { caseId: "E1", actual: { url: "/dashboard", text: "欢迎" }, screenshotPath: "/abs/..." },
+  { caseId: "T2.4", commitHash: "abc123" }
+])
+```
+
+- **lite 路径**：每条含 `caseId` + `actual`（judgeByExpected 重算基准）+ `screenshotPath`（real 层必需）。
+  **不传 claimedStatus**——CW lite 分支机器重算，丢 agent 声明（D-008 strong-recompute）。
+- **mid 路径**：每条含 `caseId` + `commitHash`（GitValidator 校验可追溯到 dev commit）。
+  CW 信 agent 声明的 status（medium-coverage），但 commitHash 必须真实。
+
+> **数据契约对齐**：test-results.json 的 `id` 字段 → cw test cases 的 `caseId` 字段（字段名不同，
+> agent 组装时映射）。check_execute.py 用 `id`，cw test handler 用 `caseId`——这是历史命名，
+> skill 指导文档明确两者的映射关系防 agent 混淆。
+
 ## Self-Check
 
 **[MANDATORY] 以下全部满足才算执行完成。**
@@ -86,6 +163,7 @@ description: >-
 - [ ] 每个 implementer 严格 TDD（先写失败测试 → 跑确认失败 → 实现 → 跑通过）
 - [ ] 每个 Wave 在独立 worktree 完成（多 Wave 并行时）
 - [ ] 覆盖率 gate 执行且 ≥ 60%（不达标未收尾）
+- [ ] **每个 Wave 完成后已调 `cw(action=dev, tasks)`**，CW 返回的 nextAction.waves 全 committed=true（dev gatePassed）
 
 测试验收（严格执行）：
 - [ ] **`check_execute.py` 已跑且 PASS**（机器核对 test-results.json 覆盖 plan 全部用例：mock 层全 pass、real 层 pass 或 user-skipped 带凭证）—— 这是以下几条的机器强制总门
@@ -95,11 +173,13 @@ description: >-
 - [ ] 验收 todo 全部 completed（无遗留 pending）
 - [ ] test-runner 独立 worktree；2 路 reviewer 共享 review worktree 并行只读审查（must_fix 并集去重，[NEEDS-VERIFY] 已复核）
 - [ ] 失败循环未超 3 轮（超限已 Stagnation 暂停）
+- [ ] **测试全跑完后已调 `cw(action=test, cases)`**，CW 返回的 nextAction.testCases 全 passed（test gatePassed）
 
 收尾：
 - [ ] goal_control complete 带具体 evidence（测试条数 + 覆盖率 + review 结论）
 - [ ] worktree 已清理
 - [ ] todo 已清空
+- [ ] **CW nextAction 已指向 retrospect**（status=tested，cw test gate 通过后 CW 返回 nextAction.action="retrospect"）
 
 ## 标记说明
 
