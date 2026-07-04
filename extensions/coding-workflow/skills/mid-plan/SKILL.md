@@ -37,7 +37,7 @@ full-architecture 全量；**编排**改为 draft → batch-ask → review-fix-l
 ## 前置
 
 - **coding-init 已完成**：项目文档容器就绪（AGENTS.md/CONTEXT.md/ARCHITECTURE.md 骨架）。未完成 → `/skill:coding-init`
-- **topic 已选定**：`.xyz-harness/{topic}/` 目录已建（若未建，本 skill Step 0 建）
+- **已调 `cw(action=create, slug, tier="mid", objective)` 拿到 topicId**（第一步，锁 tier=mid；后续 clarify.json 路径依赖此 topicId）。Step 0 建的是文件系统目录（`.xyz-harness/{topic}/` + decisions.md + _progress.md），CW topic 由 create 建——两者都必要，不互替
 
 ## 执行流程
 

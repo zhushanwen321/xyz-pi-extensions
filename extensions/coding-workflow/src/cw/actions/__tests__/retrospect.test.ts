@@ -120,6 +120,9 @@ describe("handleRetrospect", () => {
 
     expect(result.status).toBe("tested"); // 不变
     expect(result.gatePassed.retrospect).toBeFalsy();
+    // nextAction 指向 retry retrospect（不是 closeout），防 agent 调 closeout 撞 illegal_transition
+    expect(result.nextAction.action).toBe("retrospect");
+    expect(result.nextAction.skill).toBe("coding-retrospect");
     expect(result.mustFix).toMatch(/retrospect\.md|missing|empty/);
 
     closeStore(store);

@@ -27,9 +27,9 @@ mid 把同一目的的检查**跨 deliverable 合并**：
 ```
 round = 0
 loop:
-  L1  主 agent 跑机器检查 check_*.py          ← 零成本前置门，FAIL 当场修，不进 subagent
+  L1  主 agent 调 cw(action=clarify|detail) 触发机器检查  ← 零成本前置门，FAIL 当场修，不进 subagent
   L2  派 N 路 fresh reviewer 并行 wait:false   ← 各跑正交认知帧（维度见各 SKILL 的「维度审查分配」）
-  L3  每路先复跑机器检查（幂等）+ 跑认知帧      ← 禁读重建路：重建阶段禁读对应 deliverable
+  L3  每路读 changes/machine-check-{phase}.md（L1 已产出）+ 跑认知帧  ← 禁读重建路：重建阶段禁读对应 deliverable
   L4  notifier 唤醒 → 主 agent 汇总 must_fix   ← 并集去重 + 交叉验证标注（见下）
   L5  无 must_fix？→ CONVERGED，跳出 loop
   L6  否则 round++ ；round ≥ MAX → 停止，残留 D-不可逆打包二次 ask_user
@@ -38,16 +38,17 @@ loop:
 
 ### L1 · 机器检查（前置门，零 subagent）
 
-主 agent 自跑对应阶段的机器检查脚本（复用 full 的脚本，不重写）：
+主 agent 调 CW gate 触发对应阶段的机器检查（mid 阶段不手写 check 脚本，复用 CW 的 check 函数）。mid-plan 阶段调 `cw(action=clarify)`，mid-detail-plan 阶段调 `cw(action=detail)`：
 
-```bash
-python3 ${对应阶段 skill dir}/scripts/check_{phase}.py {topic_dir}
+```
+cw(action=clarify, topicId, clarifyJson)   # mid-plan 阶段，触发 check_clarity + check_architecture
+cw(action=detail, topicId, detailJson)     # mid-detail-plan 阶段，触发 check_issues + check_nfr + check_code_arch + check_execution
 ```
 
-- **exit 0** → 进 L2 派 reviewer
-- **exit 1** → 看 `changes/machine-check-{phase}.md` 报告，**当场修**低级硬伤（占位符/缺章节/幽灵引用/集合差集），修完重跑直到 exit 0。**不进 subagent**（机器可证的结构硬伤不值得占 subagent 预算）。
+- **gate pass** → 进 L2 派 reviewer
+- **gate fail** → CW 在 `changes/machine-check-{phase}.md` 落盘报告，顶层返回 `mustFix`。**当场修**低级硬伤（占位符/缺章节/幽灵引用/集合差集），修完重调 CW 直到 gate pass。**不进 subagent**（机器可证的结构硬伤不值得占 subagent 预算）。
 
-> 这层与 full 的 Step 5d 同源——「把 Step 6 审查的反馈环从定稿后缩到初稿后当场修」。mid 把它作为 loop 的固定第一道门。
+> 机器检查由 CW gate 在 `cw(action=clarify/detail)` 调用时自动执行（TS check 函数，不再是 python 脚本——上一轮已迁移）。agent 不手动跑 check 脚本。
 
 ### L2 · 派 N 路 reviewer（并行，wait:false）
 
@@ -64,10 +65,10 @@ subagent(action:'start', startParam:{
   你是独立 reviewer（{路名}），上下文与主 agent 隔离。
   {若是禁读重建路：本路重建阶段禁止读 {deliverable}，从 {源} 独立重建后 diff——读了就被锚定，退回读后审查}
 
-  **Step 0（机器检查，硬阻断，最先做）：**
-  跑 python3 {skill_dir}/scripts/check_{phase}.py {topic_dir}。
-  exit 1 → 直接判 CHANGES_REQUESTED，把 machine-check-{phase}.md 的 ❌ 当必须修改。
-  exit 0 才进下面的认知帧审查。
+  **Step 0（机器检查结果，硬阻断，最先看）：**
+  read {topic_dir}/changes/machine-check-{phase}.md（主 agent L1 已调 CW gate 产出）。
+  frontmatter machine_check: FAIL → 直接判 CHANGES_REQUESTED，把 ❌ 项当必须修改。
+  PASS 才进下面的认知帧审查。
 
   **Step 1（认知帧审查）：**
   read {本路读取材料清单}

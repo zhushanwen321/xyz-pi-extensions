@@ -517,13 +517,14 @@ describe("buildNextAction — tier+status+gatePassed 推导（#9 扁平）", () 
     expect(n.skill).toBe("mid-plan");
   });
 
-  it("plan → dev / coding-execute + waves 进度", () => {
+  it("plan gate 通过 → dev / coding-execute + waves 进度", () => {
     const topic = makeTopic({
       status: "planned",
       waves: [
         makeWave({ id: "w1", committed: "abc" }),
         makeWave({ id: "w2", committed: null }),
       ],
+      gateHistory: [makeGateEntry({ phase: "plan", result: "pass" })],
     });
     const n = buildNextAction("plan", topic);
     expect(n.action).toBe("dev");
@@ -534,18 +535,61 @@ describe("buildNextAction — tier+status+gatePassed 推导（#9 扁平）", () 
     ]);
   });
 
-  it("clarify → detail / mid-detail-plan", () => {
-    const topic = makeTopic({ tier: "mid", status: "clarified" });
+  it("plan gate FAIL（gateHistory 无 pass 记录）→ retry plan / lite-plan（不撞 illegal_transition）", () => {
+    const topic = makeTopic({
+      status: "created", // gate fail 时 status 未流转
+      gateHistory: [makeGateEntry({ phase: "plan", result: "fail" })],
+    });
+    const n = buildNextAction("plan", topic);
+    expect(n.action).toBe("plan"); // retry 当前 action，不是 dev
+    expect(n.skill).toBe("lite-plan");
+    expect(n.guidance).toContain("FAIL");
+  });
+
+  it("clarify gate 通过 → detail / mid-detail-plan", () => {
+    const topic = makeTopic({
+      tier: "mid",
+      status: "clarified",
+      gateHistory: [makeGateEntry({ phase: "clarify", result: "pass" })],
+    });
     const n = buildNextAction("clarify", topic);
     expect(n.action).toBe("detail");
     expect(n.skill).toBe("mid-detail-plan");
   });
 
-  it("detail → dev / coding-execute", () => {
-    const topic = makeTopic({ tier: "mid", status: "detailed" });
+  it("clarify gate FAIL → retry clarify / mid-plan（不撞 illegal_transition）", () => {
+    const topic = makeTopic({
+      tier: "mid",
+      status: "created",
+      gateHistory: [makeGateEntry({ phase: "clarify", result: "fail" })],
+    });
+    const n = buildNextAction("clarify", topic);
+    expect(n.action).toBe("clarify");
+    expect(n.skill).toBe("mid-plan");
+    expect(n.guidance).toContain("FAIL");
+  });
+
+  it("detail gate 通过 → dev / coding-execute", () => {
+    const topic = makeTopic({
+      tier: "mid",
+      status: "detailed",
+      gateHistory: [makeGateEntry({ phase: "detail", result: "pass" })],
+    });
     const n = buildNextAction("detail", topic);
     expect(n.action).toBe("dev");
     expect(n.skill).toBe("coding-execute");
+  });
+
+  it("detail gate FAIL → retry detail / mid-detail-plan（不撞 illegal_transition）", () => {
+    const topic = makeTopic({
+      tier: "mid",
+      status: "clarified",
+      gateHistory: [makeGateEntry({ phase: "detail", result: "fail" })],
+    });
+    const n = buildNextAction("detail", topic);
+    expect(n.action).toBe("detail");
+    expect(n.skill).toBe("mid-detail-plan");
+    expect(n.guidance).toContain("FAIL");
   });
 
   it("dev 全 committed → test（skill 留空 §10.4）+ waves 全 committed + testCases 预览", () => {
@@ -611,18 +655,46 @@ describe("buildNextAction — tier+status+gatePassed 推导（#9 扁平）", () 
     ]);
   });
 
-  it("retrospect → closeout / coding-closeout", () => {
-    const topic = makeTopic({ status: "retrospected" });
+  it("retrospect gate 通过 → closeout / coding-closeout", () => {
+    const topic = makeTopic({
+      status: "retrospected",
+      gateHistory: [makeGateEntry({ phase: "retrospect", result: "pass" })],
+    });
     const n = buildNextAction("retrospect", topic);
     expect(n.action).toBe("closeout");
     expect(n.skill).toBe("coding-closeout");
   });
 
-  it("closeout → guidance 提示 topic 已关闭，无 action/skill", () => {
-    const topic = makeTopic({ status: "closed" });
+  it("retrospect gate FAIL → retry retrospect / coding-retrospect（不撞 illegal_transition）", () => {
+    const topic = makeTopic({
+      status: "tested",
+      gateHistory: [makeGateEntry({ phase: "retrospect", result: "fail" })],
+    });
+    const n = buildNextAction("retrospect", topic);
+    expect(n.action).toBe("retrospect");
+    expect(n.skill).toBe("coding-retrospect");
+    expect(n.guidance).toContain("FAIL");
+  });
+
+  it("closeout gate 通过 → guidance 提示 topic 已关闭，无 action/skill", () => {
+    const topic = makeTopic({
+      status: "closed",
+      gateHistory: [makeGateEntry({ phase: "closeout", result: "pass" })],
+    });
     const n = buildNextAction("closeout", topic);
     expect(n.action).toBeUndefined();
     expect(n.skill).toBeUndefined();
     expect(n.guidance).toContain("关闭");
+  });
+
+  it("closeout gate FAIL → retry closeout / coding-closeout（status 仍 retrospected）", () => {
+    const topic = makeTopic({
+      status: "retrospected",
+      gateHistory: [makeGateEntry({ phase: "closeout", result: "fail" })],
+    });
+    const n = buildNextAction("closeout", topic);
+    expect(n.action).toBe("closeout"); // retry，不是 undefined
+    expect(n.skill).toBe("coding-closeout");
+    expect(n.guidance).toContain("FAIL");
   });
 });

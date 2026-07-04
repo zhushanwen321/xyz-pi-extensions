@@ -38,7 +38,7 @@ description: >-
 [MANDATORY] 启动前逐项确认，任一不满足先补齐：
 
 - plan 产物已完成（二选一）：
-  - lite 路径：`plan.md`（lite-plan 产出，含 6 章节 + U*/E* 测试清单）—— 不满足 → `/skill:lite-plan`
+  - lite 路径：`plan.md`（lite-plan 产出，含 7 章节 + U*/E* 测试清单）—— 不满足 → `/skill:lite-plan`
   - mid/full 路径：`execution-plan.md`（mid-detail-plan / full-execution-plan 产出，含测试验收清单 + T{UC}.{N} 用例）—— 不满足 → `/skill:mid-detail-plan`
 - goal 已创建（plan complete 选 "Goal-driven execution" 触发 `pi.__goalInit`）
   - 未创建 → `goal_control(action='create', slug='<feature>', objective='Execute plan: <planFilePath>')`
@@ -137,14 +137,14 @@ cw(action=dev, topicId, tasks: [
 ```
 cw(action=test, topicId, cases: [
   { caseId: "E1", actual: { url: "/dashboard", text: "欢迎" }, screenshotPath: "/abs/..." },
-  { caseId: "T2.4", commitHash: "abc123" }
+  { caseId: "T2.4", commitHash: "abc123", claimedStatus: "passed" }
 ])
 ```
 
 - **lite 路径**：每条含 `caseId` + `actual`（judgeByExpected 重算基准）+ `screenshotPath`（real 层必需）。
   **不传 claimedStatus**——CW lite 分支机器重算，丢 agent 声明（D-008 strong-recompute）。
-- **mid 路径**：每条含 `caseId` + `commitHash`（GitValidator 校验可追溯到 dev commit）。
-  CW 信 agent 声明的 status（medium-coverage），但 commitHash 必须真实。
+- **mid 路径**：每条含 `caseId` + `commitHash`（GitValidator 校验可追溯到 dev commit）+ **`claimedStatus`（必填，`"passed"`/`"failed"`）**。
+  CW 信 agent 声明的 status（medium-coverage），但 commitHash 必须真实。**漏传 claimedStatus 一律判 failed**（test.ts:174 三元运算缺省即 failed）。
 
 > **数据契约对齐**：test-results.json 的 `id` 字段 → cw test cases 的 `caseId` 字段（字段名不同，
 > agent 组装时映射）。执行收尾机器门用 `id`，cw test handler 用 `caseId`——这是历史命名，

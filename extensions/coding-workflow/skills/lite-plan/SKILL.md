@@ -14,7 +14,7 @@ description: >-
 > `cw(action=plan, topicId, planJson)` 通过 CW plan gate。CW 解析 plan.json 的 waves/testCases
 > 写入 _cw.db，gate pass 后返回 nextAction（→ dev）。按 nextAction 推进，不自行决定下一步。
 
-为**不涉及架构改动的小功能**产出一份 plan.md，含 6 个章节：业务目标、技术改动点（文件级）、Wave 依赖拆分、**完整的测试验收设计**（单测清单 + E2E 清单 + 覆盖率 gate）。
+为**不涉及架构改动的小功能**产出一份 plan.md，含 7 个章节：业务目标、技术改动点（文件级）、Wave 依赖拆分、**完整的测试验收设计**（单测清单 + E2E 清单 + 覆盖率 gate）、实现步骤（MANDATORY，plan extension 桥接依赖）。
 
 > **含 4 个条件触发的 ensemble 点**（0b 范围守门投票 / 2b 复用检查并集 / 4b 测试完整性并集 / 5b 机器检查+禁读重建）：同源盲区高风险时派 fresh subagent 并行、综合去偏；5b 用机器脚本吃掉结构检查、禁读重建抓盲区。触发条件见路由表与各步骤正文，明确小功能不启用。趋同数据（`*_ensemble_overlap` / `reconstruct_blind_spot`）记 frontmatter，供 coding-retrospect 消费做降级决策。
 
@@ -37,6 +37,8 @@ description: >-
 ### 范围守门 ensemble（投票，边界判定时触发）
 
 > 触发条件：主 agent 自检 5 条判据后，有 1-2 条**处于边界**（不确定算不算命中——如「跨 2 个子系统」的「跨」怎么算、「核心逻辑」怎么界定）。明确属于 lite（0 条命中）或明确属于 full（多条命中）→ 直接判定，不启用。
+>
+> **[铁律] 触发条件是硬性的，不允许主 agent 基于项目规模/「这次很简单」自行降级跳过 ensemble。** 降级决策由 coding-retrospect 跨功能复盘基于趋同数据（`*_ensemble_overlap` frontmatter）决定——只有 retrospect 判定「上次同类功能 ensemble 趋同 high」时，未来同类功能才可降级单路判定。主 agent 在当前功能内无降级权限。
 
 范围判定是**元决策**——判错整个工作流方向错。低判（本该 full 却走 lite）= 后期发现架构改动全盘返工；高判（本该 lite 却推 full）= 过度流程浪费。两种代价都大且判定有主观性，ensemble 把单点主观判断转多路投票压抖动。
 
@@ -56,6 +58,7 @@ description: >-
 
 ## 前置
 
+- **已调 `cw(action=create, slug, tier="lite", objective)` 拿到 topicId**（第一步，锁 tier；后续 plan.md/plan.json 路径都挂在 `.xyz-harness/{slug}/` 下，依赖此 topicId）
 - 已在 plan mode（`/plan <需求>`）
 - 已 `plan(action='select-template', templateName='feature-plan')`
 
@@ -75,11 +78,11 @@ description: >-
 | 3. Wave 拆分 | 从改动点推导 Wave 表（垂直切片 + 依赖 + 并行组 + 末尾验收 Wave） | `../lite-shared/references/wave-model.md` |
 | 4. 测试设计（随改动评估） | 代码每处改动评估现有测试如何随之改；单测清单（AC级可判定）+ E2E 清单（探测项目实际测试栈，**每条标测试层 mock/real，两层各≥1**）+ 覆盖率 gate | `../lite-shared/references/test-case-schema.md` |
 | 4b. 多路反向自检（条件触发） | 改动点 ≥3 / 涉及过滤·查询·匹配·状态机时：派 fresh subagent ensemble 找漏用例（详见正文） | — |
-| 5. 写 plan.md | 用完整模板填 6 章节（若并行加速模式启用：合并技术方案路 + 测试设计路两份草案） | `../lite-shared/references/plan-template.md` |
+| 5. 写 plan.md | 用完整模板填 7 章节（若并行加速模式启用：合并技术方案路 + 测试设计路两份草案） | `../lite-shared/references/plan-template.md` |
 | 5b. 草案审查 ensemble（条件触发） | plan.md 写成后：先让 CW gate 机器检查杀结构硬伤（调 `cw(action=plan)` 时自动跑，零 subagent），再派 1 路禁读重建 subagent 做测试盲区三态 diff（详见正文） | — |
 | 6. 自检 | 对照下方 Self-Check 逐条核对（含 5b 审查反馈处理） | — |
 
-> [铁律] 步骤 1 不做架构设计。技术约束只记录到 Constraints，不展开选型/接口定义/数据建模。
+> [铁律] 步骤 1 不做架构设计。技术约束只记录到「业务目标」章节的约束字段，不展开选型/接口定义/数据建模。
 
 ## 并行加速模式（可选，提升 plan 速度）
 
@@ -182,7 +185,7 @@ subagent(action:'start', startParam:{
 
 ### 边界与风险
 
-- **2 路拆分降低单路负担**：原来 1 个 bg subagent 写全部 6 章节，注意力和 token 预算倾斜技术方案，测试章节常被压缩。拆成 2 路后各聚焦 3 章节，测试设计质量预期显著提升。
+- **2 路拆分降低单路负担**：原来 1 个 bg subagent 写全部 7 章节，注意力和 token 预算倾斜技术方案，测试章节常被压缩。拆成 2 路后各聚焦（技术方案路 3 章节 + 测试设计路 3 章节，实现步骤由主 agent 汇合时补），测试设计质量预期显著提升。
 - **交叉校验防漂移**：技术方案路的改动点清单必须与测试设计路的用例覆盖清单一致。汇合时主 agent 做交叉校验——技术方案列了但测试没覆盖的改动点 → 补用例；测试覆盖了但技术方案没列的 → 核实后补改动点或删用例。
 - **bg 上下文不足风险**：plan 设计依赖 codebase 理解。解法——bg task 里让它**自己 read 关键文件**（主 agent 给清单），不靠摘要硬做。代价是 bg 耗时≈主 agent 自做耗时，但两路并行跑，不亏。
 - **草案烂（阻塞性问题假设错）→ 重做**：汇合时若用户答案推翻了 bg 的阻塞性假设，两路草案的相关部分都必须重做（阻塞性假设通常影响技术方案路，连带影响测试设计路的覆盖范围），不勉强用烂草案。
@@ -199,7 +202,7 @@ subagent(action:'start', startParam:{
 - **CLAUDE.md / AGENTS.md / .claude/rules/** — 项目编码规范、命名约定、禁用模式、一致性惯例（如「一致性 > 品味」「禁 any」）
 - **其他规范文档** — docs/standards.md、CONTRIBUTING、架构 ADR（docs/adr/）等
 
-> 不读规范就写代码 = 大概率违反项目约定（用了禁用 API、命名不符惯例、命令在错目录跑），返工成本远高于先读 5 分钟。规范里的约束直接进 plan.md 的 Constraints 章节。
+> 不读规范就写代码 = 大概率违反项目约定（用了禁用 API、命名不符惯例、命令在错目录跑），返工成本远高于先读 5 分钟。规范里的约束直接进 plan.md「业务目标」章节的约束字段。
 
 ### 步骤 2 必做：复用检查先于新建
 
@@ -245,9 +248,9 @@ subagent(action:'start', startParam:{
 
 plan.md 引用的事实型前提（依赖某文件/配置/接口存在）都要实测；无法实测标 `[未验证]` 暴露给用户，不默默采信。
 
-## plan.md 六章节概览
+## plan.md 七章节概览
 
-完整模板见 `../lite-shared/references/plan-template.md`。六章节：
+完整模板见 `../lite-shared/references/plan-template.md`。七章节：
 
 1. **业务目标** — 一句话目标 + 可衡量成功标准 + 约束/不做
 2. **技术改动点** — 文件级清单（创建/修改 + 职责），Wave 拆分依据
@@ -340,6 +343,8 @@ subagent(action:'start', startParam:{
 > - Wave 数 ≥2 个
 
 > **两层审查：机器吃结构，禁读重建抓盲区。** 本步用 CW gate 的机器检查杀 7 项里的 5 项结构硬伤（调 `cw(action=plan)` 时自动跑，零 subagent），再派 1 路禁读重建 subagent 做机器做不了的语义/盲区审查。从原来的 2 路读后审查降为「机器 + 1 路禁读重建」——更强（禁读比读后审查能发现更多盲区）且更省。
+>
+> **与 4b 的编排关系**：4b 在单测清单草案**写入前**找漏（草案完成后立即派 ensemble 反向自检），5b 在 plan.md**写入后**做禁读重建。两者都跑，不互替——4b 找漏后草案已更新，5b 在**更新后的草案**上重建（不沿用 4b 的结果，因为 4b 是读后审查、5b 是禁读重建，方法论不同）。4b 侧重多路视角并集，5b 侧重禁读三态 diff。
 
 ### 第一层：机器结构检查（CW gate 自动跑，零 subagent）
 
@@ -418,7 +423,7 @@ subagent(action:'start', startParam:{
 - [ ] **若触发步骤 0b**（5 条判据 1-2 条处于边界）：范围守门 ensemble 已投票，3 票一致或 2:1 偏升级已升级；2:1 偏留 lite 时边界判据已 ask_user 确认；未触发则确认范围明确（0 条或多条命中直接判定）
 - [ ] 业务目标有可衡量成功标准（非"做好 X"）
 - [ ] 技术改动点是文件级清单，无遗漏
-- [ ] 已读项目规范文档（README/CLAUDE.md/AGENTS.md 等），约束已进 Constraints
+- [ ] 已读项目规范文档（README/CLAUDE.md/AGENTS.md 等），约束已进「业务目标」章节的约束字段
 - [ ] 每个技术改动点已查复用（标注复用来源 or 不可复用原因）
 - [ ] **若触发步骤 2b**（改动点 ≥3）：复用检查 ensemble 多路候选已并集去重 + 判定真复用（vs 仅相似）后进技术改动点；未触发则确认单路复用检查已做
 - [ ] 若启用并行加速模式：2 路 bg 草案（技术方案 + 测试设计）已合并；阻塞性假设已逐条拿用户答案核对（推翻的已重做）；细节性占位符已填；交叉校验已做（技术方案改动点 vs 测试覆盖清单一致）；测试清单 fixture 已 review（不盲采 bg 预期）
@@ -453,6 +458,8 @@ plan.md 自检全通过后，**必须额外产出 plan.json**（CW `plan` action
 
 **plan.json schema 见 `../lite-shared/references/cw-json-schemas.md`「plan.json」节**（字段约束 + format 锁定 + 写入路径）。
 关键提醒：`format` 必须 === `"lite"`（D-003 tier 锁定）；`testCases[].id` 用 `E1` 格式；`testCases[].expected` 是 judgeByExpected 重算基准。
+
+> **[铁律] plan.json.testCases 只装 E\*（E2E），U\*（单测）不进 plan.json。** U* 留 plan.md 的「单测用例清单」章节，coding-execute 执行收尾机器门（check-execute.ts）读 plan.md + test-results.json 验收 U*。plan.json 的 testCases 只服务 CW test gate（test.ts judgeByExpected 重算 E*）。详见 cw-json-schemas.md「plan.json」节的映射说明。
 
 plan.json 写到 `.xyz-harness/{topic}/plan.json`。写完后调 CW：
 

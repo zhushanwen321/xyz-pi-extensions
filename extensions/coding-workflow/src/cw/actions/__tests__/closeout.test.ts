@@ -98,6 +98,9 @@ describe("handleCloseout", () => {
 
     expect(result.status).toBe("retrospected"); // 不变
     expect(result.gatePassed.closeout).toBeFalsy();
+    // nextAction 指向 retry closeout（不是终态 guidance），防 agent 误判已 closed 提前终止
+    expect(result.nextAction.action).toBe("closeout");
+    expect(result.nextAction.skill).toBe("coding-closeout");
     expect(result.mustFix).toContain("FAIL");
     // evidence 未填充（gate fail 不写 evidence）
     expect(result.evidence).toBeUndefined();

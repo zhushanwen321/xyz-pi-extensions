@@ -1,13 +1,20 @@
 # plan.md 完整模板
 
 > lite-plan 写 plan.md 时 read 本文件获取完整模板。
-> 正文只列 6 章节名称 + 每章一句，本文件是各章节的详细填写规范。
+> 正文只列 7 章节名称 + 每章一句（含 MANDATORY 的 `## 实现步骤`），本文件是各章节的详细填写规范。
 
 ## 模板正文
 
 用 write 工具写入 plan extension 指定的 planFilePath，内容如下（替换 `{...}` 占位）：
 
 ````markdown
+---
+scope_ensemble_overlap: not_triggered   # 范围守门 ensemble 趋同（high/low/not_triggered）
+reuse_ensemble_overlap: not_triggered   # 复用检查 ensemble 趋同（high/low/not_triggered）
+test_ensemble_overlap: not_triggered    # 测试完整性 ensemble 趋同（high/low/not_triggered）
+reconstruct_blind_spot: not_triggered   # 禁读重建盲区（high/low/not_triggered）
+---
+
 # {功能名} 实现计划
 
 ## 业务目标
@@ -53,11 +60,24 @@
 3. [W{N+1}] 验收 Wave：跑全量单测 + E2E + 覆盖率，全绿才算完成
 ````
 
+## frontmatter 填写规范
+
+顶部 YAML frontmatter 记录 ensemble 趋同数据，供 coding-retrospect「ensemble 趋同数据复盘」消费做降级决策：
+
+| key | 取值 | 含义 |
+|-----|------|------|
+| `scope_ensemble_overlap` | `high` / `low` / `not_triggered` | 范围守门 ensemble（步骤 0b）的投票趋同度。high=3 票一致（未来可降级单路）；low=2:1 分歧；not_triggered=未触发 |
+| `reuse_ensemble_overlap` | `high` / `low` / `not_triggered` | 复用检查 ensemble（步骤 2b）的候选重合度。high=>80%（单路已够）；low=重合度低 |
+| `test_ensemble_overlap` | `high` / `low` / `not_triggered` | 测试完整性 ensemble（步骤 4b）的建议重合度。high=N 路都指出同样漏项；low=各找各的 |
+| `reconstruct_blind_spot` | `high` / `low` / `not_triggered` | 禁读重建（步骤 5b）的盲区大小。high=MISSING>5（保持启用）；low=MISSING≤1 |
+
+> 未触发 ensemble 步骤记 `not_triggered`（不省略 key）。coding-retrospect 按 high/low 比例决定未来同类功能是否持续启用 ensemble。
+
 ## 章节填写规范
 
 ### 业务目标
 - 一句话目标 + **可衡量**的成功标准（"X 指标达到 Y"，非"做好 X"）
-- 约束只记录不展开（"必须用 Postgres"记下，不选型）
+- 约束只记录不展开（"必须用 Postgres"记下，不选型），写在「业务目标」章节的 `约束：` 字段（不另立 `## Constraints` 章节）
 - 明确"不做"边界（防 scope creep）
 
 ### 技术改动点

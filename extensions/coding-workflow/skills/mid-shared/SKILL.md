@@ -57,8 +57,8 @@ mid 不重写 full 的内容资产，**全部复用**。跨到 full 目录的引
 - **阶段内容类**（deliverable 模板 + 视角 + 词汇表）：`../full-{clarity|architecture|issues|nfr|code-arch|execution-plan}/references/*.md`
   - mid-plan 复用 `full-clarity` + `full-architecture` 的全部 references
   - mid-detail-plan 复用 `full-issues` + `full-nfr` + `full-code-arch` + `full-execution-plan` 的全部 references
-- **机器检查脚本**：`../full-{phase}/scripts/check_{phase}.py`（mid 不重写脚本，直接调；phase 名见下方子项的实际 full- 目录名）
+- **机器检查**：由 CW gate 在 `cw(action=clarify/detail)` 调用时自动执行（TS check 函数，不再是 python 脚本）。mid 不手动跑 check 脚本——调 CW 即触发。
 - **渲染 HTML**：`coding-visualizer` skill（mid 定稿后派 fresh subagent 加载它渲染）
 
 > mid-shared 只承载 **mid 独有的编排抽象**（review-fix-loop + batch-ask）。其余机制（派发工程、decisions.md、
-> context-builder、review 维度 spec、deliverable 模板、机器检查脚本、HTML 渲染）全部引用 full 资产，不重复实现。
+> context-builder、review 维度 spec、deliverable 模板、机器检查、HTML 渲染）全部引用 full 资产或 CW gate，不重复实现。

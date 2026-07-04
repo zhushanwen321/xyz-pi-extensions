@@ -241,7 +241,16 @@ export function buildNextAction(action: CwAction, topic: CwTopic): NextAction {
       };
     }
     case "plan": {
-      // plan 后：dev
+      // plan gate fail：status 仍 created，agent 须修 mustFix 后重调 plan（勿调 dev，否则 illegal_transition）
+      if (!computeGatePassed("plan", topic)) {
+        return {
+          action: "plan",
+          skill: "lite-plan",
+          guidance:
+            "plan gate FAIL。status 仍为 created——修顶层 mustFix 列出的 fail 项后重调 cw(action=plan)，勿调 dev（会 illegal_transition）。",
+        };
+      }
+      // plan gate 通过：dev
       return {
         action: "dev",
         skill: "coding-execute",
@@ -251,7 +260,16 @@ export function buildNextAction(action: CwAction, topic: CwTopic): NextAction {
       };
     }
     case "clarify": {
-      // clarify 后：detail
+      // clarify gate fail：status 仍 created，agent 须修 mustFix 后重调 clarify
+      if (!computeGatePassed("clarify", topic)) {
+        return {
+          action: "clarify",
+          skill: "mid-plan",
+          guidance:
+            "clarify gate FAIL。status 仍为 created——修顶层 mustFix 列出的 fail 项后重调 cw(action=clarify)，勿调 detail（会 illegal_transition）。",
+        };
+      }
+      // clarify gate 通过：detail
       return {
         action: "detail",
         skill: "mid-detail-plan",
@@ -260,7 +278,16 @@ export function buildNextAction(action: CwAction, topic: CwTopic): NextAction {
       };
     }
     case "detail": {
-      // detail 后：dev
+      // detail gate fail：status 仍 clarified，agent 须修 mustFix 后重调 detail
+      if (!computeGatePassed("detail", topic)) {
+        return {
+          action: "detail",
+          skill: "mid-detail-plan",
+          guidance:
+            "detail gate FAIL。status 仍为 clarified——修顶层 mustFix 列出的 fail 项后重调 cw(action=detail)，勿调 dev（会 illegal_transition）。",
+        };
+      }
+      // detail gate 通过：dev
       return {
         action: "dev",
         skill: "coding-execute",
@@ -308,7 +335,16 @@ export function buildNextAction(action: CwAction, topic: CwTopic): NextAction {
       };
     }
     case "retrospect": {
-      // retrospect 后：closeout
+      // retrospect gate fail：status 仍 tested，agent 须修 mustFix 后重调 retrospect
+      if (!computeGatePassed("retrospect", topic)) {
+        return {
+          action: "retrospect",
+          skill: "coding-retrospect",
+          guidance:
+            "retrospect gate FAIL。status 仍为 tested——修顶层 mustFix 列出的 fail 项后重调 cw(action=retrospect)，勿调 closeout（会 illegal_transition）。",
+        };
+      }
+      // retrospect gate 通过：closeout
       return {
         action: "closeout",
         skill: "coding-closeout",
@@ -317,7 +353,16 @@ export function buildNextAction(action: CwAction, topic: CwTopic): NextAction {
       };
     }
     case "closeout": {
-      // closeout 后：topic 已关闭，无后续 action（终态不可逆，§4.4）
+      // closeout gate fail：status 仍 retrospected，agent 须修 mustFix 后重调 closeout
+      if (!computeGatePassed("closeout", topic)) {
+        return {
+          action: "closeout",
+          skill: "coding-closeout",
+          guidance:
+            "closeout gate FAIL。status 仍为 retrospected——修顶层 mustFix 列出的 fail 项后重调 cw(action=closeout)。topic 尚未关闭。",
+        };
+      }
+      // closeout gate 通过：topic 已关闭，无后续 action（终态不可逆，§4.4）
       return {
         guidance:
           "topic 已关闭（closed）。本次编码流程结束，所有交付物已归档，_cw.db 进入终态。",

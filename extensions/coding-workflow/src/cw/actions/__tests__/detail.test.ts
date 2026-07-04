@@ -97,6 +97,9 @@ describe("handleDetail", () => {
     // status 不变（仍 clarified），gatePassed.detail 未设
     expect(result.status).toBe("clarified");
     expect(result.gatePassed.detail).toBeFalsy();
+    // nextAction 指向 retry detail（不是 dev），防 agent 调 dev 撞 illegal_transition
+    expect(result.nextAction.action).toBe("detail");
+    expect(result.nextAction.skill).toBe("mid-detail-plan");
     expect(result.mustFix).toContain("FAIL");
 
     // gateHistory 追加 detail/fail，report 只含 1 个 checker 的输出（fail-fast）

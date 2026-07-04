@@ -78,6 +78,9 @@ describe("handlePlan", () => {
     expect(result.status).toBe("created");
     // gatePassed.plan 未设
     expect(result.gatePassed.plan).toBeFalsy();
+    // nextAction 指向 retry plan（不是 dev），防 agent 调 dev 撞 illegal_transition
+    expect(result.nextAction.action).toBe("plan");
+    expect(result.nextAction.skill).toBe("lite-plan");
     // mustFix 含 report 文本
     expect(result.mustFix).toContain("FAIL");
     // gateHistory 追加了 plan/fail 条目

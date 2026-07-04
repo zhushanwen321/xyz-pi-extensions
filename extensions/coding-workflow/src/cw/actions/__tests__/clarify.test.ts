@@ -46,6 +46,9 @@ describe("handleClarify (#7 review 桩预检)", () => {
     // status 不变（仍 created），gatePassed.clarify 未设
     expect(result.status).toBe("created");
     expect(result.gatePassed.clarify).toBeFalsy();
+    // nextAction 指向 retry clarify（不是 detail），防 agent 调 detail 撞 illegal_transition
+    expect(result.nextAction.action).toBe("clarify");
+    expect(result.nextAction.skill).toBe("mid-plan");
     // gate 没跑（预检短路）
     expect(runnerSpy).not.toHaveBeenCalled();
 
@@ -71,6 +74,9 @@ describe("handleClarify (#7 review 桩预检)", () => {
     expect(result.mustFix).toMatch(/review-fix-loop/);
     expect(typeof result.mustFix).toBe("string");
     expect((result.mustFix as string).length).toBeGreaterThan(20);
+    // nextAction 指向 retry clarify（不是 detail），防 agent 调 detail 撞 illegal_transition
+    expect(result.nextAction.action).toBe("clarify");
+    expect(result.nextAction.skill).toBe("mid-plan");
 
     closeStore(store);
   });

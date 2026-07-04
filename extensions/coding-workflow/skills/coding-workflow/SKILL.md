@@ -31,6 +31,34 @@ description: >-
 
 **ALWAYS 按 nextAction 推进，不自决下一阶段。** nextAction.action 为空 = 流程结束（closed 终态）。
 
+### nextAction 返回结构样例
+
+每次 CW 调用返回 `nextAction` 对象（顶层字段，不在嵌套层）：
+
+```typescript
+{
+  nextAction: {
+    action: "dev" | "test" | "plan" | ... | undefined,  // undefined = 终态
+    skill: "coding-execute" | "lite-plan" | ...,          // 下一步该调的 skill
+    guidance: "plan gate 通过，下一步...",                 // 可读的中文指引
+    waves?: [{ id: "W1", committed: true/false }],       // dev/test 带进度
+    testCases?: [{ id: "E1", status: "passed/pending/failed" }]
+  },
+  // gate fail 时的逐项失败原因（按 action 类型在不同字段）：
+  mustFix: "...FAIL report...",        // single-shot（plan/clarify/detail/retrospect/closeout）
+  taskResults: [{ waveId, valid, reason }],  // dev
+  caseResults: [{ caseId, status, failureReason }],  // test
+}
+```
+
+| 当前 action | gate fail 时 nextAction.action | fail 原因字段 | 恢复方式 |
+|-------------|-------------------------------|-------------|---------|
+| plan/clarify/detail/retrospect/closeout | 重试当前 action（如 plan→plan） | 顶层 `mustFix` | 修 mustFix 列出的 fail 项后重调同一 action |
+| dev | 继续提交（dev→dev） | `taskResults[].reason`（哪个 wave valid=false） | 修该 wave 的 commit + 重调 dev |
+| test | 继续提交（test→test） | `caseResults[].failureReason`（哪个 case 失败） | 修该 case + 重调 test |
+
+> **gate fail 时 nextAction 不会指向下一阶段**（plan fail 不会返回 action:"dev"），而是指向当前 action 自身（retry）。照 nextAction 走不会撞 illegal_transition。
+
 ## tier 决策（create 时锁定，不可变）
 
 | 维度 | lite | mid |
@@ -52,7 +80,7 @@ description: >-
 
 ## 失败模式与恢复
 
-- **gate FAIL**：nextAction 列出 fail 项（哪些 wave 未 committed / case failed）。修复后重调同一 action（渐进式，已成功的项不重跑）。
+- **gate FAIL**：各 action 的 fail 字段位置不同，详见上方 nextAction 返回结构表的「fail 原因字段」列（plan/clarify/detail/retrospect/closeout → 顶层 `mustFix`；dev → `taskResults[].reason`；test → `caseResults[].failureReason`）。修复后重调同一 action（渐进式，已成功的项不重跑）。
 - **tier mismatch**（JSON format !== topic.tier）：tier 选错或 JSON 产错，作废重建 topic。
 - **guard illegal_transition**（跳阶段）：按 nextAction 顺序走，不自行判断"可跳过"。
 - **review 桩缺失**（mid clarify/detail）：先跑设计 skill 的 review-fix-loop 落盘 review 文件，再重调 CW。
