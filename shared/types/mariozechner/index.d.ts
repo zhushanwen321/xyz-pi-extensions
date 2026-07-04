@@ -317,6 +317,13 @@ declare module "@sinclair/typebox" {
 	export * from "typebox";
 }
 
+declare module "@sinclair/typebox/value" {
+	export const Value: {
+		Check(schema: unknown, value: unknown): boolean;
+		Errors(schema: unknown, value: unknown): Iterable<{ path: string; message: string }>;
+	};
+}
+
 declare module "@zhushanwen/pi-quota-providers" {
 	export function loadProviderConfig(...args: any[]): any;
 	export function loadQuotaConfig(...args: any[]): any;

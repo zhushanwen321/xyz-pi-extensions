@@ -34,9 +34,16 @@ export default defineConfig({
         __dirname,
         "./node_modules/@earendil-works/pi-ai/dist/index.js",
       ),
-      // typebox 未在 devDeps（Pi 运行时提供）；通过 pi-ai 依赖图定位虚拟 store 路径
-      typebox: resolveTypeboxFromPiAi(),
+      // typebox 未在 devDeps（Pi 运行时提供）；通过 pi-ai 依赖图定位虚拟 store 路径。
+      // /value 子路径必须排在 @sinclair/typebox 之前（前缀匹配优先），指向同一 1.1.38 typebox
+      // 的 value 子模块——否则 Type（main）与 Value（/value）会跨版本不一致。
+      "@sinclair/typebox/value": path.join(
+        path.dirname(resolveTypeboxFromPiAi()),
+        "value",
+        "index.mjs",
+      ),
       "@sinclair/typebox": resolveTypeboxFromPiAi(),
+      typebox: resolveTypeboxFromPiAi(),
     },
   },
 });

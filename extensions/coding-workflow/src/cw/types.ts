@@ -7,10 +7,8 @@
  */
 
 // ── type-only 反向引用（构造 ActionDeps，无运行时环） ──
+import type { GateRunner,GitValidator } from "./gates.js";
 import type { CwStore } from "./store.js";
-// TODO(Wave-2): gates.ts 创建后取消下行注释并恢复 ActionDeps.git/runner 的真实类型。
-// 当前 Wave 0 未创建 gates.ts，保留 import 会让 tsc 报模块不存在；临时注释。
-// import type { GitValidator, GateRunner } from "./gates.js";
 
 // ── 状态机值对象 ────────────────────────────────────────────
 
@@ -212,14 +210,12 @@ export interface NextAction {
 
 /**
  * 注入依赖（composition root = index.ts 构造，测试可换 mock）。
- *
- * TODO(Wave-2): gates.ts 创建后，git/runner 恢复为 GitValidator/GateRunner 真实类型，
- * 并取消顶部 import 注释。Wave 0 临时用 unknown 以让 tsc 通过（gates.ts 未创建）。
+ * git/runner 是 gates.ts 的 adapter 类型（type-only 反向引用，tsc 擦除无运行时环）。
  */
 export interface ActionDeps {
   store: CwStore;
-  git: unknown;
-  runner: unknown;
+  git: GitValidator;
+  runner: GateRunner;
   workspacePath: string;
   topicDir: string;
 }

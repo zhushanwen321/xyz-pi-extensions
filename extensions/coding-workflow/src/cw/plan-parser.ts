@@ -1,0 +1,280 @@
+/**
+ * plan-parser — 3 套 JSON schema 解析（D-006，#5 方案 A typebox）。
+ *
+ * 输入：plan.json / clarify.json / detail.json（skill 阶段产出，§12 architecture）。
+ * 校验链：size/depth guard（T2.17/T2.29）→ format 字段 === tier 锁定值（D-003）→ typebox Value.Check 结构。
+ * 输出：ParsedXxx，供 action handler 写入 _cw.db（waves/testCases）。
+ *
+ * 真引 typebox Type + Value（Tier 2 证伪）。
+ */
+
+import { Type } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
+
+import type { TestCaseSeed, Tier, WaveSeed } from "./types.js";
+
+// ── 3 套 schema（§12 architecture，typebox 声明） ────────────
+
+const LitePlanSchema = Type.Object({
+  format: Type.Literal("lite"),
+  objective: Type.String(),
+  waves: Type.Array(
+    Type.Object({
+      id: Type.String(),
+      changes: Type.Array(Type.String()),
+      dependsOn: Type.Array(Type.String()),
+      parallelGroup: Type.Optional(Type.String()),
+    }),
+  ),
+  testCases: Type.Array(
+    Type.Object({
+      id: Type.String(),
+      layer: Type.Union([Type.Literal("mock"), Type.Literal("real")]),
+      scenario: Type.String(),
+      steps: Type.String(),
+      expected: Type.Object({
+        url: Type.Optional(Type.String()),
+        text: Type.Optional(Type.String()),
+      }),
+      executor: Type.String(),
+    }),
+  ),
+});
+
+const MidClarifySchema = Type.Object({
+  format: Type.Literal("mid-clarify"),
+  objective: Type.String(),
+  deliverables: Type.Object({
+    requirements: Type.String(),
+    systemArchitecture: Type.String(),
+  }),
+});
+
+const MidDetailSchema = Type.Object({
+  format: Type.Literal("mid-detail"),
+  objective: Type.String(),
+  waves: Type.Array(
+    Type.Object({
+      id: Type.String(),
+      issues: Type.Array(Type.String()),
+      dependsOn: Type.Array(Type.String()),
+      parallelGroup: Type.Optional(Type.String()),
+    }),
+  ),
+  testCases: Type.Array(
+    Type.Object({
+      id: Type.String(),
+      layer: Type.Union([
+        Type.Literal("unit"),
+        Type.Literal("integration"),
+        Type.Literal("e2e"),
+        Type.Literal("perf-chaos"),
+      ]),
+      scenario: Type.String(),
+      steps: Type.String(),
+      assertion: Type.String(),
+      executor: Type.String(),
+    }),
+  ),
+  deliverables: Type.Object({
+    issues: Type.String(),
+    nonFunctional: Type.String(),
+    codeArchitecture: Type.String(),
+    executionPlan: Type.String(),
+  }),
+});
+
+// schema 入参类型从 Value.Check 签名派生（避免跨版本 TSchema 导出不稳定）。
+type Schema = Parameters<typeof Value.Check>[0];
+
+// ── 解析结果类型 ─────────────────────────────────────────────
+
+export interface ParsedLitePlan {
+  waves: WaveSeed[];
+  testCases: TestCaseSeed[];
+}
+
+export interface ParsedMidClarify {
+  deliverables: { requirements: string; systemArchitecture: string };
+}
+
+export interface ParsedMidDetail {
+  waves: WaveSeed[];
+  testCases: TestCaseSeed[];
+  deliverables: {
+    issues: string;
+    nonFunctional: string;
+    codeArchitecture: string;
+    executionPlan: string;
+  };
+}
+
+// ── size / depth guard（T2.17 超 1MB 拒 / T2.29 深嵌套爆栈防护） ──
+
+const MAX_PLAN_BYTES = 1048576; // 1 MiB（单字面量 const 初始化，豁免 no-magic-numbers）
+
+/**
+ * 入口 size + depth guard：JSON.stringify 测大小 + 捕 RangeError（深嵌套爆栈）。
+ * 放在最前：拒绝超大/深嵌套输入后再做结构校验（安全/性能，#5）。
+ */
+function assertSafeSize(obj: unknown, label: string): void {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(obj);
+  } catch (e) {
+    if (e instanceof RangeError) {
+      throw new Error(`invalid ${label}: deeply nested (JSON.stringify stack overflow rejected)`);
+    }
+    throw e;
+  }
+  if (serialized.length > MAX_PLAN_BYTES) {
+    throw new Error(
+      `${label} too large: ${serialized.length} bytes > ${MAX_PLAN_BYTES} (1MB limit, T2.17)`,
+    );
+  }
+}
+
+// ── 共用校验 ─────────────────────────────────────────────────
+
+/** format 锁定校验（D-003，AC-5.2）：json.format 必须 === tier 锁定值。 */
+function assertFormat(json: unknown, expectedFormat: string, tier: Tier): void {
+  if (typeof json !== "object" || json === null) {
+    throw new Error("invalid plan json: not an object");
+  }
+  const format = "format" in json ? json.format : undefined;
+  if (format !== expectedFormat) {
+    throw new Error(
+      `tier mismatch: json.format="${String(format)}" but topic.tier="${tier}" ` +
+        `(tier locked at create, D-003; 作废重建)`,
+    );
+  }
+}
+
+/** assertSchema 报错时最多展示的错误条数（防消息爆炸）。 */
+const MAX_SCHEMA_ERRORS = 5;
+
+/** typebox Value.Check + 结构化报错（缺字段/类型错）。 */
+function assertSchema(schema: Schema, json: unknown, label: string): void {
+  if (!Value.Check(schema, json)) {
+    const errors = Array.from(Value.Errors(schema, json))
+      .map((e) => `${e.path}: ${e.message}`)
+      .slice(0, MAX_SCHEMA_ERRORS)
+      .join("; ");
+    throw new Error(`invalid ${label} json: ${errors}`);
+  }
+}
+
+// ── 解析函数（入口：size guard → format 锁定 → schema 校验 → extract） ──
+
+export function parseLitePlan(json: unknown, tier: Tier): ParsedLitePlan {
+  assertSafeSize(json, "lite plan");
+  assertFormat(json, "lite", tier);
+  assertSchema(LitePlanSchema, json, "lite plan");
+  return extractLitePlan(json);
+}
+
+export function parseMidClarify(json: unknown, tier: Tier): ParsedMidClarify {
+  assertSafeSize(json, "mid clarify");
+  assertFormat(json, "mid-clarify", tier);
+  assertSchema(MidClarifySchema, json, "mid clarify");
+  return extractMidClarify(json);
+}
+
+export function parseMidDetail(json: unknown, tier: Tier): ParsedMidDetail {
+  assertSafeSize(json, "mid detail");
+  assertFormat(json, "mid-detail", tier);
+  assertSchema(MidDetailSchema, json, "mid detail");
+  return extractMidDetail(json);
+}
+
+// ── extract（json 已过 schema 校验，结构安全） ───────────────
+
+function extractLitePlan(json: unknown): ParsedLitePlan {
+  const obj = json as {
+    waves: Array<{
+      id: string;
+      changes: string[];
+      dependsOn: string[];
+      parallelGroup?: string;
+    }>;
+    testCases: Array<{
+      id: string;
+      layer: "mock" | "real";
+      scenario: string;
+      steps: string;
+      expected: { url?: string; text?: string };
+      executor: string;
+    }>;
+  };
+  return {
+    waves: obj.waves.map((w) => ({
+      id: w.id,
+      dependsOn: w.dependsOn,
+      parallelGroup: w.parallelGroup,
+      changes: w.changes,
+      // lite wave 无 issues 字段 → seed 填 []（D-006 lite 以 changes 为任务单元）
+      issues: [],
+    })),
+    testCases: obj.testCases.map((c) => ({
+      id: c.id,
+      layer: c.layer,
+      scenario: c.scenario,
+      steps: c.steps,
+      expected: c.expected,
+      executor: c.executor,
+    })),
+  };
+}
+
+function extractMidClarify(json: unknown): ParsedMidClarify {
+  const obj = json as {
+    deliverables: { requirements: string; systemArchitecture: string };
+  };
+  // T2.9：mid clarify 只确认 tier + 交付物引用，不含 waves/testCases（任务在 detail 阶段解析）
+  return { deliverables: obj.deliverables };
+}
+
+function extractMidDetail(json: unknown): ParsedMidDetail {
+  const obj = json as {
+    waves: Array<{
+      id: string;
+      issues: string[];
+      dependsOn: string[];
+      parallelGroup?: string;
+    }>;
+    testCases: Array<{
+      id: string;
+      layer: "unit" | "integration" | "e2e" | "perf-chaos";
+      scenario: string;
+      steps: string;
+      assertion: string;
+      executor: string;
+    }>;
+    deliverables: {
+      issues: string;
+      nonFunctional: string;
+      codeArchitecture: string;
+      executionPlan: string;
+    };
+  };
+  return {
+    waves: obj.waves.map((w) => ({
+      id: w.id,
+      dependsOn: w.dependsOn,
+      parallelGroup: w.parallelGroup,
+      // mid wave 无 changes 字段 → seed 填 []（D-006 mid 以 issues 为任务单元）
+      changes: [],
+      issues: w.issues,
+    })),
+    testCases: obj.testCases.map((c) => ({
+      id: c.id,
+      layer: c.layer,
+      scenario: c.scenario,
+      steps: c.steps,
+      // mid testCase 用 assertion（自然语言，信声明不重算，D-008），无 expected
+      assertion: c.assertion,
+      executor: c.executor,
+    })),
+    deliverables: obj.deliverables,
+  };
+}
