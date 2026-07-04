@@ -9,16 +9,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /**
  * Vitest config for coding-workflow.
  *
- * 同时覆盖两处测试：
+ * 同时覆盖三处测试：
  * - lib/gates/__tests__: gate 契约测试（ReviewGate / TestFixLoopGate 对 D-8 reason 的消费）
  * - src/__tests__:       test-orchestrator 单测（状态机 + 机器重算 status）
+ * - src/cw/__tests__:    CW 重构（Wave 0+）—— types/store/... 的 real+mock 测试
  *
  * External Pi SDK packages aliased to shared stubs/mocks so vitest resolves them
  * without the real packages installed. Mirrors extensions/todo/vitest.config.ts。
  */
 export default defineConfig({
   test: {
-    include: ["src/__tests__/**/*.test.ts", "lib/gates/__tests__/**/*.test.ts"],
+    include: [
+      "src/__tests__/**/*.test.ts",
+      "src/cw/__tests__/**/*.test.ts",
+      "lib/gates/__tests__/**/*.test.ts",
+    ],
     root: __dirname,
   },
   resolve: {
