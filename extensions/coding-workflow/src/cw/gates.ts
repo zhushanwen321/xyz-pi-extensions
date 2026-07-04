@@ -21,8 +21,12 @@ import { execFileSync } from "node:child_process";
 
 import { runCheckArchitecture } from "./checks/check-architecture.js";
 import { runCheckClarity } from "./checks/check-clarity.js";
+import { runCheckCloseout } from "./checks/check-closeout.js";
+import { runCheckCodeArch } from "./checks/check-code-arch.js";
+import { runCheckExecution } from "./checks/check-execution.js";
 import { runCheckIssues } from "./checks/check-issues.js";
 import { runCheckNfr } from "./checks/check-nfr.js";
+import { runCheckPlan } from "./checks/check-plan.js";
 import type { CheckOutput } from "./checks/shared.js";
 import type { CwAction, CwTopic, GateTier, Tier } from "./types.js";
 
@@ -158,20 +162,15 @@ export type { CheckOutput };
  */
 type CheckFn = (topicDir: string) => CheckOutput;
 
-const NOT_IMPLEMENTED = (phase: string): CheckFn => () => ({
-  passed: false,
-  infraError: `check_${phase}.py TS port not implemented yet`,
-});
-
 const CHECK_DISPATCH: Record<string, CheckFn> = {
   "check_clarity.py": runCheckClarity,
   "check_architecture.py": runCheckArchitecture,
   "check_issues.py": runCheckIssues,
   "check_nfr.py": runCheckNfr,
-  "check_code_arch.py": NOT_IMPLEMENTED("code_arch"),
-  "check_execution.py": NOT_IMPLEMENTED("execution"),
-  "check_plan.py": NOT_IMPLEMENTED("plan"),
-  "check_closeout.py": NOT_IMPLEMENTED("closeout"),
+  "check_code_arch.py": runCheckCodeArch,
+  "check_execution.py": runCheckExecution,
+  "check_plan.py": runCheckPlan,
+  "check_closeout.py": runCheckCloseout,
 };
 
 /**
