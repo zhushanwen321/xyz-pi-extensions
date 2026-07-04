@@ -16,7 +16,7 @@ import { afterEach, vi } from "vitest";
 
 import { GateRunner, GitValidator } from "../../gates.js";
 import { CwStore } from "../../store.js";
-import type { ActionDeps, CwTopic } from "../../types.js";
+import type { ActionDeps, CwTopic, TestCaseSeed, WaveSeed } from "../../types.js";
 
 // ── 临时目录管理 ─────────────────────────────────────────────
 
@@ -164,6 +164,44 @@ export function writeReviewStubs(workspacePath: string, slugs: readonly string[]
       `---\nverdict: APPROVED\n---\nreview stub for ${slug}\n`,
     );
   }
+}
+
+// ── developed 前置态（test action 前置，Wave 4） ─────────────
+
+/**
+ * 构造 developed 态 topic + 全 Wave committed + testCases（test action 前置）。
+ *
+ * 模拟 dev action 跑完的稳定态：status=developed、gatePassed.dev=true、所有 wave 已
+ * setWaveCommitted。这样 test action 的第二重 checkPhaseCascade（requirePhaseComplete=dev）
+ * 与第三重 checkCacheConsistency（gatePassed.dev 缓存 vs 重算）都能通过。
+ *
+ * 不写 gatePassed.test（让第三重只校验 dev 这一个 key；test 由 handleTest 事务内首次写入）。
+ */
+export function seedDevelopedTopic(
+  store: CwStore,
+  opts: {
+    topicId: string;
+    slug: string;
+    tier: "lite" | "mid";
+    waves: WaveSeed[];
+    testCases: TestCaseSeed[];
+  },
+): string {
+  seedTopic(store, {
+    topicId: opts.topicId,
+    slug: opts.slug,
+    tier: opts.tier,
+    status: "developed",
+    gatePassed: { dev: true },
+  });
+  store.transaction(() => {
+    store.insertWaves(opts.topicId, opts.waves);
+    for (const w of opts.waves) {
+      store.setWaveCommitted(opts.topicId, w.id, `commit-${w.id}`);
+    }
+    store.insertTestCases(opts.topicId, opts.testCases);
+  });
+  return opts.topicId;
 }
 
 /** 占位引用，防 ts 未使用 import 警告（DatabaseSync 在种子辅助里可能被未来扩展使用）。 */
