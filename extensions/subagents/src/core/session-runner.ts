@@ -23,7 +23,7 @@ import type {
   ResolvedModel,
 } from "./model-resolver.ts";
 import { collectResult } from "./output-collector.ts";
-import { getSubagentSessionDir, worktreeMappingFile } from "./path-encoding.ts";
+import { getSubagentSessionDir } from "./path-encoding.ts";
 import { getPiInvocation } from "./pi-invocation.ts";
 import { MAX_FORK_DEPTH } from "./session-context-resolver.ts";
 import { IDENTITY_CUSTOM_TYPE, type SubagentIdentityData } from "./session-reconstructor.ts";
@@ -129,6 +129,12 @@ export interface SessionRunnerContext {
   mainCwd: string;
   /** 主 agent session 文件路径（fork 源）。fork 未开启时 undefined。 */
   mainSessionFile?: string;
+  /**
+   * worktree 子进程 pid 就绪回调（first header 时触发）。
+   * Runtime 层接线为 WorktreeManager.registerPid，用于注册表补全 pid。
+   * 解耦 Core 与 Runtime——session-runner 不直接依赖 WorktreeManager。
+   */
+  onWorktreePid?: (branch: string, pid: number) => void;
 }
 
 /** SessionRunner.run 的入参。 */
@@ -546,18 +552,11 @@ export async function runSpawn(
               // best-effort：alive marker 失败不影响执行
             }
           }
-          // [持久化 B] worktree 模式：写 branch→sessionFile 映射 sidecar（MF#4）。
-          // reaper 从 worktree branch 只能拿到 recordId，需此映射定位 session 文件清理。
-          if (opts.worktree && record.sessionFile) {
-            try {
-              fs.writeFileSync(
-                worktreeMappingFile(sessionDir, opts.worktree.branch),
-                record.sessionFile,
-                "utf-8",
-              );
-            } catch {
-              // best-effort：mapping 失败不影响执行
-            }
+          // [全局注册表] worktree 模式：补全注册表条目的 pid。
+          // create 时 pid 未知写 0 占位，此处拿到 child.pid 后回调 WorktreeManager.registerPid。
+          // 取代旧的 .session mapping sidecar——注册表是 reaper 的唯一数据源。
+          if (opts.worktree && child.pid) {
+            ctx.onWorktreePid?.(opts.worktree.branch, child.pid);
           }
         } else if (parsed.kind === "event") {
           if (isSdkEvent(parsed.event)) handleSdkEvent(parsed.event);

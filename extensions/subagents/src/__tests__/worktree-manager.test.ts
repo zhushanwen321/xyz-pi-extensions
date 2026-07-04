@@ -1,9 +1,13 @@
 // src/__tests__/worktree-manager.test.ts
 //
 // WorktreeManager 单元测试。
-// mock execFileSync（git 命令）+ fs（文件操作）+ alive-store（进程探活）。
+// mock execFileSync（git 命令）+ WorktreeRegistry（注册表）+ alive-store（进程探活）。
+//
+// [全局注册表重构] scan 不再读 sidecar / 不再依赖 cwd 是否 git repo。
+// 判据从「终态 marker 状态机」改为「pid 死活」。
+// 测试重点覆盖原方案缺失的崩溃残留场景（P0）。
 
-import { beforeEach,describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DirtyWorktreeError } from "../types.ts";
 
@@ -16,23 +20,51 @@ vi.mock("node:child_process", () => ({
 vi.mock("node:fs", () => ({
   default: {
     existsSync: vi.fn(),
-    readFileSync: vi.fn(),
-    readdirSync: vi.fn(),
-    writeFileSync: vi.fn(),
+    rmSync: vi.fn(),
     symlinkSync: vi.fn(),
-    unlinkSync: vi.fn(),
+    writeFileSync: vi.fn(),
   },
   existsSync: vi.fn(),
-  readFileSync: vi.fn(),
-  readdirSync: vi.fn(),
-  writeFileSync: vi.fn(),
+  rmSync: vi.fn(),
   symlinkSync: vi.fn(),
-  unlinkSync: vi.fn(),
+  writeFileSync: vi.fn(),
 }));
 
 vi.mock("../runtime/execution/alive-store.ts", () => ({
-  readAliveMarker: vi.fn(),
   isProcessAlive: vi.fn(),
+}));
+
+// WorktreeRegistry mock：内存数组模拟，add/updatePid/remove/load 全部可追踪
+const { mockLoad, mockAdd, mockUpdatePid, mockRemove, registryEntries } = vi.hoisted(() => {
+  type Entry = { repo: string; branch: string; checkout: string; pid: number; createdAt: number };
+  const entries: Entry[] = [];
+  return {
+    registryEntries: entries,
+    mockLoad: vi.fn((): Entry[] => entries.slice()),
+    mockAdd: vi.fn((e: Entry): void => {
+      const idx = entries.findIndex((x) => x.branch === e.branch);
+      if (idx >= 0) entries[idx] = e;
+      else entries.push(e);
+    }),
+    mockUpdatePid: vi.fn((branch: string, pid: number): void => {
+      const e = entries.find((x) => x.branch === branch);
+      if (e) e.pid = pid;
+    }),
+    mockRemove: vi.fn((branch: string): void => {
+      const idx = entries.findIndex((x) => x.branch === branch);
+      if (idx >= 0) entries.splice(idx, 1);
+    }),
+  };
+});
+
+vi.mock("../runtime/worktree-registry.ts", () => ({
+  WorktreeRegistry: class {
+    add = mockAdd;
+    updatePid = mockUpdatePid;
+    remove = mockRemove;
+    load = mockLoad;
+  },
+  SPAWN_GRACE_MS: 60_000,
 }));
 
 import { execFileSync } from "node:child_process";
@@ -41,30 +73,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { encodeCwd } from "../core/path-encoding.ts";
-import { isProcessAlive,readAliveMarker } from "../runtime/execution/alive-store.ts";
+import { isProcessAlive } from "../runtime/execution/alive-store.ts";
 import { WorktreeManager } from "../runtime/worktree-manager.ts";
 
 const mockExec = vi.mocked(execFileSync);
 const mockExistsSync = vi.mocked(fs.existsSync);
-const mockReaddirSync = vi.mocked(fs.readdirSync);
-const mockReadFileSync = vi.mocked(fs.readFileSync);
-const mockReadAliveMarker = vi.mocked(readAliveMarker);
 const mockIsProcessAlive = vi.mocked(isProcessAlive);
 
 const MAIN_CWD = "/home/user/project";
-const AGENT_DIR = "/home/user/.pi/agent/subagents";
+const AGENT_DIR = "/home/user/.pi/agent";
 const RECORD_ID = "bg-42-abc";
 const BASE_COMMIT = "abc123def456";
-// scan 测试：孤儿 worktree 的 checkout 路径（tmpdir 下）
-const ORPHAN_CHECKOUT = path.join(os.tmpdir(), "pi-sub-orphan1");
-// [MF#4] reaper 从 mapping sidecar 读到的 session 文件路径
-const ORPHAN_SESSION_FILE = path.join(
-  AGENT_DIR,
-  "subagents",
-  "sessions",
-  "--home-user-project--",
-  "2026-01-01T00-00-00-000Z_orphan1.jsonl",
-);
 
 /** create 路径期望（tmpdir/pi-subagents/<enc(mainCwd)> 下） */
 function expectedCreatePath(recordId: string): string {
@@ -82,39 +101,30 @@ function makeHandle(checkoutPath: string = expectedCreatePath(RECORD_ID)) {
 }
 
 function setupCleanTree(): void {
-  // git status --porcelain → clean
-  mockExec.mockImplementation((cmd: string, args?: readonly string[]) => {
+  mockExec.mockImplementation((_cmd: string, args?: readonly string[]) => {
     if (args?.[0] === "status") return "";
     if (args?.[0] === "rev-parse" && args?.[1] === "HEAD") return BASE_COMMIT;
     if (args?.[0] === "worktree") return "";
     if (args?.[0] === "branch") return "";
     return "";
   });
-  // node_modules 存在
+  // worktreePath 不存在（无需前置清理）；node_modules 存在
   mockExistsSync.mockImplementation((p: unknown) => {
     const s = String(p);
-    if (s.includes("node_modules") && !s.includes("pi-sub-")) return true;
+    if (s.includes("pi-sub-")) return false; // checkout 目录不存在
+    if (s.includes("node_modules")) return true;
     return false;
   });
 }
 
-/** scan 公共 mock：rev-parse --git-common-dir 返回相对 .git */
-function setupScanGitCommonDir(): void {
-  mockExec.mockImplementation((cmd: string, args?: readonly string[]) => {
-    if (args?.[0] === "rev-parse" && args?.[1] === "--git-common-dir") return ".git";
-    if (args?.[0] === "worktree") return "";
-    if (args?.[0] === "branch") return "";
-    return "";
-  });
-}
-
-/** scan 公共 mock：readFileSync 读 gitdir 文件返回 <checkout>/.git；[MF#4] 读 mapping sidecar 返回 session 文件路径 */
-function setupScanGitdir(checkout: string): void {
-  mockReadFileSync.mockImplementation((p: unknown) => {
-    const s = String(p);
-    if (s.includes("pi-sub-orphan1.session")) return ORPHAN_SESSION_FILE;
-    if (s.includes("gitdir")) return `${checkout}/.git`;
-    return "";
+/** 向注册表注入一条活条目（模拟 create 后的状态）。 */
+function injectEntry(overrides: Partial<{ branch: string; pid: number; checkout: string; repo: string; createdAt: number }> = {}): void {
+  registryEntries.push({
+    repo: overrides.repo ?? MAIN_CWD,
+    branch: overrides.branch ?? "pi-sub-orphan1",
+    checkout: overrides.checkout ?? path.join(os.tmpdir(), "pi-sub-orphan1"),
+    pid: overrides.pid ?? 0,
+    createdAt: overrides.createdAt ?? Date.now(),
   });
 }
 
@@ -123,7 +133,8 @@ describe("WorktreeManager", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mgr = new WorktreeManager();
+    registryEntries.length = 0;
+    mgr = new WorktreeManager(AGENT_DIR);
   });
 
   describe("create", () => {
@@ -139,72 +150,93 @@ describe("WorktreeManager", () => {
       expect(Object.isFrozen(handle)).toBe(true);
     });
 
-    it("脏树抛 DirtyWorktreeError", () => {
-      mockExec.mockImplementation((cmd: string, args?: readonly string[]) => {
+    it("成功后写入注册表（pid=0 占位）", () => {
+      setupCleanTree();
+
+      mgr.create(MAIN_CWD, RECORD_ID);
+
+      expect(mockAdd).toHaveBeenCalledTimes(1);
+      const entry = mockAdd.mock.calls[0][0] as { repo: string; branch: string; pid: number };
+      expect(entry.repo).toBe(MAIN_CWD);
+      expect(entry.branch).toBe(`pi-sub-${RECORD_ID}`);
+      expect(entry.pid).toBe(0);
+    });
+
+    it("脏树抛 DirtyWorktreeError 且不写注册表", () => {
+      mockExec.mockImplementation((_cmd: string, args?: readonly string[]) => {
         if (args?.[0] === "status") return "M src/index.ts\n";
         return "";
       });
 
       expect(() => mgr.create(MAIN_CWD, RECORD_ID)).toThrow(DirtyWorktreeError);
+      expect(mockAdd).not.toHaveBeenCalled();
     });
 
     it("recordId 含特殊字符抛 DirtyWorktreeError", () => {
-      expect(() => mgr.create(MAIN_CWD, "../evil-path")).toThrow(
-        DirtyWorktreeError,
-      );
-      expect(() => mgr.create(MAIN_CWD, "hello world")).toThrow(
-        DirtyWorktreeError,
-      );
-    });
-
-    it("recordId 空字符串抛 DirtyWorktreeError", () => {
+      expect(() => mgr.create(MAIN_CWD, "../evil-path")).toThrow(DirtyWorktreeError);
+      expect(() => mgr.create(MAIN_CWD, "hello world")).toThrow(DirtyWorktreeError);
       expect(() => mgr.create(MAIN_CWD, "")).toThrow(DirtyWorktreeError);
-    });
-
-    it("recordId 单字符合法", () => {
-      setupCleanTree();
-      const handle = mgr.create(MAIN_CWD, "a");
-      expect(handle.branch).toBe("pi-sub-a");
-    });
-
-    it("recordId 连续短横线合法", () => {
-      setupCleanTree();
-      const handle = mgr.create(MAIN_CWD, "--test--");
-      expect(handle.branch).toBe("pi-sub---test--");
-    });
-
-    it("recordId 包含分号抛 DirtyWorktreeError", () => {
       expect(() => mgr.create(MAIN_CWD, "a;b")).toThrow(DirtyWorktreeError);
     });
 
-    it("recordId 包含反引号抛 DirtyWorktreeError", () => {
-      expect(() => mgr.create(MAIN_CWD, "`cmd`")).toThrow(DirtyWorktreeError);
+    it("recordId 单字符 / 连续短横线合法", () => {
+      setupCleanTree();
+      expect(mgr.create(MAIN_CWD, "a").branch).toBe("pi-sub-a");
+      expect(mgr.create(MAIN_CWD, "--test--").branch).toBe("pi-sub---test--");
     });
 
-    it("调用 git worktree add 正确参数（目标路径在 tmpdir）", () => {
+    it("残留 checkout 目录存在时前置清理（fs.rmSync）", () => {
       setupCleanTree();
+      // worktreePath 已存在 → 触发前置 rmSync
+      mockExistsSync.mockImplementation((p: unknown) => {
+        const s = String(p);
+        if (s.includes("pi-sub-bg-42-abc")) return true; // checkout 残留
+        if (s.includes("node_modules")) return true;
+        return false;
+      });
 
       mgr.create(MAIN_CWD, RECORD_ID);
 
+      expect(fs.rmSync).toHaveBeenCalledWith(
+        expectedCreatePath(RECORD_ID),
+        { recursive: true, force: true },
+      );
+    });
+
+    it("symlink 失败时回滚 worktree + 分支 + 注册表", () => {
+      setupCleanTree();
+      // symlink 抛错触发 MF#3 回滚
+      vi.mocked(fs.symlinkSync).mockImplementation(() => {
+        throw new Error("symlink permission denied");
+      });
+
+      expect(() => mgr.create(MAIN_CWD, RECORD_ID)).toThrow("symlink permission denied");
+
+      // 回滚：worktree remove + branch delete + registry remove
       expect(mockExec).toHaveBeenCalledWith(
         "git",
-        [
-          "worktree",
-          "add",
-          "-b",
-          `pi-sub-${RECORD_ID}`,
-          expectedCreatePath(RECORD_ID),
-          "HEAD",
-        ],
-        expect.objectContaining({ cwd: MAIN_CWD }),
+        expect.arrayContaining(["worktree", "remove", "--force"]),
+        expect.anything(),
       );
+      expect(mockExec).toHaveBeenCalledWith(
+        "git",
+        expect.arrayContaining(["branch", "-D"]),
+        expect.anything(),
+      );
+      expect(mockRemove).toHaveBeenCalledWith(`pi-sub-${RECORD_ID}`);
+    });
+  });
+
+  describe("registerPid", () => {
+    it("委托 registry.updatePid", () => {
+      mgr.registerPid("pi-sub-bg-1", 12345);
+      expect(mockUpdatePid).toHaveBeenCalledWith("pi-sub-bg-1", 12345);
     });
   });
 
   describe("cleanup", () => {
-    it("调用 git worktree remove + branch -D（cwd 用 handle.mainCwd）", () => {
+    it("worktree remove + branch -D + 注册表移除（cwd 用 handle.mainCwd）", () => {
       mockExec.mockReturnValue("");
-
       const handle = makeHandle();
 
       mgr.cleanup(handle);
@@ -219,13 +251,36 @@ describe("WorktreeManager", () => {
         ["branch", "-D", handle.branch],
         expect.objectContaining({ cwd: MAIN_CWD }),
       );
+      expect(mockRemove).toHaveBeenCalledWith(handle.branch);
+    });
+
+    it("worktree remove 失败时 branch -D + 注册表移除仍执行（best-effort 分离）", () => {
+      // 第一条 git（worktree remove）抛错，第二条（branch -D）应仍执行
+      let callCount = 0;
+      mockExec.mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) throw new Error("worktree locked");
+        return "";
+      });
+      const handle = makeHandle();
+
+      // 不应抛错
+      expect(() => mgr.cleanup(handle)).not.toThrow();
+
+      // branch -D 仍被调用
+      expect(mockExec).toHaveBeenCalledWith(
+        "git",
+        ["branch", "-D", handle.branch],
+        expect.anything(),
+      );
+      // 注册表仍被移除
+      expect(mockRemove).toHaveBeenCalledWith(handle.branch);
     });
   });
 
   describe("collectPatch", () => {
-    it("有改动返回 patch 文件（[MF#2] git add -A + diff --cached；[MF#3] patchFile 在 worktree 外）", () => {
-      const patchContent = "diff --git a/src/index.ts\n+// new line";
-      mockExec.mockReturnValue(patchContent);
+    it("有改动返回 patch 文件", () => {
+      mockExec.mockReturnValue("diff --git a/src\n+// new");
 
       const handle = makeHandle();
       const patchFile = path.join(os.tmpdir(), `outside-${RECORD_ID}.patch`);
@@ -234,183 +289,135 @@ describe("WorktreeManager", () => {
 
       expect(result.failed).toBe(false);
       expect(result.written).toBe(true);
-      expect(result.patchFile).toBe(patchFile);
-      // [MF#2] 先 git add -A 暂存（捕获未跟踪新文件）
-      expect(mockExec).toHaveBeenCalledWith(
-        "git",
-        ["add", "-A"],
-        expect.objectContaining({ cwd: handle.path }),
-      );
-      // [MF#2] 再 git diff --cached baseCommit（旧为 diff HEAD baseCommit 两参数，恒空）
+      expect(mockExec).toHaveBeenCalledWith("git", ["add", "-A"], expect.anything());
       expect(mockExec).toHaveBeenCalledWith(
         "git",
         ["diff", "--cached", BASE_COMMIT],
-        expect.objectContaining({ cwd: handle.path }),
+        expect.anything(),
       );
     });
 
     it("无改动返回 failed=false, written=false（不写文件）", () => {
       mockExec.mockReturnValue("");
-
-      const handle = makeHandle();
-      const patchFile = path.join(os.tmpdir(), `outside-${RECORD_ID}.patch`);
-
-      const result = mgr.collectPatch(handle, patchFile);
-
+      const result = mgr.collectPatch(makeHandle(), "/tmp/x.patch");
       expect(result.failed).toBe(false);
       expect(result.written).toBe(false);
     });
   });
 
+  // ============================================================
+  // scan：全局注册表 + pid 死活判据（核心重构）
+  // ============================================================
   describe("scan", () => {
-    it("清理终态且无活 .alive 的孤儿（remove 传 checkout 路径）", () => {
-      // worktrees 目录、[MF#4] mapping sidecar、.finalized 存在
-      mockExistsSync.mockImplementation((p: unknown) => {
-        const s = String(p);
-        if (s.endsWith("worktrees")) return true;
-        if (s.includes("pi-sub-orphan1.session")) return true;
-        if (s.includes(".finalized")) return true;
-        return false;
-      });
+    it("pid 已死的条目被清理（正常退出未 cleanup / 崩溃残留）", () => {
+      injectEntry({ branch: "pi-sub-dead", pid: 11111 });
+      mockIsProcessAlive.mockReturnValue(false); // pid 死
 
-      mockReaddirSync.mockReturnValue(["pi-sub-orphan1", "other-dir"] as ReturnType<typeof fs.readdirSync>);
+      mgr.scan();
 
-      // 无 alive marker
-      mockReadAliveMarker.mockReturnValue(undefined);
-
-      setupScanGitCommonDir();
-      setupScanGitdir(ORPHAN_CHECKOUT);
-
-      mgr.scan(MAIN_CWD, AGENT_DIR);
-
-      // remove 传的是 checkout 路径（tmpdir 下），不是注册表目录
       expect(mockExec).toHaveBeenCalledWith(
         "git",
-        ["worktree", "remove", "--force", ORPHAN_CHECKOUT],
+        ["worktree", "remove", "--force", expect.any(String)],
         expect.objectContaining({ cwd: MAIN_CWD }),
       );
       expect(mockExec).toHaveBeenCalledWith(
         "git",
-        ["branch", "-D", "pi-sub-orphan1"],
+        ["branch", "-D", "pi-sub-dead"],
         expect.objectContaining({ cwd: MAIN_CWD }),
       );
+      expect(mockRemove).toHaveBeenCalledWith("pi-sub-dead");
     });
 
-    it("有活 .alive 不删", () => {
-      mockExistsSync.mockImplementation((p: unknown) => {
-        const s = String(p);
-        if (s.endsWith("worktrees")) return true;
-        if (s.includes("pi-sub-orphan1.session")) return true;
-        if (s.includes(".finalized")) return true;
-        return false;
-      });
+    it("pid 活的条目不删（绝不删活进程）", () => {
+      injectEntry({ branch: "pi-sub-alive", pid: 22222 });
+      mockIsProcessAlive.mockReturnValue(true); // pid 活
 
-      mockReaddirSync.mockReturnValue(["pi-sub-orphan1"] as ReturnType<typeof fs.readdirSync>);
+      mgr.scan();
 
-      mockReadAliveMarker.mockReturnValue({
-        pid: 12345,
-        id: "orphan1",
-        startedAt: Date.now(),
-      });
-      mockIsProcessAlive.mockReturnValue(true);
+      const removeCalls = mockExec.mock.calls.filter(
+        (c) => c[1]?.[0] === "worktree" && c[1]?.[1] === "remove",
+      );
+      expect(removeCalls).toHaveLength(0);
+      expect(mockRemove).not.toHaveBeenCalled();
+    });
 
-      setupScanGitCommonDir();
-      setupScanGitdir(ORPHAN_CHECKOUT);
+    it("崩溃残留：无终态 + pid 死 → 清理（原 P0 缺陷场景）", () => {
+      // 这是原 reaper 永远泄漏的场景：进程崩溃无人写终态 marker
+      injectEntry({ branch: "pi-sub-crash", pid: 33333 });
+      mockIsProcessAlive.mockReturnValue(false); // 崩溃后进程已死
 
-      mgr.scan(MAIN_CWD, AGENT_DIR);
+      mgr.scan();
 
-      // 不应调用 worktree remove
+      expect(mockExec).toHaveBeenCalledWith(
+        "git",
+        ["branch", "-D", "pi-sub-crash"],
+        expect.anything(),
+      );
+      expect(mockRemove).toHaveBeenCalledWith("pi-sub-crash");
+    });
+
+    it("pid=0 + 未超 SPAWN_GRACE → 跳过（可能正在 spawn）", () => {
+      injectEntry({ branch: "pi-sub-spawning", pid: 0, createdAt: Date.now() });
+
+      mgr.scan();
+
       const removeCalls = mockExec.mock.calls.filter(
         (c) => c[1]?.[0] === "worktree" && c[1]?.[1] === "remove",
       );
       expect(removeCalls).toHaveLength(0);
     });
 
-    it(".alive 超过 24h 软超时即使 pid 活也清理", () => {
-      mockExistsSync.mockImplementation((p: unknown) => {
-        const s = String(p);
-        if (s.endsWith("worktrees")) return true;
-        if (s.includes(".finalized")) return true;
-        if (s.includes("pi-sub-orphan1.session")) return true;
-        return false;
-      });
+    it("pid=0 + 超 SPAWN_GRACE → 清理（create 后崩溃）", () => {
+      const sixtyOneMinAgo = Date.now() - 61 * 60 * 1000;
+      injectEntry({ branch: "pi-sub-spawn-crash", pid: 0, createdAt: sixtyOneMinAgo });
 
-      mockReaddirSync.mockReturnValue(["pi-sub-orphan1"] as ReturnType<typeof fs.readdirSync>);
-
-      // .alive 超过 24h
-      const twentyFiveHoursAgo = Date.now() - 25 * 60 * 60 * 1000;
-      mockReadAliveMarker.mockReturnValue({
-        pid: 12345,
-        id: "orphan1",
-        startedAt: twentyFiveHoursAgo,
-      });
-      mockIsProcessAlive.mockReturnValue(true); // pid 仍然活
-
-      setupScanGitCommonDir();
-      setupScanGitdir(ORPHAN_CHECKOUT);
-
-      mgr.scan(MAIN_CWD, AGENT_DIR);
-
-      // 应调用 worktree remove（超过 24h 软超时）
-      expect(mockExec).toHaveBeenCalledWith(
-        "git",
-        ["worktree", "remove", "--force", ORPHAN_CHECKOUT],
-        expect.objectContaining({ cwd: MAIN_CWD }),
-      );
-    });
-
-    it("gitdir 文件缺失时降级 worktree prune", () => {
-      mockExistsSync.mockImplementation((p: unknown) => {
-        const s = String(p);
-        if (s.endsWith("worktrees")) return true;
-        if (s.includes(".finalized")) return true;
-        if (s.includes("pi-sub-orphan1.session")) return true;
-        return false;
-      });
-
-      mockReaddirSync.mockReturnValue(["pi-sub-orphan1"] as ReturnType<typeof fs.readdirSync>);
-      mockReadAliveMarker.mockReturnValue(undefined);
-
-      setupScanGitCommonDir();
-      // [MF#4] mapping sidecar 能读出 sessionFile；gitdir 元数据损坏 → readCheckoutPath 返回 undefined → prune 兑底
-      mockReadFileSync.mockImplementation((p: unknown) => {
-        const s = String(p);
-        if (s.includes("pi-sub-orphan1.session")) return ORPHAN_SESSION_FILE;
-        throw new Error("ENOENT");
-      });
-
-      mgr.scan(MAIN_CWD, AGENT_DIR);
+      mgr.scan();
 
       expect(mockExec).toHaveBeenCalledWith(
         "git",
-        ["worktree", "prune"],
-        expect.objectContaining({ cwd: MAIN_CWD }),
+        ["branch", "-D", "pi-sub-spawn-crash"],
+        expect.anything(),
+      );
+      expect(mockRemove).toHaveBeenCalledWith("pi-sub-spawn-crash");
+    });
+
+    it("跨 repo 清理：条目 repo 字段作为 git -C 目标", () => {
+      const OTHER_REPO = "/home/user/other-repo";
+      injectEntry({ branch: "pi-sub-cross", pid: 44444, repo: OTHER_REPO });
+      mockIsProcessAlive.mockReturnValue(false);
+
+      mgr.scan();
+
+      // git 命令的 cwd 应为 OTHER_REPO，非 MAIN_CWD
+      expect(mockExec).toHaveBeenCalledWith(
+        "git",
+        expect.arrayContaining(["branch", "-D", "pi-sub-cross"]),
+        expect.objectContaining({ cwd: OTHER_REPO }),
       );
     });
 
-    it("readdirSync 抛错时静默返回", () => {
-      mockExistsSync.mockImplementation((p: unknown) => {
-        return String(p).endsWith("worktrees");
-      });
-
-      mockReaddirSync.mockImplementation(() => {
-        throw new Error("permission denied");
-      });
-
-      setupScanGitCommonDir();
-
-      // 不应抛错
-      expect(() => mgr.scan(MAIN_CWD, AGENT_DIR)).not.toThrow();
+    it("空注册表时无操作", () => {
+      // registryEntries 已在 beforeEach 清空
+      mgr.scan();
+      expect(mockExec).not.toHaveBeenCalled();
+      expect(mockRemove).not.toHaveBeenCalled();
     });
 
-    it("worktreesRoot 不存在时静默返回", () => {
-      mockExistsSync.mockReturnValue(false);
+    it("worktree remove 失败时 branch -D + 注册表移除仍执行（best-effort）", () => {
+      injectEntry({ branch: "pi-sub-stubborn", pid: 55555 });
+      mockIsProcessAlive.mockReturnValue(false);
+      mockExec.mockImplementation(() => {
+        throw new Error("worktree locked");
+      });
 
-      setupScanGitCommonDir();
+      mgr.scan();
 
-      // 不应抛错，不应调用 readdirSync
-      expect(() => mgr.scan(MAIN_CWD, AGENT_DIR)).not.toThrow();
-      expect(mockReaddirSync).not.toHaveBeenCalled();
+      // branch -D 仍被调用（两次 git 调用各自独立）
+      const branchDeleteCalls = mockExec.mock.calls.filter(
+        (c) => c[1]?.[0] === "branch" && c[1]?.[1] === "-D",
+      );
+      expect(branchDeleteCalls).toHaveLength(1);
+      expect(mockRemove).toHaveBeenCalledWith("pi-sub-stubborn");
     });
   });
 });

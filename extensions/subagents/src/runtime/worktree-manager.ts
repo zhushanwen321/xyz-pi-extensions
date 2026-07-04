@@ -8,19 +8,24 @@
 //   - clean tree 前置校验防止创建脏 worktree
 //   - checkout 放 os.tmpdir()（脱离 .git/），兼容普通 repo 与 bare+worktree 结构
 //   - mainCwd 存入 handle，不靠路径反推
-//   - scan 只删终态且无活 .alive 的孤儿（绝不删有活进程的 worktree）
+//   - scan 遍历全局注册表按 pid 死活判孤儿（绝不删有活进程的 worktree）
 //   - Object.freeze 保证 WorktreeHandle 不可变
+//
+// [全局注册表重构] scan 不再依赖当前 cwd 是否 git repo，改为遍历
+// WorktreeRegistry（<agentDir>/subagents/worktrees.json）。判据从终态 marker
+// 状态机降为 pid 死活一条——进程崩溃无人写终态时也能正确回收。
 
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { encodeCwd,getSubagentSessionDir,worktreeMappingFile } from "../core/path-encoding.ts";
+import { encodeCwd } from "../core/path-encoding.ts";
 import type { PatchResult,WorktreeHandle } from "../types.ts";
 import { DirtyWorktreeError } from "../types.ts";
 import { bestEffort } from "../utils/best-effort.ts";
-import { isProcessAlive,readAliveMarker } from "./execution/alive-store.ts";
+import { isProcessAlive } from "./execution/alive-store.ts";
+import { SPAWN_GRACE_MS,type WorktreeEntry,WorktreeRegistry } from "./worktree-registry.ts";
 
 // recordId 白名单：字母数字下划线短横线
 const SAFE_ID_RE = /^[\w-]+$/;
@@ -28,10 +33,14 @@ const SAFE_ID_RE = /^[\w-]+$/;
 // 默认 git 命令超时（ms）
 const GIT_TIMEOUT_MS = 30_000;
 
-// .alive 软超时（24h）：PID 复用兜底（D-021）
-const ALIVE_SOFT_TIMEOUT_MS = 86_400_000; // 24h in ms
-
 export class WorktreeManager {
+  // 全局注册表：跨 repo 记录所有活 worktree，reaper 遍历此表判孤儿。
+  private readonly registry: WorktreeRegistry;
+
+  constructor(agentDir: string) {
+    this.registry = new WorktreeRegistry(agentDir);
+  }
+
   /**
    * 为子 agent 创建隔离 worktree。
    *
@@ -57,12 +66,32 @@ export class WorktreeManager {
     // fork subagent 时落到同一 /tmp/pi-sub-run-1 的冲突（recordId 是 per-session 自增，无 repo 作用域）。
     const worktreePath = path.join(os.tmpdir(), "pi-subagents", encodeCwd(mainCwd), branch);
 
+    // 前置清理残留 checkout 目录：上次 create 的 MF#3 回滚可能因目录非空未删干净 tmpdir，
+    // 或跨进程竞态。路径在 tmpdir/pi-subagents/<enc>/<branch> 下，按设计只有本扩展创建，清理安全。
+    if (fs.existsSync(worktreePath)) {
+      try {
+        fs.rmSync(worktreePath, { recursive: true, force: true });
+      } catch (cleanErr) {
+        bestEffort(cleanErr, "pre-create checkout cleanup");
+      }
+    }
+
     this.gitRun(["worktree", "add", "-b", branch, worktreePath, "HEAD"], {
       cwd: mainCwd,
     });
 
-    // [MF#3] worktree+分支已落盘，后续步骤（symlink）抛错时必须回滚，否则孤儿 reaper
-    // 因无 .session 映射永久跳过 → worktree+分支永久泄漏。create 后所有步骤包 try/catch。
+    // 注册到全局表（pid=0 占位）。session-runner first header 时补 pid。
+    // 放在 worktree add 成功后、symlink 前——确保只有真正创建了 worktree 才登记。
+    this.registry.add({
+      repo: mainCwd,
+      branch,
+      checkout: worktreePath,
+      pid: 0,
+      createdAt: Date.now(),
+    });
+
+    // [MF#3] worktree+分支+注册表条目已落盘，后续步骤（symlink）抛错时必须全部回滚，
+    // 否则 worktree+分支永久泄漏。create 后所有步骤包 try/catch。
     try {
       // 软链 node_modules（复用主仓库依赖）
       const mainNodeModules = path.join(mainCwd, "node_modules");
@@ -78,7 +107,7 @@ export class WorktreeManager {
         mainCwd,
       });
     } catch (err) {
-      // 回滚已创建的 worktree+分支，best-effort 吞清理异常（原始 err 仍外抛）
+      // 回滚已创建的 worktree+分支+注册表条目，best-effort 吞清理异常（原始 err 仍外抛）
       try {
         this.gitRun(["worktree", "remove", "--force", worktreePath], { cwd: mainCwd });
       } catch (cleanErr) {
@@ -89,23 +118,45 @@ export class WorktreeManager {
       } catch (cleanErr) {
         bestEffort(cleanErr, "branch delete (create rollback MF#3)");
       }
+      this.registry.remove(branch);
       throw err;
     }
   }
 
   /**
-   * 清理 worktree：git worktree remove --force + git branch -D 成对执行。
+   * 注册子进程 pid（session-runner first header 时调）。
+   * create 时 pid 未知写 0 占位，子进程 spawn 拿到 pid 后由此补全。
+   * reaper 据 pid 死活判孤儿，pid=0 条目用 SPAWN_GRACE 宽限。
+   */
+  registerPid(branch: string, pid: number): void {
+    this.registry.updatePid(branch, pid);
+  }
+
+  /**
+   * 清理 worktree：git worktree remove --force + git branch -D + 注册表移除。
+   * 三步各自独立 try/catch——任一步失败不阻断其余（如 remove 失败仍尝试 branch -D + 注册表移除），
+   * 避免单步失败导致后续资源泄漏。
    *
    * @param handle 要清理的 worktree handle（含 mainCwd，不靠路径反推）
    */
   cleanup(handle: WorktreeHandle): void {
-    this.gitRun(["worktree", "remove", "--force", handle.path], {
-      cwd: handle.mainCwd,
-    });
+    try {
+      this.gitRun(["worktree", "remove", "--force", handle.path], {
+        cwd: handle.mainCwd,
+      });
+    } catch (err) {
+      bestEffort(err, "worktree remove (cleanup)");
+    }
 
-    this.gitRun(["branch", "-D", handle.branch], {
-      cwd: handle.mainCwd,
-    });
+    try {
+      this.gitRun(["branch", "-D", handle.branch], {
+        cwd: handle.mainCwd,
+      });
+    } catch (err) {
+      bestEffort(err, "branch delete (cleanup)");
+    }
+
+    this.registry.remove(handle.branch);
   }
 
   /**
@@ -151,78 +202,49 @@ export class WorktreeManager {
   /**
    * 扫描并清理 pi-sub-* 孤儿 worktree。
    *
-   * 孤儿判据：终态标记（.finalized / .cancelled）且无活 .alive marker。
-   * 绝不删有活 .alive 的 worktree（D-024）。
+   * 遍历全局注册表（<agentDir>/subagents/worktrees.json），按 pid 死活判孤儿。
+   * 不依赖当前 cwd 是否 git repo——注册表里记了 repo 路径，直接 git -C <repo> 跨 repo 清理。
    *
-   * @param mainCwd 主仓库根目录
-   * @param agentDir agent 目录（session 文件所在）
+   * 判据（唯一不删条件 = 进程还活着）：
+   *   pid > 0 且 isProcessAlive(pid)   → 跳过（活进程，绝不删）
+   *   pid > 0 且进程已死                → 孤儿（正常退出未 cleanup / 崩溃残留）
+   *   pid == 0 且超 SPAWN_GRACE_MS      → 孤儿（create 后崩溃，pid 永未补全）
+   *   pid == 0 且未超宽限               → 跳过（可能正在 spawn）
    */
-  scan(mainCwd: string, agentDir: string): void {
-    // --git-common-dir：普通repo 返回 .git，bare+worktree 返回 .bare。
-    // 这是 git worktree 元数据注册表的共享根，两种结构都能正确解析。
-    const commonDir = this.gitRun(["rev-parse", "--git-common-dir"], { cwd: mainCwd });
-    const worktreesRoot = path.resolve(mainCwd, commonDir, "worktrees");
+  scan(): void {
+    const entries = this.registry.load();
+    const now = Date.now();
 
-    if (!fs.existsSync(worktreesRoot)) {
-      return;
+    for (const entry of entries) {
+      if (!this.isOrphan(entry, now)) {
+        continue;
+      }
+      this.cleanupOrphan(entry);
     }
+  }
 
-    let entries: string[];
+  /** pid 死活判孤儿。pid=0 走 SPAWN_GRACE 宽限。 */
+  private isOrphan(entry: WorktreeEntry, now: number): boolean {
+    if (entry.pid === 0) {
+      // create→spawn 窗口：超过宽限期仍未补 pid = create 后崩溃
+      return now - entry.createdAt > SPAWN_GRACE_MS;
+    }
+    return !isProcessAlive(entry.pid);
+  }
+
+  /** 清理单个孤儿条目：worktree remove + branch -D + 注册表移除，三步各自 best-effort。 */
+  private cleanupOrphan(entry: WorktreeEntry): void {
     try {
-      entries = fs.readdirSync(worktreesRoot).filter((name) => name.startsWith("pi-sub-"));
-    } catch {
-      return;
+      this.gitRun(["worktree", "remove", "--force", entry.checkout], { cwd: entry.repo });
+    } catch (err) {
+      bestEffort(err, "worktree remove (orphan reaper)");
     }
-
-    for (const name of entries) {
-      const wtEntryDir = path.join(worktreesRoot, name);
-      const recordId = name.slice("pi-sub-".length);
-      const sessionFile = this.findSessionFile(agentDir, mainCwd, recordId);
-      if (sessionFile === undefined) {
-        continue; // 没有 session 文件，可能是主流程创建但还没跑完，不删
-      }
-
-      const hasFinalized = fs.existsSync(`${sessionFile}.finalized`);
-      const hasCancelled = fs.existsSync(`${sessionFile}.cancelled`);
-      if (!hasFinalized && !hasCancelled) {
-        continue; // 非终态，不删
-      }
-
-      const aliveMarker = readAliveMarker(sessionFile);
-      if (aliveMarker !== undefined) {
-        const isAlive = isProcessAlive(aliveMarker.pid);
-        const isSoftTimeout = Date.now() - aliveMarker.startedAt > ALIVE_SOFT_TIMEOUT_MS;
-        if (isAlive && !isSoftTimeout) {
-          continue; // 有活进程且未超 24h，绝不删（D-024）
-        }
-        // PID 复用兜底：超过 24h 即使 pid 活也视为孤儿（D-021）
-      }
-
-      // 是孤儿，执行清理
-      const branch = `pi-sub-${recordId}`;
-      // 从注册表 gitdir 文件读 checkout 路径（gitdir 内容 = <checkout>/.git）。
-      // 不能直接用注册表目录 wtEntryDir，那是 git 内部路径，不是 checkout。
-      const checkoutPath = this.readCheckoutPath(wtEntryDir);
-      if (checkoutPath !== undefined) {
-        try {
-          this.gitRun(["worktree", "remove", "--force", checkoutPath], { cwd: mainCwd });
-        } catch (err) {
-          bestEffort(err, "worktree remove (orphan reaper)");
-        }
-      } else {
-        // gitdir 文件缺失（元数据损坏）或 checkout 路径异常：prune 兑底清理残留元数据
-        try {
-          this.gitRun(["worktree", "prune"], { cwd: mainCwd });
-        } catch (err) {
-          bestEffort(err, "worktree prune (orphan reaper)");
-        }
-      }
-      try {
-        this.gitRun(["branch", "-D", branch], { cwd: mainCwd });
-      } catch (err) {
-        bestEffort(err, "branch delete (orphan reaper)");
-      }
+    try {
+      this.gitRun(["branch", "-D", entry.branch], { cwd: entry.repo });
+    } catch (err) {
+      bestEffort(err, "branch delete (orphan reaper)");
     }
+    this.registry.remove(entry.branch);
   }
 
   // ============================================================
@@ -260,45 +282,4 @@ export class WorktreeManager {
     }
   }
 
-  /**
-   * 从 worktree 注册表条目读 checkout 路径。
-   * gitdir 文件内容 = <checkout>/.git，去后缀得 checkout 绝对路径。
-   * 返回 undefined 表示元数据损坏或路径异常。
-   */
-  private readCheckoutPath(wtEntryDir: string): string | undefined {
-    const gitdirFile = path.join(wtEntryDir, "gitdir");
-    let gitdirContent: string;
-    try {
-      gitdirContent = fs.readFileSync(gitdirFile, "utf-8").trim();
-    } catch {
-      return undefined;
-    }
-    // gitdir = <checkout>/.git
-    if (!gitdirContent.endsWith("/.git")) {
-      return undefined;
-    }
-    return gitdirContent.slice(0, -"/.git".length);
-  }
-
-  /**
-   * 在 agentDir 下查找 recordId 对应的 session 文件。
-   *
-   * [MF#4] session 文件由 SDK 命名为 <date>-<uuid>.jsonl，recordId 仅存在于文件内部
-   * identity entry——旧实现查 <recordId>.jsonl 恒不存在 → reaper 永不清理孤儿 worktree。
-   * 改读 session-runner.run() 落盘的 branch→sessionFile 映射 sidecar（<branch>.session）。
-   */
-  private findSessionFile(agentDir: string, mainCwd: string, recordId: string): string | undefined {
-    const sessionsDir = getSubagentSessionDir(agentDir, mainCwd);
-    const branch = `pi-sub-${recordId}`;
-    const mappingFile = worktreeMappingFile(sessionsDir, branch);
-    if (!fs.existsSync(mappingFile)) {
-      return undefined;
-    }
-    try {
-      const sessionFile = fs.readFileSync(mappingFile, "utf-8").trim();
-      return sessionFile.length > 0 ? sessionFile : undefined;
-    } catch {
-      return undefined;
-    }
-  }
 }

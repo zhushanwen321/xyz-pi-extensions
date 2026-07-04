@@ -32,15 +32,3 @@ export function getSubagentSessionDir(agentDir: string, mainCwd: string): string
   // 本分支未发布，回退到既有布局即无需迁移、无数据丢失。
   return path.join(agentDir, "subagents", encodeCwd(mainCwd), "sessions");
 }
-
-/**
- * [MF#4] worktree branch → sessionFile 映射 sidecar 路径。
- *
- * reaper 从 worktree 注册表目录名只能拿到 recordId（branch=pi-sub-<recordId>），
- * 但 session 文件由 SDK 命名为 <date>-<uuid>.jsonl，recordId 仅存在于文件内部 identity entry。
- * 故 session-runner 在 sessionFile 就绪后写此 sidecar（内容=sessionFile 绝对路径），
- * reaper 直接读取，避免遍历全量 .jsonl 反查 identity。
- */
-export function worktreeMappingFile(sessionsDir: string, branch: string): string {
-  return path.join(sessionsDir, `${branch}.session`);
-}
