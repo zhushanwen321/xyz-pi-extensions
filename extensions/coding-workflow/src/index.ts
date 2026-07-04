@@ -27,7 +27,15 @@ import type { ActionDeps, ActionResult } from "./cw/types.js";
 
 // plan/clarify/detail/cases 是 agent 从文件读的任意 JSON，schema 层只描述「是个值」，
 // 真正的结构校验在 plan-parser.ts 内（typebox Value.Check + format 锁定）。
-// 用 Type.Unknown() 而非 Type.Object({})：后者是「无属性的空对象」，会拒收任意字段。
+//
+// 为什么 plan/clarify/detail 用 Type.Object({}, { additionalProperties: true }) 而非
+// Type.Unknown()：后者编译成 JSON Schema `{}`（无 type 字段），LLM 看不到类型提示，
+// 容易把 planJson 当字符串传（"读 plan.json 的内容" 的歧义 + schema 空白），到 handler
+// 的 typeof !== "object" 守卫被拒。显式声明 type:object + additionalProperties:true
+// 既告诉 LLM 该传 object，又允许任意字段（真正结构校验在 plan-parser）。
+// 注意：Type.Object({}) 默认 additionalProperties:false 会拒收任意字段，必须显式 true。
+const ANY_OBJECT = Type.Object({}, { additionalProperties: true });
+
 const CwParamsSchema = Type.Object({
   action: StringEnum([
     "create", "plan", "clarify", "detail", "dev", "test", "retrospect", "closeout",
@@ -39,17 +47,17 @@ const CwParamsSchema = Type.Object({
   tier: Type.Optional(StringEnum(["lite", "mid"] as const)),
   objective: Type.Optional(Type.String()),
   workspacePath: Type.Optional(Type.String()),
-  // plan/clarify/detail：结构化 JSON（agent 读文件后内联传入）
-  planJson: Type.Optional(Type.Unknown()),
-  clarifyJson: Type.Optional(Type.Unknown()),
-  detailJson: Type.Optional(Type.Unknown()),
+  // plan/clarify/detail：结构化 JSON（agent 读文件后内联传入，必须是 object 不是 string）
+  planJson: Type.Optional(ANY_OBJECT),
+  clarifyJson: Type.Optional(ANY_OBJECT),
+  detailJson: Type.Optional(ANY_OBJECT),
   // dev（D-005 数组，长1=单个/N=批量）
   tasks: Type.Optional(Type.Array(Type.Object({
     waveId: Type.String(),
     commitHash: Type.String(),
   }))),
   // test（数组，元素结构按 tier 分化，test.ts 内部校验）
-  cases: Type.Optional(Type.Array(Type.Unknown())),
+  cases: Type.Optional(Type.Array(ANY_OBJECT)),
   // retrospect
   retrospectPath: Type.Optional(Type.String()),
 });
@@ -61,11 +69,11 @@ export type CwParams = {
   tier?: "lite" | "mid";
   objective?: string;
   workspacePath?: string;
-  planJson?: unknown;
-  clarifyJson?: unknown;
-  detailJson?: unknown;
+  planJson?: object;
+  clarifyJson?: object;
+  detailJson?: object;
   tasks?: Array<{ waveId: string; commitHash: string }>;
-  cases?: unknown[];
+  cases?: object[];
   retrospectPath?: string;
 };
 

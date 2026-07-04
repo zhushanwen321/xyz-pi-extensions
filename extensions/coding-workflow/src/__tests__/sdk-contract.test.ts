@@ -69,6 +69,28 @@ describe("coding-workflow SDK contract [MANDATORY]", () => {
     ]);
   });
 
+  // 回归测试（2026-07-04 bug）：planJson/clarifyJson/detailJson 必须声明 type:object，
+  // 不能是 Type.Unknown()（编译成 {} 无 type 字段）。
+  // 原因：LLM 看到 schema 无 type 提示，容易把 JSON 内容当 string 传；到 handler 的
+  // typeof !== "object" 守卫被拒。显式 type:object 让 LLM 知道传 object，且 string
+  // 输入在 Pi validation 层就拒（报 Validation failed，比 handler 的 not an object 更早更清晰）。
+  it("REGRESSION 2026-07-04: planJson/clarifyJson/detailJson schemas declare type:object (not Unknown)", () => {
+    let capturedSchema: { properties?: Record<string, Record<string, unknown>> } | undefined;
+    const pi = mockExtensionApi({
+      registerTool: (tool: { parameters: { properties?: Record<string, unknown> } }) => {
+        capturedSchema = tool.parameters;
+      },
+    });
+    registerCodingWorkflowTool(pi);
+    for (const fieldName of ["planJson", "clarifyJson", "detailJson"]) {
+      const prop = capturedSchema!.properties![fieldName];
+      // anyOf/optional 包装下，type 应在某个分支里；直接检查序列化后含 "type":"object"
+      const serialized = JSON.stringify(prop);
+      expect(serialized).toContain('"type":"object"');
+      expect(serialized).not.toBe("{}"); // 不是 Unknown() 编译的空 schema
+    }
+  });
+
   it("execute returns content array + details object on valid action", async () => {
     let capturedExecute: ((...args: unknown[]) => Promise<unknown>) | undefined;
     const pi = mockExtensionApi({

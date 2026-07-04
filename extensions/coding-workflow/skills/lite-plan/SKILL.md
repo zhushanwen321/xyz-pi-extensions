@@ -461,8 +461,11 @@ plan.md 自检全通过后，**必须额外产出 plan.json**（CW `plan` action
 plan.json 写到 `.xyz-harness/{topic}/plan.json`。写完后调 CW：
 
 ```
-cw(action=plan, topicId="<create 时返回的 topicId>", planJson=<读 plan.json 的内容>)
+cw(action=plan, topicId="<create 时返回的 topicId>", planJson=<JSON.parse(plan.json 文件内容)，必须传 object 不能传 string>)
 ```
+
+**[MANDATORY] `planJson` 必须是 object**（`JSON.parse` 后的值），不是 JSON 字符串。
+传 string 会被 CW 在 `assertFormat` 拒（报 `invalid plan json: not an object`），因为 schema 声明的是 `type: object`。
 
 CW 通过 plan gate 后返回 `nextAction: {action:"dev", skill:"coding-execute", waves:[...]}`，
 按它推进（不自行决定下一步）。

@@ -89,6 +89,31 @@ describe("handlePlan", () => {
 
     closeStore(store);
   });
+
+  // 回归测试（2026-07-04 bug）：LLM 把 planJson 当 JSON 字符串传（不是 object），
+  // 到 parseLitePlan 的 typeof !== "object" 守卫被拒。报错必须明确指向 "not an object"，
+  // 而不是更下游的 schema 错（误导调试）。这个测试守住「错误信息精确」契约。
+  it("REGRESSION 2026-07-04: planJson 为 string（LLM 误传）→ throw 'invalid plan json: not an object'", () => {
+    const ws = makeTmpWorkspace();
+    const { deps, store } = makeDeps(ws);
+
+    const created = handleCreate(
+      { action: "create", slug: "demo", tier: "lite", objective: "x" },
+      deps,
+    );
+
+    // 模拟 LLM 误把 plan.json 内容 JSON.stringify 后当 string 传
+    const jsonString = JSON.stringify(makeLitePlan());
+    expect(() =>
+      handlePlan(
+        // 故意违反类型（模拟 LLM 运行时传错），用 unknown 中转避免 TS 拦截
+        { action: "plan", topicId: created.topicId, planJson: jsonString as unknown as object },
+        deps,
+      ),
+    ).toThrow(/invalid plan json: not an object/);
+
+    closeStore(store);
+  });
 });
 
 // 占位：seedTopic 在其他 action 测试里用于绕过 create，此处 import 防未来扩展时漏引

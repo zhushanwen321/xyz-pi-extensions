@@ -310,8 +310,11 @@ changes/review-execution.md    ← execution 维度的 review 结论
 detail.json 写到 `.xyz-harness/{topic}/detail.json`。写完后调 CW：
 
 ```
-cw(action=detail, topicId="<create 时返回的 topicId>", detailJson=<读 detail.json 的内容>)
+cw(action=detail, topicId="<create 时返回的 topicId>", detailJson=<JSON.parse(detail.json 文件内容)，必须传 object 不能传 string>)
 ```
+
+**[MANDATORY] `detailJson` 必须是 object**（`JSON.parse` 后的值），不是 JSON 字符串。
+传 string 会被 CW 在 `assertFormat` 拒（报 `invalid plan json: not an object`），因为 schema 声明的是 `type: object`。
 
 CW detail gate 预检 `changes/review-{issues,nfr,code-arch,execution}.md` 存在 → 跑 4 checker 串行 fail-fast →
 通过后返回 `nextAction: {action:"dev", skill:"coding-execute", waves:[...]}`。
