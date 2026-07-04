@@ -9,10 +9,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /**
  * Vitest config for coding-workflow.
  *
- * 同时覆盖三处测试：
- * - lib/gates/__tests__: gate 契约测试（ReviewGate / TestFixLoopGate 对 D-8 reason 的消费）
- * - src/__tests__:       test-orchestrator 单测（状态机 + 机器重算 status）
- * - src/cw/__tests__:    CW 重构（Wave 0+）—— types/store/... 的 real+mock 测试
+ * 覆盖三处测试：
+ * - src/__tests__:       SDK 契约测试（Wave 5 — registerCodingWorkflowTool 接线）
+ * - src/cw/__tests__:    CW 重构（Wave 0+）—— types/store/state-machine/gates/plan-parser 的 real+mock 测试
+ * - src/cw/actions/__tests__: 8 个 action handler（create/plan/.../closeout）集成测试
+ * - lib/gates/__tests__: gate 契约测试（ReviewGate / TestFixLoopGate，遗留独立 gate 实现）
+ *
+ * Wave 5 已删 src/test-orchestrator/（judgeByExpected 内化到 cw/types.ts）+ 对应单测。
  *
  * External Pi SDK packages aliased to shared stubs/mocks so vitest resolves them
  * without the real packages installed. Mirrors extensions/todo/vitest.config.ts。

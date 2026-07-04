@@ -1,59 +1,162 @@
 /**
- * coding-workflow 扩展入口 — 注册 tool + 导出 gates。
+ * CW tool 注册入口 + dispatch（D-001 tool 实现，§9.3 内化 step5）。
  *
- * 当前职责：
- * - 注册 test-orchestrator tool（机器强制的 E2E 测试状态机）
- * - 导出 gate 类（ReviewGate / TestFixLoopGate）供 phase runner 用
+ * 取代 registerTestOrchestratorTool。单个 tool `coding-workflow`，参数 action 路由到 8 handler。
+ * composition root：构造 ActionDeps（store/git/runner），按 topic workspacePath 定位。
  *
- * 不在此处注册 gate——gate 是 phase runner（在 skills/ 里）调用的库，
- * 不是独立 tool。phase runner 通过 import { ReviewGate } 用。
- *
- * 文件职责：
- * - src/index.ts（本文件）: 工厂入口（注册 tool）
- * - src/test-orchestrator/: test-orchestrator tool（state + plan-parser + index）
- * - lib/gates/:             gate 基础设施（gate + review-gate + test-fix-loop + workflow-types）
- *
- * DESIGN NOTE — 为什么 gate 不注册为 tool？
- *   gate.run(ctx) 需要 GateContext（含 phase / topicDir / phaseConfig / skillResolver），
- *   这是 phase runner 内部组装的运行时上下文，不适合作为 tool 参数暴露给 AI。
- *   gate 是机器内部门控，AI 不直接调——由 phase runner 在 phase 结尾自动跑。
- *   test-orchestrator 反之是 AI 在 coding-execute 阶段主动调用的 tool。
+ * 错误模式（项目规范）：handler throw new Error，Pi 捕获转述 agent。不返回伪装成功 content。
  */
 
+import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 
-import { registerTestOrchestratorTool } from "./test-orchestrator/index.js";
+import { type ClarifyParams,handleClarify } from "./cw/actions/clarify.js";
+import { type CloseoutParams,handleCloseout } from "./cw/actions/closeout.js";
+import { type CreateParams,handleCreate } from "./cw/actions/create.js";
+import { type DetailParams,handleDetail } from "./cw/actions/detail.js";
+import { type DevParams,handleDev } from "./cw/actions/dev.js";
+import { handlePlan, type PlanParams } from "./cw/actions/plan.js";
+import { handleRetrospect, type RetrospectParams } from "./cw/actions/retrospect.js";
+import { handleTest, type TestParams } from "./cw/actions/test.js";
+import { GateRunner, GitValidator } from "./cw/gates.js";
+import { CwStore } from "./cw/store.js";
+import type { ActionDeps, ActionResult } from "./cw/types.js";
 
-// ── gate 类再导出（供 phase runner import） ──────────────────
+// ── typebox schema（tool 入参，Pi 运行时校验） ───────────────
 
-export { Gate, type GateContext, type GateResult } from "../lib/gates/gate.js";
-export { ReviewGate } from "../lib/gates/review-gate.js";
-export { TestFixLoopGate } from "../lib/gates/test-fix-loop.js";
-export type {
-  DoneReason,
-  WorkflowRunFn,
-  WorkflowRunResult,
-} from "../lib/gates/workflow-types.js";
+// plan/clarify/detail/cases 是 agent 从文件读的任意 JSON，schema 层只描述「是个值」，
+// 真正的结构校验在 plan-parser.ts 内（typebox Value.Check + format 锁定）。
+// 用 Type.Unknown() 而非 Type.Object({})：后者是「无属性的空对象」，会拒收任意字段。
+const CwParamsSchema = Type.Object({
+  action: StringEnum([
+    "create", "plan", "clarify", "detail", "dev", "test", "retrospect", "closeout",
+  ] as const),
+  // 通用定位
+  topicId: Type.Optional(Type.String()),
+  // create
+  slug: Type.Optional(Type.String()),
+  tier: Type.Optional(StringEnum(["lite", "mid"] as const)),
+  objective: Type.Optional(Type.String()),
+  workspacePath: Type.Optional(Type.String()),
+  // plan/clarify/detail：结构化 JSON（agent 读文件后内联传入）
+  planJson: Type.Optional(Type.Unknown()),
+  clarifyJson: Type.Optional(Type.Unknown()),
+  detailJson: Type.Optional(Type.Unknown()),
+  // dev（D-005 数组，长1=单个/N=批量）
+  tasks: Type.Optional(Type.Array(Type.Object({
+    waveId: Type.String(),
+    commitHash: Type.String(),
+  }))),
+  // test（数组，元素结构按 tier 分化，test.ts 内部校验）
+  cases: Type.Optional(Type.Array(Type.Unknown())),
+  // retrospect
+  retrospectPath: Type.Optional(Type.String()),
+});
 
-// ── test-orchestrator 再导出（judgeByExpected 供外部单测/复用） ──
+export type CwParams = {
+  action: "create" | "plan" | "clarify" | "detail" | "dev" | "test" | "retrospect" | "closeout";
+  topicId?: string;
+  slug?: string;
+  tier?: "lite" | "mid";
+  objective?: string;
+  workspacePath?: string;
+  planJson?: unknown;
+  clarifyJson?: unknown;
+  detailJson?: unknown;
+  tasks?: Array<{ waveId: string; commitHash: string }>;
+  cases?: unknown[];
+  retrospectPath?: string;
+};
 
-export { judgeByExpected } from "./test-orchestrator/index.js";
-export type {
-  Actual,
-  CaseStatus,
-  Expected,
-  TestCase,
-  TestSession,
-} from "./test-orchestrator/state.js";
+// ── dispatch（action → handler 路由） ────────────────────────
 
-// ── 扩展入口 ─────────────────────────────────────────────────
+export function dispatch(params: CwParams, deps: ActionDeps): ActionResult {
+  switch (params.action) {
+    case "create":
+      return handleCreate(params as CreateParams, deps);
+    case "plan":
+      return handlePlan(params as PlanParams, deps);
+    case "clarify":
+      return handleClarify(params as ClarifyParams, deps);
+    case "detail":
+      return handleDetail(params as DetailParams, deps);
+    case "dev":
+      return handleDev(params as DevParams, deps);
+    case "test":
+      return handleTest(params as TestParams, deps);
+    case "retrospect":
+      return handleRetrospect(params as RetrospectParams, deps);
+    case "closeout":
+      return handleCloseout(params as CloseoutParams, deps);
+    default:
+      throw new Error(`unknown action: ${(params as { action?: string }).action}`);
+  }
+}
+
+// ── tool 注册 ────────────────────────────────────────────────
 
 /**
- * coding-workflow 扩展工厂。
- *
- * 每个 Pi session 创建独立闭包（test-orchestrator 的 session Map 在闭包内，
- * 满足 Pi 多 session 隔离约束）。
+ * 注册单个 tool `coding-workflow`（D-001）。
+ * execute 内构造 ActionDeps（composition root）+ dispatch 到 8 handler 之一。
  */
+export function registerCodingWorkflowTool(pi: ExtensionAPI): void {
+  pi.registerTool({
+    name: "coding-workflow",
+    label: "Coding Workflow Orchestrator",
+    description:
+      "CW 编码流程编排 tool（D-002 上层编排器）。垄断 coding 流程状态流转 + gate 验证。\n" +
+      "action: create → plan/clarify → detail → dev → test → retrospect → closeout。\n" +
+      "每次返回 nextAction 指导下一步。tier 在 create 时锁定（lite/mid），后续不可变。",
+    executionMode: "sequential",
+    promptGuidelines: [
+      "[强制] coding 流程必须经此 tool，禁止绕过状态机",
+      "[渐进式] dev/test 数组提交，长1=单个/N=批量，CW 累计判定 gatePassed",
+      "[tier 锁定] create 时锁 lite/mid，后续 format 必须 === tier",
+    ],
+    parameters: CwParamsSchema,
+    async execute(
+      _toolCallId: string,
+      rawParams: CwParams,
+      signal: AbortSignal | undefined,
+    ): Promise<{ content: Array<{ type: "text"; text: string }>; details: ActionResult }> {
+      if (signal?.aborted) {
+        throw new Error("coding-workflow call aborted by signal.");
+      }
+      // composition root：从 params 推 workspacePath，构造 deps。
+      // dbPath 放 workspacePath/.xyz-harness/_cw.db（topic 工作区约定，与 state-machine.ts 的
+      // topicDir 一致；.xyz-harness/ 已是 topic 级产出目录）。
+      const workspacePath = rawParams.workspacePath ?? process.cwd();
+      const deps: ActionDeps = {
+        store: new CwStore(`${workspacePath}/.xyz-harness/_cw.db`),
+        git: new GitValidator(workspacePath),
+        runner: new GateRunner(workspacePath),
+        workspacePath,
+        topicDir: workspacePath,
+      };
+      try {
+        const result = dispatch(rawParams as CwParams, deps);
+        return {
+          content: [{ type: "text", text: renderSummary(result) }],
+          details: result,
+        };
+      } finally {
+        // 每次 execute 后关连接（#14 单 session 串行假设；CwStore 无模块级状态，session 隔离合规）。
+        deps.store.close();
+      }
+    },
+  });
+}
+
+// ── 扩展工厂（默认导出） ─────────────────────────────────────
+
 export default function codingWorkflowExtension(pi: ExtensionAPI): void {
-  registerTestOrchestratorTool(pi);
+  registerCodingWorkflowTool(pi);
+}
+
+// ── 渲染（content 文本，TUI 展示用） ─────────────────────────
+
+function renderSummary(result: ActionResult): string {
+  return `[cw] ${result.nextAction.action ?? "(done)"} — status=${result.status}` +
+    ` gateTier=${result.gateTier ?? "-"} guidance=${result.nextAction.guidance}`;
 }
