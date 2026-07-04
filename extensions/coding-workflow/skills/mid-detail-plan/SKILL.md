@@ -2,27 +2,18 @@
 name: mid-detail-plan
 description: >-
   Use when the user says "mid 详细计划", "中等功能实施设计", "issues+nfr+架构+计划一起做",
-  "批量设计实施", or has finished mid-plan (requirements.md + system-architecture.md)
-  and needs issues.md + non-functional-design.md + code-architecture.md + execution-plan.md
-  produced via ctx-build → drafters (parallel) → review-fix-loop → consistency-check.
-  纯设计 skill：产出实施规格 4 件套（含可编译骨架 code-skeleton）+ detail.json，不写实现代码。
-  对应 CW action: detail（coding-workflow tool）。本 skill 唯一目标：产出 detail.json
-  并调 cw(action=detail, topicId, detailJson) 通过 CW detail gate（4 checker 串行 fail-fast），
-  完成后按 CW 返回的 nextAction 执行。Content aligns with full-issues + full-nfr +
-  full-code-arch + full-execution-plan; orchestration aligns with lite (parallel drafters
-  + merged review loop).
-  Not for L3 heavy — use full-* workflow (each phase deep convergence).
-  Not for requirements/architecture — that is mid-plan.
-  Produces execution-plan.md + detail.json as final deliverable.
+  "批量设计实施", or has finished mid-plan and needs issues.md + non-functional-design.md
+  + code-architecture.md + execution-plan.md (+ code-skeleton) + detail.json (CW detail action 入参).
+  纯设计 skill，不写实现代码。对应 CW action: detail.
+  Not for L3 heavy (use full-*). Not for requirements/architecture (that is mid-plan).
 ---
 
 # mid-detail-plan（实施 4 合 1，L2 标准档）
 
-> **对应 CW action: `detail`**（coding-workflow tool，D-007-REVISIT 映射）。
-> 本 skill 产出 detail.json 供 CW `detail` action 解析（waves/testCases 写入 _cw.db），
-> review-fix-loop 收敛后落盘 review 文件（供 CW detail gate 的 4 个 checker 预检：
-> check_issues / check_nfr / check_code_arch / check_execution）。
-> 完成后调 `cw(action=detail, topicId, detailJson)`，按 CW 返回的 nextAction 推进。
+> **对应 CW action: `detail`**（coding-workflow tool）。本 skill 产出 detail.json + review-fix-loop
+> 收敛后落盘 4 份 review 文件。完成后调 `cw(action=detail, topicId, detailJson)`——CW 预检
+> changes/review-{issues,nfr,code-arch,execution}.md 存在 → 跑 4 checker 串行 fail-fast →
+> pass 后返回 nextAction（→ dev）。
 
 在 mid-plan 之后，一次性产出 `issues.md` + `non-functional-design.md` + `code-architecture.md`（+ code-skeleton）+ `execution-plan.md`。
 **内容**对齐 full-issues + full-nfr + full-code-arch + full-execution-plan 全量；**编排**改为
@@ -313,46 +304,8 @@ changes/review-execution.md    ← execution 维度的 review 结论
 
 定稿后**必须额外产出 detail.json**（CW `detail` action 的入参，D-006 结构化 JSON）。
 
-#### detail.json schema（CW plan-parser 严格校验）
-
-```json
-{
-  "format": "mid-detail",
-  "objective": "<与 issues.md 一致>",
-  "waves": [
-    {
-      "id": "W1",
-      "issues": ["#3", "#4"],
-      "dependsOn": [],
-      "parallelGroup": "A"
-    }
-  ],
-  "testCases": [
-    {
-      "id": "T2.4",
-      "layer": "mock",
-      "scenario": "<场景>",
-      "steps": "<步骤>",
-      "assertion": "<自然语言断言，mid 信声明不重算>",
-      "executor": "vitest"
-    }
-  ],
-  "deliverables": {
-    "issues": "issues.md",
-    "nonFunctional": "non-functional-design.md",
-    "codeArchitecture": "code-architecture.md",
-    "executionPlan": "execution-plan.md"
-  }
-}
-```
-
-字段约束（CW `parseMidDetail` typebox schema）：
-- `format` 必须 === `"mid-detail"`（D-003 tier 锁定）
-- `waves[].id` 唯一；`issues` 是 issue 编号数组（mid 以 issues 为任务单元，D-006）；`dependsOn` 引用其他 wave id
-- `testCases[].layer` 只能是 `"unit"` / `"integration"` / `"e2e"` / `"perf-chaos"`（mid 测试层）
-- `testCases[].id` 用例 ID 格式：mid 用 `T{UC}.{N}` 如 `T2.4`（与 check_execute.py 的 mid 格式一致）
-- `testCases[].assertion` 自然语言断言（mid 信声明，medium-coverage，D-008）——**无 expected 字段**（lite 才有）
-- `deliverables` 引用本阶段产出的 4 份文件名
+**detail.json schema 见 `../lite-shared/references/cw-json-schemas.md`「detail.json」节**（字段约束 + format 锁定）。
+关键提醒：`format` 必须 === `"mid-detail"`（D-003）；`testCases[].id` 用 `T2.4` 格式；`testCases[].assertion` 是自然语言断言（**无 expected 字段**，mid 信声明 D-008）。
 
 detail.json 写到 `.xyz-harness/{topic}/detail.json`。写完后调 CW：
 
@@ -362,19 +315,6 @@ cw(action=detail, topicId="<create 时返回的 topicId>", detailJson=<读 detai
 
 CW detail gate 预检 `changes/review-{issues,nfr,code-arch,execution}.md` 存在 → 跑 4 checker 串行 fail-fast →
 通过后返回 `nextAction: {action:"dev", skill:"coding-execute", waves:[...]}`。
-
-提示用户：
-
-```
-✅ mid-detail-plan 已完成。实施设计 4 件套 + detail.json 就绪。
-   产出：issues.md + non-functional-design.md + code-architecture.md (+skeleton) + execution-plan.md（各 +.html）+ detail.json
-   一致性终检：changes/consistency-final.md（verdict: CONSISTENT）
-   review 桩：changes/review-{issues,nfr,code-arch,execution}.md（CONVERGED 落盘）
-   决策账本：decisions.md（累计 {N} 条 confirmed）
-已调 cw(detail) 通过 gate。下一步按 CW nextAction：/skill:coding-execute 按 Wave 执行 dev。
-   执行后去向：/skill:coding-retrospect（复盘执行过程）→ /skill:coding-closeout（沉淀设计结论）
-是否现在开始执行？
-```
 
 ## Self-Check
 

@@ -3,24 +3,19 @@ name: coding-execute
 description: >-
   Use when the user says "轻量执行", "lite execute", "按 Wave 执行",
   "goal 模式执行 plan", "执行 plan", or has a completed plan.md (from lite-plan)
-  **or execution-plan.md (from mid-detail-plan / full-execution-plan)**
-  and an active goal, and needs to execute the Waves with subagents in parallel,
-  run tests and code-review in isolated worktrees, and verify acceptance.
-  Produces code changes + test verification + test-results.json.
-  对应 CW action: dev（渐进式提交 commit）+ test（渐进式提交测试结果）。本 skill 派
-  implementer/test-runner subagent 执行 Wave，每个 Wave 完成后调 cw(action=dev, tasks)
-  提交 commit，测试全跑完后调 cw(action=test, cases) 提交结果，按 CW 返回的 nextAction
-  推进。Not for planning (that is lite-plan / mid-detail-plan).
-  Not for retrospect (that is coding-retrospect).
+  or execution-plan.md (from mid-detail-plan) and needs to execute the Waves with
+  subagents (TDD + worktree isolation + test-runner + code-review ensemble).
+  对应 CW action: dev (提交 commit) + test (提交测试结果).
+  Not for planning (lite-plan / mid-detail-plan). Not for retrospect (coding-retrospect).
 ---
 
 # 执行（Execute）
 
-> **对应 CW action: `dev` + `test`**（coding-workflow tool，D-007-REVISIT 映射）。
-> 本 skill 派 subagent 执行 Wave（implementer TDD + test-runner 跑测试），产出 commit +
-> test-results.json。**每个 Wave 完成后调 `cw(action=dev, tasks)`** 把 commit 提交给 CW gate
-> （GitValidator 校验 commit 真实性）；**测试全跑完后调 `cw(action=test, cases)`** 把结果提交给
-> CW gate（lite: judgeByExpected 机器重算；mid: 信声明 + GitValidator）。按 CW 返回的 nextAction 推进。
+> **对应 CW action: `dev` + `test`**（coding-workflow tool）。本 skill 派 subagent 执行 Wave
+> （implementer TDD + test-runner 跑测试），产出 commit + test-results.json。
+> **每个 Wave 完成后调 `cw(action=dev, tasks)`**（GitValidator 校验 commit 真实性）；
+> **测试全跑完后调 `cw(action=test, cases)`**（lite: judgeByExpected 重算；mid: 信声明 + GitValidator）。
+> 按 CW 返回的 nextAction 推进。
 
 读取 lite-plan 产出的 plan.md（或 mid-detail-plan / full-execution-plan 产出的 execution-plan.md），在 goal 模式下用 subagent 按 Wave 并行实现，用 worktree 隔离让测试 ‖ code-review ensemble 并行互不影响，失败自动回 Wave 修复（限 3 轮），全绿后收尾。
 

@@ -3,21 +3,16 @@ name: lite-plan
 description: >-
   Use when the user says "轻量计划", "lite plan", "小功能计划", "写测试计划",
   "Wave 拆分", "plan this feature", or is in plan mode brainstorming a small
-  feature (no architecture change) and needs a plan.md with business goal,
-  technical changes, Wave breakdown, and MANDATORY test design (unit cases +
-  E2E cases + coverage gate). Produces plan.md + plan.json.
-  对应 CW action: plan（coding-workflow tool）。本 skill 唯一目标：产出 plan.json
-  并调 cw(action=plan, topicId, planJson) 通过 CW plan gate，完成后按 CW 返回的
-  nextAction 执行。Not for architecture-level changes — use full-* workflow instead.
-  Not for execution itself — that is coding-execute.
+  feature (no architecture change). Produces plan.md + plan.json (CW plan action 入参).
+  对应 CW action: plan. Not for architecture-level changes (use full-* workflow).
+  Not for execution (that is coding-execute).
 ---
 
 # 轻量计划（Lite Plan）
 
-> **对应 CW action: `plan`**（coding-workflow tool，D-007-REVISIT 映射）。
-> 本 skill 产出 plan.json 供 CW `plan` action 解析（waves/testCases 写入 _cw.db），
-> plan.md 作为人类 review 载体保留。完成后调 `cw(action=plan, topicId, planJson)`，
-> 按 CW 返回的 nextAction 推进（不自行决定下一步）。
+> **对应 CW action: `plan`**（coding-workflow tool）。本 skill 产出 plan.json，完成后调
+> `cw(action=plan, topicId, planJson)` 通过 CW plan gate。CW 解析 plan.json 的 waves/testCases
+> 写入 _cw.db，gate pass 后返回 nextAction（→ dev）。按 nextAction 推进，不自行决定下一步。
 
 为**不涉及架构改动的小功能**产出一份 plan.md，含 6 个章节：业务目标、技术改动点（文件级）、Wave 依赖拆分、**完整的测试验收设计**（单测清单 + E2E 清单 + 覆盖率 gate）。
 
@@ -460,41 +455,10 @@ Wave 拆分：
 
 plan.md 自检全通过后，**必须额外产出 plan.json**（CW `plan` action 的入参，D-006 结构化 JSON）。
 
-### plan.json schema（CW plan-parser 严格校验）
+**plan.json schema 见 `../lite-shared/references/cw-json-schemas.md`「plan.json」节**（字段约束 + format 锁定 + 写入路径）。
+关键提醒：`format` 必须 === `"lite"`（D-003 tier 锁定）；`testCases[].id` 用 `E1` 格式；`testCases[].expected` 是 judgeByExpected 重算基准。
 
-```json
-{
-  "format": "lite",
-  "objective": "<与 plan.md 业务目标一致>",
-  "waves": [
-    {
-      "id": "W1",
-      "changes": ["src/a.ts", "src/b.ts"],
-      "dependsOn": [],
-      "parallelGroup": "g1"
-    }
-  ],
-  "testCases": [
-    {
-      "id": "E1",
-      "layer": "mock",
-      "scenario": "<场景描述>",
-      "steps": "<复现步骤>",
-      "expected": { "url": "<期望URL>", "text": "<期望文本>" },
-      "executor": "vitest"
-    }
-  ]
-}
-```
-
-字段约束（CW `parseLitePlan` typebox schema）：
-- `format` 必须 === `"lite"`（D-003 tier 锁定，与 create 时的 tier 一致，不匹配 CW throw）
-- `waves[].id` 唯一；`changes` 文件级清单；`dependsOn` 引用其他 wave id
-- `testCases[].layer` 只能是 `"mock"` 或 `"real"`（lite 两层）
-- `testCases[].expected` 含 `url?` / `text?`（CW test 阶段 judgeByExpected 机器重算基准，D-008）
-- `testCases[].id` 用例 ID 格式：lite 用 `E1` / `E2`（与 check_execute.py 一致）
-
-plan.json 写到 `.xyz-harness/{topic}/plan.json`（与 plan.md 同目录）。写完后调 CW：
+plan.json 写到 `.xyz-harness/{topic}/plan.json`。写完后调 CW：
 
 ```
 cw(action=plan, topicId="<create 时返回的 topicId>", planJson=<读 plan.json 的内容>)
@@ -502,13 +466,6 @@ cw(action=plan, topicId="<create 时返回的 topicId>", planJson=<读 plan.json
 
 CW 通过 plan gate 后返回 `nextAction: {action:"dev", skill:"coding-execute", waves:[...]}`，
 按它推进（不自行决定下一步）。
-
-提示用户：
-
-```
-✅ plan.md + plan.json 已完成。Wave {N} 个 | 单测 {U} 条 | E2E {E} 条
-已调 cw(plan) 通过 gate。下一步按 CW nextAction：/skill:coding-execute 按 Wave 执行 dev。
-```
 
 ## 标记说明
 

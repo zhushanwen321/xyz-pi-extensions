@@ -3,3 +3,6 @@ node_modules/
 __pycache__/
 .pi/
 .DS_Store
+
+# Test coverage output
+coverage/

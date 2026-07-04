@@ -28,12 +28,13 @@
     "mocks/"
   ],
   "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.8",
     "vitest": "^4.1.8"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
     "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-tui": "*",
+    "@mariozechner/pi-coding-agent": "*",
     "@sinclair/typebox": "*"
   },
   "peerDependenciesMeta": {

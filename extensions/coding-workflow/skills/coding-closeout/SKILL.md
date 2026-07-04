@@ -2,23 +2,19 @@
 name: coding-closeout
 description: >-
   Use when the user says "设计收尾", "design closeout", "沉淀设计", "归档主题",
-  "归档 topic", "archive topic", or after ⑥execution-plan（或 mid-detail-plan 产出）已完成、
-  编码实施已落地（经 coding-execute 执行）、测试验收清单已全绿，需要把本次设计的稳定结论沉淀进长期文档
-  （ARCHITECTURE/PRODUCT/NFR/ADR/TEST-STRATEGY）并归档 .xyz-harness/{topic}。
-  设计→实施→沉淀闭环的最后一步。覆盖 full（①-⑥）与 mid（mid-plan+mid-detail-plan）两种产出路径。
-  对应 CW action: closeout（coding-workflow tool）。本 skill 沉淀完长期文档后调
-  cw(action=closeout, topicId) 通过 CW closeout gate（check_closeout.py + evidence 填充），
-  status 流转到 closed（终态不可逆）。
-  Not for full-* phases ①-⑥ themselves, not for 回顾执行质量 (那是 xyz-harness-retrospect),
+  "归档 topic", "archive topic", or after coding-execute + 测试验收全绿，需要把稳定结论
+  沉淀进长期文档 (ARCHITECTURE/PRODUCT/NFR/ADR/TEST-STRATEGY) 并归档 .xyz-harness/{topic}.
+  设计→实施→沉淀闭环的最后一步。对应 CW action: closeout (status 流转到 closed 终态).
+  Not for full-* phases themselves, not for 回顾执行质量 (那是 harness-retrospect),
   not for 需求澄清或编码实现。
 ---
 
 # 设计收尾（Design Closeout）
 
-> **对应 CW action: `closeout`**（coding-workflow tool，D-007-REVISIT 映射）。
-> 本 skill 沉淀稳定结论进长期文档后，调 `cw(action=closeout, topicId)` 通过 CW closeout gate
-> （check_closeout.py + evidence 填充：closedAt / coverage / 完整 gateHistory）。
-> status 流转到 `closed`（终态不可逆，D-009）。CW 返回 nextAction.action 为空 = 流程结束。
+> **对应 CW action: `closeout`**（coding-workflow tool）。本 skill 沉淀稳定结论进长期文档后，
+> 调 `cw(action=closeout, topicId)` 通过 CW closeout gate（check_closeout.py + evidence 填充：
+> closedAt / coverage / 完整 gateHistory）。status 流转到 `closed`（终态不可逆，D-009）。
+> CW 返回 nextAction.action 为空 = 流程结束。
 
 ## 核心目标
 

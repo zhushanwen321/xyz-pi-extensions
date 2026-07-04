@@ -2,22 +2,18 @@
 name: coding-retrospect
 description: >-
   Use when the user says "轻量复盘", "lite retrospect", "做个复盘", "复盘一下",
-  or after a coding-execute run has completed (goal completed)——whether the plan
-  was lite-plan's plan.md or mid-detail-plan's / full-execution-plan's execution-plan.md——
-  and wants a quick self-check retrospect on the dev/test process, docs, skill/subagent
-  quality, prompt tuning, and architecture signals. Produces a lightweight checklist
-  report (not a deep evidence extraction).
-  对应 CW action: retrospect（coding-workflow tool）。本 skill 产 changes/retrospect.md
-  后调 cw(action=retrospect, topicId, retrospectPath) 通过 CW retrospect gate（weak-structural
-  文件存在+非空），完成后按 CW 返回的 nextAction 执行。
+  or after a coding-execute run has completed (goal completed) and wants a quick
+  self-check retrospect on the dev/test process. Produces a lightweight checklist
+  report (changes/retrospect.md, CW retrospect action 入参).
+  对应 CW action: retrospect.
   Not for design closeout (that is coding-closeout). Not for planning or execution.
 ---
 
 # 轻量复盘（Retrospect）
 
-> **对应 CW action: `retrospect`**（coding-workflow tool，D-007-REVISIT 映射）。
-> 本 skill 产出 `changes/retrospect.md`，完成后调 `cw(action=retrospect, topicId, retrospectPath)`
-> 通过 CW retrospect gate（weak-structural：文件存在 + 非空）。按 CW 返回的 nextAction 推进（→ closeout）。
+> **对应 CW action: `retrospect`**（coding-workflow tool）。本 skill 产出 `changes/retrospect.md`，
+> 完成后调 `cw(action=retrospect, topicId, retrospectPath)` 通过 CW retrospect gate（weak-structural：
+> 文件存在 + 非空）。按 CW 返回的 nextAction 推进（→ closeout）。
 
 ## 核心目标
 
