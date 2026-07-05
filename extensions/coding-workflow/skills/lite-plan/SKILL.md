@@ -66,6 +66,8 @@ description: >-
 
 按当前步骤 read 对应参考，逐步推进：
 
+> **[铁律] 本 skill 终点是 `cw(action=plan)` 过 gate，不是写完 plan.md。** plan.md 是人类 review 载体 + CW gate 的检查对象，plan.json + CW plan gate 通过才是真正交付。写完 plan.md 不调 cw(plan) = 没交付。
+
 | 步骤 | 做什么 | read 参考 |
 |------|--------|----------|
 | 0. 范围守门 | 自检是否真属于 lite（5 条判据），任一命中→升级 full | — |
@@ -78,7 +80,7 @@ description: >-
 | 3. Wave 拆分 | 从改动点推导 Wave 表（垂直切片 + 依赖 + 并行组 + 末尾验收 Wave） | `../lite-shared/references/wave-model.md` |
 | 4. 测试设计（随改动评估） | 代码每处改动评估现有测试如何随之改；单测清单（AC级可判定）+ E2E 清单（探测项目实际测试栈，**每条标测试层 mock/real，两层各≥1**）+ 覆盖率 gate | `../lite-shared/references/test-case-schema.md` |
 | 4b. 多路反向自检（条件触发） | 改动点 ≥3 / 涉及过滤·查询·匹配·状态机时：派 fresh subagent ensemble 找漏用例（详见正文） | — |
-| 5. 写 plan.md | 用完整模板填 7 章节（若并行加速模式启用：合并技术方案路 + 测试设计路两份草案） | `../lite-shared/references/plan-template.md` |
+| 5. 写 plan.md | 写到 `.xyz-harness/{slug}/plan.md`（**CW gate 期望位置**，{slug} = cw(create) 的 slug；写到别处 gate 直接 FAIL）。用完整模板填 7 章节（若并行加速模式启用：合并技术方案路 + 测试设计路两份草案） | `../lite-shared/references/plan-template.md` |
 | 5b. 草案审查 ensemble（条件触发） | plan.md 写成后：先让 CW gate 机器检查杀结构硬伤（调 `cw(action=plan)` 时自动跑，零 subagent），再派 1 路禁读重建 subagent 做测试盲区三态 diff（详见正文） | — |
 | 6. 自检 | 对照下方 Self-Check 逐条核对（含 5b 审查反馈处理） | — |
 

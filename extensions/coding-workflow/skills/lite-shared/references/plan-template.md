@@ -5,7 +5,7 @@
 
 ## 模板正文
 
-用 write 工具写入 plan extension 指定的 planFilePath，内容如下（替换 `{...}` 占位）：
+用 write 工具写入 `.xyz-harness/{slug}/plan.md`（{slug} = cw(create) 时的 slug；**CW plan gate 在此位置检查**，写到别处 gate 直接 FAIL），内容如下（替换 `{...}` 占位）：
 
 ````markdown
 ---

@@ -192,6 +192,8 @@ describe("E2E topicDir（TEST-DIVERGENCE-01）— 经 execute() composition root
     expect(created.details.status).toBe("created");
     const topicId = created.details.topicId;
     expect(topicId).toContain(slug);
+    // topicId 必须在 TUI 文本可见——agent 靠它调后续 action，不能只藏在 details 结构里
+    expect(created.content[0]?.text).toContain(`topicId=${topicId}`);
 
     // 2. plan（planJson 内联；gate 应读 .xyz-harness/{slug}/plan.md）
     const planned = await execute("e2e-plan", {

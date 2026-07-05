@@ -271,8 +271,11 @@ const MUSTFIX_SUMMARY_MAX_LEN = 800;
  * 这里截断到 MUSTFIX_SUMMARY_MAX_LEN 防刷屏，agent 需要全文去 changes/ 目录看。
  */
 function renderSummary(result: ActionResult): string {
-  const head = `[cw] ${result.nextAction.action ?? "(done)"} — status=${result.status}` +
-    ` gateTier=${result.gateTier ?? "-"} guidance=${result.nextAction.guidance}`;
+  // topicId 显式输出：create 后 agent 必须拿到 topicId 才能调后续 action，
+  // 旧版只在 details 结构里有，TUI 文本不显示——agent 误以为要去 _cw.db 查。
+  // 所有 action 的 details 都含 topicId，统一在 head 显示。
+  const head = `[cw] ${result.nextAction.action ?? "(done)"} — topicId=${result.topicId}` +
+    ` status=${result.status} gateTier=${result.gateTier ?? "-"} guidance=${result.nextAction.guidance}`;
   const mustFix = result.mustFix;
   if (typeof mustFix === "string" && mustFix.length > 0) {
     const truncated = mustFix.length > MUSTFIX_SUMMARY_MAX_LEN
