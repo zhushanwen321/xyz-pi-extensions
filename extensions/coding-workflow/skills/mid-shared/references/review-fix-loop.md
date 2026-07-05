@@ -142,3 +142,29 @@ mid 默认服务 L2（标准档）。档位驱动 loop 的路数和轮次：
 
 1. **后台 reviewer 静默 hang 无兜底**——notifier 只在完成/失败时唤醒，subagent 可能静默 hang（推理卡住/连接中断），主 agent 在 STOP 醒不过来。当前无平台级兜底。主 agent 在用户推进下一 turn 时调 `subagent(action:list)` 排查。与 full 同源限制。
 2. **合并追踪+审查的 bias 风险**——一路 reviewer 既找 gap 又判质量，认知惯性比 full 两道隔离强。靠禁读重建 + 红队反向帧对冲，但不完全等价 full 的隔离强度。这是 mid 用 wall-clock 换的质量代价。
+
+## CW gate 落盘契约
+
+> **[MANDATORY] loop CONVERGED 后，必须额外落盘 CW 面向的 `review-{slug}.md`（slug = clarity/architecture/issues/nfr/code-arch/execution），含 frontmatter `verdict: APPROVED`。这是 CW gate 预检（`findMissingReviewStubs`）的硬依赖——CW 不造假桩（D-007 方案 A），靠 skill 落盘。**
+
+### 两层 review 文件的区别（易混淆，必读）
+
+| 文件 | 性质 | 谁产 | 格式 | CW 是否直接读 |
+|------|------|------|------|--------------|
+| `changes/review-{skill-slug}-{route-slug}.md` | **loop 中间产物**（per-route reviewer 报告） | 各路 reviewer subagent | `## Verdict` heading（APPROVED/CHANGES_REQUESTED） | ❌ 不直接读（仅供主 agent L4 汇总） |
+| `changes/review-{slug}.md` | **CW gate 面向文件**（维度合并后的最终结论） | skill（主 agent / merge subagent） | **frontmatter `verdict: APPROVED`**（不是 heading） | ✅ CW `findMissingReviewStubs` 预检 |
+
+### slug 映射
+
+- **mid-plan（CW clarify 阶段）** → 产 2 份：`review-clarity.md` + `review-architecture.md`
+- **mid-detail-plan（CW detail 阶段）** → 产 4 份：`review-issues.md` + `review-nfr.md` + `review-code-arch.md` + `review-execution.md`
+
+### 落盘规则
+
+1. **loop 未 CONVERGED** → 不落盘 `review-{slug}.md`（重跑 loop）
+2. **loop CONVERGED** → 主 agent（或 1 个 merge subagent）收集 N 路 per-route 报告，**按维度合并**成 CW 面向文件：
+   - verdict 合并规则：所有纳入该 slug 的 per-route 报告均 APPROVED（无 must_fix）→ `verdict: APPROVED`；任一 CHANGES_REQUESTED → 不落盘（回 loop 修）
+   - 正文：合并 must_fix（已清空）/ should_fix / nit，保留 per-route 溯源标注（`[from review-{skill}-{route}]`）
+3. **frontmatter 必须**：`verdict: APPROVED`（字段值，非 heading）。CW 读 frontmatter 不读 `## Verdict` heading——只写 heading 不写 frontmatter = CW 预检失败
+
+> **这一步是 skill 职责，不是 CW 的。** CW 只预检文件存在 + 跑机器检查，不生成 review 桩（D-007）。per-route 报告（`## Verdict` heading）是 loop 内部工程产物，CW 永远不读；CW 只认 `review-{slug}.md` 的 frontmatter `verdict`。两套命名/格式不可混用。

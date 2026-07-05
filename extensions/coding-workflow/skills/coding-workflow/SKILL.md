@@ -74,7 +74,7 @@ description: >-
 
 [MANDATORY] 启动 CW 前：
 
-- **workspacePath 可写**：CW 在 `${workspacePath}/.xyz-harness/_cw.db` 建库 + changes/ 写 review。
+- **workspacePath 可写**：CW 在 `${workspacePath}/.xyz-harness/_cw.db` 建库；review 桩 + machine-check 报告在 `${workspacePath}/.xyz-harness/{slug}/changes/` 下查找（`{slug}` = CW create slug；CW 不产桩，靠 skill 落盘到该目录）。
 - **git 仓库已初始化**（dev/test 需要）：`git rev-parse --git-dir` 能跑通。
 - **tier 已决策**：不确定先问用户，不默认（锁定后改不了）。
 

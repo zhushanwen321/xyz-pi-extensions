@@ -100,3 +100,23 @@ done
   - 骨架漂移 → 回⑤同步骨架与文档
 
 修完后重跑 Step 6c，直到 CONSISTENT 才交接编码。
+
+## frontmatter 契约（CW gate）
+
+> **[MANDATORY] `consistency-final.md` 必须含 frontmatter `verdict`，与各阶段 review 文件的 `verdict: APPROVED` 同机制——CW gate（check-execution.ts）读 **frontmatter** 不读 heading，缺 frontmatter 或 verdict 值不对 = gate FAIL。
+
+落盘格式：
+
+```markdown
+---
+verdict: CONSISTENT   # 或 INCONSISTENT
+---
+
+# 跨文档一致性终检报告
+...
+```
+
+- `verdict: CONSISTENT`（全 6 维通过）→ CW execution gate 认可，进编码
+- `verdict: INCONSISTENT`（有未解决矛盾）→ 不落盘此文件，先回 Step 3 修矛盾重跑终检；落盘 INCONSISTENT 等于自报 gate FAIL
+
+> **关键：** check-execution.ts 只认 frontmatter 的 `verdict` 字段，不解析正文 `## Verdict` 之类的 heading。agent 产 consistency-final.md 时**必须**写 frontmatter，不能只写正文 heading。这与 mid-plan/mid-detail-plan 的 `review-{slug}.md` 落盘 `verdict: APPROVED` 是同一套机制（见 `../mid-shared/references/review-fix-loop.md`「CW gate 落盘契约」节）。

@@ -99,7 +99,7 @@ description: >-
 
 ### Step 3. 写复盘报告
 
-把清单结果 + 根因分析写入 `.xyz-harness/{yyyy-MM-dd}-lite-{topic}/retrospect.md`：
+把清单结果 + 根因分析写入 `.xyz-harness/{slug}/retrospect.md`（`{slug}` = CW create slug，与 plan/detail 阶段产出同目录）：
 
 ```markdown
 # Lite 复盘：{topic}（{date}）
@@ -156,12 +156,12 @@ description: >-
 >
 > 只写「追踪：待办」= 未完成复盘。实测：上一轮 retrospect 标了「归属：coding-execute / 追踪：待办」，coding-execute 从未被改，5 条改进全部死信——没有回流机制，retrospect 是自嗨文档。
 >
-> **[提示] retrospect.md 产出在 `.xyz-harness/`，不进代码 commit。** 提交代码时用显式路径 `git add <改动文件>`，禁 `git add -A`（实测：retrospect.md 被 add -A 误加混进代码 commit）。`.xyz-harness/` 是工作流产出，独立于代码变更。
+> **[提示] retrospect.md 产出在 `.xyz-harness/{slug}/`，不进代码 commit。** 提交代码时用显式路径 `git add <改动文件>`，禁 `git add -A`（实测：retrospect.md 被 add -A 误加混进代码 commit）。`.xyz-harness/` 是工作流产出，独立于代码变更。
 
 ### Step 4. 交付
 
 ```
-✅ 复盘完成：.xyz-harness/{date}-lite-{topic}/retrospect.md
+✅ 复盘完成：.xyz-harness/{slug}/retrospect.md
    概况：{N} Wave，{R} 轮失败循环，覆盖率 {X}%
    改进项：{P0 数} 个 P0 / {P1 数} 个 P1
    最值得改：<P0 第一条>
