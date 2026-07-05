@@ -8,7 +8,6 @@
  *   ①结构性：交付物存在 / verdict:pass / 关键章节 / 无占位符 / review-execution APPROVED
  *           consistency-final.md 存在且 verdict: CONSISTENT（Step 6c 总闸门）
  *   ②引用：测试验收清单用例 ID 集合 == ⑤test-matrix 全量（集合相等）
- *           末尾验收 Wave 存在，blocked_by 含所有功能 Wave
  *
  * 与 python 版差异：忽略 --no-consistency-final（CW gate 总是跑全量，6c 总闸门必检）。
  */
@@ -25,7 +24,6 @@ import {
   checkReviewVerdict,
   extractSection,
   parseFrontmatter,
-  readText,
   type CheckOutput,
 } from "./shared.js";
 
@@ -104,9 +102,6 @@ export function runCheckExecution(topicDir: string): CheckOutput {
     report.addFail("测试验收清单", "无「测试验收清单」章节（MANDATORY）");
   }
 
-  // ② 末尾验收 Wave 存在，blocked_by 含所有功能 Wave
-  checkAcceptanceWave(report, mdPath);
-
   return report.toOutput({ writeReport: true, topicDir });
 }
 
@@ -118,97 +113,4 @@ function extractTestIds(text: string): Set<string> {
     if (m[1]) ids.add(m[1]);
   }
   return ids;
-}
-
-/**
- * 检查末尾验收 Wave 存在且 blocked_by 含所有功能 Wave。
- *
- * 移植自 check_execution._check_acceptance_wave：
- *   - 找所有 `## Wave N` 标题 → wave 编号集合
- *   - 验收 Wave（标题含「验收/Acceptance」）必须是最大号
- *   - 验收 Wave 的 blocked_by 须含所有功能 Wave 号
- */
-function checkAcceptanceWave(report: CheckReport, mdPath: string): void {
-  const content = readText(mdPath);
-
-  // 找所有 Wave 标题（## Wave N，恰好两井号）
-  const waveMatches = [...content.matchAll(/##\s*Wave\s*(\d+)[^\n]*/g)];
-  if (waveMatches.length === 0) {
-    report.addSkip("末尾验收 Wave", "无 Wave 编排（可能未编排）");
-    return;
-  }
-  const waveNums = [...new Set(waveMatches.map((m) => Number(m[1])))].sort(
-    (a, b) => a - b,
-  );
-  const maxWave = waveNums[waveNums.length - 1]!;
-
-  // 找验收 Wave（标题含「验收」或「Acceptance」）—— re.IGNORECASE → i flag
-  const accMatch = content.match(
-    /##\s*Wave\s*(\d+)[^\n]*(?:验收|Acceptance|验收\s*Gate)[^\n]*/i,
-  );
-  if (!accMatch || accMatch[1] === undefined) {
-    report.addFail(
-      "末尾验收 Wave 存在",
-      "无「验收 Wave」（标题应含「验收/Acceptance」）",
-    );
-    return;
-  }
-  const accNum = Number(accMatch[1]);
-
-  // 验收 Wave 应是最后一个
-  if (accNum !== maxWave) {
-    report.addFail(
-      "验收 Wave 在末端",
-      `验收 Wave 是 Wave ${accNum}，但最大 Wave 是 ${maxWave}（验收应最后）`,
-    );
-    return;
-  }
-
-  // functional waves = 除验收 Wave 外的所有（排除 0）
-  const functionalWaves = waveNums.filter((w) => w !== accNum && w !== 0);
-  if (functionalWaves.length === 0) {
-    report.addPass("末尾验收 Wave", `Wave ${accNum} 是验收 Wave`);
-    return;
-  }
-
-  // 检查验收 Wave 的 blocked_by 含所有功能 Wave
-  const accSection = extractSection(
-    mdPath,
-    `Wave\\s*${accNum}[^\\n]*(?:验收|Acceptance)`,
-  );
-  let blockedByMatch = (accSection ?? "").match(
-    /\**\s*[Bb]locked\s*by\s*\**\s*[:：]\s*([^\n]+)/,
-  );
-  if (!blockedByMatch) {
-    // 兜底：全文找
-    blockedByMatch = content.match(
-      /\**\s*[Bb]locked\s*by\s*\**\s*[:：]\s*([^\n]+)/,
-    );
-  }
-
-  if (blockedByMatch && blockedByMatch[1]) {
-    // deps：`Wave N` 或 `#N` / 裸 N，取首个非空捕获组
-    const depNums = new Set<number>();
-    for (const m of blockedByMatch[1].matchAll(/Wave\s*(\d+)|#?(\d+)/g)) {
-      const n = m[1] ?? m[2];
-      if (n) depNums.add(Number(n));
-    }
-    const missingDeps = functionalWaves.filter((w) => !depNums.has(w));
-    if (missingDeps.length > 0) {
-      report.addFail(
-        "验收 Wave blocked_by 全功能 Wave",
-        `验收 Wave 未 blocked_by 功能 Wave: ${JSON.stringify(missingDeps)}`,
-      );
-    } else {
-      report.addPass(
-        "验收 Wave blocked_by 全功能 Wave",
-        `blocked_by 全部 ${functionalWaves.length} 个功能 Wave`,
-      );
-    }
-  } else {
-    report.addFail(
-      "验收 Wave blocked_by 全功能 Wave",
-      `验收 Wave 无 blocked_by 声明（应含功能 Wave: ${JSON.stringify(functionalWaves)}）`,
-    );
-  }
 }

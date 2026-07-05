@@ -53,17 +53,13 @@ Wave 2: 用户登录全链路
 - **同并行组** = 改动文件无交集 + 无调用依赖 → 可同时派 subagent 并行实现
 - **不同并行组**或有 blocked_by → 必须串行（等上游 Wave 完成后再派）
 
-### 4. 验收 Wave（强制末尾）
+### 4. 整体回归由 CW test 阶段承担（不使用验收 Wave）
 
-最后一个 Wave **必须是验收 Wave**（非功能开发）：
+plan.json 的 wave 只装功能开发（每个 wave 都有 `changes` 代码改动）。**整体回归测试（全量单测 + E2E + 覆盖率 gate）由 CW test 阶段承担**——test gate 用 testCase.status（每条 E* 用例 judgeByExpected 重算 actual vs expected）+ 覆盖率判定，不依赖一个「验收 Wave」概念。
 
-```
-Wave N+1: 验收
-  - blocked_by: 所有功能 Wave
-  - 职责：跑全部单测 + E2E + 覆盖率检查，对照 plan 的测试清单全绿才算完成
-```
-
-> 这是设计→实现的闭环闸门。逐 Wave 测试通过 ≠ 整体可用（Wave 间集成可能崩）。验收 Wave 做整体回归。
+> 历史背景：早期 design-workflow 用「末尾验收 Wave」做整体回归闸门，引入 CW 状态机后 test 阶段接管了这职责（更强：机器重算 + 覆盖率 gate，而不是依赖 agent 声明「验收 Wave 跑过了」）。验收 Wave 作为 plan.json 里 `changes: []` 的 wave 残留被 dev gate 错误地一视同仁（要求 committed ≠ null，但验收 Wave 没代码可 commit），故取消。
+>
+> 「逐 Wave 测试通过 ≠ 整体可用」的差距由 test 阶段的 E2E 用例覆盖（mock + real 两层各 ≥1 条），不需要单独的验收 Wave。
 
 ### 5. Wave 间根因传播（执行期纪律）
 
@@ -86,8 +82,7 @@ Wave 表是 plan 期产物，但执行期常发现「不同 Wave 踩同一个坑
 
 小功能常常只有一个 Wave（单文件改动）。此时：
 - 不需要并行编排，单 subagent 串行执行
-- 仍需末尾验收 Wave（跑测试 + 覆盖率）
-- Wave 表只列 W1（功能）+ W2（验收），标注 W2 blocked_by W1
+- Wave 表只列 W1（功能），无需额外验收 Wave（整体回归由 CW test 阶段承担）
 
 ## 模型
 
@@ -99,7 +94,7 @@ Wave 表是 plan 期产物，但执行期常发现「不同 Wave 踩同一个坑
                     ↓ 全部完成
   G2: [W3 subagent]    blocked_by G1，串行
                     ↓
-  验收: [W4 subagent]  blocked_by 所有功能 Wave
+  全功能 Wave committed → CW dev gate 通过
                     ↓
-  全绿 → goal complete
+  CW test 阶段（跑 E* 用例 + 覆盖率 gate）→ 全绿 → goal complete
 ```

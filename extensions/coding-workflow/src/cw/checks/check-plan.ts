@@ -11,7 +11,6 @@
  *      - 无未替换占位符（{xxx}/TODO/TBD）
  *   ② 方案结构（Wave 表完整性）
  *      - Wave 表存在且至少 1 行
- *      - 末尾验收 Wave 存在
  *      - 同并行组 Wave 改动文件无交集（并行安全）
  *   ③ 测试清单结构（机器可判的完整性）
  *      - 单测每行有具体输入 + 预期（列非空，非「正常工作」类模糊词）
@@ -28,7 +27,6 @@ import {
   checkNoPlaceholders,
   extractSection,
   hasHeading,
-  readText,
   type CheckOutput,
 } from "./shared.js";
 
@@ -73,7 +71,6 @@ export function runCheckPlan(topicDir: string): CheckOutput {
 
   // ② 方案结构
   checkWaveTable(report, mdPath);
-  checkAcceptanceWave(report, mdPath);
   checkParallelSafety(report, mdPath);
 
   // ③ 测试清单结构
@@ -154,30 +151,6 @@ function checkWaveTable(report: CheckReport, mdPath: string): void {
     report.addFail("Wave 表", "Wave 拆分章节无可解析的 Wave 行（W1/W2...）");
   } else {
     report.addPass("Wave 表", `解析到 ${rows.length} 个 Wave`);
-  }
-}
-
-/** ② 末尾验收 Wave 存在（标题或 Wave 表行含「验收/Acceptance」）。 */
-function checkAcceptanceWave(report: CheckReport, mdPath: string): void {
-  const rows = parseWaveTable(mdPath);
-  if (rows.length === 0) {
-    // 兜底：全文搜
-    if (/验收\s*Wave|Acceptance\s*Wave/.test(readText(mdPath))) {
-      report.addPass("末尾验收 Wave", "文档提及验收 Wave");
-      return;
-    }
-    report.addFail("末尾验收 Wave", "无 Wave 表且无验收 Wave 提及");
-    return;
-  }
-  // 简化：检查最大 Wave 号的行或全文是否有「验收」
-  const content = readText(mdPath);
-  if (/验收\s*Wave|Acceptance\s*Wave|W\d+[^\n]*验收/.test(content)) {
-    report.addPass("末尾验收 Wave", "验收 Wave 存在");
-  } else {
-    report.addFail(
-      "末尾验收 Wave",
-      "未找到验收 Wave（标题或表行应含「验收/Acceptance」）",
-    );
   }
 }
 

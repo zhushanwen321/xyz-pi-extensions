@@ -211,12 +211,11 @@ Drafter-A（nfr）和 Drafter-B（code-arch）并行产出后，主 agent 做一
 Wave 编排（根：从时序图推导）
 ├── Wave 0: Prefactor → 是否有让后续更易的前置重构？
 ├── Wave 1-N: 垂直切片（P0/P1）→ blocked_by 从时序图读
-├── Wave N+1: 验收 Wave → blocked_by 所有功能 Wave（闭环闸门）
 └── P3 延后项 → 标注「后续迭代」+ 理由
 ```
 
 - 从 code-architecture.md §4 时序图推导 Wave 依赖（功能 B 调用 A → Wave(B) blocked_by Wave(A)）
-- **编排末端强制加验收 Wave**（blocked_by 所有功能 Wave），读测试验收清单全量→跑测试→全 PASS 才算实现完成
+- Wave 表只列功能 Wave（都有代码改动）；**不设「验收 Wave」**——整体回归由 CW test 阶段承担（test gate 重算 T* 用例 + 覆盖率）
 - **[MANDATORY] 定稿含「测试验收清单」**——code-arch §6 test-matrix 全量用例（来源 A + B）按归属 Wave + **测试层（unit/integration/e2e/perf-chaos）**列全，供下游 coding-execute 分层验收（coding-execute 的执行收尾机器门自动识别 mid 的 T{UC}.{N} 用例 + 测试执行层；integration/e2e/perf-chaos 属 real 层，unit 属 mock 层——check-execute.ts:31 MID_LAYER_REAL 集合定义）
 - **性能混沌类缓解项**编排为独立 perf/chaos Wave 或 pre-prod gate（不混入功能 Wave）
 
@@ -341,7 +340,7 @@ drafter 并行：
 execution + 对齐：
 - [ ] 回灌对齐已做（来源 B 已补 + nfr ⑤指针已验证 + 性能混沌类已标记）
 - [ ] execution-plan 从 code-arch 时序图推导 Wave 依赖
-- [ ] 末尾验收 Wave 存在（blocked_by 所有功能 Wave）+ 测试验收清单全量（来源 A+B，**按测试层 unit/integration/e2e/perf-chaos 可分组**）
+- [ ] 测试验收清单全量（来源 A+B，**按测试层 unit/integration/e2e/perf-chaos 可分组**）
 - [ ] CW gate 机器检查通过（execution，由 `cw(action=detail)` 触发）
 
 loop + 终检：

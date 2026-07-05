@@ -56,8 +56,7 @@ function writeCodeArch(topicDir: string, ids = ["T1.1", "T2.1", "T2.2"]): void {
 
 /**
  * 合规 execution-plan.md：
- *   - 2 个功能 Wave + 1 个验收 Wave（Wave 3）
- *   - 验收 Wave blocked_by Wave 1/2
+ *   - 3 个 Wave（Wave 1/2 功能 + Wave 3 在 fixture 里命名「验收 Gate」但已不再被校验，保留作 T2.2 的归属 Wave 标签）
  *   - 测试验收清单含 T1.1/T2.1/T2.2（与 code-arch 全量相等）
  */
 function writeValidPlan(topicDir: string): void {
@@ -160,52 +159,6 @@ describe("runCheckExecution（移植自 check_execution.py）", () => {
       "| T2.1 | Wave 2 | ✅ |",
       "| T2.2 | Wave 3 | ✅ |",
       "| T9.9 | Wave 9 | ✅ |",
-    ].join("\n"));
-    writeCodeArch(topicDir);
-    writeConsistentFinal(topicDir);
-    writeApprovedReview(topicDir);
-    const out = runCheckExecution(topicDir);
-    expect(out.passed).toBe(false);
-  });
-
-  it("FAIL — 验收 Wave 非最大号（Wave 2 在 Wave 3 之前）→ passed:false", () => {
-    const topicDir = makeTmpTopicDir();
-    writeFileSync(join(topicDir, "execution-plan.md"), [
-      "---", "verdict: pass", "---",
-      "", "# Execution Plan",
-      "## Wave 编排",
-      "### Wave 1 基础", "**Blocked by**: (无)", "x",
-      "### Wave 2 验收 Gate", "**Blocked by**: Wave 1", "acceptance",
-      "### Wave 3 收尾", "**Blocked by**: Wave 2", "tail",
-      "## 测试验收清单",
-      "| 用例 | Wave | 状态 |",
-      "|------|------|------|",
-      "| T1.1 | Wave 1 | ✅ |",
-      "| T2.1 | Wave 2 | ✅ |",
-      "| T2.2 | Wave 3 | ✅ |",
-    ].join("\n"));
-    writeCodeArch(topicDir);
-    writeConsistentFinal(topicDir);
-    writeApprovedReview(topicDir);
-    const out = runCheckExecution(topicDir);
-    expect(out.passed).toBe(false);
-  });
-
-  it("FAIL — 验收 Wave 未 blocked_by 全部功能 Wave → passed:false", () => {
-    const topicDir = makeTmpTopicDir();
-    writeFileSync(join(topicDir, "execution-plan.md"), [
-      "---", "verdict: pass", "---",
-      "", "# Execution Plan",
-      "## Wave 编排",
-      "### Wave 1 基础", "**Blocked by**: (无)", "x",
-      "### Wave 2 查询", "**Blocked by**: Wave 1", "y",
-      "### Wave 3 验收 Gate", "**Blocked by**: Wave 1", "miss wave2",
-      "## 测试验收清单",
-      "| 用例 | Wave | 状态 |",
-      "|------|------|------|",
-      "| T1.1 | Wave 1 | ✅ |",
-      "| T2.1 | Wave 2 | ✅ |",
-      "| T2.2 | Wave 3 | ✅ |",
     ].join("\n"));
     writeCodeArch(topicDir);
     writeConsistentFinal(topicDir);

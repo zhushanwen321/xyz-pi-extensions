@@ -28,11 +28,10 @@ reconstruct_blind_spot: not_triggered   # 禁读重建盲区（high/low/not_trig
 - 修改 {path} — {职责}
 
 ## Wave 拆分与依赖
-<!-- read ../lite-shared/references/wave-model.md 后填。垂直切片 + 依赖推导 + 并行组 -->
+<!-- read ../lite-shared/references/wave-model.md 后填。垂直切片 + 依赖推导 + 并行组。只列功能 Wave（都有代码改动），整体回归由 CW test 阶段承担 -->
 | Wave | 改动文件 | 依赖 | 并行组 | 说明 |
 |------|---------|------|--------|------|
 | W1   |         |      |        |      |
-| W{N+1} | 验收 Wave | 所有功能 Wave | - | 跑全量测试+覆盖率 |
 
 ## 单测用例清单（AC 级）
 <!-- read ../lite-shared/references/test-case-schema.md 后填。每条可机器判定。每个改动点正常/异常/边界各≥1 -->
@@ -57,7 +56,6 @@ reconstruct_blind_spot: not_triggered   # 禁读重建盲区（high/low/not_trig
 <!-- [MANDATORY] 必须用此标题（plan extension extractPlanSteps 识别）。按 Wave 顺序 -->
 1. [W1] 写 U1/U2/U3 失败测试 → 实现 → 测试通过 → 提交
 2. [W2] ...
-3. [W{N+1}] 验收 Wave：跑全量单测 + E2E + 覆盖率，全绿才算完成
 ````
 
 ## frontmatter 填写规范
@@ -87,7 +85,7 @@ reconstruct_blind_spot: not_triggered   # 禁读重建盲区（high/low/not_trig
 ### Wave 拆分与依赖
 - read `wave-model.md` 后填
 - 垂直切片 + blocked_by 从调用关系推导 + 并行组判定
-- 末尾强制验收 Wave
+- 只列功能 Wave（都有代码改动）；**不设「验收 Wave」**——整体回归由 CW test 阶段承担（test gate 重算 E* 用例 + 覆盖率）
 
 ### 单测用例清单
 - read `test-case-schema.md` 后填
