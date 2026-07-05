@@ -8,6 +8,7 @@ import { type GateContext,runGate } from "../gates.js";
 import { parseLitePlan } from "../plan-parser.js";
 import { buildNextAction, computeNextStatus, guard } from "../state-machine.js";
 import type { ActionDeps, ActionResult } from "../types.js";
+import { resolveTopicDir } from "../types.js";
 
 export interface PlanParams {
   action: "plan";
@@ -30,7 +31,7 @@ export function handlePlan(params: PlanParams, deps: ActionDeps): ActionResult {
   const parsed = parseLitePlan(params.planJson, topic.tier);
   const gateCtx: GateContext = {
     topic,
-    topicDir: deps.topicDir,
+    topicDir: resolveTopicDir(topic),
     workspacePath: deps.workspacePath,
     runner: deps.runner,
     git: deps.git,

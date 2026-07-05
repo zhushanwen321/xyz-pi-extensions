@@ -30,7 +30,7 @@ function setupClarifiedMidTopic(
     { action: "create", slug, tier: "mid", objective: "x" },
     deps,
   );
-  writeReviewStubs(deps.topicDir, ["clarity", "architecture"]);
+  writeReviewStubs(deps.workspacePath, slug, ["clarity", "architecture"]);
   handleClarify(
     { action: "clarify", topicId: created.topicId, clarifyJson: makeMidClarify() },
     deps,
@@ -48,7 +48,7 @@ describe("handleDetail", () => {
 
     const topicId = setupClarifiedMidTopic(deps, "midfeat");
     // 写齐 detail 4 个 review 桩 → 预检通过
-    writeReviewStubs(ws, ["issues", "nfr", "code-arch", "execution"]);
+    writeReviewStubs(ws, "midfeat", ["issues", "nfr", "code-arch", "execution"]);
 
     const result = handleDetail(
       { action: "detail", topicId, detailJson: makeMidDetail() },
@@ -79,7 +79,7 @@ describe("handleDetail", () => {
     // clarify 阶段先 pass（拿到 clarified 态）
     vi.spyOn(GateRunner.prototype, "runCheck").mockReturnValue(PASS_CHECK);
     const topicId = setupClarifiedMidTopic(deps, "midfail");
-    writeReviewStubs(ws, ["issues", "nfr", "code-arch", "execution"]);
+    writeReviewStubs(ws, "midfail", ["issues", "nfr", "code-arch", "execution"]);
 
     // detail 阶段切到 fail：mock 总返 fail → runGate 首个 checker fail 即短路
     vi.spyOn(GateRunner.prototype, "runCheck").mockReturnValue(FAIL_CHECK);

@@ -19,7 +19,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CwStore } from "../store.js";
+import { CwStore, SCHEMA_VERSION } from "../store.js";
 import type { CwTopic, GateHistorySeed, TestCaseSeed, WaveSeed } from "../types.js";
 
 // ── helpers ──────────────────────────────────────────────────
@@ -39,6 +39,7 @@ function makeTopic(overrides: Partial<CwTopic> = {}): CwTopic {
     tier: "lite",
     objective: "build X",
     workspacePath: "/tmp/ws",
+    topicDir: "/tmp/ws/.xyz-harness/demo",
     createdAt: "2026-07-04T00:00:00.000Z",
     status: "created",
     planFormat: "lite",
@@ -119,7 +120,7 @@ describe("CwStore.loadTopic — 行→CwTopic 拼装（assembleTopic 叶子）",
     expect(loaded.workspacePath).toBe("/tmp/ws");
     expect(loaded.status).toBe("created");
     expect(loaded.planFormat).toBe("lite");
-    expect(loaded.schemaVersion).toBe(1);
+    expect(loaded.schemaVersion).toBe(2);
     // gate_passed JSON 列读改写
     expect(loaded.gatePassed).toEqual({ plan: true });
 
@@ -353,7 +354,7 @@ describe("T2.27 — 旧 db（user_version=0）打开新 CwStore 自动迁移 + �
     // 4. user_version 升到 SCHEMA_VERSION（经第二连接读，避免动 store 私有 db）
     const verify = new DatabaseSync(dbPath);
     const after = verify.prepare("PRAGMA user_version").get() as { user_version: number };
-    expect(after.user_version).toBe(1);
+    expect(after.user_version).toBe(SCHEMA_VERSION);
     verify.close();
 
     store.close();
@@ -393,7 +394,7 @@ describe("T2.28 — 迁移日志含 from/to version", () => {
       }
     }
 
-    expect(migrationLogs).toContainEqual({ from: 0, to: 1 });
+    expect(migrationLogs).toContainEqual({ from: 0, to: SCHEMA_VERSION });
     writeSpy.mockRestore();
   });
 });

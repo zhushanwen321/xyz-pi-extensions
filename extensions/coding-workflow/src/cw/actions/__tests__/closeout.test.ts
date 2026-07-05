@@ -7,7 +7,7 @@
  * 前置：先走通 retrospect 拿 retrospected 态（含 gatePassed.retrospect=true + gateHistory 记录）。
  */
 
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
@@ -45,10 +45,14 @@ function setupRetrospectedTopic(
     slug,
     tier: "lite",
     status: "tested",
+    workspacePath: deps.workspacePath,
   });
   store.insertTestCases(topicId, [passedCase]);
   store.updateTestCase(topicId, "E1", { status: "passed" });
-  const retroPath = join(deps.topicDir, "changes", "retrospect.md");
+  // retrospect.md 写进 topicDir/changes/（与 handler 的 resolveTopicDir(topic) 对齐）
+  const changesDir = join(deps.workspacePath, ".xyz-harness", slug, "changes");
+  mkdirSync(changesDir, { recursive: true });
+  const retroPath = join(changesDir, "retrospect.md");
   writeFileSync(retroPath, "# 复盘\n交付完成。\n");
   handleRetrospect({ action: "retrospect", topicId, retrospectPath: retroPath }, deps);
   return topicId;

@@ -9,7 +9,8 @@
 import { type GateContext,runGate } from "../gates.js";
 import { parseMidClarify } from "../plan-parser.js";
 import { buildNextAction, computeNextStatus, guard } from "../state-machine.js";
-import type { ActionDeps, ActionResult } from "../types.js";
+import type { ActionDeps, ActionResult, NextAction } from "../types.js";
+import { resolveTopicDir } from "../types.js";
 import { CLARIFY_REVIEW_SLUGS, findMissingReviewStubs, reviewStubHint } from "./review-stub.js";
 
 export interface ClarifyParams {
@@ -31,20 +32,30 @@ export function handleClarify(params: ClarifyParams, deps: ActionDeps): ActionRe
   parseMidClarify(params.clarifyJson, topic.tier);
 
   // #7 AC-7.1：review 桩缺失 → 返结构化 hint，不跑 gate（非裸 check 报错）。
-  const missing = findMissingReviewStubs(deps.topicDir, CLARIFY_REVIEW_SLUGS);
+  // 不复用 buildNextAction 的 gate-fail guidance（它说「修 fail 项」），因此处 mustFix 是
+  // 「跑 review-fix-loop」，guidance 需与之对齐——单独构造 nextAction 明确指出桩缺失 + 下一步。
+  const missing = findMissingReviewStubs(resolveTopicDir(topic), CLARIFY_REVIEW_SLUGS);
   if (missing.length > 0) {
+    const nextAction: NextAction = {
+      action: "clarify",
+      skill: "mid-plan",
+      guidance:
+        `review 桩缺失（${missing.join(", ")}），status 仍为 ${topic.status}。` +
+        "跑 mid-plan skill 的 review-fix-loop 收敛后落盘 changes/review-*.md（verdict: APPROVED），" +
+        "然后重调 cw(action=clarify)。勿调 detail（会 illegal_transition）。",
+    };
     return {
       topicId: params.topicId,
       status: topic.status,
       gatePassed: topic.gatePassed,
-      nextAction: buildNextAction("clarify", topic),
+      nextAction,
       mustFix: reviewStubHint(missing),
     };
   }
 
   const gateCtx: GateContext = {
     topic,
-    topicDir: deps.topicDir,
+    topicDir: resolveTopicDir(topic),
     workspacePath: deps.workspacePath,
     runner: deps.runner,
     git: deps.git,

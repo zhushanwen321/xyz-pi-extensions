@@ -10,6 +10,7 @@
 import { type GateContext,runGate } from "../gates.js";
 import { buildNextAction, computeNextStatus, guard } from "../state-machine.js";
 import type { ActionDeps, ActionResult, Evidence } from "../types.js";
+import { resolveTopicDir } from "../types.js";
 
 export interface CloseoutParams {
   action: "closeout";
@@ -28,7 +29,7 @@ export function handleCloseout(params: CloseoutParams, deps: ActionDeps): Action
   }
   const gateCtx: GateContext = {
     topic,
-    topicDir: deps.topicDir,
+    topicDir: resolveTopicDir(topic),
     workspacePath: deps.workspacePath,
     runner: deps.runner,
     git: deps.git,

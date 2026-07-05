@@ -34,17 +34,26 @@ import type {
 
 // ── schema 版本（PRAGMA user_version，#11） ──────────────────
 
-const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 // ── DDL（§8.1 architecture） ────────────────────────────────
 
 /**
  * user_version 迁移函数链（#11）。MIGRATIONS[i] 把 user_version 从 i 升到 i+1。
  * v0→v1 由 DDL（CREATE TABLE IF NOT EXISTS）完成，无显式迁移函数。
+ * v1→v2 给 topic 表加 topic_dir 列（ROOT-01 修复：CW 需要记录每个 topic 的交付物目录）。
  * 未来 schema 演进（如 full 接入）在此追加 ALTER TABLE 函数。
  */
 const MIGRATIONS: Array<(db: DatabaseSync) => void> = [
   // v0 → v1: 无（初始 schema 由 DDL 建立）
+  // v1 → v2: topic 表加 topic_dir 列（兼容旧库，NULL 允许，handler 用 resolveTopicDir fallback）
+  // 幂等保护：PRAGMA table_info 检测列已存在则跳过（防新库 DDL 已含列时重复 ALTER）
+  (db: DatabaseSync) => {
+    const cols = db.prepare("PRAGMA table_info(topic)").all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "topic_dir")) {
+      db.exec("ALTER TABLE topic ADD COLUMN topic_dir TEXT");
+    }
+  },
 ];
 
 /**
@@ -154,6 +163,8 @@ export class CwStore {
 
   private init(): void {
     // 接线：建表 + user_version 迁移链（#11，未来 ALTER TABLE 链）。
+    // DDL 保持 v1 初始结构，topic_dir 等新增列由迁移链加（ALTER ADD COLUMN）。
+    // 这样全新库与旧库都走迁移链，路径统一，避免“DDL 建列 + 迁移加列”冲突。
     for (const stmt of DDL) {
       this.db.exec(stmt);
     }
@@ -219,8 +230,8 @@ export class CwStore {
   insertTopic(topic: CwTopic): void {
     // 接线：prepare + run，参数绑定。
     const stmt = this.db.prepare(
-      `INSERT INTO topic (topic_id, slug, tier, objective, workspace_path, created_at, status, plan_format, coverage, gate_passed)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO topic (topic_id, slug, tier, objective, workspace_path, topic_dir, created_at, status, plan_format, coverage, gate_passed)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     stmt.run(
       topic.topicId,
@@ -228,6 +239,7 @@ export class CwStore {
       topic.tier,
       topic.objective,
       topic.workspacePath,
+      topic.topicDir,
       topic.createdAt,
       topic.status,
       topic.planFormat ?? null,
@@ -286,6 +298,10 @@ export class CwStore {
       tier: String(tr.tier) as Tier,
       objective: String(tr.objective),
       workspacePath: String(tr.workspace_path),
+      topicDir:
+        tr.topic_dir === null || tr.topic_dir === undefined
+          ? ""
+          : String(tr.topic_dir),
       createdAt: String(tr.created_at),
       status: String(tr.status) as CwStatus,
       planFormat:

@@ -133,6 +133,8 @@ export function registerCodingWorkflowTool(pi: ExtensionAPI): void {
       "- status=developed → action=test (progressive result submission)",
       "- status=tested → action=retrospect; status=retrospected → action=closeout",
       "Each call returns nextAction — ALWAYS follow it; do not self-decide the next phase.",
+      "dev/test/retrospect 支持渐进式重提交（gate fail 后 status 已流转仍可重调同 action 补提交，",
+      "直到 gatePassed）。",
       "",
       "WHEN NOT TO USE (反模式):",
       "- Do NOT call goal_control(complete) to skip CW — goal complete 只查 evidence 字符串非空，",
@@ -144,6 +146,16 @@ export function registerCodingWorkflowTool(pi: ExtensionAPI): void {
       "- Do NOT change tier after create — tier is locked (D-003). Wrong tier = tear down topic +",
       "  recreate, not in-flight downgrade.",
       "",
+      "PARAMETERS BY ACTION:",
+      "- create: slug + tier + objective (+workspacePath?)",
+      "- plan: topicId + planJson",
+      "- clarify: topicId + clarifyJson",
+      "- detail: topicId + detailJson",
+      "- dev: topicId + tasks[{waveId, commitHash}]",
+      "- test: topicId + cases[{caseId, actual?, screenshotPath?, commitHash?, claimedStatus?}]",
+      "- retrospect: topicId + retrospectPath",
+      "- closeout: topicId",
+      "",
       "CAPABILITY BOUNDARY — you cannot use CW to:",
       "- Run tests / build / lint (use BashTool or dispatch test-runner subagent)",
       "- Dispatch implementer/reviewer subagents (use subagent tool, guided by coding-execute skill)",
@@ -154,6 +166,12 @@ export function registerCodingWorkflowTool(pi: ExtensionAPI): void {
       "action — if last call returned nextAction.action=\"dev\", the next CW call MUST be action=dev.",
       "lite test = strong-recompute (CW re-judges actual vs expected, drops claimedStatus, D-008);",
       "mid test = medium-coverage (trusts agent-declared status + GitValidator on commitHash).",
+      "lite test 还要求 screenshotPath 指向已存在的截图文件（缺失即 failed），",
+      "mid test 要求 commitHash + claimedStatus。",
+      "workspacePath 默认 process.cwd()，决定 _cw.db 位置",
+      "(${workspacePath}/.xyz-harness/_cw.db)；monorepo/子目录场景需显式传，否则 topic 跨目录找不到。",
+      "create 返回 topicId（格式 cw-{date}-{slug}），后续所有 action 必须传此 topicId；",
+      "跨 session 接续前从 _cw.db 或 .xyz-harness 取回。",
     ].join("\n"),
     executionMode: "sequential",
     promptGuidelines: [
@@ -162,6 +180,7 @@ export function registerCodingWorkflowTool(pi: ExtensionAPI): void {
       "[渐进式] dev/test 数组提交，长1=单个/N=批量，CW 累计判定 gatePassed（全 committed/passed 才流转）",
       "[tier 锁定] create 时锁 lite/mid，后续 plan/clarify/detail 的 JSON format 必须 === tier，不匹配 gate 直接拒",
       "[证据] test lite 路径：CW 用 judgeByExpected 机器重算丢 claimedStatus；test mid 路径：信声明 + GitValidator 校验 commitHash 可追溯到已 committed 的 dev commit",
+      "[入参] planJson/clarifyJson/detailJson 必须传 object（JSON.parse 后的值），禁止传 JSON 字符串。string 会被 assertFormat 拒（报 not an object）",
     ],
     parameters: CwParamsSchema,
     async execute(
@@ -174,18 +193,14 @@ export function registerCodingWorkflowTool(pi: ExtensionAPI): void {
       }
       // composition root：从 params 推 workspacePath，构造 deps。
       // dbPath 放 workspacePath/.xyz-harness/_cw.db。
-      // topicDir 用 workspacePath（绝对路径）：TS check 函数和 review-stub 都用它定位
-      // changes/ 和 deliverable 文件。原 bug 是 topicDir 绝对路径触发 hasPathTraversal 拒绝；
-      // 现在 TS 函数方案删除了 hasPathTraversal 防御（subprocess 边界已消除），
-      // 绝对路径直接传给 check 函数，无 path traversal 风险（topicDir 来自 params，
-      // 非 LLM 自由输入；真要防 traversal 应在入口校验 workspacePath 合法性）。
+      // topicDir 不在 deps——各 action handler loadTopic 后用 topic.topicDir 构造 GateContext
+      // （ROOT-01 修复：原 topicDir=workspacePath 导致读盘 gate 全 fail）。
       const workspacePath = rawParams.workspacePath ?? process.cwd();
       const deps: ActionDeps = {
         store: new CwStore(`${workspacePath}/.xyz-harness/_cw.db`),
         git: new GitValidator(workspacePath),
         runner: new GateRunner(workspacePath),
         workspacePath,
-        topicDir: workspacePath,
       };
       try {
         const result = dispatch(rawParams as CwParams, deps);

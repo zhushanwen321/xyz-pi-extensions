@@ -91,7 +91,7 @@ describe("handleClarify (#7 review 桩预检)", () => {
       deps,
     );
     // 写齐 clarify 两个 review 桩 → 预检通过，跑 gate
-    writeReviewStubs(ws, ["clarity", "architecture"]);
+    writeReviewStubs(ws, "midok", ["clarity", "architecture"]);
 
     const result = handleClarify(
       { action: "clarify", topicId: created.topicId, clarifyJson: makeMidClarify() },

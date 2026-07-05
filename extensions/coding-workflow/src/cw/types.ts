@@ -7,6 +7,8 @@
  */
 
 // ── type-only 反向引用（构造 ActionDeps，无运行时环） ──
+import { join } from "node:path";
+
 import type { GateRunner,GitValidator } from "./gates.js";
 import type { CwStore } from "./store.js";
 
@@ -58,6 +60,12 @@ export interface Actual {
  * 迁移自 test-orchestrator/index.ts，8 条测试用例等价（来源 0，#8 AC-8.1）。
  *
  * 叶子逻辑：骨架阶段签名已定，逐字段比对体留 ⑥Wave 实现。
+ *
+ * 匹配严格度（m-4）：**精确字符串相等**，不做 fuzzy/substring/trim 容差。
+ * 设计取舍——lite test 是机器重算门，意图是防 AI 谎报。若加 trim/substring 容差，
+ * AI 可用「几乎一样」蒙混（如末尾斜杠、空格、大小写差异）。零容差强制 AI 在 plan 阶段
+ * 写出与实际完全一致的 expected。代价：expected 写得不严谨会导致 valid 测试 FAIL，
+ * 但这是设计意图（plan 阶段不应产出模糊 expected）。
  */
 export function judgeByExpected(
   expected: Expected,
@@ -148,6 +156,8 @@ export interface CwTopic {
   tier: Tier;
   objective: string;
   workspacePath: string;
+  /** 交付物目录（= workspacePath/.xyz-harness/{slug}）。create 时算好存入，后续 action + check 函数用它定位 plan.md/changes/ 等。修复 ROOT-01：原 index.ts 把 topicDir 赋成 workspacePath 导致所有读盘 gate 在项目根查找而永远 FAIL。 */
+  topicDir: string;
   createdAt: string;
   status: CwStatus;
   planFormat?: "lite" | "mid-clarify" | "mid-detail";
@@ -217,7 +227,16 @@ export interface ActionDeps {
   git: GitValidator;
   runner: GateRunner;
   workspacePath: string;
-  topicDir: string;
+}
+
+/**
+ * 从 topic 记录推导 GateContext.topicDir（各 action handler loadTopic 后调用）。
+ *
+ * create 时已把 topicDir 算好存入 topic.topicDir，handler 直接用即可。本函数作 fallback
+ * 兜底旧库（topic_dir 列 NULL 时从 workspacePath + slug 重算）。
+ */
+export function resolveTopicDir(topic: CwTopic): string {
+  return topic.topicDir || join(topic.workspacePath, ".xyz-harness", topic.slug);
 }
 
 /** handler 统一返回。各 action 可附加专属字段（devProgress/testProgress 等）。 */

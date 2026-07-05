@@ -52,9 +52,6 @@ export function makeDeps(workspacePath: string): { deps: ActionDeps; store: CwSt
     git: new GitValidator(workspacePath),
     runner: new GateRunner(workspacePath),
     workspacePath,
-    // 与生产 index.ts 一致：topicDir=workspacePath（绝对路径）。
-    // 原 hasPathTraversal 防御已删（TS check 函数方案无 subprocess 边界）。
-    topicDir: workspacePath,
   };
   return { deps, store };
 }
@@ -66,15 +63,24 @@ export function closeStore(store: CwStore): void {
 
 // ── store 种子（直接构造前置状态，绕过未实现的 dev/test action） ──
 
-/** 插入一个最小 topic，返回 topicId。 */
+/**
+ * 插入一个最小 topic，返回 topicId。
+ *
+ * topicDir 从 workspacePath + slug 推导（与 create.ts 一致），保证 overrides 覆盖
+ * workspacePath 时 topicDir 跟随——handler 用 resolveTopicDir(topic) 读 review 桩/
+ * 交付物时路径才对得上。
+ */
 export function seedTopic(
   store: CwStore,
   overrides: Partial<CwTopic> & { topicId: string; slug: string; tier: "lite" | "mid" },
 ): string {
+  const workspacePath = overrides.workspacePath ?? "/tmp/ws";
+  const topicDir = overrides.topicDir ?? join(workspacePath, ".xyz-harness", overrides.slug);
   const topic: CwTopic = {
     schemaVersion: 1,
     objective: "test objective",
-    workspacePath: "/tmp/ws",
+    workspacePath,
+    topicDir,
     createdAt: "2026-07-04T00:00:00.000Z",
     status: "created",
     waves: [],
@@ -158,12 +164,22 @@ export function makeMidDetail(overrides: Record<string, unknown> = {}): unknown 
 
 // ── review 桩文件写入（#7 预检命中时需要这些文件存在才能跑 gate） ──
 
-/** 在 workspace/changes/ 下写 review-{slug}.md 桩文件（内容非空即可通过预检）。 */
-export function writeReviewStubs(workspacePath: string, slugs: readonly string[]): void {
-  for (const slug of slugs) {
+/**
+ * 在 {workspacePath}/.xyz-harness/{slug}/changes/ 下写 review-{slug}.md 桩文件
+ *（内容非空即可通过预检）。路径与 handler 的 resolveTopicDir(topic) 对齐：
+ * handler 从 topic.topicDir/changes/ 找 review 桩，topicDir = workspace/.xyz-harness/{slug}。
+ */
+export function writeReviewStubs(
+  workspacePath: string,
+  slug: string,
+  reviewSlugs: readonly string[],
+): void {
+  const changesDir = join(workspacePath, ".xyz-harness", slug, "changes");
+  mkdirSync(changesDir, { recursive: true });
+  for (const reviewSlug of reviewSlugs) {
     writeFileSync(
-      join(workspacePath, "changes", `review-${slug}.md`),
-      `---\nverdict: APPROVED\n---\nreview stub for ${slug}\n`,
+      join(changesDir, `review-${reviewSlug}.md`),
+      `---\nverdict: APPROVED\n---\nreview stub for ${reviewSlug}\n`,
     );
   }
 }
