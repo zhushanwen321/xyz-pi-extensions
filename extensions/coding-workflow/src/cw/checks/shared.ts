@@ -98,6 +98,24 @@ export class CheckReport {
     return `[${this.phase}] machine check: ${passed}/${this.total} passed → ${this.failed ? "FAIL" : "PASS"}`;
   }
 
+  /**
+   * fail 项摘要（mustFix 用，Bug 3 修复）。
+   *
+   * verdictLine 只有汇总行（N/M passed → FAIL），agent 看不到具体哪几项挂了。本方法把所有
+   * FAIL 项的 name + detail 拼成多行文本，让 handler 的 mustFix 字段带可操作信息
+   * （「6 必须章节 ❌ 缺失: ["E2E"]」而非只有「machine check: 5/11 passed → FAIL」）。
+   *
+   * PASS/SKIP 项不列（mustFix 的语义是「需要修的」，不是「全部检查结果」）。完整含 PASS 的
+   * 报告在 changes/machine-check-{phase}.md，agent 需要全量去那里看。
+   */
+  failSummary(): string {
+    const fails = this.checks.filter((c) => c.status === FAIL);
+    if (fails.length === 0) return "";
+    return fails
+      .map((c) => `- ${c.name}${c.detail ? `：${c.detail}` : ""}`)
+      .join("\n");
+  }
+
   /** 渲染 markdown 报告（写 changes/machine-check-{phase}.md 用）。 */
   render(): string {
     const lines = [
@@ -157,9 +175,15 @@ export class CheckReport {
         };
       }
     }
+    // fail 时 report 不只给 verdict 行（汇总），还要带 failSummary（具体哪几项挂）。
+    // Bug 3 修复：旧版只有 verdictLine，handler 把它拼进 mustFix，agent 看到
+    // 「machine check: 5/11 passed → FAIL」却不知道哪 6 项挂——信息链路断裂。
+    // failSummary 让 mustFix 带可操作信息（如「6 必须章节：缺失: ["E2E"]」）。
+    const verdict = this.verdictLine();
+    const summary = this.failSummary();
     return {
       passed: !this.failed,
-      report: this.verdictLine(),
+      report: summary ? `${verdict}\n${summary}` : verdict,
     };
   }
 }

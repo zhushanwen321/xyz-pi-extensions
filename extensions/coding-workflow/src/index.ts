@@ -224,7 +224,34 @@ export default function codingWorkflowExtension(pi: ExtensionAPI): void {
 
 // ── 渲染（content 文本，TUI 展示用） ─────────────────────────
 
+/**
+ * gate fail 时 mustFix 摘要的最大长度。
+ *
+ * mustFix 完整内容可能很长（多 checker 的拼接 report），TUI 摘要截断到这个长度避免刷屏。
+ * 完整报告在 .xyz-harness/{slug}/changes/machine-check-{phase}.md，agent 可去那里看全文。
+ */
+const MUSTFIX_SUMMARY_MAX_LEN = 800;
+
+/**
+ * 渲染 tool execute 返回的 content[0].text（TUI 展示用）。
+ *
+ * gate fail 时 handler 把 fail report 拼成 mustFix 字符串塞进 ActionResult，
+ * 但旧版 renderSummary 只输出 nextAction.guidance（导航文案），agent 在 TUI 看不到
+ * 具体哪几项 fail——信息链路断裂。修复：gate fail（mustFix 字段存在）时把它摘要进
+ * content 文本，agent 拿到具体 fail 清单才知道改什么。
+ *
+ * 完整 fail report 落盘在 .xyz-harness/{slug}/changes/machine-check-{phase}.md，
+ * 这里截断到 MUSTFIX_SUMMARY_MAX_LEN 防刷屏，agent 需要全文去 changes/ 目录看。
+ */
 function renderSummary(result: ActionResult): string {
-  return `[cw] ${result.nextAction.action ?? "(done)"} — status=${result.status}` +
+  const head = `[cw] ${result.nextAction.action ?? "(done)"} — status=${result.status}` +
     ` gateTier=${result.gateTier ?? "-"} guidance=${result.nextAction.guidance}`;
+  const mustFix = result.mustFix;
+  if (typeof mustFix === "string" && mustFix.length > 0) {
+    const truncated = mustFix.length > MUSTFIX_SUMMARY_MAX_LEN
+      ? `${mustFix.slice(0, MUSTFIX_SUMMARY_MAX_LEN)}…（截断，完整报告见 changes/machine-check-*.md）`
+      : mustFix;
+    return `${head}\n\nmustFix:\n${truncated}`;
+  }
+  return head;
 }

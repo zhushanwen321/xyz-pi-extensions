@@ -230,5 +230,9 @@ describe("E2E topicDir（TEST-DIVERGENCE-01）— 经 execute() composition root
     expect(planned.details.mustFix).toBeDefined();
     // fail 时 nextAction 指向重试 plan（不是 dev），防 agent 误推进
     expect(planned.details.nextAction.action).toBe("plan");
+    // renderSummary 必须把 mustFix 输出到 content 文本，否则 agent 在 TUI 看不到具体 fail 清单
+    // （Bug 3 修复：旧版 renderSummary 只输出 guidance，agent 拿到「修 mustFix」却看不到 mustFix 是什么）
+    expect(planned.content[0]?.text).toContain("mustFix:");
+    expect(planned.content[0]?.text).toContain("plan.md 存在");
   });
 });
