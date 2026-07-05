@@ -52,6 +52,13 @@ export function handleDev(params: DevParams, deps: ActionDeps): ActionResult {
   deps.store.transaction(() => {
     // 渐进式：逐 task GitValidator，部分 fail 不阻塞（#3 AC-3.4）。
     for (const task of params.tasks) {
+      // m-3: 先校验 waveId 存在。原实现 setWaveCommitted 的 UPDATE 影响 0 行无报错，
+      // 未知 waveId 静默成功（taskResults 仍记 valid:true），agent 误以为已提交。
+      const wave = topic.waves.find((w) => w.id === task.waveId);
+      if (!wave) {
+        taskResults.push({ waveId: task.waveId, valid: false, reason: "wave not found" });
+        continue;
+      }
       const v = deps.git.validate(task.commitHash);
       if (v.valid) {
         deps.store.setWaveCommitted(params.topicId, task.waveId, task.commitHash);

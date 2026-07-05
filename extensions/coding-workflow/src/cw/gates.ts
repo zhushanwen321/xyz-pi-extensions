@@ -79,7 +79,7 @@ export const GATE_REGISTRY: GateRule[] = [
   { tier: "lite", phase: "plan", checkers: [buildChecker("check_plan.py")], gateTier: "weak-structural" },
   { tier: "lite", phase: "dev", checkers: [], gateTier: "medium-git", progressive: true },
   { tier: "lite", phase: "test", checkers: [], gateTier: "strong-recompute", progressive: true },
-  { tier: "lite", phase: "retrospect", checkers: [], gateTier: "weak-structural" },
+  { tier: "lite", phase: "retrospect", checkers: [], gateTier: "weak-structural", progressive: true },
   { tier: "lite", phase: "closeout", checkers: [buildChecker("check_closeout.py")], gateTier: "weak-structural" },
   // mid
   {
@@ -101,7 +101,7 @@ export const GATE_REGISTRY: GateRule[] = [
   },
   { tier: "mid", phase: "dev", checkers: [], gateTier: "medium-git", progressive: true },
   { tier: "mid", phase: "test", checkers: [], gateTier: "medium-coverage", progressive: true },
-  { tier: "mid", phase: "retrospect", checkers: [], gateTier: "weak-structural" },
+  { tier: "mid", phase: "retrospect", checkers: [], gateTier: "weak-structural", progressive: true },
   { tier: "mid", phase: "closeout", checkers: [buildChecker("check_closeout.py")], gateTier: "weak-structural" },
 ];
 
@@ -243,6 +243,26 @@ export class GitValidator {
   constructor(private workspacePath: string) {}
 
   validate(commitHash: string): CommitValidation {
+    // m-5: 非 git 仓库早返。原实现三命令全非零退出，reason 拼成 "cat-file,merge-base,empty"，
+    // agent 看不到「not a git repo」根因。先跑 rev-parse 探测，非仓库直接返明确 reason。
+    try {
+      execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+        cwd: this.workspacePath,
+        encoding: "utf8",
+        stdio: "ignore",
+      });
+    } catch (e) {
+      if (isENOENT(e)) throw e;
+      return {
+        commitHash,
+        exists: false,
+        inRepo: false,
+        nonEmpty: false,
+        valid: false,
+        reason: "not a git repo",
+      };
+    }
+
     let exists = false;
     let inRepo = false;
     let nonEmpty = false;
@@ -291,5 +311,36 @@ export class GitValidator {
       reason = parts.join(",");
     }
     return { commitHash, exists, inRepo, nonEmpty, valid, reason };
+  }
+
+  /**
+   * 校验 commitHash 是否可追溯到任一给定的祖先 commit（M-1）。
+   *
+   * 用于 mid test gate：submission.commitHash 必须是某 dev wave commit 的后裔（或相等），
+   * 防止 agent 提交与 dev 工作无关的 hash 蒙混过 medium-coverage gate。
+   *
+   * 实现：`git merge-base --is-ancestor <ancestor> <commitHash>` 退出码 0
+   * 表示 ancestor 是 commitHash 的祖先（或两者相同）。任一 ancestor 通过即返 true。
+   *
+   * @param commitHash 待校验的提交（mid test submission）
+   * @param ancestors  dev wave commits 集合（topic.waves[*].committed，过滤 null）
+   * @returns true 若 commitHash 是任一 ancestor 的后裔或相等
+   */
+  isAncestorOfAny(commitHash: string, ancestors: readonly string[]): boolean {
+    if (ancestors.length === 0) return false;
+    for (const ancestor of ancestors) {
+      try {
+        execFileSync("git", ["merge-base", "--is-ancestor", ancestor, commitHash], {
+          cwd: this.workspacePath,
+          encoding: "utf8",
+          stdio: "ignore",
+        });
+        return true;
+      } catch (e) {
+        if (isENOENT(e)) throw e;
+        // 非零退出 = ancestor 不是 commitHash 的祖先，试下一个
+      }
+    }
+    return false;
   }
 }

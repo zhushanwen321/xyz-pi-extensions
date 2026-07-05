@@ -123,6 +123,34 @@ describe("runCheckNfr（移植自 check_nfr.py）", () => {
     expect(out.passed).toBe(false);
   });
 
+  it("B1 — nfr 模板图例 + 回灌指针表延期承诺说明 ❌ 不计为残留（agent 保留模板不 FAIL）", () => {
+    const topicDir = makeTmpTopicDir();
+    writeFileSync(join(topicDir, "non-functional-design.md"), [
+      "---", "verdict: pass", "---",
+      "", "# NFR",
+      "## 风险分析矩阵",
+      "| Issue | 方案 | 安全 |",
+      "|-------|------|------|",
+      "| #1 | 方案A | ⚠️ |",
+      "",
+      "（✅ 无风险 / ⚠️ 有风险已缓解 / ❌ 不可接受需回退 / — 不适用+理由）",
+      "",
+      "> 延期承诺说明：❌ ⑤还没写，查不了 / ❌ ⑥还没编排，查不了",
+      "",
+      "## 残余风险登记",
+      "",
+      "## 缓解项回灌登记",
+      "| 缓解项 | 回灌去向 | 验收方式 | 状态 |",
+      "|--------|---------|---------|------|",
+      "| 幂等键 | ③#1 | 代码测试 | 待落 |",
+    ].join("\n"));
+    writeFileSync(join(topicDir, "issues.md"), "# Issues\n## #1 性能优化\n");
+    writeApprovedReview(topicDir);
+    const out = runCheckNfr(topicDir);
+    expect(out.passed).toBe(true);
+    expect(out.report).toContain("PASS");
+  });
+
   it("FAIL — 回灌指向不存在的 issue（PHANTOM）→ passed:false", () => {
     const topicDir = makeTmpTopicDir();
     writeFileSync(join(topicDir, "non-functional-design.md"), [
@@ -155,6 +183,26 @@ describe("runCheckNfr（移植自 check_nfr.py）", () => {
     writeApprovedReview(topicDir);
     const out = runCheckNfr(topicDir);
     expect(out.passed).toBe(true); // PHANTOM 跳过，不 fail
+  });
+
+  it("C2 — verdict 大小写不敏感（frontmatter 'Pass' / review 'approved' 也通过）", () => {
+    const topicDir = makeTmpTopicDir();
+    writeFileSync(join(topicDir, "non-functional-design.md"), [
+      "---", "verdict: Pass", "---",  // 大小写混合
+      "", "# NFR",
+      "## 风险分析矩阵", "| 风险 | 影响 |",
+      "## 缓解项回灌登记",
+      "| 风险 | 回灌去向 | 验收方式 | 状态 |",
+      "|------|---------|---------|------|",
+      "| 性能 | ③#1 | 代码测试 | PASS |",
+    ].join("\n"));
+    writeFileSync(join(topicDir, "issues.md"), "# Issues\n## #1 性能优化\n");
+    // review verdict 小写 'approved'
+    writeFileSync(join(topicDir, "changes", "review-nfr.md"), [
+      "---", "verdict: approved", "---", "review stub",
+    ].join("\n"));
+    const out = runCheckNfr(topicDir);
+    expect(out.passed).toBe(true);
   });
 
   it("写报告到 changes/machine-check-nfr.md", () => {

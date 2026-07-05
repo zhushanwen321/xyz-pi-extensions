@@ -592,7 +592,7 @@ describe("buildNextAction — tier+status+gatePassed 推导（#9 扁平）", () 
     expect(n.guidance).toContain("FAIL");
   });
 
-  it("dev 全 committed → test（skill 留空 §10.4）+ waves 全 committed + testCases 预览", () => {
+  it("dev 全 committed → test / coding-execute（test 阶段对齐 SKILL.md）+ waves 全 committed + testCases 预览", () => {
     const topic = makeTopic({
       status: "developed",
       waves: [makeWave({ id: "w1", committed: "abc" })],
@@ -603,7 +603,7 @@ describe("buildNextAction — tier+status+gatePassed 推导（#9 扁平）", () 
     });
     const n = buildNextAction("dev", topic);
     expect(n.action).toBe("test");
-    expect(n.skill).toBeUndefined();
+    expect(n.skill).toBe("coding-execute");
     expect(n.waves).toEqual([{ id: "w1", committed: true }]);
     expect(n.testCases).toEqual([
       { id: "E1", status: "pending" },
@@ -638,7 +638,7 @@ describe("buildNextAction — tier+status+gatePassed 推导（#9 扁平）", () 
     expect(n.skill).toBe("coding-retrospect");
   });
 
-  it("test 未全 passed → 继续test（skill 留空 §10.4）+ testCases 进度", () => {
+  it("test 未全 passed → 继续test / coding-execute（对齐 SKILL.md）+ testCases 进度", () => {
     const topic = makeTopic({
       status: "tested",
       testCases: [
@@ -648,7 +648,7 @@ describe("buildNextAction — tier+status+gatePassed 推导（#9 扁平）", () 
     });
     const n = buildNextAction("test", topic);
     expect(n.action).toBe("test");
-    expect(n.skill).toBeUndefined();
+    expect(n.skill).toBe("coding-execute");
     expect(n.testCases).toEqual([
       { id: "E1", status: "passed" },
       { id: "E2", status: "pending" },

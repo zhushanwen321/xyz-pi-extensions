@@ -84,14 +84,46 @@ export function runCheckNfr(topicDir: string): CheckOutput {
   }
 
   // ② 无 ❌（不可接受）项残留
+  //
+  // nfr 模板自身含合法 ❌ 字符（B1 修复）：
+  //   - 图例行：`（✅ 无风险 / ⚠️ 有风险已缓解 / ❌ 不可接受需回退 / — 不适用+理由）`
+  //   - 回灌指针表说明行：`❌ ⑤还没写，查不了` / `❌ ⑥还没编排，查不了`（延期承诺标记）
+  // 全文 grep ❌ 会误伤这些合法说明行，导致 agent 保留模板图例就 FAIL。
+  //
+  // 过滤策略（按行扫描，跳过说明性 ❌）：
+  //   1. 图例行：同一行同时含 ✅ 和 ⚠️（4 个状态符号并列）→ 跳过
+  //   2. 回灌指针表延期承诺说明：含「还没」/「查不了」→ 跳过
+  //   3. 元描述（描述 ❌ 自身含义）：含「无风险」/「有风险已缓解」/「不适用」/
+  //      「不残留」/「不可接受需回退」→ 跳过
+  //   4. 兜底原过滤：「无 ❌」前缀（如"无 ❌ 项"）→ 跳过
   const content = readText(mdPath);
-  const unacceptable = content.match(/❌[^\n]*/g) ?? [];
-  // 过滤掉说明性文字里的 ❌（如"无 ❌ 项"）
-  const realUnacceptable = unacceptable.filter((u) => !u.slice(0, 3).includes("无") && !u.includes("不残留"));
+  const realUnacceptable: string[] = [];
+  for (const rawLine of content.split(/\r?\n/)) {
+    if (!rawLine.includes("❌")) continue;
+    // 图例行（4 状态符号并列）
+    if (rawLine.includes("✅") && rawLine.includes("⚠️")) continue;
+    // 回灌指针表延期承诺说明
+    if (rawLine.includes("还没") || rawLine.includes("查不了")) continue;
+    // 元描述：解释 ❌ 含义的说明文字
+    if (
+      rawLine.includes("无风险") ||
+      rawLine.includes("有风险已缓解") ||
+      rawLine.includes("不适用") ||
+      rawLine.includes("不残留") ||
+      rawLine.includes("不可接受需回退")
+    ) {
+      continue;
+    }
+    // 兜底原过滤：「无 ❌」前缀（如"无 ❌ 项"）
+    const idx = rawLine.indexOf("❌");
+    const before = rawLine.slice(Math.max(0, idx - 3), idx);
+    if (before.includes("无")) continue;
+    realUnacceptable.push(rawLine.trim());
+  }
   if (realUnacceptable.length > 0) {
     report.addFail(
       "无 ❌ 不可接受项",
-      `残留 ${realUnacceptable.length} 处 ❌（不可接受项应已回 Step 3 重选方案）`,
+      `残留 ${realUnacceptable.length} 处 ❌（不可接受项应已回 Step 3 重选方案）: ${JSON.stringify(realUnacceptable.slice(0, 3))}`,
     );
   } else {
     report.addPass("无 ❌ 不可接受项", "无不可接受项残留");

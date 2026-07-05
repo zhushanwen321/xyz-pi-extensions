@@ -111,6 +111,14 @@ describe("GATE_REGISTRY", () => {
       expect(liteDev!.checkers).toHaveLength(0);
     }
   });
+
+  it("m-6 — retrospect 行 progressive:true（与 TRANSITIONS.retrospect.progressive=true 对齐）", () => {
+    for (const tier of ["lite", "mid"] as const) {
+      const rule = GATE_REGISTRY.find((r) => r.tier === tier && r.phase === "retrospect");
+      expect(rule).toBeDefined();
+      expect(rule!.progressive).toBe(true);
+    }
+  });
 });
 
 // ── lookupGateTier（progressive 透传 gateTier） ──────────────
@@ -213,10 +221,17 @@ describe("GitValidator.validate", () => {
     mergeBaseThrows?: boolean;
     diffTreeOutput?: string;
     enoent?: boolean;
+    /** m-5: rev-parse --is-inside-work-tree 是否 throw（非 git 仓库场景） */
+    revParseThrows?: boolean;
   }): void {
     mocks.execFileSync.mockImplementation((cmd: string, args: readonly string[]) => {
       if (opts.enoent) throw gitEnoentError();
       const sub = args[0];
+      if (sub === "rev-parse") {
+        // m-5: rev-parse --is-inside-work-tree 探测。默认成功（在 git 仓库内）。
+        if (opts.revParseThrows) throw gitExitError(128);
+        return "true\n";
+      }
       if (sub === "cat-file") {
         if (opts.catFileThrows) throw gitExitError(128);
         return "";
@@ -269,5 +284,15 @@ describe("GitValidator.validate", () => {
   it("T2.15 — git ENOENT（可执行文件缺失）→ throw infra-error，不是业务 fail", () => {
     mockGit({ enoent: true });
     expect(() => new GitValidator("/tmp/ws").validate("abc1234")).toThrow(/ENOENT|git/);
+  });
+
+  it("m-5 — 非 git 仓库（rev-parse 非零退出）→ valid:false, reason='not a git repo'（不跑后续三命令）", () => {
+    mockGit({ revParseThrows: true });
+    const v = new GitValidator("/tmp/ws").validate("abc1234");
+    expect(v.valid).toBe(false);
+    expect(v.reason).toBe("not a git repo");
+    expect(v.exists).toBe(false);
+    expect(v.inRepo).toBe(false);
+    expect(v.nonEmpty).toBe(false);
   });
 });

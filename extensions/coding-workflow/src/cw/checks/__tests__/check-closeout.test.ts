@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runCheckCloseout } from "../check-closeout.js";
+import { resolveProjectRoot } from "../shared.js";
 
 const tmpDirs: string[] = [];
 const SLUG = "add-search-feature";
@@ -176,5 +177,16 @@ describe("runCheckCloseout（移植自 check_closeout.py）", () => {
       `# Product\n[from: ${SLUG}] 迁移到 docs/\n`);
     const out = runCheckCloseout(topicDir);
     expect(out.passed).toBe(true);
+  });
+
+  it("RESOLVE-PROJECTROOT-01 — fallback：topicDir 不含 .xyz-harness 时返回 topicDir 本身（非父目录）", () => {
+    // ROOT-01 修复后 topicDir 永远含 .xyz-harness，但 fallback 逻辑本身不能错
+    // （旧库迁移、自定义路径场景）。原实现 return dirname(topicDir) 返回父目录（错误）。
+    const projectRoot = mkdtempSync(join(tmpdir(), "cw-projroot-fallback-"));
+    tmpDirs.push(projectRoot);
+    // topicDir = projectRoot（不含 .xyz-harness，模拟旧库/自定义）
+    expect(resolveProjectRoot(projectRoot)).toBe(projectRoot);
+    // 带尾斜杠也应 normalize
+    expect(resolveProjectRoot(`${projectRoot}/`)).toBe(projectRoot);
   });
 });

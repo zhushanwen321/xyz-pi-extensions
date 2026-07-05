@@ -49,8 +49,9 @@ export function runCheckIssues(topicDir: string): CheckOutput {
   const pLevels = extractPLevels(mdPath);
   const content = readText(mdPath);
   const insufficientSolutions: string[] = [];
-  // 精确匹配 ## #N 标题分段（\Z → (?![\s\S])；DOTALL|MULTILINE → gs flag）
-  const issueSegmentRe = /^##\s+#(\d+)[^\n]*\n([\s\S]*?)(?=^##\s+#\d+|(?![\s\S]))/gm;
+  // 精确匹配 ## #N 或 ### #N 标题分段（\Z → (?![\s\S])；DOTALL|MULTILINE → gs flag）
+  // B3: 正则 ^#{2,3}\s+#(\d+) 同时匹配 ## #N 与 ### #N（与 ISSUE_HEADING_RE 对齐）
+  const issueSegmentRe = /^#{2,3}\s+#(\d+)[^\n]*\n([\s\S]*?)(?=^#{2,3}\s+#\d+|(?![\s\S]))/gm;
   for (const m of content.matchAll(issueSegmentRe)) {
     const issueNum = m[1]!;
     const body = m[2]!;

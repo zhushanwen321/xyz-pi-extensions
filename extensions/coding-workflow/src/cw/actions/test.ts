@@ -21,7 +21,7 @@ import {
   guard,
 } from "../state-machine.js";
 import { judgeByExpected } from "../types.js";
-import type { ActionDeps, ActionResult, Actual, Expected, TestCase } from "../types.js";
+import type { ActionDeps, ActionResult, Actual, CwTopic, Expected, TestCase } from "../types.js";
 
 export interface TestCaseSubmission {
   caseId: string;
@@ -64,15 +64,28 @@ export function handleTest(params: TestParams, deps: ActionDeps): ActionResult {
     for (const submission of params.cases) {
       const tc = topic.testCases.find((c) => c.id === submission.caseId);
       if (!tc) {
-        caseResults.push({
-          caseId: submission.caseId,
-          status: "failed",
-          failureReason: "case not found",
-        });
-        continue;
+        // m-2: case not found 应为硬错（与 topic not found 一致）。原实现只记 failed 不阻断，
+        // gatePassed 仍可能 true 但 gateHistory 污染（result=fail 但 status 流转）。改为 throw
+        // 让调用方明确知道提交了不存在的 caseId（plan 与 test 提交取活不一致）。
+        throw new Error(`case not found: ${submission.caseId}`);
       }
       // 双分支（D-008）。
       if (topic.tier === "lite") {
+        // m-1: lite expected 为空（url/text 都缺）时 judgeByExpected 永远返 failed，
+        // topic 卡死。这是 plan 阶段不应产出的畸形数据，提前给明确错误。
+        if (!tc.expected?.url && !tc.expected?.text) {
+          const patch: Partial<TestCase> = {
+            status: "failed",
+            failureReason: "expected 为空（无 url/text），plan 阶段不应产空 expected",
+          };
+          deps.store.updateTestCase(params.topicId, submission.caseId, patch);
+          caseResults.push({
+            caseId: submission.caseId,
+            status: "failed",
+            failureReason: patch.failureReason,
+          });
+          continue;
+        }
         const judged = judgeLite(tc.expected, submission);
         deps.store.updateTestCase(params.topicId, submission.caseId, judged.patch);
         caseResults.push({
@@ -81,7 +94,7 @@ export function handleTest(params: TestParams, deps: ActionDeps): ActionResult {
           failureReason: judged.reason,
         });
       } else {
-        const judged = judgeMid(submission, deps);
+        const judged = judgeMid(submission, deps, topic);
         deps.store.updateTestCase(params.topicId, submission.caseId, judged.patch);
         caseResults.push({
           caseId: submission.caseId,
@@ -149,9 +162,18 @@ function judgeLite(
 
 // ── mid 分支：medium-coverage（信声明 + GitValidator） ───────
 
+/**
+ * 收集 topic 所有 dev wave 的 committed hash（M-1 traceability 用）。
+ * mid test submission.commitHash 必须是这些 hash 之一的后裔，证明测试覆盖的是真实 dev 工作。
+ */
+function collectDevCommits(topic: CwTopic): string[] {
+  return topic.waves.map((w) => w.committed).filter((c): c is string => c !== null);
+}
+
 function judgeMid(
   submission: TestCaseSubmission,
   deps: ActionDeps,
+  topic: CwTopic,
 ): { patch: Partial<TestCase>; reason?: string } {
   // 数据流：GitValidator 校验 commitHash 真实（AC-4.3），信 claimedStatus。
   if (!submission.commitHash) {
@@ -162,6 +184,22 @@ function judgeMid(
     return {
       patch: { status: "failed", commitHash: submission.commitHash },
       reason: `invalid commit: ${v.reason ?? "unknown"}`,
+    };
+  }
+  // M-1: commitHash 可追溯性校验。原 judgeMid 只调 git.validate（通用三项），
+  // 任何仓库内合法 commit 都过——agent 可提交与 dev wave 完全无关的 hash 蒙混
+  // medium-coverage gate。现要求 commitHash 是某 dev wave commit 的后裔（或相等）。
+  const devCommits = collectDevCommits(topic);
+  if (devCommits.length === 0) {
+    return {
+      patch: { status: "failed", commitHash: submission.commitHash },
+      reason: "no dev commit in topic (dev wave 未 committed)",
+    };
+  }
+  if (!deps.git.isAncestorOfAny(submission.commitHash, devCommits)) {
+    return {
+      patch: { status: "failed", commitHash: submission.commitHash },
+      reason: `commitHash 不在已 committed 的 dev wave 后裔中 (dev commits: ${JSON.stringify(devCommits)})`,
     };
   }
   // 信声明（medium-coverage，不重算断言）。

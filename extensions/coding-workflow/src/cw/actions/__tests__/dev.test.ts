@@ -274,4 +274,29 @@ describe("handleDev", () => {
     ]);
     closeStore(store);
   });
+
+  it("m-3 — 未知 waveId → task fail (reason='wave not found')，不静默成功", () => {
+    const ws = makeTmpWorkspace();
+    const { deps, store } = makeDeps(ws);
+    const topicId = seedTopic(store, {
+      topicId: "cw-dev-unknown-wave",
+      slug: "dev-unknown-wave",
+      tier: "lite",
+      status: "planned",
+    });
+    store.insertWaves(topicId, TWO_WAVES);
+    vi.spyOn(GitValidator.prototype, "validate").mockReturnValue(mockValidateValid("abc"));
+
+    const result = handleDev(
+      // W99 不存在
+      { action: "dev", topicId, tasks: [{ waveId: "W99", commitHash: "abc" }] },
+      deps,
+    );
+
+    expect(result.taskResults).toEqual([{ waveId: "W99", valid: false, reason: "wave not found" }]);
+    expect(result.gatePassed.dev).toBe(false);
+    // 真实 wave 未被写入
+    expect(store.loadTopic(topicId)?.waves.every((w) => w.committed === null)).toBe(true);
+    closeStore(store);
+  });
 });

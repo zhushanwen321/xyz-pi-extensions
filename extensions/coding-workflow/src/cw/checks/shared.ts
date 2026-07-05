@@ -17,7 +17,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 // ── CheckOutput（与 gates.ts 的 CheckOutput 结构兼容，单一来源） ──
 
@@ -302,12 +302,13 @@ export function checkFrontmatterVerdict(
     return null;
   }
   const fm = parseFrontmatter(mdPath);
-  const verdict = (fm.verdict ?? "").trim();
-  if (verdict === expected) {
-    report.addPass("frontmatter verdict", `verdict: ${verdict}`);
+  // C2: verdict 大小写不敏感（trim + toUpperCase 后比对）
+  const verdict = (fm.verdict ?? "").trim().toUpperCase();
+  if (verdict === expected.toUpperCase()) {
+    report.addPass("frontmatter verdict", `verdict: ${fm.verdict ?? ""}`);
     return fm;
   }
-  report.addFail("frontmatter verdict", `期望 verdict: ${expected}，实际: '${verdict}'（${mdPath}）`);
+  report.addFail("frontmatter verdict", `期望 verdict: ${expected}，实际: '${fm.verdict ?? ""}'（${mdPath}）`);
   return null;
 }
 
@@ -383,13 +384,14 @@ export function checkReviewVerdict(
     return;
   }
   const fm = parseFrontmatter(reviewPath);
-  const verdict = (fm.verdict ?? "").trim();
-  if (verdict === expected) {
-    report.addPass(`review-${phaseSlug} verdict`, `verdict: ${verdict}`);
+  // C2: verdict 大小写不敏感（trim + toUpperCase 后比对，防 "approved"/"Approved" 静默 FAIL）
+  const verdict = (fm.verdict ?? "").trim().toUpperCase();
+  if (verdict === expected.toUpperCase()) {
+    report.addPass(`review-${phaseSlug} verdict`, `verdict: ${fm.verdict ?? ""}`);
   } else {
     report.addFail(
       `review-${phaseSlug} verdict`,
-      `期望 verdict: ${expected}，实际: '${verdict}'`,
+      `期望 verdict: ${expected}，实际: '${fm.verdict ?? ""}'`,
     );
   }
 }
@@ -471,14 +473,17 @@ export function extractTestIds(mdPath: string): string[] {
 /**
  * 提取每个 issue 的 P 级。
  *
- * 按 `## #N` 标题分段（区分 ### 子标题），找段内 `**P 级**: PX`。
+ * 按 `## #N` 或 `### #N` 标题分段（issue-template.md 用 2 井号，
+ * deliverable-template.md 嵌套示例用 3 井号，B3 修复：原正则只匹配 2 井号
+ * 导致 agent 按嵌套写则 P 级检查静默 SKIP），找段内 `**P 级**: PX`。
  * 与 python extract_p_levels 1:1 对齐（含 (?=^##\s+#\d+|\Z) 的 \Z 处理）。
  */
 export function extractPLevels(mdPath: string): Record<string, string> {
   const content = readText(mdPath);
   const result: Record<string, string> = {};
   // \Z → (?![\s\S])；re.DOTALL|MULTILINE → s+m flag
-  const re = /^##\s+#(\d+)[^\n]*\n([\s\S]*?)(?=^##\s+#\d+|(?![\s\S]))/gm;
+  // B3: 正则 ^#{2,3}\s+#(\d+) 同时匹配 ## #N 与 ### #N（与 ISSUE_HEADING_RE 对齐）
+  const re = /^#{2,3}\s+#(\d+)[^\n]*\n([\s\S]*?)(?=^#{2,3}\s+#\d+|(?![\s\S]))/gm;
   for (const m of content.matchAll(re)) {
     const issueNum = m[1]!;
     const body = m[2]!;
@@ -493,11 +498,12 @@ export function extractPLevels(mdPath: string): Record<string, string> {
  *
  * 返回 { issue_num: ['2', '3'] }（去自引用）。
  * 与 python extract_blocked_by 1:1 对齐。
+ * B3: 正则 ^#{2,3}\s+#(\d+) 同时匹配 ## #N 与 ### #N（与 ISSUE_HEADING_RE 对齐）。
  */
 export function extractBlockedBy(mdPath: string): Record<string, string[]> {
   const content = readText(mdPath);
   const result: Record<string, string[]> = {};
-  const re = /^##\s+#(\d+)[^\n]*\n([\s\S]*?)(?=^##\s+#\d+|(?![\s\S]))/gm;
+  const re = /^#{2,3}\s+#(\d+)[^\n]*\n([\s\S]*?)(?=^#{2,3}\s+#\d+|(?![\s\S]))/gm;
   for (const m of content.matchAll(re)) {
     const issueNum = m[1]!;
     const body = m[2]!;
@@ -522,14 +528,24 @@ export function extractBlockedBy(mdPath: string): Record<string, string[]> {
  */
 export const ISSUE_HEADING_RE = "^#{2,3}\\s+#(\\d+)";
 
-/** 从 topicDir 推算 project_root（`.xyz-harness` 上层）。check-closeout 用。 */
+/**
+ * 从 topicDir 推算 project_root（`.xyz-harness` 上层）。check-closeout 用。
+ *
+ * topicDir 由 create.ts 算好存入 CwTopic（= workspacePath/.xyz-harness/{slug}），
+ * ROOT-01 修复后永远含 `.xyz-harness` 段，走 if 分支正确取项目根。
+ *
+ * fallback（topicDir 不含 `.xyz-harness`，如旧库迁移、自定义路径）修法（RESOLVE-PROJECTROOT-01）：
+ * 原实现 `return dirname(topicDir)` 在 topicDir=<project_root> 时返回其**父目录**（错误），
+ * 与注释承诺的「topicDir 可能就是 project_root」矛盾。改为返回 topicDir 本身——
+ * topicDir 不含 `.xyz-harness` 时，它本身就是 project_root 的合理推测（向上找祖先不可靠，
+ * 且 check-closeout 的 findDoc 会兜底 statSync 校验文件是否存在）。
+ */
 export function resolveProjectRoot(topicDir: string): string {
-  // topicDir 通常是 <project_root>/.xyz-harness/<slug> 或 <project_root>
-  // 找 .xyz-harness 段，取其父；找不到则用 topicDir 的 dirname
   if (topicDir.includes(".xyz-harness")) {
     const idx = topicDir.indexOf(".xyz-harness");
     const root = topicDir.slice(0, idx).replace(/\/+$/, "");
     return root || "/";
   }
-  return dirname(topicDir);
+  // fallback：topicDir 不含 .xyz-harness 时，视为 project_root 本身（非其父目录）。
+  return topicDir.replace(/\/+$/, "");
 }

@@ -301,9 +301,13 @@ export function buildNextAction(action: CwAction, topic: CwTopic): NextAction {
       if (computeGatePassed("dev", topic)) {
         return {
           action: "test",
-          // §10.4：test 阶段无专用 skill——agent 直接执行测试（可经 coding-execute skill 的 test 派发）后调 cw test
+          // §10.4：test 阶段对齐 coding-execute skill（test-runner 由它派发）
+          skill: "coding-execute",
+          // tier 分流：lite test 走 actual/screenshotPath，mid test 走 commitHash/claimedStatus
           guidance:
-            "所有 Wave 已 committed，dev 阶段完成。下一步：执行 testCases（可经 coding-execute skill 派发 test-runner），跑完调 cw test 提交 actual/screenshotPath。",
+            topic.tier === "lite"
+              ? "所有 Wave 已 committed，dev 阶段完成。下一步：调 coding-execute skill 派发 test-runner 执行 testCases，跑完调 cw test 提交 actual/screenshotPath。"
+              : "所有 Wave 已 committed，dev 阶段完成。下一步：调 coding-execute skill 派发 test-runner 执行 testCases，跑完调 cw test 提交 commitHash/claimedStatus。",
           waves: waveProgress(topic),
           testCases: testCaseProgress(topic),
         };
@@ -328,7 +332,8 @@ export function buildNextAction(action: CwAction, topic: CwTopic): NextAction {
       }
       return {
         action: "test",
-        // §10.4：test 阶段无专用 skill
+        // §10.4：test 进行中亦对齐 coding-execute skill（修复/补跑仍经它派发）
+        skill: "coding-execute",
         guidance:
           "test 阶段进行中，仍有 testCase 未 passed。下一步：继续执行剩余 testCase（修复 failed / 补跑 pending），跑完调 cw test 提交结果。",
         testCases: testCaseProgress(topic),

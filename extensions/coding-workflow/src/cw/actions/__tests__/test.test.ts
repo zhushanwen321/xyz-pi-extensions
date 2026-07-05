@@ -174,6 +174,8 @@ describe("handleTest — mid 分支（信声明 + GitValidator）", () => {
       testCases: [MID_CASE],
     });
     vi.spyOn(GitValidator.prototype, "validate").mockReturnValue(mockValidateValid("devcommit"));
+    // M-1: mock traceability 通过（dev commit 是 submission 的祖先）
+    vi.spyOn(GitValidator.prototype, "isAncestorOfAny").mockReturnValue(true);
 
     const result = handleTest(
       {
@@ -190,6 +192,35 @@ describe("handleTest — mid 分支（信声明 + GitValidator）", () => {
     expect(store.loadTopic(topicId)?.testCases.find((c) => c.id === "M1")?.commitHash).toBe(
       "devcommit",
     );
+    closeStore(store);
+  });
+
+  it("M-1 — mid commitHash valid 但不追溯任何 dev wave commit → failed（防提交无关 hash 蒙混 medium-coverage）", () => {
+    const ws = makeTmpWorkspace();
+    const { deps, store } = makeDeps(ws);
+    const topicId = seedDevelopedTopic(store, {
+      topicId: "cw-test-mid-untraceable",
+      slug: "test-mid-untraceable",
+      tier: "mid",
+      waves: ONE_WAVE,
+      testCases: [MID_CASE],
+    });
+    vi.spyOn(GitValidator.prototype, "validate").mockReturnValue(mockValidateValid("stray"));
+    // M-1: traceability 检查返 false（commitHash 不是任何 dev commit 的后裔）
+    vi.spyOn(GitValidator.prototype, "isAncestorOfAny").mockReturnValue(false);
+
+    const result = handleTest(
+      {
+        action: "test",
+        topicId,
+        cases: [{ caseId: "M1", commitHash: "stray", claimedStatus: "passed" }],
+      },
+      deps,
+    );
+
+    expect(result.caseResults[0].status).toBe("failed");
+    expect(result.caseResults[0].failureReason).toContain("不在已 committed 的 dev wave");
+    expect(result.gatePassed.test).toBe(false);
     closeStore(store);
   });
 
@@ -362,6 +393,63 @@ describe("handleTest — 渐进式 + 状态流转", () => {
 
     expect(result.status).toBe("tested"); // progressive 已处 nextStatus，不流转
     expect(result.gatePassed.test).toBe(true); // 现在 E1/E2 都 passed
+    closeStore(store);
+  });
+});
+
+describe("handleTest — m-1/m-2 边界修复", () => {
+  it("m-1 — lite expected 为空（无 url/text）→ failed + 明确错误（防 topic 卡死）", () => {
+    const ws = makeTmpWorkspace();
+    const { deps, store } = makeDeps(ws);
+    const topicId = seedDevelopedTopic(store, {
+      topicId: "cw-test-empty-expected",
+      slug: "test-empty-expected",
+      tier: "lite",
+      waves: ONE_WAVE,
+      // expected 完全为空（畸形 plan 数据）
+      testCases: [{ ...URL_CASE, expected: undefined }],
+    });
+    const shot = writeShot(ws);
+
+    const result = handleTest(
+      {
+        action: "test",
+        topicId,
+        cases: [{ caseId: "E1", actual: { url: "/dashboard" }, screenshotPath: shot }],
+      },
+      deps,
+    );
+
+    expect(result.caseResults[0].status).toBe("failed");
+    expect(result.caseResults[0].failureReason).toContain("expected 为空");
+    expect(result.gatePassed.test).toBe(false);
+    closeStore(store);
+  });
+
+  it("m-2 — case not found → throw（与 topic not found 一致的硬错，不静默污染 gateHistory）", () => {
+    const ws = makeTmpWorkspace();
+    const { deps, store } = makeDeps(ws);
+    const topicId = seedDevelopedTopic(store, {
+      topicId: "cw-test-case-not-found",
+      slug: "test-case-not-found",
+      tier: "lite",
+      waves: ONE_WAVE,
+      testCases: [URL_CASE],
+    });
+    const shot = writeShot(ws);
+
+    expect(() =>
+      handleTest(
+        {
+          action: "test",
+          topicId,
+          // E99 不存在
+          cases: [{ caseId: "E99", actual: { url: "/dashboard" }, screenshotPath: shot }],
+        },
+        deps,
+      ),
+    ).toThrow(/case not found: E99/);
+
     closeStore(store);
   });
 });
