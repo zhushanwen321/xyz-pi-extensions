@@ -131,10 +131,15 @@ describe("coding-workflow SDK contract [MANDATORY]", () => {
     expect(capturedExecute).toBeDefined();
 
     // create action：构造临时 workspace，让 CwStore 能建 _cw.db。
-    // execute 内部会 new CwStore(workspacePath/.xyz-harness/_cw.db)。
+    // execute 内部会 new CwStore(resolveCwDbPath(workspacePath))，db 落
+    // ~/.pi/agent/cw/<encoded-cwd>/_cw.db（全局，见 index.ts resolveCwDbPath）。
     const workspacePath = `/tmp/cw-sdk-contract-${Date.now()}`;
     const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
     fs.mkdirSync(`${workspacePath}/.xyz-harness`, { recursive: true });
+    const { encodeCwd } = await import("../cw/path-encoding.js");
+    const globalCwDir = path.join(os.homedir(), ".pi", "agent", "cw", encodeCwd(workspacePath));
     try {
       const result = await capturedExecute!(
         "call-1",
@@ -148,6 +153,8 @@ describe("coding-workflow SDK contract [MANDATORY]", () => {
       expect(result.details.status).toBe("created");
     } finally {
       fs.rmSync(workspacePath, { recursive: true, force: true });
+      // 全局 db 目录也要清，否则 ~/.pi/agent/cw/ 积累测试垃圾
+      fs.rmSync(globalCwDir, { recursive: true, force: true });
     }
   });
 
@@ -161,13 +168,18 @@ describe("coding-workflow SDK contract [MANDATORY]", () => {
     registerCodingWorkflowTool(pi);
     const workspacePath = `/tmp/cw-sdk-contract-err-${Date.now()}`;
     const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
     fs.mkdirSync(`${workspacePath}/.xyz-harness`, { recursive: true });
+    const { encodeCwd } = await import("../cw/path-encoding.js");
+    const globalCwDir = path.join(os.homedir(), ".pi", "agent", "cw", encodeCwd(workspacePath));
     try {
       await expect(
         capturedExecute!("call-2", { action: "bogus", workspacePath }, undefined),
       ).rejects.toThrow(/unknown action/);
     } finally {
       fs.rmSync(workspacePath, { recursive: true, force: true });
+      fs.rmSync(globalCwDir, { recursive: true, force: true });
     }
   });
 

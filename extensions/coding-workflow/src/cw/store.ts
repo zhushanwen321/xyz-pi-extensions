@@ -13,6 +13,8 @@
  * 可测性（AC-1.5）：DatabaseSync 可注入 mock，DAO 是纯数据访问。
  */
 
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from "node:sqlite";
 
 import type {
@@ -157,6 +159,9 @@ export class CwStore {
 
   constructor(dbPath: string) {
     // SDK 契约：node:sqlite DatabaseSync 构造打开连接（D-016 实测：ESM import + 文件持久化 OK）。
+    // 父目录自动创建：全局路径（~/.pi/agent/cw/<encoded-cwd>/）首次使用时目录可能不存在，
+    // sqlite 不会自动建父目录。项目内路径（旧版 .xyz-harness/）也兼容——mkdirSync 已存在不报错。
+    mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new DatabaseSync(dbPath);
     this.init();
   }

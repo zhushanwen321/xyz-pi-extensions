@@ -18,14 +18,16 @@
 //     期望 fail → RED。修复后 runCheckPlan 只看 .xyz-harness/{slug}/，项目根的文件被忽略 →
 //     gate fail → GREEN。此用例专门防护「把 topicDir 退回 workspacePath」的回归。
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { registerCodingWorkflowTool } from "../index.js";
+import { encodeCwd } from "../cw/path-encoding.js";
 import type { ActionResult } from "../cw/types.js";
+import { registerCodingWorkflowTool } from "../index.js";
 
 // ── execute 签名/返回类型 ────────────────────────────────────
 
@@ -141,13 +143,24 @@ afterEach(() => {
     const ws = tmpWorkspaces.pop()!;
     try {
       rmSync(ws, { recursive: true, force: true });
-    } catch {
-      /* best-effort：tmp 目录由 OS 兜底 */
+    } catch (e) {
+      // best-effort：tmp 目录由 OS 兜底。日志吞掉但记录避免完全静默。
+      void e;
+    }
+    // _cw.db 现落 ~/.pi/agent/cw/<encoded-cwd>/（全局，见 resolveCwDbPath），
+    // tmp ws 清理外还要清 homedir 下的测试 db 遗留，否则 ~/.pi/agent/cw/ 积累一堆测试垃圾。
+    const encoded = encodeCwd(ws);
+    const globalCwDir = join(homedir(), ".pi", "agent", "cw", encoded);
+    try {
+      rmSync(globalCwDir, { recursive: true, force: true });
+    } catch (e) {
+      // best-effort：可能未创建（测试失败前置）。日志吞掉但记录避免完全静默。
+      void e;
     }
   }
 });
 
-/** 建临时项目根 + .xyz-harness/ 子目录（execute() 会 new CwStore(`${ws}/.xyz-harness/_cw.db`)）。 */
+/** 建临时项目根 + .xyz-harness/ 子目录（_cw.db 全局落在 ~/.pi/agent/cw/<encoded-ws>/，交付物仍在 {ws}/.xyz-harness/{slug}/）。 */
 function makeTmpWorkspace(): string {
   const ws = mkdtempSync(join(tmpdir(), "cw-e2e-topicdir-"));
   tmpWorkspaces.push(ws);
@@ -234,5 +247,30 @@ describe("E2E topicDir（TEST-DIVERGENCE-01）— 经 execute() composition root
     // （Bug 3 修复：旧版 renderSummary 只输出 guidance，agent 拿到「修 mustFix」却看不到 mustFix 是什么）
     expect(planned.content[0]?.text).toContain("mustFix:");
     expect(planned.content[0]?.text).toContain("plan.md 存在");
+  });
+
+  it("_cw.db 全局存储：落 ~/.pi/agent/cw/<encoded-cwd>/，项目目录无污染", async () => {
+    const execute = captureExecute();
+    const ws = makeTmpWorkspace();
+    const slug = "db-location-test";
+
+    await execute("e2e-db-loc", {
+      action: "create",
+      slug,
+      tier: "lite",
+      objective: "verify global db",
+      workspacePath: ws,
+    }, undefined);
+
+    // 1. _cw.db 落全局 ~/.pi/agent/cw/<encoded-ws>/_cw.db
+    const expectedGlobalDb = join(homedir(), ".pi", "agent", "cw", encodeCwd(ws), "_cw.db");
+    expect(existsSync(expectedGlobalDb)).toBe(true);
+
+    // 2. 项目目录无 _cw.db（旧版位置）
+    expect(existsSync(join(ws, ".xyz-harness", "_cw.db"))).toBe(false);
+
+    // 3. 项目根无 cw 污染（无 changes/ 等）
+    expect(readdirSync(ws).filter((f) => f !== ".xyz-harness")).toEqual([]);
+    expect(readdirSync(join(ws, ".xyz-harness")).filter((f) => f !== slug)).toEqual([]);
   });
 });

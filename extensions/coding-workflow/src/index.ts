@@ -7,6 +7,9 @@
  * 错误模式（项目规范）：handler throw new Error，Pi 捕获转述 agent。不返回伪装成功 content。
  */
 
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
@@ -20,6 +23,7 @@ import { handlePlan, type PlanParams } from "./cw/actions/plan.js";
 import { handleRetrospect, type RetrospectParams } from "./cw/actions/retrospect.js";
 import { handleTest, type TestParams } from "./cw/actions/test.js";
 import { GateRunner, GitValidator } from "./cw/gates.js";
+import { encodeCwd } from "./cw/path-encoding.js";
 import {
   LitePlanSchema,
   MidClarifySchema,
@@ -168,8 +172,10 @@ export function registerCodingWorkflowTool(pi: ExtensionAPI): void {
       "mid test = medium-coverage (trusts agent-declared status + GitValidator on commitHash).",
       "lite test 还要求 screenshotPath 指向已存在的截图文件（缺失即 failed），",
       "mid test 要求 commitHash + claimedStatus。",
-      "workspacePath 默认 process.cwd()，决定 _cw.db 位置",
-      "(${workspacePath}/.xyz-harness/_cw.db)；monorepo/子目录场景需显式传，否则 topic 跨目录找不到。",
+      "workspacePath 默认 process.cwd()，决定 _cw.db 全局位置",
+      "(~/.pi/agent/cw/<encoded-cwd>/_cw.db，encoded-cwd 规则同 subagents ADR-027)；",
+      "topicDir（交付物目录：plan.md/changes/machine-check-*.md）仍在项目内 .xyz-harness/{slug}/，_cw.db 不污染项目目录。",
+      "monorepo/子目录场景需显式传 workspacePath，否则 topic 跨目录找不到。",
       "create 返回 topicId（格式 cw-{date}-{slug}），后续所有 action 必须传此 topicId；",
       "跨 session 接续前从 _cw.db 或 .xyz-harness 取回。",
     ].join("\n"),
@@ -192,12 +198,13 @@ export function registerCodingWorkflowTool(pi: ExtensionAPI): void {
         throw new Error("coding-workflow call aborted by signal.");
       }
       // composition root：从 params 推 workspacePath，构造 deps。
-      // dbPath 放 workspacePath/.xyz-harness/_cw.db。
-      // topicDir 不在 deps——各 action handler loadTopic 后用 topic.topicDir 构造 GateContext
-      // （ROOT-01 修复：原 topicDir=workspacePath 导致读盘 gate 全 fail）。
+      // dbPath 落 ~/.pi/agent/cw/<encoded-cwd>/_cw.db（全局，与 subagents ADR-027 同源约定）。
+      // topicDir（交付物目录）仍在项目内 .xyz-harness/{slug}/——各 action handler loadTopic
+      // 后用 topic.topicDir 构造 GateContext（ROOT-01 修复仍生效：交付物在项目内可读可写，
+      // 但 _cw.db 状态库不再污染项目目录）。
       const workspacePath = rawParams.workspacePath ?? process.cwd();
       const deps: ActionDeps = {
-        store: new CwStore(`${workspacePath}/.xyz-harness/_cw.db`),
+        store: new CwStore(resolveCwDbPath(workspacePath)),
         git: new GitValidator(workspacePath),
         runner: new GateRunner(workspacePath),
         workspacePath,
@@ -220,6 +227,26 @@ export function registerCodingWorkflowTool(pi: ExtensionAPI): void {
 
 export default function codingWorkflowExtension(pi: ExtensionAPI): void {
   registerCodingWorkflowTool(pi);
+}
+
+// ── 全局存储路径解析（与 subagents/workflow 一致：~/.pi/agent/<scope>/<encoded-cwd>/） ──
+
+/**
+ * 解析 _cw.db 全局路径。
+ *
+ * `~/.pi/agent/cw/<encoded-cwd>/_cw.db`——encoded-cwd 由 `encodeCwd(workspacePath)`
+ * 生成（与 subagents ADR-027 同源：去掉开头分隔符、剩余 / \ : 替换为 -、首尾补 --）。
+ *
+ * scope 选 `cw`（不复用 `subagents/`）—— CW 的状态库与 subagents session 物理隔离，
+ * 互不干扰。同一项目所有 topic 共享一个 _cw.db（topic_id 主键区分），不再每 topic 散一个。
+ *
+ * 全局存储而非项目内 `.xyz-harness/` 的理由：
+ *   1. 与项目其它扩展一致（subagents/evolve-daily/workflow 都用全局）
+ *   2. 不污染用户项目目录（sqlite 二进制无法 git diff，所谓「git 审计」是伪需求）
+ *   3. 跨 session 续跑靠 homedir 稳定性，不依赖 cwd 是否被 git 追踪
+ */
+function resolveCwDbPath(workspacePath: string): string {
+  return join(homedir(), ".pi", "agent", "cw", encodeCwd(workspacePath), "_cw.db");
 }
 
 // ── 渲染（content 文本，TUI 展示用） ─────────────────────────
