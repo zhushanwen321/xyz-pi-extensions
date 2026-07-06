@@ -165,12 +165,14 @@ const REVIEW_SCHEMA = {
 // dev worktree 池：wave 间串行 → wave 开始时从池轮转取 worktree + reset 到 BASE_REF
 // test/review worktree：全程独占（test 无 commit 副作用可共享；review 纯只读共享）
 
+const GIT_CMD_TIMEOUT_MS = 30_000; // git 命令超时（worktree add/reset/remove）
 const worktrees = []; // {role, branch, path}
 const runStamp = Date.now();
 
-function git(args) {
-  return execSync("git -C " + WORKSPACE_ROOT + " " + args, {
-    encoding: "utf-8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"],
+// 所有 git 调用走 execFileSync（shell:false），避免路径/ref 含空格或特殊字符的注入风险。
+function gitArgs(cwd, verb, args) {
+  return execFileSync("git", ["-C", cwd, verb, ...args], {
+    encoding: "utf-8", timeout: GIT_CMD_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 }
 
@@ -179,7 +181,7 @@ function addWorktree(role) {
   const branch = "cw-" + shortTopic + "-" + role + "-" + runStamp;
   const wtPath = WT_PARENT + "/cw-" + role + "-" + runStamp;
   try {
-    git("worktree add " + wtPath + " -b " + branch + " " + BASE_REF);
+    gitArgs(WORKSPACE_ROOT, "worktree", ["add", wtPath, "-b", branch, BASE_REF]);
     worktrees.push({ role, branch, path: wtPath });
     log("worktree 建好: " + role + " → " + wtPath);
     return wtPath;
@@ -188,20 +190,21 @@ function addWorktree(role) {
   }
 }
 
+// 复用前清前一 wave 残留：reset 到 BASE_REF + 删未跟踪文件。
+// 失败必须 throw（不能吞）——脏 worktree 被下个 wave 复用会违反隔离不变式（审查 robustness SHOULD_FIX）。
 function resetWorktree(wtPath) {
-  // 复用前清前一 wave 残留：reset 到 BASE_REF + 删未跟踪文件
   try {
-    execSync("git -C " + wtPath + " reset --hard " + BASE_REF, { encoding: "utf-8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
-    execSync("git -C " + wtPath + " clean -fd", { encoding: "utf-8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
+    gitArgs(wtPath, "reset", ["--hard", BASE_REF]);
+    gitArgs(wtPath, "clean", ["-fd"]);
   } catch (e) {
-    log("⚠ reset worktree 失败 " + wtPath + ": " + e.message);
+    throw new Error("reset worktree 失败 " + wtPath + " (拒绝复用脏 worktree): " + e.message);
   }
 }
 
 function removeWorktree(wt) {
   try {
-    git("worktree remove --force " + wt.path);
-    try { git("branch -D " + wt.branch); } catch { /* 忽略 */ }
+    gitArgs(WORKSPACE_ROOT, "worktree", ["remove", "--force", wt.path]);
+    try { gitArgs(WORKSPACE_ROOT, "branch", ["-D", wt.branch]); } catch (e) { log("  branch 删除失败 (可接受): " + e.message); }
     return null;
   } catch (e) {
     return { path: wt.path, branch: wt.branch, error: e.message };
@@ -348,7 +351,11 @@ function parseResult(raw) {
 const devFailures = [];
 const testFailures = [];
 const reviewFailures = [];
+const cleanupFailures = []; // finally 块填充
 
+// SHOULD_FIX（审查 robustness）：Phase 1/2/聚合 任一 throw 也必须跑 cleanup（防 worktree 泄漏）。
+// try/finally 包裹整个执行体，finally 跑 cleanup 后重抛原始异常（workflow 记录失败）。
+try {
 // ── Phase 1: dev waves（wave 间串行，wave 内 parallel；硬依赖 abort）──
 
 let devAborted = false;
@@ -357,28 +364,38 @@ for (let i = 0; i < devWaves2d.length; i++) {
   const wave = devWaves2d[i];
   phase("Dev-w" + i + "(" + wave.map((c) => c.id).join(",") + ")");
 
-  const waveWts = wave.map((_, j) => {
-    const wt = devWtPool[j % devWtPool.length];
-    resetWorktree(wt);
-    return wt;
-  });
-
-  const calls = wave.map((c, j) => ({
-    prompt: buildImplementerPrompt(c, waveWts[j]),
-    schema: DEV_RESULT_SCHEMA,
-    model: MODEL,
-    cwd: waveWts[j],
-    description: "dev-" + c.id,
-    timeoutMs: DEFAULT_AGENT_TIMEOUT_MS,
-  }));
-
-  log("dev wave " + i + ": parallel " + calls.length + " implementer(s)...");
-  const results = await parallel(calls);
+  // MUST_FIX（审查 robustness）：wave 超过 pool 时不别名复用——拆子波串行，每子波≤ pool。
+  // 别名复用会让 2 个 agent 写同一个 worktree（git index lock 冲突、commit 丢失）。
+  const subBatchSize = Math.min(wave.length, devWtPool.length);
+  const subBatchCount = Math.ceil(wave.length / subBatchSize);
+  const waveResults = [];
+  const waveCaseIds = [];
+  for (let sb = 0; sb < subBatchCount; sb++) {
+    const start = sb * subBatchSize;
+    const subWave = wave.slice(start, start + subBatchSize);
+    const subWts = subWave.map((_, j) => {
+      const wt = devWtPool[j]; // subWave.length ≤ devWtPool.length，1:1 分配
+      resetWorktree(wt);
+      return wt;
+    });
+    const subCalls = subWave.map((c, j) => ({
+      prompt: buildImplementerPrompt(c, subWts[j]),
+      schema: DEV_RESULT_SCHEMA,
+      model: MODEL,
+      cwd: subWts[j],
+      description: "dev-" + c.id,
+      timeoutMs: DEFAULT_AGENT_TIMEOUT_MS,
+    }));
+    log("dev wave " + i + " 子波 " + sb + ": parallel " + subCalls.length + " implementer(s)");
+    const subResults = await parallel(subCalls);
+    waveResults.push(...subResults);
+    waveCaseIds.push(...subWave.map((c) => c.id));
+  }
 
   let waveOk = true;
-  for (let j = 0; j < results.length; j++) {
-    const r = parseResult(results[j]);
-    const caseId = wave[j].id;
+  for (let j = 0; j < waveResults.length; j++) {
+    const r = parseResult(waveResults[j]);
+    const caseId = waveCaseIds[j];
     if (!r || !r.commit_hash || !r.cw_submitted) {
       const reason = !r ? "agent 无返回" : (!r.commit_hash ? "无 commit_hash" : "未调 cw_submitted");
       devFailures.push({ waveId: caseId, reason });
@@ -480,7 +497,7 @@ const totalShouldFix = (reviewCorrectness?.should_fix ?? 0) + (reviewQuality?.sh
 if (reviewCorrectness || reviewQuality) {
   const readReport = (r) => {
     if (!r || !r.report_file) return "";
-    try { return fs.readFileSync(r.report_file, "utf-8"); } catch { return ""; }
+    try { return fs.readFileSync(r.report_file, "utf-8"); } catch (e) { log("⚠ 读 review 报告失败 " + r.report_file + ": " + e.message); return ""; }
   };
   const cContent = readReport(reviewCorrectness);
   const qContent = readReport(reviewQuality);
@@ -525,15 +542,10 @@ if (reviewCorrectness || reviewQuality) {
   }
 }
 
-// ── Phase 3: cleanup（finally 语义，失败不阻塞）──────────────────
-
+// ── Phase 3: cleanup + return（finally 语义，失败不阻塞）──────────────────
+// worktree 清理在脚本的 finally 块（见末尾），确保任何 throw 也跑清理。
+// 这里只记录清理结果（正常路径下 finally 在 return 前执行，cleanupFailures 已填充）。
 phase("Cleanup");
-const cleanupFailures = [];
-for (const wt of worktrees) {
-  const err = removeWorktree(wt);
-  if (err) cleanupFailures.push(err);
-}
-log("worktree 清理: " + (worktrees.length - cleanupFailures.length) + "/" + worktrees.length + " 成功");
 
 // ── Return（主 agent 据此决策）─────────────────────────────────────
 
@@ -577,3 +589,14 @@ return {
     " / test " + (allTestOk ? "✓" : "✗") +
     " / review " + (reviewClean ? "✓" : "must_fix=" + totalMustFix),
 };
+} finally {
+  // ADR-029 决策 / 审查 robustness SHOULD_FIX：worktree 必须清理（防泄漏），无论上述是否 throw。
+  // 正常路径（return）：return 表达式求值后、实际返回前跑此块。
+  // 异常路径（throw）：跑此块后重抛原始异常。
+  phase("Cleanup-finally");
+  for (const wt of worktrees) {
+    const err = removeWorktree(wt);
+    if (err) cleanupFailures.push(err);
+  }
+  log("worktree 清理: " + (worktrees.length - cleanupFailures.length) + "/" + worktrees.length + " 成功");
+}

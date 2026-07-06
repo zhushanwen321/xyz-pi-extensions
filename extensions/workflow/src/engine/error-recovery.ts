@@ -61,6 +61,7 @@ interface AgentCallMsg {
     agent?: string;
     skill?: string;
     timeoutMs?: number;
+    cwd?: string; // ADR-029 决策 1：per-call cwd（worktree 隔离）
   };
   phase?: string;
 }

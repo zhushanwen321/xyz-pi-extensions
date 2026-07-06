@@ -204,12 +204,25 @@ export class CwStore {
     // 接线：建表 + user_version 迁移链（#11，未来 ALTER TABLE 链）。
     // DDL 保持 v1 初始结构，topic_dir 等新增列由迁移链加（ALTER ADD COLUMN）。
     // 这样全新库与旧库都走迁移链，路径统一，避免“DDL 建列 + 迁移加列”冲突。
-    for (const stmt of DDL) {
-      this.db.exec(stmt);
-    }
-    const current = this.readUserVersion();
-    if (current < SCHEMA_VERSION) {
-      this.runMigrations(current, SCHEMA_VERSION);
+    //
+    // ADR-029 决策 6 / 审查 robustness MUST_FIX：并发首次初始化竞态防护。
+    // workflow 内 N 个 agent 并发 new CwStore，全新 DB 时 N 个连接同时跑 init/migrations。
+    //幂等 check-then-add 是 TOCTOU，并发都会跳过 ADD。解法：BEGIN IMMEDIATE 立即获写锁，
+    // 并发初始化串行化（败者等 busy_timeout 后重试，获锁后重新读 user_version 发现已迁移，跳过）。
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const stmt of DDL) {
+        this.db.exec(stmt);
+      }
+      // 重读 user_version（可能并发他者已完成迁移）
+      const current = this.readUserVersion();
+      if (current < SCHEMA_VERSION) {
+        this.runMigrations(current, SCHEMA_VERSION);
+      }
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
     }
   }
 
