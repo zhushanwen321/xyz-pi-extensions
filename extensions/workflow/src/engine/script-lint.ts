@@ -221,7 +221,7 @@ function checkAgentCallOptions(
  * 形式：`(async function`、`(async ()`、`(async (args)` 后跟 `=>`
  * 不匹配：`await (async ...`（lookbehind 排除）
  */
-const BARE_ASYNC_IIFE_PATTERN = /(^|[;\n\s{}(])(?<!await\s)\(async\s+(?:function\b|\(\)|\([^)]*\)\s*=>)/;
+const BARE_ASYNC_IIFE_PATTERN = /(^|[;\n\s{}(])(?<!await\s)\(async\s+(?:function\b|\(\)|\([^)]*\)\s*=>)/g;
 
 /**
  * 判断 IIFE 调用表达式是否被某个上下文「接住」（return/赋值/await 链等）。
@@ -247,32 +247,20 @@ function isIIFEAwaited(source: string, iifeStart: number): boolean {
       i--;
       continue;
     }
-    // 收集从当前位置往前到上一个非 token 字符的连续非空白串
-    // 找出最近的「词」（标识符/操作符）
-    const tokenEnd = i + 1;
-    let tokenStart = i;
-    while (tokenStart >= 0 && /[A-Za-z0-9_$]/.test(source[tokenStart])) {
-      tokenStart--;
-    }
-    tokenStart++;
-    // 操作符类（= / ( / [ / ,）：非标识符字符
-    if (tokenStart > tokenEnd) {
-      // 标识符——可能是 return / await / yield
-      const word = source.slice(tokenStart, tokenEnd);
-      if (word === "return" || word === "await" || word === "yield") return true;
-      // 其他标识符（如变量名 `foo`），说明是 foo(async ... 之类调用，算接住
-      return true;
-    } else {
-      // 单字符操作符
-      if (ch === "=" || ch === "(" || ch === "[" || ch === "," || ch === "?" || ch === ":") {
-        return true;
-      }
-      if (ch === ";" || ch === "{" || ch === "}" || ch === ")") {
-        return false;
-      }
-      // 其他字符（如 `.` `+`），保守视为接住（避免误报）
+    // 当前字符是标识符字符 → 向前扫完整标识符
+    if (/[A-Za-z0-9_$]/.test(ch)) {
+      // return / await / yield / 变量名（如 `foo(async ...`）→ 接住
       return true;
     }
+    // 单字符操作符
+    if (ch === "=" || ch === "(" || ch === "[" || ch === "," || ch === "?" || ch === ":") {
+      return true;
+    }
+    if (ch === ";" || ch === "{" || ch === "}" || ch === ")") {
+      return false;
+    }
+    // 其他字符（如 `.` `+`），保守视为接住（避免误报）
+    return true;
   }
   return false;
 }
@@ -295,16 +283,29 @@ function isIIFEAwaited(source: string, iifeStart: number): boolean {
  * 都识别为「接住」（warning 而非 error），避免阻断合法写法。
  */
 function checkBareAsyncIIFE(source: string): LintFinding[] {
-  const match = source.match(BARE_ASYNC_IIFE_PATTERN);
-  if (!match) return [];
-
   if (!ENTRY_POINT_PATTERNS.some((p) => p.test(source))) return [];
 
-  const iifeStart = match.index ?? 0;
+ // 用 matchAll 检查所有 IIFE（脚本可能有多个，每个都需独立判断）
+  const findings: LintFinding[] = [];
+  for (const match of source.matchAll(BARE_ASYNC_IIFE_PATTERN)) {
+    const iifeStart = match.index ?? 0;
+    const finding = analyzeIIFE(source, iifeStart);
+    if (finding) findings.push(finding);
+  }
+  return findings;
+}
+
+/**
+ * 分析单个 IIFE 起点是否触发 finding。
+ *
+ * 返回 LintFinding（error 或 warning）或 undefined（IIFE 内无 agent/无闭合）。
+ * 详见 checkBareAsyncIIFE 的 [HISTORICAL] 教训记录。
+ */
+function analyzeIIFE(source: string, iifeStart: number): LintFinding | undefined {
   const iifeLine = source.slice(0, iifeStart).split("\n").length;
 
   const firstBrace = source.indexOf("{", iifeStart);
-  if (firstBrace === -1) return [];
+  if (firstBrace === -1) return undefined;
 
   let depth = 0;
   let iifeEnd = -1;
@@ -319,36 +320,32 @@ function checkBareAsyncIIFE(source: string): LintFinding[] {
       }
     }
   }
-  if (iifeEnd === -1) return [];
+  if (iifeEnd === -1) return undefined;
 
   const iifeBody = source.slice(firstBrace, iifeEnd);
   const hasAgentInside = ENTRY_POINT_PATTERNS.some((p) => p.test(iifeBody));
-  if (!hasAgentInside) return [];
+  if (!hasAgentInside) return undefined;
 
   const awaited = isIIFEAwaited(source, iifeStart);
   if (awaited) {
-    return [
-      {
-        severity: "warning",
-        line: iifeLine,
-        message:
-          "Async IIFE wrapping agent() is assigned/returned but must be awaited. If the surrounding context does not await this Promise, the worker will post `return` early and kill in-flight agent() subprocesses.",
-        suggestion:
-          "Verify the surrounding code awaits this IIFE's Promise. When unsure, prefer top-level await directly (the worker already wraps your script in an async IIFE).",
-      },
-    ];
-  }
-
-  return [
-    {
-      severity: "error",
+    return {
+      severity: "warning",
       line: iifeLine,
       message:
-        "Top-level async IIFE is a fire-and-forget statement. The worker's outer IIFE will post `return` before agent() resolves, killing the subprocess via runtime abort.",
+        "Async IIFE wrapping agent() is assigned/returned but must be awaited. If the surrounding context does not await this Promise, the worker will post `return` early and kill in-flight agent() subprocesses.",
       suggestion:
-        "Remove the IIFE wrapper and use top-level await directly (the worker already wraps your script in an async IIFE). Or `await` the IIFE: `await (async function main() { ... })();`.",
-    },
-  ];
+        "Verify the surrounding code awaits this IIFE's Promise. When unsure, prefer top-level await directly (the worker already wraps your script in an async IIFE).",
+    };
+  }
+
+  return {
+    severity: "error",
+    line: iifeLine,
+    message:
+      "Top-level async IIFE is a fire-and-forget statement. The worker's outer IIFE will post `return` before agent() resolves, killing the subprocess via runtime abort.",
+    suggestion:
+      "Remove the IIFE wrapper and use top-level await directly (the worker already wraps your script in an async IIFE). Or `await` the IIFE: `await (async function main() { ... })();`.",
+  };
 }
 
 /**

@@ -19,6 +19,7 @@
  */
 
 import type { AgentCallOpts, AgentResult } from "../engine/models/types.js";
+import { formatFailureContext } from "./format-helpers.js";
 import { makeEmptyPipeline } from "./jsonl-parser.js";
 import { buildArgs, resolveInvocation, runPiProcess } from "./pi-runner.js";
 
@@ -336,19 +337,3 @@ export class ConcurrencyGate {
   }
 }
 
-// ── Helpers ─────────────────────────────────────────────────
-
-/**
- * 格式化 schema 失败时的执行上下文（exitCode + stderr 摘要）。
- *
- * 与 subprocess-agent-runner.ts:formatFailureContext 对称实现（两处 spawn 路径
- * 各自独立，未抽到 shared——避免为单 helper 引入跨文件依赖）。
- * 详见 subprocess-agent-runner.ts 的 [HISTORICAL] 教训记录。
- */
-function formatFailureContext(exitCode: number, stderr: string): string {
-  const parts: string[] = [];
-  if (exitCode !== 0) parts.push(`exitCode=${exitCode}`);
-  const trimmed = stderr.trim();
-  if (trimmed) parts.push(`stderr=${trimmed.slice(0, 500)}`);
-  return parts.length > 0 ? ` (${parts.join(", ")})` : "";
-}

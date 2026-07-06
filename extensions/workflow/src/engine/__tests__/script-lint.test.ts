@@ -272,6 +272,17 @@ const meta = {};
     const errs = r.findings.filter((f) => f.severity === "error" && f.message.includes("IIFE"));
     expect(errs).toHaveLength(1);
   });
+
+  it("多个 IIFE 各自独立判断（matchAll 覆盖）", () => {
+ // 两个独立 IIFE 都含 agent，应各自报一条 error（共 2 条）
+    const source = `
+(async function a() { await agent({ prompt: 'a' }); })();
+(async function b() { await agent({ prompt: 'b' }); })();
+`;
+    const r = lintScript(source);
+    const iifeFindings = r.findings.filter((f) => f.message.includes("IIFE"));
+    expect(iifeFindings).toHaveLength(2);
+  });
 });
 
 // ── entry-point 检查 ─────

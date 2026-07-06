@@ -20,6 +20,7 @@
 
 import type { AgentRunner } from "../engine/models/ports.js";
 import type { AgentCallOpts, AgentResult } from "../engine/models/types.js";
+import { formatFailureContext } from "./format-helpers.js";
 import { makeEmptyPipeline } from "./jsonl-parser.js";
 import { buildArgs, resolveInvocation, runPiProcess } from "./pi-runner.js";
 
@@ -147,23 +148,3 @@ export class SubprocessAgentRunner implements AgentRunner {
   }
 }
 
-// ── Helpers ─────────────────────────────────────────────────
-
-/**
- * 格式化 schema 失败时的执行上下文（exitCode + stderr 摘要）。
- *
- * [HISTORICAL] schema-error 分支必须暴露真实失败原因。abort/崩溃场景下 pi 子进程
- * 未输出任何 JSONL，pipeline.hasToolCall=false，旧实现仅返回 "Agent did not call
- * structured-output tool" 覆盖了 stderr 里的 "Operation aborted, sending SIGKILL"
- * 等关键诊断信息。本 helper 把 exitCode + stderr（截断）拼到 error 字段尾部。
- *
- * 仅在 stderr 非空或 exitCode≠0 时附加（成功 exit 0 + 空 stderr 时不附加，
- * 保持原有"纯 schema 错误"语义）。
- */
-function formatFailureContext(exitCode: number, stderr: string): string {
-  const parts: string[] = [];
-  if (exitCode !== 0) parts.push(`exitCode=${exitCode}`);
-  const trimmed = stderr.trim();
-  if (trimmed) parts.push(`stderr=${trimmed.slice(0, 500)}`);
-  return parts.length > 0 ? ` (${parts.join(", ")})` : "";
-}
