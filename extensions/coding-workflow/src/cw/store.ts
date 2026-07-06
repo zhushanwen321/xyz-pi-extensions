@@ -174,6 +174,12 @@ export class CwStore {
     // sqlite 不会自动建父目录。项目内路径（旧版 .xyz-harness/）也兼容——mkdirSync 已存在不报错。
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new DatabaseSync(dbPath);
+    // ADR-029 决策 6：WAL 模式 + busy_timeout，支持 workflow 内多 agent 并发调 cw。
+    // WAL：并发读不阻塞写，写不阻塞读（单写串行排队）。
+    // busy_timeout=5000：撞写锁时等待 5s 重试而非立即报 SQLITE_BUSY（覆盖短事务场景）。
+    // 必须在任何业务 SQL 之前执行（init 的 DDL 也受 WAL 并发保护）。
+    this.db.exec("PRAGMA journal_mode=WAL");
+    this.db.exec("PRAGMA busy_timeout=5000");
     this.init();
   }
 

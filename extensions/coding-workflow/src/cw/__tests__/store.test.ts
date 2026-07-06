@@ -398,3 +398,29 @@ describe("T2.28 — 迁移日志含 from/to version", () => {
     writeSpy.mockRestore();
   });
 });
+
+// ============================================================
+// ADR-029 决策 6：WAL + busy_timeout 契约测试
+// ============================================================
+
+describe("CwStore WAL + busy_timeout (ADR-029 decision 6)", () => {
+  it("构造后 journal_mode=WAL", () => {
+    const dbPath = tmpDbPath();
+    const store = new CwStore(dbPath);
+    const row = store["db"].prepare("PRAGMA journal_mode").get() as { journal_mode?: string } | undefined;
+    store.close();
+    // 内存库返回 "memory"，文件库返回 "wal"。两者都应不报错且可查询。
+    // 文件库（生产路径）必须是 wal。
+    expect(row?.journal_mode).toMatch(/^(wal|memory)$/);
+    if (dbPath.includes("test.db")) {
+      expect(row?.journal_mode).toBe("wal");
+    }
+  });
+
+  it("构造后 busy_timeout=5000", () => {
+    const store = new CwStore(":memory:");
+    const row = store["db"].prepare("PRAGMA busy_timeout").get() as { timeout?: number } | undefined;
+    store.close();
+    expect(row?.timeout).toBe(5000);
+  });
+});
