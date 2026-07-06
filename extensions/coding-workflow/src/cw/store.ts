@@ -36,7 +36,7 @@ import type {
 
 // ── schema 版本（PRAGMA user_version，#11） ──────────────────
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 // ── DDL（§8.1 architecture） ────────────────────────────────
 
@@ -46,6 +46,8 @@ export const SCHEMA_VERSION = 3;
  * v1→v2 给 topic 表加 topic_dir 列（ROOT-01 修复：CW 需要记录每个 topic 的交付物目录）。
  * v2→v3 给 test_case 表加 requires_screenshot 列（P0：plan 阶段声明每条用例是否要求截图，
  * 避免 test.ts 无差别要求所有 lite case 都传 screenshotPath）。
+ * v3→v4 给 test_case 表加 depends_on + parallel_group 列（ADR-029 决策 4：测试调度字段，
+ * workflow 据此构造二维数组 wave 调度）。
  * 未来 schema 演进（如 full 接入）在此追加 ALTER TABLE 函数。
  */
 const MIGRATIONS: Array<(db: DatabaseSync) => void> = [
@@ -64,6 +66,19 @@ const MIGRATIONS: Array<(db: DatabaseSync) => void> = [
     const cols = db.prepare("PRAGMA table_info(test_case)").all() as Array<{ name: string }>;
     if (!cols.some((c) => c.name === "requires_screenshot")) {
       db.exec("ALTER TABLE test_case ADD COLUMN requires_screenshot INTEGER DEFAULT 0");
+    }
+  },
+  // v3 → v4: test_case 表加 depends_on + parallel_group 列（ADR-029 决策 4：测试调度）
+  // depends_on: JSON array of testCase.id（执行顺序依赖，workflow 拓扑排序）
+  // parallel_group: string（资源冲突规避分组，同组可并行）
+  // 幂等保护：检测列已存在则跳过
+  (db: DatabaseSync) => {
+    const cols = db.prepare("PRAGMA table_info(test_case)").all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "depends_on")) {
+      db.exec("ALTER TABLE test_case ADD COLUMN depends_on TEXT");
+    }
+    if (!cols.some((c) => c.name === "parallel_group")) {
+      db.exec("ALTER TABLE test_case ADD COLUMN parallel_group TEXT");
     }
   },
 ];
@@ -147,6 +162,8 @@ const DDL = [
     judged_at TEXT,
     failure_reason TEXT,
     requires_screenshot INTEGER DEFAULT 0,
+    depends_on TEXT,
+    parallel_group TEXT,
     PRIMARY KEY (topic_id, id),
     FOREIGN KEY (topic_id) REFERENCES topic(topic_id)
   )`,
@@ -365,6 +382,9 @@ export class CwStore {
       failureReason: r.failure_reason === null ? undefined : String(r.failure_reason),
       // v3 列：旧库迁移后 NULL/0 → false；新库写入时布尔转 0/1
       requiresScreenshot: r.requires_screenshot === 1,
+      // v4 列（ADR-029 决策 4）：旧库迁移后 NULL → []/undefined；新库写入 JSON/字符串
+      dependsOn: parseJsonField<string[]>(r.depends_on, []),
+      parallelGroup: r.parallel_group === null ? undefined : String(r.parallel_group),
     };
   }
 
@@ -440,8 +460,8 @@ export class CwStore {
   insertTestCases(topicId: string, cases: TestCaseSeed[]): void {
     // 接线：loop + prepare + run。
     const stmt = this.db.prepare(
-      `INSERT INTO test_case (topic_id, id, layer, scenario, steps, expected, assertion, executor, status, requires_screenshot)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+      `INSERT INTO test_case (topic_id, id, layer, scenario, steps, expected, assertion, executor, status, requires_screenshot, depends_on, parallel_group)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
     );
     for (const c of cases) {
       stmt.run(
@@ -454,6 +474,9 @@ export class CwStore {
         c.assertion ?? null,
         c.executor,
         c.requiresScreenshot ? 1 : 0,
+        // ADR-029 决策 4：测试调度字段。dependsOn 存 JSON 串，parallelGroup 存字符串
+        c.dependsOn ? JSON.stringify(c.dependsOn) : null,
+        c.parallelGroup ?? null,
       );
     }
   }

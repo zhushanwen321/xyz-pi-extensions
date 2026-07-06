@@ -134,6 +134,10 @@ export interface TestCase {
    * mid 路径不使用此字段（mid 用 commitHash + claimedStatus，不要求 screenshot）。
    */
   requiresScreenshot?: boolean;
+  /** 测试调度：执行顺序依赖（ADR-029 决策 4）。 */
+  dependsOn?: string[];
+  /** 测试调度：资源冲突规避分组（ADR-029 决策 4）。 */
+  parallelGroup?: string;
 }
 
 export interface GateHistoryEntry {
@@ -196,6 +200,10 @@ export interface TestCaseSeed {
   executor: string;
   /** lite 专属：见 TestCase.requiresScreenshot。mid seed 不填（undefined 视为 false）。 */
   requiresScreenshot?: boolean;
+  /** 测试调度：执行顺序依赖（ADR-029 决策 4）。 */
+  dependsOn?: string[];
+  /** 测试调度：资源冲突规避分组（ADR-029 决策 4）。 */
+  parallelGroup?: string;
 }
 
 export interface GateHistorySeed {

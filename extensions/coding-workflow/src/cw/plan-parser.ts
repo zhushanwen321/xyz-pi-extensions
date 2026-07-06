@@ -46,6 +46,18 @@ export const LitePlanSchema = Type.Object({
        * 避免「所有 lite case 无差别要求 screenshot」的反工程直觉行为。
        */
       requiresScreenshot: Type.Boolean(),
+      /**
+       * 测试调度：执行顺序依赖（ADR-029 决策 4）。
+       * 本用例依赖哪些前置用例建的数据状态（如 E3 依赖 E1 建的登录态）。
+       * workflow 据此拓扑排序，被依赖的先跑；是硬依赖（上游 fail 则 abort 下游）。
+       */
+      dependsOn: Type.Optional(Type.Array(Type.String())),
+      /**
+       * 测试调度：资源冲突规避分组（ADR-029 决策 4）。
+       * 同 parallelGroup 的用例已确认无资源冲突（不同 chrome profile / DB 表 / 端口），
+       * 可并行执行。无此字段视为独占资源（串行）。
+       */
+      parallelGroup: Type.Optional(Type.String()),
     }),
   ),
 });
@@ -83,6 +95,10 @@ export const MidDetailSchema = Type.Object({
       steps: Type.String(),
       assertion: Type.String(),
       executor: Type.String(),
+      /** 测试调度：执行顺序依赖（ADR-029 决策 4，同 LitePlanSchema）。 */
+      dependsOn: Type.Optional(Type.Array(Type.String())),
+      /** 测试调度：资源冲突规避分组（ADR-029 决策 4，同 LitePlanSchema）。 */
+      parallelGroup: Type.Optional(Type.String()),
     }),
   ),
   deliverables: Type.Object({
@@ -233,6 +249,8 @@ function extractLitePlan(json: unknown): ParsedLitePlan {
       expected: { url?: string; text?: string };
       executor: string;
       requiresScreenshot: boolean;
+      dependsOn?: string[];
+      parallelGroup?: string;
     }>;
   };
   return {
@@ -252,6 +270,8 @@ function extractLitePlan(json: unknown): ParsedLitePlan {
       expected: c.expected,
       executor: c.executor,
       requiresScreenshot: c.requiresScreenshot,
+      dependsOn: c.dependsOn,
+      parallelGroup: c.parallelGroup,
     })),
   };
 }
@@ -279,6 +299,8 @@ function extractMidDetail(json: unknown): ParsedMidDetail {
       steps: string;
       assertion: string;
       executor: string;
+      dependsOn?: string[];
+      parallelGroup?: string;
     }>;
     deliverables: {
       issues: string;
@@ -304,6 +326,8 @@ function extractMidDetail(json: unknown): ParsedMidDetail {
       // mid testCase 用 assertion（自然语言，信声明不重算，D-008），无 expected
       assertion: c.assertion,
       executor: c.executor,
+      dependsOn: c.dependsOn,
+      parallelGroup: c.parallelGroup,
     })),
     deliverables: obj.deliverables,
   };

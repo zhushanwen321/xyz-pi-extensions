@@ -423,4 +423,41 @@ describe("CwStore WAL + busy_timeout (ADR-029 decision 6)", () => {
     store.close();
     expect(row?.timeout).toBe(5000);
   });
+
+  it("ADR-029 决策 4：dependsOn + parallelGroup round-trip（write → read 等价）", () => {
+    const store = new CwStore(":memory:");
+    const seed = makeTopic();
+    store.insertTopic(seed);
+    const caseWithScheduling: TestCaseSeed = {
+      ...sampleCase,
+      id: "E3",
+      dependsOn: ["E1", "E2"],
+      parallelGroup: "g-real",
+    };
+    store.insertTestCases(seed.topicId, [caseWithScheduling]);
+
+    const loaded = store.loadTopic(seed.topicId);
+    expect(loaded).not.toBeNull();
+    if (!loaded) return;
+    expect(loaded.testCases).toHaveLength(1);
+    const tc = loaded.testCases[0]!;
+    expect(tc.dependsOn).toEqual(["E1", "E2"]);
+    expect(tc.parallelGroup).toBe("g-real");
+    store.close();
+  });
+
+  it("ADR-029 决策 4：缺省 dependsOn/parallelGroup → []/undefined（向后兼容）", () => {
+    const store = new CwStore(":memory:");
+    const seed = makeTopic();
+    store.insertTopic(seed);
+    store.insertTestCases(seed.topicId, [sampleCase]); // sampleCase 无 dependsOn/parallelGroup
+
+    const loaded = store.loadTopic(seed.topicId);
+    expect(loaded).not.toBeNull();
+    if (!loaded) return;
+    const tc = loaded.testCases[0]!;
+    expect(tc.dependsOn).toEqual([]); // 缺省回退空数组
+    expect(tc.parallelGroup).toBeUndefined(); // 缺省回退 undefined
+    store.close();
+  });
 });
