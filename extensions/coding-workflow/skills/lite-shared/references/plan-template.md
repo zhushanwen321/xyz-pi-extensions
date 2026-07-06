@@ -100,6 +100,7 @@ reconstruct_blind_spot: not_triggered   # 禁读重建盲区（high/low/not_trig
 - 无 E2E 框架但需测前端交互 → 用 browser 类 skill / CDP 类 MCP 驱动（Agent 主动发现，不写死名称）
 - 都不适用 → 标注手动验证步骤
 - 覆盖每个业务用例的 happy path + ≥1 失败 path
+- **plan.json 阶段决定每条 E2E 的 `requiresScreenshot`**（写 plan.json 时填，不进 plan.md 表格）：mock 层用例通常 `false`（无 UI/真实环境，截图无意义），real 层通常 `true`（验证真实跑通）；但按用例性质决定——如 mock 层测 DOM 渲染也可能要截图，real 层测纯 API 也可能不要。CW test gate 按此字段判断，**不再无差别要求所有 lite case 传 screenshot**
 
 ### 覆盖率 gate
 - read `test-case-schema.md`「语言×框架增量覆盖率」表后填

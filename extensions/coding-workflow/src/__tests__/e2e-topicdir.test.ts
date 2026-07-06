@@ -129,6 +129,7 @@ function makeLitePlanJson(): Record<string, unknown> {
         steps: "打开 /login → 提交",
         expected: { url: "/dashboard", text: "欢迎" },
         executor: "vitest",
+        requiresScreenshot: true,
       },
     ],
   };

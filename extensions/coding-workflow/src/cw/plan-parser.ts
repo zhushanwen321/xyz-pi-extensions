@@ -39,6 +39,13 @@ export const LitePlanSchema = Type.Object({
         text: Type.Optional(Type.String()),
       }),
       executor: Type.String(),
+      /**
+       * 本用例是否要求 screenshotPath（cw test lite 分支据此判断）。
+       * plan 阶段 agent 按用例性质决定：mock 层通常 false（无 UI/真实环境），
+       * real 层通常 true（验证真实跑通）；但 agent 可按用例需要覆写。
+       * 避免「所有 lite case 无差别要求 screenshot」的反工程直觉行为。
+       */
+      requiresScreenshot: Type.Boolean(),
     }),
   ),
 });
@@ -225,6 +232,7 @@ function extractLitePlan(json: unknown): ParsedLitePlan {
       steps: string;
       expected: { url?: string; text?: string };
       executor: string;
+      requiresScreenshot: boolean;
     }>;
   };
   return {
@@ -243,6 +251,7 @@ function extractLitePlan(json: unknown): ParsedLitePlan {
       steps: c.steps,
       expected: c.expected,
       executor: c.executor,
+      requiresScreenshot: c.requiresScreenshot,
     })),
   };
 }

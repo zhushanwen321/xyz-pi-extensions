@@ -119,6 +119,7 @@ export function makeLitePlan(overrides: Record<string, unknown> = {}): unknown {
         steps: "打开 /login → 提交",
         expected: { url: "/dashboard", text: "欢迎" },
         executor: "vitest",
+        requiresScreenshot: true,
       },
     ],
     ...overrides,

@@ -135,6 +135,7 @@ coding-execute 的执行收尾机器门对 real 层用例只认 `pass` 或 `user
   - `项目测试框架`：探测项目装了什么 E2E/前端测试框架（Playwright / Cypress / Puppeteer / Testing Library / 项目自研等），执行方式写实测探测到的命令。Playwright/Cypress 只是常见示例，不是默认。
   - `browser skill / MCP`：项目无 E2E 框架时，前端交互用例可调用 browser-automation **类** skill 或 CDP **类** MCP 驱动真实浏览器（Agent 主动发现当前环境有哪些 browser 类 skill/MCP，不限定具体名称）。注意这类手段**无 assertion 框架**——Agent 需自行解读截图/DOM 判定 pass/fail。
   - `手动`：无法自动化的场景（并发、物理设备等），写明手动验证步骤
+- **requiresScreenshot**（plan.json 必填字段，**不进 plan.md 表格**）：布尔，声明本用例是否要求 `screenshotPath`。CW test lite gate 按此字段判断——`true` 时 submission 缺 screenshot 或文件不存在 → failed；`false` 时跳过 screenshot 校验，只跑 judgeByExpected 重算。**不是按测试层（mock/real）一刀切**——plan 阶段 agent 按用例性质决定：mock 层通常 `false`（无 UI/真实环境，截图无意义），real 层通常 `true`（验证真实跑通）；例外：mock 层测 DOM 渲染也可能要截图，real 层测纯 API 也可能不要
 
 ### ⚠️ E2E / 前端测试栈探测（必做）
 

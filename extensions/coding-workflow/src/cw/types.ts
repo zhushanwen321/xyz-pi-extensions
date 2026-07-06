@@ -128,6 +128,12 @@ export interface TestCase {
   commitHash?: string;
   judgedAt?: string;
   failureReason?: string;
+  /**
+   * lite 专属：plan 阶段声明本用例是否要求 screenshotPath。
+   * cw test lite 分支据此判断（requiresScreenshot=true 且 submission 缺 screenshot → failed）。
+   * mid 路径不使用此字段（mid 用 commitHash + claimedStatus，不要求 screenshot）。
+   */
+  requiresScreenshot?: boolean;
 }
 
 export interface GateHistoryEntry {
@@ -188,6 +194,8 @@ export interface TestCaseSeed {
   expected?: Expected;
   assertion?: string;
   executor: string;
+  /** lite 专属：见 TestCase.requiresScreenshot。mid seed 不填（undefined 视为 false）。 */
+  requiresScreenshot?: boolean;
 }
 
 export interface GateHistorySeed {

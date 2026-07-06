@@ -33,6 +33,7 @@ const URL_CASE: TestCaseSeed = {
   steps: "打开 url",
   expected: { url: "/dashboard" },
   executor: "vitest",
+  requiresScreenshot: true,
 };
 
 function mockValidateValid(hash = "devcommit"): CommitValidation {
@@ -148,7 +149,40 @@ describe("handleTest — lite 分支（judgeByExpected 重算，丢 claimedStatu
     );
 
     expect(result.caseResults[0].status).toBe("failed");
-    expect(result.caseResults[0].failureReason).toBe("screenshot missing");
+    expect(result.caseResults[0].failureReason).toBe("screenshot required by plan but missing");
+    closeStore(store);
+  });
+
+  it("P0 — requiresScreenshot=false 时缺 screenshot → passed（mock 层不强制截图）", () => {
+    const ws = makeTmpWorkspace();
+    const { deps, store } = makeDeps(ws);
+    // mock 层用例 plan 声明 requiresScreenshot: false
+    const mockCase: TestCaseSeed = {
+      ...URL_CASE,
+      id: "E2",
+      layer: "mock",
+      requiresScreenshot: false,
+    };
+    const topicId = seedDevelopedTopic(store, {
+      topicId: "cw-test-lite-mock-no-shot",
+      slug: "test-lite-mock-no-shot",
+      tier: "lite",
+      waves: ONE_WAVE,
+      testCases: [mockCase],
+    });
+
+    const result = handleTest(
+      {
+        action: "test",
+        topicId,
+        // 不传 screenshotPath，actual 匹配 expected
+        cases: [{ caseId: "E2", actual: { url: "/dashboard" } }],
+      },
+      deps,
+    );
+
+    // requiresScreenshot=false → 跳过 screenshot 校验，只跑 judgeByExpected
+    expect(result.caseResults[0].status).toBe("passed");
     closeStore(store);
   });
 });

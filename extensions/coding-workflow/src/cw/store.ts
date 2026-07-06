@@ -36,7 +36,7 @@ import type {
 
 // ── schema 版本（PRAGMA user_version，#11） ──────────────────
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 // ── DDL（§8.1 architecture） ────────────────────────────────
 
@@ -44,6 +44,8 @@ export const SCHEMA_VERSION = 2;
  * user_version 迁移函数链（#11）。MIGRATIONS[i] 把 user_version 从 i 升到 i+1。
  * v0→v1 由 DDL（CREATE TABLE IF NOT EXISTS）完成，无显式迁移函数。
  * v1→v2 给 topic 表加 topic_dir 列（ROOT-01 修复：CW 需要记录每个 topic 的交付物目录）。
+ * v2→v3 给 test_case 表加 requires_screenshot 列（P0：plan 阶段声明每条用例是否要求截图，
+ * 避免 test.ts 无差别要求所有 lite case 都传 screenshotPath）。
  * 未来 schema 演进（如 full 接入）在此追加 ALTER TABLE 函数。
  */
 const MIGRATIONS: Array<(db: DatabaseSync) => void> = [
@@ -54,6 +56,14 @@ const MIGRATIONS: Array<(db: DatabaseSync) => void> = [
     const cols = db.prepare("PRAGMA table_info(topic)").all() as Array<{ name: string }>;
     if (!cols.some((c) => c.name === "topic_dir")) {
       db.exec("ALTER TABLE topic ADD COLUMN topic_dir TEXT");
+    }
+  },
+  // v2 → v3: test_case 表加 requires_screenshot 列（兼容旧库，NULL 视为 false）
+  // 幂等保护：检测列已存在则跳过
+  (db: DatabaseSync) => {
+    const cols = db.prepare("PRAGMA table_info(test_case)").all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "requires_screenshot")) {
+      db.exec("ALTER TABLE test_case ADD COLUMN requires_screenshot INTEGER DEFAULT 0");
     }
   },
 ];
@@ -136,6 +146,7 @@ const DDL = [
     commit_hash TEXT,
     judged_at TEXT,
     failure_reason TEXT,
+    requires_screenshot INTEGER DEFAULT 0,
     PRIMARY KEY (topic_id, id),
     FOREIGN KEY (topic_id) REFERENCES topic(topic_id)
   )`,
@@ -346,6 +357,8 @@ export class CwStore {
       commitHash: r.commit_hash === null ? undefined : String(r.commit_hash),
       judgedAt: r.judged_at === null ? undefined : String(r.judged_at),
       failureReason: r.failure_reason === null ? undefined : String(r.failure_reason),
+      // v3 列：旧库迁移后 NULL/0 → false；新库写入时布尔转 0/1
+      requiresScreenshot: r.requires_screenshot === 1,
     };
   }
 
@@ -421,8 +434,8 @@ export class CwStore {
   insertTestCases(topicId: string, cases: TestCaseSeed[]): void {
     // 接线：loop + prepare + run。
     const stmt = this.db.prepare(
-      `INSERT INTO test_case (topic_id, id, layer, scenario, steps, expected, assertion, executor, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      `INSERT INTO test_case (topic_id, id, layer, scenario, steps, expected, assertion, executor, status, requires_screenshot)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
     );
     for (const c of cases) {
       stmt.run(
@@ -434,6 +447,7 @@ export class CwStore {
         c.expected ? JSON.stringify(c.expected) : null,
         c.assertion ?? null,
         c.executor,
+        c.requiresScreenshot ? 1 : 0,
       );
     }
   }

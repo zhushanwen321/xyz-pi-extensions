@@ -21,7 +21,7 @@ import {
   guard,
 } from "../state-machine.js";
 import { judgeByExpected } from "../types.js";
-import type { ActionDeps, ActionResult, Actual, CwTopic, Expected, TestCase } from "../types.js";
+import type { ActionDeps, ActionResult, Actual, CwTopic, TestCase } from "../types.js";
 
 export interface TestCaseSubmission {
   caseId: string;
@@ -86,7 +86,7 @@ export function handleTest(params: TestParams, deps: ActionDeps): ActionResult {
           });
           continue;
         }
-        const judged = judgeLite(tc.expected, submission);
+        const judged = judgeLite(tc, submission);
         deps.store.updateTestCase(params.topicId, submission.caseId, judged.patch);
         caseResults.push({
           caseId: submission.caseId,
@@ -135,23 +135,32 @@ export function handleTest(params: TestParams, deps: ActionDeps): ActionResult {
 
 // ── lite 分支：strong-recompute（丢 claimedStatus，D-008） ────
 
+/**
+ * lite test 判定。screenshot 校验按 testCase.requiresScreenshot 决定（P0 修复）：
+ * - requiresScreenshot=true：submission 缺 screenshot 或文件不存在 → failed
+ * - requiresScreenshot=false：跳过 screenshot 校验，只跑 judgeByExpected 重算
+ * plan 阶段 agent 在 plan.json 按用例性质声明（mock 层通常 false，real 层通常 true）。
+ */
 function judgeLite(
-  expected: Expected | undefined,
+  testCase: TestCase,
   submission: TestCaseSubmission,
 ): { patch: Partial<TestCase>; reason?: string } {
-  // 数据流：先校验截图存在（AC-4.2），再 judgeByExpected 重算（丢 claimedStatus）。
-  if (!submission.screenshotPath || !existsSync(submission.screenshotPath)) {
-    return {
-      patch: { status: "failed", screenshotPath: submission.screenshotPath },
-      reason: "screenshot missing",
-    };
+  // 数据流：若 plan 声明需要 screenshot，先校验截图存在；再 judgeByExpected 重算（丢 claimedStatus）。
+  if (testCase.requiresScreenshot) {
+    if (!submission.screenshotPath || !existsSync(submission.screenshotPath)) {
+      return {
+        patch: { status: "failed", screenshotPath: submission.screenshotPath },
+        reason: "screenshot required by plan but missing",
+      };
+    }
   }
   // 接线：真调 judgeByExpected（claimedStatus 丢弃，D-008 AC-4.1）。
-  const verdict = judgeByExpected(expected ?? {}, submission.actual ?? {});
+  const verdict = judgeByExpected(testCase.expected ?? {}, submission.actual ?? {});
   return {
     patch: {
       status: verdict.status,
       actual: submission.actual,
+      // requiresScreenshot=false 时不强制要求，但 submission 传了仍透传存储（agent 主动截图不算错）
       screenshotPath: submission.screenshotPath,
       judgedAt: new Date().toISOString(),
       ...(verdict.status === "failed" ? { failureReason: verdict.reason } : {}),

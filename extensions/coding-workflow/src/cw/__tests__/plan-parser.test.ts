@@ -37,6 +37,7 @@ function makeLitePlan(overrides: Record<string, unknown> = {}): unknown {
         steps: "打开 /login → 提交",
         expected: { url: "/dashboard", text: "欢迎" },
         executor: "vitest",
+        requiresScreenshot: true,
       },
       {
         id: "E2",
@@ -45,6 +46,7 @@ function makeLitePlan(overrides: Record<string, unknown> = {}): unknown {
         steps: "mock 返回 200",
         expected: { text: "ok" },
         executor: "vitest",
+        requiresScreenshot: false,
       },
     ],
     ...overrides,
@@ -127,7 +129,16 @@ describe("parseLitePlan", () => {
 
   it("T2.3 — testCases 缺 expected 子结构 → throw", () => {
     const json = makeLitePlan({
-      testCases: [{ id: "E1", layer: "real", scenario: "x", steps: "y", executor: "z" }],
+      testCases: [{ id: "E1", layer: "real", scenario: "x", steps: "y", executor: "z", requiresScreenshot: true }],
+    });
+    expect(() => parseLitePlan(json, "lite")).toThrow(/invalid lite plan json/i);
+  });
+
+  it("P0 — testCases 缺 requiresScreenshot → throw（screenshot 要求由 plan 声明，必填）", () => {
+    const json = makeLitePlan({
+      testCases: [
+        { id: "E1", layer: "real", scenario: "x", steps: "y", expected: { text: "ok" }, executor: "z" },
+      ],
     });
     expect(() => parseLitePlan(json, "lite")).toThrow(/invalid lite plan json/i);
   });

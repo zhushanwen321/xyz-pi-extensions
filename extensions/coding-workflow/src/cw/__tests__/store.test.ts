@@ -120,7 +120,7 @@ describe("CwStore.loadTopic — 行→CwTopic 拼装（assembleTopic 叶子）",
     expect(loaded.workspacePath).toBe("/tmp/ws");
     expect(loaded.status).toBe("created");
     expect(loaded.planFormat).toBe("lite");
-    expect(loaded.schemaVersion).toBe(2);
+    expect(loaded.schemaVersion).toBe(SCHEMA_VERSION);
     // gate_passed JSON 列读改写
     expect(loaded.gatePassed).toEqual({ plan: true });
 

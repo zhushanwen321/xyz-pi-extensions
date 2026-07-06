@@ -234,6 +234,7 @@ describe("coding-workflow SDK contract [MANDATORY]", () => {
         testCases: [{
           id: "E1", layer: "real", scenario: "s", steps: "st",
           expected: { url: "/dash" }, executor: "vitest",
+          requiresScreenshot: true,
         }],
       }),
     ).toBe(true);

@@ -458,7 +458,7 @@ Wave 拆分：
 plan.md 自检全通过后，**必须额外产出 plan.json**（CW `plan` action 的入参，D-006 结构化 JSON）。
 
 **plan.json schema 见 `../lite-shared/references/cw-json-schemas.md`「plan.json」节**（字段约束 + format 锁定 + 写入路径）。
-关键提醒：`format` 必须 === `"lite"`（D-003 tier 锁定）；`testCases[].id` 用 `E1` 格式；`testCases[].expected` 是 judgeByExpected 重算基准。
+关键提醒：`format` 必须 === `"lite"`（D-003 tier 锁定）；`testCases[].id` 用 `E1` 格式；`testCases[].expected` 是 judgeByExpected 重算基准；`testCases[].requiresScreenshot` 布尔必填（声明本用例是否要求 screenshotPath——mock 层通常 false，real 层通常 true，CW test gate 按此字段判断而非无差别要求所有 lite case 都传截图）。
 
 > **[铁律] plan.json.testCases 只装 E\*（E2E），U\*（单测）不进 plan.json。** U* 留 plan.md 的「单测用例清单」章节，coding-execute 执行收尾机器门（check-execute.ts）读 plan.md + test-results.json 验收 U*。plan.json 的 testCases 只服务 CW test gate（test.ts judgeByExpected 重算 E*）。详见 cw-json-schemas.md「plan.json」节的映射说明。
 
