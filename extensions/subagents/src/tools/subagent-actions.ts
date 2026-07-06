@@ -52,6 +52,8 @@ export interface StartHandlerInput {
   schema?: Record<string, unknown>;
   maxTurns?: number;
   graceTurns?: number;
+  /** ADR-029 决策 1：per-call 工作目录，worktree 隔离用。 */
+  cwd?: string;
 }
 
 /** start 领域对象（adapter 包成 syncResponse 或 bgResponse）。 */
@@ -150,6 +152,7 @@ export async function startHandler(
     schema: input.schema,
     maxTurns: input.maxTurns,
     graceTurns: input.graceTurns,
+    cwd: input.cwd,
     ctxModel,
     signal,
     onUpdate: onUpdate

@@ -104,6 +104,9 @@ const SubagentParams = Type.Object({
     schema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     maxTurns: Type.Optional(Type.Number()),
     graceTurns: Type.Optional(Type.Number()),
+    cwd: Type.Optional(Type.String({
+      description: "Per-call working directory for the subagent (absolute path). Overrides the session default cwd. Use a worktree path for filesystem isolation — the subagent's createAgentSession, ResourceLoader, SessionManager, and bash tool all bind to this directory. Different cwds get independent session directories (no cross-talk). Omit to inherit the main session cwd.",
+    })),
   })),
   listParam: Type.Optional(Type.Object({
     includeFinished: Type.Optional(Type.Boolean({
@@ -165,6 +168,11 @@ Completion auto-notifies you (a message is injected that wakes your next turn). 
 - chain — dependent steps where B needs A's output: sync calls across turns.
 - parallel / fan-out — N independent tasks concurrently: send N \`subagent\` calls with action:"start" + wait:false in the SAME message. Each returns a subagentId at once; tasks run concurrently. Then do other work, or just stop.
 - background — one long-running task you don't want to block on: action:"start" + wait:false, then move on. Cancel later with action:"cancel" if the direction is wrong.
+
+## Worktree isolation (startParam.cwd)
+
+Pass startParam.cwd (absolute worktree path) to run a subagent in an isolated git worktree. The subagent's entire runtime (createAgentSession, ResourceLoader, SessionManager, bash tool) binds to that directory — different worktrees never cross-talk. This is how multi-wave dev / test / review ensembles run in parallel without git index conflicts or test side-effect pollution. Each distinct cwd gets its own session directory under ~/.pi/agent/subagents/encoded-cwd/.
+
 
 ## Anti-patterns
 

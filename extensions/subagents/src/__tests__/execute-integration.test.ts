@@ -121,8 +121,9 @@ function makeFakeSession(opts: {
   };
 }
 
-function makeFakeSdk(session: AgentSessionLike): SdkLike {
-  return {
+function makeFakeSdk(session: AgentSessionLike): SdkLike & { createAgentSessionMock: ReturnType<typeof vi.fn> } {
+  const createAgentSessionMock = vi.fn(async () => ({ session }));
+  const sdk: SdkLike = {
     DefaultResourceLoader: class {
       reload = vi.fn(async () => {});
     },
@@ -130,8 +131,10 @@ function makeFakeSdk(session: AgentSessionLike): SdkLike {
       inMemory: () => ({}),
       create: () => ({}),
     },
-    createAgentSession: vi.fn(async () => ({ session })),
+    createAgentSession: createAgentSessionMock,
   };
+  // 附加 mock 引用供测试断言（不污染 SdkLike 接口形状，createAgentSession 本身已是该 mock）
+  return Object.assign(sdk, { createAgentSessionMock });
 }
 
 // ── SubagentService setup（真实 ModelConfigService + 真实 Service）──
@@ -157,10 +160,13 @@ interface SetupResult {
   pi: ReturnType<typeof makePi>;
   agentDir: string;
   ctxModel: ModelInfo;
+  /** 暴露 createAgentSession mock，供 cwd 透传等契约断言（ADR-029 决策 1）。 */
+  createAgentSessionMock: ReturnType<typeof vi.fn>;
 }
 
 function setup(session: AgentSessionLike): SetupResult {
-  fakeSdkSlot.current = makeFakeSdk(session);
+  const fakeSdk = makeFakeSdk(session);
+  fakeSdkSlot.current = fakeSdk;
   const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-it-"));
   const modelService = new ModelConfigService({ agentDir });
   modelService.initModel({
@@ -176,6 +182,7 @@ function setup(session: AgentSessionLike): SetupResult {
     pi,
     agentDir,
     ctxModel: { id: "test-model", name: "Test", provider: "p", reasoning: false },
+    createAgentSessionMock: fakeSdk.createAgentSessionMock,
   };
 }
 
@@ -576,3 +583,92 @@ function makeQueueSdk(...sessions: AgentSessionLike[]): SdkLike {
     createAgentSession: vi.fn(async () => ({ session: sessions[i++]! })),
   };
 }
+
+// ============================================================
+// ADR-029 决策 1：per-call cwd 透传契约测试
+// ============================================================
+
+describe("SubagentService.execute() per-call cwd (ADR-029 决策 1)", () => {
+  let agentDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of agentDirs) fs.rmSync(dir, { recursive: true, force: true });
+    agentDirs = [];
+    fakeSdkSlot.current = null;
+  });
+
+  it("opts.cwd 缺省 → createAgentSession 收到 service.cwd（主 session cwd，向后兼容）", async () => {
+    const handle = makeFakeSession({
+      promptBehavior: { kind: "resolve", events: [{ type: "turn_end" }, { type: "message_end" }] },
+    });
+    const { service, agentDir, ctxModel, createAgentSessionMock } = setup(handle.session);
+    agentDirs.push(agentDir);
+
+    await service.execute({ task: "default cwd", wait: true, ctxModel });
+
+    expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
+    const callArg = createAgentSessionMock.mock.calls[0]![0] as { cwd: string };
+    expect(callArg.cwd).toBe(agentDir); // 回退到 service.cwd
+  });
+
+  it("opts.cwd 显式传入 → createAgentSession 收到该 cwd（worktree 隔离生效）", async () => {
+    const handle = makeFakeSession({
+      promptBehavior: { kind: "resolve", events: [{ type: "turn_end" }, { type: "message_end" }] },
+    });
+    const { service, agentDir, ctxModel, createAgentSessionMock } = setup(handle.session);
+    agentDirs.push(agentDir);
+    const worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), "wt-"));
+    agentDirs.push(worktreeDir);
+
+    await service.execute({ task: "worktree cwd", wait: true, ctxModel, cwd: worktreeDir });
+
+    expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
+    const callArg = createAgentSessionMock.mock.calls[0]![0] as { cwd: string };
+    expect(callArg.cwd).toBe(worktreeDir); // per-call 覆盖
+    expect(callArg.cwd).not.toBe(agentDir); // 不是 service.cwd
+  });
+
+  it("不同 cwd 的并发 execute → 各自 createAgentSession 收到自己的 cwd（无隔离串扰）", async () => {
+    // 用 queue sdk 支持两次 createAgentSession
+    const handle1 = makeFakeSession({
+      promptBehavior: { kind: "resolve", events: [{ type: "turn_end" }, { type: "message_end" }] },
+    });
+    const handle2 = makeFakeSession({
+      promptBehavior: { kind: "resolve", events: [{ type: "turn_end" }, { type: "message_end" }] },
+    });
+    fakeSdkSlot.current = makeQueueSdk(handle1.session, handle2.session);
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-it-"));
+    agentDirs.push(agentDir);
+    const modelService = new ModelConfigService({ agentDir });
+    modelService.initModel({
+      modelRegistry: makeEmptyRegistry(),
+      sessionId: "exec-it",
+      ctxModel: { id: "test-model", name: "Test", provider: "p", reasoning: false },
+    });
+    const service = new SubagentService({ cwd: agentDir, modelService });
+    service.initSession({ pi: makePi(), sessionId: "exec-it" });
+    const wt1 = fs.mkdtempSync(path.join(os.tmpdir(), "wt1-"));
+    const wt2 = fs.mkdtempSync(path.join(os.tmpdir(), "wt2-"));
+    agentDirs.push(wt1, wt2);
+    const ctxModel: ModelInfo = { id: "test-model", name: "Test", provider: "p", reasoning: false };
+
+    // background 并发（不阻塞），两个不同 cwd
+    const r1 = await service.execute({ task: "wt1", wait: false, ctxModel, cwd: wt1 });
+    const r2 = await service.execute({ task: "wt2", wait: false, ctxModel, cwd: wt2 });
+    // 等两个 background 完成（detached）
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        if (service.collectRecords(10).every((r) => r.status !== "running")) resolve();
+        else setTimeout(check, 10);
+      };
+      check();
+    });
+
+    const createAgentSessionCalls = (fakeSdkSlot.current as unknown as { createAgentSession: { mock: { calls: Array<{ 0: { cwd: string } }> } } }).createAgentSession.mock.calls;
+    const cwds = createAgentSessionCalls.map((c) => c[0].cwd);
+    expect(cwds).toContain(wt1);
+    expect(cwds).toContain(wt2);
+    expect(r1.mode).toBe("background");
+    expect(r2.mode).toBe("background");
+  });
+});

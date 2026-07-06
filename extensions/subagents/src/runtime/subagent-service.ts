@@ -240,7 +240,7 @@ export class SubagentService {
 
     // mode 判定（业务规则归 Service，tool 层只传 wait 意图）
     const mode = this.resolveMode(opts);
-    const ctx = await this.buildSessionRunnerContext();
+    const ctx = await this.buildSessionRunnerContext(opts);
 
     // ── 1. IDENTITY 解析（确认 → agentConfig → resolveModel）──
     const identity = await this.resolveIdentity(opts);
@@ -542,13 +542,18 @@ export class SubagentService {
     }
   }
 
-  /** 构造 SessionRunnerContext。sdk lazy 获取 + 缓存。 */
-  private async buildSessionRunnerContext(): Promise<SessionRunnerContext> {
+  /**
+   * 构造 SessionRunnerContext。sdk lazy 获取 + 缓存。
+   *
+   * ADR-029 决策 1：支持 per-call cwd 覆盖 service.cwd（worktree 隔离场景）。
+   * opts.cwd 缺省时回退 this.cwd（主 session cwd），向后兼容。
+   */
+  private async buildSessionRunnerContext(opts?: ExecuteOptions): Promise<SessionRunnerContext> {
     if (this.sdk === null) {
       this.sdk = await getSdk();
     }
     return {
-      cwd: this.cwd,
+      cwd: opts?.cwd ?? this.cwd,
       agentDir: this.modelService.getAgentDir(),
       modelRegistry: this.modelService.getModelRegistry(),
       resolveAgent: (name: string) => this.modelService.getAgentConfig(name),

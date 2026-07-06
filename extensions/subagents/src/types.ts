@@ -351,6 +351,15 @@ export interface ExecuteOptions {
   onUpdate?: (details: SubagentToolDetails) => void;
   /** background 完成回调（sync 不调）。 */
   onComplete?: (record: RecordSnapshot) => void;
+  /**
+   * Per-call 工作目录（ADR-029 决策 1）。缺省回退 service.cwd（主 session cwd）。
+   *
+   * 用于 worktree 隔离：传入 worktree 绝对路径，subagent 的 createAgentSession /
+   * ResourceLoader / SessionManager / bash 工具都绑定到该目录，实现文件系统隔离。
+   * 不同 cwd 的 subagent 各自独立（SessionManager 按 cwd 建独立 session 目录，
+   * branchCache 按 cwd 缓存），无并发隔离风险。
+   */
+  cwd?: string;
 }
 
 /**
