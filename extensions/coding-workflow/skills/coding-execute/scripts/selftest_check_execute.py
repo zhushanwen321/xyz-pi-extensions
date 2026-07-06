@@ -208,13 +208,14 @@ def main() -> None:
         ]
     }, expect_zero=False)
 
-    # 补充负例：pending-env 停为终态（须 ask_user 解析，未解析→FAIL）
-    check("pending_env_terminal", {
+    # 补充负例：real 层 status=fail 停为终态（须 ask_user 解析，未解析→FAIL）
+    # pending-env 已砍除（ADR-029 决策 5）：没环境跑不了 = fail，不再有中间态
+    check("real_fail_terminal", {
         "results": [
             {"id": "U1", "status": "pass"},
             {"id": "U2", "status": "pass"},
             {"id": "E1", "status": "pass"},
-            {"id": "E1-r", "status": "pending-env", "evidence": "无环境"},
+            {"id": "E1-r", "status": "fail", "evidence": "no env: 无真实后端"},
             {"id": "E3", "status": "pass"},
         ]
     }, expect_zero=False)

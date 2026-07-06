@@ -200,7 +200,7 @@ bash ~/.claude/skills/create-worktree/create-worktree.sh feat/lite-review <base-
   **real 层（真实层）**：
   4. real 层 E2E：跑 plan E2E 清单中测试层=real 的用例（需真实后端/数据环境）
      - 能真跑（worktree 起本地 mock 后端 / docker-compose / 本地集成环境）→ 跑并报 pass/fail
-     - 确无环境 → **不要自标「手动通过」**，status 记 'pending-env'，由主 agent ask_user 决定（见 B3 用户豁免）
+     - 确无环境 → **不要自标「手动通过」**，status 记 'fail' + evidence 注明 'no env: <原因>'。主 agent 收到 fail 后 ask_user 决策（重跑 vs user-skipped+凭证，见 B3 用户豁免）
   对照 plan.md 用例清单逐条判定，**必须落盘结构化报告**到
   `.xyz-harness/{topic}/changes/test-results.json`（schema 见下方），
   这是阶段 C 执行收尾机器门的强制门数据源——自由文本报告无法机器核对。
@@ -223,8 +223,9 @@ bash ~/.claude/skills/create-worktree/create-worktree.sh feat/lite-review <base-
 
 字段规范：
 - **id**：与 plan.md 用例 ID 一致（U*/E*/E*-r）
-- **status**：`pass` | `fail` | `user-skipped` | `pending-env`
-  - **禁止** `manual` / `blocked` / `skipped`——这些是 AI 自标降级，执行收尾机器门一律判 FAIL。`pending-env` 是合法中间态但终态未解析同样判 FAIL
+- **status**：`pass` | `fail` | `user-skipped`
+  - **禁止** `manual` / `blocked` / `skipped`——这些是 AI 自标降级，执行收尾机器门一律判 FAIL
+  - `fail` 涵盖所有未通过（逻辑挂/跑不了/无环境）；主 agent 收到 fail 后 ask_user 决策（重跑 vs user-skipped+凭证）
   - `user-skipped` 必须带 `user_confirm_ref`（用户确认凭证），否则 FAIL
 - **evidence**：命令输出摘要 / 失败 file:line（机器可追溯）
 - **user_confirm_ref**：仅 user-skipped 必填——记录用户在哪确认跳过（turn 号 / ask_user 引用）
@@ -248,11 +249,11 @@ bash ~/.claude/skills/create-worktree/create-worktree.sh feat/lite-review <base-
 
 ### B3. 结果汇总 + todo 更新
 
-> **real 层 pending-env 处理（用户豁免权）**：test-runner 把确无环境真跑的 real 用例记 `status: pending-env`。主 agent 收齐后，对每条 pending-env **必须 ask_user** 由用户显式决定：
+> **real 层 fail 处理（用户豁免权）**：test-runner 把确无环境真跑的 real 用例记 `status: fail` + evidence 注明 'no env: <原因>'。主 agent 收齐后，对每条 fail **必须 ask_user** 由用户显式决定：
 > - 用户确认跳过 → 改 status 为 `user-skipped` + 填 `user_confirm_ref`（记用户确认引用）
 > - 用户要求真跑 → 主 agent 提供环境方案（起本地 mock 后端 / docker-compose）重派 test-runner
 >
-> **禁止 AI 自决把 pending-env 改成 manual/blocked/pass**——降级决定权在用户。见 `test-case-schema.md` 核心原则四。
+> **禁止 AI 自决把 fail 改成 manual/blocked/pass**——降级决定权在用户。见 `test-case-schema.md` 核心原则四。
 
 ```
 test-runner：逐条用例 pass/fail + 覆盖率数值（已落盘 test-results.json）
