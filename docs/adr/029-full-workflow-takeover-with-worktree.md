@@ -112,31 +112,47 @@ Phase 3: worktree-cleanup（finally 块，必跑）
 - Phase 3 cleanup 在 `finally` 块，无论前面成败都跑
 - cleanup 失败（如 worktree 有未提交改动）→ 不 throw，记录到 return 的 `cleanup_failures`，主 agent 提示用户手动清理
 
-### 决策 3：workflow 是纯执行器，不碰 cw 状态机
+### 决策 3：workflow 内 agent 渐进式调 cw（修订）
 
-**边界划分**：
+> **修订说明**：初版（2026-07-06 草案）曾决定"workflow 是纯执行器，不碰 cw 状态机"，理由是"workflow 子进程访问不到主 agent 的 CW topic session"。经核实此假设**错误**——cw store 是全局文件 `~/.pi/agent/cw/<encoded-cwd>/_cw.db`（基于 workspacePath 解析），**不是主 session 内存状态**。workflow spawn 的 pi 子进程继承用户 `~/.pi/agent/settings.json` 配置，cw extension 自动加载，agent 可直接调 cw tool。
+
+**修订后的边界**：
 ```
 主 agent:
   cw(create) → cw(plan/clarify/detail) → 调 workflow run execute-full-workflow
                                             ↓
-  workflow（Worker 线程，纯执行器）:           ↓ 不碰 _cw.db，不调 cw tool
+  workflow（Worker 线程）:                    ↓ 每个 agent 完成后立即调 cw
     Phase 0 worktree-setup                   ↓
-    Phase 1 dev waves (commit)               ↓
-    Phase 2 test + review                    ↓
-    Phase 3 worktree-cleanup                 ↓
-    return { commits, testResults, reviewMustFix, cleanupFailures }
+    Phase 1 dev waves:                       ↓
+      每个 implementer 完成后立即调 cw(action=dev, tasks=[{waveId, commitHash}],
+                                            workspacePath=<项目根>)
+    Phase 2 test + review:                   ↓
+      每个 test-runner 完成后立即调 cw(action=test, cases=[{caseId, ...}],
+                                            workspacePath=<项目根>)
+    Phase 3 worktree-cleanup
+    return { reviewMustFix, failures, cleanupFailures }  ← 不含 commits/testResults（已在 cw）
                                             ↓
   主 agent 收 return:
-    cw(action=dev, tasks=[{waveId, commitHash}, ...])
-    cw(action=test, cases=[{caseId, actual, ...}, ...])
+    读 cw 确认 dev gatePassed + test gatePassed
+    处理 review must_fix（决定回 dev 修 or 接受）
+    对 fail 的 test case ask_user 决策（重跑 vs user-skipped+凭证）
 ```
 
-**为什么这样切**：
-- workflow Worker 线程的无状态 pi 子进程访问不到主 agent 的 CW topic session，不能写 `_cw.db`
-- cw(dev/test) 的状态机校验（GitValidator、judgeByExpected、gatePassed）需要主 session 上下文
-- 主 agent 只做"调 cw + 传 return 数据"，不做"派 agent"——派 agent 的强制力来自 workflow 内脚本不可跳过
+**关键设计点**：
 
-**强制力闭环**：主 agent 一旦调 `workflow run execute-full-workflow`，dev + test 全程必跑（脚本内 `parallel()` 必派，无分支绕过）。workflow 不碰状态机（职责清晰），主 agent 不派 agent（避免认知层逃逸）。
+1. **agent 调 cw 必须显式传 `workspacePath`（项目根）**——workflow 内 agent 的 cwd 是 worktree 路径（如 `/project/.cw-wt/cw-slug-dev-w1`），若不传 workspacePath，cw 默认用 `process.cwd()` → `encodeCwd` 编码出 worktree 路径 → 打开错误的 `_cw.db`。`workspacePath` 必须由 workflow 通过 agent task 注入（从 $ARGS.workspaceRoot 透传）。
+
+2. **并发写需 WAL 模式**（见决策 6）——多 agent 并行调 cw 会并发 BEGIN，当前 rollback journal 模式会 SQLITE_BUSY。
+
+3. **cw(dev/test) 渐进式设计已支持**（D-005）——每次调用只处理提交的 1 条/几条，重算 gatePassed（全 testCase passed 才 true），追加 gateHistory（progressive: true）。这是 cw 原生设计，不是新造。
+
+**为什么渐进式优于收齐再调**：
+- **不遗漏**：workflow crash/abort 后，cw 记录了已完成的部分，可恢复（loadTopic 看进度）
+- **任务对齐**：每条 case 的 agent 执行对应一个 cw 调用，审计清晰（gateHistory 可追溯）
+- **主 agent 职责简化**：不再中转 commit/testResult 数据，只处理需判断的（review must_fix + fail ask_user）
+- **cw 状态实时可见**：任何时刻 loadTopic 都能看到当前进度
+
+**强制力闭环**：主 agent 一旦调 workflow run，dev + test 全程必跑（脚本内 parallel() 必派，agent 必调 cw）。workflow 不做状态机决策（只调渐进式 API），主 agent 不派 agent（避免认知层逃逸）。
 
 ### 决策 4：test 调度字段进 plan.json（lite + mid 同 schema）
 
@@ -161,6 +177,23 @@ Phase 3: worktree-cleanup（finally 块，必跑）
 
 **plan skill 指导**：lite-plan / mid-detail-plan 的测试设计步骤加"测试调度设计"子步骤，要求 agent 设计完用例后标注每条的 `dependsOn` + `parallelGroup`。
 
+### 决策 6：store 加 WAL + busy_timeout（并发写前置）
+
+**背景**：决策 3 修订后，workflow 内多 agent 并行调 cw → 并发 `BEGIN`。当前 store（`node:sqlite` 默认 rollback journal 模式，无 busy_timeout）会立即 `SQLITE_BUSY` 报错。
+
+**改动**（`src/cw/store.ts` 构造函数）：
+```typescript
+db.exec("PRAGMA journal_mode=WAL");
+db.exec("PRAGMA busy_timeout=5000");
+```
+
+**为什么**：
+- **WAL 模式**：支持并发读 + 单写串行排队（多读不阻塞写，写不阻塞读）
+- **busy_timeout=5000**：撞写锁时等待 5s 重试而非立即报错（覆盖短事务场景）
+- 这是 SQLite 多进程并发写入的标准方案
+
+**风险**：WAL 模式产生 `-wal` / `-shm` 侧车文件。若进程异常退出可能残留（但 SQLite 下次打开自动 checkpoint，无数据风险）。`store.close()` 已每次调用后关闭连接，配合 WAL 的短事务，并发安全。
+
 ### 决策 5：砍除 pending-env 状态
 
 **来源**：commit `03698ebf5`，原意区分"AI 自标 blocked（逃逸）"和"test-runner 诚实上报没环境"。
@@ -179,10 +212,11 @@ Phase 3: worktree-cleanup（finally 块，必跑）
 ### 正面
 
 - **强制力闭环**：dev + test 全程机器强制，AI 调了 workflow 就必走完，认知层逃逸（"小任务跳过"）被堵死
+- **渐进式可恢复**：每个 agent 完成后立即调 cw，workflow crash 后 cw 记录已完成部分，可从断点恢复（收齐再调方案 crash 则全丢）
 - **上下文聚焦**：每 case 1 agent，agent 上下文极小（只跑 1 条），解决"大测试集 1 个 agent 上下文爆炸、注意力分散"
-- **架构对称**：dev 有 wave 调度（`WaveSeed.dependsOn/parallelGroup`），test 也有同构调度（`TestCase.dependsOn/parallelGroup`），plan 阶段用同一套心智模型
-- **状态简化**：砍 pending-env 后，test 状态机从 4 态（pass/fail/user-skipped/pending-env）简化为 3 态（pass/fail/user-skipped）
-- **per-call cwd 能力下沉**：subagents + workflow 都支持后，未来任何需要 worktree 隔离的场景都能用（不只 CW）
+- **架构对称**：dev 有 wave 调度（`WaveSeed.dependsOn/parallelGroup`），test 也有同构调度，plan 阶段用同一套心智模型
+- **状态简化**：砍 pending-env 后，test 状态机从 4 态简化为 3 态
+- **per-call cwd 能力下沉**：subagents + workflow 都支持后，未来任何需要 worktree 隔离的场景都能用
 
 ### 负面
 
@@ -195,9 +229,10 @@ Phase 3: worktree-cleanup（finally 块，必跑）
 
 1. **Chain A（subagents per-call cwd）**——内核已就绪，改动小，可独立测试 + 发布
 2. **Chain B（workflow agent() cwd）**——依赖 Chain A 的设计模式但独立实现
-3. **砍 pending-env + plan.json 加 dependsOn/parallelGroup**——schema + 文档 + store migration（v3→v4）
-4. **写 execute-full-workflow 脚本**——全流程（worktree setup / dev waves / test+review / cleanup）
-5. **改 coding-execute SKILL**——阶段 A+B 指导改为"调 workflow run"，保留 retrospect/closeout 主 agent 执行
+3. **Store WAL + busy_timeout**（决策 6）——并发写前置，独立小改动
+4. **砍 pending-env + plan.json 加 dependsOn/parallelGroup**——schema + 文档 + store migration（v3→v4）
+5. **写 execute-full-workflow 脚本**——全流程（worktree setup / dev waves 渐进调 cw / test+review 渐进调 cw / cleanup）
+6. **改 coding-execute SKILL**——阶段 A+B 指导改为"调 workflow run"，保留 retrospect/closeout 主 agent 执行
 
 ### 风险与缓解
 
@@ -220,7 +255,7 @@ Phase 3: worktree-cleanup（finally 块，必跑）
 
 ### Alternative 3：workflow 内调 cw tool（碰状态机）
 
-**否决理由**：需给 workflow 子进程传 topicId + 让 cw tool 支持跨进程 db 访问，大改 CW 架构。且 workflow 子进程的 cw 调用无法获得主 session 的 gate 校验上下文。决策 3 的"纯执行器"边界更清晰。
+**采用**（决策 3 修订）。初版曾否决此方案，理由是"workflow 子进程访问不到 cw 状态"。经核实此假设错误（cw 是全局文件不是 session 内存），且渐进式调 cw 优于收齐再调（crash 可恢复 + 任务对齐）。决策 3 已修订为采用此方案。
 
 ### Alternative 4：per-call cwd 只改 subagents，workflow 用 prompt cd 指令过渡
 
@@ -228,6 +263,9 @@ Phase 3: worktree-cleanup（finally 块，必跑）
 
 ## Open questions
 
-1. **mid 路径的 dev Wave 绑定 test-matrix**：mid 的 `execution-plan.md` 已把 test-matrix 用例 ID 绑到 dev Wave（`wave-template.md`）。全流程 workflow 化后，mid 的 test 调度是"跟 dev Wave 走"还是"独立 test-wave"？倾向：mid 的 dev Wave 信息编码进 `testCases.dependsOn/parallelGroup`，test 阶段统一用独立 test-wave（与 lite 对称）。
-2. **worktree 并发上限**：dev 多 wave 组 + test + review 可能同时建 5+ worktree。需设上限或分批建。
-3. **cw(dev) 渐进式提交**：当前 cw(dev) 支持渐进式（长 N = 批量 commitHash）。全流程 workflow return 所有 commitHash 后，主 agent 一次性调 cw(dev) 还是分批？倾向一次性（workflow 已等全部 dev 完成）。
+1. ~~**mid 路径的 dev Wave 绑定 test-matrix**~~：已确认——mid 的 dev Wave 信息编码进 `testCases.dependsOn/parallelGroup`，test 阶段统一用独立 test-wave（与 lite 对称）。
+2. ~~**worktree 并发上限**~~：已确认 5，超限分批。
+3. ~~**worktree 共享 vs 独占**~~：已确认独占。
+4. ~~**test dependsOn 软/硬依赖**~~：已确认是硬依赖（拓扑排序，被依赖的先跑，上游 fail abort 下游）。
+5. ~~**cw 渐进式调 vs 收齐再调**~~：已确认渐进式（每 agent 完成后立即调 cw，决策 3 修订）。
+6. **agent 调 cw 的 workspacePath 注入**：workflow 必须在 agent task 里显式注入 `workspacePath=<项目根>`，否则 worktree cwd 导致打开错误的 `_cw.db`。需在 workflow 脚本的 prompt 模板里固定此参数。

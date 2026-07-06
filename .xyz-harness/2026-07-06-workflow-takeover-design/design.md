@@ -46,6 +46,20 @@
 
 ## Part 1：Schema 设计（plan.json + store）
 
+### 1.0 Store 加 WAL + busy_timeout（ADR-029 决策 6，并发写前置）
+
+**文件**：`extensions/coding-workflow/src/cw/store.ts`
+
+**位置**：构造函数（`new CwStore` / DatabaseSync 初始化处）
+
+```typescript
+// 在打开 db 后、任何操作前执行：
+db.exec("PRAGMA journal_mode=WAL");
+db.exec("PRAGMA busy_timeout=5000");
+```
+
+**原因**：决策 3 修订后，workflow 内多 agent 并行调 cw → 并发 BEGIN。WAL 支持并发读 + 单写串行，busy_timeout 让撞锁等待 5s 而非立即报错。
+
 ### 1.1 LitePlanSchema / MidDetailSchema 扩展
 
 **文件**：`extensions/coding-workflow/src/cw/plan-parser.ts`
@@ -331,7 +345,7 @@ read plan.json → waves + testCases
 
 > **worktree 命名规范**：`{workspaceRoot}/.cw-wt/cw-{slug}-{role}-{n}`。`.cw-wt/` 加 .gitignore。
 
-### 3.3 Phase 1：dev waves
+### 3.3 Phase 1：dev waves（渐进式调 cw）
 
 **二维数组构造**（复用 wave-model.md 的 dev wave 调度）：
 ```
@@ -341,64 +355,74 @@ devWaves = plan.waves 按并行组重构：
   wave 间串行（dependsOn 拓扑序），wave 内并行
 ```
 
-**调度**：
+**调度**（关键：每个 implementer 的 task 含"完成后调 cw"指令）：
 ```javascript
-const allCommits = [];
+const buildImplementerPrompt = (waveCase, plan, workspaceRoot, topicId) => [
+  "你是 implementer（TDD：先写失败测试→实现→跑通→commit）。",
+  "工作目录: " + waveCase.worktree,
+  "实现: " + waveCase.changes.join(", "),
+  // ... TDD 步骤 ...
+  "",
+  "## 完成后强制（渐进式提交）",
+  "commit 后必须立即调 cw tool 提交本 wave 的 commitHash：",
+  'cw(action="dev", topicId="' + topicId + '", workspacePath="' + workspaceRoot + '", ',
+  '  tasks=[{waveId: "' + waveCase.id + '", commitHash: "<你的 commit hash>"}])',
+  "⚠️ workspacePath 必须传项目根（" + workspaceRoot + "），不能用 cwd（你在 worktree 里）",
+  "",
+  "## 返回",
+  "调用 structured-output 返回 {commitHash, files, testsPassed, cwSubmitted}。",
+].join("\n");
+
 for (const wave of devWaves) {
   phase("dev-wave-" + wave.id);
   const results = await parallel(wave.cases.map(c => ({
-    prompt: buildImplementerPrompt(c, plan),  // TDD: 先写测试→实现→跑通→commit
+    prompt: buildImplementerPrompt(c, plan, workspaceRoot, topicId),
     cwd: c.worktree,                          // ← per-call cwd
-    schema: { commitHash: string, files: string[], testsPassed: boolean },
+    schema: { commitHash: string, files: string[], testsPassed: boolean, cwSubmitted: boolean },
     description: "dev-" + c.id,
   })));
-  // 任一 implementer 失败 → 记录，继续还是 abort？
-  // 决策：abort 后续 wave（依赖链断），但已 commit 的保留（cw dev 渐进式可提交部分）
-  for (const r of results) {
-    if (r.commitHash) allCommits.push({ waveId: wave.id, commitHash: r.commitHash });
-    else { log("wave " + wave.id + " 失败，abort 后续 dev wave"); return earlyReturn; }
+  // 任一 implementer 失败 → abort 后续 wave
+  if (results.some(r => !r.commitHash || !r.cwSubmitted)) {
+    log("dev wave " + wave.id + " 失败，abort 后续 dev wave");
+    return earlyReturn;
   }
+}
+// 不需收集 allCommits——每步已调 cw，状态机已有
+```
+
+> **关键**：workflow 不收集 commitHash 了。每个 implementer 完成后自己调 cw(dev)，cw 状态机实时更新。workflow return 时 cw 已是 dev gatePassed 终态。
+
+### 3.4 Phase 2：test + review（渐进式调 cw）
+
+**test 二维数组构造**（ADR-029 决策 4 算法，dependsOn 是硬依赖）：
+```
+1. 拓扑排序 testCases（按 dependsOn）—— 被依赖的先跑
+2. 同 parallelGroup 的用例 → 同 wave（并行）
+3. 无 parallelGroup → 独占 wave（串行）
+4. wave 间串行，上游任一 fail → abort 下游（硬依赖链断）
+```
+
+**调度**（wave 间串行，wave 内 parallel）：
+```javascript
+for (const wave of testWaves) {
+  phase("test-wave-" + wave.map(c => c.id).join(","));
+  const testCalls = wave.map(c => ({
+    prompt: buildTestRunnerPrompt(c, plan, tier, workspaceRoot, topicId),
+    cwd: testWorktree,
+    schema: TEST_RESULT_SCHEMA,
+    description: "test-" + c.id,
+  }));
+  const reviewCalls = (wave === testWaves[0]) ? [  // review 只在首个 test wave 并行启动
+    { prompt: buildReviewPrompt("correctness", workspaceRoot), cwd: reviewWorktree, schema: REVIEW_SCHEMA, description: "review-correctness" },
+    { prompt: buildReviewPrompt("quality", workspaceRoot), cwd: reviewWorktree, schema: REVIEW_SCHEMA, description: "review-quality" },
+  ] : [];
+  const results = await parallel([...testCalls, ...reviewCalls]);
+  // 任一 test case fail → abort 后续 wave（硬依赖）
+  if (results.some(r => r.status === "fail")) { log("test fail，abort 后续 wave"); break; }
 }
 ```
 
-### 3.4 Phase 2：test + review
-
-**test 二维数组构造**（ADR-029 决策 4 算法）：
-```
-testCases 按 dependsOn 拓扑排序
-→ 按 parallelGroup 打包同组连续用例
-→ 无 group 各自独占 wave
-→ testWaves[][]（wave 间串行，wave 内并行）
-
-但 test 与 review 可并行（不同 worktree）→ 用一个 parallel 包含所有 test cases + 2 reviewer
-```
-
-**调度**：
-```javascript
-phase("test-review");
-const testCalls = testCases.map(c => ({
-  prompt: buildTestRunnerPrompt(c, plan, tier),  // 只跑这 1 条 case
-  cwd: testWorktree,
-  schema: TEST_RESULT_SCHEMA,  // {id, status, evidence, actual?, screenshotPath?, commitHash?}
-  description: "test-" + c.id,
-}));
-
-const reviewCalls = [
-  { prompt: buildReviewPrompt("correctness"), cwd: reviewWorktree, schema: REVIEW_SCHEMA, description: "review-correctness" },
-  { prompt: buildReviewPrompt("quality"), cwd: reviewWorktree, schema: REVIEW_SCHEMA, description: "review-quality" },
-];
-
-const allResults = await parallel([...testCalls, ...reviewCalls]);
-// 分离 test 结果 + review 结果
-```
-
-> **注意**：testCases 不分 wave 串行了——既然每 case 1 agent，且 test 与 review 并行，直接所有 test case + 2 reviewer 一起 parallel。dependsOn 的拓扑序在 prompt 里告知 agent（"前置用例 X 已跑，其数据状态 Y 可用"），但实际并行跑（plan 已确认依赖是数据状态依赖，不是执行互斥——除非 parallelGroup 不同）。
->
-> **修正**：若 dependsOn 是严格执行顺序（E3 必须 E1 完成后才能跑），则仍需分 wave。看 dependsOn 语义：
-> - 数据状态依赖（E1 建数据，E3 用）→ 若同 worktree，E1 的 commit 后 E3 可见 → 可并行（E3 agent 会看到 E1 的改动）
-> - 真正的执行互斥（E1 起服务占端口，E3 也要起）→ 必须串行
-> 
-> **决策**：dependsOn 视为"软依赖"（数据状态），默认全并行；硬互斥用不同 parallelGroup 表达（强制串行）。这样 test 可全并行（除非显式标不同 group）。
+> **review 时机**：review 审整个 diff，与 test case 无依赖。在首个 test wave 并行启动（test 跑时 review 同时审），后续 wave 不重复。若首个 wave 还没跑完 review 已完，review 结果留待最后汇总。
 
 ### 3.5 Phase 3：worktree-cleanup
 
@@ -419,21 +443,25 @@ for (const wt of worktrees) {
 // cleanup 失败不 throw，记录到 return
 ```
 
-### 3.6 Return 契约
+### 3.6 Return 契约（修订：不含 commits/testResults，已在 cw）
 
 ```javascript
 return {
   phase: "complete",
-  commits: allCommits,          // [{waveId, commitHash}, ...] → 主 agent 组装 cw(dev) tasks
-  testResults: testResults,     // [{id, status, evidence, actual?, screenshotPath?, commitHash?}, ...] → 主 agent 组装 cw(test) cases
-  reviewMustFix: {              // 主 agent 决策是否回 dev 修
+  // 不含 commits / testResults——每个 agent 完成后已渐进式调 cw，状态机已有
+  cwStatus: {                          // workflow 末尾读 cw 确认终态
+    devGatePassed: boolean,            // 主 agent 据此判断是否需回 dev
+    testGatePassed: boolean,
+    testProgress: [{id, status}, ...], // cw(test) 的渐进结果
+  },
+  reviewMustFix: {                     // 主 agent 决策是否回 dev 修
     mergedFile: ".../review-merged.md",
     totalMustFix: N,
     overlap: "high" | "medium" | "low",
   },
   worktrees: { built: N, cleaned: M, cleanupFailures: [...] },
-  failures: { dev: [...], test: [...], review: [...] },
-  nextHint: "...",              // 主 agent 据此决策
+  failures: { dev: [...], test: [...], review: [...] },  // 未调 cw 的失败 agent
+  nextHint: "...",                     // 主 agent 据此决策（ask_user / 回 dev / complete）
 };
 ```
 
@@ -538,20 +566,28 @@ status: pass | fail | user-skipped
 
 ---
 
-## 实现顺序（与 ADR-029 一致）
+## 实现顺序（与 ADR-029 一致，含修订）
 
 1. **Chain A**：pi-subagents per-call cwd（4 文件，内核已就绪）
 2. **Chain B**：pi-workflow agent() cwd（4 文件）
-3. **Schema + pending-env**：plan.json 扩展 + store v3→v4 + 砍 pending-env（6 文件）
-4. **workflow 脚本**：execute-full-workflow.js（4 phase）
-5. **SKILL 改造**：coding-execute 阶段 A+B 改调 workflow
+3. **Store WAL + busy_timeout**（决策 6，并发写前置）
+4. **Schema + pending-env**：plan.json 扩展 + store v3→v4 + 砍 pending-env（6 文件）
+5. **workflow 脚本**：execute-full-workflow.js（4 phase，agent 渐进式调 cw）
+6. **SKILL 改造**：coding-execute 阶段 A+B 改调 workflow
 
 每步独立可测，Chain A/B 向后兼容（cwd optional），可先发布。
 
 ## Open questions（待 review 决策）
 
-1. **worktree 并发上限**：dev 多 wave 组 + test + review 可能同时 5+ worktree。设 maxWorktrees=6 够否？超限分批？
-2. **worktree 共享 vs 独占**：同 parallelGroup 的 dev implementer 能否共享 worktree（改不同文件无 index 冲突）？倾向独占（安全 + 简单）。
-3. **test dependsOn 软/硬依赖**：默认全并行 + prompt 告知软依赖，硬互斥用 parallelGroup。是否需更显式的 `executionHint: serial|parallel` 字段？倾向不加（parallelGroup 已够表达）。
-4. **mid 路径**：mid 的 dev Wave 绑定 test-matrix 编码进 testCases.dependsOn/parallelGroup，与 lite 对称用独立 test-wave。需确认 mid-detail-plan SKILL 的指导改动。
-5. **cw(dev) 一次性 vs 分批**：workflow return 所有 commits 后，主 agent 一次性调 cw(dev)（渐进式 tasks 长 N）。确认无问题。
+已全部确认（见 ADR-029 Open questions）：
+1. worktree 并发上限 = 5，超限分批
+2. worktree 独占
+3. test dependsOn 是硬依赖（拓扑排序，上游 fail abort 下游）
+4. mid 路径：dev Wave 绑定 test-matrix 编码进 testCases.dependsOn/parallelGroup，与 lite 对称
+5. cw 渐进式调（每 agent 完成后立即调 cw，决策 3 修订）
+6. agent 调 cw 必须显式传 workspacePath（项目根），workflow 通过 prompt 注入
+
+实现时需注意：
+- agent task 的 prompt 必须明确 cw 调用模板（含 workspacePath 参数）
+- store WAL + busy_timeout 是并发前置（决策 6）
+- workflow return 不含 commits/testResults（已在 cw），只 return review + failures + cwStatus
