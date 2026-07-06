@@ -85,6 +85,8 @@ export async function runPiProcess(
   signal?: AbortSignal,
   env?: Record<string, string>,
   onEvent?: (raw: Record<string, unknown>) => void,
+  /** ADR-029 决策 1：per-call worktree 隔离。传给 spawn cwd option，undefined 时继承默认。 */
+  cwd?: string,
 ): Promise<{ exitCode: number; stderr: string }> {
   let stderr = "";
   const exitCode = await new Promise<number>((resolve, reject) => {
@@ -92,6 +94,7 @@ export async function runPiProcess(
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       env: env ?? process.env,
+      cwd,
     });
     let buffer = "";
     let settled = false;

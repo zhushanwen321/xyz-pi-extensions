@@ -423,4 +423,39 @@ describe("SubprocessAgentRunner", () => {
       expect(mockSpawn).toHaveBeenCalledTimes(2);
     });
   });
+
+  // ============================================================
+  // ADR-029 决策 1：per-call cwd 透传契约测试
+  // ============================================================
+
+  describe("run — cwd passthrough (ADR-029 decision 1)", () => {
+    it("opts.cwd 缺省 → spawn cwd 为 undefined（继承默认，向后兼容）", async () => {
+      const runner = new SubprocessAgentRunner();
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(asChildProcess(proc));
+
+      const ac = new AbortController();
+      const p = runner.run({ prompt: "no cwd" }, ac.signal);
+      completeSuccess(proc, "ok");
+      await p;
+
+      const spawnOpts = mockSpawn.mock.calls[0]![2] as { cwd?: string } | undefined;
+      expect(spawnOpts?.cwd).toBeUndefined();
+    });
+
+    it("opts.cwd 显式传入 → spawn 收到该 cwd（worktree 隔离生效）", async () => {
+      const runner = new SubprocessAgentRunner();
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(asChildProcess(proc));
+
+      const worktreeDir = "/tmp/cw-wt/cw-slug-dev-w1";
+      const ac = new AbortController();
+      const p = runner.run({ prompt: "worktree", cwd: worktreeDir }, ac.signal);
+      completeSuccess(proc, "ok");
+      await p;
+
+      const spawnOpts = mockSpawn.mock.calls[0]![2] as { cwd?: string };
+      expect(spawnOpts.cwd).toBe(worktreeDir);
+    });
+  });
 });

@@ -163,6 +163,7 @@ export function buildWorkerScript(userScript: string): string {
     '          model: firstArg.model,',
     '          scene: firstArg.scene,',
     '          timeoutMs: firstArg.timeoutMs,',
+    '          cwd: firstArg.cwd,',
     '        };',
     '      } else {',
     '        opts = firstArg;',

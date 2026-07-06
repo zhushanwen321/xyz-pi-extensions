@@ -121,6 +121,14 @@ export interface AgentCallOpts {
  * to activate the structured-output tool + hook.
  */
   schemaEnv?: string;
+ /**
+ * Per-call 工作目录（ADR-029 决策 1）。传给 child_process.spawn 的 cwd option。
+ *
+ * 用于 worktree 隔离：传入 worktree 绝对路径，spawn 的 pi 子进程绑定到该目录，
+ * 其内部的 createAgentSession/ResourceLoader/bash 工具都在该目录运行。
+ * undefined 时 spawn 继承 workflow 进程的 cwd（向后兼容）。
+ */
+  cwd?: string;
 }
 
 /**

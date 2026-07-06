@@ -266,6 +266,8 @@ export class ConcurrencyGate {
           pipeline,
           controller.signal,
           env,
+          undefined,
+          opts.cwd,
         );
         exitCode = result.exitCode;
         stderr = result.stderr;
