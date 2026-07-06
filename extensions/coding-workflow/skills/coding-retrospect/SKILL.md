@@ -52,7 +52,7 @@ description: >-
 #### 文档自检
 
 - [ ] plan（plan.md / execution-plan.md）是否与最终实现一致？有无偏差（实现改了 plan 没更新）
-- [ ] 是否需要更新 CLAUDE.md / ARCHITECTURE.md / 相关 ADR（本次改动有无影响约定/架构）
+- [ ] 是否需要更新 AGENTS.md / ARCHITECTURE.md / 相关 ADR（本次改动有无影响约定/架构）
 - [ ] 测试清单是否值得沉淀进 TEST-STRATEGY.md（如有破坏即事故的基线用例）
 
 #### skill / subagent 优化自检
@@ -75,7 +75,7 @@ description: >-
 
 #### 系统提示词 / 业务 / 架构自检
 
-- [ ] 是否有反复出现的错误，提示了 CLAUDE.md 或系统提示词需要补充某条规则
+- [ ] 是否有反复出现的错误，提示了 AGENTS.md 或系统提示词需要补充某条规则
 - [ ] 业务流程是否合理？有无可简化的环节（如某个 Wave 其实可合并、某步验证多余）
 - [ ] 是否暴露了架构层面的问题（如某模块耦合太紧导致 Wave 无法并行 → 需 full 重构）
 
@@ -90,7 +90,7 @@ description: >-
 | 根因层级 | 识别信号 | 修复归属 | 修复方向 |
 |---------|---------|---------|----------|
 | **工具/系统层** | 问题是工具机制限制硬塞给执行者（cwd 不跨调用持久 / subagent 无心跳 / happy-dom 不支持真实 DOM）| pi 调度层 / 业务项目只能绕不能根治 | 先在 skill 加过渡方案，根治跨 repo |
-| **认知/流程层** | 是 skill 或 agent 的疏漏（handoff 事实盲信 / fixture 不在场 / TDD 步骤跳过） | lite skill / CLAUDE.md | 改 skill 指令或加规则 |
+| **认知/流程层** | 是 skill 或 agent 的疏漏（handoff 事实盲信 / fixture 不在场 / TDD 步骤跳过） | lite skill / AGENTS.md | 改 skill 指令或加规则 |
 | **架构/契约层** | 问题源于模块耦合 / 契约不一致 / 测试金字塔断层 | 业务项目架构 / 需 full 级决策 | 升级 full 工作流或更新 ADR |
 
 **每条 ❌/⚠️ 必须产出**：症状 → why1 → why2（至少 2 层）→ 分层归类 → 可证伪实验。可证伪 = 能用实验验证（如「若 bash cwd sticky，首条 cd 后 0 次重复」）；不可证伪的根因（如「脚本太脆弱」「AI 太懒」）是错误归因。
@@ -150,7 +150,7 @@ description: >-
 >
 > **[铁律] 报告里每个 ❌/⚠️ 条目后必须附 `| 根因：症状→why1→why2 | 层级：xxx`**。只写「问题→改进」、根因留空 = 未完成复盘，不能进 Step 4 交付。
 >
-> **[铁律] 改进项必须回流，禁止「追踪：待办」死信。** 归属为 lite-* / full-* / CLAUDE.md 的每条改进项，二选一：
+> **[铁律] 改进项必须回流，禁止「追踪：待办」死信。** 归属为 lite-* / full-* / AGENTS.md 的每条改进项，二选一：
 > - 当场改对应 skill / 文档，改进项的「追踪」标「已修（文件:行 或 commit）」
 > - 当场在 `docs/todos/` 建 followup 文件（如 `docs/todos/lite-skills-followups.md`），改进项的「追踪」标 followup 文件路径
 >

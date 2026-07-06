@@ -145,7 +145,7 @@ lite-plan 写 E2E 清单前 [MANDATORY] 探测项目**实际**的测试栈（不
    - 前端/E2E：playwright.config.* / cypress.config.* / puppeteer / package.json 里 testing-library 等
    - 后端/集成：项目实际用的测试框架（pytest / JUnit / go test / vitest / jest 等）
 2. [MANDATORY] 扫描项目是否已有测试手册/策略文档，有则 read 对应功能章节复用，不从零探索：
-   - 优先扫：根目录 `TEST-STRATEGY.md`（测试分层/mock 策略/回归基线 SSOT）、`docs/testing/`（若有，各功能 MOCK/非MOCK/E2E 操作手册）、`CLAUDE.md`/`AGENTS.md` 的「测试规范」章节
+   - 优先扫：根目录 `TEST-STRATEGY.md`（测试分层/mock 策略/回归基线 SSOT）、`docs/testing/`（若有，各功能 MOCK/非MOCK/E2E 操作手册）、`AGENTS.md`/`CLAUDE.md` 的「测试规范」章节
    - 复用内容：已有 data-testid 清单（避免重新发明 selector）、调用链/时序（fixture 怎么流转）、fixture/mock 数据位置、已知坑（mock 回显双匹配、收起态 v-if 时序、预填默认值等仅靠读组件代码无法发现的运行时行为）
    - 与本次改动的功能对应：若 docs/testing/ 有该功能的文档，E2E 用例的「执行方式」「前置」「预期值」直接复用其调用链和断言模式，标注来源；无对应文档时才从 fixture 对齐（见核心原则二）推导
 3. 有框架 → E2E 用例的执行方式写「该框架的实际命令」（如探测到 Playwright 才写 npx playwright test ...）

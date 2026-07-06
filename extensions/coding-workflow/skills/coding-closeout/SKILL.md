@@ -85,7 +85,7 @@ closeout 沉淀**设计产出**（信息归位），retrospect 回顾**执行过
 
 **强制溯源：** 每条沉淀标注 `[from: {topic} §{章节}]`。缺溯源 = CW closeout 机器检查报错。
 **去重：** 沉淀前 grep 目标文档现有 ID（如 NFR `S-1..S-N`），避免重复编号。
-**文档位置：** 分发表中的 PRODUCT/ARCHITECTURE/NFR/TEST-STRATEGY/DESIGN-LOG 建在主配置（CLAUDE.md/AGENTS.md）所在目录，与 coding-init 一致；`docs/adr/` 路径相对项目根不变。
+**文档位置：** 分发表中的 PRODUCT/ARCHITECTURE/NFR/TEST-STRATEGY/DESIGN-LOG 建在主配置（AGENTS.md/CLAUDE.md）所在目录，与 coding-init 一致；`docs/adr/` 路径相对项目根不变。
 
 分发表（详见 distill-rules.md）：
 

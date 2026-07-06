@@ -24,7 +24,7 @@ description: >-
 
 | 文档 | 级别 | 工作流关系 | 处理 |
 |------|------|-----------|------|
-| **CLAUDE.md / AGENTS.md** | 必备（二者其一） | AI 协作规范的单一真相源；所有阶段遵守 | 见下方「主配置定位」 |
+| **AGENTS.md / CLAUDE.md** | 必备（二者其一） | AI 协作规范的单一真相源；所有阶段遵守 | 见下方「主配置定位」 |
 | **README.md** | 必备 | 项目说明 | 标配，通常已存在，缺失才提示 |
 | **CONTEXT.md** | 必备 | full-clarity 写入统一语言/领域术语，后续全读 | 缺失则用模板创建骨架 |
 | **ARCHITECTURE.md** | 推荐 | 架构当前态（分层/模块/状态机/领域模型）；coding-closeout 从②沉淀 | 缺失则提示，按需创建骨架 |
@@ -33,9 +33,9 @@ description: >-
 | **TEST-STRATEGY.md** | 可选 | 测试策略 + 不可回退基线；coding-closeout 从⑥提炼 | 缺失不阻断，按需创建骨架 |
 | **DESIGN-LOG.md** | 可选 | 设计历史索引（跨主题导航）；coding-closeout 维护 | 缺失不阻断，按需创建骨架 |
 
-## 主配置定位（CLAUDE.md / AGENTS.md）
+## 主配置定位（AGENTS.md / CLAUDE.md）
 
-`CLAUDE.md`（Claude Code 专用）和 `AGENTS.md`（跨工具开放标准，Codex CLI / Copilot CLI / Gemini CLI / Cursor / Claude Code 均支持）**都是 AI 协作规范载体，二者等价，有一个即可，不强制同时存在或 symlink**。
+`AGENTS.md`（跨工具开放标准，Codex CLI / Copilot CLI / Gemini CLI / Cursor / Claude Code 均支持）是**新项目默认推荐**；`CLAUDE.md`（Claude Code 专用）为兼容现存项目保留。两者都是 AI 协作规范载体，**有一个即可**——不强制同时存在，也**不主动建立 symlink**（除非用户明确要求）。
 
 > ETH Zurich 研究结论：**臃肿的 context 文件反而降低 agent 成功率、增 20% 成本**。主配置要最小化（under 100 行），只含项目概述 / 技术栈 / 常用命令 / 核心约定，不含冗余解释。
 
@@ -43,9 +43,9 @@ description: >-
 
 | 现状 | 处理 |
 |------|------|
-| 只有 `CLAUDE.md` | ✅ 直接用，以其所在目录为文档根 |
 | 只有 `AGENTS.md` | ✅ 直接用，以其所在目录为文档根 |
-| 两者都有且内容重复 | ⚠️ 维护两份会漂移，建议合并保留一个（多工具生态推荐 `AGENTS.md`）。**让用户确认，不自动合并** |
+| 只有 `CLAUDE.md` | ✅ 直接用，以其所在目录为文档根（Claude Code 项目兼容） |
+| 两者都有且内容重复 | ⚠️ 维护两份会漂移，建议合并保留一个（推荐 `AGENTS.md`）。**让用户确认，不自动合并** |
 | 两者都有且内容不同 | ⚠️ 语义冲突，须用户厘清哪个是真相源 |
 | 两者都没有 | 进入「文档位置推断 — 无主配置降级查找」 |
 
@@ -56,18 +56,18 @@ description: >-
 长期文档（ARCHITECTURE / PRODUCT / NFR / TEST-STRATEGY / DESIGN-LOG / CONTEXT）**建在主配置所在目录**，而非硬编码项目根：
 
 - 主配置在项目根 → 长期文档建项目根
-- 主配置在子目录（如 `web/CLAUDE.md`）→ 长期文档建该子目录
+- 主配置在子目录（如 `web/AGENTS.md`）→ 长期文档建该子目录
 
 ### 无主配置时的降级查找
 
 主配置缺失时，**先扫描项目找类似文档**作为基线参考，避免在已有设计沉淀的项目里重复造容器：
 
-1. 扫描常见主配置文件名：`AGENTS.md`、`CLAUDE.md`、`.cursorrules`、`.github/copilot-instructions.md`
+1. 扫描常见主配置文件名：`AGENTS.md`、`CLAUDE.md`、`.cursorrules`、`.github/copilot-instructions.md`（AGENTS.md 优先，CLAUDE.md 为现存 Claude Code 项目兼容）
 2. 扫描已有架构 / 设计文档：`ARCHITECTURE.md`、`DESIGN.md`、`docs/architecture/`、`docs/design/`
 3. 找到任一 → 报告其位置，建议以其所在目录为文档根，**询问用户**确认
 4. 都没有 → 按默认规则在项目根建 `AGENTS.md`（最小骨架）+ 其他缺失文档
 
-> 默认建 `AGENTS.md`（通用标准，多工具支持）；用户明确只用 Claude Code 生态时建 `CLAUDE.md`。
+> 默认建 `AGENTS.md`（通用标准，多工具支持，新项目首选）；用户明确只用 Claude Code 生态时建 `CLAUDE.md`。不主动建 symlink，除非用户明确要求。
 
 ## 执行流程（轻量，不走 loop-skeleton 6 步）
 
@@ -166,7 +166,7 @@ description: >-
 
 ```
 ✅ 项目文档基建就绪。
-   单一真相源：CLAUDE.md（或 AGENTS.md，二者其一即可）
+   单一真相源：AGENTS.md（或 CLAUDE.md，二者其一即可）
    缺失必备文档已补齐骨架，请在后续阶段填充实际内容。
 下一步：①需求澄清 — 明确业务目标→路线→用例/数据流/UI-UX
 调用：`/full-clarity`
