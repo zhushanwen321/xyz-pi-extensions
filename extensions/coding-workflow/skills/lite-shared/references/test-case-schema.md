@@ -116,12 +116,12 @@ coding-execute 的执行收尾机器门对 real 层用例只认 `pass` 或 `user
 ```markdown
 ## E2E 用例清单
 
-| 用例ID | 场景 | 测试层 | 前置 | 步骤 | 预期 | 执行方式 |
-|--------|------|--------|------|------|------|---------|
-| E1     | 用户登录主流程 | mock | 已注册用户(mock API) | 1.打开/login 2.填表单 3.提交 | 跳转/profile，显示用户名 | <项目测试框架> |
-| E1-r   | 用户登录主流程 | real | 已注册用户+真实后端 | 同 E1 | 同 E1（真实后端返回） | 集成环境/手动 |
-| E2     | 登录失败边界 | mock | 错误密码 | 1.打开/login 2.填错误密码 3.提交 | 显示"密码错误"，停留/login | <项目测试框架> |
-| E3     | 并发下单边界 | real | 库存=1（真实DB） | 1.两请求同时下单 | 仅1成功，1返回"售罄" | 集成环境/脚本 |
+| 用例ID | 场景 | 测试层 | 前置 | 步骤 | 预期 | 执行方式 | dependsOn | parallelGroup |
+|--------|------|--------|------|------|------|---------|-----------|---------------|
+| E1     | 用户登录主流程 | mock | 已注册用户(mock API) | 1.打开/login 2.填表单 3.提交 | 跳转/profile，显示用户名 | <项目测试框架> | - | g-login |
+| E1-r   | 用户登录主流程 | real | 已注册用户+真实后端 | 同 E1 | 同 E1（真实后端返回） | 集成环境/手动 | - | g-login-real |
+| E2     | 登录失败边界 | mock | 错误密码 | 1.打开/login 2.填错误密码 3.提交 | 显示"密码错误"，停留/login | <项目测试框架> | - | g-login |
+| E3     | 查看订单（需登录） | real | 已登录 + 订单数据 | 1.登录 2.打开/orders | 显示订单列表 | 集成环境/脚本 | E1-r | g-order |
 ```
 
 > 同一业务流程常拆 mock + real 两条（如 E1 mock / E1-r real）：mock 条快、CI 高频跑；real 条真实集成兜底。用 `-r` 后缀区分同一场景的两层用例。
@@ -136,6 +136,25 @@ coding-execute 的执行收尾机器门对 real 层用例只认 `pass` 或 `user
   - `browser skill / MCP`：项目无 E2E 框架时，前端交互用例可调用 browser-automation **类** skill 或 CDP **类** MCP 驱动真实浏览器（Agent 主动发现当前环境有哪些 browser 类 skill/MCP，不限定具体名称）。注意这类手段**无 assertion 框架**——Agent 需自行解读截图/DOM 判定 pass/fail。
   - `手动`：无法自动化的场景（并发、物理设备等），写明手动验证步骤
 - **requiresScreenshot**（plan.json 必填字段，**不进 plan.md 表格**）：布尔，声明本用例是否要求 `screenshotPath`。CW test lite gate 按此字段判断——`true` 时 submission 缺 screenshot 或文件不存在 → failed；`false` 时跳过 screenshot 校验，只跑 judgeByExpected 重算。**不是按测试层（mock/real）一刀切**——plan 阶段 agent 按用例性质决定：mock 层通常 `false`（无 UI/真实环境，截图无意义），real 层通常 `true`（验证真实跑通）；例外：mock 层测 DOM 渲染也可能要截图，real 层测纯 API 也可能不要
+- **dependsOn**（plan.json 字段，ADR-029 决策 4）：本用例依赖哪些前置用例建的数据状态（如 E3 依赖 E1-r 建的登录态/订单数据）。**硬依赖**——workflow 拓扑排序，被依赖的先跑；上游任一 fail 则 abort 下游（依赖链断）。无依赖填 `-`。
+- **parallelGroup**（plan.json 字段，ADR-029 决策 4）：资源冲突规避分组。同 `parallelGroup` 的用例已确认无资源冲突（不同 chrome profile / 不同 DB 表 / 不同端口），可并行执行；不同组或有 dependsOn 的串行。无并行需求（独占资源）可不填。
+
+### 测试调度设计（ADR-029 决策 4）
+
+testCases 的 `dependsOn` + `parallelGroup` 与 dev wave 的 `WaveSeed.dependsOn/parallelGroup` 同名同义——plan 阶段用同一套心智模型填写，形成 dev-wave 与 test-wave 对称结构。workflow 的 execute-full-workflow 读这两个字段构造二维数组调度 test case：
+
+**wave 构造算法**（workflow 读 plan.json 后）：
+1. 拓扑排序 testCases（按 `dependsOn`）——被依赖的先跑
+2. 同 `parallelGroup` 的用例 → 打包进同一 wave（并行）
+3. 无 `parallelGroup` → 各自独占一个 wave（串行）
+4. wave 间串行，上游任一 fail → abort 下游（硬依赖链断）
+
+**填写指导**：
+- `dependsOn`：看用例的「前置」列——若前置依赖另一个用例建的数据状态（如 E3 要看订单，需 E1-r 先登录建 session），则 dependsOn=["E1-r"]。若前置是独立准备（如"已注册用户"不依赖其他用例），则 dependsOn 为空
+- `parallelGroup`：判断多个用例同时跑是否会抢资源——同 chrome profile 会冲突、同 DB 表写会冲突、同端口会冲突。资源无交集的用例标同一 group 可并行；有交集的标不同 group 串行
+- mock 层用例通常可全并行（隔离环境无副作用），real 层用例常需按环境资源分组
+
+> **示例**：上表中 E1（mock 登录）和 E2（mock 登录失败）都用 mock API 无真实环境冲突 → 同组 `g-login` 并行；E1-r（real 登录）和 E3（real 订单）都用真实后端但 E3 依赖 E1-r 的登录态 → E3 dependsOn E1-r 且不同 group 串行
 
 ### ⚠️ E2E / 前端测试栈探测（必做）
 

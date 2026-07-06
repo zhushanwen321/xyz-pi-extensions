@@ -173,7 +173,7 @@ subagent(action:'start', startParam:{
   - 项目根 ARCHITECTURE.md + TEST-STRATEGY.md（若有，测试手册复用）
 
   沿代码契约树产出：工程目录 + API 契约（签名表，标注接线层级）+ 功能时序图（类方法级，含异常路径）+ 包依赖图。
-  **test-matrix §6**：来源 0（项目已有测试，先读复用）+ 来源 A（功能用例，从时序图 alt/else 枚举异常用例，**每条标测试层 unit/integration/e2e/perf-chaos**（MidDetailSchema 4 层，plan-parser.ts:69-74 锁定）；并发/性能风险用例标 perf-chaos，端到端业务流标 e2e，模块间集成标 integration，纯逻辑单测算 unit）。
+  **test-matrix §6**：来源 0（项目已有测试，先读复用）+ 来源 A（功能用例，从时序图 alt/else 枚举异常用例，**每条标测试层 unit/integration/e2e/perf-chaos**（MidDetailSchema 4 层，plan-parser.ts:69-74 锁定）；并发/性能风险用例标 perf-chaos，端到端业务流标 e2e，模块间集成标 integration，纯逻辑单测算 unit）。**每条同时标 dependsOn + parallelGroup**（ADR-029 决策 4，测试调度字段，与 lite 同 schema）——dependsOn 标前置用例 ID（硬依赖，上游 fail abort 下游），parallelGroup 标资源冲突分组（同组可并行）。详见 `../lite-shared/references/test-case-schema.md`「测试调度设计」章节。
   **来源 B（NFR 用例）留占位** {PLACEHOLDER_NFR_SOURCE_B}——nfr 还在并行产出，主 agent Step 3 会从 nfr 回灌表补。
   **Step 7 骨架验证**：按 skeleton-spike.md 产 code-skeleton/（可编译骨架，验证签名/调用链/依赖方向，非实现 body）。
   签名设计标注接线层级（模块内直调/跨模块 port/adapter 真引 SDK）。
@@ -216,7 +216,7 @@ Wave 编排（根：从时序图推导）
 
 - 从 code-architecture.md §4 时序图推导 Wave 依赖（功能 B 调用 A → Wave(B) blocked_by Wave(A)）
 - Wave 表只列功能 Wave（都有代码改动）；**不设「验收 Wave」**——整体回归由 CW test 阶段承担（test gate 重算 T* 用例 + 覆盖率）
-- **[MANDATORY] 定稿含「测试验收清单」**——code-arch §6 test-matrix 全量用例（来源 A + B）按归属 Wave + **测试层（unit/integration/e2e/perf-chaos）**列全，供下游 coding-execute 分层验收（coding-execute 的执行收尾机器门自动识别 mid 的 T{UC}.{N} 用例 + 测试执行层；integration/e2e/perf-chaos 属 real 层，unit 属 mock 层——check-execute.ts:31 MID_LAYER_REAL 集合定义）
+- **[MANDATORY] 定稿含「测试验收清单」**——code-arch §6 test-matrix 全量用例（来源 A + B）按归属 Wave + **测试层（unit/integration/e2e/perf-chaos）** + **dependsOn/parallelGroup**（ADR-029 决策 4 测试调度）列全，供下游 coding-execute 分层验收（coding-execute 的执行收尾机器门自动识别 mid 的 T{UC}.{N} 用例 + 测试执行层；integration/e2e/perf-chaos 属 real 层，unit 属 mock 层——check-execute.ts:31 MID_LAYER_REAL 集合定义）
 - **性能混沌类缓解项**编排为独立 perf/chaos Wave 或 pre-prod gate（不混入功能 Wave）
 
 ### 3c. 机器检查（CW gate 统一执行）
