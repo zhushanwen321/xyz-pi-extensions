@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": false,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": []
+  },
+  "include": ["external.d.ts", "src/**/*.ts"]
+}

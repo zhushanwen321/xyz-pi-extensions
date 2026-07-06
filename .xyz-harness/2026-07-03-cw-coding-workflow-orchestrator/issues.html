@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Issue 决策图 — CW 实施</title>
+<style>
+/*
+ * design.css — coding-visualizer 公共样式
+ * 从 issues.html (feat-system-prompt-loader) 抽出，作为 6 阶段产物骨架的统一底座。
+ * 阶段特有类（.issue / .wave-card / .uc / .risk-* 等）放各骨架局部 style，不在此文件。
+ *
+ * render.sh 通过占位符注释 INLINE:design.css 将本文件内联进产物 HTML。
+ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --font-body: 'Bricolage Grotesque', 'PingFang SC', system-ui, sans-serif;
+  --font-mono: 'Space Mono', 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  --bg: #f6f8f8; --surface: #ffffff; --surface-2: #eef2f1; --surface-elevated: #ffffff;
+  --border: rgba(15, 40, 40, 0.08); --border-bright: rgba(15, 40, 40, 0.16);
+  --text: #0f2a2a; --text-dim: #5a6b6b;
+  --accent: #0d9488; --accent-dim: rgba(13, 148, 136, 0.10);
+  --slate: #334155; --slate-dim: rgba(51, 65, 85, 0.10);
+  --green: #059669; --green-dim: rgba(5, 150, 105, 0.12);
+  --red: #dc2626; --red-dim: rgba(220, 38, 38, 0.10);
+  --orange: #c2410c; --orange-dim: rgba(194, 65, 12, 0.10);
+  --amber: #b45309; --amber-dim: rgba(180, 83, 9, 0.12);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0a1414; --surface: #111d1d; --surface-2: #182626; --surface-elevated: #162121;
+    --border: rgba(180, 220, 220, 0.07); --border-bright: rgba(180, 220, 220, 0.15);
+    --text: #e3efee; --text-dim: #8aa0a0;
+    --accent: #2dd4bf; --accent-dim: rgba(45, 212, 191, 0.13);
+    --slate: #94a3b8; --slate-dim: rgba(148, 163, 184, 0.12);
+    --green: #34d399; --green-dim: rgba(52, 211, 153, 0.13);
+    --red: #f87171; --red-dim: rgba(248, 113, 113, 0.12);
+    --orange: #fb923c; --orange-dim: rgba(251, 146, 60, 0.12);
+    --amber: #fbbf24; --amber-dim: rgba(251, 191, 36, 0.14);
+  }
+}
+html { scroll-behavior: smooth; }
+body { font-family: var(--font-body); color: var(--text); line-height: 1.65; background: var(--bg); background-image: radial-gradient(ellipse at 50% -5%, var(--accent-dim) 0%, transparent 55%); padding: 32px; overflow-wrap: break-word; }
+.grid > *, .flex > *, [style*="display:grid"] > *, [style*="display:flex"] > * { min-width: 0; }
+h1 { font-size: 38px; font-weight: 700; letter-spacing: -1px; margin-bottom: 6px; text-wrap: balance; }
+h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.3px; margin: 56px 0 18px; padding-bottom: 10px; border-bottom: 1px solid var(--border); scroll-margin-top: 70px; }
+h3 { font-size: 16px; font-weight: 700; margin: 26px 0 12px; color: var(--accent); font-family: var(--font-mono); letter-spacing: 0.2px; scroll-margin-top: 70px; }
+h4 { font-size: 13px; font-weight: 600; margin: 18px 0 8px; color: var(--slate); font-family: var(--font-mono); }
+p { margin-bottom: 12px; }
+.subtitle { color: var(--text-dim); font-size: 13px; margin-bottom: 8px; font-family: var(--font-mono); }
+code { font-family: var(--font-mono); font-size: 0.92em; }
+strong { font-weight: 600; }
+
+/* Layout: TOC + main 双栏 */
+.wrap { max-width: 1380px; margin: 0 auto; display: grid; grid-template-columns: 168px 1fr; gap: 0 44px; }
+.main { min-width: 0; }
+header.doc-head { margin-bottom: 28px; }
+.badge-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.tag { font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; padding: 4px 10px; border-radius: 20px; background: var(--accent-dim); color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+.tag--slate { background: var(--slate-dim); color: var(--slate); border-color: color-mix(in srgb, var(--slate) 30%, transparent); }
+.tag--green { background: var(--green-dim); color: var(--green); border-color: color-mix(in srgb, var(--green) 30%, transparent); }
+.tag--amber { background: var(--amber-dim); color: var(--amber); border-color: color-mix(in srgb, var(--amber) 30%, transparent); }
+
+/* TOC sidebar + scroll-spy */
+.toc { position: sticky; top: 24px; align-self: start; padding: 14px 0; grid-row: 1/-1; max-height: calc(100dvh - 48px); overflow-y: auto; }
+.toc-title { font-family: var(--font-mono); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; color: var(--text-dim); padding: 0 0 10px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+.toc a { display: block; font-size: 11px; color: var(--text-dim); text-decoration: none; padding: 4px 8px; border-radius: 5px; border-left: 2px solid transparent; transition: all .15s; line-height: 1.35; margin-bottom: 1px; }
+.toc a:hover { color: var(--text); background: var(--surface-2); }
+.toc a.active { color: var(--text); border-left-color: var(--accent); background: var(--accent-dim); }
+
+/* TL;DR 摘要框 */
+.tldr { background: var(--surface-elevated); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 14px; padding: 20px 24px; margin: 24px 0 8px; box-shadow: 0 4px 18px rgba(13,148,136,.06); }
+.tldr__label { font-family: var(--font-mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.8px; color: var(--accent); margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.tldr__label::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.tldr ul { list-style: none; padding: 0; }
+.tldr li { padding: 5px 0 5px 18px; position: relative; font-size: 14px; line-height: 1.55; }
+.tldr li::before { content: '→'; position: absolute; left: 0; color: var(--accent); font-weight: 600; }
+.tldr code { font-family: var(--font-mono); font-size: 12px; background: var(--accent-dim); color: var(--accent); padding: 1px 6px; border-radius: 3px; }
+
+/* Mermaid zoom/pan 外壳（与 zoom.js 的选择器契约绑定，勿改名） */
+.mermaid-wrap { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px 24px; overflow: auto; margin-bottom: 24px; display: flex; justify-content: center; align-items: center; min-height: 400px; cursor: grab; }
+.mermaid-wrap.is-panning { cursor: grabbing; user-select: none; }
+.zoom-controls { position: absolute; top: 8px; right: 8px; display: flex; gap: 2px; z-index: 10; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 2px; }
+.zoom-controls button { width: 28px; height: 28px; border: none; background: transparent; color: var(--text-dim); font-family: var(--font-mono); font-size: 14px; cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; transition: background .15s, color .15s; }
+.zoom-controls button:hover { background: var(--border); color: var(--text); }
+.diagram-shell { position: relative; }
+.diagram-shell__hint { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); margin-bottom: 8px; opacity: .7; }
+.mermaid-viewport { position: relative; overflow: hidden; width: 100%; height: 100%; min-height: 300px; }
+.mermaid-canvas { position: absolute; top: 0; left: 0; }
+.zoom-label { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); padding: 0 6px; white-space: nowrap; }
+.mermaid .nodeLabel { font-family: var(--font-body) !important; font-size: 14px !important; }
+.mermaid .edgeLabel { font-family: var(--font-mono) !important; font-size: 12px !important; }
+.mermaid .node rect, .mermaid .node circle, .mermaid .node polygon { stroke-width: 1.5px !important; }
+
+/* 数据表格（功能清单/AC 清单/追溯表/签名表/决策记录） */
+.table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin: 16px 0 24px; }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.55; }
+.data-table thead { position: sticky; top: 0; z-index: 2; }
+.data-table th { background: var(--surface-2); font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); text-align: left; padding: 13px 16px; border-bottom: 2px solid var(--border-bright); white-space: nowrap; }
+.data-table td { padding: 11px 16px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.data-table tbody tr:nth-child(even) { background: var(--accent-dim); }
+.data-table tbody tr:hover { background: var(--border); }
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table code { font-family: var(--font-mono); font-size: 11px; background: var(--accent-dim); color: var(--accent); padding: 1px 5px; border-radius: 3px; }
+
+/* Callout 提示框 */
+.callout { background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 14px 18px; font-size: 13px; line-height: 1.6; color: var(--text-dim); margin: 20px 0; }
+.callout strong { color: var(--text); font-weight: 600; }
+.callout code { font-family: var(--font-mono); font-size: 11px; background: var(--accent-dim); color: var(--accent); padding: 1px 5px; border-radius: 3px; }
+
+/* 章节小标题（mono 大写，区别于 h2） */
+.sec-head { font-family: var(--font-mono); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--accent); margin: 40px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+
+/* 卡片组件（架构概览 / 决策记录 / 模块概览） */
+.ve-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 8px; }
+.ve-card--elevated { box-shadow: 0 4px 18px rgba(13,148,136,.06); }
+.ve-card__label { font-family: var(--font-mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: var(--accent); display: flex; align-items: center; gap: 6px; }
+.ve-card__label::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.ve-card h3 { margin: 0; color: var(--text); font-family: var(--font-body); font-size: 17px; letter-spacing: -0.2px; }
+.ve-card p { margin: 0; font-size: 13.5px; color: var(--text-dim); line-height: 1.55; }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 18px 0 28px; }
+.node-list { list-style: none; padding: 0; margin: 0; }
+.node-list li { padding: 4px 0 4px 16px; position: relative; font-size: 13px; line-height: 1.5; color: var(--text-dim); }
+.node-list li::before { content: '›'; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
+.node-list code { font-family: var(--font-mono); font-size: 11.5px; background: var(--accent-dim); color: var(--accent); padding: 1px 5px; border-radius: 3px; }
+
+/* 状态药丸（AC 清单 / 追溯表状态列） */
+.status { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 5px; white-space: nowrap; }
+.status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.status--match { background: var(--green-dim); color: var(--green); }
+.status--warn { background: var(--amber-dim); color: var(--amber); }
+.status--gap { background: var(--red-dim); color: var(--red); }
+.status--na { background: var(--slate-dim); color: var(--slate); }
+
+/* 热力图单元格（④ NFR 风险矩阵） */
+.heatmap-cell { text-align: center; font-size: 15px; padding: 8px; }
+.heatmap-cell--good { background: var(--green-dim); }
+.heatmap-cell--warn { background: var(--amber-dim); }
+.heatmap-cell--bad { background: var(--red-dim); }
+.heatmap-cell--na { background: transparent; color: var(--text-dim); }
+
+/* 图例 */
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 16px 0; font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+
+/* Footer */
+footer.doc-foot { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
+
+/* 入场动画 */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.animate { animation: fadeUp .35s ease-out both; animation-delay: calc(var(--i, 0) * .04s); }
+
+/* 响应式 */
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+@media (max-width: 1000px) {
+  .wrap { grid-template-columns: 1fr; }
+  .toc { position: sticky; top: 0; z-index: 200; max-height: none; display: flex; gap: 4px; align-items: center; overflow-x: auto; background: var(--bg); border-bottom: 1px solid var(--border); padding: 10px 0; grid-row: auto; }
+  .toc-title { display: none; }
+  .toc a { white-space: nowrap; flex-shrink: 0; border-left: none; border-bottom: 2px solid transparent; border-radius: 4px 4px 0 0; padding: 6px 10px; font-size: 10px; }
+  .toc a.active { border-left: none; border-bottom-color: var(--accent); background: var(--surface); }
+  h2, h3 { scroll-margin-top: 60px; }
+  body { padding: 16px; }
+}
+@media (max-width: 768px) { body { padding: 12px; } h1 { font-size: 26px; } }
+
+
+/* === issues 阶段特有样式 === */
+.issue { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 22px 26px; margin-bottom: 22px; }
+.issue--p0 { border-left: 4px solid var(--green); }
+.issue--p1 { border-left: 4px solid var(--amber); }
+.issue--p2 { border-left: 4px solid #38bdf8; }
+.issue--p3 { border-left: 4px solid var(--slate); opacity: .92; }
+.issue--wont { border-left: 4px dashed var(--slate); opacity: .82; }
+.issue--fog { border-left: 4px dotted var(--accent); opacity: .9; }
+.issue__head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
+.issue__num { font-family: var(--font-mono); font-size: 18px; font-weight: 700; color: var(--accent); }
+.issue__title { font-size: 18px; font-weight: 700; letter-spacing: -0.2px; flex: 1; }
+.issue__meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-dim); margin: 10px 0 14px; font-family: var(--font-mono); }
+.issue__meta strong { color: var(--text); }
+.issue__section { margin: 16px 0; }
+.issue__section h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--accent); margin-bottom: 8px; }
+.issue__desc { font-size: 14px; line-height: 1.7; color: var(--text); margin: 8px 0 12px; }
+.issue__desc code { font-family: var(--font-mono); font-size: 12px; background: var(--surface-2); color: var(--text-dim); padding: 1px 5px; border-radius: 3px; }
+.sol { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin-bottom: 10px; }
+.sol--chosen { border-left: 3px solid var(--green); background: var(--green-dim); }
+.sol__head { font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: var(--accent); margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.sol--chosen .sol__head { color: var(--green); }
+.sol__head::before { content: '◇'; }
+.sol--chosen .sol__head::before { content: '✓'; }
+.sol ul { margin: 6px 0 6px 20px; }
+.sol li { font-size: 13px; line-height: 1.6; margin-bottom: 3px; }
+.sol__proscons { font-size: 13px; line-height: 1.6; margin: 4px 0; }
+.sol__proscons strong { font-family: var(--font-mono); font-size: 11px; }
+.pick { background: var(--accent-dim); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 10px; padding: 12px 16px; font-size: 13px; line-height: 1.6; margin-top: 10px; }
+.pick strong { color: var(--accent); }
+.ac-list { list-style: none; padding: 0; }
+.ac-list li { font-size: 13px; line-height: 1.6; padding: 5px 0 5px 26px; position: relative; }
+.ac-list li::before { content: '☐'; position: absolute; left: 4px; color: var(--accent); font-size: 14px; }
+.ac-list code { font-family: var(--font-mono); font-size: 11px; background: var(--surface-2); color: var(--text-dim); padding: 1px 5px; border-radius: 3px; }
+.pill { display: inline-block; font-family: var(--font-mono); font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 5px; white-space: nowrap; }
+.pill--ok { background: var(--green-dim); color: var(--green); }
+.pill--na { background: var(--slate-dim); color: var(--slate); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" id="toc">
+  <div class="toc-title">目录</div>
+  <a href="#tldr">TL;DR · 核心结论</a>
+  <a href="#dag">地图总览 · 决策 DAG</a>
+  <a href="#coverage">上游覆盖核验</a>
+  <a href="#p0">P0 阻塞项（#1-#2）</a>
+  <a href="#p1">P1 核心项（#3-#8,#15,#16）</a>
+  <a href="#p2">P2 重要项（#9-#11）</a>
+  <a href="#p3">P3 / Won't / 迷雾</a>
+  <a href="#decisions">决策记录汇总</a>
+</nav>
+<main class="main">
+<header class="doc-head">
+  <h1>Issue 决策图</h1>
+  <p class="subtitle">CW 实施 · ③ Issue 拆分 · upstream: system-architecture.md</p>
+  <div class="badge-row">
+    <span class="tag tag--green">P0 · 2 项</span>
+    <span class="tag tag--amber">P1 · 8 项</span>
+    <span class="tag">P2 · 3 项</span>
+    <span class="tag tag--slate">P3 · 1 项</span>
+    <span class="tag tag--slate">Won't · 1 项</span>
+    <span class="tag tag--slate">迷雾 · 1 项</span>
+  </div>
+</header>
+
+<div class="tldr" id="tldr">
+  <div class="tldr__label">TL;DR · 核心结论</div>
+  <ul>
+    <li>16 个决策点：<strong>P0×2</strong>（<code>#1</code> CwStore DAO + <code>#2</code> 状态机 guard）阻塞全部上层；<strong>P1×8</strong> 核心；<strong>P2×3</strong> 重要；<code>#12</code> P3 延后 / <code>#13</code> Won't / <code>#14</code> 迷雾。</li>
+    <li>所有方案倾向<strong>声明式编码</strong>（转换表 / 注册表数组 / typebox schema），零新依赖，复用 node:sqlite + typebox。</li>
+    <li>渐进式提交语义贯穿 <code>#3/#8/#10</code>：逐条容错 + 累计判定 + sqlite 事务原子性。</li>
+    <li>skill 侧 <code>#15</code>（收口 4 子项，按 lite→mid 分批）+ <code>#16</code>（coding-execute 改派发指导）保证 G2 agent 单接口。</li>
+    <li>迷雾 <code>#14</code> 多 session 并发：当前假设单 agent 串行，sqlite WAL 兜底；full 路径 <code>#13</code> 明确 Won't（D-015）。</li>
+  </ul>
+</div>
+
+<h2 id="dag">地图总览 — 决策 DAG</h2>
+<div class="diagram-shell">
+  <p class="diagram-shell__hint">节点 = issue（按 P 级着色） · 边 = blocked_by · 拖动平移、Ctrl+滚轮缩放、双击适配</p>
+  <div class="mermaid-wrap">
+    <div class="zoom-controls">
+      <button data-action="zoom-in" title="放大">+</button>
+      <button data-action="zoom-out" title="缩小">−</button>
+      <button data-action="zoom-fit" title="适配">⊡</button>
+      <button data-action="zoom-one" title="1:1">1:1</button>
+      <button data-action="zoom-expand" title="新窗口">⤢</button>
+      <span class="zoom-label">— contain</span>
+    </div>
+    <div class="mermaid-viewport"><div class="mermaid mermaid-canvas"></div></div>
+  </div>
+  <script type="text/plain" class="diagram-source">
+graph LR
+  I1["#1 CwStore<br/>node:sqlite DAO<br/>P0"]:::p0
+  I2["#2 状态机 guard<br/>两重校验 P0"]:::p0
+  I3["#3 GitValidator<br/>失败语义 P1"]:::p1
+  I4["#4 gate 注册表<br/>声明式 P1"]:::p1
+  I5["#5 plan-parser<br/>typebox P1"]:::p1
+  I6["#6 GateRunner<br/>subprocess P1"]:::p1
+  I7["#7 review 桩<br/>跨skill 契约 P1"]:::p1
+  I8["#8 test-orch<br/>内化回归 P1"]:::p1
+  I15["#15 skill 收口<br/>4 子项 P1"]:::p1
+  I16["#16 coding-execute<br/>适配 CW P1"]:::p1
+  I9["#9 nextAction<br/>结构 P2"]:::p2
+  I10["#10 渐进入参<br/>统一 P2"]:::p2
+  I11["#11 schemaVersion<br/>ALTER TABLE P2"]:::p2
+  I2 --> I3
+  I2 --> I4
+  I4 --> I6
+  I7 --> I6
+  I1 --> I8
+  I5 --> I8
+  subgraph SX["后续迭代 · 延后 / Won-t / 迷雾"]
+    I12["#12 D-011 skill 改名<br/>P3 延后"]:::p3
+    I13["#13 full 路径接入<br/>Won-t"]:::wont
+    I14["#14 多 session 并发<br/>迷雾"]:::fog
+  end
+  classDef p0 fill:#3f1818,stroke:#f87171,stroke-width:2.5px,color:#fecaca
+  classDef p1 fill:#38250d,stroke:#fb923c,stroke-width:2px,color:#fed7aa
+  classDef p2 fill:#0c243a,stroke:#38bdf8,stroke-width:2px,color:#bae6fd
+  classDef p3 fill:#1a202c,stroke:#64748b,stroke-width:1.5px,color:#94a3b8,stroke-dasharray:5 5
+  classDef wont fill:#1a1a1a,stroke:#525252,stroke-width:1.5px,color:#a3a3a3,stroke-dasharray:2 4
+  classDef fog fill:#1a2a2a,stroke:#5e8a85,stroke-width:1.5px,color:#9bb7b5,stroke-dasharray:3 3
+  </script>
+</div>
+
+<h2 id="coverage">上游覆盖核验（MANDATORY，逐条不漏）</h2>
+<p style="font-size:13px;color:var(--text-dim);margin:-4px 0 12px;">按 4 轴（状态 §4 / 模块 §3 / 边界 §6 / 挑战 §5+§7+§9+§13）扫 system-architecture.md。</p>
+<div class="table-wrap">
+<table class="data-table">
+<thead><tr><th>上游元素</th><th>轴</th><th>对应 issue</th><th>状态</th><th>N/A 理由</th></tr></thead>
+<tbody>
+<tr><td>§4.2 created→planned/clarified</td><td>状态</td><td>#2</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§4.2 planned/detailed→developed（dev 首次提交）</td><td>状态</td><td>#2</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§4.2 developed→tested（跨阶段级联①：dev 全 Wave committed）</td><td>状态</td><td>#2</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§4.2 tested→retrospected（跨阶段级联②：test 全 case passed）</td><td>状态</td><td>#2</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§4.2 retrospected→closed（closeout）</td><td>状态</td><td>#2</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§4.2 异常：非法转换 / previous phase incomplete throw</td><td>状态</td><td>#2</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§3 src/index.ts（注册 + 移除 lib/gates re-export + 移除 test-orch 注册）</td><td>模块</td><td>#8</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§3 src/cw/state-machine.ts（状态机 + nextAction）</td><td>模块</td><td>#2</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§3 src/cw/store.ts（_cw.db node:sqlite DAO + 事务）</td><td>模块</td><td>#1</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§3 src/cw/gates.ts（gate 注册表 + 执行器）</td><td>模块</td><td>#4</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§3 src/cw/plan-parser.ts（JSON 解析）</td><td>模块</td><td>#5</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§3 src/cw/actions/（8 个 handler）</td><td>模块</td><td>#2</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§3 src/cw/types.ts（judgeByExpected + 类型）</td><td>模块</td><td>#8</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§3 action 入参约定（topicId/不订阅 pi.on/throw/dependsOn/workspacePath）</td><td>模块</td><td>—</td><td><span class="pill pill--na">N/A</span></td><td>5 子项已定无方案空间（#10 仅覆盖数组统一）</td></tr>
+<tr><td>§6 check_*.py（subprocess 边界）</td><td>边界</td><td>#6</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§6 git（execFileSync 只读）</td><td>边界</td><td>#3</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§6 _cw.db（node:sqlite 内置）</td><td>边界</td><td>#1</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§6 judgeByExpected（in-process 纯函数）</td><td>边界</td><td>#8</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§6 Pi SDK（True-external）</td><td>边界</td><td>—</td><td><span class="pill pill--na">N/A</span></td><td>零 Port 决策已定，SDK 升级直接改 index.ts，无实施决策空间</td></tr>
+<tr><td>§6 child_process 运行时约束（第三用户豁免）</td><td>边界</td><td>#3 / #6</td><td><span class="pill pill--ok">已覆盖</span></td><td>实施前提，遵循 pi-workflow/pi-subagents 先例</td></tr>
+<tr><td>§5.1 gate 强度 4 档定义</td><td>挑战</td><td>#4</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§5.2 review 桩机制（review 文件 skill 阶段落盘）</td><td>挑战</td><td>#7</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§5.3 多 checker 串行 fail-fast 执行规则</td><td>挑战</td><td>#4</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§7 不变式：tier 不可变</td><td>挑战</td><td>#5</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§7 不变式：状态机线性 + 跨阶段级联</td><td>挑战</td><td>#2</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§7 不变式：渐进式提交原子性</td><td>挑战</td><td>#1</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§7 不变式：lite test 丢 claimedStatus</td><td>挑战</td><td>#8</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§7 不变式：dev/test commit 真实性</td><td>挑战</td><td>#3</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§7 不变式：gate 历史完整</td><td>挑战</td><td>#4</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§9 test-orchestrator 内化迁移 5 步</td><td>挑战</td><td>#8</td><td><span class="pill pill--ok">已覆盖</span></td><td>—</td></tr>
+<tr><td>§12 JSON schema 3 套（format 锁 tier）</td><td>挑战</td><td>#5 + #15</td><td><span class="pill pill--ok">已覆盖</span></td><td>#5 CW 解析侧 + #15 skill JSON 产出侧</td></tr>
+<tr><td>§13 删 coding-execute.js workflow 脚本</td><td>挑战</td><td>#16</td><td><span class="pill pill--ok">已覆盖</span></td><td>skill 重建有方案空间（coding-execute skill 改造）</td></tr>
+<tr><td>§13 保留 check_execute.py</td><td>挑战</td><td>—</td><td><span class="pill pill--na">N/A</span></td><td>跨格式能力已定，#16 适配时复用</td></tr>
+<tr><td>§6 lib/gates 移除 re-export</td><td>挑战</td><td>—</td><td><span class="pill pill--na">N/A</span></td><td>已定移除（代码保留），无方案空间</td></tr>
+<tr><td>§10 skill 收口改造批次（D-007-REVISIT）</td><td>兜底</td><td>#15</td><td><span class="pill pill--ok">已覆盖</span></td><td>4 子项整体归 #15，#7 收窄为 review 桩本身</td></tr>
+<tr><td>§11 evidence 追溯（agent 中介，非机器强制）</td><td>兜底</td><td>—</td><td><span class="pill pill--na">N/A</span></td><td>已诚实标注为 agent-mediated，CW 不耦合 goal，无实施决策</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="p0">P0 阻塞项（必须先做）</h2>
+
+<div class="issue issue--p0">
+  <div class="issue__head">
+    <span class="issue__num">#1</span>
+    <span class="issue__title">CwStore 基于 node:sqlite 的 DAO + 事务封装</span>
+  </div>
+  <div class="issue__meta"><span><strong>P 级</strong>: P0</span><span><strong>类型</strong>: 模块</span><span><strong>Blocked by</strong>: 无</span><span><strong>推荐强度</strong>: Strong</span></div>
+  <div class="issue__desc">CW 持久化层（原架构 §8 _cw.json）。D-016 决定改用 Node 内置 <code>node:sqlite</code> + 关系表模式。CwStore 封装 sqlite 连接 + 事务 + DAO（topic/wave/test_case/gate_history 分表）。渐进式 dev/test action 多次更新，事务保证原子性（sqlite 天生，测试已验证：崩溃事务不污染）。关联 §8（数据模型，需修正为关系表）、§7（不变式：渐进式提交原子性 → 现归 sqlite 事务）。</div>
+  <div class="issue__desc"><strong>为什么是 P0（阻塞）</strong>：_cw 存储是 CW 唯一持久化根。CwStore DAO 是所有 action handler 的依赖，不定下来上层无法开工。</div>
+  <div class="issue__section">
+    <h4>方案对比</h4>
+    <div class="sol sol--chosen">
+      <div class="sol__head">方案 A · 手写 DAO（每表一模块，事务在 service 层）— ✓ 选定</div>
+      <div class="sol__proscons">store.ts 导出 CwStore 类封装 DatabaseSync 连接；每张表一个 DAO 函数集；事务用 BEGIN/COMMIT/ROLLBACK 包裹多表写；handler 调 service 层组合 DAO + 事务。</div>
+      <div class="sol__proscons"><strong>优点</strong>：零额外依赖；事务边界清晰；SQL 可优化；符合项目「纯逻辑提取独立模块」测试规范。<strong>缺点</strong>：手写 SQL 样板；SQL 语法错误运行时才发现。</div>
+    </div>
+    <div class="sol">
+      <div class="sol__head">方案 B · 引入轻量查询构建器（kysely）</div>
+      <div class="sol__proscons">编译期类型检查 SQL，重构友好；但引第三方依赖违背 node:sqlite 零依赖初衷，kysely 对 node:sqlite 适配未必成熟。</div>
+    </div>
+    <div class="sol">
+      <div class="sol__head">方案 C · 扁平 SQL 字符串（handler 直写）</div>
+      <div class="sol__proscons">SQL 散落各 handler；事务边界乱；难测试；违反「状态层集中」。仅适用原型。</div>
+    </div>
+    <div class="pick"><strong>取舍</strong>：选 A。node:sqlite 选定即为零依赖（D-016），B 引 kysely 违背初衷。CW 表结构稳定 + 查询简单（按 topicId 整体读改写），手写 SQL 样板可控。DAO 分模块 + service 层事务，DAO 可注入 mock DatabaseSync 单测。</div>
+  </div>
+  <div class="issue__section">
+    <h4>验收标准</h4>
+    <ul class="ac-list">
+      <li>AC-1.1 [正常]: CwStore 事务提交后数据持久（trace: UC-2 各 action）</li>
+      <li>AC-1.2 [异常]: 事务中抛错 ROLLBACK，数据回滚（崩溃不污染已验证）</li>
+      <li>AC-1.3 [边界]: 首次 create（空库）能建表 + 插入</li>
+      <li>AC-1.4 [兼容]: schema 演进用 ALTER TABLE（关联 #11）</li>
+      <li>AC-1.5 [隔离]: DAO 可注入 mock DatabaseSync 做单测（纯逻辑提取）</li>
+    </ul>
+  </div>
+</div>
+
+<div class="issue issue--p0">
+  <div class="issue__head">
+    <span class="issue__num">#2</span>
+    <span class="issue__title">状态机两重校验组织模式</span>
+  </div>
+  <div class="issue__meta"><span><strong>P 级</strong>: P0</span><span><strong>类型</strong>: 架构</span><span><strong>Blocked by</strong>: 无</span><span><strong>推荐强度</strong>: Strong</span></div>
+  <div class="issue__desc">§4.2 定义两重校验：① 线性 expectedStatus（currentState ∈ expectedStatuses[action]）；② 跨阶段 gatePassed 级联（test 需 dev 全 Wave committed；retrospect 需 test 全 case passed）。这两道校验如何组织——集中在 state-machine.ts 还是散在各 handler——决定 handler 骨架与防跳过的可靠性。关联 §4（状态机）、§7（不变式：状态机线性 + 跨阶段级联）。</div>
+  <div class="issue__desc"><strong>为什么是 P0（阻塞）</strong>：状态机是 CW 的核心价值（D-009 主强制点）。组织模式定不下来，8 个 action handler 的骨架无法开工。</div>
+  <div class="issue__section">
+    <h4>方案对比</h4>
+    <div class="sol sol--chosen">
+      <div class="sol__head">方案 A · 声明式转换表 + 通用 guard 引擎（集中）— ✓ 选定</div>
+      <div class="sol__proscons">state-machine.ts 导出 <code>TRANSITIONS: Record&lt;Action, {expectedStatuses, nextStatus, requirePhaseComplete?}&gt;</code> 声明式表 + 通用 <code>guard(action, topic)</code>，各 handler 入口调 guard()。<strong>优点</strong>：防跳过逻辑集中单点；加 action 只改表；两重校验同函数顺序执行不漏；可测试（纯函数）。<strong>缺点</strong>：handler 与 guard 耦合靠约定，编译器不强制。</div>
+    </div>
+    <div class="sol">
+      <div class="sol__head">方案 B · 各 handler 自己实现校验（分散）</div>
+      <div class="sol__proscons">handler 自包含；但 8 个重复代码，第二道校验（级联）易在某 handler 漏写；改规则要改 8 处。违反 D-009 防跳过可靠性。</div>
+    </div>
+    <div class="sol">
+      <div class="sol__head">方案 C · 类装饰器 / 中间件模式</div>
+      <div class="sol__proscons">编译期强制；但 Pi handler 是普通函数，装饰器加魔法；TS 装饰器配置复杂；调试难。轻量工具不值得。</div>
+    </div>
+    <div class="pick"><strong>取舍</strong>：选 A。声明式转换表是状态机社区标准（XState/redux 思想），§4.2 已给完整表，声明式最自然。「约定耦合」缺点靠 SDK 契约测试覆盖（每个 handler 必须调 guard）。方案 B 的 8 处重复 + 易漏第二道校验是真实防跳过风险，不可接受。</div>
+  </div>
+  <div class="issue__section">
+    <h4>验收标准</h4>
+    <ul class="ac-list">
+      <li>AC-2.1 [正常]: 合法转换（created→planned）guard 通过（trace: UC-1 AC-1.2）</li>
+      <li>AC-2.2 [异常]: 非法转换（created→tested）guard throw <code>illegal state transition</code> 不跑 gate</li>
+      <li>AC-2.3 [异常]: developed→test 但 dev 有 Wave 未 committed，guard throw <code>previous phase incomplete</code></li>
+      <li>AC-2.4 [异常]: tested→retrospect 但 test 有 case 未 passed，guard throw <code>previous phase incomplete</code></li>
+      <li>AC-2.5 [契约]: 每个 action handler 入口调 guard（SDK 契约测试覆盖）</li>
+      <li>AC-2.6 [语义]: 首次有效 dev/test 提交触发状态流转，后续渐进提交只更新 _cw.db（UC-3 AC-3.5 / UC-4 AC-4.5）</li>
+    </ul>
+  </div>
+</div>
+
+<h2 id="p1">P1 核心项</h2>
+
+<div class="issue issue--p1">
+  <div class="issue__head">
+    <span class="issue__num">#3</span>
+    <span class="issue__title">GitValidator 失败语义</span>
+  </div>
+  <div class="issue__meta"><span><strong>P 级</strong>: P1</span><span><strong>类型</strong>: 模块</span><span><strong>Blocked by</strong>: #2</span><span><strong>推荐强度</strong>: Strong</span></div>
+  <div class="issue__desc">GitValidator 用 execFileSync 调只读 git 命令（cat-file 存在 / merge-base 属仓库 / diff-tree 非空）校验 commitHash 真实性（§7）。某条校验失败时整个 action 该 throw 还是只把该 task/case 记 fail 继续其他？决定渐进式提交的容错语义。</div>
+  <div class="issue__section">
+    <h4>方案对比</h4>
+    <div class="sol sol--chosen">
+      <div class="sol__head">方案 A · 该 task/case 记 fail，继续其他（逐条容错）— ✓ 选定</div>
+      <div class="sol__proscons">GitValidator 返回结构化结果（每条 pass/fail + 原因），handler 把 fail 的 task/case 置 failed、记 gateHistory，action 不 throw，返回 nextAction 让 agent 看到哪些 fail 去修。<strong>优</strong>：符合渐进式语义，agent 拿明确反馈。<strong>缺</strong>：gate 判定要聚合多 task/case 结果。</div>
+    </div>
+    <div class="sol">
+      <div class="sol__head">方案 B · 整个 action throw（fail-fast）</div>
+      <div class="sol__proscons">实现简单；但一个坏 commit 导致整批失败，agent 无法区分；违背 D-005 渐进式提交意图。</div>
+    </div>
+    <div class="pick"><strong>取舍</strong>：选 A。符合 D-005 渐进式语义 + §7「该 task 记 fail」（已隐含逐条）。部分失败应继续，nextAction 反馈失败项让 agent 针对性重试。</div>
+  </div>
+  <div class="issue__section">
+    <h4>验收标准</h4>
+    <ul class="ac-list">
+      <li>AC-3.1 [正常]: 合法 commit 校验 pass（trace: UC-3 dev/test）</li>
+      <li>AC-3.2 [异常]: 不存在 commitHash → 该 task fail，其他继续</li>
+      <li>AC-3.3 [异常]: commit 不属本仓库 → 该 case fail</li>
+      <li>AC-3.4 [反馈]: fail 的 task/case 在 nextAction 明确列出</li>
+      <li>AC-3.5 [约束]: mid test commitHash 必须能在 _cw.db wave 表追溯到已 committed 的 dev commit（UC-4 AC-4.3）</li>
+    </ul>
+  </div>
+</div>
+
+<div class="issue issue--p1">
+  <div class="issue__head">
+    <span class="issue__num">#4</span>
+    <span class="issue__title">gate 注册表编码模式</span>
+  </div>
+  <div class="issue__meta"><span><strong>P 级</strong>: P1</span><span><strong>类型</strong>: 模块</span><span><strong>Blocked by</strong>: #2</span><span><strong>推荐强度</strong>: Strong</span></div>
+  <div class="issue__desc">§5.2 给了 11 行 tier×phase→checker 映射表（如 lite×dev→GitValidator medium-git）。如何编码进 gates.ts 决定 gate 执行器的实现模式。多 checker 场景（mid detail 4 个 check）需串行 fail-fast（§5.3）。</div>
+  <div class="issue__section">
+    <h4>方案对比</h4>
+    <div class="sol sol--chosen">
+      <div class="sol__head">方案 A · 声明式数组 + 通用执行器 — ✓ 选定</div>
+      <div class="sol__proscons"><code>GATE_REGISTRY: Array&lt;{tier, phase, checkers: Checker[], tier: GateTier}&gt;</code>；通用 <code>runGate(tier, phase, topic)</code> 查表 → 串行跑 checkers → fail-fast → 记 gateHistory。<strong>优</strong>：数据与执行分离；加 gate 只改数组；fail-fast 单点实现；gateTier 透传自然。<strong>缺</strong>：Checker 需统一接口。</div>
+    </div>
+    <div class="sol">
+      <div class="sol__head">方案 B · 按 phase 注册函数链（命令式）</div>
+      <div class="sol__proscons">灵活；但注册散落，tier×phase 映射不直观（读多处才知道全貌），fail-fast 每个链自己实现。</div>
+    </div>
+    <div class="pick"><strong>取舍</strong>：选 A。声明式数组让 §5.2 的 11 行表 1:1 映射成代码，可读性最高。通用执行器单点实现 fail-fast + gateHistory + gateTier 透传，符合 §5.3。</div>
+  </div>
+  <div class="issue__section">
+    <h4>验收标准</h4>
+    <ul class="ac-list">
+      <li>AC-4.1 [正常]: 单 checker gate pass/fail 正确（trace: UC-2 plan gate）</li>
+      <li>AC-4.2 [异常]: 多 checker（mid detail 4 个）串行，任一 fail 则 fail-fast</li>
+      <li>AC-4.3 [记录]: 每次调 runGate 追加 gateHistory（含 tier/result/ts）</li>
+      <li>AC-4.4 [透传]: 返回值 gateTier 字段来自注册表</li>
+    </ul>
+  </div>
+</div>
+
+<div class="issue issue--p1">
+  <div class="issue__head">
+    <span class="issue__num">#5</span>
+    <span class="issue__title">plan-parser JSON 校验方式</span>
+  </div>
+  <div class="issue__meta"><span><strong>P 级</strong>: P1</span><span><strong>类型</strong>: 模块</span><span><strong>Blocked by</strong>: 无</span><span><strong>推荐强度</strong>: Strong</span></div>
+  <div class="issue__desc">§12 定义 3 套 JSON schema（LitePlan/MidClarify/MidDetail）。plan-parser.ts 需解析并校验入参 JSON。项目已用 typebox（Tool 参数 schema）。关联 §12、§7（tier 不可变：format===tier 校验）。</div>
+  <div class="issue__section">
+    <h4>方案对比</h4>
+    <div class="sol sol--chosen">
+      <div class="sol__head">方案 A · typebox Value.Assert（复用项目既有依赖）— ✓ 选定</div>
+      <div class="sol__proscons">用 typebox 定义 3 套 schema（Type.Object），用 Value.Assert/Check 运行时校验。<strong>优</strong>：零新依赖；schema 与类型同源；与 Pi Tool 参数风格一致。<strong>缺</strong>：typebox runtime 校验 API（@sinclair/typebox/value）需确认 Pi 运行时是否提供。</div>
+    </div>
+    <div class="sol">
+      <div class="sol__head">方案 B · 手写校验函数</div>
+      <div class="sol__proscons">零依赖完全可控；但 3 套 schema 重复代码、易漏字段、新增字段要改校验。</div>
+    </div>
+    <div class="sol">
+      <div class="sol__head">方案 C · 引 ajv（JSON Schema 标准校验器）</div>
+      <div class="sol__proscons">标准；但新依赖违反最小依赖，schema 与 TS 类型不同源（维护两份）。</div>
+    </div>
+    <div class="pick"><strong>取舍</strong>：选 A（前提：Pi 运行时提供 typebox/value，否则降级 B）。typebox 已是项目依赖，schema 与类型同源是最大优势。若 Value 模块不可用，方案 B 手写校验作为 fallback（3 套 schema 体量不大）。</div>
+  </div>
+  <div class="issue__section">
+    <h4>验收标准</h4>
+    <ul class="ac-list">
+      <li>AC-5.1 [正常]: 合法 LitePlan JSON 解析出 waves/testCases（trace: UC-2 plan）</li>
+      <li>AC-5.2 [异常]: format !== tier 时 throw（D-003 tier 锁定）</li>
+      <li>AC-5.3 [异常]: 缺必填字段时 throw 明确错误</li>
+      <li>AC-5.4 [兼容]: MidClarify 不含 waves/testCases（只确认 tier + deliverables）</li>
+    </ul>
+  </div>
+</div>
+
+<div class="issue issue--p1">
+  <div class="issue__head">
+    <span class="issue__num">#6</span>
+    <span class="issue__title">GateRunner subprocess 错误处理</span>
+  </div>
+  <div class="issue__meta"><span><strong>P 级</strong>: P1</span><span><strong>类型</strong>: 边界</span><span><strong>Blocked by</strong>: #4</span><span><strong>推荐强度</strong>: Worth exploring</span></div>
+  <div class="issue__desc">GateRunner 用 spawn 调 python check_*.py（§6 第三用户）。subprocess 可能：非零退出（check 发现问题）/ 超时（脚本卡死）/ crash（python 不存在）。如何区分「check 判定 fail」（业务结果）vs「subprocess 异常」（基础设施问题）？</div>
+  <div class="issue__section">
+    <h4>方案对比</h4>
+    <div class="sol sol--chosen">
+      <div class="sol__head">方案 A · 解析 stdout verdict 行 + 非零退出码双信号 — ✓ 选定</div>
+      <div class="sol__proscons">现有 check 脚本输出 <code>[check] machine check: N/N passed → PASS/FAIL</code>。GateRunner 解析末尾 verdict 行作为 gate 结果，exit code 辅助；超时 kill + 标 infra-error。<strong>优</strong>：复用现有脚本输出契约；区分业务 fail vs infra error。<strong>缺</strong>：依赖脚本输出格式稳定性。</div>
+    </div>
+    <div class="sol">
+      <div class="sol__head">方案 B · 只看 exit code</div>
+      <div class="sol__proscons">最简单；但无法区分业务 fail vs infra crash，丢失 report。</div>
+    </div>
+    <div class="pick"><strong>取舍</strong>：选 A。现有 check 脚本已有稳定输出格式（mid-plan 已验证），解析 verdict 行拿到 report 让 agent 知道哪里 fail。exit code 作辅助校验（verdict 与 exitcode 矛盾时标 infra-error）。超时 kill 标 infra-error。</div>
+  </div>
+  <div class="issue__section">
+    <h4>验收标准</h4>
+    <ul class="ac-list">
+      <li>AC-6.1 [正常]: check pass → gate pass（trace: UC-2 各 plan gate）</li>
+      <li>AC-6.2 [异常]: check fail（verdict FAIL + exit 1）→ gate fail + report 透传</li>
+      <li>AC-6.3 [异常]: subprocess crash（python 缺失）→ infra-error throw</li>
+      <li>AC-6.4 [异常]: 超时 → kill + infra-error</li>
+    </ul>
+  </div>
+</div>
+
+<div class="issue issue--p1">
+  <div class="issue__head">
+    <span class="issue__num">#7</span>
+    <span class="issue__title">review 桩跨 skill 契约保障</span>
+  </div>
+  <div class="issue__meta"><span><strong>P 级</strong>: P1</span><span><strong>类型</strong>: 流程</span><span><strong>Blocked by</strong>: 无</span><span><strong>推荐强度</strong>: Strong</span></div>
+  <div class="issue__desc">§5.2 review 桩机制：check_*.py 期望 changes/ 下对应阶段的 review 文件（verdict APPROVED），该文件由 skill 阶段（review-fix-loop）落盘，CW 不产。风险：skill 改造未完成或 review-fix-loop 未跑，则 check_*.py 因缺 review 文件 fail，agent 困惑。</div>
+  <div class="issue__section">
+    <h4>方案对比</h4>
+    <div class="sol sol--chosen">
+      <div class="sol__head">方案 A · CW 检测 review 文件缺失时给明确 hint + 信任 skill 改造 — ✓ 选定</div>
+      <div class="sol__proscons">CW gate 跑 check_*.py 前预检 review 文件是否存在，缺失则返回结构化错误「review 文件缺失，请先跑 skill 阶段的 review-fix-loop」。<strong>优</strong>：agent 拿可操作 hint；不造假 stub。<strong>缺</strong>：agent 仍需理解 review-fix-loop 流程。</div>
+    </div>
+    <div class="sol">
+      <div class="sol__head">方案 B · CW 自动生成 review stub（造假）</div>
+      <div class="sol__proscons">check 不报错；但违背 §5.2 决策，review 没真跑就 APPROVED 是造假，违背诚实执行原则。</div>
+    </div>
+    <div class="pick"><strong>取舍</strong>：选 A。CW 不造假。预检 + hint 让 agent 知道是流程缺失非设计问题。skill 改造（D-007-REVISIT）保证 review-fix-loop 跑过则文件在。</div>
+  </div>
+  <div class="issue__section">
+    <h4>验收标准</h4>
+    <ul class="ac-list">
+      <li>AC-7.1 [异常]: review 文件缺失时 CW 返回明确 hint（非裸 check 报错）</li>
+      <li>AC-7.2 [正常]: review 文件存在且 APPROVED 时 check 正常跑</li>
+    </ul>
+  </div>
+</div>
+
+<div class="issue issue--p1">
+  <div class="issue__head">
+    <span class="issue__num">#8</span>
+    <span class="issue__title">test-orchestrator 内化回归测试</span>
+  </div>
+  <div class="issue__meta"><span><strong>P 级</strong>: P1</span><span><strong>类型</strong>: 模块</span><span><strong>Blocked by</strong>: #1, #5</span><span><strong>推荐强度</strong>: Strong</span></div>
+  <div class="issue__desc">§9 决定 src/test-orchestrator/ 整体删除，judgeByExpected + 类型迁 src/cw/types.ts，expected 解析重写为 JSON 结构化（非 markdown 正则）。删除后如何保障 CW test handler 判定行为与原 test-orchestrator 等价（不回归）？关联 §9、D-004。</div>
+  <div class="issue__section">
+    <h4>方案对比</h4>
+    <div class="sol sol--chosen">
+      <div class="sol__head">方案 A · 迁移核心测试用例 + 新增 JSON 格式测试 — ✓ 选定</div>
+      <div class="sol__proscons">保留 test-orchestrator 的核心判定测试用例（judgeByExpected 的 expected/actual 对），迁到 src/cw/__tests__/types.test.ts；新增 plan-parser 的 JSON 解析测试（3 套 schema 各覆盖）。原 markdown 正则解析的测试不迁移。<strong>优</strong>：判定逻辑等价性有保障。<strong>缺</strong>：迁移工作量。</div>
+    </div>
+    <div class="sol">
+      <div class="sol__head">方案 B · 全新重写测试</div>
+      <div class="sol__proscons">无历史包袱；但判定逻辑等价性无保障（judgeByExpected 是内化核心，全新测可能漏旧 bug）。</div>
+    </div>
+    <div class="pick"><strong>取舍</strong>：选 A。judgeByExpected 是纯函数（expected/actual → verdict），测试用例与输入格式无关，直接迁移保障等价。plan-parser 因格式从 markdown 变 JSON 必须全新写。</div>
+  </div>
+  <div class="issue__section">
+    <h4>验收标准</h4>
+    <ul class="ac-list">
+      <li>AC-8.1 [等价]: judgeByExpected 迁移后所有原测试用例 pass（trace: UC-4 lite test）</li>
+      <li>AC-8.2 [密封]: lite test 忽略 claimedStatus，机器 verdict 为准（D-008）</li>
+      <li>AC-8.3 [覆盖]: 全覆盖校验（allPassed/allTerminal）迁入 test handler 累计判定</li>
+      <li>AC-8.4 [删除]: src/test-orchestrator/ 整体删除，index.ts 改 registerCodingWorkflowTool</li>
+    </ul>
+  </div>
+</div>
+
+<div class="issue issue--p1">
+  <div class="issue__head">
+    <span class="issue__num">#15</span>
+    <span class="issue__title">skill 收口改造批次</span>
+  </div>
+  <div class="issue__meta"><span><strong>P 级</strong>: P1</span><span><strong>类型</strong>: 流程</span><span><strong>Blocked by</strong>: 无</span><span><strong>推荐强度</strong>: Strong</span></div>
+  <div class="issue__desc">§10 定义 skill 收口改造 4 子项：① 新增入口 skill coding-workflow（指导 agent 调 cw create-topic 后按 nextAction 走）；② 各阶段 skill description 顶部加「对应 CW action: xxx」映射句；③ review-fix-loop 收敛后落盘对应阶段 review 文件（verdict APPROVED），满足 check_*.py 前置；④ lite-plan/mid-plan/mid-detail-plan 的 final 步骤产 plan.json/clarify.json/detail.json（§12）。原覆盖表整体归 #7，但 #7 只覆盖 review 桩契约，本 issue 收口 4 子项整体。关联 G2、§10、§12、D-007-REVISIT、D-006。</div>
+  <div class="issue__desc"><strong>为什么是 P1</strong>：G2 MVP 验收项明确要求「agent 工具箱中只有 coding-workflow tool + 新增入口 skill coding-workflow」。无 blocked_by（与 #1~#8 主体代码并行，skill 改造只依赖 CW action 接口契约）。</div>
+  <div class="issue__section">
+    <h4>方案对比</h4>
+    <div class="sol sol--chosen">
+      <div class="sol__head">方案 A · 按 tier 分批改造（先 lite 链路 3 skill，再 mid 链路 4 skill）— ✓ 选定</div>
+      <div class="sol__proscons">第一批改 coding-workflow（新增入口）+ lite-plan（description+JSON+review 落盘）+ coding-execute（description），跑通 lite 端到端；第二批改 mid-plan + mid-detail-plan + coding-retrospect + coding-closeout，复用第一批模板。<strong>优</strong>：与 CW 按 lite→mid 上线节奏对齐；lite 先跑通早验证 G2；每批可独立验证。<strong>缺</strong>：跨批过渡期 description 映射不一致，靠 §10.4 映射表人工对齐。</div>
+    </div>
+    <div class="sol">
+      <div class="sol__head">方案 B · 一次性批量改造（7 skill × 4 子项同批）</div>
+      <div class="sol__proscons">收口一次完成，description 立即一致；但约 28 处改动风险集中，与 CW 主体代码并行 skill 频繁 churn 易冲突，mid JSON 格式未验证就要改易返工。</div>
+    </div>
+    <div class="sol">
+      <div class="sol__head">方案 C · 按子项分批（先全 description，再全 JSON，再全 review）</div>
+      <div class="sol__proscons">每子项跨 skill 统一；但每 skill 被改 3 次 churn 大，子项间有依赖（JSON 依赖 description 锁定，review 依赖 JSON phase 识别）分批反而要协调。</div>
+    </div>
+    <div class="pick"><strong>取舍</strong>：选 A。CW 本身按 lite→mid 分档上线（G2 MVP 只验收 lite+mid），skill 改造与上线节奏对齐最自然。lite 端到端早验证 G2，mid 复用 lite 模板。跨批 description 不一致靠 §10.4 映射表过渡。B 约 28 处风险集中且 mid JSON 易返工；C 每 skill 改 3 次 churn 大且有依赖。</div>
+  </div>
+  <div class="issue__section">
+    <h4>验收标准</h4>
+    <ul class="ac-list">
+      <li>AC-15.1 [入口]: skills/coding-workflow/SKILL.md 新增，description 含「唯一入口」+「调 cw create-topic」+「按 nextAction 执行」（G2 MVP）</li>
+      <li>AC-15.2 [映射]: 各阶段 skill description 顶部加「对应 CW action: xxx」映射句（§10.2）</li>
+      <li>AC-15.3 [review 落盘]: review-fix-loop 收敛后落盘 review 文件（verdict APPROVED），满足 check_*.py 前置（关联 #7）</li>
+      <li>AC-15.4 [JSON 产出]: lite-plan/mid-plan/mid-detail-plan 的 final 步骤产 plan.json/clarify.json/detail.json（§12，关联 #5）</li>
+      <li>AC-15.5 [不删路由]: MVP 不删 skill 内「下一步 /skill:xxx」路由句（D-007-REVISIT 降级），路由删除与 D-011 改名同步</li>
+    </ul>
+  </div>
+</div>
+
+<div class="issue issue--p1">
+  <div class="issue__head">
+    <span class="issue__num">#16</span>
+    <span class="issue__title">coding-execute skill 适配 CW</span>
+  </div>
+  <div class="issue__meta"><span><strong>P 级</strong>: P1</span><span><strong>类型</strong>: 流程</span><span><strong>Blocked by</strong>: 无</span><span><strong>推荐强度</strong>: Strong</span></div>
+  <div class="issue__desc">§13.1 决定删除 coding-execute.js workflow 脚本（用设计拒绝的工作流路由机制，未接 test-orchestrator，与 CW 架构冲突）。删除后其承载的「Wave 派发 + worktree 隔离 + test-runner 落盘」逻辑需由 coding-execute skill 改造重建：从「调 workflow 脚本」改为「指导 agent 用 subagent tool 派发 Wave + 收集 test-results.json」。test-results.json 与 cw test 的 cases 数组需数据契约对齐（用例 ID 一致：lite 用 E 加数字如 E1，mid 用 T 加用例号.序号如 T1.1，check_execute.py 已支持双格式）。关联 §13、UC-3/UC-4。</div>
+  <div class="issue__section">
+    <h4>方案对比</h4>
+    <div class="sol sol--chosen">
+      <div class="sol__head">方案 A · skill 改为派发指导文档（无执行脚本，保留 check_execute.py 自检）— ✓ 选定</div>
+      <div class="sol__proscons">skill 内容：① 教 agent 用 subagent tool 派发 implementer/test-runner 执行 Wave；② worktree 隔离策略；③ test-results.json 字段约定（caseId/status/screenshotPath 用于 lite / commitHash 用于 mid）；④ 完成后调 cw dev 传 tasks、cw test 传 cases。保留 check_execute.py 作 skill 自检。<strong>优</strong>：符合 §13.1 分工；零运行时编排脚本维护；check_execute.py weak-structural 兜底。<strong>缺</strong>：依赖 agent 正确执行指导。</div>
+    </div>
+    <div class="sol">
+      <div class="sol__head">方案 B · skill 保留 check_execute.py + 新增轻量编排脚本</div>
+      <div class="sol__proscons">编排逻辑部分固化；但刚删 workflow 脚本又加编排脚本违背 §13.1，编排脚本与 agent 派发职责不清，脚本本身要维护 + 测试。</div>
+    </div>
+    <div class="sol">
+      <div class="sol__head">方案 C · Wave 派发逻辑内化进 CW dev/test action</div>
+      <div class="sol__proscons">完全机器强制；但违背 G2（CW 是状态机+gate，不应承担执行编排），CW 派 subagent 需 child_process spawn（越界，CW 已是第三用户），破坏关注点分离。</div>
+    </div>
+    <div class="pick"><strong>取舍</strong>：选 A。§13.1 已明确分工——CW 做 gate+状态机，coding-execute skill 做派发指导，agent 做实际派发。test-results.json 靠 skill 文档 + check_execute.py weak-structural 双重约束。agent 偏离风险靠 cw dev/test 的 GitValidator + judgeByExpected 兜底。<strong>数据契约</strong>：test-results.json 每条含 caseId+status+screenshotPath（lite）/ commitHash（mid），用例 ID 与 plan.json/detail.json 一致。</div>
+  </div>
+  <div class="issue__section">
+    <h4>验收标准</h4>
+    <ul class="ac-list">
+      <li>AC-16.1 [删除]: extensions/coding-workflow/workflows/coding-execute.js workflow 脚本删除（§13.1）</li>
+      <li>AC-16.2 [指导重建]: coding-execute skill 改为指导 agent 用 subagent tool 派发 implementer/test-runner 执行 Wave + worktree 隔离决策</li>
+      <li>AC-16.3 [数据契约]: test-results.json 字段与 cw test cases 数组 1:1 映射，用例 ID 与 plan.json/detail.json 一致（关联 #3）</li>
+      <li>AC-16.4 [复用]: check_execute.py 保留，skill 执行后自检 test-results.json 结构 + 用例覆盖（§13.2 weak-structural）</li>
+      <li>AC-16.5 [trace]: agent 据 skill 指导完成 Wave → 调 cw dev 传 tasks → 调 cw test 传 cases（UC-3/UC-4）</li>
+    </ul>
+  </div>
+</div>
+
+<h2 id="p2">P2 重要项</h2>
+
+<div class="issue issue--p2">
+  <div class="issue__head">
+    <span class="issue__num">#9</span>
+    <span class="issue__title">nextAction 数据结构</span>
+  </div>
+  <div class="issue__meta"><span><strong>P 级</strong>: P2</span><span><strong>类型</strong>: 模块</span><span><strong>Blocked by</strong>: 无</span><span><strong>推荐强度</strong>: Worth exploring</span></div>
+  <div class="issue__desc">CW 每次 action 返回 nextAction 指导 agent 下一步。结构需含 skill（调哪个 skill）、guidance（文字提示）、可能的 expectedCases（test 阶段列出待测用例）。</div>
+  <div class="pick"><strong>推荐方案</strong>：扁平结构 <code>{action?, skill?, guidance, waves?, testCases?}</code> —— action/skill 可空（test 阶段无专用 skill 则 skill 空）；guidance 总有；waves/testCases 按阶段填充。<strong>理由</strong>：agent 消费简单，按字段取值判断下一步。编码时在 state-machine.ts 与转换表同处定义（§3 已定 nextAction 组装归 state-machine.ts）。</div>
+</div>
+
+<div class="issue issue--p2">
+  <div class="issue__head">
+    <span class="issue__num">#10</span>
+    <span class="issue__title">渐进式提交入参数组统一</span>
+  </div>
+  <div class="issue__meta"><span><strong>P 级</strong>: P2</span><span><strong>类型</strong>: 模块</span><span><strong>Blocked by</strong>: 无</span><span><strong>推荐强度</strong>: Strong</span></div>
+  <div class="issue__desc">dev/test 入参是数组（D-005：长 1=单/N=批量）。handler 内部如何统一处理。</div>
+  <div class="pick"><strong>推荐方案</strong>：内部统一循环（长 1 是 N=1 特例，不分快路径）。<strong>理由</strong>：渐进式语义本就是逐个累计判定，单/批量逻辑本质相同（循环 + 累计），分支优化快路径增加复杂度无收益。handler 遍历数组 → 逐个跑 gate → 累计 gatePassed。</div>
+</div>
+
+<div class="issue issue--p2">
+  <div class="issue__head">
+    <span class="issue__num">#11</span>
+    <span class="issue__title">schemaVersion 演进与 ALTER TABLE 迁移</span>
+  </div>
+  <div class="issue__meta"><span><strong>P 级</strong>: P2</span><span><strong>类型</strong>: 模块</span><span><strong>Blocked by</strong>: 无</span><span><strong>推荐强度</strong>: Worth exploring</span></div>
+  <div class="issue__desc">D-016 改用 sqlite 关系表后，schema 演进从「JSON deserialize 缺字段补默认」变为「sqlite ALTER TABLE」。未来 schema 升级（如加 full 路径状态）如何管理。</div>
+  <div class="pick"><strong>推荐方案</strong>：sqlite 的 <code>user_version</code> PRAGMA 记录 schema 版本。CwStore 初始化时检查 user_version，按版本号顺序跑迁移函数（ALTER TABLE / CREATE INDEX）。MVP 不引入复杂迁移框架（YAGNI），手写迁移函数链够用（user_version 0→1→2...）。未来真要升版本（如 D-010 full 接入触发）才加对应迁移函数。</div>
+</div>
+
+<h2 id="p3">P3 延后 / Won't / 迷雾</h2>
+
+<div class="issue issue--p3">
+  <div class="issue__head">
+    <span class="issue__num">#12</span>
+    <span class="issue__title">D-011 skill 改名（mid-plan→mid-clarify 等）</span>
+  </div>
+  <div class="issue__meta"><span><strong>P 级</strong>: P3 延后</span><span><strong>类型</strong>: 流程</span></div>
+  <div class="issue__desc"><strong>延后理由</strong>：D-011 已决推迟到 CW 稳定后，避免改名与 CW 实现交织增加变更面。CW MVP 用现状名 + §10.4 映射表过渡。</div>
+</div>
+
+<div class="issue issue--wont">
+  <div class="issue__head">
+    <span class="issue__num">#13</span>
+    <span class="issue__title">full 路径接入</span>
+  </div>
+  <div class="issue__meta"><span><strong>状态</strong>: Won't（不做）</span><span><strong>类型</strong>: 范围</span></div>
+  <div class="issue__desc"><strong>不做理由</strong>：D-015 明确 full 不接入（非延后）。CW 定位 lite+mid 工具，可见未来不接 full 6 阶段状态机。未来需要 full 开新 topic 重设计。</div>
+</div>
+
+<div class="issue issue--fog">
+  <div class="issue__head">
+    <span class="issue__num">#14</span>
+    <span class="issue__title">多 session 并发写同一 _cw.db ?</span>
+  </div>
+  <div class="issue__meta"><span><strong>状态</strong>: ?（迷雾）</span><span><strong>类型</strong>: 边界</span></div>
+  <div class="issue__desc">NFR C-1 关注多 session 隔离（禁模块级 let）。CW 无模块级可变状态（合规），但 _cw.db 是文件级共享。若两个 agent session 同时操作同一 topic（一个 dev 一个 test），D-016 的 sqlite 连接默认无并发锁。但 sqlite 本身有 BUSY 处理机制（WAL 模式 + 重试），比原文件方案 tmp+rename 的「A 读→B 读→A 写→B 写」逻辑覆盖问题更可控。</div>
+  <div class="pick"><strong>当前假设</strong>：单 agent 串行操作一个 topic（CW 实际运行模式，agent 不会并行操作同一 topic 的不同阶段）。<strong>验证方式</strong>：在 #1 实现后用集成测试模拟顺序调用确认无覆盖。若未来发现真并发需求（如 GUI 多窗口），再加乐观锁（version 字段 + CAS）。<strong>为何暂不展开</strong>：当前架构假设单 agent 串行，无证据显示需要并发。展开需先确认 GUI/多 agent 场景是否真存在，属未来需求（D-010 full 接入或 xyz-agent GUI 集成时再看）。</div>
+</div>
+
+<h2 id="decisions">决策记录汇总</h2>
+<div class="table-wrap">
+<table class="data-table">
+<thead><tr><th>#</th><th>P</th><th>类型</th><th>选择方案</th><th>关键理由</th></tr></thead>
+<tbody>
+<tr><td>#1</td><td>P0</td><td>模块</td><td>手写 DAO + service 层事务</td><td>零依赖（D-016 node:sqlite）；表稳定查询简单；可注入 mock 单测</td></tr>
+<tr><td>#2</td><td>P0</td><td>架构</td><td>声明式转换表 + 通用 guard 引擎</td><td>状态机社区标准；§4.2 表已完整；SDK 契约测试覆盖约定耦合</td></tr>
+<tr><td>#3</td><td>P1</td><td>模块</td><td>逐条容错（task/case 记 fail 继续）</td><td>D-005 渐进式语义 + §7「该 task 记 fail」</td></tr>
+<tr><td>#4</td><td>P1</td><td>模块</td><td>声明式数组 + 通用执行器</td><td>§5.2 11 行表 1:1 映射；fail-fast 单点实现</td></tr>
+<tr><td>#5</td><td>P1</td><td>模块</td><td>typebox Value.Assert（fallback 手写）</td><td>零新依赖；schema 与类型同源；Value 不可用降级 B</td></tr>
+<tr><td>#6</td><td>P1</td><td>边界</td><td>解析 stdout verdict + exit code 双信号</td><td>复用现有脚本输出契约；区分业务 fail vs infra error</td></tr>
+<tr><td>#7</td><td>P1</td><td>流程</td><td>预检 + 明确 hint（不造假 stub）</td><td>诚实执行原则；agent 拿可操作 hint</td></tr>
+<tr><td>#8</td><td>P1</td><td>模块</td><td>迁移核心判定用例 + 新增 JSON 测试</td><td>judgeByExpected 是纯函数与格式无关，迁移保障等价</td></tr>
+<tr><td>#9</td><td>P2</td><td>模块</td><td>扁平 nextAction 结构</td><td>agent 消费简单，按字段取值</td></tr>
+<tr><td>#10</td><td>P2</td><td>模块</td><td>内部统一循环（长 1=N=1 特例）</td><td>渐进式语义本质相同，分支快路径无收益</td></tr>
+<tr><td>#11</td><td>P2</td><td>模块</td><td>user_version PRAGMA + 手写迁移链</td><td>YAGNI，不引迁移框架；未来升版本才加函数</td></tr>
+<tr><td>#12</td><td>P3</td><td>流程</td><td>延后（D-011 推迟到 CW 稳定后）</td><td>避免改名与 CW 实现交织增加变更面</td></tr>
+<tr><td>#13</td><td>Won't</td><td>范围</td><td>不做（D-015 明确不接入）</td><td>CW 定位 lite+mid，full 开新 topic 重设计</td></tr>
+<tr><td>#14</td><td>迷雾</td><td>边界</td><td>暂不展开（假设单 agent 串行）</td><td>无并发证据；sqlite WAL 兜底；未来 GUI 场景再看</td></tr>
+<tr><td>#15</td><td>P1</td><td>流程</td><td>按 tier 分批改造（先 lite 再 mid）</td><td>与 CW 分档上线对齐；lite 早验证 G2；mid 复用模板</td></tr>
+<tr><td>#16</td><td>P1</td><td>流程</td><td>skill 改派发指导文档（删 workflow 脚本）</td><td>§13.1 分工：CW 做 gate，skill 做指导，agent 做派发</td></tr>
+</tbody>
+</table>
+</div>
+
+<footer class="doc-foot">CW 实施 · Issue 决策图 · upstream: system-architecture.md · downstream: non-functional-design.md</footer>
+</main>
+</div>
+
+<script type="module">/*
+ * zoom.js — coding-visualizer 公共脚本
+ * 从 issues.html (feat-system-prompt-loader) 抽出，含 Mermaid zoom/pan/fit/expand + TOC scroll-spy。
+ * render.sh 通过占位符注释 INLINE:zoom.js 将本文件内联进产物 HTML 的 script[type=module]。
+ *
+ * 依赖：mermaid@11 + @mermaid-js/layout-elk（CDN ESM import）。
+ * CSS 契约：.diagram-shell 及内部 .mermaid-wrap/.mermaid-viewport/.mermaid-canvas/.diagram-source/.zoom-label
+ *          + [data-action] 按钮（zoom-in/out/fit/one/expand）— 类名与 design.css 绑定，勿改名。
+ */
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+import elkLayouts from 'https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk/dist/mermaid-layout-elk.esm.min.mjs';
+
+const config = { fitPadding: 28, minHeight: 360, maxHeightPx: 960, maxHeightVh: 0.84, maxInitialZoom: 1.8, minZoom: 0.08, maxZoom: 6.5, zoomStep: 0.14, readabilityFloor: 0.58 };
+const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+let activeDrag = null;
+addEventListener('mousemove', (e) => activeDrag?.onMove(e));
+addEventListener('mouseup', () => { activeDrag?.onEnd(); activeDrag = null; });
+const isDark = matchMedia('(prefers-color-scheme: dark)').matches;
+
+mermaid.registerLayoutLoaders(elkLayouts);
+mermaid.initialize({
+  startOnLoad: false, theme: 'base', look: 'classic', layout: 'elk',
+  themeVariables: {
+    fontFamily: "'Bricolage Grotesque', 'PingFang SC', system-ui, sans-serif", fontSize: '14px',
+    // Dark mode: dark filled nodes + bright semantic borders/text (keeps page bg #0a1414 and lineColor #5eead4 intact)
+    primaryColor: isDark ? '#0d2424' : '#ccfbf1', primaryBorderColor: isDark ? '#5eead4' : '#0d9488', primaryTextColor: isDark ? '#e3efee' : '#134e3a',
+    secondaryColor: isDark ? '#111d1d' : '#fffbeb', secondaryBorderColor: isDark ? '#115e59' : '#d97706', secondaryTextColor: isDark ? '#5eead4' : '#92400e',
+    tertiaryColor: isDark ? '#1a1a1a' : '#f8fafc', tertiaryBorderColor: isDark ? '#64748b' : '#64748b', tertiaryTextColor: isDark ? '#e2e8f0' : '#334155',
+    lineColor: isDark ? '#5eead4' : '#5f8a85',
+    noteBkgColor: isDark ? '#0d2424' : '#f0fdfa', noteTextColor: isDark ? '#e3efee' : '#134e3a', noteBorderColor: isDark ? '#2dd4bf' : '#0d9488',
+  }
+});
+
+function initDiagram(shell) {
+  const wrap = shell.querySelector('.mermaid-wrap');
+  const viewport = shell.querySelector('.mermaid-viewport');
+  const canvas = shell.querySelector('.mermaid-canvas');
+  const source = shell.querySelector('.diagram-source');
+  const label = shell.querySelector('.zoom-label');
+  if (!wrap || !viewport || !canvas || !source || !label) { console.error('initDiagram: missing elements', shell); return; }
+  let zoom = 1, fitMode = 'contain', panX = 0, panY = 0, svgW = 0, svgH = 0;
+  let sx = 0, sy = 0, spx = 0, spy = 0, touchDist = 0, touchCx = 0, touchCy = 0;
+  function constrainPan() { const vpW = viewport.clientWidth, vpH = viewport.clientHeight; const rW = svgW*zoom, rH = svgH*zoom, pad = config.fitPadding; panX = (rW+pad*2<=vpW)?(vpW-rW)/2:clamp(panX,vpW-rW-pad,pad); panY = (rH+pad*2<=vpH)?(vpH-rH)/2:clamp(panY,vpH-rH-pad,pad); }
+  function applyTransform() { const svg = canvas.querySelector('svg'); if (!svg||!svgW) return; constrainPan(); svg.style.width=(svgW*zoom)+'px'; svg.style.height=(svgH*zoom)+'px'; canvas.style.transform=`translate(${panX}px,${panY}px)`; label.textContent=Math.round(zoom*100)+'% \u2014 '+fitMode; }
+  function canPan() { return svgW*zoom+config.fitPadding*2>viewport.clientWidth || svgH*zoom+config.fitPadding*2>viewport.clientHeight; }
+  function computeSmartFit() { const vpW=viewport.clientWidth,vpH=viewport.clientHeight; const aW=Math.max(80,vpW-config.fitPadding*2),aH=Math.max(80,vpH-config.fitPadding*2); const contain=Math.min(aW/svgW,aH/svgH); let z=contain,mode='contain'; if(contain<config.readabilityFloor){const chartR=svgH/svgW,vpR=vpH/Math.max(vpW,1); if(chartR>=vpR){z=aW/svgW;mode='width-priority';}else{z=aH/svgH;mode='height-priority';}} return {zoom:clamp(z,config.minZoom,config.maxInitialZoom),mode}; }
+  function fitDiagram() { if(!svgW)return; const fit=computeSmartFit(); zoom=fit.zoom; fitMode=fit.mode; panX=(viewport.clientWidth-svgW*zoom)/2; panY=(viewport.clientHeight-svgH*zoom)/2; applyTransform(); }
+  function setOneToOne() { zoom=clamp(1,config.minZoom,config.maxZoom); fitMode='1:1'; panX=(viewport.clientWidth-svgW*zoom)/2; panY=(viewport.clientHeight-svgH*zoom)/2; applyTransform(); }
+  function zoomAround(factor,cx,cy) { const next=clamp(zoom*factor,config.minZoom,config.maxZoom); const ratio=next/zoom; panX=cx-ratio*(cx-panX); panY=cy-ratio*(cy-panY); zoom=next; fitMode='custom'; applyTransform(); }
+  function readSvgNaturalSize(svg) { let w=0,h=0; if(svg.viewBox?.baseVal?.width>0){w=svg.viewBox.baseVal.width;h=svg.viewBox.baseVal.height;} if(!w){w=parseFloat(svg.getAttribute('width'))||0;h=parseFloat(svg.getAttribute('height'))||0;} if(!w){const b=svg.getBBox();w=b.width;h=b.height;} if(!w){const r=svg.getBoundingClientRect();w=r.width||1000;h=r.height||700;} if(!svg.getAttribute('viewBox'))svg.setAttribute('viewBox',`0 0 ${w} ${h}`); return {w,h}; }
+  function setAdaptiveHeight() { if(!svgW)return; const usableW=Math.max(280,wrap.getBoundingClientRect().width-2); const idealH=(svgH/svgW)*usableW+config.fitPadding*2; const maxVp=Math.floor(innerHeight*config.maxHeightVh); const hardMax=Math.min(config.maxHeightPx,Math.max(config.minHeight+40,maxVp)); wrap.style.height=Math.round(clamp(idealH,config.minHeight,hardMax))+'px'; }
+  function openInNewTab() { const svg=canvas.querySelector('svg'); if(!svg)return; const clone=svg.cloneNode(true); clone.style.width=''; clone.style.height=''; const bg=isDark?'#0a1414':'#f6f8f8'; const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Diagram</title><style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:${bg};padding:40px;box-sizing:border-box}svg{max-width:100%;max-height:90vh;height:auto}</style></head><body>${clone.outerHTML}</body></html>`; open(URL.createObjectURL(new Blob([html],{type:'text/html'})),'_blank'); }
+  async function render() { try { const code=source.textContent.trim(); if(!code){label.textContent='Error: Empty source';return;} const id='diagram-'+Date.now()+'-'+Math.random().toString(36).slice(2,8); const {svg}=await mermaid.render(id,code); canvas.innerHTML=svg; const svgNode=canvas.querySelector('svg'); if(!svgNode){label.textContent='Error: No SVG';return;} const size=readSvgNaturalSize(svgNode); svgW=size.w; svgH=size.h; svgNode.removeAttribute('width'); svgNode.removeAttribute('height'); svgNode.style.maxWidth='none'; svgNode.style.display='block'; setAdaptiveHeight(); fitDiagram(); } catch(err){ console.error('Mermaid render failed:',err); label.textContent='Error: '+(err.message||'Render failed'); } }
+  const actions = { 'zoom-in':()=>zoomAround(1+config.zoomStep,viewport.clientWidth/2,viewport.clientHeight/2), 'zoom-out':()=>zoomAround(1/(1+config.zoomStep),viewport.clientWidth/2,viewport.clientHeight/2), 'zoom-fit':fitDiagram, 'zoom-one':setOneToOne, 'zoom-expand':openInNewTab };
+  Object.entries(actions).forEach(([a,h])=>wrap.querySelector(`[data-action="${a}"]`)?.addEventListener('click',h));
+  viewport.addEventListener('dblclick',fitDiagram);
+  viewport.addEventListener('wheel',(e)=>{ if(e.ctrlKey||e.metaKey){e.preventDefault();const rect=viewport.getBoundingClientRect();const f=e.deltaY<0?1+config.zoomStep:1/(1+config.zoomStep);zoomAround(f,e.clientX-rect.left,e.clientY-rect.top);return;} if(canPan()){e.preventDefault();panX-=e.deltaX;panY-=e.deltaY;applyTransform();} },{passive:false});
+  viewport.addEventListener('mousedown',(e)=>{ if(e.target.closest('.zoom-controls')||!canPan())return; wrap.classList.add('is-panning'); sx=e.clientX;sy=e.clientY;spx=panX;spy=panY;e.preventDefault(); activeDrag={onMove:(ev)=>{panX=spx+(ev.clientX-sx);panY=spy+(ev.clientY-sy);applyTransform();},onEnd:()=>wrap.classList.remove('is-panning')}; });
+  viewport.addEventListener('touchstart',(e)=>{ if(e.touches.length===1){sx=e.touches[0].clientX;sy=e.touches[0].clientY;spx=panX;spy=panY;} else if(e.touches.length===2){const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;touchDist=Math.sqrt(dx*dx+dy*dy);const r=viewport.getBoundingClientRect();touchCx=(e.touches[0].clientX+e.touches[1].clientX)/2-r.left;touchCy=(e.touches[0].clientY+e.touches[1].clientY)/2-r.top;} },{passive:true});
+  viewport.addEventListener('touchmove',(e)=>{ if(e.touches.length===1&&canPan()){if(touchDist>0){sx=e.touches[0].clientX;sy=e.touches[0].clientY;spx=panX;spy=panY;touchDist=0;}e.preventDefault();panX=spx+(e.touches[0].clientX-sx);panY=spy+(e.touches[0].clientY-sy);applyTransform();}else if(e.touches.length===2&&touchDist>0){e.preventDefault();const dx=e.touches[0].clientX-e.touches[1].clientX,dy=e.touches[0].clientY-e.touches[1].clientY;const d=Math.sqrt(dx*dx+dy*dy);zoomAround(d/touchDist,touchCx,touchCy);touchDist=d;} },{passive:false});
+  new ResizeObserver(()=>{if(svgW){setAdaptiveHeight();fitDiagram();}}).observe(wrap);
+  render();
+}
+document.querySelectorAll('.diagram-shell').forEach(initDiagram);
+
+/* TOC scroll-spy：高亮当前 section 对应的 TOC 链接 */
+(function() {
+  const toc = document.getElementById('toc'); if (!toc) return;
+  const links = toc.querySelectorAll('a'); const sections = [];
+  links.forEach(link => { const el = document.getElementById(link.getAttribute('href').slice(1)); if (el) sections.push({ el, link }); });
+  sections.forEach(s => new IntersectionObserver(entries => { entries.forEach(entry => { if (entry.isIntersecting) { links.forEach(l => l.classList.remove('active')); s.link.classList.add('active'); if (innerWidth <= 1000) s.link.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' }); } }); }, { rootMargin: '-10% 0px -80% 0px' }).observe(s.el));
+  links.forEach(link => link.addEventListener('click', e => { e.preventDefault(); const el = document.getElementById(link.getAttribute('href').slice(1)); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); history.replaceState(null, '', '#' + el.id); } }));
+})();
+</script>
+</body>
+</html>
