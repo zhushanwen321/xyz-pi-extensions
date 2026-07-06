@@ -15,6 +15,7 @@
  * 3. result.output / result.parsedOutput / result.content → agent 返回未包装值（error）
  * 4. readFileSync/writeFileSync 传状态 → 脆弱（warning）
  * 5. unlinkSync 清理状态 → 与 subprocess 文件读竞态（warning）
+ * 6. 顶层未 await 的异步 IIFE + 内部调 agent/parallel/pipeline → 子进程被提前 kill（error）
  *
  * 层归属：Engine。
  *
@@ -212,6 +213,144 @@ function checkAgentCallOptions(
   }
 }
 
+// ── 顶层未 await 的异步 IIFE 检测 ───────────────────────────
+
+/**
+ * 匹配未 await 的 async IIFE 起点（粗筛）。
+ *
+ * 形式：`(async function`、`(async ()`、`(async (args)` 后跟 `=>`
+ * 不匹配：`await (async ...`（lookbehind 排除）
+ */
+const BARE_ASYNC_IIFE_PATTERN = /(^|[;\n\s{}(])(?<!await\s)\(async\s+(?:function\b|\(\)|\([^)]*\)\s*=>)/;
+
+/**
+ * 判断 IIFE 调用表达式是否被某个上下文「接住」（return/赋值/await 链等）。
+ *
+ * 返回 true 表示 IIFE 的 Promise 被接住（合法或可能合法）；
+ * false 表示 IIFE 是孤立语句表达式（fire-and-forget）。
+ *
+ * 判断方法：扫描 IIFE 起点 `(async` 前的非空白 token：
+ *   - 遇到 `=` `return` `await` `(` `[` `,` → 接住
+ *   - 遇到 `;` `{` `}` 或行首 → 孤立语句
+ *
+ * 例：
+ *   `const x = (async ...` → '=' 接住
+ *   `return (async ...` → 'return' 接住
+ *   `(async ...` 行首 → 孤立
+ *   `}; (async ...` → 孤立（前一个语句结束后新起一个）
+ */
+function isIIFEAwaited(source: string, iifeStart: number): boolean {
+  let i = iifeStart - 1;
+  while (i >= 0) {
+    const ch = source[i];
+    if (/\s/.test(ch)) {
+      i--;
+      continue;
+    }
+    // 收集从当前位置往前到上一个非 token 字符的连续非空白串
+    // 找出最近的「词」（标识符/操作符）
+    const tokenEnd = i + 1;
+    let tokenStart = i;
+    while (tokenStart >= 0 && /[A-Za-z0-9_$]/.test(source[tokenStart])) {
+      tokenStart--;
+    }
+    tokenStart++;
+    // 操作符类（= / ( / [ / ,）：非标识符字符
+    if (tokenStart > tokenEnd) {
+      // 标识符——可能是 return / await / yield
+      const word = source.slice(tokenStart, tokenEnd);
+      if (word === "return" || word === "await" || word === "yield") return true;
+      // 其他标识符（如变量名 `foo`），说明是 foo(async ... 之类调用，算接住
+      return true;
+    } else {
+      // 单字符操作符
+      if (ch === "=" || ch === "(" || ch === "[" || ch === "," || ch === "?" || ch === ":") {
+        return true;
+      }
+      if (ch === ";" || ch === "{" || ch === "}" || ch === ")") {
+        return false;
+      }
+      // 其他字符（如 `.` `+`），保守视为接住（避免误报）
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 检测未 await 的 async IIFE，且其内部调用了 agent/parallel/pipeline。
+ *
+ * 严重度分级：
+ * - **error**：IIFE 是孤立语句表达式（fire-and-forget）+ 内部调 agent。
+ *   这是 daily-news-impact 的 bug 模式——worker 外层 IIFE 不等内层就 post return，
+ *   主线程 transition done → releaseRuntime → controller.abort() → SIGKILL 子进程。
+ * - **warning**：IIFE 被 `=`/`return`/`(` 等接住（可能后续 await），但内部调 agent。
+ *   提醒作者确认 Promise 真的被 await，不阻断运行。
+ *
+ * 误报规避（不报）：
+ * - await 前缀的 IIFE（lookbehind 排除）
+ * - IIFE 内不含 agent/parallel/pipeline（stock-screening 这类纯 execSync 合法）
+ *
+ * 局限：纯正则 + 括号配对，无法做数据流分析。「赋值后稍后 await」「return 给外层 await」
+ * 都识别为「接住」（warning 而非 error），避免阻断合法写法。
+ */
+function checkBareAsyncIIFE(source: string): LintFinding[] {
+  const match = source.match(BARE_ASYNC_IIFE_PATTERN);
+  if (!match) return [];
+
+  if (!ENTRY_POINT_PATTERNS.some((p) => p.test(source))) return [];
+
+  const iifeStart = match.index ?? 0;
+  const iifeLine = source.slice(0, iifeStart).split("\n").length;
+
+  const firstBrace = source.indexOf("{", iifeStart);
+  if (firstBrace === -1) return [];
+
+  let depth = 0;
+  let iifeEnd = -1;
+  for (let i = firstBrace; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        iifeEnd = i;
+        break;
+      }
+    }
+  }
+  if (iifeEnd === -1) return [];
+
+  const iifeBody = source.slice(firstBrace, iifeEnd);
+  const hasAgentInside = ENTRY_POINT_PATTERNS.some((p) => p.test(iifeBody));
+  if (!hasAgentInside) return [];
+
+  const awaited = isIIFEAwaited(source, iifeStart);
+  if (awaited) {
+    return [
+      {
+        severity: "warning",
+        line: iifeLine,
+        message:
+          "Async IIFE wrapping agent() is assigned/returned but must be awaited. If the surrounding context does not await this Promise, the worker will post `return` early and kill in-flight agent() subprocesses.",
+        suggestion:
+          "Verify the surrounding code awaits this IIFE's Promise. When unsure, prefer top-level await directly (the worker already wraps your script in an async IIFE).",
+      },
+    ];
+  }
+
+  return [
+    {
+      severity: "error",
+      line: iifeLine,
+      message:
+        "Top-level async IIFE is a fire-and-forget statement. The worker's outer IIFE will post `return` before agent() resolves, killing the subprocess via runtime abort.",
+      suggestion:
+        "Remove the IIFE wrapper and use top-level await directly (the worker already wraps your script in an async IIFE). Or `await` the IIFE: `await (async function main() { ... })();`.",
+    },
+  ];
+}
+
 /**
  * 静态检查 workflow 脚本合法性。
  *
@@ -230,10 +369,18 @@ export function lintScript(source: string): LintResult {
     findings.push(...checkLine(lines[i], i + 1));
   }
 
- // agent 调用上下文检查（outputSchema 作为 key）
+  // agent 调用上下文检查（outputSchema 作为 key）
   findings.push(...checkAgentCalls(source));
 
- // 按行号排序，稳定输出
+ // [HISTORICAL] 顶层未 await 的异步 IIFE + 内部调 agent——子进程被提前 kill。
+ // 教训来源：daily-news-impact.js 用 (async function main(){...})();() 包裹整个脚本，
+ // worker 外层 IIFE 不等内层 IIFE 就 postMessage("return")，主线程 transition done
+ // → release runtime → controller.abort() → spawn 后 2ms SIGKILL 子进程。
+ // 诊断耗时 4 轮：先后误判为 model 故障 / 工具缺失 / turn-signal abort / ConcurrencyGate 异常，
+ // 最终靠 worker-host → handleReturn → release → abort 的调用栈定位。
+  findings.push(...checkBareAsyncIIFE(source));
+
+  // 按行号排序，稳定输出
   findings.sort((a, b) => a.line - b.line);
 
   return {

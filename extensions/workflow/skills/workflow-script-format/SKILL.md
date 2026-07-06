@@ -14,6 +14,29 @@ description: >-
 - **DO NOT use `import`/`export` (ESM) syntax**. Use `require()` for Node.js built-ins.
 - The script's **`return` value IS captured** and sent back to the main thread.
 
+### [MANDATORY] Do NOT wrap your script in another async IIFE
+
+The worker already wraps your script in an async IIFE. If you add your own `(async function main() { ... })();` wrapper **without `await`**, the worker's outer IIFE resolves immediately (fire-and-forget), posts `return` to the main thread, and the main thread tears down the runtime — **killing any in-flight `agent()` subprocess via SIGKILL within ~2ms**.
+
+```javascript
+// ❌ WRONG: bare IIFE — outer worker IIFE doesn't await this, posts return immediately
+(async function main() {
+  const result = await agent({ prompt: 'analyze' });  // subprocess killed ~2ms after spawn
+})();
+
+// ✅ CORRECT: top-level await directly (the worker wraps this in its own async IIFE)
+const result = await agent({ prompt: 'analyze' });
+
+// ✅ ALSO OK: awaited IIFE (rarely needed — prefer top-level await)
+await (async function main() {
+  const result = await agent({ prompt: 'analyze' });
+})();
+```
+
+This is enforced by `lintScript`:
+- **error** (workflow refuses to run): bare IIFE as a standalone statement + contains agent/parallel/pipeline.
+- **warning** (workflow runs, but flagged): IIFE assigned to a variable or returned from a function + contains agent/parallel/pipeline. Review whether the surrounding code actually awaits the Promise; if not, the same kill-on-spawn bug applies.
+
 ## Required: Meta Declaration
 
 Every script MUST declare `meta` at the top level:

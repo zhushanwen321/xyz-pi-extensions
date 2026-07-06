@@ -241,6 +241,24 @@ describe("ConcurrencyGate", () => {
       expect(result.error).toContain("structured-output");
       expect(result.parsedOutput).toBeUndefined();
     });
+
+ // [HISTORICAL] 对称修复：与 subprocess-agent-runner 同样的盲点——abort/崩溃时
+ // stderr 含诊断信息，旧实现丢弃。验证 enqueue 路径也带上 exitCode + stderr。
+    it("schema-error carries exitCode + stderr (symmetric fix with subprocess-agent-runner)", async () => {
+      const gate = new ConcurrencyGate(2);
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(asChildProcess(proc));
+
+      const schema = { type: "object" };
+      const resultPromise = gate.enqueue({ prompt: "x", schema });
+      proc.stderr.emit("data", Buffer.from("Operation aborted, sending SIGKILL"));
+      proc.emit("close", 1);
+
+      const result = await resultPromise;
+      expect(result.error).toContain("structured-output");
+      expect(result.error).toContain("exitCode=1");
+      expect(result.error).toContain("Operation aborted, sending SIGKILL");
+    });
   });
 
  // ── enqueue — error path ───────────────────────────────────

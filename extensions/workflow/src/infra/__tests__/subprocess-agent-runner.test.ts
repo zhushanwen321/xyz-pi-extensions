@@ -273,6 +273,45 @@ describe("SubprocessAgentRunner", () => {
       expect(result.error).toContain("structured-output");
       expect(result.parsedOutput).toBeUndefined();
     });
+
+ // [HISTORICAL] schema-error 分支必须带上 exitCode + stderr，否则 abort/崩溃被
+ // 误判为 "LLM 拒绝调 tool"。复现 daily-news-impact 三轮根因分析被误导的场景：
+ // pi 子进程被 SIGKILL（abort 触发），pipeline 全空，schema 检查命中。
+    it("schema-error error carries exitCode + stderr (abort/misleading-message fix)", async () => {
+      const runner = new SubprocessAgentRunner();
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(asChildProcess(proc));
+
+      const schema = { type: "object" };
+      const ac = new AbortController();
+      const p = runner.run({ prompt: "x", schema }, ac.signal);
+ // 模拟 runPiProcess abortHandler 写入 stderr 后 SIGKILL
+      proc.stderr.emit("data", Buffer.from("Operation aborted, sending SIGKILL"));
+      proc.emit("close", 1);
+
+      const result = await p;
+      expect(result.error).toContain("structured-output");
+      expect(result.error).toContain("exitCode=1");
+      expect(result.error).toContain("Operation aborted, sending SIGKILL");
+    });
+
+    it("schema-error on exit 0 + empty stderr keeps clean message (no ctx suffix)", async () => {
+      const runner = new SubprocessAgentRunner();
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(asChildProcess(proc));
+
+      const schema = { type: "object" };
+      const jsonl = messageEndJsonl("not structured", { input: 10, output: 5 });
+      const ac = new AbortController();
+      const p = runner.run({ prompt: "x", schema }, ac.signal);
+      proc.stdout.emit("data", Buffer.from(jsonl + "\n"));
+      proc.emit("close", 0);
+
+      const result = await p;
+      expect(result.error).toContain("structured-output");
+      expect(result.error).not.toContain("exitCode");
+      expect(result.error).not.toContain("stderr");
+    });
   });
 
  // ── Abort / signal ─────────────────────────────────────────

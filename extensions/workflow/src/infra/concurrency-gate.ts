@@ -291,11 +291,15 @@ export class ConcurrencyGate {
       const durationMs = Date.now() - startedAt;
 
       if (opts.schema && pipeline.parsedOutput === undefined) {
+ // [HISTORICAL] schema-error 必须带 exitCode + stderr，否则 abort/崩溃被误判为
+ // "LLM 拒绝调 tool"。对称修复：与 subprocess-agent-runner.ts 保持一致。
+ // 详见 subprocess-agent-runner.ts:formatFailureContext 的教训记录。
+        const ctx = formatFailureContext(exitCode, stderr);
         if (!pipeline.hasToolCall) {
           resolve({
             content: pipeline.output,
             durationMs: Date.now() - startedAt,
-            error: "Agent did not call structured-output tool",
+            error: `Agent did not call structured-output tool${ctx}`,
             toolCalls: pipeline.toolCalls,
           });
           return;
@@ -304,7 +308,7 @@ export class ConcurrencyGate {
           resolve({
             content: pipeline.output,
             durationMs,
-            error: "Agent completed without calling structured-output tool",
+            error: `Agent completed without calling structured-output tool${ctx}`,
             toolCalls: pipeline.toolCalls,
           });
           return;
@@ -330,4 +334,21 @@ export class ConcurrencyGate {
       });
     }
   }
+}
+
+// ── Helpers ─────────────────────────────────────────────────
+
+/**
+ * 格式化 schema 失败时的执行上下文（exitCode + stderr 摘要）。
+ *
+ * 与 subprocess-agent-runner.ts:formatFailureContext 对称实现（两处 spawn 路径
+ * 各自独立，未抽到 shared——避免为单 helper 引入跨文件依赖）。
+ * 详见 subprocess-agent-runner.ts 的 [HISTORICAL] 教训记录。
+ */
+function formatFailureContext(exitCode: number, stderr: string): string {
+  const parts: string[] = [];
+  if (exitCode !== 0) parts.push(`exitCode=${exitCode}`);
+  const trimmed = stderr.trim();
+  if (trimmed) parts.push(`stderr=${trimmed.slice(0, 500)}`);
+  return parts.length > 0 ? ` (${parts.join(", ")})` : "";
 }
