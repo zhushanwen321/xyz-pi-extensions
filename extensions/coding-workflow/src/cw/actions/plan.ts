@@ -25,7 +25,14 @@ export function handlePlan(params: PlanParams, deps: ActionDeps): ActionResult {
   }
   const verdict = guard("plan", topic, deps.store);
   if (!verdict.ok) {
-    throw new Error(`guard failed: ${verdict.code} — ${verdict.reason}`);
+    // 改进项 3：lite + status∈{planned,developed} 时 plan.json 变了 → 引导用 replan
+    const isLiteReplanable = topic.tier === "lite"
+      && (topic.status === "planned" || topic.status === "developed")
+      && verdict.code === "illegal_transition";
+    const hint = isLiteReplanable
+      ? `（plan.json 已变更？改用 cw(action=replan, topicId, planJson) 追加 wave/testCase——append-only：已 committed 的 wave / 已 passed 的 testCase 不可删改，未 committed/passed 的可删可改）`
+      : "";
+    throw new Error(`guard failed: ${verdict.code} — ${verdict.reason}${hint}`);
   }
   // 解析（含 format 锁定校验，D-003 AC-2.1）。
   const parsed = parseLitePlan(params.planJson, topic.tier);
