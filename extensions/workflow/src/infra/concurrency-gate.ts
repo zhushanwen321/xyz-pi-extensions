@@ -260,15 +260,14 @@ export class ConcurrencyGate {
       if (timeoutTimer) timeoutTimer.unref();
 
       try {
-        const result = await runPiProcess(
+        const result = await runPiProcess({
           command,
           cmdArgs,
           pipeline,
-          controller.signal,
+          signal: controller.signal,
           env,
-          undefined,
-          opts.cwd,
-        );
+          cwd: opts.cwd,
+        });
         exitCode = result.exitCode;
         stderr = result.stderr;
       } catch (err) {

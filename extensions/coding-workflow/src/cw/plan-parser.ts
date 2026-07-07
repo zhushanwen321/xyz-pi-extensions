@@ -208,13 +208,62 @@ function assertSchema(schema: Schema, json: unknown, label: string): void {
   }
 }
 
+/**
+ * ADR-029 决策 4 / 审查 architecture：dependsOn 环检测。
+ * workflow 脚本的 topoSort 会在运行时检环，但那时已在 worktree 建好之后——
+ * 在 cw(plan/detail) gate 就拒环形 plan，fail-fast 在 plan 阶段而非 execute 阶段。
+ * 同时检「依赖不存在的 id」（topoSort 也会检，这里提前给更精确的错误信息）。
+ */
+function assertAcyclicDeps(
+  items: ReadonlyArray<{ id: string; dependsOn?: ReadonlyArray<string> | string[] }>,
+  label: string,
+): void {
+  const ids = new Set(items.map((i) => i.id));
+  // 1. 依赖不存在的 id
+  for (const item of items) {
+    const deps = Array.isArray(item.dependsOn) ? item.dependsOn : [];
+    for (const d of deps) {
+      if (!ids.has(d)) {
+        throw new Error(
+          `invalid ${label}: ${item.id} dependsOn unknown id "${d}"（合法 id: ${[...ids].join(", ")}）`,
+        );
+      }
+    }
+  }
+  // 2. 环检测（DFS 三色标记）
+  const GRAY = 1;
+  const BLACK = 2;
+  const color = new Map<string, number>();
+  const path: string[] = [];
+  const visit = (id: string): void => {
+    const c = color.get(id) ?? 0;
+    if (c === BLACK) return;
+    if (c === GRAY) {
+      const cycleStart = path.indexOf(id);
+      const cycle = path.slice(cycleStart).concat(id).join(" → ");
+      throw new Error(`invalid ${label}: dependsOn 有环（${cycle}）`);
+    }
+    color.set(id, GRAY);
+    path.push(id);
+    const item = items.find((i) => i.id === id);
+    const deps = Array.isArray(item?.dependsOn) ? item!.dependsOn : [];
+    for (const d of deps) visit(d);
+    path.pop();
+    color.set(id, BLACK);
+  };
+  for (const item of items) visit(item.id);
+}
+
 // ── 解析函数（入口：size guard → format 锁定 → schema 校验 → extract） ──
 
 export function parseLitePlan(json: unknown, tier: Tier): ParsedLitePlan {
   assertSafeSize(json, "lite plan");
   assertFormat(json, "lite", tier);
   assertSchema(LitePlanSchema, json, "lite plan");
-  return extractLitePlan(json);
+  const parsed = extractLitePlan(json);
+  assertAcyclicDeps(parsed.waves, "lite plan waves");
+  assertAcyclicDeps(parsed.testCases, "lite plan testCases");
+  return parsed;
 }
 
 export function parseMidClarify(json: unknown, tier: Tier): ParsedMidClarify {
@@ -228,7 +277,10 @@ export function parseMidDetail(json: unknown, tier: Tier): ParsedMidDetail {
   assertSafeSize(json, "mid detail");
   assertFormat(json, "mid-detail", tier);
   assertSchema(MidDetailSchema, json, "mid detail");
-  return extractMidDetail(json);
+  const parsed = extractMidDetail(json);
+  assertAcyclicDeps(parsed.waves, "mid detail waves");
+  assertAcyclicDeps(parsed.testCases, "mid detail testCases");
+  return parsed;
 }
 
 // ── extract（json 已过 schema 校验，结构安全） ───────────────

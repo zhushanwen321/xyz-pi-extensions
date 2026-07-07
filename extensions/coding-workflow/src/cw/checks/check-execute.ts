@@ -12,6 +12,15 @@
  * 读 test-results.json 逐条比对。mock 层必须 pass；real 层 pass 或 user-skipped（须带
  * 非空 user_confirm_ref 字符串，null/list 蒙混全堵死）。
  * 三条逃逸路径防护：① 缺用例 → FAIL；② AI 自标 manual → FAIL；③ AI 自标 blocked → FAIL。
+ *
+ * ⚠️ 与 cw 状态机的关系（ADR-029 后两套独立机制）：
+ * - **cw 状态机**（store.ts test_case.status）：ADR-029 决策 5 简化为 pass/fail/user-skipped，
+ *   砍了 pending-env。workflow agent 渐进式调 cw(test) 写入。
+ * - **本机器门**（check-execute.ts 读 test-results.json）：是遗留的「执行收尾」独立门，
+ *   不读 cw DB，直接读 test-runner 落盘的 test-results.json。它防御性拒绝 blocked/manual
+ *   （两者都不是合法终态）——这不是与 D5 矛盾，而是 test-results.json 层的额外防护。
+ *   ADR-029 后 workflow 场景下 test-results.json 可能不再统一落盘（渐进式 cw 取代），
+ *   但本门仍服务于非 workflow 场景（手动执行、回退路径）。
  */
 
 import { existsSync, readFileSync } from "node:fs";

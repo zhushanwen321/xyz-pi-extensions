@@ -160,6 +160,35 @@ describe("parseLitePlan", () => {
     const json = makeLitePlan({ objective: deep });
     expect(() => parseLitePlan(json, "lite")).toThrow();
   });
+
+  // ── ADR-029 决策 4：dependsOn 环检测 ──────────────────────
+  it("dependsOn 环 → throw（fail-fast 在 plan 阶段，不等 workflow 运行时）", () => {
+    const json = makeLitePlan({
+      waves: [
+        { id: "W1", changes: ["c1"], dependsOn: ["W3"] },
+        { id: "W2", changes: ["c2"], dependsOn: ["W1"] },
+        { id: "W3", changes: ["c3"], dependsOn: ["W2"] },
+      ],
+    });
+    expect(() => parseLitePlan(json, "lite")).toThrow(/有环/);
+  });
+
+  it("dependsOn 引用不存在的 id → throw", () => {
+    const json = makeLitePlan({
+      waves: [{ id: "W1", changes: ["c1"], dependsOn: ["WX"] }],
+    });
+    expect(() => parseLitePlan(json, "lite")).toThrow(/unknown id "WX"/);
+  });
+
+  it("testCases dependsOn 环 → throw", () => {
+    const json = makeLitePlan({
+      testCases: [
+        { id: "E1", layer: "mock", scenario: "s1", steps: "s", expected: { text: "ok" }, executor: "vitest", requiresScreenshot: false, dependsOn: ["E2"] },
+        { id: "E2", layer: "mock", scenario: "s2", steps: "s", expected: { text: "ok" }, executor: "vitest", requiresScreenshot: false, dependsOn: ["E1"] },
+      ],
+    });
+    expect(() => parseLitePlan(json, "lite")).toThrow(/testCases.*有环/);
+  });
 });
 
 // ── parseMidClarify ──────────────────────────────────────────

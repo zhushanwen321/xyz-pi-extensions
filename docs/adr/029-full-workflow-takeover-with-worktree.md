@@ -224,6 +224,7 @@ db.exec("PRAGMA busy_timeout=5000");
 - **worktree 副作用风险**：`git worktree add` 失败 / cleanup 失败会留下孤儿 worktree。靠 finally 块 + return cleanup_failures 兜底，但不 100% 可靠（如进程被 SIGKILL）
 - **workflow 内失败处理复杂**：dev wave 失败、test wave 失败、worktree 建失败、cleanup 失败——多种失败路径，workflow 脚本要显式处理（不像主 agent 能即兴判断）
 - **retrospect.md 问题3 的 workflow 引擎 bug**：1ms abort bug 跨 repo（pi-workflow）未根治。subprocess-agent-runner 的 stderr 盲点已修，但 abort 路径仍有风险。在已知有缺陷的引擎上建关键路径，需监控
+- **延长 spawn 子进程模型生命周期（与 ADR-025 的关系）**：决策 3 修订依赖 workflow 的 spawn 子进程模型（每个 `agent()` 调用 spawn 独立 `pi --mode json` 子进程，子进程加载 cw extension，agent 调 cw tool）。ADR-025 记录了 workflow 向进程内（`createAgentSession`）迁移的决策但未实施。本 ADR 加深了对 spawn 模型的依赖（prompt 注入 cw 调用、per-call cwd via `spawn({cwd})`），使 ADR-025 的未来迁移更难。未来 ADR-025 落地 workflow 进程内执行时：决策 1 Chain B 的 cwd 机制需改为 Chain A 同构的 `createAgentSession({cwd})`；决策 3 的 agent-cw 调用路径不变（进程内同样有 cw extension 加载）。本 ADR 不阻塞 ADR-025 迁移，但迁移时需同步改这两点。
 
 ### 实现顺序
 

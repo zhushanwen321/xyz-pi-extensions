@@ -261,20 +261,47 @@ export class CwStore {
   // ── 事务（#1 AC-1.2 原子性） ────────────────────────────────
 
   /**
-   * 事务包裹：fn 抛错 → ROLLBACK 重抛；正常 → COMMIT。
-   * sqlite 天生原子（D-016 实测：崩溃事务不污染）。
-   */
+ * 事务包裹：fn 抛错 → ROLLBACK 重抛；正常 → COMMIT。
+ * sqlite 天生原子（D-016 实测：崩溃事务不污染）。
+ *
+ * ADR-029 决策 6 / 审查 robustness：SQLITE_BUSY 重试。
+ * busy_timeout=5000 是第一道防线（撞写锁等 5s），但如果事务内跨 git 子进程调用
+ * （dev.ts 的 GitValidator），持锁可能超 5s，对端 busy_timeout 超时后抛 SQLITE_BUSY。
+ * 这里加第二道防线：捕获 SQLITE_BUSY，退避后重试整个事务（最多 3 次）。
+ *
+ * ⚠️ 不变式：fn 内不得持锁跨进程 IO（git/网络/磁盘扫描）。GitValidator 等慢操作
+ * 应在 transaction() 外预跑，结果传入事务内只做快写。当前 dev/test handler 还在
+ * 事务内调 git（历史代码），本重试是兑底，后续应重构为「先 git.validate 再事务写入」。
+ */
   transaction<T>(fn: () => T): T {
-    // 接线：BEGIN → fn() → COMMIT，catch → ROLLBACK 重抛。
-    this.db.exec("BEGIN");
-    try {
-      const result = fn();
-      this.db.exec("COMMIT");
-      return result;
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
+    const MAX_BUSY_RETRY = 3;
+    const BASE_BACKOFF_MS = 200;
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < MAX_BUSY_RETRY; attempt++) {
+      try {
+        this.db.exec("BEGIN");
+        try {
+          const result = fn();
+          this.db.exec("COMMIT");
+          return result;
+        } catch (err) {
+          this.db.exec("ROLLBACK");
+          throw err;
+        }
+      } catch (err) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        // 只重试 SQLITE_BUSY（WAL 下并发写撞锁）；其他错误直接抛
+        if (msg.includes("SQLITE_BUSY") || msg.includes("database is locked")) {
+          // 指数退避：200ms / 400ms / 800ms
+          const backoff = BASE_BACKOFF_MS * Math.pow(2, attempt);
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, backoff);
+          continue;
+        }
+        throw err;
+      }
     }
+    throw lastErr;
   }
 
   // ── topic DAO ──────────────────────────────────────────────

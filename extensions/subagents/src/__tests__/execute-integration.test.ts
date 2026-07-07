@@ -575,13 +575,15 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 /** fakeSdk 变体：createAgentSession 按调用顺序返回队列中的 session。 */
-function makeQueueSdk(...sessions: AgentSessionLike[]): SdkLike {
+function makeQueueSdk(...sessions: AgentSessionLike[]): SdkLike & { createAgentSessionMock: ReturnType<typeof vi.fn> } {
   let i = 0;
-  return {
+  const createAgentSessionMock = vi.fn(async () => ({ session: sessions[i++]! }));
+  const sdk: SdkLike = {
     DefaultResourceLoader: class { reload = vi.fn(async () => {}); },
     SessionManager: { inMemory: () => ({}), create: () => ({}) },
-    createAgentSession: vi.fn(async () => ({ session: sessions[i++]! })),
+    createAgentSession: createAgentSessionMock,
   };
+  return Object.assign(sdk, { createAgentSessionMock });
 }
 
 // ============================================================
@@ -664,7 +666,8 @@ describe("SubagentService.execute() per-call cwd (ADR-029 决策 1)", () => {
       check();
     });
 
-    const createAgentSessionCalls = (fakeSdkSlot.current as unknown as { createAgentSession: { mock: { calls: Array<{ 0: { cwd: string } }> } } }).createAgentSession.mock.calls;
+    const sdk = fakeSdkSlot.current as SdkLike & { createAgentSessionMock?: { mock: { calls: Array<{ 0: { cwd: string } }> } } };
+    const createAgentSessionCalls = sdk.createAgentSessionMock?.mock.calls ?? [];
     const cwds = createAgentSessionCalls.map((c) => c[0].cwd);
     expect(cwds).toContain(wt1);
     expect(cwds).toContain(wt2);

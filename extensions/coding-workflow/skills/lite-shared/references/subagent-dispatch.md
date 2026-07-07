@@ -1,5 +1,16 @@
 # Subagent 派发与 Worktree 隔离编排
 
+> ⚠️ **ADR-029 后本文档角色变化（2026-07）**
+>
+> **阶段 A+B 的 subagent 派发已由 `workflow run execute-full-workflow` 机器接管**。主 agent **不再直接调**
+> `subagent` 工具派 implementer / test-runner / code-review——workflow 脚本内部的 `parallel()` 自动完成这些派发
+> （含 cwd worktree 隔离、渐进式 cw 调用）。
+>
+> - **主 agent 的阶段 A+B 入口**：调 `workflow run execute-full-workflow`（见 `../coding-execute/SKILL.md`）
+> - **本文档的价值**：描述 workflow 内部派发的 subagent 角色定义 / cwd 契约 / 超时处理——供主 agent 理解
+>   workflow 内部行为 + 排查问题，**不是操作手册**
+> - **主 agent 读本文档不得据此绕过 workflow 直接派 subagent**
+>
 > coding-execute 派 subagent 前 read 本文件。
 > 依赖：subagent 工具支持 `startParam.cwd`（per-subagent worktree 隔离）。
 

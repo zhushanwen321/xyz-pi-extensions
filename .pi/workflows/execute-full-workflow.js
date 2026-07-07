@@ -411,7 +411,9 @@ for (let i = 0; i < devWaves2d.length; i++) {
   }
 }
 
-// ── Phase 2: test + review（test wave 串行，wave 内 parallel；review 首波并行）──
+// ── Phase 2: test waves（wave 间串行，wave 内 parallel）+ review（独立并行）──
+// 审查 robustness SHOULD_FIX：reviewer 从 test wave 0 解耦——test waves 只跑 test-runner，
+// 所有 test waves 完成后独立并行跑 2 路 reviewer。避免 reviewer 延迟耦合 test wave abort 逻辑。
 
 let testAborted = false;
 let reviewCorrectness = null;
@@ -420,7 +422,6 @@ let reviewQuality = null;
 for (let i = 0; i < testWaves2d.length; i++) {
   if (testAborted) break;
   const wave = testWaves2d[i];
-  const isFirst = (i === 0);
   phase("Test-w" + i + "(" + wave.map((c) => c.id).join(",") + ")");
 
   const testCalls = wave.map((c) => ({
@@ -431,28 +432,13 @@ for (let i = 0; i < testWaves2d.length; i++) {
     description: "test-" + c.id,
     timeoutMs: DEFAULT_AGENT_TIMEOUT_MS,
   }));
-  const reviewCalls = isFirst ? [
-    { prompt: buildReviewPrompt("correctness", reviewWt), schema: REVIEW_SCHEMA, model: MODEL, cwd: reviewWt, description: "review-correctness", timeoutMs: DEFAULT_AGENT_TIMEOUT_MS },
-    { prompt: buildReviewPrompt("quality", reviewWt), schema: REVIEW_SCHEMA, model: MODEL, cwd: reviewWt, description: "review-quality", timeoutMs: DEFAULT_AGENT_TIMEOUT_MS },
-  ] : [];
 
-  const allCalls = [...testCalls, ...reviewCalls];
-  log("test wave " + i + ": parallel " + testCalls.length + " test-runner" + (reviewCalls.length > 0 ? " + " + reviewCalls.length + " reviewer" : "") + "...");
-  const results = await parallel(allCalls);
-
-  const testResults = results.slice(0, testCalls.length);
-  const reviewResults = reviewCalls.length > 0 ? results.slice(testCalls.length) : [];
-
-  if (isFirst && reviewResults.length === 2) {
-    reviewCorrectness = parseResult(reviewResults[0]);
-    reviewQuality = parseResult(reviewResults[1]);
-    if (!reviewCorrectness) reviewFailures.push("review-correctness");
-    if (!reviewQuality) reviewFailures.push("review-quality");
-  }
+  log("test wave " + i + ": parallel " + testCalls.length + " test-runner(s)");
+  const results = await parallel(testCalls);
 
   let waveHasFail = false;
-  for (let j = 0; j < testResults.length; j++) {
-    const r = parseResult(testResults[j]);
+  for (let j = 0; j < results.length; j++) {
+    const r = parseResult(results[j]);
     const caseId = wave[j].id;
     if (!r || !r.cw_submitted) {
       testFailures.push({ caseId, reason: !r ? "agent 无返回" : "未调 cw_submitted" });
@@ -471,19 +457,17 @@ for (let i = 0; i < testWaves2d.length; i++) {
   }
 }
 
-// 无 testCases 时单独跑 review
-if (testWaves2d.length === 0 && !reviewCorrectness && !reviewQuality) {
-  phase("Review-only");
-  log("无 testCases，单独并行跑 2 路 reviewer...");
-  const [rcRaw, rqRaw] = await parallel([
-    { prompt: buildReviewPrompt("correctness", reviewWt), schema: REVIEW_SCHEMA, model: MODEL, cwd: reviewWt, description: "review-correctness", timeoutMs: DEFAULT_AGENT_TIMEOUT_MS },
-    { prompt: buildReviewPrompt("quality", reviewWt), schema: REVIEW_SCHEMA, model: MODEL, cwd: reviewWt, description: "review-quality", timeoutMs: DEFAULT_AGENT_TIMEOUT_MS },
-  ]);
-  reviewCorrectness = parseResult(rcRaw);
-  reviewQuality = parseResult(rqRaw);
-  if (!reviewCorrectness) reviewFailures.push("review-correctness");
-  if (!reviewQuality) reviewFailures.push("review-quality");
-}
+// review 独立并行跑（所有 test waves 完成后，或无 testCases 时）
+phase("Review");
+log("并行跑 2 路 reviewer（correctness + quality）...");
+const [rcRaw, rqRaw] = await parallel([
+  { prompt: buildReviewPrompt("correctness", reviewWt), schema: REVIEW_SCHEMA, model: MODEL, cwd: reviewWt, description: "review-correctness", timeoutMs: DEFAULT_AGENT_TIMEOUT_MS },
+  { prompt: buildReviewPrompt("quality", reviewWt), schema: REVIEW_SCHEMA, model: MODEL, cwd: reviewWt, description: "review-quality", timeoutMs: DEFAULT_AGENT_TIMEOUT_MS },
+]);
+reviewCorrectness = parseResult(rcRaw);
+reviewQuality = parseResult(rqRaw);
+if (!reviewCorrectness) reviewFailures.push("review-correctness");
+if (!reviewQuality) reviewFailures.push("review-quality");
 
 // ── Review 聚合（2 路去重合并）────────────────────────────────────
 
