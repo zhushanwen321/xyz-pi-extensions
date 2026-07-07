@@ -246,7 +246,7 @@ function assertAcyclicDeps(
     color.set(id, GRAY);
     path.push(id);
     const item = items.find((i) => i.id === id);
-    const deps = Array.isArray(item?.dependsOn) ? item!.dependsOn : [];
+    const deps = item && Array.isArray(item.dependsOn) ? item.dependsOn : [];
     for (const d of deps) visit(d);
     path.pop();
     color.set(id, BLACK);

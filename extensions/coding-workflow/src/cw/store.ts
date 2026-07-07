@@ -276,6 +276,8 @@ export class CwStore {
   transaction<T>(fn: () => T): T {
     const MAX_BUSY_RETRY = 3;
     const BASE_BACKOFF_MS = 200;
+    const BACKOFF_BASE = 2; // 指数退避底数：200ms * 2^attempt → 200/400/800ms
+    const INT32_BYTES = 4; // Atomics.wait 需要主 1 个 int32 的共享缓冲作等待载体
     let lastErr: unknown;
     for (let attempt = 0; attempt < MAX_BUSY_RETRY; attempt++) {
       try {
@@ -294,8 +296,8 @@ export class CwStore {
         // 只重试 SQLITE_BUSY（WAL 下并发写撞锁）；其他错误直接抛
         if (msg.includes("SQLITE_BUSY") || msg.includes("database is locked")) {
           // 指数退避：200ms / 400ms / 800ms
-          const backoff = BASE_BACKOFF_MS * Math.pow(2, attempt);
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, backoff);
+          const backoff = BASE_BACKOFF_MS * Math.pow(BACKOFF_BASE, attempt);
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(INT32_BYTES)), 0, 0, backoff);
           continue;
         }
         throw err;

@@ -13,10 +13,13 @@ const meta = {
 // ── 常量 & 全局依赖 ───────────────────────────────────────────────
 
 const fs = require("fs");
-const { execSync } = require("child_process");
+const { execFileSync } = require("child_process");
 
 const DEFAULT_AGENT_TIMEOUT_MS = 1_800_000; // 30 min，对齐 review-fix-loop
 const DEFAULT_MAX_WORKTREES = 5; // ADR-029 开放问题 1：worktree 并发上限
+const RESERVED_WORKTREES = 2; // 从 MAX_WORKTREES 预留：1 个 test worktree + 1 个 review worktree
+const OVERLAP_HIGH_THRESHOLD = 0.8; // 两路 reviewer 问题重合度 ≥ 80% → HIGH-CONFIDENCE
+const OVERLAP_MEDIUM_THRESHOLD = 0.3; // ≥ 30% → NEEDS-VERIFY；< 30% → LOW
 
 // ── 入参（$ARGS）──────────────────────────────────────────────────
 //
@@ -216,7 +219,7 @@ function removeWorktree(wt) {
 phase("WorktreeSetup");
 
 const maxParallelInWave = Math.max(1, ...devWaves2d.map((w) => w.length));
-const devPoolSize = Math.min(maxParallelInWave, Math.max(1, MAX_WORKTREES - 2));
+const devPoolSize = Math.min(maxParallelInWave, Math.max(1, MAX_WORKTREES - RESERVED_WORKTREES));
 const devWtPool = [];
 for (let i = 0; i < devPoolSize; i++) devWtPool.push(addWorktree("dev-pool" + i));
 const testWt = testWaves2d.length > 0 ? addWorktree("test") : null;
@@ -491,7 +494,7 @@ if (reviewCorrectness || reviewQuality) {
   const overlap = [...cSet].filter((x) => qSet.has(x));
   const union = new Set([...cSet, ...qSet]);
   const overlapRatio = union.size > 0 ? overlap.length / union.size : 0;
-  const overlapLabel = overlapRatio > 0.8 ? "high" : overlapRatio > 0.3 ? "medium" : "low";
+  const overlapLabel = overlapRatio > OVERLAP_HIGH_THRESHOLD ? "high" : overlapRatio > OVERLAP_MEDIUM_THRESHOLD ? "medium" : "low";
 
   const merged = [
     "---",
